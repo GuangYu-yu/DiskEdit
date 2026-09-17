@@ -14,11 +14,11 @@
 |---|---|---|
 | `info` / `ls` / `cat` / `plan` | 不需要 root | 不需要 root |
 | 分区表写入（`new`/`add`/`del`/`resize-part`/`copy`/`set`/`undo`） | 不需要 root | 需要 root |
-| FS 层（`mkfs`/`resizefs`/`check`/`set label\|uuid`） | 需要 root（`losetup`） | 需要 root |
+| FS 层（`mkfs`/`resizefs`/`check`/`set label\|uuid`） | 需要 root | 需要 root |
 
 `resize` 分两种：需要动文件系统时要 root；目标 FS 无法识别（`unknown`）时只改分区表，镜像上无需 root。
 
-FS 层由显式 root 检查拦截；块设备写入靠设备节点权限，权限不足时在打开阶段即失败。
+FS 层要 root 是因为经 `losetup` 映射分区；块设备写入靠设备节点权限，权限不足时在打开阶段即失败。
 
 **外部工具**（按需存在即可，用到才查找）：
 
@@ -77,12 +77,16 @@ FS 层由显式 root 检查拦截；块设备写入靠设备节点权限，权�
 | ext2/3/4 | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | xfs | ✓ | ✓ | — | ✓ | ✓ | ✓ |
 | btrfs | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| ntfs | ✓ | ✓ | ✓ | ✓ | ✓ | 随机新序号 |
+| ntfs | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | f2fs | ✓ | ✓ | — | ✓ | — | — |
 | vfat | ✓ | ✓ | — | ✓ | ✓ | — |
 | exfat | ✓ | — | — | ✓ | ✓ | — |
-| swap | ✓ | ✓（表项 + `mkswap` 重建） | — | — | — | — |
-| lvm2_pv | 拒绝 | PV 扩容；`--grow-lv` 再扩 LV（含 FS） | 拒绝 | — | — | — |
+| swap | ✓ | ✓ | — | — | — | — |
+| lvm2_pv | — | ✓ | — | — | — | — |
+
+- `ntfs` 的 uuid 只能生成随机新序号，`ntfslabel` 不支持指定值。
+- `swap` 的扩容是扩完表项后用 `mkswap` 重建，不搬数据；UUID、PARTUUID 与分区号保持。
+- `lvm2_pv` 的扩容只到 PV 层，加 `--grow-lv` 才继续扩 LV 及其文件系统。
 
 缩容时先缩 FS、后改分区边界；FS 缩不动就不动表。
 
