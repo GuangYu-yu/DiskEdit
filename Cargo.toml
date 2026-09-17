@@ -1,0 +1,22 @@
+[package]
+name = "diskedit"
+version = "0.1.0"
+edition = "2024"
+description = "Edit disk images / whole disks as byte-addressable files: partition tables (GPT/MBR), FS identification, mkfs/resize via external tools, partition relocation with resumable checkpoints"
+license = "MIT"
+
+[dependencies]
+gptman = "3.1"
+crc = "3"
+serde_json = "1"
+fstool = { version = "0.4", optional = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+
+[features]
+default = ["browse"]
+browse = ["dep:fstool"]
+
+[profile.release]
+lto = true
