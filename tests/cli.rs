@@ -43,7 +43,7 @@ fn new_add_del_roundtrip() {
     // 8 MiB 镜像（16384 扇区，可用区 34..16350），坐标全部取 1MiB 对齐值
     let data = vec![0u8; 8 * 1024 * 1024];
     std::fs::write(&img, &data).unwrap();
-    let exe = env!("CARGO_BIN_EXE_diskedit");
+    let exe = env!("CARGO_BIN_EXE_DiskEdit");
     let img_s = img.to_str().unwrap();
     let run = |args: &[&str]| -> (i32, String, String) {
         let out = Command::new(exe).args(args).output().unwrap();
@@ -102,7 +102,7 @@ fn undo_journal_restores_image() {
     let img = dir.join("u.img");
     std::fs::write(&img, vec![0u8; 8 * 1024 * 1024]).unwrap();
     let original = std::fs::read(&img).unwrap();
-    let exe = env!("CARGO_BIN_EXE_diskedit");
+    let exe = env!("CARGO_BIN_EXE_DiskEdit");
     let img_s = img.to_str().unwrap();
     let journal = dir.join("u.img.diskedit.journal");
     let run = |args: &[&str]| -> (i32, String) {
@@ -165,7 +165,7 @@ fn resize_part_move_copy_flag_name() {
     // 16 MiB 镜像（32768 扇区），坐标全部取 1MiB 对齐值
     let data = vec![0u8; 16 * 1024 * 1024];
     std::fs::write(&img, &data).unwrap();
-    let exe = env!("CARGO_BIN_EXE_diskedit");
+    let exe = env!("CARGO_BIN_EXE_DiskEdit");
     let img_s = img.to_str().unwrap();
     let run = |args: &[&str]| -> (i32, String, String) {
         let out = Command::new(exe).args(args).output().unwrap();
@@ -265,7 +265,7 @@ fn msdos_table_flow() {
     std::fs::create_dir_all(&dir).unwrap();
     let img = dir.join("m.img");
     std::fs::write(&img, vec![0u8; 16 * 1024 * 1024]).unwrap();
-    let exe = env!("CARGO_BIN_EXE_diskedit");
+    let exe = env!("CARGO_BIN_EXE_DiskEdit");
     let img_s = img.to_str().unwrap();
     let run = |args: &[&str]| -> (i32, String) {
         let out = Command::new(exe).args(args).output().unwrap();
@@ -320,7 +320,7 @@ fn msdos_user_resize() {
     std::fs::create_dir_all(&dir).unwrap();
     let img = dir.join("r.img");
     std::fs::write(&img, vec![0u8; 16 * 1024 * 1024]).unwrap();
-    let exe = env!("CARGO_BIN_EXE_diskedit");
+    let exe = env!("CARGO_BIN_EXE_DiskEdit");
     let img_s = img.to_str().unwrap();
     let run = |args: &[&str]| -> (i32, String) {
         let out = Command::new(exe).args(args).output().unwrap();
@@ -379,7 +379,7 @@ fn cyl_align_and_gpt_hidden_required() {
     let img = dir.join("c.img");
     // 16 MiB（32768 扇区）：cyl 柱面 = 16065 扇区（LBA-assist 255 头 × 63 扇区）
     std::fs::write(&img, vec![0u8; 16 * 1024 * 1024]).unwrap();
-    let exe = env!("CARGO_BIN_EXE_diskedit");
+    let exe = env!("CARGO_BIN_EXE_DiskEdit");
     let img_s = img.to_str().unwrap();
     let run = |args: &[&str]| -> (i32, String) {
         let out = Command::new(exe).args(args).output().unwrap();
@@ -442,7 +442,7 @@ fn grow_to_end() {
     let img = dir.join("g.img");
     // 8 MiB（16384 扇区）：last_usable = 16350
     std::fs::write(&img, vec![0u8; 8 * 1024 * 1024]).unwrap();
-    let exe = env!("CARGO_BIN_EXE_diskedit");
+    let exe = env!("CARGO_BIN_EXE_DiskEdit");
     let img_s = img.to_str().unwrap();
     let run = |args: &[&str]| -> (i32, String) {
         let out = Command::new(exe).args(args).output().unwrap();
@@ -500,7 +500,7 @@ fn apply_swap_recreate() {
     };
     gpt.write_into(&mut cur).unwrap();
     std::fs::write(&img, with_protective_mbr(cur.into_inner())).unwrap();
-    let exe = env!("CARGO_BIN_EXE_diskedit");
+    let exe = env!("CARGO_BIN_EXE_DiskEdit");
     let img_s = img.to_str().unwrap();
 
     let out = Command::new(exe).args(["apply", img_s, "--grow", "1"]).output().unwrap();
@@ -528,7 +528,7 @@ fn auto_commands_create_move_resize_set_delete() {
     let img = dir.join("auto.img");
     // 16 MiB（32768 扇区，可用 34..32734），坐标全部 1MiB 对齐
     std::fs::write(&img, vec![0u8; 16 * 1024 * 1024]).unwrap();
-    let exe = env!("CARGO_BIN_EXE_diskedit");
+    let exe = env!("CARGO_BIN_EXE_DiskEdit");
     let img_s = img.to_str().unwrap();
     let run = |args: &[&str]| -> (i32, String, String) {
         let out = Command::new(exe).args(args).output().unwrap();
@@ -608,7 +608,7 @@ fn info_on_gpt_image() {
     let img = dir.join("disk.img");
     fixture_gpt_image(&img);
 
-    let out = Command::new(env!("CARGO_BIN_EXE_diskedit"))
+    let out = Command::new(env!("CARGO_BIN_EXE_DiskEdit"))
         .args(["info", img.to_str().unwrap()])
         .output()
         .unwrap();
@@ -648,7 +648,7 @@ fn info_on_gpt_image() {
     let img2 = dir.join("disk2.img");
     std::fs::write(&img2, with_protective_mbr(cur.into_inner())).unwrap();
 
-    let out = Command::new(env!("CARGO_BIN_EXE_diskedit"))
+    let out = Command::new(env!("CARGO_BIN_EXE_DiskEdit"))
         .args(["plan", img2.to_str().unwrap(), "--grow", "1"])
         .output()
         .unwrap();
@@ -673,7 +673,7 @@ fn stale_after_enlarge_info_plan_write() {
         let mut f = std::fs::OpenOptions::new().append(true).open(&img).unwrap();
         f.write_all(&vec![0u8; 1024 * 1024]).unwrap();
     }
-    let exe = env!("CARGO_BIN_EXE_diskedit");
+    let exe = env!("CARGO_BIN_EXE_DiskEdit");
     let img_s = img.to_str().unwrap();
     let run = |args: &[&str]| -> (i32, String, String) {
         let out = Command::new(exe).args(args).output().unwrap();
@@ -717,7 +717,7 @@ fn stale_after_enlarge_info_plan_write() {
 fn cli_negative_paths() {
     let dir = std::env::temp_dir().join(format!("diskedit_neg_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let exe = env!("CARGO_BIN_EXE_diskedit");
+    let exe = env!("CARGO_BIN_EXE_DiskEdit");
     let run = |args: &[&str]| -> (i32, String, String) {
         let out = Command::new(exe).args(args).output().unwrap();
         (out.status.code().unwrap_or(-1),

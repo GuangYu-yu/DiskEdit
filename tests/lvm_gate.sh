@@ -5,9 +5,11 @@
 #       FS 真扩 / 镜像 PV losetup 路径 / loop 设备无残留。
 set -euo pipefail
 
-BIN=${1:-target/debug/diskedit}
-[[ -x $BIN ]] || BIN=target/release/diskedit
-[[ -x $BIN ]] || { echo "diskedit binary not found (build first)"; exit 1; }
+BIN=${1:-}
+if [[ -z $BIN ]]; then
+    BIN=$(find target/debug target/release -maxdepth 1 -type f -executable 2>/dev/null | head -1)
+fi
+[[ -x $BIN ]] || { echo "binary not found (build first, or pass path as \$1)"; exit 1; }
 [[ $(id -u) -eq 0 ]] || { echo "must run as root"; exit 1; }
 for t in pvcreate vgcreate lvcreate lvremove pvresize losetup mkfs.ext4 dumpe2fs blockdev; do
     command -v "$t" >/dev/null || { echo "missing tool: $t"; exit 1; }
