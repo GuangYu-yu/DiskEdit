@@ -22,7 +22,7 @@ const MBR_SIGNATURE: u16 = 0xAA55;
 /// 保护 MBR 分区类型
 const PROT_MBR_TYPE: u8 = 0xEE;
 
-/// 用户可见的"哪一份 GPT 副本"。用于把副本级的损伤讲清楚（主数组坏 vs 备数组坏），
+/// 用户可见的"哪一份 GPT 副本"。用于把副本级的损伤讲清楚（主头/主数组坏 vs 备头/备数组坏），
 /// 而不是笼统地说"GPT 头坏"
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum GptCopyKind {
@@ -72,6 +72,10 @@ pub enum GptError {
     /// 单列出来是因为它的可恢复性与前几类不同——另一份副本的数组是独立写入的，
     /// 可能完好，UEFI 2.10 §5.3.2 的主备互备正是为此；是否回退由 load_gpt 决定
     EntryArrayCorrupt { copy: GptCopyKind },
+    /// 某一副本的头部字节与自身 CRC 不符（签名在而头不可用）：**该副本的头**是数据损伤。
+    /// 与 EntryArrayCorrupt 分列是刻意的：损伤位置不同、对外措辞不同（头坏 vs 数组坏），
+    /// 而可恢复性相同——另一份副本的头是独立写入的，可能完好，回退与否仍由 load_gpt 决定
+    HeaderCorrupt { copy: GptCopyKind, detail: &'static str },
 }
 
 impl From<io::Error> for GptError {
@@ -96,6 +100,9 @@ impl std::fmt::Display for GptError {
             }
             GptError::EntryArrayCorrupt { copy } => {
                 write!(f, "{} GPT entry array CRC mismatch", copy.label())
+            }
+            GptError::HeaderCorrupt { copy, detail } => {
+                write!(f, "{} GPT header damaged: {detail}", copy.label())
             }
         }
     }
@@ -202,14 +209,26 @@ pub fn crc32(data: &[u8]) -> u32 {
     d.finalize()
 }
 
-/// 解析 LBA1 的原始头（92 字节，UEFI 2.10 §5.3.2 Table 5.5 布局），校验签名 + 头 CRC
-fn parse_raw_header(sector: &[u8]) -> io::Result<RawHeader> {
+/// 头部扇区的探测结论。两件事必须分开：候选扇区大小探测要的是"此处有没有 GPT"，
+/// 损伤上报要的是"这一份副本的头坏在哪"——压进同一个 Err，签名在而 CRC 坏就会被当成
+/// "此处没有 GPT"，一路静默走到 Ok(None)，让后续的 new 覆盖掉或许还能救回的表
+enum HeaderProbe {
+    /// 签名不匹配：该候选扇区大小下此处没有 GPT
+    Absent,
+    /// 签名在，但头部自身不可用（header_size 非法 / CRC 不符）：本副本的头字节损伤
+    Damaged(&'static str),
+    /// 头部可用
+    Present(RawHeader),
+}
+
+/// 探测 LBA1 的原始头（92 字节，UEFI 2.10 §5.3.2 Table 5.5 布局），校验签名 + 头 CRC
+fn probe_header(sector: &[u8]) -> HeaderProbe {
     if &sector[0..8] != GPT_SIGNATURE {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "GPT signature not found"));
+        return HeaderProbe::Absent;
     }
     let hdr_size = rd_u32(sector, 12) as usize; // signature[8] revision[4] 之后才是 header_size
     if hdr_size < 92 || hdr_size as u64 > sector.len() as u64 {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "invalid GPT header size"));
+        return HeaderProbe::Damaged("invalid GPT header size");
     }
     let stored_crc = rd_u32(sector, 16);
     // UEFI 2.10 §5.3.2 Table 5.5：HeaderCRC32 是"把本字段置 0 后对 HeaderSize 字节算的 CRC"，
@@ -219,9 +238,9 @@ fn parse_raw_header(sector: &[u8]) -> io::Result<RawHeader> {
     let mut tmp = sector[..hdr_size].to_vec();
     tmp[16..20].fill(0); // CRC 字段置 0 后计算（规范要求）
     if crc32(&tmp) != stored_crc {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "GPT header CRC mismatch"));
+        return HeaderProbe::Damaged("GPT header CRC mismatch");
     }
-    Ok(RawHeader {
+    HeaderProbe::Present(RawHeader {
         primary_lba: rd_u64(sector, 24),
         backup_lba: rd_u64(sector, 32),
         first_usable_lba: rd_u64(sector, 40),
@@ -302,7 +321,7 @@ enum ParsedCopy {
     Absent,
     /// 这一份可用
     Usable(Box<RawGpt>),
-    /// 这一份的**数组字节**与头部自述的 CRC 不符：本副本不可用，但另一份独立副本可能完好
+    /// 这一份的**头或数组字节**损伤（CRC 不符）：本副本不可用，但另一份独立副本可能完好
     CopyDamaged(GptError),
     /// 不可恢复：头部自述几何不合规、数组越出容器、条目语义非法、读取失败。
     /// 这些是盘/容器层面的前提，另一份副本同样不满足，换副本无解
@@ -355,9 +374,13 @@ fn parse_primary(src: &FileSource, ss: u64, pmbr: PmbrSize) -> Result<ParsedCopy
         return Ok(ParsedCopy::Absent);
     }
     src.read_at(ss, &mut sec)?;
-    let header = match parse_raw_header(&sec) {
-        Ok(h) => h,
-        Err(_) => return Ok(ParsedCopy::Absent),
+    let header = match probe_header(&sec) {
+        HeaderProbe::Present(h) => h,
+        HeaderProbe::Absent => return Ok(ParsedCopy::Absent),
+        // 签名在而头不可用 = 本副本损伤（另一份可能完好），不是"此处没有 GPT"
+        HeaderProbe::Damaged(detail) => {
+            return Ok(ParsedCopy::CopyDamaged(GptError::HeaderCorrupt { copy: GptCopyKind::Primary, detail }))
+        }
     };
     let raw = match load_entry_array(src, &sec, &header, ss, GptCopyKind::Primary) {
         Ok(r) => r,
@@ -390,9 +413,13 @@ fn parse_backup(src: &FileSource, ss: u64, pmbr: PmbrSize) -> Result<ParsedCopy,
     let file_last_lba = src.size / ss - 1;
     let mut sec = vec![0u8; ss as usize];
     src.read_at(file_last_lba * ss, &mut sec)?;
-    let mut header = match parse_raw_header(&sec) {
-        Ok(h) => h,
-        Err(_) => return Ok(ParsedCopy::Absent),
+    let mut header = match probe_header(&sec) {
+        HeaderProbe::Present(h) => h,
+        HeaderProbe::Absent => return Ok(ParsedCopy::Absent),
+        // 与主头路径同判据：签名在而头不可用是本副本损伤，不是"盘尾没有 GPT"
+        HeaderProbe::Damaged(detail) => {
+            return Ok(ParsedCopy::CopyDamaged(GptError::HeaderCorrupt { copy: GptCopyKind::Backup, detail }))
+        }
     };
     // 备份头自述：MyLBA = 盘尾、AltLBA = 1（否则不是本盘的备份头）
     if header.primary_lba != file_last_lba || header.backup_lba != 1 {
@@ -753,7 +780,8 @@ fn pmbr_size_state(src: &FileSource) -> io::Result<PmbrSize> {
 ///
 /// **主备恢复策略只在本函数**（UEFI 2.10 §5.3.2 要求 primary 无效时改用 backup）：
 /// - 主副本可用 → 用它
-/// - 主副本的**数组数据损伤**（CopyDamaged）→ 继续尝试备份副本，因为两份数组是独立写入的
+/// - 主副本的**数据损伤**（CopyDamaged：头或条目数组的字节坏）→ 继续尝试备份副本，
+///   因为两份副本的头与数组是各自独立写入的
 /// - 主副本结构性不可用（Fatal：几何自述不合规、越出容器、条目语义非法、读取失败）→ 直接失败，
 ///   因为这类失败取决于容器与头部自述，备份副本同样不满足
 /// - 两份都不可用 → 最终报错（绝不把"有备份"变成静默接受损坏的主副本）
@@ -1194,7 +1222,15 @@ mod tests {
         std::fs::write(&tmp, &data).unwrap();
         let f = std::fs::OpenOptions::new().read(true).write(true).open(&tmp).unwrap();
         let size = data.len() as u64;
-        FileSource { file: f, path: tmp, sector_size: 512, size, is_block: false, journal: None }
+        FileSource {
+            identity: crate::dev::TargetIdentity::resolve(&tmp, false, size),
+            file: f,
+            path: tmp,
+            sector_size: 512,
+            size,
+            is_block: false,
+            journal: None,
+        }
     }
 
     /// GPT 测试镜像：gptman 只写 GPT 结构，保护 MBR 需自行补——load_gpt 以前者为前置
@@ -1382,6 +1418,31 @@ mod tests {
             load_gpt(&src3),
             Err(GptError::EntryArrayCorrupt { copy: GptCopyKind::Primary })
         ));
+    }
+
+    /// 主头签名在而 CRC 坏、且盘尾没有备份：必须报"副本损伤"，不能静默当成"无分区表"。
+    /// 后者会让 new 覆盖掉或许还能救回的表——load_gpt 末尾那条设计原则要挡的正是它
+    #[test]
+    fn damaged_primary_without_backup_is_reported() {
+        // 对照组：只抹掉盘尾备份头、头本身完好 → 仍是可用的表。
+        // 有它才能证明下面那个 Err 来自头损伤，而不是"没有备份"本身
+        let mut intact = fixture_gpt(512);
+        let last = intact.len() - 512;
+        intact[last..].fill(0); // 备份头所在扇区清零
+        let mut ctl = src_from("hdmg_ctl", intact);
+        ensure_protective_mbr(&mut ctl).unwrap();
+        assert!(load_gpt(&ctl).unwrap().is_some(), "对照组：头完好时缺备份不影响解析");
+
+        let mut data = fixture_gpt(512);
+        let last = data.len() - 512;
+        data[last..].fill(0);
+        data[512 + 16] ^= 0xFF; // LBA1 头部 CRC 字段内翻转：签名完好，CRC 对不上
+        let mut src = src_from("hdmg", data);
+        ensure_protective_mbr(&mut src).unwrap();
+        assert!(
+            matches!(load_gpt(&src), Err(GptError::HeaderCorrupt { copy: GptCopyKind::Primary, .. })),
+            "签名在而头 CRC 坏且无备份 ⇒ 必须报 HeaderCorrupt(primary)"
+        );
     }
 
     #[test]

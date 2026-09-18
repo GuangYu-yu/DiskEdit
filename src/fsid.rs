@@ -243,7 +243,15 @@ mod tests {
         tmp.push(format!("diskedit_fsid_{tag}_{}.img", std::process::id()));
         std::fs::write(&tmp, &data).unwrap();
         let f = std::fs::OpenOptions::new().read(true).write(true).open(&tmp).unwrap();
-        FileSource { file: f, path: tmp, sector_size: 512, size: data.len() as u64, is_block: false, journal: None }
+        FileSource {
+            identity: crate::dev::TargetIdentity::resolve(&tmp, false, data.len() as u64),
+            file: f,
+            path: tmp,
+            sector_size: 512,
+            size: data.len() as u64,
+            is_block: false,
+            journal: None,
+        }
     }
 
     #[test]

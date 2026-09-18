@@ -43,7 +43,7 @@ pub(crate) fn cmd_plan_apply(cmd: &str, a: &Args) -> u8 {
         Err(f) => bail_fail(f),
     };
     if cmd == "plan" {
-        if movepart::has_pending_relocation(&src, plan.grow_part) {
+        if movepart::has_pending_relocation(&src, plan.grow_part).unwrap_or_else(|f| bail_fail(f)) {
             println!("[resume] an unfinished relocation job is on the disk — this is the plan it resumes with");
         }
         if let Some(what) = plan.repair.describe() {

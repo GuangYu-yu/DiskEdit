@@ -15,8 +15,205 @@ pub struct FileSource {
     pub sector_size: u64,
     pub size: u64,
     pub is_block: bool,
+    /// 目标身份：打开时解析一次，journal / checkpoint / undo 只消费它
+    pub identity: TargetIdentity,
     /// undo journal：只记录本工具 write_at 的直接写入
     pub journal: Option<Journal>,
+}
+
+/// 持久状态的默认落点
+const DEFAULT_STATE_DIR: &str = "/var/lib/diskedit";
+
+/// 持久状态的落点目录（journal / checkpoint / log）。
+///
+/// 默认取 `/var/lib/diskedit`：FHS §5.8 把 `/var/lib/<name>` 规定为应用/系统级、跨重启
+/// 保留、且不得暴露给普通用户的状态；`$XDG_STATE_HOME` 面向的是用户级 state。本工具的
+/// 块设备路径要独占打开整盘并改写分区表，属主机级操作，与后者不是一回事
+///
+/// `DISKEDIT_STATE_DIR` 只为测试 / 容器 / 打包提供显式 override，不接 `$XDG_STATE_HOME`
+/// / `$HOME` 回退链：落点随运行用户与调用环境变化，journal 与 checkpoint 的命名空间就会
+/// 漂移，撤销窗口和续传现场随之找不到。同一次未收尾作业的所有调用必须给同一个值
+pub(crate) fn state_dir() -> PathBuf {
+    match std::env::var_os("DISKEDIT_STATE_DIR") {
+        Some(v) if !v.is_empty() => PathBuf::from(v),
+        _ => PathBuf::from(DEFAULT_STATE_DIR),
+    }
+}
+
+/// 目标身份：撤销窗口与续传现场共用的命名空间。
+/// 镜像以用户给定的路径为身份——不做 canonicalize，身份语义与用户看到的目标一致；
+/// 块设备以**设备层**持久 ID 为身份：盘上 metadata 里的 GPT Disk GUID 会随表损坏而
+/// 不可读，因此它只作恢复 alias，不能当设备本体身份。
+///
+/// 两个列表的首项都是写入位置，其后是历史命名（升级前的版本写下的那份）：查找按序取
+/// 首个有效者、不扫描；两份有效候选同时存在即报歧义，不猜
+#[derive(Clone, Debug)]
+pub struct TargetIdentity {
+    kind: TargetKind,
+    journal: Vec<PathBuf>,
+    checkpoint: Vec<PathBuf>,
+}
+
+/// 只用于区分历史命名约定：块设备另有 GUID / devname 两份历史落点，镜像没有
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TargetKind {
+    Image,
+    Block,
+}
+
+/// 设备层持久 ID 的探测顺序：设备自己声明的身份优先，读不到就退到下一层。
+/// 内核并不保证这些属性在所有块设备类型上都存在（ram、无 serial 的 virtio-blk 等），
+/// 故本层只回答"最强的可用身份"，链尾恒有 devname + 容量兜底。
+///
+/// `dm/name` 是 DM 自己的退路（映射名，改名即变），不是全局物理身份，故只排在
+/// `dm/uuid` 之后；`wwid` 及其后的条目才是跨设备类型通用的那几层
+#[cfg(target_os = "linux")]
+const DEVICE_ID_ATTRS: &[&str] =
+    &["dm/uuid", "dm/name", "md/uuid", "loop/backing_file", "wwid", "device/wwid", "device/serial"];
+
+/// sysfs 属性 → 去行尾换行的值；不存在或为空都返回 None
+#[cfg(target_os = "linux")]
+fn read_sysfs_attr(path: &Path) -> Option<String> {
+    let v = std::fs::read_to_string(path).ok()?;
+    let v = v.trim();
+    (!v.is_empty()).then(|| v.to_string())
+}
+
+/// 节点自己声明的设备层身份：按层探测，全部读不到则 None
+#[cfg(target_os = "linux")]
+fn node_device_id(node: &Path) -> Option<String> {
+    DEVICE_ID_ATTRS.iter().find_map(|attr| read_sysfs_attr(&node.join(attr)))
+}
+
+/// 设备容量。sysfs 的 `size` 恒以 512 字节扇区计，与设备逻辑扇区大小无关
+#[cfg(target_os = "linux")]
+fn sysfs_capacity(node: &Path) -> Option<u64> {
+    read_sysfs_attr(&node.join("size"))?.parse::<u64>().ok()?.checked_mul(512)
+}
+
+/// 块设备身份键：设备拓扑给出的持久 ID → devname + 容量。
+///
+/// 分区节点自身不携带设备身份（内核只给它 `partition` / `start` / `size`），故取父设备
+/// 的身份再附自己的分区号。父设备与分区号都来自 sysfs 拓扑——`/sys/dev/block/<maj>:<min>`
+/// 解析出的节点、它的 `partition` 属性、它的父目录——既不解析 `sda1` / `nvme0n1p1` /
+/// `dm-0p1` 这类命名，也不自己推算分区号。容量因此不参与分区身份：分区扩容只改变自己
+/// 的容量，父设备容量不受影响，撤销窗口不会在操作中途改名
+#[cfg(target_os = "linux")]
+fn block_stable_key(path: &Path, size: u64) -> String {
+    use std::os::unix::fs::MetadataExt;
+    let fallback = || format!("{}-{size}", file_name_lossy(path));
+    let Ok(meta) = std::fs::metadata(path) else { return fallback() };
+    let dev = format!("/sys/dev/block/{}:{}", libc::major(meta.rdev()), libc::minor(meta.rdev()));
+    let Ok(node) = std::fs::canonicalize(dev) else { return fallback() };
+    // `partition` 是"这是个分区"的判据；没有它的节点自己就是整设备（含 kpartx 造出的
+    // dm-N 分区，它们是独立的 DM 设备，自带 dm/uuid）
+    let Some(n) = read_sysfs_attr(&node.join("partition")).and_then(|v| v.parse::<u32>().ok()) else {
+        return node_device_id(&node).unwrap_or_else(fallback);
+    };
+    let Some(parent) = node.parent() else { return fallback() };
+    let key = node_device_id(parent)
+        .unwrap_or_else(|| format!("{}-{}", file_name_lossy(parent), sysfs_capacity(parent).unwrap_or(0)));
+    format!("{key}-p{n}")
+}
+
+#[cfg(not(target_os = "linux"))]
+fn block_stable_key(path: &Path, size: u64) -> String {
+    format!("{}-{size}", file_name_lossy(path))
+}
+
+fn file_name_lossy(path: &Path) -> String {
+    path.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "dev".into())
+}
+
+/// 身份键 → 文件名安全的 token：保留 ASCII 字母数字与 `.` `-` `_`，其余（含路径分隔符）
+/// 换成 `_` 并截断到 32 字符，末尾附值的 CRC32——身份可能是 loop 的 backing 路径，
+/// 原样落盘会带分隔符、可能超长，而截断与替换会令两个不同身份撞同一个名字
+fn key_token(value: &str) -> String {
+    let mut token: String = value
+        .chars()
+        .take(32)
+        .map(|c| if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_') { c } else { '_' })
+        .collect();
+    token.push_str(&format!("-{:08x}", crate::table::crc32(value.as_bytes())));
+    token
+}
+
+impl TargetIdentity {
+    fn image(path: &Path) -> Self {
+        let with = |suffix: &str| {
+            let mut p = path.to_path_buf().into_os_string();
+            p.push(suffix);
+            PathBuf::from(p)
+        };
+        Self {
+            kind: TargetKind::Image,
+            journal: vec![with(".diskedit.journal")],
+            checkpoint: vec![with(".diskedit.ckpt")],
+        }
+    }
+
+    /// 打开目标时解析一次。块设备身份取自设备层；镜像身份就是用户给的路径
+    pub(crate) fn resolve(path: &Path, is_block: bool, size: u64) -> Self {
+        if !is_block {
+            return Self::image(path);
+        }
+        let stable = key_token(&block_stable_key(path, size));
+        let dir = state_dir();
+        Self {
+            kind: TargetKind::Block,
+            journal: vec![
+                dir.join(format!("{stable}.diskedit.journal")),
+                // 历史命名：块设备的 journal 曾以 devname 命名
+                dir.join(format!("{}.diskedit.journal", file_name_lossy(path))),
+            ],
+            checkpoint: vec![dir.join(format!("{stable}.diskedit.ckpt"))],
+        }
+    }
+
+    /// 手上只有目标路径时解析身份（撤销窗口在命令收尾时按命令行参数关闭，那时
+    /// FileSource 已释放）。块设备判定与容量都要重取一次，且必须与打开目标时算出
+    /// 同一个身份——收尾删的是这里给出的名字，差一个字节就会漏删。取不到容量即返回
+    /// None，由调用方告警：宁可留下 journal，也不能删错别人的
+    pub(crate) fn resolve_path(path: &Path) -> Option<Self> {
+        #[cfg(target_os = "linux")]
+        if std::fs::metadata(path).map(|m| m.file_type().is_block_device()).unwrap_or(false) {
+            let size = ioctl::blkgetsize64(&File::open(path).ok()?).ok()?;
+            return Some(Self::resolve(path, true, size));
+        }
+        Some(Self::resolve(path, false, 0))
+    }
+
+    pub(crate) fn journal_path(&self) -> &Path {
+        &self.journal[0]
+    }
+
+    pub(crate) fn journal_candidates(&self) -> &[PathBuf] {
+        &self.journal
+    }
+
+    pub(crate) fn checkpoint_path(&self) -> &Path {
+        &self.checkpoint[0]
+    }
+
+    /// checkpoint 的候选落点。块设备的历史落点以 GPT Disk GUID 命名，而 GUID 只在表
+    /// 可读时存在，读不到就没有那一条
+    pub(crate) fn checkpoint_candidates(&self, legacy_disk_guid: Option<[u8; 16]>) -> Vec<PathBuf> {
+        let mut v = self.checkpoint.clone();
+        if self.kind == TargetKind::Block
+            && let Some(g) = legacy_disk_guid
+        {
+            let hex: String = g.iter().map(|b| format!("{b:02X}")).collect();
+            v.push(state_dir().join(format!("{hex}.ckpt")));
+        }
+        v
+    }
+}
+
+/// 尽力创建目录：失败不在此处报错——真正的失败会在随后打开文件时以更具体的
+/// 错误（完整路径 + 原因）暴露，比这里笼统的 EACCES 更有诊断价值
+#[allow(clippy::let_underscore_must_use)] // 有意忽略：失败在打开文件时以更具体错误暴露
+pub(crate) fn best_effort_mkdir(dir: &Path) {
+    let _ = std::fs::create_dir_all(dir);
 }
 
 impl FileSource {
@@ -35,7 +232,15 @@ impl FileSource {
                 .open(path)?;
             let size = ioctl::blkgetsize64(&file)?;
             let sector_size = ioctl::blksszget(&file)? as u64;
-            return Ok(FileSource { file, path: path.to_path_buf(), sector_size, size, is_block: true, journal: None });
+            return Ok(FileSource {
+                identity: TargetIdentity::resolve(path, true, size),
+                file,
+                path: path.to_path_buf(),
+                sector_size,
+                size,
+                is_block: true,
+                journal: None,
+            });
         }
         let file = OpenOptions::new().read(true).write(true).open(path)?;
         let size = meta.len();
@@ -47,7 +252,15 @@ impl FileSource {
                 format!("invalid sector size {sector_size}"),
             ));
         }
-        Ok(FileSource { file, path: path.to_path_buf(), sector_size, size, is_block: false, journal: None })
+        Ok(FileSource {
+            identity: TargetIdentity::resolve(path, false, size),
+            file,
+            path: path.to_path_buf(),
+            sector_size,
+            size,
+            is_block: false,
+            journal: None,
+        })
     }
 
     /// 只读打开块设备（在线路径识别 FS 用：读写 + O_EXCL 在设备被 claim 时会失败）
@@ -56,7 +269,15 @@ impl FileSource {
         let file = OpenOptions::new().read(true).open(path)?;
         let size = ioctl::blkgetsize64(&file)?;
         let sector_size = ioctl::blksszget(&file)? as u64;
-        Ok(FileSource { file, path: path.to_path_buf(), sector_size, size, is_block: true, journal: None })
+        Ok(FileSource {
+            identity: TargetIdentity::resolve(path, true, size),
+            file,
+            path: path.to_path_buf(),
+            sector_size,
+            size,
+            is_block: true,
+            journal: None,
+        })
     }
 
     /// pread 语义（不移动文件游标，&self 可调用）；不足 buf 长度报错
@@ -228,6 +449,10 @@ impl Journal {
     pub const MOVED_MARKER: u64 = u64::MAX;
 
     pub fn create(path: &Path) -> io::Result<Self> {
+        // 落点目录归文件自己保证：路径由身份派生，身份不知道目录是否存在
+        if let Some(dir) = path.parent() {
+            best_effort_mkdir(dir);
+        }
         let mut f = OpenOptions::new().create(true).append(true).read(true).open(path)?;
         if f.metadata()?.len() == 0 {
             use std::io::Write;

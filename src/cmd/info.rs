@@ -28,7 +28,9 @@ pub(crate) fn cmd_info(a: &Args) -> u8 {
             let kind = match &e {
                 table::GptError::InvalidEntry { .. } | table::GptError::BeyondUsable { .. } => "invalid GPT entries",
                 table::GptError::BeyondContainer { .. } => "GPT geometry beyond container",
-                // 与 InvalidHeader 分开：这是数组的数据损伤（CRC 层面的坏）。
+                // 与 InvalidHeader 分开：这两个是字节层面的损伤（CRC 不符），
+                // 而 InvalidHeader 是头部自述结构的语义非法（MyLBA、usable 上下界等）
+                table::GptError::HeaderCorrupt { .. } => "GPT header damaged (both copies unusable)",
                 // 走到这里说明两份副本都没给出可用的表——单份损伤会在 load_gpt 里被备份救回
                 table::GptError::EntryArrayCorrupt { .. } => "GPT entry array damaged (both copies unusable)",
                 table::GptError::InvalidHeader(_) => "invalid GPT header",
