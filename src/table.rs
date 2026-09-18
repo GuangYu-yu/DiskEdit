@@ -316,46 +316,48 @@ fn validate_entries(entries: &[GPTPartitionEntry], header: &RawHeader) -> Result
 /// 是盘级策略。把回退藏进 parse_primary（例如加一个 recover: bool）会让解析与策略重新耦合，
 /// 每出现一种新损伤都要在解析函数里改恢复逻辑；改成"解析上报事实、load_gpt 一处定策略"后，
 /// 主头坏 / 数组 CRC 坏 / 几何不一致 / 两份都坏，都只在 load_gpt 里加一个分支
+///
+/// 没有"本副本不可恢复"这一档：两份副本的头与数组是各自独立写入的，任何一份的损伤换个
+/// 候选都可能避开——包括读取失败，换候选读的是另一个位置。故解析函数**不可能**让整次
+/// load_gpt 提前失败，这一点由返回类型（不带 Err）承担，回退与否全部收敛到 load_gpt
 enum ParsedCopy {
     /// 该候选扇区大小下此处没有 GPT
     Absent,
     /// 这一份可用
     Usable(Box<RawGpt>),
-    /// 这一份的**头或数组字节**损伤（CRC 不符）：本副本不可用，但另一份独立副本可能完好
+    /// 这一份不可用（头或数组的字节损伤、自述几何越界、读取失败）：另一份独立副本可能完好
     CopyDamaged(GptError),
-    /// 不可恢复：头部自述几何不合规、数组越出容器、条目语义非法、读取失败。
-    /// 这些是盘/容器层面的前提，另一份副本同样不满足，换副本无解
-    Fatal(GptError),
 }
 
 /// 头部自述几何的合理性检查 + 条目数组读取 + 数组 CRC 核验（主备两路共用一份）。
-/// CRC 不符 = 本副本的数组字节损伤，另一份独立副本可能完好 → CopyDamaged；
-/// 几何异常 / 数组越出容器是盘与容器层面的前提，换副本同样不满足 → Fatal
+/// 四种失败都只涉及**本副本**：几何取自本头的字段、数组按本头的 lba/size 读、
+/// CRC 与本头记录的比对、读的是本头指出的那一段字节——换一份副本读的是别处，
+/// 故错误由调用方一律归为 CopyDamaged，回退与否留到 load_gpt
 fn load_entry_array(
     src: &FileSource,
     sec: &[u8],
     header: &RawHeader,
     ss: u64,
     copy: GptCopyKind,
-) -> Result<Vec<u8>, ParsedCopy> {
-    let fatal = |m: &str| ParsedCopy::Fatal(GptError::InvalidHeader(m.into()));
+) -> Result<Vec<u8>, GptError> {
+    let bad_geometry = |m: &str| GptError::InvalidHeader(m.into());
     // 16 MiB 为自定防御上限（非 UEFI 要求）：几何异常即拒绝，不按表字段做巨型分配
     let n = header.number_of_partition_entries as u64;
     let es32 = header.size_of_partition_entry;
     if n == 0 || !valid_entry_size(es32) || n * es32 as u64 > 16 * 1024 * 1024 {
-        return Err(fatal("implausible GPT entry geometry"));
+        return Err(bad_geometry("implausible GPT entry geometry"));
     }
     let es = es32 as u64;
     // 损坏表的 lba/size 字段不受信任，乘加全部 checked，防溢出回绕
-    let array_off = header.partition_entry_lba.checked_mul(ss).ok_or_else(|| fatal("GPT entry array offset overflow"))?;
+    let array_off = header.partition_entry_lba.checked_mul(ss).ok_or_else(|| bad_geometry("GPT entry array offset overflow"))?;
     let array_len = n * es;
-    if array_off.checked_add(array_len).ok_or_else(|| fatal("GPT entry array range overflow"))? > src.size {
-        return Err(fatal("GPT entry array out of range"));
+    if array_off.checked_add(array_len).ok_or_else(|| bad_geometry("GPT entry array range overflow"))? > src.size {
+        return Err(bad_geometry("GPT entry array out of range"));
     }
     let mut raw = vec![0u8; array_len as usize];
-    src.read_at(array_off, &mut raw).map_err(|e| ParsedCopy::Fatal(e.into()))?;
+    src.read_at(array_off, &mut raw)?;
     if crc32(&raw) != rd_u32(sec, 88) {
-        return Err(ParsedCopy::CopyDamaged(GptError::EntryArrayCorrupt { copy }));
+        return Err(GptError::EntryArrayCorrupt { copy });
     }
     Ok(raw)
 }
@@ -367,88 +369,92 @@ fn parse_entry_array(raw: &[u8], n: usize, es: usize) -> Vec<GPTPartitionEntry> 
 
 /// 解析主头 + 条目数组（全部自研，写入路径用；保证主头有效）。
 /// `pmbr` 由调用方（load_gpt）判定后传入——PMBR 是独立结构，不随扇区候选变化。
-/// 返回 Absent = 该扇区大小下 LBA1 无 GPT
-fn parse_primary(src: &FileSource, ss: u64, pmbr: PmbrSize) -> Result<ParsedCopy, GptError> {
+/// 返回 Absent = 该扇区大小下 LBA1 无 GPT；返回本副本不可用 = 头/数组损伤、自述几何越界、
+/// 或这一处读不出来。任何一种都不阻止 load_gpt 继续试别的候选与盘尾备份
+fn parse_primary(src: &FileSource, ss: u64, pmbr: PmbrSize) -> ParsedCopy {
     let mut sec = vec![0u8; ss as usize];
     if src.size < ss * 2 {
-        return Ok(ParsedCopy::Absent);
+        return ParsedCopy::Absent;
     }
-    src.read_at(ss, &mut sec)?;
+    if let Err(e) = src.read_at(ss, &mut sec) {
+        // 读不出来是这一处的事（坏扇区），既不是"此处没有 GPT"，也不该就此否掉整块盘
+        return ParsedCopy::CopyDamaged(GptError::Io(e));
+    }
     let header = match probe_header(&sec) {
         HeaderProbe::Present(h) => h,
-        HeaderProbe::Absent => return Ok(ParsedCopy::Absent),
+        HeaderProbe::Absent => return ParsedCopy::Absent,
         // 签名在而头不可用 = 本副本损伤（另一份可能完好），不是"此处没有 GPT"
         HeaderProbe::Damaged(detail) => {
-            return Ok(ParsedCopy::CopyDamaged(GptError::HeaderCorrupt { copy: GptCopyKind::Primary, detail }))
+            return ParsedCopy::CopyDamaged(GptError::HeaderCorrupt { copy: GptCopyKind::Primary, detail })
         }
     };
     let raw = match load_entry_array(src, &sec, &header, ss, GptCopyKind::Primary) {
         Ok(r) => r,
-        Err(p) => return Ok(p),
+        Err(e) => return ParsedCopy::CopyDamaged(e),
     };
-    // 几何自洽性校验（validate_geometry），失败即拒绝；下游可对其结果做 LBA 算术。
-    // 这类失败取决于容器与头部自述，换备份副本同样不满足，故归 Fatal
+    // 几何自洽性校验（validate_geometry）：字段取自本头，末端按本次候选的 ss 口径算，
+    // 二者都随副本而变（备份头有它自己的 last_usable / backup_lba），故失败只是本副本不可用
     let state = match validate_geometry(&header, src.size / ss - 1) {
         Ok(s) => s,
-        Err(e) => return Ok(ParsedCopy::Fatal(e)),
+        Err(e) => return ParsedCopy::CopyDamaged(e),
     };
     let n = header.number_of_partition_entries as usize;
     let es = header.size_of_partition_entry as usize;
     let entries = parse_entry_array(&raw, n, es);
-    // 条目级校验放在数组 CRC 之后：错候选扇区大小已被头 CRC 筛掉，不会误 abort
+    // 条目级校验放在数组 CRC 之后：错候选扇区大小已被头 CRC 筛掉，不会误判
     if let Err(e) = validate_entries(&entries, &header) {
-        return Ok(ParsedCopy::Fatal(e));
+        return ParsedCopy::CopyDamaged(e);
     }
-    Ok(ParsedCopy::Usable(Box::new(RawGpt { ss, header, entries, state, pmbr })))
+    ParsedCopy::Usable(Box::new(RawGpt { ss, header, entries, state, pmbr }))
 }
 
-/// 解析备份 GPT（盘尾）。主头不可用（撕裂/清零/数组损伤）时的回退路径——主备互备是
-/// UEFI 2.10 §5.3.2 的规范要求，此刻盘尾备份是唯一能救回分区表的数据。
+/// 解析备份 GPT（盘尾）。主头不可用（头撕裂/数组损伤/该处读不出来）时的回退路径——
+/// 主备互备是 UEFI 2.10 §5.3.2 的规范要求，此刻盘尾备份是唯一能救回分区表的数据。
 /// 返回的表规范化为"主头视角"（MyLBA=1 / AltLBA=last_lba），state 置
 /// NeedsRepair{PrimaryUnreadable} 以便写入路径 ensure_geometry → perform_repair 重写双头重建主头
-fn parse_backup(src: &FileSource, ss: u64, pmbr: PmbrSize) -> Result<ParsedCopy, GptError> {
+fn parse_backup(src: &FileSource, ss: u64, pmbr: PmbrSize) -> ParsedCopy {
     if src.size < ss * 2 {
-        return Ok(ParsedCopy::Absent);
+        return ParsedCopy::Absent;
     }
     let file_last_lba = src.size / ss - 1;
     let mut sec = vec![0u8; ss as usize];
-    src.read_at(file_last_lba * ss, &mut sec)?;
+    if let Err(e) = src.read_at(file_last_lba * ss, &mut sec) {
+        return ParsedCopy::CopyDamaged(GptError::Io(e));
+    }
     let mut header = match probe_header(&sec) {
         HeaderProbe::Present(h) => h,
-        HeaderProbe::Absent => return Ok(ParsedCopy::Absent),
+        HeaderProbe::Absent => return ParsedCopy::Absent,
         // 与主头路径同判据：签名在而头不可用是本副本损伤，不是"盘尾没有 GPT"
         HeaderProbe::Damaged(detail) => {
-            return Ok(ParsedCopy::CopyDamaged(GptError::HeaderCorrupt { copy: GptCopyKind::Backup, detail }))
+            return ParsedCopy::CopyDamaged(GptError::HeaderCorrupt { copy: GptCopyKind::Backup, detail })
         }
     };
     // 备份头自述：MyLBA = 盘尾、AltLBA = 1（否则不是本盘的备份头）
     if header.primary_lba != file_last_lba || header.backup_lba != 1 {
-        return Ok(ParsedCopy::Absent);
+        return ParsedCopy::Absent;
     }
     let raw = match load_entry_array(src, &sec, &header, ss, GptCopyKind::Backup) {
         Ok(r) => r,
-        Err(p) => return Ok(p),
+        Err(e) => return ParsedCopy::CopyDamaged(e),
     };
     // 转成主头视角后再做几何自洽校验（validate_geometry 按主头语义检查 MyLBA==1）
     header.primary_lba = 1;
     header.backup_lba = file_last_lba;
     if let Err(e) = validate_geometry(&header, file_last_lba) {
-        return Ok(ParsedCopy::Fatal(e));
+        return ParsedCopy::CopyDamaged(e);
     }
     let n = header.number_of_partition_entries as usize;
     let es = header.size_of_partition_entry as usize;
     let entries = parse_entry_array(&raw, n, es);
     // 与主头路径共用同一份条目校验：只修一条路径等于留洞
     if let Err(e) = validate_entries(&entries, &header) {
-        return Ok(ParsedCopy::Fatal(e));
+        return ParsedCopy::CopyDamaged(e);
     }
-    Ok(ParsedCopy::Usable(Box::new(RawGpt {
-        ss,
-        header,
-        entries,
+    ParsedCopy::Usable(Box::new(RawGpt {
+        ss, header, entries,
         state: GptState::NeedsRepair { cause: HeaderIssue::PrimaryUnreadable },
         pmbr,
-    })))
+    }))
 }
 
 fn parse_entry(b: &[u8]) -> GPTPartitionEntry {
@@ -774,17 +780,28 @@ fn pmbr_size_state(src: &FileSource) -> io::Result<PmbrSize> {
     })
 }
 
+/// 候选扇区大小：容器 ss 优先，再补 512 / 4096。GPT 头不自述扇区大小，镜像与设备的 ss
+/// 可能不一致，故逐个探测；容器 ss 已落在候选里时不再重复一次（同一位置同一读法）
+fn candidate_sector_sizes(container_ss: u64) -> Vec<u64> {
+    let mut v = vec![container_ss];
+    for ss in [512, 4096] {
+        if ss != container_ss {
+            v.push(ss);
+        }
+    }
+    v
+}
+
 /// 便捷读取：先要求保护 MBR 形状（否则 LBA1 的残留签名即可骗过判定），再按候选扇区大小
-/// （当前盘 ss → 512 → 4096）解析主头，头 CRC 与数组 CRC 均须有效，取首个命中。
-/// 候选集是兼容性探测策略，非规范要求（GPT 头不自述扇区大小，镜像与设备 ss 可能不一致）
+/// （见 candidate_sector_sizes）解析主头，头 CRC 与数组 CRC 均须有效，取首个命中。
 ///
 /// **主备恢复策略只在本函数**（UEFI 2.10 §5.3.2 要求 primary 无效时改用 backup）：
-/// - 主副本可用 → 用它
-/// - 主副本的**数据损伤**（CopyDamaged：头或条目数组的字节坏）→ 继续尝试备份副本，
-///   因为两份副本的头与数组是各自独立写入的
-/// - 主副本结构性不可用（Fatal：几何自述不合规、越出容器、条目语义非法、读取失败）→ 直接失败，
-///   因为这类失败取决于容器与头部自述，备份副本同样不满足
-/// - 两份都不可用 → 最终报错（绝不把"有备份"变成静默接受损坏的主副本）
+/// - 任一候选、任一份可用 → 用它（来自备份时 state 标记 PrimaryUnreadable，
+///   写入路径会重写双头）
+/// - 单份不可用（头/条目数组的字节损伤、自述几何越界、这一处读不出来）→ 只是这一份的事：
+///   两份副本的头与数组是各自独立写入的，换一份读的是别处字节，故继续试其余候选
+/// - 两份都不可用 → 报出首个损伤，绝不因"试过备份"就静默接受损坏的主副本
+/// - 两份都没有 GPT 签名 → Ok(None)
 pub fn load_gpt(src: &FileSource) -> Result<Option<RawGpt>, GptError> {
     // 形状不满足保护 MBR → 不是 GPT（挡残留 GPT 头）；满足后 SizeInLBA 单独分类，
     // Stale 只标记、不否决（设备扩容后即此形态），交写入路径修复
@@ -792,29 +809,29 @@ pub fn load_gpt(src: &FileSource) -> Result<Option<RawGpt>, GptError> {
         return Ok(None);
     }
     let pmbr = pmbr_size_state(src)?;
-    // 记下首个"本副本损伤"的原因：只有两份副本都给不出可用的表时才需要报它
+    let candidates = candidate_sector_sizes(src.sector_size);
+    // 记下首个"本副本不可用"的原因：只有两份副本都给不出可用的表时才需要报它
     let mut damaged: Option<GptError> = None;
-    for ss in [src.sector_size, 512, 4096] {
-        match parse_primary(src, ss, pmbr)? {
+    for &ss in &candidates {
+        match parse_primary(src, ss, pmbr) {
             ParsedCopy::Usable(g) => return Ok(Some(*g)),
             ParsedCopy::Absent => {}
             ParsedCopy::CopyDamaged(e) => damaged = damaged.or(Some(e)),
-            ParsedCopy::Fatal(e) => return Err(e),
         }
     }
-    // 主头不可用（撕裂/清零/数组损伤）：回退解析盘尾备份头。此刻备份是唯一能救回分区表的
-    // 数据，不回退会让工具把"主副本坏但备份完好"误判为无表，进而可能在 new 时
-    // 覆盖掉这份唯一的副本。返回的 state 为 NeedsRepair，写入路径会据此重建主头
-    for ss in [src.sector_size, 512, 4096] {
-        match parse_backup(src, ss, pmbr)? {
+    // 主头全部候选都不可用（头撕裂/清零/数组损伤/该处读不出来）：回退解析盘尾备份头。
+    // 此刻备份是唯一能救回分区表的数据，不回退会让工具把"主副本坏但备份完好"误判为无表，
+    // 进而可能在 new 时覆盖掉这份唯一的副本
+    for &ss in &candidates {
+        match parse_backup(src, ss, pmbr) {
             ParsedCopy::Usable(g) => return Ok(Some(*g)),
             ParsedCopy::Absent => {}
             ParsedCopy::CopyDamaged(e) => damaged = damaged.or(Some(e)),
-            ParsedCopy::Fatal(e) => return Err(e),
         }
     }
-    // 两份副本都没有可用的表：有损伤则报出具体原因（结构化，cmd_info 据此出措辞），
-    // 不静默当"无表"——后者会让后续的 new 覆盖掉或许还能救回的数据
+    // 两份副本都没有可用的表：有损伤则报出具体原因（结构化，cmd_info 据此出措辞）；
+    // 只有两份都没有 GPT 签名才算"无表"——把损伤静默成无表会让后续的 new
+    // 覆盖掉或许还能救回的数据
     match damaged {
         Some(e) => Err(e),
         None => Ok(None),
@@ -843,6 +860,32 @@ fn derive_guid(path: &std::path::Path) -> [u8; 16] {
     out[7] = (out[7] & 0x0F) | 0x40;
     out[8] = (out[8] & 0x3F) | 0x80;
     out
+}
+
+/// 磁盘上的分区表格式（`new --table` 的值域）。用枚举而不是字符串：非法取值在参数解析
+/// 阶段就被拒，命令层拿到的一定是合法值，不必再校验一次
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum TableKind {
+    Gpt,
+    Msdos,
+}
+
+impl TableKind {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "gpt" => Some(Self::Gpt),
+            "msdos" => Some(Self::Msdos),
+            _ => None,
+        }
+    }
+
+    /// 成功信息里回显的名字，与命令行取值一致
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Gpt => "gpt",
+            Self::Msdos => "msdos",
+        }
+    }
 }
 
 /// `new`：新建空 GPT（覆盖现有表，破坏表结构但不碰分区数据区）+ 保护 MBR。
@@ -1443,6 +1486,51 @@ mod tests {
             matches!(load_gpt(&src), Err(GptError::HeaderCorrupt { copy: GptCopyKind::Primary, .. })),
             "签名在而头 CRC 坏且无备份 ⇒ 必须报 HeaderCorrupt(primary)"
         );
+    }
+
+    /// 读不出来只是"这一处"的事：主头那一段读失败时，盘尾备份照旧可用。
+    /// 让局部读取失败否掉整块盘，等于一次坏扇区就丢掉唯一能救回的表
+    #[test]
+    fn unreadable_primary_sector_falls_back_to_backup() {
+        let src = src_from_gpt("iofb", 512);
+        {
+            let _fault = crate::dev::ReadFaultGuard::at(512); // LBA1；盘尾备份在另一处偏移
+            let g = load_gpt(&src).expect("a bad sector must not fail the whole load").expect("the backup copy is intact");
+            assert!(
+                matches!(g.state, GptState::NeedsRepair { cause: HeaderIssue::PrimaryUnreadable }),
+                "recovered-from-backup must be marked for repair: {:?}",
+                g.state
+            );
+            assert!(g.entries.iter().any(|e| e.ending_lba != 0), "entries must come from the backup array");
+        }
+        // 守卫析构即撤掉注入：同一处再读正常，认的是主副本
+        assert!(load_gpt(&src).unwrap().is_some(), "the fault must not outlive its guard");
+    }
+
+    /// 两份副本的**头**都不可用 ⇒ 报错，不能静默成"无表"——后者会让 new 覆盖掉或许
+    /// 还能救回的表。与 damaged_primary_without_backup_is_reported 成对：
+    /// 那条测的是单份损伤走回退，这条测的是两份都损伤必须浮出
+    #[test]
+    fn both_headers_unusable_is_an_error_not_absence() {
+        let mut data = fixture_gpt(512);
+        let last = data.len() - 512;
+        data[512 + 16] ^= 0xFF; // 主头 CRC 字段：签名在，CRC 对不上
+        data[last + 16] ^= 0xFF; // 备头同样处理
+        let mut src = src_from("bothhdr", data);
+        ensure_protective_mbr(&mut src).unwrap();
+        assert!(
+            matches!(load_gpt(&src), Err(GptError::HeaderCorrupt { copy: GptCopyKind::Primary, .. })),
+            "两份都坏必须报错，且报首个损伤"
+        );
+    }
+
+    /// 两份副本都没有 GPT 签名（空盘）⇒ Ok(None)。与上一条成对：损伤与"没有表"必须区分开
+    #[test]
+    fn no_gpt_signature_is_absence() {
+        let mut src = src_from("nogpt", vec![0u8; 100 * 512]);
+        ensure_protective_mbr(&mut src).unwrap();
+        assert!(pmbr_shape_valid(&src).unwrap(), "前提：形状成立才会走到副本解析");
+        assert!(load_gpt(&src).unwrap().is_none(), "无签名 ⇒ 无表，不是损伤");
     }
 
     #[test]

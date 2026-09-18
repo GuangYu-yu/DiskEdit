@@ -4,6 +4,7 @@
 
 use crate::dev::FileSource;
 use crate::fsid::is_ext;
+use std::ffi::{OsStr, OsString};
 use std::io;
 #[cfg(target_os = "linux")]
 use std::path::Path;
@@ -61,7 +62,9 @@ fn is_executable(_p: &std::path::Path) -> bool {
     true
 }
 
-pub(crate) fn run(tool: &str, args: &[&str]) -> io::Result<std::process::Output> {
+/// 执行外部工具。参数用 `AsRef<OsStr>` 收：绝大多数调用点传 `&[&str]` 即可，
+/// 卷标这类任意字节的参数靠它原样透传（见 os_bytes），不经任何编码转换
+pub(crate) fn run<S: AsRef<OsStr>>(tool: &str, args: &[S]) -> io::Result<std::process::Output> {
     let path = find_tool(tool)?;
     // 输出需按格式解析（resize2fs -P、dumpe2fs -h 等），固定 LC_ALL=C 防本地化翻译破坏解析
     Command::new(path)
@@ -69,6 +72,19 @@ pub(crate) fn run(tool: &str, args: &[&str]) -> io::Result<std::process::Output>
         .stdin(Stdio::null())
         .env("LC_ALL", "C")
         .output()
+}
+
+/// 任意字节 → 命令行参数。unix 下按原字节构造：execve 的 argv 本就是字节串，无编码校验。
+/// 非 unix 平台没有这条调用路径（mkswap 只存在于 Linux），那里退化为有损解码以保持可编译
+#[cfg(unix)]
+fn os_bytes(b: &[u8]) -> OsString {
+    use std::os::unix::ffi::OsStrExt;
+    std::ffi::OsStr::from_bytes(b).to_os_string()
+}
+
+#[cfg(not(unix))]
+fn os_bytes(b: &[u8]) -> OsString {
+    OsString::from(String::from_utf8_lossy(b).into_owned())
 }
 
 /// 同 run，但从 stdin 喂入脚本（sfdisk -N 的分区描述只走 stdin）
@@ -439,27 +455,45 @@ fn min_bytes_ext(dev: &str) -> io::Result<u64> {
 
 /// swap 重建：mkswap -U <uuid> [-L <label>]，保持 UUID/卷标以维持 fstab 兼容
 /// （-U/-L 见 man mkswap：UUID 存取同序、无端转换，全零视为未设置走随机生成）。
+/// 卷标按字节透传：sws_volume 是不做编码校验的固定宽度字段，转成 String 再写回必然失真。
 /// 失败由调用方降级为日志（swap 内容可弃，但 fstab 指向的 UUID 需人工 mkswap 恢复）
-pub fn recreate_swap(src: &FileSource, part: u32, identity: (Option<[u8; 16]>, Option<String>)) -> io::Result<()> {
+pub fn recreate_swap(src: &FileSource, part: u32, identity: (Option<[u8; 16]>, Option<Vec<u8>>)) -> io::Result<()> {
     with_partition_device(src, part, |dev| {
-        let mut args: Vec<String> = Vec::new();
+        let mut args: Vec<OsString> = Vec::new();
         if let Some(u) = &identity.0 {
             // swap UUID 按原字节序列化为标准 8-4-4-4-12（mkswap 存取同序，无混合端转换）
             let hex: String = u.iter().map(|b| format!("{b:02x}")).collect();
             let s = format!("{}-{}-{}-{}-{}", &hex[0..8], &hex[8..12], &hex[12..16], &hex[16..20], &hex[20..32]);
-            args.extend(["-U".into(), s]);
+            args.extend([OsString::from("-U"), OsString::from(s)]);
         }
         if let Some(l) = &identity.1 {
-            args.extend(["-L".into(), l.clone()]);
+            args.extend([OsString::from("-L"), os_bytes(l)]);
         }
-        args.push(dev.into());
-        let argrefs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-        let out = run("mkswap", &argrefs)?;
+        args.push(OsString::from(dev));
+        let out = run("mkswap", &args)?;
         if !out.status.success() {
             return Err(io::Error::other(format!("mkswap failed: {}", String::from_utf8_lossy(&out.stderr))));
         }
         Ok(())
     })
+}
+
+/// 下取整到 unit 的整数倍
+///
+/// 用 div_euclid 而非 `/`：Rust 的整数除法对负数是向零取整，而这里要的是 floor
+/// （如 pos = part_len−1MiB 相对桶界的回退），两者在负值上不同
+fn floor_to_unit(v: i64, unit: i64) -> i64 {
+    v.div_euclid(unit) * unit
+}
+
+/// 上取整到 unit 的整数倍（取整方向说明见 floor_to_unit）
+fn ceil_to_unit(v: i64, unit: i64) -> i64 {
+    let f = floor_to_unit(v, unit);
+    if f == v {
+        f
+    } else {
+        f + unit
+    }
 }
 
 /// mkfs 前残留签名擦除：分区内固定区间整段写零，一张表覆盖已知备份超级块，
@@ -492,15 +526,12 @@ fn erase_ranges(part_len: u64, ss: u64) -> Vec<(u64, u64)> {
         // 起点：负偏移从分区尾回退，先按该行 rounding 下取整（bcachefs 备份超级块在
         // -1MiB 的桶对齐处，须先取整才能命中），再落到扇区界；越界部分由下方裁剪兜住
         let start = if off >= 0 {
-            off / ss_i * ss_i
+            floor_to_unit(off, ss_i)
         } else {
-            let pos = part_end + off;
-            let pos = if rounding > 1 { pos / rounding as i64 * rounding as i64 } else { pos };
-            pos / ss_i * ss_i
+            floor_to_unit(floor_to_unit(part_end + off, rounding as i64), ss_i)
         };
-        // 末端上取整到整扇区（写入以扇区为单位；末端非正时随裁剪一并丢弃，无需取整）
-        let end = start + len as i64;
-        let end = if end > 0 { (end + ss_i - 1) / ss_i * ss_i } else { end };
+        // 末端上取整到整扇区（写入以扇区为单位；非正的末端经下方裁剪必然落空）
+        let end = ceil_to_unit(start + len as i64, ss_i);
         let s = start.clamp(0, part_end) as u64;
         let e = end.clamp(0, part_end) as u64;
         if s < e && out.last() != Some(&(s, e - s)) {

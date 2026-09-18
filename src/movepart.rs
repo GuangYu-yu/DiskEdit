@@ -748,7 +748,10 @@ fn best_effort_read(src: &FileSource, off: u64, buf: &mut [u8]) {
 
 /// 从 swap 首部读 UUID/卷标（内核 include/linux/swap.h union swap_header：info @1024，
 /// sws_uuid@1036、sws_volume@1052）。非 swap 签名或读取失败 → None（mkswap 生成随机 UUID）
-pub(crate) fn read_swap_identity(src: &FileSource, first_lba: u64, len_lba: u64, ss: u64) -> (Option<[u8; 16]>, Option<String>) {
+///
+/// 卷标以**字节**返回：sws_volume 是 16 字节定长字段，mkswap 存入时不校验编码，
+/// 任何 String 化（Latin-1 或替换非法序列）都会在写回时改变原值
+pub(crate) fn read_swap_identity(src: &FileSource, first_lba: u64, len_lba: u64, ss: u64) -> (Option<[u8; 16]>, Option<Vec<u8>>) {
     let base = first_lba * ss;
     // 签名位置由唯一探测器判定；候选集取 libblkid 口径（含 32K）——本函数只读元数据，
     // 宽于"swapon 可激活"的范围是有意的：读得到就能保住 UUID/PARTUUID
@@ -765,9 +768,9 @@ pub(crate) fn read_swap_identity(src: &FileSource, first_lba: u64, len_lba: u64,
     // 卷标是附加信息：读失败只意味着重建后没有卷标（swap 通常按 UUID 挂载），
     // 不影响可用性；UUID 读失败已在上方显式返回 None，由 mkswap 生成新值
     best_effort_read(src, base + 1052, &mut vol);
-    let vol_s: String = vol.iter().take_while(|&&b| b != 0).map(|&b| b as char).collect();
+    let vol_bytes: Vec<u8> = vol.iter().take_while(|&&b| b != 0).copied().collect();
     let uuid_opt = if uuid == [0u8; 16] { None } else { Some(uuid) };
-    let vol_opt = if vol_s.is_empty() { None } else { Some(vol_s) };
+    let vol_opt = if vol_bytes.is_empty() { None } else { Some(vol_bytes) };
     (uuid_opt, vol_opt)
 }
 
@@ -865,6 +868,56 @@ enum CheckpointSlot {
     Ambiguous(Vec<PathBuf>),
 }
 
+/// 本次 resize 请求的目标形状——与 ckpt、盘上几何并列的第三个维度
+struct Requested {
+    part: u32,
+    start: u64,
+    end: u64,
+    chunk_len: u64,
+}
+
+/// resize 的恢复判定结论。三个维度缺一不可：
+///   requested = 本次请求的目标区间
+///   ckpt      = 持久状态（搬移前/后区间、FS 是否已缩、chunk 进度）
+///   on_disk   = 表里**当前**的分区区间
+///
+/// 判据不能只取其中两个。"盘上几何 == ckpt.new_"只说明表已提交，还要问本次请求是否就是那次
+/// 作业的目标；少了后一问，崩溃后改了 --end 重跑会被判成"已提交，收尾即可"，
+/// 于是表不动、FS 不动，却报成功——用户拿着一次什么都没做的成功去用那块空间
+enum RestoreState<'a> {
+    /// 槽位空：全新作业
+    Fresh,
+    /// 表未提交（盘上几何仍是搬移前），且本次请求与 ckpt 记的是同一次作业 → 从 chunks_done 续传
+    Resume(&'a RsCheckpoint),
+    /// 表已提交（盘上几何 == 请求 == ckpt 记的目标），只剩 FS 收尾
+    Committed(&'a RsCheckpoint),
+    /// 对不上：ckpt 属于另一次作业，或盘上几何既不是搬移前也不是搬移后
+    Divergent(&'static str),
+}
+
+/// 恢复判定：三个维度一次比完，调用方 match 结果即不可能漏看任何一个
+fn classify_restore<'a>(
+    req: &Requested,
+    ckpt: &'a RsCheckpoint,
+    on_disk: (u64, u64),
+    disk_size: u64,
+    ss: u64,
+) -> RestoreState<'a> {
+    if ckpt.part != req.part || ckpt.disk_size != disk_size || ckpt.ss != ss {
+        return RestoreState::Divergent("the checkpoint was written for a different target");
+    }
+    if (ckpt.new_start, ckpt.new_end) != (req.start, req.end) {
+        return RestoreState::Divergent("this request is not the job recorded in the checkpoint");
+    }
+    if on_disk == (ckpt.new_start, ckpt.new_end) {
+        return RestoreState::Committed(ckpt);
+    }
+    if on_disk == (ckpt.old_start, ckpt.old_end) && ckpt.chunk_bytes == req.chunk_len {
+        return RestoreState::Resume(ckpt);
+    }
+    RestoreState::Divergent("on-disk geometry matches neither end of the checkpoint")
+}
+
 // 执行期失败的类型化区分（写盘前拒绝 / 写盘后失败）定义在 outcome 模块
 
 /// 通用分区重定位：new_start/new_end 任意（grow/shrink/move 组合）。
@@ -947,34 +1000,27 @@ fn resize_part_inner(
         CheckpointSlot::Ambiguous(paths) => return Err(ambiguous_checkpoint(&paths)),
         CheckpointSlot::Empty => None,
     };
-    // Some(搬移前的 old 区间) ⇒ 表项已提交，仅剩 FS 收尾
-    let mut committed_old: Option<(u64, u64)> = None;
-    let (fs_shrunk, resume_chunks) = match existing {
-        Some(c) => {
-            // 已提交态：判据是"盘上几何已是目标位置"，而不是 ckpt 里的标记——标记与 commit
-            // 之间总有先后，落在这个窗口里中断会留下"标记说未提交、盘已提交"的 ckpt，
-            // 只认标记就会让常规校验判为"参数不匹配"而永久拒绝。此时唯一未完成的是
-            // FS 扩容收尾（幂等），直接跳过搬移阶段执行收尾
-            if c.part == part && c.disk_size == src.size && c.ss == ss
-                && old_start == c.new_start && old_end == c.new_end
-            {
-                log("resize already committed — finishing filesystem step");
-                committed_old = Some((c.old_start, c.old_end));
-                (c.fs_shrunk, c.chunks_done)
-            } else {
-                let matches = c.disk_size == src.size && c.ss == ss && c.part == part
-                    && c.old_start == old_start && c.old_end == old_end
-                    && c.new_start == new_start && c.new_end == new_end
-                    && c.chunk_bytes == chunk_len;
-                if !matches {
-                    return Err(Fail::refused("existing checkpoint does not match this resize — refusing"));
-                }
-                // Y = durable 恢复点（ckpt 文件里的值），不是本进程内存进度
-                log(&format!("resuming at chunk {} (durable checkpoint)", c.chunks_done));
-                (c.fs_shrunk, c.chunks_done)
-            }
+    // 恢复判定取三个维度：本次请求 / 持久状态 / 盘上几何（见 classify_restore）
+    let requested = Requested { part, start: new_start, end: new_end, chunk_len };
+    let state = match existing.as_ref() {
+        None => RestoreState::Fresh,
+        Some(c) => classify_restore(&requested, c, (old_start, old_end), src.size, ss),
+    };
+    let (fs_shrunk, resume_chunks, committed_old) = match state {
+        RestoreState::Fresh => (false, 0, None),
+        // Y = durable 恢复点（ckpt 文件里的值），不是本进程内存进度
+        RestoreState::Resume(c) => {
+            log(&format!("resuming at chunk {} (durable checkpoint)", c.chunks_done));
+            (c.fs_shrunk, c.chunks_done, None)
         }
-        None => (false, 0),
+        RestoreState::Committed(c) => {
+            log("resize already committed — finishing filesystem step");
+            (c.fs_shrunk, c.chunks_done, Some((c.old_start, c.old_end)))
+        }
+        // 有 ckpt 而三个维度对不上：不猜是哪一次作业，也不当作"没有 ckpt"重做一遍
+        RestoreState::Divergent(why) => {
+            return Err(Fail::refused(format!("existing checkpoint does not match this resize — refusing: {why}")));
+        }
     };
 
     // 阶段 0/3 的 FS 大小判据：已提交态下用 ckpt 记录的搬移前形状，否则本次请求的旧形状
@@ -1346,6 +1392,66 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
+    /// 崩溃后改了 --end 重跑：ckpt 是那次作业的、盘上几何也停在它的终点，但**本次请求不是它**。
+    /// 判据若只取"盘上几何 == ckpt.new_"，这一次会被判成"已提交，只剩 FS 收尾"：表不动、
+    /// FS 不动，却报成功——用户拿着一次什么都没做的成功去用那块空间
+    #[test]
+    fn retargeted_resize_after_crash_is_refused() {
+        let ss = 512u64;
+        let chunk: u64 = 1024 * 1024;
+        let (old_start, old_end) = (2048u64, 10239u64);
+        let (new_start, new_end) = (12288u64, 20479u64);
+        let (mut src, path) = plan_fixture(&[(1, [0x11; 16], old_start, old_end)]);
+
+        // 现场：表已提交到 (new_start, new_end)，ckpt 记着这次作业（提交后、FS 收尾前中断）
+        let mut g = table::load_gpt(&src).unwrap().unwrap();
+        {
+            let e = &mut g.entries[0];
+            e.starting_lba = new_start;
+            e.ending_lba = new_end;
+        }
+        let last_lba = src.size / ss - 1;
+        table::commit_gpt(&mut src, &g, last_lba).unwrap();
+        table::ensure_protective_mbr(&mut src).unwrap();
+        let ckpt_path = src.identity.checkpoint_path().to_path_buf();
+        let ckpt = RsCheckpoint {
+            disk_size: src.size, ss, part: 1,
+            old_start, old_end, new_start, new_end,
+            fs_shrunk: false, chunks_done: 4, chunk_bytes: chunk,
+        };
+
+        // (a) 请求与 ckpt 记的目标不同 → 拒绝，且不写盘
+        atomic_write_ckpt(&ckpt_path, &ckpt.serialize()).unwrap();
+        let before = std::fs::read(&path).unwrap();
+        let o = resize_part(&mut src, 1, new_start, new_end + 2048, chunk, true, &mut |_| {});
+        assert_eq!(o.exit_code(), crate::outcome::EXIT_REFUSED, "a retargeted run must be refused");
+        assert_eq!(std::fs::read(&path).unwrap(), before, "a refused run must not write");
+        assert!(ckpt_path.exists(), "the checkpoint must stay for the job it belongs to");
+
+        // (b) 请求与 ckpt 一致，但盘上几何既不是搬移前也不是搬移后（第三方工具动过表）→ 同样拒绝
+        let mut g = table::load_gpt(&src).unwrap().unwrap();
+        {
+            let e = &mut g.entries[0];
+            e.starting_lba = 16384;
+            e.ending_lba = 24575;
+        }
+        table::commit_gpt(&mut src, &g, last_lba).unwrap();
+        table::ensure_protective_mbr(&mut src).unwrap();
+        let before = std::fs::read(&path).unwrap();
+        let o = resize_part(&mut src, 1, new_start, new_end, chunk, true, &mut |_| {});
+        assert_eq!(o.exit_code(), crate::outcome::EXIT_REFUSED, "an unknown on-disk geometry must be refused");
+        assert_eq!(std::fs::read(&path).unwrap(), before, "a refused run must not write");
+        assert_eq!(
+            table::load_gpt(&src).unwrap().unwrap().entries[0].starting_lba,
+            16384,
+            "the table must stay where the third party put it"
+        );
+
+        drop(src);
+        crate::dev::warn_if_remove_failed(&ckpt_path);
+        let _ = std::fs::remove_file(&path);
+    }
+
     /// 两族作业共用一个 checkpoint 槽位。"对方在现场"必须与"空槽"分开对待：当成空槽会覆盖掉
     /// 那份唯一的续传信息，而被中断的作业盘上几何可能正停在半途
     #[test]
@@ -1520,21 +1626,36 @@ mod tests {
         assert!(make_plan(&mut src2, 1).is_err());
         drop(src2);
 
-        // 尾部容量不足：条目越过 last_usable（损坏表）→ 打包后 delta<0 拒绝
-        // （有效布局下 delta≥0 恒成立，此校验防线针对损坏/越界表）
-        // gptman 会拒绝写入越界条目，故先写合法表再手工修补原始字节 + 重算双 CRC
+        // 尾部容量不足：条目越过 last_usable（损坏表）→ 不得进入规划。
+        // gptman 会拒绝写入越界条目，故先写合法表再手工修补原始字节 + 重算**该副本**的双 CRC
         let (src3, p3) = plan_fixture(&[(1, [0x11; 16], 2048, 6143), (2, [0x22; 16], 30000, 32000)]);
         drop(src3);
+        let last_lba = std::fs::metadata(&p3).unwrap().len() / 512 - 1;
+        let backup_arr_lba = last_lba - 32; // 备份数组跨度 = 128×128/512 扇区，紧邻备份头之前
+        // 条目 2（索引 1）的 ending_lba 改成 34000（越过 last_usable）
+        let patch_entry = |raw: &mut Vec<u8>, arr_lba: u64, hdr_lba: u64| {
+            let (a, h) = ((arr_lba * 512) as usize, (hdr_lba * 512) as usize);
+            raw[a + 128 + 40..a + 128 + 48].copy_from_slice(&34000u64.to_le_bytes());
+            let arr_crc = table::crc32(&raw[a..a + 128 * 128]);
+            raw[h + 88..h + 92].copy_from_slice(&arr_crc.to_le_bytes());
+            raw[h + 16..h + 20].fill(0);
+            let hdr_crc = table::crc32(&raw[h..h + 92]);
+            raw[h + 16..h + 20].copy_from_slice(&hdr_crc.to_le_bytes());
+        };
+        // 越界的只有主副本：那是这一份的事，盘尾备份给出合法表，规划照旧成立
         {
             let mut raw = std::fs::read(&p3).unwrap();
-            let arr_off = 2 * 512;
-            let ent_off = arr_off + 128; // 条目 2（索引 1）
-            raw[ent_off + 40..ent_off + 48].copy_from_slice(&34000u64.to_le_bytes()); // ending_lba 越界
-            let arr_crc = table::crc32(&raw[arr_off..arr_off + 128 * 128]);
-            raw[512 + 88..512 + 92].copy_from_slice(&arr_crc.to_le_bytes());
-            raw[512 + 16..512 + 20].fill(0);
-            let hdr_crc = table::crc32(&raw[512..512 + 92]);
-            raw[512 + 16..512 + 20].copy_from_slice(&hdr_crc.to_le_bytes());
+            patch_entry(&mut raw, 2, 1);
+            std::fs::write(&p3, &raw).unwrap();
+        }
+        let mut src3 = plan_open(&p3);
+        assert!(make_plan(&mut src3, 1).is_ok(), "the intact backup copy must still yield a plan");
+        drop(src3);
+        // 两份都越界 ⇒ 拒绝：越界条目不得被当成有效布局
+        {
+            let mut raw = std::fs::read(&p3).unwrap();
+            patch_entry(&mut raw, 2, 1);
+            patch_entry(&mut raw, backup_arr_lba, last_lba);
             std::fs::write(&p3, &raw).unwrap();
         }
         let mut src3 = plan_open(&p3);
@@ -1650,26 +1771,47 @@ mod tests {
         let _ = std::fs::remove_file(&p);
     }
 
-    /// 几何自洽性在解析层强制：last_usable_lba 越过盘末端即拒绝（不必等下游算术兜底）
+    /// 几何自洽性在解析层强制：last_usable_lba 越过盘末端即拒绝（不必等下游算术兜底）。
+    /// 该判定读的是**本副本**的字段，故单份越界只说明这一份不可用；两份都越界才拒绝
     #[test]
     fn geometry_rejects_last_usable_beyond_disk() {
         let (src, p) = plan_fixture(&[(1, [0x11; 16], 2048, 6143)]);
         drop(src);
-        // 对照组：未打补丁时表可解析——证明下面的 Err 来自几何判定而非 CRC 写错
+        // 对照组：未打补丁时表可解析——证明后面的 Err 来自几何判定而非 CRC 写错
         let clean = plan_open(&p);
         assert!(table::load_gpt(&clean).unwrap().is_some());
         drop(clean);
+        let last_lba = std::fs::metadata(&p).unwrap().len() / 512 - 1;
+        // 手改 last_usable_lba 后重算该副本的头 CRC，才能穿过签名/CRC 抵达几何判定
+        let patch = |raw: &mut Vec<u8>, hdr_lba: u64| {
+            let h = (hdr_lba * 512) as usize;
+            raw[h + 48..h + 56].copy_from_slice(&u64::MAX.to_le_bytes());
+            raw[h + 16..h + 20].fill(0);
+            let hdr_crc = table::crc32(&raw[h..h + 92]);
+            raw[h + 16..h + 20].copy_from_slice(&hdr_crc.to_le_bytes());
+        };
+
+        // 只坏主头：盘尾备份完好 ⇒ 回退。单份越界不该否掉整块盘
         {
-            // 手改 last_usable_lba 后重算头 CRC，才能穿过签名/CRC 抵达几何判定
             let mut raw = std::fs::read(&p).unwrap();
-            raw[512 + 48..512 + 56].copy_from_slice(&u64::MAX.to_le_bytes());
-            raw[512 + 16..512 + 20].fill(0);
-            let hdr_crc = table::crc32(&raw[512..512 + 92]);
-            raw[512 + 16..512 + 20].copy_from_slice(&hdr_crc.to_le_bytes());
+            patch(&mut raw, 1);
+            std::fs::write(&p, &raw).unwrap();
+        }
+        let src = plan_open(&p);
+        let g = table::load_gpt(&src).expect("a single out-of-range copy must fall back").expect("the backup copy is intact");
+        assert!(
+            matches!(g.state, table::GptState::NeedsRepair { cause: table::HeaderIssue::PrimaryUnreadable }),
+            "recovered-from-backup must be marked for repair"
+        );
+        drop(src);
+
+        // 两份都越界 ⇒ 拒绝，且拒绝发生在解析层（所有消费者共享），ensure_geometry 只是透传
+        {
+            let mut raw = std::fs::read(&p).unwrap();
+            patch(&mut raw, last_lba);
             std::fs::write(&p, &raw).unwrap();
         }
         let mut src = plan_open(&p);
-        // 拒绝发生在解析层（所有消费者共享），ensure_geometry 只是把该错误透传出来
         let err = match table::load_gpt(&src) {
             Err(e) => e,
             Ok(_) => panic!("beyond-container last_usable_lba must be refused at parse time"),
@@ -1681,5 +1823,25 @@ mod tests {
         assert!(gpt_policy::ensure_geometry(&mut src).is_err());
         drop(src);
         let _ = std::fs::remove_file(&p);
+    }
+
+    /// swap 身份读取的字节保真：sws_volume 是 16 字节定长字段，mkswap -L 存入时不校验编码，
+    /// 解成 String 必改写非法序列（Latin-1 会把 0xFF 变成 U+00FF 的两个字节），
+    /// 于是重建 swap 时 -L 写回的值与盘上原值不同
+    #[test]
+    fn swap_identity_label_is_raw_bytes() {
+        let ss = 512u64;
+        let ps = 4096usize;
+        let mut data = vec![0u8; 4 * ps];
+        data[ps - 10..ps].copy_from_slice(b"SWAPSPACE2");
+        data[1036..1052].copy_from_slice(&[0x5A; 16]);
+        data[1052..1068].copy_from_slice(&[b'A', 0xFF, b'B', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        let src = crate::support::src_from("swaplabel", &data);
+        let path = src.path.clone();
+        let (uuid, label) = read_swap_identity(&src, 0, data.len() as u64 / ss, ss);
+        assert_eq!(uuid, Some([0x5A; 16]));
+        assert_eq!(label.as_deref(), Some(&[b'A', 0xFF, b'B'][..]));
+        drop(src);
+        let _ = std::fs::remove_file(&path);
     }
 }

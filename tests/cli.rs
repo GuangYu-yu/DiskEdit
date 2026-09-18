@@ -582,6 +582,7 @@ fn apply_swap_recreate() {
     let img = dir.join("s.img");
     // 16 MiB（32768 扇区，last_usable 32734）：root 2048..6143 + swap 6144..8191
     // apply 后：swap 尾部打包 30687..32734（零数据搬移），root 扩到 32734
+    // swap 分区内预置 v1 swap 头（见下），使重建时 -U/-L 都有值可传
     let ss = 512u64;
     let data = vec![0u8; 16 * 1024 * 1024];
     let mut cur = Cursor::new(data);
@@ -605,6 +606,19 @@ fn apply_swap_recreate() {
         partition_name: "swap".into(),
     };
     gpt.write_into(&mut cur).unwrap();
+    // v1 swap 头（内核 include/linux/swap.h union swap_header）：magic 在首页尾，
+    // sws_uuid @1036、sws_volume @1052。全零分区只会走"无 swap 头 → 随机 UUID"那条路，
+    // mkswap 的 -U/-L 参数构造就永远进不了自动化
+    const SWAP_UUID: [u8; 16] = [0xA1; 16];
+    const SWAP_LABEL: [u8; 3] = [b'A', 0xFF, b'B']; // 含非法 UTF-8 字节：按字节往返的判据
+    {
+        let ps = 4096usize; // 探测候选里本机页优先，4096 先命中
+        let base = 6144usize * 512; // swap 分区起始（LBA 6144）
+        let raw = cur.get_mut();
+        raw[base + ps - 10..base + ps].copy_from_slice(b"SWAPSPACE2");
+        raw[base + 1036..base + 1052].copy_from_slice(&SWAP_UUID);
+        raw[base + 1052..base + 1055].copy_from_slice(&SWAP_LABEL);
+    }
     std::fs::write(&img, with_protective_mbr(cur.into_inner())).unwrap();
     let exe = env!("CARGO_BIN_EXE_DiskEdit");
     let img_s = img.to_str().unwrap();
@@ -626,6 +640,18 @@ fn apply_swap_recreate() {
             .unwrap_or(false);
         if is_root {
             assert_eq!(code, 0, "apply must fully succeed as root: {stderr}");
+            // 重建后的 swap 落在新位置（LBA 30687）：-U/-L 传下去的值必须原样出现在新 swap 头里
+            use std::io::{Read, Seek, SeekFrom};
+            let mut f = std::fs::File::open(&img).unwrap();
+            let mut uuid = [0u8; 16];
+            let mut label = [0u8; 16];
+            f.seek(SeekFrom::Start(30687 * 512 + 1036)).unwrap();
+            f.read_exact(&mut uuid).unwrap();
+            f.seek(SeekFrom::Start(30687 * 512 + 1052)).unwrap();
+            f.read_exact(&mut label).unwrap();
+            assert_eq!(uuid, SWAP_UUID, "mkswap -U must restore the swap UUID");
+            assert_eq!(&label[..SWAP_LABEL.len()], &SWAP_LABEL[..], "mkswap -L must carry the label byte-for-byte");
+            assert!(label[SWAP_LABEL.len()..].iter().all(|&b| b == 0), "the rest of the label field must be NUL padding");
         } else {
             // CI runner 等非 root 环境：mkswap 无法执行 → 表已更新、swap 待重建
             assert_eq!(code, 20, "non-root: swap step pending → PARTIAL: {stderr}");

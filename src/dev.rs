@@ -216,6 +216,35 @@ pub(crate) fn best_effort_mkdir(dir: &Path) {
     let _ = std::fs::create_dir_all(dir);
 }
 
+// 测试期的定点读失败注入（模拟坏扇区），按线程生效。
+//
+// 回退逻辑的关键情形是"某个位置读不出来、别处正常"——常规文件构造不出这种形态
+// （让 file 短于 size 会连盘尾一并读失败），故留一个最小的注入点。
+// 测试各自跑在自己的线程上，用 RAII 守卫设置与复位
+#[cfg(test)]
+thread_local! {
+    static READ_FAULT: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
+}
+
+/// 注入守卫：命中该偏移的 `read_at` 报错，守卫析构即复位
+#[cfg(test)]
+pub(crate) struct ReadFaultGuard;
+
+#[cfg(test)]
+impl ReadFaultGuard {
+    pub(crate) fn at(off: u64) -> Self {
+        READ_FAULT.with(|f| f.set(Some(off)));
+        Self
+    }
+}
+
+#[cfg(test)]
+impl Drop for ReadFaultGuard {
+    fn drop(&mut self) {
+        READ_FAULT.with(|f| f.set(None));
+    }
+}
+
 impl FileSource {
     /// `sector_size_override`：镜像默认 512（镜像不携带扇区信息），块设备经 BLKSSZGET 查询并忽略覆盖值。
     pub fn open(path: &Path, sector_size_override: Option<u64>) -> io::Result<Self> {
@@ -282,6 +311,10 @@ impl FileSource {
 
     /// pread 语义（不移动文件游标，&self 可调用）；不足 buf 长度报错
     pub fn read_at(&self, off: u64, buf: &mut [u8]) -> io::Result<()> {
+        #[cfg(test)]
+        if READ_FAULT.with(|f| f.get()) == Some(off) {
+            return Err(io::Error::other("injected read fault"));
+        }
         #[cfg(unix)]
         {
             use std::os::unix::fs::FileExt;
@@ -437,8 +470,11 @@ pub enum JournalRead {
 /// 不入 journal 而只留一条 MOVED_MARKER —— 搬移是"前向恢复、无回滚"，
 /// 记数据字节既无人消费又与搬移量等大。外部 FS 工具（mkfs/resizefs 等）的写入
 /// 同样不在此列；回放时整卷日志全量载入内存。
+///
+/// 文件是**惰性**创建的：写下第一条记录之前磁盘上没有它（见 open）
 pub struct Journal {
-    file: File,
+    file: Option<File>,
+    path: PathBuf,
 }
 
 impl Journal {
@@ -448,39 +484,57 @@ impl Journal {
     /// 仅回滚表项会留下与数据不一致的布局）
     pub const MOVED_MARKER: u64 = u64::MAX;
 
-    pub fn create(path: &Path) -> io::Result<Self> {
-        // 落点目录归文件自己保证：路径由身份派生，身份不知道目录是否存在
-        if let Some(dir) = path.parent() {
-            best_effort_mkdir(dir);
+    /// 打开（必要时先校验）落点，**不产生任何痕迹**：文件已存在则必须是我们自己写的
+    /// journal——拒绝把陌生文件当 journal 追加；不存在则什么都不建。
+    ///
+    /// 撤销窗口的痕迹应当由"确实记了什么"产生，而不是由"打开目标"产生：否则一条在
+    /// 校验阶段就被拒的命令会留下空 journal，让后续 undo 报"journal 是空的"而不是
+    /// "没有 journal"，也占住了候选落点
+    pub fn open(path: &Path) -> io::Result<Self> {
+        match OpenOptions::new().read(true).append(true).open(path) {
+            Ok(mut f) => {
+                use std::io::Read;
+                let mut hdr = [0u8; Self::MAGIC.len()];
+                f.read_exact(&mut hdr).map_err(|_| {
+                    io::Error::new(io::ErrorKind::InvalidData, "existing journal too short for magic")
+                })?;
+                if &hdr != Self::MAGIC {
+                    return Err(io::Error::new(io::ErrorKind::InvalidData, "existing file is not a diskedit journal (magic mismatch)"));
+                }
+                Ok(Journal { file: Some(f), path: path.to_path_buf() })
+            }
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(Journal { file: None, path: path.to_path_buf() }),
+            Err(e) => Err(e),
         }
-        let mut f = OpenOptions::new().create(true).append(true).read(true).open(path)?;
-        if f.metadata()?.len() == 0 {
+    }
+
+    /// 首次记录时才落盘。magic 先于记录、记录先于实际写入，故任何时刻的盘上内容
+    /// 都不会超前于已经被记录的写入
+    fn ensure(&mut self) -> io::Result<&mut File> {
+        if self.file.is_none() {
+            // 落点目录归文件自己保证：路径由身份派生，身份不知道目录是否存在
+            if let Some(dir) = self.path.parent() {
+                best_effort_mkdir(dir);
+            }
+            let mut f = OpenOptions::new().create(true).append(true).read(true).open(&self.path)?;
             use std::io::Write;
             f.write_all(Self::MAGIC)?;
             f.sync_all()?;
             // 新建文件的目录项也必须落盘：否则断电后 journal 整体消失，而写入已经发生
-            best_effort_dir_fsync(path);
-        } else {
-            // 已有文件必须是我们自己写的 journal，拒绝把陌生文件当 journal 追加
-            use std::io::Read;
-            let mut hdr = [0u8; 5];
-            f.read_exact(&mut hdr).map_err(|_| {
-                io::Error::new(io::ErrorKind::InvalidData, "existing journal too short for magic")
-            })?;
-            if &hdr != Self::MAGIC {
-                return Err(io::Error::new(io::ErrorKind::InvalidData, "existing file is not a diskedit journal (magic mismatch)"));
-            }
+            best_effort_dir_fsync(&self.path);
+            self.file = Some(f);
         }
-        Ok(Journal { file: f })
+        Ok(self.file.as_mut().expect("the branch above fills an empty slot"))
     }
 
     pub fn record(&mut self, off: u64, bytes: &[u8]) -> io::Result<()> {
         use std::io::Write;
-        self.file.write_all(&(bytes.len() as u32).to_le_bytes())?;
-        self.file.write_all(&off.to_le_bytes())?;
-        self.file.write_all(&crate::table::crc32(bytes).to_le_bytes())?;
-        self.file.write_all(bytes)?;
-        self.file.sync_data()
+        let f = self.ensure()?;
+        f.write_all(&(bytes.len() as u32).to_le_bytes())?;
+        f.write_all(&off.to_le_bytes())?;
+        f.write_all(&crate::table::crc32(bytes).to_le_bytes())?;
+        f.write_all(bytes)?;
+        f.sync_data()
     }
 
     /// 逐条校验并读取。**契约不变**：已形成的记录必须 CRC 正确，任一条损坏即整体拒绝，
@@ -545,7 +599,7 @@ mod tests {
         const DATA: usize = 512;
         const REC: usize = 16 + DATA; // [len u32][off u64][crc u32][data]
         {
-            let mut j = Journal::create(&p).unwrap();
+            let mut j = Journal::open(&p).unwrap();
             for i in 0..3u64 {
                 j.record(1024 * i, &[0xAA; DATA]).unwrap();
             }
@@ -579,6 +633,24 @@ mod tests {
         corrupt[5 + 16 + 100] ^= 0xFF; // 第 1 条记录的数据中段
         std::fs::write(&p, &corrupt).unwrap();
         assert!(Journal::read_entries(&p).is_err(), "mid-file corruption must be refused");
+
+        let _ = std::fs::remove_file(&p);
+    }
+
+    /// 惰性创建：打开只做校验、不落痕迹，第一条记录才建文件。若 open 就建，一条在被拒阶段
+    /// 结束的命令会留下空 journal，让后续 undo 分不清"没有 journal"与"journal 是空的"
+    #[test]
+    fn journal_is_created_lazily() {
+        let p = journal_path("lazy");
+        let mut j = Journal::open(&p).unwrap();
+        assert!(!p.exists(), "opening a journal must not leave a trace on disk");
+        j.record(0, &[0xAA; 4]).unwrap();
+        assert!(p.exists(), "the first record must materialize the file");
+        drop(j);
+
+        // 已有文件必须是我们的 journal：陌生文件不得被当作 journal 追加
+        std::fs::write(&p, b"not-a-journal").unwrap();
+        assert!(Journal::open(&p).is_err(), "a foreign file must be refused, not adopted");
 
         let _ = std::fs::remove_file(&p);
     }

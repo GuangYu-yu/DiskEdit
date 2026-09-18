@@ -70,7 +70,7 @@ pub(crate) struct Args {
     pub(crate) fs: Option<String>,
     pub(crate) name: Option<String>,
     pub(crate) type_guid: Option<String>,
-    pub(crate) table: Option<String>,
+    pub(crate) table: Option<crate::table::TableKind>,
     pub(crate) yes: bool,
     pub(crate) online: bool,
     pub(crate) sector_size: Option<u64>,
@@ -191,7 +191,11 @@ pub(crate) fn parse_args() -> (String, Args) {
             "--lv" => { a.seen.push("--lv"); a.lv = Some(it.next().unwrap_or_else(|| miss_arg("--lv"))); }
             "--name" => { a.seen.push("--name"); a.name = Some(it.next().unwrap_or_else(|| miss_arg("--name"))); }
             "--type" => { a.seen.push("--type"); a.type_guid = Some(it.next().unwrap_or_else(|| miss_arg("--type"))); }
-            "--table" => { a.seen.push("--table"); a.table = Some(it.next().unwrap_or_else(|| miss_arg("--table"))); }
+            "--table" => {
+                a.seen.push("--table");
+                let v = it.next().unwrap_or_else(|| miss_arg("--table"));
+                a.table = Some(crate::table::TableKind::parse(&v).unwrap_or_else(|| bad_arg("--table", &v, " (gpt|msdos)")));
+            }
             // <CMD> --help：positional 为空时以当前命令为主题
             "--help" | "-h" => {
                 let topic = positional.first().cloned().unwrap_or(cmd.clone());

@@ -50,15 +50,15 @@ pub(crate) fn cmd_new(a: &Args) -> u8 {
         eprintln!("refused: `new` overwrites any existing partition table; pass --yes to confirm");
         EXIT_REFUSED
     } else {
+        let kind = a.table.unwrap_or(table::TableKind::Gpt);
         let mut src = open_target_for_write(a).unwrap_or_else(|(c, m)| bail(c, m));
         let ss = src.sector_size;
-        let r = match a.table.as_deref() {
-            Some("msdos") => table::create_mbr(&mut src),
-            Some("gpt") | None => table::create_gpt(&mut src, ss, None),
-            Some(other) => bail(EXIT_REFUSED, format!("unsupported table type {other:?} (gpt|msdos)")),
+        let r = match kind {
+            table::TableKind::Gpt => table::create_gpt(&mut src, ss, None),
+            table::TableKind::Msdos => table::create_mbr(&mut src),
         };
         match r {
-            Ok(()) => table_write_done(&src, &format!("created {} table (verify with: diskedit info {})", a.table.as_deref().unwrap_or("gpt"), a.target)),
+            Ok(()) => table_write_done(&src, &format!("created {} table (verify with: diskedit info {})", kind.as_str(), a.target)),
             Err(e) => { eprintln!("new failed: {e}"); EXIT_INFRA }
         }
     }
