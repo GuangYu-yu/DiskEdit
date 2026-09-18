@@ -1,5 +1,5 @@
 [package]
-name = "diskedit"
+name = "DiskEdit"
 version = "0.1.0"
 edition = "2024"
 description = "Edit disk images / whole disks as byte-addressable files: partition tables (GPT/MBR), FS identification, mkfs/resize via external tools, partition relocation with resumable checkpoints"
