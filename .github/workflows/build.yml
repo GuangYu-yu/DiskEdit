@@ -83,7 +83,7 @@ jobs:
         include: ${{ fromJson(needs.matrix.outputs.include) }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: 安装 Rust 工具链
         uses: dtolnay/rust-toolchain@stable
@@ -115,7 +115,7 @@ jobs:
         shell: bash
 
       - name: 上传构建产物
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.os }}_${{ matrix.arch }}
           path: binaries/${{ matrix.os }}_${{ matrix.arch }}/
@@ -126,7 +126,7 @@ jobs:
     if: ${{ needs.build.result == 'success' }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: stripped_artifacts/
       - name: Install llvm-strip
@@ -137,7 +137,7 @@ jobs:
             echo "Stripping $f"
             llvm-strip "$f"
           done
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: stripped_artifacts
           path: stripped_artifacts/
@@ -148,8 +148,8 @@ jobs:
     if: ${{ github.event.inputs.upload_to_repo == 'true' }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v8
         with:
           name: stripped_artifacts
           path: binaries
@@ -168,9 +168,9 @@ jobs:
     if: ${{ github.event.inputs.create_release == 'true' }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: stripped_artifacts
           path: artifacts/
@@ -194,17 +194,8 @@ jobs:
             fi
           done
 
-      # 删除旧版 tag 和 release
-      - name: 删除旧版 Release 和 Tag
-        run: |
-          tag="${{ github.ref_name }}-latest"
-          gh release delete "$tag" -y || true
-          git push origin ":refs/tags/$tag" || true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
       - name: 创建 GitHub Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v3
         with:
           name: "${{ github.event.inputs.project_name }} 最新版本"
           tag_name: "${{ github.ref_name }}-latest"
