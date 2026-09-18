@@ -6,13 +6,16 @@ use std::io;
 const SQUASHFS_MAGIC: &[u8; 4] = b"hsqs";
 const EROFS_MAGIC: [u8; 4] = [0xE2, 0xE1, 0xF5, 0xE0];
 
-pub fn identify(src: &FileSource, part_first_lba: u64, part_size_lba: u64) -> io::Result<&'static str> {
-    let ss = src.sector_size;
-    let base = part_first_lba * ss;
-    let part_len = part_size_lba * ss;
-
+/// 按**字节区间**识别文件系统：`base` 起、`len_bytes` 长的区域。
+///
+/// 刻意收字节而不收 LBA + 扇区大小：LBA 的单位取决于它来自哪张表——GPT 条目的 LBA 以
+/// **表自身的** ss 计（4Kn 镜像未加 --sector-size 时 `g.ss != src.sector_size`），
+/// MBR 条目的 LBA 以容器 ss 计。签名里带 ss 就等于要求每个调用点都为**别人的**单位负责，
+/// 而它手上往往只有 LBA；改收字节后，换算发生在唯一知道单位的那一层（读到表的地方），
+/// 本模块退化为"给一段字节，判它是什么"，与 probe_swap_header / overlay_offset_at 同形
+pub fn identify(src: &FileSource, base: u64, len_bytes: u64) -> io::Result<&'static str> {
     let rd = |off: u64, len: usize| -> io::Result<Option<Vec<u8>>> {
-        if off + len as u64 > part_len {
+        if off + len as u64 > len_bytes {
             return Ok(None);
         }
         let mut buf = vec![0u8; len];
@@ -113,32 +116,85 @@ pub fn identify(src: &FileSource, part_first_lba: u64, part_size_lba: u64) -> io
             return Ok("lvm2_pv");
         }
     }
-    // swap: "SWAPSPACE2" 位于第一页末尾 10 字节（内核 include/linux/swap.h
-    // union swap_header：reserved[PAGE_SIZE-10] + magic[10]）。盘上不记录创建时的页大小，
-    // 故按候选 [本机页,4K,8K,16K,64K] 逐一探测——本工具的探测策略，非规范要求。
-    // 32K 不在候选内：util-linux swapon 的 swap_get_header 明确跳过 0x8000（注释称该页大小
-    // 似不受支持），本工具跟随该口径；libblkid 仍探测 0x7ff6，两者不同
-    // 运行系统页大小（man sysconf(3) 的 _SC_PAGESIZE）
-    #[cfg(target_os = "linux")]
-    let host_page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as u64;
-    #[cfg(not(target_os = "linux"))]
-    let host_page = 4096u64;
-    // host_page 与固定候选重合时（如 4K 页宿主）去重，避免同偏移重复探测
-    let mut pages: Vec<u64> = Vec::new();
-    for ps in [host_page, 4096, 8192, 16384, 65536] {
-        if !pages.contains(&ps) {
-            pages.push(ps);
-        }
-    }
-    for ps in pages {
-        if part_len >= ps
-            && let Some(b) = rd(ps - 10, 10)?
-            && &b == b"SWAPSPACE2"
-        {
-            return Ok("swap");
-        }
+    // swap: 签名位于"创建机页大小"末尾 10 字节（内核 include/linux/swap.h
+    // union swap_header：reserved[PAGE_SIZE-10] + magic[10]），盘上不记录该页大小，
+    // 故由 probe_swap_header 按候选集探测。此处取 swapon 口径的候选集——
+    // 本函数回答的是"这台宿主能不能把它当 swap 处理"
+    if probe_swap_header(src, base, len_bytes, &swapon_activatable_pages()).is_some() {
+        return Ok("swap");
     }
     Ok("unknown")
+}
+
+/// ext 家族判定（本次识别的名字 + 用户可显式书写的别名）。
+/// identify 对 0xEF53 只回 "ext"，ext2/3/4 来自 mkfs 的目标 FS 参数，
+/// 而所有 ext 消费点对这四个名字行为一致，故"家族"只在这里定义一次
+pub fn is_ext(fstype: &str) -> bool {
+    matches!(fstype, "ext" | "ext2" | "ext3" | "ext4")
+}
+
+/// swap v1 签名（内核 include/linux/swap.h union swap_header）
+const SWAP_MAGIC: &[u8; 10] = b"SWAPSPACE2";
+
+/// util-linux swapon 的页大小范围：sys-utils/swapon.c 循环 `0x1000..=64K` 步进翻倍，
+/// 并显式 `if (page == 0x8000) continue;`（注释称 32K 页似不受支持）
+const SWAPON_PAGES: [u64; 4] = [4096, 8192, 16384, 65536];
+
+/// util-linux libblkid 的 swap 签名偏移表：libblkid/src/superblocks/swap.c 的
+/// sboff = 0xff6 / 0x1ff6 / 0x3ff6 / 0x7ff6 / 0xfff6（含 32K）
+const BLKID_PAGES: [u64; 5] = [4096, 8192, 16384, 32768, 65536];
+
+/// 本机页大小（man sysconf(3) 的 _SC_PAGESIZE）
+fn host_page() -> u64 {
+    #[cfg(target_os = "linux")]
+    {
+        // SAFETY: sysconf 只读进程/系统常量，_SC_PAGESIZE 无失败写回，返回值为长整型页大小
+        unsafe { libc::sysconf(libc::_SC_PAGESIZE) as u64 }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        4096
+    }
+}
+
+/// 候选顺序：本机页优先（本机格式化的 swap 区就是本机页大小），其余按集合升序。
+/// host 不在集合内时不追加——集合定义"哪些页大小属于该口径支持的范围内"
+fn ordered_pages(set: &[u64]) -> Vec<u64> {
+    let host = host_page();
+    let mut v: Vec<u64> = Vec::with_capacity(set.len());
+    if set.contains(&host) {
+        v.push(host);
+    }
+    v.extend(set.iter().copied().filter(|p| *p != host));
+    v
+}
+
+/// swapon 口径的候选页大小（"能否激活"，不含 32K）
+pub fn swapon_activatable_pages() -> Vec<u64> {
+    ordered_pages(&SWAPON_PAGES)
+}
+
+/// libblkid 口径的候选页大小（"能否识别出元数据"；含 32K，宽于激活能力）
+pub fn blkid_known_pages() -> Vec<u64> {
+    ordered_pages(&BLKID_PAGES)
+}
+
+/// swap 签名探测（唯一实现）：在候选页大小各自的末尾 10 字节找 SWAPSPACE2，
+/// 返回命中的页大小（magic 偏移 = page − 10），未命中返回 None。
+/// 候选集由调用方按语义选择（见上两个具名集合），本函数不做取舍。
+/// 只认 SWAPSPACE2：v0 的 "SWAP-SPACE" 内核早已不再写入，swsuspend 系签名
+/// （S1SUSPEND/S2SUSPEND/ULSUSPEND/TOI/LINHIB0001）是休眠镜像而非 swap 区，二者都不认
+pub fn probe_swap_header(src: &FileSource, base: u64, len_bytes: u64, page_sizes: &[u64]) -> Option<u64> {
+    for &page in page_sizes {
+        if len_bytes < page {
+            continue;
+        }
+        let mut magic = [0u8; 10];
+        if src.read_at(base + page - 10, &mut magic).is_ok() && &magic == SWAP_MAGIC {
+            return Some(page);
+        }
+    }
+    None
 }
 
 /// OpenWrt combined 布局的 RW overlay 起点（字节，相对分区头）。公式须与
@@ -195,7 +251,7 @@ mod tests {
         let mut data = vec![0u8; 4096];
         data[0x438..0x43A].copy_from_slice(&0xEF53u16.to_le_bytes());
         let s = src_from("ext", data);
-        assert_eq!(identify(&s, 0, 8).unwrap(), "ext");
+        assert_eq!(identify(&s, 0, 4096).unwrap(), "ext");
     }
 
     #[test]
@@ -204,7 +260,7 @@ mod tests {
         let ps = 4096u64;
         data[(ps - 10) as usize..ps as usize].copy_from_slice(b"SWAPSPACE2");
         let s = src_from("swap", data);
-        assert_eq!(identify(&s, 0, 16).unwrap(), "swap");
+        assert_eq!(identify(&s, 0, 8192).unwrap(), "swap");
     }
 
     #[test]
@@ -214,7 +270,7 @@ mod tests {
         let ps = 8192u64;
         data[(ps - 10) as usize..ps as usize].copy_from_slice(b"SWAPSPACE2");
         let s = src_from("swap8k", data);
-        assert_eq!(identify(&s, 0, 16).unwrap(), "swap");
+        assert_eq!(identify(&s, 0, 8192).unwrap(), "swap");
     }
 
     #[test]
@@ -224,7 +280,42 @@ mod tests {
         let ps = 32768u64;
         data[(ps - 10) as usize..ps as usize].copy_from_slice(b"SWAPSPACE2");
         let s = src_from("swap32k", data);
-        assert_eq!(identify(&s, 0, 128).unwrap(), "unknown");
+        assert_eq!(identify(&s, 0, 65536).unwrap(), "unknown");
+    }
+
+    /// 两个具名候选集：swapon 口径不含 32K，libblkid 口径含 32K（各自的依据见常量注释）
+    #[test]
+    fn swap_page_size_policies() {
+        let swapon = swapon_activatable_pages();
+        assert!(swapon.contains(&4096) && swapon.contains(&65536));
+        assert!(!swapon.contains(&32768), "swapon 循环跳过 0x8000");
+        let blkid = blkid_known_pages();
+        assert!(blkid.contains(&32768), "libblkid 的 magic 表含 0x7ff6");
+        // 顺序：本机页优先，其余按集合升序（本机页与固定集重合时去重）
+        assert_eq!(swapon[0], host_page());
+        assert_eq!(blkid[0], host_page());
+        let mut sorted = swapon.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(swapon, sorted);
+    }
+
+    /// 探测结果由候选集决定：同一镜像在 libblkid 口径命中 32K，在 swapon 口径不命中；
+    /// 分区长度不足以容纳候选页时不读越界
+    #[test]
+    fn swap_probe_is_driven_by_candidate_set() {
+        let mut data = vec![0u8; 65536];
+        data[32768 - 10..32768].copy_from_slice(b"SWAPSPACE2");
+        let s = src_from("probe32k", data);
+        assert_eq!(probe_swap_header(&s, 0, 65536, &blkid_known_pages()), Some(32768));
+        assert_eq!(probe_swap_header(&s, 0, 65536, &swapon_activatable_pages()), None);
+        // 长度小于候选页 → 跳过该候选，不判越界为命中
+        assert_eq!(probe_swap_header(&s, 0, 4096, &[65536]), None);
+        // 非 SWAPSPACE2 的 v0 签名不认
+        let mut old = vec![0u8; 8192];
+        old[4096 - 10..4096].copy_from_slice(b"SWAP-SPACE");
+        let s2 = src_from("probev0", old);
+        assert_eq!(probe_swap_header(&s2, 0, 8192, &blkid_known_pages()), None);
     }
 
     #[test]
@@ -232,7 +323,7 @@ mod tests {
         let mut data = vec![0u8; 4096];
         data[0x400..0x402].copy_from_slice(b"H+");
         let s = src_from("hfsplus", data);
-        assert_eq!(identify(&s, 0, 8).unwrap(), "hfsplus");
+        assert_eq!(identify(&s, 0, 4096).unwrap(), "hfsplus");
     }
 
     #[test]
@@ -240,7 +331,7 @@ mod tests {
         let mut data = vec![0u8; 4096];
         data[0x20..0x24].copy_from_slice(b"NXSB");
         let s = src_from("apfs", data);
-        assert_eq!(identify(&s, 0, 8).unwrap(), "apfs");
+        assert_eq!(identify(&s, 0, 4096).unwrap(), "apfs");
     }
 
     #[test]
@@ -249,14 +340,14 @@ mod tests {
         data[512..520].copy_from_slice(b"LABELONE");
         data[536..544].copy_from_slice(b"LVM2 001");
         let s = src_from("lvm", data);
-        assert_eq!(identify(&s, 0, 8).unwrap(), "lvm2_pv");
+        assert_eq!(identify(&s, 0, 4096).unwrap(), "lvm2_pv");
     }
 
     #[test]
     fn unknown_not_guessed() {
         let data = vec![0u8; 4096];
         let s = src_from("unk", data);
-        assert_eq!(identify(&s, 0, 8).unwrap(), "unknown");
+        assert_eq!(identify(&s, 0, 4096).unwrap(), "unknown");
     }
 
     #[test]
@@ -264,12 +355,12 @@ mod tests {
         let mut data = vec![0u8; 8192];
         data[0..4].copy_from_slice(b"hsqs");
         let s = src_from("sq", data);
-        assert_eq!(identify(&s, 0, 16).unwrap(), "squashfs");
+        assert_eq!(identify(&s, 0, 8192).unwrap(), "squashfs");
 
         let mut data = vec![0u8; 8192];
         data[1024..1028].copy_from_slice(&[0xE2, 0xE1, 0xF5, 0xE0]);
         let s = src_from("ero", data);
-        assert_eq!(identify(&s, 0, 16).unwrap(), "erofs");
+        assert_eq!(identify(&s, 0, 8192).unwrap(), "erofs");
     }
 
     /// overlay 起点公式：squashfs bytes_used 上取 64K 对齐；EROFS blocks<<blkszbits 同；

@@ -1,11 +1,17 @@
 //! diskedit — 磁盘编辑工具：镜像文件与块设备统一为按偏移读写的字节存储。
-//! 命令面与退出码契约：0=完成（经读回复核）/10=拒绝执行（未写盘）/20=部分完成/30=基础设施失败。
+//! 命令面与退出码契约：0=完成（经读回复核，且内核视图已刷新）/10=拒绝执行（未写盘，
+//! 成因在请求与现状不匹配）/20=部分完成（后置步骤未做，或表已写但内核分区视图过期）/
+//! 30=基础设施失败（盘内容/环境故障且未写盘，或写盘后失败）。
+//! 20 的两个成因正交：见 outcome::Applied 的 pending 与 kernel_sync；
+//! 30 的两个成因也正交：见 outcome::{Outcome::Infra, Outcome::Failed}
 
 mod dev;
 mod fsid;
 mod fsops;
+mod gpt_policy;
 #[cfg(target_os = "linux")]
 mod lvm;
+mod outcome;
 #[cfg(target_os = "linux")]
 mod online;
 mod movepart;
@@ -13,14 +19,12 @@ mod table;
 
 #[cfg(target_os = "linux")]
 use std::os::unix::fs::FileTypeExt;
-use dev::{FileSource, Journal};
-use std::io::Write;
+use dev::{FileSource, Journal, JournalRead};
 use std::process::ExitCode;
 
-pub(crate) const EXIT_OK: u8 = 0;
-pub(crate) const EXIT_REFUSED: u8 = 10;
-pub(crate) const EXIT_PARTIAL: u8 = 20;
-pub(crate) const EXIT_INFRA: u8 = 30;
+// 退出码的唯一定义在 outcome 模块（与 Outcome→退出码 的映射同处），此处仅重导出，
+// 避免两套常量各自漂移
+pub(crate) use crate::outcome::{EXIT_INFRA, EXIT_OK, EXIT_PARTIAL, EXIT_REFUSED};
 
 fn usage() -> ! {
     eprintln!(
@@ -30,7 +34,7 @@ fn usage() -> ! {
   resize <TARGET>:N <SIZE> [OPTS]                resize partition + FS (auto online/offline)
   move <TARGET>:N --start <LBA|end>              move partition
   copy <TARGET>:N --start <LBA|end> [--name S]   copy partition
-  create <TARGET> [--size B] [--name S] [--fs F] create partition in free space
+  create <TARGET> [--size S] [--name S] [--fs F] create partition in free space
   delete <TARGET>:N --yes                        delete partition entry
   set <TARGET>:N name S | label S | uuid U | flag F on|off
   check <TARGET>:N                               check filesystem
@@ -44,7 +48,27 @@ fn usage() -> ! {
   diskedit help <CMD>                            details for one command
 
 target: image path or block device; :N = partition number (1-based)
-exit codes: 0=done 10=refused 20=partial 30=infrastructure failure"#
+common opts: --no-fs  change the partition only, skip filesystem steps (fs grow /
+                      swap rebuild / lvm chain become out of scope, so layout
+                      success alone is exit 0). Shrinking is refused together
+                      with --no-fs: the filesystem has to be shrunk first
+exit codes:
+  0   done             layout changed and every follow-up step completed (or none
+                       was required — e.g. no fs inside, or --no-fs given), and the
+                       kernel partition view was refreshed
+  10  refused          nothing was written, and the request does not match the
+                       target's current state: validation failed, no partition
+                       table, partition missing, a required tool is missing, or
+                       the confirmation flag absent — changing arguments may help
+  20  partial          layout was written but a follow-up step is pending (remedy
+                       command printed per affected partition), or the kernel
+                       partition view is stale (run partprobe/partx before use)
+  30  infrastructure   could not complete, for one of two reasons: the environment
+                       or the on-disk data itself is at fault (I/O error, malformed
+                       partition table) and nothing was written; or the failure
+                       happened after writing, in which case the message says
+                       on-disk state may have changed — verify with `info` before
+                       retrying"#
     );
     std::process::exit(EXIT_REFUSED as i32);
 }
@@ -80,7 +104,8 @@ fn help_cmd(name: &str) -> ! {
     resizes partition -> PV -> LV -> filesystem as required; long operations
     are checkpointed and resumed by re-running the same command.
 
-  Notes: PV shrink is refused (use the lvreduce/pvresize chain)."#,
+  Notes: PV shrink is refused (use the lvreduce/pvresize chain). --no-fs skips
+  the filesystem steps, so it cannot shrink: the FS has to be shrunk first."#,
         "move" => r#"diskedit move <TARGET>:N --start <LBA|end>
 
   Move a partition, data follows (chunked copy, resumable via checkpoint).
@@ -92,10 +117,12 @@ fn help_cmd(name: &str) -> ! {
 
   Byte-wise copy a partition to a new location; the source is untouched.
   --start end packs the copy against the end of the usable range."#,
-        "create" => r#"diskedit create <TARGET> [--size BYTES] [--name S] [--fs F]
+        "create" => r#"diskedit create <TARGET> [--size SIZE] [--name S] [--fs F]
 
   Create a partition in free space. With --size, the first aligned gap that
-  fits; without, the largest aligned gap. --fs formats after creation."#,
+  fits; without, the largest aligned gap. --fs formats after creation.
+
+  SIZE: absolute size (units b/k/m/g/t, 1024 base, e.g. 32M | 2G | bytes)"#,
         "delete" | "del" => r#"diskedit delete <TARGET>:N --yes
 diskedit del <TARGET>:N --yes
 
@@ -120,7 +147,7 @@ diskedit resizefs <MOUNTPOINT> [BYTES] --online
 
   Resize a filesystem. Offline form grows the FS into its partition.
   Online form operates on a mounted partition: grow only (btrfs also
-  shrinks); BYTES is the absolute target in bytes."#,
+  shrinks); BYTES is the absolute target (units b/k/m/g/t, 1024 base)."#,
         "undo" => r#"diskedit undo <TARGET> --yes
 
   Replay the journal to undo this tool's direct writes (partition table and
@@ -156,11 +183,29 @@ fn bail(code: u8, msg: String) -> ! {
     std::process::exit(code as i32);
 }
 
+/// 规划/执行失败的出口：报告文字与退出码都取自 outcome（唯一措辞与唯一映射），
+/// 调用点不得自行拼装
+fn bail_fail(f: crate::outcome::Fail) -> ! {
+    let o = crate::outcome::finish(Err(f), Vec::new());
+    o.report();
+    std::process::exit(o.exit_code() as i32);
+}
+
+/// 参数缺值/坏值的统一拒绝出口：报出旗标名，避免静默 exit 使用户无从排查
+fn miss_arg(flag: &str) -> ! {
+    eprintln!("refused: {flag} requires a value (see diskedit help)");
+    std::process::exit(EXIT_REFUSED as i32);
+}
+
+fn bad_arg(flag: &str, v: &str, hint: &str) -> ! {
+    eprintln!("refused: bad value {v:?} for {flag}{hint}");
+    std::process::exit(EXIT_REFUSED as i32);
+}
+
 struct Args {
     target: String,
     part: Option<u32>,
     fstype: Option<String>,
-    state: Option<String>,
     grow: Option<u32>,
     start: Option<u64>,
     end: Option<u64>,
@@ -176,6 +221,8 @@ struct Args {
     chunk_mib: u64,
     grow_to_end: bool,
     allow_move: bool,
+    /// --no-fs：只改分区布局，FS 扩展不属后置条件（布局成功即 exit 0）
+    no_fs: bool,
     grow_lv: bool,
     lv: Option<String>,
     start_end: bool,
@@ -186,9 +233,9 @@ fn parse_args() -> (String, Args) {
     let mut it = std::env::args().skip(1);
     let cmd = it.next().unwrap_or_else(|| usage());
     let mut a = Args {
-        target: String::new(), part: None, fstype: None, state: None, grow: None,
+        target: String::new(), part: None, fstype: None, grow: None,
         start: None, end: None, size: None, fs: None, name: None, type_guid: None, table: None,
-        yes: false, online: false, sector_size: None,
+        yes: false, online: false, no_fs: false, sector_size: None,
         align: "mib".to_string(),
         chunk_mib: 4,
         grow_to_end: false,
@@ -204,42 +251,48 @@ fn parse_args() -> (String, Args) {
             "--yes" => a.yes = true,
             "--online" => a.online = true,
             "--sector-size" => {
-                let v = it.next().unwrap_or_else(|| std::process::exit(EXIT_REFUSED as i32));
-                a.sector_size = Some(v.parse().unwrap_or_else(|_| std::process::exit(EXIT_REFUSED as i32)));
+                let v = it.next().unwrap_or_else(|| miss_arg("--sector-size"));
+                a.sector_size = Some(v.parse().unwrap_or_else(|_| bad_arg("--sector-size", &v, " (bytes, e.g. 4096)")));
             }
             "--grow" => {
-                let v = it.next().unwrap_or_else(|| std::process::exit(EXIT_REFUSED as i32));
-                a.grow = Some(v.parse().unwrap_or_else(|_| std::process::exit(EXIT_REFUSED as i32)));
+                let v = it.next().unwrap_or_else(|| miss_arg("--grow"));
+                a.grow = Some(v.parse().unwrap_or_else(|_| bad_arg("--grow", &v, " (partition number, e.g. 1)")));
             }
             "--size" => {
-                let v = it.next().unwrap_or_else(|| std::process::exit(EXIT_REFUSED as i32));
-                a.size = Some(v.parse().unwrap_or_else(|_| std::process::exit(EXIT_REFUSED as i32)));
+                let v = it.next().unwrap_or_else(|| miss_arg("--size"));
+                // 与 resize 的 SIZE 同一单位语法（b/k/m/g/t，1024 进制），但只接受绝对值
+                a.size = Some(match parse_size_delta(&v) {
+                    Some((bytes, 0, false)) => bytes,
+                    Some(_) => bad_arg("--size", &v, " (absolute size only: use 32M, not +32M/-32M/32%)"),
+                    None => bad_arg("--size", &v, " (use 10G | 500M | plain bytes, e.g. 33554432)"),
+                });
             }
-            "--fs" => a.fs = Some(it.next().unwrap_or_else(|| std::process::exit(EXIT_REFUSED as i32))),
+            "--fs" => a.fs = Some(it.next().unwrap_or_else(|| miss_arg("--fs"))),
             "--start" => {
-                let v = it.next().unwrap_or_else(|| std::process::exit(EXIT_REFUSED as i32));
+                let v = it.next().unwrap_or_else(|| miss_arg("--start"));
                 if v.eq_ignore_ascii_case("end") {
                     a.start_end = true; // 尾部打包：挪到 last_usable 内最后位置
                 } else {
-                    a.start = Some(v.parse().unwrap_or_else(|_| std::process::exit(EXIT_REFUSED as i32)));
+                    a.start = Some(v.parse().unwrap_or_else(|_| bad_arg("--start", &v, " (LBA, e.g. 2048)")));
                 }
             }
             "--end" => {
-                let v = it.next().unwrap_or_else(|| std::process::exit(EXIT_REFUSED as i32));
-                a.end = Some(v.parse().unwrap_or_else(|_| std::process::exit(EXIT_REFUSED as i32)));
+                let v = it.next().unwrap_or_else(|| miss_arg("--end"));
+                a.end = Some(v.parse().unwrap_or_else(|_| bad_arg("--end", &v, " (LBA, e.g. 67583)")));
             }
-            "--align" => a.align = it.next().unwrap_or_else(|| std::process::exit(EXIT_REFUSED as i32)),
+            "--align" => a.align = it.next().unwrap_or_else(|| miss_arg("--align")),
             "--chunk-size" => {
-                let v = it.next().unwrap_or_else(|| std::process::exit(EXIT_REFUSED as i32));
-                a.chunk_mib = v.parse().unwrap_or_else(|_| std::process::exit(EXIT_REFUSED as i32));
+                let v = it.next().unwrap_or_else(|| miss_arg("--chunk-size"));
+                a.chunk_mib = v.parse().unwrap_or_else(|_| bad_arg("--chunk-size", &v, " (MiB, e.g. 4)"));
             }
             "--grow-to-end" => a.grow_to_end = true,
             "--allow-move" => a.allow_move = true,
+            "--no-fs" => a.no_fs = true,
             "--grow-lv" => a.grow_lv = true,
-            "--lv" => a.lv = Some(it.next().unwrap_or_else(|| std::process::exit(EXIT_REFUSED as i32))),
-            "--name" => a.name = Some(it.next().unwrap_or_else(|| std::process::exit(EXIT_REFUSED as i32))),
-            "--type" => a.type_guid = Some(it.next().unwrap_or_else(|| std::process::exit(EXIT_REFUSED as i32))),
-            "--table" => a.table = Some(it.next().unwrap_or_else(|| std::process::exit(EXIT_REFUSED as i32))),
+            "--lv" => a.lv = Some(it.next().unwrap_or_else(|| miss_arg("--lv"))),
+            "--name" => a.name = Some(it.next().unwrap_or_else(|| miss_arg("--name"))),
+            "--type" => a.type_guid = Some(it.next().unwrap_or_else(|| miss_arg("--type"))),
+            "--table" => a.table = Some(it.next().unwrap_or_else(|| miss_arg("--table"))),
             // <CMD> --help：positional 为空时以当前命令为主题
             "--help" | "-h" => {
                 let topic = positional.first().cloned().unwrap_or(cmd);
@@ -250,12 +303,12 @@ fn parse_args() -> (String, Args) {
     }
     // 无 target（含裸调用/未知命令缺参）时打印帮助而非静默退出
     let target = positional.first().cloned().unwrap_or_else(|| usage());
-    let (target, part) = dev::parse_target(&target);
+    let (target, part) =
+        dev::parse_target(&target).unwrap_or_else(|e| bail(EXIT_REFUSED, format!("refused: {e}")));
     a.target = target;
     a.part = part;
     a.pos = positional.clone();
     a.fstype = positional.get(1).cloned();
-    a.state = positional.get(2).cloned();
     (cmd, a)
 }
 
@@ -296,7 +349,7 @@ impl Logger {
         let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
         println!("{msg}");
         if let Some(f) = &mut self.file {
-            let _ = writeln!(f, "[{ts}] {msg}");
+            best_effort_log_write(f, &format!("[{ts}] {msg}"));
         }
     }
 }
@@ -359,16 +412,32 @@ fn open_target(a: &Args) -> Result<FileSource, (u8, String)> {
         .map_err(|e| (EXIT_INFRA, format!("open failed: {e}")))
 }
 
-/// undo journal 路径：镜像 = `<名>.diskedit.journal`；块设备 = /var/lib/diskedit/<devname>.diskedit.journal。
+/// 尽力创建目录：失败不在此处报错——真正的失败会在随后打开文件时以更具体的
+/// 错误（完整路径 + 原因）暴露，比这里笼统的 EACCES 更有诊断价值
+#[allow(clippy::let_underscore_must_use)] // 有意忽略：失败在打开文件时以更具体错误暴露
+fn best_effort_mkdir(dir: &std::path::Path) {
+    let _ = std::fs::create_dir_all(dir);
+}
+
+/// 尽力写日志行：诊断设施失败不改变业务结论（数据与布局不受影响），故忽略。
+/// 命名表达"可失败且无副作用"的意图，便于静态审计区分"有意忽略"与"忘了处理"
+#[allow(clippy::let_underscore_must_use)] // 有意忽略：诊断设施失败不改变业务结论
+fn best_effort_log_write(f: &mut std::fs::File, line: &str) {
+    use std::io::Write;
+    let _ = writeln!(f, "{line}");
+}
+
+/// undo journal 路径的唯一推导：镜像 = `<名>.diskedit.journal`；
+/// 块设备 = /var/lib/diskedit/<devname>.diskedit.journal。
 /// 块设备用 devname 而非 disk_guid：`new` 前后均可用，代价是设备名漂移时需手动定位 journal
-fn journal_file(src: &FileSource) -> std::path::PathBuf {
-    if src.is_block {
+fn journal_path(target: &std::path::Path, is_block: bool) -> std::path::PathBuf {
+    if is_block {
         let dir = std::path::Path::new("/var/lib/diskedit");
-        let _ = std::fs::create_dir_all(dir);
-        let name = src.path.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "dev".into());
+        best_effort_mkdir(dir);
+        let name = target.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "dev".into());
         dir.join(format!("{name}.diskedit.journal"))
     } else {
-        let mut p = src.path.clone().into_os_string();
+        let mut p = target.to_path_buf().into_os_string();
         p.push(".diskedit.journal");
         std::path::PathBuf::from(p)
     }
@@ -377,34 +446,52 @@ fn journal_file(src: &FileSource) -> std::path::PathBuf {
 /// 破坏性命令的打开方式：附带 undo journal（镜像/块设备一致）
 fn open_target_for_write(a: &Args) -> Result<FileSource, (u8, String)> {
     let mut src = open_target(a)?;
-    let p = journal_file(&src);
+    let p = journal_path(&src.path, src.is_block);
     src.journal = Some(Journal::create(&p).map_err(|e| (EXIT_INFRA, format!("journal open failed: {e}")))?);
     Ok(src)
 }
 
-/// 表类写命令成功后通知内核重读分区表（BLKRRPART）。失败仅警告不失败：
-/// 盘上表已写成功 ≠ 内核 partition view 已同步，后续不得依赖旧的内核几何，
-/// 实际状态以 /sys/block/<dev>/<part>/size 为准
+/// 表类写命令成功后通知内核重读分区表（BLKRRPART）。
+/// 返回 false = 内核视图未跟进：盘上表已写成功 ≠ 内核 partition view 已同步，
+/// 后续不得依赖旧的内核几何（实际状态以 /sys/block/<dev>/<part>/size 为准）。
+/// 只探测不打印——"内核视图过期"的措辞由 Outcome::report 一处输出
 #[cfg(target_os = "linux")]
-fn kernel_resync(src: &FileSource) {
+fn kernel_resync(src: &FileSource) -> bool {
     if !src.is_block {
-        return;
+        return true;
     }
     use std::os::fd::AsRawFd;
     const BLKRRPART: u64 = 0x125F; // _IO(0x12, 95)（include/uapi/linux/fs.h）
+    // SAFETY: fd 来自已打开且存活的 FileSource；BLKRRPART 无用户参数、内核不写回内存
     let r = unsafe { libc::ioctl(src.file.as_raw_fd() as libc::c_int, BLKRRPART as libc::Ioctl, 0u32) };
-    if r < 0 {
-        eprintln!(
-            "warning: partition table is on disk but the kernel did not re-read it (device busy?) — \
-             kernel partition view is stale; run `partprobe {}` before relying on it",
-            src.path.display()
-        );
-    }
+    r >= 0
 }
 
 #[cfg(not(target_os = "linux"))]
-fn kernel_resync(src: &FileSource) {
+fn kernel_resync(src: &FileSource) -> bool {
     let _ = src;
+    true
+}
+
+/// 布局类命令的统一收尾：内核重读分区表 → 把内核视图状态记入结果 → 报告 → 返回结果。
+/// 顺序不可换：report 必须在 resync 之后，否则打不出"内核视图过期"这一项；
+/// 未写盘的命令不做重读（没东西要同步）
+fn settle_layout(mut o: crate::outcome::Outcome, src: &FileSource) -> crate::outcome::Outcome {
+    if o.is_applied() && !kernel_resync(src) {
+        o.mark_kernel_stale();
+    }
+    o.report();
+    o
+}
+
+/// 表类写命令的成功收尾：内核重读 + 报告，仅当退出码为 0 时才打印成功字样
+/// （内核视图过期时退 20，此时打"成功"会与退出码矛盾）
+fn table_write_done(src: &FileSource, ok_msg: &str) -> u8 {
+    let o = settle_layout(crate::outcome::Outcome::applied_with(Vec::new()), src);
+    if o.exit_code() == EXIT_OK {
+        println!("{ok_msg}");
+    }
+    o.exit_code()
 }
 
 /// 在线路径前置守卫：活动 swap 拒绝（run swapoff 后重试）
@@ -451,20 +538,50 @@ fn align_start(a: &Args, start: u64, ss: u64) -> u64 {
     s
 }
 
-/// 目标分区存在且非空（`:N` 命中核验，off-by-one 防线）
-fn get_entry(src: &FileSource, part: u32) -> Result<(u64, u64), (u8, String)> {
-    let g = table::load_gpt(src).map_err(|e| (EXIT_REFUSED, format!("parse failed: {e}")))?
-        .ok_or((EXIT_REFUSED, "no GPT on target".to_string()))?;
-    let e = g.entries.get((part - 1) as usize)
-        .ok_or((EXIT_REFUSED, format!("partition {part} not found")))?;
-    if e.ending_lba == 0 {
-        return Err((EXIT_REFUSED, format!("partition {part} is empty")));
+/// 目标分区的**字节区间**（`:N` 命中核验，off-by-one 防线）。返回 (起始字节, 长度字节)。
+/// 返回字节而非 LBA 是刻意的：LBA 的单位取决于它来自哪张表——GPT 条目以**表自身的** ss 计
+/// （4Kn 镜像未加 --sector-size 时 `g.ss != src.sector_size`，按容器 ss 换算会整体错位），
+/// MBR 条目以容器 ss 计。换算在读到表的一处完成，下游（fsid::identify 按字节区间工作）不必知道
+/// 单位是谁的
+/// 返回 Fail 而不是 (码, 文案)：前缀与码必须同源——否则调用点会各自拼 "refused: " 前缀，
+/// 碰上 30 就自相矛盾（mkfs 曾打出 "refused: parse failed: ..." 却是 30）。
+/// 按标签分派：GPT 与 MBR 的条目形状不同（MBR 只有主分区槽位 1..=4）
+fn entry_byte_range(src: &FileSource, part: u32) -> Result<(u64, u64), crate::outcome::Fail> {
+    // 无表 = 请求与目标现状不匹配(10)；表在但结构非法 = 盘内容故障(30)。
+    // 与 resize/info 的 parse failed / no partition table 同一判据
+    match table::load_gpt(src) {
+        Err(e) => Err(crate::outcome::Fail::infra(format!("parse failed: {e}"))),
+        Ok(Some(g)) => {
+            let e = g.entries.get((part - 1) as usize)
+                .ok_or_else(|| crate::outcome::Fail::refused(format!("partition {part} not found")))?;
+            if e.ending_lba == 0 {
+                return Err(crate::outcome::Fail::refused(format!("partition {part} is empty")));
+            }
+            Ok((e.starting_lba * g.ss, (e.ending_lba - e.starting_lba + 1) * g.ss))
+        }
+        // 无 GPT → 按 MBR 解析。不这么做的话真 MBR 盘在这里被一律当成"无表"，
+        // mkfs / set label|uuid 在 MBR 上完全不可用
+        Ok(None) => match table::parse_mbr(src).map_err(|e| crate::outcome::Fail::infra(format!("parse failed: {e}")))? {
+            None => Err(crate::outcome::Fail::refused("no partition table on target")),
+            Some(mbr) => {
+                let p = mbr.iter().find(|p| p.num == part).ok_or_else(|| {
+                    crate::outcome::Fail::refused(format!("partition {part} not found (MBR covers primary slots 1..=4)"))
+                })?;
+                // 扩展容器是逻辑分区的壳，不是可承载文件系统的分区
+                if p.is_container {
+                    return Err(crate::outcome::Fail::refused(format!(
+                        "partition {part} is an extended container (logical partitions are out of scope)"
+                    )));
+                }
+                Ok((p.start_lba as u64 * src.sector_size, p.size_lba as u64 * src.sector_size))
+            }
+        },
     }
-    Ok((e.starting_lba, e.ending_lba - e.starting_lba + 1))
 }
 
-/// info 专用打开：块设备只读（RW+O_EXCL 在盘被 claim 时会被内核拒绝，分区被占用会连同
-/// 整盘一起被 claim），镜像文件照常
+/// 只读命令的打开：块设备只读（RW+O_EXCL 在盘被 claim 时会被内核拒绝，分区被占用会连同
+/// 整盘一起被 claim），镜像文件照常。info 与 plan 共用——两者都不写盘，却都可能被用来
+/// 查看一块正被使用的盘（挂载中、有活动分区），此时 O_EXCL 会让它们连读都读不成
 fn open_target_ro(a: &Args) -> Result<FileSource, (u8, String)> {
     #[cfg(target_os = "linux")]
     if let Ok(meta) = std::fs::metadata(&a.target)
@@ -488,25 +605,44 @@ fn cmd_info(a: &Args) -> i32 {
     let mut stale_notes: Vec<String> = Vec::new();
     let gpt = match table::load_gpt(&src) {
         Ok(g) => g,
-        // 解析层的几何自洽性失败必须显式报错，不能静默降级成 "none"
+        // 解析层的几何自洽性失败必须显式报错，不能静默降级成 "none"。
+        // 结构化变体在此分类输出（细节仍由 GptError 的 Display 单一渲染）
         Err(e) => {
-            eprintln!("parse failed: {e}");
+            let kind = match &e {
+                table::GptError::InvalidEntry { .. } | table::GptError::BeyondUsable { .. } => "invalid GPT entries",
+                table::GptError::BeyondContainer { .. } => "GPT geometry beyond container",
+                // 与 InvalidHeader 分开：这是数组的数据损伤（CRC 层面的坏）。
+                // 走到这里说明两份副本都没给出可用的表——单份损伤会在 load_gpt 里被备份救回
+                table::GptError::EntryArrayCorrupt { .. } => "GPT entry array damaged (both copies unusable)",
+                table::GptError::InvalidHeader(_) => "invalid GPT header",
+                table::GptError::Io(_) => "I/O error",
+            };
+            eprintln!("parse failed ({kind}): {e}");
             return EXIT_INFRA as i32;
         }
     };
     if let Some(g) = gpt {
         // 结构可识别但需修复的状态：只报告、不修改（修复由写入路径执行）
         match g.state {
-            table::GptState::Stale { backup_lba, file_last_lba } => stale_notes.push(format!(
-                "note: backup GPT header is stale — found at LBA {backup_lba}, expected at device end LBA {file_last_lba}; \
-                 any write command (or sgdisk -e) relocates it"
-            )),
+            table::GptState::NeedsRepair { cause: table::HeaderIssue::BackupLbaStale { expected, actual } } => {
+                stale_notes.push(format!(
+                    "note: backup GPT header is stale — found at LBA {actual}, expected at device end LBA {expected}; \
+                     any write command (or sgdisk -e) relocates it"
+                ))
+            }
+            table::GptState::NeedsRepair { cause: table::HeaderIssue::PrimaryUnreadable } => stale_notes.push(
+                "note: the primary GPT copy is unusable (header or entry array) — this table was recovered from the \
+                 backup copy at the device end; any write command rewrites both copies"
+                    .to_string(),
+            ),
             table::GptState::Valid => {}
         }
         match g.pmbr {
-            table::PmbrSize::Stale => stale_notes.push(
-                "note: protective MBR SizeInLBA is stale (smaller than this container) — any write command rewrites it".to_string(),
-            ),
+            table::PmbrSize::NeedsRepair { cause } => stale_notes.push(match cause {
+                table::PmbrIssue::Stale => "note: protective MBR SizeInLBA is stale (smaller than this container) — any write command rewrites it".to_string(),
+                // 非规范但可修复：UEFI 2.10 §5.2.3 的 SizeInLBA 以逻辑块计，512 字节口径是别的工具的历史写法
+                table::PmbrIssue::Compat512 => "note: protective MBR SizeInLBA uses the 512-byte-sector convention instead of this device's logical-block value (UEFI 2.10 §5.2.3) — any write command normalizes it".to_string(),
+            }),
             table::PmbrSize::Inconsistent => stale_notes.push(
                 "note: protective MBR SizeInLBA exceeds this container — refusing auto-repair (use sgdisk/parted)".to_string(),
             ),
@@ -528,7 +664,7 @@ fn cmd_info(a: &Args) -> i32 {
                 out.push(',');
             }
             first = false;
-            let fs = fsid::identify(&src, e.starting_lba, e.ending_lba - e.starting_lba + 1).unwrap_or("error");
+            let fs = fsid::identify(&src, e.starting_lba * g.ss, (e.ending_lba - e.starting_lba + 1) * g.ss).unwrap_or("error");
             out.push_str(&format!(
                 "{{\"num\":{},\"first_lba\":{},\"last_lba\":{},\"size_bytes\":{},\"type\":\"{}\",\"fs\":\"{}\",\"name\":\"{}\"}}",
                 i + 1,
@@ -541,26 +677,38 @@ fn cmd_info(a: &Args) -> i32 {
             ));
         }
         out.push_str("]}");
-    } else if let Ok(Some(mbr)) = table::parse_mbr(&src) {
-        // 仅签名、零记录也判 mbr（`new --table msdos` 的合法初始态）
-        out.push_str("\"mbr\",\"sector_size\":");
-        out.push_str(&src.sector_size.to_string());
-        out.push_str(",\"size_bytes\":");
-        out.push_str(&src.size.to_string());
-        out.push_str(",\"partitions\":[");
-        let parts: Vec<String> = mbr.iter().map(|p| {
-            let fs = if p.is_container { "container".to_string() }
-                else { fsid::identify(&src, p.start_lba as u64, p.size_lba as u64).unwrap_or("error").to_string() };
-            format!(
-                "{{\"num\":{},\"type\":\"0x{:02X}\",\"first_lba\":{},\"last_lba\":{},\"size_bytes\":{},\"fs\":\"{}\"}}",
-                p.num, p.os_type, p.start_lba, p.start_lba + p.size_lba.saturating_sub(1),
-                p.size_lba as u64 * src.sector_size, fs
-            )
-        }).collect();
-        out.push_str(&parts.join(","));
-        out.push_str("]}");
     } else {
-        out.push_str(&format!("\"none\",\"sector_size\":{},\"size_bytes\":{}}}", src.sector_size, src.size));
+        // 只读探测的 io 失败不得降级为 "none"：那会把"读不出来"报成"没有表"，
+        // 与 GPT 分支的判据不一致（缺表 = 现状不匹配，读不出来 = 盘内容/环境故障）
+        let mbr = match table::parse_mbr(&src) {
+            Ok(m) => m,
+            Err(e) => {
+                eprintln!("parse failed: {e}");
+                return EXIT_INFRA as i32;
+            }
+        };
+        match mbr {
+            // 仅签名、零记录也判 mbr（`new --table msdos` 的合法初始态）
+            Some(mbr) => {
+                out.push_str("\"mbr\",\"sector_size\":");
+                out.push_str(&src.sector_size.to_string());
+                out.push_str(",\"size_bytes\":");
+                out.push_str(&src.size.to_string());
+                out.push_str(",\"partitions\":[");
+                let parts: Vec<String> = mbr.iter().map(|p| {
+                    let fs = if p.is_container { "container".to_string() }
+                        else { fsid::identify(&src, p.start_lba as u64 * src.sector_size, p.size_lba as u64 * src.sector_size).unwrap_or("error").to_string() };
+                    format!(
+                        "{{\"num\":{},\"type\":\"0x{:02X}\",\"first_lba\":{},\"last_lba\":{},\"size_bytes\":{},\"fs\":\"{}\"}}",
+                        p.num, p.os_type, p.start_lba, p.start_lba + p.size_lba.saturating_sub(1),
+                        p.size_lba as u64 * src.sector_size, fs
+                    )
+                }).collect();
+                out.push_str(&parts.join(","));
+                out.push_str("]}");
+            }
+            None => out.push_str(&format!("\"none\",\"sector_size\":{},\"size_bytes\":{}}}", src.sector_size, src.size)),
+        }
     }
     println!("{out}");
     for n in &stale_notes {
@@ -626,21 +774,26 @@ fn vhd_fixed_footer(src: &FileSource) -> bool {
 
 // ---------- 用户级自动命令：resize / move / create / set ----------
 
-/// 计算用几何：表属"可修复的 stale"（设备扩容后备份头/PMBR 未更新，见 GptState::Stale）时
-/// 按修复后的 last_usable_lba 计算；plan 不写盘，实际修复由写入路径的 ensure_geometry 完成
-fn effective_last_usable(src: &FileSource, g: &table::RawGpt) -> Result<u64, String> {
+/// 计算用几何：表属"可修复的 stale"（设备扩容后备份头/PMBR 未更新，见 GptState::NeedsRepair）时
+/// 按修复后的 last_usable_lba 计算；plan 不写盘，实际修复由写入路径的 ensure_geometry 完成。
+/// 返回 `Fail` 而不是字符串：这里的失败全部是盘/容器自身不自洽（PMBR 越出容器、容器装不下
+/// 备份数组、分区越出修复后的可用区），属"未写盘的盘内容故障"，与调用点自己那一堆校验拒绝
+/// 是两回事，不能压成同一个码
+fn effective_last_usable(src: &FileSource, g: &table::RawGpt) -> Result<u64, crate::outcome::Fail> {
     let file_last = src.size / g.ss - 1;
-    match movepart::classify_repair(g, file_last) {
-        Ok(Some(r)) if r.backup_stale => movepart::repaired_last_usable(g, file_last).map_err(|e| e.to_string()),
-        Ok(_) => Ok(g.header.last_usable_lba),
-        Err(e) => Err(e.to_string()),
+    match gpt_policy::classify_repair(g, file_last) {
+        // 动作自带修复后的 last_usable（决策期已算好），无需调用点再推导一次
+        Ok(action) => Ok(action.new_last_usable().unwrap_or(g.header.last_usable_lba)),
+        Err(e) => Err(crate::outcome::Fail::infra(e.to_string())),
     }
 }
 
-/// 目标分区右侧连续空闲扇区数（到下一分区起点或 last_usable+1 为止，GPT）
-fn free_right_gpt(g: &table::RawGpt, part: u32) -> u64 {
+/// 目标分区右侧连续空闲扇区数（到下一分区起点或可用区上界为止，GPT）。
+/// 上界是显式入参而非就地取 `g.header.last_usable_lba`：设备扩容后表头里的该字段是过期值，
+/// 按它算会把整段新增空间误判成"不可用"（有效上界见 effective_last_usable）
+fn free_right_gpt(g: &table::RawGpt, part: u32, last_usable: u64) -> u64 {
     let e = &g.entries[(part - 1) as usize];
-    let mut bound = g.header.last_usable_lba + 1; // 排他上界
+    let mut bound = last_usable + 1; // 排他上界
     for (i, o) in g.entries.iter().enumerate() {
         if (i + 1) as u32 == part || (o.starting_lba == 0 && o.ending_lba == 0) {
             continue;
@@ -677,13 +830,23 @@ fn aligned_gaps(used: &[(u64, u64)], lo: u64, hi: u64, unit: u64) -> Vec<(u64, u
         .collect()
 }
 
-fn print_plan(plan: &movepart::Plan) {
-    println!("plan: grow partition {} → last_usable_lba {} (blockers relocated)", plan.grow_part, plan.last_usable_lba);
+/// 列出各分区的搬移（plan 命令与 apply 前的计划打印共用）。
+/// 头行不共用：两处要给出的数不同——写入前只需扩容终点，`plan` 还要额外给出
+/// 尾部打包的上界 last_usable_lba
+fn print_moves(plan: &movepart::Plan) {
     for m in &plan.moves {
         let tag = if m.is_swap { " [swap: recreate, no data move]" } else { "" };
         println!("move part {} : {}..{} → +{} sectors ({} bytes){}",
             m.part_num, m.first_lba, m.first_lba + m.len_lba - 1, m.delta_lba, m.delta_lba * plan.ss, tag);
     }
+}
+
+fn print_plan(plan: &movepart::Plan) -> std::io::Result<()> {
+    // 实际扩容终点由 grow_end_for 判定（与 apply 同一实现）
+    let new_end = movepart::grow_end_for(plan)?;
+    println!("plan: grow partition {} → end LBA {} (blockers relocated)", plan.grow_part, new_end);
+    print_moves(plan);
+    Ok(())
 }
 
 /// SIZE 字符串 →（数值, 类别 0=绝对/1=扩/-1=缩, 是否百分号）。
@@ -760,6 +923,99 @@ fn resolve_size_request(a: &Args, size_arg: Option<&str>, cur_bytes: u64) -> (Op
     (target, grow_to_end)
 }
 
+/// PV / --grow-lv 的事前判据：与表类型无关，故 GPT 与 MBR 两条 resize 路径共用一份。
+/// 两条判据都必须落在任何写盘之前——PV 缩容要经 lvreduce/pvresize 链（本工具不做），
+/// 一旦先改了分区表就留下"分区已缩、PV 元数据未动"的不一致
+fn check_pv_intent(
+    part: u32,
+    fstype: &str,
+    is_pv: bool,
+    shrinking: bool,
+    grow_lv: bool,
+) -> Result<(), crate::outcome::Fail> {
+    if is_pv {
+        if shrinking {
+            return Err(crate::outcome::Fail::refused(
+                "shrinking an LVM PV needs the lvreduce/pvresize chain — do it manually (see pvresize(8))",
+            ));
+        }
+    } else if grow_lv {
+        return Err(crate::outcome::Fail::refused(format!(
+            "partition {part} is not an LVM PV (identified as {fstype}) — --grow-lv needs a PV"
+        )));
+    }
+    Ok(())
+}
+
+/// resize 请求里**与表类型无关**的部分：写盘前的事实快照 + 目标尺寸。
+/// 表类型特有的差异收敛成一件事实——右侧连续空闲（GPT 按修复后的 last_usable，
+/// MBR 按 32 位上限与后继条目），故由各自的几何函数算好 `free_right_lba` 填入。
+/// 这样在线路径与 `check_pv_intent` 只写一份，不会各自演化
+#[cfg(target_os = "linux")]
+struct ResizeTarget {
+    part: u32,
+    ss: u64,
+    cur_bytes: u64,
+    is_pv: bool,
+    free_right_lba: u64,
+    target: Option<u64>,
+    grow_to_end: bool,
+}
+
+/// 块设备在线路径：**表类型无关**（写表经 sfdisk / BLKPG），随表类型变化的只有
+/// `free_right_lba` 一项，故由调用方算好传入。返回 Some(退出码) = 已按在线路径处理完毕；
+/// None = 不适用（镜像，或未挂载的非 PV）→ 调用方继续离线路径。
+/// 派生不出盘名即拒绝而非继续：此时无法探测挂载状态，退到离线路径可能在 FS 挂载中写表
+#[cfg(target_os = "linux")]
+fn resize_online(a: &Args, src: &FileSource, t: &ResizeTarget) -> Option<u8> {
+    if !src.is_block {
+        return None;
+    }
+    let dn = std::path::Path::new(&a.target)
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| bail(EXIT_REFUSED, format!("cannot derive disk name from {}", a.target)));
+    refuse_swap_active(&dn, t.part);
+
+    // PV：分区层必须先按新尺寸出现在内核里，pvresize 才能吸收；活跃 LV 经 dm 持有分区使
+    // BLKRRPART 返回 EBUSY，故走 sfdisk+partx 同步路径
+    if t.is_pv {
+        let new_len = if t.grow_to_end {
+            if t.free_right_lba == 0 {
+                bail(EXIT_REFUSED, "refused: no free space to the right — a PV cannot relocate blocking partitions while LVs may be active".to_string());
+            }
+            t.cur_bytes + t.free_right_lba * t.ss
+        } else {
+            t.target.unwrap_or(t.cur_bytes) / t.ss * t.ss // 扇区下取整，与离线路径同规则
+        };
+        if new_len != t.cur_bytes {
+            let o = online::resize_pv_online(&dn, t.part, new_len);
+            if o.exit_code() != EXIT_OK {
+                o.report();
+                return Some(o.exit_code());
+            }
+        }
+        return Some(resize_done(a, true, true, t.cur_bytes));
+    }
+
+    // 非 PV：仅挂载中的分区能在线扩（在线不能搬移，只吃连续空闲）
+    let mnt = online::find_mountpoint(&dn, t.part)?;
+    // 无右侧空闲 = 分区已吃满 → None 让 FS 工具扩满现分区
+    let size = if t.grow_to_end {
+        let free = t.free_right_lba * t.ss;
+        (t.cur_bytes + free != t.cur_bytes).then_some(t.cur_bytes + free)
+    } else {
+        t.target
+    };
+    let o = online::resize_online(&mnt, size);
+    if o.exit_code() == EXIT_OK {
+        println!("resized online (verify with: diskedit info {})", a.target);
+    } else {
+        o.report();
+    }
+    Some(o.exit_code())
+}
+
 /// 块设备的分区节点路径：盘名以数字结尾时分区号加 "p" 前缀
 /// （/dev/sda→sda3、/dev/nvme0n1→nvme0n1p3；util-linux 与内核通用命名惯例）
 #[cfg(target_os = "linux")]
@@ -824,6 +1080,11 @@ fn cmd_resize(a: &Args) -> u8 {
     if a.lv.is_some() && !a.grow_lv {
         bail(EXIT_REFUSED, "refused: --lv only works together with --grow-lv".to_string());
     }
+    // resize 只改大小、不移动。--start 属 move/resize-part 的语义，静默忽略会让用户
+    // 误以为分区被移动过 —— 显式拒绝
+    if a.start.is_some() || a.start_end {
+        bail(EXIT_REFUSED, "refused: resize does not relocate partitions — use `move` or `resize-part --start`".to_string());
+    }
     let src = open_target_ro(a).unwrap_or_else(|(c, m)| bail(c, m));
     match table::table_label(&src) {
         Ok("gpt") => {}
@@ -849,100 +1110,63 @@ fn cmd_resize(a: &Args) -> u8 {
         bail(EXIT_REFUSED, format!("partition {part} is empty"));
     }
     let (start, end, ss) = (e.starting_lba, e.ending_lba, g.ss);
+    // 有效几何：设备扩容后表头里的 last_usable_lba 可能仍是旧值，"右侧还剩多少空间"
+    // 一律按修复后的上界算，否则新增的整段空间会被当成不可用
+    let last_usable = effective_last_usable(&src, &g).unwrap_or_else(|f| bail_fail(f));
+    // 上一轮 plan 型搬移作业是否尚未收尾（右侧"已空"可能正是搬了一半的结果）
+    let resuming = movepart::has_pending_relocation(&src, part);
     let cur_bytes = (end - start + 1) * ss;
-    let fstype = fsid::identify(&src, start, end - start + 1).unwrap_or_else(|e| bail(EXIT_INFRA, format!("identify failed: {e}")));
+    let fstype = fsid::identify(&src, start * ss, (end - start + 1) * ss).unwrap_or_else(|e| bail(EXIT_INFRA, format!("identify failed: {e}")));
     let is_pv = fstype == "lvm2_pv";
 
     // SIZE → 绝对目标字节数 / grow 标记
     let (target, grow_to_end) = resolve_size_request(a, size_arg.as_deref(), cur_bytes);
     let shrinking = target.is_some_and(|t| t < cur_bytes);
 
-    if is_pv {
-        if shrinking {
-            bail(EXIT_REFUSED, "refused: shrinking an LVM PV needs the lvreduce/pvresize chain — do it manually (see pvresize(8))".to_string());
-        }
-    } else if a.grow_lv {
-        bail(EXIT_REFUSED, format!("refused: partition {part} is not an LVM PV (identified as {fstype}) — --grow-lv needs a PV"));
-    }
+    check_pv_intent(part, fstype, is_pv, shrinking, a.grow_lv).unwrap_or_else(|f| bail_fail(f));
 
-    // 块设备 PV：在线链 partition → pvresize →（--grow-lv）lvextend -r → LV 内 FS。
-    // 活动 LV 经 dm 持有分区使 BLKRRPART EBUSY，分区层必须走 sfdisk+partx 同步路径
+    // 块设备在线路径（表类型无关，随表类型变的只有右侧空闲数）；镜像或未挂载的非 PV 落到离线路径
     #[cfg(target_os = "linux")]
-    if src.is_block && is_pv {
-        let Some(dn) = std::path::Path::new(&a.target).file_name().map(|s| s.to_string_lossy().into_owned()) else {
-            bail(EXIT_REFUSED, format!("cannot derive disk name from {}", a.target));
-        };
-        refuse_swap_active(&dn, part);
-        let new_len = if grow_to_end {
-            let free = free_right_gpt(&g, part);
-            if free == 0 {
-                bail(EXIT_REFUSED, "refused: no free space to the right — a PV cannot relocate blocking partitions while LVs may be active".to_string());
-            }
-            cur_bytes + free * ss
-        } else {
-            let bytes = target.unwrap_or(cur_bytes);
-            bytes / ss * ss // 扇区下取整，与离线路径同规则
-        };
-        if new_len != cur_bytes {
-            online::resize_pv_online(&dn, part, new_len).unwrap_or_else(|(c, m)| bail(c, m));
-        }
-        return resize_done(a, true, true, cur_bytes);
-    }
-
-    // 块设备：挂载/swap 探测 → 在线路径（在线不能搬移，只吃连续空闲）
-    #[cfg(target_os = "linux")]
-    if src.is_block {
-        let cur = cur_bytes;
-        if let Some(dn) = std::path::Path::new(&a.target).file_name().map(|s| s.to_string_lossy().into_owned()) {
-            refuse_swap_active(&dn, part);
-            if let Some(mnt) = online::find_mountpoint(&dn, part) {
-                let size = if grow_to_end {
-                    let free = free_right_gpt(&g, part) * ss;
-                    (cur + free != cur).then_some(cur + free)
-                    // 无右侧空闲 = 分区已吃满 → None 让 FS 工具扩满现分区
-                } else {
-                    target
-                };
-                return match online::resize_online(&mnt, size) {
-                    Ok(()) => { println!("resized online (verify with: diskedit info {})", a.target); EXIT_OK }
-                    Err((c, m)) => { eprintln!("resize failed: {m}"); c }
-                };
-            }
-        }
+    if let Some(code) = resize_online(a, &src, &ResizeTarget {
+        part,
+        ss,
+        cur_bytes,
+        is_pv,
+        free_right_lba: free_right_gpt(&g, part, last_usable),
+        target,
+        grow_to_end,
+    }) {
+        return code;
     }
 
     // 离线路径
     let is_block = src.is_block;
     let mut src = open_target_for_write(a).unwrap_or_else(|(c, m)| bail(c, m));
     if grow_to_end {
-        let free = free_right_gpt(&g, part);
-        if free > 0 {
+        let free = free_right_gpt(&g, part, last_usable);
+        // 右侧有空闲且没有未收尾的搬移作业 → 纯扩容。若作业未收尾，则"右侧已空"很可能
+        // 正是搬了一半的结果，走普通 resize_part 会跳过剩余搬移与 swap 重建等收尾
+        if free > 0 && !resuming {
             let (chunk, mut logger) = chunk_logger(a, &src);
-            match movepart::resize_part(&mut src, part, start, end + free, chunk, &mut |m| logger.log(m)) {
-                Ok(()) => {}
-                Err(e) => { eprintln!("resize failed: {e}"); return EXIT_REFUSED; }
-            }
-            kernel_resync(&src);
-            return resize_done(a, is_pv, is_block, cur_bytes);
+            let o = settle_layout(movepart::resize_part(&mut src, part, start, end + free, chunk, a.no_fs, &mut |m| logger.log(m)), &src);
+            return finish_resize(a, o, is_pv, is_block, cur_bytes);
         }
         // 右侧被挡：自动搬移挡路分区（plan 打印 → --allow-move 放行 → --yes 确认）
         if !a.allow_move {
             bail(EXIT_REFUSED, "refused: right side is occupied — pass --allow-move to relocate the blocking partitions (plan will be printed; --yes confirms)".to_string());
         }
-        let plan = movepart::make_plan(&mut src, part).unwrap_or_else(|e| bail(EXIT_REFUSED, format!("plan failed: {e}")));
-        print_plan(&plan);
+        let plan = match movepart::make_plan_resuming(&mut src, part) {
+            Ok(p) => p,
+            Err(f) => bail_fail(f),
+        };
+        print_plan(&plan).unwrap_or_else(|e| bail(EXIT_REFUSED, format!("plan failed: {e}")));
         if !a.yes {
             eprintln!("refused: this resizes by relocating the partitions listed above — review and re-run with --yes");
             return EXIT_REFUSED;
         }
         let (chunk, mut logger) = chunk_logger(a, &src);
-        match movepart::apply(&mut src, &plan, chunk, &mut |m| logger.log(m)) {
-            Ok(()) => {
-                kernel_resync(&src);
-                resize_done(a, is_pv, is_block, cur_bytes)
-            }
-            Err(e) => { eprintln!("resize failed: {e}"); EXIT_PARTIAL }
-        }
+        let o = settle_layout(movepart::apply(&mut src, &plan, chunk, a.no_fs, &mut |m| logger.log(m)), &src);
+        finish_resize(a, o, is_pv, is_block, cur_bytes)
     } else {
         // SIZE：字节 → 扇区（下取整）；扩须右侧空闲足够，缩由 resize_part 内部 FS 先缩 + 守卫
         let Some(bytes) = target else { usage() };
@@ -950,19 +1174,36 @@ fn cmd_resize(a: &Args) -> u8 {
             bail(EXIT_REFUSED, format!("refused: size {bytes} < one sector ({ss})"));
         }
         let new_end = start + bytes / ss - 1;
-        if new_end > g.header.last_usable_lba {
-            bail(EXIT_REFUSED, format!("refused: size {bytes} exceeds usable range (partition would end past last_usable_lba {})", g.header.last_usable_lba));
+        if new_end > last_usable {
+            bail(EXIT_REFUSED, format!("refused: size {bytes} exceeds usable range (partition would end past last_usable_lba {last_usable})"));
         }
-        if new_end > end && new_end - end > free_right_gpt(&g, part) {
-            bail(EXIT_REFUSED, "refused: not enough contiguous free space to the right — `grow` with --allow-move can relocate blockers".to_string());
+        // 扩容需要的位移量只在扩的时候有定义：缩容的新末端更靠左，右侧只会更空，
+        // 不存在搬移需求（此时 new_end < end，直接相减会回绕）
+        let shift = (new_end > end).then(|| new_end - end);
+        // 未收尾的搬移作业 ⇒ 必须走 resume 路径（即使几何上 free_right 已足够——swap 等
+        // 收尾步骤可能尚未执行，普通扩容会跳过它们）
+        if resuming || shift.is_some_and(|s| s > free_right_gpt(&g, part, last_usable)) {
+            // 右侧连续空闲不足：--allow-move 时按最小位移搬移挡路分区，
+            // 与 grow 路径同一确认流（plan 打印 → --yes 确认）
+            if !a.allow_move {
+                bail(EXIT_REFUSED, "refused: not enough contiguous free space to the right — pass --allow-move to relocate the blocking partitions (plan will be printed; --yes confirms)".to_string());
+            }
+            let plan = match movepart::make_plan_shift_resuming(&mut src, part, shift) {
+                Ok(p) => p,
+                Err(f) => bail_fail(f),
+            };
+            print_plan(&plan).unwrap_or_else(|e| bail(EXIT_REFUSED, format!("plan failed: {e}")));
+            if !a.yes {
+                eprintln!("refused: this resizes by relocating the partitions listed above — review and re-run with --yes");
+                return EXIT_REFUSED;
+            }
+            let (chunk, mut logger) = chunk_logger(a, &src);
+            let o = settle_layout(movepart::apply(&mut src, &plan, chunk, a.no_fs, &mut |m| logger.log(m)), &src);
+            return finish_resize(a, o, is_pv, is_block, cur_bytes);
         }
         let (chunk, mut logger) = chunk_logger(a, &src);
-        match movepart::resize_part(&mut src, part, start, new_end, chunk, &mut |m| logger.log(m)) {
-            Ok(()) => {}
-            Err(e) => { eprintln!("resize failed: {e}"); return EXIT_REFUSED; }
-        }
-        kernel_resync(&src);
-        resize_done(a, is_pv, is_block, cur_bytes)
+        let o = settle_layout(movepart::resize_part(&mut src, part, start, new_end, chunk, a.no_fs, &mut |m| logger.log(m)), &src);
+        finish_resize(a, o, is_pv, is_block, cur_bytes)
     }
 }
 
@@ -976,7 +1217,6 @@ fn cmd_resize_superfloppy(a: &Args, size_arg: Option<&str>, src_ro: &FileSource)
     if a.grow_lv || a.lv.is_some() {
         bail(EXIT_REFUSED, "refused: --grow-lv/--lv needs an LVM PV — superfloppy has no partitions".to_string());
     }
-    let ss = src_ro.sector_size;
     let cur_bytes = src_ro.size;
     let (target, grow_to_end) = resolve_size_request(a, size_arg, cur_bytes);
     if let Some(t) = target {
@@ -990,7 +1230,7 @@ fn cmd_resize_superfloppy(a: &Args, size_arg: Option<&str>, src_ro: &FileSource)
     } else if !grow_to_end {
         unreachable!("resolve_size_request guarantees a target or grow_to_end");
     }
-    let fstype = fsid::identify(src_ro, 0, cur_bytes / ss)
+    let fstype = fsid::identify(src_ro, 0, cur_bytes)
         .unwrap_or_else(|e| bail(EXIT_INFRA, format!("identify failed: {e}")));
     if matches!(fstype, "lvm2_pv" | "swap" | "unknown") {
         bail(EXIT_REFUSED, format!("refused: whole-device {fstype} is not a resizable filesystem (no partition table on target)"));
@@ -1016,6 +1256,71 @@ fn free_right_msdos(mbr: &[table::MbrPartition], p: &table::MbrPartition, total_
     bound.saturating_sub(end)
 }
 
+/// MBR 分区被扩到更大之后的收尾：FS 步（swap 重建 / FS 扩容）→ 内核重读 → 统一收尾。
+/// grow-to-end 与显式 SIZE 扩容的后置条件完全相同，故两条路径共用本函数——
+/// FS 步是后置条件的一部分，缺了会"分区变大、文件系统没变大"却报成功。
+/// `table_written` 决定是否需要内核重读；p 是**扩容前**解析出的条目（swap 头部探测用它
+/// 原区间，原尺寸是 LVM 位移的基线）
+fn mbr_grow_finish(
+    a: &Args,
+    src: &FileSource,
+    p: &table::MbrPartition,
+    fstype: &str,
+    table_written: bool,
+    is_pv: bool,
+    is_block: bool,
+) -> u8 {
+    let part = p.num;
+    let ss = src.sector_size;
+    let cur_bytes = p.size_lba as u64 * ss;
+    let mut pending: Vec<crate::outcome::Pending> = Vec::new();
+    // --no-fs：分区层之外的后置条件整体出局，与 GPT 路径同语义
+    if !a.no_fs {
+        match fstype {
+            "unknown" | "lvm2_pv" => {}
+            // swap：内容可弃，表项已扩 → mkswap 重建使新空间生效（UUID/卷标保持；
+            // 离线路径仅镜像，块设备走在线路径且 active swap 已被守卫拒绝）
+            "swap" => {
+                let ident = movepart::read_swap_identity(src, p.start_lba as u64, p.size_lba as u64, ss);
+                if let Err(e) = fsops::recreate_swap(src, part, ident) {
+                    pending.push(crate::outcome::Pending::new(
+                        part,
+                        crate::outcome::PendingKind::Swap,
+                        e.to_string(),
+                        fsops::rescue_hint("swap", &dev::part_dev_hint(src, part, p.start_lba as u64 * ss), false),
+                    ));
+                }
+            }
+            _ => {
+                if let Err(e) = fsops::resize_fs(src, part, fstype) {
+                    pending.push(crate::outcome::Pending::new(
+                        part,
+                        crate::outcome::PendingKind::Fs,
+                        e.to_string(),
+                        fsops::rescue_hint(fstype, &dev::part_dev_hint(src, part, p.start_lba as u64 * ss), false),
+                    ));
+                }
+            }
+        }
+    }
+    if pending.is_empty() {
+        // 表已写 → 走统一收尾（内核重读 + 报告）；未写表则无需重读
+        let o = if table_written {
+            settle_layout(crate::outcome::Outcome::applied_with(Vec::new()), src)
+        } else {
+            crate::outcome::Outcome::applied_with(Vec::new())
+        };
+        finish_resize(a, o, is_pv, is_block, cur_bytes)
+    } else {
+        let mut o = crate::outcome::Outcome::applied_with(pending);
+        if table_written && !kernel_resync(src) {
+            o.mark_kernel_stale();
+        }
+        o.report();
+        o.exit_code()
+    }
+}
+
 /// resize 的 MBR 分支（仅主分区 1..4；逻辑分区与扩展容器不支持）。原位纯扩缩：扩须右侧
 /// 空闲足够（MBR 无搬移能力），缩走与 GPT 相同的"FS 先缩 → 写表"守卫链。块设备复用在线
 /// 路径（基于 sysfs + sfdisk，与表类型无关）
@@ -1033,85 +1338,46 @@ fn cmd_resize_msdos(a: &Args, part: u32, size_arg: Option<&str>, src_ro: &FileSo
     let ss = src_ro.sector_size;
     let total_sectors = src_ro.size / ss;
     let cur_bytes = p.size_lba as u64 * ss;
-    let fstype = fsid::identify(src_ro, p.start_lba as u64, p.size_lba as u64)
+    let fstype = fsid::identify(src_ro, p.start_lba as u64 * ss, p.size_lba as u64 * ss)
         .unwrap_or_else(|e| bail(EXIT_INFRA, format!("identify failed: {e}")));
     let is_pv = fstype == "lvm2_pv";
 
     let (target, grow_to_end) = resolve_size_request(a, size_arg, cur_bytes);
     let shrinking = target.is_some_and(|t| t < cur_bytes);
 
-    if is_pv && shrinking {
-        bail(EXIT_REFUSED, "refused: shrinking an LVM PV needs the lvreduce/pvresize chain — do it manually (see pvresize(8))".to_string());
-    }
-    if !is_pv && a.grow_lv {
-        bail(EXIT_REFUSED, format!("refused: partition {part} is not an LVM PV (identified as {fstype}) — --grow-lv needs a PV"));
-    }
+    check_pv_intent(part, fstype, is_pv, shrinking, a.grow_lv).unwrap_or_else(|f| bail_fail(f));
     let is_block = src_ro.is_block;
 
-    // 块设备：swap/挂载探测 → 在线路径（PV 或挂载中分区；写表经 sfdisk，与表类型无关）
+    // 块设备在线路径：与 GPT 同一份实现，随表类型变的只有右侧空闲数
     #[cfg(target_os = "linux")]
-    if is_block
-        && let Some(dn) = std::path::Path::new(&a.target).file_name().map(|s| s.to_string_lossy().into_owned())
-    {
-        refuse_swap_active(&dn, part);
-        if is_pv {
-            let new_len = if grow_to_end {
-                let free = free_right_msdos(&mbr, p, total_sectors);
-                if free == 0 {
-                    bail(EXIT_REFUSED, "refused: no free space to the right — a PV cannot relocate blocking partitions while LVs may be active".to_string());
-                }
-                cur_bytes + free * ss
-            } else {
-                target.unwrap_or(cur_bytes) / ss * ss
-            };
-            if new_len != cur_bytes {
-                online::resize_pv_online(&dn, part, new_len).unwrap_or_else(|(c, m)| bail(c, m));
-            }
-            return resize_done(a, true, true, cur_bytes);
-        }
-        if let Some(mnt) = online::find_mountpoint(&dn, part) {
-            let size = if grow_to_end {
-                let free = free_right_msdos(&mbr, p, total_sectors) * ss;
-                (cur_bytes + free != cur_bytes).then_some(cur_bytes + free)
-            } else {
-                target
-            };
-            return match online::resize_online(&mnt, size) {
-                Ok(()) => { println!("resized online (verify with: diskedit info {})", a.target); EXIT_OK }
-                Err((c, m)) => { eprintln!("resize failed: {m}"); c }
-            };
-        }
+    if let Some(code) = resize_online(a, src_ro, &ResizeTarget {
+        part,
+        ss,
+        cur_bytes,
+        is_pv,
+        free_right_lba: free_right_msdos(&mbr, p, total_sectors),
+        target,
+        grow_to_end,
+    }) {
+        return code;
     }
 
     // 离线路径
     let mut src = open_target_for_write(a).unwrap_or_else(|(c, m)| bail(c, m));
     if grow_to_end {
         let free = free_right_msdos(&mbr, p, total_sectors);
+        let mut table_written = false;
         if free > 0 {
             let new_size_lba = p.size_lba as u64 + free;
             if new_size_lba > u32::MAX as u64 {
                 bail(EXIT_REFUSED, format!("refused: new size {new_size_lba} sectors exceeds MBR 32-bit LBA limit"));
             }
             table::resize_mdos_entry(&mut src, part, new_size_lba as u32)
-                .unwrap_or_else(|e| bail(EXIT_INFRA, format!("resize failed: {e}")));
-            if is_block {
-                kernel_resync(&src);
-            }
+                .unwrap_or_else(|f| bail_fail(f));
+            table_written = true;
         }
         // free == 0：分区已吃满右侧，表不动，FS 工具直接扩满现分区（与 GPT 路径同语义）
-        match fstype {
-            "unknown" | "lvm2_pv" => {}
-            // swap：内容可弃，表项已扩 → mkswap 重建使新空间生效（UUID/卷标保持；
-            // 离线路径仅镜像，块设备走在线路径且 active swap 已被守卫拒绝）
-            "swap" => {
-                let ident = movepart::read_swap_identity(&src, p.start_lba as u64, p.size_lba as u64, ss);
-                if let Err(e) = fsops::recreate_swap(&src, part, ident) {
-                    eprintln!("swap {part} resized but mkswap failed: {e} — run mkswap manually (fstab UUID may need it)");
-                }
-            }
-            _ => fsops::resize_fs(&src, part, fstype).unwrap_or_else(|e| bail(EXIT_INFRA, format!("FS grow failed: {e}"))),
-        }
-        resize_done(a, is_pv, is_block, cur_bytes)
+        mbr_grow_finish(a, &src, p, fstype, table_written, is_pv, is_block)
     } else {
         let Some(bytes) = target else { usage() };
         if bytes < ss {
@@ -1127,14 +1393,22 @@ fn cmd_resize_msdos(a: &Args, part: u32, size_arg: Option<&str>, src_ro: &FileSo
             if want > free_right_msdos(&mbr, p, total_sectors) {
                 bail(EXIT_REFUSED, "refused: not enough contiguous free space to the right (MBR resize cannot relocate blocking partitions)".to_string());
             }
-        } else {
-            // 缩：与 movepart GPT 路径同守卫链——FS 先缩成功才写表
-            match fstype {
-                "lvm2_pv" => unreachable!("PV shrink refused above"),
-                "unknown" => bail(EXIT_REFUSED, "cannot shrink: filesystem type unrecognized (shrinking the partition without resizing the FS first would corrupt data)".to_string()),
-                _ if !movepart::fs_can_shrink(fstype) => bail(EXIT_REFUSED, format!("fs {fstype} cannot shrink; aborting before any write")),
-                _ => {}
+            if want > 0 {
+                table::resize_mdos_entry(&mut src, part, new_size_lba as u32)
+                    .unwrap_or_else(|f| bail_fail(f));
             }
+            // 分区层做完 → 与 grow-to-end 同一条收尾
+            mbr_grow_finish(a, &src, p, fstype, want > 0, is_pv, is_block)
+        } else {
+            // 缩：与 movepart GPT 路径同守卫链——FS 先缩成功才写表。
+            // --no-fs 与缩容不可共存（分区末端会切进未缩的 FS 元数据），与 GPT 同判据
+            if a.no_fs {
+                bail(EXIT_REFUSED, "refused: --no-fs cannot shrink: the filesystem has to be shrunk first, otherwise the new partition end would cut into filesystem metadata".to_string());
+            }
+            // FS 收缩的前置检查与 GPT 路径同一处（fsops::check_shrink）：能否缩 / 类型是否
+            // 认得 / 工具是否齐备只写一份
+            fsops::check_shrink(fstype)
+                .unwrap_or_else(|e| bail(EXIT_REFUSED, format!("refused: {e}")));
             if let Some(min) = fsops::fs_min_bytes(&src, part, fstype)
                 .unwrap_or_else(|e| bail(EXIT_INFRA, format!("min-size probe failed: {e}")))
                 && bytes < min
@@ -1143,14 +1417,25 @@ fn cmd_resize_msdos(a: &Args, part: u32, size_arg: Option<&str>, src_ro: &FileSo
             }
             fsops::shrink_fs(&src, part, fstype, new_size_lba * ss)
                 .unwrap_or_else(|e| bail(EXIT_INFRA, format!("FS shrink failed: {e}")));
+            table::resize_mdos_entry(&mut src, part, new_size_lba as u32)
+                .unwrap_or_else(|f| bail_fail(f));
+            let o = settle_layout(crate::outcome::Outcome::applied_with(Vec::new()), &src);
+            finish_resize(a, o, is_pv, is_block, cur_bytes)
         }
-        table::resize_mdos_entry(&mut src, part, new_size_lba as u32)
-            .unwrap_or_else(|e| bail(EXIT_INFRA, format!("resize failed: {e}")));
-        if is_block {
-            kernel_resync(&src);
-        }
-        resize_done(a, is_pv, is_block, cur_bytes)
     }
+}
+
+/// resize 的收尾：布局结果 →（PV 时才继续）LVM 链，取两者中更严重的退出码。
+/// 未写入 → 直接返回；已写入但后置条件未全满足 → 非 PV 也直接返回，不打印成功字样
+/// （否则与 PARTIAL 矛盾），PV 则仍需跑 pvresize/lvextend 链
+fn finish_resize(a: &Args, o: crate::outcome::Outcome, is_pv: bool, is_block: bool, old_bytes: u64) -> u8 {
+    if !o.is_applied() {
+        return o.exit_code();
+    }
+    if o.exit_code() != EXIT_OK && !is_pv {
+        return o.exit_code();
+    }
+    resize_done(a, is_pv, is_block, old_bytes).max(o.exit_code())
 }
 
 /// 分区扩容收尾：从盘上表项重读实际新尺寸（搬移路径的扩容终点由计划决定，
@@ -1163,22 +1448,21 @@ fn resize_done(a: &Args, is_pv: bool, is_block: bool, old_bytes: u64) -> u8 {
     }
     #[cfg(target_os = "linux")]
     {
-        let new_bytes = {
-            let src = open_target_ro(a).unwrap_or_else(|(c, m)| bail(c, m));
-            // 表项重读按 label 分派（MBR resize 也走本收尾）
-            if let Ok(Some(g)) = table::load_gpt(&src) {
-                match g.entries.get((a.part.unwrap_or(0) as usize).checked_sub(1).unwrap_or(usize::MAX)) {
-                    Some(e) if e.ending_lba != 0 => (e.ending_lba - e.starting_lba + 1) * g.ss,
-                    _ => bail(EXIT_INFRA, "post-resize: partition vanished from table".to_string()),
-                }
-            } else if let Ok(Some(mbr)) = table::parse_mbr(&src) {
-                match mbr.iter().find(|p| p.num == a.part.unwrap_or(0)) {
-                    Some(p) => p.size_lba as u64 * src.sector_size,
-                    None => bail(EXIT_INFRA, "post-resize: partition vanished from table".to_string()),
-                }
-            } else {
-                bail(EXIT_INFRA, "post-resize: no partition table on target".to_string())
+        // 只打开一次：下面读"实际新尺寸"与给 LVM 链取分区节点用的是同一份盘上现状
+        let src = open_target_ro(a).unwrap_or_else(|(c, m)| bail(c, m));
+        // 表项重读按 label 分派（MBR resize 也走本收尾）
+        let new_bytes = if let Ok(Some(g)) = table::load_gpt(&src) {
+            match g.entries.get((a.part.unwrap_or(0) as usize).checked_sub(1).unwrap_or(usize::MAX)) {
+                Some(e) if e.ending_lba != 0 => (e.ending_lba - e.starting_lba + 1) * g.ss,
+                _ => bail(EXIT_INFRA, "post-resize: partition vanished from table".to_string()),
             }
+        } else if let Ok(Some(mbr)) = table::parse_mbr(&src) {
+            match mbr.iter().find(|p| p.num == a.part.unwrap_or(0)) {
+                Some(p) => p.size_lba as u64 * src.sector_size,
+                None => bail(EXIT_INFRA, "post-resize: partition vanished from table".to_string()),
+            }
+        } else {
+            bail(EXIT_INFRA, "post-resize: no partition table on target".to_string())
         };
         let delta = new_bytes.saturating_sub(old_bytes);
         let part = a.part.unwrap_or(0);
@@ -1187,7 +1471,6 @@ fn resize_done(a: &Args, is_pv: bool, is_block: bool, old_bytes: u64) -> u8 {
         } else {
             // offset+sizelimit 映射出的 loop 设备 = 该分区的整块设备，PV 整设备语义下
             // pvresize/lvextend 直接可用，无需 -P partscan
-            let src = open_target_ro(a).unwrap_or_else(|(c, m)| bail(c, m));
             fsops::with_partition_device(&src, part, |pv| {
                 lvm_grow_chain(pv, delta, a.grow_lv, a.lv.as_deref()).map_err(std::io::Error::other)
             })
@@ -1229,7 +1512,7 @@ fn cmd_move(a: &Args) -> u8 {
     // 平移保持长度（本工具语义）：new_end = new_start + 原长度 - 1
     let len = e.ending_lba - e.starting_lba + 1;
     let start = if a.start_end {
-        effective_last_usable(&src, &g).unwrap_or_else(|m| bail(EXIT_REFUSED, m))
+        effective_last_usable(&src, &g).unwrap_or_else(|f| bail_fail(f))
             .checked_sub(len - 1)
             .unwrap_or_else(|| bail(EXIT_REFUSED, "refused: partition longer than usable range".to_string()))
     } else {
@@ -1239,10 +1522,11 @@ fn cmd_move(a: &Args) -> u8 {
     let end = start.checked_add(len - 1)
         .unwrap_or_else(|| bail(EXIT_REFUSED, "refused: end LBA overflows address space".to_string()));
     let (chunk, mut logger) = chunk_logger(a, &src);
-    match movepart::resize_part(&mut src, part, start, end, chunk, &mut |m| logger.log(m)) {
-        Ok(()) => { kernel_resync(&src); println!("moved (verify with: diskedit info {})", a.target); EXIT_OK }
-        Err(e) => { eprintln!("move failed: {e}"); EXIT_REFUSED }
+    let o = settle_layout(movepart::resize_part(&mut src, part, start, end, chunk, a.no_fs, &mut |m| logger.log(m)), &src);
+    if o.exit_code() == EXIT_OK {
+        println!("moved (verify with: diskedit info {})", a.target);
     }
+    o.exit_code()
 }
 
 /// create 的一键入口：自动选空闲槽（--size 给定取首个装得下的，否则取最大者），1MiB 对齐
@@ -1254,7 +1538,9 @@ fn cmd_create(a: &Args) -> u8 {
         if b < ss { bail(EXIT_REFUSED, format!("refused: size {b} < one sector ({ss})")); }
         b / ss
     });
-    let gaps = match table::table_label(&src) {
+    // 一次探测同时取"表类型 + 空闲区"：后面选槽写表要用的是同一个 label，
+    // 再探一次等于重解析一遍表（且可能读到与前面不同的结果）
+    let (label, gaps) = match table::table_label(&src) {
         Ok("gpt") => {
             let g = match table::load_gpt(&src) {
                 Ok(Some(g)) => g,
@@ -1264,8 +1550,8 @@ fn cmd_create(a: &Args) -> u8 {
             let used: Vec<(u64, u64)> = g.entries.iter()
                 .filter(|e| !(e.starting_lba == 0 && e.ending_lba == 0))
                 .map(|e| (e.starting_lba, e.ending_lba)).collect();
-            let last_usable = effective_last_usable(&src, &g).unwrap_or_else(|m| bail(EXIT_REFUSED, m));
-            aligned_gaps(&used, g.header.first_usable_lba, last_usable, unit)
+            let last_usable = effective_last_usable(&src, &g).unwrap_or_else(|f| bail_fail(f));
+            ("gpt", aligned_gaps(&used, g.header.first_usable_lba, last_usable, unit))
         }
         Ok("msdos") => {
             let mbr = match table::parse_mbr(&src) {
@@ -1275,7 +1561,7 @@ fn cmd_create(a: &Args) -> u8 {
             };
             let used: Vec<(u64, u64)> = mbr.iter().map(|p| (p.start_lba as u64, p.start_lba as u64 + p.size_lba as u64 - 1)).collect();
             let disk_last = src.size / ss - 1;
-            aligned_gaps(&used, unit, disk_last, unit)
+            ("msdos", aligned_gaps(&used, unit, disk_last, unit))
         }
         Ok(other) => bail(EXIT_REFUSED, format!("cannot create on {other} label — run `new` first")),
         Err(e) => bail(EXIT_INFRA, format!("label probe failed: {e}")),
@@ -1290,25 +1576,36 @@ fn cmd_create(a: &Args) -> u8 {
         },
         None => *gaps.iter().max_by_key(|(s, e)| e - s + 1).unwrap(),
     };
-    let label = table::table_label(&src).unwrap_or("");
+    // swap 声明落进类型 GUID：movepart 靠它识别 swap 挡路者（不搬数据、mkswap 重建）
+    let is_swap = a.fs.as_deref() == Some("swap");
     let r = if label == "gpt" {
-        table::add_entry(&mut src, start, end, a.name.as_deref().unwrap_or(""), table::LINUX_FS_TYPE_GUID)
+        let guid = if is_swap { table::SWAP_TYPE_GUID } else { table::LINUX_FS_TYPE_GUID };
+        table::add_entry(&mut src, start, end, a.name.as_deref().unwrap_or(""), guid)
     } else {
-        table::add_mdos_entry(&mut src, start, end, 0x83)
+        table::add_mdos_entry(&mut src, start, end, if is_swap { 0x82 } else { 0x83 })
     };
     let num = match r {
         Ok(n) => n,
-        Err(e) => { eprintln!("create failed: {e}"); return EXIT_REFUSED; }
+        // 表写入失败的性质由 table 层判定：事前校验拒绝(10) / 写盘后失败(30，
+        // commit_gpt 是四段提交，失败时盘上可能停在中间态)。调用点无从区分
+        Err(f) => bail_fail(f),
     };
-    kernel_resync(&src);
+    let mut o = crate::outcome::Outcome::applied_with(Vec::new());
+    if !kernel_resync(&src) {
+        o.mark_kernel_stale();
+    }
     if let Some(fstype) = &a.fs
         && let Err(e) = fsops::mkfs(&src, num, fstype)
     {
         eprintln!("partition #{num} created but mkfs failed: {e}");
+        o.report(); // 表已写（可能内核未同步）须一并报告
         return EXIT_PARTIAL;
     }
-    println!("created partition #{num} at {start}..{end} (verify with: diskedit info {})", a.target);
-    EXIT_OK
+    o.report();
+    if o.exit_code() == EXIT_OK {
+        println!("created partition #{num} at {start}..{end} (verify with: diskedit info {})", a.target);
+    }
+    o.exit_code()
 }
 
 /// set 的一键入口：统一 name/label/uuid/flag 四类属性
@@ -1321,8 +1618,8 @@ fn cmd_set(a: &Args) -> u8 {
     if key == "name" {
         if value.is_empty() { usage(); }
         return match table::rename_entry(&mut src, part, &value) {
-            Ok(()) => { kernel_resync(&src); println!("renamed partition #{part} to {value:?}"); EXIT_OK }
-            Err(e) => { eprintln!("set name failed: {e}"); EXIT_REFUSED }
+            Ok(()) => table_write_done(&src, &format!("renamed partition #{part} to {value:?}")),
+            Err(f) => bail_fail(f),
         };
     }
     if key == "flag" {
@@ -1337,12 +1634,12 @@ fn cmd_set(a: &Args) -> u8 {
             Err(e) => bail(EXIT_INFRA, format!("label probe failed: {e}")),
         };
         return match r {
-            Ok(()) => { kernel_resync(&src); println!("flag {value}={on} on partition #{part}"); EXIT_OK }
-            Err(e) => { eprintln!("set flag failed: {e}"); EXIT_REFUSED }
+            Ok(()) => table_write_done(&src, &format!("flag {value}={on} on partition #{part}")),
+            Err(f) => bail_fail(f),
         };
     }
     // label/uuid 需要 FS 识别
-    let (start, len) = get_entry(&src, part).unwrap_or_else(|(c, m)| bail(c, m));
+    let (start, len) = entry_byte_range(&src, part).unwrap_or_else(|f| bail_fail(f));
     let fstype = fsid::identify(&src, start, len).unwrap_or_else(|e| bail(EXIT_INFRA, format!("identify failed: {e}")));
     let r = match key {
         "label" if !value.is_empty() => fsops::set_label(&src, part, fstype, &value),
@@ -1375,8 +1672,8 @@ fn main() -> ExitCode {
                 EXIT_REFUSED
             } else {
                 let src = open_target(&a).unwrap_or_else(|(c, m)| bail(c, m));
-                if let Err((c, m)) = get_entry(&src, part) {
-                    bail(c, format!("refused: {m}"));
+                if let Err(f) = entry_byte_range(&src, part) {
+                    bail_fail(f);
                 }
                 match fsops::mkfs(&src, part, &fstype) {
                     Ok(()) => EXIT_OK,
@@ -1390,21 +1687,20 @@ fn main() -> ExitCode {
                 if a.part.is_some() {
                     bail(EXIT_REFUSED, "--online takes a mountpoint, not <target>:N".to_string());
                 }
-                let size = a.fstype.as_ref().map(|s| s.parse::<u64>().unwrap_or_else(|_| {
-                    bail(EXIT_REFUSED, format!("size {s:?} must be bytes"))
-                }));
+                // BYTES 与 --size 同一单位语法，只接受绝对值
+                let size = a.fstype.as_ref().map(|s| match parse_size_delta(s) {
+                    Some((bytes, 0, false)) => bytes,
+                    _ => bail(EXIT_REFUSED, format!("size {s:?} must be an absolute size (use 10G | 500M | plain bytes)")),
+                });
                 #[cfg(target_os = "linux")]
                 {
-                    match online::resize_online(std::path::Path::new(&a.target), size) {
-                        Ok(()) => {
-                            println!("resized online (verify with: diskedit info {})", a.target);
-                            EXIT_OK
-                        }
-                        Err((c, m)) => {
-                            eprintln!("resizefs failed: {m}");
-                            c
-                        }
+                    let o = online::resize_online(std::path::Path::new(&a.target), size);
+                    if o.exit_code() == EXIT_OK {
+                        println!("resized online (verify with: diskedit info {})", a.target);
+                    } else {
+                        o.report();
                     }
+                    o.exit_code()
                 }
                 #[cfg(not(target_os = "linux"))]
                 {
@@ -1414,7 +1710,7 @@ fn main() -> ExitCode {
             } else {
                 let Some(part) = a.part else { usage() };
                 let src = open_target(&a).unwrap_or_else(|(c, m)| bail(c, m));
-                let (start, len) = get_entry(&src, part).unwrap_or_else(|(c, m)| bail(c, m));
+                let (start, len) = entry_byte_range(&src, part).unwrap_or_else(|f| bail_fail(f));
                 let fstype = match fsid::identify(&src, start, len) {
                     Ok(t) => t,
                     Err(e) => bail(EXIT_INFRA, format!("identify failed: {e}")),
@@ -1441,11 +1737,7 @@ fn main() -> ExitCode {
                     Some(other) => bail(EXIT_REFUSED, format!("unsupported table type {other:?} (gpt|msdos)")),
                 };
                 match r {
-                    Ok(()) => {
-                        kernel_resync(&src);
-                        println!("created {} table (verify with: diskedit info {})", a.table.as_deref().unwrap_or("gpt"), a.target);
-                        EXIT_OK
-                    }
+                    Ok(()) => table_write_done(&src, &format!("created {} table (verify with: diskedit info {})", a.table.as_deref().unwrap_or("gpt"), a.target)),
                     Err(e) => { eprintln!("new failed: {e}"); EXIT_INFRA }
                 }
             }
@@ -1461,12 +1753,8 @@ fn main() -> ExitCode {
                         None => table::LINUX_FS_TYPE_GUID, // Linux filesystem data（util-linux GPT_DEFAULT_ENTRY_TYPE）
                     };
                     match table::add_entry(&mut src, start, end, a.name.as_deref().unwrap_or(""), type_guid) {
-                        Ok(num) => {
-                            kernel_resync(&src);
-                            println!("added partition #{num} (verify with: diskedit info {})", a.target);
-                            EXIT_OK
-                        }
-                        Err(e) => { eprintln!("add failed: {e}"); EXIT_REFUSED }
+                        Ok(num) => table_write_done(&src, &format!("added partition #{num} (verify with: diskedit info {})", a.target)),
+                        Err(f) => bail_fail(f),
                     }
                 }
                 Ok("msdos") => {
@@ -1479,12 +1767,8 @@ fn main() -> ExitCode {
                         None => 0x83, // Linux
                     };
                     match table::add_mdos_entry(&mut src, start, end, os_type) {
-                        Ok(num) => {
-                            kernel_resync(&src);
-                            println!("added partition #{num} (verify with: diskedit info {})", a.target);
-                            EXIT_OK
-                        }
-                        Err(e) => { eprintln!("add failed: {e}"); EXIT_REFUSED }
+                        Ok(num) => table_write_done(&src, &format!("added partition #{num} (verify with: diskedit info {})", a.target)),
+                        Err(f) => bail_fail(f),
                     }
                 }
                 Ok(other) => bail(EXIT_REFUSED, format!("cannot add on {other} label — run `new` first")),
@@ -1505,12 +1789,8 @@ fn main() -> ExitCode {
                     Err(e) => bail(EXIT_INFRA, format!("label probe failed: {e}")),
                 };
                 match r {
-                    Ok(()) => {
-                        kernel_resync(&src);
-                        println!("deleted partition #{part} (verify with: diskedit info {})", a.target);
-                        EXIT_OK
-                    }
-                    Err(e) => { eprintln!("del failed: {e}"); EXIT_REFUSED }
+                    Ok(()) => table_write_done(&src, &format!("deleted partition #{part} (verify with: diskedit info {})", a.target)),
+                    Err(f) => bail_fail(f),
                 }
             }
         }
@@ -1524,7 +1804,7 @@ fn main() -> ExitCode {
                 // 吃满后方可用区（本工具语义）：扩到 last_usable_lba；
                 // 后方有分区时由 resize_part 的重叠校验拒绝
                 match table::load_gpt(&src) {
-                    Ok(Some(g)) => effective_last_usable(&src, &g).unwrap_or_else(|m| bail(EXIT_REFUSED, m)),
+                    Ok(Some(g)) => effective_last_usable(&src, &g).unwrap_or_else(|f| bail_fail(f)),
                     Ok(None) => bail(EXIT_REFUSED, "refused: --grow-to-end requires a GPT target".to_string()),
                     Err(e) => bail(EXIT_INFRA, format!("parse failed: {e}")),
                 }
@@ -1540,14 +1820,11 @@ fn main() -> ExitCode {
                 align_range(&a, start, end, src.sector_size)
             };
             let (chunk, mut logger) = chunk_logger(&a, &src);
-            match movepart::resize_part(&mut src, part, start, end, chunk, &mut |m| logger.log(m)) {
-                Ok(()) => {
-                    kernel_resync(&src);
-                    println!("resize-part complete (verify with: diskedit info {})", a.target);
-                    EXIT_OK
-                }
-                Err(e) => { eprintln!("resize-part failed: {e}"); EXIT_REFUSED }
+            let o = settle_layout(movepart::resize_part(&mut src, part, start, end, chunk, a.no_fs, &mut |m| logger.log(m)), &src);
+            if o.exit_code() == EXIT_OK {
+                println!("resize-part complete (verify with: diskedit info {})", a.target);
             }
+            o.exit_code()
         }
         "copy" => {
             let (Some(part), start_opt) = (a.part, a.start) else { usage() };
@@ -1567,7 +1844,7 @@ fn main() -> ExitCode {
                     bail(EXIT_REFUSED, format!("partition {part} is empty"));
                 }
                 let len = e.ending_lba - e.starting_lba + 1;
-                let last_usable = effective_last_usable(&src, &g).unwrap_or_else(|m| bail(EXIT_REFUSED, m));
+                let last_usable = effective_last_usable(&src, &g).unwrap_or_else(|f| bail_fail(f));
                 last_usable
                     .checked_sub(len - 1)
                     .unwrap_or_else(|| bail(EXIT_REFUSED, "refused: partition longer than usable range".to_string()))
@@ -1576,12 +1853,8 @@ fn main() -> ExitCode {
             };
             let (chunk, mut logger) = chunk_logger(&a, &src);
             match movepart::copy_part(&mut src, part, start, a.name.as_deref().unwrap_or(""), chunk, &mut |m| logger.log(m)) {
-                Ok(num) => {
-                    kernel_resync(&src);
-                    println!("copied to partition #{num} (verify with: diskedit info {})", a.target);
-                    EXIT_OK
-                }
-                Err(e) => { eprintln!("copy failed: {e}"); EXIT_REFUSED }
+                Ok(num) => table_write_done(&src, &format!("copied to partition #{num} (verify with: diskedit info {})", a.target)),
+                Err(f) => bail_fail(f),
             }
         }
         "undo" => {
@@ -1590,30 +1863,48 @@ fn main() -> ExitCode {
                 EXIT_REFUSED
             } else {
                 let mut src = open_target(&a).unwrap_or_else(|(c, m)| bail(c, m));
-                let p = journal_file(&src);
-                let entries = match Journal::read_entries(&p) {
-                    Ok(v) if !v.is_empty() => v,
-                    Ok(_) => bail(EXIT_REFUSED, "nothing to undo (journal is empty)".to_string()),
+                let p = journal_path(&src.path, src.is_block);
+                let (entries, tail_incomplete) = match Journal::read_entries(&p) {
+                    Ok(JournalRead::Complete(v)) => (v, false),
+                    // 尾部未完成的记录：append-only 下那次追加没走完，它对应的写入也就没发生，
+                    // 丢弃安全；前面的完整前缀照常回放（严格契约仍守：每条都过了 CRC）
+                    Ok(JournalRead::TruncatedTail(v)) => (v, true),
                     Err(e) => bail(EXIT_REFUSED, format!("no usable journal: {e}")),
                 };
+                if entries.is_empty() {
+                    bail(EXIT_REFUSED, "nothing to undo (journal is empty)".to_string());
+                }
                 let n = entries.len();
+                if tail_incomplete {
+                    eprintln!(
+                        "warning: the journal ends with an incomplete record (an interrupted append, or that record was damaged) — \
+                         replaying the {n} complete record(s) before it; anything recorded after that point cannot be undone"
+                    );
+                }
+                // 含搬移的 journal 不可回滚：数据字节按设计不入 journal（前向恢复、无回滚），
+                // 只回滚表项会留下表与数据不一致的布局，必须显式拒绝而非给出假回滚
+                if entries.iter().any(|(off, _)| *off == Journal::MOVED_MARKER) {
+                    bail(EXIT_REFUSED, "refused: journal covers a partition relocation — moved/copied data is not journaled by design, so undo cannot revert it (re-run the original command to resume, or restore from backup)".to_string());
+                }
                 for (off, data) in entries.iter().rev() {
                     if let Err(e) = src.write_at(*off, data) {
                         // journal 保留在原地：可重试 undo
                         bail(EXIT_INFRA, format!("undo write failed at offset {off}: {e} (journal kept, retry)"));
                     }
                 }
-                let _ = src.sync_all();
-                let _ = std::fs::remove_file(&p);
-                kernel_resync(&src);
-                println!("undone {n} journal entries (verify with: diskedit info {})", a.target);
-                EXIT_OK
+                // undo 的契约是"盘确定回到写入前状态"：sync 失败意味着回滚可能未落盘，
+                // 不能报成功——那会让用户以为已经回滚
+                src.sync_all().unwrap_or_else(|e| {
+                    bail(EXIT_INFRA, format!("undo wrote the journal back but sync failed: {e} — rollback may not be durable, verify before retrying"))
+                });
+                dev::warn_if_remove_failed(&p);
+                table_write_done(&src, &format!("undone {n} journal entries (verify with: diskedit info {})", a.target))
             }
         }
         "check" => {
             let Some(part) = a.part else { usage() };
             let src = open_target(&a).unwrap_or_else(|(c, m)| bail(c, m));
-            let (start, len) = get_entry(&src, part).unwrap_or_else(|(c, m)| bail(c, m));
+            let (start, len) = entry_byte_range(&src, part).unwrap_or_else(|f| bail_fail(f));
             let fstype = fsid::identify(&src, start, len).unwrap_or_else(|e| bail(EXIT_INFRA, format!("identify failed: {e}")));
             match fsops::check_fs(&src, part, fstype) {
                 Ok(()) => { println!("check done on partition #{part} ({fstype})"); EXIT_OK }
@@ -1622,23 +1913,32 @@ fn main() -> ExitCode {
         }
         "plan" | "apply" => {
             let Some(grow) = a.grow else { usage() };
-            let mut src = open_target(&a).unwrap_or_else(|(c, m)| bail(c, m));
-            let plan = movepart::make_plan(&mut src, grow).unwrap_or_else(|e| bail(EXIT_REFUSED, format!("plan failed: {e}")));
+            // 这一段只读：plan 不写盘，apply 的写由 apply_cmd 用 open_target_for_write 另开一次。
+            // 故按只读命令打开——否则一块正被使用的盘上连 `plan` 都跑不出计划
+            let mut src = open_target_ro(&a).unwrap_or_else(|(c, m)| bail(c, m));
+            // 恢复感知：盘上有未收尾的搬移作业时，`plan` 要打印、`apply` 要执行的
+            // 都是那份 ckpt 里的计划（现算的 delta 与 ckpt 不一致，会撞上恢复校验）
+            let plan = match movepart::make_plan_resuming(&mut src, grow) {
+                Ok(p) => p,
+                Err(f) => bail_fail(f),
+            };
             if cmd == "plan" {
-                if let Some(r) = &plan.repair {
+                if movepart::has_pending_relocation(&src, plan.grow_part) {
+                    println!("[resume] an unfinished relocation job is on the disk — this is the plan it resumes with");
+                }
+                if let Some(what) = plan.repair.describe() {
                     // 修复动作只记录、不执行；apply 会先做这一步再搬数据
-                    if r.backup_stale {
-                        println!("[repair] relocate backup GPT: LBA {} → {}", r.backup_lba, r.file_last_lba);
-                    } else {
-                        println!("[repair] rewrite protective MBR (SizeInLBA stale)");
-                    }
+                    println!("[repair] {what}");
                 }
-                println!("grow partition {} → last_usable_lba {}", plan.grow_part, plan.last_usable_lba);
-                for m in &plan.moves {
-                    let tag = if m.is_swap { " [swap: recreate, no data move]" } else { "" };
-                    println!("move part {} : {}..{} → +{} sectors ({} bytes){}",
-                        m.part_num, m.first_lba, m.first_lba + m.len_lba - 1, m.delta_lba, m.delta_lba * plan.ss, tag);
-                }
+                // 终点与实际写入一致（grow_end_for 是 apply 用的同一实现）；
+                // last_usable_lba 单独列出：它是尾部打包的上界，不等于本次扩容终点
+                let grow_end = movepart::grow_end_for(&plan)
+                    .unwrap_or_else(|e| bail(EXIT_REFUSED, format!("plan failed: {e}")));
+                println!(
+                    "grow partition {} → end LBA {} (last usable {})",
+                    plan.grow_part, grow_end, plan.last_usable_lba
+                );
+                print_moves(&plan);
                 EXIT_OK
             } else {
                 apply_cmd(&a, plan)
@@ -1646,39 +1946,61 @@ fn main() -> ExitCode {
         }
         _ => usage(),
     };
+    // 成功完成 ⇒ 撤销窗口已关闭，删除 undo journal（失败/中断时保留，供续传或回滚）。
+    // 仅限会创建 journal 的破坏性命令：只读命令成功时若也删，会把先前失败操作
+    // 留下的 journal 误清掉
+    if code == EXIT_OK && is_destructive_cmd(&cmd) {
+        drop_journal(&a);
+    }
     ExitCode::from(code)
+}
+
+/// 是否属于经 open_target_for_write 写入（因而会创建 undo journal）的命令。
+/// mkfs 与 undo 走的是 open_target（不建 journal）：前者只重做 FS 元数据，
+/// 后者以 journal 为输入、成功时自行删除——它们若也进这个集合，
+/// 成功时会顺手清掉先前某次失败操作留下的 journal。
+/// resize 的块设备在线路径（online::resize_online/resize_pv_online）同样不经
+/// open_target_for_write，故本判定只是"可能创建"，删除动作须容忍文件不存在
+fn is_destructive_cmd(cmd: &str) -> bool {
+    matches!(cmd, "new" | "add" | "del" | "delete" | "set" | "resize" | "resize-part" | "move" | "create" | "copy" | "apply")
+}
+
+/// 成功路径删除 undo journal（路径推导与 open_target_for_write 同源）。
+/// 不存在即无残留、无告警；删除真失败则由 dev::warn_if_remove_failed 告警
+fn drop_journal(a: &Args) {
+    let p = journal_path(std::path::Path::new(&a.target), is_block_device(&a.target));
+    dev::warn_if_remove_failed(&p);
+}
+
+/// 目标是否为块设备（决定 journal 落点）
+fn is_block_device(path: &str) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::FileTypeExt;
+        std::fs::metadata(path).map(|m| m.file_type().is_block_device()).unwrap_or(false)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        false
+    }
 }
 
 fn apply_cmd(a: &Args, plan: movepart::Plan) -> u8 {
     let mut src = match open_target_for_write(a) { Ok(s) => s, Err((c, m)) => { eprintln!("{m}"); return c; } };
-    let guid = match table::load_gpt(&src) {
-        Ok(Some(g)) => g.header.disk_guid,
-        _ => return EXIT_REFUSED,
-    };
+    // 表的可解析性由 apply_inner 在写盘前判定（无表 → refused 10，表非法 → infra 30）：
+    // 同一事实不设第二判据——两处判据迟早会在某个入口分叉，且自判拒绝时还不报原因
     let chunk = match movepart::chunk_bytes(a.chunk_mib) {
         Ok(c) => c,
         Err(e) => { eprintln!("refused: {e}"); return EXIT_REFUSED; }
     };
     let mut logger = Logger::open(&src);
-    match movepart::apply(&mut src, &plan, chunk, &mut |m| logger.log(m)) {
-        Ok(()) => {
-            kernel_resync(&src);
-            println!("apply complete (verify with: diskedit info {})", a.target);
-            EXIT_OK
-        }
-        Err(e) => {
-            let msg = e.to_string();
-            logger.log(&format!("apply failed: {msg}"));
-            eprintln!("apply failed: {msg}");
-            eprintln!("manual recovery: gdisk/sgdisk -v on target shows current table state; checkpoint (if present) holds the plan");
-            // checkpoint 仍在 = 已有持久变更（部分完成）；被清掉 = 拒绝
-            if movepart::checkpoint_path(&src, guid).map(|p| p.exists()).unwrap_or(false) {
-                EXIT_PARTIAL
-            } else {
-                EXIT_REFUSED
-            }
-        }
+    let o = movepart::apply(&mut src, &plan, chunk, a.no_fs, &mut |m| logger.log(m));
+    // 失败时日志里也留一份：apply 出问题后用户常回看日志
+    if let crate::outcome::Outcome::Failed { cause } = &o {
+        logger.log(&format!("apply failed: {cause}"));
     }
+    settle_layout(o, &src).exit_code()
 }
 
 #[cfg(test)]
@@ -1745,9 +2067,9 @@ mod tests {
 
     fn base_args() -> Args {
         Args {
-            target: String::new(), part: None, fstype: None, state: None, grow: None,
+            target: String::new(), part: None, fstype: None, grow: None,
             start: None, end: None, size: None, fs: None, name: None, type_guid: None, table: None,
-            yes: false, online: false, sector_size: None, align: "mib".to_string(), chunk_mib: 4,
+            yes: false, online: false, no_fs: false, sector_size: None, align: "mib".to_string(), chunk_mib: 4,
             grow_to_end: false, allow_move: false, grow_lv: false, lv: None, start_end: false, pos: Vec::new(),
         }
     }
@@ -1807,6 +2129,21 @@ mod tests {
         assert_eq!(resolve_size_request(&a3, None, 1), (None, true));
     }
 
+    /// 分区 LBA 的单位是**表自身**的 ss，不是容器 ss：4Kn 表放在 512B 口径的容器里
+    /// （4Kn 镜像未加 --sector-size，或经 512e 转接写入的 4Kn 盘）时，按容器 ss 换算会整体差
+    /// 8 倍，于是 info/resize 认到的文件系统与 mkfs/check 认到的区间不是同一段字节。
+    /// entry_byte_range 是这处单位换算的唯一出口，故在此守住
+    #[test]
+    fn part_byte_range_uses_table_sector_size() {
+        let data = vec![0u8; 8 * 1024 * 1024];
+        let mut src = src_from("ss4k", &data); // 容器 ss = 512
+        table::create_gpt(&mut src, 4096, None).unwrap();
+        table::add_entry_at(&mut src, 256, 511, "p1", table::LINUX_FS_TYPE_GUID, [0x22; 16]).unwrap();
+        // 表以 4096B 逻辑块自述（LBA1 落在 offset 4096），load_gpt 的候选 ss 会选出 4096
+        assert_eq!(table::load_gpt(&src).unwrap().unwrap().ss, 4096);
+        assert_eq!(entry_byte_range(&src, 1).unwrap(), (256 * 4096, 256 * 4096));
+    }
+
     fn raw_gpt(last_usable: u64, ents: &[(u64, u64)]) -> table::RawGpt {
         table::RawGpt {
             ss: 512,
@@ -1833,20 +2170,24 @@ mod tests {
         }
     }
 
-    /// 右侧连续空闲：取"下一个分区起点"与"last_usable+1"的较小者
+    /// 右侧连续空闲：取"下一个分区起点"与"可用区上界+1"的较小者
     #[test]
     fn free_right_bounds() {
         // 分区 1 右侧紧邻分区 2 → 无空闲
         let g = raw_gpt(1000, &[(100, 199), (200, 299), (0, 0)]);
-        assert_eq!(free_right_gpt(&g, 1), 0);
-        assert_eq!(free_right_gpt(&g, 2), 1000 + 1 - 300);
+        assert_eq!(free_right_gpt(&g, 1, 1000), 0);
+        assert_eq!(free_right_gpt(&g, 2, 1000), 1000 + 1 - 300);
         // 右侧隔着空隙 → 以邻分区起点为界
         let g = raw_gpt(1000, &[(100, 199), (300, 399), (0, 0)]);
-        assert_eq!(free_right_gpt(&g, 1), 300 - 200);
-        assert_eq!(free_right_gpt(&g, 2), 1000 + 1 - 400);
+        assert_eq!(free_right_gpt(&g, 1, 1000), 300 - 200);
+        assert_eq!(free_right_gpt(&g, 2, 1000), 1000 + 1 - 400);
         // 左侧分区不计入（起点小于本分区末端的都被忽略）
         let g = raw_gpt(1000, &[(50, 99), (100, 199), (0, 0)]);
-        assert_eq!(free_right_gpt(&g, 2), 1000 + 1 - 200);
+        assert_eq!(free_right_gpt(&g, 2, 1000), 1000 + 1 - 200);
+        // 上界是入参而非表头字段：stale 表按修复后的上界算，才看得到扩容新增的空间
+        let stale = raw_gpt(500, &[(100, 199), (0, 0), (0, 0)]);
+        assert_eq!(free_right_gpt(&stale, 1, 500), 500 + 1 - 200);
+        assert_eq!(free_right_gpt(&stale, 1, 1000), 1000 + 1 - 200);
     }
 
     /// 1MiB 对齐空闲区间：边界 + 子集穷举（覆盖性、不重叠、单位对齐）
