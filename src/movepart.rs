@@ -9,6 +9,7 @@ use crate::gpt_policy::{self, RepairAction};
 use crate::outcome::{Fail, Outcome, Pending, PendingKind};
 use crate::table::{self, RawGpt};
 use std::io;
+use std::path::PathBuf;
 
 pub const CKPT_MAGIC: &[u8; 8] = b"DKECKPT1";
 pub const CKPT_VERSION: u32 = 3;
@@ -149,7 +150,7 @@ pub fn make_plan(src: &mut FileSource, grow_part: u32) -> Result<Plan, Fail> {
 /// 尾打包 plan 的恢复感知版本：ckpt 存在时以 ckpt 的 moves 为准（见 resume_plan），
 /// 否则照常现算
 pub fn make_plan_resuming(src: &mut FileSource, grow_part: u32) -> Result<Plan, Fail> {
-    match resume_plan(src, grow_part) {
+    match resume_plan(src, grow_part)? {
         Some(p) => Ok(p),
         None => make_plan(src, grow_part),
     }
@@ -221,7 +222,7 @@ pub fn make_plan_shift(src: &mut FileSource, grow_part: u32, shift: u64) -> Resu
 /// 否则按 shift 现算。`shift = None` 表示本次请求是缩容——缩容不搬移任何分区
 /// （新末端更靠左，右侧只会更空），此时只有 ckpt 能构成走本路径的理由
 pub fn make_plan_shift_resuming(src: &mut FileSource, grow_part: u32, shift: Option<u64>) -> Result<Plan, Fail> {
-    if let Some(p) = resume_plan(src, grow_part) {
+    if let Some(p) = resume_plan(src, grow_part)? {
         return Ok(p);
     }
     let shift = shift.ok_or_else(|| Fail::refused(
@@ -233,25 +234,26 @@ pub fn make_plan_shift_resuming(src: &mut FileSource, grow_part: u32, shift: Opt
 /// 该分区是否有未收尾的 plan 型搬移作业。命令入口据此分流：几何上"右侧已空、可直接扩容"
 /// 并不代表作业已完成——右侧变空本身可能正是搬了一半的结果，收尾步骤（剩余搬移、swap 重建、
 /// FS 扩容）都还没做
-pub fn has_pending_relocation(src: &FileSource, grow_part: u32) -> bool {
-    resume_plan(src, grow_part).is_some()
+pub fn has_pending_relocation(src: &FileSource, grow_part: u32) -> Result<bool, Fail> {
+    Ok(resume_plan(src, grow_part)?.is_some())
 }
 
 /// ckpt 里记录的 plan（仅当它属于该分区）。plan 型搬移的**任何**生成路径在恢复期都必须
 /// 以它为准：盘上几何已被部分执行改变，重算出的 delta 与 ckpt 记的不一致，会撞上 apply
 /// 的恢复校验而使续传永久失败。ckpt 存在 ⇒ repair 已在 apply 开头执行过（在初始 ckpt
 /// 写入之前），故 repair 记 None
-fn resume_plan(src: &FileSource, grow_part: u32) -> Option<Plan> {
-    let g = table::load_gpt(src).ok().flatten()?;
-    let path = checkpoint_path(src, g.header.disk_guid).ok()?;
-    let c = Checkpoint::deserialize(&std::fs::read(&path).ok()?).ok()?;
-    (c.grow_part == grow_part).then_some(Plan {
-        ss: c.ss,
-        last_usable_lba: c.last_usable_lba,
-        grow_part: c.grow_part,
-        moves: c.moves,
-        repair: RepairAction::None,
-    })
+fn resume_plan(src: &FileSource, grow_part: u32) -> Result<Option<Plan>, Fail> {
+    match read_checkpoint(src)? {
+        CheckpointSlot::Ambiguous(paths) => Err(ambiguous_checkpoint(&paths)),
+        CheckpointSlot::Relocation(c) => Ok((c.grow_part == grow_part).then_some(Plan {
+            ss: c.ss,
+            last_usable_lba: c.last_usable_lba,
+            grow_part: c.grow_part,
+            moves: c.moves,
+            repair: RepairAction::None,
+        })),
+        _ => Ok(None),
+    }
 }
 
 // ---------- checkpoint ----------
@@ -346,18 +348,43 @@ impl Checkpoint {
     }
 }
 
-/// checkpoint 落点：镜像 = 同目录 `<名>.diskedit.ckpt`；块设备 = /var/lib/diskedit/<disk_guid>.ckpt
-pub fn checkpoint_path(src: &FileSource, disk_guid: [u8; 16]) -> io::Result<std::path::PathBuf> {
-    if src.is_block {
-        let dir = std::path::Path::new("/var/lib/diskedit");
-        std::fs::create_dir_all(dir)?;
-        let hex: String = disk_guid.iter().map(|b| format!("{b:02X}")).collect();
-        Ok(dir.join(format!("{hex}.ckpt")))
-    } else {
-        let mut p = src.path.clone().into_os_string();
-        p.push(".diskedit.ckpt");
-        Ok(std::path::PathBuf::from(p))
+/// 读 checkpoint 现场：在身份给出的候选落点上（首项为本次命名，其后是历史命名）取首个
+/// **有效**者，不做目录扫描。多份候选同时有效即报歧义——猜错会把中断的搬移现场丢掉。
+/// 块设备的历史命名带 GPT Disk GUID，而 GUID 只在表可读时存在，故先尽力取一次
+///
+/// 只有"不存在"算空槽。权限 / I/O 失败、以及文件在而解不出来，都上抛：把"存在但读不了"
+/// 当成"没有 checkpoint"，会把中断的搬移降级成一次全新规划
+fn read_checkpoint(src: &FileSource) -> Result<CheckpointSlot, Fail> {
+    let legacy = table::load_gpt(src).ok().flatten().map(|g| g.header.disk_guid);
+    let mut found: Vec<(PathBuf, CheckpointSlot)> = Vec::new();
+    for path in src.identity.checkpoint_candidates(legacy) {
+        let bytes = match std::fs::read(&path) {
+            Ok(b) => b,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+            // 全程在读盘阶段，尚未写盘，故按 Infra 而不是"盘可能已改变"
+            Err(e) => return Err(Fail::infra(format!("checkpoint read failed: {}: {e}", path.display()))),
+        };
+        let relocation = Checkpoint::deserialize(&bytes);
+        let resize = RsCheckpoint::deserialize(&bytes);
+        match (relocation, resize) {
+            (Ok(c), _) => found.push((path, CheckpointSlot::Relocation(Box::new(c)))),
+            (_, Ok(c)) => found.push((path, CheckpointSlot::Resize(Box::new(c)))),
+            (Err(e), _) => return Err(Fail::infra(format!("checkpoint unreadable: {}: {e}", path.display()))),
+        }
     }
+    if found.is_empty() {
+        return Ok(CheckpointSlot::Empty);
+    }
+    if found.len() == 1 {
+        return Ok(found.swap_remove(0).1);
+    }
+    Ok(CheckpointSlot::Ambiguous(found.into_iter().map(|(p, _)| p).collect()))
+}
+
+/// 多份 checkpoint 同时可用 ⇒ 不猜：猜错会把中断的搬移现场丢掉
+fn ambiguous_checkpoint(paths: &[PathBuf]) -> Fail {
+    let listed: Vec<String> = paths.iter().map(|p| p.display().to_string()).collect();
+    Fail::refused(format!("multiple checkpoints exist for this target — refusing: {}", listed.join(", ")))
 }
 
 /// 原子写：tmp → sync_all → rename → fsync 父目录。
@@ -368,6 +395,8 @@ fn atomic_write_ckpt(path: &std::path::Path, data: &[u8]) -> io::Result<()> {
     use std::sync::atomic::{AtomicU64, Ordering};
     static SEQ: AtomicU64 = AtomicU64::new(0);
     let parent = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+    // 落点目录归文件自己保证：路径由身份派生，身份不知道目录是否存在
+    crate::dev::best_effort_mkdir(parent);
     let mut tmp = parent.to_path_buf().into_os_string();
     tmp.push(format!(
         "/.diskedit.ckpt.tmp.{}.{}",
@@ -491,7 +520,6 @@ fn apply_inner(
         Ok(None) => return Err(Fail::refused("no GPT on target")),
         Err(e) => return Err(Fail::infra(format!("parse failed: {e}"))),
     };
-    let disk_guid = g0.header.disk_guid;
     // 写盘前的 preflight：FS 扩展属本次操作的后置条件，工具缺失必须现在拒绝——
     // 一旦开始写盘才发现，就会留下"分区已改、FS 未扩"的中间态。
     // 不依赖命令层是否检查过：续传路径不经过 plan，本处才是唯一必经关口
@@ -510,18 +538,20 @@ fn apply_inner(
         crate::fsops::check_grow(ft).map_err(crate::outcome::Fail::refused)?;
     }
     // 恢复三态：有效 → 续传 / 槽位被另一族作业占用 → 拒绝 / 空 → 新建。
-    // 必须先于 perform_repair 读（磁盘 GUID 不受修复影响）：修复会写盘，而"拒绝"承诺的是本次未写盘
-    let slot = read_checkpoint_slot(src, disk_guid);
+    // 必须先于 perform_repair 读（槽位落点只由目标身份决定，与表无关）：修复会写盘，
+    // 而"拒绝"承诺的是本次未写盘
+    let slot = read_checkpoint(src)?;
     // plan 不写盘：修复动作（备份头搬移 / 保护 MBR 重写）在 apply 里先执行，
-    // 使后续所有写入都基于修复后的几何（磁盘 GUID 不变，checkpoint 路径不受影响）
+    // 使后续所有写入都基于修复后的几何
     if let Some(what) = plan.repair.describe() {
         gpt_policy::perform_repair(src, &plan.repair)?;
         log(&format!("[repair] {what}"));
     }
     fault_after_repair();
-    let ckpt_path = checkpoint_path(src, disk_guid)?;
+    let ckpt_path = src.identity.checkpoint_path().to_path_buf();
 
     let mut ckpt = match slot {
+        CheckpointSlot::Ambiguous(paths) => return Err(ambiguous_checkpoint(&paths)),
         CheckpointSlot::Resize(_) => return Err(Fail::refused(
             "an unfinished single-partition resize job occupies the checkpoint slot — re-run that resize to finish it before applying a relocation plan",
         )),
@@ -831,18 +861,8 @@ enum CheckpointSlot {
     Empty,
     Relocation(Box<Checkpoint>),
     Resize(Box<RsCheckpoint>),
-}
-
-fn read_checkpoint_slot(src: &FileSource, disk_guid: [u8; 16]) -> CheckpointSlot {
-    let Ok(path) = checkpoint_path(src, disk_guid) else { return CheckpointSlot::Empty };
-    let Ok(bytes) = std::fs::read(&path) else { return CheckpointSlot::Empty };
-    if let Ok(c) = Checkpoint::deserialize(&bytes) {
-        return CheckpointSlot::Relocation(Box::new(c));
-    }
-    if let Ok(c) = RsCheckpoint::deserialize(&bytes) {
-        return CheckpointSlot::Resize(Box::new(c));
-    }
-    CheckpointSlot::Empty
+    /// 多份候选同时可解析：不猜，交调用方拒绝
+    Ambiguous(Vec<PathBuf>),
 }
 
 // 执行期失败的类型化区分（写盘前拒绝 / 写盘后失败）定义在 outcome 模块
@@ -878,13 +898,9 @@ fn resize_part_inner(
     log: &mut dyn FnMut(&str),
     pending: &mut Vec<Pending>,
 ) -> Result<(), Fail> {
-    // checkpoint 槽位按磁盘 GUID 定位（路径只由它决定，与几何无关），故可以在
-    // ensure_geometry **之前**读：修复（若需要）会写盘，而对"槽位被别的作业占着"的拒绝
-    // 承诺的是本次未写盘。表读不出来时不可能有 ckpt → 视为空槽，由 ensure_geometry 报错
-    let slot = match table::load_gpt(src) {
-        Ok(Some(g)) => read_checkpoint_slot(src, g.header.disk_guid),
-        _ => CheckpointSlot::Empty,
-    };
+    // checkpoint 槽位只由目标身份定位（与几何无关），故可以在 ensure_geometry **之前**读：
+    // 修复（若需要）会写盘，而对"槽位被别的作业占着"的拒绝承诺的是本次未写盘
+    let slot = read_checkpoint(src)?;
     let g = gpt_policy::ensure_geometry(src)?.ok_or_else(|| Fail::refused("no GPT"))?;
     let ss = g.ss;
     let e = g.entries.get((part - 1) as usize)
@@ -918,7 +934,7 @@ fn resize_part_inner(
     // 表项 LBA 的单位是表自身的 ss。此处虽在本次搬移之前，但上面的 ensure_geometry
     // 可能已执行过 repair（重写双头/保护 MBR）→ 不满足"本次未写盘"，仍按 Failed
     let fstype = crate::fsid::identify(src, old_start * ss, (old_end - old_start + 1) * ss)?;
-    let ckpt_path = checkpoint_path(src, g.header.disk_guid)?;
+    let ckpt_path = src.identity.checkpoint_path().to_path_buf();
 
     // 恢复：checkpoint 与当前参数一致才允许续传，否则拒绝（槽位在写盘前已读取，见函数开头）
     let existing = match slot {
@@ -928,6 +944,7 @@ fn resize_part_inner(
         CheckpointSlot::Relocation(_) => return Err(Fail::refused(
             "an unfinished relocation job occupies the checkpoint slot — resume it first (re-run the original `resize ... grow` / `apply`)",
         )),
+        CheckpointSlot::Ambiguous(paths) => return Err(ambiguous_checkpoint(&paths)),
         CheckpointSlot::Empty => None,
     };
     // Some(搬移前的 old 区间) ⇒ 表项已提交，仅剩 FS 收尾
@@ -1185,7 +1202,15 @@ mod tests {
         drop(src);
         let f = std::fs::OpenOptions::new().read(true).write(true).open(&path).unwrap();
         let size = std::fs::metadata(&path).unwrap().len();
-        let mut src = FileSource { file: f, path: path.clone(), sector_size: 512, size, is_block: false, journal: None };
+        let mut src = FileSource {
+            identity: crate::dev::TargetIdentity::resolve(&path, false, size),
+            file: f,
+            path: path.clone(),
+            sector_size: 512,
+            size,
+            is_block: false,
+            journal: None,
+        };
         let mut log = |_: &str| {};
         fix_ntfs_hidden_sectors(&mut src, 30687, 512, &mut log).unwrap();
         let mut b = [0u8; 4];
@@ -1215,7 +1240,15 @@ mod tests {
         std::fs::write(&tmp, cur.into_inner()).unwrap();
         let f = std::fs::OpenOptions::new().read(true).write(true).open(&tmp).unwrap();
         let size = std::fs::metadata(&tmp).unwrap().len();
-        let mut src = FileSource { file: f, path: tmp.clone(), sector_size: 512, size, is_block: false, journal: None };
+        let mut src = FileSource {
+            identity: crate::dev::TargetIdentity::resolve(&tmp, false, size),
+            file: f,
+            path: tmp.clone(),
+            sector_size: 512,
+            size,
+            is_block: false,
+            journal: None,
+        };
         // gptman 只写 GPT 结构，保护 MBR 需自行补——load_gpt 以前者为前置
         crate::table::ensure_protective_mbr(&mut src).unwrap();
 
@@ -1240,8 +1273,7 @@ mod tests {
         src.write_at(src_off + 3 * chunk, &[0xEEu8]).unwrap();
 
         // 预置 checkpoint：chunks_done = 1
-        let g = table::load_gpt(&src).unwrap().unwrap();
-        let ckpt_path = checkpoint_path(&src, g.header.disk_guid).unwrap();
+        let ckpt_path = src.identity.checkpoint_path().to_path_buf();
         let ckpt = RsCheckpoint {
             disk_size: size, ss, part: 1,
             old_start: 2048, old_end: 10239, new_start: 12288, new_end: 20479,
@@ -1292,7 +1324,7 @@ mod tests {
         table::ensure_protective_mbr(&mut src).unwrap();
 
         // ckpt 停留在搬移前形状：正是 commit 与 ckpt 更新之间的那个窗口
-        let ckpt_path = checkpoint_path(&src, g.header.disk_guid).unwrap();
+        let ckpt_path = src.identity.checkpoint_path().to_path_buf();
         let ckpt = RsCheckpoint {
             disk_size: src.size, ss, part: 1,
             old_start, old_end, new_start, new_end,
@@ -1321,8 +1353,8 @@ mod tests {
         let chunk: u64 = 1024 * 1024;
         let (mut src, path) = plan_fixture(&[(1, [0x11; 16], 2048, 6143), (2, [0x22; 16], 8192, 10239)]);
         let g = table::load_gpt(&src).unwrap().unwrap();
-        let (guid, ss) = (g.header.disk_guid, g.ss);
-        let ckpt_path = checkpoint_path(&src, guid).unwrap();
+        let ss = g.ss;
+        let ckpt_path = src.identity.checkpoint_path().to_path_buf();
         let plan = make_plan(&mut src, 1).unwrap();
         assert!(!plan.moves.is_empty(), "fixture must have a blocker to relocate");
 
@@ -1335,7 +1367,7 @@ mod tests {
         atomic_write_ckpt(&ckpt_path, &rs.serialize()).unwrap();
         let o = apply(&mut src, &plan, chunk, true, &mut |_| {});
         assert_eq!(o.exit_code(), crate::outcome::EXIT_REFUSED, "apply must refuse while a resize job owns the slot");
-        assert!(matches!(read_checkpoint_slot(&src, guid), CheckpointSlot::Resize(_)), "the resize checkpoint must survive");
+        assert!(matches!(read_checkpoint(&src).unwrap(), CheckpointSlot::Resize(_)), "the resize checkpoint must survive");
         assert_eq!(table::load_gpt(&src).unwrap().unwrap().entries[1].starting_lba, 8192, "nothing may be relocated");
 
         // (b) 槽位里是 plan 型搬移的 ckpt → resize_part 拒绝（不能按"无 ckpt"重做）
@@ -1350,7 +1382,26 @@ mod tests {
             matches!(&o, Outcome::Refused(m) if m.contains("relocation job")),
             "resize_part must refuse while a relocation job owns the slot: {o:?}"
         );
-        assert!(matches!(read_checkpoint_slot(&src, guid), CheckpointSlot::Relocation(_)), "the relocation checkpoint must survive");
+        assert!(matches!(read_checkpoint(&src).unwrap(), CheckpointSlot::Relocation(_)), "the relocation checkpoint must survive");
+
+        drop(src);
+        let _ = std::fs::remove_file(&ckpt_path);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// 候选落点不存在即空槽（从未跑过搬移是常态）；文件在而解不出来则是故障——
+    /// 若把它当空槽，中断的搬移会被降级成一次全新规划
+    #[test]
+    fn corrupt_checkpoint_is_an_error_not_an_empty_slot() {
+        let (src, path) = plan_fixture(&[(1, [0x11; 16], 2048, 6143)]);
+        let ckpt_path = src.identity.checkpoint_path().to_path_buf();
+
+        assert!(matches!(read_checkpoint(&src).unwrap(), CheckpointSlot::Empty));
+
+        // 头部魔数在、内容被截断：正是断电撕裂写下的样子
+        std::fs::write(&ckpt_path, CKPT_MAGIC).unwrap();
+        let e = read_checkpoint(&src).err().expect("a corrupt checkpoint must not read as an empty slot");
+        assert!(matches!(&e, Fail::Infra(m) if m.contains("unreadable")), "{e:?}");
 
         drop(src);
         let _ = std::fs::remove_file(&ckpt_path);
@@ -1364,8 +1415,7 @@ mod tests {
         let chunk: u64 = 1024 * 1024;
         let (mut src, path) = plan_fixture(&[(1, [0x11; 16], 2048, 6143), (2, [0x22; 16], 8192, 10239)]);
         let g = table::load_gpt(&src).unwrap().unwrap();
-        let guid = g.header.disk_guid;
-        let ckpt_path = checkpoint_path(&src, guid).unwrap();
+        let ckpt_path = src.identity.checkpoint_path().to_path_buf();
 
         let e = match make_plan_shift_resuming(&mut src, 1, None) {
             Err(e) => e,
@@ -1381,8 +1431,8 @@ mod tests {
         atomic_write_ckpt(&ckpt_path, &ck.serialize()).unwrap();
         let resumed = make_plan_shift_resuming(&mut src, 1, None).unwrap();
         assert_eq!(resumed.moves.len(), plan.moves.len(), "resume must return the checkpoint's plan");
-        assert!(has_pending_relocation(&src, 1));
-        assert!(!has_pending_relocation(&src, 2), "another partition has no pending job");
+        assert!(has_pending_relocation(&src, 1).unwrap());
+        assert!(!has_pending_relocation(&src, 2).unwrap(), "another partition has no pending job");
 
         drop(src);
         let _ = std::fs::remove_file(&ckpt_path);
@@ -1415,7 +1465,15 @@ mod tests {
         std::fs::write(&tmp, cur.into_inner()).unwrap();
         let f = std::fs::OpenOptions::new().read(true).write(true).open(&tmp).unwrap();
         let size = std::fs::metadata(&tmp).unwrap().len();
-        let mut src = FileSource { file: f, path: tmp.clone(), sector_size: 512, size, is_block: false, journal: None };
+        let mut src = FileSource {
+            identity: crate::dev::TargetIdentity::resolve(&tmp, false, size),
+            file: f,
+            path: tmp.clone(),
+            sector_size: 512,
+            size,
+            is_block: false,
+            journal: None,
+        };
         // gptman 只写 GPT 结构，保护 MBR 需自行补——load_gpt 以前者为前置
         crate::table::ensure_protective_mbr(&mut src).unwrap();
         (src, tmp)
@@ -1424,7 +1482,15 @@ mod tests {
     fn plan_open(path: &std::path::Path) -> FileSource {
         let f = std::fs::OpenOptions::new().read(true).write(true).open(path).unwrap();
         let size = std::fs::metadata(path).unwrap().len();
-        FileSource { file: f, path: path.into(), sector_size: 512, size, is_block: false, journal: None }
+        FileSource {
+            identity: crate::dev::TargetIdentity::resolve(path, false, size),
+            file: f,
+            path: path.into(),
+            sector_size: 512,
+            size,
+            is_block: false,
+            journal: None,
+        }
     }
 
     #[test]

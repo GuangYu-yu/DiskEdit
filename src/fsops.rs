@@ -1018,7 +1018,15 @@ mod tests {
         std::fs::write(&tmp, &data).unwrap();
         let f = std::fs::OpenOptions::new().read(true).write(true).open(&tmp).unwrap();
         let size = data.len() as u64;
-        FileSource { file: f, path: tmp, sector_size: 512, size, is_block: false, journal: None }
+        FileSource {
+            identity: crate::dev::TargetIdentity::resolve(&tmp, false, size),
+            file: f,
+            path: tmp,
+            sector_size: 512,
+            size,
+            is_block: false,
+            journal: None,
+        }
     }
 
     /// 分区字节范围：GPT 与 MBR 两种表来源；空槽位/越界编号/容器分区/无表均拒绝

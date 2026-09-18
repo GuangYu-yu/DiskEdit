@@ -269,7 +269,7 @@ pub(crate) fn cmd_resize(a: &Args) -> u8 {
     // 一律按修复后的上界算，否则新增的整段空间会被当成不可用
     let last_usable = effective_last_usable(&src, &g).unwrap_or_else(|f| bail_fail(f));
     // 上一轮 plan 型搬移作业是否尚未收尾（右侧"已空"可能正是搬了一半的结果）
-    let resuming = movepart::has_pending_relocation(&src, part);
+    let resuming = movepart::has_pending_relocation(&src, part).unwrap_or_else(|f| bail_fail(f));
     let cur_bytes = (end - start + 1) * ss;
     let fstype = fsid::identify(&src, start * ss, (end - start + 1) * ss).unwrap_or_else(|e| bail(EXIT_INFRA, format!("identify failed: {e}")));
     let is_pv = fstype == "lvm2_pv";

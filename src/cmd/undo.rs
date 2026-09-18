@@ -15,13 +15,31 @@ pub(crate) fn cmd_undo(a: &Args) -> u8 {
         EXIT_REFUSED
     } else {
         let mut src = open_target(a).unwrap_or_else(|(c, m)| bail(c, m));
-        let p = journal_path(&src.path, src.is_block);
-        let (entries, tail_incomplete) = match Journal::read_entries(&p) {
-            Ok(JournalRead::Complete(v)) => (v, false),
+        // 候选落点按身份给出的固定顺序（本次命名在前，历史命名在后）：取首个可读的 journal。
+        // 两份都可读即报歧义——猜错会把历史字节回放到不该回放的盘上
+        let mut usable: Vec<(std::path::PathBuf, JournalRead)> = Vec::new();
+        let mut first_err: Option<String> = None;
+        for path in src.identity.journal_candidates() {
+            match Journal::read_entries(path) {
+                Ok(r) => usable.push((path.clone(), r)),
+                Err(e) => {
+                    first_err.get_or_insert_with(|| e.to_string());
+                }
+            }
+        }
+        let (p, read) = match usable.len() {
+            0 => bail(EXIT_REFUSED, format!("no usable journal: {}", first_err.unwrap_or_else(|| "not found".to_string()))),
+            1 => usable.remove(0),
+            _ => {
+                let listed: Vec<String> = usable.iter().map(|(p, _)| p.display().to_string()).collect();
+                bail(EXIT_REFUSED, format!("multiple journals found for this target — refusing: {}", listed.join(", ")));
+            }
+        };
+        let (entries, tail_incomplete) = match read {
+            JournalRead::Complete(v) => (v, false),
             // 尾部未完成的记录：append-only 下那次追加没走完，它对应的写入也就没发生，
             // 丢弃安全；前面的完整前缀照常回放（严格契约仍守：每条都过了 CRC）
-            Ok(JournalRead::TruncatedTail(v)) => (v, true),
-            Err(e) => bail(EXIT_REFUSED, format!("no usable journal: {e}")),
+            JournalRead::TruncatedTail(v) => (v, true),
         };
         if entries.is_empty() {
             bail(EXIT_REFUSED, "nothing to undo (journal is empty)".to_string());

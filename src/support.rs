@@ -23,8 +23,12 @@ pub(crate) fn bail_fail(f: crate::outcome::Fail) -> ! {
     std::process::exit(o.exit_code() as i32);
 }
 
-/// 日志：镜像 = `<名>.diskedit.log`；块设备 = /var/lib/diskedit/<GUID>.diskedit.log，
-/// 无 GPT（MBR/裸盘）时用 <devname>.diskedit.log，与 journal 命名策略对称
+/// 日志：镜像 = `<名>.diskedit.log`；块设备 = <state_dir()>/<GUID>.diskedit.log，
+/// 无 GPT（MBR/裸盘）时用 <devname>.diskedit.log。
+///
+/// 这是**未迁移的历史命名**：日志只增、不参与恢复，也不决定 journal / checkpoint 的
+/// 落点，故不并入 TargetIdentity 的推导。改名会打断既有日志的连续性，收益不足；
+/// 真要统一命名时另做一次迁移
 pub(crate) struct Logger {
     file: Option<std::fs::File>,
 }
@@ -32,23 +36,27 @@ pub(crate) struct Logger {
 impl Logger {
     pub(crate) fn open(src: &FileSource) -> Self {
         let path = if src.is_block {
-            let dir = std::path::Path::new("/var/lib/diskedit");
-            std::fs::create_dir_all(dir).ok().and_then(|()| {
-                table::load_gpt(src).ok().flatten().map(|g| {
+            let dir = dev::state_dir();
+            dev::best_effort_mkdir(&dir);
+            let name = table::load_gpt(src)
+                .ok()
+                .flatten()
+                .map(|g| {
                     let hex: String = g.header.disk_guid.iter().map(|b| format!("{b:02X}")).collect();
-                    dir.join(format!("{hex}.diskedit.log"))
-                }).or_else(|| {
+                    format!("{hex}.diskedit.log")
+                })
+                .unwrap_or_else(|| {
                     // 无 GPT（MBR/裸盘）：devname 是无表场景唯一稳定标识
                     let name = src.path.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "dev".into());
-                    Some(dir.join(format!("{name}.diskedit.log")))
-                })
-            })
+                    format!("{name}.diskedit.log")
+                });
+            dir.join(name)
         } else {
             let mut p = src.path.clone().into_os_string();
             p.push(".diskedit.log");
-            Some(std::path::PathBuf::from(p))
+            std::path::PathBuf::from(p)
         };
-        let file = path.and_then(|p| std::fs::OpenOptions::new().create(true).append(true).open(p).ok());
+        let file = std::fs::OpenOptions::new().create(true).append(true).open(path).ok();
         if file.is_none() {
             // 落盘失败不静默：用户需知日志只进 stdout
             eprintln!("warning: persistent log unavailable — output only goes to stdout");
@@ -123,13 +131,6 @@ pub(crate) fn open_target(a: &Args) -> Result<FileSource, (u8, String)> {
         .map_err(|e| (EXIT_INFRA, format!("open failed: {e}")))
 }
 
-/// 尽力创建目录：失败不在此处报错——真正的失败会在随后打开文件时以更具体的
-/// 错误（完整路径 + 原因）暴露，比这里笼统的 EACCES 更有诊断价值
-#[allow(clippy::let_underscore_must_use)] // 有意忽略：失败在打开文件时以更具体错误暴露
-fn best_effort_mkdir(dir: &std::path::Path) {
-    let _ = std::fs::create_dir_all(dir);
-}
-
 /// 尽力写日志行：诊断设施失败不改变业务结论（数据与布局不受影响），故忽略。
 /// 命名表达"可失败且无副作用"的意图，便于静态审计区分"有意忽略"与"忘了处理"
 #[allow(clippy::let_underscore_must_use)] // 有意忽略：诊断设施失败不改变业务结论
@@ -138,26 +139,12 @@ fn best_effort_log_write(f: &mut std::fs::File, line: &str) {
     let _ = writeln!(f, "{line}");
 }
 
-/// undo journal 路径的唯一推导：镜像 = `<名>.diskedit.journal`；
-/// 块设备 = /var/lib/diskedit/<devname>.diskedit.journal。
-/// 块设备用 devname 而非 disk_guid：`new` 前后均可用，代价是设备名漂移时需手动定位 journal
-pub(crate) fn journal_path(target: &std::path::Path, is_block: bool) -> std::path::PathBuf {
-    if is_block {
-        let dir = std::path::Path::new("/var/lib/diskedit");
-        best_effort_mkdir(dir);
-        let name = target.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "dev".into());
-        dir.join(format!("{name}.diskedit.journal"))
-    } else {
-        let mut p = target.to_path_buf().into_os_string();
-        p.push(".diskedit.journal");
-        std::path::PathBuf::from(p)
-    }
-}
-
-/// 破坏性命令的打开方式：附带 undo journal（镜像/块设备一致）
+/// undo journal 的落点由目标身份派生（见 dev::TargetIdentity）：镜像 = `<路径>.diskedit.journal`，
+/// 块设备 = <state_dir()>/<设备层身份>.diskedit.journal。身份在打开目标时解析一次，
+/// 关闭撤销窗口时按同一入口解析，两处不各自推导命名规则
 pub(crate) fn open_target_for_write(a: &Args) -> Result<FileSource, (u8, String)> {
     let mut src = open_target(a)?;
-    let p = journal_path(&src.path, src.is_block);
+    let p = src.identity.journal_path().to_path_buf();
     src.journal = Some(Journal::create(&p).map_err(|e| (EXIT_INFRA, format!("journal open failed: {e}")))?);
     Ok(src)
 }
@@ -374,23 +361,16 @@ pub(crate) fn is_destructive_cmd(cmd: &str) -> bool {
     matches!(cmd, "new" | "add" | "del" | "delete" | "set" | "resize" | "resize-part" | "move" | "create" | "copy" | "apply")
 }
 
-/// 成功路径删除 undo journal（路径推导与 open_target_for_write 同源）。
+/// 成功路径删除 undo journal。删的是本次身份的全部候选落点——含历史命名那一份：
+/// 留着它会被下次查找命中，把历史字节回放到一个已经改过的盘上。
 /// 不存在即无残留、无告警；删除真失败则由 dev::warn_if_remove_failed 告警
 pub(crate) fn drop_journal(a: &Args) {
-    let p = journal_path(std::path::Path::new(&a.target), is_block_device(&a.target));
-    dev::warn_if_remove_failed(&p);
-}
-
-/// 目标是否为块设备（决定 journal 落点）
-fn is_block_device(path: &str) -> bool {
-    #[cfg(unix)]
-    {
-        std::fs::metadata(path).map(|m| m.file_type().is_block_device()).unwrap_or(false)
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = path;
-        false
+    let Some(id) = dev::TargetIdentity::resolve_path(std::path::Path::new(&a.target)) else {
+        eprintln!("warning: cannot re-resolve the target identity — the undo journal is left in place");
+        return;
+    };
+    for p in id.journal_candidates() {
+        dev::warn_if_remove_failed(p);
     }
 }
 
@@ -400,7 +380,15 @@ pub(crate) fn src_from(tag: &str, data: &[u8]) -> FileSource {
     tmp.push(format!("diskedit_main_{tag}_{}.img", std::process::id()));
     std::fs::write(&tmp, data).unwrap();
     let f = std::fs::OpenOptions::new().read(true).write(true).open(&tmp).unwrap();
-    FileSource { file: f, path: tmp, sector_size: 512, size: data.len() as u64, is_block: false, journal: None }
+    FileSource {
+        identity: dev::TargetIdentity::resolve(&tmp, false, data.len() as u64),
+        file: f,
+        path: tmp,
+        sector_size: 512,
+        size: data.len() as u64,
+        is_block: false,
+        journal: None,
+    }
 }
 
 #[cfg(test)]
