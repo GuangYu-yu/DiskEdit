@@ -141,11 +141,13 @@ fn best_effort_log_write(f: &mut std::fs::File, line: &str) {
 
 /// undo journal 的落点由目标身份派生（见 dev::TargetIdentity）：镜像 = `<路径>.diskedit.journal`，
 /// 块设备 = <state_dir()>/<设备层身份>.diskedit.journal。身份在打开目标时解析一次，
-/// 关闭撤销窗口时按同一入口解析，两处不各自推导命名规则
+/// 关闭撤销窗口时按同一入口解析，两处不各自推导命名规则。
+/// journal 文件本身要到第一条记录才落盘（Journal::open 只做只读校验），故此处的失败
+/// 只可能是"落点被陌生文件占着"——真正的写入失败会在首次 write_at 处带上下文报出
 pub(crate) fn open_target_for_write(a: &Args) -> Result<FileSource, (u8, String)> {
     let mut src = open_target(a)?;
     let p = src.identity.journal_path().to_path_buf();
-    src.journal = Some(Journal::create(&p).map_err(|e| (EXIT_INFRA, format!("journal open failed: {e}")))?);
+    src.journal = Some(Journal::open(&p).map_err(|e| (EXIT_INFRA, format!("journal open failed: {e}")))?);
     Ok(src)
 }
 
