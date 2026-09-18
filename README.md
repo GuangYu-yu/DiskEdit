@@ -45,7 +45,6 @@ FS 层要 root 是因为经 `losetup` 映射分区；块设备写入靠设备节
 | 命令 | 作用 | 写盘 |
 |---|---|---|
 | `info <TARGET>` | 分区表、逐分区 FS 识别、LVM 布局 | 否 |
-| `ls <TARGET>:N [PATH]` / `cat <TARGET>:N <PATH>` | 浏览文件系统内容 | 否 |
 | `resize <TARGET>:N <SIZE>` | 分区 + FS 一起扩缩，自动选在线/离线 | 是 |
 | `move <TARGET>:N --start <LBA\|end>` | 移动分区，数据跟随 | 是 |
 | `copy <TARGET>:N --start <LBA\|end> [--name S]` | 复制分区到新位置，源不动 | 是 |
@@ -60,7 +59,7 @@ FS 层要 root 是因为经 `losetup` 映射分区；块设备写入靠设备节
 
 `resize` 的 `SIZE` 支持绝对值（`10G`）、增量（`+2G` / `-500M`）、百分比（`+10%` / `-10%`）与 `grow` 关键字。
 
-`--sector-size N` 是全局选项：镜像文件不携带扇区信息，默认按 512 处理，4Kn 镜像须显式指定。（`ls`/`cat` 由 `fstool` 自行探测，不受此选项影响。）
+`--sector-size N` 是全局选项：镜像文件不携带扇区信息，默认按 512 处理，4Kn 镜像须显式指定。
 
 **`check` 不是零写入**：ext 走 `e2fsck -fp`（preen 自动修复），ntfs 走 `ntfsfix -d`（清 dirty 位），两者都可能写入。只读检查为 xfs（`xfs_repair -n`）、btrfs（`btrfs check`）、vfat（`fsck.vfat -n`）、exfat（`fsck.exfat -n`）、f2fs（`fsck.f2fs` 无参）。
 
