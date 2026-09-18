@@ -616,7 +616,22 @@ fn apply_swap_recreate() {
     // 不可用 → 分区表已更新但 swap 未重建，属部分完成（PARTIAL），且必须给出补救命令。
     // 这里不再把"FS/swap 步骤失败"当作成功——那正是让脚本误判空间可用的根源
     #[cfg(target_os = "linux")]
-    assert_eq!(code, 0, "apply must fully succeed on linux: {stderr}");
+    {
+        // effective UID 取自 /proc/self/status 的 Uid: 行（proc(5)：四列依次为
+        // real/effective/saved/filesystem，取第 2 列）；测试层不引入 libc 依赖
+        let is_root = std::fs::read_to_string("/proc/self/status")
+            .ok()
+            .and_then(|s| s.lines().find(|l| l.starts_with("Uid:")))
+            .and_then(|l| l.split_whitespace().nth(2).map(|f| f == "0"))
+            .unwrap_or(false);
+        if is_root {
+            assert_eq!(code, 0, "apply must fully succeed as root: {stderr}");
+        } else {
+            // CI runner 等非 root 环境：mkswap 无法执行 → 表已更新、swap 待重建
+            assert_eq!(code, 20, "non-root: swap step pending → PARTIAL: {stderr}");
+            assert!(stderr.contains("swap rebuild") && stderr.contains("mkswap"), "remedy must be printed: {stderr}");
+        }
+    }
     #[cfg(not(target_os = "linux"))]
     {
         assert_eq!(code, 20, "without mkswap the swap step is pending → PARTIAL: {stderr}");
