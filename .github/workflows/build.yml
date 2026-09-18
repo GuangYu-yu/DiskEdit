@@ -1,0 +1,216 @@
+name: 构建和发布
+
+on:
+  workflow_dispatch:
+    inputs:
+      upload_to_repo:
+        description: '上传二进制文件到项目仓库'
+        type: boolean
+        default: false
+      create_release:
+        description: '创建发布版本'
+        type: boolean
+        default: true
+      project_name:
+        description: '项目名称'
+        type: string
+        default: 'DiskEdit'
+        required: true
+#      build_windows_amd64:
+#        description: '编译 Windows AMD64 版本'
+#        type: boolean
+#        default: true
+#     build_windows_arm64:
+#        description: '编译 Windows ARM64 版本'
+#        type: boolean
+#        default: true
+      build_linux_amd64:
+        description: '编译 Linux AMD64 版本'
+        type: boolean
+        default: true
+      build_linux_arm64:
+        description: '编译 Linux ARM64 版本'
+        type: boolean
+        default: true
+      build_linux_amd64_gnu:
+        description: '编译 Linux AMD64 动态链接版本'
+        type: boolean
+        default: false
+      build_linux_arm64_gnu:
+        description: '编译 Linux ARM64 动态链接版本'
+        type: boolean
+        default: false
+#      build_macos_amd64:
+#        description: '编译 MacOS AMD64 版本'
+#        type: boolean
+#        default: true
+#      build_macos_arm64:
+#       description: '编译 MacOS ARM64 版本'
+#        type: boolean
+#        default: true
+
+jobs:
+  # 动态生成矩阵配置，只包含用户勾选的平台
+  matrix:
+    name: 矩阵配置
+    runs-on: ubuntu-latest
+    outputs:
+      include: ${{ steps.set.outputs.include }}
+    steps:
+      - id: set
+        run: |
+          # 根据用户输入动态构建矩阵
+          arr=()
+          [[ "${{ inputs.build_windows_amd64 }}" == true ]] && arr+=('{"os":"Windows","arch":"AMD64","target":"x86_64-pc-windows-msvc","runner":"windows-latest","bin":"${{ inputs.project_name }}.exe"}')
+          [[ "${{ inputs.build_windows_arm64 }}" == true ]] && arr+=('{"os":"Windows","arch":"ARM64","target":"aarch64-pc-windows-msvc","runner":"windows-latest","bin":"${{ inputs.project_name }}.exe"}')
+          [[ "${{ inputs.build_linux_amd64 }}"   == true ]] && arr+=('{"os":"Linux","arch":"AMD64","target":"x86_64-unknown-linux-musl","runner":"ubuntu-latest","bin":"${{ inputs.project_name }}"}')
+          [[ "${{ inputs.build_linux_arm64 }}"   == true ]] && arr+=('{"os":"Linux","arch":"ARM64","target":"aarch64-unknown-linux-musl","runner":"ubuntu-latest","bin":"${{ inputs.project_name }}"}')
+          [[ "${{ inputs.build_linux_amd64_gnu }}" == true ]] && arr+=('{"os":"Linux","arch":"AMD64_GNU","target":"x86_64-unknown-linux-gnu","runner":"ubuntu-latest","bin":"${{ inputs.project_name }}"}')
+          [[ "${{ inputs.build_linux_arm64_gnu }}" == true ]] && arr+=('{"os":"Linux","arch":"ARM64_GNU","target":"aarch64-unknown-linux-gnu","runner":"ubuntu-latest","bin":"${{ inputs.project_name }}"}')
+          [[ "${{ inputs.build_macos_amd64 }}"   == true ]] && arr+=('{"os":"MacOS","arch":"AMD64","target":"x86_64-apple-darwin","runner":"ubuntu-latest","bin":"${{ inputs.project_name }}"}')
+          [[ "${{ inputs.build_macos_arm64 }}"   == true ]] && arr+=('{"os":"MacOS","arch":"ARM64","target":"aarch64-apple-darwin","runner":"ubuntu-latest","bin":"${{ inputs.project_name }}"}')
+          echo "include=[$(IFS=,; echo "${arr[*]}")]" >> $GITHUB_OUTPUT
+
+  build:
+    name: 构建 ${{ matrix.os }}_${{ matrix.arch }}
+    needs: matrix
+    # 只有当矩阵不为空时才执行构建
+    if: ${{ needs.matrix.outputs.include != '[]' }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.matrix.outputs.include) }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 Rust 工具链
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: 安装 Zig
+        if: ${{ matrix.os != 'Windows' }}
+        uses: mlugg/setup-zig@v2
+        with:
+          version: master
+
+      - name: 构建二进制
+        shell: bash
+        run: |
+          cargo update
+          if [[ "${{ matrix.os }}" == "Windows" ]]; then
+            cmd="build"
+          else
+            cargo install --locked cargo-zigbuild
+            cmd="zigbuild"
+          fi
+          cargo $cmd --release --target ${{ matrix.target }}
+
+      - name: 保存构建产物
+        run: |
+          mkdir -p binaries/${{ matrix.os }}_${{ matrix.arch }}
+          cp target/${{ matrix.target }}/release/${{ matrix.bin }} binaries/${{ matrix.os }}_${{ matrix.arch }}/
+        shell: bash
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.os }}_${{ matrix.arch }}
+          path: binaries/${{ matrix.os }}_${{ matrix.arch }}/
+
+  strip_binaries:
+    name: Strip 二进制
+    needs: [matrix, build]
+    if: ${{ needs.build.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: stripped_artifacts/
+      - name: Install llvm-strip
+        run: sudo apt-get update && sudo apt-get install -y llvm
+      - name: Strip
+        run: |
+          find stripped_artifacts -type f \( -name '*.exe' -o -name '${{ github.event.inputs.project_name }}' \) | while read f; do
+            echo "Stripping $f"
+            llvm-strip "$f"
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: stripped_artifacts
+          path: stripped_artifacts/
+
+  upload_to_repo:
+    name: 上传二进制到仓库
+    needs: [matrix, strip_binaries]
+    if: ${{ github.event.inputs.upload_to_repo == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: stripped_artifacts
+          path: binaries
+      - name: 上传到仓库
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "自动构建: 添加二进制文件"
+          file_pattern: 'binaries/*'
+          skip_fetch: true
+          skip_dirty_check: false
+          push_options: '--force'
+
+  create_release:
+    name: 创建发布
+    needs: [matrix, strip_binaries]
+    if: ${{ github.event.inputs.create_release == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: stripped_artifacts
+          path: artifacts/
+
+      - name: 打包发布文件
+        run: |
+          shopt -s nullglob
+          mkdir -p release
+          for dir in artifacts/*/; do
+            platform=$(basename "$dir")
+            IFS='_' read -r os arch suffix <<< "$platform"
+            os=$(echo "$os" | tr '[:upper:]' '[:lower:]')
+            arch=$(echo "$arch" | tr '[:upper:]' '[:lower:]')
+            suffix="${suffix:+_${suffix}}"
+
+            name="${{ github.event.inputs.project_name }}_${os}_${arch}${suffix}"
+            if [[ "$os" == "windows" ]]; then
+              zip -rj "release/${name}.zip" "$dir"
+            else
+              tar -czf "release/${name}.tar.gz" -C "$dir" .
+            fi
+          done
+
+      # 删除旧版 tag 和 release
+      - name: 删除旧版 Release 和 Tag
+        run: |
+          tag="${{ github.ref_name }}-latest"
+          gh release delete "$tag" -y || true
+          git push origin ":refs/tags/$tag" || true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 创建 GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          name: "${{ github.event.inputs.project_name }} 最新版本"
+          tag_name: "${{ github.ref_name }}-latest"
+          target_commitish: ${{ github.sha }}
+          files: release/*
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
