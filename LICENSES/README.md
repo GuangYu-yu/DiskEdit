@@ -9,7 +9,6 @@ diskedit 本体：MIT（见 Cargo.toml `license`）
 | gptman | 3.1.1 | MIT OR Apache-2.0 | GPT 解析/提交 |
 | crc | 3.4.0 | MIT OR Apache-2.0 | CRC32 |
 | crc-catalog | 2.5.0 | MIT OR Apache-2.0 | crc 传递依赖 |
-| fstool | 0.4.33 | MIT | 可选 browse feature（ls/cat） |
 | libc | 0.2.189 | MIT OR Apache-2.0 | Linux 平台 |
 | serde_json | 1.0.151 | MIT OR Apache-2.0 | dev-dependency |
 

@@ -4,7 +4,6 @@
 mod dev;
 mod fsid;
 mod fsops;
-mod list;
 #[cfg(target_os = "linux")]
 mod lvm;
 #[cfg(target_os = "linux")]
@@ -28,7 +27,6 @@ fn usage() -> ! {
         r#"diskedit — disk / image editor
 
   info <TARGET>                                  show partition table / FS / LVM layout
-  ls <TARGET>:N [PATH] | cat <TARGET>:N <PATH>   browse filesystem
   resize <TARGET>:N <SIZE> [OPTS]                resize partition + FS (auto online/offline)
   move <TARGET>:N --start <LBA|end>              move partition
   copy <TARGET>:N --start <LBA|end> [--name S]   copy partition
@@ -58,11 +56,6 @@ fn help_cmd(name: &str) -> ! {
 
   Show partition table, per-partition filesystem identification and LVM
   layout. Read-only. --sector-size N overrides the 512B default (raw images)."#,
-        "ls" | "cat" => r#"diskedit ls <TARGET>:N [PATH]
-diskedit cat <TARGET>:N <PATH>
-
-  Browse filesystem contents (streaming backend, works on large partitions).
-  ls lists a directory; cat writes a file to stdout."#,
         "resize" => r#"diskedit resize <TARGET>:N <SIZE> [OPTIONS]
 
   Resize partition and its filesystem. Online/offline method is chosen
@@ -167,7 +160,6 @@ struct Args {
     target: String,
     part: Option<u32>,
     fstype: Option<String>,
-    path: Option<String>,
     state: Option<String>,
     grow: Option<u32>,
     start: Option<u64>,
@@ -194,7 +186,7 @@ fn parse_args() -> (String, Args) {
     let mut it = std::env::args().skip(1);
     let cmd = it.next().unwrap_or_else(|| usage());
     let mut a = Args {
-        target: String::new(), part: None, fstype: None, path: None, state: None, grow: None,
+        target: String::new(), part: None, fstype: None, state: None, grow: None,
         start: None, end: None, size: None, fs: None, name: None, type_guid: None, table: None,
         yes: false, online: false, sector_size: None,
         align: "mib".to_string(),
@@ -263,7 +255,6 @@ fn parse_args() -> (String, Args) {
     a.part = part;
     a.pos = positional.clone();
     a.fstype = positional.get(1).cloned();
-    a.path = positional.get(1).cloned();
     a.state = positional.get(2).cloned();
     (cmd, a)
 }
@@ -1377,32 +1368,6 @@ fn main() -> ExitCode {
         "move" => cmd_move(&a),
         "create" => cmd_create(&a),
         "set" => cmd_set(&a),
-        "ls" => {
-            let Some(part) = a.part else { usage() };
-            // 纯浏览：只读打开（块设备 RW+O_EXCL 在盘被 claim 时会被内核拒绝）
-            let src = open_target_ro(&a).unwrap_or_else(|(c, m)| bail(c, m));
-            let path = a.path.as_deref().unwrap_or("/");
-            match list::ls(&src.path, Some(part), path) {
-                Ok(entries) => {
-                    for (name, kind, size) in entries {
-                        println!("{kind}\t{size}\t{name}");
-                    }
-                    EXIT_OK
-                }
-                Err(e) => { eprintln!("ls failed: {e}"); EXIT_REFUSED }
-            }
-        }
-        "cat" => {
-            let (Some(part), Some(path)) = (a.part, a.path.clone()) else { usage() };
-            // 纯读取：只读打开（块设备 RW+O_EXCL 在盘被 claim 时会被内核拒绝）
-            let src = open_target_ro(&a).unwrap_or_else(|(c, m)| bail(c, m));
-            let stdout = std::io::stdout();
-            let mut lock = stdout.lock();
-            match list::cat_to(&src.path, Some(part), &path, &mut lock) {
-                Ok(_) => EXIT_OK,
-                Err(e) => { eprintln!("cat failed: {e}"); EXIT_REFUSED }
-            }
-        }
         "mkfs" => {
             let (Some(part), Some(fstype)) = (a.part, a.fstype.clone()) else { usage() };
             if !a.yes {
@@ -1780,7 +1745,7 @@ mod tests {
 
     fn base_args() -> Args {
         Args {
-            target: String::new(), part: None, fstype: None, path: None, state: None, grow: None,
+            target: String::new(), part: None, fstype: None, state: None, grow: None,
             start: None, end: None, size: None, fs: None, name: None, type_guid: None, table: None,
             yes: false, online: false, sector_size: None, align: "mib".to_string(), chunk_mib: 4,
             grow_to_end: false, allow_move: false, grow_lv: false, lv: None, start_end: false, pos: Vec::new(),
