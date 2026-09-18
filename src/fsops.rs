@@ -3,6 +3,7 @@
 //! 严格 Linux。非 Linux 平台编译为显式拒绝存根。
 
 use crate::dev::FileSource;
+use crate::fsid::is_ext;
 use std::io;
 #[cfg(target_os = "linux")]
 use std::path::Path;
@@ -22,6 +23,7 @@ pub fn require_root() -> io::Result<()> {
     #[cfg(target_os = "linux")]
     {
         // geteuid = POSIX.1（man geteuid）实际 UID 判定，非有效权限位
+        // SAFETY: geteuid 无参数、不访问内存，恒成功
         if unsafe { libc::geteuid() } != 0 {
             return Err(io::Error::new(io::ErrorKind::PermissionDenied, "root required (losetup/mkfs/resize need kernel privileges)"));
         }
@@ -82,8 +84,11 @@ pub(crate) fn run_input(tool: &str, args: &[&str], input: &str) -> io::Result<st
     let mut stdin = child.stdin.take().expect("stdin piped");
     if let Err(e) = stdin.write_all(input.as_bytes()) {
         // 写 stdin 失败时子进程可能还在等输入，显式终止防僵留
-        let _ = child.kill();
-        let _ = child.wait();
+        #[allow(clippy::let_underscore_must_use)] // 主错误已上报；子进程回收失败只影响资源
+        {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
         return Err(e);
     }
     drop(stdin); // 关闭 stdin 让 sfdisk 看到输入结束
@@ -176,36 +181,30 @@ pub(crate) fn read_mounts() -> io::Result<Vec<MountEntry>> {
 /// xfs/btrfs 的临时挂载路径，不经此函数。用 /proc/self/mountinfo（第 3 字段
 /// major:minor）与 /proc/swaps（第一字段设备路径）按 st_rdev 精确匹配设备，命中即拒绝。
 #[cfg(target_os = "linux")]
-fn ensure_unmounted(dev: &str) -> io::Result<()> {
+fn require_unmounted(dev: &str) -> io::Result<()> {
     use std::os::unix::fs::MetadataExt;
     let in_use = |what: &str| io::Error::other(format!("{dev} is {what} — unmount/deactivate first (FS operations require an unmounted partition)"));
-    // 设备身份优先用 st_rdev（st_mode 无关，覆盖 /dev/mapper/... 等别名与符号链接）；
-    // stat 不可得时回退到（已解码的）source 路径字符串比对
-    let target_rdev = std::fs::metadata(dev).ok().map(|m| m.rdev());
-    let dev_no = target_rdev.map(|r| (libc::major(r) as u64, libc::minor(r) as u64));
-    if let Ok(entries) = read_mounts() {
-        let hit = entries.iter().any(|e| match dev_no {
-            Some(n) => e.dev_no == n,
-            None => e.source == dev,
-        });
-        if hit {
-            return Err(in_use("mounted"));
-        }
+    // 安全相关探测一律 fail-closed：无法确认"未挂载"就拒绝动手——探测失败若被当作
+    // "未挂载"，会对已挂载的 FS 执行 resize，那是数据损坏
+    let m = std::fs::metadata(dev).map_err(|e| {
+        io::Error::other(format!("cannot stat {dev} to confirm it is unmounted: {e} — refusing (fail-closed)"))
+    })?;
+    let rdev = m.rdev();
+    let dev_no = (libc::major(rdev) as u64, libc::minor(rdev) as u64);
+    let entries = read_mounts().map_err(|e| {
+        io::Error::other(format!("cannot read mount table to confirm {dev} is unmounted: {e} — refusing (fail-closed)"))
+    })?;
+    if entries.iter().any(|e| e.dev_no == dev_no) {
+        return Err(in_use("mounted"));
     }
-    let same_dev = |field: &str| -> bool {
-        if field == dev {
-            return true;
-        }
-        match (target_rdev, std::fs::metadata(field).ok()) {
-            (Some(r), Some(m)) => m.rdev() == r,
-            _ => false,
-        }
-    };
-    if let Ok(swaps) = std::fs::read_to_string("/proc/swaps") {
-        for line in swaps.lines().skip(1) {
-            if let Some(field) = line.split_whitespace().next()
-                && same_dev(field)
-            {
+    let swaps = std::fs::read_to_string("/proc/swaps").map_err(|e| {
+        io::Error::other(format!("cannot read /proc/swaps to confirm {dev} is not active swap: {e} — refusing (fail-closed)"))
+    })?;
+    for line in swaps.lines().skip(1) {
+        if let Some(field) = line.split_whitespace().next() {
+            // 同一设备的两种判据取并集：路径相同，或 st_rdev 相同。后者 stat 失败时
+            // 不构成"确认安全"，但路径相等这条仍能命中，避免漏检
+            if field == dev || std::fs::metadata(field).is_ok_and(|fm| fm.rdev() == rdev) {
                 return Err(in_use("active as swap"));
             }
         }
@@ -213,7 +212,7 @@ fn ensure_unmounted(dev: &str) -> io::Result<()> {
     Ok(())
 }
 #[cfg(not(target_os = "linux"))]
-fn ensure_unmounted(_dev: &str) -> io::Result<()> {
+fn require_unmounted(_dev: &str) -> io::Result<()> {
     Ok(())
 }
 
@@ -261,7 +260,16 @@ fn attach_loop(src: &FileSource, off: u64, len: u64) -> io::Result<String> {
 /// 不判 detach 失败（映射已解除，仅队列清空未确认）；udevadm 缺失（非 systemd 环境）忽略
 fn detach_loop(loopdev: &str) {
     if let Ok(losetup) = find_tool("losetup") {
-        let _ = Command::new(&losetup).arg("-d").arg(loopdev).status();
+        // 资源释放失败不该阻断业务（数据与布局已正确），但循环设备泄漏会让后续
+        // losetup 找不到空闲设备——属于用户需要知道的状态，故告警而非静默丢弃
+        match Command::new(&losetup).arg("-d").arg(loopdev).status() {
+            Ok(st) if st.success() => {}
+            Ok(st) => eprintln!(
+                "warning: `losetup -d {loopdev}` exited with {} — the loop device may still be attached",
+                st.code().unwrap_or(-1)
+            ),
+            Err(e) => eprintln!("warning: cannot run `losetup -d {loopdev}`: {e} — the loop device may still be attached"),
+        }
     }
     if let Ok(udevadm) = find_tool("udevadm") {
         match Command::new(&udevadm).args(["settle", "--timeout=5"]).status() {
@@ -306,16 +314,16 @@ where
             DeviceScope::Whole => src.path.to_string_lossy().into_owned(),
             DeviceScope::Range(..) => {
                 let loopdev = attach_loop(src, off, len)?;
-                let res = ensure_unmounted(&loopdev).and_then(|()| f(&loopdev));
+                let res = require_unmounted(&loopdev).and_then(|()| f(&loopdev));
                 detach_loop(&loopdev);
                 return res;
             }
         };
-        return ensure_unmounted(&dev).and_then(|()| f(&dev));
+        return require_unmounted(&dev).and_then(|()| f(&dev));
     }
     let (off, len) = scope_byte_range(src, scope)?;
     let loopdev = attach_loop(src, off, len)?;
-    let res = ensure_unmounted(&loopdev).and_then(|()| f(&loopdev));
+    let res = require_unmounted(&loopdev).and_then(|()| f(&loopdev));
     detach_loop(&loopdev);
     res
 }
@@ -331,7 +339,7 @@ where
 }
 
 /// 在 /sys/block/<disk>/<part>/ 按 start 匹配分区设备节点（块设备路径用）。
-/// want_start = 分区起始字节，调用方已由 partition_byte_range 求得，此处不再重复解析分区表。
+/// want_start = 分区起始字节，调用方已由 partition_byte_range 求得。
 /// start/size 属性为内核 sysfs-block ABI（Documentation/ABI/testing/sysfs-block，
 /// 单位恒为 512 字节扇区，与设备逻辑块大小无关），换算字节偏移须用 512 而非 src.sector_size
 fn find_block_partition_node(src: &FileSource, part: u32, want_start: u64) -> io::Result<String> {
@@ -362,7 +370,9 @@ fn find_block_partition_node(src: &FileSource, part: u32, want_start: u64) -> io
 
 fn partition_byte_range(src: &FileSource, part: u32) -> io::Result<(u64, u64)> {
     let ss = src.sector_size;
-    if let Some(g) = crate::table::load_gpt(src)? {
+    // 本层契约是 io::Result，"表结构非法"对调用者只等于拒绝，故在此显式压平
+    // （flatten 是可见的调用，不是 From——结构化诊断归 cmd_info）
+    if let Some(g) = crate::table::load_gpt(src).map_err(crate::table::flatten)? {
         let e = g.entries.get((part - 1) as usize)
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, format!("partition {part} not found")))?;
         if e.ending_lba == 0 && e.starting_lba == 0 {
@@ -386,7 +396,7 @@ fn partition_byte_range(src: &FileSource, part: u32) -> io::Result<(u64, u64)> {
 /// 其余 FS 无已验证的输出格式，返回 None，由工具自身在缩容前拒绝
 /// （shrink_fs 先于任何数据搬移执行，失败即安全终止）
 pub fn fs_min_bytes(src: &FileSource, part: u32, fstype: &str) -> io::Result<Option<u64>> {
-    if !matches!(fstype, "ext" | "ext2" | "ext3" | "ext4") {
+    if !is_ext(fstype) {
         return Ok(None);
     }
     let mut result: Option<io::Result<u64>> = None;
@@ -576,6 +586,122 @@ fn refuse_btrfs_multi_device_at(src: &FileSource, off: u64) -> io::Result<()> {
     Ok(())
 }
 
+/// FS 的 resize 支持情况——三态而非布尔，"不适用"与"不支持"必须分开：
+/// 前者是本工具的契约边界（不该因此报错），后者是我们认得却做不了（必须事前拒绝）
+enum ToolSupport {
+    /// 需要这些工具；任一缺失即事前拒绝
+    Tools(&'static [&'static str]),
+    /// 契约上不负责：裸分区无 FS 可扩；LVM PV 的空间生效走 pvresize/lvextend 链
+    NotApplicable,
+    /// 认得出来但本操作不接线。**理由随变体携带**：笼统的"未接线"对用户无从下手，
+    /// 而各调用点各写一句理由（lvm2_pv 要 lvreduce 链 / unknown 会写坏数据 / 其余未接线）
+    /// 正是"同一事实多处来源"——那样每加一个类型都要改多处
+    Unsupported(&'static str),
+}
+
+fn grow_support(fstype: &str) -> ToolSupport {
+    use ToolSupport::*;
+    match fstype {
+        f if is_ext(f) => Tools(&["e2fsck", "resize2fs"]),
+        "ntfs" => Tools(&["ntfsresize"]),
+        "f2fs" => Tools(&["fsck.f2fs", "resize.f2fs"]),
+        "xfs" => Tools(&["xfs_growfs"]),
+        "btrfs" => Tools(&["btrfs"]),
+        "vfat" => Tools(&["fatresize"]),
+        // swap 不搬内容：扩后按原 UUID/卷标重建（recreate_swap → mkswap）
+        "swap" => Tools(&["mkswap"]),
+        "unknown" | "lvm2_pv" => NotApplicable,
+        _ => Unsupported("not wired to a tool — pass --no-fs to change the partition only"),
+    }
+}
+
+fn shrink_support(fstype: &str) -> ToolSupport {
+    use ToolSupport::*;
+    match fstype {
+        f if is_ext(f) => Tools(&["e2fsck", "resize2fs"]),
+        "ntfs" => Tools(&["ntfsresize"]),
+        "btrfs" => Tools(&["btrfs"]),
+        // LVM PV 缩容要求新末端之后没有已分配的 extent，需经 lvreduce/pvresize 链，本工具不做
+        "lvm2_pv" => Unsupported(
+            "requires the lvreduce/pvresize chain (not implemented here; see pvresize(8))",
+        ),
+        // 类型认不出来就无法先缩 FS：缩分区后 FS 越界写坏数据
+        "unknown" => Unsupported(
+            "filesystem type unrecognized — shrinking the partition without resizing the FS first would corrupt data",
+        ),
+        // 其余认得却不会缩的类型：唯一安全路径是先由该 FS 自己的工具缩。
+        // 提示不能是 grow 的 "pass --no-fs"：--no-fs 与缩容互斥，那样等于给出错误指引
+        _ => Unsupported(
+            "not wired to a tool; the filesystem must be shrunk by its own tool first, and --no-fs cannot stand in (the new partition end would cut into filesystem metadata)",
+        ),
+    }
+}
+
+/// 工具所属包名（Debian 系）。写进错误信息是为了让自动化脚本能识别缺失项
+/// 并自动安装后重试，而不必靠人读日志
+fn tool_package(tool: &str) -> &'static str {
+    match tool {
+        "e2fsck" | "resize2fs" => "e2fsprogs",
+        "ntfsresize" => "ntfs-3g",
+        "fsck.f2fs" | "resize.f2fs" => "f2fs-tools",
+        "xfs_growfs" => "xfsprogs",
+        "btrfs" => "btrfs-progs",
+        "fatresize" => "fatresize",
+        "mkswap" => "util-linux",
+        _ => "unknown",
+    }
+}
+
+fn check_support(verb: &str, fstype: &str, support: ToolSupport) -> Result<(), String> {
+    match support {
+        ToolSupport::NotApplicable => Ok(()),
+        ToolSupport::Unsupported(reason) => Err(format!("cannot {verb} {fstype}: {reason}")),
+        ToolSupport::Tools(tools) => {
+            for &t in tools {
+                if find_tool(t).is_err() {
+                    return Err(format!(
+                        "cannot {verb} {fstype}: requires `{t}` (package: {}) — not found in PATH",
+                        tool_package(t)
+                    ));
+                }
+            }
+            Ok(())
+        }
+    }
+}
+
+/// 扩容前置检查（纯只读、不写盘）。返回 Err 即"事前拒绝"。
+/// 调用方**必须在首次写盘之前**执行，否则会留下"分区已改、FS 未扩"的中间态——
+/// 这正是本检查存在的意义：把可预见的失败挡在动手之前
+pub fn check_grow(fstype: &str) -> Result<(), String> {
+    check_support("grow", fstype, grow_support(fstype))
+}
+
+/// 缩容前置检查，语义同上
+pub fn check_shrink(fstype: &str) -> Result<(), String> {
+    check_support("shrink", fstype, shrink_support(fstype))
+}
+
+/// 该 FS 的扩容/缩容应交给用户的补救命令（用于 PARTIAL 时的提示）
+pub fn rescue_hint(fstype: &str, dev: &str, shrinking: bool) -> String {
+    match fstype {
+        f if is_ext(f) => {
+            if shrinking {
+                format!("resize2fs {dev} <size>   # after e2fsck -f {dev}")
+            } else {
+                format!("e2fsck -fp {dev} && resize2fs {dev}")
+            }
+        }
+        "ntfs" => format!("ntfsresize -f -f {dev}"),
+        "f2fs" => format!("fsck.f2fs {dev} && resize.f2fs {dev}"),
+        "xfs" => format!("mount {dev} <mnt> && xfs_growfs <mnt>"),
+        "btrfs" => format!("mount {dev} <mnt> && btrfs filesystem resize max <mnt>"),
+        "vfat" => format!("fatresize -s max {dev}"),
+        "swap" => format!("mkswap --uuid <uuid> {dev}"),
+        _ => String::new(),
+    }
+}
+
 /// resize 分发（扩容到设备/分区末端）：
 /// - ext2/3/4：先 `e2fsck -fp` 修复，再 `resize2fs <dev>` 扩满分区（离线）。
 ///   -fp = 强制检查 + 自动修复；退出码按位或：0-1 通过、2/3 改了 root fs 须重启、
@@ -598,7 +724,7 @@ pub fn resize_fs_whole(src: &FileSource, fstype: &str) -> io::Result<()> {
 fn resize_fs_in(src: &FileSource, scope: &DeviceScope, fstype: &str) -> io::Result<()> {
     match fstype {
         // fsid 识别只给 0xEF53，区分不出 2/3/4；resize2fs 对三者通用（man resize2fs）
-        "ext" | "ext2" | "ext3" | "ext4" => with_scope_device(src, scope, |dev| {
+        f if is_ext(f) => with_scope_device(src, scope, |dev| {
             let out = run("e2fsck", &["-fp", dev])?;
             check_e2fsck(out.status.code().unwrap_or(-1))?;
             let out = run("resize2fs", &[dev])?;
@@ -689,9 +815,9 @@ fn resize_fs_in(src: &FileSource, scope: &DeviceScope, fstype: &str) -> io::Resu
                 if rel >= part_len {
                     return Err(io::Error::other("overlay offset beyond partition end"));
                 }
-                let ss = src.sector_size;
-                let inner = crate::fsid::identify(src, (part_off + rel) / ss, (part_len - rel) / ss)?;
-                if !matches!(inner, "ext" | "ext2" | "ext3" | "ext4" | "f2fs") {
+                // 区间量本就是字节，直接传给按字节区间识别的 identify
+                let inner = crate::fsid::identify(src, part_off + rel, part_len - rel)?;
+                if !(is_ext(inner) || inner == "f2fs") {
                     return Err(io::Error::other(format!(
                         "overlay layer identified as {inner} — only ext/f2fs overlays are growable"
                     )));
@@ -700,7 +826,7 @@ fn resize_fs_in(src: &FileSource, scope: &DeviceScope, fstype: &str) -> io::Resu
                     // Range 路径走 loop，循环节点自身的挂载检查探不到底层分区——
                     // 底层分区挂载态在此显式守卫
                     let node = find_block_partition_node(src, *p, part_off)?;
-                    ensure_unmounted(&node)?;
+                    require_unmounted(&node)?;
                 }
                 resize_fs_in(src, &DeviceScope::Range(part_off + rel, part_len - rel), inner)
             }
@@ -742,14 +868,14 @@ where
             eprintln!("warning: umount {} failed: {why} — temp mount point may remain", mnt.display());
         }
     }
-    let _ = std::fs::remove_dir(&mnt);
+    crate::dev::best_effort_rmdir(&mnt);
     res
 }
 
 /// FS 缩容到指定字节数（调用方保证 ≤ 当前 FS 大小；先于分区边界收缩执行）
 pub fn shrink_fs(src: &FileSource, part: u32, fstype: &str, new_bytes: u64) -> io::Result<()> {
     match fstype {
-        "ext" | "ext2" | "ext3" | "ext4" => with_partition_device(src, part, |dev| {
+        f if is_ext(f) => with_partition_device(src, part, |dev| {
             let out = run("e2fsck", &["-fp", dev])?;
             check_e2fsck(out.status.code().unwrap_or(-1))?;
             // resize2fs 裸数字单位是"文件系统块数"而非字节（man resize2fs）；
@@ -805,7 +931,7 @@ pub fn check_fs(src: &FileSource, part: u32, fstype: &str) -> io::Result<()> {
         ));
     }
     let cmd: (&str, Vec<&str>) = match fstype {
-        "ext" | "ext2" | "ext3" | "ext4" => ("e2fsck", vec!["-fp"]),
+        f if is_ext(f) => ("e2fsck", vec!["-fp"]),
         "ntfs" => ("ntfsfix", vec!["-d"]),
         "f2fs" => ("fsck.f2fs", vec![]),
         "xfs" => ("xfs_repair", vec!["-n"]),
@@ -836,7 +962,7 @@ pub fn check_fs(src: &FileSource, part: u32, fstype: &str) -> io::Result<()> {
 pub fn set_label(src: &FileSource, part: u32, fstype: &str, label: &str) -> io::Result<()> {
     with_partition_device(src, part, |dev| {
         let (tool, args): (&str, Vec<String>) = match fstype {
-            "ext" | "ext2" | "ext3" | "ext4" => ("tune2fs", vec!["-L".into(), label.into(), dev.into()]),
+            f if is_ext(f) => ("tune2fs", vec!["-L".into(), label.into(), dev.into()]),
             // XFS 标签上限 12 字节（superblock s_fname[12]，man xfs_admin "twelve
             // characters"）：超长时 xfs_admin 静默截断，故提前拒绝
             "xfs" => {
@@ -866,7 +992,7 @@ pub fn set_label(src: &FileSource, part: u32, fstype: &str, label: &str) -> io::
 pub fn set_uuid(src: &FileSource, part: u32, fstype: &str, uuid: &str) -> io::Result<()> {
     with_partition_device(src, part, |dev| {
         let (tool, args): (&str, Vec<String>) = match fstype {
-            "ext" | "ext2" | "ext3" | "ext4" => ("tune2fs", vec!["-U".into(), uuid.into(), dev.into()]),
+            f if is_ext(f) => ("tune2fs", vec!["-U".into(), uuid.into(), dev.into()]),
             "xfs" => ("xfs_admin", vec!["-U".into(), uuid.into(), dev.into()]),
             "ntfs" => ("ntfslabel", vec!["--new-serial".into(), dev.into()]), // ntfs 只支持随机新序号，忽略传入值
             "btrfs" => ("btrfstune", vec!["-f".into(), "-U".into(), uuid.into(), dev.into()]), // -f：change fsid 属"dangerous changes"，man btrfstune
@@ -981,7 +1107,7 @@ mod tests {
     fn erase_ranges_boundaries() {
         const K: u64 = 1024;
         const M: u64 = 1024 * K;
-        // part_len 恰为 rounding（bcachefs 128K 桶）整数倍：pos = part_len−1M 落桶界，不再取整
+        // part_len 恰为 rounding（bcachefs 128K 桶）整数倍：pos = part_len−1M 落桶界，无需取整
         // （FT 行起点算成负数后被裁剪丢弃，bcachefs 是第 2 个产出区间）
         let exact = erase_ranges(M + 128 * K, 512);
         assert_eq!(exact[1], (128 * K, 4 * K));

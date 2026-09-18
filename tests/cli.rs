@@ -1,3 +1,4 @@
+#![allow(clippy::let_underscore_must_use)] // 测试的清理步骤有意忽略失败（临时目录/文件）
 //! 端到端：gptman 造 GPT 镜像 → 真实二进制 `info` 读回 → JSON 含预期字段。
 
 use std::io::Cursor;
@@ -95,64 +96,154 @@ fn new_add_del_roundtrip() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// 主头撕裂（torn write）时回退盘尾备份头，并在写入时重建主头
 #[test]
-fn undo_journal_restores_image() {
-    let dir = std::env::temp_dir().join(format!("diskedit_undo_{}", std::process::id()));
+fn backup_header_fallback_and_repair() {
+    let dir = std::env::temp_dir().join(format!("diskedit_bk_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let img = dir.join("u.img");
-    std::fs::write(&img, vec![0u8; 8 * 1024 * 1024]).unwrap();
-    let original = std::fs::read(&img).unwrap();
+    let img = dir.join("b.img");
+    std::fs::write(&img, vec![0u8; 16 * 1024 * 1024]).unwrap();
     let exe = env!("CARGO_BIN_EXE_DiskEdit");
     let img_s = img.to_str().unwrap();
-    let journal = dir.join("u.img.diskedit.journal");
+    let run = |args: &[&str]| -> (i32, String, String) {
+        let out = Command::new(exe).args(args).output().unwrap();
+        (out.status.code().unwrap_or(-1),
+         String::from_utf8_lossy(&out.stdout).into_owned(),
+         String::from_utf8_lossy(&out.stderr).into_owned())
+    };
+    // 覆写某个扇区（模拟撕裂/清零）
+    let wipe = |lba: u64| {
+        use std::io::{Seek, SeekFrom, Write};
+        let mut f = std::fs::OpenOptions::new().write(true).open(&img).unwrap();
+        f.seek(SeekFrom::Start(lba * 512)).unwrap();
+        f.write_all(&[0u8; 512]).unwrap();
+    };
+    let part_count = || -> usize {
+        let out = Command::new(exe).args(["info", img_s]).output().unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        v["partitions"].as_array().map(|a| a.len()).unwrap_or(0)
+    };
+
+    let (c, _, e) = run(&["new", img_s, "--yes"]);
+    assert_eq!(c, 0, "{e}");
+    let (c, _, e) = run(&["add", img_s, "--start", "2048", "--end", "6143", "--name", "a"]);
+    assert_eq!(c, 0, "{e}");
+    let (c, _, e) = run(&["add", img_s, "--start", "8192", "--end", "12287", "--name", "b"]);
+    assert_eq!(c, 0, "{e}");
+
+    // 主头（LBA1）清零 → 必须回退盘尾备份头读到表
+    wipe(1);
+    let (c, out, e) = run(&["info", img_s]);
+    assert_eq!(c, 0, "{e}");
+    let v: serde_json::Value = serde_json::from_str(out.trim()).expect("info must emit JSON");
+    assert_eq!(v["label"], "gpt", "must fall back to backup header: {out}");
+    assert_eq!(part_count(), 2, "partitions must be read from backup: {out}");
+
+    // 写入路径应借修复重建主头
+    let (c, _, e) = run(&["set", &format!("{img_s}:1"), "name", "renamed"]);
+    assert_eq!(c, 0, "write must succeed and repair primary: {e}");
+    let mut f = std::fs::File::open(&img).unwrap();
+    let gpt = gptman::GPT::find_from(&mut f).expect("primary header must be rebuilt");
+    assert_eq!(gpt[1].partition_name.as_str(), "renamed");
+
+    // 两份都清零 → 视为无表（不误判）
+    wipe(1);
+    let last = std::fs::metadata(&img).unwrap().len() / 512 - 1;
+    wipe(last);
+    let (c, out, _) = run(&["info", img_s]);
+    assert_eq!(c, 0);
+    let v: serde_json::Value = serde_json::from_str(out.trim()).unwrap();
+    assert_eq!(v["label"], "none", "both copies gone must read as none: {out}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn journal_lifecycle_and_table_undo() {
+    let dir = std::env::temp_dir().join(format!("diskedit_jl_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let img = dir.join("j.img");
+    std::fs::write(&img, vec![0u8; 8 * 1024 * 1024]).unwrap();
+    let exe = env!("CARGO_BIN_EXE_DiskEdit");
+    let img_s = img.to_str().unwrap();
+    let journal = dir.join("j.img.diskedit.journal");
     let run = |args: &[&str]| -> (i32, String) {
         let out = Command::new(exe).args(args).output().unwrap();
         (out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stderr).into_owned())
     };
+    let part_count = || -> usize {
+        let out = Command::new(exe).args(["info", img_s]).output().unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        v["partitions"].as_array().unwrap().len()
+    };
 
-    // 一串操作全部入 journal：表操作 + 数据搬移（move 会整块复制分区数据）
+    // 成功完成的破坏性命令 ⇒ journal 删除（撤销窗口关闭，不留残留）
     let (c, e) = run(&["new", img_s, "--yes"]);
     assert_eq!(c, 0, "{e}");
+    assert!(!journal.exists(), "journal must be dropped after a successful new");
     let (c, e) = run(&["add", img_s, "--start", "2048", "--end", "4095", "--name", "x"]);
     assert_eq!(c, 0, "{e}");
+    assert!(!journal.exists(), "journal must be dropped after a successful add");
     let (c, e) = run(&["set", &format!("{img_s}:1"), "flag", "esp", "on"]);
     assert_eq!(c, 0, "{e}");
-    let (c, e) = run(&["set", &format!("{img_s}:1"), "name", "y"]);
-    assert_eq!(c, 0, "{e}");
-    // move：数据块复制同样入 journal（终验的整镜像逐字节比对覆盖此路径）
-    let (c, e) = run(&["resize-part", &format!("{img_s}:1"), "--start", "8100", "--end", "4900"]);
-    assert_eq!(c, 10, "start>end must refuse: {e}");
-    let (c, e) = run(&["resize-part", &format!("{img_s}:1"), "--start", "8100", "--end", "12000"]);
-    assert_eq!(c, 0, "move must succeed: {e}");
-    let (c, e) = run(&["del", &format!("{img_s}:1"), "--yes"]);
-    assert_eq!(c, 0, "{e}");
-    assert!(journal.exists(), "journal must exist after mutating ops");
+    assert!(!journal.exists(), "journal must be dropped after a successful set");
 
-    // 崩溃切断模拟：journal 在记录中间被截断（最常见断电落点）→ undo 拒绝、不碰镜像
-    let jbytes = std::fs::read(&journal).unwrap();
-    std::fs::write(&journal, &jbytes[..jbytes.len() - 2]).unwrap();
-    let (c, e) = run(&["undo", img_s, "--yes"]);
-    assert_ne!(c, 0, "truncated journal must refuse undo: {e}");
-    // 垃圾尾追加 → 同样拒绝
-    let mut corrupt = jbytes.clone();
-    corrupt.extend_from_slice(&[0xFF; 5]);
-    std::fs::write(&journal, &corrupt).unwrap();
-    let (c, e) = run(&["undo", img_s, "--yes"]);
-    assert_ne!(c, 0, "corrupt journal tail must refuse undo: {e}");
-    // 完整 journal 恢复后 undo 正常
-    std::fs::write(&journal, &jbytes).unwrap();
+    // 只读命令不得触碰（也不得误删）journal
+    let (c, _) = run(&["info", img_s]);
+    assert_eq!(c, 0);
+    assert!(!journal.exists(), "read-only commands must not create a journal");
 
-    // undo 无 --yes 拒绝；带 --yes 后逐字节回到初始态，journal 消失
-    let (c, e) = run(&["undo", img_s]);
-    assert_eq!(c, 10, "undo without --yes must refuse: {e}");
+    // 部分失败（mkfs 工具不存在）⇒ journal 保留，供 undo 撤销半成品
+    let before = part_count();
+    let (c, e) = run(&["create", img_s, "--size", "1M", "--fs", "no-such-fs-type"]);
+    assert_eq!(c, 20, "partition created but mkfs failed must be EXIT_PARTIAL: {e}");
+    assert!(journal.exists(), "journal must be kept after a partial failure");
+    assert_eq!(part_count(), before + 1, "partition should exist before undo");
+
+    // undo 回滚表操作：分区消失，journal 清除
     let (c, e) = run(&["undo", img_s, "--yes"]);
-    assert_eq!(c, 0, "undo must succeed: {e}");
+    assert_eq!(c, 0, "undo of a table-only journal must succeed: {e}");
     assert!(!journal.exists(), "journal must be removed after undo");
-    assert_eq!(std::fs::read(&img).unwrap(), original, "image must be byte-identical after undo");
+    assert_eq!(part_count(), before, "undone partition must be gone");
 
-    // journal 已清空：再次 undo 拒绝
-    let (c, _) = run(&["undo", img_s, "--yes"]);
-    assert_eq!(c, 10, "undo with empty journal must refuse");
+    // journal 尾部未完成（截断 / 未写完的记录头）⇒ 那是"未完成的事务"而非损坏：
+    // 记录先于写入落盘，故那条记录对应的写入根本没发生，丢弃它安全；完整前缀照常回放
+    let (c, e) = run(&["create", img_s, "--size", "1M", "--fs", "no-such-fs-type"]);
+    assert_eq!(c, 20, "{e}");
+    let jb = std::fs::read(&journal).unwrap();
+    std::fs::write(&journal, &jb[..jb.len() - 2]).unwrap();
+    let (c, e) = run(&["undo", img_s, "--yes"]);
+    assert_eq!(c, 0, "a truncated tail must be treated as an unfinished append: {e}");
+    assert_eq!(part_count(), before, "the complete prefix must still be replayed");
+    assert!(!journal.exists(), "journal must be removed after a successful undo");
+
+    // 尾部垃圾 = 未写完的记录头，同样按未完成处理
+    let (c, e) = run(&["create", img_s, "--size", "1M", "--fs", "no-such-fs-type"]);
+    assert_eq!(c, 20, "{e}");
+    let jb = std::fs::read(&journal).unwrap();
+    let mut tail = jb.clone();
+    tail.extend_from_slice(&[0xFF; 5]);
+    std::fs::write(&journal, &tail).unwrap();
+    let (c, e) = run(&["undo", img_s, "--yes"]);
+    assert_eq!(c, 0, "an unterminated trailing header is an unfinished append: {e}");
+    assert_eq!(part_count(), before, "the complete prefix must still be replayed");
+
+    // 中途损坏（第 1 条记录的数据）⇒ 整体拒绝，不碰镜像——"不做部分回放"针对的是这种情形
+    let (c, e) = run(&["create", img_s, "--size", "1M", "--fs", "no-such-fs-type"]);
+    assert_eq!(c, 20, "{e}");
+    let jb = std::fs::read(&journal).unwrap();
+    let mut mid = jb.clone();
+    mid[5 + 16 + 1] ^= 0xFF; // magic 5 字节 + 记录头 16 字节之后即第 1 条的数据
+    std::fs::write(&journal, &mid).unwrap();
+    let (c, e) = run(&["undo", img_s, "--yes"]);
+    assert_ne!(c, 0, "mid-file corruption must refuse undo: {e}");
+    assert_eq!(part_count(), before + 1, "a refused undo must not touch the image");
+
+    // 恢复完整 journal → undo 正常
+    std::fs::write(&journal, &jb).unwrap();
+    let (c, e) = run(&["undo", img_s, "--yes"]);
+    assert_eq!(c, 0, "intact journal must undo cleanly: {e}");
+    assert_eq!(part_count(), before, "undone partition must be gone");
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -369,6 +460,21 @@ fn msdos_user_resize() {
     let (c, _) = run(&["resize", &format!("{img_s}:3"), "+1M"]);
     assert_eq!(c, 10);
 
+    // --no-fs 与缩容不可共存：分区末端会切进未缩的 FS 元数据（与 GPT 路径同判据）
+    let raw_before = std::fs::read(&img).unwrap();
+    let (c, o) = run(&["resize", &format!("{img_s}:1"), "-1M", "--no-fs"]);
+    assert_eq!(c, 10, "--no-fs + shrink must refuse: {o}");
+    assert!(o.contains("--no-fs"), "{o}");
+    assert_eq!(std::fs::read(&img).unwrap(), raw_before, "refused resize must not write");
+
+    // :N 命中核验按表类型分派：MBR 分区能被解析出来（此前一律按"无 GPT"拒绝）
+    let (c, o) = run(&["check", &format!("{img_s}:1")]);
+    assert_eq!(c, 30, "empty MBR partition must resolve, then fail on FS tooling: {o}");
+    assert!(!o.contains("no GPT"), "{o}");
+    let (c, o) = run(&["check", &format!("{img_s}:9")]);
+    assert_eq!(c, 10, "out-of-range MBR slot must refuse: {o}");
+    assert!(o.contains("MBR covers primary slots"), "{o}");
+
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -504,10 +610,18 @@ fn apply_swap_recreate() {
     let img_s = img.to_str().unwrap();
 
     let out = Command::new(exe).args(["apply", img_s, "--grow", "1"]).output().unwrap();
-    assert_eq!(out.status.code(), Some(0), "apply must succeed: {}", String::from_utf8_lossy(&out.stderr));
-    // Windows 上无 mkswap/losetup → 走降级日志路径（stdout），apply 仍成功；swap 位置/PARTUUID 语义不变
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(stdout.contains("mkswap") || stdout.contains("recreated"), "{stdout}");
+    let code = out.status.code().unwrap_or(-1);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    // swap 重建依赖 mkswap/losetup（仅 Linux）：工具可用 → 后置条件全满足（OK）；
+    // 不可用 → 分区表已更新但 swap 未重建，属部分完成（PARTIAL），且必须给出补救命令。
+    // 这里不再把"FS/swap 步骤失败"当作成功——那正是让脚本误判空间可用的根源
+    #[cfg(target_os = "linux")]
+    assert_eq!(code, 0, "apply must fully succeed on linux: {stderr}");
+    #[cfg(not(target_os = "linux"))]
+    {
+        assert_eq!(code, 20, "without mkswap the swap step is pending → PARTIAL: {stderr}");
+        assert!(stderr.contains("swap rebuild") && stderr.contains("mkswap"), "remedy must be printed: {stderr}");
+    }
 
     let mut f = std::fs::File::open(&img).unwrap();
     let gpt = gptman::GPT::find_from(&mut f).unwrap();
@@ -597,6 +711,89 @@ fn auto_commands_create_move_resize_set_delete() {
     assert_eq!(gpt[1].ending_lba, 28671);
     assert_eq!(gpt[2].ending_lba, 0, "partition 2 must be gone");
     drop(f);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// 最小位移扩容（resize SIZE + --allow-move）：挡路分区按需让位，
+/// 目标精确落在请求的新末端（不吞并目标与挡路者之间的间隙）
+#[test]
+fn resize_shift_relocates_blockers() {
+    let dir = std::env::temp_dir().join(format!("diskedit_shift_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let img = dir.join("sh.img");
+    // 16 MiB（32768 扇区，last_usable 32734），坐标全部 1MiB 对齐
+    std::fs::write(&img, vec![0u8; 16 * 1024 * 1024]).unwrap();
+    let exe = env!("CARGO_BIN_EXE_DiskEdit");
+    let img_s = img.to_str().unwrap();
+    let run = |args: &[&str]| -> (i32, String, String) {
+        let out = Command::new(exe).args(args).output().unwrap();
+        (out.status.code().unwrap_or(-1),
+         String::from_utf8_lossy(&out.stdout).into_owned(),
+         String::from_utf8_lossy(&out.stderr).into_owned())
+    };
+
+    let (c, _, e) = run(&["new", img_s, "--yes"]);
+    assert_eq!(c, 0, "{e}");
+    let (c, _, e) = run(&["add", img_s, "--start", "2048", "--end", "4095", "--name", "a"]);
+    assert_eq!(c, 0, "{e}");
+    let (c, _, e) = run(&["add", img_s, "--start", "4096", "--end", "6143", "--name", "b"]);
+    assert_eq!(c, 0, "{e}");
+    let (c, _, e) = run(&["add", img_s, "--start", "12288", "--end", "14335", "--name", "c"]);
+    assert_eq!(c, 0, "{e}");
+
+    // 数据指纹：b 首尾、c 首部各写可辨识字节
+    {
+        let mut f = std::fs::OpenOptions::new().write(true).open(&img).unwrap();
+        use std::io::{Seek, SeekFrom, Write};
+        f.seek(SeekFrom::Start(4096 * 512)).unwrap();
+        f.write_all(&[0xAA; 512]).unwrap();
+        f.seek(SeekFrom::Start(6143 * 512)).unwrap();
+        f.write_all(&[0xBB; 512]).unwrap();
+        f.seek(SeekFrom::Start(12288 * 512)).unwrap();
+        f.write_all(&[0xCC; 512]).unwrap();
+    }
+
+    // 无 --allow-move：右侧被 b 挡 → 拒绝
+    let (c, _, stderr) = run(&["resize", &format!("{img_s}:1"), "+3M"]);
+    assert_eq!(c, 10, "blocked resize without --allow-move must refuse");
+    assert!(stderr.contains("--allow-move"), "{stderr}");
+
+    // --allow-move 无 --yes：打印位移计划后拒绝
+    let (c, out, stderr) = run(&["resize", &format!("{img_s}:1"), "+3M", "--allow-move"]);
+    assert_eq!(c, 10, "plan printed but --yes missing must refuse");
+    assert!(out.contains("move part 2"), "plan must be printed: {out}");
+    assert!(out.contains("move part 3"), "plan must include the far blocker: {out}");
+    assert!(stderr.contains("--yes"), "{stderr}");
+
+    // +3M 相对当前 1M 大小 → 绝对 4M：b/c 让位，a 精确扩到 10239（2048+8192-1）
+    let (c, _, e) = run(&["resize", &format!("{img_s}:1"), "+3M", "--allow-move", "--yes"]);
+    assert_eq!(c, 0, "shift resize must succeed: {e}");
+    let mut f = std::fs::File::open(&img).unwrap();
+    let gpt = gptman::GPT::find_from(&mut f).unwrap();
+    assert_eq!(gpt[1].starting_lba, 2048);
+    assert_eq!(gpt[1].ending_lba, 10239, "target must land exactly at the requested end");
+    assert_eq!(gpt[2].starting_lba, 10240, "adjacent blocker shifts by the growth delta");
+    assert_eq!(gpt[2].ending_lba, 12287);
+    assert_eq!(gpt[3].starting_lba, 18432, "far blocker keeps its leading gap");
+    assert_eq!(gpt[3].ending_lba, 20479);
+    // 指纹随数据搬移
+    let mut buf = [0u8; 512];
+    use std::io::{Read, Seek, SeekFrom};
+    f.seek(SeekFrom::Start(10240 * 512)).unwrap();
+    f.read_exact(&mut buf).unwrap();
+    assert!(buf.iter().all(|&b| b == 0xAA), "b head fingerprint must survive");
+    f.seek(SeekFrom::Start(12287 * 512)).unwrap();
+    f.read_exact(&mut buf).unwrap();
+    assert!(buf.iter().all(|&b| b == 0xBB), "b tail fingerprint must survive");
+    f.seek(SeekFrom::Start(18432 * 512)).unwrap();
+    f.read_exact(&mut buf).unwrap();
+    assert!(buf.iter().all(|&b| b == 0xCC), "c head fingerprint must survive");
+    drop(f);
+
+    // 让位后的空闲不足：d 挡在末端且无尾部空间 → 明确拒绝
+    let (c, _, stderr) = run(&["resize", &format!("{img_s}:1"), "+64M", "--allow-move", "--yes"]);
+    assert_eq!(c, 10, "grow beyond usable range must refuse: {stderr}");
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -747,7 +944,7 @@ fn cli_negative_paths() {
     // label=none 走 superfloppy 分支：带 :1 说明用户以为有分区表，故明确拒绝
     assert!(e.contains("no partition table"), "{e}");
 
-    // 主头 CRC 损坏 → 保守判"无 GPT"（读路径不回退备头，既有设计）
+    // 主头 CRC 损坏 → 回退盘尾备份头读取（主备互备，UEFI 2.10 §5.3.2）
     let bad_hdr = dir.join("badhdr.img");
     fixture_gpt_image(&bad_hdr);
     {
@@ -757,21 +954,58 @@ fn cli_negative_paths() {
     }
     let (c, out, _) = run(&["info", bad_hdr.to_str().unwrap()]);
     assert_eq!(c, 0);
-    assert!(out.contains("\"label\":\"none\""), "{out}");
+    assert!(out.contains("\"label\":\"gpt\""), "must fall back to backup header: {out}");
+    assert!(out.contains("smoke"), "partition must be read from backup: {out}");
 
-    // 条目数组 CRC 损坏 → 显式报错（不得静默当无表）
+    // 条目数组 CRC 损坏（仅主副本）→ 用备份副本读回，而非整体失败；
+    // 两份数组是分别写入的，这正是 UEFI §5.3.2 主备互备的意义
     let bad_arr = dir.join("badarr.img");
     fixture_gpt_image(&bad_arr);
     {
         let mut raw = std::fs::read(&bad_arr).unwrap();
-        raw[2 * 512 + 10] ^= 0xFF;
+        raw[2 * 512 + 10] ^= 0xFF; // LBA2 = 主条目数组
         std::fs::write(&bad_arr, &raw).unwrap();
     }
-    let (c, _, e) = run(&["info", bad_arr.to_str().unwrap()]);
-    assert_eq!(c, 30, "corrupt entry array must be reported: {e}");
+    let (c, out, e) = run(&["info", bad_arr.to_str().unwrap()]);
+    assert_eq!(c, 0, "primary array damage must fall back to the backup copy: {e}");
+    assert!(out.contains("\"label\":\"gpt\""), "{out}");
+    assert!(out.contains("smoke"), "partition must be read from the backup array: {out}");
+    assert!(e.contains("recovered from the backup"), "the recovery must be reported: {e}");
+    // --grow 1 在同一备份副本上也应可规划（表可读），而不是报"表非法"
+    let (c, _, e) = run(&["plan", bad_arr.to_str().unwrap(), "--grow", "1"]);
+    assert_ne!(c, 30, "a recoverable table must not be reported as corrupt: {e}");
+
+    // 两份副本的条目数组都坏 → 无可救回：表非法 = 盘内容故障 = 30，
+    // 且因为写盘前失败，不得附"盘可能已改变"的提示
+    let bad2 = dir.join("badarr2.img");
+    fixture_gpt_image(&bad2);
+    {
+        let mut raw = std::fs::read(&bad2).unwrap();
+        raw[2 * 512 + 10] ^= 0xFF; // 主条目数组（LBA2）
+        raw[67 * 512 + 10] ^= 0xFF; // 备条目数组（末块 99 − 跨度 32 = LBA 67）
+        std::fs::write(&bad2, &raw).unwrap();
+    }
+    let (c, _, e) = run(&["info", bad2.to_str().unwrap()]);
+    assert_eq!(c, 30, "both copies damaged must be reported: {e}");
     assert!(e.contains("parse failed"), "{e}");
-    let (c, _, e) = run(&["resize", &format!("{}:1", bad_arr.display()), "10M"]);
+    let (c, _, e) = run(&["resize", &format!("{}:1", bad2.display()), "10M"]);
     assert_eq!(c, 30, "{e}");
+    // 同一判据延伸到 plan/apply/check（此前这三处把"表非法"压成了 10）
+    let (c, _, e) = run(&["plan", bad2.to_str().unwrap(), "--grow", "1"]);
+    assert_eq!(c, 30, "plan on a corrupt table must be infra: {e}");
+    assert!(e.contains("parse failed"), "{e}");
+    let (c, _, e) = run(&["apply", bad2.to_str().unwrap(), "--grow", "1", "--yes"]);
+    assert_eq!(c, 30, "apply on a corrupt table must be infra: {e}");
+    assert!(!e.contains("may have changed"), "a pre-write failure must not claim the disk may have changed: {e}");
+    let (c, _, e) = run(&["check", &format!("{}:1", bad2.display())]);
+    assert_eq!(c, 30, "check on a corrupt table must be infra: {e}");
+    assert!(e.contains("parse failed"), "{e}");
+    // 无表 = 请求与现状不匹配 = 10（与上面的 30 必须分开）
+    let blank = dir.join("blank.img");
+    std::fs::write(&blank, vec![0u8; 100 * 512]).unwrap();
+    let (c, _, e) = run(&["plan", blank.to_str().unwrap(), "--grow", "1"]);
+    assert_eq!(c, 10, "a target without a table must be refused, not infra: {e}");
+    assert!(e.contains("no GPT on target"), "{e}");
 
     // SIZE 语法错误 / 缩到超过当前大小 / 与 --size 互斥
     let img = dir.join("ok.img");

@@ -50,6 +50,18 @@ on:
 #        default: true
 
 jobs:
+  test:
+    name: 测试
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: 安装 Rust 工具链
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: cargo test
+        run: cargo test --all-targets
+
   # 动态生成矩阵配置，只包含用户勾选的平台
   matrix:
     name: 矩阵配置
@@ -73,7 +85,7 @@ jobs:
 
   build:
     name: 构建 ${{ matrix.os }}_${{ matrix.arch }}
-    needs: matrix
+    needs: [matrix, test]
     # 只有当矩阵不为空时才执行构建
     if: ${{ needs.matrix.outputs.include != '[]' }}
     runs-on: ${{ matrix.runner }}
