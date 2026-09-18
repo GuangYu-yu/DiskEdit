@@ -153,3 +153,75 @@ pub fn ensure_geometry(src: &mut FileSource) -> Result<Option<RawGpt>, Fail> {
     }
     Ok(Some(g))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::table::{HeaderIssue, PmbrIssue, RawHeader};
+
+    /// 最小表事实：ss=512、128×128B 条目（数组跨度 = 32 扇区）、条目仅含 (start,end) 区间
+    fn gpt(state: GptState, pmbr: PmbrSize, ents: &[(u64, u64)]) -> RawGpt {
+        RawGpt {
+            ss: 512,
+            state,
+            pmbr,
+            header: RawHeader {
+                primary_lba: 1,
+                backup_lba: 999, // 旧末端：事实以 state 表达，字段值不参与判定
+                first_usable_lba: 34,
+                last_usable_lba: 999,
+                disk_guid: [0; 16],
+                partition_entry_lba: 2,
+                number_of_partition_entries: 128,
+                size_of_partition_entry: 128,
+            },
+            entries: ents.iter().map(|&(s, e)| gptman::GPTPartitionEntry {
+                partition_type_guid: [1; 16],
+                unique_partition_guid: [2; 16],
+                starting_lba: s,
+                ending_lba: e,
+                attribute_bits: 0,
+                partition_name: "".into(),
+            }).collect(),
+        }
+    }
+
+    /// 判定矩阵：两条轴（state 是否需搬迁 / pmbr 是否需规范化）四组合 + Inconsistent 一票否决
+    #[test]
+    fn classify_repair_decision_matrix() {
+        let valid = GptState::Valid;
+        let stale = GptState::NeedsRepair { cause: HeaderIssue::BackupLbaStale { expected: 999, actual: 500 } };
+        let pmbr_ok = PmbrSize::Normal;
+        let pmbr_stale = PmbrSize::NeedsRepair { cause: PmbrIssue::Stale };
+
+        assert_eq!(classify_repair(&gpt(valid, pmbr_ok, &[]), 2000).unwrap(), RepairAction::None);
+        assert_eq!(
+            classify_repair(&gpt(valid, pmbr_stale, &[]), 2000).unwrap(),
+            RepairAction::RepairProtectiveMbr
+        );
+        assert_eq!(
+            classify_repair(&gpt(stale, pmbr_ok, &[]), 2000).unwrap(),
+            RepairAction::RelocateBackup { new_backup_lba: 2000, new_last_usable: 2000 - 32 - 1 }
+        );
+        assert_eq!(
+            classify_repair(&gpt(stale, pmbr_stale, &[]), 2000).unwrap(),
+            RepairAction::RelocateAndRepair { new_backup_lba: 2000, new_last_usable: 2000 - 32 - 1 }
+        );
+        // Inconsistent：可能是更大盘的截断副本，无论 state 如何都拒绝自动修复
+        let inc = gpt(GptState::Valid, PmbrSize::Inconsistent, &[]);
+        assert!(classify_repair(&inc, 2000).is_err());
+    }
+
+    /// 搬迁后的可用区上界：容量不足与既有分区越界都必须拒绝，绝不静默截断分区
+    #[test]
+    fn repaired_last_usable_bounds() {
+        // 正常：new_last_usable = file_last − 跨度 − 1
+        let g = gpt(GptState::Valid, PmbrSize::Normal, &[(100, 500)]);
+        assert_eq!(repaired_last_usable(&g, 2000).unwrap(), 1967);
+        // 分区末端越出搬迁后的可用区 → 拒绝
+        assert!(repaired_last_usable(&g, 500).is_err());
+        // 容器容不下 备份数组+备份头 的最小跨度 → 拒绝（下溢防护）
+        assert!(repaired_last_usable(&g, 32).is_err());
+        assert!(repaired_last_usable(&g, 33).is_err());
+    }
+}

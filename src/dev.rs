@@ -5,9 +5,9 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 #[cfg(target_os = "linux")]
-use std::os::fd::AsRawFd;
-#[cfg(target_os = "linux")]
 use std::os::unix::fs::{FileTypeExt, OpenOptionsExt};
+#[cfg(target_os = "linux")]
+use crate::ioctl;
 
 pub struct FileSource {
     pub(crate) file: File,
@@ -33,8 +33,8 @@ impl FileSource {
                 .write(true)
                 .custom_flags(libc::O_EXCL)
                 .open(path)?;
-            let size = blkgetsize64(&file)?;
-            let sector_size = blksszget(&file)? as u64;
+            let size = ioctl::blkgetsize64(&file)?;
+            let sector_size = ioctl::blksszget(&file)? as u64;
             return Ok(FileSource { file, path: path.to_path_buf(), sector_size, size, is_block: true, journal: None });
         }
         let file = OpenOptions::new().read(true).write(true).open(path)?;
@@ -54,8 +54,8 @@ impl FileSource {
     #[cfg(target_os = "linux")]
     pub(crate) fn open_read_only(path: &Path) -> io::Result<Self> {
         let file = OpenOptions::new().read(true).open(path)?;
-        let size = blkgetsize64(&file)?;
-        let sector_size = blksszget(&file)? as u64;
+        let size = ioctl::blkgetsize64(&file)?;
+        let sector_size = ioctl::blksszget(&file)? as u64;
         Ok(FileSource { file, path: path.to_path_buf(), sector_size, size, is_block: true, journal: None })
     }
 
@@ -132,29 +132,6 @@ impl FileSource {
     pub fn sync_data(&self) -> io::Result<()> {
         self.file.sync_data()
     }
-}
-
-#[cfg(target_os = "linux")]
-fn blkgetsize64(f: &File) -> io::Result<u64> {
-    // BLKGETSIZE64 = _IOR(0x12, 114, u64)（内核 include/uapi/linux/fs.h，内容 u64）。
-    // libc 未导出该常量（0.2.139/0.2.186/0.2.189 实测），取 UAPI 定义自持；
-    // 值为 asm-generic 编码（x86_64/aarch64/arm/riscv 共用），MIPS/PowerPC/sparc
-    // 的 _IOC 位域偏移不同、编码不同，不受支持
-    const BLKGETSIZE64: u64 = 0x8008_1272;
-    let mut v: u64 = 0;
-    // SAFETY: f 有效打开的 fd；内核仅写入 &mut v（输出方向 _IOR），调用期间指针有效
-    let r = unsafe { libc::ioctl(f.as_raw_fd() as libc::c_int, BLKGETSIZE64 as libc::Ioctl, &mut v as *mut u64) };
-    if r < 0 { Err(io::Error::last_os_error()) } else { Ok(v) }
-}
-
-#[cfg(target_os = "linux")]
-fn blksszget(f: &File) -> io::Result<u32> {
-    // BLKSSZGET = _IO(0x12, 104)（内核 include/uapi/linux/fs.h），getter 返回 u32；
-    // libc 按架构导出正确编码（generic 0x1268、mips/powerpc/sparc 0x20001268）
-    let mut v: u32 = 0;
-    // SAFETY: f 有效打开的 fd；内核仅写入 &mut v，调用期间指针有效
-    let r = unsafe { libc::ioctl(f.as_raw_fd() as libc::c_int, libc::BLKSSZGET as libc::Ioctl, &mut v as *mut u32) };
-    if r < 0 { Err(io::Error::last_os_error()) } else { Ok(v) }
 }
 
 /// 解析 `<target>[:N]` → (路径, 分区号 Option)。
