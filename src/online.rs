@@ -136,27 +136,6 @@ mod imp {
     use super::*;
     use crate::dev::FileSource;
     use crate::fsops::{run, run_input};
-    use std::os::fd::AsRawFd;
-
-    const BLKPG: u64 = 0x1269; // _IO(0x12,105)
-    const BLKPG_RESIZE_PARTITION: i32 = 3;
-
-    #[repr(C)]
-    struct BlkpgPartition {
-        start: i64,  // 字节
-        length: i64, // 字节
-        pno: i32,
-        devname: [u8; 64], // 内核忽略
-        volname: [u8; 64], // 内核忽略
-    }
-
-    #[repr(C)]
-    struct BlkpgIoctlArg {
-        op: i32,
-        flags: i32,
-        datalen: i32,
-        data: *mut BlkpgPartition,
-    }
 
     struct OnlineTarget {
         disk_dev: PathBuf,
@@ -267,37 +246,7 @@ mod imp {
     /// BLKPG_RESIZE_PARTITION：对整盘 fd 调用，pno 定位分区，start 固定为现值
     fn blkpg_resize(t: &OnlineTarget, new_len_bytes: u64) -> io::Result<()> {
         let disk = fs::OpenOptions::new().read(true).write(true).open(&t.disk_dev)?;
-        let mut part = BlkpgPartition {
-            start: t.start_bytes as i64,
-            length: new_len_bytes as i64,
-            pno: t.pno as i32,
-            devname: [0; 64],
-            volname: [0; 64],
-        };
-        let arg = BlkpgIoctlArg {
-            op: BLKPG_RESIZE_PARTITION,
-            flags: 0,
-            datalen: size_of::<BlkpgPartition>() as i32,
-            data: &mut part,
-        };
-        // SAFETY: arg/part 均为合法 repr(C) 栈对象、调用期间指针有效；BLKPG 编号与手写 blkpg_ioctl_arg 布局匹配（见模块头 UAPI 注释）
-        let r = unsafe { libc::ioctl(disk.as_raw_fd() as libc::c_int, BLKPG as libc::Ioctl, &arg) };
-        if r == 0 {
-            return Ok(());
-        }
-        let code = io::Error::last_os_error().raw_os_error().unwrap_or(0);
-        // errno 语义（内核 block/ioctl.c）：EACCES = 缺 CAP_SYS_ADMIN；EINVAL = 对分区 fd
-        // 调用 / pno ≤ 0 / range 非法或溢出 / 未按逻辑块对齐 / 超出盘容量；
-        // EBUSY = 与相邻分区重叠（block/partitions/core.c）
-        let hint = match code {
-            libc::EACCES => "requires root (CAP_SYS_ADMIN)",
-            libc::EBUSY => "kernel rejected resize: overlaps another partition",
-            libc::EINVAL => "kernel rejected resize (invalid pno/range, misaligned, or beyond capacity)",
-            _ => "kernel rejected resize",
-        };
-        Err(io::Error::other(format!(
-            "BLKPG_RESIZE_PARTITION failed: {hint} (errno {code})"
-        )))
+        crate::ioctl::blkpg_resize_partition(&disk, t.start_bytes, new_len_bytes, t.pno)
     }
 
     /// part_resize 的失败按"是否知道表已落盘"三分——这不是措辞差异：
@@ -320,13 +269,53 @@ mod imp {
         /// 无法断言 → Failed；表已写 → Applied（内核视图置为过期，退出码 20）。
         /// 具体原因（含 errno 提示）在发生处打印，契约摘要由 Outcome::report 统一输出
         fn into_outcome(self) -> Outcome {
-            match self {
-                Self::NoWrite(e) => Outcome::infra(e.to_string()),
-                Self::Unknown(e) => Outcome::failed(e.to_string()),
-                Self::Partial(e) => {
-                    eprintln!("warning: partition table written but kernel sync failed: {e}");
+            match classify_part_resize_error(&self) {
+                ResizeFailClass::Infra(msg) => Outcome::infra(msg),
+                ResizeFailClass::Failed(msg) => Outcome::failed(msg),
+                ResizeFailClass::AppliedStaleKernel(msg) => {
+                    eprintln!("warning: partition table written but kernel sync failed: {msg}");
                     Outcome::applied_stale_kernel()
                 }
+            }
+        }
+    }
+
+    /// part_resize 失败的三态分类（纯函数核）：副作用（警告打印、Outcome 构造）留在
+    /// into_outcome，分类依据本身可单测——"知道表写没写"决定退出码语义，这是契约级判断
+    #[derive(Debug)]
+    enum ResizeFailClass {
+        /// 表确定未写（sfdisk 未启动）
+        Infra(String),
+        /// sfdisk 执行过但报错，表是否落盘不可断言
+        Failed(String),
+        /// 表已写，仅内核同步失败（布局生效、内核视图过期）
+        AppliedStaleKernel(String),
+    }
+
+    fn classify_part_resize_error(e: &PartResizeError) -> ResizeFailClass {
+        match e {
+            PartResizeError::NoWrite(err) => ResizeFailClass::Infra(err.to_string()),
+            PartResizeError::Unknown(err) => ResizeFailClass::Failed(err.to_string()),
+            PartResizeError::Partial(err) => ResizeFailClass::AppliedStaleKernel(err.to_string()),
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        /// 三态分类：结论随"表写没写"这一事实走，原始错误信息原样透传
+        #[test]
+        fn part_resize_error_classification() {
+            let cls = |e: &PartResizeError| classify_part_resize_error(e);
+            assert!(matches!(cls(&PartResizeError::NoWrite(io::Error::other("spawn"))), ResizeFailClass::Infra(_)));
+            assert!(matches!(cls(&PartResizeError::Unknown(io::Error::other("x"))), ResizeFailClass::Failed(_)));
+            assert!(matches!(cls(&PartResizeError::Partial(io::Error::other("x"))), ResizeFailClass::AppliedStaleKernel(_)));
+
+            // 错误详情透传（发生处打印的是它，分类不得吞掉或改写）
+            match cls(&PartResizeError::Unknown(io::Error::other("sfdisk said no"))) {
+                ResizeFailClass::Failed(m) => assert!(m.contains("sfdisk said no"), "{m}"),
+                other => panic!("expected Failed, got {other:?}"),
             }
         }
     }

@@ -621,7 +621,7 @@ fn apply_swap_recreate() {
         // real/effective/saved/filesystem，取第 2 列）；测试层不引入 libc 依赖
         let is_root = std::fs::read_to_string("/proc/self/status")
             .ok()
-            .and_then(|s| s.lines().find(|l| l.starts_with("Uid:")))
+            .and_then(|s| s.lines().find(|l| l.starts_with("Uid:")).map(str::to_string))
             .and_then(|l| l.split_whitespace().nth(2).map(|f| f == "0"))
             .unwrap_or(false);
         if is_root {
@@ -1055,6 +1055,123 @@ fn cli_negative_paths() {
     assert!(out.contains("\"label\":\"none\""), "{out}");
     assert!(e.contains("VHD"), "container hint must mention VHD: {e}");
     assert!(e.contains("qemu-nbd"), "{e}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+/// 布局坐标系不变量：4Kn GPT 表放在 512e 容器上（g.ss ≠ src.sector_size）时，
+/// add/create 的对齐单位与 --size 换算必须按**表头记录的 ss** 折算（1MiB = 256 个表 LBA）。
+/// 按容器 ss 折算会把 1MiB 错算成 8MiB（2048 个容器扇区），合法 add 被误拒
+#[test]
+fn layout_uses_table_sector_size_not_container() {
+    let dir = std::env::temp_dir().join(format!("diskedit_4kn_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let img = dir.join("mixed.img");
+    // 8 MiB 镜像：4Kn 表视角共 2048 个 LBA，可用区 34..2014
+    std::fs::write(&img, vec![0u8; 8 * 1024 * 1024]).unwrap();
+    let exe = env!("CARGO_BIN_EXE_DiskEdit");
+    let img_s = img.to_str().unwrap();
+    let run = |args: &[&str]| -> (i32, String, String) {
+        let out = Command::new(exe).args(args).output().unwrap();
+        (out.status.code().unwrap_or(-1),
+         String::from_utf8_lossy(&out.stdout).into_owned(),
+         String::from_utf8_lossy(&out.stderr).into_owned())
+    };
+
+    // 4Kn 容器建表：表头记录 ss = 4096
+    let (c, _, o) = run(&["new", img_s, "--sector-size", "4096", "--yes"]);
+    assert_eq!(c, 0, "new with 4kn sectors: {o}");
+
+    // 换 512 容器重开（不带 --sector-size）：表 ss 与容器 ss 不一致。
+    // --start 256（表 LBA 256 = 字节 1MiB）已按表坐标对齐，必须成功
+    let (c, _, o) = run(&["add", img_s, "--start", "256", "--end", "511", "--name", "t"]);
+    assert_eq!(c, 0, "add on 4kn-table/512-container: {o}");
+
+    let (c, out, _) = run(&["info", img_s]);
+    assert_eq!(c, 0);
+    let v: serde_json::Value = serde_json::from_str(out.trim()).expect("info must emit valid JSON");
+    assert_eq!(v["sector_size"], 4096, "table ss must be probed from the GPT header: {out}");
+    let p = &v["partitions"][0];
+    assert_eq!(p["first_lba"], 256);
+    assert_eq!(p["last_lba"], 511);
+    assert_eq!(p["size_bytes"], 1024 * 1024);
+
+    // create 的空闲区与 --size 换算同样按表 ss：下一个 1MiB 边界 = 表 LBA 512
+    let (c, _, o) = run(&["create", img_s, "--size", "1M"]);
+    assert_eq!(c, 0, "create on 4kn-table/512-container: {o}");
+    let (c, out, _) = run(&["info", img_s]);
+    assert_eq!(c, 0);
+    let v: serde_json::Value = serde_json::from_str(out.trim()).expect("info must emit valid JSON");
+    let parts = v["partitions"].as_array().unwrap();
+    assert_eq!(parts.len(), 2, "{out}");
+    assert_eq!(parts[1]["first_lba"], 512);
+    assert_eq!(parts[1]["last_lba"], 767);
+    assert_eq!(parts[1]["size_bytes"], 1024 * 1024);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// fail-closed 参数契约：命令不消费的旗标一律拒绝（而非静默忽略）；
+/// 语义冲突的旗标组合（MBR resize 的 --allow-move、superfloppy 的 --no-fs、
+/// 离线 resizefs 的 --size）显式拒绝；MBR type 接受大写 0X 前缀
+#[test]
+fn flag_contract_fail_closed() {
+    let dir = std::env::temp_dir().join(format!("diskedit_fc_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let exe = env!("CARGO_BIN_EXE_DiskEdit");
+    let run = |args: &[&str]| -> (i32, String, String) {
+        let out = Command::new(exe).args(args).output().unwrap();
+        (out.status.code().unwrap_or(-1),
+         String::from_utf8_lossy(&out.stdout).into_owned(),
+         String::from_utf8_lossy(&out.stderr).into_owned())
+    };
+
+    // info 不消费 --yes：必须拒绝而非忽略
+    let img = dir.join("a.img");
+    std::fs::write(&img, vec![0u8; 8 * 1024 * 1024]).unwrap();
+    let img_s = img.to_str().unwrap();
+    let (c, _, e) = run(&["info", img_s, "--yes"]);
+    assert_eq!(c, 10, "unconsumed flag must be refused: {e}");
+    assert!(e.contains("not a valid option for `info`"), "{e}");
+
+    // MBR resize 不支持 --allow-move：显式拒绝，而非"空间不足"误导
+    let (c, _, e) = run(&["new", img_s, "--table", "msdos", "--yes"]);
+    assert_eq!(c, 0, "{e}");
+    let (c, _, e) = run(&["add", img_s, "--start", "2048", "--end", "4095"]);
+    assert_eq!(c, 0, "{e}");
+    let (c, _, e) = run(&["resize", &format!("{img_s}:1"), "10M", "--allow-move"]);
+    assert_eq!(c, 10, "MBR resize with --allow-move must be refused: {e}");
+    assert!(e.contains("--allow-move is not supported for MBR"), "{e}");
+
+    // superfloppy 无分区可改：--no-fs 让命令无事可做，拒绝
+    let sf = dir.join("sf.img");
+    std::fs::write(&sf, vec![0u8; 8 * 1024 * 1024]).unwrap();
+    let (c, _, e) = run(&["resize", sf.to_str().unwrap(), "--no-fs"]);
+    assert_eq!(c, 10, "superfloppy --no-fs must be refused: {e}");
+    assert!(e.contains("--no-fs leaves nothing to do on a superfloppy"), "{e}");
+
+    // 离线 resizefs 没有"目标尺寸"语义：--size 拒绝
+    let g = dir.join("g.img");
+    std::fs::write(&g, vec![0u8; 8 * 1024 * 1024]).unwrap();
+    let g_s = g.to_str().unwrap();
+    let (c, _, e) = run(&["new", g_s, "--yes"]);
+    assert_eq!(c, 0, "{e}");
+    let (c, _, e) = run(&["add", g_s, "--start", "2048", "--end", "6143"]);
+    assert_eq!(c, 0, "{e}");
+    let (c, _, e) = run(&["resizefs", &format!("{g_s}:1"), "--size", "5G"]);
+    assert_eq!(c, 10, "offline resizefs with --size must be refused: {e}");
+    assert!(e.contains("--size only applies to the online form"), "{e}");
+
+    // MBR --type 的 0X 大写前缀
+    let m = dir.join("m.img");
+    std::fs::write(&m, vec![0u8; 8 * 1024 * 1024]).unwrap();
+    let m_s = m.to_str().unwrap();
+    let (c, _, e) = run(&["new", m_s, "--table", "msdos", "--yes"]);
+    assert_eq!(c, 0, "{e}");
+    let (c, _, e) = run(&["add", m_s, "--start", "2048", "--end", "4095", "--type", "0X83"]);
+    assert_eq!(c, 0, "uppercase 0X prefix must be accepted: {e}");
+    let (c, out, _) = run(&["info", m_s]);
+    assert_eq!(c, 0);
+    assert!(out.contains("\"type\":\"0x83\""), "{out}");
 
     let _ = std::fs::remove_dir_all(&dir);
 }

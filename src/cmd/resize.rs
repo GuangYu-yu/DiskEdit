@@ -1,0 +1,679 @@
+//! resize：分区 + 文件系统的一键扩缩（GPT / MBR / superfloppy，在线与离线自动选择）。
+
+use crate::support::*;
+use crate::args::{parse_size_delta, Args};
+use crate::dev::FileSource;
+use crate::{dev, fsid, fsops, movepart, table};
+
+pub(crate) const HELP: &str = r#"diskedit resize <TARGET>:N <SIZE> [OPTIONS]
+
+  Resize partition and its filesystem. Online/offline method is chosen
+  automatically. GPT and MBR primary partitions; superfloppy (whole-disk FS)
+  omits :N — grow only, never shrinks.
+
+  SIZE:
+    10G       set size to 10 GiB (units b/k/m/g/t, 1024 base)
+    +2G       grow by 2 GiB
+    -500M     shrink by 500 MiB
+    +10%      grow by 10% of current size (rounded down to 1MiB)
+    -10%      shrink by 10%
+    grow      grow into the contiguous free space to the right
+
+  Options:
+    --allow-move    allow moving other partitions (plan requires --yes)
+    --grow-lv       also grow the associated LV (--lv NAME, or the only LV)
+    --yes           skip confirmation
+
+  Automatically:
+    detects partition / filesystem / LVM PV, chooses online or offline,
+    resizes partition -> PV -> LV -> filesystem as required; long operations
+    are checkpointed and resumed by re-running the same command.
+
+  Notes: PV shrink is refused (use the lvreduce/pvresize chain). --no-fs skips
+  the filesystem steps, so it cannot shrink: the FS has to be shrunk first."#;
+
+/// SIZE 参数 →（绝对目标字节数, grow 标记），GPT/MBR resize 共用。
+/// 绝对值/扩/缩都锚定当前分区字节数；两者皆缺 = 未指定 SIZE
+fn resolve_size_request(a: &Args, size_arg: Option<&str>, cur_bytes: u64) -> (Option<u64>, bool) {
+    let mut grow_to_end = a.grow_to_end;
+    let mut target: Option<u64> = a.size;
+    if let Some(s) = size_arg {
+        if s == "grow" {
+            grow_to_end = true;
+        } else {
+            let (v, kind, pct) = parse_size_delta(s)
+                .unwrap_or_else(|| bail(EXIT_REFUSED, format!("refused: bad SIZE {s:?} (use 10G | +2G | -500M | +10% | grow; see diskedit help resize)")));
+            if pct {
+                // 百分比增量：锚定当前分区字节数，先乘后除（u128 防溢出）避免丢余数，
+                // 再向下取整到 1MiB，保证结果落在扇区/对齐界内
+                let raw = (cur_bytes as u128).checked_mul(v as u128)
+                    .and_then(|x| x.checked_div(100))
+                    .filter(|x| *x <= u64::MAX as u128)
+                    .unwrap_or_else(|| bail(EXIT_REFUSED, format!("refused: {s} overflows partition size"))) as u64;
+                let delta = raw / (1024 * 1024) * (1024 * 1024);
+                target = Some(match kind {
+                    1 => cur_bytes.checked_add(delta).unwrap_or_else(|| bail(EXIT_REFUSED, format!("refused: {s} overflows partition size"))),
+                    _ => cur_bytes.checked_sub(delta).unwrap_or_else(|| bail(EXIT_REFUSED, format!("refused: {s} exceeds current size {cur_bytes}"))),
+                });
+            } else {
+                target = Some(match kind {
+                    0 => v,
+                    1 => cur_bytes.checked_add(v).unwrap_or_else(|| bail(EXIT_REFUSED, format!("refused: {s} overflows partition size"))),
+                    _ => cur_bytes.checked_sub(v).unwrap_or_else(|| bail(EXIT_REFUSED, format!("refused: {s} exceeds current size {cur_bytes}"))),
+                });
+            }
+        }
+    }
+    if target.is_none() && !grow_to_end {
+        bail(EXIT_REFUSED, "refused: specify a SIZE (e.g. +20G, -500M, 10G, grow; see diskedit help resize)".to_string());
+    }
+    (target, grow_to_end)
+}
+
+/// PV / --grow-lv 的事前判据：与表类型无关，故 GPT 与 MBR 两条 resize 路径共用一份。
+/// 两条判据都必须落在任何写盘之前——PV 缩容要经 lvreduce/pvresize 链（本工具不做），
+/// 一旦先改了分区表就留下"分区已缩、PV 元数据未动"的不一致
+fn check_pv_intent(
+    part: u32,
+    fstype: &str,
+    is_pv: bool,
+    shrinking: bool,
+    grow_lv: bool,
+) -> Result<(), crate::outcome::Fail> {
+    if is_pv {
+        if shrinking {
+            return Err(crate::outcome::Fail::refused(
+                "shrinking an LVM PV needs the lvreduce/pvresize chain — do it manually (see pvresize(8))",
+            ));
+        }
+    } else if grow_lv {
+        return Err(crate::outcome::Fail::refused(format!(
+            "partition {part} is not an LVM PV (identified as {fstype}) — --grow-lv needs a PV"
+        )));
+    }
+    Ok(())
+}
+
+/// 在线路径前置守卫：活动 swap 拒绝（run swapoff 后重试）
+#[cfg(target_os = "linux")]
+fn refuse_swap_active(dn: &str, part: u32) {
+    if crate::online::swap_active(dn, part) {
+        bail(EXIT_REFUSED, format!("refused: partition {part} is active swap — run swapoff first"));
+    }
+}
+
+/// resize 请求里**与表类型无关**的部分：写盘前的事实快照 + 目标尺寸。
+/// 表类型特有的差异收敛成一件事实——右侧连续空闲（GPT 按修复后的 last_usable，
+/// MBR 按 32 位上限与后继条目），故由各自的几何函数算好 `free_right_lba` 填入。
+/// 这样在线路径与 `check_pv_intent` 只写一份，不会各自演化
+#[cfg(target_os = "linux")]
+struct ResizeTarget {
+    part: u32,
+    ss: u64,
+    cur_bytes: u64,
+    is_pv: bool,
+    free_right_lba: u64,
+    target: Option<u64>,
+    grow_to_end: bool,
+}
+
+/// 块设备在线路径：**表类型无关**（写表经 sfdisk / BLKPG），随表类型变化的只有
+/// `free_right_lba` 一项，故由调用方算好传入。返回 Some(退出码) = 已按在线路径处理完毕；
+/// None = 不适用（镜像，或未挂载的非 PV）→ 调用方继续离线路径。
+/// 派生不出盘名即拒绝而非继续：此时无法探测挂载状态，退到离线路径可能在 FS 挂载中写表
+#[cfg(target_os = "linux")]
+fn resize_online(a: &Args, src: &FileSource, t: &ResizeTarget) -> Option<u8> {
+    if !src.is_block {
+        return None;
+    }
+    let dn = std::path::Path::new(&a.target)
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| bail(EXIT_REFUSED, format!("cannot derive disk name from {}", a.target)));
+    refuse_swap_active(&dn, t.part);
+
+    // PV：分区层必须先按新尺寸出现在内核里，pvresize 才能吸收；活跃 LV 经 dm 持有分区使
+    // BLKRRPART 返回 EBUSY，故走 sfdisk+partx 同步路径
+    if t.is_pv {
+        let new_len = if t.grow_to_end {
+            if t.free_right_lba == 0 {
+                bail(EXIT_REFUSED, "refused: no free space to the right — a PV cannot relocate blocking partitions while LVs may be active".to_string());
+            }
+            t.cur_bytes + t.free_right_lba * t.ss
+        } else {
+            t.target.unwrap_or(t.cur_bytes) / t.ss * t.ss // 扇区下取整，与离线路径同规则
+        };
+        if new_len != t.cur_bytes {
+            let o = crate::online::resize_pv_online(&dn, t.part, new_len);
+            if o.exit_code() != EXIT_OK {
+                o.report();
+                return Some(o.exit_code());
+            }
+        }
+        return Some(resize_done(a, true, true, t.cur_bytes));
+    }
+
+    // 非 PV：仅挂载中的分区能在线扩（在线不能搬移，只吃连续空闲）
+    let mnt = crate::online::find_mountpoint(&dn, t.part)?;
+    // 无右侧空闲 = 分区已吃满 → None 让 FS 工具扩满现分区
+    let size = if t.grow_to_end {
+        let free = t.free_right_lba * t.ss;
+        (t.cur_bytes + free != t.cur_bytes).then_some(t.cur_bytes + free)
+    } else {
+        t.target
+    };
+    let o = crate::online::resize_online(&mnt, size);
+    if o.exit_code() == EXIT_OK {
+        println!("resized online (verify with: diskedit info {})", a.target);
+    } else {
+        o.report();
+    }
+    Some(o.exit_code())
+}
+
+/// 块设备的分区节点路径：盘名以数字结尾时分区号加 "p" 前缀
+/// （/dev/sda→sda3、/dev/nvme0n1→nvme0n1p3；util-linux 与内核通用命名惯例）
+#[cfg(target_os = "linux")]
+fn part_dev_path(target: &str, part: u32) -> String {
+    let base = target.trim_end_matches('/');
+    let sep = if base.chars().last().is_some_and(|c| c.is_ascii_digit()) { "p" } else { "" };
+    format!("{base}{sep}{part}")
+}
+
+/// 分区扩容成功后的 LVM 链（仅块设备）：pvresize 吸收全部新增空间；--grow-lv 把本次新增
+/// 传给目标 LV（--lv 指定或该 PV 上唯一顶层 LV），向下取整到 VG extent，不消费原有空闲。
+/// lvextend 按容量扩，分配源由 LVM 决定，不限于本 PV
+#[cfg(target_os = "linux")]
+fn lvm_grow_chain(part_dev: &str, delta_bytes: u64, grow_lv: bool, want_lv: Option<&str>) -> Result<(), String> {
+    crate::lvm::pv_resize(part_dev)?;
+    println!("pvresize {part_dev} done");
+    if !grow_lv {
+        return Ok(());
+    }
+    let vg = match crate::lvm::vg_of(part_dev) {
+        Ok(Some(vg)) => vg,
+        Ok(None) => return Err(format!("pvresize done but {part_dev} is a PV outside any VG — nothing to extend")),
+        Err(e) => return Err(e),
+    };
+    let lvs = crate::lvm::lvs_on_pv(&vg, part_dev)?;
+    let (name, path) = match want_lv {
+        // 匹配裸 LV 名或 /dev/<vg>/<name> 路径（lv_path 精确比较，不做后缀模糊匹配）
+        Some(sel) => match lvs.iter().find(|(n, p)| n == sel || p == &format!("/dev/{sel}")) {
+            Some(x) => x.clone(),
+            None => {
+                let names = lvs.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>().join(", ");
+                return Err(format!("LV {sel:?} not found on {part_dev} in VG {vg} (top-level LVs: {names})"));
+            }
+        },
+        None => match lvs.len() {
+            1 => lvs[0].clone(),
+            0 => return Err(format!("VG {vg}: no top-level LV uses {part_dev} — nothing to extend")),
+            _ => {
+                let names = lvs.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>().join(", ");
+                return Err(format!("VG {vg}: multiple LVs on {part_dev} — pick one with --lv NAME (candidates: {names})"));
+            }
+        },
+    };
+    let ext = crate::lvm::vg_extent_size(&vg)?;
+    let n = delta_bytes / ext;
+    if n == 0 {
+        return Err(format!("added {delta_bytes} bytes < one VG extent ({ext} bytes) — LV left unchanged"));
+    }
+    crate::lvm::lv_extend(&path, n)?;
+    println!("lvextend -l +{n} -r {path} done (lv {name})");
+    Ok(())
+}
+
+/// resize 的一键入口。SIZE：`10G`=绝对值、`+2G`/`-500M`=增量、`grow`=吃满右侧可用区
+/// （挡路分区须 --allow-move，搬移计划须 --yes 确认）。LVM PV 扩容自动 pvresize，
+/// --grow-lv 再把新增传给目标 LV 并扩 FS；PV 缩容一律拒绝（走 lvreduce/pvresize 链）
+pub(crate) fn cmd_resize(a: &Args) -> u8 {
+    let size_arg = a.pos.get(1).cloned();
+    if size_arg.is_some() && (a.size.is_some() || a.grow_to_end) {
+        bail(EXIT_REFUSED, "refused: SIZE and --size/--grow-to-end are mutually exclusive".to_string());
+    }
+    if a.lv.is_some() && !a.grow_lv {
+        bail(EXIT_REFUSED, "refused: --lv only works together with --grow-lv".to_string());
+    }
+    // resize 只改大小、不移动。--start 属 move/resize-part 的语义，静默忽略会让用户
+    // 误以为分区被移动过 —— 显式拒绝
+    if a.start.is_some() || a.start_end {
+        bail(EXIT_REFUSED, "refused: resize does not relocate partitions — use `move` or `resize-part --start`".to_string());
+    }
+    let src = open_target_ro(a).unwrap_or_else(|(c, m)| bail(c, m));
+    match table::table_label(&src) {
+        Ok("gpt") => {}
+        Ok("msdos") => {
+            let Some(part) = a.part else { crate::args::usage() };
+            return cmd_resize_msdos(a, part, size_arg.as_deref(), &src);
+        }
+        // superfloppy：无分区表，FS 即整盘，无表可写——纯 FS grow
+        Ok("none") => return cmd_resize_superfloppy(a, size_arg.as_deref(), &src),
+        Ok(other) => bail(EXIT_REFUSED, format!("refused: resize requires a GPT or MBR target (label: {other})")),
+        Err(e) => bail(EXIT_INFRA, format!("parse failed: {e}")),
+    }
+    let Some(part) = a.part else { crate::args::usage() };
+    let g = match table::load_gpt(&src) {
+        Ok(Some(g)) => g,
+        Ok(None) => bail(EXIT_REFUSED, "refused: resize requires a GPT target".to_string()),
+        Err(e) => bail(EXIT_INFRA, format!("parse failed: {e}")),
+    };
+    let Some(e) = g.entries.get((part - 1) as usize) else {
+        bail(EXIT_REFUSED, format!("partition {part} not found"));
+    };
+    if e.ending_lba == 0 {
+        bail(EXIT_REFUSED, format!("partition {part} is empty"));
+    }
+    let (start, end, ss) = (e.starting_lba, e.ending_lba, g.ss);
+    // 有效几何：设备扩容后表头里的 last_usable_lba 可能仍是旧值，"右侧还剩多少空间"
+    // 一律按修复后的上界算，否则新增的整段空间会被当成不可用
+    let last_usable = effective_last_usable(&src, &g).unwrap_or_else(|f| bail_fail(f));
+    // 上一轮 plan 型搬移作业是否尚未收尾（右侧"已空"可能正是搬了一半的结果）
+    let resuming = movepart::has_pending_relocation(&src, part);
+    let cur_bytes = (end - start + 1) * ss;
+    let fstype = fsid::identify(&src, start * ss, (end - start + 1) * ss).unwrap_or_else(|e| bail(EXIT_INFRA, format!("identify failed: {e}")));
+    let is_pv = fstype == "lvm2_pv";
+
+    // SIZE → 绝对目标字节数 / grow 标记
+    let (target, grow_to_end) = resolve_size_request(a, size_arg.as_deref(), cur_bytes);
+    let shrinking = target.is_some_and(|t| t < cur_bytes);
+
+    check_pv_intent(part, fstype, is_pv, shrinking, a.grow_lv).unwrap_or_else(|f| bail_fail(f));
+
+    // 块设备在线路径（表类型无关，随表类型变的只有右侧空闲数）；镜像或未挂载的非 PV 落到离线路径
+    #[cfg(target_os = "linux")]
+    if let Some(code) = resize_online(a, &src, &ResizeTarget {
+        part,
+        ss,
+        cur_bytes,
+        is_pv,
+        free_right_lba: free_right_gpt(&g, part, last_usable),
+        target,
+        grow_to_end,
+    }) {
+        return code;
+    }
+
+    // 离线路径
+    let is_block = src.is_block;
+    let mut src = open_target_for_write(a).unwrap_or_else(|(c, m)| bail(c, m));
+    if grow_to_end {
+        let free = free_right_gpt(&g, part, last_usable);
+        // 右侧有空闲且没有未收尾的搬移作业 → 纯扩容。若作业未收尾，则"右侧已空"很可能
+        // 正是搬了一半的结果，走普通 resize_part 会跳过剩余搬移与 swap 重建等收尾
+        if free > 0 && !resuming {
+            let (chunk, mut logger) = chunk_logger(a, &src);
+            let o = settle_layout(movepart::resize_part(&mut src, part, start, end + free, chunk, a.no_fs, &mut |m| logger.log(m)), &src);
+            return finish_resize(a, o, is_pv, is_block, cur_bytes);
+        }
+        // 右侧被挡：自动搬移挡路分区（plan 打印 → --allow-move 放行 → --yes 确认）
+        if !a.allow_move {
+            bail(EXIT_REFUSED, "refused: right side is occupied — pass --allow-move to relocate the blocking partitions (plan will be printed; --yes confirms)".to_string());
+        }
+        let plan = match movepart::make_plan_resuming(&mut src, part) {
+            Ok(p) => p,
+            Err(f) => bail_fail(f),
+        };
+        crate::cmd::plan::print_plan(&plan).unwrap_or_else(|e| bail(EXIT_REFUSED, format!("plan failed: {e}")));
+        if !a.yes {
+            eprintln!("refused: this resizes by relocating the partitions listed above — review and re-run with --yes");
+            return EXIT_REFUSED;
+        }
+        let (chunk, mut logger) = chunk_logger(a, &src);
+        let o = settle_layout(movepart::apply(&mut src, &plan, chunk, a.no_fs, &mut |m| logger.log(m)), &src);
+        finish_resize(a, o, is_pv, is_block, cur_bytes)
+    } else {
+        // SIZE：字节 → 扇区（下取整）；扩须右侧空闲足够，缩由 resize_part 内部 FS 先缩 + 守卫
+        let Some(bytes) = target else { crate::args::usage() };
+        if bytes < ss {
+            bail(EXIT_REFUSED, format!("refused: size {bytes} < one sector ({ss})"));
+        }
+        let new_end = start + bytes / ss - 1;
+        if new_end > last_usable {
+            bail(EXIT_REFUSED, format!("refused: size {bytes} exceeds usable range (partition would end past last_usable_lba {last_usable})"));
+        }
+        // 扩容需要的位移量只在扩的时候有定义：缩容的新末端更靠左，右侧只会更空，
+        // 不存在搬移需求（此时 new_end < end，直接相减会回绕）
+        let shift = (new_end > end).then(|| new_end - end);
+        // 未收尾的搬移作业 ⇒ 必须走 resume 路径（即使几何上 free_right 已足够——swap 等
+        // 收尾步骤可能尚未执行，普通扩容会跳过它们）
+        if resuming || shift.is_some_and(|s| s > free_right_gpt(&g, part, last_usable)) {
+            // 右侧连续空闲不足：--allow-move 时按最小位移搬移挡路分区，
+            // 与 grow 路径同一确认流（plan 打印 → --yes 确认）
+            if !a.allow_move {
+                bail(EXIT_REFUSED, "refused: not enough contiguous free space to the right — pass --allow-move to relocate the blocking partitions (plan will be printed; --yes confirms)".to_string());
+            }
+            let plan = match movepart::make_plan_shift_resuming(&mut src, part, shift) {
+                Ok(p) => p,
+                Err(f) => bail_fail(f),
+            };
+            crate::cmd::plan::print_plan(&plan).unwrap_or_else(|e| bail(EXIT_REFUSED, format!("plan failed: {e}")));
+            if !a.yes {
+                eprintln!("refused: this resizes by relocating the partitions listed above — review and re-run with --yes");
+                return EXIT_REFUSED;
+            }
+            let (chunk, mut logger) = chunk_logger(a, &src);
+            let o = settle_layout(movepart::apply(&mut src, &plan, chunk, a.no_fs, &mut |m| logger.log(m)), &src);
+            return finish_resize(a, o, is_pv, is_block, cur_bytes);
+        }
+        let (chunk, mut logger) = chunk_logger(a, &src);
+        let o = settle_layout(movepart::resize_part(&mut src, part, start, new_end, chunk, a.no_fs, &mut |m| logger.log(m)), &src);
+        finish_resize(a, o, is_pv, is_block, cur_bytes)
+    }
+}
+
+/// superfloppy resize（无分区表，FS 即整盘）：无表可写，唯一有意义的是 FS grow
+/// 到盘/镜像末端——缩无处可缩（无分区边界），显式 SIZE 只接受等于当前值。
+/// 镜像/盘须已是大尺寸（dd 后或 truncate 预扩），本命令不负责扩文件本身
+fn cmd_resize_superfloppy(a: &Args, size_arg: Option<&str>, src_ro: &FileSource) -> u8 {
+    if let Some(n) = a.part {
+        bail(EXIT_REFUSED, format!("refused: target has no partition table — drop :{n} (the FS occupies the whole device)"));
+    }
+    if a.grow_lv || a.lv.is_some() {
+        bail(EXIT_REFUSED, "refused: --grow-lv/--lv needs an LVM PV — superfloppy has no partitions".to_string());
+    }
+    // superfloppy 无分区可改，唯一动作就是 FS 扩容：--no-fs 会让命令无事可做，
+    // --allow-move 无分区可搬。静默照常执行会做出旗标明确排除的事
+    if a.no_fs {
+        bail(EXIT_REFUSED, "refused: --no-fs leaves nothing to do on a superfloppy — there is no partition to change, the only action is the filesystem grow".to_string());
+    }
+    if a.allow_move {
+        bail(EXIT_REFUSED, "refused: --allow-move has nothing to do on a superfloppy — there are no partitions to relocate".to_string());
+    }
+    let cur_bytes = src_ro.size;
+    let (target, grow_to_end) = resolve_size_request(a, size_arg, cur_bytes);
+    if let Some(t) = target {
+        if t < cur_bytes {
+            bail(EXIT_REFUSED, "refused: superfloppy cannot shrink — the FS occupies the whole device, there is no partition boundary to shrink to".to_string());
+        }
+        if t > cur_bytes {
+            bail(EXIT_REFUSED, "refused: target exceeds device/image size — extend the image or replace the disk first (this tool does not resize the container)".to_string());
+        }
+        // SIZE == 当前值：与 grow 等价（FS 可能仍小于盘）
+    } else if !grow_to_end {
+        unreachable!("resolve_size_request guarantees a target or grow_to_end");
+    }
+    let fstype = fsid::identify(src_ro, 0, cur_bytes)
+        .unwrap_or_else(|e| bail(EXIT_INFRA, format!("identify failed: {e}")));
+    if matches!(fstype, "lvm2_pv" | "swap" | "unknown") {
+        bail(EXIT_REFUSED, format!("refused: whole-device {fstype} is not a resizable filesystem (no partition table on target)"));
+    }
+    // FS grow 本身不改分区表，无 kernel_resync 必要
+    let src = open_target_for_write(a).unwrap_or_else(|(c, m)| bail(c, m));
+    fsops::resize_fs_whole(&src, fstype).unwrap_or_else(|e| bail(EXIT_INFRA, format!("FS grow failed: {e}")));
+    println!("superfloppy: {fstype} grown to full device ({} bytes) — verify with: diskedit info {}", cur_bytes, a.target);
+    EXIT_OK
+}
+
+/// MBR 分区被扩到更大之后的收尾：FS 步（swap 重建 / FS 扩容）→ 内核重读 → 统一收尾。
+/// grow-to-end 与显式 SIZE 扩容的后置条件完全相同，故两条路径共用本函数——
+/// FS 步是后置条件的一部分，缺了会"分区变大、文件系统没变大"却报成功。
+/// `table_written` 决定是否需要内核重读；p 是**扩容前**解析出的条目（swap 头部探测用它
+/// 原区间，原尺寸是 LVM 位移的基线）
+fn mbr_grow_finish(
+    a: &Args,
+    src: &FileSource,
+    p: &table::MbrPartition,
+    fstype: &str,
+    table_written: bool,
+    is_pv: bool,
+    is_block: bool,
+) -> u8 {
+    let part = p.num;
+    let ss = src.sector_size;
+    let cur_bytes = p.size_lba as u64 * ss;
+    let mut pending: Vec<crate::outcome::Pending> = Vec::new();
+    // --no-fs：分区层之外的后置条件整体出局，与 GPT 路径同语义
+    if !a.no_fs {
+        match fstype {
+            "unknown" | "lvm2_pv" => {}
+            // swap：内容可弃，表项已扩 → mkswap 重建使新空间生效（UUID/卷标保持；
+            // 离线路径仅镜像，块设备走在线路径且 active swap 已被守卫拒绝）
+            "swap" => {
+                let ident = movepart::read_swap_identity(src, p.start_lba as u64, p.size_lba as u64, ss);
+                if let Err(e) = fsops::recreate_swap(src, part, ident) {
+                    pending.push(crate::outcome::Pending::new(
+                        part,
+                        crate::outcome::PendingKind::Swap,
+                        e.to_string(),
+                        fsops::rescue_hint("swap", &dev::part_dev_hint(src, part, p.start_lba as u64 * ss), false),
+                    ));
+                }
+            }
+            _ => {
+                if let Err(e) = fsops::resize_fs(src, part, fstype) {
+                    pending.push(crate::outcome::Pending::new(
+                        part,
+                        crate::outcome::PendingKind::Fs,
+                        e.to_string(),
+                        fsops::rescue_hint(fstype, &dev::part_dev_hint(src, part, p.start_lba as u64 * ss), false),
+                    ));
+                }
+            }
+        }
+    }
+    if pending.is_empty() {
+        // 表已写 → 走统一收尾（内核重读 + 报告）；未写表则无需重读
+        let o = if table_written {
+            settle_layout(crate::outcome::Outcome::applied_with(Vec::new()), src)
+        } else {
+            crate::outcome::Outcome::applied_with(Vec::new())
+        };
+        finish_resize(a, o, is_pv, is_block, cur_bytes)
+    } else {
+        let mut o = crate::outcome::Outcome::applied_with(pending);
+        if table_written && !kernel_resync(src) {
+            o.mark_kernel_stale();
+        }
+        o.report();
+        o.exit_code()
+    }
+}
+
+/// resize 的 MBR 分支（仅主分区 1..4；逻辑分区与扩展容器不支持）。原位纯扩缩：扩须右侧
+/// 空闲足够（MBR 无搬移能力），缩走与 GPT 相同的"FS 先缩 → 写表"守卫链。块设备复用在线
+/// 路径（基于 sysfs + sfdisk，与表类型无关）
+fn cmd_resize_msdos(a: &Args, part: u32, size_arg: Option<&str>, src_ro: &FileSource) -> u8 {
+    // MBR resize 没有搬移能力：--allow-move 承诺的"搬开挡路分区"不存在，
+    // 静默按不可搬移处理会让来自脚本的调用只看到一条"空间不足"
+    if a.allow_move {
+        bail(EXIT_REFUSED, "refused: --allow-move is not supported for MBR resize — MBR cannot relocate blocking partitions".to_string());
+    }
+    let mbr = table::parse_mbr(src_ro)
+        .unwrap_or_else(|e| bail(EXIT_INFRA, format!("parse failed: {e}")))
+        .unwrap_or_else(|| bail(EXIT_REFUSED, "refused: no MBR on target".to_string()));
+    let p = match mbr.iter().find(|p| p.num == part) {
+        Some(p) => p,
+        None => bail(EXIT_REFUSED, format!("partition {part} not found (MBR resize covers primary partitions 1..4 only)")),
+    };
+    if p.is_container {
+        bail(EXIT_REFUSED, "refused: extended partition container cannot be resized (logical partitions are out of scope)".to_string());
+    }
+    let ss = src_ro.sector_size;
+    let total_sectors = src_ro.size / ss;
+    let cur_bytes = p.size_lba as u64 * ss;
+    let fstype = fsid::identify(src_ro, p.start_lba as u64 * ss, p.size_lba as u64 * ss)
+        .unwrap_or_else(|e| bail(EXIT_INFRA, format!("identify failed: {e}")));
+    let is_pv = fstype == "lvm2_pv";
+
+    let (target, grow_to_end) = resolve_size_request(a, size_arg, cur_bytes);
+    let shrinking = target.is_some_and(|t| t < cur_bytes);
+
+    check_pv_intent(part, fstype, is_pv, shrinking, a.grow_lv).unwrap_or_else(|f| bail_fail(f));
+    let is_block = src_ro.is_block;
+
+    // 块设备在线路径：与 GPT 同一份实现，随表类型变的只有右侧空闲数
+    #[cfg(target_os = "linux")]
+    if let Some(code) = resize_online(a, src_ro, &ResizeTarget {
+        part,
+        ss,
+        cur_bytes,
+        is_pv,
+        free_right_lba: free_right_msdos(&mbr, p, total_sectors),
+        target,
+        grow_to_end,
+    }) {
+        return code;
+    }
+
+    // 离线路径
+    let mut src = open_target_for_write(a).unwrap_or_else(|(c, m)| bail(c, m));
+    if grow_to_end {
+        let free = free_right_msdos(&mbr, p, total_sectors);
+        let mut table_written = false;
+        if free > 0 {
+            let new_size_lba = p.size_lba as u64 + free;
+            if new_size_lba > u32::MAX as u64 {
+                bail(EXIT_REFUSED, format!("refused: new size {new_size_lba} sectors exceeds MBR 32-bit LBA limit"));
+            }
+            table::resize_mdos_entry(&mut src, part, new_size_lba as u32)
+                .unwrap_or_else(|f| bail_fail(f));
+            table_written = true;
+        }
+        // free == 0：分区已吃满右侧，表不动，FS 工具直接扩满现分区（与 GPT 路径同语义）
+        mbr_grow_finish(a, &src, p, fstype, table_written, is_pv, is_block)
+    } else {
+        let Some(bytes) = target else { crate::args::usage() };
+        if bytes < ss {
+            bail(EXIT_REFUSED, format!("refused: size {bytes} < one sector ({ss})"));
+        }
+        let new_size_lba = bytes / ss;
+        if new_size_lba > u32::MAX as u64 {
+            bail(EXIT_REFUSED, format!("refused: size {new_size_lba} sectors exceeds MBR 32-bit LBA limit"));
+        }
+        if new_size_lba >= p.size_lba as u64 {
+            // no-op（==）不触发缩容守卫链；扩（>）须右侧空闲足够
+            let want = new_size_lba - p.size_lba as u64;
+            if want > free_right_msdos(&mbr, p, total_sectors) {
+                bail(EXIT_REFUSED, "refused: not enough contiguous free space to the right (MBR resize cannot relocate blocking partitions)".to_string());
+            }
+            if want > 0 {
+                table::resize_mdos_entry(&mut src, part, new_size_lba as u32)
+                    .unwrap_or_else(|f| bail_fail(f));
+            }
+            // 分区层做完 → 与 grow-to-end 同一条收尾
+            mbr_grow_finish(a, &src, p, fstype, want > 0, is_pv, is_block)
+        } else {
+            // 缩：与 movepart GPT 路径同守卫链——FS 先缩成功才写表。
+            // --no-fs 与缩容不可共存（分区末端会切进未缩的 FS 元数据），与 GPT 同判据
+            if a.no_fs {
+                bail(EXIT_REFUSED, "refused: --no-fs cannot shrink: the filesystem has to be shrunk first, otherwise the new partition end would cut into filesystem metadata".to_string());
+            }
+            // FS 收缩的前置检查与 GPT 路径同一处（fsops::check_shrink）：能否缩 / 类型是否
+            // 认得 / 工具是否齐备只写一份
+            fsops::check_shrink(fstype)
+                .unwrap_or_else(|e| bail(EXIT_REFUSED, format!("refused: {e}")));
+            if let Some(min) = fsops::fs_min_bytes(&src, part, fstype)
+                .unwrap_or_else(|e| bail(EXIT_INFRA, format!("min-size probe failed: {e}")))
+                && bytes < min
+            {
+                bail(EXIT_REFUSED, format!("refused: target size {bytes} < minimum FS size {min} bytes (resize2fs -P)"));
+            }
+            fsops::shrink_fs(&src, part, fstype, new_size_lba * ss)
+                .unwrap_or_else(|e| bail(EXIT_INFRA, format!("FS shrink failed: {e}")));
+            table::resize_mdos_entry(&mut src, part, new_size_lba as u32)
+                .unwrap_or_else(|f| bail_fail(f));
+            let o = settle_layout(crate::outcome::Outcome::applied_with(Vec::new()), &src);
+            finish_resize(a, o, is_pv, is_block, cur_bytes)
+        }
+    }
+}
+
+/// resize 的收尾：布局结果 →（PV 时才继续）LVM 链，取两者中更严重的退出码。
+/// 未写入 → 直接返回；已写入但后置条件未全满足 → 非 PV 也直接返回，不打印成功字样
+/// （否则与 PARTIAL 矛盾），PV 则仍需跑 pvresize/lvextend 链
+fn finish_resize(a: &Args, o: crate::outcome::Outcome, is_pv: bool, is_block: bool, old_bytes: u64) -> u8 {
+    if !o.is_applied() {
+        return o.exit_code();
+    }
+    if o.exit_code() != EXIT_OK && !is_pv {
+        return o.exit_code();
+    }
+    resize_done(a, is_pv, is_block, old_bytes).max(o.exit_code())
+}
+
+/// 分区扩容收尾：从盘上表项重读实际新尺寸（搬移路径的扩容终点由计划决定，
+/// 不能用操作前的预估）。PV 一律走 pvresize（--grow-lv 再传 LV）：块设备直接对
+/// 分区节点；镜像经 losetup 临时映射该分区（attach → pvresize/lvextend → detach）。
+fn resize_done(a: &Args, is_pv: bool, is_block: bool, old_bytes: u64) -> u8 {
+    if !is_pv {
+        println!("resized (verify with: diskedit info {})", a.target);
+        return EXIT_OK;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        // 只打开一次：下面读"实际新尺寸"与给 LVM 链取分区节点用的是同一份盘上现状
+        let src = open_target_ro(a).unwrap_or_else(|(c, m)| bail(c, m));
+        // 表项重读按 label 分派（MBR resize 也走本收尾）
+        let new_bytes = if let Ok(Some(g)) = table::load_gpt(&src) {
+            match g.entries.get((a.part.unwrap_or(0) as usize).checked_sub(1).unwrap_or(usize::MAX)) {
+                Some(e) if e.ending_lba != 0 => (e.ending_lba - e.starting_lba + 1) * g.ss,
+                _ => bail(EXIT_INFRA, "post-resize: partition vanished from table".to_string()),
+            }
+        } else if let Ok(Some(mbr)) = table::parse_mbr(&src) {
+            match mbr.iter().find(|p| p.num == a.part.unwrap_or(0)) {
+                Some(p) => p.size_lba as u64 * src.sector_size,
+                None => bail(EXIT_INFRA, "post-resize: partition vanished from table".to_string()),
+            }
+        } else {
+            bail(EXIT_INFRA, "post-resize: no partition table on target".to_string())
+        };
+        let delta = new_bytes.saturating_sub(old_bytes);
+        let part = a.part.unwrap_or(0);
+        let r = if is_block {
+            lvm_grow_chain(&part_dev_path(&a.target, part), delta, a.grow_lv, a.lv.as_deref())
+        } else {
+            // offset+sizelimit 映射出的 loop 设备 = 该分区的整块设备，PV 整设备语义下
+            // pvresize/lvextend 直接可用，无需 -P partscan
+            fsops::with_partition_device(&src, part, |pv| {
+                lvm_grow_chain(pv, delta, a.grow_lv, a.lv.as_deref()).map_err(std::io::Error::other)
+            })
+            .map_err(|e| e.to_string())
+        };
+        match r {
+            Ok(()) => EXIT_OK,
+            Err(e) => {
+                eprintln!("partition resized but LVM chain failed: {e}");
+                EXIT_PARTIAL
+            }
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (is_block, old_bytes);
+        eprintln!("partition resized but LVM chain NOT executed: pvresize/lvextend require Linux — run pvresize on the partition manually");
+        EXIT_PARTIAL
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_size_request;
+    use crate::support::base_args;
+
+    /// SIZE 请求解析：绝对/增量/百分比（先乘后除、下取整到 1MiB），锚定当前分区字节数
+    #[test]
+    fn size_request_resolution() {
+        const MIB: u64 = 1024 * 1024;
+        const G: u64 = 1024 * MIB;
+        let a = base_args();
+        assert_eq!(resolve_size_request(&a, Some("10G"), 1), (Some(10 * G), false));
+        assert_eq!(resolve_size_request(&a, Some("+2G"), G), (Some(3 * G), false));
+        assert_eq!(resolve_size_request(&a, Some("-500M"), G), (Some(G - 500 * MIB), false));
+        // 百分比：raw = cur×10/100 后向下取整到 1MiB
+        let raw = G * 10 / 100; // 107374182
+        let delta = raw / MIB * MIB; // 106954752
+        assert_eq!(resolve_size_request(&a, Some("+10%"), G), (Some(G + delta), false));
+        assert_eq!(resolve_size_request(&a, Some("-10%"), G), (Some(G - delta), false));
+        // 百分比增量不足 1MiB 时取整为 0（近似语义）
+        assert_eq!(resolve_size_request(&a, Some("+1%"), 5 * MIB), (Some(5 * MIB), false));
+        // "grow" 与 --grow-to-end 等价；--size 走绝对目标
+        assert_eq!(resolve_size_request(&a, Some("grow"), 1), (None, true));
+        let mut a2 = base_args();
+        a2.size = Some(4096);
+        assert_eq!(resolve_size_request(&a2, None, 1), (Some(4096), false));
+        let mut a3 = base_args();
+        a3.grow_to_end = true;
+        assert_eq!(resolve_size_request(&a3, None, 1), (None, true));
+    }
+}
