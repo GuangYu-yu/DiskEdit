@@ -197,6 +197,15 @@ pub fn probe_swap_header(src: &FileSource, base: u64, len_bytes: u64, page_sizes
     None
 }
 
+/// 元数据是 swap、但**本机（swapon 口径）激活不了**的区间：libblkid 口径命中而 swapon 口径落空。
+/// 两个候选集的差集只有 32K 一项（见 SWAPON_PAGES / BLKID_PAGES 的依据），故命中即
+/// "创建机用了 32K 页"。identify 对此类区间回 "unknown"，写入路径会据此跳过 FS 步骤，
+/// 而分区扩容后 swap 头里的页数还是旧值——那是一条未完成的后置条件，不能报成功
+pub fn unactivatable_swap(src: &FileSource, base: u64, len_bytes: u64) -> bool {
+    probe_swap_header(src, base, len_bytes, &blkid_known_pages()).is_some()
+        && probe_swap_header(src, base, len_bytes, &swapon_activatable_pages()).is_none()
+}
+
 /// OpenWrt combined 布局的 RW overlay 起点（字节，相对分区头）。公式须与
 /// fstools libfstools/rootdisk.c 一致（mount_root 建 loop 用的 lo_offset 即此值）：
 /// - squashfs 4.0 → bytes_used __le64 @0x28（内核 squashfs_fs.h 结构序：
@@ -324,6 +333,28 @@ mod tests {
         old[4096 - 10..4096].copy_from_slice(b"SWAP-SPACE");
         let s2 = src_from("probev0", old);
         assert_eq!(probe_swap_header(&s2, 0, 8192, &blkid_known_pages()), None);
+    }
+
+    /// "本机激活不了的 swap"判据：两口径的差集只有 32K 一项，故它等价于
+    /// "libblkid 认得出、swapon 认不出"
+    #[test]
+    fn unactivatable_swap_is_the_32k_case() {
+        // 4K swap：两个口径都命中 ⇒ 不是"激活不了"
+        let mut data = vec![0u8; 65536];
+        data[4096 - 10..4096].copy_from_slice(b"SWAPSPACE2");
+        assert!(!unactivatable_swap(&src_from("un_act4k", data), 0, 65536));
+        // 32K swap：只有 libblkid 口径命中
+        let mut data = vec![0u8; 65536];
+        data[32768 - 10..32768].copy_from_slice(b"SWAPSPACE2");
+        assert!(unactivatable_swap(&src_from("un_act32k", data), 0, 65536));
+        // 非 swap 区：两个口径都落空
+        assert!(!unactivatable_swap(&src_from("un_actnone", vec![0u8; 65536]), 0, 65536));
+        // 签名相对**区间起点**解释：同一段字节换个起点就不再命中
+        let mut data = vec![0u8; 131072];
+        data[65536 + 32768 - 10..65536 + 32768].copy_from_slice(b"SWAPSPACE2");
+        let s = src_from("un_actoff", data);
+        assert!(unactivatable_swap(&s, 65536, 65536));
+        assert!(!unactivatable_swap(&s, 0, 65536));
     }
 
     #[test]

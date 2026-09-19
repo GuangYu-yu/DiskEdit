@@ -137,6 +137,14 @@ mod imp {
     use crate::dev::FileSource;
     use crate::fsops::{run, run_input};
 
+    // 在线路径的成对注入点：表是否已落盘全看这一对之间的那次 sfdisk
+    crate::movepart::fault_points! {
+        /// sfdisk 之前：此刻 abort，分区表确定未改
+        fault_online_before_write() = "online-before-write";
+        /// sfdisk 之后：此刻 abort，分区表可能已改
+        fault_online_after_write() = "online-after-write";
+    }
+
     struct OnlineTarget {
         disk_dev: PathBuf,
         part_dev: PathBuf,
@@ -300,26 +308,6 @@ mod imp {
         }
     }
 
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-
-        /// 三态分类：结论随"表写没写"这一事实走，原始错误信息原样透传
-        #[test]
-        fn part_resize_error_classification() {
-            let cls = |e: &PartResizeError| classify_part_resize_error(e);
-            assert!(matches!(cls(&PartResizeError::NoWrite(io::Error::other("spawn"))), ResizeFailClass::Infra(_)));
-            assert!(matches!(cls(&PartResizeError::Unknown(io::Error::other("x"))), ResizeFailClass::Failed(_)));
-            assert!(matches!(cls(&PartResizeError::Partial(io::Error::other("x"))), ResizeFailClass::AppliedStaleKernel(_)));
-
-            // 错误详情透传（发生处打印的是它，分类不得吞掉或改写）
-            match cls(&PartResizeError::Unknown(io::Error::other("sfdisk said no"))) {
-                ResizeFailClass::Failed(m) => assert!(m.contains("sfdisk said no"), "{m}"),
-                other => panic!("expected Failed, got {other:?}"),
-            }
-        }
-    }
-
     /// 持久化分区缩放：sfdisk 改写该分区表项（start 不变，仅 size）→ partx -u
     /// 同步内核；partx 失败以 BLKPG 兜底。挂载中分区的 BLKRRPART 重读必失败，
     /// 故 --no-reread；边界与重叠由调用方预检，--force 关闭 sfdisk 一致性检查。
@@ -330,12 +318,16 @@ mod imp {
         // 即设备逻辑扇区大小（4Kn = 4096B，非恒 512B），故按 t.logical_block 换算。
         // -N：只改指定分区、未指定字段保持原值（空 start/size 继承现值，sfdisk(8)）
         let script = format!(",{}", new_len_bytes / t.logical_block);
+        // 在线路径的 durable boundary 就在这一次 sfdisk：之前 abort 表确定未写、
+        // 之后 abort 表可能已写。成对注入才能把这条分界变成可断言的事实
+        fault_online_before_write();
         let out = run_input(
             "sfdisk",
             &["--no-reread", "--force", "-N", &pno_str, &disk_str],
             &script,
         )
-        .map_err(PartResizeError::NoWrite)?;
+        .map_err(|e| PartResizeError::NoWrite(e.into()))?;
+        fault_online_after_write();
         if !out.status.success() {
             return Err(PartResizeError::Unknown(io::Error::other(format!(
                 "sfdisk resize failed: {}",
@@ -400,7 +392,7 @@ mod imp {
     fn fs_grow_hint(t: &OnlineTarget, fstype: &str) -> String {
         match fs_grow_cmd(t, fstype) {
             Some((prog, args)) => format!("{prog} {}", args.join(" ")),
-            None => crate::fsops::rescue_hint(fstype, &t.part_dev.to_string_lossy(), false),
+            None => crate::fsops::rescue_hint(fstype, &t.part_dev.to_string_lossy()),
         }
     }
 
@@ -615,6 +607,26 @@ mod imp {
                         Err(e) => Outcome::failed(e.to_string()),
                     }
                 }
+            }
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        /// 三态分类：结论随"表写没写"这一事实走，原始错误信息原样透传
+        #[test]
+        fn part_resize_error_classification() {
+            let cls = |e: &PartResizeError| classify_part_resize_error(e);
+            assert!(matches!(cls(&PartResizeError::NoWrite(io::Error::other("spawn"))), ResizeFailClass::Infra(_)));
+            assert!(matches!(cls(&PartResizeError::Unknown(io::Error::other("x"))), ResizeFailClass::Failed(_)));
+            assert!(matches!(cls(&PartResizeError::Partial(io::Error::other("x"))), ResizeFailClass::AppliedStaleKernel(_)));
+
+            // 错误详情透传（发生处打印的是它，分类不得吞掉或改写）
+            match cls(&PartResizeError::Unknown(io::Error::other("sfdisk said no"))) {
+                ResizeFailClass::Failed(m) => assert!(m.contains("sfdisk said no"), "{m}"),
+                other => panic!("expected Failed, got {other:?}"),
             }
         }
     }

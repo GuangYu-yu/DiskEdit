@@ -1,7 +1,7 @@
 //! 命令层共用的支撑件：进程退出出口、目标打开/journal、几何与对齐助手、GUID/JSON 编解码。
 //! 退出码常量的唯一定义在 outcome 模块，此处重导出给命令层，避免两套常量各自漂移
 
-pub(crate) use crate::outcome::{EXIT_INFRA, EXIT_OK, EXIT_PARTIAL, EXIT_REFUSED};
+pub(crate) use crate::outcome::{Fail, EXIT_OK, EXIT_PARTIAL, EXIT_REFUSED};
 
 #[cfg(unix)]
 use std::os::unix::fs::FileTypeExt;
@@ -10,52 +10,29 @@ use crate::args::Args;
 use crate::dev::{FileSource, Journal};
 use crate::{dev, gpt_policy, movepart, table};
 
-pub(crate) fn bail(code: u8, msg: String) -> ! {
-    eprintln!("{msg}");
-    std::process::exit(code as i32);
-}
-
 /// 规划/执行失败的出口：报告文字与退出码都取自 outcome（唯一措辞与唯一映射），
-/// 调用点不得自行拼装
+/// 调用点不得自行拼装。**本模块不提供"带裸退出码的退出"**——那会绕开 Outcome::report
+/// 的措辞与 exit_code 的映射，正是 10/20/30 语义分裂的入口
 pub(crate) fn bail_fail(f: crate::outcome::Fail) -> ! {
     let o = crate::outcome::finish(Err(f), Vec::new());
     o.report();
     std::process::exit(o.exit_code() as i32);
 }
 
-/// 日志：镜像 = `<名>.diskedit.log`；块设备 = <state_dir()>/<GUID>.diskedit.log，
-/// 无 GPT（MBR/裸盘）时用 <devname>.diskedit.log。
-///
-/// 这是**未迁移的历史命名**：日志只增、不参与恢复，也不决定 journal / checkpoint 的
-/// 落点，故不并入 TargetIdentity 的推导。改名会打断既有日志的连续性，收益不足；
-/// 真要统一命名时另做一次迁移
+/// 日志：落点由目标身份派生（见 `dev::TargetIdentity::log_path`）；日志只增、不参与恢复
 pub(crate) struct Logger {
     file: Option<std::fs::File>,
 }
 
 impl Logger {
     pub(crate) fn open(src: &FileSource) -> Self {
-        let path = if src.is_block {
-            let dir = dev::state_dir();
-            dev::best_effort_mkdir(&dir);
-            let name = table::load_gpt(src)
-                .ok()
-                .flatten()
-                .map(|g| {
-                    let hex: String = g.header.disk_guid.iter().map(|b| format!("{b:02X}")).collect();
-                    format!("{hex}.diskedit.log")
-                })
-                .unwrap_or_else(|| {
-                    // 无 GPT（MBR/裸盘）：devname 是无表场景唯一稳定标识
-                    let name = src.path.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "dev".into());
-                    format!("{name}.diskedit.log")
-                });
-            dir.join(name)
+        // 只有块设备需要读表：GUID 是那种目标上最稳的日志名，镜像用路径即可
+        let guid = if src.is_block {
+            table::load_gpt(src).ok().flatten().map(|g| g.header.disk_guid)
         } else {
-            let mut p = src.path.clone().into_os_string();
-            p.push(".diskedit.log");
-            std::path::PathBuf::from(p)
+            None
         };
+        let path = src.identity.log_path(guid);
         let file = std::fs::OpenOptions::new().create(true).append(true).open(path).ok();
         if file.is_none() {
             // 落盘失败不静默：用户需知日志只进 stdout
@@ -75,7 +52,7 @@ impl Logger {
 
 /// chunk 大小 + 持久日志的成对构造（搬移/拷贝类命令共用）
 pub(crate) fn chunk_logger(a: &Args, src: &FileSource) -> (u64, Logger) {
-    let chunk = movepart::chunk_bytes(a.chunk_mib).unwrap_or_else(|e| bail(EXIT_REFUSED, format!("refused: {e}")));
+    let chunk = movepart::chunk_bytes(a.chunk_mib).unwrap_or_else(|e| bail_fail(Fail::refused(e.to_string())));
     (chunk, Logger::open(src))
 }
 
@@ -126,9 +103,9 @@ pub(crate) fn parse_guid(s: &str) -> Option<[u8; 16]> {
     Some(out)
 }
 
-pub(crate) fn open_target(a: &Args) -> Result<FileSource, (u8, String)> {
+pub(crate) fn open_target(a: &Args) -> Result<FileSource, crate::outcome::Fail> {
     FileSource::open(std::path::Path::new(&a.target), a.sector_size)
-        .map_err(|e| (EXIT_INFRA, format!("open failed: {e}")))
+        .map_err(|e| crate::outcome::Fail::infra(format!("open failed: {e}")))
 }
 
 /// 尽力写日志行：诊断设施失败不改变业务结论（数据与布局不受影响），故忽略。
@@ -140,14 +117,16 @@ fn best_effort_log_write(f: &mut std::fs::File, line: &str) {
 }
 
 /// undo journal 的落点由目标身份派生（见 dev::TargetIdentity）：镜像 = `<路径>.diskedit.journal`，
-/// 块设备 = <state_dir()>/<设备层身份>.diskedit.journal。身份在打开目标时解析一次，
+/// 块设备 = 状态目录/<设备层身份>.diskedit.journal。身份在打开目标时解析一次，
 /// 关闭撤销窗口时按同一入口解析，两处不各自推导命名规则。
 /// journal 文件本身要到第一条记录才落盘（Journal::open 只做只读校验），故此处的失败
 /// 只可能是"落点被陌生文件占着"——真正的写入失败会在首次 write_at 处带上下文报出
-pub(crate) fn open_target_for_write(a: &Args) -> Result<FileSource, (u8, String)> {
+pub(crate) fn open_target_for_write(a: &Args) -> Result<FileSource, crate::outcome::Fail> {
     let mut src = open_target(a)?;
     let p = src.identity.journal_path().to_path_buf();
-    src.journal = Some(Journal::open(&p).map_err(|e| (EXIT_INFRA, format!("journal open failed: {e}")))?);
+    src.journal = Some(
+        Journal::open(&p).map_err(|e| crate::outcome::Fail::infra(format!("journal open failed: {e}")))?,
+    );
     Ok(src)
 }
 
@@ -180,11 +159,13 @@ pub(crate) fn settle_layout(mut o: crate::outcome::Outcome, src: &FileSource) ->
     o
 }
 
-/// 表类写命令的成功收尾：内核重读 + 报告，仅当退出码为 0 时才打印成功字样
+/// 表类写命令的成功收尾：内核重读 + 报告，仅当后置条件全部满足时才打印成功字样
 /// （内核视图过期时退 20，此时打"成功"会与退出码矛盾）
 pub(crate) fn table_write_done(src: &FileSource, ok_msg: &str) -> u8 {
     let o = settle_layout(crate::outcome::Outcome::applied_with(Vec::new()), src);
-    if o.exit_code() == EXIT_OK {
+    // 用语义判断而不是比退出码：比数字会把"部分完成"误判成成功，而且数字的含义
+    // 只在 outcome 一处解释得清
+    if o.is_complete() {
         println!("{ok_msg}");
     }
     o.exit_code()
@@ -199,7 +180,7 @@ pub(crate) fn align_unit(a: &Args, table_ss: u64) -> Option<u64> {
         "none" => None,
         "mib" => Some((1024 * 1024 / table_ss).max(1)),
         "cyl" => Some(16065),
-        other => bail(EXIT_REFUSED, format!("invalid --align {other:?} (mib|cyl|none)")),
+        other => bail_fail(Fail::refused(format!("invalid --align {other:?} (mib|cyl|none)"))),
     }
 }
 
@@ -209,7 +190,7 @@ pub(crate) fn align_range(a: &Args, start: u64, end: u64, table_ss: u64) -> (u64
     let s = start.div_ceil(unit) * unit;
     let e1 = end.saturating_add(1) / unit * unit;
     if e1 == 0 || s > e1 - 1 {
-        bail(EXIT_REFUSED, format!("refused: range {start}..{end} is empty after {} alignment", a.align));
+        bail_fail(Fail::refused(format!("range {start}..{end} is empty after {} alignment", a.align)));
     }
     if s != start || e1 - 1 != end {
         eprintln!("aligned to {}: {start}..{end} -> {s}..{}", a.align, e1 - 1);
@@ -233,7 +214,7 @@ pub(crate) fn align_start(a: &Args, start: u64, table_ss: u64) -> u64 {
 /// MBR 条目以容器 ss 计。换算在读到表的一处完成，下游（fsid::identify 按字节区间工作）不必知道
 /// 单位是谁的
 /// 返回 Fail 而不是 (码, 文案)：前缀与码必须同源——否则调用点会各自拼 "refused: " 前缀，
-/// 碰上 30 就自相矛盾（mkfs 曾打出 "refused: parse failed: ..." 却是 30）。
+/// 碰上 30 就自相矛盾（打出 "refused: parse failed: ..." 却退出 30）。
 /// 按标签分派：GPT 与 MBR 的条目形状不同（MBR 只有主分区槽位 1..=4）
 pub(crate) fn entry_byte_range(src: &FileSource, part: u32) -> Result<(u64, u64), crate::outcome::Fail> {
     // 无表 = 请求与目标现状不匹配(10)；表在但结构非法 = 盘内容故障(30)。
@@ -271,19 +252,19 @@ pub(crate) fn entry_byte_range(src: &FileSource, part: u32) -> Result<(u64, u64)
 /// 只读命令的打开：块设备只读（RW+O_EXCL 在盘被 claim 时会被内核拒绝，分区被占用会连同
 /// 整盘一起被 claim），镜像文件照常。info 与 plan 共用——两者都不写盘，却都可能被用来
 /// 查看一块正被使用的盘（挂载中、有活动分区），此时 O_EXCL 会让它们连读都读不成
-pub(crate) fn open_target_ro(a: &Args) -> Result<FileSource, (u8, String)> {
+pub(crate) fn open_target_ro(a: &Args) -> Result<FileSource, crate::outcome::Fail> {
     #[cfg(target_os = "linux")]
     if let Ok(meta) = std::fs::metadata(&a.target)
         && meta.file_type().is_block_device()
     {
         return FileSource::open_read_only(std::path::Path::new(&a.target))
-            .map_err(|e| (EXIT_INFRA, format!("open failed: {e}")));
+            .map_err(|e| crate::outcome::Fail::infra(format!("open failed: {e}")));
     }
     open_target(a)
 }
 
 /// 计算用几何：表属"可修复的 stale"（设备扩容后备份头/PMBR 未更新，见 GptState::NeedsRepair）时
-/// 按修复后的 last_usable_lba 计算；plan 不写盘，实际修复由写入路径的 ensure_geometry 完成。
+/// 按修复后的 last_usable_lba 计算；plan 不写盘，实际修复由写入路径的 apply_repair 完成。
 /// 返回 `Fail` 而不是字符串：这里的失败全部是盘/容器自身不自洽（PMBR 越出容器、容器装不下
 /// 备份数组、分区越出修复后的可用区），属"未写盘的盘内容故障"，与调用点自己那一堆校验拒绝
 /// 是两回事，不能压成同一个码
@@ -353,16 +334,6 @@ pub(crate) fn aligned_gaps(used: &[(u64, u64)], lo: u64, hi: u64, unit: u64) -> 
         .collect()
 }
 
-/// 是否属于经 open_target_for_write 写入（因而会创建 undo journal）的命令。
-/// mkfs 与 undo 走的是 open_target（不建 journal）：前者只重做 FS 元数据，
-/// 后者以 journal 为输入、成功时自行删除——它们若也进这个集合，
-/// 成功时会顺手清掉先前某次失败操作留下的 journal。
-/// resize 的块设备在线路径（online::resize_online/resize_pv_online）同样不经
-/// open_target_for_write，故本判定只是"可能创建"，删除动作须容忍文件不存在
-pub(crate) fn is_destructive_cmd(cmd: &str) -> bool {
-    matches!(cmd, "new" | "add" | "del" | "delete" | "set" | "resize" | "resize-part" | "move" | "create" | "copy" | "apply")
-}
-
 /// 成功路径删除 undo journal。删的是本次身份的全部候选落点——含历史命名那一份：
 /// 留着它会被下次查找命中，把历史字节回放到一个已经改过的盘上。
 /// 不存在即无残留、无告警；删除真失败则由 dev::warn_if_remove_failed 告警
@@ -396,9 +367,9 @@ pub(crate) fn src_from(tag: &str, data: &[u8]) -> FileSource {
 #[cfg(test)]
 pub(crate) fn base_args() -> Args {
     Args {
-        target: String::new(), part: None, fstype: None, grow: None,
+        target: String::new(), part: None, grow: None,
         start: None, end: None, size: None, fs: None, name: None, type_guid: None, table: None,
-        yes: false, online: false, no_fs: false, sector_size: None, align: "mib".to_string(), chunk_mib: 4,
+        yes: false, online: false, random: false, no_fs: false, sector_size: None, align: "mib".to_string(), chunk_mib: 4,
         grow_to_end: false, allow_move: false, grow_lv: false, lv: None, start_end: false, pos: Vec::new(),
         seen: Vec::new(),
     }
@@ -438,6 +409,7 @@ mod tests {
                 partition_entry_lba: 2,
                 number_of_partition_entries: 128,
                 size_of_partition_entry: 128,
+                header_size: 92,
             },
             entries: ents.iter().map(|&(s, e)| gptman::GPTPartitionEntry {
                 partition_type_guid: [1; 16],

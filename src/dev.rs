@@ -50,6 +50,8 @@ pub(crate) fn state_dir() -> PathBuf {
 #[derive(Clone, Debug)]
 pub struct TargetIdentity {
     kind: TargetKind,
+    /// 用户给出的目标路径：镜像直接用它拼同名兄弟文件，块设备只取其文件名作无表时的日志名
+    base: PathBuf,
     journal: Vec<PathBuf>,
     checkpoint: Vec<PathBuf>,
 }
@@ -125,6 +127,19 @@ fn file_name_lossy(path: &Path) -> String {
     path.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "dev".into())
 }
 
+/// 在目标路径后追加后缀（不适配扩展名，只做串接）：`/a/b.img` + `.diskedit.log` ⇒ `/a/b.img.diskedit.log`，
+/// 与用户可见的目标名保持一一对应
+fn suffix_path(base: &Path, suffix: &str) -> PathBuf {
+    let mut p = base.to_path_buf().into_os_string();
+    p.push(suffix);
+    PathBuf::from(p)
+}
+
+/// 16 字节 Disk GUID → 大写无连字符十六进制（历史落点用的就是这种写法）
+fn guid_hex(g: &[u8; 16]) -> String {
+    g.iter().map(|b| format!("{b:02X}")).collect()
+}
+
 /// 身份键 → 文件名安全的 token：保留 ASCII 字母数字与 `.` `-` `_`，其余（含路径分隔符）
 /// 换成 `_` 并截断到 32 字符，末尾附值的 CRC32——身份可能是 loop 的 backing 路径，
 /// 原样落盘会带分隔符、可能超长，而截断与替换会令两个不同身份撞同一个名字
@@ -140,15 +155,11 @@ fn key_token(value: &str) -> String {
 
 impl TargetIdentity {
     fn image(path: &Path) -> Self {
-        let with = |suffix: &str| {
-            let mut p = path.to_path_buf().into_os_string();
-            p.push(suffix);
-            PathBuf::from(p)
-        };
         Self {
             kind: TargetKind::Image,
-            journal: vec![with(".diskedit.journal")],
-            checkpoint: vec![with(".diskedit.ckpt")],
+            base: path.to_path_buf(),
+            journal: vec![suffix_path(path, ".diskedit.journal")],
+            checkpoint: vec![suffix_path(path, ".diskedit.ckpt")],
         }
     }
 
@@ -161,6 +172,7 @@ impl TargetIdentity {
         let dir = state_dir();
         Self {
             kind: TargetKind::Block,
+            base: path.to_path_buf(),
             journal: vec![
                 dir.join(format!("{stable}.diskedit.journal")),
                 // 历史命名：块设备的 journal 曾以 devname 命名
@@ -195,6 +207,24 @@ impl TargetIdentity {
         &self.checkpoint[0]
     }
 
+    /// 日志落点：镜像 = `<目标路径>.diskedit.log`；块设备 = `<state_dir>/<名>.diskedit.log`，
+    /// 名取可读的 GPT Disk GUID（与 checkpoint 同源），读不到表时退到 devname。
+    ///
+    /// 与 journal / checkpoint 的差别只有一处：日志只增、不参与恢复，因此不做候选回退，
+    /// 名字也保持既有约定不变——改名会打断已写下日志的连续性。落点只在此处拼装，
+    /// 调用方不得自行拼 `state_dir()`
+    pub(crate) fn log_path(&self, disk_guid: Option<[u8; 16]>) -> PathBuf {
+        if self.kind == TargetKind::Image {
+            return suffix_path(&self.base, ".diskedit.log");
+        }
+        let name = match disk_guid {
+            Some(g) => guid_hex(&g),
+            // 无 GPT（MBR / 裸盘）：devname 是这类目标上唯一稳定的标识
+            None => file_name_lossy(&self.base),
+        };
+        state_dir().join(format!("{name}.diskedit.log"))
+    }
+
     /// checkpoint 的候选落点。块设备的历史落点以 GPT Disk GUID 命名，而 GUID 只在表
     /// 可读时存在，读不到就没有那一条
     pub(crate) fn checkpoint_candidates(&self, legacy_disk_guid: Option<[u8; 16]>) -> Vec<PathBuf> {
@@ -202,8 +232,7 @@ impl TargetIdentity {
         if self.kind == TargetKind::Block
             && let Some(g) = legacy_disk_guid
         {
-            let hex: String = g.iter().map(|b| format!("{b:02X}")).collect();
-            v.push(state_dir().join(format!("{hex}.ckpt")));
+            v.push(state_dir().join(format!("{}.ckpt", guid_hex(&g))));
         }
         v
     }
@@ -390,12 +419,17 @@ impl FileSource {
 
 /// 解析 `<target>[:N]` → (路径, 分区号 Option)。
 /// 本层只判定合法性、不决定进程怎么退出：数字段溢出 u32 静默当整盘目标会误伤数据，
-/// 故作为错误上抛，由调用方（main 的参数层）转成退出码
+/// 故作为错误上抛，由调用方（main 的参数层）转成退出码。
+/// `:0` 同样拒绝——分区号是 1-based，静默折叠成"整盘"会把一次针对具体分区的操作
+/// 放大成对整盘的表操作
 pub fn parse_target(s: &str) -> Result<(String, Option<u32>), &'static str> {
     match s.rfind(':') {
         Some(pos) if s[pos + 1..].chars().all(|c| c.is_ascii_digit()) && !s[pos + 1..].is_empty() => {
             let n: u32 = s[pos + 1..].parse().map_err(|_| "partition number out of range")?;
-            Ok((s[..pos].to_string(), if n > 0 { Some(n) } else { None }))
+            if n == 0 {
+                return Err("partition number is 1-based (:0 is not a partition)");
+            }
+            Ok((s[..pos].to_string(), Some(n)))
         }
         _ => Ok((s.to_string(), None)),
     }
@@ -509,14 +543,32 @@ impl Journal {
     }
 
     /// 首次记录时才落盘。magic 先于记录、记录先于实际写入，故任何时刻的盘上内容
-    /// 都不会超前于已经被记录的写入
+    /// 都不会超前于已经被记录的写入。
+    ///
+    /// 用 `create_new` 而不是 `create`：`open` 的"文件不存在"与本处的"创建它"之间存在
+    /// TOCTOU 窗口，普通的 create 会安静地打开一个刚被别人建好的文件，把两方记录交错进
+    /// 同一份 journal（一次 undo 就会回放出不属于本次的字节）。`create_new` 是原子断言
+    /// "此前不存在"，失败即说明有人抢先——要么是另一个 diskedit 正在用同一个目标，
+    /// 要么是上一次的 journal 没处理干净
     fn ensure(&mut self) -> io::Result<&mut File> {
         if self.file.is_none() {
             // 落点目录归文件自己保证：路径由身份派生，身份不知道目录是否存在
             if let Some(dir) = self.path.parent() {
                 best_effort_mkdir(dir);
             }
-            let mut f = OpenOptions::new().create(true).append(true).read(true).open(&self.path)?;
+            let mut f = OpenOptions::new().create_new(true).write(true).open(&self.path).map_err(|e| {
+                if e.kind() == io::ErrorKind::AlreadyExists {
+                    io::Error::new(
+                        io::ErrorKind::AlreadyExists,
+                        format!(
+                            "{} appeared after the target was opened — another diskedit run may be using this target, or a previous journal was left behind (resolve it with `diskedit undo` first)",
+                            self.path.display()
+                        ),
+                    )
+                } else {
+                    e
+                }
+            })?;
             use std::io::Write;
             f.write_all(Self::MAGIC)?;
             f.sync_all()?;
@@ -583,6 +635,19 @@ impl Journal {
 mod tests {
     #![allow(clippy::let_underscore_must_use)] // 清理临时文件有意忽略失败
     use super::*;
+
+    /// `:N` 后缀的判定：分区号 1-based，`:0` 必须拒绝而不是折叠成"整盘"——
+    /// 折叠会把一次针对具体分区的操作放大成对整盘的表操作
+    #[test]
+    fn parse_target_partition_suffix() {
+        assert_eq!(parse_target("img").unwrap(), ("img".to_string(), None));
+        assert_eq!(parse_target("img:1").unwrap(), ("img".to_string(), Some(1)));
+        assert_eq!(parse_target("img:4294967295").unwrap(), ("img".to_string(), Some(u32::MAX)));
+        assert!(parse_target("img:0").is_err());
+        assert!(parse_target("img:4294967296").is_err());
+        // 文件名的冒号不是分区后缀（其后不是纯数字）
+        assert_eq!(parse_target("/a/b:c.img").unwrap(), ("/a/b:c.img".to_string(), None));
+    }
 
     fn journal_path(tag: &str) -> PathBuf {
         let mut p = std::env::temp_dir();
@@ -653,5 +718,37 @@ mod tests {
         assert!(Journal::open(&p).is_err(), "a foreign file must be refused, not adopted");
 
         let _ = std::fs::remove_file(&p);
+    }
+
+    /// open 与首次 record 之间存在窗口：此刻冒出来的文件不是我们建的，必须拒绝而不是
+    /// 把 MAGIC 追加进去（两方记录交错进同一份 journal，一次 undo 会回放出不属于本次的字节）。
+    /// 抢建的文件还要原样保留——“拒绝”不包括把它截断
+    #[test]
+    fn journal_creation_refuses_a_file_that_appeared_late() {
+        let p = journal_path("toctou");
+        let mut j = Journal::open(&p).unwrap();
+        assert!(!p.exists(), "opening a journal must not leave a trace on disk");
+
+        std::fs::write(&p, b"someone else's file").unwrap();
+        assert!(j.record(0, &[0xAA; 4]).is_err(), "a file that appeared after open must not be adopted");
+        assert_eq!(std::fs::read(&p).unwrap(), b"someone else's file", "the intruding file must be left untouched");
+
+        let _ = std::fs::remove_file(&p);
+    }
+
+    /// 日志落点也由身份推导：镜像与目标同层级，块设备落在 state_dir 下且以 Disk GUID /
+    /// devname 命名。模块自行拼 state_dir() 会让落点随调用方漂移
+    #[test]
+    fn log_path_comes_from_the_identity() {
+        let img = PathBuf::from("/tmp/disk.img");
+        let id = TargetIdentity::resolve(&img, false, 0);
+        assert_eq!(id.log_path(None), PathBuf::from("/tmp/disk.img.diskedit.log"));
+
+        let dev = PathBuf::from("/dev/sdz");
+        let id = TargetIdentity::resolve(&dev, true, 4096);
+        let guid = [0xABu8; 16];
+        assert_eq!(id.log_path(Some(guid)), state_dir().join(format!("{}.diskedit.log", guid_hex(&guid))));
+        // 读不到表时退回 devname：MBR / 裸盘上没有更稳的标识
+        assert_eq!(id.log_path(None), state_dir().join("sdz.diskedit.log"));
     }
 }
