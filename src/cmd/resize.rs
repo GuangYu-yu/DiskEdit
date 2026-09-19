@@ -253,21 +253,21 @@ pub(crate) fn cmd_resize(a: &Args) -> u8 {
         Err(e) => bail_fail(Fail::infra(format!("parse failed: {e}"))),
     }
     let Some(part) = a.part else { crate::args::usage() };
-    let g = match table::load_gpt(&src) {
-        Ok(Some(g)) => g,
+    // 可操作几何（构造点即拒绝条目重叠）：entries / ss / 修复后的 last_usable 全部取自它，
+    // 命令层不再自己算一次有效上界（历史实现见 support::effective_last_usable）
+    let (g, _repair) = match crate::gpt_policy::resolve_geometry(&src) {
+        Ok(Some(v)) => v,
         Ok(None) => bail_fail(Fail::refused("resize requires a GPT target".to_string())),
-        Err(e) => bail_fail(Fail::infra(format!("parse failed: {e}"))),
+        Err(f) => bail_fail(f),
     };
-    let Some(e) = g.entries.get((part - 1) as usize) else {
+    let Some(e) = g.entry_index(part).and_then(|i| g.entries.get(i)) else {
         bail_fail(Fail::refused(format!("partition {part} not found")));
     };
     if e.ending_lba == 0 {
         bail_fail(Fail::refused(format!("partition {part} is empty")));
     }
     let (start, end, ss) = (e.starting_lba, e.ending_lba, g.ss);
-    // 有效几何：设备扩容后表头里的 last_usable_lba 可能仍是旧值，"右侧还剩多少空间"
-    // 一律按修复后的上界算，否则新增的整段空间会被当成不可用
-    let last_usable = effective_last_usable(&src, &g).unwrap_or_else(|f| bail_fail(f));
+    let last_usable = g.last_usable_lba();
     // 上一轮 plan 型搬移作业是否尚未收尾（右侧"已空"可能正是搬了一半的结果）
     let resuming = movepart::has_pending_relocation(&src, part).unwrap_or_else(|f| bail_fail(f));
     let cur_bytes = (end - start + 1) * ss;
@@ -287,7 +287,7 @@ pub(crate) fn cmd_resize(a: &Args) -> u8 {
         ss,
         cur_bytes,
         is_pv,
-        free_right_lba: free_right_gpt(&g, part, last_usable),
+        free_right_lba: free_right_gpt(&g, part),
         target,
         grow_to_end,
     }) {
@@ -296,9 +296,16 @@ pub(crate) fn cmd_resize(a: &Args) -> u8 {
 
     // 离线路径
     let is_block = src.is_block;
-    let mut src = open_target_for_write(a).unwrap_or_else(|f| bail_fail(f));
+    // 上一轮作业没做完就显式续跑它；否则这是一次新事务。判据已在上面按 ckpt 算出，
+    // 这里只负责把"我知道自己在续跑"这件事告诉事务层
+    let mut src = if resuming {
+        open_target_resuming(a)
+    } else {
+        open_target_for_write(a)
+    }
+    .unwrap_or_else(|f| bail_fail(f));
     if grow_to_end {
-        let free = free_right_gpt(&g, part, last_usable);
+        let free = free_right_gpt(&g, part);
         // 右侧有空闲且没有未收尾的搬移作业 → 纯扩容。若作业未收尾，则"右侧已空"很可能
         // 正是搬了一半的结果，走普通 resize_part 会跳过剩余搬移与 swap 重建等收尾
         if free > 0 && !resuming {
@@ -336,7 +343,7 @@ pub(crate) fn cmd_resize(a: &Args) -> u8 {
         let shift = (new_end > end).then(|| new_end - end);
         // 未收尾的搬移作业 ⇒ 必须走 resume 路径（即使几何上 free_right 已足够——swap 等
         // 收尾步骤可能尚未执行，普通扩容会跳过它们）
-        if resuming || shift.is_some_and(|s| s > free_right_gpt(&g, part, last_usable)) {
+        if resuming || shift.is_some_and(|s| s > free_right_gpt(&g, part)) {
             // 右侧连续空闲不足：--allow-move 时按最小位移搬移挡路分区，
             // 与 grow 路径同一确认流（plan 打印 → --yes 确认）
             if !a.allow_move {

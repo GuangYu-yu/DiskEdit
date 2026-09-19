@@ -2,7 +2,7 @@
 
 use crate::support::*;
 use crate::args::Args;
-use crate::dev::{Journal, JournalRead};
+use crate::dev::{Journal, JournalRead, RecoveryData};
 
 pub(crate) const HELP: &str = r#"diskedit undo <TARGET> --yes
 
@@ -35,11 +35,17 @@ fn pick_journal(candidates: &[std::path::PathBuf]) -> Result<(std::path::PathBuf
     }
 }
 
+/// checkpoint 的历史命名带 GPT Disk GUID，而 GUID 只在表可读时存在。undo 属恢复路径：
+/// 表读不出来时要照常工作（该候选缺席即可），故一切失败都降级为 None
+fn legacy_guid(src: &crate::dev::FileSource) -> Option<[u8; 16]> {
+    crate::table::load_gpt(src).ok().flatten().map(|g| g.header.disk_guid)
+}
+
 pub(crate) fn cmd_undo(a: &Args) -> u8 {
     if !a.yes {
         bail_fail(Fail::refused("`undo` overwrites current bytes from journal; pass --yes to confirm"));
     } else {
-        let mut src = open_target(a).unwrap_or_else(|f| bail_fail(f));
+        let mut src = open_target_owned(a).unwrap_or_else(|f| bail_fail(f));
         let (p, read) = pick_journal(src.identity.journal_candidates()).unwrap_or_else(|m| bail_fail(Fail::refused(m)));
         let (entries, tail_incomplete) = match read {
             JournalRead::Complete(v) => (v, false),
@@ -48,7 +54,19 @@ pub(crate) fn cmd_undo(a: &Args) -> u8 {
             JournalRead::TruncatedTail(v) => (v, true),
         };
         if entries.is_empty() {
-            bail_fail(Fail::refused("nothing to undo (journal is empty)".to_string()));
+            // 空 journal 与"目标上留着未收尾的 checkpoint"是两件事：后者描述的是另一族作业
+            // 的进度（例如搬移搬到一半），undo 回放不了它，也不能假装目标干净——它会让后续
+            // resize 被判成 Divergent 而拒绝，用户看到的是"什么也没做却被拒绝"
+            let leftover = src.identity.checkpoint_candidates(legacy_guid(&src));
+            let stale: Vec<String> = leftover.iter().filter(|p| p.exists()).map(|p| p.display().to_string()).collect();
+            if stale.is_empty() {
+                bail_fail(Fail::refused("nothing to undo (journal is empty)".to_string()));
+            }
+            bail_fail(Fail::refused(format!(
+                "the undo journal is empty, but this target still has an unfinished checkpoint ({}); undo cannot release it — \
+                 re-run the command that started that job to resume it to completion",
+                stale.join(", ")
+            )));
         }
         let n = entries.len();
         if tail_incomplete {
@@ -57,13 +75,26 @@ pub(crate) fn cmd_undo(a: &Args) -> u8 {
                  replaying the {n} complete record(s) before it; anything recorded after that point cannot be undone"
             );
         }
-        // 含搬移的 journal 不可回滚：数据字节按设计不入 journal（前向恢复、无回滚），
-        // 只回滚表项会留下表与数据不一致的布局，必须显式拒绝而非给出假回滚
-        if entries.iter().any(|(off, _)| *off == Journal::MOVED_MARKER) {
-            bail_fail(Fail::refused("journal covers a partition relocation — moved/copied data is not journaled by design, so undo cannot revert it (re-run the original command to resume, or restore from backup)".to_string()));
+        // 含**不可回滚写入**的 journal 不可回滚：数据搬移的字节、外部 FS 工具的写入
+        // （resize2fs/mkswap/mkfs…）与内核侧表写入都按设计不入 journal，只回滚表项会留下
+        // 表与盘上内容自相矛盾的布局（例如 FS 自述尺寸 > 分区尺寸），故显式拒绝而非假回滚。
+        // 屏障记着是哪一类越过了这条线，理由因此可以直接说给用户听
+        if let Some(m) = entries.iter().find_map(|r| match r.recovery {
+            RecoveryData::Barrier => Some(r.mutation),
+            RecoveryData::PreImage { .. } => None,
+        }) {
+            bail_fail(Fail::refused(format!(
+                // 只陈述 undo 做不到什么、以及谁做得到。"重跑原命令续跑"不能写在这里：
+                // 并非所有不可回滚的场景都有 ckpt 可续（`copy` 就没有），那句判断
+                // 属于 transaction 的出路分流（见 `TransactionManager::busy`）
+                "this journal records a non-reversible mutation ({}), so rolling back only the table would leave the layout \
+                 contradicting the on-disk content; restore from backup, or release the transaction with `diskedit abandon`",
+                m.describe()
+            )));
         }
-        for (off, data) in entries.iter().rev() {
-            if let Err(e) = src.write_at(*off, data) {
+        for rec in entries.iter().rev() {
+            let RecoveryData::PreImage { off, bytes } = &rec.recovery else { continue };
+            if let Err(e) = src.write_at(*off, bytes) {
                 // journal 保留在原地：可重试 undo
                 bail_fail(Fail::infra(format!("undo write failed at offset {off}: {e} (journal kept, retry)")));
             }
@@ -74,6 +105,13 @@ pub(crate) fn cmd_undo(a: &Args) -> u8 {
             bail_fail(Fail::infra(format!("undo wrote the journal back but sync failed: {e} — rollback may not be durable, verify before retrying")))
         });
         crate::dev::warn_if_remove_failed(&p);
+        // 事务的恢复状态随回滚一并释放：这份 journal 记下的表写入已经全部回退，而 checkpoint
+        // 描述的是同一个事务的进度——留下来只会描述一个已被回滚掉的世界，让后续 resize 被判成
+        // Divergent 而永久拒绝（"什么也没做却被拒绝"）。两族作业不会交叉：目标上/journal 存在
+        // 期间，另一族作业根本起不来（见 prepare_* 的槽位判定）
+        for ckpt in src.identity.checkpoint_candidates(legacy_guid(&src)) {
+            crate::dev::warn_if_remove_failed(&ckpt);
+        }
         table_write_done(&src, &format!("undone {n} journal entries (verify with: diskedit info {})", a.target))
     }
 }

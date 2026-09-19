@@ -6,6 +6,7 @@
 //! "是否需要修复、修哪一类"只在这里判一次，main 与 movepart 共用同一个动作类型。
 
 use crate::dev::FileSource;
+use crate::geometry::{self, ValidatedGeometry};
 use crate::outcome::Fail;
 use crate::table::{self, GptState, PmbrSize, RawGpt};
 use std::io;
@@ -61,7 +62,14 @@ impl RepairAction {
 /// 修复后的 last_usable_lba = 新末端 − 数组跨度 − 1（备份数组位于备份头之前）。
 /// 容器容不下最小跨度、或现有分区越出新区间 → 拒绝（不写盘，纯计算）
 pub fn repaired_last_usable(g: &RawGpt, file_last_lba: u64) -> io::Result<u64> {
-    let span = table::array_span_sectors(g.header.number_of_partition_entries, g.header.size_of_partition_entry, g.ss);
+    // 跨度取自唯一的几何构造点，不在此另算一遍 条目数 × 条目大小 ÷ 扇区
+    let geom = geometry::EntryArrayGeometry::new(
+        g.ss,
+        g.header.size_of_partition_entry,
+        g.header.number_of_partition_entries,
+    )
+    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
+    let span = geom.lba_span();
     let new_last_usable = file_last_lba
         .checked_sub(span)
         .and_then(|v| v.checked_sub(1))
@@ -125,7 +133,15 @@ pub(crate) fn perform_repair(src: &mut FileSource, action: &RepairAction) -> io:
 }
 
 /// 所有需要做空间算术的命令（add/new/del/rename/flag/resize-part/copy）都先经过这里：
-/// 读取 → 判定（classify_repair）→ 把修复后的几何反映到返回的表上。
+/// 读取 → 判定（classify_repair）→ 产出**可操作几何**（[`ValidatedGeometry`]，其
+/// `last_usable_lba` 已是修复后将生效的值）。
+///
+/// 构造 [`ValidatedGeometry`] 即校验，因此写入路径拿到它之后不必再问"这个几何可用吗"：
+/// - 条目数组几何自洽（条目数/单条目大小/自定字节上限，见 `EntryArrayGeometry::new`）
+/// - **已定义条目互不重叠**（UEFI 2.10 §5.3.1 GPT overview：Each defined partition must not
+///   overlap with any other defined partition）。本工具的空间派生事实（右侧空闲、搬移打包、
+///   扩容终点）全部以不重叠为前提，故它必须在构造点被验过——这是拒绝，不是能力缺陷：
+///   `info` 仍读 RawGpt，能告诉用户哪两条重叠了
 ///
 /// **绝不写盘**：入参是 `&FileSource`，类型上就没有写入能力。决策与副作用分开是各自的
 /// 唯一出口——修复动作由 [`apply_repair`] 执行，调用方须在**所有事前拒绝判定之后**才调用它，
@@ -139,8 +155,8 @@ pub(crate) fn perform_repair(src: &mut FileSource, action: &RepairAction) -> io:
 /// of a physical volume_"，理由同节给出——GPT 的恢复方案依赖备份头位于设备末端，容量变化后
 /// 备份头必须随之搬移。本函数被所有空间算术命令共用（含不扩容的 del），对它们而言比规范更严：
 /// 规范只规定了扩容场景的下限，并未禁止其他操作也要求双头有效
-pub fn resolve_geometry(src: &FileSource) -> Result<Option<(RawGpt, RepairAction)>, Fail> {
-    let mut g = match table::load_gpt(src) {
+pub fn resolve_geometry(src: &FileSource) -> Result<Option<(ValidatedGeometry, RepairAction)>, Fail> {
+    let g = match table::load_gpt(src) {
         Ok(Some(g)) => g,
         Ok(None) => return Ok(None),
         // 解析失败与"修不了"都发生在任何写入之前 → Infra（不能提示"盘可能已改变"）
@@ -150,12 +166,10 @@ pub fn resolve_geometry(src: &FileSource) -> Result<Option<(RawGpt, RepairAction
     // 这些拒绝（PMBR SizeInLBA 越出容器、容器装不下备份头跨度、分区越出修复后的可用区）
     // 都是盘/容器自身的异常：改请求参数也无解，故归 infra
     let action = classify_repair(&g, file_last_lba).map_err(|e| Fail::infra(e.to_string()))?;
-    // 修复后的可用区上界取自动作本身（决策期已算好），调用方据此校验，不必自己再推导一次。
-    // 只反映决策结果，不改盘
-    if let Some(new_last_usable) = action.new_last_usable() {
-        g.header.last_usable_lba = new_last_usable;
-    }
-    Ok(Some((g, action)))
+    // 修复后的可用区上界只从动作取（决策期已算好），不再由调用点各自推导一次
+    let vg = ValidatedGeometry::new(&g, file_last_lba, action.new_last_usable())
+        .map_err(|e| Fail::infra(e.to_string()))?;
+    Ok(Some((vg, action)))
 }
 
 /// 执行修复的 `Fail` 版本：空间算术命令（add/del/rename/flag/resize-part/copy）走这里，

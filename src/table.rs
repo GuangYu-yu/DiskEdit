@@ -14,6 +14,7 @@
 //!   execute_resize）
 
 use crate::dev::FileSource;
+use crate::geometry::{self, EntryArrayGeometry};
 use crate::outcome::Fail;
 use gptman::GPTPartitionEntry;
 use std::io;
@@ -270,10 +271,10 @@ fn probe_header(sector: &[u8]) -> HeaderProbe {
 /// FirstUsableLBA），备份数组在可用区**之后**（上界是盘尾的备份头）。两条一起写会把
 /// 所有合法盘的备份副本误拒
 ///
-/// 调用前提：条目数/条目大小已由 load_entry_array 判定合理（数组跨度不会溢出）
+/// 调用前提：条目数组几何已由 [`EntryArrayGeometry`] 判定合理（跨度不会溢出）
 fn validate_geometry(
     header: &RawHeader,
-    ss: u64,
+    geom: &EntryArrayGeometry,
     file_last_lba: u64,
     view: GptCopyKind,
 ) -> Result<GptState, GptError> {
@@ -298,7 +299,7 @@ fn validate_geometry(
     if header.partition_entry_lba < 2 {
         return Err(invalid("partition_entry_lba < 2 — GPT entry array would cover the protective MBR or the header"));
     }
-    let span = array_span_sectors(header.number_of_partition_entries, header.size_of_partition_entry, ss);
+    let span = geom.lba_span();
     let array_end = header
         .partition_entry_lba
         .checked_add(span)
@@ -386,18 +387,15 @@ fn load_entry_array(
     header: &RawHeader,
     ss: u64,
     copy: GptCopyKind,
-) -> Result<Vec<u8>, GptError> {
+) -> Result<(Vec<u8>, EntryArrayGeometry), GptError> {
     let bad_geometry = |m: &str| GptError::InvalidHeader(m.into());
-    // 16 MiB 为自定防御上限（非 UEFI 要求）：几何异常即拒绝，不按表字段做巨型分配
-    let n = header.number_of_partition_entries as u64;
-    let es32 = header.size_of_partition_entry;
-    if n == 0 || !valid_entry_size(es32) || n * es32 as u64 > 16 * 1024 * 1024 {
-        return Err(bad_geometry("implausible GPT entry geometry"));
-    }
-    let es = es32 as u64;
+    // 条目数组几何的唯一构造点：条目数/单条目大小合规、字节数不超自定安全上限，三件事
+    // 都在那里判定，本处不重复表达（此前这里的 16 MiB 上限与 checkpoint 的 128 各说各话）
+    let geom = EntryArrayGeometry::new(ss, header.size_of_partition_entry, header.number_of_partition_entries)
+        .map_err(|e| bad_geometry(&e.to_string()))?;
     // 损坏表的 lba/size 字段不受信任，乘加全部 checked，防溢出回绕
     let array_off = header.partition_entry_lba.checked_mul(ss).ok_or_else(|| bad_geometry("GPT entry array offset overflow"))?;
-    let array_len = n * es;
+    let array_len = geom.byte_len();
     if array_off.checked_add(array_len).ok_or_else(|| bad_geometry("GPT entry array range overflow"))? > src.size {
         return Err(bad_geometry("GPT entry array out of range"));
     }
@@ -406,7 +404,7 @@ fn load_entry_array(
     if crc32(&raw) != rd_u32(sec, 88) {
         return Err(GptError::EntryArrayCorrupt { copy });
     }
-    Ok(raw)
+    Ok((raw, geom))
 }
 
 /// 每条目取前 128 字节解析（头部自述的 es 可大于 128，余下为保留区）
@@ -435,13 +433,13 @@ fn parse_primary(src: &FileSource, ss: u64, pmbr: PmbrSize) -> ParsedCopy {
             return ParsedCopy::CopyDamaged(GptError::HeaderCorrupt { copy: GptCopyKind::Primary, detail })
         }
     };
-    let raw = match load_entry_array(src, &sec, &header, ss, GptCopyKind::Primary) {
+    let (raw, geom) = match load_entry_array(src, &sec, &header, ss, GptCopyKind::Primary) {
         Ok(r) => r,
         Err(e) => return ParsedCopy::CopyDamaged(e),
     };
     // 几何自洽性校验（validate_geometry）：字段取自本头，末端按本次候选的 ss 口径算，
     // 二者都随副本而变（备份头有它自己的 last_usable / backup_lba），故失败只是本副本不可用
-    let state = match validate_geometry(&header, ss, src.size / ss - 1, GptCopyKind::Primary) {
+    let state = match validate_geometry(&header, &geom, src.size / ss - 1, GptCopyKind::Primary) {
         Ok(s) => s,
         Err(e) => return ParsedCopy::CopyDamaged(e),
     };
@@ -480,14 +478,14 @@ fn parse_backup(src: &FileSource, ss: u64, pmbr: PmbrSize) -> ParsedCopy {
     if header.primary_lba != file_last_lba || header.backup_lba != 1 {
         return ParsedCopy::Absent;
     }
-    let raw = match load_entry_array(src, &sec, &header, ss, GptCopyKind::Backup) {
+    let (raw, geom) = match load_entry_array(src, &sec, &header, ss, GptCopyKind::Backup) {
         Ok(r) => r,
         Err(e) => return ParsedCopy::CopyDamaged(e),
     };
     // 转成主头视角后再做几何自洽校验（validate_geometry 按主头语义检查 MyLBA==1）
     header.primary_lba = 1;
     header.backup_lba = file_last_lba;
-    if let Err(e) = validate_geometry(&header, ss, file_last_lba, GptCopyKind::Backup) {
+    if let Err(e) = validate_geometry(&header, &geom, file_last_lba, GptCopyKind::Backup) {
         return ParsedCopy::CopyDamaged(e);
     }
     let n = header.number_of_partition_entries as usize;
@@ -576,34 +574,18 @@ fn serialize_header(h: &RawHeader, array_crc: u32, ss: u64) -> io::Result<Vec<u8
     Ok(b)
 }
 
-/// 条目大小合规：UEFI 2.10 规定 SizeOfPartitionEntry = 128 × 2^n（128/256/512/…），
-/// 前 128 字节为标准定义字段，其余 Reserved 必须为零
-fn valid_entry_size(es: u32) -> bool {
-    es >= 128 && es.is_power_of_two()
-}
-
-/// 条目数组序列化（含补零到扇区边界），返回 (字节, span_sectors, 数组 CRC)。
-/// es > 128 时条目尾部保留区保持零；不合规的 es 无法按规范重写，显式报错
-pub fn serialize_array(entries: &[GPTPartitionEntry], n: u32, es: u32, ss: u64) -> io::Result<(Vec<u8>, u64, u32)> {
-    if !valid_entry_size(es) {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("unsupported GPT partition entry size {es} (must be 128 × 2^n)"),
-        ));
-    }
-    let span = (n as u64 * es as u64).div_ceil(ss);
-    let mut b = vec![0u8; (span * ss) as usize];
-    for (i, e) in entries.iter().enumerate().take(n as usize) {
-        let off = i * es as usize;
+/// 条目数组序列化（含补零到扇区边界），返回 (字节, 数组 CRC)。
+/// 几何由 [`EntryArrayGeometry`] 单点判定（es > 128 时条目尾部保留区保持零；
+/// 不合规的几何在构造点即报错，此处不再自证）
+pub fn serialize_array(entries: &[GPTPartitionEntry], geom: &EntryArrayGeometry) -> io::Result<(Vec<u8>, u32)> {
+    let span = geom.lba_span();
+    let mut b = vec![0u8; (span * geom.sector_size) as usize];
+    for (i, e) in entries.iter().enumerate().take(geom.entry_count as usize) {
+        let off = i * geom.entry_size as usize;
         b[off..off + 128].copy_from_slice(&serialize_entry(e));
     }
-    let crc = crc32(&b[..(n as u64 * es as u64) as usize]);
-    Ok((b, span, crc))
-}
-
-/// 条目数组占用的扇区数：条目数与单条目大小取自表自身字段（4Kn 盘 128×128B = 4 扇区）
-pub fn array_span_sectors(n: u32, es: u32, ss: u64) -> u64 {
-    (n as u64 * es as u64).div_ceil(ss)
+    let crc = crc32(&b[..geom.byte_len() as usize]);
+    Ok((b, crc))
 }
 
 /// 重建规范化主/备头（写入路径：无论读到的是哪份副本，输出总为规范位置）
@@ -613,24 +595,24 @@ pub fn array_span_sectors(n: u32, es: u32, ss: u64) -> u64 {
 /// `backup_array_lba` 由调用方算好传入（commit_gpt 已用 checked_sub 校验容器装得下数组）：
 /// 本函数再算一次既与 serialize_array 的同一个跨度重复，又会先于调用方的下溢保护执行——
 /// debug 下 panic、release 下先回绕再被调用方拦下，同一个事实两处推导
-fn canonical_headers(g: &RawGpt, last_lba: u64, backup_array_lba: u64) -> (RawHeader, RawHeader) {
+fn canonical_headers(h: &RawHeader, last_lba: u64, backup_array_lba: u64) -> (RawHeader, RawHeader) {
     let primary = RawHeader {
         primary_lba: 1,
         backup_lba: last_lba,
-        first_usable_lba: g.header.first_usable_lba,
-        last_usable_lba: g.header.last_usable_lba,
-        disk_guid: g.header.disk_guid,
+        first_usable_lba: h.first_usable_lba,
+        last_usable_lba: h.last_usable_lba,
+        disk_guid: h.disk_guid,
         partition_entry_lba: 2,
-        number_of_partition_entries: g.header.number_of_partition_entries,
-        size_of_partition_entry: g.header.size_of_partition_entry,
-        header_size: g.header.header_size,
+        number_of_partition_entries: h.number_of_partition_entries,
+        size_of_partition_entry: h.size_of_partition_entry,
+        header_size: h.header_size,
     };
     let backup = RawHeader {
         primary_lba: last_lba,
         backup_lba: 1,
-        first_usable_lba: g.header.first_usable_lba,
-        last_usable_lba: g.header.last_usable_lba,
-        disk_guid: g.header.disk_guid,
+        first_usable_lba: h.first_usable_lba,
+        last_usable_lba: h.last_usable_lba,
+        disk_guid: h.disk_guid,
         partition_entry_lba: backup_array_lba,
         ..primary.clone()
     };
@@ -640,28 +622,42 @@ fn canonical_headers(g: &RawGpt, last_lba: u64, backup_array_lba: u64) -> (RawHe
 /// 崩溃安全四结构序列：备数组 → 备头 → 主数组 → 主头，每步 sync。
 /// 任意落点断电至少存在一份自洽副本且不一致可经 CRC 检出。
 pub fn commit_gpt(src: &mut FileSource, g: &RawGpt, last_lba: u64) -> io::Result<()> {
-    let (array_bytes, span, array_crc) =
-        serialize_array(&g.entries, g.header.number_of_partition_entries, g.header.size_of_partition_entry, g.ss)?;
-    // 跨度只算一次（serialize_array 的返回值），下溢检查先于任何头部构造
+    commit_table(src, g.ss, &g.header, &g.entries, last_lba)
+}
+
+/// 崩溃安全四结构序列的唯一实现处：`commit_gpt`（解析侧产物）与
+/// [`crate::geometry::ValidatedGeometry::commit`]（写入路径的可操作几何）都走这里，
+/// 于是"提交一张表"只有一份序列、一份几何推导
+pub(crate) fn commit_table(
+    src: &mut FileSource,
+    ss: u64,
+    header: &RawHeader,
+    entries: &[GPTPartitionEntry],
+    last_lba: u64,
+) -> io::Result<()> {
+    // 几何只构造一次：数组字节数、扇区跨度、条目数与大小都取自它，不再各自乘一遍
+    let geom = EntryArrayGeometry::new(ss, header.size_of_partition_entry, header.number_of_partition_entries)?;
+    let (array_bytes, array_crc) = serialize_array(entries, &geom)?;
+    // 跨度只算一次（几何对象），下溢检查先于任何头部构造
     let backup_array_lba = last_lba
-        .checked_sub(span)
+        .checked_sub(geom.lba_span())
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "disk too small to hold GPT entry array"))?;
-    let (primary, backup) = canonical_headers(g, last_lba, backup_array_lba);
+    let (primary, backup) = canonical_headers(header, last_lba, backup_array_lba);
     // 两份头的字节都在首次写盘之前构造完：构造会因 HeaderSize 越界而失败，
     // 那时盘必须还没被碰过（放到写作序列中间会让拒绝留下半张表）
-    let bh = serialize_header(&backup, array_crc, g.ss)?;
-    let ph = serialize_header(&primary, array_crc, g.ss)?;
+    let bh = serialize_header(&backup, array_crc, ss)?;
+    let ph = serialize_header(&primary, array_crc, ss)?;
 
-    src.write_at(backup_array_lba * g.ss, &array_bytes)?;
+    src.write_at(backup_array_lba * ss, &array_bytes)?;
     src.sync_all()?;
 
-    src.write_at(last_lba * g.ss, &bh)?;
+    src.write_at(last_lba * ss, &bh)?;
     src.sync_all()?;
 
-    src.write_at(2 * g.ss, &array_bytes)?;
+    src.write_at(2 * ss, &array_bytes)?;
     src.sync_all()?;
 
-    src.write_at(g.ss, &ph)?;
+    src.write_at(ss, &ph)?;
     src.sync_all()?;
     Ok(())
 }
@@ -953,7 +949,10 @@ impl TableKind {
 /// 紧约束，同时保证主数组 [2, 2+span) 与备数组 [last-span, last) 不重叠。
 /// 512B → 68 扇区，4Kn → 12 扇区（GNU parted 对 512B 给出同一 68 下限）。
 pub fn create_gpt(src: &mut FileSource, ss: u64, disk_guid: Option<[u8; 16]>) -> io::Result<()> {
-    let span = (128u64 * 128).div_ceil(ss);
+    // 新建表的条目数与单条目大小取建表策略（[`geometry::DEFAULT_ENTRY_COUNT`] /
+    // [`geometry::DEFAULT_ENTRY_SIZE`]），与盘上任何既有几何无关
+    let geom = EntryArrayGeometry::new(ss, geometry::DEFAULT_ENTRY_SIZE, geometry::DEFAULT_ENTRY_COUNT)?;
+    let span = geom.lba_span();
     let min_sectors = 2 * span + 4;
     if src.size / ss < min_sectors {
         return Err(io::Error::new(io::ErrorKind::InvalidData, format!(
@@ -968,11 +967,11 @@ pub fn create_gpt(src: &mut FileSource, ss: u64, disk_guid: Option<[u8; 16]>) ->
         last_usable_lba: last_lba - span - 1,
         disk_guid: disk_guid.unwrap_or_else(|| derive_guid(&src.path)),
         partition_entry_lba: 2,
-        number_of_partition_entries: 128,
-        size_of_partition_entry: 128,
+        number_of_partition_entries: geom.entry_count,
+        size_of_partition_entry: geom.entry_size,
         header_size: 92,
     };
-    let g = RawGpt { ss, header, entries: vec![empty_entry(); 128], state: GptState::Valid, pmbr: PmbrSize::Normal };
+    let g = RawGpt { ss, header, entries: vec![empty_entry(); geom.entry_count as usize], state: GptState::Valid, pmbr: PmbrSize::Normal };
     commit_gpt(src, &g, last_lba)?;
     ensure_protective_mbr(src)
 }
@@ -1039,7 +1038,7 @@ pub fn add_entry_at(
     // 拒绝判定已全部结束，首次写盘从这里开始
     crate::gpt_policy::apply_repair(src, &repair)?;
     let last_lba = src.size / g.ss - 1;
-    commit_gpt(src, &g, last_lba)?;
+    g.commit(src, last_lba)?;
     ensure_protective_mbr(src)?;
     Ok((slot + 1) as u32)
 }
@@ -1060,7 +1059,7 @@ pub fn rename_entry(src: &mut FileSource, part: u32, name: &str) -> Result<(), F
     // 拒绝判定已全部结束，首次写盘从这里开始
     crate::gpt_policy::apply_repair(src, &repair)?;
     let last_lba = src.size / g.ss - 1;
-    Ok(commit_gpt(src, &g, last_lba)?)
+    Ok(g.commit(src, last_lba)?)
 }
 
 /// GPT flags：attribute 位按 UEFI 2.10 §5（bit0=Required Partition，bit1=No Block IO
@@ -1112,7 +1111,7 @@ pub fn set_gpt_flag(src: &mut FileSource, part: u32, flag: &str, on: bool) -> Re
     // 拒绝判定已全部结束，首次写盘从这里开始
     crate::gpt_policy::apply_repair(src, &repair)?;
     let last_lba = src.size / g.ss - 1;
-    Ok(commit_gpt(src, &g, last_lba)?)
+    Ok(g.commit(src, last_lba)?)
 }
 
 // ---------- msdos（真 MBR）表创建与主分区条目编辑 ----------
@@ -1300,7 +1299,7 @@ pub fn del_entry(src: &mut FileSource, part: u32) -> Result<(), Fail> {
     // 拒绝判定已全部结束，首次写盘从这里开始
     crate::gpt_policy::apply_repair(src, &repair)?;
     let last_lba = src.size / g.ss - 1;
-    commit_gpt(src, &g, last_lba)?;
+    g.commit(src, last_lba)?;
     Ok(ensure_protective_mbr(src)?)
 }
 
@@ -1340,6 +1339,7 @@ mod tests {
             size,
             is_block: false,
             journal: None,
+            ownership: None,
         }
     }
 
@@ -1348,6 +1348,56 @@ mod tests {
         let mut src = src_from(tag, fixture_gpt(ss));
         ensure_protective_mbr(&mut src).unwrap();
         src
+    }
+
+    /// 以**原始字节**写入主副本条目（绕过 gptman：它的 write_into 自带 overlap 校验
+    /// `InvalidPartitionBoundaries`，而盘上真实存在的重叠表正是别的工具写下的字节，
+    /// 解析层必须能读到它）
+    fn write_primary_entries(src: &mut FileSource, ss: u64, ents: &[(u64, u64)]) {
+        let geom = geom128(ss);
+        let parsed: Vec<GPTPartitionEntry> = ents
+            .iter()
+            .map(|&(s, e)| GPTPartitionEntry {
+                partition_type_guid: [0x11; 16],
+                unique_partition_guid: [0x22; 16],
+                starting_lba: s,
+                ending_lba: e,
+                attribute_bits: 0,
+                partition_name: "".into(),
+            })
+            .collect();
+        let (bytes, crc) = serialize_array(&parsed, &geom).unwrap();
+        src.write_at(2 * ss, &bytes).unwrap();
+        let h = geo_header(34, 2048 - geom.lba_span() - 1, 2);
+        let sec = serialize_header(&h, crc, ss).unwrap();
+        src.write_at(ss, &sec).unwrap();
+    }
+
+    /// 重叠条目：诊断层必须仍能读出（info 要能指出哪两条重叠、用户据此修表），
+    /// 而写入层必须拒绝——本工具的空间派生事实（右侧空闲、搬移打包、扩容终点）全部
+    /// 以"不重叠"为前提（UEFI 2.10 §5.3.1 GPT overview：Each defined partition must not
+    /// overlap with any other defined partition）。拒绝发生在任何写盘之前，故归 infra
+    #[test]
+    fn overlapping_entries_are_diagnosable_but_never_writable() {
+        let ss = 512u64;
+        let mut src = src_from("overlap", vec![0u8; (2048 * ss) as usize]);
+        // 150..250 落在 100..200 内：解析层放行（诊断要看得到），写入层拒绝
+        write_primary_entries(&mut src, ss, &[(100, 200), (150, 250), (400, 500)]);
+        ensure_protective_mbr(&mut src).unwrap();
+        let g = load_gpt(&src)
+            .unwrap()
+            .expect("a table with overlapping entries must stay observable for diagnostics");
+        assert_eq!(crate::geometry::find_overlap(&g.entries), Some((1, 2)));
+        let e = crate::gpt_policy::resolve_geometry(&src)
+            .err()
+            .expect("an overlapping table must be refused by the write-path geometry");
+        assert!(matches!(&e, Fail::Infra(m) if m.contains("overlap")), "{e:?}");
+
+        // 紧邻但不重叠（200 / 201）：同一构造点必须放行，不得把合法表一并拒掉
+        let mut ok = src_from("no_overlap", vec![0u8; (2048 * ss) as usize]);
+        write_primary_entries(&mut ok, ss, &[(100, 200), (201, 250), (400, 500)]);
+        ensure_protective_mbr(&mut ok).unwrap();
+        assert!(crate::gpt_policy::resolve_geometry(&ok).is_ok());
     }
 
     /// 容器装不下条目数组时，commit_gpt 必须用 checked 运算返回 Err，
@@ -1432,31 +1482,37 @@ mod tests {
         }
     }
 
+    /// 测试用几何：128 条目 × 128B（跨度为 SPAN_128_512），扇区大小由参数给出。
+    /// 几何是"表允许多大"的唯一来源，因此测试也不再直接传字面量上限
+    fn geom128(ss: u64) -> EntryArrayGeometry {
+        EntryArrayGeometry::new(ss, 128, 128).unwrap()
+    }
+
     /// 主副本视角：条目数组必须夹在头部与可用区之间（[2, 2+span) ⊆ 可用区之前）。
     /// 越界的数组会让"分区数据"与"分区表"共用同一段 LBA，读出来的条目是别的字节
     #[test]
     fn geometry_primary_requires_entry_array_before_usable_range() {
         let last = 999;
-        let ok = validate_geometry(&geo_header(2 + SPAN_128_512, 900, 2), 512, last, GptCopyKind::Primary);
+        let ok = validate_geometry(&geo_header(2 + SPAN_128_512, 900, 2), &geom128(512), last, GptCopyKind::Primary);
         assert!(ok.is_ok(), "spec-shaped table must pass: {ok:?}");
         // 数组起点压住 LBA0/LBA1
         assert!(matches!(
-            validate_geometry(&geo_header(34, 900, 1), 512, last, GptCopyKind::Primary),
+            validate_geometry(&geo_header(34, 900, 1), &geom128(512), last, GptCopyKind::Primary),
             Err(GptError::InvalidHeader(_))
         ));
         // 起点合规但数组上界越过 FirstUsableLBA（比"起点 < 2"隐蔽）
         assert!(matches!(
-            validate_geometry(&geo_header(34, 900, 4), 512, last, GptCopyKind::Primary),
+            validate_geometry(&geo_header(34, 900, 4), &geom128(512), last, GptCopyKind::Primary),
             Err(GptError::InvalidHeader(_))
         ));
         // FirstUsableLBA 装不下数组：first_usable < 2 + span
         assert!(matches!(
-            validate_geometry(&geo_header(1, 900, 2), 512, last, GptCopyKind::Primary),
+            validate_geometry(&geo_header(1, 900, 2), &geom128(512), last, GptCopyKind::Primary),
             Err(GptError::InvalidHeader(_))
         ));
         // 极端下界：拒绝而非回绕/越界
         assert!(matches!(
-            validate_geometry(&geo_header(0, 900, 2), 512, last, GptCopyKind::Primary),
+            validate_geometry(&geo_header(0, 900, 2), &geom128(512), last, GptCopyKind::Primary),
             Err(GptError::InvalidHeader(_))
         ));
     }
@@ -1468,21 +1524,21 @@ mod tests {
         let file_last = 999;
         // 规范形状：数组 [967, 999)，可用区上界 966
         let legal = geo_header(2 + SPAN_128_512, file_last - SPAN_128_512 - 1, file_last - SPAN_128_512);
-        assert!(validate_geometry(&legal, 512, file_last, GptCopyKind::Backup).is_ok());
+        assert!(validate_geometry(&legal, &geom128(512), file_last, GptCopyKind::Backup).is_ok());
         // 同一份头按主副本视角必须被拒：证明两视角确实是两套约束
-        assert!(validate_geometry(&legal, 512, file_last, GptCopyKind::Primary).is_err());
+        assert!(validate_geometry(&legal, &geom128(512), file_last, GptCopyKind::Primary).is_err());
         // 数组落进可用区
-        assert!(validate_geometry(&geo_header(34, 966, 966), 512, file_last, GptCopyKind::Backup).is_err());
+        assert!(validate_geometry(&geo_header(34, 966, 966), &geom128(512), file_last, GptCopyKind::Backup).is_err());
         // 数组越过备份头（越过盘尾）
-        assert!(validate_geometry(&geo_header(34, 966, 968), 512, file_last, GptCopyKind::Backup).is_err());
+        assert!(validate_geometry(&geo_header(34, 966, 968), &geom128(512), file_last, GptCopyKind::Backup).is_err());
         // 起点仍须在 LBA0/LBA1 之后
-        assert!(validate_geometry(&geo_header(34, 966, 1), 512, file_last, GptCopyKind::Backup).is_err());
+        assert!(validate_geometry(&geo_header(34, 966, 1), &geom128(512), file_last, GptCopyKind::Backup).is_err());
     }
 
     /// 直接把一份自定义几何的主副本写进镜像（绕过 commit_gpt 的规范化和写入序列）
     fn write_raw_primary(src: &mut FileSource, mut h: RawHeader, ss: u64) {
-        let (bytes, _, crc) =
-            serialize_array(&[], h.number_of_partition_entries, h.size_of_partition_entry, ss).unwrap();
+        let geom = EntryArrayGeometry::new(ss, h.size_of_partition_entry, h.number_of_partition_entries).unwrap();
+        let (bytes, crc) = serialize_array(&[], &geom).unwrap();
         src.write_at(h.partition_entry_lba * ss, &bytes).unwrap();
         h.header_size = 92;
         let sec = serialize_header(&h, crc, ss).unwrap();
@@ -1523,13 +1579,14 @@ mod tests {
 
     #[test]
     fn entry_size_rules() {
-        // UEFI 2.10+：SizeOfPartitionEntry ∈ {128 × 2^n}；192/136 等非法
-        assert!(valid_entry_size(128));
-        assert!(valid_entry_size(256));
-        assert!(valid_entry_size(1024));
-        assert!(!valid_entry_size(192));
-        assert!(!valid_entry_size(136));
-        assert!(!valid_entry_size(64));
+        // UEFI 2.10 §5.3.3 Table 5.6：SizeOfPartitionEntry = 128 × 2^n；192/136 等非法。
+        // 判据的唯一实现在 geometry（数组几何的构造点），此处直接消费它
+        assert!(crate::geometry::entry_size_ok(128));
+        assert!(crate::geometry::entry_size_ok(256));
+        assert!(crate::geometry::entry_size_ok(1024));
+        assert!(!crate::geometry::entry_size_ok(192));
+        assert!(!crate::geometry::entry_size_ok(136));
+        assert!(!crate::geometry::entry_size_ok(64));
         // es=256 序列化：前 128 字节为条目，尾部保留区为零，CRC 覆盖整个 n×es
         let e = GPTPartitionEntry {
             partition_type_guid: ESP_TYPE_GUID,
@@ -1539,13 +1596,12 @@ mod tests {
             attribute_bits: 0,
             partition_name: "p".into(),
         };
-        let (b, span, crc) = serialize_array(&[e], 1, 256, 512).unwrap();
-        assert_eq!(span, 1);
+        let (b, crc) = serialize_array(&[e], &EntryArrayGeometry::new(512, 256, 1).unwrap()).unwrap();
         assert_eq!(b.len(), 512);
         assert_eq!(b[128..256], [0u8; 128], "reserved tail must stay zero");
         assert_eq!(crc, crate::table::crc32(&b[..256]));
-        // 192 违规拒绝
-        assert!(serialize_array(&[], 1, 192, 512).is_err());
+        // 192 违规：几何构造点即拒绝
+        assert!(EntryArrayGeometry::new(512, 192, 1).is_err());
     }
 
     #[test]
@@ -1565,8 +1621,8 @@ mod tests {
         let src = src_from_gpt("g4kn", 4096);
         let g = load_gpt(&src).unwrap().expect("gpt should parse at 4096");
         // 4Kn 盘上 128 条目 × 128B = 16 KiB = 4 扇区
-        let span = array_span_sectors(g.header.number_of_partition_entries, g.header.size_of_partition_entry, 4096);
-        assert_eq!(span, 4);
+        let geom = EntryArrayGeometry::new(4096, g.header.size_of_partition_entry, g.header.number_of_partition_entries).unwrap();
+        assert_eq!(geom.lba_span(), 4);
     }
 
     #[test]

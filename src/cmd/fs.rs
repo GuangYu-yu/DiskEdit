@@ -2,6 +2,7 @@
 
 use crate::support::*;
 use crate::args::{parse_size_delta, Args};
+use crate::dev::Mutation;
 use crate::{fsid, fsops};
 
 pub(crate) const HELP_MKFS: &str = r#"diskedit mkfs <TARGET>:N <FS> --yes
@@ -56,10 +57,22 @@ pub(crate) fn cmd_mkfs(a: &Args) -> u8 {
     if !a.yes {
         bail_fail(Fail::refused(format!("mkfs destroys all data on partition {part}; pass --yes to confirm")));
     }
-    let src = open_target(a).unwrap_or_else(|f| bail_fail(f));
+    // 先问类型认不认得：拒绝的语义是"什么都没写"，而下面一开事务就会先落不可回滚屏障——
+    // 让一个拼错的类型名把目标锁进"未收尾"状态、要用户再跑一次 abandon 是错的
+    if let Err(e) = fsops::mkfs_supported(&fstype) {
+        bail_fail(Fail::from(e));
+    }
+    let mut src = open_target_for_write(a).unwrap_or_else(|f| bail_fail(f));
     if let Err(f) = entry_byte_range(&src, part) {
         bail_fail(f);
     }
+    // mkfs 是一次事务，但不可回滚：内容擦掉之后没有"回去"这回事。目标被别人的未收尾现场
+    // 占着的话，上面那句 `open_target_for_write` 已经拒绝了。先落屏障（记下"这个分区上创建
+    // 了文件系统"）再交给外部工具：成功时 main 关闭事务，失败或崩溃则留下一个 active 的
+    // 不可回滚事务，出路是 `abandon`
+    src.set_mutation(Mutation::Mkfs);
+    src.mark_non_reversible()
+        .unwrap_or_else(|e| bail_fail(Fail::infra(format!("cannot persist the transaction state: {e}"))));
     // FS 层的失败分类在此换算成出口语义：不认得的类型 ⇒ 10（改参数有解），
     // 工具缺失 / 环境故障 ⇒ 30
     match fsops::mkfs(&src, part, &fstype) {
@@ -104,8 +117,10 @@ pub(crate) fn cmd_resizefs(a: &Args) -> u8 {
             bail_fail(Fail::refused("--size only applies to the online form — offline resizes the filesystem into its partition"));
         }
         let Some(part) = a.part else { crate::args::usage() };
-        let src = open_target(a).unwrap_or_else(|f| bail_fail(f));
+        let src = open_target_owned(a).unwrap_or_else(|f| bail_fail(f));
         let (start, len) = entry_byte_range(&src, part).unwrap_or_else(|f| bail_fail(f));
+        // 与 mkfs 同判据：扩 FS 是外部写入，未收尾的恢复现场必须先收拾
+        refuse_if_pending_recovery(&src, "resizefs").unwrap_or_else(|f| bail_fail(f));
         let fstype = match fsid::identify(&src, start, len) {
             Ok(t) => t,
             Err(e) => bail_fail(Fail::infra(format!("identify failed: {e}"))),
@@ -122,8 +137,10 @@ pub(crate) fn cmd_resizefs(a: &Args) -> u8 {
 
 pub(crate) fn cmd_check(a: &Args) -> u8 {
     let Some(part) = a.part else { crate::args::usage() };
-    let src = open_target(a).unwrap_or_else(|f| bail_fail(f));
+    let src = open_target_owned(a).unwrap_or_else(|f| bail_fail(f));
     let (start, len) = entry_byte_range(&src, part).unwrap_or_else(|f| bail_fail(f));
+    // e2fsck -fp / ntfsfix -d 会把修复写进 FS（不经 journal）：同 mkfs 的理由
+    refuse_if_pending_recovery(&src, "check").unwrap_or_else(|f| bail_fail(f));
     let fstype = fsid::identify(&src, start, len).unwrap_or_else(|e| bail_fail(Fail::infra(format!("identify failed: {e}"))));
     match fsops::check_fs(&src, part, fstype) {
         Ok(()) => {

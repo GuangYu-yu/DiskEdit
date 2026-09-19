@@ -14,6 +14,7 @@ mod cmd;
 mod dev;
 mod fsid;
 mod fsops;
+mod geometry;
 mod gpt_policy;
 #[cfg(target_os = "linux")]
 mod ioctl;
@@ -25,6 +26,8 @@ mod online;
 mod movepart;
 mod support;
 mod table;
+mod targetlock;
+mod transaction;
 
 use std::process::ExitCode;
 

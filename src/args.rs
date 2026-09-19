@@ -18,6 +18,7 @@ pub(crate) fn usage() -> ! {
   resizefs <TARGET>:N | <MOUNTPOINT> [BYTES] --online
                                                  resize filesystem
   undo <TARGET> --yes                            undo this tool's writes (journal)
+  abandon <TARGET> --yes                         give up on an unfinished operation
 
   new / add / del / resize-part / plan / apply   low-level
 
