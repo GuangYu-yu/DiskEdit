@@ -7,8 +7,13 @@ pub(crate) use crate::outcome::{Fail, EXIT_OK, EXIT_PARTIAL, EXIT_REFUSED};
 use std::os::unix::fs::FileTypeExt;
 
 use crate::args::Args;
-use crate::dev::{FileSource, Journal};
-use crate::{dev, gpt_policy, movepart, table};
+use crate::dev::FileSource;
+use crate::geometry::ValidatedGeometry;
+use crate::transaction::TransactionManager;
+use crate::{movepart, table};
+
+#[cfg(test)]
+use crate::dev; // 只有测试夹具 src_from 用得到
 
 /// 规划/执行失败的出口：报告文字与退出码都取自 outcome（唯一措辞与唯一映射），
 /// 调用点不得自行拼装。**本模块不提供"带裸退出码的退出"**——那会绕开 Outcome::report
@@ -103,9 +108,35 @@ pub(crate) fn parse_guid(s: &str) -> Option<[u8; 16]> {
     Some(out)
 }
 
-pub(crate) fn open_target(a: &Args) -> Result<FileSource, crate::outcome::Fail> {
-    FileSource::open(std::path::Path::new(&a.target), a.sector_size)
-        .map_err(|e| crate::outcome::Fail::infra(format!("open failed: {e}")))
+// 目标怎么打开、所有权怎么取、事务怎么开与提交，全部归 `transaction::TransactionManager`。
+// 这里只给命令层惯用的入口名，并把"哪一类命令可以接着做未完成的作业"这一条规则写成闭包
+
+/// 会留下 durable history 的写事务（add/del/set/resize/create/mkfs/apply…）
+pub(crate) fn open_target_for_write(a: &Args) -> Result<FileSource, crate::outcome::Fail> {
+    TransactionManager::begin(a)
+}
+
+/// 显式续跑：本命令声明"我要接着做目标上那件没做完的事"（由领域层按 ckpt 判定后传入）。
+/// 与 `open_target_for_write` 是两个入口，绝不合并——合并就必须让某一层去猜
+pub(crate) fn open_target_resuming(a: &Args) -> Result<FileSource, crate::outcome::Fail> {
+    TransactionManager::resume(a)
+}
+
+/// 数据搬移类命令的打开（resize-part / move / copy）：目标上已有 checkpoint 时以显式续跑
+/// 进入同一事务，否则开新事务。
+///
+/// 判据是"有没有 checkpoint"，不细分是哪个分区——这些命令本就把 ckpt 交给
+/// `movepart::resize_part` / `copy_part` 比对，是否属于同一件事由领域层的恢复校验裁
+/// （不匹配即 `Divergent`）
+pub(crate) fn open_target_for_data_move(a: &Args) -> Result<FileSource, crate::outcome::Fail> {
+    TransactionManager::begin_or_resume(a, |active| {
+        active.iter().any(|r| matches!(r, RecoveryRecord::Checkpoint { .. }))
+    })
+}
+
+/// 只持有所有权、不建 journal 的写事务（undo / check / resizefs）
+pub(crate) fn open_target_owned(a: &Args) -> Result<FileSource, crate::outcome::Fail> {
+    TransactionManager::begin_without_history(a)
 }
 
 /// 尽力写日志行：诊断设施失败不改变业务结论（数据与布局不受影响），故忽略。
@@ -114,20 +145,6 @@ pub(crate) fn open_target(a: &Args) -> Result<FileSource, crate::outcome::Fail> 
 fn best_effort_log_write(f: &mut std::fs::File, line: &str) {
     use std::io::Write;
     let _ = writeln!(f, "{line}");
-}
-
-/// undo journal 的落点由目标身份派生（见 dev::TargetIdentity）：镜像 = `<路径>.diskedit.journal`，
-/// 块设备 = 状态目录/<设备层身份>.diskedit.journal。身份在打开目标时解析一次，
-/// 关闭撤销窗口时按同一入口解析，两处不各自推导命名规则。
-/// journal 文件本身要到第一条记录才落盘（Journal::open 只做只读校验），故此处的失败
-/// 只可能是"落点被陌生文件占着"——真正的写入失败会在首次 write_at 处带上下文报出
-pub(crate) fn open_target_for_write(a: &Args) -> Result<FileSource, crate::outcome::Fail> {
-    let mut src = open_target(a)?;
-    let p = src.identity.journal_path().to_path_buf();
-    src.journal = Some(
-        Journal::open(&p).map_err(|e| crate::outcome::Fail::infra(format!("journal open failed: {e}")))?,
-    );
-    Ok(src)
 }
 
 /// 表类写命令成功后通知内核重读分区表（BLKRRPART）。
@@ -249,40 +266,31 @@ pub(crate) fn entry_byte_range(src: &FileSource, part: u32) -> Result<(u64, u64)
     }
 }
 
-/// 只读命令的打开：块设备只读（RW+O_EXCL 在盘被 claim 时会被内核拒绝，分区被占用会连同
-/// 整盘一起被 claim），镜像文件照常。info 与 plan 共用——两者都不写盘，却都可能被用来
-/// 查看一块正被使用的盘（挂载中、有活动分区），此时 O_EXCL 会让它们连读都读不成
+/// 只读命令的打开（info / plan / resize 的只读阶段）：不取所有权
 pub(crate) fn open_target_ro(a: &Args) -> Result<FileSource, crate::outcome::Fail> {
-    #[cfg(target_os = "linux")]
-    if let Ok(meta) = std::fs::metadata(&a.target)
-        && meta.file_type().is_block_device()
-    {
-        return FileSource::open_read_only(std::path::Path::new(&a.target))
-            .map_err(|e| crate::outcome::Fail::infra(format!("open failed: {e}")));
-    }
-    open_target(a)
+    TransactionManager::read_only(a)
 }
 
-/// 计算用几何：表属"可修复的 stale"（设备扩容后备份头/PMBR 未更新，见 GptState::NeedsRepair）时
-/// 按修复后的 last_usable_lba 计算；plan 不写盘，实际修复由写入路径的 apply_repair 完成。
-/// 返回 `Fail` 而不是字符串：这里的失败全部是盘/容器自身不自洽（PMBR 越出容器、容器装不下
-/// 备份数组、分区越出修复后的可用区），属"未写盘的盘内容故障"，与调用点自己那一堆校验拒绝
-/// 是两回事，不能压成同一个码
-pub(crate) fn effective_last_usable(src: &FileSource, g: &table::RawGpt) -> Result<u64, crate::outcome::Fail> {
-    let file_last = src.size / g.ss - 1;
-    match gpt_policy::classify_repair(g, file_last) {
-        // 动作自带修复后的 last_usable（决策期已算好），无需调用点再推导一次
-        Ok(action) => Ok(action.new_last_usable().unwrap_or(g.header.last_usable_lba)),
-        Err(e) => Err(crate::outcome::Fail::infra(e.to_string())),
-    }
+/// 恢复现场的枚举口径与"未收尾就拒绝"的闸口都在 `transaction`（见 `TransactionManager`）。
+/// 这里只转发名字，命令层不必知道它是怎么判的
+pub(crate) use crate::transaction::{active_recovery_records, legacy_disk_guid, RecoveryRecord};
+
+/// 闸口：目标上还留着未收尾的现场 ⇒ 拒绝这次不写 journal 的写盘
+pub(crate) fn refuse_if_pending_recovery(src: &FileSource, what: &str) -> Result<(), Fail> {
+    TransactionManager::refuse_if_active(src, what)
 }
 
-/// 目标分区右侧连续空闲扇区数（到下一分区起点或可用区上界为止，GPT）。
-/// 上界是显式入参而非就地取 `g.header.last_usable_lba`：设备扩容后表头里的该字段是过期值，
-/// 按它算会把整段新增空间误判成"不可用"（有效上界见 effective_last_usable）
-pub(crate) fn free_right_gpt(g: &table::RawGpt, part: u32, last_usable: u64) -> u64 {
-    let e = &g.entries[(part - 1) as usize];
-    let mut bound = last_usable + 1; // 排他上界
+/// 目标分区右侧连续空闲扇区数（到下一分区起点或可用区上界为止）。
+///
+/// 前提由参数类型给出：入参是 **已验证几何**（[`ValidatedGeometry`]）——条目互不重叠且都落在
+/// 修复后的可用区内，因此"起点大于本分区末端"确实等价于"在本分区右侧"。可用区上界取自几何
+/// 本身（修复后将生效的值），不再作为参数传入：同一个事实有两个来源时，两者会分叉
+/// （历史实现即如此：调用点各自算一次有效上界，本函数只对"起点在右"的表项取最小）
+pub(crate) fn free_right_gpt(g: &ValidatedGeometry, part: u32) -> u64 {
+    let Some(e) = g.entry_index(part).and_then(|i| g.entries.get(i)) else {
+        return 0;
+    };
+    let mut bound = g.last_usable_lba() + 1; // 排他上界
     for (i, o) in g.entries.iter().enumerate() {
         if (i + 1) as u32 == part || (o.starting_lba == 0 && o.ending_lba == 0) {
             continue;
@@ -334,17 +342,9 @@ pub(crate) fn aligned_gaps(used: &[(u64, u64)], lo: u64, hi: u64, unit: u64) -> 
         .collect()
 }
 
-/// 成功路径删除 undo journal。删的是本次身份的全部候选落点——含历史命名那一份：
-/// 留着它会被下次查找命中，把历史字节回放到一个已经改过的盘上。
-/// 不存在即无残留、无告警；删除真失败则由 dev::warn_if_remove_failed 告警
+/// 成功路径提交事务：关闭它的 active 状态（见 `TransactionManager::commit`）
 pub(crate) fn drop_journal(a: &Args) {
-    let Some(id) = dev::TargetIdentity::resolve_path(std::path::Path::new(&a.target)) else {
-        eprintln!("warning: cannot re-resolve the target identity — the undo journal is left in place");
-        return;
-    };
-    for p in id.journal_candidates() {
-        dev::warn_if_remove_failed(p);
-    }
+    TransactionManager::commit(a)
 }
 
 #[cfg(test)]
@@ -361,6 +361,7 @@ pub(crate) fn src_from(tag: &str, data: &[u8]) -> FileSource {
         size: data.len() as u64,
         is_block: false,
         journal: None,
+        ownership: None,
     }
 }
 
@@ -422,24 +423,34 @@ mod tests {
         }
     }
 
+    /// 已验证几何：由解析事实构造（与生产同一构造点）。free_right 只接受它，因此测试
+    /// 无法再构造"条目重叠 / 越界"的几何——那正是该类型要排除的状态
+    fn validated(on_disk_last_usable: u64, effective_last_usable: u64, ents: &[(u64, u64)]) -> ValidatedGeometry {
+        let g = raw_gpt(on_disk_last_usable, ents);
+        ValidatedGeometry::new(&g, effective_last_usable + 1, Some(effective_last_usable)).unwrap()
+    }
+
     /// 右侧连续空闲：取"下一个分区起点"与"可用区上界+1"的较小者
     #[test]
     fn free_right_bounds() {
         // 分区 1 右侧紧邻分区 2 → 无空闲
-        let g = raw_gpt(1000, &[(100, 199), (200, 299), (0, 0)]);
-        assert_eq!(free_right_gpt(&g, 1, 1000), 0);
-        assert_eq!(free_right_gpt(&g, 2, 1000), 1000 + 1 - 300);
+        let g = validated(1000, 1000, &[(100, 199), (200, 299), (0, 0)]);
+        assert_eq!(free_right_gpt(&g, 1), 0);
+        assert_eq!(free_right_gpt(&g, 2), 1000 + 1 - 300);
         // 右侧隔着空隙 → 以邻分区起点为界
-        let g = raw_gpt(1000, &[(100, 199), (300, 399), (0, 0)]);
-        assert_eq!(free_right_gpt(&g, 1, 1000), 300 - 200);
-        assert_eq!(free_right_gpt(&g, 2, 1000), 1000 + 1 - 400);
+        let g = validated(1000, 1000, &[(100, 199), (300, 399), (0, 0)]);
+        assert_eq!(free_right_gpt(&g, 1), 300 - 200);
+        assert_eq!(free_right_gpt(&g, 2), 1000 + 1 - 400);
         // 左侧分区不计入（起点小于本分区末端的都被忽略）
-        let g = raw_gpt(1000, &[(50, 99), (100, 199), (0, 0)]);
-        assert_eq!(free_right_gpt(&g, 2, 1000), 1000 + 1 - 200);
-        // 上界是入参而非表头字段：stale 表按修复后的上界算，才看得到扩容新增的空间
-        let stale = raw_gpt(500, &[(100, 199), (0, 0), (0, 0)]);
-        assert_eq!(free_right_gpt(&stale, 1, 500), 500 + 1 - 200);
-        assert_eq!(free_right_gpt(&stale, 1, 1000), 1000 + 1 - 200);
+        let g = validated(1000, 1000, &[(50, 99), (100, 199), (0, 0)]);
+        assert_eq!(free_right_gpt(&g, 2), 1000 + 1 - 200);
+        // 上界取自几何本身（修复后将生效的值）：盘上表头还是旧值（500）时，几何携带的是
+        // 修复后的 1000，于是扩容新增的空间可见——这正是"上界只有一个来源"的意思
+        let stale = validated(500, 1000, &[(100, 199), (0, 0), (0, 0)]);
+        assert_eq!(free_right_gpt(&stale, 1), 1000 + 1 - 200);
+        // 分区号越界：几何给出上界，越界即 0，不再直接索引（历史实现会 panic）
+        assert_eq!(free_right_gpt(&stale, 128), 0);
+        assert_eq!(free_right_gpt(&stale, 129), 0);
     }
 
     /// 1MiB 对齐空闲区间：边界 + 子集穷举（覆盖性、不重叠、单位对齐）

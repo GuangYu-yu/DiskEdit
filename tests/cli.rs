@@ -248,6 +248,104 @@ fn journal_lifecycle_and_table_undo() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// 不开 journal 的写盘命令（mkfs / resizefs / check 的修复）在目标上留有未收尾现场时必须
+/// 拒绝：它们会作废那份 journal 所指的旧布局，而用户随后 undo 仍会把旧表字节回放上去，
+/// 形成"表与盘上内容自相矛盾"的状态。另外三条同族不变量：
+/// - `ensure` 建好文件却没写完 magic 留下的 0 字节空壳是"残骸"，不是"journal 损坏"；
+/// - 只含 magic、零条记录的 journal 描述的是"零次写入"：它不构成未收尾现场，
+///   否则一次在创建 journal 时掉电就会把目标永久锁死；
+/// - undo 成功回滚后要一并释放该事务的 checkpoint（否则它描述一个已被回滚掉的世界，
+///   让后续 resize 被判成 Divergent 而永久拒绝）
+#[test]
+fn pending_recovery_blocks_unjournaled_writers_and_empty_shell_is_not_corruption() {
+    let dir = std::env::temp_dir().join(format!("diskedit_pr_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let img = dir.join("p.img");
+    std::fs::write(&img, vec![0u8; 8 * 1024 * 1024]).unwrap();
+    let exe = env!("CARGO_BIN_EXE_DiskEdit");
+    let img_s = img.to_str().unwrap();
+    let journal = dir.join("p.img.diskedit.journal");
+    let ckpt = dir.join("p.img.diskedit.ckpt");
+    let run = |args: &[&str]| -> (i32, String) {
+        let out = Command::new(exe).args(args).output().unwrap();
+        (out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stderr).into_owned())
+    };
+
+    let (c, e) = run(&["new", img_s, "--yes"]);
+    assert_eq!(c, 0, "{e}");
+    let (c, e) = run(&["add", img_s, "--start", "2048", "--end", "4095"]);
+    assert_eq!(c, 0, "{e}");
+
+    // 造一个真正的未收尾现场：create 建好了分区、随后的 mkfs 失败（部分完成），
+    // 事务把 journal 留在目标上等 undo 或续跑
+    let (c, e) = run(&["create", img_s, "--size", "1M", "--fs", "no-such-fs-type"]);
+    assert_eq!(c, 20, "partition created but mkfs failed must be EXIT_PARTIAL: {e}");
+    assert!(journal.exists(), "a partial operation must leave its journal behind: {e}");
+
+    // 未收尾现场 ⇒ 目标仍被那次事务占着：**任何**写命令都不能接手它，含开 journal 的 add。
+    // 断言必须落在措辞上——30 也可由别的理由产生（工具链缺失、平台不支持），只看退出码
+    // 会把"闸口没生效"误判成通过；而且每次都要确认那份 journal 没被顺手删掉：
+    // "被拒绝的命令销毁了别人的 durable history"正是这个洞最恶劣的形态
+    let p1 = format!("{img_s}:1");
+    for argv in [
+        vec!["mkfs", p1.as_str(), "ext4", "--yes"],
+        vec!["check", p1.as_str()],
+        vec!["resizefs", p1.as_str()],
+        vec!["add", img_s, "--start", "6144", "--end", "8191"],
+    ] {
+        let (c, e) = run(&argv);
+        assert_eq!(c, 30, "{argv:?} must be refused while another transaction owns the target: {e}");
+        assert!(e.contains("owns this target"), "{argv:?} must be stopped by the gate: {e}");
+        assert!(e.contains("undo"), "{argv:?}: the refusal must point at the way out: {e}");
+        assert!(journal.exists(), "{argv:?} must not destroy the other transaction's history: {e}");
+    }
+
+    // 现场收拾干净（undo 成功）⇒ 目标重新可用（断言针对措辞，因为 30 也可能来自工具链缺失等别的拒绝）
+    let (c, e) = run(&["undo", img_s, "--yes"]);
+    assert_eq!(c, 0, "undo must release the pending state: {e}");
+    assert!(!journal.exists(), "undo must drop the journal: {e}");
+    let (c, e) = run(&["check", &format!("{img_s}:1")]);
+    assert!(
+        !e.contains("owns this target"),
+        "the gate must let it through once no recovery state remains: code={c} {e}"
+    );
+
+    // 0 字节空壳：按残骸处理（补写 magic 后照常工作），不报"journal 损坏"
+    std::fs::write(&journal, b"").unwrap();
+    let (c, e) = run(&["set", &format!("{img_s}:1"), "flag", "esp", "on"]);
+    assert_eq!(c, 0, "an empty journal shell must not be reported as corruption: {e}");
+    assert!(!journal.exists(), "a successful journaled command must drop the journal");
+
+    // 只含 magic、零记录的 journal（`ensure` 写完 magic 就中断留下的）：它描述的是零次写入，
+    // 既不该挡住 mkfs，也不该被报成未收尾现场
+    std::fs::write(&journal, b"DEJL\x02").unwrap();
+    let (c, e) = run(&["mkfs", &format!("{img_s}:1"), "ext4", "--yes"]);
+    assert!(
+        !e.contains("owns this target"),
+        "a record-less journal shell must not block other writers: code={c} {e}"
+    );
+
+    // 但**旧格式**的 journal（magic 尾字节即格式版本）属于"读不出来的现场"：记录布局已经变了，
+    // 一律不猜着回放，而是当作有事没做完——目标仍被它占着（30）。版本只升不兼
+    std::fs::write(&journal, b"DEJL\x01").unwrap();
+    let (c, e) = run(&["mkfs", &format!("{img_s}:1"), "ext4", "--yes"]);
+    assert_eq!(c, 30, "a journal of an older format must stop other writers: {e}");
+    assert!(e.contains("abandon"), "the refusal must point at the way out: {e}");
+    let (c, e) = run(&["abandon", img_s, "--yes"]);
+    assert_eq!(c, 0, "abandon must be able to release an unreadable journal: {e}");
+    assert!(!journal.exists(), "abandon must move it out of the active name: {e}");
+
+    // undo 回滚成功 ⇒ 同一目标的 checkpoint 一并释放
+    let (c, e) = run(&["create", img_s, "--size", "1M", "--fs", "no-such-fs-type"]);
+    assert_eq!(c, 20, "partition created but mkfs failed must be EXIT_PARTIAL: {e}");
+    std::fs::write(&ckpt, b"stale checkpoint bytes").unwrap();
+    let (c, e) = run(&["undo", img_s, "--yes"]);
+    assert_eq!(c, 0, "undo of a table-only journal must succeed: {e}");
+    assert!(!ckpt.exists(), "a completed rollback must release that transaction's checkpoint");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn resize_part_move_copy_flag_name() {
     let dir = std::env::temp_dir().join(format!("diskedit_rp_{}", std::process::id()));
@@ -1138,9 +1236,7 @@ fn layout_uses_table_sector_size_not_container() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// fail-closed 参数契约：命令不消费的旗标一律拒绝（而非静默忽略）；
-/// 语义冲突的旗标组合（MBR resize 的 --allow-move、superfloppy 的 --no-fs、
-/// 离线 resizefs 的 --size）显式拒绝；MBR type 接受大写 0X 前缀
+/// fail-closed 参数契约：命令不消费的旗标一律拒绝（而非静默忽略）
 #[test]
 fn flag_contract_fail_closed() {
     let dir = std::env::temp_dir().join(format!("diskedit_fc_{}", std::process::id()));
@@ -1160,6 +1256,152 @@ fn flag_contract_fail_closed() {
     let (c, _, e) = run(&["info", img_s, "--yes"]);
     assert_eq!(c, 10, "unconsumed flag must be refused: {e}");
     assert!(e.contains("not a valid option for `info`"), "{e}");
+}
+
+/// 一个目标一把锁。正面：别的持有者还在时写命令必须拒绝，而不是与它并行改同一块盘。
+/// 反面同样重要：**残留的锁文件不构成任何阻挡**——判据是"锁取不取得到"，不是"文件在不在"。
+/// 锁文件一定会残留，因为释放时删除它有竞态（另一个进程可能刚取到同一把锁）
+#[test]
+fn target_lock_serializes_writers_and_a_stale_lock_file_is_harmless() {
+    let dir = std::env::temp_dir().join(format!("diskedit_tl_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let img = dir.join("t.img");
+    std::fs::write(&img, vec![0u8; 8 * 1024 * 1024]).unwrap();
+    let exe = env!("CARGO_BIN_EXE_DiskEdit");
+    let img_s = img.to_str().unwrap();
+    let lock = dir.join("t.img.diskedit.lock");
+    let run = |args: &[&str]| -> (i32, String, String) {
+        let out = Command::new(exe).args(args).output().unwrap();
+        (
+            out.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        )
+    };
+
+    let (c, _, e) = run(&["new", img_s, "--yes"]);
+    assert_eq!(c, 0, "{e}");
+
+    // 另一个持有者占着锁（不同的进程/句柄）：写命令必须拒绝并说清成因
+    let holder = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&lock)
+        .unwrap();
+    holder.try_lock().unwrap();
+    let (c, _, e) = run(&["add", img_s, "--start", "2048", "--end", "4095"]);
+    assert_eq!(c, 30, "a held target lock must stop another writer: {e}");
+    assert!(e.contains("another diskedit"), "the refusal must name the cause: {e}");
+
+    // 反面：只读命令**不取所有权**，因此不被别人持有的锁挡住——`info` / `plan` 恰恰
+    // 可能被用来查看一块正被写入的盘。（写命令里"先只读看一眼再取锁"的阶段同理）
+    let (c, _, e) = run(&["info", img_s]);
+    assert_eq!(c, 0, "a read-only command must not be blocked by a held lock: {e}");
+    drop(holder);
+
+    // 锁已释放、文件仍在：必须照常工作
+    assert!(lock.exists(), "the lock file persists by design");
+    let (c, _, e) = run(&["add", img_s, "--start", "2048", "--end", "4095"]);
+    assert_eq!(c, 0, "a released lock must not block anything: {e}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// abandon 的完整契约：不依赖记录可解析性（损坏的 journal 也必须能释放）、幂等、
+/// 多份现场一起处理、盘上字节一个都不动、单文件改名为固定落点、以及"中途崩溃后重跑收敛"
+#[test]
+fn abandon_releases_recovery_state_idempotently_and_converges() {
+    let dir = std::env::temp_dir().join(format!("diskedit_ab_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let img = dir.join("a.img");
+    std::fs::write(&img, vec![0u8; 8 * 1024 * 1024]).unwrap();
+    let exe = env!("CARGO_BIN_EXE_DiskEdit");
+    let img_s = img.to_str().unwrap();
+    let journal = dir.join("a.img.diskedit.journal");
+    let ckpt = dir.join("a.img.diskedit.ckpt");
+    let run = |args: &[&str]| -> (i32, String, String) {
+        let out = Command::new(exe).args(args).output().unwrap();
+        (
+            out.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        )
+    };
+
+    let (c, _, e) = run(&["new", img_s, "--yes"]);
+    assert_eq!(c, 0, "{e}");
+    let (c, _, e) = run(&["add", img_s, "--start", "2048", "--end", "4095"]);
+    assert_eq!(c, 0, "{e}");
+
+    // 放弃是不可逆的：没有 --yes 一律拒绝
+    let (c, _, _) = run(&["abandon", img_s]);
+    assert_eq!(c, 10, "abandon must require --yes");
+
+    // 没有现场 ⇒ 空跑即成功（目标已经是"没有 active transaction"）
+    let (c, o, e) = run(&["abandon", img_s, "--yes"]);
+    assert_eq!(c, 0, "abandoning a clean target must be a no-op: {e}");
+    assert!(o.contains("nothing to abandon"), "the no-op must say so: {o}");
+
+    let before = std::fs::read(&img).unwrap();
+
+    // 造两份现场：一份**读不出来**的 journal（陌生内容）与一份 checkpoint。
+    // 前者正是 abandon 与 undo 的分界——undo 会因无法解析而拒绝，abandon 必须照常释放
+    std::fs::write(&journal, b"not a diskedit journal at all").unwrap();
+    std::fs::write(&ckpt, b"stale checkpoint bytes").unwrap();
+    // 顺带钉住"固定落点"这一条：上一次 abandon 的残骸就在那儿，这次必须能覆盖它
+    let journal_abandoned = dir.join("a.img.diskedit.journal.abandoned");
+    std::fs::write(&journal_abandoned, b"left over from an earlier abandon").unwrap();
+
+    let (c, o, e) = run(&["abandon", img_s, "--yes"]);
+    assert_eq!(c, 0, "abandon must release an unreadable journal: {e}");
+    assert!(e.contains("not readable as a journal"), "it must warn what is being given up: {e}");
+    assert!(o.contains("abandoned 2 recovery record(s)"), "both records must be released: {o}");
+    assert!(!journal.exists(), "the journal must leave its active name");
+    assert!(!ckpt.exists(), "the checkpoint must leave its active name");
+    assert!(journal_abandoned.exists(), "the journal must land on the fixed .abandoned name");
+    assert!(dir.join("a.img.diskedit.ckpt.abandoned").exists(), "same for the checkpoint");
+    assert_eq!(std::fs::read(&img).unwrap(), before, "abandon must not touch a byte of the target");
+
+    // 现场没了 ⇒ 目标重新可用（断言针对措辞；30 也可能来自工具链缺失等别的拒绝）
+    let (_, _, e) = run(&["check", &format!("{img_s}:1")]);
+    assert!(!e.contains("owns this target"), "the gate must be clear now: {e}");
+
+    // 幂等：再来一次仍是空跑
+    let (c, o, _) = run(&["abandon", img_s, "--yes"]);
+    assert_eq!(c, 0, "a second abandon must be a no-op");
+    assert!(o.contains("nothing to abandon"), "{o}");
+
+    // 崩溃重跑收敛：模拟"改名到一半就崩"，剩余的那份由下一次运行补上
+    let (c, _, e) = run(&["create", img_s, "--size", "1M", "--fs", "no-such-fs-type"]);
+    assert_eq!(c, 20, "{e}");
+    std::fs::write(&ckpt, b"stale checkpoint bytes").unwrap();
+    std::fs::rename(&ckpt, dir.join("a.img.diskedit.ckpt.abandoned")).unwrap(); // 已改完的那一份
+    let (c, o, e) = run(&["abandon", img_s, "--yes"]);
+    assert_eq!(c, 0, "abandon must converge on the rest: {e}");
+    assert!(o.contains("abandoned 1 recovery record(s)"), "only the leftover is still active: {o}");
+    assert!(!journal.exists(), "the leftover journal must be released by the re-run");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// 旗标契约的其余几条 fail-closed：MBR 不接受 --allow-move、superfloppy 上 --no-fs
+/// 无事可做、离线 resizefs 没有"目标尺寸"语义、MBR --type 接受大写 0X 前缀
+#[test]
+fn flag_contract_mbr_resizefs_and_type() {
+    let dir = std::env::temp_dir().join(format!("diskedit_fc2_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let exe = env!("CARGO_BIN_EXE_DiskEdit");
+    let img = dir.join("a.img");
+    std::fs::write(&img, vec![0u8; 8 * 1024 * 1024]).unwrap();
+    let img_s = img.to_str().unwrap();
+    let run = |args: &[&str]| -> (i32, String, String) {
+        let out = Command::new(exe).args(args).output().unwrap();
+        (out.status.code().unwrap_or(-1),
+         String::from_utf8_lossy(&out.stdout).into_owned(),
+         String::from_utf8_lossy(&out.stderr).into_owned())
+    };
 
     // MBR resize 不支持 --allow-move：显式拒绝，而非"空间不足"误导
     let (c, _, e) = run(&["new", img_s, "--table", "msdos", "--yes"]);
@@ -1296,4 +1538,101 @@ fn targeted_refusals_are_reported_as_ten() {
     assert!(e.contains("--grow-to-end"), "{e}");
 
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// 崩溃恢复。注入点只在 `test-faults` 构建下存在，故整块按 feature 隔离：
+/// **默认 `cargo test` 不会跑这里**，要跑得显式 `cargo test --features test-faults`。
+///
+/// 这两条补的是"共用执行入口"覆盖不到的那一半：`move` 已被 Linux 冒烟验过，
+/// 而 `resize-part` / `copy` 各有自己的收尾形状——一个留下可续跑的 ckpt，
+/// 一个什么都不留、且已越过不可回滚点。断言必须落在它们**各自的**后效上
+#[cfg(feature = "test-faults")]
+mod crash_recovery {
+    fn run(args: &[&str]) -> (i32, String) {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_DiskEdit")).args(args).output().unwrap();
+        (out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stderr).into_owned())
+    }
+
+    /// 与 `run` 同一命令，但带上注入标签：命中即 abort
+    fn run_fault(fault: &str, args: &[&str]) -> (i32, String) {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_DiskEdit"))
+            .env("DISKEDIT_FAULT", fault)
+            .args(args)
+            .output()
+            .unwrap();
+        (out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stderr).into_owned())
+    }
+
+    /// 32MiB 镜像 + 一个 2048..4095 的分区
+    fn stage(tag: &str) -> (std::path::PathBuf, std::path::PathBuf, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("diskedit_{tag}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let img = dir.join("c.img");
+        std::fs::write(&img, vec![0u8; 32 * 1024 * 1024]).unwrap();
+        let img_s = img.to_str().unwrap();
+        assert_eq!(run(&["new", img_s, "--yes"]).0, 0);
+        assert_eq!(run(&["add", img_s, "--start", "2048", "--end", "4095"]).0, 0);
+        (img, dir.join("c.img.diskedit.journal"), dir.join("c.img.diskedit.ckpt"))
+    }
+
+    /// `resize-part`：数据已搬、表项未提交时崩溃。它留了 ckpt ⇒ 出路是**重跑原命令续跑**
+    #[test]
+    fn resize_part_crash_leaves_a_resumable_transaction() {
+        let (img, journal, ckpt) = stage("rsc");
+        let img_s = img.to_str().unwrap();
+        let target = format!("{img_s}:1");
+        let argv = ["resize-part", target.as_str(), "--start", "8192", "--end", "10239"];
+
+        let (c, e) = run_fault("rs-before-commit", &argv);
+        assert_ne!(c, 0, "the injected abort must not look like success: {e}");
+        assert!(journal.exists(), "the transaction's history must survive the crash: {e}");
+        assert!(ckpt.exists(), "a mid-move crash must leave a resumable checkpoint: {e}");
+        let len_before = std::fs::metadata(&journal).unwrap().len();
+
+        // 另一条新操作不得接手，且不得动那份 history
+        let (c, e) = run(&["add", img_s, "--start", "20480", "--end", "22527"]);
+        assert_eq!(c, 30, "another mutator must be refused: {e}");
+        assert!(e.contains("owns this target"), "{e}");
+        assert!(e.contains("re-run the command that started it"), "with a ckpt the way out is resume: {e}");
+        assert_eq!(std::fs::metadata(&journal).unwrap().len(), len_before, "a refusal must not touch the history");
+
+        // 重跑原命令 ⇒ 续跑并收尾
+        let (c, e) = run(&argv);
+        assert_eq!(c, 0, "re-running must resume and finish: {e}");
+        assert!(!journal.exists(), "a finished transaction must be committed: {e}");
+        assert!(!ckpt.exists(), "{e}");
+    }
+
+    /// `copy`：数据已复制、表项未提交时崩溃。它**不写 ckpt**，journal 又已越过不可回滚点
+    /// ⇒ 既续不了也回滚不了，只有 `abandon` 能释放。这条专门盯住"三路出路给同一句话"的错
+    #[test]
+    fn copy_crash_leaves_a_transaction_that_only_abandon_can_release() {
+        let (img, journal, ckpt) = stage("cpc");
+        let img_s = img.to_str().unwrap();
+        let target = format!("{img_s}:1");
+
+        let (c, e) = run_fault("copy-before-commit", &["copy", target.as_str(), "--start", "20480", "--chunk-size", "1"]);
+        assert_ne!(c, 0, "the injected abort must not look like success: {e}");
+        assert!(journal.exists(), "the history must survive the crash: {e}");
+        assert!(!ckpt.exists(), "copy leaves no checkpoint to resume from: {e}");
+
+        let (c, e) = run(&["add", img_s, "--start", "28672", "--end", "30719"]);
+        assert_eq!(c, 30, "another mutator must be refused: {e}");
+        assert!(e.contains("owns this target"), "{e}");
+        assert!(
+            e.contains("only way to release it"),
+            "no ckpt and already past the barrier ⇒ only abandon releases it: {e}"
+        );
+
+        // 被推荐的那条出路必须真的走得通：undo 拒绝，abandon 释放
+        let (c, e) = run(&["undo", img_s, "--yes"]);
+        assert_eq!(c, 10, "undo must refuse a journal that crossed the point of no return: {e}");
+        assert!(e.contains("non-reversible"), "{e}");
+        let (c, e) = run(&["abandon", img_s, "--yes"]);
+        assert_eq!(c, 0, "abandon must release it: {e}");
+        assert!(!journal.exists(), "{e}");
+        let (c, e) = run(&["add", img_s, "--start", "28672", "--end", "30719"]);
+        assert_eq!(c, 0, "the target must be usable again: {e}");
+    }
 }

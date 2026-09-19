@@ -139,17 +139,18 @@ pub(crate) fn cmd_resize_part(a: &Args) -> u8 {
     if a.grow_to_end && a.end.is_some() {
         bail_fail(Fail::refused("--end and --grow-to-end are mutually exclusive".to_string()));
     }
-    let mut src = open_target_for_write(a).unwrap_or_else(|f| bail_fail(f));
-    // 坐标系在几何计算前确定：resize-part 仅支持 GPT，条目按表头 ss 对齐（可与容器 ss 不同）
-    let g = match table::load_gpt(&src) {
-        Ok(Some(g)) => g,
+    let mut src = open_target_for_data_move(a).unwrap_or_else(|f| bail_fail(f));
+    // 坐标系在几何计算前确定：resize-part 仅支持 GPT，条目按表头 ss 对齐（可与容器 ss 不同）。
+    // 几何走唯一构造点（条目重叠在此被拒），修复后的 last_usable 也由它给出
+    let (g, _repair) = match crate::gpt_policy::resolve_geometry(&src) {
+        Ok(Some(v)) => v,
         Ok(None) => bail_fail(Fail::refused("no GPT on target".to_string())),
-        Err(e) => bail_fail(Fail::infra(format!("parse failed: {e}"))),
+        Err(f) => bail_fail(f),
     };
     let end = if a.grow_to_end {
         // 吃满后方可用区（本工具语义）：扩到 last_usable_lba；
         // 后方有分区时由 resize_part 的重叠校验拒绝
-        effective_last_usable(&src, &g).unwrap_or_else(|f| bail_fail(f))
+        g.last_usable_lba()
     } else {
         let Some(e) = a.end else { crate::args::usage() };
         e
@@ -174,13 +175,13 @@ pub(crate) fn cmd_move(a: &Args) -> u8 {
     if !a.start_end && start_opt.is_none() {
         crate::args::usage();
     }
-    let mut src = open_target_for_write(a).unwrap_or_else(|f| bail_fail(f));
-    let g = match table::load_gpt(&src) {
-        Ok(Some(g)) => g,
+    let mut src = open_target_for_data_move(a).unwrap_or_else(|f| bail_fail(f));
+    let (g, _repair) = match crate::gpt_policy::resolve_geometry(&src) {
+        Ok(Some(v)) => v,
         Ok(None) => bail_fail(Fail::refused("move requires a GPT target".to_string())),
-        Err(e) => bail_fail(Fail::infra(format!("parse failed: {e}"))),
+        Err(f) => bail_fail(f),
     };
-    let Some(e) = g.entries.get((part - 1) as usize) else {
+    let Some(e) = g.entry_index(part).and_then(|i| g.entries.get(i)) else {
         bail_fail(Fail::refused(format!("partition {part} not found")));
     };
     if e.ending_lba == 0 {
@@ -189,7 +190,7 @@ pub(crate) fn cmd_move(a: &Args) -> u8 {
     // 平移保持长度（本工具语义）：new_end = new_start + 原长度 - 1
     let len = e.ending_lba - e.starting_lba + 1;
     let start = if a.start_end {
-        effective_last_usable(&src, &g).unwrap_or_else(|f| bail_fail(f))
+        g.last_usable_lba()
             .checked_sub(len - 1)
             .unwrap_or_else(|| bail_fail(Fail::refused("partition longer than usable range".to_string())))
     } else {
@@ -211,22 +212,21 @@ pub(crate) fn cmd_copy(a: &Args) -> u8 {
     if !a.start_end && start_opt.is_none() {
         crate::args::usage();
     }
-    let mut src = open_target_for_write(a).unwrap_or_else(|f| bail_fail(f));
+    let mut src = open_target_for_data_move(a).unwrap_or_else(|f| bail_fail(f));
     // 坐标系在几何计算前确定：copy 仅支持 GPT，条目按表头 ss 对齐（可与容器 ss 不同）
-    let g = match table::load_gpt(&src) {
-        Ok(Some(g)) => g,
+    let (g, _repair) = match crate::gpt_policy::resolve_geometry(&src) {
+        Ok(Some(v)) => v,
         Ok(None) => bail_fail(Fail::refused("no GPT on target".to_string())),
-        Err(e) => bail_fail(Fail::infra(format!("parse failed: {e}"))),
+        Err(f) => bail_fail(f),
     };
     let start = if a.start_end {
-        let e = g.entries.get((part - 1) as usize)
+        let e = g.entry_index(part).and_then(|i| g.entries.get(i))
             .unwrap_or_else(|| bail_fail(Fail::refused(format!("partition {part} not found"))));
         if e.ending_lba == 0 {
             bail_fail(Fail::refused(format!("partition {part} is empty")));
         }
         let len = e.ending_lba - e.starting_lba + 1;
-        let last_usable = effective_last_usable(&src, &g).unwrap_or_else(|f| bail_fail(f));
-        last_usable
+        g.last_usable_lba()
             .checked_sub(len - 1)
             .unwrap_or_else(|| bail_fail(Fail::refused("partition longer than usable range".to_string())))
     } else {
@@ -248,10 +248,10 @@ pub(crate) fn cmd_create(a: &Args) -> u8 {
     // 坐标系在几何计算前确定：want 与 aligned_gaps 的单位随分支而定
     let (label, gaps, want) = match table::table_label(&src) {
         Ok("gpt") => {
-            let g = match table::load_gpt(&src) {
-                Ok(Some(g)) => g,
+            let (g, _repair) = match crate::gpt_policy::resolve_geometry(&src) {
+                Ok(Some(v)) => v,
                 Ok(None) => bail_fail(Fail::refused("no GPT on target — run `new` first".to_string())),
-                Err(e) => bail_fail(Fail::infra(format!("parse failed: {e}"))),
+                Err(f) => bail_fail(f),
             };
             let unit = (1024 * 1024 / g.ss).max(1);
             let want = a.size.map(|b| {
@@ -261,8 +261,7 @@ pub(crate) fn cmd_create(a: &Args) -> u8 {
             let used: Vec<(u64, u64)> = g.entries.iter()
                 .filter(|e| !(e.starting_lba == 0 && e.ending_lba == 0))
                 .map(|e| (e.starting_lba, e.ending_lba)).collect();
-            let last_usable = effective_last_usable(&src, &g).unwrap_or_else(|f| bail_fail(f));
-            ("gpt", aligned_gaps(&used, g.header.first_usable_lba, last_usable, unit), want)
+            ("gpt", aligned_gaps(&used, g.first_usable_lba(), g.last_usable_lba(), unit), want)
         }
         Ok("msdos") => {
             let mbr = match table::parse_mbr(&src) {
@@ -311,12 +310,20 @@ pub(crate) fn cmd_create(a: &Args) -> u8 {
     if !kernel_resync(&src) {
         o.mark_kernel_stale();
     }
-    if let Some(fstype) = &a.fs
-        && let Err(e) = crate::fsops::mkfs(&src, num, fstype)
-    {
-        eprintln!("partition #{num} created but mkfs failed: {e}");
-        o.report(); // 表已写（可能内核未同步）须一并报告
-        return EXIT_PARTIAL;
+    if let Some(fstype) = &a.fs {
+        // 先问类型认不认得：不认得的类型不该先落下不可回滚的屏障——那条分区创建的记录
+        // 本来还能整个 undo 掉，加了屏障就只能 abandon 了
+        if crate::fsops::mkfs_supported(fstype).is_ok() {
+            src.set_mutation(crate::dev::Mutation::Mkfs);
+            if let Err(e) = src.mark_non_reversible() {
+                bail_fail(Fail::infra(format!("cannot persist the transaction state: {e}")));
+            }
+        }
+        if let Err(e) = crate::fsops::mkfs(&src, num, fstype) {
+            eprintln!("partition #{num} created but mkfs failed: {e}");
+            o.report(); // 表已写（可能内核未同步）须一并报告
+            return EXIT_PARTIAL;
+        }
     }
     o.report();
     if o.is_complete() {

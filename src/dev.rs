@@ -19,6 +19,9 @@ pub struct FileSource {
     pub identity: TargetIdentity,
     /// undo journal：只记录本工具 write_at 的直接写入
     pub journal: Option<Journal>,
+    /// 目标的独占所有权（见 `targetlock`）：写命令持有它，只读打开为 None。
+    /// 与这次打开同生命周期，因此不必由调用方各自绑定，也就不会在写盘前被提前丢掉
+    pub(crate) ownership: Option<crate::targetlock::TargetLock>,
 }
 
 /// 持久状态的默认落点
@@ -54,6 +57,9 @@ pub struct TargetIdentity {
     base: PathBuf,
     journal: Vec<PathBuf>,
     checkpoint: Vec<PathBuf>,
+    /// 独占锁的落点（见 `targetlock`）。只有镜像有——块设备的独占凭据是打开它的 O_EXCL，
+    /// 不落在文件上，故为 None
+    lock: Option<PathBuf>,
 }
 
 /// 只用于区分历史命名约定：块设备另有 GUID / devname 两份历史落点，镜像没有
@@ -129,7 +135,7 @@ fn file_name_lossy(path: &Path) -> String {
 
 /// 在目标路径后追加后缀（不适配扩展名，只做串接）：`/a/b.img` + `.diskedit.log` ⇒ `/a/b.img.diskedit.log`，
 /// 与用户可见的目标名保持一一对应
-fn suffix_path(base: &Path, suffix: &str) -> PathBuf {
+pub(crate) fn suffix_path(base: &Path, suffix: &str) -> PathBuf {
     let mut p = base.to_path_buf().into_os_string();
     p.push(suffix);
     PathBuf::from(p)
@@ -160,6 +166,7 @@ impl TargetIdentity {
             base: path.to_path_buf(),
             journal: vec![suffix_path(path, ".diskedit.journal")],
             checkpoint: vec![suffix_path(path, ".diskedit.ckpt")],
+            lock: Some(suffix_path(path, ".diskedit.lock")),
         }
     }
 
@@ -179,6 +186,7 @@ impl TargetIdentity {
                 dir.join(format!("{}.diskedit.journal", file_name_lossy(path))),
             ],
             checkpoint: vec![dir.join(format!("{stable}.diskedit.ckpt"))],
+            lock: None,
         }
     }
 
@@ -197,6 +205,15 @@ impl TargetIdentity {
 
     pub(crate) fn journal_path(&self) -> &Path {
         &self.journal[0]
+    }
+
+    /// 独占锁的落点；块设备为 None（凭据是 O_EXCL 打开的 fd）
+    pub(crate) fn lock_path(&self) -> Option<&Path> {
+        self.lock.as_deref()
+    }
+
+    pub(crate) fn is_block(&self) -> bool {
+        self.kind == TargetKind::Block
     }
 
     pub(crate) fn journal_candidates(&self) -> &[PathBuf] {
@@ -298,6 +315,7 @@ impl FileSource {
                 size,
                 is_block: true,
                 journal: None,
+                ownership: None,
             });
         }
         let file = OpenOptions::new().read(true).write(true).open(path)?;
@@ -318,6 +336,7 @@ impl FileSource {
             size,
             is_block: false,
             journal: None,
+            ownership: None,
         })
     }
 
@@ -335,6 +354,7 @@ impl FileSource {
             size,
             is_block: true,
             journal: None,
+            ownership: None,
         })
     }
 
@@ -398,13 +418,25 @@ impl FileSource {
         self.file.write_all(buf)
     }
 
-    /// 标记本次操作含数据搬移（其字节不入 journal）：undo 据此拒绝回滚，
-    /// 避免"表回滚了、数据没回滚"的不一致
-    pub fn mark_relocation(&mut self) -> io::Result<()> {
+    /// 记下"本次操作含有不可回滚的写入"，undo 见到它即拒绝回滚。
+    ///
+    /// 判据是**可逆性**，不是"是不是外部进程"：数据搬移的字节（`write_data_at`）是本进程
+    /// 写的，但按设计故意不入 journal；外部 FS 工具的写入（resize2fs/mkswap/mkfs…）
+    /// 与内核侧的分区表写入同样无法回滚。凡"回滚表项会与盘上内容自相矛盾"的写入都属于这一类，
+    /// 它们共同落一条屏障，屏障上的 mutation 说明是哪一类越过了这条线
+    pub fn mark_non_reversible(&mut self) -> io::Result<()> {
         if let Some(journal) = self.journal.as_mut() {
-            journal.record(Journal::MOVED_MARKER, &[])?;
+            journal.barrier()?;
         }
         Ok(())
+    }
+
+    /// 声明"接下来这类改动是什么"，作用于随后的 pre-image 与屏障记录。
+    /// 语义由知道自己在做什么的那一层给出——journal 只负责记，不负责猜
+    pub fn set_mutation(&mut self, m: Mutation) {
+        if let Some(journal) = self.journal.as_mut() {
+            journal.set_mutation(m);
+        }
     }
 
     /// 每步落盘。容量有变化的场景用 sync_all，纯数据覆盖用 sync_data。
@@ -488,35 +520,187 @@ fn best_effort_dir_fsync(path: &std::path::Path) {
 #[cfg(not(unix))]
 fn best_effort_dir_fsync(_path: &std::path::Path) {}
 
+/// 一次 durable mutation 的**语义**：用户看到的"做了什么"，也是 undo policy 的输入。
+///
+/// 语义与恢复数据分开表达是刻意的：字节 diff 反推不出业务语义（"这两段字节变了"不等于
+/// "分区被搬走了"），而业务语义也替代不了 pre-image（想回滚就得有被覆盖的原文）。
+/// 两者各记一份在**同一条记录**里，不设第二套 history
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Mutation {
+    /// 分区表/条目字节的改写：new / add / del / set / create / resize-part / 搬移的表项部分
+    PartitionTable,
+    /// 分区数据块被搬移
+    RelocatePartition { partition: u32, from_lba: u64, to_lba: u64 },
+    /// 分区数据块被复制到别处
+    CopyPartition { partition: u32, from_lba: u64, to_lba: u64 },
+    /// 外部 FS 工具写进了分区内容：resize2fs / xfs_growfs / mkswap / e2fsck / pvresize…
+    ExternalFsTool,
+    /// 在分区上创建了文件系统
+    Mkfs,
+}
+
+impl Mutation {
+    /// 人读的一句话。undo 的拒绝理由与 abandon 的清单都用它，避免两处各自措辞
+    pub fn describe(&self) -> String {
+        match self {
+            Mutation::PartitionTable => "the partition table was rewritten".to_string(),
+            Mutation::RelocatePartition { partition, from_lba, to_lba } => {
+                format!("partition {partition} data was moved from LBA {from_lba} to {to_lba}")
+            }
+            Mutation::CopyPartition { partition, from_lba, to_lba } => {
+                format!("partition {partition} data was copied from LBA {from_lba} to {to_lba}")
+            }
+            Mutation::ExternalFsTool => "an external filesystem tool wrote to the partition".to_string(),
+            Mutation::Mkfs => "a filesystem was created on the partition".to_string(),
+        }
+    }
+}
+
+/// 一条记录里的**恢复依据**：undo 真正依赖的那部分
+pub enum RecoveryData {
+    /// 被覆盖字节的原文。回放它即回到这次写入之前
+    PreImage { off: u64, bytes: Vec<u8> },
+    /// 从这里起该 mutation 越过了不可回滚点：只回滚它之前的记录会得到"表与盘上内容
+    /// 自相矛盾"的布局，故 undo 见到即整体拒绝
+    Barrier,
+}
+
+/// 一条 durable 记录：发生了什么 + 怎么恢复
+pub struct JournalRecord {
+    pub mutation: Mutation,
+    pub recovery: RecoveryData,
+}
+
+/// 记录头 `[len u32][crc32 u32]` 的字节数。`len` 不计入 CRC（见 [`Journal::read_entries`]）
+const REC_HDR: usize = 8;
+
+fn journal_decode_err(what: &str) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, format!("journal record is malformed: {what}"))
+}
+
+impl Mutation {
+    fn tag(self) -> u8 {
+        match self {
+            Mutation::PartitionTable => 0,
+            Mutation::RelocatePartition { .. } => 1,
+            Mutation::CopyPartition { .. } => 2,
+            Mutation::ExternalFsTool => 3,
+            Mutation::Mkfs => 4,
+        }
+    }
+
+    fn write_meta(self, out: &mut Vec<u8>) {
+        match self {
+            Mutation::RelocatePartition { partition, from_lba, to_lba }
+            | Mutation::CopyPartition { partition, from_lba, to_lba } => {
+                out.extend_from_slice(&partition.to_le_bytes());
+                out.extend_from_slice(&from_lba.to_le_bytes());
+                out.extend_from_slice(&to_lba.to_le_bytes());
+            }
+            _ => {}
+        }
+    }
+
+    /// 解出 mutation 与它消耗的字节数（调用方据此找到后面的 recovery 段）
+    fn read(tag: u8, rest: &[u8]) -> io::Result<(Self, usize)> {
+        let reloc = |kind: u8| -> io::Result<(Mutation, usize)> {
+            if rest.len() < 20 {
+                return Err(journal_decode_err("truncated mutation payload"));
+            }
+            let partition = u32::from_le_bytes(rest[0..4].try_into().unwrap());
+            let from_lba = u64::from_le_bytes(rest[4..12].try_into().unwrap());
+            let to_lba = u64::from_le_bytes(rest[12..20].try_into().unwrap());
+            let m = if kind == 1 {
+                Mutation::RelocatePartition { partition, from_lba, to_lba }
+            } else {
+                Mutation::CopyPartition { partition, from_lba, to_lba }
+            };
+            Ok((m, 20))
+        };
+        match tag {
+            0 => Ok((Mutation::PartitionTable, 0)),
+            1 | 2 => reloc(tag),
+            3 => Ok((Mutation::ExternalFsTool, 0)),
+            4 => Ok((Mutation::Mkfs, 0)),
+            other => Err(journal_decode_err(&format!("unknown mutation tag {other}"))),
+        }
+    }
+}
+
+impl JournalRecord {
+    /// `payload = [mutation tag][mutation meta][recovery tag][recovery body]`
+    fn encode(&self) -> Vec<u8> {
+        let mut p = Vec::new();
+        p.push(self.mutation.tag());
+        self.mutation.write_meta(&mut p);
+        match &self.recovery {
+            RecoveryData::PreImage { off, bytes } => {
+                p.push(0);
+                p.extend_from_slice(&off.to_le_bytes());
+                p.extend_from_slice(bytes);
+            }
+            RecoveryData::Barrier => p.push(1),
+        }
+        p
+    }
+
+    fn decode(payload: &[u8]) -> io::Result<Self> {
+        let tag = *payload.first().ok_or_else(|| journal_decode_err("empty payload"))?;
+        let (mutation, used) = Mutation::read(tag, &payload[1..])?;
+        let rest = &payload[1 + used..];
+        let rtag = *rest.first().ok_or_else(|| journal_decode_err("missing recovery tag"))?;
+        let recovery = match rtag {
+            0 => {
+                if rest.len() < 9 {
+                    return Err(journal_decode_err("truncated pre-image"));
+                }
+                let off = u64::from_le_bytes(rest[1..9].try_into().unwrap());
+                RecoveryData::PreImage { off, bytes: rest[9..].to_vec() }
+            }
+            1 => RecoveryData::Barrier,
+            other => return Err(journal_decode_err(&format!("unknown recovery tag {other}"))),
+        };
+        Ok(JournalRecord { mutation, recovery })
+    }
+}
+
 /// journal 整份读取的结论：区分"读完了"与"尾部有一笔未完成的事务"。
 /// 后者是 append-only 语义下的正常产物（最后一次追加中途断电），不是损坏——两者若共用一个
 /// 表示，"崩溃后能不能回滚"就变成靠错误文案猜的事
 pub enum JournalRead {
     /// 全部记录完整且 CRC 校验通过
-    Complete(Vec<(u64, Vec<u8>)>),
+    Complete(Vec<JournalRecord>),
     /// 尾部存在一条未完成的记录，已丢弃；前面已完整的记录前缀原样返回
-    TruncatedTail(Vec<(u64, Vec<u8>)>),
+    TruncatedTail(Vec<JournalRecord>),
 }
 
-/// undo journal：追加式 [len u32][off u64][crc32 u32][data] 记录流。
+/// durable transaction log：追加式 `[len u32][crc32 u32][payload]` 记录流，其中
+/// `payload = [mutation][recovery]`（见 [`JournalRecord`]）。
+///
 /// 每条记录先于实际写入持久化，故任意落点断电后 undo 都能还原已发生的写入。
-/// 只覆盖本工具**元数据**写入（write_at）；分区搬移的**数据块**走 write_data_at，
-/// 不入 journal 而只留一条 MOVED_MARKER —— 搬移是"前向恢复、无回滚"，
-/// 记数据字节既无人消费又与搬移量等大。外部 FS 工具（mkfs/resizefs 等）的写入
-/// 同样不在此列；回放时整卷日志全量载入内存。
+/// pre-image 只覆盖本工具**元数据**写入（write_at）；回滚不了的那些写入——分区搬移的
+/// **数据块**（走 write_data_at）、外部 FS 工具的写入（resize2fs/mkswap/mkfs…）、
+/// 内核侧的分区表写入——不记字节，改为在**首次此类写入之前**记一条
+/// [`RecoveryData::Barrier`]，其 `mutation` 说明是哪一类越过了不可回滚点。
+/// 回放时整卷日志全量载入内存。
 ///
 /// 文件是**惰性**创建的：写下第一条记录之前磁盘上没有它（见 open）
 pub struct Journal {
     file: Option<File>,
     path: PathBuf,
+    /// 之后写入的 pre-image 记在哪个 mutation 名下。由知道自己在做什么的那一层设置
+    /// （见 [`FileSource::set_mutation`]）；journal 不猜语义
+    mutation: Mutation,
 }
 
 impl Journal {
-    const MAGIC: &[u8; 5] = b"DEJL\x01";
+    /// 尾字节是格式版本：读到的 magic 不符即拒绝整卷（见 open）。版本**不做旧格式兼容**——
+    /// 旧 journal 会被当作"读不出来的现场"，由 `abandon` 释放，而不是猜着回放
+    const MAGIC: &[u8; 5] = b"DEJL\x02";
 
-    /// 搬移标记哨兵 offset：undo 见到它即拒绝回滚（数据未被 journal 覆盖，
-    /// 仅回滚表项会留下与数据不一致的布局）
-    pub const MOVED_MARKER: u64 = u64::MAX;
+    fn at(path: &Path, file: Option<File>) -> Self {
+        Journal { file, path: path.to_path_buf(), mutation: Mutation::PartitionTable }
+    }
 
     /// 打开（必要时先校验）落点，**不产生任何痕迹**：文件已存在则必须是我们自己写的
     /// journal——拒绝把陌生文件当 journal 追加；不存在则什么都不建。
@@ -528,16 +712,40 @@ impl Journal {
         match OpenOptions::new().read(true).append(true).open(path) {
             Ok(mut f) => {
                 use std::io::Read;
+                let len = f.metadata()?.len();
+                // 0 字节 = `ensure` 建好文件、但 magic 没写完（ENOSPC/EIO）留下的**空壳**。
+                // 它不含任何记录 ⇒ 没有任何写入依赖它，就地补写 magic 即可。
+                // 报"太短"会把"上次创建未完成"说成"journal 损坏"，把方向指错
+                if len == 0 {
+                    use std::io::Write;
+                    f.write_all(Self::MAGIC)?; // append 模式：空文件的落点就是 0
+                    f.sync_all()?;
+                    best_effort_dir_fsync(path);
+                    return Ok(Self::at(path, Some(f)));
+                }
                 let mut hdr = [0u8; Self::MAGIC.len()];
                 f.read_exact(&mut hdr).map_err(|_| {
-                    io::Error::new(io::ErrorKind::InvalidData, "existing journal too short for magic")
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!(
+                            "{} is a leftover from an interrupted journal creation ({len} bytes, no complete magic header) — \
+                             it holds no records, so nothing depends on it; deleting it is safe (inspect it first if you do not trust that)",
+                            path.display()
+                        ),
+                    )
                 })?;
                 if &hdr != Self::MAGIC {
-                    return Err(io::Error::new(io::ErrorKind::InvalidData, "existing file is not a diskedit journal (magic mismatch)"));
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        // 版本只升不兼：旧版本的 journal 一律当作"读不出来的现场"交给 abandon，
+                        // 而不是猜着回放（记录布局已经不同）
+                        "existing file is not a diskedit journal of this format (magic/version mismatch) — \
+                         if it was written by an older version of this tool, release it with `diskedit abandon`",
+                    ));
                 }
-                Ok(Journal { file: Some(f), path: path.to_path_buf() })
+                Ok(Self::at(path, Some(f)))
             }
-            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(Journal { file: None, path: path.to_path_buf() }),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(Self::at(path, None)),
             Err(e) => Err(e),
         }
     }
@@ -580,12 +788,33 @@ impl Journal {
     }
 
     pub fn record(&mut self, off: u64, bytes: &[u8]) -> io::Result<()> {
+        let rec = JournalRecord {
+            mutation: self.mutation,
+            recovery: RecoveryData::PreImage { off, bytes: bytes.to_vec() },
+        };
+        self.append(&rec)
+    }
+
+    /// 落一条屏障记录：从这一刻起，当前 mutation 已越过不可回滚点，undo 见到即整体拒绝
+    /// （见 [`FileSource::mark_non_reversible`]）
+    pub fn barrier(&mut self) -> io::Result<()> {
+        let rec = JournalRecord { mutation: self.mutation, recovery: RecoveryData::Barrier };
+        self.append(&rec)
+    }
+
+    /// 设置后续记录的 mutation。命令层在自己即将做的那类改动发生变化时调用
+    /// （例如表项写完后要搬数据、要交给外部 FS 工具）
+    pub fn set_mutation(&mut self, m: Mutation) {
+        self.mutation = m;
+    }
+
+    fn append(&mut self, rec: &JournalRecord) -> io::Result<()> {
         use std::io::Write;
+        let payload = rec.encode();
         let f = self.ensure()?;
-        f.write_all(&(bytes.len() as u32).to_le_bytes())?;
-        f.write_all(&off.to_le_bytes())?;
-        f.write_all(&crate::table::crc32(bytes).to_le_bytes())?;
-        f.write_all(bytes)?;
+        f.write_all(&(payload.len() as u32).to_le_bytes())?;
+        f.write_all(&crate::table::crc32(&payload).to_le_bytes())?;
+        f.write_all(&payload)?;
         f.sync_data()
     }
 
@@ -609,23 +838,23 @@ impl Journal {
         let mut pos = Self::MAGIC.len();
         while pos < data.len() {
             // 记录头尚未写全 → 尾部未完成的事务
-            if pos + 16 > data.len() {
+            if pos + REC_HDR > data.len() {
                 return Ok(JournalRead::TruncatedTail(out));
             }
             let len = u32::from_le_bytes(data[pos..pos + 4].try_into().unwrap()) as usize;
-            let off = u64::from_le_bytes(data[pos + 4..pos + 12].try_into().unwrap());
-            let crc = u32::from_le_bytes(data[pos + 12..pos + 16].try_into().unwrap());
-            pos += 16;
-            // 头写全了但数据没写全 → 尾部未完成的事务
+            let crc = u32::from_le_bytes(data[pos + 4..pos + 8].try_into().unwrap());
+            pos += REC_HDR;
+            // 头写全了但载荷没写全 → 尾部未完成的事务
             if pos + len > data.len() {
                 return Ok(JournalRead::TruncatedTail(out));
             }
-            let bytes = data[pos..pos + len].to_vec();
-            if crate::table::crc32(&bytes) != crc {
+            let payload = &data[pos..pos + len];
+            if crate::table::crc32(payload) != crc {
                 return Err(io::Error::new(io::ErrorKind::InvalidData, "journal entry CRC mismatch"));
             }
             pos += len;
-            out.push((off, bytes));
+            // 载荷解不出来同样是"读不出来"：宁可让调用方按"有事没做完"处理，也不静默跳过
+            out.push(JournalRecord::decode(payload)?);
         }
         Ok(JournalRead::Complete(out))
     }
@@ -662,7 +891,8 @@ mod tests {
     fn journal_tail_truncation_is_recovered_but_corruption_is_not() {
         let p = journal_path("tail");
         const DATA: usize = 512;
-        const REC: usize = 16 + DATA; // [len u32][off u64][crc u32][data]
+        // [len u32][crc u32] + [mutation u8][recovery u8][off u64][data]（PartitionTable 无 meta）
+        const REC: usize = REC_HDR + 10 + DATA;
         {
             let mut j = Journal::open(&p).unwrap();
             for i in 0..3u64 {
@@ -695,7 +925,7 @@ mod tests {
 
         // 中途（非尾部）CRC 损坏 → 整体拒绝
         let mut corrupt = full.clone();
-        corrupt[5 + 16 + 100] ^= 0xFF; // 第 1 条记录的数据中段
+        corrupt[5 + REC_HDR + 10 + 100] ^= 0xFF; // 第 1 条记录的 pre-image 字节中段
         std::fs::write(&p, &corrupt).unwrap();
         assert!(Journal::read_entries(&p).is_err(), "mid-file corruption must be refused");
 

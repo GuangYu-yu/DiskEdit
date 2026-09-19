@@ -42,8 +42,11 @@ pub(crate) fn cmd_plan_apply(cmd: &str, a: &Args) -> u8 {
         Ok(p) => p,
         Err(f) => bail_fail(f),
     };
+    // 是否在续跑：与下面那句提示同一判据，且必须在打开写事务之前算出来——
+    // `apply` 要显式声明"我接着做那件没做完的事"，而不是让事务层去猜
+    let resuming = movepart::has_pending_relocation(&src, plan.grow_part).unwrap_or_else(|f| bail_fail(f));
     if cmd == "plan" {
-        if movepart::has_pending_relocation(&src, plan.grow_part).unwrap_or_else(|f| bail_fail(f)) {
+        if resuming {
             println!("[resume] an unfinished relocation job is on the disk — this is the plan it resumes with");
         }
         if let Some(what) = plan.repair.describe() {
@@ -61,12 +64,18 @@ pub(crate) fn cmd_plan_apply(cmd: &str, a: &Args) -> u8 {
         print_moves(&plan);
         EXIT_OK
     } else {
-        apply_cmd(a, plan)
+        apply_cmd(a, plan, resuming)
     }
 }
 
-fn apply_cmd(a: &Args, plan: movepart::Plan) -> u8 {
-    let mut src = open_target_for_write(a).unwrap_or_else(|f| bail_fail(f));
+fn apply_cmd(a: &Args, plan: movepart::Plan, resuming: bool) -> u8 {
+    // 续跑走 resume 入口：盘上那件没做完的事，就是这次要接着做的
+    let mut src = if resuming {
+        open_target_resuming(a)
+    } else {
+        open_target_for_write(a)
+    }
+    .unwrap_or_else(|f| bail_fail(f));
     // 表的可解析性由 prepare_apply 在写盘前判定（无表 → refused 10，表非法 → infra 30）：
     // 同一事实不设第二判据——两处判据迟早会在某个入口分叉，且自判拒绝时还不报原因
     let chunk = match movepart::chunk_bytes(a.chunk_mib) {

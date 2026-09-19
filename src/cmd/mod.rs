@@ -1,5 +1,6 @@
 //! 命令实现：每条命令的参数消费、逻辑与帮助文本同处一个模块。
 
+pub(crate) mod abandon;
 pub(crate) mod fs;
 pub(crate) mod info;
 pub(crate) mod layout;
@@ -115,14 +116,16 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
         mode: TargetMode::WriteNoJournal,
         run: |_, a| fs::cmd_check(a),
     },
-    // mkfs 破坏的是分区内容而非分区表，走 open_target（不建 journal）：
-    // 它若也进撤销窗口，成功时会顺手清掉先前某次失败操作留下的 journal
+    // mkfs 是一次真正的**事务**（不可回滚，但要走完整的 begin/commit）：它先落一条屏障
+    // 说明"这个分区上创建了文件系统"，成功即关闭事务，失败/崩溃则留下待 abandon 的现场。
+    // 之所以能安全地进撤销窗口：`begin` 在目标被别的事务占用时就会拒绝，所以它开自己的
+    // 撤销窗口时，目标上不会还留着别人的现场
     CommandSpec {
         name: "mkfs",
         aliases: &[],
         flags: &["--sector-size", "--yes"],
         help: fs::HELP_MKFS,
-        mode: TargetMode::WriteNoJournal,
+        mode: TargetMode::WriteJournal,
         run: |_, a| fs::cmd_mkfs(a),
     },
     CommandSpec {
@@ -140,6 +143,16 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
         help: undo::HELP,
         mode: TargetMode::WriteNoJournal,
         run: |_, a| undo::cmd_undo(a),
+    },
+    // abandon 既不建 journal、也不回放：它把现场字节原样改名交出去，盘上一个字节都不写。
+    // 归 WriteNoJournal 的后果正是要的——成功时不触发 main 的 journal 清理
+    CommandSpec {
+        name: "abandon",
+        aliases: &[],
+        flags: &["--sector-size", "--yes"],
+        help: abandon::HELP,
+        mode: TargetMode::WriteNoJournal,
+        run: |_, a| abandon::cmd_abandon(a),
     },
     CommandSpec {
         name: "new",
@@ -254,8 +267,10 @@ mod tests {
         assert!(flags_for("move").unwrap().contains(&"--start"));
         assert_eq!(flags_for("nosuchcmd"), None);
         assert!(opens_undo_journal("apply") && !opens_undo_journal("plan"));
-        // undo 与 mkfs 不经 open_target_for_write：会把已存在的 journal 误清掉
-        assert!(!opens_undo_journal("undo") && !opens_undo_journal("mkfs"));
+        // undo 不经 open_target_for_write：它要回放的是已存在的那份 journal
+        assert!(!opens_undo_journal("undo"));
+        // mkfs 相反：它自己就是一次事务，成功时正该关闭自己的撤销窗口
+        assert!(opens_undo_journal("mkfs"));
     }
 
     /// 每条命令与撤销窗口的关系都是逐条裁定过的：这里把结论钉住——
@@ -273,9 +288,10 @@ mod tests {
             ("delete", WriteJournal),
             ("set", WriteJournal),
             ("check", WriteNoJournal),
-            ("mkfs", WriteNoJournal),
+            ("mkfs", WriteJournal),
             ("resizefs", WriteNoJournal),
             ("undo", WriteNoJournal),
+            ("abandon", WriteNoJournal),
             ("new", WriteJournal),
             ("add", WriteJournal),
             ("resize-part", WriteJournal),

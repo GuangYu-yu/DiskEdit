@@ -648,20 +648,29 @@ fn wipe_zero(dev: &str, ranges: &[(u64, u64)]) -> io::Result<()> {
     Ok(())
 }
 
-/// mkfs：<fstype> 映射到 mkfs.<tool>；ext 系直调 mke2fs -t extN（mkfs.extN 是其符号链接），
-/// swap 用 mkswap（裸设备遇已有盘标头须 -f，分区节点不受影响，man mkswap）。
-/// 破坏分区数据，调用方须先取确认；执行前先擦残留签名（见 erase_ranges），
-/// 防旧 btrfs/ZFS/RAID 备份超级块残留被 blkid 误认。
-/// btrfs/f2fs/xfs 检测到已有文件系统时默认拒绝写入，须 -f 覆盖（man mkfs.btrfs/mkfs.f2fs/mkfs.xfs）；
-/// -f 语义各工具不类推：mkntfs 的 -f 是 fast 格式化而非 force（force 为 -F），
-/// 故 ntfs 不传 -f，让工具自身拒绝已有文件系统（man mkntfs）。
-pub fn mkfs(src: &FileSource, part: u32, fstype: &str) -> Result<(), FsError> {
+/// fstype → 外部工具与参数。**唯一**一份支持列表：`mkfs` 与命令层的"先问再做"都读它，
+/// 免得"能不能做"与"怎么做"两份清单分叉。
+///
+/// - ext 系直调 mke2fs -t extN（mkfs.extN 只是它的符号链接，man mke2fs）
+/// - swap 用 mkswap（裸设备遇已有盘标头须 -f，分区节点不受影响，man mkswap）
+/// - btrfs/f2fs/xfs 检测到已有文件系统时默认拒绝写入，须 -f 覆盖
+///   （man mkfs.btrfs / mkfs.f2fs / mkfs.xfs）
+/// - `-f` 语义各工具不类推：mkntfs 的 -f 是 fast 格式化而非 force（force 为 -F），
+///   故 ntfs 不传 -f，让工具自身拒绝已有文件系统（man mkntfs）
+struct MkfsTool<'a> {
+    program: String,
+    force: bool,
+    /// `mke2fs -t <ext_type>`；生命周期跟着调用方给的 fstype
+    ext_type: Option<&'a str>,
+}
+
+fn mkfs_tool(fstype: &str) -> Result<MkfsTool<'_>, FsError> {
     if fstype == "lvm2_pv" {
         return Err(FsError::unsupported(
             "cannot mkfs an LVM2 PV — to (re)create the PV use pvcreate(8), to wipe it use wipefs(8)",
         ));
     }
-    let (tool, force, ext_t) = match fstype {
+    let (program, force, ext_type) = match fstype {
         // mkfs.extN 只是 mke2fs 等价 -t extN 的符号链接（man mke2fs），直调 mke2fs 免依赖链接布局
         "ext2" | "ext3" | "ext4" => ("mke2fs".to_string(), false, Some(fstype)),
         "vfat" | "exfat" | "ntfs" => (format!("mkfs.{fstype}"), false, None),
@@ -673,22 +682,37 @@ pub fn mkfs(src: &FileSource, part: u32, fstype: &str) -> Result<(), FsError> {
             )));
         }
     };
+    Ok(MkfsTool { program, force, ext_type })
+}
+
+/// 命令层"先问再做"的入口：`mkfs` 认不认得这个类型。
+///
+/// 必须先问再开事务：拒绝的语义是"什么都没写"，而 mkfs 一旦开了事务就先落一条不可回滚
+/// 屏障——一个拼错的类型名不该因此把目标锁在"未收尾"状态里等 `abandon`
+pub fn mkfs_supported(fstype: &str) -> Result<(), FsError> {
+    mkfs_tool(fstype).map(|_| ())
+}
+
+/// mkfs：破坏分区数据，调用方须先取确认；执行前先擦残留签名（见 erase_ranges），
+/// 防旧 btrfs/ZFS/RAID 备份超级块残留被 blkid 误认
+pub fn mkfs(src: &FileSource, part: u32, fstype: &str) -> Result<(), FsError> {
+    let tool = mkfs_tool(fstype)?;
     let (_, part_len) = partition_byte_range(src, part)?;
     let ss = src.sector_size;
     with_partition_device(src, part, |dev| {
         wipe_zero(dev, &erase_ranges(part_len, ss))?;
         let mut args: Vec<&str> = Vec::new();
-        if force {
+        if tool.force {
             args.push("-f");
         }
-        if let Some(t) = ext_t {
+        if let Some(t) = tool.ext_type {
             args.push("-t");
             args.push(t);
         }
         args.push(dev);
-        let out = run(&tool, &args)?;
+        let out = run(&tool.program, &args)?;
         if !out.status.success() {
-            return Err(FsError::command(&tool, &out));
+            return Err(FsError::command(&tool.program, &out));
         }
         Ok(())
     })
@@ -1206,6 +1230,7 @@ mod tests {
             size,
             is_block: false,
             journal: None,
+            ownership: None,
         }
     }
 

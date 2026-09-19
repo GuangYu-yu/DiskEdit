@@ -60,6 +60,14 @@ pub(crate) fn cmd_info(a: &Args) -> u8 {
             ),
             table::PmbrSize::Normal => {}
         }
+        // 重叠条目：写入路径在构造可操作几何时即拒绝（见 geometry::ValidatedGeometry::new），
+        // 但诊断必须看得到——这里点名冲突的两条，用户据此用 sfdisk/parted 修表
+        if let Some((a, b)) = crate::geometry::find_overlap(&g.entries) {
+            stale_notes.push(format!(
+                "note: partition entries #{a} and #{b} overlap — this tool refuses write operations on this table; \
+                 remove the overlapping entry with sfdisk/parted first"
+            ));
+        }
         out.push_str("\"gpt\",\"sector_size\":");
         out.push_str(&g.ss.to_string());
         out.push_str(",\"size_bytes\":");
