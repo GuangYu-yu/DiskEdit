@@ -5,14 +5,14 @@
 //! 无已分配 extent）；lvextend(8)：`-l +N` 按 extent 数增量扩，`-r/--resizefs`
 //! 同步扩文件系统。
 
-use crate::fsops::run;
+use crate::fsops::{run, FsError};
 use serde_json::Value;
-use std::io;
 
 /// 执行 lvm2 工具并取 stdout；区分"工具未安装"与"命令失败"
 fn run_json(tool: &str, args: &[&str]) -> Result<String, String> {
     match run(tool, args) {
-        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+        // 工具缺失要装包，与"命令跑失败"是两条不同的补救路径，分开报
+        Err(FsError::ToolMissing(_)) => {
             Err(format!("LVM tooling missing: {tool} not found in PATH (install lvm2)"))
         }
         Err(e) => Err(format!("{tool} failed: {e}")),

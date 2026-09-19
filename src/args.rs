@@ -1,6 +1,6 @@
 //! 参数层：命令行解析、每命令旗标消费契约（fail-closed）与帮助文本入口。
 
-use crate::support::{bail, EXIT_REFUSED};
+use crate::support::{bail_fail, Fail, EXIT_REFUSED};
 
 pub(crate) fn usage() -> ! {
     eprintln!(
@@ -62,7 +62,6 @@ pub(crate) fn help_cmd(name: &str) -> ! {
 pub(crate) struct Args {
     pub(crate) target: String,
     pub(crate) part: Option<u32>,
-    pub(crate) fstype: Option<String>,
     pub(crate) grow: Option<u32>,
     pub(crate) start: Option<u64>,
     pub(crate) end: Option<u64>,
@@ -73,6 +72,8 @@ pub(crate) struct Args {
     pub(crate) table: Option<crate::table::TableKind>,
     pub(crate) yes: bool,
     pub(crate) online: bool,
+    /// --random：`set uuid` 要求目标生成新随机值（唯一支持者是 ntfs）
+    pub(crate) random: bool,
     pub(crate) sector_size: Option<u64>,
     pub(crate) align: String,
     pub(crate) chunk_mib: u64,
@@ -88,35 +89,14 @@ pub(crate) struct Args {
     pub(crate) seen: Vec<&'static str>,
 }
 
-/// 每条命令声明其消费的旗标；声明之外的旗标一律拒绝（fail-closed）。
-/// 静默忽略用户显式给出的旗标是最危险的参数漂移：命令做了旗标明确排除的事却报成功。
-/// 新增旗标或调整某命令的参数消费时同步维护本表——它就是"每命令实际读哪些旗标"的
-/// 单一事实来源，与 help 文本的差异即帮助漂移的检查点
-const COMMAND_FLAGS: &[(&str, &[&str])] = &[
-    ("info", &["--sector-size"]),
-    ("resize", &["--sector-size", "--size", "--grow-to-end", "--no-fs", "--grow-lv", "--lv", "--yes", "--allow-move", "--chunk-size"]),
-    ("move", &["--sector-size", "--start", "--align", "--chunk-size", "--no-fs"]),
-    ("create", &["--sector-size", "--size", "--fs", "--name"]),
-    ("set", &["--sector-size"]),
-    ("check", &["--sector-size"]),
-    ("mkfs", &["--sector-size", "--yes"]),
-    ("resizefs", &["--sector-size", "--online", "--size"]),
-    ("undo", &["--sector-size", "--yes"]),
-    ("new", &["--sector-size", "--table", "--yes"]),
-    ("add", &["--sector-size", "--start", "--end", "--align", "--name", "--type"]),
-    ("resize-part", &["--sector-size", "--start", "--end", "--grow-to-end", "--align", "--chunk-size", "--no-fs"]),
-    ("copy", &["--sector-size", "--start", "--align", "--chunk-size", "--name"]),
-    ("plan", &["--sector-size", "--grow"]),
-    ("apply", &["--sector-size", "--grow", "--chunk-size", "--no-fs", "--yes"]),
-];
-
 /// 消费对账：命令收到自己不消费的旗标即拒绝。不做此检查的后果不是报错
-/// 就是静默忽略——后者意味着命令的实际行为与用户请求不一致却仍报成功
+/// 就是静默忽略——后者意味着命令的实际行为与用户请求不一致却仍报成功。
+/// 白名单取自命令表（`cmd::flags_for`），与分派同源
 pub(crate) fn refuse_unconsumed_flags(cmd: &str, a: &Args) {
-    let Some((_, allowed)) = COMMAND_FLAGS.iter().find(|(c, _)| *c == cmd) else { return };
+    let Some(allowed) = crate::cmd::flags_for(cmd) else { return };
     for f in &a.seen {
         if !allowed.contains(f) {
-            bail(EXIT_REFUSED, format!("refused: {f} is not a valid option for `{cmd}` (see diskedit help {cmd})"));
+            bail_fail(Fail::refused(format!("{f} is not a valid option for `{cmd}` (see diskedit help {cmd})")));
         }
     }
 }
@@ -125,9 +105,9 @@ pub(crate) fn parse_args() -> (String, Args) {
     let mut it = std::env::args().skip(1);
     let cmd = it.next().unwrap_or_else(|| usage());
     let mut a = Args {
-        target: String::new(), part: None, fstype: None, grow: None,
+        target: String::new(), part: None, grow: None,
         start: None, end: None, size: None, fs: None, name: None, type_guid: None, table: None,
-        yes: false, online: false, no_fs: false, sector_size: None,
+        yes: false, online: false, random: false, no_fs: false, sector_size: None,
         align: "mib".to_string(),
         chunk_mib: 4,
         grow_to_end: false,
@@ -143,6 +123,7 @@ pub(crate) fn parse_args() -> (String, Args) {
         match arg.as_str() {
             "--yes" => { a.seen.push("--yes"); a.yes = true; }
             "--online" => { a.seen.push("--online"); a.online = true; }
+            "--random" => { a.seen.push("--random"); a.random = true; }
             "--sector-size" => {
                 a.seen.push("--sector-size");
                 let v = it.next().unwrap_or_else(|| miss_arg("--sector-size"));
@@ -151,7 +132,12 @@ pub(crate) fn parse_args() -> (String, Args) {
             "--grow" => {
                 a.seen.push("--grow");
                 let v = it.next().unwrap_or_else(|| miss_arg("--grow"));
-                a.grow = Some(v.parse().unwrap_or_else(|_| bad_arg("--grow", &v, " (partition number, e.g. 1)")));
+                let n: u32 = v.parse().unwrap_or_else(|_| bad_arg("--grow", &v, " (partition number, e.g. 1)"));
+                // 分区号是 1-based：0 会让下游的 (n-1) 下溢，在解析层就挡住
+                if n == 0 {
+                    bad_arg("--grow", &v, " (partition number is 1-based)");
+                }
+                a.grow = Some(n);
             }
             "--size" => {
                 a.seen.push("--size");
@@ -196,9 +182,15 @@ pub(crate) fn parse_args() -> (String, Args) {
                 let v = it.next().unwrap_or_else(|| miss_arg("--table"));
                 a.table = Some(crate::table::TableKind::parse(&v).unwrap_or_else(|| bad_arg("--table", &v, " (gpt|msdos)")));
             }
-            // <CMD> --help：positional 为空时以当前命令为主题
+            // <CMD> --help：主题是命令名本身——`resize img:1 --help` 的位置参数是目标，
+            // 不是主题（取它会让详助退化成顶层 usage）。只有 `--help <CMD>` 这种
+            // 命令位本身就是 help 的写法，位置参数才当主题
             "--help" | "-h" => {
-                let topic = positional.first().cloned().unwrap_or(cmd.clone());
+                let topic = if matches!(cmd.as_str(), "help" | "--help" | "-h") {
+                    positional.first().cloned().unwrap_or_else(|| cmd.clone())
+                } else {
+                    cmd.clone()
+                };
                 help_cmd(&topic);
             }
             _ => positional.push(arg),
@@ -207,11 +199,10 @@ pub(crate) fn parse_args() -> (String, Args) {
     // 无 target（含裸调用/未知命令缺参）时打印帮助而非静默退出
     let target = positional.first().cloned().unwrap_or_else(|| usage());
     let (target, part) =
-        crate::dev::parse_target(&target).unwrap_or_else(|e| bail(EXIT_REFUSED, format!("refused: {e}")));
+        crate::dev::parse_target(&target).unwrap_or_else(|e| bail_fail(Fail::refused(e)));
     a.target = target;
     a.part = part;
     a.pos = positional.clone();
-    a.fstype = positional.get(1).cloned();
     (cmd, a)
 }
 

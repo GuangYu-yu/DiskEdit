@@ -42,30 +42,30 @@ fn resolve_size_request(a: &Args, size_arg: Option<&str>, cur_bytes: u64) -> (Op
             grow_to_end = true;
         } else {
             let (v, kind, pct) = parse_size_delta(s)
-                .unwrap_or_else(|| bail(EXIT_REFUSED, format!("refused: bad SIZE {s:?} (use 10G | +2G | -500M | +10% | grow; see diskedit help resize)")));
+                .unwrap_or_else(|| bail_fail(Fail::refused(format!("bad SIZE {s:?} (use 10G | +2G | -500M | +10% | grow; see diskedit help resize)"))));
             if pct {
                 // 百分比增量：锚定当前分区字节数，先乘后除（u128 防溢出）避免丢余数，
                 // 再向下取整到 1MiB，保证结果落在扇区/对齐界内
                 let raw = (cur_bytes as u128).checked_mul(v as u128)
                     .and_then(|x| x.checked_div(100))
                     .filter(|x| *x <= u64::MAX as u128)
-                    .unwrap_or_else(|| bail(EXIT_REFUSED, format!("refused: {s} overflows partition size"))) as u64;
+                    .unwrap_or_else(|| bail_fail(Fail::refused(format!("{s} overflows partition size")))) as u64;
                 let delta = raw / (1024 * 1024) * (1024 * 1024);
                 target = Some(match kind {
-                    1 => cur_bytes.checked_add(delta).unwrap_or_else(|| bail(EXIT_REFUSED, format!("refused: {s} overflows partition size"))),
-                    _ => cur_bytes.checked_sub(delta).unwrap_or_else(|| bail(EXIT_REFUSED, format!("refused: {s} exceeds current size {cur_bytes}"))),
+                    1 => cur_bytes.checked_add(delta).unwrap_or_else(|| bail_fail(Fail::refused(format!("{s} overflows partition size")))),
+                    _ => cur_bytes.checked_sub(delta).unwrap_or_else(|| bail_fail(Fail::refused(format!("{s} exceeds current size {cur_bytes}")))),
                 });
             } else {
                 target = Some(match kind {
                     0 => v,
-                    1 => cur_bytes.checked_add(v).unwrap_or_else(|| bail(EXIT_REFUSED, format!("refused: {s} overflows partition size"))),
-                    _ => cur_bytes.checked_sub(v).unwrap_or_else(|| bail(EXIT_REFUSED, format!("refused: {s} exceeds current size {cur_bytes}"))),
+                    1 => cur_bytes.checked_add(v).unwrap_or_else(|| bail_fail(Fail::refused(format!("{s} overflows partition size")))),
+                    _ => cur_bytes.checked_sub(v).unwrap_or_else(|| bail_fail(Fail::refused(format!("{s} exceeds current size {cur_bytes}")))),
                 });
             }
         }
     }
     if target.is_none() && !grow_to_end {
-        bail(EXIT_REFUSED, "refused: specify a SIZE (e.g. +20G, -500M, 10G, grow; see diskedit help resize)".to_string());
+        bail_fail(Fail::refused("specify a SIZE (e.g. +20G, -500M, 10G, grow; see diskedit help resize)".to_string()));
     }
     (target, grow_to_end)
 }
@@ -98,7 +98,7 @@ fn check_pv_intent(
 #[cfg(target_os = "linux")]
 fn refuse_swap_active(dn: &str, part: u32) {
     if crate::online::swap_active(dn, part) {
-        bail(EXIT_REFUSED, format!("refused: partition {part} is active swap — run swapoff first"));
+        bail_fail(Fail::refused(format!("partition {part} is active swap — run swapoff first")));
     }
 }
 
@@ -129,7 +129,7 @@ fn resize_online(a: &Args, src: &FileSource, t: &ResizeTarget) -> Option<u8> {
     let dn = std::path::Path::new(&a.target)
         .file_name()
         .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_else(|| bail(EXIT_REFUSED, format!("cannot derive disk name from {}", a.target)));
+        .unwrap_or_else(|| bail_fail(Fail::refused(format!("cannot derive disk name from {}", a.target))));
     refuse_swap_active(&dn, t.part);
 
     // PV：分区层必须先按新尺寸出现在内核里，pvresize 才能吸收；活跃 LV 经 dm 持有分区使
@@ -137,7 +137,7 @@ fn resize_online(a: &Args, src: &FileSource, t: &ResizeTarget) -> Option<u8> {
     if t.is_pv {
         let new_len = if t.grow_to_end {
             if t.free_right_lba == 0 {
-                bail(EXIT_REFUSED, "refused: no free space to the right — a PV cannot relocate blocking partitions while LVs may be active".to_string());
+                bail_fail(Fail::refused("no free space to the right — a PV cannot relocate blocking partitions while LVs may be active".to_string()));
             }
             t.cur_bytes + t.free_right_lba * t.ss
         } else {
@@ -145,7 +145,7 @@ fn resize_online(a: &Args, src: &FileSource, t: &ResizeTarget) -> Option<u8> {
         };
         if new_len != t.cur_bytes {
             let o = crate::online::resize_pv_online(&dn, t.part, new_len);
-            if o.exit_code() != EXIT_OK {
+            if !o.is_complete() {
                 o.report();
                 return Some(o.exit_code());
             }
@@ -163,7 +163,7 @@ fn resize_online(a: &Args, src: &FileSource, t: &ResizeTarget) -> Option<u8> {
         t.target
     };
     let o = crate::online::resize_online(&mnt, size);
-    if o.exit_code() == EXIT_OK {
+    if o.is_complete() {
         println!("resized online (verify with: diskedit info {})", a.target);
     } else {
         o.report();
@@ -230,17 +230,17 @@ fn lvm_grow_chain(part_dev: &str, delta_bytes: u64, grow_lv: bool, want_lv: Opti
 pub(crate) fn cmd_resize(a: &Args) -> u8 {
     let size_arg = a.pos.get(1).cloned();
     if size_arg.is_some() && (a.size.is_some() || a.grow_to_end) {
-        bail(EXIT_REFUSED, "refused: SIZE and --size/--grow-to-end are mutually exclusive".to_string());
+        bail_fail(Fail::refused("SIZE and --size/--grow-to-end are mutually exclusive".to_string()));
     }
     if a.lv.is_some() && !a.grow_lv {
-        bail(EXIT_REFUSED, "refused: --lv only works together with --grow-lv".to_string());
+        bail_fail(Fail::refused("--lv only works together with --grow-lv".to_string()));
     }
     // resize 只改大小、不移动。--start 属 move/resize-part 的语义，静默忽略会让用户
     // 误以为分区被移动过 —— 显式拒绝
     if a.start.is_some() || a.start_end {
-        bail(EXIT_REFUSED, "refused: resize does not relocate partitions — use `move` or `resize-part --start`".to_string());
+        bail_fail(Fail::refused("resize does not relocate partitions — use `move` or `resize-part --start`".to_string()));
     }
-    let src = open_target_ro(a).unwrap_or_else(|(c, m)| bail(c, m));
+    let src = open_target_ro(a).unwrap_or_else(|f| bail_fail(f));
     match table::table_label(&src) {
         Ok("gpt") => {}
         Ok("msdos") => {
@@ -249,20 +249,20 @@ pub(crate) fn cmd_resize(a: &Args) -> u8 {
         }
         // superfloppy：无分区表，FS 即整盘，无表可写——纯 FS grow
         Ok("none") => return cmd_resize_superfloppy(a, size_arg.as_deref(), &src),
-        Ok(other) => bail(EXIT_REFUSED, format!("refused: resize requires a GPT or MBR target (label: {other})")),
-        Err(e) => bail(EXIT_INFRA, format!("parse failed: {e}")),
+        Ok(other) => bail_fail(Fail::refused(format!("resize requires a GPT or MBR target (label: {other})"))),
+        Err(e) => bail_fail(Fail::infra(format!("parse failed: {e}"))),
     }
     let Some(part) = a.part else { crate::args::usage() };
     let g = match table::load_gpt(&src) {
         Ok(Some(g)) => g,
-        Ok(None) => bail(EXIT_REFUSED, "refused: resize requires a GPT target".to_string()),
-        Err(e) => bail(EXIT_INFRA, format!("parse failed: {e}")),
+        Ok(None) => bail_fail(Fail::refused("resize requires a GPT target".to_string())),
+        Err(e) => bail_fail(Fail::infra(format!("parse failed: {e}"))),
     };
     let Some(e) = g.entries.get((part - 1) as usize) else {
-        bail(EXIT_REFUSED, format!("partition {part} not found"));
+        bail_fail(Fail::refused(format!("partition {part} not found")));
     };
     if e.ending_lba == 0 {
-        bail(EXIT_REFUSED, format!("partition {part} is empty"));
+        bail_fail(Fail::refused(format!("partition {part} is empty")));
     }
     let (start, end, ss) = (e.starting_lba, e.ending_lba, g.ss);
     // 有效几何：设备扩容后表头里的 last_usable_lba 可能仍是旧值，"右侧还剩多少空间"
@@ -271,7 +271,7 @@ pub(crate) fn cmd_resize(a: &Args) -> u8 {
     // 上一轮 plan 型搬移作业是否尚未收尾（右侧"已空"可能正是搬了一半的结果）
     let resuming = movepart::has_pending_relocation(&src, part).unwrap_or_else(|f| bail_fail(f));
     let cur_bytes = (end - start + 1) * ss;
-    let fstype = fsid::identify(&src, start * ss, (end - start + 1) * ss).unwrap_or_else(|e| bail(EXIT_INFRA, format!("identify failed: {e}")));
+    let fstype = fsid::identify(&src, start * ss, (end - start + 1) * ss).unwrap_or_else(|e| bail_fail(Fail::infra(format!("identify failed: {e}"))));
     let is_pv = fstype == "lvm2_pv";
 
     // SIZE → 绝对目标字节数 / grow 标记
@@ -296,7 +296,7 @@ pub(crate) fn cmd_resize(a: &Args) -> u8 {
 
     // 离线路径
     let is_block = src.is_block;
-    let mut src = open_target_for_write(a).unwrap_or_else(|(c, m)| bail(c, m));
+    let mut src = open_target_for_write(a).unwrap_or_else(|f| bail_fail(f));
     if grow_to_end {
         let free = free_right_gpt(&g, part, last_usable);
         // 右侧有空闲且没有未收尾的搬移作业 → 纯扩容。若作业未收尾，则"右侧已空"很可能
@@ -308,16 +308,15 @@ pub(crate) fn cmd_resize(a: &Args) -> u8 {
         }
         // 右侧被挡：自动搬移挡路分区（plan 打印 → --allow-move 放行 → --yes 确认）
         if !a.allow_move {
-            bail(EXIT_REFUSED, "refused: right side is occupied — pass --allow-move to relocate the blocking partitions (plan will be printed; --yes confirms)".to_string());
+            bail_fail(Fail::refused("right side is occupied — pass --allow-move to relocate the blocking partitions (plan will be printed; --yes confirms)".to_string()));
         }
         let plan = match movepart::make_plan_resuming(&mut src, part) {
             Ok(p) => p,
             Err(f) => bail_fail(f),
         };
-        crate::cmd::plan::print_plan(&plan).unwrap_or_else(|e| bail(EXIT_REFUSED, format!("plan failed: {e}")));
+        crate::cmd::plan::print_plan(&plan).unwrap_or_else(|e| bail_fail(Fail::refused(format!("plan failed: {e}"))));
         if !a.yes {
-            eprintln!("refused: this resizes by relocating the partitions listed above — review and re-run with --yes");
-            return EXIT_REFUSED;
+            bail_fail(Fail::refused("this resizes by relocating the partitions listed above — review and re-run with --yes"));
         }
         let (chunk, mut logger) = chunk_logger(a, &src);
         let o = settle_layout(movepart::apply(&mut src, &plan, chunk, a.no_fs, &mut |m| logger.log(m)), &src);
@@ -326,11 +325,11 @@ pub(crate) fn cmd_resize(a: &Args) -> u8 {
         // SIZE：字节 → 扇区（下取整）；扩须右侧空闲足够，缩由 resize_part 内部 FS 先缩 + 守卫
         let Some(bytes) = target else { crate::args::usage() };
         if bytes < ss {
-            bail(EXIT_REFUSED, format!("refused: size {bytes} < one sector ({ss})"));
+            bail_fail(Fail::refused(format!("size {bytes} < one sector ({ss})")));
         }
         let new_end = start + bytes / ss - 1;
         if new_end > last_usable {
-            bail(EXIT_REFUSED, format!("refused: size {bytes} exceeds usable range (partition would end past last_usable_lba {last_usable})"));
+            bail_fail(Fail::refused(format!("size {bytes} exceeds usable range (partition would end past last_usable_lba {last_usable})")));
         }
         // 扩容需要的位移量只在扩的时候有定义：缩容的新末端更靠左，右侧只会更空，
         // 不存在搬移需求（此时 new_end < end，直接相减会回绕）
@@ -341,16 +340,15 @@ pub(crate) fn cmd_resize(a: &Args) -> u8 {
             // 右侧连续空闲不足：--allow-move 时按最小位移搬移挡路分区，
             // 与 grow 路径同一确认流（plan 打印 → --yes 确认）
             if !a.allow_move {
-                bail(EXIT_REFUSED, "refused: not enough contiguous free space to the right — pass --allow-move to relocate the blocking partitions (plan will be printed; --yes confirms)".to_string());
+                bail_fail(Fail::refused("not enough contiguous free space to the right — pass --allow-move to relocate the blocking partitions (plan will be printed; --yes confirms)".to_string()));
             }
             let plan = match movepart::make_plan_shift_resuming(&mut src, part, shift) {
                 Ok(p) => p,
                 Err(f) => bail_fail(f),
             };
-            crate::cmd::plan::print_plan(&plan).unwrap_or_else(|e| bail(EXIT_REFUSED, format!("plan failed: {e}")));
+            crate::cmd::plan::print_plan(&plan).unwrap_or_else(|e| bail_fail(Fail::refused(format!("plan failed: {e}"))));
             if !a.yes {
-                eprintln!("refused: this resizes by relocating the partitions listed above — review and re-run with --yes");
-                return EXIT_REFUSED;
+                bail_fail(Fail::refused("this resizes by relocating the partitions listed above — review and re-run with --yes"));
             }
             let (chunk, mut logger) = chunk_logger(a, &src);
             let o = settle_layout(movepart::apply(&mut src, &plan, chunk, a.no_fs, &mut |m| logger.log(m)), &src);
@@ -367,40 +365,40 @@ pub(crate) fn cmd_resize(a: &Args) -> u8 {
 /// 镜像/盘须已是大尺寸（dd 后或 truncate 预扩），本命令不负责扩文件本身
 fn cmd_resize_superfloppy(a: &Args, size_arg: Option<&str>, src_ro: &FileSource) -> u8 {
     if let Some(n) = a.part {
-        bail(EXIT_REFUSED, format!("refused: target has no partition table — drop :{n} (the FS occupies the whole device)"));
+        bail_fail(Fail::refused(format!("target has no partition table — drop :{n} (the FS occupies the whole device)")));
     }
     if a.grow_lv || a.lv.is_some() {
-        bail(EXIT_REFUSED, "refused: --grow-lv/--lv needs an LVM PV — superfloppy has no partitions".to_string());
+        bail_fail(Fail::refused("--grow-lv/--lv needs an LVM PV — superfloppy has no partitions".to_string()));
     }
     // superfloppy 无分区可改，唯一动作就是 FS 扩容：--no-fs 会让命令无事可做，
     // --allow-move 无分区可搬。静默照常执行会做出旗标明确排除的事
     if a.no_fs {
-        bail(EXIT_REFUSED, "refused: --no-fs leaves nothing to do on a superfloppy — there is no partition to change, the only action is the filesystem grow".to_string());
+        bail_fail(Fail::refused("--no-fs leaves nothing to do on a superfloppy — there is no partition to change, the only action is the filesystem grow".to_string()));
     }
     if a.allow_move {
-        bail(EXIT_REFUSED, "refused: --allow-move has nothing to do on a superfloppy — there are no partitions to relocate".to_string());
+        bail_fail(Fail::refused("--allow-move has nothing to do on a superfloppy — there are no partitions to relocate".to_string()));
     }
     let cur_bytes = src_ro.size;
     let (target, grow_to_end) = resolve_size_request(a, size_arg, cur_bytes);
     if let Some(t) = target {
         if t < cur_bytes {
-            bail(EXIT_REFUSED, "refused: superfloppy cannot shrink — the FS occupies the whole device, there is no partition boundary to shrink to".to_string());
+            bail_fail(Fail::refused("superfloppy cannot shrink — the FS occupies the whole device, there is no partition boundary to shrink to".to_string()));
         }
         if t > cur_bytes {
-            bail(EXIT_REFUSED, "refused: target exceeds device/image size — extend the image or replace the disk first (this tool does not resize the container)".to_string());
+            bail_fail(Fail::refused("target exceeds device/image size — extend the image or replace the disk first (this tool does not resize the container)".to_string()));
         }
         // SIZE == 当前值：与 grow 等价（FS 可能仍小于盘）
     } else if !grow_to_end {
         unreachable!("resolve_size_request guarantees a target or grow_to_end");
     }
     let fstype = fsid::identify(src_ro, 0, cur_bytes)
-        .unwrap_or_else(|e| bail(EXIT_INFRA, format!("identify failed: {e}")));
+        .unwrap_or_else(|e| bail_fail(Fail::infra(format!("identify failed: {e}"))));
     if matches!(fstype, "lvm2_pv" | "swap" | "unknown") {
-        bail(EXIT_REFUSED, format!("refused: whole-device {fstype} is not a resizable filesystem (no partition table on target)"));
+        bail_fail(Fail::refused(format!("whole-device {fstype} is not a resizable filesystem (no partition table on target)")));
     }
     // FS grow 本身不改分区表，无 kernel_resync 必要
-    let src = open_target_for_write(a).unwrap_or_else(|(c, m)| bail(c, m));
-    fsops::resize_fs_whole(&src, fstype).unwrap_or_else(|e| bail(EXIT_INFRA, format!("FS grow failed: {e}")));
+    let src = open_target_for_write(a).unwrap_or_else(|f| bail_fail(f));
+    fsops::resize_fs_whole(&src, fstype).unwrap_or_else(|e| bail_fail(Fail::from(e).context("FS grow failed")));
     println!("superfloppy: {fstype} grown to full device ({} bytes) — verify with: diskedit info {}", cur_bytes, a.target);
     EXIT_OK
 }
@@ -426,7 +424,14 @@ fn mbr_grow_finish(
     // --no-fs：分区层之外的后置条件整体出局，与 GPT 路径同语义
     if !a.no_fs {
         match fstype {
-            "unknown" | "lvm2_pv" => {}
+            // 探测用扩容前的区间：swap 签名恒在分区首 32K 内，起点未变，原长度足够容纳
+            "unknown" | "lvm2_pv" => {
+                if let Some(missed) = movepart::swap_rebuild_pending(
+                    src, part, p.start_lba as u64 * ss, p.size_lba as u64 * ss,
+                ) {
+                    pending.push(missed);
+                }
+            }
             // swap：内容可弃，表项已扩 → mkswap 重建使新空间生效（UUID/卷标保持；
             // 离线路径仅镜像，块设备走在线路径且 active swap 已被守卫拒绝）
             "swap" => {
@@ -436,7 +441,7 @@ fn mbr_grow_finish(
                         part,
                         crate::outcome::PendingKind::Swap,
                         e.to_string(),
-                        fsops::rescue_hint("swap", &dev::part_dev_hint(src, part, p.start_lba as u64 * ss), false),
+                        fsops::rescue_hint("swap", &dev::part_dev_hint(src, part, p.start_lba as u64 * ss)),
                     ));
                 }
             }
@@ -446,7 +451,7 @@ fn mbr_grow_finish(
                         part,
                         crate::outcome::PendingKind::Fs,
                         e.to_string(),
-                        fsops::rescue_hint(fstype, &dev::part_dev_hint(src, part, p.start_lba as u64 * ss), false),
+                        fsops::rescue_hint(fstype, &dev::part_dev_hint(src, part, p.start_lba as u64 * ss)),
                     ));
                 }
             }
@@ -477,23 +482,23 @@ fn cmd_resize_msdos(a: &Args, part: u32, size_arg: Option<&str>, src_ro: &FileSo
     // MBR resize 没有搬移能力：--allow-move 承诺的"搬开挡路分区"不存在，
     // 静默按不可搬移处理会让来自脚本的调用只看到一条"空间不足"
     if a.allow_move {
-        bail(EXIT_REFUSED, "refused: --allow-move is not supported for MBR resize — MBR cannot relocate blocking partitions".to_string());
+        bail_fail(Fail::refused("--allow-move is not supported for MBR resize — MBR cannot relocate blocking partitions".to_string()));
     }
     let mbr = table::parse_mbr(src_ro)
-        .unwrap_or_else(|e| bail(EXIT_INFRA, format!("parse failed: {e}")))
-        .unwrap_or_else(|| bail(EXIT_REFUSED, "refused: no MBR on target".to_string()));
+        .unwrap_or_else(|e| bail_fail(Fail::infra(format!("parse failed: {e}"))))
+        .unwrap_or_else(|| bail_fail(Fail::refused("no MBR on target".to_string())));
     let p = match mbr.iter().find(|p| p.num == part) {
         Some(p) => p,
-        None => bail(EXIT_REFUSED, format!("partition {part} not found (MBR resize covers primary partitions 1..4 only)")),
+        None => bail_fail(Fail::refused(format!("partition {part} not found (MBR resize covers primary partitions 1..4 only)"))),
     };
     if p.is_container {
-        bail(EXIT_REFUSED, "refused: extended partition container cannot be resized (logical partitions are out of scope)".to_string());
+        bail_fail(Fail::refused("extended partition container cannot be resized (logical partitions are out of scope)".to_string()));
     }
     let ss = src_ro.sector_size;
     let total_sectors = src_ro.size / ss;
     let cur_bytes = p.size_lba as u64 * ss;
     let fstype = fsid::identify(src_ro, p.start_lba as u64 * ss, p.size_lba as u64 * ss)
-        .unwrap_or_else(|e| bail(EXIT_INFRA, format!("identify failed: {e}")));
+        .unwrap_or_else(|e| bail_fail(Fail::infra(format!("identify failed: {e}"))));
     let is_pv = fstype == "lvm2_pv";
 
     let (target, grow_to_end) = resolve_size_request(a, size_arg, cur_bytes);
@@ -517,14 +522,14 @@ fn cmd_resize_msdos(a: &Args, part: u32, size_arg: Option<&str>, src_ro: &FileSo
     }
 
     // 离线路径
-    let mut src = open_target_for_write(a).unwrap_or_else(|(c, m)| bail(c, m));
+    let mut src = open_target_for_write(a).unwrap_or_else(|f| bail_fail(f));
     if grow_to_end {
         let free = free_right_msdos(&mbr, p, total_sectors);
         let mut table_written = false;
         if free > 0 {
             let new_size_lba = p.size_lba as u64 + free;
             if new_size_lba > u32::MAX as u64 {
-                bail(EXIT_REFUSED, format!("refused: new size {new_size_lba} sectors exceeds MBR 32-bit LBA limit"));
+                bail_fail(Fail::refused(format!("new size {new_size_lba} sectors exceeds MBR 32-bit LBA limit")));
             }
             table::resize_mdos_entry(&mut src, part, new_size_lba as u32)
                 .unwrap_or_else(|f| bail_fail(f));
@@ -535,17 +540,17 @@ fn cmd_resize_msdos(a: &Args, part: u32, size_arg: Option<&str>, src_ro: &FileSo
     } else {
         let Some(bytes) = target else { crate::args::usage() };
         if bytes < ss {
-            bail(EXIT_REFUSED, format!("refused: size {bytes} < one sector ({ss})"));
+            bail_fail(Fail::refused(format!("size {bytes} < one sector ({ss})")));
         }
         let new_size_lba = bytes / ss;
         if new_size_lba > u32::MAX as u64 {
-            bail(EXIT_REFUSED, format!("refused: size {new_size_lba} sectors exceeds MBR 32-bit LBA limit"));
+            bail_fail(Fail::refused(format!("size {new_size_lba} sectors exceeds MBR 32-bit LBA limit")));
         }
         if new_size_lba >= p.size_lba as u64 {
             // no-op（==）不触发缩容守卫链；扩（>）须右侧空闲足够
             let want = new_size_lba - p.size_lba as u64;
             if want > free_right_msdos(&mbr, p, total_sectors) {
-                bail(EXIT_REFUSED, "refused: not enough contiguous free space to the right (MBR resize cannot relocate blocking partitions)".to_string());
+                bail_fail(Fail::refused("not enough contiguous free space to the right (MBR resize cannot relocate blocking partitions)".to_string()));
             }
             if want > 0 {
                 table::resize_mdos_entry(&mut src, part, new_size_lba as u32)
@@ -557,20 +562,19 @@ fn cmd_resize_msdos(a: &Args, part: u32, size_arg: Option<&str>, src_ro: &FileSo
             // 缩：与 movepart GPT 路径同守卫链——FS 先缩成功才写表。
             // --no-fs 与缩容不可共存（分区末端会切进未缩的 FS 元数据），与 GPT 同判据
             if a.no_fs {
-                bail(EXIT_REFUSED, "refused: --no-fs cannot shrink: the filesystem has to be shrunk first, otherwise the new partition end would cut into filesystem metadata".to_string());
+                bail_fail(Fail::refused("--no-fs cannot shrink: the filesystem has to be shrunk first, otherwise the new partition end would cut into filesystem metadata".to_string()));
             }
             // FS 收缩的前置检查与 GPT 路径同一处（fsops::check_shrink）：能否缩 / 类型是否
             // 认得 / 工具是否齐备只写一份
-            fsops::check_shrink(fstype)
-                .unwrap_or_else(|e| bail(EXIT_REFUSED, format!("refused: {e}")));
+            fsops::check_shrink(fstype).unwrap_or_else(|e| bail_fail(Fail::from(e)));
             if let Some(min) = fsops::fs_min_bytes(&src, part, fstype)
-                .unwrap_or_else(|e| bail(EXIT_INFRA, format!("min-size probe failed: {e}")))
+                .unwrap_or_else(|e| bail_fail(Fail::from(e).context("min-size probe failed")))
                 && bytes < min
             {
-                bail(EXIT_REFUSED, format!("refused: target size {bytes} < minimum FS size {min} bytes (resize2fs -P)"));
+                bail_fail(Fail::refused(format!("target size {bytes} < minimum FS size {min} bytes (resize2fs -P)")));
             }
             fsops::shrink_fs(&src, part, fstype, new_size_lba * ss)
-                .unwrap_or_else(|e| bail(EXIT_INFRA, format!("FS shrink failed: {e}")));
+                .unwrap_or_else(|e| bail_fail(Fail::from(e).context("FS shrink failed")));
             table::resize_mdos_entry(&mut src, part, new_size_lba as u32)
                 .unwrap_or_else(|f| bail_fail(f));
             let o = settle_layout(crate::outcome::Outcome::applied_with(Vec::new()), &src);
@@ -586,7 +590,7 @@ fn finish_resize(a: &Args, o: crate::outcome::Outcome, is_pv: bool, is_block: bo
     if !o.is_applied() {
         return o.exit_code();
     }
-    if o.exit_code() != EXIT_OK && !is_pv {
+    if !o.is_complete() && !is_pv {
         return o.exit_code();
     }
     resize_done(a, is_pv, is_block, old_bytes).max(o.exit_code())
@@ -603,20 +607,20 @@ fn resize_done(a: &Args, is_pv: bool, is_block: bool, old_bytes: u64) -> u8 {
     #[cfg(target_os = "linux")]
     {
         // 只打开一次：下面读"实际新尺寸"与给 LVM 链取分区节点用的是同一份盘上现状
-        let src = open_target_ro(a).unwrap_or_else(|(c, m)| bail(c, m));
+        let src = open_target_ro(a).unwrap_or_else(|f| bail_fail(f));
         // 表项重读按 label 分派（MBR resize 也走本收尾）
         let new_bytes = if let Ok(Some(g)) = table::load_gpt(&src) {
             match g.entries.get((a.part.unwrap_or(0) as usize).checked_sub(1).unwrap_or(usize::MAX)) {
                 Some(e) if e.ending_lba != 0 => (e.ending_lba - e.starting_lba + 1) * g.ss,
-                _ => bail(EXIT_INFRA, "post-resize: partition vanished from table".to_string()),
+                _ => bail_fail(Fail::infra("post-resize: partition vanished from table".to_string())),
             }
         } else if let Ok(Some(mbr)) = table::parse_mbr(&src) {
             match mbr.iter().find(|p| p.num == a.part.unwrap_or(0)) {
                 Some(p) => p.size_lba as u64 * src.sector_size,
-                None => bail(EXIT_INFRA, "post-resize: partition vanished from table".to_string()),
+                None => bail_fail(Fail::infra("post-resize: partition vanished from table".to_string())),
             }
         } else {
-            bail(EXIT_INFRA, "post-resize: no partition table on target".to_string())
+            bail_fail(Fail::infra("post-resize: no partition table on target".to_string()))
         };
         let delta = new_bytes.saturating_sub(old_bytes);
         let part = a.part.unwrap_or(0);
@@ -626,7 +630,7 @@ fn resize_done(a: &Args, is_pv: bool, is_block: bool, old_bytes: u64) -> u8 {
             // offset+sizelimit 映射出的 loop 设备 = 该分区的整块设备，PV 整设备语义下
             // pvresize/lvextend 直接可用，无需 -P partscan
             fsops::with_partition_device(&src, part, |pv| {
-                lvm_grow_chain(pv, delta, a.grow_lv, a.lv.as_deref()).map_err(std::io::Error::other)
+                lvm_grow_chain(pv, delta, a.grow_lv, a.lv.as_deref()).map_err(fsops::FsError::CommandFailed)
             })
             .map_err(|e| e.to_string())
         };

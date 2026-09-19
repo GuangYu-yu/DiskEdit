@@ -35,7 +35,7 @@ pub(crate) fn cmd_plan_apply(cmd: &str, a: &Args) -> u8 {
     let Some(grow) = a.grow else { crate::args::usage() };
     // 这一段只读：plan 不写盘，apply 的写由 apply_cmd 用 open_target_for_write 另开一次。
     // 故按只读命令打开——否则一块正被使用的盘上连 `plan` 都跑不出计划
-    let mut src = open_target_ro(a).unwrap_or_else(|(c, m)| bail(c, m));
+    let mut src = open_target_ro(a).unwrap_or_else(|f| bail_fail(f));
     // 恢复感知：盘上有未收尾的搬移作业时，`plan` 要打印、`apply` 要执行的
     // 都是那份 ckpt 里的计划（现算的 delta 与 ckpt 不一致，会撞上恢复校验）
     let plan = match movepart::make_plan_resuming(&mut src, grow) {
@@ -53,7 +53,7 @@ pub(crate) fn cmd_plan_apply(cmd: &str, a: &Args) -> u8 {
         // 终点与实际写入一致（grow_end_for 是 apply 用的同一实现）；
         // last_usable_lba 单独列出：它是尾部打包的上界，不等于本次扩容终点
         let grow_end = movepart::grow_end_for(&plan)
-            .unwrap_or_else(|e| bail(EXIT_REFUSED, format!("plan failed: {e}")));
+            .unwrap_or_else(|e| bail_fail(Fail::refused(format!("plan failed: {e}"))));
         println!(
             "grow partition {} → end LBA {} (last usable {})",
             plan.grow_part, grow_end, plan.last_usable_lba
@@ -66,12 +66,14 @@ pub(crate) fn cmd_plan_apply(cmd: &str, a: &Args) -> u8 {
 }
 
 fn apply_cmd(a: &Args, plan: movepart::Plan) -> u8 {
-    let mut src = match open_target_for_write(a) { Ok(s) => s, Err((c, m)) => { eprintln!("{m}"); return c; } };
-    // 表的可解析性由 apply_inner 在写盘前判定（无表 → refused 10，表非法 → infra 30）：
+    let mut src = open_target_for_write(a).unwrap_or_else(|f| bail_fail(f));
+    // 表的可解析性由 prepare_apply 在写盘前判定（无表 → refused 10，表非法 → infra 30）：
     // 同一事实不设第二判据——两处判据迟早会在某个入口分叉，且自判拒绝时还不报原因
     let chunk = match movepart::chunk_bytes(a.chunk_mib) {
         Ok(c) => c,
-        Err(e) => { eprintln!("refused: {e}"); return EXIT_REFUSED; }
+        // chunk_bytes 只校验 --chunk-size 的取值：请求本身不合法 ⇒ 10（改参数有解），
+        // 不是环境故障。故显式 refused，不走 `From<io::Error>` 的"可能已改变"
+        Err(e) => bail_fail(Fail::refused(e.to_string())),
     };
     let mut logger = Logger::open(&src);
     let o = movepart::apply(&mut src, &plan, chunk, a.no_fs, &mut |m| logger.log(m));

@@ -11,34 +11,106 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
+/// FS 层失败的分类。fsops 只回答"操作层面发生了什么"，"这该算拒绝还是故障"要结合
+/// durable boundary 才能回答，属命令层语义（映射见 `outcome::From<FsError> for Fail`）。
+///
+/// 只有三类是**在发生处就能确定**的，故单列；其余一律 `Io`——环境故障是最保守的缺省，
+/// 它不承诺"改参数重试有意义"。用 io::ErrorKind 反推这三类是行不通的：
+/// kind 一旦成形就分不出"类型不认得"与"设备读不到"
+#[derive(Debug)]
+pub enum FsError {
+    /// 该类型/该操作没有接线的工具（不认得的 FS、本工具不负责的组合）
+    UnsupportedFs(String),
+    /// 参数非法，或目标现状与请求不符（分区不存在/为空、容器分区、尺寸不是扇区倍数）
+    InvalidArgument(String),
+    /// PATH 里找不到必需的工具
+    ToolMissing(String),
+    /// 读写、权限、挂载态等环境故障
+    Io(io::Error),
+    /// 外部工具跑起来了但非零退出
+    CommandFailed(String),
+}
 
-pub fn require_linux() -> io::Result<()> {
-    if cfg!(target_os = "linux") {
-        Ok(())
-    } else {
-        Err(io::Error::new(io::ErrorKind::Unsupported, "this operation requires Linux (build/runtime platform)"))
+impl FsError {
+    fn unsupported(msg: impl Into<String>) -> Self {
+        Self::UnsupportedFs(msg.into())
+    }
+
+    fn invalid(msg: impl Into<String>) -> Self {
+        Self::InvalidArgument(msg.into())
+    }
+
+    fn missing(msg: impl Into<String>) -> Self {
+        Self::ToolMissing(msg.into())
+    }
+
+    /// 外部工具非零退出：`<tool> failed: <stderr 原文>`
+    fn command(tool: &str, out: &std::process::Output) -> Self {
+        Self::CommandFailed(format!("{tool} failed: {}", String::from_utf8_lossy(&out.stderr).trim()))
     }
 }
 
-pub fn require_root() -> io::Result<()> {
+impl std::fmt::Display for FsError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UnsupportedFs(m)
+            | Self::InvalidArgument(m)
+            | Self::ToolMissing(m)
+            | Self::CommandFailed(m) => f.write_str(m),
+            Self::Io(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl From<io::Error> for FsError {
+    fn from(e: io::Error) -> Self {
+        Self::Io(e)
+    }
+}
+
+/// 越过 durable boundary 之后（`execute_*` 内部），`FsError` 的分类不再有出口语义：
+/// 那里的任何失败对外都只能是 `Failed`（盘可能已改变）。压平是显式的，不是 From——
+/// 需要区分分类的地方必须自己表态
+impl From<FsError> for io::Error {
+    fn from(e: FsError) -> Self {
+        io::Error::other(e.to_string())
+    }
+}
+
+pub fn require_linux() -> Result<(), FsError> {
+    if cfg!(target_os = "linux") {
+        Ok(())
+    } else {
+        Err(FsError::Io(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "this operation requires Linux (build/runtime platform)",
+        )))
+    }
+}
+
+pub fn require_root() -> Result<(), FsError> {
     #[cfg(target_os = "linux")]
     {
         // geteuid = POSIX.1（man geteuid）实际 UID 判定，非有效权限位
         // SAFETY: geteuid 无参数、不访问内存，恒成功
         if unsafe { libc::geteuid() } != 0 {
-            return Err(io::Error::new(io::ErrorKind::PermissionDenied, "root required (losetup/mkfs/resize need kernel privileges)"));
+            return Err(FsError::Io(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "root required (losetup/mkfs/resize need kernel privileges)",
+            )));
         }
         Ok(())
     }
     #[cfg(not(target_os = "linux"))]
     {
-        Err(io::Error::new(io::ErrorKind::Unsupported, "not linux"))
+        Err(FsError::Io(io::Error::new(io::ErrorKind::Unsupported, "not linux")))
     }
 }
 
 /// 工具存在性守卫：执行前 fail-fast 确认工具存在且可执行
-fn find_tool(name: &str) -> io::Result<PathBuf> {
-    let path = std::env::var_os("PATH").ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "PATH unset"))?;
+fn find_tool(name: &str) -> Result<PathBuf, FsError> {
+    let path = std::env::var_os("PATH")
+        .ok_or_else(|| FsError::missing("PATH unset — cannot locate required tools"))?;
     for dir in std::env::split_paths(&path) {
         let p = dir.join(name);
         // 需可执行：存在但无 x 位时继续向后找，避免错误推迟到 spawn 才以裸 EACCES 冒出
@@ -46,7 +118,7 @@ fn find_tool(name: &str) -> io::Result<PathBuf> {
             return Ok(p);
         }
     }
-    Err(io::Error::new(io::ErrorKind::NotFound, format!("required tool not found in PATH: {name}")))
+    Err(FsError::missing(format!("required tool not found in PATH: {name}")))
 }
 
 /// 执行位判定：stat(2) 得到的 st_mode 中 S_IXUSR|S_IXGRP|S_IXOTH（0o111）任一置位即视为
@@ -64,7 +136,7 @@ fn is_executable(_p: &std::path::Path) -> bool {
 
 /// 执行外部工具。参数用 `AsRef<OsStr>` 收：绝大多数调用点传 `&[&str]` 即可，
 /// 卷标这类任意字节的参数靠它原样透传（见 os_bytes），不经任何编码转换
-pub(crate) fn run<S: AsRef<OsStr>>(tool: &str, args: &[S]) -> io::Result<std::process::Output> {
+pub(crate) fn run<S: AsRef<OsStr>>(tool: &str, args: &[S]) -> Result<std::process::Output, FsError> {
     let path = find_tool(tool)?;
     // 输出需按格式解析（resize2fs -P、dumpe2fs -h 等），固定 LC_ALL=C 防本地化翻译破坏解析
     Command::new(path)
@@ -72,6 +144,7 @@ pub(crate) fn run<S: AsRef<OsStr>>(tool: &str, args: &[S]) -> io::Result<std::pr
         .stdin(Stdio::null())
         .env("LC_ALL", "C")
         .output()
+        .map_err(FsError::from)
 }
 
 /// 任意字节 → 命令行参数。unix 下按原字节构造：execve 的 argv 本就是字节串，无编码校验。
@@ -89,13 +162,14 @@ fn os_bytes(b: &[u8]) -> OsString {
 
 /// 同 run，但从 stdin 喂入脚本（sfdisk -N 的分区描述只走 stdin）
 #[cfg(target_os = "linux")]
-pub(crate) fn run_input(tool: &str, args: &[&str], input: &str) -> io::Result<std::process::Output> {
+pub(crate) fn run_input(tool: &str, args: &[&str], input: &str) -> Result<std::process::Output, FsError> {
     let path = find_tool(tool)?;
     let mut child = Command::new(path)
         .args(args)
         .stdin(Stdio::piped())
         .env("LC_ALL", "C")
-        .spawn()?;
+        .spawn()
+        .map_err(FsError::from)?;
     use std::io::Write as _;
     let mut stdin = child.stdin.take().expect("stdin piped");
     if let Err(e) = stdin.write_all(input.as_bytes()) {
@@ -105,25 +179,28 @@ pub(crate) fn run_input(tool: &str, args: &[&str], input: &str) -> io::Result<st
             let _ = child.kill();
             let _ = child.wait();
         }
-        return Err(e);
+        return Err(FsError::Io(e));
     }
     drop(stdin); // 关闭 stdin 让 sfdisk 看到输入结束
-    child.wait_with_output()
+    child.wait_with_output().map_err(FsError::from)
 }
 
 /// e2fsck 退出码判定（man e2fsck EXIT CODE：各项按位或求和）。bit1（REBOOT）置位条件
 /// （e2fsprogs e2fsck/unix.c）：FS 被修改且 ctx->mount_flags & EXT2_MF_ISROOT——改了
 /// root fs 需重启才能继续，2/3 一律中断（未挂载镜像上通常不出现）。
 /// 0/1 通过，4 = 有未修正错误即拒绝。
-fn check_e2fsck(code: i32) -> io::Result<()> {
+fn check_e2fsck(code: i32) -> Result<(), FsError> {
     match code {
         0 | 1 => Ok(()),
-        2 | 3 => Err(io::Error::new(
+        2 | 3 => Err(FsError::Io(io::Error::new(
             io::ErrorKind::PermissionDenied,
             "e2fsck: root filesystem was modified, reboot required before resizing",
-        )),
-        4 => Err(io::Error::new(io::ErrorKind::InvalidData, "e2fsck: uncorrected errors (exit 4), refuse resize")),
-        c => Err(io::Error::other(format!("e2fsck infrastructure failure (exit {c})"))),
+        ))),
+        4 => Err(FsError::Io(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "e2fsck: uncorrected errors (exit 4), refuse resize",
+        ))),
+        c => Err(FsError::CommandFailed(format!("e2fsck infrastructure failure (exit {c})"))),
     }
 }
 
@@ -197,24 +274,34 @@ pub(crate) fn read_mounts() -> io::Result<Vec<MountEntry>> {
 /// xfs/btrfs 的临时挂载路径，不经此函数。用 /proc/self/mountinfo（第 3 字段
 /// major:minor）与 /proc/swaps（第一字段设备路径）按 st_rdev 精确匹配设备，命中即拒绝。
 #[cfg(target_os = "linux")]
-fn require_unmounted(dev: &str) -> io::Result<()> {
+fn require_unmounted(dev: &str) -> Result<(), FsError> {
     use std::os::unix::fs::MetadataExt;
-    let in_use = |what: &str| io::Error::other(format!("{dev} is {what} — unmount/deactivate first (FS operations require an unmounted partition)"));
+    let in_use = |what: &str| {
+        FsError::Io(io::Error::other(format!(
+            "{dev} is {what} — unmount/deactivate first (FS operations require an unmounted partition)"
+        )))
+    };
     // 安全相关探测一律 fail-closed：无法确认"未挂载"就拒绝动手——探测失败若被当作
     // "未挂载"，会对已挂载的 FS 执行 resize，那是数据损坏
     let m = std::fs::metadata(dev).map_err(|e| {
-        io::Error::other(format!("cannot stat {dev} to confirm it is unmounted: {e} — refusing (fail-closed)"))
+        FsError::Io(io::Error::other(format!(
+            "cannot stat {dev} to confirm it is unmounted: {e} — refusing (fail-closed)"
+        )))
     })?;
     let rdev = m.rdev();
     let dev_no = (libc::major(rdev) as u64, libc::minor(rdev) as u64);
     let entries = read_mounts().map_err(|e| {
-        io::Error::other(format!("cannot read mount table to confirm {dev} is unmounted: {e} — refusing (fail-closed)"))
+        FsError::Io(io::Error::other(format!(
+            "cannot read mount table to confirm {dev} is unmounted: {e} — refusing (fail-closed)"
+        )))
     })?;
     if entries.iter().any(|e| e.dev_no == dev_no) {
         return Err(in_use("mounted"));
     }
     let swaps = std::fs::read_to_string("/proc/swaps").map_err(|e| {
-        io::Error::other(format!("cannot read /proc/swaps to confirm {dev} is not active swap: {e} — refusing (fail-closed)"))
+        FsError::Io(io::Error::other(format!(
+            "cannot read /proc/swaps to confirm {dev} is not active swap: {e} — refusing (fail-closed)"
+        )))
     })?;
     for line in swaps.lines().skip(1) {
         if let Some(field) = line.split_whitespace().next() {
@@ -228,7 +315,7 @@ fn require_unmounted(dev: &str) -> io::Result<()> {
     Ok(())
 }
 #[cfg(not(target_os = "linux"))]
-fn require_unmounted(_dev: &str) -> io::Result<()> {
+fn require_unmounted(_dev: &str) -> Result<(), FsError> {
     Ok(())
 }
 
@@ -237,7 +324,7 @@ fn require_unmounted(_dev: &str) -> io::Result<()> {
 /// （losetup(8)：--sizelimit size = 数据终点为起点之后不超过 size 字节）；
 /// 非 512 扇区镜像必须一次带 --sector-size（内核 ≥4.14）：先以 512 映射虽能成功，
 /// 但 loop 设备扇区几何错误，FS/表工具按错误扇区解析会写坏数据
-fn attach_loop(src: &FileSource, off: u64, len: u64) -> io::Result<String> {
+fn attach_loop(src: &FileSource, off: u64, len: u64) -> Result<String, FsError> {
     let losetup = find_tool("losetup")?;
     let base_args: Vec<String> = if src.sector_size != 512 {
         vec![
@@ -255,17 +342,19 @@ fn attach_loop(src: &FileSource, off: u64, len: u64) -> io::Result<String> {
         .arg("--show")
         .arg(&img)
         .stdin(Stdio::null())
-        .output()?;
+        .output()
+        .map_err(FsError::from)?;
     if !show.status.success() && src.sector_size == 512 {
         // offset 对齐异常等少数情况需要 --sector-size，512 路径再带该选项重试一次
         show = Command::new(&losetup)
             .args(["-o", &off.to_string(), "--sizelimit", &len.to_string(), "--sector-size", &src.sector_size.to_string(), "-f", "--show"])
             .arg(&img)
             .stdin(Stdio::null())
-            .output()?;
+            .output()
+            .map_err(FsError::from)?;
     }
     if !show.status.success() {
-        return Err(io::Error::other(format!("losetup failed: {}", String::from_utf8_lossy(&show.stderr))));
+        return Err(FsError::command("losetup", &show));
     }
     Ok(String::from_utf8_lossy(&show.stdout).trim().to_string())
 }
@@ -305,7 +394,7 @@ pub enum DeviceScope {
     Range(u64, u64),
 }
 
-fn scope_byte_range(src: &FileSource, scope: &DeviceScope) -> io::Result<(u64, u64)> {
+fn scope_byte_range(src: &FileSource, scope: &DeviceScope) -> Result<(u64, u64), FsError> {
     match scope {
         DeviceScope::Partition(p) => partition_byte_range(src, *p),
         DeviceScope::Whole => Ok((0, src.size)),
@@ -314,9 +403,9 @@ fn scope_byte_range(src: &FileSource, scope: &DeviceScope) -> io::Result<(u64, u
 }
 
 /// 按范围执行 FS 操作的统一入口，with_partition_device 的公共底层
-fn with_scope_device<F>(src: &FileSource, scope: &DeviceScope, f: F) -> io::Result<()>
+fn with_scope_device<F>(src: &FileSource, scope: &DeviceScope, f: F) -> Result<(), FsError>
 where
-    F: FnOnce(&str) -> io::Result<()>,
+    F: FnOnce(&str) -> Result<(), FsError>,
 {
     require_linux()?;
     require_root()?;
@@ -347,9 +436,9 @@ where
 /// 在分区上执行操作的统一入口。
 /// - 镜像文件：`losetup -o <off> --sizelimit <len> [-S ss] -f --show <img>`
 /// - 块设备：直接定位分区设备节点（/sys/block/<disk>/<part>/start 匹配），不经 loop
-pub fn with_partition_device<F>(src: &FileSource, part: u32, f: F) -> io::Result<()>
+pub fn with_partition_device<F>(src: &FileSource, part: u32, f: F) -> Result<(), FsError>
 where
-    F: FnOnce(&str) -> io::Result<()>,
+    F: FnOnce(&str) -> Result<(), FsError>,
 {
     with_scope_device(src, &DeviceScope::Partition(part), f)
 }
@@ -358,15 +447,15 @@ where
 /// want_start = 分区起始字节，调用方已由 partition_byte_range 求得。
 /// start/size 属性为内核 sysfs-block ABI（Documentation/ABI/testing/sysfs-block，
 /// 单位恒为 512 字节扇区，与设备逻辑块大小无关），换算字节偏移须用 512 而非 src.sector_size
-fn find_block_partition_node(src: &FileSource, part: u32, want_start: u64) -> io::Result<String> {
+fn find_block_partition_node(src: &FileSource, part: u32, want_start: u64) -> Result<String, FsError> {
     #[cfg(target_os = "linux")]
     {
         let disk = src.path.file_name()
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "no disk name"))?
+            .ok_or_else(|| FsError::invalid("no disk name"))?
             .to_string_lossy().to_string();
         let sys = Path::new("/sys/block").join(&disk);
-        for entry in std::fs::read_dir(&sys)? {
-            let entry = entry?;
+        for entry in std::fs::read_dir(&sys).map_err(FsError::from)? {
+            let entry = entry.map_err(FsError::from)?;
             let start_file = entry.path().join("start");
             let Ok(txt) = std::fs::read_to_string(&start_file) else { continue };
             let start_sectors: u64 = txt.trim().parse().unwrap_or(0);
@@ -375,43 +464,43 @@ fn find_block_partition_node(src: &FileSource, part: u32, want_start: u64) -> io
                 return Ok(format!("/dev/{name}"));
             }
         }
-        Err(io::Error::new(io::ErrorKind::NotFound, format!("partition node for part {part} not found under /sys/block/{disk}")))
+        Err(FsError::invalid(format!("partition node for part {part} not found under /sys/block/{disk}")))
     }
     #[cfg(not(target_os = "linux"))]
     {
         let _ = (src, part, want_start);
-        Err(io::Error::new(io::ErrorKind::Unsupported, "not linux"))
+        Err(FsError::Io(io::Error::new(io::ErrorKind::Unsupported, "not linux")))
     }
 }
 
-fn partition_byte_range(src: &FileSource, part: u32) -> io::Result<(u64, u64)> {
+fn partition_byte_range(src: &FileSource, part: u32) -> Result<(u64, u64), FsError> {
     let ss = src.sector_size;
-    // 本层契约是 io::Result，"表结构非法"对调用者只等于拒绝，故在此显式压平
-    // （flatten 是可见的调用，不是 From——结构化诊断归 cmd_info）
-    if let Some(g) = crate::table::load_gpt(src).map_err(crate::table::flatten)? {
+    // 本层契约是 FsError::Io，"表结构非法"对调用者只等于拒绝，故在此显式压平
+    // （into_io_error 是可见的调用，不是 From——结构化诊断归 cmd_info）
+    if let Some(g) = crate::table::load_gpt(src).map_err(crate::table::into_io_error)? {
         let e = g.entries.get((part - 1) as usize)
-            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, format!("partition {part} not found")))?;
+            .ok_or_else(|| FsError::invalid(format!("partition {part} not found")))?;
         if e.ending_lba == 0 && e.starting_lba == 0 {
-            return Err(io::Error::new(io::ErrorKind::NotFound, format!("partition {part} is empty")));
+            return Err(FsError::invalid(format!("partition {part} is empty")));
         }
         return Ok((e.starting_lba * g.ss, (e.ending_lba - e.starting_lba + 1) * g.ss));
     }
-    if let Some(mbr) = crate::table::parse_mbr(src)? {
+    if let Some(mbr) = crate::table::parse_mbr(src).map_err(FsError::from)? {
         let p = mbr.iter().find(|p| p.num == part)
-            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, format!("partition {part} not found")))?;
+            .ok_or_else(|| FsError::invalid(format!("partition {part} not found")))?;
         if p.is_container {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "extended/container entries not supported for FS ops"));
+            return Err(FsError::invalid("extended/container entries not supported for FS ops"));
         }
         return Ok((p.start_lba as u64 * ss, p.size_lba as u64 * ss));
     }
-    Err(io::Error::new(io::ErrorKind::InvalidData, "no partition table on target"))
+    Err(FsError::invalid("no partition table on target"))
 }
 
 /// ext 最小尺寸估算：resize2fs -P 的最小块数 × dumpe2fs -h 的块大小；
 /// 输出格式锚定 man 页示例（"Estimated minimum size of the filesystem: N" / "Block size: N"）。
 /// 其余 FS 无已验证的输出格式，返回 None，由工具自身在缩容前拒绝
 /// （shrink_fs 先于任何数据搬移执行，失败即安全终止）
-pub fn fs_min_bytes(src: &FileSource, part: u32, fstype: &str) -> io::Result<Option<u64>> {
+pub fn fs_min_bytes(src: &FileSource, part: u32, fstype: &str) -> Result<Option<u64>, FsError> {
     if !is_ext(fstype) {
         return Ok(None);
     }
@@ -421,7 +510,7 @@ pub fn fs_min_bytes(src: &FileSource, part: u32, fstype: &str) -> io::Result<Opt
         Ok(())
     })?;
     match result {
-        Some(r) => r.map(Some),
+        Some(r) => r.map(Some).map_err(FsError::from),
         None => Ok(None),
     }
 }
@@ -457,7 +546,7 @@ fn min_bytes_ext(dev: &str) -> io::Result<u64> {
 /// （-U/-L 见 man mkswap：UUID 存取同序、无端转换，全零视为未设置走随机生成）。
 /// 卷标按字节透传：sws_volume 是不做编码校验的固定宽度字段，转成 String 再写回必然失真。
 /// 失败由调用方降级为日志（swap 内容可弃，但 fstab 指向的 UUID 需人工 mkswap 恢复）
-pub fn recreate_swap(src: &FileSource, part: u32, identity: (Option<[u8; 16]>, Option<Vec<u8>>)) -> io::Result<()> {
+pub fn recreate_swap(src: &FileSource, part: u32, identity: (Option<[u8; 16]>, Option<Vec<u8>>)) -> Result<(), FsError> {
     with_partition_device(src, part, |dev| {
         let mut args: Vec<OsString> = Vec::new();
         if let Some(u) = &identity.0 {
@@ -472,7 +561,7 @@ pub fn recreate_swap(src: &FileSource, part: u32, identity: (Option<[u8; 16]>, O
         args.push(OsString::from(dev));
         let out = run("mkswap", &args)?;
         if !out.status.success() {
-            return Err(io::Error::other(format!("mkswap failed: {}", String::from_utf8_lossy(&out.stderr))));
+            return Err(FsError::command("mkswap", &out));
         }
         Ok(())
     })
@@ -566,10 +655,9 @@ fn wipe_zero(dev: &str, ranges: &[(u64, u64)]) -> io::Result<()> {
 /// btrfs/f2fs/xfs 检测到已有文件系统时默认拒绝写入，须 -f 覆盖（man mkfs.btrfs/mkfs.f2fs/mkfs.xfs）；
 /// -f 语义各工具不类推：mkntfs 的 -f 是 fast 格式化而非 force（force 为 -F），
 /// 故 ntfs 不传 -f，让工具自身拒绝已有文件系统（man mkntfs）。
-pub fn mkfs(src: &FileSource, part: u32, fstype: &str) -> io::Result<()> {
+pub fn mkfs(src: &FileSource, part: u32, fstype: &str) -> Result<(), FsError> {
     if fstype == "lvm2_pv" {
-        return Err(io::Error::new(
-            io::ErrorKind::PermissionDenied,
+        return Err(FsError::unsupported(
             "cannot mkfs an LVM2 PV — to (re)create the PV use pvcreate(8), to wipe it use wipefs(8)",
         ));
     }
@@ -579,7 +667,11 @@ pub fn mkfs(src: &FileSource, part: u32, fstype: &str) -> io::Result<()> {
         "vfat" | "exfat" | "ntfs" => (format!("mkfs.{fstype}"), false, None),
         "xfs" | "btrfs" | "f2fs" => (format!("mkfs.{fstype}"), true, None),
         "swap" => ("mkswap".to_string(), false, None),
-        other => return Err(io::Error::new(io::ErrorKind::InvalidInput, format!("unsupported fstype {other}"))),
+        other => {
+            return Err(FsError::unsupported(format!(
+                "unsupported fstype {other} (supported: ext2/3/4, xfs, btrfs, f2fs, vfat, exfat, ntfs, swap)"
+            )));
+        }
     };
     let (_, part_len) = partition_byte_range(src, part)?;
     let ss = src.sector_size;
@@ -596,7 +688,7 @@ pub fn mkfs(src: &FileSource, part: u32, fstype: &str) -> io::Result<()> {
         args.push(dev);
         let out = run(&tool, &args)?;
         if !out.status.success() {
-            return Err(io::Error::other(format!("{tool} failed: {}", String::from_utf8_lossy(&out.stderr))));
+            return Err(FsError::command(&tool, &out));
         }
         Ok(())
     })
@@ -605,12 +697,11 @@ pub fn mkfs(src: &FileSource, part: u32, fstype: &str) -> io::Result<()> {
 /// btrfs 多设备拒绝：主 superblock @分区起点+0x10000 的 num_devices 字段（偏移 0x88，
 /// u64 LE，内核 fs/btrfs ctree.h 字段序）。>1 时 resize/max 按 devid 作用于所映射的
 /// 单个 member，"分区扩满即 FS 扩满"前提不成立，直接拒绝，多设备布局交用户手动处理
-fn refuse_btrfs_multi_device_at(src: &FileSource, off: u64) -> io::Result<()> {
+fn refuse_btrfs_multi_device_at(src: &FileSource, off: u64) -> Result<(), FsError> {
     let mut raw = [0u8; 8];
-    src.read_at(off + 0x10000 + 0x88, &mut raw)?;
+    src.read_at(off + 0x10000 + 0x88, &mut raw).map_err(FsError::from)?;
     if u64::from_le_bytes(raw) > 1 {
-        return Err(io::Error::new(
-            io::ErrorKind::PermissionDenied,
+        return Err(FsError::unsupported(
             "btrfs filesystem spans multiple devices (num_devices > 1) — resize manually per btrfs-filesystem(8)",
         ));
     }
@@ -683,17 +774,17 @@ fn tool_package(tool: &str) -> &'static str {
     }
 }
 
-fn check_support(verb: &str, fstype: &str, support: ToolSupport) -> Result<(), String> {
+fn check_support(verb: &str, fstype: &str, support: ToolSupport) -> Result<(), FsError> {
     match support {
         ToolSupport::NotApplicable => Ok(()),
-        ToolSupport::Unsupported(reason) => Err(format!("cannot {verb} {fstype}: {reason}")),
+        ToolSupport::Unsupported(reason) => Err(FsError::unsupported(format!("cannot {verb} {fstype}: {reason}"))),
         ToolSupport::Tools(tools) => {
             for &t in tools {
                 if find_tool(t).is_err() {
-                    return Err(format!(
+                    return Err(FsError::missing(format!(
                         "cannot {verb} {fstype}: requires `{t}` (package: {}) — not found in PATH",
                         tool_package(t)
-                    ));
+                    )));
                 }
             }
             Ok(())
@@ -704,25 +795,19 @@ fn check_support(verb: &str, fstype: &str, support: ToolSupport) -> Result<(), S
 /// 扩容前置检查（纯只读、不写盘）。返回 Err 即"事前拒绝"。
 /// 调用方**必须在首次写盘之前**执行，否则会留下"分区已改、FS 未扩"的中间态——
 /// 这正是本检查存在的意义：把可预见的失败挡在动手之前
-pub fn check_grow(fstype: &str) -> Result<(), String> {
+pub fn check_grow(fstype: &str) -> Result<(), FsError> {
     check_support("grow", fstype, grow_support(fstype))
 }
 
 /// 缩容前置检查，语义同上
-pub fn check_shrink(fstype: &str) -> Result<(), String> {
+pub fn check_shrink(fstype: &str) -> Result<(), FsError> {
     check_support("shrink", fstype, shrink_support(fstype))
 }
 
 /// 该 FS 的扩容/缩容应交给用户的补救命令（用于 PARTIAL 时的提示）
-pub fn rescue_hint(fstype: &str, dev: &str, shrinking: bool) -> String {
+pub fn rescue_hint(fstype: &str, dev: &str) -> String {
     match fstype {
-        f if is_ext(f) => {
-            if shrinking {
-                format!("resize2fs {dev} <size>   # after e2fsck -f {dev}")
-            } else {
-                format!("e2fsck -fp {dev} && resize2fs {dev}")
-            }
-        }
+        f if is_ext(f) => format!("e2fsck -fp {dev} && resize2fs {dev}"),
         "ntfs" => format!("ntfsresize -f -f {dev}"),
         "f2fs" => format!("fsck.f2fs {dev} && resize.f2fs {dev}"),
         "xfs" => format!("mount {dev} <mnt> && xfs_growfs <mnt>"),
@@ -743,16 +828,16 @@ pub fn rescue_hint(fstype: &str, dev: &str, shrinking: bool) -> String {
 /// - btrfs：临时 mount → `btrfs filesystem resize max <mnt>`（max = 占满、须挂载态，man btrfs-filesystem）→ umount
 /// - vfat：`fatresize -s max <dev>`（扩满设备，man fatresize）
 /// - 其余（exfat/swap…）：无已接线的扩容工具，显式拒绝
-pub fn resize_fs(src: &FileSource, part: u32, fstype: &str) -> io::Result<()> {
+pub fn resize_fs(src: &FileSource, part: u32, fstype: &str) -> Result<(), FsError> {
     resize_fs_in(src, &DeviceScope::Partition(part), fstype)
 }
 
 /// superfloppy（无分区表，FS 即整盘）扩容：无表可写，纯 FS grow
-pub fn resize_fs_whole(src: &FileSource, fstype: &str) -> io::Result<()> {
+pub fn resize_fs_whole(src: &FileSource, fstype: &str) -> Result<(), FsError> {
     resize_fs_in(src, &DeviceScope::Whole, fstype)
 }
 
-fn resize_fs_in(src: &FileSource, scope: &DeviceScope, fstype: &str) -> io::Result<()> {
+fn resize_fs_in(src: &FileSource, scope: &DeviceScope, fstype: &str) -> Result<(), FsError> {
     match fstype {
         // fsid 识别只给 0xEF53，区分不出 2/3/4；resize2fs 对三者通用（man resize2fs）
         f if is_ext(f) => with_scope_device(src, scope, |dev| {
@@ -760,7 +845,7 @@ fn resize_fs_in(src: &FileSource, scope: &DeviceScope, fstype: &str) -> io::Resu
             check_e2fsck(out.status.code().unwrap_or(-1))?;
             let out = run("resize2fs", &[dev])?;
             if !out.status.success() {
-                return Err(io::Error::other(format!("resize2fs failed: {}", String::from_utf8_lossy(&out.stderr))));
+                return Err(FsError::command("resize2fs", &out));
             }
             Ok(())
         }),
@@ -768,14 +853,14 @@ fn resize_fs_in(src: &FileSource, scope: &DeviceScope, fstype: &str) -> io::Resu
             // 先 --no-action 演练，成功才真改，失败零副作用
             let out = run("ntfsresize", &["-f", "-f", "--no-action", dev])?;
             if !out.status.success() {
-                return Err(io::Error::other(format!(
+                return Err(FsError::CommandFailed(format!(
                     "ntfsresize simulation failed: {}",
-                    String::from_utf8_lossy(&out.stderr)
+                    String::from_utf8_lossy(&out.stderr).trim()
                 )));
             }
             let out = run("ntfsresize", &["-f", "-f", dev])?;
             if !out.status.success() {
-                return Err(io::Error::other(format!("ntfsresize failed: {}", String::from_utf8_lossy(&out.stderr))));
+                return Err(FsError::command("ntfsresize", &out));
             }
             Ok(())
         }),
@@ -785,21 +870,21 @@ fn resize_fs_in(src: &FileSource, scope: &DeviceScope, fstype: &str) -> io::Resu
             // 非 0 即拒绝 resize
             let out = run("fsck.f2fs", &[dev])?;
             if !out.status.success() {
-                return Err(io::Error::other(format!(
+                return Err(FsError::CommandFailed(format!(
                     "fsck.f2fs failed (exit {}), refuse resize",
                     out.status.code().unwrap_or(-1)
                 )));
             }
             let out = run("resize.f2fs", &[dev])?;
             if !out.status.success() {
-                return Err(io::Error::other(format!("resize.f2fs failed: {}", String::from_utf8_lossy(&out.stderr))));
+                return Err(FsError::command("resize.f2fs", &out));
             }
             Ok(())
         }),
         "xfs" => with_scope_device(src, scope, |dev| with_mount(dev, |mnt| {
             let out = run("xfs_growfs", &[mnt])?;
             if !out.status.success() {
-                return Err(io::Error::other(format!("xfs_growfs failed: {}", String::from_utf8_lossy(&out.stderr))));
+                return Err(FsError::command("xfs_growfs", &out));
             }
             Ok(())
         })),
@@ -809,7 +894,7 @@ fn resize_fs_in(src: &FileSource, scope: &DeviceScope, fstype: &str) -> io::Resu
             with_scope_device(src, scope, |dev| with_mount(dev, |mnt| {
                 let out = run("btrfs", &["filesystem", "resize", "max", mnt])?;
                 if !out.status.success() {
-                    return Err(io::Error::other(format!("btrfs resize failed: {}", String::from_utf8_lossy(&out.stderr))));
+                    return Err(FsError::command("btrfs resize", &out));
                 }
                 Ok(())
             }))
@@ -826,7 +911,7 @@ fn resize_fs_in(src: &FileSource, scope: &DeviceScope, fstype: &str) -> io::Resu
                     out = run("fatresize", &["-s", &(dev_len - 1).to_string(), dev])?;
                 }
                 if !out.status.success() {
-                    return Err(io::Error::other(format!("fatresize failed: {}", String::from_utf8_lossy(&out.stderr))));
+                    return Err(FsError::command("fatresize", &out));
                 }
                 Ok(())
             })
@@ -838,18 +923,18 @@ fn resize_fs_in(src: &FileSource, scope: &DeviceScope, fstype: &str) -> io::Resu
         "squashfs" | "erofs" => match scope {
             DeviceScope::Partition(p) => {
                 let (part_off, part_len) = partition_byte_range(src, *p)?;
-                let Some(rel) = crate::fsid::overlay_offset_at(src, part_off)? else {
-                    return Err(io::Error::other(format!(
+                let Some(rel) = crate::fsid::overlay_offset_at(src, part_off).map_err(FsError::from)? else {
+                    return Err(FsError::unsupported(format!(
                         "{fstype} rootfs without trailing RW overlay layout — nothing to grow"
                     )));
                 };
                 if rel >= part_len {
-                    return Err(io::Error::other("overlay offset beyond partition end"));
+                    return Err(FsError::invalid("overlay offset beyond partition end"));
                 }
                 // 区间量本就是字节，直接传给按字节区间识别的 identify
-                let inner = crate::fsid::identify(src, part_off + rel, part_len - rel)?;
+                let inner = crate::fsid::identify(src, part_off + rel, part_len - rel).map_err(FsError::from)?;
                 if !(is_ext(inner) || inner == "f2fs") {
-                    return Err(io::Error::other(format!(
+                    return Err(FsError::unsupported(format!(
                         "overlay layer identified as {inner} — only ext/f2fs overlays are growable"
                     )));
                 }
@@ -861,29 +946,42 @@ fn resize_fs_in(src: &FileSource, scope: &DeviceScope, fstype: &str) -> io::Resu
                 }
                 resize_fs_in(src, &DeviceScope::Range(part_off + rel, part_len - rel), inner)
             }
-            _ => Err(io::Error::other(format!(
+            _ => Err(FsError::unsupported(format!(
                 "{fstype} rootfs outside partition overlay layout — nothing to grow"
             ))),
         },
-        other => Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("no resize tool wired for {other} (supported: ext2/3/4, ntfs, f2fs, xfs, btrfs, vfat, squashfs/erofs+overlay)"),
-        )),
+        other => Err(FsError::unsupported(format!(
+            "no resize tool wired for {other} (supported: ext2/3/4, ntfs, f2fs, xfs, btrfs, vfat, squashfs/erofs+overlay)"
+        ))),
     }
 }
 
-/// 临时挂载 → 回调 → 卸载（xfs/btrfs 只支持挂载态扩容）。挂载点用后即删。
-fn with_mount<F>(dev: &str, f: F) -> io::Result<()>
+/// 本次调用的临时挂载点（纯函数：只用 PID 与进程内序号，不碰文件系统）。
+///
+/// 挂载点必须唯一：只用 PID 命名时，崩溃残留的挂载点会让下一次挂载叠在同一个目录上，
+/// 而 PID 复用会直接撞上别人的残留。序号用进程内自增（与 atomic_write_ckpt 的临时名同法）
+fn mount_point() -> PathBuf {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    std::env::temp_dir().join(format!(
+        "diskedit.mnt.{}.{}",
+        std::process::id(),
+        SEQ.fetch_add(1, Ordering::Relaxed)
+    ))
+}
+
+/// 临时挂载 → 回调 → 卸载（xfs/btrfs 只支持挂载态扩容）。挂载点用后即删
+fn with_mount<F>(dev: &str, f: F) -> Result<(), FsError>
 where
-    F: FnOnce(&str) -> io::Result<()>,
+    F: FnOnce(&str) -> Result<(), FsError>,
 {
-    let mnt = std::env::temp_dir().join(format!("diskedit.mnt.{}", std::process::id()));
-    std::fs::create_dir_all(&mnt)?;
+    let mnt = mount_point();
+    std::fs::create_dir_all(&mnt).map_err(FsError::from)?;
     let res = (|| {
         let mount = find_tool("mount")?;
-        let out = Command::new(mount).arg(dev).arg(&mnt).stdin(Stdio::null()).output()?;
+        let out = Command::new(mount).arg(dev).arg(&mnt).stdin(Stdio::null()).output().map_err(FsError::from)?;
         if !out.status.success() {
-            return Err(io::Error::other(format!("mount failed: {}", String::from_utf8_lossy(&out.stderr))));
+            return Err(FsError::command("mount", &out));
         }
         f(&mnt.to_string_lossy())
     })();
@@ -904,7 +1002,7 @@ where
 }
 
 /// FS 缩容到指定字节数（调用方保证 ≤ 当前 FS 大小；先于分区边界收缩执行）
-pub fn shrink_fs(src: &FileSource, part: u32, fstype: &str, new_bytes: u64) -> io::Result<()> {
+pub fn shrink_fs(src: &FileSource, part: u32, fstype: &str, new_bytes: u64) -> Result<(), FsError> {
     match fstype {
         f if is_ext(f) => with_partition_device(src, part, |dev| {
             let out = run("e2fsck", &["-fp", dev])?;
@@ -912,12 +1010,15 @@ pub fn shrink_fs(src: &FileSource, part: u32, fstype: &str, new_bytes: u64) -> i
             // resize2fs 裸数字单位是"文件系统块数"而非字节（man resize2fs）；
             // 's' 后缀 = 512 字节扇区。分区尺寸必为 sector_size(≥512) 整数倍
             if !new_bytes.is_multiple_of(512) {
-                return Err(io::Error::new(io::ErrorKind::InvalidInput, "shrink size must be a multiple of 512"));
+                return Err(FsError::invalid("shrink size must be a multiple of 512"));
             }
             let sectors = format!("{}s", new_bytes / 512);
             let out = run("resize2fs", &[dev, &sectors])?;
             if !out.status.success() {
-                return Err(io::Error::other(format!("resize2fs shrink failed: {}", String::from_utf8_lossy(&out.stderr))));
+                return Err(FsError::CommandFailed(format!(
+                    "resize2fs shrink failed: {}",
+                    String::from_utf8_lossy(&out.stderr).trim()
+                )));
             }
             Ok(())
         }),
@@ -925,7 +1026,10 @@ pub fn shrink_fs(src: &FileSource, part: u32, fstype: &str, new_bytes: u64) -> i
             // -s 无后缀 = 字节，k/M/G = 10³/10⁶/10⁹（man ntfsresize OPTIONS）；本工具只传裸字节
             let out = run("ntfsresize", &["-f", "-f", "-s", &new_bytes.to_string(), dev])?;
             if !out.status.success() {
-                return Err(io::Error::other(format!("ntfsresize shrink failed: {}", String::from_utf8_lossy(&out.stderr))));
+                return Err(FsError::CommandFailed(format!(
+                    "ntfsresize shrink failed: {}",
+                    String::from_utf8_lossy(&out.stderr).trim()
+                )));
             }
             Ok(())
         }),
@@ -936,7 +1040,7 @@ pub fn shrink_fs(src: &FileSource, part: u32, fstype: &str, new_bytes: u64) -> i
                 // 裸数字 = 绝对字节数、必须挂载态（man btrfs-filesystem resize）
                 let out = run("btrfs", &["filesystem", "resize", &new_bytes.to_string(), mnt])?;
                 if !out.status.success() {
-                    return Err(io::Error::other(format!(
+                    return Err(FsError::CommandFailed(format!(
                         "btrfs shrink failed: {} (minimum size via `btrfs inspect-internal min-dev-size` on a mount)",
                         String::from_utf8_lossy(&out.stderr).trim()
                     )));
@@ -944,7 +1048,7 @@ pub fn shrink_fs(src: &FileSource, part: u32, fstype: &str, new_bytes: u64) -> i
                 Ok(())
             }))
         }
-        other => Err(io::Error::new(io::ErrorKind::InvalidInput, format!("fs {other} cannot shrink"))),
+        other => Err(FsError::unsupported(format!("fs {other} cannot shrink"))),
     }
 }
 
@@ -954,10 +1058,9 @@ pub fn shrink_fs(src: &FileSource, part: u32, fstype: &str, new_bytes: u64) -> i
 /// chkdsk，检查语义偏弱，man ntfsfix）、fsck.f2fs 无参 = 仅检查（man fsck.f2fs）、
 /// xfs_repair -n = no modify（man xfs_repair）、btrfs check = 默认只读（man btrfs-check）、
 /// fsck.vfat -n = no-operation 只读（man fsck.fat）、fsck.exfat -n = read-only 不修复（man fsck.exfat）
-pub fn check_fs(src: &FileSource, part: u32, fstype: &str) -> io::Result<()> {
+pub fn check_fs(src: &FileSource, part: u32, fstype: &str) -> Result<(), FsError> {
     if fstype == "lvm2_pv" {
-        return Err(io::Error::new(
-            io::ErrorKind::PermissionDenied,
+        return Err(FsError::unsupported(
             "target is an LVM2 PV, not a filesystem — PV metadata is checked with pvck(8), not fsck",
         ));
     }
@@ -970,7 +1073,7 @@ pub fn check_fs(src: &FileSource, part: u32, fstype: &str) -> io::Result<()> {
         "vfat" => ("fsck.vfat", vec!["-n"]),
         // fsck.exfat man 未定义无参默认行为（存在 -r 交互修复），显式 -n = 仅检查不修复
         "exfat" => ("fsck.exfat", vec!["-n"]),
-        other => return Err(io::Error::new(io::ErrorKind::InvalidInput, format!("no check tool wired for {other}"))),
+        other => return Err(FsError::unsupported(format!("no check tool wired for {other}"))),
     };
     with_partition_device(src, part, |dev| {
         let mut args = cmd.1;
@@ -980,7 +1083,7 @@ pub fn check_fs(src: &FileSource, part: u32, fstype: &str) -> io::Result<()> {
             return check_e2fsck(out.status.code().unwrap_or(-1));
         }
         if !out.status.success() {
-            return Err(io::Error::other(format!("{} failed: {}", cmd.0, String::from_utf8_lossy(&out.stderr))));
+            return Err(FsError::command(cmd.0, &out));
         }
         Ok(())
     })
@@ -990,7 +1093,7 @@ pub fn check_fs(src: &FileSource, part: u32, fstype: &str) -> io::Result<()> {
 /// 来源：tune2fs -L（man tune2fs）、xfs_admin -L ≤12 字符（man xfs_admin）、
 /// btrfs filesystem label ≤256 字符（man btrfs-filesystem）、ntfslabel（man ntfslabel）、
 /// fatlabel ≤11 字节（man fatlabel）、exfatlabel（man exfatlabel）
-pub fn set_label(src: &FileSource, part: u32, fstype: &str, label: &str) -> io::Result<()> {
+pub fn set_label(src: &FileSource, part: u32, fstype: &str, label: &str) -> Result<(), FsError> {
     with_partition_device(src, part, |dev| {
         let (tool, args): (&str, Vec<String>) = match fstype {
             f if is_ext(f) => ("tune2fs", vec!["-L".into(), label.into(), dev.into()]),
@@ -998,7 +1101,10 @@ pub fn set_label(src: &FileSource, part: u32, fstype: &str, label: &str) -> io::
             // characters"）：超长时 xfs_admin 静默截断，故提前拒绝
             "xfs" => {
                 if label.len() > 12 {
-                    return Err(io::Error::new(io::ErrorKind::InvalidInput, format!("xfs label exceeds 12 bytes (got {}); xfs_admin would silently truncate", label.len())));
+                    return Err(FsError::invalid(format!(
+                        "xfs label exceeds 12 bytes (got {}); xfs_admin would silently truncate",
+                        label.len()
+                    )));
                 }
                 ("xfs_admin", vec!["-L".into(), label.into(), dev.into()])
             }
@@ -1006,33 +1112,76 @@ pub fn set_label(src: &FileSource, part: u32, fstype: &str, label: &str) -> io::
             "ntfs" => ("ntfslabel", vec![dev.into(), label.into()]),
             "vfat" => ("fatlabel", vec![dev.into(), label.into()]),
             "exfat" => ("exfatlabel", vec![dev.into(), label.into()]),
-            other => return Err(io::Error::new(io::ErrorKind::InvalidInput, format!("no label tool wired for {other}"))),
+            other => return Err(FsError::unsupported(format!("no label tool wired for {other}"))),
         };
         let argrefs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
         let out = run(tool, &argrefs)?;
         if !out.status.success() {
-            return Err(io::Error::other(format!("{tool} failed: {}", String::from_utf8_lossy(&out.stderr))));
+            return Err(FsError::command(tool, &out));
         }
         Ok(())
     })
 }
 
+/// 一次 UUID 设置请求的两种形式。**不含"目标能不能接受"**——那是 [`uuid_support`] 回答的，
+/// 由调用方比对后决定拒还是做（命令层是唯一能给出"改参数也许有解"式拒绝的地方）
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum UuidRequest {
+    /// 写入调用方给定的值
+    Explicit(String),
+    /// 要求目标生成一个新的随机值
+    NewRandom,
+}
+
+/// 该 FS 能接受什么样的 UUID 设置请求（三态，不折成布尔）：
+/// - `Yes`：值由调用方给定（tune2fs -U / xfs_admin -U / btrfstune -U）
+/// - `RandomOnly`：只支持"生成新随机值"。ntfs 唯一可改的标识是 `ntfslabel --new-serial`
+///   生成的 serial，而它**不是** Windows volume UUID（man ntfslabel）——用户给的具体值
+///   无从落实，静默丢弃正是要防的漂移，故必须让调用方显式拒绝
+/// - `No`：本工具不为这种类型接 UUID 工具
+pub enum UuidSupport {
+    Yes,
+    RandomOnly,
+    No(&'static str),
+}
+
+pub fn uuid_support(fstype: &str) -> UuidSupport {
+    if is_ext(fstype) || matches!(fstype, "xfs" | "btrfs") {
+        UuidSupport::Yes
+    } else if fstype == "ntfs" {
+        UuidSupport::RandomOnly
+    } else {
+        UuidSupport::No("not wired to a tool — use the filesystem's own utility")
+    }
+}
+
 /// 设置 FS UUID。来源：tune2fs -U（man tune2fs）、xfs_admin -U（man xfs_admin）、
-/// ntfslabel --new-serial 无值=随机 serial 且 serial ≠ Windows volume UUID（man ntfslabel）、
-/// btrfstune -f -U（-f：change fsid 属 dangerous changes，man btrfstune）
-pub fn set_uuid(src: &FileSource, part: u32, fstype: &str, uuid: &str) -> io::Result<()> {
+/// ntfslabel --new-serial 无值=随机 serial（man ntfslabel）、
+/// btrfstune -f -U（-f：change fsid 属 dangerous changes，man btrfstune）。
+/// 请求形式与 FS 能力的匹配由调用方先按 [`uuid_support`] 判定；此处只做工具映射，
+/// 落不到工具的组合同样拒绝，不静默降级
+pub fn set_uuid(src: &FileSource, part: u32, fstype: &str, req: &UuidRequest) -> Result<(), FsError> {
     with_partition_device(src, part, |dev| {
-        let (tool, args): (&str, Vec<String>) = match fstype {
-            f if is_ext(f) => ("tune2fs", vec!["-U".into(), uuid.into(), dev.into()]),
-            "xfs" => ("xfs_admin", vec!["-U".into(), uuid.into(), dev.into()]),
-            "ntfs" => ("ntfslabel", vec!["--new-serial".into(), dev.into()]), // ntfs 只支持随机新序号，忽略传入值
-            "btrfs" => ("btrfstune", vec!["-f".into(), "-U".into(), uuid.into(), dev.into()]), // -f：change fsid 属"dangerous changes"，man btrfstune
-            other => return Err(io::Error::new(io::ErrorKind::InvalidInput, format!("no uuid tool wired for {other}"))),
+        let no_tool = |what: &str| {
+            FsError::unsupported(format!("no uuid tool wired for {fstype}{what}"))
+        };
+        let (tool, args): (&str, Vec<String>) = match req {
+            UuidRequest::Explicit(u) => match fstype {
+                f if is_ext(f) => ("tune2fs", vec!["-U".into(), u.clone(), dev.into()]),
+                "xfs" => ("xfs_admin", vec!["-U".into(), u.clone(), dev.into()]),
+                "btrfs" => ("btrfstune", vec!["-f".into(), "-U".into(), u.clone(), dev.into()]),
+                _ => return Err(no_tool("")),
+            },
+            // 只有 ntfs 的工具提供"生成新值"这一用法
+            UuidRequest::NewRandom => match fstype {
+                "ntfs" => ("ntfslabel", vec!["--new-serial".into(), dev.into()]),
+                _ => return Err(no_tool(" that generates a random value")),
+            },
         };
         let argrefs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
         let out = run(tool, &argrefs)?;
         if !out.status.success() {
-            return Err(io::Error::other(format!("{tool} failed: {}", String::from_utf8_lossy(&out.stderr))));
+            return Err(FsError::command(tool, &out));
         }
         Ok(())
     })
@@ -1107,6 +1256,16 @@ mod tests {
         // 无 "-" 分界 / 字段不足 → 拒绝
         assert!(parse_mountinfo("36 25 8:1 / / rw").is_none());
         assert!(parse_mountinfo("").is_none());
+    }
+
+    /// 挂载点必须逐次唯一：只用 PID 命名时，崩溃残留的挂载点会让下一次挂载叠在同一个
+    /// 目录上，PID 复用还会直接撞上别人的残留。此处只断言纯函数部分，不必真挂载
+    #[test]
+    fn temp_mount_points_are_unique() {
+        let a = super::mount_point();
+        let b = super::mount_point();
+        assert_ne!(a, b, "two calls in one process must not share a mount point");
+        assert_eq!(a.parent(), b.parent(), "both live directly under the temp dir");
     }
 
     #[test]

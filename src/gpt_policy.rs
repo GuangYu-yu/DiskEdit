@@ -100,31 +100,38 @@ pub fn classify_repair(g: &RawGpt, file_last_lba: u64) -> io::Result<RepairActio
     })
 }
 
-/// 执行修复（写入路径）：按动作重写双头 / 保护 MBR → 重读校验必须收敛
-pub fn perform_repair(src: &mut FileSource, action: &RepairAction) -> io::Result<()> {
+/// 执行修复（写入路径）：按动作重写双头 / 保护 MBR → 重读校验必须收敛。
+/// `None` 不写盘（调用方已在决策期确认无需修复）
+pub(crate) fn perform_repair(src: &mut FileSource, action: &RepairAction) -> io::Result<()> {
     match action {
-        // None / RepairProtectiveMbr：无需写 GPT（后者由函数尾部的 ensure_protective_mbr 统一重写）
-        RepairAction::None | RepairAction::RepairProtectiveMbr => {}
+        RepairAction::None => return Ok(()),
+        // RepairProtectiveMbr：无需写 GPT（由函数尾部的 ensure_protective_mbr 统一重写）
+        RepairAction::RepairProtectiveMbr => {}
         RepairAction::RelocateBackup { new_backup_lba, new_last_usable }
         | RepairAction::RelocateAndRepair { new_backup_lba, new_last_usable } => {
             let mut g = table::load_gpt(src)
-                .map_err(table::flatten)?
+                .map_err(table::into_io_error)?
                 .ok_or_else(|| io::Error::other("GPT vanished before repair"))?;
             g.header.last_usable_lba = *new_last_usable;
             table::commit_gpt(src, &g, *new_backup_lba)?;
         }
     }
     table::ensure_protective_mbr(src)?;
-    let g2 = table::load_gpt(src).map_err(table::flatten)?.ok_or_else(|| io::Error::other("re-read after repair failed"))?;
+    let g2 = table::load_gpt(src).map_err(table::into_io_error)?.ok_or_else(|| io::Error::other("re-read after repair failed"))?;
     if g2.state != GptState::Valid || g2.pmbr != PmbrSize::Normal {
         return Err(io::Error::other("repair did not converge — refusing"));
     }
     Ok(())
 }
 
-/// 所有需要做空间算术的命令（add/new/del/rename/flag/resize-part）都先经过这里：
-/// 读取 → 判定（classify_repair）→ 需要时就地修复（perform_repair）→ 返回修复后的表。
-/// 表自身的几何自洽性（主头位置、可用区、备份头是否越界）由 table 在解析层强制；
+/// 所有需要做空间算术的命令（add/new/del/rename/flag/resize-part/copy）都先经过这里：
+/// 读取 → 判定（classify_repair）→ 把修复后的几何反映到返回的表上。
+///
+/// **绝不写盘**：入参是 `&FileSource`，类型上就没有写入能力。决策与副作用分开是各自的
+/// 唯一出口——修复动作由 [`apply_repair`] 执行，调用方须在**所有事前拒绝判定之后**才调用它，
+/// 否则那些 `Refused`（承诺"本次未写盘"，退出码 10）就成了假话。
+///
+/// 表自身的几何自洽性（主头位置、可用区、数组位置、备份头是否越界）由 table 在解析层强制；
 /// plan 不走这里（plan 不写盘，修复动作由 apply 执行）。
 ///
 /// "修复后必须两份头都有效"这一条有规范依据：UEFI 2.10 §5.3.2 规定
@@ -132,26 +139,32 @@ pub fn perform_repair(src: &mut FileSource, action: &RepairAction) -> io::Result
 /// of a physical volume_"，理由同节给出——GPT 的恢复方案依赖备份头位于设备末端，容量变化后
 /// 备份头必须随之搬移。本函数被所有空间算术命令共用（含不扩容的 del），对它们而言比规范更严：
 /// 规范只规定了扩容场景的下限，并未禁止其他操作也要求双头有效
-/// 失败按"写没写盘"分类：解析失败与"修不了"都发生在任何写入之前 → `Infra`（不能提示
-/// "盘可能已改变"）；一旦 perform_repair 开始写，后续失败就只能按 `Failed` 报
-pub fn ensure_geometry(src: &mut FileSource) -> Result<Option<RawGpt>, Fail> {
-    let g = match table::load_gpt(src) {
-        Ok(g) => g,
+pub fn resolve_geometry(src: &FileSource) -> Result<Option<(RawGpt, RepairAction)>, Fail> {
+    let mut g = match table::load_gpt(src) {
+        Ok(Some(g)) => g,
+        Ok(None) => return Ok(None),
+        // 解析失败与"修不了"都发生在任何写入之前 → Infra（不能提示"盘可能已改变"）
         Err(e) => return Err(Fail::infra(format!("parse failed: {e}"))),
     };
-    let Some(g) = g else { return Ok(None) };
     let file_last_lba = src.size / g.ss - 1;
+    // 这些拒绝（PMBR SizeInLBA 越出容器、容器装不下备份头跨度、分区越出修复后的可用区）
+    // 都是盘/容器自身的异常：改请求参数也无解，故归 infra
     let action = classify_repair(&g, file_last_lba).map_err(|e| Fail::infra(e.to_string()))?;
-    if action != RepairAction::None {
-        perform_repair(src, &action)?;
-        return match table::load_gpt(src) {
-            Ok(Some(g)) => Ok(Some(g)),
-            Ok(None) => Err(Fail::failed("GPT vanished while repairing")),
-            // 修复已写过盘 → 重读失败只能按"可能已改变"处理
-            Err(e) => Err(Fail::failed(format!("re-read after repair: {e}"))),
-        };
+    // 修复后的可用区上界取自动作本身（决策期已算好），调用方据此校验，不必自己再推导一次。
+    // 只反映决策结果，不改盘
+    if let Some(new_last_usable) = action.new_last_usable() {
+        g.header.last_usable_lba = new_last_usable;
     }
-    Ok(Some(g))
+    Ok(Some((g, action)))
+}
+
+/// 执行修复的 `Fail` 版本：空间算术命令（add/del/rename/flag/resize-part/copy）走这里，
+/// 它们需要"已写盘 ⇒ Failed"这一层语义。`None` 不碰盘。
+/// 一旦开始写，后续任何失败都只能按 `Failed`（30）报：此时已不能声称"未写盘"
+pub fn apply_repair(src: &mut FileSource, action: &RepairAction) -> Result<(), Fail> {
+    // io 失败经 From<io::Error> 落到 Failed：这是"已写盘或无法断定"的安全缺省
+    perform_repair(src, action)?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -174,6 +187,7 @@ mod tests {
                 partition_entry_lba: 2,
                 number_of_partition_entries: 128,
                 size_of_partition_entry: 128,
+                header_size: 92,
             },
             entries: ents.iter().map(|&(s, e)| gptman::GPTPartitionEntry {
                 partition_type_guid: [1; 16],

@@ -2,15 +2,16 @@
 //!
 //! 读取经 gptman（主备头自动回退、扇区大小自动探测）。
 //! 写入自行序列化（gptman write_into 无 sync、顺序不受控）：
-//! 头 92 字节 + 条目 128 字节，均为 UEFI 规范布局；CRC（ISO-HDLC）
-//! 对实际写盘的字节计算。
+//! 头 92 字节起（实际长度见规范 HeaderSize，CRC 覆盖该长度的字节）+ 条目 128 字节，
+//! 均为 UEFI 规范布局；CRC（ISO-HDLC）对实际写盘的字节计算。
 //!
 //! 写原语的错误类型分两类，判据是调用方要不要区分**未写盘的事前拒绝（退出码 10）**与
 //! **写盘后失败（30，须提示"盘可能已改变"）**：
 //! - 需要区分 → 返回 `outcome::Fail`：写盘前的校验/形状拒绝写 `Fail::refused`，
 //!   I/O 失败交给 `?`（`From<io::Error> for Fail` 落到 `Failed`，即安全缺省）
-//! - 不需要（调用方一律按 30 处理，如 commit_gpt 只被 ensure_geometry/apply_inner 使用）
-//!   → 保持 `io::Result`，避免无收益的类型搬运
+//! - 不需要（调用方一律按 30 处理）→ 保持 `io::Result`，避免无收益的类型搬运。
+//!   例：commit_gpt 的调用方是 table 自己的写原语与写入路径（apply_repair / execute_apply /
+//!   execute_resize）
 
 use crate::dev::FileSource;
 use crate::outcome::Fail;
@@ -41,7 +42,7 @@ impl GptCopyKind {
 
 /// 解析层错误：结构非法的表在类型上不可继续当作正常 GPT 使用（load_gpt 只返回它）。
 /// 只提供 `From<io::Error>` 这一个方向——**不提供 `From<GptError> for io::Error`**，
-/// 因此"把结构化错误压平"必须经 flatten() 在每个调用点显式发生，不会被 `?` 静默吞掉。
+/// 因此"把结构化错误压平"必须经 into_io_error() 在每个调用点显式发生，不会被 `?` 静默吞掉。
 #[derive(Debug)]
 pub enum GptError {
     /// 底层读写失败
@@ -119,7 +120,7 @@ impl std::error::Error for GptError {
 
 /// 把 GptError 压平为 io::Error：只给"调用方只需知道这次被拒绝"的写入/查询层用。
 /// cmd_info 不得使用——它必须直接匹配 GptError 变体做结构化诊断。
-pub fn flatten(e: GptError) -> io::Error {
+pub fn into_io_error(e: GptError) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, e.to_string())
 }
 
@@ -133,6 +134,10 @@ pub struct RawHeader {
     pub partition_entry_lba: u64,
     pub number_of_partition_entries: u32,
     pub size_of_partition_entry: u32,
+    /// 规范 HeaderSize：≥ 92 且 ≤ 逻辑块大小，HeaderCRC32 按这么多字节计算
+    /// （UEFI 2.10 §5.3.2 Table 5.5）。读到的值随头一起带回，重写时按原值输出——
+    /// 头是本工具直接映射的盘上字节，改写不能被固定为 92 而丢掉输入
+    pub header_size: u32,
 }
 
 #[derive(Clone)]
@@ -221,7 +226,8 @@ enum HeaderProbe {
     Present(RawHeader),
 }
 
-/// 探测 LBA1 的原始头（92 字节，UEFI 2.10 §5.3.2 Table 5.5 布局），校验签名 + 头 CRC
+/// 探测 LBA1 的原始头（前 92 字节为规范固定字段，其后至 HeaderSize 为保留区；
+/// UEFI 2.10 §5.3.2 Table 5.5 布局），校验签名 + 头 CRC
 fn probe_header(sector: &[u8]) -> HeaderProbe {
     if &sector[0..8] != GPT_SIGNATURE {
         return HeaderProbe::Absent;
@@ -249,20 +255,34 @@ fn probe_header(sector: &[u8]) -> HeaderProbe {
         partition_entry_lba: rd_u64(sector, 72),
         number_of_partition_entries: rd_u32(sector, 80),
         size_of_partition_entry: rd_u32(sector, 84),
+        header_size: hdr_size as u32,
     })
 }
 
 /// GPT 几何校验，依据 UEFI 2.10 §5.3.2 GPT Header：MyLBA = 本头所在 LBA（主头恒为 1）、
 /// FirstUsableLBA ≤ LastUsableLBA、LastUsableLBA 是可供分区条目使用的最后 LBA、
-/// backup header 位于设备最后一个 LBA。
-/// 备份头早于末端 = NeedsRepair（设备扩容后未搬移，由写入路径经 ensure_geometry repair 修复）；
+/// backup header 位于设备最后一个 LBA；条目数组不得覆盖 LBA0/LBA1，也不得侵入可用区
+/// （§5.3.2 规定数组紧跟头部、位于 FirstUsableLBA 之前）。
+/// 备份头早于末端 = NeedsRepair（设备扩容后未搬移，由写入路径经 apply_repair 修复）；
 /// 越过末端 = 拒绝
-fn validate_geometry(header: &RawHeader, file_last_lba: u64) -> Result<GptState, GptError> {
+///
+/// 主/备两个视角的数组位置约束不同，**必须分开**：主数组在可用区**之前**（上界是
+/// FirstUsableLBA），备份数组在可用区**之后**（上界是盘尾的备份头）。两条一起写会把
+/// 所有合法盘的备份副本误拒
+///
+/// 调用前提：条目数/条目大小已由 load_entry_array 判定合理（数组跨度不会溢出）
+fn validate_geometry(
+    header: &RawHeader,
+    ss: u64,
+    file_last_lba: u64,
+    view: GptCopyKind,
+) -> Result<GptState, GptError> {
+    let invalid = |m: &str| GptError::InvalidHeader(m.into());
     if header.primary_lba != 1 {
-        return Err(GptError::InvalidHeader("GPT primary_lba != 1 — invalid GPT".into()));
+        return Err(invalid("GPT primary_lba != 1 — invalid GPT"));
     }
     if header.first_usable_lba > header.last_usable_lba {
-        return Err(GptError::InvalidHeader("first_usable_lba > last_usable_lba — invalid GPT".into()));
+        return Err(invalid("first_usable_lba > last_usable_lba — invalid GPT"));
     }
     if header.last_usable_lba > file_last_lba {
         return Err(GptError::BeyondContainer {
@@ -273,6 +293,33 @@ fn validate_geometry(header: &RawHeader, file_last_lba: u64) -> Result<GptState,
     }
     if header.backup_lba > file_last_lba {
         return Err(GptError::BeyondContainer { field: "backup_lba", value: header.backup_lba, file_last_lba });
+    }
+    // 数组起点恒须在 LBA0（保护 MBR）与 LBA1（主头）之后——主备两视角同判
+    if header.partition_entry_lba < 2 {
+        return Err(invalid("partition_entry_lba < 2 — GPT entry array would cover the protective MBR or the header"));
+    }
+    let span = array_span_sectors(header.number_of_partition_entries, header.size_of_partition_entry, ss);
+    let array_end = header
+        .partition_entry_lba
+        .checked_add(span)
+        .ok_or_else(|| invalid("GPT entry array range overflow"))?;
+    match view {
+        // 主副本：数组夹在头与可用区之间（数组上界不越过 FirstUsableLBA，即
+        // FirstUsableLBA ≥ 2 + span；由本条与上面的 LBA ≥ 2 共同推出）
+        GptCopyKind::Primary => {
+            if array_end > header.first_usable_lba {
+                return Err(invalid("GPT entry array overlaps the usable range — invalid GPT"));
+            }
+        }
+        // 备份副本：数组在可用区之后、备份头之前
+        GptCopyKind::Backup => {
+            if header.partition_entry_lba <= header.last_usable_lba {
+                return Err(invalid("backup GPT entry array overlaps the usable range — invalid GPT"));
+            }
+            if array_end > file_last_lba {
+                return Err(invalid("backup GPT entry array beyond the backup header — invalid GPT"));
+            }
+        }
     }
     Ok(if header.backup_lba == file_last_lba {
         GptState::Valid
@@ -394,7 +441,7 @@ fn parse_primary(src: &FileSource, ss: u64, pmbr: PmbrSize) -> ParsedCopy {
     };
     // 几何自洽性校验（validate_geometry）：字段取自本头，末端按本次候选的 ss 口径算，
     // 二者都随副本而变（备份头有它自己的 last_usable / backup_lba），故失败只是本副本不可用
-    let state = match validate_geometry(&header, src.size / ss - 1) {
+    let state = match validate_geometry(&header, ss, src.size / ss - 1, GptCopyKind::Primary) {
         Ok(s) => s,
         Err(e) => return ParsedCopy::CopyDamaged(e),
     };
@@ -411,7 +458,7 @@ fn parse_primary(src: &FileSource, ss: u64, pmbr: PmbrSize) -> ParsedCopy {
 /// 解析备份 GPT（盘尾）。主头不可用（头撕裂/数组损伤/该处读不出来）时的回退路径——
 /// 主备互备是 UEFI 2.10 §5.3.2 的规范要求，此刻盘尾备份是唯一能救回分区表的数据。
 /// 返回的表规范化为"主头视角"（MyLBA=1 / AltLBA=last_lba），state 置
-/// NeedsRepair{PrimaryUnreadable} 以便写入路径 ensure_geometry → perform_repair 重写双头重建主头
+/// NeedsRepair{PrimaryUnreadable} 以便写入路径 resolve_geometry → apply_repair 重写双头重建主头
 fn parse_backup(src: &FileSource, ss: u64, pmbr: PmbrSize) -> ParsedCopy {
     if src.size < ss * 2 {
         return ParsedCopy::Absent;
@@ -440,7 +487,7 @@ fn parse_backup(src: &FileSource, ss: u64, pmbr: PmbrSize) -> ParsedCopy {
     // 转成主头视角后再做几何自洽校验（validate_geometry 按主头语义检查 MyLBA==1）
     header.primary_lba = 1;
     header.backup_lba = file_last_lba;
-    if let Err(e) = validate_geometry(&header, file_last_lba) {
+    if let Err(e) = validate_geometry(&header, ss, file_last_lba, GptCopyKind::Backup) {
         return ParsedCopy::CopyDamaged(e);
     }
     let n = header.number_of_partition_entries as usize;
@@ -500,12 +547,20 @@ fn serialize_entry(e: &GPTPartitionEntry) -> [u8; 128] {
     b
 }
 
-/// 头序列化：92 字节有效 + 补零到扇区；CRC 对自身 92 字节（CRC 字段置 0）计算
-fn serialize_header(h: &RawHeader, array_crc: u32, ss: u64) -> Vec<u8> {
+/// 头序列化：HeaderSize 字节有效 + 补零到扇区；CRC 对 HeaderSize 字节
+/// （CRC 字段置 0）计算（UEFI 2.10 §5.3.2 Table 5.5：HeaderCRC32 覆盖 HeaderSize 字节，
+/// HeaderSize ≥ 92 且 ≤ 逻辑块大小）。HeaderSize 之后到扇区末尾为保留区，恒写零
+fn serialize_header(h: &RawHeader, array_crc: u32, ss: u64) -> io::Result<Vec<u8>> {
+    if h.header_size < 92 || h.header_size as u64 > ss {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("GPT HeaderSize {} out of range 92..={ss}", h.header_size),
+        ));
+    }
     let mut b = vec![0u8; ss as usize];
     b[0..8].copy_from_slice(GPT_SIGNATURE);
     b[8..12].copy_from_slice(&[0x00, 0x00, 0x01, 0x00]); // revision 1.0
-    b[12..16].copy_from_slice(&92u32.to_le_bytes());
+    b[12..16].copy_from_slice(&h.header_size.to_le_bytes());
     b[16..20].copy_from_slice(&0u32.to_le_bytes()); // CRC 占位
     b[24..32].copy_from_slice(&h.primary_lba.to_le_bytes());
     b[32..40].copy_from_slice(&h.backup_lba.to_le_bytes());
@@ -516,9 +571,9 @@ fn serialize_header(h: &RawHeader, array_crc: u32, ss: u64) -> Vec<u8> {
     b[80..84].copy_from_slice(&h.number_of_partition_entries.to_le_bytes());
     b[84..88].copy_from_slice(&h.size_of_partition_entry.to_le_bytes());
     b[88..92].copy_from_slice(&array_crc.to_le_bytes());
-    let crc = crc32(&b[..92]);
+    let crc = crc32(&b[..h.header_size as usize]);
     b[16..20].copy_from_slice(&crc.to_le_bytes());
-    b
+    Ok(b)
 }
 
 /// 条目大小合规：UEFI 2.10 规定 SizeOfPartitionEntry = 128 × 2^n（128/256/512/…），
@@ -568,6 +623,7 @@ fn canonical_headers(g: &RawGpt, last_lba: u64, backup_array_lba: u64) -> (RawHe
         partition_entry_lba: 2,
         number_of_partition_entries: g.header.number_of_partition_entries,
         size_of_partition_entry: g.header.size_of_partition_entry,
+        header_size: g.header.header_size,
     };
     let backup = RawHeader {
         primary_lba: last_lba,
@@ -591,18 +647,20 @@ pub fn commit_gpt(src: &mut FileSource, g: &RawGpt, last_lba: u64) -> io::Result
         .checked_sub(span)
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "disk too small to hold GPT entry array"))?;
     let (primary, backup) = canonical_headers(g, last_lba, backup_array_lba);
+    // 两份头的字节都在首次写盘之前构造完：构造会因 HeaderSize 越界而失败，
+    // 那时盘必须还没被碰过（放到写作序列中间会让拒绝留下半张表）
+    let bh = serialize_header(&backup, array_crc, g.ss)?;
+    let ph = serialize_header(&primary, array_crc, g.ss)?;
 
     src.write_at(backup_array_lba * g.ss, &array_bytes)?;
     src.sync_all()?;
 
-    let bh = serialize_header(&backup, array_crc, g.ss);
     src.write_at(last_lba * g.ss, &bh)?;
     src.sync_all()?;
 
     src.write_at(2 * g.ss, &array_bytes)?;
     src.sync_all()?;
 
-    let ph = serialize_header(&primary, array_crc, g.ss);
     src.write_at(g.ss, &ph)?;
     src.sync_all()?;
     Ok(())
@@ -912,6 +970,7 @@ pub fn create_gpt(src: &mut FileSource, ss: u64, disk_guid: Option<[u8; 16]>) ->
         partition_entry_lba: 2,
         number_of_partition_entries: 128,
         size_of_partition_entry: 128,
+        header_size: 92,
     };
     let g = RawGpt { ss, header, entries: vec![empty_entry(); 128], state: GptState::Valid, pmbr: PmbrSize::Normal };
     commit_gpt(src, &g, last_lba)?;
@@ -951,7 +1010,7 @@ pub fn add_entry_at(
     type_guid: [u8; 16],
     unique_guid: [u8; 16],
 ) -> Result<u32, Fail> {
-    let mut g = crate::gpt_policy::ensure_geometry(src)?.ok_or_else(|| Fail::refused("no GPT"))?;
+    let (mut g, repair) = crate::gpt_policy::resolve_geometry(src)?.ok_or_else(|| Fail::refused("no GPT"))?;
     if start < g.header.first_usable_lba || end > g.header.last_usable_lba || start > end {
         return Err(Fail::refused(format!(
             "range {start}..{end} outside usable {}..{}",
@@ -977,6 +1036,8 @@ pub fn add_entry_at(
         attribute_bits: 0,
         partition_name: name.into(),
     };
+    // 拒绝判定已全部结束，首次写盘从这里开始
+    crate::gpt_policy::apply_repair(src, &repair)?;
     let last_lba = src.size / g.ss - 1;
     commit_gpt(src, &g, last_lba)?;
     ensure_protective_mbr(src)?;
@@ -989,13 +1050,15 @@ pub fn rename_entry(src: &mut FileSource, part: u32, name: &str) -> Result<(), F
     if part == 0 {
         return Err(Fail::refused(format!("invalid partition number {part} (1-based)")));
     }
-    let mut g = crate::gpt_policy::ensure_geometry(src)?.ok_or_else(|| Fail::refused("no GPT"))?;
+    let (mut g, repair) = crate::gpt_policy::resolve_geometry(src)?.ok_or_else(|| Fail::refused("no GPT"))?;
     let e = g.entries.get_mut((part - 1) as usize)
         .ok_or_else(|| Fail::refused(format!("partition {part} not found")))?;
     if e.ending_lba == 0 {
         return Err(Fail::refused(format!("partition {part} is empty")));
     }
     e.partition_name = name.into();
+    // 拒绝判定已全部结束，首次写盘从这里开始
+    crate::gpt_policy::apply_repair(src, &repair)?;
     let last_lba = src.size / g.ss - 1;
     Ok(commit_gpt(src, &g, last_lba)?)
 }
@@ -1033,7 +1096,7 @@ pub fn set_gpt_flag(src: &mut FileSource, part: u32, flag: &str, on: bool) -> Re
         "required" => 1 << 0,
         other => return Err(Fail::refused(format!("unknown gpt flag {other} (esp/legacy/hidden/required)"))),
     };
-    let mut g = crate::gpt_policy::ensure_geometry(src)?.ok_or_else(|| Fail::refused("no GPT"))?;
+    let (mut g, repair) = crate::gpt_policy::resolve_geometry(src)?.ok_or_else(|| Fail::refused("no GPT"))?;
     let e = g.entries.get_mut((part - 1) as usize)
         .ok_or_else(|| Fail::refused(format!("partition {part} not found")))?;
     if e.ending_lba == 0 {
@@ -1046,6 +1109,8 @@ pub fn set_gpt_flag(src: &mut FileSource, part: u32, flag: &str, on: bool) -> Re
     } else {
         e.attribute_bits &= !bit;
     }
+    // 拒绝判定已全部结束，首次写盘从这里开始
+    crate::gpt_policy::apply_repair(src, &repair)?;
     let last_lba = src.size / g.ss - 1;
     Ok(commit_gpt(src, &g, last_lba)?)
 }
@@ -1225,13 +1290,15 @@ pub fn del_entry(src: &mut FileSource, part: u32) -> Result<(), Fail> {
     if part == 0 {
         return Err(Fail::refused(format!("invalid partition number {part} (1-based)")));
     }
-    let mut g = crate::gpt_policy::ensure_geometry(src)?.ok_or_else(|| Fail::refused("no GPT"))?;
+    let (mut g, repair) = crate::gpt_policy::resolve_geometry(src)?.ok_or_else(|| Fail::refused("no GPT"))?;
     let e = g.entries.get_mut((part - 1) as usize)
         .ok_or_else(|| Fail::refused(format!("partition {part} not found")))?;
     if e.ending_lba == 0 {
         return Err(Fail::refused(format!("partition {part} is already empty")));
     }
     *e = empty_entry();
+    // 拒绝判定已全部结束，首次写盘从这里开始
+    crate::gpt_policy::apply_repair(src, &repair)?;
     let last_lba = src.size / g.ss - 1;
     commit_gpt(src, &g, last_lba)?;
     Ok(ensure_protective_mbr(src)?)
@@ -1291,6 +1358,150 @@ mod tests {
         let g = load_gpt(&src).unwrap().unwrap();
         let e = commit_gpt(&mut src, &g, 0).unwrap_err();
         assert!(e.to_string().contains("too small to hold GPT entry array"), "{e}");
+    }
+
+    /// 把 LBA1 主头的 HeaderSize 改成 `hdr_size` 并按新长度重算 CRC；
+    /// `reserved` 为真时同时把 92..96 的非零保留字节写进去
+    fn patch_primary_header(mut src: FileSource, hdr_size: u32, reserved: bool) -> FileSource {
+        let ss = src.sector_size as usize;
+        let mut sec = vec![0u8; ss];
+        src.read_at(ss as u64, &mut sec).unwrap();
+        sec[12..16].copy_from_slice(&hdr_size.to_le_bytes());
+        if reserved {
+            sec[92..96].fill(0xAA);
+        }
+        sec[16..20].fill(0);
+        let crc = crc32(&sec[..hdr_size as usize]);
+        sec[16..20].copy_from_slice(&crc.to_le_bytes());
+        src.write_at(ss as u64, &sec).unwrap();
+        src
+    }
+
+    /// HeaderSize 是规范字段而非固定 92：读到的值必须随头带回并按原值重写，
+    /// CRC 覆盖 HeaderSize 字节（含 92 之后的保留区）。写入端固定 92 的实现会把
+    /// 合法的更大 HeaderSize 静默规范化掉——读改写不再是恒等变换
+    #[test]
+    fn header_size_is_preserved_across_rewrite() {
+        for (hdr_size, reserved) in [(92u32, false), (96, true), (512, false)] {
+            let mut src = patch_primary_header(src_from_gpt(&format!("hsz{hdr_size}"), 512), hdr_size, reserved);
+            let g = load_gpt(&src).unwrap().unwrap();
+            assert_eq!(g.header.header_size, hdr_size, "parse must carry HeaderSize");
+            let last_lba = src.size / 512 - 1;
+            commit_gpt(&mut src, &g, last_lba).unwrap();
+            let g2 = load_gpt(&src).unwrap().unwrap();
+            assert_eq!(g2.header.header_size, hdr_size, "rewrite must keep HeaderSize");
+            // 盘上字节自证：字段等于原值，且 CRC 恰覆盖该长度
+            let mut sec = vec![0u8; 512];
+            src.read_at(512, &mut sec).unwrap();
+            assert_eq!(u32::from_le_bytes(sec[12..16].try_into().unwrap()), hdr_size);
+            let stored = u32::from_le_bytes(sec[16..20].try_into().unwrap());
+            sec[16..20].fill(0);
+            assert_eq!(crc32(&sec[..hdr_size as usize]), stored);
+        }
+    }
+
+    /// 头部自述的 HeaderSize 越出容器/小于规范下限时必须返回错误，
+    /// 不得按该值切片（越界 panic）或写出一张 CRC 语义不明的头
+    #[test]
+    fn header_size_out_of_range_is_an_error() {
+        let mut src = src_from_gpt("hszbad", 512);
+        let g = load_gpt(&src).unwrap().unwrap();
+        let last_lba = src.size / 512 - 1;
+        for bad in [0u32, 91, 513, u32::MAX] {
+            let mut g = g.clone();
+            g.header.header_size = bad;
+            let e = commit_gpt(&mut src, &g, last_lba).unwrap_err();
+            assert!(e.to_string().contains("HeaderSize"), "{bad}: {e}");
+        }
+    }
+
+    /// 几何校验的直调夹具：128 × 128B 条目 ⇒ 数组跨度 32 扇区（512B 扇区）
+    const SPAN_128_512: u64 = 32;
+
+    fn geo_header(first_usable: u64, last_usable: u64, entry_lba: u64) -> RawHeader {
+        RawHeader {
+            primary_lba: 1,
+            backup_lba: 999,
+            first_usable_lba: first_usable,
+            last_usable_lba: last_usable,
+            disk_guid: [0; 16],
+            partition_entry_lba: entry_lba,
+            number_of_partition_entries: 128,
+            size_of_partition_entry: 128,
+            header_size: 92,
+        }
+    }
+
+    /// 主副本视角：条目数组必须夹在头部与可用区之间（[2, 2+span) ⊆ 可用区之前）。
+    /// 越界的数组会让"分区数据"与"分区表"共用同一段 LBA，读出来的条目是别的字节
+    #[test]
+    fn geometry_primary_requires_entry_array_before_usable_range() {
+        let last = 999;
+        let ok = validate_geometry(&geo_header(2 + SPAN_128_512, 900, 2), 512, last, GptCopyKind::Primary);
+        assert!(ok.is_ok(), "spec-shaped table must pass: {ok:?}");
+        // 数组起点压住 LBA0/LBA1
+        assert!(matches!(
+            validate_geometry(&geo_header(34, 900, 1), 512, last, GptCopyKind::Primary),
+            Err(GptError::InvalidHeader(_))
+        ));
+        // 起点合规但数组上界越过 FirstUsableLBA（比"起点 < 2"隐蔽）
+        assert!(matches!(
+            validate_geometry(&geo_header(34, 900, 4), 512, last, GptCopyKind::Primary),
+            Err(GptError::InvalidHeader(_))
+        ));
+        // FirstUsableLBA 装不下数组：first_usable < 2 + span
+        assert!(matches!(
+            validate_geometry(&geo_header(1, 900, 2), 512, last, GptCopyKind::Primary),
+            Err(GptError::InvalidHeader(_))
+        ));
+        // 极端下界：拒绝而非回绕/越界
+        assert!(matches!(
+            validate_geometry(&geo_header(0, 900, 2), 512, last, GptCopyKind::Primary),
+            Err(GptError::InvalidHeader(_))
+        ));
+    }
+
+    /// 备份副本视角：数组在可用区**之后**、备份头之前。主备两条约束不可混用——
+    /// 备份数组本来就不在可用区之前，套用主视角会误拒所有合法盘
+    #[test]
+    fn geometry_backup_requires_entry_array_after_usable_range() {
+        let file_last = 999;
+        // 规范形状：数组 [967, 999)，可用区上界 966
+        let legal = geo_header(2 + SPAN_128_512, file_last - SPAN_128_512 - 1, file_last - SPAN_128_512);
+        assert!(validate_geometry(&legal, 512, file_last, GptCopyKind::Backup).is_ok());
+        // 同一份头按主副本视角必须被拒：证明两视角确实是两套约束
+        assert!(validate_geometry(&legal, 512, file_last, GptCopyKind::Primary).is_err());
+        // 数组落进可用区
+        assert!(validate_geometry(&geo_header(34, 966, 966), 512, file_last, GptCopyKind::Backup).is_err());
+        // 数组越过备份头（越过盘尾）
+        assert!(validate_geometry(&geo_header(34, 966, 968), 512, file_last, GptCopyKind::Backup).is_err());
+        // 起点仍须在 LBA0/LBA1 之后
+        assert!(validate_geometry(&geo_header(34, 966, 1), 512, file_last, GptCopyKind::Backup).is_err());
+    }
+
+    /// 直接把一份自定义几何的主副本写进镜像（绕过 commit_gpt 的规范化和写入序列）
+    fn write_raw_primary(src: &mut FileSource, mut h: RawHeader, ss: u64) {
+        let (bytes, _, crc) =
+            serialize_array(&[], h.number_of_partition_entries, h.size_of_partition_entry, ss).unwrap();
+        src.write_at(h.partition_entry_lba * ss, &bytes).unwrap();
+        h.header_size = 92;
+        let sec = serialize_header(&h, crc, ss).unwrap();
+        src.write_at(ss, &sec).unwrap();
+    }
+
+    /// 端到端：主副本自述 first_usable_lba = 1（装不下条目数组）时必须被拒，
+    /// 且不得因"主副本坏"就静默交由别处掩盖
+    #[test]
+    fn geometry_invariant_reaches_load_gpt() {
+        let ss = 512u64;
+        let mut src = src_from_gpt("geo_e2e", ss);
+        let file_last = src.size / ss - 1;
+        // 抹掉盘尾备份头：本用例只考主副本的判定
+        src.write_at(file_last * ss, &vec![0u8; ss as usize]).unwrap();
+        let mut h = geo_header(1, 66, 2);
+        h.backup_lba = file_last;
+        write_raw_primary(&mut src, h, ss);
+        assert!(matches!(load_gpt(&src), Err(GptError::InvalidHeader(_))));
     }
 
     /// MBR 的 StartLBA/SizeInLBA 是 u32 字段：超出表示范围必须拒绝。

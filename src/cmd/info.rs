@@ -11,13 +11,7 @@ pub(crate) const HELP: &str = r#"diskedit info <TARGET> [--sector-size N]
   layout. Read-only. --sector-size N overrides the 512B default (raw images)."#;
 
 pub(crate) fn cmd_info(a: &Args) -> u8 {
-    let src = match open_target_ro(a) {
-        Ok(s) => s,
-        Err((_, msg)) => {
-            eprintln!("{msg}");
-            return EXIT_INFRA;
-        }
-    };
+    let src = open_target_ro(a).unwrap_or_else(|f| bail_fail(f));
     let mut out = String::from("{\"label\":");
     let mut stale_notes: Vec<String> = Vec::new();
     let gpt = match table::load_gpt(&src) {
@@ -36,8 +30,7 @@ pub(crate) fn cmd_info(a: &Args) -> u8 {
                 table::GptError::InvalidHeader(_) => "invalid GPT header",
                 table::GptError::Io(_) => "I/O error",
             };
-            eprintln!("parse failed ({kind}): {e}");
-            return EXIT_INFRA;
+            bail_fail(Fail::infra(format!("parse failed ({kind}): {e}")));
         }
     };
     if let Some(g) = gpt {
@@ -101,10 +94,7 @@ pub(crate) fn cmd_info(a: &Args) -> u8 {
         // 与 GPT 分支的判据不一致（缺表 = 现状不匹配，读不出来 = 盘内容/环境故障）
         let mbr = match table::parse_mbr(&src) {
             Ok(m) => m,
-            Err(e) => {
-                eprintln!("parse failed: {e}");
-                return EXIT_INFRA;
-            }
+            Err(e) => bail_fail(Fail::infra(format!("parse failed: {e}"))),
         };
         match mbr {
             // 仅签名、零记录也判 mbr（`new --table msdos` 的合法初始态）
@@ -117,9 +107,12 @@ pub(crate) fn cmd_info(a: &Args) -> u8 {
                 let parts: Vec<String> = mbr.iter().map(|p| {
                     let fs = if p.is_container { "container".to_string() }
                         else { fsid::identify(&src, p.start_lba as u64 * src.sector_size, p.size_lba as u64 * src.sector_size).unwrap_or("error").to_string() };
+                    // 末端在 u64 域算：两个 u32 字段相加会溢出（debug panic / release 回绕），
+                    // 报出一个小于起点的 last_lba。size_lba != 0 由 parse_mbr 保证，无下溢
+                    let last_lba = p.start_lba as u64 + p.size_lba as u64 - 1;
                     format!(
                         "{{\"num\":{},\"type\":\"0x{:02X}\",\"first_lba\":{},\"last_lba\":{},\"size_bytes\":{},\"fs\":\"{}\"}}",
-                        p.num, p.os_type, p.start_lba, p.start_lba + p.size_lba.saturating_sub(1),
+                        p.num, p.os_type, p.start_lba, last_lba,
                         p.size_lba as u64 * src.sector_size, fs
                     )
                 }).collect();

@@ -112,16 +112,22 @@ impl Outcome {
         matches!(self, Self::Applied { .. })
     }
 
+    /// 后置条件全部满足：无待办且内核视图已同步。这是**唯一**对应退出码 0 的形态，
+    /// 调用点要问"是不是完全成功"时用它而不是比退出码——比数字会把"部分完成"误判成成功
+    pub fn is_complete(&self) -> bool {
+        matches!(
+            self,
+            Self::Applied { pending, kernel_sync }
+                if pending.is_empty() && *kernel_sync == KernelSync::Synchronized
+        )
+    }
+
     /// 唯一的 Outcome → 退出码映射点
     pub fn exit_code(&self) -> u8 {
         match self {
             Self::Refused(_) => EXIT_REFUSED,
             Self::Infra { .. } | Self::Failed { .. } => EXIT_INFRA,
-            Self::Applied { pending, kernel_sync }
-                if pending.is_empty() && *kernel_sync == KernelSync::Synchronized =>
-            {
-                EXIT_OK
-            }
+            applied if applied.is_complete() => EXIT_OK,
             Self::Applied { .. } => EXIT_PARTIAL,
         }
     }
@@ -184,7 +190,26 @@ pub enum Fail {
 /// 与 table::GptError 只提供单向压平同理：需要区分的地方由编译器强制它显式表态
 impl From<std::io::Error> for Fail {
     fn from(e: std::io::Error) -> Self {
-        Self::Failed(e.to_string())
+        Self::failed(e.to_string())
+    }
+}
+
+/// FS 层的失败分类 → 出口语义。**这是 `FsError` 唯一的解释处**：fsops 只回答
+/// "操作层面发生了什么"，落成哪个退出码属应用层 policy，故不在 fsops 里做。
+///
+/// 判据仍是那两条：成因在请求还是在环境。「类型没有接线 / 参数与目标现状不符」是前者，
+/// 改参数（或换命令）有意义 → 拒绝（10）；工具缺失、环境故障、外部工具非零退出都是后者，
+/// 改参数无用 → 30。写盘之后（`execute_*` 里）拿不到这个映射：那里 `FsError` 已被
+/// 压平成 io::Error，结论只能是 Failed
+impl From<crate::fsops::FsError> for Fail {
+    fn from(e: crate::fsops::FsError) -> Self {
+        use crate::fsops::FsError;
+        match e {
+            FsError::UnsupportedFs(m) | FsError::InvalidArgument(m) => Self::refused(m),
+            FsError::ToolMissing(m) => Self::infra(m),
+            FsError::Io(err) => Self::infra(err.to_string()),
+            FsError::CommandFailed(m) => Self::infra(m),
+        }
     }
 }
 
@@ -213,6 +238,28 @@ impl Fail {
     pub fn infra_io(e: std::io::Error) -> Self {
         Self::Infra(e.to_string())
     }
+
+    /// 给原因加上本层上下文（变体与退出码不变）。存在的意义是让调用点补一句"当时在做什么"
+    /// 而不必丢弃已经得出的分类——为了拼文案而改用 `Fail::infra(..)` 会把
+    /// `Refused` 悄悄升格成 `Infra`
+    pub fn context(self, what: &str) -> Self {
+        match self {
+            Self::Refused(m) => Self::Refused(format!("{what}: {m}")),
+            Self::Infra(m) => Self::Infra(format!("{what}: {m}")),
+            Self::Failed(m) => Self::Failed(format!("{what}: {m}")),
+        }
+    }
+}
+
+/// 把内层 `Fail` 并入一个"已越界"的调用点：此时对外结论只能是 `Failed`（盘可能已改变），
+/// 内层是 Refused 也只是因为它自己那一层还没写盘——对本层已经不算数了。
+/// 存在的意义是让这种"层级差"显式可见，而不是靠 `?` 悄悄把 Refused 透传出去。
+/// 不提供 `From<Fail> for io::Error`：压平必须逐点写明，理由同上
+pub fn into_io_error(e: Fail) -> std::io::Error {
+    let msg = match e {
+        Fail::Refused(m) | Fail::Infra(m) | Fail::Failed(m) => m,
+    };
+    std::io::Error::other(msg)
 }
 
 /// 内部执行体与对外入口的分界：执行体用 `?` 传播（io 错误默认按"可能已改变"归 Failed），
@@ -223,5 +270,66 @@ pub fn finish(result: Result<(), Fail>, pending: Vec<Pending>) -> Outcome {
         Err(Fail::Refused(m)) => Outcome::refused(m),
         Err(Fail::Infra(m)) => Outcome::infra(m),
         Err(Fail::Failed(m)) => Outcome::failed(m),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::fsops::FsError;
+
+    /// FsError 的分类只在这一处落成出口语义：不认得的类型 / 参数与目标现状不符 ⇒ 10
+    /// （改参数有意义），工具缺失 / 环境故障 / 外部工具非零退出 ⇒ 30（改参数无意义）
+    #[test]
+    fn fs_error_maps_to_exit_codes() {
+        let code = |e: FsError| finish(Err(Fail::from(e)), Vec::new()).exit_code();
+        assert_eq!(code(FsError::UnsupportedFs("no resize tool".into())), EXIT_REFUSED);
+        assert_eq!(code(FsError::InvalidArgument("bad size".into())), EXIT_REFUSED);
+        assert_eq!(code(FsError::ToolMissing("no mkfs.xfs".into())), EXIT_INFRA);
+        assert_eq!(code(FsError::Io(std::io::Error::other("EIO"))), EXIT_INFRA);
+        assert_eq!(code(FsError::CommandFailed("mkswap failed".into())), EXIT_INFRA);
+    }
+
+    /// 越过 durable boundary 之后，同一分类不再有出口语义：压平即只剩 Failed
+    /// （报告里必须带"盘可能已改变"，此时确实无法断言）
+    #[test]
+    fn fs_error_flattens_to_failed_after_the_boundary() {
+        let after: std::io::Error = FsError::UnsupportedFs("no resize tool".into()).into();
+        assert!(matches!(Fail::from(after), Fail::Failed(_)));
+    }
+
+    /// 上下文只改文案，不改分类——为了补一句"当时在做什么"而改用 `Fail::infra(..)`
+    /// 会把 10 悄悄升格成 30
+    #[test]
+    fn context_keeps_the_variant() {
+        assert!(matches!(Fail::refused("x").context("doing y"), Fail::Refused(m) if m == "doing y: x"));
+        assert!(matches!(Fail::infra("x").context("doing y"), Fail::Infra(m) if m == "doing y: x"));
+        assert!(matches!(Fail::failed("x").context("doing y"), Fail::Failed(m) if m == "doing y: x"));
+    }
+
+    /// 本模块是"后置条件契约 + 退出码的唯一映射点"，不认识任何具体文件系统或工具——
+    /// 那类知识属于 fsops/movepart。一旦落进来，它就会以"某类走某工具"的形式改变分类结论，
+    /// 而分类错了是静默的。层的归属靠自觉守不住，故设门禁：写下一个名字就立刻红。
+    /// 只扫代码：注解描述契约本身（含它覆盖哪些机制）是这一层的本分
+    #[test]
+    fn knows_no_concrete_filesystem_or_tool() {
+        let src = include_str!("outcome.rs");
+        let code = src[..src.find("#[cfg(test)]").unwrap_or(src.len())]
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .map(|l| &l[..l.find("//").unwrap_or(l.len())])
+            .collect::<Vec<_>>()
+            .join("\n")
+            .to_lowercase();
+        // 门禁自己也要有门禁：截取或去注释若吃掉了全文，下面的断言会全部空过
+        assert!(code.contains("exit_refused"), "门禁没扫到代码：截取或去注释把它吃空了");
+        for t in [
+            // 文件系统类型
+            "ntfs", "ext2", "ext3", "ext4", "xfs", "btrfs", "f2fs", "vfat", "exfat", "msdos",
+            // 文件系统与卷管理工具
+            "mkfs", "mkswap", "fsck", "tune2fs", "resize2fs", "lvm", "pvresize", "lvextend",
+        ] {
+            assert!(!code.contains(t), "本模块不该提到 {t:?}：那是 fsops/movepart 的知识");
+        }
     }
 }

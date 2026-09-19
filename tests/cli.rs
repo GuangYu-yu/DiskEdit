@@ -467,9 +467,11 @@ fn msdos_user_resize() {
     assert!(o.contains("--no-fs"), "{o}");
     assert_eq!(std::fs::read(&img).unwrap(), raw_before, "refused resize must not write");
 
-    // :N 命中核验按表类型分派：MBR 分区能被解析出来（此前一律按"无 GPT"拒绝）
+    // :N 命中核验按表类型分派：MBR 分区也要能解析出来，不得按"无 GPT"拒绝。
+    // 解析成功之后失败落在 FS 层：unknown 没有 check 工具 ⇒ 拒绝（10）——
+    // 与"表里没这个分区"同为 10，靠文案区分（后者会说 no GPT / MBR covers slots）
     let (c, o) = run(&["check", &format!("{img_s}:1")]);
-    assert_eq!(c, 30, "empty MBR partition must resolve, then fail on FS tooling: {o}");
+    assert_eq!(c, 10, "empty MBR partition must resolve, then be refused for lack of FS tooling: {o}");
     assert!(!o.contains("no GPT"), "{o}");
     let (c, o) = run(&["check", &format!("{img_s}:9")]);
     assert_eq!(c, 10, "out-of-range MBR slot must refuse: {o}");
@@ -950,7 +952,7 @@ fn stale_after_enlarge_info_plan_write() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// 错误路径走真实二进制：bail() 会退出进程，进程内测不到，故用 subprocess 断言退出码 + 文案
+/// 错误路径走真实二进制：bail_fail() 会退出进程，进程内测不到，故用 subprocess 断言退出码 + 文案
 #[test]
 fn cli_negative_paths() {
     let dir = std::env::temp_dir().join(format!("diskedit_neg_{}", std::process::id()));
@@ -1031,7 +1033,7 @@ fn cli_negative_paths() {
     assert!(e.contains("parse failed"), "{e}");
     let (c, _, e) = run(&["resize", &format!("{}:1", bad2.display()), "10M"]);
     assert_eq!(c, 30, "{e}");
-    // 同一判据延伸到 plan/apply/check（此前这三处把"表非法"压成了 10）
+    // 同一判据延伸到 plan/apply/check：表非法在任何入口都是 30
     let (c, _, e) = run(&["plan", bad2.to_str().unwrap(), "--grow", "1"]);
     assert_eq!(c, 30, "plan on a corrupt table must be infra: {e}");
     assert!(e.contains("parse failed"), "{e}");
@@ -1198,6 +1200,100 @@ fn flag_contract_fail_closed() {
     let (c, out, _) = run(&["info", m_s]);
     assert_eq!(c, 0);
     assert!(out.contains("\"type\":\"0x83\""), "{out}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// 参数层与只读输出层的三处缺陷：`--help` 的主题、`:0` 分区号、MBR 条目末端算术域
+#[test]
+fn help_topic_zero_partition_and_mbr_end_overflow() {
+    let dir = std::env::temp_dir().join(format!("diskedit_parse_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let exe = env!("CARGO_BIN_EXE_DiskEdit");
+    let run = |args: &[&str]| -> (i32, String, String) {
+        let out = Command::new(exe).args(args).output().unwrap();
+        (out.status.code().unwrap_or(-1),
+         String::from_utf8_lossy(&out.stdout).into_owned(),
+         String::from_utf8_lossy(&out.stderr).into_owned())
+    };
+
+    // <CMD> --help 的主题是命令名；位置参数是目标，取它只会退化成顶层 usage
+    let (c, out, _) = run(&["resize", "whatever.img:1", "--help"]);
+    assert_eq!(c, 0, "per-command help must be selected by the command name: {out}");
+    assert!(out.contains("diskedit resize <TARGET>:N"), "{out}");
+    // --help <CMD> 这条写法仍按位置参数取主题
+    let (c, out, _) = run(&["--help", "resize"]);
+    assert_eq!(c, 0);
+    assert!(out.contains("diskedit resize <TARGET>:N"), "{out}");
+    // copy 没有 checkpoint，中断后重跑从头抄：帮助文本必须如实声明，
+    // 否则用户会以为它能像 move 一样续传
+    let (c, out, _) = run(&["copy", "whatever.img:1", "--help"]);
+    assert_eq!(c, 0);
+    assert!(out.contains("No resume"), "{out}");
+
+    // `:0` 不是合法分区号：拒绝而不是静默当整盘
+    let blank = dir.join("blank.img");
+    std::fs::write(&blank, vec![0u8; 2 * 1024 * 1024]).unwrap();
+    let blank_s = blank.to_str().unwrap();
+    let (c, _, err) = run(&["info", &format!("{blank_s}:0")]);
+    assert_eq!(c, 10, "{err}");
+    assert!(err.contains("1-based"), "{err}");
+
+    // MBR 条目末端 = start + size − 1：两个 u32 相加必须在 u64 域算，
+    // 否则 start 接近 u32::MAX 时 debug 下 panic、release 下回绕成小于起点的 last_lba
+    let mut data = vec![0u8; 2 * 1024 * 1024];
+    data[446 + 4] = 0x83;
+    data[446 + 8..446 + 12].copy_from_slice(&0xFFFF_FFFEu32.to_le_bytes());
+    data[446 + 12..446 + 16].copy_from_slice(&4u32.to_le_bytes());
+    data[510] = 0x55;
+    data[511] = 0xAA;
+    let wrap = dir.join("wrap.img");
+    std::fs::write(&wrap, &data).unwrap();
+    let (c, out, err) = run(&["info", wrap.to_str().unwrap()]);
+    assert_eq!(c, 0, "{err}");
+    let v: serde_json::Value = serde_json::from_str(out.trim()).expect("info must emit valid JSON");
+    assert_eq!(v["label"], "mbr", "{out}");
+    assert_eq!(v["partitions"][0]["first_lba"], 4294967294u64);
+    assert_eq!(v["partitions"][0]["last_lba"], 4294967297u64, "must not wrap in u32: {out}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// 三条"改参数即可解决"的拒绝必须落在 10，且提示要指向正确的旗标：
+/// 未知 FS 名（列出支持的类型）、`resize --start`（指向 move/resize-part）、
+/// `resize-part --start end`（指向 --grow-to-end）
+#[test]
+fn targeted_refusals_are_reported_as_ten() {
+    let dir = std::env::temp_dir().join(format!("diskedit_refuse_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let exe = env!("CARGO_BIN_EXE_DiskEdit");
+    let run = |args: &[&str]| -> (i32, String, String) {
+        let out = Command::new(exe).args(args).output().unwrap();
+        (out.status.code().unwrap_or(-1),
+         String::from_utf8_lossy(&out.stdout).into_owned(),
+         String::from_utf8_lossy(&out.stderr).into_owned())
+    };
+
+    let img = dir.join("t.img");
+    fixture_gpt_image(&img);
+    let img_s = img.to_str().unwrap();
+    let part = format!("{img_s}:1");
+
+    // 不认得的 FS 名是"参数写错了"：必须 10，且把支持的类型列出来供改正
+    let (c, _, e) = run(&["mkfs", &part, "et4", "--yes"]);
+    assert_eq!(c, 10, "unknown fstype must be refused, not reported as infra: {e}");
+    assert!(e.contains("unsupported fstype et4"), "{e}");
+    assert!(e.contains("supported: ext2/3/4"), "{e}");
+
+    // resize 只改大小、不搬移：--start 进白名单后由本命令给出有指向性的拒绝
+    let (c, _, e) = run(&["resize", &part, "--start", "5"]);
+    assert_eq!(c, 10, "{e}");
+    assert!(e.contains("does not relocate"), "{e}");
+
+    // resize-part 的 `--start end` 是 move/copy 的尾部打包语法：提示改用 --grow-to-end
+    let (c, _, e) = run(&["resize-part", &part, "--start", "end"]);
+    assert_eq!(c, 10, "{e}");
+    assert!(e.contains("--grow-to-end"), "{e}");
 
     let _ = std::fs::remove_dir_all(&dir);
 }
