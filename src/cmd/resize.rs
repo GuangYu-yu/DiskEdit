@@ -232,23 +232,29 @@ pub(crate) fn cmd_resize(a: &Args) -> u8 {
     if size_arg.is_some() && (a.size.is_some() || a.grow_to_end) {
         bail_fail(Fail::refused("SIZE and --size/--grow-to-end are mutually exclusive".to_string()));
     }
+    // --size 与 --grow-to-end 是两种给终点的方式：都给时 grow_to_end 分支根本不读
+    // size 的值，静默丢参数比报错更害人（用户以为扩到了 10G）
+    if a.size.is_some() && a.grow_to_end {
+        bail_fail(Fail::refused("--size and --grow-to-end are mutually exclusive".to_string()));
+    }
     if a.lv.is_some() && !a.grow_lv {
         bail_fail(Fail::refused("--lv only works together with --grow-lv".to_string()));
     }
-    // resize 只改大小、不移动。--start 属 move/resize-part 的语义，静默忽略会让用户
-    // 误以为分区被移动过 —— 显式拒绝
-    if a.start.is_some() || a.start_end {
-        bail_fail(Fail::refused("resize does not relocate partitions — use `move` or `resize-part --start`".to_string()));
+    // resize 只改大小、不移动。--start/--end 属 move/resize-part 的语义（挪位），
+    // 静默忽略会让用户误以为分区被移动过 —— 显式拒绝。判据必须覆盖三个入口：
+    // 两者各自单给、以及 `--start end` 那种尾部打包的写法
+    if a.start.is_some() || a.end.is_some() || a.start_end {
+        bail_fail(Fail::refused("resize does not relocate partitions — use `move` or `resize-part --start/--end`".to_string()));
     }
     let src = open_target_ro(a).unwrap_or_else(|f| bail_fail(f));
     match table::table_label(&src) {
-        Ok("gpt") => {}
-        Ok("msdos") => {
+        Ok(table::TableLabel::Gpt) => {}
+        Ok(table::TableLabel::Mbr) => {
             let Some(part) = a.part else { crate::args::usage() };
             return cmd_resize_msdos(a, part, size_arg.as_deref(), &src);
         }
         // superfloppy：无分区表，FS 即整盘，无表可写——纯 FS grow
-        Ok("none") => return cmd_resize_superfloppy(a, size_arg.as_deref(), &src),
+        Ok(table::TableLabel::None) => return cmd_resize_superfloppy(a, size_arg.as_deref(), &src),
         Ok(other) => bail_fail(Fail::refused(format!("resize requires a GPT or MBR target (label: {other})"))),
         Err(e) => bail_fail(Fail::infra(format!("parse failed: {e}"))),
     }
@@ -268,8 +274,6 @@ pub(crate) fn cmd_resize(a: &Args) -> u8 {
     }
     let (start, end, ss) = (e.starting_lba, e.ending_lba, g.ss);
     let last_usable = g.last_usable_lba();
-    // 上一轮 plan 型搬移作业是否尚未收尾（右侧"已空"可能正是搬了一半的结果）
-    let resuming = movepart::has_pending_relocation(&src, part).unwrap_or_else(|f| bail_fail(f));
     let cur_bytes = (end - start + 1) * ss;
     let fstype = fsid::identify(&src, start * ss, (end - start + 1) * ss).unwrap_or_else(|e| bail_fail(Fail::infra(format!("identify failed: {e}"))));
     let is_pv = fstype == "lvm2_pv";
@@ -296,14 +300,11 @@ pub(crate) fn cmd_resize(a: &Args) -> u8 {
 
     // 离线路径
     let is_block = src.is_block;
-    // 上一轮作业没做完就显式续跑它；否则这是一次新事务。判据已在上面按 ckpt 算出，
-    // 这里只负责把"我知道自己在续跑"这件事告诉事务层
-    let mut src = if resuming {
-        open_target_resuming(a)
-    } else {
-        open_target_for_write(a)
-    }
-    .unwrap_or_else(|f| bail_fail(f));
+    // 一次打开完成分类：有没有自己分区的未收尾搬移在**锁下**判定（右侧"已空"可能正是
+    // 搬了一半的结果），而不是先只读判一次再开第二次——判据与开目标之间不许留窗口。
+    // 返回的 resumed 决定 grow 分支：续跑时"右侧已空"可能是搬移的中间态
+    let (mut src, resuming) =
+        open_target_resumable(a, part).unwrap_or_else(|f| bail_fail(f));
     if grow_to_end {
         let free = free_right_gpt(&g, part);
         // 右侧有空闲且没有未收尾的搬移作业 → 纯扩容。若作业未收尾，则"右侧已空"很可能
@@ -313,14 +314,19 @@ pub(crate) fn cmd_resize(a: &Args) -> u8 {
             let o = settle_layout(movepart::resize_part(&mut src, part, start, end + free, chunk, a.no_fs, &mut |m| logger.log(m)), &src);
             return finish_resize(a, o, is_pv, is_block, cur_bytes);
         }
-        // 右侧被挡：自动搬移挡路分区（plan 打印 → --allow-move 放行 → --yes 确认）
-        if !a.allow_move {
+        // 右侧被挡：自动搬移挡路分区（plan 打印 → --allow-move 放行 → --yes 确认）。
+        // --allow-move 只对**新**搬移授权：续跑是"接着做用户已确认过的那件事"，
+        // 被卡的挡路分区正是那份作业的一部分——再要一次授权只会把承诺"重跑原命令
+        // 即续跑"变成谎话。要求豁免的两态由此分开：未收尾作业放行，真空间不足才拒绝
+        if !a.allow_move && !resuming {
             bail_fail(Fail::refused("right side is occupied — pass --allow-move to relocate the blocking partitions (plan will be printed; --yes confirms)".to_string()));
         }
         let plan = match movepart::make_plan_resuming(&mut src, part) {
             Ok(p) => p,
             Err(f) => bail_fail(f),
         };
+        // 续跑的收尾仍须 --yes：盘上状态已与上次请求时不同，写盘前再确认一次；
+        // --yes 一并覆盖"未确认的续跑"与"新的搬移"两种进入方式
         crate::cmd::plan::print_plan(&plan).unwrap_or_else(|e| bail_fail(Fail::refused(format!("plan failed: {e}"))));
         if !a.yes {
             bail_fail(Fail::refused("this resizes by relocating the partitions listed above — review and re-run with --yes"));
@@ -334,7 +340,10 @@ pub(crate) fn cmd_resize(a: &Args) -> u8 {
         if bytes < ss {
             bail_fail(Fail::refused(format!("size {bytes} < one sector ({ss})")));
         }
-        let new_end = start + bytes / ss - 1;
+        // SIZE 是外部输入：换算与相加全程 checked，回绕会把越过 last_usable 的荒谬值送进比较
+        let Some(new_end) = start.checked_add(bytes / ss).and_then(|e| e.checked_sub(1)) else {
+            bail_fail(Fail::refused(format!("size {bytes} overflows the LBA range")));
+        };
         if new_end > last_usable {
             bail_fail(Fail::refused(format!("size {bytes} exceeds usable range (partition would end past last_usable_lba {last_usable})")));
         }
@@ -613,16 +622,21 @@ fn resize_done(a: &Args, is_pv: bool, is_block: bool, old_bytes: u64) -> u8 {
     }
     #[cfg(target_os = "linux")]
     {
+        // 分区号在 cmd_resize 入口就已解析（usage 兜底），到这里还没有是调用方的 bug：
+        // 用 unwrap_or(0) 继续算，报出来的会是"分区从表里消失了"这种指向盘内容的假话
+        let Some(part) = a.part else {
+            bail_fail(Fail::infra("internal error: resize finished without a partition number".to_string()))
+        };
         // 只打开一次：下面读"实际新尺寸"与给 LVM 链取分区节点用的是同一份盘上现状
         let src = open_target_ro(a).unwrap_or_else(|f| bail_fail(f));
         // 表项重读按 label 分派（MBR resize 也走本收尾）
         let new_bytes = if let Ok(Some(g)) = table::load_gpt(&src) {
-            match g.entries.get((a.part.unwrap_or(0) as usize).checked_sub(1).unwrap_or(usize::MAX)) {
+            match (part as usize).checked_sub(1).and_then(|i| g.entries.get(i)) {
                 Some(e) if e.ending_lba != 0 => (e.ending_lba - e.starting_lba + 1) * g.ss,
                 _ => bail_fail(Fail::infra("post-resize: partition vanished from table".to_string())),
             }
         } else if let Ok(Some(mbr)) = table::parse_mbr(&src) {
-            match mbr.iter().find(|p| p.num == a.part.unwrap_or(0)) {
+            match mbr.iter().find(|p| p.num == part) {
                 Some(p) => p.size_lba as u64 * src.sector_size,
                 None => bail_fail(Fail::infra("post-resize: partition vanished from table".to_string())),
             }
@@ -630,7 +644,6 @@ fn resize_done(a: &Args, is_pv: bool, is_block: bool, old_bytes: u64) -> u8 {
             bail_fail(Fail::infra("post-resize: no partition table on target".to_string()))
         };
         let delta = new_bytes.saturating_sub(old_bytes);
-        let part = a.part.unwrap_or(0);
         let r = if is_block {
             lvm_grow_chain(&part_dev_path(&a.target, part), delta, a.grow_lv, a.lv.as_deref())
         } else {

@@ -197,9 +197,11 @@ impl From<std::io::Error> for Fail {
 /// FS 层的失败分类 → 出口语义。**这是 `FsError` 唯一的解释处**：fsops 只回答
 /// "操作层面发生了什么"，落成哪个退出码属应用层 policy，故不在 fsops 里做。
 ///
-/// 判据仍是那两条：成因在请求还是在环境。「类型没有接线 / 参数与目标现状不符」是前者，
-/// 改参数（或换命令）有意义 → 拒绝（10）；工具缺失、环境故障、外部工具非零退出都是后者，
-/// 改参数无用 → 30。写盘之后（`execute_*` 里）拿不到这个映射：那里 `FsError` 已被
+/// 判据仍是那两条：成因在请求还是在环境；环境侧再按"写盘与否"细分。「类型没有接线 /
+/// 参数与目标现状不符」改参数（或换命令）有意义 → 拒绝（10）；工具缺失、环境故障
+/// 发生在任何写盘之前 → Infra（30，改参数无用但不警示"盘可能已改变"）；外部工具
+/// 非零退出意味着工具已经运行——它写没写、写了多少无法断言 → Failed（30，报告带
+/// 警示行）。写盘之后（`execute_*` 里）拿不到这个映射：那里 `FsError` 已被
 /// 压平成 io::Error，结论只能是 Failed
 impl From<crate::fsops::FsError> for Fail {
     fn from(e: crate::fsops::FsError) -> Self {
@@ -208,7 +210,7 @@ impl From<crate::fsops::FsError> for Fail {
             FsError::UnsupportedFs(m) | FsError::InvalidArgument(m) => Self::refused(m),
             FsError::ToolMissing(m) => Self::infra(m),
             FsError::Io(err) => Self::infra(err.to_string()),
-            FsError::CommandFailed(m) => Self::infra(m),
+            FsError::CommandFailed(m) => Self::failed(m),
         }
     }
 }
@@ -262,14 +264,27 @@ pub fn into_io_error(e: Fail) -> std::io::Error {
     std::io::Error::other(msg)
 }
 
+impl Fail {
+    /// 把失败折叠成 CLI 结果。**这是 `Fail` → `Outcome` 的唯一映射点**：三个变体各自
+    /// 对应一种出口语义（10 / 30 / 30 + "盘可能已改变"警示），调用点只表达"这次失败
+    /// 最终怎么呈现"，不自己决定退出码。名字用 `into_*` 而非 `From`：它不是纯粹的类型
+    /// 转换，而是带上出口 policy 的折叠
+    pub fn into_outcome(self) -> Outcome {
+        match self {
+            Fail::Refused(m) => Outcome::refused(m),
+            Fail::Infra(m) => Outcome::infra(m),
+            Fail::Failed(m) => Outcome::failed(m),
+        }
+    }
+}
+
 /// 内部执行体与对外入口的分界：执行体用 `?` 传播（io 错误默认按"可能已改变"归 Failed），
 /// 入口负责换算为 Outcome。这样"退出码"只在入口一处出现
 pub fn finish(result: Result<(), Fail>, pending: Vec<Pending>) -> Outcome {
     match result {
         Ok(()) => Outcome::applied_with(pending),
-        Err(Fail::Refused(m)) => Outcome::refused(m),
-        Err(Fail::Infra(m)) => Outcome::infra(m),
-        Err(Fail::Failed(m)) => Outcome::failed(m),
+        // 失败侧的映射只有一处（`Fail::into_outcome`），本函数不复制它
+        Err(f) => f.into_outcome(),
     }
 }
 
@@ -279,7 +294,8 @@ mod tests {
     use crate::fsops::FsError;
 
     /// FsError 的分类只在这一处落成出口语义：不认得的类型 / 参数与目标现状不符 ⇒ 10
-    /// （改参数有意义），工具缺失 / 环境故障 / 外部工具非零退出 ⇒ 30（改参数无意义）
+    /// （改参数有意义），工具缺失 / 环境故障 ⇒ 30（Infra，改参数无意义但不警示），
+    /// 外部工具非零退出 ⇒ 同码 30 但落 Failed（工具运行过，写没写无法断言 → 带警示行）
     #[test]
     fn fs_error_maps_to_exit_codes() {
         let code = |e: FsError| finish(Err(Fail::from(e)), Vec::new()).exit_code();
@@ -288,6 +304,9 @@ mod tests {
         assert_eq!(code(FsError::ToolMissing("no mkfs.xfs".into())), EXIT_INFRA);
         assert_eq!(code(FsError::Io(std::io::Error::other("EIO"))), EXIT_INFRA);
         assert_eq!(code(FsError::CommandFailed("mkswap failed".into())), EXIT_INFRA);
+        // 同码不同变体：30 的语义差别（有无"盘可能已改变"警示行）只体现在变体上
+        assert!(matches!(Fail::from(FsError::CommandFailed("mkswap failed".into())), Fail::Failed(_)));
+        assert!(matches!(Fail::from(FsError::ToolMissing("no mkfs.xfs".into())), Fail::Infra(_)));
     }
 
     /// 越过 durable boundary 之后，同一分类不再有出口语义：压平即只剩 Failed

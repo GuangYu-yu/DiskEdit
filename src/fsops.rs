@@ -229,7 +229,11 @@ pub(crate) fn decode_octal(s: &str) -> String {
             && i + 3 < b.len()
             && b[i + 1..i + 4].iter().all(|c| (b'0'..=b'7').contains(c))
         {
-            out.push((b[i + 1] - b'0') * 64 + (b[i + 2] - b'0') * 8 + (b[i + 3] - b'0'));
+            // 先在 u32 上合成再收进 u8：八进制位值最大 7*64+7*8+7=511，全程 u8 会在
+            // \777 这类畸形序列上回绕（debug panic / release 511→255），畸形
+            // mountinfo 行不该有让解析进程退出的能力
+            let v = (b[i + 1] - b'0') as u32 * 64 + (b[i + 2] - b'0') as u32 * 8 + (b[i + 3] - b'0') as u32;
+            out.push(v as u8);
             i += 4;
         } else {
             out.push(b[i]);
@@ -478,7 +482,7 @@ fn partition_byte_range(src: &FileSource, part: u32) -> Result<(u64, u64), FsErr
     // 本层契约是 FsError::Io，"表结构非法"对调用者只等于拒绝，故在此显式压平
     // （into_io_error 是可见的调用，不是 From——结构化诊断归 cmd_info）
     if let Some(g) = crate::table::load_gpt(src).map_err(crate::table::into_io_error)? {
-        let e = g.entries.get((part - 1) as usize)
+        let e = part.checked_sub(1).and_then(|i| g.entries.get(i as usize))
             .ok_or_else(|| FsError::invalid(format!("partition {part} not found")))?;
         if e.ending_lba == 0 && e.starting_lba == 0 {
             return Err(FsError::invalid(format!("partition {part} is empty")));
@@ -685,12 +689,14 @@ fn mkfs_tool(fstype: &str) -> Result<MkfsTool<'_>, FsError> {
     Ok(MkfsTool { program, force, ext_type })
 }
 
-/// 命令层"先问再做"的入口：`mkfs` 认不认得这个类型。
+/// 命令层"先问再做"的入口：这个 FS 类型**具备被创建的能力**吗——类型有没有接线、
+/// 对应的外部工具在不在 PATH 且可执行。两问都必须在这里答完
 ///
 /// 必须先问再开事务：拒绝的语义是"什么都没写"，而 mkfs 一旦开了事务就先落一条不可回滚
-/// 屏障——一个拼错的类型名不该因此把目标锁在"未收尾"状态里等 `abandon`
-pub fn mkfs_supported(fstype: &str) -> Result<(), FsError> {
-    mkfs_tool(fstype).map(|_| ())
+/// 屏障——一个拼错的类型名、或一个没装的工具包，都不该把目标锁在"未收尾"状态里等 `abandon`
+pub fn mkfs_capability(fstype: &str) -> Result<(), FsError> {
+    let tool = mkfs_tool(fstype)?;
+    find_tool(&tool.program).map(|_| ())
 }
 
 /// mkfs：破坏分区数据，调用方须先取确认；执行前先擦残留签名（见 erase_ranges），
@@ -1001,14 +1007,16 @@ where
 {
     let mnt = mount_point();
     std::fs::create_dir_all(&mnt).map_err(FsError::from)?;
-    let res = (|| {
-        let mount = find_tool("mount")?;
-        let out = Command::new(mount).arg(dev).arg(&mnt).stdin(Stdio::null()).output().map_err(FsError::from)?;
-        if !out.status.success() {
-            return Err(FsError::command("mount", &out));
-        }
-        f(&mnt.to_string_lossy())
-    })();
+    let mount = find_tool("mount")?;
+    let out = Command::new(mount).arg(dev).arg(&mnt).stdin(Stdio::null()).output().map_err(FsError::from)?;
+    if !out.status.success() {
+        // mount 没成功就谈不上 umount：对从未挂载的目录卸载必然失败，
+        // 那条"may remain"的告警只会把用户引向一个不存在的残留挂载点。
+        // 临时目录仍要清——它是本次调用建的，mount 失败不代表它可以留下
+        crate::dev::best_effort_rmdir(&mnt);
+        return Err(FsError::command("mount", &out));
+    }
+    let res = f(&mnt.to_string_lossy());
     let umount = find_tool("umount");
     if let Ok(u) = umount {
         let out = Command::new(u).arg(&mnt).stdin(Stdio::null()).output();

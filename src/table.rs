@@ -668,12 +668,18 @@ pub(crate) fn commit_table(
 /// 经此重写即收敛
 pub fn ensure_protective_mbr(src: &mut FileSource) -> io::Result<()> {
     let ss = src.sector_size;
+    // 零扇区盘的 read_at(0) 只会撞出 UnexpectedEof，把"盘没有扇区"这件事
+    // 说成一次 I/O 意外：先于任何读盘把几何前提判掉
+    let total_sectors = src.size / ss;
+    if total_sectors == 0 {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "disk has zero sectors"));
+    }
     let mut lba0 = vec![0u8; ss as usize];
     src.read_at(0, &mut lba0)?;
     if lba0[510] == 0x55 && lba0[511] == 0xAA {
         let rec = &lba0[446..462]; // 槽位 1（与下方写入位置一致）
         // 与 pmbr_shape_valid 同口径：槽位 2-4 必须全零，否则 hybrid MBR 残留
-        // 会使 load_gpt 拒读 GPT、0xEE 记录被 parse_mbr 当分区输出
+        // 会使 load_gpt 拒读 GPT（形状前置不满足），盘型判定就此失真
         if lba0[462..510].iter().all(|&b| b == 0) && rec[4] == PROT_MBR_TYPE {
             let start = rd_u32(rec, 8);
             let size = rd_u32(rec, 12);
@@ -693,9 +699,6 @@ pub fn ensure_protective_mbr(src: &mut FileSource) -> io::Result<()> {
     rec[4] = PROT_MBR_TYPE;
     rec[5..8].copy_from_slice(&[0xFF, 0xFF, 0xFF]); // EndCHS
     let total_sectors = src.size / ss;
-    if total_sectors == 0 {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "disk has zero sectors"));
-    }
     let size: u32 = if total_sectors > u32::MAX as u64 { u32::MAX } else { (total_sectors - 1) as u32 };
     rec[8..12].copy_from_slice(&1u32.to_le_bytes());
     rec[12..16].copy_from_slice(&size.to_le_bytes());
@@ -707,6 +710,7 @@ pub fn ensure_protective_mbr(src: &mut FileSource) -> io::Result<()> {
 }
 
 /// MBR（真 MBR 盘）解析：LBA0 @446 起 4×16B，OSIndicator ∈ {0x05,0x0F,0x85} 为容器
+#[derive(Debug, Clone)]
 pub struct MbrPartition {
     pub num: u32,
     pub os_type: u8,
@@ -715,7 +719,36 @@ pub struct MbrPartition {
     pub is_container: bool,
 }
 
-pub fn parse_mbr(src: &FileSource) -> io::Result<Option<Vec<MbrPartition>>> {
+/// MBR 的一处损伤。盘型不因它改变（这仍然是一张 MBR 盘），但这份表不能当作可安全
+/// 操作的对象——写路径必须拒绝，观察路径必须照实报出
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MbrDamage {
+    /// 条目末端越过盘尾（写入侧 `add_mdos_entry` 同样拒绝这种条目）
+    PastEnd { num: u32, start: u32, size: u32, total_sectors: u64 },
+}
+
+impl MbrDamage {
+    pub fn describe(&self) -> String {
+        match self {
+            MbrDamage::PastEnd { num, start, size, total_sectors } => format!(
+                "MBR entry {num} extends past the end of the disk (start {start} + {size} > {total_sectors} sectors)"
+            ),
+        }
+    }
+}
+
+/// 原样解析的结果：条目 + 损伤清单。**观察路径消费它**——受损的表仍然是表，`info`
+/// 要能看到它（"不可操作"不该连带变成"不可观察"）
+#[derive(Debug, Clone)]
+pub struct RawMbr {
+    pub parts: Vec<MbrPartition>,
+    /// 有损伤的条目**仍留在 `parts` 里**：观察者要看的是那条越界的记录本身，
+    /// 而不是只知道"表有损伤"
+    pub damage: Vec<MbrDamage>,
+}
+
+/// 原样解析（不做可操作性判定）。`None` = 这不是一张 MBR 盘
+pub fn parse_mbr_raw(src: &FileSource) -> io::Result<Option<RawMbr>> {
     let ss = src.sector_size as usize;
     if src.size < ss as u64 {
         return Ok(None);
@@ -725,12 +758,15 @@ pub fn parse_mbr(src: &FileSource) -> io::Result<Option<Vec<MbrPartition>>> {
     if u16::from_le_bytes([lba0[510], lba0[511]]) != MBR_SIGNATURE {
         return Ok(None);
     }
-    // 本工具策略（UEFI 未规定）：保护 MBR 布局的盘交由 GPT 判定，不按 msdos 解析——
-    // 避免把 0xEE 记录当成分区；GPT 头/数组损坏时报 "none"，不误报假分区
+    // 本工具策略：保护 MBR 布局成立 → 盘交由 GPT 判定（内核探测同口径），不按 msdos 解析。
+    // 布局不成立时盘型也不必然是 msdos——0xEE 记录与 LBA1 签名的处置见下方两处
     if pmbr_shape_valid(src)? {
         return Ok(None);
     }
-    let mut out = Vec::new();
+    let mut parts = Vec::new();
+    let mut damage = Vec::new();
+    let mut saw_protective = false;
+    let total_sectors = src.size / ss as u64;
     for i in 0..4u32 {
         let rec = &lba0[446 + (i as usize) * 16..446 + (i as usize) * 16 + 16];
         let os_type = rec[4];
@@ -739,7 +775,23 @@ pub fn parse_mbr(src: &FileSource) -> io::Result<Option<Vec<MbrPartition>>> {
         if os_type == 0 || size == 0 {
             continue;
         }
-        out.push(MbrPartition {
+        // 0xEE 在 msdos 语义里不是分区（UEFI 2.10 §5.2.3：protective record），
+        // 真实 msdos 盘不会合法出现。保护布局受损的 GPT 盘若按槽位解析，
+        // 这条会被当成真分区输出，del/flag 随之清除或改写它——毁掉恢复 GPT
+        // 所需的保护记录。只排除、不输出；hybrid MBR 的槽位 2-4 是真分区，照常输出。
+        // 0xEE 也必须先于越界检查跳过：保护记录的 size 合法值可达 0xFFFFFFFF
+        // （min(disk-1, u32::MAX)），小盘上 1+size 必然"越界"，那是 GPT 盘的常态而非损坏
+        if os_type == PROT_MBR_TYPE {
+            saw_protective = true;
+            continue;
+        }
+        // 越盘条目 = 表已损坏：写入侧有 end >= total 检查，读取侧若放行，info 会照实
+        // 打印一个不存在的分区、resize 还会拿这个伪尺寸当基线算目标。这里记为损伤并
+        // **保留条目**：可操作性由 `parse_mbr` 拒绝，可观察性由 raw 侧提供
+        if start as u64 + size as u64 > total_sectors {
+            damage.push(MbrDamage::PastEnd { num: i + 1, start, size, total_sectors });
+        }
+        parts.push(MbrPartition {
             num: i + 1,
             os_type,
             start_lba: start,
@@ -747,7 +799,26 @@ pub fn parse_mbr(src: &FileSource) -> io::Result<Option<Vec<MbrPartition>>> {
             is_container: matches!(os_type, 0x05 | 0x0F | 0x85),
         });
     }
-    Ok(Some(out))
+    // 只剩 0xEE 记录且 LBA1 带 GPT 头签名：盘型是 GPT（LBA1 签名定盘型，保护布局
+    // 只定修复分类），不能判成"零分区的 msdos 盘"——否则 del 会把保护记录当空槽清掉。
+    // 无签名时（GPT 已灭）只能按 msdos 处置，0xEE 槽已排除，不会误伤残留记录
+    if parts.is_empty() && saw_protective && gpt_signature_present(src)? {
+        return Ok(None);
+    }
+    Ok(Some(RawMbr { parts, damage }))
+}
+
+/// 校验过的 MBR：与 GPT 侧只接受 `GptState::Valid` 同一口径——有损伤即 Err。
+/// 于是所有写路径与依赖表内容的判定，都只可能在一张无损伤的表上进行
+pub fn parse_mbr(src: &FileSource) -> io::Result<Option<Vec<MbrPartition>>> {
+    let Some(raw) = parse_mbr_raw(src)? else { return Ok(None) };
+    if let Some(d) = raw.damage.first() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("{} — table is damaged", d.describe()),
+        ));
+    }
+    Ok(Some(raw.parts))
 }
 
 /// 修改 MBR 主分区条目大小（start 不变，纯扩缩）。LBA 单位与 parse_mbr /
@@ -801,6 +872,27 @@ fn pmbr_shape_valid(src: &FileSource) -> io::Result<bool> {
     }
     let rec = &lba0[446..462];
     Ok(rec[4] == PROT_MBR_TYPE && rd_u32(rec, 8) == 1)
+}
+
+/// LBA1 是否带 GPT 头签名（UEFI 2.10 §5.3.1：头首 8 字节）。头不自述扇区大小，
+/// 与 load_gpt 同一套候选逐个探测。
+///
+/// 返回 `Err` 表示**读不出来**：那既不能证明有、也不能证明没有，调用方不得当成 `false`
+/// ——判成"无签名"会让一张签名读不出的 GPT 盘被当作 msdos 甚至裸盘处置，而写命令会照
+/// 那个盘型动手。写路径因此 fail-closed
+pub fn gpt_signature_present(src: &FileSource) -> io::Result<bool> {
+    for &ss in &candidate_sector_sizes(src.sector_size) {
+        if src.size < ss + GPT_SIGNATURE.len() as u64 {
+            return Ok(false);
+        }
+        let mut sig = [0u8; GPT_SIGNATURE.len()];
+        match src.read_at(ss, &mut sig) {
+            Ok(()) if &sig == GPT_SIGNATURE => return Ok(true),
+            Ok(()) => {}
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(false)
 }
 
 /// SizeInLBA 与当前容器的关系（唯一判定点）。规范值按设备逻辑块计（UEFI 口径）；
@@ -942,23 +1034,54 @@ impl TableKind {
     }
 }
 
-/// `new`：新建空 GPT（覆盖现有表，破坏表结构但不碰分区数据区）+ 保护 MBR。
-/// 几何：128 条目 × 128B，first_usable = 数组之后，last_usable = 末端 - span - 1
-/// （由 UEFI 头/数组布局推导的实现约定，非规范逐字给出的公式）。
-/// 最小容量 = 2·span+4 扇区（last_lba ≥ 2·span+3）：first/last_usable 可分配的
-/// 紧约束，同时保证主数组 [2, 2+span) 与备数组 [last-span, last) 不重叠。
-/// 512B → 68 扇区，4Kn → 12 扇区（GNU parted 对 512B 给出同一 68 下限）。
-pub fn create_gpt(src: &mut FileSource, ss: u64, disk_guid: Option<[u8; 16]>) -> io::Result<()> {
+/// 建表最小容量（扇区数）：2·span+4（last_lba ≥ 2·span+3）——first/last_usable
+/// 可分配的紧约束，同时保证主数组 [2, 2+span) 与备数组 [last-span, last) 不重叠。
+/// 512B → 68 扇区，4Kn → 12 扇区（GNU parted 对 512B 给出同一 68 下限）
+fn gpt_min_sectors(ss: u64) -> io::Result<u64> {
     // 新建表的条目数与单条目大小取建表策略（[`geometry::DEFAULT_ENTRY_COUNT`] /
     // [`geometry::DEFAULT_ENTRY_SIZE`]），与盘上任何既有几何无关
     let geom = EntryArrayGeometry::new(ss, geometry::DEFAULT_ENTRY_SIZE, geometry::DEFAULT_ENTRY_COUNT)?;
-    let span = geom.lba_span();
-    let min_sectors = 2 * span + 4;
-    if src.size / ss < min_sectors {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, format!(
-            "image too small for a GPT (needs ≥{min_sectors} sectors at {ss}-byte sector size)"
+    Ok(2 * geom.lba_span() + 4)
+}
+
+/// `new` 写盘前的全部拒绝判据。命令层必须在任何写入之前先过它：这些检查若埋在
+/// create_gpt 里以 io::Error 上抛，会被"建表失败可能停在中间态"的映射误报成
+/// Failed（30 + "盘可能已改变"）——而此刻什么都没写，语义是 refused（10）
+pub fn create_gpt_preflight(size_bytes: u64, ss: u64) -> Result<(), Fail> {
+    let min_sectors = gpt_min_sectors(ss).map_err(|e| Fail::refused(e.to_string()))?;
+    if size_bytes / ss < min_sectors {
+        return Err(Fail::refused(format!(
+            "target too small for a GPT (needs ≥{min_sectors} sectors at {ss}-byte sector size)"
         )));
     }
+    Ok(())
+}
+
+/// `new --table msdos` 写盘前的判据：MBR 只占 LBA0，但盘至少要有一个扇区可写。
+/// 与 GPT 侧同一理由：把"盘太小"当建表失败的 io::Error 报，会被误报成 Failed
+pub fn create_mbr_preflight(size_bytes: u64, ss: u64) -> Result<(), Fail> {
+    if size_bytes / ss < 1 {
+        return Err(Fail::refused(format!(
+            "target too small for an MBR (needs ≥1 sector at {ss}-byte sector size)"
+        )));
+    }
+    Ok(())
+}
+
+/// `new`：新建空 GPT（覆盖现有表，破坏表结构但不碰分区数据区）+ 保护 MBR。
+/// 几何：128 条目 × 128B，first_usable = 数组之后，last_usable = 末端 - span - 1
+/// （由 UEFI 头/数组布局推导的实现约定，非规范逐字给出的公式）。
+pub fn create_gpt(src: &mut FileSource, ss: u64, disk_guid: Option<[u8; 16]>) -> io::Result<()> {
+    // 与 create_gpt_preflight 同一判据（同一 gpt_min_sectors）、同一措辞：命令层已先在
+    // 写盘前过了一遍，这里是直接调本函数的调用方（测试）的兜底，两种入口看到同一句话
+    let min_sectors = gpt_min_sectors(ss)?;
+    if src.size / ss < min_sectors {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, format!(
+            "target too small for a GPT (needs ≥{min_sectors} sectors at {ss}-byte sector size)"
+        )));
+    }
+    let geom = EntryArrayGeometry::new(ss, geometry::DEFAULT_ENTRY_SIZE, geometry::DEFAULT_ENTRY_COUNT)?;
+    let span = geom.lba_span();
     let last_lba = src.size / ss - 1;
     let header = RawHeader {
         primary_lba: 1,
@@ -1130,19 +1253,60 @@ pub fn create_mbr(src: &mut FileSource) -> io::Result<()> {
 }
 
 fn is_mdos_label(src: &FileSource) -> Result<bool, GptError> {
-    Ok(table_label(src)? == "msdos")
+    Ok(table_label(src)? == TableLabel::Mbr)
 }
 
-/// 标签判定："gpt" / "msdos" / "none"。
-/// MBR 解析的 io 失败也走 GptError::Io（本函数只回答标签，不区分来源）
-pub fn table_label(src: &FileSource) -> Result<&'static str, GptError> {
+/// 盘型。**与"表的形状是否完好"分开表达**：`GptDamaged` 是"LBA1 带 GPT 头签名、
+/// 但保护布局不满足"——盘型仍是 GPT，只是形状受损，故与 `Gpt` 分开（处置不同）。
+/// 展示层各自格式化，内部判定只认变体
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TableLabel {
+    Gpt,
+    GptDamaged,
+    Mbr,
+    None,
+}
+
+impl TableLabel {
+    /// 形状受损。**GPT 侧专用**：MBR 的损伤由 `RawMbr::damage` 表达——两个表族的判据
+    /// 不同源，只在 `info` 的 `damaged` 字段处汇合
+    pub fn is_damaged(self) -> bool {
+        self == TableLabel::GptDamaged
+    }
+}
+
+/// 人读文案。**只用于给人看的措辞**，不是机器接口的一部分：脚本读的是 `info` 的结构化
+/// 字段（`label` + `damaged`），两者各自独立、互不推导，改这里的措辞不会影响那个契约。
+/// 由 `Display` 承载：Rust 里"人读格式化"的惯用表达就是它，出现之处一眼
+/// 可辨（`{label}`），不会被人当成可以解析的稳定词汇
+impl std::fmt::Display for TableLabel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            TableLabel::Gpt => "gpt",
+            TableLabel::GptDamaged => "gpt (damaged)",
+            TableLabel::Mbr => "msdos",
+            TableLabel::None => "none",
+        })
+    }
+}
+
+/// 盘型判定。
+/// MBR 解析的 io 失败也走 GptError::Io（本函数只回答盘型，不区分来源）
+pub fn table_label(src: &FileSource) -> Result<TableLabel, GptError> {
     if load_gpt(src)?.is_some() {
-        return Ok("gpt");
+        return Ok(TableLabel::Gpt);
     }
     if parse_mbr(src)?.is_some() {
-        return Ok("msdos");
+        return Ok(TableLabel::Mbr);
     }
-    Ok("none")
+    // 这里探到 LBA1 签名而 load_gpt 已放行失败：保护布局不满足的 GPT 盘（保护 MBR
+    // 被改写 / LBA0 被抹）。报 `GptDamaged` 而非 `None`——写命令对非 gpt/msdos
+    // 标签一律拒绝，且用户看到的是"盘型可辨、布局受损"，不会被诱导用 `new` 覆盖
+    // 一份或许还能救回的表；resize 也不会把这种盘当 superfloppy 整盘扩
+    if gpt_signature_present(src)? {
+        return Ok(TableLabel::GptDamaged);
+    }
+    Ok(TableLabel::None)
 }
 
 /// msdos：主分区条目追加（槽位 1..=4）
@@ -1273,6 +1437,11 @@ pub fn set_mdos_hidden(src: &mut FileSource, part: u32, on: bool) -> Result<(), 
         }
         0
     };
+    // 已是目标态（cur 本身就是 on 所指的那一侧）即无操作：重复执行同一意图应当
+    // 幂等，而不是第二次起被当"无对应类型"拒绝
+    if MDOS_HIDDEN_PAIRS.iter().any(|&(v, h)| if on { h == cur } else { v == cur }) {
+        return Ok(());
+    }
     let next = want(cur, on);
     if next == 0 {
         return Err(Fail::refused(format!(
@@ -1915,6 +2084,97 @@ mod tests {
         assert_eq!(pmbr_size_state(&k4).unwrap(), PmbrSize::Inconsistent);
         let g4 = load_gpt(&k4).unwrap().unwrap();
         assert!(crate::gpt_policy::classify_repair(&g4, last).is_err());
+    }
+
+    /// 盘型由 LBA1 签名判定（UEFI 2.10 §5.3），保护 MBR 布局只定修复分类：
+    /// 布局破损的 GPT 盘绝不能按 msdos 解析。0xEE 槽若被当成真分区输出，
+    /// del/flag 会清除或改写它，恢复 GPT 所需的保护记录就此毁掉
+    #[test]
+    fn damaged_protective_mbr_never_parses_as_msdos() {
+        let mut src = src_from_gpt("pmbdmg", 512);
+        let mut good = [0u8; 512];
+        src.read_at(0, &mut good).unwrap();
+
+        // 破法一：槽位 1 仍是 0xEE 但 StartingLBA 被改坏——签名在 ⇒ 盘型 GPT，不判 msdos
+        let mut b = good;
+        b[446 + 8..446 + 12].copy_from_slice(&2u32.to_le_bytes());
+        src.write_at(0, &b).unwrap();
+        assert!(!pmbr_shape_valid(&src).unwrap());
+        assert!(parse_mbr(&src).unwrap().is_none(), "0xEE 槽不是分区，签名在 ⇒ 不判 msdos");
+        assert_eq!(table_label(&src).unwrap(), TableLabel::GptDamaged);
+
+        // 破法二：槽位 1 类型被改写成真实分区类型——内核同口径判 msdos（真实槽位）
+        let mut b = good;
+        b[446 + 4] = 0x0B;
+        src.write_at(0, &b).unwrap();
+        assert_eq!(table_label(&src).unwrap(), TableLabel::Mbr);
+        let m = parse_mbr(&src).unwrap().unwrap();
+        assert_eq!(m.len(), 1);
+        assert_eq!(m[0].os_type, 0x0B);
+
+        // 破法三：签名抹掉（GPT 全灭）+ 槽位 1 起点被改坏——无签名无从判 GPT，
+        // 0xEE 槽已排除，等价于零分区的 msdos 盘
+        let mut b = good;
+        b[446 + 8..446 + 12].copy_from_slice(&2u32.to_le_bytes());
+        src.write_at(0, &b).unwrap();
+        src.write_at(512, &vec![0u8; 512]).unwrap();
+        assert!(!pmbr_shape_valid(&src).unwrap());
+        assert!(parse_mbr(&src).unwrap().unwrap().is_empty());
+        assert_eq!(table_label(&src).unwrap(), TableLabel::Mbr);
+
+        // hybrid 布局：0xEE + 真实槽位 → 只输出真实槽位（内核同口径按 msdos 管）
+        let mut h = src_from("hybrid", vec![0u8; 300 * 512]);
+        create_mbr(&mut h).unwrap();
+        add_mdos_entry(&mut h, 63, 200, 0x0B).unwrap();
+        add_mdos_entry(&mut h, 210, 250, 0x83).unwrap(); // 第二分区进槽位 2
+        let mut lba0 = [0u8; 512];
+        h.read_at(0, &mut lba0).unwrap();
+        lba0[446 + 4] = 0xEE;
+        h.write_at(0, &lba0).unwrap();
+        // msdos 盘上 LBA1 的残留 GPT 头：槽位是真实分区 → 照常按 msdos 管
+        let mut sig = vec![0u8; 512];
+        sig[..8].copy_from_slice(GPT_SIGNATURE);
+        h.write_at(512, &sig).unwrap();
+        let m = parse_mbr(&h).unwrap().unwrap();
+        assert_eq!(m.len(), 1, "0xEE 槽不输出");
+        assert_eq!(m[0].num, 2);
+        assert_eq!(table_label(&h).unwrap(), TableLabel::Mbr);
+    }
+
+    /// msdos hidden 的幂等：已是目标态时重复同一意图必须成功且不改字节。第二次起被
+    /// 当"无对应类型"拒绝是这类"读当前值再决定"的改写的典型回归
+    #[test]
+    fn mdos_hidden_is_idempotent() {
+        let mut src = src_from("hidden_idem", vec![0u8; 300 * 512]);
+        create_mbr(&mut src).unwrap();
+        add_mdos_entry(&mut src, 63, 200, 0x0C).unwrap(); // FAT32 LBA（可见侧）
+        let ty = |src: &FileSource| {
+            let mut lba0 = [0u8; 512];
+            src.read_at(0, &mut lba0).unwrap();
+            lba0[446 + 4]
+        };
+
+        set_mdos_hidden(&mut src, 1, true).unwrap();
+        assert_eq!(ty(&src), 0x1C);
+        set_mdos_hidden(&mut src, 1, true).unwrap();
+        assert_eq!(ty(&src), 0x1C, "a repeated hide must be a no-op, not a refusal");
+
+        set_mdos_hidden(&mut src, 1, false).unwrap();
+        assert_eq!(ty(&src), 0x0C);
+        set_mdos_hidden(&mut src, 1, false).unwrap();
+        assert_eq!(ty(&src), 0x0C, "a repeated unhide must be a no-op, not a refusal");
+    }
+
+    /// 非配对类型两个方向都拒绝：幂等短路只认配对表内的值，不得把"未知类型"当成
+    /// "已在目标态"
+    #[test]
+    fn mdos_hidden_rejects_unpaired_type() {
+        let mut src = src_from("hidden_unpaired", vec![0u8; 300 * 512]);
+        create_mbr(&mut src).unwrap();
+        add_mdos_entry(&mut src, 63, 200, 0x83).unwrap(); // Linux data：无 hidden 对应码
+        let e = set_mdos_hidden(&mut src, 1, true).expect_err("0x83 must be refused");
+        assert!(matches!(&e, Fail::Refused(m) if m.contains("no hidden counterpart")), "{e:?}");
+        assert!(set_mdos_hidden(&mut src, 1, false).is_err(), "0x83 must be refused in both directions");
     }
 
     /// 条目级结构校验（UEFI 2.10 §5.3.1）：倒挂 / 越出 usable range → 结构化错误；

@@ -201,10 +201,11 @@ mod imp {
         })? as u32;
         let start_sectors = sysfs_u64(&sysdir.join("start"))?;
         let size_sectors = sysfs_u64(&sysdir.join("size"))?;
-        // 内核 sysfs-block ABI：start/size 以 512-byte sectors 表示（与设备逻辑块大小
-        // queue/logical_block_size 无关，二者不可混用）
-        let start_bytes = start_sectors * 512;
-        let part_len_bytes = size_sectors * 512;
+        // 内核 sysfs-block ABI：start/size 以 512 字节扇区计（与设备逻辑块大小
+        // queue/logical_block_size 无关，两者不可混用）。sysfs 值理论到不了 u64 溢出，
+        // 但这是外部输入：回绕出来的"字节偏移"会伪装成一个正常分区，乘法必须 checked
+        let start_bytes = start_sectors.checked_mul(512).ok_or_else(|| io::Error::other("partition start overflows u64 bytes"))?;
+        let part_len_bytes = size_sectors.checked_mul(512).ok_or_else(|| io::Error::other("partition size overflows u64 bytes"))?;
 
         let part_name = sysdir
             .read_link()?
@@ -216,7 +217,9 @@ mod imp {
         let disk_name = disk_name_from_partition(&part_name, disk_exists).ok_or_else(|| {
             io::Error::other(format!("cannot derive disk name from partition {part_name}"))
         })?;
-        let disk_cap_bytes = sysfs_u64(&Path::new("/sys/block").join(&disk_name).join("size"))? * 512;
+        let disk_cap_bytes = sysfs_u64(&Path::new("/sys/block").join(&disk_name).join("size"))?
+            .checked_mul(512)
+            .ok_or_else(|| io::Error::other("disk capacity overflows u64 bytes"))?;
         // queue/logical_block_size：内核 sysfs 只读属性，单位 = 字节
         let logical_block =
             sysfs_u64(&Path::new("/sys/block").join(&disk_name).join("queue/logical_block_size"))?;
@@ -234,7 +237,14 @@ mod imp {
                 continue;
             }
             if let (Ok(s), Ok(l)) = (sysfs_u64(&p.join("start")), sysfs_u64(&p.join("size"))) {
-                others.push((s * 512, l * 512));
+                // 邻居区间进重叠自查，而自查正是"能否安全写入"的判据：回绕值会伪装成
+                // 正常区间，算不出真值的邻居意味着**无法证明不重叠**——按校验失败处理，
+                // 跳过它等于让一次写入可能覆盖邻居
+                let sb = s.checked_mul(512)
+                    .ok_or_else(|| io::Error::other(format!("neighbour {} start overflows u64 bytes", p.display())))?;
+                let lb = l.checked_mul(512)
+                    .ok_or_else(|| io::Error::other(format!("neighbour {} size overflows u64 bytes", p.display())))?;
+                others.push((sb, lb));
             }
         }
 
@@ -373,14 +383,32 @@ mod imp {
         }
     }
 
-    fn fs_grow(t: &OnlineTarget, fstype: &str) -> io::Result<()> {
+    /// fs_grow 的两态失败：**工具没跑起来**（找不到 / 无法执行）时 FS 未被触碰；
+    /// **非零退出**说明工具可能改了一半。两者性质不同（infra / failed），
+    /// 压成一个错误类型会让调用点无从区分
+    enum FsGrowError {
+        /// 工具没跑起来：`fsops::run` 的失败侧（工具缺失 / 执行失败）
+        Spawn(crate::fsops::FsError),
+        Exit(String),
+    }
+
+    impl FsGrowError {
+        fn detail(&self) -> String {
+            match self {
+                FsGrowError::Spawn(e) => e.to_string(),
+                FsGrowError::Exit(m) => m.clone(),
+            }
+        }
+    }
+
+    fn fs_grow(t: &OnlineTarget, fstype: &str) -> Result<(), FsGrowError> {
         let Some((prog, args)) = fs_grow_cmd(t, fstype) else {
-            return Err(io::Error::other(format!("{fstype} has no online grow")));
+            return Err(FsGrowError::Spawn(crate::fsops::FsError::ToolMissing(format!("{fstype} has no online grow"))));
         };
         let argv: Vec<&str> = args.iter().map(String::as_str).collect();
-        let out = run(&prog, &argv)?;
+        let out = run(&prog, &argv).map_err(FsGrowError::Spawn)?;
         if !out.status.success() {
-            return Err(io::Error::other(format!(
+            return Err(FsGrowError::Exit(format!(
                 "online FS grow failed: {}",
                 String::from_utf8_lossy(&out.stderr)
             )));
@@ -431,9 +459,11 @@ mod imp {
         if !part_dev.exists() {
             return Err(io::Error::other(format!("partition node {} not found", part_dev.display())));
         }
-        let start_bytes = sysfs_u64(&sysdir.join("start"))? * 512;
-        let part_len_bytes = sysfs_u64(&sysdir.join("size"))? * 512;
-        let disk_cap_bytes = sysfs_u64(&sysroot.join("size"))? * 512;
+        // 与 resolve_target 同一防线：sysfs 字节换算全部 checked（见那里的注释）
+        let byte_of = |v: u64| v.checked_mul(512).ok_or_else(|| io::Error::other("sysfs sector value overflows u64 bytes"));
+        let start_bytes = byte_of(sysfs_u64(&sysdir.join("start"))?)?;
+        let part_len_bytes = byte_of(sysfs_u64(&sysdir.join("size"))?)?;
+        let disk_cap_bytes = byte_of(sysfs_u64(&sysroot.join("size"))?)?;
         let logical_block = sysfs_u64(&sysroot.join("queue/logical_block_size"))?;
         let this_dev = std::fs::read_to_string(sysdir.join("dev")).ok().and_then(|s| parse_dev_attr(&s));
         let mut others = Vec::new();
@@ -449,7 +479,12 @@ mod imp {
                 continue;
             }
             if let (Ok(s), Ok(l)) = (sysfs_u64(&p.join("start")), sysfs_u64(&p.join("size"))) {
-                others.push((s * 512, l * 512));
+                // 与 resolve_target 同一防线：算不出真值的邻居意味着无法证明不重叠
+                let sb = s.checked_mul(512)
+                    .ok_or_else(|| io::Error::other(format!("neighbour {} start overflows u64 bytes", p.display())))?;
+                let lb = l.checked_mul(512)
+                    .ok_or_else(|| io::Error::other(format!("neighbour {} size overflows u64 bytes", p.display())))?;
+                others.push((sb, lb));
             }
         }
         Ok(OnlineTarget {
@@ -463,6 +498,17 @@ mod imp {
             logical_block,
             others,
         })
+    }
+
+    /// 在线路径的独占所有权：设备已挂载 / 被 DM 持有，`O_EXCL` 不可能成功，但**同一把
+    /// TargetLock** 仍必须持有——否则在线写表与离线 mutation 可以互相穿插。
+    /// 粒度取**整盘**：分区表属于盘，且只有盘粒度才能与"以 `/dev/sdX` 为目标的离线
+    /// 调用"落进同一个锁名；锁是 advisory 的，它约束的是本工具的所有入口，不是别人
+    fn lock_disk(t: &OnlineTarget) -> Result<crate::targetlock::TargetLock, Outcome> {
+        let ident = crate::dev::TargetIdentity::resolve(&t.disk_dev, true, t.disk_cap_bytes);
+        // 取锁的失败按 `Fail` 的三个变体折叠成出口语义（唯一映射点在 outcome 模块），
+        // 本处不借 `finish` 做转换——那是"结束一次操作"的入口，语义不同
+        crate::targetlock::TargetLock::acquire(&ident).map_err(|f| f.into_outcome())
     }
 
     /// 新尺寸的几何前置检查：对齐 → 容量 → 邻接，两条在线写表路径共用。
@@ -496,6 +542,11 @@ mod imp {
             Ok(t) => t,
             Err(e) => return Outcome::infra(e.to_string()),
         };
+        // 此后每一步都是写盘（写表 / 内核重读），独占权从解析出目标起就取得
+        let _owned = match lock_disk(&t) {
+            Ok(l) => l,
+            Err(o) => return o,
+        };
         if new_len_bytes <= t.part_len_bytes {
             return Outcome::refused(format!(
                 "PV partition can only grow here (current {} bytes); PV shrink needs the lvreduce/pvresize chain",
@@ -524,6 +575,12 @@ mod imp {
             Ok(t) => t,
             Err(e) => return Outcome::infra(e.to_string()),
         };
+        // 独占权必须在 FS 步之前取得：本函数既可能写 FS（fs_grow）也可能写表
+        // （part_resize），等到写表才取锁会让前面的 FS 写入落在锁外
+        let _owned = match lock_disk(&t) {
+            Ok(l) => l,
+            Err(o) => return o,
+        };
         let fstype = match fstype_of(&t) {
             Ok(f) => f,
             Err(e) => return Outcome::infra(e.to_string()),
@@ -546,10 +603,14 @@ mod imp {
         };
 
         match size {
-            // 扩满现分区：分区不动，FS 工具直接吃满（内核视图无需变更）
+            // 扩满现分区：分区不动，FS 工具直接吃满（内核视图无需变更）。
+            // spawn 失败 = 什么都没动（infra）；非零退出 = 工具可能改了一半（failed）
             None => match fs_grow(&t, &fstype) {
                 Ok(()) => Outcome::applied_with(Vec::new()),
-                Err(e) => Outcome::failed(e.to_string()),
+                Err(e) => match e {
+                    FsGrowError::Spawn(err) => Outcome::infra(err.to_string()),
+                    FsGrowError::Exit(m) => Outcome::failed(m),
+                },
             },
             Some(bytes) => {
                 if let Err(msg) = check_new_range(&t, bytes) {
@@ -569,13 +630,15 @@ mod imp {
                     }
                     match fs_grow(&t, &fstype) {
                         Ok(()) => Outcome::applied_with(Vec::new()),
-                        Err(e) => Outcome::applied_with(vec![fs_pending(format!("partition resized but FS grow skipped: {e}"))]),
+                        // 分区已扩：无论 spawn 失败还是非零退出，FS 步都是一条未满足后置条件
+                        Err(e) => Outcome::applied_with(vec![fs_pending(format!("partition resized but FS grow skipped: {}", e.detail()))]),
                     }
                 } else if bytes < t.part_len_bytes {
                     // shrink（仅 btrfs）：FS 先缩（内核校验占用与 256MiB 下限），持久化缩分区
                     let mnt = t.mnt.to_string_lossy().into_owned();
                     match run("btrfs", &["filesystem", "resize", &bytes.to_string(), &mnt]) {
-                        Err(e) => return Outcome::failed(e.to_string()),
+                        // spawn 失败（工具缺失等）发生在本次首次写盘之前：FS 未缩、表未写 → Infra
+                        Err(e) => return Outcome::infra(e.to_string()),
                         Ok(out) if !out.status.success() => {
                             return Outcome::failed(format!("btrfs shrink failed: {}", String::from_utf8_lossy(&out.stderr)));
                         }
@@ -602,9 +665,13 @@ mod imp {
                         }
                     }
                 } else {
+                    // bytes == 现分区：与 None 分支同性质（没有别的写盘步骤）
                     match fs_grow(&t, &fstype) {
                         Ok(()) => Outcome::applied_with(Vec::new()),
-                        Err(e) => Outcome::failed(e.to_string()),
+                        Err(e) => match e {
+                            FsGrowError::Spawn(err) => Outcome::infra(err.to_string()),
+                            FsGrowError::Exit(m) => Outcome::failed(m),
+                        },
                     }
                 }
             }

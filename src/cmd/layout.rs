@@ -54,6 +54,13 @@ pub(crate) fn cmd_new(a: &Args) -> u8 {
         let kind = a.table.unwrap_or(table::TableKind::Gpt);
         let mut src = open_target_for_write(a).unwrap_or_else(|f| bail_fail(f));
         let ss = src.sector_size;
+        // 尺寸/几何判据先于一切写入：过不了就该报 refused（10），而不是等建表把它当
+        // 失败的 io::Error 误报成 Failed（30 + "盘可能已改变"）。两族表各有自己的下限
+        let preflight = match kind {
+            table::TableKind::Gpt => table::create_gpt_preflight(src.size, ss),
+            table::TableKind::Msdos => table::create_mbr_preflight(src.size, ss),
+        };
+        preflight.unwrap_or_else(|f| bail_fail(f));
         let r = match kind {
             table::TableKind::Gpt => table::create_gpt(&mut src, ss, None),
             table::TableKind::Msdos => table::create_mbr(&mut src),
@@ -114,8 +121,8 @@ pub(crate) fn cmd_del(a: &Args) -> u8 {
     } else {
         let mut src = open_target_for_write(a).unwrap_or_else(|f| bail_fail(f));
         let r = match table::table_label(&src) {
-            Ok("gpt") => table::del_entry(&mut src, part),
-            Ok("msdos") => table::del_mdos_entry(&mut src, part),
+            Ok(table::TableLabel::Gpt) => table::del_entry(&mut src, part),
+            Ok(table::TableLabel::Mbr) => table::del_mdos_entry(&mut src, part),
             Ok(other) => bail_fail(Fail::refused(format!("cannot del on {other} label"))),
             Err(e) => bail_fail(Fail::infra(format!("label probe failed: {e}"))),
         };
@@ -139,7 +146,7 @@ pub(crate) fn cmd_resize_part(a: &Args) -> u8 {
     if a.grow_to_end && a.end.is_some() {
         bail_fail(Fail::refused("--end and --grow-to-end are mutually exclusive".to_string()));
     }
-    let mut src = open_target_for_data_move(a).unwrap_or_else(|f| bail_fail(f));
+    let (mut src, _resumed) = open_target_for_data_move(a).unwrap_or_else(|f| bail_fail(f));
     // 坐标系在几何计算前确定：resize-part 仅支持 GPT，条目按表头 ss 对齐（可与容器 ss 不同）。
     // 几何走唯一构造点（条目重叠在此被拒），修复后的 last_usable 也由它给出
     let (g, _repair) = match crate::gpt_policy::resolve_geometry(&src) {
@@ -175,7 +182,7 @@ pub(crate) fn cmd_move(a: &Args) -> u8 {
     if !a.start_end && start_opt.is_none() {
         crate::args::usage();
     }
-    let mut src = open_target_for_data_move(a).unwrap_or_else(|f| bail_fail(f));
+    let (mut src, _resumed) = open_target_for_data_move(a).unwrap_or_else(|f| bail_fail(f));
     let (g, _repair) = match crate::gpt_policy::resolve_geometry(&src) {
         Ok(Some(v)) => v,
         Ok(None) => bail_fail(Fail::refused("move requires a GPT target".to_string())),
@@ -212,7 +219,7 @@ pub(crate) fn cmd_copy(a: &Args) -> u8 {
     if !a.start_end && start_opt.is_none() {
         crate::args::usage();
     }
-    let mut src = open_target_for_data_move(a).unwrap_or_else(|f| bail_fail(f));
+    let (mut src, _resumed) = open_target_for_data_move(a).unwrap_or_else(|f| bail_fail(f));
     // 坐标系在几何计算前确定：copy 仅支持 GPT，条目按表头 ss 对齐（可与容器 ss 不同）
     let (g, _repair) = match crate::gpt_policy::resolve_geometry(&src) {
         Ok(Some(v)) => v,
@@ -245,9 +252,11 @@ pub(crate) fn cmd_create(a: &Args) -> u8 {
     let mut src = open_target_for_write(a).unwrap_or_else(|f| bail_fail(f));
     // 一次探测同时取"表类型 + 空闲区"：后面选槽写表要用的是同一个 label，
     // 再探一次等于重解析一遍表（且可能读到与前面不同的结果）。
-    // 坐标系在几何计算前确定：want 与 aligned_gaps 的单位随分支而定
-    let (label, gaps, want) = match table::table_label(&src) {
-        Ok("gpt") => {
+    // 坐标系在几何计算前确定：want 与 aligned_gaps 的单位随分支而定。
+    // 第四个值是该分支的 LBA 单位（字节/扇区），后面把 LBA 换成字节偏移时只能用它：
+    // GPT 条目按**表头** ss 对齐，可与容器 ss 不同，用错单位会算出偏移差一倍的提示
+    let (label, gaps, want, lba_bytes) = match table::table_label(&src) {
+        Ok(table::TableLabel::Gpt) => {
             let (g, _repair) = match crate::gpt_policy::resolve_geometry(&src) {
                 Ok(Some(v)) => v,
                 Ok(None) => bail_fail(Fail::refused("no GPT on target — run `new` first".to_string())),
@@ -261,9 +270,9 @@ pub(crate) fn cmd_create(a: &Args) -> u8 {
             let used: Vec<(u64, u64)> = g.entries.iter()
                 .filter(|e| !(e.starting_lba == 0 && e.ending_lba == 0))
                 .map(|e| (e.starting_lba, e.ending_lba)).collect();
-            ("gpt", aligned_gaps(&used, g.first_usable_lba(), g.last_usable_lba(), unit), want)
+            (table::TableLabel::Gpt, aligned_gaps(&used, g.first_usable_lba(), g.last_usable_lba(), unit), want, g.ss)
         }
-        Ok("msdos") => {
+        Ok(table::TableLabel::Mbr) => {
             let mbr = match table::parse_mbr(&src) {
                 Ok(Some(m)) => m,
                 Ok(None) => bail_fail(Fail::refused("no partition table on target — run `new` first".to_string())),
@@ -277,7 +286,7 @@ pub(crate) fn cmd_create(a: &Args) -> u8 {
             });
             let used: Vec<(u64, u64)> = mbr.iter().map(|p| (p.start_lba as u64, p.start_lba as u64 + p.size_lba as u64 - 1)).collect();
             let disk_last = src.size / ss - 1;
-            ("msdos", aligned_gaps(&used, unit, disk_last, unit), want)
+            (table::TableLabel::Mbr, aligned_gaps(&used, unit, disk_last, unit), want, ss)
         }
         Ok(other) => bail_fail(Fail::refused(format!("cannot create on {other} label — run `new` first"))),
         Err(e) => bail_fail(Fail::infra(format!("label probe failed: {e}"))),
@@ -294,7 +303,7 @@ pub(crate) fn cmd_create(a: &Args) -> u8 {
     };
     // swap 声明落进类型 GUID：movepart 靠它识别 swap 挡路者（不搬数据、mkswap 重建）
     let is_swap = a.fs.as_deref() == Some("swap");
-    let r = if label == "gpt" {
+    let r = if label == table::TableLabel::Gpt {
         let guid = if is_swap { table::SWAP_TYPE_GUID } else { table::LINUX_FS_TYPE_GUID };
         table::add_entry(&mut src, start, end, a.name.as_deref().unwrap_or(""), guid)
     } else {
@@ -306,24 +315,39 @@ pub(crate) fn cmd_create(a: &Args) -> u8 {
         // commit_gpt 是四段提交，失败时盘上可能停在中间态)。调用点无从区分
         Err(f) => bail_fail(f),
     };
-    let mut o = crate::outcome::Outcome::applied_with(Vec::new());
-    if !kernel_resync(&src) {
-        o.mark_kernel_stale();
-    }
+    // 通知内核重读分区表，且必须**早于** mkfs：新分区此时只存在于盘上，内核还没为它
+    // 建出分区节点，而 mkfs 走的 `with_partition_device` 是按 sysfs 拓扑定位节点的
+    // （块设备上找不到就失败）。resync 失败不改变本次结论，只并入下面的报告
+    let synced = kernel_resync(&src);
+    // FS 步失败不算整体失败：分区已建成，只有 mkfs 这个后置条件没满足——
+    // 走 Pending 通道报 PARTIAL（补救提示由 FS 层生成），不在这里手写出口码
+    let mut pending = Vec::new();
     if let Some(fstype) = &a.fs {
-        // 先问类型认不认得：不认得的类型不该先落下不可回滚的屏障——那条分区创建的记录
-        // 本来还能整个 undo 掉，加了屏障就只能 abandon 了
-        if crate::fsops::mkfs_supported(fstype).is_ok() {
+        // 屏障的判据是"确实把写盘交给了外部工具"：类型不认得 / 工具不在时 mkfs
+        // 起都没起来，盘上只有表写入——那条分区记录仍可整体 undo，不落屏障；
+        // 工具真的跑起来了（可能写了半个 FS）才落屏障，undo 从此拒绝
+        if crate::fsops::mkfs_capability(fstype).is_ok() {
             src.set_mutation(crate::dev::Mutation::Mkfs);
             if let Err(e) = src.mark_non_reversible() {
-                bail_fail(Fail::infra(format!("cannot persist the transaction state: {e}")));
+                bail_fail(Fail::failed(format!(
+                    "partition #{num} was created, but the transaction state could not be persisted: {e} \
+                     — verify with: diskedit info {}",
+                    a.target
+                )));
             }
         }
         if let Err(e) = crate::fsops::mkfs(&src, num, fstype) {
-            eprintln!("partition #{num} created but mkfs failed: {e}");
-            o.report(); // 表已写（可能内核未同步）须一并报告
-            return EXIT_PARTIAL;
+            pending.push(crate::outcome::Pending::new(
+                num,
+                crate::outcome::PendingKind::Fs,
+                e.to_string(),
+                crate::fsops::rescue_hint(fstype, &crate::dev::part_dev_hint(&src, num, start * lba_bytes)),
+            ));
         }
+    }
+    let mut o = crate::outcome::Outcome::applied_with(pending);
+    if !synced {
+        o.mark_kernel_stale();
     }
     o.report();
     if o.is_complete() {
