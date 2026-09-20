@@ -68,7 +68,13 @@ pub(crate) fn cmd_info(a: &Args) -> u8 {
                  remove the overlapping entry with sfdisk/parted first"
             ));
         }
-        out.push_str("\"gpt\",\"sector_size\":");
+        // 形状是否受损：结构化字段，不再把 "(damaged)" 塞进 label 字符串里。
+        // 两种来源都算——头部/备份头需修复（state）、保护 MBR 需修复或不可自动修复（pmbr）
+        let damaged = !matches!(g.state, table::GptState::Valid)
+            || !matches!(g.pmbr, table::PmbrSize::Normal);
+        out.push_str("\"gpt\",\"damaged\":");
+        out.push_str(if damaged { "true" } else { "false" });
+        out.push_str(",\"sector_size\":");
         out.push_str(&g.ss.to_string());
         out.push_str(",\"size_bytes\":");
         out.push_str(&src.size.to_string());
@@ -99,20 +105,24 @@ pub(crate) fn cmd_info(a: &Args) -> u8 {
         out.push_str("]}");
     } else {
         // 只读探测的 io 失败不得降级为 "none"：那会把"读不出来"报成"没有表"，
-        // 与 GPT 分支的判据不一致（缺表 = 现状不匹配，读不出来 = 盘内容/环境故障）
-        let mbr = match table::parse_mbr(&src) {
+        // 与 GPT 分支的判据不一致（缺表 = 现状不匹配，读不出来 = 盘内容/环境故障）。
+        // 这里走 **raw** 解析：受损的表仍然是表，观察路径要能看到它的条目，
+        // 否则"不可操作"会连带变成"不可观察"
+        let raw = match table::parse_mbr_raw(&src) {
             Ok(m) => m,
             Err(e) => bail_fail(Fail::infra(format!("parse failed: {e}"))),
         };
-        match mbr {
+        match raw {
             // 仅签名、零记录也判 mbr（`new --table msdos` 的合法初始态）
-            Some(mbr) => {
-                out.push_str("\"mbr\",\"sector_size\":");
+            Some(raw) => {
+                out.push_str("\"mbr\",\"damaged\":");
+                out.push_str(if raw.damage.is_empty() { "false" } else { "true" });
+                out.push_str(",\"sector_size\":");
                 out.push_str(&src.sector_size.to_string());
                 out.push_str(",\"size_bytes\":");
                 out.push_str(&src.size.to_string());
                 out.push_str(",\"partitions\":[");
-                let parts: Vec<String> = mbr.iter().map(|p| {
+                let parts: Vec<String> = raw.parts.iter().map(|p| {
                     let fs = if p.is_container { "container".to_string() }
                         else { fsid::identify(&src, p.start_lba as u64 * src.sector_size, p.size_lba as u64 * src.sector_size).unwrap_or("error").to_string() };
                     // 末端在 u64 域算：两个 u32 字段相加会溢出（debug panic / release 回绕），
@@ -126,8 +136,22 @@ pub(crate) fn cmd_info(a: &Args) -> u8 {
                 }).collect();
                 out.push_str(&parts.join(","));
                 out.push_str("]}");
+                // 损伤逐条报出：条目本身仍在上面的列表里，用户需要知道哪一条越了界
+                for d in &raw.damage {
+                    stale_notes.push(format!("note: {}", d.describe()));
+                }
             }
-            None => out.push_str(&format!("\"none\",\"sector_size\":{},\"size_bytes\":{}}}", src.sector_size, src.size)),
+            None => {
+                // 走到这里已确定不是 GPT（load_gpt 为 None）也不是 MBR（raw 解析为 None），
+                // 只可能在 GptDamaged（LBA1 有签名、保护布局不满足）与 None 之间。
+                // 判据取自唯一判定点 table_label，与写命令的拒绝理由同源
+                let damaged = table::table_label(&src).is_ok_and(|l| l.is_damaged());
+                let name = if damaged { "gpt" } else { "none" };
+                out.push_str(&format!(
+                    "\"{name}\",\"damaged\":{damaged},\"sector_size\":{},\"size_bytes\":{}}}",
+                    src.sector_size, src.size
+                ));
+            }
         }
     }
     println!("{out}");

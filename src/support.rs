@@ -3,9 +3,6 @@
 
 pub(crate) use crate::outcome::{Fail, EXIT_OK, EXIT_PARTIAL, EXIT_REFUSED};
 
-#[cfg(unix)]
-use std::os::unix::fs::FileTypeExt;
-
 use crate::args::Args;
 use crate::dev::FileSource;
 use crate::geometry::ValidatedGeometry;
@@ -19,7 +16,9 @@ use crate::dev; // 只有测试夹具 src_from 用得到
 /// 调用点不得自行拼装。**本模块不提供"带裸退出码的退出"**——那会绕开 Outcome::report
 /// 的措辞与 exit_code 的映射，正是 10/20/30 语义分裂的入口
 pub(crate) fn bail_fail(f: crate::outcome::Fail) -> ! {
-    let o = crate::outcome::finish(Err(f), Vec::new());
+    // 把失败折叠成 CLI 结果走 `Fail::into_outcome`（映射的唯一处），不借 `finish`——
+    // 那是"结束一次操作"的入口，而这里没有任何要收尾的 pending
+    let o = f.into_outcome();
     o.report();
     std::process::exit(o.exit_code() as i32);
 }
@@ -116,22 +115,31 @@ pub(crate) fn open_target_for_write(a: &Args) -> Result<FileSource, crate::outco
     TransactionManager::begin(a)
 }
 
-/// 显式续跑：本命令声明"我要接着做目标上那件没做完的事"（由领域层按 ckpt 判定后传入）。
-/// 与 `open_target_for_write` 是两个入口，绝不合并——合并就必须让某一层去猜
-pub(crate) fn open_target_resuming(a: &Args) -> Result<FileSource, crate::outcome::Fail> {
-    TransactionManager::resume(a)
-}
-
 /// 数据搬移类命令的打开（resize-part / move / copy）：目标上已有 checkpoint 时以显式续跑
-/// 进入同一事务，否则开新事务。
+/// 进入同一事务，否则开新事务。返回是否按续跑进入。
 ///
 /// 判据是"有没有 checkpoint"，不细分是哪个分区——这些命令本就把 ckpt 交给
 /// `movepart::resize_part` / `copy_part` 比对，是否属于同一件事由领域层的恢复校验裁
 /// （不匹配即 `Divergent`）
-pub(crate) fn open_target_for_data_move(a: &Args) -> Result<FileSource, crate::outcome::Fail> {
-    TransactionManager::begin_or_resume(a, |active| {
-        active.iter().any(|r| matches!(r, RecoveryRecord::Checkpoint { .. }))
+pub(crate) fn open_target_for_data_move(
+    a: &Args,
+) -> Result<(FileSource, bool), crate::outcome::Fail> {
+    TransactionManager::begin_or_resume(a, |_src, active| {
+        Ok(active.iter().any(|r| matches!(r, RecoveryRecord::Checkpoint { .. })))
     })
+}
+
+/// 搬移收尾类命令（resize / apply）的打开：判据是**锁下**的那份目标上还有没有自己
+/// 分区的未收尾搬移（`movepart::relocation_ownership`），不靠打开前的只读预判。
+/// 返回（目标，是否续跑）——resize 要拿后者决定 grow 分支。
+///
+/// 槽位被别的分区的作业占着时，判据直接返回拒绝理由：那种情形下本命令既不能当空槽
+/// （会覆盖别人的现场），也不能按别人的 ckpt 续跑，通用的 busy 文案说不出这一点
+pub(crate) fn open_target_resumable(
+    a: &Args,
+    grow_part: u32,
+) -> Result<(FileSource, bool), crate::outcome::Fail> {
+    TransactionManager::begin_or_resume(a, |src, _| movepart::relocation_ownership(src, grow_part))
 }
 
 /// 只持有所有权、不建 journal 的写事务（undo / check / resizefs）
@@ -239,7 +247,10 @@ pub(crate) fn entry_byte_range(src: &FileSource, part: u32) -> Result<(u64, u64)
     match table::load_gpt(src) {
         Err(e) => Err(crate::outcome::Fail::infra(format!("parse failed: {e}"))),
         Ok(Some(g)) => {
-            let e = g.entries.get((part - 1) as usize)
+            // part 是外部输入，直接索引 entries[(n-1)]：part==0 的 checked_sub 让
+            // "0 号分区"也落进下面的 refused，而不是先在 usize 上回绕成 usize::MAX
+            let e = (part as usize).checked_sub(1)
+                .and_then(|i| g.entries.get(i))
                 .ok_or_else(|| crate::outcome::Fail::refused(format!("partition {part} not found")))?;
             if e.ending_lba == 0 {
                 return Err(crate::outcome::Fail::refused(format!("partition {part} is empty")));
@@ -335,7 +346,10 @@ pub(crate) fn aligned_gaps(used: &[(u64, u64)], lo: u64, hi: u64, unit: u64) -> 
     }
     free.into_iter()
         .filter_map(|(s, e)| {
-            let s2 = s.div_ceil(unit) * unit;
+            // 对齐乘法躲着回绕：s 逼近 u64::MAX 时 div_ceil*unit 会静默回绕，
+            // 把一个"无法对齐"的区间伪造成从 0 起的伪空闲。e 侧下面已有 checked，
+            // s 侧同一防线
+            let s2 = s.div_ceil(unit).checked_mul(unit)?;
             let e2 = (e.saturating_add(1) / unit * unit).checked_sub(1)?;
             (s2 <= e2).then_some((s2, e2))
         })

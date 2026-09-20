@@ -56,12 +56,13 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         name: "resize",
         aliases: &[],
-        // --start 在此不是"被消费的旗标"而是"必须明确拒绝的旗标"：声明它，
+        // --start/--end 在此不是"被消费的旗标"而是"必须明确拒绝的旗标"：声明它们，
         // 请求才会走到 resize 自己那条"改大小不挪位，用 move/resize-part"的提示，
-        // 而不是被白名单拦成一句笼统的"不是本命令的选项"
+        // 而不是被白名单拦成一句笼统的"不是本命令的选项"。--start 与 --end 是同一
+        // 语义（挪位）的两半，缺一个另一半就会先死在白名单上
         flags: &[
             "--sector-size", "--size", "--grow-to-end", "--no-fs", "--grow-lv", "--lv", "--yes",
-            "--allow-move", "--chunk-size", "--start",
+            "--allow-move", "--chunk-size", "--start", "--end",
         ],
         help: resize::HELP,
         mode: TargetMode::WriteJournal,

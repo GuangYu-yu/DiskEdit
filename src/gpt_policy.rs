@@ -108,26 +108,31 @@ pub fn classify_repair(g: &RawGpt, file_last_lba: u64) -> io::Result<RepairActio
     })
 }
 
-/// 执行修复（写入路径）：按动作重写双头 / 保护 MBR → 重读校验必须收敛。
+/// 执行修复（写入路径唯一出口）：按动作重写双头 / 保护 MBR → 重读校验必须收敛。
+/// 相位判据在函数体内显式落点——
+/// - 首次目标写盘之前（重读表）：失败按 Infra 报，此时一个字节都没写，"盘可能已改变"不成立
+/// - 从首次写盘起（commit_gpt / ensure_protective_mbr 及其后）：失败按 Failed 报，
+///   写入量已无法断定
+///
 /// `None` 不写盘（调用方已在决策期确认无需修复）
-pub(crate) fn perform_repair(src: &mut FileSource, action: &RepairAction) -> io::Result<()> {
+pub(crate) fn apply_repair(src: &mut FileSource, action: &RepairAction) -> Result<(), Fail> {
     match action {
         RepairAction::None => return Ok(()),
-        // RepairProtectiveMbr：无需写 GPT（由函数尾部的 ensure_protective_mbr 统一重写）
+        // RepairProtectiveMbr：无需写 GPT（由函数尾部的 ensure_protective_mbr 统一重写，即首次写盘）
         RepairAction::RepairProtectiveMbr => {}
         RepairAction::RelocateBackup { new_backup_lba, new_last_usable }
         | RepairAction::RelocateAndRepair { new_backup_lba, new_last_usable } => {
             let mut g = table::load_gpt(src)
-                .map_err(table::into_io_error)?
-                .ok_or_else(|| io::Error::other("GPT vanished before repair"))?;
+                .map_err(|e| Fail::infra_io(table::into_io_error(e)))?
+                .ok_or_else(|| Fail::infra("GPT vanished before repair"))?;
             g.header.last_usable_lba = *new_last_usable;
             table::commit_gpt(src, &g, *new_backup_lba)?;
         }
     }
     table::ensure_protective_mbr(src)?;
-    let g2 = table::load_gpt(src).map_err(table::into_io_error)?.ok_or_else(|| io::Error::other("re-read after repair failed"))?;
+    let g2 = table::load_gpt(src).map_err(|e| Fail::failed(table::into_io_error(e).to_string()))?.ok_or_else(|| Fail::failed("re-read after repair failed"))?;
     if g2.state != GptState::Valid || g2.pmbr != PmbrSize::Normal {
-        return Err(io::Error::other("repair did not converge — refusing"));
+        return Err(Fail::failed("repair did not converge — refusing"));
     }
     Ok(())
 }
@@ -170,15 +175,6 @@ pub fn resolve_geometry(src: &FileSource) -> Result<Option<(ValidatedGeometry, R
     let vg = ValidatedGeometry::new(&g, file_last_lba, action.new_last_usable())
         .map_err(|e| Fail::infra(e.to_string()))?;
     Ok(Some((vg, action)))
-}
-
-/// 执行修复的 `Fail` 版本：空间算术命令（add/del/rename/flag/resize-part/copy）走这里，
-/// 它们需要"已写盘 ⇒ Failed"这一层语义。`None` 不碰盘。
-/// 一旦开始写，后续任何失败都只能按 `Failed`（30）报：此时已不能声称"未写盘"
-pub fn apply_repair(src: &mut FileSource, action: &RepairAction) -> Result<(), Fail> {
-    // io 失败经 From<io::Error> 落到 Failed：这是"已写盘或无法断定"的安全缺省
-    perform_repair(src, action)?;
-    Ok(())
 }
 
 #[cfg(test)]

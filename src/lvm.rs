@@ -80,7 +80,12 @@ pub fn parse_extent_size(json: &str) -> Option<u64> {
         .as_str()?
         .to_string();
     let int_part = tok.trim().split('.').next()?;
-    int_part.parse().ok()
+    // extent 大小要当下一步除法的分母（lvm_grow_chain 的 delta_bytes / ext）：
+    // "0" 是畸形报告不是合法 VG，放过去就是除零 panic（release 也一样），这里拒绝成 None
+    match int_part.parse() {
+        Ok(ext @ 1..) => Some(ext),
+        _ => None,
+    }
 }
 
 /// 该分区所属 VG 名；Ok(None) = 有 PV 标签但不属任何 VG（或工具返回空），
@@ -90,8 +95,15 @@ pub fn vg_of(part_dev: &str) -> Result<Option<String>, String> {
     let out = run_json("pvs", &["--reportformat", "json", "-o", "pv_name,vg_name", part_dev])?;
     match parse_pv_vg(&out, part_dev) {
         Some(vg) => Ok(Some(vg)),
-        // 有 PV 行但无 VG：以解析出的 pv 行数组非空为准，不做字符串匹配
-        None if !report_rows(&out, "pv").is_empty() => Ok(None),
+        // "是 PV 但不属于任何 VG"只能由**本设备的 pv 行**证明：report 里出现任意 pv 行
+        // 不够——那可能只是别的设备（pvs 行为一旦变化，非 PV 设备就会被误判成
+        // "PV 但无 VG"进而走 pvresize 分支）。解析出的行里找得到本设备才算数
+        None if report_rows(&out, "pv").iter().any(|row| {
+            row.get("pv_name").and_then(|v| v.as_str()) == Some(part_dev)
+        }) =>
+        {
+            Ok(None)
+        }
         None => Err(format!("pvs: no report for {part_dev} — is it an LVM2 PV?")),
     }
 }

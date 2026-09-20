@@ -1069,7 +1069,8 @@ fn cli_negative_paths() {
     assert_eq!(c, 30, "missing target must be infra failure: {e}");
     assert!(e.contains("open failed"), "{e}");
 
-    // 有 GPT 结构但缺保护 MBR → 不按 GPT 认（label none），resize 拒绝
+    // 有 GPT 结构但保护 MBR 缺失 → 盘型可辨、形状受损：报 "gpt (damaged)"，
+    // 写命令对非 gpt/msdos 标签一律拒绝（不会被当 superfloppy 整盘扩）
     let no_pmbr = dir.join("nopmbr.img");
     {
         let mut cur = Cursor::new(vec![0u8; 100 * 512]);
@@ -1079,11 +1080,10 @@ fn cli_negative_paths() {
     }
     let (c, out, _) = run(&["info", no_pmbr.to_str().unwrap()]);
     assert_eq!(c, 0);
-    assert!(out.contains("\"label\":\"none\""), "GPT without protective MBR must not be claimed: {out}");
+    assert!(out.contains("\"label\":\"gpt\",\"damaged\":true"), "PMBR-less GPT must surface as damaged: {out}");
     let (c, _, e) = run(&["resize", &format!("{}:1", no_pmbr.display()), "10M"]);
-    assert_eq!(c, 10, "resize on unlabelled target must refuse: {e}");
-    // label=none 走 superfloppy 分支：带 :1 说明用户以为有分区表，故明确拒绝
-    assert!(e.contains("no partition table"), "{e}");
+    assert_eq!(c, 10, "resize on damaged-GPT target must refuse: {e}");
+    assert!(e.contains("resize requires"), "{e}");
 
     // 主头 CRC 损坏 → 回退盘尾备份头读取（主备互备，UEFI 2.10 §5.3.2）
     let bad_hdr = dir.join("badhdr.img");
@@ -1373,15 +1373,49 @@ fn abandon_releases_recovery_state_idempotently_and_converges() {
     assert_eq!(c, 0, "a second abandon must be a no-op");
     assert!(o.contains("nothing to abandon"), "{o}");
 
-    // 崩溃重跑收敛：模拟"改名到一半就崩"，剩余的那份由下一次运行补上
+    // 崩溃重跑收敛：模拟"转换到一半就崩"，剩余的那份由下一次运行补上
     let (c, _, e) = run(&["create", img_s, "--size", "1M", "--fs", "no-such-fs-type"]);
     assert_eq!(c, 20, "{e}");
     std::fs::write(&ckpt, b"stale checkpoint bytes").unwrap();
-    std::fs::rename(&ckpt, dir.join("a.img.diskedit.ckpt.abandoned")).unwrap(); // 已改完的那一份
+    std::fs::rename(&ckpt, dir.join("a.img.diskedit.ckpt.abandoned")).unwrap(); // 已转换完的那一份
     let (c, o, e) = run(&["abandon", img_s, "--yes"]);
     assert_eq!(c, 0, "abandon must converge on the rest: {e}");
     assert!(o.contains("abandoned 1 recovery record(s)"), "only the leftover is still active: {o}");
     assert!(!journal.exists(), "the leftover journal must be released by the re-run");
+
+    // 同名冲突之一：目标名已是**同一个 inode**（上次 link 成功、删原件那步没跑完的残局）
+    // ⇒ 收敛即成功：删掉原文件，绝不覆盖那份副本
+    let (c, _, e) = run(&["create", img_s, "--size", "1M", "--fs", "no-such-fs-type"]);
+    assert_eq!(c, 20, "{e}");
+    let j_abandoned = dir.join("a.img.diskedit.journal.abandoned");
+    let _ = std::fs::remove_file(&j_abandoned);
+    std::fs::hard_link(&journal, &j_abandoned).unwrap();
+    assert!(journal.exists() && j_abandoned.exists(), "the fixture is the leftover state");
+    let (c, o, e) = run(&["abandon", img_s, "--yes"]);
+    assert_eq!(c, 0, "a same-inode leftover must converge: {e}");
+    assert!(o.contains("abandoned 1 recovery record(s)"), "{o}");
+    assert!(!journal.exists(), "the active name must be dropped");
+    assert!(j_abandoned.exists(), "the abandoned copy must survive");
+
+    // 同名冲突之二：首选名是**另一个文件** ⇒ 顺延到 `.abandoned.2`：既不覆盖别人的
+    // 记录，也不为了"名字冲突"把目标锁死（那会让第二次中断后再无出路）
+    let (c, _, e) = run(&["create", img_s, "--size", "1M", "--fs", "no-such-fs-type"]);
+    assert_eq!(c, 20, "{e}");
+    let _ = std::fs::remove_file(&j_abandoned);
+    std::fs::write(&j_abandoned, b"an unrelated artifact").unwrap();
+    let (c, o, e) = run(&["abandon", img_s, "--yes"]);
+    assert_eq!(c, 0, "a taken preferred name must fall back to a free one: {e}");
+    assert!(o.contains("abandoned 1 recovery record(s)"), "{o}");
+    assert!(!journal.exists(), "the active record must still be released");
+    assert_eq!(
+        std::fs::read(&j_abandoned).unwrap(),
+        b"an unrelated artifact",
+        "the existing artifact must be untouched"
+    );
+    assert!(
+        dir.join("a.img.diskedit.journal.abandoned.2").exists(),
+        "the released record must land on the fallback name"
+    );
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -1482,7 +1516,9 @@ fn help_topic_zero_partition_and_mbr_end_overflow() {
     assert!(err.contains("1-based"), "{err}");
 
     // MBR 条目末端 = start + size − 1：两个 u32 相加必须在 u64 域算，
-    // 否则 start 接近 u32::MAX 时 debug 下 panic、release 下回绕成小于起点的 last_lba
+    // 否则 start 接近 u32::MAX 时 debug 下 panic、release 下回绕成小于起点的 last_lba。
+    // 这类越盘条目属"表已损坏"：观察路径（info）照常可看并标注 damaged，
+    // 写路径（parse_mbr 的校验侧）则必须拒绝
     let mut data = vec![0u8; 2 * 1024 * 1024];
     data[446 + 4] = 0x83;
     data[446 + 8..446 + 12].copy_from_slice(&0xFFFF_FFFEu32.to_le_bytes());
@@ -1492,11 +1528,16 @@ fn help_topic_zero_partition_and_mbr_end_overflow() {
     let wrap = dir.join("wrap.img");
     std::fs::write(&wrap, &data).unwrap();
     let (c, out, err) = run(&["info", wrap.to_str().unwrap()]);
-    assert_eq!(c, 0, "{err}");
+    assert_eq!(c, 0, "a damaged table must stay observable: {err}");
     let v: serde_json::Value = serde_json::from_str(out.trim()).expect("info must emit valid JSON");
     assert_eq!(v["label"], "mbr", "{out}");
+    assert_eq!(v["damaged"], true, "the out-of-range entry must be reported as damage: {out}");
     assert_eq!(v["partitions"][0]["first_lba"], 4294967294u64);
     assert_eq!(v["partitions"][0]["last_lba"], 4294967297u64, "must not wrap in u32: {out}");
+    // 可观察 ≠ 可操作：同一条目在写路径上必须 fail-closed
+    let (c, _, err) = run(&["del", &format!("{}:1", wrap.display()), "--yes"]);
+    assert_ne!(c, 0, "a damaged table must not be written: {err}");
+    assert!(err.contains("extends past the end"), "{err}");
 
     let _ = std::fs::remove_dir_all(&dir);
 }

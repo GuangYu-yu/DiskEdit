@@ -57,9 +57,10 @@ pub struct TargetIdentity {
     base: PathBuf,
     journal: Vec<PathBuf>,
     checkpoint: Vec<PathBuf>,
-    /// 独占锁的落点（见 `targetlock`）。只有镜像有——块设备的独占凭据是打开它的 O_EXCL，
-    /// 不落在文件上，故为 None
-    lock: Option<PathBuf>,
+    /// 独占锁的落点（见 `targetlock`）。**恒有值**：镜像放在目标旁，块设备由设备身份
+    /// 派生到 `state_dir()` 下。类型上没有"没有锁落点"这一状态——取不到锁就是拒绝，
+    /// 不存在无锁继续跑的路径
+    lock: PathBuf,
 }
 
 /// 只用于区分历史命名约定：块设备另有 GUID / devname 两份历史落点，镜像没有
@@ -99,34 +100,43 @@ fn sysfs_capacity(node: &Path) -> Option<u64> {
     read_sysfs_attr(&node.join("size"))?.parse::<u64>().ok()?.checked_mul(512)
 }
 
-/// 块设备身份键：设备拓扑给出的持久 ID → devname + 容量。
+/// 设备层身份的**两个投影**，共用同一次 sysfs 解析：
+/// - `.0`（目标自身）：分区节点带分区号，整设备就是它自己。journal / checkpoint 用它——
+///   现场归属是持久的、按分区落的
+/// - `.1`（所在整设备）：分区节点抹掉分区号。锁用它——独占权针对的是**盘**（分区表属于
+///   盘），只有盘粒度才能让"离线以分区节点为目标"与"在线对同一分区"落进同一把锁
 ///
 /// 分区节点自身不携带设备身份（内核只给它 `partition` / `start` / `size`），故取父设备
 /// 的身份再附自己的分区号。父设备与分区号都来自 sysfs 拓扑——`/sys/dev/block/<maj>:<min>`
 /// 解析出的节点、它的 `partition` 属性、它的父目录——既不解析 `sda1` / `nvme0n1p1` /
 /// `dm-0p1` 这类命名，也不自己推算分区号。容量因此不参与分区身份：分区扩容只改变自己
 /// 的容量，父设备容量不受影响，撤销窗口不会在操作中途改名
+///
+/// 解析不出来时两个投影都退到"设备自身（devname + 容量）"：宁可粗一档，也不能让同一个
+/// 设备在两个视角下得到两个互不相干的名字
 #[cfg(target_os = "linux")]
-fn block_stable_key(path: &Path, size: u64) -> String {
+fn block_keys(path: &Path, size: u64) -> (String, String) {
     use std::os::unix::fs::MetadataExt;
     let fallback = || format!("{}-{size}", file_name_lossy(path));
-    let Ok(meta) = std::fs::metadata(path) else { return fallback() };
+    let Ok(meta) = std::fs::metadata(path) else { return (fallback(), fallback()) };
     let dev = format!("/sys/dev/block/{}:{}", libc::major(meta.rdev()), libc::minor(meta.rdev()));
-    let Ok(node) = std::fs::canonicalize(dev) else { return fallback() };
+    let Ok(node) = std::fs::canonicalize(dev) else { return (fallback(), fallback()) };
     // `partition` 是"这是个分区"的判据；没有它的节点自己就是整设备（含 kpartx 造出的
-    // dm-N 分区，它们是独立的 DM 设备，自带 dm/uuid）
+    // dm-N 分区，它们是独立的 DM 设备，自带 dm/uuid），此时两个投影重合
     let Some(n) = read_sysfs_attr(&node.join("partition")).and_then(|v| v.parse::<u32>().ok()) else {
-        return node_device_id(&node).unwrap_or_else(fallback);
+        let alone = node_device_id(&node).unwrap_or_else(fallback);
+        return (alone.clone(), alone);
     };
-    let Some(parent) = node.parent() else { return fallback() };
-    let key = node_device_id(parent)
+    let Some(parent) = node.parent() else { return (fallback(), fallback()) };
+    let disk = node_device_id(parent)
         .unwrap_or_else(|| format!("{}-{}", file_name_lossy(parent), sysfs_capacity(parent).unwrap_or(0)));
-    format!("{key}-p{n}")
+    (format!("{disk}-p{n}"), disk)
 }
 
 #[cfg(not(target_os = "linux"))]
-fn block_stable_key(path: &Path, size: u64) -> String {
-    format!("{}-{size}", file_name_lossy(path))
+fn block_keys(path: &Path, size: u64) -> (String, String) {
+    let k = format!("{}-{size}", file_name_lossy(path));
+    (k.clone(), k)
 }
 
 fn file_name_lossy(path: &Path) -> String {
@@ -166,7 +176,7 @@ impl TargetIdentity {
             base: path.to_path_buf(),
             journal: vec![suffix_path(path, ".diskedit.journal")],
             checkpoint: vec![suffix_path(path, ".diskedit.ckpt")],
-            lock: Some(suffix_path(path, ".diskedit.lock")),
+            lock: suffix_path(path, ".diskedit.lock"),
         }
     }
 
@@ -175,7 +185,8 @@ impl TargetIdentity {
         if !is_block {
             return Self::image(path);
         }
-        let stable = key_token(&block_stable_key(path, size));
+        let (self_key, disk_key) = block_keys(path, size);
+        let stable = key_token(&self_key);
         let dir = state_dir();
         Self {
             kind: TargetKind::Block,
@@ -186,7 +197,14 @@ impl TargetIdentity {
                 dir.join(format!("{}.diskedit.journal", file_name_lossy(path))),
             ],
             checkpoint: vec![dir.join(format!("{stable}.diskedit.ckpt"))],
-            lock: None,
+            // 锁按**所在整设备**派生，与 journal / checkpoint 的按目标派生刻意不同：
+            // 独占权针对盘（分区表属于盘），于是"离线以分区节点为目标"与"在线对同一分区"
+            // 落到同一把锁上；而现场归属仍按目标落，升级不会让旧 journal 找不到
+            // 落点与 journal / checkpoint 同处 state_dir、同一 key_token 编码：三者的
+            // 路径规则只有一套，不引入第二个 lock 目录。锁文件是纯运行时 artifact
+            // （重启自清也无妨），残留不构成阻挡——判据是"锁取不取得到"，不是"文件在不在"
+            // （见 targetlock）
+            lock: dir.join(format!("{}.diskedit.lock", key_token(&disk_key))),
         }
     }
 
@@ -207,9 +225,9 @@ impl TargetIdentity {
         &self.journal[0]
     }
 
-    /// 独占锁的落点；块设备为 None（凭据是 O_EXCL 打开的 fd）
-    pub(crate) fn lock_path(&self) -> Option<&Path> {
-        self.lock.as_deref()
+    /// 独占锁的落点。恒有值：取锁失败即拒绝，不提供"没有锁落点"这种状态
+    pub(crate) fn lock_path(&self) -> &Path {
+        &self.lock
     }
 
     pub(crate) fn is_block(&self) -> bool {
@@ -353,6 +371,24 @@ impl FileSource {
             sector_size,
             size,
             is_block: true,
+            journal: None,
+            ownership: None,
+        })
+    }
+
+    /// 非 Linux 平台的占位实现：块设备判定与 ioctl 都不可用，只读路径按普通文件打开。
+    /// 该平台上身份解析恒为镜像（`is_block()` 恒 false），此函数不会被块设备路径走到
+    #[cfg(not(target_os = "linux"))]
+    pub(crate) fn open_read_only(path: &Path) -> io::Result<Self> {
+        let file = File::open(path)?;
+        let size = file.metadata()?.len();
+        Ok(FileSource {
+            identity: TargetIdentity::resolve(path, false, size),
+            file,
+            path: path.to_path_buf(),
+            sector_size: 512,
+            size,
+            is_block: false,
             journal: None,
             ownership: None,
         })
@@ -724,15 +760,22 @@ impl Journal {
                     return Ok(Self::at(path, Some(f)));
                 }
                 let mut hdr = [0u8; Self::MAGIC.len()];
-                f.read_exact(&mut hdr).map_err(|_| {
-                    io::Error::new(
+                f.read_exact(&mut hdr).map_err(|e| match e.kind() {
+                    // 文件在但读不满一个头 = 魔数还没写完就断了（残骸）；
+                    io::ErrorKind::UnexpectedEof => io::Error::new(
                         io::ErrorKind::InvalidData,
                         format!(
                             "{} is a leftover from an interrupted journal creation ({len} bytes, no complete magic header) — \
                              it holds no records, so nothing depends on it; deleting it is safe (inspect it first if you do not trust that)",
                             path.display()
                         ),
-                    )
+                    ),
+                    // 读得出长度却读不动内容是 I/O 故障：说成"创建残骸"会把用户引向
+                    // 删文件，而真正该修的是那台盘
+                    _ => io::Error::new(
+                        e.kind(),
+                        format!("{}: journal header read failed: {e}", path.display()),
+                    ),
                 })?;
                 if &hdr != Self::MAGIC {
                     return Err(io::Error::new(
@@ -980,5 +1023,25 @@ mod tests {
         assert_eq!(id.log_path(Some(guid)), state_dir().join(format!("{}.diskedit.log", guid_hex(&guid))));
         // 读不到表时退回 devname：MBR / 裸盘上没有更稳的标识
         assert_eq!(id.log_path(None), state_dir().join("sdz.diskedit.log"));
+    }
+
+    /// 设备层身份的两个投影。解析不出来时二者必须重合——宁可粗一档（按 devname 认），
+    /// 也不能让同一个设备在"目标自身"与"所在整盘"两个视角下得到互不相干的名字，
+    /// 否则锁与现场会分别落到两套命名空间里
+    #[test]
+    fn block_keys_fall_back_to_a_single_name() {
+        let (own, disk) = block_keys(Path::new("/dev/diskedit-nonexistent"), 4096);
+        assert_eq!(own, disk, "an unparsable node must not yield two identities");
+        assert!(own.contains("diskedit-nonexistent") && own.contains("4096"), "{own}");
+    }
+
+    /// 锁按**盘**派生、现场按**目标**派生：两者在块设备上是同一个函数算出来的两个投影，
+    /// 因此锁落点必然落在 state_dir 下、与 journal 同目录（不引入第二套路径规则）
+    #[test]
+    fn block_lock_and_journal_share_one_directory() {
+        let id = TargetIdentity::resolve(Path::new("/dev/diskedit-nonexistent"), true, 4096);
+        assert_eq!(id.lock_path().parent(), Some(state_dir().as_path()));
+        assert_eq!(id.journal_path().parent(), Some(state_dir().as_path()));
+        assert!(id.lock_path().to_string_lossy().ends_with(".diskedit.lock"));
     }
 }

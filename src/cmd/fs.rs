@@ -57,19 +57,20 @@ pub(crate) fn cmd_mkfs(a: &Args) -> u8 {
     if !a.yes {
         bail_fail(Fail::refused(format!("mkfs destroys all data on partition {part}; pass --yes to confirm")));
     }
-    // 先问类型认不认得：拒绝的语义是"什么都没写"，而下面一开事务就会先落不可回滚屏障——
-    // 让一个拼错的类型名把目标锁进"未收尾"状态、要用户再跑一次 abandon 是错的
-    if let Err(e) = fsops::mkfs_supported(&fstype) {
-        bail_fail(Fail::from(e));
-    }
+    // 先问类型认不认得、工具在不在，再落不可回滚屏障：一个拼错的类型名、一个没装的
+    // 工具包，都不该把目标锁进"未收尾"状态、要用户再跑一次 abandon。检查放在开事务
+    // **之后**：目标被别人的未收尾现场占着时，busy 的闸口文案（含出路指引）比
+    // "工具缺失"更该先到达——journal 是惰性的，此处拒绝同样不留任何痕迹
     let mut src = open_target_for_write(a).unwrap_or_else(|f| bail_fail(f));
     if let Err(f) = entry_byte_range(&src, part) {
         bail_fail(f);
     }
-    // mkfs 是一次事务，但不可回滚：内容擦掉之后没有"回去"这回事。目标被别人的未收尾现场
-    // 占着的话，上面那句 `open_target_for_write` 已经拒绝了。先落屏障（记下"这个分区上创建
-    // 了文件系统"）再交给外部工具：成功时 main 关闭事务，失败或崩溃则留下一个 active 的
-    // 不可回滚事务，出路是 `abandon`
+    if let Err(e) = fsops::mkfs_capability(&fstype) {
+        bail_fail(Fail::from(e));
+    }
+    // mkfs 是一次事务，但不可回滚：内容擦掉之后没有"回去"这回事。先落屏障（记下"这个
+    // 分区上创建了文件系统"）再交给外部工具：成功时 main 关闭事务，失败或崩溃则留下一个
+    // active 的不可回滚事务，出路是 `abandon`
     src.set_mutation(Mutation::Mkfs);
     src.mark_non_reversible()
         .unwrap_or_else(|e| bail_fail(Fail::infra(format!("cannot persist the transaction state: {e}"))));
@@ -169,10 +170,10 @@ pub(crate) fn cmd_set(a: &Args) -> u8 {
         if value.is_empty() { crate::args::usage(); }
         let on = match state.as_str() { "on" => true, "off" => false, _ => crate::args::usage() };
         let r = match crate::table::table_label(&src) {
-            Ok("gpt") => crate::table::set_gpt_flag(&mut src, part, &value, on),
-            Ok("msdos") if value == "boot" => crate::table::set_mdos_boot(&mut src, part, on),
-            Ok("msdos") if value == "hidden" => crate::table::set_mdos_hidden(&mut src, part, on),
-            Ok("msdos") => bail_fail(Fail::refused("msdos flags: only `boot` and `hidden` are supported".to_string())),
+            Ok(crate::table::TableLabel::Gpt) => crate::table::set_gpt_flag(&mut src, part, &value, on),
+            Ok(crate::table::TableLabel::Mbr) if value == "boot" => crate::table::set_mdos_boot(&mut src, part, on),
+            Ok(crate::table::TableLabel::Mbr) if value == "hidden" => crate::table::set_mdos_hidden(&mut src, part, on),
+            Ok(crate::table::TableLabel::Mbr) => bail_fail(Fail::refused("msdos flags: only `boot` and `hidden` are supported".to_string())),
             Ok(other) => bail_fail(Fail::refused(format!("cannot set flag on {other} label"))),
             Err(e) => bail_fail(Fail::infra(format!("label probe failed: {e}"))),
         };

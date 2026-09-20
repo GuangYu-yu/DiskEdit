@@ -13,15 +13,17 @@ const EROFS_MAGIC: [u8; 4] = [0xE2, 0xE1, 0xF5, 0xE0];
 /// MBR 条目的 LBA 以容器 ss 计。签名里带 ss 就等于要求每个调用点都为**别人的**单位负责，
 /// 而它手上往往只有 LBA；改收字节后，换算发生在唯一知道单位的那一层（读到表的地方），
 /// 本模块退化为"给一段字节，判它是什么"，与 probe_swap_header / overlay_offset_at 同形
+///
+/// Err 只表达设备故障：调用方必须把它与"区间内没有已知签名"（Ok("unknown")）区分开，
+/// 否则 resize 会在 I/O 错误时把 FS 步骤整体跳过并报成功
 pub fn identify(src: &FileSource, base: u64, len_bytes: u64) -> io::Result<&'static str> {
     let rd = |off: u64, len: usize| -> io::Result<Option<Vec<u8>>> {
+        // 区间外：这里确实没有那些字节，不是读失败
         if off + len as u64 > len_bytes {
             return Ok(None);
         }
         let mut buf = vec![0u8; len];
-        if src.read_at(base + off, &mut buf).is_err() {
-            return Ok(None);
-        }
+        src.read_at(base + off, &mut buf)?;
         Ok(Some(buf))
     };
 
@@ -120,7 +122,7 @@ pub fn identify(src: &FileSource, base: u64, len_bytes: u64) -> io::Result<&'sta
     // union swap_header：reserved[PAGE_SIZE-10] + magic[10]），盘上不记录该页大小，
     // 故由 probe_swap_header 按候选集探测。此处取 swapon 口径的候选集——
     // 本函数回答的是"这台宿主能不能把它当 swap 处理"
-    if probe_swap_header(src, base, len_bytes, &swapon_activatable_pages()).is_some() {
+    if probe_swap_header(src, base, len_bytes, &swapon_activatable_pages())?.is_some() {
         return Ok("swap");
     }
     Ok("unknown")
@@ -180,30 +182,38 @@ pub fn blkid_known_pages() -> Vec<u64> {
 }
 
 /// swap 签名探测（唯一实现）：在候选页大小各自的末尾 10 字节找 SWAPSPACE2，
-/// 返回命中的页大小（magic 偏移 = page − 10），未命中返回 None。
-/// 候选集由调用方按语义选择（见上两个具名集合），本函数不做取舍。
-/// 只认 SWAPSPACE2：v0 的 "SWAP-SPACE" 内核早已不再写入，swsuspend 系签名
-/// （S1SUSPEND/S2SUSPEND/ULSUSPEND/TOI/LINHIB0001）是休眠镜像而非 swap 区，二者都不认
-pub fn probe_swap_header(src: &FileSource, base: u64, len_bytes: u64, page_sizes: &[u64]) -> Option<u64> {
+/// 返回命中的页大小（magic 偏移 = page − 10）。候选集由调用方按语义选择（见上两个
+/// 具名集合），本函数不做取舍。只认 SWAPSPACE2：v0 的 "SWAP-SPACE" 内核早已不再写入，
+/// swsuspend 系签名（S1SUSPEND/S2SUSPEND/ULSUSPEND/TOI/LINHIB0001）是休眠镜像
+/// 而非 swap 区，二者都不认。
+/// 读取失败回 Err 而非 None：签名位置读不出来 ≠ 证明签名不在——把设备故障压成
+/// "未命中"会让 identify 把故障盘报成 unknown，resize 随之跳过 FS 步骤并报成功
+pub fn probe_swap_header(src: &FileSource, base: u64, len_bytes: u64, page_sizes: &[u64]) -> io::Result<Option<u64>> {
     for &page in page_sizes {
         if len_bytes < page {
             continue;
         }
         let mut magic = [0u8; 10];
-        if src.read_at(base + page - 10, &mut magic).is_ok() && &magic == SWAP_MAGIC {
-            return Some(page);
+        src.read_at(base + page - 10, &mut magic)?;
+        if &magic == SWAP_MAGIC {
+            return Ok(Some(page));
         }
     }
-    None
+    Ok(None)
 }
 
 /// 元数据是 swap、但**本机（swapon 口径）激活不了**的区间：libblkid 口径命中而 swapon 口径落空。
 /// 两个候选集的差集只有 32K 一项（见 SWAPON_PAGES / BLKID_PAGES 的依据），故命中即
 /// "创建机用了 32K 页"。identify 对此类区间回 "unknown"，写入路径会据此跳过 FS 步骤，
 /// 而分区扩容后 swap 头里的页数还是旧值——那是一条未完成的后置条件，不能报成功
-pub fn unactivatable_swap(src: &FileSource, base: u64, len_bytes: u64) -> bool {
-    probe_swap_header(src, base, len_bytes, &blkid_known_pages()).is_some()
-        && probe_swap_header(src, base, len_bytes, &swapon_activatable_pages()).is_none()
+pub fn unactivatable_swap(src: &FileSource, base: u64, len_bytes: u64) -> io::Result<bool> {
+    Ok(matches!(
+        (
+            probe_swap_header(src, base, len_bytes, &blkid_known_pages())?,
+            probe_swap_header(src, base, len_bytes, &swapon_activatable_pages())?,
+        ),
+        (Some(_), None)
+    ))
 }
 
 /// OpenWrt combined 布局的 RW overlay 起点（字节，相对分区头）。公式须与
@@ -213,13 +223,12 @@ pub fn unactivatable_swap(src: &FileSource, base: u64, len_bytes: u64) -> bool {
 /// - EROFS → blocks u32 @超级块+0x24 左移 blkszbits u8 @超级块+0x0C（超级块 @1024）
 ///
 /// 统一 64K 上对齐（fstools ROOTDEV_OVERLAY_ALIGN 的惯例，非通用规范）；
-/// 解析失败或 0 → None
+/// 解析失败或 0 → None。读错误如实上抛：读不出来与"签名不命中"是两回事，
+/// 把前者折叠成 None 会让调用方把盘上事实当成"没有 overlay"
 pub fn overlay_offset_at(src: &FileSource, part_offset: u64) -> io::Result<Option<u64>> {
     const ALIGN: u64 = 64 * 1024;
     let mut sb = [0u8; 2048];
-    if src.read_at(part_offset, &mut sb).is_err() {
-        return Ok(None);
-    }
+    src.read_at(part_offset, &mut sb)?;
     let raw = if &sb[0..4] == SQUASHFS_MAGIC {
         u64::from_le_bytes(sb[0x28..0x30].try_into().unwrap())
     } else if sb[1024..1028] == EROFS_MAGIC {
@@ -281,6 +290,15 @@ mod tests {
         assert_eq!(identify(&s, 0, 8192).unwrap(), "swap");
     }
 
+    /// 读失败必须与"没有已知签名"区分开：identify 对设备故障回 Err——
+    /// 压成 Ok("unknown") 的后果是 resize 跳过 FS 步骤并报成功
+    #[test]
+    fn read_fault_is_error_not_unknown() {
+        let s = src_from("fault", vec![0u8; 4096]);
+        let _g = crate::dev::ReadFaultGuard::at(0);
+        assert!(identify(&s, 0, 4096).is_err(), "device fault must surface as Err");
+    }
+
     #[test]
     fn swap_detected_across_page_sizes() {
         // 创建机页 8K、宿主页 4K：候选探测命中 8192 处 magic
@@ -325,15 +343,15 @@ mod tests {
         let mut data = vec![0u8; 65536];
         data[32768 - 10..32768].copy_from_slice(b"SWAPSPACE2");
         let s = src_from("probe32k", data);
-        assert_eq!(probe_swap_header(&s, 0, 65536, &blkid_known_pages()), Some(32768));
-        assert_eq!(probe_swap_header(&s, 0, 65536, &swapon_activatable_pages()), None);
+        assert_eq!(probe_swap_header(&s, 0, 65536, &blkid_known_pages()).unwrap(), Some(32768));
+        assert_eq!(probe_swap_header(&s, 0, 65536, &swapon_activatable_pages()).unwrap(), None);
         // 长度小于候选页 → 跳过该候选，不判越界为命中
-        assert_eq!(probe_swap_header(&s, 0, 4096, &[65536]), None);
+        assert_eq!(probe_swap_header(&s, 0, 4096, &[65536]).unwrap(), None);
         // 非 SWAPSPACE2 的 v0 签名不认
         let mut old = vec![0u8; 8192];
         old[4096 - 10..4096].copy_from_slice(b"SWAP-SPACE");
         let s2 = src_from("probev0", old);
-        assert_eq!(probe_swap_header(&s2, 0, 8192, &blkid_known_pages()), None);
+        assert_eq!(probe_swap_header(&s2, 0, 8192, &blkid_known_pages()).unwrap(), None);
     }
 
     /// "本机激活不了的 swap"判据：两口径的差集只有 32K 一项，故它等价于
@@ -343,19 +361,19 @@ mod tests {
         // 4K swap：两个口径都命中 ⇒ 不是"激活不了"
         let mut data = vec![0u8; 65536];
         data[4096 - 10..4096].copy_from_slice(b"SWAPSPACE2");
-        assert!(!unactivatable_swap(&src_from("un_act4k", data), 0, 65536));
+        assert!(!unactivatable_swap(&src_from("un_act4k", data), 0, 65536).unwrap());
         // 32K swap：只有 libblkid 口径命中
         let mut data = vec![0u8; 65536];
         data[32768 - 10..32768].copy_from_slice(b"SWAPSPACE2");
-        assert!(unactivatable_swap(&src_from("un_act32k", data), 0, 65536));
+        assert!(unactivatable_swap(&src_from("un_act32k", data), 0, 65536).unwrap());
         // 非 swap 区：两个口径都落空
-        assert!(!unactivatable_swap(&src_from("un_actnone", vec![0u8; 65536]), 0, 65536));
+        assert!(!unactivatable_swap(&src_from("un_actnone", vec![0u8; 65536]), 0, 65536).unwrap());
         // 签名相对**区间起点**解释：同一段字节换个起点就不再命中
         let mut data = vec![0u8; 131072];
         data[65536 + 32768 - 10..65536 + 32768].copy_from_slice(b"SWAPSPACE2");
         let s = src_from("un_actoff", data);
-        assert!(unactivatable_swap(&s, 65536, 65536));
-        assert!(!unactivatable_swap(&s, 0, 65536));
+        assert!(unactivatable_swap(&s, 65536, 65536).unwrap());
+        assert!(!unactivatable_swap(&s, 0, 65536).unwrap());
     }
 
     #[test]

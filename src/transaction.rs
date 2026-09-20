@@ -42,15 +42,25 @@ impl RecoveryRecord {
     }
 }
 
-/// 盘上表里的 Disk GUID，用来认**历史命名**的 checkpoint 落点。表读不出来时返回 `None`：
-/// 名字由 Disk GUID 派生，没有表就没有名字。恢复侧（`undo` / `abandon` / 现场枚举）在那段
-/// 时间里看不到那份 checkpoint，而领域侧 `movepart::read_checkpoint` 拿的是已验证几何
-/// （表必可读），总能看见它。
+/// 盘上表里的 Disk GUID，用来认**历史命名**的 checkpoint 落点。
 ///
-/// 看不见的那份不参与任何判定，只是不被列举；表一旦重新可读它就重新出现，届时可被
-/// `abandon` 释放。消除这条差异要求身份解析不再依赖表内容——扫目录猜名字不在身份解析的范围内
+/// 读不出来只降级为 `None` 并告警，**不改变任何判定**：目标身份取自设备层拓扑
+/// （见 [`TargetIdentity`]），与表内容无关，损坏 GPT 因此照样能 abandon；`None` 仅仅
+/// 意味着"按 GUID 命名的那份历史候选这一轮列举不到"。静默降级则会让用户以为盘上
+/// 只有一份现场，而报告里一条警告都没有
 pub(crate) fn legacy_disk_guid(src: &FileSource) -> Option<[u8; 16]> {
-    table::load_gpt(src).ok().flatten().map(|g| g.header.disk_guid)
+    match table::load_gpt(src) {
+        Ok(Some(g)) => Some(g.header.disk_guid),
+        // 无表（MBR / 裸盘）是常态而非故障：历史命名那份本来就不存在
+        Ok(None) => None,
+        Err(e) => {
+            eprintln!(
+                "warning: cannot read the GPT Disk GUID ({e}) — a checkpoint stored under the \
+                 legacy GUID-based name cannot be enumerated in this run"
+            );
+            None
+        }
+    }
 }
 
 /// 枚举目标上还活着的恢复现场。
@@ -107,7 +117,7 @@ impl TransactionManager {
     /// 开一次**新的**写事务：读写打开、取独占所有权、把 journal 接到目标上。
     ///
     /// 目标上已有 active transaction 时**拒绝**（30）：一个普通 mutation 永远不能隐式
-    /// 接管别人没做完的事务。接着做要走 [`Self::resume`]，放弃要走 `abandon`——
+    /// 接管别人没做完的事务。接着做要走 [`Self::begin_or_resume`]，放弃要走 `abandon`——
     /// 让 `begin` 去猜"这是不是续跑"，必然导致"是不是续跑"要在两处保持一致
     ///
     /// journal 是**惰性**的：`Journal::open` 只做只读校验，此刻盘上没有任何新痕迹；
@@ -123,40 +133,33 @@ impl TransactionManager {
         Ok(src)
     }
 
-    /// **显式续跑**：本命令声明"我要接着做目标上那件没做完的事"。
-    ///
-    /// 这里只做事务层能做的校验——确实有一份现场可以接着做。至于"是不是同一件事"
-    /// （checkpoint 与本次请求 / 当前几何是否一致）属于领域知识，由 `movepart` 的恢复校验判。
-    /// checkpoint 能证明**能否 resume**，但不该决定**谁拥有这个 target**
-    pub(crate) fn resume(a: &Args) -> Result<FileSource, Fail> {
-        let mut src = Self::open_rw(a)?;
-        let active = Self::active_records(&src);
-        if active.is_empty() {
-            return Err(Fail::infra(format!(
-                "{}: nothing to resume — this target has no unfinished operation",
-                a.target
-            )));
-        }
-        Self::attach_journal(&mut src)?;
-        Ok(src)
-    }
-
     /// 数据搬移类命令的入口：目标上有可续跑的作业时按续跑进入，否则开新事务。
     ///
     /// 判据由调用方给——那是领域知识（这类命令按 checkpoint 决定能不能接着做）。
-    /// `begin` 不参与这个判断：接管与否永远由调用方显式声明。判据只在目标确实被占用时
-    /// 被调用，故这里同时是 `resume` 与 `begin` 的合流点，而不需要先打开目标问一次再打开一次
+    /// `begin` 不参与这个判断：接管与否永远由调用方显式声明。判据拿到**锁下**的已打开
+    /// 目标，分类（续跑 / 新事务）因此发生在独占权确立之后：先开一次再判，而不是
+    /// 先判一次再开第二次——后者的判据与开目标之间存在窗口，别人可以在窗口里改变现状
+    ///
+    /// 判据返回 `Err` 时原样上抛：领域层知道的拒绝原因（例如"槽位被别的分区的作业
+    /// 占着"）必须到达 boundary，压成一个 bool 只会让它退化成通用的 busy 文案
+    ///
+    /// 返回是否按续跑进入：调用方（如 resize）要拿它决定后续分支
     pub(crate) fn begin_or_resume(
         a: &Args,
-        resumable: impl FnOnce(&[RecoveryRecord]) -> bool,
-    ) -> Result<FileSource, Fail> {
+        resumable: impl FnOnce(&FileSource, &[RecoveryRecord]) -> Result<bool, Fail>,
+    ) -> Result<(FileSource, bool), Fail> {
         let mut src = Self::open_rw(a)?;
         let active = Self::active_records(&src);
-        if !active.is_empty() && !resumable(&active) {
-            return Err(Self::busy(&active));
-        }
+        let resumed = if active.is_empty() {
+            false
+        } else {
+            if !resumable(&src, &active)? {
+                return Err(Self::busy(&active));
+            }
+            true
+        };
         Self::attach_journal(&mut src)?;
-        Ok(src)
+        Ok((src, resumed))
     }
 
     fn attach_journal(src: &mut FileSource) -> Result<(), Fail> {
