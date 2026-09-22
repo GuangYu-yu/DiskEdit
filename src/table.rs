@@ -908,6 +908,11 @@ pub fn parse_mbr(src: &FileSource) -> io::Result<Option<Vec<MbrPartition>>> {
 /// 修改 MBR 主分区条目大小（start 不变，纯扩缩）。LBA 单位与 parse_mbr /
 /// add_mdos_entry 的现有约定一致（= 扇区大小）；CHS 字段不动（现代工具惯例，
 /// 内核按 LBA 解析）。经 FileSource 写入自动进 undo journal。
+///
+/// 崩溃语义：普通单扇区写**不是**规范层面的原子写（untorn write 需要设备显式支持，
+/// Linux 内核对普通写只作 logical block 原子的行为假设），而 MBR 无 GPT 式 CRC，
+/// 掉电撕裂只能靠 0x55AA 签名粗检、字段区损坏不可检出。恢复不依赖"写是原子的"，
+/// 依赖的是写前已持久化的 undo journal——发现盘异常后 `undo` 整扇区重写 LBA0 即还原。
 pub fn resize_mdos_entry(src: &mut FileSource, part: u32, new_size_lba: u32) -> Result<(), Fail> {
     if !(1..=4).contains(&part) {
         return Err(Fail::refused(format!("invalid MBR partition number {part} (1..4)")));
@@ -1664,6 +1669,55 @@ mod tests {
         assert!(validate_geometry(&geo_header(34, 966, 968), &geom128(512), file_last, GptCopyKind::Backup).is_err());
         // 起点仍须在 LBA0/LBA1 之后
         assert!(validate_geometry(&geo_header(34, 966, 1), &geom128(512), file_last, GptCopyKind::Backup).is_err());
+    }
+
+    /// 头字段判据的拒绝分支：primary_lba、区间倒挂、越容器、数组跨度溢出逐一覆盖
+    #[test]
+    fn geometry_rejects_malformed_header_fields() {
+        let g = geom128(512);
+        // primary_lba != 1：UEFI 2.10 §5.3.1 固定主头在 LBA1
+        let mut h = geo_header(34, 900, 2);
+        h.primary_lba = 2;
+        assert!(matches!(validate_geometry(&h, &g, 999, GptCopyKind::Primary), Err(GptError::InvalidHeader(_))));
+        // 区间倒挂
+        let h = geo_header(900, 34, 2);
+        assert!(matches!(validate_geometry(&h, &g, 999, GptCopyKind::Primary), Err(GptError::InvalidHeader(_))));
+        // last_usable_lba 越容器
+        let h = geo_header(34, 1000, 2);
+        assert!(matches!(
+            validate_geometry(&h, &g, 999, GptCopyKind::Primary),
+            Err(GptError::BeyondContainer { field: "last_usable_lba", .. })
+        ));
+        // backup_lba 越容器
+        let mut h = geo_header(34, 900, 2);
+        h.backup_lba = 1000;
+        assert!(matches!(
+            validate_geometry(&h, &g, 999, GptCopyKind::Primary),
+            Err(GptError::BeyondContainer { field: "backup_lba", .. })
+        ));
+        // 数组跨度溢出：checked_add 必须拒绝而非回绕（起点贴着 u64 上界）
+        let h = geo_header(34, 900, u64::MAX - 30);
+        assert!(matches!(validate_geometry(&h, &g, 999, GptCopyKind::Primary), Err(GptError::InvalidHeader(_))));
+    }
+
+    /// 越盘条目：raw 侧保留（info 可观察、可诊断），校验侧 parse_mbr 必须拒绝——
+    /// 写入侧有 end >= total 检查，所以坏表只能像真实世界那样来自别处：手写字节绕过
+    #[test]
+    fn msdos_entry_past_end_is_damaged_and_refused() {
+        let mut src = src_from("past_end", vec![0u8; 300 * 512]);
+        create_mbr(&mut src).unwrap();
+        let mut lba0 = [0u8; 512];
+        src.read_at(0, &mut lba0).unwrap();
+        let rec = &mut lba0[446..446 + 16];
+        rec[4] = 0x0C;
+        rec[8..12].copy_from_slice(&1u32.to_le_bytes());
+        rec[12..16].copy_from_slice(&10_000u32.to_le_bytes()); // 1 + 10_000 > 300 扇区
+        src.write_at(0, &lba0).unwrap();
+
+        let raw = parse_mbr_raw(&src).unwrap().expect("the entry must stay observable for diagnostics");
+        assert!(matches!(raw.damage.first(), Some(MbrDamage::PastEnd { .. })), "{:?}", raw.damage);
+        let e = parse_mbr(&src).expect_err("a past-end entry must refuse the write path");
+        assert_eq!(e.kind(), io::ErrorKind::InvalidData, "{e}");
     }
 
     /// 直接把一份自定义几何的主副本写进镜像（绕过 commit_gpt 的规范化和写入序列）

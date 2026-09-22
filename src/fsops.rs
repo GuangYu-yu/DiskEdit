@@ -463,7 +463,9 @@ fn find_block_partition_node(src: &FileSource, part: u32, want_start: u64) -> Re
             let entry = entry.map_err(FsError::from)?;
             let start_file = entry.path().join("start");
             let Ok(txt) = std::fs::read_to_string(&start_file) else { continue };
-            let start_sectors: u64 = txt.trim().parse().unwrap_or(0);
+            // 解析失败等于"这个候选不成立"，跳过而非折叠成 0——0 不会匹配任何
+            // 真实分区，但一个假装合法的数值比跳过更难排查
+            let Ok(start_sectors) = txt.trim().parse::<u64>() else { continue };
             if start_sectors * 512 == want_start {
                 let name = entry.file_name().to_string_lossy().to_string();
                 return Ok(format!("/dev/{name}"));

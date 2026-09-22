@@ -2,9 +2,10 @@
 
 use crate::support::{bail_fail, Fail, EXIT_REFUSED};
 
-pub(crate) fn usage() -> ! {
-    eprintln!(
-        r#"diskedit — disk / image editor
+/// 顶层用法文本。错误用法打到 stderr 退 10（refused：请求无效、未写盘）；
+/// `help` / `--help` / `-h` 这类**主动请求帮助**打到 stdout 退 0（请求本身有效，
+/// 按 GNU 惯例帮助出口 0）
+const USAGE_TEXT: &str = r#"diskedit — disk / image editor
 
   info <TARGET>                                  show partition table / FS / LVM layout
   resize <TARGET>:N <SIZE> [OPTS]                resize partition + FS (auto online/offline)
@@ -45,9 +46,17 @@ exit codes:
                        partition table) and nothing was written; or the failure
                        happened after writing, in which case the message says
                        on-disk state may have changed — verify with `info` before
-                       retrying"#
-    );
+                       retrying"#;
+
+pub(crate) fn usage() -> ! {
+    eprintln!("{USAGE_TEXT}");
     std::process::exit(EXIT_REFUSED as i32);
+}
+
+/// 主动请求帮助（`help` 无主题、`--help`、`-h`）的出口：请求有效，退 0
+pub(crate) fn usage_help() -> ! {
+    println!("{USAGE_TEXT}");
+    std::process::exit(crate::support::EXIT_OK as i32);
 }
 
 /// 单命令详助（diskedit help <CMD> / <CMD> --help）。文本归各命令模块所有
@@ -119,7 +128,7 @@ pub(crate) fn parse_args() -> (String, Args) {
         pos: Vec::new(),
         seen: Vec::new(),
     };
-    let mut positional = Vec::new();
+    let mut positional: Vec<String> = Vec::new();
     while let Some(arg) = it.next() {
         match arg.as_str() {
             "--yes" => { a.seen.push("--yes"); a.yes = true; }
@@ -188,7 +197,11 @@ pub(crate) fn parse_args() -> (String, Args) {
             // 命令位本身就是 help 的写法，位置参数才当主题
             "--help" | "-h" => {
                 let topic = if matches!(cmd.as_str(), "help" | "--help" | "-h") {
-                    positional.first().cloned().unwrap_or_else(|| cmd.clone())
+                    match positional.first() {
+                        Some(t) => t.clone(),
+                        // 命令位与旗标都是 help（`diskedit --help`）：主动求助，退 0
+                        None => usage_help(),
+                    }
                 } else {
                     cmd.clone()
                 };
@@ -197,8 +210,13 @@ pub(crate) fn parse_args() -> (String, Args) {
             _ => positional.push(arg),
         }
     }
-    // 无 target（含裸调用/未知命令缺参）时打印帮助而非静默退出
-    let target = positional.first().cloned().unwrap_or_else(|| usage());
+    // 无 target（含裸调用/未知命令缺参）时打印帮助而非静默退出；但命令位本身就是
+    // help 请求（`help` / `--help` / `-h` 且无主题）时是主动求助，退 0
+    let target = match positional.first() {
+        Some(t) => t.clone(),
+        None if matches!(cmd.as_str(), "help" | "--help" | "-h") => usage_help(),
+        None => usage(),
+    };
     let (target, part) =
         crate::dev::parse_target(&target).unwrap_or_else(|e| bail_fail(Fail::refused(e)));
     a.target = target;

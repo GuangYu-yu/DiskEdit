@@ -1,7 +1,9 @@
 //! 分区搬移与中间分区扩容闭环。
 //!
 //! 前向恢复、无回滚；单分区 = 单事务；checkpoint 原子写
-//! （tmp → sync → rename → fsync 父目录）；复制方向：delta ≥ 0 且尾→头推进，
+//! （tmp → sync → rename → fsync 父目录，其中父目录 fsync 仅 unix 实现——
+//! Windows 上承诺降级为 rename 语义，不经此路径写盘所以不影响恢复协议）；
+//! 复制方向：delta ≥ 0 且尾→头推进，
 //! 写点恒在未读源之上（右移时目的地址总是大于已读位置），顺序固化不提供方向参数。
 
 use crate::dev::FileSource;
@@ -478,6 +480,12 @@ impl Checkpoint {
         if chunk_bytes == 0 {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "checkpoint chunk_bytes invalid"));
         }
+        // cur_index 的合法区间是 0..=moves.len()（等于 len 表示全部条目已提交，此时
+        // chunks_done 必为 0）：越界值若放行，恢复比对会把它夹回 len，续传循环空转、
+        // 所有搬移被跳过，表却仍按搬移后的几何提交
+        if cur_index as usize > moves.len() {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "implausible checkpoint entry index"));
+        }
         let chunks_limit = match moves.get(cur_index as usize) {
             Some(m) => m.len_lba.checked_mul(ss)
                 .and_then(|t| t.checked_add(chunk_bytes - 1))
@@ -688,18 +696,19 @@ pub(crate) fn swap_rebuild_pending(
     part: u32,
     base: u64,
     len_bytes: u64,
-) -> Option<Pending> {
-    // 读失败无法排除"还有未重建的 swap"：按存在待办处理（宁多一条 Pending，
-    // 不把故障压成一次假的成功——unactivatable_swap 的 Err 与"命中"同出口）
-    if !crate::fsid::unactivatable_swap(src, base, len_bytes).unwrap_or(true) {
-        return None;
+) -> io::Result<Option<Pending>> {
+    // 读失败≠"确认存在待办"：Pending 文案断言"本机激活不了"只在探测成功且命中时成立，
+    // 设备 I/O 故障属于另一码事，按故障上抛（调用点都在写盘之后，Failed 的
+    // "盘可能已改变"警示才是对状态的如实表述）
+    if !crate::fsid::unactivatable_swap(src, base, len_bytes)? {
+        return Ok(None);
     }
-    Some(Pending::new(
+    Ok(Some(Pending::new(
         part,
         PendingKind::Swap,
         "partition grown but the swap area was not rebuilt (its page format is not activatable on this host)",
         crate::fsops::rescue_hint("swap", &crate::dev::part_dev_hint(src, part, base)),
-    ))
+    )))
 }
 
 /// 一次搬移事务 = 事前判定（只读）+ 执行（写盘）。
@@ -798,9 +807,17 @@ fn prepare_apply(
                 chunks_done: c.chunks_done,
                 chunk_bytes: chunk_len,
             };
+            // chunk_bytes 单独先查：它是命令行可控项，混在"disk/plan 全等"里报会让
+            // 用户去查盘，而真实原因是这次换了 --chunk-size
+            if c.chunk_bytes != chunk_len {
+                return Err(crate::outcome::Fail::refused(format!(
+                    "the checkpoint was written with --chunk-size {} MiB, this run uses {} — re-run with the original value",
+                    c.chunk_bytes / (1024 * 1024),
+                    chunk_len / (1024 * 1024),
+                )));
+            }
             if c.disk_size != fresh.disk_size || c.ss != fresh.ss || c.grow_part != fresh.grow_part
                 || c.last_usable_lba != fresh.last_usable_lba || c.moves.len() != fresh.moves.len()
-                || c.chunk_bytes != fresh.chunk_bytes
                 || c.moves.iter().zip(&fresh.moves).any(|(a, b)| a.part_num != b.part_num || a.first_lba != b.first_lba || a.len_lba != b.len_lba || a.delta_lba != b.delta_lba)
             {
                 // 写盘前的校验：此刻盘上尚未改动，属事前拒绝而非执行失败
@@ -824,6 +841,27 @@ fn prepare_apply(
     };
     Ok(ApplyDecision { g: g0.clone(), ckpt, ckpt_path, chunk_len, no_fs })
 }
+
+/// 数据 chunk 的 I/O 失败必须带着精确 LBA 区间上抛：errno 说不出"哪一段"，
+/// 用户需要它区分瞬态错误（重跑续传）与永久坏块（先做救援镜像再对镜像操作）。
+/// 本层只报告区间与出路，不判断块对文件系统是否已分配、可否弃——那是 fsck 的事
+fn chunk_io_error(
+    e: io::Error,
+    action: &str,
+    base_lba: u64,
+    len_lba: u64,
+    chunk: usize,
+    total: usize,
+    hint: &str,
+) -> io::Error {
+    io::Error::other(format!(
+        "{action} failed at LBA {base_lba}..{} (chunk {chunk}/{total}): {e} — {hint}",
+        base_lba + len_lba
+    ))
+}
+
+const RESUME_HINT: &str = "the checkpoint is kept, re-run the command to retry this block (transient errors resume from here); for a permanently unreadable block, image the source with ddrescue and run the operation on the image";
+const COPY_HINT: &str = "copy has no resume — release the scene with `diskedit undo` (if rollbackable) or `diskedit abandon`, then re-run; a permanently unreadable block must be imaged with ddrescue first";
 
 // ---- durable boundary：以上判定全部结束，以下开始写盘 ----
 
@@ -949,8 +987,12 @@ fn execute_apply(
                 continue; // durable 边界之前视为完成：恢复只认 ckpt 值，绝不用内存进度跳过
             }
             let mut buf = vec![0u8; *len as usize];
-            src.read_at(src_off + within, &mut buf)?;
-            src.write_data_at(dst_off + within, &buf)?;
+            src.read_at(src_off + within, &mut buf).map_err(|e| {
+                chunk_io_error(e, "reading source", (src_off + within) / plan.ss, len / plan.ss, i + 1, total_chunks as usize, RESUME_HINT)
+            })?;
+            src.write_data_at(dst_off + within, &buf).map_err(|e| {
+                chunk_io_error(e, "writing target", (dst_off + within) / plan.ss, len / plan.ss, i + 1, total_chunks as usize, RESUME_HINT)
+            })?;
             src.sync_data()?; // 数据 chunk 用 sync_data；表结构提交用 sync_all
             ckpt.chunks_done = i as u64 + 1; // 内存进度：递增发生在 sync_data 之后，永不超前于 durable 数据
             pending_chunks += 1;
@@ -1047,7 +1089,7 @@ fn finalize_growth(
                 src.set_mutation(crate::dev::Mutation::ExternalFsTool);
                 src.mark_non_reversible()?;
             }
-            match swap_rebuild_pending(src, part, r.new.0 * ss, r.new.1 * ss) {
+            match swap_rebuild_pending(src, part, r.new.0 * ss, r.new.1 * ss)? {
                 Some(missed) => pending.push(missed),
                 None => log("partition extended (no resizable filesystem inside)"),
             }
@@ -1290,6 +1332,11 @@ fn classify_restore<'a>(
     }
     if on_disk == (ckpt.old_start, ckpt.old_end) && ckpt.chunk_bytes == req.chunk_len {
         return RestoreState::Resume(ckpt);
+    }
+    // 几何与旧端一致而仅 chunk_bytes 不同：resume_gate 不校验 chunk 大小，这里
+    // 是唯一拦得住的地方——报"几何不匹配"会让人去查盘而不是查 --chunk-size
+    if on_disk == (ckpt.old_start, ckpt.old_end) {
+        return RestoreState::Divergent("on-disk geometry matches the checkpoint, but --chunk-size differs from the interrupted job");
     }
     RestoreState::Divergent("on-disk geometry matches neither end of the checkpoint")
 }
@@ -1561,8 +1608,12 @@ fn execute_resize(
                 continue;
             }
             let mut buf = vec![0u8; *len as usize];
-            src.read_at(src_off + within, &mut buf)?;
-            src.write_data_at(dst_off + within, &buf)?;
+            src.read_at(src_off + within, &mut buf).map_err(|e| {
+                chunk_io_error(e, "reading source", (src_off + within) / ss, len / ss, i + 1, order.len(), RESUME_HINT)
+            })?;
+            src.write_data_at(dst_off + within, &buf).map_err(|e| {
+                chunk_io_error(e, "writing target", (dst_off + within) / ss, len / ss, i + 1, order.len(), RESUME_HINT)
+            })?;
             src.sync_data()?;
             ckpt.chunks_done = i as u64 + 1;
             save(&ckpt)?;
@@ -1722,11 +1773,16 @@ fn execute_copy(
     });
     src.mark_non_reversible()?;
     let mut pos = 0u64;
+    let total_n = total.div_ceil(chunk_len) as usize;
     while pos < total {
         let len_c = chunk_len.min(total - pos);
         let mut buf = vec![0u8; len_c as usize];
-        src.read_at(src_off + pos, &mut buf)?;
-        src.write_data_at(dst_off + pos, &buf)?;
+        src.read_at(src_off + pos, &mut buf).map_err(|e| {
+            chunk_io_error(e, "reading source", (src_off + pos) / ss, len_c / ss, (pos / chunk_len + 1) as usize, total_n, COPY_HINT)
+        })?;
+        src.write_data_at(dst_off + pos, &buf).map_err(|e| {
+            chunk_io_error(e, "writing target", (dst_off + pos) / ss, len_c / ss, (pos / chunk_len + 1) as usize, total_n, COPY_HINT)
+        })?;
         src.sync_data()?;
         pos += len_c;
     }
@@ -2189,6 +2245,14 @@ mod tests {
         rewrite_crc(&mut b);
         assert!(Checkpoint::deserialize(&b, &lim(128)).is_err(), "residual progress after the last entry must be rejected");
 
+        // cur_index 越过条目数（chunks_done 归零可绕过进度校验）：放行会在恢复比对里
+        // 被夹回 len，续传循环空转、搬移全部跳过而表仍按新几何提交
+        let mut b = ckpt.serialize();
+        b[CUR_INDEX..CUR_INDEX + 4].copy_from_slice(&2u32.to_le_bytes());
+        rewrite_crc(&mut b);
+        let e = Checkpoint::deserialize(&b, &lim(128)).err().expect("cur_index beyond the move list must be rejected");
+        assert_eq!(e.kind(), io::ErrorKind::InvalidData, "{e}");
+
         // 单分区 resize 型：区间 1024 LBA × 512 B = 512 KiB < 1 MiB ⇒ 同样只有 1 个 chunk
         let rs = RsCheckpoint {
             disk_size: 64 * 1024 * 1024, ss: 512, part: 1,
@@ -2245,6 +2309,165 @@ mod tests {
         let crc = table::crc32(&b[..crc_off]);
         b[crc_off..].copy_from_slice(&crc.to_le_bytes());
         let e = RsCheckpoint::deserialize(&b, &lim(128)).err().expect("a valid CRC must not smuggle a foreign sector size");
+        assert_eq!(e.kind(), io::ErrorKind::InvalidData, "{e}");
+    }
+
+    /// Checkpoint 头部与载荷判据的拒绝分支逐字段覆盖。CRC 之前的判据直接改字节即可
+    /// 触发；CRC 之后的判据（chunk_bytes）须重算 CRC，证明拦住它的是字段校验本身。
+    /// 布局推导沿用上方测试：moves 从 @44 起每条 29 字节，
+    /// count=1 时 cur_index@73、chunks_done@77、chunk_bytes@85、kind@93
+    #[test]
+    fn checkpoint_rejects_malformed_header_and_payload() {
+        let ckpt = Checkpoint {
+            disk_size: 64 * 1024 * 1024,
+            ss: 512,
+            grow_part: 1,
+            last_usable_lba: 100_000,
+            moves: vec![PlanEntry { part_num: 1, first_lba: 2048, len_lba: 100, delta_lba: 200, is_swap: false }],
+            kind: PlanKind::TailPacked,
+            cur_index: 0,
+            chunks_done: 0,
+            chunk_bytes: 1024 * 1024,
+        };
+        assert!(Checkpoint::deserialize(&ckpt.serialize(), &lim(128)).is_ok(), "the baseline must be readable");
+        let rewrite_crc = |b: &mut Vec<u8>| {
+            let crc_off = b.len() - 4;
+            let crc = table::crc32(&b[..crc_off]);
+            b[crc_off..].copy_from_slice(&crc.to_le_bytes());
+        };
+
+        // 魔数与版本在 CRC 之前判定：无需重算
+        let mut b = ckpt.serialize();
+        b[0..8].copy_from_slice(b"NOTMAGI!");
+        let e = Checkpoint::deserialize(&b, &lim(128)).err().expect("foreign magic must be rejected");
+        assert_eq!(e.kind(), io::ErrorKind::InvalidData, "{e}");
+
+        let mut b = ckpt.serialize();
+        b[8..12].copy_from_slice(&99u32.to_le_bytes());
+        let e = Checkpoint::deserialize(&b, &lim(128)).err().expect("a foreign version must be rejected");
+        assert_eq!(e.kind(), io::ErrorKind::InvalidData, "{e}");
+
+        // last_usable_lba 越容器（@32）：放行会拿一个容器上并不存在的可用区去判区间
+        const LAST_USABLE: usize = 32;
+        let mut b = ckpt.serialize();
+        b[LAST_USABLE..LAST_USABLE + 8].copy_from_slice(&200_001u64.to_le_bytes());
+        let e = Checkpoint::deserialize(&b, &lim(128)).err().expect("last_usable beyond the container must be rejected");
+        assert_eq!(e.kind(), io::ErrorKind::InvalidData, "{e}");
+
+        // 条目数越上界（@40）：防巨型 with_capacity，上界 = 表条目数
+        const COUNT: usize = 40;
+        let mut b = ckpt.serialize();
+        b[COUNT..COUNT + 4].copy_from_slice(&129u32.to_le_bytes());
+        let e = Checkpoint::deserialize(&b, &lim(128)).err().expect("a move count beyond the table's entries must be rejected");
+        assert_eq!(e.kind(), io::ErrorKind::InvalidData, "{e}");
+
+        // 首条 move 的字段：first_lba@48、len_lba@56、delta_lba@64（区间算术全 checked）
+        const FIRST_LBA: usize = 48;
+        const LEN_LBA: usize = 56;
+        const DELTA_LBA: usize = 64;
+        // 源区间溢出
+        let mut b = ckpt.serialize();
+        b[FIRST_LBA..FIRST_LBA + 8].copy_from_slice(&u64::MAX.to_le_bytes());
+        b[LEN_LBA..LEN_LBA + 8].copy_from_slice(&1u64.to_le_bytes());
+        let e = Checkpoint::deserialize(&b, &lim(128)).err().expect("an overflowing entry range must be rejected");
+        assert_eq!(e.kind(), io::ErrorKind::InvalidData, "{e}");
+        // 目标区间溢出
+        let mut b = ckpt.serialize();
+        b[DELTA_LBA..DELTA_LBA + 8].copy_from_slice(&u64::MAX.to_le_bytes());
+        let e = Checkpoint::deserialize(&b, &lim(128)).err().expect("an overflowing target range must be rejected");
+        assert_eq!(e.kind(), io::ErrorKind::InvalidData, "{e}");
+        // 出可用区（first_usable = 34）
+        let mut b = ckpt.serialize();
+        b[FIRST_LBA..FIRST_LBA + 8].copy_from_slice(&33u64.to_le_bytes());
+        b[LEN_LBA..LEN_LBA + 8].copy_from_slice(&1u64.to_le_bytes());
+        let e = Checkpoint::deserialize(&b, &lim(128)).err().expect("an entry outside the usable area must be rejected");
+        assert_eq!(e.kind(), io::ErrorKind::InvalidData, "{e}");
+
+        // plan kind 只认 0/1（@93）
+        const KIND: usize = 93;
+        let mut b = ckpt.serialize();
+        b[KIND] = 7;
+        let e = Checkpoint::deserialize(&b, &lim(128)).err().expect("an unknown plan kind must be rejected");
+        assert_eq!(e.kind(), io::ErrorKind::InvalidData, "{e}");
+
+        // CRC 在字段判据之前：撕一位必须先撞 CRC
+        let mut b = ckpt.serialize();
+        let last = b.len() - 1;
+        b[last] ^= 0xFF;
+        let e = Checkpoint::deserialize(&b, &lim(128)).err().expect("a torn tail must be rejected by CRC");
+        assert_eq!(e.kind(), io::ErrorKind::InvalidData, "{e}");
+
+        // chunk_bytes = 0 在 CRC 之后判定：重算 CRC 证明拦它的是判据本身
+        const CHUNK_BYTES: usize = 85;
+        let mut b = ckpt.serialize();
+        b[CHUNK_BYTES..CHUNK_BYTES + 8].copy_from_slice(&0u64.to_le_bytes());
+        rewrite_crc(&mut b);
+        let e = Checkpoint::deserialize(&b, &lim(128)).err().expect("chunk_bytes = 0 must be rejected");
+        assert_eq!(e.kind(), io::ErrorKind::InvalidData, "{e}");
+    }
+
+    /// 单分区 resize 型的对应拒绝分支（与搬移型逐条对称）。
+    /// 布局：magic(8)+ver(4)+disk_size(8)+ss(8)+part(4) ⇒ old_start@32、old_end@40、
+    /// new_start@48、new_end@56、fs_shrunk@64、chunks_done@65、chunk_bytes@73
+    #[test]
+    fn resize_checkpoint_rejects_malformed_records() {
+        let rs = RsCheckpoint {
+            disk_size: 64 * 1024 * 1024, ss: 512, part: 1,
+            old_start: 2048, old_end: 3071, new_start: 2048, new_end: 3071,
+            fs_shrunk: false, chunks_done: 0, chunk_bytes: 1024 * 1024,
+        };
+        assert!(RsCheckpoint::deserialize(&rs.serialize(), &lim(128)).is_ok(), "the baseline must be readable");
+        let rewrite_crc = |b: &mut Vec<u8>| {
+            let crc_off = b.len() - 4;
+            let crc = table::crc32(&b[..crc_off]);
+            b[crc_off..].copy_from_slice(&crc.to_le_bytes());
+        };
+
+        let mut b = rs.serialize();
+        b[0..8].copy_from_slice(b"NOTMAGI!");
+        let e = RsCheckpoint::deserialize(&b, &lim(128)).err().expect("foreign magic must be rejected");
+        assert_eq!(e.kind(), io::ErrorKind::InvalidData, "{e}");
+
+        let mut b = rs.serialize();
+        b[8..12].copy_from_slice(&99u32.to_le_bytes());
+        let e = RsCheckpoint::deserialize(&b, &lim(128)).err().expect("a foreign version must be rejected");
+        assert_eq!(e.kind(), io::ErrorKind::InvalidData, "{e}");
+
+        // 区间倒挂：放行会让 chunk 总数算式 old_end − old_start + 1 在 debug 下 panic
+        const OLD_START: usize = 32;
+        const OLD_END: usize = 40;
+        let mut b = rs.serialize();
+        b[OLD_START..OLD_START + 8].copy_from_slice(&3071u64.to_le_bytes());
+        b[OLD_END..OLD_END + 8].copy_from_slice(&2048u64.to_le_bytes());
+        let e = RsCheckpoint::deserialize(&b, &lim(128)).err().expect("an inverted range must be rejected");
+        assert_eq!(e.kind(), io::ErrorKind::InvalidData, "{e}");
+
+        // 分区号越上界
+        const PART: usize = 28;
+        let mut b = rs.serialize();
+        b[PART..PART + 4].copy_from_slice(&129u32.to_le_bytes());
+        let e = RsCheckpoint::deserialize(&b, &lim(128)).err().expect("an implausible partition number must be rejected");
+        assert_eq!(e.kind(), io::ErrorKind::InvalidData, "{e}");
+
+        // 出可用区（first_usable = 34）
+        let mut b = rs.serialize();
+        b[OLD_START..OLD_START + 8].copy_from_slice(&33u64.to_le_bytes());
+        let e = RsCheckpoint::deserialize(&b, &lim(128)).err().expect("a range outside the usable area must be rejected");
+        assert_eq!(e.kind(), io::ErrorKind::InvalidData, "{e}");
+
+        // CRC 先于字段判据：撕一位必须先撞 CRC
+        let mut b = rs.serialize();
+        let last = b.len() - 1;
+        b[last] ^= 0xFF;
+        let e = RsCheckpoint::deserialize(&b, &lim(128)).err().expect("a torn tail must be rejected by CRC");
+        assert_eq!(e.kind(), io::ErrorKind::InvalidData, "{e}");
+
+        // chunk_bytes = 0 在 CRC 之后：重算 CRC 证明拦它的是判据本身
+        const CHUNK_BYTES: usize = 73;
+        let mut b = rs.serialize();
+        b[CHUNK_BYTES..CHUNK_BYTES + 8].copy_from_slice(&0u64.to_le_bytes());
+        rewrite_crc(&mut b);
+        let e = RsCheckpoint::deserialize(&b, &lim(128)).err().expect("chunk_bytes = 0 must be rejected");
         assert_eq!(e.kind(), io::ErrorKind::InvalidData, "{e}");
     }
 

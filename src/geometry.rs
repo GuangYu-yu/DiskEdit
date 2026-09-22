@@ -107,8 +107,9 @@ impl ValidatedGeometry {
         }
     }
 
-    /// 用本几何提交分区表。这是写入路径唯一的提交入口：几何已过构造校验，
-    /// 提交前不重新推导 header/array 的几何（崩溃安全四结构序列见 `table::commit_table`）。
+    /// 用本几何提交分区表。这是几何消费路径（搬移/扩容/修复）唯一的提交入口：
+    /// 几何已过构造校验，提交前不重新推导 header/array 的几何（崩溃安全四结构序列见
+    /// `table::commit_table`）。add_entry_at 的增量写不经本几何，走 `table::commit_gpt`。
     /// 备份头位置（容器末 LBA）取自构造时传入的 `file_last_lba`——同一事实不接受第二个来源，
     /// 调用点不得各自重算一遍 `src.size / ss - 1`
     pub fn commit(&self, src: &mut crate::dev::FileSource) -> io::Result<()> {

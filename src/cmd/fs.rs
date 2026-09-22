@@ -89,6 +89,11 @@ pub(crate) fn cmd_resizefs(a: &Args) -> u8 {
         if a.part.is_some() {
             bail_fail(Fail::refused("--online takes a mountpoint, not <target>:N"));
         }
+        // 在线形式不打开目标，扇区大小的全部消费点都在打开路径上——落到这里
+        // 即拒绝（fail-closed），不能静默忽略后照常成功
+        if a.sector_size.is_some() {
+            bail_fail(Fail::refused("--sector-size only applies to image targets — the online form takes a mountpoint"));
+        }
         // 目标尺寸的两种给法（BYTES 与 --size 同一单位语法，只接受绝对值）二选一
         let size = match (a.pos.get(1), a.size) {
             (Some(_), Some(_)) => bail_fail(Fail::refused("give the target size either as BYTES or --size, not both")),
@@ -157,6 +162,11 @@ pub(crate) fn cmd_check(a: &Args) -> u8 {
 pub(crate) fn cmd_set(a: &Args) -> u8 {
     let Some(part) = a.part else { crate::args::usage() };
     let key = a.pos.get(1).map(|s| s.as_str()).unwrap_or_else(|| crate::args::usage());
+    // --random 是 `uuid` 子命令的专属旗标，其余分支不消费它——白名单是命令级的，
+    // 分支级差异必须在此显式拒绝（同 resizefs 离线对 --size 的处置）
+    if a.random && key != "uuid" {
+        bail_fail(Fail::refused(format!("--random only applies to `set <target>:N uuid`, not `{key}`")));
+    }
     let value = a.pos.get(2).cloned().unwrap_or_default();
     let state = a.pos.get(3).cloned().unwrap_or_default();
     let mut src = open_target_for_write(a).unwrap_or_else(|f| bail_fail(f));

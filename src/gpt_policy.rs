@@ -456,6 +456,40 @@ mod tests {
         assert_eq!(partition_bytes(&src, 1).unwrap(), (256 * 4096, 256 * 4096));
     }
 
+    /// add 的三个拒绝分支（出可用区 / 重叠 / 表满）：拒绝发生在任何写盘之前。
+    /// 紧邻区间必须放行，证明重叠判据没有过宽
+    #[test]
+    fn add_entry_at_rejects_out_of_range_overlap_and_full_table() {
+        let mut src = gpt_src("addrej");
+        // 低于 first_usable_lba（夹具 512B：first = 34）
+        let e = add_entry_at(&mut src, 33, 100, "x", table::LINUX_FS_TYPE_GUID, [0x44; 16]).unwrap_err();
+        assert!(matches!(&e, Fail::Refused(m) if m.contains("outside usable")), "{e:?}");
+        // 区间倒挂走同一判据（start > end）
+        let e = add_entry_at(&mut src, 5000, 4000, "x", table::LINUX_FS_TYPE_GUID, [0x44; 16]).unwrap_err();
+        assert!(matches!(&e, Fail::Refused(m) if m.contains("outside usable")), "{e:?}");
+        // 与既有分区（2048..4095）重叠
+        let e = add_entry_at(&mut src, 3000, 5000, "x", table::LINUX_FS_TYPE_GUID, [0x44; 16]).unwrap_err();
+        assert!(matches!(&e, Fail::Refused(m) if m.contains("overlaps")), "{e:?}");
+        // 紧邻不重叠：必须放行（判据是 end < e.starting_lba || start > e.ending_lba）
+        assert_eq!(add_entry_at(&mut src, 4096, 5000, "p2", table::LINUX_FS_TYPE_GUID, [0x45; 16]).unwrap(), 2);
+        // 表满：填满剩余槽位后 add 必须拒绝——放行会静默丢掉用户刚给的数据布局
+        let mut g = table::load_gpt(&src).unwrap().unwrap();
+        for (i, e) in g.entries.iter_mut().enumerate().skip(2) {
+            *e = gptman::GPTPartitionEntry {
+                partition_type_guid: table::LINUX_FS_TYPE_GUID,
+                unique_partition_guid: [0x46; 16],
+                starting_lba: 6000 + i as u64,
+                ending_lba: 6000 + i as u64,
+                attribute_bits: 0,
+                partition_name: "f".into(),
+            };
+        }
+        let last = src.size / src.sector_size - 1;
+        table::commit_gpt(&mut src, &g, last).unwrap();
+        let e = add_entry_at(&mut src, 8192, 8200, "x", table::LINUX_FS_TYPE_GUID, [0x44; 16]).unwrap_err();
+        assert!(matches!(&e, Fail::Refused(m) if m.contains("full")), "{e:?}");
+    }
+
     /// 无表、空槽、越界编号各自只可能落一种出口语义：前者 10，后两者同判据同文案
     #[test]
     fn partition_bytes_error_kinds() {
