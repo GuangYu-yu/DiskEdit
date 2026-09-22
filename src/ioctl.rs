@@ -80,10 +80,13 @@ pub(crate) fn blkpg_resize_partition(f: &File, start_bytes: u64, new_len_bytes: 
     let Ok(length) = i64::try_from(new_len_bytes) else {
         return Err(io::Error::new(io::ErrorKind::InvalidData, format!("length {new_len_bytes} overflows BLKPG's signed range")));
     };
+    let Ok(pno) = i32::try_from(pno) else {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, format!("partition number {pno} overflows BLKPG's signed range")));
+    };
     let mut part = BlkpgPartition {
         start,
         length,
-        pno: pno as i32,
+        pno,
         devname: [0; 64],
         volname: [0; 64],
     };

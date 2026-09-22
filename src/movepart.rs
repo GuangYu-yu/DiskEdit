@@ -854,9 +854,10 @@ fn chunk_io_error(
     total: usize,
     hint: &str,
 ) -> io::Error {
+    // 诊断区间同样不回绕：chunk 搬移的算术全部 checked，报错的 LBA 没有理由例外
+    let end = base_lba.saturating_add(len_lba);
     io::Error::other(format!(
-        "{action} failed at LBA {base_lba}..{} (chunk {chunk}/{total}): {e} — {hint}",
-        base_lba + len_lba
+        "{action} failed at LBA {base_lba}..{end} (chunk {chunk}/{total}): {e} — {hint}"
     ))
 }
 
@@ -1080,15 +1081,12 @@ fn finalize_growth(
 ) -> io::Result<()> {
     match fstype {
         // unknown/LVM PV 无本工具可扩的文件系统；其中混着一类**真实的未完成后置条件**
-        //（创建于 32K 页的 swap，本机激活不了），故先探测一遍
+        //（创建于 32K 页的 swap，本机激活不了），故先探测一遍。
+        // 两侧都不在此落 ExternalFsTool 屏障：PV 的外部写入（pvresize/lvextend）在收尾
+        // resize_done 里发生，屏障由它携带 journal 写句柄在 spawn 前落——"表被回滚、
+        // PV 已扩"的自相矛盾同样被排除，且 undo 不再被"屏障已落、pvresize 未跑"的
+        // 死亡窗口无谓锁死。unknown 这支只探测、不写盘
         "unknown" | "lvm2_pv" => {
-            // PV：调用方返回后仍会跑 pvresize/lvextend（外部写入），必须在它之前落标记——
-            // 否则"表被回滚、而 PV/LV/FS 已扩"正是本标记要排除的自相矛盾状态。
-            // unknown 不落标记：这一支只探测、不写盘，undo 应当仍然可用
-            if fstype == "lvm2_pv" {
-                src.set_mutation(crate::dev::Mutation::ExternalFsTool);
-                src.mark_non_reversible()?;
-            }
             match swap_rebuild_pending(src, part, r.new.0 * ss, r.new.1 * ss)? {
                 Some(missed) => pending.push(missed),
                 None => log("partition extended (no resizable filesystem inside)"),

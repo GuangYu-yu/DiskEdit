@@ -279,7 +279,9 @@ pub(crate) fn free_right_gpt(g: &ValidatedGeometry, part: u32) -> u64 {
             bound = bound.min(o.starting_lba);
         }
     }
-    bound.saturating_sub(e.ending_lba + 1)
+    // +1 走 checked：ending_lba 虽被几何构造校验拦在 usable 内，这里的回绕仍不可信——
+    // 回绕成 0 会把右侧空闲虚报成整段 bound
+    e.ending_lba.checked_add(1).map_or(0, |next| bound.saturating_sub(next))
 }
 
 /// MBR 分区右侧连续空闲扇区数（到下一表项起点或盘尾为止；扩展容器起点同样

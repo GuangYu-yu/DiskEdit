@@ -613,7 +613,12 @@ mod imp {
         if crate::online::swap_active(disk_name, pno) {
             return Outcome::refused(format!("partition {pno} became active swap during locking — run swapoff first"));
         }
-        if new_len_bytes <= t.part_len_bytes {
+        // 相等值单独说清：调用方包装通常在相等时短路，但本函数是 pub——
+        // 未来调用方传相等值得到的是"无事可做"而非"只能增长"
+        if new_len_bytes == t.part_len_bytes {
+            return Outcome::refused(format!("partition is already {} bytes — nothing to resize", t.part_len_bytes));
+        }
+        if new_len_bytes < t.part_len_bytes {
             return Outcome::refused(format!(
                 "PV partition can only grow here (current {} bytes); PV shrink needs the lvreduce/pvresize chain",
                 t.part_len_bytes
@@ -665,6 +670,14 @@ mod imp {
         // 现场闸口：必须在 FS 步（fs_grow）与写表（sfdisk）之前
         if let Err(o) = refuse_if_scene_active(&t) {
             return o;
+        }
+        // 活动 swap 的锁下复核（命令层那次是锁前粗查，理由同 resize_pv）：本路径的前提
+        // 是"挂载中"，挂载本身放行，唯独 swap 激活不可——swapon 不守本工具的锁
+        let Some(dn) = t.disk_dev.file_name().map(|s| s.to_string_lossy().into_owned()) else {
+            return Outcome::refused(format!("cannot derive disk name from {}", t.disk_dev.display()));
+        };
+        if crate::online::swap_active(&dn, t.pno) {
+            return Outcome::refused(format!("partition {} became active swap during locking — run swapoff first", t.pno));
         }
         let fstype = match fstype_of(&t) {
             Ok(f) => f,

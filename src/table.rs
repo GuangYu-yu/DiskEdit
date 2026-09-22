@@ -935,6 +935,19 @@ pub fn resize_mdos_entry(src: &mut FileSource, part: u32, new_size_lba: u32) -> 
     if matches!(rec[4], 0x05 | 0x0F | 0x85) {
         return Err(Fail::refused("extended partition container cannot be resized"));
     }
+    // 条目自守（与 add_mdos_entry 同严格）：start + 新长度须落在盘内。现有调用方
+    // 都先查过 free，但这是 pub 写入口——越界尺寸要挡在写 LBA0 之前，不能指望
+    // 每个未来调用方都记得复核
+    let start = u32::from_le_bytes(rec[8..12].try_into().unwrap()) as u64;
+    let total_sectors = src.size / ss as u64;
+    if start == 0 {
+        return Err(Fail::refused(format!("MBR partition {part} has invalid start LBA 0")));
+    }
+    if start + new_size_lba as u64 > total_sectors {
+        return Err(Fail::refused(format!(
+            "new size {new_size_lba} sectors from LBA {start} exceeds the disk ({total_sectors} sectors)"
+        )));
+    }
     rec[12..16].copy_from_slice(&new_size_lba.to_le_bytes());
     src.write_at(0, &lba0)?;
     src.sync_all()?;
@@ -1966,6 +1979,22 @@ mod tests {
         // 无 hidden 对应码的类型拒绝
         add_mdos_entry(&mut src, 210, 250, 0x83).unwrap();
         assert!(set_mdos_hidden(&mut src, 2, true).is_err());
+    }
+
+    /// resize_mdos_entry 是 pub 写入口：start + 新长度越出盘尾必须拒绝——
+    /// 与 add_mdos_entry 的自守同严格，不能指望每个调用方都先查过 free
+    #[test]
+    fn resize_mdos_entry_rejects_beyond_disk_end() {
+        let data = vec![0u8; 300 * 512];
+        let mut src = src_from("mrszend", data);
+        create_mbr(&mut src).unwrap();
+        add_mdos_entry(&mut src, 63, 200, 0x83).unwrap();
+        // 63 + 300 > 300 盘尾：拒绝且不落盘
+        let e = resize_mdos_entry(&mut src, 1, 300).unwrap_err();
+        assert!(matches!(e, Fail::Refused(_)), "must be refused: {e:?}");
+        // 仍在盘内的扩容照常写入（新检查不得把合法调用一并拒掉）
+        resize_mdos_entry(&mut src, 1, 200).unwrap();
+        assert_eq!(parse_mbr(&src).unwrap().unwrap()[0].size_lba, 200);
     }
 
     /// 保护 MBR（UEFI 2.10 §5.2.3）：形状与 SizeInLBA 覆盖范围分层判定

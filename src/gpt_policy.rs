@@ -222,7 +222,21 @@ pub(crate) fn partition_bytes(src: &FileSource, part: u32) -> Result<(u64, u64),
         Err(e) => Err(Fail::infra(format!("parse failed: {e}"))),
         Ok(Some(g)) => {
             let e = live_entry_in(&g.entries, part)?;
-            Ok((e.starting_lba * g.ss, (e.ending_lba - e.starting_lba + 1) * g.ss))
+            // 条目在 usable 区内本不该溢出；checked 失败即表内容异常，按 Infra 如实报，
+            // 不让回绕值顺着字节偏移流进 losetup / mkswap 的参数里
+            let overflow = |part: u32| {
+                Fail::infra(format!("partition {part} entry arithmetic overflows (entry inconsistent with geometry)"))
+            };
+            let Some(len_lba) = e.ending_lba.checked_sub(e.starting_lba).and_then(|d| d.checked_add(1)) else {
+                return Err(overflow(part));
+            };
+            let Some(off) = e.starting_lba.checked_mul(g.ss) else {
+                return Err(overflow(part));
+            };
+            let Some(len) = len_lba.checked_mul(g.ss) else {
+                return Err(overflow(part));
+            };
+            Ok((off, len))
         }
         // 无 GPT → 按 MBR 解析。不这么做的话真 MBR 盘在这里被一律当成"无表"，
         // mkfs / set label|uuid 在 MBR 上完全不可用

@@ -323,7 +323,13 @@ pub(crate) fn cmd_create(a: &Args) -> u8 {
     }
     let (start, end) = match want {
         Some(n) => match gaps.iter().find(|(s, e)| e - s + 1 >= n) {
-            Some(&(s, e)) => (s, (s + n - 1).min(e)), // 区间端点落在间隙内
+            // n 来自 --size（用户可控）：find 的 span≥n 已保证 s+n-1 ≤ e，checked 把
+            // 这层非局部依赖显式化——回绕不依赖 find 的承诺
+            Some(&(s, e)) => {
+                let last = s.checked_add(n).and_then(|x| x.checked_sub(1))
+                    .unwrap_or_else(|| bail_fail(Fail::refused(format!("size {n} sectors overflows the LBA range"))));
+                (s, last.min(e)) // 区间端点落在间隙内
+            }
             None => bail_fail(Fail::refused(format!("no aligned gap fits {n} sectors; free gaps: {gaps:?}"))),
         },
         None => *gaps.iter().max_by_key(|(s, e)| e - s + 1).unwrap(),
