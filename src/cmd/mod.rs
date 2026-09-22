@@ -146,11 +146,12 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
         run: |_, a| undo::cmd_undo(a),
     },
     // abandon 既不建 journal、也不回放：它把现场字节原样改名交出去，盘上一个字节都不写。
+    // 打开是只读的且不走 --sector-size（扇区大小对"改名交出去"无意义），白名单不收。
     // 归 WriteNoJournal 的后果正是要的——成功时不触发 main 的 journal 清理
     CommandSpec {
         name: "abandon",
         aliases: &[],
-        flags: &["--sector-size", "--yes"],
+        flags: &["--yes"],
         help: abandon::HELP,
         mode: TargetMode::WriteNoJournal,
         run: |_, a| abandon::cmd_abandon(a),
@@ -190,7 +191,10 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         name: "apply",
         aliases: &[],
-        flags: &["--sector-size", "--grow", "--chunk-size", "--no-fs", "--yes"],
+        // 无 --yes：apply 与 plan 是同一件事的两面——plan 干跑不触盘，apply 在**锁下**
+        // 按盘上现状重新推导计划后执行（见 cmd::plan），没有第二个确认层；
+        // 白名单声明却不消费的旗标 = 静默接受用户以为存在的确认
+        flags: &["--sector-size", "--grow", "--chunk-size", "--no-fs"],
         help: plan::HELP,
         mode: TargetMode::WriteJournal,
         run: plan::cmd_plan_apply,

@@ -41,15 +41,17 @@ pub fn parse_sysfs_u64(s: &str) -> Option<u64> {
 pub fn disk_name_from_partition(part_name: &str, disk_exists: impl Fn(&str) -> bool) -> Option<String> {
     if let Some(pos) = part_name.rfind('p') {
         let (base, suffix) = part_name.split_at(pos);
-        if !suffix.is_empty() && suffix[1..].bytes().all(|b| b.is_ascii_digit())
+        // rfind 命中 ⇒ suffix 非空且以 'p' 开头，只余"其余全为数字"待验
+        if suffix[1..].bytes().all(|b| b.is_ascii_digit())
             && !base.is_empty() && disk_exists(base)
         {
             return Some(base.to_string());
         }
     }
     let digits_end = part_name.bytes().rposition(|b| !b.is_ascii_digit()).map(|i| i + 1);
+    // i + 1 ≥ 1：Some(0) 不可达，"全数字"（盘名无分区号）由 None 表达
     match digits_end {
-        Some(0) | None => None,
+        None => None,
         Some(end) => {
             let base = &part_name[..end];
             (!base.is_empty() && disk_exists(base)).then(|| base.to_string())
@@ -162,6 +164,27 @@ mod imp {
         parse_sysfs_u64(&s).ok_or_else(|| io::Error::other(format!("unparsable sysfs value in {}", path.display())))
     }
 
+    /// 收集盘上相邻分区的字节区间（sysfs 遍历），`skip` 命中的条目除外。
+    /// 两条在线路径（resolve_target / resolve_target_ro）共用的唯一实现；
+    /// 算不出真值的邻居意味着**无法证明不重叠**——按校验失败上抛，绝不静默跳过
+    fn collect_neighbours(sysroot: &Path, skip: impl Fn(&Path) -> bool) -> io::Result<Vec<(u64, u64)>> {
+        let mut others = Vec::new();
+        for entry in fs::read_dir(sysroot)? {
+            let p = entry?.path();
+            if skip(&p) || !p.join("partition").exists() {
+                continue;
+            }
+            let s = sysfs_u64(&p.join("start"))?;
+            let l = sysfs_u64(&p.join("size"))?;
+            let sb = s.checked_mul(512)
+                .ok_or_else(|| io::Error::other(format!("neighbour {} start overflows u64 bytes", p.display())))?;
+            let lb = l.checked_mul(512)
+                .ok_or_else(|| io::Error::other(format!("neighbour {} size overflows u64 bytes", p.display())))?;
+            others.push((sb, lb));
+        }
+        Ok(others)
+    }
+
     /// mountpoint → /proc/self/mountinfo 匹配（挂载点已解码八进制转义，man
     /// proc_pid_mountinfo(5)）→ (分区块设备节点, 规范化挂载点)。
     /// multi-device/bind 挂载不支持
@@ -230,23 +253,7 @@ mod imp {
 
         // 相邻分区区间（本分区除外），fail-fast 前置自查；内核 -EBUSY 兜底
         let this_dev = (maj as u64, min as u64);
-        let mut others = Vec::new();
-        for entry in fs::read_dir(Path::new("/sys/block").join(&disk_name))? {
-            let p = entry?.path();
-            if is_same_device(&p, this_dev) || !p.join("partition").exists() {
-                continue;
-            }
-            if let (Ok(s), Ok(l)) = (sysfs_u64(&p.join("start")), sysfs_u64(&p.join("size"))) {
-                // 邻居区间进重叠自查，而自查正是"能否安全写入"的判据：回绕值会伪装成
-                // 正常区间，算不出真值的邻居意味着**无法证明不重叠**——按校验失败处理，
-                // 跳过它等于让一次写入可能覆盖邻居
-                let sb = s.checked_mul(512)
-                    .ok_or_else(|| io::Error::other(format!("neighbour {} start overflows u64 bytes", p.display())))?;
-                let lb = l.checked_mul(512)
-                    .ok_or_else(|| io::Error::other(format!("neighbour {} size overflows u64 bytes", p.display())))?;
-                others.push((sb, lb));
-            }
-        }
+        let others = collect_neighbours(&Path::new("/sys/block").join(&disk_name), |p| is_same_device(p, this_dev))?;
 
         Ok(OnlineTarget {
             disk_dev,
@@ -383,10 +390,13 @@ mod imp {
         }
     }
 
-    /// fs_grow 的两态失败：**工具没跑起来**（找不到 / 无法执行）时 FS 未被触碰；
-    /// **非零退出**说明工具可能改了一半。两者性质不同（infra / failed），
-    /// 压成一个错误类型会让调用点无从区分
+    /// fs_grow 的三态失败：**该 FS 没有在线工具**意味着本次一个进程都没起，
+    /// 成因在请求（换离线路径才有解）⇒ 拒绝；**工具没跑起来**（找不到 / 无法执行）
+    /// 是环境故障，FS 同样未被触碰 ⇒ infra；**非零退出**说明工具可能改了一半 ⇒ failed。
+    /// 三者出口语义各异，压成一个错误类型会让调用点无从区分
     enum FsGrowError {
+        /// 该 FS 无在线 grow 工具（`fs_grow_cmd` 映射缺失）
+        NoTool(String),
         /// 工具没跑起来：`fsops::run` 的失败侧（工具缺失 / 执行失败）
         Spawn(crate::fsops::FsError),
         Exit(String),
@@ -395,15 +405,17 @@ mod imp {
     impl FsGrowError {
         fn detail(&self) -> String {
             match self {
+                FsGrowError::NoTool(m) | FsGrowError::Exit(m) => m.clone(),
                 FsGrowError::Spawn(e) => e.to_string(),
-                FsGrowError::Exit(m) => m.clone(),
             }
         }
     }
 
     fn fs_grow(t: &OnlineTarget, fstype: &str) -> Result<(), FsGrowError> {
         let Some((prog, args)) = fs_grow_cmd(t, fstype) else {
-            return Err(FsGrowError::Spawn(crate::fsops::FsError::ToolMissing(format!("{fstype} has no online grow"))));
+            return Err(FsGrowError::NoTool(format!(
+                "{fstype} has no online grow tool; unmount the partition and use the offline path where the FS is supported"
+            )));
         };
         let argv: Vec<&str> = args.iter().map(String::as_str).collect();
         let out = run(&prog, &argv).map_err(FsGrowError::Spawn)?;
@@ -466,27 +478,12 @@ mod imp {
         let disk_cap_bytes = byte_of(sysfs_u64(&sysroot.join("size"))?)?;
         let logical_block = sysfs_u64(&sysroot.join("queue/logical_block_size"))?;
         let this_dev = std::fs::read_to_string(sysdir.join("dev")).ok().and_then(|s| parse_dev_attr(&s));
-        let mut others = Vec::new();
-        for entry in fs::read_dir(&sysroot)? {
-            let p = entry?.path();
-            // 与 resolve_target 用同一判据排除目标自身；本函数的 sysdir 由上面同一目录遍历得出，
-            // 故 dev 属性缺失时退回路径比较（那种比较在**这个**函数里是成立的）
-            let is_target = match this_dev {
-                Some(d) => is_same_device(&p, d),
-                None => p == sysdir,
-            };
-            if is_target || !p.join("partition").exists() {
-                continue;
-            }
-            if let (Ok(s), Ok(l)) = (sysfs_u64(&p.join("start")), sysfs_u64(&p.join("size"))) {
-                // 与 resolve_target 同一防线：算不出真值的邻居意味着无法证明不重叠
-                let sb = s.checked_mul(512)
-                    .ok_or_else(|| io::Error::other(format!("neighbour {} start overflows u64 bytes", p.display())))?;
-                let lb = l.checked_mul(512)
-                    .ok_or_else(|| io::Error::other(format!("neighbour {} size overflows u64 bytes", p.display())))?;
-                others.push((sb, lb));
-            }
-        }
+        // 与 resolve_target 用同一判据排除目标自身；本函数的 sysdir 由上面同一目录遍历得出，
+        // 故 dev 属性缺失时退回路径比较（那种比较在**这个**函数里是成立的）
+        let others = collect_neighbours(&sysroot, |p| match this_dev {
+            Some(d) => is_same_device(p, d),
+            None => p == sysdir,
+        })?;
         Ok(OnlineTarget {
             disk_dev,
             part_dev,
@@ -505,10 +502,30 @@ mod imp {
     /// 粒度取**整盘**：分区表属于盘，且只有盘粒度才能与"以 `/dev/sdX` 为目标的离线
     /// 调用"落进同一个锁名；锁是 advisory 的，它约束的是本工具的所有入口，不是别人
     fn lock_disk(t: &OnlineTarget) -> Result<crate::targetlock::TargetLock, Outcome> {
-        let ident = crate::dev::TargetIdentity::resolve(&t.disk_dev, true, t.disk_cap_bytes);
+        // fail-closed：拓扑解析不出来即拒绝（不退到 devname-容量身份）
+        let ident = crate::dev::TargetIdentity::resolve_block(&t.disk_dev)
+            .map_err(Outcome::infra)?;
         // 取锁的失败按 `Fail` 的三个变体折叠成出口语义（唯一映射点在 outcome 模块），
         // 本处不借 `finish` 做转换——那是"结束一次操作"的入口，语义不同
         crate::targetlock::TargetLock::acquire(&ident).map_err(|f| f.into_outcome())
+    }
+
+    /// 在线路径的现场闸口。本路径不建 journal（sfdisk / FS 工具用自己的 fd 写盘，
+    /// 不经过 `FileSource::write_at`，挂 journal 只会得到空壳），因此**首次写盘之前**
+    /// 必须确认目标上没有任何未收尾的现场：有 ⇒ 拒绝（busy 文案与离线闸口同源）。
+    /// 判定发生在锁下、与首次写盘之间无窗口；有了这道闸，命令成功后 main 的
+    /// drop_journal 只会碰到"不存在"的候选——绝无"删掉别人可回滚凭据"的可能
+    fn refuse_if_scene_active(t: &OnlineTarget) -> Result<(), Outcome> {
+        // 只读打开整盘：闸口只读现场（journal / checkpoint 候选），不申请写权限
+        let src = crate::dev::FileSource::open_read_only(&t.disk_dev)
+            .map_err(|e| Outcome::infra(format!("open failed: {e}")))?;
+        // 只传主语：后半句 "writes outside the undo journal" 由 refuse_if_active 统一拼
+        //（与之并列的调用点传的是命令名，如 "resizefs" / "check"）
+        crate::transaction::TransactionManager::refuse_if_active(
+            &src,
+            "online resize",
+        )
+        .map_err(|f| f.into_outcome())
     }
 
     /// 新尺寸的几何前置检查：对齐 → 容量 → 邻接，两条在线写表路径共用。
@@ -547,6 +564,17 @@ mod imp {
             Ok(l) => l,
             Err(o) => return o,
         };
+        // 独占权在手后重取 sysfs 快照：resolve 必须先于取锁（锁身份取自它的结果），
+        // 而外部工具不守本工具的锁——取锁耗时期间邻居/容量/本分区尺寸都可能已变。
+        // 下面的 shrink 判定与 check_new_range 的邻接、容量判据必须来自锁下的新鲜事实
+        let t = match resolve_pv_target(disk_name, pno) {
+            Ok(t) => t,
+            Err(e) => return Outcome::infra(e.to_string()),
+        };
+        // 现场闸口：本路径不建 journal，目标上若有未收尾的现场必须在此拒绝
+        if let Err(o) = refuse_if_scene_active(&t) {
+            return o;
+        }
         if new_len_bytes <= t.part_len_bytes {
             return Outcome::refused(format!(
                 "PV partition can only grow here (current {} bytes); PV shrink needs the lvreduce/pvresize chain",
@@ -581,6 +609,25 @@ mod imp {
             Ok(l) => l,
             Err(o) => return o,
         };
+        // 同 resize_pv：锁下重取 sysfs 快照（理由见彼处）。mountpoint 在窗口内被重挂载
+        // 会解析到别的分区——两次解析目标不一致即拒绝，绝不在 A 的锁下操作 B
+        let fresh = match resolve_target(mountpoint) {
+            Ok(t) => t,
+            Err(e) => return Outcome::infra(e.to_string()),
+        };
+        if fresh.part_dev != t.part_dev {
+            return Outcome::infra(format!(
+                "mountpoint {} changed target during locking ({} -> {}) — retry",
+                mountpoint.display(),
+                t.part_dev.display(),
+                fresh.part_dev.display()
+            ));
+        }
+        let t = fresh;
+        // 现场闸口：必须在 FS 步（fs_grow）与写表（sfdisk）之前
+        if let Err(o) = refuse_if_scene_active(&t) {
+            return o;
+        }
         let fstype = match fstype_of(&t) {
             Ok(f) => f,
             Err(e) => return Outcome::infra(e.to_string()),
@@ -601,17 +648,19 @@ mod imp {
         let fs_pending = |detail: String| {
             Pending::new(t.pno, PendingKind::Fs, detail, fs_grow_hint(&t, &fstype))
         };
+        // fs_grow 的三态映射（唯一处）：无在线工具 = 成因在请求（换离线路径）⇒ refused；
+        // spawn 失败 = 什么都没动（infra）；非零退出 = 工具可能改了一半（failed）。
+        // 适用前提：本分支没有更早的写盘步骤
+        let fs_grow_outcome = |r: Result<(), FsGrowError>| match r {
+            Ok(()) => Outcome::applied_with(Vec::new()),
+            Err(FsGrowError::NoTool(m)) => Outcome::refused(m),
+            Err(FsGrowError::Spawn(err)) => Outcome::infra(err.to_string()),
+            Err(FsGrowError::Exit(m)) => Outcome::failed(m),
+        };
 
         match size {
-            // 扩满现分区：分区不动，FS 工具直接吃满（内核视图无需变更）。
-            // spawn 失败 = 什么都没动（infra）；非零退出 = 工具可能改了一半（failed）
-            None => match fs_grow(&t, &fstype) {
-                Ok(()) => Outcome::applied_with(Vec::new()),
-                Err(e) => match e {
-                    FsGrowError::Spawn(err) => Outcome::infra(err.to_string()),
-                    FsGrowError::Exit(m) => Outcome::failed(m),
-                },
-            },
+            // 扩满现分区：分区不动，FS 工具直接吃满（内核视图无需变更）
+            None => fs_grow_outcome(fs_grow(&t, &fstype)),
             Some(bytes) => {
                 if let Err(msg) = check_new_range(&t, bytes) {
                     return Outcome::refused(msg);
@@ -666,13 +715,7 @@ mod imp {
                     }
                 } else {
                     // bytes == 现分区：与 None 分支同性质（没有别的写盘步骤）
-                    match fs_grow(&t, &fstype) {
-                        Ok(()) => Outcome::applied_with(Vec::new()),
-                        Err(e) => match e {
-                            FsGrowError::Spawn(err) => Outcome::infra(err.to_string()),
-                            FsGrowError::Exit(m) => Outcome::failed(m),
-                        },
-                    }
+                    fs_grow_outcome(fs_grow(&t, &fstype))
                 }
             }
         }

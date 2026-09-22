@@ -1,89 +1,20 @@
-//! GPT 条目数组的 canonical geometry，以及全仓唯一的 **operational geometry** 类型。
+//! GPT 全仓唯一的 **operational geometry** 类型。
 //!
-//! 此前"数组有多大"这一事实有四个来源各自表达（`load_entry_array` 的 16 MiB 上限、
-//! `validate_geometry` 的跨度、`Checkpoint::deserialize` 的 128、`create_gpt` 的 128），
-//! 于是同一块盘在不同消费者眼里可以是不同的几何。本模块把该事实收成一处。
-//!
-//! 三个数字互不代用（它们是三件不同的事，不是同一个常量的三个副本）：
-//! - [`EntryArrayGeometry`]`::entry_count` / `entry_size`：**盘/规范事实**。UEFI 2.10
-//!   §5.3.3 Table 5.6 规定数组大小由 NumberOfPartitionEntries × SizeOfPartitionEntry
-//!   决定（SizeOfPartitionEntry = 128 × 2^n），不是固定的 128 条目
-//! - [`MAX_ARRAY_BYTES`]：**安全策略**（自定上限，非规范要求）。几何异常时不做巨型分配
-//! - [`DEFAULT_ENTRY_COUNT`] / [`DEFAULT_ENTRY_SIZE`]：**建表策略**。`new` 造一张**新表**
-//!   时写多少条目，与盘上已有的表无关，因此不能从任何已有几何推导
+//! "条目数组有多大"是编解码/布局事实，canonical 类型 [`EntryArrayGeometry`] 与
+//! 自定字节上限 [`MAX_ARRAY_BYTES`] 都定义在 codec 层（`table`），本模块从中引入
+//! 消费（策略常量在构造点显式传入）。
 //!
 //! [`ValidatedGeometry`] 是"写操作的唯一入口事实"：它只由解析结果 + 修复动作构造，
 //! 携带**修复完成后将成立**的几何（见 `new` 的 `post_repair_last_usable`）。写入路径只准
 //! 消费它；`info` 一类诊断路径继续读 `table::RawGpt`——那是有意的能力保留：
 //! 本工具拒绝在坏几何上继续操作，但必须能告诉用户哪里坏了。
 
-use crate::table::{RawGpt, RawHeader};
+use crate::table::{EntryArrayGeometry, MAX_ARRAY_BYTES, RawGpt, RawHeader};
 use gptman::GPTPartitionEntry;
 use std::io;
 
-/// 自定安全上限（非 UEFI 要求）：条目数组字节数不得超过此值。它是 policy，
-/// 不随规范或盘上字段变化，因此与 `entry_count`/`entry_size` 分开命名
-const MAX_ARRAY_BYTES: u64 = 16 * 1024 * 1024;
-
-/// `new` 造新表时写入的条目数与单条目字节数：建表策略，不是从盘上推导的事实。
-/// 新建 GPT 的这两项由实现自选（各工具默认值不同），本工具取 128 × 128B；
-/// 改它只影响新造的表，不影响对已有表的解读
-pub const DEFAULT_ENTRY_COUNT: u32 = 128;
-pub const DEFAULT_ENTRY_SIZE: u32 = 128;
-
-/// 单条目字节数合规判据：UEFI 2.10 §5.3.3 Table 5.6 规定 SizeOfPartitionEntry = 128 × 2^n，
-/// 前 128 字节为规范定义字段，其余为保留区（必须为零）
-pub fn entry_size_ok(entry_size: u32) -> bool {
-    entry_size >= 128 && entry_size.is_power_of_two()
-}
-
 fn invalid(msg: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, msg.into())
-}
-
-/// 条目数组的几何：`sector_size` 是**该表自身**的扇区大小（条目 LBA 的单位），
-/// 与容器扇区大小可以不同（4Kn 表放在 512e 容器里），两者不可混用
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct EntryArrayGeometry {
-    pub sector_size: u64,
-    pub entry_size: u32,
-    pub entry_count: u32,
-}
-
-impl EntryArrayGeometry {
-    /// 唯一构造点：三条判据（扇区大小非零、条目数非零且单条目合规、字节数不超安全上限）
-    /// 都只在此处表达。解析层与写入层共用它，于是"表允许多大"只有一个答案
-    pub fn new(sector_size: u64, entry_size: u32, entry_count: u32) -> io::Result<Self> {
-        if sector_size == 0 {
-            return Err(invalid("GPT entry geometry: zero sector size"));
-        }
-        if entry_count == 0 || !entry_size_ok(entry_size) {
-            return Err(invalid("implausible GPT entry geometry"));
-        }
-        let byte_len = entry_count as u64 * entry_size as u64;
-        if byte_len > MAX_ARRAY_BYTES {
-            return Err(invalid(format!(
-                "implausible GPT entry geometry: {entry_count} × {entry_size} B = {byte_len} bytes exceeds the {MAX_ARRAY_BYTES}-byte safety limit"
-            )));
-        }
-        Ok(Self { sector_size, entry_size, entry_count })
-    }
-
-    /// 数组占用的字节数（UEFI 2.10 §5.3.3 Table 5.6：由两个自述字段相乘决定）
-    pub fn byte_len(&self) -> u64 {
-        self.entry_count as u64 * self.entry_size as u64
-    }
-
-    /// 数组占用的扇区数（向上取整到整扇区）
-    pub fn lba_span(&self) -> u64 {
-        self.byte_len().div_ceil(self.sector_size)
-    }
-
-    /// 1-based 分区号 → 数组下标。越界返回 None：**禁止**用字面量上限直接索引
-    pub fn slot(&self, part: u32) -> Option<usize> {
-        let idx = part.checked_sub(1)? as usize;
-        (idx < self.entry_count as usize).then_some(idx)
-    }
 }
 
 /// checkpoint 之类"盘上可控的持久状态"的合法性判据来源：它们不自己发现世界，
@@ -134,6 +65,7 @@ impl ValidatedGeometry {
             g.ss,
             g.header.size_of_partition_entry,
             g.header.number_of_partition_entries,
+            MAX_ARRAY_BYTES,
         )?;
         if let Some((a, b)) = find_overlap(&g.entries) {
             return Err(invalid(format!(
@@ -176,9 +108,11 @@ impl ValidatedGeometry {
     }
 
     /// 用本几何提交分区表。这是写入路径唯一的提交入口：几何已过构造校验，
-    /// 提交前不再重新推导 header/array 的几何（崩溃安全四结构序列见 `table::commit_table`）
-    pub fn commit(&self, src: &mut crate::dev::FileSource, last_lba: u64) -> io::Result<()> {
-        crate::table::commit_table(src, self.ss, &self.header, &self.entries, last_lba)
+    /// 提交前不重新推导 header/array 的几何（崩溃安全四结构序列见 `table::commit_table`）。
+    /// 备份头位置（容器末 LBA）取自构造时传入的 `file_last_lba`——同一事实不接受第二个来源，
+    /// 调用点不得各自重算一遍 `src.size / ss - 1`
+    pub fn commit(&self, src: &mut crate::dev::FileSource) -> io::Result<()> {
+        crate::table::commit_table(src, self.ss, &self.header, &self.entries, self.file_last_lba)
     }
 }
 
@@ -220,40 +154,8 @@ mod tests {
         }
     }
 
-    /// 条目数组：128 × 2^n 合规，其余拒绝；字节数上限是自定 policy（非规范），
-    /// 超限即拒绝而不是按字段做巨型分配
-    #[test]
-    fn entry_array_geometry_bounds() {
-        assert!(EntryArrayGeometry::new(512, 128, 128).is_ok());
-        assert!(EntryArrayGeometry::new(4096, 128, 128).is_ok());
-        assert!(EntryArrayGeometry::new(512, 256, 128).is_ok());
-        // 条目数为 0 / 单条目不合规 / 扇区大小为 0
-        assert!(EntryArrayGeometry::new(512, 128, 0).is_err());
-        assert!(EntryArrayGeometry::new(512, 192, 128).is_err());
-        assert!(EntryArrayGeometry::new(0, 128, 128).is_err());
-        // 16 MiB 上限：128B 条目 ⇒ 上界 131072 条；再大一档即拒绝
-        assert!(EntryArrayGeometry::new(512, 128, 131_072).is_ok());
-        assert!(EntryArrayGeometry::new(512, 128, 262_144).is_err());
-    }
-
-    /// 跨度按表自身的扇区大小算：128 × 128B 在 512B 下 32 扇区、在 4Kn 下 4 扇区
-    #[test]
-    fn lba_span_follows_table_sector_size() {
-        assert_eq!(EntryArrayGeometry::new(512, 128, 128).unwrap().lba_span(), 32);
-        assert_eq!(EntryArrayGeometry::new(4096, 128, 128).unwrap().lba_span(), 4);
-        // 256 条目 × 256B = 64 KiB ⇒ 4Kn 下 16 扇区
-        assert_eq!(EntryArrayGeometry::new(4096, 256, 256).unwrap().lba_span(), 16);
-    }
-
-    /// 槽位换算：分区号上界来自本表的条目数，128 不再是硬上限
-    #[test]
-    fn slot_is_derived_from_entry_count() {
-        let g = EntryArrayGeometry::new(512, 128, 256).unwrap();
-        assert_eq!(g.slot(1), Some(0));
-        assert_eq!(g.slot(256), Some(255));
-        assert_eq!(g.slot(257), None);
-        assert_eq!(g.slot(0), None);
-    }
+    // 条目数组几何的构造判据与跨度/槽位换算已随类型下沉 codec 层（`table::tests`），
+    // 此处只保留本模块自己的不变量
 
     /// 重叠探测：相邻、嵌套、跨越三形态都要命中；未使用条目与紧邻不重叠不得误报
     #[test]

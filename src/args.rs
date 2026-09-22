@@ -35,8 +35,8 @@ exit codes:
                        kernel partition view was refreshed
   10  refused          nothing was written, and the request does not match the
                        target's current state: validation failed, no partition
-                       table, partition missing, a required tool is missing, or
-                       the confirmation flag absent — changing arguments may help
+                       table, partition missing, or the confirmation flag
+                       absent — changing arguments may help
   20  partial          layout was written but a follow-up step is pending (remedy
                        command printed per affected partition), or the kernel
                        partition view is stale (run partprobe/partx before use)
@@ -207,15 +207,14 @@ pub(crate) fn parse_args() -> (String, Args) {
     (cmd, a)
 }
 
-/// 参数缺值/坏值的统一拒绝出口：报出旗标名，避免静默 exit 使用户无从排查
+/// 参数缺值/坏值的统一拒绝出口：走 `bail_fail`（报告文字与退出码都取自 outcome，
+/// 不在参数层自拼前缀绕开唯一映射）。报出旗标名，避免静默 exit 使用户无从排查
 fn miss_arg(flag: &str) -> ! {
-    eprintln!("refused: {flag} requires a value (see diskedit help)");
-    std::process::exit(EXIT_REFUSED as i32);
+    bail_fail(Fail::refused(format!("{flag} requires a value (see diskedit help)")))
 }
 
 fn bad_arg(flag: &str, v: &str, hint: &str) -> ! {
-    eprintln!("refused: bad value {v:?} for {flag}{hint}");
-    std::process::exit(EXIT_REFUSED as i32);
+    bail_fail(Fail::refused(format!("bad value {v:?} for {flag}{hint}")))
 }
 
 /// SIZE 字符串 →（数值, 类别 0=绝对/1=扩/-1=缩, 是否百分号）。

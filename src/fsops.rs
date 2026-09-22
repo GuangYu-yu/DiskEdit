@@ -189,17 +189,18 @@ pub(crate) fn run_input(tool: &str, args: &[&str], input: &str) -> Result<std::p
 /// （e2fsprogs e2fsck/unix.c）：FS 被修改且 ctx->mount_flags & EXT2_MF_ISROOT——改了
 /// root fs 需重启才能继续，2/3 一律中断（未挂载镜像上通常不出现）。
 /// 0/1 通过，4 = 有未修正错误即拒绝。
+/// 2/3/4 归 `CommandFailed`：三者都说明工具**运行过**——2/3 自述改过文件系统、
+/// 4 在 -p 下仍会自动修复过——"不能证明已写"不等于"已证明未写"，不足以支撑
+/// `Io → Infra` 的"确定未写盘"承诺。`Failed` 的语义正是不对是否落盘作断言
 fn check_e2fsck(code: i32) -> Result<(), FsError> {
     match code {
         0 | 1 => Ok(()),
-        2 | 3 => Err(FsError::Io(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            "e2fsck: root filesystem was modified, reboot required before resizing",
-        ))),
-        4 => Err(FsError::Io(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "e2fsck: uncorrected errors (exit 4), refuse resize",
-        ))),
+        2 | 3 => Err(FsError::CommandFailed(
+            "e2fsck: root filesystem was modified, reboot required before resizing".into(),
+        )),
+        4 => Err(FsError::CommandFailed(
+            "e2fsck: uncorrected errors (exit 4), refuse resize".into(),
+        )),
         c => Err(FsError::CommandFailed(format!("e2fsck infrastructure failure (exit {c})"))),
     }
 }
@@ -478,26 +479,13 @@ fn find_block_partition_node(src: &FileSource, part: u32, want_start: u64) -> Re
 }
 
 fn partition_byte_range(src: &FileSource, part: u32) -> Result<(u64, u64), FsError> {
-    let ss = src.sector_size;
-    // 本层契约是 FsError::Io，"表结构非法"对调用者只等于拒绝，故在此显式压平
-    // （into_io_error 是可见的调用，不是 From——结构化诊断归 cmd_info）
-    if let Some(g) = crate::table::load_gpt(src).map_err(crate::table::into_io_error)? {
-        let e = part.checked_sub(1).and_then(|i| g.entries.get(i as usize))
-            .ok_or_else(|| FsError::invalid(format!("partition {part} not found")))?;
-        if e.ending_lba == 0 && e.starting_lba == 0 {
-            return Err(FsError::invalid(format!("partition {part} is empty")));
-        }
-        return Ok((e.starting_lba * g.ss, (e.ending_lba - e.starting_lba + 1) * g.ss));
-    }
-    if let Some(mbr) = crate::table::parse_mbr(src).map_err(FsError::from)? {
-        let p = mbr.iter().find(|p| p.num == part)
-            .ok_or_else(|| FsError::invalid(format!("partition {part} not found")))?;
-        if p.is_container {
-            return Err(FsError::invalid("extended/container entries not supported for FS ops"));
-        }
-        return Ok((p.start_lba as u64 * ss, p.size_lba as u64 * ss));
-    }
-    Err(FsError::invalid("no partition table on target"))
+    // 唯一实现在 gpt_policy::partition_bytes（GPT 优先、MBR 兜底，换算用表自身的 ss）。
+    // 出口语义由 FsError 的既有映射承担：Refused ⇒ 请求与现状不符(10)，环境/盘内容故障 ⇒
+    // Io(30)。本层不把分类重解释一遍——那会让"同一事实的第二处判据"重新长出来
+    crate::gpt_policy::partition_bytes(src, part).map_err(|f| match f {
+        crate::outcome::Fail::Refused(m) => FsError::invalid(m),
+        crate::outcome::Fail::Infra(m) | crate::outcome::Fail::Failed(m) => FsError::Io(io::Error::other(m)),
+    })
 }
 
 /// ext 最小尺寸估算：resize2fs -P 的最小块数 × dumpe2fs -h 的块大小；
@@ -1017,17 +1005,24 @@ where
         return Err(FsError::command("mount", &out));
     }
     let res = f(&mnt.to_string_lossy());
-    let umount = find_tool("umount");
-    if let Ok(u) = umount {
-        let out = Command::new(u).arg(&mnt).stdin(Stdio::null()).output();
-        // 卸载失败不静默：残留挂载点会占用分区，提示用户手动处理
-        if out.as_ref().map(|o| !o.status.success()).unwrap_or(true) {
-            let why = match out {
-                Ok(o) => String::from_utf8_lossy(&o.stderr).trim().to_string(),
-                Err(e) => e.to_string(),
-            };
-            eprintln!("warning: umount {} failed: {why} — temp mount point may remain", mnt.display());
+    match find_tool("umount") {
+        Ok(u) => {
+            let out = Command::new(u).arg(&mnt).stdin(Stdio::null()).output();
+            // 卸载失败不静默：残留挂载点会占用分区，提示用户手动处理
+            if out.as_ref().map(|o| !o.status.success()).unwrap_or(true) {
+                let why = match out {
+                    Ok(o) => String::from_utf8_lossy(&o.stderr).trim().to_string(),
+                    Err(e) => e.to_string(),
+                };
+                eprintln!("warning: umount {} failed: {why} — temp mount point may remain", mnt.display());
+            }
         }
+        // umount 缺失同样不能静默：挂载中的目录 rmdir 必然失败，"用后即删"就此失效
+        // 而用户毫不知情——与"卸载失败"同一告警口径
+        Err(e) => eprintln!(
+            "warning: umount not found ({e}) — temp mount point {} may remain mounted",
+            mnt.display()
+        ),
     }
     crate::dev::best_effort_rmdir(&mnt);
     res
@@ -1222,7 +1217,22 @@ pub fn set_uuid(src: &FileSource, part: u32, fstype: &str, req: &UuidRequest) ->
 #[cfg(test)]
 mod tests {
     use super::{check_e2fsck, erase_ranges, parse_num_field, partition_byte_range};
+    use super::FsError;
     use crate::dev::FileSource;
+
+    /// e2fsck 2/3/4 归 `CommandFailed`：三者都说明工具运行过——"确定未写盘"
+    /// 的 Infra 承诺不成立。exit 2 的人工复现（e2fsck -fp 改过 root fs）无需真实环境：
+    /// 判定是纯函数，逐码断言变体即可
+    #[test]
+    fn e2fsck_exit_codes_do_not_claim_no_write() {
+        assert!(check_e2fsck(0).is_ok());
+        assert!(check_e2fsck(1).is_ok());
+        for c in [2, 3, 4] {
+            assert!(matches!(check_e2fsck(c), Err(FsError::CommandFailed(_))), "exit {c}");
+        }
+        // 基础设施故障（8/16 等）同样走 CommandFailed，与 2/3/4 同口径
+        assert!(matches!(check_e2fsck(8), Err(FsError::CommandFailed(_))));
+    }
 
     fn fs_fixture(tag: &str, data: Vec<u8>) -> FileSource {
         let mut tmp = std::env::temp_dir();
@@ -1231,7 +1241,7 @@ mod tests {
         let f = std::fs::OpenOptions::new().read(true).write(true).open(&tmp).unwrap();
         let size = data.len() as u64;
         FileSource {
-            identity: crate::dev::TargetIdentity::resolve(&tmp, false, size),
+            identity: crate::dev::TargetIdentity::resolve_image(&tmp),
             file: f,
             path: tmp,
             sector_size: 512,
@@ -1248,7 +1258,7 @@ mod tests {
         // GPT：按解析时的扇区大小换算
         let mut src = fs_fixture("pbr_gpt", vec![0u8; 2 * 1024 * 1024]);
         crate::table::create_gpt(&mut src, 512, None).unwrap();
-        crate::table::add_entry(&mut src, 2048, 3000, "p", crate::table::LINUX_FS_TYPE_GUID).unwrap();
+        crate::gpt_policy::add_entry(&mut src, 2048, 3000, "p", crate::table::LINUX_FS_TYPE_GUID).unwrap();
         assert_eq!(partition_byte_range(&src, 1).unwrap(), (2048 * 512, (3000 - 2048 + 1) * 512));
         assert!(partition_byte_range(&src, 2).is_err(), "empty slot must be rejected");
         assert!(partition_byte_range(&src, 99).is_err(), "out-of-range number must be rejected");

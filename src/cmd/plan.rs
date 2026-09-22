@@ -9,8 +9,9 @@ diskedit apply <TARGET> --grow N [--chunk-size MiB]
 
   Grow partition N into all following free space, relocating intervening
   partitions tail-packed (manual multi-step form of `resize grow`).
-  plan prints the operations without touching the disk; apply executes
-  them and resumes from its checkpoint if re-run."#;
+  plan prints the operations without touching the disk. apply derives the
+  plan under the target lock (the disk may have changed since plan ran)
+  and executes it, resuming from its checkpoint if re-run."#;
 
 /// 列出各分区的搬移（plan 命令与 apply 前的计划打印共用）。
 /// 头行不共用：两处要给出的数不同——写入前只需扩容终点，`plan` 还要额外给出
@@ -33,19 +34,23 @@ pub(crate) fn print_plan(plan: &movepart::Plan) -> std::io::Result<()> {
 
 pub(crate) fn cmd_plan_apply(cmd: &str, a: &Args) -> u8 {
     let Some(grow) = a.grow else { crate::args::usage() };
-    // 这一段只读：plan 不写盘，apply 的写由 apply_cmd 自己的写事务另开一次。
-    // 故按只读命令打开——否则一块正被使用的盘上连 `plan` 都跑不出计划
-    let mut src = open_target_ro(a).unwrap_or_else(|f| bail_fail(f));
-    // 恢复感知：盘上有未收尾的搬移作业时，`plan` 要打印、`apply` 要执行的
-    // 都是那份 ckpt 里的计划（现算的 delta 与 ckpt 不一致，会撞上恢复校验）
-    let plan = match movepart::make_plan_resuming(&mut src, grow) {
-        Ok(p) => p,
-        Err(f) => bail_fail(f),
-    };
-    // 是否在续跑：`plan` 的提示行要用。apply 的分类不在这里做——它在自己的写打开里
-    // 按锁下的目标重新判（见 apply_cmd）
-    let resuming = movepart::has_pending_relocation(&src, plan.grow_part).unwrap_or_else(|f| bail_fail(f));
     if cmd == "plan" {
+        // 这一段只读：plan 不写盘，故按只读命令打开——否则一块正被使用的盘上
+        // 连 `plan` 都跑不出计划
+        let mut src = open_target_ro(a).unwrap_or_else(|f| bail_fail(f));
+        // 解析一次（构造点即拒绝条目重叠），随后的续传判定与规划共用它
+        let (g, repair) = match crate::gpt_policy::resolve_geometry(&src) {
+            Ok(Some(v)) => v,
+            Ok(None) => bail_fail(Fail::refused("no GPT on target".to_string())),
+            Err(f) => bail_fail(f),
+        };
+        // 恢复感知：盘上有未收尾的搬移作业时，plan 要打印的就是那份 ckpt 里的计划
+        // （现算的 delta 与 ckpt 不一致，会撞上恢复校验）
+        let plan = match movepart::make_plan_resuming(&mut src, &g, repair, grow) {
+            Ok(p) => p,
+            Err(f) => bail_fail(f),
+        };
+        let resuming = movepart::has_pending_relocation(&src, &g, grow).unwrap_or_else(|f| bail_fail(f));
         if resuming {
             println!("[resume] an unfinished relocation job is on the disk — this is the plan it resumes with");
         }
@@ -64,15 +69,28 @@ pub(crate) fn cmd_plan_apply(cmd: &str, a: &Args) -> u8 {
         print_moves(&plan);
         EXIT_OK
     } else {
-        apply_cmd(a, plan)
+        apply_cmd(a, grow)
     }
 }
 
-fn apply_cmd(a: &Args, plan: movepart::Plan) -> u8 {
-    // 一次打开完成分类：是否续跑在**锁下**按 ckpt 判定（has_pending_relocation），
-    // 不沿用上面只读阶段算出的那份——判据与开目标之间不许留窗口
+fn apply_cmd(a: &Args, grow: u32) -> u8 {
+    // 一次打开完成分类：是否续跑在**锁下**按 ckpt 判定（见 open_target_resumable），
+    // 不沿用任何只读预判——判据与开目标之间不许留窗口
     let (mut src, _resuming) =
-        open_target_resumable(a, plan.grow_part).unwrap_or_else(|f| bail_fail(f));
+        open_target_resumable(a, grow).unwrap_or_else(|f| bail_fail(f));
+    // plan 在**锁下**构造：它是本次执行的权威值（续跑时取自 ckpt 自持）。
+    // 取锁之前构造的那份只能算草稿——只读阶段与取得独占权之间盘可以被别人改写，
+    // 执行一份与盘上现状无关的计划就是把过期决定写进盘。
+    // 几何在同一把锁下解析一次，plan、Logger 与 apply 的判定/执行全程共用它
+    let (g, repair) = match crate::gpt_policy::resolve_geometry(&src) {
+        Ok(Some(v)) => v,
+        Ok(None) => bail_fail(Fail::refused("no GPT on target".to_string())),
+        Err(f) => bail_fail(f),
+    };
+    let plan = match movepart::make_plan_resuming(&mut src, &g, repair, grow) {
+        Ok(p) => p,
+        Err(f) => bail_fail(f),
+    };
     // 表的可解析性由 prepare_apply 在写盘前判定（无表 → refused 10，表非法 → infra 30）：
     // 同一事实不设第二判据——两处判据迟早会在某个入口分叉，且自判拒绝时还不报原因
     let chunk = match movepart::chunk_bytes(a.chunk_mib) {
@@ -81,8 +99,8 @@ fn apply_cmd(a: &Args, plan: movepart::Plan) -> u8 {
         // 不是环境故障。故显式 refused，不走 `From<io::Error>` 的"可能已改变"
         Err(e) => bail_fail(Fail::refused(e.to_string())),
     };
-    let mut logger = Logger::open(&src);
-    let o = movepart::apply(&mut src, &plan, chunk, a.no_fs, &mut |m| logger.log(m));
+    let mut logger = Logger::open(&src, Some(g.header.disk_guid));
+    let o = movepart::apply(&mut src, &g, &plan, chunk, a.no_fs, &mut |m| logger.log(m));
     // 失败时日志里也留一份：apply 出问题后用户常回看日志
     if let crate::outcome::Outcome::Failed { cause } = &o {
         logger.log(&format!("apply failed: {cause}"));

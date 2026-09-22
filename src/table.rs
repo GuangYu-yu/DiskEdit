@@ -14,15 +14,96 @@
 //!   execute_resize）
 
 use crate::dev::FileSource;
-use crate::geometry::{self, EntryArrayGeometry};
 use crate::outcome::Fail;
 use gptman::GPTPartitionEntry;
 use std::io;
+
+// ---------- 条目数组几何（canonical，codec 层自持） ----------
+//
+// "数组有多大"是编解码/布局事实（UEFI 2.10 §5.3.3 Table 5.6：NumberOfPartitionEntries ×
+// SizeOfPartitionEntry 决定，不是固定 128 条目），住在本层；操作几何
+// （geometry::ValidatedGeometry）只消费它，不让本层反向依赖几何层
+
+/// 自定安全上限（**策略参数，非 UEFI 规范要求**）：条目数组字节数不得超过此值。
+/// 刻意不进 `EntryArrayGeometry::new` 的规范判据——由构造点显式传入：解析分配防线与
+/// 操作几何共用同一个常量，同一份策略不留第二个副本
+pub const MAX_ARRAY_BYTES: u64 = 16 * 1024 * 1024;
+
+/// `new` 造新表时写入的条目数与单条目字节数：建表策略，不是从盘上推导的事实。
+/// 新建 GPT 的这两项由实现自选（各工具默认值不同），本工具取 128 × 128B；
+/// 改它只影响新造的表，不影响对已有表的解读
+pub const DEFAULT_ENTRY_COUNT: u32 = 128;
+pub const DEFAULT_ENTRY_SIZE: u32 = 128;
+
+/// 单条目字节数合规判据：UEFI 2.10 §5.3.3 Table 5.6 规定 SizeOfPartitionEntry = 128 × 2^n，
+/// 前 128 字节为规范定义字段，其余为保留区（必须为零）
+pub fn entry_size_ok(entry_size: u32) -> bool {
+    entry_size >= 128 && entry_size.is_power_of_two()
+}
+
+fn invalid_geom(msg: impl Into<String>) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, msg.into())
+}
+
+/// 条目数组的几何：`sector_size` 是**该表自身**的扇区大小（条目 LBA 的单位），
+/// 与容器扇区大小可以不同（4Kn 表放在 512e 容器里），两者不可混用
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct EntryArrayGeometry {
+    pub sector_size: u64,
+    pub entry_size: u32,
+    pub entry_count: u32,
+}
+
+impl EntryArrayGeometry {
+    /// 唯一构造点：规范判据（扇区大小非零、条目数非零且单条目合规）在此表达；
+    /// `max_array_bytes` 是调用方的策略输入（见 [`MAX_ARRAY_BYTES`]），不是本类型的
+    /// 规范约束。解析层与写入层共用它，于是"表允许多大"只有一个答案
+    pub fn new(sector_size: u64, entry_size: u32, entry_count: u32, max_array_bytes: u64) -> io::Result<Self> {
+        if sector_size == 0 {
+            return Err(invalid_geom("GPT entry geometry: zero sector size"));
+        }
+        if entry_count == 0 || !entry_size_ok(entry_size) {
+            return Err(invalid_geom("implausible GPT entry geometry"));
+        }
+        let byte_len = entry_count as u64 * entry_size as u64;
+        if byte_len > max_array_bytes {
+            return Err(invalid_geom(format!(
+                "implausible GPT entry geometry: {entry_count} × {entry_size} B = {byte_len} bytes exceeds the {max_array_bytes}-byte safety limit"
+            )));
+        }
+        Ok(Self { sector_size, entry_size, entry_count })
+    }
+
+    /// 数组占用的字节数（UEFI 2.10 §5.3.3 Table 5.6：由两个自述字段相乘决定）
+    pub fn byte_len(&self) -> u64 {
+        self.entry_count as u64 * self.entry_size as u64
+    }
+
+    /// 数组占用的扇区数（向上取整到整扇区）
+    pub fn lba_span(&self) -> u64 {
+        self.byte_len().div_ceil(self.sector_size)
+    }
+
+    /// 1-based 分区号 → 数组下标。越界返回 None：**禁止**用字面量上限直接索引
+    pub fn slot(&self, part: u32) -> Option<usize> {
+        let idx = part.checked_sub(1)? as usize;
+        (idx < self.entry_count as usize).then_some(idx)
+    }
+}
 
 const GPT_SIGNATURE: &[u8; 8] = b"EFI PART";
 const MBR_SIGNATURE: u16 = 0xAA55;
 /// 保护 MBR 分区类型
 const PROT_MBR_TYPE: u8 = 0xEE;
+
+/// 容器末 LBA（按给定表的扇区大小计）。全仓唯一的算式落点：
+/// 不允许在任何调用点重写第二遍——同一事实两个来源迟早分叉。
+/// 调用点各有前置（读到扇区 / ≥68 扇区等），`size < ss` 不可达；仍用 saturating
+/// 收口而不是裸 `- 1`：release 未开 overflow-checks，下溢会静默回绕成 u64::MAX
+///（一个"无限大的容器"），debug 下才 panic——单点算式不该把正确性押在编译模式上
+pub(crate) fn container_last_lba(src: &FileSource, ss: u64) -> u64 {
+    (src.size / ss).saturating_sub(1)
+}
 
 /// 用户可见的"哪一份 GPT 副本"。用于把副本级的损伤讲清楚（主头/主数组坏 vs 备头/备数组坏），
 /// 而不是笼统地说"GPT 头坏"
@@ -391,7 +472,7 @@ fn load_entry_array(
     let bad_geometry = |m: &str| GptError::InvalidHeader(m.into());
     // 条目数组几何的唯一构造点：条目数/单条目大小合规、字节数不超自定安全上限，三件事
     // 都在那里判定，本处不重复表达（此前这里的 16 MiB 上限与 checkpoint 的 128 各说各话）
-    let geom = EntryArrayGeometry::new(ss, header.size_of_partition_entry, header.number_of_partition_entries)
+    let geom = EntryArrayGeometry::new(ss, header.size_of_partition_entry, header.number_of_partition_entries, MAX_ARRAY_BYTES)
         .map_err(|e| bad_geometry(&e.to_string()))?;
     // 损坏表的 lba/size 字段不受信任，乘加全部 checked，防溢出回绕
     let array_off = header.partition_entry_lba.checked_mul(ss).ok_or_else(|| bad_geometry("GPT entry array offset overflow"))?;
@@ -439,7 +520,7 @@ fn parse_primary(src: &FileSource, ss: u64, pmbr: PmbrSize) -> ParsedCopy {
     };
     // 几何自洽性校验（validate_geometry）：字段取自本头，末端按本次候选的 ss 口径算，
     // 二者都随副本而变（备份头有它自己的 last_usable / backup_lba），故失败只是本副本不可用
-    let state = match validate_geometry(&header, &geom, src.size / ss - 1, GptCopyKind::Primary) {
+    let state = match validate_geometry(&header, &geom, container_last_lba(src, ss), GptCopyKind::Primary) {
         Ok(s) => s,
         Err(e) => return ParsedCopy::CopyDamaged(e),
     };
@@ -461,7 +542,7 @@ fn parse_backup(src: &FileSource, ss: u64, pmbr: PmbrSize) -> ParsedCopy {
     if src.size < ss * 2 {
         return ParsedCopy::Absent;
     }
-    let file_last_lba = src.size / ss - 1;
+    let file_last_lba = container_last_lba(src, ss);
     let mut sec = vec![0u8; ss as usize];
     if let Err(e) = src.read_at(file_last_lba * ss, &mut sec) {
         return ParsedCopy::CopyDamaged(GptError::Io(e));
@@ -577,7 +658,7 @@ fn serialize_header(h: &RawHeader, array_crc: u32, ss: u64) -> io::Result<Vec<u8
 /// 条目数组序列化（含补零到扇区边界），返回 (字节, 数组 CRC)。
 /// 几何由 [`EntryArrayGeometry`] 单点判定（es > 128 时条目尾部保留区保持零；
 /// 不合规的几何在构造点即报错，此处不再自证）
-pub fn serialize_array(entries: &[GPTPartitionEntry], geom: &EntryArrayGeometry) -> io::Result<(Vec<u8>, u32)> {
+pub fn serialize_array(entries: &[GPTPartitionEntry], geom: &EntryArrayGeometry) -> (Vec<u8>, u32) {
     let span = geom.lba_span();
     let mut b = vec![0u8; (span * geom.sector_size) as usize];
     for (i, e) in entries.iter().enumerate().take(geom.entry_count as usize) {
@@ -585,7 +666,7 @@ pub fn serialize_array(entries: &[GPTPartitionEntry], geom: &EntryArrayGeometry)
         b[off..off + 128].copy_from_slice(&serialize_entry(e));
     }
     let crc = crc32(&b[..geom.byte_len() as usize]);
-    Ok((b, crc))
+    (b, crc)
 }
 
 /// 重建规范化主/备头（写入路径：无论读到的是哪份副本，输出总为规范位置）
@@ -636,8 +717,8 @@ pub(crate) fn commit_table(
     last_lba: u64,
 ) -> io::Result<()> {
     // 几何只构造一次：数组字节数、扇区跨度、条目数与大小都取自它，不再各自乘一遍
-    let geom = EntryArrayGeometry::new(ss, header.size_of_partition_entry, header.number_of_partition_entries)?;
-    let (array_bytes, array_crc) = serialize_array(entries, &geom)?;
+    let geom = EntryArrayGeometry::new(ss, header.size_of_partition_entry, header.number_of_partition_entries, MAX_ARRAY_BYTES)?;
+    let (array_bytes, array_crc) = serialize_array(entries, &geom);
     // 跨度只算一次（几何对象），下溢检查先于任何头部构造
     let backup_array_lba = last_lba
         .checked_sub(geom.lba_span())
@@ -883,7 +964,7 @@ fn pmbr_shape_valid(src: &FileSource) -> io::Result<bool> {
 pub fn gpt_signature_present(src: &FileSource) -> io::Result<bool> {
     for &ss in &candidate_sector_sizes(src.sector_size) {
         if src.size < ss + GPT_SIGNATURE.len() as u64 {
-            return Ok(false);
+            continue;
         }
         let mut sig = [0u8; GPT_SIGNATURE.len()];
         match src.read_at(ss, &mut sig) {
@@ -988,7 +1069,7 @@ pub fn load_gpt(src: &FileSource) -> Result<Option<RawGpt>, GptError> {
 
 /// GUID 熵源：时间 + 路径哈希（无第三方 rand 依赖；不承诺 UUIDv4 质量）。
 /// disk GUID 与分区 unique GUID 共用播种
-fn derive_guid(path: &std::path::Path) -> [u8; 16] {
+pub(crate) fn derive_guid(path: &std::path::Path) -> [u8; 16] {
     use std::hash::{BuildHasher, Hasher};
     let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
     let mut h1 = std::collections::hash_map::RandomState::new().build_hasher();
@@ -1038,10 +1119,16 @@ impl TableKind {
 /// 可分配的紧约束，同时保证主数组 [2, 2+span) 与备数组 [last-span, last) 不重叠。
 /// 512B → 68 扇区，4Kn → 12 扇区（GNU parted 对 512B 给出同一 68 下限）
 fn gpt_min_sectors(ss: u64) -> io::Result<u64> {
-    // 新建表的条目数与单条目大小取建表策略（[`geometry::DEFAULT_ENTRY_COUNT`] /
-    // [`geometry::DEFAULT_ENTRY_SIZE`]），与盘上任何既有几何无关
-    let geom = EntryArrayGeometry::new(ss, geometry::DEFAULT_ENTRY_SIZE, geometry::DEFAULT_ENTRY_COUNT)?;
+    // 新建表的条目数与单条目大小取建表策略（[`DEFAULT_ENTRY_COUNT`] /
+    // [`DEFAULT_ENTRY_SIZE`]），与盘上任何既有几何无关
+    let geom = EntryArrayGeometry::new(ss, DEFAULT_ENTRY_SIZE, DEFAULT_ENTRY_COUNT, MAX_ARRAY_BYTES)?;
     Ok(2 * geom.lba_span() + 4)
+}
+
+/// "盘装不下 GPT"的唯一措辞：preflight（命令层写盘前拒绝，Fail::refused）与
+/// create_gpt（直调入口的兜底，io::Error）共用同一判据 gpt_min_sectors 与同一句话
+fn gpt_too_small(min_sectors: u64, ss: u64) -> String {
+    format!("target too small for a GPT (needs ≥{min_sectors} sectors at {ss}-byte sector size)")
 }
 
 /// `new` 写盘前的全部拒绝判据。命令层必须在任何写入之前先过它：这些检查若埋在
@@ -1050,9 +1137,7 @@ fn gpt_min_sectors(ss: u64) -> io::Result<u64> {
 pub fn create_gpt_preflight(size_bytes: u64, ss: u64) -> Result<(), Fail> {
     let min_sectors = gpt_min_sectors(ss).map_err(|e| Fail::refused(e.to_string()))?;
     if size_bytes / ss < min_sectors {
-        return Err(Fail::refused(format!(
-            "target too small for a GPT (needs ≥{min_sectors} sectors at {ss}-byte sector size)"
-        )));
+        return Err(Fail::refused(gpt_too_small(min_sectors, ss)));
     }
     Ok(())
 }
@@ -1076,13 +1161,11 @@ pub fn create_gpt(src: &mut FileSource, ss: u64, disk_guid: Option<[u8; 16]>) ->
     // 写盘前过了一遍，这里是直接调本函数的调用方（测试）的兜底，两种入口看到同一句话
     let min_sectors = gpt_min_sectors(ss)?;
     if src.size / ss < min_sectors {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, format!(
-            "target too small for a GPT (needs ≥{min_sectors} sectors at {ss}-byte sector size)"
-        )));
+        return Err(io::Error::new(io::ErrorKind::InvalidData, gpt_too_small(min_sectors, ss)));
     }
-    let geom = EntryArrayGeometry::new(ss, geometry::DEFAULT_ENTRY_SIZE, geometry::DEFAULT_ENTRY_COUNT)?;
+    let geom = EntryArrayGeometry::new(ss, DEFAULT_ENTRY_SIZE, DEFAULT_ENTRY_COUNT, MAX_ARRAY_BYTES)?;
     let span = geom.lba_span();
-    let last_lba = src.size / ss - 1;
+    let last_lba = container_last_lba(src, ss);
     let header = RawHeader {
         primary_lba: 1,
         backup_lba: last_lba,
@@ -1099,7 +1182,7 @@ pub fn create_gpt(src: &mut FileSource, ss: u64, disk_guid: Option<[u8; 16]>) ->
     ensure_protective_mbr(src)
 }
 
-fn empty_entry() -> GPTPartitionEntry {
+pub(crate) fn empty_entry() -> GPTPartitionEntry {
     GPTPartitionEntry {
         partition_type_guid: [0; 16],
         unique_partition_guid: [0; 16],
@@ -1110,80 +1193,8 @@ fn empty_entry() -> GPTPartitionEntry {
     }
 }
 
-/// `add`：在最低空闲槽位追加条目。校验：范围落在 [first_usable, last_usable]、
-/// 与既有分区不重叠、start ≤ end。碰撞即拒绝。
-pub fn add_entry(
-    src: &mut FileSource,
-    start: u64,
-    end: u64,
-    name: &str,
-    type_guid: [u8; 16],
-) -> Result<u32, Fail> {
-    let unique = derive_guid(&src.path);
-    add_entry_at(src, start, end, name, type_guid, unique)
-}
-
-/// add 的底层：显式指定 unique guid（copy 场景沿用源分区 guid）
-pub fn add_entry_at(
-    src: &mut FileSource,
-    start: u64,
-    end: u64,
-    name: &str,
-    type_guid: [u8; 16],
-    unique_guid: [u8; 16],
-) -> Result<u32, Fail> {
-    let (mut g, repair) = crate::gpt_policy::resolve_geometry(src)?.ok_or_else(|| Fail::refused("no GPT"))?;
-    if start < g.header.first_usable_lba || end > g.header.last_usable_lba || start > end {
-        return Err(Fail::refused(format!(
-            "range {start}..{end} outside usable {}..{}",
-            g.header.first_usable_lba, g.header.last_usable_lba
-        )));
-    }
-    for e in &g.entries {
-        if e.ending_lba == 0 {
-            continue;
-        }
-        if !(end < e.starting_lba || start > e.ending_lba) {
-            return Err(Fail::refused("range overlaps an existing partition"));
-        }
-    }
-    let Some(slot) = g.entries.iter().position(|e| e.ending_lba == 0) else {
-        return Err(Fail::refused("partition table full"));
-    };
-    g.entries[slot] = GPTPartitionEntry {
-        partition_type_guid: type_guid,
-        unique_partition_guid: unique_guid,
-        starting_lba: start,
-        ending_lba: end,
-        attribute_bits: 0,
-        partition_name: name.into(),
-    };
-    // 拒绝判定已全部结束，首次写盘从这里开始
-    crate::gpt_policy::apply_repair(src, &repair)?;
-    let last_lba = src.size / g.ss - 1;
-    g.commit(src, last_lba)?;
-    ensure_protective_mbr(src)?;
-    Ok((slot + 1) as u32)
-}
-
-/// GPT 分区改名。落盘字段为 36 个 UTF-16 码元（gptman 3.1.1 PartitionName.raw_buf: [u16; 36]），
-/// 超长部分由 `From<&str>` 静默截断
-pub fn rename_entry(src: &mut FileSource, part: u32, name: &str) -> Result<(), Fail> {
-    if part == 0 {
-        return Err(Fail::refused(format!("invalid partition number {part} (1-based)")));
-    }
-    let (mut g, repair) = crate::gpt_policy::resolve_geometry(src)?.ok_or_else(|| Fail::refused("no GPT"))?;
-    let e = g.entries.get_mut((part - 1) as usize)
-        .ok_or_else(|| Fail::refused(format!("partition {part} not found")))?;
-    if e.ending_lba == 0 {
-        return Err(Fail::refused(format!("partition {part} is empty")));
-    }
-    e.partition_name = name.into();
-    // 拒绝判定已全部结束，首次写盘从这里开始
-    crate::gpt_policy::apply_repair(src, &repair)?;
-    let last_lba = src.size / g.ss - 1;
-    Ok(g.commit(src, last_lba)?)
-}
+// 表项编排（add/rename/flag/del：读 → 判 → 修复 → 提交）已上移策略层
+// （gpt_policy）；本层只保留它们用到的写入原语与常量
 
 /// GPT flags：attribute 位按 UEFI 2.10 §5（bit0=Required Partition，bit1=No Block IO
 /// Protocol 即 hidden，bit2=Legacy BIOS Bootable）；esp/boot 为类型 GUID 切换
@@ -1203,39 +1214,6 @@ pub const LINUX_FS_TYPE_GUID: [u8; 16] = [
 pub const SWAP_TYPE_GUID: [u8; 16] = [
     0x6D, 0xFD, 0x57, 0x06, 0xAB, 0xA4, 0xC4, 0x43, 0x84, 0xE5, 0x09, 0x33, 0xC8, 0x4B, 0x4F, 0x4F,
 ];
-
-pub fn set_gpt_flag(src: &mut FileSource, part: u32, flag: &str, on: bool) -> Result<(), Fail> {
-    if part == 0 {
-        return Err(Fail::refused(format!("invalid partition number {part} (1-based)")));
-    }
-    // esp/boot 切换分区类型 GUID（parted gpt.c set_flag/set_system，L1633-1647、L1462-1466），
-    // 不动属性位：UEFI 属性 bit48-63 为 GUID 专属区间，bit60 是 Microsoft read-only（sfdisk man）
-    let set_type = matches!(flag, "esp" | "boot");
-    let bit: u64 = match flag {
-        "esp" | "boot" => 0,
-        "legacy" | "legacy_boot" => 1 << 2,
-        "hidden" => 1 << 1,
-        "required" => 1 << 0,
-        other => return Err(Fail::refused(format!("unknown gpt flag {other} (esp/legacy/hidden/required)"))),
-    };
-    let (mut g, repair) = crate::gpt_policy::resolve_geometry(src)?.ok_or_else(|| Fail::refused("no GPT"))?;
-    let e = g.entries.get_mut((part - 1) as usize)
-        .ok_or_else(|| Fail::refused(format!("partition {part} not found")))?;
-    if e.ending_lba == 0 {
-        return Err(Fail::refused(format!("partition {part} is empty")));
-    }
-    if set_type {
-        e.partition_type_guid = if on { ESP_TYPE_GUID } else { LINUX_FS_TYPE_GUID };
-    } else if on {
-        e.attribute_bits |= bit;
-    } else {
-        e.attribute_bits &= !bit;
-    }
-    // 拒绝判定已全部结束，首次写盘从这里开始
-    crate::gpt_policy::apply_repair(src, &repair)?;
-    let last_lba = src.size / g.ss - 1;
-    Ok(g.commit(src, last_lba)?)
-}
 
 // ---------- msdos（真 MBR）表创建与主分区条目编辑 ----------
 // 限制：仅主分区槽位 1..=4，不支持扩展/逻辑分区链。
@@ -1453,25 +1431,6 @@ pub fn set_mdos_hidden(src: &mut FileSource, part: u32, on: bool) -> Result<(), 
     Ok(src.sync_all()?)
 }
 
-/// `del`：清零条目（只清表项，分区数据区不动）
-pub fn del_entry(src: &mut FileSource, part: u32) -> Result<(), Fail> {
-    if part == 0 {
-        return Err(Fail::refused(format!("invalid partition number {part} (1-based)")));
-    }
-    let (mut g, repair) = crate::gpt_policy::resolve_geometry(src)?.ok_or_else(|| Fail::refused("no GPT"))?;
-    let e = g.entries.get_mut((part - 1) as usize)
-        .ok_or_else(|| Fail::refused(format!("partition {part} not found")))?;
-    if e.ending_lba == 0 {
-        return Err(Fail::refused(format!("partition {part} is already empty")));
-    }
-    *e = empty_entry();
-    // 拒绝判定已全部结束，首次写盘从这里开始
-    crate::gpt_policy::apply_repair(src, &repair)?;
-    let last_lba = src.size / g.ss - 1;
-    g.commit(src, last_lba)?;
-    Ok(ensure_protective_mbr(src)?)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1501,7 +1460,7 @@ mod tests {
         let f = std::fs::OpenOptions::new().read(true).write(true).open(&tmp).unwrap();
         let size = data.len() as u64;
         FileSource {
-            identity: crate::dev::TargetIdentity::resolve(&tmp, false, size),
+            identity: crate::dev::TargetIdentity::resolve_image(&tmp),
             file: f,
             path: tmp,
             sector_size: 512,
@@ -1535,7 +1494,7 @@ mod tests {
                 partition_name: "".into(),
             })
             .collect();
-        let (bytes, crc) = serialize_array(&parsed, &geom).unwrap();
+        let (bytes, crc) = serialize_array(&parsed, &geom);
         src.write_at(2 * ss, &bytes).unwrap();
         let h = geo_header(34, 2048 - geom.lba_span() - 1, 2);
         let sec = serialize_header(&h, crc, ss).unwrap();
@@ -1654,7 +1613,7 @@ mod tests {
     /// 测试用几何：128 条目 × 128B（跨度为 SPAN_128_512），扇区大小由参数给出。
     /// 几何是"表允许多大"的唯一来源，因此测试也不再直接传字面量上限
     fn geom128(ss: u64) -> EntryArrayGeometry {
-        EntryArrayGeometry::new(ss, 128, 128).unwrap()
+        EntryArrayGeometry::new(ss, 128, 128, MAX_ARRAY_BYTES).unwrap()
     }
 
     /// 主副本视角：条目数组必须夹在头部与可用区之间（[2, 2+span) ⊆ 可用区之前）。
@@ -1706,8 +1665,8 @@ mod tests {
 
     /// 直接把一份自定义几何的主副本写进镜像（绕过 commit_gpt 的规范化和写入序列）
     fn write_raw_primary(src: &mut FileSource, mut h: RawHeader, ss: u64) {
-        let geom = EntryArrayGeometry::new(ss, h.size_of_partition_entry, h.number_of_partition_entries).unwrap();
-        let (bytes, crc) = serialize_array(&[], &geom).unwrap();
+        let geom = EntryArrayGeometry::new(ss, h.size_of_partition_entry, h.number_of_partition_entries, MAX_ARRAY_BYTES).unwrap();
+        let (bytes, crc) = serialize_array(&[], &geom);
         src.write_at(h.partition_entry_lba * ss, &bytes).unwrap();
         h.header_size = 92;
         let sec = serialize_header(&h, crc, ss).unwrap();
@@ -1750,12 +1709,12 @@ mod tests {
     fn entry_size_rules() {
         // UEFI 2.10 §5.3.3 Table 5.6：SizeOfPartitionEntry = 128 × 2^n；192/136 等非法。
         // 判据的唯一实现在 geometry（数组几何的构造点），此处直接消费它
-        assert!(crate::geometry::entry_size_ok(128));
-        assert!(crate::geometry::entry_size_ok(256));
-        assert!(crate::geometry::entry_size_ok(1024));
-        assert!(!crate::geometry::entry_size_ok(192));
-        assert!(!crate::geometry::entry_size_ok(136));
-        assert!(!crate::geometry::entry_size_ok(64));
+        assert!(entry_size_ok(128));
+        assert!(entry_size_ok(256));
+        assert!(entry_size_ok(1024));
+        assert!(!entry_size_ok(192));
+        assert!(!entry_size_ok(136));
+        assert!(!entry_size_ok(64));
         // es=256 序列化：前 128 字节为条目，尾部保留区为零，CRC 覆盖整个 n×es
         let e = GPTPartitionEntry {
             partition_type_guid: ESP_TYPE_GUID,
@@ -1765,12 +1724,12 @@ mod tests {
             attribute_bits: 0,
             partition_name: "p".into(),
         };
-        let (b, crc) = serialize_array(&[e], &EntryArrayGeometry::new(512, 256, 1).unwrap()).unwrap();
+        let (b, crc) = serialize_array(&[e], &EntryArrayGeometry::new(512, 256, 1, MAX_ARRAY_BYTES).unwrap());
         assert_eq!(b.len(), 512);
         assert_eq!(b[128..256], [0u8; 128], "reserved tail must stay zero");
         assert_eq!(crc, crate::table::crc32(&b[..256]));
         // 192 违规：几何构造点即拒绝
-        assert!(EntryArrayGeometry::new(512, 192, 1).is_err());
+        assert!(EntryArrayGeometry::new(512, 192, 1, MAX_ARRAY_BYTES).is_err());
     }
 
     #[test]
@@ -1790,7 +1749,7 @@ mod tests {
         let src = src_from_gpt("g4kn", 4096);
         let g = load_gpt(&src).unwrap().expect("gpt should parse at 4096");
         // 4Kn 盘上 128 条目 × 128B = 16 KiB = 4 扇区
-        let geom = EntryArrayGeometry::new(4096, g.header.size_of_partition_entry, g.header.number_of_partition_entries).unwrap();
+        let geom = EntryArrayGeometry::new(4096, g.header.size_of_partition_entry, g.header.number_of_partition_entries, MAX_ARRAY_BYTES).unwrap();
         assert_eq!(geom.lba_span(), 4);
     }
 
@@ -1820,42 +1779,10 @@ mod tests {
     }
 
     #[test]
-    fn gpt_flag_hidden_required() {
-        let mut src = src_from_gpt("gflag", 512);
-        set_gpt_flag(&mut src, 1, "hidden", true).unwrap();
-        let g = load_gpt(&src).unwrap().unwrap();
-        assert_eq!(g.entries[0].attribute_bits & (1 << 1), 1 << 1);
-        set_gpt_flag(&mut src, 1, "required", true).unwrap();
-        let g = load_gpt(&src).unwrap().unwrap();
-        assert_eq!(g.entries[0].attribute_bits & (1 << 0), 1 << 0);
-        // legacy（bit2）不受影响
-        set_gpt_flag(&mut src, 1, "legacy", true).unwrap();
-        set_gpt_flag(&mut src, 1, "hidden", false).unwrap();
-        set_gpt_flag(&mut src, 1, "required", false).unwrap();
-        let g = load_gpt(&src).unwrap().unwrap();
-        assert_eq!(g.entries[0].attribute_bits, 1 << 2);
-        assert!(set_gpt_flag(&mut src, 1, "bogus", true).is_err());
-    }
-
-    #[test]
     fn type_guid_constants_are_disk_byte_order() {
         // 内核 include/linux/efi.h EFI_GUID 宏展开的落盘字节（前 3 字段小端）
         assert_eq!(ESP_TYPE_GUID, [0x28, 0x73, 0x2A, 0xC1, 0x1F, 0xF8, 0xD2, 0x11, 0xBA, 0x4B, 0x00, 0xA0, 0xC9, 0x3E, 0xC9, 0x3B]);
         assert_eq!(LINUX_FS_TYPE_GUID, [0xAF, 0x3D, 0xC6, 0x0F, 0x83, 0x84, 0x72, 0x47, 0x8E, 0x79, 0x3D, 0x69, 0xD8, 0x47, 0x7D, 0xE4]);
-    }
-
-    #[test]
-    fn gpt_flag_esp_switches_type_guid() {
-        // parted gpt.c：boot/esp 标志 = 类型 GUID ↔ PARTITION_SYSTEM_GUID，
-        // off 回 Linux filesystem data；属性位不动（esp≠bit60 read-only）
-        let mut src = src_from_gpt("gesp", 512);
-        set_gpt_flag(&mut src, 1, "esp", true).unwrap();
-        let g = load_gpt(&src).unwrap().unwrap();
-        assert_eq!(g.entries[0].partition_type_guid, ESP_TYPE_GUID);
-        assert_eq!(g.entries[0].attribute_bits, 0);
-        set_gpt_flag(&mut src, 1, "boot", false).unwrap();
-        let g = load_gpt(&src).unwrap().unwrap();
-        assert_eq!(g.entries[0].partition_type_guid, LINUX_FS_TYPE_GUID);
     }
 
     #[test]
@@ -2139,6 +2066,43 @@ mod tests {
         assert_eq!(m.len(), 1, "0xEE 槽不输出");
         assert_eq!(m[0].num, 2);
         assert_eq!(table_label(&h).unwrap(), TableLabel::Mbr);
+    }
+
+    /// 条目数组：128 × 2^n 合规，其余拒绝；字节数上限是策略参数（非规范），
+    /// 超限即拒绝而不是按字段做巨型分配
+    #[test]
+    fn entry_array_geometry_bounds() {
+        assert!(EntryArrayGeometry::new(512, 128, 128, MAX_ARRAY_BYTES).is_ok());
+        assert!(EntryArrayGeometry::new(4096, 128, 128, MAX_ARRAY_BYTES).is_ok());
+        assert!(EntryArrayGeometry::new(512, 256, 128, MAX_ARRAY_BYTES).is_ok());
+        // 条目数为 0 / 单条目不合规 / 扇区大小为 0
+        assert!(EntryArrayGeometry::new(512, 128, 0, MAX_ARRAY_BYTES).is_err());
+        assert!(EntryArrayGeometry::new(512, 192, 128, MAX_ARRAY_BYTES).is_err());
+        assert!(EntryArrayGeometry::new(0, 128, 128, MAX_ARRAY_BYTES).is_err());
+        // 16 MiB 上限：128B 条目 ⇒ 上界 131072 条；再大一档即拒绝。
+        // 上限是调用方的策略输入：同一个"越限"几何换个宽松上限就合法
+        assert!(EntryArrayGeometry::new(512, 128, 131_072, MAX_ARRAY_BYTES).is_ok());
+        assert!(EntryArrayGeometry::new(512, 128, 262_144, MAX_ARRAY_BYTES).is_err());
+        assert!(EntryArrayGeometry::new(512, 128, 262_144, u64::MAX).is_ok());
+    }
+
+    /// 跨度按表自身的扇区大小算：128 × 128B 在 512B 下 32 扇区、在 4Kn 下 4 扇区
+    #[test]
+    fn lba_span_follows_table_sector_size() {
+        assert_eq!(EntryArrayGeometry::new(512, 128, 128, MAX_ARRAY_BYTES).unwrap().lba_span(), 32);
+        assert_eq!(EntryArrayGeometry::new(4096, 128, 128, MAX_ARRAY_BYTES).unwrap().lba_span(), 4);
+        // 256 条目 × 256B = 64 KiB ⇒ 4Kn 下 16 扇区
+        assert_eq!(EntryArrayGeometry::new(4096, 256, 256, MAX_ARRAY_BYTES).unwrap().lba_span(), 16);
+    }
+
+    /// 槽位换算：分区号上界来自本表的条目数，128 不是硬上限
+    #[test]
+    fn slot_is_derived_from_entry_count() {
+        let g = EntryArrayGeometry::new(512, 128, 256, MAX_ARRAY_BYTES).unwrap();
+        assert_eq!(g.slot(1), Some(0));
+        assert_eq!(g.slot(256), Some(255));
+        assert_eq!(g.slot(257), None);
+        assert_eq!(g.slot(0), None);
     }
 
     /// msdos hidden 的幂等：已是目标态时重复同一意图必须成功且不改字节。第二次起被
