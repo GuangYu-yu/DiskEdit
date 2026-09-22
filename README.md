@@ -13,7 +13,7 @@
 | 操作 | 镜像文件 | 块设备 |
 |---|---|---|
 | `info` / `plan` | 不需要 root | 不需要 root |
-| 分区表写入（`new`/`add`/`del`/`resize-part`/`copy`/`set`/`undo`） | 不需要 root | 需要 root |
+| 分区表写入（`new`/`add`/`del`/`resize-part`/`copy`/`set`/`undo`/`move`/`apply`） | 不需要 root | 需要 root |
 | FS 层（`mkfs`/`resizefs`/`check`/`set label\|uuid`） | 需要 root | 需要 root |
 
 `resize` 分两种：需要动文件系统时要 root；目标 FS 无法识别（`unknown`）时只改分区表，镜像上无需 root。
