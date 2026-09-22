@@ -12,7 +12,7 @@
 
 | 操作 | 镜像文件 | 块设备 |
 |---|---|---|
-| `info` / `ls` / `cat` / `plan` | 不需要 root | 不需要 root |
+| `info` / `plan` | 不需要 root | 不需要 root |
 | 分区表写入（`new`/`add`/`del`/`resize-part`/`copy`/`set`/`undo`） | 不需要 root | 需要 root |
 | FS 层（`mkfs`/`resizefs`/`check`/`set label\|uuid`） | 需要 root | 需要 root |
 
