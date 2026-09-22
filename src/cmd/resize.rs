@@ -335,15 +335,36 @@ pub(crate) fn cmd_resize(a: &Args) -> u8 {
     let cur_bytes = (end - start + 1) * ss;
     let (target, _) = resolve_size_request(a, size_arg.as_deref(), cur_bytes);
     let shrinking = target.is_some_and(|t| t < cur_bytes);
+    // FS 类型与 PV 判据同样按锁下现状重取（与几何同理）：识别与取锁之间分区可被
+    // 重新格式化（mkfs 不守本工具的锁），过期的 is_pv 会让 check_pv_intent 对着
+    // 已不是 PV 的分区说 PV 的话
+    let fstype = fsid::identify(&src, start * ss, (end - start + 1) * ss)
+        .unwrap_or_else(|e| bail_fail(Fail::infra(format!("identify failed: {e}"))));
+    let is_pv = fstype == "lvm2_pv";
     check_pv_intent(part, fstype, is_pv, shrinking, a.grow_lv).unwrap_or_else(|f| bail_fail(f));
+    // 占用复核在锁下（离线选择时的探测在锁前）：首次落盘前确认分区仍空闲，
+    // 把"表已写、FS 步被占"的 PARTIAL(20) 提前成 REFUSED(10)
+    crate::fsops::ensure_idle_before_write(&src, part, start * ss).unwrap_or_else(|f| bail_fail(f));
     if grow_to_end {
         let free = free_right_gpt(&g, part);
         // 右侧有空闲且没有未收尾的搬移作业 → 纯扩容。若作业未收尾，则"右侧已空"很可能
         // 正是搬了一半的结果，走普通 resize_part 会跳过剩余搬移与 swap 重建等收尾
         if free > 0 && !resuming {
+            // free 的上界由 free_right_gpt 的构造保证（≤ last_usable - end）；checked
+            // 把这层非局部依赖显式化，回绕值进不了计划
+            let Some(new_end) = end.checked_add(free) else {
+                bail_fail(Fail::infra("free-space arithmetic overflow (geometry inconsistent)"));
+            };
             let (chunk, mut logger) = chunk_logger(a, &src, g.header.disk_guid);
-            let o = settle_layout(movepart::resize_part(&mut src, &g, repair, part, start, end + free, chunk, a.no_fs, &mut |m| logger.log(m)), &src);
-            return finish_resize(a, o, is_pv, is_block, cur_bytes);
+            let o = settle_layout(movepart::resize_part(&mut src, &g, repair, part, start, new_end, chunk, a.no_fs, &mut |m| logger.log(m)), &src);
+            return finish_resize(a, o, &src, is_pv, is_block, cur_bytes);
+        }
+        // 已顶到 last_usable 的分区不是"被挡"，是无可再扩：occupied 文案会把用户引进
+        // --allow-move 的空搬移（空 moves 的 plan 什么都没做却报成功）
+        if !resuming && end == last_usable {
+            bail_fail(Fail::refused(format!(
+                "partition already ends at last_usable_lba {last_usable} — nothing to grow"
+            )));
         }
         // 右侧被挡：自动搬移挡路分区（plan 打印 → --allow-move 放行 → --yes 确认）。
         // --allow-move 只对**新**搬移授权：续跑是"接着做用户已确认过的那件事"，
@@ -369,7 +390,7 @@ pub(crate) fn cmd_resize(a: &Args) -> u8 {
         }
         let (chunk, mut logger) = chunk_logger(a, &src, g.header.disk_guid);
         let o = settle_layout(movepart::apply(&mut src, &g, &plan, chunk, a.no_fs, &mut |m| logger.log(m)), &src);
-        finish_resize(a, o, is_pv, is_block, cur_bytes)
+        finish_resize(a, o, &src, is_pv, is_block, cur_bytes)
     } else {
         // SIZE：字节 → 扇区（下取整）；扩须右侧空闲足够，缩由 resize_part 内部 FS 先缩 + 守卫
         let Some(bytes) = target else { crate::args::usage() };
@@ -411,11 +432,11 @@ pub(crate) fn cmd_resize(a: &Args) -> u8 {
             }
             let (chunk, mut logger) = chunk_logger(a, &src, g.header.disk_guid);
             let o = settle_layout(movepart::apply(&mut src, &g, &plan, chunk, a.no_fs, &mut |m| logger.log(m)), &src);
-            return finish_resize(a, o, is_pv, is_block, cur_bytes);
+            return finish_resize(a, o, &src, is_pv, is_block, cur_bytes);
         }
         let (chunk, mut logger) = chunk_logger(a, &src, g.header.disk_guid);
         let o = settle_layout(movepart::resize_part(&mut src, &g, repair, part, start, new_end, chunk, a.no_fs, &mut |m| logger.log(m)), &src);
-        finish_resize(a, o, is_pv, is_block, cur_bytes)
+        finish_resize(a, o, &src, is_pv, is_block, cur_bytes)
     }
 }
 
@@ -457,6 +478,13 @@ fn cmd_resize_superfloppy(a: &Args, size_arg: Option<&str>, src_ro: &FileSource)
     }
     // FS grow 本身不改分区表，无 kernel_resync 必要
     let src = open_target_for_write(a).unwrap_or_else(|f| bail_fail(f));
+    // 锁下重取 FS 类型（与分区路径同理）：识别与取锁之间整盘可被重新格式化，
+    // 不合格的类型在动 FS 工具之前再拦一道
+    let fstype = fsid::identify(&src, 0, cur_bytes)
+        .unwrap_or_else(|e| bail_fail(Fail::infra(format!("identify failed: {e}"))));
+    if matches!(fstype, "lvm2_pv" | "swap" | "unknown") {
+        bail_fail(Fail::refused(format!("whole-device {fstype} is not a resizable filesystem (no partition table on target)")));
+    }
     fsops::resize_fs_whole(&src, fstype).unwrap_or_else(|e| bail_fail(Fail::from(e).context("FS grow failed")));
     println!("superfloppy: {fstype} grown to full device ({} bytes) — verify with: diskedit info {}", cur_bytes, a.target);
     EXIT_OK
@@ -527,7 +555,7 @@ fn mbr_grow_finish(
         } else {
             crate::outcome::Outcome::applied_with(Vec::new())
         };
-        finish_resize(a, o, is_pv, is_block, cur_bytes)
+        finish_resize(a, o, &src, is_pv, is_block, cur_bytes)
     } else {
         let mut o = crate::outcome::Outcome::applied_with(pending);
         if table_written && !kernel_resync(src) {
@@ -598,11 +626,18 @@ fn cmd_resize_msdos(a: &Args, part: u32, size_arg: Option<&str>, src_ro: &FileSo
     if p.is_container {
         bail_fail(Fail::refused("extended partition container cannot be resized (logical partitions are out of scope)".to_string()));
     }
+    // FS 类型按锁下现状重取：识别与取锁之间分区可被重新格式化（mkfs 不守本工具的锁），
+    // 拿旧类型选工具就是把 ext4 的工具链砸到 xfs 上；PV 判据随之重算
+    let fstype = fsid::identify(&src, p.start_lba as u64 * ss, p.size_lba as u64 * ss)
+        .unwrap_or_else(|e| bail_fail(Fail::infra(format!("identify failed: {e}"))));
+    let is_pv = fstype == "lvm2_pv";
     // SIZE 锚点按锁下的新分区尺寸重算；grow 标记是请求的形状，锁前锁后同值（见 GPT 分支）
     let cur_bytes = p.size_lba as u64 * ss;
     let (target, _) = resolve_size_request(a, size_arg, cur_bytes);
     let shrinking = target.is_some_and(|t| t < cur_bytes);
     check_pv_intent(part, fstype, is_pv, shrinking, a.grow_lv).unwrap_or_else(|f| bail_fail(f));
+    // 占用复核在锁下（离线选择时的探测在锁前）：首次落盘前确认分区仍空闲，与 GPT 分支同闸
+    crate::fsops::ensure_idle_before_write(&src, part, p.start_lba as u64 * ss).unwrap_or_else(|f| bail_fail(f));
     let total_sectors = src.size / ss;
     if grow_to_end {
         let free = free_right_msdos(&mbr, p, total_sectors);
@@ -659,28 +694,29 @@ fn cmd_resize_msdos(a: &Args, part: u32, size_arg: Option<&str>, src_ro: &FileSo
             table::resize_mdos_entry(&mut src, part, new_size_lba as u32)
                 .unwrap_or_else(|f| bail_fail(f));
             let o = settle_layout(crate::outcome::Outcome::applied_with(Vec::new()), &src);
-            finish_resize(a, o, is_pv, is_block, cur_bytes)
+            finish_resize(a, o, &src, is_pv, is_block, cur_bytes)
         }
     }
 }
 
 /// resize 的收尾：布局结果 →（PV 时才继续）LVM 链，取两者中更严重的退出码。
 /// 未写入 → 直接返回；已写入但后置条件未全满足 → 非 PV 也直接返回，不打印成功字样
-/// （否则与 PARTIAL 矛盾），PV 则仍需跑 pvresize/lvextend 链
-fn finish_resize(a: &Args, o: crate::outcome::Outcome, is_pv: bool, is_block: bool, old_bytes: u64) -> u8 {
+/// （否则与 PARTIAL 矛盾），PV 则仍需跑 pvresize/lvextend 链。
+/// `wsrc` 是持锁带 journal 的写句柄：PV 屏障（见 resize_done）只能由它落
+fn finish_resize(a: &Args, o: crate::outcome::Outcome, wsrc: &FileSource, is_pv: bool, is_block: bool, old_bytes: u64) -> u8 {
     if !o.is_applied() {
         return o.exit_code();
     }
     if !o.is_complete() && !is_pv {
         return o.exit_code();
     }
-    resize_done(a, is_pv, is_block, old_bytes).max(o.exit_code())
+    resize_done(a, wsrc, is_pv, is_block, old_bytes).max(o.exit_code())
 }
 
 /// 分区扩容收尾：从盘上表项重读实际新尺寸（搬移路径的扩容终点由计划决定，
 /// 不能用操作前的预估）。PV 一律走 pvresize（--grow-lv 再传 LV）：块设备直接对
 /// 分区节点；镜像经 losetup 临时映射该分区（attach → pvresize/lvextend → detach）。
-fn resize_done(a: &Args, is_pv: bool, is_block: bool, old_bytes: u64) -> u8 {
+fn resize_done(a: &Args, wsrc: &FileSource, is_pv: bool, is_block: bool, old_bytes: u64) -> u8 {
     if !is_pv {
         println!("resized (verify with: diskedit info {})", a.target);
         return EXIT_OK;
@@ -702,6 +738,12 @@ fn resize_done(a: &Args, is_pv: bool, is_block: bool, old_bytes: u64) -> u8 {
             Err(f) => bail_fail(Fail::infra(format!("post-resize: {}", crate::outcome::into_io_error(f)))),
         };
         let delta = new_bytes.saturating_sub(old_bytes);
+        // pvresize/lvextend 的写入不可回滚：此后回滚表项即"表与内容自相矛盾"，屏障必须
+        // 先于该写入落。落点是它存在的唯一位置——GPT/MBR、镜像/块设备的 PV 收尾在此
+        // 汇合，且只有 wsrc 带 journal；比藏在各自表写入函数里少一处各自演化（GPT 旧实现
+        // 在 finalize_growth 落，距实际写入隔了整个收尾流，死亡窗口会无谓锁死 undo）
+        wsrc.set_mutation(crate::dev::Mutation::ExternalFsTool);
+        wsrc.mark_non_reversible().unwrap_or_else(|e| bail_fail(Fail::from(e)));
         let r = if is_block {
             lvm_grow_chain(&part_dev_path(&a.target, part), delta, a.grow_lv, a.lv.as_deref())
         } else {
@@ -730,7 +772,7 @@ fn resize_done(a: &Args, is_pv: bool, is_block: bool, old_bytes: u64) -> u8 {
     }
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = (is_block, old_bytes);
+        let _ = (is_block, old_bytes, wsrc);
         // 分区号守卫与 Linux 分支同款（规范见上）：unwrap_or(0) 会把"没拿到分区号"
         // 报成指向盘内容的假话
         let Some(part) = a.part else {

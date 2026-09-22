@@ -78,6 +78,13 @@ pub(crate) fn cmd_plan_apply(cmd: &str, a: &Args) -> u8 {
 }
 
 fn apply_cmd(a: &Args, grow: u32) -> u8 {
+    // chunk_bytes 只校验 --chunk-size 的取值，与目标无关：放在一切开盘动作之前，
+    // 请求本身不合法 ⇒ 10（改参数有解），不让它被"现有 ckpt 不匹配"之类的
+    // 盘上现状消息抢占
+    let chunk = match movepart::chunk_bytes(a.chunk_mib) {
+        Ok(c) => c,
+        Err(e) => bail_fail(Fail::refused(e.to_string())),
+    };
     // 一次打开完成分类：是否续跑在**锁下**按 ckpt 判定（见 open_target_resumable），
     // 不沿用任何只读预判——判据与开目标之间不许留窗口
     let (mut src, _resuming) =
@@ -97,12 +104,6 @@ fn apply_cmd(a: &Args, grow: u32) -> u8 {
     };
     // 表的可解析性由 prepare_apply 在写盘前判定（无表 → refused 10，表非法 → infra 30）：
     // 同一事实不设第二判据——两处判据迟早会在某个入口分叉，且自判拒绝时还不报原因
-    let chunk = match movepart::chunk_bytes(a.chunk_mib) {
-        Ok(c) => c,
-        // chunk_bytes 只校验 --chunk-size 的取值：请求本身不合法 ⇒ 10（改参数有解），
-        // 不是环境故障。故显式 refused，不走 `From<io::Error>` 的"可能已改变"
-        Err(e) => bail_fail(Fail::refused(e.to_string())),
-    };
     let mut logger = Logger::open(&src, Some(g.header.disk_guid));
     let o = movepart::apply(&mut src, &g, &plan, chunk, a.no_fs, &mut |m| logger.log(m));
     // 出问题时日志里也留一份：apply 失败后用户常回看日志——refused 的参数成因

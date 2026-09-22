@@ -604,6 +604,9 @@ impl FileSource {
 /// 放大成对整盘的表操作
 pub fn parse_target(s: &str) -> Result<(String, Option<u32>), &'static str> {
     match s.rfind(':') {
+        // 尾冒号（`img:`）多半是分区号漏写的笔误：按整路径打开只会报"文件不存在"，
+        // 不如当场说清缺的是什么
+        Some(pos) if pos + 1 == s.len() => Err("missing partition number after ':'"),
         Some(pos) if s[pos + 1..].chars().all(|c| c.is_ascii_digit()) && !s[pos + 1..].is_empty() => {
             let n: u32 = s[pos + 1..].parse().map_err(|_| "partition number out of range")?;
             if n == 0 {
@@ -1035,6 +1038,7 @@ mod tests {
         assert_eq!(parse_target("img:4294967295").unwrap(), ("img".to_string(), Some(u32::MAX)));
         assert!(parse_target("img:0").is_err());
         assert!(parse_target("img:4294967296").is_err());
+        assert!(parse_target("img:").is_err());
         // 文件名的冒号不是分区后缀（其后不是纯数字）
         assert_eq!(parse_target("/a/b:c.img").unwrap(), ("/a/b:c.img".to_string(), None));
     }

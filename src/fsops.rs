@@ -185,14 +185,14 @@ pub(crate) fn run_input(tool: &str, args: &[&str], input: &str) -> Result<std::p
     child.wait_with_output().map_err(FsError::from)
 }
 
-/// e2fsck 退出码判定（man e2fsck EXIT CODE：各项按位或求和）。bit1（REBOOT）置位条件
-/// （e2fsprogs e2fsck/unix.c）：FS 被修改且 ctx->mount_flags & EXT2_MF_ISROOT——改了
-/// root fs 需重启才能继续，2/3 一律中断（未挂载镜像上通常不出现）。
+/// e2fsck 退出码判定——resize 语境（man e2fsck EXIT CODE：各项按位或求和）。bit1（REBOOT）
+/// 置位条件（e2fsprogs e2fsck/unix.c）：FS 被修改且 ctx->mount_flags & EXT2_MF_ISROOT——改了
+/// root fs 需重启才能继续 resize，2/3 一律中断（未挂载镜像上通常不出现）。
 /// 0/1 通过，4 = 有未修正错误即拒绝。
 /// 2/3/4 归 `CommandFailed`：三者都说明工具**运行过**——2/3 自述改过文件系统、
 /// 4 在 -p 下仍会自动修复过——"不能证明已写"不等于"已证明未写"，不足以支撑
 /// `Io → Infra` 的"确定未写盘"承诺。`Failed` 的语义正是不对是否落盘作断言
-fn check_e2fsck(code: i32) -> Result<(), FsError> {
+fn check_e2fsck_for_resize(code: i32) -> Result<(), FsError> {
     match code {
         0 | 1 => Ok(()),
         2 | 3 => Err(FsError::CommandFailed(
@@ -200,6 +200,21 @@ fn check_e2fsck(code: i32) -> Result<(), FsError> {
         )),
         4 => Err(FsError::CommandFailed(
             "e2fsck: uncorrected errors (exit 4), refuse resize".into(),
+        )),
+        c => Err(FsError::CommandFailed(format!("e2fsck infrastructure failure (exit {c})"))),
+    }
+}
+
+/// e2fsck 退出码判定——check 语境。检查命令的本职就是修复：0（干净）、1（已修复）
+/// 是成功；2/3 = 修复完成 + REBOOT 位（该位来自内核的 root 挂载标记，只影响"能否
+/// 立即继续 resize"，与修复成败无关），同为成功。仅 4（-fp 后仍有未修正错误）算
+/// 检查失败；8/16 等为基础设施故障。不复用 resize 判据——那套拒绝 2/3 的理由在
+/// check 上没有对应物，照搬会把"修复成功"报成 Failed(30)
+fn check_e2fsck_for_check(code: i32) -> Result<(), FsError> {
+    match code {
+        0..=3 => Ok(()),
+        4 => Err(FsError::CommandFailed(
+            "e2fsck: uncorrected errors remain (exit 4)".into(),
         )),
         c => Err(FsError::CommandFailed(format!("e2fsck infrastructure failure (exit {c})"))),
     }
@@ -274,53 +289,91 @@ pub(crate) fn read_mounts() -> io::Result<Vec<MountEntry>> {
     Ok(s.lines().filter_map(parse_mountinfo).collect())
 }
 
-/// 前置守卫：FS 操作要求分区未挂载、未作 swap——本工具策略，内核并不强制
-/// （man resize2fs：内核支持在线扩容时可直接扩已挂载的 ext）；挂载态扩容走
-/// xfs/btrfs 的临时挂载路径，不经此函数。用 /proc/self/mountinfo（第 3 字段
-/// major:minor）与 /proc/swaps（第一字段设备路径）按 st_rdev 精确匹配设备，命中即拒绝。
+/// 设备占用探测结果（/proc/self/mountinfo + /proc/swaps，路径与 st_rdev 并集匹配）。
+/// FS 操作要求分区未挂载、未作 swap 是本工具策略，内核并不强制（man resize2fs：
+/// 内核支持在线扩容时可直接扩已挂载的 ext）；挂载态扩容走 xfs/btrfs 的临时挂载路径，
+/// 不经此判定
 #[cfg(target_os = "linux")]
-fn require_unmounted(dev: &str) -> Result<(), FsError> {
+enum Occupancy {
+    /// 未挂载且非活动 swap
+    Idle,
+    /// 挂载表中命中
+    Mounted,
+    /// /proc/swaps 命中
+    ActiveSwap,
+}
+
+/// 探测设备节点的占用状态。Err = 探测本身失败——调用方一律 fail-closed，
+/// "确认不了空闲"不得当成"空闲"
+#[cfg(target_os = "linux")]
+fn probe_occupancy(dev: &str) -> io::Result<Occupancy> {
     use std::os::unix::fs::MetadataExt;
-    let in_use = |what: &str| {
-        FsError::Io(io::Error::other(format!(
-            "{dev} is {what} — unmount/deactivate first (FS operations require an unmounted partition)"
-        )))
-    };
-    // 安全相关探测一律 fail-closed：无法确认"未挂载"就拒绝动手——探测失败若被当作
-    // "未挂载"，会对已挂载的 FS 执行 resize，那是数据损坏
     let m = std::fs::metadata(dev).map_err(|e| {
-        FsError::Io(io::Error::other(format!(
-            "cannot stat {dev} to confirm it is unmounted: {e} — refusing (fail-closed)"
-        )))
+        io::Error::other(format!("cannot stat {dev} to confirm it is unmounted: {e}"))
     })?;
     let rdev = m.rdev();
     let dev_no = (libc::major(rdev) as u64, libc::minor(rdev) as u64);
-    let entries = read_mounts().map_err(|e| {
-        FsError::Io(io::Error::other(format!(
-            "cannot read mount table to confirm {dev} is unmounted: {e} — refusing (fail-closed)"
-        )))
-    })?;
+    let entries = read_mounts()?;
     if entries.iter().any(|e| e.dev_no == dev_no) {
-        return Err(in_use("mounted"));
+        return Ok(Occupancy::Mounted);
     }
-    let swaps = std::fs::read_to_string("/proc/swaps").map_err(|e| {
-        FsError::Io(io::Error::other(format!(
-            "cannot read /proc/swaps to confirm {dev} is not active swap: {e} — refusing (fail-closed)"
-        )))
-    })?;
+    let swaps = std::fs::read_to_string("/proc/swaps")?;
     for line in swaps.lines().skip(1) {
         if let Some(field) = line.split_whitespace().next() {
             // 同一设备的两种判据取并集：路径相同，或 st_rdev 相同。后者 stat 失败时
             // 不构成"确认安全"，但路径相等这条仍能命中，避免漏检
             if field == dev || std::fs::metadata(field).is_ok_and(|fm| fm.rdev() == rdev) {
-                return Err(in_use("active as swap"));
+                return Ok(Occupancy::ActiveSwap);
             }
         }
     }
-    Ok(())
+    Ok(Occupancy::Idle)
+}
+
+/// FS 步的占用闸：占用或探测失败都拒绝（fail-closed——探测失败若被当作
+/// "未挂载"，会对已挂载的 FS 执行 resize，那是数据损坏）
+#[cfg(target_os = "linux")]
+fn require_unmounted(dev: &str) -> Result<(), FsError> {
+    match probe_occupancy(dev) {
+        Ok(Occupancy::Idle) => Ok(()),
+        Ok(o) => Err(FsError::Io(io::Error::other(match o {
+            Occupancy::Mounted => format!("{dev} is mounted — unmount/deactivate first (FS operations require an unmounted partition)"),
+            _ => format!("{dev} is active as swap — unmount/deactivate first (FS operations require an unmounted partition)"),
+        }))),
+        Err(e) => Err(FsError::Io(io::Error::other(format!(
+            "cannot confirm {dev} is unmounted: {e} — refusing (fail-closed)"
+        )))),
+    }
 }
 #[cfg(not(target_os = "linux"))]
 fn require_unmounted(_dev: &str) -> Result<(), FsError> {
+    Ok(())
+}
+
+/// 离线写表路径的占用前置闸：分区在首次落盘前须空闲。FS 步内部的 require_unmounted
+/// 保留（纵深防御）；此处提前是把"表已写、FS 步被占"的 PARTIAL(20) 变成 REFUSED(10)——
+/// 占用是请求与现状不匹配，不是盘故障。镜像无块设备挂载语义，直接放行（经 loop 挂载
+/// 的镜像由 FS 步的设备级检查兜底）。`start_bytes` = 分区起始字节（与 find_block_partition_node
+/// 的换算基准一致）
+#[cfg(target_os = "linux")]
+pub fn ensure_idle_before_write(src: &FileSource, part: u32, start_bytes: u64) -> Result<(), crate::outcome::Fail> {
+    if !src.is_block {
+        return Ok(());
+    }
+    let node = find_block_partition_node(src, part, start_bytes).map_err(Fail::from)?;
+    match probe_occupancy(&node) {
+        Ok(Occupancy::Idle) => Ok(()),
+        Ok(Occupancy::Mounted) => Err(Fail::refused(format!(
+            "{node} is mounted — unmount before resizing (moving a mounted partition's extents invalidates the live mount)"
+        ))),
+        Ok(Occupancy::ActiveSwap) => Err(Fail::refused(format!("{node} is active swap — run swapoff first"))),
+        Err(e) => Err(Fail::infra(format!(
+            "cannot confirm {node} is unmounted: {e} — refusing (fail-closed)"
+        ))),
+    }
+}
+#[cfg(not(target_os = "linux"))]
+pub fn ensure_idle_before_write(_src: &FileSource, _part: u32, _start_bytes: u64) -> Result<(), crate::outcome::Fail> {
     Ok(())
 }
 
@@ -877,7 +930,7 @@ fn resize_fs_in(src: &FileSource, scope: &DeviceScope, fstype: &str) -> Result<(
         // fsid 识别只给 0xEF53，区分不出 2/3/4；resize2fs 对三者通用（man resize2fs）
         f if is_ext(f) => with_scope_device(src, scope, |dev| {
             let out = run("e2fsck", &["-fp", dev])?;
-            check_e2fsck(out.status.code().unwrap_or(-1))?;
+            check_e2fsck_for_resize(out.status.code().unwrap_or(-1))?;
             let out = run("resize2fs", &[dev])?;
             if !out.status.success() {
                 return Err(FsError::command("resize2fs", &out));
@@ -1054,8 +1107,8 @@ where
 pub fn shrink_fs(src: &FileSource, part: u32, fstype: &str, new_bytes: u64) -> Result<(), FsError> {
     match fstype {
         f if is_ext(f) => with_partition_device(src, part, |dev| {
-            let out = run("e2fsck", &["-fp", dev])?;
-            check_e2fsck(out.status.code().unwrap_or(-1))?;
+        let out = run("e2fsck", &["-fp", dev])?;
+        check_e2fsck_for_resize(out.status.code().unwrap_or(-1))?;
             // resize2fs 裸数字单位是"文件系统块数"而非字节（man resize2fs）；
             // 's' 后缀 = 512 字节扇区。分区尺寸必为 sector_size(≥512) 整数倍
             if !new_bytes.is_multiple_of(512) {
@@ -1129,7 +1182,7 @@ pub fn check_fs(src: &FileSource, part: u32, fstype: &str) -> Result<(), FsError
         args.push(dev);
         let out = run(cmd.0, &args)?;
         if cmd.0 == "e2fsck" {
-            return check_e2fsck(out.status.code().unwrap_or(-1));
+            return check_e2fsck_for_check(out.status.code().unwrap_or(-1));
         }
         if !out.status.success() {
             return Err(FsError::command(cmd.0, &out));
@@ -1242,7 +1295,7 @@ pub fn set_uuid(src: &FileSource, part: u32, fstype: &str, req: &UuidRequest) ->
 
 #[cfg(test)]
 mod tests {
-    use super::{check_e2fsck, erase_ranges, parse_num_field, partition_byte_range, uuid_support, UuidSupport};
+    use super::{check_e2fsck_for_check, check_e2fsck_for_resize, erase_ranges, parse_num_field, partition_byte_range, uuid_support, UuidSupport};
     use super::FsError;
     use crate::dev::FileSource;
 
@@ -1251,13 +1304,25 @@ mod tests {
     /// 判定是纯函数，逐码断言变体即可
     #[test]
     fn e2fsck_exit_codes_do_not_claim_no_write() {
-        assert!(check_e2fsck(0).is_ok());
-        assert!(check_e2fsck(1).is_ok());
+        assert!(check_e2fsck_for_resize(0).is_ok());
+        assert!(check_e2fsck_for_resize(1).is_ok());
         for c in [2, 3, 4] {
-            assert!(matches!(check_e2fsck(c), Err(FsError::CommandFailed(_))), "exit {c}");
+            assert!(matches!(check_e2fsck_for_resize(c), Err(FsError::CommandFailed(_))), "exit {c}");
         }
         // 基础设施故障（8/16 等）同样走 CommandFailed，与 2/3/4 同口径
-        assert!(matches!(check_e2fsck(8), Err(FsError::CommandFailed(_))));
+        assert!(matches!(check_e2fsck_for_resize(8), Err(FsError::CommandFailed(_))));
+    }
+
+    /// check 语境的判定独立于 resize：修复成功（0..=3）是 check 的本职成果，
+    /// 不得照搬 resize 的 REBOOT 拒绝——照搬会把修复成功报成 Failed(30)。
+    /// 仅 4（未修正错误）与基础设施故障是失败
+    #[test]
+    fn e2fsck_check_context_treats_repair_as_success() {
+        for ok in [0, 1, 2, 3] {
+            assert!(check_e2fsck_for_check(ok).is_ok(), "exit {ok} must pass");
+        }
+        assert!(matches!(check_e2fsck_for_check(4), Err(FsError::CommandFailed(_))));
+        assert!(matches!(check_e2fsck_for_check(8), Err(FsError::CommandFailed(_))));
     }
 
     /// swap 的 label/uuid 走 swaplabel（util-linux）：能力判定归 Yes（只收显式值，
@@ -1412,13 +1477,19 @@ mod tests {
 
     #[test]
     fn e2fsck_exit_code_semantics() {
-        // man e2fsck 按位或语义（bit1 = 改 root fs 须重启）：0/1 可继续，2/3/4 拒绝，
-        // 更高位为基础设施失败
+        // man e2fsck 按位或语义（bit1 = 改 root fs 须重启）：resize 判据 0/1 可继续，
+        // 2/3/4 拒绝，更高位为基础设施失败；check 判据 0..=3 成功
         for ok in [0, 1] {
-            assert!(check_e2fsck(ok).is_ok(), "exit {ok} must pass");
+            assert!(check_e2fsck_for_resize(ok).is_ok(), "exit {ok} must pass");
         }
         for refuse in [2, 3, 4, 8, 16] {
-            assert!(check_e2fsck(refuse).is_err(), "exit {refuse} must fail");
+            assert!(check_e2fsck_for_resize(refuse).is_err(), "exit {refuse} must fail");
+        }
+        for ok in [0, 1, 2, 3] {
+            assert!(check_e2fsck_for_check(ok).is_ok(), "check exit {ok} must pass");
+        }
+        for refuse in [4, 8, 16] {
+            assert!(check_e2fsck_for_check(refuse).is_err(), "check exit {refuse} must fail");
         }
     }
 
