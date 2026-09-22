@@ -203,7 +203,9 @@ impl TransactionManager {
     fn busy(active: &[RecoveryRecord]) -> Fail {
         let listed: Vec<String> = active.iter().map(|r| r.path().display().to_string()).collect();
         let resumable = active.iter().any(|r| matches!(r, RecoveryRecord::Checkpoint { .. }));
-        let rollbackable = active.iter().any(|r| match r {
+        // 每一份 journal 都可回滚才给这条出路：两份并存时 undo 的 pick_journal 会因
+        // 无法抉择而拒绝（Ambiguous），按其中一份许诺"可以 undo"是句到不了的出路
+        let rollbackable = active.iter().all(|r| match r {
             RecoveryRecord::Journal { entries: Some(v), .. } => {
                 v.iter().all(|e| !matches!(e.recovery, dev::RecoveryData::Barrier))
             }
@@ -298,5 +300,51 @@ impl TransactionManager {
         }
         // 与 `begin` 同一句话（`busy`），只多一句本文命令为什么绕不开它
         Err(Self::busy(&active).context(&format!("{what} writes outside the undo journal")))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::dev::{JournalRecord, Mutation, RecoveryData};
+
+    /// 一份 journal 现场：`barrier` 决定它是否已越过不可回滚点
+    fn journal(path: &str, barrier: bool) -> RecoveryRecord {
+        RecoveryRecord::Journal {
+            path: path.into(),
+            entries: Some(vec![JournalRecord {
+                mutation: Mutation::PartitionTable,
+                recovery: if barrier {
+                    RecoveryData::Barrier
+                } else {
+                    RecoveryData::PreImage { off: 0, bytes: vec![0u8; 4] }
+                },
+            }]),
+        }
+    }
+
+    fn way_out(active: &[RecoveryRecord]) -> String {
+        match TransactionManager::busy(active) {
+            Fail::Infra(m) => m,
+            other => panic!("busy must report the gate as Infra: {other:?}"),
+        }
+    }
+
+    /// 出路按现场性质分三路，给同一句话就是把用户送进注定失败的路。undo 这条出路
+    /// 要求**每一份** journal 都可回滚：多份并存时 `pick_journal` 会因无法抉择而
+    /// 拒绝（Ambiguous），凭其中一份许诺"可以 undo"是句到不了的出路
+    #[test]
+    fn busy_offers_undo_only_when_every_journal_is_rollbackable() {
+        let text = way_out(&[journal("a", false)]);
+        assert!(text.contains("undo"), "a rollbackable journal must offer undo: {text}");
+
+        let text = way_out(&[journal("a", true)]);
+        assert!(!text.contains("undo"), "a journal past the barrier must not offer undo: {text}");
+        assert!(text.contains("abandon"), "{text}");
+
+        // 两份并存、其一已越过不可回滚点：另一份可回滚也不足以许诺 undo
+        let text = way_out(&[journal("a", false), journal("b", true)]);
+        assert!(!text.contains("undo"), "one un-rollbackable journal must withdraw the undo way out: {text}");
+        assert!(text.contains("abandon"), "{text}");
     }
 }

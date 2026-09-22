@@ -139,6 +139,21 @@ fn resize_online(a: &Args, src: &FileSource, t: &ResizeTarget) -> Option<u8> {
         .unwrap_or_else(|| bail_fail(Fail::refused(format!("cannot derive disk name from {}", a.target))));
     refuse_swap_active(&dn, t.part);
 
+    // grow-to-end 的目标长度 = 现长 + 右侧空闲字节数。乘加全程 checked：数值来自
+    // 表/sysfs、受盘容量约束本不可能溢出，一旦溢出即事实已损坏——报明确错误，
+    // 而不是回绕成小值骗过下游的容量校验
+    let grow_full_len = |t: &ResizeTarget| -> u64 {
+        t.free_right_lba
+            .checked_mul(t.ss)
+            .and_then(|f| t.cur_bytes.checked_add(f))
+            .unwrap_or_else(|| {
+                bail_fail(Fail::infra(format!(
+                    "grown size overflows ({} + {} sectors × {} B)",
+                    t.cur_bytes, t.free_right_lba, t.ss
+                )))
+            })
+    };
+
     // PV：分区层必须先按新尺寸出现在内核里，pvresize 才能吸收；活跃 LV 经 dm 持有分区使
     // BLKRRPART 返回 EBUSY，故走 sfdisk+partx 同步路径
     if t.is_pv {
@@ -146,7 +161,7 @@ fn resize_online(a: &Args, src: &FileSource, t: &ResizeTarget) -> Option<u8> {
             if t.free_right_lba == 0 {
                 bail_fail(Fail::refused("no free space to the right — a PV cannot relocate blocking partitions while LVs may be active".to_string()));
             }
-            t.cur_bytes + t.free_right_lba * t.ss
+            grow_full_len(t)
         } else {
             t.target.unwrap_or(t.cur_bytes) / t.ss * t.ss // 扇区下取整，与离线路径同规则
         };
@@ -164,8 +179,8 @@ fn resize_online(a: &Args, src: &FileSource, t: &ResizeTarget) -> Option<u8> {
     let mnt = crate::online::find_mountpoint(&dn, t.part)?;
     // 无右侧空闲 = 分区已吃满 → None 让 FS 工具扩满现分区
     let size = if t.grow_to_end {
-        let free = t.free_right_lba * t.ss;
-        (t.cur_bytes + free != t.cur_bytes).then_some(t.cur_bytes + free)
+        let grown = grow_full_len(t);
+        (grown != t.cur_bytes).then_some(grown)
     } else {
         t.target
     };
@@ -304,8 +319,8 @@ pub(crate) fn cmd_resize(a: &Args) -> u8 {
     let (mut src, resuming) =
         open_target_resumable(a, part).unwrap_or_else(|f| bail_fail(f));
     // 锁下重取权威几何：写路径的每个 LBA（start/end/free/last_usable）都来自它。
-    // 锁前那份只服务请求解析与展示（SIZE 锚定、PV 判定）；只读阶段与取得独占权之间
-    // 盘可以被别人改写，用锁前的 free 驱动写分支就是把过期决定写进盘
+    // 锁前那份只服务参数早失败与在线路径的事实快照；只读阶段与取得独占权之间
+    // 盘可以被别人改写，用锁前的值驱动写分支就是把过期决定写进盘
     let (g, repair) = match crate::gpt_policy::resolve_geometry(&src) {
         Ok(Some(v)) => v,
         Ok(None) => bail_fail(Fail::refused("resize requires a GPT target".to_string())),
@@ -314,6 +329,13 @@ pub(crate) fn cmd_resize(a: &Args) -> u8 {
     let e = crate::gpt_policy::live_entry(&g, part).unwrap_or_else(|f| bail_fail(f));
     let (start, end, ss) = (e.starting_lba, e.ending_lba, g.ss);
     let last_usable = g.last_usable_lba();
+    // SIZE 锚点与 PV 判据按锁下的新几何重算：+N/+N% 锚定"当前尺寸"，窗口内分区被
+    // 改写过，锁前锚点就已作废——拿旧锚点的绝对值对照新几何会把"扩"判成"缩"
+    // （先缩 FS！），方向与请求相反。grow 标记是请求的形状（与盘无关），锁前锁后同值
+    let cur_bytes = (end - start + 1) * ss;
+    let (target, _) = resolve_size_request(a, size_arg.as_deref(), cur_bytes);
+    let shrinking = target.is_some_and(|t| t < cur_bytes);
+    check_pv_intent(part, fstype, is_pv, shrinking, a.grow_lv).unwrap_or_else(|f| bail_fail(f));
     if grow_to_end {
         let free = free_right_gpt(&g, part);
         // 右侧有空闲且没有未收尾的搬移作业 → 纯扩容。若作业未收尾，则"右侧已空"很可能
@@ -334,9 +356,14 @@ pub(crate) fn cmd_resize(a: &Args) -> u8 {
             Ok(p) => p,
             Err(f) => bail_fail(f),
         };
+        // 槽上未收尾的作业若是精确 SIZE 的最小位移 plan，其终点停在旧请求的末端：
+        // 当作 grow 执行会把请求静默缩水。重跑当初那条 SIZE 命令即续跑
+        if plan.kind == movepart::PlanKind::Shift {
+            bail_fail(Fail::refused("an unfinished `resize SIZE` relocation job owns this target — re-run that command to resume it, or `diskedit abandon` to release it".to_string()));
+        }
         // 续跑的收尾仍须 --yes：盘上状态已与上次请求时不同，写盘前再确认一次；
         // --yes 一并覆盖"未确认的续跑"与"新的搬移"两种进入方式
-        crate::cmd::plan::print_plan(&plan).unwrap_or_else(|e| bail_fail(Fail::refused(format!("plan failed: {e}"))));
+        crate::cmd::plan::print_plan(&plan, start).unwrap_or_else(|e| bail_fail(Fail::refused(format!("plan failed: {e}"))));
         if !a.yes {
             bail_fail(Fail::refused("this resizes by relocating the partitions listed above — review and re-run with --yes"));
         }
@@ -362,16 +389,23 @@ pub(crate) fn cmd_resize(a: &Args) -> u8 {
         // 未收尾的搬移作业 ⇒ 必须走 resume 路径（即使几何上 free_right 已足够——swap 等
         // 收尾步骤可能尚未执行，普通扩容会跳过它们）
         if resuming || shift.is_some_and(|s| s > free_right_gpt(&g, part)) {
-            // 右侧连续空闲不足：--allow-move 时按最小位移搬移挡路分区，
-            // 与 grow 路径同一确认流（plan 打印 → --yes 确认）
-            if !a.allow_move {
+            // --allow-move 只对**新**搬移授权，续跑放行——两态判据与 grow 分支
+            // 同一份理由（见上），真空间不足才拒绝；确认流也同一份：
+            // plan 打印 → --yes 确认
+            if !a.allow_move && !resuming {
                 bail_fail(Fail::refused("not enough contiguous free space to the right — pass --allow-move to relocate the blocking partitions (plan will be printed; --yes confirms)".to_string()));
             }
             let plan = match movepart::make_plan_shift_resuming(&mut src, &g, repair, part, shift) {
                 Ok(p) => p,
                 Err(f) => bail_fail(f),
             };
-            crate::cmd::plan::print_plan(&plan).unwrap_or_else(|e| bail_fail(Fail::refused(format!("plan failed: {e}"))));
+            // 反向同理：槽上是 grow 的尾打包 plan，终点是"吃满右侧"而非请求的 SIZE，
+            // 静默执行会把请求放大到全部空闲（缩容请求甚至会变成扩容）。
+            // 重跑当初那条 grow 命令即续跑
+            if plan.kind == movepart::PlanKind::TailPacked {
+                bail_fail(Fail::refused("an unfinished `resize grow` job owns this target — re-run that command to resume it, or `diskedit abandon` to release it".to_string()));
+            }
+            crate::cmd::plan::print_plan(&plan, start).unwrap_or_else(|e| bail_fail(Fail::refused(format!("plan failed: {e}"))));
             if !a.yes {
                 bail_fail(Fail::refused("this resizes by relocating the partitions listed above — review and re-run with --yes"));
             }
@@ -560,6 +594,11 @@ fn cmd_resize_msdos(a: &Args, part: u32, size_arg: Option<&str>, src_ro: &FileSo
     if p.is_container {
         bail_fail(Fail::refused("extended partition container cannot be resized (logical partitions are out of scope)".to_string()));
     }
+    // SIZE 锚点按锁下的新分区尺寸重算；grow 标记是请求的形状，锁前锁后同值（见 GPT 分支）
+    let cur_bytes = p.size_lba as u64 * ss;
+    let (target, _) = resolve_size_request(a, size_arg, cur_bytes);
+    let shrinking = target.is_some_and(|t| t < cur_bytes);
+    check_pv_intent(part, fstype, is_pv, shrinking, a.grow_lv).unwrap_or_else(|f| bail_fail(f));
     let total_sectors = src.size / ss;
     if grow_to_end {
         let free = free_right_msdos(&mbr, p, total_sectors);

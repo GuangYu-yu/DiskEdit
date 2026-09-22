@@ -267,7 +267,7 @@ pub(crate) fn free_right_gpt(g: &ValidatedGeometry, part: u32) -> u64 {
     let Some(e) = g.entry_index(part).and_then(|i| g.entries.get(i)) else {
         return 0;
     };
-    let mut bound = g.last_usable_lba() + 1; // 排他上界
+    let mut bound = g.last_usable_lba().saturating_add(1); // 排他上界（饱和防损坏几何下 +1 回绕成 0）
     for (i, o) in g.entries.iter().enumerate() {
         if (i + 1) as u32 == part || (o.starting_lba == 0 && o.ending_lba == 0) {
             continue;

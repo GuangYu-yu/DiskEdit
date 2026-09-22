@@ -196,6 +196,13 @@ fn journal_lifecycle_and_table_undo() {
         let out = Command::new(exe).args(args).output().unwrap();
         (out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stderr).into_owned())
     };
+    // mkfs 工具从 PATH 上摘掉（只留 exe 所在目录）：类型认得但工具不在 ⇒ 分区建成、
+    // mkfs 起不来——PARTIAL(20)，journal 保留且不落屏障，undo 可整表回滚
+    let exe_dir = std::path::Path::new(exe).parent().unwrap().to_path_buf();
+    let run_no_mkfs = |args: &[&str]| -> (i32, String) {
+        let out = Command::new(exe).args(args).env("PATH", &exe_dir).output().unwrap();
+        (out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stderr).into_owned())
+    };
     let part_count = || -> usize {
         let out = Command::new(exe).args(["info", img_s]).output().unwrap();
         let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
@@ -218,9 +225,15 @@ fn journal_lifecycle_and_table_undo() {
     assert_eq!(c, 0);
     assert!(!journal.exists(), "read-only commands must not create a journal");
 
-    // 部分失败（mkfs 工具不存在）⇒ journal 保留，供 undo 撤销半成品
+    // 未接线的 FS 类型是请求本身的错误：事前拒绝，此刻什么都没写
     let before = part_count();
     let (c, e) = run(&["create", img_s, "--size", "1M", "--fs", "no-such-fs-type"]);
+    assert_eq!(c, 10, "an unsupported fstype must be refused upfront: {e}");
+    assert_eq!(part_count(), before, "the refusal must leave the table untouched");
+    assert!(!journal.exists(), "the refusal must not open a journal");
+
+    // 部分失败（mkfs 工具不存在）⇒ journal 保留，供 undo 撤销半成品
+    let (c, e) = run_no_mkfs(&["create", img_s, "--size", "1M", "--fs", "ext4"]);
     assert_eq!(c, 20, "partition created but mkfs failed must be EXIT_PARTIAL: {e}");
     assert!(journal.exists(), "journal must be kept after a partial failure");
     assert_eq!(part_count(), before + 1, "partition should exist before undo");
@@ -233,7 +246,7 @@ fn journal_lifecycle_and_table_undo() {
 
     // journal 尾部未完成（截断 / 未写完的记录头）⇒ 那是"未完成的事务"而非损坏：
     // 记录先于写入落盘，故那条记录对应的写入根本没发生，丢弃它安全；完整前缀照常回放
-    let (c, e) = run(&["create", img_s, "--size", "1M", "--fs", "no-such-fs-type"]);
+    let (c, e) = run_no_mkfs(&["create", img_s, "--size", "1M", "--fs", "ext4"]);
     assert_eq!(c, 20, "{e}");
     let jb = std::fs::read(&journal).unwrap();
     std::fs::write(&journal, &jb[..jb.len() - 2]).unwrap();
@@ -243,7 +256,7 @@ fn journal_lifecycle_and_table_undo() {
     assert!(!journal.exists(), "journal must be removed after a successful undo");
 
     // 尾部垃圾 = 未写完的记录头，同样按未完成处理
-    let (c, e) = run(&["create", img_s, "--size", "1M", "--fs", "no-such-fs-type"]);
+    let (c, e) = run_no_mkfs(&["create", img_s, "--size", "1M", "--fs", "ext4"]);
     assert_eq!(c, 20, "{e}");
     let jb = std::fs::read(&journal).unwrap();
     let mut tail = jb.clone();
@@ -254,7 +267,7 @@ fn journal_lifecycle_and_table_undo() {
     assert_eq!(part_count(), before, "the complete prefix must still be replayed");
 
     // 中途损坏（第 1 条记录的数据）⇒ 整体拒绝，不碰镜像——"不做部分回放"针对的是这种情形
-    let (c, e) = run(&["create", img_s, "--size", "1M", "--fs", "no-such-fs-type"]);
+    let (c, e) = run_no_mkfs(&["create", img_s, "--size", "1M", "--fs", "ext4"]);
     assert_eq!(c, 20, "{e}");
     let jb = std::fs::read(&journal).unwrap();
     let mut mid = jb.clone();
@@ -295,15 +308,22 @@ fn pending_recovery_blocks_unjournaled_writers_and_empty_shell_is_not_corruption
         let out = Command::new(exe).args(args).output().unwrap();
         (out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stderr).into_owned())
     };
+    // mkfs 工具从 PATH 上摘掉（只留 exe 所在目录）：类型认得但工具不在 ⇒ 分区建成、
+    // mkfs 起不来——PARTIAL(20)，journal 保留且不落屏障，undo 可整表回滚
+    let exe_dir = std::path::Path::new(exe).parent().unwrap().to_path_buf();
+    let run_no_mkfs = |args: &[&str]| -> (i32, String) {
+        let out = Command::new(exe).args(args).env("PATH", &exe_dir).output().unwrap();
+        (out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stderr).into_owned())
+    };
 
     let (c, e) = run(&["new", img_s, "--yes"]);
     assert_eq!(c, 0, "{e}");
     let (c, e) = run(&["add", img_s, "--start", "2048", "--end", "4095"]);
     assert_eq!(c, 0, "{e}");
 
-    // 造一个真正的未收尾现场：create 建好了分区、随后的 mkfs 失败（部分完成），
+    // 造一个真正的未收尾现场：create 建好了分区、随后的 mkfs 起不来（工具不在），
     // 事务把 journal 留在目标上等 undo 或续跑
-    let (c, e) = run(&["create", img_s, "--size", "1M", "--fs", "no-such-fs-type"]);
+    let (c, e) = run_no_mkfs(&["create", img_s, "--size", "1M", "--fs", "ext4"]);
     assert_eq!(c, 20, "partition created but mkfs failed must be EXIT_PARTIAL: {e}");
     assert!(journal.exists(), "a partial operation must leave its journal behind: {e}");
 
@@ -361,7 +381,7 @@ fn pending_recovery_blocks_unjournaled_writers_and_empty_shell_is_not_corruption
     assert!(!journal.exists(), "abandon must move it out of the active name: {e}");
 
     // undo 回滚成功 ⇒ 同一目标的 checkpoint 一并释放
-    let (c, e) = run(&["create", img_s, "--size", "1M", "--fs", "no-such-fs-type"]);
+    let (c, e) = run_no_mkfs(&["create", img_s, "--size", "1M", "--fs", "ext4"]);
     assert_eq!(c, 20, "partition created but mkfs failed must be EXIT_PARTIAL: {e}");
     std::fs::write(&ckpt, b"stale checkpoint bytes").unwrap();
     let (c, e) = run(&["undo", img_s, "--yes"]);
@@ -1355,6 +1375,17 @@ fn abandon_releases_recovery_state_idempotently_and_converges() {
             String::from_utf8_lossy(&out.stderr).into_owned(),
         )
     };
+    // mkfs 工具从 PATH 上摘掉（只留 exe 所在目录）：类型认得但工具不在 ⇒ create
+    // 建成分区、mkfs 记 PARTIAL——journal 保留，正是本测试要收拾的现场
+    let exe_dir = std::path::Path::new(exe).parent().unwrap().to_path_buf();
+    let run_no_mkfs = |args: &[&str]| -> (i32, String, String) {
+        let out = Command::new(exe).args(args).env("PATH", &exe_dir).output().unwrap();
+        (
+            out.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        )
+    };
 
     let (c, _, e) = run(&["new", img_s, "--yes"]);
     assert_eq!(c, 0, "{e}");
@@ -1400,7 +1431,7 @@ fn abandon_releases_recovery_state_idempotently_and_converges() {
     assert!(o.contains("nothing to abandon"), "{o}");
 
     // 崩溃重跑收敛：模拟"转换到一半就崩"，剩余的那份由下一次运行补上
-    let (c, _, e) = run(&["create", img_s, "--size", "1M", "--fs", "no-such-fs-type"]);
+    let (c, _, e) = run_no_mkfs(&["create", img_s, "--size", "1M", "--fs", "ext4"]);
     assert_eq!(c, 20, "{e}");
     std::fs::write(&ckpt, b"stale checkpoint bytes").unwrap();
     std::fs::rename(&ckpt, dir.join("a.img.diskedit.ckpt.abandoned")).unwrap(); // 已转换完的那一份
@@ -1411,7 +1442,7 @@ fn abandon_releases_recovery_state_idempotently_and_converges() {
 
     // 同名冲突之一：目标名已是**同一个 inode**（上次 link 成功、删原件那步没跑完的残局）
     // ⇒ 收敛即成功：删掉原文件，绝不覆盖那份副本
-    let (c, _, e) = run(&["create", img_s, "--size", "1M", "--fs", "no-such-fs-type"]);
+    let (c, _, e) = run_no_mkfs(&["create", img_s, "--size", "1M", "--fs", "ext4"]);
     assert_eq!(c, 20, "{e}");
     let j_abandoned = dir.join("a.img.diskedit.journal.abandoned");
     let _ = std::fs::remove_file(&j_abandoned);
@@ -1425,7 +1456,7 @@ fn abandon_releases_recovery_state_idempotently_and_converges() {
 
     // 同名冲突之二：首选名是**另一个文件** ⇒ 顺延到 `.abandoned.2`：既不覆盖别人的
     // 记录，也不为了"名字冲突"把目标锁死（那会让第二次中断后再无出路）
-    let (c, _, e) = run(&["create", img_s, "--size", "1M", "--fs", "no-such-fs-type"]);
+    let (c, _, e) = run_no_mkfs(&["create", img_s, "--size", "1M", "--fs", "ext4"]);
     assert_eq!(c, 20, "{e}");
     let _ = std::fs::remove_file(&j_abandoned);
     std::fs::write(&j_abandoned, b"an unrelated artifact").unwrap();
@@ -1734,5 +1765,57 @@ mod crash_recovery {
         assert!(!journal.exists(), "{e}");
         let (c, e) = run(&["add", img_s, "--start", "28672", "--end", "30719"]);
         assert_eq!(c, 0, "the target must be usable again: {e}");
+    }
+
+    /// 目标分区右侧紧邻挡路者：`resize grow`（尾部打包）与 `resize SIZE`（最小位移）
+    /// 各自只有走搬移才能完成，而两条命令共用同一个续跑槽位。按对方的语义执行槽上
+    /// 那份 plan，就是把请求静默放大或缩水——故必须拒绝，并指回原命令
+    #[test]
+    fn pending_relocation_job_refuses_the_other_resize_semantic() {
+        let dir = std::env::temp_dir().join(format!("diskedit_sem_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let img = dir.join("s.img");
+        std::fs::write(&img, vec![0u8; 32 * 1024 * 1024]).unwrap();
+        let img_s = img.to_str().unwrap();
+        let target = format!("{img_s}:1");
+        assert_eq!(run(&["new", img_s, "--yes"]).0, 0);
+        assert_eq!(run(&["add", img_s, "--start", "2048", "--end", "4095"]).0, 0);
+        assert_eq!(run(&["add", img_s, "--start", "4096", "--end", "6143"]).0, 0);
+        let journal = dir.join("s.img.diskedit.journal");
+        let ckpt = dir.join("s.img.diskedit.ckpt");
+
+        // ① 精确 SIZE 作业（最小位移 plan）中断
+        let size_argv = ["resize", target.as_str(), "+3M", "--allow-move", "--yes"];
+        let (c, e) = run_fault("chunk:1", &size_argv);
+        assert_ne!(c, 0, "the injected abort must not look like success: {e}");
+        assert!(ckpt.exists(), "a mid-move crash must leave a checkpoint: {e}");
+
+        // grow 语义与它不符：拒绝，且指回当初那条命令
+        let grow_argv = ["resize", target.as_str(), "grow", "--allow-move", "--yes"];
+        let (c, e) = run(&grow_argv);
+        assert_eq!(c, 10, "grow must refuse a pending SIZE job: {e}");
+        assert!(e.contains("`resize SIZE`"), "the refusal must name the job it belongs to: {e}");
+        assert!(ckpt.exists(), "a refusal must not touch the scene");
+
+        // 重跑原命令 ⇒ 续跑并收尾（此刻 p1 与 p2 已紧邻，grow 只剩搬移一条路）
+        let (c, e) = run(&size_argv);
+        assert_eq!(c, 0, "re-running the original command must resume and finish: {e}");
+        assert!(!ckpt.exists() && !journal.exists(), "{e}");
+
+        // ② 反向：grow 作业（尾部打包 plan）中断 → SIZE 语义必须拒绝
+        let (c, e) = run_fault("chunk:1", &grow_argv);
+        assert_ne!(c, 0, "{e}");
+        assert!(ckpt.exists(), "{e}");
+        let (c, e) = run(&size_argv);
+        assert_eq!(c, 10, "SIZE must refuse a pending grow job: {e}");
+        assert!(e.contains("`resize grow`"), "the refusal must name the job it belongs to: {e}");
+        assert!(ckpt.exists(), "a refusal must not touch the scene");
+
+        let (c, e) = run(&grow_argv);
+        assert_eq!(c, 0, "re-running the original command must resume and finish: {e}");
+        assert!(!ckpt.exists() && !journal.exists(), "{e}");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
