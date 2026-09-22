@@ -357,6 +357,7 @@ fn require_unmounted(_dev: &str) -> Result<(), FsError> {
 /// 的换算基准一致）
 #[cfg(target_os = "linux")]
 pub fn ensure_idle_before_write(src: &FileSource, part: u32, start_bytes: u64) -> Result<(), crate::outcome::Fail> {
+    use crate::outcome::Fail;
     if !src.is_block {
         return Ok(());
     }

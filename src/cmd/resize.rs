@@ -172,7 +172,7 @@ fn resize_online(a: &Args, src: &FileSource, t: &ResizeTarget) -> Option<u8> {
                 return Some(o.exit_code());
             }
         }
-        return Some(resize_done(a, true, true, t.cur_bytes));
+        return Some(resize_done(a, None, true, true, t.cur_bytes));
     }
 
     // 非 PV：仅挂载中的分区能在线扩（在线不能搬移，只吃连续空闲）
@@ -357,7 +357,7 @@ pub(crate) fn cmd_resize(a: &Args) -> u8 {
             };
             let (chunk, mut logger) = chunk_logger(a, &src, g.header.disk_guid);
             let o = settle_layout(movepart::resize_part(&mut src, &g, repair, part, start, new_end, chunk, a.no_fs, &mut |m| logger.log(m)), &src);
-            return finish_resize(a, o, &src, is_pv, is_block, cur_bytes);
+            return finish_resize(a, o, Some(&mut src), is_pv, is_block, cur_bytes);
         }
         // 已顶到 last_usable 的分区不是"被挡"，是无可再扩：occupied 文案会把用户引进
         // --allow-move 的空搬移（空 moves 的 plan 什么都没做却报成功）
@@ -390,7 +390,7 @@ pub(crate) fn cmd_resize(a: &Args) -> u8 {
         }
         let (chunk, mut logger) = chunk_logger(a, &src, g.header.disk_guid);
         let o = settle_layout(movepart::apply(&mut src, &g, &plan, chunk, a.no_fs, &mut |m| logger.log(m)), &src);
-        finish_resize(a, o, &src, is_pv, is_block, cur_bytes)
+        finish_resize(a, o, Some(&mut src), is_pv, is_block, cur_bytes)
     } else {
         // SIZE：字节 → 扇区（下取整）；扩须右侧空闲足够，缩由 resize_part 内部 FS 先缩 + 守卫
         let Some(bytes) = target else { crate::args::usage() };
@@ -432,11 +432,11 @@ pub(crate) fn cmd_resize(a: &Args) -> u8 {
             }
             let (chunk, mut logger) = chunk_logger(a, &src, g.header.disk_guid);
             let o = settle_layout(movepart::apply(&mut src, &g, &plan, chunk, a.no_fs, &mut |m| logger.log(m)), &src);
-            return finish_resize(a, o, &src, is_pv, is_block, cur_bytes);
+            return finish_resize(a, o, Some(&mut src), is_pv, is_block, cur_bytes);
         }
         let (chunk, mut logger) = chunk_logger(a, &src, g.header.disk_guid);
         let o = settle_layout(movepart::resize_part(&mut src, &g, repair, part, start, new_end, chunk, a.no_fs, &mut |m| logger.log(m)), &src);
-        finish_resize(a, o, &src, is_pv, is_block, cur_bytes)
+        finish_resize(a, o, Some(&mut src), is_pv, is_block, cur_bytes)
     }
 }
 
@@ -497,7 +497,7 @@ fn cmd_resize_superfloppy(a: &Args, size_arg: Option<&str>, src_ro: &FileSource)
 /// 原区间，原尺寸是 LVM 位移的基线）
 fn mbr_grow_finish(
     a: &Args,
-    src: &FileSource,
+    src: &mut FileSource,
     p: &table::MbrPartition,
     fstype: &str,
     table_written: bool,
@@ -555,7 +555,7 @@ fn mbr_grow_finish(
         } else {
             crate::outcome::Outcome::applied_with(Vec::new())
         };
-        finish_resize(a, o, &src, is_pv, is_block, cur_bytes)
+        finish_resize(a, o, Some(src), is_pv, is_block, cur_bytes)
     } else {
         let mut o = crate::outcome::Outcome::applied_with(pending);
         if table_written && !kernel_resync(src) {
@@ -652,7 +652,7 @@ fn cmd_resize_msdos(a: &Args, part: u32, size_arg: Option<&str>, src_ro: &FileSo
             table_written = true;
         }
         // free == 0：分区已吃满右侧，表不动，FS 工具直接扩满现分区（与 GPT 路径同语义）
-        mbr_grow_finish(a, &src, p, fstype, table_written, is_pv, is_block)
+        mbr_grow_finish(a, &mut src, p, fstype, table_written, is_pv, is_block)
     } else {
         let Some(bytes) = target else { crate::args::usage() };
         if bytes < ss {
@@ -673,7 +673,7 @@ fn cmd_resize_msdos(a: &Args, part: u32, size_arg: Option<&str>, src_ro: &FileSo
                     .unwrap_or_else(|f| bail_fail(f));
             }
             // 分区层做完 → 与 grow-to-end 同一条收尾
-            mbr_grow_finish(a, &src, p, fstype, want > 0, is_pv, is_block)
+            mbr_grow_finish(a, &mut src, p, fstype, want > 0, is_pv, is_block)
         } else {
             // 缩：与 movepart GPT 路径同守卫链——FS 先缩成功才写表。
             // --no-fs 与缩容不可共存（分区末端会切进未缩的 FS 元数据），与 GPT 同判据
@@ -694,7 +694,7 @@ fn cmd_resize_msdos(a: &Args, part: u32, size_arg: Option<&str>, src_ro: &FileSo
             table::resize_mdos_entry(&mut src, part, new_size_lba as u32)
                 .unwrap_or_else(|f| bail_fail(f));
             let o = settle_layout(crate::outcome::Outcome::applied_with(Vec::new()), &src);
-            finish_resize(a, o, &src, is_pv, is_block, cur_bytes)
+            finish_resize(a, o, Some(&mut src), is_pv, is_block, cur_bytes)
         }
     }
 }
@@ -702,8 +702,9 @@ fn cmd_resize_msdos(a: &Args, part: u32, size_arg: Option<&str>, src_ro: &FileSo
 /// resize 的收尾：布局结果 →（PV 时才继续）LVM 链，取两者中更严重的退出码。
 /// 未写入 → 直接返回；已写入但后置条件未全满足 → 非 PV 也直接返回，不打印成功字样
 /// （否则与 PARTIAL 矛盾），PV 则仍需跑 pvresize/lvextend 链。
-/// `wsrc` 是持锁带 journal 的写句柄：PV 屏障（见 resize_done）只能由它落
-fn finish_resize(a: &Args, o: crate::outcome::Outcome, wsrc: &FileSource, is_pv: bool, is_block: bool, old_bytes: u64) -> u8 {
+/// `wsrc` 是持锁带 journal 的写句柄（在线路径无 journal，为 None）：PV 屏障
+/// （见 resize_done）只能由它落
+fn finish_resize(a: &Args, o: crate::outcome::Outcome, wsrc: Option<&mut FileSource>, is_pv: bool, is_block: bool, old_bytes: u64) -> u8 {
     if !o.is_applied() {
         return o.exit_code();
     }
@@ -716,7 +717,7 @@ fn finish_resize(a: &Args, o: crate::outcome::Outcome, wsrc: &FileSource, is_pv:
 /// 分区扩容收尾：从盘上表项重读实际新尺寸（搬移路径的扩容终点由计划决定，
 /// 不能用操作前的预估）。PV 一律走 pvresize（--grow-lv 再传 LV）：块设备直接对
 /// 分区节点；镜像经 losetup 临时映射该分区（attach → pvresize/lvextend → detach）。
-fn resize_done(a: &Args, wsrc: &FileSource, is_pv: bool, is_block: bool, old_bytes: u64) -> u8 {
+fn resize_done(a: &Args, wsrc: Option<&mut FileSource>, is_pv: bool, is_block: bool, old_bytes: u64) -> u8 {
     if !is_pv {
         println!("resized (verify with: diskedit info {})", a.target);
         return EXIT_OK;
@@ -741,9 +742,12 @@ fn resize_done(a: &Args, wsrc: &FileSource, is_pv: bool, is_block: bool, old_byt
         // pvresize/lvextend 的写入不可回滚：此后回滚表项即"表与内容自相矛盾"，屏障必须
         // 先于该写入落。落点是它存在的唯一位置——GPT/MBR、镜像/块设备的 PV 收尾在此
         // 汇合，且只有 wsrc 带 journal；比藏在各自表写入函数里少一处各自演化（GPT 旧实现
-        // 在 finalize_growth 落，距实际写入隔了整个收尾流，死亡窗口会无谓锁死 undo）
-        wsrc.set_mutation(crate::dev::Mutation::ExternalFsTool);
-        wsrc.mark_non_reversible().unwrap_or_else(|e| bail_fail(Fail::from(e)));
+        // 在 finalize_growth 落，距实际写入隔了整个收尾流，死亡窗口会无谓锁死 undo）。
+        // 在线路径不经 journal（sfdisk 用自己的 fd 写盘，事后也无 undo 可谈），无需屏障
+        if let Some(w) = wsrc {
+            w.set_mutation(crate::dev::Mutation::ExternalFsTool);
+            w.mark_non_reversible().unwrap_or_else(|e| bail_fail(Fail::from(e)));
+        }
         let r = if is_block {
             lvm_grow_chain(&part_dev_path(&a.target, part), delta, a.grow_lv, a.lv.as_deref())
         } else {
