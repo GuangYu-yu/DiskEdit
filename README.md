@@ -33,7 +33,7 @@ FS 层要 root 是因为经 `losetup` 映射分区；块设备写入靠设备节
 | f2fs | `mkfs.f2fs`、`fsck.f2fs`、`resize.f2fs` |
 | vfat | `mkfs.vfat`、`fsck.vfat`、`fatresize`、`fatlabel` |
 | exfat | `mkfs.exfat`、`fsck.exfat`、`exfatlabel` |
-| swap | `mkswap` |
+| swap | `mkswap`、`swaplabel` |
 | LVM | `pvs`、`lvs`、`vgs`、`pvresize`、`lvextend` |
 
 所有外部调用注入 `LC_ALL=C`，避免本地化输出破坏解析。
@@ -59,7 +59,7 @@ FS 层要 root 是因为经 `losetup` 映射分区；块设备写入靠设备节
 
 `resize` 的 `SIZE` 支持绝对值（`10G`）、增量（`+2G` / `-500M`）、百分比（`+10%` / `-10%`）与 `grow` 关键字。
 
-`--sector-size N` 是全局选项：镜像文件不携带扇区信息，默认按 512 处理，4Kn 镜像须显式指定。
+`--sector-size N` 是全局选项：镜像文件不携带扇区信息，默认按 512 处理，4Kn 镜像须显式指定。`resizefs` 的在线形式（挂载点）不适用该选项，显式拒绝。
 
 **`check` 不是零写入**：ext 走 `e2fsck -fp`（preen 自动修复），ntfs 走 `ntfsfix -d`（清 dirty 位），两者都可能写入。只读检查为 xfs（`xfs_repair -n`）、btrfs（`btrfs check`）、vfat（`fsck.vfat -n`）、exfat（`fsck.exfat -n`）、f2fs（`fsck.f2fs` 无参）。
 
@@ -80,7 +80,7 @@ FS 层要 root 是因为经 `losetup` 映射分区；块设备写入靠设备节
 | f2fs | ✓ | ✓ | — | ✓ | — | — |
 | vfat | ✓ | ✓ | — | ✓ | ✓ | — |
 | exfat | ✓ | — | — | ✓ | ✓ | — |
-| swap | ✓ | ✓ | — | — | — | — |
+| swap | ✓ | ✓ | — | — | ✓ | ✓ |
 | lvm2_pv | — | ✓ | — | — | — | — |
 
 - `ntfs` 的 uuid 只能生成随机新序号，`ntfslabel` 不支持指定值。
