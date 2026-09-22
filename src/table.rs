@@ -91,9 +91,12 @@ impl EntryArrayGeometry {
     }
 }
 
+/// GPT 头签名（UEFI Specification §5.3.2 Table 5.5：Header offset 0、长 8 字节 ASCII）
 const GPT_SIGNATURE: &[u8; 8] = b"EFI PART";
+/// 签名 `55 AA`（UEFI §5.2.1 Table 5.1：byte 510 = 0x55、byte 511 = 0xAA）；
+/// 本常量是它的 little-endian u16 读法，故写作 0xAA55
 const MBR_SIGNATURE: u16 = 0xAA55;
-/// 保护 MBR 分区类型
+/// 保护 MBR 分区类型：OS Type 0xEE = GPT Protective（UEFI §5.2.2–§5.2.3 Tables 5.2–5.4）
 const PROT_MBR_TYPE: u8 = 0xEE;
 
 /// 容器末 LBA（按给定表的扇区大小计）。全仓唯一的算式落点：
