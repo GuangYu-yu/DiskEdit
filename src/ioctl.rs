@@ -38,12 +38,12 @@ pub(crate) fn blksszget(f: &File) -> io::Result<u32> {
 }
 
 /// 通知内核重读分区表。BLKRRPART = _IO(0x12, 95)（include/uapi/linux/fs.h），
-/// 无用户参数、内核不写回内存
-pub(crate) fn blkrrpart(f: &File) -> bool {
+/// 无用户参数、内核不写回内存。errno 由调用方决定呈现方式（本层不丢弃）
+pub(crate) fn blkrrpart(f: &File) -> io::Result<()> {
     const BLKRRPART: u64 = 0x125F;
     // SAFETY: f 有效打开的 fd；无指针参数
     let r = unsafe { libc::ioctl(f.as_raw_fd() as libc::c_int, BLKRRPART as libc::Ioctl, 0u32) };
-    r >= 0
+    if r < 0 { Err(io::Error::last_os_error()) } else { Ok(()) }
 }
 
 /// include/uapi/linux/blkpg.h 的 blkpg_partition（start/length 单位 = 字节，

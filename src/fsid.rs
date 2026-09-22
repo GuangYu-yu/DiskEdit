@@ -100,9 +100,9 @@ pub fn identify(src: &FileSource, base: u64, len_bytes: u64) -> io::Result<&'sta
             return Ok("hfsplus");
         }
     }
-    // APFS: 容器超块 nx_superblock_t 在块 0，前 32 字节为 obj_phys_t 对象头
-    // （o_cksum 8 + o_oid 8 + o_xid 8 + o_type 4），magic "NXSB" @0x20
-    // （Apple File System Reference nx_superblock_t； carving 文献同：bytes 32..36 == 'NXSB'）
+    // APFS：容器超块 nx_superblock_t 在块 0；对象头 obj_phys_t 共 32 字节
+    // （o_cksum8 + o_oid8 + o_xid8 + o_type4 + o_subtype4），magic "NXSB" @0x20
+    // （Apple File System Reference nx_superblock_t；carving 文献同：bytes 32..36 == 'NXSB'）
     if let Some(b) = rd(0x20, 4)?
         && &b == b"NXSB"
     {
@@ -218,8 +218,8 @@ pub fn unactivatable_swap(src: &FileSource, base: u64, len_bytes: u64) -> io::Re
 
 /// OpenWrt combined 布局的 RW overlay 起点（字节，相对分区头）。公式须与
 /// fstools libfstools/rootdisk.c 一致（mount_root 建 loop 用的 lo_offset 即此值）：
-/// - squashfs 4.0 → bytes_used __le64 @0x28（内核 squashfs_fs.h 结构序：
-///   5×u32 + 4×u16 + u64 root_inode = 0x28）
+/// - squashfs 4.0 → bytes_used __le64 @0x28（内核 squashfs_fs.h：超级块为 5×u32 + 6×u16，
+///   其后 u64 root_inode@0x20、u64 bytes_used@0x28）
 /// - EROFS → blocks u32 @超级块+0x24 左移 blkszbits u8 @超级块+0x0C（超级块 @1024）
 ///
 /// 统一 64K 上对齐（fstools ROOTDEV_OVERLAY_ALIGN 的惯例，非通用规范）；
@@ -262,7 +262,7 @@ mod tests {
         std::fs::write(&tmp, &data).unwrap();
         let f = std::fs::OpenOptions::new().read(true).write(true).open(&tmp).unwrap();
         FileSource {
-            identity: crate::dev::TargetIdentity::resolve(&tmp, false, data.len() as u64),
+            identity: crate::dev::TargetIdentity::resolve_image(&tmp),
             file: f,
             path: tmp,
             sector_size: 512,

@@ -7,15 +7,16 @@
 //!
 //! 未完成的情形按两条**正交**的轴分三类：**本次是否写盘**（决定能不能对盘上状态作断言，
 //! 从而决定给用户的下一步建议）与**成因在请求还是在环境**（决定"改参数重试"有没有意义）：
-//! - 请求与目标现状不匹配 + 未写盘 → 10：无表、无此分区、工具缺失、缺少确认旗标
-//! - 环境/盘内容故障 + 未写盘 → 30：I/O 失败、表结构非法（头 CRC 坏、条目越界）
+//! - 请求与目标现状不匹配 + 未写盘 → 10：无表、无此分区、缺少确认旗标
+//! - 环境/盘内容故障 + 未写盘 → 30：I/O 失败、表结构非法（头 CRC 坏、条目越界）、工具缺失
 //! - 已写盘 → 20（后置条件未全满足）或 30（执行失败，可能已改变）
 //!
 //! 因此**分类必须在知道成因的那一层做**：同一个成因（例如表读不出来）会因"无表"与
 //! "表非法"落进两个变体，而 io::Error 一旦成形就再也分不出来，只会在调用点被压成一个码
 
 pub const EXIT_OK: u8 = 0;
-/// 事前拒绝：本次未写盘，成因在请求与目标现状不匹配（无表、无此分区、工具缺失、缺少确认旗标）
+/// 事前拒绝：本次未写盘，成因在请求与目标现状不匹配（无表、无此分区、缺少确认旗标）。
+/// 工具缺失不在此列：它归 30（Infra）——改参数无意义
 pub const EXIT_REFUSED: u8 = 10;
 /// 部分完成：写盘已发生，但后置条件未全部满足
 pub const EXIT_PARTIAL: u8 = 20;
@@ -24,11 +25,13 @@ pub const EXIT_PARTIAL: u8 = 20;
 pub const EXIT_INFRA: u8 = 30;
 
 /// 后续步骤的种类：决定补救提示里出现哪条命令。
-/// 目前只有两种——LVM 链失败由 resize_done 直接判定 PARTIAL，不经 Pending 通道
+/// Fs/Swap 之外的做法：标签随变体由调用方携带——本层不认识具体机制，只做呈现
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PendingKind {
     Fs,
     Swap,
+    /// 其余机制（LVM 链等）：显示标签由调用方给出
+    Other(&'static str),
 }
 
 /// 一条未满足的后置条件。补救信息由 FS 层生成（工具与包名的知识在那里），
@@ -154,6 +157,7 @@ impl Outcome {
                         let what = match p.kind {
                             PendingKind::Fs => "fs grow",
                             PendingKind::Swap => "swap rebuild",
+                            PendingKind::Other(what) => what,
                         };
                         eprintln!("  [part {}] {what}: {}", p.part, p.detail);
                         if !p.hint.is_empty() {

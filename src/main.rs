@@ -40,7 +40,8 @@ fn main() -> ExitCode {
     let code = cmd::dispatch(&cmd, &a);
     // 成功完成 ⇒ 撤销窗口已关闭，删除 undo journal（失败/中断时保留，供续传或回滚）。
     // 仅限命令表里标为开 journal 的命令：不开窗口的命令成功时若也删，会把先前失败
-    // 操作留下的 journal 误清掉。删除动作须容忍文件不存在——块设备的在线路径会在别处写盘
+    // 操作留下的 journal 误清掉。删除动作须容忍文件不存在；块设备的在线路径（sfdisk、
+    // FS 工具）用自己的 fd 写盘、不经过本工具的 journal，那些写入本就不在回放范围内
     if code == EXIT_OK && cmd::opens_undo_journal(&cmd) {
         drop_journal(&a);
     }

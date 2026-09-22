@@ -11,7 +11,14 @@ pub(crate) const HELP: &str = r#"diskedit info <TARGET> [--sector-size N]
   layout. Read-only. --sector-size N overrides the 512B default (raw images)."#;
 
 pub(crate) fn cmd_info(a: &Args) -> u8 {
+    // info 只看整盘布局：`:N` 指定了也会被静默忽略，用户会误以为输出是单分区的
+    if let Some(n) = a.part {
+        bail_fail(Fail::refused(format!("`info` reports the whole target — drop :{n}")));
+    }
     let src = open_target_ro(a).unwrap_or_else(|f| bail_fail(f));
+    // identify 的读失败逐条如实上报：JSON 照常输出（fs 字段记 "error"），原因逐条
+    // 打到 stderr，退出码与本文件其他读失败路径一致（infra 30）
+    let mut identify_errors: Vec<String> = Vec::new();
     let mut out = String::from("{\"label\":");
     let mut stale_notes: Vec<String> = Vec::new();
     let gpt = match table::load_gpt(&src) {
@@ -90,7 +97,13 @@ pub(crate) fn cmd_info(a: &Args) -> u8 {
                 out.push(',');
             }
             first = false;
-            let fs = fsid::identify(&src, e.starting_lba * g.ss, (e.ending_lba - e.starting_lba + 1) * g.ss).unwrap_or("error");
+            let fs = match fsid::identify(&src, e.starting_lba * g.ss, (e.ending_lba - e.starting_lba + 1) * g.ss) {
+                Ok(f) => f.to_string(),
+                Err(e) => {
+                    identify_errors.push(format!("partition {}: identify failed: {e}", i + 1));
+                    "error".to_string()
+                }
+            };
             out.push_str(&format!(
                 "{{\"num\":{},\"first_lba\":{},\"last_lba\":{},\"size_bytes\":{},\"type\":\"{}\",\"fs\":\"{}\",\"name\":\"{}\"}}",
                 i + 1,
@@ -123,8 +136,17 @@ pub(crate) fn cmd_info(a: &Args) -> u8 {
                 out.push_str(&src.size.to_string());
                 out.push_str(",\"partitions\":[");
                 let parts: Vec<String> = raw.parts.iter().map(|p| {
-                    let fs = if p.is_container { "container".to_string() }
-                        else { fsid::identify(&src, p.start_lba as u64 * src.sector_size, p.size_lba as u64 * src.sector_size).unwrap_or("error").to_string() };
+                    let fs = if p.is_container {
+                        "container".to_string()
+                    } else {
+                        match fsid::identify(&src, p.start_lba as u64 * src.sector_size, p.size_lba as u64 * src.sector_size) {
+                            Ok(f) => f.to_string(),
+                            Err(e) => {
+                                identify_errors.push(format!("partition {}: identify failed: {e}", p.num));
+                                "error".to_string()
+                            }
+                        }
+                    };
                     // 末端在 u64 域算：两个 u32 字段相加会溢出（debug panic / release 回绕），
                     // 报出一个小于起点的 last_lba。size_lba != 0 由 parse_mbr 保证，无下溢
                     let last_lba = p.start_lba as u64 + p.size_lba as u64 - 1;
@@ -157,6 +179,15 @@ pub(crate) fn cmd_info(a: &Args) -> u8 {
     println!("{out}");
     for n in &stale_notes {
         eprintln!("{n}");
+    }
+    // 识别失败如实升级结论：JSON 照常输出（结构化字段在），但退出码不伪装成功
+    if !identify_errors.is_empty() {
+        for e in &identify_errors {
+            eprintln!("error: {e}");
+        }
+        return Fail::infra("filesystem identification failed on one or more partitions")
+            .into_outcome()
+            .exit_code();
     }
     // 非 raw 容器格式识别（qcow2/VMDK/VDI/VHD/VHDX 魔数，qemu docs block-drivers）：字节直译
     // 假设不成立（guest LBA 经容器内分配表间接映射），本工具无法处理，改用 qemu-nbd 映射为

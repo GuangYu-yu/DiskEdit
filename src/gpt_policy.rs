@@ -6,7 +6,7 @@
 //! "是否需要修复、修哪一类"只在这里判一次，main 与 movepart 共用同一个动作类型。
 
 use crate::dev::FileSource;
-use crate::geometry::{self, ValidatedGeometry};
+use crate::geometry::ValidatedGeometry;
 use crate::outcome::Fail;
 use crate::table::{self, GptState, PmbrSize, RawGpt};
 use std::io;
@@ -63,10 +63,11 @@ impl RepairAction {
 /// 容器容不下最小跨度、或现有分区越出新区间 → 拒绝（不写盘，纯计算）
 pub fn repaired_last_usable(g: &RawGpt, file_last_lba: u64) -> io::Result<u64> {
     // 跨度取自唯一的几何构造点，不在此另算一遍 条目数 × 条目大小 ÷ 扇区
-    let geom = geometry::EntryArrayGeometry::new(
+    let geom = crate::table::EntryArrayGeometry::new(
         g.ss,
         g.header.size_of_partition_entry,
         g.header.number_of_partition_entries,
+        crate::table::MAX_ARRAY_BYTES,
     )
     .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
     let span = geom.lba_span();
@@ -167,7 +168,7 @@ pub fn resolve_geometry(src: &FileSource) -> Result<Option<(ValidatedGeometry, R
         // 解析失败与"修不了"都发生在任何写入之前 → Infra（不能提示"盘可能已改变"）
         Err(e) => return Err(Fail::infra(format!("parse failed: {e}"))),
     };
-    let file_last_lba = src.size / g.ss - 1;
+    let file_last_lba = table::container_last_lba(src, g.ss);
     // 这些拒绝（PMBR SizeInLBA 越出容器、容器装不下备份头跨度、分区越出修复后的可用区）
     // 都是盘/容器自身的异常：改请求参数也无解，故归 infra
     let action = classify_repair(&g, file_last_lba).map_err(|e| Fail::infra(e.to_string()))?;
@@ -177,10 +178,300 @@ pub fn resolve_geometry(src: &FileSource) -> Result<Option<(ValidatedGeometry, R
     Ok(Some((vg, action)))
 }
 
+// ---------- 表项编排（"读 → 判 → 修复 → 提交"） ----------
+//
+// 这些函数编排的是策略层的三步（解析出几何 → 事前拒绝判定 → 修复 + 提交），
+// 因此住在这里而不是 codec 层：table 只提供事实、编解码与写入原语，
+// "什么时候允许写、写之前必须先做什么"由本层决定
+
+use gptman::GPTPartitionEntry;
+
+/// "查找第 N 个**已定义**分区"的唯一出口：分区号越界与空槽各自的拒绝文案只在此写一遍。
+/// 接受条目切片使 ValidatedGeometry（写入路径）与 RawGpt（诊断路径）共用同一判据与同一措辞。
+/// 需要可变访问的编排函数取 [`live_index`]，只读调用点取 [`live_entry_in`]
+pub(crate) fn live_index(entries: &[GPTPartitionEntry], part: u32) -> Result<usize, Fail> {
+    // part 是外部输入：part==0 的 checked_sub 让"0 号分区"落进下面的 not found，
+    // 而不是先在 usize 上回绕成 usize::MAX
+    let idx = part.checked_sub(1).map(|i| i as usize);
+    match idx.and_then(|i| entries.get(i).map(|e| (i, e))) {
+        Some((i, e)) if e.ending_lba != 0 => Ok(i),
+        Some(_) => Err(Fail::refused(format!("partition {part} is empty"))),
+        None => Err(Fail::refused(format!("partition {part} not found"))),
+    }
+}
+
+pub(crate) fn live_entry_in(entries: &[GPTPartitionEntry], part: u32) -> Result<&GPTPartitionEntry, Fail> {
+    live_index(entries, part).map(|i| &entries[i])
+}
+
+/// 分区在容器字节空间的区间 `(起始字节, 长度字节)` —— **唯一实现**：诊断路径
+/// （`mkfs` / `set` / `check` 的 `:N` 命中核验）与 FS 操作路径（挂载点定位、离线缩容）
+/// 都从这里取，两侧不各直呼一次 `table::load_gpt`。
+///
+/// 返回字节而非 LBA 是刻意的：LBA 的单位取决于它来自哪张表——GPT 条目以**表自身的** ss
+/// 计（4Kn 镜像未加 `--sector-size` 时 `g.ss != src.sector_size`，按容器 ss 换算会整体差
+/// 8 倍，于是 info/resize 认到的区间与 mkfs/check 认到的不是同一段字节），MBR 条目以容器
+/// ss 计。换算在此处完成一次，下游（`fsid::identify` 按字节区间工作）不必知道单位是谁的
+///
+/// 返回 `Fail` 而不是 `(码, 文案)`：前缀与码必须同源——否则调用点会各自拼 "refused: "
+/// 前缀，碰上 30 就自相矛盾（打出 "refused: parse failed: ..." 却退出 30）
+pub(crate) fn partition_bytes(src: &FileSource, part: u32) -> Result<(u64, u64), Fail> {
+    // 无表 = 请求与目标现状不匹配(10)；表在但结构非法 = 盘内容故障(30)。
+    // 与 resize / info 的 parse failed / no partition table 同一判据
+    match crate::table::load_gpt(src) {
+        Err(e) => Err(Fail::infra(format!("parse failed: {e}"))),
+        Ok(Some(g)) => {
+            let e = live_entry_in(&g.entries, part)?;
+            Ok((e.starting_lba * g.ss, (e.ending_lba - e.starting_lba + 1) * g.ss))
+        }
+        // 无 GPT → 按 MBR 解析。不这么做的话真 MBR 盘在这里被一律当成"无表"，
+        // mkfs / set label|uuid 在 MBR 上完全不可用
+        Ok(None) => match crate::table::parse_mbr(src).map_err(|e| Fail::infra(format!("parse failed: {e}")))? {
+            None => Err(Fail::refused("no partition table on target")),
+            Some(mbr) => {
+                let p = mbr.iter().find(|p| p.num == part).ok_or_else(|| {
+                    Fail::refused(format!("partition {part} not found (MBR covers primary slots 1..=4)"))
+                })?;
+                // 扩展容器是逻辑分区的壳，不是可承载文件系统的分区
+                if p.is_container {
+                    return Err(Fail::refused(format!(
+                        "partition {part} is an extended container (logical partitions are out of scope)"
+                    )));
+                }
+                Ok((p.start_lba as u64 * src.sector_size, p.size_lba as u64 * src.sector_size))
+            }
+        },
+    }
+}
+
+/// 已验证几何上的 [`live_entry_in`] 惯用形态：分区号上界来自几何的条目数
+pub(crate) fn live_entry(g: &ValidatedGeometry, part: u32) -> Result<&GPTPartitionEntry, Fail> {
+    live_entry_in(&g.entries, part)
+}
+
+/// add：自动派生 unique guid（与镜像路径绑定，复制盘不会拿到相同的 PARTUUID）
+pub fn add_entry(
+    src: &mut FileSource,
+    start: u64,
+    end: u64,
+    name: &str,
+    type_guid: [u8; 16],
+) -> Result<u32, Fail> {
+    let unique = table::derive_guid(&src.path);
+    add_entry_at(src, start, end, name, type_guid, unique)
+}
+
+/// add 的底层：显式指定 unique guid（copy 场景沿用源分区 guid）。
+/// `execute_copy` 在 durable boundary 之后调用它，依赖它"写盘前拒绝 ⇒ `Refused`、
+/// 写盘后 ⇒ 压成 `io::Error`"这个分界——只换模块，不动契约
+pub fn add_entry_at(
+    src: &mut FileSource,
+    start: u64,
+    end: u64,
+    name: &str,
+    type_guid: [u8; 16],
+    unique_guid: [u8; 16],
+) -> Result<u32, Fail> {
+    let (mut g, repair) = resolve_geometry(src)?.ok_or_else(|| Fail::refused("no GPT"))?;
+    if start < g.header.first_usable_lba || end > g.header.last_usable_lba || start > end {
+        return Err(Fail::refused(format!(
+            "range {start}..{end} outside usable {}..{}",
+            g.header.first_usable_lba, g.header.last_usable_lba
+        )));
+    }
+    for e in &g.entries {
+        if e.ending_lba == 0 {
+            continue;
+        }
+        if !(end < e.starting_lba || start > e.ending_lba) {
+            return Err(Fail::refused("range overlaps an existing partition"));
+        }
+    }
+    let Some(slot) = g.entries.iter().position(|e| e.ending_lba == 0) else {
+        return Err(Fail::refused("partition table full"));
+    };
+    g.entries[slot] = GPTPartitionEntry {
+        partition_type_guid: type_guid,
+        unique_partition_guid: unique_guid,
+        starting_lba: start,
+        ending_lba: end,
+        attribute_bits: 0,
+        partition_name: name.into(),
+    };
+    // 拒绝判定已全部结束，首次写盘从这里开始
+    apply_repair(src, &repair)?;
+    g.commit(src)?;
+    table::ensure_protective_mbr(src)?;
+    Ok((slot + 1) as u32)
+}
+
+/// GPT 分区改名。落盘字段为 36 个 UTF-16 码元（gptman 3.1.1 PartitionName.raw_buf: [u16; 36]），
+/// 超长部分由 `From<&str>` 静默截断
+pub fn rename_entry(src: &mut FileSource, part: u32, name: &str) -> Result<(), Fail> {
+    let (mut g, repair) = resolve_geometry(src)?.ok_or_else(|| Fail::refused("no GPT"))?;
+    // 空槽 / 越界的判据与文案取自唯一出口；改名只需下标
+    let i = live_index(&g.entries, part)?;
+    g.entries[i].partition_name = name.into();
+    // 拒绝判定已全部结束，首次写盘从这里开始
+    apply_repair(src, &repair)?;
+    Ok(g.commit(src)?)
+}
+
+/// GPT 属性旗标：属性位按 UEFI 2.10 §5（bit0=Required Partition，bit1=No Block IO
+/// Protocol 即 hidden，bit2=Legacy BIOS Bootable）；esp/boot 为类型 GUID 切换。
+///
+/// 取值域收进枚举：别名表与拒绝文案只由这里生成，调用点与 HELP 不各抄一份名单
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GptFlag {
+    /// `esp` / `boot`：切到 ESP 类型 GUID
+    Esp,
+    /// `legacy` / `legacy_boot`：Legacy BIOS Bootable 属性位
+    Legacy,
+    Hidden,
+    Required,
+}
+
+impl GptFlag {
+    /// 接受的写法（别名并列）。拒绝文案与 HELP_SET 都必须与它一致
+    pub const NAMES: &'static str = "esp/boot, legacy/legacy_boot, hidden, required";
+
+    pub fn parse(s: &str) -> Result<Self, Fail> {
+        match s {
+            "esp" | "boot" => Ok(Self::Esp),
+            "legacy" | "legacy_boot" => Ok(Self::Legacy),
+            "hidden" => Ok(Self::Hidden),
+            "required" => Ok(Self::Required),
+            other => Err(Fail::refused(format!(
+                "unknown gpt flag {other} (accepted: {})",
+                Self::NAMES
+            ))),
+        }
+    }
+
+    /// 切类型 GUID 而非改属性位（parted gpt.c set_flag/set_system）
+    fn switches_type_guid(self) -> bool {
+        matches!(self, Self::Esp)
+    }
+
+    /// 属性位；`Esp` 恒为 0——它走类型 GUID，不占属性位（UEFI 属性 bit48-63 为
+    /// GUID 专属区间，bit60 是 Microsoft read-only，sfdisk man）
+    fn attribute_bit(self) -> u64 {
+        match self {
+            Self::Esp => 0,
+            Self::Legacy => 1 << 2,
+            Self::Hidden => 1 << 1,
+            Self::Required => 1 << 0,
+        }
+    }
+}
+
+pub fn set_gpt_flag(src: &mut FileSource, part: u32, flag: GptFlag, on: bool) -> Result<(), Fail> {
+    let (mut g, repair) = resolve_geometry(src)?.ok_or_else(|| Fail::refused("no GPT"))?;
+    let i = live_index(&g.entries, part)?;
+    let e = &mut g.entries[i];
+    if flag.switches_type_guid() {
+        e.partition_type_guid = if on { table::ESP_TYPE_GUID } else { table::LINUX_FS_TYPE_GUID };
+    } else if on {
+        e.attribute_bits |= flag.attribute_bit();
+    } else {
+        e.attribute_bits &= !flag.attribute_bit();
+    }
+    // 拒绝判定已全部结束，首次写盘从这里开始
+    apply_repair(src, &repair)?;
+    Ok(g.commit(src)?)
+}
+
+/// `del`：清零条目（只清表项，分区数据区不动）
+pub fn del_entry(src: &mut FileSource, part: u32) -> Result<(), Fail> {
+    let (mut g, repair) = resolve_geometry(src)?.ok_or_else(|| Fail::refused("no GPT"))?;
+    let i = live_index(&g.entries, part)?;
+    g.entries[i] = table::empty_entry();
+    // 拒绝判定已全部结束，首次写盘从这里开始
+    apply_repair(src, &repair)?;
+    g.commit(src)?;
+    Ok(table::ensure_protective_mbr(src)?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::table::{HeaderIssue, PmbrIssue, RawHeader};
+
+    /// 带一个分区的 GPT 夹具：编排函数的端到端行为（flags / esp 切换）在真表上验证
+    fn gpt_src(tag: &str) -> crate::dev::FileSource {
+        let mut src = crate::support::src_from(tag, &[0u8; 8 * 1024 * 1024]);
+        table::create_gpt(&mut src, 512, None).unwrap();
+        add_entry(&mut src, 2048, 4095, "p", table::LINUX_FS_TYPE_GUID).unwrap();
+        src
+    }
+
+    #[test]
+    fn gpt_flag_hidden_required() {
+        let mut src = gpt_src("gflag");
+        let flag = |s: &str| GptFlag::parse(s).unwrap();
+        set_gpt_flag(&mut src, 1, flag("hidden"), true).unwrap();
+        let g = table::load_gpt(&src).unwrap().unwrap();
+        assert_eq!(g.entries[0].attribute_bits & (1 << 1), 1 << 1);
+        set_gpt_flag(&mut src, 1, flag("required"), true).unwrap();
+        let g = table::load_gpt(&src).unwrap().unwrap();
+        assert_eq!(g.entries[0].attribute_bits & (1 << 0), 1 << 0);
+        // legacy（bit2）不受影响
+        set_gpt_flag(&mut src, 1, flag("legacy"), true).unwrap();
+        set_gpt_flag(&mut src, 1, flag("hidden"), false).unwrap();
+        set_gpt_flag(&mut src, 1, flag("required"), false).unwrap();
+        let g = table::load_gpt(&src).unwrap().unwrap();
+        assert_eq!(g.entries[0].attribute_bits, 1 << 2);
+        // 别名：boot 与 legacy_boot 各自与主名落同一变体（名单只有一份，拒绝文案由它生成）
+        assert_eq!(flag("boot"), GptFlag::Esp);
+        assert_eq!(flag("legacy_boot"), GptFlag::Legacy);
+        assert!(GptFlag::parse("bogus").is_err());
+    }
+
+    #[test]
+    fn gpt_flag_esp_switches_type_guid() {
+        // parted gpt.c：boot/esp 标志 = 类型 GUID ↔ PARTITION_SYSTEM_GUID，
+        // off 回 Linux filesystem data；属性位不动（esp≠bit60 read-only）
+        let mut src = gpt_src("gesp");
+        let flag = |s: &str| GptFlag::parse(s).unwrap();
+        set_gpt_flag(&mut src, 1, flag("esp"), true).unwrap();
+        let g = table::load_gpt(&src).unwrap().unwrap();
+        assert_eq!(g.entries[0].partition_type_guid, table::ESP_TYPE_GUID);
+        assert_eq!(g.entries[0].attribute_bits, 0);
+        set_gpt_flag(&mut src, 1, flag("boot"), false).unwrap();
+        let g = table::load_gpt(&src).unwrap().unwrap();
+        assert_eq!(g.entries[0].partition_type_guid, table::LINUX_FS_TYPE_GUID);
+    }
+
+    /// 分区字节区间的单位是**表自身**的 ss，不是容器 ss：4Kn 表放在 512B 口径的容器里
+    /// （4Kn 镜像未加 --sector-size，或经 512e 转接写入的 4Kn 盘）时，按容器 ss 换算会整体差
+    /// 8 倍，于是 info/resize 认到的文件系统与 mkfs/check 认到的区间不是同一段字节
+    #[test]
+    fn partition_bytes_uses_table_sector_size() {
+        let data = vec![0u8; 8 * 1024 * 1024];
+        let mut src = crate::support::src_from("ss4k", &data); // 容器 ss = 512
+        table::create_gpt(&mut src, 4096, None).unwrap();
+        add_entry_at(&mut src, 256, 511, "p1", table::LINUX_FS_TYPE_GUID, [0x22; 16]).unwrap();
+        // 表以 4096B 逻辑块自述（LBA1 落在 offset 4096），load_gpt 的候选 ss 会选出 4096
+        assert_eq!(table::load_gpt(&src).unwrap().unwrap().ss, 4096);
+        assert_eq!(partition_bytes(&src, 1).unwrap(), (256 * 4096, 256 * 4096));
+    }
+
+    /// 无表、空槽、越界编号各自只可能落一种出口语义：前者 10，后两者同判据同文案
+    #[test]
+    fn partition_bytes_error_kinds() {
+        let bare = crate::support::src_from("pb_none", &vec![0u8; 1024 * 1024]);
+        assert!(matches!(partition_bytes(&bare, 1), Err(Fail::Refused(_))));
+        let src = gpt_src("pb_gpt");
+        assert!(matches!(partition_bytes(&src, 2), Err(Fail::Refused(m)) if m.contains("empty")));
+        assert!(matches!(partition_bytes(&src, 0), Err(Fail::Refused(m)) if m.contains("not found")));
+        // MBR：容器分区不可当 FS 载体
+        let mut src = crate::support::src_from("pb_mbr", &vec![0u8; 2 * 1024 * 1024]);
+        table::create_mbr(&mut src).unwrap();
+        table::add_mdos_entry(&mut src, 63, 200, 0x83).unwrap();
+        table::add_mdos_entry(&mut src, 201, 300, 0x05).unwrap();
+        assert_eq!(partition_bytes(&src, 1).unwrap(), (63 * 512, (200u64 - 63 + 1) * 512));
+        assert!(matches!(partition_bytes(&src, 2), Err(Fail::Refused(m)) if m.contains("container")));
+    }
 
     /// 最小表事实：ss=512、128×128B 条目（数组跨度 = 32 扇区）、条目仅含 (start,end) 区间
     fn gpt(state: GptState, pmbr: PmbrSize, ents: &[(u64, u64)]) -> RawGpt {

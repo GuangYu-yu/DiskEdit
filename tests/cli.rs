@@ -96,6 +96,31 @@ fn new_add_del_roundtrip() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// 对齐放大到溢出的 start（`--start` 逼近 u64::MAX、`--align cyl`）必须拒绝：
+/// `div_ceil(unit) * unit` 会静默回绕成一个"从 0 起"的合法区间，把无法对齐的输入
+/// 伪装成能落盘的坐标
+#[test]
+fn huge_start_with_cyl_alignment_is_refused_not_wrapped() {
+    let dir = std::env::temp_dir().join(format!("diskedit_ovf_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let img = dir.join("t.img");
+    std::fs::write(&img, vec![0u8; 4 * 1024 * 1024]).unwrap();
+    let exe = env!("CARGO_BIN_EXE_DiskEdit");
+    let img_s = img.to_str().unwrap();
+    let run = |args: &[&str]| -> (i32, String, String) {
+        let out = Command::new(exe).args(args).output().unwrap();
+        (out.status.code().unwrap_or(-1),
+         String::from_utf8_lossy(&out.stdout).into_owned(),
+         String::from_utf8_lossy(&out.stderr).into_owned())
+    };
+    assert_eq!(run(&["new", img_s, "--yes"]).0, 0);
+    // cyl = 16065 扇区/柱面：上取整后乘法越过 u64::MAX
+    let (c, _, err) = run(&["add", img_s, "--start", "18446744073709551614", "--end", "18446744073709551615", "--align", "cyl", "--name", "x"]);
+    assert_eq!(c, 10, "an unalignable start must be refused, not wrapped: {err}");
+    assert!(err.contains("overflows the LBA range"), "{err}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// 主头撕裂（torn write）时回退盘尾备份头，并在写入时重建主头
 #[test]
 fn backup_header_fallback_and_repair() {
@@ -1135,7 +1160,8 @@ fn cli_negative_paths() {
     let (c, _, e) = run(&["plan", bad2.to_str().unwrap(), "--grow", "1"]);
     assert_eq!(c, 30, "plan on a corrupt table must be infra: {e}");
     assert!(e.contains("parse failed"), "{e}");
-    let (c, _, e) = run(&["apply", bad2.to_str().unwrap(), "--grow", "1", "--yes"]);
+    // apply 无 --yes（apply 在锁下按盘上现状重新推导计划后执行，没有第二个确认层）
+    let (c, _, e) = run(&["apply", bad2.to_str().unwrap(), "--grow", "1"]);
     assert_eq!(c, 30, "apply on a corrupt table must be infra: {e}");
     assert!(!e.contains("may have changed"), "a pre-write failure must not claim the disk may have changed: {e}");
     let (c, _, e) = run(&["check", &format!("{}:1", bad2.display())]);
@@ -1528,7 +1554,9 @@ fn help_topic_zero_partition_and_mbr_end_overflow() {
     let wrap = dir.join("wrap.img");
     std::fs::write(&wrap, &data).unwrap();
     let (c, out, err) = run(&["info", wrap.to_str().unwrap()]);
-    assert_eq!(c, 0, "a damaged table must stay observable: {err}");
+    // 条目越盘使 identify 短读：JSON 照常输出（可观察），但退出码如实升级为 30
+    assert_eq!(c, 30, "identify failure must be reported honestly: {err}");
+    assert!(err.contains("identify failed"), "{err}");
     let v: serde_json::Value = serde_json::from_str(out.trim()).expect("info must emit valid JSON");
     assert_eq!(v["label"], "mbr", "{out}");
     assert_eq!(v["damaged"], true, "the out-of-range entry must be reported as damage: {out}");
@@ -1643,6 +1671,37 @@ mod crash_recovery {
         assert_eq!(c, 0, "re-running must resume and finish: {e}");
         assert!(!journal.exists(), "a finished transaction must be committed: {e}");
         assert!(!ckpt.exists(), "{e}");
+    }
+
+    /// copy 的严格打开：单分区 resize 的中途现场对 `resize` / `copy` 都不可续跑
+    /// ——`resize` 对它拒绝且出路文案不得误导（重跑 resize 救不了它）；`copy` 没有续跑
+    /// 能力，绝不静默接管别人的现场（否则成功后会把人家的 journal 当自己的清掉）
+    #[test]
+    fn foreign_resize_slot_refuses_resize_and_copy() {
+        let (img, journal, ckpt) = stage("frs");
+        let img_s = img.to_str().unwrap();
+        let target = format!("{img_s}:1");
+        let argv = ["resize-part", target.as_str(), "--start", "8192", "--end", "10239"];
+
+        let (c, e) = run_fault("rs-before-commit", &argv);
+        assert_ne!(c, 0, "the injected abort must not look like success: {e}");
+        assert!(ckpt.exists(), "a mid-move crash must leave a resumable checkpoint: {e}");
+        let len_before = std::fs::metadata(&journal).unwrap().len();
+
+        // resize：拒绝（30），且出路文案给出真正能续跑的命令
+        let (c, e) = run(&["resize", target.as_str(), "grow", "--allow-move", "--yes"]);
+        assert_eq!(c, 30, "resize must refuse a foreign single-partition job: {e}");
+        assert!(e.contains("resize-part") && e.contains("move"), "the way out must name the resuming commands: {e}");
+        // copy：同样拒绝，不得接管
+        let (c, e) = run(&["copy", target.as_str(), "--start", "end"]);
+        assert_eq!(c, 30, "copy must refuse while any job owns the slot: {e}");
+        // 两次拒绝都不得动现场
+        assert!(ckpt.exists() && std::fs::metadata(&journal).unwrap().len() == len_before, "a refusal must not touch the scene");
+
+        // 重跑原命令收尾（对账：现场本身仍是可续跑的）
+        let (c, e) = run(&argv);
+        assert_eq!(c, 0, "re-running must resume and finish: {e}");
+        assert!(!ckpt.exists() && !journal.exists());
     }
 
     /// `copy`：数据已复制、表项未提交时崩溃。它**不写 ckpt**，journal 又已越过不可回滚点

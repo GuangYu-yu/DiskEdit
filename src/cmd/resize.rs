@@ -27,7 +27,9 @@ pub(crate) const HELP: &str = r#"diskedit resize <TARGET>:N <SIZE> [OPTIONS]
   Automatically:
     detects partition / filesystem / LVM PV, chooses online or offline,
     resizes partition -> PV -> LV -> filesystem as required; long operations
-    are checkpointed and resumed by re-running the same command.
+    are checkpointed and resumed by re-running the same command (an
+    interrupted single-partition resize job is resumed by re-running
+    `resize-part` or `move`, not `resize`).
 
   Notes: PV shrink is refused (use the lvreduce/pvresize chain). --no-fs skips
   the filesystem steps, so it cannot shrink: the FS has to be shrunk first."#;
@@ -105,7 +107,12 @@ fn refuse_swap_active(dn: &str, part: u32) {
 /// resize 请求里**与表类型无关**的部分：写盘前的事实快照 + 目标尺寸。
 /// 表类型特有的差异收敛成一件事实——右侧连续空闲（GPT 按修复后的 last_usable，
 /// MBR 按 32 位上限与后继条目），故由各自的几何函数算好 `free_right_lba` 填入。
-/// 这样在线路径与 `check_pv_intent` 只写一份，不会各自演化
+/// 这样在线路径与 `check_pv_intent` 只写一份，不会各自演化。
+///
+/// `free_right_lba` / `cur_bytes` 是**锁前**快照：在线路径的锁在 `online` 模块内部取得
+///（身份取自解析结果，此处还拿不到它）。写表前 `online` 会在锁下重取 sysfs 快照，
+/// 由 `check_new_range` 复核容量与邻接——过扩/重叠有锁下防线；残余是 free 的**数额**
+/// 不在锁下重导出（在线路径刻意不解析分区表），窗口内布局变化可能少扩或被拒，不会越界
 #[cfg(target_os = "linux")]
 struct ResizeTarget {
     part: u32,
@@ -171,13 +178,10 @@ fn resize_online(a: &Args, src: &FileSource, t: &ResizeTarget) -> Option<u8> {
     Some(o.exit_code())
 }
 
-/// 块设备的分区节点路径：盘名以数字结尾时分区号加 "p" 前缀
-/// （/dev/sda→sda3、/dev/nvme0n1→nvme0n1p3；util-linux 与内核通用命名惯例）
+/// 块设备的分区节点路径：命名规则唯一实现在 `dev::part_node_name`
 #[cfg(target_os = "linux")]
 fn part_dev_path(target: &str, part: u32) -> String {
-    let base = target.trim_end_matches('/');
-    let sep = if base.chars().last().is_some_and(|c| c.is_ascii_digit()) { "p" } else { "" };
-    format!("{base}{sep}{part}")
+    crate::dev::part_node_name(target.trim_end_matches('/'), part)
 }
 
 /// 分区扩容成功后的 LVM 链（仅块设备）：pvresize 吸收全部新增空间；--grow-lv 把本次新增
@@ -266,14 +270,8 @@ pub(crate) fn cmd_resize(a: &Args) -> u8 {
         Ok(None) => bail_fail(Fail::refused("resize requires a GPT target".to_string())),
         Err(f) => bail_fail(f),
     };
-    let Some(e) = g.entry_index(part).and_then(|i| g.entries.get(i)) else {
-        bail_fail(Fail::refused(format!("partition {part} not found")));
-    };
-    if e.ending_lba == 0 {
-        bail_fail(Fail::refused(format!("partition {part} is empty")));
-    }
+    let e = crate::gpt_policy::live_entry(&g, part).unwrap_or_else(|f| bail_fail(f));
     let (start, end, ss) = (e.starting_lba, e.ending_lba, g.ss);
-    let last_usable = g.last_usable_lba();
     let cur_bytes = (end - start + 1) * ss;
     let fstype = fsid::identify(&src, start * ss, (end - start + 1) * ss).unwrap_or_else(|e| bail_fail(Fail::infra(format!("identify failed: {e}"))));
     let is_pv = fstype == "lvm2_pv";
@@ -305,13 +303,24 @@ pub(crate) fn cmd_resize(a: &Args) -> u8 {
     // 返回的 resumed 决定 grow 分支：续跑时"右侧已空"可能是搬移的中间态
     let (mut src, resuming) =
         open_target_resumable(a, part).unwrap_or_else(|f| bail_fail(f));
+    // 锁下重取权威几何：写路径的每个 LBA（start/end/free/last_usable）都来自它。
+    // 锁前那份只服务请求解析与展示（SIZE 锚定、PV 判定）；只读阶段与取得独占权之间
+    // 盘可以被别人改写，用锁前的 free 驱动写分支就是把过期决定写进盘
+    let (g, repair) = match crate::gpt_policy::resolve_geometry(&src) {
+        Ok(Some(v)) => v,
+        Ok(None) => bail_fail(Fail::refused("resize requires a GPT target".to_string())),
+        Err(f) => bail_fail(f),
+    };
+    let e = crate::gpt_policy::live_entry(&g, part).unwrap_or_else(|f| bail_fail(f));
+    let (start, end, ss) = (e.starting_lba, e.ending_lba, g.ss);
+    let last_usable = g.last_usable_lba();
     if grow_to_end {
         let free = free_right_gpt(&g, part);
         // 右侧有空闲且没有未收尾的搬移作业 → 纯扩容。若作业未收尾，则"右侧已空"很可能
         // 正是搬了一半的结果，走普通 resize_part 会跳过剩余搬移与 swap 重建等收尾
         if free > 0 && !resuming {
-            let (chunk, mut logger) = chunk_logger(a, &src);
-            let o = settle_layout(movepart::resize_part(&mut src, part, start, end + free, chunk, a.no_fs, &mut |m| logger.log(m)), &src);
+            let (chunk, mut logger) = chunk_logger(a, &src, g.header.disk_guid);
+            let o = settle_layout(movepart::resize_part(&mut src, &g, repair, part, start, end + free, chunk, a.no_fs, &mut |m| logger.log(m)), &src);
             return finish_resize(a, o, is_pv, is_block, cur_bytes);
         }
         // 右侧被挡：自动搬移挡路分区（plan 打印 → --allow-move 放行 → --yes 确认）。
@@ -321,7 +330,7 @@ pub(crate) fn cmd_resize(a: &Args) -> u8 {
         if !a.allow_move && !resuming {
             bail_fail(Fail::refused("right side is occupied — pass --allow-move to relocate the blocking partitions (plan will be printed; --yes confirms)".to_string()));
         }
-        let plan = match movepart::make_plan_resuming(&mut src, part) {
+        let plan = match movepart::make_plan_resuming(&mut src, &g, repair, part) {
             Ok(p) => p,
             Err(f) => bail_fail(f),
         };
@@ -331,8 +340,8 @@ pub(crate) fn cmd_resize(a: &Args) -> u8 {
         if !a.yes {
             bail_fail(Fail::refused("this resizes by relocating the partitions listed above — review and re-run with --yes"));
         }
-        let (chunk, mut logger) = chunk_logger(a, &src);
-        let o = settle_layout(movepart::apply(&mut src, &plan, chunk, a.no_fs, &mut |m| logger.log(m)), &src);
+        let (chunk, mut logger) = chunk_logger(a, &src, g.header.disk_guid);
+        let o = settle_layout(movepart::apply(&mut src, &g, &plan, chunk, a.no_fs, &mut |m| logger.log(m)), &src);
         finish_resize(a, o, is_pv, is_block, cur_bytes)
     } else {
         // SIZE：字节 → 扇区（下取整）；扩须右侧空闲足够，缩由 resize_part 内部 FS 先缩 + 守卫
@@ -358,7 +367,7 @@ pub(crate) fn cmd_resize(a: &Args) -> u8 {
             if !a.allow_move {
                 bail_fail(Fail::refused("not enough contiguous free space to the right — pass --allow-move to relocate the blocking partitions (plan will be printed; --yes confirms)".to_string()));
             }
-            let plan = match movepart::make_plan_shift_resuming(&mut src, part, shift) {
+            let plan = match movepart::make_plan_shift_resuming(&mut src, &g, repair, part, shift) {
                 Ok(p) => p,
                 Err(f) => bail_fail(f),
             };
@@ -366,12 +375,12 @@ pub(crate) fn cmd_resize(a: &Args) -> u8 {
             if !a.yes {
                 bail_fail(Fail::refused("this resizes by relocating the partitions listed above — review and re-run with --yes"));
             }
-            let (chunk, mut logger) = chunk_logger(a, &src);
-            let o = settle_layout(movepart::apply(&mut src, &plan, chunk, a.no_fs, &mut |m| logger.log(m)), &src);
+            let (chunk, mut logger) = chunk_logger(a, &src, g.header.disk_guid);
+            let o = settle_layout(movepart::apply(&mut src, &g, &plan, chunk, a.no_fs, &mut |m| logger.log(m)), &src);
             return finish_resize(a, o, is_pv, is_block, cur_bytes);
         }
-        let (chunk, mut logger) = chunk_logger(a, &src);
-        let o = settle_layout(movepart::resize_part(&mut src, part, start, new_end, chunk, a.no_fs, &mut |m| logger.log(m)), &src);
+        let (chunk, mut logger) = chunk_logger(a, &src, g.header.disk_guid);
+        let o = settle_layout(movepart::resize_part(&mut src, &g, repair, part, start, new_end, chunk, a.no_fs, &mut |m| logger.log(m)), &src);
         finish_resize(a, o, is_pv, is_block, cur_bytes)
     }
 }
@@ -511,7 +520,6 @@ fn cmd_resize_msdos(a: &Args, part: u32, size_arg: Option<&str>, src_ro: &FileSo
         bail_fail(Fail::refused("extended partition container cannot be resized (logical partitions are out of scope)".to_string()));
     }
     let ss = src_ro.sector_size;
-    let total_sectors = src_ro.size / ss;
     let cur_bytes = p.size_lba as u64 * ss;
     let fstype = fsid::identify(src_ro, p.start_lba as u64 * ss, p.size_lba as u64 * ss)
         .unwrap_or_else(|e| bail_fail(Fail::infra(format!("identify failed: {e}"))));
@@ -530,7 +538,7 @@ fn cmd_resize_msdos(a: &Args, part: u32, size_arg: Option<&str>, src_ro: &FileSo
         ss,
         cur_bytes,
         is_pv,
-        free_right_lba: free_right_msdos(&mbr, p, total_sectors),
+        free_right_lba: free_right_msdos(&mbr, p, src_ro.size / ss),
         target,
         grow_to_end,
     }) {
@@ -539,6 +547,20 @@ fn cmd_resize_msdos(a: &Args, part: u32, size_arg: Option<&str>, src_ro: &FileSo
 
     // 离线路径
     let mut src = open_target_for_write(a).unwrap_or_else(|f| bail_fail(f));
+    // 锁下重取权威几何（与 GPT 分支同一原则）：只读阶段与取得独占权之间盘可以被别人
+    // 改写（sfdisk/fdisk 不守本工具的锁），用锁前的 mbr/p/free 驱动写分支就是把过期
+    // 决定写进盘——resize_mdos_entry 不复核邻接，过期的 free 没有第二道防线
+    let mbr = table::parse_mbr(&src)
+        .unwrap_or_else(|e| bail_fail(Fail::infra(format!("parse failed: {e}"))))
+        .unwrap_or_else(|| bail_fail(Fail::refused("no MBR on target".to_string())));
+    let p = match mbr.iter().find(|p| p.num == part) {
+        Some(p) => p,
+        None => bail_fail(Fail::refused(format!("partition {part} not found (MBR resize covers primary partitions 1..4 only)"))),
+    };
+    if p.is_container {
+        bail_fail(Fail::refused("extended partition container cannot be resized (logical partitions are out of scope)".to_string()));
+    }
+    let total_sectors = src.size / ss;
     if grow_to_end {
         let free = free_right_msdos(&mbr, p, total_sectors);
         let mut table_written = false;
@@ -629,19 +651,12 @@ fn resize_done(a: &Args, is_pv: bool, is_block: bool, old_bytes: u64) -> u8 {
         };
         // 只打开一次：下面读"实际新尺寸"与给 LVM 链取分区节点用的是同一份盘上现状
         let src = open_target_ro(a).unwrap_or_else(|f| bail_fail(f));
-        // 表项重读按 label 分派（MBR resize 也走本收尾）
-        let new_bytes = if let Ok(Some(g)) = table::load_gpt(&src) {
-            match (part as usize).checked_sub(1).and_then(|i| g.entries.get(i)) {
-                Some(e) if e.ending_lba != 0 => (e.ending_lba - e.starting_lba + 1) * g.ss,
-                _ => bail_fail(Fail::infra("post-resize: partition vanished from table".to_string())),
-            }
-        } else if let Ok(Some(mbr)) = table::parse_mbr(&src) {
-            match mbr.iter().find(|p| p.num == part) {
-                Some(p) => p.size_lba as u64 * src.sector_size,
-                None => bail_fail(Fail::infra("post-resize: partition vanished from table".to_string())),
-            }
-        } else {
-            bail_fail(Fail::infra("post-resize: no partition table on target".to_string()))
+        // 表项重读：GPT 与 MBR 的分派、表自身 ss 的换算都在 gpt_policy::partition_bytes 一处
+        let new_bytes = match crate::gpt_policy::partition_bytes(&src, part) {
+            Ok((_, len)) => len,
+            // 分区号在 resize 入口已由锁下几何验证过一次，此时查不到即盘内容异常 →
+            // 升级为 Infra，原因原样带上（into_io_error 正是"此处已越界"的取消息方式）
+            Err(f) => bail_fail(Fail::infra(format!("post-resize: {}", crate::outcome::into_io_error(f)))),
         };
         let delta = new_bytes.saturating_sub(old_bytes);
         let r = if is_block {
@@ -656,17 +671,36 @@ fn resize_done(a: &Args, is_pv: bool, is_block: bool, old_bytes: u64) -> u8 {
         };
         match r {
             Ok(()) => EXIT_OK,
+            // LVM 链失败 = 后置条件未满足：经 Outcome 的 Pending 通道报告并换算 PARTIAL，
+            // 不在此手拼退出码（退出码映射的唯一处是 outcome）
             Err(e) => {
-                eprintln!("partition resized but LVM chain failed: {e}");
-                EXIT_PARTIAL
+                let o = crate::outcome::Outcome::applied_with(vec![crate::outcome::Pending::new(
+                    part,
+                    crate::outcome::PendingKind::Other("lvm chain (pvresize/lvextend)"),
+                    e,
+                    "pvresize <part>; lvextend -l +<ext> -r <lv> (see pvresize(8))",
+                )]);
+                o.report();
+                o.exit_code()
             }
         }
     }
     #[cfg(not(target_os = "linux"))]
     {
         let _ = (is_block, old_bytes);
-        eprintln!("partition resized but LVM chain NOT executed: pvresize/lvextend require Linux — run pvresize on the partition manually");
-        EXIT_PARTIAL
+        // 分区号守卫与 Linux 分支同款（规范见上）：unwrap_or(0) 会把"没拿到分区号"
+        // 报成指向盘内容的假话
+        let Some(part) = a.part else {
+            bail_fail(Fail::infra("internal error: resize finished without a partition number".to_string()))
+        };
+        let o = crate::outcome::Outcome::applied_with(vec![crate::outcome::Pending::new(
+            part,
+            crate::outcome::PendingKind::Other("lvm chain (pvresize/lvextend)"),
+            "pvresize/lvextend require Linux — run pvresize on the partition manually",
+            "",
+        )]);
+        o.report();
+        o.exit_code()
     }
 }
 

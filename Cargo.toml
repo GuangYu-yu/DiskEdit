@@ -6,7 +6,7 @@ description = "Edit disk images / whole disks as byte-addressable files: partiti
 license = "MIT"
 
 [dependencies]
-gptman = "3.1"
+gptman = { version = "3.1", default-features = false }
 crc = "3"
 serde_json = "1"
 

@@ -1,7 +1,7 @@
 //! 命令层共用的支撑件：进程退出出口、目标打开/journal、几何与对齐助手、GUID/JSON 编解码。
 //! 退出码常量的唯一定义在 outcome 模块，此处重导出给命令层，避免两套常量各自漂移
 
-pub(crate) use crate::outcome::{Fail, EXIT_OK, EXIT_PARTIAL, EXIT_REFUSED};
+pub(crate) use crate::outcome::{Fail, EXIT_OK, EXIT_REFUSED};
 
 use crate::args::Args;
 use crate::dev::FileSource;
@@ -29,13 +29,10 @@ pub(crate) struct Logger {
 }
 
 impl Logger {
-    pub(crate) fn open(src: &FileSource) -> Self {
-        // 只有块设备需要读表：GUID 是那种目标上最稳的日志名，镜像用路径即可
-        let guid = if src.is_block {
-            table::load_gpt(src).ok().flatten().map(|g| g.header.disk_guid)
-        } else {
-            None
-        };
+    /// `guid`：调用方从**已解析的几何**带来的 Disk GUID（日志命名不该反向依赖表内容——
+    /// 命令层手上总有那份几何，本函数不自己读一次表）。仅块设备使用：镜像按路径命名
+    pub(crate) fn open(src: &FileSource, guid: Option<[u8; 16]>) -> Self {
+        let guid = if src.is_block { guid } else { None };
         let path = src.identity.log_path(guid);
         let file = std::fs::OpenOptions::new().create(true).append(true).open(path).ok();
         if file.is_none() {
@@ -54,10 +51,11 @@ impl Logger {
     }
 }
 
-/// chunk 大小 + 持久日志的成对构造（搬移/拷贝类命令共用）
-pub(crate) fn chunk_logger(a: &Args, src: &FileSource) -> (u64, Logger) {
+/// chunk 大小 + 持久日志的成对构造（搬移/拷贝类命令共用）。
+/// `guid` 来自调用方已解析的几何（见 `Logger::open`）
+pub(crate) fn chunk_logger(a: &Args, src: &FileSource, guid: [u8; 16]) -> (u64, Logger) {
     let chunk = movepart::chunk_bytes(a.chunk_mib).unwrap_or_else(|e| bail_fail(Fail::refused(e.to_string())));
-    (chunk, Logger::open(src))
+    (chunk, Logger::open(src, Some(guid)))
 }
 
 /// 磁盘字节序 16 字节 → 标准文本 GUID（前 3 字段小端重排；内核 efi.h EFI_GUID 宏的逆变换）
@@ -115,31 +113,29 @@ pub(crate) fn open_target_for_write(a: &Args) -> Result<FileSource, crate::outco
     TransactionManager::begin(a)
 }
 
-/// 数据搬移类命令的打开（resize-part / move / copy）：目标上已有 checkpoint 时以显式续跑
+/// 数据搬移类命令的打开（resize-part / move）：目标上已有 checkpoint 时以显式续跑
 /// 进入同一事务，否则开新事务。返回是否按续跑进入。
 ///
-/// 判据是"有没有 checkpoint"，不细分是哪个分区——这些命令本就把 ckpt 交给
-/// `movepart::resize_part` / `copy_part` 比对，是否属于同一件事由领域层的恢复校验裁
-/// （不匹配即 `Divergent`）
+/// 接受态是"存在任意 checkpoint"（[`ResumeClaim::AnyCheckpoint`]），不细分是哪个分区
+/// ——这些命令本就把 ckpt 交给 `movepart::resize_part` / `copy_part` 比对，是否属于
+/// 同一件事由领域层的恢复校验裁（不匹配即 `Divergent`）
 pub(crate) fn open_target_for_data_move(
     a: &Args,
 ) -> Result<(FileSource, bool), crate::outcome::Fail> {
-    TransactionManager::begin_or_resume(a, |_src, active| {
-        Ok(active.iter().any(|r| matches!(r, RecoveryRecord::Checkpoint { .. })))
-    })
+    TransactionManager::begin_or_resume(a, ResumeClaim::AnyCheckpoint)
 }
 
 /// 搬移收尾类命令（resize / apply）的打开：判据是**锁下**的那份目标上还有没有自己
-/// 分区的未收尾搬移（`movepart::relocation_ownership`），不靠打开前的只读预判。
-/// 返回（目标，是否续跑）——resize 要拿后者决定 grow 分支。
+/// 分区的未收尾搬移（[`ResumeClaim::OwnRelocation`] → `movepart::relocation_ownership`），
+/// 不靠打开前的只读预判。返回（目标，是否续跑）——resize 要拿后者决定 grow 分支。
 ///
-/// 槽位被别的分区的作业占着时，判据直接返回拒绝理由：那种情形下本命令既不能当空槽
+/// 槽位被别的分区的作业占着时，领域层直接给出拒绝理由：那种情形下本命令既不能当空槽
 /// （会覆盖别人的现场），也不能按别人的 ckpt 续跑，通用的 busy 文案说不出这一点
 pub(crate) fn open_target_resumable(
     a: &Args,
     grow_part: u32,
 ) -> Result<(FileSource, bool), crate::outcome::Fail> {
-    TransactionManager::begin_or_resume(a, |src, _| movepart::relocation_ownership(src, grow_part))
+    TransactionManager::begin_or_resume(a, ResumeClaim::OwnRelocation(grow_part))
 }
 
 /// 只持有所有权、不建 journal 的写事务（undo / check / resizefs）
@@ -164,7 +160,8 @@ pub(crate) fn kernel_resync(src: &FileSource) -> bool {
     if !src.is_block {
         return true;
     }
-    crate::ioctl::blkrrpart(&src.file)
+    // 本层只取"过期与否"：stale 的用户文案是固定句（见 Outcome::report），不携带 errno
+    crate::ioctl::blkrrpart(&src.file).is_ok()
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -196,6 +193,12 @@ pub(crate) fn table_write_done(src: &FileSource, ok_msg: &str) -> u8 {
     o.exit_code()
 }
 
+/// 1 MiB 折算成表内扇区的唯一落点：不足一扇区时取 1，调用点共用，
+/// 不各自写 `(1024 * 1024 / ss).max(1)` 第二遍
+pub(crate) fn mib_in_sectors(ss: u64) -> u64 {
+    (1024 * 1024 / ss).max(1)
+}
+
 /// 对齐单位（LBA 所属表的扇区数）。mib = 1MiB 折算成表内扇区；cyl = 255 头 × 63 扇区 =
 /// 16065 扇区/柱面（BIOS INT 13h 虚拟几何，即 fdisk 的 "cylinders of 16065 * 512"）；
 /// none = 不对齐。`table_ss` 必须是 **LBA 所属表的**扇区大小：GPT 条目按表头记录的 ss
@@ -203,16 +206,20 @@ pub(crate) fn table_write_done(src: &FileSource, ok_msg: &str) -> u8 {
 pub(crate) fn align_unit(a: &Args, table_ss: u64) -> Option<u64> {
     match a.align.as_str() {
         "none" => None,
-        "mib" => Some((1024 * 1024 / table_ss).max(1)),
+        "mib" => Some(mib_in_sectors(table_ss)),
         "cyl" => Some(16065),
         other => bail_fail(Fail::refused(format!("invalid --align {other:?} (mib|cyl|none)"))),
     }
 }
 
-/// 对齐（选项名同 parted --align）：start 上取整、end 下取整；对齐后区间为空即拒绝
+/// 对齐（选项名同 parted --align）：start 上取整、end 下取整；对齐后区间为空即拒绝。
+/// 乘法全程 checked：--start 由 CLI 原始输入落 u64，s 逼近 u64::MAX 时
+/// `div_ceil * unit` 会静默回绕，把无法对齐的区间伪造成从 0 起的伪区间
+/// （与 aligned_gaps 的 s 侧同一防线）
 pub(crate) fn align_range(a: &Args, start: u64, end: u64, table_ss: u64) -> (u64, u64) {
     let Some(unit) = align_unit(a, table_ss) else { return (start, end) };
-    let s = start.div_ceil(unit) * unit;
+    let s = start.div_ceil(unit).checked_mul(unit)
+        .unwrap_or_else(|| bail_fail(Fail::refused(format!("start {start} overflows the LBA range when aligned to {}", a.align))));
     let e1 = end.saturating_add(1) / unit * unit;
     if e1 == 0 || s > e1 - 1 {
         bail_fail(Fail::refused(format!("range {start}..{end} is empty after {} alignment", a.align)));
@@ -223,58 +230,15 @@ pub(crate) fn align_range(a: &Args, start: u64, end: u64, table_ss: u64) -> (u64
     (s, e1 - 1)
 }
 
-/// 起点上取整（copy 的 --start 只有起点语义，长度继承源分区）
+/// 起点上取整（copy 的 --start 只有起点语义，长度继承源分区）。checked 同 align_range
 pub(crate) fn align_start(a: &Args, start: u64, table_ss: u64) -> u64 {
     let Some(unit) = align_unit(a, table_ss) else { return start };
-    let s = start.div_ceil(unit) * unit;
+    let s = start.div_ceil(unit).checked_mul(unit)
+        .unwrap_or_else(|| bail_fail(Fail::refused(format!("start {start} overflows the LBA range when aligned to {}", a.align))));
     if s != start {
         eprintln!("aligned to {}: {start} -> {s}", a.align);
     }
     s
-}
-
-/// 目标分区的**字节区间**（`:N` 命中核验，off-by-one 防线）。返回 (起始字节, 长度字节)。
-/// 返回字节而非 LBA 是刻意的：LBA 的单位取决于它来自哪张表——GPT 条目以**表自身的** ss 计
-/// （4Kn 镜像未加 --sector-size 时 `g.ss != src.sector_size`，按容器 ss 换算会整体错位），
-/// MBR 条目以容器 ss 计。换算在读到表的一处完成，下游（fsid::identify 按字节区间工作）不必知道
-/// 单位是谁的
-/// 返回 Fail 而不是 (码, 文案)：前缀与码必须同源——否则调用点会各自拼 "refused: " 前缀，
-/// 碰上 30 就自相矛盾（打出 "refused: parse failed: ..." 却退出 30）。
-/// 按标签分派：GPT 与 MBR 的条目形状不同（MBR 只有主分区槽位 1..=4）
-pub(crate) fn entry_byte_range(src: &FileSource, part: u32) -> Result<(u64, u64), crate::outcome::Fail> {
-    // 无表 = 请求与目标现状不匹配(10)；表在但结构非法 = 盘内容故障(30)。
-    // 与 resize/info 的 parse failed / no partition table 同一判据
-    match table::load_gpt(src) {
-        Err(e) => Err(crate::outcome::Fail::infra(format!("parse failed: {e}"))),
-        Ok(Some(g)) => {
-            // part 是外部输入，直接索引 entries[(n-1)]：part==0 的 checked_sub 让
-            // "0 号分区"也落进下面的 refused，而不是先在 usize 上回绕成 usize::MAX
-            let e = (part as usize).checked_sub(1)
-                .and_then(|i| g.entries.get(i))
-                .ok_or_else(|| crate::outcome::Fail::refused(format!("partition {part} not found")))?;
-            if e.ending_lba == 0 {
-                return Err(crate::outcome::Fail::refused(format!("partition {part} is empty")));
-            }
-            Ok((e.starting_lba * g.ss, (e.ending_lba - e.starting_lba + 1) * g.ss))
-        }
-        // 无 GPT → 按 MBR 解析。不这么做的话真 MBR 盘在这里被一律当成"无表"，
-        // mkfs / set label|uuid 在 MBR 上完全不可用
-        Ok(None) => match table::parse_mbr(src).map_err(|e| crate::outcome::Fail::infra(format!("parse failed: {e}")))? {
-            None => Err(crate::outcome::Fail::refused("no partition table on target")),
-            Some(mbr) => {
-                let p = mbr.iter().find(|p| p.num == part).ok_or_else(|| {
-                    crate::outcome::Fail::refused(format!("partition {part} not found (MBR covers primary slots 1..=4)"))
-                })?;
-                // 扩展容器是逻辑分区的壳，不是可承载文件系统的分区
-                if p.is_container {
-                    return Err(crate::outcome::Fail::refused(format!(
-                        "partition {part} is an extended container (logical partitions are out of scope)"
-                    )));
-                }
-                Ok((p.start_lba as u64 * src.sector_size, p.size_lba as u64 * src.sector_size))
-            }
-        },
-    }
 }
 
 /// 只读命令的打开（info / plan / resize 的只读阶段）：不取所有权
@@ -284,7 +248,9 @@ pub(crate) fn open_target_ro(a: &Args) -> Result<FileSource, crate::outcome::Fai
 
 /// 恢复现场的枚举口径与"未收尾就拒绝"的闸口都在 `transaction`（见 `TransactionManager`）。
 /// 这里只转发名字，命令层不必知道它是怎么判的
-pub(crate) use crate::transaction::{active_recovery_records, legacy_disk_guid, RecoveryRecord};
+pub(crate) use crate::transaction::{
+    active_recovery_records, legacy_disk_guid, RecoveryRecord, ResumeClaim,
+};
 
 /// 闸口：目标上还留着未收尾的现场 ⇒ 拒绝这次不写 journal 的写盘
 pub(crate) fn refuse_if_pending_recovery(src: &FileSource, what: &str) -> Result<(), Fail> {
@@ -368,7 +334,7 @@ pub(crate) fn src_from(tag: &str, data: &[u8]) -> FileSource {
     std::fs::write(&tmp, data).unwrap();
     let f = std::fs::OpenOptions::new().read(true).write(true).open(&tmp).unwrap();
     FileSource {
-        identity: dev::TargetIdentity::resolve(&tmp, false, data.len() as u64),
+        identity: dev::TargetIdentity::resolve_image(&tmp),
         file: f,
         path: tmp,
         sector_size: 512,
@@ -394,21 +360,6 @@ pub(crate) fn base_args() -> Args {
 mod tests {
     use super::*;
     use crate::table;
-
-    /// 分区 LBA 的单位是**表自身**的 ss，不是容器 ss：4Kn 表放在 512B 口径的容器里
-    /// （4Kn 镜像未加 --sector-size，或经 512e 转接写入的 4Kn 盘）时，按容器 ss 换算会整体差
-    /// 8 倍，于是 info/resize 认到的文件系统与 mkfs/check 认到的区间不是同一段字节。
-    /// entry_byte_range 是这处单位换算的唯一出口，故在此守住
-    #[test]
-    fn part_byte_range_uses_table_sector_size() {
-        let data = vec![0u8; 8 * 1024 * 1024];
-        let mut src = src_from("ss4k", &data); // 容器 ss = 512
-        table::create_gpt(&mut src, 4096, None).unwrap();
-        table::add_entry_at(&mut src, 256, 511, "p1", table::LINUX_FS_TYPE_GUID, [0x22; 16]).unwrap();
-        // 表以 4096B 逻辑块自述（LBA1 落在 offset 4096），load_gpt 的候选 ss 会选出 4096
-        assert_eq!(table::load_gpt(&src).unwrap().unwrap().ss, 4096);
-        assert_eq!(entry_byte_range(&src, 1).unwrap(), (256 * 4096, 256 * 4096));
-    }
 
     fn raw_gpt(last_usable: u64, ents: &[(u64, u64)]) -> table::RawGpt {
         table::RawGpt {

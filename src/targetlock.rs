@@ -77,7 +77,7 @@ mod tests {
     use std::path::PathBuf;
 
     fn identity_for(path: &std::path::Path) -> TargetIdentity {
-        TargetIdentity::resolve(path, false, 0)
+        TargetIdentity::resolve_image(path)
     }
 
     fn temp_image(tag: &str) -> PathBuf {
@@ -125,21 +125,26 @@ mod tests {
             std::path::Path::new("/tmp/diskedit_lk_path.img.diskedit.lock")
         );
 
-        let bd = TargetIdentity::resolve(std::path::Path::new("/dev/nonexistent"), true, 1024);
-        let lock = bd.lock_path();
-        assert_eq!(
-            lock.parent(),
-            Some(crate::dev::state_dir().as_path()),
-            "a block device's lock must live in state_dir next to its journal"
-        );
-        assert!(
-            lock.file_name().is_some_and(|n| n.to_string_lossy().ends_with(".diskedit.lock")),
-            "the lock name must be recognisable: {}",
-            lock.display()
-        );
-        // 同一 state_dir 内，两个**不同**设备的锁名必须不同——这才是"不碰撞"的判据
-        // （与镜像路径比较是恒真的：两者父目录本就不同，证明不了任何事）
-        let other = TargetIdentity::resolve(std::path::Path::new("/dev/other"), true, 1024);
-        assert_ne!(lock, other.lock_path(), "two devices must not share one lock name");
+        // 块设备侧命名断言只在非 Linux 跑：Linux 上伪造设备名的拓扑解析不出（fail-closed），
+        // 身份构造会拒绝；Linux 侧的对应证据是"拒绝且带设备名"（dev 模块）
+        #[cfg(not(target_os = "linux"))]
+        {
+            let bd = TargetIdentity::resolve_block(std::path::Path::new("/dev/nonexistent")).unwrap();
+            let lock = bd.lock_path();
+            assert_eq!(
+                lock.parent(),
+                Some(crate::dev::state_dir().as_path()),
+                "a block device's lock must live in state_dir next to its journal"
+            );
+            assert!(
+                lock.file_name().is_some_and(|n| n.to_string_lossy().ends_with(".diskedit.lock")),
+                "the lock name must be recognisable: {}",
+                lock.display()
+            );
+            // 同一 state_dir 内，两个**不同**设备的锁名必须不同——这才是"不碰撞"的判据
+            // （与镜像路径比较是恒真的：两者父目录本就不同，证明不了任何事）
+            let other = TargetIdentity::resolve_block(std::path::Path::new("/dev/other")).unwrap();
+            assert_ne!(lock, other.lock_path(), "two devices must not share one lock name");
+        }
     }
 }

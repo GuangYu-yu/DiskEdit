@@ -1,4 +1,15 @@
 //! 输入源：镜像文件与块设备统一为按偏移读写的字节存储。
+//!
+//! 本模块实际承载五件事（模块文档即职责表，改职责先改这里）：
+//! 1. **输入源**（`FileSource`）：按偏移的 read/write/sync，镜像与块设备同一接口；
+//! 2. **身份落点**（`TargetIdentity`）：设备层拓扑 → journal / checkpoint / log / lock
+//!    的唯一派生处；
+//! 3. **Journal 格式**（`Journal`）：undo 记录的编解码与生命周期（惰性创建、原子性）；
+//! 4. **Mutation 语义**（`Mutation` / `RecoveryData`）：undo 的可回滚性判据与屏障；
+//! 5. **losetup 用户提示**（`part_dev_hint`）：镜像上定位分区的外部工具提示。
+//!
+//! `TargetIdentity` 经两个具名构造取得：`resolve_image(path)` 恒成功；
+//! `resolve_block(path)` 解析不出设备拓扑即失败——块设备身份拒绝任何退化路径。
 
 use std::fs::{File, OpenOptions};
 use std::io;
@@ -80,24 +91,46 @@ enum TargetKind {
 const DEVICE_ID_ATTRS: &[&str] =
     &["dm/uuid", "dm/name", "md/uuid", "loop/backing_file", "wwid", "device/wwid", "device/serial"];
 
-/// sysfs 属性 → 去行尾换行的值；不存在或为空都返回 None
+/// sysfs 属性 → 去行尾换行的值。三态必须可分：**不存在**（ENOENT）⇒ `Ok(None)`，
+/// 读失败（I/O、权限）⇒ `Err`，存在但值为空 ⇒ `Ok(Some(""))`。
+/// 把后两者压进 None（`.ok()`），`partition` 判据会把一个**读不出来**的分区节点
+/// 当成整设备——分区身份在那一刻静默降级，正是 fail-closed 要排除的退化
 #[cfg(target_os = "linux")]
-fn read_sysfs_attr(path: &Path) -> Option<String> {
-    let v = std::fs::read_to_string(path).ok()?;
-    let v = v.trim();
-    (!v.is_empty()).then(|| v.to_string())
+fn read_sysfs_attr(path: &Path) -> io::Result<Option<String>> {
+    let v = match std::fs::read_to_string(path) {
+        Ok(v) => v,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    Ok(Some(v.trim().to_string()))
 }
 
-/// 节点自己声明的设备层身份：按层探测，全部读不到则 None
+/// 节点自己声明的设备层身份：按层探测（属性不存在或为空 → 试下一个），
+/// 全部不存在则 `Ok(None)`；读失败原样上抛（见 [`read_sysfs_attr`]）
 #[cfg(target_os = "linux")]
-fn node_device_id(node: &Path) -> Option<String> {
-    DEVICE_ID_ATTRS.iter().find_map(|attr| read_sysfs_attr(&node.join(attr)))
+fn node_device_id(node: &Path) -> io::Result<Option<String>> {
+    for attr in DEVICE_ID_ATTRS {
+        if let Some(v) = read_sysfs_attr(&node.join(attr))?
+            && !v.is_empty()
+        {
+            return Ok(Some(v));
+        }
+    }
+    Ok(None)
 }
 
-/// 设备容量。sysfs 的 `size` 恒以 512 字节扇区计，与设备逻辑扇区大小无关
+/// 设备容量。sysfs 的 `size` 恒以 512 字节扇区计，与设备逻辑扇区大小无关。
+/// 块设备节点的 `size` 恒存在：不存在 / 不可解析 / 读失败都是异常 ⇒ `Err`——
+/// 容量进过身份键，读失败静默取 0 会让下一次成功读取把身份改名
 #[cfg(target_os = "linux")]
-fn sysfs_capacity(node: &Path) -> Option<u64> {
-    read_sysfs_attr(&node.join("size"))?.parse::<u64>().ok()?.checked_mul(512)
+fn sysfs_capacity(node: &Path) -> io::Result<u64> {
+    let v = read_sysfs_attr(&node.join("size"))?
+        .ok_or_else(|| io::Error::other("sysfs size attribute is missing"))?;
+    let sectors =
+        v.parse::<u64>().map_err(|e| io::Error::other(format!("unparseable sysfs size {v:?}: {e}")))?;
+    sectors
+        .checked_mul(512)
+        .ok_or_else(|| io::Error::other(format!("sysfs size {v:?} overflows u64 bytes")))
 }
 
 /// 设备层身份的**两个投影**，共用同一次 sysfs 解析：
@@ -112,31 +145,62 @@ fn sysfs_capacity(node: &Path) -> Option<u64> {
 /// `dm-0p1` 这类命名，也不自己推算分区号。容量因此不参与分区身份：分区扩容只改变自己
 /// 的容量，父设备容量不受影响，撤销窗口不会在操作中途改名
 ///
-/// 解析不出来时两个投影都退到"设备自身（devname + 容量）"：宁可粗一档，也不能让同一个
-/// 设备在两个视角下得到两个互不相干的名字
+/// 拓扑解析不出来时**拒绝**（fail-closed，见 [`block_keys`]）：journal / checkpoint /
+/// lock 必须落在同一个序列化域，而"调用方 devname-容量"的退化身份会让
+/// `/dev/sdb` 与 `/dev/sdb1` 得到两把锁、两个互不相干的现场命名空间
 #[cfg(target_os = "linux")]
-fn block_keys(path: &Path, size: u64) -> (String, String) {
+fn block_keys(path: &Path) -> io::Result<(String, String)> {
     use std::os::unix::fs::MetadataExt;
-    let fallback = || format!("{}-{size}", file_name_lossy(path));
-    let Ok(meta) = std::fs::metadata(path) else { return (fallback(), fallback()) };
-    let dev = format!("/sys/dev/block/{}:{}", libc::major(meta.rdev()), libc::minor(meta.rdev()));
-    let Ok(node) = std::fs::canonicalize(dev) else { return (fallback(), fallback()) };
-    // `partition` 是"这是个分区"的判据；没有它的节点自己就是整设备（含 kpartx 造出的
-    // dm-N 分区，它们是独立的 DM 设备，自带 dm/uuid），此时两个投影重合
-    let Some(n) = read_sysfs_attr(&node.join("partition")).and_then(|v| v.parse::<u32>().ok()) else {
-        let alone = node_device_id(&node).unwrap_or_else(fallback);
-        return (alone.clone(), alone);
+    // fail-closed：sysfs 拓扑解析不出来（节点不存在 / maj:min 无对应 sysfs 项）即拒绝，
+    // 绝不退到"调用方 devname-容量"——那个退化会让 /dev/sdb 与 /dev/sdb1 得到两把锁，
+    // journal / checkpoint / lock 落进两个序列化域。错误信息带设备名，指向该查的东西
+    let deny = |why: String| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            format!(
+                "cannot resolve block device topology for {}: {why} — refusing rather than \
+                 degrading to a devname-based identity (journal, checkpoint and lock must share \
+                 one serialization domain)",
+                path.display()
+            ),
+        )
     };
-    let Some(parent) = node.parent() else { return (fallback(), fallback()) };
-    let disk = node_device_id(parent)
-        .unwrap_or_else(|| format!("{}-{}", file_name_lossy(parent), sysfs_capacity(parent).unwrap_or(0)));
-    (format!("{disk}-p{n}"), disk)
-}
-
-#[cfg(not(target_os = "linux"))]
-fn block_keys(path: &Path, size: u64) -> (String, String) {
-    let k = format!("{}-{size}", file_name_lossy(path));
-    (k.clone(), k)
+    let meta = std::fs::metadata(path).map_err(|e| deny(e.to_string()))?;
+    let sysdev = format!("/sys/dev/block/{}:{}", libc::major(meta.rdev()), libc::minor(meta.rdev()));
+    let node = std::fs::canonicalize(&sysdev).map_err(|e| deny(format!("no sysfs node at {sysdev} ({e})")))?;
+    // 设备层身份：有 device-id 用它；没有（多数普通盘）退到 **sysfs 节点自身**的名字
+    // 与容量——那是拓扑事实，与调用方给的路径无关。两者都读不出来则拒绝，不退化成
+    // "名字-0"：容量进过身份键，写死 0 会在下一次成功读取时把身份改名（换序列化域）
+    let key_of = |n: &Path| -> io::Result<String> {
+        let id = node_device_id(n)
+            .map_err(|e| deny(format!("reading device-id attribute of {}: {e}", n.display())))?;
+        match id {
+            Some(id) => Ok(id),
+            None => {
+                let cap = sysfs_capacity(n)
+                    .map_err(|e| deny(format!("reading {}: {e}", n.join("size").display())))?;
+                Ok(format!("{}-{cap}", file_name_lossy(n)))
+            }
+        }
+    };
+    // `partition` 是"这是个分区"的判据；**不存在**的节点自己就是整设备（含 kpartx 造出的
+    // dm-N 分区，它们是独立的 DM 设备，自带 dm/uuid），此时两个投影重合。
+    // 读失败上抛：把"读不出来"折进"不存在"，分区身份会在这一刻静默降级成整设备身份；
+    // 值存在而不可解析（含空值）同理——分区属性不存在解析不出数字的情形，拒绝
+    let part = read_sysfs_attr(&node.join("partition"))
+        .map_err(|e| deny(format!("reading {}: {e}", node.join("partition").display())))?;
+    let Some(part) = part else {
+        let alone = key_of(&node)?;
+        return Ok((alone.clone(), alone));
+    };
+    let n = part
+        .parse::<u32>()
+        .map_err(|e| deny(format!("partition attribute is {part:?}, not a number ({e})")))?;
+    let Some(parent) = node.parent() else {
+        return Err(deny("partition node without a parent device".into()));
+    };
+    let disk = key_of(parent)?;
+    Ok((format!("{disk}-p{n}"), disk))
 }
 
 fn file_name_lossy(path: &Path) -> String {
@@ -159,6 +223,7 @@ fn guid_hex(g: &[u8; 16]) -> String {
 /// 身份键 → 文件名安全的 token：保留 ASCII 字母数字与 `.` `-` `_`，其余（含路径分隔符）
 /// 换成 `_` 并截断到 32 字符，末尾附值的 CRC32——身份可能是 loop 的 backing 路径，
 /// 原样落盘会带分隔符、可能超长，而截断与替换会令两个不同身份撞同一个名字
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))] // 块设备身份链只在 Linux 的生产路径上使用
 fn key_token(value: &str) -> String {
     let mut token: String = value
         .chars()
@@ -180,12 +245,35 @@ impl TargetIdentity {
         }
     }
 
-    /// 打开目标时解析一次。块设备身份取自设备层；镜像身份就是用户给的路径
-    pub(crate) fn resolve(path: &Path, is_block: bool, size: u64) -> Self {
-        if !is_block {
-            return Self::image(path);
-        }
-        let (self_key, disk_key) = block_keys(path, size);
+    /// 镜像身份：用户给的路径即身份（具名构造，`is_block` 布尔不出现在任何签名里）
+    pub(crate) fn resolve_image(path: &Path) -> Self {
+        Self::image(path)
+    }
+
+    /// 块设备身份：打开目标时解析一次，设备层拓扑取自 sysfs。
+    /// **fail-closed**：拓扑解析不出来即 `Err`（错误信息带设备名），调用方拒绝——
+    /// 绝不退到"devname-容量"的调用方身份，journal / checkpoint / lock 三者的落点
+    /// 必须落在同一个序列化域。
+    ///
+    /// 不接收容量：容量不参与身份（分区扩容会改变自己的容量，父设备容量不受影响，
+    /// 撤销窗口不该在操作中途改名）
+    #[cfg(target_os = "linux")]
+    pub(crate) fn resolve_block(path: &Path) -> Result<Self, String> {
+        let (self_key, disk_key) = block_keys(path).map_err(|e| e.to_string())?;
+        Ok(Self::from_block_keys(path, self_key, disk_key))
+    }
+
+    /// 非 Linux 平台没有 sysfs，块设备判定恒 false，本入口不会到达；保留防御性实现
+    /// 使两侧签名一致
+    #[cfg(not(target_os = "linux"))]
+    #[allow(dead_code)] // 非 Linux 没有块设备的生产打开路径，此处只服务命名与锁落点断言
+    pub(crate) fn resolve_block(path: &Path) -> Result<Self, String> {
+        let k = file_name_lossy(path);
+        Ok(Self::from_block_keys(path, k.clone(), k))
+    }
+
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))] // 同上：非 Linux 只经 resolve_block 的测试到达
+    fn from_block_keys(path: &Path, self_key: String, disk_key: String) -> Self {
         let stable = key_token(&self_key);
         let dir = state_dir();
         Self {
@@ -215,10 +303,11 @@ impl TargetIdentity {
     pub(crate) fn resolve_path(path: &Path) -> Option<Self> {
         #[cfg(target_os = "linux")]
         if std::fs::metadata(path).map(|m| m.file_type().is_block_device()).unwrap_or(false) {
-            let size = ioctl::blkgetsize64(&File::open(path).ok()?).ok()?;
-            return Some(Self::resolve(path, true, size));
+            // 拓扑解析不出来（fail-closed）⇒ None：调用方告警并留下 journal——
+            // 宁可漏删，也不能按退化身份删错别人的
+            return Self::resolve_block(path).ok();
         }
-        Some(Self::resolve(path, false, 0))
+        Some(Self::resolve_image(path))
     }
 
     pub(crate) fn journal_path(&self) -> &Path {
@@ -312,31 +401,53 @@ impl Drop for ReadFaultGuard {
 impl FileSource {
     /// `sector_size_override`：镜像默认 512（镜像不携带扇区信息），块设备经 BLKSSZGET 查询并忽略覆盖值。
     pub fn open(path: &Path, sector_size_override: Option<u64>) -> io::Result<Self> {
-        let meta = std::fs::metadata(path)?;
         // 块设备判定：块设备文件（其 metadata().len() 恒 0，容量需 ioctl 取）
         #[cfg(target_os = "linux")]
-        if meta.file_type().is_block_device() {
-            // 读写 + O_EXCL（man open(2)）：设备被 claim 时内核拒绝打开，
-            // 分区被挂载或占用会连同整盘一起被 claim
-            let file = OpenOptions::new()
-                .read(true)
-                .write(true)
-                .custom_flags(libc::O_EXCL)
-                .open(path)?;
-            let size = ioctl::blkgetsize64(&file)?;
-            let sector_size = ioctl::blksszget(&file)? as u64;
-            return Ok(FileSource {
-                identity: TargetIdentity::resolve(path, true, size),
-                file,
-                path: path.to_path_buf(),
-                sector_size,
-                size,
-                is_block: true,
-                journal: None,
-                ownership: None,
-            });
+        {
+            let meta = std::fs::metadata(path)?;
+            if meta.file_type().is_block_device() {
+                // 读写 + O_EXCL（man open(2)）：设备被 claim 时内核拒绝打开，
+                // 分区被挂载或占用会连同整盘一起被 claim
+                let file = OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .custom_flags(libc::O_EXCL)
+                    .open(path)?;
+                let size = ioctl::blkgetsize64(&file)?;
+                let sector_size = ioctl::blksszget(&file)? as u64;
+                // 块设备身份解析失败（fail-closed）⇒ 打开失败：错误信息带设备名
+                let identity = TargetIdentity::resolve_block(path).map_err(io::Error::other)?;
+                return Ok(FileSource {
+                    identity,
+                    file,
+                    path: path.to_path_buf(),
+                    sector_size,
+                    size,
+                    is_block: true,
+                    journal: None,
+                    ownership: None,
+                });
+            }
         }
-        let file = OpenOptions::new().read(true).write(true).open(path)?;
+        Self::open_image(path, sector_size_override, true)
+    }
+
+    /// 镜像的只读打开：info/plan/resize 的只读阶段经此打开——调用面已核清
+    /// 无一处经该 FileSource 写盘，真只读让只读文件、只读介质或被他进程独占的镜像
+    /// 同样可用，且"只读命令不申请写权限"与块设备侧同一口径
+    pub(crate) fn open_read_only_image(path: &Path, sector_size_override: Option<u64>) -> io::Result<Self> {
+        Self::open_image(path, sector_size_override, false)
+    }
+
+    /// 镜像打开的唯一实现：可写性是显式参数，读写与只读两个入口不各自拼一份
+    fn open_image(path: &Path, sector_size_override: Option<u64>, writable: bool) -> io::Result<Self> {
+        let meta = std::fs::metadata(path)?;
+        let mut opts = OpenOptions::new();
+        opts.read(true);
+        if writable {
+            opts.write(true);
+        }
+        let file = opts.open(path)?;
         let size = meta.len();
         let sector_size = sector_size_override.unwrap_or(512);
         // 镜像扇区大小须为 2 的幂且落在 512..=65536；这是本工具的自定约束，非规范要求
@@ -347,7 +458,7 @@ impl FileSource {
             ));
         }
         Ok(FileSource {
-            identity: TargetIdentity::resolve(path, false, size),
+            identity: TargetIdentity::resolve_image(path),
             file,
             path: path.to_path_buf(),
             sector_size,
@@ -358,14 +469,15 @@ impl FileSource {
         })
     }
 
-    /// 只读打开块设备（在线路径识别 FS 用：读写 + O_EXCL 在设备被 claim 时会失败）
+    /// 只读打开块设备（在线路径识别 FS 用：读写 + O_EXCL 在设备被 claim 时会失败）。
+    /// 身份解析失败（fail-closed）⇒ 打开失败
     #[cfg(target_os = "linux")]
     pub(crate) fn open_read_only(path: &Path) -> io::Result<Self> {
         let file = OpenOptions::new().read(true).open(path)?;
         let size = ioctl::blkgetsize64(&file)?;
         let sector_size = ioctl::blksszget(&file)? as u64;
         Ok(FileSource {
-            identity: TargetIdentity::resolve(path, true, size),
+            identity: TargetIdentity::resolve_block(path).map_err(io::Error::other)?,
             file,
             path: path.to_path_buf(),
             sector_size,
@@ -383,7 +495,7 @@ impl FileSource {
         let file = File::open(path)?;
         let size = file.metadata()?.len();
         Ok(FileSource {
-            identity: TargetIdentity::resolve(path, false, size),
+            identity: TargetIdentity::resolve_image(path),
             file,
             path: path.to_path_buf(),
             sector_size: 512,
@@ -503,14 +615,20 @@ pub fn parse_target(s: &str) -> Result<(String, Option<u32>), &'static str> {
     }
 }
 
+/// 块设备分区节点命名（util-linux 与内核通用惯例）：盘名以数字结尾时分区号加 "p"。
+/// `part_dev_hint`（镜像 losetup 提示）与在线/离线 LVM 链的分区节点路径共用此规则。
+/// `base` 是**盘名**（如 /dev/sda、nvme0n1），不含分区号
+pub(crate) fn part_node_name(base: &str, part: u32) -> String {
+    let sep = if base.chars().last().is_some_and(|c| c.is_ascii_digit()) { "p" } else { "" };
+    format!("{base}{sep}{part}")
+}
+
 /// 补救提示里的设备标识：块设备给出可直接粘贴的分区节点（/dev/sdb→/dev/sdb1、
-/// /dev/nvme0n1→/dev/nvme0n1p1，末尾数字需 p 分隔）；镜像文件没有分区节点，
-/// 给出字节偏移供 `losetup -o` 使用
+/// /dev/nvme0n1→/dev/nvme0n1p1，末尾数字需 p 分隔，命名规则见 `part_node_name`）；
+/// 镜像文件没有分区节点，给出字节偏移供 `losetup -o` 使用
 pub(crate) fn part_dev_hint(src: &FileSource, part: u32, offset_bytes: u64) -> String {
     if src.is_block {
-        let base = src.path.to_string_lossy();
-        let sep = if base.chars().last().is_some_and(|c| c.is_ascii_digit()) { "p" } else { "" };
-        format!("{base}{sep}{part}")
+        part_node_name(&src.path.to_string_lossy(), part)
     } else {
         format!("<part {part} of {} at offset {offset_bytes} — e.g. losetup -o {offset_bytes}>", src.path.display())
     }
@@ -1010,36 +1128,73 @@ mod tests {
     }
 
     /// 日志落点也由身份推导：镜像与目标同层级，块设备落在 state_dir 下且以 Disk GUID /
-    /// devname 命名。模块自行拼 state_dir() 会让落点随调用方漂移
+    /// devname 命名。模块自行拼 state_dir() 会让落点随调用方漂移。
+    /// 块设备侧的推导断言只在非 Linux 跑：Linux 上 /dev/sdz 的拓扑解析不出（fail-closed），
+    /// 身份构造本身会拒绝，不存在"退化身份"可用来测命名
     #[test]
     fn log_path_comes_from_the_identity() {
         let img = PathBuf::from("/tmp/disk.img");
-        let id = TargetIdentity::resolve(&img, false, 0);
+        let id = TargetIdentity::resolve_image(&img);
         assert_eq!(id.log_path(None), PathBuf::from("/tmp/disk.img.diskedit.log"));
 
-        let dev = PathBuf::from("/dev/sdz");
-        let id = TargetIdentity::resolve(&dev, true, 4096);
-        let guid = [0xABu8; 16];
-        assert_eq!(id.log_path(Some(guid)), state_dir().join(format!("{}.diskedit.log", guid_hex(&guid))));
-        // 读不到表时退回 devname：MBR / 裸盘上没有更稳的标识
-        assert_eq!(id.log_path(None), state_dir().join("sdz.diskedit.log"));
+        #[cfg(not(target_os = "linux"))]
+        {
+            let dev = PathBuf::from("/dev/sdz");
+            let id = TargetIdentity::resolve_block(&dev).unwrap();
+            let guid = [0xABu8; 16];
+            assert_eq!(id.log_path(Some(guid)), state_dir().join(format!("{}.diskedit.log", guid_hex(&guid))));
+            // 读不到表时退回 devname：MBR / 裸盘上没有更稳的标识
+            assert_eq!(id.log_path(None), state_dir().join("sdz.diskedit.log"));
+        }
     }
 
-    /// 设备层身份的两个投影。解析不出来时二者必须重合——宁可粗一档（按 devname 认），
-    /// 也不能让同一个设备在"目标自身"与"所在整盘"两个视角下得到互不相干的名字，
-    /// 否则锁与现场会分别落到两套命名空间里
+    /// fail-closed：sysfs 拓扑解析不出来 ⇒ 拒绝（错误信息带设备名），不退到
+    /// "devname-容量"的调用方身份——那个退化会让 /dev/sdb 与 /dev/sdb1 得到两把锁。
+    /// 非 Linux 平台没有 sysfs 概念，`resolve_block` 本就不走该判据
+    #[cfg(target_os = "linux")]
     #[test]
-    fn block_keys_fall_back_to_a_single_name() {
-        let (own, disk) = block_keys(Path::new("/dev/diskedit-nonexistent"), 4096);
-        assert_eq!(own, disk, "an unparsable node must not yield two identities");
-        assert!(own.contains("diskedit-nonexistent") && own.contains("4096"), "{own}");
+    fn block_identity_refuses_unresolvable_topology() {
+        // 普通文件被当作 is_block 传入：rdev=0 ⇒ /sys/dev/block/0:0 不存在 ⇒ 拒绝
+        let fake = std::env::temp_dir().join(format!("diskedit_notablock_{}", std::process::id()));
+        std::fs::write(&fake, b"x").unwrap();
+        let e = TargetIdentity::resolve_block(&fake).expect_err("an unresolvable topology must be refused");
+        assert!(e.contains("fake") || e.contains("diskedit_notablock"), "the error must name the device: {e}");
+        assert!(e.contains("topology"), "{e}");
+        let _ = std::fs::remove_file(&fake);
+    }
+
+    /// [`read_sysfs_attr`] 的三态必须可分（上条测试的细粒度锁）："不存在 ⇒ None"
+    /// 是整设备的正常路径，"读失败 ⇒ Err" 则不得降级——两者曾被 `.ok()` 压成同一个
+    /// None，分区身份会在读不出来的那一刻静默变成整设备身份
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn sysfs_attr_distinguishes_missing_from_read_failure() {
+        assert_eq!(
+            read_sysfs_attr(Path::new("/nonexistent/diskedit/attr")).unwrap(),
+            None,
+            "不存在 ⇒ None"
+        );
+        let tmp = std::env::temp_dir().join(format!("diskedit_attr_{}", std::process::id()));
+        std::fs::write(&tmp, "7\n").unwrap();
+        assert_eq!(read_sysfs_attr(&tmp).unwrap().as_deref(), Some("7"));
+        // 存在但值空：与"不存在"分开（空的 partition 属性是分区侧的异常，不该走整设备分支）
+        std::fs::write(&tmp, " \n").unwrap();
+        assert_eq!(read_sysfs_attr(&tmp).unwrap().as_deref(), Some(""));
+        let _ = std::fs::remove_file(&tmp);
+        // 读目录：失败且 errno 非 ENOENT ⇒ 必须上抛，不得折进"不存在"
+        let e = read_sysfs_attr(&std::env::temp_dir())
+            .expect_err("reading a directory must not count as 'attribute missing'");
+        assert_ne!(e.kind(), io::ErrorKind::NotFound, "{e}");
     }
 
     /// 锁按**盘**派生、现场按**目标**派生：两者在块设备上是同一个函数算出来的两个投影，
-    /// 因此锁落点必然落在 state_dir 下、与 journal 同目录（不引入第二套路径规则）
+    /// 因此锁落点必然落在 state_dir 下、与 journal 同目录（不引入第二套路径规则）。
+    /// 非 Linux 跑退化身份（无 sysfs 判据）；Linux 上身份只能来自真实拓扑
+    /// （见 `block_identity_refuses_unresolvable_topology`）
+    #[cfg(not(target_os = "linux"))]
     #[test]
     fn block_lock_and_journal_share_one_directory() {
-        let id = TargetIdentity::resolve(Path::new("/dev/diskedit-nonexistent"), true, 4096);
+        let id = TargetIdentity::resolve_block(Path::new("/dev/diskedit-nonexistent")).unwrap();
         assert_eq!(id.lock_path().parent(), Some(state_dir().as_path()));
         assert_eq!(id.journal_path().parent(), Some(state_dir().as_path()));
         assert!(id.lock_path().to_string_lossy().ends_with(".diskedit.lock"));

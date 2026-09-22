@@ -77,6 +77,33 @@ pub struct Plan {
     pub repair: RepairAction,
 }
 
+/// movable 集合与两条硬拒绝的唯一构造处：目标之后所有已定义条目（按起点升序）。
+/// 端点倒挂（盘内容故障）与 LUKS/LVM PV（不可搬移）在此一并给出——
+/// 两条规划路径共用，拒绝理由不会漂移
+fn blockers_after(
+    g: &ValidatedGeometry,
+    target_end: u64,
+) -> Result<Vec<(u32, &gptman::GPTPartitionEntry)>, Fail> {
+    let mut movable: Vec<(u32, &gptman::GPTPartitionEntry)> = g
+        .entries
+        .iter()
+        .enumerate()
+        .filter(|(_, e)| e.ending_lba != 0 && e.starting_lba > target_end)
+        .map(|(i, e)| ((i + 1) as u32, e))
+        .collect();
+    movable.sort_by_key(|(_, e)| e.starting_lba);
+    for (num, e) in &movable {
+        // 条目端点倒挂属盘内容故障（解析层已拦，这里是纵深防守）
+        if e.ending_lba < e.starting_lba {
+            return Err(Fail::infra(format!("partition {num} has ending LBA below starting LBA (corrupted table)")));
+        }
+        if FORBIDDEN_TYPE_GUIDS.contains(&e.partition_type_guid) {
+            return Err(Fail::refused(format!("partition {num} is LUKS/LVM PV — relocation refused")));
+        }
+    }
+    Ok(movable)
+}
+
 /// plan 生成：只解析 + 验证 + 计算，不写盘。stale 表按"修复后"的几何生成计划，
 /// 并把修复动作记入 plan.repair，由 apply 执行。
 /// 几何只在此解析一次（[`ValidatedGeometry`] = 修复后将生效的几何），随后的
@@ -86,56 +113,40 @@ pub struct Plan {
 fn plan_tail_packed(g: &ValidatedGeometry, repair: RepairAction, grow_part: u32) -> Result<Plan, Fail> {
     let ss = g.ss;
 
-    // 目标分区必须存在。分区号 1-based，checked_sub 让 0 也被这条拒掉而不是先下溢
-    let target = grow_part.checked_sub(1).and_then(|i| g.entries.get(i as usize))
-        .ok_or_else(|| Fail::refused(format!("partition {grow_part} not found")))?;
-    if target.ending_lba == 0 {
-        return Err(Fail::refused(format!("partition {grow_part} is empty")));
-    }
+    // 目标分区必须存在（唯一查找出口见 live_entry）
+    let target = gpt_policy::live_entry(g, grow_part)?;
 
-    // movable = 目标分区之后的所有分区（按 first_lba 升序）
-    let mut movable: Vec<(u32, &gptman::GPTPartitionEntry)> = g
-        .entries
-        .iter()
-        .enumerate()
-        .filter(|(_, e)| e.ending_lba != 0 && e.starting_lba > target.ending_lba)
-        .map(|(i, e)| ((i + 1) as u32, e))
-        .collect();
-    movable.sort_by_key(|(_, e)| e.starting_lba);
+    let movable = blockers_after(g, target.ending_lba)?;
 
     let mut moves = Vec::new();
     let mut cursor = g.header.last_usable_lba;
     for (num, e) in movable.iter().rev() {
-        // 条目端点倒挂属盘内容故障（解析层已拦，这里是纵深防守）
-        if e.ending_lba < e.starting_lba {
-            return Err(Fail::infra(format!("partition {num} has ending LBA below starting LBA (corrupted table)")));
-        }
         let len = e.ending_lba - e.starting_lba + 1;
-        // LUKS/LVM 拒绝；swap 走"重建"而非搬移：内容可弃，UUID/PARTUUID/分区号保持
-        if FORBIDDEN_TYPE_GUIDS.contains(&e.partition_type_guid) {
-            return Err(Fail::refused(format!("partition {num} is LUKS/LVM PV — relocation refused")));
-        }
         // 尾部打包：末端对齐 cursor（含），不留缝隙
         let new_first = cursor.checked_sub(len - 1).ok_or_else(|| {
             Fail::refused("insufficient tail space for relocation")
         })?;
-        let delta = new_first as i64 - e.starting_lba as i64;
-        if delta < 0 {
-            return Err(Fail::refused("insufficient tail space for relocation"));
-        }
+        // 目标起点低于源起点 = 尾部空间不足
+        let delta = new_first.checked_sub(e.starting_lba).ok_or_else(|| {
+            Fail::refused("insufficient tail space for relocation")
+        })?;
         // saturating：new_first 理论上 ≥1（LBA0 保护 MBR + LBA1 主头），
         // 极端输入下防下溢 panic，退化为 0 后由下轮 checked_sub 报空间不足
         cursor = new_first.saturating_sub(1);
-        moves.push(PlanEntry { part_num: *num, first_lba: e.starting_lba, len_lba: len, delta_lba: delta as u64, is_swap: is_swap_guid(&e.partition_type_guid) });
+        moves.push(PlanEntry { part_num: *num, first_lba: e.starting_lba, len_lba: len, delta_lba: delta, is_swap: is_swap_guid(&e.partition_type_guid) });
     }
     Ok(Plan { ss, last_usable_lba: g.header.last_usable_lba, grow_part, moves, repair })
 }
 
 /// 尾打包 plan 的恢复感知版本：ckpt 存在时以 ckpt 的 moves 为准（见 resume_outcome），
-/// 否则照常现算。几何只解析一次，两条分支共用同一份可操作几何
-pub fn make_plan_resuming(src: &mut FileSource, grow_part: u32) -> Result<Plan, Fail> {
-    let (g, repair) = gpt_policy::resolve_geometry(src)?.ok_or_else(|| Fail::refused("no GPT on target"))?;
-    match resume_outcome(src, &g, grow_part)? {
+/// 否则照常现算。几何与修复动作由调用方解析（一条命令解析一次，往下传），本函数不读表
+pub fn make_plan_resuming(
+    src: &mut FileSource,
+    g: &ValidatedGeometry,
+    repair: RepairAction,
+    grow_part: u32,
+) -> Result<Plan, Fail> {
+    match resume_outcome(src, g, grow_part)? {
         ResumeOutcome::Belongs(p) => Ok(p),
         // 槽位是别的分区的作业：现算的 plan 与那份作业的现场不符，打印出来会与
         // 盘上未收尾的事自相矛盾，apply 也只会得到一次注定失败的比对
@@ -143,7 +154,7 @@ pub fn make_plan_resuming(src: &mut FileSource, grow_part: u32) -> Result<Plan, 
         // 槽位被单分区 resize 作业占着：与 apply 同一结论、同一文案（那里在 prepare_apply
         // 的分派处拒绝）。只修 apply 不修这里，plan 就会打印一份 apply 必然拒绝的计划并报成功
         ResumeOutcome::ForeignResize => Err(foreign_resize_refusal()),
-        ResumeOutcome::Empty => plan_tail_packed(&g, repair, grow_part),
+        ResumeOutcome::Empty => plan_tail_packed(g, repair, grow_part),
     }
 }
 
@@ -158,23 +169,12 @@ pub fn make_plan_resuming(src: &mut FileSource, grow_part: u32) -> Result<Plan, 
 fn shift_plan_from(g: &ValidatedGeometry, repair: RepairAction, grow_part: u32, shift: u64) -> Result<Plan, Fail> {
     let ss = g.ss;
 
-    let target = grow_part.checked_sub(1).and_then(|i| g.entries.get(i as usize))
-        .ok_or_else(|| Fail::refused(format!("partition {grow_part} not found")))?;
-    if target.ending_lba == 0 {
-        return Err(Fail::refused(format!("partition {grow_part} is empty")));
-    }
+    let target = gpt_policy::live_entry(g, grow_part)?;
     if shift == 0 {
         return Err(Fail::refused("shift must be positive"));
     }
 
-    let mut movable: Vec<(u32, &gptman::GPTPartitionEntry)> = g
-        .entries
-        .iter()
-        .enumerate()
-        .filter(|(_, e)| e.ending_lba != 0 && e.starting_lba > target.ending_lba)
-        .map(|(i, e)| ((i + 1) as u32, e))
-        .collect();
-    movable.sort_by_key(|(_, e)| e.starting_lba);
+    let movable = blockers_after(g, target.ending_lba)?;
     if movable.is_empty() {
         return Err(Fail::refused("no partition to relocate (right side is free — no --allow-move needed)"));
     }
@@ -186,14 +186,7 @@ fn shift_plan_from(g: &ValidatedGeometry, repair: RepairAction, grow_part: u32, 
 
     let mut moves: Vec<PlanEntry> = Vec::with_capacity(movable.len());
     for (num, e) in &movable {
-        // 条目端点倒挂属盘内容故障（解析层已拦，这里是纵深防守）
-        if e.ending_lba < e.starting_lba {
-            return Err(Fail::infra(format!("partition {num} has ending LBA below starting LBA (corrupted table)")));
-        }
         let len = e.ending_lba - e.starting_lba + 1;
-        if FORBIDDEN_TYPE_GUIDS.contains(&e.partition_type_guid) {
-            return Err(Fail::refused(format!("partition {num} is LUKS/LVM PV — relocation refused")));
-        }
         let new_first = e.starting_lba.checked_add(delta).ok_or_else(|| {
             Fail::refused("relocation target LBA overflows — refusing")
         })?;
@@ -211,10 +204,16 @@ fn shift_plan_from(g: &ValidatedGeometry, repair: RepairAction, grow_part: u32, 
 
 /// 中断感知的最小位移 plan：ckpt 存在时以 ckpt 的 moves 为准（见 resume_outcome），
 /// 否则按 shift 现算。`shift = None` 表示本次请求是缩容——缩容不搬移任何分区
-/// （新末端更靠左，右侧只会更空），此时只有 ckpt 能构成走本路径的理由
-pub fn make_plan_shift_resuming(src: &mut FileSource, grow_part: u32, shift: Option<u64>) -> Result<Plan, Fail> {
-    let (g, repair) = gpt_policy::resolve_geometry(src)?.ok_or_else(|| Fail::refused("no GPT on target"))?;
-    match resume_outcome(src, &g, grow_part)? {
+/// （新末端更靠左，右侧只会更空），此时只有 ckpt 能构成走本路径的理由。
+/// 几何与修复动作由调用方解析并下传，本函数不读表
+pub fn make_plan_shift_resuming(
+    src: &mut FileSource,
+    g: &ValidatedGeometry,
+    repair: RepairAction,
+    grow_part: u32,
+    shift: Option<u64>,
+) -> Result<Plan, Fail> {
+    match resume_outcome(src, g, grow_part)? {
         ResumeOutcome::Belongs(p) => return Ok(p),
         // 与 make_plan_resuming 同判据：别的分区的作业占着槽位，本请求既不能把它
         // 当空槽、也不能按它续跑
@@ -227,14 +226,14 @@ pub fn make_plan_shift_resuming(src: &mut FileSource, grow_part: u32, shift: Opt
     let shift = shift.ok_or_else(|| Fail::refused(
         "shrink relocates nothing, but an unfinished relocation job is pending on this target — re-run the command that started it to resume",
     ))?;
-    shift_plan_from(&g, repair, grow_part, shift)
+    shift_plan_from(g, repair, grow_part, shift)
 }
 
 /// 该分区是否有未收尾的 plan 型搬移作业。命令入口据此分流：几何上"右侧已空、可直接扩容"
 /// 并不代表作业已完成——右侧变空本身可能正是搬了一半的结果，收尾步骤（剩余搬移、swap 重建、
-/// FS 扩容）都还没做
-pub fn has_pending_relocation(src: &FileSource, grow_part: u32) -> Result<bool, Fail> {
-    Ok(matches!(resume_outcome_in(src, grow_part)?, ResumeOutcome::Belongs(_)))
+/// FS 扩容）都还没做。几何由调用方解析并下传
+pub fn has_pending_relocation(src: &FileSource, g: &ValidatedGeometry, grow_part: u32) -> Result<bool, Fail> {
+    Ok(matches!(resume_outcome(src, g, grow_part)?, ResumeOutcome::Belongs(_)))
 }
 
 /// 事务门用的归属判定：与 `has_pending_relocation` 同一内核，但把"槽位属于别的分区"
@@ -243,8 +242,8 @@ pub fn has_pending_relocation(src: &FileSource, grow_part: u32) -> Result<bool, 
 pub(crate) fn relocation_ownership(src: &FileSource, grow_part: u32) -> Result<bool, Fail> {
     match resume_outcome_in(src, grow_part)? {
         ResumeOutcome::Belongs(_) => Ok(true),
-        // 空槽与"另一族作业占着"对本事务门是同一结论：都不该由它续跑（resize 的续跑点
-        // 由 prepare_resize 自己按 RsCheckpoint 决定），故放行开新事务
+        // 空槽与"另一族作业占着"对本事务门是同一结论：都不由它续跑（单分区
+        // resize 的现场要用 resize-part / move 续，不是重跑 resize），闸口按 busy 拒绝
         ResumeOutcome::Empty | ResumeOutcome::ForeignResize => Ok(false),
         ResumeOutcome::Occupied => Err(foreign_checkpoint_refusal()),
     }
@@ -263,7 +262,7 @@ fn foreign_checkpoint_refusal() -> Fail {
 /// 而两边给同一事实的措辞也会漂移
 fn foreign_resize_refusal() -> Fail {
     Fail::refused(
-        "an unfinished single-partition resize job occupies the checkpoint slot — re-run that resize to resume it, or release it with `diskedit abandon`",
+        "an unfinished single-partition resize job occupies the checkpoint slot — resume it with `resize-part` or `move`, or release it with `diskedit abandon`",
     )
 }
 
@@ -285,9 +284,9 @@ enum ResumeOutcome {
     /// 搬移"，搬移路径必须拒绝——现算的 plan 与那份作业的现场不符
     Occupied,
     /// 槽位被**另一族**作业（单分区 resize 的 `RsCheckpoint`）占用。与 `Occupied` 并列而非
-    /// 并入，因为两族对它的结论不同：resize 路径要照常开事务续跑它（现场与它自己的请求一致），
-    /// 而 plan 型搬移绝不能在此现算计划——盘上几何已被那次 resize 部分改写，现算的 plan
-    /// 会打印成功，apply 却必然拒绝
+    /// 并入，因为两族对它的结论不同：plan 型搬移绝不能在此现算计划——盘上几何已被那次
+    /// resize 部分改写，现算的 plan 会打印成功，apply 却必然拒绝；resize/apply 对它
+    /// 拒绝（本入口续不了它，出路是 `resize-part` / `move`）
     ForeignResize,
 }
 
@@ -326,7 +325,6 @@ fn resume_outcome(src: &FileSource, g: &ValidatedGeometry, grow_part: u32) -> Re
 // "搬到第几 chunk"从数据区只看得出"已覆盖"、看不出"到哪"，必须存（chunks_done）。
 // 本文两个 checkpoint（搬移的 Checkpoint 与单分区缩放的 RsCheckpoint）同受此判据约束
 
-#[derive(Clone)]
 pub struct Checkpoint {
     pub disk_size: u64,
     pub ss: u64,
@@ -453,6 +451,23 @@ impl Checkpoint {
         if table::crc32(&b[..off]) != stored {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "checkpoint CRC mismatch"));
         }
+        // 进度字段同属盘上可控值：CRC 自洽但值荒谬的 ckpt 会让续传把该条目的全部 chunk
+        // 跳过后仍提交表项——表将指向从未复制过的位置。上界在解析期可算：当前条目的
+        // chunk 总数（自重叠搬移重做已完成 chunk 读到的仍是原始源数据，故越界只可能损坏）
+        if chunk_bytes == 0 {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "checkpoint chunk_bytes invalid"));
+        }
+        let chunks_limit = match moves.get(cur_index as usize) {
+            Some(m) => m.len_lba.checked_mul(ss)
+                .and_then(|t| t.checked_add(chunk_bytes - 1))
+                .map(|t| t / chunk_bytes)
+                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "checkpoint chunk count overflow"))?,
+            // 全部条目已提交：进度归零，残留值即损坏
+            None => 0,
+        };
+        if chunks_done > chunks_limit {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "implausible checkpoint chunk progress"));
+        }
         Ok(Checkpoint { disk_size, ss, grow_part, last_usable_lba, moves, cur_index, chunks_done, chunk_bytes })
     }
 }
@@ -520,16 +535,16 @@ fn atomic_write_ckpt(path: &std::path::Path, data: &[u8]) -> io::Result<()> {
     use std::io::Write;
     use std::sync::atomic::{AtomicU64, Ordering};
     static SEQ: AtomicU64 = AtomicU64::new(0);
-    let parent = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+    // 相对路径（如 "a.ckpt"）的 parent() 是空而非 None：空父目录拼出的临时路径会带根
+    // 组件，落进当前盘的根目录
+    let parent = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or_else(|| std::path::Path::new("."));
     // 落点目录归文件自己保证：路径由身份派生，身份不知道目录是否存在
     crate::dev::best_effort_mkdir(parent);
-    let mut tmp = parent.to_path_buf().into_os_string();
-    tmp.push(format!(
-        "/.diskedit.ckpt.tmp.{}.{}",
+    let tmp = parent.join(format!(
+        ".diskedit.ckpt.tmp.{}.{}",
         std::process::id(),
         SEQ.fetch_add(1, Ordering::Relaxed)
     ));
-    let tmp = std::path::PathBuf::from(tmp);
     {
         let mut f = std::fs::File::create(&tmp)?;
         f.write_all(data)?;
@@ -664,14 +679,22 @@ pub(crate) fn swap_rebuild_pending(
 /// 一次搬移事务 = 事前判定（只读）+ 执行（写盘）。
 /// 两半的返回类型不同，这就是 durable boundary 的类型表达：`prepare_apply` 只可能给出
 /// `Refused` / `Infra`（此刻确定未写盘），`execute_apply` 的返回类型里没有 `Fail`，
-/// 因此"写盘之后仍返回 Refused"在那半边**写不出来**
-pub fn apply(src: &mut FileSource, plan: &Plan, chunk_len: u64, no_fs: bool, log: &mut dyn FnMut(&str)) -> Outcome {
+/// 因此"写盘之后仍返回 Refused"在那半边**写不出来**。
+/// 几何由调用方解析（一条命令解析一次，往下传），本函数与执行半程都不读表
+pub fn apply(
+    src: &mut FileSource,
+    g: &ValidatedGeometry,
+    plan: &Plan,
+    chunk_len: u64,
+    no_fs: bool,
+    log: &mut dyn FnMut(&str),
+) -> Outcome {
     // 事务入口的注入点：此刻 abort 必须与"从未运行过"不可区分
     fault_before_any_write();
     // 后置条件中未完成的部分：布局写完后才可能产生，交调用方统一换算退出码
     let mut pending: Vec<Pending> = Vec::new();
     let r = (|| -> Result<(), Fail> {
-        let d = prepare_apply(src, plan, chunk_len, no_fs, log)?;
+        let d = prepare_apply(src, g, plan, chunk_len, no_fs, log)?;
         // 修复虽是写盘，但先于任何目标写入执行；放在 Fail 域是为了保住分类：
         // 其读表阶段尚未写一个字节（Infra），一旦进入 io 域就只剩 Failed 一条路
         if let Some(what) = plan.repair.describe() {
@@ -686,30 +709,29 @@ pub fn apply(src: &mut FileSource, plan: &Plan, chunk_len: u64, no_fs: bool, log
 }
 
 /// 事前判定的产物，也是 execute 的**唯一输入源**：凡是执行阶段要用的都在这里带过去。
-/// `chunk_len` / `no_fs` 若同时留在 execute 的参数位上，同一个值就有两个来源、谁赢没有定义
+/// `chunk_len` / `no_fs` 若同时留在 execute 的参数位上，同一个值就有两个来源、谁赢没有定义。
+/// `g` 随行：执行半程对表项的全部落位都基于它（不重读盘上的表）
 struct ApplyDecision {
+    g: ValidatedGeometry,
     ckpt: Checkpoint,
     ckpt_path: PathBuf,
     chunk_len: u64,
     no_fs: bool,
 }
 
-/// 事前判定（只读）：解析 → FS preflight → 槽位判定。
+/// 事前判定（只读）：FS preflight → 槽位判定。
 /// 返回 `Err` 一律发生在任何写盘之前；本函数签名上就没有 `&mut FileSource`
 fn prepare_apply(
     src: &FileSource,
+    g0: &ValidatedGeometry,
     plan: &Plan,
     chunk_len: u64,
     no_fs: bool,
     log: &mut dyn FnMut(&str),
 ) -> Result<ApplyDecision, Fail> {
-    // 几何解析一次（构造点即拒绝条目重叠），随后的 FS preflight 与 ckpt 判定共用它；
-    // 解析失败分两类：无表 = 请求与目标现状不匹配（10）；表在但结构非法 = 盘内容故障（30）。
-    //
-    // 几何里的上界是"修复生效后"的值，ckpt 的边界校验依赖它；要执行的动作则取
-    // `plan.repair`——与 plan 生成时定下的那个一致。盘在 plan 生成之后变了的话，
+    // 几何由调用方解析并下传（构造点即拒绝条目重叠），FS preflight 与 ckpt 判定共用它；
+    // 几何里的上界是"修复生效后"的值，ckpt 的边界校验依赖它。盘在 plan 生成之后变了的话，
     // 由下面的恢复校验拒绝
-    let (g0, _repair) = gpt_policy::resolve_geometry(src)?.ok_or_else(|| Fail::refused("no GPT on target"))?;
     // 写盘前的 preflight：FS 扩展属本次操作的后置条件，工具缺失必须现在拒绝——
     // 一旦开始写盘才发现，就会留下"分区已改、FS 未扩"的中间态。
     // 不依赖命令层是否检查过：续传路径不经过 plan，本处才是唯一必经关口
@@ -729,7 +751,7 @@ fn prepare_apply(
         crate::fsops::check_grow(ft)?;
     }
     // 恢复三态：有效 → 续传 / 槽位被另一族作业占用 → 拒绝 / 空 → 新建
-    let slot = read_checkpoint(src, &g0)?;
+    let slot = read_checkpoint(src, g0)?;
     let ckpt_path = src.identity.checkpoint_path().to_path_buf();
 
     let ckpt = match slot {
@@ -772,7 +794,7 @@ fn prepare_apply(
             chunk_bytes: chunk_len,
         },
     };
-    Ok(ApplyDecision { ckpt, ckpt_path, chunk_len, no_fs })
+    Ok(ApplyDecision { g: g0.clone(), ckpt, ckpt_path, chunk_len, no_fs })
 }
 
 // ---- durable boundary：以上判定全部结束，以下开始写盘 ----
@@ -787,24 +809,33 @@ fn execute_apply(
     log: &mut dyn FnMut(&str),
     pending: &mut Vec<Pending>,
 ) -> io::Result<()> {
-    // 决策按值收下：ckpt 就地推进
+    // 决策按值收下：ckpt 就地推进；表项落位全部基于随行几何（不重读盘上的表——
+    // 搬移循环内每条重解析一次正是"解析次数随 N 增长"的根源）。条目绝对赋值 +
+    // 同一份几何连续提交，与逐条重读盘上表再提交逐字节等价（commit 幂等）
     let mut ckpt = d.ckpt;
     let (chunk_len, no_fs) = (d.chunk_len, d.no_fs);
     let ckpt_path = &d.ckpt_path;
+    let mut g = d.g;
     // 修复已由 apply 的 Fail 域在调用本函数之前完成（备份头搬移 / 保护 MBR 重写），
     // 使后续所有写入都基于修复后的几何
     atomic_write_ckpt(ckpt_path, &ckpt.serialize())?;
     // 本操作含**不可回滚的写入**：搬移的数据块按设计不入 journal（前向恢复、无回滚），
-    // 故留一条标记使 undo 拒绝回滚——否则表被回滚而数据未回滚，布局与盘上内容自相矛盾
-    if let Some(m) = plan.moves.first() {
-        // delta_lba 以 u64 存放（构造处是 i64 的补码转换），这里按同一约定还原目标起点
+    // 故留一条标记使 undo 拒绝回滚——否则表被回滚而数据未回滚，布局与盘上内容自相矛盾。
+    // delta_lba 在 plan 生成处只产生非负值：目标起点 = first_lba + delta，直接 checked 相加
+    let effective = plan.moves.iter().find(|m| m.delta_lba != 0);
+    if let Some(m) = effective {
+        let to_lba = m.first_lba.checked_add(m.delta_lba).ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidData, "relocation target LBA overflows — refusing")
+        })?;
         src.set_mutation(crate::dev::Mutation::RelocatePartition {
             partition: m.part_num,
             from_lba: m.first_lba,
-            to_lba: (m.first_lba as i64 + m.delta_lba as i64) as u64,
+            to_lba,
         });
     }
-    if !plan.moves.is_empty() {
+    // 位移全为 0（右邻已尾打包时重跑 resize grow --allow-move 的典型产物）⇒ 没有
+    // 不可回滚的写入，不落屏障：undo 的可回滚性不受这次空转影响
+    if effective.is_some() {
         src.mark_non_reversible()?;
     }
 
@@ -818,6 +849,14 @@ fn execute_apply(
     for mi in (ckpt.cur_index as usize)..plan.moves.len() {
         let m = &plan.moves[mi];
         ckpt.cur_index = mi as u32;
+        // δ=0：条目已在目标位（右邻尾打包后重跑的产物）。自拷贝、重写表、推进 ckpt
+        // 之外的一切都是空转，跳过——表项绝对赋值下它本来就"已提交"
+        if m.delta_lba == 0 {
+            ckpt.chunks_done = 0;
+            ckpt.cur_index = mi as u32 + 1;
+            atomic_write_ckpt(ckpt_path, &ckpt.serialize())?;
+            continue;
+        }
         // 目标区端点一次算好、全链 checked：要原样写进表项并进入字节地址换算
         let new_first = m.first_lba.checked_add(m.delta_lba).ok_or_else(|| {
             io::Error::new(io::ErrorKind::InvalidData, "relocation target LBA overflows — refusing")
@@ -830,7 +869,6 @@ fn execute_apply(
         ckpt.chunks_done = entry_resume;
         // swap：内容可弃 → 不搬数据，表项落位后 mkswap 重建（UUID/卷标保持）
         if m.is_swap {
-            let mut g = table::load_gpt(src).map_err(table::into_io_error)?.ok_or_else(|| io::Error::other("GPT vanished mid-apply"))?;
             // PARTUUID/分区号由条目原样保留（unique guid 不动），只改位置。
             // 绝对赋值而非 += delta：commit 后、ckpt 更新前崩溃的重放幂等
             {
@@ -838,8 +876,7 @@ fn execute_apply(
                 e.starting_lba = new_first;
                 e.ending_lba = new_end;
             }
-            let last_lba = src.size / plan.ss - 1;
-            table::commit_gpt(src, &g, last_lba)?;
+            g.commit(src)?;
             fault_after_swap_commit(mi);
             // 旧 swap 签名区在源位置（数据区未搬移），从那里读 UUID/卷标
             let ident = read_swap_identity(src, m.first_lba, m.len_lba, plan.ss);
@@ -900,14 +937,12 @@ fn execute_apply(
         fault_before_entry_commit();
         // 本分区完成 → 按崩溃安全四结构序列提交表项（整表重写）。
         // 绝对赋值（非 += delta）：commit 后 ckpt 更新前崩溃的重放幂等
-        let mut g = table::load_gpt(src).map_err(table::into_io_error)?.ok_or_else(|| io::Error::other("GPT vanished mid-apply"))?;
         {
             let e = &mut g.entries[(m.part_num - 1) as usize];
             e.starting_lba = new_first;
             e.ending_lba = new_end;
         }
-        let last_lba = src.size / plan.ss - 1;
-        table::commit_gpt(src, &g, last_lba)?;
+        g.commit(src)?;
         // 起始位置变化的 NTFS 分区需修 HiddenSectors（数据是字节拷贝，boot sector 带着旧值）
         if crate::fsid::identify(src, new_first * plan.ss, m.len_lba * plan.ss)? == "ntfs" {
             fix_ntfs_hidden_sectors(src, new_first, plan.ss, log)?;
@@ -921,18 +956,24 @@ fn execute_apply(
     fault_before_grow();
 
     // 扩容收尾：目标分区扩到 movable 新区域之前（防止与刚打包的分区重叠）；
-    // 无 movable 时到 last_usable。commit → resize FS
-    let last_lba = src.size / plan.ss - 1;
-    let mut g = table::load_gpt(src).map_err(table::into_io_error)?.ok_or_else(|| io::Error::other("GPT vanished before grow"))?;
-    let (grow_start, grow_len);
+    // 无 movable 时到 last_usable。commit → resize FS（同一份随行几何，不重读盘上的表）
+    let (grow_start, grow_len, old_len);
     {
         let grow_end = grow_end_for(plan)?;
         let te = &mut g.entries[(plan.grow_part - 1) as usize];
+        // moves 可整份来自 ckpt：first_lba + delta 的下界只到 first_usable，若低于目标起点，
+        // 提交的就是端点倒挂的表项。grow_end_for 只保证 ≥ LBA 1，此处补目标自身的下界
+        if grow_end < te.starting_lba {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "grow target below its own start — refusing"));
+        }
+        old_len = te.ending_lba.checked_sub(te.starting_lba)
+            .map(|v| v + 1)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "grow target entry inverted — refusing"))?;
         te.ending_lba = grow_end;
         grow_start = te.starting_lba;
-        grow_len = te.ending_lba - te.starting_lba + 1;
+        grow_len = grow_end - grow_start + 1;
     }
-    table::commit_gpt(src, &g, last_lba)?;
+    g.commit(src)?;
     table::ensure_protective_mbr(src)?;
     log(&format!("partition {} extended (FS area ends before relocated partitions)", plan.grow_part));
 
@@ -943,25 +984,81 @@ fn execute_apply(
     let fstype = crate::fsid::identify(src, grow_start * g.ss, grow_len * g.ss)?;
     if no_fs {
         log("partition extended (--no-fs: filesystem left untouched)");
-    } else if matches!(fstype, "unknown" | "swap" | "lvm2_pv") {
-        // unknown/LVM PV 里混着一类真实的未完成后置条件（创建于 32K 页的 swap），先探一遍
-        match swap_rebuild_pending(src, plan.grow_part, grow_start * g.ss, grow_len * g.ss) {
-            Some(missed) => pending.push(missed),
-            None => log("partition extended (no resizable filesystem inside)"),
-        }
     } else {
-        // 外部 FS 工具（resize2fs/xfs_growfs/…）的写入不可回滚：必须先于该写入落屏障。
-        // moves 为空的纯扩容在开头没有屏障，undo 的可回滚性全靠这里这一条
-        src.set_mutation(crate::dev::Mutation::ExternalFsTool);
-        src.mark_non_reversible()?;
-        match crate::fsops::resize_fs(src, plan.grow_part, fstype) {
-            Ok(()) => log("filesystem resized"),
-            Err(e) => pending.push(Pending::new(
-                plan.grow_part,
-                PendingKind::Fs,
-                e.to_string(),
-                crate::fsops::rescue_hint(fstype, &crate::dev::part_dev_hint(src, plan.grow_part, grow_start)),
-            )),
+        finalize_growth(src, plan.grow_part, fstype, GrowthRegions {
+            old: (grow_start, old_len),
+            new: (grow_start, grow_len),
+        }, g.ss, log, pending)?;
+    }
+    Ok(())
+}
+
+/// 扩容收尾的区间对（LBA，表自身 ss）：swap 重建读旧头的区间与探测新空间生效的区间
+/// 是两个不同的事实，调用点各给一次
+struct GrowthRegions {
+    old: (u64, u64), // 搬移前 (start, len)：swap 旧头仍在此处（两族都拒绝搬 swap，start 不变）
+    new: (u64, u64), // 提交后 (start, len)：探测按它进行
+}
+
+/// 扩容的统一 FS 收尾（apply 与 resize 的唯一实现）：表项已按新几何提交后，
+/// 按 FS 家族给出唯一处置。未完成的后置条件进 `pending`，退出码由调用方统一换算；
+/// 其余 `Err` 归 io 域（此刻已过 durable boundary，不得再伪装成拒绝）。
+/// 各家族的可做性已在事前由 check_grow 给出，此处不判第二遍
+fn finalize_growth(
+    src: &mut FileSource,
+    part: u32,
+    fstype: &str,
+    r: GrowthRegions,
+    ss: u64,
+    log: &mut dyn FnMut(&str),
+    pending: &mut Vec<Pending>,
+) -> io::Result<()> {
+    match fstype {
+        // unknown/LVM PV 无本工具可扩的文件系统；其中混着一类**真实的未完成后置条件**
+        //（创建于 32K 页的 swap，本机激活不了），故先探测一遍
+        "unknown" | "lvm2_pv" => {
+            // PV：调用方返回后仍会跑 pvresize/lvextend（外部写入），必须在它之前落标记——
+            // 否则"表被回滚、而 PV/LV/FS 已扩"正是本标记要排除的自相矛盾状态。
+            // unknown 不落标记：这一支只探测、不写盘，undo 应当仍然可用
+            if fstype == "lvm2_pv" {
+                src.set_mutation(crate::dev::Mutation::ExternalFsTool);
+                src.mark_non_reversible()?;
+            }
+            match swap_rebuild_pending(src, part, r.new.0 * ss, r.new.1 * ss) {
+                Some(missed) => pending.push(missed),
+                None => log("partition extended (no resizable filesystem inside)"),
+            }
+        }
+        // swap：内容可弃，表项已扩 → mkswap 重建使新空间生效（UUID/卷标保持）。
+        // grow_support 对 swap 承诺的就是 mkswap——漏掉它即违背承诺。外部工具写盘，先落屏障
+        "swap" => {
+            src.set_mutation(crate::dev::Mutation::ExternalFsTool);
+            src.mark_non_reversible()?;
+            let ident = read_swap_identity(src, r.old.0, r.old.1, ss);
+            match crate::fsops::recreate_swap(src, part, ident) {
+                Ok(()) => log("swap recreated (UUID preserved)"),
+                Err(e) => pending.push(Pending::new(
+                    part,
+                    PendingKind::Swap,
+                    e.to_string(),
+                    crate::fsops::rescue_hint("swap", &crate::dev::part_dev_hint(src, part, r.old.0 * ss)),
+                )),
+            }
+        }
+        // 外部 FS 工具（resize2fs/xfs_growfs/…）的写入不可回滚：扩完后 FS 自述尺寸大于
+        // 旧分区尺寸，此后回滚表项即"表与内容自相矛盾"。必须先于该写入落屏障
+        _ => {
+            src.set_mutation(crate::dev::Mutation::ExternalFsTool);
+            src.mark_non_reversible()?;
+            match crate::fsops::resize_fs(src, part, fstype) {
+                Ok(()) => log("filesystem resized"),
+                Err(e) => pending.push(Pending::new(
+                    part,
+                    PendingKind::Fs,
+                    e.to_string(),
+                    crate::fsops::rescue_hint(fstype, &crate::dev::part_dev_hint(src, part, r.old.0 * ss)),
+                )),
+            }
         }
     }
     Ok(())
@@ -1100,6 +1197,14 @@ impl RsCheckpoint {
         {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "resize checkpoint range outside usable area"));
         }
+        // 进度上界同 Checkpoint：搬移区间的 chunk 总数（区间端点已验非倒挂，乘法仍 checked）
+        let chunks_limit = (old_end - old_start + 1).checked_mul(ss)
+            .and_then(|t| t.checked_add(chunk_bytes - 1))
+            .map(|t| t / chunk_bytes)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "resize checkpoint chunk count overflow"))?;
+        if chunks_done > chunks_limit {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "implausible resize checkpoint chunk progress"));
+        }
         Ok(RsCheckpoint { disk_size, ss, part, old_start, old_end, new_start, new_end, fs_shrunk, chunks_done, chunk_bytes })
     }
 }
@@ -1171,9 +1276,13 @@ fn classify_restore<'a>(
 /// 通用分区重定位：new_start/new_end 任意（grow/shrink/move 组合）。
 /// 顺序：缩容 FS（如有）→ 数据搬移（方向感知 + checkpoint 续传）→ 提交表项 → 扩容 FS（如有）。
 /// 两半的返回类型就是 durable boundary 的类型表达（见 `prepare_resize` / `execute_resize`）。
-/// 对外入口负责把内部失败分类换算为 Outcome（退出码只在这一层定）
+/// 对外入口负责把内部失败分类换算为 Outcome（退出码只在这一层定）。
+/// 几何与修复动作由调用方解析（一条命令解析一次，往下传），本函数不读表
+#[allow(clippy::too_many_arguments)] // src/几何/修复动作/区间/chunk/开关/日志各司其职：合成参数对象只是给 lint 换一层间接
 pub fn resize_part(
     src: &mut FileSource,
+    g: &ValidatedGeometry,
+    repair: RepairAction,
     part: u32,
     new_start: u64,
     new_end: u64,
@@ -1185,7 +1294,7 @@ pub fn resize_part(
     fault_before_any_write();
     let mut pending: Vec<Pending> = Vec::new();
     let r = (|| -> Result<(), Fail> {
-        let p = prepare_resize(src, part, new_start, new_end, chunk_len, no_fs, log)?;
+        let p = prepare_resize(src, g, repair, part, new_start, new_end, chunk_len, no_fs, log)?;
         // 修复先于任何目标写入；放 Fail 域以保住分类（同 apply）
         if let Some(what) = p.repair.describe() {
             gpt_policy::apply_repair(src, &p.repair)?;
@@ -1227,6 +1336,8 @@ struct ResizeDecision {
     chunk_len: u64,
     no_fs: bool,
     ckpt_path: PathBuf,
+    /// 随行几何：执行半程的表项提交基于它（不重读盘上的表）
+    g: ValidatedGeometry,
 }
 
 /// 事前判定（只读）：几何、范围、重叠、槽位、恢复三态、FS 能力与工具 preflight。
@@ -1234,6 +1345,8 @@ struct ResizeDecision {
 #[allow(clippy::too_many_arguments)]
 fn prepare_resize(
     src: &FileSource,
+    g: &ValidatedGeometry,
+    repair: RepairAction,
     part: u32,
     new_start: u64,
     new_end: u64,
@@ -1243,16 +1356,11 @@ fn prepare_resize(
 ) -> Result<ResizeDecision, Fail> {
     // ---- 事前判定：全部只读，且必须在首次写盘（apply_repair）之前结束 ----
     // 下面的每一条拒绝都承诺"本次未写盘"（退出码 10），故判定与写盘的先后不能颠倒
-    // 几何先解析：ckpt 的合法边界来自它（分区号上界、可用区、容器末端），读取顺序因此
-    // 不能颠倒——历史实现先读 ckpt 再解析几何，导致同一份几何在内部被算第二遍
-    let (g, repair) = gpt_policy::resolve_geometry(src)?.ok_or_else(|| Fail::refused("no GPT"))?;
+    // 几何由调用方解析并下传：ckpt 的合法边界来自它（分区号上界、可用区、容器末端）
+    let g = g.clone();
     let slot = read_checkpoint(src, &g)?;
     let ss = g.ss;
-    let e = part.checked_sub(1).and_then(|i| g.entries.get(i as usize))
-        .ok_or_else(|| Fail::refused(format!("partition {part} not found")))?;
-    if e.ending_lba == 0 {
-        return Err(Fail::refused(format!("partition {part} is empty")));
-    }
+    let e = gpt_policy::live_entry(&g, part)?;
     // 只拦搬移（起点变化）：LUKS/LVM PV/swap 的纯扩缩不搬数据，允许。
     // swap 在此一并拒绝：plan/apply 有 mkswap 重建流程，单分区 resize-part 没有
     if (FORBIDDEN_TYPE_GUIDS.contains(&e.partition_type_guid) || is_swap_guid(&e.partition_type_guid))
@@ -1356,6 +1464,7 @@ fn prepare_resize(
         fs_shrunk, resume_chunks, committed_old, fs_action, repair, new_bytes,
         chunk_len, no_fs,
         ckpt_path: src.identity.checkpoint_path().to_path_buf(),
+        g,
     })
 }
 
@@ -1441,14 +1550,15 @@ fn execute_resize(
     // ---- 阶段 2：提交表项（幂等：重复执行结果相同；已提交态跳过）----
     if committed_old.is_none() {
         fault_rs_before_commit();
-        let mut g2 = table::load_gpt(src).map_err(table::into_io_error)?.ok_or_else(|| io::Error::other("GPT vanished mid-resize"))?;
+        // 表项提交基于 prepare 阶段随行而来的几何（同一持锁期间内它就是权威事实），
+        // 绝对赋值保证中断重放幂等
+        let mut g2 = p.g.clone();
         {
             let te = &mut g2.entries[(part - 1) as usize];
             te.starting_lba = new_start;
             te.ending_lba = new_end;
         }
-        let last_lba = src.size / ss - 1;
-        table::commit_gpt(src, &g2, last_lba)?;
+        g2.commit(src)?;
         table::ensure_protective_mbr(src)?;
         // 提交后不写 ckpt：恢复分支以盘上几何判定"是否已提交"，不需要第二份标记。
         // 此处中断后的重放由表项的绝对赋值保证幂等 —— fault_rs_after_commit 正测这一点
@@ -1463,54 +1573,12 @@ fn execute_resize(
 
     // ---- 阶段 3：扩容 FS ----
     crate::dev::warn_if_remove_failed(&p.ckpt_path);
-    // 要不要扩由 prepare 的决策给出，此处不再比尺寸
+    // 要不要扩由 prepare 的决策给出，此处不比尺寸；家族处置与 apply 共用同一实现
     if p.fs_action == FsAction::Grow {
-        // unknown/LVM PV 无本工具可扩的文件系统；其中混着一类**真实的未完成后置条件**
-        // （创建于 32K 页的 swap，本机激活不了），故先探测一遍
-        if matches!(fstype, "unknown" | "lvm2_pv") {
-            // PV：本函数返回后命令层仍会跑 pvresize/lvextend（外部写入），必须在它之前落标记——
-            // 否则"表被回滚、而 PV/LV/FS 已扩"正是本标记要排除的自相矛盾状态。
-            // unknown 不落标记：这一支只探测、不写盘，undo 应当仍然可用
-            if fstype == "lvm2_pv" {
-                src.set_mutation(crate::dev::Mutation::ExternalFsTool);
-                src.mark_non_reversible()?;
-            }
-            // 探测按**提交后**的区间：搬移过的分区签名已随数据到新位置
-            match swap_rebuild_pending(src, part, new_start * ss, new_bytes) {
-                Some(missed) => pending.push(missed),
-                None => log("partition resized (no resizable filesystem inside)"),
-            }
-        } else if fstype == "swap" {
-            // swap：内容可弃，表项已扩 → mkswap 重建使新空间生效（UUID/卷标保持；
-            // swap 目标拒绝搬移，起始未变，旧头部仍在原位可读）。
-            // mkswap 是外部工具的写盘，先落屏障
-            src.set_mutation(crate::dev::Mutation::ExternalFsTool);
-            src.mark_non_reversible()?;
-            let ident = read_swap_identity(src, old_start, old_end - old_start + 1, ss);
-            match crate::fsops::recreate_swap(src, part, ident) {
-                Ok(()) => log("swap recreated (UUID preserved)"),
-                Err(e) => pending.push(Pending::new(
-                    part,
-                    PendingKind::Swap,
-                    e.to_string(),
-                    crate::fsops::rescue_hint("swap", &crate::dev::part_dev_hint(src, part, old_start * ss)),
-                )),
-            }
-        } else {
-            // 外部 FS 工具（resize2fs/xfs_growfs/…）的写入不可回滚：扩完后 FS 自述尺寸大于
-            // 旧分区尺寸，此后回滚表项即"表与内容自相矛盾"。必须先于该写入落屏障
-            src.set_mutation(crate::dev::Mutation::ExternalFsTool);
-            src.mark_non_reversible()?;
-            match crate::fsops::resize_fs(src, part, fstype) {
-                Ok(()) => log("fs grown"),
-                Err(e) => pending.push(Pending::new(
-                    part,
-                    PendingKind::Fs,
-                    e.to_string(),
-                    crate::fsops::rescue_hint(fstype, &crate::dev::part_dev_hint(src, part, old_start * ss)),
-                )),
-            }
-        }
+        finalize_growth(src, part, fstype, GrowthRegions {
+            old: (old_start, old_end - old_start + 1),
+            new: (new_start, new_end - new_start + 1),
+        }, ss, log, pending)?;
     } else if no_fs {
         log("partition resized (--no-fs: filesystem left untouched)");
     }
@@ -1537,9 +1605,23 @@ fn fix_ntfs_hidden_sectors(src: &mut FileSource, new_first_lba: u64, ss: u64, lo
 
 /// 字节级分区复制：源不动，目标范围逐 chunk 复制后新增条目。
 /// 目标范围由 add_entry_at 的重叠校验把关；数据复制先于表项提交。
-/// 两半的返回类型就是 durable boundary 的类型表达（见 `prepare_copy` / `execute_copy`）
-pub fn copy_part(src: &mut FileSource, part: u32, new_start: u64, name: &str, chunk_len: u64, log: &mut dyn FnMut(&str)) -> Result<u32, Fail> {
-    let p = prepare_copy(src, part, new_start)?;
+/// 两半的返回类型就是 durable boundary 的类型表达（见 `prepare_copy` / `execute_copy`）。
+/// 几何与修复动作由调用方解析并下传，本函数不读表
+#[allow(clippy::too_many_arguments)] // 同 resize_part：参数即最小事实集
+pub fn copy_part(
+    src: &mut FileSource,
+    g: &ValidatedGeometry,
+    repair: RepairAction,
+    part: u32,
+    new_start: u64,
+    name: &str,
+    chunk_len: u64,
+    log: &mut dyn FnMut(&str),
+) -> Result<u32, Fail> {
+    // 事务入口注入点与 apply / resize_part 同形：durable boundary 之前 abort 必须留下
+    // 完全未改动的盘，这条不变量在 copy 上同样要可断言
+    fault_before_any_write();
+    let p = prepare_copy(g, repair, part, new_start)?;
     // 修复先于任何目标写入；放 Fail 域以保住分类（同 apply）
     if let Some(what) = p.repair.describe() {
         gpt_policy::apply_repair(src, &p.repair)?;
@@ -1562,15 +1644,16 @@ struct PreparedCopy {
     repair: RepairAction,
 }
 
-/// 事前判定（只读）：源分区存在性、目标范围与重叠。返回 `Err` 一律在任何写盘之前
-fn prepare_copy(src: &FileSource, part: u32, new_start: u64) -> Result<PreparedCopy, Fail> {
-    let (g, repair) = gpt_policy::resolve_geometry(src)?.ok_or_else(|| Fail::refused("no GPT"))?;
+/// 事前判定（只读）：源分区存在性、目标范围与重叠。返回 `Err` 一律在任何写盘之前。
+/// 几何与修复动作由调用方解析并下传（本函数纯只读，不触盘）
+fn prepare_copy(
+    g: &ValidatedGeometry,
+    repair: RepairAction,
+    part: u32,
+    new_start: u64,
+) -> Result<PreparedCopy, Fail> {
     let ss = g.ss;
-    let e = part.checked_sub(1).and_then(|i| g.entries.get(i as usize))
-        .ok_or_else(|| Fail::refused(format!("partition {part} not found")))?;
-    if e.ending_lba == 0 {
-        return Err(Fail::refused(format!("partition {part} is empty")));
-    }
+    let e = gpt_policy::live_entry(g, part)?;
     let len = e.ending_lba - e.starting_lba + 1;
     let src_start = e.starting_lba;
     // checked：new_start 来自 CLI 原始输入（--align none 时无上界），回绕会骗过下方边界校验
@@ -1627,7 +1710,7 @@ fn execute_copy(
     fault_copy_before_commit();
     // add_entry_at 自带"写盘前拒绝"语义，但它在本命令的边界之后：数据已经复制过去，
     // 此刻它报什么，对本次调用的结论都只能是"盘可能已改变"
-    let num = table::add_entry_at(
+    let num = gpt_policy::add_entry_at(
         src, new_start, new_end, name, p.type_guid, p.unique_guid,
     )
     .map_err(crate::outcome::into_io_error)?;
@@ -1671,6 +1754,33 @@ mod tests {
         plan_tail_packed(&g, repair, grow_part)
     }
 
+    // ---- 测试便利入口：显式解析几何后走生产路径（生产调用方在锁下解析一次后传参） ----
+
+    fn plan_resuming(src: &mut FileSource, grow_part: u32) -> Result<Plan, Fail> {
+        let (g, repair) = gpt_policy::resolve_geometry(src)?.ok_or_else(|| Fail::refused("no GPT on target"))?;
+        make_plan_resuming(src, &g, repair, grow_part)
+    }
+
+    fn plan_shift(src: &mut FileSource, grow_part: u32, shift: Option<u64>) -> Result<Plan, Fail> {
+        let (g, repair) = gpt_policy::resolve_geometry(src)?.ok_or_else(|| Fail::refused("no GPT on target"))?;
+        make_plan_shift_resuming(src, &g, repair, grow_part, shift)
+    }
+
+    fn pending_relocation(src: &FileSource, grow_part: u32) -> Result<bool, Fail> {
+        let (g, _repair) = gpt_policy::resolve_geometry(src)?.ok_or_else(|| Fail::refused("no GPT on target"))?;
+        has_pending_relocation(src, &g, grow_part)
+    }
+
+    fn rsize(src: &mut FileSource, part: u32, start: u64, end: u64, chunk: u64, no_fs: bool, log: &mut dyn FnMut(&str)) -> Outcome {
+        let (g, repair) = gpt_policy::resolve_geometry(src).unwrap().unwrap();
+        resize_part(src, &g, repair, part, start, end, chunk, no_fs, log)
+    }
+
+    fn ap(src: &mut FileSource, plan: &Plan, chunk: u64, no_fs: bool, log: &mut dyn FnMut(&str)) -> Outcome {
+        let (g, _repair) = gpt_policy::resolve_geometry(src).unwrap().unwrap();
+        apply(src, &g, plan, chunk, no_fs, log)
+    }
+
     /// HiddenSectors 修正：0x1C 处写入 LE32 起始 LBA；≥2^32 值取 0（纯函数分支 + 落盘各验一次）
     #[test]
     fn ntfs_hidden_sectors_fix() {
@@ -1682,7 +1792,7 @@ mod tests {
         let f = std::fs::OpenOptions::new().read(true).write(true).open(&path).unwrap();
         let size = std::fs::metadata(&path).unwrap().len();
         let mut src = FileSource {
-            identity: crate::dev::TargetIdentity::resolve(&path, false, size),
+            identity: crate::dev::TargetIdentity::resolve_image(&path),
             file: f,
             path: path.clone(),
             sector_size: 512,
@@ -1721,7 +1831,7 @@ mod tests {
         let f = std::fs::OpenOptions::new().read(true).write(true).open(&tmp).unwrap();
         let size = std::fs::metadata(&tmp).unwrap().len();
         let mut src = FileSource {
-            identity: crate::dev::TargetIdentity::resolve(&tmp, false, size),
+            identity: crate::dev::TargetIdentity::resolve_image(&tmp),
             file: f,
             path: tmp.clone(),
             sector_size: 512,
@@ -1763,7 +1873,7 @@ mod tests {
         atomic_write_ckpt(&ckpt_path, &ckpt.serialize()).unwrap();
 
         // 续传：跳过 chunk 0，补齐 chunk 1..3，提交表项
-        let o = resize_part(&mut src, 1, 12288, 20479, chunk, false, &mut |_| {});
+        let o = rsize(&mut src,1, 12288, 20479, chunk, false, &mut |_| {});
         assert!(o.is_applied(), "resize must apply (exit {})", o.exit_code());
 
         // 终验：目标 4 块 = 指纹 0x10..0x13（chunk 0 未被重搬污染）
@@ -1815,7 +1925,7 @@ mod tests {
         };
         atomic_write_ckpt(&ckpt_path, &ckpt.serialize()).unwrap();
 
-        let o = resize_part(&mut src, 1, new_start, new_end, chunk, true, &mut |_| {});
+        let o = rsize(&mut src,1, new_start, new_end, chunk, true, &mut |_| {});
         assert!(o.is_applied(), "must finish the FS step instead of refusing (exit {})", o.exit_code());
         assert!(!ckpt_path.exists(), "checkpoint must be removed on success");
         let g2 = table::load_gpt(&src).unwrap().unwrap();
@@ -1858,7 +1968,7 @@ mod tests {
         // (a) 请求与 ckpt 记的目标不同 → 拒绝，且不写盘
         atomic_write_ckpt(&ckpt_path, &ckpt.serialize()).unwrap();
         let before = std::fs::read(&path).unwrap();
-        let o = resize_part(&mut src, 1, new_start, new_end + 2048, chunk, true, &mut |_| {});
+        let o = rsize(&mut src,1, new_start, new_end + 2048, chunk, true, &mut |_| {});
         assert_eq!(o.exit_code(), crate::outcome::EXIT_REFUSED, "a retargeted run must be refused");
         assert_eq!(std::fs::read(&path).unwrap(), before, "a refused run must not write");
         assert!(ckpt_path.exists(), "the checkpoint must stay for the job it belongs to");
@@ -1873,7 +1983,7 @@ mod tests {
         table::commit_gpt(&mut src, &g, last_lba).unwrap();
         table::ensure_protective_mbr(&mut src).unwrap();
         let before = std::fs::read(&path).unwrap();
-        let o = resize_part(&mut src, 1, new_start, new_end, chunk, true, &mut |_| {});
+        let o = rsize(&mut src,1, new_start, new_end, chunk, true, &mut |_| {});
         assert_eq!(o.exit_code(), crate::outcome::EXIT_REFUSED, "an unknown on-disk geometry must be refused");
         assert_eq!(std::fs::read(&path).unwrap(), before, "a refused run must not write");
         assert_eq!(
@@ -1906,7 +2016,7 @@ mod tests {
             fs_shrunk: false, chunks_done: 0, chunk_bytes: chunk,
         };
         atomic_write_ckpt(&ckpt_path, &rs.serialize()).unwrap();
-        let o = apply(&mut src, &plan, chunk, true, &mut |_| {});
+        let o = ap(&mut src, &plan, chunk, true, &mut |_| {});
         assert_eq!(o.exit_code(), crate::outcome::EXIT_REFUSED, "apply must refuse while a resize job owns the slot");
         assert!(matches!(read_checkpoint(&src, &geom_of(&src)).unwrap(), CheckpointSlot::Resize(_)), "the resize checkpoint must survive");
         assert_eq!(table::load_gpt(&src).unwrap().unwrap().entries[1].starting_lba, 8192, "nothing may be relocated");
@@ -1918,7 +2028,7 @@ mod tests {
             moves: plan.moves.clone(), cur_index: 0, chunks_done: 0, chunk_bytes: chunk,
         };
         atomic_write_ckpt(&ckpt_path, &ck.serialize()).unwrap();
-        let o = resize_part(&mut src, 1, 2048, 3071, chunk, false, &mut |_| {});
+        let o = rsize(&mut src,1, 2048, 3071, chunk, false, &mut |_| {});
         assert!(
             matches!(&o, Outcome::Refused(m) if m.contains("relocation job")),
             "resize_part must refuse while a relocation job owns the slot: {o:?}"
@@ -2006,6 +2116,68 @@ mod tests {
         );
     }
 
+    /// 原子写的临时文件必须落在目标同目录：相对路径的 parent() 是空而非 None，
+    /// 历史实现把空父目录拼上根组件，临时文件会写到当前盘的根目录
+    #[test]
+    fn relative_checkpoint_path_writes_beside_the_target() {
+        let name = format!(".diskedit.rel_ckpt_test.{}.tmp", std::process::id());
+        let p = std::path::PathBuf::from(&name);
+        atomic_write_ckpt(&p, b"payload").unwrap();
+        assert!(p.exists(), "the ckpt must land beside its relative target");
+        let _ = std::fs::remove_file(&p);
+    }
+
+    /// 进度字段同属盘上可控值：CRC 自洽但值荒谬的 ckpt 若被放行，续传会把该条目的
+    /// 全部 chunk 跳过后仍提交表项——表将指向从未复制过的位置。重算 CRC 以证明
+    /// 拦住它的是上界校验；两族 ckpt 各验一遍
+    #[test]
+    fn checkpoint_rejects_implausible_chunk_progress() {
+        // 搬移型：len_lba=100 × ss=512 = 50 KiB < 1 MiB ⇒ 该条目只有 1 个 chunk
+        let ckpt = Checkpoint {
+            disk_size: 64 * 1024 * 1024,
+            ss: 512,
+            grow_part: 1,
+            last_usable_lba: 100_000,
+            moves: vec![PlanEntry { part_num: 1, first_lba: 2048, len_lba: 100, delta_lba: 200, is_swap: false }],
+            cur_index: 0,
+            chunks_done: 1,
+            chunk_bytes: 1024 * 1024,
+        };
+        assert!(Checkpoint::deserialize(&ckpt.serialize(), &lim(128)).is_ok(), "baseline must stay readable");
+
+        const CUR_INDEX: usize = 73;  // 头 73 字节（magic..moves[0]）之后
+        const CHUNKS_DONE: usize = 77;
+        let rewrite_crc = |b: &mut Vec<u8>| {
+            let crc_off = b.len() - 4;
+            let crc = table::crc32(&b[..crc_off]);
+            b[crc_off..].copy_from_slice(&crc.to_le_bytes());
+        };
+        let mut b = ckpt.serialize();
+        b[CHUNKS_DONE..CHUNKS_DONE + 8].copy_from_slice(&2u64.to_le_bytes());
+        rewrite_crc(&mut b);
+        let e = Checkpoint::deserialize(&b, &lim(128)).err().expect("chunks_done beyond the entry's chunk count must be rejected");
+        assert_eq!(e.kind(), io::ErrorKind::InvalidData, "{e}");
+
+        // 全部条目已提交（cur_index == moves.len()）时进度必须归零
+        let mut b = ckpt.serialize();
+        b[CUR_INDEX..CUR_INDEX + 4].copy_from_slice(&1u32.to_le_bytes());
+        rewrite_crc(&mut b);
+        assert!(Checkpoint::deserialize(&b, &lim(128)).is_err(), "residual progress after the last entry must be rejected");
+
+        // 单分区 resize 型：区间 1024 LBA × 512 B = 512 KiB < 1 MiB ⇒ 同样只有 1 个 chunk
+        let rs = RsCheckpoint {
+            disk_size: 64 * 1024 * 1024, ss: 512, part: 1,
+            old_start: 2048, old_end: 3071, new_start: 2048, new_end: 3071,
+            fs_shrunk: false, chunks_done: 1, chunk_bytes: 1024 * 1024,
+        };
+        assert!(RsCheckpoint::deserialize(&rs.serialize(), &lim(128)).is_ok(), "baseline must stay readable");
+        let mut b = rs.serialize();
+        b[65..73].copy_from_slice(&2u64.to_le_bytes()); // chunks_done @ 12+6×8+4+1
+        rewrite_crc(&mut b);
+        let e = RsCheckpoint::deserialize(&b, &lim(128)).err().expect("chunks_done beyond the moved range must be rejected");
+        assert_eq!(e.kind(), io::ErrorKind::InvalidData, "{e}");
+    }
+
     /// ss 是 LBA→字节换算的唯一单位，写地址全经它换算：与目标几何不一致的 ckpt 即使
     /// CRC 正确也必须拦下（重算 CRC——证明拦住它的是字段校验，不是 CRC），且两族
     /// decoder 同一防线
@@ -2059,7 +2231,7 @@ mod tests {
         let g = table::load_gpt(&src).unwrap().unwrap();
         let ckpt_path = src.identity.checkpoint_path().to_path_buf();
 
-        let e = match make_plan_shift_resuming(&mut src, 1, None) {
+        let e = match plan_shift(&mut src, 1, None) {
             Err(e) => e,
             Ok(_) => panic!("no checkpoint must mean no relocation plan for a shrink"),
         };
@@ -2071,10 +2243,10 @@ mod tests {
             moves: plan.moves.clone(), cur_index: 0, chunks_done: 0, chunk_bytes: chunk,
         };
         atomic_write_ckpt(&ckpt_path, &ck.serialize()).unwrap();
-        let resumed = make_plan_shift_resuming(&mut src, 1, None).unwrap();
+        let resumed = plan_shift(&mut src, 1, None).unwrap();
         assert_eq!(resumed.moves.len(), plan.moves.len(), "resume must return the checkpoint's plan");
-        assert!(has_pending_relocation(&src, 1).unwrap());
-        assert!(!has_pending_relocation(&src, 2).unwrap(), "another partition has no pending job");
+        assert!(pending_relocation(&src, 1).unwrap());
+        assert!(!pending_relocation(&src, 2).unwrap(), "another partition has no pending job");
 
         drop(src);
         let _ = std::fs::remove_file(&ckpt_path);
@@ -2103,12 +2275,12 @@ mod tests {
         };
         atomic_write_ckpt(&ckpt_path, &rs.serialize()).unwrap();
 
-        let e = make_plan_resuming(&mut src, 1).err().expect("a foreign resize job must refuse a fresh plan");
+        let e = plan_resuming(&mut src, 1).err().expect("a foreign resize job must refuse a fresh plan");
         assert!(matches!(&e, Fail::Refused(m) if m.contains("single-partition resize job")), "{e:?}");
-        let e = make_plan_shift_resuming(&mut src, 1, Some(1024)).err().expect("the shift path must refuse it too");
+        let e = plan_shift(&mut src, 1, Some(1024)).err().expect("the shift path must refuse it too");
         assert!(matches!(&e, Fail::Refused(m) if m.contains("single-partition resize job")), "{e:?}");
         // 归属仍判"本分区无搬移作业"：resize 自己要按这份 RsCheckpoint 续跑，不该被搬移的门挡住
-        assert!(!has_pending_relocation(&src, 1).unwrap());
+        assert!(!pending_relocation(&src, 1).unwrap());
 
         drop(src);
         let _ = std::fs::remove_file(&ckpt_path);
@@ -2135,11 +2307,11 @@ mod tests {
         };
         atomic_write_ckpt(&ckpt_path, &ck.serialize()).unwrap();
 
-        let e = make_plan_resuming(&mut src, 1).err().expect("a foreign job must refuse a fresh plan");
+        let e = plan_resuming(&mut src, 1).err().expect("a foreign job must refuse a fresh plan");
         assert!(matches!(&e, Fail::Refused(m) if m.contains("occupies the checkpoint slot")), "{e:?}");
-        let e = make_plan_shift_resuming(&mut src, 1, Some(4096)).err().expect("a foreign job must refuse a fresh shift plan");
+        let e = plan_shift(&mut src, 1, Some(4096)).err().expect("a foreign job must refuse a fresh shift plan");
         assert!(matches!(&e, Fail::Refused(m) if m.contains("occupies the checkpoint slot")), "{e:?}");
-        assert!(!has_pending_relocation(&src, 1).unwrap(), "the occupying job belongs to another partition");
+        assert!(!pending_relocation(&src, 1).unwrap(), "the occupying job belongs to another partition");
 
         drop(src);
         let _ = std::fs::remove_file(&ckpt_path);
@@ -2173,7 +2345,7 @@ mod tests {
         let f = std::fs::OpenOptions::new().read(true).write(true).open(&tmp).unwrap();
         let size = std::fs::metadata(&tmp).unwrap().len();
         let mut src = FileSource {
-            identity: crate::dev::TargetIdentity::resolve(&tmp, false, size),
+            identity: crate::dev::TargetIdentity::resolve_image(&tmp),
             file: f,
             path: tmp.clone(),
             sector_size: 512,
@@ -2191,7 +2363,7 @@ mod tests {
         let f = std::fs::OpenOptions::new().read(true).write(true).open(path).unwrap();
         let size = std::fs::metadata(path).unwrap().len();
         FileSource {
-            identity: crate::dev::TargetIdentity::resolve(path, false, size),
+            identity: crate::dev::TargetIdentity::resolve_image(path),
             file: f,
             path: path.into(),
             sector_size: 512,
@@ -2287,6 +2459,32 @@ mod tests {
         assert!(grow_end_for(&plan_of(vec![mv(40000, 0)], 32734)).is_err());
     }
 
+    /// 右邻已尾打包时重跑 grow：规划只产出 δ=0 的空转 move，执行它不得写盘。
+    /// 落屏障的条件是"moves 里存在非 0 δ"（apply 里的 `effective`），本测试同时锁住
+    /// 该判定的输入（全 0 δ）与后果（邻居表项一字未动）
+    #[test]
+    fn tail_packed_rerun_only_yields_zero_delta_moves() {
+        let data = vec![0u8; 4 * 1024 * 1024];
+        let mut src = crate::support::src_from("tp0", &data);
+        table::create_gpt(&mut src, 512, None).unwrap();
+        // 4MiB = 8192 扇区，尾部留给备份头与备份数组 ⇒ last_usable = 8158：
+        // p3 紧贴尾部，p1 与 p3 之间留 2000 扇区空隙
+        gpt_policy::add_entry_at(&mut src, 2048, 3000, "p1", table::LINUX_FS_TYPE_GUID, [1; 16]).unwrap();
+        gpt_policy::add_entry_at(&mut src, 5001, 8158, "p3", table::LINUX_FS_TYPE_GUID, [3; 16]).unwrap();
+        let plan = make_plan(&mut src, 1).unwrap();
+        assert!(!plan.moves.is_empty(), "the tail neighbour is a blocker and must appear as a move");
+        assert!(plan.moves.iter().all(|m| m.delta_lba == 0), "an already tail-packed neighbour needs no relocation");
+        let before = table::load_gpt(&src).unwrap().unwrap();
+        let o = ap(&mut src, &plan, 1 << 20, true, &mut |_| {});
+        assert!(o.is_complete(), "a zero-delta plan must not fail: {}", o.exit_code());
+        let after = table::load_gpt(&src).unwrap().unwrap();
+        assert_eq!(
+            (before.entries[2].starting_lba, before.entries[2].ending_lba),
+            (after.entries[2].starting_lba, after.entries[2].ending_lba),
+            "a zero-delta move must leave the neighbour untouched"
+        );
+    }
+
     /// 真实路径：truncate 预扩后 backup GPT 与保护 MBR 同时过期 —— 解析标记 NeedsRepair、
     /// plan 只记录修复动作（不写盘）、写入路径 repair 到新末端
     #[test]
@@ -2374,10 +2572,10 @@ mod tests {
                 };
                 atomic_write_ckpt(&ckpt_path, &rs.serialize()).unwrap();
                 let plan = make_plan(&mut src, 1).unwrap();
-                apply(&mut src, &plan, chunk, true, &mut |_| {})
+                ap(&mut src, &plan, chunk, true, &mut |_| {})
             } else {
                 // 新范围与分区 2 重叠 ⇒ resize-part 须事前拒绝
-                resize_part(&mut src, 1, 2048, 9000, chunk, true, &mut |_| {})
+                rsize(&mut src, 1, 2048, 9000, chunk, true, &mut |_| {})
             };
             assert_eq!(o.exit_code(), 10, "via_apply={via_apply}");
 
@@ -2409,7 +2607,7 @@ mod tests {
         let before = std::fs::read(&p).unwrap();
 
         // 新范围与分区 2 重叠 ⇒ 事前拒绝
-        let o = resize_part(&mut src, 1, 2048, 9000, 1024 * 1024, true, &mut |_| {});
+        let o = rsize(&mut src,1, 2048, 9000, 1024 * 1024, true, &mut |_| {});
         assert_eq!(o.exit_code(), 10, "无需修复的表上，事前拒绝仍是 Refused");
         drop(src);
 
@@ -2428,7 +2626,7 @@ mod tests {
         // 注入点落在搬移的第三轮读（右移时尾→头推进，此刻已有 3 个 chunk 写进目标区），
         // 且不在 prepare 阶段的任何探测区间里
         let _fault = crate::dev::ReadFaultGuard::at(2048 * 512 + 3 * chunk);
-        let o = resize_part(&mut src, 1, 6144, 18431, chunk, true, &mut |_| {});
+        let o = rsize(&mut src,1, 6144, 18431, chunk, true, &mut |_| {});
         assert_eq!(o.exit_code(), 30, "越界之后的失败须按 Failed 报（不得声称未写盘）");
         drop(src);
         let _ = std::fs::remove_file(&ckpt_path);
@@ -2451,7 +2649,7 @@ mod tests {
             new_start: 3072, new_end: 5119, fs_shrunk: false, chunks_done: 0, chunk_bytes: chunk,
         };
         atomic_write_ckpt(&ckpt_path, &rs.serialize()).unwrap();
-        let o = resize_part(&mut src, 1, 2048, 4095, chunk, true, &mut |_| {});
+        let o = rsize(&mut src, 1, 2048, 4095, chunk, true, &mut |_| {});
         assert_eq!(o.exit_code(), 10, "Divergent 属事前拒绝");
         assert!(
             matches!(table::load_gpt(&src).unwrap().unwrap().state, table::GptState::NeedsRepair { .. }),
@@ -2466,7 +2664,7 @@ mod tests {
         drop(src);
         make_stale(&p);
         let mut src = plan_open(&p);
-        let o = resize_part(&mut src, 1, 2048, 4095, chunk, true, &mut |_| {});
+        let o = rsize(&mut src, 1, 2048, 4095, chunk, true, &mut |_| {});
         assert_eq!(o.exit_code(), 10, "--no-fs 缩容属事前拒绝");
         assert!(
             matches!(table::load_gpt(&src).unwrap().unwrap().state, table::GptState::NeedsRepair { .. }),
@@ -2608,7 +2806,7 @@ mod tests {
         assert!(crate::fsid::unactivatable_swap(&src, base as u64, 4096 * 512).unwrap());
 
         // 起点不变、向右扩
-        let o = resize_part(&mut src, 1, 2048, 8191, 1024 * 1024, false, &mut |_| {});
+        let o = rsize(&mut src,1, 2048, 8191, 1024 * 1024, false, &mut |_| {});
         match &o {
             crate::outcome::Outcome::Applied { pending, .. } => {
                 assert_eq!(pending.len(), 1, "须报一条待办：{pending:?}");

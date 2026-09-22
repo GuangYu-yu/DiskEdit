@@ -113,6 +113,22 @@ pub(crate) fn active_recovery_records(
 /// 与目标本身；本类型只提供入口，使生命周期只有一个地方可改
 pub(crate) struct TransactionManager;
 
+/// 入口对"目标上已有现场"的处置声明——由调用方**显式选择**，事务层只执行。
+/// 这是"每个入口接受哪几态"的类型化：判据不以闭包形式下沉（压成 bool 会让
+/// 领域结论在闸口处丢失），事务层也不为任何入口猜"这是不是续跑"
+pub(crate) enum ResumeClaim {
+    /// 不接受任何现场：目标上有 active 现场即拒绝。无续跑能力的入口（`copy`）用它——
+    /// 接管别人的现场再成功，会把人家的 journal 当自己的清掉
+    FreshOnly,
+    /// 存在 checkpoint 即按续跑进入（`resize-part` / `move`）：是否真是同一件事，
+    /// 由领域层的恢复校验比对参数后裁决（不匹配即 Divergent 拒绝）
+    AnyCheckpoint,
+    /// 只认本分区的 relocation 作业（`resize` / `apply`）。槽位被别的分区的作业占着
+    /// 时由领域层给出针对性拒绝理由；被另一族作业（单分区 resize 的 RsCheckpoint）
+    /// 占着时拒绝——本入口续不了它，出路是 `resize-part` / `move`
+    OwnRelocation(u32),
+}
+
 impl TransactionManager {
     /// 开一次**新的**写事务：读写打开、取独占所有权、把 journal 接到目标上。
     ///
@@ -124,39 +140,45 @@ impl TransactionManager {
     /// 真正的记录要等到第一次真正的写入（见 [`FileSource::write_at`]）。
     /// 因此一条在校验阶段就被拒的命令不会留下空 journal，也就不会占住候选落点
     pub(crate) fn begin(a: &Args) -> Result<FileSource, Fail> {
-        let mut src = Self::open_rw(a)?;
-        let active = Self::active_records(&src);
-        if !active.is_empty() {
-            return Err(Self::busy(&active));
-        }
-        Self::attach_journal(&mut src)?;
-        Ok(src)
+        // FreshOnly：不接受任何现场。与 begin_or_resume 共用同一闸口——
+        // "普通 mutation 永不接管别人的事务"只有一个执行处
+        Self::begin_or_resume(a, ResumeClaim::FreshOnly).map(|(src, _)| src)
     }
 
     /// 数据搬移类命令的入口：目标上有可续跑的作业时按续跑进入，否则开新事务。
     ///
-    /// 判据由调用方给——那是领域知识（这类命令按 checkpoint 决定能不能接着做）。
-    /// `begin` 不参与这个判断：接管与否永远由调用方显式声明。判据拿到**锁下**的已打开
-    /// 目标，分类（续跑 / 新事务）因此发生在独占权确立之后：先开一次再判，而不是
+    /// 接受哪几态由 `claim` 显式声明（见 [`ResumeClaim`]）——那是领域知识，事务层只执行，
+    /// 不猜"这是不是续跑"。分类发生在**锁下**的已打开目标上：先开一次再判，而不是
     /// 先判一次再开第二次——后者的判据与开目标之间存在窗口，别人可以在窗口里改变现状
     ///
-    /// 判据返回 `Err` 时原样上抛：领域层知道的拒绝原因（例如"槽位被别的分区的作业
-    /// 占着"）必须到达 boundary，压成一个 bool 只会让它退化成通用的 busy 文案
+    /// 领域层判据返回 `Err` 时原样上抛：领域层知道的拒绝原因（例如"槽位被别的分区的
+    /// 作业占着"）必须到达 boundary，压成一个 bool 只会让它退化成通用的 busy 文案
     ///
     /// 返回是否按续跑进入：调用方（如 resize）要拿它决定后续分支
     pub(crate) fn begin_or_resume(
         a: &Args,
-        resumable: impl FnOnce(&FileSource, &[RecoveryRecord]) -> Result<bool, Fail>,
+        claim: ResumeClaim,
     ) -> Result<(FileSource, bool), Fail> {
         let mut src = Self::open_rw(a)?;
         let active = Self::active_records(&src);
         let resumed = if active.is_empty() {
             false
         } else {
-            if !resumable(&src, &active)? {
-                return Err(Self::busy(&active));
+            match claim {
+                ResumeClaim::FreshOnly => return Err(Self::busy(&active)),
+                ResumeClaim::AnyCheckpoint => {
+                    if !active.iter().any(|r| matches!(r, RecoveryRecord::Checkpoint { .. })) {
+                        return Err(Self::busy(&active));
+                    }
+                    true
+                }
+                ResumeClaim::OwnRelocation(grow_part) => {
+                    if !crate::movepart::relocation_ownership(&src, grow_part)? {
+                        return Err(Self::busy(&active));
+                    }
+                    true
+                }
             }
-            true
         };
         Self::attach_journal(&mut src)?;
         Ok((src, resumed))
@@ -188,7 +210,10 @@ impl TransactionManager {
             _ => false,
         });
         let way_out = if resumable {
-            "re-run the command that started it to continue, or release it with `diskedit abandon`"
+            // "重跑原命令即续跑"只对 relocation 作业成立；单分区 resize 的现场
+            //（RecoveryRecord 只有路径，分不出两族）必须把另一条出路一并给出
+            "re-run the command that started it to continue (an unfinished single-partition \
+             resize is resumed with `resize-part` or `move`), or release it with `diskedit abandon`"
         } else if rollbackable {
             "roll it back with `diskedit undo`, or release it with `diskedit abandon`"
         } else {
@@ -211,7 +236,8 @@ impl TransactionManager {
     /// 写挡住——`resize` 这类命令的只读阶段正是在自己随后要取锁之前调它。
     ///
     /// 块设备走只读打开：RW+O_EXCL 在盘被 claim 时会被内核拒绝，分区被占用会连同整盘
-    /// 一起被 claim，而 `info` / `plan` 恰恰可能被用来查看一块正被使用的盘
+    /// 一起被 claim，而 `info` / `plan` 恰恰可能被用来查看一块正被使用的盘。
+    /// 镜像同样真只读：调用面已核清无一处写盘，只读镜像/介质不被拒之门外
     pub(crate) fn read_only(a: &Args) -> Result<FileSource, Fail> {
         #[cfg(target_os = "linux")]
         if let Ok(meta) = std::fs::metadata(&a.target)
@@ -220,7 +246,8 @@ impl TransactionManager {
             return FileSource::open_read_only(Path::new(&a.target))
                 .map_err(|e| Fail::infra(format!("open failed: {e}")));
         }
-        Self::open_plain(a)
+        FileSource::open_read_only_image(Path::new(&a.target), a.sector_size)
+            .map_err(|e| Fail::infra(format!("open failed: {e}")))
     }
 
     /// 读写打开、不取所有权

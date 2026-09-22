@@ -31,7 +31,8 @@ pub(crate) const HELP_SET: &str = r#"diskedit set <TARGET>:N name S | label S | 
     label / uuid  filesystem label / UUID (FS-aware). --random asks the target
                   to generate a new value (ntfs only: its serial is not the
                   Windows volume UUID)
-    flag          GPT: esp|boot|hidden|required ; MBR: boot|hidden"#;
+    flag          GPT: esp|boot|legacy|legacy_boot|hidden|required ;
+                  MBR: boot|hidden"#;
 
 /// 请求形式与目标能力的比对。能力事实取自 `fsops::uuid_support`（不在此另抄一份），
 /// 但"不合能力该不该拒、拿什么措辞拒"是产品的决定，只有命令层能给出"改参数也许有解"
@@ -62,7 +63,7 @@ pub(crate) fn cmd_mkfs(a: &Args) -> u8 {
     // **之后**：目标被别人的未收尾现场占着时，busy 的闸口文案（含出路指引）比
     // "工具缺失"更该先到达——journal 是惰性的，此处拒绝同样不留任何痕迹
     let mut src = open_target_for_write(a).unwrap_or_else(|f| bail_fail(f));
-    if let Err(f) = entry_byte_range(&src, part) {
+    if let Err(f) = crate::gpt_policy::partition_bytes(&src, part) {
         bail_fail(f);
     }
     if let Err(e) = fsops::mkfs_capability(&fstype) {
@@ -119,7 +120,7 @@ pub(crate) fn cmd_resizefs(a: &Args) -> u8 {
         }
         let Some(part) = a.part else { crate::args::usage() };
         let src = open_target_owned(a).unwrap_or_else(|f| bail_fail(f));
-        let (start, len) = entry_byte_range(&src, part).unwrap_or_else(|f| bail_fail(f));
+        let (start, len) = crate::gpt_policy::partition_bytes(&src, part).unwrap_or_else(|f| bail_fail(f));
         // 与 mkfs 同判据：扩 FS 是外部写入，未收尾的恢复现场必须先收拾
         refuse_if_pending_recovery(&src, "resizefs").unwrap_or_else(|f| bail_fail(f));
         let fstype = match fsid::identify(&src, start, len) {
@@ -139,7 +140,7 @@ pub(crate) fn cmd_resizefs(a: &Args) -> u8 {
 pub(crate) fn cmd_check(a: &Args) -> u8 {
     let Some(part) = a.part else { crate::args::usage() };
     let src = open_target_owned(a).unwrap_or_else(|f| bail_fail(f));
-    let (start, len) = entry_byte_range(&src, part).unwrap_or_else(|f| bail_fail(f));
+    let (start, len) = crate::gpt_policy::partition_bytes(&src, part).unwrap_or_else(|f| bail_fail(f));
     // e2fsck -fp / ntfsfix -d 会把修复写进 FS（不经 journal）：同 mkfs 的理由
     refuse_if_pending_recovery(&src, "check").unwrap_or_else(|f| bail_fail(f));
     let fstype = fsid::identify(&src, start, len).unwrap_or_else(|e| bail_fail(Fail::infra(format!("identify failed: {e}"))));
@@ -161,7 +162,7 @@ pub(crate) fn cmd_set(a: &Args) -> u8 {
     let mut src = open_target_for_write(a).unwrap_or_else(|f| bail_fail(f));
     if key == "name" {
         if value.is_empty() { crate::args::usage(); }
-        return match crate::table::rename_entry(&mut src, part, &value) {
+        return match crate::gpt_policy::rename_entry(&mut src, part, &value) {
             Ok(()) => table_write_done(&src, &format!("renamed partition #{part} to {value:?}")),
             Err(f) => bail_fail(f),
         };
@@ -170,7 +171,8 @@ pub(crate) fn cmd_set(a: &Args) -> u8 {
         if value.is_empty() { crate::args::usage(); }
         let on = match state.as_str() { "on" => true, "off" => false, _ => crate::args::usage() };
         let r = match crate::table::table_label(&src) {
-            Ok(crate::table::TableLabel::Gpt) => crate::table::set_gpt_flag(&mut src, part, &value, on),
+            Ok(crate::table::TableLabel::Gpt) => crate::gpt_policy::GptFlag::parse(&value)
+                .and_then(|f| crate::gpt_policy::set_gpt_flag(&mut src, part, f, on)),
             Ok(crate::table::TableLabel::Mbr) if value == "boot" => crate::table::set_mdos_boot(&mut src, part, on),
             Ok(crate::table::TableLabel::Mbr) if value == "hidden" => crate::table::set_mdos_hidden(&mut src, part, on),
             Ok(crate::table::TableLabel::Mbr) => bail_fail(Fail::refused("msdos flags: only `boot` and `hidden` are supported".to_string())),
@@ -183,7 +185,7 @@ pub(crate) fn cmd_set(a: &Args) -> u8 {
         };
     }
     // label/uuid 需要 FS 识别
-    let (start, len) = entry_byte_range(&src, part).unwrap_or_else(|f| bail_fail(f));
+    let (start, len) = crate::gpt_policy::partition_bytes(&src, part).unwrap_or_else(|f| bail_fail(f));
     let fstype = fsid::identify(&src, start, len).unwrap_or_else(|e| bail_fail(Fail::infra(format!("identify failed: {e}"))));
     let r = match key {
         "label" if !value.is_empty() => fsops::set_label(&src, part, fstype, &value),
