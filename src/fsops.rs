@@ -684,7 +684,14 @@ fn mkfs_tool(fstype: &str) -> Result<MkfsTool<'_>, FsError> {
 /// 屏障——一个拼错的类型名、或一个没装的工具包，都不该把目标锁在"未收尾"状态里等 `abandon`
 pub fn mkfs_capability(fstype: &str) -> Result<(), FsError> {
     let tool = mkfs_tool(fstype)?;
-    find_tool(&tool.program).map(|_| ())
+    find_tool(&tool.program).map(|_| ()).map_err(|e| match e {
+        FsError::ToolMissing(_) => FsError::missing(format!(
+            "cannot mkfs {fstype}: requires `{}` (package: {}) — not found in PATH",
+            tool.program,
+            tool_package(&tool.program)
+        )),
+        e => e,
+    })
 }
 
 /// mkfs：破坏分区数据，调用方须先取确认；执行前先擦残留签名（见 erase_ranges），
@@ -787,7 +794,15 @@ fn tool_package(tool: &str) -> &'static str {
         "xfs_growfs" => "xfsprogs",
         "btrfs" => "btrfs-progs",
         "fatresize" => "fatresize",
-        "mkswap" => "util-linux",
+        "mkswap" | "swaplabel" => "util-linux",
+        // mkfs 的各工具（mkfs_tool 的 program）：由 mkfs_capability 的缺工具提示引用
+        "mke2fs" => "e2fsprogs",
+        "mkfs.vfat" => "dosfstools",
+        "mkfs.exfat" => "exfatprogs",
+        "mkfs.ntfs" => "ntfs-3g",
+        "mkfs.xfs" => "xfsprogs",
+        "mkfs.btrfs" => "btrfs-progs",
+        "mkfs.f2fs" => "f2fs-tools",
         _ => "unknown",
     }
 }
@@ -926,7 +941,12 @@ fn resize_fs_in(src: &FileSource, scope: &DeviceScope, fstype: &str) -> Result<(
             with_scope_device(src, scope, |dev| {
                 let mut out = run("fatresize", &["-s", "max", dev])?;
                 if !out.status.success() {
-                    out = run("fatresize", &["-s", &(dev_len - 1).to_string(), dev])?;
+                    // 兜底的字节数 = 设备长 − 1（见上）：长度为 0 时减一会回绕成
+                    // u64::MAX，把"无从格式化"伪装成扩到天文数字
+                    let want = dev_len.checked_sub(1).ok_or_else(|| {
+                        FsError::invalid(format!("vfat device length {dev_len} — cannot derive fallback size"))
+                    })?;
+                    out = run("fatresize", &["-s", &want.to_string(), dev])?;
                 }
                 if !out.status.success() {
                     return Err(FsError::command("fatresize", &out));
@@ -1119,7 +1139,8 @@ pub fn check_fs(src: &FileSource, part: u32, fstype: &str) -> Result<(), FsError
 /// 设置 FS label。值原样传给各 FS 官方工具。
 /// 来源：tune2fs -L（man tune2fs）、xfs_admin -L ≤12 字符（man xfs_admin）、
 /// btrfs filesystem label ≤256 字符（man btrfs-filesystem）、ntfslabel（man ntfslabel）、
-/// fatlabel ≤11 字节（man fatlabel）、exfatlabel（man exfatlabel）
+/// fatlabel ≤11 字节（man fatlabel）、exfatlabel（man exfatlabel）、
+/// swaplabel -L（man swaplabel，标签写进 swap 头的 volume_name[16]）
 pub fn set_label(src: &FileSource, part: u32, fstype: &str, label: &str) -> Result<(), FsError> {
     with_partition_device(src, part, |dev| {
         let (tool, args): (&str, Vec<String>) = match fstype {
@@ -1139,6 +1160,7 @@ pub fn set_label(src: &FileSource, part: u32, fstype: &str, label: &str) -> Resu
             "ntfs" => ("ntfslabel", vec![dev.into(), label.into()]),
             "vfat" => ("fatlabel", vec![dev.into(), label.into()]),
             "exfat" => ("exfatlabel", vec![dev.into(), label.into()]),
+            "swap" => ("swaplabel", vec!["-L".into(), label.into(), dev.into()]),
             other => return Err(FsError::unsupported(format!("no label tool wired for {other}"))),
         };
         let argrefs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
@@ -1161,7 +1183,7 @@ pub enum UuidRequest {
 }
 
 /// 该 FS 能接受什么样的 UUID 设置请求（三态，不折成布尔）：
-/// - `Yes`：值由调用方给定（tune2fs -U / xfs_admin -U / btrfstune -U）
+/// - `Yes`：值由调用方给定（tune2fs -U / xfs_admin -U / btrfstune -U / swaplabel -U）
 /// - `RandomOnly`：只支持"生成新随机值"。ntfs 唯一可改的标识是 `ntfslabel --new-serial`
 ///   生成的 serial，而它**不是** Windows volume UUID（man ntfslabel）——用户给的具体值
 ///   无从落实，静默丢弃正是要防的漂移，故必须让调用方显式拒绝
@@ -1173,7 +1195,7 @@ pub enum UuidSupport {
 }
 
 pub fn uuid_support(fstype: &str) -> UuidSupport {
-    if is_ext(fstype) || matches!(fstype, "xfs" | "btrfs") {
+    if is_ext(fstype) || matches!(fstype, "xfs" | "btrfs" | "swap") {
         UuidSupport::Yes
     } else if fstype == "ntfs" {
         UuidSupport::RandomOnly
@@ -1184,7 +1206,8 @@ pub fn uuid_support(fstype: &str) -> UuidSupport {
 
 /// 设置 FS UUID。来源：tune2fs -U（man tune2fs）、xfs_admin -U（man xfs_admin）、
 /// ntfslabel --new-serial 无值=随机 serial（man ntfslabel）、
-/// btrfstune -f -U（-f：change fsid 属 dangerous changes，man btrfstune）。
+/// btrfstune -f -U（-f：change fsid 属 dangerous changes，man btrfstune）、
+/// swaplabel -U（man swaplabel）。
 /// 请求形式与 FS 能力的匹配由调用方先按 [`uuid_support`] 判定；此处只做工具映射，
 /// 落不到工具的组合同样拒绝，不静默降级
 pub fn set_uuid(src: &FileSource, part: u32, fstype: &str, req: &UuidRequest) -> Result<(), FsError> {
@@ -1197,6 +1220,7 @@ pub fn set_uuid(src: &FileSource, part: u32, fstype: &str, req: &UuidRequest) ->
                 f if is_ext(f) => ("tune2fs", vec!["-U".into(), u.clone(), dev.into()]),
                 "xfs" => ("xfs_admin", vec!["-U".into(), u.clone(), dev.into()]),
                 "btrfs" => ("btrfstune", vec!["-f".into(), "-U".into(), u.clone(), dev.into()]),
+                "swap" => ("swaplabel", vec!["-U".into(), u.clone(), dev.into()]),
                 _ => return Err(no_tool("")),
             },
             // 只有 ntfs 的工具提供"生成新值"这一用法
@@ -1216,7 +1240,7 @@ pub fn set_uuid(src: &FileSource, part: u32, fstype: &str, req: &UuidRequest) ->
 
 #[cfg(test)]
 mod tests {
-    use super::{check_e2fsck, erase_ranges, parse_num_field, partition_byte_range};
+    use super::{check_e2fsck, erase_ranges, parse_num_field, partition_byte_range, uuid_support, UuidSupport};
     use super::FsError;
     use crate::dev::FileSource;
 
@@ -1232,6 +1256,15 @@ mod tests {
         }
         // 基础设施故障（8/16 等）同样走 CommandFailed，与 2/3/4 同口径
         assert!(matches!(check_e2fsck(8), Err(FsError::CommandFailed(_))));
+    }
+
+    /// swap 的 label/uuid 走 swaplabel（util-linux）：能力判定归 Yes（只收显式值，
+    /// `--random` 由命令层按 Yes+NewRandom 拒绝）。这条接线若回退，set 会退回
+    /// "no label tool wired for swap" 的拒绝
+    #[test]
+    fn swap_label_and_uuid_are_wired_to_swaplabel() {
+        assert!(matches!(uuid_support("swap"), UuidSupport::Yes));
+        assert!(matches!(uuid_support("vfat"), UuidSupport::No(_)));
     }
 
     fn fs_fixture(tag: &str, data: Vec<u8>) -> FileSource {

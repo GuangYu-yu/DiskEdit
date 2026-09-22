@@ -575,6 +575,11 @@ mod imp {
         if let Err(o) = refuse_if_scene_active(&t) {
             return o;
         }
+        // 活动 swap 的锁下复核（命令层那次是锁前粗查）：swapon 不守本工具的锁，
+        // 窗口内被激活的 swap 若放行写表，改的就是活动 swap 的底层分区
+        if crate::online::swap_active(disk_name, pno) {
+            return Outcome::refused(format!("partition {pno} became active swap during locking — run swapoff first"));
+        }
         if new_len_bytes <= t.part_len_bytes {
             return Outcome::refused(format!(
                 "PV partition can only grow here (current {} bytes); PV shrink needs the lvreduce/pvresize chain",

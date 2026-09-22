@@ -24,9 +24,9 @@ pub(crate) fn print_moves(plan: &movepart::Plan) {
     }
 }
 
-pub(crate) fn print_plan(plan: &movepart::Plan) -> std::io::Result<()> {
+pub(crate) fn print_plan(plan: &movepart::Plan, target_start: u64) -> std::io::Result<()> {
     // 实际扩容终点由 grow_end_for 判定（与 apply 同一实现）
-    let new_end = movepart::grow_end_for(plan)?;
+    let new_end = movepart::grow_end_for(plan, target_start)?;
     println!("plan: grow partition {} → end LBA {} (blockers relocated)", plan.grow_part, new_end);
     print_moves(plan);
     Ok(())
@@ -59,8 +59,12 @@ pub(crate) fn cmd_plan_apply(cmd: &str, a: &Args) -> u8 {
             println!("[repair] {what}");
         }
         // 终点与实际写入一致（grow_end_for 是 apply 用的同一实现）；
-        // last_usable_lba 单独列出：它是尾部打包的上界，不等于本次扩容终点
-        let grow_end = movepart::grow_end_for(&plan)
+        // last_usable_lba 单独列出：它是尾部打包的上界，不等于本次扩容终点。
+        // 下界取目标分区当前起点（与 apply 读同一张表）
+        let target_start = crate::gpt_policy::live_entry(&g, plan.grow_part)
+            .unwrap_or_else(|f| bail_fail(f))
+            .starting_lba;
+        let grow_end = movepart::grow_end_for(&plan, target_start)
             .unwrap_or_else(|e| bail_fail(Fail::refused(format!("plan failed: {e}"))));
         println!(
             "grow partition {} → end LBA {} (last usable {})",
@@ -101,9 +105,19 @@ fn apply_cmd(a: &Args, grow: u32) -> u8 {
     };
     let mut logger = Logger::open(&src, Some(g.header.disk_guid));
     let o = movepart::apply(&mut src, &g, &plan, chunk, a.no_fs, &mut |m| logger.log(m));
-    // 失败时日志里也留一份：apply 出问题后用户常回看日志
-    if let crate::outcome::Outcome::Failed { cause } = &o {
-        logger.log(&format!("apply failed: {cause}"));
+    // 出问题时日志里也留一份：apply 失败后用户常回看日志——refused 的参数成因
+    // 与 infra 的环境故障同样值得持久化
+    if !o.is_complete() {
+        let why = match &o {
+            crate::outcome::Outcome::Refused(m) => format!("refused: {m}"),
+            crate::outcome::Outcome::Infra { cause } | crate::outcome::Outcome::Failed { cause } => format!("error: {cause}"),
+            crate::outcome::Outcome::Applied { pending, kernel_sync } => format!(
+                "finished with {} pending, kernel view {}",
+                pending.len(),
+                if *kernel_sync == crate::outcome::KernelSync::Stale { "stale" } else { "in sync" }
+            ),
+        };
+        logger.log(&format!("apply {why}"));
     }
     settle_layout(o, &src).exit_code()
 }

@@ -78,6 +78,15 @@ pub(crate) fn cmd_new(a: &Args) -> u8 {
     }
 }
 
+/// `--name` 写的是 GPT 分区名；MBR 条目没有这一列。旗标白名单是命令级的，
+/// 分支级的消费差异必须在分支里显式拒绝——静默丢弃等于命令做了旗标
+/// 明确排除的事却报成功
+fn refuse_name_on_msdos(a: &Args) {
+    if a.name.is_some() {
+        bail_fail(Fail::refused("`--name` sets a GPT partition name — MBR entries have none; drop --name".to_string()));
+    }
+}
+
 pub(crate) fn cmd_add(a: &Args) -> u8 {
     // add 追加到最低空闲槽位，不接受 `:N` 指定槽位：静默忽略会让用户以为写进了 N 号槽
     if let Some(n) = a.part {
@@ -102,6 +111,7 @@ pub(crate) fn cmd_add(a: &Args) -> u8 {
         Ok(None) => match table::parse_mbr(&src) {
             Err(e) => bail_fail(Fail::infra(format!("label probe failed: {e}"))),
             Ok(Some(_)) => {
+                refuse_name_on_msdos(a);
                 let (start, end) = align_range(a, start, end, src.sector_size);
                 let os_type = match &a.type_guid {
                     Some(s) => {
@@ -255,6 +265,15 @@ pub(crate) fn cmd_create(a: &Args) -> u8 {
     if let Some(n) = a.part {
         bail_fail(Fail::refused(format!("`create` picks a free gap itself — drop :{n}")));
     }
+    // FS 类型先问再开事务（判据与出口码同 `mkfs`）：未接线的类型是请求本身的错误，
+    // 用户改不动它——事前拒绝，此刻什么都没写。工具缺失不在此拦：分区照建，mkfs
+    // 走后置条件通道记 PARTIAL（装上工具后按提示补做）
+    if let Some(fstype) = &a.fs
+        && let Err(e) = crate::fsops::mkfs_capability(fstype)
+        && matches!(&e, crate::fsops::FsError::UnsupportedFs(_))
+    {
+        bail_fail(Fail::from(e));
+    }
     let mut src = open_target_for_write(a).unwrap_or_else(|f| bail_fail(f));
     // 一次探测同时取"表类型 + 空闲区"：后面选槽写表要用的是同一个 label，
     // 再探一次等于重解析一遍表（且可能读到与前面不同的结果）。
@@ -279,6 +298,7 @@ pub(crate) fn cmd_create(a: &Args) -> u8 {
             (table::TableLabel::Gpt, aligned_gaps(&used, g.first_usable_lba(), g.last_usable_lba(), unit), want, g.ss)
         }
         Ok(table::TableLabel::Mbr) => {
+            refuse_name_on_msdos(a);
             let mbr = match table::parse_mbr(&src) {
                 Ok(Some(m)) => m,
                 Ok(None) => bail_fail(Fail::refused("no partition table on target — run `new` first".to_string())),
@@ -329,9 +349,9 @@ pub(crate) fn cmd_create(a: &Args) -> u8 {
     // 走 Pending 通道报 PARTIAL（补救提示由 FS 层生成），不在这里手写出口码
     let mut pending = Vec::new();
     if let Some(fstype) = &a.fs {
-        // 屏障的判据是"确实把写盘交给了外部工具"：类型不认得 / 工具不在时 mkfs
-        // 起都没起来，盘上只有表写入——那条分区记录仍可整体 undo，不落屏障；
-        // 工具真的跑起来了（可能写了半个 FS）才落屏障，undo 从此拒绝
+        // 屏障的判据是"确实把写盘交给了外部工具"：工具不在时 mkfs 起都没起来（类型
+        // 不认得已在开事务前整体拒绝），盘上只有表写入——那条分区记录仍可整体 undo，
+        // 不落屏障；工具真的跑起来了（可能写了半个 FS）才落屏障，undo 从此拒绝
         if crate::fsops::mkfs_capability(fstype).is_ok() {
             src.set_mutation(crate::dev::Mutation::Mkfs);
             if let Err(e) = src.mark_non_reversible() {
@@ -343,11 +363,18 @@ pub(crate) fn cmd_create(a: &Args) -> u8 {
             }
         }
         if let Err(e) = crate::fsops::mkfs(&src, num, fstype) {
+            // create 没有"原来的 UUID"可保：新分区上的 swap 提示不带 --uuid 占位符
+            let dev_hint = crate::dev::part_dev_hint(&src, num, start * lba_bytes);
+            let hint = if *fstype == "swap" {
+                format!("mkswap {dev_hint}")
+            } else {
+                crate::fsops::rescue_hint(fstype, &dev_hint)
+            };
             pending.push(crate::outcome::Pending::new(
                 num,
                 crate::outcome::PendingKind::Fs,
                 e.to_string(),
-                crate::fsops::rescue_hint(fstype, &crate::dev::part_dev_hint(&src, num, start * lba_bytes)),
+                hint,
             ));
         }
     }

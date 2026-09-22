@@ -13,7 +13,7 @@ use std::io;
 use std::path::PathBuf;
 
 pub const CKPT_MAGIC: &[u8; 8] = b"DKECKPT1";
-pub const CKPT_VERSION: u32 = 3;
+pub const CKPT_VERSION: u32 = 4;
 
 /// checkpoint 批量提交粒度：性能参数，不属于恢复协议。恢复永远从最近一次
 /// durable checkpoint 继续；此值只决定提交频率，即崩溃后最多重做多少个
@@ -68,11 +68,23 @@ fn is_swap_guid(g: &[u8; 16]) -> bool {
     *g == table::SWAP_TYPE_GUID || *g == SWAP_TYPE_GUID_NATURAL
 }
 
+/// plan 的进入语义。`grow` 与 `SIZE` 两条命令共用同一个续跑槽位，续跑时必须
+/// 对上号：按自己的语义执行对方的 plan，就是把用户的请求静默放大或缩水
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum PlanKind {
+    /// 吃满右侧空闲的尾部打包（`resize grow` / `plan` / `apply`）
+    TailPacked,
+    /// 精确落在请求新末端的最小位移（`resize SIZE + --allow-move`）
+    Shift,
+}
+
 pub struct Plan {
     pub ss: u64,
     pub last_usable_lba: u64,
     pub grow_part: u32,
     pub moves: Vec<PlanEntry>,
+    pub kind: PlanKind,
     /// 待执行的修复动作：plan 只记录，apply 执行（plan 本身不写盘）
     pub repair: RepairAction,
 }
@@ -135,7 +147,7 @@ fn plan_tail_packed(g: &ValidatedGeometry, repair: RepairAction, grow_part: u32)
         cursor = new_first.saturating_sub(1);
         moves.push(PlanEntry { part_num: *num, first_lba: e.starting_lba, len_lba: len, delta_lba: delta, is_swap: is_swap_guid(&e.partition_type_guid) });
     }
-    Ok(Plan { ss, last_usable_lba: g.header.last_usable_lba, grow_part, moves, repair })
+    Ok(Plan { ss, last_usable_lba: g.header.last_usable_lba, grow_part, moves, kind: PlanKind::TailPacked, repair })
 }
 
 /// 尾打包 plan 的恢复感知版本：ckpt 存在时以 ckpt 的 moves 为准（见 resume_outcome），
@@ -199,7 +211,7 @@ fn shift_plan_from(g: &ValidatedGeometry, repair: RepairAction, grow_part: u32, 
         moves.push(PlanEntry { part_num: *num, first_lba: e.starting_lba, len_lba: len, delta_lba: delta, is_swap: is_swap_guid(&e.partition_type_guid) });
     }
     moves.reverse(); // 升序构造 → 降序排列：最右侧先搬
-    Ok(Plan { ss, last_usable_lba: g.header.last_usable_lba, grow_part, moves, repair })
+    Ok(Plan { ss, last_usable_lba: g.header.last_usable_lba, grow_part, moves, kind: PlanKind::Shift, repair })
 }
 
 /// 中断感知的最小位移 plan：ckpt 存在时以 ckpt 的 moves 为准（见 resume_outcome），
@@ -305,6 +317,7 @@ fn resume_outcome(src: &FileSource, g: &ValidatedGeometry, grow_part: u32) -> Re
                     last_usable_lba: c.last_usable_lba,
                     grow_part: c.grow_part,
                     moves: c.moves,
+                    kind: c.kind,
                     repair: RepairAction::None,
                 })
             } else {
@@ -331,6 +344,7 @@ pub struct Checkpoint {
     pub grow_part: u32,
     pub last_usable_lba: u64,
     pub moves: Vec<PlanEntry>,
+    pub kind: PlanKind,    // plan 的进入语义（续跑入口据此对号）
     pub cur_index: u32,   // 正在搬的 moves 下标
     pub chunks_done: u64, // 该分区已完成的 chunk 数
     pub chunk_bytes: u64, // chunk 大小（续传不一致即拒绝）
@@ -356,6 +370,7 @@ impl Checkpoint {
         b.extend_from_slice(&self.cur_index.to_le_bytes());
         b.extend_from_slice(&self.chunks_done.to_le_bytes());
         b.extend_from_slice(&self.chunk_bytes.to_le_bytes());
+        b.push(self.kind as u8);
         let crc = table::crc32(&b);
         b.extend_from_slice(&crc.to_le_bytes());
         b
@@ -365,9 +380,9 @@ impl Checkpoint {
     /// 容器末端都取自盘上那张表的自述几何，故 256 槽位的表与 128 槽位的一样合法
     fn deserialize(b: &[u8], lim: &GeometryLimits) -> io::Result<Self> {
         // magic8 + ver4 + disk_size8 + ss8 + grow_part4 + last_usable8 + count4
-        // + cur_index4 + chunks_done8 + chunk_bytes8 + crc4：count=0 时的精确最小值。
-        // 少算只是把检查让给后面逐字段的 rd 兜底，常数本身失去防守意义
-        if b.len() < 8 + 4 + 8 + 8 + 4 + 8 + 4 + 4 + 8 + 8 + 4 {
+        // + cur_index4 + chunks_done8 + chunk_bytes8 + kind1 + crc4：count=0 时的
+        // 精确最小值。少算只是把检查让给后面逐字段的 rd 兜底，常数本身失去防守意义
+        if b.len() < 8 + 4 + 8 + 8 + 4 + 8 + 4 + 4 + 8 + 8 + 1 + 4 {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "checkpoint truncated"));
         }
         if &b[0..8] != CKPT_MAGIC {
@@ -447,6 +462,12 @@ impl Checkpoint {
         off += 8;
         let chunk_bytes = u64::from_le_bytes(rd(off, 8)?.try_into().unwrap());
         off += 8;
+        let kind = match rd(off, 1)?[0] {
+            0 => PlanKind::TailPacked,
+            1 => PlanKind::Shift,
+            _ => return Err(io::Error::new(io::ErrorKind::InvalidData, "implausible checkpoint plan kind")),
+        };
+        off += 1;
         let stored = u32::from_le_bytes(rd(off, 4)?.try_into().unwrap());
         if table::crc32(&b[..off]) != stored {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "checkpoint CRC mismatch"));
@@ -468,7 +489,7 @@ impl Checkpoint {
         if chunks_done > chunks_limit {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "implausible checkpoint chunk progress"));
         }
-        Ok(Checkpoint { disk_size, ss, grow_part, last_usable_lba, moves, cur_index, chunks_done, chunk_bytes })
+        Ok(Checkpoint { disk_size, ss, grow_part, last_usable_lba, moves, kind, cur_index, chunks_done, chunk_bytes })
     }
 }
 
@@ -631,8 +652,10 @@ pub(crate) use fault_points;
 
 /// 扩容终点：`moves` 是按"末→首"的尾部紧凑打包序，各分区新起点中最小者即本次腾出空间的
 /// 左边界，故 grow_end = min(new_first) − 1；无 movable 时扩到 last_usable_lba。
-/// 加法一律 checked：越界/损坏表下报错而非回绕（回绕会把荒谬的 LBA 写进表再交给 resize）
-pub fn grow_end_for(plan: &Plan) -> io::Result<u64> {
+/// 加法一律 checked：越界/损坏表下报错而非回绕（回绕会把荒谬的 LBA 写进表再交给 resize）。
+/// `target_start`：moves 可整份来自 ckpt，其 first+delta 的下界只到 LBA 1——终点低于
+/// 目标分区自身起点就是端点倒挂的表项。上、下两个边界在此收口成唯一判据
+pub fn grow_end_for(plan: &Plan, target_start: u64) -> io::Result<u64> {
     let mut leftmost: Option<u64> = None;
     for m in &plan.moves {
         let new_first = m.first_lba.checked_add(m.delta_lba).ok_or_else(|| {
@@ -649,6 +672,9 @@ pub fn grow_end_for(plan: &Plan) -> io::Result<u64> {
     };
     if grow_end > plan.last_usable_lba {
         return Err(io::Error::new(io::ErrorKind::InvalidData, "relocation target beyond last usable LBA — refusing"));
+    }
+    if grow_end < target_start {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "grow target below its own start — refusing"));
     }
     Ok(grow_end)
 }
@@ -767,6 +793,7 @@ fn prepare_apply(
                 grow_part: plan.grow_part,
                 last_usable_lba: plan.last_usable_lba,
                 moves: plan.moves.clone(),
+                kind: plan.kind,
                 cur_index: c.cur_index.min(plan.moves.len() as u32),
                 chunks_done: c.chunks_done,
                 chunk_bytes: chunk_len,
@@ -789,6 +816,7 @@ fn prepare_apply(
             grow_part: plan.grow_part,
             last_usable_lba: plan.last_usable_lba,
             moves: plan.moves.clone(),
+            kind: plan.kind,
             cur_index: 0,
             chunks_done: 0,
             chunk_bytes: chunk_len,
@@ -959,13 +987,8 @@ fn execute_apply(
     // 无 movable 时到 last_usable。commit → resize FS（同一份随行几何，不重读盘上的表）
     let (grow_start, grow_len, old_len);
     {
-        let grow_end = grow_end_for(plan)?;
         let te = &mut g.entries[(plan.grow_part - 1) as usize];
-        // moves 可整份来自 ckpt：first_lba + delta 的下界只到 first_usable，若低于目标起点，
-        // 提交的就是端点倒挂的表项。grow_end_for 只保证 ≥ LBA 1，此处补目标自身的下界
-        if grow_end < te.starting_lba {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "grow target below its own start — refusing"));
-        }
+        let grow_end = grow_end_for(plan, te.starting_lba)?;
         old_len = te.ending_lba.checked_sub(te.starting_lba)
             .map(|v| v + 1)
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "grow target entry inverted — refusing"))?;
@@ -2025,7 +2048,7 @@ mod tests {
         std::fs::remove_file(&ckpt_path).unwrap();
         let ck = Checkpoint {
             disk_size: src.size, ss, grow_part: 1, last_usable_lba: plan.last_usable_lba,
-            moves: plan.moves.clone(), cur_index: 0, chunks_done: 0, chunk_bytes: chunk,
+            moves: plan.moves.clone(), kind: PlanKind::TailPacked, cur_index: 0, chunks_done: 0, chunk_bytes: chunk,
         };
         atomic_write_ckpt(&ckpt_path, &ck.serialize()).unwrap();
         let o = rsize(&mut src,1, 2048, 3071, chunk, false, &mut |_| {});
@@ -2070,6 +2093,7 @@ mod tests {
             grow_part: 3,
             last_usable_lba: 100_000,
             moves: vec![PlanEntry { part_num: 1, first_lba: 2048, len_lba: 100, delta_lba: 200, is_swap: false }],
+            kind: PlanKind::TailPacked,
             cur_index: 0,
             chunks_done: 0,
             chunk_bytes: 1024 * 1024,
@@ -2139,6 +2163,7 @@ mod tests {
             grow_part: 1,
             last_usable_lba: 100_000,
             moves: vec![PlanEntry { part_num: 1, first_lba: 2048, len_lba: 100, delta_lba: 200, is_swap: false }],
+            kind: PlanKind::TailPacked,
             cur_index: 0,
             chunks_done: 1,
             chunk_bytes: 1024 * 1024,
@@ -2189,6 +2214,7 @@ mod tests {
             grow_part: 1,
             last_usable_lba: 100_000,
             moves: vec![PlanEntry { part_num: 1, first_lba: 2048, len_lba: 100, delta_lba: 200, is_swap: false }],
+            kind: PlanKind::TailPacked,
             cur_index: 0,
             chunks_done: 0,
             chunk_bytes: 1024 * 1024,
@@ -2240,7 +2266,7 @@ mod tests {
         let plan = make_plan(&mut src, 1).unwrap();
         let ck = Checkpoint {
             disk_size: src.size, ss: g.ss, grow_part: 1, last_usable_lba: plan.last_usable_lba,
-            moves: plan.moves.clone(), cur_index: 0, chunks_done: 0, chunk_bytes: chunk,
+            moves: plan.moves.clone(), kind: PlanKind::Shift, cur_index: 0, chunks_done: 0, chunk_bytes: chunk,
         };
         atomic_write_ckpt(&ckpt_path, &ck.serialize()).unwrap();
         let resumed = plan_shift(&mut src, 1, None).unwrap();
@@ -2301,6 +2327,7 @@ mod tests {
             grow_part: 2,
             last_usable_lba: 32734,
             moves: vec![PlanEntry { part_num: 1, first_lba: 2048, len_lba: 4096, delta_lba: 2048, is_swap: false }],
+            kind: PlanKind::TailPacked,
             cur_index: 0,
             chunks_done: 0,
             chunk_bytes: 1024 * 1024,
@@ -2442,21 +2469,23 @@ mod tests {
     /// grow_end 公式的纯算术边界（不依赖任何平台）
     #[test]
     fn grow_end_formula_and_overflow() {
-        let plan_of = |moves: Vec<PlanEntry>, last_usable: u64| Plan { ss: 512, last_usable_lba: last_usable, grow_part: 1, moves, repair: RepairAction::None };
+        let plan_of = |moves: Vec<PlanEntry>, last_usable: u64| Plan { ss: 512, last_usable_lba: last_usable, grow_part: 1, moves, kind: PlanKind::TailPacked, repair: RepairAction::None };
         let mv = |first_lba: u64, delta_lba: u64| PlanEntry { part_num: 1, first_lba, len_lba: 10, delta_lba, is_swap: false };
 
         // 无 movable → last_usable_lba
-        assert_eq!(grow_end_for(&plan_of(vec![], 32734)).unwrap(), 32734);
+        assert_eq!(grow_end_for(&plan_of(vec![], 32734), 0).unwrap(), 32734);
         // last_usable_lba 取满值也不得溢出
-        assert_eq!(grow_end_for(&plan_of(vec![], u64::MAX)).unwrap(), u64::MAX);
+        assert_eq!(grow_end_for(&plan_of(vec![], u64::MAX), 0).unwrap(), u64::MAX);
         // delta = 0（已贴合的 movable 同样进 moves）→ 其新起点 − 1
-        assert_eq!(grow_end_for(&plan_of(vec![mv(1000, 0)], 32734)).unwrap(), 999);
+        assert_eq!(grow_end_for(&plan_of(vec![mv(1000, 0)], 32734), 0).unwrap(), 999);
         // 多个 movable → 取最小新起点 − 1（100→150、200→250）
-        assert_eq!(grow_end_for(&plan_of(vec![mv(100, 50), mv(200, 50)], 32734)).unwrap(), 149);
+        assert_eq!(grow_end_for(&plan_of(vec![mv(100, 50), mv(200, 50)], 32734), 0).unwrap(), 149);
         // first_lba + delta_lba 溢出 → 报错，不回绕
-        assert!(grow_end_for(&plan_of(vec![mv(u64::MAX - 5, 10)], u64::MAX)).is_err());
+        assert!(grow_end_for(&plan_of(vec![mv(u64::MAX - 5, 10)], u64::MAX), 0).is_err());
         // 新起点越过 last_usable_lba → 拒绝（越界表不得写进几何）
-        assert!(grow_end_for(&plan_of(vec![mv(40000, 0)], 32734)).is_err());
+        assert!(grow_end_for(&plan_of(vec![mv(40000, 0)], 32734), 0).is_err());
+        // 终点低于目标分区自身起点 → 拒绝（端点倒挂的表项不得提交）
+        assert!(grow_end_for(&plan_of(vec![mv(100, 0)], 32734), 200).is_err());
     }
 
     /// 右邻已尾打包时重跑 grow：规划只产出 δ=0 的空转 move，执行它不得写盘。
