@@ -353,9 +353,9 @@ mod imp {
             }
             Err(f) => {
                 // Fail 无 Display：压出内文重包，NoWrite = 确定未写盘（Infra 语义）
-                let crate::outcome::Fail::Refused(m)
+                let (crate::outcome::Fail::Refused(m)
                 | crate::outcome::Fail::Infra(m)
-                | crate::outcome::Fail::Failed(m) = f;
+                | crate::outcome::Fail::Failed(m)) = f;
                 return Err(PartResizeError::NoWrite(io::Error::other(format!(
                     "cannot re-read the on-disk partition table before writing: {m}"
                 ))));
