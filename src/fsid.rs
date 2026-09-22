@@ -18,12 +18,15 @@ const EROFS_MAGIC: [u8; 4] = [0xE2, 0xE1, 0xF5, 0xE0];
 /// 否则 resize 会在 I/O 错误时把 FS 步骤整体跳过并报成功
 pub fn identify(src: &FileSource, base: u64, len_bytes: u64) -> io::Result<&'static str> {
     let rd = |off: u64, len: usize| -> io::Result<Option<Vec<u8>>> {
-        // 区间外：这里确实没有那些字节，不是读失败
-        if off + len as u64 > len_bytes {
+        // 区间外：这里确实没有那些字节，不是读失败。off/len 虽全是常量调用点，
+        // checked 失败同样按不命中处理——回绕地址不得混进 read_at
+        let Some(end) = off.checked_add(len as u64) else { return Ok(None) };
+        if end > len_bytes {
             return Ok(None);
         }
         let mut buf = vec![0u8; len];
-        src.read_at(base + off, &mut buf)?;
+        let Some(pos) = base.checked_add(off) else { return Ok(None) };
+        src.read_at(pos, &mut buf)?;
         Ok(Some(buf))
     };
 
@@ -224,10 +227,15 @@ pub fn unactivatable_swap(src: &FileSource, base: u64, len_bytes: u64) -> io::Re
 ///
 /// 统一 64K 上对齐（fstools ROOTDEV_OVERLAY_ALIGN 的惯例，非通用规范）；
 /// 解析失败或 0 → None。读错误如实上抛：读不出来与"签名不命中"是两回事，
-/// 把前者折叠成 None 会让调用方把盘上事实当成"没有 overlay"
+/// 把前者折叠成 None 会让调用方把盘上事实当成"没有 overlay"。分区不足以容纳
+/// 超级块读区同样按未命中——那不是读故障，是区间不存在的事实
 pub fn overlay_offset_at(src: &FileSource, part_offset: u64) -> io::Result<Option<u64>> {
     const ALIGN: u64 = 64 * 1024;
     let mut sb = [0u8; 2048];
+    // 不设此闸，read_exact 对越界区间报 UnexpectedEof，会被调用方当成 I/O 故障（退 30）
+    if src.size < part_offset.saturating_add(sb.len() as u64) {
+        return Ok(None);
+    }
     src.read_at(part_offset, &mut sb)?;
     let raw = if &sb[0..4] == SQUASHFS_MAGIC {
         u64::from_le_bytes(sb[0x28..0x30].try_into().unwrap())
