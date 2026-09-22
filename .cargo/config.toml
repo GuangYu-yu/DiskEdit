@@ -1,0 +1,16 @@
+[build]
+rustflags = [
+    "-C", "codegen-units=1",
+    "--remap-path-prefix=/home/runner/.cargo/registry=registry",
+    "--remap-path-prefix=/home/runner/work/DiskEdit=.",
+    "--remap-path-prefix=/home/runner=/"
+]
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
+debug = 0
+incremental = false

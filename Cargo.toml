@@ -17,9 +17,6 @@ libc = "0.2"
 # 测试专用
 test-faults = []
 
-[profile.release]
-lto = true
-
 [lints.clippy]
 # 有意忽略错误必须落在 best_effort_* / warn_* 这类命名函数内（并在该函数上 #[allow]），
 # 这样"裸 let _ ="可被静态检查拦住。lint 只能发现"结果被丢弃"，
