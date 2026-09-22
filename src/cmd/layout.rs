@@ -37,8 +37,9 @@ pub(crate) const HELP_COPY: &str = r#"diskedit copy <TARGET>:N --start <LBA|end>
 
   Byte-wise copy a partition to a new location; the source is untouched.
   --start end packs the copy against the end of the usable range.
-  No resume: an interrupted copy is redone from the beginning on re-run
-  (the destination bytes are simply rewritten)."#;
+  No resume: an interrupted copy cannot pick up where it left off. The
+  slot it held stays busy until released — undo (while still reversible)
+  or abandon — then re-run to rewrite the destination from the beginning."#;
 
 pub(crate) const HELP_CREATE: &str = r#"diskedit create <TARGET> [--size SIZE] [--name S] [--fs F]
 

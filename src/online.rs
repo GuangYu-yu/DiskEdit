@@ -327,10 +327,40 @@ mod imp {
 
     /// 持久化分区缩放：sfdisk 改写该分区表项（start 不变，仅 size）→ partx -u
     /// 同步内核；partx 失败以 BLKPG 兜底。挂载中分区的 BLKRRPART 重读必失败，
-    /// 故 --no-reread；边界与重叠由调用方预检，--force 关闭 sfdisk 一致性检查。
+    /// 故 --no-reread；--force 关闭 sfdisk 一致性检查，故写前先锁下重验盘上表
+    /// （见函数体首段注释），边界与重叠仍由调用方预检。
     fn part_resize(t: &OnlineTarget, new_len_bytes: u64) -> Result<(), PartResizeError> {
         let pno_str = t.pno.to_string();
         let disk_str = t.disk_dev.to_string_lossy().into_owned();
+        // 写前锁下重验（最小 TOCTOU 防线）：sysfs 快照取自内核视图，取锁到 sfdisk
+        // 之间第三方（不守本工具的锁）可能已改写盘上表；sfdisk 的 --force 关闭全部
+        // 一致性检查，不会替我们拒绝由此造成的重叠。这里直接重读**盘上表**比对
+        // 目标分区，不符即拒——把窗口压缩到"重验之后、sfdisk 执行"的毫秒级残余，
+        // 该残余无法在本进程内消除（sfdisk 内部自读盘表），由内核 -EBUSY/-EINVAL
+        // 兜底为 Partial（退出 20 + 盘上表需人工核对）
+        let disk = crate::dev::FileSource::open_read_only(&t.disk_dev)
+            .map_err(|e| PartResizeError::NoWrite(io::Error::other(format!("pre-write re-read failed: {e}"))))?;
+        match crate::gpt_policy::partition_bytes(&disk, t.pno) {
+            Ok((start, len)) if (start, len) == (t.start_bytes, t.part_len_bytes) => {}
+            Ok((start, len)) => {
+                return Err(PartResizeError::NoWrite(io::Error::other(format!(
+                    "partition {} on disk changed since the snapshot (now at {start}..{}, snapshot {}..{}) — refusing to overwrite a foreign edit",
+                    t.pno,
+                    start + len,
+                    t.start_bytes,
+                    t.start_bytes + t.part_len_bytes,
+                ))));
+            }
+            Err(f) => {
+                // Fail 无 Display：压出内文重包，NoWrite = 确定未写盘（Infra 语义）
+                let crate::outcome::Fail::Refused(m)
+                | crate::outcome::Fail::Infra(m)
+                | crate::outcome::Fail::Failed(m) = f;
+                return Err(PartResizeError::NoWrite(io::Error::other(format!(
+                    "cannot re-read the on-disk partition table before writing: {m}"
+                ))));
+            }
+        }
         // sfdisk 脚本里的裸数字按"设备扇区"解释（libfdisk/src/script.c parse_size_value），
         // 即设备逻辑扇区大小（4Kn = 4096B，非恒 512B），故按 t.logical_block 换算。
         // -N：只改指定分区、未指定字段保持原值（空 start/size 继承现值，sfdisk(8)）
@@ -520,11 +550,14 @@ mod imp {
         let src = crate::dev::FileSource::open_read_only(&t.disk_dev)
             .map_err(|e| Outcome::infra(format!("open failed: {e}")))?;
         // 只传主语：后半句 "writes outside the undo journal" 由 refuse_if_active 统一拼
-        //（与之并列的调用点传的是命令名，如 "resizefs" / "check"）
+        //（与之并列的调用点传的是命令名，如 "resizefs" / "check"）。
+        // 挂载中的块设备重跑 `resize` 会再次走在线路径、再次撞上本闸口——busy 文案里
+        // 的"重跑续跑"只有在卸载后走离线分支才真正可达，故在此附上挂载态提示
         crate::transaction::TransactionManager::refuse_if_active(
             &src,
             "online resize",
         )
+        .map_err(|f| f.context("the target is mounted, so a re-run would take the online path again — unmount it first to reach the resume path"))
         .map_err(|f| f.into_outcome())
     }
 

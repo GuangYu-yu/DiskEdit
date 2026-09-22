@@ -8,7 +8,7 @@ pub(crate) mod plan;
 pub(crate) mod resize;
 pub(crate) mod undo;
 
-use crate::args::{help_cmd, usage, Args};
+use crate::args::{help_cmd, usage, usage_help, Args};
 
 /// 一条命令的全部声明。名字/别名、旗标白名单、详助文本、与目标盘的打开关系、处理函数
 /// **同出一源**：分派、`help <CMD>` 路由、旗标消费对账、成功后的 journal 清理
@@ -226,7 +226,8 @@ pub(crate) fn dispatch(cmd: &str, a: &Args) -> u8 {
     match cmd {
         "help" | "--help" | "-h" => match a.pos.first() {
             Some(t) => help_cmd(t),
-            None => usage(),
+            // 主动请求帮助，非用法错误：打全文退 0（未知命令/缺参数才是 10）
+            None => usage_help(),
         },
         _ => match find(cmd) {
             Some(c) => (c.run)(cmd, a),

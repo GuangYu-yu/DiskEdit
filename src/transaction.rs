@@ -86,8 +86,10 @@ pub(crate) fn active_recovery_records(
         // 0 字节：连 magic 都没写完的创建残骸。它与"只含 magic 的壳"一样描述**零次写入**，
         // 故不是现场。这条判据必须与 `Journal::open` 一致——那边对 0 字节的处理是
         // "就地补 magic 后照常使用"（详见其注释）；否则一次在创建 journal 时掉电会出现
-        // 两种结局：开 journal 的命令放行，走闸口的命令被永久挡住
-        if std::fs::metadata(p).map(|m| m.len()).unwrap_or(0) == 0 {
+        // 两种结局：开 journal 的命令放行，走闸口的命令被永久挡住。
+        // stat 失败不是"0 字节"：读不出大小的文件不在此跳过，交由下方 read_entries
+        // 归类（读不出来会记为现场）——把它折叠成 0 会把真现场当残骸放行
+        if matches!(std::fs::metadata(p), Ok(m) if m.len() == 0) {
             continue;
         }
         let entries = match Journal::read_entries(p) {
@@ -203,20 +205,21 @@ impl TransactionManager {
     fn busy(active: &[RecoveryRecord]) -> Fail {
         let listed: Vec<String> = active.iter().map(|r| r.path().display().to_string()).collect();
         let resumable = active.iter().any(|r| matches!(r, RecoveryRecord::Checkpoint { .. }));
-        // 每一份 journal 都可回滚才给这条出路：两份并存时 undo 的 pick_journal 会因
-        // 无法抉择而拒绝（Ambiguous），按其中一份许诺"可以 undo"是句到不了的出路
-        let rollbackable = active.iter().all(|r| match r {
-            RecoveryRecord::Journal { entries: Some(v), .. } => {
-                v.iter().all(|e| !matches!(e.recovery, dev::RecoveryData::Barrier))
-            }
-            _ => false,
-        });
+        // 恰好一份 journal 且它可回滚才给这条出路：两份并存时 undo 的 pick_journal
+        // 会因无法抉择而拒绝（Ambiguous），按其中一份许诺"可以 undo"是句到不了的出路
+        let single_rollbackable = active.iter().filter(|r| matches!(r, RecoveryRecord::Journal { .. })).count() == 1
+            && active.iter().all(|r| match r {
+                RecoveryRecord::Journal { entries: Some(v), .. } => {
+                    v.iter().all(|e| !matches!(e.recovery, dev::RecoveryData::Barrier))
+                }
+                _ => false,
+            });
         let way_out = if resumable {
             // "重跑原命令即续跑"只对 relocation 作业成立；单分区 resize 的现场
             //（RecoveryRecord 只有路径，分不出两族）必须把另一条出路一并给出
             "re-run the command that started it to continue (an unfinished single-partition \
              resize is resumed with `resize-part` or `move`), or release it with `diskedit abandon`"
-        } else if rollbackable {
+        } else if single_rollbackable {
             "roll it back with `diskedit undo`, or release it with `diskedit abandon`"
         } else {
             "it is already past the point of rolling back, so `diskedit abandon` is the only way to release it"
@@ -345,6 +348,11 @@ mod tests {
         // 两份并存、其一已越过不可回滚点：另一份可回滚也不足以许诺 undo
         let text = way_out(&[journal("a", false), journal("b", true)]);
         assert!(!text.contains("undo"), "one un-rollbackable journal must withdraw the undo way out: {text}");
+        assert!(text.contains("abandon"), "{text}");
+
+        // 两份均可回滚也不许诺 undo：pick_journal 对两份可用 journal 必拒 Ambiguous
+        let text = way_out(&[journal("a", false), journal("b", false)]);
+        assert!(!text.contains("undo"), "two journals leave undo no single choice: {text}");
         assert!(text.contains("abandon"), "{text}");
     }
 }

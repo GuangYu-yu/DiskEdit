@@ -485,10 +485,14 @@ fn mbr_grow_finish(
         match fstype {
             // 探测用扩容前的区间：swap 签名恒在分区首 32K 内，起点未变，原长度足够容纳
             "unknown" | "lvm2_pv" => {
-                if let Some(missed) = movepart::swap_rebuild_pending(
+                match movepart::swap_rebuild_pending(
                     src, part, p.start_lba as u64 * ss, p.size_lba as u64 * ss,
                 ) {
-                    pending.push(missed);
+                    Ok(Some(missed)) => pending.push(missed),
+                    Ok(None) => {}
+                    // 探测读失败属设备故障，且此刻表多半已写：Failed 的"盘可能已改变"
+                    // 警示比伪造一条 Pending 如实
+                    Err(e) => bail_fail(Fail::from(e)),
                 }
             }
             // swap：内容可弃，表项已扩 → mkswap 重建使新空间生效（UUID/卷标保持；

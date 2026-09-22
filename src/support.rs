@@ -164,6 +164,9 @@ pub(crate) fn kernel_resync(src: &FileSource) -> bool {
     crate::ioctl::blkrrpart(&src.file).is_ok()
 }
 
+/// 非 Linux 存根：返回值**不是**"重读成功"的事实——非 Linux 目标没有内核分区视图
+/// 可同步，`true` 只表示"没有可过期之物"，settle_layout 因此跳过 stale 标记。
+/// 把它读成"内核已重读"是错的；支持新平台时这里须按该平台的重读机制重新实现
 #[cfg(not(target_os = "linux"))]
 pub(crate) fn kernel_resync(src: &FileSource) -> bool {
     let _ = src;
