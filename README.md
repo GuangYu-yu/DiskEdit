@@ -87,7 +87,7 @@ FS 层要 root 是因为经 `losetup` 映射分区；块设备写入靠设备节
 
 - `ntfs` 的 uuid 只能生成随机新序号，`ntfslabel` 不支持指定值。
 - `swap` 的扩容是扩完表项后用 `mkswap` 重建，不搬数据；UUID、PARTUUID 与分区号保持。
-- `lvm2_pv` 的扩容只到 PV 层，加 `--grow-lv` 才继续扩 LV 及其文件系统。
+- `lvm2_pv` 的扩容只到 PV 层，加 `--grow-lv` 才继续扩 LV 及其文件系统；缩容一律拒绝——链与扩容反向（先 `lvreduce -r` 缩 LV+FS，再 `pvresize --setphysicalvolumesize`，最后改分区表），本工具只管后者。
 
 缩容时先缩 FS、后改分区边界；FS 缩不动就不动表。
 
