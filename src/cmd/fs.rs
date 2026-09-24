@@ -24,10 +24,12 @@ pub(crate) const HELP_CHECK: &str = r#"diskedit check <TARGET>:N
   Check filesystem consistency (tool-specific; ext runs e2fsck -fp and
   ntfs runs ntfsfix -d, both may write repairs to the filesystem)."#;
 
-pub(crate) const HELP_SET: &str = r#"diskedit set <TARGET>:N name S | label S | uuid U | uuid --random | flag F on|off
+pub(crate) const HELP_SET: &str = r#"diskedit set <TARGET>:N name S | type GUID | type 0xXX | label S | uuid U | uuid --random | flag F on|off
 
   Set a partition property.
     name          GPT partition name
+    type          GPT: partition type GUID (hyphens optional, e.g.
+                  C12A7328-F81F-11D2-BA4B-00A0C93EC93B); MBR: type byte (0xXX)
     label / uuid  filesystem label / UUID (FS-aware). --random asks the target
                   to generate a new value (ntfs only: its serial is not the
                   Windows volume UUID)
@@ -174,6 +176,31 @@ pub(crate) fn cmd_set(a: &Args) -> u8 {
         if value.is_empty() { crate::args::usage(); }
         return match crate::gpt_policy::rename_entry(&mut src, part, &value) {
             Ok(()) => table_write_done(&src, &format!("renamed partition #{part} to {value:?}")),
+            Err(f) => bail_fail(f),
+        };
+    }
+    if key == "type" {
+        if value.is_empty() { crate::args::usage(); }
+        let r = match crate::table::table_label(&src) {
+            Ok(crate::table::TableLabel::Gpt) => {
+                let Some(guid) = crate::support::parse_guid(&value) else {
+                    bail_fail(Fail::refused(format!("invalid GUID {value:?} (expect standard text like C12A7328-F81F-11D2-BA4B-00A0C93EC93B, hyphens optional)")));
+                };
+                crate::gpt_policy::set_type_guid(&mut src, part, guid)
+            }
+            Ok(crate::table::TableLabel::Mbr) => {
+                // 0x 前缀大小写不限（0X83 是常见写法），解析口径与 create 的 --type-guid 一致
+                let hex = value.strip_prefix("0x").or_else(|| value.strip_prefix("0X")).unwrap_or(&value);
+                match u8::from_str_radix(hex, 16) {
+                    Ok(t) => crate::table::set_mdos_type(&mut src, part, t),
+                    Err(_) => bail_fail(Fail::refused(format!("invalid MBR type {value:?} (expect 0xXX)"))),
+                }
+            }
+            Ok(other) => bail_fail(Fail::refused(format!("cannot set type on {other} label"))),
+            Err(e) => bail_fail(Fail::infra(format!("label probe failed: {e}"))),
+        };
+        return match r {
+            Ok(()) => table_write_done(&src, &format!("type set on partition #{part} (verify with: diskedit info {})", a.target)),
             Err(f) => bail_fail(f),
         };
     }

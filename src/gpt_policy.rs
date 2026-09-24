@@ -331,6 +331,20 @@ pub fn rename_entry(src: &mut FileSource, part: u32, name: &str) -> Result<(), F
     Ok(g.commit(src)?)
 }
 
+/// GPT 分区类型 GUID 直改（UEFI 2.10 §5.3.2 PartitionTypeGUID）。全零拒绝：
+/// 零 GUID 是"未用条目"的形状，写零等于把在用条目改成空壳，移除分区应走 `del`
+pub fn set_type_guid(src: &mut FileSource, part: u32, guid: [u8; 16]) -> Result<(), Fail> {
+    if guid == [0u8; 16] {
+        return Err(Fail::refused("type GUID cannot be all-zero (that marks an unused entry — use `del`)"));
+    }
+    let (mut g, repair) = resolve_geometry(src)?.ok_or_else(|| Fail::refused("no GPT"))?;
+    let i = live_index(&g.entries, part)?;
+    g.entries[i].partition_type_guid = guid;
+    // 拒绝判定已全部结束，首次写盘从这里开始
+    apply_repair(src, &repair)?;
+    Ok(g.commit(src)?)
+}
+
 /// GPT 属性旗标：属性位按 UEFI 2.10 §5（bit0=Required Partition，bit1=No Block IO
 /// Protocol 即 hidden，bit2=Legacy BIOS Bootable）；esp/boot 为类型 GUID 切换。
 ///
@@ -454,6 +468,19 @@ mod tests {
         set_gpt_flag(&mut src, 1, flag("boot"), false).unwrap();
         let g = table::load_gpt(&src).unwrap().unwrap();
         assert_eq!(g.entries[0].partition_type_guid, table::LINUX_FS_TYPE_GUID);
+    }
+
+    #[test]
+    fn gpt_set_type_guid() {
+        let mut src = gpt_src("gtype");
+        set_type_guid(&mut src, 1, table::ESP_TYPE_GUID).unwrap();
+        let g = table::load_gpt(&src).unwrap().unwrap();
+        assert_eq!(g.entries[0].partition_type_guid, table::ESP_TYPE_GUID);
+        // 全零拒绝且不落盘：零 GUID 是未用条目的形状
+        let e = set_type_guid(&mut src, 1, [0u8; 16]).unwrap_err();
+        assert!(matches!(e, Fail::Refused(_)), "all-zero must be refused: {e:?}");
+        let g = table::load_gpt(&src).unwrap().unwrap();
+        assert_eq!(g.entries[0].partition_type_guid, table::ESP_TYPE_GUID);
     }
 
     /// 分区字节区间的单位是**表自身**的 ss，不是容器 ss：4Kn 表放在 512B 口径的容器里
