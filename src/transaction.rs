@@ -92,6 +92,14 @@ pub(crate) fn active_recovery_records(
         if matches!(std::fs::metadata(p), Ok(m) if m.len() == 0) {
             continue;
         }
+        // 目录等非普通文件不是本工具写下的任何东西（本工具只建普通文件）：read_entries
+        // 对目录报 EISDIR 会把它记成"读不出来的现场"，而 abandon 对目录 hard_link 必然
+        // 失败——留下一个清不掉的假现场。stat 失败不在此列：交由下方 read_entries 归类
+        if let Ok(m) = std::fs::metadata(p)
+            && !m.is_file()
+        {
+            continue;
+        }
         let entries = match Journal::read_entries(p) {
             Ok(dev::JournalRead::Complete(v)) | Ok(dev::JournalRead::TruncatedTail(v)) => {
                 if v.is_empty() {
