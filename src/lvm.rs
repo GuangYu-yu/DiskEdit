@@ -4,6 +4,10 @@
 //! 解析为纯函数可单测。pvresize(8)：扩容方向无前置条件（缩容才要求新末端之后
 //! 无已分配 extent）；lvextend(8)：`-l +N` 按 extent 数增量扩，`-r/--resizefs`
 //! 同步扩文件系统。
+//!
+//! PV 缩容本工具不做——链恰好与扩容反向：先 lvreduce -r 缩 LV + FS，再
+//! pvresize --setphysicalvolumesize 缩 PV 元数据，最后改分区表。pvresize 拒绝
+//! 时需先 pvmove 把 PE 前移，后者是 LVM 内部元数据重构，不在分区工具的范围内
 
 use crate::fsops::{run, FsError};
 use serde_json::Value;
