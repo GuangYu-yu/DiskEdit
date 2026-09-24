@@ -38,23 +38,33 @@ pub(crate) fn cmd_abandon(a: &Args) -> u8 {
         ));
     }
     let path = std::path::Path::new(&a.target);
-    // 身份要先解析出来才能谈锁：块设备的锁文件落点由设备层身份决定
-    let identity = TargetIdentity::resolve_path(path)
+    // 身份要先解析出来才能谈锁：块设备的锁文件落点由设备层身份决定。abandon 用
+    // cleanup 语义的解析——目标可能已不存在，而现场文件可能比目标活得更久
+    let identity = TargetIdentity::resolve_for_cleanup(path)
         .unwrap_or_else(|| bail_fail(Fail::infra(format!("cannot determine the identity of {}", path.display()))));
+
+    // 目标不存在时跳过锁：现场候选是兄弟文件/持久落点，锁的独占权针对的是"对目标
+    // 的操作"，而目标已无可操作；跳过也避免给一个不存在的目标留下新的锁文件残骸
+    let _owned = std::fs::metadata(path).is_ok()
+        .then(|| TargetLock::acquire(&identity).unwrap_or_else(|f| bail_fail(f)));
 
     if identity.is_block() {
         // 独占权来自锁文件（与镜像同一机制），不再依赖 O_EXCL 打开——abandon 只碰恢复
         // 现场不碰盘上字节，没有理由要求排他写打开。打开内容只为读表里的 Disk GUID：
         // 历史命名的 checkpoint 以它落点，不认它就会漏掉一份现场；表读不出来（abandon
         // 的常态之一）不挡这条路，按 None 处理
-        let _owned = TargetLock::acquire(&identity).unwrap_or_else(|f| bail_fail(f));
-        let legacy = FileSource::open_read_only(path)
-            .map(|src| legacy_disk_guid(&src))
-            .unwrap_or_else(|e| bail_fail(Fail::infra(format!("open failed: {e}"))));
+        let legacy = match FileSource::open_read_only(path) {
+            Ok(src) => legacy_disk_guid(&src),
+            Err(e) => {
+                eprintln!("warning: cannot open {} to enumerate legacy checkpoint names ({e}) — \
+                           a checkpoint under the GUID-based name will not be listed",
+                    path.display());
+                None
+            }
+        };
         abandon_records(&identity, legacy)
     } else {
         // 镜像不必打开内容：abandon 只改目标的兄弟文件，碰不到盘上字节
-        let _owned = TargetLock::acquire(&identity).unwrap_or_else(|f| bail_fail(f));
         abandon_records(&identity, None)
     }
 }

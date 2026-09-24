@@ -314,6 +314,24 @@ impl TargetIdentity {
         Some(Self::resolve_image(path))
     }
 
+    /// 清理类命令（abandon）的身份解析：目标可能已不存在，而现场文件可能比目标活得
+    /// 久（用户删了镜像，journal 还在旁边）。路径 stat 不了时按镜像身份回退——镜像
+    /// 身份就是给定的路径本身，兄弟候选的枚举不需要目标存在。节点消失的块设备身份
+    /// 不可恢复（拓扑派生），其 state_dir 下的现场随之不可达：此处无从区分两者，按
+    /// 镜像回退时前者得救、后者空跑——报"nothing to abandon"而不是按错身份删候选。
+    /// 拓扑解析得出但解析失败的块设备仍返回 None（同 resolve_path 的保守方向）
+    pub(crate) fn resolve_for_cleanup(path: &Path) -> Option<Self> {
+        #[cfg(target_os = "linux")]
+        {
+            match std::fs::metadata(path).map(|m| m.file_type().is_block_device()) {
+                Ok(true) => return Self::resolve_block(path).ok(),
+                Ok(false) => {}
+                Err(_) => return Some(Self::resolve_image(path)),
+            }
+        }
+        Some(Self::resolve_image(path))
+    }
+
     pub(crate) fn journal_path(&self) -> &Path {
         &self.journal[0]
     }
