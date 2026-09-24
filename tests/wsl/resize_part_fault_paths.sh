@@ -20,11 +20,13 @@ mk() {
 }
 fillp() { # part MB -> 整分区设备 md5
   LD=$(lo_attach "$T")
+  lo_waitpart "${LD}p$1" || { echo "p$1 part node not ready"; rc=1; lo_detach "$LD"; return 1; }
   mount_at "${LD}p$1" /testmnt && dd if=/dev/urandom of=/testmnt/blob bs=1M count=$2 2>/dev/null
   umount /testmnt; md5sum "${LD}p$1" | cut -d' ' -f1; lo_detach "$LD"
 }
 chkp() { # part want-md5（传 "-" 则跳过哈希对比，仅 fsck；FS 扩缩后设备哈希必变）
   LD=$(lo_attach "$T") || return 1
+  lo_waitpart "${LD}p$1" || { echo "p$1 part node not ready"; rc=1; lo_detach "$LD"; return 1; }
   if [ "$2" != "-" ]; then
     if [ "$2" = "$(md5sum "${LD}p$1" | cut -d' ' -f1)" ]; then
       echo "p$1 DEV OK"
@@ -32,7 +34,12 @@ chkp() { # part want-md5（传 "-" 则跳过哈希对比，仅 fsck；FS 扩缩�
       echo "p$1 DEV CORRUPT (size=$(blockdev --getsize64 "${LD}p$1" 2>/dev/null))"; rc=1
     fi
   fi
-  e2fsck -fn "${LD}p$1" >/dev/null 2>&1 && echo "p$1 e2fsck clean" || { echo "p$1 e2fsck ISSUES"; rc=1; }
+  local fsck_out
+  if fsck_out=$(e2fsck -fn "${LD}p$1" 2>&1); then
+    echo "p$1 e2fsck clean"
+  else
+    echo "p$1 e2fsck ISSUES (exit=$?)"; echo "$fsck_out" | tail -5; rc=1
+  fi
   lo_detach "$LD"
 }
 
