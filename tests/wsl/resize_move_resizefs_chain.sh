@@ -9,7 +9,7 @@ MNT=/testmnt
 
 cleanup_hook() { rm -f /var/lib/diskedit/* 2>/dev/null; }
 
-rm -f "$T" "$T".diskedit.* 2>/dev/null
+rm -f "$T" "$T"$SIDECAR_GLOB 2>/dev/null
 rm -f /var/lib/diskedit/* 2>/dev/null
 mkdir -p "$MNT"
 track_file "$T"

@@ -644,7 +644,8 @@ fn ambiguous_checkpoint(paths: &[PathBuf]) -> Fail {
 
 /// 原子写：tmp → sync_all → rename → fsync 父目录。
 /// 临时名带 PID + 进程内自增序号：同目录下的两个 ckpt 可能由同一进程并行写
-/// （测试里就会发生），只用 PID 会撞同一个临时路径
+/// （测试里就会发生），只用 PID 会撞同一个临时路径。前缀取自 `crate::dev::CKPT_TMP_PREFIX`
+/// ——打开目标时按它清掉崩溃残骸
 fn atomic_write_ckpt(path: &std::path::Path, data: &[u8]) -> io::Result<()> {
     use std::io::Write;
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -655,7 +656,8 @@ fn atomic_write_ckpt(path: &std::path::Path, data: &[u8]) -> io::Result<()> {
     // 落点目录归文件自己保证：路径由身份派生，身份不知道目录是否存在
     crate::dev::best_effort_mkdir(parent);
     let tmp = parent.join(format!(
-        ".diskedit.ckpt.tmp.{}.{}",
+        "{}{}.{}",
+        crate::dev::CKPT_TMP_PREFIX,
         std::process::id(),
         SEQ.fetch_add(1, Ordering::Relaxed)
     ));

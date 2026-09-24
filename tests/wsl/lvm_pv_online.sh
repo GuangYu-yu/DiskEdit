@@ -22,7 +22,7 @@ cleanup_hook() {
 T=/var/tmp/t32.img
 track_file "$T"
 
-rm -f "$T" "$T".diskedit.* 2>/dev/null
+rm -f "$T" "$T"$SIDECAR_GLOB 2>/dev/null
 truncate -s 1G "$T"
 $B new "$T" --yes >/dev/null
 # LVM 分区类型 GUID

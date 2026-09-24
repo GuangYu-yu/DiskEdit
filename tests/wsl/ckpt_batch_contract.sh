@@ -15,7 +15,7 @@ track_file "$T"
 
 run_case() {
   local fault="$1" expect="$2" forbid="$3" label="$4"
-  rm -f "$T" "$T".diskedit.*
+  rm -f "$T" "$T"$SIDECAR_GLOB
   truncate -s 1G "$T"
   $BF new "$T" --yes >/dev/null
   $BF create "$T" --size 500M --name a >/dev/null
@@ -37,7 +37,7 @@ run_case() {
   else
     $BF resize "$T":1 +100M --allow-move --yes >/dev/null 2>&1
   fi
-  [ -f "$T.diskedit.ckpt" ] && echo "ckpt left: yes" || echo "ckpt left: no"
+  [ -f "$T$CKPT_SUFFIX" ] && echo "ckpt left: yes" || echo "ckpt left: no"
 
   # 重跑同命令 → 续传（无注入）
   OUT=$($BF resize "$T":1 +100M --allow-move --yes 2>&1)

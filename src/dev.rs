@@ -300,6 +300,21 @@ pub(crate) fn suffix_path(base: &Path, suffix: &str) -> PathBuf {
     PathBuf::from(p)
 }
 
+// 落盘文件名的词表：journal / checkpoint / log / lock 四类伴随文件与 checkpoint 的
+// 暂存前缀只在这里定义一次。派生点（身份构造、日志落点）、写入侧（原子写）都取自这里
+// ——改词表就是改这一处，不在各处各自拼串。
+// 测试里对这个拼法的字面断言是有意保留的：它们是落盘命名的契约锚点（如
+// `x.img.diskedit.log`、`*.diskedit.lock`），词表被改动时应当失败一次让人过目
+pub(crate) const JOURNAL_SUFFIX: &str = ".diskedit.journal";
+pub(crate) const CHECKPOINT_SUFFIX: &str = ".diskedit.ckpt";
+pub(crate) const LOCK_SUFFIX: &str = ".diskedit.lock";
+pub(crate) const LOG_SUFFIX: &str = ".diskedit.log";
+/// 暂存文件前缀：原子写先写它、再 rename 到正式落点（见 `crate::movepart::atomic_write_ckpt`）；
+/// 打开可写目标时也按它清掉崩溃残骸
+pub(crate) const CKPT_TMP_PREFIX: &str = ".diskedit.ckpt.tmp.";
+/// 旧版块设备现场的命名：GUID 后只有 `.ckpt`，没有 `.diskedit.` 中缀
+pub(crate) const LEGACY_GUID_CKPT_SUFFIX: &str = ".ckpt";
+
 /// 16 字节 Disk GUID → 大写无连字符十六进制（历史落点用的就是这种写法）
 fn guid_hex(g: &[u8; 16]) -> String {
     g.iter().map(|b| format!("{b:02X}")).collect()
@@ -325,18 +340,18 @@ impl TargetIdentity {
     /// 或非规范化成分）时字面路径的兄弟文件降为历史候选——只用于发现，发现后照走
     /// 完整校验；两份候选同时有效即歧义拒绝，不猜
     fn image_at(canonical: &Path, literal: &Path) -> Self {
-        let mut journal = vec![suffix_path(canonical, ".diskedit.journal")];
-        let mut checkpoint = vec![suffix_path(canonical, ".diskedit.ckpt")];
+        let mut journal = vec![suffix_path(canonical, JOURNAL_SUFFIX)];
+        let mut checkpoint = vec![suffix_path(canonical, CHECKPOINT_SUFFIX)];
         if literal != canonical {
-            journal.push(suffix_path(literal, ".diskedit.journal"));
-            checkpoint.push(suffix_path(literal, ".diskedit.ckpt"));
+            journal.push(suffix_path(literal, JOURNAL_SUFFIX));
+            checkpoint.push(suffix_path(literal, CHECKPOINT_SUFFIX));
         }
         Self {
             kind: TargetKind::Image,
             base: literal.to_path_buf(),
             journal,
             checkpoint,
-            lock: suffix_path(canonical, ".diskedit.lock"),
+            lock: suffix_path(canonical, LOCK_SUFFIX),
             legacy_guid_checkpoints: false,
         }
     }
@@ -365,10 +380,10 @@ impl TargetIdentity {
         let canonical = std::fs::canonicalize(&raw).unwrap_or_else(|_| raw.clone());
         let mut id = Self::image_at(&canonical, &raw);
         let tok = key_token(&raw.to_string_lossy());
-        id.journal.push(state_dir().join(format!("{tok}.diskedit.journal")));
-        id.checkpoint.push(state_dir().join(format!("{tok}.diskedit.ckpt")));
+        id.journal.push(state_dir().join(format!("{tok}{JOURNAL_SUFFIX}")));
+        id.checkpoint.push(state_dir().join(format!("{tok}{CHECKPOINT_SUFFIX}")));
         // 更旧的历史命名：块设备 journal 曾以 devname 命名
-        id.journal.push(state_dir().join(format!("{}.diskedit.journal", file_name_lossy(dev_path))));
+        id.journal.push(state_dir().join(format!("{}{JOURNAL_SUFFIX}", file_name_lossy(dev_path))));
         id.legacy_guid_checkpoints = true;
         id
     }
@@ -411,15 +426,15 @@ impl TargetIdentity {
     fn from_block_keys(path: &Path, self_key: String, disk_key: String) -> Self {
         let stable = key_token(&disk_key);
         let dir = state_dir();
-        let mut journal = vec![dir.join(format!("{stable}.diskedit.journal"))];
-        let mut checkpoint = vec![dir.join(format!("{stable}.diskedit.ckpt"))];
+        let mut journal = vec![dir.join(format!("{stable}{JOURNAL_SUFFIX}"))];
+        let mut checkpoint = vec![dir.join(format!("{stable}{CHECKPOINT_SUFFIX}"))];
         if self_key != disk_key {
             // 历史命名：旧版现场按分区落（self_key 含分区号）
             let self_tok = key_token(&self_key);
-            journal.push(dir.join(format!("{self_tok}.diskedit.journal")));
-            checkpoint.push(dir.join(format!("{self_tok}.diskedit.ckpt")));
+            journal.push(dir.join(format!("{self_tok}{JOURNAL_SUFFIX}")));
+            checkpoint.push(dir.join(format!("{self_tok}{CHECKPOINT_SUFFIX}")));
         }
-        journal.push(dir.join(format!("{}.diskedit.journal", file_name_lossy(path))));
+        journal.push(dir.join(format!("{}{JOURNAL_SUFFIX}", file_name_lossy(path))));
         Self {
             kind: TargetKind::Block,
             base: path.to_path_buf(),
@@ -429,7 +444,7 @@ impl TargetIdentity {
             // 独占权针对盘（分区表属于盘），于是"离线以分区节点为目标"与"在线对同一
             // 分区"落到同一把锁上。锁文件是纯运行时 artifact（重启自清也无妨），残留
             // 不构成阻挡——判据是"锁取不取得到"，不是"文件在不在"（见 targetlock）
-            lock: dir.join(format!("{stable}.diskedit.lock")),
+            lock: dir.join(format!("{stable}{LOCK_SUFFIX}")),
             legacy_guid_checkpoints: true,
         }
     }
@@ -497,14 +512,14 @@ impl TargetIdentity {
     /// 调用方不得自行拼 `state_dir()`
     pub(crate) fn log_path(&self, disk_guid: Option<[u8; 16]>) -> PathBuf {
         if self.kind == TargetKind::Image {
-            return suffix_path(&self.base, ".diskedit.log");
+            return suffix_path(&self.base, LOG_SUFFIX);
         }
         let name = match disk_guid {
             Some(g) => guid_hex(&g),
             // 无 GPT（MBR / 裸盘）：devname 是这类目标上唯一稳定的标识
             None => file_name_lossy(&self.base),
         };
-        state_dir().join(format!("{name}.diskedit.log"))
+        state_dir().join(format!("{name}{LOG_SUFFIX}"))
     }
 
     /// checkpoint 的候选落点。块设备语义下的历史落点以 GPT Disk GUID 命名，而 GUID 只
@@ -514,7 +529,7 @@ impl TargetIdentity {
         if self.has_block_legacy_naming()
             && let Some(g) = legacy_disk_guid
         {
-            v.push(state_dir().join(format!("{}.ckpt", guid_hex(&g))));
+            v.push(state_dir().join(format!("{}{LEGACY_GUID_CKPT_SUFFIX}", guid_hex(&g))));
         }
         v
     }
@@ -532,6 +547,40 @@ impl TargetIdentity {
 #[allow(clippy::let_underscore_must_use)] // 有意忽略：失败在打开文件时以更具体错误暴露
 pub(crate) fn best_effort_mkdir(dir: &Path) {
     let _ = std::fs::create_dir_all(dir);
+}
+
+/// 暂存文件算"陈旧"的岁数：一次 ckpt 写入是毫秒级，正常路径下 rename 已把它带走，
+/// 超过这个岁数还留在原地的只可能是进程被 SIGKILL 打断留下的残骸
+const CKPT_TMP_STALE_AFTER: std::time::Duration = std::time::Duration::from_secs(3600);
+
+/// 打开**可写**目标时清掉落点目录里的陈旧 checkpoint 暂存文件。
+/// 按岁数判而不看 PID：state_dir 是所有盘共用的落点，同目录可能有别的进程正在写，
+/// 它那份暂存文件是活的——岁数阈值把"正在写"与"崩溃残骸"分开（取不到 mtime，含落在
+/// 未来的，一律当不陈旧，宁可不删）。
+/// 尽力而为：目录读不到、元数据拿不到、删不掉都不拦打开目标
+#[allow(clippy::let_underscore_must_use)] // 有意忽略：删不掉就留到下次打开再清
+fn sweep_stale_ckpt_temps(identity: &TargetIdentity) {
+    let candidates = identity.checkpoint_candidates(None);
+    let mut dirs: Vec<PathBuf> = candidates.iter().filter_map(|p| p.parent().map(Path::to_path_buf)).collect();
+    dirs.sort();
+    dirs.dedup();
+    for dir in dirs {
+        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+        for entry in entries.flatten() {
+            if !entry.file_name().to_string_lossy().starts_with(CKPT_TMP_PREFIX) {
+                continue;
+            }
+            let stale = entry
+                .metadata()
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.elapsed().ok())
+                .is_some_and(|age| age >= CKPT_TMP_STALE_AFTER);
+            if stale {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+    }
 }
 
 // 测试期的定点读失败注入（模拟坏扇区），按线程生效。
@@ -582,6 +631,8 @@ impl FileSource {
                 let sector_size = ioctl::blksszget(&file)? as u64;
                 // 块设备身份解析失败（fail-closed）⇒ 打开失败：错误信息带设备名
                 let identity = TargetIdentity::resolve_block(path).map_err(io::Error::other)?;
+                // 可写打开：顺手清掉落点目录里的崩溃残骸（ckpt 暂存文件）
+                sweep_stale_ckpt_temps(&identity);
                 // loop 的身份是 backing 文件：指纹取它；真块设备节点 inode 不承诺稳定，不取。
                 // sysfs 只读探测在打开早期进行，失败即打不开目标
                 let fingerprint = if identity.kind == TargetKind::Image {
@@ -632,8 +683,13 @@ impl FileSource {
                 format!("invalid sector size {sector_size}"),
             ));
         }
+        let identity = TargetIdentity::resolve_image(path);
+        if writable {
+            // 可写打开：顺手清掉落点目录里的崩溃残骸（ckpt 暂存文件）
+            sweep_stale_ckpt_temps(&identity);
+        }
         Ok(FileSource {
-            identity: TargetIdentity::resolve_image(path),
+            identity,
             file,
             path: path.to_path_buf(),
             sector_size,
@@ -1331,17 +1387,37 @@ mod tests {
     fn log_path_comes_from_the_identity() {
         let img = PathBuf::from("/tmp/disk.img");
         let id = TargetIdentity::resolve_image(&img);
-        assert_eq!(id.log_path(None), PathBuf::from("/tmp/disk.img.diskedit.log"));
+        assert_eq!(id.log_path(None), suffix_path(&img, LOG_SUFFIX));
 
         #[cfg(not(target_os = "linux"))]
         {
             let dev = PathBuf::from("/dev/sdz");
             let id = TargetIdentity::resolve_block(&dev).unwrap();
             let guid = [0xABu8; 16];
-            assert_eq!(id.log_path(Some(guid)), state_dir().join(format!("{}.diskedit.log", guid_hex(&guid))));
+            assert_eq!(id.log_path(Some(guid)), state_dir().join(format!("{}{LOG_SUFFIX}", guid_hex(&guid))));
             // 读不到表时退回 devname：MBR / 裸盘上没有更稳的标识
-            assert_eq!(id.log_path(None), state_dir().join("sdz.diskedit.log"));
+            assert_eq!(id.log_path(None), state_dir().join(format!("sdz{LOG_SUFFIX}")));
         }
+    }
+
+    /// 落盘命名的契约锚点：词表的值就是用户在目标旁边看到的名字。这一处写死字面量，
+    /// 其余测试一律用词表拼——改拼法时只有这里该失败
+    #[test]
+    fn artifact_names_are_pinned_as_documented() {
+        assert_eq!(JOURNAL_SUFFIX, ".diskedit.journal");
+        assert_eq!(CHECKPOINT_SUFFIX, ".diskedit.ckpt");
+        assert_eq!(LOCK_SUFFIX, ".diskedit.lock");
+        assert_eq!(LOG_SUFFIX, ".diskedit.log");
+        assert_eq!(CKPT_TMP_PREFIX, ".diskedit.ckpt.tmp.");
+        assert_eq!(LEGACY_GUID_CKPT_SUFFIX, ".ckpt");
+
+        // 镜像：四类伴随文件都是目标路径的同目录兄弟
+        let img = PathBuf::from("/tmp/x.img");
+        let id = TargetIdentity::resolve_image(&img);
+        assert_eq!(id.journal_candidates()[0], PathBuf::from("/tmp/x.img.diskedit.journal"));
+        assert_eq!(id.checkpoint_candidates(None)[0], PathBuf::from("/tmp/x.img.diskedit.ckpt"));
+        assert_eq!(id.lock_path(), PathBuf::from("/tmp/x.img.diskedit.lock"));
+        assert_eq!(id.log_path(None), PathBuf::from("/tmp/x.img.diskedit.log"));
     }
 
     /// 非 loop 块设备的身份是**盘级**的：journal / checkpoint / lock 按 disk_key 落点，
@@ -1356,12 +1432,12 @@ mod tests {
         );
         let disk_tok = key_token("sdb-1234");
         let part_tok = key_token("sdb-1234-p1");
-        assert_eq!(id.journal[0], state_dir().join(format!("{disk_tok}.diskedit.journal")));
-        assert_eq!(id.journal[1], state_dir().join(format!("{part_tok}.diskedit.journal")));
-        assert_eq!(id.journal[2], state_dir().join("sdb1.diskedit.journal"));
-        assert_eq!(id.checkpoint[0], state_dir().join(format!("{disk_tok}.diskedit.ckpt")));
-        assert_eq!(id.checkpoint[1], state_dir().join(format!("{part_tok}.diskedit.ckpt")));
-        assert_eq!(id.lock_path(), state_dir().join(format!("{disk_tok}.diskedit.lock")));
+        assert_eq!(id.journal[0], state_dir().join(format!("{disk_tok}{JOURNAL_SUFFIX}")));
+        assert_eq!(id.journal[1], state_dir().join(format!("{part_tok}{JOURNAL_SUFFIX}")));
+        assert_eq!(id.journal[2], state_dir().join(format!("sdb1{JOURNAL_SUFFIX}")));
+        assert_eq!(id.checkpoint[0], state_dir().join(format!("{disk_tok}{CHECKPOINT_SUFFIX}")));
+        assert_eq!(id.checkpoint[1], state_dir().join(format!("{part_tok}{CHECKPOINT_SUFFIX}")));
+        assert_eq!(id.lock_path(), state_dir().join(format!("{disk_tok}{LOCK_SUFFIX}")));
         assert!(id.has_block_legacy_naming());
 
         // 整盘目标：self_key 与 disk_key 重合，不重复列同一落点
@@ -1371,7 +1447,7 @@ mod tests {
             "sdb-1234".to_string(),
         );
         assert_eq!(id.journal.len(), 2, "whole-disk target has no partition-level legacy entry");
-        assert_eq!(id.journal[1], state_dir().join("sdb.diskedit.journal"));
+        assert_eq!(id.journal[1], state_dir().join(format!("sdb{JOURNAL_SUFFIX}")));
     }
 
     /// loop 设备的身份收敛到 backing 文件：现场落 backing 的兄弟文件（首候选），旧版
@@ -1386,18 +1462,18 @@ mod tests {
         std::fs::write(&backing, b"x").unwrap();
 
         let id = TargetIdentity::loop_backed(Path::new("/dev/loop0"), backing.clone());
-        assert_eq!(id.journal[0], suffix_path(&backing, ".diskedit.journal"));
-        assert_eq!(id.lock_path(), suffix_path(&backing, ".diskedit.lock"));
+        assert_eq!(id.journal[0], suffix_path(&backing, JOURNAL_SUFFIX));
+        assert_eq!(id.lock_path(), suffix_path(&backing, LOCK_SUFFIX));
         let tok = key_token(&backing.to_string_lossy());
-        assert_eq!(id.journal[1], state_dir().join(format!("{tok}.diskedit.journal")));
-        assert_eq!(id.checkpoint[1], state_dir().join(format!("{tok}.diskedit.ckpt")));
-        assert_eq!(id.journal[2], state_dir().join("loop0.diskedit.journal"));
+        assert_eq!(id.journal[1], state_dir().join(format!("{tok}{JOURNAL_SUFFIX}")));
+        assert_eq!(id.checkpoint[1], state_dir().join(format!("{tok}{CHECKPOINT_SUFFIX}")));
+        assert_eq!(id.journal[2], state_dir().join(format!("loop0{JOURNAL_SUFFIX}")));
         assert!(id.has_block_legacy_naming());
 
         // backing 已删：realpath 失败退回原始路径串，兄弟文件仍是首候选
         std::fs::remove_file(&backing).unwrap();
         let id = TargetIdentity::loop_backed(Path::new("/dev/loop0"), backing.clone());
-        assert_eq!(id.journal[0], suffix_path(&backing, ".diskedit.journal"));
+        assert_eq!(id.journal[0], suffix_path(&backing, JOURNAL_SUFFIX));
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1418,9 +1494,40 @@ mod tests {
         let direct = TargetIdentity::resolve_image(&real);
         assert_eq!(via_link.journal[0], direct.journal[0], "both spellings must share one journal");
         assert_eq!(via_link.lock_path(), direct.lock_path());
-        assert_eq!(via_link.journal[1], suffix_path(&link, ".diskedit.journal"), "literal path stays a legacy candidate");
-        assert_eq!(via_link.log_path(None), suffix_path(&link, ".diskedit.log"));
+        assert_eq!(via_link.journal[1], suffix_path(&link, JOURNAL_SUFFIX), "literal path stays a legacy candidate");
+        assert_eq!(via_link.log_path(None), suffix_path(&link, LOG_SUFFIX));
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 可写打开清掉落点目录里的陈旧 ckpt 暂存文件：只动过期的，新鲜那份（可能属于
+    /// 正在写的另一个进程）与非本前缀的文件都不碰
+    #[test]
+    fn stale_ckpt_temps_are_swept_on_open() {
+        let dir = std::env::temp_dir().join(format!("diskedit_sweep_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let img = dir.join("x.img");
+        std::fs::write(&img, b"x").unwrap();
+        // Linux 上身份取 realpath，落点目录未必是上面那个字面目录：以身份为准
+        let id = TargetIdentity::resolve_image(&img);
+        let dir = id.checkpoint_candidates(None)[0].parent().unwrap().to_path_buf();
+
+        let stale = dir.join(format!("{CKPT_TMP_PREFIX}1.1"));
+        let fresh = dir.join(format!("{CKPT_TMP_PREFIX}2.1"));
+        let other = dir.join("not-ours.img");
+        std::fs::File::create(&stale).unwrap()
+            .set_modified(std::time::SystemTime::now() - CKPT_TMP_STALE_AFTER * 2).unwrap();
+        std::fs::File::create(&fresh).unwrap();
+        std::fs::write(&other, b"x").unwrap();
+
+        sweep_stale_ckpt_temps(&id);
+        assert!(!stale.exists(), "a stale temp must be swept");
+        assert!(fresh.exists(), "a fresh temp may belong to a running writer");
+        assert!(other.exists(), "only the checkpoint temp prefix is ours to sweep");
+
+        let _ = std::fs::remove_file(&fresh);
+        let _ = std::fs::remove_file(&other);
+        let _ = std::fs::remove_file(&img);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1473,6 +1580,6 @@ mod tests {
         let id = TargetIdentity::resolve_block(Path::new("/dev/diskedit-nonexistent")).unwrap();
         assert_eq!(id.lock_path().parent(), Some(state_dir().as_path()));
         assert_eq!(id.journal_path().parent(), Some(state_dir().as_path()));
-        assert!(id.lock_path().to_string_lossy().ends_with(".diskedit.lock"));
+        assert!(id.lock_path().to_string_lossy().ends_with(LOCK_SUFFIX));
     }
 }

@@ -6,7 +6,7 @@ require_bin
 T=/var/tmp/diskedit_test12.img
 track_file "$T"
 
-rm -f "$T" "$T".diskedit.*
+rm -f "$T" "$T"$SIDECAR_GLOB
 truncate -s 128M "$T"
 $B new "$T" --yes || exit 1
 $B create "$T" --size 16M --name p1 --fs ext4

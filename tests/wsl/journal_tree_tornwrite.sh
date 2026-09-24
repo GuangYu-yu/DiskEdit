@@ -10,10 +10,10 @@ T=/var/tmp/t22a.img
 SNAP=/var/tmp/t22snap
 track_file "$T"
 
-rm -f "$T" "$T".diskedit.* 2>/dev/null
+rm -f "$T" "$T"$SIDECAR_GLOB 2>/dev/null
 
 mk() { # 100M/100M/200M，p2 前后留空便于自重叠左移
-  rm -f "$T" "$T".diskedit.*
+  rm -f "$T" "$T"$SIDECAR_GLOB
   truncate -s 1G "$T"
   $B new "$T" --yes >/dev/null
   $B add "$T" --start 2048 --end 206847 --name p1 >/dev/null && $B mkfs "$T":1 ext4 --yes >/dev/null
@@ -28,7 +28,7 @@ mk
 mnt 2; dd if=/dev/urandom of=/testmnt/blob bs=1M count=90 2>/dev/null; umnt; LD=$(lo_attach "$T"); MD2=$(md5sum "${LD}p2" | cut -d' ' -f1); lo_detach "$LD"
 echo "-- A1: 中断的 100M 分区搬移后 journal 体积 --"
 DISKEDIT_FAULT=rs-chunk:60 $BF move "$T":2 --start 250000 --chunk-size 1 >/dev/null 2>&1
-JSZ=$(stat -c%s "$T.diskedit.journal" 2>/dev/null || echo 0)
+JSZ=$(stat -c%s "$T$JOURNAL_SUFFIX" 2>/dev/null || echo 0)
 echo "journal = $JSZ bytes (搬移量约 100M)"
 if [ "$JSZ" -gt 5 ] && [ "$JSZ" -lt 1048576 ]; then echo "A1 JOURNAL-STREAMING OK (<1MiB, 含搬移标记)"; else { echo "A1 JOURNAL SIZE ODD ($JSZ)"; rc=1; }; fi
 echo "-- A2: 含搬移的 undo 应被拒绝 --"
@@ -37,7 +37,7 @@ echo "exit=$E msg: $(echo "$OUT" | head -1 | cut -c1-70)"
 [ "$E" = "10" ] && echo "$OUT" | grep -q "data was moved" && echo "A2 UNDO-REFUSED OK" || { echo "A2 UNDO NOT REFUSED"; rc=1; }
 echo "-- A3: 完成后 journal 应被删除 --"
 $B move "$T":2 --start 250000 --chunk-size 1 >/dev/null 2>&1; E=$?
-[ -f "$T.diskedit.journal" ] && { echo "A3 JOURNAL LEFT (bad)"; rc=1; } || echo "A3 JOURNAL DROPPED OK (exit=$E)"
+[ -f "$T$JOURNAL_SUFFIX" ] && { echo "A3 JOURNAL LEFT (bad)"; rc=1; } || echo "A3 JOURNAL DROPPED OK (exit=$E)"
 LD=$(lo_attach "$T")
 [ "$MD2" = "$(md5sum "${LD}p2" | cut -d' ' -f1)" ] && echo "A3 p2 DEV OK" || { echo "A3 p2 DEV CORRUPT"; rc=1; }
 e2fsck -fn "${LD}p2" >/dev/null 2>&1 && echo "A3 e2fsck clean" || { echo "A3 e2fsck ISSUES"; rc=1; }

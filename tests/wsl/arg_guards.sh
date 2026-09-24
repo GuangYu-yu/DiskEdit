@@ -9,7 +9,7 @@ require_bin
 T=/var/tmp/arg_guards.img
 track_file "$T"
 
-rm -f "$T" "$T.diskedit.journal"
+rm -f "$T" "$T$JOURNAL_SUFFIX"
 truncate -s 32M "$T"
 $B new "$T" --yes >/dev/null 2>&1; exp $? 0 "new（32MiB GPT）"
 $B create "$T" --size 1M --name p1 >/dev/null 2>&1; exp $? 0 "create 1MiB p1"

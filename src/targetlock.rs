@@ -122,7 +122,7 @@ mod tests {
         let img = std::path::Path::new("/tmp/diskedit_lk_path.img");
         assert_eq!(
             identity_for(img).lock_path(),
-            std::path::Path::new("/tmp/diskedit_lk_path.img.diskedit.lock")
+            crate::dev::suffix_path(img, crate::dev::LOCK_SUFFIX)
         );
 
         // 块设备侧命名断言只在非 Linux 跑：Linux 上伪造设备名的拓扑解析不出（fail-closed），
@@ -137,7 +137,7 @@ mod tests {
                 "a block device's lock must live in state_dir next to its journal"
             );
             assert!(
-                lock.file_name().is_some_and(|n| n.to_string_lossy().ends_with(".diskedit.lock")),
+                lock.file_name().is_some_and(|n| n.to_string_lossy().ends_with(crate::dev::LOCK_SUFFIX)),
                 "the lock name must be recognisable: {}",
                 lock.display()
             );

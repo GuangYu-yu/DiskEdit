@@ -6,7 +6,7 @@ require_bin
 T=/var/tmp/diskedit_test11.img
 track_file "$T"
 
-rm -f "$T" "$T.diskedit.journal"
+rm -f "$T" "$T$JOURNAL_SUFFIX"
 truncate -s 64M "$T"
 $B new "$T" --yes
 echo "== create --size 32M (units) =="

@@ -47,7 +47,7 @@ addk() { # $1=label $2=期望生成的分区节点  其余=传给 add 的参数
       $B abandon "$LD" --yes >/dev/null 2>&1
       echo "  OK   add $label（首次已写盘，内核视图滞后，journal 已释放）"; return 0
     fi
-    [ -f "$T.diskedit.journal" ] && $B undo "$LD" --yes >/dev/null 2>&1
+    [ -f "$T$JOURNAL_SUFFIX" ] && $B undo "$LD" --yes >/dev/null 2>&1
     out=$($B add "$LD" "$@" 2>&1); e=$?
   fi
   [ "$e" -eq 0 ] && echo "  OK   add $label" || { echo "  BAD  add $label FAILED: $(echo "$out" | tail -1)"; rc=1; return 1; }
@@ -72,7 +72,7 @@ movek() { # $1=目标 start（LBA）
 }
 
 setup4k() {
-  rm -f "$T" "$T".diskedit.*; rm -f /var/lib/diskedit/* 2>/dev/null
+  rm -f "$T" "$T"$SIDECAR_GLOB; rm -f /var/lib/diskedit/* 2>/dev/null
   [ -n "$LD" ] && lo_detach "$LD" 2>/dev/null
   truncate -s 2G "$T"
   LD=$(lo_attach "$T" --sector-size 4096)

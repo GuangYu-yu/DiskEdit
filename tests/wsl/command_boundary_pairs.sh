@@ -8,7 +8,7 @@ source "$(dirname "$0")/lib.sh"
 require_fault_bin
 
 T=/var/tmp/tcb.img
-CK="$T.diskedit.ckpt"
+CK="$T$CKPT_SUFFIX"
 MNT=/testmnt
 ok=0; bad=0
 
@@ -16,12 +16,12 @@ chk() { # got want what
   if [ "$1" = "$2" ]; then echo "  OK   $3"; ok=$((ok+1)); else echo "  BAD  $3 (got [$1] want [$2])"; bad=$((bad+1)); fi
 }
 
-rm -f "$T" "$T".diskedit.* 2>/dev/null
+rm -f "$T" "$T"$SIDECAR_GLOB 2>/dev/null
 mkdir -p "$MNT"
 track_file "$T"
 
 mk() { # p1 扩容需要把 p2/p3 往后搬，故必有搬移相位
-  rm -f "$T" "$T".diskedit.*
+  rm -f "$T" "$T"$SIDECAR_GLOB
   truncate -s 1G "$T"
   $BF new "$T" --yes >/dev/null
   $BF create "$T" --size 100M --name p1 --fs ext4 >/dev/null
@@ -61,7 +61,7 @@ $B apply "$T" --grow 1 >/dev/null 2>&1; chk "$?" "0" "B2 重跑收敛（exit 0�
 
 echo
 echo "===== C: resize（在线，sfdisk 分界）====="
-rm -f "$T" "$T".diskedit.*
+rm -f "$T" "$T"$SIDECAR_GLOB
 truncate -s 64M "$T"
 $BF new "$T" --yes >/dev/null
 $BF create "$T" --size 16777216 --name p1 --fs ext4 >/dev/null
