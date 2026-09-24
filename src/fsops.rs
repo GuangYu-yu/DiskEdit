@@ -350,11 +350,13 @@ fn require_unmounted(_dev: &str) -> Result<(), FsError> {
     Ok(())
 }
 
-/// 离线写表路径的占用前置闸：分区在首次落盘前须空闲。FS 步内部的 require_unmounted
-/// 保留（纵深防御）；此处提前是把"表已写、FS 步被占"的 PARTIAL(20) 变成 REFUSED(10)——
-/// 占用是请求与现状不匹配，不是盘故障。镜像无块设备挂载语义，直接放行（经 loop 挂载
-/// 的镜像由 FS 步的设备级检查兜底）。`start_bytes` = 分区起始字节（与 find_block_partition_node
-/// 的换算基准一致）
+/// 写表路径的占用前置闸：分区在首次落盘前须空闲。调用点在 prepare 层（movepart 的
+/// prepare_resize / prepare_apply）与 MBR resize 命令层——那是任何写盘的唯一必经关口，
+/// 把"表已写、FS 步被占"的 PARTIAL(20) 变成 REFUSED(10)：占用是请求与现状不匹配，
+/// 不是盘故障。块设备另有整盘 O_EXCL 独占打开这道内核级防线（任一分区被挂载或作
+/// swap 时 open 即 EBUSY），本闸对其是纵深防御；镜像是本工具内唯一没有占用判据的
+/// 目标（不存在分区节点可查），直接放行（经 loop 挂载的镜像由 FS 步的设备级检查兜底）。
+/// `start_bytes` = 分区起始字节（与 find_block_partition_node 的换算基准一致）
 #[cfg(target_os = "linux")]
 pub fn ensure_idle_before_write(src: &FileSource, part: u32, start_bytes: u64) -> Result<(), crate::outcome::Fail> {
     use crate::outcome::Fail;
@@ -520,10 +522,12 @@ fn find_block_partition_node(src: &FileSource, part: u32, want_start: u64) -> Re
             // 解析失败等于"这个候选不成立"，跳过而非折叠成 0——0 不会匹配任何
             // 真实分区，但一个假装合法的数值比跳过更难排查
             let Ok(start_sectors) = txt.trim().parse::<u64>() else { continue };
-            if start_sectors * 512 == want_start {
-                let name = entry.file_name().to_string_lossy().to_string();
-                return Ok(format!("/dev/{name}"));
+            // sysfs 是外部输入：回绕出的假字节偏移可能撞上别的分区节点，乘法必须 checked
+            if start_sectors.checked_mul(512) != Some(want_start) {
+                continue;
             }
+            let name = entry.file_name().to_string_lossy().to_string();
+            return Ok(format!("/dev/{name}"));
         }
         Err(FsError::invalid(format!("partition node for part {part} not found under /sys/block/{disk}")))
     }

@@ -96,6 +96,19 @@ fn check_pv_intent(
     Ok(())
 }
 
+/// checked 换算：表项 LBA 来自盘上内容，回绕的字节值会骗过下游的容量判据——溢出按表损坏报
+fn lba_bytes(n_lba: u64, ss: u64) -> u64 {
+    n_lba.checked_mul(ss)
+        .unwrap_or_else(|| bail_fail(Fail::infra("LBA × sector-size overflows byte range (corrupted table)")))
+}
+
+/// LBA 区间 [start, end]（含两端）的字节数，同上 checked
+fn lba_range_bytes(start: u64, end: u64, ss: u64) -> u64 {
+    let n = end.checked_sub(start).and_then(|d| d.checked_add(1))
+        .unwrap_or_else(|| bail_fail(Fail::infra("partition end below start (corrupted table)")));
+    lba_bytes(n, ss)
+}
+
 /// 在线路径前置守卫：活动 swap 拒绝（run swapoff 后重试）
 #[cfg(target_os = "linux")]
 fn refuse_swap_active(dn: &str, part: u32) {
@@ -112,7 +125,11 @@ fn refuse_swap_active(dn: &str, part: u32) {
 /// `free_right_lba` / `cur_bytes` 是**锁前**快照：在线路径的锁在 `online` 模块内部取得
 ///（身份取自解析结果，此处还拿不到它）。写表前 `online` 会在锁下重取 sysfs 快照，
 /// 由 `check_new_range` 复核容量与邻接——过扩/重叠有锁下防线；残余是 free 的**数额**
-/// 不在锁下重导出（在线路径刻意不解析分区表），窗口内布局变化可能少扩或被拒，不会越界
+/// 不在锁下重导出（在线路径刻意不解析分区表），窗口内布局变化可能少扩或被拒，不会越界。
+/// `is_pv` 同为锁前值：`online::resize_pv` 在锁下重识别分区内容，已不再是 PV 即拒绝，
+/// 过期判据不会把 sfdisk 的表写入砸到别的 FS 上。
+/// delta 的旧尺寸与"是否无事可做"也由锁下事实判定：`resize_pv_online` 把锁下旧尺寸
+/// 随结果带回，锁前 `cur_bytes` 不参与扩量计算
 #[cfg(target_os = "linux")]
 struct ResizeTarget {
     part: u32,
@@ -165,14 +182,15 @@ fn resize_online(a: &Args, src: &FileSource, t: &ResizeTarget) -> Option<u8> {
         } else {
             t.target.unwrap_or(t.cur_bytes) / t.ss * t.ss // 扇区下取整，与离线路径同规则
         };
-        if new_len != t.cur_bytes {
-            let o = crate::online::resize_pv_online(&dn, t.part, new_len);
-            if !o.is_complete() {
-                o.report();
-                return Some(o.exit_code());
-            }
+        // 相等与写表统一交给在线路径：相等与否由锁下事实判定，锁前 cur_bytes
+        // 在窗口内可能已过期，用它短路会跳过本该做的写表。delta 的旧尺寸用
+        // 锁下带回的实际值——锁前 cur_bytes 算出的扩量可能不对
+        let (o, old_bytes) = crate::online::resize_pv_online(&dn, t.part, new_len);
+        if !o.is_complete() {
+            o.report();
+            return Some(o.exit_code());
         }
-        return Some(resize_done(a, None, true, true, t.cur_bytes));
+        return Some(resize_done(a, None, true, true, old_bytes));
     }
 
     // 非 PV：仅挂载中的分区能在线扩（在线不能搬移，只吃连续空闲）
@@ -273,7 +291,7 @@ pub(crate) fn cmd_resize(a: &Args) -> u8 {
             return cmd_resize_msdos(a, part, size_arg.as_deref(), &src);
         }
         // superfloppy：无分区表，FS 即整盘，无表可写——纯 FS grow
-        Ok(table::TableLabel::None) => return cmd_resize_superfloppy(a, size_arg.as_deref(), &src),
+        Ok(table::TableLabel::None) => return cmd_resize_superfloppy(a, size_arg.as_deref()),
         Ok(other) => bail_fail(Fail::refused(format!("resize requires a GPT or MBR target (label: {other})"))),
         Err(e) => bail_fail(Fail::infra(format!("parse failed: {e}"))),
     }
@@ -287,8 +305,9 @@ pub(crate) fn cmd_resize(a: &Args) -> u8 {
     };
     let e = crate::gpt_policy::live_entry(&g, part).unwrap_or_else(|f| bail_fail(f));
     let (start, end, ss) = (e.starting_lba, e.ending_lba, g.ss);
-    let cur_bytes = (end - start + 1) * ss;
-    let fstype = fsid::identify(&src, start * ss, (end - start + 1) * ss).unwrap_or_else(|e| bail_fail(Fail::infra(format!("identify failed: {e}"))));
+    let cur_bytes = lba_range_bytes(start, end, ss);
+    let fstype = fsid::identify(&src, lba_bytes(start, ss), cur_bytes)
+        .unwrap_or_else(|e| bail_fail(Fail::infra(format!("identify failed: {e}"))));
     let is_pv = fstype == "lvm2_pv";
 
     // SIZE → 绝对目标字节数 / grow 标记
@@ -332,19 +351,18 @@ pub(crate) fn cmd_resize(a: &Args) -> u8 {
     // SIZE 锚点与 PV 判据按锁下的新几何重算：+N/+N% 锚定"当前尺寸"，窗口内分区被
     // 改写过，锁前锚点就已作废——拿旧锚点的绝对值对照新几何会把"扩"判成"缩"
     // （先缩 FS！），方向与请求相反。grow 标记是请求的形状（与盘无关），锁前锁后同值
-    let cur_bytes = (end - start + 1) * ss;
+    let cur_bytes = lba_range_bytes(start, end, ss);
     let (target, _) = resolve_size_request(a, size_arg.as_deref(), cur_bytes);
     let shrinking = target.is_some_and(|t| t < cur_bytes);
     // FS 类型与 PV 判据同样按锁下现状重取（与几何同理）：识别与取锁之间分区可被
     // 重新格式化（mkfs 不守本工具的锁），过期的 is_pv 会让 check_pv_intent 对着
     // 已不是 PV 的分区说 PV 的话
-    let fstype = fsid::identify(&src, start * ss, (end - start + 1) * ss)
+    let fstype = fsid::identify(&src, lba_bytes(start, ss), cur_bytes)
         .unwrap_or_else(|e| bail_fail(Fail::infra(format!("identify failed: {e}"))));
     let is_pv = fstype == "lvm2_pv";
     check_pv_intent(part, fstype, is_pv, shrinking, a.grow_lv).unwrap_or_else(|f| bail_fail(f));
-    // 占用复核在锁下（离线选择时的探测在锁前）：首次落盘前确认分区仍空闲，
-    // 把"表已写、FS 步被占"的 PARTIAL(20) 提前成 REFUSED(10)
-    crate::fsops::ensure_idle_before_write(&src, part, start * ss).unwrap_or_else(|f| bail_fail(f));
+    // 占用闸在 movepart 的 prepare 层（本分支的每条路径都经 prepare_resize/prepare_apply），
+    // 不在命令层重复判一次
     if grow_to_end {
         let free = free_right_gpt(&g, part);
         // 右侧有空闲且没有未收尾的搬移作业 → 纯扩容。若作业未收尾，则"右侧已空"很可能
@@ -443,7 +461,7 @@ pub(crate) fn cmd_resize(a: &Args) -> u8 {
 /// superfloppy resize（无分区表，FS 即整盘）：无表可写，唯一有意义的是 FS grow
 /// 到盘/镜像末端——缩无处可缩（无分区边界），显式 SIZE 只接受等于当前值。
 /// 镜像/盘须已是大尺寸（dd 后或 truncate 预扩），本命令不负责扩文件本身
-fn cmd_resize_superfloppy(a: &Args, size_arg: Option<&str>, src_ro: &FileSource) -> u8 {
+fn cmd_resize_superfloppy(a: &Args, size_arg: Option<&str>) -> u8 {
     if let Some(n) = a.part {
         bail_fail(Fail::refused(format!("target has no partition table — drop :{n} (the FS occupies the whole device)")));
     }
@@ -458,7 +476,10 @@ fn cmd_resize_superfloppy(a: &Args, size_arg: Option<&str>, src_ro: &FileSource)
     if a.allow_move {
         bail_fail(Fail::refused("--allow-move has nothing to do on a superfloppy — there are no partitions to relocate".to_string()));
     }
-    let cur_bytes = src_ro.size;
+    let src = open_target_for_write(a).unwrap_or_else(|f| bail_fail(f));
+    // 锁下取权威容器尺寸并解析 SIZE：+N/+% 锚定"当前尺寸"，而容器大小不受本工具锁约束
+    //（镜像可被 truncate、盘可被第三方改写）——锁前锚点会算错方向，与分区路径同理
+    let cur_bytes = src.size;
     let (target, grow_to_end) = resolve_size_request(a, size_arg, cur_bytes);
     if let Some(t) = target {
         if t < cur_bytes {
@@ -469,24 +490,19 @@ fn cmd_resize_superfloppy(a: &Args, size_arg: Option<&str>, src_ro: &FileSource)
         }
         // SIZE == 当前值：与 grow 等价（FS 可能仍小于盘）
     } else if !grow_to_end {
-        unreachable!("resolve_size_request guarantees a target or grow_to_end");
+        // resolve_size_request 的契约是无 SIZE 必带 grow 标记；契约破裂时显式报错，
+        // 不把未知请求静默当成"扩到盘尾"
+        bail_fail(Fail::infra("internal error: size request resolved to neither a target nor grow".to_string()));
     }
-    let fstype = fsid::identify(src_ro, 0, cur_bytes)
-        .unwrap_or_else(|e| bail_fail(Fail::infra(format!("identify failed: {e}"))));
-    if matches!(fstype, "lvm2_pv" | "swap" | "unknown") {
-        bail_fail(Fail::refused(format!("whole-device {fstype} is not a resizable filesystem (no partition table on target)")));
-    }
-    // FS grow 本身不改分区表，无 kernel_resync 必要
-    let src = open_target_for_write(a).unwrap_or_else(|f| bail_fail(f));
-    // 锁下重取 FS 类型（与分区路径同理）：识别与取锁之间整盘可被重新格式化，
-    // 不合格的类型在动 FS 工具之前再拦一道
+    // FS 类型在锁下识别：整盘可在取锁前被重新格式化，类型判据必须锚定独占权之后的内容
     let fstype = fsid::identify(&src, 0, cur_bytes)
         .unwrap_or_else(|e| bail_fail(Fail::infra(format!("identify failed: {e}"))));
     if matches!(fstype, "lvm2_pv" | "swap" | "unknown") {
         bail_fail(Fail::refused(format!("whole-device {fstype} is not a resizable filesystem (no partition table on target)")));
     }
+    // FS grow 本身不改分区表，无 kernel_resync 必要
     fsops::resize_fs_whole(&src, fstype).unwrap_or_else(|e| bail_fail(Fail::from(e).context("FS grow failed")));
-    println!("superfloppy: {fstype} grown to full device ({} bytes) — verify with: diskedit info {}", cur_bytes, a.target);
+    println!("superfloppy: {fstype} grown to full device ({cur_bytes} bytes) — verify with: diskedit info {}", a.target);
     EXIT_OK
 }
 
@@ -724,19 +740,28 @@ fn resize_done(a: &Args, wsrc: Option<&mut FileSource>, is_pv: bool, is_block: b
     }
     #[cfg(target_os = "linux")]
     {
+        // 屏障要经可变借用落（mark_non_reversible 是 &mut self），只有 Linux 路径用到
+        let mut wsrc = wsrc;
         // 分区号在 cmd_resize 入口就已解析（usage 兜底），到这里还没有是调用方的 bug：
         // 用 unwrap_or(0) 继续算，报出来的会是"分区从表里消失了"这种指向盘内容的假话
         let Some(part) = a.part else {
             bail_fail(Fail::infra("internal error: resize finished without a partition number".to_string()))
         };
-        // 只打开一次：下面读"实际新尺寸"与给 LVM 链取分区节点用的是同一份盘上现状
-        let src = open_target_ro(a).unwrap_or_else(|f| bail_fail(f));
+        // 写句柄在手（离线路径）时直接复用它读盘上现状；在线路径无 journal 句柄，
+        // 才自开只读句柄
+        let mut opened = None;
         // 表项重读：GPT 与 MBR 的分派、表自身 ss 的换算都在 gpt_policy::partition_bytes 一处
-        let new_bytes = match crate::gpt_policy::partition_bytes(&src, part) {
-            Ok((_, len)) => len,
-            // 分区号在 resize 入口已由锁下几何验证过一次，此时查不到即盘内容异常 →
-            // 升级为 Infra，原因原样带上（into_io_error 正是"此处已越界"的取消息方式）
-            Err(f) => bail_fail(Fail::infra(format!("post-resize: {}", crate::outcome::into_io_error(f)))),
+        let new_bytes = {
+            let ro: &FileSource = match wsrc.as_deref() {
+                Some(w) => w,
+                None => opened.get_or_insert_with(|| open_target_ro(a).unwrap_or_else(|f| bail_fail(f))),
+            };
+            match crate::gpt_policy::partition_bytes(ro, part) {
+                Ok((_, len)) => len,
+                // 分区号在 resize 入口已由锁下几何验证过一次，此时查不到即盘内容异常 →
+                // 升级为 Infra，原因原样带上（into_io_error 正是"此处已越界"的取消息方式）
+                Err(f) => bail_fail(Fail::infra(format!("post-resize: {}", crate::outcome::into_io_error(f)))),
+            }
         };
         let delta = new_bytes.saturating_sub(old_bytes);
         // pvresize/lvextend 的写入不可回滚：此后回滚表项即"表与内容自相矛盾"，屏障必须
@@ -744,7 +769,7 @@ fn resize_done(a: &Args, wsrc: Option<&mut FileSource>, is_pv: bool, is_block: b
         // 汇合，且只有 wsrc 带 journal；比藏在各自表写入函数里少一处各自演化（GPT 旧实现
         // 在 finalize_growth 落，距实际写入隔了整个收尾流，死亡窗口会无谓锁死 undo）。
         // 在线路径不经 journal（sfdisk 用自己的 fd 写盘，事后也无 undo 可谈），无需屏障
-        if let Some(w) = wsrc {
+        if let Some(ref mut w) = wsrc {
             w.set_mutation(crate::dev::Mutation::ExternalFsTool);
             w.mark_non_reversible().unwrap_or_else(|e| bail_fail(Fail::from(e)));
         }
@@ -752,8 +777,14 @@ fn resize_done(a: &Args, wsrc: Option<&mut FileSource>, is_pv: bool, is_block: b
             lvm_grow_chain(&part_dev_path(&a.target, part), delta, a.grow_lv, a.lv.as_deref())
         } else {
             // offset+sizelimit 映射出的 loop 设备 = 该分区的整块设备，PV 整设备语义下
-            // pvresize/lvextend 直接可用，无需 -P partscan
-            fsops::with_partition_device(&src, part, |pv| {
+            // pvresize/lvextend 直接可用，无需 -P partscan。
+            // wsrc 为 None 只发生在块设备在线路径（镜像恒走离线、带写句柄），
+            // 故走到镜像分支时 opened 必已在上面的 new_bytes 块中填好
+            let ro: &FileSource = match wsrc.as_deref() {
+                Some(w) => w,
+                None => opened.as_ref().unwrap(),
+            };
+            fsops::with_partition_device(ro, part, |pv| {
                 lvm_grow_chain(pv, delta, a.grow_lv, a.lv.as_deref()).map_err(fsops::FsError::CommandFailed)
             })
             .map_err(|e| e.to_string())

@@ -137,7 +137,13 @@ pub(crate) fn parse_args() -> (String, Args) {
             "--sector-size" => {
                 a.seen.push("--sector-size");
                 let v = it.next().unwrap_or_else(|| miss_arg("--sector-size"));
-                a.sector_size = Some(v.parse().unwrap_or_else(|_| bad_arg("--sector-size", &v, " (bytes, e.g. 4096)")));
+                let n: u64 = v.parse().unwrap_or_else(|_| bad_arg("--sector-size", &v, " (bytes, e.g. 4096)"));
+                // 取值合法性在参数层当场判：改参数有解的错误归用法拒绝（10），
+                // 不留给打开阶段报成 Infra(30)——分类不因截获层不同而漂移
+                if !(512..=65536).contains(&n) || !n.is_power_of_two() {
+                    bad_arg("--sector-size", &v, " (must be a power of two in 512..=65536, e.g. 4096)");
+                }
+                a.sector_size = Some(n);
             }
             "--grow" => {
                 a.seen.push("--grow");

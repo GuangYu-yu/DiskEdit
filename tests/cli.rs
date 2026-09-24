@@ -171,14 +171,16 @@ fn backup_header_fallback_and_repair() {
     let gpt = gptman::GPT::find_from(&mut f).expect("primary header must be rebuilt");
     assert_eq!(gpt[1].partition_name.as_str(), "renamed");
 
-    // 两份都清零 → 视为无表（不误判）
+    // 两份都清零 → 保护 MBR 仍在，盘型可辨：gpt + damaged，不得落成 none——
+    // none 会让 new 把还能救回的表当无表盘覆盖、resize 走 superfloppy 整盘扩
     wipe(1);
     let last = std::fs::metadata(&img).unwrap().len() / 512 - 1;
     wipe(last);
     let (c, out, _) = run(&["info", img_s]);
     assert_eq!(c, 0);
     let v: serde_json::Value = serde_json::from_str(out.trim()).unwrap();
-    assert_eq!(v["label"], "none", "both copies gone must read as none: {out}");
+    assert_eq!(v["label"], "gpt", "pmbr intact must still identify as gpt: {out}");
+    assert_eq!(v["damaged"], true, "headers gone must read as damaged: {out}");
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -1125,7 +1127,9 @@ fn cli_negative_paths() {
     }
     let (c, out, _) = run(&["info", no_pmbr.to_str().unwrap()]);
     assert_eq!(c, 0);
-    assert!(out.contains("\"label\":\"gpt\",\"damaged\":true"), "PMBR-less GPT must surface as damaged: {out}");
+    let v: serde_json::Value = serde_json::from_str(out.trim()).expect("info must emit valid JSON");
+    assert_eq!(v["label"], "gpt", "{out}");
+    assert_eq!(v["damaged"], true, "PMBR-less GPT must surface as damaged: {out}");
     let (c, _, e) = run(&["resize", &format!("{}:1", no_pmbr.display()), "10M"]);
     assert_eq!(c, 10, "resize on damaged-GPT target must refuse: {e}");
     assert!(e.contains("resize requires"), "{e}");
@@ -1210,8 +1214,9 @@ fn cli_negative_paths() {
     // --sector-size 非法 → 参数解析阶段拒绝
     let (c, _, _) = run(&["info", img_s, "--sector-size", "abc"]);
     assert_eq!(c, 10);
-    let (c, _, _) = run(&["info", img_s, "--sector-size", "300"]);
-    assert_eq!(c, 30, "非 2 的幂扇区大小须被拒绝");
+    let (c, _, e) = run(&["info", img_s, "--sector-size", "300"]);
+    assert_eq!(c, 10, "non-power-of-two sector size must be a usage refusal, not Infra: {e}");
+    assert!(e.contains("power of two"), "{e}");
 
     // fixed VHD（footer 只在 EOF）→ 提示容器格式与 qemu-nbd 出路，但不解析其内容
     let vhd = dir.join("fixed.vhd");
@@ -1230,6 +1235,40 @@ fn cli_negative_paths() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// fs 族分支级旗标守卫：白名单是命令级的，分支差异必须显式拒绝而非静默忽略。
+/// 三处拒绝都发生在打开目标之前，任何平台上都可验证退出码与文案
+#[test]
+fn fs_command_branch_level_flag_guards() {
+    let dir = std::env::temp_dir().join(format!("diskedit_fsflags_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let img = dir.join("t.img");
+    std::fs::write(&img, vec![0u8; 8 * 1024 * 1024]).unwrap();
+    let exe = env!("CARGO_BIN_EXE_DiskEdit");
+    let img_s = img.to_str().unwrap();
+    let run = |args: &[&str]| -> (i32, String, String) {
+        let out = Command::new(exe).args(args).output().unwrap();
+        (out.status.code().unwrap_or(-1),
+         String::from_utf8_lossy(&out.stdout).into_owned(),
+         String::from_utf8_lossy(&out.stderr).into_owned())
+    };
+
+    // 在线 resizefs 拿 <target>:N ⇒ 它只收挂载点
+    let (c, _, e) = run(&["resizefs", &format!("{img_s}:1"), "--online"]);
+    assert_eq!(c, 10, "online resizefs must refuse a :N target: {e}");
+    assert!(e.contains("mountpoint"), "{e}");
+    // 在线 resizefs 携 --sector-size ⇒ 该旗标的消费点都在打开路径上
+    let (c, _, e) = run(&["resizefs", "some-mountpoint", "--online", "--sector-size", "4096"]);
+    assert_eq!(c, 10, "online resizefs must refuse --sector-size: {e}");
+    assert!(e.contains("mountpoint"), "{e}");
+    // set 的 --random 是 uuid 分支专属
+    let (c, _, e) = run(&["set", &format!("{img_s}:1"), "name", "foo", "--random"]);
+    assert_eq!(c, 10, "set --random outside the uuid branch must refuse: {e}");
+    assert!(e.contains("uuid"), "{e}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// 布局坐标系不变量：4Kn GPT 表放在 512e 容器上（g.ss ≠ src.sector_size）时，
 /// add/create 的对齐单位与 --size 换算必须按**表头记录的 ss** 折算（1MiB = 256 个表 LBA）。
 /// 按容器 ss 折算会把 1MiB 错算成 8MiB（2048 个容器扇区），合法 add 被误拒
@@ -1532,7 +1571,9 @@ fn flag_contract_mbr_resizefs_and_type() {
     assert_eq!(c, 0, "uppercase 0X prefix must be accepted: {e}");
     let (c, out, _) = run(&["info", m_s]);
     assert_eq!(c, 0);
-    assert!(out.contains("\"type\":\"0x83\""), "{out}");
+    let v: serde_json::Value = serde_json::from_str(out.trim()).expect("info must emit valid JSON");
+    let types: Vec<&str> = v["partitions"].as_array().unwrap().iter().filter_map(|p| p["type"].as_str()).collect();
+    assert_eq!(types, ["0x83"], "{out}");
 
     let _ = std::fs::remove_dir_all(&dir);
 }

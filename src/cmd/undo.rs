@@ -190,4 +190,23 @@ mod tests {
         let _ = std::fs::remove_file(&ok);
         let _ = std::fs::remove_file(&foreign);
     }
+
+    /// 两份候选同时可读 → Ambiguous：不猜（回放错一份就是把历史字节写到不该写的盘上），
+    /// 错误文案列出两份路径，供 abandon 逐一定位
+    #[test]
+    fn two_readable_candidates_are_ambiguous_not_silently_picked() {
+        let a = tmp_path("amb_a");
+        let b = tmp_path("amb_b");
+        for p in [&a, &b] {
+            let mut j = Journal::open(p).unwrap();
+            j.record(0, &[0xAA; 4]).unwrap();
+        }
+        let e = pick_journal(&[a.clone(), b.clone()]).err().unwrap();
+        assert!(matches!(e, PickJournalError::Ambiguous { .. }), "{e}");
+        assert!(e.to_string().contains(&a.display().to_string()), "{e}");
+        assert!(e.to_string().contains(&b.display().to_string()), "{e}");
+
+        let _ = std::fs::remove_file(&a);
+        let _ = std::fs::remove_file(&b);
+    }
 }
