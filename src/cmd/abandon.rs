@@ -48,11 +48,12 @@ pub(crate) fn cmd_abandon(a: &Args) -> u8 {
     let _owned = std::fs::metadata(path).is_ok()
         .then(|| TargetLock::acquire(&identity).unwrap_or_else(|f| bail_fail(f)));
 
-    if identity.is_block() {
+    if identity.has_block_legacy_naming() {
         // 独占权来自锁文件（与镜像同一机制），不再依赖 O_EXCL 打开——abandon 只碰恢复
         // 现场不碰盘上字节，没有理由要求排他写打开。打开内容只为读表里的 Disk GUID：
         // 历史命名的 checkpoint 以它落点，不认它就会漏掉一份现场；表读不出来（abandon
-        // 的常态之一）不挡这条路，按 None 处理
+        // 的常态之一）不挡这条路，按 None 处理。loop 归一后身份是 Image kind，但其
+        // 历史落点按 Block 规则生成，同样要走这条补列路径
         let legacy = match FileSource::open_read_only(path) {
             Ok(src) => legacy_disk_guid(&src),
             Err(e) => {
