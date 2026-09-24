@@ -679,7 +679,8 @@ impl FileSource {
     #[cfg(not(target_os = "linux"))]
     pub(crate) fn open_read_only(path: &Path) -> io::Result<Self> {
         let file = File::open(path)?;
-        let size = file.metadata()?.len();
+        let meta = file.metadata()?;
+        let size = meta.len();
         Ok(FileSource {
             identity: TargetIdentity::resolve_image(path),
             file,
@@ -689,7 +690,7 @@ impl FileSource {
             is_block: false,
             journal: None,
             ownership: None,
-            fingerprint: TargetFingerprint::default(),
+            fingerprint: TargetFingerprint::from_meta(&meta),
             loop_mapping: None,
         })
     }
