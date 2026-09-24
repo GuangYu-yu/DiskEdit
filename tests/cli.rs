@@ -550,6 +550,69 @@ fn msdos_table_flow() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// `set type` 的 CLI 分发：GPT 写类型 GUID、MBR 写类型字节，都能读回；全零 GUID 与
+/// 0x00 / 扩展容器类型（0x05/0x0F/0x85）在写盘前拒绝，拒绝后盘上原值不变
+#[test]
+fn set_type_cli() {
+    let dir = std::env::temp_dir().join(format!("diskedit_stype_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let exe = env!("CARGO_BIN_EXE_DiskEdit");
+    let run = |args: &[&str]| -> (i32, String) {
+        let out = Command::new(exe).args(args).output().unwrap();
+        (out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stdout).into_owned())
+    };
+    let gpt_type = |img: &std::path::Path| -> String {
+        let (c, out) = run(&["info", img.to_str().unwrap()]);
+        assert_eq!(c, 0, "info must succeed: {out}");
+        let v: serde_json::Value = serde_json::from_str(out.trim()).expect("info must emit valid JSON");
+        v["partitions"][0]["type"].as_str().unwrap().to_string()
+    };
+
+    // GPT：文本 GUID（连字符可省）落进条目
+    let g = dir.join("g.img");
+    std::fs::write(&g, vec![0u8; 8 * 1024 * 1024]).unwrap();
+    let g_s = g.to_str().unwrap();
+    let (c, _) = run(&["new", g_s, "--yes"]);
+    assert_eq!(c, 0);
+    let (c, _) = run(&["add", g_s, "--start", "2048", "--end", "4095"]);
+    assert_eq!(c, 0);
+    let (c, _) = run(&["set", &format!("{g_s}:1"), "type", "c12a7328f81f11d2ba4b00a0c93ec93b"]);
+    assert_eq!(c, 0);
+    assert_eq!(gpt_type(&g), "C12A7328-F81F-11D2-BA4B-00A0C93EC93B");
+    // 全零 GUID 是"未用条目"的形状：拒绝且不改盘
+    let (c, _) = run(&["set", &format!("{g_s}:1"), "type", "00000000-0000-0000-0000-000000000000"]);
+    assert_eq!(c, 10, "all-zero type GUID must refuse");
+    assert_eq!(gpt_type(&g), "C12A7328-F81F-11D2-BA4B-00A0C93EC93B", "refused set must not touch the table");
+    // 类型字节不是 GUID 文本；空槽没有类型可改
+    let (c, _) = run(&["set", &format!("{g_s}:1"), "type", "0x83"]);
+    assert_eq!(c, 10, "GPT target must reject an MBR-style byte");
+    let (c, _) = run(&["set", &format!("{g_s}:2"), "type", "C12A7328-F81F-11D2-BA4B-00A0C93EC93B"]);
+    assert_eq!(c, 10, "empty slot must refuse");
+
+    // MBR：类型字节直改，0x 前缀大小写不限
+    let m = dir.join("m.img");
+    std::fs::write(&m, vec![0u8; 8 * 1024 * 1024]).unwrap();
+    let m_s = m.to_str().unwrap();
+    let (c, _) = run(&["new", m_s, "--yes", "--table", "msdos"]);
+    assert_eq!(c, 0);
+    let (c, _) = run(&["add", m_s, "--start", "2048", "--end", "4095", "--type", "0x83"]);
+    assert_eq!(c, 0);
+    let (c, _) = run(&["set", &format!("{m_s}:1"), "type", "0X07"]);
+    assert_eq!(c, 0);
+    assert_eq!(std::fs::read(&m).unwrap()[446 + 4], 0x07, "type byte must land in slot 1");
+    for bad in ["0x00", "0x05", "0x0F", "0x85"] {
+        let (c, _) = run(&["set", &format!("{m_s}:1"), "type", bad]);
+        assert_eq!(c, 10, "{bad} must be refused");
+    }
+    assert_eq!(std::fs::read(&m).unwrap()[446 + 4], 0x07, "refused set must not touch slot 1");
+    let (c, _) = run(&["set", &format!("{m_s}:2"), "type", "0x07"]);
+    assert_eq!(c, 10, "empty slot must refuse");
+    let (c, _) = run(&["set", &format!("{m_s}:5"), "type", "0x07"]);
+    assert_eq!(c, 10, "slot 5 is outside the msdos primary range");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn msdos_user_resize() {
     let dir = std::env::temp_dir().join(format!("diskedit_mres_{}", std::process::id()));
