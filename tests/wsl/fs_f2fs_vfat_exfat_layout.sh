@@ -140,6 +140,48 @@ fi
 rm -rf "$SQSRC" "$SQIMG" 2>/dev/null
 
 echo
+echo "########## F: erofs + 尾部 overlay 扩容 ##########"
+if ! command -v mkfs.erofs >/dev/null 2>&1; then
+  echo "SKIP: erofs-utils not installed (mkfs.erofs missing) — 按约定不在 WSL 安装依赖，CI 上真测"
+else
+# 与 E 同构，覆盖 overlay_offset_at 的 erofs 分支（src/fsid.rs:246-257）：
+# blkszbits@1024+0x0C、blocks(u32)@1024+0x24，overlay 偏移 = blocks << blkszbits，
+# 64KiB 上对齐后定位内层 RW overlay（mkfs.erofs / erofs-utils，CI 已装）
+ERSRC=/var/tmp/t25ersrc
+ERIMG=/var/tmp/t25er.img
+rm -rf "$ERSRC" "$ERIMG"; mkdir -p "$ERSRC"
+head -c 2000000 /dev/urandom > "$ERSRC/blob.bin" 2>/dev/null
+mkfs.erofs "$ERIMG" "$ERSRC" >/dev/null 2>&1; echo "mkfs.erofs exit=$?"
+BLKSZ=$(od -An -tu1 -j 1036 -N1 "$ERIMG" | tr -d ' ')
+NBLK=$(od -An -tu4 -j 1040 -N4 "$ERIMG" | tr -d ' ')
+OFF=$(( ((NBLK << BLKSZ) + 65535) / 65536 * 65536 ))
+echo "erofs blkszbits=$BLKSZ blocks=$NBLK overlay_off=$OFF"
+rm -f "$T" "$T".diskedit.*
+truncate -s 512M "$T"
+$B new "$T" --yes >/dev/null
+$B add "$T" --start 2048 --end 524287 --name rootfs >/dev/null
+PS=$((2048 * 512)); PLEN=$(( (524287 - 2048 + 1) * 512 ))
+dd if="$ERIMG" of="$T" bs=512 seek=2048 conv=notrunc 2>/dev/null
+INNER=$(( (PLEN - OFF) / 2 ))
+LO1=$(losetup -f --show -o $((PS + OFF)) --sizelimit "$INNER" "$T")
+mkfs.ext4 -q -F "$LO1" >/dev/null 2>&1; echo "mkfs inner ext4 exit=$?"
+B0=$(dumpe2fs -h "$LO1" 2>/dev/null | awk '/^Block count:/ {print $3}')
+losetup -d "$LO1"
+OUT=$($B resizefs "$T":1 2>&1); E=$?
+echo "resizefs exit=$E : $(echo "$OUT" | tail -1)"
+LO2=$(losetup -f --show -o $((PS + OFF)) --sizelimit "$((PLEN - OFF))" "$T")
+B1=$(dumpe2fs -h "$LO2" 2>/dev/null | awk '/^Block count:/ {print $3}')
+losetup -d "$LO2"
+echo "inner blocks: $B0 -> $B1"
+if [ "$E" = "0" ] && [ -n "$B0" ] && [ -n "$B1" ] && [ "$B1" -gt "$B0" ]; then
+  echo "F EROFS-OVERLAY-GROW OK"
+else
+  echo "F NO GROW (exit=$E, $B0 -> $B1)"; rc=1
+fi
+rm -rf "$ERSRC" "$ERIMG" 2>/dev/null
+fi
+
+echo
 echo "########## 残留核对（cleanup 前）##########"
 echo "t25 files: $(ls /var/tmp/t25* 2>/dev/null | wc -l)  loops: $(losetup -a | wc -l)"
 exit $rc

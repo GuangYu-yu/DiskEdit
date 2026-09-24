@@ -32,6 +32,36 @@ set4kn() { # $1=label  其余=传给 set 的参数
   [ "$e" -eq 0 ] && echo "  OK   set $label" || { echo "  BAD  set $label FAILED: $(echo "$out" | tail -1)"; rc=1; }
 }
 
+addk() { # $1=label $2=期望生成的分区节点  其余=传给 add 的参数
+  local label=$1 node=$2 out e; shift 2
+  out=$($B add "$LD" "$@" 2>&1); e=$?
+  if [ "$e" -ne 0 ] && echo "$out" | grep -q 'stale'; then
+    partx -u "$LD" 2>/dev/null; sleep 1
+    if [ -b "$node" ]; then
+      echo "  OK   add $label（首次已写盘，仅内核视图滞后）"; return 0
+    fi
+    [ -f "$T.diskedit.journal" ] && $B undo "$T" --yes >/dev/null 2>&1
+    out=$($B add "$LD" "$@" 2>&1); e=$?
+  fi
+  [ "$e" -eq 0 ] && echo "  OK   add $label" || { echo "  BAD  add $label FAILED: $(echo "$out" | tail -1)"; rc=1; return 1; }
+}
+
+movek() { # $1=目标 start（LBA）
+  local start=$1 out e fl
+  out=$($B move "$LD":2 --start "$start" --chunk-size 4 2>&1); e=$?
+  if [ "$e" -ne 0 ] && echo "$out" | grep -q 'stale'; then
+    partx -u "$LD" 2>/dev/null; sleep 1
+    fl=$($B info "$LD" | grep -o '"num":2,"first_lba":[0-9]*' | grep -o '[0-9]*$')
+    if [ "$fl" = "$start" ]; then
+      e=0; echo "  move 首次已写盘，仅内核视图滞后"
+    else
+      $B abandon "$T" --yes >/dev/null 2>&1
+      out=$($B move "$LD":2 --start "$start" --chunk-size 4 2>&1); e=$?
+    fi
+  fi
+  echo "$out"; return $e
+}
+
 setup4k() {
   rm -f "$T" "$T".diskedit.*; rm -f /var/lib/diskedit/* 2>/dev/null
   [ -n "$LD" ] && lo_detach "$LD" 2>/dev/null
@@ -39,11 +69,11 @@ setup4k() {
   LD=$(lo_attach "$T" --sector-size 4096)
   $B new "$LD" --yes >/dev/null || { echo "setup: new FAILED"; rc=1; return 1; }
   # 4Kn 下 1MiB = 256 扇区
-  $B add "$LD" --start 256 --end 65791 --name p1 >/dev/null || { echo "setup: add p1 FAILED"; rc=1; return 1; }
+  addk p1 "${LD}p1" --start 256 --end 65791 --name p1 || return 1
   refresh; mkfs.ext4 -q "${LD}p1" || { echo "setup: mkfs p1 FAILED"; rc=1; return 1; }
-  $B add "$LD" --start 131072 --end 196607 --name p2 >/dev/null || { echo "setup: add p2 FAILED"; rc=1; return 1; }
+  addk p2 "${LD}p2" --start 131072 --end 196607 --name p2 || return 1
   refresh; mkfs.ext4 -q "${LD}p2" || { echo "setup: mkfs p2 FAILED"; rc=1; return 1; }
-  $B add "$LD" --start 262144 --end 327679 --name p3 >/dev/null || { echo "setup: add p3 FAILED"; rc=1; return 1; }
+  addk p3 "${LD}p3" --start 262144 --end 327679 --name p3 || return 1
   refresh; mkfs.ext4 -q "${LD}p3" || { echo "setup: mkfs p3 FAILED"; rc=1; return 1; }
 }
 
@@ -57,7 +87,7 @@ mount_at "${LD}p2" /testmnt && { dd if=/dev/urandom of=/testmnt/blob bs=1M count
 
 echo
 echo "########## B: 4Kn 自重叠左移（delta < 分区长度）##########"
-$B move "$LD":2 --start 66048 --chunk-size 4 >/dev/null 2>&1; echo "move exit=$?"
+MOVE_OUT=$(movek 66048); echo "move exit=$? : $(echo "$MOVE_OUT" | tail -1)"
 $B info "$LD" | grep -o '"num":2,[^}]*}'
 refresh
 e2fsck -fn "${LD}p2" >/dev/null 2>&1; echo "e2fsck -fn exit=$? (0=clean)"
@@ -85,7 +115,7 @@ set4kn "flag esp on" flag esp on
 echo "move 前现场：$(ls /var/lib/diskedit/ 2>/dev/null | wc -l) 项"
 PU_BEFORE=$(sgdisk -i 2 "$LD" 2>/dev/null | grep -i "unique GUID" | awk '{print $NF}')
 TY_BEFORE=$($B info "$LD" | grep -o '"num":2,[^}]*}' | grep -o '"type":"[^"]*"')
-MOVE_OUT=$($B move "$LD":2 --start 66048 --chunk-size 4 2>&1); echo "move exit=$? : $(echo "$MOVE_OUT" | tail -1)"
+MOVE_OUT=$(movek 66048); echo "move exit=$? : $(echo "$MOVE_OUT" | tail -1)"
 PU_AFTER=$(sgdisk -i 2 "$LD" 2>/dev/null | grep -i "unique GUID" | awk '{print $NF}')
 TY_AFTER=$($B info "$LD" | grep -o '"num":2,[^}]*}' | grep -o '"type":"[^"]*"')
 NAME_AFTER=$($B info "$LD" | grep -o '"num":2,[^}]*}' | grep -o '"name":"[^"]*"')
