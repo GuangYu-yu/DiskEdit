@@ -1,8 +1,5 @@
 name: Linux 全量回归
 
-# tests/wsl 套件：losetup/mount/loop 设备需要 root 与真实内核，runner 的
-# ubuntu VM 直接满足；QEMU 引导验证用 TCG 软件模拟（标准 runner 无 /dev/kvm）。
-# 手动触发，避免每次 push 都跑约数十分钟的完整套件
 on:
   workflow_dispatch:
 
@@ -22,7 +19,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             e2fsprogs xfsprogs btrfs-progs dosfstools exfatprogs ntfs-3g \
-            f2fs-tools squashfs-tools erofs-utils gdisk lvm2 \
+            f2fs-tools squashfs-tools erofs-utils gdisk lvm2 fatresize \
             qemu-system-x86 ovmf grub-efi-amd64-bin efibootmgr
 
       - name: 下载 Alpine netboot 内核（qemu 引导验证用）
