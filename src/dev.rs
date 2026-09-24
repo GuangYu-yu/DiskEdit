@@ -39,6 +39,66 @@ pub struct FileSource {
     /// 目标的独占所有权（见 `targetlock`）：写命令持有它，只读打开为 None。
     /// 与这次打开同生命周期，因此不必由调用方各自绑定，也就不会在写盘前被提前丢掉
     pub(crate) ownership: Option<crate::targetlock::TargetLock>,
+    /// 目标文件的稳定指纹：checkpoint 恢复时确认"路径下的文件还是当时那个"。
+    /// 镜像与 loop 的 backing 文件取文件元数据；真块设备的节点 inode 不承诺稳定
+    /// （udev 重建节点即变），恒零——零指纹不参与比对
+    pub fingerprint: TargetFingerprint,
+    /// loop 映射事实（offset, sizelimit）：目标经由 loop 设备进入时在打开时读一次
+    /// sysfs。checkpoint 恢复时与记录值比对，重 attach 参数变化报"映射已变化"
+    /// 而非几何不符的泛化拒绝
+    pub loop_mapping: Option<(u64, u64)>,
+}
+
+/// 目标文件的稳定指纹（st_dev, st_ino, size）：恢复现场用它确认"路径下的文件
+/// 还是当时那个"。size 参与指纹——同 inode 截断/扩容即不同目标。非 Unix 平台
+/// 没有稳定 inode，恒零；零指纹不参与比对，这些平台凭 canonical path 单凭据
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub struct TargetFingerprint {
+    pub dev: u64,
+    pub ino: u64,
+    pub size: u64,
+}
+
+impl TargetFingerprint {
+    /// dev / ino 任一非零即有意义：全零只出自"取不到稳定指纹"的平台与设备类
+    pub fn meaningful(&self) -> bool {
+        self.dev != 0 || self.ino != 0
+    }
+
+    pub fn from_meta(meta: &std::fs::Metadata) -> Self {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            Self { dev: meta.dev(), ino: meta.ino(), size: meta.len() }
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = meta;
+            Self::default()
+        }
+    }
+}
+
+/// 读 loop 映射事实：backing_file 在 ⇒ 这台设备是 loop，offset / sizelimit 与它
+/// 同批引入（Documentation/ABI/testing/sysfs-block-devloop），缺失即读失败如实上抛。
+/// sizelimit 0 = 无限制（losetup(8)），按原值记录，比对也按原值
+#[cfg(target_os = "linux")]
+fn loop_mapping_of(dev: &Path) -> io::Result<Option<(u64, u64)>> {
+    let node = sysfs_node(dev)?;
+    if read_sysfs_attr(&node.join("loop/backing_file"))?.is_none() {
+        return Ok(None);
+    }
+    let parse = |name: &str| -> io::Result<u64> {
+        let v = read_sysfs_attr(&node.join(name))?
+            .ok_or_else(|| io::Error::other(format!("sysfs {name} attribute is missing")))?;
+        v.parse::<u64>().map_err(|e| io::Error::other(format!("unparseable sysfs {name} {v:?}: {e}")))
+    };
+    Ok(Some((parse("loop/offset")?, parse("loop/sizelimit")?)))
+}
+
+#[cfg(not(target_os = "linux"))]
+fn loop_mapping_of(_dev: &Path) -> io::Result<Option<(u64, u64)>> {
+    Ok(None)
 }
 
 /// 持久状态的默认落点
@@ -527,6 +587,14 @@ impl FileSource {
                 let sector_size = ioctl::blksszget(&file)? as u64;
                 // 块设备身份解析失败（fail-closed）⇒ 打开失败：错误信息带设备名
                 let identity = TargetIdentity::resolve_block(path).map_err(io::Error::other)?;
+                // loop 的身份是 backing 文件：指纹取它；真块设备节点 inode 不承诺稳定，不取。
+                // sysfs 只读探测在打开早期进行，失败即打不开目标
+                let fingerprint = if identity.kind == TargetKind::Image {
+                    TargetFingerprint::from_meta(&std::fs::metadata(&identity.base)?)
+                } else {
+                    TargetFingerprint::default()
+                };
+                let loop_mapping = loop_mapping_of(path)?;
                 return Ok(FileSource {
                     identity,
                     file,
@@ -536,6 +604,8 @@ impl FileSource {
                     is_block: true,
                     journal: None,
                     ownership: None,
+                    fingerprint,
+                    loop_mapping,
                 });
             }
         }
@@ -576,6 +646,8 @@ impl FileSource {
             is_block: false,
             journal: None,
             ownership: None,
+            fingerprint: TargetFingerprint::from_meta(&meta),
+            loop_mapping: None,
         })
     }
 
@@ -586,8 +658,15 @@ impl FileSource {
         let file = OpenOptions::new().read(true).open(path)?;
         let size = ioctl::blkgetsize64(&file)?;
         let sector_size = ioctl::blksszget(&file)? as u64;
+        let identity = TargetIdentity::resolve_block(path).map_err(io::Error::other)?;
+        let fingerprint = if identity.kind == TargetKind::Image {
+            TargetFingerprint::from_meta(&std::fs::metadata(&identity.base)?)
+        } else {
+            TargetFingerprint::default()
+        };
+        let loop_mapping = loop_mapping_of(path)?;
         Ok(FileSource {
-            identity: TargetIdentity::resolve_block(path).map_err(io::Error::other)?,
+            identity,
             file,
             path: path.to_path_buf(),
             sector_size,
@@ -595,6 +674,8 @@ impl FileSource {
             is_block: true,
             journal: None,
             ownership: None,
+            fingerprint,
+            loop_mapping,
         })
     }
 
@@ -613,6 +694,8 @@ impl FileSource {
             is_block: false,
             journal: None,
             ownership: None,
+            fingerprint: TargetFingerprint::default(),
+            loop_mapping: None,
         })
     }
 
