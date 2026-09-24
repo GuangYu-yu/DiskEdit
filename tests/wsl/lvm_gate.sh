@@ -66,10 +66,12 @@ f3=$(fs_bytes "$VG" lv1) || fail "dumpe2fs lv1 (after --lv) failed"
 $B resize "${LOOP}:1" +8M --grow-lv --lv "$VG/lv1" >/dev/null || fail "--lv vg/name failed"
 [ "$(lv_bytes "$VG" lv1)" -eq "$((b3 + 8388608))" ] || fail "vg/name form did not extend"
 
-# 移除 lv2 后单 LV 自动选择
+# 移除 lv2 后单 LV 自动选择。
+# 分区尺寸账：80M 起步，多 LV 拒绝用例按契约已扩 16M（部分完成），--lv lv1 再 +16M，
+# vg/name 再 +8M → 此刻分区 120M；若再 +8M 会到 128M，加 1MiB 起始间隙恰好越盘，故收 +4M
 lvremove -f "/dev/$VG/lv2" >/dev/null || fail "lvremove lv2 failed"
-$B resize "${LOOP}:1" +8M --grow-lv >/dev/null || fail "single-LV auto-select failed"
-[ "$(lv_bytes "$VG" lv1)" -eq "$((b3 + 8388608 + 8388608))" ] || fail "auto-select did not extend lv1"
+$B resize "${LOOP}:1" +4M --grow-lv >/dev/null || fail "single-LV auto-select failed"
+[ "$(lv_bytes "$VG" lv1)" -eq "$((b3 + 8388608 + 4194304))" ] || fail "auto-select did not extend lv1"
 
 lo_detach "$LOOP"; LOOP=
 vgremove -ff "$VG" >/dev/null || fail "vgremove $VG failed"
