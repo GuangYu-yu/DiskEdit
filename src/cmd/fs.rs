@@ -188,14 +188,10 @@ pub(crate) fn cmd_set(a: &Args) -> u8 {
                 };
                 crate::gpt_policy::set_type_guid(&mut src, part, guid)
             }
-            Ok(crate::table::TableLabel::Mbr) => {
-                // 0x 前缀大小写不限（0X83 是常见写法），解析口径与 create 的 --type-guid 一致
-                let hex = value.strip_prefix("0x").or_else(|| value.strip_prefix("0X")).unwrap_or(&value);
-                match u8::from_str_radix(hex, 16) {
-                    Ok(t) => crate::table::set_mdos_type(&mut src, part, t),
-                    Err(_) => bail_fail(Fail::refused(format!("invalid MBR type {value:?} (expect 0xXX)"))),
-                }
-            }
+            Ok(crate::table::TableLabel::Mbr) => match crate::support::parse_os_type(&value) {
+                Some(t) => crate::table::set_mdos_type(&mut src, part, t),
+                None => bail_fail(Fail::refused(format!("invalid MBR type {value:?} (expect 0xXX)"))),
+            },
             Ok(other) => bail_fail(Fail::refused(format!("cannot set type on {other} label"))),
             Err(e) => bail_fail(Fail::infra(format!("label probe failed: {e}"))),
         };

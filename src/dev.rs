@@ -96,11 +96,6 @@ fn loop_mapping_of(dev: &Path) -> io::Result<Option<(u64, u64)>> {
     Ok(Some((parse("loop/offset")?, parse("loop/sizelimit")?)))
 }
 
-#[cfg(not(target_os = "linux"))]
-fn loop_mapping_of(_dev: &Path) -> io::Result<Option<(u64, u64)>> {
-    Ok(None)
-}
-
 /// 持久状态的默认落点
 const DEFAULT_STATE_DIR: &str = "/var/lib/diskedit";
 

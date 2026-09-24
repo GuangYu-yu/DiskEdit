@@ -1356,15 +1356,14 @@ impl RsCheckpoint {
             ino: rd64(b, &mut o)?,
             size: rd64(b, &mut o)?,
         };
-        let map = match *b.get(o).ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "truncated"))? {
+        // 标志字节先行跨过，再按标志决定是否读它后面那两个 u64
+        let flagged = *b.get(o).ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "truncated"))?;
+        o += 1;
+        let map = match flagged {
             0 => None,
-            1 => {
-                o += 1;
-                Some((rd64(b, &mut o)?, rd64(b, &mut o)?))
-            }
+            1 => Some((rd64(b, &mut o)?, rd64(b, &mut o)?)),
             _ => return Err(io::Error::new(io::ErrorKind::InvalidData, "implausible resize checkpoint mapping flag")),
         };
-        o += 1;
         if table::crc32(&b[..o]) != u32::from_le_bytes(b[o..o + 4].try_into().unwrap()) {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "resize checkpoint CRC mismatch"));
         }
@@ -2416,6 +2415,18 @@ mod tests {
             map: None,
         };
         assert!(RsCheckpoint::deserialize(&rs.serialize(), &lim(128)).is_ok(), "baseline must stay readable");
+        // 带 loop 映射与真实指纹的现场同样要原样回读：标志字节与它后面那两个 u64 是一组，
+        // 偏移记账错位会在这里立刻现形
+        let mapped = RsCheckpoint {
+            disk_size: 64 * 1024 * 1024, ss: 512, part: 1,
+            old_start: 2048, old_end: 3071, new_start: 2048, new_end: 3071,
+            fs_shrunk: false, chunks_done: 1, chunk_bytes: 1024 * 1024,
+            fp: crate::dev::TargetFingerprint { dev: 7, ino: 42, size: 1 << 20 },
+            map: Some((1024 * 1024, 0)),
+        };
+        let back = RsCheckpoint::deserialize(&mapped.serialize(), &lim(128)).expect("mapped checkpoint must round-trip");
+        assert_eq!(back.fp, crate::dev::TargetFingerprint { dev: 7, ino: 42, size: 1 << 20 });
+        assert_eq!(back.map, Some((1024 * 1024, 0)));
         let mut b = rs.serialize();
         b[65..73].copy_from_slice(&2u64.to_le_bytes()); // chunks_done @ 12+6×8+4+1
         rewrite_crc(&mut b);
@@ -3256,54 +3267,28 @@ mod tests {
     /// （真块设备节点 / 非 Unix 平台）不构成证据，比对只对"双方都有意义"的值进行
     #[test]
     fn scene_mismatch_guards_foreign_scenes() {
-        let scene = |dev: u64, ino: u64, size: u64, map: Option<(u64, u64)>| {
-            static SEQ: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-            let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-            let path = std::env::temp_dir().join(format!("diskedit_scene_{}_{}.img", std::process::id(), seq));
-            let f = std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(true).open(&path).unwrap();
-            FileSource {
-                identity: crate::dev::TargetIdentity::resolve_image(&path),
-                file: f,
-                path: path.clone(),
-                sector_size: 512,
-                size: 0,
-                is_block: false,
-                journal: None,
-                ownership: None,
-                fingerprint: crate::dev::TargetFingerprint { dev, ino, size },
-                loop_mapping: map,
-            }
-        };
         let fp = |dev: u64, ino: u64, size: u64| crate::dev::TargetFingerprint { dev, ino, size };
-        let mut paths: Vec<std::path::PathBuf> = Vec::new();
-        let mut scene_at = |dev: u64, ino: u64, size: u64, map: Option<(u64, u64)>| {
-            let s = scene(dev, ino, size, map);
-            paths.push(s.path.clone());
-            s
+        let scene = |fp: crate::dev::TargetFingerprint, map: Option<(u64, u64)>| FileSource {
+            fingerprint: fp,
+            loop_mapping: map,
+            ..crate::support::src_from("scene", &[])
         };
 
         // 指纹不符 → 拦
-        let src = scene_at(7, 42, 1024, None);
-        let why = scene_mismatch(&src, &fp(7, 43, 1024), &None);
-        assert!(why.as_deref().unwrap().contains("fingerprint"), "{why:?}");
-        drop(src);
-        // 指纹一致且双方无映射 → 放行
-        let src = scene_at(7, 42, 1024, None);
-        assert!(scene_mismatch(&src, &fp(7, 42, 1024), &None).is_none());
-        drop(src);
-        // 映射值不符 → 拦；映射有无之别 → 拦
-        let src = scene_at(7, 42, 1024, Some((0, 0)));
-        assert!(scene_mismatch(&src, &fp(7, 42, 1024), &Some((4096, 0))).unwrap().contains("loop mapping"));
-        drop(src);
-        let src = scene_at(7, 42, 1024, None);
-        assert!(scene_mismatch(&src, &fp(7, 42, 1024), &Some((0, 0))).unwrap().contains("loop device"));
-        drop(src);
-        // 双零指纹不构成证据（真块设备 / 非 Unix）：指纹不同也放行
-        let src = scene_at(0, 0, 0, None);
-        assert!(scene_mismatch(&src, &fp(7, 42, 1024), &None).is_none());
-        drop(src);
-        for p in paths {
-            let _ = std::fs::remove_file(p);
-        }
+        let s = scene(fp(7, 42, 1024), None);
+        assert!(scene_mismatch(&s, &fp(7, 43, 1024), &None).unwrap().contains("fingerprint"));
+        // 指纹一致且双方都无映射 → 放行
+        let s = scene(fp(7, 42, 1024), None);
+        assert!(scene_mismatch(&s, &fp(7, 42, 1024), &None).is_none());
+        // 映射值不符 → 拦
+        let s = scene(fp(7, 42, 1024), Some((0, 0)));
+        assert!(scene_mismatch(&s, &fp(7, 42, 1024), &Some((4096, 0))).unwrap().contains("loop mapping"));
+        // 映射有无之别 → 拦：loop 写入的现场不能改从裸镜像续跑，反之亦然
+        let s = scene(fp(7, 42, 1024), None);
+        assert!(scene_mismatch(&s, &fp(7, 42, 1024), &Some((0, 0))).unwrap().contains("loop device"));
+        // 双零指纹不构成证据（真块设备 / 非 Unix 平台）：指纹不同也放行
+        let s = scene(fp(0, 0, 0), None);
+        assert!(scene_mismatch(&s, &fp(7, 42, 1024), &None).is_none());
+        let _ = std::fs::remove_file(&s.path);
     }
 }
