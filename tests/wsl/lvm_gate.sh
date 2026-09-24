@@ -70,6 +70,8 @@ $B resize "${LOOP}:1" +8M --grow-lv --lv "$VG/lv1" >/dev/null || fail "--lv vg/n
 # 分区尺寸账：80M 起步，多 LV 拒绝用例按契约已扩 16M（部分完成），--lv lv1 再 +16M，
 # vg/name 再 +8M → 此刻分区 120M；若再 +8M 会到 128M，加 1MiB 起始间隙恰好越盘，故收 +4M
 lvremove -f "/dev/$VG/lv2" >/dev/null || fail "lvremove lv2 failed"
+# 诊断转储：CI 曾在此处报 candidates "lv1, lv1"（lvs 输出重复行）——留存原始 JSON 以定性
+lvs --reportformat json -o lv_name,lv_path,devices "$VG" 2>&1 | head -5
 $B resize "${LOOP}:1" +4M --grow-lv >/dev/null || fail "single-LV auto-select failed"
 [ "$(lv_bytes "$VG" lv1)" -eq "$((b3 + 8388608 + 4194304))" ] || fail "auto-select did not extend lv1"
 

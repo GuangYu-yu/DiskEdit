@@ -74,7 +74,7 @@ fn resolve_size_request(a: &Args, size_arg: Option<&str>, cur_bytes: u64) -> (Op
 
 /// PV / --grow-lv 的事前判据：与表类型无关，故 GPT 与 MBR 两条 resize 路径共用一份。
 /// 两条判据都必须落在任何写盘之前——PV 缩容链恰好与扩容反向：先 lvreduce -r 缩 LV
-/// + FS，再 pvresize --setphysicalvolumesize 缩 PV 元数据，最后才改分区表。本工具
+/// 与 FS，再 pvresize --setphysicalvolumesize 缩 PV 元数据，最后才改分区表。本工具
 /// 只管最后一步，前两步留给用户，否则先改表会留下"分区已缩、PV 元数据未动"的不一致
 fn check_pv_intent(
     part: u32,

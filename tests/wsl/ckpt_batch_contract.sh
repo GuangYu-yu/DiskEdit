@@ -53,10 +53,24 @@ run_case() {
   fi
 
   # 校验哈希同样先 sync：断言只应在数据落盘之后进行，否则会读到旧状态而假报 CORRUPT
+  # attach 后强制刷新内核分区视图：CI 复用同一 loop 号，udev/kpartx 更新分区节点
+  # 有延迟，md5 若落在旧映射区间会假报 CORRUPT（FS 与表侧均 clean 是其特征）
   sync
   LD=$(lo_attach "$T")
+  partx -u "$LD" 2>/dev/null; sleep 1
   MD2=$(md5sum "${LD}p2" | cut -d' ' -f1)
-  [ "$MD" = "$MD2" ] && echo "DATA OK" || { echo "DATA CORRUPT"; rc=1; }
+  if [ "$MD" = "$MD2" ]; then
+    echo "DATA OK"
+  else
+    echo "md5 base=$MD now=$MD2 p2size=$(blockdev --getsize64 "${LD}p2" 2>/dev/null) loops=$(losetup -a | grep -c diskedit_test15)"
+    partx -u "$LD" 2>/dev/null; sleep 1
+    MD2=$(md5sum "${LD}p2" | cut -d' ' -f1)
+    if [ "$MD" = "$MD2" ]; then
+      echo "DATA OK after refresh（首次读到过期分区映射——测试基建竞态，非数据损坏）"
+    else
+      echo "DATA CORRUPT"; rc=1
+    fi
+  fi
   e2fsck -fn "${LD}p2" >/dev/null 2>&1; echo "e2fsck exit=$?"
   lo_detach "$LD"
   sgdisk -v "$T" >/dev/null 2>&1 && echo "sgdisk clean" || { echo "sgdisk ISSUES"; rc=1; }
