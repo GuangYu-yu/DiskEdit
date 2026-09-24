@@ -1,0 +1,151 @@
+{
+  "repo_notes": [
+    {
+      "content": "DiskEdit 是一个 Rust CLI（src/main.rs 为入口，src/cmd/ 下每命令一个模块），把镜像文件与块设备统一为按偏移读写的字节存储，操作 GPT/MBR 分区表与文件系统，不使用 libparted。文档应始终围绕三个跨模块不变量组织：1) 退出码契约 0=完成/10=拒绝/20=部分完成/30=基础设施失败，与 src/outcome.rs 的 Outcome::{Refused,Infra,Failed,Applied} 一一对应；2) crash-safety 模型：append-only undo journal（CRC32 pre-image log）+ 原子检查点 + advisory TargetLock，写盘前必须通过占用闸（挂载/swap/PV 状态检查）；3) 所有 LBA/尺寸算术必须用 checked 操作。代码注释为纯描述性中文，解释 why 而非 what，wiki 正文请用中文撰写，措辞风格与代码注释一致。Linux 专属模块（src/online.rs、src/lvm.rs、src/ioctl.rs）在非 Linux 平台用 cfg 条件编译排除，文档应说明这一点。",
+      "author": "maintainer"
+    }
+  ],
+  "pages": [
+    {
+      "title": "总览",
+      "purpose": "DiskEdit 是什么、解决什么问题：无 libparted 的 Rust 分区表/文件系统编辑器，镜像与块设备统一抽象。给出 src/ 模块分层图（命令层 src/cmd/、领域层 table/movepart/online/fsid/fsops/lvm/gpt_policy、基础层 dev/targetlock/transaction/outcome），并链接各子页。"
+    },
+    {
+      "title": "构建与配置",
+      "purpose": "Document Cargo.toml：edition 2024、依赖仅 gptman/crc/serde_json（libc 仅 Linux）、clippy deny let_underscore_must_use 及其配合的 best_effort_* 命名约定、test-faults feature、.github/workflows 的 CI 与发布流程（softprops/action-gh-release@v3、profile.release strip=true）。"
+    },
+    {
+      "title": "执行模型与退出码",
+      "purpose": "Document src/main.rs 流程与 src/cmd/mod.rs 的 dispatch、src/support.rs 的共用支撑件（drop_journal、EXIT_OK、opens_undo_journal）：parse_args → refuse_unconsumed_flags → dispatch → 成功时 drop_journal（仅 opens_undo_journal 的命令）。重点解释退出码 0/10/20/30 与 Outcome 变体的映射（src/outcome.rs），以及 20（Applied 的 pending 与 kernel_sync）和 30（Infra vs Failed）各自的两个正交成因。"
+    },
+    {
+      "title": "命令行界面",
+      "purpose": "CLI 面总览父页：命令清单、help 走 stdout 退 0 / 用法错误走 stderr 退 10 的 GNU 惯例、每命令显式旗标白名单的 fail-closed 原则。作为下列命令子页的父页。"
+    },
+    {
+      "title": "命令注册与参数解析",
+      "purpose": "Document src/args.rs：CommandSpec 与 COMMANDS 注册表、TargetMode、别名解析、大小参数（b/k/m/g/t 基于 1024 不区分大小写）、未识别旗标立即拒绝并给出有效用法。",
+      "parent": "命令行界面"
+    },
+    {
+      "title": "检查命令（info、plan）",
+      "purpose": "Document src/cmd/info.rs 与 src/cmd/plan.rs：info 输出的 JSON 结构（table label、扇区大小、分区、src/fsid.rs 文件系统识别、LVM 布局）；plan 如何预览布局变更而不写盘。",
+      "parent": "命令行界面"
+    },
+    {
+      "title": "布局变更命令（new、add、del、apply、move、copy、create）",
+      "purpose": "Document src/cmd/layout.rs 系列命令：GPT/MBR 分支差异（如 MBR 拒绝 --allow-move 与 --name）、对齐计算（须在解析几何后进行、GPT 用表自身扇区大小）、create 的 mkfs 失败走 Pending 通道、copy 中断后需先 undo/abandon 才能重跑。",
+      "parent": "命令行界面"
+    },
+    {
+      "title": "调整大小命令（resize 系）",
+      "purpose": "Document src/cmd/resize.rs 的 resize/resize-part/resizefs 分发：离线 vs 在线选择、绝对 vs 相对尺寸、--allow-move（仅新搬移授权，续跑豁免，需 --yes）、--grow-to-end 的 tail-packing 与精确 SIZE 的 minimal displacement 两种策略、--no-fs、LVM 增长旗标、--size 与 --grow-to-end 互斥。",
+      "parent": "命令行界面"
+    },
+    {
+      "title": "文件系统命令（mkfs、check、set）",
+      "purpose": "Document src/cmd/fs.rs 的 cmd_mkfs/cmd_check/cmd_set：busy 闸与工具缺失检查的顺序、mkfs 支持矩阵（exfat 已支持、lvm2_pv 拒绝）、set 的 UUID/label 能力映射与分支级旗标拒绝（如非 uuid 分支拒 --random）、mark_non_reversible 屏障。",
+      "parent": "命令行界面"
+    },
+    {
+      "title": "恢复命令（undo、abandon）",
+      "purpose": "Document src/cmd/undo.rs 与 src/cmd/abandon.rs：undo 依赖 journal 存在（成功操作已删除 journal，故不可 undo——当前产品行为）、Ambiguous 分支（两份 journal 并存时拒绝）、abandon 用 hard_link+remove 防止静默覆盖 .abandoned 文件、孤儿日志清理回退到镜像身份。",
+      "parent": "命令行界面"
+    },
+    {
+      "title": "存储与分区表核心",
+      "purpose": "存储抽象总览父页：字节存储层如何被 table/movepart/online 共用，ResolvedGeometry 的由来（无全仓库 Lba 新类型的取舍）。链接四个子页。"
+    },
+    {
+      "title": "FileSource 与目标身份",
+      "purpose": "Document src/dev.rs：镜像与块设备统一为 FileSource、read_at/write_data_at、块设备写打开 O_EXCL、sysfs 派生的设备身份（st_dev/st_ino 锁键）、state_dir 布局、目标字符串解析。",
+      "parent": "存储与分区表核心"
+    },
+    {
+      "title": "GPT 与 MBR 的解析与提交",
+      "purpose": "Document src/table.rs：load_gpt/commit_gpt、保护性 MBR（0xEE 的处理与 PMBR 损坏判定）、CRC 校验、primary/backup 回退与修复、四阶段 crash-safe 提交顺序（备份数组→备份头→主数组→主头，每阶段 sync）、条目越界判 damaged 的对称处理（GPT 与 MBR）、MBR 邻接重叠检查、GPT_SIGNATURE/MBR_SIGNATURE 常量的 UEFI Spec 出处。",
+      "parent": "存储与分区表核心"
+    },
+    {
+      "title": "几何与对齐",
+      "purpose": "Document src/geometry.rs：ValidatedGeometry、表扇区大小 vs 容器扇区大小（4Kn 表在 512e 容器上的不变量：LBA 坐标系在 Plan 阶段前确定）、对齐单位（mib/cyl/none）、free-space 计算、checked 算术要求。",
+      "parent": "存储与分区表核心"
+    },
+    {
+      "title": "文件系统识别",
+      "purpose": "Document src/fsid.rs：magic-number 识别 ext/xfs/btrfs/f2fs/ntfs/vfat/exfat/swap/squashfs/erofs/hfsplus/apfs/lvm2_pv；I/O 错误与真正未知文件系统的区分；识别结果如何驱动策略（对齐、grow-end、mkfs/resize 支持）。",
+      "parent": "存储与分区表核心"
+    },
+    {
+      "title": "事务、安全与恢复",
+      "purpose": "crash-safety 模型总览父页：Snapshot → Validate → Plan → Commit 顺序、屏障唯一落点为实际不可逆 mutation 前、三态错误分类（NoWrite/Unknown/Partial）与磁盘状态的关系。链接三个子页。"
+    },
+    {
+      "title": "Undo Journal",
+      "purpose": "Document journal 格式：append-only CRC32 pre-image log、Mutation 枚举（含 ExternalFsTool 屏障语义与 MOVED_MARKER=u64::MAX 的约定）、payload 长度 u32::MAX 上限检查、lazy 创建、TruncatedTail 处理、成功时删除。",
+      "parent": "事务、安全与恢复"
+    },
+    {
+      "title": "事务管理与目标锁",
+      "purpose": "Document src/transaction.rs 的 open_target_* 网关、所有权模式、refuse_if_pending_recovery、begin_or_resume 的锁下判定签名（FnOnce(&FileSource,&[RecoveryRecord]) -> bool）；src/targetlock.rs 的 advisory 锁（镜像 <path>.diskedit.lock，块设备 state_dir 派生；锁文件不随释放删除的竞态理由）。",
+      "parent": "事务、安全与恢复"
+    },
+    {
+      "title": "检查点与前向恢复",
+      "purpose": "Document 原子检查点写（tmp→sync→rename→fsync parent）、64 MiB/16 块批处理阈值（以先到者为准，最后一块始终检查点）、PlanKind 区分策略类型防止语义冲突续跑、cur_index/chunks_done 反序列化校验、扇区大小不匹配拒绝、test-faults 故障注入点。",
+      "parent": "事务、安全与恢复"
+    },
+    {
+      "title": "分区数据搬移与调整",
+      "purpose": "分区搬移/复制/缩扩执行总览父页：尾部到头部的块顺序防自重叠、纯 Rust read_at+write_data_at+sync_data（默认 1MiB 块，--chunk-size 可调，范围校验在解析期）、swap 分区重定位不搬数据（mkswap 重建保留 UUID/label）。链接三个子页。"
+    },
+    {
+      "title": "规划：尾装箱与最小位移",
+      "purpose": "Document src/movepart.rs 的 Plan/PlanEntry 生成与 src/gpt_policy.rs 的策略判定：grow 关键字的 tail-packing 与精确调整的 minimal displacement 两种策略、gpt_policy 基于文件系统识别结果约束布局决策（含禁止的类型 GUID）、重叠检查、preflight 与 durable 边界的划分。",
+      "parent": "分区数据搬移与调整"
+    },
+    {
+      "title": "执行：move、copy、resize_part",
+      "purpose": "Document 执行路径：分块复制与每块 checkpoint、chunk_io_error 带精确 LBA 区间上报、commit_gpt 集成、几何变更后的文件系统收缩/扩容、swap 重建、ExternalFsTool 屏障的落点（execute_resize/execute_apply 的 mkswap 与 resize_fs 步前）。",
+      "parent": "分区数据搬移与调整"
+    },
+    {
+      "title": "已挂载卷的在线调整",
+      "purpose": "Document src/online.rs（Linux 专属）：sysfs/mountinfo 发现、sfdisk --no-reread + partx -u、BLKPG 回退、grow/shrink 顺序、sfdisk 执行前锁下重读比对分区起止的 TOCTOU 防线、resizefs --online 的 BYTES 语义与 btrfs 之外仅扩容的限制、三态失败分类（NoTool/Spawn/Exit → NoWrite/Unknown）。",
+      "parent": "分区数据搬移与调整"
+    },
+    {
+      "title": "外部工具集成",
+      "purpose": "外部工具与内核接口总览父页：工具启动失败（Infra/NoWrite）与执行中失败（Failed/可能已写盘）的分类原则、机器可读输出优先（JSON）、每次调用只做一件事。链接三个子页。"
+    },
+    {
+      "title": "文件系统工具链（fsops）",
+      "purpose": "Document src/fsops.rs：require_linux/require_root、loop device 映射与用户自挂载检测、mount/swap 安全闸（with_scope_device 检查底层分区挂载状态）、签名擦除、每文件系统的 mkfs/fsck/resize 工具选择、fs_min_bytes 的 checked 乘法。",
+      "parent": "外部工具集成"
+    },
+    {
+      "title": "内核接口（ioctl 与 sysfs）",
+      "purpose": "Document src/ioctl.rs（Linux 专属）：BLKRRPART、BLKPG、手工编码 ioctl 常量的架构验证（MIPS/PowerPC/sparc 显式拒绝编译）、sysfs 属性读取与内核分区视图刷新。",
+      "parent": "外部工具集成"
+    },
+    {
+      "title": "LVM 支持",
+      "purpose": "Document src/lvm.rs（Linux 专属）：PV/VG/LV 发现（vg_of 验证 PV 归属）、pvresize 在线路径（锁下重读 fstype 与活动 swap 补查）、--grow-lv/--lv 语义、多 LV 拒绝策略、PV 缩容为何拒绝（操作链与扩容反向：lvreduce -r → pvresize → 改表）。",
+      "parent": "外部工具集成"
+    },
+    {
+      "title": "测试",
+      "purpose": "测试策略总览父页：Cargo 单元测试与 tests/cli.rs 集成测试、test-faults 故障注入。链接两个子页。"
+    },
+    {
+      "title": "CLI 集成测试套件",
+      "purpose": "Document tests/cli.rs 结构：spawn 二进制、结构化 JSON 断言（不用子串匹配）、字节级验证（设备级分区哈希 + 卸载后 e2fsck/xfs_repair/btrfs check）、退出码与恢复场景覆盖、4Kn GPT 与 >2TiB 稀疏镜像用例。",
+      "parent": "测试"
+    },
+    {
+      "title": "故障注入与崩溃恢复测试",
+      "purpose": "Document test-faults feature：故障点宏、模拟中断与续跑验证、test-faults 在 CI 中的接入步骤、三态错误分类（NoWrite/Unknown/Partial）的行为断言。",
+      "parent": "测试"
+    }
+  ]
+}
