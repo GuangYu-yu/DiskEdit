@@ -114,6 +114,13 @@ pub(crate) fn parse_guid(s: &str) -> Option<[u8; 16]> {
     Some(out)
 }
 
+/// MBR 分区类型字节（OSIndicator）的文本口径：0x 前缀大小写不限，其余按十六进制读。
+/// `add` 与 `set type` 共用它，两处的取值与拒绝文案因此不会分叉
+pub(crate) fn parse_os_type(s: &str) -> Option<u8> {
+    let hex = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")).unwrap_or(s);
+    u8::from_str_radix(hex, 16).ok()
+}
+
 // 目标怎么打开、所有权怎么取、事务怎么开与提交，全部归 `transaction::TransactionManager`。
 // 这里只给命令层惯用的入口名，并把"哪一类命令可以接着做未完成的作业"这一条规则写成闭包
 
