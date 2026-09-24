@@ -302,10 +302,14 @@ impl TargetIdentity {
     /// None，由调用方告警：宁可留下 journal，也不能删错别人的
     pub(crate) fn resolve_path(path: &Path) -> Option<Self> {
         #[cfg(target_os = "linux")]
-        if std::fs::metadata(path).map(|m| m.file_type().is_block_device()).unwrap_or(false) {
-            // 拓扑解析不出来（fail-closed）⇒ None：调用方告警并留下 journal——
-            // 宁可漏删，也不能按退化身份删错别人的
-            return Self::resolve_block(path).ok();
+        {
+            // stat 不了的目标身份不可知：按镜像身份收尾会删错候选。宁可漏删（None ⇒
+            // 调用方告警并留下 journal），也不按错身份删
+            match std::fs::metadata(path).map(|m| m.file_type().is_block_device()) {
+                Ok(true) => return Self::resolve_block(path).ok(),
+                Ok(false) => {}
+                Err(_) => return None,
+            }
         }
         Some(Self::resolve_image(path))
     }
@@ -522,7 +526,10 @@ impl FileSource {
             use std::os::windows::fs::FileExt;
             let mut done = 0usize;
             while done < buf.len() {
-                let n = self.file.seek_read(&mut buf[done..], off + done as u64)?;
+                let at = off.checked_add(done as u64).ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidInput, "read offset overflows")
+                })?;
+                let n = self.file.seek_read(&mut buf[done..], at)?;
                 if n == 0 {
                     return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "short read"));
                 }
@@ -607,7 +614,7 @@ pub fn parse_target(s: &str) -> Result<(String, Option<u32>), &'static str> {
         // 尾冒号（`img:`）多半是分区号漏写的笔误：按整路径打开只会报"文件不存在"，
         // 不如当场说清缺的是什么
         Some(pos) if pos + 1 == s.len() => Err("missing partition number after ':'"),
-        Some(pos) if s[pos + 1..].chars().all(|c| c.is_ascii_digit()) && !s[pos + 1..].is_empty() => {
+        Some(pos) if s[pos + 1..].chars().all(|c| c.is_ascii_digit()) => {
             let n: u32 = s[pos + 1..].parse().map_err(|_| "partition number out of range")?;
             if n == 0 {
                 return Err("partition number is 1-based (:0 is not a partition)");
@@ -990,7 +997,7 @@ impl Journal {
     /// 追加，那条记录对应的数据写入**根本没有发生**，丢弃它是安全的。中途（非尾部）CRC 不符
     /// 才是真实损坏，仍整体拒绝
     ///
-    /// 注意：记录头里的 len 不参与任何 CRC，故"len 被写坏成大值"与"数据只写了一半"在文件里
+    /// 记录头里的 len 不参与任何 CRC，故"len 被写坏成大值"与"数据只写了一半"在文件里
     /// 无法区分，两者都落在 TruncatedTail。这不影响安全性——返回的前缀每条都通过了 CRC，
     /// 且各自对应的写入确实发生过；代价只是该点之后的记录无法回放，措辞里已如实点明
     pub fn read_entries(path: &Path) -> io::Result<JournalRead> {

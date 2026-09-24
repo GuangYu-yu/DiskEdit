@@ -16,19 +16,26 @@ diskedit apply <TARGET> --grow N [--chunk-size MiB]
 /// 列出各分区的搬移（plan 命令与 apply 前的计划打印共用）。
 /// 头行不共用：两处要给出的数不同——写入前只需扩容终点，`plan` 还要额外给出
 /// 尾部打包的上界 last_usable_lba
-pub(crate) fn print_moves(plan: &movepart::Plan) {
+pub(crate) fn print_moves(plan: &movepart::Plan) -> std::io::Result<()> {
     for m in &plan.moves {
         let tag = if m.is_swap { " [swap: recreate, no data move]" } else { "" };
+        // 值来自锁下解析的表项/ckpt；仍按库规约 checked——损坏条目的下溢/溢出
+        // 宁可拒打，不回绕成假区间误导用户
+        let last = m.first_lba.checked_add(m.len_lba).and_then(|e| e.checked_sub(1))
+            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "corrupted move entry: range overflows"))?;
+        let bytes = m.delta_lba.checked_mul(plan.ss)
+            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "corrupted move entry: byte size overflows"))?;
         println!("move part {} : {}..{} → +{} sectors ({} bytes){}",
-            m.part_num, m.first_lba, m.first_lba + m.len_lba - 1, m.delta_lba, m.delta_lba * plan.ss, tag);
+            m.part_num, m.first_lba, last, m.delta_lba, bytes, tag);
     }
+    Ok(())
 }
 
 pub(crate) fn print_plan(plan: &movepart::Plan, target_start: u64) -> std::io::Result<()> {
     // 实际扩容终点由 grow_end_for 判定（与 apply 同一实现）
     let new_end = movepart::grow_end_for(plan, target_start)?;
     println!("plan: grow partition {} → end LBA {} (blockers relocated)", plan.grow_part, new_end);
-    print_moves(plan);
+    print_moves(plan)?;
     Ok(())
 }
 
@@ -70,7 +77,7 @@ pub(crate) fn cmd_plan_apply(cmd: &str, a: &Args) -> u8 {
             "grow partition {} → end LBA {} (last usable {})",
             plan.grow_part, grow_end, plan.last_usable_lba
         );
-        print_moves(&plan);
+        print_moves(&plan).unwrap_or_else(|e| bail_fail(Fail::infra(e.to_string())));
         EXIT_OK
     } else {
         apply_cmd(a, grow)

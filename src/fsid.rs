@@ -197,7 +197,11 @@ pub fn probe_swap_header(src: &FileSource, base: u64, len_bytes: u64, page_sizes
             continue;
         }
         let mut magic = [0u8; 10];
-        src.read_at(base + page - 10, &mut magic)?;
+        let at = base
+            .checked_add(page)
+            .and_then(|a| a.checked_sub(10))
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "swap header offset overflows"))?;
+        src.read_at(at, &mut magic)?;
         if &magic == SWAP_MAGIC {
             return Ok(Some(page));
         }

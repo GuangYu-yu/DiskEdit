@@ -130,7 +130,10 @@ pub fn resize_online(mountpoint: &Path, size: Option<u64>) -> Outcome {
 /// 尺寸核验。PV 本身不挂载，但活动 LV 经 device-mapper 持有分区使 BLKRRPART
 /// EBUSY，因此必须走与挂载分区相同的 partx/BLKPG 同步路径；pvresize/lvextend
 /// 由调用方在分区尺寸生效后执行（pvresize(8) 支持已属 VG 且有活动 LV 的 PV）。
-pub fn resize_pv_online(disk_name: &str, pno: u32, new_len_bytes: u64) -> Outcome {
+/// 返回 (结果, 锁下取得的实际旧尺寸)：调用方计算扩量只能用后者——锁前快照在
+/// 窗口内可能已过期，用它算出的扩量会传导给 lvextend。前置失败时旧尺寸带 0，
+/// 调用方只在 complete 分支消费它
+pub fn resize_pv_online(disk_name: &str, pno: u32, new_len_bytes: u64) -> (Outcome, u64) {
     imp::resize_pv(disk_name, pno, new_len_bytes)
 }
 
@@ -585,59 +588,80 @@ mod imp {
         Ok(())
     }
 
-    /// PV 分区在线扩容：只动分区层，pvresize/lvextend 归调用方
-    pub fn resize_pv(disk_name: &str, pno: u32, new_len_bytes: u64) -> Outcome {
-        // 解析只读 sysfs / 路径，尚未写盘 → Infra
+    /// PV 分区在线扩容：只动分区层，pvresize/lvextend 归调用方。第二返回值是
+    /// 锁下取得的实际旧尺寸（前置失败时为 0，调用方只在 complete 分支消费）
+    pub fn resize_pv(disk_name: &str, pno: u32, new_len_bytes: u64) -> (Outcome, u64) {
+        // 解析只读 sysfs / 路径，尚未写盘 → Infra。尚未取得独占权，旧尺寸不可信
         let t = match resolve_pv_target(disk_name, pno) {
             Ok(t) => t,
-            Err(e) => return Outcome::infra(e.to_string()),
+            Err(e) => return (Outcome::infra(e.to_string()), 0),
         };
         // 此后每一步都是写盘（写表 / 内核重读），独占权从解析出目标起就取得
         let _owned = match lock_disk(&t) {
             Ok(l) => l,
-            Err(o) => return o,
+            Err(o) => return (o, 0),
         };
         // 独占权在手后重取 sysfs 快照：resolve 必须先于取锁（锁身份取自它的结果），
         // 而外部工具不守本工具的锁——取锁耗时期间邻居/容量/本分区尺寸都可能已变。
         // 下面的 shrink 判定与 check_new_range 的邻接、容量判据必须来自锁下的新鲜事实
         let t = match resolve_pv_target(disk_name, pno) {
             Ok(t) => t,
-            Err(e) => return Outcome::infra(e.to_string()),
+            Err(e) => return (Outcome::infra(e.to_string()), 0),
         };
+        let old_len_bytes = t.part_len_bytes;
         // 现场闸口：本路径不建 journal，目标上若有未收尾的现场必须在此拒绝
         if let Err(o) = refuse_if_scene_active(&t) {
-            return o;
+            return (o, old_len_bytes);
         }
         // 活动 swap 的锁下复核（命令层那次是锁前粗查）：swapon 不守本工具的锁，
         // 窗口内被激活的 swap 若放行写表，改的就是活动 swap 的底层分区
         if crate::online::swap_active(disk_name, pno) {
-            return Outcome::refused(format!("partition {pno} became active swap during locking — run swapoff first"));
+            return (Outcome::refused(format!("partition {pno} became active swap during locking — run swapoff first")), old_len_bytes);
         }
-        // 相等值单独说清：调用方包装通常在相等时短路，但本函数是 pub——
-        // 未来调用方传相等值得到的是"无事可做"而非"只能增长"
-        if new_len_bytes == t.part_len_bytes {
-            return Outcome::refused(format!("partition is already {} bytes — nothing to resize", t.part_len_bytes));
-        }
-        if new_len_bytes < t.part_len_bytes {
-            return Outcome::refused(format!(
-                "PV partition can only grow here (current {} bytes); PV shrink needs the lvreduce/pvresize chain",
-                t.part_len_bytes
-            ));
-        }
-        if let Err(msg) = check_new_range(&t, new_len_bytes) {
-            return Outcome::refused(msg);
-        }
-        if let Err(e) = part_resize(&t, new_len_bytes) {
-            return e.into_outcome();
-        }
-        match verify_part_size(&t, new_len_bytes) {
-            Ok(()) => Outcome::applied_with(Vec::new()),
-            // 表已写、内核报的尺寸却不同 → 内核视图过期（后续 PV 链不得基于旧尺寸）
-            Err(e) => {
-                eprintln!("warning: partition table updated but kernel reports a different size: {e}");
-                Outcome::applied_stale_kernel()
+        // PV 判据的锁下复核（命令层那次是锁前粗查）：识别与取锁之间分区可被重新格式化，
+        // 过期的 is_pv 会把 sfdisk 的表写入砸到已不是 PV 的分区上
+        {
+            let src = match crate::dev::FileSource::open_read_only(&t.disk_dev) {
+                Ok(s) => s,
+                Err(e) => return (Outcome::infra(format!("open failed: {e}")), old_len_bytes),
+            };
+            match crate::fsid::identify(&src, t.start_bytes, t.part_len_bytes) {
+                Ok("lvm2_pv") => {}
+                Ok(ft) => return (Outcome::refused(format!(
+                    "partition {pno} is no longer an LVM PV (identified as {ft}) — re-run `diskedit resize` to re-classify the target"
+                )), old_len_bytes),
+                Err(e) => return (Outcome::infra(format!("identify failed: {e}")), old_len_bytes),
             }
         }
+        // 相等值 = 分区层无事可做，按 complete 返回：调用方照常走完 PV 链，
+        // delta 为 0 时 pvresize/lvextend 只同步现状。相等与否必须由锁下事实判定——
+        // 锁前快照在窗口内可能已过期，用它短路会跳过本该做的写表
+        if new_len_bytes == t.part_len_bytes {
+            return (Outcome::applied_with(Vec::new()), old_len_bytes);
+        }
+        if new_len_bytes < t.part_len_bytes {
+            return (Outcome::refused(format!(
+                "PV partition can only grow here (current {} bytes); PV shrink needs the lvreduce/pvresize chain",
+                t.part_len_bytes
+            )), old_len_bytes);
+        }
+        if let Err(msg) = check_new_range(&t, new_len_bytes) {
+            return (Outcome::refused(msg), old_len_bytes);
+        }
+        if let Err(e) = part_resize(&t, new_len_bytes) {
+            return (e.into_outcome(), old_len_bytes);
+        }
+        (
+            match verify_part_size(&t, new_len_bytes) {
+                Ok(()) => Outcome::applied_with(Vec::new()),
+                // 表已写、内核报的尺寸却不同 → 内核视图过期（后续 PV 链不得基于旧尺寸）
+                Err(e) => {
+                    eprintln!("warning: partition table updated but kernel reports a different size: {e}");
+                    Outcome::applied_stale_kernel()
+                }
+            },
+            old_len_bytes,
+        )
     }
 
     pub fn resize_online(mountpoint: &Path, size: Option<u64>) -> Outcome {

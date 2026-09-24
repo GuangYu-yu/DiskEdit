@@ -43,12 +43,21 @@ impl Logger {
     }
 
     pub(crate) fn log(&mut self, msg: &str) {
-        let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+        let ts = best_effort_unix_secs();
         println!("{msg}");
         if let Some(f) = &mut self.file {
             best_effort_log_write(f, &format!("[{ts}] {msg}"));
         }
     }
+}
+
+/// 持久日志的秒级时间戳只用于人读排序；时钟取不到时落 0，best-effort 语义按
+/// `best_effort_*` 命名收敛（见 Cargo.toml 的 lint 门禁）
+fn best_effort_unix_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 /// chunk 大小 + 持久日志的成对构造（搬移/拷贝类命令共用）。
