@@ -56,6 +56,10 @@ pub fn parse_pv_vg(json: &str, part_dev: &str) -> Option<String> {
 /// 输出格式，非稳定 ABI，故只做 "PV路径(" 前缀匹配不做严格解析）；方括号名
 /// （[pool0]/[lvol0_pmspare] 等）是 LVM 内部卷，排除。
 pub fn parse_lvs_on_pv(json: &str, part_dev: &str) -> Vec<(String, String)> {
+    // report 数组逐对象展平（report_rows），同一 LV 可能在多个 report 对象中各出现一次
+    // （如 duplicate PV 扫描）；同 VG 内两个同名 LV 不可能存在，逐 (name,path) 去重，
+    // 否则单 LV 自动选择会被重复行误判成多 LV 拒绝
+    let mut seen = std::collections::HashSet::new();
     report_rows(json, "lv")
         .into_iter()
         .filter_map(|row| {
@@ -71,6 +75,7 @@ pub fn parse_lvs_on_pv(json: &str, part_dev: &str) -> Vec<(String, String)> {
             devices.contains(&format!("{part_dev}("))
         })
         .map(|(name, path, _)| (name, path))
+        .filter(|pair| seen.insert(pair.clone()))
         .collect()
 }
 
@@ -185,5 +190,16 @@ mod tests {
             .filter_map(|r| r.get("lv_name").and_then(|v| v.as_str()).map(|s| s.to_string()))
             .collect();
         assert_eq!(names, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn duplicate_report_rows_collapse() {
+        // 同一 LV 经多 report 对象重复出现（duplicate PV 扫描的 CI 实测形态）：
+        // 去重后单 LV 自动选择不得误判为多 LV
+        let json = r#"{"report":[
+            {"lv":[{"lv_name":"lv1","lv_path":"/dev/vg/lv1","devices":"/dev/loop0p1(0)"}]},
+            {"lv":[{"lv_name":"lv1","lv_path":"/dev/vg/lv1","devices":"/dev/loop0p1(0)"}]}
+        ]}"#;
+        assert_eq!(parse_lvs_on_pv(json, "/dev/loop0p1").len(), 1);
     }
 }

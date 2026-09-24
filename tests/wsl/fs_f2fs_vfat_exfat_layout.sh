@@ -153,7 +153,8 @@ rm -rf "$ERSRC" "$ERIMG"; mkdir -p "$ERSRC"
 head -c 2000000 /dev/urandom > "$ERSRC/blob.bin" 2>/dev/null
 mkfs.erofs "$ERIMG" "$ERSRC" >/dev/null 2>&1; echo "mkfs.erofs exit=$?"
 BLKSZ=$(od -An -tu1 -j 1036 -N1 "$ERIMG" | tr -d ' ')
-NBLK=$(od -An -tu4 -j 1040 -N4 "$ERIMG" | tr -d ' ')
+# blocks 为超级块内偏移 0x24 的 u32：文件内偏移 = 1024+36 = 1060（0x10 处是 inos，勿混）
+NBLK=$(od -An -tu4 -j 1060 -N4 "$ERIMG" | tr -d ' ')
 OFF=$(( ((NBLK << BLKSZ) + 65535) / 65536 * 65536 ))
 echo "erofs blkszbits=$BLKSZ blocks=$NBLK overlay_off=$OFF"
 rm -f "$T" "$T".diskedit.*
