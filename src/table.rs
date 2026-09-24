@@ -809,6 +809,9 @@ pub struct MbrPartition {
 pub enum MbrDamage {
     /// 条目末端越过盘尾（写入侧 `add_mdos_entry` 同样拒绝这种条目）
     PastEnd { num: u32, start: u32, size: u32, total_sectors: u64 },
+    /// 两条目区间重叠。右侧空闲的推导（free_right_msdos）与单条目改写（resize_mdos_entry）
+    /// 都以"条目互不重叠"为前提，与 GPT 侧 `ValidatedGeometry::new` 的构造点拒绝同口径
+    Overlap { num_a: u32, num_b: u32, start_a: u32, start_b: u32 },
 }
 
 impl MbrDamage {
@@ -816,6 +819,9 @@ impl MbrDamage {
         match self {
             MbrDamage::PastEnd { num, start, size, total_sectors } => format!(
                 "MBR entry {num} extends past the end of the disk (start {start} + {size} > {total_sectors} sectors)"
+            ),
+            MbrDamage::Overlap { num_a, num_b, start_a, start_b } => format!(
+                "MBR entries {num_a} and {num_b} overlap (start {start_a} / {start_b})"
             ),
         }
     }
@@ -883,6 +889,24 @@ pub fn parse_mbr_raw(src: &FileSource) -> io::Result<Option<RawMbr>> {
             is_container: matches!(os_type, 0x05 | 0x0F | 0x85),
         });
     }
+    // 条目两两重叠 = 表已损坏（与 GPT 侧 ValidatedGeometry::new 的构造点拒绝同口径）：
+    // 右侧空闲的推导与单条目改写都以"条目互不重叠"为前提，损坏表上放行会把扩容砸到
+    // 邻区之上。记为损伤并保留条目：info 照实观察，写路径由 parse_mbr 拒绝
+    for i in 0..parts.len() {
+        for j in (i + 1)..parts.len() {
+            let (a, b) = (&parts[i], &parts[j]);
+            let ae = a.start_lba as u64 + a.size_lba as u64 - 1;
+            let be = b.start_lba as u64 + b.size_lba as u64 - 1;
+            if !(ae < b.start_lba as u64 || be < a.start_lba as u64) {
+                damage.push(MbrDamage::Overlap {
+                    num_a: a.num,
+                    num_b: b.num,
+                    start_a: a.start_lba,
+                    start_b: b.start_lba,
+                });
+            }
+        }
+    }
     // 只剩 0xEE 记录且 LBA1 带 GPT 头签名：盘型是 GPT（LBA1 签名定盘型，保护布局
     // 只定修复分类），不能判成"零分区的 msdos 盘"——否则 del 会把保护记录当空槽清掉。
     // 无签名时（GPT 已灭）只能按 msdos 处置，0xEE 槽已排除，不会误伤残留记录
@@ -928,17 +952,16 @@ pub fn resize_mdos_entry(src: &mut FileSource, part: u32, new_size_lba: u32) -> 
         return Err(Fail::infra("no MBR signature on target"));
     }
     let off = 446 + (part as usize - 1) * 16;
-    let rec = &mut lba0[off..off + 16];
-    if rec[4] == 0 {
+    if lba0[off + 4] == 0 {
         return Err(Fail::refused(format!("MBR partition {part} is empty")));
     }
-    if matches!(rec[4], 0x05 | 0x0F | 0x85) {
+    if matches!(lba0[off + 4], 0x05 | 0x0F | 0x85) {
         return Err(Fail::refused("extended partition container cannot be resized"));
     }
     // 条目自守（与 add_mdos_entry 同严格）：start + 新长度须落在盘内。现有调用方
     // 都先查过 free，但这是 pub 写入口——越界尺寸要挡在写 LBA0 之前，不能指望
     // 每个未来调用方都记得复核
-    let start = u32::from_le_bytes(rec[8..12].try_into().unwrap()) as u64;
+    let start = u32::from_le_bytes(lba0[off + 8..off + 12].try_into().unwrap()) as u64;
     let total_sectors = src.size / ss as u64;
     if start == 0 {
         return Err(Fail::refused(format!("MBR partition {part} has invalid start LBA 0")));
@@ -948,7 +971,28 @@ pub fn resize_mdos_entry(src: &mut FileSource, part: u32, new_size_lba: u32) -> 
             "new size {new_size_lba} sectors from LBA {start} exceeds the disk ({total_sectors} sectors)"
         )));
     }
-    rec[12..16].copy_from_slice(&new_size_lba.to_le_bytes());
+    // 邻接自守（与 add_mdos_entry 同判据）：其余槽位任一与新区间重叠即拒绝。命令层的
+    // free 判据以"条目互不重叠"为前提——那由 parse_mbr 的 damage 口径把关，而本入口
+    // 直接读 LBA0、不经那道闸，重叠必须在此挡在写 LBA0 之前
+    let new_end = start + new_size_lba as u64 - 1;
+    for i in 0..4u32 {
+        if i + 1 == part {
+            continue;
+        }
+        let o = &lba0[446 + (i as usize) * 16..446 + (i as usize) * 16 + 16];
+        if o[4] == 0 || rd_u32(o, 12) == 0 {
+            continue;
+        }
+        let os = u32::from_le_bytes(o[8..12].try_into().unwrap()) as u64;
+        let oe = os + rd_u32(o, 12) as u64 - 1;
+        if !(new_end < os || oe < start) {
+            return Err(Fail::refused(format!(
+                "new range [{start}, {new_end}] overlaps partition {} [{os}, {oe}]",
+                i + 1
+            )));
+        }
+    }
+    lba0[off + 12..off + 16].copy_from_slice(&new_size_lba.to_le_bytes());
     src.write_at(0, &lba0)?;
     src.sync_all()?;
     Ok(())
@@ -999,7 +1043,10 @@ pub fn gpt_signature_present(src: &FileSource) -> io::Result<bool> {
 
 /// SizeInLBA 与当前容器的关系（唯一判定点）。规范值按设备逻辑块计（UEFI 口径）；
 /// 512 口径值单独识别为"非规范但已知"，不并入 Normal——并入就等于宣称它合法。
-/// 扇区数超出 32 位表示范围时按规范饱和写 0xFFFFFFFF（此时两种口径期望值相同）
+/// 扇区数超出 32 位表示范围时按规范饱和写 0xFFFFFFFF（此时两种口径期望值相同）。
+/// 读取恒取前 512 字节：MBR 记录布局在 LBA0 的前 512 字节内（UEFI 2.10 §5.2.3），
+/// 与容器逻辑块大小无关，4Kn 设备上同样成立——`lba0` 的定长与 `src.sector_size`
+/// 的口径差在此说明，非遗漏
 fn pmbr_size_state(src: &FileSource) -> io::Result<PmbrSize> {
     let mut lba0 = [0u8; 512];
     src.read_at(0, &mut lba0)?;
@@ -2017,6 +2064,43 @@ mod tests {
         // 仍在盘内的扩容照常写入（新检查不得把合法调用一并拒掉）
         resize_mdos_entry(&mut src, 1, 200).unwrap();
         assert_eq!(parse_mbr(&src).unwrap().unwrap()[0].size_lba, 200);
+    }
+
+    /// resize_mdos_entry 的邻接自守：盘上已存在邻区时，扩到邻区之上必须在写 LBA0 前拒绝
+    #[test]
+    fn resize_mdos_entry_rejects_neighbor_overlap() {
+        let data = vec![0u8; 300 * 512];
+        let mut src = src_from("mrszovl", data);
+        create_mbr(&mut src).unwrap();
+        add_mdos_entry(&mut src, 63, 162, 0x83).unwrap();
+        add_mdos_entry(&mut src, 200, 249, 0x83).unwrap();
+        // [63, 162] 扩到 [63, 199] 与分区 2 [200, 249] 相接：合法（区间贴邻不重叠）
+        resize_mdos_entry(&mut src, 1, 137).unwrap();
+        // 盖过分区 2 起点：拒绝且不落盘
+        let e = resize_mdos_entry(&mut src, 1, 138).unwrap_err();
+        assert!(matches!(e, Fail::Refused(_)), "must be refused: {e:?}");
+        assert_eq!(parse_mbr(&src).unwrap().unwrap()[0].size_lba, 137);
+    }
+
+    /// parse_mbr_raw 的重叠损伤：重叠条目保留在 raw 视图（info 可观察），
+    /// 写路径经 parse_mbr 整体拒绝
+    #[test]
+    fn parse_mbr_reports_overlap_damage() {
+        let data = vec![0u8; 300 * 512];
+        let mut src = src_from("mbrovl", data);
+        create_mbr(&mut src).unwrap();
+        add_mdos_entry(&mut src, 63, 162, 0x83).unwrap();
+        add_mdos_entry(&mut src, 200, 249, 0x83).unwrap();
+        // 手工把分区 2 起点改进分区 1 的区间（add_mdos_entry 自己不会写出这种表）
+        let mut lba0 = vec![0u8; 512];
+        src.read_at(0, &mut lba0).unwrap();
+        lba0[446 + 16 + 8..446 + 16 + 12].copy_from_slice(&100u32.to_le_bytes());
+        src.write_at(0, &lba0).unwrap();
+        let raw = parse_mbr_raw(&src).unwrap().unwrap();
+        assert!(raw.damage.iter().any(|d| matches!(d, MbrDamage::Overlap { .. })), "{:?}", raw.damage);
+        assert_eq!(raw.parts.len(), 2, "重叠条目必须保留在 raw 视图里");
+        // 写路径拒绝
+        assert!(parse_mbr(&src).is_err());
     }
 
     /// 保护 MBR（UEFI 2.10 §5.2.3）：形状与 SizeInLBA 覆盖范围分层判定

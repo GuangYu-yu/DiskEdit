@@ -184,7 +184,13 @@ pub(crate) fn parse_args() -> (String, Args) {
             "--chunk-size" => {
                 a.seen.push("--chunk-size");
                 let v = it.next().unwrap_or_else(|| miss_arg("--chunk-size"));
-                a.chunk_mib = v.parse().unwrap_or_else(|_| bad_arg("--chunk-size", &v, " (MiB, e.g. 4)"));
+                let n: u64 = v.parse().unwrap_or_else(|_| bad_arg("--chunk-size", &v, " (MiB, e.g. 4)"));
+                // 取值合法性在参数层当场判（与 --sector-size 同理：分类不因截获层不同
+                // 而漂移）；chunk_bytes 作为 pub 领域入口保留同一判据自守
+                if !(1..=1024).contains(&n) {
+                    bad_arg("--chunk-size", &v, " (must be in 1..=1024 MiB, e.g. 4)");
+                }
+                a.chunk_mib = n;
             }
             "--grow-to-end" => { a.seen.push("--grow-to-end"); a.grow_to_end = true; }
             "--allow-move" => { a.seen.push("--allow-move"); a.allow_move = true; }

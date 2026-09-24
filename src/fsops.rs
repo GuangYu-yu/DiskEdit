@@ -591,7 +591,10 @@ fn min_bytes_ext(dev: &str) -> io::Result<u64> {
         return Err(io::Error::other(format!("dumpe2fs -h failed: {}", text2.trim())));
     }
     let bs = parse_num_field(&text2, "Block size:")?;
-    Ok(blocks * bs)
+    // 两个因子都出自外部工具的 stdout：回绕的"最小尺寸"会放行本应拒绝的缩容请求
+    //（分区末端切进 FS 元数据），方向危险，溢出按工具输出异常上抛
+    blocks.checked_mul(bs)
+        .ok_or_else(|| io::Error::other(format!("resize2fs -P × dumpe2fs block size overflows ({blocks} × {bs})")))
 }
 
 /// swap 重建：mkswap -U <uuid> [-L <label>]，保持 UUID/卷标以维持 fstab 兼容
