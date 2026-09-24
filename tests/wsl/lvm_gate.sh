@@ -75,8 +75,11 @@ lvs --reportformat json -o lv_name,lv_path,devices "$VG" 2>&1 | head -5
 $B resize "${LOOP}:1" +4M --grow-lv >/dev/null || fail "single-LV auto-select failed"
 [ "$(lv_bytes "$VG" lv1)" -eq "$((b3 + 8388608 + 4194304))" ] || fail "auto-select did not extend lv1"
 
-lo_detach "$LOOP"; LOOP=
+# 收尾顺序：LV 可能仍处活动态，须先 vgchange -an 释放 dm，vgremove 也必须在
+# detach 之前——PV 所在 loop 一旦拆掉，lvm 扫不到 VG，vgremove 报 "not found"
+vgchange -an "$VG" >/dev/null 2>&1
 vgremove -ff "$VG" >/dev/null || fail "vgremove $VG failed"
+lo_detach "$LOOP" || fail "lo_detach $LOOP failed"; LOOP=
 VG=
 rm -f "$IMG" "$IMG".diskedit.*; IMG=
 
@@ -101,8 +104,9 @@ losetup -a | grep -F "$IMG2" && fail "loop device leaked after image PV resize"
 LOOP2=$(lo_attach "$IMG2") || fail "re-losetup $IMG2 failed"
 pv_after=$(pvs --noheadings --units b --nosuffix -o pv_size "${LOOP2}p1" | tr -d ' ') || fail "read pv_size after failed"
 { [ -n "$pv_before" ] && [ "$pv_after" -eq "$((pv_before + 8388608))" ]; } || fail "pv_size: $pv_after expected $((pv_before + 8388608))"
-lo_detach "$LOOP2"; LOOP2=
+# vgremove 必须在 detach 之前（PV 在 loop 上，先拆 VG 就找不到了）
 vgremove -ff "$VG" >/dev/null || fail "vgremove $VG failed"
+lo_detach "$LOOP2"; LOOP2=
 VG=
 rm -f "$IMG2" "$IMG2".diskedit.*; IMG2=
 

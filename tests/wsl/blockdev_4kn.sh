@@ -27,6 +27,10 @@ set4kn() { # $1=label  其余=传给 set 的参数
   out=$($B set "$LD":2 "$@" 2>&1); e=$?
   if [ "$e" -ne 0 ] && echo "$out" | grep -q 'stale'; then
     partx -u "$LD" 2>/dev/null; sleep 1
+    # set 首次尝试撞 stale 时 DiskEdit 保留 journal，裸重试会被 unfinished-op 闸拒绝——
+    # 先 abandon 释放现场（set 幂等，表项重写无副作用）。undo/abandon 的目标必须是
+    # 启动场景时的 $LD：镜像路径侧身份匹配不到现场（产品跨目标回退缺失，见报告）
+    $B abandon "$LD" --yes >/dev/null 2>&1
     out=$($B set "$LD":2 "$@" 2>&1); e=$?
   fi
   [ "$e" -eq 0 ] && echo "  OK   set $label" || { echo "  BAD  set $label FAILED: $(echo "$out" | tail -1)"; rc=1; }
@@ -38,9 +42,12 @@ addk() { # $1=label $2=期望生成的分区节点  其余=传给 add 的参数
   if [ "$e" -ne 0 ] && echo "$out" | grep -q 'stale'; then
     partx -u "$LD" 2>/dev/null; sleep 1
     if [ -b "$node" ]; then
-      echo "  OK   add $label（首次已写盘，仅内核视图滞后）"; return 0
+      # 表已写、内核视图滞后，DiskEdit 保留了 journal——不清掉会以 "unfinished
+      # operation" 闸拒绝后续所有表写命令。abandon 只释放现场，不回滚已写表项
+      $B abandon "$LD" --yes >/dev/null 2>&1
+      echo "  OK   add $label（首次已写盘，内核视图滞后，journal 已释放）"; return 0
     fi
-    [ -f "$T.diskedit.journal" ] && $B undo "$T" --yes >/dev/null 2>&1
+    [ -f "$T.diskedit.journal" ] && $B undo "$LD" --yes >/dev/null 2>&1
     out=$($B add "$LD" "$@" 2>&1); e=$?
   fi
   [ "$e" -eq 0 ] && echo "  OK   add $label" || { echo "  BAD  add $label FAILED: $(echo "$out" | tail -1)"; rc=1; return 1; }
@@ -53,9 +60,11 @@ movek() { # $1=目标 start（LBA）
     partx -u "$LD" 2>/dev/null; sleep 1
     fl=$($B info "$LD" | grep -o '"num":2,"first_lba":[0-9]*' | grep -o '[0-9]*$')
     if [ "$fl" = "$start" ]; then
-      e=0; echo "  move 首次已写盘，仅内核视图滞后"
+      e=0
+      $B abandon "$LD" --yes >/dev/null 2>&1
+      echo "  move 首次已写盘，内核视图滞后，journal 已释放"
     else
-      $B abandon "$T" --yes >/dev/null 2>&1
+      $B abandon "$LD" --yes >/dev/null 2>&1
       out=$($B move "$LD":2 --start "$start" --chunk-size 4 2>&1); e=$?
     fi
   fi
