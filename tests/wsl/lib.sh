@@ -104,6 +104,17 @@ lo_attach() {
     losetup -fP "$@" --show "$img"
 }
 
+# 等待分区设备节点就绪：losetup -P 的分区扫描是异步的，节点可能在 attach
+# 返回后短暂不可读；attach 后立即访问分区设备的调用点必须先过这一关
+lo_waitpart() {
+    local dev=$1 i
+    for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+        [ -b "$dev" ] && blockdev --getsize64 "$dev" >/dev/null 2>&1 && return 0
+        sleep 0.1
+    done
+    return 1
+}
+
 mount_at() { # dev mp [mount 选项...]
     local dev=$1 mp=$2; shift 2
     mkdir -p "$mp" || return 1
