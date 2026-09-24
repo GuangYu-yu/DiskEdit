@@ -115,11 +115,7 @@ pub(crate) fn cmd_add(a: &Args) -> u8 {
                 refuse_name_on_msdos(a);
                 let (start, end) = align_range(a, start, end, src.sector_size);
                 let os_type = match &a.type_guid {
-                    Some(s) => {
-                        // 0x 前缀大小写不限（0X83 是常见写法）
-                        let hex = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")).unwrap_or(s);
-                        u8::from_str_radix(hex, 16).unwrap_or_else(|_| bail_fail(Fail::refused(format!("invalid MBR type {s:?} (expect 0xXX)"))))
-                    }
+                    Some(s) => parse_os_type(s).unwrap_or_else(|| bail_fail(Fail::refused(format!("invalid MBR type {s:?} (expect 0xXX)")))),
                     // 默认 Linux 数据分区（util-linux pt-mbr.h MBR_LINUX_DATA_PARTITION）
                     None => 0x83, // Linux
                 };
