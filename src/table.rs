@@ -1295,6 +1295,12 @@ pub fn table_label(src: &FileSource) -> Result<TableLabel, GptError> {
     if load_gpt(src)?.is_some() {
         return Ok(TableLabel::Gpt);
     }
+    // 保护 MBR 形状成立而两份 GPT 头都给不出表：这是一块 GPT 盘，只是头毁到
+    // 签名尽失（条目数组可能完好，仍可救）。落成 None 会让 new 把它当无表盘
+    // 覆盖、resize 走 superfloppy 整盘扩——与下方签名路径同一处置，交给写命令拒绝
+    if pmbr_shape_valid(src)? {
+        return Ok(TableLabel::GptDamaged);
+    }
     if parse_mbr(src)?.is_some() {
         return Ok(TableLabel::Mbr);
     }
@@ -1964,6 +1970,22 @@ mod tests {
         ensure_protective_mbr(&mut src).unwrap();
         assert!(pmbr_shape_valid(&src).unwrap(), "前提：形状成立才会走到副本解析");
         assert!(load_gpt(&src).unwrap().is_none(), "无签名 ⇒ 无表，不是损伤");
+    }
+
+    /// PMBR 形状成立而两份 GPT 头的签名都丢了 ⇒ GptDamaged，不得落成 None——
+    /// None 会让 new 把还能救回的盘当无表盘覆盖、resize 走 superfloppy 整盘扩。
+    /// 与上一条成对：load_gpt 只回答表能否解析（这里确实解析不出），盘型判定
+    /// 在它之上补回"这是一块 GPT 盘"的事实
+    #[test]
+    fn pmbr_intact_without_gpt_headers_is_damaged_not_absence() {
+        let mut src = src_from_gpt("pmbrdead", 512);
+        // 两份头都毁到 EFI PART 不在：主头 LBA1、备头镜像尾 LBA
+        src.write_at(512, &[0u8; 512]).unwrap();
+        let last = (src.size / 512 - 1) * 512;
+        src.write_at(last, &[0u8; 512]).unwrap();
+        assert!(pmbr_shape_valid(&src).unwrap(), "前提：保护记录未动");
+        assert!(load_gpt(&src).unwrap().is_none(), "前提：表解析不出，缺口只在盘型判定层");
+        assert_eq!(table_label(&src).unwrap(), TableLabel::GptDamaged);
     }
 
     #[test]

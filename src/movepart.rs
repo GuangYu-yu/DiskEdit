@@ -764,6 +764,19 @@ fn prepare_apply(
     no_fs: bool,
     log: &mut dyn FnMut(&str),
 ) -> Result<ApplyDecision, Fail> {
+    // 占用闸（与 prepare_resize 同一判据）：被搬移分区的数据区会被整体重写，grow 目标
+    // 随后要接 FS 步——挂载中或活动 swap 的分区必须在任何写盘前拒绝。镜像无块设备
+    // 占用语义，闸内自会放行
+    for m in &plan.moves {
+        crate::fsops::ensure_idle_before_write(src, m.part_num, m.first_lba.checked_mul(plan.ss)
+            .ok_or_else(|| Fail::infra("move source start overflows byte offset"))?)?;
+    }
+    if let Some(ge) = g0.entry_index(plan.grow_part).and_then(|i| g0.entries.get(i))
+        && ge.ending_lba != 0
+    {
+        crate::fsops::ensure_idle_before_write(src, plan.grow_part, ge.starting_lba.checked_mul(plan.ss)
+            .ok_or_else(|| Fail::infra("grow target start overflows byte offset"))?)?;
+    }
     // 几何由调用方解析并下传（构造点即拒绝条目重叠），FS preflight 与 ckpt 判定共用它；
     // 几何里的上界是"修复生效后"的值，ckpt 的边界校验依赖它。盘在 plan 生成之后变了的话，
     // 由下面的恢复校验拒绝
@@ -1429,6 +1442,10 @@ fn prepare_resize(
     let slot = read_checkpoint(src, &g)?;
     let ss = g.ss;
     let e = gpt_policy::live_entry(&g, part)?;
+    // 占用闸：搬移/改写一个被挂载或活动 swap 的分区会让现场失效。镜像无块设备占用
+    // 语义，闸内自会放行（支持边界见 README）
+    crate::fsops::ensure_idle_before_write(src, part, e.starting_lba.checked_mul(ss)
+        .ok_or_else(|| Fail::infra("partition start overflows byte offset"))?)?;
     // 只拦搬移（起点变化）：LUKS/LVM PV/swap 的纯扩缩不搬数据，允许。
     // swap 在此一并拒绝：plan/apply 有 mkswap 重建流程，单分区 resize-part 没有
     if (FORBIDDEN_TYPE_GUIDS.contains(&e.partition_type_guid) || is_swap_guid(&e.partition_type_guid))
@@ -1578,8 +1595,10 @@ fn execute_resize(
     }
 
     // ---- 阶段 1：数据搬移（方向感知 + chunk 续传）----
-    let delta = new_start as i64 - old_start as i64;
-    if delta != 0 && committed_old.is_none() {
+    // 方向与幅度分开算：abs_diff 不经 i64 cast，差值再大也不会翻转符号
+    let forward = new_start > old_start;
+    let moved = new_start.abs_diff(old_start);
+    if moved != 0 && committed_old.is_none() {
         // 含数据搬移：字节不入 journal，落屏障令 undo 拒绝（前向恢复、无回滚）
         src.set_mutation(crate::dev::Mutation::RelocatePartition {
             partition: part,
@@ -1598,7 +1617,7 @@ fn execute_resize(
                 v.push((pos, len));
                 pos += len;
             }
-            if delta > 0 { v.reverse(); }
+            if forward { v.reverse(); }
             v
         };
         for (i, (within, len)) in order.iter().enumerate() {
@@ -1617,7 +1636,7 @@ fn execute_resize(
             save(&ckpt)?;
             fault_rs_chunk(i as u64 + 1);
         }
-        log(&format!("data moved by {delta} sectors"));
+        log(&format!("data moved by {moved} sectors"));
     }
     // ---- 阶段 2：提交表项（幂等：重复执行结果相同；已提交态跳过）----
     if committed_old.is_none() {
@@ -1639,7 +1658,7 @@ fn execute_resize(
     }
 
     // 起始 LBA 变了才需要修 NTFS HiddenSectors（扩缩不动 start 时跳过）
-    if delta != 0 && fstype == "ntfs" {
+    if moved != 0 && fstype == "ntfs" {
         fix_ntfs_hidden_sectors(src, new_start, ss, log)?;
     }
 

@@ -321,8 +321,13 @@ pub(crate) fn cmd_create(a: &Args) -> u8 {
     if gaps.is_empty() {
         bail_fail(Fail::refused("no free space (after 1MiB alignment)".to_string()));
     }
+    // 间隙跨度全程 checked（与下面 s+n-1 同一原则）：回绕的跨度会把装不下的间隙判成装得下
+    let span = |(s, e): &(u64, u64)| -> u64 {
+        e.checked_sub(*s).and_then(|d| d.checked_add(1))
+            .unwrap_or_else(|| bail_fail(Fail::refused("gap span overflows the LBA range (corrupted table)".to_string())))
+    };
     let (start, end) = match want {
-        Some(n) => match gaps.iter().find(|(s, e)| e - s + 1 >= n) {
+        Some(n) => match gaps.iter().find(|g| span(g) >= n) {
             // n 来自 --size（用户可控）：find 的 span≥n 已保证 s+n-1 ≤ e，checked 把
             // 这层非局部依赖显式化——回绕不依赖 find 的承诺
             Some(&(s, e)) => {
@@ -332,7 +337,7 @@ pub(crate) fn cmd_create(a: &Args) -> u8 {
             }
             None => bail_fail(Fail::refused(format!("no aligned gap fits {n} sectors; free gaps: {gaps:?}"))),
         },
-        None => *gaps.iter().max_by_key(|(s, e)| e - s + 1).unwrap(),
+        None => *gaps.iter().max_by_key(|g| span(g)).unwrap(),
     };
     // swap 声明落进类型 GUID：movepart 靠它识别 swap 挡路者（不搬数据、mkswap 重建）
     let is_swap = a.fs.as_deref() == Some("swap");
