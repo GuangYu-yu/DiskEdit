@@ -31,7 +31,9 @@ fs_bytes() { dumpe2fs -h "/dev/$1/$2" 2>/dev/null | awk '/^Block count:/ {print 
 IMG=/var/tmp/t31a.img
 track_file "$IMG"
 rm -f "$IMG" "$IMG".diskedit.* 2>/dev/null
-truncate -s 96M "$IMG"
+# 128M：p1 80M +16M 的扩容终点（起始间隙 1MiB + 97MiB）必须装得下，
+# 否则多 LV 拒绝用例会被"尺寸溢出"歪打正着地拒绝、--lv 链路在 grow 时超盘被拒
+truncate -s 128M "$IMG"
 $B new "$IMG" --yes >/dev/null || fail "new $IMG failed"
 $B create "$IMG" --size 80M >/dev/null || fail "create $IMG failed"
 LOOP=$(lo_attach "$IMG") || fail "losetup $IMG failed"
