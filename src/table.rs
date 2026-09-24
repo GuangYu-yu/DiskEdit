@@ -98,6 +98,9 @@ const GPT_SIGNATURE: &[u8; 8] = b"EFI PART";
 const MBR_SIGNATURE: u16 = 0xAA55;
 /// 保护 MBR 分区类型：OS Type 0xEE = GPT Protective（UEFI §5.2.2–§5.2.3 Tables 5.2–5.4）
 const PROT_MBR_TYPE: u8 = 0xEE;
+/// 扩展容器分区类型（OSIndicator）：解析、尺寸改写与类型改写三处共用同一份集合，
+/// 免得"哪些码是容器"在多处各写一遍
+const MDOS_CONTAINER_TYPES: [u8; 3] = [0x05, 0x0F, 0x85];
 
 /// 容器末 LBA（按给定表的扇区大小计）。全仓唯一的算式落点：
 /// 不允许在任何调用点重写第二遍——同一事实两个来源迟早分叉。
@@ -886,7 +889,7 @@ pub fn parse_mbr_raw(src: &FileSource) -> io::Result<Option<RawMbr>> {
             os_type,
             start_lba: start,
             size_lba: size,
-            is_container: matches!(os_type, 0x05 | 0x0F | 0x85),
+            is_container: MDOS_CONTAINER_TYPES.contains(&os_type),
         });
     }
     // 条目两两重叠 = 表已损坏（与 GPT 侧 ValidatedGeometry::new 的构造点拒绝同口径）：
@@ -955,7 +958,7 @@ pub fn resize_mdos_entry(src: &mut FileSource, part: u32, new_size_lba: u32) -> 
     if lba0[off + 4] == 0 {
         return Err(Fail::refused(format!("MBR partition {part} is empty")));
     }
-    if matches!(lba0[off + 4], 0x05 | 0x0F | 0x85) {
+    if MDOS_CONTAINER_TYPES.contains(&lba0[off + 4]) {
         return Err(Fail::refused("extended partition container cannot be resized"));
     }
     // 条目自守（与 add_mdos_entry 同严格）：start + 新长度须落在盘内。现有调用方
@@ -1513,11 +1516,10 @@ pub fn set_mdos_type(src: &mut FileSource, part: u32, t: u8) -> Result<(), Fail>
     if !(1..=4).contains(&part) {
         return Err(Fail::refused("msdos supports primary slots 1..=4 only"));
     }
-    const EXTENDED: [u8; 3] = [0x05, 0x0F, 0x85];
     if t == 0 {
         return Err(Fail::refused("type 0x00 marks an empty entry — use `del` to remove the partition"));
     }
-    if EXTENDED.contains(&t) {
+    if MDOS_CONTAINER_TYPES.contains(&t) {
         return Err(Fail::refused("extended-container types (0x05/0x0F/0x85) are not supported — logical partitions are out of scope"));
     }
     let ss = src.sector_size;
@@ -1528,7 +1530,7 @@ pub fn set_mdos_type(src: &mut FileSource, part: u32, t: u8) -> Result<(), Fail>
     if cur == 0 {
         return Err(Fail::refused(format!("partition {part} is empty")));
     }
-    if EXTENDED.contains(&cur) {
+    if MDOS_CONTAINER_TYPES.contains(&cur) {
         return Err(Fail::refused(format!("partition {part} is an extended container (0x{cur:02X}) — its type is structural, not descriptive")));
     }
     lba0[off + 4] = t;
