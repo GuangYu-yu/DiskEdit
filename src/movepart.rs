@@ -1270,8 +1270,9 @@ pub(crate) fn read_swap_identity(src: &FileSource, first_lba: u64, len_lba: u64,
 // ---------- 通用 resize-part：grow / shrink / move 三合一 ----------
 
 const CKPT2_MAGIC: &[u8; 8] = b"DKECKPT2";
-/// 字段变动即升版本：旧 ckpt 解析失败 → 当作"无 ckpt"重跑（搬移与 commit 都幂等，重跑安全）。
-/// 不靠长度巧合兜底——CRC 覆盖长度随字段变化，旧布局必然对不上。
+/// 字段变动即升版本：版本号先行拦下旧布局，CRC 覆盖长度也随之不同。
+/// 旧版本现场不会按"无 ckpt"重跑——read_checkpoint 把"现场存在但不可判读"报成 Infra
+/// 并列明死因，出路是 abandon。
 /// v4：追加目标指纹（3×u64）与 loop 映射（1+2×u64），语义同 CKPT1 v5
 const CKPT2_VERSION: u32 = 4;
 

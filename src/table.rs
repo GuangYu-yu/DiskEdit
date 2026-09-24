@@ -1506,8 +1506,9 @@ pub fn set_mdos_hidden(src: &mut FileSource, part: u32, on: bool) -> Result<(), 
 }
 
 /// msdos：分区类型字节直改（OSIndicator，类型名域见 util-linux pt-mbr-partnames.h）。
-/// 0x00 拒绝——那是"未用条目"的形状，移除分区应走 `del`；扩展容器类型（0x05/0x0F/0x85）
-/// 双向拒绝——本工具不管理逻辑分区，把主条目改成或改成自容器类型会留下无处落位的逻辑链
+/// 0x00 拒绝——那是"未用条目"的形状，移除分区应走 `del`。扩展容器类型（0x05/0x0F/0x85）
+/// 双向拒绝：改成容器类型会凭空多出一条容器语义，把既有容器改走别的类型则让它管辖的
+/// 逻辑分区失去入口——本工具不管理逻辑分区，两个方向都不受理
 pub fn set_mdos_type(src: &mut FileSource, part: u32, t: u8) -> Result<(), Fail> {
     if !(1..=4).contains(&part) {
         return Err(Fail::refused("msdos supports primary slots 1..=4 only"));
@@ -2099,6 +2100,15 @@ mod tests {
         assert_eq!(parse_mbr(&src).unwrap().unwrap()[0].os_type, 0x07);
         // 空槽拒绝
         assert!(set_mdos_type(&mut src, 2, 0x07).is_err());
+        // 既有条目本身是容器类型：它的类型是结构性的，不接受改写。容器形状直接改字节造出
+        // —— add_mdos_entry 那道闸不允许写入容器类型
+        let mut lba0 = vec![0u8; 512];
+        src.read_at(0, &mut lba0).unwrap();
+        lba0[446 + 4] = 0x05;
+        src.write_at(0, &lba0).unwrap();
+        let e = set_mdos_type(&mut src, 1, 0x07).unwrap_err();
+        assert!(matches!(e, Fail::Refused(_)), "existing extended container must be refused: {e:?}");
+        assert_eq!(parse_mbr(&src).unwrap().unwrap()[0].os_type, 0x05);
     }
 
     /// resize_mdos_entry 是 pub 写入口：start + 新长度越出盘尾必须拒绝——
