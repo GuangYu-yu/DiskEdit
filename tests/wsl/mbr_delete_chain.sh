@@ -10,10 +10,10 @@ cleanup_hook() { rm -f /var/lib/diskedit/* 2>/dev/null; }
 T=/var/tmp/t29.img
 track_file "$T"
 
-rm -f "$T" "$T".diskedit.* 2>/dev/null
+rm -f "$T" "$T"$SIDECAR_GLOB 2>/dev/null
 
 echo "===== A: msdos 建表 / add --type / flag ====="
-rm -f "$T" "$T".diskedit.*
+rm -f "$T" "$T"$SIDECAR_GLOB
 truncate -s 256M "$T"
 $B new "$T" --table msdos --yes; echo "new exit=$?"
 $B add "$T" --start 2048 --end 99999 >/dev/null; echo "add p1 exit=$?"
@@ -75,7 +75,7 @@ lo_detach "$LD"
 
 echo
 echo "===== E: GPT 侧 delete ====="
-rm -f "$T" "$T".diskedit.*
+rm -f "$T" "$T"$SIDECAR_GLOB
 truncate -s 64M "$T"
 $B new "$T" --yes >/dev/null
 $B add "$T" --start 2048 --end 99999 --name g1 >/dev/null

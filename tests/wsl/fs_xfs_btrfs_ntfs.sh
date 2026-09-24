@@ -9,10 +9,10 @@ cleanup_hook() { umount /testmnt 2>/dev/null; }
 T=/var/tmp/t20.img
 track_file "$T"
 
-rm -f "$T" "$T".diskedit.* 2>/dev/null
+rm -f "$T" "$T"$SIDECAR_GLOB 2>/dev/null
 
 echo "########## A: xfs 扩容 400M → 1500M ##########"
-rm -f "$T" "$T".diskedit.*; truncate -s 2G "$T"
+rm -f "$T" "$T"$SIDECAR_GLOB; truncate -s 2G "$T"
 $B new "$T" --yes >/dev/null
 $B create "$T" --size 400M --name x --fs xfs; echo "create exit=$?"
 LD=$(lo_attach "$T")
@@ -28,7 +28,7 @@ lo_detach "$LD"; sgdisk -v "$T" >/dev/null 2>&1 && echo "sgdisk clean" || { echo
 
 echo
 echo "########## B: btrfs 扩容 400M → 1500M ##########"
-rm -f "$T" "$T".diskedit.*; truncate -s 2G "$T"
+rm -f "$T" "$T"$SIDECAR_GLOB; truncate -s 2G "$T"
 $B new "$T" --yes >/dev/null
 $B create "$T" --size 400M --name b --fs btrfs; echo "create exit=$?"
 LD=$(lo_attach "$T")
@@ -44,7 +44,7 @@ lo_detach "$LD"; sgdisk -v "$T" >/dev/null 2>&1 && echo "sgdisk clean" || { echo
 
 echo
 echo "########## C: ntfs 搬移（HiddenSectors 修复） ##########"
-rm -f "$T" "$T".diskedit.*; truncate -s 1G "$T"
+rm -f "$T" "$T"$SIDECAR_GLOB; truncate -s 1G "$T"
 $B new "$T" --yes >/dev/null
 $B create "$T" --size 200M --name n --fs ntfs; echo "create exit=$?"
 $B create "$T" --size 200M --name filler --fs ext4 >/dev/null
@@ -80,7 +80,7 @@ IMGD=/var/tmp/t20d.img
 D2=/var/tmp/t20d2.img
 track_file "$IMGD"
 track_file "$D2"
-rm -f "$IMGD" "$IMGD".diskedit.* "$D2" "$D2".diskedit.* /var/tmp/t20d*.img* 2>/dev/null
+rm -f "$IMGD" "$IMGD"$SIDECAR_GLOB "$D2" "$D2"$SIDECAR_GLOB /var/tmp/t20d*.img* 2>/dev/null
 truncate -s 1G "$IMGD"
 $B new "$IMGD" --yes >/dev/null
 $B add "$IMGD" --start 2048 --end 1044479 --name btrmd >/dev/null

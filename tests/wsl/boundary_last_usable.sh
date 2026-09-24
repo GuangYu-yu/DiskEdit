@@ -12,7 +12,7 @@ p1_last() { # p1 的 last_lba
   $B info "$T" | grep -o '"num":1,[^}]*}' | grep -o '"last_lba":[0-9]*' | cut -d: -f2
 }
 
-rm -f "$T" "$T".diskedit.* 2>/dev/null
+rm -f "$T" "$T"$SIDECAR_GLOB 2>/dev/null
 truncate -s 1G "$T"
 
 echo "== new（1GiB）=="

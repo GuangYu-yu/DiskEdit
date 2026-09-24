@@ -12,10 +12,10 @@ cleanup_hook() { rm -f /var/lib/diskedit/* 2>/dev/null; }
 T=/var/tmp/t26.img
 track_file "$T"
 
-rm -f "$T" "$T".diskedit.* 2>/dev/null
+rm -f "$T" "$T"$SIDECAR_GLOB 2>/dev/null
 
 mk() { # $1=fs  $2=size
-  rm -f "$T" "$T".diskedit.*
+  rm -f "$T" "$T"$SIDECAR_GLOB
   truncate -s 1G "$T"
   $B new "$T" --yes >/dev/null
   $B create "$T" --size "$2" --name p1 --fs "$1" >/dev/null 2>&1

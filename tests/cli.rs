@@ -4,6 +4,20 @@
 use std::io::Cursor;
 use std::process::Command;
 
+/// 落盘伴随文件名的词表：与 `src/dev.rs` 的同名常量同值。集成测试是独立 crate，
+/// 取不到 crate 内的常量，故在这里复写一份——改拼法时两处一起改（src 侧有
+/// `dev::tests::artifact_names_are_pinned_as_documented` 会提醒）
+const JOURNAL_SUFFIX: &str = ".diskedit.journal";
+const CHECKPOINT_SUFFIX: &str = ".diskedit.ckpt";
+const LOCK_SUFFIX: &str = ".diskedit.lock";
+/// abandon 的改写名（同 `src/cmd/abandon.rs` 的 ABANDONED_SUFFIX）
+const ABANDONED_SUFFIX: &str = ".abandoned";
+
+/// 目标旁边的伴随文件：`dir` 下的 `<name><suffix>`
+fn sidecar(dir: &std::path::Path, name: &str, suffix: &str) -> std::path::PathBuf {
+    dir.join(format!("{name}{suffix}"))
+}
+
 fn fixture_gpt_image(path: &std::path::Path) {
     let ss = 512u64;
     let data = vec![0u8; 100 * ss as usize];
@@ -193,7 +207,7 @@ fn journal_lifecycle_and_table_undo() {
     std::fs::write(&img, vec![0u8; 8 * 1024 * 1024]).unwrap();
     let exe = env!("CARGO_BIN_EXE_DiskEdit");
     let img_s = img.to_str().unwrap();
-    let journal = dir.join("j.img.diskedit.journal");
+    let journal = sidecar(&dir, "j.img", JOURNAL_SUFFIX);
     let run = |args: &[&str]| -> (i32, String) {
         let out = Command::new(exe).args(args).output().unwrap();
         (out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stderr).into_owned())
@@ -304,8 +318,8 @@ fn pending_recovery_blocks_unjournaled_writers_and_empty_shell_is_not_corruption
     std::fs::write(&img, vec![0u8; 8 * 1024 * 1024]).unwrap();
     let exe = env!("CARGO_BIN_EXE_DiskEdit");
     let img_s = img.to_str().unwrap();
-    let journal = dir.join("p.img.diskedit.journal");
-    let ckpt = dir.join("p.img.diskedit.ckpt");
+    let journal = sidecar(&dir, "p.img", JOURNAL_SUFFIX);
+    let ckpt = sidecar(&dir, "p.img", CHECKPOINT_SUFFIX);
     let run = |args: &[&str]| -> (i32, String) {
         let out = Command::new(exe).args(args).output().unwrap();
         (out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stderr).into_owned())
@@ -1417,7 +1431,7 @@ fn target_lock_serializes_writers_and_a_stale_lock_file_is_harmless() {
     std::fs::write(&img, vec![0u8; 8 * 1024 * 1024]).unwrap();
     let exe = env!("CARGO_BIN_EXE_DiskEdit");
     let img_s = img.to_str().unwrap();
-    let lock = dir.join("t.img.diskedit.lock");
+    let lock = sidecar(&dir, "t.img", LOCK_SUFFIX);
     let run = |args: &[&str]| -> (i32, String, String) {
         let out = Command::new(exe).args(args).output().unwrap();
         (
@@ -1467,8 +1481,8 @@ fn abandon_releases_recovery_state_idempotently_and_converges() {
     std::fs::write(&img, vec![0u8; 8 * 1024 * 1024]).unwrap();
     let exe = env!("CARGO_BIN_EXE_DiskEdit");
     let img_s = img.to_str().unwrap();
-    let journal = dir.join("a.img.diskedit.journal");
-    let ckpt = dir.join("a.img.diskedit.ckpt");
+    let journal = sidecar(&dir, "a.img", JOURNAL_SUFFIX);
+    let ckpt = sidecar(&dir, "a.img", CHECKPOINT_SUFFIX);
     let run = |args: &[&str]| -> (i32, String, String) {
         let out = Command::new(exe).args(args).output().unwrap();
         (
@@ -1510,7 +1524,7 @@ fn abandon_releases_recovery_state_idempotently_and_converges() {
     std::fs::write(&journal, b"not a diskedit journal at all").unwrap();
     std::fs::write(&ckpt, b"stale checkpoint bytes").unwrap();
     // 顺带钉住"固定落点"这一条：上一次 abandon 的残骸就在那儿，这次必须能覆盖它
-    let journal_abandoned = dir.join("a.img.diskedit.journal.abandoned");
+    let journal_abandoned = dir.join(format!("a.img{JOURNAL_SUFFIX}{ABANDONED_SUFFIX}"));
     std::fs::write(&journal_abandoned, b"left over from an earlier abandon").unwrap();
 
     let (c, o, e) = run(&["abandon", img_s, "--yes"]);
@@ -1520,7 +1534,7 @@ fn abandon_releases_recovery_state_idempotently_and_converges() {
     assert!(!journal.exists(), "the journal must leave its active name");
     assert!(!ckpt.exists(), "the checkpoint must leave its active name");
     assert!(journal_abandoned.exists(), "the journal must land on the fixed .abandoned name");
-    assert!(dir.join("a.img.diskedit.ckpt.abandoned").exists(), "same for the checkpoint");
+    assert!(dir.join(format!("a.img{CHECKPOINT_SUFFIX}{ABANDONED_SUFFIX}")).exists(), "same for the checkpoint");
     assert_eq!(std::fs::read(&img).unwrap(), before, "abandon must not touch a byte of the target");
 
     // 现场没了 ⇒ 目标重新可用（断言针对措辞；30 也可能来自工具链缺失等别的拒绝）
@@ -1536,7 +1550,7 @@ fn abandon_releases_recovery_state_idempotently_and_converges() {
     let (c, _, e) = run_no_mkfs(&["create", img_s, "--size", "1M", "--fs", "ext4"]);
     assert_eq!(c, 20, "{e}");
     std::fs::write(&ckpt, b"stale checkpoint bytes").unwrap();
-    std::fs::rename(&ckpt, dir.join("a.img.diskedit.ckpt.abandoned")).unwrap(); // 已转换完的那一份
+    std::fs::rename(&ckpt, dir.join(format!("a.img{CHECKPOINT_SUFFIX}{ABANDONED_SUFFIX}"))).unwrap(); // 已转换完的那一份
     let (c, o, e) = run(&["abandon", img_s, "--yes"]);
     assert_eq!(c, 0, "abandon must converge on the rest: {e}");
     assert!(o.contains("abandoned 1 recovery record(s)"), "only the leftover is still active: {o}");
@@ -1546,7 +1560,7 @@ fn abandon_releases_recovery_state_idempotently_and_converges() {
     // ⇒ 收敛即成功：删掉原文件，绝不覆盖那份副本
     let (c, _, e) = run_no_mkfs(&["create", img_s, "--size", "1M", "--fs", "ext4"]);
     assert_eq!(c, 20, "{e}");
-    let j_abandoned = dir.join("a.img.diskedit.journal.abandoned");
+    let j_abandoned = dir.join(format!("a.img{JOURNAL_SUFFIX}{ABANDONED_SUFFIX}"));
     let _ = std::fs::remove_file(&j_abandoned);
     std::fs::hard_link(&journal, &j_abandoned).unwrap();
     assert!(journal.exists() && j_abandoned.exists(), "the fixture is the leftover state");
@@ -1572,7 +1586,7 @@ fn abandon_releases_recovery_state_idempotently_and_converges() {
         "the existing artifact must be untouched"
     );
     assert!(
-        dir.join("a.img.diskedit.journal.abandoned.2").exists(),
+        dir.join(format!("a.img{JOURNAL_SUFFIX}{ABANDONED_SUFFIX}.2")).exists(),
         "the released record must land on the fallback name"
     );
 
@@ -1777,7 +1791,7 @@ mod crash_recovery {
         let img_s = img.to_str().unwrap();
         assert_eq!(run(&["new", img_s, "--yes"]).0, 0);
         assert_eq!(run(&["add", img_s, "--start", "2048", "--end", "4095"]).0, 0);
-        (img, dir.join("c.img.diskedit.journal"), dir.join("c.img.diskedit.ckpt"))
+        (img, sidecar(&dir, "c.img", JOURNAL_SUFFIX), sidecar(&dir, "c.img", CHECKPOINT_SUFFIX))
     }
 
     /// `resize-part`：数据已搬、表项未提交时崩溃。它留了 ckpt ⇒ 出路是**重跑原命令续跑**
@@ -1886,8 +1900,8 @@ mod crash_recovery {
         assert_eq!(run(&["new", img_s, "--yes"]).0, 0);
         assert_eq!(run(&["add", img_s, "--start", "2048", "--end", "4095"]).0, 0);
         assert_eq!(run(&["add", img_s, "--start", "4096", "--end", "6143"]).0, 0);
-        let journal = dir.join("s.img.diskedit.journal");
-        let ckpt = dir.join("s.img.diskedit.ckpt");
+        let journal = sidecar(&dir, "s.img", JOURNAL_SUFFIX);
+        let ckpt = sidecar(&dir, "s.img", CHECKPOINT_SUFFIX);
 
         // ① 精确 SIZE 作业（最小位移 plan）中断
         let size_argv = ["resize", target.as_str(), "+3M", "--allow-move", "--yes"];

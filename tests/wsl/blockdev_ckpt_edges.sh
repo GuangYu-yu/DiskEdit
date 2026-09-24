@@ -11,15 +11,15 @@ T=/var/tmp/t19.img
 cleanup_hook() {
   local f
   for f in /var/tmp/t19.img /var/tmp/t19b.img; do
-    rm -f "$f" "$f".diskedit.* 2>/dev/null
+    rm -f "$f" "$f"$SIDECAR_GLOB 2>/dev/null
   done
-  rm -f /var/lib/diskedit/*.ckpt 2>/dev/null
+  rm -f /var/lib/diskedit/*$LEGACY_CKPT_SUFFIX 2>/dev/null
 }
 
 track_file "$T"
 
 mk1() { # 1G: p1 100M p2 100M p3 200M
-  rm -f "$T" "$T".diskedit.*; rm -f /var/lib/diskedit/*.ckpt
+  rm -f "$T" "$T"$SIDECAR_GLOB; rm -f /var/lib/diskedit/*$LEGACY_CKPT_SUFFIX
   truncate -s 1G "$T"
   $B new "$T" --yes >/dev/null
   $B create "$T" --size 100M --name p1 --fs ext4 >/dev/null
@@ -36,9 +36,9 @@ for kind in trunc junk magic; do
   M2=$(md5sum "${LD}p2" | cut -d' ' -f1); lo_detach "$LD"
   DISKEDIT_FAULT=rs-chunk:40 $BF move "$T":2 --start 900000 --chunk-size 1 >/dev/null 2>&1
   case $kind in
-    trunc) head -c 40 "$T.diskedit.ckpt" > "$T.ckpt.new" && mv "$T.ckpt.new" "$T.diskedit.ckpt" ;;
-    junk)  printf 'GARBAGE-TAIL-XXXX' >> "$T.diskedit.ckpt" ;;
-    magic) printf 'XXXX' | dd of="$T.diskedit.ckpt" bs=1 seek=0 conv=notrunc 2>/dev/null ;;
+    trunc) head -c 40 "$T$CKPT_SUFFIX" > "$T.ckpt.new" && mv "$T.ckpt.new" "$T$CKPT_SUFFIX" ;;
+    junk)  printf 'GARBAGE-TAIL-XXXX' >> "$T$CKPT_SUFFIX" ;;
+    magic) printf 'XXXX' | dd of="$T$CKPT_SUFFIX" bs=1 seek=0 conv=notrunc 2>/dev/null ;;
   esac
   OUT=$($B move "$T":2 --start 900000 --chunk-size 1 2>&1); E=$?
   RS=$(echo "$OUT" | grep -oc "resuming at chunk")
@@ -86,7 +86,7 @@ echo "mib : $($B info "$T" | grep -o '"num":2,"first_lba":[0-9]*')  (期望 9011
 echo
 echo "########## E: 边界（128 分区上限） ##########"
 T2=/var/tmp/t19b.img; T=$T2
-rm -f "$T" "$T".diskedit.*
+rm -f "$T" "$T"$SIDECAR_GLOB
 truncate -s 1G "$T"
 $B new "$T" --yes >/dev/null
 OK=0

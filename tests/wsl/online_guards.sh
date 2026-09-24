@@ -15,7 +15,7 @@ fs_bytes() { # 设备：Block count × Block size
 }
 lba1() { $B info "$T" 2>/dev/null | grep -o '"last_lba":[0-9]*' | head -1; }
 
-rm -f "$T" "$T.diskedit.journal"
+rm -f "$T" "$T$JOURNAL_SUFFIX"
 truncate -s 64M "$T"
 $B new "$T" --yes >/dev/null 2>&1; exp $? 0 "new（64MiB GPT）"
 $B create "$T" --size 16M --name p1 --fs ext4 >/dev/null 2>&1; exp $? 0 "create 16MiB ext4 p1"

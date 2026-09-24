@@ -9,7 +9,7 @@ cleanup_hook() { rm -f /var/lib/diskedit/* 2>/dev/null; }
 
 T=/var/tmp/diskedit_test4.img
 track_file "$T"
-rm -f "$T" "$T".diskedit.* 2>/dev/null
+rm -f "$T" "$T"$SIDECAR_GLOB 2>/dev/null
 
 truncate -s 64M "$T"
 

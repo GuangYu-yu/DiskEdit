@@ -10,7 +10,7 @@ cleanup_hook() { rm -f /var/tmp/diskedit_test13*.img* 2>/dev/null; }
 rm -f /var/tmp/diskedit_test13*.img* 2>/dev/null
 track_file "$T"
 
-rm -f "$T" "$T".diskedit.*
+rm -f "$T" "$T"$SIDECAR_GLOB
 truncate -s 2G "$T"
 $B new "$T" --yes || exit 1
 $B create "$T" --size 900M --name big --fs ext4
@@ -28,7 +28,7 @@ $B resize-part "$T":1 --start 104448 --end 1947647 --chunk-size 1 &
 PID=$!
 sleep 1
 kill -9 $PID 2>/dev/null; wait $PID 2>/dev/null
-[ -f "$T.diskedit.ckpt" ] && echo "checkpoint exists: yes" || echo "checkpoint exists: NO (may have finished)"
+[ -f "$T$CKPT_SUFFIX" ] && echo "checkpoint exists: yes" || echo "checkpoint exists: NO (may have finished)"
 
 echo "== 重跑同一命令 → 续传 =="
 $B resize-part "$T":1 --start 104448 --end 1947647 --chunk-size 1; echo "exit=$?"
@@ -44,7 +44,7 @@ sgdisk -v "$T" | tail -2
 
 echo "== shift 路径中断恢复 =="
 T2=/var/tmp/diskedit_test13b.img
-rm -f "$T2" "$T2".diskedit.*
+rm -f "$T2" "$T2"$SIDECAR_GLOB
 truncate -s 1G "$T2"
 $B new "$T2" --yes
 $B create "$T2" --size 500M --name a
@@ -60,7 +60,7 @@ $B resize "$T2":1 +100M --allow-move --yes --chunk-size 1 &
 PID=$!
 sleep 0.5
 kill -9 $PID 2>/dev/null; wait $PID 2>/dev/null
-[ -f "$T2.diskedit.ckpt" ] && echo "checkpoint exists: yes" || echo "checkpoint exists: NO (may have finished)"
+[ -f "$T2$CKPT_SUFFIX" ] && echo "checkpoint exists: yes" || echo "checkpoint exists: NO (may have finished)"
 $B resize "$T2":1 +100M --allow-move --yes --chunk-size 1; echo "resume exit=$?"
 LD=$(lo_attach "$T2")
 MD2_AFTER=$(md5sum "${LD}p2" | cut -d' ' -f1)

@@ -5,7 +5,7 @@ require_fault_bin
 
 mk_layout() { # $1=img $2=extra create args...
   local T=$1; shift
-  rm -f "$T" "$T".diskedit.*
+  rm -f "$T" "$T"$SIDECAR_GLOB
   truncate -s 2G "$T"
   $BF new "$T" --yes >/dev/null
   $BF create "$T" --size 500M --name p1 >/dev/null
@@ -75,7 +75,7 @@ $B info "$T"
 T=/var/tmp/diskedit_t16c.img
 track_file "$T"
 echo "===== C: swap 挡路分支 + after-swap-entry ====="
-rm -f "$T" "$T".diskedit.*
+rm -f "$T" "$T"$SIDECAR_GLOB
 truncate -s 1G "$T"
 $BF new "$T" --yes >/dev/null
 $BF create "$T" --size 300M --name p1 >/dev/null
@@ -103,7 +103,7 @@ T=/var/tmp/diskedit_t16d.img
 track_file "$T"
 echo
 echo "===== D: 自重叠搬移（delta 100M < len 300M）+ chunk 注入 ====="
-rm -f "$T" "$T".diskedit.*
+rm -f "$T" "$T"$SIDECAR_GLOB
 truncate -s 1G "$T"
 $BF new "$T" --yes >/dev/null
 $BF create "$T" --size 400M --name p1 >/dev/null

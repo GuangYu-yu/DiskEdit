@@ -7,7 +7,7 @@ T=/var/tmp/t21.img
 track_file "$T"
 
 mk() {
-  rm -f "$T" "$T".diskedit.*; truncate -s 1G "$T"
+  rm -f "$T" "$T"$SIDECAR_GLOB; truncate -s 1G "$T"
   $B new "$T" --yes >/dev/null
   $B create "$T" --size 100M --name p1 --fs ext4 >/dev/null
   $B create "$T" --size 100M --name p2 --fs ext4 >/dev/null
