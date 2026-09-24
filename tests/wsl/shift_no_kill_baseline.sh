@@ -7,7 +7,7 @@ T=/var/tmp/diskedit_test14.img
 
 track_file "$T"
 
-rm -f "$T" "$T".diskedit.*
+rm -f "$T" "$T"$SIDECAR_GLOB
 truncate -s 1G "$T"
 $B new "$T" --yes
 $B create "$T" --size 500M --name a

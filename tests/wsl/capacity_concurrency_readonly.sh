@@ -8,10 +8,10 @@ cleanup_hook() { rm -f /var/lib/diskedit/* 2>/dev/null; }
 T=/var/tmp/t30.img
 track_file "$T"
 
-rm -f "$T" "$T".diskedit.* 2>/dev/null
+rm -f "$T" "$T"$SIDECAR_GLOB 2>/dev/null
 
 echo "===== A: 3TiB GPT（稀疏镜像，秒级） ====="
-rm -f "$T" "$T".diskedit.*
+rm -f "$T" "$T"$SIDECAR_GLOB
 truncate -s 3T "$T"; ls -lh "$T" | awk '{print "sparse 占用:", $5}'
 $B new "$T" --yes >/dev/null; echo "new exit=$?"
 # 3TiB = 6442450944 扇区；last_usable = 6442450944 - 34 = 6442450910
@@ -27,7 +27,7 @@ echo " <- 期望 EFI PART"
 
 echo
 echo "===== B: 只读 loop → 写操作拒绝且不改盘 ====="
-rm -f "$T" "$T".diskedit.*
+rm -f "$T" "$T"$SIDECAR_GLOB
 truncate -s 64M "$T"
 $B new "$T" --yes >/dev/null
 # add 只建表项，不建文件系统（无 --fs 旗标）；格式化由下一行的 mkfs.ext4 显式完成
@@ -61,7 +61,7 @@ lo_detach "$LD"
 
 echo
 echo "===== C: 同镜像并发 move ====="
-rm -f "$T" "$T".diskedit.*
+rm -f "$T" "$T"$SIDECAR_GLOB
 truncate -s 512M "$T"
 $B new "$T" --yes >/dev/null
 $B add "$T" --start 2048 --end 206847 --name p1 >/dev/null && $B mkfs "$T":1 ext4 --yes >/dev/null
@@ -83,7 +83,7 @@ P2=$!
 wait $P1; E1=$?
 wait $P2; E2=$?
 echo "concurrent exits: $E1 / $E2"
-echo "ckpt: $([ -f "$T.diskedit.ckpt" ] && echo present || echo absent)"
+echo "ckpt: $([ -f "$T$CKPT_SUFFIX" ] && echo present || echo absent)"
 $B move "$T":2 --start 250000 --chunk-size 1 >/dev/null 2>&1; echo "settle rerun exit=$?"
 LD=$(lo_attach "$T")
 if [ -z "$MD" ]; then

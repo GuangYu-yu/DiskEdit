@@ -30,7 +30,7 @@ fs_bytes() { dumpe2fs -h "/dev/$1/$2" 2>/dev/null | awk '/^Block count:/ {print 
 # ---- 场景一：块设备 PV，VG 内两个 LV ----
 IMG=/var/tmp/t31a.img
 track_file "$IMG"
-rm -f "$IMG" "$IMG".diskedit.* 2>/dev/null
+rm -f "$IMG" "$IMG"$SIDECAR_GLOB 2>/dev/null
 # 128M：p1 80M +16M 的扩容终点（起始间隙 1MiB + 97MiB）必须装得下，
 # 否则多 LV 拒绝用例会被"尺寸溢出"歪打正着地拒绝、--lv 链路在 grow 时超盘被拒
 truncate -s 128M "$IMG"
@@ -81,12 +81,12 @@ vgchange -an "$VG" >/dev/null 2>&1
 vgremove -ff "$VG" >/dev/null || fail "vgremove $VG failed"
 lo_detach "$LOOP" || fail "lo_detach $LOOP failed"; LOOP=
 VG=
-rm -f "$IMG" "$IMG".diskedit.*; IMG=
+rm -f "$IMG" "$IMG"$SIDECAR_GLOB; IMG=
 
 # ---- 场景二：镜像内 PV（losetup 临时映射路径）----
 IMG2=/var/tmp/t31b.img
 track_file "$IMG2"
-rm -f "$IMG2" "$IMG2".diskedit.* 2>/dev/null
+rm -f "$IMG2" "$IMG2"$SIDECAR_GLOB 2>/dev/null
 truncate -s 64M "$IMG2"
 $B new "$IMG2" --yes >/dev/null || fail "new $IMG2 failed"
 $B create "$IMG2" --size 48M >/dev/null || fail "create $IMG2 failed"
@@ -108,6 +108,6 @@ pv_after=$(pvs --noheadings --units b --nosuffix -o pv_size "${LOOP2}p1" | tr -d
 vgremove -ff "$VG" >/dev/null || fail "vgremove $VG failed"
 lo_detach "$LOOP2"; LOOP2=
 VG=
-rm -f "$IMG2" "$IMG2".diskedit.*; IMG2=
+rm -f "$IMG2" "$IMG2"$SIDECAR_GLOB; IMG2=
 
 echo "GATE PASS: all LVM chain cases verified"

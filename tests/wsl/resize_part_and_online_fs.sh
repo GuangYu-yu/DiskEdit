@@ -11,7 +11,7 @@ fs_bytes() { # $1=设备：Block count × Block size
   dumpe2fs -h "$1" 2>/dev/null | awk '/^Block count:/ {c=$3} /^Block size:/ {s=$3} END {print c*s}'
 }
 
-rm -f "$T" "$T".diskedit.* 2>/dev/null
+rm -f "$T" "$T"$SIDECAR_GLOB 2>/dev/null
 truncate -s 64M "$T"
 
 echo "== new + create p1（16MiB ext4）=="

@@ -8,10 +8,10 @@ cleanup_hook() { rm -f /var/lib/diskedit/* 2>/dev/null; }
 T=/var/tmp/t25.img
 track_file "$T"
 
-rm -f "$T" "$T".diskedit.* 2>/dev/null
+rm -f "$T" "$T"$SIDECAR_GLOB 2>/dev/null
 
 mk1() { # $1 = fs, $2 = size (默认 400M；FAT32 需 ≥512MB)
-  rm -f "$T" "$T".diskedit.*
+  rm -f "$T" "$T"$SIDECAR_GLOB
   truncate -s 1G "$T"
   $B new "$T" --yes >/dev/null
   $B create "$T" --size "${2:-400M}" --name p1 --fs "$1" >/dev/null 2>&1
@@ -70,7 +70,7 @@ lo_detach "$LD"
 
 echo
 echo "########## D: 4+ 分区复杂布局（ESP + MSR + Linux + recovery）搬移 ##########"
-rm -f "$T" "$T".diskedit.*
+rm -f "$T" "$T"$SIDECAR_GLOB
 truncate -s 2G "$T"
 $B new "$T" --yes >/dev/null
 # ESP 200M / MSR 16M / Linux 300M / recovery(NTFS) 500M
@@ -115,7 +115,7 @@ mksquashfs "$SQSRC" "$SQIMG" -noappend >/dev/null 2>&1; echo "mksquashfs exit=$?
 BU=$(od -An -tu8 -j 40 -N8 "$SQIMG" | tr -d ' ')
 OFF=$(( (BU + 65535) / 65536 * 65536 ))
 echo "squashfs bytes_used=$BU overlay_off=$OFF"
-rm -f "$T" "$T".diskedit.*
+rm -f "$T" "$T"$SIDECAR_GLOB
 truncate -s 512M "$T"
 $B new "$T" --yes >/dev/null
 $B add "$T" --start 2048 --end 524287 --name rootfs >/dev/null
@@ -157,7 +157,7 @@ BLKSZ=$(od -An -tu1 -j 1036 -N1 "$ERIMG" | tr -d ' ')
 NBLK=$(od -An -tu4 -j 1060 -N4 "$ERIMG" | tr -d ' ')
 OFF=$(( ((NBLK << BLKSZ) + 65535) / 65536 * 65536 ))
 echo "erofs blkszbits=$BLKSZ blocks=$NBLK overlay_off=$OFF"
-rm -f "$T" "$T".diskedit.*
+rm -f "$T" "$T"$SIDECAR_GLOB
 truncate -s 512M "$T"
 $B new "$T" --yes >/dev/null
 $B add "$T" --start 2048 --end 524287 --name rootfs >/dev/null

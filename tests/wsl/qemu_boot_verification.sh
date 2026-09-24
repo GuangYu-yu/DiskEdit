@@ -14,7 +14,7 @@ INITRD=/var/tmp/initramfs-virt
 OVMF=/usr/share/ovmf/OVMF.fd
 track_file "$T"
 
-rm -f "$T" "$T".diskedit.* "$LOG".* 2>/dev/null
+rm -f "$T" "$T"$SIDECAR_GLOB "$LOG".* 2>/dev/null
 
 cleanup_hook() {
   rm -f /var/lib/diskedit/* 2>/dev/null

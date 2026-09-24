@@ -23,6 +23,15 @@ _bin_dir=${1:-${DISKEDIT_BIN_DIR:-$_repo_root/tmp}}
 B=$_bin_dir/DiskEdit
 BF=$_bin_dir/DiskEdit-fault
 
+# 落盘伴随文件后缀：与 src/dev.rs 的词表同名同值，改一处要一起改。
+# SIDECAR_GLOB 是"整族伴随文件"的清理通配（故意不含引号，靠 shell 路径展开）；
+# LEGACY_CKPT_SUFFIX 是旧版按 GPT Disk GUID 命名的 checkpoint 后缀。
+JOURNAL_SUFFIX=.diskedit.journal
+CKPT_SUFFIX=.diskedit.ckpt
+LOCK_SUFFIX=.diskedit.lock
+SIDECAR_GLOB=.diskedit.*
+LEGACY_CKPT_SUFFIX=.ckpt
+
 rc=0
 
 require_bin() {
@@ -161,7 +170,7 @@ cleanup_all() {
     # 额外收尾放在资源释放之后：hook 常依赖「已卸载/loop 已释放」的前置
     declare -F cleanup_hook >/dev/null && cleanup_hook
     for x in ${_TRACK_FILES[@]+"${_TRACK_FILES[@]}"}; do
-        rm -f "$x" "$x".diskedit.* 2>/dev/null
+        rm -f "$x" "$x"$SIDECAR_GLOB 2>/dev/null
     done
 }
 trap cleanup_all EXIT
