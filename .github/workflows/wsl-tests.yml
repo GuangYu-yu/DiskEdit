@@ -1,0 +1,43 @@
+name: Linux 全量回归
+
+# tests/wsl 套件：losetup/mount/loop 设备需要 root 与真实内核，runner 的
+# ubuntu VM 直接满足；QEMU 引导验证用 TCG 软件模拟（标准 runner 无 /dev/kvm）。
+# 手动触发，避免每次 push 都跑约数十分钟的完整套件
+on:
+  workflow_dispatch:
+
+jobs:
+  suite:
+    name: tests/wsl 全量回归
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: 安装 Rust 工具链
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: 安装外部工具依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            e2fsprogs xfsprogs btrfs-progs dosfstools exfatprogs ntfs-3g \
+            f2fs-tools squashfs-tools erofs-utils gdisk lvm2 \
+            qemu-system-x86 ovmf grub-efi-amd64-bin efibootmgr
+
+      - name: 下载 Alpine netboot 内核（qemu 引导验证用）
+        run: |
+          base=https://dl-cdn.alpinelinux.org/alpine/v3.22/releases/x86_64/netboot
+          curl -fsSL -o /var/tmp/vmlinuz-virt "$base/vmlinuz-virt"
+          curl -fsSL -o /var/tmp/initramfs-virt "$base/initramfs-virt"
+
+      - name: 构建普通版与故障注入版
+        run: |
+          mkdir -p bins
+          cargo build --release
+          cp target/release/DiskEdit bins/DiskEdit
+          cargo build --release --features test-faults
+          cp target/release/DiskEdit bins/DiskEdit-fault
+
+      - name: 运行全量套件（root）
+        run: sudo env DISKEDIT_BIN_DIR="$GITHUB_WORKSPACE/bins" bash tests/wsl/run_all.sh
