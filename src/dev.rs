@@ -10,6 +10,12 @@
 //!
 //! `TargetIdentity` 经两个具名构造取得：`resolve_image(path)` 恒成功；
 //! `resolve_block(path)` 解析不出设备拓扑即失败——块设备身份拒绝任何退化路径。
+//!
+//! 身份一律是**盘级**的：分区号属于操作与校验，不进落盘键。loop 设备的身份是
+//! backing 文件的 realpath（Linux；`/dev/loop0:2` 与直接以该镜像为目标的操作由此
+//! 收敛到同一序列化域），非 loop 块设备仍是 sysfs 拓扑键，镜像路径 canonicalize
+//! 后与 loop 侧对齐。两个列表的首项都是写入位置，其后是历史命名候选：只用于发现，
+//! 发现后仍走完整校验；不做文件改名迁移。
 
 use std::fs::{File, OpenOptions};
 use std::io;
@@ -54,17 +60,21 @@ pub(crate) fn state_dir() -> PathBuf {
     }
 }
 
-/// 目标身份：撤销窗口与续传现场共用的命名空间。
-/// 镜像以用户给定的路径为身份——不做 canonicalize，身份语义与用户看到的目标一致；
-/// 块设备以**设备层**持久 ID 为身份：盘上 metadata 里的 GPT Disk GUID 会随表损坏而
-/// 不可读，因此它只作恢复 alias，不能当设备本体身份。
+/// 目标身份：撤销窗口与续传现场共用的命名空间。**盘级**：分区号属于操作与校验，
+/// 不进落盘键，`img:2` 与对应分区节点由此共享同一现场。
+/// 镜像以 canonicalize 后的 realpath 为身份（Linux；loop 设备的 backing 侧用同一规则，
+/// 两种目标表示由此收敛），realpath 取不到（cleanup 路径上文件已删）退到字面路径；
+/// 非 Linux 无 loop、不 canonicalize（Windows 上 canonicalize 产生 `\\?\` verbatim
+/// 路径，v1 不引入这套语义）。块设备以设备层拓扑键为身份；loop 设备例外——身份是
+/// backing 文件本身，现场落镜像兄弟文件。
 ///
-/// 两个列表的首项都是写入位置，其后是历史命名（升级前的版本写下的那份）：查找按序取
-/// 首个有效者、不扫描；两份有效候选同时存在即报歧义，不猜
+/// 候选列表的首项是写入位置，其后是历史命名（旧版本写下的那份）：查找按序取首个
+/// 有效者、不扫描；两份有效候选同时存在即报歧义，不猜
 #[derive(Clone, Debug)]
 pub struct TargetIdentity {
     kind: TargetKind,
-    /// 用户给出的目标路径：镜像直接用它拼同名兄弟文件，块设备只取其文件名作无表时的日志名
+    /// 用户可见的目标路径：镜像日志沿用它的既有命名（canonicalize 不打断日志连续性），
+    /// 块设备只取其文件名作无表时的日志名
     base: PathBuf,
     journal: Vec<PathBuf>,
     checkpoint: Vec<PathBuf>,
@@ -72,6 +82,9 @@ pub struct TargetIdentity {
     /// 派生到 `state_dir()` 下。类型上没有"没有锁落点"这一状态——取不到锁就是拒绝，
     /// 不存在无锁继续跑的路径
     lock: PathBuf,
+    /// 旧版按块设备语义（kind == Block）写下的 GUID 命名 checkpoint 是否可能存在。
+    /// loop 归一后本身份已是 Image kind，但历史落点按 Block 规则生成，枚举时需补列
+    legacy_guid_checkpoints: bool,
 }
 
 /// 只用于区分历史命名约定：块设备另有 GUID / devname 两份历史落点，镜像没有
@@ -86,10 +99,11 @@ enum TargetKind {
 /// 故本层只回答"最强的可用身份"，链尾恒有 devname + 容量兜底。
 ///
 /// `dm/name` 是 DM 自己的退路（映射名，改名即变），不是全局物理身份，故只排在
-/// `dm/uuid` 之后；`wwid` 及其后的条目才是跨设备类型通用的那几层
+/// `dm/uuid` 之后；`wwid` 及其后的条目才是跨设备类型通用的那几层。
+/// `loop/backing_file` 不在列：loop 设备在进入本链之前就走专用的 backing 身份解析
+/// （见 [`TargetIdentity::resolve_block`]），不再以属性值充当设备 ID
 #[cfg(target_os = "linux")]
-const DEVICE_ID_ATTRS: &[&str] =
-    &["dm/uuid", "dm/name", "md/uuid", "loop/backing_file", "wwid", "device/wwid", "device/serial"];
+const DEVICE_ID_ATTRS: &[&str] = &["dm/uuid", "dm/name", "md/uuid", "wwid", "device/wwid", "device/serial"];
 
 /// sysfs 属性 → 去行尾换行的值。三态必须可分：**不存在**（ENOENT）⇒ `Ok(None)`，
 /// 读失败（I/O、权限）⇒ `Err`，存在但值为空 ⇒ `Ok(Some(""))`。
@@ -133,27 +147,13 @@ fn sysfs_capacity(node: &Path) -> io::Result<u64> {
         .ok_or_else(|| io::Error::other(format!("sysfs size {v:?} overflows u64 bytes")))
 }
 
-/// 设备层身份的**两个投影**，共用同一次 sysfs 解析：
-/// - `.0`（目标自身）：分区节点带分区号，整设备就是它自己。journal / checkpoint 用它——
-///   现场归属是持久的、按分区落的
-/// - `.1`（所在整设备）：分区节点抹掉分区号。锁用它——独占权针对的是**盘**（分区表属于
-///   盘），只有盘粒度才能让"离线以分区节点为目标"与"在线对同一分区"落进同一把锁
-///
-/// 分区节点自身不携带设备身份（内核只给它 `partition` / `start` / `size`），故取父设备
-/// 的身份再附自己的分区号。父设备与分区号都来自 sysfs 拓扑——`/sys/dev/block/<maj>:<min>`
-/// 解析出的节点、它的 `partition` 属性、它的父目录——既不解析 `sda1` / `nvme0n1p1` /
-/// `dm-0p1` 这类命名，也不自己推算分区号。容量因此不参与分区身份：分区扩容只改变自己
-/// 的容量，父设备容量不受影响，撤销窗口不会在操作中途改名
-///
-/// 拓扑解析不出来时**拒绝**（fail-closed，见 [`block_keys`]）：journal / checkpoint /
-/// lock 必须落在同一个序列化域，而"调用方 devname-容量"的退化身份会让
-/// `/dev/sdb` 与 `/dev/sdb1` 得到两把锁、两个互不相干的现场命名空间
+/// 块设备节点 → sysfs 设备目录。fail-closed：节点 stat 不了或 maj:min 无对应 sysfs 项
+/// 即拒绝，绝不退到"调用方 devname-容量"——那个退化会让 `/dev/sdb` 与 `/dev/sdb1`
+/// 得到两把锁，journal / checkpoint / lock 落进两个序列化域。
+/// 错误信息带设备名，指向该查的东西。`loop/backing_file` 等属性的探测也以此为根
 #[cfg(target_os = "linux")]
-fn block_keys(path: &Path) -> io::Result<(String, String)> {
+fn sysfs_node(path: &Path) -> io::Result<PathBuf> {
     use std::os::unix::fs::MetadataExt;
-    // fail-closed：sysfs 拓扑解析不出来（节点不存在 / maj:min 无对应 sysfs 项）即拒绝，
-    // 绝不退到"调用方 devname-容量"——那个退化会让 /dev/sdb 与 /dev/sdb1 得到两把锁，
-    // journal / checkpoint / lock 落进两个序列化域。错误信息带设备名，指向该查的东西
     let deny = |why: String| {
         io::Error::new(
             io::ErrorKind::NotFound,
@@ -167,7 +167,37 @@ fn block_keys(path: &Path) -> io::Result<(String, String)> {
     };
     let meta = std::fs::metadata(path).map_err(|e| deny(e.to_string()))?;
     let sysdev = format!("/sys/dev/block/{}:{}", libc::major(meta.rdev()), libc::minor(meta.rdev()));
-    let node = std::fs::canonicalize(&sysdev).map_err(|e| deny(format!("no sysfs node at {sysdev} ({e})")))?;
+    std::fs::canonicalize(&sysdev).map_err(|e| deny(format!("no sysfs node at {sysdev} ({e})")))
+}
+
+/// 设备层身份的**两个投影**，共用同一次 sysfs 解析（`node` 即 [`sysfs_node`] 的产物）：
+/// - `.0`（目标自身）：分区节点带分区号，整设备就是它自己。旧版 journal / checkpoint
+///   按它落点——现场归属曾是持久的、按分区落的
+/// - `.1`（所在整设备）：分区节点抹掉分区号。锁用它——独占权针对的是**盘**（分区表属于
+///   盘），只有盘粒度才能让"离线以分区节点为目标"与"在线对同一分区"落进同一把锁
+///
+/// 分区节点自身不携带设备身份（内核只给它 `partition` / `start` / `size`），故取父设备
+/// 的身份再附自己的分区号。父设备与分区号都来自 sysfs 拓扑——`/sys/dev/block/<maj>:<min>`
+/// 解析出的节点、它的 `partition` 属性、它的父目录——既不解析 `sda1` / `nvme0n1p1` /
+/// `dm-0p1` 这类命名，也不自己推算分区号。容量因此不参与分区身份：分区扩容只改变自己
+/// 的容量，父设备容量不受影响，撤销窗口不会在操作中途改名
+///
+/// 拓扑解析不出来时**拒绝**（fail-closed，见 [`block_keys`]）：journal / checkpoint /
+/// lock 必须落在同一个序列化域，而"调用方 devname-容量"的退化身份会让
+/// `/dev/sdb` 与 `/dev/sdb1` 得到两把锁、两个互不相干的现场命名空间
+#[cfg(target_os = "linux")]
+fn block_keys(node: &Path, path: &Path) -> io::Result<(String, String)> {
+    let deny = |why: String| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            format!(
+                "cannot resolve block device topology for {}: {why} — refusing rather than \
+                 degrading to a devname-based identity (journal, checkpoint and lock must share \
+                 one serialization domain)",
+                path.display()
+            ),
+        )
+    };
     // 设备层身份：有 device-id 用它；没有（多数普通盘）退到 **sysfs 节点自身**的名字
     // 与容量——那是拓扑事实，与调用方给的路径无关。两者都读不出来则拒绝，不退化成
     // "名字-0"：容量进过身份键，写死 0 会在下一次成功读取时把身份改名（换序列化域）
@@ -190,7 +220,7 @@ fn block_keys(path: &Path) -> io::Result<(String, String)> {
     let part = read_sysfs_attr(&node.join("partition"))
         .map_err(|e| deny(format!("reading {}: {e}", node.join("partition").display())))?;
     let Some(part) = part else {
-        let alone = key_of(&node)?;
+        let alone = key_of(node)?;
         return Ok((alone.clone(), alone));
     };
     let n = part
@@ -235,19 +265,57 @@ fn key_token(value: &str) -> String {
 }
 
 impl TargetIdentity {
-    fn image(path: &Path) -> Self {
+    /// 镜像身份。canonical = 身份主体（journal / checkpoint / lock 落它旁边）；
+    /// literal = 用户给的路径（base，日志命名沿用既有约定）。两者不同（路径含符号链接
+    /// 或非规范化成分）时字面路径的兄弟文件降为历史候选——只用于发现，发现后照走
+    /// 完整校验；两份候选同时有效即歧义拒绝，不猜
+    fn image_at(canonical: &Path, literal: &Path) -> Self {
+        let mut journal = vec![suffix_path(canonical, ".diskedit.journal")];
+        let mut checkpoint = vec![suffix_path(canonical, ".diskedit.ckpt")];
+        if literal != canonical {
+            journal.push(suffix_path(literal, ".diskedit.journal"));
+            checkpoint.push(suffix_path(literal, ".diskedit.ckpt"));
+        }
         Self {
             kind: TargetKind::Image,
-            base: path.to_path_buf(),
-            journal: vec![suffix_path(path, ".diskedit.journal")],
-            checkpoint: vec![suffix_path(path, ".diskedit.ckpt")],
-            lock: suffix_path(path, ".diskedit.lock"),
+            base: literal.to_path_buf(),
+            journal,
+            checkpoint,
+            lock: suffix_path(canonical, ".diskedit.lock"),
+            legacy_guid_checkpoints: false,
         }
     }
 
-    /// 镜像身份：用户给的路径即身份（具名构造，`is_block` 布尔不出现在任何签名里）
+    /// 镜像身份：Linux 上取 realpath（文件不存在——cleanup 路径的常态之一——退字面
+    /// 路径），其余平台字面路径
     pub(crate) fn resolve_image(path: &Path) -> Self {
-        Self::image(path)
+        #[cfg(target_os = "linux")]
+        {
+            let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+            Self::image_at(&canonical, path)
+        }
+        #[cfg(not(target_os = "linux"))]
+        Self::image_at(path, path)
+    }
+
+    /// loop 设备的身份：backing 文件本身。现场落 backing 的兄弟文件——与直接以该
+    /// 镜像为目标的操作天然同一序列化域，这正是 loop↔image 的收敛点。
+    /// `raw` 来自 sysfs `loop/backing_file`：内核记录的 attach 时刻路径。backing 还在
+    /// （写命令的常态）⇒ 以 realpath 为主；已消失（现场比文件活得久）⇒ 退到原始路径串
+    /// 的兄弟文件——losetup 以绝对路径 attach 时那正是现场所在地；路径含符号链接时
+    /// 由此不可达，这是 v1 文档化的恢复前提（backing 须留在原 canonical path）。
+    /// 旧版身份（state_dir 下按 backing 串 token 与 devname 命名的落点）列为历史候选
+    #[cfg(target_os = "linux")]
+    fn loop_backed(dev_path: &Path, raw: PathBuf) -> Self {
+        let canonical = std::fs::canonicalize(&raw).unwrap_or_else(|_| raw.clone());
+        let mut id = Self::image_at(&canonical, &raw);
+        let tok = key_token(&raw.to_string_lossy());
+        id.journal.push(state_dir().join(format!("{tok}.diskedit.journal")));
+        id.checkpoint.push(state_dir().join(format!("{tok}.diskedit.ckpt")));
+        // 更旧的历史命名：块设备 journal 曾以 devname 命名
+        id.journal.push(state_dir().join(format!("{}.diskedit.journal", file_name_lossy(dev_path))));
+        id.legacy_guid_checkpoints = true;
+        id
     }
 
     /// 块设备身份：打开目标时解析一次，设备层拓扑取自 sysfs。
@@ -255,11 +323,20 @@ impl TargetIdentity {
     /// 绝不退到"devname-容量"的调用方身份，journal / checkpoint / lock 三者的落点
     /// 必须落在同一个序列化域。
     ///
+    /// loop 设备走专用解析：`loop/backing_file` 属性在 ⇒ 身份是 backing 文件（见
+    /// [`Self::loop_backed`]），不再以属性值充当设备 ID。读失败原样上抛；属性不存在
+    /// （含空值）按非 loop 走拓扑链
+    ///
     /// 不接收容量：容量不参与身份（分区扩容会改变自己的容量，父设备容量不受影响，
     /// 撤销窗口不该在操作中途改名）
     #[cfg(target_os = "linux")]
     pub(crate) fn resolve_block(path: &Path) -> Result<Self, String> {
-        let (self_key, disk_key) = block_keys(path).map_err(|e| e.to_string())?;
+        let node = sysfs_node(path).map_err(|e| e.to_string())?;
+        match read_sysfs_attr(&node.join("loop/backing_file")).map_err(|e| e.to_string())? {
+            Some(raw) if !raw.is_empty() => return Ok(Self::loop_backed(path, PathBuf::from(raw))),
+            _ => {}
+        }
+        let (self_key, disk_key) = block_keys(&node, path).map_err(|e| e.to_string())?;
         Ok(Self::from_block_keys(path, self_key, disk_key))
     }
 
@@ -272,27 +349,33 @@ impl TargetIdentity {
         Ok(Self::from_block_keys(path, k.clone(), k))
     }
 
-    #[cfg_attr(not(target_os = "linux"), allow(dead_code))] // 同上：非 Linux 只经 resolve_block 的测试到达
+    /// 非 loop 块设备的身份构造。**盘级**：journal / checkpoint / lock 全部按所在整设备
+    /// 派生——分区号属于操作，不进落盘键，`/dev/sdb:2`（整盘节点 + 后缀）与
+    /// `/dev/sdb2`（分区节点）由此共享同一现场，旧版按分区落的那份降为历史候选
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))] // 非 Linux 只经 resolve_block 的测试到达
     fn from_block_keys(path: &Path, self_key: String, disk_key: String) -> Self {
-        let stable = key_token(&self_key);
+        let stable = key_token(&disk_key);
         let dir = state_dir();
+        let mut journal = vec![dir.join(format!("{stable}.diskedit.journal"))];
+        let mut checkpoint = vec![dir.join(format!("{stable}.diskedit.ckpt"))];
+        if self_key != disk_key {
+            // 历史命名：旧版现场按分区落（self_key 含分区号）
+            let self_tok = key_token(&self_key);
+            journal.push(dir.join(format!("{self_tok}.diskedit.journal")));
+            checkpoint.push(dir.join(format!("{self_tok}.diskedit.ckpt")));
+        }
+        journal.push(dir.join(format!("{}.diskedit.journal", file_name_lossy(path))));
         Self {
             kind: TargetKind::Block,
             base: path.to_path_buf(),
-            journal: vec![
-                dir.join(format!("{stable}.diskedit.journal")),
-                // 历史命名：块设备的 journal 曾以 devname 命名
-                dir.join(format!("{}.diskedit.journal", file_name_lossy(path))),
-            ],
-            checkpoint: vec![dir.join(format!("{stable}.diskedit.ckpt"))],
-            // 锁按**所在整设备**派生，与 journal / checkpoint 的按目标派生刻意不同：
-            // 独占权针对盘（分区表属于盘），于是"离线以分区节点为目标"与"在线对同一分区"
-            // 落到同一把锁上；而现场归属仍按目标落，升级不会让旧 journal 找不到
-            // 落点与 journal / checkpoint 同处 state_dir、同一 key_token 编码：三者的
-            // 路径规则只有一套，不引入第二个 lock 目录。锁文件是纯运行时 artifact
-            // （重启自清也无妨），残留不构成阻挡——判据是"锁取不取得到"，不是"文件在不在"
-            // （见 targetlock）
-            lock: dir.join(format!("{}.diskedit.lock", key_token(&disk_key))),
+            journal,
+            checkpoint,
+            // 锁按**所在整设备**派生，与 journal / checkpoint 的盘级键一致：
+            // 独占权针对盘（分区表属于盘），于是"离线以分区节点为目标"与"在线对同一
+            // 分区"落到同一把锁上。锁文件是纯运行时 artifact（重启自清也无妨），残留
+            // 不构成阻挡——判据是"锁取不取得到"，不是"文件在不在"（见 targetlock）
+            lock: dir.join(format!("{stable}.diskedit.lock")),
+            legacy_guid_checkpoints: true,
         }
     }
 
@@ -319,7 +402,9 @@ impl TargetIdentity {
     /// 身份就是给定的路径本身，兄弟候选的枚举不需要目标存在。节点消失的块设备身份
     /// 不可恢复（拓扑派生），其 state_dir 下的现场随之不可达：此处无从区分两者，按
     /// 镜像回退时前者得救、后者空跑——报"nothing to abandon"而不是按错身份删候选。
-    /// 拓扑解析得出但解析失败的块设备仍返回 None（同 resolve_path 的保守方向）
+    /// 拓扑解析得出但解析失败的块设备仍返回 None（同 resolve_path 的保守方向）。
+    /// loop 设备的回退内建于 [`Self::loop_backed`]：backing 的 realpath 取不到时退到
+    /// sysfs 记录的原始路径串与 state_dir 历史落点，不因 backing 消失而失去现场
     pub(crate) fn resolve_for_cleanup(path: &Path) -> Option<Self> {
         #[cfg(target_os = "linux")]
         {
@@ -339,10 +424,6 @@ impl TargetIdentity {
     /// 独占锁的落点。恒有值：取锁失败即拒绝，不提供"没有锁落点"这种状态
     pub(crate) fn lock_path(&self) -> &Path {
         &self.lock
-    }
-
-    pub(crate) fn is_block(&self) -> bool {
-        self.kind == TargetKind::Block
     }
 
     pub(crate) fn journal_candidates(&self) -> &[PathBuf] {
@@ -371,16 +452,23 @@ impl TargetIdentity {
         state_dir().join(format!("{name}.diskedit.log"))
     }
 
-    /// checkpoint 的候选落点。块设备的历史落点以 GPT Disk GUID 命名，而 GUID 只在表
-    /// 可读时存在，读不到就没有那一条
+    /// checkpoint 的候选落点。块设备语义下的历史落点以 GPT Disk GUID 命名，而 GUID 只
+    /// 在表可读时存在，读不到就没有那一条
     pub(crate) fn checkpoint_candidates(&self, legacy_disk_guid: Option<[u8; 16]>) -> Vec<PathBuf> {
         let mut v = self.checkpoint.clone();
-        if self.kind == TargetKind::Block
+        if self.has_block_legacy_naming()
             && let Some(g) = legacy_disk_guid
         {
             v.push(state_dir().join(format!("{}.ckpt", guid_hex(&g))));
         }
         v
+    }
+
+    /// 本身份是否可能带 Block 语义的历史落点（GUID 命名的 checkpoint）。两个消费点：
+    /// checkpoint 候选补列，以及补列前打开目标读表（GUID 只在表可读时存在）。
+    /// loop 归一后身份已是 Image kind，但其历史落点按 Block 规则生成，同样适用
+    pub(crate) fn has_block_legacy_naming(&self) -> bool {
+        self.kind == TargetKind::Block || self.legacy_guid_checkpoints
     }
 }
 
@@ -1175,6 +1263,86 @@ mod tests {
             // 读不到表时退回 devname：MBR / 裸盘上没有更稳的标识
             assert_eq!(id.log_path(None), state_dir().join("sdz.diskedit.log"));
         }
+    }
+
+    /// 非 loop 块设备的身份是**盘级**的：journal / checkpoint / lock 按 disk_key 落点，
+    /// 旧版按分区落的 self_key 落点降为历史候选（整盘目标上两个键重合，不产生重复候选）。
+    /// 断言用 state_dir() 自身拼期望值——测试不改环境变量，进程内并行测试共享环境
+    #[test]
+    fn block_identity_keys_on_the_whole_disk() {
+        let id = TargetIdentity::from_block_keys(
+            Path::new("/dev/sdb1"),
+            "sdb-1234-p1".to_string(),
+            "sdb-1234".to_string(),
+        );
+        let disk_tok = key_token("sdb-1234");
+        let part_tok = key_token("sdb-1234-p1");
+        assert_eq!(id.journal[0], state_dir().join(format!("{disk_tok}.diskedit.journal")));
+        assert_eq!(id.journal[1], state_dir().join(format!("{part_tok}.diskedit.journal")));
+        assert_eq!(id.journal[2], state_dir().join("sdb1.diskedit.journal"));
+        assert_eq!(id.checkpoint[0], state_dir().join(format!("{disk_tok}.diskedit.ckpt")));
+        assert_eq!(id.checkpoint[1], state_dir().join(format!("{part_tok}.diskedit.ckpt")));
+        assert_eq!(id.lock_path(), state_dir().join(format!("{disk_tok}.diskedit.lock")));
+        assert!(id.has_block_legacy_naming());
+
+        // 整盘目标：self_key 与 disk_key 重合，不重复列同一落点
+        let id = TargetIdentity::from_block_keys(
+            Path::new("/dev/sdb"),
+            "sdb-1234".to_string(),
+            "sdb-1234".to_string(),
+        );
+        assert_eq!(id.journal.len(), 2, "whole-disk target has no partition-level legacy entry");
+        assert_eq!(id.journal[1], state_dir().join("sdb.diskedit.journal"));
+    }
+
+    /// loop 设备的身份收敛到 backing 文件：现场落 backing 的兄弟文件（首候选），旧版
+    /// state_dir 落点降为历史候选，GUID 补列开启。realpath 取不到时退到原始路径串，
+    /// 兄弟文件仍是首候选——backing 消失不等于现场不可达
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn loop_identity_converges_to_the_backing_file() {
+        let dir = std::env::temp_dir().join(format!("diskedit_loop_id_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let backing = dir.join("backing.img");
+        std::fs::write(&backing, b"x").unwrap();
+
+        let id = TargetIdentity::loop_backed(Path::new("/dev/loop0"), backing.clone());
+        assert_eq!(id.journal[0], suffix_path(&backing, ".diskedit.journal"));
+        assert_eq!(id.lock_path(), suffix_path(&backing, ".diskedit.lock"));
+        let tok = key_token(&backing.to_string_lossy());
+        assert_eq!(id.journal[1], state_dir().join(format!("{tok}.diskedit.journal")));
+        assert_eq!(id.checkpoint[1], state_dir().join(format!("{tok}.diskedit.ckpt")));
+        assert_eq!(id.journal[2], state_dir().join("loop0.diskedit.journal"));
+        assert!(id.has_block_legacy_naming());
+
+        // backing 已删：realpath 失败退回原始路径串，兄弟文件仍是首候选
+        std::fs::remove_file(&backing).unwrap();
+        let id = TargetIdentity::loop_backed(Path::new("/dev/loop0"), backing.clone());
+        assert_eq!(id.journal[0], suffix_path(&backing, ".diskedit.journal"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 镜像身份以 realpath 为主体：经符号链接打开与直接打开收敛到同一现场，字面路径
+    /// 的兄弟文件降为历史候选；日志命名沿用字面路径，不因 canonicalize 打断连续性
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn image_identity_prefers_the_realpath() {
+        let dir = std::env::temp_dir().join(format!("diskedit_img_id_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let real = dir.join("real.img");
+        std::fs::write(&real, b"x").unwrap();
+        let link = dir.join("link.img");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        let via_link = TargetIdentity::resolve_image(&link);
+        let direct = TargetIdentity::resolve_image(&real);
+        assert_eq!(via_link.journal[0], direct.journal[0], "both spellings must share one journal");
+        assert_eq!(via_link.lock_path(), direct.lock_path());
+        assert_eq!(via_link.journal[1], suffix_path(&link, ".diskedit.journal"), "literal path stays a legacy candidate");
+        assert_eq!(via_link.log_path(None), suffix_path(&link, ".diskedit.log"));
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// fail-closed：sysfs 拓扑解析不出来 ⇒ 拒绝（错误信息带设备名），不退到
