@@ -1505,6 +1505,36 @@ pub fn set_mdos_hidden(src: &mut FileSource, part: u32, on: bool) -> Result<(), 
     Ok(src.sync_all()?)
 }
 
+/// msdos：分区类型字节直改（OSIndicator，类型名域见 util-linux pt-mbr-partnames.h）。
+/// 0x00 拒绝——那是"未用条目"的形状，移除分区应走 `del`；扩展容器类型（0x05/0x0F/0x85）
+/// 双向拒绝——本工具不管理逻辑分区，把主条目改成或改成自容器类型会留下无处落位的逻辑链
+pub fn set_mdos_type(src: &mut FileSource, part: u32, t: u8) -> Result<(), Fail> {
+    if !(1..=4).contains(&part) {
+        return Err(Fail::refused("msdos supports primary slots 1..=4 only"));
+    }
+    const EXTENDED: [u8; 3] = [0x05, 0x0F, 0x85];
+    if t == 0 {
+        return Err(Fail::refused("type 0x00 marks an empty entry — use `del` to remove the partition"));
+    }
+    if EXTENDED.contains(&t) {
+        return Err(Fail::refused("extended-container types (0x05/0x0F/0x85) are not supported — logical partitions are out of scope"));
+    }
+    let ss = src.sector_size;
+    let mut lba0 = vec![0u8; ss as usize];
+    src.read_at(0, &mut lba0).map_err(Fail::infra_io)?;
+    let off = 446 + (part as usize - 1) * 16;
+    let cur = lba0[off + 4];
+    if cur == 0 {
+        return Err(Fail::refused(format!("partition {part} is empty")));
+    }
+    if EXTENDED.contains(&cur) {
+        return Err(Fail::refused(format!("partition {part} is an extended container (0x{cur:02X}) — its type is structural, not descriptive")));
+    }
+    lba0[off + 4] = t;
+    src.write_at(0, &lba0)?;
+    Ok(src.sync_all()?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1542,6 +1572,8 @@ mod tests {
             is_block: false,
             journal: None,
             ownership: None,
+            fingerprint: Default::default(),
+            loop_mapping: None,
         }
     }
 
@@ -2048,6 +2080,25 @@ mod tests {
         // 无 hidden 对应码的类型拒绝
         add_mdos_entry(&mut src, 210, 250, 0x83).unwrap();
         assert!(set_mdos_hidden(&mut src, 2, true).is_err());
+    }
+
+    #[test]
+    fn msdos_type_set_and_guards() {
+        let data = vec![0u8; 300 * 512];
+        let mut src = src_from("mtype", data);
+        create_mbr(&mut src).unwrap();
+        add_mdos_entry(&mut src, 63, 200, 0x83).unwrap();
+        // 0x 前缀大小写在命令层；此处只验落盘与领域守卫
+        set_mdos_type(&mut src, 1, 0x07).unwrap();
+        assert_eq!(parse_mbr(&src).unwrap().unwrap()[0].os_type, 0x07);
+        // 0x00 / 扩展容器类型双向拒绝，且不落盘
+        for bad in [0x00u8, 0x05, 0x0F, 0x85] {
+            let e = set_mdos_type(&mut src, 1, bad).unwrap_err();
+            assert!(matches!(e, Fail::Refused(_)), "0x{bad:02X} must be refused: {e:?}");
+        }
+        assert_eq!(parse_mbr(&src).unwrap().unwrap()[0].os_type, 0x07);
+        // 空槽拒绝
+        assert!(set_mdos_type(&mut src, 2, 0x07).is_err());
     }
 
     /// resize_mdos_entry 是 pub 写入口：start + 新长度越出盘尾必须拒绝——

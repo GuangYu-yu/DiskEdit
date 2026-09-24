@@ -282,6 +282,8 @@ mod tests {
             is_block: false,
             journal: None,
             ownership: None,
+            fingerprint: Default::default(),
+            loop_mapping: None,
         }
     }
 

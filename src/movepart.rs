@@ -15,7 +15,9 @@ use std::io;
 use std::path::PathBuf;
 
 pub const CKPT_MAGIC: &[u8; 8] = b"DKECKPT1";
-pub const CKPT_VERSION: u32 = 4;
+/// v5：追加目标指纹（3×u64）与 loop 映射（1+2×u64）。旧版本不做兼容读——
+/// checkpoint 是活操作的暂存现场而非持久资产，读到旧版本报 unsupported 并指向 abandon
+pub const CKPT_VERSION: u32 = 5;
 
 /// checkpoint 批量提交粒度：性能参数，不属于恢复协议。恢复永远从最近一次
 /// durable checkpoint 继续；此值只决定提交频率，即崩溃后最多重做多少个
@@ -350,6 +352,8 @@ pub struct Checkpoint {
     pub cur_index: u32,   // 正在搬的 moves 下标
     pub chunks_done: u64, // 该分区已完成的 chunk 数
     pub chunk_bytes: u64, // chunk 大小（续传不一致即拒绝）
+    pub fp: crate::dev::TargetFingerprint, // 目标文件指纹（"同路径换文件"防线）
+    pub map: Option<(u64, u64)>,           // 创建时的 loop 映射；None = 非 loop 进入
 }
 
 impl Checkpoint {
@@ -373,6 +377,14 @@ impl Checkpoint {
         b.extend_from_slice(&self.chunks_done.to_le_bytes());
         b.extend_from_slice(&self.chunk_bytes.to_le_bytes());
         b.push(self.kind as u8);
+        b.extend_from_slice(&self.fp.dev.to_le_bytes());
+        b.extend_from_slice(&self.fp.ino.to_le_bytes());
+        b.extend_from_slice(&self.fp.size.to_le_bytes());
+        b.push(self.map.is_some() as u8);
+        if let Some((off, limit)) = self.map {
+            b.extend_from_slice(&off.to_le_bytes());
+            b.extend_from_slice(&limit.to_le_bytes());
+        }
         let crc = table::crc32(&b);
         b.extend_from_slice(&crc.to_le_bytes());
         b
@@ -382,9 +394,10 @@ impl Checkpoint {
     /// 容器末端都取自盘上那张表的自述几何，故 256 槽位的表与 128 槽位的一样合法
     fn deserialize(b: &[u8], lim: &GeometryLimits) -> io::Result<Self> {
         // magic8 + ver4 + disk_size8 + ss8 + grow_part4 + last_usable8 + count4
-        // + cur_index4 + chunks_done8 + chunk_bytes8 + kind1 + crc4：count=0 时的
-        // 精确最小值。少算只是把检查让给后面逐字段的 rd 兜底，常数本身失去防守意义
-        if b.len() < 8 + 4 + 8 + 8 + 4 + 8 + 4 + 4 + 8 + 8 + 1 + 4 {
+        // + cur_index4 + chunks_done8 + chunk_bytes8 + kind1 + fp24 + map1 + crc4：
+        // count=0 且 map 缺席时的精确最小值。少算只是把检查让给后面逐字段的 rd 兜底，
+        // 常数本身失去防守意义
+        if b.len() < 8 + 4 + 8 + 8 + 4 + 8 + 4 + 4 + 8 + 8 + 1 + 24 + 1 + 4 {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "checkpoint truncated"));
         }
         if &b[0..8] != CKPT_MAGIC {
@@ -470,6 +483,23 @@ impl Checkpoint {
             _ => return Err(io::Error::new(io::ErrorKind::InvalidData, "implausible checkpoint plan kind")),
         };
         off += 1;
+        // 指纹与映射属于"创建时事实"：解析只负责取值，比对在 read_checkpoint——那里
+        // 才有当前目标的指纹与 loop 映射可对
+        let fp = crate::dev::TargetFingerprint {
+            dev: u64::from_le_bytes(rd(off, 8)?.try_into().unwrap()),
+            ino: u64::from_le_bytes(rd(off + 8, 8)?.try_into().unwrap()),
+            size: u64::from_le_bytes(rd(off + 16, 8)?.try_into().unwrap()),
+        };
+        off += 24;
+        let map = match rd(off, 1)?[0] {
+            0 => None,
+            1 => Some((
+                u64::from_le_bytes(rd(off + 1, 8)?.try_into().unwrap()),
+                u64::from_le_bytes(rd(off + 9, 8)?.try_into().unwrap()),
+            )),
+            _ => return Err(io::Error::new(io::ErrorKind::InvalidData, "implausible checkpoint mapping flag")),
+        };
+        off += 1 + if map.is_some() { 16 } else { 0 };
         let stored = u32::from_le_bytes(rd(off, 4)?.try_into().unwrap());
         if table::crc32(&b[..off]) != stored {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "checkpoint CRC mismatch"));
@@ -497,7 +527,36 @@ impl Checkpoint {
         if chunks_done > chunks_limit {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "implausible checkpoint chunk progress"));
         }
-        Ok(Checkpoint { disk_size, ss, grow_part, last_usable_lba, moves, kind, cur_index, chunks_done, chunk_bytes })
+        Ok(Checkpoint { disk_size, ss, grow_part, last_usable_lba, moves, kind, cur_index, chunks_done, chunk_bytes, fp, map })
+    }
+}
+
+/// 当前目标与 checkpoint 记录的"创建时事实"比对：指纹或 loop 映射任一不符即外来现场。
+/// 指纹只对"双方都有意义"的值比对——零指纹（真块设备节点 / 非 Unix 平台）不构成证据；
+/// 映射的有无本身参与比对：经 loop 写入的现场不允许改从裸镜像续跑（反之亦然），
+/// 两种途径下同一 LBA 指向的字节不同，映射差异不是可忽略的记法差
+fn scene_mismatch(
+    src: &FileSource,
+    fp: &crate::dev::TargetFingerprint,
+    map: &Option<(u64, u64)>,
+) -> Option<String> {
+    if fp.meaningful() && src.fingerprint.meaningful() && *fp != src.fingerprint {
+        return Some(format!(
+            "file fingerprint changed since the checkpoint was written (was dev:{} ino:{} size:{}, now dev:{} ino:{} size:{})",
+            fp.dev, fp.ino, fp.size, src.fingerprint.dev, src.fingerprint.ino, src.fingerprint.size,
+        ));
+    }
+    match (map, &src.loop_mapping) {
+        (Some((ro, rl)), Some((co, cl))) if (*ro, *rl) != (*co, *cl) => {
+            Some(format!("loop mapping changed since the checkpoint was written (was offset={ro} sizelimit={rl}, now offset={co} sizelimit={cl})"))
+        }
+        (Some(_), None) => {
+            Some("checkpoint was written through a loop device, this target is not one".to_string())
+        }
+        (None, Some(_)) => {
+            Some("checkpoint was written on a non-loop target, this one is reached through a loop device".to_string())
+        }
+        _ => None,
     }
 }
 
@@ -515,6 +574,9 @@ fn read_checkpoint(src: &FileSource, g: &ValidatedGeometry) -> Result<Checkpoint
     let lim = g.limits();
     let mut found: Vec<(PathBuf, CheckpointSlot)> = Vec::new();
     let mut damaged: Vec<(PathBuf, String)> = Vec::new();
+    // 现场可读但"创建时事实"对不上：不是损坏（CRC 自洽），也不可取信（继续执行会把
+    // 旧现场写进换了文件/换了映射的目标）。单独归档，唯一时给出点名拒绝
+    let mut foreign: Vec<(PathBuf, String)> = Vec::new();
     for path in src.identity.checkpoint_candidates(legacy) {
         let bytes = match std::fs::read(&path) {
             Ok(b) => b,
@@ -526,24 +588,47 @@ fn read_checkpoint(src: &FileSource, g: &ValidatedGeometry) -> Result<Checkpoint
             Err(e) => return Err(Fail::infra(format!("checkpoint read failed: {}: {e}", path.display()))),
         };
         match (Checkpoint::deserialize(&bytes, &lim), RsCheckpoint::deserialize(&bytes, &lim)) {
-            (Ok(c), _) => found.push((path, CheckpointSlot::Relocation(Box::new(c)))),
-            (_, Ok(c)) => found.push((path, CheckpointSlot::Resize(Box::new(c)))),
+            (Ok(c), _) => {
+                if let Some(why) = scene_mismatch(src, &c.fp, &c.map) {
+                    foreign.push((path, why));
+                } else {
+                    found.push((path, CheckpointSlot::Relocation(Box::new(c))));
+                }
+            }
+            (_, Ok(c)) => {
+                if let Some(why) = scene_mismatch(src, &c.fp, &c.map) {
+                    foreign.push((path, why));
+                } else {
+                    found.push((path, CheckpointSlot::Resize(Box::new(c))));
+                }
+            }
             (Err(re), Err(_)) => damaged.push((path, re.to_string())),
         }
     }
     match found.len() {
-        0 if damaged.is_empty() => Ok(CheckpointSlot::Empty),
+        0 if foreign.is_empty() && damaged.is_empty() => Ok(CheckpointSlot::Empty),
         // 候选全在而全部不可读：现场存在但已无法判读——如实报 Infra 并列明各份的死因，
         // 出路是 abandon，而不是让续跑路径去猜
-        0 => Err(Fail::infra(format!(
+        0 if foreign.is_empty() => Err(Fail::infra(format!(
             "checkpoint files exist but none is readable: {}; release them with `diskedit abandon`",
             damaged.iter().map(|(p, e)| format!("{} ({e})", p.display())).collect::<Vec<_>>().join("; ")
         ))),
-        // 唯一可读者即取信；损坏的那份要报出来——它本可能构成歧义判定，
-        // 用户需要知道盘上不止一份落点文件
-        1 => {
+        // 全部"创建时事实"对不上：现场在，但不属于这个目标场景——点名各份的死因，
+        // 拒绝必须发生在任何写盘之前
+        0 => {
             for (p, e) in &damaged {
                 eprintln!("warning: unreadable checkpoint {}: {e}", p.display());
+            }
+            Err(Fail::refused(format!(
+                "checkpoint does not match this target scene — refusing: {}; release it with `diskedit abandon` if that scene is no longer wanted",
+                foreign.iter().map(|(p, e)| format!("{} ({e})", p.display())).collect::<Vec<_>>().join("; ")
+            )))
+        }
+        // 唯一可读者即取信；损坏/外来的那份要报出来——它本可能构成歧义判定，
+        // 用户需要知道盘上不止一份落点文件
+        1 => {
+            for (p, e) in damaged.iter().chain(foreign.iter()) {
+                eprintln!("warning: unusable checkpoint {}: {e}", p.display());
             }
             Ok(found.swap_remove(0).1)
         }
@@ -819,6 +904,8 @@ fn prepare_apply(
                 cur_index: c.cur_index.min(plan.moves.len() as u32),
                 chunks_done: c.chunks_done,
                 chunk_bytes: chunk_len,
+                fp: src.fingerprint,
+                map: src.loop_mapping,
             };
             // chunk_bytes 单独先查：它是命令行可控项，混在"disk/plan 全等"里报会让
             // 用户去查盘，而真实原因是这次换了 --chunk-size
@@ -850,6 +937,8 @@ fn prepare_apply(
             cur_index: 0,
             chunks_done: 0,
             chunk_bytes: chunk_len,
+            fp: src.fingerprint,
+            map: src.loop_mapping,
         },
     };
     Ok(ApplyDecision { g: g0.clone(), ckpt, ckpt_path, chunk_len, no_fs })
@@ -1182,10 +1271,11 @@ pub(crate) fn read_swap_identity(src: &FileSource, first_lba: u64, len_lba: u64,
 
 const CKPT2_MAGIC: &[u8; 8] = b"DKECKPT2";
 /// 字段变动即升版本：旧 ckpt 解析失败 → 当作"无 ckpt"重跑（搬移与 commit 都幂等，重跑安全）。
-/// 不靠长度巧合兜底——CRC 覆盖长度随字段变化，旧布局必然对不上
-const CKPT2_VERSION: u32 = 3;
+/// 不靠长度巧合兜底——CRC 覆盖长度随字段变化，旧布局必然对不上。
+/// v4：追加目标指纹（3×u64）与 loop 映射（1+2×u64），语义同 CKPT1 v5
+const CKPT2_VERSION: u32 = 4;
 
-/// resize-part 的 checkpoint（v3）：搬移覆盖源区，中途断电后新旧两处都不完整，
+/// resize-part 的 checkpoint（v4）：搬移覆盖源区，中途断电后新旧两处都不完整，
 /// 已完成位置只能由 checkpoint 判定。"表项是否已提交"不在这里存——盘上的分区几何
 /// 就是那个事实，另存一份标记只会与它分叉（见 prepare_resize 的恢复分支）
 struct RsCheckpoint {
@@ -1199,6 +1289,8 @@ struct RsCheckpoint {
     fs_shrunk: bool,
     chunks_done: u64,
     chunk_bytes: u64,
+    fp: crate::dev::TargetFingerprint, // 目标文件指纹（"同路径换文件"防线）
+    map: Option<(u64, u64)>,           // 创建时的 loop 映射；None = 非 loop 进入
 }
 
 impl RsCheckpoint {
@@ -1216,15 +1308,23 @@ impl RsCheckpoint {
         b.push(self.fs_shrunk as u8);
         b.extend_from_slice(&self.chunks_done.to_le_bytes());
         b.extend_from_slice(&self.chunk_bytes.to_le_bytes());
+        b.extend_from_slice(&self.fp.dev.to_le_bytes());
+        b.extend_from_slice(&self.fp.ino.to_le_bytes());
+        b.extend_from_slice(&self.fp.size.to_le_bytes());
+        b.push(self.map.is_some() as u8);
+        if let Some((off, limit)) = self.map {
+            b.extend_from_slice(&off.to_le_bytes());
+            b.extend_from_slice(&limit.to_le_bytes());
+        }
         let crc = table::crc32(&b);
         b.extend_from_slice(&crc.to_le_bytes());
         b
     }
     fn deserialize(b: &[u8], lim: &GeometryLimits) -> io::Result<Self> {
         // 最短完整布局 = 8(magic)+4(ver)+6×u64+4(part)+1(fs_shrunk)+8(chunks_done)
-        // +8(chunk_bytes)+4(crc) = 85；CRC 4 字节必须计入：截断文件走 InvalidData
-        // 而非在尾部切片时 panic
-        if b.len() < 8 + 4 + 8 * 6 + 4 + 1 + 8 + 8 + 4 || &b[0..8] != CKPT2_MAGIC {
+        // +8(chunk_bytes)+24(fp)+1(map flag)+4(crc) = 110；CRC 4 字节必须计入：
+        // 截断文件走 InvalidData 而非在尾部切片时 panic
+        if b.len() < 8 + 4 + 8 * 6 + 4 + 1 + 8 + 8 + 24 + 1 + 4 || &b[0..8] != CKPT2_MAGIC {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "resize checkpoint invalid"));
         }
         if u32::from_le_bytes(b[8..12].try_into().unwrap()) != CKPT2_VERSION {
@@ -1250,6 +1350,21 @@ impl RsCheckpoint {
         let fs_shrunk = *b.get(o).ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "truncated"))? != 0; o += 1;
         let chunks_done = rd64(b, &mut o)?;
         let chunk_bytes = rd64(b, &mut o)?;
+        // 指纹与映射属于"创建时事实"：解析只负责取值，比对在 read_checkpoint
+        let fp = crate::dev::TargetFingerprint {
+            dev: rd64(b, &mut o)?,
+            ino: rd64(b, &mut o)?,
+            size: rd64(b, &mut o)?,
+        };
+        let map = match *b.get(o).ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "truncated"))? {
+            0 => None,
+            1 => {
+                o += 1;
+                Some((rd64(b, &mut o)?, rd64(b, &mut o)?))
+            }
+            _ => return Err(io::Error::new(io::ErrorKind::InvalidData, "implausible resize checkpoint mapping flag")),
+        };
+        o += 1;
         if table::crc32(&b[..o]) != u32::from_le_bytes(b[o..o + 4].try_into().unwrap()) {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "resize checkpoint CRC mismatch"));
         }
@@ -1281,7 +1396,7 @@ impl RsCheckpoint {
         if chunks_done > chunks_limit {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "implausible resize checkpoint chunk progress"));
         }
-        Ok(RsCheckpoint { disk_size, ss, part, old_start, old_end, new_start, new_end, fs_shrunk, chunks_done, chunk_bytes })
+        Ok(RsCheckpoint { disk_size, ss, part, old_start, old_end, new_start, new_end, fs_shrunk, chunks_done, chunk_bytes, fp, map })
     }
 }
 
@@ -1577,6 +1692,8 @@ fn execute_resize(
         old_start, old_end, new_start, new_end,
         fs_shrunk: p.fs_shrunk, chunks_done: p.resume_chunks,
         chunk_bytes: chunk_len,
+        fp: src.fingerprint,
+        map: src.loop_mapping,
     };
     let save = |c: &RsCheckpoint| atomic_write_ckpt(&p.ckpt_path, &c.serialize());
 
@@ -1896,6 +2013,8 @@ mod tests {
             is_block: false,
             journal: None,
             ownership: None,
+            fingerprint: Default::default(),
+            loop_mapping: None,
         };
         let mut log = |_: &str| {};
         fix_ntfs_hidden_sectors(&mut src, 30687, 512, &mut log).unwrap();
@@ -1935,6 +2054,8 @@ mod tests {
             is_block: false,
             journal: None,
             ownership: None,
+            fingerprint: Default::default(),
+            loop_mapping: None,
         };
         // gptman 只写 GPT 结构，保护 MBR 需自行补——load_gpt 以前者为前置
         crate::table::ensure_protective_mbr(&mut src).unwrap();
@@ -1965,6 +2086,8 @@ mod tests {
             disk_size: size, ss, part: 1,
             old_start: 2048, old_end: 10239, new_start: 12288, new_end: 20479,
             fs_shrunk: false, chunks_done: 1, chunk_bytes: chunk,
+            fp: Default::default(),
+            map: None,
         };
         atomic_write_ckpt(&ckpt_path, &ckpt.serialize()).unwrap();
 
@@ -2018,6 +2141,8 @@ mod tests {
             fs_shrunk: false,
             chunks_done: (old_end - old_start + 1) * ss / chunk,
             chunk_bytes: chunk,
+            fp: Default::default(),
+            map: None,
         };
         atomic_write_ckpt(&ckpt_path, &ckpt.serialize()).unwrap();
 
@@ -2059,6 +2184,8 @@ mod tests {
             disk_size: src.size, ss, part: 1,
             old_start, old_end, new_start, new_end,
             fs_shrunk: false, chunks_done: 4, chunk_bytes: chunk,
+            fp: Default::default(),
+            map: None,
         };
 
         // (a) 请求与 ckpt 记的目标不同 → 拒绝，且不写盘
@@ -2110,6 +2237,8 @@ mod tests {
             disk_size: src.size, ss, part: 1,
             old_start: 2048, old_end: 6143, new_start: 2048, new_end: 3071,
             fs_shrunk: false, chunks_done: 0, chunk_bytes: chunk,
+            fp: Default::default(),
+            map: None,
         };
         atomic_write_ckpt(&ckpt_path, &rs.serialize()).unwrap();
         let o = ap(&mut src, &plan, chunk, true, &mut |_| {});
@@ -2122,6 +2251,8 @@ mod tests {
         let ck = Checkpoint {
             disk_size: src.size, ss, grow_part: 1, last_usable_lba: plan.last_usable_lba,
             moves: plan.moves.clone(), kind: PlanKind::TailPacked, cur_index: 0, chunks_done: 0, chunk_bytes: chunk,
+            fp: Default::default(),
+            map: None,
         };
         atomic_write_ckpt(&ckpt_path, &ck.serialize()).unwrap();
         let o = rsize(&mut src,1, 2048, 3071, chunk, false, &mut |_| {});
@@ -2170,6 +2301,8 @@ mod tests {
             cur_index: 0,
             chunks_done: 0,
             chunk_bytes: 1024 * 1024,
+            fp: Default::default(),
+            map: None,
         };
         assert!(Checkpoint::deserialize(&ckpt.serialize(), &lim(128)).is_ok(), "the baseline must be readable");
 
@@ -2201,6 +2334,8 @@ mod tests {
         let wide = Checkpoint {
             grow_part: 200,
             last_usable_lba: 100_000,
+            fp: Default::default(),
+            map: None,
             ..ckpt
         };
         assert!(
@@ -2240,6 +2375,8 @@ mod tests {
             cur_index: 0,
             chunks_done: 1,
             chunk_bytes: 1024 * 1024,
+            fp: Default::default(),
+            map: None,
         };
         assert!(Checkpoint::deserialize(&ckpt.serialize(), &lim(128)).is_ok(), "baseline must stay readable");
 
@@ -2275,6 +2412,8 @@ mod tests {
             disk_size: 64 * 1024 * 1024, ss: 512, part: 1,
             old_start: 2048, old_end: 3071, new_start: 2048, new_end: 3071,
             fs_shrunk: false, chunks_done: 1, chunk_bytes: 1024 * 1024,
+            fp: Default::default(),
+            map: None,
         };
         assert!(RsCheckpoint::deserialize(&rs.serialize(), &lim(128)).is_ok(), "baseline must stay readable");
         let mut b = rs.serialize();
@@ -2299,6 +2438,8 @@ mod tests {
             cur_index: 0,
             chunks_done: 0,
             chunk_bytes: 1024 * 1024,
+            fp: Default::default(),
+            map: None,
         };
         assert!(Checkpoint::deserialize(&base.serialize(), &lim(128)).is_ok(), "the baseline must be readable");
 
@@ -2318,6 +2459,8 @@ mod tests {
             part: 1,
             old_start: 2048, old_end: 2147, new_start: 2048, new_end: 2147,
             fs_shrunk: false, chunks_done: 0, chunk_bytes: 1024 * 1024,
+            fp: Default::default(),
+            map: None,
         };
         assert!(RsCheckpoint::deserialize(&rs.serialize(), &lim(128)).is_ok(), "the baseline must be readable");
         let mut b = rs.serialize();
@@ -2345,6 +2488,8 @@ mod tests {
             cur_index: 0,
             chunks_done: 0,
             chunk_bytes: 1024 * 1024,
+            fp: Default::default(),
+            map: None,
         };
         assert!(Checkpoint::deserialize(&ckpt.serialize(), &lim(128)).is_ok(), "the baseline must be readable");
         let rewrite_crc = |b: &mut Vec<u8>| {
@@ -2432,6 +2577,8 @@ mod tests {
             disk_size: 64 * 1024 * 1024, ss: 512, part: 1,
             old_start: 2048, old_end: 3071, new_start: 2048, new_end: 3071,
             fs_shrunk: false, chunks_done: 0, chunk_bytes: 1024 * 1024,
+            fp: Default::default(),
+            map: None,
         };
         assert!(RsCheckpoint::deserialize(&rs.serialize(), &lim(128)).is_ok(), "the baseline must be readable");
         let rewrite_crc = |b: &mut Vec<u8>| {
@@ -2507,6 +2654,8 @@ mod tests {
         let ck = Checkpoint {
             disk_size: src.size, ss: g.ss, grow_part: 1, last_usable_lba: plan.last_usable_lba,
             moves: plan.moves.clone(), kind: PlanKind::Shift, cur_index: 0, chunks_done: 0, chunk_bytes: chunk,
+            fp: Default::default(),
+            map: None,
         };
         atomic_write_ckpt(&ckpt_path, &ck.serialize()).unwrap();
         let resumed = plan_shift(&mut src, 1, None).unwrap();
@@ -2538,6 +2687,8 @@ mod tests {
             fs_shrunk: false,
             chunks_done: 0,
             chunk_bytes: 1024 * 1024,
+            fp: Default::default(),
+            map: None,
         };
         atomic_write_ckpt(&ckpt_path, &rs.serialize()).unwrap();
 
@@ -2571,6 +2722,8 @@ mod tests {
             cur_index: 0,
             chunks_done: 0,
             chunk_bytes: 1024 * 1024,
+            fp: Default::default(),
+            map: None,
         };
         atomic_write_ckpt(&ckpt_path, &ck.serialize()).unwrap();
 
@@ -2620,6 +2773,8 @@ mod tests {
             is_block: false,
             journal: None,
             ownership: None,
+            fingerprint: Default::default(),
+            loop_mapping: None,
         };
         // gptman 只写 GPT 结构，保护 MBR 需自行补——load_gpt 以前者为前置
         crate::table::ensure_protective_mbr(&mut src).unwrap();
@@ -2638,6 +2793,8 @@ mod tests {
             is_block: false,
             journal: None,
             ownership: None,
+            fingerprint: Default::default(),
+            loop_mapping: None,
         }
     }
 
@@ -2838,6 +2995,8 @@ mod tests {
                 let rs = RsCheckpoint {
                     disk_size: src.size, ss: 512, part: 1, old_start: 2048, old_end: 6143,
                     new_start: 2048, new_end: 4095, fs_shrunk: false, chunks_done: 0, chunk_bytes: chunk,
+                    fp: Default::default(),
+                    map: None,
                 };
                 atomic_write_ckpt(&ckpt_path, &rs.serialize()).unwrap();
                 let plan = make_plan(&mut src, 1).unwrap();
@@ -2916,6 +3075,8 @@ mod tests {
         let rs = RsCheckpoint {
             disk_size: src.size, ss: 512, part: 1, old_start: 2048, old_end: 6143,
             new_start: 3072, new_end: 5119, fs_shrunk: false, chunks_done: 0, chunk_bytes: chunk,
+            fp: Default::default(),
+            map: None,
         };
         atomic_write_ckpt(&ckpt_path, &rs.serialize()).unwrap();
         let o = rsize(&mut src, 1, 2048, 4095, chunk, true, &mut |_| {});
@@ -3089,5 +3250,60 @@ mod tests {
         drop(src);
         let _ = std::fs::remove_file(&ckpt_path);
         let _ = std::fs::remove_file(&p);
+    }
+
+    /// scene_mismatch 三判据：指纹不符、映射不符、映射有无之别各自拦下；双零指纹
+    /// （真块设备节点 / 非 Unix 平台）不构成证据，比对只对"双方都有意义"的值进行
+    #[test]
+    fn scene_mismatch_guards_foreign_scenes() {
+        let scene = |dev: u64, ino: u64, size: u64, map: Option<(u64, u64)>| {
+            static SEQ: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+            let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+            let path = std::env::temp_dir().join(format!("diskedit_scene_{}_{}.img", std::process::id(), seq));
+            let f = std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(true).open(&path).unwrap();
+            FileSource {
+                identity: crate::dev::TargetIdentity::resolve_image(&path),
+                file: f,
+                path: path.clone(),
+                sector_size: 512,
+                size: 0,
+                is_block: false,
+                journal: None,
+                ownership: None,
+                fingerprint: crate::dev::TargetFingerprint { dev, ino, size },
+                loop_mapping: map,
+            }
+        };
+        let fp = |dev: u64, ino: u64, size: u64| crate::dev::TargetFingerprint { dev, ino, size };
+        let mut paths: Vec<std::path::PathBuf> = Vec::new();
+        let mut scene_at = |dev: u64, ino: u64, size: u64, map: Option<(u64, u64)>| {
+            let s = scene(dev, ino, size, map);
+            paths.push(s.path.clone());
+            s
+        };
+
+        // 指纹不符 → 拦
+        let src = scene_at(7, 42, 1024, None);
+        let why = scene_mismatch(&src, &fp(7, 43, 1024), &None);
+        assert!(why.as_deref().unwrap().contains("fingerprint"), "{why:?}");
+        drop(src);
+        // 指纹一致且双方无映射 → 放行
+        let src = scene_at(7, 42, 1024, None);
+        assert!(scene_mismatch(&src, &fp(7, 42, 1024), &None).is_none());
+        drop(src);
+        // 映射值不符 → 拦；映射有无之别 → 拦
+        let src = scene_at(7, 42, 1024, Some((0, 0)));
+        assert!(scene_mismatch(&src, &fp(7, 42, 1024), &Some((4096, 0))).unwrap().contains("loop mapping"));
+        drop(src);
+        let src = scene_at(7, 42, 1024, None);
+        assert!(scene_mismatch(&src, &fp(7, 42, 1024), &Some((0, 0))).unwrap().contains("loop device"));
+        drop(src);
+        // 双零指纹不构成证据（真块设备 / 非 Unix）：指纹不同也放行
+        let src = scene_at(0, 0, 0, None);
+        assert!(scene_mismatch(&src, &fp(7, 42, 1024), &None).is_none());
+        drop(src);
+        for p in paths {
+            let _ = std::fs::remove_file(p);
+        }
     }
 }
