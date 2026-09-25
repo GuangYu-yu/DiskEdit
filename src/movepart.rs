@@ -2354,7 +2354,7 @@ mod tests {
     /// 历史实现把空父目录拼上根组件，临时文件会写到当前盘的根目录
     #[test]
     fn relative_checkpoint_path_writes_beside_the_target() {
-        let name = format!(".diskedit.rel_ckpt_test.{}.tmp", std::process::id());
+        let name = format!("rel_ckpt_test.{}.tmp", std::process::id());
         let p = std::path::PathBuf::from(&name);
         atomic_write_ckpt(&p, b"payload").unwrap();
         assert!(p.exists(), "the ckpt must land beside its relative target");
