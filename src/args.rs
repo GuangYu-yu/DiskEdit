@@ -29,14 +29,17 @@ const USAGE_TEXT: &str = r#"diskedit — disk / image editor
 target: image path or block device; :N = partition number (1-based); :last = the last
         partition a command can act on (on MBR an extended container does not count;
         a target without a partition table takes neither). `--grow` takes them too
-common opts: --no-fs  change the partition only, skip filesystem steps (fs grow /
-                      swap rebuild / lvm chain become out of scope, so layout
-                      success alone is exit 0). Shrinking is refused together
+common opts: --no-fs  drop the filesystem step of the grown partition: layout
+                      success alone is exit 0, and a filesystem that cannot be
+                      grown is refused without it. A swap that a relocation has
+                      to rebuild, and the PV chain, still run — they belong to
+                      the relocation / PV layer. Shrinking is refused together
                       with --no-fs: the filesystem has to be shrunk first
 exit codes:
   0   done             layout changed and every follow-up step completed (or none
-                       was required — e.g. no fs inside, or --no-fs given), and the
-                       kernel partition view was refreshed
+                       was required — the overlay RW layer waits for first mount,
+                       a PV's space for the pvresize chain — or --no-fs was
+                       given), and the kernel partition view was refreshed
   10  refused          nothing was written, and the request does not match the
                        target's current state: validation failed, no partition
                        table, partition missing, or the confirmation flag
@@ -92,7 +95,7 @@ pub(crate) struct Args {
     pub(crate) chunk_mib: u64,
     pub(crate) grow_to_end: bool,
     pub(crate) allow_move: bool,
-    /// --no-fs：只改分区布局，FS 扩展不属后置条件（布局成功即 exit 0）
+    /// --no-fs：grow 目标的 FS 步骤不属后置条件（布局成功即 exit 0）
     pub(crate) no_fs: bool,
     pub(crate) grow_lv: bool,
     pub(crate) lv: Option<String>,

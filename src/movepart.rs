@@ -878,13 +878,10 @@ fn prepare_apply(
         // 要动的是哪一段、里面是什么 FS 由 grow_target_at 判定——与写盘后的收尾同一判据，
         // 两处只是区间不同。区间的 LBA 单位是**表自身**的 ss（plan.ss）。此处位于
         // apply_repair / 搬移之前，本次调用尚未写目标盘：它的环境故障按 Infra 报，
-        // "不支持 / 工具缺失"交 FsError 分流（10 / 30），不在此另判；
-        // 没有可扩的文件系统则无事可检——那正是"扩完分区即可"的情形
+        // "不支持 / 工具缺失 / 里面是什么都不知道"交 FsError 分流（10 / 30），不在此另判
         let base = ge.starting_lba * plan.ss;
         let len = (ge.ending_lba - ge.starting_lba + 1) * plan.ss;
-        if let Growable::Target(t) = crate::fsops::grow_target_at(src, plan.grow_part, base, len)? {
-            crate::fsops::check_grow(t.fstype)?;
-        }
+        crate::fsops::check_grow_step(crate::fsops::grow_target_at(src, plan.grow_part, base, len)?)?;
     }
     // 恢复三态：有效 → 续传 / 槽位被另一族作业占用 → 拒绝 / 空 → 新建
     let slot = read_checkpoint(src, g0)?;
@@ -1186,16 +1183,24 @@ fn finalize_growth(
 ) -> io::Result<()> {
     let (base, len) = (r.new.0 * ss, r.new.1 * ss);
     match crate::fsops::grow_target_at(src, part, base, len) {
-        // 没有可扩的文件系统：布局已改，后置条件本就为空。其中混着一类**真实的未完成后置
-        // 条件**（创建于 32K 页的 swap，本机激活不了），故先探测一遍。
+        // 走到这里的是写盘前已放行、没有可扩 FS 的那几种：首启 overlay、PV，以及页格式
+        // 在本机激活不了的 swap——`unknown` 已由 check_grow_step 拦下，本支至多因盘在两步
+        // 之间被改动而见到它。swap 那一类还留着一件**真实的待办**（重建才能用上新空间），
+        // 故先探测一遍。
         // 此支不落 ExternalFsTool 屏障：PV 的外部写入（pvresize/lvextend）在收尾
         // resize_done 里发生，屏障由它携带 journal 写句柄在 spawn 前落——"表被回滚、
         // PV 已扩"的自相矛盾同样被排除，且 undo 不再被"屏障已落、pvresize 未跑"的
         // 死亡窗口无谓锁死。本支只探测、不写盘
-        Ok(Growable::OverlayPending | Growable::NoFilesystem(_)) => {
+        Ok(g @ (Growable::OverlayPending | Growable::SwapUnactivatable | Growable::NoFilesystem(_))) => {
             match swap_rebuild_pending(src, part, base, len)? {
                 Some(missed) => pending.push(missed),
-                None => log("partition extended (no resizable filesystem inside)"),
+                // 这句是 FS 步的实情，不是对区域内容的断言：`unknown` 同时涵盖空区域与
+                // 认不出的类型，PV 的空间则在收尾的 pvresize 链里生效
+                None => log(match g {
+                    Growable::OverlayPending => "partition extended (the overlay RW layer is created at first mount)",
+                    Growable::NoFilesystem("lvm2_pv") => "partition extended (the PV space takes effect through the pvresize chain)",
+                    _ => "partition extended (filesystem not resized — its type was not identified)",
+                }),
             }
         }
         // swap：内容可弃，表项已扩 → mkswap 重建使新空间生效（UUID/卷标保持）。
@@ -1658,12 +1663,10 @@ fn prepare_resize(
     match fs_action {
         FsAction::Shrink => crate::fsops::check_shrink(fstype)?,
         // 扩的目标与写盘后的收尾取同一判据（grow_target_at）：要动的那段可能是分区尾部的
-        // RW overlay 层；也可能压根没有可扩的文件系统（空区域 / 尚未格式化的 RW 层）——
-        // 后者无事可检，正是"扩完分区即可"的情形
+        // RW overlay 层，也可能是分区自己。这道写盘前的判定与收尾同源，缺了它就会把
+        // "里面是什么都不知道"当成功放过去——正因如此它必须在这里，而不是写表之后
         FsAction::Grow => {
-            if let Growable::Target(t) = crate::fsops::grow_target_at(src, part, fb_start * ss, old_bytes)? {
-                crate::fsops::check_grow(t.fstype)?;
-            }
+            crate::fsops::check_grow_step(crate::fsops::grow_target_at(src, part, fb_start * ss, old_bytes)?)?;
         }
         FsAction::Leave => {}
     }

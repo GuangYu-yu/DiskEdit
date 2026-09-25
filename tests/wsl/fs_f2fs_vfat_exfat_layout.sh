@@ -150,9 +150,9 @@ fi
 
 echo
 echo "########## G: 首启现场（尾部 RW 层尚未格式化）扩容 ##########"
-# 依据：grow_target_at 把"没有可扩的文件系统"分成两种——尚未格式化的 RW 层（那块空间会被
-# 首次挂载的 fstools 建满）与空区域 / PV（什么都不会发生）。分区层命令对两者都算完成：
-# 分区扩到末尾即退 0，而不是把首启现场报成"不支持"
+# 依据：grow_target_at 把"没有可扩的文件系统"分开——尚未格式化的 RW 层（那块空间会被首次
+# 挂载的 fstools 建满）与类型识别不出的区域（check_grow_step 视后者为"没有信息"，写表前
+# 拒绝，须 --no-fs 才只改表）。分区层命令对首启现场算完成：分区扩到末尾即退 0
 rm -f "$T" "$T"$SIDECAR_GLOB
 truncate -s 512M "$T"
 $B new "$T" --yes >/dev/null
@@ -167,8 +167,8 @@ else
   echo "G WRONG EXIT ($EG, last_lba=$NEWLAST): $(echo "$OUT" | tail -1)"; rc=1
 fi
 # G2/G3：同一个判据，两条命令的后置条件不同——resizefs 只动 FS，首启现场它没有可写的
-# 后置条件（退 0，并说明该层由首次挂载创建）；而分区里压根没有文件系统时它什么都没做，
-# 必须拒绝（退 10）——报成功会让脚本以为空间已可用
+# 后置条件（退 0，并说明该层由首次挂载创建）；而类型识别不出（空区域同此）时它什么都没做，
+# 必须拒绝（退 10）并把识别结果带进文案——报成功会让脚本以为空间已可用
 OUT=$($B resizefs "$T":1 2>&1); ER=$?
 echo "resizefs (first-boot overlay) exit=$ER : $(echo "$OUT" | tail -1)"
 if [ "$ER" = "0" ]; then

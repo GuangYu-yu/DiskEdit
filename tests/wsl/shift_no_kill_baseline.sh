@@ -20,7 +20,8 @@ MD=$(md5sum "${LD}p2" | cut -d' ' -f1)
 echo "md5 before: $MD"
 lo_detach "$LD"
 
-$B resize "$T":1 +100M --allow-move --yes --chunk-size 1; echo "exit=$?"
+# a 是 grow 目标且没有 FS：扩分区表要显式 --no-fs（本段只验最小位移搬移不动 b 的数据）
+$B resize "$T":1 +100M --allow-move --yes --chunk-size 1 --no-fs; echo "exit=$?"
 
 LD=$(lo_attach "$T")
 MD2=$(md5sum "${LD}p2" | cut -d' ' -f1)

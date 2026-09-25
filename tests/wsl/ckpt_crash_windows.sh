@@ -44,15 +44,17 @@ track_file "$T"
 
 echo "===== A: 跨条目间隙 + 连续多次中断 ====="
 mk_layout "$T"; fill_p23 "$T"
-# 轮1：entry 0（p3）commit 后死
-DISKEDIT_FAULT=after-entry-commit:0 $BF resize "$T":1 +200M --allow-move --yes >/dev/null 2>&1
+# 轮1：entry 0（p3）commit 后死。
+# 各段的 p1 都是 grow 目标且没有 FS：扩分区表要显式 --no-fs——本脚本开关的是中断窗口
+# 与续跑，FS 步骤不在覆盖范围内
+DISKEDIT_FAULT=after-entry-commit:0 $BF resize "$T":1 +200M --allow-move --yes --no-fs >/dev/null 2>&1
 echo "round1 aborted (expected)"
 # 轮2：entry 1（p2，100 chunks）拷到第 70 chunk 死 → durable=64
-OUT=$(DISKEDIT_FAULT=chunk:70 $BF resize "$T":1 +200M --allow-move --yes 2>&1)
+OUT=$(DISKEDIT_FAULT=chunk:70 $BF resize "$T":1 +200M --allow-move --yes --no-fs 2>&1)
 echo "$OUT" | grep -o "resuming at entry [0-9]* chunk [0-9]*" | head -1
 echo "round2 aborted (expected)"
 # 轮3：无注入完成 → resume at entry 1 chunk 64
-OUT=$($BF resize "$T":1 +200M --allow-move --yes 2>&1)
+OUT=$($BF resize "$T":1 +200M --allow-move --yes --no-fs 2>&1)
 R=$(echo "$OUT" | grep -o "resuming at entry [0-9]* chunk [0-9]*" | head -1)
 echo "round3: $R (want entry 1 chunk 64)"
 [ "$R" = "resuming at entry 1 chunk 64" ] && echo "RESUME-CHAIN OK" || { echo "RESUME-CHAIN WRONG"; rc=1; }
@@ -64,10 +66,10 @@ echo
 
 echo "===== B: before-grow → 间隙已够，重跑经普通路径收敛 ====="
 mk_layout "$T"; fill_p23 "$T"
-DISKEDIT_FAULT=before-grow $BF resize "$T":1 +200M --allow-move --yes >/dev/null 2>&1
+DISKEDIT_FAULT=before-grow $BF resize "$T":1 +200M --allow-move --yes --no-fs >/dev/null 2>&1
 echo "aborted (expected)"
 # p2/p3 已搬完、p1 未扩：free_right 恰好 = shift → 普通扩容路径直接收敛（合法）
-$BF resize "$T":1 +200M --allow-move --yes >/dev/null 2>&1; echo "round2 exit=$?"
+$BF resize "$T":1 +200M --allow-move --yes --no-fs >/dev/null 2>&1; echo "round2 exit=$?"
 check_data "$T" || rc=1
 echo "p1 终态几何（应为 700M = 500M+200M）："
 $B info "$T"
@@ -88,10 +90,11 @@ MD3=$(md5sum "${LD}p3" | cut -d' ' -f1)
 UUID_BEFORE=$(blkid -s UUID -o value "${LD}p2")
 losetup -d "$LD"
 echo "swap uuid before: $UUID_BEFORE"
-DISKEDIT_FAULT=after-swap-entry:1 $BF resize "$T":1 +100M --allow-move --yes >/dev/null 2>&1
+DISKEDIT_FAULT=after-swap-entry:1 $BF resize "$T":1 +100M --allow-move --yes --no-fs >/dev/null 2>&1
 echo "aborted (expected)"
 # swap 已落位重建、p3 已搬完：free_right = shift → 普通路径收敛
-$BF resize "$T":1 +100M --allow-move --yes >/dev/null 2>&1; echo "round2 exit=$?"
+# （swap 重建属搬移的一环，与 --no-fs 无关；该开关只免掉 grow 目标的 FS 步骤）
+$BF resize "$T":1 +100M --allow-move --yes --no-fs >/dev/null 2>&1; echo "round2 exit=$?"
 LD=$(lo_attach "$T")
 UUID_AFTER=$(blkid -s UUID -o value "${LD}p2")
 MD3G=$(md5sum "${LD}p3" | cut -d' ' -f1)
@@ -113,9 +116,9 @@ mount_at "${LD}p2" /testmnt && dd if=/dev/urandom of=/testmnt/b2.bin bs=1M count
 umount /testmnt
 MD2=$(md5sum "${LD}p2" | cut -d' ' -f1)
 losetup -d "$LD"
-DISKEDIT_FAULT=chunk:33 $BF resize "$T":1 +100M --allow-move --yes >/dev/null 2>&1
+DISKEDIT_FAULT=chunk:33 $BF resize "$T":1 +100M --allow-move --yes --no-fs >/dev/null 2>&1
 echo "aborted (expected)"
-OUT=$($BF resize "$T":1 +100M --allow-move --yes 2>&1)
+OUT=$($BF resize "$T":1 +100M --allow-move --yes --no-fs 2>&1)
 R=$(echo "$OUT" | grep -o "resuming at entry [0-9]* chunk [0-9]*" | head -1)
 echo "resume: $R (want entry 0 chunk 32)"
 [ "$R" = "resuming at entry 0 chunk 32" ] && echo "SELF-OVERLAP RESUME OK" || { echo "SELF-OVERLAP RESUME WRONG"; rc=1; }

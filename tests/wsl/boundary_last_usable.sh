@@ -22,7 +22,8 @@ echo "== add p1（2048..4095）=="
 $B add "$T" --start 2048 --end 4095 --name p1 >/dev/null; exp $? 0 "add p1（2048..4095）"
 
 echo "== 扩到 last_usable =="
-$B resize-part "$T":1 --start 2048 --grow-to-end >/dev/null; exp $? 0 "at last_usable"
+# p1 里没有 FS：扩分区表要显式 --no-fs（本段验的是边界几何，不是 FS 步骤）
+$B resize-part "$T":1 --start 2048 --grow-to-end --no-fs >/dev/null; exp $? 0 "at last_usable"
 [ "$(p1_last)" = "$LU" ] && echo "  OK   p1 已到 2048..$LU" \
   || { echo "  BAD  p1 未到 last_usable（last_lba=$(p1_last)）"; rc=1; }
 

@@ -452,7 +452,7 @@ fn resize_part_move_copy_flag_name() {
     assert_eq!(c, 10, "overlapping move must refuse");
     assert!(stderr.contains("overlaps"), "{stderr}");
 
-    // move：分区 a 右移 8100..12400 → 对齐 8192..12287（落点空闲，无 FS → 跳过 FS 步骤）
+    // move：分区 a 右移 8100..12400 → 对齐 8192..12287（落点空闲；长度不变，故没有 FS 步骤）
     let (c, _, stderr) = run(&["resize-part", &format!("{img_s}:1"), "--start", "8100", "--end", "12400"]);
     assert_eq!(c, 0, "move must succeed: {stderr}");
     let mut f = std::fs::File::open(&img).unwrap();
@@ -661,15 +661,25 @@ fn msdos_user_resize() {
     let (c, o) = run(&["add", img_s, "--start", "6144", "--end", "8191", "--type", "0x83"]);
     assert_eq!(c, 0, "{o}");
 
-    // +delta：分区 1 → 4096 扇区（恰好吃掉右侧空闲）
+    // 分区里没有 FS：只改表必须显式声明（--no-fs），否则写表之前就拒绝——"类型识别不出"
+    // 不等于"里面没东西"，不能让工具替用户下这个结论
+    let raw_before = std::fs::read(&img).unwrap();
     let (c, o) = run(&["resize", &format!("{img_s}:1"), "+1M"]);
+    assert_eq!(c, 10, "growing an unidentifiable region must refuse without --no-fs: {o}");
+    assert!(o.contains("--no-fs"), "{o}");
+    assert_eq!(std::fs::read(&img).unwrap(), raw_before, "refused resize must not write");
+
+    // +delta --no-fs：分区 1 → 4096 扇区（恰好吃掉右侧空闲）
+    let (c, o) = run(&["resize", &format!("{img_s}:1"), "+1M", "--no-fs"]);
     assert_eq!(c, 0, "{o}");
     let raw = std::fs::read(&img).unwrap();
     assert_eq!(slot(&raw, 1), (2048, 4096), "relative grow");
     assert_eq!(slot(&raw, 2), (6144, 2048), "partition 2 untouched");
 
-    // grow 吃满右侧：已到分区 2 起点，表不再变化
+    // grow 吃满右侧：已到分区 2 起点，表不再变化（`grow` 仍属扩容语义，故同样要 --no-fs）
     let (c, o) = run(&["resize", &format!("{img_s}:1"), "grow"]);
+    assert_eq!(c, 10, "grow must refuse an unidentifiable region without --no-fs: {o}");
+    let (c, o) = run(&["resize", &format!("{img_s}:1"), "grow", "--no-fs"]);
     assert_eq!(c, 0, "{o}");
     let raw = std::fs::read(&img).unwrap();
     assert_eq!(slot(&raw, 1), (2048, 4096), "grow stops at partition 2");
@@ -795,8 +805,13 @@ fn grow_to_end() {
     let (c, _) = run(&["resize-part", &format!("{img_s}:1"), "--start", "2048", "--end", "6000", "--grow-to-end"]);
     assert_eq!(c, 10, "--end + --grow-to-end must refuse");
 
-    // grow-to-end：扩到 last_usable_lba 16350（无 FS → 跳过 FS 步骤）
+    // grow-to-end：分区里没有 FS，只改表要由 --no-fs 显式担下；不带它在写表之前就拒绝
     let (c, e) = run(&["resize-part", &format!("{img_s}:1"), "--start", "2048", "--grow-to-end"]);
+    assert_eq!(c, 10, "an unidentifiable region must be refused without --no-fs: {e}");
+    assert!(e.contains("--no-fs"), "{e}");
+
+    // 扩到 last_usable_lba 16350
+    let (c, e) = run(&["resize-part", &format!("{img_s}:1"), "--start", "2048", "--grow-to-end", "--no-fs"]);
     assert_eq!(c, 0, "{e}");
     let mut f = std::fs::File::open(&img).unwrap();
     let gpt = gptman::GPT::find_from(&mut f).unwrap();
@@ -854,7 +869,9 @@ fn apply_swap_recreate() {
     let exe = env!("CARGO_BIN_EXE_DiskEdit");
     let img_s = img.to_str().unwrap();
 
-    let out = Command::new(exe).args(["apply", img_s, "--grow", "1"]).output().unwrap();
+    // --no-fs：#1 是 grow 目标且里面没有 FS，只改表由用户显式担下（否则事前拒绝）；
+    // #2 的 swap 重建是**搬移**的一环（swap 头随位置走），与本开关无关，重建照旧
+    let out = Command::new(exe).args(["apply", img_s, "--grow", "1", "--no-fs"]).output().unwrap();
     let code = out.status.code().unwrap_or(-1);
     let stderr = String::from_utf8_lossy(&out.stderr);
     // swap 重建依赖 mkswap/losetup（仅 Linux）：工具可用 → 后置条件全满足（OK）；
@@ -945,8 +962,9 @@ fn auto_commands_create_move_resize_set_delete() {
     assert_eq!(c, 10, "plan printed but --yes missing must refuse");
     assert!(out.contains("move part 2"), "plan must be printed: {out}");
     assert!(stderr.contains("--yes"), "{stderr}");
-    // 带 --allow-move --yes：自动搬移 #2 到尾部并扩 #1（apply 打包到 last_usable=32734）
-    let (c, _, e) = run(&["resize", &format!("{img_s}:1"), "grow", "--allow-move", "--yes"]);
+    // 带 --allow-move --yes：自动搬移 #2 到尾部并扩 #1（apply 打包到 last_usable=32734）。
+    // #1 里没有 FS，扩分区表这件事本身要显式声明——--no-fs 正是"只改表"的入口
+    let (c, _, e) = run(&["resize", &format!("{img_s}:1"), "grow", "--allow-move", "--yes", "--no-fs"]);
     assert_eq!(c, 0, "auto-relocate grow must succeed: {e}");
     let mut f = std::fs::File::open(&img).unwrap();
     let gpt = gptman::GPT::find_from(&mut f).unwrap();
@@ -972,10 +990,10 @@ fn auto_commands_create_move_resize_set_delete() {
     assert_eq!(c, 10, "shrink of unknown FS must refuse: {stderr}");
     assert!(stderr.contains("shrink"), "{stderr}");
 
-    // delete + --size 扩容：删 #2 后 #1 扩到 12MiB（4096..28671）
+    // delete + --size 扩容：删 #2 后 #1 扩到 12MiB（4096..28671）；#1 无 FS，同样走 --no-fs
     let (c, _, e) = run(&["delete", &format!("{img_s}:2"), "--yes"]);
     assert_eq!(c, 0, "{e}");
-    let (c, _, e) = run(&["resize", &format!("{img_s}:1"), "--size", "12582912"]);
+    let (c, _, e) = run(&["resize", &format!("{img_s}:1"), "--size", "12582912", "--no-fs"]);
     assert_eq!(c, 0, "grow by --size must succeed: {e}");
     let mut f = std::fs::File::open(&img).unwrap();
     let gpt = gptman::GPT::find_from(&mut f).unwrap();
@@ -1038,8 +1056,9 @@ fn resize_shift_relocates_blockers() {
     assert!(out.contains("move part 3"), "plan must include the far blocker: {out}");
     assert!(stderr.contains("--yes"), "{stderr}");
 
-    // +3M 相对当前 1M 大小 → 绝对 4M：b/c 让位，a 精确扩到 10239（2048+8192-1）
-    let (c, _, e) = run(&["resize", &format!("{img_s}:1"), "+3M", "--allow-move", "--yes"]);
+    // +3M 相对当前 1M 大小 → 绝对 4M：b/c 让位，a 精确扩到 10239（2048+8192-1）。
+    // a 里的指纹不是任何 FS 的签名（识别为 unknown），故扩分区表要显式 --no-fs
+    let (c, _, e) = run(&["resize", &format!("{img_s}:1"), "+3M", "--allow-move", "--yes", "--no-fs"]);
     assert_eq!(c, 0, "shift resize must succeed: {e}");
     let mut f = std::fs::File::open(&img).unwrap();
     let gpt = gptman::GPT::find_from(&mut f).unwrap();
@@ -1971,13 +1990,14 @@ mod crash_recovery {
         let ckpt = sidecar(&dir, "s.img", CHECKPOINT_SUFFIX);
 
         // ① 精确 SIZE 作业（最小位移 plan）中断
-        let size_argv = ["resize", target.as_str(), "+3M", "--allow-move", "--yes"];
+        // 两个分区都没有 FS：扩分区表要显式 --no-fs（槽位/续跑语义与它无关）
+        let size_argv = ["resize", target.as_str(), "+3M", "--allow-move", "--yes", "--no-fs"];
         let (c, e) = run_fault("chunk:1", &size_argv);
         assert_ne!(c, 0, "the injected abort must not look like success: {e}");
         assert!(ckpt.exists(), "a mid-move crash must leave a checkpoint: {e}");
 
         // grow 语义与它不符：拒绝，且指回当初那条命令
-        let grow_argv = ["resize", target.as_str(), "grow", "--allow-move", "--yes"];
+        let grow_argv = ["resize", target.as_str(), "grow", "--allow-move", "--yes", "--no-fs"];
         let (c, e) = run(&grow_argv);
         assert_eq!(c, 10, "grow must refuse a pending SIZE job: {e}");
         assert!(e.contains("`resize SIZE`"), "the refusal must name the job it belongs to: {e}");

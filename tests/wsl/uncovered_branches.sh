@@ -89,7 +89,8 @@ $B add "$T" --start 264192 --end 266239 --name over >/dev/null 2>&1; E=$?
 # 所以这里必须 --align none，越界请求才真正到达边界校验（src/movepart.rs:1456）
 LU=2097118
 echo "last_usable=$LU (2097151 - 32 - 1)"
-$B resize-part "$T":128 --start "$((2048+127*2048))" --align none --end "$LU" >/dev/null 2>&1; E=$?
+# p128 里没有 FS：扩分区表要显式 --no-fs，越界判定才轮到边界校验这一关
+$B resize-part "$T":128 --start "$((2048+127*2048))" --align none --end "$LU" --no-fs >/dev/null 2>&1; E=$?
 [ "$E" = "0" ] && echo "grow-to-usable OK (exit=$E)" || { echo "grow-to-usable failed (exit=$E)"; rc=1; }
 P=$($B info "$T" | grep -o '"num":128,[^}]*}' | grep -o '"last_lba":[0-9]*' | cut -d: -f2)
 [ "$P" = "$LU" ] && echo "p128 at last_usable ($P)" || { echo "p128 not at last_usable (got $P, want $LU)"; rc=1; }

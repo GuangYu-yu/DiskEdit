@@ -801,7 +801,8 @@ fn refuse_btrfs_multi_device_at(src: &FileSource, off: u64) -> Result<(), FsErro
 enum ToolSupport {
     /// 需要这些工具；任一缺失即事前拒绝
     Tools(&'static [&'static str]),
-    /// 契约上不负责：裸分区无 FS 可扩；LVM PV 的空间生效走 pvresize/lvextend 链
+    /// 契约上不负责：没有可扩的 FS 可谈（空区域 / 类型未识别 / LVM PV）。它不是失败，
+    /// 也不等于"做完了"——两种后果由下游按自己的契约分开处置，见 [`Growable`]
     NotApplicable,
     /// 认得出来但本操作不接线。**理由随变体携带**：笼统的"未接线"对用户无从下手，
     /// 而各调用点各写一句理由（lvm2_pv 要 lvreduce 链 / unknown 会写坏数据 / 其余未接线）
@@ -930,18 +931,24 @@ impl GrowTarget {
     }
 }
 
-/// [`grow_target_at`] 的结论。三种结果对调用方的含义不同，故不塌缩成"能不能扩"一个布尔：
-/// 有活要干的只有 `Target`；另两种都没有可扩的文件系统，区别在那块空间会不会被用上——
-/// 未初始化的 overlay RW 层由首次挂载的 fstools 建满（分区层到此即完成），空区域 / LVM PV
-/// 则什么都不会发生（FS 层命令把它当成功，就是报出一件没做过的事）
+/// [`grow_target_at`] 的结论。四种结果对调用方的含义不同，故不塌缩成"能不能扩"一个布尔：
+/// 有活要干的只有 `Target`；其余三种都没有可扩的文件系统，区别在那块空间**有没有承担者**——
+/// 未初始化的 overlay RW 层由首次挂载建满，PV 的由 pvresize 链吸收，
+/// [`SwapUnactivatable`](Growable::SwapUnactivatable) 的落在一条待办上，分区层到此即完成；
+/// 而"没有足够信息"没有承担者，后置条件含 FS 的命令据此拒绝（[`check_grow_step`]）
 pub enum Growable {
     /// 有可扩的一段：普通分区就是它自己，OpenWrt 的只读根取分区尾部的 RW 层
     Target(GrowTarget),
     /// 尾部 RW 层尚未格式化（OpenWrt 首启）：空间由首次挂载时的 fstools 按尾部区域建满，
     /// 本次没有可写的后置条件
     OverlayPending,
-    /// 区域里没有文件系统（空区域、LVM PV）：携带识别出的类型，供调用方分辨情形
-    /// （如 PV 指路到 `resize --grow-lv`）
+    /// 元数据是 swap、页格式却在本机激活不了（创建机用了 32K 页）：identify 按 swapon 口径
+    /// 回 "unknown"，但这不是"没有信息"——[`unactivatable_swap`](crate::fsid::unactivatable_swap)
+    /// 认得它，扩容后"swap 未重建"是一条**真实的待办**，故不并入 `NoFilesystem`
+    SwapUnactivatable,
+    /// 区域里没有**可扩**的文件系统：空区域、类型未识别、LVM PV。携带识别出的类型，
+    /// 供调用方分辨情形与措辞——"未识别"不等于"里面没有文件系统"，措辞不得替它下这个结论。
+    /// PV 有承担者（pvresize 链，见 `resize --grow-lv`）；`unknown` 没有，故分区层默认拒绝它
     NoFilesystem(&'static str),
 }
 
@@ -983,11 +990,33 @@ pub fn grow_target_at(src: &FileSource, part: u32, base: u64, len: u64) -> Resul
         }
         return Ok(Growable::Target(GrowTarget { scope: DeviceScope::Range(base + rel, len - rel), fstype: inner }));
     }
-    // 其余按 FS 自身的可扩性分流：三态与工具清单都取自 grow_support，不在此另列一份
+    // 其余按 FS 自身的可扩性分流：三态与工具清单都取自 grow_support，不在此另列一份。
+    // "没有可扩的 FS"里有一类并非无信息——页格式激活不了的 swap（见该变体），探测认得它；
+    // 只对 identify 已给 "unknown" 的区间探，其余类型不付这次读盘
+    let swap_unactivatable = fstype == "unknown"
+        && crate::fsid::unactivatable_swap(src, base, len).map_err(FsError::from)?;
     match grow_support(fstype) {
         ToolSupport::Tools(_) => Ok(Growable::Target(GrowTarget { scope: DeviceScope::Partition(part), fstype })),
+        ToolSupport::NotApplicable if swap_unactivatable => Ok(Growable::SwapUnactivatable),
         ToolSupport::NotApplicable => Ok(Growable::NoFilesystem(fstype)),
         ToolSupport::Unsupported(reason) => Err(FsError::unsupported(format!("cannot grow {fstype}: {reason}"))),
+    }
+}
+
+/// 分区层扩容的写盘前判定：后置条件含 FS 调整，故"这段区域里是什么、那一步做得了吗"
+/// 必须在**动手之前**回答——等到写表之后才发现，留下的就是"表已改、FS 未扩"。
+/// 调用点已按 `--no-fs` 跳过本判定，走到这里即"FS 那一步算数"。
+/// 没有可扩 FS 的几种在此分道：`OverlayPending` 的空间由首次挂载建满，PV 由 pvresize 链
+/// 吸收，`SwapUnactivatable` 在收尾被探测成待办——都不是"当成功放过去"；而 `unknown`
+/// 什么信息都没给，没有谁能保证那块空间会生效，默认放行就是拿无知当许可，
+/// 只改分区表须由 `--no-fs` 显式担下
+pub fn check_grow_step(g: Growable) -> Result<(), FsError> {
+    match g {
+        Growable::Target(t) => check_grow(t.fstype),
+        Growable::OverlayPending | Growable::SwapUnactivatable | Growable::NoFilesystem("lvm2_pv") => Ok(()),
+        Growable::NoFilesystem(f) => Err(FsError::unsupported(format!(
+            "cannot grow {f}: the filesystem type was not identified — pass --no-fs to change the partition only"
+        ))),
     }
 }
 
@@ -1348,7 +1377,7 @@ pub fn set_uuid(src: &FileSource, part: u32, fstype: &str, req: &UuidRequest) ->
 
 #[cfg(test)]
 mod tests {
-    use super::{check_e2fsck_for_check, check_e2fsck_for_resize, erase_ranges, grow_target_at, parse_num_field, partition_byte_range, uuid_support, DeviceScope, Growable, UuidSupport};
+    use super::{check_e2fsck_for_check, check_e2fsck_for_resize, check_grow_step, erase_ranges, grow_target_at, parse_num_field, partition_byte_range, uuid_support, DeviceScope, Growable, UuidSupport};
     use super::FsError;
     use crate::dev::FileSource;
 
@@ -1388,9 +1417,9 @@ mod tests {
     }
 
     /// `grow_target_at` 是"这段区域里能扩的是什么"的唯一判据：普通分区取 FS 自己，
-    /// OpenWrt 的只读根取分区尾部的 RW 层。三种结论必须分开——**尚未格式化的 RW 层与
-    /// 空区域 / PV 都"没有可扩的文件系统"**，但前者的空间会被首次挂载的 fstools 建满，
-    /// 后者什么都不会发生；认得出却不接线仍是拒绝。混为一谈要么让 FS 层命令报出一件
+    /// OpenWrt 的只读根取分区尾部的 RW 层。结论必须分开——**尚未格式化的 RW 层、空区域 /
+    /// 未识别 / PV 都"没有可扩的文件系统"**，但它们的空间各有下家（首次挂载建满 / 一条待办 /
+    /// pvresize 链），不是同一件事；认得出却不接线仍是拒绝。混为一谈要么让 FS 层命令报出一件
     /// 没做过的事，要么让首启现场报假失败
     #[test]
     fn grow_target_at_separates_nothing_to_do_from_unsupported() {
@@ -1414,6 +1443,7 @@ mod tests {
         let target = |r: Result<Growable, FsError>| match r {
             Ok(Growable::Target(t)) => t,
             Ok(Growable::OverlayPending) => panic!("expected a grow target, got OverlayPending"),
+            Ok(Growable::SwapUnactivatable) => panic!("expected a grow target, got SwapUnactivatable"),
             Ok(Growable::NoFilesystem(ft)) => panic!("expected a grow target, got NoFilesystem({ft})"),
             Err(e) => panic!("expected a grow target, got {e}"),
         };
@@ -1454,8 +1484,8 @@ mod tests {
         assert_eq!(t.fstype, "ext");
         assert!(matches!(t.scope, DeviceScope::Partition(2)));
 
-        // 空区域与 LVM PV：没有文件系统，且不会有——类型原样报出，供调用方分辨
-        // （PV 有别的出路）
+        // 空区域与 LVM PV：类型原样报出，供调用方分辨（PV 有别的出路）；`unknown` 不区分
+        // "空"与"认不出的类型"，故调用点的措辞不得宣称里面没有文件系统
         assert!(matches!(
             grow_target_at(&fs_fixture("plain_zero", vec![0u8; 64 * 1024]), 2, 0, 64 * 1024),
             Ok(Growable::NoFilesystem("unknown"))
@@ -1468,6 +1498,15 @@ mod tests {
             Ok(Growable::NoFilesystem("lvm2_pv"))
         ));
 
+        // 页格式在本机激活不了的 swap（签名只落在 32K 候选位）不是"无信息"：identify 按
+        // swapon 口径给 "unknown"，而探测认得它——扩容后有一条真实待办，故与空区域分道
+        let mut swap32k = vec![0u8; 64 * 1024];
+        swap32k[32768 - 10..32768].copy_from_slice(b"SWAPSPACE2");
+        assert!(matches!(
+            grow_target_at(&fs_fixture("plain_swap32k", swap32k), 2, 0, 64 * 1024),
+            Ok(Growable::SwapUnactivatable)
+        ));
+
         // 认得出却不接线的类型（exfat）：拒绝
         let mut exfat = vec![0u8; 64 * 1024];
         exfat[3..11].copy_from_slice(b"EXFAT   ");
@@ -1475,6 +1514,22 @@ mod tests {
             grow_target_at(&fs_fixture("plain_exfat", exfat), 2, 0, 64 * 1024),
             Err(FsError::UnsupportedFs(m)) if m.contains("cannot grow exfat")
         ));
+    }
+
+    /// 分区层的写盘前判定：`unknown` 与"认得却不接线"同样要由 `--no-fs` 显式担下，
+    /// 而 overlay 首启现场、PV、探测得出的 32K swap 都有下家，不得被这条规则误伤
+    #[test]
+    fn unidentified_region_needs_an_explicit_opt_out() {
+        assert!(check_grow_step(Growable::OverlayPending).is_ok());
+        assert!(check_grow_step(Growable::SwapUnactivatable).is_ok());
+        assert!(check_grow_step(Growable::NoFilesystem("lvm2_pv")).is_ok());
+        match check_grow_step(Growable::NoFilesystem("unknown")) {
+            Err(FsError::UnsupportedFs(m)) => {
+                assert!(m.contains("unknown") && m.contains("--no-fs"), "{m}")
+            }
+            Err(e) => panic!("the refusal must stay in the unsupported domain (refused/10), got {e}"),
+            Ok(()) => panic!("an unidentified region must not pass the preflight"),
+        }
     }
 
     fn fs_fixture(tag: &str, data: Vec<u8>) -> FileSource {

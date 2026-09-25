@@ -56,12 +56,13 @@ umount /testmnt
 MD2=$(md5sum "${LD}p2" | cut -d' ' -f1)
 echo "md5 b before: $MD2"
 lo_detach "$LD"
-$B resize "$T2":1 +100M --allow-move --yes --chunk-size 1 &
+# a 是 grow 目标且没有 FS：扩分区表要显式 --no-fs（本段验的是中断后续跑）
+$B resize "$T2":1 +100M --allow-move --yes --chunk-size 1 --no-fs &
 PID=$!
 sleep 0.5
 kill -9 $PID 2>/dev/null; wait $PID 2>/dev/null
 [ -f "$T2$CKPT_SUFFIX" ] && echo "checkpoint exists: yes" || echo "checkpoint exists: NO (may have finished)"
-$B resize "$T2":1 +100M --allow-move --yes --chunk-size 1; echo "resume exit=$?"
+$B resize "$T2":1 +100M --allow-move --yes --chunk-size 1 --no-fs; echo "resume exit=$?"
 LD=$(lo_attach "$T2")
 MD2_AFTER=$(md5sum "${LD}p2" | cut -d' ' -f1)
 echo "md5 b after:  $MD2_AFTER"

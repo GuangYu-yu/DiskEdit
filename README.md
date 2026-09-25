@@ -16,7 +16,7 @@
 | 分区表写入（`new`/`add`/`del`/`resize-part`/`copy`/`set`/`undo`/`move`/`apply`） | 不需要 root | 需要 root |
 | FS 层（`mkfs`/`resizefs`/`check`/`set label\|uuid`） | 需要 root | 需要 root |
 
-`resize` 分两种：需要动文件系统时要 root；目标 FS 无法识别（`unknown`）时只改分区表，镜像上无需 root。
+`resize` 分两种：需要动文件系统时要 root；加 `--no-fs` 表示不把 FS 增长算作后置条件（镜像上无需 root）。目标 FS 无法识别（`unknown`）时，不带 `--no-fs` 一律拒绝——"认不出"不等于"里面没有东西"。
 
 FS 层要 root 是因为经 `losetup` 映射分区；块设备写入靠设备节点权限，权限不足时在打开阶段即失败。
 
