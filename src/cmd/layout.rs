@@ -23,7 +23,8 @@ pub(crate) const HELP_RESIZE_PART: &str = r#"diskedit resize-part <TARGET>:N --s
   Low-level grow/shrink/move in one: repartition [start, end] with data
   relocation. --grow-to-end pins end at last_usable_lba (fill semantics);
   --align mib|cyl|none and --chunk-size MiB control placement and copy
-  granularity."#;
+  granularity. A grow also resizes the filesystem inside; one that cannot be
+  grown here (unidentified, or not wired to a tool) needs an explicit --no-fs."#;
 
 pub(crate) const HELP_MOVE: &str = r#"diskedit move <TARGET>:N --start <LBA|end>
 

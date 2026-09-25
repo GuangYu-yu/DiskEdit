@@ -14,11 +14,11 @@ pub(crate) const HELP_MKFS: &str = r#"diskedit mkfs <TARGET>:N <FS> --yes
 pub(crate) const HELP_RESIZEFS: &str = r#"diskedit resizefs <TARGET>:N
 diskedit resizefs <MOUNTPOINT> [BYTES | --size SIZE] --online
 
-  Resize a filesystem. Offline form grows the FS into its partition. A
-  partition that holds no filesystem at all (empty, an LVM PV) is refused —
-  a PV's space takes effect through `resize --grow-lv`. The OpenWrt overlay
-  layer before its first mount needs nothing here (exit 0): fstools creates
-  it at first mount, filling the trailing region.
+  Resize a filesystem. Offline form grows the FS into its partition. A region
+  with no growable filesystem is refused: an LVM PV here (its space takes
+  effect through `resize --grow-lv`), or a type this tool cannot identify.
+  The OpenWrt overlay layer before its first mount needs nothing here
+  (exit 0): fstools creates it at first mount, filling the trailing region.
   Online form operates on a mounted partition: grow only (btrfs also
   shrinks); the target size is absolute (units b/k/m/g/t, 1024 base) —
   omitted means grow to fill the partition."#;
@@ -139,9 +139,9 @@ pub(crate) fn cmd_resizefs(a: &Args) -> u8 {
         // 与 mkfs 同判据：扩 FS 是外部写入，未收尾的恢复现场必须先收拾
         refuse_if_pending_recovery(&src, "resizefs").unwrap_or_else(|f| bail_fail(f));
         // 要扩哪一段、里面是什么 FS 取的是与 `resize` 同一处的判据（overlay 的 RW 层即由此
-        // 落到内层区间）。判据只有一处，两条命令的后置条件却不同：`resize` 的分区层已经写盘，
-        // 里面没有文件系统也算完成；本命令只动 FS，没有文件系统就是**什么都没做**，
-        // 报成功会让脚本以为空间已经可用
+        // 落到内层区间）。判据只有一处，两条命令的后置条件却不同：`resize` 的后置条件含
+        // 分区层，FS 那一步做不了时它在写表之前就拒绝；本命令只动 FS，同一个结论落在这里
+        // 就成了**什么都没做**，报成功会让脚本以为空间已经可用
         let target = match fsops::grow_target_at(&src, part, start, len) {
             Ok(fsops::Growable::Target(t)) => t,
             Ok(fsops::Growable::OverlayPending) => {
@@ -149,12 +149,19 @@ pub(crate) fn cmd_resizefs(a: &Args) -> u8 {
                 println!("nothing to resize on partition #{part} — the overlay RW layer is created at first mount, filling the trailing region");
                 return EXIT_OK;
             }
-            // 没有文件系统就报成功等于报出一件没做过的事；PV 另有出路，指路到那条链
+            // 页格式在本机激活不了的 swap：不是"里面没有 FS"，但也不是本命令扩得了的 FS——
+            // 用了新空间要靠重建那块区域（与 `resize` 那条 Pending 的补救提示同一件事）
+            Ok(fsops::Growable::SwapUnactivatable) => bail_fail(Fail::refused(format!(
+                "nothing to resize on partition #{part} — a swap area whose page format is not activatable on this host (its space takes effect once the area is rebuilt with `mkswap`)"
+            ))),
+            // 没有可扩的文件系统就报成功等于报出一件没做过的事；PV 另有出路，指路到那条链
             Ok(fsops::Growable::NoFilesystem("lvm2_pv")) => bail_fail(Fail::refused(format!(
                 "nothing to resize on partition #{part} — an LVM PV is not a filesystem (its space takes effect through `resize --grow-lv`)"
             ))),
-            Ok(fsops::Growable::NoFilesystem(_)) => bail_fail(Fail::refused(format!(
-                "nothing to resize on partition #{part} — no filesystem inside"
+            // 类型未识别既可能是空区域，也可能是认不出的 FS：把识别结果原样带出，
+            // 不替它下"里面没有文件系统"的结论
+            Ok(fsops::Growable::NoFilesystem(f)) => bail_fail(Fail::refused(format!(
+                "nothing to resize on partition #{part} — identified as `{f}`: an empty region or a filesystem this tool cannot grow (nothing was resized)"
             ))),
             Err(e) => bail_fail(Fail::from(e)),
         };

@@ -33,7 +33,8 @@ echo "== set name =="
 $B set "$T":2 name renamed2; exp "$?" 0 "set name"
 
 echo "== resize grow +8M =="
-$B resize "$T":2 +8M; exp "$?" 0 "resize +8M"
+# p2 这时还没有 FS（下面的 mkfs 才建）：扩分区表要显式 --no-fs，否则写表之前就拒绝
+$B resize "$T":2 +8M --no-fs; exp "$?" 0 "resize +8M"
 
 echo "== info（p2 应已到 67584..116735）=="
 INFO=$($B info "$T"); E=$?
