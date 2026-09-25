@@ -1773,6 +1773,8 @@ fn targeted_refusals_are_reported_as_ten() {
 /// 一个什么都不留、且已越过不可回滚点。断言必须落在它们**各自的**后效上
 #[cfg(feature = "test-faults")]
 mod crash_recovery {
+    use super::{sidecar, CHECKPOINT_SUFFIX, JOURNAL_SUFFIX};
+
     fn run(args: &[&str]) -> (i32, String) {
         let out = std::process::Command::new(env!("CARGO_BIN_EXE_DiskEdit")).args(args).output().unwrap();
         (out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stderr).into_owned())
