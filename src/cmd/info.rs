@@ -87,7 +87,12 @@ pub(crate) fn cmd_info(a: &Args) -> u8 {
         out.push_str(&src.size.to_string());
         out.push_str(",\"disk_guid\":\"");
         out.push_str(&hex_guid(&g.header.disk_guid));
-        out.push_str("\",\"partitions\":[");
+        out.push('"');
+        // `:last` 指向的条目（取号与写路径同一函数，不在此另算一遍）：没有已用条目即无此字段
+        if let Some(n) = crate::gpt_policy::last_used_gpt(&g.entries) {
+            out.push_str(&format!(",\"last_part\":{n}"));
+        }
+        out.push_str(",\"partitions\":[");
         let mut first = true;
         for (i, e) in g.entries.iter().enumerate() {
             if e.ending_lba == 0 && e.starting_lba == 0 {
@@ -134,6 +139,11 @@ pub(crate) fn cmd_info(a: &Args) -> u8 {
                 out.push_str(&src.sector_size.to_string());
                 out.push_str(",\"size_bytes\":");
                 out.push_str(&src.size.to_string());
+                // `:last` 指向的分区（取号与写路径同一函数：扩展容器不算）：没有可操作条目
+                // 即无此字段
+                if let Some(n) = crate::gpt_policy::last_used_mbr(&raw.parts) {
+                    out.push_str(&format!(",\"last_part\":{n}"));
+                }
                 out.push_str(",\"partitions\":[");
                 let parts: Vec<String> = raw.parts.iter().map(|p| {
                     let fs = if p.is_container {

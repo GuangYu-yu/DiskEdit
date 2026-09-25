@@ -14,7 +14,11 @@ pub(crate) const HELP_MKFS: &str = r#"diskedit mkfs <TARGET>:N <FS> --yes
 pub(crate) const HELP_RESIZEFS: &str = r#"diskedit resizefs <TARGET>:N
 diskedit resizefs <MOUNTPOINT> [BYTES | --size SIZE] --online
 
-  Resize a filesystem. Offline form grows the FS into its partition.
+  Resize a filesystem. Offline form grows the FS into its partition. A
+  partition that holds no filesystem at all (empty, an LVM PV) is refused —
+  a PV's space takes effect through `resize --grow-lv`. The OpenWrt overlay
+  layer before its first mount needs nothing here (exit 0): fstools creates
+  it at first mount, filling the trailing region.
   Online form operates on a mounted partition: grow only (btrfs also
   shrinks); the target size is absolute (units b/k/m/g/t, 1024 base) —
   omitted means grow to fill the partition."#;
@@ -56,15 +60,17 @@ fn check_uuid_request(fstype: &str, req: &fsops::UuidRequest) -> Result<(), Stri
 
 pub(crate) fn cmd_mkfs(a: &Args) -> u8 {
     // FS 名是第二个位置参数（第一个是 <TARGET>:N，已解析进 a.target/a.part）
-    let (Some(part), Some(fstype)) = (a.part, a.pos.get(1).cloned()) else { crate::args::usage() };
+    let (Some(pref), Some(fstype)) = (a.part, a.pos.get(1).cloned()) else { crate::args::usage() };
     if !a.yes {
-        bail_fail(Fail::refused(format!("mkfs destroys all data on partition {part}; pass --yes to confirm")));
+        bail_fail(Fail::refused("mkfs destroys all data on the target partition; pass --yes to confirm"));
     }
     // 先问类型认不认得、工具在不在，再落不可回滚屏障：一个拼错的类型名、一个没装的
     // 工具包，都不该把目标锁进"未收尾"状态、要用户再跑一次 abandon。检查放在开事务
     // **之后**：目标被别人的未收尾现场占着时，busy 的闸口文案（含出路指引）比
     // "工具缺失"更该先到达——journal 是惰性的，此处拒绝同样不留任何痕迹
     let mut src = open_target_for_write(a).unwrap_or_else(|f| bail_fail(f));
+    // 锁下快照
+    let part = crate::gpt_policy::resolve_part(&src, pref).unwrap_or_else(|f| bail_fail(f));
     if let Err(f) = crate::gpt_policy::partition_bytes(&src, part) {
         bail_fail(f);
     }
@@ -125,16 +131,34 @@ pub(crate) fn cmd_resizefs(a: &Args) -> u8 {
         if a.size.is_some() {
             bail_fail(Fail::refused("--size only applies to the online form — offline resizes the filesystem into its partition"));
         }
-        let Some(part) = a.part else { crate::args::usage() };
+        let Some(pref) = a.part else { crate::args::usage() };
         let src = open_target_owned(a).unwrap_or_else(|f| bail_fail(f));
+        // 锁下快照
+        let part = crate::gpt_policy::resolve_part(&src, pref).unwrap_or_else(|f| bail_fail(f));
         let (start, len) = crate::gpt_policy::partition_bytes(&src, part).unwrap_or_else(|f| bail_fail(f));
         // 与 mkfs 同判据：扩 FS 是外部写入，未收尾的恢复现场必须先收拾
         refuse_if_pending_recovery(&src, "resizefs").unwrap_or_else(|f| bail_fail(f));
-        let fstype = match fsid::identify(&src, start, len) {
-            Ok(t) => t,
-            Err(e) => bail_fail(Fail::infra(format!("identify failed: {e}"))),
+        // 要扩哪一段、里面是什么 FS 取的是与 `resize` 同一处的判据（overlay 的 RW 层即由此
+        // 落到内层区间）。判据只有一处，两条命令的后置条件却不同：`resize` 的分区层已经写盘，
+        // 里面没有文件系统也算完成；本命令只动 FS，没有文件系统就是**什么都没做**，
+        // 报成功会让脚本以为空间已经可用
+        let target = match fsops::grow_target_at(&src, part, start, len) {
+            Ok(fsops::Growable::Target(t)) => t,
+            Ok(fsops::Growable::OverlayPending) => {
+                // 首启现场：该层由首次挂载时的 fstools 按尾部区域建满，本次无后置条件可做
+                println!("nothing to resize on partition #{part} — the overlay RW layer is created at first mount, filling the trailing region");
+                return EXIT_OK;
+            }
+            // 没有文件系统就报成功等于报出一件没做过的事；PV 另有出路，指路到那条链
+            Ok(fsops::Growable::NoFilesystem("lvm2_pv")) => bail_fail(Fail::refused(format!(
+                "nothing to resize on partition #{part} — an LVM PV is not a filesystem (its space takes effect through `resize --grow-lv`)"
+            ))),
+            Ok(fsops::Growable::NoFilesystem(_)) => bail_fail(Fail::refused(format!(
+                "nothing to resize on partition #{part} — no filesystem inside"
+            ))),
+            Err(e) => bail_fail(Fail::from(e)),
         };
-        match fsops::resize_fs(&src, part, fstype) {
+        match target.resize_fs(&src) {
             Ok(()) => {
                 println!("resized (verify with: diskedit info {})", a.target);
                 EXIT_OK
@@ -145,8 +169,10 @@ pub(crate) fn cmd_resizefs(a: &Args) -> u8 {
 }
 
 pub(crate) fn cmd_check(a: &Args) -> u8 {
-    let Some(part) = a.part else { crate::args::usage() };
+    let Some(pref) = a.part else { crate::args::usage() };
     let src = open_target_owned(a).unwrap_or_else(|f| bail_fail(f));
+    // 锁下快照
+    let part = crate::gpt_policy::resolve_part(&src, pref).unwrap_or_else(|f| bail_fail(f));
     let (start, len) = crate::gpt_policy::partition_bytes(&src, part).unwrap_or_else(|f| bail_fail(f));
     // e2fsck -fp / ntfsfix -d 会把修复写进 FS（不经 journal）：同 mkfs 的理由
     refuse_if_pending_recovery(&src, "check").unwrap_or_else(|f| bail_fail(f));
@@ -162,7 +188,7 @@ pub(crate) fn cmd_check(a: &Args) -> u8 {
 
 /// set 的一键入口：统一 name/label/uuid/flag 四类属性
 pub(crate) fn cmd_set(a: &Args) -> u8 {
-    let Some(part) = a.part else { crate::args::usage() };
+    let Some(pref) = a.part else { crate::args::usage() };
     let key = a.pos.get(1).map(|s| s.as_str()).unwrap_or_else(|| crate::args::usage());
     // --random 是 `uuid` 子命令的专属旗标，其余分支不消费它——白名单是命令级的，
     // 分支级差异必须在此显式拒绝（同 resizefs 离线对 --size 的处置）
@@ -172,6 +198,8 @@ pub(crate) fn cmd_set(a: &Args) -> u8 {
     let value = a.pos.get(2).cloned().unwrap_or_default();
     let state = a.pos.get(3).cloned().unwrap_or_default();
     let mut src = open_target_for_write(a).unwrap_or_else(|f| bail_fail(f));
+    // 锁下快照
+    let part = crate::gpt_policy::resolve_part(&src, pref).unwrap_or_else(|f| bail_fail(f));
     if key == "name" {
         if value.is_empty() { crate::args::usage(); }
         return match crate::gpt_policy::rename_entry(&mut src, part, &value) {

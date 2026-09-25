@@ -5,10 +5,10 @@
 //! movepart.rs = 搬移与提交（"怎么写"）。
 //! "是否需要修复、修哪一类"只在这里判一次，main 与 movepart 共用同一个动作类型。
 
-use crate::dev::FileSource;
+use crate::dev::{FileSource, PartSelector};
 use crate::geometry::ValidatedGeometry;
 use crate::outcome::Fail;
-use crate::table::{self, GptState, PmbrSize, RawGpt};
+use crate::table::{self, GptState, MbrPartition, PmbrSize, RawGpt};
 use std::io;
 
 /// 修复动作（互斥、穷举）。不用 bool 旗标：动作本身就是状态，
@@ -178,6 +178,14 @@ pub fn resolve_geometry(src: &FileSource) -> Result<Option<(ValidatedGeometry, R
     Ok(Some((vg, action)))
 }
 
+/// 取 GPT 的可操作几何（含修复分类），没有 GPT 即拒绝——名字点明它只要 GPT：MBR 没有
+/// "几何 + 修复"这一层，通用表读取走 [`read_table`]。命令层各写一遍这段 match，等于把
+/// "判定 + 文案"复制到每个调用点，改一处口径就要追多处；`verb` 是命令/动作名，与
+/// `fsops::check_support(verb, …)` 同款——文案的主语由调用点传入，不各写一份
+pub fn require_gpt_geometry(src: &FileSource, verb: &str) -> Result<(ValidatedGeometry, RepairAction), Fail> {
+    resolve_geometry(src)?.ok_or_else(|| Fail::refused(format!("{verb} requires a GPT target")))
+}
+
 // ---------- 表项编排（"读 → 判 → 修复 → 提交"） ----------
 //
 // 这些函数编排的是策略层的三步（解析出几何 → 事前拒绝判定 → 修复 + 提交），
@@ -185,6 +193,114 @@ pub fn resolve_geometry(src: &FileSource) -> Result<Option<(ValidatedGeometry, R
 // "什么时候允许写、写之前必须先做什么"由本层决定
 
 use gptman::GPTPartitionEntry;
+
+/// 目标上的分区表（已解析）。族信息必须与条目一起交出去——`:last` 的解释按族分派
+/// （GPT 跳空槽、MBR 跳扩展容器），少了它，这些规则就会被迫泄漏回调用层。
+/// 扇区尺寸也留在 GPT 一侧：条目以**表自身的** ss 计，可与容器 ss 不同（4Kn 镜像未加
+/// `--sector-size` 时二者差 8 倍），MBR 没有自己的扇区尺寸概念
+pub(crate) enum Table {
+    Gpt { entries: Vec<GPTPartitionEntry>, ss: u64 },
+    Mbr(Vec<MbrPartition>),
+}
+
+impl Table {
+    fn entries(&self) -> TableEntries<'_> {
+        match self {
+            Table::Gpt { entries, .. } => TableEntries::Gpt(entries),
+            Table::Mbr(parts) => TableEntries::Mbr(parts),
+        }
+    }
+}
+
+/// [`resolve_part_in`] 的入参：只借条目、不复制——已持有表的调用点（写路径的几何、
+/// MBR resize 已解析的条目）直接借它，不重复读盘
+#[derive(Clone, Copy)]
+pub(crate) enum TableEntries<'a> {
+    Gpt(&'a [GPTPartitionEntry]),
+    Mbr(&'a [MbrPartition]),
+}
+
+/// "读出表里的条目、没有表就拒绝"的**唯一入口**：GPT 先、MBR 后，无表（10）与结构非法（30）
+/// 的出口与措辞只写在这里，[`partition_bytes`] 与 [`resolve_part`] 都从这里取，不各判一遍。
+/// 盘型分派（含"GPT 布局受损"这一态）另有 [`table::table_label`]——它回答的是"该走哪条
+/// 命令分支"，不给出条目
+pub(crate) fn read_table(src: &FileSource) -> Result<Table, Fail> {
+    match table::load_gpt(src) {
+        Err(e) => Err(Fail::infra(format!("parse failed: {e}"))),
+        Ok(Some(g)) => Ok(Table::Gpt { entries: g.entries, ss: g.ss }),
+        // 无 GPT → 按 MBR 解析。不这么做的话真 MBR 盘在这里被一律当成"无表"，
+        // mkfs / set label|uuid 在 MBR 上完全不可用
+        Ok(None) => match table::parse_mbr(src) {
+            Err(e) => Err(Fail::infra(format!("parse failed: {e}"))),
+            Ok(Some(parts)) => Ok(Table::Mbr(parts)),
+            Ok(None) => Err(Fail::refused("no partition table on target")),
+        },
+    }
+}
+
+/// 取号：末端扇区最大的条目。末端不会相同——条目重叠在几何构造点已被拒绝
+/// （[`ValidatedGeometry::new`] / `parse_mbr`）
+fn last_used(used: impl Iterator<Item = (u32, u64)>) -> Option<u32> {
+    used.max_by_key(|&(_, last_lba)| last_lba).map(|(num, _)| num)
+}
+
+/// GPT 侧取号：条目号 = 下标 + 1，"已用"的判据与 [`live_index`] 一致（空槽不计）。
+/// 语义与分派见 [`resolve_part_in`]
+pub(crate) fn last_used_gpt(entries: &[GPTPartitionEntry]) -> Option<u32> {
+    last_used(
+        entries
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| e.ending_lba != 0)
+            .map(|(i, e)| ((i + 1) as u32, e.ending_lba)),
+    )
+}
+
+/// MBR 侧取号：只取主分区，且**跳过扩展容器**——它是 EBR / 逻辑分区的壳，不是可操作
+/// 分区（[`partition_bytes`] 对它的拒绝同口径）。空槽位不进 `parts`：`parse_mbr` 只收
+/// os_type 与 size 都非 0 的记录。语义与分派见 [`resolve_part_in`]
+pub(crate) fn last_used_mbr(parts: &[MbrPartition]) -> Option<u32> {
+    last_used(
+        parts
+            .iter()
+            .filter(|p| !p.is_container)
+            .map(|p| (p.num, p.start_lba as u64 + p.size_lba as u64 - 1)),
+    )
+}
+
+/// `:last` 的语义**只在这里**，且是纯判定、不做 I/O：交哪份条目，就在哪份快照上解释
+/// 选择器。`selector` 是数字时不查表——命中核验（空槽 / 不存在 / 容器）在 [`live_entry`]
+/// 与 MBR 查表那一层，不在这里判第二遍。
+///
+/// 命令层的顺序固定为「确认表 / 几何 → 解释选择器 → 校验操作」：无表的目标上写 `:last` 与
+/// 写 `:2` 得到同一个前置错误（命令自己的表要求），错误优先级不由选择器改写。
+///
+/// `:last` 是**最后一个可操作分区**，不是字面上的"末端扇区最大的表项"：指到一个命令收不了
+/// 的对象，等于把 `:last` 变成一个多数用法都报错的写法。按族分派：
+/// - GPT：末端最靠后的已用条目
+/// - MBR：末端最靠后的主分区，**扩展容器除外**
+///
+/// 没有可指的对象（空表 / 只有空槽 / MBR 只有容器）即拒绝
+pub(crate) fn resolve_part_in(t: TableEntries<'_>, selector: PartSelector) -> Result<u32, Fail> {
+    match selector {
+        PartSelector::Number(n) => Ok(n),
+        PartSelector::Last => match t {
+            TableEntries::Gpt(entries) => last_used_gpt(entries)
+                .ok_or_else(|| Fail::refused("no partition to point :last at — the table has no defined entry")),
+            TableEntries::Mbr(parts) => last_used_mbr(parts)
+                .ok_or_else(|| Fail::refused("no partition to point :last at — the MBR has no usable primary entry")),
+        },
+    }
+}
+
+/// `:last` 的便捷入口：读表 + 判定。语义全在 [`resolve_part_in`]，这里只负责把表读出来；
+/// 已经持有表的调用点直接用 `_in`，不重复读盘
+pub(crate) fn resolve_part(src: &FileSource, selector: PartSelector) -> Result<u32, Fail> {
+    match selector {
+        PartSelector::Number(n) => Ok(n),
+        PartSelector::Last => resolve_part_in(read_table(src)?.entries(), selector),
+    }
+}
 
 /// "查找第 N 个**已定义**分区"的唯一出口：分区号越界与空槽各自的拒绝文案只在此写一遍。
 /// 接受条目切片使 ValidatedGeometry（写入路径）与 RawGpt（诊断路径）共用同一判据与同一措辞。
@@ -216,12 +332,11 @@ pub(crate) fn live_entry_in(entries: &[GPTPartitionEntry], part: u32) -> Result<
 /// 返回 `Fail` 而不是 `(码, 文案)`：前缀与码必须同源——否则调用点会各自拼 "refused: "
 /// 前缀，碰上 30 就自相矛盾（打出 "refused: parse failed: ..." 却退出 30）
 pub(crate) fn partition_bytes(src: &FileSource, part: u32) -> Result<(u64, u64), Fail> {
-    // 无表 = 请求与目标现状不匹配(10)；表在但结构非法 = 盘内容故障(30)。
-    // 与 resize / info 的 parse failed / no partition table 同一判据
-    match crate::table::load_gpt(src) {
-        Err(e) => Err(Fail::infra(format!("parse failed: {e}"))),
-        Ok(Some(g)) => {
-            let e = live_entry_in(&g.entries, part)?;
+    // 无表 = 请求与目标现状不匹配(10)；表在但结构非法 = 盘内容故障(30)：两种出口都由
+    // read_table 一处给出，不在这里重写一遍 GPT→MBR 的判定
+    match read_table(src)? {
+        Table::Gpt { entries, ss } => {
+            let e = live_entry_in(&entries, part)?;
             // 条目在 usable 区内本不该溢出；checked 失败即表内容异常，按 Infra 如实报，
             // 不让回绕值顺着字节偏移流进 losetup / mkswap 的参数里
             let overflow = |part: u32| {
@@ -230,31 +345,26 @@ pub(crate) fn partition_bytes(src: &FileSource, part: u32) -> Result<(u64, u64),
             let Some(len_lba) = e.ending_lba.checked_sub(e.starting_lba).and_then(|d| d.checked_add(1)) else {
                 return Err(overflow(part));
             };
-            let Some(off) = e.starting_lba.checked_mul(g.ss) else {
+            let Some(off) = e.starting_lba.checked_mul(ss) else {
                 return Err(overflow(part));
             };
-            let Some(len) = len_lba.checked_mul(g.ss) else {
+            let Some(len) = len_lba.checked_mul(ss) else {
                 return Err(overflow(part));
             };
             Ok((off, len))
         }
-        // 无 GPT → 按 MBR 解析。不这么做的话真 MBR 盘在这里被一律当成"无表"，
-        // mkfs / set label|uuid 在 MBR 上完全不可用
-        Ok(None) => match crate::table::parse_mbr(src).map_err(|e| Fail::infra(format!("parse failed: {e}")))? {
-            None => Err(Fail::refused("no partition table on target")),
-            Some(mbr) => {
-                let p = mbr.iter().find(|p| p.num == part).ok_or_else(|| {
-                    Fail::refused(format!("partition {part} not found (MBR covers primary slots 1..=4)"))
-                })?;
-                // 扩展容器是逻辑分区的壳，不是可承载文件系统的分区
-                if p.is_container {
-                    return Err(Fail::refused(format!(
-                        "partition {part} is an extended container (logical partitions are out of scope)"
-                    )));
-                }
-                Ok((p.start_lba as u64 * src.sector_size, p.size_lba as u64 * src.sector_size))
+        Table::Mbr(parts) => {
+            let p = parts.iter().find(|p| p.num == part).ok_or_else(|| {
+                Fail::refused(format!("partition {part} not found (MBR covers primary slots 1..=4)"))
+            })?;
+            // 扩展容器是逻辑分区的壳，不是可承载文件系统的分区
+            if p.is_container {
+                return Err(Fail::refused(format!(
+                    "partition {part} is an extended container (logical partitions are out of scope)"
+                )));
             }
-        },
+            Ok((p.start_lba as u64 * src.sector_size, p.size_lba as u64 * src.sector_size))
+        }
     }
 }
 
@@ -613,5 +723,68 @@ mod tests {
         // 容器容不下 备份数组+备份头 的最小跨度 → 拒绝（下溢防护）
         assert!(repaired_last_usable(&g, 32).is_err());
         assert!(repaired_last_usable(&g, 33).is_err());
+    }
+
+    /// `:last` 的取号：末端扇区最大者。GPT 跳过空槽、MBR 跳过扩展容器——容器是 EBR /
+    /// 逻辑分区的壳，不是可操作分区。没有可指的对象（空表 / 只有空槽 / 只有容器）→ None，
+    /// 由 `resolve_part` 转成拒绝
+    #[test]
+    fn last_used_picks_the_last_operable_entry() {
+        let ent = |s: u64, e: u64| gptman::GPTPartitionEntry {
+            partition_type_guid: [1; 16],
+            unique_partition_guid: [2; 16],
+            starting_lba: s,
+            ending_lba: e,
+            attribute_bits: 0,
+            partition_name: "".into(),
+        };
+        // 空槽（ending_lba == 0）不计入：取末端最大的已用条目，而不是下标最大的槽
+        assert_eq!(last_used_gpt(&[ent(34, 100), ent(0, 0), ent(200, 300), ent(500, 600)]), Some(4));
+        assert_eq!(last_used_gpt(&[ent(34, 100), ent(200, 300), ent(0, 0)]), Some(2));
+        assert_eq!(last_used_gpt(&[ent(0, 0), ent(0, 0)]), None);
+        assert_eq!(last_used_gpt(&[]), None);
+
+        let part = |num: u32, start: u32, size: u32, is_container: bool| MbrPartition {
+            num,
+            os_type: if is_container { 0x05 } else { 0x83 },
+            start_lba: start,
+            size_lba: size,
+            is_container,
+        };
+        // 末端 = start + size − 1：3 号起点居中，但末端最靠后的是 2 号
+        assert_eq!(last_used_mbr(&[part(1, 63, 100, false), part(2, 500, 200, false), part(3, 200, 50, false)]), Some(2));
+        // 容器末端最靠后也不是它：取容器之外最靠后的那条
+        assert_eq!(last_used_mbr(&[part(1, 63, 100, false), part(4, 500, 5000, true)]), Some(1));
+        assert_eq!(last_used_mbr(&[part(4, 500, 5000, true)]), None);
+        assert_eq!(last_used_mbr(&[]), None);
+    }
+
+    /// `resolve_part_in` 是 `:last` 的唯一语义处，且是纯判定：数字原样返回（命中核验在
+    /// [`live_entry`] / MBR 查表那一层），`:last` 按族分派，没有可指的对象即拒绝
+    #[test]
+    fn resolve_part_in_is_pure_and_typed_by_table() {
+        let part = |num: u32, start: u32, size: u32, is_container: bool| MbrPartition {
+            num,
+            os_type: if is_container { 0x05 } else { 0x83 },
+            start_lba: start,
+            size_lba: size,
+            is_container,
+        };
+        // 数字不查表：空表也照过（"分区不存在"由调用点的命中核验给出）
+        assert_eq!(resolve_part_in(TableEntries::Gpt(&[]), PartSelector::Number(7)).unwrap(), 7);
+
+        // 同一份条目、同一个选择器，解释随族变化——族信息因此不能在这一层丢掉
+        let mbr = [part(1, 63, 100, false), part(4, 500, 5000, true)];
+        assert_eq!(resolve_part_in(TableEntries::Mbr(&mbr), PartSelector::Last).unwrap(), 1);
+
+        // 只有容器 / 只有空槽：没有可指的对象，拒绝
+        assert!(matches!(
+            resolve_part_in(TableEntries::Mbr(&mbr[1..]), PartSelector::Last),
+            Err(Fail::Refused(m)) if m.contains("no usable primary entry")
+        ));
+        assert!(matches!(
+            resolve_part_in(TableEntries::Gpt(&[]), PartSelector::Last),
+            Err(Fail::Refused(m)) if m.contains("no defined entry")
+        ));
     }
 }

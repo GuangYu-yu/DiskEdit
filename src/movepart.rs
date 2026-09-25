@@ -7,6 +7,7 @@
 //! 写点恒在未读源之上（右移时目的地址总是大于已读位置），顺序固化不提供方向参数。
 
 use crate::dev::FileSource;
+use crate::fsops::Growable;
 use crate::geometry::{GeometryLimits, ValidatedGeometry};
 use crate::gpt_policy::{self, RepairAction};
 use crate::outcome::{Fail, Outcome, Pending, PendingKind};
@@ -874,16 +875,16 @@ fn prepare_apply(
         && let Some(ge) = g0.entry_index(plan.grow_part).and_then(|i| g0.entries.get(i))
         && ge.ending_lba != 0
     {
-        // LBA 的单位是**表自身**的 ss（plan.ss）。此处位于 apply_repair / 搬移之前，
-        // 本次调用尚未写目标盘：identify 的环境故障按 Infra 报，check_grow 的
-        // "不支持 / 工具缺失"交 FsError 分流（10 / 30），不在此另判
-        let ft = crate::fsid::identify(
-            src,
-            ge.starting_lba * plan.ss,
-            (ge.ending_lba - ge.starting_lba + 1) * plan.ss,
-        )
-        .map_err(Fail::infra_io)?;
-        crate::fsops::check_grow(ft)?;
+        // 要动的是哪一段、里面是什么 FS 由 grow_target_at 判定——与写盘后的收尾同一判据，
+        // 两处只是区间不同。区间的 LBA 单位是**表自身**的 ss（plan.ss）。此处位于
+        // apply_repair / 搬移之前，本次调用尚未写目标盘：它的环境故障按 Infra 报，
+        // "不支持 / 工具缺失"交 FsError 分流（10 / 30），不在此另判；
+        // 没有可扩的文件系统则无事可检——那正是"扩完分区即可"的情形
+        let base = ge.starting_lba * plan.ss;
+        let len = (ge.ending_lba - ge.starting_lba + 1) * plan.ss;
+        if let Growable::Target(t) = crate::fsops::grow_target_at(src, plan.grow_part, base, len)? {
+            crate::fsops::check_grow(t.fstype)?;
+        }
     }
     // 恢复三态：有效 → 续传 / 槽位被另一族作业占用 → 拒绝 / 空 → 新建
     let slot = read_checkpoint(src, g0)?;
@@ -1151,11 +1152,10 @@ fn execute_apply(
 
     // FS resize 是契约的一部分：失败即后置条件未满足（由调用方换算为 PARTIAL）。
     // 这里不能只打日志当成功——脚本会据此认为空间已可用
-    let fstype = crate::fsid::identify(src, grow_start * g.ss, grow_len * g.ss)?;
     if no_fs {
         log("partition extended (--no-fs: filesystem left untouched)");
     } else {
-        finalize_growth(src, plan.grow_part, fstype, GrowthRegions {
+        finalize_growth(src, plan.grow_part, GrowthRegions {
             old: (grow_start, old_len),
             new: (grow_start, grow_len),
         }, g.ss, log, pending)?;
@@ -1170,35 +1170,37 @@ struct GrowthRegions {
     new: (u64, u64), // 提交后 (start, len)：探测按它进行
 }
 
-/// 扩容的统一 FS 收尾（apply 与 resize 的唯一实现）：表项已按新几何提交后，
-/// 按 FS 家族给出唯一处置。未完成的后置条件进 `pending`，退出码由调用方统一换算；
-/// 其余 `Err` 归 io 域（此刻已过 durable boundary，不得再伪装成拒绝）。
-/// 各家族的可做性已在事前由 check_grow 给出，此处不判第二遍
+/// 扩容的统一 FS 收尾（apply 与 resize 的唯一实现）：表项已按新几何提交后，按
+/// [`grow_target_at`](crate::fsops::grow_target_at) 给出的那段区间与其中的 FS 处置。
+/// 未完成的后置条件进 `pending`，退出码由调用方统一换算；其余 `Err` 归 io 域
+/// （此刻已过 durable boundary，不得再伪装成拒绝）。
+/// 判据与写盘前的 preflight 是同一处，只是区间取扩容后的那份——两步之间盘被改动时
+/// 结论会变，那种情形归后置条件未完成（pending），不算拒绝
 fn finalize_growth(
     src: &mut FileSource,
     part: u32,
-    fstype: &str,
     r: GrowthRegions,
     ss: u64,
     log: &mut dyn FnMut(&str),
     pending: &mut Vec<Pending>,
 ) -> io::Result<()> {
-    match fstype {
-        // unknown/LVM PV 无本工具可扩的文件系统；其中混着一类**真实的未完成后置条件**
-        //（创建于 32K 页的 swap，本机激活不了），故先探测一遍。
-        // 两侧都不在此落 ExternalFsTool 屏障：PV 的外部写入（pvresize/lvextend）在收尾
+    let (base, len) = (r.new.0 * ss, r.new.1 * ss);
+    match crate::fsops::grow_target_at(src, part, base, len) {
+        // 没有可扩的文件系统：布局已改，后置条件本就为空。其中混着一类**真实的未完成后置
+        // 条件**（创建于 32K 页的 swap，本机激活不了），故先探测一遍。
+        // 此支不落 ExternalFsTool 屏障：PV 的外部写入（pvresize/lvextend）在收尾
         // resize_done 里发生，屏障由它携带 journal 写句柄在 spawn 前落——"表被回滚、
         // PV 已扩"的自相矛盾同样被排除，且 undo 不再被"屏障已落、pvresize 未跑"的
-        // 死亡窗口无谓锁死。unknown 这支只探测、不写盘
-        "unknown" | "lvm2_pv" => {
-            match swap_rebuild_pending(src, part, r.new.0 * ss, r.new.1 * ss)? {
+        // 死亡窗口无谓锁死。本支只探测、不写盘
+        Ok(Growable::OverlayPending | Growable::NoFilesystem(_)) => {
+            match swap_rebuild_pending(src, part, base, len)? {
                 Some(missed) => pending.push(missed),
                 None => log("partition extended (no resizable filesystem inside)"),
             }
         }
         // swap：内容可弃，表项已扩 → mkswap 重建使新空间生效（UUID/卷标保持）。
         // grow_support 对 swap 承诺的就是 mkswap——漏掉它即违背承诺。外部工具写盘，先落屏障
-        "swap" => {
+        Ok(Growable::Target(t)) if t.fstype == "swap" => {
             src.set_mutation(crate::dev::Mutation::ExternalFsTool);
             src.mark_non_reversible()?;
             let ident = read_swap_identity(src, r.old.0, r.old.1, ss);
@@ -1214,19 +1216,27 @@ fn finalize_growth(
         }
         // 外部 FS 工具（resize2fs/xfs_growfs/…）的写入不可回滚：扩完后 FS 自述尺寸大于
         // 旧分区尺寸，此后回滚表项即"表与内容自相矛盾"。必须先于该写入落屏障
-        _ => {
+        Ok(Growable::Target(t)) => {
             src.set_mutation(crate::dev::Mutation::ExternalFsTool);
             src.mark_non_reversible()?;
-            match crate::fsops::resize_fs(src, part, fstype) {
+            match t.resize_fs(src) {
                 Ok(()) => log("filesystem resized"),
                 Err(e) => pending.push(Pending::new(
                     part,
                     PendingKind::Fs,
                     e.to_string(),
-                    crate::fsops::rescue_hint(fstype, &crate::dev::part_dev_hint(src, part, r.old.0 * ss)),
+                    crate::fsops::rescue_hint(t.fstype, &crate::dev::part_dev_hint(src, part, r.old.0 * ss)),
                 )),
             }
         }
+        // 判定本身失败：写盘前那类"请求与现状不符"已不成立，此刻只剩两条出路——
+        // 后置条件做不了（pending，脚本据此知道空间还没可用）与读不出来（io 域，报失败）
+        Err(e) => match crate::outcome::Fail::from(e) {
+            crate::outcome::Fail::Refused(why) => pending.push(Pending::new(part, PendingKind::Fs, why, String::new())),
+            crate::outcome::Fail::Infra(cause) | crate::outcome::Fail::Failed(cause) => {
+                return Err(io::Error::other(cause))
+            }
+        },
     }
     Ok(())
 }
@@ -1647,7 +1657,14 @@ fn prepare_resize(
     };
     match fs_action {
         FsAction::Shrink => crate::fsops::check_shrink(fstype)?,
-        FsAction::Grow => crate::fsops::check_grow(fstype)?,
+        // 扩的目标与写盘后的收尾取同一判据（grow_target_at）：要动的那段可能是分区尾部的
+        // RW overlay 层；也可能压根没有可扩的文件系统（空区域 / 尚未格式化的 RW 层）——
+        // 后者无事可检，正是"扩完分区即可"的情形
+        FsAction::Grow => {
+            if let Growable::Target(t) = crate::fsops::grow_target_at(src, part, fb_start * ss, old_bytes)? {
+                crate::fsops::check_grow(t.fstype)?;
+            }
+        }
         FsAction::Leave => {}
     }
     // ext 预查 FS 最小尺寸（resize2fs -P × dumpe2fs -h 块大小），缩太小在写盘前拒绝。
@@ -1785,7 +1802,7 @@ fn execute_resize(
     crate::dev::warn_if_remove_failed(&p.ckpt_path);
     // 要不要扩由 prepare 的决策给出，此处不比尺寸；家族处置与 apply 共用同一实现
     if p.fs_action == FsAction::Grow {
-        finalize_growth(src, part, fstype, GrowthRegions {
+        finalize_growth(src, part, GrowthRegions {
             old: (old_start, old_end - old_start + 1),
             new: (new_start, new_end - new_start + 1),
         }, ss, log, pending)?;

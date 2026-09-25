@@ -1128,6 +1128,59 @@ fn info_on_gpt_image() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// `:last` 指最后一个可操作分区（GPT 上即末端最靠后的已用条目）：`info` 报告 `last_part`，
+/// 写命令上 `:last` 与具体号等价，而只报告整盘布局的命令明确拒绝分区指代
+#[test]
+fn last_partref_resolves_like_the_explicit_number() {
+    let dir = std::env::temp_dir().join(format!("diskedit_last_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let exe = env!("CARGO_BIN_EXE_DiskEdit");
+    let run = |args: &[&str]| -> (i32, String, String) {
+        let out = Command::new(exe).args(args).output().unwrap();
+        (out.status.code().unwrap_or(-1),
+         String::from_utf8_lossy(&out.stdout).into_owned(),
+         String::from_utf8_lossy(&out.stderr).into_owned())
+    };
+
+    let img = dir.join("a.img");
+    std::fs::write(&img, vec![0u8; 8 * 1024 * 1024]).unwrap();
+    let img_s = img.to_str().unwrap();
+    assert_eq!(run(&["new", img_s, "--yes"]).0, 0);
+    assert_eq!(run(&["add", img_s, "--start", "2048", "--end", "4095", "--name", "a"]).0, 0);
+    assert_eq!(run(&["add", img_s, "--start", "4096", "--end", "6143", "--name", "b"]).0, 0);
+    // 第二份逐字节副本：`:last` 与 `:2` 各自的收尾必须落到同一份字节上
+    let img2 = dir.join("b.img");
+    std::fs::copy(&img, &img2).unwrap();
+    let img2_s = img2.to_str().unwrap();
+
+    // 末端最靠后的是 #2
+    let (c, out, e) = run(&["info", img_s]);
+    assert_eq!(c, 0, "{e}");
+    assert!(out.contains("\"last_part\":2"), "info must report the ending-last entry: {out}");
+
+    // 只报告整盘布局的命令不接受分区指代，`:last` 同样被回显拒绝
+    let (c, _, e) = run(&["info", &format!("{img_s}:last")]);
+    assert_eq!(c, 10, "info must refuse :last: {e}");
+
+    // 写命令：`:last` 与 `:2` 等价
+    let (c, _, e) = run(&["delete", &format!("{img_s}:last"), "--yes"]);
+    assert_eq!(c, 0, "delete :last must succeed: {e}");
+    let (c, _, e) = run(&["delete", &format!("{img2_s}:2"), "--yes"]);
+    assert_eq!(c, 0, "delete :2 must succeed: {e}");
+    assert_eq!(
+        std::fs::read(&img).unwrap(),
+        std::fs::read(&img2).unwrap(),
+        ":last and the explicit number must produce the same table"
+    );
+
+    // 删掉 #2 后末端最靠后的是 #1
+    let (c, out, e) = run(&["info", img_s]);
+    assert_eq!(c, 0, "{e}");
+    assert!(out.contains("\"last_part\":1"), "{out}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// 真实扩容路径：truncate 预扩使 backup GPT 与保护 MBR 同时过期 ——
 /// info 只报告、plan 只记录（两者都不写盘），写入命令才修复（搬备份头 + 重写 PMBR）
 #[test]
@@ -1280,7 +1333,12 @@ fn cli_negative_paths() {
     std::fs::write(&blank, vec![0u8; 100 * 512]).unwrap();
     let (c, _, e) = run(&["plan", blank.to_str().unwrap(), "--grow", "1"]);
     assert_eq!(c, 10, "a target without a table must be refused, not infra: {e}");
-    assert!(e.contains("no GPT on target"), "{e}");
+    // 缺表的拒绝文案出自唯一那处（gpt_policy::require_gpt_geometry），带命令名
+    assert!(e.contains("plan requires a GPT target"), "{e}");
+    // 顺序：先确认表、再解释选择器 —— 无表目标上写 `:last` 不该换一种错误
+    let (c, _, e) = run(&["move", &format!("{}:last", blank.display()), "--start", "2048"]);
+    assert_eq!(c, 10, "{e}");
+    assert!(e.contains("move requires a GPT target"), "{e}");
 
     // SIZE 语法错误 / 缩到超过当前大小 / 与 --size 互斥
     let img = dir.join("ok.img");
