@@ -12,7 +12,7 @@
 #   exp "$?" 0 "label"               # 断言退出码
 #   LD=$(lo_attach "$T")             # 建 loop(-P) 并登记，退出时自动收
 #   mount_at "${LD}p1" /testmnt      # 挂载并登记
-#   track_file "$T"                  # 登记临时镜像（含 .diskedit.* 伴随文件）
+#   track_file "$T"                  # 登记临时镜像（含其伴随文件）
 #   cleanup_hook() { ... }           # 可选：脚本自有的额外收尾（退出时先跑）
 #   结尾 exit $rc
 
@@ -24,12 +24,14 @@ B=$_bin_dir/DiskEdit
 BF=$_bin_dir/DiskEdit-fault
 
 # 落盘伴随文件后缀：与 src/dev.rs 的词表同名同值，改一处要一起改。
+# 命名空间只写一次，各后缀由它拼出。
 # SIDECAR_GLOB 是"整族伴随文件"的清理通配（故意不含引号，靠 shell 路径展开）；
-# LEGACY_CKPT_SUFFIX 是旧版按 GPT Disk GUID 命名的 checkpoint 后缀。
-JOURNAL_SUFFIX=.diskedit.journal
-CKPT_SUFFIX=.diskedit.ckpt
-LOCK_SUFFIX=.diskedit.lock
-SIDECAR_GLOB=.diskedit.*
+# LEGACY_CKPT_SUFFIX 是旧版按 GPT Disk GUID 命名的 checkpoint 后缀（无命名空间中缀）。
+NS=.diskedit
+JOURNAL_SUFFIX=${NS}.journal
+CKPT_SUFFIX=${NS}.ckpt
+LOCK_SUFFIX=${NS}.lock
+SIDECAR_GLOB=${NS}.*
 LEGACY_CKPT_SUFFIX=.ckpt
 
 rc=0
