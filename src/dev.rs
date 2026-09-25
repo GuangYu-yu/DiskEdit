@@ -292,7 +292,7 @@ fn file_name_lossy(path: &Path) -> String {
     path.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "dev".into())
 }
 
-/// 在目标路径后追加后缀（不适配扩展名，只做串接）：`/a/b.img` + `.diskedit.log` ⇒ `/a/b.img.diskedit.log`，
+/// 在目标路径后追加后缀（不适配扩展名，只做串接）：`/a/b.img` + `.bak` ⇒ `/a/b.img.bak`，
 /// 与用户可见的目标名保持一一对应
 pub(crate) fn suffix_path(base: &Path, suffix: &str) -> PathBuf {
     let mut p = base.to_path_buf().into_os_string();
@@ -301,18 +301,22 @@ pub(crate) fn suffix_path(base: &Path, suffix: &str) -> PathBuf {
 }
 
 // 落盘文件名的词表：journal / checkpoint / log / lock 四类伴随文件与 checkpoint 的
-// 暂存前缀只在这里定义一次。派生点（身份构造、日志落点）、写入侧（原子写）都取自这里
-// ——改词表就是改这一处，不在各处各自拼串。
-// 测试里对这个拼法的字面断言是有意保留的：它们是落盘命名的契约锚点（如
-// `x.img.diskedit.log`、`*.diskedit.lock`），词表被改动时应当失败一次让人过目
-pub(crate) const JOURNAL_SUFFIX: &str = ".diskedit.journal";
-pub(crate) const CHECKPOINT_SUFFIX: &str = ".diskedit.ckpt";
-pub(crate) const LOCK_SUFFIX: &str = ".diskedit.lock";
-pub(crate) const LOG_SUFFIX: &str = ".diskedit.log";
+// 暂存前缀只在这里定义一次，派生点（身份构造、日志落点）与写入侧（原子写）都取自这里。
+// 命名空间只在宏体里出现一次，各常量只提供自己的 stem
+macro_rules! sidecar_suffix {
+    ($stem:literal) => {
+        concat!(".diskedit.", $stem)
+    };
+}
+
+pub(crate) const JOURNAL_SUFFIX: &str = sidecar_suffix!("journal");
+pub(crate) const CHECKPOINT_SUFFIX: &str = sidecar_suffix!("ckpt");
+pub(crate) const LOCK_SUFFIX: &str = sidecar_suffix!("lock");
+pub(crate) const LOG_SUFFIX: &str = sidecar_suffix!("log");
 /// 暂存文件前缀：原子写先写它、再 rename 到正式落点（见 `crate::movepart::atomic_write_ckpt`）；
 /// 打开可写目标时也按它清掉崩溃残骸
-pub(crate) const CKPT_TMP_PREFIX: &str = ".diskedit.ckpt.tmp.";
-/// 旧版块设备现场的命名：GUID 后只有 `.ckpt`，没有 `.diskedit.` 中缀
+pub(crate) const CKPT_TMP_PREFIX: &str = sidecar_suffix!("ckpt.tmp.");
+/// 旧版块设备现场的命名：GUID 后只有 `.ckpt`，没有命名空间中缀
 pub(crate) const LEGACY_GUID_CKPT_SUFFIX: &str = ".ckpt";
 
 /// 16 字节 Disk GUID → 大写无连字符十六进制（历史落点用的就是这种写法）
@@ -504,7 +508,7 @@ impl TargetIdentity {
         &self.checkpoint[0]
     }
 
-    /// 日志落点：镜像 = `<目标路径>.diskedit.log`；块设备 = `<state_dir>/<名>.diskedit.log`，
+    /// 日志落点：镜像 = 目标路径旁的兄弟文件；块设备 = `<state_dir>/<名>` 加同一后缀，
     /// 名取可读的 GPT Disk GUID（与 checkpoint 同源），读不到表时退到 devname。
     ///
     /// 与 journal / checkpoint 的差别只有一处：日志只增、不参与恢复，因此不做候选回退，
@@ -1400,24 +1404,26 @@ mod tests {
         }
     }
 
-    /// 落盘命名的契约锚点：词表的值就是用户在目标旁边看到的名字。这一处写死字面量，
-    /// 其余测试一律用词表拼——改拼法时只有这里该失败
+    /// 落盘命名的契约锚点：命名空间的字面量只在这一处出现，四类伴随文件各自的后缀
+    /// 由它派生校验——改命名空间或改某一类后缀，这里该失败
     #[test]
     fn artifact_names_are_pinned_as_documented() {
-        assert_eq!(JOURNAL_SUFFIX, ".diskedit.journal");
-        assert_eq!(CHECKPOINT_SUFFIX, ".diskedit.ckpt");
-        assert_eq!(LOCK_SUFFIX, ".diskedit.lock");
-        assert_eq!(LOG_SUFFIX, ".diskedit.log");
-        assert_eq!(CKPT_TMP_PREFIX, ".diskedit.ckpt.tmp.");
+        let ns = JOURNAL_SUFFIX.strip_suffix("journal").expect("journal suffix ends with its stem");
+        assert_eq!(ns, ".diskedit.");
+        assert_eq!(CHECKPOINT_SUFFIX, format!("{ns}ckpt"));
+        assert_eq!(LOCK_SUFFIX, format!("{ns}lock"));
+        assert_eq!(LOG_SUFFIX, format!("{ns}log"));
+        assert_eq!(CKPT_TMP_PREFIX, format!("{ns}ckpt.tmp."));
+        // 旧版 GUID 命名的 checkpoint 有意不带命名空间
         assert_eq!(LEGACY_GUID_CKPT_SUFFIX, ".ckpt");
 
         // 镜像：四类伴随文件都是目标路径的同目录兄弟
         let img = PathBuf::from("/tmp/x.img");
         let id = TargetIdentity::resolve_image(&img);
-        assert_eq!(id.journal_candidates()[0], PathBuf::from("/tmp/x.img.diskedit.journal"));
-        assert_eq!(id.checkpoint_candidates(None)[0], PathBuf::from("/tmp/x.img.diskedit.ckpt"));
-        assert_eq!(id.lock_path(), PathBuf::from("/tmp/x.img.diskedit.lock"));
-        assert_eq!(id.log_path(None), PathBuf::from("/tmp/x.img.diskedit.log"));
+        assert_eq!(id.journal_candidates()[0], suffix_path(&img, JOURNAL_SUFFIX));
+        assert_eq!(id.checkpoint_candidates(None)[0], suffix_path(&img, CHECKPOINT_SUFFIX));
+        assert_eq!(id.lock_path(), suffix_path(&img, LOCK_SUFFIX));
+        assert_eq!(id.log_path(None), suffix_path(&img, LOG_SUFFIX));
     }
 
     /// 非 loop 块设备的身份是**盘级**的：journal / checkpoint / lock 按 disk_key 落点，

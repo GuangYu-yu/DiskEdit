@@ -6,10 +6,17 @@ use std::process::Command;
 
 /// 落盘伴随文件名的词表：与 `src/dev.rs` 的同名常量同值。集成测试是独立 crate，
 /// 取不到 crate 内的常量，故在这里复写一份——改拼法时两处一起改（src 侧有
-/// `dev::tests::artifact_names_are_pinned_as_documented` 会提醒）
-const JOURNAL_SUFFIX: &str = ".diskedit.journal";
-const CHECKPOINT_SUFFIX: &str = ".diskedit.ckpt";
-const LOCK_SUFFIX: &str = ".diskedit.lock";
+/// `dev::tests::artifact_names_are_pinned_as_documented` 会提醒）。
+/// 命名空间也只在宏体里写一次；跨 crate 无法共享宏，故宏同样复写一份
+macro_rules! sidecar_suffix {
+    ($stem:literal) => {
+        concat!(".diskedit.", $stem)
+    };
+}
+
+const JOURNAL_SUFFIX: &str = sidecar_suffix!("journal");
+const CHECKPOINT_SUFFIX: &str = sidecar_suffix!("ckpt");
+const LOCK_SUFFIX: &str = sidecar_suffix!("lock");
 /// abandon 的改写名（同 `src/cmd/abandon.rs` 的 ABANDONED_SUFFIX）
 const ABANDONED_SUFFIX: &str = ".abandoned";
 
