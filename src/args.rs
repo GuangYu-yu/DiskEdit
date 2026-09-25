@@ -1,5 +1,6 @@
 //! 参数层：命令行解析、每命令旗标消费契约（fail-closed）与帮助文本入口。
 
+use crate::dev::PartSelector;
 use crate::support::{bail_fail, Fail, EXIT_REFUSED};
 
 /// 顶层用法文本。错误用法打到 stderr 退 10（refused：请求无效、未写盘）；
@@ -25,7 +26,9 @@ const USAGE_TEXT: &str = r#"diskedit — disk / image editor
 
   diskedit help <CMD>                            details for one command
 
-target: image path or block device; :N = partition number (1-based)
+target: image path or block device; :N = partition number (1-based); :last = the last
+        partition a command can act on (on MBR an extended container does not count;
+        a target without a partition table takes neither). `--grow` takes them too
 common opts: --no-fs  change the partition only, skip filesystem steps (fs grow /
                       swap rebuild / lvm chain become out of scope, so layout
                       success alone is exit 0). Shrinking is refused together
@@ -71,8 +74,8 @@ pub(crate) fn help_cmd(name: &str) -> ! {
 
 pub(crate) struct Args {
     pub(crate) target: String,
-    pub(crate) part: Option<u32>,
-    pub(crate) grow: Option<u32>,
+    pub(crate) part: Option<PartSelector>,
+    pub(crate) grow: Option<PartSelector>,
     pub(crate) start: Option<u64>,
     pub(crate) end: Option<u64>,
     pub(crate) size: Option<u64>,
@@ -148,12 +151,18 @@ pub(crate) fn parse_args() -> (String, Args) {
             "--grow" => {
                 a.seen.push("--grow");
                 let v = it.next().unwrap_or_else(|| miss_arg("--grow"));
-                let n: u32 = v.parse().unwrap_or_else(|_| bad_arg("--grow", &v, " (partition number, e.g. 1)"));
-                // 分区号是 1-based：0 会让下游的 (n-1) 下溢，在解析层就挡住
-                if n == 0 {
-                    bad_arg("--grow", &v, " (partition number is 1-based)");
+                // `last` 与数字号并列（大小写不敏感，同 --start end 的先例）：它落到具体号
+                // 要等读到分区表，此处只判定形式
+                if v.eq_ignore_ascii_case("last") {
+                    a.grow = Some(PartSelector::Last);
+                } else {
+                    let n: u32 = v.parse().unwrap_or_else(|_| bad_arg("--grow", &v, " (partition number or `last`, e.g. 1)"));
+                    // 分区号是 1-based：0 会让下游的 (n-1) 下溢，在解析层就挡住
+                    if n == 0 {
+                        bad_arg("--grow", &v, " (partition number is 1-based)");
+                    }
+                    a.grow = Some(PartSelector::Number(n));
                 }
-                a.grow = Some(n);
             }
             "--size" => {
                 a.seen.push("--size");

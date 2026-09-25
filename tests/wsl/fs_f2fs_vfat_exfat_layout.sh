@@ -102,11 +102,11 @@ sgdisk -v "$T" >/dev/null 2>&1 && echo "sgdisk clean" || { echo "sgdisk ISSUES";
 
 echo
 echo "########## E: squashfs + 尾部 overlay（OpenWrt combined）扩容 ##########"
-# 依据：src/fsops.rs:1024-1053 resize_fs_in 的 squashfs 分支：定位尾部 RW overlay
-# （src/fsid.rs:236-265 overlay_offset_at：squashfs bytes_used@0x28，按 64KiB 上对齐），
-# 识别内层 FS（仅 ext/f2fs 可扩，src/fsops.rs:1037-1041），复用既有扩容分发。
-# 本用例经 resizefs（离线）触达该分支；resize 的 preflight check_grow 未列 squashfs/erofs
-# （src/fsops.rs:812-825 grow_support 的兜底分支），会先拒——该差异见报告，不在此断言。
+# 依据：src/fsops.rs grow_target_at 是"这段区域里能扩的是什么"的唯一判据——squashfs/
+# erofs 只读根取分区尾部的 RW overlay 层（src/fsid.rs overlay_offset_at：bytes_used@0x28
+# 按 64KiB 上对齐），内层仅 ext/f2fs 可扩，其余类型拒绝。
+# 本段先经 resizefs（离线，只动 FS），再由 E2 走 resize 整条链路（表 + FS）——
+# 写盘前的 preflight 与写盘后的收尾取同一判据，故 squashfs/erofs 不再被一律先拒
 SQSRC=/var/tmp/t25sqsrc
 SQIMG=/var/tmp/t25sq.sqfs
 rm -rf "$SQSRC" "$SQIMG"; mkdir -p "$SQSRC"
@@ -136,6 +136,56 @@ if [ "$E" = "0" ] && [ -n "$B0" ] && [ -n "$B1" ] && [ "$B1" -gt "$B0" ]; then
   echo "E SQUASHFS-OVERLAY-GROW OK"
 else
   echo "E NO GROW (exit=$E, $B0 -> $B1)"; rc=1
+fi
+# E2：同一条链路经 resize（分区 + 内层 FS 一起）——内层由写盘前的 preflight 解析出来，
+# 不再因 squashfs/erofs 不在 grow_support 名单里而在写盘前被拒
+OUT=$($B resize "$T":1 grow 2>&1); E2=$?
+NEWLAST=$($B info "$T" | grep -o '"last_lba":[0-9]*' | head -1 | cut -d: -f2)
+echo "resize grow exit=$E2 : $(echo "$OUT" | tail -1)"
+if [ "$E2" = "0" ] && [ -n "$NEWLAST" ] && [ "$NEWLAST" -gt 524287 ]; then
+  echo "E2 RESIZE-OVERLAY-GROW OK"
+else
+  echo "E2 NO GROW (exit=$E2, last_lba=$NEWLAST): $(echo "$OUT" | tail -1)"; rc=1
+fi
+
+echo
+echo "########## G: 首启现场（尾部 RW 层尚未格式化）扩容 ##########"
+# 依据：grow_target_at 把"没有可扩的文件系统"分成两种——尚未格式化的 RW 层（那块空间会被
+# 首次挂载的 fstools 建满）与空区域 / PV（什么都不会发生）。分区层命令对两者都算完成：
+# 分区扩到末尾即退 0，而不是把首启现场报成"不支持"
+rm -f "$T" "$T"$SIDECAR_GLOB
+truncate -s 512M "$T"
+$B new "$T" --yes >/dev/null
+$B add "$T" --start 2048 --end 524287 --name rootfs >/dev/null
+dd if="$SQIMG" of="$T" bs=512 seek=2048 conv=notrunc 2>/dev/null
+OUT=$($B resize "$T":1 grow 2>&1); EG=$?
+NEWLAST=$($B info "$T" | grep -o '"last_lba":[0-9]*' | head -1 | cut -d: -f2)
+echo "resize grow exit=$EG : $(echo "$OUT" | tail -1)"
+if [ "$EG" = "0" ] && [ -n "$NEWLAST" ] && [ "$NEWLAST" -gt 524287 ]; then
+  echo "G FIRST-BOOT-OVERLAY OK（分区已扩，RW 层待首次挂载初始化）"
+else
+  echo "G WRONG EXIT ($EG, last_lba=$NEWLAST): $(echo "$OUT" | tail -1)"; rc=1
+fi
+# G2/G3：同一个判据，两条命令的后置条件不同——resizefs 只动 FS，首启现场它没有可写的
+# 后置条件（退 0，并说明该层由首次挂载创建）；而分区里压根没有文件系统时它什么都没做，
+# 必须拒绝（退 10）——报成功会让脚本以为空间已可用
+OUT=$($B resizefs "$T":1 2>&1); ER=$?
+echo "resizefs (first-boot overlay) exit=$ER : $(echo "$OUT" | tail -1)"
+if [ "$ER" = "0" ]; then
+  echo "G2 RESIZEFS-OVERLAY-NOOP OK"
+else
+  echo "G2 WRONG EXIT ($ER): $(echo "$OUT" | tail -1)"; rc=1
+fi
+rm -f "$T" "$T"$SIDECAR_GLOB
+truncate -s 512M "$T"
+$B new "$T" --yes >/dev/null
+$B add "$T" --start 2048 --end 524287 --name empty >/dev/null
+OUT=$($B resizefs "$T":1 2>&1); ER2=$?
+echo "resizefs (no filesystem) exit=$ER2 : $(echo "$OUT" | tail -1)"
+if [ "$ER2" = "10" ]; then
+  echo "G3 RESIZEFS-NOFS-REFUSED OK"
+else
+  echo "G3 WRONG EXIT ($ER2): $(echo "$OUT" | tail -1)"; rc=1
 fi
 rm -rf "$SQSRC" "$SQIMG" 2>/dev/null
 
