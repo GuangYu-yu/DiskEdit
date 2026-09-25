@@ -8,11 +8,11 @@
   "pages": [
     {
       "title": "总览",
-      "purpose": "DiskEdit 是什么、解决什么问题：无 libparted 的 Rust 分区表/文件系统编辑器，镜像与块设备统一抽象。给出 src/ 模块分层图（命令层 src/cmd/、领域层 table/movepart/online/fsid/fsops/lvm/gpt_policy、基础层 dev/targetlock/transaction/outcome），并链接各子页。"
+      "purpose": "DiskEdit 是什么、解决什么问题：无 libparted 的 Rust 分区表/文件系统编辑器，镜像与块设备统一抽象。给出 src/ 的模块分层图（命令层 / 领域层 / 基础层的划分与各自职责，含 Linux 专属模块的处理），并链接各子页。"
     },
     {
       "title": "构建与配置",
-      "purpose": "Document Cargo.toml：edition 2024、依赖仅 gptman/crc/serde_json（libc 仅 Linux）、clippy deny let_underscore_must_use 及其配合的 best_effort_* 命名约定、test-faults feature、.github/workflows 的 CI 与发布流程（softprops/action-gh-release@v3、profile.release strip=true）。"
+      "purpose": "Document 构建与配置：Cargo.toml 的包元信息、依赖与 feature、license 与 clippy lint 策略及其配套的命名约定；.cargo/config.toml 的 rustflags 与 release profile 以及各自的意图；LICENSES/ 的许可归属（本体、依赖、外部调用工具）；.gitattributes 的换行约定；.github/workflows 的测试、构建、产物剥离与发布流程，以及每个 workflow 的触发方式与门禁。"
     },
     {
       "title": "执行模型与退出码",
@@ -39,7 +39,7 @@
     },
     {
       "title": "调整大小命令（resize 系）",
-      "purpose": "Document src/cmd/resize.rs 的 resize/resize-part/resizefs 分发：离线 vs 在线选择、绝对 vs 相对尺寸、--allow-move（仅新搬移授权，续跑豁免，需 --yes）、--grow-to-end 的 tail-packing 与精确 SIZE 的 minimal displacement 两种策略、--no-fs、LVM 增长旗标、--size 与 --grow-to-end 互斥。",
+      "purpose": "Document src/cmd/resize.rs 的 resize/resize-part/resizefs 分发：离线 vs 在线选择、绝对 vs 相对尺寸、--allow-move（仅新搬移授权，续跑豁免，需 --yes）、--grow-to-end 的 tail-packing 与精确 SIZE 的 minimal displacement 两种策略、--no-fs 与 FS 步骤的边界（哪些步骤退出后置条件、哪些照常执行，以及 FS 无法处理时它为何是必须显式给出的那个入口；判定只有一处，不散落各命令）、LVM 增长旗标、--size 与 --grow-to-end 互斥。",
       "parent": "命令行界面"
     },
     {
@@ -73,7 +73,7 @@
     },
     {
       "title": "文件系统识别",
-      "purpose": "Document src/fsid.rs：magic-number 识别 ext/xfs/btrfs/f2fs/ntfs/vfat/exfat/swap/squashfs/erofs/hfsplus/apfs/lvm2_pv；I/O 错误与真正未知文件系统的区分；识别结果如何驱动策略（对齐、grow-end、mkfs/resize 支持）。",
+      "purpose": "Document src/fsid.rs：识别能力的清单与各文件系统签名的偏移出处（以模块现状为准）；识别刻意按字节区间而非 LBA + 扇区大小，以及这一取舍的由来；ext 家族为何只回一个名字；读错误与\"区间内没有已知签名\"必须分开，否则 I/O 故障会被当成没有文件系统；swap 签名位置由创建机页大小决定、盘上不记录，故按候选页大小探测，且存在识别得出而本机激活不了的一类（两个探测口径的差别）；overlay RW 层起点如何从只读根的超级块算出并对齐；识别结果如何驱动策略（对齐、grow-end、overlay 起点、mkfs/resize 支持）。",
       "parent": "存储与分区表核心"
     },
     {
@@ -101,7 +101,7 @@
     },
     {
       "title": "规划：尾装箱与最小位移",
-      "purpose": "Document src/movepart.rs 的 Plan/PlanEntry 生成与 src/gpt_policy.rs 的策略判定：grow 关键字的 tail-packing 与精确调整的 minimal displacement 两种策略、gpt_policy 基于文件系统识别结果约束布局决策（含禁止的类型 GUID）、重叠检查、preflight 与 durable 边界的划分。",
+      "purpose": "Document src/movepart.rs 的 Plan/PlanEntry 生成与 src/gpt_policy.rs 的策略判定：grow 关键字的 tail-packing 与精确调整的 minimal displacement 两种策略、gpt_policy 基于文件系统识别结果约束布局决策（含禁止的类型 GUID）、重叠检查、preflight 与 durable 边界的划分；另需交代 gpt_policy 不属规划的那一半职责——全仓读表的唯一入口（表类型判定与表自身的扇区大小）、目标身份的解释（:N/:last 的纯函数解析）、GPT 专属的几何校验。",
       "parent": "分区数据搬移与调整"
     },
     {
@@ -135,11 +135,11 @@
     },
     {
       "title": "测试",
-      "purpose": "测试策略总览父页：Cargo 单元测试与 tests/cli.rs 集成测试、test-faults 故障注入。链接两个子页。"
+      "purpose": "测试策略总览父页：三层验证面——src/ 内的 Cargo 单元测试、tests/cli.rs 的进程级集成测试（spawn 二进制 + 结构化断言 + 字节级校验）、tests/wsl 的真块设备回归（Linux + root + 外部工具，含引导验证），以及贯穿其中的 test-faults 故障注入。链接两个子页。"
     },
     {
-      "title": "CLI 集成测试套件",
-      "purpose": "Document tests/cli.rs 结构：spawn 二进制、结构化 JSON 断言（不用子串匹配）、字节级验证（设备级分区哈希 + 卸载后 e2fsck/xfs_repair/btrfs check）、退出码与恢复场景覆盖、4Kn GPT 与 >2TiB 稀疏镜像用例。",
+      "title": "测试套件：cli.rs 与 WSL 真块设备回归",
+      "purpose": "Document 两层集成测试。tests/cli.rs：spawn 二进制、结构化断言而非子串匹配、字节级验证与恢复场景覆盖、大几何与特殊扇区大小的用例。tests/wsl：run_all.sh 的执行顺序与判定规则（以脚本退出码为准，输出只作现场阅读）、单脚本超时、lib.sh 提供的共享件（断言、二进制定位与构建变体、临时设备与伴随文件的自动回收）、脚本的主题分组、运行前提（Linux + root + 外部工具）以及承载它的 workflow。",
       "parent": "测试"
     },
     {
