@@ -32,7 +32,10 @@ pub(crate) const HELP: &str = r#"diskedit resize <TARGET>:N <SIZE> [OPTIONS]
     `resize-part` or `move`, not `resize`).
 
   Notes: PV shrink is refused (use the lvreduce/pvresize chain). --no-fs skips
-  the filesystem steps, so it cannot shrink: the FS has to be shrunk first."#;
+  the filesystem step of the grown partition, so it cannot shrink: the FS has
+  to be shrunk first. It is also required whenever the filesystem inside
+  cannot be grown (unidentified, or not wired to a tool) — otherwise the
+  request is refused (10)."#;
 
 /// SIZE 参数 →（绝对目标字节数, grow 标记），GPT/MBR resize 共用。
 /// 绝对值/扩/缩都锚定当前分区字节数；两者皆缺 = 未指定 SIZE
@@ -536,10 +539,12 @@ fn mbr_grow_finish(
             })
             .unwrap_or_else(|f| bail_fail(f));
         match fsops::grow_target_at(src, part, base, len) {
-            // 没有可扩的文件系统（含尚未格式化的 overlay RW 层）：布局已改，后置条件空。
+            // 走到这里的是写盘前已放行、没有可扩 FS 的那几种：首启 overlay、PV，以及页格式
+            // 在本机激活不了的 swap——`unknown` 已由 check_grow_step 拦下，本支至多因盘在
+            // 两步之间被改动而见到它。
             // 仍要探一遍"元数据是 swap 却激活不了"那类真实待办——探测用扩容前的区间：
             // swap 签名恒在分区首 32K 内，起点未变，原长度足够容纳
-            Ok(fsops::Growable::OverlayPending | fsops::Growable::NoFilesystem(_)) => {
+            Ok(fsops::Growable::OverlayPending | fsops::Growable::SwapUnactivatable | fsops::Growable::NoFilesystem(_)) => {
                 match movepart::swap_rebuild_pending(
                     src, part, p.start_lba as u64 * ss, p.size_lba as u64 * ss,
                 ) {
@@ -686,6 +691,15 @@ fn cmd_resize_msdos(a: &Args, pref: PartSelector, size_arg: Option<&str>, src_ro
     // 占用复核在锁下（离线选择时的探测在锁前）：首次落盘前确认分区仍空闲，与 GPT 分支同闸
     crate::fsops::ensure_idle_before_write(&src, part, p.start_lba as u64 * ss).unwrap_or_else(|f| bail_fail(f));
     let total_sectors = src.size / ss;
+    // 后置条件含 FS 调整：请求在扩（`grow` 即便右侧无空闲，也仍要把 FS 扩满现分区，见下面
+    // free == 0 那支）就必须在写表之前问出"里面是什么、那一步做得了吗"——判据与 GPT 路径
+    // 同一处。缩容有下面的 check_shrink 守卫链，no-op 两不动，故都不在此列
+    let extends = grow_to_end || target.is_some_and(|b| b / ss > p.size_lba as u64);
+    if extends && !a.no_fs {
+        fsops::grow_target_at(&src, part, p.start_lba as u64 * ss, p.size_lba as u64 * ss)
+            .and_then(fsops::check_grow_step)
+            .unwrap_or_else(|e| bail_fail(Fail::from(e)));
+    }
     if grow_to_end {
         let free = free_right_msdos(&mbr, p, total_sectors);
         let mut table_written = false;

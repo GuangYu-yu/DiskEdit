@@ -31,16 +31,18 @@ run_case() {
   lo_detach "$LD"
 
   echo "== case: $label =="
+  # p1 是 grow 目标且没有 FS（b 才有 ext4）：扩分区表要显式 --no-fs，
+  # 本段验的是 ckpt/续跑，与 FS 步骤无关
   if [ -n "$fault" ]; then
-    DISKEDIT_FAULT=$fault $BF resize "$T":1 +100M --allow-move --yes >/dev/null 2>&1
+    DISKEDIT_FAULT=$fault $BF resize "$T":1 +100M --allow-move --yes --no-fs >/dev/null 2>&1
     echo "process aborted (expected)"
   else
-    $BF resize "$T":1 +100M --allow-move --yes >/dev/null 2>&1
+    $BF resize "$T":1 +100M --allow-move --yes --no-fs >/dev/null 2>&1
   fi
   [ -f "$T$CKPT_SUFFIX" ] && echo "ckpt left: yes" || echo "ckpt left: no"
 
   # 重跑同命令 → 续传（无注入）
-  OUT=$($BF resize "$T":1 +100M --allow-move --yes 2>&1)
+  OUT=$($BF resize "$T":1 +100M --allow-move --yes --no-fs 2>&1)
   if [ -n "$expect" ]; then
     echo "$OUT" | grep -q "resuming at entry 0 chunk $expect (durable checkpoint)" \
       && echo "RESUME-START OK ($expect)" || { echo "RESUME-START WRONG (want $expect)"; rc=1; echo "$OUT" | grep resuming; }

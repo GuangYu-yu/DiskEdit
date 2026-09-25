@@ -21,10 +21,11 @@ $BF create "$T" --size 300M --name p2 --fs ext4 >/dev/null
 truncate -s 1200M "$T"   # 预扩容器 → backup GPT/PMBR 过期 → 触发 repair 路径
 LD=$(lo_attach "$T")
 mount_at "${LD}p2" /testmnt && dd if=/dev/urandom of=/testmnt/b2.bin bs=1M count=250 2>/dev/null; umount /testmnt; MD2=$(md5sum "${LD}p2" | cut -d' ' -f1); lo_detach "$LD"
-DISKEDIT_FAULT=after-repair $BF resize "$T":1 +100M --allow-move --yes >/dev/null 2>&1
+# p1 是 grow 目标且没有 FS（E 段只有 p2 是 ext4）：扩分区表要显式 --no-fs
+DISKEDIT_FAULT=after-repair $BF resize "$T":1 +100M --allow-move --yes --no-fs >/dev/null 2>&1
 echo "aborted (expected); ckpt exists: $([ -f "$T$CKPT_SUFFIX" ] && echo yes || echo no)"
 # 无 ckpt → 正常重算：repair 已收敛（再判为 Normal）→ 完整执行
-$BF resize "$T":1 +100M --allow-move --yes >/dev/null 2>&1; echo "rerun exit=$?"
+$BF resize "$T":1 +100M --allow-move --yes --no-fs >/dev/null 2>&1; echo "rerun exit=$?"
 LD=$(lo_attach "$T")
 [ "$MD2" = "$(md5sum "${LD}p2" | cut -d' ' -f1)" ] && echo "p2 DATA OK" || { echo "p2 DATA CORRUPT"; rc=1; }
 e2fsck -fn "${LD}p2" >/dev/null 2>&1 && echo "p2 e2fsck clean" || { echo "p2 e2fsck ISSUES"; rc=1; }
@@ -44,9 +45,10 @@ $BF create "$T" --size 300M --name p3 --fs ext4 >/dev/null
 LD=$(lo_attach "$T")
 UUID_BEFORE=$(blkid -s UUID -o value "${LD}p2")
 mount_at "${LD}p3" /testmnt && dd if=/dev/urandom of=/testmnt/b3.bin bs=1M count=250 2>/dev/null; umount /testmnt; MD3=$(md5sum "${LD}p3" | cut -d' ' -f1); lo_detach "$LD"
-DISKEDIT_FAULT=after-swap-commit:1 $BF resize "$T":1 +100M --allow-move --yes >/dev/null 2>&1
+# p1 是 grow 目标且没有 FS：同样要 --no-fs（p2 的 swap 重建属搬移的一环，与本开关无关）
+DISKEDIT_FAULT=after-swap-commit:1 $BF resize "$T":1 +100M --allow-move --yes --no-fs >/dev/null 2>&1
 echo "aborted (expected)"
-OUT=$($BF resize "$T":1 +100M --allow-move --yes 2>&1); E=$?
+OUT=$($BF resize "$T":1 +100M --allow-move --yes --no-fs 2>&1); E=$?
 echo "$OUT" | grep -o "resuming at entry [0-9]* chunk [0-9]*" | head -1
 echo "rerun exit=$E"
 LD=$(lo_attach "$T")
