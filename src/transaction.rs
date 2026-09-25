@@ -18,7 +18,7 @@ use std::path::Path;
 use std::os::unix::fs::FileTypeExt;
 
 use crate::args::Args;
-use crate::dev::{FileSource, Journal, TargetIdentity};
+use crate::dev::{FileSource, Journal, PartSelector, TargetIdentity};
 use crate::outcome::Fail;
 use crate::targetlock::TargetLock;
 use crate::{dev, table};
@@ -135,8 +135,9 @@ pub(crate) enum ResumeClaim {
     AnyCheckpoint,
     /// 只认本分区的 relocation 作业（`resize` / `apply`）。槽位被别的分区的作业占着
     /// 时由领域层给出针对性拒绝理由；被另一族作业（单分区 resize 的 RsCheckpoint）
-    /// 占着时拒绝——本入口续不了它，出路是 `resize-part` / `move`
-    OwnRelocation(u32),
+    /// 占着时拒绝——本入口续不了它，出路是 `resize-part` / `move`。
+    /// 带的是分区选择器而非具体号：`:last` 落到具体号要读表，而那一刻目标刚在锁下打开
+    OwnRelocation(PartSelector),
 }
 
 impl TransactionManager {
@@ -182,7 +183,8 @@ impl TransactionManager {
                     }
                     true
                 }
-                ResumeClaim::OwnRelocation(grow_part) => {
+                ResumeClaim::OwnRelocation(r) => {
+                    let grow_part = crate::gpt_policy::resolve_part(&src, r)?;
                     if !crate::movepart::relocation_ownership(&src, grow_part)? {
                         return Err(Self::busy(&active));
                     }

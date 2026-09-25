@@ -130,15 +130,17 @@ pub(crate) fn cmd_add(a: &Args) -> u8 {
 }
 
 pub(crate) fn cmd_del(a: &Args) -> u8 {
-    let Some(part) = a.part else { crate::args::usage() };
+    let Some(pref) = a.part else { crate::args::usage() };
     if !a.yes {
-        bail_fail(Fail::refused(format!("`del` removes partition entry {part}; pass --yes to confirm")));
+        bail_fail(Fail::refused("`del` removes the target partition entry; pass --yes to confirm"));
     } else {
         let mut src = open_target_for_write(a).unwrap_or_else(|f| bail_fail(f));
+        // 锁下快照
+        let part = crate::gpt_policy::resolve_part(&src, pref).unwrap_or_else(|f| bail_fail(f));
         let r = match table::table_label(&src) {
             Ok(table::TableLabel::Gpt) => crate::gpt_policy::del_entry(&mut src, part),
             Ok(table::TableLabel::Mbr) => table::del_mdos_entry(&mut src, part),
-            Ok(other) => bail_fail(Fail::refused(format!("cannot del on {other} label"))),
+            Ok(other) => bail_fail(Fail::refused(format!("`del` needs a GPT or MBR target (label: {other})"))),
             Err(e) => bail_fail(Fail::infra(format!("label probe failed: {e}"))),
         };
         match r {
@@ -157,18 +159,17 @@ pub(crate) fn cmd_resize_part(a: &Args) -> u8 {
             "`--start end` does not apply to resize-part (it does not relocate) — use --grow-to-end to extend the partition to the last usable LBA",
         ));
     }
-    let (Some(part), Some(start)) = (a.part, a.start) else { crate::args::usage() };
+    let (Some(pref), Some(start)) = (a.part, a.start) else { crate::args::usage() };
     if a.grow_to_end && a.end.is_some() {
         bail_fail(Fail::refused("--end and --grow-to-end are mutually exclusive".to_string()));
     }
     let (mut src, _resumed) = open_target_for_data_move(a).unwrap_or_else(|f| bail_fail(f));
     // 坐标系在几何计算前确定：resize-part 仅支持 GPT，条目按表头 ss 对齐（可与容器 ss 不同）。
     // 几何走唯一构造点（条目重叠在此被拒），修复后的 last_usable 也由它给出
-    let (g, repair) = match crate::gpt_policy::resolve_geometry(&src) {
-        Ok(Some(v)) => v,
-        Ok(None) => bail_fail(Fail::refused("no GPT on target".to_string())),
-        Err(f) => bail_fail(f),
-    };
+    let (g, repair) = crate::gpt_policy::require_gpt_geometry(&src, "resize-part").unwrap_or_else(|f| bail_fail(f));
+    // 锁下快照
+    let part = crate::gpt_policy::resolve_part_in(crate::gpt_policy::TableEntries::Gpt(&g.entries), pref)
+        .unwrap_or_else(|f| bail_fail(f));
     let end = if a.grow_to_end {
         // 吃满后方可用区（本工具语义）：扩到 last_usable_lba；
         // 后方有分区时由 resize_part 的重叠校验拒绝
@@ -193,16 +194,15 @@ pub(crate) fn cmd_resize_part(a: &Args) -> u8 {
 }
 
 pub(crate) fn cmd_move(a: &Args) -> u8 {
-    let (Some(part), start_opt) = (a.part, a.start) else { crate::args::usage() };
+    let (Some(pref), start_opt) = (a.part, a.start) else { crate::args::usage() };
     if !a.start_end && start_opt.is_none() {
         crate::args::usage();
     }
     let (mut src, _resumed) = open_target_for_data_move(a).unwrap_or_else(|f| bail_fail(f));
-    let (g, repair) = match crate::gpt_policy::resolve_geometry(&src) {
-        Ok(Some(v)) => v,
-        Ok(None) => bail_fail(Fail::refused("move requires a GPT target".to_string())),
-        Err(f) => bail_fail(f),
-    };
+    let (g, repair) = crate::gpt_policy::require_gpt_geometry(&src, "move").unwrap_or_else(|f| bail_fail(f));
+    // 锁下快照
+    let part = crate::gpt_policy::resolve_part_in(crate::gpt_policy::TableEntries::Gpt(&g.entries), pref)
+        .unwrap_or_else(|f| bail_fail(f));
     let e = crate::gpt_policy::live_entry(&g, part).unwrap_or_else(|f| bail_fail(f));
     // 平移保持长度（本工具语义）：new_end = new_start + 原长度 - 1
     let len = e.ending_lba - e.starting_lba + 1;
@@ -225,7 +225,7 @@ pub(crate) fn cmd_move(a: &Args) -> u8 {
 }
 
 pub(crate) fn cmd_copy(a: &Args) -> u8 {
-    let (Some(part), start_opt) = (a.part, a.start) else { crate::args::usage() };
+    let (Some(pref), start_opt) = (a.part, a.start) else { crate::args::usage() };
     if !a.start_end && start_opt.is_none() {
         crate::args::usage();
     }
@@ -234,11 +234,10 @@ pub(crate) fn cmd_copy(a: &Args) -> u8 {
     // 绝不出现"copy 成功后把别人的 journal 当自己的清掉、而那份 ckpt 原样留在槽里"
     let mut src = open_target_for_write(a).unwrap_or_else(|f| bail_fail(f));
     // 坐标系在几何计算前确定：copy 仅支持 GPT，条目按表头 ss 对齐（可与容器 ss 不同）
-    let (g, repair) = match crate::gpt_policy::resolve_geometry(&src) {
-        Ok(Some(v)) => v,
-        Ok(None) => bail_fail(Fail::refused("no GPT on target".to_string())),
-        Err(f) => bail_fail(f),
-    };
+    let (g, repair) = crate::gpt_policy::require_gpt_geometry(&src, "copy").unwrap_or_else(|f| bail_fail(f));
+    // 锁下快照
+    let part = crate::gpt_policy::resolve_part_in(crate::gpt_policy::TableEntries::Gpt(&g.entries), pref)
+        .unwrap_or_else(|f| bail_fail(f));
     let start = if a.start_end {
         let e = crate::gpt_policy::live_entry(&g, part).unwrap_or_else(|f| bail_fail(f));
         let len = e.ending_lba - e.starting_lba + 1;
@@ -279,11 +278,7 @@ pub(crate) fn cmd_create(a: &Args) -> u8 {
     // GPT 条目按**表头** ss 对齐，可与容器 ss 不同，用错单位会算出偏移差一倍的提示
     let (label, gaps, want, lba_bytes) = match table::table_label(&src) {
         Ok(table::TableLabel::Gpt) => {
-            let (g, _repair) = match crate::gpt_policy::resolve_geometry(&src) {
-                Ok(Some(v)) => v,
-                Ok(None) => bail_fail(Fail::refused("no GPT on target — run `new` first".to_string())),
-                Err(f) => bail_fail(f),
-            };
+            let (g, _repair) = crate::gpt_policy::require_gpt_geometry(&src, "create").unwrap_or_else(|f| bail_fail(f));
             let unit = mib_in_sectors(g.ss);
             let want = a.size.map(|b| {
                 if b < g.ss { bail_fail(Fail::refused(format!("size {b} < one sector ({})", g.ss))); }

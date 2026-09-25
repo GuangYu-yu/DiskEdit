@@ -42,7 +42,7 @@ FS 层要 root 是因为经 `losetup` 映射分区；块设备写入靠设备节
 
 ## 命令
 
-`<TARGET>` 为镜像路径或块设备；`:N` 寻址第 N 个分区（1 起）。`diskedit help <CMD>` 查看单命令详助。
+`<TARGET>` 为镜像路径或块设备；`:N` 寻址第 N 个分区（1 起），`:last` 指最后一个可操作分区（MBR 上扩展容器不算，无分区表的目标两者都不接受），`--grow` 同此两形。`diskedit help <CMD>` 查看单命令详助。
 
 | 命令 | 作用 | 写盘 |
 |---|---|---|
@@ -91,7 +91,7 @@ FS 层要 root 是因为经 `losetup` 映射分区；块设备写入靠设备节
 
 缩容时先缩 FS、后改分区边界；FS 缩不动就不动表。
 
-**OpenWrt combined 布局**（同分区内 squashfs/erofs 只读根 + 尾部 RW overlay）：扩容识别内层 FS 后经 offset loop 只扩 RW 层，只扩不缩；内层非 ext/f2fs 时拒绝。多设备 btrfs 拒绝扩容。
+**OpenWrt combined 布局**（同分区内 squashfs/erofs 只读根 + 尾部 RW overlay）：扩容识别内层 FS 后经 offset loop 只扩 RW 层，只扩不缩；内层非 ext/f2fs 时拒绝。尾部 RW 层尚未格式化（首启安装现场）不算失败：分区照扩，该层由首次挂载时的 fstools 初始化，本次无事可做。多设备 btrfs 拒绝扩容。
 
 ## License
 

@@ -849,22 +849,45 @@ impl FileSource {
     }
 }
 
-/// 解析 `<target>[:N]` → (路径, 分区号 Option)。
+/// 分区选择器：用户写下的 `:N` / `:last`（`--grow N|last` 同形）。词法层只能判定形式，
+/// 解析成具体分区号要等读到分区表——语义与分派见 `gpt_policy::resolve_part_in`
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PartSelector {
+    Number(u32),
+    Last,
+}
+
+/// 回显成用户写下的形式：拒绝文案（"本命令不接受分区选择器"）要能让用户对上自己那条命令
+impl std::fmt::Display for PartSelector {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PartSelector::Number(n) => write!(f, "{n}"),
+            PartSelector::Last => f.write_str("last"),
+        }
+    }
+}
+
+/// 解析 `<target>[:N]` → (路径, 分区选择器 Option)。
 /// 本层只判定合法性、不决定进程怎么退出：数字段溢出 u32 静默当整盘目标会误伤数据，
 /// 故作为错误上抛，由调用方（main 的参数层）转成退出码。
 /// `:0` 同样拒绝——分区号是 1-based，静默折叠成"整盘"会把一次针对具体分区的操作
-/// 放大成对整盘的表操作
-pub fn parse_target(s: &str) -> Result<(String, Option<u32>), &'static str> {
+/// 放大成对整盘的表操作。
+/// `:last` 指**最后一个可操作分区**（不是字面上的末端最大表项）；它落到具体号要等读到
+/// 分区表，故本层只判定形式（大小写不敏感，与 `--start end` 同一先例）
+pub fn parse_target(s: &str) -> Result<(String, Option<PartSelector>), &'static str> {
     match s.rfind(':') {
         // 尾冒号（`img:`）多半是分区号漏写的笔误：按整路径打开只会报"文件不存在"，
         // 不如当场说清缺的是什么
         Some(pos) if pos + 1 == s.len() => Err("missing partition number after ':'"),
+        Some(pos) if s[pos + 1..].eq_ignore_ascii_case("last") => {
+            Ok((s[..pos].to_string(), Some(PartSelector::Last)))
+        }
         Some(pos) if s[pos + 1..].chars().all(|c| c.is_ascii_digit()) => {
             let n: u32 = s[pos + 1..].parse().map_err(|_| "partition number out of range")?;
             if n == 0 {
                 return Err("partition number is 1-based (:0 is not a partition)");
             }
-            Ok((s[..pos].to_string(), Some(n)))
+            Ok((s[..pos].to_string(), Some(PartSelector::Number(n))))
         }
         _ => Ok((s.to_string(), None)),
     }
@@ -1282,16 +1305,19 @@ mod tests {
     use super::*;
 
     /// `:N` 后缀的判定：分区号 1-based，`:0` 必须拒绝而不是折叠成"整盘"——
-    /// 折叠会把一次针对具体分区的操作放大成对整盘的表操作
+    /// 折叠会把一次针对具体分区的操作放大成对整盘的表操作。
+    /// `:last` 与数字号并列，大小写不敏感
     #[test]
     fn parse_target_partition_suffix() {
         assert_eq!(parse_target("img").unwrap(), ("img".to_string(), None));
-        assert_eq!(parse_target("img:1").unwrap(), ("img".to_string(), Some(1)));
-        assert_eq!(parse_target("img:4294967295").unwrap(), ("img".to_string(), Some(u32::MAX)));
+        assert_eq!(parse_target("img:1").unwrap(), ("img".to_string(), Some(PartSelector::Number(1))));
+        assert_eq!(parse_target("img:4294967295").unwrap(), ("img".to_string(), Some(PartSelector::Number(u32::MAX))));
         assert!(parse_target("img:0").is_err());
         assert!(parse_target("img:4294967296").is_err());
         assert!(parse_target("img:").is_err());
-        // 文件名的冒号不是分区后缀（其后不是纯数字）
+        assert_eq!(parse_target("img:last").unwrap(), ("img".to_string(), Some(PartSelector::Last)));
+        assert_eq!(parse_target("img:LAST").unwrap(), ("img".to_string(), Some(PartSelector::Last)));
+        // 文件名的冒号不是分区后缀（其后不是纯数字，也不是 last）
         assert_eq!(parse_target("/a/b:c.img").unwrap(), ("/a/b:c.img".to_string(), None));
     }
 

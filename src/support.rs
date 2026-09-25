@@ -4,7 +4,7 @@
 pub(crate) use crate::outcome::{Fail, EXIT_OK, EXIT_REFUSED};
 
 use crate::args::Args;
-use crate::dev::FileSource;
+use crate::dev::{FileSource, PartSelector};
 use crate::geometry::ValidatedGeometry;
 use crate::transaction::TransactionManager;
 use crate::{movepart, table};
@@ -149,7 +149,7 @@ pub(crate) fn open_target_for_data_move(
 /// （会覆盖别人的现场），也不能按别人的 ckpt 续跑，通用的 busy 文案说不出这一点
 pub(crate) fn open_target_resumable(
     a: &Args,
-    grow_part: u32,
+    grow_part: PartSelector,
 ) -> Result<(FileSource, bool), crate::outcome::Fail> {
     TransactionManager::begin_or_resume(a, ResumeClaim::OwnRelocation(grow_part))
 }

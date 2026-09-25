@@ -2,6 +2,7 @@
 
 use crate::support::*;
 use crate::args::Args;
+use crate::dev::PartSelector;
 use crate::movepart;
 
 pub(crate) const HELP: &str = r#"diskedit plan <TARGET> --grow N
@@ -40,17 +41,19 @@ pub(crate) fn print_plan(plan: &movepart::Plan, target_start: u64) -> std::io::R
 }
 
 pub(crate) fn cmd_plan_apply(cmd: &str, a: &Args) -> u8 {
-    let Some(grow) = a.grow else { crate::args::usage() };
+    let Some(pref) = a.grow else { crate::args::usage() };
     if cmd == "plan" {
         // 这一段只读：plan 不写盘，故按只读命令打开——否则一块正被使用的盘上
         // 连 `plan` 都跑不出计划
         let mut src = open_target_ro(a).unwrap_or_else(|f| bail_fail(f));
         // 解析一次（构造点即拒绝条目重叠），随后的续传判定与规划共用它
-        let (g, repair) = match crate::gpt_policy::resolve_geometry(&src) {
-            Ok(Some(v)) => v,
-            Ok(None) => bail_fail(Fail::refused("no GPT on target".to_string())),
-            Err(f) => bail_fail(f),
-        };
+        let (g, repair) = crate::gpt_policy::require_gpt_geometry(&src, cmd).unwrap_or_else(|f| bail_fail(f));
+        // 只读快照
+        let grow = crate::gpt_policy::resolve_part_in(
+            crate::gpt_policy::TableEntries::Gpt(&g.entries),
+            pref,
+        )
+        .unwrap_or_else(|f| bail_fail(f));
         // 恢复感知：盘上有未收尾的搬移作业时，plan 要打印的就是那份 ckpt 里的计划
         // （现算的 delta 与 ckpt 不一致，会撞上恢复校验）
         let plan = match movepart::make_plan_resuming(&mut src, &g, repair, grow) {
@@ -80,11 +83,11 @@ pub(crate) fn cmd_plan_apply(cmd: &str, a: &Args) -> u8 {
         print_moves(&plan).unwrap_or_else(|e| bail_fail(Fail::infra(e.to_string())));
         EXIT_OK
     } else {
-        apply_cmd(a, grow)
+        apply_cmd(a, pref)
     }
 }
 
-fn apply_cmd(a: &Args, grow: u32) -> u8 {
+fn apply_cmd(a: &Args, pref: PartSelector) -> u8 {
     // chunk_bytes 只校验 --chunk-size 的取值，与目标无关：放在一切开盘动作之前，
     // 请求本身不合法 ⇒ 10（改参数有解），不让它被"现有 ckpt 不匹配"之类的
     // 盘上现状消息抢占
@@ -95,21 +98,23 @@ fn apply_cmd(a: &Args, grow: u32) -> u8 {
     // 一次打开完成分类：是否续跑在**锁下**按 ckpt 判定（见 open_target_resumable），
     // 不沿用任何只读预判——判据与开目标之间不许留窗口
     let (mut src, _resuming) =
-        open_target_resumable(a, grow).unwrap_or_else(|f| bail_fail(f));
+        open_target_resumable(a, pref).unwrap_or_else(|f| bail_fail(f));
     // plan 在**锁下**构造：它是本次执行的权威值（续跑时取自 ckpt 自持）。
     // 取锁之前构造的那份只能算草稿——只读阶段与取得独占权之间盘可以被别人改写，
     // 执行一份与盘上现状无关的计划就是把过期决定写进盘。
     // 几何在同一把锁下解析一次，plan、Logger 与 apply 的判定/执行全程共用它
-    let (g, repair) = match crate::gpt_policy::resolve_geometry(&src) {
-        Ok(Some(v)) => v,
-        Ok(None) => bail_fail(Fail::refused("no GPT on target".to_string())),
-        Err(f) => bail_fail(f),
-    };
+    let (g, repair) = crate::gpt_policy::require_gpt_geometry(&src, "apply").unwrap_or_else(|f| bail_fail(f));
+    // 锁下快照
+    let grow = crate::gpt_policy::resolve_part_in(
+        crate::gpt_policy::TableEntries::Gpt(&g.entries),
+        pref,
+    )
+    .unwrap_or_else(|f| bail_fail(f));
     let plan = match movepart::make_plan_resuming(&mut src, &g, repair, grow) {
         Ok(p) => p,
         Err(f) => bail_fail(f),
     };
-    // 表的可解析性由 prepare_apply 在写盘前判定（无表 → refused 10，表非法 → infra 30）：
+    // 表的可解析性由上面那一次 require_gpt_geometry 判过（无 GPT → refused 10，表非法 → infra 30）：
     // 同一事实不设第二判据——两处判据迟早会在某个入口分叉，且自判拒绝时还不报原因
     let mut logger = Logger::open(&src, Some(g.header.disk_guid));
     let o = movepart::apply(&mut src, &g, &plan, chunk, a.no_fs, &mut |m| logger.log(m));

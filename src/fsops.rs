@@ -914,7 +914,89 @@ pub fn rescue_hint(fstype: &str, dev: &str) -> String {
     }
 }
 
-/// resize 分发（扩容到设备/分区末端）：
+/// 本次扩容要动的**那一段**与它里面的文件系统：`scope` 是既有的范围表达（普通 FS = 分区
+/// 本身；OpenWrt overlay 的 RW 层 = 分区内的一段），`fstype` 是 identify 口径的名字。
+/// 判断与执行因此同源——调用点拿到它之后只把区间交给 [`GrowTarget::resize_fs`]，
+/// 不自己推算 overlay 的偏移
+pub struct GrowTarget {
+    pub scope: DeviceScope,
+    pub fstype: &'static str,
+}
+
+impl GrowTarget {
+    /// 按判断期的同一份结论执行扩容
+    pub fn resize_fs(&self, src: &FileSource) -> Result<(), FsError> {
+        resize_fs_in(src, &self.scope, self.fstype)
+    }
+}
+
+/// [`grow_target_at`] 的结论。三种结果对调用方的含义不同，故不塌缩成"能不能扩"一个布尔：
+/// 有活要干的只有 `Target`；另两种都没有可扩的文件系统，区别在那块空间会不会被用上——
+/// 未初始化的 overlay RW 层由首次挂载的 fstools 建满（分区层到此即完成），空区域 / LVM PV
+/// 则什么都不会发生（FS 层命令把它当成功，就是报出一件没做过的事）
+pub enum Growable {
+    /// 有可扩的一段：普通分区就是它自己，OpenWrt 的只读根取分区尾部的 RW 层
+    Target(GrowTarget),
+    /// 尾部 RW 层尚未格式化（OpenWrt 首启）：空间由首次挂载时的 fstools 按尾部区域建满，
+    /// 本次没有可写的后置条件
+    OverlayPending,
+    /// 区域里没有文件系统（空区域、LVM PV）：携带识别出的类型，供调用方分辨情形
+    /// （如 PV 指路到 `resize --grow-lv`）
+    NoFilesystem(&'static str),
+}
+
+/// 这段区域里能扩的文件系统是哪个 —— **唯一的判据**。写盘前的 preflight（能不能做、工具是否
+/// 齐备）与写盘后的收尾（真正执行）都取它的结论；两处各按自己掌握的区间调用：写盘前是旧条目
+/// 的区间，写盘后是新条目的区间，差别只在区间，不在规则。结论见 [`Growable`]；
+/// `Err` 是"认得出却不接线"（含只有只读根、没有尾部 RW 层的 squashfs/erofs）或设备读不出来
+pub fn grow_target_at(src: &FileSource, part: u32, base: u64, len: u64) -> Result<Growable, FsError> {
+    let fstype = crate::fsid::identify(src, base, len).map_err(FsError::from)?;
+    if fstype == "squashfs" || fstype == "erofs" {
+        // OpenWrt combined 布局：同分区头部只读根 + 尾部 RW overlay（fstools rootdisk.c）。
+        // fstools 只把 RW 层造成 ext4/f2fs，故内层可扩集合就是这两者
+        let rel = crate::fsid::overlay_offset_at(src, base)
+            .map_err(FsError::from)?
+            .ok_or_else(|| FsError::unsupported(format!(
+                "{fstype} rootfs without a trailing RW overlay layer — nothing to grow"
+            )))?;
+        if rel >= len {
+            return Err(FsError::invalid("overlay offset beyond partition end"));
+        }
+        // 区间量本就是字节，直接传给按字节区间识别的 identify
+        let inner = crate::fsid::identify(src, base + rel, len - rel).map_err(FsError::from)?;
+        if !(is_ext(inner) || inner == "f2fs") {
+            // 尚未格式化与"认得出但不接线"是两回事：前者那块空间会在首次挂载时被 fstools
+            // 建满，后者要用户自己处理
+            return if inner == "unknown" {
+                Ok(Growable::OverlayPending)
+            } else {
+                Err(FsError::unsupported(format!(
+                    "overlay layer identified as {inner} — only ext/f2fs overlays are growable"
+                )))
+            };
+        }
+        if src.is_block {
+            // Range 路径走 loop，循环节点自身的挂载检查探不到底层分区——底层分区
+            // 挂载态在此显式守卫
+            let node = find_block_partition_node(src, part, base)?;
+            require_unmounted(&node)?;
+        }
+        return Ok(Growable::Target(GrowTarget { scope: DeviceScope::Range(base + rel, len - rel), fstype: inner }));
+    }
+    // 其余按 FS 自身的可扩性分流：三态与工具清单都取自 grow_support，不在此另列一份
+    match grow_support(fstype) {
+        ToolSupport::Tools(_) => Ok(Growable::Target(GrowTarget { scope: DeviceScope::Partition(part), fstype })),
+        ToolSupport::NotApplicable => Ok(Growable::NoFilesystem(fstype)),
+        ToolSupport::Unsupported(reason) => Err(FsError::unsupported(format!("cannot grow {fstype}: {reason}"))),
+    }
+}
+
+/// superfloppy（无分区表，FS 即整盘）扩容：无表可写，纯 FS grow
+pub fn resize_fs_whole(src: &FileSource, fstype: &str) -> Result<(), FsError> {
+    resize_fs_in(src, &DeviceScope::Whole, fstype)
+}
+
+/// resize 分发（扩容到给定范围末端）。范围由 [`grow_target_at`] 判定，本层只管执行：
 /// - ext2/3/4：先 `e2fsck -fp` 修复，再 `resize2fs <dev>` 扩满分区（离线）。
 ///   -fp = 强制检查 + 自动修复；退出码按位或：0-1 通过、2/3 改了 root fs 须重启、
 ///   4 有未修正错误即拒绝（man e2fsck EXIT CODE）。resize2fs 缺省 size = 扩到分区末端（man resize2fs）
@@ -924,15 +1006,6 @@ pub fn rescue_hint(fstype: &str, dev: &str) -> String {
 /// - btrfs：临时 mount → `btrfs filesystem resize max <mnt>`（max = 占满、须挂载态，man btrfs-filesystem）→ umount
 /// - vfat：`fatresize -s max <dev>`（扩满设备，man fatresize）
 /// - 其余（exfat/swap…）：无已接线的扩容工具，显式拒绝
-pub fn resize_fs(src: &FileSource, part: u32, fstype: &str) -> Result<(), FsError> {
-    resize_fs_in(src, &DeviceScope::Partition(part), fstype)
-}
-
-/// superfloppy（无分区表，FS 即整盘）扩容：无表可写，纯 FS grow
-pub fn resize_fs_whole(src: &FileSource, fstype: &str) -> Result<(), FsError> {
-    resize_fs_in(src, &DeviceScope::Whole, fstype)
-}
-
 fn resize_fs_in(src: &FileSource, scope: &DeviceScope, fstype: &str) -> Result<(), FsError> {
     match fstype {
         // fsid 识别只给 0xEF53，区分不出 2/3/4；resize2fs 对三者通用（man resize2fs）
@@ -1017,42 +1090,14 @@ fn resize_fs_in(src: &FileSource, scope: &DeviceScope, fstype: &str) -> Result<(
                 Ok(())
             })
         }
-        // OpenWrt combined 布局：同分区头部只读根 + 尾部 RW overlay（fstools rootdisk.c）。
-        // 只扩不缩，overlay 语义即 RW 层吃满分区剩余空间。定位 overlay 起点后
-        // 识别内层 FS（fstools 只产 ext4/f2fs），再复用既有扩容分发
-        // （内层 Range 经 offset loop 映射）
-        "squashfs" | "erofs" => match scope {
-            DeviceScope::Partition(p) => {
-                let (part_off, part_len) = partition_byte_range(src, *p)?;
-                let Some(rel) = crate::fsid::overlay_offset_at(src, part_off).map_err(FsError::from)? else {
-                    return Err(FsError::unsupported(format!(
-                        "{fstype} rootfs without trailing RW overlay layout — nothing to grow"
-                    )));
-                };
-                if rel >= part_len {
-                    return Err(FsError::invalid("overlay offset beyond partition end"));
-                }
-                // 区间量本就是字节，直接传给按字节区间识别的 identify
-                let inner = crate::fsid::identify(src, part_off + rel, part_len - rel).map_err(FsError::from)?;
-                if !(is_ext(inner) || inner == "f2fs") {
-                    return Err(FsError::unsupported(format!(
-                        "overlay layer identified as {inner} — only ext/f2fs overlays are growable"
-                    )));
-                }
-                if src.is_block {
-                    // Range 路径走 loop，循环节点自身的挂载检查探不到底层分区——
-                    // 底层分区挂载态在此显式守卫
-                    let node = find_block_partition_node(src, *p, part_off)?;
-                    require_unmounted(&node)?;
-                }
-                resize_fs_in(src, &DeviceScope::Range(part_off + rel, part_len - rel), inner)
-            }
-            _ => Err(FsError::unsupported(format!(
-                "{fstype} rootfs outside partition overlay layout — nothing to grow"
-            ))),
-        },
+        // squashfs/erofs 自己不可扩：能变大的是分区尾部的 RW overlay 层，那段由
+        // grow_target_at 定位后交内层的分支执行。落到这里说明这个范围不是分区
+        // （superfloppy），其内部没有 RW 层可扩
+        "squashfs" | "erofs" => Err(FsError::unsupported(format!(
+            "{fstype} needs a trailing RW overlay layer inside a partition — nothing to grow here"
+        ))),
         other => Err(FsError::unsupported(format!(
-            "no resize tool wired for {other} (supported: ext2/3/4, ntfs, f2fs, xfs, btrfs, vfat, squashfs/erofs+overlay)"
+            "no resize tool wired for {other} (supported: ext2/3/4, ntfs, f2fs, xfs, btrfs, vfat; squashfs/erofs via their trailing RW overlay layer)"
         ))),
     }
 }
@@ -1303,7 +1348,7 @@ pub fn set_uuid(src: &FileSource, part: u32, fstype: &str, req: &UuidRequest) ->
 
 #[cfg(test)]
 mod tests {
-    use super::{check_e2fsck_for_check, check_e2fsck_for_resize, erase_ranges, parse_num_field, partition_byte_range, uuid_support, UuidSupport};
+    use super::{check_e2fsck_for_check, check_e2fsck_for_resize, erase_ranges, grow_target_at, parse_num_field, partition_byte_range, uuid_support, DeviceScope, Growable, UuidSupport};
     use super::FsError;
     use crate::dev::FileSource;
 
@@ -1340,6 +1385,96 @@ mod tests {
     fn swap_label_and_uuid_are_wired_to_swaplabel() {
         assert!(matches!(uuid_support("swap"), UuidSupport::Yes));
         assert!(matches!(uuid_support("vfat"), UuidSupport::No(_)));
+    }
+
+    /// `grow_target_at` 是"这段区域里能扩的是什么"的唯一判据：普通分区取 FS 自己，
+    /// OpenWrt 的只读根取分区尾部的 RW 层。三种结论必须分开——**尚未格式化的 RW 层与
+    /// 空区域 / PV 都"没有可扩的文件系统"**，但前者的空间会被首次挂载的 fstools 建满，
+    /// 后者什么都不会发生；认得出却不接线仍是拒绝。混为一谈要么让 FS 层命令报出一件
+    /// 没做过的事，要么让首启现场报假失败
+    #[test]
+    fn grow_target_at_separates_nothing_to_do_from_unsupported() {
+        // squashfs 的 bytes_used → RW 层起点（上对齐 64K）；区域长 128K，内层自 64K 起
+        const LEN: u64 = 128 * 1024;
+        const REL: u64 = 64 * 1024;
+        let squashfs_head = |inner: &[u8]| {
+            let mut d = vec![0u8; LEN as usize];
+            d[0..4].copy_from_slice(b"hsqs"); // SQUASHFS_MAGIC @0
+            d[0x28..0x30].copy_from_slice(&4096u64.to_le_bytes()); // bytes_used @0x28
+            d[REL as usize..REL as usize + inner.len()].copy_from_slice(inner);
+            d
+        };
+        let inner_ext = {
+            let mut f = vec![0u8; 4096];
+            f[0x438..0x43A].copy_from_slice(&0xEF53u16.to_le_bytes()); // s_magic @sb+0x38
+            f
+        };
+
+        // 取 `Target`：其余结论一律视为用例失败，免去每处写一遍三臂 match
+        let target = |r: Result<Growable, FsError>| match r {
+            Ok(Growable::Target(t)) => t,
+            Ok(Growable::OverlayPending) => panic!("expected a grow target, got OverlayPending"),
+            Ok(Growable::NoFilesystem(ft)) => panic!("expected a grow target, got NoFilesystem({ft})"),
+            Err(e) => panic!("expected a grow target, got {e}"),
+        };
+
+        // 内层 ext：可扩，且 scope 指向内层那段（不是整个分区）
+        let t = target(grow_target_at(&fs_fixture("ovl_ext", squashfs_head(&inner_ext)), 3, 0, LEN));
+        assert_eq!(t.fstype, "ext");
+        assert!(matches!(t.scope, DeviceScope::Range(off, len) if off == REL && len == LEN - REL));
+
+        // 内层还是零（首启尚未格式化）：没有可扩的文件系统，但那块空间会被首次挂载的
+        // fstools 建满——与下面"区域里压根没有 FS"是两种事
+        assert!(matches!(
+            grow_target_at(&fs_fixture("ovl_raw", squashfs_head(&[])), 3, 0, LEN),
+            Ok(Growable::OverlayPending)
+        ));
+
+        // 内层是认得出却不接线的类型：拒绝，并说清是内层的类型
+        let mut xfs = vec![0u8; 4096];
+        xfs[0..4].copy_from_slice(b"XFSB");
+        match grow_target_at(&fs_fixture("ovl_xfs", squashfs_head(&xfs)), 3, 0, LEN) {
+            Err(FsError::UnsupportedFs(m)) => assert!(m.contains("overlay layer identified as xfs"), "{m}"),
+            Err(e) => panic!("expected the inner layer to be named in the refusal, got {e}"),
+            Ok(_) => panic!("xfs overlay layer must be refused"),
+        }
+
+        // 只有只读根、没有尾部 RW 层（bytes_used = 0）：认得却无法扩
+        let mut no_layer = vec![0u8; LEN as usize];
+        no_layer[0..4].copy_from_slice(b"hsqs");
+        assert!(matches!(
+            grow_target_at(&fs_fixture("ovl_none", no_layer), 3, 0, LEN),
+            Err(FsError::UnsupportedFs(m)) if m.contains("without a trailing RW overlay layer")
+        ));
+
+        // 普通分区：可扩目标就是分区自己
+        let mut plain = vec![0u8; 64 * 1024];
+        plain[0x438..0x43A].copy_from_slice(&0xEF53u16.to_le_bytes());
+        let t = target(grow_target_at(&fs_fixture("plain_ext", plain), 2, 0, 64 * 1024));
+        assert_eq!(t.fstype, "ext");
+        assert!(matches!(t.scope, DeviceScope::Partition(2)));
+
+        // 空区域与 LVM PV：没有文件系统，且不会有——类型原样报出，供调用方分辨
+        // （PV 有别的出路）
+        assert!(matches!(
+            grow_target_at(&fs_fixture("plain_zero", vec![0u8; 64 * 1024]), 2, 0, 64 * 1024),
+            Ok(Growable::NoFilesystem("unknown"))
+        ));
+        let mut pv = vec![0u8; 64 * 1024];
+        pv[512..520].copy_from_slice(b"LABELONE"); // PV label 在第 2 扇区，同 fsid 的识别口径
+        pv[536..544].copy_from_slice(b"LVM2 001");
+        assert!(matches!(
+            grow_target_at(&fs_fixture("plain_pv", pv), 2, 0, 64 * 1024),
+            Ok(Growable::NoFilesystem("lvm2_pv"))
+        ));
+
+        // 认得出却不接线的类型（exfat）：拒绝
+        let mut exfat = vec![0u8; 64 * 1024];
+        exfat[3..11].copy_from_slice(b"EXFAT   ");
+        assert!(matches!(
+            grow_target_at(&fs_fixture("plain_exfat", exfat), 2, 0, 64 * 1024),
+            Err(FsError::UnsupportedFs(m)) if m.contains("cannot grow exfat")
+        ));
     }
 
     fn fs_fixture(tag: &str, data: Vec<u8>) -> FileSource {
