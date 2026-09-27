@@ -155,7 +155,7 @@ pub(crate) fn cmd_resizefs(a: &Args) -> u8 {
                 "nothing to resize on partition #{part} — a swap area whose page format is not activatable on this host (its space takes effect once the area is rebuilt with `mkswap`)"
             ))),
             // 没有可扩的文件系统就报成功等于报出一件没做过的事；PV 另有出路，指路到那条链
-            Ok(fsops::Growable::NoFilesystem("lvm2_pv")) => bail_fail(Fail::refused(format!(
+            Ok(fsops::Growable::NoFilesystem(crate::fsid::FS_LVM2_PV)) => bail_fail(Fail::refused(format!(
                 "nothing to resize on partition #{part} — an LVM PV is not a filesystem (its space takes effect through `resize --grow-lv`)"
             ))),
             // 类型未识别既可能是空区域，也可能是认不出的 FS：把识别结果原样带出，

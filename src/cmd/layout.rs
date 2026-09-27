@@ -194,11 +194,24 @@ pub(crate) fn cmd_resize_part(a: &Args) -> u8 {
     o.exit_code()
 }
 
+/// `--start end` 把起点钉在 `last_usable_lba - len + 1`，是"贴尾打包"而非"挑一个对齐
+/// 位置"；此时再给 `--align` 没有被消费的余地，静默忽略会让用户以为对齐生效。旗标白名单
+/// 是命令级的，这个分支级的消费差异只能在分支里拒绝。判据看 `seen`：`--align` 有默认值
+/// （mib），只看字段分不出"没给"与"给了 mib"
+fn refuse_align_on_start_end(a: &Args) {
+    if a.start_end && a.seen.contains(&"--align") {
+        bail_fail(Fail::refused(
+            "`--align` does not apply to `--start end` — the start is pinned to the last usable position; drop --align or pass an explicit start LBA",
+        ));
+    }
+}
+
 pub(crate) fn cmd_move(a: &Args) -> u8 {
     let (Some(pref), start_opt) = (a.part, a.start) else { crate::args::usage() };
     if !a.start_end && start_opt.is_none() {
         crate::args::usage();
     }
+    refuse_align_on_start_end(a);
     let (mut src, _resumed) = open_target_for_data_move(a).unwrap_or_else(|f| bail_fail(f));
     let (g, repair) = crate::gpt_policy::require_gpt_geometry(&src, "move").unwrap_or_else(|f| bail_fail(f));
     // 锁下快照
@@ -230,6 +243,7 @@ pub(crate) fn cmd_copy(a: &Args) -> u8 {
     if !a.start_end && start_opt.is_none() {
         crate::args::usage();
     }
+    refuse_align_on_start_end(a);
     // copy 不读不写 checkpoint（见 HELP_COPY 的 "No resume"）：它没有可续跑的东西，
     // 也就没有资格接管任何未收尾的现场。走严格打开——目标上有任何 active 现场即拒绝，
     // 绝不出现"copy 成功后把别人的 journal 当自己的清掉、而那份 ckpt 原样留在槽里"

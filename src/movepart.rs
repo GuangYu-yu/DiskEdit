@@ -893,22 +893,8 @@ fn prepare_apply(
         CheckpointSlot::Resize(_) => return Err(foreign_resize_refusal()),
         CheckpointSlot::Relocation(c) => {
             let c = *c;
-            // plan 参数与磁盘现状必须一致（盘大小/扇区/计划/chunk 全等），否则拒绝
-            let fresh = Checkpoint {
-                disk_size: src.size,
-                ss: plan.ss,
-                grow_part: plan.grow_part,
-                last_usable_lba: plan.last_usable_lba,
-                moves: plan.moves.clone(),
-                kind: plan.kind,
-                cur_index: c.cur_index.min(plan.moves.len() as u32),
-                chunks_done: c.chunks_done,
-                chunk_bytes: chunk_len,
-                fp: src.fingerprint,
-                map: src.loop_mapping,
-            };
-            // chunk_bytes 单独先查：它是命令行可控项，混在"disk/plan 全等"里报会让
-            // 用户去查盘，而真实原因是这次换了 --chunk-size
+            // chunk_bytes 单独先查：它是命令行可控项，混在"盘上事实不符"里报会让用户
+            // 去查盘，而真实原因是这次换了 --chunk-size
             if c.chunk_bytes != chunk_len {
                 return Err(crate::outcome::Fail::refused(format!(
                     "the checkpoint was written with --chunk-size {} MiB, this run uses {} — re-run with the original value",
@@ -916,16 +902,56 @@ fn prepare_apply(
                     chunk_len / (1024 * 1024),
                 )));
             }
-            if c.disk_size != fresh.disk_size || c.ss != fresh.ss || c.grow_part != fresh.grow_part
-                || c.last_usable_lba != fresh.last_usable_lba || c.moves.len() != fresh.moves.len()
-                || c.moves.iter().zip(&fresh.moves).any(|(a, b)| a.part_num != b.part_num || a.first_lba != b.first_lba || a.len_lba != b.len_lba || a.delta_lba != b.delta_lba)
-            {
-                // 写盘前的校验：此刻盘上尚未改动，属事前拒绝而非执行失败
-                return Err(crate::outcome::Fail::refused("existing checkpoint does not match current disk/plan — refusing"));
+            // 恢复的外部校验（对照 classify_restore 的位置一致性模式）。ckpt 是持久化输入，
+            // 而这里的 plan 由 resume_outcome 直接从 ckpt 重建——拿 plan 派生值互相比较是
+            // 自循环，盘上几何这一维度根本进不来。真正独立的证据只在盘上：按 cur_index 逐条
+            // 核对每个被搬移分区的**当前起点**。已完成的停在 first_lba + delta_lba（表项绝对
+            // 赋值，重放幂等），未开始的仍在 first_lba；正在搬的那一条可能已提交表项而 ckpt
+            // 尚未推进（commit 与推进之间崩溃），故两个位置都接受。全部完成即终态，逐条落在
+            // 目标位。此处不重算 plan——那会破坏"盘上几何已被部分改写"下的续跑语义
+            if c.disk_size != src.size || c.ss != g0.ss {
+                return Err(crate::outcome::Fail::refused(
+                    "existing checkpoint does not match the current disk geometry — refusing",
+                ));
+            }
+            let done = c.cur_index.min(plan.moves.len() as u32);
+            for (mi, m) in plan.moves.iter().enumerate() {
+                let cur = g0
+                    .entry_index(m.part_num)
+                    .and_then(|i| g0.entries.get(i))
+                    .ok_or_else(|| crate::outcome::Fail::refused(format!(
+                        "checkpoint names partition {} that is no longer on the disk — refusing",
+                        m.part_num
+                    )))?;
+                let target = m.first_lba.checked_add(m.delta_lba)
+                    .ok_or_else(|| crate::outcome::Fail::infra("relocation target LBA overflows"))?;
+                let ok = match (mi as u32).cmp(&done) {
+                    std::cmp::Ordering::Less => cur.starting_lba == target,
+                    std::cmp::Ordering::Equal => cur.starting_lba == m.first_lba || cur.starting_lba == target,
+                    std::cmp::Ordering::Greater => cur.starting_lba == m.first_lba,
+                };
+                if !ok {
+                    return Err(crate::outcome::Fail::refused(format!(
+                        "partition {} is not where the checkpoint says it should be (on disk LBA {}, expected {}) — the layout moved under the job; refusing",
+                        m.part_num, cur.starting_lba, m.first_lba
+                    )));
+                }
             }
             // Y = durable 恢复点（ckpt 文件里的值），不是本进程内存进度
             log(&format!("resuming at entry {} chunk {} (durable checkpoint)", c.cur_index, c.chunks_done));
-            fresh
+            Checkpoint {
+                disk_size: src.size,
+                ss: plan.ss,
+                grow_part: plan.grow_part,
+                last_usable_lba: plan.last_usable_lba,
+                moves: plan.moves.clone(),
+                kind: plan.kind,
+                cur_index: done,
+                chunks_done: c.chunks_done,
+                chunk_bytes: chunk_len,
+                fp: src.fingerprint,
+                map: src.loop_mapping,
+            }
         }
         CheckpointSlot::Empty => Checkpoint {
             disk_size: src.size,
@@ -1198,7 +1224,7 @@ fn finalize_growth(
                 // 认不出的类型，PV 的空间则在收尾的 pvresize 链里生效
                 None => log(match g {
                     Growable::OverlayPending => "partition extended (the overlay RW layer is created at first mount)",
-                    Growable::NoFilesystem("lvm2_pv") => "partition extended (the PV space takes effect through the pvresize chain)",
+                    Growable::NoFilesystem(crate::fsid::FS_LVM2_PV) => "partition extended (the PV space takes effect through the pvresize chain)",
                     _ => "partition extended (filesystem not resized — its type was not identified)",
                 }),
             }
@@ -2943,6 +2969,64 @@ mod tests {
             (after.entries[2].starting_lba, after.entries[2].ending_lba),
             "a zero-delta move must leave the neighbour untouched"
         );
+    }
+
+    /// 续跑前的位置一致性校验（R2）：ckpt 是持久化输入，而续跑用的 plan 由 ckpt 直接重建，
+    /// 拿两者互比是自循环——唯一独立证据是盘上**当前**起点。此处把一条尚未开始搬移的
+    /// 条目挪到别处，模拟"表在作业中断后被第三方改过"：必须拒绝，而不是把别人的布局
+    /// 当成自己的续跑点继续搬
+    #[test]
+    fn resume_refuses_when_a_pending_partition_moved_on_disk() {
+        const SWAP: [u8; 16] = [0x6D, 0xFD, 0x57, 0x06, 0xAB, 0xA4, 0xC4, 0x43, 0x84, 0xE5, 0x09, 0x33, 0xC8, 0x4B, 0x4F, 0x4F];
+        // root 2048..6143 | home 6144..10239 | swap 10240..12287
+        let (mut src, path) = plan_fixture(&[
+            (1, [0x11; 16], 2048, 6143),
+            (2, [0x22; 16], 6144, 10239),
+            (3, SWAP, 10240, 12287),
+        ]);
+        let chunk: u64 = 1024 * 1024;
+        let plan = make_plan(&mut src, 1).unwrap();
+        // 执行序：[swap, home]；home 的 first_lba 是 6144，目标位在 first_lba + delta
+        assert!(plan.moves.len() >= 2, "the fixture must produce relocations");
+        let home = plan.moves.iter().find(|m| m.part_num == 2).expect("home must be a movable");
+        assert_ne!(home.delta_lba, 0, "home must need a real relocation for this test");
+        // 预置"尚未开始搬移"的现场：cur_index=0 ⇒ home（moves 未达下标）必须仍在 first_lba
+        let ckpt = Checkpoint {
+            disk_size: src.size, ss: plan.ss, grow_part: plan.grow_part,
+            last_usable_lba: plan.last_usable_lba, moves: plan.moves.clone(), kind: plan.kind,
+            cur_index: 0, chunks_done: 0, chunk_bytes: chunk,
+            fp: src.fingerprint, map: src.loop_mapping,
+        };
+        atomic_write_ckpt(&src.identity.checkpoint_path(), &ckpt.serialize()).unwrap();
+        drop(src);
+
+        // 篡改现场：把 home 挪到一个空闲位置（既非 first_lba、也非任何目标位），改主副本
+        // 起点/终点并重算主数组与主头的 CRC。盘尾备份保持原样——解析仍有一份自洽副本
+        let arr = 2 * 512usize; // 主 Entry Array 起点 LBA 2
+        let e = arr + 128; // 条目 2（索引 1）
+        let mut raw = std::fs::read(&path).unwrap();
+        raw[e + 32..e + 40].copy_from_slice(&20000u64.to_le_bytes());
+        raw[e + 40..e + 48].copy_from_slice(&24095u64.to_le_bytes());
+        let arr_crc = table::crc32(&raw[arr..arr + 128 * 128]);
+        raw[512 + 88..512 + 92].copy_from_slice(&arr_crc.to_le_bytes());
+        raw[512 + 16..512 + 20].fill(0);
+        let hdr_crc = table::crc32(&raw[512..512 + 92]);
+        raw[512 + 16..512 + 20].copy_from_slice(&hdr_crc.to_le_bytes());
+        std::fs::write(&path, &raw).unwrap();
+
+        let src = plan_open(&path);
+        let g = geom_of(&src);
+        // 篡改确实落到几何上：home 现在停在 20000，而非 ckpt 记的 first_lba=6144
+        assert_eq!(crate::gpt_policy::live_entry(&g, 2).unwrap().starting_lba, 20000);
+        // 直呼事前判定，隔离出拒绝来源：必须是 R2 的位置校验，而不是更靠前的占用/场景/槽位判定
+        match prepare_apply(&src, &g, &plan, chunk, true, &mut |_| {}) {
+            Err(Fail::Refused(m)) => assert!(m.contains("not where the checkpoint says"), "{m}"),
+            Err(other) => panic!("expected a position refusal, got {other:?}"),
+            Ok(_) => panic!("expected a position refusal, but the resume was accepted"),
+        }
+        assert!(src.identity.checkpoint_path().exists(), "a refusal must not consume the checkpoint");
+        drop(src);
+        let _ = std::fs::remove_file(&path);
     }
 
     /// 真实路径：truncate 预扩后 backup GPT 与保护 MBR 同时过期 —— 解析标记 NeedsRepair、
