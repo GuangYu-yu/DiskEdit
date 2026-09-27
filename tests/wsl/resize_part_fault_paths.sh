@@ -117,23 +117,20 @@ T2=/var/tmp/t18b.img; T=$T2
 mk; M3=$(fillp 3 190)
 $B copy "$T":3 --start 1500000 --chunk-size 1 >/dev/null 2>&1 &
 PID=$!; sleep 1; kill -9 $PID 2>/dev/null; wait $PID 2>/dev/null
-# kill 时序竞态的三态分支：journal/ckpt 已建 → abandon 后重跑；
-# 现场未建且 p4 未落 → 直接重跑；copy 已在 kill 前完成 → 跳过重跑直接验证
+# kill 落点分两问：现场是否已建、表项是否已提交。现场已建 → 先 abandon 释放；
+# 表项已提交（p4 已进表）→ 任务已到终态，重跑只会被以目标重叠正确拒绝（10），
+# 验证即可；未提交才重跑收尾。两问都直接读镜像，绕开 loop 分区节点的异步就绪
 if [ -f "$T$JOURNAL_SUFFIX" ] || [ -f "$T$CKPT_SUFFIX" ]; then
   exp "$($B abandon "$T" --yes >/dev/null 2>&1; echo $?)" 0 "abandon 释放 copy 现场"
-  OUT=$($B copy "$T":3 --start 1500000 --chunk-size 1 2>&1); exp "$?" 0 "copy 重跑完成"
-elif ! LD=$(lo_attach "$T") ; then rc=1
+fi
+if $B info "$T" | grep -q '"num":4'; then
+  echo "  （copy 在 kill 前已提交表项——跳过重跑仅验证）"
 else
-  P4EXISTS=$(blkid "${LD}p4" >/dev/null 2>&1 && echo yes || echo no)
-  lo_detach "$LD"
-  if [ "$P4EXISTS" = no ]; then
-    OUT=$($B copy "$T":3 --start 1500000 --chunk-size 1 2>&1); exp "$?" 0 "copy 重跑完成"
-  else
-    echo "  （copy 在 kill 前已完成——kill 竞态窗口，跳过重跑仅验证）"
-  fi
+  OUT=$($B copy "$T":3 --start 1500000 --chunk-size 1 2>&1); exp "$?" 0 "copy 重跑完成"
 fi
 chkp 3 "$M3"
 LD=$(lo_attach "$T")
+lo_waitpart "${LD}p4" || { echo "p4 part node not ready"; rc=1; }
 [ "$M3" = "$(md5sum "${LD}p4" | cut -d' ' -f1)" ] && echo "p4 COPY OK (device-identical)" || { echo "p4 COPY MISMATCH"; rc=1; }
 lo_detach "$LD"
 sgdisk -v "$T" >/dev/null 2>&1 && echo "sgdisk clean" || { echo "sgdisk ISSUES"; rc=1; }
