@@ -391,9 +391,19 @@ fn validate_geometry(
         .partition_entry_lba
         .checked_add(span)
         .ok_or_else(|| invalid("GPT entry array range overflow"))?;
+    // 表级不变量：主 GPT Entry Array 固定在 LBA2 起、长度为 span，故必须在 FirstUsableLBA
+    // 之前结束。此界由 UEFI 的布局要求（UEFI 2.10 §5.3.1：primary GPT Partition Entry Array
+    // must be located after the primary GPT Header and end before First Usable LBA）结合本
+    // 项目固定的主数组起点 LBA2 推出，不是规范逐字给出的公式。它与"当前解析的是哪一份
+    // 副本"无关，故置于视角分支之前、主/备同判——备份视角若漏此界，first_usable_lba=0
+    // 的备份头会被接受，其自述的可用区下界随后被写入路径当作权威（放行 starting_lba=0
+    // 的条目，覆盖保护 MBR 与主头）
+    if header.first_usable_lba < 2 + span {
+        return Err(invalid("first_usable_lba leaves no room for the entry array — invalid GPT"));
+    }
     match view {
-        // 主副本：数组夹在头与可用区之间（数组上界不越过 FirstUsableLBA，即
-        // FirstUsableLBA ≥ 2 + span；由本条与上面的 LBA ≥ 2 共同推出）
+        // 主副本：数组上界不越过 FirstUsableLBA。本视角用头自述的 partition_entry_lba，
+        // 对声明起点后移（> 2）的头比上面的表级界更强
         GptCopyKind::Primary => {
             if array_end > header.first_usable_lba {
                 return Err(invalid("GPT entry array overlaps the usable range — invalid GPT"));
@@ -1770,6 +1780,27 @@ mod tests {
         assert!(validate_geometry(&geo_header(34, 966, 968), &geom128(512), file_last, GptCopyKind::Backup).is_err());
         // 起点仍须在 LBA0/LBA1 之后
         assert!(validate_geometry(&geo_header(34, 966, 1), &geom128(512), file_last, GptCopyKind::Backup).is_err());
+        // FirstUsableLBA 装不下数组：表级界与主视角同判，备份视角不得漏
+        assert!(matches!(
+            validate_geometry(&geo_header(1, 966, file_last - SPAN_128_512), &geom128(512), file_last, GptCopyKind::Backup),
+            Err(GptError::InvalidHeader(_))
+        ));
+        assert!(matches!(
+            validate_geometry(&geo_header(0, 966, file_last - SPAN_128_512), &geom128(512), file_last, GptCopyKind::Backup),
+            Err(GptError::InvalidHeader(_))
+        ));
+    }
+
+    /// 表级不变量：FirstUsableLBA 的下界与"解析的是哪份副本"无关。
+    /// 同一份 first_usable_lba 过低的头，主/备两个视角必须同判，否则备份视角会成为
+    /// 绕过界面的入口（主副本损坏 → 回退备份副本 → 下游按备份自述的下界放行条目）
+    #[test]
+    fn geometry_first_usable_floor_is_view_independent() {
+        let file_last = 999;
+        // 备份数组落位合规（可用区之后、备份头之前），单独把 first_usable_lba 压到界下
+        let h = geo_header(2 + SPAN_128_512 - 1, file_last - SPAN_128_512 - 1, file_last - SPAN_128_512);
+        assert!(matches!(validate_geometry(&h, &geom128(512), file_last, GptCopyKind::Primary), Err(GptError::InvalidHeader(_))));
+        assert!(matches!(validate_geometry(&h, &geom128(512), file_last, GptCopyKind::Backup), Err(GptError::InvalidHeader(_))));
     }
 
     /// 头字段判据的拒绝分支：primary_lba、区间倒挂、越容器、数组跨度溢出逐一覆盖
@@ -1831,6 +1862,18 @@ mod tests {
         src.write_at(ss, &sec).unwrap();
     }
 
+    /// 直接把一份自定义几何的**备份**副本写进镜像（盘尾头 + 其自述的条目数组位置）。
+    /// 传入的 `h` 须为备份头语义：MyLBA = 盘尾、AltLBA = 1
+    fn write_raw_backup(src: &mut FileSource, mut h: RawHeader, ss: u64) {
+        let geom = EntryArrayGeometry::new(ss, h.size_of_partition_entry, h.number_of_partition_entries, MAX_ARRAY_BYTES).unwrap();
+        let (bytes, crc) = serialize_array(&[], &geom);
+        src.write_at(h.partition_entry_lba * ss, &bytes).unwrap();
+        h.header_size = 92;
+        let file_last = src.size / ss - 1;
+        let sec = serialize_header(&h, crc, ss).unwrap();
+        src.write_at(file_last * ss, &sec).unwrap();
+    }
+
     /// 端到端：主副本自述 first_usable_lba = 1（装不下条目数组）时必须被拒，
     /// 且不得因"主副本坏"就静默交由别处掩盖
     #[test]
@@ -1844,6 +1887,27 @@ mod tests {
         h.backup_lba = file_last;
         write_raw_primary(&mut src, h, ss);
         assert!(matches!(load_gpt(&src), Err(GptError::InvalidHeader(_))));
+    }
+
+    /// 端到端：主副本读不出时回退备份副本，备份头若自述 first_usable_lba = 0 必须被拒。
+    /// 该字段随后被写入路径当作权威下界，漏判会放行 starting_lba=0 的条目——
+    /// 覆盖保护 MBR 与主头。这是"表级不变量必须主/备同判"的端到端锚点
+    #[test]
+    fn backup_first_usable_floor_reaches_load_gpt() {
+        let ss = 512u64;
+        let mut src = src_from_gpt("geo_bak", ss);
+        let file_last = src.size / ss - 1;
+        // 抹掉主头：本轮只考备份副本的判定
+        src.write_at(ss, &vec![0u8; ss as usize]).unwrap();
+        let entry_lba = file_last - SPAN_128_512;
+        let mut h = geo_header(0, entry_lba - 1, entry_lba);
+        h.primary_lba = file_last; // 备份头自述 MyLBA = 盘尾
+        h.backup_lba = 1; // 备头 AltLBA = 1
+        write_raw_backup(&mut src, h, ss);
+        assert!(
+            matches!(load_gpt(&src), Err(GptError::InvalidHeader(_))),
+            "备份副本的 first_usable_lba 下界不得被漏判"
+        );
     }
 
     /// MBR 的 StartLBA/SizeInLBA 是 u32 字段：超出表示范围必须拒绝。

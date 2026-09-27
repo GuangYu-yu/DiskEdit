@@ -140,6 +140,18 @@ pub(crate) enum ResumeClaim {
     OwnRelocation(PartSelector),
 }
 
+/// `--sector-size` 只对镜像有意义：镜像不携带扇区信息，故由用户给出。块设备的逻辑扇区
+/// 大小由内核经 BLKSSZGET 给出，覆盖值被 `FileSource::open` 静默忽略——静默接受一个不
+/// 生效的旗标，等于让用户以为扇区大小改了。块设备上显式给出即拒绝（改参数有解，退 10）
+fn reject_sector_size_on_block(a: &Args, src: &FileSource) -> Result<(), Fail> {
+    if src.is_block && a.sector_size.is_some() {
+        return Err(Fail::refused(
+            "--sector-size applies to image files only; a block device's logical sector size is reported by the kernel (BLKSSZGET) and cannot be overridden",
+        ));
+    }
+    Ok(())
+}
+
 impl TransactionManager {
     /// 开一次**新的**写事务：读写打开、取独占所有权、把 journal 接到目标上。
     ///
@@ -258,8 +270,10 @@ impl TransactionManager {
         if let Ok(meta) = std::fs::metadata(&a.target)
             && meta.file_type().is_block_device()
         {
-            return FileSource::open_read_only(Path::new(&a.target))
-                .map_err(|e| Fail::infra(format!("open failed: {e}")));
+            let src = FileSource::open_read_only(Path::new(&a.target))
+                .map_err(|e| Fail::infra(format!("open failed: {e}")))?;
+            reject_sector_size_on_block(a, &src)?;
+            return Ok(src);
         }
         FileSource::open_read_only_image(Path::new(&a.target), a.sector_size)
             .map_err(|e| Fail::infra(format!("open failed: {e}")))
@@ -267,8 +281,10 @@ impl TransactionManager {
 
     /// 读写打开、不取所有权
     fn open_plain(a: &Args) -> Result<FileSource, Fail> {
-        FileSource::open(Path::new(&a.target), a.sector_size)
-            .map_err(|e| Fail::infra(format!("open failed: {e}")))
+        let src = FileSource::open(Path::new(&a.target), a.sector_size)
+            .map_err(|e| Fail::infra(format!("open failed: {e}")))?;
+        reject_sector_size_on_block(a, &src)?;
+        Ok(src)
     }
 
     /// 读写打开 + 取目标的独占所有权（见 `targetlock`）。

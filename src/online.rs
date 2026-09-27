@@ -24,7 +24,8 @@
 //! 在线能力矩阵（SUSE 存储指南 + 各工具 man）：ext2/3/4 在线仅 grow、xfs 仅 grow、
 //! btrfs grow+shrink；ntfs/vfat/exfat/f2fs 工具要求未挂载，一律拒绝。
 
-use crate::outcome::{Outcome, Pending, PendingKind};
+use crate::dev::FileSource;
+use crate::outcome::{Fail, Outcome, Pending, PendingKind};
 use std::fs;
 use std::io;
 use std::os::linux::fs::MetadataExt;
@@ -118,23 +119,38 @@ fn part_in_use(dev: &str, disk_name: &str, pno: u32) -> bool {
         .is_some_and(|d| d == disk_name)
 }
 
-/// 在线 resize 总入口。`size`：None = 扩满现分区；Some(字节) = 绝对新尺寸
-/// （> 现分区 = grow；< 现分区 = 仅 btrfs 支持）。
+/// 在线 resize 总入口（resizefs --online 用）。`size`：None = 扩满现分区；Some(字节) = 绝对新尺寸
+/// （> 现分区 = grow；< 现分区 = 仅 btrfs 支持）。请求不含锚定语义，故目标在锁下原样给出。
 /// 结果统一为 Outcome（退出码只在 outcome 模块映射）：10=拒绝（未动盘）/
 /// 20=布局已写但后置条件或内核视图未跟上 / 30=执行失败
 pub fn resize_online(mountpoint: &Path, size: Option<u64>) -> Outcome {
-    imp::resize_online(mountpoint, size)
+    imp::resize_online(mountpoint, move |_| Ok(size))
+}
+
+/// 在线 resize（resize 命令用）：目标长度由 `decide` 在**持有目标锁之后**、以只读打开的
+/// 整盘为输入解析——`+N`/`+N%` 锚定"当前尺寸"、`grow` 锚定右侧空闲，锁前快照在窗口内可能已作废。
+/// `Ok(None)` = 不指定绝对尺寸（仅把 FS 扩满现分区）；`Ok(Some(b))` = 绝对新尺寸
+pub fn resize_online_planned(
+    mountpoint: &Path,
+    decide: impl FnOnce(&FileSource) -> Result<Option<u64>, Fail>,
+) -> Outcome {
+    imp::resize_online(mountpoint, decide)
 }
 
 /// PV 在线扩容（仅分区层，无 FS 层）：sfdisk 写表 → partx 同步（BLKPG 兜底）→
 /// 尺寸核验。PV 本身不挂载，但活动 LV 经 device-mapper 持有分区使 BLKRRPART
 /// EBUSY，因此必须走与挂载分区相同的 partx/BLKPG 同步路径；pvresize/lvextend
 /// 由调用方在分区尺寸生效后执行（pvresize(8) 支持已属 VG 且有活动 LV 的 PV）。
+/// 目标长度同样由 `decide` 在锁下解析，`Ok(None)` 视作"无绝对目标"（分区层无变化）。
 /// 返回 (结果, 锁下取得的实际旧尺寸)：调用方计算扩量只能用后者——锁前快照在
 /// 窗口内可能已过期，用它算出的扩量会传导给 lvextend。前置失败时旧尺寸带 0，
 /// 调用方只在 complete 分支消费它
-pub fn resize_pv_online(disk_name: &str, pno: u32, new_len_bytes: u64) -> (Outcome, u64) {
-    imp::resize_pv(disk_name, pno, new_len_bytes)
+pub fn resize_pv_online(
+    disk_name: &str,
+    pno: u32,
+    decide: impl FnOnce(&FileSource) -> Result<Option<u64>, Fail>,
+) -> (Outcome, u64) {
+    imp::resize_pv(disk_name, pno, decide)
 }
 
 mod imp {
@@ -590,7 +606,11 @@ mod imp {
 
     /// PV 分区在线扩容：只动分区层，pvresize/lvextend 归调用方。第二返回值是
     /// 锁下取得的实际旧尺寸（前置失败时为 0，调用方只在 complete 分支消费）
-    pub fn resize_pv(disk_name: &str, pno: u32, new_len_bytes: u64) -> (Outcome, u64) {
+    pub fn resize_pv(
+        disk_name: &str,
+        pno: u32,
+        decide: impl FnOnce(&FileSource) -> Result<Option<u64>, Fail>,
+    ) -> (Outcome, u64) {
         // 解析只读 sysfs / 路径，尚未写盘 → Infra。尚未取得独占权，旧尺寸不可信
         let t = match resolve_pv_target(disk_name, pno) {
             Ok(t) => t,
@@ -618,21 +638,27 @@ mod imp {
         if crate::online::swap_active(disk_name, pno) {
             return (Outcome::refused(format!("partition {pno} became active swap during locking — run swapoff first")), old_len_bytes);
         }
-        // PV 判据的锁下复核（命令层那次是锁前粗查）：识别与取锁之间分区可被重新格式化，
-        // 过期的 is_pv 会把 sfdisk 的表写入砸到已不是 PV 的分区上
-        {
-            let src = match crate::dev::FileSource::open_read_only(&t.disk_dev) {
-                Ok(s) => s,
-                Err(e) => return (Outcome::infra(format!("open failed: {e}")), old_len_bytes),
-            };
-            match crate::fsid::identify(&src, t.start_bytes, t.part_len_bytes) {
-                Ok("lvm2_pv") => {}
-                Ok(ft) => return (Outcome::refused(format!(
-                    "partition {pno} is no longer an LVM PV (identified as {ft}) — re-run `diskedit resize` to re-classify the target"
-                )), old_len_bytes),
-                Err(e) => return (Outcome::infra(format!("identify failed: {e}")), old_len_bytes),
-            }
+        // 锁下重取真相共用一个只读整盘句柄：PV 判据复核与"请求 → 目标长度"的解析
+        // 都锚定独占权之后的盘上内容。PV 判据的复核（命令层那次是锁前粗查）：识别与
+        // 取锁之间分区可被重新格式化，过期的 is_pv 会把 sfdisk 的表写入砸到已不是 PV 的分区上
+        let disk = match FileSource::open_read_only(&t.disk_dev) {
+            Ok(s) => s,
+            Err(e) => return (Outcome::infra(format!("open failed: {e}")), old_len_bytes),
+        };
+        match crate::fsid::identify(&disk, t.start_bytes, t.part_len_bytes) {
+            Ok(crate::fsid::FS_LVM2_PV) => {}
+            Ok(ft) => return (Outcome::refused(format!(
+                "partition {pno} is no longer an LVM PV (identified as {ft}) — re-run `diskedit resize` to re-classify the target"
+            )), old_len_bytes),
+            Err(e) => return (Outcome::infra(format!("identify failed: {e}")), old_len_bytes),
         }
+        // 目标长度在锁下解析（见 `resize_online_planned` 的说明）；PV 路径无"仅扩 FS"一说，
+        // `Ok(None)` 视作无绝对目标 = 分区层无变化
+        let new_len_bytes = match decide(&disk) {
+            Ok(Some(b)) => b,
+            Ok(None) => t.part_len_bytes,
+            Err(f) => return (f.into_outcome(), old_len_bytes),
+        };
         // 相等值 = 分区层无事可做，按 complete 返回：调用方照常走完 PV 链，
         // delta 为 0 时 pvresize/lvextend 只同步现状。相等与否必须由锁下事实判定——
         // 锁前快照在窗口内可能已过期，用它短路会跳过本该做的写表
@@ -664,7 +690,10 @@ mod imp {
         )
     }
 
-    pub fn resize_online(mountpoint: &Path, size: Option<u64>) -> Outcome {
+    pub fn resize_online(
+        mountpoint: &Path,
+        decide: impl FnOnce(&FileSource) -> Result<Option<u64>, Fail>,
+    ) -> Outcome {
         // 解析与 FS 识别都是只读的，且先于 part_resize/sfdisk 的首次写盘 → Infra
         let t = match resolve_target(mountpoint) {
             Ok(t) => t,
@@ -706,6 +735,17 @@ mod imp {
         let fstype = match fstype_of(&t) {
             Ok(f) => f,
             Err(e) => return Outcome::infra(e.to_string()),
+        };
+        // 目标长度在锁下解析：请求的锚定值（`+N`/`+N%` 的当前尺寸、`grow` 的右侧空闲）
+        // 必须取自独占权之后的盘上现状，锁前快照在窗口内可能已作废。只读打开整盘，
+        // 解析失败按 Fail 的出口语义直接折叠
+        let disk = match FileSource::open_read_only(&t.disk_dev) {
+            Ok(s) => s,
+            Err(e) => return Outcome::infra(format!("open failed: {e}")),
+        };
+        let size = match decide(&disk) {
+            Ok(v) => v,
+            Err(f) => return f.into_outcome(),
         };
         let online_shrink = fstype == "btrfs";
         if size.is_some_and(|s| s < t.part_len_bytes) && !online_shrink {

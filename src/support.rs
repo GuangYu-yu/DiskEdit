@@ -369,17 +369,6 @@ pub(crate) fn src_from(tag: &str, data: &[u8]) -> FileSource {
 }
 
 #[cfg(test)]
-pub(crate) fn base_args() -> Args {
-    Args {
-        target: String::new(), part: None, grow: None,
-        start: None, end: None, size: None, fs: None, name: None, type_guid: None, table: None,
-        yes: false, online: false, random: false, no_fs: false, sector_size: None, align: "mib".to_string(), chunk_mib: 4,
-        grow_to_end: false, allow_move: false, grow_lv: false, lv: None, start_end: false, pos: Vec::new(),
-        seen: Vec::new(),
-    }
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
     use crate::table;
