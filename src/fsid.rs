@@ -6,6 +6,16 @@ use std::io;
 const SQUASHFS_MAGIC: &[u8; 4] = b"hsqs";
 const EROFS_MAGIC: [u8; 4] = [0xE2, 0xE1, 0xF5, 0xE0];
 
+/// identify 对"区间内没有已知签名"的结论名。它是**结论**而非"没探测"：写入路径据此
+/// 跳过 FS 步骤，并把无后续待办与"探测认得但激活不了"分道。集中在此是因为它在识别层
+/// 产出、被 fsops/resize 多处消费——字面量散落会让某一处改了名而另一处继续按旧名判定
+pub(crate) const FS_UNKNOWN: &str = "unknown";
+
+/// LVM2 PV 标签的识别名（`LABELONE` + 类型串 `LVM2 001`）。它不是可挂载的文件系统，
+/// 接力的是 pvresize/lvextend 链；写入路径对它的分支与"认不出的区域"完全不同
+/// （mkfs/check 显式拒绝，grow 记为无 FS 步骤的扩容）
+pub(crate) const FS_LVM2_PV: &str = "lvm2_pv";
+
 /// 按**字节区间**识别文件系统：`base` 起、`len_bytes` 长的区域。
 ///
 /// 刻意收字节而不收 LBA + 扇区大小：LBA 的单位取决于它来自哪张表——GPT 条目的 LBA 以
@@ -118,7 +128,7 @@ pub fn identify(src: &FileSource, base: u64, len_bytes: u64) -> io::Result<&'sta
             && &b[0..8] == b"LABELONE"
             && &b[24..32] == b"LVM2 001"
         {
-            return Ok("lvm2_pv");
+            return Ok(FS_LVM2_PV);
         }
     }
     // swap: 签名位于"创建机页大小"末尾 10 字节（内核 include/linux/swap.h
@@ -128,7 +138,7 @@ pub fn identify(src: &FileSource, base: u64, len_bytes: u64) -> io::Result<&'sta
     if probe_swap_header(src, base, len_bytes, &swapon_activatable_pages())?.is_some() {
         return Ok("swap");
     }
-    Ok("unknown")
+    Ok(FS_UNKNOWN)
 }
 
 /// ext 家族判定（本次识别的名字 + 用户可显式书写的别名）。

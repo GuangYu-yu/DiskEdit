@@ -720,7 +720,7 @@ struct MkfsTool<'a> {
 }
 
 fn mkfs_tool(fstype: &str) -> Result<MkfsTool<'_>, FsError> {
-    if fstype == "lvm2_pv" {
+    if fstype == crate::fsid::FS_LVM2_PV {
         return Err(FsError::unsupported(
             "cannot mkfs an LVM2 PV — to (re)create the PV use pvcreate(8), to wipe it use wipefs(8)",
         ));
@@ -821,7 +821,7 @@ fn grow_support(fstype: &str) -> ToolSupport {
         "vfat" => Tools(&["fatresize"]),
         // swap 不搬内容：扩后按原 UUID/卷标重建（recreate_swap → mkswap）
         "swap" => Tools(&["mkswap"]),
-        "unknown" | "lvm2_pv" => NotApplicable,
+        crate::fsid::FS_UNKNOWN | crate::fsid::FS_LVM2_PV => NotApplicable,
         _ => Unsupported("not wired to a tool — pass --no-fs to change the partition only"),
     }
 }
@@ -833,11 +833,11 @@ fn shrink_support(fstype: &str) -> ToolSupport {
         "ntfs" => Tools(&["ntfsresize"]),
         "btrfs" => Tools(&["btrfs"]),
         // LVM PV 缩容要求新末端之后没有已分配的 extent，需经 lvreduce/pvresize 链，本工具不做
-        "lvm2_pv" => Unsupported(
+        crate::fsid::FS_LVM2_PV => Unsupported(
             "requires the lvreduce/pvresize chain (not implemented here; see pvresize(8))",
         ),
         // 类型认不出来就无法先缩 FS：缩分区后 FS 越界写坏数据
-        "unknown" => Unsupported(
+        crate::fsid::FS_UNKNOWN => Unsupported(
             "filesystem type unrecognized — shrinking the partition without resizing the FS first would corrupt data",
         ),
         // 其余认得却不会缩的类型：唯一安全路径是先由该 FS 自己的工具缩。
@@ -974,7 +974,7 @@ pub fn grow_target_at(src: &FileSource, part: u32, base: u64, len: u64) -> Resul
         if !(is_ext(inner) || inner == "f2fs") {
             // 尚未格式化与"认得出但不接线"是两回事：前者那块空间会在首次挂载时被 fstools
             // 建满，后者要用户自己处理
-            return if inner == "unknown" {
+            return if inner == crate::fsid::FS_UNKNOWN {
                 Ok(Growable::OverlayPending)
             } else {
                 Err(FsError::unsupported(format!(
@@ -993,7 +993,7 @@ pub fn grow_target_at(src: &FileSource, part: u32, base: u64, len: u64) -> Resul
     // 其余按 FS 自身的可扩性分流：三态与工具清单都取自 grow_support，不在此另列一份。
     // "没有可扩的 FS"里有一类并非无信息——页格式激活不了的 swap（见该变体），探测认得它；
     // 只对 identify 已给 "unknown" 的区间探，其余类型不付这次读盘
-    let swap_unactivatable = fstype == "unknown"
+    let swap_unactivatable = fstype == crate::fsid::FS_UNKNOWN
         && crate::fsid::unactivatable_swap(src, base, len).map_err(FsError::from)?;
     match grow_support(fstype) {
         ToolSupport::Tools(_) => Ok(Growable::Target(GrowTarget { scope: DeviceScope::Partition(part), fstype })),
@@ -1013,7 +1013,7 @@ pub fn grow_target_at(src: &FileSource, part: u32, base: u64, len: u64) -> Resul
 pub fn check_grow_step(g: Growable) -> Result<(), FsError> {
     match g {
         Growable::Target(t) => check_grow(t.fstype),
-        Growable::OverlayPending | Growable::SwapUnactivatable | Growable::NoFilesystem("lvm2_pv") => Ok(()),
+        Growable::OverlayPending | Growable::SwapUnactivatable | Growable::NoFilesystem(crate::fsid::FS_LVM2_PV) => Ok(()),
         Growable::NoFilesystem(f) => Err(FsError::unsupported(format!(
             "cannot grow {f}: the filesystem type was not identified — pass --no-fs to change the partition only"
         ))),
@@ -1243,7 +1243,7 @@ pub fn shrink_fs(src: &FileSource, part: u32, fstype: &str, new_bytes: u64) -> R
 /// xfs_repair -n = no modify（man xfs_repair）、btrfs check = 默认只读（man btrfs-check）、
 /// fsck.vfat -n = no-operation 只读（man fsck.fat）、fsck.exfat -n = read-only 不修复（man fsck.exfat）
 pub fn check_fs(src: &FileSource, part: u32, fstype: &str) -> Result<(), FsError> {
-    if fstype == "lvm2_pv" {
+    if fstype == crate::fsid::FS_LVM2_PV {
         return Err(FsError::unsupported(
             "target is an LVM2 PV, not a filesystem — PV metadata is checked with pvck(8), not fsck",
         ));
