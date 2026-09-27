@@ -52,6 +52,18 @@ echo "$OUT" | head -2
 [ "$BEFORE" = "$(pt)" ] && echo "C DISK UNTOUCHED OK" || { echo "C DISK CHANGED (BAD)"; rc=1; }
 
 echo
+echo "===== D: create 的 mkfs 失败 → 表已改、FS 未做 → PARTIAL(20) ====="
+# 16M 远低于 mkfs.xfs 的 300M 下限：分区建成后 FS 步必然失败，走 Pending 通道报 20
+rm -f "$T" "$T"$SIDECAR_GLOB
+truncate -s 1G "$T"
+$B new "$T" --yes >/dev/null
+OUT=$($B create "$T" --size 16M --name tiny --fs xfs 2>&1); E=$?
+echo "exit=$E : $(echo "$OUT" | head -1)"
+exp "$E" 20 "create 的 mkfs 失败 → 后置条件未全满足（PARTIAL）"
+$B info "$T" | grep -q '"num":1' && echo "D PARTITION-CREATED OK（表已写）" || { echo "D partition missing (BAD)"; rc=1; }
+echo "$OUT" | grep -q "follow-up step(s) are pending" && echo "D PENDING-REPORT OK" || { echo "D pending report missing (BAD)"; rc=1; }
+
+echo
 echo "===== 残留核对 ====="
 echo "t26: $(ls /var/tmp/t26* 2>/dev/null | wc -l)  loops: $(losetup -a | wc -l)"
 exit $rc

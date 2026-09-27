@@ -37,4 +37,4 @@ jobs:
           cp target/release/DiskEdit bins/DiskEdit-fault
 
       - name: 运行全量套件（root）
-        run: sudo env DISKEDIT_BIN_DIR="$GITHUB_WORKSPACE/bins" bash tests/wsl/run_all.sh
+        run: sudo env DISKEDIT_BIN_DIR="$GITHUB_WORKSPACE/bins" DISKEDIT_STRICT=1 bash tests/wsl/run_all.sh
