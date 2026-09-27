@@ -112,22 +112,19 @@ echo "resume: $R (batch 边界应为 chunk 144)"
 chkp 2 "$M2"; chkp 3 "$M3"
 
 echo
-echo "===== 7: copy 中断（journal 残留为非可逆现场 → abandon → 重跑） ====="
+echo "===== 7: copy 确定性中断（copy-before-commit）→ 重跑拒 → abandon → 重跑 → 数据一致 ====="
 T2=/var/tmp/t18b.img; T=$T2
 mk; M3=$(fillp 3 190)
-$B copy "$T":3 --start 1500000 --chunk-size 1 >/dev/null 2>&1 &
-PID=$!; sleep 1; kill -9 $PID 2>/dev/null; wait $PID 2>/dev/null
-# kill 落点分两问：现场是否已建、表项是否已提交。现场已建 → 先 abandon 释放；
-# 表项已提交（p4 已进表）→ 任务已到终态，重跑只会被以目标重叠正确拒绝（10），
-# 验证即可；未提交才重跑收尾。两问都直接读镜像，绕开 loop 分区节点的异步就绪
-if [ -f "$T$JOURNAL_SUFFIX" ] || [ -f "$T$CKPT_SUFFIX" ]; then
-  exp "$($B abandon "$T" --yes >/dev/null 2>&1; echo $?)" 0 "abandon 释放 copy 现场"
-fi
-if $B info "$T" | grep -q '"num":4'; then
-  echo "  （copy 在 kill 前已提交表项——跳过重跑仅验证）"
-else
-  OUT=$($B copy "$T":3 --start 1500000 --chunk-size 1 2>&1); exp "$?" 0 "copy 重跑完成"
-fi
+# 数据已拷、表项尚未提交的确定点：copy 不可续传，现场只能靠 abandon 释放
+DISKEDIT_FAULT=copy-before-commit $BF copy "$T":3 --start 1500000 --chunk-size 1 >/dev/null 2>&1
+exp "$([ -f "$T$JOURNAL_SUFFIX" ] && echo yes || echo no)" yes "copy 中断留下 journal 现场"
+exp "$([ -f "$T$CKPT_SUFFIX" ] && echo yes || echo no)" no "copy 无 checkpoint（不可续传）"
+$B info "$T" | grep -q '"num":4' && { echo "  BAD  p4 已进表（应在提交前中断）"; rc=1; } || echo "  OK   p4 尚未进表"
+OUT=$($BF copy "$T":3 --start 1500000 --chunk-size 1 2>&1); exp "$?" 30 "未释放现场时重跑被拒（不得静默重跑）"
+echo "$OUT" | grep -o "unfinished operation still owns this target" | head -1
+exp "$($B abandon "$T" --yes >/dev/null 2>&1; echo $?)" 0 "abandon 释放 copy 现场"
+OUT=$($B copy "$T":3 --start 1500000 --chunk-size 1 2>&1); exp "$?" 0 "abandon 后重跑 copy"
+$B info "$T" | grep -q '"num":4' && echo "  OK   p4 已落表" || { echo "  BAD  p4 未进表"; rc=1; }
 chkp 3 "$M3"
 LD=$(lo_attach "$T")
 lo_waitpart "${LD}p4" || { echo "p4 part node not ready"; rc=1; }
