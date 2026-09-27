@@ -3,7 +3,7 @@
 //! 严格 Linux。非 Linux 平台编译为显式拒绝存根。
 
 use crate::dev::FileSource;
-use crate::fsid::is_ext;
+use crate::fsid::{fs_name, FsKind};
 use std::ffi::{OsStr, OsString};
 use std::io;
 #[cfg(target_os = "linux")]
@@ -552,8 +552,8 @@ fn partition_byte_range(src: &FileSource, part: u32) -> Result<(u64, u64), FsErr
 /// 输出格式锚定 man 页示例（"Estimated minimum size of the filesystem: N" / "Block size: N"）。
 /// 其余 FS 无已验证的输出格式，返回 None，由工具自身在缩容前拒绝
 /// （shrink_fs 先于任何数据搬移执行，失败即安全终止）
-pub fn fs_min_bytes(src: &FileSource, part: u32, fstype: &str) -> Result<Option<u64>, FsError> {
-    if !is_ext(fstype) {
+pub fn fs_min_bytes(src: &FileSource, part: u32, fstype: Option<FsKind>) -> Result<Option<u64>, FsError> {
+    if fstype != Some(FsKind::Ext) {
         return Ok(None);
     }
     let mut result: Option<io::Result<u64>> = None;
@@ -703,6 +703,96 @@ fn wipe_zero(dev: &str, ranges: &[(u64, u64)]) -> io::Result<()> {
     Ok(())
 }
 
+/// `--fs`/`mkfs` 请求要创建的具体类型。与识别域 [`FsKind`] 分属两件事：识别器只到 ext
+/// 家族（0xEF53 区分不出 2/3/4），而 mkfs 请求必须点名 ext2/3/4（`mke2fs -t extN`）。
+/// 两者不互相包含：本枚举独有 ext2/3/4，[`FsKind`] 独有 squashfs/erofs/hfsplus/apfs。
+/// 交集按转调共享 [`FsKind::as_str`] 维持，字符串只维护一处
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MkfsFs {
+    Ext2,
+    Ext3,
+    Ext4,
+    Vfat,
+    Exfat,
+    Ntfs,
+    Xfs,
+    Btrfs,
+    F2fs,
+    Swap,
+    /// 能被解析、随后被 [`mkfs_tool`] 逐字节拒绝（`cannot mkfs an LVM2 PV …`）。
+    /// 枚举必须含它，否则那条文案与失败分类会变
+    Lvm2Pv,
+}
+
+impl MkfsFs {
+    /// 对外规范名（`--fs` 接受的值、`-t` 参数、文案都由它生成）
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            MkfsFs::Ext2 => "ext2",
+            MkfsFs::Ext3 => "ext3",
+            MkfsFs::Ext4 => "ext4",
+            // 与识别域共享的 8 项转调其规范名，不复制字符串
+            MkfsFs::Vfat => FsKind::Vfat.as_str(),
+            MkfsFs::Exfat => FsKind::Exfat.as_str(),
+            MkfsFs::Ntfs => FsKind::Ntfs.as_str(),
+            MkfsFs::Xfs => FsKind::Xfs.as_str(),
+            MkfsFs::Btrfs => FsKind::Btrfs.as_str(),
+            MkfsFs::F2fs => FsKind::F2fs.as_str(),
+            MkfsFs::Swap => FsKind::Swap.as_str(),
+            MkfsFs::Lvm2Pv => FsKind::Lvm2Pv.as_str(),
+        }
+    }
+
+    /// CLI 拼写 → 类型。只认规范拼写，不做大小写归一化
+    pub fn from_cli_name(name: &str) -> Option<MkfsFs> {
+        Some(match name {
+            "ext2" => MkfsFs::Ext2,
+            "ext3" => MkfsFs::Ext3,
+            "ext4" => MkfsFs::Ext4,
+            "vfat" => MkfsFs::Vfat,
+            "exfat" => MkfsFs::Exfat,
+            "ntfs" => MkfsFs::Ntfs,
+            "xfs" => MkfsFs::Xfs,
+            "btrfs" => MkfsFs::Btrfs,
+            "f2fs" => MkfsFs::F2fs,
+            "swap" => MkfsFs::Swap,
+            "lvm2_pv" => MkfsFs::Lvm2Pv,
+            _ => return None,
+        })
+    }
+
+    /// 识别域口径的类型：ext2/3/4 折叠为 [`FsKind::Ext`]（e2fsck/resize2fs 对三者通用）。
+    /// 供需要 `FsKind` 的消费点（如 [`rescue_hint`]）跨域取值
+    pub fn as_fs_kind(self) -> FsKind {
+        match self {
+            MkfsFs::Ext2 | MkfsFs::Ext3 | MkfsFs::Ext4 => FsKind::Ext,
+            MkfsFs::Vfat => FsKind::Vfat,
+            MkfsFs::Exfat => FsKind::Exfat,
+            MkfsFs::Ntfs => FsKind::Ntfs,
+            MkfsFs::Xfs => FsKind::Xfs,
+            MkfsFs::Btrfs => FsKind::Btrfs,
+            MkfsFs::F2fs => FsKind::F2fs,
+            MkfsFs::Swap => FsKind::Swap,
+            MkfsFs::Lvm2Pv => FsKind::Lvm2Pv,
+        }
+    }
+}
+
+impl std::fmt::Display for MkfsFs {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// `--fs` 值 → 类型。失败归 `UnsupportedFs`（拒绝/10）：拼错的类型名改参数即可解
+pub fn parse_fstype(name: &str) -> Result<MkfsFs, FsError> {
+    MkfsFs::from_cli_name(name).ok_or_else(|| {
+        FsError::unsupported(format!(
+            "unsupported fstype {name} (supported: ext2/3/4, xfs, btrfs, f2fs, vfat, exfat, ntfs, swap)"
+        ))
+    })
+}
+
 /// fstype → 外部工具与参数。**唯一**一份支持列表：`mkfs` 与命令层的"先问再做"都读它，
 /// 免得"能不能做"与"怎么做"两份清单分叉。
 ///
@@ -712,29 +802,24 @@ fn wipe_zero(dev: &str, ranges: &[(u64, u64)]) -> io::Result<()> {
 ///   （man mkfs.btrfs / mkfs.f2fs / mkfs.xfs）
 /// - `-f` 语义各工具不类推：mkntfs 的 -f 是 fast 格式化而非 force（force 为 -F），
 ///   故 ntfs 不传 -f，让工具自身拒绝已有文件系统（man mkntfs）
-struct MkfsTool<'a> {
+struct MkfsTool {
     program: String,
     force: bool,
-    /// `mke2fs -t <ext_type>`；生命周期跟着调用方给的 fstype
-    ext_type: Option<&'a str>,
+    /// `mke2fs -t <ext_type>`；只有 ext2/3/4 携带
+    ext_type: Option<MkfsFs>,
 }
 
-fn mkfs_tool(fstype: &str) -> Result<MkfsTool<'_>, FsError> {
-    if fstype == crate::fsid::FS_LVM2_PV {
-        return Err(FsError::unsupported(
-            "cannot mkfs an LVM2 PV — to (re)create the PV use pvcreate(8), to wipe it use wipefs(8)",
-        ));
-    }
+fn mkfs_tool(fstype: MkfsFs) -> Result<MkfsTool, FsError> {
     let (program, force, ext_type) = match fstype {
         // mkfs.extN 只是 mke2fs 等价 -t extN 的符号链接（man mke2fs），直调 mke2fs 免依赖链接布局
-        "ext2" | "ext3" | "ext4" => ("mke2fs".to_string(), false, Some(fstype)),
-        "vfat" | "exfat" | "ntfs" => (format!("mkfs.{fstype}"), false, None),
-        "xfs" | "btrfs" | "f2fs" => (format!("mkfs.{fstype}"), true, None),
-        "swap" => ("mkswap".to_string(), false, None),
-        other => {
-            return Err(FsError::unsupported(format!(
-                "unsupported fstype {other} (supported: ext2/3/4, xfs, btrfs, f2fs, vfat, exfat, ntfs, swap)"
-            )));
+        MkfsFs::Ext2 | MkfsFs::Ext3 | MkfsFs::Ext4 => ("mke2fs".to_string(), false, Some(fstype)),
+        MkfsFs::Vfat | MkfsFs::Exfat | MkfsFs::Ntfs => (format!("mkfs.{}", fstype.as_str()), false, None),
+        MkfsFs::Xfs | MkfsFs::Btrfs | MkfsFs::F2fs => (format!("mkfs.{}", fstype.as_str()), true, None),
+        MkfsFs::Swap => ("mkswap".to_string(), false, None),
+        MkfsFs::Lvm2Pv => {
+            return Err(FsError::unsupported(
+                "cannot mkfs an LVM2 PV — to (re)create the PV use pvcreate(8), to wipe it use wipefs(8)",
+            ));
         }
     };
     Ok(MkfsTool { program, force, ext_type })
@@ -745,7 +830,7 @@ fn mkfs_tool(fstype: &str) -> Result<MkfsTool<'_>, FsError> {
 ///
 /// 必须先问再开事务：拒绝的语义是"什么都没写"，而 mkfs 一旦开了事务就先落一条不可回滚
 /// 屏障——一个拼错的类型名、或一个没装的工具包，都不该把目标锁在"未收尾"状态里等 `abandon`
-pub fn mkfs_capability(fstype: &str) -> Result<(), FsError> {
+pub fn mkfs_capability(fstype: MkfsFs) -> Result<(), FsError> {
     let tool = mkfs_tool(fstype)?;
     find_tool(&tool.program).map(|_| ()).map_err(|e| match e {
         FsError::ToolMissing(_) => FsError::missing(format!(
@@ -759,7 +844,7 @@ pub fn mkfs_capability(fstype: &str) -> Result<(), FsError> {
 
 /// mkfs：破坏分区数据，调用方须先取确认；执行前先擦残留签名（见 erase_ranges），
 /// 防旧 btrfs/ZFS/RAID 备份超级块残留被 blkid 误认
-pub fn mkfs(src: &FileSource, part: u32, fstype: &str) -> Result<(), FsError> {
+pub fn mkfs(src: &FileSource, part: u32, fstype: MkfsFs) -> Result<(), FsError> {
     let tool = mkfs_tool(fstype)?;
     let (_, part_len) = partition_byte_range(src, part)?;
     let ss = src.sector_size;
@@ -771,7 +856,7 @@ pub fn mkfs(src: &FileSource, part: u32, fstype: &str) -> Result<(), FsError> {
         }
         if let Some(t) = tool.ext_type {
             args.push("-t");
-            args.push(t);
+            args.push(t.as_str());
         }
         args.push(dev);
         let out = run(&tool.program, &args)?;
@@ -810,34 +895,34 @@ enum ToolSupport {
     Unsupported(&'static str),
 }
 
-fn grow_support(fstype: &str) -> ToolSupport {
+fn grow_support(fstype: FsKind) -> ToolSupport {
     use ToolSupport::*;
     match fstype {
-        f if is_ext(f) => Tools(&["e2fsck", "resize2fs"]),
-        "ntfs" => Tools(&["ntfsresize"]),
-        "f2fs" => Tools(&["fsck.f2fs", "resize.f2fs"]),
-        "xfs" => Tools(&["xfs_growfs"]),
-        "btrfs" => Tools(&["btrfs"]),
-        "vfat" => Tools(&["fatresize"]),
+        FsKind::Ext => Tools(&["e2fsck", "resize2fs"]),
+        FsKind::Ntfs => Tools(&["ntfsresize"]),
+        FsKind::F2fs => Tools(&["fsck.f2fs", "resize.f2fs"]),
+        FsKind::Xfs => Tools(&["xfs_growfs"]),
+        FsKind::Btrfs => Tools(&["btrfs"]),
+        FsKind::Vfat => Tools(&["fatresize"]),
         // swap 不搬内容：扩后按原 UUID/卷标重建（recreate_swap → mkswap）
-        "swap" => Tools(&["mkswap"]),
-        crate::fsid::FS_UNKNOWN | crate::fsid::FS_LVM2_PV => NotApplicable,
+        FsKind::Swap => Tools(&["mkswap"]),
+        FsKind::Lvm2Pv => NotApplicable,
         _ => Unsupported("not wired to a tool — pass --no-fs to change the partition only"),
     }
 }
 
-fn shrink_support(fstype: &str) -> ToolSupport {
+fn shrink_support(fstype: Option<FsKind>) -> ToolSupport {
     use ToolSupport::*;
     match fstype {
-        f if is_ext(f) => Tools(&["e2fsck", "resize2fs"]),
-        "ntfs" => Tools(&["ntfsresize"]),
-        "btrfs" => Tools(&["btrfs"]),
+        Some(FsKind::Ext) => Tools(&["e2fsck", "resize2fs"]),
+        Some(FsKind::Ntfs) => Tools(&["ntfsresize"]),
+        Some(FsKind::Btrfs) => Tools(&["btrfs"]),
         // LVM PV 缩容要求新末端之后没有已分配的 extent，需经 lvreduce/pvresize 链，本工具不做
-        crate::fsid::FS_LVM2_PV => Unsupported(
+        Some(FsKind::Lvm2Pv) => Unsupported(
             "requires the lvreduce/pvresize chain (not implemented here; see pvresize(8))",
         ),
         // 类型认不出来就无法先缩 FS：缩分区后 FS 越界写坏数据
-        crate::fsid::FS_UNKNOWN => Unsupported(
+        None => Unsupported(
             "filesystem type unrecognized — shrinking the partition without resizing the FS first would corrupt data",
         ),
         // 其余认得却不会缩的类型：唯一安全路径是先由该 FS 自己的工具缩。
@@ -871,15 +956,15 @@ fn tool_package(tool: &str) -> &'static str {
     }
 }
 
-fn check_support(verb: &str, fstype: &str, support: ToolSupport) -> Result<(), FsError> {
+fn check_support(verb: &str, name: &str, support: ToolSupport) -> Result<(), FsError> {
     match support {
         ToolSupport::NotApplicable => Ok(()),
-        ToolSupport::Unsupported(reason) => Err(FsError::unsupported(format!("cannot {verb} {fstype}: {reason}"))),
+        ToolSupport::Unsupported(reason) => Err(FsError::unsupported(format!("cannot {verb} {name}: {reason}"))),
         ToolSupport::Tools(tools) => {
             for &t in tools {
                 if find_tool(t).is_err() {
                     return Err(FsError::missing(format!(
-                        "cannot {verb} {fstype}: requires `{t}` (package: {}) — not found in PATH",
+                        "cannot {verb} {name}: requires `{t}` (package: {}) — not found in PATH",
                         tool_package(t)
                     )));
                 }
@@ -892,42 +977,44 @@ fn check_support(verb: &str, fstype: &str, support: ToolSupport) -> Result<(), F
 /// 扩容前置检查（纯只读、不写盘）。返回 Err 即"事前拒绝"。
 /// 调用方**必须在首次写盘之前**执行，否则会留下"分区已改、FS 未扩"的中间态——
 /// 这正是本检查存在的意义：把可预见的失败挡在动手之前
-pub fn check_grow(fstype: &str) -> Result<(), FsError> {
-    check_support("grow", fstype, grow_support(fstype))
+pub fn check_grow(fstype: FsKind) -> Result<(), FsError> {
+    check_support("grow", fstype.as_str(), grow_support(fstype))
 }
 
-/// 缩容前置检查，语义同上
-pub fn check_shrink(fstype: &str) -> Result<(), FsError> {
-    check_support("shrink", fstype, shrink_support(fstype))
+/// 缩容前置检查，语义同上。`None`（未识别）在 shrink_support 里对应"类型认不出来"，
+/// 故不必在这里另开一臂
+pub fn check_shrink(fstype: Option<FsKind>) -> Result<(), FsError> {
+    check_support("shrink", fs_name(fstype), shrink_support(fstype))
 }
 
-/// 该 FS 的扩容/缩容应交给用户的补救命令（用于 PARTIAL 时的提示）
-pub fn rescue_hint(fstype: &str, dev: &str) -> String {
+/// 该 FS 的扩容/缩容应交给用户的补救命令（用于 PARTIAL 时的提示）。
+/// 产物是一段 shell 命令文本，属对外呈现，不参与能力判定；`None`（未识别）无补救命令
+pub fn rescue_hint(fstype: Option<FsKind>, dev: &str) -> String {
     match fstype {
-        f if is_ext(f) => format!("e2fsck -fp {dev} && resize2fs {dev}"),
-        "ntfs" => format!("ntfsresize -f -f {dev}"),
-        "f2fs" => format!("fsck.f2fs {dev} && resize.f2fs {dev}"),
-        "xfs" => format!("mount {dev} <mnt> && xfs_growfs <mnt>"),
-        "btrfs" => format!("mount {dev} <mnt> && btrfs filesystem resize max <mnt>"),
-        "vfat" => format!("fatresize -s max {dev}"),
-        "swap" => format!("mkswap --uuid <uuid> {dev}"),
+        Some(FsKind::Ext) => format!("e2fsck -fp {dev} && resize2fs {dev}"),
+        Some(FsKind::Ntfs) => format!("ntfsresize -f -f {dev}"),
+        Some(FsKind::F2fs) => format!("fsck.f2fs {dev} && resize.f2fs {dev}"),
+        Some(FsKind::Xfs) => format!("mount {dev} <mnt> && xfs_growfs <mnt>"),
+        Some(FsKind::Btrfs) => format!("mount {dev} <mnt> && btrfs filesystem resize max <mnt>"),
+        Some(FsKind::Vfat) => format!("fatresize -s max {dev}"),
+        Some(FsKind::Swap) => format!("mkswap --uuid <uuid> {dev}"),
         _ => String::new(),
     }
 }
 
 /// 本次扩容要动的**那一段**与它里面的文件系统：`scope` 是既有的范围表达（普通 FS = 分区
-/// 本身；OpenWrt overlay 的 RW 层 = 分区内的一段），`fstype` 是 identify 口径的名字。
+/// 本身；OpenWrt overlay 的 RW 层 = 分区内的一段），`fstype` 是 identify 口径的类型。
 /// 判断与执行因此同源——调用点拿到它之后只把区间交给 [`GrowTarget::resize_fs`]，
 /// 不自己推算 overlay 的偏移
 pub struct GrowTarget {
     pub scope: DeviceScope,
-    pub fstype: &'static str,
+    pub fstype: FsKind,
 }
 
 impl GrowTarget {
     /// 按判断期的同一份结论执行扩容
     pub fn resize_fs(&self, src: &FileSource) -> Result<(), FsError> {
-        resize_fs_in(src, &self.scope, self.fstype)
+        resize_fs_in(src, &self.scope, Some(self.fstype))
     }
 }
 
@@ -946,10 +1033,11 @@ pub enum Growable {
     /// 回 "unknown"，但这不是"没有信息"——[`unactivatable_swap`](crate::fsid::unactivatable_swap)
     /// 认得它，扩容后"swap 未重建"是一条**真实的待办**，故不并入 `NoFilesystem`
     SwapUnactivatable,
-    /// 区域里没有**可扩**的文件系统：空区域、类型未识别、LVM PV。携带识别出的类型，
-    /// 供调用方分辨情形与措辞——"未识别"不等于"里面没有文件系统"，措辞不得替它下这个结论。
-    /// PV 有承担者（pvresize 链，见 `resize --grow-lv`）；`unknown` 没有，故分区层默认拒绝它
-    NoFilesystem(&'static str),
+    /// 区域里没有**可扩**的文件系统：空区域、类型未识别、LVM PV。携带识别出的类型（含
+    /// `None` = 未识别），供调用方分辨情形与措辞——"未识别"不等于"里面没有文件系统"，
+    /// 措辞不得替它下这个结论。PV 有承担者（pvresize 链，见 `resize --grow-lv`）；
+    /// 未识别没有，故分区层默认拒绝它
+    NoFilesystem(Option<FsKind>),
 }
 
 /// 这段区域里能扩的文件系统是哪个 —— **唯一的判据**。写盘前的 preflight（能不能做、工具是否
@@ -958,29 +1046,29 @@ pub enum Growable {
 /// `Err` 是"认得出却不接线"（含只有只读根、没有尾部 RW 层的 squashfs/erofs）或设备读不出来
 pub fn grow_target_at(src: &FileSource, part: u32, base: u64, len: u64) -> Result<Growable, FsError> {
     let fstype = crate::fsid::identify(src, base, len).map_err(FsError::from)?;
-    if fstype == "squashfs" || fstype == "erofs" {
+    if matches!(fstype, Some(FsKind::Squashfs | FsKind::Erofs)) {
         // OpenWrt combined 布局：同分区头部只读根 + 尾部 RW overlay（fstools rootdisk.c）。
         // fstools 只把 RW 层造成 ext4/f2fs，故内层可扩集合就是这两者
         let rel = crate::fsid::overlay_offset_at(src, base)
             .map_err(FsError::from)?
             .ok_or_else(|| FsError::unsupported(format!(
-                "{fstype} rootfs without a trailing RW overlay layer — nothing to grow"
+                "{} rootfs without a trailing RW overlay layer — nothing to grow",
+                fs_name(fstype)
             )))?;
         if rel >= len {
             return Err(FsError::invalid("overlay offset beyond partition end"));
         }
         // 区间量本就是字节，直接传给按字节区间识别的 identify
         let inner = crate::fsid::identify(src, base + rel, len - rel).map_err(FsError::from)?;
-        if !(is_ext(inner) || inner == "f2fs") {
-            // 尚未格式化与"认得出但不接线"是两回事：前者那块空间会在首次挂载时被 fstools
-            // 建满，后者要用户自己处理
-            return if inner == crate::fsid::FS_UNKNOWN {
-                Ok(Growable::OverlayPending)
-            } else {
-                Err(FsError::unsupported(format!(
-                    "overlay layer identified as {inner} — only ext/f2fs overlays are growable"
-                )))
-            };
+        let Some(inner_kind) = inner else {
+            // 尚未格式化的 RW 层不是"认得出但不接线"：那块空间会在首次挂载时被 fstools 建满
+            return Ok(Growable::OverlayPending);
+        };
+        if !matches!(inner_kind, FsKind::Ext | FsKind::F2fs) {
+            return Err(FsError::unsupported(format!(
+                "overlay layer identified as {} — only ext/f2fs overlays are growable",
+                inner_kind.as_str()
+            )));
         }
         if src.is_block {
             // Range 路径走 loop，循环节点自身的挂载检查探不到底层分区——底层分区
@@ -988,18 +1076,22 @@ pub fn grow_target_at(src: &FileSource, part: u32, base: u64, len: u64) -> Resul
             let node = find_block_partition_node(src, part, base)?;
             require_unmounted(&node)?;
         }
-        return Ok(Growable::Target(GrowTarget { scope: DeviceScope::Range(base + rel, len - rel), fstype: inner }));
+        return Ok(Growable::Target(GrowTarget { scope: DeviceScope::Range(base + rel, len - rel), fstype: inner_kind }));
     }
-    // 其余按 FS 自身的可扩性分流：三态与工具清单都取自 grow_support，不在此另列一份。
-    // "没有可扩的 FS"里有一类并非无信息——页格式激活不了的 swap（见该变体），探测认得它；
-    // 只对 identify 已给 "unknown" 的区间探，其余类型不付这次读盘
-    let swap_unactivatable = fstype == crate::fsid::FS_UNKNOWN
-        && crate::fsid::unactivatable_swap(src, base, len).map_err(FsError::from)?;
-    match grow_support(fstype) {
-        ToolSupport::Tools(_) => Ok(Growable::Target(GrowTarget { scope: DeviceScope::Partition(part), fstype })),
-        ToolSupport::NotApplicable if swap_unactivatable => Ok(Growable::SwapUnactivatable),
-        ToolSupport::NotApplicable => Ok(Growable::NoFilesystem(fstype)),
-        ToolSupport::Unsupported(reason) => Err(FsError::unsupported(format!("cannot grow {fstype}: {reason}"))),
+    // 未识别的区间里有一类并非无信息——页格式激活不了的 swap（见该变体），探测认得它；
+    // 其余类型不付这次读盘
+    let Some(kind) = fstype else {
+        return Ok(if crate::fsid::unactivatable_swap(src, base, len).map_err(FsError::from)? {
+            Growable::SwapUnactivatable
+        } else {
+            Growable::NoFilesystem(None)
+        });
+    };
+    // 其余按 FS 自身的可扩性分流：三态与工具清单都取自 grow_support，不在此另列一份
+    match grow_support(kind) {
+        ToolSupport::Tools(_) => Ok(Growable::Target(GrowTarget { scope: DeviceScope::Partition(part), fstype: kind })),
+        ToolSupport::NotApplicable => Ok(Growable::NoFilesystem(Some(kind))),
+        ToolSupport::Unsupported(reason) => Err(FsError::unsupported(format!("cannot grow {kind}: {reason}"))),
     }
 }
 
@@ -1013,15 +1105,16 @@ pub fn grow_target_at(src: &FileSource, part: u32, base: u64, len: u64) -> Resul
 pub fn check_grow_step(g: Growable) -> Result<(), FsError> {
     match g {
         Growable::Target(t) => check_grow(t.fstype),
-        Growable::OverlayPending | Growable::SwapUnactivatable | Growable::NoFilesystem(crate::fsid::FS_LVM2_PV) => Ok(()),
+        Growable::OverlayPending | Growable::SwapUnactivatable | Growable::NoFilesystem(Some(FsKind::Lvm2Pv)) => Ok(()),
         Growable::NoFilesystem(f) => Err(FsError::unsupported(format!(
-            "cannot grow {f}: the filesystem type was not identified — pass --no-fs to change the partition only"
+            "cannot grow {}: the filesystem type was not identified — pass --no-fs to change the partition only",
+            fs_name(f)
         ))),
     }
 }
 
 /// superfloppy（无分区表，FS 即整盘）扩容：无表可写，纯 FS grow
-pub fn resize_fs_whole(src: &FileSource, fstype: &str) -> Result<(), FsError> {
+pub fn resize_fs_whole(src: &FileSource, fstype: Option<FsKind>) -> Result<(), FsError> {
     resize_fs_in(src, &DeviceScope::Whole, fstype)
 }
 
@@ -1035,10 +1128,10 @@ pub fn resize_fs_whole(src: &FileSource, fstype: &str) -> Result<(), FsError> {
 /// - btrfs：临时 mount → `btrfs filesystem resize max <mnt>`（max = 占满、须挂载态，man btrfs-filesystem）→ umount
 /// - vfat：`fatresize -s max <dev>`（扩满设备，man fatresize）
 /// - 其余（exfat/swap…）：无已接线的扩容工具，显式拒绝
-fn resize_fs_in(src: &FileSource, scope: &DeviceScope, fstype: &str) -> Result<(), FsError> {
+fn resize_fs_in(src: &FileSource, scope: &DeviceScope, fstype: Option<FsKind>) -> Result<(), FsError> {
     match fstype {
         // fsid 识别只给 0xEF53，区分不出 2/3/4；resize2fs 对三者通用（man resize2fs）
-        f if is_ext(f) => with_scope_device(src, scope, |dev| {
+        Some(FsKind::Ext) => with_scope_device(src, scope, |dev| {
             let out = run("e2fsck", &["-fp", dev])?;
             check_e2fsck_for_resize(out.status.code().unwrap_or(-1))?;
             let out = run("resize2fs", &[dev])?;
@@ -1047,7 +1140,7 @@ fn resize_fs_in(src: &FileSource, scope: &DeviceScope, fstype: &str) -> Result<(
             }
             Ok(())
         }),
-        "ntfs" => with_scope_device(src, scope, |dev| {
+        Some(FsKind::Ntfs) => with_scope_device(src, scope, |dev| {
             // 先 --no-action 演练，成功才真改，失败零副作用
             let out = run("ntfsresize", &["-f", "-f", "--no-action", dev])?;
             if !out.status.success() {
@@ -1062,7 +1155,7 @@ fn resize_fs_in(src: &FileSource, scope: &DeviceScope, fstype: &str) -> Result<(
             }
             Ok(())
         }),
-        "f2fs" => with_scope_device(src, scope, |dev| {
+        Some(FsKind::F2fs) => with_scope_device(src, scope, |dev| {
             // 预检：fsck.f2fs 无参 = 仅检查不修复（修复须显式 -f/-p；-a 只在内核报告 bug
             // 时才检查且默认禁用，man fsck.f2fs）。退出码负数表示失败（-1 表现为 255），
             // 非 0 即拒绝 resize
@@ -1079,14 +1172,14 @@ fn resize_fs_in(src: &FileSource, scope: &DeviceScope, fstype: &str) -> Result<(
             }
             Ok(())
         }),
-        "xfs" => with_scope_device(src, scope, |dev| with_mount(dev, |mnt| {
+        Some(FsKind::Xfs) => with_scope_device(src, scope, |dev| with_mount(dev, |mnt| {
             let out = run("xfs_growfs", &[mnt])?;
             if !out.status.success() {
                 return Err(FsError::command("xfs_growfs", &out));
             }
             Ok(())
         })),
-        "btrfs" => {
+        Some(FsKind::Btrfs) => {
             let (off, _) = scope_byte_range(src, scope)?;
             refuse_btrfs_multi_device_at(src, off)?;
             with_scope_device(src, scope, |dev| with_mount(dev, |mnt| {
@@ -1101,7 +1194,7 @@ fn resize_fs_in(src: &FileSource, scope: &DeviceScope, fstype: &str) -> Result<(
         // max 可能报 "Can't have overlapping partitions"，此时降级为显式字节（分区大小-1）；
         // 属经验性 workaround，非工具规范保证。
         // FAT32 <512MB 由工具自身拒绝（man BUGS，Windows 限制）
-        "vfat" => {
+        Some(FsKind::Vfat) => {
             let (_, dev_len) = scope_byte_range(src, scope)?;
             with_scope_device(src, scope, |dev| {
                 let mut out = run("fatresize", &["-s", "max", dev])?;
@@ -1122,11 +1215,13 @@ fn resize_fs_in(src: &FileSource, scope: &DeviceScope, fstype: &str) -> Result<(
         // squashfs/erofs 自己不可扩：能变大的是分区尾部的 RW overlay 层，那段由
         // grow_target_at 定位后交内层的分支执行。落到这里说明这个范围不是分区
         // （superfloppy），其内部没有 RW 层可扩
-        "squashfs" | "erofs" => Err(FsError::unsupported(format!(
-            "{fstype} needs a trailing RW overlay layer inside a partition — nothing to grow here"
+        Some(FsKind::Squashfs | FsKind::Erofs) => Err(FsError::unsupported(format!(
+            "{} needs a trailing RW overlay layer inside a partition — nothing to grow here",
+            fs_name(fstype)
         ))),
         other => Err(FsError::unsupported(format!(
-            "no resize tool wired for {other} (supported: ext2/3/4, ntfs, f2fs, xfs, btrfs, vfat; squashfs/erofs via their trailing RW overlay layer)"
+            "no resize tool wired for {} (supported: ext2/3/4, ntfs, f2fs, xfs, btrfs, vfat; squashfs/erofs via their trailing RW overlay layer)",
+            fs_name(other)
         ))),
     }
 }
@@ -1186,9 +1281,9 @@ where
 }
 
 /// FS 缩容到指定字节数（调用方保证 ≤ 当前 FS 大小；先于分区边界收缩执行）
-pub fn shrink_fs(src: &FileSource, part: u32, fstype: &str, new_bytes: u64) -> Result<(), FsError> {
+pub fn shrink_fs(src: &FileSource, part: u32, fstype: Option<FsKind>, new_bytes: u64) -> Result<(), FsError> {
     match fstype {
-        f if is_ext(f) => with_partition_device(src, part, |dev| {
+        Some(FsKind::Ext) => with_partition_device(src, part, |dev| {
         let out = run("e2fsck", &["-fp", dev])?;
         check_e2fsck_for_resize(out.status.code().unwrap_or(-1))?;
             // resize2fs 裸数字单位是"文件系统块数"而非字节（man resize2fs）；
@@ -1206,7 +1301,7 @@ pub fn shrink_fs(src: &FileSource, part: u32, fstype: &str, new_bytes: u64) -> R
             }
             Ok(())
         }),
-        "ntfs" => with_partition_device(src, part, |dev| {
+        Some(FsKind::Ntfs) => with_partition_device(src, part, |dev| {
             // -s 无后缀 = 字节，k/M/G = 10³/10⁶/10⁹（man ntfsresize OPTIONS）；本工具只传裸字节
             let out = run("ntfsresize", &["-f", "-f", "-s", &new_bytes.to_string(), dev])?;
             if !out.status.success() {
@@ -1217,7 +1312,7 @@ pub fn shrink_fs(src: &FileSource, part: u32, fstype: &str, new_bytes: u64) -> R
             }
             Ok(())
         }),
-        "btrfs" => {
+        Some(FsKind::Btrfs) => {
             let (off, _) = partition_byte_range(src, part)?;
             refuse_btrfs_multi_device_at(src, off)?;
             with_partition_device(src, part, |dev| with_mount(dev, |mnt| {
@@ -1232,7 +1327,7 @@ pub fn shrink_fs(src: &FileSource, part: u32, fstype: &str, new_bytes: u64) -> R
                 Ok(())
             }))
         }
-        other => Err(FsError::unsupported(format!("fs {other} cannot shrink"))),
+        other => Err(FsError::unsupported(format!("fs {} cannot shrink", fs_name(other)))),
     }
 }
 
@@ -1242,22 +1337,22 @@ pub fn shrink_fs(src: &FileSource, part: u32, fstype: &str, new_bytes: u64) -> R
 /// chkdsk，检查语义偏弱，man ntfsfix）、fsck.f2fs 无参 = 仅检查（man fsck.f2fs）、
 /// xfs_repair -n = no modify（man xfs_repair）、btrfs check = 默认只读（man btrfs-check）、
 /// fsck.vfat -n = no-operation 只读（man fsck.fat）、fsck.exfat -n = read-only 不修复（man fsck.exfat）
-pub fn check_fs(src: &FileSource, part: u32, fstype: &str) -> Result<(), FsError> {
-    if fstype == crate::fsid::FS_LVM2_PV {
+pub fn check_fs(src: &FileSource, part: u32, fstype: Option<FsKind>) -> Result<(), FsError> {
+    if fstype == Some(FsKind::Lvm2Pv) {
         return Err(FsError::unsupported(
             "target is an LVM2 PV, not a filesystem — PV metadata is checked with pvck(8), not fsck",
         ));
     }
     let cmd: (&str, Vec<&str>) = match fstype {
-        f if is_ext(f) => ("e2fsck", vec!["-fp"]),
-        "ntfs" => ("ntfsfix", vec!["-d"]),
-        "f2fs" => ("fsck.f2fs", vec![]),
-        "xfs" => ("xfs_repair", vec!["-n"]),
-        "btrfs" => ("btrfs", vec!["check"]),
-        "vfat" => ("fsck.vfat", vec!["-n"]),
+        Some(FsKind::Ext) => ("e2fsck", vec!["-fp"]),
+        Some(FsKind::Ntfs) => ("ntfsfix", vec!["-d"]),
+        Some(FsKind::F2fs) => ("fsck.f2fs", vec![]),
+        Some(FsKind::Xfs) => ("xfs_repair", vec!["-n"]),
+        Some(FsKind::Btrfs) => ("btrfs", vec!["check"]),
+        Some(FsKind::Vfat) => ("fsck.vfat", vec!["-n"]),
         // fsck.exfat man 未定义无参默认行为（存在 -r 交互修复），显式 -n = 仅检查不修复
-        "exfat" => ("fsck.exfat", vec!["-n"]),
-        other => return Err(FsError::unsupported(format!("no check tool wired for {other}"))),
+        Some(FsKind::Exfat) => ("fsck.exfat", vec!["-n"]),
+        other => return Err(FsError::unsupported(format!("no check tool wired for {}", fs_name(other)))),
     };
     with_partition_device(src, part, |dev| {
         let mut args = cmd.1;
@@ -1278,13 +1373,13 @@ pub fn check_fs(src: &FileSource, part: u32, fstype: &str) -> Result<(), FsError
 /// btrfs filesystem label ≤256 字符（man btrfs-filesystem）、ntfslabel（man ntfslabel）、
 /// fatlabel ≤11 字节（man fatlabel）、exfatlabel（man exfatlabel）、
 /// swaplabel -L（man swaplabel，标签写进 swap 头的 volume_name[16]）
-pub fn set_label(src: &FileSource, part: u32, fstype: &str, label: &str) -> Result<(), FsError> {
+pub fn set_label(src: &FileSource, part: u32, fstype: Option<FsKind>, label: &str) -> Result<(), FsError> {
     with_partition_device(src, part, |dev| {
         let (tool, args): (&str, Vec<String>) = match fstype {
-            f if is_ext(f) => ("tune2fs", vec!["-L".into(), label.into(), dev.into()]),
+            Some(FsKind::Ext) => ("tune2fs", vec!["-L".into(), label.into(), dev.into()]),
             // XFS 标签上限 12 字节（superblock s_fname[12]，man xfs_admin "twelve
             // characters"）：超长时 xfs_admin 静默截断，故提前拒绝
-            "xfs" => {
+            Some(FsKind::Xfs) => {
                 if label.len() > 12 {
                     return Err(FsError::invalid(format!(
                         "xfs label exceeds 12 bytes (got {}); xfs_admin would silently truncate",
@@ -1293,12 +1388,12 @@ pub fn set_label(src: &FileSource, part: u32, fstype: &str, label: &str) -> Resu
                 }
                 ("xfs_admin", vec!["-L".into(), label.into(), dev.into()])
             }
-            "btrfs" => ("btrfs", vec!["filesystem".into(), "label".into(), dev.into(), label.into()]),
-            "ntfs" => ("ntfslabel", vec![dev.into(), label.into()]),
-            "vfat" => ("fatlabel", vec![dev.into(), label.into()]),
-            "exfat" => ("exfatlabel", vec![dev.into(), label.into()]),
-            "swap" => ("swaplabel", vec!["-L".into(), label.into(), dev.into()]),
-            other => return Err(FsError::unsupported(format!("no label tool wired for {other}"))),
+            Some(FsKind::Btrfs) => ("btrfs", vec!["filesystem".into(), "label".into(), dev.into(), label.into()]),
+            Some(FsKind::Ntfs) => ("ntfslabel", vec![dev.into(), label.into()]),
+            Some(FsKind::Vfat) => ("fatlabel", vec![dev.into(), label.into()]),
+            Some(FsKind::Exfat) => ("exfatlabel", vec![dev.into(), label.into()]),
+            Some(FsKind::Swap) => ("swaplabel", vec!["-L".into(), label.into(), dev.into()]),
+            other => return Err(FsError::unsupported(format!("no label tool wired for {}", fs_name(other)))),
         };
         let argrefs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
         let out = run(tool, &argrefs)?;
@@ -1331,10 +1426,10 @@ pub enum UuidSupport {
     No(&'static str),
 }
 
-pub fn uuid_support(fstype: &str) -> UuidSupport {
-    if is_ext(fstype) || matches!(fstype, "xfs" | "btrfs" | "swap") {
+pub fn uuid_support(fstype: Option<FsKind>) -> UuidSupport {
+    if matches!(fstype, Some(FsKind::Ext | FsKind::Xfs | FsKind::Btrfs | FsKind::Swap)) {
         UuidSupport::Yes
-    } else if fstype == "ntfs" {
+    } else if fstype == Some(FsKind::Ntfs) {
         UuidSupport::RandomOnly
     } else {
         UuidSupport::No("not wired to a tool — use the filesystem's own utility")
@@ -1347,22 +1442,22 @@ pub fn uuid_support(fstype: &str) -> UuidSupport {
 /// swaplabel -U（man swaplabel）。
 /// 请求形式与 FS 能力的匹配由调用方先按 [`uuid_support`] 判定；此处只做工具映射，
 /// 落不到工具的组合同样拒绝，不静默降级
-pub fn set_uuid(src: &FileSource, part: u32, fstype: &str, req: &UuidRequest) -> Result<(), FsError> {
+pub fn set_uuid(src: &FileSource, part: u32, fstype: Option<FsKind>, req: &UuidRequest) -> Result<(), FsError> {
     with_partition_device(src, part, |dev| {
         let no_tool = |what: &str| {
-            FsError::unsupported(format!("no uuid tool wired for {fstype}{what}"))
+            FsError::unsupported(format!("no uuid tool wired for {}{what}", fs_name(fstype)))
         };
         let (tool, args): (&str, Vec<String>) = match req {
             UuidRequest::Explicit(u) => match fstype {
-                f if is_ext(f) => ("tune2fs", vec!["-U".into(), u.clone(), dev.into()]),
-                "xfs" => ("xfs_admin", vec!["-U".into(), u.clone(), dev.into()]),
-                "btrfs" => ("btrfstune", vec!["-f".into(), "-U".into(), u.clone(), dev.into()]),
-                "swap" => ("swaplabel", vec!["-U".into(), u.clone(), dev.into()]),
+                Some(FsKind::Ext) => ("tune2fs", vec!["-U".into(), u.clone(), dev.into()]),
+                Some(FsKind::Xfs) => ("xfs_admin", vec!["-U".into(), u.clone(), dev.into()]),
+                Some(FsKind::Btrfs) => ("btrfstune", vec!["-f".into(), "-U".into(), u.clone(), dev.into()]),
+                Some(FsKind::Swap) => ("swaplabel", vec!["-U".into(), u.clone(), dev.into()]),
                 _ => return Err(no_tool("")),
             },
             // 只有 ntfs 的工具提供"生成新值"这一用法
             UuidRequest::NewRandom => match fstype {
-                "ntfs" => ("ntfslabel", vec!["--new-serial".into(), dev.into()]),
+                Some(FsKind::Ntfs) => ("ntfslabel", vec!["--new-serial".into(), dev.into()]),
                 _ => return Err(no_tool(" that generates a random value")),
             },
         };
@@ -1377,9 +1472,10 @@ pub fn set_uuid(src: &FileSource, part: u32, fstype: &str, req: &UuidRequest) ->
 
 #[cfg(test)]
 mod tests {
-    use super::{check_e2fsck_for_check, check_e2fsck_for_resize, check_grow_step, erase_ranges, grow_target_at, parse_num_field, partition_byte_range, uuid_support, DeviceScope, Growable, UuidSupport};
+    use super::{check_e2fsck_for_check, check_e2fsck_for_resize, check_grow_step, erase_ranges, grow_target_at, mkfs_tool, parse_fstype, parse_num_field, partition_byte_range, uuid_support, DeviceScope, Growable, MkfsFs, UuidSupport};
     use super::FsError;
     use crate::dev::FileSource;
+    use crate::fsid::{self, FsKind};
 
     /// e2fsck 2/3/4 归 `CommandFailed`：三者都说明工具运行过——"确定未写盘"
     /// 的 Infra 承诺不成立。exit 2 的人工复现（e2fsck -fp 改过 root fs）无需真实环境：
@@ -1412,8 +1508,88 @@ mod tests {
     /// "no label tool wired for swap" 的拒绝
     #[test]
     fn swap_label_and_uuid_are_wired_to_swaplabel() {
-        assert!(matches!(uuid_support("swap"), UuidSupport::Yes));
-        assert!(matches!(uuid_support("vfat"), UuidSupport::No(_)));
+        assert!(matches!(uuid_support(Some(FsKind::Swap)), UuidSupport::Yes));
+        assert!(matches!(uuid_support(Some(FsKind::Vfat)), UuidSupport::No(_)));
+    }
+
+    /// `as_str` 是全仓唯一的规范名来源：任何一字漂移都会改动 info JSON 与文案，
+    /// 这里逐项钉死对外名
+    #[test]
+    fn fs_kind_and_mkfs_fs_strings_are_frozen() {
+        assert_eq!(FsKind::Squashfs.as_str(), "squashfs");
+        assert_eq!(FsKind::Erofs.as_str(), "erofs");
+        assert_eq!(FsKind::Ext.as_str(), "ext");
+        assert_eq!(FsKind::Xfs.as_str(), "xfs");
+        assert_eq!(FsKind::Btrfs.as_str(), "btrfs");
+        assert_eq!(FsKind::F2fs.as_str(), "f2fs");
+        assert_eq!(FsKind::Exfat.as_str(), "exfat");
+        assert_eq!(FsKind::Vfat.as_str(), "vfat");
+        assert_eq!(FsKind::Ntfs.as_str(), "ntfs");
+        assert_eq!(FsKind::HfsPlus.as_str(), "hfsplus");
+        assert_eq!(FsKind::Apfs.as_str(), "apfs");
+        assert_eq!(FsKind::Swap.as_str(), "swap");
+        assert_eq!(FsKind::Lvm2Pv.as_str(), "lvm2_pv");
+
+        assert_eq!(fsid::fs_name(None), "unknown");
+        assert_eq!(fsid::fs_name(Some(FsKind::Ext)), "ext");
+
+        // CLI 域自有字面量：ext 只在这里分裂到 2/3/4
+        assert_eq!(MkfsFs::Ext2.as_str(), "ext2");
+        assert_eq!(MkfsFs::Ext3.as_str(), "ext3");
+        assert_eq!(MkfsFs::Ext4.as_str(), "ext4");
+        // 交集转调共享：CLI 名必须与识别名逐字节一致
+        for (mk, kind) in [
+            (MkfsFs::Vfat, FsKind::Vfat),
+            (MkfsFs::Exfat, FsKind::Exfat),
+            (MkfsFs::Ntfs, FsKind::Ntfs),
+            (MkfsFs::Xfs, FsKind::Xfs),
+            (MkfsFs::Btrfs, FsKind::Btrfs),
+            (MkfsFs::F2fs, FsKind::F2fs),
+            (MkfsFs::Swap, FsKind::Swap),
+            (MkfsFs::Lvm2Pv, FsKind::Lvm2Pv),
+        ] {
+            assert_eq!(mk.as_str(), kind.as_str());
+        }
+    }
+
+    /// 接受集往返：11 个规范名解析回自身
+    #[test]
+    fn cli_fstype_names_round_trip() {
+        for k in [
+            MkfsFs::Ext2, MkfsFs::Ext3, MkfsFs::Ext4, MkfsFs::Vfat, MkfsFs::Exfat, MkfsFs::Ntfs,
+            MkfsFs::Xfs, MkfsFs::Btrfs, MkfsFs::F2fs, MkfsFs::Swap, MkfsFs::Lvm2Pv,
+        ] {
+            assert_eq!(MkfsFs::from_cli_name(k.as_str()), Some(k), "{}", k.as_str());
+        }
+    }
+
+    /// 拒绝面：识别域独有的名、大小写变体、空串一律不接受
+    #[test]
+    fn cli_fstype_rejects_non_canonical() {
+        for s in ["ext", "unknown", "EXT4", "", "squashfs", "erofs", "hfsplus", "apfs"] {
+            assert_eq!(MkfsFs::from_cli_name(s), None, "{s:?}");
+        }
+    }
+
+    /// ext 家族不得被归一化：mke2fs 的 `-t` 需要具体到 ext2/3/4，
+    /// 分裂若塌回 `Ext`，`-t ext` 会成为非法参数
+    #[test]
+    fn mkfs_tool_keeps_ext_family_split() {
+        for k in [MkfsFs::Ext2, MkfsFs::Ext3, MkfsFs::Ext4] {
+            assert_eq!(mkfs_tool(k).ok().and_then(|t| t.ext_type), Some(k));
+        }
+        assert!(mkfs_tool(MkfsFs::Xfs).ok().is_some_and(|t| t.ext_type.is_none()));
+    }
+
+    /// 非法 `--fs` 的拒绝文案与分类：`UnsupportedFs`（拒绝/10），逐字节冻结
+    #[test]
+    fn unsupported_fstype_message_is_frozen() {
+        let e = parse_fstype("zfs").unwrap_err();
+        assert!(matches!(e, FsError::UnsupportedFs(_)));
+        assert_eq!(
+            e.to_string(),
+            "unsupported fstype zfs (supported: ext2/3/4, xfs, btrfs, f2fs, vfat, exfat, ntfs, swap)"
+        );
     }
 
     /// `grow_target_at` 是"这段区域里能扩的是什么"的唯一判据：普通分区取 FS 自己，
@@ -1444,13 +1620,13 @@ mod tests {
             Ok(Growable::Target(t)) => t,
             Ok(Growable::OverlayPending) => panic!("expected a grow target, got OverlayPending"),
             Ok(Growable::SwapUnactivatable) => panic!("expected a grow target, got SwapUnactivatable"),
-            Ok(Growable::NoFilesystem(ft)) => panic!("expected a grow target, got NoFilesystem({ft})"),
+            Ok(Growable::NoFilesystem(ft)) => panic!("expected a grow target, got NoFilesystem({})", fsid::fs_name(ft)),
             Err(e) => panic!("expected a grow target, got {e}"),
         };
 
         // 内层 ext：可扩，且 scope 指向内层那段（不是整个分区）
         let t = target(grow_target_at(&fs_fixture("ovl_ext", squashfs_head(&inner_ext)), 3, 0, LEN));
-        assert_eq!(t.fstype, "ext");
+        assert_eq!(t.fstype, FsKind::Ext);
         assert!(matches!(t.scope, DeviceScope::Range(off, len) if off == REL && len == LEN - REL));
 
         // 内层还是零（首启尚未格式化）：没有可扩的文件系统，但那块空间会被首次挂载的
@@ -1481,21 +1657,21 @@ mod tests {
         let mut plain = vec![0u8; 64 * 1024];
         plain[0x438..0x43A].copy_from_slice(&0xEF53u16.to_le_bytes());
         let t = target(grow_target_at(&fs_fixture("plain_ext", plain), 2, 0, 64 * 1024));
-        assert_eq!(t.fstype, "ext");
+        assert_eq!(t.fstype, FsKind::Ext);
         assert!(matches!(t.scope, DeviceScope::Partition(2)));
 
         // 空区域与 LVM PV：类型原样报出，供调用方分辨（PV 有别的出路）；`unknown` 不区分
         // "空"与"认不出的类型"，故调用点的措辞不得宣称里面没有文件系统
         assert!(matches!(
             grow_target_at(&fs_fixture("plain_zero", vec![0u8; 64 * 1024]), 2, 0, 64 * 1024),
-            Ok(Growable::NoFilesystem("unknown"))
+            Ok(Growable::NoFilesystem(None))
         ));
         let mut pv = vec![0u8; 64 * 1024];
         pv[512..520].copy_from_slice(b"LABELONE"); // PV label 在第 2 扇区，同 fsid 的识别口径
         pv[536..544].copy_from_slice(b"LVM2 001");
         assert!(matches!(
             grow_target_at(&fs_fixture("plain_pv", pv), 2, 0, 64 * 1024),
-            Ok(Growable::NoFilesystem("lvm2_pv"))
+            Ok(Growable::NoFilesystem(Some(FsKind::Lvm2Pv)))
         ));
 
         // 页格式在本机激活不了的 swap（签名只落在 32K 候选位）不是"无信息"：identify 按
@@ -1522,8 +1698,8 @@ mod tests {
     fn unidentified_region_needs_an_explicit_opt_out() {
         assert!(check_grow_step(Growable::OverlayPending).is_ok());
         assert!(check_grow_step(Growable::SwapUnactivatable).is_ok());
-        assert!(check_grow_step(Growable::NoFilesystem("lvm2_pv")).is_ok());
-        match check_grow_step(Growable::NoFilesystem("unknown")) {
+        assert!(check_grow_step(Growable::NoFilesystem(Some(FsKind::Lvm2Pv))).is_ok());
+        match check_grow_step(Growable::NoFilesystem(None)) {
             Err(FsError::UnsupportedFs(m)) => {
                 assert!(m.contains("unknown") && m.contains("--no-fs"), "{m}")
             }

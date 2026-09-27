@@ -2,6 +2,7 @@
 
 use crate::support::*;
 use crate::args::Args;
+use crate::fsops::MkfsFs;
 use crate::{movepart, table};
 
 pub(crate) const HELP_NEW: &str = r#"diskedit new <TARGET> [--table gpt|msdos] --yes
@@ -279,12 +280,21 @@ pub(crate) fn cmd_create(a: &Args) -> u8 {
     // FS 类型先问再开事务（判据与出口码同 `mkfs`）：未接线的类型是请求本身的错误，
     // 用户改不动它——事前拒绝，此刻什么都没写。工具缺失不在此拦：分区照建，mkfs
     // 走后置条件通道记 PARTIAL（装上工具后按提示补做）
-    if let Some(fstype) = &a.fs
-        && let Err(e) = crate::fsops::mkfs_capability(fstype)
-        && matches!(&e, crate::fsops::FsError::UnsupportedFs(_))
-    {
-        bail_fail(Fail::from(e));
-    }
+    let fs_kind: Option<MkfsFs> = match &a.fs {
+        Some(name) => {
+            let k = match crate::fsops::parse_fstype(name) {
+                Ok(k) => k,
+                Err(e) => bail_fail(Fail::from(e)),
+            };
+            if let Err(e) = crate::fsops::mkfs_capability(k)
+                && matches!(&e, crate::fsops::FsError::UnsupportedFs(_))
+            {
+                bail_fail(Fail::from(e));
+            }
+            Some(k)
+        }
+        None => None,
+    };
     let mut src = open_target_for_write(a).unwrap_or_else(|f| bail_fail(f));
     // 一次探测同时取"表类型 + 空闲区"：后面选槽写表要用的是同一个 label，
     // 再探一次等于重解析一遍表（且可能读到与前面不同的结果）。
@@ -346,7 +356,7 @@ pub(crate) fn cmd_create(a: &Args) -> u8 {
         None => *gaps.iter().max_by_key(|g| span(g)).unwrap(),
     };
     // swap 声明落进类型 GUID：movepart 靠它识别 swap 挡路者（不搬数据、mkswap 重建）
-    let is_swap = a.fs.as_deref() == Some("swap");
+    let is_swap = fs_kind == Some(MkfsFs::Swap);
     let r = if label == table::TableLabel::Gpt {
         let guid = if is_swap { table::SWAP_TYPE_GUID } else { table::LINUX_FS_TYPE_GUID };
         crate::gpt_policy::add_entry(&mut src, start, end, a.name.as_deref().unwrap_or(""), guid)
@@ -366,7 +376,7 @@ pub(crate) fn cmd_create(a: &Args) -> u8 {
     // FS 步失败不算整体失败：分区已建成，只有 mkfs 这个后置条件没满足——
     // 走 Pending 通道报 PARTIAL（补救提示由 FS 层生成），不在这里手写出口码
     let mut pending = Vec::new();
-    if let Some(fstype) = &a.fs {
+    if let Some(fstype) = fs_kind {
         // 屏障的判据是"确实把写盘交给了外部工具"：工具不在时 mkfs 起都没起来（类型
         // 不认得已在开事务前整体拒绝），盘上只有表写入——那条分区记录仍可整体 undo，
         // 不落屏障；工具真的跑起来了（可能写了半个 FS）才落屏障，undo 从此拒绝
@@ -383,10 +393,10 @@ pub(crate) fn cmd_create(a: &Args) -> u8 {
         if let Err(e) = crate::fsops::mkfs(&src, num, fstype) {
             // create 没有"原来的 UUID"可保：新分区上的 swap 提示不带 --uuid 占位符
             let dev_hint = crate::dev::part_dev_hint(&src, num, start * lba_bytes);
-            let hint = if *fstype == "swap" {
+            let hint = if fstype == MkfsFs::Swap {
                 format!("mkswap {dev_hint}")
             } else {
-                crate::fsops::rescue_hint(fstype, &dev_hint)
+                crate::fsops::rescue_hint(Some(fstype.as_fs_kind()), &dev_hint)
             };
             pending.push(crate::outcome::Pending::new(
                 num,
