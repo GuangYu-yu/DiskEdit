@@ -35,6 +35,8 @@ $B resize-part "$T":1 --start 104448 --end 1947647 --chunk-size 1; echo "exit=$?
 
 echo "== 完整性校验 =="
 LD=$(lo_attach "$T")
+# losetup -P 的分区扫描是异步的：节点未就绪就读会把空结果当成数据损坏
+lo_waitpart "${LD}p1" || { echo "p1 part node not ready"; rc=1; }
 MD_AFTER=$(md5sum "${LD}p1" | cut -d' ' -f1)
 echo "md5 after:  $MD_AFTER"
 [ -n "$MD_BEFORE" ] && [ "$MD_BEFORE" = "$MD_AFTER" ] && echo "RESUME DATA OK" || { echo "RESUME DATA CORRUPT"; rc=1; }
@@ -64,6 +66,7 @@ kill -9 $PID 2>/dev/null; wait $PID 2>/dev/null
 [ -f "$T2$CKPT_SUFFIX" ] && echo "checkpoint exists: yes" || echo "checkpoint exists: NO (may have finished)"
 $B resize "$T2":1 +100M --allow-move --yes --chunk-size 1 --no-fs; echo "resume exit=$?"
 LD=$(lo_attach "$T2")
+lo_waitpart "${LD}p2" || { echo "p2 part node not ready"; rc=1; }
 MD2_AFTER=$(md5sum "${LD}p2" | cut -d' ' -f1)
 echo "md5 b after:  $MD2_AFTER"
 [ -n "$MD2" ] && [ "$MD2" = "$MD2_AFTER" ] && echo "SHIFT-RESUME DATA OK" || { echo "SHIFT-RESUME DATA CORRUPT"; rc=1; }
