@@ -401,6 +401,18 @@ fn validate_geometry(
     if header.first_usable_lba < 2 + span {
         return Err(invalid("first_usable_lba leaves no room for the entry array — invalid GPT"));
     }
+    // 表级不变量：LastUsableLBA 必须位于备份条目数组之前。备份数组固定在
+    // [file_last_lba − span, file_last_lba − 1]、备份头在 file_last_lba（commit_table 的
+    // 落位，UEFI 2.10 §5.3.1 要求 backup Partition Entry Array 在 Last Usable LBA 之后、
+    // backup header 之前），故 last_usable_lba 一旦越过 file_last_lba − span − 1，
+    // 可用区就与 backup GPT 元数据区重叠。与上面的 first_usable_lba 下界同属表级判据、
+    // 主备同判：下游 add/grow 以 Valid 的 last_usable_lba 为可信上界划分区范围，
+    // 放行越界值等于把新分区写进备份结构区，随后被 commit_table 无条件覆盖。
+    // 减法安全：此处已过 last ≤ file_last_lba 与 first ≤ last、first ≥ 2 + span 三条，
+    // 故 file_last_lba ≥ 2 + span，file_last_lba − span − 1 不下溢
+    if header.last_usable_lba > file_last_lba - span - 1 {
+        return Err(invalid("last_usable_lba overlaps the backup GPT entry array — invalid GPT"));
+    }
     match view {
         // 主副本：数组上界不越过 FirstUsableLBA。本视角用头自述的 partition_entry_lba，
         // 对声明起点后移（> 2）的头比上面的表级界更强
@@ -822,6 +834,9 @@ pub struct MbrPartition {
 pub enum MbrDamage {
     /// 条目末端越过盘尾（写入侧 `add_mdos_entry` 同样拒绝这种条目）
     PastEnd { num: u32, start: u32, size: u32, total_sectors: u64 },
+    /// 条目起始 LBA 为 0：LBA0 是分区表自身（保护 MBR / MBR）所在扇区，从它起步的分区会
+    /// 覆盖表。写入侧 `add_mdos_entry` / `resize_mdos_entry` 都以 start ≥ 1 为前提
+    StartZero { num: u32 },
     /// 两条目区间重叠。右侧空闲的推导（free_right_msdos）与单条目改写（resize_mdos_entry）
     /// 都以"条目互不重叠"为前提，与 GPT 侧 `ValidatedGeometry::new` 的构造点拒绝同口径
     Overlap { num_a: u32, num_b: u32, start_a: u32, start_b: u32 },
@@ -832,6 +847,9 @@ impl MbrDamage {
         match self {
             MbrDamage::PastEnd { num, start, size, total_sectors } => format!(
                 "MBR entry {num} extends past the end of the disk (start {start} + {size} > {total_sectors} sectors)"
+            ),
+            MbrDamage::StartZero { num } => format!(
+                "MBR entry {num} starts at LBA 0, which holds the partition table itself"
             ),
             MbrDamage::Overlap { num_a, num_b, start_a, start_b } => format!(
                 "MBR entries {num_a} and {num_b} overlap (start {start_a} / {start_b})"
@@ -887,6 +905,12 @@ pub fn parse_mbr_raw(src: &FileSource) -> io::Result<Option<RawMbr>> {
         if os_type == PROT_MBR_TYPE {
             saw_protective = true;
             continue;
+        }
+        // 起始 LBA 0 = 表自身所在扇区：partition_bytes 会为它算出偏移 0 的区间，
+        // mkfs/check/set 随之从盘首擦写、毁掉 LBA0 的分区表。写入侧以 start ≥ 1 为前提，
+        // 读取侧必须同判，否则这条非法条目会一路送进破坏性操作
+        if start == 0 {
+            damage.push(MbrDamage::StartZero { num: i + 1 });
         }
         // 越盘条目 = 表已损坏：写入侧有 end >= total 检查，读取侧若放行，info 会照实
         // 打印一个不存在的分区、resize 还会拿这个伪尺寸当基线算目标。这里记为损伤并
@@ -1615,7 +1639,8 @@ mod tests {
             .collect();
         let (bytes, crc) = serialize_array(&parsed, &geom);
         src.write_at(2 * ss, &bytes).unwrap();
-        let h = geo_header(34, 2048 - geom.lba_span() - 1, 2);
+        let file_last = src.size / ss - 1;
+        let h = geo_header(34, file_last - geom.lba_span() - 1, 2);
         let sec = serialize_header(&h, crc, ss).unwrap();
         src.write_at(ss, &sec).unwrap();
     }
@@ -1803,6 +1828,22 @@ mod tests {
         assert!(matches!(validate_geometry(&h, &geom128(512), file_last, GptCopyKind::Backup), Err(GptError::InvalidHeader(_))));
     }
 
+    /// 表级不变量：LastUsableLBA 的上界（须位于备份条目数组之前）同样与副本无关。
+    /// 越界值一旦判为 Valid，下游 add/grow 便以它为可信上界把分区划进 backup GPT
+    /// 元数据区，随后被 commit_table 覆盖
+    #[test]
+    fn geometry_last_usable_ceiling_is_view_independent() {
+        let file_last = 999;
+        let span = SPAN_128_512;
+        // 备份数组落位合规，单独把 last_usable_lba 压进数组区（= file_last − span）
+        let h = geo_header(2 + span, file_last - span, file_last - span);
+        assert!(matches!(validate_geometry(&h, &geom128(512), file_last, GptCopyKind::Primary), Err(GptError::InvalidHeader(_))));
+        assert!(matches!(validate_geometry(&h, &geom128(512), file_last, GptCopyKind::Backup), Err(GptError::InvalidHeader(_))));
+        // 界外一扇区（file_last − span − 1）恰好合规
+        let ok = geo_header(2 + span, file_last - span - 1, 2);
+        assert!(validate_geometry(&ok, &geom128(512), file_last, GptCopyKind::Primary).is_ok());
+    }
+
     /// 头字段判据的拒绝分支：primary_lba、区间倒挂、越容器、数组跨度溢出逐一覆盖
     #[test]
     fn geometry_rejects_malformed_header_fields() {
@@ -1849,6 +1890,26 @@ mod tests {
         let raw = parse_mbr_raw(&src).unwrap().expect("the entry must stay observable for diagnostics");
         assert!(matches!(raw.damage.first(), Some(MbrDamage::PastEnd { .. })), "{:?}", raw.damage);
         let e = parse_mbr(&src).expect_err("a past-end entry must refuse the write path");
+        assert_eq!(e.kind(), io::ErrorKind::InvalidData, "{e}");
+    }
+
+    /// 起始 LBA 为 0 的条目：raw 侧保留可观察，校验侧 parse_mbr 必须拒绝。
+    /// 放行会让 partition_bytes 给出偏移 0 的区间，mkfs/check/set 从盘首擦写、覆盖 LBA0 的表
+    #[test]
+    fn msdos_entry_start_zero_is_damaged_and_refused() {
+        let mut src = src_from("start_zero", vec![0u8; 300 * 512]);
+        create_mbr(&mut src).unwrap();
+        let mut lba0 = [0u8; 512];
+        src.read_at(0, &mut lba0).unwrap();
+        let rec = &mut lba0[446..446 + 16];
+        rec[4] = 0x83;
+        rec[8..12].copy_from_slice(&0u32.to_le_bytes()); // 起始 LBA 0
+        rec[12..16].copy_from_slice(&100u32.to_le_bytes());
+        src.write_at(0, &lba0).unwrap();
+
+        let raw = parse_mbr_raw(&src).unwrap().expect("the entry must stay observable for diagnostics");
+        assert!(matches!(raw.damage.first(), Some(MbrDamage::StartZero { .. })), "{:?}", raw.damage);
+        let e = parse_mbr(&src).expect_err("a start-at-LBA-0 entry must refuse the write path");
         assert_eq!(e.kind(), io::ErrorKind::InvalidData, "{e}");
     }
 
