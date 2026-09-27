@@ -91,7 +91,7 @@ fn resolve_size_request(req: &SizeRequest, cur_bytes: u64) -> Result<(Option<u64
 /// 只管最后一步，前两步留给用户，否则先改表会留下"分区已缩、PV 元数据未动"的不一致
 fn check_pv_intent(
     part: u32,
-    fstype: &str,
+    fstype: Option<fsid::FsKind>,
     is_pv: bool,
     shrinking: bool,
     grow_lv: bool,
@@ -104,7 +104,8 @@ fn check_pv_intent(
         }
     } else if grow_lv {
         return Err(crate::outcome::Fail::refused(format!(
-            "partition {part} is not an LVM PV (identified as {fstype}) — --grow-lv needs a PV"
+            "partition {part} is not an LVM PV (identified as {}) — --grow-lv needs a PV",
+            fsid::fs_name(fstype)
         )));
     }
     Ok(())
@@ -353,7 +354,7 @@ pub(crate) fn cmd_resize(a: &Args) -> u8 {
     let cur_bytes = lba_range_bytes(start, end, ss);
     let fstype = fsid::identify(&src, lba_bytes(start, ss), cur_bytes)
         .unwrap_or_else(|e| bail_fail(Fail::infra(format!("identify failed: {e}"))));
-    let is_pv = fstype == crate::fsid::FS_LVM2_PV;
+    let is_pv = fstype == Some(fsid::FsKind::Lvm2Pv);
 
     // SIZE → 绝对目标字节数 / grow 标记（锁前快照，仅服务参数早失败与在线路径的选择）
     let (target, grow_to_end) = resolve_size_request(&req, cur_bytes).unwrap_or_else(|f| bail_fail(f));
@@ -397,7 +398,7 @@ pub(crate) fn cmd_resize(a: &Args) -> u8 {
     // 已不是 PV 的分区说 PV 的话
     let fstype = fsid::identify(&src, lba_bytes(start, ss), cur_bytes)
         .unwrap_or_else(|e| bail_fail(Fail::infra(format!("identify failed: {e}"))));
-    let is_pv = fstype == crate::fsid::FS_LVM2_PV;
+    let is_pv = fstype == Some(fsid::FsKind::Lvm2Pv);
     check_pv_intent(part, fstype, is_pv, shrinking, a.grow_lv).unwrap_or_else(|f| bail_fail(f));
     // 占用闸在 movepart 的 prepare 层（本分支的每条路径都经 prepare_resize/prepare_apply），
     // 不在命令层重复判一次
@@ -535,12 +536,15 @@ fn cmd_resize_superfloppy(a: &Args, req: &SizeRequest) -> u8 {
     // FS 类型在锁下识别：整盘可在取锁前被重新格式化，类型判据必须锚定独占权之后的内容
     let fstype = fsid::identify(&src, 0, cur_bytes)
         .unwrap_or_else(|e| bail_fail(Fail::infra(format!("identify failed: {e}"))));
-    if matches!(fstype, crate::fsid::FS_LVM2_PV | "swap" | crate::fsid::FS_UNKNOWN) {
-        bail_fail(Fail::refused(format!("whole-device {fstype} is not a resizable filesystem (no partition table on target)")));
+    if matches!(fstype, Some(fsid::FsKind::Lvm2Pv | fsid::FsKind::Swap) | None) {
+        bail_fail(Fail::refused(format!(
+            "whole-device {} is not a resizable filesystem (no partition table on target)",
+            fsid::fs_name(fstype)
+        )));
     }
     // FS grow 本身不改分区表，无 kernel_resync 必要
     fsops::resize_fs_whole(&src, fstype).unwrap_or_else(|e| bail_fail(Fail::from(e).context("FS grow failed")));
-    println!("superfloppy: {fstype} grown to full device ({cur_bytes} bytes) — verify with: diskedit info {}", a.target);
+    println!("superfloppy: {} grown to full device ({cur_bytes} bytes) — verify with: diskedit info {}", fsid::fs_name(fstype), a.target);
     EXIT_OK
 }
 
@@ -593,7 +597,7 @@ fn mbr_grow_finish(
             }
             // swap：内容可弃，表项已扩 → mkswap 重建使新空间生效（UUID/卷标保持；
             // 离线路径仅镜像，块设备走在线路径且 active swap 已被守卫拒绝）
-            Ok(fsops::Growable::Target(t)) if t.fstype == "swap" => {
+            Ok(fsops::Growable::Target(t)) if t.fstype == fsid::FsKind::Swap => {
                 // swap 的承诺就是 mkswap：外部工具写盘不可回滚，先落屏障
                 src.set_mutation(crate::dev::Mutation::ExternalFsTool);
                 src.mark_non_reversible().unwrap_or_else(|e| bail_fail(Fail::from(e)));
@@ -603,7 +607,7 @@ fn mbr_grow_finish(
                         part,
                         crate::outcome::PendingKind::Swap,
                         e.to_string(),
-                        fsops::rescue_hint("swap", &dev::part_dev_hint(src, part, p.start_lba as u64 * ss)),
+                        fsops::rescue_hint(Some(fsid::FsKind::Swap), &dev::part_dev_hint(src, part, p.start_lba as u64 * ss)),
                     ));
                 }
             }
@@ -617,7 +621,7 @@ fn mbr_grow_finish(
                         part,
                         crate::outcome::PendingKind::Fs,
                         e.to_string(),
-                        fsops::rescue_hint(t.fstype, &dev::part_dev_hint(src, part, p.start_lba as u64 * ss)),
+                        fsops::rescue_hint(Some(t.fstype), &dev::part_dev_hint(src, part, p.start_lba as u64 * ss)),
                     ));
                 }
             }
@@ -674,7 +678,7 @@ fn cmd_resize_msdos(a: &Args, pref: PartSelector, req: &SizeRequest, src_ro: &Fi
     let cur_bytes = p.size_lba as u64 * ss;
     let fstype = fsid::identify(src_ro, p.start_lba as u64 * ss, p.size_lba as u64 * ss)
         .unwrap_or_else(|e| bail_fail(Fail::infra(format!("identify failed: {e}"))));
-    let is_pv = fstype == crate::fsid::FS_LVM2_PV;
+    let is_pv = fstype == Some(fsid::FsKind::Lvm2Pv);
 
     let (target, grow_to_end) = resolve_size_request(req, cur_bytes).unwrap_or_else(|f| bail_fail(f));
     let shrinking = target.is_some_and(|t| t < cur_bytes);
@@ -711,7 +715,7 @@ fn cmd_resize_msdos(a: &Args, pref: PartSelector, req: &SizeRequest, src_ro: &Fi
     // 拿旧类型选工具就是把 ext4 的工具链砸到 xfs 上；PV 判据随之重算
     let fstype = fsid::identify(&src, p.start_lba as u64 * ss, p.size_lba as u64 * ss)
         .unwrap_or_else(|e| bail_fail(Fail::infra(format!("identify failed: {e}"))));
-    let is_pv = fstype == crate::fsid::FS_LVM2_PV;
+    let is_pv = fstype == Some(fsid::FsKind::Lvm2Pv);
     // SIZE 锚点按锁下的新分区尺寸重算；grow 标记是请求的形状，锁前锁后同值（见 GPT 分支）
     let cur_bytes = p.size_lba as u64 * ss;
     let (target, _) = resolve_size_request(req, cur_bytes).unwrap_or_else(|f| bail_fail(f));

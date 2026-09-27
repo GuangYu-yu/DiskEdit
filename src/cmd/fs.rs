@@ -3,6 +3,7 @@
 use crate::support::*;
 use crate::args::{parse_size_delta, Args};
 use crate::dev::Mutation;
+use crate::fsid::FsKind;
 use crate::{fsid, fsops};
 
 pub(crate) const HELP_MKFS: &str = r#"diskedit mkfs <TARGET>:N <FS> --yes
@@ -43,16 +44,17 @@ pub(crate) const HELP_SET: &str = r#"diskedit set <TARGET>:N name S | type GUID 
 /// 请求形式与目标能力的比对。能力事实取自 `fsops::uuid_support`（不在此另抄一份），
 /// 但"不合能力该不该拒、拿什么措辞拒"是产品的决定，只有命令层能给出"改参数也许有解"
 /// 的可读拒绝（退出码 10）
-fn check_uuid_request(fstype: &str, req: &fsops::UuidRequest) -> Result<(), String> {
+fn check_uuid_request(fstype: Option<FsKind>, req: &fsops::UuidRequest) -> Result<(), String> {
     use fsops::{UuidRequest, UuidSupport};
+    let name = fsid::fs_name(fstype);
     match (fsops::uuid_support(fstype), req) {
-        (UuidSupport::No(reason), _) => Err(format!("cannot set uuid on {fstype}: {reason}")),
+        (UuidSupport::No(reason), _) => Err(format!("cannot set uuid on {name}: {reason}")),
         (UuidSupport::RandomOnly, UuidRequest::Explicit(_)) => Err(format!(
-            "{fstype} exposes a settable serial, not a volume UUID — it cannot take a chosen value; \
+            "{name} exposes a settable serial, not a volume UUID — it cannot take a chosen value; \
              use --random to generate a new one (a serial is not the Windows volume UUID)"
         )),
         (UuidSupport::Yes, UuidRequest::NewRandom) => {
-            Err(format!("--random is not supported for {fstype}; pass an explicit UUID value"))
+            Err(format!("--random is not supported for {name}; pass an explicit UUID value"))
         }
         _ => Ok(()),
     }
@@ -60,7 +62,7 @@ fn check_uuid_request(fstype: &str, req: &fsops::UuidRequest) -> Result<(), Stri
 
 pub(crate) fn cmd_mkfs(a: &Args) -> u8 {
     // FS 名是第二个位置参数（第一个是 <TARGET>:N，已解析进 a.target/a.part）
-    let (Some(pref), Some(fstype)) = (a.part, a.pos.get(1).cloned()) else { crate::args::usage() };
+    let (Some(pref), Some(fstype_name)) = (a.part, a.pos.get(1).cloned()) else { crate::args::usage() };
     if !a.yes {
         bail_fail(Fail::refused("mkfs destroys all data on the target partition; pass --yes to confirm"));
     }
@@ -74,7 +76,11 @@ pub(crate) fn cmd_mkfs(a: &Args) -> u8 {
     if let Err(f) = crate::gpt_policy::partition_bytes(&src, part) {
         bail_fail(f);
     }
-    if let Err(e) = fsops::mkfs_capability(&fstype) {
+    let fstype = match fsops::parse_fstype(&fstype_name) {
+        Ok(k) => k,
+        Err(e) => bail_fail(Fail::from(e)),
+    };
+    if let Err(e) = fsops::mkfs_capability(fstype) {
         bail_fail(Fail::from(e));
     }
     // mkfs 是一次事务，但不可回滚：内容擦掉之后没有"回去"这回事。先落屏障（记下"这个
@@ -85,7 +91,7 @@ pub(crate) fn cmd_mkfs(a: &Args) -> u8 {
         .unwrap_or_else(|e| bail_fail(Fail::infra(format!("cannot persist the transaction state: {e}"))));
     // FS 层的失败分类在此换算成出口语义：不认得的类型 ⇒ 10（改参数有解），
     // 工具缺失 / 环境故障 ⇒ 30
-    match fsops::mkfs(&src, part, &fstype) {
+    match fsops::mkfs(&src, part, fstype) {
         Ok(()) => EXIT_OK,
         Err(e) => bail_fail(Fail::from(e)),
     }
@@ -155,13 +161,14 @@ pub(crate) fn cmd_resizefs(a: &Args) -> u8 {
                 "nothing to resize on partition #{part} — a swap area whose page format is not activatable on this host (its space takes effect once the area is rebuilt with `mkswap`)"
             ))),
             // 没有可扩的文件系统就报成功等于报出一件没做过的事；PV 另有出路，指路到那条链
-            Ok(fsops::Growable::NoFilesystem(crate::fsid::FS_LVM2_PV)) => bail_fail(Fail::refused(format!(
+            Ok(fsops::Growable::NoFilesystem(Some(FsKind::Lvm2Pv))) => bail_fail(Fail::refused(format!(
                 "nothing to resize on partition #{part} — an LVM PV is not a filesystem (its space takes effect through `resize --grow-lv`)"
             ))),
             // 类型未识别既可能是空区域，也可能是认不出的 FS：把识别结果原样带出，
             // 不替它下"里面没有文件系统"的结论
             Ok(fsops::Growable::NoFilesystem(f)) => bail_fail(Fail::refused(format!(
-                "nothing to resize on partition #{part} — identified as `{f}`: an empty region or a filesystem this tool cannot grow (nothing was resized)"
+                "nothing to resize on partition #{part} — identified as `{}`: an empty region or a filesystem this tool cannot grow (nothing was resized)",
+                fsid::fs_name(f)
             ))),
             Err(e) => bail_fail(Fail::from(e)),
         };
@@ -186,7 +193,7 @@ pub(crate) fn cmd_check(a: &Args) -> u8 {
     let fstype = fsid::identify(&src, start, len).unwrap_or_else(|e| bail_fail(Fail::infra(format!("identify failed: {e}"))));
     match fsops::check_fs(&src, part, fstype) {
         Ok(()) => {
-            println!("check done on partition #{part} ({fstype})");
+            println!("check done on partition #{part} ({})", fsid::fs_name(fstype));
             EXIT_OK
         }
         Err(e) => bail_fail(Fail::from(e).context("check failed")),
@@ -274,7 +281,7 @@ pub(crate) fn cmd_set(a: &Args) -> u8 {
     };
     match r {
         Ok(()) => {
-            println!("set {key} on partition #{part} ({fstype})");
+            println!("set {key} on partition #{part} ({})", fsid::fs_name(fstype));
             EXIT_OK
         }
         Err(e) => bail_fail(Fail::from(e).context(&format!("set {key} failed"))),
@@ -284,23 +291,24 @@ pub(crate) fn cmd_set(a: &Args) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::check_uuid_request;
+    use crate::fsid::FsKind;
     use crate::fsops::{UuidRequest, UuidSupport};
 
     /// UUID 请求与目标能力的比对：能设值的类型只接受显式值，ntfs 只接受"生成新值"，
     /// 其余不接线。ntfs 收到具体值必须**拒**——静默丢弃用户给的值正是要防的漂移
     #[test]
     fn uuid_request_capability_matrix() {
-        for f in ["ext4", "xfs", "btrfs"] {
-            assert!(check_uuid_request(f, &UuidRequest::Explicit("x".into())).is_ok(), "{f}");
-            assert!(check_uuid_request(f, &UuidRequest::NewRandom).is_err(), "{f}");
+        for f in [FsKind::Ext, FsKind::Xfs, FsKind::Btrfs] {
+            assert!(check_uuid_request(Some(f), &UuidRequest::Explicit("x".into())).is_ok(), "{f}");
+            assert!(check_uuid_request(Some(f), &UuidRequest::NewRandom).is_err(), "{f}");
         }
-        assert!(check_uuid_request("ntfs", &UuidRequest::NewRandom).is_ok());
-        let e = check_uuid_request("ntfs", &UuidRequest::Explicit("x".into())).unwrap_err();
+        assert!(check_uuid_request(Some(FsKind::Ntfs), &UuidRequest::NewRandom).is_ok());
+        let e = check_uuid_request(Some(FsKind::Ntfs), &UuidRequest::Explicit("x".into())).unwrap_err();
         assert!(e.contains("--random"), "{e}");
-        assert!(check_uuid_request("vfat", &UuidRequest::Explicit("x".into())).is_err());
+        assert!(check_uuid_request(Some(FsKind::Vfat), &UuidRequest::Explicit("x".into())).is_err());
         // 判据同源：gate 读的是 fsops 的能力表，不是命令层另抄的一份
-        assert!(matches!(crate::fsops::uuid_support("ntfs"), UuidSupport::RandomOnly));
-        assert!(matches!(crate::fsops::uuid_support("ext4"), UuidSupport::Yes));
-        assert!(matches!(crate::fsops::uuid_support("unknown"), UuidSupport::No(_)));
+        assert!(matches!(crate::fsops::uuid_support(Some(FsKind::Ntfs)), UuidSupport::RandomOnly));
+        assert!(matches!(crate::fsops::uuid_support(Some(FsKind::Ext)), UuidSupport::Yes));
+        assert!(matches!(crate::fsops::uuid_support(None), UuidSupport::No(_)));
     }
 }

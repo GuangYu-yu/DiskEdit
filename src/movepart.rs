@@ -7,6 +7,7 @@
 //! 写点恒在未读源之上（右移时目的地址总是大于已读位置），顺序固化不提供方向参数。
 
 use crate::dev::FileSource;
+use crate::fsid::FsKind;
 use crate::fsops::Growable;
 use crate::geometry::{GeometryLimits, ValidatedGeometry};
 use crate::gpt_policy::{self, RepairAction};
@@ -795,7 +796,7 @@ pub(crate) fn swap_rebuild_pending(
         part,
         PendingKind::Swap,
         "partition grown but the swap area was not rebuilt (its page format is not activatable on this host)",
-        crate::fsops::rescue_hint("swap", &crate::dev::part_dev_hint(src, part, base)),
+        crate::fsops::rescue_hint(Some(FsKind::Swap), &crate::dev::part_dev_hint(src, part, base)),
     )))
 }
 
@@ -1085,7 +1086,7 @@ fn execute_apply(
                     m.part_num,
                     PendingKind::Swap,
                     e.to_string(),
-                    crate::fsops::rescue_hint("swap", &crate::dev::part_dev_hint(src, m.part_num, m.first_lba * plan.ss)),
+                    crate::fsops::rescue_hint(Some(FsKind::Swap), &crate::dev::part_dev_hint(src, m.part_num, m.first_lba * plan.ss)),
                 )),
             }
             ckpt.chunks_done = 0;
@@ -1143,7 +1144,7 @@ fn execute_apply(
         }
         g.commit(src)?;
         // 起始位置变化的 NTFS 分区需修 HiddenSectors（数据是字节拷贝，boot sector 带着旧值）
-        if crate::fsid::identify(src, new_first * plan.ss, m.len_lba * plan.ss)? == "ntfs" {
+        if crate::fsid::identify(src, new_first * plan.ss, m.len_lba * plan.ss)? == Some(FsKind::Ntfs) {
             fix_ntfs_hidden_sectors(src, new_first, plan.ss, log)?;
         }
         log(&format!("partition {} relocated (delta {} sectors)", m.part_num, m.delta_lba));
@@ -1224,14 +1225,14 @@ fn finalize_growth(
                 // 认不出的类型，PV 的空间则在收尾的 pvresize 链里生效
                 None => log(match g {
                     Growable::OverlayPending => "partition extended (the overlay RW layer is created at first mount)",
-                    Growable::NoFilesystem(crate::fsid::FS_LVM2_PV) => "partition extended (the PV space takes effect through the pvresize chain)",
+                    Growable::NoFilesystem(Some(FsKind::Lvm2Pv)) => "partition extended (the PV space takes effect through the pvresize chain)",
                     _ => "partition extended (filesystem not resized — its type was not identified)",
                 }),
             }
         }
         // swap：内容可弃，表项已扩 → mkswap 重建使新空间生效（UUID/卷标保持）。
         // grow_support 对 swap 承诺的就是 mkswap——漏掉它即违背承诺。外部工具写盘，先落屏障
-        Ok(Growable::Target(t)) if t.fstype == "swap" => {
+        Ok(Growable::Target(t)) if t.fstype == FsKind::Swap => {
             src.set_mutation(crate::dev::Mutation::ExternalFsTool);
             src.mark_non_reversible()?;
             let ident = read_swap_identity(src, r.old.0, r.old.1, ss);
@@ -1241,7 +1242,7 @@ fn finalize_growth(
                     part,
                     PendingKind::Swap,
                     e.to_string(),
-                    crate::fsops::rescue_hint("swap", &crate::dev::part_dev_hint(src, part, r.old.0 * ss)),
+                    crate::fsops::rescue_hint(Some(FsKind::Swap), &crate::dev::part_dev_hint(src, part, r.old.0 * ss)),
                 )),
             }
         }
@@ -1256,7 +1257,7 @@ fn finalize_growth(
                     part,
                     PendingKind::Fs,
                     e.to_string(),
-                    crate::fsops::rescue_hint(t.fstype, &crate::dev::part_dev_hint(src, part, r.old.0 * ss)),
+                    crate::fsops::rescue_hint(Some(t.fstype), &crate::dev::part_dev_hint(src, part, r.old.0 * ss)),
                 )),
             }
         }
@@ -1564,7 +1565,7 @@ struct ResizeDecision {
     old_end: u64,
     new_start: u64,
     new_end: u64,
-    fstype: &'static str,
+    fstype: Option<FsKind>,
     fs_shrunk: bool,
     resume_chunks: u64,
     committed_old: Option<(u64, u64)>,
@@ -1823,7 +1824,7 @@ fn execute_resize(
     }
 
     // 起始 LBA 变了才需要修 NTFS HiddenSectors（扩缩不动 start 时跳过）
-    if moved != 0 && fstype == "ntfs" {
+    if moved != 0 && fstype == Some(FsKind::Ntfs) {
         fix_ntfs_hidden_sectors(src, new_start, ss, log)?;
     }
 
@@ -1976,7 +1977,7 @@ fn execute_copy(
     )
     .map_err(crate::outcome::into_io_error)?;
     // 副本的 boot sector 原样带来旧 HiddenSectors，按新起始位置修正
-    if crate::fsid::identify(src, new_start * ss, len * ss)? == "ntfs" {
+    if crate::fsid::identify(src, new_start * ss, len * ss)? == Some(FsKind::Ntfs) {
         fix_ntfs_hidden_sectors(src, new_start, ss, log)?;
     }
     log(&format!("partition {part} copied to #{num} at {new_start}..{new_end}"));
@@ -3350,7 +3351,7 @@ mod tests {
 
         let mut src = plan_open(&p);
         let ckpt_path = src.identity.checkpoint_path().to_path_buf();
-        assert_eq!(crate::fsid::identify(&src, base as u64, 4096 * 512).unwrap(), "unknown");
+        assert_eq!(crate::fsid::identify(&src, base as u64, 4096 * 512).unwrap(), None);
         assert!(crate::fsid::unactivatable_swap(&src, base as u64, 4096 * 512).unwrap());
 
         // 起点不变、向右扩

@@ -103,7 +103,7 @@ pub(crate) fn cmd_info(a: &Args) -> u8 {
             }
             first = false;
             let fs = match fsid::identify(&src, e.starting_lba * g.ss, (e.ending_lba - e.starting_lba + 1) * g.ss) {
-                Ok(f) => f.to_string(),
+                Ok(f) => fsid::fs_name(f).to_string(),
                 Err(e) => {
                     identify_errors.push(format!("partition {}: identify failed: {e}", i + 1));
                     "error".to_string()
@@ -150,7 +150,7 @@ pub(crate) fn cmd_info(a: &Args) -> u8 {
                         "container".to_string()
                     } else {
                         match fsid::identify(&src, p.start_lba as u64 * src.sector_size, p.size_lba as u64 * src.sector_size) {
-                            Ok(f) => f.to_string(),
+                            Ok(f) => fsid::fs_name(f).to_string(),
                             Err(e) => {
                                 identify_errors.push(format!("partition {}: identify failed: {e}", p.num));
                                 "error".to_string()

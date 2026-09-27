@@ -428,13 +428,13 @@ mod imp {
     /// FS 在线 grow 到整分区（ext: resize2fs 对挂载设备无 size = 扩满分区，man resize2fs；
     /// xfs: xfs_growfs 挂载点；btrfs: resize max 挂载点）。
     /// 程序与参数只写这一处：补救提示复用同一份映射（fs_grow_hint），避免两处漂移
-    fn fs_grow_cmd(t: &OnlineTarget, fstype: &str) -> Option<(String, Vec<String>)> {
+    fn fs_grow_cmd(t: &OnlineTarget, fstype: Option<crate::fsid::FsKind>) -> Option<(String, Vec<String>)> {
         let mnt = t.mnt.to_string_lossy().into_owned();
         let dev = t.part_dev.to_string_lossy().into_owned();
         match fstype {
-            f if crate::fsid::is_ext(f) => Some(("resize2fs".to_string(), vec![dev])),
-            "xfs" => Some(("xfs_growfs".to_string(), vec![mnt])),
-            "btrfs" => Some(("btrfs".to_string(), vec!["filesystem".into(), "resize".into(), "max".into(), mnt])),
+            Some(crate::fsid::FsKind::Ext) => Some(("resize2fs".to_string(), vec![dev])),
+            Some(crate::fsid::FsKind::Xfs) => Some(("xfs_growfs".to_string(), vec![mnt])),
+            Some(crate::fsid::FsKind::Btrfs) => Some(("btrfs".to_string(), vec!["filesystem".into(), "resize".into(), "max".into(), mnt])),
             _ => None,
         }
     }
@@ -460,10 +460,11 @@ mod imp {
         }
     }
 
-    fn fs_grow(t: &OnlineTarget, fstype: &str) -> Result<(), FsGrowError> {
+    fn fs_grow(t: &OnlineTarget, fstype: Option<crate::fsid::FsKind>) -> Result<(), FsGrowError> {
         let Some((prog, args)) = fs_grow_cmd(t, fstype) else {
             return Err(FsGrowError::NoTool(format!(
-                "{fstype} has no online grow tool; unmount the partition and use the offline path where the FS is supported"
+                "{} has no online grow tool; unmount the partition and use the offline path where the FS is supported",
+                crate::fsid::fs_name(fstype)
             )));
         };
         let argv: Vec<&str> = args.iter().map(String::as_str).collect();
@@ -478,17 +479,17 @@ mod imp {
     }
 
     /// 在线 FS 步的补救命令（与 fs_grow 共用命令映射；无在线工具时回落到离线提示）
-    fn fs_grow_hint(t: &OnlineTarget, fstype: &str) -> String {
+    fn fs_grow_hint(t: &OnlineTarget, fstype: Option<crate::fsid::FsKind>) -> String {
         match fs_grow_cmd(t, fstype) {
             Some((prog, args)) => format!("{prog} {}", args.join(" ")),
             None => crate::fsops::rescue_hint(fstype, &t.part_dev.to_string_lossy()),
         }
     }
 
-    fn fstype_of(t: &OnlineTarget) -> io::Result<String> {
+    fn fstype_of(t: &OnlineTarget) -> io::Result<Option<crate::fsid::FsKind>> {
         // 挂载中的分区不能以 O_EXCL 读写打开（dev::FileSource::open 会失败），只读识别
         let src = FileSource::open_read_only(&t.part_dev)?;
-        Ok(crate::fsid::identify(&src, 0, t.part_len_bytes)?.to_string())
+        crate::fsid::identify(&src, 0, t.part_len_bytes)
     }
 
     /// 从（盘名, 分区号）解析 OnlineTarget（PV 路径无挂载点，mnt 置空不用）
@@ -646,9 +647,10 @@ mod imp {
             Err(e) => return (Outcome::infra(format!("open failed: {e}")), old_len_bytes),
         };
         match crate::fsid::identify(&disk, t.start_bytes, t.part_len_bytes) {
-            Ok(crate::fsid::FS_LVM2_PV) => {}
+            Ok(Some(crate::fsid::FsKind::Lvm2Pv)) => {}
             Ok(ft) => return (Outcome::refused(format!(
-                "partition {pno} is no longer an LVM PV (identified as {ft}) — re-run `diskedit resize` to re-classify the target"
+                "partition {pno} is no longer an LVM PV (identified as {}) — re-run `diskedit resize` to re-classify the target",
+                crate::fsid::fs_name(ft)
             )), old_len_bytes),
             Err(e) => return (Outcome::infra(format!("identify failed: {e}")), old_len_bytes),
         }
@@ -747,21 +749,22 @@ mod imp {
             Ok(v) => v,
             Err(f) => return f.into_outcome(),
         };
-        let online_shrink = fstype == "btrfs";
+        let online_shrink = fstype == Some(crate::fsid::FsKind::Btrfs);
         if size.is_some_and(|s| s < t.part_len_bytes) && !online_shrink {
             // xfs 离线同样不可缩（shrink_fs 兜底拒绝），单独说明以免用户改走离线路径
-            if fstype == "xfs" {
+            if fstype == Some(crate::fsid::FsKind::Xfs) {
                 return Outcome::refused(
                     "xfs does not support shrinking (online or offline); only growing is possible".to_string(),
                 );
             }
             return Outcome::refused(format!(
-                "{fstype} cannot shrink online (only btrfs can); unmount and use the offline path where supported"
+                "{} cannot shrink online (only btrfs can); unmount and use the offline path where supported",
+                crate::fsid::fs_name(fstype)
             ));
         }
         // FS 步未完成 → 一条 Pending（补救命令与 fs_grow 同源）
         let fs_pending = |detail: String| {
-            Pending::new(t.pno, PendingKind::Fs, detail, fs_grow_hint(&t, &fstype))
+            Pending::new(t.pno, PendingKind::Fs, detail, fs_grow_hint(&t, fstype))
         };
         // fs_grow 的三态映射（唯一处）：无在线工具 = 成因在请求（换离线路径）⇒ refused；
         // spawn 失败 = 什么都没动（infra）；非零退出 = 工具可能改了一半（failed）。
@@ -775,7 +778,7 @@ mod imp {
 
         match size {
             // 扩满现分区：分区不动，FS 工具直接吃满（内核视图无需变更）
-            None => fs_grow_outcome(fs_grow(&t, &fstype)),
+            None => fs_grow_outcome(fs_grow(&t, fstype)),
             Some(bytes) => {
                 if let Err(msg) = check_new_range(&t, bytes) {
                     return Outcome::refused(msg);
@@ -792,7 +795,7 @@ mod imp {
                         o.mark_kernel_stale();
                         return o;
                     }
-                    match fs_grow(&t, &fstype) {
+                    match fs_grow(&t, fstype) {
                         Ok(()) => Outcome::applied_with(Vec::new()),
                         // 分区已扩：无论 spawn 失败还是非零退出，FS 步都是一条未满足后置条件
                         Err(e) => Outcome::applied_with(vec![fs_pending(format!("partition resized but FS grow skipped: {}", e.detail()))]),
@@ -830,7 +833,7 @@ mod imp {
                     }
                 } else {
                     // bytes == 现分区：与 None 分支同性质（没有别的写盘步骤）
-                    fs_grow_outcome(fs_grow(&t, &fstype))
+                    fs_grow_outcome(fs_grow(&t, fstype))
                 }
             }
         }
