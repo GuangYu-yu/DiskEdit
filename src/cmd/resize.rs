@@ -181,8 +181,10 @@ fn resize_online(
 
 /// 在线目标长度的公共骨架：锁下取事实（扇区大小、当前字节、右侧空闲扇区）→
 /// 共享的 `resolve_size_request` → grow/shrink 分支。grow 零空闲时 PV 拒绝（无法搬移
-/// 活跃 LV）、非 PV 返回 None（FS 工具扩满现分区）；shrink 的 PV 绝对目标按扇区下取整
-/// （与离线路径同规则）——两族表必须同语义，差异只在"事实怎么取"，故分支只此一份
+/// 活跃 LV）、非 PV 返回 None（FS 工具扩满现分区）；PV 收缩在上游 `check_pv_intent`
+/// 已拒（online 层还有 grow-only 闸兜底），shrink 的下取整仅在锁窗口内分区被第三方
+/// 扩大的竞态下可达——与离线路径的字节→LBA 隐式下取整同规则。两族表必须同语义，
+/// 差异只在"事实怎么取"，故分支只此一份
 #[cfg(target_os = "linux")]
 fn online_size<'a>(
     req: &'a SizeRequest,
