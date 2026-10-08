@@ -12,18 +12,47 @@
 use crate::fsops::{run, FsError};
 use serde_json::Value;
 
+/// LVM 链失败的两态：工具缺失是环境缺件（装 lvm2 后重试有意义），工具已运行的
+/// 非零退出/报表不可解析则无法断言 LVM 元数据被动到什么程度。出口通道
+/// （Infra/Failed/Pending）由调用方按 durable boundary 决定，这里只携带事实
+#[derive(Debug)]
+pub enum LvmError {
+    /// 工具未安装（lvm2 包）
+    ToolMissing(String),
+    /// 工具已运行但非零退出，或输出不可解析
+    Failed(String),
+}
+
+impl std::fmt::Display for LvmError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ToolMissing(m) | Self::Failed(m) => f.write_str(m),
+        }
+    }
+}
+
+impl From<FsError> for LvmError {
+    fn from(e: FsError) -> Self {
+        match e {
+            // 工具缺失原样保留分类；其余变体无对应通道，按"执行已介入"归 Failed
+            FsError::ToolMissing(m) => Self::ToolMissing(m),
+            e => Self::Failed(e.to_string()),
+        }
+    }
+}
+
 /// 执行 lvm2 工具并取 stdout；区分"工具未安装"与"命令失败"
-fn run_json(tool: &str, args: &[&str]) -> Result<String, String> {
+fn run_json(tool: &str, args: &[&str]) -> Result<String, LvmError> {
     match run(tool, args) {
         // 工具缺失要装包，与"命令跑失败"是两条不同的补救路径，分开报
-        Err(FsError::ToolMissing(_)) => {
-            Err(format!("LVM tooling missing: {tool} not found in PATH (install lvm2)"))
-        }
-        Err(e) => Err(format!("{tool} failed: {e}")),
-        Ok(out) if !out.status.success() => Err(format!(
+        Err(FsError::ToolMissing(_)) => Err(LvmError::ToolMissing(format!(
+            "LVM tooling missing: {tool} not found in PATH (install lvm2)"
+        ))),
+        Err(e) => Err(LvmError::Failed(format!("{tool} failed: {e}"))),
+        Ok(out) if !out.status.success() => Err(LvmError::Failed(format!(
             "{tool} failed: {}",
             String::from_utf8_lossy(&out.stderr).trim()
-        )),
+        ))),
         Ok(out) => Ok(String::from_utf8_lossy(&out.stdout).into_owned()),
     }
 }
@@ -99,7 +128,7 @@ pub fn parse_extent_size(json: &str) -> Option<u64> {
 
 /// 该分区所属 VG 名；Ok(None) = 有 PV 标签但不属任何 VG（或工具返回空），
 /// Err = 基础设施失败（lvm2 缺失、命令失败、JSON 不可解析）
-pub fn vg_of(part_dev: &str) -> Result<Option<String>, String> {
+pub fn vg_of(part_dev: &str) -> Result<Option<String>, LvmError> {
     // -o 字段名取自 man pvs
     let out = run_json("pvs", &["--reportformat", "json", "-o", "pv_name,vg_name", part_dev])?;
     match parse_pv_vg(&out, part_dev) {
@@ -113,29 +142,29 @@ pub fn vg_of(part_dev: &str) -> Result<Option<String>, String> {
         {
             Ok(None)
         }
-        None => Err(format!("pvs: no report for {part_dev} — is it an LVM2 PV?")),
+        None => Err(LvmError::Failed(format!("pvs: no report for {part_dev} — is it an LVM2 PV?"))),
     }
 }
 
 /// 落在该 PV 上的顶层 LV（lv_name, lv_path）
-pub fn lvs_on_pv(vg: &str, part_dev: &str) -> Result<Vec<(String, String)>, String> {
+pub fn lvs_on_pv(vg: &str, part_dev: &str) -> Result<Vec<(String, String)>, LvmError> {
     let out = run_json("lvs", &["--reportformat", "json", "-o", "lv_name,lv_path,devices", vg])?;
     Ok(parse_lvs_on_pv(&out, part_dev))
 }
 
 /// VG extent 大小（字节）
-pub fn vg_extent_size(vg: &str) -> Result<u64, String> {
+pub fn vg_extent_size(vg: &str) -> Result<u64, LvmError> {
     let out = run_json("vgs", &["--reportformat", "json", "--units", "b", "--nosuffix", "-o", "vg_extent_size", vg])?;
-    parse_extent_size(&out).ok_or_else(|| "vgs: unparsable vg_extent_size in output".to_string())
+    parse_extent_size(&out).ok_or_else(|| LvmError::Failed("vgs: unparsable vg_extent_size in output".to_string()))
 }
 
 /// PV 吸收分区新增的全部空间（扩容方向无前置条件，pvresize(8)）
-pub fn pv_resize(part_dev: &str) -> Result<(), String> {
+pub fn pv_resize(part_dev: &str) -> Result<(), LvmError> {
     run_json("pvresize", &[part_dev]).map(|_| ())
 }
 
 /// LV 增量扩 n 个 extent 并同步扩文件系统（lvextend -l +N -r）
-pub fn lv_extend(lv_path: &str, extents: u64) -> Result<(), String> {
+pub fn lv_extend(lv_path: &str, extents: u64) -> Result<(), LvmError> {
     run_json("lvextend", &["-l", &format!("+{extents}"), "-r", lv_path]).map(|_| ())
 }
 

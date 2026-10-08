@@ -4,6 +4,8 @@ use crate::support::*;
 use crate::args::{parse_size_delta, Args};
 use crate::dev::{FileSource, PartSelector};
 use crate::{dev, fsid, fsops, movepart, table};
+#[cfg(target_os = "linux")]
+use crate::lvm::LvmError;
 
 pub(crate) const HELP: &str = r#"diskedit resize <TARGET>:N <SIZE> [OPTIONS]
 
@@ -177,66 +179,20 @@ fn resize_online(
     Some(o.exit_code())
 }
 
-/// 锁下解析在线目标长度（GPT）：几何解析与右侧空闲都取自**只读打开的整盘**，锚定值
-/// `cur_bytes` 因此来自锁下现状；"请求 → 目标"的构造交给共享的 `resolve_size_request`。
-/// `grow` 无右侧空闲时 PV 拒绝（无法搬移活跃 LV）、非 PV 返回 None（FS 工具扩满现分区）；
-/// PV 的绝对目标按扇区下取整，与离线路径同规则。
-/// `part` 是**锁前由选择器解析出的分区号**：在线模块正是按它（PV 的 pno）或它的挂载点
-/// 定位目标，锁下重解析 `:last` 会指向另一个分区、把某个分区的尺寸算到另一个分区头上；
-/// 该分区在锁下已消失/清空则由 `live_entry` 拒绝
+/// 在线目标长度的公共骨架：锁下取事实（扇区大小、当前字节、右侧空闲扇区）→
+/// 共享的 `resolve_size_request` → grow/shrink 分支。grow 零空闲时 PV 拒绝（无法搬移
+/// 活跃 LV）、非 PV 返回 None（FS 工具扩满现分区）；shrink 的 PV 绝对目标按扇区下取整
+/// （与离线路径同规则）——两族表必须同语义，差异只在"事实怎么取"，故分支只此一份
 #[cfg(target_os = "linux")]
-fn gpt_decider<'a>(
+fn online_size<'a>(
     req: &'a SizeRequest,
-    part: u32,
     is_pv: bool,
-) -> impl FnOnce(&FileSource) -> Result<Option<u64>, crate::outcome::Fail> + 'a {
+    facts: impl FnOnce(&FileSource) -> Result<(u64, u64, u64), Fail> + 'a,
+) -> impl FnOnce(&FileSource) -> Result<Option<u64>, Fail> + 'a {
     move |disk: &FileSource| {
-        let (g, _repair) = crate::gpt_policy::require_gpt_geometry(disk, "resize")?;
-        let e = crate::gpt_policy::live_entry(&g, part)?;
-        let cur = lba_range_bytes(e.starting_lba, e.ending_lba, g.ss);
+        let (ss, cur, free) = facts(disk)?;
         let (target, grow) = resolve_size_request(req, cur)?;
         if grow {
-            let free = free_right_gpt(&g, part);
-            if free == 0 {
-                return if is_pv {
-                    Err(Fail::refused("no free space to the right — a PV cannot relocate blocking partitions while LVs may be active".to_string()))
-                } else {
-                    Ok(None)
-                };
-            }
-            free.checked_mul(g.ss).and_then(|f| cur.checked_add(f))
-                .map(Some)
-                .ok_or_else(|| Fail::infra(format!("grown size overflows ({cur} + {free} sectors × {} B)", g.ss)))
-        } else {
-            Ok(Some(match target {
-                Some(t) if is_pv => t / g.ss * g.ss,
-                Some(t) => t,
-                None => cur,
-            }))
-        }
-    }
-}
-
-/// 锁下解析在线目标长度（MBR）：几何与右侧空闲同样取自锁下的整盘；MBR 无搬移能力，
-/// 空闲上界由 32 位 LBA 上限与后继条目界定（见 `free_right_msdos`）。
-/// `part` 同 `gpt_decider`：锁前解析出的分区号，锁下不再重解释选择器
-#[cfg(target_os = "linux")]
-fn mbr_decider<'a>(
-    req: &'a SizeRequest,
-    part: u32,
-    is_pv: bool,
-) -> impl FnOnce(&FileSource) -> Result<Option<u64>, crate::outcome::Fail> + 'a {
-    move |disk: &FileSource| {
-        let mbr = table::parse_mbr(disk)
-            .map_err(|e| Fail::infra(format!("parse failed: {e}")))?
-            .ok_or_else(|| Fail::refused("no MBR on target".to_string()))?;
-        let p = mbr.iter().find(|p| p.num == part)
-            .ok_or_else(|| Fail::refused(format!("partition {part} not found (MBR resize covers primary partitions 1..4 only)")))?;
-        let ss = disk.sector_size;
-        let cur = p.size_lba as u64 * ss;
-        let (target, grow) = resolve_size_request(req, cur)?;
-        if grow {
-            let free = free_right_msdos(&mbr, p, disk.size / ss);
             if free == 0 {
                 return if is_pv {
                     Err(Fail::refused("no free space to the right — a PV cannot relocate blocking partitions while LVs may be active".to_string()))
@@ -257,6 +213,45 @@ fn mbr_decider<'a>(
     }
 }
 
+/// 锁下解析在线目标长度（GPT）：几何解析与右侧空闲都取自**只读打开的整盘**，锚定值
+/// 因此来自锁下现状。
+/// `part` 是**锁前由选择器解析出的分区号**：在线模块正是按它（PV 的 pno）或它的挂载点
+/// 定位目标，锁下重解析 `:last` 会指向另一个分区、把某个分区的尺寸算到另一个分区头上；
+/// 该分区在锁下已消失/清空则由 `live_entry` 拒绝
+#[cfg(target_os = "linux")]
+fn gpt_decider<'a>(
+    req: &'a SizeRequest,
+    part: u32,
+    is_pv: bool,
+) -> impl FnOnce(&FileSource) -> Result<Option<u64>, Fail> + 'a {
+    online_size(req, is_pv, move |disk| {
+        let (g, _repair) = crate::gpt_policy::require_gpt_geometry(disk, "resize")?;
+        let e = crate::gpt_policy::live_entry(&g, part)?;
+        let cur = lba_range_bytes(e.starting_lba, e.ending_lba, g.ss);
+        Ok((g.ss, cur, free_right_gpt(&g, part)))
+    })
+}
+
+/// 锁下解析在线目标长度（MBR）：几何与右侧空闲同样取自锁下的整盘；MBR 无搬移能力，
+/// 空闲上界由 32 位 LBA 上限与后继条目界定（见 `free_right_msdos`）。
+/// `part` 同 `gpt_decider`：锁前解析出的分区号，锁下不再重解释选择器
+#[cfg(target_os = "linux")]
+fn mbr_decider<'a>(
+    req: &'a SizeRequest,
+    part: u32,
+    is_pv: bool,
+) -> impl FnOnce(&FileSource) -> Result<Option<u64>, Fail> + 'a {
+    online_size(req, is_pv, move |disk| {
+        let mbr = table::parse_mbr(disk)
+            .map_err(|e| Fail::infra(format!("parse failed: {e}")))?
+            .ok_or_else(|| Fail::refused("no MBR on target".to_string()))?;
+        let p = mbr.iter().find(|p| p.num == part)
+            .ok_or_else(|| Fail::refused(format!("partition {part} not found (MBR resize covers primary partitions 1..4 only)")))?;
+        let ss = disk.sector_size;
+        Ok((ss, lba_bytes(p.size_lba as u64, ss), free_right_msdos(&mbr, p, disk.size / ss)))
+    })
+}
+
 /// 块设备的分区节点路径：命名规则唯一实现在 `dev::part_node_name`
 #[cfg(target_os = "linux")]
 fn part_dev_path(target: &str, part: u32) -> String {
@@ -267,7 +262,7 @@ fn part_dev_path(target: &str, part: u32) -> String {
 /// 传给目标 LV（--lv 指定或该 PV 上唯一顶层 LV），向下取整到 VG extent，不消费原有空闲。
 /// lvextend 按容量扩，分配源由 LVM 决定，不限于本 PV
 #[cfg(target_os = "linux")]
-fn lvm_grow_chain(part_dev: &str, delta_bytes: u64, grow_lv: bool, want_lv: Option<&str>) -> Result<(), String> {
+fn lvm_grow_chain(part_dev: &str, delta_bytes: u64, grow_lv: bool, want_lv: Option<&str>) -> Result<(), LvmError> {
     crate::lvm::pv_resize(part_dev)?;
     println!("pvresize {part_dev} done");
     if !grow_lv {
@@ -275,7 +270,7 @@ fn lvm_grow_chain(part_dev: &str, delta_bytes: u64, grow_lv: bool, want_lv: Opti
     }
     let vg = match crate::lvm::vg_of(part_dev) {
         Ok(Some(vg)) => vg,
-        Ok(None) => return Err(format!("pvresize done but {part_dev} is a PV outside any VG — nothing to extend")),
+        Ok(None) => return Err(LvmError::Failed(format!("pvresize done but {part_dev} is a PV outside any VG — nothing to extend"))),
         Err(e) => return Err(e),
     };
     let lvs = crate::lvm::lvs_on_pv(&vg, part_dev)?;
@@ -285,22 +280,28 @@ fn lvm_grow_chain(part_dev: &str, delta_bytes: u64, grow_lv: bool, want_lv: Opti
             Some(x) => x.clone(),
             None => {
                 let names = lvs.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>().join(", ");
-                return Err(format!("LV {sel:?} not found on {part_dev} in VG {vg} (top-level LVs: {names})"));
+                return Err(LvmError::Failed(format!(
+                    "LV {sel:?} not found on {part_dev} in VG {vg} (top-level LVs: {names})"
+                )));
             }
         },
         None => match lvs.len() {
             1 => lvs[0].clone(),
-            0 => return Err(format!("VG {vg}: no top-level LV uses {part_dev} — nothing to extend")),
+            0 => return Err(LvmError::Failed(format!("VG {vg}: no top-level LV uses {part_dev} — nothing to extend"))),
             _ => {
                 let names = lvs.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>().join(", ");
-                return Err(format!("VG {vg}: multiple LVs on {part_dev} — pick one with --lv NAME (candidates: {names})"));
+                return Err(LvmError::Failed(format!(
+                    "VG {vg}: multiple LVs on {part_dev} — pick one with --lv NAME (candidates: {names})"
+                )));
             }
         },
     };
     let ext = crate::lvm::vg_extent_size(&vg)?;
     let n = delta_bytes / ext;
     if n == 0 {
-        return Err(format!("added {delta_bytes} bytes < one VG extent ({ext} bytes) — LV left unchanged"));
+        return Err(LvmError::Failed(format!(
+            "added {delta_bytes} bytes < one VG extent ({ext} bytes) — LV left unchanged"
+        )));
     }
     crate::lvm::lv_extend(&path, n)?;
     println!("lvextend -l +{n} -r {path} done (lv {name})");
@@ -566,7 +567,7 @@ fn mbr_grow_finish(
 ) -> u8 {
     let part = p.num;
     let ss = src.sector_size;
-    let cur_bytes = p.size_lba as u64 * ss;
+    let cur_bytes = lba_bytes(p.size_lba as u64, ss);
     let mut pending: Vec<crate::outcome::Pending> = Vec::new();
     // --no-fs：分区层之外的后置条件整体出局，与 GPT 路径同语义
     if !a.no_fs {
@@ -586,7 +587,7 @@ fn mbr_grow_finish(
             // swap 签名恒在分区首 32K 内，起点未变，原长度足够容纳
             Ok(fsops::Growable::OverlayPending | fsops::Growable::SwapUnactivatable | fsops::Growable::NoFilesystem(_)) => {
                 match movepart::swap_rebuild_pending(
-                    src, part, p.start_lba as u64 * ss, p.size_lba as u64 * ss,
+                    src, part, lba_bytes(p.start_lba as u64, ss), lba_bytes(p.size_lba as u64, ss),
                 ) {
                     Ok(Some(missed)) => pending.push(missed),
                     Ok(None) => {}
@@ -607,7 +608,7 @@ fn mbr_grow_finish(
                         part,
                         crate::outcome::PendingKind::Swap,
                         e.to_string(),
-                        fsops::rescue_hint(Some(fsid::FsKind::Swap), &dev::part_dev_hint(src, part, p.start_lba as u64 * ss)),
+                        fsops::rescue_hint(Some(fsid::FsKind::Swap), &dev::part_dev_hint(src, part, lba_bytes(p.start_lba as u64, ss))),
                     ));
                 }
             }
@@ -621,7 +622,7 @@ fn mbr_grow_finish(
                         part,
                         crate::outcome::PendingKind::Fs,
                         e.to_string(),
-                        fsops::rescue_hint(Some(t.fstype), &dev::part_dev_hint(src, part, p.start_lba as u64 * ss)),
+                        fsops::rescue_hint(Some(t.fstype), &dev::part_dev_hint(src, part, lba_bytes(p.start_lba as u64, ss))),
                     ));
                 }
             }
@@ -675,8 +676,8 @@ fn cmd_resize_msdos(a: &Args, pref: PartSelector, req: &SizeRequest, src_ro: &Fi
         bail_fail(Fail::refused("extended partition container cannot be resized (logical partitions are out of scope)".to_string()));
     }
     let ss = src_ro.sector_size;
-    let cur_bytes = p.size_lba as u64 * ss;
-    let fstype = fsid::identify(src_ro, p.start_lba as u64 * ss, p.size_lba as u64 * ss)
+    let cur_bytes = lba_bytes(p.size_lba as u64, ss);
+    let fstype = fsid::identify(src_ro, lba_bytes(p.start_lba as u64, ss), lba_bytes(p.size_lba as u64, ss))
         .unwrap_or_else(|e| bail_fail(Fail::infra(format!("identify failed: {e}"))));
     let is_pv = fstype == Some(fsid::FsKind::Lvm2Pv);
 
@@ -713,23 +714,23 @@ fn cmd_resize_msdos(a: &Args, pref: PartSelector, req: &SizeRequest, src_ro: &Fi
     }
     // FS 类型按锁下现状重取：识别与取锁之间分区可被重新格式化（mkfs 不守本工具的锁），
     // 拿旧类型选工具就是把 ext4 的工具链砸到 xfs 上；PV 判据随之重算
-    let fstype = fsid::identify(&src, p.start_lba as u64 * ss, p.size_lba as u64 * ss)
+    let fstype = fsid::identify(&src, lba_bytes(p.start_lba as u64, ss), lba_bytes(p.size_lba as u64, ss))
         .unwrap_or_else(|e| bail_fail(Fail::infra(format!("identify failed: {e}"))));
     let is_pv = fstype == Some(fsid::FsKind::Lvm2Pv);
     // SIZE 锚点按锁下的新分区尺寸重算；grow 标记是请求的形状，锁前锁后同值（见 GPT 分支）
-    let cur_bytes = p.size_lba as u64 * ss;
+    let cur_bytes = lba_bytes(p.size_lba as u64, ss);
     let (target, _) = resolve_size_request(req, cur_bytes).unwrap_or_else(|f| bail_fail(f));
     let shrinking = target.is_some_and(|t| t < cur_bytes);
     check_pv_intent(part, fstype, is_pv, shrinking, a.grow_lv).unwrap_or_else(|f| bail_fail(f));
     // 占用复核在锁下（离线选择时的探测在锁前）：首次落盘前确认分区仍空闲，与 GPT 分支同闸
-    crate::fsops::ensure_idle_before_write(&src, part, p.start_lba as u64 * ss).unwrap_or_else(|f| bail_fail(f));
+    crate::fsops::ensure_idle_before_write(&src, part, lba_bytes(p.start_lba as u64, ss)).unwrap_or_else(|f| bail_fail(f));
     let total_sectors = src.size / ss;
     // 后置条件含 FS 调整：请求在扩（`grow` 即便右侧无空闲，也仍要把 FS 扩满现分区，见下面
     // free == 0 那支）就必须在写表之前问出"里面是什么、那一步做得了吗"——判据与 GPT 路径
     // 同一处。缩容有下面的 check_shrink 守卫链，no-op 两不动，故都不在此列
     let extends = grow_to_end || target.is_some_and(|b| b / ss > p.size_lba as u64);
     if extends && !a.no_fs {
-        fsops::grow_target_at(&src, part, p.start_lba as u64 * ss, p.size_lba as u64 * ss)
+        fsops::grow_target_at(&src, part, lba_bytes(p.start_lba as u64, ss), lba_bytes(p.size_lba as u64, ss))
             .and_then(fsops::check_grow_step)
             .unwrap_or_else(|e| bail_fail(Fail::from(e)));
     }
@@ -848,7 +849,7 @@ fn resize_done(a: &Args, wsrc: Option<&mut FileSource>, part: u32, is_pv: bool, 
             w.set_mutation(crate::dev::Mutation::ExternalFsTool);
             w.mark_non_reversible().unwrap_or_else(|e| bail_fail(Fail::from(e)));
         }
-        let r = if is_block {
+        let r: Result<(), LvmError> = if is_block {
             lvm_grow_chain(&part_dev_path(&a.target, part), delta, a.grow_lv, a.lv.as_deref())
         } else {
             // offset+sizelimit 映射出的 loop 设备 = 该分区的整块设备，PV 整设备语义下
@@ -860,20 +861,24 @@ fn resize_done(a: &Args, wsrc: Option<&mut FileSource>, part: u32, is_pv: bool, 
                 None => opened.as_ref().unwrap(),
             };
             fsops::with_partition_device(ro, part, |pv| {
-                lvm_grow_chain(pv, delta, a.grow_lv, a.lv.as_deref()).map_err(fsops::FsError::CommandFailed)
+                lvm_grow_chain(pv, delta, a.grow_lv, a.lv.as_deref())
             })
-            .map_err(|e| e.to_string())
         };
         match r {
             Ok(()) => EXIT_OK,
             // LVM 链失败 = 后置条件未满足：经 Outcome 的 Pending 通道报告并换算 PARTIAL，
             // 不在此手拼退出码（退出码映射的唯一处是 outcome）
             Err(e) => {
+                // 工具缺失的补救是装包而非重跑链——恢复指引按变体分岔
+                let hint = match &e {
+                    LvmError::ToolMissing(_) => "install the lvm2 package",
+                    LvmError::Failed(_) => "pvresize <part>; lvextend -l +<ext> -r <lv> (see pvresize(8))",
+                };
                 let o = crate::outcome::Outcome::applied_with(vec![crate::outcome::Pending::new(
                     part,
                     crate::outcome::PendingKind::Other("lvm chain (pvresize/lvextend)"),
-                    e,
-                    "pvresize <part>; lvextend -l +<ext> -r <lv> (see pvresize(8))",
+                    e.to_string(),
+                    hint,
                 )]);
                 o.report();
                 o.exit_code()
