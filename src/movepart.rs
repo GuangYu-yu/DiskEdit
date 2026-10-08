@@ -395,11 +395,10 @@ impl Checkpoint {
     /// 判据来源 `lim` 是**已验证几何**（见 [`GeometryLimits`]）：分区号上界、可用区、
     /// 容器末端都取自盘上那张表的自述几何，故 256 槽位的表与 128 槽位的一样合法
     fn deserialize(b: &[u8], lim: &GeometryLimits) -> io::Result<Self> {
-        // magic8 + ver4 + disk_size8 + ss8 + grow_part4 + last_usable8 + count4
-        // + cur_index4 + chunks_done8 + chunk_bytes8 + kind1 + fp24 + map1 + crc4：
-        // count=0 且 map 缺席时的精确最小值。少算只是把检查让给后面逐字段的 rd 兜底，
-        // 常数本身失去防守意义
-        if b.len() < 8 + 4 + 8 + 8 + 4 + 8 + 4 + 4 + 8 + 8 + 1 + 24 + 1 + 4 {
+        // 前置只护 rd 之前的直接切片：magic(8) + version(4)。其后的字段逐个经 rd 兜底
+        // 截断，尾部 CRC 读同样走 rd——手工枚举字段总长会随结构演进数错（少算时让给
+        // rd 尚安全，多算则误拒合法现场），故不设第二份长度事实
+        if b.len() < 12 {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "checkpoint truncated"));
         }
         if &b[0..8] != CKPT_MAGIC {
@@ -1366,10 +1365,9 @@ impl RsCheckpoint {
         b
     }
     fn deserialize(b: &[u8], lim: &GeometryLimits) -> io::Result<Self> {
-        // 最短完整布局 = 8(magic)+4(ver)+6×u64+4(part)+1(fs_shrunk)+8(chunks_done)
-        // +8(chunk_bytes)+24(fp)+1(map flag)+4(crc) = 110；CRC 4 字节必须计入：
-        // 截断文件走 InvalidData 而非在尾部切片时 panic
-        if b.len() < 8 + 4 + 8 * 6 + 4 + 1 + 8 + 8 + 24 + 1 + 4 || &b[0..8] != CKPT2_MAGIC {
+        // 前置只护边界检查 get 之前的直接切片：magic(8) + version(4)。其后字段逐个经
+        // get 兜底截断，尾部 CRC 读也走 get——截断一律 InvalidData 而非 panic
+        if b.len() < 12 || &b[0..8] != CKPT2_MAGIC {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "resize checkpoint invalid"));
         }
         if u32::from_le_bytes(b[8..12].try_into().unwrap()) != CKPT2_VERSION {
@@ -1409,7 +1407,14 @@ impl RsCheckpoint {
             1 => Some((rd64(b, &mut o)?, rd64(b, &mut o)?)),
             _ => return Err(io::Error::new(io::ErrorKind::InvalidData, "implausible resize checkpoint mapping flag")),
         };
-        if table::crc32(&b[..o]) != u32::from_le_bytes(b[o..o + 4].try_into().unwrap()) {
+        if table::crc32(&b[..o])
+            != u32::from_le_bytes(
+                b.get(o..o + 4)
+                    .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "truncated"))?
+                    .try_into()
+                    .unwrap(),
+            )
+        {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "resize checkpoint CRC mismatch"));
         }
         // 字段一致性：区间端点不得倒挂，chunk_bytes 不得为 0（防除零/死循环回放）
@@ -2998,7 +3003,7 @@ mod tests {
             cur_index: 0, chunks_done: 0, chunk_bytes: chunk,
             fp: src.fingerprint, map: src.loop_mapping,
         };
-        atomic_write_ckpt(&src.identity.checkpoint_path(), &ckpt.serialize()).unwrap();
+        atomic_write_ckpt(src.identity.checkpoint_path(), &ckpt.serialize()).unwrap();
         drop(src);
 
         // 篡改现场：把 home 挪到一个空闲位置（既非 first_lba、也非任何目标位），改主副本
