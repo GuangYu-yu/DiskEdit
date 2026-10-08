@@ -1912,6 +1912,119 @@ mod crash_recovery {
         assert!(!ckpt.exists(), "{e}");
     }
 
+    /// `resize-part` 搬移 NTFS 分区：表项提交后、HiddenSectors 修正前崩溃。
+    /// 已提交态续跑时盘上几何已是新值，修正与否必须由 ckpt 记录的搬移前起点判定
+    #[test]
+    fn ntfs_hidden_sectors_fixed_when_resuming_after_commit() {
+        use std::io::{Read, Seek, Write};
+        let (img, journal, ckpt) = stage("nhs");
+        let img_s = img.to_str().unwrap();
+        let target = format!("{img_s}:1");
+        let argv = ["resize-part", target.as_str(), "--start", "8192", "--end", "10239"];
+
+        // 手造 NTFS 引导扇区：OEM ID @3 供 identify 认类型，HiddenSectors(u32 LE) @0x1C 记旧起点
+        let boot = |hidden: u32| {
+            let mut b = vec![0u8; 512];
+            b[3..11].copy_from_slice(b"NTFS    ");
+            b[0x1C..0x20].copy_from_slice(&hidden.to_le_bytes());
+            b
+        };
+        let mut f = std::fs::OpenOptions::new().write(true).open(&img).unwrap();
+        f.seek(std::io::SeekFrom::Start(2048 * 512)).unwrap();
+        f.write_all(&boot(2048)).unwrap();
+        drop(f);
+
+        let (c, e) = run_fault("rs-after-commit", &argv);
+        assert_ne!(c, 0, "the injected abort must not look like success: {e}");
+        assert!(ckpt.exists(), "a committed-but-unfinished crash leaves the checkpoint: {e}");
+
+        // 中断现场：数据已随表项落在新起点，HiddenSectors 仍是旧值
+        let mut buf = [0u8; 512];
+        let mut rd = std::fs::File::open(&img).unwrap();
+        rd.seek(std::io::SeekFrom::Start(8192 * 512)).unwrap();
+        rd.read_exact(&mut buf).unwrap();
+        assert_eq!(&buf[3..11], b"NTFS    ", "boot sector must have moved with the data");
+        assert_eq!(
+            u32::from_le_bytes(buf[0x1C..0x20].try_into().unwrap()),
+            2048,
+            "the crashed run must leave the old hidden value in place"
+        );
+
+        // 续跑：已提交态收尾，HiddenSectors 必须补修到新起点
+        let (c, e) = run(&argv);
+        assert_eq!(c, 0, "committed resume must finish: {e}");
+        rd.seek(std::io::SeekFrom::Start(8192 * 512)).unwrap();
+        rd.read_exact(&mut buf).unwrap();
+        assert_eq!(
+            u32::from_le_bytes(buf[0x1C..0x20].try_into().unwrap()),
+            8192,
+            "hidden sectors must be corrected to the new start on resume"
+        );
+        assert!(!ckpt.exists() && !journal.exists(), "a finished transaction must be cleaned up");
+    }
+
+    /// `apply`（尾部紧凑打包）搬移 NTFS 分区：表项 commit 后、HiddenSectors 修正前崩溃。
+    /// 续跑须重入该分区：chunk 跳过、重提交幂等、修正补齐（apply 路径的同类窗口）
+    #[test]
+    fn move_ntfs_hidden_sectors_fixed_when_resuming_after_commit() {
+        use std::io::{Read, Seek, Write};
+        let (img, journal, ckpt) = stage("mhs");
+        let img_s = img.to_str().unwrap();
+        let argv = ["apply", img_s, "--grow", "1", "--no-fs"];
+
+        // 挡路分区 2（apply 只搬目标右侧的分区）：手造 NTFS 引导扇区，
+        // OEM ID @3 供 identify 认类型，HiddenSectors(u32 LE) @0x1C 记旧起点
+        assert_eq!(run(&["add", img_s, "--start", "8192", "--end", "12287"]).0, 0);
+        let boot = |hidden: u32| {
+            let mut b = vec![0u8; 512];
+            b[3..11].copy_from_slice(b"NTFS    ");
+            b[0x1C..0x20].copy_from_slice(&hidden.to_le_bytes());
+            b
+        };
+        let mut f = std::fs::OpenOptions::new().write(true).open(&img).unwrap();
+        f.seek(std::io::SeekFrom::Start(8192 * 512)).unwrap();
+        f.write_all(&boot(8192)).unwrap();
+        drop(f);
+
+        let (c, e) = run_fault("before-hidden-fix", &argv);
+        assert_ne!(c, 0, "the injected abort must not look like success: {e}");
+        assert!(ckpt.exists(), "a committed-but-unfinished crash leaves the checkpoint: {e}");
+
+        // 新起点以盘上表为准（尾部打包的位置不硬编码）
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_DiskEdit"))
+            .args(["info", img_s])
+            .output()
+            .unwrap();
+        let v: serde_json::Value =
+            serde_json::from_str(String::from_utf8_lossy(&out.stdout).trim()).unwrap();
+        let new_first = v["partitions"][1]["first_lba"].as_u64().unwrap();
+        assert_ne!(new_first, 8192, "the committed table must be at the packed position");
+
+        // 中断现场：数据已随表项落在新起点，HiddenSectors 仍是旧值
+        let mut buf = [0u8; 512];
+        let mut rd = std::fs::File::open(&img).unwrap();
+        rd.seek(std::io::SeekFrom::Start(new_first * 512)).unwrap();
+        rd.read_exact(&mut buf).unwrap();
+        assert_eq!(&buf[3..11], b"NTFS    ", "boot sector must have moved with the data");
+        assert_eq!(
+            u32::from_le_bytes(buf[0x1C..0x20].try_into().unwrap()),
+            8192,
+            "the crashed run must leave the old hidden value in place"
+        );
+
+        // 续跑：重入该分区，HiddenSectors 必须补修到新起点
+        let (c, e) = run(&argv);
+        assert_eq!(c, 0, "resuming must finish the relocation: {e}");
+        rd.seek(std::io::SeekFrom::Start(new_first * 512)).unwrap();
+        rd.read_exact(&mut buf).unwrap();
+        assert_eq!(
+            u32::from_le_bytes(buf[0x1C..0x20].try_into().unwrap()),
+            new_first as u32,
+            "hidden sectors must be corrected to the new start on resume"
+        );
+        assert!(!ckpt.exists() && !journal.exists(), "a finished transaction must be cleaned up");
+    }
+
     /// copy 的严格打开：单分区 resize 的中途现场对 `resize` / `copy` 都不可续跑
     /// ——`resize` 对它拒绝且出路文案不得误导（重跑 resize 救不了它）；`copy` 没有续跑
     /// 能力，绝不静默接管别人的现场（否则成功后会把人家的 journal 当自己的清掉）

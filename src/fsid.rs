@@ -351,6 +351,14 @@ mod tests {
     }
 
     #[test]
+    fn ntfs_oem_id() {
+        let mut data = vec![0u8; 4096];
+        data[3..11].copy_from_slice(b"NTFS    ");
+        let s = src_from("ntfs", data);
+        assert_eq!(identify(&s, 0, 4096).unwrap(), Some(FsKind::Ntfs));
+    }
+
+    #[test]
     fn swap_magic_at_page_tail() {
         let mut data = vec![0u8; 8192];
         let ps = 4096u64;
