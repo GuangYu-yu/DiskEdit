@@ -348,6 +348,19 @@ pub(crate) fn drop_journal(a: &Args) {
     TransactionManager::commit(a)
 }
 
+/// checked 换算：表项 LBA 来自盘上内容，回绕的字节值会骗过下游的容量判据——溢出按表损坏报
+pub(crate) fn lba_bytes(n_lba: u64, ss: u64) -> u64 {
+    n_lba.checked_mul(ss)
+        .unwrap_or_else(|| bail_fail(Fail::infra("LBA × sector-size overflows byte range (corrupted table)")))
+}
+
+/// LBA 区间 [start, end]（含两端）的字节数，同上 checked
+pub(crate) fn lba_range_bytes(start: u64, end: u64, ss: u64) -> u64 {
+    let n = end.checked_sub(start).and_then(|d| d.checked_add(1))
+        .unwrap_or_else(|| bail_fail(Fail::infra("partition end below start (corrupted table)")));
+    lba_bytes(n, ss)
+}
+
 #[cfg(test)]
 pub(crate) fn src_from(tag: &str, data: &[u8]) -> FileSource {
     let mut tmp = std::env::temp_dir();

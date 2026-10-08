@@ -102,7 +102,7 @@ pub(crate) fn cmd_info(a: &Args) -> u8 {
                 out.push(',');
             }
             first = false;
-            let fs = match fsid::identify(&src, e.starting_lba * g.ss, (e.ending_lba - e.starting_lba + 1) * g.ss) {
+            let fs = match fsid::identify(&src, lba_bytes(e.starting_lba, g.ss), lba_range_bytes(e.starting_lba, e.ending_lba, g.ss)) {
                 Ok(f) => fsid::fs_name(f).to_string(),
                 Err(e) => {
                     identify_errors.push(format!("partition {}: identify failed: {e}", i + 1));
@@ -114,7 +114,7 @@ pub(crate) fn cmd_info(a: &Args) -> u8 {
                 i + 1,
                 e.starting_lba,
                 e.ending_lba,
-                (e.ending_lba - e.starting_lba + 1) * g.ss,
+                lba_range_bytes(e.starting_lba, e.ending_lba, g.ss),
                 hex_guid(&e.partition_type_guid),
                 fs,
                 json_escape(e.partition_name.as_str())
@@ -149,7 +149,7 @@ pub(crate) fn cmd_info(a: &Args) -> u8 {
                     let fs = if p.is_container {
                         "container".to_string()
                     } else {
-                        match fsid::identify(&src, p.start_lba as u64 * src.sector_size, p.size_lba as u64 * src.sector_size) {
+                        match fsid::identify(&src, lba_bytes(p.start_lba as u64, src.sector_size), lba_bytes(p.size_lba as u64, src.sector_size)) {
                             Ok(f) => fsid::fs_name(f).to_string(),
                             Err(e) => {
                                 identify_errors.push(format!("partition {}: identify failed: {e}", p.num));
@@ -163,7 +163,7 @@ pub(crate) fn cmd_info(a: &Args) -> u8 {
                     format!(
                         "{{\"num\":{},\"type\":\"0x{:02X}\",\"first_lba\":{},\"last_lba\":{},\"size_bytes\":{},\"fs\":\"{}\"}}",
                         p.num, p.os_type, p.start_lba, last_lba,
-                        p.size_lba as u64 * src.sector_size, fs
+                        lba_bytes(p.size_lba as u64, src.sector_size), fs
                     )
                 }).collect();
                 out.push_str(&parts.join(","));

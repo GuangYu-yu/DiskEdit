@@ -857,12 +857,12 @@ pub enum PartSelector {
     Last,
 }
 
-/// 回显成用户写下的形式：拒绝文案（"本命令不接受分区选择器"）要能让用户对上自己那条命令
+/// 回显用户写法：`3` / `last`（拒绝文案里 `drop :{n}` 用它拼回原样）
 impl std::fmt::Display for PartSelector {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             PartSelector::Number(n) => write!(f, "{n}"),
-            PartSelector::Last => f.write_str("last"),
+            PartSelector::Last => write!(f, "last"),
         }
     }
 }

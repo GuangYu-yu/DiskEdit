@@ -88,15 +88,13 @@ pub(crate) fn active_recovery_records(
         // "就地补 magic 后照常使用"（详见其注释）；否则一次在创建 journal 时掉电会出现
         // 两种结局：开 journal 的命令放行，走闸口的命令被永久挡住。
         // stat 失败不是"0 字节"：读不出大小的文件不在此跳过，交由下方 read_entries
-        // 归类（读不出来会记为现场）——把它折叠成 0 会把真现场当残骸放行
-        if matches!(std::fs::metadata(p), Ok(m) if m.len() == 0) {
-            continue;
-        }
+        // 归类（读不出来会记为现场）——把它折叠成 0 会把真现场当残骸放行。
         // 目录等非普通文件不是本工具写下的任何东西（本工具只建普通文件）：read_entries
         // 对目录报 EISDIR 会把它记成"读不出来的现场"，而 abandon 对目录 hard_link 必然
-        // 失败——留下一个清不掉的假现场。stat 失败不在此列：交由下方 read_entries 归类
-        if let Ok(m) = std::fs::metadata(p)
-            && !m.is_file()
+        // 失败——留下一个清不掉的假现场
+        let stat = std::fs::metadata(p);
+        if let Ok(m) = &stat
+            && (m.len() == 0 || !m.is_file())
         {
             continue;
         }

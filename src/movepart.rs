@@ -859,28 +859,27 @@ fn prepare_apply(
         crate::fsops::ensure_idle_before_write(src, m.part_num, m.first_lba.checked_mul(plan.ss)
             .ok_or_else(|| Fail::infra("move source start overflows byte offset"))?)?;
     }
-    if let Some(ge) = g0.entry_index(plan.grow_part).and_then(|i| g0.entries.get(i))
-        && ge.ending_lba != 0
-    {
-        crate::fsops::ensure_idle_before_write(src, plan.grow_part, ge.starting_lba.checked_mul(plan.ss)
-            .ok_or_else(|| Fail::infra("grow target start overflows byte offset"))?)?;
-    }
-    // 几何由调用方解析并下传（构造点即拒绝条目重叠），FS preflight 与 ckpt 判定共用它；
-    // 几何里的上界是"修复生效后"的值，ckpt 的边界校验依赖它。盘在 plan 生成之后变了的话，
-    // 由下面的恢复校验拒绝
+    // 几何由调用方解析并下传（构造点即拒绝条目重叠）；几何里的上界是"修复生效后"的值，
+    // ckpt 的边界校验依赖它。盘在 plan 生成之后变了的话，由下面的恢复校验拒绝
     // 写盘前的 preflight：FS 扩展属本次操作的后置条件，工具缺失必须现在拒绝——
     // 一旦开始写盘才发现，就会留下"分区已改、FS 未扩"的中间态。
     // 不依赖命令层是否检查过：续传路径不经过 plan，本处才是唯一必经关口
+    let grow_entry = g0.entry_index(plan.grow_part).and_then(|i| g0.entries.get(i)).filter(|ge| ge.ending_lba != 0);
+    if let Some(ge) = grow_entry {
+        crate::fsops::ensure_idle_before_write(src, plan.grow_part, ge.starting_lba.checked_mul(plan.ss)
+            .ok_or_else(|| Fail::infra("grow target start overflows byte offset"))?)?;
+    }
     if !no_fs
-        && let Some(ge) = g0.entry_index(plan.grow_part).and_then(|i| g0.entries.get(i))
-        && ge.ending_lba != 0
+        && let Some(ge) = grow_entry
     {
         // 要动的是哪一段、里面是什么 FS 由 grow_target_at 判定——与写盘后的收尾同一判据，
         // 两处只是区间不同。区间的 LBA 单位是**表自身**的 ss（plan.ss）。此处位于
         // apply_repair / 搬移之前，本次调用尚未写目标盘：它的环境故障按 Infra 报，
         // "不支持 / 工具缺失 / 里面是什么都不知道"交 FsError 分流（10 / 30），不在此另判
-        let base = ge.starting_lba * plan.ss;
-        let len = (ge.ending_lba - ge.starting_lba + 1) * plan.ss;
+        let base = ge.starting_lba.checked_mul(plan.ss)
+            .ok_or_else(|| Fail::infra("grow target start overflows byte offset"))?;
+        let len = (ge.ending_lba - ge.starting_lba + 1).checked_mul(plan.ss)
+            .ok_or_else(|| Fail::infra("grow target length overflows byte size"))?;
         crate::fsops::check_grow_step(crate::fsops::grow_target_at(src, plan.grow_part, base, len)?)?;
     }
     // 恢复三态：有效 → 续传 / 槽位被另一族作业占用 → 拒绝 / 空 → 新建
@@ -1027,10 +1026,9 @@ fn execute_apply(
             from_lba: m.first_lba,
             to_lba,
         });
-    }
-    // 位移全为 0（右邻已尾打包时重跑 resize grow --allow-move 的典型产物）⇒ 没有
-    // 不可回滚的写入，不落屏障：undo 的可回滚性不受这次空转影响
-    if effective.is_some() {
+        // 位移非零 ⇒ 存在不可回滚的写入。位移全为 0（右邻已尾打包时重跑 resize
+        // grow --allow-move 的典型产物）没有这样的写入，不落屏障：undo 的可回滚性
+        // 不受这次空转影响
         src.mark_non_reversible()?;
     }
 
@@ -1043,7 +1041,6 @@ fn execute_apply(
     // 搬移循环：单分区 = 单事务；尾→头推进
     for mi in (ckpt.cur_index as usize)..plan.moves.len() {
         let m = &plan.moves[mi];
-        ckpt.cur_index = mi as u32;
         // δ=0：条目已在目标位（右邻尾打包后重跑的产物）。自拷贝、重写表、推进 ckpt
         // 之外的一切都是空转，跳过——表项绝对赋值下它本来就"已提交"
         if m.delta_lba == 0 {
@@ -1052,6 +1049,8 @@ fn execute_apply(
             atomic_write_ckpt(ckpt_path, &ckpt.serialize())?;
             continue;
         }
+        // 中断时正在搬的条目号随本次 ckpt 序列化落盘，恢复侧据此定位 chunk 级进度
+        ckpt.cur_index = mi as u32;
         // 目标区端点一次算好、全链 checked：要原样写进表项并进入字节地址换算
         let new_first = m.first_lba.checked_add(m.delta_lba).ok_or_else(|| {
             io::Error::new(io::ErrorKind::InvalidData, "relocation target LBA overflows — refusing")

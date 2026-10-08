@@ -33,7 +33,10 @@ pub(crate) const HELP_MOVE: &str = r#"diskedit move <TARGET>:N --start <LBA|end>
 
   LOCATION:
     <LBA>     new start LBA (aligned per --align, default 1MiB)
-    end       tail-pack to the last possible position"#;
+    end       tail-pack to the last possible position
+
+  --no-fs skips the filesystem step for the moved partition (a swap that
+  the relocation rebuilds still runs — it belongs to the relocation)."#;
 
 pub(crate) const HELP_COPY: &str = r#"diskedit copy <TARGET>:N --start <LBA|end> [--name S]
 

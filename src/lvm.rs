@@ -34,7 +34,7 @@ impl std::fmt::Display for LvmError {
 impl From<FsError> for LvmError {
     fn from(e: FsError) -> Self {
         match e {
-            // 工具缺失原样保留分类；其余变体无对应通道，按"执行已介入"归 Failed
+            // 工具缺失原样保留分类；其余变体在 LvmError 无对应通道，统一压成 Failed
             FsError::ToolMissing(m) => Self::ToolMissing(m),
             e => Self::Failed(e.to_string()),
         }

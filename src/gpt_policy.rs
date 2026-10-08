@@ -68,8 +68,7 @@ pub fn repaired_last_usable(g: &RawGpt, file_last_lba: u64) -> io::Result<u64> {
         g.header.size_of_partition_entry,
         g.header.number_of_partition_entries,
         crate::table::MAX_ARRAY_BYTES,
-    )
-    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
+    )?;
     let span = geom.lba_span();
     let new_last_usable = file_last_lba
         .checked_sub(span)
@@ -363,7 +362,9 @@ pub(crate) fn partition_bytes(src: &FileSource, part: u32) -> Result<(u64, u64),
                     "partition {part} is an extended container (logical partitions are out of scope)"
                 )));
             }
-            Ok((p.start_lba as u64 * src.sector_size, p.size_lba as u64 * src.sector_size))
+            // MBR 的 32 位 LBA × 扇区大小在 u64 域不可能溢出；checked 是全仓换算的统一口径
+            Ok((crate::support::lba_bytes(p.start_lba as u64, src.sector_size),
+                crate::support::lba_bytes(p.size_lba as u64, src.sector_size)))
         }
     }
 }

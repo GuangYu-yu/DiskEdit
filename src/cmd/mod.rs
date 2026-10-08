@@ -9,6 +9,7 @@ pub(crate) mod resize;
 pub(crate) mod undo;
 
 use crate::args::{help_cmd, usage, usage_help, Args};
+use crate::support::{bail_fail, Fail};
 
 /// 一条命令的全部声明。名字/别名、旗标白名单、详助文本、与目标盘的打开关系、处理函数
 /// **同出一源**：分派、`help <CMD>` 路由、旗标消费对账、成功后的 journal 清理
@@ -26,6 +27,9 @@ pub(crate) struct CommandSpec {
     pub(crate) flags: &'static [&'static str],
     /// 详助正文（`diskedit help <CMD>` / `<CMD> --help`）
     pub(crate) help: &'static str,
+    /// 位置参数上限（含第 0 位的目标路径）。与旗标同罪：多给即拒绝——
+    /// 静默忽略多余位置参数会让用户以为写到了别处（如把 SIZE 落在错位上）却报成功
+    pub(crate) max_pos: usize,
     /// 与目标盘的打开关系（见 `TargetMode`）；main 据此决定成功后是否关闭撤销窗口
     pub(crate) mode: TargetMode,
     /// 处理函数。收命令名是因为 plan/apply 共用一个实现、要按名字分干跑与执行
@@ -50,6 +54,7 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
         aliases: &[],
         flags: &["--sector-size"],
         help: info::HELP,
+        max_pos: 1,
         mode: TargetMode::ReadOnly,
         run: |_, a| info::cmd_info(a),
     },
@@ -65,6 +70,7 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
             "--allow-move", "--chunk-size", "--start", "--end",
         ],
         help: resize::HELP,
+        max_pos: 2, // TARGET:N + SIZE
         mode: TargetMode::WriteJournal,
         run: |_, a| resize::cmd_resize(a),
     },
@@ -73,6 +79,7 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
         aliases: &[],
         flags: &["--sector-size", "--start", "--align", "--chunk-size", "--no-fs"],
         help: layout::HELP_MOVE,
+        max_pos: 1,
         mode: TargetMode::WriteJournal,
         run: |_, a| layout::cmd_move(a),
     },
@@ -81,6 +88,7 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
         aliases: &[],
         flags: &["--sector-size", "--start", "--align", "--chunk-size", "--name"],
         help: layout::HELP_COPY,
+        max_pos: 1,
         mode: TargetMode::WriteJournal,
         run: |_, a| layout::cmd_copy(a),
     },
@@ -89,6 +97,7 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
         aliases: &[],
         flags: &["--sector-size", "--size", "--fs", "--name"],
         help: layout::HELP_CREATE,
+        max_pos: 1,
         mode: TargetMode::WriteJournal,
         run: |_, a| layout::cmd_create(a),
     },
@@ -97,6 +106,7 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
         aliases: &["del"],
         flags: &["--sector-size", "--yes"],
         help: layout::HELP_DELETE,
+        max_pos: 1,
         mode: TargetMode::WriteJournal,
         run: |_, a| layout::cmd_del(a),
     },
@@ -105,6 +115,7 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
         aliases: &[],
         flags: &["--sector-size", "--random"],
         help: fs::HELP_SET,
+        max_pos: 4, // TARGET:N + key + value + state
         mode: TargetMode::WriteJournal,
         run: |_, a| fs::cmd_set(a),
     },
@@ -114,6 +125,7 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
         flags: &["--sector-size"],
         // check 把分区交给外部工具，自己不动分区表；不需要撤销窗口
         help: fs::HELP_CHECK,
+        max_pos: 1,
         mode: TargetMode::WriteNoJournal,
         run: |_, a| fs::cmd_check(a),
     },
@@ -126,6 +138,7 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
         aliases: &[],
         flags: &["--sector-size", "--yes"],
         help: fs::HELP_MKFS,
+        max_pos: 2, // TARGET:N + FSTYPE
         mode: TargetMode::WriteJournal,
         run: |_, a| fs::cmd_mkfs(a),
     },
@@ -134,6 +147,7 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
         aliases: &[],
         flags: &["--sector-size", "--online", "--size"],
         help: fs::HELP_RESIZEFS,
+        max_pos: 2, // MOUNTPOINT + BYTES
         mode: TargetMode::WriteNoJournal,
         run: |_, a| fs::cmd_resizefs(a),
     },
@@ -142,6 +156,7 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
         aliases: &[],
         flags: &["--sector-size", "--yes"],
         help: undo::HELP,
+        max_pos: 1,
         mode: TargetMode::WriteNoJournal,
         run: |_, a| undo::cmd_undo(a),
     },
@@ -153,6 +168,7 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
         aliases: &[],
         flags: &["--yes"],
         help: abandon::HELP,
+        max_pos: 1,
         mode: TargetMode::WriteNoJournal,
         run: |_, a| abandon::cmd_abandon(a),
     },
@@ -161,6 +177,7 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
         aliases: &[],
         flags: &["--sector-size", "--table", "--yes"],
         help: layout::HELP_NEW,
+        max_pos: 1,
         mode: TargetMode::WriteJournal,
         run: |_, a| layout::cmd_new(a),
     },
@@ -169,6 +186,7 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
         aliases: &[],
         flags: &["--sector-size", "--start", "--end", "--align", "--name", "--type"],
         help: layout::HELP_ADD,
+        max_pos: 1,
         mode: TargetMode::WriteJournal,
         run: |_, a| layout::cmd_add(a),
     },
@@ -177,6 +195,7 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
         aliases: &[],
         flags: &["--sector-size", "--start", "--end", "--grow-to-end", "--align", "--chunk-size", "--no-fs"],
         help: layout::HELP_RESIZE_PART,
+        max_pos: 1,
         mode: TargetMode::WriteJournal,
         run: |_, a| layout::cmd_resize_part(a),
     },
@@ -185,6 +204,7 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
         aliases: &[],
         flags: &["--sector-size", "--grow"],
         help: plan::HELP,
+        max_pos: 1,
         mode: TargetMode::ReadOnly,
         run: plan::cmd_plan_apply,
     },
@@ -196,6 +216,7 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
         // 白名单声明却不消费的旗标 = 静默接受用户以为存在的确认
         flags: &["--sector-size", "--grow", "--chunk-size", "--no-fs"],
         help: plan::HELP,
+        max_pos: 1,
         mode: TargetMode::WriteJournal,
         run: plan::cmd_plan_apply,
     },
@@ -230,7 +251,15 @@ pub(crate) fn dispatch(cmd: &str, a: &Args) -> u8 {
             None => usage_help(),
         },
         _ => match find(cmd) {
-            Some(c) => (c.run)(cmd, a),
+            Some(c) => {
+                // 位置参数与旗标同一对账：多出的第 max_pos 位即拒绝，不落命令函数
+                if let Some(extra) = a.pos.get(c.max_pos) {
+                    bail_fail(Fail::refused(format!(
+                        "unexpected extra argument for `{cmd}`: {extra} (see `diskedit help {cmd}`)"
+                    )));
+                }
+                (c.run)(cmd, a)
+            }
             None => usage(),
         },
     }
@@ -252,6 +281,7 @@ mod tests {
                 assert!(seen.insert(a), "duplicate alias {a}");
             }
             assert!(!c.help.is_empty(), "{}: missing help text", c.name);
+            assert!(c.max_pos >= 1, "{}: max_pos must count the target", c.name);
             assert!(
                 c.help.contains(&format!("diskedit {}", c.name)),
                 "{}: help text must name the command",

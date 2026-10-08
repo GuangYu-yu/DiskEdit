@@ -792,10 +792,9 @@ pub fn ensure_protective_mbr(src: &mut FileSource) -> io::Result<()> {
         if lba0[462..510].iter().all(|&b| b == 0) && rec[4] == PROT_MBR_TYPE {
             let start = rd_u32(rec, 8);
             let size = rd_u32(rec, 12);
-            let total = src.size / ss;
             // 已合规即一字不写（保留外层引导代码）。比较基准是**逻辑块**口径的 total，
             // 故 512 口径值（PmbrSize::NeedsRepair{Compat512}）在此落空，会走到下面重写为规范值
-            if start == 1 && size as u64 + 1 == total.min(u32::MAX as u64 + 1) {
+            if start == 1 && size as u64 + 1 == total_sectors.min(u32::MAX as u64 + 1) {
                 return Ok(());
             }
         }
@@ -807,7 +806,6 @@ pub fn ensure_protective_mbr(src: &mut FileSource) -> io::Result<()> {
     rec[1..4].copy_from_slice(&[0x00, 0x02, 0x00]); // StartCHS 惯例值
     rec[4] = PROT_MBR_TYPE;
     rec[5..8].copy_from_slice(&[0xFF, 0xFF, 0xFF]); // EndCHS
-    let total_sectors = src.size / ss;
     let size: u32 = if total_sectors > u32::MAX as u64 { u32::MAX } else { (total_sectors - 1) as u32 };
     rec[8..12].copy_from_slice(&1u32.to_le_bytes());
     rec[12..16].copy_from_slice(&size.to_le_bytes());
@@ -1002,6 +1000,12 @@ pub fn resize_mdos_entry(src: &mut FileSource, part: u32, new_size_lba: u32) -> 
     let total_sectors = src.size / ss as u64;
     if start == 0 {
         return Err(Fail::refused(format!("MBR partition {part} has invalid start LBA 0")));
+    }
+    // 零长度条目在解析侧按空槽处理——写进去等于隐式删分区，缩容请求不得经此入口表达
+    if new_size_lba == 0 {
+        return Err(Fail::refused(format!(
+            "new size 0 would erase partition {part} — use `delete` to remove the entry"
+        )));
     }
     if start + new_size_lba as u64 > total_sectors {
         return Err(Fail::refused(format!(

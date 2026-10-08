@@ -55,7 +55,8 @@ pub fn disk_name_from_partition(part_name: &str, disk_exists: impl Fn(&str) -> b
         None => None,
         Some(end) => {
             let base = &part_name[..end];
-            (!base.is_empty() && disk_exists(base)).then(|| base.to_string())
+            // digits_end 分支里 base 至少含一个非数字字符，非空判据恒真，只验 disk_exists
+            disk_exists(base).then(|| base.to_string())
         }
     }
 }
@@ -91,13 +92,15 @@ pub fn find_mountpoint(disk_name: &str, pno: u32) -> Option<PathBuf> {
 }
 
 /// 目标盘上的分区是否是活动 swap（/proc/swaps；man proc_swaps(5)：首行为表头，
-/// 其后每行第一字段为设备路径。反解方式同 find_mountpoint）
-pub fn swap_active(disk_name: &str, pno: u32) -> bool {
-    let Ok(s) = fs::read_to_string("/proc/swaps") else { return false };
-    s.lines()
+/// 其后每行第一字段为设备路径。反解方式同 find_mountpoint）。
+/// 读失败如实上抛：折叠成"无 swap"会让活动 swap 的锁下复核被一次读故障绕过
+/// （fail-open），与占用探测的 fail-closed 口径相反
+pub fn swap_active(disk_name: &str, pno: u32) -> std::io::Result<bool> {
+    let s = fs::read_to_string("/proc/swaps")?;
+    Ok(s.lines()
         .skip(1) // 首行表头
         .filter_map(|l| l.split_whitespace().next().map(|d| d.to_string()))
-        .any(|d| part_in_use(&d, disk_name, pno))
+        .any(|d| part_in_use(&d, disk_name, pno)))
 }
 
 fn part_in_use(dev: &str, disk_name: &str, pno: u32) -> bool {
@@ -362,12 +365,14 @@ mod imp {
         match crate::gpt_policy::partition_bytes(&disk, t.pno) {
             Ok((start, len)) if (start, len) == (t.start_bytes, t.part_len_bytes) => {}
             Ok((start, len)) => {
+                // 端点换算 saturating（数据源是盘上重读结果）：饱和只影响提示文字，
+                // 不影响拒绝判定本身
+                let now_end = start.saturating_add(len);
+                let snap_end = t.start_bytes.saturating_add(t.part_len_bytes);
                 return Err(PartResizeError::NoWrite(io::Error::other(format!(
-                    "partition {} on disk changed since the snapshot (now at {start}..{}, snapshot {}..{}) — refusing to overwrite a foreign edit",
+                    "partition {} on disk changed since the snapshot (now at {start}..{now_end}, snapshot {}..{snap_end}) — refusing to overwrite a foreign edit",
                     t.pno,
-                    start + len,
                     t.start_bytes,
-                    t.start_bytes + t.part_len_bytes,
                 ))));
             }
             Err(f) => {
@@ -635,9 +640,14 @@ mod imp {
             return (o, old_len_bytes);
         }
         // 活动 swap 的锁下复核（命令层那次是锁前粗查）：swapon 不守本工具的锁，
-        // 窗口内被激活的 swap 若放行写表，改的就是活动 swap 的底层分区
-        if crate::online::swap_active(disk_name, pno) {
-            return (Outcome::refused(format!("partition {pno} became active swap during locking — run swapoff first")), old_len_bytes);
+        // 窗口内被激活的 swap 若放行写表，改的就是活动 swap 的底层分区。
+        // /proc/swaps 读不出来时无从断言"无 swap"——按环境故障拒绝而非放行
+        match crate::online::swap_active(disk_name, pno) {
+            Ok(true) => {
+                return (Outcome::refused(format!("partition {pno} became active swap during locking — run swapoff first")), old_len_bytes);
+            }
+            Ok(false) => {}
+            Err(e) => return (Outcome::infra(format!("cannot read /proc/swaps: {e}")), old_len_bytes),
         }
         // 锁下重取真相共用一个只读整盘句柄：PV 判据复核与"请求 → 目标长度"的解析
         // 都锚定独占权之后的盘上内容。PV 判据的复核（命令层那次是锁前粗查）：识别与
@@ -731,8 +741,12 @@ mod imp {
         let Some(dn) = t.disk_dev.file_name().map(|s| s.to_string_lossy().into_owned()) else {
             return Outcome::refused(format!("cannot derive disk name from {}", t.disk_dev.display()));
         };
-        if crate::online::swap_active(&dn, t.pno) {
-            return Outcome::refused(format!("partition {} became active swap during locking — run swapoff first", t.pno));
+        match crate::online::swap_active(&dn, t.pno) {
+            Ok(true) => {
+                return Outcome::refused(format!("partition {} became active swap during locking — run swapoff first", t.pno));
+            }
+            Ok(false) => {}
+            Err(e) => return Outcome::infra(format!("cannot read /proc/swaps: {e}")),
         }
         let fstype = match fstype_of(&t) {
             Ok(f) => f,
@@ -776,6 +790,11 @@ mod imp {
             Err(FsGrowError::Exit(m)) => Outcome::failed(m),
         };
 
+        // 请求 == 现分区尺寸与"未指定尺寸"同性质：分区不动、无其他写盘步骤，合并同一臂
+        let size = match size {
+            Some(b) if b == t.part_len_bytes => None,
+            other => other,
+        };
         match size {
             // 扩满现分区：分区不动，FS 工具直接吃满（内核视图无需变更）
             None => fs_grow_outcome(fs_grow(&t, fstype)),
@@ -800,7 +819,7 @@ mod imp {
                         // 分区已扩：无论 spawn 失败还是非零退出，FS 步都是一条未满足后置条件
                         Err(e) => Outcome::applied_with(vec![fs_pending(format!("partition resized but FS grow skipped: {}", e.detail()))]),
                     }
-                } else if bytes < t.part_len_bytes {
+                } else {
                     // shrink（仅 btrfs）：FS 先缩（内核校验占用与 256MiB 下限），持久化缩分区
                     let mnt = t.mnt.to_string_lossy().into_owned();
                     match run("btrfs", &["filesystem", "resize", &bytes.to_string(), &mnt]) {
@@ -831,9 +850,6 @@ mod imp {
                             Outcome::applied_stale_kernel()
                         }
                     }
-                } else {
-                    // bytes == 现分区：与 None 分支同性质（没有别的写盘步骤）
-                    fs_grow_outcome(fs_grow(&t, fstype))
                 }
             }
         }
