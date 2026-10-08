@@ -6,13 +6,16 @@ use crate::dev::PartSelector;
 use crate::movepart;
 
 pub(crate) const HELP: &str = r#"diskedit plan <TARGET> --grow N
-diskedit apply <TARGET> --grow N [--chunk-size MiB]
+diskedit apply <TARGET> --grow N [--chunk-size MiB] [--no-fs]
 
   Grow partition N into all following free space, relocating intervening
   partitions tail-packed (manual multi-step form of `resize grow`).
   plan prints the operations without touching the disk. apply derives the
   plan under the target lock (the disk may have changed since plan ran)
-  and executes it, resuming from its checkpoint if re-run."#;
+  and executes it, resuming from its checkpoint if re-run.
+
+  --no-fs (apply only) skips the filesystem step of the grown partition;
+  a swap that a relocation has to rebuild still runs."#;
 
 /// 列出各分区的搬移（plan 命令与 apply 前的计划打印共用）。
 /// 头行不共用：两处要给出的数不同——写入前只需扩容终点，`plan` 还要额外给出

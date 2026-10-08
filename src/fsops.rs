@@ -567,7 +567,9 @@ pub fn fs_min_bytes(src: &FileSource, part: u32, fstype: Option<FsKind>) -> Resu
     })?;
     match result {
         Some(r) => r.map(Some).map_err(FsError::from),
-        None => Ok(None),
+        // 闭包在 with_partition_device 内恒执行一次，None 只能是内部不变量破裂：
+        // fail-closed 报错误，不冒充"无最小尺寸可报"
+        None => Err(FsError::Io(io::Error::other("partition probe did not run (internal invariant broken)"))),
     }
 }
 
