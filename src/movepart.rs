@@ -507,7 +507,8 @@ impl Checkpoint {
         }
         // 进度字段同属盘上可控值：CRC 自洽但值荒谬的 ckpt 会让续传把该条目的全部 chunk
         // 跳过后仍提交表项——表将指向从未复制过的位置。上界在解析期可算：当前条目的
-        // chunk 总数（自重叠搬移重做已完成 chunk 读到的仍是原始源数据，故越界只可能损坏）
+        // chunk 总数（chunk 数按写入时确定性布局重算，自重叠条目 chunk 已收敛到位移
+        // 以内，重做读到的仍是原始源数据；越界值只会跳过未写区间，故只可能损坏）
         if chunk_bytes == 0 {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "checkpoint chunk_bytes invalid"));
         }
@@ -518,10 +519,20 @@ impl Checkpoint {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "implausible checkpoint entry index"));
         }
         let chunks_limit = match moves.get(cur_index as usize) {
-            Some(m) => m.len_lba.checked_mul(ss)
-                .and_then(|t| t.checked_add(chunk_bytes - 1))
-                .map(|t| t / chunk_bytes)
-                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "checkpoint chunk count overflow"))?,
+            Some(m) => {
+                // 与搬移循环同一份确定性布局：自重叠条目（位移小于长度）的 chunk 收敛到
+                // 位移字节以内，chunk 数按收敛后的值算，两侧口径一致才不会误判损坏
+                let delta_bytes = m.delta_lba.saturating_mul(ss);
+                let ec = if m.delta_lba != 0 && m.delta_lba < m.len_lba {
+                    chunk_bytes.min(delta_bytes)
+                } else {
+                    chunk_bytes
+                };
+                m.len_lba.checked_mul(ss)
+                    .and_then(|t| t.checked_add(ec - 1))
+                    .map(|t| t / ec)
+                    .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "checkpoint chunk count overflow"))?
+            }
             // 全部条目已提交：进度归零，残留值即损坏
             None => 0,
         };
@@ -1096,12 +1107,27 @@ fn execute_apply(
         let src_off = m.first_lba * plan.ss;
         let dst_off = new_first * plan.ss;
         let total = m.len_lba * plan.ss;
+        // 自重叠搬移（位移小于分区长度）下，重做 chunk 的源区间会被先落盘的更靠尾
+        // chunk 的写覆盖，除非每个 chunk 不大于位移（写区间起点 ≥ 任何重做源区间终点）。
+        // 因此 chunk 收敛到位移字节以内，且停用批量提交——批量攒下的未持久化 chunk
+        // 同样会探入重做区间。非自重叠搬移写区间与源区间不相交，两种优化照常可用
+        let overlap = m.delta_lba < m.len_lba;
+        let delta_bytes = m.delta_lba
+            .checked_mul(plan.ss)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "relocation byte offset overflows — refusing"))?;
+        let entry_chunk = if overlap { chunk_len.min(delta_bytes) } else { chunk_len };
+        if overlap && entry_chunk < chunk_len {
+            log(&format!(
+                "partition {}: self-overlapping move, chunk size reduced to {} bytes to keep redo reads intact",
+                m.part_num, entry_chunk
+            ));
+        }
         let chunk_from_tail: Vec<(u64, u64)> = {
             // (offset_within, len) 从尾部向头部
             let mut v = Vec::new();
             let mut pos = total;
             while pos > 0 {
-                let len = chunk_len.min(pos);
+                let len = entry_chunk.min(pos);
                 v.push((pos - len, len));
                 pos -= len;
             }
@@ -1124,9 +1150,9 @@ fn execute_apply(
             src.sync_data()?; // 数据 chunk 用 sync_data；表结构提交用 sync_all
             ckpt.chunks_done = i as u64 + 1; // 内存进度：递增发生在 sync_data 之后，永不超前于 durable 数据
             pending_chunks += 1;
-            // 批量提交：攒满一批或到达末 chunk 才落盘。落后只导致重复执行
-            // （重做读到的仍是原始源数据），超前才会跳过未落盘区间——单向不等式不可破坏
-            if pending_chunks >= CKPT_BATCH_CHUNKS || i as u64 + 1 == total_chunks {
+            // 自重叠搬移：durable 边界逐 chunk 推进（写区间探入后续重做源区间的窗口
+            // 只能靠收紧 checkpoint 频率关死）；非自重叠照常攒批
+            if overlap || pending_chunks >= CKPT_BATCH_CHUNKS || i as u64 + 1 == total_chunks {
                 atomic_write_ckpt(ckpt_path, &ckpt.serialize())?;
                 pending_chunks = 0;
             }
@@ -1436,10 +1462,20 @@ impl RsCheckpoint {
         {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "resize checkpoint range outside usable area"));
         }
-        // 进度上界同 Checkpoint：搬移区间的 chunk 总数（区间端点已验非倒挂，乘法仍 checked）
+        // 进度上界同 Checkpoint：搬移区间的 chunk 总数。区间端点已验非倒挂，乘法仍 checked。
+        // 自重叠搬移（位移小于区间长度）的 chunk 收敛到位移字节以内（见搬移循环），
+        // chunk 数按收敛后的值算，两侧口径一致才不会误判损坏
+        let moved = old_start.abs_diff(new_start);
+        let ec = if moved != 0 && moved < old_end - old_start + 1 {
+            chunk_bytes.min(moved.checked_mul(ss).ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidData, "checkpoint chunk count overflow")
+            })?)
+        } else {
+            chunk_bytes
+        };
         let chunks_limit = (old_end - old_start + 1).checked_mul(ss)
-            .and_then(|t| t.checked_add(chunk_bytes - 1))
-            .map(|t| t / chunk_bytes)
+            .and_then(|t| t.checked_add(ec - 1))
+            .map(|t| t / ec)
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "resize checkpoint chunk count overflow"))?;
         if chunks_done > chunks_limit {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "implausible resize checkpoint chunk progress"));
@@ -1779,11 +1815,22 @@ fn execute_resize(
         let src_off = old_start * ss;
         let dst_off = new_start * ss;
         let total = (old_end - old_start + 1) * ss;
+        // 自重叠搬移（位移小于分区长度）下，重做 chunk 的源区间会被先落盘 chunk 的写
+        // 覆盖，除非每个 chunk 不大于位移（两个方向同理：写区间起点与重做源区间终点
+        // 至少隔一个位移）。chunk 收敛到位移字节以内；此处本就逐 chunk checkpoint
+        let entry_chunk = if moved < old_end - old_start + 1 {
+            chunk_len.min(
+                moved.checked_mul(ss)
+                    .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "relocation byte offset overflows — refusing"))?,
+            )
+        } else {
+            chunk_len
+        };
         let order: Vec<(u64, u64)> = {
             let mut v = Vec::new();
             let mut pos = 0u64;
             while pos < total {
-                let len = chunk_len.min(total - pos);
+                let len = entry_chunk.min(total - pos);
                 v.push((pos, len));
                 pos += len;
             }

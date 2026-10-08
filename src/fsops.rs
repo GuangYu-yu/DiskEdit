@@ -282,11 +282,18 @@ pub(crate) fn parse_mountinfo(line: &str) -> Option<MountEntry> {
     })
 }
 
-/// 读取 /proc/self/mountinfo；无法解析的行跳过
+/// 读取 /proc/self/mountinfo；解析失败的行告警后跳过（pseudo-fs 行无设备号等属常态，
+/// 静默吞掉会掩盖真实解析缺陷——设备占用判定宁可多问一句也不漏报挂载）
 #[cfg(target_os = "linux")]
 pub(crate) fn read_mounts() -> io::Result<Vec<MountEntry>> {
     let s = std::fs::read_to_string("/proc/self/mountinfo")?;
-    Ok(s.lines().filter_map(parse_mountinfo).collect())
+    Ok(s.lines().filter_map(|l| {
+        let e = parse_mountinfo(l);
+        if e.is_none() {
+            eprintln!("warning: unparseable mountinfo line skipped: {l}");
+        }
+        e
+    }).collect())
 }
 
 /// 设备占用探测结果（/proc/self/mountinfo + /proc/swaps，路径与 st_rdev 并集匹配）。
@@ -855,7 +862,11 @@ pub fn mkfs(src: &FileSource, part: u32, fstype: MkfsFs) -> Result<(), FsError> 
     let (_, part_len) = partition_byte_range(src, part)?;
     let ss = src.sector_size;
     with_partition_device(src, part, |dev| {
-        wipe_zero(dev, &erase_ranges(part_len, ss))?;
+        // wipe_zero 一旦开始就存在部分清零：之后的任何失败都不再是"确定未写盘"，
+        // 统一压成 CommandFailed（→ Failed），报告带"盘上状态可能已改变"的警示
+        wipe_zero(dev, &erase_ranges(part_len, ss)).map_err(|e| {
+            FsError::CommandFailed(format!("mkfs: signature wipe started but failed, the target may be partially erased: {e}"))
+        })?;
         let mut args: Vec<&str> = Vec::new();
         if tool.force {
             args.push("-f");
@@ -865,7 +876,10 @@ pub fn mkfs(src: &FileSource, part: u32, fstype: MkfsFs) -> Result<(), FsError> 
             args.push(t.as_str());
         }
         args.push(dev);
-        let out = run(&tool.program, &args)?;
+        // 工具已拿到设备：启动失败与非零退出同样无法断言写没写、写了多少
+        let out = run(&tool.program, &args).map_err(|e| {
+            FsError::CommandFailed(format!("mkfs: {} was about to run but failed to execute, the target may already be partially erased: {e}", tool.program))
+        })?;
         if !out.status.success() {
             return Err(FsError::command(&tool.program, &out));
         }

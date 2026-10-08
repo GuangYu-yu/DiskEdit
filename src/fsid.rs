@@ -173,7 +173,8 @@ pub fn identify(src: &FileSource, base: u64, len_bytes: u64) -> io::Result<Optio
         return Ok(Some(FsKind::Apfs));
     }
     // LVM2 PV：标签头 "LABELONE" 位于前 4 个 512B 扇区之一（pvcreate 默认第 2 扇区），
-    // 标签头内偏移 24 处为类型串 "LVM2 001"（LVM2 lib/format_text/layout.h label_header）
+    // 标签头内偏移 24 处为类型串 "LVM2 001"（LVM2 lib/label/label.h 的 label_header：
+    // packed 的 id[8]+sector_xl[8]+crc_xl[4]+offset_xl[4]+type[8]）
     for off in [0u64, 512, 1024, 1536] {
         if let Some(b) = rd(off, 32)?
             && &b[0..8] == b"LABELONE"

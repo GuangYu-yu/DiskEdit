@@ -1378,6 +1378,10 @@ fn cli_negative_paths() {
     let (c, _, e) = run(&["info", img_s, "--sector-size", "300"]);
     assert_eq!(c, 10, "non-power-of-two sector size must be a usage refusal, not Infra: {e}");
     assert!(e.contains("power of two"), "{e}");
+    // 位置参数超限（CommandSpec.max_pos）：多余参数是用法错误，静默忽略等于吞掉用户的笔误
+    let (c, _, e) = run(&["info", img_s, "extra"]);
+    assert_eq!(c, 10, "excess positional argument must be a usage refusal: {e}");
+    assert!(e.contains("unexpected extra argument") && e.contains("help"), "refusal must name the excess argument and point at help: {e}");
 
     // fixed VHD（footer 只在 EOF）→ 提示容器格式与 qemu-nbd 出路，但不解析其内容
     let vhd = dir.join("fixed.vhd");
@@ -1969,6 +1973,116 @@ mod crash_recovery {
         assert!(!journal.exists(), "{e}");
         let (c, e) = run(&["add", img_s, "--start", "28672", "--end", "30719"]);
         assert_eq!(c, 0, "the target must be usable again: {e}");
+    }
+
+    /// 64MiB 镜像 + 一条 4MiB 分区（2048..10239），分区数据区填确定性伪随机图案。
+    /// 返回（镜像、图案）——图案用于搬移后逐字节对账
+    fn stage_self_overlap(tag: &str) -> (std::path::PathBuf, Vec<u8>) {
+        let dir = std::env::temp_dir().join(format!("diskedit_{tag}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let img = dir.join("c.img");
+        std::fs::write(&img, vec![0u8; 64 * 1024 * 1024]).unwrap();
+        let img_s = img.to_str().unwrap();
+        assert_eq!(run(&["new", img_s, "--yes"]).0, 0);
+        assert_eq!(run(&["add", img_s, "--start", "2048", "--end", "10239"]).0, 0);
+        let (start, len) = (2048u64 * 512, 8192u64 * 512);
+        let mut pattern = vec![0u8; len as usize];
+        let mut x = 0x1234u32;
+        for b in pattern.iter_mut() {
+            x = x.wrapping_mul(1664525).wrapping_add(1013904223);
+            *b = (x >> 24) as u8;
+        }
+        let mut f = std::fs::OpenOptions::new().write(true).open(&img).unwrap();
+        std::io::Seek::seek(&mut f, std::io::SeekFrom::Start(start)).unwrap();
+        std::io::Write::write_all(&mut f, &pattern).unwrap();
+        (img, pattern)
+    }
+
+    /// 自重叠搬移（位移 < 分区长度）中断 → 续跑 → 与原图案逐字节比对。
+    /// 重做的 chunk 读到的必须是原始源数据：位移小于 chunk 时 chunk 收敛到位移以内，
+    /// 且自重叠条目停用批量提交——两条保证缺一，中断续跑都会把覆写过的源字节当数据搬走
+    ///
+    /// `move` 走单分区路径（rs-chunk 故障点），起点按 MiB 对齐，故位移取对齐后的值
+    #[test]
+    fn self_overlap_delta_below_chunk_crash_resume_is_byte_exact() {
+        let (img, pattern) = stage_self_overlap("sov");
+        let img_s = img.to_str().unwrap();
+        let ckpt = sidecar(img.parent().unwrap(), "c.img", CHECKPOINT_SUFFIX);
+        // 位移 1MiB（--start 4096，已对齐）< chunk 2MiB：chunk 收敛到 1MiB，共 4 块
+        let argv = ["move", &format!("{img_s}:1"), "--start", "4096", "--chunk-size", "2"];
+        let (c, e) = run_fault("rs-chunk:2", &argv);
+        assert_ne!(c, 0, "the injected abort must not look like success: {e}");
+        assert!(ckpt.exists(), "a mid-move crash must leave a resumable checkpoint: {e}");
+
+        let (c, e) = run(&argv);
+        assert_eq!(c, 0, "re-running must resume and finish: {e}");
+        assert!(!ckpt.exists(), "{e}");
+        let raw = std::fs::read(&img).unwrap();
+        assert_eq!(&raw[4096 * 512..(4096 + 8192) * 512], &pattern[..], "relocated bytes must match the original pattern");
+    }
+
+    /// 同上，位移（2MiB）大于 chunk（1MiB）：chunk 不收敛，但自重叠仍逐 chunk 推进
+    /// durable 边界——重做只从最后一个已落盘 chunk 之后开始
+    #[test]
+    fn self_overlap_delta_above_chunk_crash_resume_is_byte_exact() {
+        let (img, pattern) = stage_self_overlap("sov2");
+        let img_s = img.to_str().unwrap();
+        let ckpt = sidecar(img.parent().unwrap(), "c.img", CHECKPOINT_SUFFIX);
+        // 位移 2MiB（--start 6144，已对齐）> chunk 1MiB，共 4 块
+        let argv = ["move", &format!("{img_s}:1"), "--start", "6144", "--chunk-size", "1"];
+        let (c, e) = run_fault("rs-chunk:3", &argv);
+        assert_ne!(c, 0, "the injected abort must not look like success: {e}");
+        assert!(ckpt.exists(), "a mid-move crash must leave a resumable checkpoint: {e}");
+
+        let (c, e) = run(&argv);
+        assert_eq!(c, 0, "re-running must resume and finish: {e}");
+        assert!(!ckpt.exists(), "{e}");
+        let raw = std::fs::read(&img).unwrap();
+        assert_eq!(&raw[6144 * 512..(6144 + 8192) * 512], &pattern[..], "relocated bytes must match the original pattern");
+    }
+
+    /// plan/apply 路径（批量提交）的自重叠回归：挡路分区被搬移的位移（1MiB）小于其
+    /// 长度（24MiB），chunk 1MiB 共 24 块。批量提交下 durable 边界每 16 块推进一次，
+    /// 中断在 chunk 17 时重做 chunk 16——其源区间恰被 chunk 17 的写覆盖（位移 = 1 chunk
+    /// 的自重叠污染窗口）。停用批量后 durable 逐 chunk 推进，重做自 chunk 18 起，必须
+    /// 逐字节完好
+    #[test]
+    fn plan_path_self_overlap_disables_batch_commit() {
+        let dir = std::env::temp_dir().join(format!("diskedit_sovb_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let img = dir.join("c.img");
+        std::fs::write(&img, vec![0u8; 64 * 1024 * 1024]).unwrap();
+        let img_s = img.to_str().unwrap();
+        assert_eq!(run(&["new", img_s, "--yes"]).0, 0);
+        assert_eq!(run(&["add", img_s, "--start", "2048", "--end", "10239"]).0, 0);
+        assert_eq!(run(&["add", img_s, "--start", "10240", "--end", "59391"]).0, 0);
+        // 挡路者 24MiB（10240..59391），填图案作为对账数据
+        let (p2_start, p2_len) = (10240u64 * 512, 49152u64 * 512);
+        let mut pattern = vec![0u8; p2_len as usize];
+        let mut x = 0xBEEFu32;
+        for b in pattern.iter_mut() {
+            x = x.wrapping_mul(1664525).wrapping_add(1013904223);
+            *b = (x >> 24) as u8;
+        }
+        let mut f = std::fs::OpenOptions::new().write(true).open(&img).unwrap();
+        std::io::Seek::seek(&mut f, std::io::SeekFrom::Start(p2_start)).unwrap();
+        std::io::Write::write_all(&mut f, &pattern).unwrap();
+        drop(f);
+
+        // resize #1 +1MiB：#2 被右移 1MiB（< 24MiB ⇒ 自重叠），24 块批量循环
+        let argv = ["resize", &format!("{img_s}:1"), "+1M", "--allow-move", "--yes", "--no-fs"];
+        let (c, e) = run_fault("chunk:17", &argv);
+        assert_ne!(c, 0, "the injected abort must not look like success: {e}");
+        let ckpt = sidecar(&dir, "c.img", CHECKPOINT_SUFFIX);
+        assert!(ckpt.exists(), "a mid-move crash must leave a resumable checkpoint: {e}");
+
+        let (c, e) = run(&argv);
+        assert_eq!(c, 0, "re-running must resume and finish: {e}");
+        assert!(!ckpt.exists(), "{e}");
+        let raw = std::fs::read(&img).unwrap();
+        assert_eq!(&raw[(10240 + 2048) * 512..(10240 + 2048 + 49152) * 512], &pattern[..], "relocated bytes must match the original pattern");
     }
 
     /// 目标分区右侧紧邻挡路者：`resize grow`（尾部打包）与 `resize SIZE`（最小位移）

@@ -125,14 +125,16 @@ pub(crate) fn cmd_undo(a: &Args) -> u8 {
         for rec in entries.iter().rev() {
             let RecoveryData::PreImage { off, bytes } = &rec.recovery else { continue };
             if let Err(e) = src.write_at(*off, bytes) {
-                // journal 保留在原地：可重试 undo
-                bail_fail(Fail::infra(format!("undo write failed at offset {off}: {e} (journal kept, retry)")));
+                // journal 保留在原地：可重试 undo。回放进行到一半才失败——前面的条目
+                // 已经写入，"确定未写盘"的断言不成立，归 Failed（可能已改变）
+                bail_fail(Fail::failed(format!("undo write failed at offset {off}: {e} (journal kept, retry)")));
             }
         }
         // undo 的契约是"盘确定回到写入前状态"：sync 失败意味着回滚可能未落盘，
-        // 不能报成功——那会让用户以为已经回滚
+        // 不能报成功——那会让用户以为已经回滚。回放本身已完成，但持久性无法断言，
+        // 同样只承诺"可能已改变，需验证"
         src.sync_all().unwrap_or_else(|e| {
-            bail_fail(Fail::infra(format!("undo wrote the journal back but sync failed: {e} — rollback may not be durable, verify before retrying")))
+            bail_fail(Fail::failed(format!("undo wrote the journal back but sync failed: {e} — rollback may not be durable, verify before retrying")))
         });
         crate::dev::warn_if_remove_failed(&p);
         // 事务的恢复状态随回滚一并释放：这份 journal 记下的表写入已经全部回退，而 checkpoint

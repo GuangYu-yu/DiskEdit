@@ -206,7 +206,12 @@ impl From<std::io::Error> for Fail {
 /// 发生在任何写盘之前 → Infra（30，改参数无用但不警示"盘可能已改变"）；外部工具
 /// 非零退出意味着工具已经运行——它写没写、写了多少无法断言 → Failed（30，报告带
 /// 警示行）。写盘之后（`execute_*` 里）拿不到这个映射：那里 `FsError` 已被
-/// 压平成 io::Error，结论只能是 Failed
+/// 压平成 io::Error，结论只能是 Failed。
+///
+/// **本映射只适用于尚未写盘的调用点**：`Io` 变体在此归 Infra（断言"确定未写盘"），
+/// 一旦本次调用已开始写目标盘（清零、格式化中……），调用点必须先把错误改判为
+/// `CommandFailed`（→ Failed），不得让 `Io` 走进这个 `From`——那会把"可能已写"
+/// 洗成"确定没写"
 impl From<crate::fsops::FsError> for Fail {
     fn from(e: crate::fsops::FsError) -> Self {
         use crate::fsops::FsError;
