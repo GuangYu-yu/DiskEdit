@@ -743,6 +743,8 @@ fault_points! {
     fault_rs_before_commit() = "rs-before-commit";
     /// 表项提交后、FS 扩容前 abort
     fault_rs_after_commit() = "rs-after-commit";
+    /// 表项 commit 后、NTFS HiddenSectors 修正前 abort（重放须重入该分区并补修正）
+    fault_before_hidden_fix() = "before-hidden-fix";
     /// copy 的数据复制全部完成、表项提交前 abort（与 `rs-before-commit` 同形：
     /// 不可逆的一步已经迈出，而那份"发生过什么"还没写进表）
     fault_copy_before_commit() = "copy-before-commit";
@@ -1167,6 +1169,7 @@ fn execute_apply(
             e.ending_lba = new_end;
         }
         g.commit(src)?;
+        fault_before_hidden_fix();
         // 起始位置变化的 NTFS 分区需修 HiddenSectors（数据是字节拷贝，boot sector 带着旧值）
         if crate::fsid::identify(src, new_first * plan.ss, m.len_lba * plan.ss)? == Some(FsKind::Ntfs) {
             fix_ntfs_hidden_sectors(src, new_first, plan.ss, log)?;
@@ -1874,8 +1877,10 @@ fn execute_resize(
         fault_rs_after_commit();
     }
 
-    // 起始 LBA 变了才需要修 NTFS HiddenSectors（扩缩不动 start 时跳过）
-    if moved != 0 && fstype == Some(FsKind::Ntfs) {
+    // 起始 LBA 变了才需要修 NTFS HiddenSectors（扩缩不动 start 时跳过；
+    // 已提交态续跑时盘上几何已是新值，搬移与否改由 ckpt 记录的搬移前起点判定）
+    let start_moved = committed_old.map_or(moved != 0, |(os, _)| os != new_start);
+    if start_moved && fstype == Some(FsKind::Ntfs) {
         fix_ntfs_hidden_sectors(src, new_start, ss, log)?;
     }
 
@@ -1899,8 +1904,9 @@ fn ntfs_hidden_value(start_lba: u64) -> (u32, bool) {
 
 /// NTFS boot sector BPB HiddenSectors（偏移 0x1C，u32 LE，值 = 分区起始 LBA；
 /// NTFS 引导扇区布局，ntfs-3g bootsect.c 与微软 NTFS 规范同此定义）。
-/// 字段只有 32 位：start ≥ 2^32 时写 0 并警告（Windows 将无法从该分区引导，
-/// 数据不受影响）。仅在分区起始 LBA 变化后调用。
+/// 单位是设备逻辑扇区（4Kn 原生盘上即 4Kn LBA，不折算 512）：bytes_per_sector 记录
+/// 各自的扇区大小，hidden_sectors 语义随它计。字段只有 32 位：start ≥ 2^32 时写 0 并
+/// 警告（Windows 将无法从该分区引导，数据不受影响）。仅在分区起始 LBA 变化后调用。
 fn fix_ntfs_hidden_sectors(src: &mut FileSource, new_first_lba: u64, ss: u64, log: &mut dyn FnMut(&str)) -> io::Result<()> {
     let (val, warn) = ntfs_hidden_value(new_first_lba);
     src.write_at(new_first_lba * ss + 0x1C, &val.to_le_bytes())?;
