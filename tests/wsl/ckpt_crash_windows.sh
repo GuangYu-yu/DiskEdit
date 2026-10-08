@@ -44,24 +44,25 @@ track_file "$T"
 
 echo "===== A: 跨条目间隙 + 连续多次中断 ====="
 mk_layout "$T"; fill_p23 "$T"
-# 轮1：entry 0（p3）commit 后死。
+# grow 取 +500M：p2/p3 各长 400M，位移 500M ≥ len → 非自重叠，攒批契约（durable 滞后）
+# 才成立。轮1：entry 0（p3）commit 后死。
 # 各段的 p1 都是 grow 目标且没有 FS：扩分区表要显式 --no-fs——本脚本开关的是中断窗口
 # 与续跑，FS 步骤不在覆盖范围内
-DISKEDIT_FAULT=after-entry-commit:0 $BF resize "$T":1 +200M --allow-move --yes --no-fs >/dev/null 2>&1
+DISKEDIT_FAULT=after-entry-commit:0 $BF resize "$T":1 +500M --allow-move --yes --no-fs >/dev/null 2>&1
 echo "round1 aborted (expected)"
 # 轮2：entry 1（p2，100 chunks）拷到第 70 chunk 死 → durable=64
-OUT=$(DISKEDIT_FAULT=chunk:70 $BF resize "$T":1 +200M --allow-move --yes --no-fs 2>&1)
+OUT=$(DISKEDIT_FAULT=chunk:70 $BF resize "$T":1 +500M --allow-move --yes --no-fs 2>&1)
 echo "$OUT" | grep -o "resuming at entry [0-9]* chunk [0-9]*" | head -1
 echo "round2 aborted (expected)"
 # 轮3：无注入完成 → resume at entry 1 chunk 64
-OUT=$($BF resize "$T":1 +200M --allow-move --yes --no-fs 2>&1)
+OUT=$($BF resize "$T":1 +500M --allow-move --yes --no-fs 2>&1)
 R=$(echo "$OUT" | grep -o "resuming at entry [0-9]* chunk [0-9]*" | head -1)
 echo "round3: $R (want entry 1 chunk 64)"
 [ "$R" = "resuming at entry 1 chunk 64" ] && echo "RESUME-CHAIN OK" || { echo "RESUME-CHAIN WRONG"; rc=1; }
 check_data "$T" || rc=1
-# p1 终态 = 500M + 200M = 700M
+# p1 终态 = 500M + 500M = 1000M
 P1=$($B info "$T" | grep -o '"num":1,[^}]*}' | grep -o '"size_bytes":[0-9]*' | cut -d: -f2)
-echo "p1 size_bytes: $P1 (期望 700M = 734003200)"
+echo "p1 size_bytes: $P1 (期望 1000M = 1048576000)"
 echo
 
 echo "===== B: before-grow → 间隙已够，重跑经普通路径收敛 ====="
@@ -120,8 +121,9 @@ DISKEDIT_FAULT=chunk:33 $BF resize "$T":1 +100M --allow-move --yes --no-fs >/dev
 echo "aborted (expected)"
 OUT=$($BF resize "$T":1 +100M --allow-move --yes --no-fs 2>&1)
 R=$(echo "$OUT" | grep -o "resuming at entry [0-9]* chunk [0-9]*" | head -1)
-echo "resume: $R (want entry 0 chunk 32)"
-[ "$R" = "resuming at entry 0 chunk 32" ] && echo "SELF-OVERLAP RESUME OK" || { echo "SELF-OVERLAP RESUME WRONG"; rc=1; }
+# 自重叠搬移逐 chunk 落 durable ckpt：注入点 33 即 durable 点，续跑从 33 起
+echo "resume: $R (want entry 0 chunk 33)"
+[ "$R" = "resuming at entry 0 chunk 33" ] && echo "SELF-OVERLAP RESUME OK" || { echo "SELF-OVERLAP RESUME WRONG"; rc=1; }
 LD=$(lo_attach "$T")
 MD2G=$(md5sum "${LD}p2" | cut -d' ' -f1)
 [ "$MD2" = "$MD2G" ] && echo "p2 DATA OK" || { echo "p2 DATA CORRUPT"; rc=1; }
