@@ -464,9 +464,10 @@ fn scope_byte_range(src: &FileSource, scope: &DeviceScope) -> Result<(u64, u64),
 }
 
 /// 按范围执行 FS 操作的统一入口，with_partition_device 的公共底层
-fn with_scope_device<F>(src: &FileSource, scope: &DeviceScope, f: F) -> Result<(), FsError>
+fn with_scope_device<T, E, F>(src: &FileSource, scope: &DeviceScope, f: F) -> Result<T, E>
 where
-    F: FnOnce(&str) -> Result<(), FsError>,
+    F: FnOnce(&str) -> Result<T, E>,
+    E: From<FsError>,
 {
     require_linux()?;
     require_root()?;
@@ -480,16 +481,18 @@ where
             DeviceScope::Whole => src.path.to_string_lossy().into_owned(),
             DeviceScope::Range(..) => {
                 let loopdev = attach_loop(src, off, len)?;
-                let res = require_unmounted(&loopdev).and_then(|()| f(&loopdev));
+                // require 失败也要先 detach 再返回错误，? 短路会漏掉 detach
+                let res = require_unmounted(&loopdev).map_err(Into::into).and_then(|()| f(&loopdev));
                 detach_loop(&loopdev);
                 return res;
             }
         };
-        return require_unmounted(&dev).and_then(|()| f(&dev));
+        return require_unmounted(&dev).map_err(Into::into).and_then(|()| f(&dev));
     }
     let (off, len) = scope_byte_range(src, scope)?;
     let loopdev = attach_loop(src, off, len)?;
-    let res = require_unmounted(&loopdev).and_then(|()| f(&loopdev));
+    // require 失败也要先 detach 再返回错误，? 短路会漏掉 detach
+    let res = require_unmounted(&loopdev).map_err(Into::into).and_then(|()| f(&loopdev));
     detach_loop(&loopdev);
     res
 }
@@ -497,9 +500,10 @@ where
 /// 在分区上执行操作的统一入口。
 /// - 镜像文件：`losetup -o <off> --sizelimit <len> [-S ss] -f --show <img>`
 /// - 块设备：直接定位分区设备节点（/sys/block/<disk>/<part>/start 匹配），不经 loop
-pub fn with_partition_device<F>(src: &FileSource, part: u32, f: F) -> Result<(), FsError>
+pub fn with_partition_device<T, E, F>(src: &FileSource, part: u32, f: F) -> Result<T, E>
 where
-    F: FnOnce(&str) -> Result<(), FsError>,
+    F: FnOnce(&str) -> Result<T, E>,
+    E: From<FsError>,
 {
     with_scope_device(src, &DeviceScope::Partition(part), f)
 }
@@ -559,7 +563,7 @@ pub fn fs_min_bytes(src: &FileSource, part: u32, fstype: Option<FsKind>) -> Resu
     let mut result: Option<io::Result<u64>> = None;
     with_partition_device(src, part, |dev| {
         result = Some(min_bytes_ext(dev));
-        Ok(())
+        Ok::<(), FsError>(())
     })?;
     match result {
         Some(r) => r.map(Some).map_err(FsError::from),
