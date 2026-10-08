@@ -23,8 +23,16 @@ pub(crate) const HELP: &str = r#"diskedit resize <TARGET>:N <SIZE> [OPTIONS]
 
   Options:
     --allow-move    allow moving other partitions (plan requires --yes)
+    --size BYTES    absolute target size (same units as SIZE)
+    --grow-to-end   grow into the contiguous free space to the right
+    --chunk-size N  relocation copy granularity in MiB (default 4)
+    --sector-size N logical sector size override for raw images
+                    (power of two, 512..=65536)
     --grow-lv       also grow the associated LV (--lv NAME, or the only LV)
     --yes           skip confirmation
+
+  --start/--end are rejected here: resizing does not relocate partitions —
+  use `move` or `resize-part --start/--end`.
 
   Automatically:
     detects partition / filesystem / LVM PV, chooses online or offline,
@@ -113,23 +121,13 @@ fn check_pv_intent(
     Ok(())
 }
 
-/// checked 换算：表项 LBA 来自盘上内容，回绕的字节值会骗过下游的容量判据——溢出按表损坏报
-fn lba_bytes(n_lba: u64, ss: u64) -> u64 {
-    n_lba.checked_mul(ss)
-        .unwrap_or_else(|| bail_fail(Fail::infra("LBA × sector-size overflows byte range (corrupted table)")))
-}
-
-/// LBA 区间 [start, end]（含两端）的字节数，同上 checked
-fn lba_range_bytes(start: u64, end: u64, ss: u64) -> u64 {
-    let n = end.checked_sub(start).and_then(|d| d.checked_add(1))
-        .unwrap_or_else(|| bail_fail(Fail::infra("partition end below start (corrupted table)")));
-    lba_bytes(n, ss)
-}
-
-/// 在线路径前置守卫：活动 swap 拒绝（run swapoff 后重试）
+/// 在线路径前置守卫：活动 swap 拒绝（run swapoff 后重试）。/proc/swaps 读不出来
+/// 不是"没有 swap"——折叠成 false 就是给锁下复核开 fail-open 的口子
 #[cfg(target_os = "linux")]
 fn refuse_swap_active(dn: &str, part: u32) {
-    if crate::online::swap_active(dn, part) {
+    let active = crate::online::swap_active(dn, part)
+        .unwrap_or_else(|e| bail_fail(Fail::infra(format!("cannot read /proc/swaps: {e}"))));
+    if active {
         bail_fail(Fail::refused(format!("partition {part} is active swap — run swapoff first")));
     }
 }
@@ -313,6 +311,8 @@ fn lvm_grow_chain(part_dev: &str, delta_bytes: u64, grow_lv: bool, want_lv: Opti
 /// resize 的一键入口。SIZE：`10G`=绝对值、`+2G`/`-500M`=增量、`grow`=吃满右侧可用区
 /// （挡路分区须 --allow-move，搬移计划须 --yes 确认）。LVM PV 扩容自动 pvresize，
 /// --grow-lv 再把新增传给目标 LV 并扩 FS；PV 缩容一律拒绝（走 lvreduce/pvresize 链）
+const CONFIRM_RELOCATION: &str = "this resizes by relocating the partitions listed above — review and re-run with --yes";
+
 pub(crate) fn cmd_resize(a: &Args) -> u8 {
     // 请求的形状在入口定型一次，随锁前/锁下两次解析共用：位置参数 SIZE / --size / --grow-to-end
     let req = SizeRequest { pos: a.pos.get(1).cloned(), abs: a.size, grow_to_end: a.grow_to_end };
@@ -446,13 +446,13 @@ pub(crate) fn cmd_resize(a: &Args) -> u8 {
         // --yes 一并覆盖"未确认的续跑"与"新的搬移"两种进入方式
         crate::cmd::plan::print_plan(&plan, start).unwrap_or_else(|e| bail_fail(Fail::refused(format!("plan failed: {e}"))));
         if !a.yes {
-            bail_fail(Fail::refused("this resizes by relocating the partitions listed above — review and re-run with --yes"));
+            bail_fail(Fail::refused(CONFIRM_RELOCATION));
         }
         let (chunk, mut logger) = chunk_logger(a, &src, g.header.disk_guid);
         let o = settle_layout(movepart::apply(&mut src, &g, &plan, chunk, a.no_fs, &mut |m| logger.log(m)), &src);
         finish_resize(a, o, Some(&mut src), part, is_pv, is_block, cur_bytes)
     } else {
-        // SIZE：字节 → 扇区（下取整）；扩须右侧空闲足够，缩由 resize_part 内部 FS 先缩 + 守卫
+        // SIZE：字节 → 扇区（下取整）；扩须右侧空闲足够，缩由 resize_part 内部 FS 先缩 + 守卫链
         let Some(bytes) = target else { crate::args::usage() };
         if bytes < ss {
             bail_fail(Fail::refused(format!("size {bytes} < one sector ({ss})")));
@@ -488,7 +488,7 @@ pub(crate) fn cmd_resize(a: &Args) -> u8 {
             }
             crate::cmd::plan::print_plan(&plan, start).unwrap_or_else(|e| bail_fail(Fail::refused(format!("plan failed: {e}"))));
             if !a.yes {
-                bail_fail(Fail::refused("this resizes by relocating the partitions listed above — review and re-run with --yes"));
+                bail_fail(Fail::refused(CONFIRM_RELOCATION));
             }
             let (chunk, mut logger) = chunk_logger(a, &src, g.header.disk_guid);
             let o = settle_layout(movepart::apply(&mut src, &g, &plan, chunk, a.no_fs, &mut |m| logger.log(m)), &src);
