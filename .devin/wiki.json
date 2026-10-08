@@ -92,12 +92,12 @@
     },
     {
       "title": "检查点与前向恢复",
-      "purpose": "Document 原子检查点写（tmp→sync→rename→fsync parent）、64 MiB/16 块批处理阈值（以先到者为准，最后一块始终检查点）、PlanKind 区分策略类型防止语义冲突续跑、cur_index/chunks_done 反序列化校验、扇区大小不匹配拒绝、test-faults 故障注入点。",
+      "purpose": "Document 原子检查点写（tmp→sync→rename→fsync parent）、批处理阈值（以先到者为准，最后一块始终检查点）及其在不同搬移形态下的粒度调整、PlanKind 区分策略类型防止语义冲突续跑、cur_index/chunks_done 反序列化校验、扇区大小不匹配拒绝、test-faults 故障注入点。",
       "parent": "事务、安全与恢复"
     },
     {
       "title": "分区数据搬移与调整",
-      "purpose": "分区搬移/复制/缩扩执行总览父页：尾部到头部的块顺序防自重叠、纯 Rust read_at+write_data_at+sync_data（默认 1MiB 块，--chunk-size 可调，范围校验在解析期）、swap 分区重定位不搬数据（mkswap 重建保留 UUID/label）。链接三个子页。"
+      "purpose": "分区搬移/复制/缩扩执行总览父页：块顺序与检查点粒度共同保证自重叠搬移的安全、纯 Rust read_at+write_data_at+sync_data（默认 1MiB 块，--chunk-size 可调，范围校验在解析期）、swap 分区重定位不搬数据（mkswap 重建保留 UUID/label）。链接三个子页。"
     },
     {
       "title": "规划：尾装箱与最小位移",
