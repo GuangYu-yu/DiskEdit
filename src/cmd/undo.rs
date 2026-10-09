@@ -67,6 +67,10 @@ fn pick_journal(candidates: &[std::path::PathBuf]) -> Result<(std::path::PathBuf
 /// 表读不出来时要照常工作（该候选缺席即可），故一切失败都降级为 None——判据与
 /// `abandon` 完全同源，共用 `legacy_disk_guid`（含降级告警），两处不各写一遍
 pub(crate) fn cmd_undo(a: &Args) -> u8 {
+    // undo 回放的是整盘 journal：`:N` 指定了也会被静默忽略（与 info 同判据）
+    if let Some(n) = a.part {
+        bail_fail(Fail::refused(format!("`undo` replays the whole target's journal — drop :{n}")));
+    }
     if !a.yes {
         bail_fail(Fail::refused("`undo` overwrites current bytes from journal; pass --yes to confirm"));
     } else {
@@ -123,11 +127,32 @@ pub(crate) fn cmd_undo(a: &Args) -> u8 {
             )));
         }
         for rec in entries.iter().rev() {
-            let RecoveryData::PreImage { off, bytes } = &rec.recovery else { continue };
+            let RecoveryData::PreImage { off, bytes, after } = &rec.recovery else { continue };
+            // 分叉核对：盘上当前字节须与这条记录的写后内容一致（正常现场），或与原文
+            // 一致（上一次 undo 中断留下的已回滚态——重放同一原文幂等无害）。
+            // 其余值说明该写入之后有外部改动动过同一段字节（journal 不挡第三方），
+            // 回放会把它覆盖掉
+            let mut now = vec![0u8; bytes.len()];
+            match src.read_at(*off, &mut now) {
+                Ok(()) if now == *after || now == *bytes => {}
+                Ok(_) => bail_fail(Fail::refused(format!(
+                    "target no longer matches the journaled write at offset {off} — the disk changed outside this tool after that write; \
+                     replaying would overwrite the foreign edit (release the transaction with `diskedit abandon` if the rollback is no longer wanted)"
+                ))),
+                Err(e) => bail_fail(Fail::refused(format!(
+                    "cannot verify the journaled write at offset {off} against the target: {e} — refusing to replay over an unverifiable region"
+                ))),
+            }
             if let Err(e) = src.write_at(*off, bytes) {
                 // journal 保留在原地：可重试 undo。回放进行到一半才失败——前面的条目
                 // 已经写入，"确定未写盘"的断言不成立，归 Failed（可能已改变）
                 bail_fail(Fail::failed(format!("undo write failed at offset {off}: {e} (journal kept, retry)")));
+            }
+            // 逐条落盘再进下一条：掉电重试时，已回滚条目在盘上稳定停在原文（通过核对），
+            // 进度精确到条；整场回放攒到最后一次 sync 的话，一次掉电可撕裂任意多条，
+            // 撕裂字节与外部改动无法区分，重试只能被拒
+            if let Err(e) = src.sync_data() {
+                bail_fail(Fail::failed(format!("undo sync failed at offset {off}: {e} (journal kept, retry)")));
             }
         }
         // undo 的契约是"盘确定回到写入前状态"：sync 失败意味着回滚可能未落盘，
@@ -162,6 +187,50 @@ mod tests {
         p
     }
 
+    /// 上次 undo 中断的现场（部分条目已回滚、其余未动）必须能续跑：核对接受两种
+    /// 历史——写后内容（未动）与原文（自己上次的回滚进度）。只认写后内容会把
+    /// "journal kept, retry" 的承诺落空：中断的回滚永远续不上，只能 abandon 成
+    /// 半回滚混合态。注意 cmd_undo 的失败出口是 process::exit，本测试只覆盖成功路径
+    #[test]
+    fn interrupted_undo_replay_resumes_over_its_own_rollback() {
+        let img = tmp_path("resume_img");
+        let mut jpath = img.clone().into_os_string();
+        jpath.push(".diskedit.journal");
+        let journal = std::path::PathBuf::from(jpath);
+        let _ = std::fs::remove_file(&journal);
+        {
+            let mut j = Journal::open(&journal).unwrap();
+            j.record(0, &[0xAA; 4], &[0xBB; 4]).unwrap();
+            j.record(100, &[0xCC; 4], &[0xDD; 4]).unwrap();
+        }
+        // 逆序回放中断后的盘面：offset 100 已回滚（进度条），offset 0 未动
+        let mut disk = vec![0u8; 1024];
+        disk[0..4].copy_from_slice(&[0xBB; 4]);
+        disk[100..104].copy_from_slice(&[0xCC; 4]);
+        std::fs::write(&img, &disk).unwrap();
+
+        let a = crate::args::Args {
+            target: img.to_string_lossy().into_owned(),
+            part: None, grow: None, start: None, end: None, size: None,
+            fs: None, name: None, type_guid: None, table: None,
+            yes: true, online: false, random: false, sector_size: None,
+            align: String::new(), chunk_mib: 0, grow_to_end: false,
+            allow_move: false, no_fs: false, grow_lv: false, start_end: false, lv: None,
+            pos: Vec::new(), seen: Vec::new(),
+        };
+        let code = super::cmd_undo(&a);
+        assert_eq!(code, 0, "undo must resume over its own interrupted progress");
+        let now = std::fs::read(&img).unwrap();
+        assert_eq!(&now[0..4], &[0xAA; 4], "the untouched entry must be rolled back");
+        assert_eq!(&now[100..104], &[0xCC; 4], "the rolled-back entry stays at the original bytes");
+        assert!(!journal.exists(), "a completed undo must drop the journal");
+
+        let mut lpath = img.clone().into_os_string();
+        lpath.push(".diskedit.lock");
+        let _ = std::fs::remove_file(&img);
+        let _ = std::fs::remove_file(std::path::PathBuf::from(lpath));
+    }
+
     /// 候选缺席不是故障：它不得盖住另一份候选的真实损伤原因。
     /// 两份候选里"第一份不存在、第二份是陌生文件"是最常见的现场（历史命名那份通常不存在），
     /// 报出 No such file or directory 等于让用户去查一个根本不是原因的路径
@@ -184,7 +253,7 @@ mod tests {
         let ok = tmp_path("ok");
         {
             let mut j = Journal::open(&ok).unwrap();
-            j.record(0, &[0xAA; 4]).unwrap();
+            j.record(0, &[0xAA; 4], &[0xBB; 4]).unwrap();
         }
         let (p, _) = pick_journal(&[missing, ok.clone()]).unwrap();
         assert_eq!(p, ok);
@@ -201,7 +270,7 @@ mod tests {
         let b = tmp_path("amb_b");
         for p in [&a, &b] {
             let mut j = Journal::open(p).unwrap();
-            j.record(0, &[0xAA; 4]).unwrap();
+            j.record(0, &[0xAA; 4], &[0xBB; 4]).unwrap();
         }
         let e = pick_journal(&[a.clone(), b.clone()]).err().unwrap();
         assert!(matches!(e, PickJournalError::Ambiguous { .. }), "{e}");

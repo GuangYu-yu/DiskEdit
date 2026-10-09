@@ -392,6 +392,7 @@ mod tests {
             state: table::GptState::Valid,
             pmbr: table::PmbrSize::Normal,
             header: table::RawHeader {
+                revision: 0x0001_0000,
                 primary_lba: 1,
                 backup_lba: last_usable + 1,
                 first_usable_lba: 34,

@@ -344,7 +344,7 @@ mod tests {
                 recovery: if barrier {
                     RecoveryData::Barrier
                 } else {
-                    RecoveryData::PreImage { off: 0, bytes: vec![0u8; 4] }
+                    RecoveryData::PreImage { off: 0, bytes: vec![0u8; 4], after: vec![0u8; 4] }
                 },
             }]),
         }

@@ -18,10 +18,14 @@ use std::fs::File;
 use std::io;
 use std::os::fd::AsRawFd;
 
-/// 设备容量（字节）。BLKGETSIZE64 = _IOR(0x12, 114, u64)（内核 include/uapi/linux/fs.h，
-/// 内容 u64）。libc 未导出该常量（0.2.139/0.2.186/0.2.189 实测），取 UAPI 定义自持
+/// 设备容量（字节）。BLKGETSIZE64 = _IOR(0x12, 114, size_t)（内核 include/uapi/linux/fs.h，
+/// 内容 u64）。libc 未导出该常量（0.2.139/0.2.186/0.2.189 实测），取 UAPI 定义自持；
+/// 编号含 size_t 宽度位，随指针宽度切换（64 位 0x8008_1272 / 32 位 0x8004_1272）
 pub(crate) fn blkgetsize64(f: &File) -> io::Result<u64> {
+    #[cfg(target_pointer_width = "64")]
     const BLKGETSIZE64: u64 = 0x8008_1272;
+    #[cfg(target_pointer_width = "32")]
+    const BLKGETSIZE64: u64 = 0x8004_1272;
     let mut v: u64 = 0;
     // SAFETY: f 有效打开的 fd；内核仅写入 &mut v（输出方向 _IOR），调用期间指针有效
     let r = unsafe { libc::ioctl(f.as_raw_fd() as libc::c_int, BLKGETSIZE64 as libc::Ioctl, &mut v as *mut u64) };
