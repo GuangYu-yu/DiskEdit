@@ -666,6 +666,7 @@ mod tests {
             state,
             pmbr,
             header: RawHeader {
+                revision: 0x0001_0000,
                 primary_lba: 1,
                 backup_lba: 999, // 旧末端：事实以 state 表达，字段值不参与判定
                 first_usable_lba: 34,

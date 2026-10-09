@@ -869,7 +869,12 @@ fn prepare_apply(
     // 随后要接 FS 步——挂载中或活动 swap 的分区必须在任何写盘前拒绝。镜像无块设备
     // 占用语义，闸内自会放行
     for m in &plan.moves {
-        crate::fsops::ensure_idle_before_write(src, m.part_num, m.first_lba.checked_mul(plan.ss)
+        // 续跑时按盘上**当前**起点探测：已搬完的条目内核视图停在新位置，
+        // 探旧起点找不到节点，且新位置上的占用也看不见；新跑两者重合，行为不变
+        let probe_lba = g0.entry_index(m.part_num).and_then(|i| g0.entries.get(i))
+            .map(|e| e.starting_lba)
+            .unwrap_or(m.first_lba);
+        crate::fsops::ensure_idle_before_write(src, m.part_num, probe_lba.checked_mul(plan.ss)
             .ok_or_else(|| Fail::infra("move source start overflows byte offset"))?)?;
     }
     // 几何由调用方解析并下传（构造点即拒绝条目重叠）；几何里的上界是"修复生效后"的值，
@@ -1106,9 +1111,10 @@ fn execute_apply(
             fault_after_swap_entry(mi);
             continue;
         }
-        let src_off = m.first_lba * plan.ss;
-        let dst_off = new_first * plan.ss;
-        let total = m.len_lba * plan.ss;
+        let overflow = || io::Error::new(io::ErrorKind::InvalidData, "relocation byte offset overflows — refusing");
+        let src_off = m.first_lba.checked_mul(plan.ss).ok_or_else(overflow)?;
+        let dst_off = new_first.checked_mul(plan.ss).ok_or_else(overflow)?;
+        let total = m.len_lba.checked_mul(plan.ss).ok_or_else(overflow)?;
         // 自重叠搬移（位移小于分区长度）下，重做 chunk 的源区间会被先落盘的更靠尾
         // chunk 的写覆盖，除非每个 chunk 不大于位移（写区间起点 ≥ 任何重做源区间终点）。
         // 因此 chunk 收敛到位移字节以内，且停用批量提交——批量攒下的未持久化 chunk
@@ -1171,7 +1177,7 @@ fn execute_apply(
         g.commit(src)?;
         fault_before_hidden_fix();
         // 起始位置变化的 NTFS 分区需修 HiddenSectors（数据是字节拷贝，boot sector 带着旧值）
-        if crate::fsid::identify(src, new_first * plan.ss, m.len_lba * plan.ss)? == Some(FsKind::Ntfs) {
+        if crate::fsid::identify(src, dst_off, total)? == Some(FsKind::Ntfs) {
             fix_ntfs_hidden_sectors(src, new_first, plan.ss, log)?;
         }
         log(&format!("partition {} relocated (delta {} sectors)", m.part_num, m.delta_lba));
@@ -1705,12 +1711,15 @@ fn prepare_resize(
         }
     };
 
-    // 阶段 0/3 的 FS 大小判据：已提交态下用 ckpt 记录的搬移前形状，否则本次请求的旧形状
+    // 阶段 0/3 的 FS 大小判据：FS 尺寸在已提交态下取 ckpt 记录的搬移前形状（旧区间），
+    // 否则取本次请求的旧形状；FS 位置始终以盘上条目起点为准
     let (fb_start, fb_end) = committed_old.unwrap_or((old_start, old_end));
-    let old_bytes = (fb_end - fb_start + 1) * ss;
-    let new_bytes = (new_end - new_start + 1) * ss;
+    let byte_overflow = || Fail::infra("resize LBA arithmetic overflows byte offset");
+    let old_bytes = (fb_end - fb_start + 1).checked_mul(ss).ok_or_else(byte_overflow)?;
+    let new_bytes = (new_end - new_start + 1).checked_mul(ss).ok_or_else(byte_overflow)?;
     // 表项 LBA 的单位是表自身的 ss。identify 只读目标内容，仍属事前判定
-    let fstype = crate::fsid::identify(src, old_start * ss, (old_end - old_start + 1) * ss).map_err(Fail::infra_io)?;
+    let fstype = crate::fsid::identify(src, old_start.checked_mul(ss).ok_or_else(byte_overflow)?,
+        (old_end - old_start + 1).checked_mul(ss).ok_or_else(byte_overflow)?).map_err(Fail::infra_io)?;
 
     // preflight：本操作的后置条件含 FS 调整，工具缺失必须在阶段 0
     // （缩容时 FS shrink 即首次写盘）之前拒绝，否则会留下"表已改、FS 未改"的中间态。
@@ -1736,7 +1745,11 @@ fn prepare_resize(
         // RW overlay 层，也可能是分区自己。这道写盘前的判定与收尾同源，缺了它就会把
         // "里面是什么都不知道"当成功放过去——正因如此它必须在这里，而不是写表之后
         FsAction::Grow => {
-            crate::fsops::check_grow_step(crate::fsops::grow_target_at(src, part, fb_start * ss, old_bytes)?)?;
+            // FS 现在占据的区间 = 盘上条目起点 × ckpt 记录的搬移前长度：Fresh/Resume 下
+            // 就是旧区间；Committed 下表项已停在新位置，probe 旧起点会探到空段。
+            // 与收尾 finalize_growth 探测的是同一段字节，两侧结论不会分叉
+            crate::fsops::check_grow_step(crate::fsops::grow_target_at(src, part,
+                old_start.checked_mul(ss).ok_or_else(byte_overflow)?, old_bytes)?)?;
         }
         FsAction::Leave => {}
     }
@@ -1815,9 +1828,14 @@ fn execute_resize(
             to_lba: new_start,
         });
         src.mark_non_reversible()?;
-        let src_off = old_start * ss;
-        let dst_off = new_start * ss;
-        let total = (old_end - old_start + 1) * ss;
+        // 拷贝长度取新旧区间的较小者：move+shrink 时 FS 已在阶段 0 缩到 new_bytes，
+        // 旧区间尾部是死数据；按旧区间全长拷贝会让写落点越过 new_end 进相邻分区。
+        // 恢复重放由盘上几何（表未提交时 old 区间不变）重算出同一 copy_len，chunk 进度口径一致
+        let copy_len = (old_end - old_start + 1).min(new_end - new_start + 1);
+        let byte_overflow = || io::Error::new(io::ErrorKind::InvalidData, "relocation byte offset overflows — refusing");
+        let src_off = old_start.checked_mul(ss).ok_or_else(byte_overflow)?;
+        let dst_off = new_start.checked_mul(ss).ok_or_else(byte_overflow)?;
+        let total = copy_len.checked_mul(ss).ok_or_else(byte_overflow)?;
         // 自重叠搬移（位移小于分区长度）下，重做 chunk 的源区间会被先落盘 chunk 的写
         // 覆盖，除非每个 chunk 不大于位移（两个方向同理：写区间起点与重做源区间终点
         // 至少隔一个位移）。chunk 收敛到位移字节以内；此处本就逐 chunk checkpoint

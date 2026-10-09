@@ -265,9 +265,13 @@ mod imp {
         let disk_cap_bytes = sysfs_u64(&Path::new("/sys/block").join(&disk_name).join("size"))?
             .checked_mul(512)
             .ok_or_else(|| io::Error::other("disk capacity overflows u64 bytes"))?;
-        // queue/logical_block_size：内核 sysfs 只读属性，单位 = 字节
+        // queue/logical_block_size：内核 sysfs 只读属性，单位 = 字节；
+        // 0 是异常输入，后续尺寸换算（字节 ÷ 逻辑块）会除零，在此拦截
         let logical_block =
             sysfs_u64(&Path::new("/sys/block").join(&disk_name).join("queue/logical_block_size"))?;
+        if logical_block == 0 {
+            return Err(io::Error::other("logical_block_size reported as 0 — sysfs value invalid"));
+        }
         let disk_dev = PathBuf::from("/dev").join(&disk_name);
         if !disk_dev.exists() {
             return Err(io::Error::other(format!("disk node {} not found", disk_dev.display())));
@@ -497,6 +501,17 @@ mod imp {
         crate::fsid::identify(&src, 0, t.part_len_bytes)
     }
 
+    /// btrfs 多设备防线（在线路径）：多设备 btrfs 的 resize 须按设备逐个手动处理
+    /// （btrfs-filesystem(8)），与离线路径共用 fsops 的同一道判定；只对 btrfs 生效，
+    /// 其余 FS 的该偏移另有布局。调用点须在任何写盘步骤之前
+    fn refuse_btrfs_multi_device(t: &OnlineTarget, fstype: Option<crate::fsid::FsKind>) -> Result<(), crate::fsops::FsError> {
+        if fstype != Some(crate::fsid::FsKind::Btrfs) {
+            return Ok(());
+        }
+        let src = FileSource::open_read_only(&t.part_dev)?;
+        crate::fsops::refuse_btrfs_multi_device_at(&src, 0)
+    }
+
     /// 从（盘名, 分区号）解析 OnlineTarget（PV 路径无挂载点，mnt 置空不用）
     fn resolve_pv_target(disk_name: &str, pno: u32) -> io::Result<OnlineTarget> {
         let disk_dev = PathBuf::from("/dev").join(disk_name);
@@ -532,6 +547,9 @@ mod imp {
         let part_len_bytes = byte_of(sysfs_u64(&sysdir.join("size"))?)?;
         let disk_cap_bytes = byte_of(sysfs_u64(&sysroot.join("size"))?)?;
         let logical_block = sysfs_u64(&sysroot.join("queue/logical_block_size"))?;
+        if logical_block == 0 {
+            return Err(io::Error::other("logical_block_size reported as 0 — sysfs value invalid"));
+        }
         let this_dev = std::fs::read_to_string(sysdir.join("dev")).ok().and_then(|s| parse_dev_attr(&s));
         // 与 resolve_target 用同一判据排除目标自身；本函数的 sysdir 由上面同一目录遍历得出，
         // 故 dev 属性缺失时退回路径比较（那种比较在**这个**函数里是成立的）
@@ -797,13 +815,26 @@ mod imp {
         };
         match size {
             // 扩满现分区：分区不动，FS 工具直接吃满（内核视图无需变更）
-            None => fs_grow_outcome(fs_grow(&t, fstype)),
+            None => {
+                if let Err(e) = refuse_btrfs_multi_device(&t, fstype) {
+                    return Fail::from(e).into_outcome();
+                }
+                fs_grow_outcome(fs_grow(&t, fstype))
+            }
             Some(bytes) => {
                 if let Err(msg) = check_new_range(&t, bytes) {
                     return Outcome::refused(msg);
                 }
                 if bytes > t.part_len_bytes {
-                    // grow：先自查（内核 EBUSY 兜底），sfdisk 写表 → partx 同步 → FS 工具
+                    // grow：先自查（内核 EBUSY 兜底），sfdisk 写表 → partx 同步 → FS 工具。
+                    // 无在线工具的判定必须在写表前——fs_grow 对无工具情形不启动任何进程，
+                    // 借它把拒绝挡在写表之前，不留下"表已扩、FS 未扩"
+                    if fs_grow_cmd(&t, fstype).is_none() {
+                        return fs_grow_outcome(fs_grow(&t, fstype));
+                    }
+                    if let Err(e) = refuse_btrfs_multi_device(&t, fstype) {
+                        return Fail::from(e).into_outcome();
+                    }
                     if let Err(e) = part_resize(&t, bytes) {
                         return e.into_outcome();
                     }
@@ -821,6 +852,9 @@ mod imp {
                     }
                 } else {
                     // shrink（仅 btrfs）：FS 先缩（内核校验占用与 256MiB 下限），持久化缩分区
+                    if let Err(e) = refuse_btrfs_multi_device(&t, fstype) {
+                        return Fail::from(e).into_outcome();
+                    }
                     let mnt = t.mnt.to_string_lossy().into_owned();
                     match run("btrfs", &["filesystem", "resize", &bytes.to_string(), &mnt]) {
                         // spawn 失败（工具缺失等）发生在本次首次写盘之前：FS 未缩、表未写 → Infra

@@ -385,8 +385,8 @@ fn pending_recovery_blocks_unjournaled_writers_and_empty_shell_is_not_corruption
     assert!(!journal.exists(), "a successful journaled command must drop the journal");
 
     // 只含 magic、零记录的 journal（`ensure` 写完 magic 就中断留下的）：它描述的是零次写入，
-    // 既不该挡住 mkfs，也不该被报成未收尾现场
-    std::fs::write(&journal, b"DEJL\x02").unwrap();
+    // 既不该挡住 mkfs，也不该被报成未收尾现场（尾字节 = 当前 journal 格式版本）
+    std::fs::write(&journal, b"DEJL\x03").unwrap();
     let (c, e) = run(&["mkfs", &format!("{img_s}:1"), "ext4", "--yes"]);
     assert!(
         !e.contains("owns this target"),
