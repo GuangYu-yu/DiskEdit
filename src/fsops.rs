@@ -889,8 +889,9 @@ pub fn mkfs(src: &FileSource, part: u32, fstype: MkfsFs) -> Result<(), FsError> 
 
 /// btrfs 多设备拒绝：主 superblock @分区起点+0x10000 的 num_devices 字段（偏移 0x88，
 /// u64 LE，内核 fs/btrfs ctree.h 字段序）。>1 时 resize/max 按 devid 作用于所映射的
-/// 单个 member，"分区扩满即 FS 扩满"前提不成立，直接拒绝，多设备布局交用户手动处理
-fn refuse_btrfs_multi_device_at(src: &FileSource, off: u64) -> Result<(), FsError> {
+/// 单个 member，"分区扩满即 FS 扩满"前提不成立，直接拒绝，多设备布局交用户手动处理。
+/// 离线（resize_fs_in / shrink_fs）与在线路径（online::fs_grow / 在线 shrink）共用同一道防线
+pub(crate) fn refuse_btrfs_multi_device_at(src: &FileSource, off: u64) -> Result<(), FsError> {
     let mut raw = [0u8; 8];
     src.read_at(off + 0x10000 + 0x88, &mut raw).map_err(FsError::from)?;
     if u64::from_le_bytes(raw) > 1 {
@@ -1304,8 +1305,8 @@ where
 pub fn shrink_fs(src: &FileSource, part: u32, fstype: Option<FsKind>, new_bytes: u64) -> Result<(), FsError> {
     match fstype {
         Some(FsKind::Ext) => with_partition_device(src, part, |dev| {
-        let out = run("e2fsck", &["-fp", dev])?;
-        check_e2fsck_for_resize(out.status.code().unwrap_or(-1))?;
+            let out = run("e2fsck", &["-fp", dev])?;
+            check_e2fsck_for_resize(out.status.code().unwrap_or(-1))?;
             // resize2fs 裸数字单位是"文件系统块数"而非字节（man resize2fs）；
             // 's' 后缀 = 512 字节扇区。分区尺寸必为 sector_size(≥512) 整数倍
             if !new_bytes.is_multiple_of(512) {

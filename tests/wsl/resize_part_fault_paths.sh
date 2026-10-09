@@ -71,6 +71,7 @@ echo "$OUT" | grep -o "unfinished operation still owns this target" | head -1
 exp "$($B undo "$T" --yes >/dev/null 2>&1; echo $?)" 0 "undo 回滚已提交的表"
 OUT=$($BF resize "$T":3 300M 2>&1); exp "$?" 0 "undo 后重跑 resize"
 LD=$(lo_attach "$T")
+lo_waitpart "${LD}p3" || { echo "p3 part node not ready"; rc=1; lo_detach "$LD"; }
 BC=$(dumpe2fs -h "${LD}p3" 2>/dev/null | grep -i '^Block count' | tr -dc '0-9')
 exp "$BC" 76800 "FS 扩容收尾真做完（300M）"
 lo_detach "$LD"

@@ -214,6 +214,9 @@ pub fn into_io_error(e: GptError) -> io::Error {
 
 #[derive(Clone, Debug)]
 pub struct RawHeader {
+    /// 规范 Revision 字段（UEFI 2.10 §5.3.2 Table 5.5，字节序 0x00010000 = 1.0）。
+    /// 与 HeaderSize 同口径：读到的值随头带回，重写按原值输出，不固定为 1.0
+    pub revision: u32,
     pub primary_lba: u64,   // 本头所在 LBA（规范 MyLBA）
     pub backup_lba: u64,    // 对端头 LBA（规范 AlternateLBA）
     pub first_usable_lba: u64,
@@ -335,6 +338,7 @@ fn probe_header(sector: &[u8]) -> HeaderProbe {
         return HeaderProbe::Damaged("GPT header CRC mismatch");
     }
     HeaderProbe::Present(RawHeader {
+        revision: rd_u32(sector, 8),
         primary_lba: rd_u64(sector, 24),
         backup_lba: rd_u64(sector, 32),
         first_usable_lba: rd_u64(sector, 40),
@@ -666,7 +670,7 @@ fn serialize_header(h: &RawHeader, array_crc: u32, ss: u64) -> io::Result<Vec<u8
     }
     let mut b = vec![0u8; ss as usize];
     b[0..8].copy_from_slice(GPT_SIGNATURE);
-    b[8..12].copy_from_slice(&[0x00, 0x00, 0x01, 0x00]); // revision 1.0
+    b[8..12].copy_from_slice(&h.revision.to_le_bytes());
     b[12..16].copy_from_slice(&h.header_size.to_le_bytes());
     b[16..20].copy_from_slice(&0u32.to_le_bytes()); // CRC 占位
     b[24..32].copy_from_slice(&h.primary_lba.to_le_bytes());
@@ -706,6 +710,7 @@ pub fn serialize_array(entries: &[GPTPartitionEntry], geom: &EntryArrayGeometry)
 /// debug 下 panic、release 下先回绕再被调用方拦下，同一个事实两处推导
 fn canonical_headers(h: &RawHeader, last_lba: u64, backup_array_lba: u64) -> (RawHeader, RawHeader) {
     let primary = RawHeader {
+        revision: h.revision,
         primary_lba: 1,
         backup_lba: last_lba,
         first_usable_lba: h.first_usable_lba,
@@ -1276,6 +1281,7 @@ pub fn create_gpt(src: &mut FileSource, ss: u64, disk_guid: Option<[u8; 16]>) ->
     let span = geom.lba_span();
     let last_lba = container_last_lba(src, ss);
     let header = RawHeader {
+        revision: 0x0001_0000,
         primary_lba: 1,
         backup_lba: last_lba,
         first_usable_lba: 2 + span,
@@ -1411,6 +1417,10 @@ pub fn add_mdos_entry(src: &mut FileSource, start: u64, end: u64, os_type: u8) -
     let total = src.size / ss;
     if total == 0 {
         return Err(Fail::infra("image has zero sectors"));
+    }
+    // 单扇区容器没有可用区间，单独说明以免提示里出现空区间 (1..0)
+    if total == 1 {
+        return Err(Fail::refused("image has a single sector — no usable range"));
     }
     if start < 1 || end >= total || start > end {
         return Err(Fail::refused(format!("range {start}..{end} outside disk (1..{})", total - 1)));
@@ -1746,6 +1756,7 @@ mod tests {
 
     fn geo_header(first_usable: u64, last_usable: u64, entry_lba: u64) -> RawHeader {
         RawHeader {
+            revision: 0x0001_0000,
             primary_lba: 1,
             backup_lba: 999,
             first_usable_lba: first_usable,

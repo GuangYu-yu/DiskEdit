@@ -799,7 +799,7 @@ impl FileSource {
             } // EOF 之外视为零，其余保持 0 填充
               // journal 先行落盘：写入发生前，被覆盖字节的原文必须已持久化
             if let Some(journal) = self.journal.as_mut() {
-                journal.record(off, &orig)?;
+                journal.record(off, &orig, buf)?;
             }
         }
         self.write_raw(off, buf)
@@ -990,8 +990,10 @@ impl Mutation {
 
 /// 一条记录里的**恢复依据**：undo 真正依赖的那部分
 pub enum RecoveryData {
-    /// 被覆盖字节的原文。回放它即回到这次写入之前
-    PreImage { off: u64, bytes: Vec<u8> },
+    /// 被覆盖字节的原文与当时的写后内容。回放原文即回到这次写入之前；
+    /// 写后内容是回放前的分叉核对依据——盘上字节与它不符，说明这次写入之后
+    /// 有外部改动动过同一段字节，回放会覆盖它
+    PreImage { off: u64, bytes: Vec<u8>, after: Vec<u8> },
     /// 从这里起该 mutation 越过了不可回滚点：只回滚它之前的记录会得到"表与盘上内容
     /// 自相矛盾"的布局，故 undo 见到即整体拒绝
     Barrier,
@@ -1060,16 +1062,19 @@ impl Mutation {
 }
 
 impl JournalRecord {
-    /// `payload = [mutation tag][mutation meta][recovery tag][recovery body]`
+    /// `payload = [mutation tag][mutation meta][recovery tag][recovery body]`；
+    /// PreImage body = `off(8) + pre_len(u32) + 原文 + 写后内容`
     fn encode(&self) -> Vec<u8> {
         let mut p = Vec::new();
         p.push(self.mutation.tag());
         self.mutation.write_meta(&mut p);
         match &self.recovery {
-            RecoveryData::PreImage { off, bytes } => {
+            RecoveryData::PreImage { off, bytes, after } => {
                 p.push(0);
                 p.extend_from_slice(&off.to_le_bytes());
+                p.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
                 p.extend_from_slice(bytes);
+                p.extend_from_slice(after);
             }
             RecoveryData::Barrier => p.push(1),
         }
@@ -1083,11 +1088,20 @@ impl JournalRecord {
         let rtag = *rest.first().ok_or_else(|| journal_decode_err("missing recovery tag"))?;
         let recovery = match rtag {
             0 => {
-                if rest.len() < 9 {
+                if rest.len() < 13 {
                     return Err(journal_decode_err("truncated pre-image"));
                 }
                 let off = u64::from_le_bytes(rest[1..9].try_into().unwrap());
-                RecoveryData::PreImage { off, bytes: rest[9..].to_vec() }
+                let pre_len = u32::from_le_bytes(rest[9..13].try_into().unwrap()) as usize;
+                let body = rest.get(13..).ok_or_else(|| journal_decode_err("truncated pre-image"))?;
+                if body.len() < pre_len {
+                    return Err(journal_decode_err("truncated pre-image"));
+                }
+                RecoveryData::PreImage {
+                    off,
+                    bytes: body[..pre_len].to_vec(),
+                    after: body[pre_len..].to_vec(),
+                }
             }
             1 => RecoveryData::Barrier,
             other => return Err(journal_decode_err(&format!("unknown recovery tag {other}"))),
@@ -1127,8 +1141,9 @@ pub struct Journal {
 
 impl Journal {
     /// 尾字节是格式版本：读到的 magic 不符即拒绝整卷（见 open）。版本**不做旧格式兼容**——
-    /// 旧 journal 会被当作"读不出来的现场"，由 `abandon` 释放，而不是猜着回放
-    const MAGIC: &[u8; 5] = b"DEJL\x02";
+    /// 旧 journal 会被当作"读不出来的现场"，由 `abandon` 释放，而不是猜着回放。
+    /// v3：PreImage 记录补记写后内容（undo 回放前的分叉核对依据）
+    const MAGIC: &[u8; 5] = b"DEJL\x03";
 
     fn at(path: &Path, file: Option<File>) -> Self {
         Journal { file, path: path.to_path_buf(), mutation: Mutation::PartitionTable }
@@ -1226,10 +1241,10 @@ impl Journal {
         Ok(self.file.as_mut().expect("the branch above fills an empty slot"))
     }
 
-    pub fn record(&mut self, off: u64, bytes: &[u8]) -> io::Result<()> {
+    pub fn record(&mut self, off: u64, bytes: &[u8], after: &[u8]) -> io::Result<()> {
         let rec = JournalRecord {
             mutation: self.mutation,
-            recovery: RecoveryData::PreImage { off, bytes: bytes.to_vec() },
+            recovery: RecoveryData::PreImage { off, bytes: bytes.to_vec(), after: after.to_vec() },
         };
         self.append(&rec)
     }
@@ -1250,8 +1265,11 @@ impl Journal {
     fn append(&mut self, rec: &JournalRecord) -> io::Result<()> {
         use std::io::Write;
         let payload = rec.encode();
+        // 长度字段按 u32 落盘：超限静默截断会破坏 [len][crc][payload] 的帧定位，显式拒绝
+        let n = u32::try_from(payload.len())
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "journal record exceeds u32 length"))?;
         let f = self.ensure()?;
-        f.write_all(&(payload.len() as u32).to_le_bytes())?;
+        f.write_all(&n.to_le_bytes())?;
         f.write_all(&crate::table::crc32(&payload).to_le_bytes())?;
         f.write_all(&payload)?;
         f.sync_data()
@@ -1276,15 +1294,15 @@ impl Journal {
         let mut out = Vec::new();
         let mut pos = Self::MAGIC.len();
         while pos < data.len() {
-            // 记录头尚未写全 → 尾部未完成的事务
-            if pos + REC_HDR > data.len() {
+            // 记录头尚未写全 → 尾部未完成的事务（加法 checked：输入是外部文件内容）
+            if pos.checked_add(REC_HDR).is_none_or(|end| end > data.len()) {
                 return Ok(JournalRead::TruncatedTail(out));
             }
             let len = u32::from_le_bytes(data[pos..pos + 4].try_into().unwrap()) as usize;
             let crc = u32::from_le_bytes(data[pos + 4..pos + 8].try_into().unwrap());
             pos += REC_HDR;
             // 头写全了但载荷没写全 → 尾部未完成的事务
-            if pos + len > data.len() {
+            if pos.checked_add(len).is_none_or(|end| end > data.len()) {
                 return Ok(JournalRead::TruncatedTail(out));
             }
             let payload = &data[pos..pos + len];
@@ -1334,12 +1352,12 @@ mod tests {
     fn journal_tail_truncation_is_recovered_but_corruption_is_not() {
         let p = journal_path("tail");
         const DATA: usize = 512;
-        // [len u32][crc u32] + [mutation u8][recovery u8][off u64][data]（PartitionTable 无 meta）
-        const REC: usize = REC_HDR + 10 + DATA;
+        // [len u32][crc u32] + [mutation u8][recovery u8][off u64][pre_len u32][data]×2（PartitionTable 无 meta）
+        const REC: usize = REC_HDR + 14 + 2 * DATA;
         {
             let mut j = Journal::open(&p).unwrap();
             for i in 0..3u64 {
-                j.record(1024 * i, &[0xAA; DATA]).unwrap();
+                j.record(1024 * i, &[0xAA; DATA], &[0xBB; DATA]).unwrap();
             }
         }
         assert!(matches!(
@@ -1382,7 +1400,7 @@ mod tests {
         let p = journal_path("lazy");
         let mut j = Journal::open(&p).unwrap();
         assert!(!p.exists(), "opening a journal must not leave a trace on disk");
-        j.record(0, &[0xAA; 4]).unwrap();
+        j.record(0, &[0xAA; 4], &[0xBB; 4]).unwrap();
         assert!(p.exists(), "the first record must materialize the file");
         drop(j);
 
@@ -1403,7 +1421,7 @@ mod tests {
         assert!(!p.exists(), "opening a journal must not leave a trace on disk");
 
         std::fs::write(&p, b"someone else's file").unwrap();
-        assert!(j.record(0, &[0xAA; 4]).is_err(), "a file that appeared after open must not be adopted");
+        assert!(j.record(0, &[0xAA; 4], &[0xBB; 4]).is_err(), "a file that appeared after open must not be adopted");
         assert_eq!(std::fs::read(&p).unwrap(), b"someone else's file", "the intruding file must be left untouched");
 
         let _ = std::fs::remove_file(&p);

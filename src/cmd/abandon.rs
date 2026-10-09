@@ -32,6 +32,10 @@ pub(crate) const HELP: &str = r#"diskedit abandon <TARGET> --yes
   foreign file can still be released. The ability to roll back is lost."#;
 
 pub(crate) fn cmd_abandon(a: &Args) -> u8 {
+    // abandon 释放的是整盘的恢复现场：`:N` 指定了也会被静默忽略（与 info 同判据）
+    if let Some(n) = a.part {
+        bail_fail(Fail::refused(format!("`abandon` releases the whole target's recovery scene — drop :{n}")));
+    }
     if !a.yes {
         bail_fail(Fail::refused(
             "`abandon` gives up on recovering this target for good; pass --yes to confirm",
@@ -91,7 +95,7 @@ fn abandon_records(identity: &TargetIdentity, legacy: Option<[u8; 16]>) -> u8 {
                             "    {} — already past the point of rolling back",
                             rec.mutation.describe()
                         ),
-                        RecoveryData::PreImage { off, bytes } => println!(
+                        RecoveryData::PreImage { off, bytes, .. } => println!(
                             "    {} ({} byte(s) at offset {off})",
                             rec.mutation.describe(),
                             bytes.len()
