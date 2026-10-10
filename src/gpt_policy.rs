@@ -654,7 +654,12 @@ mod tests {
         let mut src = crate::support::src_from("pb_mbr", &vec![0u8; 2 * 1024 * 1024]);
         table::create_mbr(&mut src).unwrap();
         table::add_mdos_entry(&mut src, 63, 200, 0x83).unwrap();
-        table::add_mdos_entry(&mut src, 201, 300, 0x05).unwrap();
+        table::add_mdos_entry(&mut src, 201, 300, 0x83).unwrap();
+        // 被测对象是"容器类型条目的区间判读"，类型字节直接写盘面：追加路径拒绝容器类型
+        let mut lba0 = vec![0u8; 512];
+        src.read_at(0, &mut lba0).unwrap();
+        lba0[446 + 16 + 4] = 0x05;
+        src.write_at(0, &lba0).unwrap();
         assert_eq!(partition_bytes(&src, 1).unwrap(), (63 * 512, (200u64 - 63 + 1) * 512));
         assert!(matches!(partition_bytes(&src, 2), Err(Fail::Refused(m)) if m.contains("container")));
     }
