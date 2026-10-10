@@ -196,9 +196,15 @@ mod imp {
             if skip(&p) {
                 continue;
             }
-            // "partition 属性不存在"（NotFound）= 整盘目录，跳过；其余 stat 失败按
-            // 校验失败上抛——exists() 把任何 I/O 错误都折叠成 false，会让算不出真值的
-            // 邻居被当成"不是分区"静默放过，重叠检验就此失守
+            // 非目录条目（uevent/dev/size/stat 等 sysfs 属性文件）不可能是分区：对其拼
+            // "partition" 会得到 ENOTDIR（os error 20），那是"这不是个目录"，与"分区属性
+            // 读不出来"不同类，必须先排除，否则整条在线流程会被属性文件打挂
+            if !p.is_dir() {
+                continue;
+            }
+            // "partition 属性不存在"（NotFound）= 整盘目录（queue/power/holders 等），跳过；
+            // 其余 stat 失败按校验失败上抛——exists() 把任何 I/O 错误都折叠成 false，会让
+            // 算不出真值的邻居被当成"不是分区"静默放过，重叠检验就此失守
             match fs::metadata(p.join("partition")) {
                 Ok(_) => {}
                 Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
