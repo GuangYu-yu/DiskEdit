@@ -1408,8 +1408,15 @@ pub fn table_label(src: &FileSource) -> Result<TableLabel, GptError> {
     Ok(TableLabel::None)
 }
 
-/// msdos：主分区条目追加（槽位 1..=4）
+/// msdos：主分区条目追加（槽位 1..=4）。类型判据与 `set_mdos_type` 同源：0x00 是
+/// "未用条目"的形状（本函数用它识别空闲槽），容器类型凭空多出容器语义
 pub fn add_mdos_entry(src: &mut FileSource, start: u64, end: u64, os_type: u8) -> Result<u32, Fail> {
+    if os_type == 0 {
+        return Err(Fail::refused("type 0x00 is the empty-entry marker — give a partition type"));
+    }
+    if MDOS_CONTAINER_TYPES.contains(&os_type) {
+        return Err(Fail::refused("extended-container types (0x05/0x0F/0x85) are not supported — logical partitions are out of scope"));
+    }
     let ss = src.sector_size;
     if !is_mdos_label(src).map_err(|e| Fail::infra(e.to_string()))? {
         return Err(Fail::refused("not an msdos-labelled image"));

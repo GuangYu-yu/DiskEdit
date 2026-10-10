@@ -300,13 +300,18 @@ pub fn overlay_offset_at(src: &FileSource, part_offset: u64) -> io::Result<Optio
         u64::from_le_bytes(sb[0x28..0x30].try_into().unwrap())
     } else if sb[1024..1028] == EROFS_MAGIC {
         let blkszbits = sb[1024 + 0x0C] as u32;
-        // blkszbits 是盘上可控值：内核按自身 LOG_BLOCK_SIZE 匹配，故只查下界；
-        // checked_shl 挡位数溢出
+        // blkszbits 是盘上可控值：内核按自身 LOG_BLOCK_SIZE 匹配，故只查下界
         if blkszbits < 9 {
             return Ok(None);
         }
         let blocks = u32::from_le_bytes(sb[1024 + 0x24..1024 + 0x28].try_into().unwrap()) as u64;
-        match blocks.checked_shl(blkszbits) {
+        // 乘 2^blkszbits 走 checked_mul：checked_shl 只挡位移量越界，不挡高位丢弃——
+        // 盘上可控的 blocks/blkszbits 组合会把溢出静默折成一个小值，算出伪 overlay 偏移
+        let unit = match 1u64.checked_shl(blkszbits) {
+            Some(v) => v,
+            None => return Ok(None),
+        };
+        match blocks.checked_mul(unit) {
             Some(v) => v,
             None => return Ok(None),
         }

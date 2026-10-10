@@ -1765,7 +1765,12 @@ mod tests {
         let mut src = fs_fixture("pbr_mbr", vec![0u8; 2 * 1024 * 1024]);
         crate::table::create_mbr(&mut src).unwrap();
         crate::table::add_mdos_entry(&mut src, 63, 200, 0x83).unwrap();
-        crate::table::add_mdos_entry(&mut src, 201, 300, 0x05).unwrap();
+        crate::table::add_mdos_entry(&mut src, 201, 300, 0x83).unwrap();
+        // 被测对象是"容器类型条目的区间判读"，类型字节直接写盘面：追加路径拒绝容器类型
+        let mut lba0 = vec![0u8; 512];
+        src.read_at(0, &mut lba0).unwrap();
+        lba0[446 + 16 + 4] = 0x05;
+        src.write_at(0, &lba0).unwrap();
         assert_eq!(partition_byte_range(&src, 1).unwrap(), (63 * 512, (200 - 63 + 1) * 512));
         let err = partition_byte_range(&src, 2).unwrap_err();
         assert!(err.to_string().contains("container"), "{err}");
