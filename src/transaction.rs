@@ -110,6 +110,13 @@ pub(crate) fn active_recovery_records(
         out.push(RecoveryRecord::Journal { path: p.clone(), entries });
     }
     for p in identity.checkpoint_candidates(legacy_disk_guid) {
+        // 与上方 journal 分支同判据：目录等非普通文件不是本工具写下的任何东西，
+        // 留着它会把一个无关路径顶成 busy 现场
+        if let Ok(m) = std::fs::metadata(&p)
+            && !m.is_file()
+        {
+            continue;
+        }
         if p.exists() {
             out.push(RecoveryRecord::Checkpoint { path: p });
         }

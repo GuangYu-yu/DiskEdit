@@ -884,14 +884,18 @@ fn prepare_apply(
     // 写盘前的 preflight：FS 扩展属本次操作的后置条件，工具缺失必须现在拒绝——
     // 一旦开始写盘才发现，就会留下"分区已改、FS 未扩"的中间态。
     // 不依赖命令层是否检查过：续传路径不经过 plan，本处才是唯一必经关口
-    let grow_entry = g0.entry_index(plan.grow_part).and_then(|i| g0.entries.get(i)).filter(|ge| ge.ending_lba != 0);
-    if let Some(ge) = grow_entry {
-        crate::fsops::ensure_idle_before_write(src, plan.grow_part, ge.starting_lba.checked_mul(plan.ss)
-            .ok_or_else(|| Fail::infra("grow target start overflows byte offset"))?)?;
-    }
-    if !no_fs
-        && let Some(ge) = grow_entry
-    {
+    let grow_entry = g0.entry_index(plan.grow_part).and_then(|i| g0.entries.get(i));
+    let Some(ge) = grow_entry.filter(|ge| ge.ending_lba != 0) else {
+        // 新跑路径 live_entry 已保证条目非空；空槽只出现在续跑——盘上布局在中断窗口
+        // 被外部改动。不拒绝的话，下游会把 starting_lba=0 的空条目扩成横跨表头的大条目
+        return Err(crate::outcome::Fail::refused(format!(
+            "partition {} has an empty entry on disk — the layout moved under the job; refusing",
+            plan.grow_part
+        )));
+    };
+    crate::fsops::ensure_idle_before_write(src, plan.grow_part, ge.starting_lba.checked_mul(plan.ss)
+        .ok_or_else(|| Fail::infra("grow target start overflows byte offset"))?)?;
+    if !no_fs {
         // 要动的是哪一段、里面是什么 FS 由 grow_target_at 判定——与写盘后的收尾同一判据，
         // 两处只是区间不同。区间的 LBA 单位是**表自身**的 ss（plan.ss）。此处位于
         // apply_repair / 搬移之前，本次调用尚未写目标盘：它的环境故障按 Infra 报，

@@ -806,6 +806,9 @@ fn cmd_resize_msdos(a: &Args, pref: PartSelector, req: &SizeRequest, src_ro: &Fi
             {
                 bail_fail(Fail::refused(format!("target size {bytes} < minimum FS size {min} bytes (resize2fs -P)")));
             }
+            // 与 grow 臂同判据：外部 FS 工具写盘不可回滚，undo journal 从此只能如实记屏障
+            src.set_mutation(crate::dev::Mutation::ExternalFsTool);
+            src.mark_non_reversible().unwrap_or_else(|e| bail_fail(Fail::from(e)));
             fsops::shrink_fs(&src, part, fstype, new_size_lba * ss)
                 .unwrap_or_else(|e| bail_fail(Fail::from(e).context("FS shrink failed")));
             table::resize_mdos_entry(&mut src, part, new_size_lba as u32)
