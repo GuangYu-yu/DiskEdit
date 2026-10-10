@@ -430,8 +430,10 @@ impl Checkpoint {
         }
         let last_usable_lba = u64::from_le_bytes(rd(off, 8)?.try_into().unwrap());
         off += 8;
-        if last_usable_lba > lim.file_last_lba {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "checkpoint last_usable_lba beyond container"));
+        // moves 为空时它就是 grow 终点（grow_end_for），直接进表项 ending_lba：只验到
+        // 容器末端不够——越过可用区末端会覆盖 GPT 备份头。上界取已验证几何的可用区
+        if last_usable_lba > lim.last_usable_lba {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "checkpoint last_usable_lba beyond usable area"));
         }
         let count = u32::from_le_bytes(rd(off, 4)?.try_into().unwrap()) as usize;
         off += 4;
@@ -1205,10 +1207,9 @@ fn execute_apply(
     table::ensure_protective_mbr(src)?;
     log(&format!("partition {} extended (FS area ends before relocated partitions)", plan.grow_part));
 
-    crate::dev::warn_if_remove_failed(ckpt_path);
-
     // FS resize 是契约的一部分：失败即后置条件未满足（由调用方换算为 PARTIAL）。
     // 这里不能只打日志当成功——脚本会据此认为空间已可用
+    let pending_before = pending.len();
     if no_fs {
         log("partition extended (--no-fs: filesystem left untouched)");
     } else {
@@ -1216,6 +1217,12 @@ fn execute_apply(
             old: (grow_start, old_len),
             new: (grow_start, grow_len),
         }, g.ss, log, pending)?;
+    }
+    // ckpt 在 FS 步定论后才撤：FS 步失败而 ckpt 已删时，重跑会按全新作业从旧区重拷，
+    // 自重叠搬移下旧区字节已被写覆盖，重拷即把覆盖后的数据盖回新区。FS 步留下待办时
+    // 保留 ckpt——重跑按续传口径只重试 FS 步
+    if pending.len() == pending_before {
+        crate::dev::warn_if_remove_failed(ckpt_path);
     }
     Ok(())
 }
@@ -1472,17 +1479,19 @@ impl RsCheckpoint {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "resize checkpoint range outside usable area"));
         }
         // 进度上界同 Checkpoint：搬移区间的 chunk 总数。区间端点已验非倒挂，乘法仍 checked。
-        // 自重叠搬移（位移小于区间长度）的 chunk 收敛到位移字节以内（见搬移循环），
-        // chunk 数按收敛后的值算，两侧口径一致才不会误判损坏
+        // 拷贝总长与搬移循环同口径：move+shrink 只拷新旧区间的较小者；自重叠搬移（位移小于
+        // 旧区间长度）的 chunk 收敛到位移字节以内。两侧口径一致才不会误判损坏
         let moved = old_start.abs_diff(new_start);
-        let ec = if moved != 0 && moved < old_end - old_start + 1 {
+        let old_len = old_end - old_start + 1;
+        let copy_len = old_len.min(new_end - new_start + 1);
+        let ec = if moved != 0 && moved < old_len {
             chunk_bytes.min(moved.checked_mul(ss).ok_or_else(|| {
                 io::Error::new(io::ErrorKind::InvalidData, "checkpoint chunk count overflow")
             })?)
         } else {
             chunk_bytes
         };
-        let chunks_limit = (old_end - old_start + 1).checked_mul(ss)
+        let chunks_limit = copy_len.checked_mul(ss)
             .and_then(|t| t.checked_add(ec - 1))
             .map(|t| t / ec)
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "resize checkpoint chunk count overflow"))?;
@@ -1903,8 +1912,8 @@ fn execute_resize(
     }
 
     // ---- 阶段 3：扩容 FS ----
-    crate::dev::warn_if_remove_failed(&p.ckpt_path);
     // 要不要扩由 prepare 的决策给出，此处不比尺寸；家族处置与 apply 共用同一实现
+    let pending_before = pending.len();
     if p.fs_action == FsAction::Grow {
         finalize_growth(src, part, GrowthRegions {
             old: (old_start, old_end - old_start + 1),
@@ -1912,6 +1921,12 @@ fn execute_resize(
         }, ss, log, pending)?;
     } else if no_fs {
         log("partition resized (--no-fs: filesystem left untouched)");
+    }
+    // ckpt 在 FS 步定论后才撤：FS 步失败而 ckpt 已删时，重跑会按全新作业从旧区重拷，
+    // 自重叠搬移下旧区字节已被写覆盖，重拷即把覆盖后的数据盖回新区。FS 步留下待办时
+    // 保留 ckpt——重跑按续传口径只重试 FS 步
+    if pending.len() == pending_before {
+        crate::dev::warn_if_remove_failed(&p.ckpt_path);
     }
     Ok(())
 }
@@ -2559,6 +2574,46 @@ mod tests {
         assert_eq!(e.kind(), io::ErrorKind::InvalidData, "{e}");
     }
 
+    /// last_usable_lba 的上界是可用区末端，不是容器末端：moves 为空时它直接成为
+    /// grow 终点写进表项 ending_lba，越过可用区会覆盖 GPT 备份头
+    #[test]
+    fn relocation_ckpt_last_usable_is_bounded_by_the_usable_area() {
+        let ckpt = Checkpoint {
+            disk_size: 64 * 1024 * 1024,
+            ss: 512,
+            grow_part: 1,
+            last_usable_lba: 100_000,
+            moves: Vec::new(),
+            kind: PlanKind::TailPacked,
+            cur_index: 0,
+            chunks_done: 0,
+            chunk_bytes: 1024 * 1024,
+            fp: Default::default(),
+            map: None,
+        };
+        // 容器比可用区大（200_000 vs 100_000）：两值相等时测不出上界取的是哪一个
+        let bounds = GeometryLimits {
+            sector_size: 512,
+            entry_count: 128,
+            first_usable_lba: 34,
+            last_usable_lba: 100_000,
+            file_last_lba: 200_000,
+        };
+        assert!(Checkpoint::deserialize(&ckpt.serialize(), &bounds).is_ok(), "the baseline must be readable");
+
+        // 字段偏移：magic(8) + ver(4) + disk_size(8) + ss(8) + grow_part(4) ⇒ last_usable @32
+        const LAST_USABLE: usize = 32;
+        let mut b = ckpt.serialize();
+        b[LAST_USABLE..LAST_USABLE + 8].copy_from_slice(&150_000u64.to_le_bytes());
+        let crc_off = b.len() - 4;
+        let crc = table::crc32(&b[..crc_off]);
+        b[crc_off..].copy_from_slice(&crc.to_le_bytes());
+        let e = Checkpoint::deserialize(&b, &bounds)
+            .err()
+            .expect("last_usable past the usable area but inside the file must be rejected");
+        assert_eq!(e.kind(), io::ErrorKind::InvalidData, "{e}");
+    }
+
     /// ss 是 LBA→字节换算的唯一单位，写地址全经它换算：与目标几何不一致的 ckpt 即使
     /// CRC 正确也必须拦下（重算 CRC——证明拦住它的是字段校验，不是 CRC），且两族
     /// decoder 同一防线
@@ -2768,6 +2823,40 @@ mod tests {
         b[CHUNK_BYTES..CHUNK_BYTES + 8].copy_from_slice(&0u64.to_le_bytes());
         rewrite_crc(&mut b);
         let e = RsCheckpoint::deserialize(&b, &lim(128)).err().expect("chunk_bytes = 0 must be rejected");
+        assert_eq!(e.kind(), io::ErrorKind::InvalidData, "{e}");
+    }
+
+    /// 进度上界按拷贝总长（min(old, new)）算，不按旧区间全长：move+shrink 时写入侧
+    /// 只拷新旧区间的较小者，旧区间全长给出的上限会放过超过真实拷贝量的进度
+    #[test]
+    fn resize_ckpt_progress_bound_follows_copy_len() {
+        // move+shrink：old = 1024 LBA、new = 512 LBA、位移 2048 LBA ≥ old_len ⇒ chunk 不收敛
+        let rs = RsCheckpoint {
+            disk_size: 64 * 1024 * 1024, ss: 512, part: 1,
+            old_start: 2048, old_end: 3071, new_start: 4096, new_end: 4607,
+            fs_shrunk: false, chunks_done: 0, chunk_bytes: 64 * 1024,
+            fp: Default::default(),
+            map: None,
+        };
+        let rewrite_crc = |b: &mut Vec<u8>| {
+            let crc_off = b.len() - 4;
+            let crc = table::crc32(&b[..crc_off]);
+            b[crc_off..].copy_from_slice(&crc.to_le_bytes());
+        };
+        // 拷贝总长 = 512 × 512 = 262144 B = 4 × 65536 ⇒ 上限 4 chunk；
+        // 旧区间全长 = 1024 × 512 = 524288 B ⇒ 8 chunk——5..8 这段只有按旧区间算才放行
+        const CHUNKS_DONE: usize = 65;
+        let mut b = rs.serialize();
+        b[CHUNKS_DONE..CHUNKS_DONE + 8].copy_from_slice(&4u64.to_le_bytes());
+        rewrite_crc(&mut b);
+        RsCheckpoint::deserialize(&b, &lim(128)).expect("progress at the copy bound must stay readable");
+
+        let mut b = rs.serialize();
+        b[CHUNKS_DONE..CHUNKS_DONE + 8].copy_from_slice(&6u64.to_le_bytes());
+        rewrite_crc(&mut b);
+        let e = RsCheckpoint::deserialize(&b, &lim(128)).err().expect(
+            "progress beyond the copy bound must be rejected even when it fits the old range",
+        );
         assert_eq!(e.kind(), io::ErrorKind::InvalidData, "{e}");
     }
 
@@ -3440,6 +3529,55 @@ mod tests {
         }
         assert!(!o.is_complete());
         assert_eq!(o.exit_code(), 20, "分区已扩而 swap 未重建，不能报完全成功");
+
+        drop(src);
+        let _ = std::fs::remove_file(&ckpt_path);
+        let _ = std::fs::remove_file(&p);
+    }
+
+    /// FS 步留下待办时 checkpoint 保留，重跑同一请求落到"已提交、补 FS 步"分支：
+    /// 重跑既不能静默完成（Fresh 下旧区间=新区间 ⇒ Leave ⇒ 报 0 而 swap 仍未重建），
+    /// 也不得再次搬动数据。ckpt 只在数据搬移的 chunk 循环里落，故夹具必须带搬移
+    #[test]
+    fn swap_pending_keeps_checkpoint_and_rerun_retries_the_fs_step() {
+        let (src, p) = plan_fixture(&[(1, [0x11; 16], 2048, 10239)]);
+        drop(src);
+        // 32K 候选位置放 swap 签名：identify 认不出它；搬移把它一并拷到新区间的
+        // 同一相对偏移，收尾的 swap 探测在新区间探得到 → 记成待办
+        let base = 2048 * 512;
+        let mut raw = std::fs::read(&p).unwrap();
+        raw[base + 32768 - 10..base + 32768].copy_from_slice(b"SWAPSPACE2");
+        std::fs::write(&p, &raw).unwrap();
+
+        let mut src = plan_open(&p);
+        let ckpt_path = src.identity.checkpoint_path().to_path_buf();
+        // 旧区间哨兵：正向搬移不与目标区重叠，旧区字节在整轮作业里都不该被改写
+        let marker = base as u64 + 4096;
+        let sentinel = [0xA5u8; 512];
+        src.write_at(marker, &sentinel).unwrap();
+
+        // move+grow：起点 2048 → 12288，区间 8192 LBA → 12288 LBA，
+        // 拷贝量取 min = 4 MiB ⇒ 4 个 chunk
+        let o1 = rsize(&mut src, 1, 12288, 24575, 1024 * 1024, false, &mut |_| {});
+        assert_eq!(o1.exit_code(), 20, "{o1:?}");
+        assert!(ckpt_path.exists(), "FS 步留下待办时 checkpoint 必须保留——重跑只能靠它落到续传分支");
+
+        let o2 = rsize(&mut src, 1, 12288, 24575, 1024 * 1024, false, &mut |_| {});
+        match &o2 {
+            crate::outcome::Outcome::Applied { pending, .. } => {
+                assert_eq!(pending.len(), 1, "重跑须再次报出 swap 待办：{pending:?}");
+            }
+            other => panic!("expected Applied, got {other:?}"),
+        }
+        assert!(!o2.is_complete(), "重跑不得把未完成的 FS 步报成完成");
+        assert_eq!(o2.exit_code(), 20);
+        assert!(ckpt_path.exists(), "重跑仍留待办时 checkpoint 继续保留");
+
+        let mut after = [0u8; 512];
+        src.read_at(marker, &mut after).unwrap();
+        assert_eq!(after, sentinel, "续传只重试 FS 步，不得再次搬动数据");
+        let g2 = table::load_gpt(&src).unwrap().unwrap();
+        assert_eq!((g2.entries[0].starting_lba, g2.entries[0].ending_lba), (12288, 24575));
 
         drop(src);
         let _ = std::fs::remove_file(&ckpt_path);

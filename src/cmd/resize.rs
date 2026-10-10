@@ -149,6 +149,18 @@ fn resize_online(
     if !src.is_block {
         return None;
     }
+    // 在线路径不搬移也不收 chunk：两旗标的承诺无从兑现，静默照跑即"命令做了
+    // 用户明确排除的事却报成功"
+    if a.allow_move {
+        bail_fail(Fail::refused(
+            "--allow-move is not available online — the online path cannot relocate blocking partitions; unmount the disk to use it".to_string(),
+        ));
+    }
+    if a.seen.contains(&"--chunk-size") {
+        bail_fail(Fail::refused(
+            "--chunk-size has no effect online — the online path does not relocate data".to_string(),
+        ));
+    }
     let dn = std::path::Path::new(&a.target)
         .file_name()
         .map(|s| s.to_string_lossy().into_owned())
@@ -168,6 +180,14 @@ fn resize_online(
 
     // 非 PV：仅挂载中的分区能在线扩（在线不能搬移，只吃连续空闲）
     let mnt = crate::online::find_mountpoint(&dn, part)?;
+    // 在线 grow 的表写与 FS 扩是一体的，且在线 shrink（btrfs）方向相反——先缩 FS 再写表。
+    // 若只写表不动 FS，shrink 会得到"FS 大于分区"的损坏现场，故 --no-fs 不放行在线：
+    // 未挂载的分区自然落离线路径，那里 --no-fs 照常生效
+    if a.no_fs {
+        bail_fail(Fail::refused(
+            "--no-fs is not available online — the online path always includes the filesystem step; unmount the partition to skip it".to_string(),
+        ));
+    }
     let o = crate::online::resize_online_planned(&mnt, decide);
     if o.is_complete() {
         println!("resized online (verify with: diskedit info {})", a.target);
@@ -836,9 +856,10 @@ fn resize_done(a: &Args, wsrc: Option<&mut FileSource>, part: u32, is_pv: bool, 
             };
             match crate::gpt_policy::partition_bytes(ro, part) {
                 Ok((_, len)) => len,
-                // 分区号在 resize 入口已由锁下几何验证过一次，此时查不到即盘内容异常 →
-                // 升级为 Infra，原因原样带上（into_io_error 正是"此处已越界"的取消息方式）
-                Err(f) => bail_fail(Fail::infra(format!("post-resize: {}", crate::outcome::into_io_error(f)))),
+                // 分区号在 resize 入口已由锁下几何验证过一次，此时查不到即盘内容异常。
+                // 表已写，报 Failed 而非 Infra：后者向用户承诺"本次没写盘"，在此为假
+                //（into_io_error 正是"此处已越界"的取消息方式）
+                Err(f) => bail_fail(Fail::failed(format!("post-resize: {}", crate::outcome::into_io_error(f)))),
             }
         };
         let delta = new_bytes.saturating_sub(old_bytes);

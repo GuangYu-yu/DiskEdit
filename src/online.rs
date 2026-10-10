@@ -193,8 +193,16 @@ mod imp {
         let mut others = Vec::new();
         for entry in fs::read_dir(sysroot)? {
             let p = entry?.path();
-            if skip(&p) || !p.join("partition").exists() {
+            if skip(&p) {
                 continue;
+            }
+            // "partition 属性不存在"（NotFound）= 整盘目录，跳过；其余 stat 失败按
+            // 校验失败上抛——exists() 把任何 I/O 错误都折叠成 false，会让算不出真值的
+            // 邻居被当成"不是分区"静默放过，重叠检验就此失守
+            match fs::metadata(p.join("partition")) {
+                Ok(_) => {}
+                Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+                Err(e) => return Err(io::Error::other(format!("cannot stat {}: {e}", p.join("partition").display()))),
             }
             let s = sysfs_u64(&p.join("start"))?;
             let l = sysfs_u64(&p.join("size"))?;
