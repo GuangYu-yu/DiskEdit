@@ -915,11 +915,20 @@ fn apply_swap_recreate() {
     let mut f = std::fs::File::open(&img).unwrap();
     let gpt = gptman::GPT::find_from(&mut f).unwrap();
     assert_eq!(gpt[1].starting_lba, 2048, "root start unchanged");
-    // root 扩到 swap 新区域之前（30687-1=30686），不得重叠
-    assert_eq!(gpt[1].ending_lba, 30686, "root must end before relocated swap");
-    assert_eq!(gpt[2].starting_lba, 30687, "swap packed at tail");
-    assert_eq!(gpt[2].ending_lba, 32734);
     assert_eq!(gpt[2].unique_partition_guid, [0x42; 16], "PARTUUID must be preserved");
+    if code == 0 {
+        // swap 重建成功 → 条目循环走完，扩容收尾照常：root 扩到 swap 新区域之前
+        //（30687-1=30686），不得重叠
+        assert_eq!(gpt[1].ending_lba, 30686, "root must end before relocated swap");
+        assert_eq!(gpt[2].starting_lba, 30687, "swap packed at tail");
+        assert_eq!(gpt[2].ending_lba, 32734);
+    } else {
+        // swap 未重建 → 条目循环未走完，扩容收尾跳过：root 保持原终点（收尾按全体 moves
+        // 取 min(new_first)−1，未走完时会把未搬移条目的旧位划进扩容区）；swap 条目已落位
+        assert_eq!(gpt[1].ending_lba, 6143, "growth must not be committed while the swap rebuild is pending");
+        assert_eq!(gpt[2].starting_lba, 30687, "swap entry already relocated");
+        assert_eq!(gpt[2].ending_lba, 32734);
+    }
 
     let _ = std::fs::remove_dir_all(&dir);
 }

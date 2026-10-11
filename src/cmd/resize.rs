@@ -342,11 +342,11 @@ fn lvm_grow_chain(part_dev: &str, delta_bytes: u64, grow_lv: bool, want_lv: Opti
     Ok(())
 }
 
+const CONFIRM_RELOCATION: &str = "this resizes by relocating the partitions listed above — review and re-run with --yes";
+
 /// resize 的一键入口。SIZE：`10G`=绝对值、`+2G`/`-500M`=增量、`grow`=吃满右侧可用区
 /// （挡路分区须 --allow-move，搬移计划须 --yes 确认）。LVM PV 扩容自动 pvresize，
 /// --grow-lv 再把新增传给目标 LV 并扩 FS；PV 缩容一律拒绝（走 lvreduce/pvresize 链）
-const CONFIRM_RELOCATION: &str = "this resizes by relocating the partitions listed above — review and re-run with --yes";
-
 pub(crate) fn cmd_resize(a: &Args) -> u8 {
     // 请求的形状在入口定型一次，随锁前/锁下两次解析共用：位置参数 SIZE / --size / --grow-to-end
     let req = SizeRequest { pos: a.pos.get(1).cloned(), abs: a.size, grow_to_end: a.grow_to_end };
@@ -551,6 +551,11 @@ fn cmd_resize_superfloppy(a: &Args, req: &SizeRequest) -> u8 {
     }
     if a.allow_move {
         bail_fail(Fail::refused("--allow-move has nothing to do on a superfloppy — there are no partitions to relocate".to_string()));
+    }
+    if a.seen.contains(&"--chunk-size") {
+        bail_fail(Fail::refused(
+            "--chunk-size has no effect on a superfloppy — there is nothing to relocate".to_string(),
+        ));
     }
     let src = open_target_for_write(a).unwrap_or_else(|f| bail_fail(f));
     // 锁下取权威容器尺寸并解析 SIZE：+N/+% 锚定"当前尺寸"，而容器大小不受本工具锁约束
