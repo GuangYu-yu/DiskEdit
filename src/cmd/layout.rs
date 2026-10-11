@@ -211,6 +211,12 @@ fn refuse_align_on_start_end(a: &Args) {
 }
 
 pub(crate) fn cmd_move(a: &Args) -> u8 {
+    // 两种给起点的方式各写一条会都留在 Args 里：start_end 恒优先，数值被静默丢弃
+    if a.start_end && a.start.is_some() {
+        bail_fail(Fail::refused(
+            "`--start end` and a numeric --start are mutually exclusive — pass one of them".to_string(),
+        ));
+    }
     let (Some(pref), start_opt) = (a.part, a.start) else { crate::args::usage() };
     if !a.start_end && start_opt.is_none() {
         crate::args::usage();
@@ -243,6 +249,11 @@ pub(crate) fn cmd_move(a: &Args) -> u8 {
 }
 
 pub(crate) fn cmd_copy(a: &Args) -> u8 {
+    if a.start_end && a.start.is_some() {
+        bail_fail(Fail::refused(
+            "`--start end` and a numeric --start are mutually exclusive — pass one of them".to_string(),
+        ));
+    }
     let (Some(pref), start_opt) = (a.part, a.start) else { crate::args::usage() };
     if !a.start_end && start_opt.is_none() {
         crate::args::usage();

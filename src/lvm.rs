@@ -149,6 +149,15 @@ pub fn vg_of(part_dev: &str) -> Result<Option<String>, LvmError> {
 /// 落在该 PV 上的顶层 LV（lv_name, lv_path）
 pub fn lvs_on_pv(vg: &str, part_dev: &str) -> Result<Vec<(String, String)>, LvmError> {
     let out = run_json("lvs", &["--reportformat", "json", "-o", "lv_name,lv_path,devices", vg])?;
+    // "确认无行"与"解析不出"必须分开：后者折叠成空表会被调用方当成
+    // "no top-level LV"，把故障引向错误的出路（挑 --lv / 判定无从扩）
+    let parsable = serde_json::from_str::<Value>(&out)
+        .ok()
+        .and_then(|v| v.get("report").and_then(|r| r.as_array()).map(|_| ()))
+        .is_some();
+    if !parsable {
+        return Err(LvmError::Failed("lvs: unparsable report in output".to_string()));
+    }
     Ok(parse_lvs_on_pv(&out, part_dev))
 }
 

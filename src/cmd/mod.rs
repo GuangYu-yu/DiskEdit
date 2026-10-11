@@ -245,10 +245,14 @@ pub(crate) fn opens_undo_journal(name: &str) -> bool {
 /// 命令分派。usage/help_cmd 不返回（直接退出进程）
 pub(crate) fn dispatch(cmd: &str, a: &Args) -> u8 {
     match cmd {
-        "help" | "--help" | "-h" => match a.pos.first() {
-            Some(t) => help_cmd(t),
+        "help" | "--help" | "-h" => match a.pos.len() {
             // 主动请求帮助，非用法错误：打全文退 0（未知命令/缺参数才是 10）
-            None => usage_help(),
+            0 => usage_help(),
+            1 => help_cmd(&a.pos[0]),
+            _ => bail_fail(Fail::refused(format!(
+                "unexpected extra argument for `help`: {} (see `diskedit help`)",
+                a.pos[1]
+            ))),
         },
         _ => match find(cmd) {
             Some(c) => {

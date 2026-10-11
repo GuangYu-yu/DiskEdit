@@ -252,8 +252,17 @@ mod imp {
         let entries = crate::fsops::read_mounts()?;
         let mnt_str = mnt.to_string_lossy().into_owned();
         let raw_str = mountpoint.to_string_lossy().into_owned();
-        // 取首个匹配挂载点：bind/multi-device 会共享挂载点，此时 source 不是块设备节点 → 拒绝
-        if let Some(e) = entries.iter().find(|e| e.mount_point == mnt_str || e.mount_point == raw_str) {
+        // 同一挂载点多条记录 = 发生过叠挂（overmount）：mountinfo 里首条是被遮的下层，
+        // 取首/取尾都在猜"实际生效的是哪一层文件系统"，保守拒绝。bind/multi-device
+        // 共享挂载点同样落到这条或多条非块设备分支，各自的拒绝语义不变
+        let matched: Vec<_> = entries.iter().filter(|e| e.mount_point == mnt_str || e.mount_point == raw_str).collect();
+        if matched.len() > 1 {
+            return Err(io::Error::other(format!(
+                "{} is mounted multiple times (overmount) — which filesystem is in effect cannot be determined",
+                mnt.display()
+            )));
+        }
+        if let Some(e) = matched.first() {
             let dev = PathBuf::from(&e.source);
             if fs::metadata(&dev)?.file_type().is_block_device() {
                 return Ok((dev, mnt));

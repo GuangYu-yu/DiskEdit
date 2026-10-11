@@ -125,6 +125,12 @@ pub(crate) fn apply_repair(src: &mut FileSource, action: &RepairAction) -> Resul
             let mut g = table::load_gpt(src)
                 .map_err(|e| Fail::infra_io(table::into_io_error(e)))?
                 .ok_or_else(|| Fail::infra("GPT vanished before repair"))?;
+            // 判定期的 entries 与此刻盘上的可能不同（两步之间表被外部改动）：
+            // 越界复跑一次，拒绝必须发生在写盘之前
+            let max_end = g.entries.iter().filter(|e| e.ending_lba != 0).map(|e| e.ending_lba).max().unwrap_or(0);
+            if max_end > *new_last_usable {
+                return Err(Fail::infra("partitions exceed new usable range after enlarge"));
+            }
             g.header.last_usable_lba = *new_last_usable;
             table::commit_gpt(src, &g, *new_backup_lba)?;
         }

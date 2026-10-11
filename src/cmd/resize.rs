@@ -105,7 +105,15 @@ fn check_pv_intent(
     is_pv: bool,
     shrinking: bool,
     grow_lv: bool,
+    no_fs: bool,
 ) -> Result<(), crate::outcome::Fail> {
+    // PV 链（pvresize/lvextend -r）没有可跳过的"分区文件系统步"：旗标在此整条链
+    // 都无消费点，静默照跑即命令做了旗标明确排除的事却报成功
+    if is_pv && no_fs {
+        return Err(crate::outcome::Fail::refused(
+            "--no-fs has no effect on an LVM PV — the partition holds no filesystem of its own; drop --no-fs".to_string(),
+        ));
+    }
     if is_pv {
         if shrinking {
             return Err(crate::outcome::Fail::refused(
@@ -389,7 +397,7 @@ pub(crate) fn cmd_resize(a: &Args) -> u8 {
     let (target, grow_to_end) = resolve_size_request(&req, cur_bytes).unwrap_or_else(|f| bail_fail(f));
     let shrinking = target.is_some_and(|t| t < cur_bytes);
 
-    check_pv_intent(part, fstype, is_pv, shrinking, a.grow_lv).unwrap_or_else(|f| bail_fail(f));
+    check_pv_intent(part, fstype, is_pv, shrinking, a.grow_lv, a.no_fs).unwrap_or_else(|f| bail_fail(f));
 
     // 块设备在线路径（表类型无关，随表类型变的只有右侧空闲数）；镜像或未挂载的非 PV 落到离线路径。
     // 目标长度不在锁前算：`+N` 锚定当前尺寸、`grow` 锚定右侧空闲，都由 gpt_decider 在
@@ -428,7 +436,7 @@ pub(crate) fn cmd_resize(a: &Args) -> u8 {
     let fstype = fsid::identify(&src, lba_bytes(start, ss), cur_bytes)
         .unwrap_or_else(|e| bail_fail(Fail::infra(format!("identify failed: {e}"))));
     let is_pv = fstype == Some(fsid::FsKind::Lvm2Pv);
-    check_pv_intent(part, fstype, is_pv, shrinking, a.grow_lv).unwrap_or_else(|f| bail_fail(f));
+    check_pv_intent(part, fstype, is_pv, shrinking, a.grow_lv, a.no_fs).unwrap_or_else(|f| bail_fail(f));
     // 占用闸在 movepart 的 prepare 层（本分支的每条路径都经 prepare_resize/prepare_apply），
     // 不在命令层重复判一次
     if grow_to_end {
@@ -719,7 +727,7 @@ fn cmd_resize_msdos(a: &Args, pref: PartSelector, req: &SizeRequest, src_ro: &Fi
     let (target, grow_to_end) = resolve_size_request(req, cur_bytes).unwrap_or_else(|f| bail_fail(f));
     let shrinking = target.is_some_and(|t| t < cur_bytes);
 
-    check_pv_intent(part, fstype, is_pv, shrinking, a.grow_lv).unwrap_or_else(|f| bail_fail(f));
+    check_pv_intent(part, fstype, is_pv, shrinking, a.grow_lv, a.no_fs).unwrap_or_else(|f| bail_fail(f));
     let is_block = src_ro.is_block;
 
     // 块设备在线路径：与 GPT 同一份实现，随表类型变的只有右侧空闲数。目标长度同样
@@ -756,7 +764,7 @@ fn cmd_resize_msdos(a: &Args, pref: PartSelector, req: &SizeRequest, src_ro: &Fi
     let cur_bytes = lba_bytes(p.size_lba as u64, ss);
     let (target, _) = resolve_size_request(req, cur_bytes).unwrap_or_else(|f| bail_fail(f));
     let shrinking = target.is_some_and(|t| t < cur_bytes);
-    check_pv_intent(part, fstype, is_pv, shrinking, a.grow_lv).unwrap_or_else(|f| bail_fail(f));
+    check_pv_intent(part, fstype, is_pv, shrinking, a.grow_lv, a.no_fs).unwrap_or_else(|f| bail_fail(f));
     // 占用复核在锁下（离线选择时的探测在锁前）：首次落盘前确认分区仍空闲，与 GPT 分支同闸
     crate::fsops::ensure_idle_before_write(&src, part, lba_bytes(p.start_lba as u64, ss)).unwrap_or_else(|f| bail_fail(f));
     let total_sectors = src.size / ss;

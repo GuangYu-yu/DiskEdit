@@ -136,10 +136,11 @@ pub(crate) fn cmd_undo(a: &Args) -> u8 {
             match src.read_at(*off, &mut now) {
                 Ok(()) if now == *after || now == *bytes => {}
                 Ok(_) => bail_fail(Fail::refused(format!(
-                    "target no longer matches the journaled write at offset {off} — the disk changed outside this tool after that write; \
+                    "target no longer matches the journaled write at offset {off} — the disk changed outside this tool \
+                     (or an interrupted write by this tool itself) after that write; \
                      replaying would overwrite the foreign edit (release the transaction with `diskedit abandon` if the rollback is no longer wanted)"
                 ))),
-                Err(e) => bail_fail(Fail::refused(format!(
+                Err(e) => bail_fail(Fail::infra(format!(
                     "cannot verify the journaled write at offset {off} against the target: {e} — refusing to replay over an unverifiable region"
                 ))),
             }
