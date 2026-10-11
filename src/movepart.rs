@@ -313,7 +313,8 @@ enum ResumeOutcome {
 /// 的恢复校验而使续传永久失败。ckpt 存在 ⇒ repair 已在 apply 开头执行过（在初始 ckpt
 /// 写入之前），故 repair 记 None
 fn resume_outcome(src: &FileSource, g: &ValidatedGeometry, grow_part: u32) -> Result<ResumeOutcome, Fail> {
-    Ok(match read_checkpoint(src, g)? {
+    let (slot, _) = read_checkpoint(src, g)?;
+    Ok(match slot {
         CheckpointSlot::Ambiguous(paths) => return Err(ambiguous_checkpoint(&paths)),
         CheckpointSlot::Relocation(c) => {
             let c = *c;
@@ -579,20 +580,25 @@ fn scene_mismatch(
 /// 候选的历史命名带 GPT Disk GUID，故调用方须把**已解析的几何**传进来（几何是唯一来源，
 /// 本函数不再自己读一次表）。记录的合法边界同样来自该几何（见 [`GeometryLimits`]）
 ///
+/// 返回命中的落点路径，写与删消费同一路径：命中的是历史命名候选时若仍写本次命名落点，
+/// 会同时存在两份现场（下次读取即歧义），删除也会漏掉真正承载现场的那份。
+/// 槽位空时返回本次命名落点（候选首项），新作业照常落在那里
+///
 /// 候选逐个独立定性（与 `active_recovery_records` / `pick_journal` 同一口径）：
 /// 不存在 → 跳过；损坏 → **记录后继续**看后面的候选——提前 return 会让
 /// 一份损坏的历史命名候选遮住一份完好的本次命名候选，用户看到的是"目标坏了去 abandon"，
 /// 而真实情况是现场完好可续跑。只有"所有候选都不可读"才把损伤如实报成 Infra
-fn read_checkpoint(src: &FileSource, g: &ValidatedGeometry) -> Result<CheckpointSlot, Fail> {
+fn read_checkpoint(src: &FileSource, g: &ValidatedGeometry) -> Result<(CheckpointSlot, PathBuf), Fail> {
     let legacy = Some(g.header.disk_guid);
+    let candidates = src.identity.checkpoint_candidates(legacy);
     let lim = g.limits();
     let mut found: Vec<(PathBuf, CheckpointSlot)> = Vec::new();
     let mut damaged: Vec<(PathBuf, String)> = Vec::new();
     // 现场可读但"创建时事实"对不上：不是损坏（CRC 自洽），也不可取信（继续执行会把
     // 旧现场写进换了文件/换了映射的目标）。单独归档，唯一时给出点名拒绝
     let mut foreign: Vec<(PathBuf, String)> = Vec::new();
-    for path in src.identity.checkpoint_candidates(legacy) {
-        let bytes = match std::fs::read(&path) {
+    for path in &candidates {
+        let bytes = match std::fs::read(path) {
             Ok(b) => b,
             // 两种"读不出来"性质不同，处置因此不同：**文件的可得性**故障（EIO / EACCES）
             // 说明连这份候选都取不到，其余候选大概率同样取不到 ⇒ 整体失败；**这一份的内容**
@@ -604,23 +610,23 @@ fn read_checkpoint(src: &FileSource, g: &ValidatedGeometry) -> Result<Checkpoint
         match (Checkpoint::deserialize(&bytes, &lim), RsCheckpoint::deserialize(&bytes, &lim)) {
             (Ok(c), _) => {
                 if let Some(why) = scene_mismatch(src, &c.fp, &c.map) {
-                    foreign.push((path, why));
+                    foreign.push((path.clone(), why));
                 } else {
-                    found.push((path, CheckpointSlot::Relocation(Box::new(c))));
+                    found.push((path.clone(), CheckpointSlot::Relocation(Box::new(c))));
                 }
             }
             (_, Ok(c)) => {
                 if let Some(why) = scene_mismatch(src, &c.fp, &c.map) {
-                    foreign.push((path, why));
+                    foreign.push((path.clone(), why));
                 } else {
-                    found.push((path, CheckpointSlot::Resize(Box::new(c))));
+                    found.push((path.clone(), CheckpointSlot::Resize(Box::new(c))));
                 }
             }
-            (Err(re), Err(_)) => damaged.push((path, re.to_string())),
+            (Err(re), Err(_)) => damaged.push((path.clone(), re.to_string())),
         }
     }
     match found.len() {
-        0 if foreign.is_empty() && damaged.is_empty() => Ok(CheckpointSlot::Empty),
+        0 if foreign.is_empty() && damaged.is_empty() => Ok((CheckpointSlot::Empty, candidates[0].clone())),
         // 候选全在而全部不可读：现场存在但已无法判读——如实报 Infra 并列明各份的死因，
         // 出路是 abandon，而不是让续跑路径去猜
         0 if foreign.is_empty() => Err(Fail::infra(format!(
@@ -644,9 +650,13 @@ fn read_checkpoint(src: &FileSource, g: &ValidatedGeometry) -> Result<Checkpoint
             for (p, e) in damaged.iter().chain(foreign.iter()) {
                 eprintln!("warning: unusable checkpoint {}: {e}", p.display());
             }
-            Ok(found.swap_remove(0).1)
+            let (p, c) = found.swap_remove(0);
+            Ok((c, p))
         }
-        _ => Ok(CheckpointSlot::Ambiguous(found.into_iter().map(|(p, _)| p).collect())),
+        _ => {
+            let paths = found.into_iter().map(|(p, _)| p).collect();
+            Ok((CheckpointSlot::Ambiguous(paths), candidates[0].clone()))
+        }
     }
 }
 
@@ -907,8 +917,8 @@ fn prepare_apply(
         crate::fsops::check_grow_step(crate::fsops::grow_target_at(src, plan.grow_part, base, len)?)?;
     }
     // 恢复三态：有效 → 续传 / 槽位被另一族作业占用 → 拒绝 / 空 → 新建
-    let slot = read_checkpoint(src, g0)?;
-    let ckpt_path = src.identity.checkpoint_path().to_path_buf();
+    // 落点取命中路径：续传写同一份现场；空槽返回本次命名落点
+    let (slot, ckpt_path) = read_checkpoint(src, g0)?;
 
     let ckpt = match slot {
         CheckpointSlot::Ambiguous(paths) => return Err(ambiguous_checkpoint(&paths)),
@@ -1098,11 +1108,13 @@ fn execute_apply(
             fault_after_swap_commit(mi);
             // 旧 swap 签名区在源位置（数据区未搬移），从那里读 UUID/卷标
             let ident = read_swap_identity(src, m.first_lba, m.len_lba, plan.ss);
+            let had_uuid = ident.0.is_some();
             // mkswap 是外部工具的写盘，先落屏障（对齐 execute_resize 的 swap 分支）
             src.set_mutation(crate::dev::Mutation::ExternalFsTool);
             src.mark_non_reversible()?;
             match crate::fsops::recreate_swap(src, m.part_num, ident) {
-                Ok(()) => log(&format!("swap {} recreated at new location (UUID preserved)", m.part_num)),
+                Ok(()) if had_uuid => log(&format!("swap {} recreated at new location (UUID preserved)", m.part_num)),
+                Ok(()) => log(&format!("swap {} recreated at new location (old signature had no UUID — mkswap wrote a fresh one)", m.part_num)),
                 // 表项已落位、内容可弃：swap 未重建属"后续步骤未完成"，不是本次操作失败
                 Err(e) => pending.push(Pending::new(
                     m.part_num,
@@ -1281,8 +1293,10 @@ fn finalize_growth(
             src.set_mutation(crate::dev::Mutation::ExternalFsTool);
             src.mark_non_reversible()?;
             let ident = read_swap_identity(src, r.old.0, r.old.1, ss);
+            let had_uuid = ident.0.is_some();
             match crate::fsops::recreate_swap(src, part, ident) {
-                Ok(()) => log("swap recreated (UUID preserved)"),
+                Ok(()) if had_uuid => log("swap recreated (UUID preserved)"),
+                Ok(()) => log("swap recreated (old signature had no UUID — mkswap wrote a fresh one)"),
                 Err(e) => pending.push(Pending::new(
                     part,
                     PendingKind::Swap,
@@ -1661,7 +1675,7 @@ fn prepare_resize(
     // 下面的每一条拒绝都承诺"本次未写盘"（退出码 10），故判定与写盘的先后不能颠倒
     // 几何由调用方解析并下传：ckpt 的合法边界来自它（分区号上界、可用区、容器末端）
     let g = g.clone();
-    let slot = read_checkpoint(src, &g)?;
+    let (slot, ckpt_path) = read_checkpoint(src, &g)?;
     let ss = g.ss;
     let e = gpt_policy::live_entry(&g, part)?;
     // 占用闸：搬移/改写一个被挂载或活动 swap 的分区会让现场失效。镜像无块设备占用
@@ -1782,7 +1796,7 @@ fn prepare_resize(
         ss, part, old_start, old_end, new_start, new_end, fstype,
         fs_shrunk, resume_chunks, committed_old, fs_action, repair, new_bytes,
         chunk_len, no_fs,
-        ckpt_path: src.identity.checkpoint_path().to_path_buf(),
+        ckpt_path,
         g,
     })
 }
@@ -1815,6 +1829,14 @@ fn execute_resize(
         map: src.loop_mapping,
     };
     let save = |c: &RsCheckpoint| atomic_write_ckpt(&p.ckpt_path, &c.serialize());
+
+    // 纯扩容（不搬移、无缩容）没有其余 save 落点：FS 步失败或崩溃后，盘上条目已是新
+    // 尺寸，重跑会按 Fresh 算出 old_bytes == new_bytes → Leave 而报成功，FS 永不扩。
+    // 开工即落 ckpt，重跑经 Committed 分支用 ckpt 记录的搬移前区间判 Grow、补试 FS 步；
+    // 成功后照常在收尾撤除
+    if p.fs_action == FsAction::Grow && new_start == old_start && committed_old.is_none() {
+        save(&ckpt)?;
+    }
 
     // ---- 阶段 0：缩容 FS 先缩（只做一次）----
     // 本块只在 !no_fs 时可达（no_fs + 缩容 + FS 未缩已在上面整体拒绝），因此
@@ -2387,7 +2409,7 @@ mod tests {
         atomic_write_ckpt(&ckpt_path, &rs.serialize()).unwrap();
         let o = ap(&mut src, &plan, chunk, true, &mut |_| {});
         assert_eq!(o.exit_code(), crate::outcome::EXIT_REFUSED, "apply must refuse while a resize job owns the slot");
-        assert!(matches!(read_checkpoint(&src, &geom_of(&src)).unwrap(), CheckpointSlot::Resize(_)), "the resize checkpoint must survive");
+        assert!(matches!(read_checkpoint(&src, &geom_of(&src)).unwrap().0, CheckpointSlot::Resize(_)), "the resize checkpoint must survive");
         assert_eq!(table::load_gpt(&src).unwrap().unwrap().entries[1].starting_lba, 8192, "nothing may be relocated");
 
         // (b) 槽位里是 plan 型搬移的 ckpt → resize_part 拒绝（不能按"无 ckpt"重做）
@@ -2404,7 +2426,7 @@ mod tests {
             matches!(&o, Outcome::Refused(m) if m.contains("relocation job")),
             "resize_part must refuse while a relocation job owns the slot: {o:?}"
         );
-        assert!(matches!(read_checkpoint(&src, &geom_of(&src)).unwrap(), CheckpointSlot::Relocation(_)), "the relocation checkpoint must survive");
+        assert!(matches!(read_checkpoint(&src, &geom_of(&src)).unwrap().0, CheckpointSlot::Relocation(_)), "the relocation checkpoint must survive");
 
         drop(src);
         let _ = std::fs::remove_file(&ckpt_path);
@@ -2418,7 +2440,7 @@ mod tests {
         let (src, path) = plan_fixture(&[(1, [0x11; 16], 2048, 6143)]);
         let ckpt_path = src.identity.checkpoint_path().to_path_buf();
 
-        assert!(matches!(read_checkpoint(&src, &geom_of(&src)).unwrap(), CheckpointSlot::Empty));
+        assert!(matches!(read_checkpoint(&src, &geom_of(&src)).unwrap().0, CheckpointSlot::Empty));
 
         // 头部魔数在、内容被截断：正是断电撕裂写下的样子。
         // 新契约：文件在而全部不可读 = Infra，且文案指向 abandon（不再吞成空槽）
@@ -3542,7 +3564,7 @@ mod tests {
 
     /// FS 步留下待办时 checkpoint 保留，重跑同一请求落到"已提交、补 FS 步"分支：
     /// 重跑既不能静默完成（Fresh 下旧区间=新区间 ⇒ Leave ⇒ 报 0 而 swap 仍未重建），
-    /// 也不得再次搬动数据。ckpt 只在数据搬移的 chunk 循环里落，故夹具必须带搬移
+    /// 也不得再次搬动数据。夹具带搬移：chunk 循环的逐 chunk save 是这条路径的落盘来源
     #[test]
     fn swap_pending_keeps_checkpoint_and_rerun_retries_the_fs_step() {
         let (src, p) = plan_fixture(&[(1, [0x11; 16], 2048, 10239)]);
@@ -3583,6 +3605,42 @@ mod tests {
         assert_eq!(after, sentinel, "续传只重试 FS 步，不得再次搬动数据");
         let g2 = table::load_gpt(&src).unwrap().unwrap();
         assert_eq!((g2.entries[0].starting_lba, g2.entries[0].ending_lba), (12288, 24575));
+
+        drop(src);
+        let _ = std::fs::remove_file(&ckpt_path);
+        let _ = std::fs::remove_file(&p);
+    }
+
+    /// 纯扩容（不搬移）FS 步留下待办时 checkpoint 同样保留、重跑补试 FS 步：
+    /// 无搬移就没有 chunk 循环的 save 落点，开工时的这一次落盘是重跑落到
+    /// "已提交、补 FS 步"分支的唯一凭据——缺了它重跑按 Fresh 算出
+    /// 旧区间 == 新区间 ⇒ Leave ⇒ 报 0，待办从此无人认领
+    #[test]
+    fn pure_growth_fs_pending_keeps_checkpoint_and_rerun_retries() {
+        let (src, p) = plan_fixture(&[(1, [0x11; 16], 2048, 6143)]);
+        drop(src);
+        // 32K 候选位置放 swap 签名：identify 认不出它，FS 步按"不可激活的 swap"记待办
+        let base = 2048 * 512;
+        let mut raw = std::fs::read(&p).unwrap();
+        raw[base + 32768 - 10..base + 32768].copy_from_slice(b"SWAPSPACE2");
+        std::fs::write(&p, &raw).unwrap();
+
+        let mut src = plan_open(&p);
+        let ckpt_path = src.identity.checkpoint_path().to_path_buf();
+
+        let o1 = rsize(&mut src, 1, 2048, 8191, 1024 * 1024, false, &mut |_| {});
+        assert_eq!(o1.exit_code(), 20, "{o1:?}");
+        assert!(ckpt_path.exists(), "纯扩容的 FS 待办同样要留 ckpt——重跑只能靠它落到补试分支");
+
+        let o2 = rsize(&mut src, 1, 2048, 8191, 1024 * 1024, false, &mut |_| {});
+        match &o2 {
+            crate::outcome::Outcome::Applied { pending, .. } => {
+                assert_eq!(pending.len(), 1, "重跑须再次报出 swap 待办：{pending:?}");
+            }
+            other => panic!("expected Applied, got {other:?}"),
+        }
+        assert!(!o2.is_complete(), "重跑不得把未完成的 FS 步报成完成");
+        assert_eq!(o2.exit_code(), 20);
 
         drop(src);
         let _ = std::fs::remove_file(&ckpt_path);
