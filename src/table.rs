@@ -1326,6 +1326,12 @@ pub const ESP_TYPE_GUID: [u8; 16] = [
 pub const LINUX_FS_TYPE_GUID: [u8; 16] = [
     0xAF, 0x3D, 0xC6, 0x0F, 0x83, 0x84, 0x72, 0x47, 0x8E, 0x79, 0x3D, 0x69, 0xD8, 0x47, 0x7D, 0xE4,
 ];
+/// Microsoft basic data 类型 GUID（标准文本 A2A0D0EB-E5B9-3344-87C0-68B6B72699C7 的磁盘字节序）。
+/// `flag esp=off` 对 FAT/NTFS 分区的回退落点（parted gpt.c set_system：fs_type 为
+/// fat/ntfs 时落此类型而非 Linux data）
+pub const BASIC_DATA_TYPE_GUID: [u8; 16] = [
+    0xEB, 0xD0, 0xA0, 0xA2, 0xB9, 0xE5, 0x44, 0x33, 0x87, 0xC0, 0x68, 0xB6, 0xB7, 0x26, 0x99, 0xC7,
+];
 /// Linux swap 类型 GUID（标准文本 0657FD6D-A4AB-43C4-84E5-0933C84B4F4F 的磁盘字节序）。
 /// movepart 依赖此识别 swap 挡路者（不搬数据、落位后 mkswap 重建）
 pub const SWAP_TYPE_GUID: [u8; 16] = [

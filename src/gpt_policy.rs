@@ -515,7 +515,30 @@ pub fn set_gpt_flag(src: &mut FileSource, part: u32, flag: GptFlag, on: bool) ->
     let i = live_index(&g.entries, part)?;
     let e = &mut g.entries[i];
     if flag.switches_type_guid() {
-        e.partition_type_guid = if on { table::ESP_TYPE_GUID } else { table::LINUX_FS_TYPE_GUID };
+        if on {
+            e.partition_type_guid = table::ESP_TYPE_GUID;
+        } else {
+            // off 只对已处 ESP 类型的条目做类型回退（parted gpt.c set_flag：先比对当前
+            // 类型，非 ESP 不动 GUID）；关闭一个未生效的标志不应改写分区现有类型。
+            // 回退落点按盘上实际 FS 定：FAT/NTFS → Microsoft basic data，其余（含识别
+            // 不出的区域）→ Linux filesystem data——这是类型回退而非"恢复原类型"，
+            // 原 GUID 未被保存，无从恢复
+            if e.partition_type_guid == table::ESP_TYPE_GUID {
+                let base = e.starting_lba.checked_mul(g.ss).ok_or_else(|| {
+                    Fail::infra("partition start overflows byte offset")
+                })?;
+                let len = (e.ending_lba - e.starting_lba + 1).checked_mul(g.ss).ok_or_else(|| {
+                    Fail::infra("partition length overflows byte size")
+                })?;
+                let recognized = crate::fsid::identify(src, base, len)?;
+                e.partition_type_guid = match recognized {
+                    Some(crate::fsid::FsKind::Vfat) | Some(crate::fsid::FsKind::Ntfs) => {
+                        table::BASIC_DATA_TYPE_GUID
+                    }
+                    _ => table::LINUX_FS_TYPE_GUID,
+                };
+            }
+        }
     } else if on {
         e.attribute_bits |= flag.attribute_bit();
     } else {
@@ -574,8 +597,9 @@ mod tests {
 
     #[test]
     fn gpt_flag_esp_switches_type_guid() {
-        // parted gpt.c：boot/esp 标志 = 类型 GUID ↔ PARTITION_SYSTEM_GUID，
-        // off 回 Linux filesystem data；属性位不动（esp≠bit60 read-only）
+        // parted gpt.c set_flag/set_system：esp on = 类型换 ESP GUID；off 仅在当前类型
+        // 仍是 ESP 时回退，落点按盘上 FS 定（本夹具无 FS 签名 → Linux filesystem data）；
+        // 属性位不动（esp≠bit60 read-only）
         let mut src = gpt_src("gesp");
         let flag = |s: &str| GptFlag::parse(s).unwrap();
         set_gpt_flag(&mut src, 1, flag("esp"), true).unwrap();
@@ -585,6 +609,40 @@ mod tests {
         set_gpt_flag(&mut src, 1, flag("boot"), false).unwrap();
         let g = table::load_gpt(&src).unwrap().unwrap();
         assert_eq!(g.entries[0].partition_type_guid, table::LINUX_FS_TYPE_GUID);
+    }
+
+    #[test]
+    fn gpt_flag_esp_off_leaves_non_esp_untouched() {
+        // off 只回退 ESP 类型：关闭一个未生效的标志不改写分区现有类型（parted gpt.c
+        // set_flag 先比对当前类型，非 ESP 原样返回）
+        let mut src = gpt_src("gespkeep");
+        set_gpt_flag(&mut src, 1, GptFlag::Esp, false).unwrap();
+        let g = table::load_gpt(&src).unwrap().unwrap();
+        assert_eq!(g.entries[0].partition_type_guid, table::LINUX_FS_TYPE_GUID);
+        // on 恒切 ESP，off 再收回到回退落点
+        set_gpt_flag(&mut src, 1, GptFlag::Esp, true).unwrap();
+        let g = table::load_gpt(&src).unwrap().unwrap();
+        assert_eq!(g.entries[0].partition_type_guid, table::ESP_TYPE_GUID);
+        set_gpt_flag(&mut src, 1, GptFlag::Esp, false).unwrap();
+        let g = table::load_gpt(&src).unwrap().unwrap();
+        assert_eq!(g.entries[0].partition_type_guid, table::LINUX_FS_TYPE_GUID);
+    }
+
+    #[test]
+    fn gpt_flag_esp_off_falls_back_by_fs_content() {
+        // 回退落点按盘上实际 FS：FAT 签名（FAT12/16 @0x36）→ Microsoft basic data
+        let mut img = vec![0u8; 8 * 1024 * 1024];
+        let part_base = 2048u64 * 512;
+        img[part_base as usize + 0x36..][..8].copy_from_slice(b"FAT16   ");
+        let mut src = crate::support::src_from("gespfat", &img);
+        table::create_gpt(&mut src, 512, None).unwrap();
+        add_entry(&mut src, 2048, 4095, "p", table::LINUX_FS_TYPE_GUID).unwrap();
+        set_gpt_flag(&mut src, 1, GptFlag::Esp, true).unwrap();
+        let g = table::load_gpt(&src).unwrap().unwrap();
+        assert_eq!(g.entries[0].partition_type_guid, table::ESP_TYPE_GUID);
+        set_gpt_flag(&mut src, 1, GptFlag::Esp, false).unwrap();
+        let g = table::load_gpt(&src).unwrap().unwrap();
+        assert_eq!(g.entries[0].partition_type_guid, table::BASIC_DATA_TYPE_GUID);
     }
 
     #[test]
