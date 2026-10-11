@@ -288,11 +288,13 @@ pub fn unactivatable_swap(src: &FileSource, base: u64, len_bytes: u64) -> io::Re
 /// 解析失败或 0 → None。读错误如实上抛：读不出来与"签名不命中"是两回事，
 /// 把前者折叠成 None 会让调用方把盘上事实当成"没有 overlay"。分区不足以容纳
 /// 超级块读区同样按未命中——那不是读故障，是区间不存在的事实
-pub fn overlay_offset_at(src: &FileSource, part_offset: u64) -> io::Result<Option<u64>> {
+pub fn overlay_offset_at(src: &FileSource, part_offset: u64, part_len_bytes: u64) -> io::Result<Option<u64>> {
     const ALIGN: u64 = 64 * 1024;
     let mut sb = [0u8; 2048];
-    // 不设此闸，read_exact 对越界区间报 UnexpectedEof，会被调用方当成 I/O 故障（退 30）
-    if src.size < part_offset.saturating_add(sb.len() as u64) {
+    // 读区越出分区尾按未命中：那不是读故障，是区间不存在的事实；且闸若缺位，
+    // 越界读会吃到分区之后的邻分区字节（或 EOF 上的 UnexpectedEof，被调用方
+    // 当成 I/O 故障退 30）
+    if sb.len() as u64 > part_len_bytes {
         return Ok(None);
     }
     src.read_at(part_offset, &mut sb)?;
@@ -512,31 +514,31 @@ mod tests {
         data[0..4].copy_from_slice(b"hsqs");
         data[0x28..0x30].copy_from_slice(&0x29C00u64.to_le_bytes());
         let s = src_from("ovl", data.clone());
-        assert_eq!(overlay_offset_at(&s, 0).unwrap(), Some(0x30000));
+        assert_eq!(overlay_offset_at(&s, 0, 65536).unwrap(), Some(0x30000));
         // 已对齐值不变
         data[0x28..0x30].copy_from_slice(&0x30000u64.to_le_bytes());
         let s = src_from("ovl2", data);
-        assert_eq!(overlay_offset_at(&s, 0).unwrap(), Some(0x30000));
+        assert_eq!(overlay_offset_at(&s, 0, 65536).unwrap(), Some(0x30000));
         // EROFS：blocks=0x30 << blkszbits=12 = 0x30000
         let mut data = vec![0u8; 65536];
         data[1024..1028].copy_from_slice(&[0xE2, 0xE1, 0xF5, 0xE0]);
         data[1024 + 0x0C] = 12;
         data[1024 + 0x24..1024 + 0x28].copy_from_slice(&0x30u32.to_le_bytes());
         let s = src_from("ovl3", data.clone());
-        assert_eq!(overlay_offset_at(&s, 0).unwrap(), Some(0x30000));
+        assert_eq!(overlay_offset_at(&s, 0, 65536).unwrap(), Some(0x30000));
         // blkszbits 溢出 → None
         data[1024 + 0x0C] = 99;
         let s = src_from("ovl4", data);
-        assert_eq!(overlay_offset_at(&s, 0).unwrap(), None);
+        assert_eq!(overlay_offset_at(&s, 0, 65536).unwrap(), None);
         // blkszbits < 9（无下界语义）→ None
         let mut data = vec![0u8; 65536];
         data[1024..1028].copy_from_slice(&[0xE2, 0xE1, 0xF5, 0xE0]);
         data[1024 + 0x0C] = 8;
         let s = src_from("ovl6", data);
-        assert_eq!(overlay_offset_at(&s, 0).unwrap(), None);
+        assert_eq!(overlay_offset_at(&s, 0, 65536).unwrap(), None);
         // 无魔数 → None
         let data = vec![0u8; 65536];
         let s = src_from("ovl5", data);
-        assert_eq!(overlay_offset_at(&s, 0).unwrap(), None);
+        assert_eq!(overlay_offset_at(&s, 0, 65536).unwrap(), None);
     }
 }

@@ -44,6 +44,10 @@ pub(crate) fn print_plan(plan: &movepart::Plan, target_start: u64) -> std::io::R
 }
 
 pub(crate) fn cmd_plan_apply(cmd: &str, a: &Args) -> u8 {
+    // 目标分区由 --grow N 选定：`:N` 若被静默忽略，用户会误以为只动了某个分区
+    if let Some(n) = a.part {
+        bail_fail(Fail::refused(format!("`{cmd}` selects the partition with --grow N — drop :{n}")));
+    }
     let Some(pref) = a.grow else { crate::args::usage() };
     if cmd == "plan" {
         // 这一段只读：plan 不写盘，故按只读命令打开——否则一块正被使用的盘上
@@ -78,7 +82,7 @@ pub(crate) fn cmd_plan_apply(cmd: &str, a: &Args) -> u8 {
             .unwrap_or_else(|f| bail_fail(f))
             .starting_lba;
         let grow_end = movepart::grow_end_for(&plan, target_start)
-            .unwrap_or_else(|e| bail_fail(Fail::refused(format!("plan failed: {e}"))));
+            .unwrap_or_else(|e| bail_fail(Fail::infra(format!("plan failed: {e}"))));
         println!(
             "grow partition {} → end LBA {} (last usable {})",
             plan.grow_part, grow_end, plan.last_usable_lba
@@ -117,6 +121,12 @@ fn apply_cmd(a: &Args, pref: PartSelector) -> u8 {
         Ok(p) => p,
         Err(f) => bail_fail(f),
     };
+    // 槽上未收尾的作业若是精确 SIZE 的最小位移 plan，其终点停在旧请求的末端：
+    // 当作 grow 收尾等于把本次请求静默替换成旧作业的续跑。新建 plan 一律是
+    // TailPacked，此判据只在续跑 ckpt 时可能触发；重跑当初那条 SIZE 命令即续跑
+    if plan.kind == movepart::PlanKind::Shift {
+        bail_fail(Fail::refused("an unfinished `resize SIZE` relocation job owns this target — re-run that command to resume it, or `diskedit abandon` to release it".to_string()));
+    }
     // 表的可解析性由上面那一次 require_gpt_geometry 判过（无 GPT → refused 10，表非法 → infra 30）：
     // 同一事实不设第二判据——两处判据迟早会在某个入口分叉，且自判拒绝时还不报原因
     let mut logger = Logger::open(&src, Some(g.header.disk_guid));

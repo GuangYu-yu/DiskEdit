@@ -282,18 +282,16 @@ pub(crate) fn parse_mountinfo(line: &str) -> Option<MountEntry> {
     })
 }
 
-/// 读取 /proc/self/mountinfo；解析失败的行告警后跳过（pseudo-fs 行无设备号等属常态，
-/// 静默吞掉会掩盖真实解析缺陷——设备占用判定宁可多问一句也不漏报挂载）
+/// 读取 /proc/self/mountinfo。任何一行解析失败都整体报错：调用方的契约是
+/// "确认不了空闲即不算空闲"（见 probe_occupancy），跳过坏行会把目标设备恰好
+/// 落在那一行上的情形误判成未挂载——宁可整个操作拒做
 #[cfg(target_os = "linux")]
 pub(crate) fn read_mounts() -> io::Result<Vec<MountEntry>> {
     let s = std::fs::read_to_string("/proc/self/mountinfo")?;
-    Ok(s.lines().filter_map(|l| {
-        let e = parse_mountinfo(l);
-        if e.is_none() {
-            eprintln!("warning: unparseable mountinfo line skipped: {l}");
-        }
-        e
-    }).collect())
+    s.lines().map(|l| {
+        parse_mountinfo(l)
+            .ok_or_else(|| io::Error::other(format!("unparseable /proc/self/mountinfo line: {l}")))
+    }).collect()
 }
 
 /// 设备占用探测结果（/proc/self/mountinfo + /proc/swaps，路径与 st_rdev 并集匹配）。
@@ -1070,7 +1068,7 @@ pub fn grow_target_at(src: &FileSource, part: u32, base: u64, len: u64) -> Resul
     if matches!(fstype, Some(FsKind::Squashfs | FsKind::Erofs)) {
         // OpenWrt combined 布局：同分区头部只读根 + 尾部 RW overlay（fstools rootdisk.c）。
         // fstools 只把 RW 层造成 ext4/f2fs，故内层可扩集合就是这两者
-        let rel = crate::fsid::overlay_offset_at(src, base)
+        let rel = crate::fsid::overlay_offset_at(src, base, len)
             .map_err(FsError::from)?
             .ok_or_else(|| FsError::unsupported(format!(
                 "{} rootfs without a trailing RW overlay layer — nothing to grow",
@@ -1093,7 +1091,8 @@ pub fn grow_target_at(src: &FileSource, part: u32, base: u64, len: u64) -> Resul
         }
         if src.is_block {
             // Range 路径走 loop，循环节点自身的挂载检查探不到底层分区——底层分区
-            // 挂载态在此显式守卫
+            // 挂载态在此显式守卫。这是判定期的时点检查：本函数每次被调用（preflight
+            // 与收尾各一次）各守一次，判定之后的执行窗口不再复核
             let node = find_block_partition_node(src, part, base)?;
             require_unmounted(&node)?;
         }
@@ -1267,6 +1266,14 @@ where
     F: FnOnce(&str) -> Result<(), FsError>,
 {
     let mnt = mount_point();
+    // PID 复用会撞上崩溃残留的同名目录：先试着清掉——remove_dir 只对空目录成功，
+    // 非空说明残留目录上可能还挂着上次留下的文件系统，叠挂会把两个 FS 混在同一目录
+    if mnt.exists() {
+        std::fs::remove_dir(&mnt).map_err(|e| FsError::from(io::Error::other(format!(
+            "stale mountpoint {} from a previous run is not removable (check for a residual mount there): {e}",
+            mnt.display()
+        ))))?;
+    }
     std::fs::create_dir_all(&mnt).map_err(FsError::from)?;
     let mount = find_tool("mount")?;
     let out = Command::new(mount).arg(dev).arg(&mnt).stdin(Stdio::null()).output().map_err(FsError::from)?;
