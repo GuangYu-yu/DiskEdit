@@ -103,10 +103,10 @@ pub fn swap_active(disk_name: &str, pno: u32) -> std::io::Result<bool> {
     let s = fs::read_to_string("/proc/swaps")?;
     for l in s.lines().skip(1) {
         // 首行表头已跳过；其余行首字段为设备路径
-        if let Some(d) = l.split_whitespace().next() {
-            if part_in_use(d, disk_name, pno)? {
-                return Ok(true);
-            }
+        if let Some(d) = l.split_whitespace().next()
+            && part_in_use(d, disk_name, pno)?
+        {
+            return Ok(true);
         }
     }
     Ok(false)
