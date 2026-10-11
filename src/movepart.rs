@@ -124,8 +124,6 @@ fn blockers_after(
 
 /// plan 生成：只解析 + 验证 + 计算，不写盘。stale 表按"修复后"的几何生成计划，
 /// 并把修复动作记入 plan.repair，由 apply 执行。
-/// 几何只在此解析一次（[`ValidatedGeometry`] = 修复后将生效的几何），随后的
-/// 续传判定与规划共用它——历史实现让 read_checkpoint 与 resolve_geometry 各读一次表
 /// 尾打包规划的唯一实现处：几何已由调用方解析，本函数不再读盘、不再重新推导边界。
 /// 生产路径只有恢复感知入口（[`make_plan_resuming`]，几何解析一次），本函数由它直接调用
 fn plan_tail_packed(g: &ValidatedGeometry, repair: RepairAction, grow_part: u32) -> Result<Plan, Fail> {
@@ -973,9 +971,10 @@ fn prepare_apply(
             // 目的区校验：上面的位置比对只覆盖源位置这半个维度。目的区同样是盘上可控
             // 值——中断期间第三方改表（尾部打包的目的区恰在 last_usable 端空闲带，最易
             // 被新建分区占用），或 ckpt 被改写出 CRC 自洽的目的区。与**非本作业**条目
-            // 重叠的续跑会把 chunk 拷贝写到别人的分区并提交重叠表项。本作业成员的现位
-            // 不在此列：移位/尾打包 plan 的目的区合法地落在其他成员的旧位（右侧先搬
-            // 让位），成员现位是否停在应停处已由上面的位置比对裁决
+            // 重叠的续跑会把 chunk 拷贝写到别人的分区并提交重叠表项。本作业成员的条目
+            // 全部豁免：移位/尾打包 plan 的目的区合法落在其他成员的旧位（右侧先搬让位，
+            // 先处理成员表项提交前崩溃的重跑即命中此态），成员现位是否停在应停处已由
+            // 上面的位置比对逐条裁决
             let mut dst_ranges = Vec::with_capacity(plan.moves.len());
             for m in &plan.moves {
                 let dst = m.first_lba.checked_add(m.delta_lba)
@@ -987,7 +986,8 @@ fn prepare_apply(
             for &(pn, dst, dst_end) in &dst_ranges {
                 for (ei, e) in g0.entries.iter().enumerate() {
                     // 空条目（0,0）不可能命中：dst 下界 ≥ first_usable ≥ 2
-                    if (ei as u32 + 1) == pn {
+                    let n = ei as u32 + 1;
+                    if n == pn || plan.moves.iter().any(|m| m.part_num == n) {
                         continue;
                     }
                     if e.starting_lba <= dst_end && dst <= e.ending_lba {
@@ -1279,6 +1279,14 @@ fn execute_apply(
         ckpt.cur_index = mi as u32 + 1;
         atomic_write_ckpt(ckpt_path, &ckpt.serialize())?;
         fault_after_entry_commit(mi);
+    }
+    // 条目循环未走完（swap 重建失败就地 break）：扩容收尾不能做——grow_end_for 按
+    // 全体 moves 取 min(new_first)−1，会把尚未搬移成员的旧位也划进扩容区，提交即写出
+    // 与未搬移分区重叠的表项。扩容留给续跑：重跑在同一 ckpt 上从本条目重试 mkswap，
+    // 条目走完后才到达这里
+    if (ckpt.cur_index as usize) < plan.moves.len() {
+        log("relocation incomplete (swap rebuild pending) — growth not applied, re-run the command to continue");
+        return Ok(());
     }
     fault_before_grow();
 
@@ -3235,6 +3243,48 @@ mod tests {
             (after.entries[2].starting_lba, after.entries[2].ending_lba),
             "a zero-delta move must leave the neighbour untouched"
         );
+    }
+
+    /// 条目循环未走完（swap 重建失败就地停止）时扩容收尾必须跳过：grow_end_for 按全体
+    /// moves 取 min(new_first)−1，会把尚未搬移成员的旧位划进扩容区，提交即写出与未搬移
+    /// 分区重叠的表项。swap 条目只给 64 扇区（32KiB，低于 mkswap 的最小可建容量），
+    /// 使重建在带 mkswap 的环境按容量拒绝、在其余环境按工具缺失/权限拒绝——两条路都进
+    /// Err 臂。重跑走续传口径：位置与目的区校验须接受"成员停在本作业成员旧位"的现场
+    #[test]
+    fn swap_rebuild_failure_skips_growth_finalization() {
+        const SWAP: [u8; 16] = [0x6D, 0xFD, 0x57, 0x06, 0xAB, 0xA4, 0xC4, 0x43, 0x84, 0xE5, 0x09, 0x33, 0xC8, 0x4B, 0x4F, 0x4F];
+        // root 2048..6143 | home 6144..10239 | swap 10240..10303（64 扇区）
+        let (mut src, path) = plan_fixture(&[
+            (1, [0x11; 16], 2048, 6143),
+            (2, [0x22; 16], 6144, 10239),
+            (3, SWAP, 10240, 10303),
+        ]);
+        let ckpt_path = src.identity.checkpoint_path().to_path_buf();
+        let plan = make_plan(&mut src, 1).unwrap();
+        assert!(plan.moves.iter().any(|m| m.is_swap), "fixture must carry a movable swap");
+        let o = ap(&mut src, &plan, 1024 * 1024, true, &mut |_| {});
+        match &o {
+            crate::outcome::Outcome::Applied { pending, .. } => {
+                assert_eq!(pending.len(), 1, "须报一条待办：{pending:?}");
+                assert_eq!(pending[0].kind, crate::outcome::PendingKind::Swap);
+            }
+            other => panic!("expected Applied, got {other:?}"),
+        }
+        assert!(!o.is_complete());
+        assert_eq!(o.exit_code(), 20, "swap 未重建，不能报完全成功");
+        // 扩容收尾被跳过：home 仍在旧位，root 终点未动，表无重叠
+        let g = table::load_gpt(&src).unwrap().unwrap();
+        assert_eq!((g.entries[0].starting_lba, g.entries[0].ending_lba), (2048, 6143));
+        assert_eq!((g.entries[1].starting_lba, g.entries[1].ending_lba), (6144, 10239));
+        assert!(ckpt_path.exists(), "有待办时 checkpoint 必须保留");
+        // 重跑：续传口径须被接受（dst 校验豁免本作业成员），并停在同一待办
+        let plan2 = plan_resuming(&mut src, 1).unwrap();
+        let o2 = ap(&mut src, &plan2, 1024 * 1024, true, &mut |_| {});
+        assert!(!o2.is_complete());
+        assert_eq!(o2.exit_code(), 20, "重跑仍以 swap 重建失败收场");
+        drop(src);
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&ckpt_path);
     }
 
     /// 续跑前的位置一致性校验（R2）：ckpt 是持久化输入，而续跑用的 plan 由 ckpt 直接重建，
