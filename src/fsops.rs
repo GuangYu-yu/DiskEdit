@@ -319,7 +319,10 @@ fn probe_occupancy(dev: &str) -> io::Result<Occupancy> {
     let rdev = m.rdev();
     let dev_no = (libc::major(rdev) as u64, libc::minor(rdev) as u64);
     let entries = read_mounts()?;
-    if entries.iter().any(|e| e.dev_no == dev_no) {
+    // 双判据取并集：dev_no（st_rdev）之外比对 source 路径——btrfs 成员挂载在 mountinfo
+    // 字段 3 报匿名设备号（anon bdev，与成员分区 st_rdev 必不相同），但 source 仍是
+    // 成员设备路径，单靠 dev_no 会漏检
+    if entries.iter().any(|e| e.dev_no == dev_no || e.source == dev) {
         return Ok(Occupancy::Mounted);
     }
     let swaps = std::fs::read_to_string("/proc/swaps")?;

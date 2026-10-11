@@ -38,8 +38,12 @@ pub(crate) const HELP_SET: &str = r#"diskedit set <TARGET>:N name S | type GUID 
     label / uuid  filesystem label / UUID (FS-aware). --random asks the target
                   to generate a new value (ntfs only: its serial is not the
                   Windows volume UUID)
-    flag          GPT: esp|boot|legacy|legacy_boot|hidden|required ;
-                  MBR: boot|hidden"#;
+    flag          GPT: esp|boot|legacy|legacy_boot|hidden|required — esp/boot on
+                  switches the type GUID to EFI System Partition; off switches
+                  it back only when the type is currently ESP (falling back to
+                  Microsoft basic data for FAT/NTFS content, Linux filesystem
+                  data otherwise; the previous type GUID is not preserved).
+                  Other type GUIDs are left untouched. MBR: boot|hidden"#;
 
 /// 请求形式与目标能力的比对。能力事实取自 `fsops::uuid_support`（不在此另抄一份），
 /// 但"不合能力该不该拒、拿什么措辞拒"是产品的决定，只有命令层能给出"改参数也许有解"
