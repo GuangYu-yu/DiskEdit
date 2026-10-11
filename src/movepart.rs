@@ -970,6 +970,72 @@ fn prepare_apply(
                     )));
                 }
             }
+            // 目的区校验：上面的位置比对只覆盖源位置这半个维度。目的区同样是盘上可控
+            // 值——中断期间第三方改表（尾部打包的目的区恰在 last_usable 端空闲带，最易
+            // 被新建分区占用），或 ckpt 被改写出 CRC 自洽的目的区。与**非本作业**条目
+            // 重叠的续跑会把 chunk 拷贝写到别人的分区并提交重叠表项。本作业成员的现位
+            // 不在此列：移位/尾打包 plan 的目的区合法地落在其他成员的旧位（右侧先搬
+            // 让位），成员现位是否停在应停处已由上面的位置比对裁决
+            let mut dst_ranges = Vec::with_capacity(plan.moves.len());
+            for m in &plan.moves {
+                let dst = m.first_lba.checked_add(m.delta_lba)
+                    .ok_or_else(|| crate::outcome::Fail::infra("relocation target LBA overflows"))?;
+                let dst_end = dst.checked_add(m.len_lba).and_then(|v| v.checked_sub(1))
+                    .ok_or_else(|| crate::outcome::Fail::infra("relocation target range overflows"))?;
+                dst_ranges.push((m.part_num, dst, dst_end));
+            }
+            for &(pn, dst, dst_end) in &dst_ranges {
+                for (ei, e) in g0.entries.iter().enumerate() {
+                    // 空条目（0,0）不可能命中：dst 下界 ≥ first_usable ≥ 2
+                    if (ei as u32 + 1) == pn {
+                        continue;
+                    }
+                    if e.starting_lba <= dst_end && dst <= e.ending_lba {
+                        return Err(crate::outcome::Fail::refused(format!(
+                            "relocation target of partition {} (LBA {}..{}) overlaps partition {} on disk — the layout moved under the job; refusing",
+                            pn, dst, dst_end,
+                            ei + 1
+                        )));
+                    }
+                }
+            }
+            // 目的区两两不相交：重叠的目的区无论执行顺序如何都互相覆写
+            for (i, &(apn, ad, ae)) in dst_ranges.iter().enumerate() {
+                for &(bpn, bd, be) in dst_ranges.iter().skip(i + 1) {
+                    if ad <= be && bd <= ae {
+                        return Err(crate::outcome::Fail::refused(format!(
+                            "relocation targets of partitions {} and {} overlap (LBA {}..{}) — inconsistent checkpoint; refusing",
+                            apn, bpn, ad, ae
+                        )));
+                    }
+                }
+            }
+            // chunks_done 采信自本次 read_checkpoint，moves 重建自 resume_outcome 的第一次
+            // 读——两次读之间文件可能被改写（CRC 自洽），deserialize 的进度上界按文件自身
+            // 的 moves 推导，拼接口径下失效。此处按内存里的 plan.moves 重算当前条目的
+            // chunk 上界（与搬移循环同一份确定性布局）：越界不是合法运行能产出的进度，
+            // 静默 min 会把"跳过未拷贝的 chunk"放行成提交
+            let chunk_bound = match plan.moves.get(done as usize) {
+                Some(m) => {
+                    let delta_bytes = m.delta_lba.saturating_mul(plan.ss);
+                    let ec = if m.delta_lba != 0 && m.delta_lba < m.len_lba {
+                        chunk_len.min(delta_bytes)
+                    } else {
+                        chunk_len
+                    };
+                    m.len_lba.checked_mul(plan.ss)
+                        .and_then(|t| t.checked_add(ec - 1))
+                        .map(|t| t / ec)
+                        .ok_or_else(|| crate::outcome::Fail::infra("relocation chunk count overflow"))?
+                }
+                None => 0,
+            };
+            if c.chunks_done > chunk_bound {
+                return Err(crate::outcome::Fail::refused(format!(
+                    "checkpoint chunk progress {} exceeds the bound {} recomputed from the plan — the checkpoint changed between reads; refusing",
+                    c.chunks_done, chunk_bound
+                )));
+            }
             // Y = durable 恢复点（ckpt 文件里的值），不是本进程内存进度
             log(&format!("resuming at entry {} chunk {} (durable checkpoint)", c.cur_index, c.chunks_done));
             Checkpoint {
@@ -1115,14 +1181,23 @@ fn execute_apply(
             match crate::fsops::recreate_swap(src, m.part_num, ident) {
                 Ok(()) if had_uuid => log(&format!("swap {} recreated at new location (UUID preserved)", m.part_num)),
                 Ok(()) => log(&format!("swap {} recreated at new location (old signature had no UUID — mkswap wrote a fresh one)", m.part_num)),
-                // 表项已落位、内容可弃：swap 未重建属"后续步骤未完成"，不是本次操作失败
-                Err(e) => pending.push(Pending::new(
-                    m.part_num,
-                    PendingKind::Swap,
-                    e.to_string(),
-                    // hint 指向表项已提交的新位置（只有读旧签名区取 identity 才用旧起点）
-                    crate::fsops::rescue_hint(Some(FsKind::Swap), &crate::dev::part_dev_hint(src, m.part_num, new_first * plan.ss)),
-                )),
+                // 表项已落位、内容可弃：swap 未重建属"后续步骤未完成"，不是本次操作失败。
+                // 不推进 cur_index、就地停止条目循环，续跑从本条目重试 mkswap（表项提交与
+                // identity 读取幂等，旧签名仍在源位）。推进会让重跑的位置比对要求"后续
+                // 条目仍在源位"而自相矛盾；跳过待办则让重跑把未重建的 swap 洗成成功
+                Err(e) => {
+                    pending.push(Pending::new(
+                        m.part_num,
+                        PendingKind::Swap,
+                        e.to_string(),
+                        // hint 指向表项已提交的新位置（只有读旧签名区取 identity 才用旧起点）
+                        crate::fsops::rescue_hint(Some(FsKind::Swap), &crate::dev::part_dev_hint(src, m.part_num, new_first * plan.ss)),
+                    ));
+                    ckpt.chunks_done = 0;
+                    atomic_write_ckpt(ckpt_path, &ckpt.serialize())?;
+                    fault_after_swap_entry(mi);
+                    break;
+                }
             }
             ckpt.chunks_done = 0;
             ckpt.cur_index = mi as u32 + 1;
@@ -1226,7 +1301,6 @@ fn execute_apply(
 
     // FS resize 是契约的一部分：失败即后置条件未满足（由调用方换算为 PARTIAL）。
     // 这里不能只打日志当成功——脚本会据此认为空间已可用
-    let pending_before = pending.len();
     if no_fs {
         log("partition extended (--no-fs: filesystem left untouched)");
     } else {
@@ -1236,9 +1310,9 @@ fn execute_apply(
         }, g.ss, log, pending)?;
     }
     // ckpt 在 FS 步定论后才撤：FS 步失败而 ckpt 已删时，重跑会按全新作业从旧区重拷，
-    // 自重叠搬移下旧区字节已被写覆盖，重拷即把覆盖后的数据盖回新区。FS 步留下待办时
-    // 保留 ckpt——重跑按续传口径只重试 FS 步
-    if pending.len() == pending_before {
+    // 自重叠搬移下旧区字节已被写覆盖，重拷即把覆盖后的数据盖回新区。任何待办（FS 步
+    // 或 swap 重建）都保留 ckpt——重跑按续传口径只重试未完成的部分
+    if pending.is_empty() {
         crate::dev::warn_if_remove_failed(ckpt_path);
     }
     Ok(())

@@ -126,6 +126,9 @@ pub(crate) fn cmd_undo(a: &Args) -> u8 {
                 m.describe()
             )));
         }
+        // 已写回的条目数：核对失败时的退出码按它分流——refused/infra 的契约是"确定
+        // 未写盘"，部分回滚已落盘后按它报会让脚本误判盘面未动（写失败臂同据归 Failed）
+        let mut replayed: usize = 0;
         for rec in entries.iter().rev() {
             let RecoveryData::PreImage { off, bytes, after } = &rec.recovery else { continue };
             // 分叉核对：盘上当前字节须与这条记录的写后内容一致（正常现场），或与原文
@@ -135,14 +138,38 @@ pub(crate) fn cmd_undo(a: &Args) -> u8 {
             let mut now = vec![0u8; bytes.len()];
             match src.read_at(*off, &mut now) {
                 Ok(()) if now == *after || now == *bytes => {}
-                Ok(_) => bail_fail(Fail::refused(format!(
-                    "target no longer matches the journaled write at offset {off} — the disk changed outside this tool \
-                     (or an interrupted write by this tool itself) after that write; \
-                     replaying would overwrite the foreign edit (release the transaction with `diskedit abandon` if the rollback is no longer wanted)"
-                ))),
-                Err(e) => bail_fail(Fail::infra(format!(
-                    "cannot verify the journaled write at offset {off} against the target: {e} — refusing to replay over an unverifiable region"
-                ))),
+                Ok(_) => {
+                    let detail = format!(
+                        "target no longer matches the journaled write at offset {off} — the disk changed outside this tool \
+                         (or an interrupted write by this tool itself) after that write; \
+                         replaying would overwrite the foreign edit"
+                    );
+                    if replayed == 0 {
+                        bail_fail(Fail::refused(format!(
+                            "{detail} (release the transaction with `diskedit abandon` if the rollback is no longer wanted)"
+                        )));
+                    }
+                    bail_fail(Fail::failed(format!(
+                        "{detail}; {replayed} journal entr{} already rolled back, journal kept — \
+                         re-run `undo` to continue (verify with: diskedit info {})",
+                        if replayed == 1 { "y" } else { "ies" },
+                        a.target
+                    )));
+                }
+                Err(e) => {
+                    let detail = format!(
+                        "cannot verify the journaled write at offset {off} against the target: {e} — refusing to replay over an unverifiable region"
+                    );
+                    if replayed == 0 {
+                        bail_fail(Fail::infra(detail));
+                    }
+                    bail_fail(Fail::failed(format!(
+                        "{detail}; {replayed} journal entr{} already rolled back, journal kept — \
+                         re-run `undo` to continue (verify with: diskedit info {})",
+                        if replayed == 1 { "y" } else { "ies" },
+                        a.target
+                    )));
+                }
             }
             if let Err(e) = src.write_at(*off, bytes) {
                 // journal 保留在原地：可重试 undo。回放进行到一半才失败——前面的条目
@@ -155,6 +182,7 @@ pub(crate) fn cmd_undo(a: &Args) -> u8 {
             if let Err(e) = src.sync_data() {
                 bail_fail(Fail::failed(format!("undo sync failed at offset {off}: {e} (journal kept, retry)")));
             }
+            replayed += 1;
         }
         // undo 的契约是"盘确定回到写入前状态"：sync 失败意味着回滚可能未落盘，
         // 不能报成功——那会让用户以为已经回滚。回放本身已完成，但持久性无法断言，
