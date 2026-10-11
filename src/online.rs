@@ -83,43 +83,66 @@ pub fn range_free(start: u64, len: u64, others: &[(u64, u64)]) -> bool {
 
 /// 目标盘上的分区是否正被挂载：扫描 /proc/self/mountinfo（man proc_pid_mountinfo(5)），
 /// 逐设备经 sysfs maj:min 反解出（盘名, 分区号）与入参比对，命中返回首个挂载点（已解码）。
-/// disk_name = 盘节点文件名（如 "sda"）；dm/mapper 等无法反解的设备返回 None
-pub fn find_mountpoint(disk_name: &str, pno: u32) -> Option<PathBuf> {
-    let entries = crate::fsops::read_mounts().ok()?;
-    entries.iter().find_map(|e| {
-        part_in_use(&e.source, disk_name, pno).then(|| PathBuf::from(&e.mount_point))
-    })
+/// 读失败如实上抛：折叠成"未挂载"会让离线写表在挂载中的分区上开跑。
+/// disk_name = 盘节点文件名（如 "sda"）；dm/mapper 等无法反解的设备不算命中
+pub fn find_mountpoint(disk_name: &str, pno: u32) -> std::io::Result<Option<PathBuf>> {
+    let entries = crate::fsops::read_mounts()?;
+    for e in &entries {
+        if part_in_use(&e.source, disk_name, pno)? {
+            return Ok(Some(PathBuf::from(&e.mount_point)));
+        }
+    }
+    Ok(None)
 }
 
 /// 目标盘上的分区是否是活动 swap（/proc/swaps；man proc_swaps(5)：首行为表头，
 /// 其后每行第一字段为设备路径。反解方式同 find_mountpoint）。
-/// 读失败如实上抛：折叠成"无 swap"会让活动 swap 的锁下复核被一次读故障绕过
-/// （fail-open），与占用探测的 fail-closed 口径相反
+/// 读失败如实上抛——整体读失败与逐条目反解失败（part_in_use）都算：
+/// 折叠成"无 swap"会让活动 swap 的锁下复核被一次读故障绕过（fail-open）
 pub fn swap_active(disk_name: &str, pno: u32) -> std::io::Result<bool> {
     let s = fs::read_to_string("/proc/swaps")?;
-    Ok(s.lines()
-        .skip(1) // 首行表头
-        .filter_map(|l| l.split_whitespace().next().map(|d| d.to_string()))
-        .any(|d| part_in_use(&d, disk_name, pno)))
+    for l in s.lines().skip(1) {
+        // 首行表头已跳过；其余行首字段为设备路径
+        if let Some(d) = l.split_whitespace().next() {
+            if part_in_use(d, disk_name, pno)? {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
 }
 
-fn part_in_use(dev: &str, disk_name: &str, pno: u32) -> bool {
-    let Ok(meta) = fs::metadata(dev) else { return false };
+/// 命中 = 该设备是 disk_name 上的分区 pno。读失败上抛（fail-closed）：折叠成
+/// "不在使用"会让锁下占用复核被一次读故障绕过。`metadata` 与 `partition` 属性的
+/// NotFound 例外——前者是 mountinfo 里 pseudo-fs 条目（如 cgroup2，source 不是
+/// 路径）的常态；后者是整盘目录的判别结果（无 partition 属性 = 整盘非分区）
+fn part_in_use(dev: &str, disk_name: &str, pno: u32) -> std::io::Result<bool> {
+    let meta = match fs::metadata(dev) {
+        Ok(m) => m,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(e),
+    };
     if !meta.file_type().is_block_device() {
-        return false;
+        return Ok(false);
     }
     let rdev = meta.st_rdev();
     // dev_t 分解主次设备号（man makedev(3) 的 major()/minor()）
     let sysdir = PathBuf::from(format!("/sys/dev/block/{}:{}", libc::major(rdev), libc::minor(rdev)));
     // <part>/partition：内核 sysfs-block ABI 属性，内容 = 分区号；整盘目录无此属性（据此区分二者）
-    let Ok(part) = imp::sysfs_u64(&sysdir.join("partition")) else { return false };
+    let part = match imp::sysfs_u64(&sysdir.join("partition")) {
+        Ok(p) => p,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(e),
+    };
     if part as u32 != pno {
-        return false;
+        return Ok(false);
     }
-    let Ok(link) = sysdir.read_link() else { return false };
-    let Some(name) = link.file_name().and_then(|s| s.to_str()) else { return false };
-    disk_name_from_partition(name, |n| Path::new("/sys/block").join(n).exists())
-        .is_some_and(|d| d == disk_name)
+    let link = sysdir.read_link()?;
+    let name = link.file_name().and_then(|s| s.to_str()).ok_or_else(|| {
+        std::io::Error::other(format!("unusable sysfs link name at {}", sysdir.display()))
+    })?;
+    Ok(disk_name_from_partition(name, |n| Path::new("/sys/block").join(n).exists())
+        .is_some_and(|d| d == disk_name))
 }
 
 /// 在线 resize 总入口（resizefs --online 用）。`size`：None = 扩满现分区；Some(字节) = 绝对新尺寸
@@ -423,13 +446,19 @@ mod imp {
                 String::from_utf8_lossy(&out.stderr).trim()
             ))));
         }
-        let partx_ok = run("partx", &["-u", "--nr", &pno_str, &disk_str])
-            .map(|o| o.status.success())
-            .unwrap_or(false);
+        let partx = run("partx", &["-u", "--nr", &pno_str, &disk_str]);
+        let partx_ok = partx.as_ref().map(|o| o.status.success()).unwrap_or(false);
         if partx_ok {
             return Ok(());
         }
-        blkpg_resize(t, new_len_bytes).map_err(PartResizeError::Partial)
+        // BLKPG 兜底成功时用户只会看到兜底结果，partx 的根因若不在此带出就再也不可观察
+        let why = match partx {
+            Err(e) => format!("partx could not be run: {e}"),
+            Ok(o) => format!("partx -u failed: {}", String::from_utf8_lossy(&o.stderr).trim()),
+        };
+        blkpg_resize(t, new_len_bytes).map_err(|e| {
+            PartResizeError::Partial(io::Error::other(format!("{e} (kernel sync attempts: {why})")))
+        })
     }
 
     /// 内核同步最终判据：/sys/dev/block/<maj>:<min>/size 须等于期望值。
@@ -608,13 +637,14 @@ mod imp {
             .map_err(|e| Outcome::infra(format!("open failed: {e}")))?;
         // 只传主语：后半句 "writes outside the undo journal" 由 refuse_if_active 统一拼
         //（与之并列的调用点传的是命令名，如 "resizefs" / "check"）。
-        // 挂载中的块设备重跑 `resize` 会再次走在线路径、再次撞上本闸口——busy 文案里
-        // 的"重跑续跑"只有在卸载后走离线分支才真正可达，故在此附上挂载态提示
+        // 在线路径的两种入口共用本闸口：挂载中的块设备，与被 device-mapper 持有的
+        // LVM PV——两者的续跑出路都是先退出在线形态（卸载 / 停用卷组）再走离线分支，
+        // busy 文案里的"重跑续跑"只有在离线分支才真正可达，故在此附上提示
         crate::transaction::TransactionManager::refuse_if_active(
             &src,
             "online resize",
         )
-        .map_err(|f| f.context("the target is mounted, so a re-run would take the online path again — unmount it first to reach the resume path"))
+        .map_err(|f| f.context("a re-run would take the online path again and cannot resume the job — unmount the target (for an LVM PV: deactivate its volume group) to reach the resume path"))
         .map_err(|f| f.into_outcome())
     }
 

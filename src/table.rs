@@ -1483,6 +1483,9 @@ pub fn del_mdos_entry(src: &mut FileSource, part: u32) -> Result<(), Fail> {
     let ss = src.sector_size;
     let mut lba0 = vec![0u8; ss as usize];
     src.read_at(0, &mut lba0).map_err(Fail::infra_io)?;
+    if u16::from_le_bytes([lba0[510], lba0[511]]) != MBR_SIGNATURE {
+        return Err(Fail::infra("no MBR signature on target"));
+    }
     let rec = &mut lba0[446 + (part as usize - 1) * 16..446 + (part as usize - 1) * 16 + 16];
     if rec[4] == 0 {
         return Err(Fail::refused(format!("partition {part} is already empty")));
@@ -1500,9 +1503,17 @@ pub fn set_mdos_boot(src: &mut FileSource, part: u32, on: bool) -> Result<(), Fa
     let ss = src.sector_size;
     let mut lba0 = vec![0u8; ss as usize];
     src.read_at(0, &mut lba0).map_err(Fail::infra_io)?;
+    if u16::from_le_bytes([lba0[510], lba0[511]]) != MBR_SIGNATURE {
+        return Err(Fail::infra("no MBR signature on target"));
+    }
     let off = 446 + (part as usize - 1) * 16;
     if lba0[off + 4] == 0 {
         return Err(Fail::refused(format!("partition {part} is empty")));
+    }
+    if rd_u32(&lba0[off..off + 16], 12) == 0 {
+        return Err(Fail::refused(format!(
+            "partition {part} has a type byte but zero sectors — the entry is invisible to the parser; `del` clears it"
+        )));
     }
     // MBR 规范未规定 boot 标志唯一性，"至多一个"是本工具策略：置位前清掉其他
     if on {
@@ -1534,10 +1545,18 @@ pub fn set_mdos_hidden(src: &mut FileSource, part: u32, on: bool) -> Result<(), 
     let ss = src.sector_size;
     let mut lba0 = vec![0u8; ss as usize];
     src.read_at(0, &mut lba0).map_err(Fail::infra_io)?;
+    if u16::from_le_bytes([lba0[510], lba0[511]]) != MBR_SIGNATURE {
+        return Err(Fail::infra("no MBR signature on target"));
+    }
     let off = 446 + (part as usize - 1) * 16;
     let cur = lba0[off + 4];
     if cur == 0 {
         return Err(Fail::refused(format!("partition {part} is empty")));
+    }
+    if rd_u32(&lba0[off..off + 16], 12) == 0 {
+        return Err(Fail::refused(format!(
+            "partition {part} has a type byte but zero sectors — the entry is invisible to the parser; `del` clears it"
+        )));
     }
     let want = |t: u8, hide: bool| -> u8 {
         for (v, h) in MDOS_HIDDEN_PAIRS {
@@ -1580,10 +1599,18 @@ pub fn set_mdos_type(src: &mut FileSource, part: u32, t: u8) -> Result<(), Fail>
     let ss = src.sector_size;
     let mut lba0 = vec![0u8; ss as usize];
     src.read_at(0, &mut lba0).map_err(Fail::infra_io)?;
+    if u16::from_le_bytes([lba0[510], lba0[511]]) != MBR_SIGNATURE {
+        return Err(Fail::infra("no MBR signature on target"));
+    }
     let off = 446 + (part as usize - 1) * 16;
     let cur = lba0[off + 4];
     if cur == 0 {
         return Err(Fail::refused(format!("partition {part} is empty")));
+    }
+    if rd_u32(&lba0[off..off + 16], 12) == 0 {
+        return Err(Fail::refused(format!(
+            "partition {part} has a type byte but zero sectors — the entry is invisible to the parser; `del` clears it"
+        )));
     }
     if MDOS_CONTAINER_TYPES.contains(&cur) {
         return Err(Fail::refused(format!("partition {part} is an extended container (0x{cur:02X}) — its type is structural, not descriptive")));

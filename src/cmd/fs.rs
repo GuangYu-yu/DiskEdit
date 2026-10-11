@@ -211,6 +211,13 @@ pub(crate) fn cmd_set(a: &Args) -> u8 {
     }
     let value = a.pos.get(2).cloned().unwrap_or_default();
     let state = a.pos.get(3).cloned().unwrap_or_default();
+    // state 是 `flag` 分支的专属位（on|off）：其余分支不消费它，静默吞掉
+    // 会让 `set img:1 name foo bar` 这类笔误看起来成功了
+    if key != "flag" && !state.is_empty() {
+        bail_fail(Fail::refused(format!(
+            "`set {key}` takes no state argument — only `set <target>:N flag <flag> on|off` does"
+        )));
+    }
     let mut src = open_target_for_write(a).unwrap_or_else(|f| bail_fail(f));
     // 锁下快照
     let part = crate::gpt_policy::resolve_part(&src, pref).unwrap_or_else(|f| bail_fail(f));

@@ -1108,7 +1108,8 @@ fn execute_apply(
                     m.part_num,
                     PendingKind::Swap,
                     e.to_string(),
-                    crate::fsops::rescue_hint(Some(FsKind::Swap), &crate::dev::part_dev_hint(src, m.part_num, m.first_lba * plan.ss)),
+                    // hint 指向表项已提交的新位置（只有读旧签名区取 identity 才用旧起点）
+                    crate::fsops::rescue_hint(Some(FsKind::Swap), &crate::dev::part_dev_hint(src, m.part_num, new_first * plan.ss)),
                 )),
             }
             ckpt.chunks_done = 0;

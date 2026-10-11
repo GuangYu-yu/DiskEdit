@@ -179,7 +179,11 @@ fn resize_online(
     }
 
     // 非 PV：仅挂载中的分区能在线扩（在线不能搬移，只吃连续空闲）
-    let mnt = crate::online::find_mountpoint(&dn, part)?;
+    // 探测失败按 Infra 拒绝而非退离线路径：读不出来 ≠ 没挂载
+    let mnt = match crate::online::find_mountpoint(&dn, part) {
+        Ok(m) => m,
+        Err(e) => bail_fail(Fail::infra(format!("cannot probe mount state: {e}"))),
+    };
     // 在线 grow 的表写与 FS 扩是一体的，且在线 shrink（btrfs）方向相反——先缩 FS 再写表。
     // 若只写表不动 FS，shrink 会得到"FS 大于分区"的损坏现场，故 --no-fs 不放行在线：
     // 未挂载的分区自然落离线路径，那里 --no-fs 照常生效
@@ -464,7 +468,7 @@ pub(crate) fn cmd_resize(a: &Args) -> u8 {
         }
         // 续跑的收尾仍须 --yes：盘上状态已与上次请求时不同，写盘前再确认一次；
         // --yes 一并覆盖"未确认的续跑"与"新的搬移"两种进入方式
-        crate::cmd::plan::print_plan(&plan, start).unwrap_or_else(|e| bail_fail(Fail::refused(format!("plan failed: {e}"))));
+        crate::cmd::plan::print_plan(&plan, start).unwrap_or_else(|e| bail_fail(Fail::infra(format!("plan failed: {e}"))));
         if !a.yes {
             bail_fail(Fail::refused(CONFIRM_RELOCATION));
         }
@@ -506,7 +510,7 @@ pub(crate) fn cmd_resize(a: &Args) -> u8 {
             if plan.kind == movepart::PlanKind::TailPacked {
                 bail_fail(Fail::refused("an unfinished `resize grow` job owns this target — re-run that command to resume it, or `diskedit abandon` to release it".to_string()));
             }
-            crate::cmd::plan::print_plan(&plan, start).unwrap_or_else(|e| bail_fail(Fail::refused(format!("plan failed: {e}"))));
+            crate::cmd::plan::print_plan(&plan, start).unwrap_or_else(|e| bail_fail(Fail::infra(format!("plan failed: {e}"))));
             if !a.yes {
                 bail_fail(Fail::refused(CONFIRM_RELOCATION));
             }
@@ -683,6 +687,13 @@ fn cmd_resize_msdos(a: &Args, pref: PartSelector, req: &SizeRequest, src_ro: &Fi
     // 静默按不可搬移处理会让来自脚本的调用只看到一条"空间不足"
     if a.allow_move {
         bail_fail(Fail::refused("--allow-move is not supported for MBR resize — MBR cannot relocate blocking partitions".to_string()));
+    }
+    // 离线路径不消费 chunk：在线检查（resize_online）只在块设备上执行，镜像文件
+    // 与非 Linux 平台会绕过它落到这里，取值校验也随之跳过
+    if a.seen.contains(&"--chunk-size") {
+        bail_fail(Fail::refused(
+            "--chunk-size has no effect for MBR resize — MBR cannot relocate blocking partitions".to_string(),
+        ));
     }
     let mbr = table::parse_mbr(src_ro)
         .unwrap_or_else(|e| bail_fail(Fail::infra(format!("parse failed: {e}"))))
