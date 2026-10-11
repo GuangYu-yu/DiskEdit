@@ -184,6 +184,8 @@ fn resize_online(
         Ok(m) => m,
         Err(e) => bail_fail(Fail::infra(format!("cannot probe mount state: {e}"))),
     };
+    // 未挂载 = 在线路径不适用，None 经 `?` 返回调用方走离线路径
+    let mnt = mnt?;
     // 在线 grow 的表写与 FS 扩是一体的，且在线 shrink（btrfs）方向相反——先缩 FS 再写表。
     // 若只写表不动 FS，shrink 会得到"FS 大于分区"的损坏现场，故 --no-fs 不放行在线：
     // 未挂载的分区自然落离线路径，那里 --no-fs 照常生效
