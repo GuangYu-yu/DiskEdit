@@ -734,7 +734,9 @@ fn canonical_headers(h: &RawHeader, last_lba: u64, backup_array_lba: u64) -> (Ra
 }
 
 /// 崩溃安全四结构序列：备数组 → 备头 → 主数组 → 主头，每步 sync。
-/// 任意落点断电至少存在一份自洽副本且不一致可经 CRC 检出。
+/// 每个中间落点都留有一份 CRC 自洽的表；主备两份各自自洽而内容分叉时 CRC 检不出
+/// （不一致只出现在跨副本比较），解析按主副本优先收敛——中断的代价是本次提交丢失，
+/// 不是表损坏。
 pub fn commit_gpt(src: &mut FileSource, g: &RawGpt, last_lba: u64) -> io::Result<()> {
     commit_table(src, g.ss, &g.header, &g.entries, last_lba)
 }

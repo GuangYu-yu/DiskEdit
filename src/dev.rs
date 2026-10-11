@@ -504,6 +504,9 @@ impl TargetIdentity {
         &self.journal
     }
 
+    /// checkpoint 首选落点。生产路径的写/删一律走 `checkpoint_candidates` 命中的那份
+    /// （见 movepart::read_checkpoint），本方法只剩测试在用
+    #[cfg(test)]
     pub(crate) fn checkpoint_path(&self) -> &Path {
         &self.checkpoint[0]
     }

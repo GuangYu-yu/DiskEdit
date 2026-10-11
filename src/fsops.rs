@@ -1266,6 +1266,7 @@ where
     F: FnOnce(&str) -> Result<(), FsError>,
 {
     let mnt = mount_point();
+    let mount = find_tool("mount")?;
     // PID 复用会撞上崩溃残留的同名目录：先试着清掉——remove_dir 只对空目录成功，
     // 非空说明残留目录上可能还挂着上次留下的文件系统，叠挂会把两个 FS 混在同一目录
     if mnt.exists() {
@@ -1275,7 +1276,6 @@ where
         ))))?;
     }
     std::fs::create_dir_all(&mnt).map_err(FsError::from)?;
-    let mount = find_tool("mount")?;
     let out = Command::new(mount).arg(dev).arg(&mnt).stdin(Stdio::null()).output().map_err(FsError::from)?;
     if !out.status.success() {
         // mount 没成功就谈不上 umount：对从未挂载的目录卸载必然失败，
