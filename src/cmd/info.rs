@@ -139,6 +139,9 @@ pub(crate) fn cmd_info(a: &Args) -> u8 {
                 out.push_str(&src.sector_size.to_string());
                 out.push_str(",\"size_bytes\":");
                 out.push_str(&src.size.to_string());
+                // 顶层键集与 GPT 分支一致：MBR 没有磁盘 GUID 概念，如实给 null——缺字段会让
+                // 按同一 schema 消费 JSON 的调用方在此分支上拿到不同的键集
+                out.push_str(",\"disk_guid\":null");
                 // `:last` 指向的分区（取号与写路径同一函数：扩展容器不算）：没有可操作条目
                 // 即无此字段
                 if let Some(n) = crate::gpt_policy::last_used_mbr(&raw.parts) {
@@ -179,10 +182,11 @@ pub(crate) fn cmd_info(a: &Args) -> u8 {
                 // 判据取自唯一判定点 table_label，与写命令的拒绝理由同源
                 let damaged = table::table_label(&src).is_ok_and(|l| l.is_damaged());
                 let name = if damaged { "gpt" } else { "none" };
-                // 形状与其余分支一致：`partitions` 恒为数组。none/damaged 没有可报告的
-                // 条目，但缺字段会让按同一 schema 消费 JSON 的调用方在此分支上拿到不同的键集
+                // 形状与其余分支一致：`partitions` 恒为数组、`disk_guid` 恒在（无表即无 GUID）。
+                // none/damaged 没有可报告的条目，但缺字段会让按同一 schema 消费 JSON 的调用方
+                // 在此分支上拿到不同的键集
                 out.push_str(&format!(
-                    "\"{name}\",\"damaged\":{damaged},\"sector_size\":{},\"size_bytes\":{},\"partitions\":[]}}",
+                    "\"{name}\",\"damaged\":{damaged},\"sector_size\":{},\"size_bytes\":{},\"disk_guid\":null,\"partitions\":[]}}",
                     src.sector_size, src.size
                 ));
             }

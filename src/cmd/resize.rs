@@ -211,38 +211,49 @@ fn resize_online(
     Some(o.exit_code())
 }
 
-/// 在线目标长度的公共骨架：锁下取事实（扇区大小、当前字节、右侧空闲扇区）→
-/// 共享的 `resolve_size_request` → grow/shrink 分支。grow 零空闲时 PV 拒绝（无法搬移
-/// 活跃 LV）、非 PV 返回 None（FS 工具扩满现分区）；PV 收缩在上游 `check_pv_intent`
-/// 已拒（online 层还有 grow-only 闸兜底），shrink 的下取整仅在锁窗口内分区被第三方
-/// 扩大的竞态下可达——与离线路径的字节→LBA 隐式下取整同规则。两族表必须同语义，
-/// 差异只在"事实怎么取"，故分支只此一份
+/// 在线目标长度的公共骨架：锁下取事实（扇区大小、当前字节、右侧空闲扇区、表自身的长度
+/// 上界）→ 共享的 `resolve_size_request` → grow/shrink 分支。grow 零空闲时拒绝：本次
+/// grow 不会产生分区扩容（表自身的上界已到顶，或下一分区紧贴右侧），在线路径又不能搬移
+/// 挡路分区——与离线路径同口径。FS 是否已填满现分区不是这里的判据：只扩 FS 走
+/// `resizefs --online`。绝对尺寸同样按该上界拒绝——可用区是表自身的闭区间，越界目标没有
+/// 交给外部工具兜底的理由。上界（可用区端点到分区起点的扇区数）由各表自己的几何给出，
+/// MBR 无此概念（其容量由 online 层的 `check_new_range` 把关）。PV 收缩在上游
+/// `check_pv_intent` 已拒（online 层还有 grow-only 闸兜底），shrink 的下取整仅在锁窗口内
+/// 分区被第三方扩大的竞态下可达——与离线路径的字节→LBA 隐式下取整同规则。两族表必须
+/// 同语义，差异只在"事实怎么取"，故分支只此一份
 #[cfg(target_os = "linux")]
 fn online_size<'a>(
     req: &'a SizeRequest,
     is_pv: bool,
-    facts: impl FnOnce(&FileSource) -> Result<(u64, u64, u64), Fail> + 'a,
+    facts: impl FnOnce(&FileSource) -> Result<(u64, u64, u64, Option<u64>), Fail> + 'a,
 ) -> impl FnOnce(&FileSource) -> Result<Option<u64>, Fail> + 'a {
     move |disk: &FileSource| {
-        let (ss, cur, free) = facts(disk)?;
+        let (ss, cur, free, max_len_sectors) = facts(disk)?;
         let (target, grow) = resolve_size_request(req, cur)?;
         if grow {
             if free == 0 {
                 return if is_pv {
                     Err(Fail::refused("no free space to the right — a PV cannot relocate blocking partitions while LVs may be active".to_string()))
                 } else {
-                    Ok(None)
+                    Err(Fail::refused("grow would not extend the partition — no usable free space to its right; the online path cannot relocate blocking partitions (unmount to grow offline, or fill the filesystem with `resizefs --online`)".to_string()))
                 };
             }
             free.checked_mul(ss).and_then(|f| cur.checked_add(f))
                 .map(Some)
                 .ok_or_else(|| Fail::infra(format!("grown size overflows ({cur} + {free} sectors × {ss} B)")))
         } else {
-            Ok(Some(match target {
+            let want = match target {
                 Some(t) if is_pv => t / ss * ss,
                 Some(t) => t,
                 None => cur,
-            }))
+            };
+            // 目标终点不得越过可用区上界：与离线路径同一判据（长度按扇区下取整后比较）
+            if max_len_sectors.is_some_and(|lim| want / ss > lim) {
+                return Err(Fail::refused(format!(
+                    "size {want} exceeds the usable range — the partition would end past the last usable block"
+                )));
+            }
+            Ok(Some(want))
         }
     }
 }
@@ -262,7 +273,14 @@ fn gpt_decider<'a>(
         let (g, _repair) = crate::gpt_policy::require_gpt_geometry(disk, "resize")?;
         let e = crate::gpt_policy::live_entry(&g, part)?;
         let cur = lba_range_bytes(e.starting_lba, e.ending_lba, g.ss);
-        Ok((g.ss, cur, free_right_gpt(&g, part)))
+        // 可用区是闭区间 [first_usable, last_usable]：本分区最大可占的扇区数即
+        // 起点到 last_usable 的跨度；几何构造已保证起点落在可用区内，故不会下溢
+        let max_len = g
+            .last_usable_lba()
+            .checked_sub(e.starting_lba)
+            .and_then(|n| n.checked_add(1))
+            .ok_or_else(|| Fail::infra("usable-range arithmetic overflow".to_string()))?;
+        Ok((g.ss, cur, free_right_gpt(&g, part), Some(max_len)))
     })
 }
 
@@ -282,7 +300,7 @@ fn mbr_decider<'a>(
         let p = mbr.iter().find(|p| p.num == part)
             .ok_or_else(|| Fail::refused(format!("partition {part} not found (MBR resize covers primary partitions 1..4 only)")))?;
         let ss = disk.sector_size;
-        Ok((ss, lba_bytes(p.size_lba as u64, ss), free_right_msdos(&mbr, p, disk.size / ss)))
+        Ok((ss, lba_bytes(p.size_lba as u64, ss), free_right_msdos(&mbr, p, disk.size / ss), None))
     })
 }
 
@@ -381,7 +399,7 @@ pub(crate) fn cmd_resize(a: &Args) -> u8 {
     }
     let Some(pref) = a.part else { crate::args::usage() };
     // 可操作几何（构造点即拒绝条目重叠）：entries / ss / 修复后的 last_usable 全部取自它，
-    // 命令层不再自己算一次有效上界（历史实现见 support::effective_last_usable）
+    // 命令层不自己算一次有效上界
     let (g, _repair) = crate::gpt_policy::require_gpt_geometry(&src, "resize").unwrap_or_else(|f| bail_fail(f));
     // 只读快照
     let part = crate::gpt_policy::resolve_part_in(crate::gpt_policy::TableEntries::Gpt(&g.entries), pref)

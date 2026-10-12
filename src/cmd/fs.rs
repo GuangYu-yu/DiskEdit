@@ -137,9 +137,13 @@ pub(crate) fn cmd_resizefs(a: &Args) -> u8 {
             bail_fail(Fail::infra("online resize requires Linux".to_string()));
         }
     } else {
-        // 离线形式"把 FS 扩进分区"，没有尺寸参数可言
+        // 离线形式"把 FS 扩进分区"，没有尺寸参数可言：--size 与位置参数 BYTES 都是在线的给法，
+        // 离线分支消费不到，静默忽略即报成功却没扩到请求的尺寸
         if a.size.is_some() {
             bail_fail(Fail::refused("--size only applies to the online form — offline resizes the filesystem into its partition"));
+        }
+        if let Some(s) = a.pos.get(1) {
+            bail_fail(Fail::refused(format!("size {s:?} only applies to the online form — offline resizes the filesystem into its partition")));
         }
         let Some(pref) = a.part else { crate::args::usage() };
         let src = open_target_owned(a).unwrap_or_else(|f| bail_fail(f));
