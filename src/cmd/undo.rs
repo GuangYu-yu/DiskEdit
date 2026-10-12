@@ -63,6 +63,13 @@ fn pick_journal(candidates: &[std::path::PathBuf]) -> Result<(std::path::PathBuf
     }
 }
 
+/// 逐条核对失败后共用的出路：两种成因（盘上字节被外部改动、目标被缩短到记录之外）下
+/// "重跑 undo"都要等目标回到那条写入时的状态之后才可能成功。确实不再需要回滚时，
+/// `abandon` 释放现场——它不写目标一个字节，放弃的是"还能回滚"这个能力
+const ROLLBACK_STUCK_REMEDY: &str =
+    "restore the target to the state it was in, then re-run `undo`; if the rollback is no longer \
+     wanted, release it with `diskedit abandon`";
+
 /// checkpoint 的历史命名带 GPT Disk GUID，而 GUID 只在表可读时存在。undo 属恢复路径：
 /// 表读不出来时要照常工作（该候选缺席即可），故一切失败都降级为 None——判据与
 /// `abandon` 完全同源，共用 `legacy_disk_guid`（含降级告警），两处不各写一遍
@@ -150,9 +157,10 @@ pub(crate) fn cmd_undo(a: &Args) -> u8 {
                         )));
                     }
                     bail_fail(Fail::failed(format!(
-                        "{detail}; {replayed} journal entr{} already rolled back, journal kept — \
-                         re-run `undo` to continue (verify with: diskedit info {})",
+                        "{detail}; {replayed} journal entr{} already rolled back, journal kept — {} \
+                         (verify with: diskedit info {})",
                         if replayed == 1 { "y" } else { "ies" },
+                        ROLLBACK_STUCK_REMEDY,
                         a.target
                     )));
                 }
@@ -164,9 +172,10 @@ pub(crate) fn cmd_undo(a: &Args) -> u8 {
                         bail_fail(Fail::infra(detail));
                     }
                     bail_fail(Fail::failed(format!(
-                        "{detail}; {replayed} journal entr{} already rolled back, journal kept — \
-                         re-run `undo` to continue (verify with: diskedit info {})",
+                        "{detail}; {replayed} journal entr{} already rolled back, journal kept — {} \
+                         (verify with: diskedit info {})",
                         if replayed == 1 { "y" } else { "ies" },
+                        ROLLBACK_STUCK_REMEDY,
                         a.target
                     )));
                 }

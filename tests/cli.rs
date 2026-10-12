@@ -309,6 +309,57 @@ fn journal_lifecycle_and_table_undo() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// 目标在 journal 写下之后被外部缩短：回放越不过新的 EOF。v3 journal 记了每条写后内容，
+/// 回放前逐条与盘上核对；越界处读不全即拒绝，绝不在"无法核对"的区域上写。拒绝必须
+/// 不改变文件长度——那正是"越过 EOF 的写会把文件写长"的那条路
+#[test]
+fn undo_refuses_when_the_target_shrank_under_its_journal() {
+    let dir = std::env::temp_dir().join(format!("diskedit_shr_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let img = dir.join("s.img");
+    let full = 8 * 1024 * 1024;
+    std::fs::write(&img, vec![0u8; full]).unwrap();
+    let exe = env!("CARGO_BIN_EXE_DiskEdit");
+    let img_s = img.to_str().unwrap();
+    let journal = sidecar(&dir, "s.img", JOURNAL_SUFFIX);
+    let run = |args: &[&str]| -> (i32, String) {
+        let out = Command::new(exe).args(args).output().unwrap();
+        (out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stderr).into_owned())
+    };
+    // mkfs 工具从 PATH 上摘掉：create 建成分区、mkfs 起不来 ⇒ PARTIAL，journal 留在盘上
+    let exe_dir = std::path::Path::new(exe).parent().unwrap().to_path_buf();
+    let run_no_mkfs = |args: &[&str]| -> (i32, String) {
+        let out = Command::new(exe).args(args).env("PATH", &exe_dir).output().unwrap();
+        (out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stderr).into_owned())
+    };
+    let set_len = |n: u64| {
+        std::fs::OpenOptions::new().write(true).open(&img).unwrap().set_len(n).unwrap();
+    };
+
+    let (c, e) = run(&["new", img_s, "--yes"]);
+    assert_eq!(c, 0, "{e}");
+    let (c, e) = run(&["add", img_s, "--start", "2048", "--end", "4095"]);
+    assert_eq!(c, 0, "{e}");
+    let (c, e) = run_no_mkfs(&["create", img_s, "--size", "1M", "--fs", "ext4"]);
+    assert_eq!(c, 20, "partition created but mkfs failed must be EXIT_PARTIAL: {e}");
+    assert!(journal.exists(), "a partial operation leaves its journal behind: {e}");
+
+    // 缩到一半：journal 里落在旧末端附近的记录（表写入）越过了新的 EOF
+    let half = 4 * 1024 * 1024;
+    set_len(half);
+    let (c, e) = run(&["undo", img_s, "--yes"]);
+    assert_ne!(c, 0, "undo must refuse a region it cannot verify against the target: {e}");
+    assert!(e.contains("cannot verify the journaled write"), "{e}");
+    // 出路必须说清：先把目标恢复原状再重跑，或确认不再需要回滚时 abandon
+    assert!(e.contains("restore the target to the state it was in"), "{e}");
+    assert!(e.contains("diskedit abandon"), "{e}");
+    assert_eq!(std::fs::metadata(&img).unwrap().len(), half, "a refused replay must not extend the file");
+    assert!(journal.exists(), "the journal must be kept for a retry against the target as it was");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// 不开 journal 的写盘命令（mkfs / resizefs / check 的修复）在目标上留有未收尾现场时必须
 /// 拒绝：它们会作废那份 journal 所指的旧布局，而用户随后 undo 仍会把旧表字节回放上去，
 /// 形成"表与盘上内容自相矛盾"的状态。另外三条同族不变量：
@@ -1156,6 +1207,63 @@ fn info_on_gpt_image() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// info 的顶层键集跨 label 分支一致：none / mbr / gpt 都含
+/// damaged、disk_guid、label、partitions、sector_size、size_bytes。
+/// `last_part` 只在有可操作条目时出现（两分支同规则）。按同一 schema 消费 JSON 的调用方
+/// 不该因盘型不同而缺键——少写一个字段不报错，只会让它拿到空值
+#[test]
+fn info_json_top_level_keys_are_consistent_across_label_branches() {
+    let dir = std::env::temp_dir().join(format!("diskedit_keys_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let exe = env!("CARGO_BIN_EXE_DiskEdit");
+    let run = |args: &[&str]| -> (i32, String) {
+        let out = Command::new(exe).args(args).output().unwrap();
+        (out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stdout).into_owned())
+    };
+    let info = |img: &std::path::Path| -> serde_json::Value {
+        let (c, out) = run(&["info", img.to_str().unwrap()]);
+        assert_eq!(c, 0, "info must succeed: {out}");
+        serde_json::from_str(out.trim()).expect("info must emit valid JSON")
+    };
+    let keys = |img: &std::path::Path| -> Vec<String> {
+        let mut k: Vec<String> = info(img).as_object().unwrap().keys().cloned().collect();
+        k.sort();
+        k
+    };
+    let base: Vec<String> = ["damaged", "disk_guid", "label", "partitions", "sector_size", "size_bytes"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+
+    // none：既不是 GPT 也不是 MBR
+    let none = dir.join("none.img");
+    std::fs::write(&none, vec![0u8; 2 * 1024 * 1024]).unwrap();
+    assert_eq!(keys(&none), base, "the `none` branch must carry the common key set");
+
+    // mbr：空表 → 无 last_part；disk_guid 如实为 null（MBR 没有磁盘 GUID 概念）
+    let mbr = dir.join("mbr.img");
+    std::fs::write(&mbr, vec![0u8; 8 * 1024 * 1024]).unwrap();
+    assert_eq!(run(&["new", mbr.to_str().unwrap(), "--table", "msdos", "--yes"]).0, 0);
+    assert_eq!(keys(&mbr), base, "the `mbr` branch must carry the common key set");
+    assert!(info(&mbr)["disk_guid"].is_null(), "mbr must report disk_guid as null");
+    // 有可操作条目 → 两分支同规则地多出 last_part
+    assert_eq!(run(&["add", mbr.to_str().unwrap(), "--start", "2048", "--end", "4095"]).0, 0);
+    let mut with_last = base.clone();
+    with_last.push("last_part".to_string());
+    with_last.sort();
+    assert_eq!(keys(&mbr), with_last, "an operable entry adds last_part");
+
+    // gpt：同一套键；disk_guid 是 GUID 串
+    let gpt = dir.join("gpt.img");
+    std::fs::write(&gpt, vec![0u8; 8 * 1024 * 1024]).unwrap();
+    assert_eq!(run(&["new", gpt.to_str().unwrap(), "--yes"]).0, 0);
+    assert_eq!(keys(&gpt), base, "the `gpt` branch must carry the common key set");
+    assert!(info(&gpt)["disk_guid"].is_string(), "gpt must report a GUID string");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// `:last` 指最后一个可操作分区（GPT 上即末端最靠后的已用条目）：`info` 报告 `last_part`，
 /// 写命令上 `:last` 与具体号等价，而只报告整盘布局的命令明确拒绝分区指代
 #[test]
@@ -1734,6 +1842,13 @@ fn flag_contract_mbr_resizefs_and_type() {
     let (c, _, e) = run(&["resizefs", &format!("{g_s}:1"), "--size", "5G"]);
     assert_eq!(c, 10, "offline resizefs with --size must be refused: {e}");
     assert!(e.contains("--size only applies to the online form"), "{e}");
+    // 位置参数形式的尺寸同属在线专属：离线分支消费不到它，静默忽略会让
+    // `resizefs img:1 10G` 报成功却仍只把 FS 扩进现分区
+    let raw_before = std::fs::read(&g).unwrap();
+    let (c, _, e) = run(&["resizefs", &format!("{g_s}:1"), "5G"]);
+    assert_eq!(c, 10, "offline resizefs with a positional size must be refused: {e}");
+    assert!(e.contains("only applies to the online form"), "{e}");
+    assert_eq!(std::fs::read(&g).unwrap(), raw_before, "the refusal must not write");
 
     // MBR --type 的 0X 大写前缀
     let m = dir.join("m.img");
