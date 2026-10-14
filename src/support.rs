@@ -231,15 +231,26 @@ pub(crate) fn align_unit(a: &Args, table_ss: u64) -> Option<u64> {
     }
 }
 
+/// 对齐上取整（乘法全程 checked，s 逼近 u64::MAX 时回绕会伪造从 0 起的伪区间）。
+/// 失败策略（拒绝 / 丢区间）由调用点决定，这里只给 `Option`
+fn ceil_align(v: u64, unit: u64) -> Option<u64> {
+    v.div_ceil(unit).checked_mul(unit)
+}
+
+/// 对齐下取整（end 侧：饱和防 +1 回绕，再截到 unit 倍数）
+fn floor_align(v: u64, unit: u64) -> u64 {
+    v.saturating_add(1) / unit * unit
+}
+
 /// 对齐（选项名同 parted --align）：start 上取整、end 下取整；对齐后区间为空即拒绝。
 /// 乘法全程 checked：--start 由 CLI 原始输入落 u64，s 逼近 u64::MAX 时
 /// `div_ceil * unit` 会静默回绕，把无法对齐的区间伪造成从 0 起的伪区间
 /// （与 aligned_gaps 的 s 侧同一防线）
 pub(crate) fn align_range(a: &Args, start: u64, end: u64, table_ss: u64) -> (u64, u64) {
     let Some(unit) = align_unit(a, table_ss) else { return (start, end) };
-    let s = start.div_ceil(unit).checked_mul(unit)
+    let s = ceil_align(start, unit)
         .unwrap_or_else(|| bail_fail(Fail::refused(format!("start {start} overflows the LBA range when aligned to {}", a.align))));
-    let e1 = end.saturating_add(1) / unit * unit;
+    let e1 = floor_align(end, unit);
     if e1 == 0 || s > e1 - 1 {
         bail_fail(Fail::refused(format!("range {start}..{end} is empty after {} alignment", a.align)));
     }
@@ -252,7 +263,7 @@ pub(crate) fn align_range(a: &Args, start: u64, end: u64, table_ss: u64) -> (u64
 /// 起点上取整（copy 的 --start 只有起点语义，长度继承源分区）。checked 同 align_range
 pub(crate) fn align_start(a: &Args, start: u64, table_ss: u64) -> u64 {
     let Some(unit) = align_unit(a, table_ss) else { return start };
-    let s = start.div_ceil(unit).checked_mul(unit)
+    let s = ceil_align(start, unit)
         .unwrap_or_else(|| bail_fail(Fail::refused(format!("start {start} overflows the LBA range when aligned to {}", a.align))));
     if s != start {
         eprintln!("aligned to {}: {start} -> {s}", a.align);
@@ -336,8 +347,8 @@ pub(crate) fn aligned_gaps(used: &[(u64, u64)], lo: u64, hi: u64, unit: u64) -> 
             // 对齐乘法躲着回绕：s 逼近 u64::MAX 时 div_ceil*unit 会静默回绕，
             // 把一个"无法对齐"的区间伪造成从 0 起的伪空闲。e 侧下面已有 checked，
             // s 侧同一防线
-            let s2 = s.div_ceil(unit).checked_mul(unit)?;
-            let e2 = (e.saturating_add(1) / unit * unit).checked_sub(1)?;
+            let s2 = ceil_align(s, unit)?;
+            let e2 = floor_align(e, unit).checked_sub(1)?;
             (s2 <= e2).then_some((s2, e2))
         })
         .collect()
