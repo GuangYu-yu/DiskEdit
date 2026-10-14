@@ -36,8 +36,9 @@ pub(crate) const HELP_SET: &str = r#"diskedit set <TARGET>:N name S | type GUID 
     type          GPT: partition type GUID (hyphens optional, e.g.
                   C12A7328-F81F-11D2-BA4B-00A0C93EC93B); MBR: type byte (0xXX)
     label / uuid  filesystem label / UUID (FS-aware). --random asks the target
-                  to generate a new value (ntfs only: its serial is not the
-                  Windows volume UUID)
+                  to generate a new value (the literal value `random` counts
+                  as --random; ntfs only: its serial is not the Windows
+                  volume UUID)
     flag          GPT: esp|boot|legacy|legacy_boot|hidden|required — esp/boot on
                   switches the type GUID to EFI System Partition; off switches
                   it back only when the type is currently ESP (falling back to
@@ -283,6 +284,10 @@ pub(crate) fn cmd_set(a: &Args) -> u8 {
             let req = match (a.random, value.is_empty()) {
                 (true, false) => bail_fail(Fail::refused("`uuid` takes either a value or --random, not both".to_string())),
                 (true, true) => fsops::UuidRequest::NewRandom,
+                // 字面量 `random` 与 `--random` 归入同一请求形式：生成随机值是同一个意图，
+                // 必须过同一套能力矩阵——否则 ext 上 `--random` 被拒而 `uuid random` 过闸，
+                // 同一意图两条路径结论相反
+                (false, false) if value == "random" => fsops::UuidRequest::NewRandom,
                 (false, false) => fsops::UuidRequest::Explicit(value.clone()),
                 // 既没给值也没给 --random：无从知道用户要什么
                 (false, true) => crate::args::usage(),

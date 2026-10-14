@@ -220,7 +220,9 @@ fn shift_plan_from(g: &ValidatedGeometry, repair: RepairAction, grow_part: u32, 
 
 /// 中断感知的最小位移 plan：ckpt 存在时以 ckpt 的 moves 为准（见 resume_outcome），
 /// 否则按 shift 现算。`shift = None` 表示本次请求是缩容——缩容不搬移任何分区
-/// （新末端更靠左，右侧只会更空），此时只有 ckpt 能构成走本路径的理由。
+/// （新末端更靠左，右侧只会更空）。槽上未收尾的 plan 属于当初那条扩容请求，
+/// 执行它就是把缩容静默放大成旧扩容（违反 plan 的"执行方即请求方"归属），故
+/// 缩容一律拒绝并指向续跑/放弃两条出路；只有原样重跑当初的 grow 命令才续跑。
 /// 几何与修复动作由调用方解析并下传，本函数不读表
 pub fn make_plan_shift_resuming(
     src: &mut FileSource,
@@ -230,7 +232,14 @@ pub fn make_plan_shift_resuming(
     shift: Option<u64>,
 ) -> Result<Plan, Fail> {
     match resume_outcome(src, g, grow_part)? {
-        ResumeOutcome::Belongs(p) => return Ok(p),
+        ResumeOutcome::Belongs(p) => {
+            if shift.is_none() {
+                return Err(Fail::refused(
+                    "an unfinished `resize grow` job owns this target — re-run that command to resume it, or `diskedit abandon` to release it",
+                ));
+            }
+            return Ok(p);
+        }
         // 与 make_plan_resuming 同判据：别的分区的作业占着槽位，本请求既不能把它
         // 当空槽、也不能按它续跑
         ResumeOutcome::Occupied => return Err(foreign_checkpoint_refusal()),
@@ -2974,8 +2983,9 @@ mod tests {
         assert_eq!(e.kind(), io::ErrorKind::InvalidData, "{e}");
     }
 
-    /// `shift = None`（缩容请求）不产生新的搬移计划：无 ckpt 必须拒绝而不是现算一个；
-    /// 有 ckpt 则以 ckpt 为准（那才是盘上真正在做的事）
+    /// `shift = None`（缩容请求）既不现算也不执行任何搬移计划：无 ckpt 必须拒绝；
+    /// 有 ckpt 同样拒绝——槽上的 plan 属于当初那条扩容请求，缩容请求执行它就是把
+    /// 请求静默放大成旧扩容（plan 的"执行方即请求方"归属判据），续跑只认原样重跑
     #[test]
     fn shift_plan_none_never_ghost_relocates() {
         let chunk: u64 = 1024 * 1024;
@@ -2997,8 +3007,12 @@ mod tests {
             map: None,
         };
         atomic_write_ckpt(&ckpt_path, &ck.serialize()).unwrap();
-        let resumed = plan_shift(&mut src, 1, None).unwrap();
-        assert_eq!(resumed.moves.len(), plan.moves.len(), "resume must return the checkpoint's plan");
+        // 有 ckpt 的缩容：拒绝并指向续跑/放弃，绝不把旧 grow plan 当缩容的执行体
+        let e = match plan_shift(&mut src, 1, None) {
+            Err(e) => e,
+            Ok(_) => panic!("a shrink must not execute the pending grow relocation plan"),
+        };
+        assert!(matches!(&e, Fail::Refused(m) if m.contains("unfinished")), "{e:?}");
         assert!(pending_relocation(&src, 1).unwrap());
         assert!(!pending_relocation(&src, 2).unwrap(), "another partition has no pending job");
 
