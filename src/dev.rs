@@ -556,6 +556,31 @@ pub(crate) fn best_effort_mkdir(dir: &Path) {
     let _ = std::fs::create_dir_all(dir);
 }
 
+/// 目标是否为**分区节点**（sysfs `partition` 属性存在且可解析）。镜像恒 false。
+/// `new` 用它做整盘校验：分区表写在节点最前部，落到分区节点上会覆盖该分区的
+/// 数据（512B 扇区下 ext 超级块就在 +1024）。拓扑解析或属性读取失败时按
+/// 分区节点处理——判据读不出来就拒，是设备层一贯的 fail-closed 口径
+pub(crate) fn target_is_partition_node(path: &Path) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        match std::fs::metadata(path).map(|m| m.file_type().is_block_device()) {
+            Ok(true) => {}
+            _ => return false,
+        }
+        let Ok(node) = sysfs_node(path) else { return true };
+        match read_sysfs_attr(&node.join("partition")) {
+            Ok(Some(v)) => v.parse::<u32>().is_ok(),
+            Ok(None) => false,
+            Err(_) => true,
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = path;
+        false
+    }
+}
+
 /// 暂存文件算"陈旧"的岁数：一次 ckpt 写入是毫秒级，正常路径下 rename 已把它带走，
 /// 超过这个岁数还留在原地的只可能是进程被 SIGKILL 打断留下的残骸
 const CKPT_TMP_STALE_AFTER: std::time::Duration = std::time::Duration::from_secs(3600);
@@ -653,7 +678,7 @@ impl FileSource {
                 let identity = TargetIdentity::resolve_block(path).map_err(io::Error::other)?;
                 // 可写打开：顺手清掉落点目录里的崩溃残骸（ckpt 暂存文件）
                 sweep_stale_ckpt_temps(&identity);
-                let (fingerprint, loop_mapping) = block_open_extras(&identity, path)?;
+                let (fingerprint, loop_mapping) = Self::block_open_extras(&identity, path)?;
                 return Ok(FileSource {
                     identity,
                     file,
@@ -723,7 +748,7 @@ impl FileSource {
         let size = ioctl::blkgetsize64(&file)?;
         let sector_size = ioctl::blksszget(&file)? as u64;
         let identity = TargetIdentity::resolve_block(path).map_err(io::Error::other)?;
-        let (fingerprint, loop_mapping) = block_open_extras(&identity, path)?;
+        let (fingerprint, loop_mapping) = Self::block_open_extras(&identity, path)?;
         Ok(FileSource {
             identity,
             file,

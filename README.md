@@ -48,7 +48,7 @@ FS 层要 root 是因为经 `losetup` 映射分区；块设备写入靠设备节
 
 | 命令 | 作用 | 写盘 |
 |---|---|---|
-| `info <TARGET>` | 分区表、逐分区 FS 识别、LVM 布局 | 否 |
+| `info <TARGET>` | 分区表、逐分区 FS 识别（LVM PV 显示为 lvm2_pv） | 否 |
 | `resize <TARGET>:N <SIZE>` | 分区 + FS 一起扩缩，自动选在线/离线 | 是 |
 | `move <TARGET>:N --start <LBA\|end>` | 移动分区，数据跟随 | 是 |
 | `copy <TARGET>:N --start <LBA\|end> [--name S]` | 复制分区到新位置，源不动 | 是 |
