@@ -174,11 +174,15 @@ pub fn make_plan_resuming(
     }
 }
 
-/// 最小位移 plan：目标分区增长 `shift` 扇区，其右侧所有挡路分区整体右移让位，间隙保持。
+/// 最小位移 plan：目标分区增长 `shift` 扇区，其右侧所有挡路分区右移让位。
 /// 与 make_plan（尾打包）相对，用于精确大小的扩容（resize SIZE + --allow-move）。
-/// 挡路分区的位移量 = shift − 目标与首个挡路者之间的间隙：首个挡路分区新起点恰为
+/// 落点是绝对量（同 parted `move START END` 的语义）：首个挡路分区新起点恰为
 /// 目标原末端 + shift + 1，apply 的扩容终点（min(new_first) − 1）因此精确落在
 /// 请求的新末端——既不多吞目标与挡路者之间的间隙，也不少给。
+/// 后续挡路者取"紧随前一落点"与"当前位置"的较大者：已在目标位的挡路者得到
+/// delta 0、apply 跳过。计划生成因此对部分位移后的盘面幂等——中断后 abandon 重跑
+/// （此时 ckpt 已删，必然现算）生成与一次做成相同的落点，不会对已搬段二次位移
+///
 /// moves 按起始 LBA 降序排列（apply 升序处理 → 最右侧先搬）：
 /// 各分区的目的区要么落在尾部空闲，要么落在其右侧已被搬空分区的旧位置，拷贝永不踩源
 /// 最小位移规划的唯一实现处：几何已由调用方解析，本函数不再读盘
@@ -194,18 +198,18 @@ fn shift_plan_from(g: &ValidatedGeometry, repair: RepairAction, grow_part: u32, 
     if movable.is_empty() {
         return Err(Fail::refused("no partition to relocate (right side is free — no --allow-move needed)"));
     }
-
-    // 位移量锚定首个挡路者：扣掉目标右侧的既有间隙后才是各分区需要让出的量
-    let leading_gap = movable[0].1.starting_lba - target.ending_lba - 1;
-    let delta = shift.checked_sub(leading_gap).filter(|d| *d >= 1)
-        .ok_or_else(|| Fail::refused("shift does not exceed the free gap before the first blocker — relocation not needed"))?;
+    if shift < movable[0].1.starting_lba - target.ending_lba {
+        return Err(Fail::refused("shift does not exceed the free gap before the first blocker — relocation not needed"));
+    }
 
     let mut moves: Vec<PlanEntry> = Vec::with_capacity(movable.len());
+    let mut cursor = target.ending_lba.checked_add(shift)
+        .and_then(|v| v.checked_add(1))
+        .ok_or_else(|| Fail::refused("relocation target LBA overflows — refusing"))?;
     for (num, e) in &movable {
         let len = e.ending_lba - e.starting_lba + 1;
-        let new_first = e.starting_lba.checked_add(delta).ok_or_else(|| {
-            Fail::refused("relocation target LBA overflows — refusing")
-        })?;
+        let new_first = cursor.max(e.starting_lba);
+        let delta = new_first - e.starting_lba;
         let new_end = new_first.checked_add(len - 1).ok_or_else(|| {
             Fail::refused("relocation target LBA overflows — refusing")
         })?;
@@ -213,6 +217,7 @@ fn shift_plan_from(g: &ValidatedGeometry, repair: RepairAction, grow_part: u32, 
             return Err(Fail::refused("insufficient tail space to relocate blockers by the requested size"));
         }
         moves.push(PlanEntry { part_num: *num, first_lba: e.starting_lba, len_lba: len, delta_lba: delta, is_swap: is_swap_guid(&e.partition_type_guid) });
+        cursor = new_end.saturating_add(1);
     }
     moves.reverse(); // 升序构造 → 降序排列：最右侧先搬
     Ok(Plan { ss, last_usable_lba: g.header.last_usable_lba, grow_part, moves, kind: PlanKind::Shift, repair })
