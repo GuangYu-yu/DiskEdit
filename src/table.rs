@@ -629,7 +629,7 @@ fn parse_entry(b: &[u8]) -> GPTPartitionEntry {
 }
 
 fn decode_name(raw: &[u8; 72]) -> gptman::PartitionName {
-    let units: Vec<u16> = raw.chunks_exact(2).map(|c| u16::from_le_bytes(c.try_into().unwrap())).collect();
+    let units: Vec<u16> = raw.as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).collect();
     let s: String = String::from_utf16_lossy(&units);
     s.trim_end_matches('\0').into()
 }
