@@ -59,6 +59,12 @@ impl RepairAction {
     }
 }
 
+/// 条目里的最大 ending_lba（0 视为空条目）。两处作用于不同时刻的 `g`
+/// （判定期 vs 锁下重读），不可跨调用缓存
+fn last_used_end(g: &RawGpt) -> u64 {
+    g.entries.iter().filter(|e| e.ending_lba != 0).map(|e| e.ending_lba).max().unwrap_or(0)
+}
+
 /// 修复后的 last_usable_lba = 新末端 − 数组跨度 − 1（备份数组位于备份头之前）。
 /// 容器容不下最小跨度、或现有分区越出新区间 → 拒绝（不写盘，纯计算）
 pub fn repaired_last_usable(g: &RawGpt, file_last_lba: u64) -> io::Result<u64> {
@@ -74,7 +80,7 @@ pub fn repaired_last_usable(g: &RawGpt, file_last_lba: u64) -> io::Result<u64> {
         .checked_sub(span)
         .and_then(|v| v.checked_sub(1))
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "container too small for GPT backup header — refusing"))?;
-    let max_end = g.entries.iter().filter(|e| e.ending_lba != 0).map(|e| e.ending_lba).max().unwrap_or(0);
+    let max_end = last_used_end(g);
     if max_end > new_last_usable {
         return Err(io::Error::new(io::ErrorKind::InvalidData, "partitions exceed new usable range after enlarge"));
     }
@@ -127,7 +133,7 @@ pub(crate) fn apply_repair(src: &mut FileSource, action: &RepairAction) -> Resul
                 .ok_or_else(|| Fail::infra("GPT vanished before repair"))?;
             // 判定期的 entries 与此刻盘上的可能不同（两步之间表被外部改动）：
             // 越界复跑一次，拒绝必须发生在写盘之前
-            let max_end = g.entries.iter().filter(|e| e.ending_lba != 0).map(|e| e.ending_lba).max().unwrap_or(0);
+            let max_end = last_used_end(&g);
             if max_end > *new_last_usable {
                 return Err(Fail::infra("partitions exceed new usable range after enlarge"));
             }

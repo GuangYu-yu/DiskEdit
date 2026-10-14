@@ -2102,6 +2102,11 @@ struct PreparedCopy {
 
 /// 事前判定（只读）：源分区存在性、目标范围与重叠。返回 `Err` 一律在任何写盘之前。
 /// 几何与修复动作由调用方解析并下传（本函数纯只读，不触盘）
+///
+/// 为何不像 prepare_resize / prepare_apply 那样调 ensure_idle_before_write：
+/// copy 只读源分区、不搬移其 extent，只写经重叠校验的空闲区，不触发占用闸所防的
+/// 两险（搬挂载中分区的 extent、表已写而 FS 步被占）；块设备另有整盘 O_EXCL
+/// （见 dev.rs）兜底
 fn prepare_copy(
     g: &ValidatedGeometry,
     repair: RepairAction,
