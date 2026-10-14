@@ -403,10 +403,9 @@ fn attach_loop(src: &FileSource, off: u64, len: u64) -> Result<String, FsError> 
     } else {
         vec!["-o".into(), off.to_string(), "--sizelimit".into(), len.to_string()]
     };
-    let args_str: Vec<&str> = base_args.iter().map(|s| s.as_str()).collect();
     let img = src.path.clone();
     let mut show = Command::new(&losetup)
-        .args(&args_str)
+        .args(&base_args)
         .arg("-f")
         .arg("--show")
         .arg(&img)

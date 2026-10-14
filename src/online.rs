@@ -210,7 +210,7 @@ mod imp {
     }
 
     /// 收集盘上相邻分区的字节区间（sysfs 遍历），`skip` 命中的条目除外。
-    /// 两条在线路径（resolve_target / resolve_target_ro）共用的唯一实现；
+    /// 两条在线路径（resolve_target / resolve_pv_target）共用的唯一实现；
     /// 算不出真值的邻居意味着**无法证明不重叠**——按校验失败上抛，绝不静默跳过
     fn collect_neighbours(sysroot: &Path, skip: impl Fn(&Path) -> bool) -> io::Result<Vec<(u64, u64)>> {
         let mut others = Vec::new();

@@ -620,6 +620,19 @@ impl Drop for ReadFaultGuard {
 }
 
 impl FileSource {
+    /// 块设备打开的公共附加物：指纹 + loop 映射。
+    /// loop 的身份是 backing 文件：指纹取它；真块设备节点 inode 不承诺稳定，不取。
+    /// loop 的 sysfs 只读探测在打开早期进行，失败即打不开目标；调用点在 identity 已解析之后
+    #[cfg(target_os = "linux")]
+    fn block_open_extras(identity: &TargetIdentity, path: &Path) -> io::Result<(TargetFingerprint, Option<(u64, u64)>)> {
+        let fp = if identity.kind == TargetKind::Image {
+            TargetFingerprint::from_meta(&std::fs::metadata(&identity.base)?)
+        } else {
+            TargetFingerprint::default()
+        };
+        Ok((fp, loop_mapping_of(path)?))
+    }
+
     /// `sector_size_override`：镜像默认 512（镜像不携带扇区信息），块设备经 BLKSSZGET 查询并忽略覆盖值。
     pub fn open(path: &Path, sector_size_override: Option<u64>) -> io::Result<Self> {
         // 块设备判定：块设备文件（其 metadata().len() 恒 0，容量需 ioctl 取）
@@ -640,14 +653,7 @@ impl FileSource {
                 let identity = TargetIdentity::resolve_block(path).map_err(io::Error::other)?;
                 // 可写打开：顺手清掉落点目录里的崩溃残骸（ckpt 暂存文件）
                 sweep_stale_ckpt_temps(&identity);
-                // loop 的身份是 backing 文件：指纹取它；真块设备节点 inode 不承诺稳定，不取。
-                // sysfs 只读探测在打开早期进行，失败即打不开目标
-                let fingerprint = if identity.kind == TargetKind::Image {
-                    TargetFingerprint::from_meta(&std::fs::metadata(&identity.base)?)
-                } else {
-                    TargetFingerprint::default()
-                };
-                let loop_mapping = loop_mapping_of(path)?;
+                let (fingerprint, loop_mapping) = block_open_extras(&identity, path)?;
                 return Ok(FileSource {
                     identity,
                     file,
@@ -717,12 +723,7 @@ impl FileSource {
         let size = ioctl::blkgetsize64(&file)?;
         let sector_size = ioctl::blksszget(&file)? as u64;
         let identity = TargetIdentity::resolve_block(path).map_err(io::Error::other)?;
-        let fingerprint = if identity.kind == TargetKind::Image {
-            TargetFingerprint::from_meta(&std::fs::metadata(&identity.base)?)
-        } else {
-            TargetFingerprint::default()
-        };
-        let loop_mapping = loop_mapping_of(path)?;
+        let (fingerprint, loop_mapping) = block_open_extras(&identity, path)?;
         Ok(FileSource {
             identity,
             file,
