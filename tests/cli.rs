@@ -1116,7 +1116,8 @@ fn resize_shift_relocates_blockers() {
     assert!(out.contains("move part 3"), "plan must include the far blocker: {out}");
     assert!(stderr.contains("--yes"), "{stderr}");
 
-    // +3M 相对当前 1M 大小 → 绝对 4M：b/c 让位，a 精确扩到 10239（2048+8192-1）。
+    // +3M 相对当前 1M 大小 → 绝对 4M：b 让位到新末端之后，c 本就在扩容前线之外不动，
+    // a 精确扩到 10239（2048+8192-1）。
     // a 里的指纹不是任何 FS 的签名（识别为 unknown），故扩分区表要显式 --no-fs
     let (c, _, e) = run(&["resize", &format!("{img_s}:1"), "+3M", "--allow-move", "--yes", "--no-fs"]);
     assert_eq!(c, 0, "shift resize must succeed: {e}");
@@ -1126,8 +1127,8 @@ fn resize_shift_relocates_blockers() {
     assert_eq!(gpt[1].ending_lba, 10239, "target must land exactly at the requested end");
     assert_eq!(gpt[2].starting_lba, 10240, "adjacent blocker shifts by the growth delta");
     assert_eq!(gpt[2].ending_lba, 12287);
-    assert_eq!(gpt[3].starting_lba, 18432, "far blocker keeps its leading gap");
-    assert_eq!(gpt[3].ending_lba, 20479);
+    assert_eq!(gpt[3].starting_lba, 12288, "far blocker already beyond the growth front — not relocated");
+    assert_eq!(gpt[3].ending_lba, 14335);
     // 指纹随数据搬移
     let mut buf = [0u8; 512];
     use std::io::{Read, Seek, SeekFrom};
@@ -1137,7 +1138,7 @@ fn resize_shift_relocates_blockers() {
     f.seek(SeekFrom::Start(12287 * 512)).unwrap();
     f.read_exact(&mut buf).unwrap();
     assert!(buf.iter().all(|&b| b == 0xBB), "b tail fingerprint must survive");
-    f.seek(SeekFrom::Start(18432 * 512)).unwrap();
+    f.seek(SeekFrom::Start(12288 * 512)).unwrap();
     f.read_exact(&mut buf).unwrap();
     assert!(buf.iter().all(|&b| b == 0xCC), "c head fingerprint must survive");
     drop(f);
