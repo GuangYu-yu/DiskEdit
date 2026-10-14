@@ -55,6 +55,7 @@ for f in \
   capacity_concurrency_readonly.sh \
   lvm_pv_online.sh \
   lvm_gate.sh \
+  review_guards.sh \
   qemu_boot_verification.sh
 do
   run "$f"
