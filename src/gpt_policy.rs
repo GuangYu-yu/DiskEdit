@@ -348,6 +348,15 @@ pub(crate) fn partition_bytes(src: &FileSource, part: u32) -> Result<(u64, u64),
     match read_table(src)? {
         Table::Gpt { entries, ss } => {
             let e = live_entry_in(&entries, part)?;
+            // 重叠表按设计保持可诊断（info 读 RawGpt 点名冲突条目），但本函数的调用面
+            // 全是数据写入（mkfs / set label|uuid / check 的修复写入）：对这样的表执行
+            // 写命令会让 info 的"refuses write operations on this table"承诺为假
+            if let Some((a, b)) = crate::geometry::find_overlap(&entries) {
+                return Err(Fail::refused(format!(
+                    "partition entries #{a} and #{b} overlap — this tool refuses write operations \
+                     on this table; remove the overlapping entry with sfdisk/parted first"
+                )));
+            }
             // 条目在 usable 区内本不该溢出；checked 失败即表内容异常，按 Infra 如实报，
             // 不让回绕值顺着字节偏移流进 losetup / mkswap 的参数里
             let overflow = |part: u32| {
@@ -710,6 +719,28 @@ mod tests {
         table::commit_gpt(&mut src, &g, last).unwrap();
         let e = add_entry_at(&mut src, 8192, 8200, "x", table::LINUX_FS_TYPE_GUID, [0x44; 16]).unwrap_err();
         assert!(matches!(&e, Fail::Refused(m) if m.contains("full")), "{e:?}");
+    }
+
+    /// 重叠条目保持可诊断（info 读 RawGpt），但 FS 写路径的字节区间出口必须拒：
+    /// info 对用户承诺"this tool refuses write operations on this table"，
+    /// mkfs / set label|uuid / check 都经 partition_bytes，闸就收在这
+    #[test]
+    fn partition_bytes_refuses_overlapping_table() {
+        let mut src = gpt_src("pb_overlap");
+        // 直接改条目数组绕过 add 的构造点拒绝，制造 #1（2048..4095）与 #2 重叠的表
+        let mut g = table::load_gpt(&src).unwrap().unwrap();
+        g.entries[1] = gptman::GPTPartitionEntry {
+            partition_type_guid: table::LINUX_FS_TYPE_GUID,
+            unique_partition_guid: [0x47; 16],
+            starting_lba: 3000,
+            ending_lba: 5000,
+            attribute_bits: 0,
+            partition_name: "ovl".into(),
+        };
+        let last = src.size / src.sector_size - 1;
+        table::commit_gpt(&mut src, &g, last).unwrap();
+        let e = partition_bytes(&src, 2).unwrap_err();
+        assert!(matches!(&e, Fail::Refused(m) if m.contains("overlap")), "{e:?}");
     }
 
     /// 无表、空槽、越界编号各自只可能落一种出口语义：前者 10，后两者同判据同文案

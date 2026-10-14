@@ -8,7 +8,7 @@ use crate::support::{bail_fail, Fail, EXIT_REFUSED};
 /// 按 GNU 惯例帮助出口 0）
 const USAGE_TEXT: &str = r#"diskedit — disk / image editor
 
-  info <TARGET>                                  show partition table / FS / LVM layout
+  info <TARGET>                                  show partition table / FS identification
   resize <TARGET>:N <SIZE> [OPTS]                resize partition + FS (auto online/offline)
   move <TARGET>:N --start <LBA|end>              move partition
   copy <TARGET>:N --start <LBA|end> [--name S]   copy partition
@@ -29,9 +29,10 @@ const USAGE_TEXT: &str = r#"diskedit — disk / image editor
 target: image path or block device; :N = partition number (1-based); :last = the last
         partition a command can act on (on MBR an extended container does not count;
         a target without a partition table takes neither). `--grow` takes them too
-common opts: --no-fs  drop the filesystem step of the grown partition: layout
-                      success alone is exit 0, and a filesystem that cannot be
-                      grown is refused without it. A swap that a relocation has
+common opts: --no-fs  drop the filesystem step of the grown or moved
+                      partition: layout success alone is exit 0, and a
+                      filesystem that cannot be grown is refused without it.
+                      A swap that a relocation has
                       to rebuild, and the PV chain, still run — they belong to
                       the relocation / PV layer. Shrinking is refused together
                       with --no-fs: the filesystem has to be shrunk first

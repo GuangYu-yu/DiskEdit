@@ -58,6 +58,14 @@ pub(crate) fn cmd_new(a: &Args) -> u8 {
     if let Some(n) = a.part {
         bail_fail(Fail::refused(format!("`new` operates on the whole target — drop :{n}")));
     }
+    // 分区节点不是建表的合法载体：GPT 头与条目数组写在节点最前 16KiB，会直接覆盖
+    // 该分区的数据（512B 扇区下 ext 超级块在 +1024）。建表只认整设备
+    if crate::dev::target_is_partition_node(std::path::Path::new(&a.target)) {
+        bail_fail(Fail::refused(format!(
+            "target is a partition, not a whole disk — `new` writes a partition table; pass the whole device instead of {}",
+            a.target
+        )));
+    }
     if !a.yes {
         bail_fail(Fail::refused("`new` overwrites any existing partition table; pass --yes to confirm"));
     } else {
@@ -321,6 +329,10 @@ pub(crate) fn cmd_create(a: &Args) -> u8 {
             let unit = mib_in_sectors(g.ss);
             let want = a.size.map(|b| {
                 if b < g.ss { bail_fail(Fail::refused(format!("size {b} < one sector ({})", g.ss))); }
+                // 下取整是换算的一部分，但落盘值与请求值不同必须可见：这里回显实际生效值
+                if b % g.ss != 0 {
+                    eprintln!("note: size {b} is not a multiple of the {}-byte sector — creating {} bytes", g.ss, b / g.ss * g.ss);
+                }
                 b / g.ss
             });
             let used: Vec<(u64, u64)> = g.entries.iter()
@@ -339,6 +351,9 @@ pub(crate) fn cmd_create(a: &Args) -> u8 {
             let unit = mib_in_sectors(ss);
             let want = a.size.map(|b| {
                 if b < ss { bail_fail(Fail::refused(format!("size {b} < one sector ({ss})"))); }
+                if b % ss != 0 {
+                    eprintln!("note: size {b} is not a multiple of the {ss}-byte sector — creating {} bytes", b / ss * ss);
+                }
                 b / ss
             });
             let used: Vec<(u64, u64)> = mbr.iter().map(|p| (p.start_lba as u64, p.start_lba as u64 + p.size_lba as u64 - 1)).collect();

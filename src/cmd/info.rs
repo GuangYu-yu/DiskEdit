@@ -7,8 +7,10 @@ use crate::{fsid, table};
 
 pub(crate) const HELP: &str = r#"diskedit info <TARGET> [--sector-size N]
 
-  Show partition table, per-partition filesystem identification and LVM
-  layout. Read-only. --sector-size N overrides the 512B default (raw images)."#;
+  Show partition table and per-partition filesystem identification
+  (an LVM PV shows up in the fs field as lvm2_pv; PV space takes effect
+  through `resize --grow-lv`). Read-only.
+  --sector-size N overrides the 512B default (raw images)."#;
 
 pub(crate) fn cmd_info(a: &Args) -> u8 {
     // info 只看整盘布局：`:N` 指定了也会被静默忽略，用户会误以为输出是单分区的
