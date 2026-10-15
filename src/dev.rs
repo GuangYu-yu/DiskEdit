@@ -922,11 +922,20 @@ pub fn parse_target(s: &str) -> Result<(String, Option<PartSelector>), &'static 
     }
 }
 
-/// 块设备分区节点命名（util-linux 与内核通用惯例）：盘名以数字结尾时分区号加 "p"。
+/// 块设备分区节点命名，两种真实惯例并存：
+/// - 盘名以数字结尾时分区号加 "p"（/dev/sda→/dev/sda1、/dev/nvme0n1→/dev/nvme0n1p1）；
+/// - udev 的 by-id / by-path 链接用 "-part" 后缀（ata-XXX→ata-XXX-part1；
+///   systemd 60-persistent-storage.rules：DEVTYPE=="partition" ⇒ PART_SUFFIX="-part%n"）。
 /// `part_dev_hint`（镜像 losetup 提示）与在线/离线 LVM 链的分区节点路径共用此规则。
-/// `base` 是**盘名**（如 /dev/sda、nvme0n1），不含分区号
+/// `base` 是**盘名**（如 /dev/sda、/dev/disk/by-id/ata-XXX），不含分区号
 pub(crate) fn part_node_name(base: &str, part: u32) -> String {
-    let sep = if base.chars().last().is_some_and(|c| c.is_ascii_digit()) { "p" } else { "" };
+    let sep = if base.ends_with(|c: char| c.is_ascii_digit()) {
+        "p"
+    } else if base.starts_with("/dev/disk/by-id/") || base.starts_with("/dev/disk/by-path/") {
+        "-part"
+    } else {
+        ""
+    };
     format!("{base}{sep}{part}")
 }
 

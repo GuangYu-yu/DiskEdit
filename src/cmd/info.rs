@@ -167,8 +167,10 @@ pub(crate) fn cmd_info(a: &Args) -> u8 {
                     // 末端在 u64 域算：两个 u32 字段相加会溢出（debug panic / release 回绕），
                     // 报出一个小于起点的 last_lba。size_lba != 0 由 parse_mbr 保证，无下溢
                     let last_lba = p.start_lba as u64 + p.size_lba as u64 - 1;
+                    // 条目键集与 GPT 分支一致：MBR 没有分区名概念，如实给 null（同
+                    // disk_guid 的口径——缺字段会让按同一 schema 消费的调用方拿到不同键集）
                     format!(
-                        "{{\"num\":{},\"type\":\"0x{:02X}\",\"first_lba\":{},\"last_lba\":{},\"size_bytes\":{},\"fs\":\"{}\"}}",
+                        "{{\"num\":{},\"type\":\"0x{:02X}\",\"first_lba\":{},\"last_lba\":{},\"size_bytes\":{},\"fs\":\"{}\",\"name\":null}}",
                         p.num, p.os_type, p.start_lba, last_lba,
                         lba_bytes(p.size_lba as u64, src.sector_size), fs
                     )

@@ -604,6 +604,16 @@ fn cmd_resize_superfloppy(a: &Args, req: &SizeRequest) -> u8 {
             fsid::fs_name(fstype)
         )));
     }
+    // 事前能力探测（check_grow 的契约：必须在首次写盘之前）。本路径的 e2fsck -fp 一类
+    // 修复步骤本身写盘，缺工具若在那时才暴露，Infra(30) 会谎报"确定未写盘"。
+    // 类型接线判断不在此拦：不接线的类型不会写盘，由 resize_fs_in 按类型给出准确的
+    // 拒绝文案；grow_support 的 "--no-fs" 提示对无分区的 superfloppy 不适用
+    if let Some(kind) = fstype {
+        match fsops::check_grow(kind, src.is_block) {
+            Err(fsops::FsError::UnsupportedFs(_)) => {}
+            other => other.unwrap_or_else(|e| bail_fail(Fail::from(e))),
+        }
+    }
     // FS grow 本身不改分区表，无 kernel_resync 必要
     fsops::resize_fs_whole(&src, fstype).unwrap_or_else(|e| bail_fail(Fail::from(e).context("FS grow failed")));
     println!("superfloppy: {} grown to full device ({cur_bytes} bytes) — verify with: diskedit info {}", fsid::fs_name(fstype), a.target);
@@ -799,7 +809,7 @@ fn cmd_resize_msdos(a: &Args, pref: PartSelector, req: &SizeRequest, src_ro: &Fi
     let extends = grow_to_end || target.is_some_and(|b| b / ss > p.size_lba as u64);
     if extends && !a.no_fs {
         fsops::grow_target_at(&src, part, lba_bytes(p.start_lba as u64, ss), lba_bytes(p.size_lba as u64, ss))
-            .and_then(fsops::check_grow_step)
+            .and_then(|g| fsops::check_grow_step(g, is_block))
             .unwrap_or_else(|e| bail_fail(Fail::from(e)));
     }
     if grow_to_end {
@@ -847,7 +857,7 @@ fn cmd_resize_msdos(a: &Args, pref: PartSelector, req: &SizeRequest, src_ro: &Fi
             }
             // FS 收缩的前置检查与 GPT 路径同一处（fsops::check_shrink）：能否缩 / 类型是否
             // 认得 / 工具是否齐备只写一份
-            fsops::check_shrink(fstype).unwrap_or_else(|e| bail_fail(Fail::from(e)));
+            fsops::check_shrink(fstype, is_block).unwrap_or_else(|e| bail_fail(Fail::from(e)));
             if let Some(min) = fsops::fs_min_bytes(&src, part, fstype)
                 .unwrap_or_else(|e| bail_fail(Fail::from(e).context("min-size probe failed")))
                 && bytes < min
