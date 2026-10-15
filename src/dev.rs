@@ -1213,8 +1213,12 @@ fn truncated_header_error(have: usize) -> io::Error {
 
 /// 落点是不是"零次写入"的残骸：文件存在、是普通文件、且**一个字节都没有**。
 ///
-/// `ensure` 先 `create_new` 建文件、再把头一次写完，故 0 字节只表示"建好文件、头还没落盘"，
-/// 它不可能含任何记录（记录只能接在完整头之后）。**判据只有这一条**，三个消费点共用——
+/// 0 字节有两种在现有状态下**不可区分**的来源：`ensure` 先 `create_new` 建文件、再把头
+/// 一次写完，中断在两者之间会留下 0 字节；已有 journal 被外部截断到 0 也一样。本判据把
+/// 0 字节一律按前者收养（它不可能含任何记录——记录只能接在完整头之后），但**排除不了
+/// 后者**，这是已接受的限制而非安全保证（见 `journal_truncated_to_zero_is_adopted_as_a_remnant`
+/// 测试）。
+/// **判据只有这一条**，三个消费点共用——
 /// [`Journal::open`]（补头后照常使用）、事务闸口 `active_recovery_records`（不算现场）、
 /// `undo` 的候选挑选（不算可回放的 journal）。三者若不同源，一次在创建 journal 时掉电就会
 /// 出现两种结局：开 journal 的命令放行、走闸口的命令被永久挡住。
@@ -1441,7 +1445,7 @@ impl Journal {
     /// 既有文件还要过身份核对：它记的是**哪个目标**（v4 起）。指纹或 loop 映射不符即拒绝
     /// 采纳——把别的目标记下的原文当成"本目标的待回滚字节"，是这条路径最坏的后果
     ///
-    /// 唯一的例外：（0 字节的创建残骸 → 补写头，判据见 [`is_zero_write_remnant`]）与
+    /// 唯一的例外：（0 字节的残骸 → 补写头，判据见 [`is_zero_write_remnant`]）与
     /// （撕裂尾物理截断，见 [`Self::scan_entries`]）。两者都是收养既有现场的一部分而非新痕迹
     /// ——不截断的话垃圾尾会永远留在文件里，之后的新记录接在垃圾之后，`read_entries` 会把
     /// "垃圾之后的一切"都判进 TruncatedTail，新记录从此无法回放
@@ -1450,10 +1454,11 @@ impl Journal {
             Ok(mut f) => {
                 use std::io::Read;
                 let len = f.metadata()?.len();
-                // 0 字节 = 建头没写完的残骸：只有这一种现场就地补头（它不含记录，补头不丢东西）。
-                // **1..HEADER_LEN-1 字节不在此列**，一律走下面的三关校验——把那种现场也当残骸，
-                // 就等于把"原 journal 被外部截断、记录已经丢了"当成"零次写入"：两者在内容上
-                // 不可区分（头没写全，身份段的 CRC 也验不了），而后者是丢了记录的现场
+                // 0 字节按残骸就地补头：它不含记录（记录只能接在完整头之后），补头不覆盖
+                // 任何已知内容；但"初始化没写完"与"被外部截断到 0"不可区分，后者丢了记录
+                // 也无从得知——按残骸收养是已接受的限制。**1..HEADER_LEN-1 字节不在此列**，
+                // 一律走下面的三关校验——把那种现场也当残骸，就等于替用户宣布"这里什么
+                // 都没有"，而头没写全、身份段 CRC 验不了，证明不了这一点
                 if len == 0 {
                     Self::rewrite_header(path, &identity)?;
                     let f = OpenOptions::new().read(true).append(true).open(path)?;
@@ -1823,7 +1828,7 @@ mod tests {
         let _ = std::fs::remove_file(&q);
     }
 
-    /// v4 的"头不完整 / 头被改坏 / 记录被改坏"三种都拒绝；**只有 0 字节**的创建残骸按
+    /// v4 的"头不完整 / 头被改坏 / 记录被改坏"三种都拒绝；**只有 0 字节**的残骸按
     /// "零次写入"处理（补头继续用）。1..HEADER_LEN-1 字节一律拒绝：那既可能是初始化没写完，
     /// 也可能是原 journal 被外部截断（记录已丢），无法证明是前者，就不当后者不存在
     #[test]
@@ -1878,6 +1883,30 @@ mod tests {
         std::fs::write(&p, b"XYZ").unwrap();
         assert!(Journal::open(&p, id).is_err());
         assert_eq!(std::fs::read(&p).unwrap(), b"XYZ", "a foreign short file must be left alone");
+
+        let _ = std::fs::remove_file(&p);
+    }
+
+    /// 记录判据的边界：一份**含记录的完整 journal 被外部截断到 0** 后，与"建好文件、头还没
+    /// 写"在现有状态下不可区分，判据把它当残骸收养——记录就此丢失且无从提示。这是**已接受
+    /// 的限制而非安全保证**；1 字节以上的截断走的是拒绝路径（见上一条测试），唯独 0 字节
+    /// 例外。若产品日后要求"无法证明来源就不重新初始化"，改的是 `is_zero_write_remnant`
+    /// 与本测试，不是恢复流程
+    #[test]
+    fn journal_truncated_to_zero_is_adopted_as_a_remnant() {
+        let p = journal_path("trunc_zero");
+        let id = JournalIdentity { fp: TargetFingerprint { dev: 7, ino: 42, size: 1 << 20 }, map: None };
+        {
+            let mut j = Journal::open(&p, id).unwrap();
+            j.record(0, &[0xAA; 8], &[0xBB; 8]).unwrap();
+        }
+        assert!(Journal::read_entries(&p).is_ok(), "the journal must be complete before truncation");
+
+        std::fs::write(&p, b"").unwrap();
+        assert!(is_zero_write_remnant(&p), "an externally truncated empty file fits the remnant criterion");
+        drop(Journal::open(&p, id).unwrap());
+        assert!(matches!(Journal::read_entries(&p).unwrap(), JournalRead::Complete(v) if v.is_empty()),
+            "the lost records are gone silently — that is the accepted limitation");
 
         let _ = std::fs::remove_file(&p);
     }

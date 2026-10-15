@@ -109,6 +109,14 @@ fn check_replay_entry(src: &FileSource, rec: &JournalRecord) -> EntryCheck {
 /// 必须走虚拟盘面，不能逐条去对真盘：同一偏移被写多次时，先写那条的写后内容已被
 /// 后写那条覆盖，只有把后者的回滚结果留在虚拟盘面上，前者才核得上——这与真实回放的
 /// 顺序完全一致（先回滚后写的，再核先写的）
+///
+/// 虚拟盘面按起始偏移索引、只在长度相等时复用。不同长度走真盘回读的分支今天是**死路**：
+/// PreImage 的唯一生产者是 `FileSource::write_at`，pre-image 长度恒等于当次写入长度，
+/// 而生产调用点只两类——整扇区写（MBR/GPT，偏移按扇区对齐、长度恒为扇区大小或同一份
+/// 表数组）与 NTFS HiddenSectors 的 4 字节写（偏移 ≡ 0x1C mod 扇区）。起始偏移决定了
+/// 调用点类别，故同一偏移的两条记录长度必相同。失效条件：将来新增一类 journaled 局部
+/// 写，其起始偏移与既有类别重合而长度不同——届时这里会退化为"多读一次真盘"的误拒
+/// （fail-closed，一字未写），并应把索引改成 (offset, length) 双键
 fn verify_replay_plan(src: &FileSource, entries: &[JournalRecord]) -> Result<(), Fail> {
     let mut staged: std::collections::HashMap<u64, Vec<u8>> = std::collections::HashMap::new();
     for rec in entries.iter().rev() {
@@ -209,14 +217,15 @@ pub(crate) fn cmd_undo(a: &Args) -> u8 {
             bail_fail(Fail::refused(format!("{why} — this journal is not replayed here; {ROLLBACK_STUCK_REMEDY}")));
         }
         // 身份保障的边界要说给用户听：这个载体一个可比字段都给不出时（真块设备节点、以及
-        // 任何指纹恒零的载体），上面那道核对无从下手——回放靠的是"落点由身份键派生"加下面
-        // 逐条记录的字节核对，不能当成"身份已验证"。有尺寸证据（非 Unix 平台的镜像、以及
-        // 任何元数据长度可读的载体）时不在此列：那道核对确实跑了，只是覆盖的是尺寸这一项
+        // 任何指纹恒零的载体），上面那道核对无从下手——字段没有证据就不参与比较，"没比"
+        // 不能表述成"已验证"。回放实际依靠的是"落点由身份键派生"加下面逐条记录的字节核对。
+        // 有尺寸证据（非 Unix 平台的镜像、以及任何元数据长度可读的载体）时不在此列：那道
+        // 核对确实跑了，只是覆盖的是尺寸这一项
         if !src.fingerprint.has_any_evidence() {
             eprintln!(
-                "note: this target offers none of the fingerprint fields (device id, inode, size), so the journal's \
-                 target identity could not be compared — the replay rests on the identity-derived location and the \
-                 per-record byte check"
+                "note: identity boundary — this target exposes none of the fingerprint fields (device id, inode, \
+                 size), so none of them was compared; no evidence is not a match, and the replay rests on the \
+                 identity-derived journal location plus the per-record byte check"
             );
         }
         let n = entries.len();
