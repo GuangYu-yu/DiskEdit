@@ -239,9 +239,15 @@ pub fn make_plan_shift_resuming(
     match resume_outcome(src, g, grow_part)? {
         ResumeOutcome::Belongs(p) => {
             if shift.is_none() {
-                return Err(Fail::refused(
-                    "an unfinished `resize grow` job owns this target — re-run that command to resume it, or `diskedit abandon` to release it",
-                ));
+                // 文案按 pending 作业的进入语义分句：TailPacked 来自 `resize grow`，
+                // Shift 来自 `resize SIZE + --allow-move`——让用户知道该重跑哪条命令
+                let verb = match p.kind {
+                    PlanKind::TailPacked => "`resize grow`",
+                    PlanKind::Shift => "`resize SIZE --allow-move`",
+                };
+                return Err(Fail::refused(format!(
+                    "an unfinished {verb} job owns this target — re-run that command to resume it, or `diskedit abandon` to release it",
+                )));
             }
             return Ok(p);
         }
@@ -1940,7 +1946,9 @@ fn execute_resize(
     // 此处不另设判据，以 check_shrink 的三重结果（能否缩 / 类型 / 工具）为准
     if p.fs_action == FsAction::Shrink {
         // 缩容**不**落不可回滚标记：缩小之后再回滚表项只会得到"FS 小于分区"这一自洽状态
-        // （与扩容方向相反），undo 仍然安全可用。判据是可逆性，不是"有没有调外部工具"
+        // （与扩容方向相反），undo 仍然安全可用。判据是可逆性，不是"有没有调外部工具"。
+        // shrink_fs 的契约按旧分区尺寸比对（FS 小于分区时实为良性扩容，见其文档）：
+        // new_bytes ≤ 旧分区尺寸由 plan 的缩容方向保证
         crate::fsops::shrink_fs(src, part, fstype, new_bytes)?;
         ckpt.fs_shrunk = true;
         save(&ckpt)?;

@@ -404,12 +404,14 @@ mod imp {
     fn part_resize(t: &OnlineTarget, new_len_bytes: u64) -> Result<(), PartResizeError> {
         let pno_str = t.pno.to_string();
         let disk_str = t.disk_dev.to_string_lossy().into_owned();
-        // 写前锁下重验（最小 TOCTOU 防线）：sysfs 快照取自内核视图，取锁到 sfdisk
-        // 之间第三方（不守本工具的锁）可能已改写盘上表；sfdisk 的 --force 关闭全部
-        // 一致性检查，不会替我们拒绝由此造成的重叠。这里直接重读**盘上表**比对
-        // 目标分区，不符即拒——把窗口压缩到"重验之后、sfdisk 执行"的毫秒级残余，
-        // 该残余无法在本进程内消除（sfdisk 内部自读盘表），由内核 -EBUSY/-EINVAL
-        // 兜底为 Partial（退出 20 + 盘上表需人工核对）
+        // 写前锁下重验（最小 TOCTOU 防线，**只覆盖目标分区自身**）：sysfs 快照取自
+        // 内核视图，取锁到 sfdisk 之间第三方（不守本工具的锁）可能已改写盘上表；
+        // sfdisk 的 --force 关闭全部一致性检查，不会替我们拒绝由此造成的异常。这里
+        // 直接重读**盘上表**比对目标分区的条目，不符即拒。**邻居维度无写前重验**：
+        // 重叠判定用的邻居集仍来自锁下快照，窗口内的第三方改动只能靠"守锁约定 +
+        // 内核 -EBUSY/-EINVAL"兜底为 Partial（退出 20 + 盘上表需人工核对）；残余
+        // 窗口（重验之后、sfdisk 执行）连目标维度也无法在本进程内消除（sfdisk 内部
+        // 自读盘表）
         let disk = crate::dev::FileSource::open_read_only(&t.disk_dev)
             .map_err(|e| PartResizeError::NoWrite(io::Error::other(format!("pre-write re-read failed: {e}"))))?;
         match crate::gpt_policy::partition_bytes(&disk, t.pno) {
@@ -561,7 +563,7 @@ mod imp {
             return Ok(());
         }
         let src = FileSource::open_read_only(&t.part_dev)?;
-        crate::fsops::refuse_btrfs_multi_device_at(&src, 0)
+        crate::fsops::refuse_btrfs_multi_device_at(&src, 0, t.part_len_bytes)
     }
 
     /// 从（盘名, 分区号）解析 OnlineTarget（PV 路径无挂载点，mnt 置空不用）

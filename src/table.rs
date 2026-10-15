@@ -227,7 +227,9 @@ pub struct RawHeader {
     pub size_of_partition_entry: u32,
     /// 规范 HeaderSize：≥ 92 且 ≤ 逻辑块大小，HeaderCRC32 按这么多字节计算
     /// （UEFI 2.10 §5.3.2 Table 5.5）。读到的值随头一起带回，重写时按原值输出——
-    /// 头是本工具直接映射的盘上字节，改写不能被固定为 92 而丢掉输入
+    /// 头是本工具直接映射的盘上字节，改写不能被固定为 92 而丢掉输入。
+    /// 92..HeaderSize 之间是规范规定**必须为零**的保留区（同表 Table 5.5），重写时
+    /// 清零是按规范 normalization，不构成丢输入——非零保留区本身即不合规盘面
     pub header_size: u32,
 }
 
@@ -1000,6 +1002,14 @@ pub fn resize_mdos_entry(src: &mut FileSource, part: u32, new_size_lba: u32) -> 
     if MDOS_CONTAINER_TYPES.contains(&lba0[off + 4]) {
         return Err(Fail::refused("extended partition container cannot be resized"));
     }
+    // 隐形条目（type 字节非零但 size 为零，解析侧按空槽处理）：与 set_mdos_boot /
+    // set_mdos_hidden / set_mdos_type 同判据同文案——写入等于凭空造出一条解析器
+    // 看不见的分区，操作者无从核对结果
+    if rd_u32(&lba0[off..off + 16], 12) == 0 {
+        return Err(Fail::refused(format!(
+            "partition {part} has a type byte but zero sectors — the entry is invisible to the parser; `del` clears it"
+        )));
+    }
     // 条目自守（与 add_mdos_entry 同严格）：start + 新长度须落在盘内。现有调用方
     // 都先查过 free，但这是 pub 写入口——越界尺寸要挡在写 LBA0 之前，不能指望
     // 每个未来调用方都记得复核
@@ -1675,6 +1685,39 @@ mod tests {
         let mut src = src_from(tag, fixture_gpt(ss));
         ensure_protective_mbr(&mut src).unwrap();
         src
+    }
+
+    /// MBR 测试镜像：原始字节写一个带 55AA 签名与若干分区条目的 LBA0。
+    /// `entries` 每项 `(type, start_lba, size_lba)`，落在标准 MBR 分区槽位
+    /// （off = 446 + 16*(i)，type 在 +4、start 在 +8、size 在 +12）。`img_sectors`
+    /// 决定整盘大小，用于让合法条目通过越界检查
+    fn src_from_mbr(tag: &str, entries: &[(u8, u32, u32)], img_sectors: u64) -> FileSource {
+        let mut data = vec![0u8; (img_sectors * 512) as usize];
+        let lba0 = &mut data[..512];
+        for (i, (ty, start, size)) in entries.iter().enumerate() {
+            let off = 446 + 16 * i;
+            lba0[off + 4] = *ty;
+            lba0[off + 8..off + 12].copy_from_slice(&start.to_le_bytes());
+            lba0[off + 12..off + 16].copy_from_slice(&size.to_le_bytes());
+        }
+        lba0[510] = 0x55;
+        lba0[511] = 0xAA;
+        src_from(tag, data)
+    }
+
+    /// 隐形条目（type 字节非零但 size 为零）在解析侧按空槽处理：resize_mdos_entry
+    /// 不得把它当真实分区改写——那是凭空造出一条解析器看不见的分区，操作者无从核对。
+    /// 与 set_mdos_boot / set_mdos_hidden / set_mdos_type 同判据同文案
+    #[test]
+    fn resize_mdos_entry_refuses_invisible_type_only_entry() {
+        let mut src = src_from_mbr("mdosinv", &[(0x83, 2048, 0)], 32768);
+        let e = resize_mdos_entry(&mut src, 1, 1000)
+            .err()
+            .expect("a type-only MBR entry must be refused by resize_mdos_entry");
+        assert!(matches!(&e, Fail::Refused(m) if m.contains("invisible to the parser")), "{e:?}");
+        // 正常条目（type≠0 且 size≠0）不受影响——缩容仍走既有路径
+        let mut ok = src_from_mbr("mdosok", &[(0x83, 2048, 2048)], 32768);
+        assert!(resize_mdos_entry(&mut ok, 1, 4096).is_ok(), "a real entry must still be resizable");
     }
 
     /// 以**原始字节**写入主副本条目（绕过 gptman：它的 write_into 自带 overlap 校验

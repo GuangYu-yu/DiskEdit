@@ -2376,3 +2376,122 @@ mod crash_recovery {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+
+/// 重叠 GPT 镜像：合法 GPT 写入后，改盘上条目数组让两条条目重叠，再重算条目数组
+/// CRC 与主头 CRC（与 DiskEdit 同算法，见 src/table.rs::crc32）。load_gpt 优先用主头、
+/// 仅当其失效才回退备份——所以主头里重叠的条目也能被 info 读到并判重叠
+fn overlapping_gpt_image(path: &std::path::Path) {
+    let ss = 512u64;
+    // 夹具要能先经 gptman 合法写出再人为改坏：镜像须装得下条目 2 的末端（LBA 90）
+    // 加 GPT 尾部结构，100 扇区的镜像在 write_into 的几何校验处就过不去
+    let data = vec![0u8; 2048 * ss as usize];
+    let mut cur = Cursor::new(data);
+    let mut gpt = gptman::GPT::new_from(&mut cur, ss, [0xAB; 16]).unwrap();
+    gpt[1] = gptman::GPTPartitionEntry {
+        partition_type_guid: [0x11; 16],
+        unique_partition_guid: [0x22; 16],
+        starting_lba: 34,
+        ending_lba: 60,
+        attribute_bits: 0,
+        partition_name: "p1".into(),
+    };
+    gpt[2] = gptman::GPTPartitionEntry {
+        partition_type_guid: [0x11; 16],
+        unique_partition_guid: [0x33; 16],
+        starting_lba: 64,
+        ending_lba: 90,
+        attribute_bits: 0,
+        partition_name: "p2".into(),
+    };
+    gpt.write_into(&mut cur).unwrap();
+    let mut data = cur.into_inner();
+    // 条目数组在 LBA2（偏移 1024），每条 128 字节；把条目 2 的起始拉进条目 1 区间内
+    let e2 = 1024 + 128;
+    data[e2 + 32..e2 + 40].copy_from_slice(&40u64.to_le_bytes()); // starting_lba = 40（落在 34..60 内）
+    data[e2 + 40..e2 + 48].copy_from_slice(&90u64.to_le_bytes()); // ending_lba = 90
+    let crc = crc::Crc::<u32>::new(&crc::CRC_32_ISO_HDLC);
+    // 重算条目数组 CRC（默认 128 条 × 128 字节）
+    let array_crc = crc.checksum(&data[1024..1024 + 128 * 128]);
+    data[512 + 88..512 + 92].copy_from_slice(&array_crc.to_le_bytes());
+    // 重算主头 CRC：先清占位字段，对 HeaderSize 字节算 CRC 写回
+    let hdr_size = u32::from_le_bytes(data[512 + 12..512 + 16].try_into().unwrap()) as usize;
+    data[512 + 16..512 + 20].fill(0);
+    let hdr_crc = crc.checksum(&data[512..512 + hdr_size]);
+    data[512 + 16..512 + 20].copy_from_slice(&hdr_crc.to_le_bytes());
+    std::fs::write(path, with_protective_mbr(data)).unwrap();
+}
+
+/// D4（C4）：info 对**重叠的 GPT** 必须报 damaged:true（与 MBR 的 MbrDamage::Overlap 口径对称），
+/// 且重叠条目仍可见（诊断不能因受损而消失）
+#[test]
+fn info_reports_damaged_for_overlapping_gpt() {
+    let dir = std::env::temp_dir().join(format!("diskedit_ovgpt_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let img = dir.join("overlap.img");
+    overlapping_gpt_image(&img);
+    let exe = env!("CARGO_BIN_EXE_DiskEdit");
+    let out = Command::new(exe).args(["info", img.to_str().unwrap()]).output().unwrap();
+    let s = String::from_utf8_lossy(&out.stdout);
+    let v: serde_json::Value = serde_json::from_str(s.trim()).expect("info must emit valid JSON");
+    assert_eq!(v["label"], "gpt", "label must still be gpt: {s}");
+    assert_eq!(v["damaged"], serde_json::json!(true), "overlapping GPT must be reported damaged: {s}");
+    assert!(v["partitions"].as_array().unwrap().len() >= 2, "overlapping entries must remain visible: {s}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// D5（C1）：set name 超过 36 个 UTF-16 码元必须拒绝（而非静默截断）；恰 36 个码元可接受
+#[test]
+fn set_name_over_36_code_units_is_refused() {
+    let dir = std::env::temp_dir().join(format!("diskedit_nm36_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let img = dir.join("blank.img");
+    std::fs::write(&img, vec![0u8; 8 * 1024 * 1024]).unwrap();
+    let exe = env!("CARGO_BIN_EXE_DiskEdit");
+    let img_s = img.to_str().unwrap();
+    let run = |args: &[&str]| -> (i32, String, String) {
+        let out = Command::new(exe).args(args).output().unwrap();
+        (out.status.code().unwrap_or(-1),
+         String::from_utf8_lossy(&out.stdout).into_owned(),
+         String::from_utf8_lossy(&out.stderr).into_owned())
+    };
+    assert_eq!(run(&["new", img_s, "--yes"]).0, 0);
+    assert_eq!(run(&["add", img_s, "--start", "2048", "--end", "4095", "--name", "root"]).0, 0);
+
+    // 37 个 ASCII 字符 = 37 码元 > 36 → 拒绝，文案点明 UTF-16 码元
+    let over = "a".repeat(37);
+    let (c, _, err) = run(&["set", &format!("{img_s}:1"), "name", &over]);
+    assert_eq!(c, 10, "a name over 36 UTF-16 code units must be refused: {err}");
+    assert!(err.contains("UTF-16 code units"), "{err}");
+
+    // 边界：恰 36 个码元应被接受
+    let exact = "a".repeat(36);
+    let (c, _, err) = run(&["set", &format!("{img_s}:1"), "name", &exact]);
+    assert_eq!(c, 0, "a 36-code-unit name must be accepted: {err}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// D5（C2）：resize SIZE 非扇区对齐时回显 note（实际生效的下取整值），且不改变落盘值
+#[test]
+fn resize_non_aligned_size_emits_note() {
+    let dir = std::env::temp_dir().join(format!("diskedit_na_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let img = dir.join("blank.img");
+    std::fs::write(&img, vec![0u8; 8 * 1024 * 1024]).unwrap();
+    let exe = env!("CARGO_BIN_EXE_DiskEdit");
+    let img_s = img.to_str().unwrap();
+    let run = |args: &[&str]| -> (i32, String, String) {
+        let out = Command::new(exe).args(args).output().unwrap();
+        (out.status.code().unwrap_or(-1),
+         String::from_utf8_lossy(&out.stdout).into_owned(),
+         String::from_utf8_lossy(&out.stderr).into_owned())
+    };
+    assert_eq!(run(&["new", img_s, "--yes"]).0, 0);
+    assert_eq!(run(&["add", img_s, "--start", "2048", "--end", "4095", "--name", "root"]).0, 0);
+    // 1 MiB + 1 字节非 512 整数倍：note 回显"实际生效 1 MiB"，请求本身合法（同尺寸
+    // 重写）故退出 0——note 出现在越界判定之后，被拒绝的请求不会再带 note
+    let (c, _, err) = run(&["resize", &format!("{img_s}:1"), "1048577"]);
+    assert!(err.contains("note: size 1048577 is not a multiple of the 512-byte sector"), "{err}");
+    assert!(err.contains("resizing to 1048576 bytes"), "{err}");
+    assert_eq!(c, 0, "the non-aligned but in-range request must succeed: {err}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

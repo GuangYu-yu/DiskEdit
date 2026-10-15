@@ -60,12 +60,7 @@ pub(crate) fn cmd_new(a: &Args) -> u8 {
     }
     // 分区节点不是建表的合法载体：GPT 头与条目数组写在节点最前 16KiB，会直接覆盖
     // 该分区的数据（512B 扇区下 ext 超级块在 +1024）。建表只认整设备
-    if crate::dev::target_is_partition_node(std::path::Path::new(&a.target)) {
-        bail_fail(Fail::refused(format!(
-            "target is a partition, not a whole disk — `new` writes a partition table; pass the whole device instead of {}",
-            a.target
-        )));
-    }
+    refuse_partition_node_target("new", &a.target);
     if !a.yes {
         bail_fail(Fail::refused("`new` overwrites any existing partition table; pass --yes to confirm"));
     } else {
@@ -106,6 +101,9 @@ pub(crate) fn cmd_add(a: &Args) -> u8 {
     if let Some(n) = a.part {
         bail_fail(Fail::refused(format!("`add` picks the first free slot itself — drop :{n}")));
     }
+    // 分区节点不是合法载体：表条目写在整盘最前 16KiB，落到分区节点上会直接覆盖该
+    // 分区的数据——判据与文案见 refuse_partition_node_target
+    refuse_partition_node_target("add", &a.target);
     let (Some(start), Some(end)) = (a.start, a.end) else { crate::args::usage() };
     let mut src = open_target_for_write(a).unwrap_or_else(|f| bail_fail(f));
     // 坐标系在几何计算前确定：GPT 条目按表头 ss 对齐，MBR 条目按容器 ss 对齐
@@ -117,6 +115,8 @@ pub(crate) fn cmd_add(a: &Args) -> u8 {
                 Some(s) => parse_guid(s).unwrap_or_else(|| bail_fail(Fail::refused(format!("invalid GUID {s:?} (expect standard text like C12A7328-F81F-11D2-BA4B-00A0C93EC93B, hyphens optional)")))),
                 None => table::LINUX_FS_TYPE_GUID, // Linux filesystem data（util-linux GPT_DEFAULT_ENTRY_TYPE）
             };
+            // 名字守卫在消费点：GPT 分支是 --name 的唯一落盘处（MBR 分支已拒绝 --name）
+            if let Some(n) = &a.name { crate::support::check_gpt_name_len(n); }
             match crate::gpt_policy::add_entry(&mut src, start, end, a.name.as_deref().unwrap_or(""), type_guid) {
                 Ok(num) => table_write_done(&src, &format!("added partition #{num} (verify with: diskedit info {})", a.target)),
                 Err(f) => bail_fail(f),
@@ -286,6 +286,8 @@ pub(crate) fn cmd_copy(a: &Args) -> u8 {
         align_start(a, start_opt.unwrap(), g.ss)
     };
     let (chunk, mut logger) = chunk_logger(a, &src, g.header.disk_guid);
+    // 名字守卫在消费点：copy 的落盘名字与 add 同一个 36 码元字段
+    if let Some(n) = &a.name { crate::support::check_gpt_name_len(n); }
     match movepart::copy_part(&mut src, &g, repair, part, start, a.name.as_deref().unwrap_or(""), chunk, &mut |m| logger.log(m)) {
         Ok(num) => table_write_done(&src, &format!("copied to partition #{num} (verify with: diskedit info {})", a.target)),
         Err(f) => bail_fail(f),
@@ -317,6 +319,8 @@ pub(crate) fn cmd_create(a: &Args) -> u8 {
         }
         None => None,
     };
+    // 分区节点不是合法载体（同 add：表条目写在整盘最前 16KiB）
+    refuse_partition_node_target("create", &a.target);
     let mut src = open_target_for_write(a).unwrap_or_else(|f| bail_fail(f));
     // 一次探测同时取"表类型 + 空闲区"：后面选槽写表要用的是同一个 label，
     // 再探一次等于重解析一遍表（且可能读到与前面不同的结果）。
@@ -329,10 +333,7 @@ pub(crate) fn cmd_create(a: &Args) -> u8 {
             let unit = mib_in_sectors(g.ss);
             let want = a.size.map(|b| {
                 if b < g.ss { bail_fail(Fail::refused(format!("size {b} < one sector ({})", g.ss))); }
-                // 下取整是换算的一部分，但落盘值与请求值不同必须可见：这里回显实际生效值
-                if b % g.ss != 0 {
-                    eprintln!("note: size {b} is not a multiple of the {}-byte sector — creating {} bytes", g.ss, b / g.ss * g.ss);
-                }
+                crate::support::note_sector_truncation("creating", b, g.ss);
                 b / g.ss
             });
             let used: Vec<(u64, u64)> = g.entries.iter()
@@ -351,9 +352,7 @@ pub(crate) fn cmd_create(a: &Args) -> u8 {
             let unit = mib_in_sectors(ss);
             let want = a.size.map(|b| {
                 if b < ss { bail_fail(Fail::refused(format!("size {b} < one sector ({ss})"))); }
-                if b % ss != 0 {
-                    eprintln!("note: size {b} is not a multiple of the {ss}-byte sector — creating {} bytes", b / ss * ss);
-                }
+                crate::support::note_sector_truncation("creating", b, ss);
                 b / ss
             });
             let used: Vec<(u64, u64)> = mbr.iter().map(|p| (p.start_lba as u64, p.start_lba as u64 + p.size_lba as u64 - 1)).collect();
@@ -387,6 +386,8 @@ pub(crate) fn cmd_create(a: &Args) -> u8 {
     // swap 声明落进类型 GUID：movepart 靠它识别 swap 挡路者（不搬数据、mkswap 重建）
     let is_swap = fs_kind == Some(MkfsFs::Swap);
     let r = if label == table::TableLabel::Gpt {
+        // 名字守卫在消费点（同 add）：MBR 分支没有名字列
+        if let Some(n) = &a.name { crate::support::check_gpt_name_len(n); }
         let guid = if is_swap { table::SWAP_TYPE_GUID } else { table::LINUX_FS_TYPE_GUID };
         crate::gpt_policy::add_entry(&mut src, start, end, a.name.as_deref().unwrap_or(""), guid)
     } else {

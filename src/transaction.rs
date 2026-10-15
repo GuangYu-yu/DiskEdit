@@ -164,7 +164,8 @@ impl TransactionManager {
     /// 接管别人没做完的事务。接着做要走 [`Self::begin_or_resume`]，放弃要走 `abandon`——
     /// 让 `begin` 去猜"这是不是续跑"，必然导致"是不是续跑"要在两处保持一致
     ///
-    /// journal 是**惰性**的：`Journal::open` 只做只读校验，此刻盘上没有任何新痕迹；
+    /// journal 是**惰性**的：`Journal::open` 在文件不存在时什么都不建，采纳既有文件时
+    /// 只做校验与撕裂尾的物理截断（截掉的是设计认定可丢弃的未完成追加，见其文档）；
     /// 真正的记录要等到第一次真正的写入（见 [`FileSource::write_at`]）。
     /// 因此一条在校验阶段就被拒的命令不会留下空 journal，也就不会占住候选落点
     pub(crate) fn begin(a: &Args) -> Result<FileSource, Fail> {

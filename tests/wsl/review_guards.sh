@@ -91,6 +91,25 @@ if lo_waitpart "${LD}p2"; then
 else
     echo "  BAD  ${LD}p2 did not appear"; rc=1
 fi
+    # 同一道分区节点守卫还覆盖 add / create / undo / abandon（建表 / 回放类命令的载体必须是整盘）。
+    # 放在 lo_detach 之前：分区节点设备此刻仍挂着
+    OUT=$($B add "${LD}p2" --start 2048 --end 4095 --name p1 2>&1); E=$?
+    echo "add on partition node -> exit=$E"; exp "$E" 10 "E2a add refused on a partition node"
+    case "$OUT" in *"target is a partition, not a whole disk"*) echo "  OK   E2a refusal names the partition node" ;; *) echo "  BAD  E2a refusal wording"; rc=1 ;; esac
+
+    OUT=$($B create "${LD}p2" --size 100M --name p1 2>&1); E=$?
+    echo "create on partition node -> exit=$E"; exp "$E" 10 "E2b create refused on a partition node"
+    case "$OUT" in *"target is a partition, not a whole disk"*) echo "  OK   E2b refusal names the partition node" ;; *) echo "  BAD  E2b refusal wording"; rc=1 ;; esac
+
+    OUT=$($B undo "${LD}p2" --yes 2>&1); E=$?
+    echo "undo on partition node -> exit=$E"; exp "$E" 10 "E2c undo refused on a partition node"
+    case "$OUT" in *"target is a partition, not a whole disk"*) echo "  OK   E2c refusal names the partition node" ;; *) echo "  BAD  E2c refusal wording"; rc=1 ;; esac
+
+    OUT=$($B abandon "${LD}p2" --yes 2>&1); E=$?
+    echo "abandon on partition node -> exit=$E"; exp "$E" 10 "E2d abandon refused on a partition node"
+    case "$OUT" in *"target is a partition, not a whole disk"*) echo "  OK   E2d refusal names the partition node" ;; *) echo "  BAD  E2d refusal wording"; rc=1 ;; esac
+
+    assert_eq "$(md5sum "${LD}p2" | cut -d ' ' -f1)" "$E2B" "E2 all refusals leave the partition node bytes unchanged"
 lo_detach "$LD"
 
 echo

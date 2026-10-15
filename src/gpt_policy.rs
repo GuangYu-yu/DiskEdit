@@ -249,8 +249,10 @@ pub(crate) fn read_table(src: &FileSource) -> Result<Table, Fail> {
     }
 }
 
-/// 取号：末端扇区最大的条目。末端不会相同——条目重叠在几何构造点已被拒绝
-/// （[`ValidatedGeometry::new`] / `parse_mbr`）
+/// 取号：末端扇区最大的条目。"末端互异"依赖**条目不重叠**，而该保证只在写路径成立
+/// （GPT 经 [`ValidatedGeometry::new`]、MBR 经 `parse_mbr` 的 damage 口径拒绝重叠）；
+/// 重叠表的读路径不过那道闸（info 对重叠表仍照常取号），末端相同的极端现场里取谁
+/// 由迭代顺序决定——那已是受损表，点名冲突条目才是 info 的正事
 fn last_used(used: impl Iterator<Item = (u32, u64)>) -> Option<u32> {
     used.max_by_key(|&(_, last_lba)| last_lba).map(|(num, _)| num)
 }
@@ -542,9 +544,12 @@ pub fn set_gpt_flag(src: &mut FileSource, part: u32, flag: GptFlag, on: bool) ->
                 let base = e.starting_lba.checked_mul(g.ss).ok_or_else(|| {
                     Fail::infra("partition start overflows byte offset")
                 })?;
-                let len = (e.ending_lba - e.starting_lba + 1).checked_mul(g.ss).ok_or_else(|| {
-                    Fail::infra("partition length overflows byte size")
-                })?;
+                // checked 换算与 partition_bytes 同口径：条目来自盘上内容，回绕会把
+                // 错误的字节区间送进 identify
+                let len = e.ending_lba.checked_sub(e.starting_lba)
+                    .and_then(|d| d.checked_add(1))
+                    .and_then(|n| n.checked_mul(g.ss))
+                    .ok_or_else(|| Fail::infra("partition length overflows byte size"))?;
                 let recognized = crate::fsid::identify(src, base, len)?;
                 e.partition_type_guid = match recognized {
                     Some(crate::fsid::FsKind::Vfat) | Some(crate::fsid::FsKind::Ntfs) => {

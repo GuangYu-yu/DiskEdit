@@ -276,6 +276,38 @@ pub(crate) fn open_target_ro(a: &Args) -> Result<FileSource, crate::outcome::Fai
     TransactionManager::read_only(a)
 }
 
+/// 建表 / 回放类命令的载体必须是整盘：目标是分区节点时拒绝（判据见
+/// `dev::target_is_partition_node`，镜像恒通过）。`new`/`add`/`create` 写分区表，
+/// `undo`/`abandon` 回放 / 释放的是整盘的恢复现场——落到分区节点上要么覆盖该分区
+/// 数据、要么把整盘偏移的字节写进分区
+pub(crate) fn refuse_partition_node_target(cmd: &str, target: &str) {
+    if crate::dev::target_is_partition_node(std::path::Path::new(target)) {
+        bail_fail(Fail::refused(format!(
+            "target is a partition, not a whole disk — `{cmd}` must be given the whole device instead of {target}"
+        )));
+    }
+}
+
+/// GPT 分区名的落盘字段只有 36 个 UTF-16 码元（gptman PartitionName），超长会被
+/// From<&str> 静默截断——名字是用户对齐条目的锚点，悄悄少一截比拒绝更糟。按
+/// encode_utf16 预判码元数（不是 char 数：BMP 外字符占 2 码元）
+pub(crate) fn check_gpt_name_len(name: &str) {
+    let units = name.encode_utf16().count();
+    if units > 36 {
+        bail_fail(Fail::refused(format!(
+            "name is {units} UTF-16 code units; a GPT partition name holds at most 36 — refusing rather than truncating"
+        )));
+    }
+}
+
+/// SIZE 换算的下取整让落盘值与请求值不同，必须可见：回显实际生效的字节数。
+/// `action` 是该处命令的动词（creating / resizing）
+pub(crate) fn note_sector_truncation(action: &str, bytes: u64, ss: u64) {
+    if bytes % ss != 0 {
+        eprintln!("note: size {bytes} is not a multiple of the {ss}-byte sector — {action} {} bytes", bytes / ss * ss);
+    }
+}
+
 /// 恢复现场的枚举口径与"未收尾就拒绝"的闸口都在 `transaction`（见 `TransactionManager`）。
 /// 这里只转发名字，命令层不必知道它是怎么判的
 pub(crate) use crate::transaction::{

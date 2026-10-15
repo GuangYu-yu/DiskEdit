@@ -78,6 +78,9 @@ pub(crate) fn cmd_undo(a: &Args) -> u8 {
     if let Some(n) = a.part {
         bail_fail(Fail::refused(format!("`undo` replays the whole target's journal — drop :{n}")));
     }
+    // 回放类命令的载体必须是整盘：journal 记的是整盘偏移，落到分区节点上会把
+    // 别处的字节写进该分区
+    refuse_partition_node_target("undo", &a.target);
     if !a.yes {
         bail_fail(Fail::refused("`undo` overwrites current bytes from journal; pass --yes to confirm"));
     } else {
@@ -137,6 +140,8 @@ pub(crate) fn cmd_undo(a: &Args) -> u8 {
         // 未写盘"，部分回滚已落盘后按它报会让脚本误判盘面未动（写失败臂同据归 Failed）
         let mut replayed: usize = 0;
         for rec in entries.iter().rev() {
+            // Barrier 已在前置整体拒绝（上方 find_map），此臂只作纵深防御——真有漏网
+            // 的 Barrier，跳过比回放更接近"不假装回滚了"的安全缺省
             let RecoveryData::PreImage { off, bytes, after } = &rec.recovery else { continue };
             // 分叉核对：盘上当前字节须与这条记录的写后内容一致（正常现场），或与原文
             // 一致（上一次 undo 中断留下的已回滚态——重放同一原文幂等无害）。
@@ -199,7 +204,12 @@ pub(crate) fn cmd_undo(a: &Args) -> u8 {
         src.sync_all().unwrap_or_else(|e| {
             bail_fail(Fail::failed(format!("undo wrote the journal back but sync failed: {e} — rollback may not be durable, verify before retrying")))
         });
-        crate::dev::warn_if_remove_failed(&p);
+        // 回放成功的收尾不止删被回放的那份：历史命名候选若还留在盘上（读不出的那份，
+        // pick_journal 已逐条告警过），下一次 undo 仍会把它报成 Unreadable、abandon
+        // 仍把它列为现场——回放既然已经成功，这个"有事没做完"的表象必须一并消失。
+        // Barrier 型 journal 走不到这里（上方已整体拒绝），Ambiguous 也在挑 journal
+        // 时前置拒绝，这里能多删的只有历史候选
+        clear_journal_candidates(src.identity.journal_candidates(), &p);
         // 事务的恢复状态随回滚一并释放：这份 journal 记下的表写入已经全部回退，而 checkpoint
         // 描述的是同一个事务的进度——留下来只会描述一个已被回滚掉的世界，让后续 resize 被判成
         // Divergent 而永久拒绝（"什么也没做却被拒绝"）。两族作业不会交叉：目标上/journal 存在
@@ -208,6 +218,37 @@ pub(crate) fn cmd_undo(a: &Args) -> u8 {
             crate::dev::warn_if_remove_failed(&ckpt);
         }
         table_write_done(&src, &format!("undone {n} journal entries (verify with: diskedit info {})", a.target))
+    }
+}
+
+/// 回放成功后清掉**全部** journal 候选，不止被回放的那份 `picked`。被回放的那份
+/// 无条件删除（使命已结束）；其余候选只有以本工具 magic 开头才删——那说明它是
+/// 我们自己写下的残卷（pick_journal 口径的"读不出"，损伤已逐条告警过），留着会让
+/// 下一次 undo 报 Unreadable、abandon 仍列为现场。陌生内容不删：候选路径按命名
+/// 派生只说明"可能是我们的落点"，证明不了"是我们的文件"——`Journal::open` 拒绝
+/// 采纳陌生文件，这里同判据保留并告警，交 abandon 人工处置
+fn clear_journal_candidates(candidates: &[std::path::PathBuf], picked: &std::path::Path) {
+    for cand in candidates {
+        if cand == picked {
+            crate::dev::warn_if_remove_failed(cand);
+            continue;
+        }
+        let ours = std::fs::File::open(cand).and_then(|mut f| {
+            use std::io::Read;
+            let mut hdr = [0u8; Journal::MAGIC.len()];
+            f.read_exact(&mut hdr)?;
+            Ok(&hdr == Journal::MAGIC)
+        }).unwrap_or(false);
+        if ours {
+            eprintln!("removing stale journal candidate {}", cand.display());
+            crate::dev::warn_if_remove_failed(cand);
+        } else if cand.exists() {
+            eprintln!(
+                "warning: {} does not start with a diskedit journal header — left in place; \
+                 release it with `diskedit abandon` if it is ours",
+                cand.display()
+            );
+        }
     }
 }
 
@@ -317,5 +358,115 @@ mod tests {
 
         let _ = std::fs::remove_file(&a);
         let _ = std::fs::remove_file(&b);
+    }
+
+    /// D1（A1）：既有 journal 的撕裂尾在采纳时被物理截断，新记录得以回放。模拟崩溃发生在
+    /// 第一条记录只写了一半——盘上只有 magic + 一条不完整的记录（头声称巨大长度、无载荷）；
+    /// open 截回 magic 长，之后追加的新记录才能被 undo 成功回放，而非永远卡在 TruncatedTail
+    #[test]
+    fn torn_journal_tail_is_truncated_and_replayable() {
+        let img = tmp_path("torn_img");
+        let mut jpath = img.clone().into_os_string();
+        jpath.push(".diskedit.journal");
+        let journal = std::path::PathBuf::from(jpath);
+        let _ = std::fs::remove_file(&journal);
+
+        // 盘面：offset 0 处原字节 0xAA，写入后变 0xBB
+        let mut disk = vec![0u8; 1024];
+        disk[0..4].copy_from_slice(&[0xAA; 4]);
+        std::fs::write(&img, &disk).unwrap();
+
+        // 先经 record() 真实建出 magic（open 惰性，不建文件），再截回 magic 长、
+        // 追加一段不完整的"首记录"——模拟崩溃发生在第一条记录只写了一半
+        {
+            let mut j = Journal::open(&journal).unwrap();
+            j.record(usize::MAX as u64, &[0u8; 0], &[0u8; 0]).unwrap();
+        }
+        let with_magic = std::fs::read(&journal).unwrap();
+        std::fs::write(&journal, &with_magic[..Journal::MAGIC.len()]).unwrap();
+        {
+            use std::io::Write;
+            // 头声称巨大长度、且无对应载荷 ⇒ 扫描落到 TruncatedTail（非空 CRC 误判）
+            let mut f = std::fs::OpenOptions::new().append(true).open(&journal).unwrap();
+            f.write_all(b"\xff\xff\xff\xff\x99\x99\x99\x99").unwrap();
+        }
+        // 采纳：垃圾尾被截回 magic 长（零完整记录）
+        {
+            let _j = Journal::open(&journal).unwrap();
+        }
+        assert_eq!(
+            std::fs::read(&journal).unwrap().len(),
+            5,
+            "torn first record must be truncated back to the magic length"
+        );
+        // 重跑追加：记一条新记录，文件长度 = magic + 一条完整记录
+        {
+            let mut j = Journal::open(&journal).unwrap();
+            j.record(0, &[0xAA; 4], &[0xBB; 4]).unwrap();
+        }
+        // 记录帧 = [len(4)][crc(4)][payload]；PreImage payload = tag(1) + meta(0) +
+        // rtag(1) + off(8) + pre_len(4) + before(4) + after(4) = 22（JournalRecord::encode）
+        let framed = 5 + 8 + 22;
+        assert_eq!(
+            std::fs::read(&journal).unwrap().len(),
+            framed,
+            "re-run append must yield magic + exactly one complete record (torn tail already gone)"
+        );
+        // undo 成功回放新记录（盘上已 == 0xBB，回滚到 0xAA）并删除 journal
+        let code = super::cmd_undo(&args_for(&img.to_string_lossy().into_owned()));
+        assert_eq!(code, 0, "undo of the replayed journal must succeed");
+        let now = std::fs::read(&img).unwrap();
+        assert_eq!(&now[0..4], &[0xAA; 4], "the entry must be rolled back to its pre-image");
+        assert!(!journal.exists(), "a completed undo must drop the journal");
+
+        let _ = std::fs::remove_file(&img);
+    }
+
+    /// D6（A6）：回放成功后清掉全部候选，不止被回放的那份——本工具的读不出残卷
+    /// （magic 在、载荷损坏）随之消失；无 magic 的陌生文件保留并告警
+    #[test]
+    fn replay_success_clears_stale_unreadable_candidate() {
+        let picked = tmp_path("d6_pick");
+        let stale = tmp_path("d6_stale");
+        let foreign = tmp_path("d6_foreign");
+        for p in [&picked, &stale, &foreign] {
+            let _ = std::fs::remove_file(p);
+        }
+        {
+            let mut j = Journal::open(&picked).unwrap();
+            j.record(0, &[0xAA; 4], &[0xBB; 4]).unwrap();
+        }
+        // 历史命名候选：本工具写下的残卷——magic 在、载荷被翻坏一个字节（pick_journal
+        // 口径的"读不出"：CRC 不符）
+        {
+            let mut j = Journal::open(&stale).unwrap();
+            j.record(0, &[0x11; 4], &[0x22; 4]).unwrap();
+        }
+        let mut raw = std::fs::read(&stale).unwrap();
+        let last = raw.len() - 1;
+        raw[last] ^= 0xFF;
+        std::fs::write(&stale, &raw).unwrap();
+        // 陌生文件：落点命名匹配，但内容不是本工具的 journal——不删
+        std::fs::write(&foreign, b"not-a-journal").unwrap();
+
+        super::clear_journal_candidates(&[picked.clone(), stale.clone(), foreign.clone()], &picked);
+        assert!(!picked.exists(), "the replayed journal must be removed");
+        assert!(!stale.exists(), "our unreadable residue must be removed after replay");
+        assert!(foreign.exists(), "a file without our magic must be left in place");
+
+        let _ = std::fs::remove_file(&foreign);
+    }
+
+    /// 精简 Args 构造：仅 target + yes，其余取默认空值（专供 cmd_undo 成功路径测试）
+    fn args_for(target: &str) -> crate::args::Args {
+        crate::args::Args {
+            target: target.to_string(),
+            part: None, grow: None, start: None, end: None, size: None,
+            fs: None, name: None, type_guid: None, table: None,
+            yes: true, online: false, random: false, sector_size: None,
+            align: String::new(), chunk_mib: 0, grow_to_end: false,
+            allow_move: false, no_fs: false, grow_lv: false, start_end: false, lv: None,
+            pos: Vec::new(), seen: Vec::new(),
+        }
     }
 }

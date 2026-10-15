@@ -267,7 +267,11 @@ pub fn probe_swap_header(src: &FileSource, base: u64, len_bytes: u64, page_sizes
 /// 元数据是 swap、但**本机（swapon 口径）激活不了**的区间：libblkid 口径命中而 swapon 口径落空。
 /// 两个候选集的差集只有 32K 一项（见 SWAPON_PAGES / BLKID_PAGES 的依据），故命中即
 /// "创建机用了 32K 页"。identify 对此类区间回 None，写入路径会据此跳过 FS 步骤，
-/// 而分区扩容后 swap 头里的页数还是旧值——那是一条未完成的后置条件，不能报成功
+/// 而分区扩容后 swap 头里的页数还是旧值——那是一条未完成的后置条件，不能报成功。
+///
+/// **隐式契约（显式化）**：identify 的 Ok(None) 不区分"空区域"与"32K swap"。新增
+/// 写路径若只消费 identify 的 Ok(None) 就跳过 FS 步骤，必须补调本函数——否则 32K
+/// swap 扩容后会带着旧页数报成功
 pub fn unactivatable_swap(src: &FileSource, base: u64, len_bytes: u64) -> io::Result<bool> {
     Ok(matches!(
         (

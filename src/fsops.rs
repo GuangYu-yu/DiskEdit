@@ -361,9 +361,11 @@ fn require_unmounted(_dev: &str) -> Result<(), FsError> {
 /// 写表路径的占用前置闸：分区在首次落盘前须空闲。调用点在 prepare 层（movepart 的
 /// prepare_resize / prepare_apply）与 MBR resize 命令层——那是任何写盘的唯一必经关口，
 /// 把"表已写、FS 步被占"的 PARTIAL(20) 变成 REFUSED(10)：占用是请求与现状不匹配，
-/// 不是盘故障。块设备另有整盘 O_EXCL 独占打开这道内核级防线（任一分区被挂载或作
-/// swap 时 open 即 EBUSY），本闸对其是纵深防御；镜像是本工具内唯一没有占用判据的
-/// 目标（不存在分区节点可查），直接放行（经 loop 挂载的镜像由 FS 步的设备级检查兜底）。
+/// 不是盘故障。块设备另有整盘 O_EXCL 独占打开这道内核级防线，但其保护面要说准：
+/// 它挡的是挂载 / swap / 他人的 O_EXCL 打开（open 即 EBUSY），**不挡**不守约定的
+/// 普通并发写——本闸对其是纵深防御。镜像是本工具内唯一没有占用判据的目标（不存在
+/// 分区节点可查，也没有 O_EXCL 这道内核防线），本闸对它是唯一防线，直接放行
+/// （经 loop 挂载的镜像由 FS 步的设备级检查兜底）。
 /// `start_bytes` = 分区起始字节（与 find_block_partition_node 的换算基准一致）
 #[cfg(target_os = "linux")]
 pub fn ensure_idle_before_write(src: &FileSource, part: u32, start_bytes: u64) -> Result<(), crate::outcome::Fail> {
@@ -860,6 +862,15 @@ pub fn mkfs_capability(fstype: MkfsFs) -> Result<(), FsError> {
 pub fn mkfs(src: &FileSource, part: u32, fstype: MkfsFs) -> Result<(), FsError> {
     let tool = mkfs_tool(fstype)?;
     let (_, part_len) = partition_byte_range(src, part)?;
+    // part_len 上界断言（入口拒绝，替代 erase_ranges 内 `as i64` 的回绕面）：区间表
+    // 以 i64 承载"分区尾 − 回退量"的中间负值，≥ 2^63 的长度回绕成负数后裁剪逻辑
+    // 静默失效。真实设备远到不了这么大，但入口输入来自盘上表——畸形表配巨型镜像
+    // 不该以错误的擦除区间收场
+    if part_len >= 1u64 << 63 {
+        return Err(FsError::invalid(format!(
+            "partition length {part_len} exceeds the supported maximum (2^63 bytes) — refusing"
+        )));
+    }
     let ss = src.sector_size;
     with_partition_device(src, part, |dev| {
         // wipe_zero 一旦开始就存在部分清零：之后的任何失败都不再是"确定未写盘"，
@@ -890,8 +901,16 @@ pub fn mkfs(src: &FileSource, part: u32, fstype: MkfsFs) -> Result<(), FsError> 
 /// btrfs 多设备拒绝：主 superblock @分区起点+0x10000 的 num_devices 字段（偏移 0x88，
 /// u64 LE，内核 fs/btrfs ctree.h 字段序）。>1 时 resize/max 按 devid 作用于所映射的
 /// 单个 member，"分区扩满即 FS 扩满"前提不成立，直接拒绝，多设备布局交用户手动处理。
-/// 离线（resize_fs_in / shrink_fs）与在线路径（online::fs_grow / 在线 shrink）共用同一道防线
-pub(crate) fn refuse_btrfs_multi_device_at(src: &FileSource, off: u64) -> Result<(), FsError> {
+/// 离线（resize_fs_in / shrink_fs）与在线路径（online::fs_grow / 在线 shrink）共用同一道防线。
+/// `part_len` 是该分区的字节长度：读 superblock 前先校验它装得下 superblock 头
+/// （≥ 0x10090），不足即拒绝——分区之外读到的是邻居的字节，比"读失败"更危险
+pub(crate) fn refuse_btrfs_multi_device_at(src: &FileSource, off: u64, part_len: u64) -> Result<(), FsError> {
+    const SB_NEED: u64 = 0x10090; // 0x10000 基址 + 0x90 头内最大字段偏移（num_devices @0x88 是 u64）
+    if part_len < SB_NEED {
+        return Err(FsError::unsupported(
+            "partition is smaller than a btrfs superblock — the identified btrfs header does not fit this partition; refusing",
+        ));
+    }
     let mut raw = [0u8; 8];
     src.read_at(off + 0x10000 + 0x88, &mut raw).map_err(FsError::from)?;
     if u64::from_le_bytes(raw) > 1 {
@@ -1202,8 +1221,8 @@ fn resize_fs_in(src: &FileSource, scope: &DeviceScope, fstype: Option<FsKind>) -
             Ok(())
         })),
         Some(FsKind::Btrfs) => {
-            let (off, _) = scope_byte_range(src, scope)?;
-            refuse_btrfs_multi_device_at(src, off)?;
+            let (off, len) = scope_byte_range(src, scope)?;
+            refuse_btrfs_multi_device_at(src, off, len)?;
             with_scope_device(src, scope, |dev| with_mount(dev, |mnt| {
                 let out = run("btrfs", &["filesystem", "resize", "max", mnt])?;
                 if !out.status.success() {
@@ -1310,7 +1329,9 @@ where
     res
 }
 
-/// FS 缩容到指定字节数（调用方保证 ≤ 当前 FS 大小；先于分区边界收缩执行）
+/// FS 缩容到指定字节数（先于分区边界收缩执行）。契约是 `new_bytes` ≤ 旧**分区**尺寸
+/// 而非"≤ 当前 FS 大小"：FS 小于分区时（曾扩过分区或中断过的现场）此调用实为扩容，
+/// 方向良性——FS 工具把 FS 对到目标尺寸即可，不构成失败
 pub fn shrink_fs(src: &FileSource, part: u32, fstype: Option<FsKind>, new_bytes: u64) -> Result<(), FsError> {
     match fstype {
         Some(FsKind::Ext) => with_partition_device(src, part, |dev| {
@@ -1343,8 +1364,8 @@ pub fn shrink_fs(src: &FileSource, part: u32, fstype: Option<FsKind>, new_bytes:
             Ok(())
         }),
         Some(FsKind::Btrfs) => {
-            let (off, _) = partition_byte_range(src, part)?;
-            refuse_btrfs_multi_device_at(src, off)?;
+            let (off, len) = partition_byte_range(src, part)?;
+            refuse_btrfs_multi_device_at(src, off, len)?;
             with_partition_device(src, part, |dev| with_mount(dev, |mnt| {
                 // 裸数字 = 绝对字节数、必须挂载态（man btrfs-filesystem resize）
                 let out = run("btrfs", &["filesystem", "resize", &new_bytes.to_string(), mnt])?;
@@ -1540,6 +1561,19 @@ mod tests {
     fn swap_label_and_uuid_are_wired_to_swaplabel() {
         assert!(matches!(uuid_support(Some(FsKind::Swap)), UuidSupport::Yes));
         assert!(matches!(uuid_support(Some(FsKind::Vfat)), UuidSupport::No(_)));
+    }
+
+    /// btrfs 多设备检查的尺寸闸：分区装不下 superblock 头（< 0x10090）时在读之前
+    /// 拒绝——分区之外读到的是邻居的字节，比读失败更危险。装得下时全零镜像的
+    /// num_devices = 0（≤1）放行
+    #[test]
+    fn btrfs_multi_device_gate_refuses_undersized_partition() {
+        let path = std::env::temp_dir().join(format!("diskedit_btrfs_gate_{}.img", std::process::id()));
+        std::fs::write(&path, vec![0u8; 128 * 1024]).unwrap();
+        let src = FileSource::open(&path, None).unwrap();
+        assert!(super::refuse_btrfs_multi_device_at(&src, 0, 4096).is_err(), "a partition smaller than the superblock must be refused before any read");
+        assert!(super::refuse_btrfs_multi_device_at(&src, 0, 128 * 1024).is_ok(), "num_devices = 0 must pass the multi-device check");
+        let _ = std::fs::remove_file(&path);
     }
 
     /// `as_str` 是全仓唯一的规范名来源：任何一字漂移都会改动 info JSON 与文案，

@@ -232,6 +232,7 @@ pub(crate) fn cmd_set(a: &Args) -> u8 {
     let part = crate::gpt_policy::resolve_part(&src, pref).unwrap_or_else(|f| bail_fail(f));
     if key == "name" {
         if value.is_empty() { crate::args::usage(); }
+        crate::support::check_gpt_name_len(&value);
         return match crate::gpt_policy::rename_entry(&mut src, part, &value) {
             Ok(()) => table_write_done(&src, &format!("renamed partition #{part} to {value:?}")),
             Err(f) => bail_fail(f),
