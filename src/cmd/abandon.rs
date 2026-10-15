@@ -17,7 +17,8 @@
 
 use crate::dev::{suffix_path, FileSource, RecoveryData, TargetIdentity};
 use crate::support::{
-    active_recovery_records, bail_fail, legacy_disk_guid, RecoveryRecord, EXIT_OK, Fail,
+    active_recovery_records, bail_fail, legacy_disk_guid, refuse_partition_node_target,
+    RecoveryRecord, EXIT_OK, Fail,
 };
 use crate::targetlock::TargetLock;
 use crate::args::Args;
@@ -36,6 +37,9 @@ pub(crate) fn cmd_abandon(a: &Args) -> u8 {
     if let Some(n) = a.part {
         bail_fail(Fail::refused(format!("`abandon` releases the whole target's recovery scene — drop :{n}")));
     }
+    // 回放类命令的载体必须是整盘：现场按整盘身份落点，在分区节点上释放的会是
+    // 另一个（或残缺的）现场集合
+    refuse_partition_node_target("abandon", &a.target);
     if !a.yes {
         bail_fail(Fail::refused(
             "`abandon` gives up on recovering this target for good; pass --yes to confirm",
