@@ -51,10 +51,10 @@ pub(crate) fn cmd_abandon(a: &Args) -> u8 {
     let identity = TargetIdentity::resolve_for_cleanup(path)
         .unwrap_or_else(|| bail_fail(Fail::infra(format!("cannot determine the identity of {}", path.display()))));
 
-    // 目标不存在时跳过锁：现场候选是兄弟文件/持久落点，锁的独占权针对的是"对目标
-    // 的操作"，而目标已无可操作；跳过也避免给一个不存在的目标留下新的锁文件残骸
-    let _owned = std::fs::metadata(path).is_ok()
-        .then(|| TargetLock::acquire(&identity).unwrap_or_else(|f| bail_fail(f)));
+    // 锁的独占权针对"对本目标的操作"，目标不存在也照取：abandon_one 的 rename 兜底
+    // 以"持锁 ⇒ 窗口内无并发 diskedit 抢名"为前提，跳锁会让该前提失效。
+    // 锁文件是纯运行时 artifact，残留不构成阻挡（判据是锁本身，见 targetlock）
+    let _owned = TargetLock::acquire(&identity).unwrap_or_else(|f| bail_fail(f));
 
     if identity.has_block_legacy_naming() {
         // 独占权来自锁文件（与镜像同一机制），不再依赖 O_EXCL 打开——abandon 只碰恢复

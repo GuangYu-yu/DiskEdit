@@ -640,6 +640,8 @@ mod imp {
     /// 在线路径的现场闸口。本路径不建 journal（sfdisk / FS 工具用自己的 fd 写盘，
     /// 不经过 `FileSource::write_at`，挂 journal 只会得到空壳），因此**首次写盘之前**
     /// 必须确认目标上没有任何未收尾的现场：有 ⇒ 拒绝（busy 文案与离线闸口同源）。
+    /// 代价也在此声明：本路径中断后没有 journal / checkpoint 可查，若 sfdisk 自身
+    /// 在写主/备 GPT 结构之间被撕裂，undo 与续传都覆盖不到，只能由外部工具修复。
     /// 判定发生在锁下、与首次写盘之间无窗口；有了这道闸，命令成功后 main 的
     /// drop_journal 只会碰到"不存在"的候选——绝无"删掉别人可回滚凭据"的可能
     fn refuse_if_scene_active(t: &OnlineTarget) -> Result<(), Outcome> {
