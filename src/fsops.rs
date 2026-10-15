@@ -174,15 +174,21 @@ pub(crate) fn run_input(tool: &str, args: &[&str], input: &str) -> Result<std::p
     let mut stdin = child.stdin.take().expect("stdin piped");
     if let Err(e) = stdin.write_all(input.as_bytes()) {
         // 写 stdin 失败时子进程可能还在等输入，显式终止防僵留
-        #[allow(clippy::let_underscore_must_use)] // 主错误已上报；子进程回收失败只影响资源
-        {
-            let _ = child.kill();
-            let _ = child.wait();
-        }
+        best_effort_reap_child(&mut child);
         return Err(FsError::Io(e));
     }
     drop(stdin); // 关闭 stdin 让 sfdisk 看到输入结束
     child.wait_with_output().map_err(FsError::from)
+}
+
+/// 终止并回收子进程：主错误已由调用点上报，回收本身失败只影响资源占用。
+/// 命名即契约——与其余 `best_effort_*` 同族（见 Cargo.toml 的 lints 注释），
+/// 使"有意忽略"与"忘了处理"可被 grep 区分
+#[cfg(target_os = "linux")]
+#[allow(clippy::let_underscore_must_use)] // 有意忽略：主错误已上报，见上
+fn best_effort_reap_child(child: &mut std::process::Child) {
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 /// e2fsck 退出码判定——resize 语境（man e2fsck EXIT CODE：各项按位或求和）。bit1（REBOOT）
@@ -203,6 +209,15 @@ fn check_e2fsck_for_resize(code: i32) -> Result<(), FsError> {
         )),
         c => Err(FsError::CommandFailed(format!("e2fsck infrastructure failure (exit {c})"))),
     }
+}
+
+/// 前序工具（`e2fsck -fp` 一类修复步骤）**可能已经写盘**之后，后一步的启动失败不能再走
+/// `Io`：`Io` 在命令层映射为 Infra，语义是"确定未写盘"（见 `outcome::From<FsError>`）。
+/// 启动不起来只说明这一次 spawn 没跑成，反推不出盘没被前序步骤改过
+fn tool_write_maybe_started(tool: &str, dev: &str, e: FsError) -> FsError {
+    FsError::CommandFailed(format!(
+        "{tool} could not be started on {dev}: {e} — a preceding repair step may already have written to it"
+    ))
 }
 
 /// e2fsck 退出码判定——check 语境。检查命令的本职就是修复：0（干净）、1（已修复）
@@ -480,11 +495,29 @@ where
 {
     require_linux()?;
     require_root()?;
+    // 区间在此只求一次：分区起点同时作为节点匹配的 want_start
+    let (off, len) = scope_byte_range(src, scope)?;
+    with_scope_device_ranged(src, scope, off, len, f)
+}
+
+/// 区间已由调用方解析好时用它：调用方手里的其他判据（如 mkfs 的擦除区间）与本处的
+/// 设备建立必须**同源**，各自再解析一次会在两次读表之间开出一个窗口
+fn with_scope_device_ranged<T, E, F>(
+    src: &FileSource,
+    scope: &DeviceScope,
+    off: u64,
+    len: u64,
+    f: F,
+) -> Result<T, E>
+where
+    F: FnOnce(&str) -> Result<T, E>,
+    E: From<FsError>,
+{
+    require_linux()?;
+    require_root()?;
     if src.is_block {
         // 块设备：分区 = 定位分区节点（/sys/block/<disk>/<part>/start 匹配），不经 loop；
-        // 整盘 = 盘节点本身；Range = 无"偏移节点"概念，必须 loop 映射（backing=整盘）。
-        // 区间在此只求一次：分区起点同时作为节点匹配的 want_start
-        let (off, len) = scope_byte_range(src, scope)?;
+        // 整盘 = 盘节点本身；Range = 无"偏移节点"概念，必须 loop 映射（backing=整盘）
         let dev = match scope {
             DeviceScope::Partition(p) => find_block_partition_node(src, *p, off)?,
             DeviceScope::Whole => src.path.to_string_lossy().into_owned(),
@@ -498,7 +531,6 @@ where
         };
         return require_unmounted(&dev).map_err(Into::into).and_then(|()| f(&dev));
     }
-    let (off, len) = scope_byte_range(src, scope)?;
     let loopdev = attach_loop(src, off, len)?;
     // require 失败也要先 detach 再返回错误，? 短路会漏掉 detach
     let res = require_unmounted(&loopdev).map_err(Into::into).and_then(|()| f(&loopdev));
@@ -537,6 +569,13 @@ fn find_block_partition_node(src: &FileSource, part: u32, want_start: u64) -> Re
             let Ok(start_sectors) = txt.trim().parse::<u64>() else { continue };
             // sysfs 是外部输入：回绕出的假字节偏移可能撞上别的分区节点，乘法必须 checked
             if start_sectors.checked_mul(512) != Some(want_start) {
+                continue;
+            }
+            // 分区号交叉校验：只有一个维度相同时，内核视图与盘上表可能已在编号上分叉，
+            // 只按 start 认节点会把操作落到另一个分区节点上。号也要读得出来且相符
+            let Ok(num_txt) = std::fs::read_to_string(entry.path().join("partition")) else { continue };
+            let Ok(num) = num_txt.trim().parse::<u32>() else { continue };
+            if num != part {
                 continue;
             }
             let name = entry.file_name().to_string_lossy().to_string();
@@ -585,6 +624,17 @@ pub fn fs_min_bytes(src: &FileSource, part: u32, fstype: Option<FsKind>) -> Resu
 fn parse_num_field(text: &str, prefix: &str) -> io::Result<u64> {
     text.lines()
         .find_map(|l| l.trim().strip_prefix(prefix)?.trim().parse().ok())
+        .ok_or_else(|| io::Error::other(format!("unexpected tool output, missing {prefix:?}")))
+}
+
+/// 取字段值**开头**的十进制数字。回读用的行里数值后面还跟着人读注解
+/// （`Current volume size: 33554944 bytes (34 MB)`），故不能要求整段就是一个数
+fn parse_num_lead(text: &str, prefix: &str) -> io::Result<u64> {
+    text.lines()
+        .find_map(|l| {
+            let rest = l.trim().strip_prefix(prefix)?.trim_start();
+            rest.chars().take_while(char::is_ascii_digit).collect::<String>().parse().ok()
+        })
         .ok_or_else(|| io::Error::other(format!("unexpected tool output, missing {prefix:?}")))
 }
 
@@ -861,7 +911,9 @@ pub fn mkfs_capability(fstype: MkfsFs) -> Result<(), FsError> {
 /// 防旧 btrfs/ZFS/RAID 备份超级块残留被 blkid 误认
 pub fn mkfs(src: &FileSource, part: u32, fstype: MkfsFs) -> Result<(), FsError> {
     let tool = mkfs_tool(fstype)?;
-    let (_, part_len) = partition_byte_range(src, part)?;
+    // 区间只解析一次：擦除区间与实际建立的那个设备必须同源——分两次读表的话，
+    // 两次读数之间表被改动会让"擦哪一段"与"擦的是哪个设备"对不上
+    let (part_off, part_len) = scope_byte_range(src, &DeviceScope::Partition(part))?;
     // part_len 上界断言（入口拒绝，替代 erase_ranges 内 `as i64` 的回绕面）：区间表
     // 以 i64 承载"分区尾 − 回退量"的中间负值，≥ 2^63 的长度回绕成负数后裁剪逻辑
     // 静默失效。真实设备远到不了这么大，但入口输入来自盘上表——畸形表配巨型镜像
@@ -872,7 +924,7 @@ pub fn mkfs(src: &FileSource, part: u32, fstype: MkfsFs) -> Result<(), FsError> 
         )));
     }
     let ss = src.sector_size;
-    with_partition_device(src, part, |dev| {
+    with_scope_device_ranged(src, &DeviceScope::Partition(part), part_off, part_len, |dev| {
         // wipe_zero 一旦开始就存在部分清零：之后的任何失败都不再是"确定未写盘"，
         // 统一压成 CommandFailed（→ Failed），报告带"盘上状态可能已改变"的警示
         wipe_zero(dev, &erase_ranges(part_len, ss)).map_err(|e| {
@@ -1076,7 +1128,7 @@ pub struct GrowTarget {
 
 impl GrowTarget {
     /// 按判断期的同一份结论执行扩容
-    pub fn resize_fs(&self, src: &FileSource) -> Result<(), FsError> {
+    pub fn resize_fs(&self, src: &FileSource) -> Result<Option<MountLeak>, FsError> {
         resize_fs_in(src, &self.scope, Some(self.fstype))
     }
 }
@@ -1089,8 +1141,11 @@ impl GrowTarget {
 pub enum Growable {
     /// 有可扩的一段：普通分区就是它自己，OpenWrt 的只读根取分区尾部的 RW 层
     Target(GrowTarget),
-    /// 尾部 RW 层尚未格式化（OpenWrt 首启）：空间由首次挂载时的 fstools 按尾部区域建满，
-    /// 本次没有可写的后置条件
+    /// 尾部 RW 层里没有认得出的文件系统：`identify` 的 `None` 分不出"尚未格式化"、"是格式化
+    /// 过的格式但本工具认不出"与"可供识别的字节不足"三者，本变体也不替它下结论——它只说
+    /// "这段没有可扩的文件系统"，本次因此没有可写的后置条件。
+    /// 放行的前提是**本命令不写这段区域**（空间随后由首次挂载时的 fstools 建满）：将来若有
+    /// 路径要在放行后往里写，必须先按可用判据把三者分开，不能沿用这个"无需处理"的结论
     OverlayPending,
     /// 元数据是 swap、页格式却在本机激活不了（创建机用了 32K 页）：identify 按 swapon 口径
     /// 回 "unknown"，但这不是"没有信息"——[`unactivatable_swap`](crate::fsid::unactivatable_swap)
@@ -1124,7 +1179,10 @@ pub fn grow_target_at(src: &FileSource, part: u32, base: u64, len: u64) -> Resul
         // 区间量本就是字节，直接传给按字节区间识别的 identify
         let inner = crate::fsid::identify(src, base + rel, len - rel).map_err(FsError::from)?;
         let Some(inner_kind) = inner else {
-            // 尚未格式化的 RW 层不是"认得出但不接线"：那块空间会在首次挂载时被 fstools 建满
+            // 内层没认出签名有三种成因，`identify` 的 `None` 区分不了：① 尾部区域不足一个魔数
+            // （`overlay_offset_at` 对 `len - rel` 没有下界保证）；② 是格式化过的格式但本工具
+            // 认不出；③ 确实尚未格式化。本命令在这三种下都不写这段区域，故结论同为"无需处理"；
+            // 但**结论里不能夹带成因**——说成"未格式化"会把 ①② 也说成空区域
             return Ok(Growable::OverlayPending);
         };
         if !matches!(inner_kind, FsKind::Ext | FsKind::F2fs) {
@@ -1178,7 +1236,7 @@ pub fn check_grow_step(g: Growable, is_block: bool) -> Result<(), FsError> {
 }
 
 /// superfloppy（无分区表，FS 即整盘）扩容：无表可写，纯 FS grow
-pub fn resize_fs_whole(src: &FileSource, fstype: Option<FsKind>) -> Result<(), FsError> {
+pub fn resize_fs_whole(src: &FileSource, fstype: Option<FsKind>) -> Result<Option<MountLeak>, FsError> {
     resize_fs_in(src, &DeviceScope::Whole, fstype)
 }
 
@@ -1192,18 +1250,19 @@ pub fn resize_fs_whole(src: &FileSource, fstype: Option<FsKind>) -> Result<(), F
 /// - btrfs：临时 mount → `btrfs filesystem resize max <mnt>`（max = 占满、须挂载态，man btrfs-filesystem）→ umount
 /// - vfat：`fatresize -s max <dev>`（扩满设备，man fatresize）
 /// - 其余（exfat/swap…）：无已接线的扩容工具，显式拒绝
-fn resize_fs_in(src: &FileSource, scope: &DeviceScope, fstype: Option<FsKind>) -> Result<(), FsError> {
+fn resize_fs_in(src: &FileSource, scope: &DeviceScope, fstype: Option<FsKind>) -> Result<Option<MountLeak>, FsError> {
     match fstype {
         // fsid 识别只给 0xEF53，区分不出 2/3/4；resize2fs 对三者通用（man resize2fs）
         Some(FsKind::Ext) => with_scope_device(src, scope, |dev| {
             let out = run("e2fsck", &["-fp", dev])?;
             check_e2fsck_for_resize(out.status.code().unwrap_or(-1))?;
-            let out = run("resize2fs", &[dev])?;
+            let out = run("resize2fs", &[dev]).map_err(|e| tool_write_maybe_started("resize2fs", dev, e))?;
             if !out.status.success() {
                 return Err(FsError::command("resize2fs", &out));
             }
             Ok(())
-        }),
+        })
+        .map(|()| None),
         Some(FsKind::Ntfs) => with_scope_device(src, scope, |dev| {
             // 先 --no-action 演练，成功才真改，失败零副作用
             let out = run("ntfsresize", &["-f", "-f", "--no-action", dev])?;
@@ -1218,7 +1277,8 @@ fn resize_fs_in(src: &FileSource, scope: &DeviceScope, fstype: Option<FsKind>) -
                 return Err(FsError::command("ntfsresize", &out));
             }
             Ok(())
-        }),
+        })
+        .map(|()| None),
         Some(FsKind::F2fs) => with_scope_device(src, scope, |dev| {
             // 预检：fsck.f2fs 无参 = 仅检查不修复（修复须显式 -f/-p；-a 只在内核报告 bug
             // 时才检查且默认禁用，man fsck.f2fs）。退出码负数表示失败（-1 表现为 255），
@@ -1235,7 +1295,8 @@ fn resize_fs_in(src: &FileSource, scope: &DeviceScope, fstype: Option<FsKind>) -
                 return Err(FsError::command("resize.f2fs", &out));
             }
             Ok(())
-        }),
+        })
+        .map(|()| None),
         Some(FsKind::Xfs) => with_scope_device(src, scope, |dev| with_mount(dev, |mnt| {
             let out = run("xfs_growfs", &[mnt])?;
             if !out.status.success() {
@@ -1275,6 +1336,7 @@ fn resize_fs_in(src: &FileSource, scope: &DeviceScope, fstype: Option<FsKind>) -
                 }
                 Ok(())
             })
+            .map(|()| None)
         }
         // squashfs/erofs 自己不可扩：能变大的是分区尾部的 RW overlay 层，那段由
         // grow_target_at 定位后交内层的分支执行。落到这里说明这个范围不是分区
@@ -1304,8 +1366,9 @@ fn mount_point() -> PathBuf {
     ))
 }
 
-/// 临时挂载 → 回调 → 卸载（xfs/btrfs 只支持挂载态扩容）。挂载点用后即删
-fn with_mount<F>(dev: &str, f: F) -> Result<(), FsError>
+/// 临时挂载 → 回调 → 卸载（xfs/btrfs 只支持挂载态扩容）。挂载点用后即删。
+/// 卸载的成败不改写回调的成败：它是一条独立的清理待办，随 `Ok` 浮出
+fn with_mount<F>(dev: &str, f: F) -> Result<Option<MountLeak>, FsError>
 where
     F: FnOnce(&str) -> Result<(), FsError>,
 {
@@ -1329,80 +1392,281 @@ where
         return Err(FsError::command("mount", &out));
     }
     let res = f(&mnt.to_string_lossy());
-    match find_tool("umount") {
-        Ok(u) => {
-            let out = Command::new(u).arg(&mnt).stdin(Stdio::null()).output();
-            // 卸载失败不静默：残留挂载点会占用分区，提示用户手动处理
-            if out.as_ref().map(|o| !o.status.success()).unwrap_or(true) {
-                let why = match out {
-                    Ok(o) => String::from_utf8_lossy(&o.stderr).trim().to_string(),
-                    Err(e) => e.to_string(),
-                };
-                eprintln!("warning: umount {} failed: {why} — temp mount point may remain", mnt.display());
-            }
-        }
-        // umount 缺失同样不能静默：挂载中的目录 rmdir 必然失败，"用后即删"就此失效
-        // 而用户毫不知情——与"卸载失败"同一告警口径
-        Err(e) => eprintln!(
-            "warning: umount not found ({e}) — temp mount point {} may remain mounted",
-            mnt.display()
-        ),
-    }
+    let leak = leak_from(&mnt.to_string_lossy(), release_mount(&mnt));
     crate::dev::best_effort_rmdir(&mnt);
-    res
+    let (outcome, warn) = settle_release(res, leak);
+    if let Some(l) = warn {
+        eprintln!("warning: {l}");
+    }
+    outcome
+}
+
+/// 临时挂载点的清理待办：核心 FS 操作已经完成，挂载点却没能卸掉（工具非零退出或
+/// 工具缺失），系统上仍留着占用。它是**后置条件**而不是本次操作的失败，故与
+/// `Result` 的 `Err` 分道——压在 `Ok` 上随成功结果一并浮出，由调用方决定怎么表达
+pub(crate) struct MountLeak {
+    /// 残留的挂载点路径
+    pub point: String,
+    /// 没能卸掉的原因（外部工具原话，或工具缺失 / 启动失败）
+    pub why: String,
+}
+
+impl MountLeak {
+    /// 转成一条后置条件待办：类别标签在这里唯一给出，调用点不各写一份。
+    /// 它的语义是"核心操作已完成、清理未完成"——与 `PendingKind::Fs`（FS 步没做成）
+    /// 分属两件事，报告里必须看得出区别
+    pub fn into_pending(self, part: u32) -> crate::outcome::Pending {
+        let hint = self.hint();
+        crate::outcome::Pending::new(
+            part,
+            crate::outcome::PendingKind::Other("mount cleanup"),
+            self.why,
+            hint,
+        )
+    }
+
+    /// 补救命令
+    fn hint(&self) -> String {
+        format!("umount {}", self.point)
+    }
+}
+
+impl std::fmt::Display for MountLeak {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "temp mount point {} was left behind ({}) — release it with `umount`", self.point, self.why)
+    }
+}
+
+/// 一次卸载动作归一到三态：判定与"怎么调工具"无关，故这一层可脱离真实工具单测
+#[derive(Debug, PartialEq, Eq)]
+enum ReleaseOutcome {
+    /// 工具跑完且退出码 0
+    Released,
+    /// 工具跑完但非零退出（携带工具原话）
+    Failed(String),
+    /// 工具缺失或启动不了
+    Unavailable(String),
+}
+
+/// 卸载结果 → 清理待办。只有"跑完且退出码 0"算没有待办：启动失败与工具缺失都不能
+/// 证明已卸掉，而挂载中的目录 rmdir 必然失败，"用后即删"就此失效
+fn leak_from(point: &str, outcome: ReleaseOutcome) -> Option<MountLeak> {
+    match outcome {
+        ReleaseOutcome::Released => None,
+        ReleaseOutcome::Failed(why) | ReleaseOutcome::Unavailable(why) => {
+            Some(MountLeak { point: point.to_string(), why })
+        }
+    }
+}
+
+/// 核心操作结果与清理待办的合成：核心失败是主错误，清理待办只降为一条告警——
+/// 残留挂载点仍要让人看见，但它不能改写主错误。返回 (对外结果, 需要告警的待办)
+fn settle_release(
+    core: Result<(), FsError>,
+    leak: Option<MountLeak>,
+) -> (Result<Option<MountLeak>, FsError>, Option<MountLeak>) {
+    match (core, leak) {
+        (Ok(()), leak) => (Ok(leak), None),
+        (Err(e), leak) => (Err(e), leak),
+    }
+}
+
+/// 跑一次 umount，把结果归一到 [`ReleaseOutcome`]
+fn release_mount(mnt: &std::path::Path) -> ReleaseOutcome {
+    let u = match find_tool("umount") {
+        Ok(u) => u,
+        Err(e) => return ReleaseOutcome::Unavailable(format!("umount not found ({e})")),
+    };
+    match Command::new(u).arg(mnt).stdin(Stdio::null()).output() {
+        Ok(o) if o.status.success() => ReleaseOutcome::Released,
+        Ok(o) => ReleaseOutcome::Failed(String::from_utf8_lossy(&o.stderr).trim().to_string()),
+        Err(e) => ReleaseOutcome::Unavailable(format!("umount did not start: {e}")),
+    }
+}
+
+/// 缩容后的**实际落点**核对结论。请求值只说明"我们要了多大"——工具的取整粒度各不相同
+/// （ext 按块、ntfs 按簇、btrfs 按 sectorsize），真正决定"分区能不能缩到请求尺寸"的是
+/// 文件系统实际落在哪儿，故工具成功返回后必须回读一次
+pub enum ShrinkVerify {
+    /// 回读到的实际尺寸（实测三种工具的取整方向都向下，故它 ≤ 请求值）
+    Within(u64),
+    /// 回读不出来（工具缺失、输出解析不了、缩容把卷标成待检查而工具拒答）：缩容**可能已经
+    /// 完成**，只是落点无法证实。这是"结果无法验证"，不是"缩容失败"——故它随成功结果
+    /// 浮出成一条待办，而不上抛成错误
+    Unverifiable { why: String, hint: String },
+}
+
+impl ShrinkVerify {
+    /// 缩容成功那一行：请求值与实际落点都给（工具的取整差异因此可见）。
+    /// 回读不出来时没有落点可报，这一类改由 [`Self::pending`] 浮出
+    pub fn ok_line(&self, requested: u64) -> Option<String> {
+        match self {
+            Self::Within(actual) => Some(format!("fs shrunk to {actual} bytes (requested {requested})")),
+            Self::Unverifiable { .. } => None,
+        }
+    }
+
+    /// 回读不出来 → 一条后置条件待办
+    pub fn pending(self, part: u32) -> Option<crate::outcome::Pending> {
+        match self {
+            Self::Within(_) => None,
+            Self::Unverifiable { why, hint } => Some(crate::outcome::Pending::new(
+                part,
+                crate::outcome::PendingKind::Other("fs shrink"),
+                why,
+                hint,
+            )),
+        }
+    }
+}
+
+/// 缩容这一动的结果：核对结论 + 挂载点没卸掉（只有 btrfs 路径会产生）
+pub struct ShrinkOutcome {
+    pub verify: ShrinkVerify,
+    pub leak: Option<MountLeak>,
 }
 
 /// FS 缩容到指定字节数（先于分区边界收缩执行）。契约是 `new_bytes` ≤ 旧**分区**尺寸
 /// 而非"≤ 当前 FS 大小"：FS 小于分区时（曾扩过分区或中断过的现场）此调用实为扩容，
 /// 方向良性——FS 工具把 FS 对到目标尺寸即可，不构成失败
-pub fn shrink_fs(src: &FileSource, part: u32, fstype: Option<FsKind>, new_bytes: u64) -> Result<(), FsError> {
+pub fn shrink_fs(src: &FileSource, part: u32, fstype: Option<FsKind>, new_bytes: u64) -> Result<ShrinkOutcome, FsError> {
     match fstype {
-        Some(FsKind::Ext) => with_partition_device(src, part, |dev| {
-            let out = run("e2fsck", &["-fp", dev])?;
-            check_e2fsck_for_resize(out.status.code().unwrap_or(-1))?;
-            // resize2fs 裸数字单位是"文件系统块数"而非字节（man resize2fs）；
-            // 's' 后缀 = 512 字节扇区。分区尺寸必为 sector_size(≥512) 整数倍
-            if !new_bytes.is_multiple_of(512) {
-                return Err(FsError::invalid("shrink size must be a multiple of 512"));
-            }
-            let sectors = format!("{}s", new_bytes / 512);
-            let out = run("resize2fs", &[dev, &sectors])?;
-            if !out.status.success() {
-                return Err(FsError::CommandFailed(format!(
-                    "resize2fs shrink failed: {}",
-                    String::from_utf8_lossy(&out.stderr).trim()
-                )));
-            }
-            Ok(())
-        }),
-        Some(FsKind::Ntfs) => with_partition_device(src, part, |dev| {
-            // -s 无后缀 = 字节，k/M/G = 10³/10⁶/10⁹（man ntfsresize OPTIONS）；本工具只传裸字节
-            let out = run("ntfsresize", &["-f", "-f", "-s", &new_bytes.to_string(), dev])?;
-            if !out.status.success() {
-                return Err(FsError::CommandFailed(format!(
-                    "ntfsresize shrink failed: {}",
-                    String::from_utf8_lossy(&out.stderr).trim()
-                )));
-            }
-            Ok(())
-        }),
-        Some(FsKind::Btrfs) => {
-            let (off, len) = partition_byte_range(src, part)?;
-            refuse_btrfs_multi_device_at(src, off, len)?;
-            with_partition_device(src, part, |dev| with_mount(dev, |mnt| {
-                // 裸数字 = 绝对字节数、必须挂载态（man btrfs-filesystem resize）
-                let out = run("btrfs", &["filesystem", "resize", &new_bytes.to_string(), mnt])?;
+        Some(FsKind::Ext) => {
+            let verify = with_partition_device(src, part, |dev| {
+                let out = run("e2fsck", &["-fp", dev])?;
+                check_e2fsck_for_resize(out.status.code().unwrap_or(-1))?;
+                // resize2fs 裸数字单位是"文件系统块数"而非字节（man resize2fs）；
+                // 's' 后缀 = 512 字节扇区。分区尺寸必为 sector_size(≥512) 整数倍
+                if !new_bytes.is_multiple_of(512) {
+                    return Err(FsError::invalid("shrink size must be a multiple of 512"));
+                }
+                let sectors = format!("{}s", new_bytes / 512);
+                let out = run("resize2fs", &[dev, &sectors]).map_err(|e| tool_write_maybe_started("resize2fs", dev, e))?;
                 if !out.status.success() {
                     return Err(FsError::CommandFailed(format!(
-                        "btrfs shrink failed: {} (minimum size via `btrfs inspect-internal min-dev-size` on a mount)",
+                        "resize2fs shrink failed: {}",
                         String::from_utf8_lossy(&out.stderr).trim()
                     )));
                 }
-                Ok(())
-            }))
+                verify_shrink(FsKind::Ext, dev, new_bytes, "resize2fs")
+            })?;
+            Ok(ShrinkOutcome { verify, leak: None })
+        }
+        Some(FsKind::Ntfs) => {
+            let verify = with_partition_device(src, part, |dev| {
+                // -s 无后缀 = 字节，k/M/G = 10³/10⁶/10⁹（man ntfsresize OPTIONS）；本工具只传裸字节
+                let out = run("ntfsresize", &["-f", "-f", "-s", &new_bytes.to_string(), dev])?;
+                if !out.status.success() {
+                    return Err(FsError::CommandFailed(format!(
+                        "ntfsresize shrink failed: {}",
+                        String::from_utf8_lossy(&out.stderr).trim()
+                    )));
+                }
+                verify_shrink(FsKind::Ntfs, dev, new_bytes, "ntfsresize")
+            })?;
+            Ok(ShrinkOutcome { verify, leak: None })
+        }
+        Some(FsKind::Btrfs) => {
+            let (off, len) = partition_byte_range(src, part)?;
+            refuse_btrfs_multi_device_at(src, off, len)?;
+            // 核对结论由闭包写进外层：回读失败（工具没落在请求范围内）要从 `with_mount`
+            // 里上抛，那条路正是"核心失败 + 挂载点没卸掉"的既有处置（告警随错误一起出），
+            // 把 leak 留在闭包外会让它被错误出口吞掉
+            let mut verify = None;
+            let leak = with_partition_device(src, part, |dev| {
+                with_mount(dev, |mnt| {
+                    // 裸数字 = 绝对字节数、必须挂载态（man btrfs-filesystem resize）
+                    let out = run("btrfs", &["filesystem", "resize", &new_bytes.to_string(), mnt])?;
+                    if !out.status.success() {
+                        return Err(FsError::CommandFailed(format!(
+                            "btrfs shrink failed: {} (minimum size via `btrfs inspect-internal min-dev-size` on a mount)",
+                            String::from_utf8_lossy(&out.stderr).trim()
+                        )));
+                    }
+                    verify = Some(verify_shrink(FsKind::Btrfs, dev, new_bytes, "btrfs filesystem resize")?);
+                    Ok(())
+                })
+            })?;
+            let verify = verify.ok_or_else(|| {
+                FsError::Io(io::Error::other("btrfs shrink did not run (internal invariant broken)"))
+            })?;
+            Ok(ShrinkOutcome { verify, leak })
         }
         other => Err(FsError::unsupported(format!("fs {} cannot shrink", fs_name(other)))),
     }
+}
+
+/// 缩容工具成功返回后的核对：回读实际落点，与请求值比对。三种结局对应三条出路——
+/// 落点在请求范围内 = 正常成功；落点超出请求 = 工具行为不符合预期（分区不能按请求缩进去）；
+/// 回读不出来 = 结果无法验证（工具可能已经缩好了，故不上抛成失败）
+fn verify_shrink(kind: FsKind, dev: &str, requested: u64, tool: &str) -> Result<ShrinkVerify, FsError> {
+    classify_shrink(read_fs_bytes(kind, dev), requested, tool, &size_read_back_hint(kind))
+}
+
+/// 回读结果 → 核对结论。与外部调用分开，判定本身才能单测
+fn classify_shrink(read: io::Result<u64>, requested: u64, tool: &str, hint: &str) -> Result<ShrinkVerify, FsError> {
+    match read {
+        Ok(actual) if actual <= requested => Ok(ShrinkVerify::Within(actual)),
+        Ok(actual) => Err(FsError::CommandFailed(format!(
+            "{tool} reported success but left the filesystem at {actual} bytes, more than the requested \
+             {requested} — the partition is not shrunk to a size the filesystem does not fit in"
+        ))),
+        Err(e) => Ok(ShrinkVerify::Unverifiable {
+            why: format!(
+                "{tool} reported success but the filesystem size could not be read back: {e} — \
+                 the shrink may have been applied; verify the new size before relying on it"
+            ),
+            hint: hint.to_string(),
+        }),
+    }
+}
+
+/// 回读缩容后**实际**文件系统尺寸。三者都是只读查询：
+/// - ext：`dumpe2fs -h`（man dumpe2fs：-h 只打印超级块）的 `Block count:` × `Block size:`
+/// - ntfs：`ntfsresize --info` 的 `Current volume size:`（--info 是查询，不调整大小，故只读）。
+///   `-f` 是必需的：真实调整大小会把卷标成"待检查"，不带 `-f` 的 `--info` 会以该理由拒答
+/// - btrfs：`btrfs inspect-internal dump-super -f`（-f = --full）的 `total_bytes`。它读的是
+///   超级块；该命令除签名验证外不做全面合理性检查，故只用来报尺寸、不用来判断卷是否健康
+///
+/// 输出格式非稳定机器接口（随工具版本可能变化），解析失败即报错、不猜默认值
+fn read_fs_bytes(kind: FsKind, dev: &str) -> io::Result<u64> {
+    match kind {
+        FsKind::Ext => {
+            let text = run_text("dumpe2fs", &["-h", dev])?;
+            let blocks = parse_num_lead(&text, "Block count:")?;
+            let block_size = parse_num_lead(&text, "Block size:")?;
+            blocks.checked_mul(block_size).ok_or_else(|| {
+                io::Error::other(format!("dumpe2fs block count × block size overflows ({blocks} × {block_size})"))
+            })
+        }
+        FsKind::Ntfs => parse_num_lead(&run_text("ntfsresize", &["-f", "--info", dev])?, "Current volume size:"),
+        FsKind::Btrfs => parse_num_lead(
+            &run_text("btrfs", &["inspect-internal", "dump-super", "-f", dev])?,
+            "total_bytes",
+        ),
+        other => Err(io::Error::other(format!("no size read-back wired for {}", fs_name(Some(other))))),
+    }
+}
+
+/// 回读命令的写法（待办里给用户的补救信息）。设备路径留给用户填：镜像目标上的
+/// 分区节点是临时 loop，写进待办会指向一个随命令结束即消失的路径
+fn size_read_back_hint(kind: FsKind) -> String {
+    match kind {
+        FsKind::Ext => "dumpe2fs -h <partition device>  (Block count × Block size)".into(),
+        FsKind::Ntfs => "ntfsresize -f --info <partition device>".into(),
+        FsKind::Btrfs => "btrfs inspect-internal dump-super -f <partition device>".into(),
+        _ => String::new(),
+    }
+}
+
+/// 跑一个只读查询工具并取回 stdout+stderr 的全文本：查询的成败由调用方按各自的输出格式
+/// 判定（它们要解析的字段不同），此处只保证"工具跑起来了且成功退出"
+fn run_text(tool: &str, args: &[&str]) -> io::Result<String> {
+    let out = run(tool, args).map_err(io::Error::from)?;
+    if !out.status.success() {
+        return Err(io::Error::from(FsError::command(tool, &out)));
+    }
+    Ok(format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr)))
 }
 
 /// FS 一致性检查（不修改分区边界；是否写盘取决于各工具的只读/修复开关）。
@@ -1546,7 +1810,8 @@ pub fn set_uuid(src: &FileSource, part: u32, fstype: Option<FsKind>, req: &UuidR
 
 #[cfg(test)]
 mod tests {
-    use super::{check_e2fsck_for_check, check_e2fsck_for_resize, check_grow_step, erase_ranges, grow_target_at, mkfs_tool, parse_fstype, parse_num_field, partition_byte_range, uuid_support, DeviceScope, Growable, MkfsFs, UuidSupport};
+    #![allow(clippy::let_underscore_must_use)] // 清理临时文件有意忽略失败
+    use super::{check_e2fsck_for_check, check_e2fsck_for_resize, check_grow_step, classify_shrink, erase_ranges, grow_target_at, leak_from, mkfs_tool, parse_fstype, parse_num_field, parse_num_lead, partition_byte_range, settle_release, uuid_support, DeviceScope, Growable, MkfsFs, MountLeak, ReleaseOutcome, ShrinkVerify, UuidSupport};
     use super::FsError;
     use crate::dev::FileSource;
     use crate::fsid::{self, FsKind};
@@ -1912,6 +2177,46 @@ mod tests {
         assert_eq!(odd[2], (7168 * 1024, 4096)); // floor(7288K, 128K) = 7168K
     }
 
+    /// 卸载侧的判定：只有"跑完且退出码 0"算没有待办。非零退出与工具缺失都不能
+    /// 证明已卸掉——挂载中的目录 rmdir 必然失败，"用后即删"就此失效，故各留一条待办
+    #[test]
+    fn release_outcome_decides_whether_a_cleanup_todo_exists() {
+        assert!(leak_from("/mnt/x", ReleaseOutcome::Released).is_none());
+
+        let failed = leak_from("/mnt/x", ReleaseOutcome::Failed("target is busy".into())).unwrap();
+        assert_eq!(failed.point, "/mnt/x");
+        assert_eq!(failed.why, "target is busy", "the tool's own words are the reason");
+        assert_eq!(failed.hint(), "umount /mnt/x");
+
+        let missing = leak_from("/mnt/x", ReleaseOutcome::Unavailable("umount not found".into())).unwrap();
+        assert_eq!(missing.why, "umount not found");
+        assert_eq!(missing.point, "/mnt/x");
+    }
+
+    /// 核心结果与清理待办的合成：两个事实各归各位，不揉成一个结果——
+    /// 核心成功时待办随 `Ok` 浮出（卸载也成功则为 `None`）；核心失败时主错误原样返回，
+    /// 清理待办只降为一条告警（残留挂载点仍要让人看见，但不能改写主错误）
+    #[test]
+    fn core_failure_and_cleanup_failure_stay_separate() {
+        let leak = || Some(MountLeak { point: "/mnt/x".into(), why: "target is busy".into() });
+
+        let (out, warn) = settle_release(Ok(()), None);
+        assert!(matches!(out, Ok(None)), "core ok + release ok has nothing left over");
+        assert!(warn.is_none());
+
+        let (out, warn) = settle_release(Ok(()), leak());
+        assert!(matches!(out, Ok(Some(_))), "core ok carries the cleanup todo out through Ok");
+        assert!(warn.is_none(), "a successful core op reports the todo, not a warning");
+
+        let (out, warn) = settle_release(Err(FsError::unsupported("boom")), None);
+        assert!(out.is_err(), "core failure stays the main error");
+        assert!(warn.is_none());
+
+        let (out, warn) = settle_release(Err(FsError::unsupported("boom")), leak());
+        assert!(out.is_err(), "the cleanup todo must not rewrite the main error");
+        assert!(warn.is_some(), "a leftover mount point is still surfaced when the core op failed");
+    }
+
     #[test]
     fn erase_ranges_boundaries() {
         const K: u64 = 1024;
@@ -1969,5 +2274,59 @@ mod tests {
         let b = "meta-data=/dev/loop0\nBlock size:               4096\n";
         assert_eq!(parse_num_field(b, "Block size:").unwrap(), 4096);
         assert!(parse_num_field("nothing here", "Block size:").is_err());
+    }
+
+    #[test]
+    fn parses_shrink_read_back_output_formats() {
+        // 三个回读命令的实际输出样本（本机实测：dumpe2fs 1.47.2 / ntfsresize v2022.10.3 /
+        // btrfs-progs v6.17.1）
+        let ext = "Filesystem volume name:   <none>\nBlock count:              8192\nBlock size:               4096\n";
+        assert_eq!(parse_num_lead(ext, "Block count:").unwrap(), 8192);
+        assert_eq!(parse_num_lead(ext, "Block size:").unwrap(), 4096);
+        // ntfsresize --info 的尺寸行后面还跟着人读单位，取开头的数字
+        let ntfs = "Cluster size       : 4096 bytes\nCurrent volume size: 33554944 bytes (34 MB)\n";
+        assert_eq!(parse_num_lead(ntfs, "Current volume size:").unwrap(), 33_554_944);
+        // dump-super -f 里还有 dev_item.total_bytes 与 backup_total_bytes，行首锚定只取主超级块那条
+        let btrfs = "total_bytes             314572800\ndev_item.total_bytes    268435456\n             backup_total_bytes:     1073741824\n";
+        assert_eq!(parse_num_lead(btrfs, "total_bytes").unwrap(), 314_572_800);
+    }
+
+    /// 缩容工具成功返回后的回读判定：正常（含向下取整）、超出请求值、读不出来三种结局
+    /// 各有各的出路，不能塌缩成"成功/失败"
+    #[test]
+    fn shrink_read_back_decides_between_within_over_and_unverifiable() {
+        let hint = "dumpe2fs -h <partition device>";
+        // 回读值等于请求值（ntfs 实测如此）：正常成功，成功行同时给两个数
+        let v = classify_shrink(Ok(33_554_944), 33_554_944, "ntfsresize", hint).unwrap();
+        assert!(matches!(v, ShrinkVerify::Within(33_554_944)));
+        assert_eq!(
+            v.ok_line(33_554_944).as_deref(),
+            Some("fs shrunk to 33554944 bytes (requested 33554944)")
+        );
+        assert!(v.pending(3).is_none(), "落点在请求范围内没有待办");
+        // 工具按自身粒度向下取整（ext 实测：请求 33,554,944 → 8192×4096 = 33,554,432）
+        let v = classify_shrink(Ok(33_554_432), 33_554_944, "resize2fs", hint).unwrap();
+        assert!(matches!(v, ShrinkVerify::Within(33_554_432)));
+        assert_eq!(
+            v.ok_line(33_554_944).as_deref(),
+            Some("fs shrunk to 33554432 bytes (requested 33554944)")
+        );
+        // 落点超出请求值：工具行为不符合预期，分区不能按请求尺寸缩进去
+        let e = match classify_shrink(Ok(67_108_864), 33_554_944, "resize2fs", hint) {
+            Err(e) => e,
+            Ok(_) => panic!("落点超出请求值必须报成失败"),
+        };
+        assert!(
+            matches!(e, FsError::CommandFailed(ref m) if m.contains("67108864") && m.contains("33554944")),
+            "超出请求值要报成工具行为不符合预期: {e}"
+        );
+        // 读不出来：不是缩容失败，而是一条"结果无法验证"的待办
+        let v = classify_shrink(Err(std::io::Error::other("dumpe2fs: command not found")), 33_554_944, "resize2fs", hint)
+            .unwrap();
+        assert!(v.ok_line(33_554_944).is_none(), "回读不出来时没有成功行");
+        let p = v.pending(3).expect("回读不出来要给出一条待办");
+        assert_eq!(p.part, 3);
+        assert_eq!(p.hint, hint);
+        assert!(p.detail.contains("could not be read back"), "{:?}", p.detail);
     }
 }

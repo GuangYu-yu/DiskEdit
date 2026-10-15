@@ -49,6 +49,8 @@ for f in \
   blockdev_4kn.sh \
   fs_f2fs_vfat_exfat_layout.sh \
   postcondition_contract.sh \
+  mount_cleanup_pending.sh \
+  shrink_readback.sh \
   uncovered_branches.sh \
   boundary_last_usable.sh \
   mbr_delete_chain.sh \

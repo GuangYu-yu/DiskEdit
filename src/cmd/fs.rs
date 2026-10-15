@@ -160,8 +160,14 @@ pub(crate) fn cmd_resizefs(a: &Args) -> u8 {
         let target = match fsops::grow_target_at(&src, part, start, len) {
             Ok(fsops::Growable::Target(t)) => t,
             Ok(fsops::Growable::OverlayPending) => {
-                // 首启现场：该层由首次挂载时的 fstools 按尾部区域建满，本次无后置条件可做
-                println!("nothing to resize on partition #{part} — the overlay RW layer is created at first mount, filling the trailing region");
+                // 这段区间里没有认得出的文件系统：可能是尚未格式化、可能是认不出的格式、
+                // 也可能是可供识别的字节不足——`identify` 的 `None` 分不出这三种。本命令在这
+                // 三种情形下都无事后置条件可做（该层的空间由首次挂载时的 fstools 建满），
+                // 故只报"没有可扩的文件系统"，不替用户断言是哪一种
+                println!(
+                    "nothing to resize on partition #{part} — no growable filesystem was identified in the trailing region \
+                     (unformatted, unrecognised, or too short to hold a signature — this tool does not tell them apart)"
+                );
                 return EXIT_OK;
             }
             // 页格式在本机激活不了的 swap：不是"里面没有 FS"，但也不是本命令扩得了的 FS——
@@ -182,7 +188,11 @@ pub(crate) fn cmd_resizefs(a: &Args) -> u8 {
             Err(e) => bail_fail(Fail::from(e)),
         };
         match target.resize_fs(&src) {
-            Ok(()) => {
+            Ok(leak) => {
+                // 清理待办在此只以告警呈现：本命令的成功出口保持 0，不改既有契约
+                if let Some(leak) = leak {
+                    eprintln!("warning: {leak}");
+                }
                 println!("resized (verify with: diskedit info {})", a.target);
                 EXIT_OK
             }

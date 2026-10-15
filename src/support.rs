@@ -213,9 +213,10 @@ pub(crate) fn table_write_done(src: &FileSource, ok_msg: &str) -> u8 {
 }
 
 /// 1 MiB 折算成表内扇区的唯一落点：不足一扇区时取 1，调用点共用，
-/// 不各自写 `(1024 * 1024 / ss).max(1)` 第二遍
+/// 不各自写 `(1024 * 1024 / ss).max(1)` 第二遍。`ss` 为 0 时没有有意义的折算，
+/// 直接取 1——本函数是折算助手而非校验点，不该成为除零的崩溃点
 pub(crate) fn mib_in_sectors(ss: u64) -> u64 {
-    (1024 * 1024 / ss).max(1)
+    (1024u64 * 1024).checked_div(ss).unwrap_or(0).max(1)
 }
 
 /// 对齐单位（LBA 所属表的扇区数）。mib = 1MiB 折算成表内扇区；cyl = 255 头 × 63 扇区 =
@@ -303,7 +304,11 @@ pub(crate) fn check_gpt_name_len(name: &str) {
 /// SIZE 换算的下取整让落盘值与请求值不同，必须可见：回显实际生效的字节数。
 /// `action` 是该处命令的动词（creating / resizing）
 pub(crate) fn note_sector_truncation(action: &str, bytes: u64, ss: u64) {
-    if bytes % ss != 0 {
+    // `ss` 为 0 时"整扇区"无从谈起：取模会 panic，而本函数只负责提示，不该成为崩溃点
+    if ss == 0 {
+        return;
+    }
+    if !bytes.is_multiple_of(ss) {
         eprintln!("note: size {bytes} is not a multiple of the {ss}-byte sector — {action} {} bytes", bytes / ss * ss);
     }
 }
@@ -428,6 +433,15 @@ pub(crate) fn src_from(tag: &str, data: &[u8]) -> FileSource {
 mod tests {
     use super::*;
     use crate::table;
+
+    /// 扇区大小为 0 时两个助手都不得 panic：它们不是校验点，把"盘没有扇区"这件事
+    /// 说成一次崩溃（101）会让调用方拿不到任何可读的分类
+    #[test]
+    fn sector_helpers_tolerate_zero_sector_size() {
+        assert_eq!(mib_in_sectors(0), 1);
+        assert_eq!(mib_in_sectors(512), 2048);
+        note_sector_truncation("resizing to", 1000, 0); // 不得 panic
+    }
 
     fn raw_gpt(last_usable: u64, ents: &[(u64, u64)]) -> table::RawGpt {
         table::RawGpt {

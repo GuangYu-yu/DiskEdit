@@ -132,9 +132,12 @@ fn abandon_records(identity: &TargetIdentity, legacy: Option<[u8; 16]>) -> u8 {
         EXIT_OK
     } else {
         // 已经改成的那些不会退回，所以这不是"什么都没做"——但也不是盘上状态被改坏。
-        // 收敛点只有一个：再跑一次，剩下的继续改
+        // 收敛点只有一个：再跑一次，剩下的继续改。因此数量要如实报出来：
+        // "放弃到哪一步了"是用户决定下一步的唯一依据
+        let done = records.len() - failed.len();
         bail_fail(Fail::infra(format!(
-            "could not abandon every recovery record ({}); re-run `diskedit abandon` to converge",
+            "abandoned {done} of {} recovery record(s) on this target; the rest failed ({}) — re-run `diskedit abandon` to converge",
+            records.len(),
             failed.join("; ")
         )))
     }

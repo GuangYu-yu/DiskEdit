@@ -38,7 +38,7 @@ common opts: --no-fs  drop the filesystem step of the grown or moved
                       with --no-fs: the filesystem has to be shrunk first
 exit codes:
   0   done             layout changed and every follow-up step completed (or none
-                       was required — the overlay RW layer waits for first mount,
+                       was required — no filesystem to grow was found in the region,
                        a PV's space for the pvresize chain — or --no-fs was
                        given), and the kernel partition view was refreshed
   10  refused          nothing was written, and the request does not match the
@@ -119,7 +119,16 @@ pub(crate) fn refuse_unconsumed_flags(cmd: &str, a: &Args) {
 }
 
 pub(crate) fn parse_args() -> (String, Args) {
-    let mut it = std::env::args().skip(1);
+    // `env::args()` 遇非 UTF-8 参数会 panic（退出码 101，越出 0/10/20/30 契约）。
+    // 换成 args_os 后逐个转 &str：转不动就是一次可读的用法拒绝，而不是崩溃
+    let mut it = std::env::args_os().skip(1).map(|arg| {
+        arg.into_string().unwrap_or_else(|bad| {
+            bail_fail(Fail::refused(format!(
+                "argument {:?} is not valid UTF-8 — diskedit takes its arguments as text",
+                bad.to_string_lossy()
+            )))
+        })
+    });
     let cmd = it.next().unwrap_or_else(|| usage());
     let mut a = Args {
         target: String::new(), part: None, grow: None,
@@ -137,6 +146,13 @@ pub(crate) fn parse_args() -> (String, Args) {
     };
     let mut positional: Vec<String> = Vec::new();
     while let Some(arg) = it.next() {
+        // 同一旗标重复给出即拒绝。`seen` 本来就记着每一次出现，具备判重能力；
+        // 不判的后果是 last-wins——生效值与用户第一意图相反却没有任何回显
+        if a.seen.contains(&arg.as_str()) {
+            bail_fail(Fail::refused(format!(
+                "{arg} is given more than once — refusing rather than letting the last one win silently"
+            )));
+        }
         match arg.as_str() {
             "--yes" => { a.seen.push("--yes"); a.yes = true; }
             "--online" => { a.seen.push("--online"); a.online = true; }
@@ -193,7 +209,17 @@ pub(crate) fn parse_args() -> (String, Args) {
                 let v = it.next().unwrap_or_else(|| miss_arg("--end"));
                 a.end = Some(v.parse().unwrap_or_else(|_| bad_arg("--end", &v, " (LBA, e.g. 67583)")));
             }
-            "--align" => { a.seen.push("--align"); a.align = it.next().unwrap_or_else(|| miss_arg("--align")); }
+            "--align" => {
+                a.seen.push("--align");
+                let v = it.next().unwrap_or_else(|| miss_arg("--align"));
+                // 取值合法性在参数层当场判（与 --sector-size / --chunk-size 同理）：
+                // 留到开盘之后才判，会被"目标上有未收尾现场"的 busy(30) 抢在前面，
+                // 把一条纯用法错误（应为 10 + invalid --align）报成环境/现状错误
+                if !matches!(v.as_str(), "mib" | "cyl" | "none") {
+                    bad_arg("--align", &v, " (mib|cyl|none)");
+                }
+                a.align = v;
+            }
             "--chunk-size" => {
                 a.seen.push("--chunk-size");
                 let v = it.next().unwrap_or_else(|| miss_arg("--chunk-size"));

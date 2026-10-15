@@ -489,11 +489,6 @@ pub(crate) fn cmd_resize(a: &Args) -> u8 {
             Ok(p) => p,
             Err(f) => bail_fail(f),
         };
-        // 槽上未收尾的作业若是精确 SIZE 的最小位移 plan，其终点停在旧请求的末端：
-        // 当作 grow 执行会把请求静默缩水。重跑当初那条 SIZE 命令即续跑
-        if plan.kind == movepart::PlanKind::Shift {
-            bail_fail(Fail::refused("an unfinished `resize SIZE` relocation job owns this target — re-run that command to resume it, or `diskedit abandon` to release it".to_string()));
-        }
         // 续跑的收尾仍须 --yes：盘上状态已与上次请求时不同，写盘前再确认一次；
         // --yes 一并覆盖"未确认的续跑"与"新的搬移"两种进入方式
         crate::cmd::plan::print_plan(&plan, start).unwrap_or_else(|e| bail_fail(Fail::infra(format!("plan failed: {e}"))));
@@ -534,12 +529,6 @@ pub(crate) fn cmd_resize(a: &Args) -> u8 {
                 Ok(p) => p,
                 Err(f) => bail_fail(f),
             };
-            // 反向同理：槽上是 grow 的尾打包 plan，终点是"吃满右侧"而非请求的 SIZE，
-            // 静默执行会把请求放大到全部空闲（缩容请求甚至会变成扩容）。
-            // 重跑当初那条 grow 命令即续跑
-            if plan.kind == movepart::PlanKind::TailPacked {
-                bail_fail(Fail::refused("an unfinished `resize grow` job owns this target — re-run that command to resume it, or `diskedit abandon` to release it".to_string()));
-            }
             crate::cmd::plan::print_plan(&plan, start).unwrap_or_else(|e| bail_fail(Fail::infra(format!("plan failed: {e}"))));
             if !a.yes {
                 bail_fail(Fail::refused(CONFIRM_RELOCATION));
@@ -615,7 +604,12 @@ fn cmd_resize_superfloppy(a: &Args, req: &SizeRequest) -> u8 {
         }
     }
     // FS grow 本身不改分区表，无 kernel_resync 必要
-    fsops::resize_fs_whole(&src, fstype).unwrap_or_else(|e| bail_fail(Fail::from(e).context("FS grow failed")));
+    // 清理待办在此只以告警呈现：本命令的成功出口保持 0，不改既有契约
+    match fsops::resize_fs_whole(&src, fstype) {
+        Ok(Some(leak)) => eprintln!("warning: {leak}"),
+        Ok(None) => {}
+        Err(e) => bail_fail(Fail::from(e).context("FS grow failed")),
+    }
     println!("superfloppy: {} grown to full device ({cur_bytes} bytes) — verify with: diskedit info {}", fsid::fs_name(fstype), a.target);
     EXIT_OK
 }
@@ -674,13 +668,18 @@ fn mbr_grow_finish(
                 src.set_mutation(crate::dev::Mutation::ExternalFsTool);
                 src.mark_non_reversible().unwrap_or_else(|e| bail_fail(Fail::from(e)));
                 let ident = movepart::read_swap_identity(src, p.start_lba as u64, p.size_lba as u64, ss);
-                if let Err(e) = fsops::recreate_swap(src, part, ident) {
-                    pending.push(crate::outcome::Pending::new(
+                // 与 movepart 的两个重建点同一口径：保不住原 UUID 必须说给用户听，
+                // 否则 fstab / resume 的 UUID= 会静默失效（旧签名本就没有 UUID，或读不出来）
+                let had_uuid = ident.0.is_some();
+                match fsops::recreate_swap(src, part, ident) {
+                    Ok(()) if had_uuid => println!("swap recreated (UUID preserved)"),
+                    Ok(()) => println!("swap recreated (no UUID could be read from the old signature — mkswap wrote a fresh one)"),
+                    Err(e) => pending.push(crate::outcome::Pending::new(
                         part,
                         crate::outcome::PendingKind::Swap,
                         e.to_string(),
                         fsops::rescue_hint(Some(fsid::FsKind::Swap), &dev::part_dev_hint(src, part, lba_bytes(p.start_lba as u64, ss))),
-                    ));
+                    )),
                 }
             }
             Ok(fsops::Growable::Target(t)) => {
@@ -688,13 +687,17 @@ fn mbr_grow_finish(
                 // 旧分区尺寸，此后回滚表项即"表与内容自相矛盾"，先落屏障
                 src.set_mutation(crate::dev::Mutation::ExternalFsTool);
                 src.mark_non_reversible().unwrap_or_else(|e| bail_fail(Fail::from(e)));
-                if let Err(e) = t.resize_fs(src) {
-                    pending.push(crate::outcome::Pending::new(
+                match t.resize_fs(src) {
+                    // 扩容已成功，卸载的成败是另一条后置条件：它不改写成功这一事实，
+                    // 只作为一条待办随结果浮出
+                    Ok(Some(leak)) => pending.push(leak.into_pending(part)),
+                    Ok(None) => {}
+                    Err(e) => pending.push(crate::outcome::Pending::new(
                         part,
                         crate::outcome::PendingKind::Fs,
                         e.to_string(),
                         fsops::rescue_hint(Some(t.fstype), &dev::part_dev_hint(src, part, lba_bytes(p.start_lba as u64, ss))),
-                    ));
+                    )),
                 }
             }
             // 判定失败：做不了的后置条件 ⇒ PARTIAL；设备读不出来 ⇒ 报失败
@@ -869,11 +872,22 @@ fn cmd_resize_msdos(a: &Args, pref: PartSelector, req: &SizeRequest, src_ro: &Fi
             src.mark_non_reversible().unwrap_or_else(|e| bail_fail(Fail::from(e)));
             // shrink_fs 的契约按旧分区尺寸比对（FS 小于分区时实为良性扩容，见其文档）；
             // 此处传入的是新分区尺寸，≤ 旧分区尺寸由缩容方向（new_size_lba < p.size_lba）保证
-            fsops::shrink_fs(&src, part, fstype, new_size_lba * ss)
+            let requested = new_size_lba * ss;
+            let shrunk = fsops::shrink_fs(&src, part, fstype, requested)
                 .unwrap_or_else(|e| bail_fail(Fail::from(e).context("FS shrink failed")));
+            // 成功行同时给出实际落点与请求值：工具按自身粒度取整，差异要看得见
+            if let Some(line) = shrunk.verify.ok_line(requested) {
+                println!("{line}");
+            }
             table::resize_mdos_entry(&mut src, part, new_size_lba as u32)
                 .unwrap_or_else(|f| bail_fail(f));
-            let o = settle_layout(crate::outcome::Outcome::applied_with(Vec::new()), &src);
+            // FS 已缩之后浮出的两条待办：回读不出来（缩容可能已完成、落点未证实）与卸载
+            // 没做成（清理未完成）——都不改写缩容这一事实，只作为待办浮出
+            let mut pending: Vec<_> = shrunk.verify.pending(part).into_iter().collect();
+            if let Some(leak) = shrunk.leak {
+                pending.push(leak.into_pending(part));
+            }
+            let o = settle_layout(crate::outcome::Outcome::applied_with(pending), &src);
             finish_resize(a, o, Some(&mut src), part, is_pv, is_block, cur_bytes)
         }
     }
