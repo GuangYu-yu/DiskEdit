@@ -121,12 +121,6 @@ fn apply_cmd(a: &Args, pref: PartSelector) -> u8 {
         Ok(p) => p,
         Err(f) => bail_fail(f),
     };
-    // 槽上未收尾的作业若是精确 SIZE 的最小位移 plan，其终点停在旧请求的末端：
-    // 当作 grow 收尾等于把本次请求静默替换成旧作业的续跑。新建 plan 一律是
-    // TailPacked，此判据只在续跑 ckpt 时可能触发；重跑当初那条 SIZE 命令即续跑
-    if plan.kind == movepart::PlanKind::Shift {
-        bail_fail(Fail::refused("an unfinished `resize SIZE` relocation job owns this target — re-run that command to resume it, or `diskedit abandon` to release it".to_string()));
-    }
     // 表的可解析性由上面那一次 require_gpt_geometry 判过（无 GPT → refused 10，表非法 → infra 30）：
     // 同一事实不设第二判据——两处判据迟早会在某个入口分叉，且自判拒绝时还不报原因
     let mut logger = Logger::open(&src, Some(g.header.disk_guid));

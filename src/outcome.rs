@@ -98,8 +98,8 @@ impl Outcome {
     }
 
     /// 布局已写但内核视图未跟上（在线路径表已落盘、partx/BLKPG 未同步时直接构造）。
-    /// 唯一调用方是 online（仅 Linux）——非 Linux 构建下它没有使用者
-    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    /// 唯一调用方是 online（仅 Linux）——非 Linux 构建下没有在线路径可产生"内核视图过期"
+    #[cfg(target_os = "linux")]
     pub fn applied_stale_kernel() -> Self {
         Self::Applied { pending: Vec::new(), kernel_sync: KernelSync::Stale }
     }

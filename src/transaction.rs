@@ -83,21 +83,22 @@ pub(crate) fn active_recovery_records(
         if !p.exists() {
             continue;
         }
-        // 0 字节：连 magic 都没写完的创建残骸。它与"只含 magic 的壳"一样描述**零次写入**，
-        // 故不是现场。这条判据必须与 `Journal::open` 一致——那边对 0 字节的处理是
-        // "就地补 magic 后照常使用"（详见其注释）；否则一次在创建 journal 时掉电会出现
-        // 两种结局：开 journal 的命令放行，走闸口的命令被永久挡住。
-        // stat 失败不是"0 字节"：读不出大小的文件不在此跳过，交由下方 read_entries
-        // 归类（读不出来会记为现场）——把它折叠成 0 会把真现场当残骸放行。
         // 目录等非普通文件不是本工具写下的任何东西（本工具只建普通文件）：read_entries
         // 对目录报 EISDIR 会把它记成"读不出来的现场"，而 abandon 对目录 hard_link 必然
         // 失败——留下一个清不掉的假现场
-        let stat = std::fs::metadata(p);
-        if let Ok(m) = &stat
-            && (m.len() == 0 || !m.is_file())
-        {
+        if std::fs::metadata(p).is_ok_and(|m| !m.is_file()) {
             continue;
         }
+        // 0 字节的创建残骸描述的是**零次写入**，故不是现场。判据与 `Journal::open`、
+        // `undo` 的候选挑选共用一个实现（`dev::is_zero_write_remnant`）——三处若不一致，
+        // 一次在创建 journal 时掉电就会出现两种结局：开 journal 的命令放行、走闸口的命令
+        // 被永久挡住。1..HEADER_LEN-1 字节**不在**这条判据里（详见该函数的注释）：那种文件
+        // 可能是一份被外部截断、记录已丢的现场，按"读不出来"处理
+        if dev::is_zero_write_remnant(p) {
+            continue;
+        }
+        // 读不出大小不是"0 字节"：那种文件不在此跳过，交由下方 read_entries 归类
+        // （读不出来会记为现场）——把它折叠成 0 会把真现场当残骸放行
         let entries = match Journal::read_entries(p) {
             Ok(dev::JournalRead::Complete(v)) | Ok(dev::JournalRead::TruncatedTail(v)) => {
                 if v.is_empty() {
@@ -216,8 +217,11 @@ impl TransactionManager {
 
     fn attach_journal(src: &mut FileSource) -> Result<(), Fail> {
         let p = src.identity.journal_path().to_path_buf();
+        // 身份随头落盘：采纳既有 journal 时 `open` 会拿它核对（见 `dev::scene_mismatch`），
+        // 故新开的窗口也记的是"这个目标"
+        let identity = dev::JournalIdentity { fp: src.fingerprint, map: src.loop_mapping };
         src.journal = Some(
-            Journal::open(&p).map_err(|e| Fail::infra(format!("journal open failed: {e}")))?,
+            Journal::open(&p, identity).map_err(|e| Fail::infra(format!("journal open failed: {e}")))?,
         );
         Ok(())
     }

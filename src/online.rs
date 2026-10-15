@@ -404,28 +404,36 @@ mod imp {
     fn part_resize(t: &OnlineTarget, new_len_bytes: u64) -> Result<(), PartResizeError> {
         let pno_str = t.pno.to_string();
         let disk_str = t.disk_dev.to_string_lossy().into_owned();
-        // 写前锁下重验（最小 TOCTOU 防线，**只覆盖目标分区自身**）：sysfs 快照取自
-        // 内核视图，取锁到 sfdisk 之间第三方（不守本工具的锁）可能已改写盘上表；
+        // 写前锁下重验（最小 TOCTOU 防线，**只覆盖目标分区自身与邻居集**）：sysfs 快照
+        // 取自内核视图，取锁到 sfdisk 之间第三方（不守本工具的锁）可能已改写盘上表；
         // sfdisk 的 --force 关闭全部一致性检查，不会替我们拒绝由此造成的异常。这里
-        // 直接重读**盘上表**比对目标分区的条目，不符即拒。**邻居维度无写前重验**：
-        // 重叠判定用的邻居集仍来自锁下快照，窗口内的第三方改动只能靠"守锁约定 +
-        // 内核 -EBUSY/-EINVAL"兜底为 Partial（退出 20 + 盘上表需人工核对）；残余
-        // 窗口（重验之后、sfdisk 执行）连目标维度也无法在本进程内消除（sfdisk 内部
-        // 自读盘表）
+        // 直接重读**盘上表**：目标条目与邻居集都从这一次读里取，不符即拒——邻居维度
+        // 若只信取锁时的 sysfs 快照，跨界重叠就只能靠内核 -EBUSY/-EINVAL 兜底，那时
+        // 盘上已经躺着一张重叠的表。残余窗口（重验之后、sfdisk 执行）连目标维度也
+        // 无法在本进程内消除（sfdisk 内部自读盘表）
         let disk = crate::dev::FileSource::open_read_only(&t.disk_dev)
             .map_err(|e| PartResizeError::NoWrite(io::Error::other(format!("pre-write re-read failed: {e}"))))?;
-        match crate::gpt_policy::partition_bytes(&disk, t.pno) {
-            Ok((start, len)) if (start, len) == (t.start_bytes, t.part_len_bytes) => {}
-            Ok((start, len)) => {
-                // 端点换算 saturating（数据源是盘上重读结果）：饱和只影响提示文字，
-                // 不影响拒绝判定本身
-                let now_end = start.saturating_add(len);
-                let snap_end = t.start_bytes.saturating_add(t.part_len_bytes);
-                return Err(PartResizeError::NoWrite(io::Error::other(format!(
-                    "partition {} on disk changed since the snapshot (now at {start}..{now_end}, snapshot {}..{snap_end}) — refusing to overwrite a foreign edit",
-                    t.pno,
-                    t.start_bytes,
-                ))));
+        match crate::gpt_policy::disk_snapshot(&disk, t.pno) {
+            Ok(snap) => {
+                let (start, len) = snap.target;
+                if (start, len) != (t.start_bytes, t.part_len_bytes) {
+                    // 端点换算 saturating（数据源是盘上重读结果）：饱和只影响提示文字，
+                    // 不影响拒绝判定本身
+                    let now_end = start.saturating_add(len);
+                    let snap_end = t.start_bytes.saturating_add(t.part_len_bytes);
+                    return Err(PartResizeError::NoWrite(io::Error::other(format!(
+                        "partition {} on disk changed since the snapshot (now at {start}..{now_end}, snapshot {}..{snap_end}) — refusing to overwrite a foreign edit",
+                        t.pno,
+                        t.start_bytes,
+                    ))));
+                }
+                if !range_free(t.start_bytes, new_len_bytes, &snap.others) {
+                    return Err(PartResizeError::NoWrite(io::Error::other(format!(
+                        "resizing partition {} to {new_len_bytes} bytes would overlap a partition present on disk now ({} neighbour(s)) — refusing over a stale snapshot",
+                        t.pno,
+                        snap.others.len(),
+                    ))));
+                }
             }
             Err(f) => {
                 // Fail 无 Display：压出内文重包，NoWrite = 确定未写盘（Infra 语义）
@@ -624,17 +632,43 @@ mod imp {
         })
     }
 
+    /// 锁身份：锁按**取锁时刻**的拓扑派生（粒度取整盘，见 [`lock_disk`]）。路径串相同
+    /// 不代表拓扑相同——同一个 `/dev/sdX` 被重新绑定到另一块盘时，锁保护的是旧身份，
+    /// 而要动的是新设备。故取锁与锁下重解析之后各算一次，两处不一致即拒绝
+    fn lock_identity(t: &OnlineTarget) -> Result<crate::dev::TargetIdentity, Outcome> {
+        // fail-closed：拓扑解析不出来即拒绝（不退到 devname-容量身份）
+        crate::dev::TargetIdentity::resolve_block(&t.disk_dev).map_err(Outcome::infra)
+    }
+
     /// 在线路径的独占所有权：设备已挂载 / 被 DM 持有，`O_EXCL` 不可能成功，但**同一把
     /// TargetLock** 仍必须持有——否则在线写表与离线 mutation 可以互相穿插。
     /// 粒度取**整盘**：分区表属于盘，且只有盘粒度才能与"以 `/dev/sdX` 为目标的离线
-    /// 调用"落进同一个锁名；锁是 advisory 的，它约束的是本工具的所有入口，不是别人
-    fn lock_disk(t: &OnlineTarget) -> Result<crate::targetlock::TargetLock, Outcome> {
-        // fail-closed：拓扑解析不出来即拒绝（不退到 devname-容量身份）
-        let ident = crate::dev::TargetIdentity::resolve_block(&t.disk_dev)
-            .map_err(Outcome::infra)?;
+    /// 调用"落进同一个锁名；锁是 advisory 的，它约束的是本工具的所有入口，不是别人。
+    /// 身份一并交回，供锁下重解析复核（见 [`lock_identity`]）
+    fn lock_disk(
+        t: &OnlineTarget,
+    ) -> Result<(crate::targetlock::TargetLock, crate::dev::TargetIdentity), Outcome> {
+        let ident = lock_identity(t)?;
         // 取锁的失败按 `Fail` 的三个变体折叠成出口语义（唯一映射点在 outcome 模块），
         // 本处不借 `finish` 做转换——那是"结束一次操作"的入口，语义不同
-        crate::targetlock::TargetLock::acquire(&ident).map_err(|f| f.into_outcome())
+        let lock = crate::targetlock::TargetLock::acquire(&ident).map_err(|f| f.into_outcome())?;
+        Ok((lock, ident))
+    }
+
+    /// 锁下重解析出的目标是否仍落在取锁时的同一身份上。不符即拒绝：在 A 的锁下
+    /// 操作 B，两个写者会同时以为自己是独占的
+    fn verify_lock_identity(
+        held: &crate::dev::TargetIdentity,
+        fresh: &OnlineTarget,
+    ) -> Result<(), Outcome> {
+        match lock_identity(fresh) {
+            Ok(id) if id.lock_path() == held.lock_path() => Ok(()),
+            Ok(_) => Err(Outcome::infra(format!(
+                "the device behind {} changed identity during locking — the lock protects a different target now; retry",
+                fresh.disk_dev.display()
+            ))),
+            Err(o) => Err(o),
+        }
     }
 
     /// 在线路径的现场闸口。本路径不建 journal（sfdisk / FS 工具用自己的 fd 写盘，
@@ -661,26 +695,42 @@ mod imp {
         .map_err(|f| f.into_outcome())
     }
 
-    /// 新尺寸的几何前置检查：对齐 → 容量 → 邻接，两条在线写表路径共用。
+    /// 新尺寸的几何前置检查：对齐 → 容量 → 邻接 → GPT 可用区上界，两条在线写表路径共用。
     /// 缩容（仅 btrfs）也走这里：起点不变、区间只会更短，容量与邻接两条恒成立，
     /// 需要它们的是 grow；对齐对两个方向都必要——sfdisk 会把未对齐尺寸静默截到扇区界。
-    /// 必须全部通过才允许 part_resize 落盘：写表之后这些条件已无法"事后退出"
-    fn check_new_range(t: &OnlineTarget, new_len_bytes: u64) -> Result<(), String> {
+    /// 必须全部通过才允许 part_resize 落盘：写表之后这些条件已无法"事后退出"。
+    /// `disk` 是锁下的只读整盘句柄：可用区上界只能从**当下重读的表**取，sysfs 快照
+    /// 里没有这一项
+    fn check_new_range(t: &OnlineTarget, new_len_bytes: u64, disk: &FileSource) -> Result<(), Fail> {
         if new_len_bytes == 0 || !new_len_bytes.is_multiple_of(t.logical_block) {
-            return Err(format!(
+            return Err(Fail::refused(format!(
                 "size {new_len_bytes} not aligned to logical block size {}",
                 t.logical_block
-            ));
+            )));
         }
-        match t.start_bytes.checked_add(new_len_bytes) {
-            None => return Err("size overflow".to_string()),
-            Some(end) if end > t.disk_cap_bytes => {
-                return Err(format!("new end {end} exceeds disk capacity {}", t.disk_cap_bytes));
-            }
-            _ => {}
+        let end = t
+            .start_bytes
+            .checked_add(new_len_bytes)
+            .ok_or_else(|| Fail::refused("size overflow".to_string()))?;
+        if end > t.disk_cap_bytes {
+            return Err(Fail::refused(format!(
+                "new end {end} exceeds disk capacity {}",
+                t.disk_cap_bytes
+            )));
         }
         if !range_free(t.start_bytes, new_len_bytes, &t.others) {
-            return Err("new size would overlap an adjacent partition".to_string());
+            return Err(Fail::refused("new size would overlap an adjacent partition".to_string()));
+        }
+        // 盘尾的备份 GPT 与条目数组不在可用区内：落到那段字节上的表项会让备份头与
+        // 分区内容互相覆盖。离线入口按 last_usable_lba 拒绝，在线入口此前只按裸盘长
+        // ——同一请求两个入口结论不同。表读不出来时无从判断上界，按环境故障拒绝
+        if let Some(max_end) = crate::gpt_policy::usable_end_bytes(disk)?
+            && end > max_end
+        {
+            return Err(Fail::refused(format!(
+                "new end {end} exceeds the last usable block at {max_end} — the backup GPT and its entry array sit past it; \
+                 grow offline (`diskedit resize`) so the backup GPT is relocated first"
+            )));
         }
         Ok(())
     }
@@ -698,8 +748,8 @@ mod imp {
             Err(e) => return (Outcome::infra(e.to_string()), 0),
         };
         // 此后每一步都是写盘（写表 / 内核重读），独占权从解析出目标起就取得
-        let _owned = match lock_disk(&t) {
-            Ok(l) => l,
+        let (_owned, locked_ident) = match lock_disk(&t) {
+            Ok(v) => v,
             Err(o) => return (o, 0),
         };
         // 独占权在手后重取 sysfs 快照：resolve 必须先于取锁（锁身份取自它的结果），
@@ -709,6 +759,11 @@ mod imp {
             Ok(t) => t,
             Err(e) => return (Outcome::infra(e.to_string()), 0),
         };
+        // 身份复核：锁按取锁时刻的拓扑派生，窗口内同一路径被重绑到别的设备时，
+        // 路径串比对看不出来，锁保护的已不是我们要动的这块盘
+        if let Err(o) = verify_lock_identity(&locked_ident, &t) {
+            return (o, 0);
+        }
         let old_len_bytes = t.part_len_bytes;
         // 现场闸口：本路径不建 journal，目标上若有未收尾的现场必须在此拒绝
         if let Err(o) = refuse_if_scene_active(&t) {
@@ -758,8 +813,8 @@ mod imp {
                 t.part_len_bytes
             )), old_len_bytes);
         }
-        if let Err(msg) = check_new_range(&t, new_len_bytes) {
-            return (Outcome::refused(msg), old_len_bytes);
+        if let Err(f) = check_new_range(&t, new_len_bytes, &disk) {
+            return (f.into_outcome(), old_len_bytes);
         }
         if let Err(e) = part_resize(&t, new_len_bytes) {
             return (e.into_outcome(), old_len_bytes);
@@ -788,8 +843,8 @@ mod imp {
         };
         // 独占权必须在 FS 步之前取得：本函数既可能写 FS（fs_grow）也可能写表
         // （part_resize），等到写表才取锁会让前面的 FS 写入落在锁外
-        let _owned = match lock_disk(&t) {
-            Ok(l) => l,
+        let (_owned, locked_ident) = match lock_disk(&t) {
+            Ok(v) => v,
             Err(o) => return o,
         };
         // 同 resize_pv：锁下重取 sysfs 快照（理由见彼处）。mountpoint 在窗口内被重挂载
@@ -798,6 +853,10 @@ mod imp {
             Ok(t) => t,
             Err(e) => return Outcome::infra(e.to_string()),
         };
+        // 先比身份再比路径串：身份是锁的载体，路径串只是它的一个投影
+        if let Err(o) = verify_lock_identity(&locked_ident, &fresh) {
+            return o;
+        }
         if fresh.part_dev != t.part_dev {
             return Outcome::infra(format!(
                 "mountpoint {} changed target during locking ({} -> {}) — retry",
@@ -879,8 +938,8 @@ mod imp {
                 fs_grow_outcome(fs_grow(&t, fstype))
             }
             Some(bytes) => {
-                if let Err(msg) = check_new_range(&t, bytes) {
-                    return Outcome::refused(msg);
+                if let Err(f) = check_new_range(&t, bytes, &disk) {
+                    return f.into_outcome();
                 }
                 if bytes > t.part_len_bytes {
                     // grow：先自查（内核 EBUSY 兜底），sfdisk 写表 → partx 同步 → FS 工具。
