@@ -1172,18 +1172,23 @@ impl Journal {
     /// 尾字节是格式版本：读到的 magic 不符即拒绝整卷（见 open）。版本**不做旧格式兼容**——
     /// 旧 journal 会被当作"读不出来的现场"，由 `abandon` 释放，而不是猜着回放。
     /// v3：PreImage 记录补记写后内容（undo 回放前的分叉核对依据）
-    const MAGIC: &[u8; 5] = b"DEJL\x03";
+    pub(crate) const MAGIC: &[u8; 5] = b"DEJL\x03";
 
     fn at(path: &Path, file: Option<File>) -> Self {
         Journal { file, path: path.to_path_buf(), mutation: Mutation::PartitionTable }
     }
 
-    /// 打开（必要时先校验）落点，**不产生任何痕迹**：文件已存在则必须是我们自己写的
+    /// 打开（必要时先校验）落点，**不产生任何新痕迹**：文件已存在则必须是我们自己写的
     /// journal——拒绝把陌生文件当 journal 追加；不存在则什么都不建。
     ///
     /// 撤销窗口的痕迹应当由"确实记了什么"产生，而不是由"打开目标"产生：否则一条在
     /// 校验阶段就被拒的命令会留下空 journal，让后续 undo 报"journal 是空的"而不是
-    /// "没有 journal"，也占住了候选落点
+    /// "没有 journal"，也占住了候选落点。
+    ///
+    /// 唯一的例外：采纳既有文件时把**撕裂尾物理截断**（set_len 到最后一条完整记录的
+    /// 结束偏移，见 [`Self::scan_entries`]）。那是收养既有现场的一部分而非新痕迹——
+    /// 不截断的话垃圾尾会永远留在文件里，之后的新记录接在垃圾之后，`read_entries`
+    /// 会把"垃圾之后的一切"都判进 TruncatedTail，新记录从此无法回放
     pub fn open(path: &Path) -> io::Result<Self> {
         match OpenOptions::new().read(true).append(true).open(path) {
             Ok(mut f) => {
@@ -1225,6 +1230,28 @@ impl Journal {
                         "existing file is not a diskedit journal of this format (magic/version mismatch) — \
                          if it was written by an older version of this tool, release it with `diskedit abandon`",
                     ));
+                }
+                // 采纳前的撕裂尾物理截断：共用扫描给出最后一条完整记录的结束偏移，
+                // 零完整记录时截回 magic 长。截断点之前的记录每条都通过了 CRC，
+                // 其对应的写入都确实发生过；被截掉的只有"没走完的追加"或其后的垃圾。
+                // set_len 走独立的写句柄：append 模式的句柄在 Windows 上只有
+                // FILE_APPEND_DATA，没有 set_len 所需的 FILE_WRITE_DATA
+                {
+                    use std::io::{Read, Seek, SeekFrom};
+                    let mut data = Vec::new();
+                    f.seek(SeekFrom::Start(0))?;
+                    f.read_to_end(&mut data)?;
+                    let (_, truncated, end) = Self::scan_entries(&data)?;
+                    if truncated {
+                        let cut = data.len() - end;
+                        let w = std::fs::OpenOptions::new().write(true).open(path)?;
+                        w.set_len(end as u64)?;
+                        w.sync_all()?;
+                        eprintln!(
+                            "note: journal {} ends with an incomplete record — truncated {cut} byte(s) back to the last complete record",
+                            path.display()
+                        );
+                    }
                 }
                 Ok(Self::at(path, Some(f)))
             }
@@ -1320,19 +1347,28 @@ impl Journal {
         if data.len() < Self::MAGIC.len() || &data[..Self::MAGIC.len()] != Self::MAGIC {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "bad journal header"));
         }
+        let (out, truncated, _) = Self::scan_entries(&data)?;
+        Ok(if truncated { JournalRead::TruncatedTail(out) } else { JournalRead::Complete(out) })
+    }
+
+    /// 逐条扫描 journal 内容（含 magic 前缀），供 [`Self::read_entries`]（回放）与
+    /// [`Self::open`]（采纳时的撕裂尾截断）共用同一套判据。返回
+    /// `(完整记录, 尾部是否撕裂, 最后一条完整记录的结束偏移)`——零完整记录且撕裂时
+    /// 结束偏移即 magic 长；尾部完整时结束偏移即 `data.len()`
+    fn scan_entries(data: &[u8]) -> io::Result<(Vec<JournalRecord>, bool, usize)> {
         let mut out = Vec::new();
         let mut pos = Self::MAGIC.len();
         while pos < data.len() {
             // 记录头尚未写全 → 尾部未完成的事务（加法 checked：输入是外部文件内容）
             if pos.checked_add(REC_HDR).is_none_or(|end| end > data.len()) {
-                return Ok(JournalRead::TruncatedTail(out));
+                return Ok((out, true, pos));
             }
             let len = u32::from_le_bytes(data[pos..pos + 4].try_into().unwrap()) as usize;
             let crc = u32::from_le_bytes(data[pos + 4..pos + 8].try_into().unwrap());
             pos += REC_HDR;
             // 头写全了但载荷没写全 → 尾部未完成的事务
             if pos.checked_add(len).is_none_or(|end| end > data.len()) {
-                return Ok(JournalRead::TruncatedTail(out));
+                return Ok((out, true, pos - REC_HDR));
             }
             let payload = &data[pos..pos + len];
             if crate::table::crc32(payload) != crc {
@@ -1342,7 +1378,7 @@ impl Journal {
             // 载荷解不出来同样是"读不出来"：宁可让调用方按"有事没做完"处理，也不静默跳过
             out.push(JournalRecord::decode(payload)?);
         }
-        Ok(JournalRead::Complete(out))
+        Ok((out, false, data.len()))
     }
 }
 

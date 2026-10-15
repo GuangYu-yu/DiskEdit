@@ -77,10 +77,12 @@ pub(crate) fn cmd_info(a: &Args) -> u8 {
                  remove the overlapping entry with sfdisk/parted first"
             ));
         }
-        // 形状是否受损：结构化字段，不再把 "(damaged)" 塞进 label 字符串里。
-        // 两种来源都算——头部/备份头需修复（state）、保护 MBR 需修复或不可自动修复（pmbr）
+        // 形状是否受损：结构化字段，与 MBR 分支的 MbrDamage 口径对称——四种来源都算：
+        // 头部/备份头需修复（state）、保护 MBR 需修复或不可自动修复（pmbr）、条目重叠
+        // （find_overlap，写入路径在 ValidatedGeometry::new 处拒绝、诊断侧须看得到）
         let damaged = !matches!(g.state, table::GptState::Valid)
-            || !matches!(g.pmbr, table::PmbrSize::Normal);
+            || !matches!(g.pmbr, table::PmbrSize::Normal)
+            || crate::geometry::find_overlap(&g.entries).is_some();
         out.push_str("\"gpt\",\"damaged\":");
         out.push_str(if damaged { "true" } else { "false" });
         out.push_str(",\"sector_size\":");

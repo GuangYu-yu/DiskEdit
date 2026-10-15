@@ -516,6 +516,8 @@ pub(crate) fn cmd_resize(a: &Args) -> u8 {
         if new_end > last_usable {
             bail_fail(Fail::refused(format!("size {bytes} exceeds usable range (partition would end past last_usable_lba {last_usable})")));
         }
+        // 请求已通过越界判定，note 不会再跟在一条拒绝后面
+        crate::support::note_sector_truncation("resizing to", bytes, ss);
         // 扩容需要的位移量只在扩的时候有定义：缩容的新末端更靠左，右侧只会更空，
         // 不存在搬移需求（此时 new_end < end，直接相减会回绕）
         let shift = (new_end > end).then(|| new_end - end);
@@ -823,6 +825,8 @@ fn cmd_resize_msdos(a: &Args, pref: PartSelector, req: &SizeRequest, src_ro: &Fi
         if new_size_lba > u32::MAX as u64 {
             bail_fail(Fail::refused(format!("size {new_size_lba} sectors exceeds MBR 32-bit LBA limit")));
         }
+        // 请求已通过越界判定，note 不会再跟在一条拒绝后面
+        crate::support::note_sector_truncation("resizing to", bytes, ss);
         if new_size_lba >= p.size_lba as u64 {
             // no-op（==）不触发缩容守卫链；扩（>）须右侧空闲足够
             let want = new_size_lba - p.size_lba as u64;
@@ -853,6 +857,8 @@ fn cmd_resize_msdos(a: &Args, pref: PartSelector, req: &SizeRequest, src_ro: &Fi
             // 与 grow 臂同判据：外部 FS 工具写盘不可回滚，undo journal 从此只能如实记屏障
             src.set_mutation(crate::dev::Mutation::ExternalFsTool);
             src.mark_non_reversible().unwrap_or_else(|e| bail_fail(Fail::from(e)));
+            // shrink_fs 的契约按旧分区尺寸比对（FS 小于分区时实为良性扩容，见其文档）；
+            // 此处传入的是新分区尺寸，≤ 旧分区尺寸由缩容方向（new_size_lba < p.size_lba）保证
             fsops::shrink_fs(&src, part, fstype, new_size_lba * ss)
                 .unwrap_or_else(|e| bail_fail(Fail::from(e).context("FS shrink failed")));
             table::resize_mdos_entry(&mut src, part, new_size_lba as u32)
