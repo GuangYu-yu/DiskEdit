@@ -780,6 +780,18 @@ pub(crate) fn commit_table(
     Ok(())
 }
 
+/// 规范 SizeInLBA = 逻辑块数 − 1；逻辑块数超出 32 位表示范围时按规范饱和写 0xFFFFFFFF
+/// （UEFI 2.10 §5.2.3，LBA 字段以 logical block 计而非恒定 512 字节）。
+/// "写入什么值"（[`ensure_protective_mbr`]）与"读到的值算不算规范"
+/// （[`pmbr_size_state`]）共用这一处，两侧不各写一遍同一个算式
+fn size_in_lba(total_sectors: u64) -> u32 {
+    if total_sectors > u32::MAX as u64 {
+        u32::MAX
+    } else {
+        total_sectors.saturating_sub(1) as u32
+    }
+}
+
 /// 保护 MBR（LBA0）：保留 BootCode 区 0..446，仅重写 446..512。
 /// SizeInLBA = 逻辑块数 − 1（UEFI 2.10 §5.2.3；LBA 字段以 logical block 计，非恒定 512 字节），
 /// 超出 32 位表示范围才用 0xFFFFFFFF。本函数同时是规范化点：任何非规范值（stale / 512 口径）
@@ -803,7 +815,7 @@ pub fn ensure_protective_mbr(src: &mut FileSource) -> io::Result<()> {
             let size = rd_u32(rec, 12);
             // 已合规即一字不写（保留外层引导代码）。比较基准是**逻辑块**口径的 total，
             // 故 512 口径值（PmbrSize::NeedsRepair{Compat512}）在此落空，会走到下面重写为规范值
-            if start == 1 && size as u64 + 1 == total_sectors.min(u32::MAX as u64 + 1) {
+            if start == 1 && size == size_in_lba(total_sectors) {
                 return Ok(());
             }
         }
@@ -815,7 +827,7 @@ pub fn ensure_protective_mbr(src: &mut FileSource) -> io::Result<()> {
     rec[1..4].copy_from_slice(&[0x00, 0x02, 0x00]); // StartCHS 惯例值
     rec[4] = PROT_MBR_TYPE;
     rec[5..8].copy_from_slice(&[0xFF, 0xFF, 0xFF]); // EndCHS
-    let size: u32 = if total_sectors > u32::MAX as u64 { u32::MAX } else { (total_sectors - 1) as u32 };
+    let size: u32 = size_in_lba(total_sectors);
     rec[8..12].copy_from_slice(&1u32.to_le_bytes());
     rec[12..16].copy_from_slice(&size.to_le_bytes());
     lba0[510] = 0x55;
@@ -1109,15 +1121,8 @@ fn pmbr_size_state(src: &FileSource) -> io::Result<PmbrSize> {
     let mut lba0 = [0u8; 512];
     src.read_at(0, &mut lba0)?;
     let size = rd_u32(&lba0, 446 + 12);
-    let expect = |total: u64| -> u32 {
-        if total > u32::MAX as u64 {
-            u32::MAX
-        } else {
-            (total.saturating_sub(1)) as u32
-        }
-    };
-    let e = expect(src.size / src.sector_size);
-    let e512 = expect(src.size / 512);
+    let e = size_in_lba(src.size / src.sector_size);
+    let e512 = size_in_lba(src.size / 512);
     if size == e {
         return Ok(PmbrSize::Normal);
     }
@@ -1712,8 +1717,7 @@ mod tests {
     fn resize_mdos_entry_refuses_invisible_type_only_entry() {
         let mut src = src_from_mbr("mdosinv", &[(0x83, 2048, 0)], 32768);
         let e = resize_mdos_entry(&mut src, 1, 1000)
-            .err()
-            .expect("a type-only MBR entry must be refused by resize_mdos_entry");
+            .expect_err("a type-only MBR entry must be refused by resize_mdos_entry");
         assert!(matches!(&e, Fail::Refused(m) if m.contains("invisible to the parser")), "{e:?}");
         // 正常条目（type≠0 且 size≠0）不受影响——缩容仍走既有路径
         let mut ok = src_from_mbr("mdosok", &[(0x83, 2048, 2048)], 32768);

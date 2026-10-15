@@ -163,7 +163,13 @@ pub fn make_plan_resuming(
     grow_part: u32,
 ) -> Result<Plan, Fail> {
     match resume_outcome(src, g, grow_part)? {
-        ResumeOutcome::Belongs(p) => Ok(p),
+        // 作业身份比对：本入口的进入语义是"吃满右侧"（TailPacked）。槽上那份若是精确
+        // SIZE 的最小位移 plan，它的终点停在旧请求的末端——按 grow 收尾等于把本次请求
+        // 静默换成旧作业的续跑。判据与 SIZE 入口共用一处（见 make_plan_shift_resuming）
+        ResumeOutcome::Belongs(p) => match p.kind {
+            PlanKind::TailPacked => Ok(p),
+            PlanKind::Shift => Err(plan_job_owns_target(p.kind, false)),
+        },
         // 槽位是别的分区的作业：现算的 plan 与那份作业的现场不符，打印出来会与
         // 盘上未收尾的事自相矛盾，apply 也只会得到一次注定失败的比对
         ResumeOutcome::Occupied => Err(foreign_checkpoint_refusal()),
@@ -238,16 +244,25 @@ pub fn make_plan_shift_resuming(
 ) -> Result<Plan, Fail> {
     match resume_outcome(src, g, grow_part)? {
         ResumeOutcome::Belongs(p) => {
-            if shift.is_none() {
-                // 文案按 pending 作业的进入语义分句：TailPacked 来自 `resize grow`，
-                // Shift 来自 `resize SIZE + --allow-move`——让用户知道该重跑哪条命令
-                let verb = match p.kind {
-                    PlanKind::TailPacked => "`resize grow`",
-                    PlanKind::Shift => "`resize SIZE --allow-move`",
-                };
-                return Err(Fail::refused(format!(
-                    "an unfinished {verb} job owns this target — re-run that command to resume it, or `diskedit abandon` to release it",
-                )));
+            // 缩容不搬移任何分区（新末端更靠左，右侧只会更空）：槽上那份属于当初的
+            // 扩容请求，执行它就是把缩容静默放大成旧扩容（违反"执行方即请求方"归属）
+            let Some(shift) = shift else {
+                return Err(plan_job_owns_target(p.kind, false));
+            };
+            // 作业身份比对，两维都要对上：kind 不同 ⇒ 是另一条命令的作业；终点不同
+            // ⇒ 是同一条命令的另一次请求。两种都不可逆——搬移已写盘，表项终点照抄旧值
+            if p.kind != PlanKind::Shift {
+                return Err(plan_job_owns_target(p.kind, false));
+            }
+            let e = gpt_policy::live_entry(g, grow_part)?;
+            // 本次请求的终点 = 目标当前末端 + 本次 shift。终点是绝对量，与 ckpt 里记下的
+            // 那次请求的终点（plan_requested_end）同一坐标系，可直接比
+            let want_end = e
+                .ending_lba
+                .checked_add(shift)
+                .ok_or_else(|| Fail::refused("requested size overflows the LBA range"))?;
+            if plan_requested_end(&p, e.starting_lba) != Some(want_end) {
+                return Err(plan_job_owns_target(p.kind, true));
             }
             return Ok(p);
         }
@@ -300,6 +315,36 @@ fn foreign_resize_refusal() -> Fail {
     Fail::refused(
         "an unfinished single-partition resize job occupies the checkpoint slot — resume it with `resize-part` or `move`, or release it with `diskedit abandon`",
     )
+}
+
+/// 续跑入口的作业身份不匹配时的拒绝理由。措辞按 pending 作业的进入语义分句：
+/// 用户拿到的必须是**唯一**能接着做下去的那条命令。四个续跑入口（grow / SIZE /
+/// plan / apply）共用这一处——只修其中一处，同一条事实在不同入口的指引迟早漂移
+fn plan_job_owns_target(kind: PlanKind, different_size: bool) -> Fail {
+    let verb = match kind {
+        PlanKind::TailPacked => "`resize grow`",
+        PlanKind::Shift => "`resize SIZE --allow-move`",
+    };
+    if different_size {
+        Fail::refused(format!(
+            "an unfinished {verb} job owns this target for a different size — re-run that command with its original size, or `diskedit abandon` to release it",
+        ))
+    } else {
+        Fail::refused(format!(
+            "an unfinished {verb} job owns this target — re-run that command to resume it, or `diskedit abandon` to release it",
+        ))
+    }
+}
+
+/// 作业身份里的"请求数值"一维：Shift plan 的扩容终点（`min(new_first) − 1`，与 apply
+/// 实际写下的终点是同一实现）。TailPacked 的终点由几何决定、没有数值维度，返回 None
+/// 表示"这一维不参与比对"；几何非法时同样返回 None——比对不上即拒绝，不把损坏现场
+/// 当成"身份相符"放行
+fn plan_requested_end(plan: &Plan, target_start: u64) -> Option<u64> {
+    match plan.kind {
+        PlanKind::TailPacked => None,
+        PlanKind::Shift => grow_end_for(plan, target_start).ok(),
+    }
 }
 
 /// 三态判定的共用内核：几何在内部解析（调用方手上没有已验证几何）
@@ -362,6 +407,36 @@ fn resume_outcome(src: &FileSource, g: &ValidatedGeometry, grow_part: u32) -> Re
 // "FS 是否已缩"算得出当前大小、算不出历史（缩过就再也看不出来），必须存（fs_shrunk）；
 // "搬到第几 chunk"从数据区只看得出"已覆盖"、看不出"到哪"，必须存（chunks_done）。
 // 本文两个 checkpoint（搬移的 Checkpoint 与单分区缩放的 RsCheckpoint）同受此判据约束
+
+/// 一条搬移的块布局：返回 `(每块字节数, 块数上界)`。
+///
+/// 逐块前移的覆盖顺序要求**自重叠**搬移（位移 < 源长度）的单次拷贝不超过位移，
+/// 否则本次拷贝会写进自己还没读的源区。故有效块大小取 `chunk_bytes` 与位移字节的
+/// 较小者。**唯一实现**：搬移循环、checkpoint 采纳与续跑校验都从这里取——同一算式
+/// 抄在多处时，任何一处漂移都会变成"少拷却提交表项"或"重做读到已被覆盖的源"。
+///
+/// `copy_lba` 是本次要搬的扇区数（plan 条目 = 分区长度；move+shrink = 新旧区间的
+/// 较小者），`src_len_lba` 是源区间长度：`shift != 0 && shift < src_len_lba` 即自重叠。
+/// 位移为 0 的条目与块大小算成 0 的现场都没有可用的块布局，返回 `None`
+/// （调用方按"溢出/损坏"拒绝，不拿 0 当除数）
+fn move_chunk_layout(
+    copy_lba: u64,
+    ss: u64,
+    shift_lba: u64,
+    src_len_lba: u64,
+    chunk_bytes: u64,
+) -> Option<(u64, u64)> {
+    let chunk = if shift_lba != 0 && shift_lba < src_len_lba {
+        chunk_bytes.min(shift_lba.checked_mul(ss)?)
+    } else {
+        chunk_bytes
+    };
+    if chunk == 0 {
+        return None;
+    }
+    let count = copy_lba.checked_mul(ss)?.checked_add(chunk - 1)? / chunk;
+    Some((chunk, count))
+}
 
 pub struct Checkpoint {
     pub disk_size: u64,
@@ -540,20 +615,11 @@ impl Checkpoint {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "implausible checkpoint entry index"));
         }
         let chunks_limit = match moves.get(cur_index as usize) {
-            Some(m) => {
-                // 与搬移循环同一份确定性布局：自重叠条目（位移小于长度）的 chunk 收敛到
-                // 位移字节以内，chunk 数按收敛后的值算，两侧口径一致才不会误判损坏
-                let delta_bytes = m.delta_lba.saturating_mul(ss);
-                let ec = if m.delta_lba != 0 && m.delta_lba < m.len_lba {
-                    chunk_bytes.min(delta_bytes)
-                } else {
-                    chunk_bytes
-                };
-                m.len_lba.checked_mul(ss)
-                    .and_then(|t| t.checked_add(ec - 1))
-                    .map(|t| t / ec)
-                    .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "checkpoint chunk count overflow"))?
-            }
+            // 与搬移循环同一份确定性布局（见 `move_chunk_layout`）：chunk 数按收敛后的
+            // 块大小算，两侧口径一致才不会误判损坏
+            Some(m) => move_chunk_layout(m.len_lba, ss, m.delta_lba, m.len_lba, chunk_bytes)
+                .map(|(_, count)| count)
+                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "checkpoint chunk count overflow"))?,
             // 全部条目已提交：进度归零，残留值即损坏
             None => 0,
         };
@@ -564,33 +630,10 @@ impl Checkpoint {
     }
 }
 
-/// 当前目标与 checkpoint 记录的"创建时事实"比对：指纹或 loop 映射任一不符即外来现场。
-/// 指纹只对"双方都有意义"的值比对——零指纹（真块设备节点 / 非 Unix 平台）不构成证据；
-/// 映射的有无本身参与比对：经 loop 写入的现场不允许改从裸镜像续跑（反之亦然），
-/// 两种途径下同一 LBA 指向的字节不同，映射差异不是可忽略的记法差
-fn scene_mismatch(
-    src: &FileSource,
-    fp: &crate::dev::TargetFingerprint,
-    map: &Option<(u64, u64)>,
-) -> Option<String> {
-    if fp.meaningful() && src.fingerprint.meaningful() && *fp != src.fingerprint {
-        return Some(format!(
-            "file fingerprint changed since the checkpoint was written (was dev:{} ino:{} size:{}, now dev:{} ino:{} size:{})",
-            fp.dev, fp.ino, fp.size, src.fingerprint.dev, src.fingerprint.ino, src.fingerprint.size,
-        ));
-    }
-    match (map, &src.loop_mapping) {
-        (Some((ro, rl)), Some((co, cl))) if (*ro, *rl) != (*co, *cl) => {
-            Some(format!("loop mapping changed since the checkpoint was written (was offset={ro} sizelimit={rl}, now offset={co} sizelimit={cl})"))
-        }
-        (Some(_), None) => {
-            Some("checkpoint was written through a loop device, this target is not one".to_string())
-        }
-        (None, Some(_)) => {
-            Some("checkpoint was written on a non-loop target, this one is reached through a loop device".to_string())
-        }
-        _ => None,
-    }
+/// 当前目标与 checkpoint 记录的"创建时事实"比对：判据与 journal 共用 `dev::scene_mismatch`
+/// （同一种异常在两条恢复路径上必须得到同一个结论）
+fn checkpoint_foreign(src: &FileSource, fp: &crate::dev::TargetFingerprint, map: &Option<(u64, u64)>) -> Option<String> {
+    crate::dev::scene_mismatch(fp, map, &src.fingerprint, &src.loop_mapping)
 }
 
 /// 读 checkpoint 现场：在身份给出的候选落点上（首项为本次命名，其后是历史命名）找**可读**
@@ -627,14 +670,14 @@ fn read_checkpoint(src: &FileSource, g: &ValidatedGeometry) -> Result<(Checkpoin
         };
         match (Checkpoint::deserialize(&bytes, &lim), RsCheckpoint::deserialize(&bytes, &lim)) {
             (Ok(c), _) => {
-                if let Some(why) = scene_mismatch(src, &c.fp, &c.map) {
+                if let Some(why) = checkpoint_foreign(src, &c.fp, &c.map) {
                     foreign.push((path.clone(), why));
                 } else {
                     found.push((path.clone(), CheckpointSlot::Relocation(Box::new(c))));
                 }
             }
             (_, Ok(c)) => {
-                if let Some(why) = scene_mismatch(src, &c.fp, &c.map) {
+                if let Some(why) = checkpoint_foreign(src, &c.fp, &c.map) {
                     foreign.push((path.clone(), why));
                 } else {
                     found.push((path.clone(), CheckpointSlot::Resize(Box::new(c))));
@@ -1036,18 +1079,9 @@ fn prepare_apply(
             // chunk 上界（与搬移循环同一份确定性布局）：越界不是合法运行能产出的进度，
             // 静默 min 会把"跳过未拷贝的 chunk"放行成提交
             let chunk_bound = match plan.moves.get(done as usize) {
-                Some(m) => {
-                    let delta_bytes = m.delta_lba.saturating_mul(plan.ss);
-                    let ec = if m.delta_lba != 0 && m.delta_lba < m.len_lba {
-                        chunk_len.min(delta_bytes)
-                    } else {
-                        chunk_len
-                    };
-                    m.len_lba.checked_mul(plan.ss)
-                        .and_then(|t| t.checked_add(ec - 1))
-                        .map(|t| t / ec)
-                        .ok_or_else(|| crate::outcome::Fail::infra("relocation chunk count overflow"))?
-                }
+                Some(m) => move_chunk_layout(m.len_lba, plan.ss, m.delta_lba, m.len_lba, chunk_len)
+                    .map(|(_, count)| count)
+                    .ok_or_else(|| crate::outcome::Fail::infra("relocation chunk count overflow"))?,
                 None => 0,
             };
             if c.chunks_done > chunk_bound {
@@ -1183,6 +1217,23 @@ fn execute_apply(
         ckpt.chunks_done = entry_resume;
         // swap：内容可弃 → 不搬数据，表项落位后 mkswap 重建（UUID/卷标保持）
         if m.is_swap {
+            // 类型复核：`is_swap` 来自 ckpt（当初的类型判定），锁下这份盘上表才是现状。
+            // 两次运行之间该分区被改成别的类型时，按旧判定 mkswap 会把一个已不属于
+            // swap 的分区覆写掉。类型读不出来同样按"不再成立"拒绝，绝不用无知当许可
+            let still_swap = match crate::gpt_policy::live_entry(&g, m.part_num) {
+                Ok(e) => is_swap_guid(&e.partition_type_guid),
+                Err(_) => false,
+            };
+            if !still_swap {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "partition {} is not a swap partition on disk any more (its type changed since the checkpoint) — \
+                         refusing to recreate it there; release the scene with `diskedit abandon`",
+                        m.part_num
+                    ),
+                ));
+            }
             // PARTUUID/分区号由条目原样保留（unique guid 不动），只改位置。
             // 绝对赋值而非 += delta：commit 后、ckpt 更新前崩溃的重放幂等
             {
@@ -1232,12 +1283,14 @@ fn execute_apply(
         // 自重叠搬移（位移小于分区长度）下，重做 chunk 的源区间会被先落盘的更靠尾
         // chunk 的写覆盖，除非每个 chunk 不大于位移（写区间起点 ≥ 任何重做源区间终点）。
         // 因此 chunk 收敛到位移字节以内，且停用批量提交——批量攒下的未持久化 chunk
-        // 同样会探入重做区间。非自重叠搬移写区间与源区间不相交，两种优化照常可用
+        // 同样会探入重做区间。非自重叠搬移写区间与源区间不相交，两种优化照常可用。
+        // 块布局取自唯一实现，与 checkpoint 的进度上界同源
+        let (entry_chunk, _) = move_chunk_layout(m.len_lba, plan.ss, m.delta_lba, m.len_lba, chunk_len)
+            .ok_or_else(overflow)?;
+        // 分派判据是**几何**自重叠（位移小于分区长度），不是"块大小是否真被收敛"：
+        // 请求的 chunk 本来就不大于位移时布局已经安全，但 durable 边界仍逐 chunk 推进
+        // 并由下方的批量开关决定是否攒批——两种优化都只在非自重叠时可用
         let overlap = m.delta_lba < m.len_lba;
-        let delta_bytes = m.delta_lba
-            .checked_mul(plan.ss)
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "relocation byte offset overflows — refusing"))?;
-        let entry_chunk = if overlap { chunk_len.min(delta_bytes) } else { chunk_len };
         if overlap && entry_chunk < chunk_len {
             log(&format!(
                 "partition {}: self-overlapping move, chunk size reduced to {} bytes to keep redo reads intact",
@@ -1383,7 +1436,9 @@ fn finalize_growth(
                 // 这句是 FS 步的实情，不是对区域内容的断言：`unknown` 同时涵盖空区域与
                 // 认不出的类型，PV 的空间则在收尾的 pvresize 链里生效
                 None => log(match g {
-                    Growable::OverlayPending => "partition extended (the overlay RW layer is created at first mount)",
+                    // 只说这句实情：内层没认出文件系统（未格式化 / 认不出的格式 / 字节不足），
+                    // 不替它断言是哪一种
+                    Growable::OverlayPending => "partition extended (no filesystem was identified in the overlay RW layer)",
                     Growable::NoFilesystem(Some(FsKind::Lvm2Pv)) => "partition extended (the PV space takes effect through the pvresize chain)",
                     _ => "partition extended (filesystem not resized — its type was not identified)",
                 }),
@@ -1413,7 +1468,14 @@ fn finalize_growth(
             src.set_mutation(crate::dev::Mutation::ExternalFsTool);
             src.mark_non_reversible()?;
             match t.resize_fs(src) {
-                Ok(()) => log("filesystem resized"),
+                Ok(leak) => {
+                    log("filesystem resized");
+                    // 扩容已成功，卸载的成败是另一条后置条件：它不改写成功这一事实，
+                    // 只作为一条待办随结果浮出
+                    if let Some(leak) = leak {
+                        pending.push(leak.into_pending(part));
+                    }
+                }
                 Err(e) => pending.push(Pending::new(
                     part,
                     PendingKind::Fs,
@@ -1599,22 +1661,14 @@ impl RsCheckpoint {
         {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "resize checkpoint range outside usable area"));
         }
-        // 进度上界同 Checkpoint：搬移区间的 chunk 总数。区间端点已验非倒挂，乘法仍 checked。
-        // 拷贝总长与搬移循环同口径：move+shrink 只拷新旧区间的较小者；自重叠搬移（位移小于
-        // 旧区间长度）的 chunk 收敛到位移字节以内。两侧口径一致才不会误判损坏
+        // 进度上界同 Checkpoint：搬移区间的 chunk 总数，块布局取自唯一实现
+        // （见 `move_chunk_layout`）。拷贝总长与搬移循环同口径：move+shrink 只拷新旧
+        // 区间的较小者，两侧一致才不会误判损坏
         let moved = old_start.abs_diff(new_start);
         let old_len = old_end - old_start + 1;
         let copy_len = old_len.min(new_end - new_start + 1);
-        let ec = if moved != 0 && moved < old_len {
-            chunk_bytes.min(moved.checked_mul(ss).ok_or_else(|| {
-                io::Error::new(io::ErrorKind::InvalidData, "checkpoint chunk count overflow")
-            })?)
-        } else {
-            chunk_bytes
-        };
-        let chunks_limit = copy_len.checked_mul(ss)
-            .and_then(|t| t.checked_add(ec - 1))
-            .map(|t| t / ec)
+        let chunks_limit = move_chunk_layout(copy_len, ss, moved, old_len, chunk_bytes)
+            .map(|(_, count)| count)
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "resize checkpoint chunk count overflow"))?;
         if chunks_done > chunks_limit {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "implausible resize checkpoint chunk progress"));
@@ -1949,10 +2003,22 @@ fn execute_resize(
         // （与扩容方向相反），undo 仍然安全可用。判据是可逆性，不是"有没有调外部工具"。
         // shrink_fs 的契约按旧分区尺寸比对（FS 小于分区时实为良性扩容，见其文档）：
         // new_bytes ≤ 旧分区尺寸由 plan 的缩容方向保证
-        crate::fsops::shrink_fs(src, part, fstype, new_bytes)?;
+        // FS 已缩，卸载的成败是另一条后置条件：它不改写缩容这一事实，只作为待办浮出。
+        // 回读不出来（缩容可能已完成、落点未证实）同理——两者都是"核心操作已完成、
+        // 某项未收口"
+        let o = crate::fsops::shrink_fs(src, part, fstype, new_bytes)?;
+        let line = o.verify.ok_line(new_bytes);
+        if let Some(p) = o.verify.pending(part) {
+            pending.push(p);
+        }
+        if let Some(leak) = o.leak {
+            pending.push(leak.into_pending(part));
+        }
         ckpt.fs_shrunk = true;
         save(&ckpt)?;
-        log(&format!("fs shrunk to {new_bytes} bytes"));
+        if let Some(l) = line {
+            log(&l);
+        }
         fault_rs_after_fs_shrink();
     }
 
@@ -1982,15 +2048,10 @@ fn execute_resize(
         let total = copy_len.checked_mul(ss).ok_or_else(byte_overflow)?;
         // 自重叠搬移（位移小于分区长度）下，重做 chunk 的源区间会被先落盘 chunk 的写
         // 覆盖，除非每个 chunk 不大于位移（两个方向同理：写区间起点与重做源区间终点
-        // 至少隔一个位移）。chunk 收敛到位移字节以内；此处本就逐 chunk checkpoint
-        let entry_chunk = if moved < old_end - old_start + 1 {
-            chunk_len.min(
-                moved.checked_mul(ss)
-                    .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "relocation byte offset overflows — refusing"))?,
-            )
-        } else {
-            chunk_len
-        };
+        // 至少隔一个位移）。chunk 收敛到位移字节以内；此处本就逐 chunk checkpoint。
+        // 块布局取自唯一实现，与 checkpoint 的进度上界同源
+        let (entry_chunk, _) = move_chunk_layout(copy_len, ss, moved, old_end - old_start + 1, chunk_len)
+            .ok_or_else(byte_overflow)?;
         let order: Vec<(u64, u64)> = {
             let mut v = Vec::new();
             let mut pos = 0u64;
@@ -3038,6 +3099,54 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
+    /// 续跑的身份比对必须含**请求数值**：同 kind、不同 SIZE 的重跑不得静默执行旧 plan。
+    /// 不比对数值时的后果正是断言反面的那一幕——搬移按旧 X 落位、表项照抄旧终点，
+    /// 本次请求的 Y 被静默丢弃，而写入不可逆
+    #[test]
+    fn shift_resume_requires_the_same_requested_size() {
+        let chunk: u64 = 1024 * 1024;
+        const P1_START: u64 = 2048;
+        const P1_END: u64 = 6143;
+        const SHIFT: u64 = 4096;
+        let (mut src, path) = plan_fixture(&[(1, [0x11; 16], P1_START, P1_END), (2, [0x22; 16], 8192, 10239)]);
+        let ckpt_path = src.identity.checkpoint_path().to_path_buf();
+        let g = table::load_gpt(&src).unwrap().unwrap();
+
+        // 槽位为空时现算一份 Shift plan，把它当作"当初那次请求"的进度记录落盘
+        let plan = plan_shift(&mut src, 1, Some(SHIFT)).unwrap();
+        assert!(plan.kind == PlanKind::Shift);
+        // 身份里的数值一维就是它：请求的扩容终点 = 目标原末端 + shift
+        assert_eq!(grow_end_for(&plan, P1_START).unwrap(), P1_END + SHIFT);
+        let ck = Checkpoint {
+            disk_size: src.size, ss: g.ss, grow_part: 1, last_usable_lba: plan.last_usable_lba,
+            moves: plan.moves.clone(), kind: PlanKind::Shift, cur_index: 0, chunks_done: 0, chunk_bytes: chunk,
+            fp: Default::default(),
+            map: None,
+        };
+        atomic_write_ckpt(&ckpt_path, &ck.serialize()).unwrap();
+
+        // 原样重跑：两维都对上 ⇒ 续跑，终点仍是当初请求的那个
+        let resumed = plan_shift(&mut src, 1, Some(SHIFT)).expect("re-running the same size must resume");
+        assert!(resumed.kind == PlanKind::Shift);
+        assert_eq!(grow_end_for(&resumed, P1_START).unwrap(), P1_END + SHIFT);
+
+        // 同 kind、不同 SIZE
+        let e = plan_shift(&mut src, 1, Some(SHIFT + 4096))
+            .err()
+            .expect("a different size must not silently execute the pending plan");
+        assert!(matches!(&e, Fail::Refused(m) if m.contains("different size")), "{e:?}");
+
+        // 槽上是 Shift 作业，grow 入口不得把它当自己的续跑
+        let e = plan_resuming(&mut src, 1).err().expect("a Shift job must refuse the grow entry");
+        assert!(matches!(&e, Fail::Refused(m) if m.contains("resize SIZE")), "{e:?}");
+        // 归属仍是本分区的作业：断言被挡住的是身份比对，不是归属判定
+        assert!(pending_relocation(&src, 1).unwrap());
+
+        drop(src);
+        let _ = std::fs::remove_file(&ckpt_path);
+        let _ = std::fs::remove_file(&path);
+    }
+
     /// 槽位被**另一族**作业（单分区 resize 的 RsCheckpoint）占着：plan 型搬移的两条生成
     /// 路径都必须拒绝：若与空槽同归 `Empty`，plan 会现算一份计划并报
     /// 成功，而 apply 在 prepare_apply 的分派处必然拒绝——同一条命令两个入口给出相反结论
@@ -3807,8 +3916,9 @@ mod tests {
         let _ = std::fs::remove_file(&p);
     }
 
-    /// scene_mismatch 三判据：指纹不符、映射不符、映射有无之别各自拦下；双零指纹
-    /// （真块设备节点 / 非 Unix 平台）不构成证据，比对只对"双方都有意义"的值进行
+    /// `dev::scene_mismatch` 的逐字段判据：device id / inode 不符拦下，尺寸不符同样拦下；每个
+    /// 字段只在**两侧都有证据**时参与（零值 = 该平台或该载体给不出这个字段，不等于"匹配"）。
+    /// 该判据由 checkpoint 与 journal 两族现场共用，故在这里随 checkpoint 一侧一起测
     #[test]
     fn scene_mismatch_guards_foreign_scenes() {
         let fp = |dev: u64, ino: u64, size: u64| crate::dev::TargetFingerprint { dev, ino, size };
@@ -3818,21 +3928,35 @@ mod tests {
             ..crate::support::src_from("scene", &[])
         };
 
-        // 指纹不符 → 拦
+        // device id / inode 不符 → 拦
         let s = scene(fp(7, 42, 1024), None);
-        assert!(scene_mismatch(&s, &fp(7, 43, 1024), &None).unwrap().contains("fingerprint"));
-        // 指纹一致且双方都无映射 → 放行
+        assert!(checkpoint_foreign(&s, &fp(7, 43, 1024), &None).unwrap().contains("fingerprint"));
+        // 三者一致且双方都无映射 → 放行
         let s = scene(fp(7, 42, 1024), None);
-        assert!(scene_mismatch(&s, &fp(7, 42, 1024), &None).is_none());
+        assert!(checkpoint_foreign(&s, &fp(7, 42, 1024), &None).is_none());
+        // 尺寸不符 → 拦（`Metadata::len()` 处处可读，故非 Unix 平台也走这条）
+        let s = scene(fp(0, 0, 1024), None);
+        assert!(checkpoint_foreign(&s, &fp(0, 0, 2048), &None).unwrap().contains("size changed"));
+        // 尺寸一致、inode 无证据 → 放行
+        let s = scene(fp(0, 0, 1024), None);
+        assert!(checkpoint_foreign(&s, &fp(0, 0, 1024), &None).is_none());
         // 映射值不符 → 拦
         let s = scene(fp(7, 42, 1024), Some((0, 0)));
-        assert!(scene_mismatch(&s, &fp(7, 42, 1024), &Some((4096, 0))).unwrap().contains("loop mapping"));
+        assert!(checkpoint_foreign(&s, &fp(7, 42, 1024), &Some((4096, 0))).unwrap().contains("loop mapping"));
         // 映射有无之别 → 拦：loop 写入的现场不能改从裸镜像续跑，反之亦然
         let s = scene(fp(7, 42, 1024), None);
-        assert!(scene_mismatch(&s, &fp(7, 42, 1024), &Some((0, 0))).unwrap().contains("loop device"));
-        // 双零指纹不构成证据（真块设备 / 非 Unix 平台）：指纹不同也放行
+        assert!(checkpoint_foreign(&s, &fp(7, 42, 1024), &Some((0, 0))).unwrap().contains("loop device"));
+        // 无字段可比的载体（真块设备节点：inode 与元数据长度都拿不到）不构成证据，放行
         let s = scene(fp(0, 0, 0), None);
-        assert!(scene_mismatch(&s, &fp(7, 42, 1024), &None).is_none());
+        assert!(checkpoint_foreign(&s, &fp(7, 42, 1024), &None).is_none());
+        // 一侧有尺寸证据、另一侧没有：不把"给不出"读成"匹配"，也不读成"不符"
+        let s = scene(fp(0, 0, 0), None);
+        assert!(checkpoint_foreign(&s, &fp(0, 0, 1024), &None).is_none());
+        let s = scene(fp(0, 0, 1024), None);
+        assert!(checkpoint_foreign(&s, &fp(0, 0, 0), &None).is_none());
+        // "一个可比字段都没有"这一档是报出身份保障范围的那一档（undo 的 note）：全零指纹
+        assert!(!crate::dev::TargetFingerprint::default().has_any_evidence());
+        assert!(fp(0, 0, 1024).has_any_evidence() && fp(7, 0, 0).has_any_evidence());
         let _ = std::fs::remove_file(&s.path);
     }
 }

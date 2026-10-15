@@ -25,6 +25,33 @@ fn sidecar(dir: &std::path::Path, name: &str, suffix: &str) -> std::path::PathBu
     dir.join(format!("{name}{suffix}"))
 }
 
+/// v4 journal 头长 = magic(5) + 身份段(dev/ino/size 各 8 字节 + 有无 loop 映射 1 字节 +
+/// offset/sizelimit 各 8 字节 = 41) + 身份段的 CRC32(4)。与 `src/dev.rs` 的
+/// `Journal::HEADER_LEN` 同值——集成测试是独立 crate 取不到那里的常量，故与上方后缀词表
+/// 一样复写一份（src 侧 `dev::tests` 有用例逐字段钉住布局，改格式时这里会一起暴露）
+const V4_HEADER_LEN: usize = 5 + 41 + 4;
+/// 记录帧头 `[len u32][crc u32]` 的字节数（同 `src/dev.rs` 的 `REC_HDR`）
+const REC_HDR: usize = 8;
+
+/// 重算 v4 头里身份段的 CRC。头**自带**这个 CRC，故测试改过身份字段（或只造一个头）之后
+/// 必须同步重算——否则先报出来的是"头校验失败"，身份核对那条路径就测不到
+fn v4_resign_header(bytes: &mut [u8]) {
+    let crc = crc::Crc::<u32>::new(&crc::CRC_32_ISO_HDLC);
+    let mut d = crc.digest();
+    d.update(&bytes[..V4_HEADER_LEN - 4]);
+    bytes[V4_HEADER_LEN - 4..V4_HEADER_LEN].copy_from_slice(&d.finalize().to_le_bytes());
+}
+
+/// 一份**零记录**的 v4 journal：头 + 全零身份段（"取不到稳定身份的载体"那一类，身份核对
+/// 因此不参与）+ 身份段 CRC。它描述的是"零次写入"——`ensure` 写完头、第一条记录还没落盘
+/// 就中断，留下的就是这个形态
+fn v4_header_only() -> Vec<u8> {
+    let mut b = b"DEJL\x04".to_vec();
+    b.resize(V4_HEADER_LEN, 0);
+    v4_resign_header(&mut b);
+    b
+}
+
 fn fixture_gpt_image(path: &std::path::Path) {
     let ss = 512u64;
     let data = vec![0u8; 100 * ss as usize];
@@ -294,7 +321,7 @@ fn journal_lifecycle_and_table_undo() {
     assert_eq!(c, 20, "{e}");
     let jb = std::fs::read(&journal).unwrap();
     let mut mid = jb.clone();
-    mid[5 + 16 + 1] ^= 0xFF; // magic 5 字节 + 记录头 16 字节之后即第 1 条的数据
+    mid[V4_HEADER_LEN + REC_HDR + 1] ^= 0xFF; // 头之后是记录头 `[len][crc]`，再往后即第 1 条记录的数据
     std::fs::write(&journal, &mid).unwrap();
     let (c, e) = run(&["undo", img_s, "--yes"]);
     assert_ne!(c, 0, "mid-file corruption must refuse undo: {e}");
@@ -309,9 +336,10 @@ fn journal_lifecycle_and_table_undo() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// 目标在 journal 写下之后被外部缩短：回放越不过新的 EOF。v3 journal 记了每条写后内容，
-/// 回放前逐条与盘上核对；越界处读不全即拒绝，绝不在"无法核对"的区域上写。拒绝必须
-/// 不改变文件长度——那正是"越过 EOF 的写会把文件写长"的那条路
+/// 目标在 journal 写下之后被外部缩短：v4 的头里记着创建时的目标指纹，而尺寸处处可读，
+/// 故"缩短"就是"尺寸不符"，回放因此在任何字节落地之前被拒（这条判据不区分平台）。没有尺寸
+/// 证据的载体（真块设备节点：元数据长度恒 0）上改由逐条核对在"记录越过了新的 EOF"处露出。
+/// 两条路都必须在第一个字节写回之前拦下——"越过 EOF 的写会把文件写长"正是这里要防的那条路
 #[test]
 fn undo_refuses_when_the_target_shrank_under_its_journal() {
     let dir = std::env::temp_dir().join(format!("diskedit_shr_{}", std::process::id()));
@@ -345,27 +373,90 @@ fn undo_refuses_when_the_target_shrank_under_its_journal() {
     assert_eq!(c, 20, "partition created but mkfs failed must be EXIT_PARTIAL: {e}");
     assert!(journal.exists(), "a partial operation leaves its journal behind: {e}");
 
-    // 缩到一半：journal 里落在旧末端附近的记录（表写入）越过了新的 EOF
+    // 缩到一半：头里记的 size 与现状不符，且 journal 里落在旧末端附近的记录（表写入）
+    // 越过了新的 EOF——两道判据都指向"这不是当时那个目标"，都必须拒绝
     let half = 4 * 1024 * 1024;
     set_len(half);
+    // 拒绝前的整盘内容：核对整批发生在第一个字节写回之前，所以"一个字都没写回"是
+    // 这里可断言的事实（逐条边核对边回放的话，能读到的那几条已经先被回滚了）
+    let before = std::fs::read(&img).unwrap();
     let (c, e) = run(&["undo", img_s, "--yes"]);
-    assert_ne!(c, 0, "undo must refuse a region it cannot verify against the target: {e}");
-    assert!(e.contains("cannot verify the journaled write"), "{e}");
+    assert_ne!(c, 0, "undo must refuse a target that is no longer the one the journal was written for: {e}");
+    // 尺寸处处可读，故这条判据不区分平台：镜像被缩短即在身份核对处被拦下
+    assert!(e.contains("size changed"), "a shrink must be caught by the size field of the identity check: {e}");
     // 出路必须说清：先把目标恢复原状再重跑，或确认不再需要回滚时 abandon
     assert!(e.contains("restore the target to the state it was in"), "{e}");
     assert!(e.contains("diskedit abandon"), "{e}");
-    assert_eq!(std::fs::metadata(&img).unwrap().len(), half, "a refused replay must not extend the file");
+    assert_eq!(std::fs::read(&img).unwrap(), before, "a refused replay must not write back any entry");
     assert!(journal.exists(), "the journal must be kept for a retry against the target as it was");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// 身份核对拦下"为别的目标写下的 journal"：v4 的头记着创建时目标的指纹与 loop 映射，
+/// 与当前目标不符即拒绝回放。拒绝必须落在任何写回之前，且不动盘面、不删现场——放弃它
+/// 是用户的决定（`abandon`），不是拒绝的副作用。
+///
+/// 这里改的是头里"经 loop 写入"这一位（magic 之后第 24 字节，即身份段里 dev/ino/size
+/// 各 8 字节之后的那一个）：真实世界里它对应"现场是经 loop 设备写下的，而当前目标不是"。它与指纹同属
+/// `dev::scene_mismatch` 的判据（两族恢复现场共用），且不依赖平台是否提供稳定 inode——
+/// 纯指纹不符的用例在 `dev::tests` 里有另一份
+#[test]
+fn undo_refuses_a_journal_whose_recorded_scene_is_not_this_target() {
+    let dir = std::env::temp_dir().join(format!("diskedit_foreign_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let img = dir.join("f.img");
+    std::fs::write(&img, vec![0u8; 8 * 1024 * 1024]).unwrap();
+    let exe = env!("CARGO_BIN_EXE_DiskEdit");
+    let img_s = img.to_str().unwrap();
+    let journal = sidecar(&dir, "f.img", JOURNAL_SUFFIX);
+    let run = |args: &[&str]| -> (i32, String) {
+        let out = Command::new(exe).args(args).output().unwrap();
+        (out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stderr).into_owned())
+    };
+    let exe_dir = std::path::Path::new(exe).parent().unwrap().to_path_buf();
+    let run_no_mkfs = |args: &[&str]| -> (i32, String) {
+        let out = Command::new(exe).args(args).env("PATH", &exe_dir).output().unwrap();
+        (out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stderr).into_owned())
+    };
+
+    let (c, e) = run(&["new", img_s, "--yes"]);
+    assert_eq!(c, 0, "{e}");
+    let (c, e) = run(&["add", img_s, "--start", "2048", "--end", "4095"]);
+    assert_eq!(c, 0, "{e}");
+    // mkfs 工具从 PATH 上摘掉 ⇒ 建成分区但 PARTIAL，留下一份带记录的真 journal
+    let (c, e) = run_no_mkfs(&["create", img_s, "--size", "1M", "--fs", "ext4"]);
+    assert_eq!(c, 20, "{e}");
+    assert!(journal.exists(), "a partial operation leaves its journal behind: {e}");
+
+    let mut jb = std::fs::read(&journal).unwrap();
+    assert!(jb.len() > V4_HEADER_LEN, "the journal must hold at least one record to reach the identity check");
+    jb[5 + 24] = 1; // 记成"经 loop 写入"
+    v4_resign_header(&mut jb);
+    std::fs::write(&journal, &jb).unwrap();
+
+    let before = std::fs::read(&img).unwrap();
+    let (c, e) = run(&["undo", img_s, "--yes"]);
+    assert_ne!(c, 0, "a journal written for another scene must not be replayed: {e}");
+    assert!(e.contains("this journal is not replayed here"), "{e}");
+    assert!(e.contains("loop device"), "the refusal must name the field that differs: {e}");
+    assert!(e.contains("restore the target to the state it was in"), "the refusal must point at the way out: {e}");
+    assert!(e.contains("diskedit abandon"), "the refusal must point at the way out: {e}");
+    assert_eq!(std::fs::read(&img).unwrap(), before, "a refused replay must not write back any entry");
+    assert_eq!(std::fs::read(&journal).unwrap(), jb, "a refused replay must leave the journal as it was");
 
     let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// 不开 journal 的写盘命令（mkfs / resizefs / check 的修复）在目标上留有未收尾现场时必须
 /// 拒绝：它们会作废那份 journal 所指的旧布局，而用户随后 undo 仍会把旧表字节回放上去，
-/// 形成"表与盘上内容自相矛盾"的状态。另外三条同族不变量：
-/// - `ensure` 建好文件却没写完 magic 留下的 0 字节空壳是"残骸"，不是"journal 损坏"；
-/// - 只含 magic、零条记录的 journal 描述的是"零次写入"：它不构成未收尾现场，
-///   否则一次在创建 journal 时掉电就会把目标永久锁死；
+/// 形成"表与盘上内容自相矛盾"的状态。另外四条同族不变量：
+/// - 0 字节的空壳是"残骸"（零次写入），不是"journal 损坏"；
+/// - 零记录的完整头同样描述"零次写入"：两者都不构成未收尾现场，否则一次在创建 journal
+///   时掉电就会把目标永久锁死；
+/// - 1..头长-1 字节的**半截头**不是残骸：它与"原 journal 被外部截断"不可区分，按现场处理；
+/// - 旧格式（v3）同样按现场处理：版本只升不兼，拒绝不删现场，只有 `abandon` 能释放；
 /// - undo 成功回滚后要一并释放该事务的 checkpoint（否则它描述一个已被回滚掉的世界，
 ///   让后续 resize 被判成 Divergent 而永久拒绝）
 #[test]
@@ -435,21 +526,46 @@ fn pending_recovery_blocks_unjournaled_writers_and_empty_shell_is_not_corruption
     assert_eq!(c, 0, "an empty journal shell must not be reported as corruption: {e}");
     assert!(!journal.exists(), "a successful journaled command must drop the journal");
 
-    // 只含 magic、零记录的 journal（`ensure` 写完 magic 就中断留下的）：它描述的是零次写入，
-    // 既不该挡住 mkfs，也不该被报成未收尾现场（尾字节 = 当前 journal 格式版本）
-    std::fs::write(&journal, b"DEJL\x03").unwrap();
+    // 只含头、零记录的 journal（`ensure` 写完头、第一条记录还没落盘就中断留下的）：它描述的
+    // 是零次写入，既不该挡住 mkfs，也不该被报成未收尾现场
+    std::fs::write(&journal, v4_header_only()).unwrap();
     let (c, e) = run(&["mkfs", &format!("{img_s}:1"), "ext4", "--yes"]);
     assert!(
         !e.contains("owns this target"),
-        "a record-less journal shell must not block other writers: code={c} {e}"
+        "a record-less journal header must not block other writers: code={c} {e}"
     );
 
-    // 但**旧格式**的 journal（magic 尾字节即格式版本）属于"读不出来的现场"：记录布局已经变了，
-    // 一律不猜着回放，而是当作有事没做完——目标仍被它占着（30）。版本只升不兼
-    std::fs::write(&journal, b"DEJL\x01").unwrap();
+    // 但**半截头**（1..头长-1 字节，这里取前 20 字节）属于"读不出来的现场"：它既可能是一次
+    // 没写完的初始化，也可能是原 journal 被外部截断到这么短——两者在内容上不可区分，而后者是
+    // 丢了记录的现场。故不按"零次写入"放行：写命令被挡（30）、undo 也拒绝、文件一字不动，
+    // 只有 `abandon` 能释放（它是改名保留字节，不是覆盖）
+    let torn = v4_header_only()[..20].to_vec();
+    std::fs::write(&journal, &torn).unwrap();
+    let (c, e) = run(&["mkfs", &format!("{img_s}:1"), "ext4", "--yes"]);
+    assert_eq!(c, 30, "a torn header must stop other writers: {e}");
+    assert!(e.contains("owns this target"), "{e}");
+    assert!(e.contains("abandon"), "the refusal must point at the way out: {e}");
+    let (c, e) = run(&["undo", img_s, "--yes"]);
+    assert_eq!(c, 30, "a torn header must not be replayed: {e}");
+    assert!(e.contains("abandon"), "the refusal must point at the way out: {e}");
+    assert_eq!(std::fs::read(&journal).unwrap(), torn, "a torn header must be left byte-identical");
+    let (c, e) = run(&["abandon", img_s, "--yes"]);
+    assert_eq!(c, 0, "abandon must be able to release a torn header: {e}");
+    assert!(!journal.exists(), "abandon must move it out of the active name: {e}");
+
+    // 但**旧格式**的 journal（magic 的尾字节即格式版本）属于"读不出来的现场"：记录布局已经变了，
+    // 一律不猜着回放，而是当作有事没做完——目标仍被它占着（30）。版本只升不兼，拒绝也不删现场：
+    // 那份旧 journal 只能由用户显式 `abandon` 释放
+    let v3 = b"DEJL\x03".to_vec();
+    std::fs::write(&journal, &v3).unwrap();
     let (c, e) = run(&["mkfs", &format!("{img_s}:1"), "ext4", "--yes"]);
     assert_eq!(c, 30, "a journal of an older format must stop other writers: {e}");
     assert!(e.contains("abandon"), "the refusal must point at the way out: {e}");
+    assert_eq!(std::fs::read(&journal).unwrap(), v3, "refusing an older format must leave it byte-identical");
+    let (c, e) = run(&["undo", img_s, "--yes"]);
+    assert_eq!(c, 30, "an older format must not be replayed either: {e}");
+    assert!(e.contains("abandon"), "the refusal must point at the way out: {e}");
+    assert_eq!(std::fs::read(&journal).unwrap(), v3, "undo must not touch a journal it cannot read");
     let (c, e) = run(&["abandon", img_s, "--yes"]);
     assert_eq!(c, 0, "abandon must be able to release an unreadable journal: {e}");
     assert!(!journal.exists(), "abandon must move it out of the active name: {e}");
@@ -2352,7 +2468,7 @@ mod crash_recovery {
         let grow_argv = ["resize", target.as_str(), "grow", "--allow-move", "--yes", "--no-fs"];
         let (c, e) = run(&grow_argv);
         assert_eq!(c, 10, "grow must refuse a pending SIZE job: {e}");
-        assert!(e.contains("`resize SIZE`"), "the refusal must name the job it belongs to: {e}");
+        assert!(e.contains("`resize SIZE --allow-move`"), "the refusal must name the job it belongs to: {e}");
         assert!(ckpt.exists(), "a refusal must not touch the scene");
 
         // 重跑原命令 ⇒ 续跑并收尾（此刻 p1 与 p2 已紧邻，grow 只剩搬移一条路）

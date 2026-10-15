@@ -345,15 +345,55 @@ pub(crate) fn live_entry_in(entries: &[GPTPartitionEntry], part: u32) -> Result<
 /// 返回 `Fail` 而不是 `(码, 文案)`：前缀与码必须同源——否则调用点会各自拼 "refused: "
 /// 前缀，碰上 30 就自相矛盾（打出 "refused: parse failed: ..." 却退出 30）
 pub(crate) fn partition_bytes(src: &FileSource, part: u32) -> Result<(u64, u64), Fail> {
-    // 无表 = 请求与目标现状不匹配(10)；表在但结构非法 = 盘内容故障(30)：两种出口都由
-    // read_table 一处给出，不在这里重写一遍 GPT→MBR 的判定
-    match read_table(src)? {
+    partition_bytes_in(&read_table(src)?, part, src.sector_size)
+}
+
+/// 写表前一次读表得到的现场：目标分区区间 + 其余分区区间。类型化而非元组，
+/// 两个成员的含义在调用点一眼可辨
+#[cfg(target_os = "linux")] // 唯一消费者是 online 的写前重验
+pub(crate) struct DiskSnapshot {
+    /// 目标分区的 (起始字节, 长度字节)
+    pub target: (u64, u64),
+    /// 其余已定义分区的区间（重叠判定用）
+    pub others: Vec<(u64, u64)>,
+}
+
+/// 一次读表同时问"目标区间"与"其余分区区间"——写表前的重验用它：重叠判定的邻居集
+/// 必须与目标条目来自**同一份快照**，分两次读会在两读之间再开一个窗口，而邻居集
+/// 恰恰是更容易被第三方改动的那一半
+#[cfg(target_os = "linux")] // 唯一消费者是 online 的写前重验
+pub(crate) fn disk_snapshot(src: &FileSource, part: u32) -> Result<DiskSnapshot, Fail> {
+    let t = read_table(src)?;
+    let target = partition_bytes_in(&t, part, src.sector_size)?;
+    let numbers: Vec<u32> = match &t {
+        Table::Gpt { entries, .. } => (1..=entries.len() as u32).collect(),
+        Table::Mbr(parts) => parts.iter().map(|p| p.num).collect(),
+    };
+    let mut others = Vec::new();
+    for n in numbers {
+        if n == part {
+            continue;
+        }
+        match partition_bytes_in(&t, n, src.sector_size) {
+            Ok(range) => others.push(range),
+            // 空槽 / 扩展容器不是可承载文件系统的分区，本就不是邻居（同 partition_bytes 口径）
+            Err(Fail::Refused(_)) => {}
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(DiskSnapshot { target, others })
+}
+
+/// [`partition_bytes`] 的读表后形态：判定与措辞只有这一份，两个入口都从这里取
+fn partition_bytes_in(t: &Table, part: u32, container_ss: u64) -> Result<(u64, u64), Fail> {
+    match t {
         Table::Gpt { entries, ss } => {
-            let e = live_entry_in(&entries, part)?;
+            let ss = *ss;
+            let e = live_entry_in(entries, part)?;
             // 重叠表按设计保持可诊断（info 读 RawGpt 点名冲突条目），但本函数的调用面
             // 全是数据写入（mkfs / set label|uuid / check 的修复写入）：对这样的表执行
             // 写命令会让 info 的"refuses write operations on this table"承诺为假
-            if let Some((a, b)) = crate::geometry::find_overlap(&entries) {
+            if let Some((a, b)) = crate::geometry::find_overlap(entries) {
                 return Err(Fail::refused(format!(
                     "partition entries #{a} and #{b} overlap — this tool refuses write operations \
                      on this table; remove the overlapping entry with sfdisk/parted first"
@@ -386,13 +426,33 @@ pub(crate) fn partition_bytes(src: &FileSource, part: u32) -> Result<(u64, u64),
                 )));
             }
             // MBR 的 32 位 LBA × 扇区大小在 u64 域不可能溢出；checked 是全仓换算的统一口径
-            Ok((crate::support::lba_bytes(p.start_lba as u64, src.sector_size),
-                crate::support::lba_bytes(p.size_lba as u64, src.sector_size)))
+            Ok((crate::support::lba_bytes(p.start_lba as u64, container_ss),
+                crate::support::lba_bytes(p.size_lba as u64, container_ss)))
         }
     }
 }
 
-/// 已验证几何上的 [`live_entry_in`] 惯用形态：分区号上界来自几何的条目数
+/// GPT 可用区右端点（字节）= (last_usable_lba + 1) × 表自身的 ss；无 GPT（MBR / 裸盘）
+/// 时 `None`。盘尾的备份 GPT 与其条目数组不在可用区内：越过它的表项会让备份头与
+/// 分区内容互相覆盖。在线入口的容量判据只按裸盘长，故另有这一道
+#[cfg(target_os = "linux")] // 唯一消费者是 online 的容量判据
+pub(crate) fn usable_end_bytes(src: &FileSource) -> Result<Option<u64>, Fail> {
+    match table::load_gpt(src) {
+        Err(e) => Err(Fail::infra(format!("parse failed: {e}"))),
+        Ok(None) => Ok(None),
+        Ok(Some(g)) => g
+            .header
+            .last_usable_lba
+            .checked_add(1)
+            .and_then(|lba| lba.checked_mul(g.ss))
+            .map(Some)
+            .ok_or_else(|| Fail::infra("last_usable_lba arithmetic overflows")),
+    }
+}
+
+/// 已验证几何上的 [`live_entry_in`] 惯用形态。几何的条目数组在解析时即按表声明的条目数
+/// 定长（`table.rs` 按 `number_of_partition_entries` 分配），故上界就是 `entries.len()`，
+/// 与 `entry_index` 的 `entry_count` 是同一个数
 pub(crate) fn live_entry(g: &ValidatedGeometry, part: u32) -> Result<&GPTPartitionEntry, Fail> {
     live_entry_in(&g.entries, part)
 }
@@ -550,7 +610,9 @@ pub fn set_gpt_flag(src: &mut FileSource, part: u32, flag: GptFlag, on: bool) ->
                     .and_then(|d| d.checked_add(1))
                     .and_then(|n| n.checked_mul(g.ss))
                     .ok_or_else(|| Fail::infra("partition length overflows byte size"))?;
-                let recognized = crate::fsid::identify(src, base, len)?;
+                // 写盘前的盘读：失败必须是 Infra（"确定未写盘"），不能经 `?` 落成
+                // Failed 而虚构一条"盘可能已改变"的警示（首次写盘在函数尾部的 commit）
+                let recognized = crate::fsid::identify(src, base, len).map_err(Fail::infra_io)?;
                 e.partition_type_guid = match recognized {
                     Some(crate::fsid::FsKind::Vfat) | Some(crate::fsid::FsKind::Ntfs) => {
                         table::BASIC_DATA_TYPE_GUID

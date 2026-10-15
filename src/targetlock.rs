@@ -26,9 +26,16 @@ use crate::outcome::Fail;
 ///
 /// 独占权由锁文件承载（两类目标同一机制，见模块注释），本类型不区分载体细节
 pub(crate) struct TargetLock {
-    /// 锁的载体。本字段**不被读取**，存在的意义就是被持有：句柄析构即释放锁
-    #[allow(dead_code)]
-    file: File,
+    /// 锁的载体。下划线前缀即契约：本字段**不被读取**，存在的意义就是被持有，句柄析构即释放锁
+    _file: File,
+    /// 镜像目标的第二道凭据：对**数据文件自身**上的非阻塞排他锁（inode 级，仅 unix）。
+    /// 锁文件按 canonical path 派生，硬链接等"同一 inode 的另一条路径"由此各拿一把
+    /// 锁文件锁、互相看不见；对数据文件上锁才把同一份数据收敛到一把锁。
+    /// 目标不在（`abandon` 的常态）时拿不到这道凭据，退回只靠锁文件。
+    /// Windows 侧不取这道凭据：那里的 LockFileEx 是**强制**的且 `File::lock` 锁整个文件，
+    /// 本进程随后经另一个句柄读写同一文件会直接 ERROR_LOCK_VIOLATION（见
+    /// [`crate::dev::FileSource`] 的读写句柄）
+    _image: Option<File>,
 }
 
 impl TargetLock {
@@ -54,19 +61,43 @@ impl TargetLock {
             .open(path)
             .map_err(|e| Fail::infra(format!("cannot open the target lock {}: {e}", path.display())))?;
         match file.try_lock() {
-            Ok(()) => Ok(TargetLock { file }),
+            Ok(()) => {}
             // 另一个进程正持有 ⇒ 环境条件，不是请求与现状不匹配：换参数没用，等它做完即可。
             // 与块设备那条 O_EXCL 打开失败的归类一致（都是 30）
-            Err(std::fs::TryLockError::WouldBlock) => Err(Fail::infra(format!(
-                "another diskedit is working on this target (the lock {} is held); \
-                 this tool serializes writers per target — wait for it to finish and retry",
-                path.display()
-            ))),
-            Err(std::fs::TryLockError::Error(e)) => Err(Fail::infra(format!(
-                "cannot take the target lock {}: {e}",
-                path.display()
-            ))),
+            Err(std::fs::TryLockError::WouldBlock) => return Err(Self::busy(path)),
+            Err(std::fs::TryLockError::Error(e)) => {
+                return Err(Fail::infra(format!("cannot take the target lock {}: {e}", path.display())));
+            }
         }
+        // 第二道凭据：镜像的数据文件本身（仅 unix）。打不开（目标不在）即放弃这道凭据
+        // ——`abandon` 的常态就是目标已消失，那时能依赖的只有锁文件
+        #[cfg(unix)]
+        let image = match identity.image_data_path() {
+            Some(data) => match OpenOptions::new().read(true).open(data) {
+                Ok(f) => match f.try_lock() {
+                    Ok(()) => Some(f),
+                    Err(std::fs::TryLockError::WouldBlock) => return Err(Self::busy(data)),
+                    Err(std::fs::TryLockError::Error(e)) => {
+                        return Err(Fail::infra(format!("cannot lock the target {}: {e}", data.display())));
+                    }
+                },
+                Err(_) => None,
+            },
+            None => None,
+        };
+        // 非 unix 平台没有 advisory 锁：LockFileEx 是强制的，锁整个文件会让本进程随后
+        // 经另一个句柄的读写撞上 ERROR_LOCK_VIOLATION（见字段注释），故只留锁文件
+        #[cfg(not(unix))]
+        let image: Option<File> = None;
+        Ok(TargetLock { _file: file, _image: image })
+    }
+
+    fn busy(what: &std::path::Path) -> Fail {
+        Fail::infra(format!(
+            "another diskedit is working on this target (the lock {} is held); \
+             this tool serializes writers per target — wait for it to finish and retry",
+            what.display()
+        ))
     }
 }
 
@@ -112,6 +143,33 @@ mod tests {
         TargetLock::acquire(&identity_for(&img)).expect("a released lock must be re-acquirable");
 
         cleanup(&img);
+    }
+
+    /// 硬链接是同一份数据的另一条路径：锁文件按 canonical path 派生，两条路径各派生
+    /// 一把锁文件，只有对**数据文件本身**上锁才把同一 inode 收敛到一把锁。
+    /// 这道凭据只在 unix 上取（见 `TargetLock::image` 的说明），故断言也只在 unix 跑
+    #[cfg(unix)]
+    #[test]
+    fn hard_linked_paths_share_one_lock() {
+        let img = temp_image("hardlink");
+        let alias = img.with_extension("alias");
+        let _ = std::fs::remove_file(&alias);
+        if std::fs::hard_link(&img, &alias).is_err() {
+            // 不支持硬链接的文件系统（FAT/exFAT/部分网络盘）上没有这个场景
+            cleanup(&img);
+            return;
+        }
+        let held = TargetLock::acquire(&identity_for(&img)).expect("the first holder must succeed");
+        assert!(
+            TargetLock::acquire(&identity_for(&alias)).is_err(),
+            "a hard link names the same data — it must not get a second lock"
+        );
+        drop(held);
+        TargetLock::acquire(&identity_for(&alias)).expect("a released lock must be re-acquirable through the alias");
+
+        cleanup(&img);
+        let _ = std::fs::remove_file(&alias);
+        let _ = std::fs::remove_file(identity_for(&alias).lock_path());
     }
 
     /// 每个身份都有锁落点，且两侧落在各自的命名空间：镜像在目标旁（与用户给的路径
