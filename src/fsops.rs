@@ -984,6 +984,7 @@ fn tool_package(tool: &str) -> &'static str {
         "btrfs" => "btrfs-progs",
         "fatresize" => "fatresize",
         "mkswap" | "swaplabel" => "util-linux",
+        "mount" | "umount" | "losetup" => "util-linux",
         // mkfs 的各工具（mkfs_tool 的 program）：由 mkfs_capability 的缺工具提示引用
         "mke2fs" => "e2fsprogs",
         "mkfs.vfat" => "dosfstools",
@@ -1017,14 +1018,36 @@ fn check_support(verb: &str, name: &str, support: ToolSupport) -> Result<(), FsE
 /// 扩容前置检查（纯只读、不写盘）。返回 Err 即"事前拒绝"。
 /// 调用方**必须在首次写盘之前**执行，否则会留下"分区已改、FS 未扩"的中间态——
 /// 这正是本检查存在的意义：把可预见的失败挡在动手之前
-pub fn check_grow(fstype: FsKind) -> Result<(), FsError> {
-    check_support("grow", fstype.as_str(), grow_support(fstype))
+pub fn check_grow(fstype: FsKind, is_block: bool) -> Result<(), FsError> {
+    check_support("grow", fstype.as_str(), grow_support(fstype))?;
+    check_mount_layer_tools(Some(fstype), is_block)
 }
 
 /// 缩容前置检查，语义同上。`None`（未识别）在 shrink_support 里对应"类型认不出来"，
 /// 故不必在这里另开一臂
-pub fn check_shrink(fstype: Option<FsKind>) -> Result<(), FsError> {
-    check_support("shrink", fs_name(fstype), shrink_support(fstype))
+pub fn check_shrink(fstype: Option<FsKind>, is_block: bool) -> Result<(), FsError> {
+    check_support("shrink", fs_name(fstype), shrink_support(fstype))?;
+    check_mount_layer_tools(fstype, is_block)
+}
+
+/// mount 层的公共前置：xfs/btrfs 只能挂载态扩缩（grow 与 shrink 都经 with_mount），
+/// 镜像目标还要先经 losetup 映射。这些工具不进 grow_support/shrink_support 的
+/// FS 工具清单——它们属于挂载/映射层，不随 FS 类型走；但不探测就会在表已提交、
+/// FS 工具已动盘之后才暴露缺工具 ⇒ `Io → Infra`，违背"确定未写盘"的承诺
+fn check_mount_layer_tools(fstype: Option<FsKind>, is_block: bool) -> Result<(), FsError> {
+    if !matches!(fstype, Some(FsKind::Xfs | FsKind::Btrfs)) {
+        return Ok(());
+    }
+    let tools: &[&str] = if is_block { &["mount", "umount"] } else { &["mount", "umount", "losetup"] };
+    for t in tools {
+        if find_tool(t).is_err() {
+            return Err(FsError::missing(format!(
+                "requires `{t}` (package: {}) — not found in PATH",
+                tool_package(t)
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// 该 FS 的扩容/缩容应交给用户的补救命令（用于 PARTIAL 时的提示）。
@@ -1143,9 +1166,9 @@ pub fn grow_target_at(src: &FileSource, part: u32, base: u64, len: u64) -> Resul
 /// 吸收，`SwapUnactivatable` 在收尾被探测成待办——都不是"当成功放过去"；而 `unknown`
 /// 什么信息都没给，没有谁能保证那块空间会生效，默认放行就是拿无知当许可，
 /// 只改分区表须由 `--no-fs` 显式担下
-pub fn check_grow_step(g: Growable) -> Result<(), FsError> {
+pub fn check_grow_step(g: Growable, is_block: bool) -> Result<(), FsError> {
     match g {
-        Growable::Target(t) => check_grow(t.fstype),
+        Growable::Target(t) => check_grow(t.fstype, is_block),
         Growable::OverlayPending | Growable::SwapUnactivatable | Growable::NoFilesystem(Some(FsKind::Lvm2Pv)) => Ok(()),
         Growable::NoFilesystem(f) => Err(FsError::unsupported(format!(
             "cannot grow {}: the filesystem type was not identified — pass --no-fs to change the partition only",
@@ -1760,10 +1783,10 @@ mod tests {
     /// 而 overlay 首启现场、PV、探测得出的 32K swap 都有下家，不得被这条规则误伤
     #[test]
     fn unidentified_region_needs_an_explicit_opt_out() {
-        assert!(check_grow_step(Growable::OverlayPending).is_ok());
-        assert!(check_grow_step(Growable::SwapUnactivatable).is_ok());
-        assert!(check_grow_step(Growable::NoFilesystem(Some(FsKind::Lvm2Pv))).is_ok());
-        match check_grow_step(Growable::NoFilesystem(None)) {
+        assert!(check_grow_step(Growable::OverlayPending, true).is_ok());
+        assert!(check_grow_step(Growable::SwapUnactivatable, true).is_ok());
+        assert!(check_grow_step(Growable::NoFilesystem(Some(FsKind::Lvm2Pv)), true).is_ok());
+        match check_grow_step(Growable::NoFilesystem(None), true) {
             Err(FsError::UnsupportedFs(m)) => {
                 assert!(m.contains("unknown") && m.contains("--no-fs"), "{m}")
             }

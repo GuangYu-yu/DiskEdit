@@ -932,7 +932,7 @@ fn prepare_apply(
             .ok_or_else(|| Fail::infra("grow target start overflows byte offset"))?;
         let len = (ge.ending_lba - ge.starting_lba + 1).checked_mul(plan.ss)
             .ok_or_else(|| Fail::infra("grow target length overflows byte size"))?;
-        crate::fsops::check_grow_step(crate::fsops::grow_target_at(src, plan.grow_part, base, len)?)?;
+        crate::fsops::check_grow_step(crate::fsops::grow_target_at(src, plan.grow_part, base, len)?, src.is_block)?;
     }
     // 恢复三态：有效 → 续传 / 槽位被另一族作业占用 → 拒绝 / 空 → 新建
     // 落点取命中路径：续传写同一份现场；空槽返回本次命名落点
@@ -1870,7 +1870,7 @@ fn prepare_resize(
         FsAction::Leave
     };
     match fs_action {
-        FsAction::Shrink => crate::fsops::check_shrink(fstype)?,
+        FsAction::Shrink => crate::fsops::check_shrink(fstype, src.is_block)?,
         // 扩的目标与写盘后的收尾取同一判据（grow_target_at）：要动的那段可能是分区尾部的
         // RW overlay 层，也可能是分区自己。这道写盘前的判定与收尾同源，缺了它就会把
         // "里面是什么都不知道"当成功放过去——正因如此它必须在这里，而不是写表之后
@@ -1879,7 +1879,7 @@ fn prepare_resize(
             // 就是旧区间；Committed 下表项已停在新位置，probe 旧起点会探到空段。
             // 与收尾 finalize_growth 探测的是同一段字节，两侧结论不会分叉
             crate::fsops::check_grow_step(crate::fsops::grow_target_at(src, part,
-                old_start.checked_mul(ss).ok_or_else(byte_overflow)?, old_bytes)?)?;
+                old_start.checked_mul(ss).ok_or_else(byte_overflow)?, old_bytes)?, src.is_block)?;
         }
         FsAction::Leave => {}
     }
@@ -1961,6 +1961,10 @@ fn execute_resize(
     let forward = new_start > old_start;
     let moved = new_start.abs_diff(old_start);
     if moved != 0 && committed_old.is_none() {
+        // 开工即落 ckpt，再落屏障——顺序不可换：屏障一旦落地 undo 即永久失效，
+        // ckpt 若晚于它，二者之间中断就"既不能回滚也不能续传"。纯搬移（Leave）不命中
+        // 上面的 Grow 提前落点，唯一的开工落点在这里（execute_apply 的同族顺序与此一致）
+        save(&ckpt)?;
         // 含数据搬移：字节不入 journal，落屏障令 undo 拒绝（前向恢复、无回滚）
         src.set_mutation(crate::dev::Mutation::RelocatePartition {
             partition: part,
