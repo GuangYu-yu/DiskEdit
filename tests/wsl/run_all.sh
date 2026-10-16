@@ -55,6 +55,7 @@ for f in \
   boundary_last_usable.sh \
   mbr_delete_chain.sh \
   capacity_concurrency_readonly.sh \
+  carrier_and_image_occupancy.sh \
   lvm_pv_online.sh \
   lvm_gate.sh \
   review_guards.sh \
