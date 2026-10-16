@@ -343,9 +343,18 @@ fn probe_occupancy(dev: &str) -> io::Result<Occupancy> {
     let swaps = std::fs::read_to_string("/proc/swaps")?;
     for line in swaps.lines().skip(1) {
         if let Some(field) = line.split_whitespace().next() {
-            // 同一设备的两种判据取并集：路径相同，或 st_rdev 相同。后者 stat 失败时
-            // 不构成"确认安全"，但路径相等这条仍能命中，避免漏检
-            if field == dev || std::fs::metadata(field).is_ok_and(|fm| fm.rdev() == rdev) {
+            // 同一设备的两种判据取并集：路径相同，或 st_rdev 相同。stat 失败时两项都
+            // 无法确认，按本函数的 fail-closed 口径报错——当成"这一项不是目标"就是
+            // 把"确认不了"读成"空闲"
+            if field == dev {
+                return Ok(Occupancy::ActiveSwap);
+            }
+            let fm = std::fs::metadata(field).map_err(|e| {
+                io::Error::other(format!(
+                    "cannot stat swap entry {field} to confirm {dev} is not active as swap: {e}"
+                ))
+            })?;
+            if fm.rdev() == rdev {
                 return Ok(Occupancy::ActiveSwap);
             }
         }
@@ -373,20 +382,89 @@ fn require_unmounted(_dev: &str) -> Result<(), FsError> {
     Ok(())
 }
 
+/// dev_no（major, minor）所属 loop 设备的 backing 文件；不是 loop 或解析不出来 ⇒ None
+#[cfg(target_os = "linux")]
+fn loop_backing_of(dev_no: (u64, u64)) -> Option<std::path::PathBuf> {
+    let real = std::fs::canonicalize(
+        Path::new("/sys/dev/block").join(format!("{}:{}", dev_no.0, dev_no.1)),
+    )
+    .ok()?;
+    // 设备 kobject 路径上出现 `loopN` 即说明是 loop（或它的分区）：分区名形如 loop0p1，
+    // 尾部不是纯数字，故只认首个 `loop` + 全数字的组件
+    let loop_name = real
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy().into_owned())
+        .find(|s| s.len() > 4 && s.starts_with("loop") && s[4..].bytes().all(|b| b.is_ascii_digit()))?;
+    let raw = std::fs::read_to_string(
+        Path::new("/sys/block").join(&loop_name).join("loop/backing_file"),
+    )
+    .ok()?;
+    let raw = raw.trim();
+    // backing 已被删除时内核在路径后附 " (deleted)"
+    let raw = raw.strip_suffix(" (deleted)").unwrap_or(raw);
+    if raw.is_empty() {
+        return None;
+    }
+    Some(std::fs::canonicalize(raw).unwrap_or_else(|_| std::path::PathBuf::from(raw)))
+}
+
+/// 指向同一镜像的 loop 中，哪一个正被占用（挂载或活动 swap），返回它的设备路径。
+///
+/// 镜像是本工具内唯一没有分区节点可查的目标：本工具要经 loop 才能碰它的分区，而那个
+/// loop 与用户自己映射的是**两个设备**——只探测新建的那个看不见用户那份挂载。故反向
+/// 解析：把每个已挂载 / 已做 swap 的设备解析到它所属的 loop，再看那个 loop 的 backing
+/// 是不是本镜像
+#[cfg(target_os = "linux")]
+fn image_loop_occupant(src: &FileSource) -> io::Result<Option<String>> {
+    use std::os::unix::fs::MetadataExt;
+    let want = std::fs::canonicalize(&src.path).map_err(|e| {
+        io::Error::other(format!(
+            "cannot resolve {} to check for loops onto it: {e}",
+            src.path.display()
+        ))
+    })?;
+    for e in read_mounts()? {
+        if loop_backing_of(e.dev_no).is_some_and(|b| b == want) {
+            return Ok(Some(e.source));
+        }
+    }
+    for line in std::fs::read_to_string("/proc/swaps")?.lines().skip(1) {
+        let Some(field) = line.split_whitespace().next() else { continue };
+        // stat 不到就不是设备节点，也就不可能是本镜像的 loop（那个必然是设备节点）
+        let Some(rdev) = std::fs::metadata(field).ok().map(|m| m.rdev()) else { continue };
+        if loop_backing_of((libc::major(rdev) as u64, libc::minor(rdev) as u64)).is_some_and(|b| b == want) {
+            return Ok(Some(field.to_string()));
+        }
+    }
+    Ok(None)
+}
+#[cfg(not(target_os = "linux"))]
+fn image_loop_occupant(_src: &FileSource) -> io::Result<Option<String>> {
+    Ok(None)
+}
+
 /// 写表路径的占用前置闸：分区在首次落盘前须空闲。调用点在 prepare 层（movepart 的
 /// prepare_resize / prepare_apply）与 MBR resize 命令层——那是任何写盘的唯一必经关口，
 /// 把"表已写、FS 步被占"的 PARTIAL(20) 变成 REFUSED(10)：占用是请求与现状不匹配，
 /// 不是盘故障。块设备另有整盘 O_EXCL 独占打开这道内核级防线，但其保护面要说准：
 /// 它挡的是挂载 / swap / 他人的 O_EXCL 打开（open 即 EBUSY），**不挡**不守约定的
-/// 普通并发写——本闸对其是纵深防御。镜像是本工具内唯一没有占用判据的目标（不存在
-/// 分区节点可查，也没有 O_EXCL 这道内核防线），本闸对它是唯一防线，直接放行
-/// （经 loop 挂载的镜像由 FS 步的设备级检查兜底）。
+/// 普通并发写——本闸对其是纵深防御。镜像没有分区节点可查，也没有 O_EXCL 这道内核
+/// 防线，占用只能按"有没有另一个 loop 指着它且在用"判定（[`image_loop_occupant`]）；
+/// 那一步只覆盖已经映射出去的 loop，不覆盖别的东西按镜像路径直接写字节。
 /// `start_bytes` = 分区起始字节（与 find_block_partition_node 的换算基准一致）
 #[cfg(target_os = "linux")]
 pub fn ensure_idle_before_write(src: &FileSource, part: u32, start_bytes: u64) -> Result<(), crate::outcome::Fail> {
     use crate::outcome::Fail;
     if !src.is_block {
-        return Ok(());
+        return match image_loop_occupant(src) {
+            Ok(None) => Ok(()),
+            Ok(Some(dev)) => Err(Fail::refused(format!(
+                "{dev} is a loop onto this image and is in use — unmount/swapoff it first (editing the image changes a live filesystem)"
+            ))),
+            Err(e) => Err(Fail::infra(format!(
+                "cannot confirm no loop has this image in use: {e} — refusing (fail-closed)"
+            ))),
+        };
     }
     let node = find_block_partition_node(src, part, start_bytes).map_err(Fail::from)?;
     match probe_occupancy(&node) {
@@ -530,6 +608,13 @@ where
             }
         };
         return require_unmounted(&dev).map_err(Into::into).and_then(|()| f(&dev));
+    }
+    // 镜像：占用只能按 backing 反查——本工具新建的这个 loop 与用户自己映射的是两个
+    // 设备，只探测新建的那个看不见用户那份挂载 / swap
+    if let Some(occupant) = image_loop_occupant(src).map_err(FsError::from)? {
+        return Err(FsError::Io(io::Error::other(format!(
+            "{occupant} is a loop onto this image and is in use — unmount/swapoff it first"
+        ))).into());
     }
     let loopdev = attach_loop(src, off, len)?;
     // require 失败也要先 detach 再返回错误，? 短路会漏掉 detach
