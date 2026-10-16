@@ -144,6 +144,10 @@ pub(crate) fn cmd_add(a: &Args) -> u8 {
 
 pub(crate) fn cmd_del(a: &Args) -> u8 {
     let Some(pref) = a.part else { crate::args::usage() };
+    // 载体必须是整盘：del 清零的是节点 LBA0 里的条目槽，而分区节点上被判成 msdos 的
+    // 可能只是文件系统引导扇区——FAT/NTFS 的引导扇区末尾同为 0x55AA，MBR 判据只认
+    // 这个签名。判据与 new/add/create 同源
+    refuse_partition_node_target("del", &a.target);
     if !a.yes {
         bail_fail(Fail::refused("`del` removes the target partition entry; pass --yes to confirm"));
     } else {
@@ -176,6 +180,8 @@ pub(crate) fn cmd_resize_part(a: &Args) -> u8 {
     if a.grow_to_end && a.end.is_some() {
         bail_fail(Fail::refused("--end and --grow-to-end are mutually exclusive".to_string()));
     }
+    // 载体必须是整盘：条目按节点 LBA0 的偏移读写（判据与 new/add/create 同源）
+    refuse_partition_node_target("resize-part", &a.target);
     let (mut src, _resumed) = open_target_for_data_move(a).unwrap_or_else(|f| bail_fail(f));
     // 坐标系在几何计算前确定：resize-part 仅支持 GPT，条目按表头 ss 对齐（可与容器 ss 不同）。
     // 几何走唯一构造点（条目重叠在此被拒），修复后的 last_usable 也由它给出
@@ -230,6 +236,8 @@ pub(crate) fn cmd_move(a: &Args) -> u8 {
         crate::args::usage();
     }
     refuse_align_on_start_end(a);
+    // 载体必须是整盘：条目按节点 LBA0 的偏移读写（判据与 new/add/create 同源）
+    refuse_partition_node_target("move", &a.target);
     let (mut src, _resumed) = open_target_for_data_move(a).unwrap_or_else(|f| bail_fail(f));
     let (g, repair) = crate::gpt_policy::require_gpt_geometry(&src, "move").unwrap_or_else(|f| bail_fail(f));
     // 锁下快照
@@ -270,6 +278,8 @@ pub(crate) fn cmd_copy(a: &Args) -> u8 {
     // copy 不读不写 checkpoint（见 HELP_COPY 的 "No resume"）：它没有可续跑的东西，
     // 也就没有资格接管任何未收尾的现场。走严格打开——目标上有任何 active 现场即拒绝，
     // 绝不出现"copy 成功后把别人的 journal 当自己的清掉、而那份 ckpt 原样留在槽里"
+    // 载体必须是整盘：条目按节点 LBA0 的偏移读写（判据与 new/add/create 同源）
+    refuse_partition_node_target("copy", &a.target);
     let mut src = open_target_for_write(a).unwrap_or_else(|f| bail_fail(f));
     // 坐标系在几何计算前确定：copy 仅支持 GPT，条目按表头 ss 对齐（可与容器 ss 不同）
     let (g, repair) = crate::gpt_policy::require_gpt_geometry(&src, "copy").unwrap_or_else(|f| bail_fail(f));

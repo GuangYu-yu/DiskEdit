@@ -186,7 +186,12 @@ pub(crate) fn cmd_info(a: &Args) -> u8 {
                 // 走到这里已确定不是 GPT（load_gpt 为 None）也不是 MBR（raw 解析为 None），
                 // 只可能在 GptDamaged（LBA1 有签名、保护布局不满足）与 None 之间。
                 // 判据取自唯一判定点 table_label，与写命令的拒绝理由同源
-                let damaged = table::table_label(&src).is_ok_and(|l| l.is_damaged());
+                // 与上面 MBR 分支同一口径（见本文件前一处 label 判定的注释）：探测失败
+                // 不得降级成 "none"——那会把"读不出来"报成"没有表"
+                let damaged = match table::table_label(&src) {
+                    Ok(l) => l.is_damaged(),
+                    Err(e) => bail_fail(Fail::infra(format!("label probe failed: {e}"))),
+                };
                 let name = if damaged { "gpt" } else { "none" };
                 // 形状与其余分支一致：`partitions` 恒为数组、`disk_guid` 恒在（无表即无 GUID）。
                 // none/damaged 没有可报告的条目，但缺字段会让按同一 schema 消费 JSON 的调用方

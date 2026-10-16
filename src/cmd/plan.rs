@@ -102,6 +102,8 @@ fn apply_cmd(a: &Args, pref: PartSelector) -> u8 {
         Ok(c) => c,
         Err(e) => bail_fail(Fail::refused(e.to_string())),
     };
+    // 载体必须是整盘：条目按节点 LBA0 的偏移读写（判据与 new/add/create 同源）
+    refuse_partition_node_target("apply", &a.target);
     // 一次打开完成分类：是否续跑在**锁下**按 ckpt 判定（见 open_target_resumable），
     // 不沿用任何只读预判——判据与开目标之间不许留窗口
     let (mut src, _resuming) =

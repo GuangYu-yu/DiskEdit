@@ -2138,7 +2138,18 @@ fn ntfs_hidden_value(start_lba: u64) -> (u32, bool) {
 /// 警告（Windows 将无法从该分区引导，数据不受影响）。仅在分区起始 LBA 变化后调用。
 fn fix_ntfs_hidden_sectors(src: &mut FileSource, new_first_lba: u64, ss: u64, log: &mut dyn FnMut(&str)) -> io::Result<()> {
     let (val, warn) = ntfs_hidden_value(new_first_lba);
-    src.write_at(new_first_lba * ss + 0x1C, &val.to_le_bytes())?;
+    // 与 execute_apply / execute_copy 的 LBA→字节换算同口径：起点来自调用方传入的
+    // 几何，裸乘回绕会把 HiddenSectors 写到盘上另一个位置
+    let off = new_first_lba
+        .checked_mul(ss)
+        .and_then(|b| b.checked_add(0x1C))
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("NTFS HiddenSectors offset overflows ({new_first_lba} × {ss} + 0x1C)"),
+            )
+        })?;
+    src.write_at(off, &val.to_le_bytes())?;
     src.sync_data()?;
     if warn {
         log("warning: partition starts beyond 2^32; HiddenSectors zeroed — Windows cannot boot from it");
@@ -2235,9 +2246,12 @@ fn execute_copy(
     log: &mut dyn FnMut(&str),
 ) -> io::Result<u32> {
     let (ss, part, new_start, new_end, len) = (p.ss, p.part, p.new_start, p.new_end, p.len);
-    let src_off = p.src_start * ss;
-    let dst_off = new_start * ss;
-    let total = len * ss;
+    // 与 execute_apply 的同类换算同口径（见那边的 byte_overflow）：这些 LBA 经 checked
+    // 运算才能进地址计算，回绕会让复制落到盘上另一个位置
+    let byte_overflow = || io::Error::new(io::ErrorKind::InvalidData, "copy byte offset overflows — refusing");
+    let src_off = p.src_start.checked_mul(ss).ok_or_else(byte_overflow)?;
+    let dst_off = new_start.checked_mul(ss).ok_or_else(byte_overflow)?;
+    let total = len.checked_mul(ss).ok_or_else(byte_overflow)?;
     // 修复已由 copy 的 Fail 域在调用本函数之前完成，后续所有写入都基于修复后的几何
     // 含数据复制：字节不入 journal，留屏障令 undo 拒绝（前向恢复、无回滚）
     src.set_mutation(crate::dev::Mutation::CopyPartition {

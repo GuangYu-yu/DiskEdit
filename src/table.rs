@@ -1469,8 +1469,16 @@ pub fn add_mdos_entry(src: &mut FileSource, start: u64, end: u64, os_type: u8) -
     let mut slot: Option<usize> = None;
     for i in 0..4usize {
         let rec = &lba0[446 + i * 16..446 + i * 16 + 16];
-        let used = rec[4] != 0 && rd_u32(rec, 12) != 0;
-        if !used {
+        // 隐形条目（类型字节非零但长度为 0）：与 set_mdos_boot / set_mdos_hidden /
+        // set_mdos_type / resize_mdos_entry 同判据——把它当空闲槽写进去等于凭空替换掉
+        // 一条解析器看不见的条目，操作者无从核对
+        if rec[4] != 0 && rd_u32(rec, 12) == 0 {
+            return Err(Fail::refused(format!(
+                "partition {} has a type byte but zero sectors — the entry is invisible to the parser; `del` clears it",
+                i + 1
+            )));
+        }
+        if rec[4] == 0 {
             if slot.is_none() {
                 slot = Some(i);
             }
@@ -1510,8 +1518,22 @@ pub fn del_mdos_entry(src: &mut FileSource, part: u32) -> Result<(), Fail> {
         return Err(Fail::infra("no MBR signature on target"));
     }
     let rec = &mut lba0[446 + (part as usize - 1) * 16..446 + (part as usize - 1) * 16 + 16];
-    if rec[4] == 0 {
+    let cur = rec[4];
+    if cur == 0 {
         return Err(Fail::refused(format!("partition {part} is already empty")));
+    }
+    // 两类条目的类型字节承担结构语义，清零等于把它们从盘上抹掉：0xEE 是 GPT 保护记录
+    // （恢复 GPT 所需），容器类型是其中逻辑分区的入口——与 add_mdos_entry / set_mdos_type
+    // 同判据拒绝。解析侧已把 0xEE 排除出可操作条目，此处是写路径的同一条判据
+    if cur == PROT_MBR_TYPE {
+        return Err(Fail::refused(format!(
+            "partition {part} is the GPT protective record (0xEE) — clearing it destroys the record used to recognise and recover the GPT"
+        )));
+    }
+    if MDOS_CONTAINER_TYPES.contains(&cur) {
+        return Err(Fail::refused(format!(
+            "partition {part} is an extended container (0x{cur:02X}) — its type is structural, not a partition"
+        )));
     }
     rec.fill(0);
     src.write_at(0, &lba0)?;

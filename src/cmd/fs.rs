@@ -88,6 +88,12 @@ pub(crate) fn cmd_mkfs(a: &Args) -> u8 {
     if let Err(e) = fsops::mkfs_capability(fstype) {
         bail_fail(Fail::from(e));
     }
+    // linux/root 是纯只读判定，失败必然"一个字节都没写"——必须落在屏障之前：屏障一旦
+    // 落地，零写入的失败也会留下一个只能靠 abandon 收拾的现场（见下）。镜像的 losetup
+    // 属于设备建立，在屏障之后，其失败不在"确定未写盘"的范围内
+    if let Err(e) = fsops::require_linux().and_then(|()| fsops::require_root()) {
+        bail_fail(Fail::from(e));
+    }
     // mkfs 是一次事务，但不可回滚：内容擦掉之后没有"回去"这回事。先落屏障（记下"这个
     // 分区上创建了文件系统"）再交给外部工具：成功时 main 关闭事务，失败或崩溃则留下一个
     // active 的不可回滚事务，出路是 `abandon`
@@ -187,6 +193,14 @@ pub(crate) fn cmd_resizefs(a: &Args) -> u8 {
             ))),
             Err(e) => bail_fail(Fail::from(e)),
         };
+        // 事前能力探测：与 superfloppy 路径同一契约（见 cmd/resize 的同名判定——check_grow
+        // 必须在首次写盘之前）。扩 FS 的修复步骤（e2fsck -fp 等）本身写盘，缺工具若在那时
+        // 才暴露，Infra(30) 会谎报"确定未写盘"。类型接线判断不在此拦：不接线的类型不会写盘，
+        // 由 resize_fs_in 按类型给出准确的拒绝文案
+        match fsops::check_grow(target.fstype, src.is_block) {
+            Err(fsops::FsError::UnsupportedFs(_)) => {}
+            other => other.unwrap_or_else(|e| bail_fail(Fail::from(e))),
+        }
         match target.resize_fs(&src) {
             Ok(leak) => {
                 // 清理待办在此只以告警呈现：本命令的成功出口保持 0，不改既有契约

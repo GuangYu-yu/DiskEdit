@@ -242,9 +242,11 @@ fn online_size<'a>(
                 .map(Some)
                 .ok_or_else(|| Fail::infra(format!("grown size overflows ({cur} + {free} sectors × {ss} B)")))
         } else {
+            // 目标长度一律下取整到扇区：MBR/GPT 的位置字段是 LBA，非整扇区值到落盘时
+            // 仍会被隐式下取整。不取整会让下方上界比较（同样按扇区下取整）放过不足一个
+            // 扇区的超出
             let want = match target {
-                Some(t) if is_pv => t / ss * ss,
-                Some(t) => t,
+                Some(t) => t / ss * ss,
                 None => cur,
             };
             // 目标终点不得越过可用区上界：与离线路径同一判据（长度按扇区下取整后比较）
@@ -838,14 +840,14 @@ fn cmd_resize_msdos(a: &Args, pref: PartSelector, req: &SizeRequest, src_ro: &Fi
         if new_size_lba > u32::MAX as u64 {
             bail_fail(Fail::refused(format!("size {new_size_lba} sectors exceeds MBR 32-bit LBA limit")));
         }
-        // 请求已通过越界判定，note 不会再跟在一条拒绝后面
-        crate::support::note_sector_truncation("resizing to", bytes, ss);
+        // 越界与右侧空闲都已判定，note 不再跟在一条拒绝后面
         if new_size_lba >= p.size_lba as u64 {
             // no-op（==）不触发缩容守卫链；扩（>）须右侧空闲足够
             let want = new_size_lba - p.size_lba as u64;
             if want > free_right_msdos(&mbr, p, total_sectors) {
                 bail_fail(Fail::refused("not enough contiguous free space to the right (MBR resize cannot relocate blocking partitions)".to_string()));
             }
+            crate::support::note_sector_truncation("resizing to", bytes, ss);
             if want > 0 {
                 table::resize_mdos_entry(&mut src, part, new_size_lba as u32)
                     .unwrap_or_else(|f| bail_fail(f));
@@ -867,6 +869,8 @@ fn cmd_resize_msdos(a: &Args, pref: PartSelector, req: &SizeRequest, src_ro: &Fi
             {
                 bail_fail(Fail::refused(format!("target size {bytes} < minimum FS size {min} bytes (resize2fs -P)")));
             }
+            // 缩容预检（方向、可缩性、工具齐备、下界）全过，note 不再跟在一条拒绝后面
+            crate::support::note_sector_truncation("resizing to", bytes, ss);
             // 与 grow 臂同判据：外部 FS 工具写盘不可回滚，undo journal 从此只能如实记屏障
             src.set_mutation(crate::dev::Mutation::ExternalFsTool);
             src.mark_non_reversible().unwrap_or_else(|e| bail_fail(Fail::from(e)));
