@@ -70,8 +70,12 @@ pub enum Outcome {
     /// 与 `Failed` 同为 30，但**不能**附"盘可能已改变"的提示：本次确实没写
     Infra { cause: String },
     /// 执行阶段失败——**不对"是否已落盘"作断言**：写调用报错时我们并不知道
-    /// 实际写入多少，磁盘状态可能已改变，故只承诺"可能已改变，需验证"
-    Failed { cause: String },
+    /// 实际写入多少，磁盘状态可能已改变，故只承诺"可能已改变，需验证"。
+    /// `pending` 是已知但尚未满足的后置条件：失败发生在它们之前/中途时随失败一并报出
+    Failed {
+        cause: String,
+        pending: Vec<Pending>,
+    },
     /// 布局写入完成；`pending` 为空且内核视图已同步即后置条件全部满足
     Applied {
         pending: Vec<Pending>,
@@ -89,7 +93,12 @@ impl Outcome {
     }
 
     pub fn failed(cause: impl Into<String>) -> Self {
-        Self::Failed { cause: cause.into() }
+        Self::Failed { cause: cause.into(), pending: Vec::new() }
+    }
+
+    /// 已写盘或无法断言的失败，另带已知未完成的后置条件
+    pub fn failed_with(cause: impl Into<String>, pending: Vec<Pending>) -> Self {
+        Self::Failed { cause: cause.into(), pending }
     }
 
     /// 布局已写、后置条件待办；内核视图默认按"已同步"起算，由调用方在 resync 失败后置位
@@ -143,9 +152,13 @@ impl Outcome {
             Self::Refused(msg) => eprintln!("refused: {msg}"),
             // 与 Failed 同码不同话：本次没写盘，不能提示"盘可能已改变"
             Self::Infra { cause } => eprintln!("error: {cause}"),
-            Self::Failed { cause } => {
+            Self::Failed { cause, pending } => {
                 eprintln!("error: {cause}");
                 eprintln!("       on-disk state may have changed — verify with `diskedit info` before retrying");
+                if !pending.is_empty() {
+                    eprintln!("       {} known follow-up step(s) were left undone:", pending.len());
+                    Self::report_pending(pending);
+                }
             }
             Self::Applied { pending, kernel_sync } => {
                 if pending.is_empty() && *kernel_sync == KernelSync::Synchronized {
@@ -153,17 +166,7 @@ impl Outcome {
                 }
                 if !pending.is_empty() {
                     eprintln!("partition table updated, but {} follow-up step(s) are pending:", pending.len());
-                    for p in pending {
-                        let what = match p.kind {
-                            PendingKind::Fs => "fs grow",
-                            PendingKind::Swap => "swap rebuild",
-                            PendingKind::Other(what) => what,
-                        };
-                        eprintln!("  [part {}] {what}: {}", p.part, p.detail);
-                        if !p.hint.is_empty() {
-                            eprintln!("           run manually: {}", p.hint);
-                        }
-                    }
+                    Self::report_pending(pending);
                 }
                 if *kernel_sync == KernelSync::Stale {
                     eprintln!(
@@ -171,6 +174,21 @@ impl Outcome {
                          run `partprobe <device>` (or partx/blkpg) before relying on the new layout"
                     );
                 }
+            }
+        }
+    }
+
+    /// 未完成后置条件的逐条呈现：Applied 与 Failed 两条路径共用同一份格式
+    fn report_pending(pending: &[Pending]) {
+        for p in pending {
+            let what = match p.kind {
+                PendingKind::Fs => "fs grow",
+                PendingKind::Swap => "swap rebuild",
+                PendingKind::Other(what) => what,
+            };
+            eprintln!("  [part {}] {what}: {}", p.part, p.detail);
+            if !p.hint.is_empty() {
+                eprintln!("           run manually: {}", p.hint);
             }
         }
     }
@@ -287,13 +305,49 @@ impl Fail {
     }
 }
 
-/// 内部执行体与对外入口的分界：执行体用 `?` 传播（io 错误默认按"可能已改变"归 Failed），
-/// 入口负责换算为 Outcome。这样"退出码"只在入口一处出现
-pub fn finish(result: Result<(), Fail>, pending: Vec<Pending>) -> Outcome {
-    match result {
-        Ok(()) => Outcome::applied_with(pending),
-        // 失败侧的映射只有一处（`Fail::into_outcome`），本函数不复制它
-        Err(f) => f.into_outcome(),
+/// 越过 durable boundary 之后的写会话。入口在首次目标写盘前创建它，执行体把未完成的
+/// 后置条件记进来，出口只由 [`applied`](Self::applied) / [`failed`](Self::failed) 给出。
+///
+/// 会话的出口里放不下 `Refused` / `Infra`：此刻盘可能已改变，"确定未写盘"的结论在类型上
+/// 就写不出来。执行体只返回 `io::Result`（io 失败默认按"可能已改变"），入口把它换成
+/// `failed(cause)`，待办随失败一并报出
+pub struct PostWrite {
+    pending: Vec<Pending>,
+}
+
+impl PostWrite {
+    pub fn new() -> Self {
+        Self { pending: Vec::new() }
+    }
+
+    /// 记录一条尚未满足的后置条件
+    pub fn pending(&mut self, p: Pending) {
+        self.pending.push(p);
+    }
+
+    /// 已记录的待办条数：执行体用它判断"本次收尾是否留下未完成项"（如 ckpt 的去留）
+    pub fn len(&self) -> usize {
+        self.pending.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.pending.is_empty()
+    }
+
+    /// 执行体全部返回 `Ok`：布局已写，待办随结果浮出
+    pub fn applied(self) -> Outcome {
+        Outcome::applied_with(self.pending)
+    }
+
+    /// 执行体返回 `Err`：盘可能已改变，已知未完成的待办一并列出
+    pub fn failed(self, cause: impl Into<String>) -> Outcome {
+        Outcome::failed_with(cause, self.pending)
+    }
+}
+
+impl Default for PostWrite {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -307,7 +361,7 @@ mod tests {
     /// 外部工具非零退出 ⇒ 同码 30 但落 Failed（工具运行过，写没写无法断言 → 带警示行）
     #[test]
     fn fs_error_maps_to_exit_codes() {
-        let code = |e: FsError| finish(Err(Fail::from(e)), Vec::new()).exit_code();
+        let code = |e: FsError| Fail::from(e).into_outcome().exit_code();
         assert_eq!(code(FsError::UnsupportedFs("no resize tool".into())), EXIT_REFUSED);
         assert_eq!(code(FsError::InvalidArgument("bad size".into())), EXIT_REFUSED);
         assert_eq!(code(FsError::ToolMissing("no mkfs.xfs".into())), EXIT_INFRA);

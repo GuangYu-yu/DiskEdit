@@ -36,11 +36,26 @@ pub(crate) fn print_moves(plan: &movepart::Plan) -> std::io::Result<()> {
 }
 
 pub(crate) fn print_plan(plan: &movepart::Plan, target_start: u64) -> std::io::Result<()> {
+    print_plan_inner(plan, target_start, None)
+}
+
+/// `plan` 命令的呈现：比写盘前的计划多给出 last_usable_lba——它是尾部打包的上界，
+/// 不等于本次扩容终点。推导与 `print_plan` 共用同一实现
+pub(crate) fn print_plan_detail(plan: &movepart::Plan, target_start: u64) -> std::io::Result<()> {
+    print_plan_inner(plan, target_start, Some(plan.last_usable_lba))
+}
+
+fn print_plan_inner(plan: &movepart::Plan, target_start: u64, last_usable: Option<u64>) -> std::io::Result<()> {
     // 实际扩容终点由 grow_end_for 判定（与 apply 同一实现）
     let new_end = movepart::grow_end_for(plan, target_start)?;
-    println!("plan: grow partition {} → end LBA {} (blockers relocated)", plan.grow_part, new_end);
-    print_moves(plan)?;
-    Ok(())
+    match last_usable {
+        Some(last) => println!(
+            "grow partition {} → end LBA {} (last usable {})",
+            plan.grow_part, new_end, last
+        ),
+        None => println!("plan: grow partition {} → end LBA {} (blockers relocated)", plan.grow_part, new_end),
+    }
+    print_moves(plan)
 }
 
 pub(crate) fn cmd_plan_apply(cmd: &str, a: &Args) -> u8 {
@@ -57,7 +72,7 @@ pub(crate) fn cmd_plan_apply(cmd: &str, a: &Args) -> u8 {
         let (g, repair) = crate::gpt_policy::require_gpt_geometry(&src, cmd).unwrap_or_else(|f| bail_fail(f));
         // 只读快照
         let grow = crate::gpt_policy::resolve_part_in(
-            crate::gpt_policy::TableEntries::Gpt(&g.entries),
+            crate::gpt_policy::TableEntries::Gpt(g.entries()),
             pref,
         )
         .unwrap_or_else(|f| bail_fail(f));
@@ -75,19 +90,16 @@ pub(crate) fn cmd_plan_apply(cmd: &str, a: &Args) -> u8 {
             // 修复动作只记录、不执行；apply 会先做这一步再搬数据
             println!("[repair] {what}");
         }
-        // 终点与实际写入一致（grow_end_for 是 apply 用的同一实现）；
-        // last_usable_lba 单独列出：它是尾部打包的上界，不等于本次扩容终点。
-        // 下界取目标分区当前起点（与 apply 读同一张表）
+        // 终点与实际写入一致（grow_end_for 是 apply 用的同一实现）；last_usable_lba
+        // 由 print_plan_detail 一并给出。下界取目标分区当前起点（与 apply 读同一张表）
         let target_start = crate::gpt_policy::live_entry(&g, plan.grow_part)
             .unwrap_or_else(|f| bail_fail(f))
             .starting_lba;
-        let grow_end = movepart::grow_end_for(&plan, target_start)
-            .unwrap_or_else(|e| bail_fail(Fail::infra(format!("plan failed: {e}"))));
+        print_plan_detail(&plan, target_start).unwrap_or_else(|e| bail_fail(Fail::infra(e.to_string())));
+        // apply 的守卫比 plan 多：plan 只读（可在被占用的盘上运行），apply 取锁后重验
         println!(
-            "grow partition {} → end LBA {} (last usable {})",
-            plan.grow_part, grow_end, plan.last_usable_lba
+            "note: `apply` re-validates under the target lock — a partition-node target or an active recovery scene will be refused there"
         );
-        print_moves(&plan).unwrap_or_else(|e| bail_fail(Fail::infra(e.to_string())));
         EXIT_OK
     } else {
         apply_cmd(a, pref)
@@ -115,7 +127,7 @@ fn apply_cmd(a: &Args, pref: PartSelector) -> u8 {
     let (g, repair) = crate::gpt_policy::require_gpt_geometry(&src, "apply").unwrap_or_else(|f| bail_fail(f));
     // 锁下快照
     let grow = crate::gpt_policy::resolve_part_in(
-        crate::gpt_policy::TableEntries::Gpt(&g.entries),
+        crate::gpt_policy::TableEntries::Gpt(g.entries()),
         pref,
     )
     .unwrap_or_else(|f| bail_fail(f));
@@ -125,14 +137,14 @@ fn apply_cmd(a: &Args, pref: PartSelector) -> u8 {
     };
     // 表的可解析性由上面那一次 require_gpt_geometry 判过（无 GPT → refused 10，表非法 → infra 30）：
     // 同一事实不设第二判据——两处判据迟早会在某个入口分叉，且自判拒绝时还不报原因
-    let mut logger = Logger::open(&src, Some(g.header.disk_guid));
+    let mut logger = Logger::open(&src, Some(g.disk_guid()));
     let o = movepart::apply(&mut src, &g, &plan, chunk, a.no_fs, &mut |m| logger.log(m));
     // 出问题时日志里也留一份：apply 失败后用户常回看日志——refused 的参数成因
     // 与 infra 的环境故障同样值得持久化
     if !o.is_complete() {
         let why = match &o {
             crate::outcome::Outcome::Refused(m) => format!("refused: {m}"),
-            crate::outcome::Outcome::Infra { cause } | crate::outcome::Outcome::Failed { cause } => format!("error: {cause}"),
+            crate::outcome::Outcome::Infra { cause } | crate::outcome::Outcome::Failed { cause, .. } => format!("error: {cause}"),
             crate::outcome::Outcome::Applied { pending, kernel_sync } => format!(
                 "finished with {} pending, kernel view {}",
                 pending.len(),

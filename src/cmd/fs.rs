@@ -20,9 +20,12 @@ diskedit resizefs <MOUNTPOINT> [BYTES | --size SIZE] --online
   effect through `resize --grow-lv`), or a type this tool cannot identify.
   The OpenWrt overlay layer before its first mount needs nothing here
   (exit 0): fstools creates it at first mount, filling the trailing region.
-  Online form operates on a mounted partition: grow only (btrfs also
-  shrinks); the target size is absolute (units b/k/m/g/t, 1024 base) —
-  omitted means grow to fill the partition."#;
+  Online form operates on a mounted partition: the partition table is never
+  changed; the filesystem is grown inside the current partition (btrfs also
+  shrinks). A size beyond the current partition is refused — run
+  `diskedit resize` to enlarge the partition first. The target size is
+  absolute (units b/k/m/g/t, 1024 base); omitted means grow to fill the
+  partition."#;
 
 pub(crate) const HELP_CHECK: &str = r#"diskedit check <TARGET>:N
 
@@ -78,9 +81,10 @@ pub(crate) fn cmd_mkfs(a: &Args) -> u8 {
     let mut src = open_target_for_write(a).unwrap_or_else(|f| bail_fail(f));
     // 锁下快照
     let part = crate::gpt_policy::resolve_part(&src, pref).unwrap_or_else(|f| bail_fail(f));
-    if let Err(f) = crate::gpt_policy::partition_bytes(&src, part) {
-        bail_fail(f);
-    }
+    let part_off = match crate::gpt_policy::partition_bytes(&src, part) {
+        Ok((off, _len)) => off,
+        Err(f) => bail_fail(f),
+    };
     let fstype = match fsops::parse_fstype(&fstype_name) {
         Ok(k) => k,
         Err(e) => bail_fail(Fail::from(e)),
@@ -93,6 +97,12 @@ pub(crate) fn cmd_mkfs(a: &Args) -> u8 {
     // 属于设备建立，在屏障之后，其失败不在"确定未写盘"的范围内
     if let Err(e) = fsops::require_linux().and_then(|()| fsops::require_root()) {
         bail_fail(Fail::from(e));
+    }
+    // 占用闸必须在屏障之前：镜像被 loop 占用（或块设备分区被挂载/活动 swap）是
+    // "请求与现状不符"，此刻一个字节都没写；放到 fsops::mkfs 里探测则是屏障之后，
+    // 拒绝会以 Infra(30) 退出并把目标锁进只能 abandon 的现场
+    if let Err(f) = fsops::ensure_idle_before_write(&src, part, part_off) {
+        bail_fail(f);
     }
     // mkfs 是一次事务，但不可回滚：内容擦掉之后没有"回去"这回事。先落屏障（记下"这个
     // 分区上创建了文件系统"）再交给外部工具：成功时 main 关闭事务，失败或崩溃则留下一个
@@ -251,6 +261,10 @@ pub(crate) fn cmd_set(a: &Args) -> u8 {
             "`set {key}` takes no state argument — only `set <target>:N flag <flag> on|off` does"
         )));
     }
+    // 载体必须是整盘：MBR 的 type/flag 分支直接改目标 LBA0 的记录槽，而分区节点上被
+    // parse_mbr 认成 msdos 的可能只是 FAT/NTFS 引导扇区（末尾同为 0x55AA）——写入会
+    // 落进文件系统的引导扇区。判据与 new/add/del 同源
+    refuse_partition_node_target("set", &a.target);
     let mut src = open_target_for_write(a).unwrap_or_else(|f| bail_fail(f));
     // 锁下快照
     let part = crate::gpt_policy::resolve_part(&src, pref).unwrap_or_else(|f| bail_fail(f));

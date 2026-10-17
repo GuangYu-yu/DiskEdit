@@ -331,11 +331,11 @@ pub(crate) fn refuse_if_pending_recovery(src: &FileSource, what: &str) -> Result
 /// 本身（修复后将生效的值），不再作为参数传入：同一个事实有两个来源时，两者会分叉
 /// （历史实现即如此：调用点各自算一次有效上界，本函数只对"起点在右"的表项取最小）
 pub(crate) fn free_right_gpt(g: &ValidatedGeometry, part: u32) -> u64 {
-    let Some(e) = g.entry_index(part).and_then(|i| g.entries.get(i)) else {
+    let Some(e) = g.entry_index(part).and_then(|i| g.entries().get(i)) else {
         return 0;
     };
     let mut bound = g.last_usable_lba().saturating_add(1); // 排他上界（饱和防损坏几何下 +1 回绕成 0）
-    for (i, o) in g.entries.iter().enumerate() {
+    for (i, o) in g.entries().iter().enumerate() {
         if (i + 1) as u32 == part || (o.starting_lba == 0 && o.ending_lba == 0) {
             continue;
         }
@@ -444,6 +444,24 @@ mod tests {
     }
 
     fn raw_gpt(last_usable: u64, ents: &[(u64, u64)]) -> table::RawGpt {
+        // 头自述 128 条目，条目数组必须凑满同样的长度：ValidatedGeometry 拒绝
+        // "数组长度 ≠ 头自述条目数"的表
+        let mut entries: Vec<_> = ents.iter().map(|&(s, e)| gptman::GPTPartitionEntry {
+            partition_type_guid: [1; 16],
+            unique_partition_guid: [2; 16],
+            starting_lba: s,
+            ending_lba: e,
+            attribute_bits: 0,
+            partition_name: "".into(),
+        }).collect();
+        entries.resize_with(128, || gptman::GPTPartitionEntry {
+            partition_type_guid: [0; 16],
+            unique_partition_guid: [0; 16],
+            starting_lba: 0,
+            ending_lba: 0,
+            attribute_bits: 0,
+            partition_name: "".into(),
+        });
         table::RawGpt {
             ss: 512,
             state: table::GptState::Valid,
@@ -460,14 +478,7 @@ mod tests {
                 size_of_partition_entry: 128,
                 header_size: 92,
             },
-            entries: ents.iter().map(|&(s, e)| gptman::GPTPartitionEntry {
-                partition_type_guid: [1; 16],
-                unique_partition_guid: [2; 16],
-                starting_lba: s,
-                ending_lba: e,
-                attribute_bits: 0,
-                partition_name: "".into(),
-            }).collect(),
+            entries,
         }
     }
 
@@ -475,7 +486,10 @@ mod tests {
     /// 无法再构造"条目重叠 / 越界"的几何——那正是该类型要排除的状态
     fn validated(on_disk_last_usable: u64, effective_last_usable: u64, ents: &[(u64, u64)]) -> ValidatedGeometry {
         let g = raw_gpt(on_disk_last_usable, ents);
-        ValidatedGeometry::new(&g, effective_last_usable + 1, Some(effective_last_usable)).unwrap()
+        // 容器末端给备份数组（128 × 128B = 32 扇区）和备份头各留出位置：
+        // effective_last_usable 本身不得侵入备份元数据
+        let file_last = effective_last_usable + 33;
+        ValidatedGeometry::new(&g, file_last, Some(effective_last_usable)).unwrap()
     }
 
     /// 右侧连续空闲：取"下一个分区起点"与"可用区上界+1"的较小者
@@ -496,9 +510,9 @@ mod tests {
         // 修复后的 1000，于是扩容新增的空间可见——这正是"上界只有一个来源"的意思
         let stale = validated(500, 1000, &[(100, 199), (0, 0), (0, 0)]);
         assert_eq!(free_right_gpt(&stale, 1), 1000 + 1 - 200);
-        // 分区号越界：几何给出上界，越界即 0，不再直接索引（历史实现会 panic）
-        assert_eq!(free_right_gpt(&stale, 128), 0);
+        // 分区号越界（表有 128 个槽位）：几何给出上界，越界即 0，不再直接索引
         assert_eq!(free_right_gpt(&stale, 129), 0);
+        assert_eq!(free_right_gpt(&stale, 130), 0);
     }
 
     /// 1MiB 对齐空闲区间：边界 + 子集穷举（覆盖性、不重叠、单位对齐）
