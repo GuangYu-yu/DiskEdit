@@ -207,7 +207,7 @@ pub(crate) fn cmd_resizefs(a: &Args) -> u8 {
         // 必须在首次写盘之前）。扩 FS 的修复步骤（e2fsck -fp 等）本身写盘，缺工具若在那时
         // 才暴露，Infra(30) 会谎报"确定未写盘"。类型接线判断不在此拦：不接线的类型不会写盘，
         // 由 resize_fs_in 按类型给出准确的拒绝文案
-        match fsops::check_grow(target.fstype, src.is_block) {
+        match fsops::check_grow(target.fstype, src.is_block, fsops::needs_loop(&target.scope, src.is_block)) {
             Err(fsops::FsError::UnsupportedFs(_)) => {}
             other => other.unwrap_or_else(|e| bail_fail(Fail::from(e))),
         }

@@ -1672,7 +1672,8 @@ pub fn set_mdos_hidden(src: &mut FileSource, part: u32, on: bool) -> Result<(), 
 }
 
 /// msdos：分区类型字节直改（OSIndicator，类型名域见 util-linux pt-mbr-partnames.h）。
-/// 0x00 拒绝——那是"未用条目"的形状，移除分区应走 `del`。扩展容器类型（0x05/0x0F/0x85）
+/// 0x00 拒绝——那是"未用条目"的形状，移除分区应走 `del`。0xEE 是 GPT 保护记录，
+/// 类型字节承担结构语义，改写后解析侧不再认得出 GPT。扩展容器类型（0x05/0x0F/0x85）
 /// 双向拒绝：改成容器类型会凭空多出一条容器语义，把既有容器改走别的类型则让它管辖的
 /// 逻辑分区失去入口——本工具不管理逻辑分区，两个方向都不受理
 pub fn set_mdos_type(src: &mut FileSource, part: u32, t: u8) -> Result<(), Fail> {
@@ -1709,6 +1710,13 @@ pub fn set_mdos_type(src: &mut FileSource, part: u32, t: u8) -> Result<(), Fail>
     }
     if MDOS_CONTAINER_TYPES.contains(&cur) {
         return Err(Fail::refused(format!("partition {part} is an extended container (0x{cur:02X}) — its type is structural, not descriptive")));
+    }
+    // 与 del_mdos_entry 同判据：0xEE 是保护记录，改掉它会让 pmbr_shape_valid 恒假，
+    // GPT 从此被判成损坏，写路径只能 fail-closed
+    if cur == PROT_MBR_TYPE {
+        return Err(Fail::refused(format!(
+            "partition {part} is the GPT protective record (0xEE) — its type byte is structural, not descriptive"
+        )));
     }
     lba0[off + 4] = t;
     src.write_at(0, &lba0)?;
@@ -2414,6 +2422,14 @@ mod tests {
         let e = set_mdos_type(&mut src, 1, 0x07).unwrap_err();
         assert!(matches!(e, Fail::Refused(_)), "existing extended container must be refused: {e:?}");
         assert_eq!(parse_mbr(&src).unwrap().unwrap()[0].os_type, 0x05);
+        // 既有条目是 GPT 保护记录：类型字节承担结构语义，与 del_mdos_entry 同判据
+        lba0[446 + 4] = 0xEE;
+        src.write_at(0, &lba0).unwrap();
+        let e = set_mdos_type(&mut src, 1, 0x07).unwrap_err();
+        assert!(matches!(e, Fail::Refused(_)), "existing protective record must be refused: {e:?}");
+        let mut raw = vec![0u8; 512];
+        src.read_at(0, &mut raw).unwrap();
+        assert_eq!(raw[446 + 4], 0xEE, "a refused write must leave the type byte unchanged");
     }
 
     /// resize_mdos_entry 是 pub 写入口：start + 新长度越出盘尾必须拒绝——

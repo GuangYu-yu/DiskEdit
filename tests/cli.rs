@@ -502,6 +502,9 @@ fn pending_recovery_blocks_unjournaled_writers_and_empty_shell_is_not_corruption
         vec!["check", p1.as_str()],
         vec!["resizefs", p1.as_str()],
         vec!["add", img_s, "--start", "6144", "--end", "8191"],
+        // copy 声明"没有可续跑的东西"，但正因如此更不能接管别人的现场——
+        // 它走同一个严格打开闸，被拒绝在几何计算之前
+        vec!["copy", p1.as_str(), "--start", "6144"],
     ] {
         let (c, e) = run(&argv);
         assert_eq!(c, 30, "{argv:?} must be refused while another transaction owns the target: {e}");
@@ -577,6 +580,52 @@ fn pending_recovery_blocks_unjournaled_writers_and_empty_shell_is_not_corruption
     let (c, e) = run(&["undo", img_s, "--yes"]);
     assert_eq!(c, 0, "undo of a table-only journal must succeed: {e}");
     assert!(!ckpt.exists(), "a completed rollback must release that transaction's checkpoint");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// undo 收掉零记录的空壳（头完整、身份可归属），但拒绝删一份身份对不上的壳：
+/// "读出来是空的"不是删除授权。也验证空壳与未收尾 checkpoint 并存时不报"目标干净"
+#[test]
+fn undo_removes_an_empty_shell_only_when_its_identity_matches() {
+    let dir = std::env::temp_dir().join(format!("diskedit_shell_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let img = dir.join("sh.img");
+    std::fs::write(&img, vec![0u8; 4 * 1024 * 1024]).unwrap();
+    let exe = env!("CARGO_BIN_EXE_DiskEdit");
+    let img_s = img.to_str().unwrap();
+    let journal = sidecar(&dir, "sh.img", JOURNAL_SUFFIX);
+    let ckpt = sidecar(&dir, "sh.img", CHECKPOINT_SUFFIX);
+    let run = |args: &[&str]| -> (i32, String) {
+        let out = Command::new(exe).args(args).output().unwrap();
+        (out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stderr).into_owned())
+    };
+
+    // 全零身份段：没有可比字段，归属由"候选落点由身份派生"承担——清理
+    std::fs::write(&journal, v4_header_only()).unwrap();
+    let (c, e) = run(&["undo", img_s, "--yes"]);
+    assert_eq!(c, 10, "an empty shell means there is nothing to undo: {e}");
+    assert!(e.contains("empty journal shell"), "the conclusion must say what was removed: {e}");
+    assert!(!journal.exists(), "the empty shell must be removed: {e}");
+
+    // 空壳 + 未收尾 checkpoint：不能报"目标干净"，也一字不动
+    std::fs::write(&journal, v4_header_only()).unwrap();
+    std::fs::write(&ckpt, b"incomplete relocation").unwrap();
+    let (c, e) = run(&["undo", img_s, "--yes"]);
+    assert_eq!(c, 10, "{e}");
+    assert!(e.contains("unfinished checkpoint"), "a leftover checkpoint must not be hidden: {e}");
+    assert!(journal.exists(), "nothing may be removed while another job is unfinished: {e}");
+    std::fs::remove_file(&ckpt).unwrap();
+
+    // 身份段写着别的尺寸：与本目标不符，拒绝删除并原样保留
+    let mut foreign = v4_header_only();
+    foreign[5 + 8 + 8..5 + 8 + 8 + 8].copy_from_slice(&12345u64.to_le_bytes());
+    v4_resign_header(&mut foreign);
+    std::fs::write(&journal, &foreign).unwrap();
+    let (c, e) = run(&["undo", img_s, "--yes"]);
+    assert_eq!(c, 10, "an empty shell of another target must be refused: {e}");
+    assert!(e.contains("not removed here"), "{e}");
+    assert_eq!(std::fs::read(&journal).unwrap(), foreign, "a foreign shell must be left byte-identical");
 
     let _ = std::fs::remove_dir_all(&dir);
 }
