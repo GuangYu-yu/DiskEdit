@@ -146,7 +146,7 @@ fn part_in_use(dev: &str, disk_name: &str, pno: u32) -> std::io::Result<bool> {
 }
 
 /// 在线 resize 总入口（resizefs --online 用）。`size`：None = 扩满现分区；Some(字节) = 绝对新尺寸
-/// （< 现分区 = 仅 btrfs 支持；> 现分区被拒绝：本入口不改分区表）。
+/// （> 现分区与 < 现分区都被拒绝：本入口不改分区表，缩容需要分区跟着缩，属 `resize` 的职责）。
 /// 请求不含锚定语义，故目标在锁下原样给出。
 /// 结果统一为 Outcome（退出码只在 outcome 模块映射）：10=拒绝（未动盘）/
 /// 20=布局已写但后置条件或内核视图未跟上 / 30=执行失败
@@ -921,17 +921,29 @@ mod imp {
             Err(f) => return f.into_outcome(),
         };
         let online_shrink = fstype == Some(crate::fsid::FsKind::Btrfs);
-        if size.is_some_and(|s| s < t.part_len_bytes) && !online_shrink {
+        if size.is_some_and(|s| s < t.part_len_bytes) {
             // xfs 离线同样不可缩（shrink_fs 兜底拒绝），单独说明以免用户改走离线路径
             if fstype == Some(crate::fsid::FsKind::Xfs) {
                 return Outcome::refused(
                     "xfs does not support shrinking (online or offline); only growing is possible".to_string(),
                 );
             }
-            return Outcome::refused(format!(
-                "{} cannot shrink online (only btrfs can); unmount and use the offline path where supported",
-                crate::fsid::fs_name(fstype)
-            ));
+            if !online_shrink {
+                return Outcome::refused(format!(
+                    "{} cannot shrink online (only btrfs can); unmount and use the offline path where supported",
+                    crate::fsid::fs_name(fstype)
+                ));
+            }
+            // 本入口（resizefs --online）不改分区表，而缩容必须让分区跟着 FS 一起缩
+            // （下方 shrink 臂的 part_resize 会写表）——承诺优先于能力，哪怕 btrfs 缩得动。
+            // 与上面的拒绝同层：都在任何 FS 写入与写表之前
+            if !allow_partition_grow {
+                return Outcome::refused(
+                    "resizefs --online does not change the partition table — shrinking the filesystem \
+                     requires shrinking the partition with it; use `diskedit resize` instead"
+                        .to_string(),
+                );
+            }
         }
         // FS 步未完成 → 一条 Pending（补救命令与 fs_grow 同源）
         let fs_pending = |detail: String| {
@@ -1006,7 +1018,8 @@ mod imp {
                         Err(e) => Outcome::applied_with(vec![fs_pending(format!("partition resized but FS grow skipped: {}", e.detail()))]),
                     }
                 } else {
-                    // shrink（仅 btrfs）：FS 先缩（内核校验占用与 256MiB 下限），持久化缩分区
+                    // shrink（仅 btrfs；--online 入口已在上方拒绝，能到这里说明本入口
+                    // 的职责包含分区几何）：FS 先缩（内核校验占用与 256MiB 下限），持久化缩分区
                     if let Err(e) = refuse_btrfs_multi_device(&t, fstype) {
                         return Fail::from(e).into_outcome();
                     }

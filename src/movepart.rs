@@ -2012,7 +2012,8 @@ fn prepare_resize(
         FsAction::Leave
     };
     match fs_action {
-        FsAction::Shrink => crate::fsops::check_shrink(fstype, src.is_block)?,
+        FsAction::Shrink => crate::fsops::check_shrink(fstype, src.is_block,
+            crate::fsops::needs_loop(&crate::fsops::DeviceScope::Partition(part), src.is_block))?,
         // 扩的目标与写盘后的收尾取同一判据（grow_target_at）：要动的那段可能是分区尾部的
         // RW overlay 层，也可能是分区自己。这道写盘前的判定与收尾同源，缺了它就会把
         // "里面是什么都不知道"当成功放过去——正因如此它必须在这里，而不是写表之后

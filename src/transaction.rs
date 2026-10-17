@@ -13,6 +13,7 @@
 //! 本层只保管盘上推导不出来的东西（独占所有权），不复制一份可能与盘上分叉的副本
 
 use std::path::Path;
+use std::sync::Mutex;
 
 #[cfg(target_os = "linux")]
 use std::os::unix::fs::FileTypeExt;
@@ -65,61 +66,39 @@ pub(crate) fn legacy_disk_guid(src: &FileSource) -> Option<[u8; 16]> {
 
 /// 枚举目标上还活着的恢复现场。
 ///
-/// journal 的判据不是"文件在不在"，而是**有没有至少一条完整记录**：
-/// - 有记录（含只余完整前缀的截断尾部）⇒ 活着
-/// - **读不出来**（陌生文件 / magic 不符 / 中途 CRC 损坏）⇒ 也按活着处理。把"读不出来"
-///   当作"没有"，正是把一次中断的操作降级成一次全新操作
-/// - 0 字节，或只写了 magic 就在 `ensure` 中途中断留下的空壳 ⇒ 它描述的是"零次写入"，
-///   没有任何东西依赖它：既不该挡住别的命令，也不该被报成现场。否则一次在创建
-///   journal 时掉电就会把目标永久锁死
+/// journal 的判据集中在 [`dev::classify_journal`]（absent / shell / damaged / records 四态）：
+/// 有记录或读不出来 ⇒ 活着；空壳与 0 字节残骸 ⇒ 不是现场。`undo` 的候选挑选与 `abandon`
+/// 的枚举都消费同一个分类，三处对"什么算现场"不会给出不同答案。
 ///
-/// checkpoint 没有"空壳"一说：它一落盘就描述一次中断的搬移，故只看存在性
+/// checkpoint 没有"空壳"一说：它一落盘就描述一次中断的搬移，故只看存在性——
+/// **只有 `NotFound` 算不存在**，属性读取的其他错误按存在处理
 pub(crate) fn active_recovery_records(
     identity: &TargetIdentity,
     legacy_disk_guid: Option<[u8; 16]>,
 ) -> Vec<RecoveryRecord> {
     let mut out = Vec::new();
     for p in identity.journal_candidates() {
-        if !p.exists() {
-            continue;
-        }
-        // 目录等非普通文件不是本工具写下的任何东西（本工具只建普通文件）：read_entries
-        // 对目录报 EISDIR 会把它记成"读不出来的现场"，而 abandon 对目录 hard_link 必然
-        // 失败——留下一个清不掉的假现场
-        if std::fs::metadata(p).is_ok_and(|m| !m.is_file()) {
-            continue;
-        }
-        // 0 字节的创建残骸描述的是**零次写入**，故不是现场。判据与 `Journal::open`、
-        // `undo` 的候选挑选共用一个实现（`dev::is_zero_write_remnant`）——三处若不一致，
-        // 一次在创建 journal 时掉电就会出现两种结局：开 journal 的命令放行、走闸口的命令
-        // 被永久挡住。1..HEADER_LEN-1 字节**不在**这条判据里（详见该函数的注释）：那种文件
-        // 可能是一份被外部截断、记录已丢的现场，按"读不出来"处理
-        if dev::is_zero_write_remnant(p) {
-            continue;
-        }
-        // 读不出大小不是"0 字节"：那种文件不在此跳过，交由下方 read_entries 归类
-        // （读不出来会记为现场）——把它折叠成 0 会把真现场当残骸放行
-        let entries = match Journal::read_entries(p) {
-            Ok(dev::JournalRead::Complete(v)) | Ok(dev::JournalRead::TruncatedTail(v)) => {
-                if v.is_empty() {
-                    continue; // 零记录的壳：不是现场
-                }
-                Some(v)
+        match dev::classify_journal(p) {
+            dev::JournalCandidate::Absent | dev::JournalCandidate::Shell => {}
+            dev::JournalCandidate::Damaged(_) => {
+                out.push(RecoveryRecord::Journal { path: p.clone(), entries: None });
             }
-            Err(_) => None,
-        };
-        out.push(RecoveryRecord::Journal { path: p.clone(), entries });
+            dev::JournalCandidate::Records(read) => {
+                let entries = match read {
+                    dev::JournalRead::Complete(v) | dev::JournalRead::TruncatedTail(v) => v,
+                };
+                out.push(RecoveryRecord::Journal { path: p.clone(), entries: Some(entries) });
+            }
+        }
     }
     for p in identity.checkpoint_candidates(legacy_disk_guid) {
-        // 与上方 journal 分支同判据：目录等非普通文件不是本工具写下的任何东西，
-        // 留着它会把一个无关路径顶成 busy 现场
-        if let Ok(m) = std::fs::metadata(&p)
-            && !m.is_file()
-        {
-            continue;
-        }
-        if p.exists() {
-            out.push(RecoveryRecord::Checkpoint { path: p });
+        // 目录等非普通文件不是本工具写下的任何东西，留着它会把一个无关路径顶成 busy 现场
+        match std::fs::metadata(&p) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            // 读不出来不是"没有"：折叠成 absent 会让闸口在 state_dir 不可读时放行写命令
+            Err(_) => out.push(RecoveryRecord::Checkpoint { path: p }),
+            Ok(m) if !m.is_file() => continue,
+            Ok(_) => out.push(RecoveryRecord::Checkpoint { path: p }),
         }
     }
     out
@@ -128,6 +107,17 @@ pub(crate) fn active_recovery_records(
 /// 事务的控制层。它不持状态——"这次事务开到哪了"的唯一事实就是盘上那份 journal
 /// 与目标本身；本类型只提供入口，使生命周期只有一个地方可改
 pub(crate) struct TransactionManager;
+
+/// 本次进程内那次写事务的身份：**在事务开始时（锁下、目标句柄已打开）记下**，
+/// `commit` 只消费它。收尾时不再按命令行路径重新解析——命令返回后路径可能已经指向另一个
+/// 文件（改名或替换），重新解析会把清理落到别人的 journal 上。
+///
+/// 一个进程只跑一条命令，因此单槽位足够；`begin_or_resume` 是唯一的写入点
+static TRANSACTION_IDENTITY: Mutex<Option<TargetIdentity>> = Mutex::new(None);
+
+fn session_slot() -> std::sync::MutexGuard<'static, Option<TargetIdentity>> {
+    TRANSACTION_IDENTITY.lock().unwrap_or_else(|e| e.into_inner())
+}
 
 /// 入口对"目标上已有现场"的处置声明——由调用方**显式选择**，事务层只执行。
 /// 这是"每个入口接受哪几态"的类型化：判据不以闭包形式下沉（压成 bool 会让
@@ -212,6 +202,8 @@ impl TransactionManager {
             }
         };
         Self::attach_journal(&mut src)?;
+        // 身份在锁下、与已打开的句柄同一时刻定稿；`commit` 只消费这一个值
+        *session_slot() = Some(src.identity.clone());
         Ok((src, resumed))
     }
 
@@ -239,13 +231,17 @@ impl TransactionManager {
         let resumable = active.iter().any(|r| matches!(r, RecoveryRecord::Checkpoint { .. }));
         // 恰好一份 journal 且它可回滚才给这条出路：两份并存时 undo 的 pick_journal
         // 会因无法抉择而拒绝（Ambiguous），按其中一份许诺"可以 undo"是句到不了的出路
-        let single_rollbackable = active.iter().filter(|r| matches!(r, RecoveryRecord::Journal { .. })).count() == 1
-            && active.iter().all(|r| match r {
-                RecoveryRecord::Journal { entries: Some(v), .. } => {
-                    v.iter().all(|e| !matches!(e.recovery, dev::RecoveryData::Barrier))
-                }
-                _ => false,
-            });
+        // 与 `pick_journal` 同分母：只有"读出来且非空"的 journal 参与计数；损坏候选
+        // （entries: None）既不否决一份可用的记录，也不被当成第二份
+        let usable: Vec<&Vec<dev::JournalRecord>> = active
+            .iter()
+            .filter_map(|r| match r {
+                RecoveryRecord::Journal { entries: Some(v), .. } => Some(v),
+                _ => None,
+            })
+            .collect();
+        let single_rollbackable = usable.len() == 1
+            && usable[0].iter().all(|e| !matches!(e.recovery, dev::RecoveryData::Barrier));
         let way_out = if resumable {
             // "重跑原命令即续跑"只对 relocation 作业成立；单分区 resize 的现场
             //（RecoveryRecord 只有路径，分不出两族）必须把另一条出路一并给出
@@ -307,22 +303,22 @@ impl TransactionManager {
         Ok(src)
     }
 
-    /// 提交：事务完成，关闭它的 active 状态。删的是本次身份的全部候选落点——含历史命名
-    /// 那一份：留着它会被下次查找命中，把历史字节回放到一个已经改过的盘上。
-    /// 不存在即无残留、无告警；删除真失败则由 `dev::warn_if_remove_failed` 告警
+    /// 提交：事务完成，关闭它的 active 状态。删的是**事务开始时确定的那个身份**的全部
+    /// 候选落点——含历史命名那一份：留着它会被下次查找命中，把历史字节回放到一个已经
+    /// 改过的盘上。不存在即无残留、无告警；删除真失败则由 `dev::warn_if_remove_failed`
+    /// 告警
     ///
-    /// 命令返回时 [`FileSource`]（连同它的所有权）已释放，故这里重新取一次锁：删除必须
-    /// 与 journal 的创建落在同一个独占窗口里，否则窗口内另一个 diskedit 可能刚在同一
-    /// 落点建好它自己的 journal，删掉的就是别人的回滚凭据。取不到锁即保留 journal
+    /// `identity` 必须来自 [`Self::begin_or_resume`] 记下的值（见 [`Self::take_identity`]），
+    /// **不得在这里按命令行路径重新解析**：命令返回时路径可能已被改名或替换，重新解析
+    /// 会得到另一个文件的伴随文件，删掉的就是别人的回滚凭据
+    ///
+    /// 命令返回时 [`FileSource`]（连同它的所有权）已释放，故这里按同一身份重新取一次锁：
+    /// 删除必须与 journal 的创建落在同一个独占窗口里。取不到锁即保留 journal
     /// （漏删会被下次运行报成 busy，但不会丢失别人的现场）
-    pub(crate) fn commit(a: &Args) {
-        let Some(id) = TargetIdentity::resolve_path(Path::new(&a.target)) else {
-            eprintln!("warning: cannot re-resolve the target identity — the undo journal is left in place");
-            return;
-        };
+    pub(crate) fn commit(identity: &TargetIdentity) {
         // 重新取锁后目标归本进程独占，下面两个动作（删除与目录落盘）才不会被别人的
         // 新建动作穿插；锁失败只影响"现在能不能关窗口"，不是数据错误
-        let _lock = match TargetLock::acquire(&id) {
+        let _lock = match TargetLock::acquire(identity) {
             Ok(lock) => lock,
             Err(f) => {
                 let why = match f {
@@ -334,12 +330,18 @@ impl TransactionManager {
                 return;
             }
         };
-        for p in id.journal_candidates() {
+        for p in identity.journal_candidates() {
             dev::warn_if_remove_failed(p);
             // 撤销窗口的关闭与创建/改写同级持久化：unlink 不落盘时掉电后 journal 可能复活，
             // 把已完成的事务报成未收尾现场
             dev::best_effort_dir_fsync(p);
         }
+    }
+
+    /// 取走事务开始时记下的身份。没有走到 `begin_or_resume`（或它没成功）时为 None——
+    /// 此时没有本进程开的撤销窗口可关
+    pub(crate) fn take_identity() -> Option<TargetIdentity> {
+        session_slot().take()
     }
 
     /// 目标上还活着的恢复现场
@@ -392,10 +394,11 @@ mod tests {
     }
 
     /// 出路按现场性质分三路，给同一句话就是把用户送进注定失败的路。undo 这条出路
-    /// 要求**每一份** journal 都可回滚：多份并存时 `pick_journal` 会因无法抉择而
-    /// 拒绝（Ambiguous），凭其中一份许诺"可以 undo"是句到不了的出路
+    /// 要求**恰好一份可读 journal**：多份并存时 `pick_journal` 会因无法抉择而拒绝
+    /// （Ambiguous），凭其中一份许诺"可以 undo"是句到不了的出路；读不出来的候选则
+    /// 只告警、不否决那一份可用记录
     #[test]
-    fn busy_offers_undo_only_when_every_journal_is_rollbackable() {
+    fn busy_offers_undo_only_when_a_single_usable_journal_is_rollbackable() {
         let text = way_out(&[journal("a", false)]);
         assert!(text.contains("undo"), "a rollbackable journal must offer undo: {text}");
 
@@ -412,5 +415,39 @@ mod tests {
         let text = way_out(&[journal("a", false), journal("b", false)]);
         assert!(!text.contains("undo"), "two journals leave undo no single choice: {text}");
         assert!(text.contains("abandon"), "{text}");
+
+        // 一份可用 + 一份读不出来：pick_journal 按可用那份回放，损坏候选只告警，
+        // 因此它不参与计数、也不否决 "undo"
+        let damaged = RecoveryRecord::Journal { path: "b".into(), entries: None };
+        let text = way_out(&[journal("a", false), damaged]);
+        assert!(text.contains("undo"), "a damaged candidate must not withdraw the undo way out: {text}");
+    }
+
+    /// commit 只清**传入身份**的候选：同一条命令行路径在不同时刻可以指向不同文件，
+    /// 收尾时按路径重新解析会删到别人的 journal。这里用两个不同身份证明清理范围
+    #[test]
+    fn commit_drops_the_candidates_of_the_given_identity_only() {
+        let dir = std::env::temp_dir().join(format!("diskedit_commitid_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let img = dir.join("a.img");
+        std::fs::write(&img, b"x").unwrap();
+        let id = TargetIdentity::resolve_image(&img);
+        let mut mine = Vec::new();
+        for p in id.journal_candidates() {
+            std::fs::write(p, b"DEJL\x05").unwrap();
+            mine.push(p.clone());
+        }
+        let other = TargetIdentity::resolve_image(&dir.join("b.img"));
+        std::fs::write(other.journal_path(), b"keep").unwrap();
+
+        TransactionManager::commit(&id);
+
+        for p in &mine {
+            assert!(!p.exists(), "{} belongs to the committed transaction and must be dropped", p.display());
+        }
+        assert!(other.journal_path().exists(), "another target's journal must survive the commit");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -110,7 +110,9 @@ pub(crate) fn cmd_add(a: &Args) -> u8 {
     // 分区节点不是合法载体：表条目写在整盘最前 16KiB，落到分区节点上会直接覆盖该
     // 分区的数据——判据与文案见 refuse_partition_node_target
     refuse_partition_node_target("add", &a.target);
-    let (Some(start), Some(end)) = (a.start, a.end) else { crate::args::usage() };
+    let (Some(start), Some(end)) = (a.start, a.end) else {
+        bail_fail(Fail::refused("`add` needs both --start and --end".to_string()));
+    };
     let mut src = open_target_for_write(a).unwrap_or_else(|f| bail_fail(f));
     // 坐标系在几何计算前确定：GPT 条目按表头 ss 对齐，MBR 条目按容器 ss 对齐
     match table::table_label(&src) {
@@ -196,7 +198,9 @@ pub(crate) fn cmd_resize_part(a: &Args) -> u8 {
             "`--start end` does not apply to resize-part (it does not relocate) — use --grow-to-end to extend the partition to the last usable LBA",
         ));
     }
-    let (Some(pref), Some(start)) = (a.part, a.start) else { crate::args::usage() };
+    let (Some(pref), Some(start)) = (a.part, a.start) else {
+        bail_fail(Fail::refused("`resize-part` needs :N and --start".to_string()));
+    };
     if a.grow_to_end && a.end.is_some() {
         bail_fail(Fail::refused("--end and --grow-to-end are mutually exclusive".to_string()));
     }
@@ -214,7 +218,9 @@ pub(crate) fn cmd_resize_part(a: &Args) -> u8 {
         // 后方有分区时由 resize_part 的重叠校验拒绝
         g.last_usable_lba()
     } else {
-        let Some(e) = a.end else { crate::args::usage() };
+        let Some(e) = a.end else {
+            bail_fail(Fail::refused("`resize-part` needs --end (or --grow-to-end)".to_string()));
+        };
         e
     };
     // --grow-to-end：end 钉死 last_usable 不做下取整（吃满语义），--align 仅作用于 start；

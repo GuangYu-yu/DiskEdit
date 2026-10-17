@@ -63,7 +63,9 @@ pub(crate) fn cmd_plan_apply(cmd: &str, a: &Args) -> u8 {
     if let Some(n) = a.part {
         bail_fail(Fail::refused(format!("`{cmd}` selects the partition with --grow N — drop :{n}")));
     }
-    let Some(pref) = a.grow else { crate::args::usage() };
+    let Some(pref) = a.grow else {
+        bail_fail(Fail::refused(format!("`{cmd}` needs --grow N")));
+    };
     if cmd == "plan" {
         // 这一段只读：plan 不写盘，故按只读命令打开——否则一块正被使用的盘上
         // 连 `plan` 都跑不出计划

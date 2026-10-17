@@ -45,7 +45,8 @@ pub(crate) const HELP: &str = r#"diskedit resize <TARGET>:N <SIZE> [OPTIONS]
   the filesystem step of the grown partition, so it cannot shrink: the FS has
   to be shrunk first. It is also required whenever the filesystem inside
   cannot be grown (unidentified, or not wired to a tool) — otherwise the
-  request is refused (10)."#;
+  request is refused (10). On an LVM PV --no-fs is refused: the PV chain has
+  no filesystem step of its own."#;
 
 /// 尺寸请求的**形状**（与盘无关）：位置参数 SIZE / `--size` 绝对值 / `--grow-to-end`。
 /// 在线路径把它带进锁内、用锁下重取的当前分区尺寸重新解析——`+N`/`+N%` 锚定"当前尺寸"、
@@ -412,7 +413,9 @@ pub(crate) fn cmd_resize(a: &Args) -> u8 {
     match table::table_label(&src) {
         Ok(table::TableLabel::Gpt) => {}
         Ok(table::TableLabel::Mbr) => {
-            let Some(pref) = a.part else { crate::args::usage() };
+            let Some(pref) = a.part else {
+                bail_fail(Fail::refused("`resize` needs :N (the partition to resize)".to_string()));
+            };
             return cmd_resize_msdos(a, pref, &req, &src);
         }
         // superfloppy：无分区表，FS 即整盘，无表可写——纯 FS grow
@@ -420,7 +423,9 @@ pub(crate) fn cmd_resize(a: &Args) -> u8 {
         Ok(other) => bail_fail(Fail::refused(format!("resize requires a GPT or MBR target (label: {other})"))),
         Err(e) => bail_fail(Fail::infra(format!("parse failed: {e}"))),
     }
-    let Some(pref) = a.part else { crate::args::usage() };
+    let Some(pref) = a.part else {
+        bail_fail(Fail::refused("`resize` needs :N (the partition to resize)".to_string()));
+    };
     // 可操作几何（构造点即拒绝条目重叠）：entries / ss / 修复后的 last_usable 全部取自它，
     // 命令层不自己算一次有效上界
     let (g, _repair) = crate::gpt_policy::require_gpt_geometry(&src, "resize").unwrap_or_else(|f| bail_fail(f));
@@ -621,7 +626,7 @@ fn cmd_resize_superfloppy(a: &Args, req: &SizeRequest) -> u8 {
     // 类型接线判断不在此拦：不接线的类型不会写盘，由 resize_fs_in 按类型给出准确的
     // 拒绝文案；grow_support 的 "--no-fs" 提示对无分区的 superfloppy 不适用
     if let Some(kind) = fstype {
-        match fsops::check_grow(kind, src.is_block) {
+        match fsops::check_grow(kind, src.is_block, fsops::needs_loop(&fsops::DeviceScope::Whole, src.is_block)) {
             Err(fsops::FsError::UnsupportedFs(_)) => {}
             other => other.unwrap_or_else(|e| bail_fail(Fail::from(e))),
         }
@@ -883,7 +888,8 @@ fn cmd_resize_msdos(a: &Args, pref: PartSelector, req: &SizeRequest, src_ro: &Fi
             }
             // FS 收缩的前置检查与 GPT 路径同一处（fsops::check_shrink）：能否缩 / 类型是否
             // 认得 / 工具是否齐备只写一份
-            fsops::check_shrink(fstype, is_block).unwrap_or_else(|e| bail_fail(Fail::from(e)));
+            fsops::check_shrink(fstype, is_block, fsops::needs_loop(&fsops::DeviceScope::Partition(part), is_block))
+                .unwrap_or_else(|e| bail_fail(Fail::from(e)));
             if let Some(min) = fsops::fs_min_bytes(&src, part, fstype)
                 .unwrap_or_else(|e| bail_fail(Fail::from(e).context("min-size probe failed")))
                 && bytes < min

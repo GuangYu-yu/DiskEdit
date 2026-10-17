@@ -13,9 +13,10 @@
 //!
 //! 身份一律是**盘级**的：分区号属于操作与校验，不进落盘键。loop 设备的身份是
 //! backing 文件的 realpath（Linux；`/dev/loop0:2` 与直接以该镜像为目标的操作由此
-//! 收敛到同一序列化域），非 loop 块设备仍是 sysfs 拓扑键，镜像路径 canonicalize
-//! 后与 loop 侧对齐。两个列表的首项都是写入位置，其后是历史命名候选：只用于发现，
-//! 发现后仍走完整校验；不做文件改名迁移。
+//! 收敛到同一序列化域），非 loop 块设备仍是 sysfs 拓扑键。镜像身份以**已打开句柄**
+//! 的路径为准（Linux：`/proc/self/fd`，块设备则按 fd 的 rdev 反查 sysfs），不从命令行
+//! 路径二次取事实——打开与 canonicalize 之间的替换窗口会让身份与写句柄分叉。两个列表
+//! 的首项都是写入位置，其后是历史命名候选：只用于发现，发现后仍走完整校验；不做文件改名迁移。
 
 use std::fs::{File, OpenOptions};
 use std::io;
@@ -596,30 +597,12 @@ impl TargetIdentity {
         }
     }
 
-    /// 手上只有目标路径时解析身份（撤销窗口在命令收尾时按命令行参数关闭，那时
-    /// FileSource 已释放）。块设备判定与容量都要重取一次，且必须与打开目标时算出
-    /// 同一个身份——收尾删的是这里给出的名字，差一个字节就会漏删。取不到容量即返回
-    /// None，由调用方告警：宁可留下 journal，也不能删错别人的
-    pub(crate) fn resolve_path(path: &Path) -> Option<Self> {
-        #[cfg(target_os = "linux")]
-        {
-            // stat 不了的目标身份不可知：按镜像身份收尾会删错候选。宁可漏删（None ⇒
-            // 调用方告警并留下 journal），也不按错身份删
-            match std::fs::metadata(path).map(|m| m.file_type().is_block_device()) {
-                Ok(true) => return Self::resolve_block(path).ok(),
-                Ok(false) => {}
-                Err(_) => return None,
-            }
-        }
-        Some(Self::resolve_image(path))
-    }
-
     /// 清理类命令（abandon）的身份解析：目标可能已不存在，而现场文件可能比目标活得
     /// 久（用户删了镜像，journal 还在旁边）。路径 stat 不了时按镜像身份回退——镜像
     /// 身份就是给定的路径本身，兄弟候选的枚举不需要目标存在。节点消失的块设备身份
     /// 不可恢复（拓扑派生），其 state_dir 下的现场随之不可达：此处无从区分两者，按
     /// 镜像回退时前者得救、后者空跑——报"nothing to abandon"而不是按错身份删候选。
-    /// 拓扑解析得出但解析失败的块设备仍返回 None（同 resolve_path 的保守方向）。
+    /// 拓扑解析得出但解析失败的块设备仍返回 None（保守方向：宁可漏清，也不按错身份删候选）。
     /// loop 设备的回退内建于 [`Self::loop_backed`]：backing 的 realpath 取不到时退到
     /// sysfs 记录的原始路径串与 state_dir 历史落点，不因 backing 消失而失去现场
     pub(crate) fn resolve_for_cleanup(path: &Path) -> Option<Self> {
@@ -861,6 +844,58 @@ impl FileSource {
         Self::open_image(path, sector_size_override, false)
     }
 
+    /// 已打开镜像的身份。canonical 取自**已打开的句柄**（Linux：`/proc/self/fd/<n>`），
+    /// 不再按命令行路径 canonicalize：open 与 canonicalize 之间有一个窗口，路径被改名或
+    /// 替换后，canonicalize 给出的是另一个文件的名字，而写入仍落在 fd 指向的文件上，
+    /// journal / checkpoint / lock 因此会挂到另一份数据旁。
+    ///
+    /// 字面路径仍用于日志命名与历史候选，但前提是它**此刻仍指向同一个 inode**：改名后
+    /// 旧路径可能已经属于别人，把它的兄弟文件当成本目标的历史候选，提交清理时就会删到
+    /// 别人的 journal。两条检查任一不成立即拒绝（fail-closed），不退到路径身份
+    #[cfg(target_os = "linux")]
+    fn identity_of_opened_image(
+        path: &Path,
+        file: &File,
+        meta: &std::fs::Metadata,
+    ) -> io::Result<TargetIdentity> {
+        use std::os::fd::AsRawFd;
+        use std::os::unix::fs::MetadataExt;
+        let link = PathBuf::from(format!("/proc/self/fd/{}", file.as_raw_fd()));
+        let canonical = std::fs::read_link(&link).map_err(|e| {
+            io::Error::other(format!(
+                "cannot resolve the path of the opened target through {}: {e} — refusing to \
+                 derive the target identity from the command-line path alone",
+                link.display()
+            ))
+        })?;
+        // 打开之后被 unlink：内核在链接尾部标 " (deleted)"，这个名字已不再指向任何可达
+        // 文件，伴随文件无处安放
+        if canonical.as_os_str().to_string_lossy().ends_with(" (deleted)") {
+            return Err(io::Error::other(format!(
+                "the target {} was removed after it was opened — refusing to write through an unnamed file",
+                path.display()
+            )));
+        }
+        let literal = std::fs::metadata(path).map_err(|e| {
+            io::Error::other(format!(
+                "cannot verify that {} still names the opened target: {e}",
+                path.display()
+            ))
+        })?;
+        if (literal.dev(), literal.ino()) != (meta.dev(), meta.ino()) {
+            return Err(io::Error::other(format!(
+                "{} no longer names the file that was opened (path dev:{} ino:{}, opened dev:{} ino:{}) \
+                 — refusing to place the undo journal next to another file",
+                path.display(),
+                literal.dev(),
+                literal.ino(),
+                meta.dev(),
+                meta.ino(),
+            )));
+        }
+        Ok(TargetIdentity::image_at(&canonical, path))
+    }
+
     /// 镜像打开的唯一实现：可写性是显式参数，读写与只读两个入口不各自拼一份
     fn open_image(path: &Path, sector_size_override: Option<u64>, writable: bool) -> io::Result<Self> {
         let mut opts = OpenOptions::new();
@@ -881,6 +916,13 @@ impl FileSource {
                 format!("invalid sector size {sector_size}"),
             ));
         }
+        // 身份也取自已打开的句柄：路径在 open 与 canonicalize 之间被替换时，身份与写句柄
+        // 会指向两个不同的文件（见 `identity_of_opened_image`）
+        #[cfg(target_os = "linux")]
+        let identity = Self::identity_of_opened_image(path, &file, &meta)?;
+        // 非 Linux 没有从 fd 取路径的标准接口：维持按路径解析（README 的"并发边界"
+        // 已声明该平台上的别名路径各有一份现场与一把锁）
+        #[cfg(not(target_os = "linux"))]
         let identity = TargetIdentity::resolve_image(path);
         if writable {
             // 可写打开：顺手清掉落点目录里的崩溃残骸（ckpt 暂存文件）
@@ -1283,25 +1325,48 @@ fn truncated_header_error(have: usize) -> io::Error {
     )
 }
 
-/// 落点是不是"零次写入"的残骸：文件存在、是普通文件、且**一个字节都没有**。
+/// 一个 journal 候选落点的状态。**四态是现场判定的唯一来源**：写闸口、`undo` 的挑选
+/// 与 `abandon` 的枚举都从它派生，不各自实现"文件在不在 / 读不读得出"。
 ///
-/// 0 字节有两种在现有状态下**不可区分**的来源：`ensure` 先 `create_new` 建文件、再把头
-/// 一次写完，中断在两者之间会留下 0 字节；已有 journal 被外部截断到 0 也一样。本判据把
-/// 0 字节一律按前者收养（它不可能含任何记录——记录只能接在完整头之后），但**排除不了
-/// 后者**，这是已接受的限制而非安全保证（见 `journal_truncated_to_zero_is_adopted_as_a_remnant`
-/// 测试）。
-/// **判据只有这一条**，三个消费点共用——
-/// [`Journal::open`]（补头后照常使用）、事务闸口 `active_recovery_records`（不算现场）、
-/// `undo` 的候选挑选（不算可回放的 journal）。三者若不同源，一次在创建 journal 时掉电就会
-/// 出现两种结局：开 journal 的命令放行、走闸口的命令被永久挡住。
+/// `Absent` 覆盖三种"不是现场"的形态：落点不存在、0 字节残骸、非普通文件。0 字节有两种
+/// 在现有状态下不可区分的来源（`ensure` 建好文件、头还没写；已有 journal 被外部截断到 0），
+/// 一律按零次写入收养——它不可能含记录，因为记录只能接在完整头之后。这是已接受的限制而非
+/// 安全保证（见 `journal_truncated_to_zero_is_adopted_as_a_remnant` 测试）。
 ///
-/// **1..HEADER_LEN-1 字节不在此列**：我们的代码只会在这条 50 字节的写里被打断时留下这种文件，
-/// 而"初始化没写完"与"原 journal 被外部截断到这么短"在内容上不可区分（头没写全，身份段的
-/// CRC 也验不了）——后者是一份**丢了记录**的现场，且丢了哪些已无从得知。把不可证明当已证明，
-/// 就会替用户宣布"这里什么都没有"；故那种现场按"读不出来"拒绝，由 `abandon` 显式释放
-/// （它是改名保留字节，不是覆盖）
-pub(crate) fn is_zero_write_remnant(path: &Path) -> bool {
-    matches!(std::fs::metadata(path), Ok(m) if m.is_file() && m.len() == 0)
+/// **1..HEADER_LEN-1 字节不在此列**：初始化没写完与原 journal 被外部截断到这么短在内容上
+/// 不可区分，后者是一份丢了记录的现场。把不可证明当已证明，就会替用户宣布"这里什么都没有"；
+/// 故那种形态按 `Damaged` 拒绝，由 `abandon` 显式释放（它是改名保留字节，不是覆盖）。
+pub(crate) enum JournalCandidate {
+    Absent,
+    /// 头完整、零条完整记录：零次写入的壳
+    Shell,
+    /// 读不出来（陌生文件、magic 不符、CRC 损坏、属性读取失败）
+    Damaged(String),
+    /// 至少一条完整记录
+    Records(JournalRead),
+}
+
+/// 判一个落点属于哪一态。**只有 `NotFound` 是"不在"**：属性读不出来按 `Damaged` 处理，
+/// 否则一次瞬态 I/O 错误就会把一份可能完好的现场当成不存在，后续 `commit` 还会
+/// 把它静默删掉
+pub(crate) fn classify_journal(path: &Path) -> JournalCandidate {
+    let meta = match std::fs::metadata(path) {
+        Ok(m) => m,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return JournalCandidate::Absent,
+        Err(e) => return JournalCandidate::Damaged(format!("cannot stat: {e}")),
+    };
+    if !meta.is_file() || meta.len() == 0 {
+        return JournalCandidate::Absent;
+    }
+    match Journal::read_entries(path) {
+        Ok(JournalRead::Complete(v)) | Ok(JournalRead::TruncatedTail(v)) if v.is_empty() => {
+            JournalCandidate::Shell
+        }
+        Ok(read) => JournalCandidate::Records(read),
+        // 属性读到之后文件被删掉：本次判断按"不在"处理，与打开时的 NotFound 同义
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => JournalCandidate::Absent,
+        Err(e) => JournalCandidate::Damaged(e.to_string()),
+    }
 }
 
 fn journal_decode_err(what: &str) -> io::Error {
@@ -1547,12 +1612,17 @@ impl Journal {
     /// 既有文件还要过身份核对：它记的是**哪个目标**（v4 起）。指纹或 loop 映射不符即拒绝
     /// 采纳——把别的目标记下的原文当成"本目标的待回滚字节"，是这条路径最坏的后果
     ///
-    /// 唯一的例外：（0 字节的残骸 → 补写头，判据见 [`is_zero_write_remnant`]）与
+    /// 唯一的例外：（0 字节的残骸 → 补写头）与
     /// （撕裂尾物理截断，见 [`Self::scan_entries`]）。两者都是收养既有现场的一部分而非新痕迹
     /// ——不截断的话垃圾尾会永远留在文件里，之后的新记录接在垃圾之后，`read_entries` 会把
     /// "垃圾之后的一切"都判进 TruncatedTail，新记录从此无法回放
+    ///
+    /// 文件以 `read(true).write(true)` 打开（**不用 append 模式**）：补头、撕裂尾截断
+    /// （`set_len`）与之后的追加全部复用这一个句柄。append 模式在 Windows 上只拿到
+    /// `FILE_APPEND_DATA`、没有 `set_len` 所需的 `FILE_WRITE_DATA`，会迫使截断再按路径
+    /// 开第二个句柄——两次打开之间路径可被替换，截断就落到另一个文件上
     pub fn open(path: &Path, identity: JournalIdentity) -> io::Result<Self> {
-        match OpenOptions::new().read(true).append(true).open(path) {
+        match OpenOptions::new().read(true).write(true).open(path) {
             Ok(mut f) => {
                 use std::io::Read;
                 let len = f.metadata()?.len();
@@ -1562,8 +1632,7 @@ impl Journal {
                 // 一律走下面的三关校验——把那种现场也当残骸，就等于替用户宣布"这里什么
                 // 都没有"，而头没写全、身份段 CRC 验不了，证明不了这一点
                 if len == 0 {
-                    Self::rewrite_header(path, &identity)?;
-                    let f = OpenOptions::new().read(true).append(true).open(path)?;
+                    Self::rewrite_header(path, &mut f, &identity)?;
                     return Ok(Self::at(path, Some(f), identity, JournalFormat::V5));
                 }
                 let have = usize::try_from(len.min(Self::HEADER_LEN as u64)).unwrap();
@@ -1593,8 +1662,7 @@ impl Journal {
                 // 采纳前的撕裂尾物理截断：共用扫描给出最后一条完整记录的结束偏移，
                 // 零完整记录时截回头的长度。截断点之前的记录每条都通过了 CRC，
                 // 其对应的写入都确实发生过；被截掉的只有"没走完的追加"或其后的垃圾。
-                // set_len 走独立的写句柄：append 模式的句柄在 Windows 上只有
-                // FILE_APPEND_DATA，没有 set_len 所需的 FILE_WRITE_DATA
+                // `set_len` 与追加共用上面那个句柄：不再按路径二次打开
                 {
                     use std::io::{Read, Seek, SeekFrom};
                     let mut data = Vec::new();
@@ -1603,9 +1671,8 @@ impl Journal {
                     let (_, truncated, end) = Self::scan_entries(&data, format)?;
                     if truncated {
                         let cut = data.len() - end;
-                        let w = std::fs::OpenOptions::new().write(true).open(path)?;
-                        w.set_len(end as u64)?;
-                        w.sync_all()?;
+                        f.set_len(end as u64)?;
+                        f.sync_all()?;
                         eprintln!(
                             "note: journal {} ends with an incomplete record — truncated {cut} byte(s) back to the last complete record",
                             path.display()
@@ -1621,14 +1688,14 @@ impl Journal {
         }
     }
 
-    /// 把残骸的头重写成当前格式与身份：截到 0 再写，否则残余的半个头会留在新头之前
-    fn rewrite_header(path: &Path, identity: &JournalIdentity) -> io::Result<()> {
-        let w = std::fs::OpenOptions::new().write(true).open(path)?;
-        w.set_len(0)?;
-        use std::io::Write;
-        let mut w = w;
-        w.write_all(&Self::header(identity, JournalFormat::V5))?;
-        w.sync_all()?;
+    /// 把残骸的头重写成当前格式与身份：截到 0 再写，否则残余的半个头会留在新头之前。
+    /// 复用调用方已打开的那个句柄（不按路径二次打开）
+    fn rewrite_header(path: &Path, f: &mut File, identity: &JournalIdentity) -> io::Result<()> {
+        use std::io::{Seek, SeekFrom, Write};
+        f.set_len(0)?;
+        f.seek(SeekFrom::Start(0))?;
+        f.write_all(&Self::header(identity, JournalFormat::V5))?;
+        f.sync_all()?;
         best_effort_dir_fsync(path);
         Ok(())
     }
@@ -1647,7 +1714,7 @@ impl Journal {
             if let Some(dir) = self.path.parent() {
                 best_effort_mkdir(dir);
             }
-            let mut f = OpenOptions::new().create_new(true).write(true).open(&self.path).map_err(|e| {
+            let mut f = OpenOptions::new().read(true).write(true).create_new(true).open(&self.path).map_err(|e| {
                 if e.kind() == io::ErrorKind::AlreadyExists {
                     io::Error::new(
                         io::ErrorKind::AlreadyExists,
@@ -1714,14 +1781,21 @@ impl Journal {
         }
     }
 
+    /// 追加一条记录。调用方必须持有目标锁（生产路径上只有 [`FileSource::write_at`] /
+    /// [`FileSource::mark_non_reversible`] 会走到这里，而 journal 只挂在持锁的
+    /// `FileSource` 上）：`seek(End)` 与随后的写入之间不能有第二个写者。
+    ///
+    /// 句柄不是 append 模式，追加位置因此由这里显式给出——只 seek 一次，然后把
+    /// `[len][crc][payload]` 连续写完，避免帧中间夹进别人的写入
     fn append(&mut self, rec: &JournalRecord) -> io::Result<()> {
-        use std::io::Write;
+        use std::io::{Seek, SeekFrom, Write};
         let payload = rec.encode();
         // 长度字段按 u32 落盘：超限静默截断会破坏 [len][crc][payload] 的帧定位，显式拒绝
         let n = u32::try_from(payload.len())
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "journal record exceeds u32 length"))?;
         let format = self.format;
         let f = self.ensure()?;
+        f.seek(SeekFrom::End(0))?;
         let n_le = n.to_le_bytes();
         f.write_all(&n_le)?;
         f.write_all(&Self::record_crc(format, n_le, &payload).to_le_bytes())?;
@@ -1823,6 +1897,58 @@ mod tests {
             Ok(_) => panic!("expected an error"),
             Err(e) => e.to_string(),
         }
+    }
+
+    /// 四态分类的边界：只有 NotFound 是 absent；0 字节残骸与非普通文件也不是现场；
+    /// 零记录的头是 shell；半截头与陌生文件是 damaged
+    #[test]
+    fn journal_candidate_classification_covers_every_state() {
+        let p = journal_path("classify");
+        assert!(matches!(classify_journal(&p), JournalCandidate::Absent), "a missing path is absent");
+
+        std::fs::write(&p, b"").unwrap();
+        assert!(matches!(classify_journal(&p), JournalCandidate::Absent), "a zero-byte remnant is not a scene");
+
+        drop(Journal::open(&p, jid()).unwrap());
+        assert!(matches!(classify_journal(&p), JournalCandidate::Shell), "a header with no records is a shell");
+
+        std::fs::write(&p, b"DEJ").unwrap();
+        assert!(matches!(classify_journal(&p), JournalCandidate::Damaged(_)), "a torn header must not be provable as empty");
+
+        let _ = std::fs::remove_file(&p);
+        let mut j = Journal::open(&p, jid()).unwrap();
+        j.record(0, &[0xAA; 4], &[0xBB; 4]).unwrap();
+        drop(j);
+        assert!(
+            matches!(classify_journal(&p), JournalCandidate::Records(JournalRead::Complete(v)) if v.len() == 1),
+            "a journal with a complete record must be classified as records"
+        );
+
+        let _ = std::fs::remove_file(&p);
+        std::fs::create_dir(&p).unwrap();
+        assert!(matches!(classify_journal(&p), JournalCandidate::Absent), "a directory is not written by this tool");
+        let _ = std::fs::remove_dir(&p);
+    }
+
+    /// 属性读不出来不是"不在"：只有 `NotFound` 才算缺席，其余错误必须按 `Damaged` 收口。
+    /// 权限位在 root 下不生效，机器上造不出这个错误时跳过
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn candidate_classification_fails_closed_on_stat_errors() {
+        use std::os::unix::fs::PermissionsExt;
+        if unsafe { libc::geteuid() } == 0 {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("diskedit_classify_denied_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("j.journal");
+        std::fs::write(&p, b"DEJL\x04").unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let got = classify_journal(&p);
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(matches!(got, JournalCandidate::Damaged(_)), "a stat error must fail closed");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// 分区节点不暴露 loop 属性：沿 `partition` 属性上溯到整设备节点再读。
@@ -2074,7 +2200,7 @@ mod tests {
 
         // 0 字节 = 建头没写完的残骸（唯一的残骸判据）：补写成当前身份，不报损坏
         std::fs::write(&p, b"").unwrap();
-        assert!(is_zero_write_remnant(&p), "an empty file is the one shape that may be rewritten");
+        assert_eq!(std::fs::metadata(&p).unwrap().len(), 0, "an empty file is the one shape that may be rewritten");
         drop(Journal::open(&p, id).unwrap());
         assert_eq!(Journal::read_identity(&p).unwrap().fp.ino, 42, "the remnant must carry the current identity");
         assert!(matches!(Journal::read_entries(&p).unwrap(), JournalRead::Complete(v) if v.is_empty()));
@@ -2103,8 +2229,8 @@ mod tests {
     /// 记录判据的边界：一份**含记录的完整 journal 被外部截断到 0** 后，与"建好文件、头还没
     /// 写"在现有状态下不可区分，判据把它当残骸收养——记录就此丢失且无从提示。这是**已接受
     /// 的限制而非安全保证**；1 字节以上的截断走的是拒绝路径（见上一条测试），唯独 0 字节
-    /// 例外。若产品日后要求"无法证明来源就不重新初始化"，改的是 `is_zero_write_remnant`
-    /// 与本测试，不是恢复流程
+    /// 例外。若产品日后要求"无法证明来源就不重新初始化"，改的是 `Journal::open` 的 0 字节
+    /// 分支与本测试，不是恢复流程
     #[test]
     fn journal_truncated_to_zero_is_adopted_as_a_remnant() {
         let p = journal_path("trunc_zero");
@@ -2116,7 +2242,7 @@ mod tests {
         assert!(Journal::read_entries(&p).is_ok(), "the journal must be complete before truncation");
 
         std::fs::write(&p, b"").unwrap();
-        assert!(is_zero_write_remnant(&p), "an externally truncated empty file fits the remnant criterion");
+        assert_eq!(std::fs::metadata(&p).unwrap().len(), 0, "an externally truncated empty file fits the remnant criterion");
         drop(Journal::open(&p, id).unwrap());
         assert!(matches!(Journal::read_entries(&p).unwrap(), JournalRead::Complete(v) if v.is_empty()),
             "the lost records are gone silently — that is the accepted limitation");
@@ -2138,6 +2264,74 @@ mod tests {
         assert_eq!(std::fs::read(&p).unwrap(), b"someone else's file", "the intruding file must be left untouched");
 
         let _ = std::fs::remove_file(&p);
+    }
+
+    /// 单句柄：采纳一份带撕裂尾的既有 journal，截断与之后的追加落在同一个句柄上。
+    /// 句柄不再是 append 模式，追加位置由 `seek(End)` 显式给出——不 seek 就会把新记录
+    /// 写在旧 EOF 之后（截断留下的空洞），读回来即 CRC 失败
+    #[test]
+    fn journal_adopts_truncates_and_appends_through_one_handle() {
+        let p = journal_path("onehandle");
+        const DATA: usize = 32;
+        {
+            let mut j = Journal::open(&p, jid()).unwrap();
+            for i in 0..2u64 {
+                j.record(i * 512, &[0xAA; DATA], &[0xBB; DATA]).unwrap();
+            }
+        }
+        let full = std::fs::read(&p).unwrap();
+        // 撕掉最后一条记录的尾部：模拟一条没走完的追加
+        std::fs::write(&p, &full[..full.len() - 7]).unwrap();
+
+        let mut j = Journal::open(&p, jid()).unwrap();
+        assert!(
+            matches!(Journal::read_entries(&p).unwrap(), JournalRead::Complete(v) if v.len() == 1),
+            "adoption must physically cut the torn tail"
+        );
+        j.record(4096, &[0xCC; DATA], &[0xDD; DATA]).unwrap();
+        drop(j);
+        assert!(
+            matches!(Journal::read_entries(&p).unwrap(), JournalRead::Complete(v) if v.len() == 2),
+            "the append after adoption must land directly after the surviving record"
+        );
+
+        let _ = std::fs::remove_file(&p);
+    }
+
+    /// 身份取自已打开的句柄：符号链接只是别名，身份主体落在真实路径的兄弟文件上；
+    /// 打开之后路径被改名/替换时必须拒绝——fd 仍指向旧 inode，而字面路径已属于别人，
+    /// 按字面路径派生伴随文件会把 journal 放到另一份数据旁
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn image_identity_follows_the_opened_handle_not_the_path() {
+        let dir = std::env::temp_dir().join(format!("diskedit_idfd_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let a = dir.join("a.img");
+        let link = dir.join("link.img");
+        std::fs::write(&a, vec![0u8; 4096]).unwrap();
+        std::os::unix::fs::symlink(&a, &link).unwrap();
+
+        let f = std::fs::OpenOptions::new().read(true).write(true).open(&link).unwrap();
+        let meta = f.metadata().unwrap();
+        let id = FileSource::identity_of_opened_image(&link, &f, &meta).unwrap();
+        let canonical = std::fs::canonicalize(&a).unwrap();
+        assert_eq!(
+            id.journal_path(),
+            suffix_path(&canonical, JOURNAL_SUFFIX),
+            "the identity subject must be the opened file, not the spelling used to open it"
+        );
+        drop(f);
+
+        // 打开后把文件改名，并在原路径放一个新文件：fd 仍指向旧 inode，字面路径已换人
+        let f = std::fs::OpenOptions::new().read(true).write(true).open(&a).unwrap();
+        let meta = f.metadata().unwrap();
+        std::fs::rename(&a, dir.join("moved.img")).unwrap();
+        std::fs::write(&a, vec![0u8; 4096]).unwrap();
+        let e = FileSource::identity_of_opened_image(&a, &f, &meta).unwrap_err();
+        assert!(e.to_string().contains("no longer names the file that was opened"), "{e}");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// 日志落点也由身份推导：镜像与目标同层级，块设备落在 state_dir 下且以 Disk GUID /

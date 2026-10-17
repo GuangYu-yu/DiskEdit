@@ -44,7 +44,7 @@ fn main() -> ExitCode {
     // 操作留下的 journal 误清掉。删除动作须容忍文件不存在；块设备的在线路径（sfdisk、
     // FS 工具）用自己的 fd 写盘、不经过本工具的 journal，那些写入本就不在回放范围内
     if code == EXIT_OK && cmd::opens_undo_journal(&cmd) {
-        drop_journal(&a);
+        drop_journal();
     }
     ExitCode::from(code)
 }
