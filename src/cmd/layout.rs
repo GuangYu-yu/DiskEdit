@@ -9,10 +9,12 @@ pub(crate) const HELP_NEW: &str = r#"diskedit new <TARGET> [--table gpt|msdos] -
 
   Create a fresh partition table; overwrites any existing one. Default gpt."#;
 
-pub(crate) const HELP_ADD: &str = r#"diskedit add <TARGET> --start LBA --end LBA [--name S] [--type T]
+pub(crate) const HELP_ADD: &str = r#"diskedit add <TARGET> --start LBA --end LBA [--name S] [--type T] [--align A]
 
   Add a partition over [start, end] LBA. GPT --type takes a standard GUID
-  text (default: Linux filesystem data); MBR --type takes 0xXX (default 0x83)."#;
+  text (default: Linux filesystem data); MBR --type takes 0xXX (default 0x83).
+  LBA values are aligned per --align (default 1MiB: start rounds up, end
+  rounds down); pass --align none to use them as given."#;
 
 pub(crate) const HELP_DELETE: &str = r#"diskedit delete <TARGET>:N --yes
 diskedit del <TARGET>:N --yes
@@ -38,13 +40,17 @@ pub(crate) const HELP_MOVE: &str = r#"diskedit move <TARGET>:N --start <LBA|end>
   --no-fs skips the filesystem step for the moved partition (a swap that
   the relocation rebuilds still runs — it belongs to the relocation)."#;
 
-pub(crate) const HELP_COPY: &str = r#"diskedit copy <TARGET>:N --start <LBA|end> [--name S]
+pub(crate) const HELP_COPY: &str = r#"diskedit copy <TARGET>:N --start <LBA|end> [--name S] [--clone]
 
   Byte-wise copy a partition to a new location; the source is untouched.
   --start end packs the copy against the end of the usable range.
   No resume: an interrupted copy cannot pick up where it left off. The
-  slot it held stays busy until released — undo (while still reversible)
-  or abandon — then re-run to rewrite the destination from the beginning."#;
+  slot it held stays busy until released with `diskedit abandon` — then
+  re-run to rewrite the destination from the beginning.
+
+  PARTUUID: the copy gets a freshly generated v4 GUID, so the two
+  partitions stay distinguishable. --clone keeps the source PARTUUID
+  instead — mount-by-PARTUUID then resolves to either partition."#;
 
 pub(crate) const HELP_CREATE: &str = r#"diskedit create <TARGET> [--size SIZE] [--name S] [--fs F]
 
@@ -107,9 +113,22 @@ pub(crate) fn cmd_add(a: &Args) -> u8 {
     let (Some(start), Some(end)) = (a.start, a.end) else { crate::args::usage() };
     let mut src = open_target_for_write(a).unwrap_or_else(|f| bail_fail(f));
     // 坐标系在几何计算前确定：GPT 条目按表头 ss 对齐，MBR 条目按容器 ss 对齐
-    match table::load_gpt(&src) {
+    match table::table_label(&src) {
         Err(e) => bail_fail(Fail::infra(format!("label probe failed: {e}"))),
-        Ok(Some(g)) => {
+        // 判型只用 table_label 一个来源（与 del/create 同口径）：load_gpt 单独判会把
+        // "保护 MBR 受损、条目数组可能完好"的 GPT 盘当作无表盘降级到 msdos 分支
+        Ok(table::TableLabel::GptDamaged) => bail_fail(Fail::refused(
+            "the GPT on this target is damaged — repair it first (or recover it manually); \
+             `new` would overwrite a table whose entries may still be recoverable"
+                .to_string(),
+        )),
+        Ok(table::TableLabel::Gpt) => {
+            // 判型刚由 load_gpt 成功得出；这里再取一次几何只有读盘，没有第二个判据
+            let g = match table::load_gpt(&src) {
+                Ok(Some(g)) => g,
+                Ok(None) => bail_fail(Fail::infra("the GPT disappeared between reads — retry".to_string())),
+                Err(e) => bail_fail(Fail::infra(format!("label probe failed: {e}"))),
+            };
             let (start, end) = align_range(a, start, end, g.ss);
             let type_guid = match &a.type_guid {
                 Some(s) => parse_guid(s).unwrap_or_else(|| bail_fail(Fail::refused(format!("invalid GUID {s:?} (expect standard text like C12A7328-F81F-11D2-BA4B-00A0C93EC93B, hyphens optional)")))),
@@ -122,7 +141,7 @@ pub(crate) fn cmd_add(a: &Args) -> u8 {
                 Err(f) => bail_fail(f),
             }
         }
-        Ok(None) => match table::parse_mbr(&src) {
+        Ok(table::TableLabel::Mbr) => match table::parse_mbr(&src) {
             Err(e) => bail_fail(Fail::infra(format!("label probe failed: {e}"))),
             Ok(Some(_)) => {
                 refuse_name_on_msdos(a);
@@ -137,8 +156,9 @@ pub(crate) fn cmd_add(a: &Args) -> u8 {
                     Err(f) => bail_fail(f),
                 }
             }
-            Ok(None) => bail_fail(Fail::refused("cannot add on none label — run `new` first".to_string())),
+            Ok(None) => bail_fail(Fail::infra("the MBR disappeared between reads — retry".to_string())),
         },
+        Ok(table::TableLabel::None) => bail_fail(Fail::refused("cannot add on none label — run `new` first".to_string())),
     }
 }
 
@@ -187,7 +207,7 @@ pub(crate) fn cmd_resize_part(a: &Args) -> u8 {
     // 几何走唯一构造点（条目重叠在此被拒），修复后的 last_usable 也由它给出
     let (g, repair) = crate::gpt_policy::require_gpt_geometry(&src, "resize-part").unwrap_or_else(|f| bail_fail(f));
     // 锁下快照
-    let part = crate::gpt_policy::resolve_part_in(crate::gpt_policy::TableEntries::Gpt(&g.entries), pref)
+    let part = crate::gpt_policy::resolve_part_in(crate::gpt_policy::TableEntries::Gpt(g.entries()), pref)
         .unwrap_or_else(|f| bail_fail(f));
     let end = if a.grow_to_end {
         // 吃满后方可用区（本工具语义）：扩到 last_usable_lba；
@@ -200,11 +220,11 @@ pub(crate) fn cmd_resize_part(a: &Args) -> u8 {
     // --grow-to-end：end 钉死 last_usable 不做下取整（吃满语义），--align 仅作用于 start；
     // 常规路径 start 上取整、end 下取整
     let (start, end) = if a.grow_to_end {
-        (align_start(a, start, g.ss), end)
+        (align_start(a, start, g.sector_size()), end)
     } else {
-        align_range(a, start, end, g.ss)
+        align_range(a, start, end, g.sector_size())
     };
-    let (chunk, mut logger) = chunk_logger(a, &src, g.header.disk_guid);
+    let (chunk, mut logger) = chunk_logger(a, &src, g.disk_guid());
     let o = settle_layout(movepart::resize_part(&mut src, &g, repair, part, start, end, chunk, a.no_fs, &mut |m| logger.log(m)), &src);
     if o.is_complete() {
         println!("resize-part complete (verify with: diskedit info {})", a.target);
@@ -241,7 +261,7 @@ pub(crate) fn cmd_move(a: &Args) -> u8 {
     let (mut src, _resumed) = open_target_for_data_move(a).unwrap_or_else(|f| bail_fail(f));
     let (g, repair) = crate::gpt_policy::require_gpt_geometry(&src, "move").unwrap_or_else(|f| bail_fail(f));
     // 锁下快照
-    let part = crate::gpt_policy::resolve_part_in(crate::gpt_policy::TableEntries::Gpt(&g.entries), pref)
+    let part = crate::gpt_policy::resolve_part_in(crate::gpt_policy::TableEntries::Gpt(g.entries()), pref)
         .unwrap_or_else(|f| bail_fail(f));
     let e = crate::gpt_policy::live_entry(&g, part).unwrap_or_else(|f| bail_fail(f));
     // 平移保持长度（本工具语义）：new_end = new_start + 原长度 - 1
@@ -251,12 +271,12 @@ pub(crate) fn cmd_move(a: &Args) -> u8 {
             .checked_sub(len - 1)
             .unwrap_or_else(|| bail_fail(Fail::refused("partition longer than usable range".to_string())))
     } else {
-        align_start(a, start_opt.unwrap(), g.ss)
+        align_start(a, start_opt.unwrap(), g.sector_size())
     };
     // checked：start 来自 CLI 原始输入（--align none 时无上界），回绕会骗过 resize_part 的边界校验
     let end = start.checked_add(len - 1)
         .unwrap_or_else(|| bail_fail(Fail::refused("end LBA overflows address space".to_string())));
-    let (chunk, mut logger) = chunk_logger(a, &src, g.header.disk_guid);
+    let (chunk, mut logger) = chunk_logger(a, &src, g.disk_guid());
     let o = settle_layout(movepart::resize_part(&mut src, &g, repair, part, start, end, chunk, a.no_fs, &mut |m| logger.log(m)), &src);
     if o.is_complete() {
         println!("moved (verify with: diskedit info {})", a.target);
@@ -284,7 +304,7 @@ pub(crate) fn cmd_copy(a: &Args) -> u8 {
     // 坐标系在几何计算前确定：copy 仅支持 GPT，条目按表头 ss 对齐（可与容器 ss 不同）
     let (g, repair) = crate::gpt_policy::require_gpt_geometry(&src, "copy").unwrap_or_else(|f| bail_fail(f));
     // 锁下快照
-    let part = crate::gpt_policy::resolve_part_in(crate::gpt_policy::TableEntries::Gpt(&g.entries), pref)
+    let part = crate::gpt_policy::resolve_part_in(crate::gpt_policy::TableEntries::Gpt(g.entries()), pref)
         .unwrap_or_else(|f| bail_fail(f));
     let start = if a.start_end {
         let e = crate::gpt_policy::live_entry(&g, part).unwrap_or_else(|f| bail_fail(f));
@@ -293,12 +313,12 @@ pub(crate) fn cmd_copy(a: &Args) -> u8 {
             .checked_sub(len - 1)
             .unwrap_or_else(|| bail_fail(Fail::refused("partition longer than usable range".to_string())))
     } else {
-        align_start(a, start_opt.unwrap(), g.ss)
+        align_start(a, start_opt.unwrap(), g.sector_size())
     };
-    let (chunk, mut logger) = chunk_logger(a, &src, g.header.disk_guid);
+    let (chunk, mut logger) = chunk_logger(a, &src, g.disk_guid());
     // 名字守卫在消费点：copy 的落盘名字与 add 同一个 36 码元字段
     if let Some(n) = &a.name { crate::support::check_gpt_name_len(n); }
-    match movepart::copy_part(&mut src, &g, repair, part, start, a.name.as_deref().unwrap_or(""), chunk, &mut |m| logger.log(m)) {
+    match movepart::copy_part(&mut src, &g, repair, part, start, a.name.as_deref().unwrap_or(""), a.clone, chunk, &mut |m| logger.log(m)) {
         Ok(num) => table_write_done(&src, &format!("copied to partition #{num} (verify with: diskedit info {})", a.target)),
         Err(f) => bail_fail(f),
     }
@@ -332,24 +352,25 @@ pub(crate) fn cmd_create(a: &Args) -> u8 {
     // 分区节点不是合法载体（同 add：表条目写在整盘最前 16KiB）
     refuse_partition_node_target("create", &a.target);
     let mut src = open_target_for_write(a).unwrap_or_else(|f| bail_fail(f));
-    // 一次探测同时取"表类型 + 空闲区"：后面选槽写表要用的是同一个 label，
-    // 再探一次等于重解析一遍表（且可能读到与前面不同的结果）。
+    // 盘型由 table_label 判定一次，label 决定写入哪个表族的槽；空闲区在同一分支里由
+    // 该表族自己的几何算出（GPT 用表头 ss 与可用区，MBR 用容器 ss 与盘尾）。写表函数
+    // 内部还会解析一次表做自身校验——本命令持锁，盘面在窗口内不会变
     // 坐标系在几何计算前确定：want 与 aligned_gaps 的单位随分支而定。
     // 第四个值是该分支的 LBA 单位（字节/扇区），后面把 LBA 换成字节偏移时只能用它：
     // GPT 条目按**表头** ss 对齐，可与容器 ss 不同，用错单位会算出偏移差一倍的提示
     let (label, gaps, want, lba_bytes) = match table::table_label(&src) {
         Ok(table::TableLabel::Gpt) => {
             let (g, _repair) = crate::gpt_policy::require_gpt_geometry(&src, "create").unwrap_or_else(|f| bail_fail(f));
-            let unit = mib_in_sectors(g.ss);
+            let unit = mib_in_sectors(g.sector_size());
             let want = a.size.map(|b| {
-                if b < g.ss { bail_fail(Fail::refused(format!("size {b} < one sector ({})", g.ss))); }
-                crate::support::note_sector_truncation("creating", b, g.ss);
-                b / g.ss
+                if b < g.sector_size() { bail_fail(Fail::refused(format!("size {b} < one sector ({})", g.sector_size()))); }
+                crate::support::note_sector_truncation("creating", b, g.sector_size());
+                b / g.sector_size()
             });
-            let used: Vec<(u64, u64)> = g.entries.iter()
+            let used: Vec<(u64, u64)> = g.entries().iter()
                 .filter(|e| !(e.starting_lba == 0 && e.ending_lba == 0))
                 .map(|e| (e.starting_lba, e.ending_lba)).collect();
-            (table::TableLabel::Gpt, aligned_gaps(&used, g.first_usable_lba(), g.last_usable_lba(), unit), want, g.ss)
+            (table::TableLabel::Gpt, aligned_gaps(&used, g.first_usable_lba(), g.last_usable_lba(), unit), want, g.sector_size())
         }
         Ok(table::TableLabel::Mbr) => {
             refuse_name_on_msdos(a);
@@ -369,7 +390,11 @@ pub(crate) fn cmd_create(a: &Args) -> u8 {
             let disk_last = table::container_last_lba(&src, ss);
             (table::TableLabel::Mbr, aligned_gaps(&used, unit, disk_last, unit), want, ss)
         }
-        Ok(other) => bail_fail(Fail::refused(format!("cannot create on {other} label — run `new` first"))),
+        // 可辨但受损的盘不得给出会覆盖它的下一步：new 会重写头与条目数组
+        Ok(table::TableLabel::GptDamaged) => bail_fail(Fail::refused(
+            "the GPT on this target is damaged — repair it first (or recover it manually); `new` would overwrite it".to_string(),
+        )),
+        Ok(table::TableLabel::None) => bail_fail(Fail::refused("cannot create on none label — run `new` first".to_string())),
         Err(e) => bail_fail(Fail::infra(format!("label probe failed: {e}"))),
     };
     if gaps.is_empty() {

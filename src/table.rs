@@ -572,6 +572,10 @@ fn parse_primary(src: &FileSource, ss: u64, pmbr: PmbrSize) -> ParsedCopy {
 /// 主备互备是 UEFI 2.10 §5.3.2 的规范要求，此刻盘尾备份是唯一能救回分区表的数据。
 /// 返回的表规范化为"主头视角"（MyLBA=1 / AltLBA=last_lba），state 置
 /// NeedsRepair{PrimaryUnreadable} 以便写入路径 resolve_geometry → apply_repair 重写双头重建主头
+///
+/// 能力边界：只认"备份头恰在容器最后一个 LBA"这一种形态（`primary_lba == file_last_lba`）。
+/// 镜像扩容/截断后备份头仍留在旧末端，主头一旦损坏就没有可读副本——此时所有写命令
+/// fail-closed 拒绝，但"备份可救"并不成立；扩容流程须先经 apply_repair 搬移备份头
 fn parse_backup(src: &FileSource, ss: u64, pmbr: PmbrSize) -> ParsedCopy {
     if src.size < ss * 2 {
         return ParsedCopy::Absent;
@@ -630,6 +634,10 @@ fn parse_entry(b: &[u8]) -> GPTPartitionEntry {
     }
 }
 
+/// 分区名按 UTF-16LE 解码。`from_utf16_lossy` 会把孤立代理项替换为 U+FFFD，而
+/// `commit_table` 每次重写整个条目数组——任何写表命令都会把这类名字**永久**规范化。
+/// 这是已接受的边界：合法 UTF-16 名字逐字节往返，只有盘上本来就是非法 UTF-16 的
+/// 名字才会被改写（UEFI 2.10 §5.3.3 规定该字段是 UTF-16 字符串）
 fn decode_name(raw: &[u8; 72]) -> gptman::PartitionName {
     let units: Vec<u16> = raw.as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).collect();
     let s: String = String::from_utf16_lossy(&units);
@@ -1111,6 +1119,29 @@ pub fn gpt_signature_present(src: &FileSource) -> io::Result<bool> {
     Ok(false)
 }
 
+/// PMBR 布局不成立时判断主头是否仍可解析（签名 + HeaderCRC32）。
+/// 只回答"盘型"：裸签名（`gpt_signature_present`）可能只是残留字节，不足以推翻一张
+/// 形状完整的 msdos 表；一份 CRC 自洽的主头则证明盘是 GPT、LBA0 只是被改坏。
+/// 不读条目数组：条目是否完好由 `load_gpt` 报
+fn gpt_header_parseable(src: &FileSource) -> io::Result<bool> {
+    for &ss in &candidate_sector_sizes(src.sector_size) {
+        if src.size < ss * 2 {
+            continue;
+        }
+        let mut sec = vec![0u8; ss as usize];
+        match src.read_at(ss, &mut sec) {
+            Ok(()) => {
+                if matches!(probe_header(&sec), HeaderProbe::Present(_)) {
+                    return Ok(true);
+                }
+            }
+            // 与 gpt_signature_present 同口径：读不出来既不能证明有也不能证明没有
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(false)
+}
+
 /// SizeInLBA 与当前容器的关系（唯一判定点）。规范值按设备逻辑块计（UEFI 口径）；
 /// 512 口径值单独识别为"非规范但已知"，不并入 Normal——并入就等于宣称它合法。
 /// 扇区数超出 32 位表示范围时按规范饱和写 0xFFFFFFFF（此时两种口径期望值相同）。
@@ -1418,6 +1449,12 @@ pub fn table_label(src: &FileSource) -> Result<TableLabel, GptError> {
     if pmbr_shape_valid(src)? {
         return Ok(TableLabel::GptDamaged);
     }
+    // LBA1 仍有可解析的主头（签名 + HeaderCRC32）：这是一块 GPT 盘，只是 LBA0 的保护
+    // 布局被改坏。若在此放行 parse_mbr，一个被改成真实类型的保护记录会让整盘判成
+    // msdos，后续写入只改 MBR 视图、GPT 视图不动，两套表静默分叉
+    if gpt_header_parseable(src)? {
+        return Ok(TableLabel::GptDamaged);
+    }
     if parse_mbr(src)?.is_some() {
         return Ok(TableLabel::Mbr);
     }
@@ -1436,6 +1473,13 @@ pub fn table_label(src: &FileSource) -> Result<TableLabel, GptError> {
 pub fn add_mdos_entry(src: &mut FileSource, start: u64, end: u64, os_type: u8) -> Result<u32, Fail> {
     if os_type == 0 {
         return Err(Fail::refused("type 0x00 is the empty-entry marker — give a partition type"));
+    }
+    // 0xEE 是 GPT 保护记录（UEFI 2.10 §5.2.3），不是数据分区：解析侧已把它排除出
+    // 可操作条目，写侧若放行会凭空造出一条解析器与内核都不当分区的"分区"
+    if os_type == PROT_MBR_TYPE {
+        return Err(Fail::refused(
+            "type 0xEE is the GPT protective record, not a data partition — use a real partition type",
+        ));
     }
     if MDOS_CONTAINER_TYPES.contains(&os_type) {
         return Err(Fail::refused("extended-container types (0x05/0x0F/0x85) are not supported — logical partitions are out of scope"));
@@ -1637,6 +1681,12 @@ pub fn set_mdos_type(src: &mut FileSource, part: u32, t: u8) -> Result<(), Fail>
     }
     if t == 0 {
         return Err(Fail::refused("type 0x00 marks an empty entry — use `del` to remove the partition"));
+    }
+    // 与 add_mdos_entry 同一判据：0xEE 是保护记录，不是可描述的条目类型
+    if t == PROT_MBR_TYPE {
+        return Err(Fail::refused(
+            "type 0xEE is the GPT protective record, not a data partition — use a real partition type",
+        ));
     }
     if MDOS_CONTAINER_TYPES.contains(&t) {
         return Err(Fail::refused("extended-container types (0x05/0x0F/0x85) are not supported — logical partitions are out of scope"));
@@ -2101,7 +2151,9 @@ mod tests {
     /// 少了这条检查，`start as u32` 会静默截断成一个指向别处的条目（落盘即损坏且不报错）
     #[test]
     fn add_mdos_entry_rejects_beyond_32bit_lba() {
-        let mut data = vec![0u8; 4096];
+        // 8KiB 让 4Kn 候选的 LBA1 探测（偏移 4096）有字节可读；下面把 size 改成 3TiB 只是
+        // 为了让 u32 上限内的请求落在容器内，文件本身不必真有那么大
+        let mut data = vec![0u8; 8192];
         data[510] = 0x55;
         data[511] = 0xAA;
         let mut src = src_from("mdos32", data);
@@ -2536,14 +2588,13 @@ mod tests {
         assert!(parse_mbr(&src).unwrap().is_none(), "0xEE 槽不是分区，签名在 ⇒ 不判 msdos");
         assert_eq!(table_label(&src).unwrap(), TableLabel::GptDamaged);
 
-        // 破法二：槽位 1 类型被改写成真实分区类型——内核同口径判 msdos（真实槽位）
+        // 破法二：槽位 1 类型被改写成真实分区类型——LBA1 仍有 CRC 自洽的主头，
+        // 盘型仍是 GPT；按 msdos 解析会让写入只改 MBR 视图、GPT 视图不动
         let mut b = good;
         b[446 + 4] = 0x0B;
         src.write_at(0, &b).unwrap();
-        assert_eq!(table_label(&src).unwrap(), TableLabel::Mbr);
-        let m = parse_mbr(&src).unwrap().unwrap();
-        assert_eq!(m.len(), 1);
-        assert_eq!(m[0].os_type, 0x0B);
+        assert_eq!(table_label(&src).unwrap(), TableLabel::GptDamaged);
+        assert!(load_gpt(&src).unwrap().is_none(), "保护布局不成立 ⇒ load_gpt 不给表");
 
         // 破法三：签名抹掉（GPT 全灭）+ 槽位 1 起点被改坏——无签名无从判 GPT，
         // 0xEE 槽已排除，等价于零分区的 msdos 盘

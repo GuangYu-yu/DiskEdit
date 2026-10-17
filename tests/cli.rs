@@ -679,6 +679,22 @@ fn resize_part_move_copy_flag_name() {
     );
     assert_eq!(gpt[3].starting_lba, 20480);
     assert_eq!(gpt[3].ending_lba, 22527);
+    // PARTUUID：默认 copy 生成新的 v4 GUID，不与源重复
+    let src_guid = gpt[2].unique_partition_guid;
+    let copy_guid = gpt[3].unique_partition_guid;
+    assert_ne!(copy_guid, src_guid, "copy must not reuse the source PARTUUID by default");
+    assert_eq!(copy_guid[7] & 0xF0, 0x40, "new PARTUUID must carry version 4");
+    assert_eq!(copy_guid[8] & 0xC0, 0x80, "new PARTUUID must use the RFC 4122 variant");
+    drop(gpt);
+    drop(f);
+
+    // --clone 显式保留源 PARTUUID（复制身份，而不只是复制内容）
+    let (c, out, stderr) = run(&["copy", &format!("{img_s}:2"), "--start", "24000", "--clone"]);
+    assert_eq!(c, 0, "--clone copy must succeed: {out}{stderr}");
+    let mut f = std::fs::File::open(&img).unwrap();
+    let gpt = gptman::GPT::find_from(&mut f).unwrap();
+    assert_eq!(gpt[4].starting_lba, 24576);
+    assert_eq!(gpt[4].unique_partition_guid, src_guid, "--clone must keep the source PARTUUID");
 
     let _ = std::fs::remove_dir_all(&dir);
 }

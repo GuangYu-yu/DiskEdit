@@ -121,6 +121,13 @@ fn find_tool(name: &str) -> Result<PathBuf, FsError> {
     Err(FsError::missing(format!("required tool not found in PATH: {name}")))
 }
 
+/// 工具存在性预检：调用点在**首次写盘之前**确认后置条件所需的工具齐备时用它，
+/// 避免"表已提交、FS 步才发现缺工具"。当前唯一消费者是 Linux 在线路径
+#[cfg(target_os = "linux")]
+pub(crate) fn require_tool(name: &str) -> Result<(), FsError> {
+    find_tool(name).map(|_| ())
+}
+
 /// 执行位判定：stat(2) 得到的 st_mode 中 S_IXUSR|S_IXGRP|S_IXOTH（0o111）任一置位即视为
 /// 可执行（权限位语义见 chmod(2)）
 #[cfg(unix)]
@@ -136,15 +143,26 @@ fn is_executable(_p: &std::path::Path) -> bool {
 
 /// 执行外部工具。参数用 `AsRef<OsStr>` 收：绝大多数调用点传 `&[&str]` 即可，
 /// 卷标这类任意字节的参数靠它原样透传（见 os_bytes），不经任何编码转换
+///
+/// 先 `spawn` 再 `wait_with_output`：两者的失败不是一回事。spawn 失败 = 工具没跑起来
+/// （`Io`）；等待/读取输出失败 = 工具已经启动，写没写目标无法断言，故记
+/// `CommandFailed`（调用点的映射把它落成"可能已改变"）
 pub(crate) fn run<S: AsRef<OsStr>>(tool: &str, args: &[S]) -> Result<std::process::Output, FsError> {
     let path = find_tool(tool)?;
     // 输出需按格式解析（resize2fs -P、dumpe2fs -h 等），固定 LC_ALL=C 防本地化翻译破坏解析
-    Command::new(path)
+    let child = Command::new(path)
         .args(args)
         .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
         .env("LC_ALL", "C")
-        .output()
-        .map_err(FsError::from)
+        .spawn()
+        .map_err(FsError::from)?;
+    child.wait_with_output().map_err(|e| {
+        FsError::CommandFailed(format!(
+            "{tool} was started but its exit status could not be read ({e}) — it may have changed the target"
+        ))
+    })
 }
 
 /// 任意字节 → 命令行参数。unix 下按原字节构造：execve 的 argv 本就是字节串，无编码校验。
@@ -173,12 +191,19 @@ pub(crate) fn run_input(tool: &str, args: &[&str], input: &str) -> Result<std::p
     use std::io::Write as _;
     let mut stdin = child.stdin.take().expect("stdin piped");
     if let Err(e) = stdin.write_all(input.as_bytes()) {
-        // 写 stdin 失败时子进程可能还在等输入，显式终止防僵留
+        // 写 stdin 失败时子进程可能还在等输入，显式终止防僵留。子进程**已经启动**：
+        // 它可能读到一部分输入后动过盘，也可能什么都没做，无法断言——按"可能已改变"记
         best_effort_reap_child(&mut child);
-        return Err(FsError::Io(e));
+        return Err(FsError::CommandFailed(format!(
+            "{tool} was started but its input could not be delivered ({e}) — it may have changed the target"
+        )));
     }
     drop(stdin); // 关闭 stdin 让 sfdisk 看到输入结束
-    child.wait_with_output().map_err(FsError::from)
+    child.wait_with_output().map_err(|e| {
+        FsError::CommandFailed(format!(
+            "{tool} was started but its exit status could not be read ({e}) — it may have changed the target"
+        ))
+    })
 }
 
 /// 终止并回收子进程：主错误已由调用点上报，回收本身失败只影响资源占用。
@@ -641,9 +666,7 @@ where
 fn find_block_partition_node(src: &FileSource, part: u32, want_start: u64) -> Result<String, FsError> {
     #[cfg(target_os = "linux")]
     {
-        let disk = src.path.file_name()
-            .ok_or_else(|| FsError::invalid("no disk name"))?
-            .to_string_lossy().to_string();
+        let disk = block_disk_name(src)?;
         let sys = Path::new("/sys/block").join(&disk);
         for entry in std::fs::read_dir(&sys).map_err(FsError::from)? {
             let entry = entry.map_err(FsError::from)?;
@@ -673,6 +696,31 @@ fn find_block_partition_node(src: &FileSource, part: u32, want_start: u64) -> Re
         let _ = (src, part, want_start);
         Err(FsError::Io(io::Error::new(io::ErrorKind::Unsupported, "not linux")))
     }
+}
+
+/// 已打开块设备的**磁盘**名（sysfs `/sys/block/<name>` 下的名字）。
+/// 按 fd 的 rdev 反查 `/sys/dev/block/<maj>:<min>`，再向上越过分区目录——不能用用户给出的
+/// 路径字面量：`/dev/disk/by-id/...` 的文件名不是 sysfs 目录名，`/dev/mapper/x` 同理，
+/// 按字面量拼 `/sys/block/<name>` 会直接读失败，让所有块设备 FS 步都以 Io 收场
+#[cfg(target_os = "linux")]
+fn block_disk_name(src: &FileSource) -> Result<String, FsError> {
+    use std::os::unix::fs::MetadataExt;
+    let rdev = src.file.metadata().map_err(FsError::from)?.rdev();
+    if rdev == 0 {
+        return Err(FsError::Io(io::Error::other("open target reports no device number")));
+    }
+    let sysdev = Path::new("/sys/dev/block").join(format!("{}:{}", libc::major(rdev), libc::minor(rdev)));
+    let mut node = std::fs::canonicalize(&sysdev)
+        .map_err(|e| FsError::Io(io::Error::other(format!("no sysfs node for {sysdev:?}: {e}"))))?;
+    // 分区目录带 `partition` 属性；整盘目录没有。目标是分区节点时也要落到它的父盘
+    while node.join("partition").exists() {
+        node = node.parent()
+            .ok_or_else(|| FsError::Io(io::Error::other("sysfs partition node has no parent disk")))?
+            .to_path_buf();
+    }
+    node.file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .ok_or_else(|| FsError::Io(io::Error::other("sysfs disk node has no name")))
 }
 
 fn partition_byte_range(src: &FileSource, part: u32) -> Result<(u64, u64), FsError> {
@@ -1081,7 +1129,8 @@ fn grow_support(fstype: FsKind) -> ToolSupport {
         FsKind::Xfs => Tools(&["xfs_growfs"]),
         FsKind::Btrfs => Tools(&["btrfs"]),
         FsKind::Vfat => Tools(&["fatresize"]),
-        // swap 不搬内容：扩后按原 UUID/卷标重建（recreate_swap → mkswap）
+        // swap 没有"原地 resize"：空间靠 mkswap 重建吸收（resize 的收尾负责），
+        // 但这里仍探测 mkswap——那条收尾路径要在写表之前知道工具在不在
         FsKind::Swap => Tools(&["mkswap"]),
         FsKind::Lvm2Pv => NotApplicable,
         _ => Unsupported("not wired to a tool — pass --no-fs to change the partition only"),
@@ -1172,10 +1221,21 @@ pub fn check_shrink(fstype: Option<FsKind>, is_block: bool) -> Result<(), FsErro
 /// FS 工具清单——它们属于挂载/映射层，不随 FS 类型走；但不探测就会在表已提交、
 /// FS 工具已动盘之后才暴露缺工具 ⇒ `Io → Infra`，违背"确定未写盘"的承诺
 fn check_mount_layer_tools(fstype: Option<FsKind>, is_block: bool) -> Result<(), FsError> {
-    if !matches!(fstype, Some(FsKind::Xfs | FsKind::Btrfs)) {
+    // 执行侧 `with_scope_device_ranged` 对每个目标都先过 require_linux/require_root；
+    // 镜像目标（任何 FS）与块设备的 Range 目标还要 `losetup` 建映射。这些检查必须与
+    // FS 工具一同落在写盘前，否则表提交后才以 Io → Infra(30) 暴露，谎报"确定未写盘"
+    require_linux()?;
+    require_root()?;
+    let mount_fs = matches!(fstype, Some(FsKind::Xfs | FsKind::Btrfs));
+    if !mount_fs && is_block {
         return Ok(());
     }
-    let tools: &[&str] = if is_block { &["mount", "umount"] } else { &["mount", "umount", "losetup"] };
+    let tools: &[&str] = if mount_fs {
+        if is_block { &["mount", "umount"] } else { &["mount", "umount", "losetup"] }
+    } else {
+        // 镜像：任何 FS 步都经 attach_loop 建立设备（块设备非 xfs/btrfs 已在上方返回）
+        &["losetup"]
+    };
     for t in tools {
         if find_tool(t).is_err() {
             return Err(FsError::missing(format!(
@@ -1390,9 +1450,11 @@ fn resize_fs_in(src: &FileSource, scope: &DeviceScope, fstype: Option<FsKind>) -
             Ok(())
         })),
         Some(FsKind::Btrfs) => {
+            // 区间只解析一次：多设备闸与设备建立消费同一份 (off, len)，两次读表之间
+            // 第三方改表不会让闸和实际映射看见不同的区间
             let (off, len) = scope_byte_range(src, scope)?;
             refuse_btrfs_multi_device_at(src, off, len)?;
-            with_scope_device(src, scope, |dev| with_mount(dev, |mnt| {
+            with_scope_device_ranged(src, scope, off, len, |dev| with_mount(dev, |mnt| {
                 let out = run("btrfs", &["filesystem", "resize", "max", mnt])?;
                 if !out.status.success() {
                     return Err(FsError::command("btrfs resize", &out));
@@ -1405,8 +1467,10 @@ fn resize_fs_in(src: &FileSource, scope: &DeviceScope, fstype: Option<FsKind>) -
         // 属经验性 workaround，非工具规范保证。
         // FAT32 <512MB 由工具自身拒绝（man BUGS，Windows 限制）
         Some(FsKind::Vfat) => {
-            let (_, dev_len) = scope_byte_range(src, scope)?;
-            with_scope_device(src, scope, |dev| {
+            // 区间与设备同源：fallback 尺寸用的 len 就是设备建立时的那一份，
+            // 不再在闭包外另读一次表
+            let (off, dev_len) = scope_byte_range(src, scope)?;
+            with_scope_device_ranged(src, scope, off, dev_len, |dev| {
                 let mut out = run("fatresize", &["-s", "max", dev])?;
                 if !out.status.success() {
                     // 兜底的字节数 = 设备长 − 1（见上）：长度为 0 时减一会回绕成
@@ -1423,6 +1487,11 @@ fn resize_fs_in(src: &FileSource, scope: &DeviceScope, fstype: Option<FsKind>) -
             })
             .map(|()| None)
         }
+        // swap 不是被"resize"的对象：新尺寸通过 mkswap 重建那一整块区域才生效。
+        // 本命令只改 FS，不重建，故在此拒绝并指向真正会重建的入口
+        Some(FsKind::Swap) => Err(FsError::unsupported(
+            "swap has no in-place resize — use `resize`, which recreates the swap area so the new size takes effect",
+        )),
         // squashfs/erofs 自己不可扩：能变大的是分区尾部的 RW overlay 层，那段由
         // grow_target_at 定位后交内层的分支执行。落到这里说明这个范围不是分区
         // （superfloppy），其内部没有 RW 层可扩
@@ -1617,14 +1686,16 @@ pub struct ShrinkOutcome {
 pub fn shrink_fs(src: &FileSource, part: u32, fstype: Option<FsKind>, new_bytes: u64) -> Result<ShrinkOutcome, FsError> {
     match fstype {
         Some(FsKind::Ext) => {
+            // 纯参数校验必须在任何写盘之前：e2fsck -fp 本身会写盘，把它排在后面
+            // 会让一次参数错误先改文件系统、再以 Refused 退出
+            if !new_bytes.is_multiple_of(512) {
+                return Err(FsError::invalid("shrink size must be a multiple of 512"));
+            }
             let verify = with_partition_device(src, part, |dev| {
                 let out = run("e2fsck", &["-fp", dev])?;
                 check_e2fsck_for_resize(out.status.code().unwrap_or(-1))?;
                 // resize2fs 裸数字单位是"文件系统块数"而非字节（man resize2fs）；
                 // 's' 后缀 = 512 字节扇区。分区尺寸必为 sector_size(≥512) 整数倍
-                if !new_bytes.is_multiple_of(512) {
-                    return Err(FsError::invalid("shrink size must be a multiple of 512"));
-                }
                 let sectors = format!("{}s", new_bytes / 512);
                 let out = run("resize2fs", &[dev, &sectors]).map_err(|e| tool_write_maybe_started("resize2fs", dev, e))?;
                 if !out.status.success() {
@@ -2042,6 +2113,7 @@ mod tests {
         let squashfs_head = |inner: &[u8]| {
             let mut d = vec![0u8; LEN as usize];
             d[0..4].copy_from_slice(b"hsqs"); // SQUASHFS_MAGIC @0
+            d[0x1c..0x1e].copy_from_slice(&4u16.to_le_bytes()); // s_major @0x1c
             d[0x28..0x30].copy_from_slice(&4096u64.to_le_bytes()); // bytes_used @0x28
             d[REL as usize..REL as usize + inner.len()].copy_from_slice(inner);
             d

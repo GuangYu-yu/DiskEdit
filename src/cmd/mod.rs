@@ -30,19 +30,22 @@ pub(crate) struct CommandSpec {
     /// 位置参数上限（含第 0 位的目标路径）。与旗标同罪：多给即拒绝——
     /// 静默忽略多余位置参数会让用户以为写到了别处（如把 SIZE 落在错位上）却报成功
     pub(crate) max_pos: usize,
-    /// 与目标盘的打开关系（见 `TargetMode`）；main 据此决定成功后是否关闭撤销窗口
+    /// 撤销窗口的生命周期（见 `TargetMode`）：main 据此决定成功后是否关闭它
     pub(crate) mode: TargetMode,
     /// 处理函数。收命令名是因为 plan/apply 共用一个实现、要按名字分干跑与执行
     pub(crate) run: fn(&str, &Args) -> u8,
 }
 
-/// 命令与目标盘的打开关系。`opens_undo_journal` 由它派生，没有第二个声明。
-/// 若按行为命名（"写没写盘"）会撒谎——mkfs 与 undo 都会写目标盘，但它们不建 journal
+/// 命令与撤销窗口的关系：唯一的消费者是 `opens_undo_journal`（main 据此决定成功后
+/// 是否删 journal），不描述每个命令实际怎样打开目标——`abandon` 归 `WriteNoJournal`，
+/// 而它基本不打开目标。若按行为命名（"写没写盘"）会撒谎：mkfs 与 undo 都写目标盘，
+/// 但都不建 journal
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TargetMode {
-    /// 只读打开（`open_target_ro`）：不写目标盘
+    /// 不参与撤销窗口：只读命令，成功时没有要关闭的窗口
     ReadOnly,
-    /// 读写打开（`open_target`）：写目标盘，但撤销窗口由调用方自理
+    /// 写盘，但撤销窗口由命令自己处理（undo 回放既有 journal；check/resizefs 动手前
+    /// 过闸口）；成功后不得替别的失败运行清掉 journal
     WriteNoJournal,
     /// 读写打开并建 journal（`open_target_for_write`）：成功后须关闭撤销窗口
     WriteJournal,
@@ -86,7 +89,7 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         name: "copy",
         aliases: &[],
-        flags: &["--sector-size", "--start", "--align", "--chunk-size", "--name"],
+        flags: &["--sector-size", "--start", "--align", "--chunk-size", "--name", "--clone"],
         help: layout::HELP_COPY,
         max_pos: 1,
         mode: TargetMode::WriteJournal,
