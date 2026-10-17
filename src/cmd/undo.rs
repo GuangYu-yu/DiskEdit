@@ -6,8 +6,9 @@ use crate::dev::{FileSource, Journal, JournalRead, JournalRecord, RecoveryData, 
 
 pub(crate) const HELP: &str = r#"diskedit undo <TARGET> --yes
 
-  Replay the journal to undo this tool's direct writes (partition table and
-  relocated data). Writes made by external FS tools are not undone."#;
+  Replay the journal to undo the partition-table bytes this tool wrote.
+  Relocated data cannot be rolled back, and writes made by external FS
+  tools are not undone."#;
 
 /// 挑不出唯一可读 journal 的三种原因——**性质不同，出口码就该不同**，故在这里
 /// 分型而不是把文案揉成一个 String 让调用方猜：
@@ -45,11 +46,26 @@ fn pick_journal(candidates: &[std::path::PathBuf]) -> Result<(std::path::PathBuf
     let mut usable: Vec<(std::path::PathBuf, JournalRead)> = Vec::new();
     let mut damaged: Vec<String> = Vec::new();
     for path in candidates {
+        // 目录等非普通文件不是本工具写下的任何东西（同 active_recovery_records 的过滤）：
+        // read_entries 对目录报 EISDIR 会被记成"读不出来的现场"，而 abandon 对目录
+        // 也只能报 nothing to abandon——两边会互相把用户支到对方那里
+        if std::fs::metadata(path).is_ok_and(|m| !m.is_file()) {
+            continue;
+        }
         if is_zero_write_remnant(path) {
             continue;
         }
         match Journal::read_entries(path) {
-            Ok(r) => usable.push((path.clone(), r)),
+            Ok(r) => {
+                // 零记录的壳不是现场（与 active_recovery_records 同口径）：把它算成
+                // usable 会让一份有记录的历史候选被判成 Ambiguous
+                let empty = match &r {
+                    JournalRead::Complete(v) | JournalRead::TruncatedTail(v) => v.is_empty(),
+                };
+                if !empty {
+                    usable.push((path.clone(), r));
+                }
+            }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
             Err(e) => damaged.push(format!("{} ({e})", path.display())),
         }
@@ -450,7 +466,7 @@ mod tests {
         let a = crate::args::Args {
             target: img.to_string_lossy().into_owned(),
             part: None, grow: None, start: None, end: None, size: None,
-            fs: None, name: None, type_guid: None, table: None,
+            fs: None, name: None, clone: false, type_guid: None, table: None,
             yes: true, online: false, random: false, sector_size: None,
             align: String::new(), chunk_mib: 0, grow_to_end: false,
             allow_move: false, no_fs: false, grow_lv: false, start_end: false, lv: None,
@@ -715,7 +731,7 @@ mod tests {
         crate::args::Args {
             target: target.to_string(),
             part: None, grow: None, start: None, end: None, size: None,
-            fs: None, name: None, type_guid: None, table: None,
+            fs: None, name: None, clone: false, type_guid: None, table: None,
             yes: true, online: false, random: false, sector_size: None,
             align: String::new(), chunk_mib: 0, grow_to_end: false,
             allow_move: false, no_fs: false, grow_lv: false, start_end: false, lv: None,

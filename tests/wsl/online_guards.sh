@@ -40,6 +40,12 @@ exp "$(lba1)" "$LAST0" "  拒绝后分区表未变（last_lba 一致）"
 $B resizefs "$MP" 8M --online --size 8M >/dev/null 2>&1; exp $? 10 "resizefs <mountpoint> --online BYTES + --size 同给拒绝"
 exp "$(lba1)" "$LAST0" "  拒绝后分区表未变（last_lba 一致）"
 
+echo "== resizefs --online 不改分区表 =="
+# src/online.rs resize_online：大于现分区的请求在任何写盘之前拒绝，并指向 resize
+$B resizefs "$MP" 32M --online >/dev/null 2>&1; exp $? 10 "resizefs --online 越分区尺寸拒绝"
+exp "$(lba1)" "$LAST0" "  拒绝后分区表未变（last_lba 一致）"
+exp "$(fs_bytes "${LD}p1")" "$FS0" "  拒绝后 FS 未变（block count×size 一致）"
+
 echo "== 非 btrfs 在线缩容拒绝 =="
 # src/online.rs:710-721 —— online_shrink 仅 btrfs；ext4 请求 8MiB < 现分区 16MiB
 # 走 Outcome::refused；src/cmd/fs.rs:106-114 将该 Outcome 映射为退出码 10（未写盘）

@@ -146,21 +146,23 @@ fn part_in_use(dev: &str, disk_name: &str, pno: u32) -> std::io::Result<bool> {
 }
 
 /// 在线 resize 总入口（resizefs --online 用）。`size`：None = 扩满现分区；Some(字节) = 绝对新尺寸
-/// （> 现分区 = grow；< 现分区 = 仅 btrfs 支持）。请求不含锚定语义，故目标在锁下原样给出。
+/// （< 现分区 = 仅 btrfs 支持；> 现分区被拒绝：本入口不改分区表）。
+/// 请求不含锚定语义，故目标在锁下原样给出。
 /// 结果统一为 Outcome（退出码只在 outcome 模块映射）：10=拒绝（未动盘）/
 /// 20=布局已写但后置条件或内核视图未跟上 / 30=执行失败
 pub fn resize_online(mountpoint: &Path, size: Option<u64>) -> Outcome {
-    imp::resize_online(mountpoint, move |_| Ok(size))
+    imp::resize_online(mountpoint, move |_| Ok(size), false)
 }
 
 /// 在线 resize（resize 命令用）：目标长度由 `decide` 在**持有目标锁之后**、以只读打开的
 /// 整盘为输入解析——`+N`/`+N%` 锚定"当前尺寸"、`grow` 锚定右侧空闲，锁前快照在窗口内可能已作废。
-/// `Ok(None)` = 不指定绝对尺寸（仅把 FS 扩满现分区）；`Ok(Some(b))` = 绝对新尺寸
+/// `Ok(None)` = 不指定绝对尺寸（仅把 FS 扩满现分区）；`Ok(Some(b))` = 绝对新尺寸；
+/// 大于现分区时允许先扩分区表（本入口的职责包含分区几何）
 pub fn resize_online_planned(
     mountpoint: &Path,
     decide: impl FnOnce(&FileSource) -> Result<Option<u64>, Fail>,
 ) -> Outcome {
-    imp::resize_online(mountpoint, decide)
+    imp::resize_online(mountpoint, decide, true)
 }
 
 /// PV 在线扩容（仅分区层，无 FS 层）：sfdisk 写表 → partx 同步（BLKPG 兜底）→
@@ -168,14 +170,14 @@ pub fn resize_online_planned(
 /// EBUSY，因此必须走与挂载分区相同的 partx/BLKPG 同步路径；pvresize/lvextend
 /// 由调用方在分区尺寸生效后执行（pvresize(8) 支持已属 VG 且有活动 LV 的 PV）。
 /// 目标长度同样由 `decide` 在锁下解析，`Ok(None)` 视作"无绝对目标"（分区层无变化）。
-/// 返回 (结果, 锁下取得的实际旧尺寸)：调用方计算扩量只能用后者——锁前快照在
-/// 窗口内可能已过期，用它算出的扩量会传导给 lvextend。前置失败时旧尺寸带 0，
-/// 调用方只在 complete 分支消费它
+/// 返回 (结果, 锁下取得的实际旧尺寸, 独占锁)：调用方计算扩量只能用第二个值——锁前快照在
+/// 窗口内可能已过期，用它算出的扩量会传导给 lvextend。前置失败时旧尺寸带 0、锁为 None，
+/// 调用方只在 complete 分支消费；complete 分支的锁必须持有到 PV 链结束
 pub fn resize_pv_online(
     disk_name: &str,
     pno: u32,
     decide: impl FnOnce(&FileSource) -> Result<Option<u64>, Fail>,
-) -> (Outcome, u64) {
+) -> (Outcome, u64, Option<crate::targetlock::TargetLock>) {
     imp::resize_pv(disk_name, pno, decide)
 }
 
@@ -346,12 +348,15 @@ mod imp {
         crate::ioctl::blkpg_resize_partition(&disk, t.start_bytes, new_len_bytes, t.pno)
     }
 
-    /// part_resize 的失败按"是否知道表已落盘"三分——这不是措辞差异：
+    /// part_resize 的失败按"是否知道表已落盘"与"成因在哪一侧"分四类——这不是措辞差异：
+    /// - `Stale`：盘上现状与锁下快照不符（目标条目被改 / 新尺寸压到现存分区）。
+    ///   请求与现状不匹配且表未写 → 拒绝（10）
     /// - `NoWrite`：sfdisk 进程未启动，表确定未写
     /// - `Unknown`：sfdisk 执行了但报错。脚本被拒是未写、写入中途失败则可能已写，
     ///   两者在 stdout/stderr 上不可区分 → 不得断言未写
     /// - `Partial`：表已写，仅内核同步失败
     enum PartResizeError {
+        Stale(io::Error),
         NoWrite(io::Error),
         Unknown(io::Error),
         Partial(io::Error),
@@ -359,14 +364,15 @@ mod imp {
     impl PartResizeError {
         fn detail(&self) -> &io::Error {
             match self {
-                Self::NoWrite(e) | Self::Unknown(e) | Self::Partial(e) => e,
+                Self::Stale(e) | Self::NoWrite(e) | Self::Unknown(e) | Self::Partial(e) => e,
             }
         }
-        /// 表未写 → Infra（确定未写盘，不带"盘可能已改变"的提示）；
+        /// 现状与请求不符 → 拒绝；表未写 → Infra（确定未写盘，不带"盘可能已改变"的提示）；
         /// 无法断言 → Failed；表已写 → Applied（内核视图置为过期，退出码 20）。
         /// 具体原因（含 errno 提示）在发生处打印，契约摘要由 Outcome::report 统一输出
         fn into_outcome(self) -> Outcome {
             match classify_part_resize_error(&self) {
+                ResizeFailClass::Refused(msg) => Outcome::refused(msg),
                 ResizeFailClass::Infra(msg) => Outcome::infra(msg),
                 ResizeFailClass::Failed(msg) => Outcome::failed(msg),
                 ResizeFailClass::AppliedStaleKernel(msg) => {
@@ -381,6 +387,8 @@ mod imp {
     /// into_outcome，分类依据本身可单测——"知道表写没写"决定退出码语义，这是契约级判断
     #[derive(Debug)]
     enum ResizeFailClass {
+        /// 请求与盘上现状不匹配，表确定未写
+        Refused(String),
         /// 表确定未写（sfdisk 未启动）
         Infra(String),
         /// sfdisk 执行过但报错，表是否落盘不可断言
@@ -391,6 +399,7 @@ mod imp {
 
     fn classify_part_resize_error(e: &PartResizeError) -> ResizeFailClass {
         match e {
+            PartResizeError::Stale(err) => ResizeFailClass::Refused(err.to_string()),
             PartResizeError::NoWrite(err) => ResizeFailClass::Infra(err.to_string()),
             PartResizeError::Unknown(err) => ResizeFailClass::Failed(err.to_string()),
             PartResizeError::Partial(err) => ResizeFailClass::AppliedStaleKernel(err.to_string()),
@@ -421,14 +430,14 @@ mod imp {
                     // 不影响拒绝判定本身
                     let now_end = start.saturating_add(len);
                     let snap_end = t.start_bytes.saturating_add(t.part_len_bytes);
-                    return Err(PartResizeError::NoWrite(io::Error::other(format!(
+                    return Err(PartResizeError::Stale(io::Error::other(format!(
                         "partition {} on disk changed since the snapshot (now at {start}..{now_end}, snapshot {}..{snap_end}) — refusing to overwrite a foreign edit",
                         t.pno,
                         t.start_bytes,
                     ))));
                 }
                 if !range_free(t.start_bytes, new_len_bytes, &snap.others) {
-                    return Err(PartResizeError::NoWrite(io::Error::other(format!(
+                    return Err(PartResizeError::Stale(io::Error::other(format!(
                         "resizing partition {} to {new_len_bytes} bytes would overlap a partition present on disk now ({} neighbour(s)) — refusing over a stale snapshot",
                         t.pno,
                         snap.others.len(),
@@ -457,7 +466,11 @@ mod imp {
             &["--no-reread", "--force", "-N", &pno_str, &disk_str],
             &script,
         )
-        .map_err(|e| PartResizeError::NoWrite(e.into()))?;
+        .map_err(|e| match e {
+            // 进程已启动、输入没能送达：可能读过一部分脚本并动过盘，不得断言未写
+            crate::fsops::FsError::CommandFailed(m) => PartResizeError::Unknown(io::Error::other(m)),
+            other => PartResizeError::NoWrite(other.into()),
+        })?;
         fault_online_after_write();
         if !out.status.success() {
             return Err(PartResizeError::Unknown(io::Error::other(format!(
@@ -539,7 +552,12 @@ mod imp {
             )));
         };
         let argv: Vec<&str> = args.iter().map(String::as_str).collect();
-        let out = run(&prog, &argv).map_err(FsGrowError::Spawn)?;
+        // spawn 失败 = 工具没跑起来；启动后拿不到退出状态 = 可能已改 FS，归 Exit（failed）
+        let out = match run(&prog, &argv) {
+            Ok(o) => o,
+            Err(crate::fsops::FsError::CommandFailed(m)) => return Err(FsGrowError::Exit(m)),
+            Err(e) => return Err(FsGrowError::Spawn(e)),
+        };
         if !out.status.success() {
             return Err(FsGrowError::Exit(format!(
                 "online FS grow failed: {}",
@@ -736,88 +754,90 @@ mod imp {
     }
 
     /// PV 分区在线扩容：只动分区层，pvresize/lvextend 归调用方。第二返回值是
-    /// 锁下取得的实际旧尺寸（前置失败时为 0，调用方只在 complete 分支消费）
+    /// 锁下取得的实际旧尺寸（前置失败时为 0，调用方只在 complete 分支消费）。
+    /// 第三返回值是本函数持有的独占锁：随后的 pvresize/lvextend 仍在同一次操作里，
+    /// 调用方须把它带到 LVM 链结束——在这里就释放会让那条链落在锁外
     pub fn resize_pv(
         disk_name: &str,
         pno: u32,
         decide: impl FnOnce(&FileSource) -> Result<Option<u64>, Fail>,
-    ) -> (Outcome, u64) {
+    ) -> (Outcome, u64, Option<crate::targetlock::TargetLock>) {
         // 解析只读 sysfs / 路径，尚未写盘 → Infra。尚未取得独占权，旧尺寸不可信
         let t = match resolve_pv_target(disk_name, pno) {
             Ok(t) => t,
-            Err(e) => return (Outcome::infra(e.to_string()), 0),
+            Err(e) => return (Outcome::infra(e.to_string()), 0, None),
         };
         // 此后每一步都是写盘（写表 / 内核重读），独占权从解析出目标起就取得
-        let (_owned, locked_ident) = match lock_disk(&t) {
+        let (owned, locked_ident) = match lock_disk(&t) {
             Ok(v) => v,
-            Err(o) => return (o, 0),
+            Err(o) => return (o, 0, None),
         };
         // 独占权在手后重取 sysfs 快照：resolve 必须先于取锁（锁身份取自它的结果），
         // 而外部工具不守本工具的锁——取锁耗时期间邻居/容量/本分区尺寸都可能已变。
         // 下面的 shrink 判定与 check_new_range 的邻接、容量判据必须来自锁下的新鲜事实
         let t = match resolve_pv_target(disk_name, pno) {
             Ok(t) => t,
-            Err(e) => return (Outcome::infra(e.to_string()), 0),
+            Err(e) => return (Outcome::infra(e.to_string()), 0, None),
         };
         // 身份复核：锁按取锁时刻的拓扑派生，窗口内同一路径被重绑到别的设备时，
         // 路径串比对看不出来，锁保护的已不是我们要动的这块盘
         if let Err(o) = verify_lock_identity(&locked_ident, &t) {
-            return (o, 0);
+            return (o, 0, None);
         }
         let old_len_bytes = t.part_len_bytes;
         // 现场闸口：本路径不建 journal，目标上若有未收尾的现场必须在此拒绝
         if let Err(o) = refuse_if_scene_active(&t) {
-            return (o, old_len_bytes);
+            return (o, old_len_bytes, None);
         }
         // 活动 swap 的锁下复核（命令层那次是锁前粗查）：swapon 不守本工具的锁，
         // 窗口内被激活的 swap 若放行写表，改的就是活动 swap 的底层分区。
         // /proc/swaps 读不出来时无从断言"无 swap"——按环境故障拒绝而非放行
         match crate::online::swap_active(disk_name, pno) {
             Ok(true) => {
-                return (Outcome::refused(format!("partition {pno} became active swap during locking — run swapoff first")), old_len_bytes);
+                return (Outcome::refused(format!("partition {pno} became active swap during locking — run swapoff first")), old_len_bytes, None);
             }
             Ok(false) => {}
-            Err(e) => return (Outcome::infra(format!("cannot read /proc/swaps: {e}")), old_len_bytes),
+            Err(e) => return (Outcome::infra(format!("cannot read /proc/swaps: {e}")), old_len_bytes, None),
         }
         // 锁下重取真相共用一个只读整盘句柄：PV 判据复核与"请求 → 目标长度"的解析
         // 都锚定独占权之后的盘上内容。PV 判据的复核（命令层那次是锁前粗查）：识别与
         // 取锁之间分区可被重新格式化，过期的 is_pv 会把 sfdisk 的表写入砸到已不是 PV 的分区上
         let disk = match FileSource::open_read_only(&t.disk_dev) {
             Ok(s) => s,
-            Err(e) => return (Outcome::infra(format!("open failed: {e}")), old_len_bytes),
+            Err(e) => return (Outcome::infra(format!("open failed: {e}")), old_len_bytes, None),
         };
         match crate::fsid::identify(&disk, t.start_bytes, t.part_len_bytes) {
             Ok(Some(crate::fsid::FsKind::Lvm2Pv)) => {}
             Ok(ft) => return (Outcome::refused(format!(
                 "partition {pno} is no longer an LVM PV (identified as {}) — re-run `diskedit resize` to re-classify the target",
                 crate::fsid::fs_name(ft)
-            )), old_len_bytes),
-            Err(e) => return (Outcome::infra(format!("identify failed: {e}")), old_len_bytes),
+            )), old_len_bytes, None),
+            Err(e) => return (Outcome::infra(format!("identify failed: {e}")), old_len_bytes, None),
         }
         // 目标长度在锁下解析（见 `resize_online_planned` 的说明）；PV 路径无"仅扩 FS"一说，
         // `Ok(None)` 视作无绝对目标 = 分区层无变化
         let new_len_bytes = match decide(&disk) {
             Ok(Some(b)) => b,
             Ok(None) => t.part_len_bytes,
-            Err(f) => return (f.into_outcome(), old_len_bytes),
+            Err(f) => return (f.into_outcome(), old_len_bytes, None),
         };
         // 相等值 = 分区层无事可做，按 complete 返回：调用方照常走完 PV 链，
         // delta 为 0 时 pvresize/lvextend 只同步现状。相等与否必须由锁下事实判定——
         // 锁前快照在窗口内可能已过期，用它短路会跳过本该做的写表
         if new_len_bytes == t.part_len_bytes {
-            return (Outcome::applied_with(Vec::new()), old_len_bytes);
+            return (Outcome::applied_with(Vec::new()), old_len_bytes, Some(owned));
         }
         if new_len_bytes < t.part_len_bytes {
             return (Outcome::refused(format!(
                 "PV partition can only grow here (current {} bytes); PV shrink needs the lvreduce/pvresize chain",
                 t.part_len_bytes
-            )), old_len_bytes);
+            )), old_len_bytes, None);
         }
         if let Err(f) = check_new_range(&t, new_len_bytes, &disk) {
-            return (f.into_outcome(), old_len_bytes);
+            return (f.into_outcome(), old_len_bytes, None);
         }
         if let Err(e) = part_resize(&t, new_len_bytes) {
-            return (e.into_outcome(), old_len_bytes);
+            return (e.into_outcome(), old_len_bytes, None);
         }
         (
             match verify_part_size(&t, new_len_bytes) {
@@ -829,12 +849,15 @@ mod imp {
                 }
             },
             old_len_bytes,
+            // 表已写：后面的 PV 链仍属本次操作，锁随返回值继续持有
+            Some(owned),
         )
     }
 
     pub fn resize_online(
         mountpoint: &Path,
         decide: impl FnOnce(&FileSource) -> Result<Option<u64>, Fail>,
+        allow_partition_grow: bool,
     ) -> Outcome {
         // 解析与 FS 识别都是只读的，且先于 part_resize/sfdisk 的首次写盘 → Infra
         let t = match resolve_target(mountpoint) {
@@ -938,6 +961,15 @@ mod imp {
                 fs_grow_outcome(fs_grow(&t, fstype))
             }
             Some(bytes) => {
+                // resizefs --online 只扩文件系统，不改分区表：越界请求在任何写盘之前拒绝，
+                // 分区几何的协调由 `resize` 负责
+                if bytes > t.part_len_bytes && !allow_partition_grow {
+                    return Outcome::refused(format!(
+                        "resizefs --online grows the filesystem inside the current partition ({} bytes) — \
+                         enlarge the partition with `diskedit resize` first",
+                        t.part_len_bytes
+                    ));
+                }
                 if let Err(f) = check_new_range(&t, bytes, &disk) {
                     return f.into_outcome();
                 }
@@ -945,8 +977,15 @@ mod imp {
                     // grow：先自查（内核 EBUSY 兜底），sfdisk 写表 → partx 同步 → FS 工具。
                     // 无在线工具的判定必须在写表前——fs_grow 对无工具情形不启动任何进程，
                     // 借它把拒绝挡在写表之前，不留下"表已扩、FS 未扩"
-                    if fs_grow_cmd(&t, fstype).is_none() {
-                        return fs_grow_outcome(fs_grow(&t, fstype));
+                    match fs_grow_cmd(&t, fstype) {
+                        None => return fs_grow_outcome(fs_grow(&t, fstype)),
+                        // 映射里有工具不等于 PATH 里有：缺二进制同样必须在写表前拒绝，
+                        // 否则表已扩才发现，只剩 PARTIAL 加手工补救
+                        Some((prog, _)) => {
+                            if let Err(e) = crate::fsops::require_tool(&prog) {
+                                return fs_grow_outcome(Err(FsGrowError::Spawn(e)));
+                            }
+                        }
                     }
                     if let Err(e) = refuse_btrfs_multi_device(&t, fstype) {
                         return Fail::from(e).into_outcome();
@@ -973,8 +1012,9 @@ mod imp {
                     }
                     let mnt = t.mnt.to_string_lossy().into_owned();
                     match run("btrfs", &["filesystem", "resize", &bytes.to_string(), &mnt]) {
-                        // spawn 失败（工具缺失等）发生在本次首次写盘之前：FS 未缩、表未写 → Infra
-                        Err(e) => return Outcome::infra(e.to_string()),
+                        // ToolMissing / spawn 失败发生在本次首次写盘之前 → Infra；
+                        // 启动后拿不到退出状态则可能已改 FS → Failed（映射见 Fail::from）
+                        Err(e) => return Fail::from(e).into_outcome(),
                         Ok(out) if !out.status.success() => {
                             return Outcome::failed(format!("btrfs shrink failed: {}", String::from_utf8_lossy(&out.stderr)));
                         }

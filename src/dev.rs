@@ -145,17 +145,46 @@ pub(crate) fn scene_mismatch(
     }
 }
 
+/// 从 sysfs 节点定位承载它的整设备节点：`partition` 属性在 ⇒ 当前是分区，
+/// 逐级上溯直到非分区节点。层级深度随设备类型变化（loop0p1 与 NVMe 分区的父目录
+/// 不同），故按属性判断而不硬编码 `../..`。链断了如实报错，不退化成"就是当前节点"
+#[cfg(target_os = "linux")]
+fn block_device_at(node: &Path) -> io::Result<PathBuf> {
+    let mut cur = node.to_path_buf();
+    loop {
+        if read_sysfs_attr(&cur.join("partition"))?.is_none() {
+            return Ok(cur);
+        }
+        cur = cur
+            .parent()
+            .ok_or_else(|| io::Error::other(format!("partition node {} has no parent device", node.display())))?
+            .to_path_buf();
+    }
+}
+
+/// 目标若是 loop 支撑的（含 loop 设备上的分区），取 `loop/backing_file`。
+/// 分区节点自身不继承 loop 属性，属性在它上溯到的整设备节点上。
+/// 读失败上抛：读不出来不能等同于"不是 loop"
+#[cfg(target_os = "linux")]
+fn loop_backing_at(node: &Path) -> io::Result<Option<PathBuf>> {
+    let owner = block_device_at(node)?;
+    Ok(read_sysfs_attr(&owner.join("loop/backing_file"))?
+        .filter(|raw| !raw.is_empty())
+        .map(PathBuf::from))
+}
+
 /// 读 loop 映射事实：backing_file 在 ⇒ 这台设备是 loop，offset / sizelimit 与它
 /// 同批引入（Documentation/ABI/testing/sysfs-block-devloop），缺失即读失败如实上抛。
 /// sizelimit 0 = 无限制（losetup(8)），按原值记录，比对也按原值
+/// 已解析出 sysfs 节点时用它：打开路径按 fd 的 rdev 定位节点，不再二次 stat 路径
 #[cfg(target_os = "linux")]
-fn loop_mapping_of(dev: &Path) -> io::Result<Option<(u64, u64)>> {
-    let node = sysfs_node(dev)?;
-    if read_sysfs_attr(&node.join("loop/backing_file"))?.is_none() {
+fn loop_mapping_at(node: &Path) -> io::Result<Option<(u64, u64)>> {
+    let owner = block_device_at(node)?;
+    if read_sysfs_attr(&owner.join("loop/backing_file"))?.is_none() {
         return Ok(None);
     }
     let parse = |name: &str| -> io::Result<u64> {
-        let v = read_sysfs_attr(&node.join(name))?
+        let v = read_sysfs_attr(&owner.join(name))?
             .ok_or_else(|| io::Error::other(format!("sysfs {name} attribute is missing")))?;
         v.parse::<u64>().map_err(|e| io::Error::other(format!("unparseable sysfs {name} {v:?}: {e}")))
     };
@@ -287,8 +316,21 @@ fn sysfs_node(path: &Path) -> io::Result<PathBuf> {
         )
     };
     let meta = std::fs::metadata(path).map_err(|e| deny(e.to_string()))?;
-    let sysdev = format!("/sys/dev/block/{}:{}", libc::major(meta.rdev()), libc::minor(meta.rdev()));
-    std::fs::canonicalize(&sysdev).map_err(|e| deny(format!("no sysfs node at {sysdev} ({e})")))
+    sysfs_node_from_rdev(meta.rdev())
+}
+
+/// 已打开设备的 sysfs 目录：按 fd 的 rdev 反查 `/sys/dev/block/<maj>:<min>`。
+/// 与 [`sysfs_node`] 的区别只在取值来源——打开之后一律走这里，路径在 open 与 stat
+/// 之间被 udev 重建时不会把锁与 journal 派生到另一个设备
+#[cfg(target_os = "linux")]
+fn sysfs_node_from_rdev(rdev: u64) -> io::Result<PathBuf> {
+    let sysdev = Path::new("/sys/dev/block").join(format!("{}:{}", libc::major(rdev), libc::minor(rdev)));
+    std::fs::canonicalize(&sysdev).map_err(|e| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("no sysfs node at {} ({e})", sysdev.display()),
+        )
+    })
 }
 
 /// 设备层身份的**两个投影**，共用同一次 sysfs 解析（`node` 即 [`sysfs_node`] 的产物）：
@@ -321,7 +363,10 @@ fn block_keys(node: &Path, path: &Path) -> io::Result<(String, String)> {
     };
     // 设备层身份：有 device-id 用它；没有（多数普通盘）退到 **sysfs 节点自身**的名字
     // 与容量——那是拓扑事实，与调用方给的路径无关。两者都读不出来则拒绝，不退化成
-    // "名字-0"：容量进过身份键，写死 0 会在下一次成功读取时把身份改名（换序列化域）
+    // "名字-0"：容量进过身份键，写死 0 会在下一次成功读取时把身份改名（换序列化域）。
+    // 退化键不含绑到具体物理盘的成分：同一槽位先后出现同节点名、同容量的两块盘共用
+    // 一个身份域（README 的"设备身份边界"）；要区分它们需要 device-id，本函数不消费
+    // 分区内容摘要
     let key_of = |n: &Path| -> io::Result<String> {
         let id = node_device_id(n)
             .map_err(|e| deny(format!("reading device-id attribute of {}: {e}", n.display())))?;
@@ -452,7 +497,8 @@ impl TargetIdentity {
     }
 
     /// 镜像身份：Linux 上取 realpath（文件不存在——cleanup 路径的常态之一——退字面
-    /// 路径），其余平台字面路径
+    /// 路径），其余平台字面路径。非 Unix 上同一文件的别名路径（硬链接、符号链接、
+    /// junction）因此各有一份现场与一把锁——见 README 的"并发边界"
     pub(crate) fn resolve_image(path: &Path) -> Self {
         #[cfg(target_os = "linux")]
         {
@@ -497,11 +543,18 @@ impl TargetIdentity {
     #[cfg(target_os = "linux")]
     pub(crate) fn resolve_block(path: &Path) -> Result<Self, String> {
         let node = sysfs_node(path).map_err(|e| e.to_string())?;
-        match read_sysfs_attr(&node.join("loop/backing_file")).map_err(|e| e.to_string())? {
-            Some(raw) if !raw.is_empty() => return Ok(Self::loop_backed(path, PathBuf::from(raw))),
-            _ => {}
+        Self::resolve_block_at(&node, path)
+    }
+
+    /// 已解析出 sysfs 节点时的身份构造（打开路径按 fd 的 rdev 定位，见
+    /// [`sysfs_node_from_rdev`]）。其余判据与 [`Self::resolve_block`] 完全一致
+    #[cfg(target_os = "linux")]
+    pub(crate) fn resolve_block_at(node: &Path, path: &Path) -> Result<Self, String> {
+        // loop 属性属于整设备节点：分区节点经设备链上溯到父 loop 设备后再读
+        if let Some(raw) = loop_backing_at(node).map_err(|e| e.to_string())? {
+            return Ok(Self::loop_backed(path, raw));
         }
-        let (self_key, disk_key) = block_keys(&node, path).map_err(|e| e.to_string())?;
+        let (self_key, disk_key) = block_keys(node, path).map_err(|e| e.to_string())?;
         Ok(Self::from_block_keys(path, self_key, disk_key))
     }
 
@@ -744,15 +797,16 @@ impl Drop for ReadFaultGuard {
 impl FileSource {
     /// 块设备打开的公共附加物：指纹 + loop 映射。
     /// loop 的身份是 backing 文件：指纹取它；真块设备节点 inode 不承诺稳定，不取。
-    /// loop 的 sysfs 只读探测在打开早期进行，失败即打不开目标；调用点在 identity 已解析之后
+    /// `node` 必须与身份解析用的是同一个 sysfs 节点（打开路径按 fd 的 rdev 定位），
+    /// 否则路径在窗口内被重建时映射事实会来自另一台设备
     #[cfg(target_os = "linux")]
-    fn block_open_extras(identity: &TargetIdentity, path: &Path) -> io::Result<(TargetFingerprint, Option<(u64, u64)>)> {
+    fn block_open_extras(identity: &TargetIdentity, node: &Path) -> io::Result<(TargetFingerprint, Option<(u64, u64)>)> {
         let fp = if identity.kind == TargetKind::Image {
             TargetFingerprint::from_meta(&std::fs::metadata(&identity.base)?)
         } else {
             TargetFingerprint::default()
         };
-        Ok((fp, loop_mapping_of(path)?))
+        Ok((fp, loop_mapping_at(node)?))
     }
 
     /// `sector_size_override`：镜像默认 512（镜像不携带扇区信息），块设备经 BLKSSZGET 查询并忽略覆盖值。
@@ -771,11 +825,18 @@ impl FileSource {
                     .open(path)?;
                 let size = ioctl::blkgetsize64(&file)?;
                 let sector_size = ioctl::blksszget(&file)? as u64;
+                // fd 已拿到：身份与映射都按它的 rdev 反查 sysfs，不再按路径二次 stat——
+                // /dev 节点在窗口内被 udev 重建时，fd 与身份描述会指向不同设备
+                let rdev = {
+                    use std::os::unix::fs::MetadataExt;
+                    file.metadata()?.rdev()
+                };
+                let node = sysfs_node_from_rdev(rdev)?;
                 // 块设备身份解析失败（fail-closed）⇒ 打开失败：错误信息带设备名
-                let identity = TargetIdentity::resolve_block(path).map_err(io::Error::other)?;
+                let identity = TargetIdentity::resolve_block_at(&node, path).map_err(io::Error::other)?;
                 // 可写打开：顺手清掉落点目录里的崩溃残骸（ckpt 暂存文件）
                 sweep_stale_ckpt_temps(&identity);
-                let (fingerprint, loop_mapping) = Self::block_open_extras(&identity, path)?;
+                let (fingerprint, loop_mapping) = Self::block_open_extras(&identity, &node)?;
                 return Ok(FileSource {
                     identity,
                     file,
@@ -802,13 +863,15 @@ impl FileSource {
 
     /// 镜像打开的唯一实现：可写性是显式参数，读写与只读两个入口不各自拼一份
     fn open_image(path: &Path, sector_size_override: Option<u64>, writable: bool) -> io::Result<Self> {
-        let meta = std::fs::metadata(path)?;
         let mut opts = OpenOptions::new();
         opts.read(true);
         if writable {
             opts.write(true);
         }
         let file = opts.open(path)?;
+        // 元数据取自已打开的句柄：先 stat 路径再 open 会在两步之间留下替换窗口——
+        // 写句柄指向 B 而越界上界与 journal 身份来自 A
+        let meta = file.metadata()?;
         let size = meta.len();
         let sector_size = sector_size_override.unwrap_or(512);
         // 镜像扇区大小须为 2 的幂且落在 512..=65536；这是本工具的自定约束，非规范要求
@@ -844,8 +907,14 @@ impl FileSource {
         let file = OpenOptions::new().read(true).open(path)?;
         let size = ioctl::blkgetsize64(&file)?;
         let sector_size = ioctl::blksszget(&file)? as u64;
-        let identity = TargetIdentity::resolve_block(path).map_err(io::Error::other)?;
-        let (fingerprint, loop_mapping) = Self::block_open_extras(&identity, path)?;
+        // 与可写打开同口径：身份与映射都从 fd 的 rdev 派生
+        let rdev = {
+            use std::os::unix::fs::MetadataExt;
+            file.metadata()?.rdev()
+        };
+        let node = sysfs_node_from_rdev(rdev)?;
+        let identity = TargetIdentity::resolve_block_at(&node, path).map_err(io::Error::other)?;
+        let (fingerprint, loop_mapping) = Self::block_open_extras(&identity, &node)?;
         Ok(FileSource {
             identity,
             file,
@@ -1049,10 +1118,12 @@ pub fn parse_target(s: &str) -> Result<(String, Option<PartSelector>), &'static 
 /// `part_dev_hint`（镜像 losetup 提示）与在线/离线 LVM 链的分区节点路径共用此规则。
 /// `base` 是**盘名**（如 /dev/sda、/dev/disk/by-id/ata-XXX），不含分区号
 pub(crate) fn part_node_name(base: &str, part: u32) -> String {
-    let sep = if base.ends_with(|c: char| c.is_ascii_digit()) {
-        "p"
-    } else if base.starts_with("/dev/disk/by-id/") || base.starts_with("/dev/disk/by-path/") {
+    // 前缀判据必须先行：by-id 名（wwn-0x…、nvme-eui.…、序列号）完全可能以数字结尾，
+    // 先走"数字结尾 ⇒ 拼 p"会生成 by-id 路径下不存在的 …pN
+    let sep = if base.starts_with("/dev/disk/by-id/") || base.starts_with("/dev/disk/by-path/") {
         "-part"
+    } else if base.ends_with(|c: char| c.is_ascii_digit()) {
+        "p"
     } else {
         ""
     };
@@ -1099,7 +1170,7 @@ pub(crate) fn best_effort_rmdir(dir: &std::path::Path) {
 /// 两者都不会产生"超前于数据"的持久化状态，故此处有意忽略失败
 #[cfg(unix)]
 #[allow(clippy::let_underscore_must_use)] // 有意忽略：失败只使元数据回退，见上
-fn best_effort_dir_fsync(path: &std::path::Path) {
+pub(crate) fn best_effort_dir_fsync(path: &std::path::Path) {
     if let Some(dir) = path.parent()
         && let Ok(d) = std::fs::File::open(dir)
     {
@@ -1108,7 +1179,7 @@ fn best_effort_dir_fsync(path: &std::path::Path) {
 }
 
 #[cfg(not(unix))]
-fn best_effort_dir_fsync(_path: &std::path::Path) {}
+pub(crate) fn best_effort_dir_fsync(_path: &std::path::Path) {}
 
 /// 一次 durable mutation 的**语义**：用户看到的"做了什么"，也是 undo policy 的输入。
 ///
@@ -1163,7 +1234,8 @@ pub struct JournalRecord {
     pub recovery: RecoveryData,
 }
 
-/// 记录头 `[len u32][crc32 u32]` 的字节数。`len` 不计入 CRC（见 [`Journal::read_entries`]）
+/// 记录头 `[len u32][crc32 u32]` 的字节数。v5 起 `len` 计入 CRC（见 [`Journal::read_entries`]）；
+/// v4 journal 仍按旧口径（CRC 只覆盖载荷）读取与追加
 const REC_HDR: usize = 8;
 
 /// journal 头里的**创建时目标身份**：写入这份 journal 时那个目标的指纹与 loop 映射。
@@ -1185,8 +1257,8 @@ fn unsupported_version_error(version: u8) -> io::Error {
     io::Error::new(
         io::ErrorKind::InvalidData,
         format!(
-            "journal format v{version} is not supported by this build (it reads and writes v{}) — the journal cannot be \
-             replayed; release it with `diskedit abandon` (that gives up the ability to roll back, not the data)",
+            "journal format v{version} is not supported by this build (it reads v4 and v5, writes v{}) — the journal \
+             cannot be replayed; release it with `diskedit abandon` (that gives up the ability to roll back, not the data)",
             Journal::MAGIC[4]
         ),
     )
@@ -1364,15 +1436,45 @@ pub struct Journal {
     /// 本目标是哪个目标：随头一起落盘（首条记录之前），也在采纳既有 journal 时与头里的
     /// 记录值比对（见 [`Self::open`]）
     identity: JournalIdentity,
+    /// 本份 journal 的记录 CRC 口径。新建即当前版本；采纳 v4 现场时保持 v4，
+    /// 追加的记录与该文件既有记录同口径，避免同一文件里混两种 CRC 规则
+    format: JournalFormat,
+}
+
+/// journal 的记录 CRC 口径，版本号即 magic 的尾字节
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum JournalFormat {
+    /// CRC 只覆盖载荷；`len` 不受完整性保护
+    V4,
+    /// CRC 覆盖 `[len][payload]`：长度字段被位翻转时按校验失败拒绝，而不是被当成
+    /// "更长的载荷"继续扫描
+    V5,
+}
+
+impl JournalFormat {
+    fn from_version(version: u8) -> Option<Self> {
+        match version {
+            4 => Some(Self::V4),
+            5 => Some(Self::V5),
+            _ => None,
+        }
+    }
+
+    fn magic(self) -> &'static [u8; 5] {
+        match self {
+            Self::V4 => b"DEJL\x04",
+            Self::V5 => b"DEJL\x05",
+        }
+    }
 }
 
 impl Journal {
-    /// 尾字节是格式版本：读到别的 magic 即拒绝整卷（见 open）。版本**不做旧格式兼容**——
-    /// 旧 journal 会被当作"读不出来的现场"，由 `abandon` 释放，而不是猜着回放；版本识别
-    /// 先于任何记录解析，故旧格式报的是"版本不支持"而非"记录损坏"
+    /// 尾字节是格式版本。版本识别先于任何记录解析，故不认识的格式报"版本不支持"
+    /// 而非"记录损坏"。可读 v4 与 v5：v4 现场保持旧口径追加，回滚能力不因升级丢失
     /// - v3：PreImage 记录补记写后内容（undo 回放前的分叉核对依据）
     /// - v4：头里加"创建时目标身份"段（指纹 + loop 映射），采纳与回放前都先核对
-    pub(crate) const MAGIC: &[u8; 5] = b"DEJL\x04";
+    /// - v5：记录 CRC 覆盖 `[len][payload]`，长度字段纳入完整性保护
+    pub(crate) const MAGIC: &[u8; 5] = b"DEJL\x05";
 
     /// magic 的前 4 字节：凡以它开头而版本字节不同的，都是本工具别的版本写下的 journal
     const MAGIC_PREFIX: &[u8; 4] = b"DEJL";
@@ -1383,9 +1485,9 @@ impl Journal {
     pub(crate) const HEADER_LEN: usize = Self::MAGIC.len() + IDENTITY_LEN + 4;
 
     /// 头（含身份段的 CRC）。写出与校验两处只用这一份布局
-    fn header(identity: &JournalIdentity) -> Vec<u8> {
+    fn header(identity: &JournalIdentity, format: JournalFormat) -> Vec<u8> {
         let mut b = Vec::with_capacity(Self::HEADER_LEN);
-        b.extend_from_slice(Self::MAGIC);
+        b.extend_from_slice(format.magic());
         b.extend_from_slice(&identity.fp.dev.to_le_bytes());
         b.extend_from_slice(&identity.fp.ino.to_le_bytes());
         b.extend_from_slice(&identity.fp.size.to_le_bytes());
@@ -1399,18 +1501,18 @@ impl Journal {
     }
 
     /// 解析并校验头。**版本识别在一切之前**：magic 前缀对上而版本字节不同，报的是版本错误，
-    /// 不是长度不足、更不是 CRC——那两种措辞会把用户送去怀疑文件被写坏
-    fn parse_header(data: &[u8]) -> io::Result<JournalIdentity> {
+    /// 不是长度不足、更不是 CRC——那两种措辞会把用户送去怀疑文件被写坏。
+    /// 返回身份与记录 CRC 口径（v4 / v5 共用同一头布局，仅 magic 版本字节不同）
+    fn parse_header(data: &[u8]) -> io::Result<(JournalIdentity, JournalFormat)> {
         if data.len() < Self::MAGIC.len() {
             return Err(truncated_header_error(data.len()));
         }
-        if &data[..Self::MAGIC.len()] != Self::MAGIC {
-            return Err(if &data[..Self::MAGIC_PREFIX.len()] == Self::MAGIC_PREFIX {
-                unsupported_version_error(data[Self::MAGIC_PREFIX.len()])
-            } else {
-                not_a_journal_error()
-            });
+        if &data[..Self::MAGIC_PREFIX.len()] != Self::MAGIC_PREFIX {
+            return Err(not_a_journal_error());
         }
+        let Some(format) = JournalFormat::from_version(data[Self::MAGIC_PREFIX.len()]) else {
+            return Err(unsupported_version_error(data[Self::MAGIC_PREFIX.len()]));
+        };
         if data.len() < Self::HEADER_LEN {
             return Err(truncated_header_error(data.len()));
         }
@@ -1422,17 +1524,17 @@ impl Journal {
         let u64_at = |i: usize| u64::from_le_bytes(data[Self::MAGIC.len() + i..Self::MAGIC.len() + i + 8].try_into().unwrap());
         let fp = TargetFingerprint { dev: u64_at(0), ino: u64_at(8), size: u64_at(16) };
         let map = (data[Self::MAGIC.len() + 24] != 0).then(|| (u64_at(25), u64_at(33)));
-        Ok(JournalIdentity { fp, map })
+        Ok((JournalIdentity { fp, map }, format))
     }
 
     /// 只读头：undo 在回放前用它取"这份 journal 是为哪个目标写的"。与 [`Self::open`] 用
     /// 同一份布局与同一套校验，故两条路径对"头是否可信"不会分叉
     pub fn read_identity(path: &Path) -> io::Result<JournalIdentity> {
-        Self::parse_header(&std::fs::read(path)?)
+        Self::parse_header(&std::fs::read(path)?).map(|(identity, _)| identity)
     }
 
-    fn at(path: &Path, file: Option<File>, identity: JournalIdentity) -> Self {
-        Journal { file, path: path.to_path_buf(), mutation: Mutation::PartitionTable, identity }
+    fn at(path: &Path, file: Option<File>, identity: JournalIdentity, format: JournalFormat) -> Self {
+        Journal { file, path: path.to_path_buf(), mutation: Mutation::PartitionTable, identity, format }
     }
 
     /// 打开（必要时先校验）落点，**不产生任何新痕迹**：文件已存在则必须是我们自己写的
@@ -1462,7 +1564,7 @@ impl Journal {
                 if len == 0 {
                     Self::rewrite_header(path, &identity)?;
                     let f = OpenOptions::new().read(true).append(true).open(path)?;
-                    return Ok(Self::at(path, Some(f), identity));
+                    return Ok(Self::at(path, Some(f), identity, JournalFormat::V5));
                 }
                 let have = usize::try_from(len.min(Self::HEADER_LEN as u64)).unwrap();
                 let mut head = vec![0u8; have];
@@ -1470,7 +1572,7 @@ impl Journal {
                 // 版本识别排在长度与 CRC 之前：一份**旧版本**的 journal 可能只有几十字节，
                 // 按长度先判会把它说成"头没写完"，按 CRC 先判会说成"记录损坏"——两种都会把
                 // 用户送去怀疑文件被写坏，而真实原因是版本不认识
-                let recorded = if head.len() >= Self::MAGIC.len() {
+                let (recorded, format) = if head.len() >= Self::MAGIC.len() {
                     Self::parse_header(&head)? // 版本、长度、头 CRC 三关；不认的文件在此被拒
                 } else if Self::MAGIC.starts_with(&head) {
                     // 1..4 字节且是本工具 magic 的前缀：不足一个 magic，按头截断报（不是残骸）
@@ -1498,7 +1600,7 @@ impl Journal {
                     let mut data = Vec::new();
                     f.seek(SeekFrom::Start(0))?;
                     f.read_to_end(&mut data)?;
-                    let (_, truncated, end) = Self::scan_entries(&data)?;
+                    let (_, truncated, end) = Self::scan_entries(&data, format)?;
                     if truncated {
                         let cut = data.len() - end;
                         let w = std::fs::OpenOptions::new().write(true).open(path)?;
@@ -1510,9 +1612,11 @@ impl Journal {
                         );
                     }
                 }
-                Ok(Self::at(path, Some(f), identity))
+                Ok(Self::at(path, Some(f), identity, format))
             }
-            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(Self::at(path, None, identity)),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                Ok(Self::at(path, None, identity, JournalFormat::V5))
+            }
             Err(e) => Err(e),
         }
     }
@@ -1523,7 +1627,7 @@ impl Journal {
         w.set_len(0)?;
         use std::io::Write;
         let mut w = w;
-        w.write_all(&Self::header(identity))?;
+        w.write_all(&Self::header(identity, JournalFormat::V5))?;
         w.sync_all()?;
         best_effort_dir_fsync(path);
         Ok(())
@@ -1557,8 +1661,17 @@ impl Journal {
                 }
             })?;
             use std::io::Write;
-            f.write_all(&Self::header(&self.identity))?;
-            f.sync_all()?;
+            let head = Self::header(&self.identity, self.format);
+            let init = f.write_all(&head).and_then(|()| f.sync_all());
+            if let Err(e) = init {
+                // 头没写完的文件不属于可采纳的形态（0 字节残骸或完整头），重试会报成
+                // "另一个 diskedit 在用"，下次 open 又只能 abandon——清掉自己刚建的文件，
+                // 让本地 I/O 故障保持成"没有 journal"，而不是留下需要人工释放的假现场
+                drop(f);
+                #[allow(clippy::let_underscore_must_use)] // 清理失败不改变主错误：残留的空文件下次打开会报成占用
+                let _ = std::fs::remove_file(&self.path);
+                return Err(e);
+            }
             // 新建文件的目录项也必须落盘：否则断电后 journal 整体消失，而写入已经发生
             best_effort_dir_fsync(&self.path);
             self.file = Some(f);
@@ -1587,15 +1700,31 @@ impl Journal {
         self.mutation = m;
     }
 
+    /// 记录的 CRC：v4 只覆盖载荷；v5 覆盖 `[len][payload]`，长度字段被改坏时校验失败。
+    /// 写入与读取共用这一处口径
+    fn record_crc(format: JournalFormat, len: [u8; 4], payload: &[u8]) -> u32 {
+        match format {
+            JournalFormat::V4 => crate::table::crc32(payload),
+            JournalFormat::V5 => {
+                let mut frame = Vec::with_capacity(len.len() + payload.len());
+                frame.extend_from_slice(&len);
+                frame.extend_from_slice(payload);
+                crate::table::crc32(&frame)
+            }
+        }
+    }
+
     fn append(&mut self, rec: &JournalRecord) -> io::Result<()> {
         use std::io::Write;
         let payload = rec.encode();
         // 长度字段按 u32 落盘：超限静默截断会破坏 [len][crc][payload] 的帧定位，显式拒绝
         let n = u32::try_from(payload.len())
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "journal record exceeds u32 length"))?;
+        let format = self.format;
         let f = self.ensure()?;
-        f.write_all(&n.to_le_bytes())?;
-        f.write_all(&crate::table::crc32(&payload).to_le_bytes())?;
+        let n_le = n.to_le_bytes();
+        f.write_all(&n_le)?;
+        f.write_all(&Self::record_crc(format, n_le, &payload).to_le_bytes())?;
         f.write_all(&payload)?;
         f.sync_data()
     }
@@ -1608,14 +1737,16 @@ impl Journal {
     /// 追加，那条记录对应的数据写入**根本没有发生**，丢弃它是安全的。中途（非尾部）CRC 不符
     /// 才是真实损坏，仍整体拒绝
     ///
-    /// 记录头里的 len 不参与任何 CRC，故"len 被写坏成大值"与"数据只写了一半"在文件里
-    /// 无法区分，两者都落在 TruncatedTail。这不影响安全性——返回的前缀每条都通过了 CRC，
-    /// 且各自对应的写入确实发生过；代价只是该点之后的记录无法回放，措辞里已如实点明
+    /// 记录头里的 len 从 v5 起参与 CRC，故"len 被写坏"不会再被当成"载荷只写了一半"：
+    /// 在记录头完整、载荷长度仍落在文件内时，校验失败即整体拒绝。v4 现场没有这层保护，
+    /// 仍按旧口径（`len` 不参与 CRC）读取与追加——升级不把尚可回滚的旧现场变成只能 abandon。
+    /// 两种口径下，"len 被写坏成大值"与"数据只写了一半"都仍可能落在 TruncatedTail；
+    /// 返回的前缀每条都通过了该文件的 CRC，且各自对应的写入确实发生过
     pub fn read_entries(path: &Path) -> io::Result<JournalRead> {
         let data = std::fs::read(path)?;
         // 头（版本 + 身份 + 头 CRC）先整体校验：版本不符在这里就报出来，不会走到记录解析
-        Self::parse_header(&data)?;
-        let (out, truncated, _) = Self::scan_entries(&data)?;
+        let (_, format) = Self::parse_header(&data)?;
+        let (out, truncated, _) = Self::scan_entries(&data, format)?;
         Ok(if truncated { JournalRead::TruncatedTail(out) } else { JournalRead::Complete(out) })
     }
 
@@ -1623,7 +1754,7 @@ impl Journal {
     /// [`Self::open`]（采纳时的撕裂尾截断）共用同一套判据。返回
     /// `(完整记录, 尾部是否撕裂, 最后一条完整记录的结束偏移)`——零完整记录且撕裂时
     /// 结束偏移即头长；尾部完整时结束偏移即 `data.len()`
-    fn scan_entries(data: &[u8]) -> io::Result<(Vec<JournalRecord>, bool, usize)> {
+    fn scan_entries(data: &[u8], format: JournalFormat) -> io::Result<(Vec<JournalRecord>, bool, usize)> {
         let mut out = Vec::new();
         let mut pos = Self::HEADER_LEN;
         while pos < data.len() {
@@ -1631,7 +1762,8 @@ impl Journal {
             if pos.checked_add(REC_HDR).is_none_or(|end| end > data.len()) {
                 return Ok((out, true, pos));
             }
-            let len = u32::from_le_bytes(data[pos..pos + 4].try_into().unwrap()) as usize;
+            let n_le: [u8; 4] = data[pos..pos + 4].try_into().unwrap();
+            let len = u32::from_le_bytes(n_le) as usize;
             let crc = u32::from_le_bytes(data[pos + 4..pos + 8].try_into().unwrap());
             pos += REC_HDR;
             // 头写全了但载荷没写全 → 尾部未完成的事务
@@ -1639,7 +1771,7 @@ impl Journal {
                 return Ok((out, true, pos - REC_HDR));
             }
             let payload = &data[pos..pos + len];
-            if crate::table::crc32(payload) != crc {
+            if Self::record_crc(format, n_le, payload) != crc {
                 return Err(io::Error::new(io::ErrorKind::InvalidData, "journal entry CRC mismatch"));
             }
             pos += len;
@@ -1691,6 +1823,30 @@ mod tests {
             Ok(_) => panic!("expected an error"),
             Err(e) => e.to_string(),
         }
+    }
+
+    /// 分区节点不暴露 loop 属性：沿 `partition` 属性上溯到整设备节点再读。
+    /// 非 loop 的盘同样上溯后得到"没有 backing_file"，不是"读不出来"
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn loop_backing_is_read_from_the_device_above_the_partition() {
+        let root = std::env::temp_dir().join(format!("diskedit_sysfs_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("loop0/loop")).unwrap();
+        std::fs::create_dir_all(root.join("loop0/loop0p1")).unwrap();
+        std::fs::create_dir_all(root.join("sda/sda1")).unwrap();
+        std::fs::write(root.join("loop0/loop/backing_file"), "/tmp/backing.img\n").unwrap();
+        std::fs::write(root.join("loop0/loop0p1/partition"), "1\n").unwrap();
+        std::fs::write(root.join("sda/sda1/partition"), "1\n").unwrap();
+
+        assert_eq!(
+            loop_backing_at(&root.join("loop0/loop0p1")).unwrap(),
+            Some(PathBuf::from("/tmp/backing.img"))
+        );
+        assert_eq!(loop_backing_at(&root.join("loop0")).unwrap(), Some(PathBuf::from("/tmp/backing.img")));
+        assert_eq!(loop_backing_at(&root.join("sda/sda1")).unwrap(), None);
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// 字面路径与 canonical 指同一文件（相对路径 / `./` / `..` 这类非规范化成分）时，
@@ -1759,6 +1915,63 @@ mod tests {
         corrupt[Journal::HEADER_LEN + REC_HDR + 10 + 100] ^= 0xFF; // 第 1 条记录的 pre-image 字节中段
         std::fs::write(&p, &corrupt).unwrap();
         assert!(Journal::read_entries(&p).is_err(), "mid-file corruption must be refused");
+
+        let _ = std::fs::remove_file(&p);
+    }
+
+    /// v4 现场仍可读、可追加：升级不把尚能回滚的旧 journal 变成只能 abandon。
+    /// 采纳后的文件保持 v4 口径，新记录不会与既有记录混用两种 CRC 规则
+    #[test]
+    fn journal_v4_stays_readable_and_appendable() {
+        let p = journal_path("v4compat");
+        let ident = jid();
+        // 手工造一份 v4 文件：头布局相同，记录 CRC 只覆盖载荷
+        let rec = JournalRecord {
+            mutation: Mutation::PartitionTable,
+            recovery: RecoveryData::PreImage { off: 0, bytes: vec![0xAA; 16], after: vec![0xBB; 16] },
+        };
+        let payload = rec.encode();
+        let mut bytes = Journal::header(&ident, JournalFormat::V4);
+        assert_eq!(&bytes[..5], b"DEJL\x04");
+        bytes.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(&crate::table::crc32(&payload).to_le_bytes());
+        bytes.extend_from_slice(&payload);
+        std::fs::write(&p, &bytes).unwrap();
+
+        assert!(matches!(
+            Journal::read_entries(&p).unwrap(),
+            JournalRead::Complete(v) if v.len() == 1
+        ));
+        {
+            let mut j = Journal::open(&p, ident).unwrap();
+            j.record(4096, &[0xCC; 16], &[0xDD; 16]).unwrap();
+        }
+        let bytes = std::fs::read(&p).unwrap();
+        assert_eq!(&bytes[..5], b"DEJL\x04", "an adopted v4 journal must keep its format");
+        assert!(matches!(
+            Journal::read_entries(&p).unwrap(),
+            JournalRead::Complete(v) if v.len() == 2
+        ));
+
+        let _ = std::fs::remove_file(&p);
+    }
+
+    /// v5 的 len 参与 CRC：长度字段被改小后按校验失败拒绝，不再被当成"载荷只写了一半"
+    #[test]
+    fn journal_v5_crc_covers_the_length_field() {
+        let p = journal_path("v5len");
+        {
+            let mut j = Journal::open(&p, jid()).unwrap();
+            j.record(0, &[0xAA; 16], &[0xBB; 16]).unwrap();
+        }
+        let mut bytes = std::fs::read(&p).unwrap();
+        assert_eq!(&bytes[..5], Journal::MAGIC);
+        let at = Journal::HEADER_LEN;
+        let n = u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap());
+        bytes[at..at + 4].copy_from_slice(&(n - 1).to_le_bytes());
+        std::fs::write(&p, &bytes).unwrap();
+        let e = err_text(Journal::read_entries(&p));
+        assert!(e.contains("CRC mismatch"), "a corrupted len must be a CRC failure: {e}");
 
         let _ = std::fs::remove_file(&p);
     }

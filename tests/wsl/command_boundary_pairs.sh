@@ -67,14 +67,14 @@ $BF new "$T" --yes >/dev/null
 $BF create "$T" --size 16777216 --name p1 --fs ext4 >/dev/null
 LD=$(lo_attach "$T")
 mount_at "${LD}p1" "$MNT" || { echo "  BAD  C MOUNT-FAIL"; exit 1; }
-DISKEDIT_FAULT=online-before-write $BF resizefs "$MNT" 33554432 --online >/dev/null 2>&1; C1=$?
+DISKEDIT_FAULT=online-before-write $BF resize "${LD}:1" 33554432 >/dev/null 2>&1; C1=$?
 umount "$MNT"
 chk "$C1" "134" "C1 sfdisk 前 abort"
 # p1 的末端 LBA：16MiB = 32768 扇区 ⇒ 2048+32768-1
 chk "$($B info "$T" | grep -o '"last_lba":[0-9]*' | head -1)" '"last_lba":34815' "C1 分区仍 16MiB（表未改）"
 
 mount_at "${LD}p1" "$MNT" || { echo "  BAD  C MOUNT-FAIL(2)"; exit 1; }
-DISKEDIT_FAULT=online-after-write $BF resizefs "$MNT" 33554432 --online >/dev/null 2>&1; C2=$?
+DISKEDIT_FAULT=online-after-write $BF resize "${LD}:1" 33554432 >/dev/null 2>&1; C2=$?
 umount "$MNT"; lo_detach "$LD"
 chk "$C2" "134" "C2 sfdisk 后 abort"
 # 32MiB = 65536 扇区 ⇒ 2048+65536-1

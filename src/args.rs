@@ -11,7 +11,8 @@ const USAGE_TEXT: &str = r#"diskedit — disk / image editor
   info <TARGET>                                  show partition table / FS identification
   resize <TARGET>:N <SIZE> [OPTS]                resize partition + FS (auto online/offline)
   move <TARGET>:N --start <LBA|end>              move partition
-  copy <TARGET>:N --start <LBA|end> [--name S]   copy partition
+  copy <TARGET>:N --start <LBA|end> [--name S] [--clone]
+                                                 copy partition
   create <TARGET> [--size S] [--name S] [--fs F] create partition in free space
   delete <TARGET>:N --yes                        delete partition entry
   set <TARGET>:N name S | label S | uuid U | flag F on|off
@@ -85,6 +86,8 @@ pub(crate) struct Args {
     pub(crate) size: Option<u64>,
     pub(crate) fs: Option<String>,
     pub(crate) name: Option<String>,
+    /// --clone：copy 沿用源分区的 PARTUUID（默认生成新的 v4 GUID）
+    pub(crate) clone: bool,
     pub(crate) type_guid: Option<String>,
     pub(crate) table: Option<crate::table::TableKind>,
     pub(crate) yes: bool,
@@ -132,7 +135,7 @@ pub(crate) fn parse_args() -> (String, Args) {
     let cmd = it.next().unwrap_or_else(|| usage());
     let mut a = Args {
         target: String::new(), part: None, grow: None,
-        start: None, end: None, size: None, fs: None, name: None, type_guid: None, table: None,
+        start: None, end: None, size: None, fs: None, name: None, clone: false, type_guid: None, table: None,
         yes: false, online: false, random: false, no_fs: false, sector_size: None,
         align: "mib".to_string(),
         chunk_mib: 4,
@@ -237,6 +240,7 @@ pub(crate) fn parse_args() -> (String, Args) {
             "--grow-lv" => { a.seen.push("--grow-lv"); a.grow_lv = true; }
             "--lv" => { a.seen.push("--lv"); a.lv = Some(it.next().unwrap_or_else(|| miss_arg("--lv"))); }
             "--name" => { a.seen.push("--name"); a.name = Some(it.next().unwrap_or_else(|| miss_arg("--name"))); }
+            "--clone" => { a.seen.push("--clone"); a.clone = true; }
             "--type" => { a.seen.push("--type"); a.type_guid = Some(it.next().unwrap_or_else(|| miss_arg("--type"))); }
             "--table" => {
                 a.seen.push("--table");

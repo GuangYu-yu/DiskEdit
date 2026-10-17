@@ -126,19 +126,19 @@ pub(crate) fn apply_repair(src: &mut FileSource, action: &RepairAction) -> Resul
         RepairAction::None => return Ok(()),
         // RepairProtectiveMbr：无需写 GPT（由函数尾部的 ensure_protective_mbr 统一重写，即首次写盘）
         RepairAction::RepairProtectiveMbr => {}
-        RepairAction::RelocateBackup { new_backup_lba, new_last_usable }
-        | RepairAction::RelocateAndRepair { new_backup_lba, new_last_usable } => {
-            let mut g = table::load_gpt(src)
+        RepairAction::RelocateBackup { .. } | RepairAction::RelocateAndRepair { .. } => {
+            // 判定期的 new_backup_lba / new_last_usable 是旧快照：两步之间表或容器可能被
+            // 外部改动。落盘的头必须满足自身不变量，故修复参数一律从重读结果重新推导，
+            // 并经 ValidatedGeometry::new 复核（条目数、覆盖关系、备份元数据上界）后提交
+            let g = table::load_gpt(src)
                 .map_err(|e| Fail::infra_io(table::into_io_error(e)))?
                 .ok_or_else(|| Fail::infra("GPT vanished before repair"))?;
-            // 判定期的 entries 与此刻盘上的可能不同（两步之间表被外部改动）：
-            // 越界复跑一次，拒绝必须发生在写盘之前
-            let max_end = last_used_end(&g);
-            if max_end > *new_last_usable {
-                return Err(Fail::infra("partitions exceed new usable range after enlarge"));
-            }
-            g.header.last_usable_lba = *new_last_usable;
-            table::commit_gpt(src, &g, *new_backup_lba)?;
+            let file_last_lba = table::container_last_lba(src, g.ss);
+            let new_last_usable = repaired_last_usable(&g, file_last_lba)
+                .map_err(|e| Fail::infra(e.to_string()))?;
+            let vg = ValidatedGeometry::new(&g, file_last_lba, Some(new_last_usable))
+                .map_err(|e| Fail::infra(e.to_string()))?;
+            vg.commit(src).map_err(|e| Fail::failed(e.to_string()))?;
         }
     }
     table::ensure_protective_mbr(src)?;
@@ -376,8 +376,19 @@ pub(crate) fn disk_snapshot(src: &FileSource, part: u32) -> Result<DiskSnapshot,
         }
         match partition_bytes_in(&t, n, src.sector_size) {
             Ok(range) => others.push(range),
-            // 空槽 / 扩展容器不是可承载文件系统的分区，本就不是邻居（同 partition_bytes 口径）
-            Err(Fail::Refused(_)) => {}
+            // 空槽不承载任何字节，跳过。扩展容器本身不可承载文件系统，但它覆盖的区间
+            // 里放着逻辑分区：写前重验的邻居集必须含它，否则主分区越过容器时，等内核
+            // 以 -EBUSY 兜底之前，重叠的表已经写下去了
+            Err(Fail::Refused(_)) => {
+                let Table::Mbr(parts) = &t else { continue };
+                let Some(p) = parts.iter().find(|p| p.num == n && p.is_container) else {
+                    continue;
+                };
+                others.push((
+                    crate::support::lba_bytes(p.start_lba as u64, src.sector_size),
+                    crate::support::lba_bytes(p.size_lba as u64, src.sector_size),
+                ));
+            }
             Err(e) => return Err(e),
         }
     }
@@ -454,7 +465,7 @@ pub(crate) fn usable_end_bytes(src: &FileSource) -> Result<Option<u64>, Fail> {
 /// 定长（`table.rs` 按 `number_of_partition_entries` 分配），故上界就是 `entries.len()`，
 /// 与 `entry_index` 的 `entry_count` 是同一个数
 pub(crate) fn live_entry(g: &ValidatedGeometry, part: u32) -> Result<&GPTPartitionEntry, Fail> {
-    live_entry_in(&g.entries, part)
+    live_entry_in(g.entries(), part)
 }
 
 /// add：自动派生 unique guid（与镜像路径绑定，复制盘不会拿到相同的 PARTUUID）
@@ -469,9 +480,9 @@ pub fn add_entry(
     add_entry_at(src, start, end, name, type_guid, unique)
 }
 
-/// add 的底层：显式指定 unique guid（copy 场景沿用源分区 guid）。
-/// `execute_copy` 在 durable boundary 之后调用它，依赖它"写盘前拒绝 ⇒ `Refused`、
-/// 写盘后 ⇒ 压成 `io::Error`"这个分界——只换模块，不动契约
+/// add 的底层：显式指定 unique guid（copy 传入新生成的 v4 GUID，`--clone` 时
+/// 传入源分区的 GUID）。`execute_copy` 在 durable boundary 之后调用它，依赖它
+/// "写盘前拒绝 ⇒ `Refused`、写盘后 ⇒ 压成 `io::Error`"这个分界——只换模块，不动契约
 pub fn add_entry_at(
     src: &mut FileSource,
     start: u64,
@@ -481,13 +492,13 @@ pub fn add_entry_at(
     unique_guid: [u8; 16],
 ) -> Result<u32, Fail> {
     let (mut g, repair) = resolve_geometry(src)?.ok_or_else(|| Fail::refused("no GPT"))?;
-    if start < g.header.first_usable_lba || end > g.header.last_usable_lba || start > end {
+    if start < g.first_usable_lba() || end > g.last_usable_lba() || start > end {
         return Err(Fail::refused(format!(
             "range {start}..{end} outside usable {}..{}",
-            g.header.first_usable_lba, g.header.last_usable_lba
+            g.first_usable_lba(), g.last_usable_lba()
         )));
     }
-    for e in &g.entries {
+    for e in g.entries() {
         if e.ending_lba == 0 {
             continue;
         }
@@ -495,17 +506,20 @@ pub fn add_entry_at(
             return Err(Fail::refused("range overlaps an existing partition"));
         }
     }
-    let Some(slot) = g.entries.iter().position(|e| e.ending_lba == 0) else {
+    let Some(slot) = g.entries().iter().position(|e| e.ending_lba == 0) else {
         return Err(Fail::refused("partition table full"));
     };
-    g.entries[slot] = GPTPartitionEntry {
-        partition_type_guid: type_guid,
-        unique_partition_guid: unique_guid,
-        starting_lba: start,
-        ending_lba: end,
-        attribute_bits: 0,
-        partition_name: name.into(),
-    };
+    g.update_entry(slot, |e| {
+        *e = GPTPartitionEntry {
+            partition_type_guid: type_guid,
+            unique_partition_guid: unique_guid,
+            starting_lba: start,
+            ending_lba: end,
+            attribute_bits: 0,
+            partition_name: name.into(),
+        };
+    })
+    .map_err(|e| Fail::infra(format!("geometry edit rejected: {e}")))?;
     // 拒绝判定已全部结束，首次写盘从这里开始
     apply_repair(src, &repair)?;
     g.commit(src)?;
@@ -518,8 +532,9 @@ pub fn add_entry_at(
 pub fn rename_entry(src: &mut FileSource, part: u32, name: &str) -> Result<(), Fail> {
     let (mut g, repair) = resolve_geometry(src)?.ok_or_else(|| Fail::refused("no GPT"))?;
     // 空槽 / 越界的判据与文案取自唯一出口；改名只需下标
-    let i = live_index(&g.entries, part)?;
-    g.entries[i].partition_name = name.into();
+    let i = live_index(g.entries(), part)?;
+    g.update_entry(i, |e| e.partition_name = name.into())
+        .map_err(|e| Fail::infra(format!("geometry edit rejected: {e}")))?;
     // 拒绝判定已全部结束，首次写盘从这里开始
     apply_repair(src, &repair)?;
     Ok(g.commit(src)?)
@@ -532,8 +547,9 @@ pub fn set_type_guid(src: &mut FileSource, part: u32, guid: [u8; 16]) -> Result<
         return Err(Fail::refused("type GUID cannot be all-zero (that marks an unused entry — use `del`)"));
     }
     let (mut g, repair) = resolve_geometry(src)?.ok_or_else(|| Fail::refused("no GPT"))?;
-    let i = live_index(&g.entries, part)?;
-    g.entries[i].partition_type_guid = guid;
+    let i = live_index(g.entries(), part)?;
+    g.update_entry(i, |e| e.partition_type_guid = guid)
+        .map_err(|e| Fail::infra(format!("geometry edit rejected: {e}")))?;
     // 拒绝判定已全部结束，首次写盘从这里开始
     apply_repair(src, &repair)?;
     Ok(g.commit(src)?)
@@ -589,31 +605,35 @@ impl GptFlag {
 
 pub fn set_gpt_flag(src: &mut FileSource, part: u32, flag: GptFlag, on: bool) -> Result<(), Fail> {
     let (mut g, repair) = resolve_geometry(src)?.ok_or_else(|| Fail::refused("no GPT"))?;
-    let i = live_index(&g.entries, part)?;
-    let e = &mut g.entries[i];
+    let i = live_index(g.entries(), part)?;
+    // 先算好新类型与属性位（ESP off 的 FS 识别要读盘），再一次性写回：
+    // 读盘失败时不留下半改的条目
+    let cur = g.entries()[i].clone();
+    let mut type_guid = cur.partition_type_guid;
+    let mut attributes = cur.attribute_bits;
     if flag.switches_type_guid() {
         if on {
-            e.partition_type_guid = table::ESP_TYPE_GUID;
+            type_guid = table::ESP_TYPE_GUID;
         } else {
             // off 只对已处 ESP 类型的条目做类型回退（parted gpt.c set_flag：先比对当前
             // 类型，非 ESP 不动 GUID）；关闭一个未生效的标志不应改写分区现有类型。
             // 回退落点按盘上实际 FS 定：FAT/NTFS → Microsoft basic data，其余（含识别
             // 不出的区域）→ Linux filesystem data——这是类型回退而非"恢复原类型"，
             // 原 GUID 未被保存，无从恢复
-            if e.partition_type_guid == table::ESP_TYPE_GUID {
-                let base = e.starting_lba.checked_mul(g.ss).ok_or_else(|| {
+            if cur.partition_type_guid == table::ESP_TYPE_GUID {
+                let base = cur.starting_lba.checked_mul(g.sector_size()).ok_or_else(|| {
                     Fail::infra("partition start overflows byte offset")
                 })?;
                 // checked 换算与 partition_bytes 同口径：条目来自盘上内容，回绕会把
                 // 错误的字节区间送进 identify
-                let len = e.ending_lba.checked_sub(e.starting_lba)
+                let len = cur.ending_lba.checked_sub(cur.starting_lba)
                     .and_then(|d| d.checked_add(1))
-                    .and_then(|n| n.checked_mul(g.ss))
+                    .and_then(|n| n.checked_mul(g.sector_size()))
                     .ok_or_else(|| Fail::infra("partition length overflows byte size"))?;
                 // 写盘前的盘读：失败必须是 Infra（"确定未写盘"），不能经 `?` 落成
                 // Failed 而虚构一条"盘可能已改变"的警示（首次写盘在函数尾部的 commit）
                 let recognized = crate::fsid::identify(src, base, len).map_err(Fail::infra_io)?;
-                e.partition_type_guid = match recognized {
+                type_guid = match recognized {
                     Some(crate::fsid::FsKind::Vfat) | Some(crate::fsid::FsKind::Ntfs) => {
                         table::BASIC_DATA_TYPE_GUID
                     }
@@ -622,10 +642,15 @@ pub fn set_gpt_flag(src: &mut FileSource, part: u32, flag: GptFlag, on: bool) ->
             }
         }
     } else if on {
-        e.attribute_bits |= flag.attribute_bit();
+        attributes |= flag.attribute_bit();
     } else {
-        e.attribute_bits &= !flag.attribute_bit();
+        attributes &= !flag.attribute_bit();
     }
+    g.update_entry(i, |e| {
+        e.partition_type_guid = type_guid;
+        e.attribute_bits = attributes;
+    })
+    .map_err(|e| Fail::infra(format!("geometry edit rejected: {e}")))?;
     // 拒绝判定已全部结束，首次写盘从这里开始
     apply_repair(src, &repair)?;
     Ok(g.commit(src)?)
@@ -634,8 +659,9 @@ pub fn set_gpt_flag(src: &mut FileSource, part: u32, flag: GptFlag, on: bool) ->
 /// `del`：清零条目（只清表项，分区数据区不动）
 pub fn del_entry(src: &mut FileSource, part: u32) -> Result<(), Fail> {
     let (mut g, repair) = resolve_geometry(src)?.ok_or_else(|| Fail::refused("no GPT"))?;
-    let i = live_index(&g.entries, part)?;
-    g.entries[i] = table::empty_entry();
+    let i = live_index(g.entries(), part)?;
+    g.update_entry(i, |e| *e = table::empty_entry())
+        .map_err(|e| Fail::infra(format!("geometry edit rejected: {e}")))?;
     // 拒绝判定已全部结束，首次写盘从这里开始
     apply_repair(src, &repair)?;
     g.commit(src)?;

@@ -285,7 +285,8 @@ pub fn unactivatable_swap(src: &FileSource, base: u64, len_bytes: u64) -> io::Re
 /// OpenWrt combined 布局的 RW overlay 起点（字节，相对分区头）。公式须与
 /// fstools libfstools/rootdisk.c 一致（mount_root 建 loop 用的 lo_offset 即此值）：
 /// - squashfs 4.0 → bytes_used __le64 @0x28（内核 squashfs_fs.h：超级块为 5×u32 + 6×u16，
-///   其后 u64 root_inode@0x20、u64 bytes_used@0x28）
+///   其后 u64 root_inode@0x20、u64 bytes_used@0x28）。版本字段 `s_major`/`s_minor` 是
+///   __le16 @0x1c/@0x1e；本布局只对 4.0 成立，其它版本的超级块按未命中处理
 /// - EROFS → blocks u32 @超级块+0x24 左移 blkszbits u8 @超级块+0x0C（超级块 @1024）
 ///
 /// 统一 64K 上对齐（fstools ROOTDEV_OVERLAY_ALIGN 的惯例，非通用规范）；
@@ -303,6 +304,12 @@ pub fn overlay_offset_at(src: &FileSource, part_offset: u64, part_len_bytes: u64
     }
     src.read_at(part_offset, &mut sb)?;
     let raw = if &sb[0..4] == SQUASHFS_MAGIC {
+        let major = u16::from_le_bytes(sb[0x1c..0x1e].try_into().unwrap());
+        let minor = u16::from_le_bytes(sb[0x1e..0x20].try_into().unwrap());
+        // 3.x 的超级块字段布局不同，不能按 4.x 的偏移取 bytes_used
+        if (major, minor) != (4, 0) {
+            return Ok(None);
+        }
         u64::from_le_bytes(sb[0x28..0x30].try_into().unwrap())
     } else if sb[1024..1028] == EROFS_MAGIC {
         let blkszbits = sb[1024 + 0x0C] as u32;
@@ -510,19 +517,29 @@ mod tests {
     }
 
     /// overlay 起点公式：squashfs bytes_used 上取 64K 对齐；EROFS blocks<<blkszbits 同；
-    /// 无根 fs 魔数 → None；blkszbits 溢出 → None
+    /// 无根 fs 魔数 → None；blkszbits 溢出 → None；squashfs 非 4.0 → None
     #[test]
     fn overlay_offset_fstools_alignment() {
         // squashfs：bytes_used = 0x2_9C00 → 上对齐 64K = 0x2_0000... 验证非对齐值上取
         let mut data = vec![0u8; 65536];
         data[0..4].copy_from_slice(b"hsqs");
+        data[0x1c..0x1e].copy_from_slice(&4u16.to_le_bytes());
+        data[0x1e..0x20].copy_from_slice(&0u16.to_le_bytes());
         data[0x28..0x30].copy_from_slice(&0x29C00u64.to_le_bytes());
         let s = src_from("ovl", data.clone());
         assert_eq!(overlay_offset_at(&s, 0, 65536).unwrap(), Some(0x30000));
         // 已对齐值不变
         data[0x28..0x30].copy_from_slice(&0x30000u64.to_le_bytes());
-        let s = src_from("ovl2", data);
+        let s = src_from("ovl2", data.clone());
         assert_eq!(overlay_offset_at(&s, 0, 65536).unwrap(), Some(0x30000));
+        // 3.x：超级块布局不同，0x28 不是 bytes_used → None
+        data[0x1c..0x1e].copy_from_slice(&3u16.to_le_bytes());
+        let s = src_from("ovl7", data.clone());
+        assert_eq!(overlay_offset_at(&s, 0, 65536).unwrap(), None);
+        data[0x1c..0x1e].copy_from_slice(&4u16.to_le_bytes());
+        data[0x1e..0x20].copy_from_slice(&1u16.to_le_bytes());
+        let s = src_from("ovl8", data);
+        assert_eq!(overlay_offset_at(&s, 0, 65536).unwrap(), None);
         // EROFS：blocks=0x30 << blkszbits=12 = 0x30000
         let mut data = vec![0u8; 65536];
         data[1024..1028].copy_from_slice(&[0xE2, 0xE1, 0xF5, 0xE0]);

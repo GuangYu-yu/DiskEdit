@@ -18,6 +18,14 @@ pub(crate) fn cmd_info(a: &Args) -> u8 {
         bail_fail(Fail::refused(format!("`info` reports the whole target — drop :{n}")));
     }
     let src = open_target_ro(a).unwrap_or_else(|f| bail_fail(f));
+    // info 对分区节点不拒绝（只读、观察用途），但必须点明解析对象：分区节点上没有盘级
+    // 分区表，FAT/NTFS 引导扇区里形似 MBR 的字节会被当成一张表输出
+    if crate::dev::target_is_partition_node(std::path::Path::new(&a.target)) {
+        eprintln!(
+            "note: {} is a partition node, not a whole disk — the layout below is parsed from this partition's first sector",
+            a.target
+        );
+    }
     // identify 的读失败逐条如实上报：JSON 照常输出（fs 字段记 "error"），原因逐条
     // 打到 stderr，退出码与本文件其他读失败路径一致（infra 30）
     let mut identify_errors: Vec<String> = Vec::new();
@@ -48,21 +56,21 @@ pub(crate) fn cmd_info(a: &Args) -> u8 {
             table::GptState::NeedsRepair { cause: table::HeaderIssue::BackupLbaStale { expected, actual } } => {
                 stale_notes.push(format!(
                     "note: backup GPT header is stale — found at LBA {actual}, expected at device end LBA {expected}; \
-                     any write command (or sgdisk -e) relocates it"
+                     any partition-table write command (or sgdisk -e) relocates it"
                 ))
             }
             table::GptState::NeedsRepair { cause: table::HeaderIssue::PrimaryUnreadable } => stale_notes.push(
                 "note: the primary GPT copy is unusable (header or entry array) — this table was recovered from the \
-                 backup copy at the device end; any write command rewrites both copies"
+                 backup copy at the device end; any partition-table write command rewrites both copies"
                     .to_string(),
             ),
             table::GptState::Valid => {}
         }
         match g.pmbr {
             table::PmbrSize::NeedsRepair { cause } => stale_notes.push(match cause {
-                table::PmbrIssue::Stale => "note: protective MBR SizeInLBA is stale (smaller than this container) — any write command rewrites it".to_string(),
+                table::PmbrIssue::Stale => "note: protective MBR SizeInLBA is stale (smaller than this container) — any partition-table write command rewrites it".to_string(),
                 // 非规范但可修复：UEFI 2.10 §5.2.3 的 SizeInLBA 以逻辑块计，512 字节口径是别的工具的历史写法
-                table::PmbrIssue::Compat512 => "note: protective MBR SizeInLBA uses the 512-byte-sector convention instead of this device's logical-block value (UEFI 2.10 §5.2.3) — any write command normalizes it".to_string(),
+                table::PmbrIssue::Compat512 => "note: protective MBR SizeInLBA uses the 512-byte-sector convention instead of this device's logical-block value (UEFI 2.10 §5.2.3) — any partition-table write command normalizes it".to_string(),
             }),
             table::PmbrSize::Inconsistent => stale_notes.push(
                 "note: protective MBR SizeInLBA exceeds this container — refusing auto-repair (use sgdisk/parted)".to_string(),
@@ -193,6 +201,15 @@ pub(crate) fn cmd_info(a: &Args) -> u8 {
                     Err(e) => bail_fail(Fail::infra(format!("label probe failed: {e}"))),
                 };
                 let name = if damaged { "gpt" } else { "none" };
+                // 保护布局成立却找不到任何候选（512/4096）下的头：逻辑块更大的镜像
+                // （8192/16Kn）在不给 --sector-size 时正是这个形态，诊断必须指向真实原因
+                if damaged && a.sector_size.is_none() {
+                    stale_notes.push(
+                        "note: no GPT header was found at the 512-byte or 4096-byte layout — if this image uses \
+                         another logical block size (e.g. 8192), pass --sector-size N"
+                            .to_string(),
+                    );
+                }
                 // 形状与其余分支一致：`partitions` 恒为数组、`disk_guid` 恒在（无表即无 GUID）。
                 // none/damaged 没有可报告的条目，但缺字段会让按同一 schema 消费 JSON 的调用方
                 // 在此分支上拿到不同的键集

@@ -35,16 +35,20 @@ pub struct GeometryLimits {
 ///
 /// `header` 内是**修复完成后**的值（`last_usable_lba` / `backup_lba` 已按修复动作收敛），
 /// 于是 Planner 永远看不到 stale 几何，也不会出现"某处再算一次 effective_last_usable"
+///
+/// 字段全部私有：条目只能经 [`ValidatedGeometry::update_entry`] 修改，该入口在写回前
+/// 按构造期同一判据复核。这样"构造后改坏几何"在类型外写不出来
 #[derive(Clone)]
 pub struct ValidatedGeometry {
     /// 该表自身的扇区大小（条目 LBA 的单位）
-    pub ss: u64,
+    ss: u64,
     /// 修复后将生效的头（last_usable_lba / backup_lba 已收敛）
-    pub header: RawHeader,
-    pub entries: Vec<GPTPartitionEntry>,
-    pub entry_geometry: EntryArrayGeometry,
+    header: RawHeader,
+    /// 分区条目，长度恒等于 `entry_geometry.entry_count`
+    entries: Vec<GPTPartitionEntry>,
+    entry_geometry: EntryArrayGeometry,
     /// 容器最后一个 LBA（本表 ss 口径）：几何自洽性的上界，也是 checkpoint 的 LBA 上界
-    pub file_last_lba: u64,
+    file_last_lba: u64,
 }
 
 impl ValidatedGeometry {
@@ -74,6 +78,41 @@ impl ValidatedGeometry {
                  fix the overlap with sfdisk/parted first"
             )));
         }
+        // 条目数组的长度必须与头自述的条目数一致：不一致时下游的槽位→下标换算与
+        // 全表重写会一边按 entry_count 补零/截断，一边按 entries.len() 取号
+        if g.entries.len() != entry_geometry.entry_count as usize {
+            return Err(invalid(format!(
+                "GPT entry array holds {} entries but the header declares {}",
+                g.entries.len(),
+                entry_geometry.entry_count
+            )));
+        }
+        // 修复后的 last_usable 必须覆盖 first_usable 与所有已定义条目的末端，且不得
+        // 侵入盘尾备份元数据（与 table 解析层的 validate_geometry 同一上界公式）。
+        // 构造点把这些判据收进来，消费者不必再各自复核
+        let max_end = g
+            .entries
+            .iter()
+            .filter(|e| e.ending_lba != 0)
+            .map(|e| e.ending_lba)
+            .max()
+            .unwrap_or(0);
+        let last_usable = post_repair_last_usable.unwrap_or(g.header.last_usable_lba);
+        if last_usable < g.header.first_usable_lba || last_usable < max_end {
+            return Err(invalid(format!(
+                "last_usable_lba {last_usable} does not cover usable start {} / highest partition end {max_end}",
+                g.header.first_usable_lba
+            )));
+        }
+        let ceiling = file_last_lba
+            .checked_sub(entry_geometry.lba_span())
+            .and_then(|v| v.checked_sub(1))
+            .ok_or_else(|| invalid("container too small for the backup GPT metadata"))?;
+        if last_usable > ceiling {
+            return Err(invalid(format!(
+                "last_usable_lba {last_usable} would overlap the backup GPT metadata (ceiling {ceiling})"
+            )));
+        }
         let mut header = g.header.clone();
         if let Some(last_usable) = post_repair_last_usable {
             header.last_usable_lba = last_usable;
@@ -90,6 +129,72 @@ impl ValidatedGeometry {
     /// 修复后将生效的可用区上界。任何调用点都不得再自行推导（历史问题：多处各算一次）
     pub fn last_usable_lba(&self) -> u64 {
         self.header.last_usable_lba
+    }
+
+    /// 该表自身的扇区大小：条目 LBA 的换算单位（可与容器 ss 不同）
+    pub fn sector_size(&self) -> u64 {
+        self.ss
+    }
+
+    /// 盘 GUID：`copy` 一类命令用它识别同源表
+    pub fn disk_guid(&self) -> [u8; 16] {
+        self.header.disk_guid
+    }
+
+    /// 只读的条目视图。修改必须走 [`Self::update_entry`]
+    pub fn entries(&self) -> &[GPTPartitionEntry] {
+        &self.entries
+    }
+
+    /// 修改一条条目的唯一入口。闭包拿到副本，写回前按构造期同一判据复核：
+    /// 端点不倒挂、落在 usable 区内、与其余已定义条目不重叠。任一违反即保留旧条目并报错
+    pub fn update_entry(
+        &mut self,
+        index: usize,
+        f: impl FnOnce(&mut GPTPartitionEntry),
+    ) -> io::Result<()> {
+        let Some(cur) = self.entries.get(index) else {
+            return Err(invalid(format!("partition entry #{index} is out of range")));
+        };
+        let mut draft = cur.clone();
+        f(&mut draft);
+        // 未使用条目的判据与解析层一致：两个 LBA 字段同时为零
+        if !(draft.starting_lba == 0 && draft.ending_lba == 0) {
+            if draft.starting_lba > draft.ending_lba {
+                return Err(invalid(format!(
+                    "entry #{} has an inverted range {}..{}",
+                    index + 1,
+                    draft.starting_lba,
+                    draft.ending_lba
+                )));
+            }
+            if draft.starting_lba < self.header.first_usable_lba
+                || draft.ending_lba > self.header.last_usable_lba
+            {
+                return Err(invalid(format!(
+                    "entry #{} range {}..{} falls outside the usable area {}..{}",
+                    index + 1,
+                    draft.starting_lba,
+                    draft.ending_lba,
+                    self.header.first_usable_lba,
+                    self.header.last_usable_lba
+                )));
+            }
+            for (i, other) in self.entries.iter().enumerate() {
+                if i == index || (other.starting_lba == 0 && other.ending_lba == 0) {
+                    continue;
+                }
+                if draft.starting_lba <= other.ending_lba && other.starting_lba <= draft.ending_lba {
+                    return Err(invalid(format!(
+                        "entry #{} would overlap entry #{}",
+                        index + 1,
+                        i + 1
+                    )));
+                }
+            }
+        }
+        self.entries[index] = draft;
+        Ok(())
     }
 
     /// 1-based 分区号 → 条目下标；越界即 None（分区号上界来自本表的条目数，不是常量）

@@ -310,13 +310,35 @@ impl TransactionManager {
     /// 提交：事务完成，关闭它的 active 状态。删的是本次身份的全部候选落点——含历史命名
     /// 那一份：留着它会被下次查找命中，把历史字节回放到一个已经改过的盘上。
     /// 不存在即无残留、无告警；删除真失败则由 `dev::warn_if_remove_failed` 告警
+    ///
+    /// 命令返回时 [`FileSource`]（连同它的所有权）已释放，故这里重新取一次锁：删除必须
+    /// 与 journal 的创建落在同一个独占窗口里，否则窗口内另一个 diskedit 可能刚在同一
+    /// 落点建好它自己的 journal，删掉的就是别人的回滚凭据。取不到锁即保留 journal
+    /// （漏删会被下次运行报成 busy，但不会丢失别人的现场）
     pub(crate) fn commit(a: &Args) {
         let Some(id) = TargetIdentity::resolve_path(Path::new(&a.target)) else {
             eprintln!("warning: cannot re-resolve the target identity — the undo journal is left in place");
             return;
         };
+        // 重新取锁后目标归本进程独占，下面两个动作（删除与目录落盘）才不会被别人的
+        // 新建动作穿插；锁失败只影响"现在能不能关窗口"，不是数据错误
+        let _lock = match TargetLock::acquire(&id) {
+            Ok(lock) => lock,
+            Err(f) => {
+                let why = match f {
+                    Fail::Refused(m) | Fail::Infra(m) | Fail::Failed(m) => m,
+                };
+                eprintln!(
+                    "warning: cannot re-take the target lock to drop the undo journal ({why}) — the journal is left in place"
+                );
+                return;
+            }
+        };
         for p in id.journal_candidates() {
             dev::warn_if_remove_failed(p);
+            // 撤销窗口的关闭与创建/改写同级持久化：unlink 不落盘时掉电后 journal 可能复活，
+            // 把已完成的事务报成未收尾现场
+            dev::best_effort_dir_fsync(p);
         }
     }
 

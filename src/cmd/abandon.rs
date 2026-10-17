@@ -185,7 +185,9 @@ fn abandon_one(from: &std::path::Path) -> std::io::Result<std::path::PathBuf> {
                 std::fs::rename(from, &to)?;
                 return Ok(to);
             }
-            Err(e) => return Err(e),
+            // 名字已被另一份放弃记录占用：顺延 .N。硬链接失败的原因与占用是两件事，
+            // 占用本身不能成为拒绝理由——拒绝会让目标永久锁死
+            Err(_) => continue,
         }
     }
     Err(std::io::Error::other("no free abandoned name available"))
