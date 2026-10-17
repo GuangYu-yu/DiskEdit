@@ -368,6 +368,7 @@ impl TransactionManager {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::let_underscore_must_use)] // 清理临时文件有意忽略失败
     use super::*;
     use crate::dev::{JournalRecord, Mutation, RecoveryData};
 
