@@ -33,10 +33,11 @@ target: image path or block device; :N = partition number (1-based); :last = the
 common opts: --no-fs  drop the filesystem step of the grown or moved
                       partition: layout success alone is exit 0, and a
                       filesystem that cannot be grown is refused without it.
-                      A swap that a relocation has
-                      to rebuild, and the PV chain, still run — they belong to
-                      the relocation / PV layer. Shrinking is refused together
-                      with --no-fs: the filesystem has to be shrunk first
+                      A swap that a relocation has to rebuild still runs — it
+                      belongs to the relocation layer. On an LVM PV --no-fs is
+                      refused: the PV chain has no filesystem step of its own.
+                      Shrinking is refused together with --no-fs: the
+                      filesystem has to be shrunk first
 exit codes:
   0   done             layout changed and every follow-up step completed (or none
                        was required — no filesystem to grow was found in the region,

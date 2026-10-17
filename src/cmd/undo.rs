@@ -2,7 +2,7 @@
 
 use crate::support::*;
 use crate::args::Args;
-use crate::dev::{FileSource, Journal, JournalRead, JournalRecord, RecoveryData, is_zero_write_remnant};
+use crate::dev::{classify_journal, FileSource, Journal, JournalCandidate, JournalRead, JournalRecord, RecoveryData};
 
 pub(crate) const HELP: &str = r#"diskedit undo <TARGET> --yes
 
@@ -10,15 +10,13 @@ pub(crate) const HELP: &str = r#"diskedit undo <TARGET> --yes
   Relocated data cannot be rolled back, and writes made by external FS
   tools are not undone."#;
 
-/// 挑不出唯一可读 journal 的三种原因——**性质不同，出口码就该不同**，故在这里
+/// 挑不出唯一可读 journal 的两种原因——**性质不同，出口码就该不同**，故在这里
 /// 分型而不是把文案揉成一个 String 让调用方猜：
-/// - `Absent`：落点上根本没有 journal ⇒ 请求与目标现状不匹配（10）
 /// - `Unreadable`：文件在而读不出来（CRC/magic/损坏/I-O）⇒ 盘上事实，重试无用（30）；
 ///   只有 abandon 能释放，提示也指向那里
 /// - `Ambiguous`：多份同时可读 ⇒ 不猜（猜错会把历史字节回放到不该回放的盘上）
 #[derive(Debug)]
 enum PickJournalError {
-    Absent,
     Unreadable { detail: String },
     Ambiguous { listed: String },
 }
@@ -26,7 +24,6 @@ enum PickJournalError {
 impl std::fmt::Display for PickJournalError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            PickJournalError::Absent => write!(f, "no undo journal on this target"),
             PickJournalError::Unreadable { detail } => write!(f, "the undo journal exists but is unreadable: {detail} — \
                  it cannot be replayed; release it with `diskedit abandon`"),
             PickJournalError::Ambiguous { listed } => write!(f, "multiple journals found for this target — refusing: {listed}"),
@@ -34,40 +31,33 @@ impl std::fmt::Display for PickJournalError {
     }
 }
 
-/// 在候选落点中挑出唯一可读的 journal。
+/// 候选落点的挑选结论。缺席与空壳都不是"可回放的记录"，但该给出的结论不同：
+/// 前者是请求与现状不符，后者描述零次写入、清理即可
+enum PickedJournal {
+    Absent,
+    /// 头完整、零记录的壳（可能有多个落点）
+    Shells(Vec<std::path::PathBuf>),
+    Records(std::path::PathBuf, JournalRead),
+}
+
+/// 在候选落点中挑出唯一可读的 journal；没有可读记录时区分"空壳"与"什么都没有"。
 /// 候选列表按"本次命名在前、历史命名在后"给出，缺席是常态而非故障：把它记成错误会让
 /// 真正的损伤原因（另一份文件存在但读不出来）被 `No such file or directory` 盖住。
 /// 损坏候选**记录后继续**看后面的候选（与 read_checkpoint 同一口径）：一份损坏的历史
 /// 命名不该遮住一份完好的本次命名；全部候选都不可读时才把死因如实带回。
-/// 0 字节的创建残骸先被排除——它不是可回放的 journal，判据与 [`Journal::open`] 和事务闸口
-/// 同源（`dev::is_zero_write_remnant`）：这里若按"读不出来"报，用户会拿到一句"用 abandon
-/// 释放"，而 `abandon` 对同一份文件认定"没有任何恢复现场"——两边互相指向对方
-fn pick_journal(candidates: &[std::path::PathBuf]) -> Result<(std::path::PathBuf, JournalRead), PickJournalError> {
+///
+/// 分类只走 [`classify_journal`]：写闸口、`abandon` 与这里对"什么算现场"因此不会分叉。
+/// 有损坏候选时不把"只剩空壳"报成干净——那份损坏的可能正是丢了记录的真现场
+fn pick_journal(candidates: &[std::path::PathBuf]) -> Result<PickedJournal, PickJournalError> {
     let mut usable: Vec<(std::path::PathBuf, JournalRead)> = Vec::new();
+    let mut shells: Vec<std::path::PathBuf> = Vec::new();
     let mut damaged: Vec<String> = Vec::new();
     for path in candidates {
-        // 目录等非普通文件不是本工具写下的任何东西（同 active_recovery_records 的过滤）：
-        // read_entries 对目录报 EISDIR 会被记成"读不出来的现场"，而 abandon 对目录
-        // 也只能报 nothing to abandon——两边会互相把用户支到对方那里
-        if std::fs::metadata(path).is_ok_and(|m| !m.is_file()) {
-            continue;
-        }
-        if is_zero_write_remnant(path) {
-            continue;
-        }
-        match Journal::read_entries(path) {
-            Ok(r) => {
-                // 零记录的壳不是现场（与 active_recovery_records 同口径）：把它算成
-                // usable 会让一份有记录的历史候选被判成 Ambiguous
-                let empty = match &r {
-                    JournalRead::Complete(v) | JournalRead::TruncatedTail(v) => v.is_empty(),
-                };
-                if !empty {
-                    usable.push((path.clone(), r));
-                }
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(e) => damaged.push(format!("{} ({e})", path.display())),
+        match classify_journal(path) {
+            JournalCandidate::Absent => {}
+            JournalCandidate::Shell => shells.push(path.clone()),
+            JournalCandidate::Damaged(detail) => damaged.push(format!("{} ({detail})", path.display())),
+            JournalCandidate::Records(read) => usable.push((path.clone(), read)),
         }
     }
     match usable.len() {
@@ -75,14 +65,67 @@ fn pick_journal(candidates: &[std::path::PathBuf]) -> Result<(std::path::PathBuf
             for d in &damaged {
                 eprintln!("warning: unreadable journal {d}");
             }
-            Ok(usable.remove(0))
+            let (p, r) = usable.remove(0);
+            Ok(PickedJournal::Records(p, r))
         }
-        0 if damaged.is_empty() => Err(PickJournalError::Absent),
-        0 => Err(PickJournalError::Unreadable { detail: damaged.join("; ") }),
+        0 if !damaged.is_empty() => Err(PickJournalError::Unreadable { detail: damaged.join("; ") }),
+        0 if !shells.is_empty() => Ok(PickedJournal::Shells(shells)),
+        0 => Ok(PickedJournal::Absent),
         _ => Err(PickJournalError::Ambiguous {
             listed: usable.iter().map(|(p, _)| p.display().to_string()).collect::<Vec<_>>().join(", "),
         }),
     }
+}
+
+/// checkpoint 是否还在。判据与写闸口同源：非普通文件不是现场；只有 `NotFound` 算不在，
+/// 属性读不出来按存在处理——否则磁盘不可读时会把"还有未收尾作业"报成"目标干净"
+fn checkpoint_present(p: &std::path::Path) -> bool {
+    match std::fs::metadata(p) {
+        Ok(m) => m.is_file(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+        Err(_) => true,
+    }
+}
+
+/// 空壳（头完整、零记录）描述的是零次写入：没有任何东西依赖它，但它一直占着候选落点，
+/// 而写闸口与 `abandon` 都按设计跳过它——不在这里收掉就没有命令能收。
+///
+/// 只删**确认属于本目标**的壳：头里的身份与本目标不符即拒绝，绝不按"读出来是空的"就删。
+/// 全部核验完再动手，避免删掉一个之后才在第二个上拒绝而留下半清理状态
+fn remove_empty_shells(src: &FileSource, shells: Vec<std::path::PathBuf>) -> ! {
+    // 空壳与"目标上留着未收尾的 checkpoint"是两件事：后者描述的是另一族作业的进度
+    // （例如搬移搬到一半），undo 回放不了它，也不能假装目标干净——它会让后续 resize
+    // 被判成 Divergent 而拒绝，用户看到的是"什么也没做却被拒绝"
+    let leftover = src.identity.checkpoint_candidates(legacy_disk_guid(src));
+    let stale: Vec<String> = leftover.iter().filter(|p| checkpoint_present(p)).map(|p| p.display().to_string()).collect();
+    if !stale.is_empty() {
+        bail_fail(Fail::refused(format!(
+            "the undo journal is empty, but this target still has an unfinished checkpoint ({}); undo cannot release it — \
+             re-run the command that started that job to resume it to completion",
+            stale.join(", ")
+        )));
+    }
+    for p in &shells {
+        let identity = Journal::read_identity(p)
+            .unwrap_or_else(|e| bail_fail(Fail::infra(format!("journal identity header is unreadable: {e}"))));
+        if let Some(why) = crate::dev::scene_mismatch(&identity.fp, &identity.map, &src.fingerprint, &src.loop_mapping) {
+            bail_fail(Fail::refused(format!(
+                "{why} — this empty journal is not removed here; {ROLLBACK_STUCK_REMEDY}"
+            )));
+        }
+    }
+    let mut removed = 0;
+    for p in &shells {
+        match std::fs::remove_file(p) {
+            // NotFound 的后置条件（不残留）已经成立
+            Ok(()) => removed += 1,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => removed += 1,
+            Err(e) => eprintln!("warning: cannot remove {}: {e} — undo will find the same empty shell again", p.display()),
+        }
+    }
+    bail_fail(Fail::refused(format!(
+        "nothing to undo ({removed} empty journal shell(s) removed; they held no records)"
+    )))
 }
 
 /// 单条记录的分叉核对结论。三态而非 bool：两个失败方向的**出口码不同**——盘上字节
@@ -187,38 +230,20 @@ pub(crate) fn cmd_undo(a: &Args) -> u8 {
         let mut src = open_target_owned(a).unwrap_or_else(|f| bail_fail(f));
         // 三种挑不出各自的出口码：缺席 = 请求与现状不符（10）；在而读不出 = 盘上事实，
         // 重试无用且只有 abandon 能释放（30）；歧义同样按拒绝处理（不猜）
-        let (p, read) = pick_journal(src.identity.journal_candidates()).unwrap_or_else(|e| bail_fail(match e {
+        let picked = pick_journal(src.identity.journal_candidates()).unwrap_or_else(|e| bail_fail(match e {
             PickJournalError::Unreadable { .. } => Fail::infra(e.to_string()),
             _ => Fail::refused(e.to_string()),
         }));
-        let (entries, tail_incomplete) = match read {
-            JournalRead::Complete(v) => (v, false),
-            // 尾部未完成的记录：append-only 下那次追加没走完，它对应的写入也就没发生，
-            // 丢弃安全；前面的完整前缀照常回放（严格契约仍守：每条都过了 CRC）
-            JournalRead::TruncatedTail(v) => (v, true),
+        let (p, entries, tail_incomplete) = match picked {
+            PickedJournal::Absent => bail_fail(Fail::refused("no undo journal on this target".to_string())),
+            PickedJournal::Shells(shells) => remove_empty_shells(&src, shells),
+            PickedJournal::Records(p, read) => match read {
+                JournalRead::Complete(v) => (p, v, false),
+                // 尾部未完成的记录：append-only 下那次追加没走完，它对应的写入也就没发生，
+                // 丢弃安全；前面的完整前缀照常回放（严格契约仍守：每条都过了 CRC）
+                JournalRead::TruncatedTail(v) => (p, v, true),
+            },
         };
-        if entries.is_empty() {
-            // 空 journal 与"目标上留着未收尾的 checkpoint"是两件事：后者描述的是另一族作业
-            // 的进度（例如搬移搬到一半），undo 回放不了它，也不能假装目标干净——它会让后续
-            // resize 被判成 Divergent 而拒绝，用户看到的是"什么也没做却被拒绝"
-            let leftover = src.identity.checkpoint_candidates(legacy_disk_guid(&src));
-            let stale: Vec<String> = leftover.iter().filter(|p| p.exists()).map(|p| p.display().to_string()).collect();
-            if stale.is_empty() {
-                // 只含 magic 的壳描述的是"零次写入"（判据见 `active_recovery_records`）：没有
-                // 任何东西依赖它。但该判据让 undo 与 abandon 都把它跳过——于是没有任何命令
-                // 能清掉它，只能手工 rm。本命令既已认定它不是现场，就顺手收掉
-                crate::dev::warn_if_remove_failed(&p);
-                bail_fail(Fail::refused(format!(
-                    "nothing to undo (journal {} holds no records; removed the empty journal shell)",
-                    p.display()
-                )));
-            }
-            bail_fail(Fail::refused(format!(
-                "the undo journal is empty, but this target still has an unfinished checkpoint ({}); undo cannot release it — \
-                 re-run the command that started that job to resume it to completion",
-                stale.join(", ")
-            )));
-        }
         // 这份 journal 是写给**哪个目标**的：v4 起头里记着创建时的指纹与 loop 映射。
         // 不符即拒绝，且发生在任何写回之前——把别的目标记下的原文回放到本目标上，是这条
         // 路径最坏的后果。它与下面按记录字节的整体核算是两道不同判据：那一道证明"这些字节
@@ -441,6 +466,73 @@ mod tests {
         p
     }
 
+    /// 四态挑选：空壳只在没有任何可读记录时成为结论；损坏候选不否决唯一可用的记录，
+    /// 也不会让"只剩空壳"被报成干净
+    #[test]
+    fn pick_journal_separates_shells_damaged_and_records() {
+        let absent = tmp_path("pj_absent");
+        assert!(matches!(pick_journal(&[absent]).unwrap(), super::PickedJournal::Absent));
+
+        let shell = tmp_path("pj_shell");
+        std::fs::write(&shell, b"").unwrap();
+        drop(Journal::open(&shell, jid()).unwrap());
+        assert!(matches!(
+            pick_journal(std::slice::from_ref(&shell)).unwrap(),
+            super::PickedJournal::Shells(v) if v == vec![shell.clone()]
+        ));
+
+        let good = tmp_path("pj_good");
+        {
+            let mut j = Journal::open(&good, jid()).unwrap();
+            j.record(0, &[0xAA; 4], &[0xBB; 4]).unwrap();
+        }
+        assert!(matches!(
+            pick_journal(std::slice::from_ref(&good)).unwrap(),
+            super::PickedJournal::Records(p, _) if p == good
+        ));
+
+        // 一份可用 + 一份读不出来：按可用那份回放（损坏候选只告警）
+        let bad = tmp_path("pj_bad");
+        std::fs::write(&bad, b"DEJ").unwrap();
+        assert!(matches!(
+            pick_journal(&[good.clone(), bad.clone()]).unwrap(),
+            super::PickedJournal::Records(p, _) if p == good
+        ));
+
+        // 一份可用 + 一份空壳：只按可用那份回放，空壳留在原地（回放成功后由
+        // clear_journal_candidates 清掉候选，不在这里顺手删）
+        let shell2 = tmp_path("pj_shell2");
+        std::fs::write(&shell2, b"").unwrap();
+        drop(Journal::open(&shell2, jid()).unwrap());
+        assert!(matches!(
+            pick_journal(&[good.clone(), shell2.clone()]).unwrap(),
+            super::PickedJournal::Records(p, _) if p == good
+        ));
+        assert!(good.exists(), "a usable journal must be left for the replay");
+        assert!(shell2.exists(), "picking the records must not touch the shell");
+
+        // 两份可用：不猜
+        let good2 = tmp_path("pj_good2");
+        {
+            let mut j = Journal::open(&good2, jid()).unwrap();
+            j.record(0, &[0xCC; 4], &[0xDD; 4]).unwrap();
+        }
+        assert!(matches!(
+            pick_journal(&[good.clone(), good2.clone()]),
+            Err(PickJournalError::Ambiguous { .. })
+        ));
+
+        // 只剩空壳 + 一份读不出来的：先报读不出来，不能把目标报成干净
+        assert!(matches!(
+            pick_journal(&[shell.clone(), bad.clone()]),
+            Err(PickJournalError::Unreadable { .. })
+        ));
+
+        for p in [shell, shell2, good, good2, bad] {
+            let _ = std::fs::remove_file(p);
+        }
+    }
+
     /// 上次 undo 中断的现场（部分条目已回滚、其余未动）必须能续跑：核对接受两种
     /// 历史——写后内容（未动）与原文（自己上次的回滚进度）。只认写后内容会把
     /// "journal kept, retry" 的承诺落空：中断的回滚永远续不上，只能 abandon 成
@@ -594,8 +686,10 @@ mod tests {
         assert!(!e.to_string().contains(&missing.display().to_string()), "{e}");
 
         // 全部候选都不存在 → Absent（请求与现状不符，10）
-        let e = pick_journal(std::slice::from_ref(&missing)).err().unwrap();
-        assert!(matches!(e, PickJournalError::Absent), "{e}");
+        assert!(matches!(
+            pick_journal(std::slice::from_ref(&missing)).unwrap(),
+            super::PickedJournal::Absent
+        ));
 
         // 唯一存在且可读的候选被选中（缺席的那份不影响）
         let ok = tmp_path("ok");
@@ -603,7 +697,9 @@ mod tests {
             let mut j = Journal::open(&ok, jid()).unwrap();
             j.record(0, &[0xAA; 4], &[0xBB; 4]).unwrap();
         }
-        let (p, _) = pick_journal(&[missing, ok.clone()]).unwrap();
+        let super::PickedJournal::Records(p, _) = pick_journal(&[missing, ok.clone()]).unwrap() else {
+            panic!("a single readable candidate must be picked");
+        };
         assert_eq!(p, ok);
 
         let _ = std::fs::remove_file(&ok);
