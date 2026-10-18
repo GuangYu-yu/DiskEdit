@@ -2,21 +2,21 @@
 
 use super::*;
 
-/// resize 的收尾：布局结果 →（PV 时才继续）LVM 链，取两者中更严重的退出码。
+/// resize 的收尾：布局结果 →（PV 时才继续）LVM 链，两侧待办取并集。
 /// 未写入 → 直接返回；已写入但后置条件未全满足 → 非 PV 也直接返回，不打印成功字样
 /// （否则与 PARTIAL 矛盾），PV 则仍需跑 pvresize/lvextend 链。
 /// `wsrc` 是持锁带 journal 的写句柄（在线路径无 journal，为 None）：PV 屏障
 /// （见 resize_done）只能由它落。
 /// `part` 是**本次操作的那个分区**（入口处解析一次后随行）：收尾要对它做 pvresize/
 /// lvextend，出错的代价是写到别的分区上，故不按写后的表重新解释一次
-pub(crate) fn finish_resize(a: &Args, o: crate::outcome::Outcome, wsrc: Option<&mut FileSource>, part: u32, is_pv: bool, is_block: bool, old_bytes: u64) -> u8 {
+pub(crate) fn finish_resize(a: &Args, o: crate::outcome::Outcome, wsrc: Option<&mut FileSource>, part: u32, is_pv: bool, is_block: bool, old_bytes: u64) -> crate::outcome::Outcome {
     if !o.is_applied() {
-        return o.exit_code();
+        return o;
     }
     if !o.is_complete() && !is_pv {
-        return o.exit_code();
+        return o;
     }
-    resize_done(a, wsrc, part, is_pv, is_block, old_bytes, None).max(o.exit_code())
+    o.merge_applied(resize_done(a, wsrc, part, is_pv, is_block, old_bytes, None))
 }
 
 /// 分区扩容收尾：从盘上表项重读实际新尺寸（搬移路径的扩容终点由计划决定，
@@ -30,13 +30,13 @@ pub(crate) fn resize_done(
     is_block: bool,
     old_bytes: u64,
     online_lock: Option<crate::targetlock::TargetLock>,
-) -> u8 {
+) -> crate::outcome::Outcome {
     // 在线路径的独占权要覆盖到 LVM 链结束：pvresize/lvextend 是本次操作的后置条件，
     // 在它们跑之前释放锁，另一个 diskedit 就能在这段窗口内改写同一块盘
     let _online_lock = online_lock;
     if !is_pv {
         println!("resized (verify with: diskedit info {})", a.target);
-        return EXIT_OK;
+        return crate::outcome::Outcome::applied_with(Vec::new());
     }
     #[cfg(target_os = "linux")]
     {
@@ -75,17 +75,19 @@ pub(crate) fn resize_done(
             // offset+sizelimit 映射出的 loop 设备 = 该分区的整块设备，PV 整设备语义下
             // pvresize/lvextend 直接可用，无需 -P partscan。
             // wsrc 为 None 只发生在块设备在线路径（镜像恒走离线、带写句柄），
-            // 故走到镜像分支时 opened 必已在上面的 new_bytes 块中填好
+            // 故走到镜像分支时 opened 必已在上面的 new_bytes 块中填好。
+            // 这里用 LVM 专用入口：用户自己映射的 loop 分区被 dm 持有时是活动 VG 的常态，
+            // 而 pvresize 写的是 PV 元数据，持有栈不解析它（判据见 with_partition_device_for_lvm）
             let ro: &FileSource = match wsrc.as_deref() {
                 Some(w) => w,
                 None => opened.as_ref().unwrap(),
             };
-            fsops::with_partition_device(ro, part, |pv| {
+            fsops::with_partition_device_for_lvm(ro, part, |pv| {
                 lvm_grow_chain(pv, new_bytes, delta, a.grow_lv, a.lv.as_deref())
             })
         };
         match r {
-            Ok(()) => EXIT_OK,
+            Ok(()) => crate::outcome::Outcome::applied_with(Vec::new()),
             // LVM 链失败 = 后置条件未满足：经 Outcome 的 Pending 通道报告并换算 PARTIAL，
             // 不在此手拼退出码（退出码映射的唯一处是 outcome）
             Err(e) => {
@@ -98,7 +100,7 @@ pub(crate) fn resize_done(
                     hint,
                 )]);
                 o.report();
-                o.exit_code()
+                o
             }
         }
     }
@@ -112,6 +114,6 @@ pub(crate) fn resize_done(
             "",
         )]);
         o.report();
-        o.exit_code()
+        o
     }
 }

@@ -93,7 +93,8 @@ pub fn shrink_fs(src: &FileSource, part: u32, fstype: Option<FsKind>, new_bytes:
             // 里上抛，那条路正是"核心失败 + 挂载点没卸掉"的既有处置（告警随错误一起出），
             // 把 leak 留在闭包外会让它被错误出口吞掉
             let mut verify = None;
-            let leak = with_partition_device(src, part, |dev| {
+            // 多设备闸看的区间与真正映射的设备必须同源：再解析一次表会在两读之间留窗口
+            let leak = with_scope_device_ranged(src, &DeviceScope::Partition(part), off, len, |dev| {
                 with_mount(dev, |mnt| {
                     // 裸数字 = 绝对字节数、必须挂载态（man btrfs-filesystem resize）
                     let out = run("btrfs", &["filesystem", "resize", &new_bytes.to_string(), mnt])?;

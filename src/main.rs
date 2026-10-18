@@ -33,18 +33,21 @@ mod transaction;
 use std::process::ExitCode;
 
 use crate::args::{parse_args, refuse_unconsumed_flags};
-use crate::support::{drop_journal, EXIT_OK};
+use crate::support::drop_journal;
 
 fn main() -> ExitCode {
     let (cmd, a) = parse_args();
     refuse_unconsumed_flags(&cmd, &a);
-    let code = cmd::dispatch(&cmd, &a);
-    // 成功完成 ⇒ 撤销窗口已关闭，删除 undo journal（失败/中断时保留，供续传或回滚）。
-    // 仅限命令表里标为开 journal 的命令：不开窗口的命令成功时若也删，会把先前失败
-    // 操作留下的 journal 误清掉。删除动作须容忍文件不存在；块设备的在线路径（sfdisk、
-    // FS 工具）用自己的 fd 写盘、不经过本工具的 journal，那些写入本就不在回放范围内
-    if code == EXIT_OK && cmd::opens_undo_journal(&cmd) {
+    let result = cmd::dispatch(&cmd, &a);
+    // 布局已完成（Applied）且没有已知待办 ⇒ 撤销窗口可以关闭，删除 undo journal。
+    // 判据不能看退出码：20 同时覆盖"待办非空"（保留 journal 供 undo 撤销表写入）与
+    // "仅内核视图过期"（事务已完成，必须关闭——否则下一次写命令会被自己残留的
+    // journal 挡成 busy）。仅限命令表里标为开 journal 的命令：不开窗口的命令成功时
+    // 若也删，会把先前失败操作留下的 journal 误清掉。删除动作须容忍文件不存在；
+    // 块设备的在线路径（sfdisk、FS 工具）用自己的 fd 写盘、不经过本工具的 journal，
+    // 那些写入本就不在回放范围内
+    if cmd::opens_undo_journal(&cmd) && result.closes_journal() {
         drop_journal();
     }
-    ExitCode::from(code)
+    ExitCode::from(result.code())
 }

@@ -116,11 +116,9 @@ fn remove_empty_shells(src: &FileSource, shells: Vec<std::path::PathBuf>) -> ! {
     }
     let mut removed = 0;
     for p in &shells {
-        match std::fs::remove_file(p) {
-            // NotFound 的后置条件（不残留）已经成立
-            Ok(()) => removed += 1,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => removed += 1,
-            Err(e) => eprintln!("warning: cannot remove {}: {e} — undo will find the same empty shell again", p.display()),
+        // NotFound 的后置条件（不残留）已经成立；成功删除同时落盘目录项
+        if crate::dev::remove_recovery_file(p) {
+            removed += 1;
         }
     }
     bail_fail(Fail::refused(format!(
@@ -228,6 +226,11 @@ pub(crate) fn cmd_undo(a: &Args) -> u8 {
         bail_fail(Fail::refused("`undo` overwrites current bytes from journal; pass --yes to confirm"));
     } else {
         let mut src = open_target_owned(a).unwrap_or_else(|f| bail_fail(f));
+        // 回放写回的是整盘表字节：目标仍在被使用时回放，会让内核分区视图与盘面
+        // 从"分叉"变成"按历史布局分叉"。闸门在任何写回与 journal 处理之前
+        if let Err(f) = crate::fsops::ensure_table_write_idle(&src) {
+            bail_fail(f);
+        }
         // 三种挑不出各自的出口码：缺席 = 请求与现状不符（10）；在而读不出 = 盘上事实，
         // 重试无用且只有 abandon 能释放（30）；歧义同样按拒绝处理（不猜）
         let picked = pick_journal(src.identity.journal_candidates()).unwrap_or_else(|e| bail_fail(match e {
@@ -371,9 +374,10 @@ pub(crate) fn cmd_undo(a: &Args) -> u8 {
         //    + checkpoint_candidates(legacy_disk_guid)），既不会漏删、也不会删到别处的落点。
         // 新增绕过 begin_or_resume 的 ckpt 写入点，或新增接受非空 active 的入口，即推翻本结论
         for ckpt in src.identity.checkpoint_candidates(legacy_disk_guid(&src)) {
-            crate::dev::warn_if_remove_failed(&ckpt);
+            crate::dev::remove_recovery_file(&ckpt);
         }
-        table_write_done(&src, &format!("undone {n} journal entries (verify with: diskedit info {})", a.target))
+        // undo 不开撤销窗口（WriteNoJournal）：结果只用于自身退出码
+        table_write_done(&src, &format!("undone {n} journal entries (verify with: diskedit info {})", a.target)).exit_code()
     }
 }
 
@@ -386,7 +390,7 @@ pub(crate) fn cmd_undo(a: &Args) -> u8 {
 fn clear_journal_candidates(candidates: &[std::path::PathBuf], picked: &std::path::Path) {
     for cand in candidates {
         if cand == picked {
-            crate::dev::warn_if_remove_failed(cand);
+            crate::dev::remove_recovery_file(cand);
             continue;
         }
         // 读得出但首部不是本工具 magic ⇒ 陌生文件，保留交人工处置；
@@ -401,7 +405,7 @@ fn clear_journal_candidates(candidates: &[std::path::PathBuf], picked: &std::pat
         match probe {
             Ok(true) => {
                 eprintln!("removing stale journal candidate {}", cand.display());
-                crate::dev::warn_if_remove_failed(cand);
+                crate::dev::remove_recovery_file(cand);
             }
             Ok(false) => {
                 eprintln!(

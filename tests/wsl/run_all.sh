@@ -56,6 +56,7 @@ for f in \
   mbr_delete_chain.sh \
   capacity_concurrency_readonly.sh \
   carrier_and_image_occupancy.sh \
+  image_loop_identity.sh \
   lvm_pv_online.sh \
   lvm_gate.sh \
   review_guards.sh \

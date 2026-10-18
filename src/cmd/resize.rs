@@ -74,7 +74,7 @@ const CONFIRM_RELOCATION: &str = "this resizes by relocating the partitions list
 /// resize 的一键入口。SIZE：`10G`=绝对值、`+2G`/`-500M`=增量、`grow`=吃满右侧可用区
 /// （挡路分区须 --allow-move，搬移计划须 --yes 确认）。LVM PV 扩容自动 pvresize，
 /// --grow-lv 再把新增传给目标 LV 并扩 FS；PV 缩容一律拒绝（走 lvreduce/pvresize 链）
-pub(crate) fn cmd_resize(a: &Args) -> u8 {
+pub(crate) fn cmd_resize(a: &Args) -> crate::outcome::Outcome {
     // 请求的形状在入口定型一次，随锁前/锁下两次解析共用：位置参数 SIZE / --size / --grow-to-end
     let req = SizeRequest { pos: a.pos.get(1).cloned(), abs: a.size, grow_to_end: a.grow_to_end };
     if req.pos.is_some() && (a.size.is_some() || a.grow_to_end) {
@@ -134,8 +134,8 @@ pub(crate) fn cmd_resize(a: &Args) -> u8 {
     // 目标长度不在锁前算：`+N` 锚定当前尺寸、`grow` 锚定右侧空闲，都由 gpt_decider 在
     // 在线自己的锁下、按重解析的盘上几何重新解析（见其注释）
     #[cfg(target_os = "linux")]
-    if let Some(code) = resize_online(a, &src, part, is_pv, gpt_decider(&req, part, is_pv)) {
-        return code;
+    if let Some(o) = resize_online(a, &src, part, is_pv, gpt_decider(&req, part, is_pv)) {
+        return o;
     }
 
     // 离线路径
@@ -226,19 +226,25 @@ pub(crate) fn cmd_resize(a: &Args) -> u8 {
         }
         // 请求已通过越界判定，note 不会再跟在一条拒绝后面
         crate::support::note_sector_truncation("resizing to", bytes, ss);
-        // 扩容需要的位移量只在扩的时候有定义：缩容的新末端更靠左，右侧只会更空，
-        // 不存在搬移需求（此时 new_end < end，直接相减会回绕）
-        let shift = (new_end > end).then(|| new_end - end);
+        // 请求的形状三选一：缩容与"尺寸未变"都算不出正位移，但只有后者可能是原样
+        // 重跑当初的扩容命令。搬移量本身只在扩的时候有定义
+        let intent = if new_end > end {
+            movepart::ShiftIntent::Grow(new_end - end)
+        } else if new_end == end {
+            movepart::ShiftIntent::NoOp
+        } else {
+            movepart::ShiftIntent::Shrink
+        };
         // 未收尾的搬移作业 ⇒ 必须走 resume 路径（即使几何上 free_right 已足够——swap 等
         // 收尾步骤可能尚未执行，普通扩容会跳过它们）
-        if resuming || shift.is_some_and(|s| s > free_right_gpt(&g, part)) {
+        if resuming || matches!(intent, movepart::ShiftIntent::Grow(s) if s > free_right_gpt(&g, part)) {
             // --allow-move 只对**新**搬移授权，续跑放行——两态判据与 grow 分支
             // 同一份理由（见上），真空间不足才拒绝；确认流也同一份：
             // plan 打印 → --yes 确认
             if !a.allow_move && !resuming {
                 bail_fail(Fail::refused("not enough contiguous free space to the right — pass --allow-move to relocate the blocking partitions (plan will be printed; --yes confirms)".to_string()));
             }
-            let plan = match movepart::make_plan_shift_resuming(&mut src, &g, repair, part, shift) {
+            let plan = match movepart::make_plan_shift_resuming(&mut src, &g, repair, part, intent) {
                 Ok(p) => p,
                 Err(f) => bail_fail(f),
             };

@@ -18,8 +18,30 @@ pub(crate) fn scope_byte_range(src: &FileSource, scope: &DeviceScope) -> Result<
     }
 }
 
+/// 镜像上已有 loop 的放行口径。FS 步要求目标完全空闲；LVM PV 收尾（pvresize）
+/// 允许 DM 持有者——它写的是 PV 元数据，持有该分区的 dm 栈不解析这部分字节
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ImageLoopPolicy {
+    RefuseAny,
+    #[cfg(target_os = "linux")]
+    AllowDm,
+}
+
 /// 按范围执行 FS 操作的统一入口，with_partition_device 的公共底层
 pub(crate) fn with_scope_device<T, E, F>(src: &FileSource, scope: &DeviceScope, f: F) -> Result<T, E>
+where
+    F: FnOnce(&str) -> Result<T, E>,
+    E: From<FsError>,
+{
+    with_scope_device_policy(src, scope, ImageLoopPolicy::RefuseAny, f)
+}
+
+fn with_scope_device_policy<T, E, F>(
+    src: &FileSource,
+    scope: &DeviceScope,
+    policy: ImageLoopPolicy,
+    f: F,
+) -> Result<T, E>
 where
     F: FnOnce(&str) -> Result<T, E>,
     E: From<FsError>,
@@ -28,7 +50,7 @@ where
     require_root()?;
     // 区间在此只求一次：分区起点同时作为节点匹配的 want_start
     let (off, len) = scope_byte_range(src, scope)?;
-    with_scope_device_ranged(src, scope, off, len, f)
+    with_scope_device_ranged_policy(src, scope, off, len, policy, f)
 }
 
 /// 区间已由调用方解析好时用它：调用方手里的其他判据（如 mkfs 的擦除区间）与本处的
@@ -44,8 +66,25 @@ where
     F: FnOnce(&str) -> Result<T, E>,
     E: From<FsError>,
 {
+    with_scope_device_ranged_policy(src, scope, off, len, ImageLoopPolicy::RefuseAny, f)
+}
+
+fn with_scope_device_ranged_policy<T, E, F>(
+    src: &FileSource,
+    scope: &DeviceScope,
+    off: u64,
+    len: u64,
+    policy: ImageLoopPolicy,
+    f: F,
+) -> Result<T, E>
+where
+    F: FnOnce(&str) -> Result<T, E>,
+    E: From<FsError>,
+{
     require_linux()?;
     require_root()?;
+    #[cfg(not(target_os = "linux"))]
+    let _ = policy;
     if src.is_block {
         // 块设备：分区 = 定位分区节点（/sys/block/<disk>/<part>/start 匹配），不经 loop；
         // 整盘 = 盘节点本身；Range = 无"偏移节点"概念，必须 loop 映射（backing=整盘）
@@ -62,12 +101,29 @@ where
         };
         return require_unmounted(&dev).map_err(Into::into).and_then(|()| f(&dev));
     }
-    // 镜像：占用只能按 backing 反查——本工具新建的这个 loop 与用户自己映射的是两个
-    // 设备，只探测新建的那个看不见用户那份挂载 / swap
-    if let Some(occupant) = image_loop_occupant(src).map_err(FsError::from)? {
-        return Err(FsError::Io(io::Error::other(format!(
-            "{occupant} is a loop onto this image and is in use — unmount/swapoff it first"
-        ))).into());
+    // 镜像：占用只能按 backing 文件身份反查（LOOP_GET_STATUS64 的 lo_device/lo_inode，
+    // 不依赖路径解析）——本工具新建的这个 loop 与用户自己映射的是两个设备，只探测
+    // 新建的那个看不见用户那份挂载 / swap / 栈持有。探测本身只在 Linux 上存在，
+    // 别的平台已由上面的 require_linux 拒绝
+    #[cfg(target_os = "linux")]
+    if let Some(occupant) = image_loop_occupancy(src).map_err(FsError::from)? {
+        let why = match occupant {
+            LoopOccupancy::Live(dev) => Some(format!(
+                "{dev} is a loop onto this image and is in use — unmount/swapoff it first"
+            )),
+            LoopOccupancy::Held { loopdev: _, holders }
+                if policy == ImageLoopPolicy::AllowDm && dm_only(&holders) =>
+            {
+                None
+            }
+            LoopOccupancy::Held { loopdev, holders } => Some(format!(
+                "{loopdev} is a loop onto this image and is held by {} — deactivate that stack first",
+                holders.join(", ")
+            )),
+        };
+        if let Some(why) = why {
+            return Err(FsError::Io(io::Error::other(why)).into());
+        }
     }
     let loopdev = attach_loop(src, off, len)?;
     // require 失败也要先 detach 再返回错误，? 短路会漏掉 detach
@@ -85,6 +141,21 @@ where
     E: From<FsError>,
 {
     with_scope_device(src, &DeviceScope::Partition(part), f)
+}
+
+/// 镜像上跑 LVM 收尾（pvresize/lvextend）的入口：与 [`with_partition_device`] 相同，
+/// 区别只在镜像已有 loop 被 DM 持有时放行——pvresize 写 PV 元数据所在的扇区，持有该
+/// 分区的 dm 栈按自己的映射读逻辑字节、不解析 PV 元数据；表项只向右增长也不改变已
+/// 映射的扇区（与 [`ensure_idle_before_write`] 的 Extend 放行同一判据）。挂载与活动
+/// swap 仍拒绝：经栈顶看到的是被改写的同一段字节。非 DM 持有者（MD、loop 等）没有
+/// 这种增量语义，同样拒绝
+#[cfg(target_os = "linux")]
+pub fn with_partition_device_for_lvm<T, E, F>(src: &FileSource, part: u32, f: F) -> Result<T, E>
+where
+    F: FnOnce(&str) -> Result<T, E>,
+    E: From<FsError>,
+{
+    with_scope_device_policy(src, &DeviceScope::Partition(part), ImageLoopPolicy::AllowDm, f)
 }
 
 /// 在 /sys/block/<disk>/<part>/ 按 start 匹配分区设备节点（块设备路径用）。

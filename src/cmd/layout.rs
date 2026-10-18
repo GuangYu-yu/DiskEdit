@@ -59,7 +59,7 @@ pub(crate) const HELP_CREATE: &str = r#"diskedit create <TARGET> [--size SIZE] [
 
   SIZE: absolute size (units b/k/m/g/t, 1024 base, e.g. 32M | 2G | bytes)"#;
 
-pub(crate) fn cmd_new(a: &Args) -> u8 {
+pub(crate) fn cmd_new(a: &Args) -> crate::outcome::Outcome {
     // new 作用于整盘：`:N` 若被静默忽略，用户会误以为只动了某个分区
     if let Some(n) = a.part {
         bail_fail(Fail::refused(format!("`new` operates on the whole target — drop :{n}")));
@@ -80,6 +80,11 @@ pub(crate) fn cmd_new(a: &Args) -> u8 {
             table::TableKind::Msdos => table::create_mbr_preflight(src.size, ss),
         };
         preflight.unwrap_or_else(|f| bail_fail(f));
+        // 写表前的占用闸：目标上任一分区在用（镜像：任一绑定到它的 loop 在用）即拒绝，
+        // 否则新表会与内核仍在使用的分区视图分叉
+        if let Err(f) = crate::fsops::ensure_table_write_idle(&src) {
+            bail_fail(f);
+        }
         let r = match kind {
             table::TableKind::Gpt => table::create_gpt(&mut src, ss, None),
             table::TableKind::Msdos => table::create_mbr(&mut src),
@@ -102,7 +107,7 @@ fn refuse_name_on_msdos(a: &Args) {
     }
 }
 
-pub(crate) fn cmd_add(a: &Args) -> u8 {
+pub(crate) fn cmd_add(a: &Args) -> crate::outcome::Outcome {
     // add 追加到最低空闲槽位，不接受 `:N` 指定槽位：静默忽略会让用户以为写进了 N 号槽
     if let Some(n) = a.part {
         bail_fail(Fail::refused(format!("`add` picks the first free slot itself — drop :{n}")));
@@ -114,6 +119,11 @@ pub(crate) fn cmd_add(a: &Args) -> u8 {
         bail_fail(Fail::refused("`add` needs both --start and --end".to_string()));
     };
     let mut src = open_target_for_write(a).unwrap_or_else(|f| bail_fail(f));
+    // 写表前的占用闸（见 fsops::ensure_table_write_idle）。放在几何判定之前：
+    // 占用是"目标现在能不能写"的事实，与本条命令的参数是否合法无关
+    if let Err(f) = crate::fsops::ensure_table_write_idle(&src) {
+        bail_fail(f);
+    }
     // 坐标系在几何计算前确定：GPT 条目按表头 ss 对齐，MBR 条目按容器 ss 对齐
     match table::table_label(&src) {
         Err(e) => bail_fail(Fail::infra(format!("label probe failed: {e}"))),
@@ -164,7 +174,7 @@ pub(crate) fn cmd_add(a: &Args) -> u8 {
     }
 }
 
-pub(crate) fn cmd_del(a: &Args) -> u8 {
+pub(crate) fn cmd_del(a: &Args) -> crate::outcome::Outcome {
     let Some(pref) = a.part else { crate::args::usage() };
     // 载体必须是整盘：del 清零的是节点 LBA0 里的条目槽，而分区节点上被判成 msdos 的
     // 可能只是文件系统引导扇区——FAT/NTFS 的引导扇区末尾同为 0x55AA，MBR 判据只认
@@ -174,6 +184,10 @@ pub(crate) fn cmd_del(a: &Args) -> u8 {
         bail_fail(Fail::refused("`del` removes the target partition entry; pass --yes to confirm"));
     } else {
         let mut src = open_target_for_write(a).unwrap_or_else(|f| bail_fail(f));
+        // 写表前的占用闸：删掉一个仍被内核使用的分区，会让盘上表与挂载视图分叉
+        if let Err(f) = crate::fsops::ensure_table_write_idle(&src) {
+            bail_fail(f);
+        }
         // 锁下快照
         let part = crate::gpt_policy::resolve_part(&src, pref).unwrap_or_else(|f| bail_fail(f));
         let r = match table::table_label(&src) {
@@ -189,7 +203,7 @@ pub(crate) fn cmd_del(a: &Args) -> u8 {
     }
 }
 
-pub(crate) fn cmd_resize_part(a: &Args) -> u8 {
+pub(crate) fn cmd_resize_part(a: &Args) -> crate::outcome::Outcome {
     // `--start end` 是 move/copy 的"贴着可用区尾部打包"语法，resize-part 不挪位置，
     // 对应的语义是"扩到最后一个可用 LBA"。语义错与用法错共用 usage() 出口，
     // 用户只会看到一段用法而不知该改哪个旗标
@@ -235,7 +249,7 @@ pub(crate) fn cmd_resize_part(a: &Args) -> u8 {
     if o.is_complete() {
         println!("resize-part complete (verify with: diskedit info {})", a.target);
     }
-    o.exit_code()
+    o
 }
 
 /// `--start end` 把起点钉在 `last_usable_lba - len + 1`，是"贴尾打包"而非"挑一个对齐
@@ -250,7 +264,7 @@ fn refuse_align_on_start_end(a: &Args) {
     }
 }
 
-pub(crate) fn cmd_move(a: &Args) -> u8 {
+pub(crate) fn cmd_move(a: &Args) -> crate::outcome::Outcome {
     // 两种给起点的方式各写一条会都留在 Args 里：start_end 恒优先，数值被静默丢弃
     if a.start_end && a.start.is_some() {
         bail_fail(Fail::refused(
@@ -287,10 +301,10 @@ pub(crate) fn cmd_move(a: &Args) -> u8 {
     if o.is_complete() {
         println!("moved (verify with: diskedit info {})", a.target);
     }
-    o.exit_code()
+    o
 }
 
-pub(crate) fn cmd_copy(a: &Args) -> u8 {
+pub(crate) fn cmd_copy(a: &Args) -> crate::outcome::Outcome {
     if a.start_end && a.start.is_some() {
         bail_fail(Fail::refused(
             "`--start end` and a numeric --start are mutually exclusive — pass one of them".to_string(),
@@ -332,7 +346,7 @@ pub(crate) fn cmd_copy(a: &Args) -> u8 {
 
 /// create 的一键入口：自动选空闲槽（--size 给定取首个装得下的，否则取最大者），1MiB 对齐。
 /// 空闲区与 --size 的换算都按 LBA 所属表的扇区算（GPT = 表头 ss，可与容器 ss 不同）
-pub(crate) fn cmd_create(a: &Args) -> u8 {
+pub(crate) fn cmd_create(a: &Args) -> crate::outcome::Outcome {
     // create 自选空闲槽：`:N` 静默忽略会让用户以为分区被放进了 N 号槽
     if let Some(n) = a.part {
         bail_fail(Fail::refused(format!("`create` picks a free gap itself — drop :{n}")));
@@ -358,6 +372,11 @@ pub(crate) fn cmd_create(a: &Args) -> u8 {
     // 分区节点不是合法载体（同 add：表条目写在整盘最前 16KiB）
     refuse_partition_node_target("create", &a.target);
     let mut src = open_target_for_write(a).unwrap_or_else(|f| bail_fail(f));
+    // 写表前的占用闸（与 add/del 同判据）。放在几何判定之前：占用是"目标现在能不能写"
+    // 的事实，与本条命令的参数是否合法无关
+    if let Err(f) = crate::fsops::ensure_table_write_idle(&src) {
+        bail_fail(f);
+    }
     // 盘型由 table_label 判定一次，label 决定写入哪个表族的槽；空闲区在同一分支里由
     // 该表族自己的几何算出（GPT 用表头 ss 与可用区，MBR 用容器 ss 与盘尾）。写表函数
     // 内部还会解析一次表做自身校验——本命令持锁，盘面在窗口内不会变
@@ -485,5 +504,5 @@ pub(crate) fn cmd_create(a: &Args) -> u8 {
     if o.is_complete() {
         println!("created partition #{num} at {start}..{end} (verify with: diskedit info {})", a.target);
     }
-    o.exit_code()
+    o
 }

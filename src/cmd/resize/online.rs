@@ -17,7 +17,7 @@ pub(crate) fn refuse_swap_active(dn: &str, part: u32) {
 /// 块设备在线路径：**表类型无关**（写表经 sfdisk / BLKPG）。目标长度由 `decide` 在
 /// **持有目标锁之后**、基于只读打开的整盘解析——`+N`/`+N%` 锚定"当前尺寸"、`grow` 锚定
 /// 右侧空闲，锁前的快照在窗口内可能已作废，用它算出的扩量会传导给 pvresize/lvextend。
-/// 返回 Some(退出码) = 已按在线路径处理完毕；None = 不适用（镜像，或未挂载的非 PV）
+/// 返回 Some(结果) = 已按在线路径处理完毕；None = 不适用（镜像，或未挂载的非 PV）
 /// → 调用方继续离线路径。派生不出盘名即拒绝而非继续：此时无法探测挂载状态，
 /// 退到离线路径可能在 FS 挂载中写表
 #[cfg(target_os = "linux")]
@@ -27,7 +27,7 @@ pub(crate) fn resize_online(
     part: u32,
     is_pv: bool,
     decide: impl FnOnce(&FileSource) -> Result<Option<u64>, crate::outcome::Fail>,
-) -> Option<u8> {
+) -> Option<crate::outcome::Outcome> {
     if !src.is_block {
         return None;
     }
@@ -44,7 +44,7 @@ pub(crate) fn resize_online(
         let (o, old_bytes, pv_lock) = crate::online::resize_pv_online(&dn, part, decide);
         if !o.is_complete() {
             o.report();
-            return Some(o.exit_code());
+            return Some(o);
         }
         // 锁贯穿 pvresize/lvextend：它们仍属同一次操作（见 resize_done 的持有说明）
         return Some(resize_done(a, None, part, true, true, old_bytes, pv_lock));
@@ -74,7 +74,7 @@ pub(crate) fn resize_online(
     } else {
         o.report();
     }
-    Some(o.exit_code())
+    Some(o)
 }
 
 /// 在线路径不搬移也不收 chunk：两个旗标的承诺在在线入口无从兑现。调用点只在实际

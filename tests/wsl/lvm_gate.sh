@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # LVM 全链 Gate：多 LV 拒绝（--lv 缺省）/ --lv 指定 / 单 LV 自动选择 / lvextend -r 后 FS 真扩 /
-# 镜像 PV 的 losetup 临时映射路径 / loop 无残留。
+# 镜像 PV 的 losetup 临时映射路径 / 活动 LV 持有 loop 分区时的 AllowDm 边界与 mkfs 拒绝 /
+# 镜像 PV + 非活动 LV 的 --grow-lv 全链 / loop 无残留。
 # 依赖 lvm2（pvcreate/vgcreate/lvcreate…）+ e2fsprogs —— WSL 未装 lvm2 时打印 SKIP 并退出 0
-# （按约定不在 WSL 安装依赖以免弄脏环境；做法同 lvm_pv_online.sh）。
+# （本脚本不自行安装依赖）。
 source "$(dirname "$0")/lib.sh"
 
 if ! command -v pvcreate >/dev/null 2>&1; then
@@ -16,11 +17,15 @@ fail() { echo "GATE FAIL: $*"; exit 1; }
 
 # LVM 栈须先拆（LV→VG→PV），再释放本脚本的 loop（在 cleanup_all 的 rm 之前完成）
 VG=""
+LOOP3=""
+LOOP4=""
 cleanup_hook() {
   [ -n "$VG" ] && vgchange -an "$VG" 2>/dev/null
   [ -n "$VG" ] && vgremove -ff "$VG" 2>/dev/null
   [ -n "$LOOP" ] && lo_detach "$LOOP"
   [ -n "$LOOP2" ] && lo_detach "$LOOP2"
+  [ -n "$LOOP3" ] && lo_detach "$LOOP3"
+  [ -n "$LOOP4" ] && lo_detach "$LOOP4"
   return 0
 }
 
@@ -109,5 +114,104 @@ vgremove -ff "$VG" >/dev/null || fail "vgremove $VG failed"
 lo_detach "$LOOP2"; LOOP2=
 VG=
 rm -f "$IMG2" "$IMG2"$SIDECAR_GLOB; IMG2=
+
+# ---- 场景三：镜像内 PV + 活动 LV（loop 分区被 dm 持有）----
+# 这一场景检验 ImageLoopPolicy::AllowDm / with_partition_device_for_lvm 的两个边界：
+#   a) 活动的 LV 使 dm 持有 loop 分区时，通用占用规则不得把 LVM 链误判成"被别的栈占用"（exit 10）
+#   b) 整段重写（mkfs）在同一状态下仍须被 REFUSED(10) 拒绝，且不动盘上字节
+# 另记录 LVM 的一个运行期事实：同一 PV 经两个 loop 可见时，LVM 偏好"已被 LV 使用"的那个，
+# 对临时映射的 pvresize 是 no-op 且退出码为 0。工具的后置条件检查因此把它报成 PARTIAL(20)
+# （LVM 链待办），不宣称成功；表项只向右扩展，PV/LV/FS 均不变。
+IMG3=/var/tmp/t31c.img
+track_file "$IMG3"
+rm -f "$IMG3" "$IMG3"$SIDECAR_GLOB 2>/dev/null
+truncate -s 96M "$IMG3"
+$B new "$IMG3" --yes >/dev/null || fail "new $IMG3 failed"
+$B create "$IMG3" --size 48M >/dev/null || fail "create $IMG3 failed"
+LOOP3=$(lo_attach "$IMG3") || fail "losetup $IMG3 failed"
+pvcreate -f "${LOOP3}p1" >/dev/null || fail "pvcreate ${LOOP3}p1 failed"
+VG=gatevg3$$
+vgcreate "$VG" "${LOOP3}p1" >/dev/null || fail "vgcreate $VG failed"
+lvcreate -L 16M -n lv1 "$VG" >/dev/null || fail "lvcreate lv1 failed"
+mkfs.ext4 -F "/dev/$VG/lv1" >/dev/null || fail "mkfs.ext4 lv1 failed"
+lv_before=$(lv_bytes "$VG" lv1) || fail "blockdev lv1 failed"
+fs_before=$(fs_bytes "$VG" lv1) || fail "dumpe2fs lv1 failed"
+last_before=$($B info "$IMG3" | grep -o '"last_lba":[0-9]*' | head -1 | cut -d: -f2)
+pv_before=$(pvs --noheadings --units b --nosuffix -o pv_size "${LOOP3}p1" 2>/dev/null | tr -d ' ')
+[ -n "$pv_before" ] || fail "cannot read pv_size from ${IMG3}:1"
+
+# b) 先验证整段重写被拒绝：活动的 LV 仍在，mkfs 不得动 PV 的字节
+$B mkfs "$IMG3:1" ext4 --yes >/dev/null 2>&1
+exp "$?" 10 "活动 LV 持有分区时 mkfs 被拒"
+pvs --noheadings -o pv_name "${LOOP3}p1" >/dev/null 2>&1 || fail "PV destroyed by refused mkfs"
+
+# a) 通用占用规则不得拒绝 LVM 链本身
+out=$($B resize "$IMG3:1" +8M --grow-lv --lv lv1 2>&1); got=$?
+case "$out" in
+    *"held by"*) fail "generic holder gate rejected the LVM chain: $out" ;;
+esac
+[ "$got" -ne 10 ] || fail "AllowDm gate refused the LVM chain (exit 10): $out"
+[ "$got" -eq 20 ] || fail "expected PARTIAL(20) from duplicate-PV handling, got $got: $out"
+case "$out" in
+    *"pending"*) ;;
+    *) fail "partial result not reported as pending: $out" ;;
+esac
+last_after=$($B info "$IMG3" | grep -o '"last_lba":[0-9]*' | head -1 | cut -d: -f2)
+[ "$last_after" -eq "$((last_before + 16384))" ] || fail "table not extended: $last_before -> $last_after"
+[ "$(lv_bytes "$VG" lv1)" -eq "$lv_before" ] || fail "LV changed despite no-op pvresize"
+[ "$(fs_bytes "$VG" lv1)" -eq "$fs_before" ] || fail "LV filesystem changed despite no-op pvresize"
+pv_after=$(pvs --noheadings --units b --nosuffix -o pv_size "${LOOP3}p1" 2>/dev/null | tr -d ' ')
+[ "$pv_after" -eq "$pv_before" ] || fail "PV resized behind the active stack: $pv_before -> $pv_after"
+vgdisplay "$VG" >/dev/null 2>&1 || fail "VG damaged"
+[ "$(losetup -a | grep -cF "$IMG3")" -eq 1 ] || fail "temporary loop leaked for $IMG3"
+
+vgchange -an "$VG" >/dev/null 2>&1
+vgremove -ff "$VG" >/dev/null || fail "vgremove $VG failed"
+lo_detach "$LOOP3"; LOOP3=
+VG=
+rm -f "$IMG3" "$IMG3"$SIDECAR_GLOB; IMG3=
+
+# ---- 场景四：镜像内 PV + 非活动 LV，--grow-lv 全链 ----
+# 无 dm 持有者时走 with_partition_device_for_lvm 的正常路径：pvresize 吸收新增空间，
+# lvextend -r 把同一份增量传给 LV 与 FS。与场景三合起来覆盖该入口的放行与成功两条路径。
+IMG4=/var/tmp/t31d.img
+track_file "$IMG4"
+rm -f "$IMG4" "$IMG4"$SIDECAR_GLOB 2>/dev/null
+truncate -s 64M "$IMG4"
+$B new "$IMG4" --yes >/dev/null || fail "new $IMG4 failed"
+$B create "$IMG4" --size 48M >/dev/null || fail "create $IMG4 failed"
+LOOP4=$(lo_attach "$IMG4") || fail "losetup $IMG4 failed"
+lo_waitpart "${LOOP4}p1" || fail "partition node ${LOOP4}p1 not ready"
+pvcreate -f "${LOOP4}p1" >/dev/null || fail "pvcreate ${LOOP4}p1 failed"
+VG=gatevg4$$
+vgcreate "$VG" "${LOOP4}p1" >/dev/null || fail "vgcreate $VG failed"
+lvcreate -L 16M -n lv1 "$VG" >/dev/null || fail "lvcreate lv1 failed"
+mkfs.ext4 -F "/dev/$VG/lv1" >/dev/null || fail "mkfs.ext4 lv1 failed"
+lv_before=$(lv_bytes "$VG" lv1) || fail "blockdev lv1 failed"
+pv_before=$(pvs --noheadings --units b --nosuffix -o pv_size "${LOOP4}p1" 2>/dev/null | tr -d ' ')
+[ -n "$pv_before" ] || fail "cannot read pv_size from ${IMG4}:1"
+# 先停用 VG 再拆 loop：起始状态无 dm 持有者
+vgchange -an "$VG" >/dev/null 2>&1 || fail "vgchange -an failed"
+lo_detach "$LOOP4"; LOOP4=
+
+$B resize "$IMG4:1" +8M --grow-lv --lv lv1 >/dev/null || fail "image PV --grow-lv chain failed"
+# lvextend -r 需要设备节点；LV 若被 LVM 留在非活动态，这里显式激活再取值
+lvchange -ay "$VG/lv1" >/dev/null 2>&1
+lv_after=$(lv_bytes "$VG" lv1) || fail "blockdev lv1 (after) failed"
+fs_after=$(fs_bytes "$VG" lv1) || fail "dumpe2fs lv1 (after) failed"
+assert_eq "$lv_after" "$((lv_before + 8388608))" "LV 扩 8M"
+[ "$fs_after" -eq "$lv_after" ] || fail "FS did not grow with LV: fs=$fs_after lv=$lv_after"
+
+# 停用后 dm 释放持有，临时 loop 的 autoclear 生效；再挂一次读 PV 元数据
+vgchange -an "$VG" >/dev/null 2>&1
+for _ in {1..20}; do [ -z "$(losetup -j "$IMG4" -n -O NAME)" ] && break; sleep 0.1; done
+LOOP4=$(lo_attach "$IMG4") || fail "re-losetup $IMG4 failed"
+lo_waitpart "${LOOP4}p1" || fail "partition node ${LOOP4}p1 not ready"
+pv_after=$(pvs --noheadings --units b --nosuffix -o pv_size "${LOOP4}p1" 2>/dev/null | tr -d ' ')
+assert_eq "$pv_after" "$((pv_before + 8388608))" "PV 吸收新增 8M"
+vgremove -ff "$VG" >/dev/null || fail "vgremove $VG failed"
+lo_detach "$LOOP4"; LOOP4=
+VG=
+rm -f "$IMG4" "$IMG4"$SIDECAR_GLOB; IMG4=
 
 echo "GATE PASS: all LVM chain cases verified"

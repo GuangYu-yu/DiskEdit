@@ -297,9 +297,15 @@ pub(crate) fn prepare_resize(
     let ss = g.sector_size();
     let e = gpt_policy::live_entry(&g, part)?;
     // 占用闸：搬移/改写一个被挂载或活动 swap 的分区会让现场失效。镜像无块设备占用
-    // 语义，闸内自会放行（支持边界见 README）
+    // 语义，闸内自会放行（支持边界见 README）。起点不变、末端不变或只增的请求按 Extend
+    // 放行 DM 栈持有（LVM PV / dm-crypt 的增长先长分区再调栈）；搬移或缩小要求无持有者
+    let edit = if new_start == e.starting_lba && new_end >= e.ending_lba {
+        crate::fsops::WriteKind::Extend
+    } else {
+        crate::fsops::WriteKind::Overwrite
+    };
     crate::fsops::ensure_idle_before_write(src, part, e.starting_lba.checked_mul(ss)
-        .ok_or_else(|| Fail::infra("partition start overflows byte offset"))?)?;
+        .ok_or_else(|| Fail::infra("partition start overflows byte offset"))?, edit)?;
     // 只拦搬移（起点变化）：LUKS/LVM PV/swap 的纯扩缩不搬数据，允许。
     // swap 在此一并拒绝：plan/apply 有 mkswap 重建流程，单分区 resize-part 没有
     if (FORBIDDEN_TYPE_GUIDS.contains(&e.partition_type_guid) || is_swap_guid(&e.partition_type_guid))
@@ -595,7 +601,7 @@ pub(crate) fn execute_resize(
     // 自重叠搬移下旧区字节已被写覆盖，重拷即把覆盖后的数据盖回新区。FS 步留下待办时
     // 保留 ckpt——重跑按续传口径只重试 FS 步
     if post.len() == pending_before {
-        crate::dev::warn_if_remove_failed(&p.ckpt_path);
+        crate::dev::remove_recovery_file(&p.ckpt_path);
     }
     Ok(())
 }

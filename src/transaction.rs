@@ -307,7 +307,7 @@ impl TransactionManager {
 
     /// 提交：事务完成，关闭它的 active 状态。删的是**事务开始时确定的那个身份**的全部
     /// 候选落点——含历史命名那一份：留着它会被下次查找命中，把历史字节回放到一个已经
-    /// 改过的盘上。不存在即无残留、无告警；删除真失败则由 `dev::warn_if_remove_failed`
+    /// 改过的盘上。不存在即无残留、无告警；删除真失败则由 `dev::remove_recovery_file`
     /// 告警
     ///
     /// `identity` 必须来自 [`Self::begin_or_resume`] 记下的值（见 [`Self::take_identity`]），
@@ -332,11 +332,10 @@ impl TransactionManager {
                 return;
             }
         };
+        // 删除与目录落盘在同一处：撤销窗口的关闭与创建/改写同级持久化，unlink 不落盘时
+        // 掉电后 journal 可能复活，把已完成的事务报成未收尾现场
         for p in identity.journal_candidates() {
-            dev::warn_if_remove_failed(p);
-            // 撤销窗口的关闭与创建/改写同级持久化：unlink 不落盘时掉电后 journal 可能复活，
-            // 把已完成的事务报成未收尾现场
-            dev::best_effort_dir_fsync(p);
+            dev::remove_recovery_file(p);
         }
     }
 
@@ -359,7 +358,19 @@ impl TransactionManager {
     /// 经过 [`Self::begin`] 的写命令（add/del/resize/mkfs…）不靠它：`begin` 在目标被占用时
     /// 就已拒绝。本闸口覆盖的是只取所有权、不开事务的那些命令
     pub(crate) fn refuse_if_active(src: &FileSource, what: &str) -> Result<(), Fail> {
-        let active = Self::active_records(src);
+        Self::refuse_if_active_at(src, src, what)
+    }
+
+    /// 现场身份与 Disk GUID 取自不同节点时的入口。在线 PV 路径按**分区**节点枚举现场
+    /// （`from_block_keys` 在 self_key != disk_key 时同时列出盘级键与旧版按分区命名的
+    /// 历史候选，`undo /dev/sdXN` 正是按后者枚举的），而历史 GUID 命名的 checkpoint 只能
+    /// 从**整盘**的表读——分区节点的 0 偏移不是 GPT 头
+    pub(crate) fn refuse_if_active_at(
+        identity: &FileSource,
+        disk: &FileSource,
+        what: &str,
+    ) -> Result<(), Fail> {
+        let active = active_recovery_records(&identity.identity, legacy_disk_guid(disk));
         if active.is_empty() {
             return Ok(());
         }

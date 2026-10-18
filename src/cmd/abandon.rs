@@ -168,11 +168,14 @@ fn abandon_one(from: &std::path::Path) -> std::io::Result<std::path::PathBuf> {
         match std::fs::hard_link(from, &to) {
             Ok(()) => {
                 std::fs::remove_file(from)?;
+                // 改名转换要落盘目录项：否则掉电后原件可能复活，目标重新被判成 busy
+                crate::dev::best_effort_dir_fsync(from);
                 return Ok(to);
             }
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
                 if same_file(from, &to) {
                     std::fs::remove_file(from)?;
+                    crate::dev::best_effort_dir_fsync(from);
                     return Ok(to);
                 }
                 continue;
@@ -183,6 +186,7 @@ fn abandon_one(from: &std::path::Path) -> std::io::Result<std::path::PathBuf> {
             // 会覆盖的 rename"，不能是"在不支持硬链接的盘上永远无法释放现场"
             Err(_) if !to.exists() => {
                 std::fs::rename(from, &to)?;
+                crate::dev::best_effort_dir_fsync(from);
                 return Ok(to);
             }
             // 名字已被另一份放弃记录占用：顺延 .N。硬链接失败的原因与占用是两件事，

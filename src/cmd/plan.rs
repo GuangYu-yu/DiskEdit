@@ -58,7 +58,7 @@ fn print_plan_inner(plan: &movepart::Plan, target_start: u64, last_usable: Optio
     print_moves(plan)
 }
 
-pub(crate) fn cmd_plan_apply(cmd: &str, a: &Args) -> u8 {
+pub(crate) fn cmd_plan_apply(cmd: &str, a: &Args) -> crate::cmd::CmdResult {
     // 目标分区由 --grow N 选定：`:N` 若被静默忽略，用户会误以为只动了某个分区
     if let Some(n) = a.part {
         bail_fail(Fail::refused(format!("`{cmd}` selects the partition with --grow N — drop :{n}")));
@@ -102,13 +102,14 @@ pub(crate) fn cmd_plan_apply(cmd: &str, a: &Args) -> u8 {
         println!(
             "note: `apply` re-validates under the target lock — a partition-node target or an active recovery scene will be refused there"
         );
-        EXIT_OK
+        // 只读干跑：没有布局事务可判定
+        EXIT_OK.into()
     } else {
-        apply_cmd(a, pref)
+        apply_cmd(a, pref).into()
     }
 }
 
-fn apply_cmd(a: &Args, pref: PartSelector) -> u8 {
+fn apply_cmd(a: &Args, pref: PartSelector) -> crate::outcome::Outcome {
     // chunk_bytes 只校验 --chunk-size 的取值，与目标无关：放在一切开盘动作之前，
     // 请求本身不合法 ⇒ 10（改参数有解），不让它被"现有 ckpt 不匹配"之类的
     // 盘上现状消息抢占
@@ -155,5 +156,5 @@ fn apply_cmd(a: &Args, pref: PartSelector) -> u8 {
         };
         logger.log(&format!("apply {why}"));
     }
-    settle_layout(o, &src).exit_code()
+    settle_layout(o, &src)
 }

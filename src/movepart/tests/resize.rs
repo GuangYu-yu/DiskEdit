@@ -117,7 +117,7 @@ pub(crate) fn resize_part_resume_skips_done_chunks() {
     assert!(!ckpt_path.exists(), "checkpoint must be removed on success");
     drop(src);
     let _ = std::fs::remove_file(&tmp);
-    crate::dev::warn_if_remove_failed(&ckpt_path);
+    let _ = crate::dev::remove_recovery_file(&ckpt_path);
 }
 
 /// 提交已落盘、ckpt 尚未更新时中断：判据必须落在"盘上几何已是目标"上，否则续传会把
@@ -226,7 +226,7 @@ pub(crate) fn retargeted_resize_after_crash_is_refused() {
     );
 
     drop(src);
-    crate::dev::warn_if_remove_failed(&ckpt_path);
+    let _ = crate::dev::remove_recovery_file(&ckpt_path);
     let _ = std::fs::remove_file(&path);
 }
 

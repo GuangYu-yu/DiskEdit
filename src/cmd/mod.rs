@@ -9,7 +9,49 @@ pub(crate) mod resize;
 pub(crate) mod undo;
 
 use crate::args::{help_cmd, usage, usage_help, Args};
+use crate::outcome::{Outcome, EXIT_OK};
 use crate::support::{bail_fail, Fail};
+
+/// 命令分派的结果。退出码之外还要保住"撤销窗口能不能关"这一事实：
+/// 20 既可能来自"布局已写、待办非空"，也可能来自"布局已写、仅内核视图过期"，
+/// 两者对 journal 的去留结论相反，压成 u8 之后再也分不出来
+pub(crate) enum CmdResult {
+    /// 命令持有可判定的后置条件契约（布局写入及其后续链）
+    Outcome(Outcome),
+    /// 没有布局事务可判定：按退出码处理
+    Code(u8),
+}
+
+impl CmdResult {
+    pub(crate) fn code(&self) -> u8 {
+        match self {
+            Self::Outcome(o) => o.exit_code(),
+            Self::Code(c) => *c,
+        }
+    }
+
+    /// 布局写入已完成且没有已知待办 ⇒ 撤销窗口可以关闭。
+    /// 待办非空时保留 journal：它是 `undo` 撤销本次表写入的唯一凭据
+    /// （`new --mkfs` 的 PARTIAL 契约，见 tests/cli/journal.rs）
+    pub(crate) fn closes_journal(&self) -> bool {
+        match self {
+            Self::Outcome(o) => matches!(o, Outcome::Applied { pending, .. } if pending.is_empty()),
+            Self::Code(code) => *code == EXIT_OK,
+        }
+    }
+}
+
+impl From<Outcome> for CmdResult {
+    fn from(o: Outcome) -> Self {
+        Self::Outcome(o)
+    }
+}
+
+impl From<u8> for CmdResult {
+    fn from(code: u8) -> Self {
+        Self::Code(code)
+    }
+}
 
 /// 一条命令的全部声明。名字/别名、旗标白名单、详助文本、与目标盘的打开关系、处理函数
 /// **同出一源**：分派、`help <CMD>` 路由、旗标消费对账、成功后的 journal 清理
@@ -32,8 +74,10 @@ pub(crate) struct CommandSpec {
     pub(crate) max_pos: usize,
     /// 撤销窗口的生命周期（见 `TargetMode`）：main 据此决定成功后是否关闭它
     pub(crate) mode: TargetMode,
-    /// 处理函数。收命令名是因为 plan/apply 共用一个实现、要按名字分干跑与执行
-    pub(crate) run: fn(&str, &Args) -> u8,
+    /// 处理函数。收命令名是因为 plan/apply 共用一个实现、要按名字分干跑与执行。
+    /// 返回 `CmdResult` 而不是裸退出码：main 要按"已应用且无待办"决定是否关闭
+    /// 撤销窗口，而码值 20 分不出待办非空与仅内核视图过期
+    pub(crate) run: fn(&str, &Args) -> CmdResult,
 }
 
 /// 命令与撤销窗口的关系：唯一的消费者是 `opens_undo_journal`（main 据此决定成功后
@@ -59,7 +103,7 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
         help: info::HELP,
         max_pos: 1,
         mode: TargetMode::ReadOnly,
-        run: |_, a| info::cmd_info(a),
+        run: |_, a| info::cmd_info(a).into(),
     },
     CommandSpec {
         name: "resize",
@@ -75,7 +119,7 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
         help: resize::HELP,
         max_pos: 2, // TARGET:N + SIZE
         mode: TargetMode::WriteJournal,
-        run: |_, a| resize::cmd_resize(a),
+        run: |_, a| resize::cmd_resize(a).into(),
     },
     CommandSpec {
         name: "move",
@@ -84,7 +128,7 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
         help: layout::HELP_MOVE,
         max_pos: 1,
         mode: TargetMode::WriteJournal,
-        run: |_, a| layout::cmd_move(a),
+        run: |_, a| layout::cmd_move(a).into(),
     },
     CommandSpec {
         name: "copy",
@@ -93,7 +137,7 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
         help: layout::HELP_COPY,
         max_pos: 1,
         mode: TargetMode::WriteJournal,
-        run: |_, a| layout::cmd_copy(a),
+        run: |_, a| layout::cmd_copy(a).into(),
     },
     CommandSpec {
         name: "create",
@@ -102,7 +146,7 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
         help: layout::HELP_CREATE,
         max_pos: 1,
         mode: TargetMode::WriteJournal,
-        run: |_, a| layout::cmd_create(a),
+        run: |_, a| layout::cmd_create(a).into(),
     },
     CommandSpec {
         name: "delete",
@@ -111,7 +155,7 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
         help: layout::HELP_DELETE,
         max_pos: 1,
         mode: TargetMode::WriteJournal,
-        run: |_, a| layout::cmd_del(a),
+        run: |_, a| layout::cmd_del(a).into(),
     },
     CommandSpec {
         name: "set",
@@ -120,7 +164,7 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
         help: fs::HELP_SET,
         max_pos: 4, // TARGET:N + key + value + state
         mode: TargetMode::WriteJournal,
-        run: |_, a| fs::cmd_set(a),
+        run: |_, a| fs::cmd_set(a).into(),
     },
     CommandSpec {
         name: "check",
@@ -130,7 +174,7 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
         help: fs::HELP_CHECK,
         max_pos: 1,
         mode: TargetMode::WriteNoJournal,
-        run: |_, a| fs::cmd_check(a),
+        run: |_, a| fs::cmd_check(a).into(),
     },
     // mkfs 是一次真正的**事务**（不可回滚，但要走完整的 begin/commit）：它先落一条屏障
     // 说明"这个分区上创建了文件系统"，成功即关闭事务，失败/崩溃则留下待 abandon 的现场。
@@ -143,7 +187,7 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
         help: fs::HELP_MKFS,
         max_pos: 2, // TARGET:N + FSTYPE
         mode: TargetMode::WriteJournal,
-        run: |_, a| fs::cmd_mkfs(a),
+        run: |_, a| fs::cmd_mkfs(a).into(),
     },
     CommandSpec {
         name: "resizefs",
@@ -152,7 +196,7 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
         help: fs::HELP_RESIZEFS,
         max_pos: 2, // MOUNTPOINT + BYTES
         mode: TargetMode::WriteNoJournal,
-        run: |_, a| fs::cmd_resizefs(a),
+        run: |_, a| fs::cmd_resizefs(a).into(),
     },
     CommandSpec {
         name: "undo",
@@ -161,7 +205,7 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
         help: undo::HELP,
         max_pos: 1,
         mode: TargetMode::WriteNoJournal,
-        run: |_, a| undo::cmd_undo(a),
+        run: |_, a| undo::cmd_undo(a).into(),
     },
     // abandon 既不建 journal、也不回放：它把现场字节原样改名交出去，盘上一个字节都不写。
     // 打开是只读的且不走 --sector-size（扇区大小对"改名交出去"无意义），白名单不收。
@@ -173,7 +217,7 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
         help: abandon::HELP,
         max_pos: 1,
         mode: TargetMode::WriteNoJournal,
-        run: |_, a| abandon::cmd_abandon(a),
+        run: |_, a| abandon::cmd_abandon(a).into(),
     },
     CommandSpec {
         name: "new",
@@ -182,7 +226,7 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
         help: layout::HELP_NEW,
         max_pos: 1,
         mode: TargetMode::WriteJournal,
-        run: |_, a| layout::cmd_new(a),
+        run: |_, a| layout::cmd_new(a).into(),
     },
     CommandSpec {
         name: "add",
@@ -191,7 +235,7 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
         help: layout::HELP_ADD,
         max_pos: 1,
         mode: TargetMode::WriteJournal,
-        run: |_, a| layout::cmd_add(a),
+        run: |_, a| layout::cmd_add(a).into(),
     },
     CommandSpec {
         name: "resize-part",
@@ -200,7 +244,7 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
         help: layout::HELP_RESIZE_PART,
         max_pos: 1,
         mode: TargetMode::WriteJournal,
-        run: |_, a| layout::cmd_resize_part(a),
+        run: |_, a| layout::cmd_resize_part(a).into(),
     },
     CommandSpec {
         name: "plan",
@@ -246,7 +290,7 @@ pub(crate) fn opens_undo_journal(name: &str) -> bool {
 }
 
 /// 命令分派。usage/help_cmd 不返回（直接退出进程）
-pub(crate) fn dispatch(cmd: &str, a: &Args) -> u8 {
+pub(crate) fn dispatch(cmd: &str, a: &Args) -> CmdResult {
     match cmd {
         "help" | "--help" | "-h" => match a.pos.len() {
             // 主动请求帮助，非用法错误：打全文退 0（未知命令/缺参数才是 10）
@@ -314,6 +358,38 @@ mod tests {
         assert!(!opens_undo_journal("undo"));
         // mkfs 相反：它自己就是一次事务，成功时正该关闭自己的撤销窗口
         assert!(opens_undo_journal("mkfs"));
+    }
+
+    /// 撤销窗口的关闭判据是"布局已应用且没有已知待办"，不是退出码 0。20 有两个
+    /// 正交成因：待办非空（保留 journal 供 undo 撤销表写入）与仅内核视图过期
+    /// （事务已完成，必须关闭——否则下一次写命令会被自己残留的 journal 挡成 busy）
+    #[test]
+    fn journal_closes_only_when_applied_without_pending() {
+        use crate::outcome::{EXIT_OK, EXIT_PARTIAL, KernelSync, Outcome, Pending, PendingKind};
+
+        let complete = CmdResult::from(Outcome::applied_with(Vec::new()));
+        assert!(complete.closes_journal());
+        assert_eq!(complete.code(), EXIT_OK);
+
+        let pending = CmdResult::from(Outcome::applied_with(vec![Pending::new(
+            1, PendingKind::Fs, "detail", "hint",
+        )]));
+        assert!(!pending.closes_journal());
+        assert_eq!(pending.code(), EXIT_PARTIAL);
+
+        let stale = CmdResult::from(Outcome::Applied {
+            pending: Vec::new(),
+            kernel_sync: KernelSync::Stale,
+        });
+        assert!(stale.closes_journal());
+        assert_eq!(stale.code(), EXIT_PARTIAL);
+
+        // 不开事务的命令只带退出码：0 是它自己的成功，与撤销窗口无关
+        assert!(CmdResult::Code(EXIT_OK).closes_journal());
+        assert!(!CmdResult::Code(EXIT_PARTIAL).closes_journal());
+
+        assert!(!CmdResult::from(Outcome::refused("no")).closes_journal());
+        assert!(!CmdResult::from(Outcome::failed("boom")).closes_journal());
     }
 
     /// 每条命令与撤销窗口的关系都是逐条裁定过的：这里把结论钉住——

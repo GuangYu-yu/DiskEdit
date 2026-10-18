@@ -5,7 +5,7 @@ use super::*;
 /// superfloppy resize（无分区表，FS 即整盘）：无表可写，唯一有意义的是 FS grow
 /// 到盘/镜像末端——缩无处可缩（无分区边界），显式 SIZE 只接受等于当前值。
 /// 镜像/盘须已是大尺寸（dd 后或 truncate 预扩），本命令不负责扩文件本身
-pub(crate) fn cmd_resize_superfloppy(a: &Args, req: &SizeRequest) -> u8 {
+pub(crate) fn cmd_resize_superfloppy(a: &Args, req: &SizeRequest) -> crate::outcome::Outcome {
     if let Some(n) = a.part {
         bail_fail(Fail::refused(format!("target has no partition table — drop :{n} (the FS occupies the whole device)")));
     }
@@ -70,5 +70,6 @@ pub(crate) fn cmd_resize_superfloppy(a: &Args, req: &SizeRequest) -> u8 {
         Err(e) => bail_fail(Fail::from(e).context("FS grow failed")),
     }
     println!("superfloppy: {} grown to full device ({cur_bytes} bytes) — verify with: diskedit info {}", fsid::fs_name(fstype), a.target);
-    EXIT_OK
+    // 无分区表可写：FS 已扩，事务完成且无待办
+    crate::outcome::Outcome::applied_with(Vec::new())
 }

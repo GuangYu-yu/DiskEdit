@@ -132,15 +132,23 @@ pub(crate) fn apply_repair(src: &mut FileSource, action: &RepairAction) -> Resul
         // RepairProtectiveMbr：无需写 GPT（由函数尾部的 ensure_protective_mbr 统一重写，即首次写盘）
         RepairAction::RepairProtectiveMbr => {}
         RepairAction::RelocateBackup { .. } | RepairAction::RelocateAndRepair { .. } => {
-            // 判定期的 new_backup_lba / new_last_usable 是旧快照：两步之间表或容器可能被
-            // 外部改动。落盘的头必须满足自身不变量，故修复参数一律从重读结果重新推导，
-            // 并经 ValidatedGeometry::new 复核（条目数、覆盖关系、备份元数据上界）后提交
+            // 执行的是判定期那个动作：new_last_usable 已经算好并随动作携带，重读只用来
+            // 确认动作仍成立。两步之间表或容器可能被外部改动——重新分类的结果与动作
+            // 不一致即拒绝（此刻尚未写盘），不拿重读结果另算一个上界
             let g = table::load_gpt(src)
                 .map_err(|e| Fail::infra_io(table::into_io_error(e)))?
                 .ok_or_else(|| Fail::infra("GPT vanished before repair"))?;
             let file_last_lba = table::container_last_lba(src, g.ss);
-            let new_last_usable = repaired_last_usable(&g, file_last_lba)
-                .map_err(|e| Fail::infra(e.to_string()))?;
+            let now = classify_repair(&g, file_last_lba).map_err(|e| Fail::infra(e.to_string()))?;
+            if now != *action {
+                return Err(Fail::infra(
+                    "GPT changed between validation and repair — re-run the command",
+                ));
+            }
+            let Some(new_last_usable) = action.new_last_usable() else {
+                return Err(Fail::infra("repair action is missing its last_usable value"));
+            };
+            // ValidatedGeometry::new 复核条目数、覆盖关系与备份元数据上界
             let vg = ValidatedGeometry::new(&g, file_last_lba, Some(new_last_usable))
                 .map_err(|e| Fail::infra(e.to_string()))?;
             vg.commit(src).map_err(|e| Fail::failed(e.to_string()))?;

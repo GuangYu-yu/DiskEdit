@@ -2,22 +2,28 @@
 
 use super::*;
 
+/// 表项已写盘之后的失败：任何分类都不再能断言"本次未写盘"，
+/// 出口语义一律压成 `Failed`（报告带"盘可能已改变"的警示）
+fn after_table_write(f: Fail) -> Fail {
+    match f {
+        Fail::Refused(m) | Fail::Infra(m) => Fail::failed(m),
+        Fail::Failed(m) => Fail::Failed(m),
+    }
+}
+
 /// MBR 分区被扩到更大之后的收尾：FS 步（swap 重建 / FS 扩容）→ 内核重读 → 统一收尾。
 /// grow-to-end 与显式 SIZE 扩容的后置条件完全相同，故两条路径共用本函数——
 /// FS 步是后置条件的一部分，缺了会"分区变大、文件系统没变大"却报成功。
-/// 表写入要等收尾才提交，故两个写盘臂都先落不可回滚屏障：外部工具一旦写完，回滚表项
-/// 就会留下"表小于内容"的自相矛盾（与 GPT 侧 finalize_growth 同一不变量；只探测不写盘
-/// 的分支不落——那里的表写入仍可安全回滚）
-/// `table_written` 决定是否需要内核重读；p 是**扩容前**解析出的条目（swap 头部探测用它
-/// 原区间，原尺寸是 LVM 位移的基线）
+/// 调用点均已把新表项写盘，故表写入不再可回滚：外部 FS 工具一旦写完，回滚表项
+/// 就会留下"表小于内容"的自相矛盾（与 GPT 侧 finalize_growth 同一不变量）。
+/// p 是**扩容前**解析出的条目（swap 头部探测用它原区间，原尺寸是 LVM 位移的基线）
 pub(crate) fn mbr_grow_finish(
     a: &Args,
     src: &mut FileSource,
     p: &table::MbrPartition,
-    table_written: bool,
     is_pv: bool,
     is_block: bool,
-) -> u8 {
+) -> crate::outcome::Outcome {
     let part = p.num;
     let ss = src.sector_size;
     let cur_bytes = lba_bytes(p.size_lba as u64, ss);
@@ -27,10 +33,7 @@ pub(crate) fn mbr_grow_finish(
         // 区域取自**当前**表（本轮可能已写表）：起点与长度都以盘上现状为准。
         // 此处已越过写盘，判定失败不再有"本次未写盘"的出口语义，故 Refused 按 Failed 如实报
         let (base, len) = crate::gpt_policy::partition_bytes(src, part)
-            .map_err(|f| match f {
-                Fail::Refused(m) => Fail::failed(m),
-                other => other,
-            })
+            .map_err(after_table_write)
             .unwrap_or_else(|f| bail_fail(f));
         match fsops::grow_target_at(src, part, base, len) {
             // 走到这里的是写盘前已放行、没有可扩 FS 的那几种：首启 overlay、PV，以及页格式
@@ -93,42 +96,33 @@ pub(crate) fn mbr_grow_finish(
                 Fail::Refused(why) => pending.push(crate::outcome::Pending::new(
                     part, crate::outcome::PendingKind::Fs, why, String::new(),
                 )),
-                other => bail_fail(other),
+                other => bail_fail(after_table_write(other)),
             },
         }
     }
     if pending.is_empty() {
-        // 表已写 → 走统一收尾（内核重读 + 报告）；未写表则无需重读
-        let o = if table_written {
-            settle_layout(crate::outcome::Outcome::applied_with(Vec::new()), src)
-        } else {
-            crate::outcome::Outcome::applied_with(Vec::new())
-        };
+        // 表已写 → 统一收尾（内核重读 + 报告）
+        let o = settle_layout(crate::outcome::Outcome::applied_with(Vec::new()), src);
         return finish_resize(a, o, Some(src), part, is_pv, is_block, cur_bytes);
     }
     let mut o = crate::outcome::Outcome::applied_with(pending);
-    if table_written && !kernel_resync(src) {
+    if !kernel_resync(src) {
         o.mark_kernel_stale();
     }
-    if table_written {
-        o.report();
-    } else {
-        // SIZE 与现状相同 ⇒ 表一个字节都没改：不能沿用"表已更新"的措辞
-        o.report_pending_without_table_claim();
-    }
+    o.report();
     // PV 的 pvresize/lvextend 链是本次操作的后置条件之一，不因 swap 等外层待办而跳过：
     // finish_resize 只在非 PV 的未完成结果上早退，PV 则照常进链，并以两者中更严重的
     // 退出码收口。链自身的失败在 resize_done 内另报，与上面的待办清单不是同一条
     if is_pv {
         return finish_resize(a, o, Some(src), part, is_pv, is_block, cur_bytes);
     }
-    o.exit_code()
+    o
 }
 
 /// resize 的 MBR 分支（仅主分区 1..4；逻辑分区与扩展容器不支持）。原位纯扩缩：扩须右侧
 /// 空闲足够（MBR 无搬移能力），缩走与 GPT 相同的"FS 先缩 → 写表"守卫链。块设备复用在线
 /// 路径（基于 sysfs + sfdisk，与表类型无关）
-pub(crate) fn cmd_resize_msdos(a: &Args, pref: PartSelector, req: &SizeRequest, src_ro: &FileSource) -> u8 {
+pub(crate) fn cmd_resize_msdos(a: &Args, pref: PartSelector, req: &SizeRequest, src_ro: &FileSource) -> crate::outcome::Outcome {
     // MBR resize 没有搬移能力：--allow-move 承诺的"搬开挡路分区"不存在，
     // 静默按不可搬移处理会让来自脚本的调用只看到一条"空间不足"
     if a.allow_move {
@@ -169,8 +163,8 @@ pub(crate) fn cmd_resize_msdos(a: &Args, pref: PartSelector, req: &SizeRequest, 
     // 块设备在线路径：与 GPT 同一份实现，随表类型变的只有右侧空闲数。目标长度同样
     // 交给 mbr_decider 在在线自己的锁下重解析（理由见 gpt_decider）
     #[cfg(target_os = "linux")]
-    if let Some(code) = resize_online(a, src_ro, part, is_pv, mbr_decider(req, part, is_pv)) {
-        return code;
+    if let Some(o) = resize_online(a, src_ro, part, is_pv, mbr_decider(req, part, is_pv)) {
+        return o;
     }
 
     // 离线路径
@@ -201,8 +195,14 @@ pub(crate) fn cmd_resize_msdos(a: &Args, pref: PartSelector, req: &SizeRequest, 
     let (target, _) = resolve_size_request(req, cur_bytes).unwrap_or_else(|f| bail_fail(f));
     let shrinking = target.is_some_and(|t| t < cur_bytes);
     check_pv_intent(part, fstype, is_pv, shrinking, a.grow_lv, a.no_fs).unwrap_or_else(|f| bail_fail(f));
-    // 占用复核在锁下（离线选择时的探测在锁前）：首次落盘前确认分区仍空闲，与 GPT 分支同闸
-    crate::fsops::ensure_idle_before_write(&src, part, lba_bytes(p.start_lba as u64, ss)).unwrap_or_else(|f| bail_fail(f));
+    // 占用复核在锁下（离线选择时的探测在锁前）：首次落盘前确认分区仍空闲，与 GPT 分支闸同源。
+    // 起点不变、末端不变或只增的请求不挪动上层 DM 栈映射的扇区，按 Extend 放行；缩容要求无持有者
+    let edit = if grow_to_end || target.is_some_and(|b| b >= cur_bytes) {
+        crate::fsops::WriteKind::Extend
+    } else {
+        crate::fsops::WriteKind::Overwrite
+    };
+    crate::fsops::ensure_idle_before_write(&src, part, lba_bytes(p.start_lba as u64, ss), edit).unwrap_or_else(|f| bail_fail(f));
     let total_sectors = src.size / ss;
     // 后置条件含 FS 调整：请求在扩（`grow` 即便右侧无空闲，也仍要把 FS 扩满现分区，见下面
     // free == 0 那支）就必须在写表之前问出"里面是什么、那一步做得了吗"——判据与 GPT 路径
@@ -229,7 +229,7 @@ pub(crate) fn cmd_resize_msdos(a: &Args, pref: PartSelector, req: &SizeRequest, 
         }
         table::resize_mdos_entry(&mut src, part, new_size_lba as u32)
             .unwrap_or_else(|f| bail_fail(f));
-        mbr_grow_finish(a, &mut src, p, true, is_pv, is_block)
+        mbr_grow_finish(a, &mut src, p, is_pv, is_block)
     } else {
         let Some(bytes) = target else { crate::args::usage() };
         if bytes < ss {
@@ -240,19 +240,24 @@ pub(crate) fn cmd_resize_msdos(a: &Args, pref: PartSelector, req: &SizeRequest, 
             bail_fail(Fail::refused(format!("size {new_size_lba} sectors exceeds MBR 32-bit LBA limit")));
         }
         // 越界与右侧空闲都已判定，note 不再跟在一条拒绝后面
-        if new_size_lba >= p.size_lba as u64 {
-            // no-op（==）不触发缩容守卫链；扩（>）须右侧空闲足够
+        if new_size_lba == p.size_lba as u64 {
+            // 请求的终点就是现状：表与 FS 都不动（GPT 路径对未变尺寸同样判 FsAction::Leave）。
+            // 不跑 FS 步，请求"什么都不改"就不会因外部工具缺失而拿到非零退出码
+            crate::support::note_sector_truncation("resizing to", bytes, ss);
+            println!("partition {part} is already {cur_bytes} bytes — nothing to do");
+            // 表与 FS 都没动：事务已完成且没有待办
+            return crate::outcome::Outcome::applied_with(Vec::new());
+        }
+        if new_size_lba > p.size_lba as u64 {
             let want = new_size_lba - p.size_lba as u64;
             if want > free_right_msdos(&mbr, p, total_sectors) {
                 bail_fail(Fail::refused("not enough contiguous free space to the right (MBR resize cannot relocate blocking partitions)".to_string()));
             }
             crate::support::note_sector_truncation("resizing to", bytes, ss);
-            if want > 0 {
-                table::resize_mdos_entry(&mut src, part, new_size_lba as u32)
-                    .unwrap_or_else(|f| bail_fail(f));
-            }
+            table::resize_mdos_entry(&mut src, part, new_size_lba as u32)
+                .unwrap_or_else(|f| bail_fail(f));
             // 分区层做完 → 与 grow-to-end 同一条收尾
-            mbr_grow_finish(a, &mut src, p, want > 0, is_pv, is_block)
+            mbr_grow_finish(a, &mut src, p, is_pv, is_block)
         } else {
             // 缩：与 movepart GPT 路径同守卫链——FS 先缩成功才写表。
             // --no-fs 与缩容不可共存（分区末端会切进未缩的 FS 元数据），与 GPT 同判据

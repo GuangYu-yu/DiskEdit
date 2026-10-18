@@ -145,6 +145,9 @@ pub fn mkfs_capability(fstype: MkfsFs) -> Result<(), FsError> {
 /// 防旧 btrfs/ZFS/RAID 备份超级块残留被 blkid 误认
 pub fn mkfs(src: &FileSource, part: u32, fstype: MkfsFs) -> Result<(), FsError> {
     let tool = mkfs_tool(fstype)?;
+    // 能力检查必须发生在任何写盘之前：wipe_zero 一旦开始就不可回滚，工具缺失时
+    // 目标上"什么都没写"的承诺只能在第一次擦除之前作出
+    mkfs_capability(fstype)?;
     // 区间只解析一次：擦除区间与实际建立的那个设备必须同源——分两次读表的话，
     // 两次读数之间表被改动会让"擦哪一段"与"擦的是哪个设备"对不上
     let (part_off, part_len) = scope_byte_range(src, &DeviceScope::Partition(part))?;

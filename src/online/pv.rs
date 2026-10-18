@@ -108,16 +108,22 @@ pub(crate) fn verify_lock_identity(
 /// 判定发生在锁下、与首次写盘之间无窗口；有了这道闸，命令成功后 main 的
 /// drop_journal 只会碰到"不存在"的候选——绝无"删掉别人可回滚凭据"的可能
 pub(crate) fn refuse_if_scene_active(t: &OnlineTarget) -> Result<(), Outcome> {
-    // 只读打开整盘：闸口只读现场（journal / checkpoint 候选），不申请写权限
-    let src = crate::dev::FileSource::open_read_only(&t.disk_dev)
+    // 只读打开**分区**节点：闸口只读现场（journal / checkpoint 候选），不申请写权限。
+    // 身份按分区节点解析时，盘级键与旧版按分区命名的历史候选会被一并列出——undo
+    // /dev/sdXN 正是按后者枚举的，用整盘身份会漏掉那些现场
+    let part = crate::dev::FileSource::open_read_only(&t.part_dev)
+        .map_err(|e| Outcome::infra(format!("open failed: {e}")))?;
+    // 历史 GUID 命名的 checkpoint 只能从整盘的表读：分区节点的 0 偏移不是 GPT 头
+    let disk = crate::dev::FileSource::open_read_only(&t.disk_dev)
         .map_err(|e| Outcome::infra(format!("open failed: {e}")))?;
     // 只传主语：后半句 "writes outside the undo journal" 由 refuse_if_active 统一拼
     //（与之并列的调用点传的是命令名，如 "resizefs" / "check"）。
     // 在线路径的两种入口共用本闸口：挂载中的块设备，与被 device-mapper 持有的
     // LVM PV——两者的续跑出路都是先退出在线形态（卸载 / 停用卷组）再走离线分支，
     // busy 文案里的"重跑续跑"只有在离线分支才真正可达，故在此附上提示
-    crate::transaction::TransactionManager::refuse_if_active(
-        &src,
+    crate::transaction::TransactionManager::refuse_if_active_at(
+        &part,
+        &disk,
         "online resize",
     )
     .map_err(|f| f.context("a re-run would take the online path again and cannot resume the job — unmount the target (for an LVM PV: deactivate its volume group) to reach the resume path"))
