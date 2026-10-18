@@ -59,7 +59,9 @@ pub(crate) fn collect_neighbours(sysroot: &Path, skip: impl Fn(&Path) -> bool) -
 /// multi-device/bind 挂载不支持
 pub(crate) fn resolve_part_dev(mountpoint: &Path) -> io::Result<(PathBuf, PathBuf)> {
     let mnt = fs::canonicalize(mountpoint)?;
-    let entries = crate::fsops::read_mounts()?;
+    // 本命名空间的挂载表：叠挂判定针对"此刻在这台机器上叠上去的层"，
+    // 全命名空间视图会把同一挂载经 shared 传播进其他命名空间的副本也算进来
+    let entries = crate::fsops::read_own_mounts()?;
     let mnt_str = mnt.to_string_lossy().into_owned();
     let raw_str = mountpoint.to_string_lossy().into_owned();
     // 同一挂载点多条记录 = 发生过叠挂（overmount）：mountinfo 里首条是被遮的下层，

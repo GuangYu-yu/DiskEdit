@@ -110,13 +110,34 @@ pub(crate) fn read_mounts() -> io::Result<Vec<MountEntry>> {
             Err(e) if skippable_mountinfo_error(&e) => continue,
             Err(e) => return Err(io::Error::other(format!("cannot read {}: {e}", path.display()))),
         };
-        for l in s.lines() {
-            out.push(parse_mountinfo(l).ok_or_else(|| {
-                io::Error::other(format!("unparseable {} line: {l}", path.display()))
-            })?);
-        }
+        append_mountinfo(&mut out, &s, &path)?;
     }
     Ok(out)
+}
+
+/// 本进程 mount namespace 的挂载表（/proc/self/mountinfo）。
+///
+/// 占用闸之外的场景（在线流程解析挂载点/判叠挂）必须用这一份而不是
+/// [`read_mounts`]：宿主的 shared 传播会把同一挂载带进其他命名空间，全命名空间
+/// 视图里同一条记录出现多份，叠挂判定会把"同一个挂载的多个视图"误读成
+/// "mounted multiple times"
+#[cfg(target_os = "linux")]
+pub(crate) fn read_own_mounts() -> io::Result<Vec<MountEntry>> {
+    let path = std::path::Path::new("/proc/self/mountinfo");
+    let s = std::fs::read_to_string(path)?;
+    let mut out = Vec::new();
+    append_mountinfo(&mut out, &s, path)?;
+    Ok(out)
+}
+
+#[cfg(target_os = "linux")]
+fn append_mountinfo(out: &mut Vec<MountEntry>, s: &str, path: &std::path::Path) -> io::Result<()> {
+    for l in s.lines() {
+        out.push(parse_mountinfo(l).ok_or_else(|| {
+            io::Error::other(format!("unparseable {} line: {l}", path.display()))
+        })?);
+    }
+    Ok(())
 }
 
 /// sysfs 组件名是否为 loop 设备本身（`loop0`）；`loop0p1` 这类分区名不算——
@@ -288,15 +309,26 @@ const LOOP_GET_STATUS64: libc::c_int = 0x4C05;
 /// `fstat` 的 `st_dev` 同一编码。这条判定不经过任何用户态可见的文件名，所以
 /// backing file 的路径在本 mount namespace 不可解析时仍能命中。
 /// ENXIO（内核在 `lo_state != Lo_bound` 时的返回）是确定的"没有绑定文件"，
-/// 不算探测失败；打不开设备节点、ioctl 被拒、getattr 失败都无法确认，上抛后由
-/// 调用方按 fail-closed 拒绝
+/// 不算探测失败；ioctl 被拒、getattr 失败都无法确认，上抛后由调用方按
+/// fail-closed 拒绝。
+///
+/// 打不开设备节点（`PermissionDenied`）单独处理：节点属 root:disk 0660，无 disk
+/// 组的用户打不开任何 loop，而建立绑定也发生在同一权限类里（loop-control 与 loop
+/// 节点同组属）——打不开节点的一方也建不出指向本镜像的绑定，该方自己的占用始终
+/// 可查。把这种 EACCES 当探测失败会让非 root 用户的所有镜像操作报废。若 udev
+/// 放开 loop-control 而收紧 loop 节点，这条跳过会漏检绑定；边界随内核/udev 的
+/// 权限模型演进
 #[cfg(target_os = "linux")]
 fn loop_backing_identity(name: &str) -> io::Result<Option<(u64, u64)>> {
     use std::os::unix::io::AsRawFd;
     let path = format!("/dev/{name}");
-    let f = std::fs::File::open(&path).map_err(|e| {
-        io::Error::other(format!("cannot open {path} to verify its backing file: {e}"))
-    })?;
+    let f = match std::fs::File::open(&path) {
+        Ok(f) => f,
+        Err(e) if e.kind() == io::ErrorKind::PermissionDenied => return Ok(None),
+        Err(e) => {
+            return Err(io::Error::other(format!("cannot open {path} to verify its backing file: {e}")));
+        }
+    };
     let mut info: LoopInfo64 = unsafe { std::mem::zeroed() };
     let rc = unsafe { libc::ioctl(f.as_raw_fd(), LOOP_GET_STATUS64 as _, &mut info) };
     if rc != 0 {

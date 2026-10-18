@@ -56,7 +56,9 @@ pub fn range_free(start: u64, len: u64, others: &[(u64, u64)]) -> bool {
 /// 读失败如实上抛：折叠成"未挂载"会让离线写表在挂载中的分区上开跑。
 /// disk_name = 盘节点文件名（如 "sda"）；dm/mapper 等无法反解的设备不算命中
 pub fn find_mountpoint(disk_name: &str, pno: u32) -> std::io::Result<Option<PathBuf>> {
-    let entries = crate::fsops::read_mounts()?;
+    // 本命名空间的表：在线流程随后要在同一命名空间里对返回的挂载点跑 FS 工具，
+    // 别的命名空间里的挂载点路径在这里解析不了
+    let entries = crate::fsops::read_own_mounts()?;
     for e in &entries {
         if part_in_use(&e.source, disk_name, pno)? {
             return Ok(Some(PathBuf::from(&e.mount_point)));
