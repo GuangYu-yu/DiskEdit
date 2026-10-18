@@ -109,7 +109,7 @@ pub(crate) fn sysfs_node(path: &Path) -> io::Result<PathBuf> {
         )
     };
     let meta = std::fs::metadata(path).map_err(|e| deny(e.to_string()))?;
-    sysfs_node_from_rdev(meta.rdev())
+    sysfs_node_from_rdev(meta.rdev()).map_err(|e| deny(e.to_string()))
 }
 
 /// 已打开设备的 sysfs 目录：按 fd 的 rdev 反查 `/sys/dev/block/<maj>:<min>`。
