@@ -64,69 +64,171 @@ pub(crate) fn parse_mountinfo(line: &str) -> Option<MountEntry> {
     })
 }
 
-/// 读取 /proc/self/mountinfo。任何一行解析失败都整体报错：调用方的契约是
-/// "确认不了空闲即不算空闲"（见 probe_occupancy），跳过坏行会把目标设备恰好
-/// 落在那一行上的情形误判成未挂载——宁可整个操作拒做
+/// `/proc/<pid>/mountinfo` 读取失败时，哪些 errno 能证明"该进程已不引用挂载命名空间"：
+/// - `NotFound`：遍历窗口内退出
+/// - `ESRCH`：读到目录项时进程已消失
+/// - `EINVAL`：nsproxy 已清空——内核 `mounts_open_common` 在 `!nsp || !nsp->mnt_ns`
+///   时返回 EINVAL（fs/proc_namespace.c），该进程不再引用任何挂载
+///
+/// 权限不足（`EACCES`）不在此列：`hidepid` 隐藏的是"能不能看"，不是"有没有挂载"。
+/// 读不到别人的 mountinfo 时，那些命名空间里的挂载仍然可能存在，按探测失败上抛
 #[cfg(target_os = "linux")]
-pub(crate) fn read_mounts() -> io::Result<Vec<MountEntry>> {
-    let s = std::fs::read_to_string("/proc/self/mountinfo")?;
-    s.lines().map(|l| {
-        parse_mountinfo(l)
-            .ok_or_else(|| io::Error::other(format!("unparseable /proc/self/mountinfo line: {l}")))
-    }).collect()
+fn skippable_mountinfo_error(e: &io::Error) -> bool {
+    e.kind() == io::ErrorKind::NotFound
+        || matches!(e.raw_os_error(), Some(libc::ESRCH | libc::EINVAL))
 }
 
-/// 设备占用探测结果（/proc/self/mountinfo + /proc/swaps，路径与 st_rdev 并集匹配）。
-/// FS 操作要求分区未挂载、未作 swap 是本工具策略，内核并不强制（man resize2fs：
+/// 读取所有可读进程的 mountinfo。同一个设备可以在别的 mount namespace 里挂载，
+/// 只看 /proc/self 会把那种占用漏成空闲（容器经 --device 拿到宿主设备即是一例）。
+/// 逐 PID 读取，按 nsfs 的 (dev, ino) 去重——同一命名空间的进程给出同一份视图。
+/// 只有能证明"该进程已不引用挂载命名空间"的读取失败才跳过（见
+/// [`skippable_mountinfo_error`]）；权限不足意味着无法确认，按探测失败上抛。
+/// 任何一行解析失败都整体报错：调用方的契约是 "确认不了空闲即不算空闲"
+/// （见 probe_occupancy），跳过坏行会把目标设备恰好落在那一行上的情形误判成未挂载
+/// ——宁可整个操作拒做
+#[cfg(target_os = "linux")]
+pub(crate) fn read_mounts() -> io::Result<Vec<MountEntry>> {
+    use std::os::unix::fs::MetadataExt;
+    let mut out = Vec::new();
+    let mut namespaces = std::collections::HashSet::new();
+    for entry in std::fs::read_dir("/proc")? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        if name.is_empty() || !name.bytes().all(|b| b.is_ascii_digit()) {
+            continue;
+        }
+        // 取不到命名空间身份（权限/竞态）就不去重，照常尝试读取它
+        if let Ok(m) = std::fs::metadata(entry.path().join("ns/mnt"))
+            && !namespaces.insert((m.dev(), m.ino()))
+        {
+            continue;
+        }
+        let path = entry.path().join("mountinfo");
+        let s = match std::fs::read_to_string(&path) {
+            Ok(s) => s,
+            Err(e) if skippable_mountinfo_error(&e) => continue,
+            Err(e) => return Err(io::Error::other(format!("cannot read {}: {e}", path.display()))),
+        };
+        for l in s.lines() {
+            out.push(parse_mountinfo(l).ok_or_else(|| {
+                io::Error::other(format!("unparseable {} line: {l}", path.display()))
+            })?);
+        }
+    }
+    Ok(out)
+}
+
+/// sysfs 组件名是否为 loop 设备本身（`loop0`）；`loop0p1` 这类分区名不算——
+/// 尾部不是纯数字
+#[cfg(target_os = "linux")]
+fn is_loop_name(s: &str) -> bool {
+    s.len() > 4 && s.starts_with("loop") && s[4..].bytes().all(|b| b.is_ascii_digit())
+}
+
+/// 一个块设备 sysfs 目录下的持有者（`holders/` 的项名，如 `dm-0`、`md0`）。
+/// 持有者表示该设备正被另一个块设备栈当作底层使用。目录读不出来按探测失败上抛：
+/// "确认不了没人持有"不能读成"没人持有"
+#[cfg(target_os = "linux")]
+fn holders_at(sysdir: &Path) -> io::Result<Vec<String>> {
+    let dir = sysdir.join("holders");
+    let rd = std::fs::read_dir(&dir)
+        .map_err(|e| io::Error::other(format!("cannot read {}: {e}", dir.display())))?;
+    let mut out = Vec::new();
+    for entry in rd {
+        let entry = entry.map_err(|e| io::Error::other(format!("cannot read {}: {e}", dir.display())))?;
+        out.push(entry.file_name().to_string_lossy().into_owned());
+    }
+    Ok(out)
+}
+
+/// 设备号所属块设备的持有者。调用方已 stat 出 rdev（探测里免得再 stat 一次）
+#[cfg(target_os = "linux")]
+fn holders_of_rdev(rdev: u64) -> io::Result<Vec<String>> {
+    let sysdir = Path::new("/sys/dev/block")
+        .join(format!("{}:{}", libc::major(rdev), libc::minor(rdev)));
+    holders_at(&sysdir)
+}
+
+/// 设备占用探测结果（所有可读 mount namespace 的 mountinfo + /proc/swaps +
+/// 块设备持有者，路径、st_rdev 与 sysfs holders 并集匹配）。FS 操作要求分区未挂载、
+/// 未作 swap、未被别的块设备栈持有，是本工具策略，内核并不强制（man resize2fs：
 /// 内核支持在线扩容时可直接扩已挂载的 ext）；挂载态扩容走 xfs/btrfs 的临时挂载路径，
 /// 不经此判定
 #[cfg(target_os = "linux")]
 pub(crate) enum Occupancy {
-    /// 未挂载且非活动 swap
+    /// 未挂载且非活动 swap、无持有者
     Idle,
     /// 挂载表中命中
     Mounted,
     /// /proc/swaps 命中
     ActiveSwap,
+    /// `/sys/dev/block/<maj>:<min>/holders` 非空：设备被另一个块设备栈当作底层使用
+    /// （LVM PV / dm-crypt / MD 成员 / loop 源）。栈顶设备才是挂载表里出现的那个名字，
+    /// 底层设备本身看不见挂载或 swap 记录
+    Held(Vec<String>),
 }
 
 /// 探测设备节点的占用状态。Err = 探测本身失败——调用方一律 fail-closed，
 /// "确认不了空闲"不得当成"空闲"
 #[cfg(target_os = "linux")]
 pub(crate) fn probe_occupancy(dev: &str) -> io::Result<Occupancy> {
+    let mounts = read_mounts()?;
+    let swaps = std::fs::read_to_string("/proc/swaps")?;
+    probe_occupancy_with(&mounts, &swaps, dev)
+}
+
+/// 判据本体。挂载表与 swap 表由调用方一次读好：整盘逐分区判定时不必重复扫描 /proc
+#[cfg(target_os = "linux")]
+fn probe_occupancy_with(mounts: &[MountEntry], swaps: &str, dev: &str) -> io::Result<Occupancy> {
     use std::os::unix::fs::MetadataExt;
     let m = std::fs::metadata(dev).map_err(|e| {
         io::Error::other(format!("cannot stat {dev} to confirm it is unmounted: {e}"))
     })?;
     let rdev = m.rdev();
     let dev_no = (libc::major(rdev) as u64, libc::minor(rdev) as u64);
-    let entries = read_mounts()?;
-    // 双判据取并集：dev_no（st_rdev）之外比对 source 路径——btrfs 成员挂载在 mountinfo
-    // 字段 3 报匿名设备号（anon bdev，与成员分区 st_rdev 必不相同），但 source 仍是
-    // 成员设备路径，单靠 dev_no 会漏检
-    if entries.iter().any(|e| e.dev_no == dev_no || e.source == dev) {
+    if mounted_in(mounts, dev, dev_no) {
         return Ok(Occupancy::Mounted);
     }
-    let swaps = std::fs::read_to_string("/proc/swaps")?;
-    for line in swaps.lines().skip(1) {
-        if let Some(field) = line.split_whitespace().next() {
-            // 同一设备的两种判据取并集：路径相同，或 st_rdev 相同。stat 失败时两项都
-            // 无法确认，按本函数的 fail-closed 口径报错——当成"这一项不是目标"就是
-            // 把"确认不了"读成"空闲"
-            if field == dev {
-                return Ok(Occupancy::ActiveSwap);
-            }
-            let fm = std::fs::metadata(field).map_err(|e| {
-                io::Error::other(format!(
-                    "cannot stat swap entry {field} to confirm {dev} is not active as swap: {e}"
-                ))
-            })?;
-            if fm.rdev() == rdev {
-                return Ok(Occupancy::ActiveSwap);
-            }
-        }
+    if active_swap_in(swaps, dev, rdev)? {
+        return Ok(Occupancy::ActiveSwap);
+    }
+    let holders = holders_of_rdev(rdev)?;
+    if !holders.is_empty() {
+        return Ok(Occupancy::Held(holders));
     }
     Ok(Occupancy::Idle)
+}
+
+/// mountinfo 里是否有指向该设备的记录。双判据取并集：dev_no（st_rdev）之外比对
+/// source 路径——btrfs 成员挂载在 mountinfo 字段 3 报匿名设备号（anon bdev，与成员
+/// 分区 st_rdev 必不相同），但 source 仍是成员设备路径，单靠 dev_no 会漏检
+#[cfg(target_os = "linux")]
+fn mounted_in(entries: &[MountEntry], dev: &str, dev_no: (u64, u64)) -> bool {
+    entries.iter().any(|e| e.dev_no == dev_no || e.source == dev)
+}
+
+/// /proc/swaps 里是否有该设备。同一设备的两种判据取并集：路径相同，或 st_rdev 相同。
+/// stat 失败时两项都无法确认，按本模块的 fail-closed 口径报错——当成"这一项不是目标"
+/// 就是把"确认不了"读成"空闲"
+#[cfg(target_os = "linux")]
+fn active_swap_in(swaps: &str, dev: &str, rdev: u64) -> io::Result<bool> {
+    use std::os::unix::fs::MetadataExt;
+    for line in swaps.lines().skip(1) {
+        let Some(field) = line.split_whitespace().next() else { continue };
+        if field == dev {
+            return Ok(true);
+        }
+        let fm = std::fs::metadata(field).map_err(|e| {
+            io::Error::other(format!(
+                "cannot stat swap entry {field} to confirm {dev} is not active as swap: {e}"
+            ))
+        })?;
+        if fm.rdev() == rdev {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// FS 步的占用闸：占用或探测失败都拒绝（fail-closed——探测失败若被当作
@@ -135,6 +237,10 @@ pub(crate) fn probe_occupancy(dev: &str) -> io::Result<Occupancy> {
 pub(crate) fn require_unmounted(dev: &str) -> Result<(), FsError> {
     match probe_occupancy(dev) {
         Ok(Occupancy::Idle) => Ok(()),
+        Ok(Occupancy::Held(holders)) => Err(FsError::Io(io::Error::other(format!(
+            "{dev} is held by {} — deactivate that stack first (FS operations require an unmounted partition)",
+            holders.join(", ")
+        )))),
         Ok(o) => Err(FsError::Io(io::Error::other(match o {
             Occupancy::Mounted => format!("{dev} is mounted — unmount/deactivate first (FS operations require an unmounted partition)"),
             _ => format!("{dev} is active as swap — unmount/deactivate first (FS operations require an unmounted partition)"),
@@ -150,90 +256,214 @@ pub(crate) fn require_unmounted(_dev: &str) -> Result<(), FsError> {
     Ok(())
 }
 
-/// dev_no（major, minor）所属 loop 设备的 backing 文件；不是 loop 或解析不出来 ⇒ None
+/// `struct loop_info64`（include/uapi/linux/loop.h）：LOOP_GET_STATUS64 的载荷。
+/// 只用到前两个字段，但 ioctl 按整个结构体拷贝，布局必须与内核逐字节一致
 #[cfg(target_os = "linux")]
-pub(crate) fn loop_backing_of(dev_no: (u64, u64)) -> Option<std::path::PathBuf> {
-    let real = std::fs::canonicalize(
-        Path::new("/sys/dev/block").join(format!("{}:{}", dev_no.0, dev_no.1)),
-    )
-    .ok()?;
-    // 设备 kobject 路径上出现 `loopN` 即说明是 loop（或它的分区）：分区名形如 loop0p1，
-    // 尾部不是纯数字，故只认首个 `loop` + 全数字的组件
-    let loop_name = real
-        .components()
-        .map(|c| c.as_os_str().to_string_lossy().into_owned())
-        .find(|s| s.len() > 4 && s.starts_with("loop") && s[4..].bytes().all(|b| b.is_ascii_digit()))?;
-    let raw = std::fs::read_to_string(
-        Path::new("/sys/block").join(&loop_name).join("loop/backing_file"),
-    )
-    .ok()?;
-    let raw = raw.trim();
-    // backing 已被删除时内核在路径后附 " (deleted)"
-    let raw = raw.strip_suffix(" (deleted)").unwrap_or(raw);
-    if raw.is_empty() {
-        return None;
-    }
-    Some(std::fs::canonicalize(raw).unwrap_or_else(|_| std::path::PathBuf::from(raw)))
+#[repr(C)]
+struct LoopInfo64 {
+    lo_device: u64,
+    lo_inode: u64,
+    lo_rdevice: u64,
+    lo_offset: u64,
+    lo_sizelimit: u64,
+    lo_number: u32,
+    lo_encrypt_type: u32,
+    lo_encrypt_key_size: u32,
+    lo_flags: u32,
+    lo_file_name: [u8; 64],
+    lo_crypt_name: [u8; 64],
+    lo_encrypt_key: [u8; 32],
+    lo_init: [u64; 2],
 }
 
-/// 指向同一镜像的 loop 中，哪一个正被占用（挂载或活动 swap），返回它的设备路径。
+/// include/uapi/linux/loop.h：LOOP_GET_STATUS64
+#[cfg(target_os = "linux")]
+const LOOP_GET_STATUS64: libc::c_int = 0x4C05;
+
+/// loop 设备当前绑定的 backing 文件身份 `(st_dev, st_ino)`；未绑定返回 None。
+///
+/// 内核 `loop_get_status` 对 backing file 的 `f_path` 做 `vfs_getattr`，把
+/// `huge_encode_dev(stat.dev)` 与 `stat.ino` 填进 `lo_device` / `lo_inode`；
+/// `huge_encode_dev` 就是 `new_encode_dev`（include/linux/kdev_t.h），与用户态
+/// `fstat` 的 `st_dev` 同一编码。这条判定不经过任何用户态可见的文件名，所以
+/// backing file 的路径在本 mount namespace 不可解析时仍能命中。
+/// ENXIO（内核在 `lo_state != Lo_bound` 时的返回）是确定的"没有绑定文件"，
+/// 不算探测失败；打不开设备节点、ioctl 被拒、getattr 失败都无法确认，上抛后由
+/// 调用方按 fail-closed 拒绝
+#[cfg(target_os = "linux")]
+fn loop_backing_identity(name: &str) -> io::Result<Option<(u64, u64)>> {
+    use std::os::unix::io::AsRawFd;
+    let path = format!("/dev/{name}");
+    let f = std::fs::File::open(&path).map_err(|e| {
+        io::Error::other(format!("cannot open {path} to verify its backing file: {e}"))
+    })?;
+    let mut info: LoopInfo64 = unsafe { std::mem::zeroed() };
+    let rc = unsafe { libc::ioctl(f.as_raw_fd(), LOOP_GET_STATUS64 as _, &mut info) };
+    if rc != 0 {
+        let e = io::Error::last_os_error();
+        return match e.raw_os_error() {
+            Some(libc::ENXIO) => Ok(None),
+            _ => Err(io::Error::other(format!("LOOP_GET_STATUS64 on {path} failed: {e}"))),
+        };
+    }
+    Ok(Some((info.lo_device, info.lo_inode)))
+}
+
+/// 指向本镜像的 loop 被使用的两种形态
+#[cfg(target_os = "linux")]
+pub(crate) enum LoopOccupancy {
+    /// loop 本身或它的分区被挂载或是活动 swap：字段是那个设备路径
+    Live(String),
+    /// loop（或 `losetup -P` 展开出的分区）被上层块设备栈持有
+    Held { loopdev: String, holders: Vec<String> },
+}
+
+/// 一个 loop 及其 `losetup -P` 展开出的分区：`(设备名, sysfs 目录)`。
+/// `partition` 属性存在即为分区；除 NotFound 之外的读取失败都上抛——确认不了哪个
+/// 目录是分区，就可能漏掉那个节点上的占用。属性文件（`uevent`、`size` 等）不是候选，
+/// 对它们拼 `partition` 只会得到 ENOTDIR
+#[cfg(target_os = "linux")]
+fn loop_and_partitions(sysdir: &Path, name: &str) -> io::Result<Vec<(String, PathBuf)>> {
+    let mut out = vec![(name.to_string(), sysdir.to_path_buf())];
+    for child in std::fs::read_dir(sysdir)? {
+        let child = child?;
+        let is_dir = child
+            .file_type()
+            .map_err(|e| io::Error::other(format!("cannot stat {}: {e}", child.path().display())))?
+            .is_dir();
+        if !is_dir {
+            continue;
+        }
+        let part = child.path().join("partition");
+        match std::fs::metadata(&part) {
+            Ok(_) => out.push((child.file_name().to_string_lossy().into_owned(), child.path())),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => return Err(io::Error::other(format!("cannot stat {}: {e}", part.display()))),
+        }
+    }
+    Ok(out)
+}
+
+/// 指向同一镜像的 loop 中，哪一个正被使用——挂载、活动 swap，或被块设备栈持有。
 ///
 /// 镜像是本工具内唯一没有分区节点可查的目标：本工具要经 loop 才能碰它的分区，而那个
-/// loop 与用户自己映射的是**两个设备**——只探测新建的那个看不见用户那份挂载。故反向
-/// 解析：把每个已挂载 / 已做 swap 的设备解析到它所属的 loop，再看那个 loop 的 backing
-/// 是不是本镜像
+/// loop 与用户自己映射的是**两个设备**——只探测新建的那个看不见用户那份占用。故反向
+/// 枚举所有 loop，按 **backing 文件身份**（st_dev + st_ino，取自 LOOP_GET_STATUS64）
+/// 与本镜像比对，命中后检查该 loop 及其分区的挂载、swap 与持有者。
+/// sysfs 的 `loop/backing_file` 只是路径表示，既可能在本进程的 mount namespace 不可
+/// 解析，也可能已指向被替换过的文件，故不参与判定。任一环节确认不了都上抛，由调用方
+/// fail-closed；枚举本身来自全局 sysfs，不随 mount namespace 变化，但设备节点打不开
+/// 时无法查询身份，同样按无法确认处理
 #[cfg(target_os = "linux")]
-pub(crate) fn image_loop_occupant(src: &FileSource) -> io::Result<Option<String>> {
+pub(crate) fn image_loop_occupancy(src: &FileSource) -> io::Result<Option<LoopOccupancy>> {
     use std::os::unix::fs::MetadataExt;
-    let want = std::fs::canonicalize(&src.path).map_err(|e| {
-        io::Error::other(format!(
-            "cannot resolve {} to check for loops onto it: {e}",
-            src.path.display()
-        ))
-    })?;
-    for e in read_mounts()? {
-        if loop_backing_of(e.dev_no).is_some_and(|b| b == want) {
-            return Ok(Some(e.source));
+    let target = {
+        let md = src.file.metadata().map_err(|e| {
+            io::Error::other(format!("cannot stat the open image to identify it: {e}"))
+        })?;
+        (md.dev(), md.ino())
+    };
+    let mounts = read_mounts()?;
+    let swaps = std::fs::read_to_string("/proc/swaps")?;
+    // 每个 loop 独立成形：持有者记在真正拥有它的那个 loop 名下。跨 loop 汇总会把
+    // "B 上的占用"说成"A 被持有"，而拒绝消息是用户解除占用的唯一线索
+    let mut held: Vec<(String, Vec<String>)> = Vec::new();
+    for entry in std::fs::read_dir("/sys/block")? {
+        let entry = entry?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !is_loop_name(&name) {
+            continue;
+        }
+        if loop_backing_identity(&name)? != Some(target) {
+            continue;
+        }
+        let loopdev = format!("/dev/{name}");
+        let mut holders: Vec<String> = Vec::new();
+        for (node, sysdir) in loop_and_partitions(&entry.path(), &name)? {
+            let path = format!("/dev/{node}");
+            let m = std::fs::metadata(&path).map_err(|e| {
+                io::Error::other(format!("cannot stat {path} to confirm it is unused: {e}"))
+            })?;
+            let rdev = m.rdev();
+            let dev_no = (libc::major(rdev) as u64, libc::minor(rdev) as u64);
+            if mounted_in(&mounts, &path, dev_no) || active_swap_in(&swaps, &path, rdev)? {
+                return Ok(Some(LoopOccupancy::Live(path)));
+            }
+            holders.extend(holders_at(&sysdir)?);
+        }
+        if !holders.is_empty() {
+            held.push((loopdev, holders));
         }
     }
-    for line in std::fs::read_to_string("/proc/swaps")?.lines().skip(1) {
-        let Some(field) = line.split_whitespace().next() else { continue };
-        // stat 不到就不是设备节点，也就不可能是本镜像的 loop（那个必然是设备节点）
-        let Some(rdev) = std::fs::metadata(field).ok().map(|m| m.rdev()) else { continue };
-        if loop_backing_of((libc::major(rdev) as u64, libc::minor(rdev) as u64)).is_some_and(|b| b == want) {
-            return Ok(Some(field.to_string()));
-        }
+    // 多个 loop 都被持有时报第一个；loopdev 与 holders 来自同一次扫描
+    match held.into_iter().next() {
+        Some((loopdev, holders)) => Ok(Some(LoopOccupancy::Held { loopdev, holders })),
+        None => Ok(None),
     }
-    Ok(None)
 }
 
-#[cfg(not(target_os = "linux"))]
-pub(crate) fn image_loop_occupant(_src: &FileSource) -> io::Result<Option<String>> {
-    Ok(None)
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn loop_info64_matches_the_uapi_layout() {
+        // include/uapi/linux/loop.h：5 个 __u64、4 个 __u32、LO_NAME_SIZE(64) 两个、
+        // LO_KEY_SIZE(32)、lo_init[2]；总长 232（8 字节对齐）
+        assert_eq!(std::mem::size_of::<LoopInfo64>(), 232);
+        assert_eq!(std::mem::offset_of!(LoopInfo64, lo_device), 0);
+        assert_eq!(std::mem::offset_of!(LoopInfo64, lo_inode), 8);
+        assert_eq!(std::mem::offset_of!(LoopInfo64, lo_file_name), 56);
+    }
+
+    /// 跳过 mountinfo 读取失败只在"能证明进程已不引用挂载命名空间"时成立。
+    /// 权限不足（hidepid 隐藏 `/proc/<pid>/mountinfo`）说明不了有没有挂载，
+    /// 把它与进程退出一并跳过，探测就会在看不见的命名空间上宣称"空闲"
+    #[test]
+    fn mountinfo_skip_only_covers_proven_process_exit() {
+        assert!(skippable_mountinfo_error(&io::Error::from(io::ErrorKind::NotFound)));
+        assert!(skippable_mountinfo_error(&io::Error::from_raw_os_error(libc::ESRCH)));
+        // nsproxy 已清空：mounts_open_common 的 `!nsp || !nsp->mnt_ns` 分支
+        assert!(skippable_mountinfo_error(&io::Error::from_raw_os_error(libc::EINVAL)));
+        assert!(!skippable_mountinfo_error(&io::Error::from_raw_os_error(libc::EACCES)));
+        assert!(!skippable_mountinfo_error(&io::Error::from_raw_os_error(libc::EIO)));
+    }
 }
 
-/// 写表路径的占用前置闸：分区在首次落盘前须空闲。调用点在 prepare 层（movepart 的
-/// prepare_resize / prepare_apply）与 MBR resize 命令层——那是任何写盘的唯一必经关口，
-/// 把"表已写、FS 步被占"的 PARTIAL(20) 变成 REFUSED(10)：占用是请求与现状不匹配，
-/// 不是盘故障。块设备另有整盘 O_EXCL 独占打开这道内核级防线，但其保护面要说准：
-/// 它挡的是挂载 / swap / 他人的 O_EXCL 打开（open 即 EBUSY），**不挡**不守约定的
-/// 普通并发写——本闸对其是纵深防御。镜像没有分区节点可查，也没有 O_EXCL 这道内核
-/// 防线，占用只能按"有没有另一个 loop 指着它且在用"判定（[`image_loop_occupant`]）；
-/// 那一步只覆盖已经映射出去的 loop，不覆盖别的东西按镜像路径直接写字节。
-/// `start_bytes` = 分区起始字节（与 find_block_partition_node 的换算基准一致）
+/// 本次写入对目标区间的形状。占用判据据此分档：起点不变、末端不变或只增的写入
+/// （含 no-op，连表项都不写）不会动到上层栈已映射的扇区；搬移、缩小与整段重写
+/// （mkfs）都会让栈顶设备继续指向被改写的字节
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WriteKind {
+    /// 起点不变，末端不变或变大
+    Extend,
+    /// 搬移、缩小或整段重写
+    Overwrite,
+}
+
+/// 被 DM 持有的设备是否可放行本次写入。LVM PV 与 dm-crypt 的标准增长流程是
+/// 先长分区、再 pvresize / cryptsetup resize——增长不改变 DM 栈已映射的扇区，
+/// 故纯扩容放行；MD/loop 等栈没有这种增量语义，任何写入都可能与栈顶视图脱节
 #[cfg(target_os = "linux")]
-pub fn ensure_idle_before_write(src: &FileSource, part: u32, start_bytes: u64) -> Result<(), crate::outcome::Fail> {
+pub(crate) fn dm_only(holders: &[String]) -> bool {
+    holders.iter().all(|h| h.starts_with("dm-"))
+}
+
+/// 写入路径的占用前置闸（表写入与 mkfs）：目标在首次落盘前须空闲。表写入的调用点在
+/// prepare 层（movepart 的 prepare_resize / prepare_apply）与 MBR resize 命令层——那是
+/// 任何写盘的唯一必经关口，把"表已写、FS 步被占"的 PARTIAL(20) 变成 REFUSED(10)：
+/// 占用是请求与现状不匹配，不是盘故障。块设备另有整盘 O_EXCL 独占打开这道内核级防线，
+/// 但其保护面要说准：它挡的是挂载 / swap / 他人的 O_EXCL 打开（open 即 EBUSY），
+/// **不挡**不守约定的普通并发写——本闸对其是纵深防御。镜像没有分区节点可查，也没有
+/// O_EXCL 这道内核防线，占用只能按"有没有 loop 绑定到同一个文件且在用"判定
+/// （[`image_loop_occupancy`]，身份取自 LOOP_GET_STATUS64 而非路径）；那一步只覆盖
+/// 已经映射出去的 loop，不覆盖别的东西按镜像路径直接写字节。`start_bytes` = 分区
+/// 起始字节（与 find_block_partition_node 的换算基准一致）
+#[cfg(target_os = "linux")]
+pub fn ensure_idle_before_write(src: &FileSource, part: u32, start_bytes: u64, kind: WriteKind) -> Result<(), crate::outcome::Fail> {
     use crate::outcome::Fail;
     if !src.is_block {
-        return match image_loop_occupant(src) {
-            Ok(None) => Ok(()),
-            Ok(Some(dev)) => Err(Fail::refused(format!(
-                "{dev} is a loop onto this image and is in use — unmount/swapoff it first (editing the image changes a live filesystem)"
-            ))),
-            Err(e) => Err(Fail::infra(format!(
-                "cannot confirm no loop has this image in use: {e} — refusing (fail-closed)"
-            ))),
-        };
+        return image_target_unused(src, kind);
     }
     let node = find_block_partition_node(src, part, start_bytes).map_err(Fail::from)?;
     match probe_occupancy(&node) {
@@ -242,14 +472,145 @@ pub fn ensure_idle_before_write(src: &FileSource, part: u32, start_bytes: u64) -
             "{node} is mounted — unmount before resizing (moving a mounted partition's extents invalidates the live mount)"
         ))),
         Ok(Occupancy::ActiveSwap) => Err(Fail::refused(format!("{node} is active swap — run swapoff first"))),
+        // 纯扩容放行 DM：分区表变大不改变 dm 栈已映射的扇区（见 [`dm_only`]）
+        Ok(Occupancy::Held(holders)) if kind == WriteKind::Extend && dm_only(&holders) => Ok(()),
+        Ok(Occupancy::Held(holders)) => Err(Fail::refused(format!(
+            "{node} is held by {} — deactivate that stack first (the write would change bytes the holder still maps)",
+            holders.join(", ")
+        ))),
         Err(e) => Err(Fail::infra(format!(
             "cannot confirm {node} is unmounted: {e} — refusing (fail-closed)"
         ))),
     }
 }
 
+/// 镜像目标的占用判定：目标级，不区分分区。`kind` 只在 Held 分支上参与——
+/// Extend 且仅 dm 持有时放行（LVM PV / dm-crypt 的增长语义）
+#[cfg(target_os = "linux")]
+fn image_target_unused(src: &FileSource, kind: WriteKind) -> Result<(), crate::outcome::Fail> {
+    use crate::outcome::Fail;
+    match image_loop_occupancy(src) {
+        Ok(None) => Ok(()),
+        Ok(Some(LoopOccupancy::Live(dev))) => Err(Fail::refused(format!(
+            "{dev} is a loop onto this image and is in use — unmount/swapoff it first (editing the image changes a live filesystem)"
+        ))),
+        Ok(Some(LoopOccupancy::Held { loopdev: _, holders }))
+            if kind == WriteKind::Extend && dm_only(&holders) => Ok(()),
+        Ok(Some(LoopOccupancy::Held { loopdev, holders })) => Err(Fail::refused(format!(
+            "{loopdev} is a loop onto this image and is held by {} — deactivate that stack first (editing the image changes bytes the holder still maps)",
+            holders.join(", ")
+        ))),
+        Err(e) => Err(Fail::infra(format!(
+            "cannot confirm no loop has this image in use: {e} — refusing (fail-closed)"
+        ))),
+    }
+}
+
+/// 分区表写入前的占用闸（整盘范围）：写表会让盘上布局与内核仍在使用的分区视图分叉，
+/// 故目标上任何一个分区在用都要拒绝——镜像则是任何绑定到该镜像的 loop 在用即拒绝。
+/// 与 [`ensure_idle_before_write`] 的分区级判定不同，本闸不区分本次改哪个分区，
+/// 因此不适用于"扩容放行 DM 持有"的形状判定。
+///
+/// 调用点是所有**直接改表**的命令：`new` / `add` / `del` / `create` /
+/// `set name|type|flag` / `undo`。搬移类命令（`resize-part` / `move` / `resize` /
+/// `apply`）在 prepare 层按操作形状做分区级判定，不走这里。`copy` 是显式例外：
+/// 它只在经重叠校验的空闲区新增条目，不改既有分区的起止，也不搬移目标分区的 extent
+/// （见 `movepart::prepare_copy`）。
+///
+/// 块设备的整盘 O_EXCL 已在打开时挡住挂载 / swap / 他人的独占打开，这里的逐分区探测
+/// 是纵深防御，覆盖不守约定的并发写者留下的内核视图
+#[cfg(target_os = "linux")]
+pub fn ensure_table_write_idle(src: &FileSource) -> Result<(), crate::outcome::Fail> {
+    if src.is_block {
+        return ensure_whole_device_idle(src);
+    }
+    image_target_unused(src, WriteKind::Overwrite)
+}
+
+/// 块设备：盘节点自身与 sysfs 列出的每个分区节点都须空闲。分区列表读不出来
+/// 按探测失败上抛——"确认不了哪些分区在用"不能读成"没有分区在用"
+#[cfg(target_os = "linux")]
+fn ensure_whole_device_idle(src: &FileSource) -> Result<(), crate::outcome::Fail> {
+    use crate::outcome::Fail;
+    let disk = block_disk_name(src).map_err(Fail::from)?;
+    let sysdir = Path::new("/sys/block").join(&disk);
+    // 盘节点用用户给出的路径：by-id / mapper 之类的别名在 /dev/<sysfs 名> 下不一定存在
+    let mut nodes = vec![src.path.to_string_lossy().into_owned()];
+    let rd = std::fs::read_dir(&sysdir).map_err(|e| {
+        Fail::infra(format!("cannot list {} to confirm no partition is in use: {e} — refusing (fail-closed)", sysdir.display()))
+    })?;
+    for entry in rd {
+        let entry = entry.map_err(|e| {
+            Fail::infra(format!("cannot list {} to confirm no partition is in use: {e} — refusing (fail-closed)", sysdir.display()))
+        })?;
+        let path = entry.path();
+        // sysfs 里同层混着 uevent/size/holders 等文件与 queue 等目录；只对目录取 partition。
+        // 对文件拼 /partition 得到的是 ENOTDIR，不是"没有该属性"
+        match std::fs::metadata(&path) {
+            Ok(m) if m.is_dir() => {}
+            Ok(_) => continue,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+            Err(e) => {
+                return Err(Fail::infra(format!(
+                    "cannot stat {} to tell whether it is a partition: {e} — refusing (fail-closed)",
+                    path.display()
+                )));
+            }
+        }
+        match std::fs::metadata(path.join("partition")) {
+            Ok(_) => nodes.push(format!("/dev/{}", entry.file_name().to_string_lossy())),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => {
+                return Err(Fail::infra(format!(
+                    "cannot stat {} to tell whether it is a partition: {e} — refusing (fail-closed)",
+                    path.join("partition").display()
+                )));
+            }
+        }
+    }
+    let mounts = read_mounts().map_err(|e| {
+        Fail::infra(format!("cannot read mount tables to confirm {disk} is unused: {e} — refusing (fail-closed)"))
+    })?;
+    let swaps = std::fs::read_to_string("/proc/swaps").map_err(|e| {
+        Fail::infra(format!("cannot read /proc/swaps to confirm {disk} is unused: {e} — refusing (fail-closed)"))
+    })?;
+    for node in nodes {
+        match probe_occupancy_with(&mounts, &swaps, &node) {
+            Ok(Occupancy::Idle) => {}
+            Ok(Occupancy::Mounted) => {
+                return Err(Fail::refused(format!(
+                    "{node} is mounted — unmount it before rewriting the partition table"
+                )));
+            }
+            Ok(Occupancy::ActiveSwap) => {
+                return Err(Fail::refused(format!(
+                    "{node} is active swap — run swapoff before rewriting the partition table"
+                )));
+            }
+            Ok(Occupancy::Held(holders)) => {
+                return Err(Fail::refused(format!(
+                    "{node} is held by {} — deactivate that stack first (the new table would contradict the live stack)",
+                    holders.join(", ")
+                )));
+            }
+            Err(e) => {
+                return Err(Fail::infra(format!(
+                    "cannot confirm {node} is unused: {e} — refusing (fail-closed)"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
 #[cfg(not(target_os = "linux"))]
-pub fn ensure_idle_before_write(_src: &FileSource, _part: u32, _start_bytes: u64) -> Result<(), crate::outcome::Fail> {
+pub fn ensure_idle_before_write(_src: &FileSource, _part: u32, _start_bytes: u64, _kind: WriteKind) -> Result<(), crate::outcome::Fail> {
+    Ok(())
+}
+
+/// 非 Linux 存根：该平台上没有 loop 枚举与 /proc 挂载表，占用闸只存在于 Linux
+#[cfg(not(target_os = "linux"))]
+pub fn ensure_table_write_idle(_src: &FileSource) -> Result<(), crate::outcome::Fail> {
     Ok(())
 }
 

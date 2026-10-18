@@ -40,6 +40,42 @@ pub(crate) fn shift_plan_none_never_ghost_relocates() {
     let _ = std::fs::remove_file(&path);
 }
 
+/// 缩容撞上"表已提交、只剩 FS 收尾"的扩容作业：那份作业的终点恰好等于当前末端，
+/// 只比终点就会把缩容当成扩容续跑执行。同一现场下，尺寸未变的原样重跑才是合法续跑
+#[test]
+pub(crate) fn shrink_does_not_resume_a_committed_growth_job() {
+    const SHIFT: u64 = 2048;
+    let chunk: u64 = 1024 * 1024;
+    // 作业已提交后的盘面：目标末端 = 原末端 + SHIFT，挡路者已右移到目标之后
+    let (mut src, path) = plan_fixture(&[
+        (1, [0x11; 16], 2048, 10239 + SHIFT),
+        (2, [0x22; 16], 10240 + SHIFT, 12287 + SHIFT),
+    ]);
+    let g = table::load_gpt(&src).unwrap().unwrap();
+    let ckpt_path = src.identity.checkpoint_path().to_path_buf();
+    let ck = Checkpoint {
+        disk_size: src.size, ss: g.ss, grow_part: 1, last_usable_lba: g.header.last_usable_lba,
+        moves: vec![PlanEntry { part_num: 2, first_lba: 10240, len_lba: 2048, delta_lba: SHIFT, is_swap: false }],
+        kind: PlanKind::Shift, cur_index: 0, chunks_done: 0, chunk_bytes: chunk,
+        fp: Default::default(),
+        map: None,
+    };
+    atomic_write_ckpt(&ckpt_path, &ck.serialize()).unwrap();
+
+    let e = plan_shift(&mut src, 1, None).err().expect("shrink must not resume the committed growth job");
+    assert!(matches!(&e, Fail::Refused(m) if m.contains("unfinished")), "{e:?}");
+    assert!(pending_relocation(&src, 1).unwrap());
+
+    // 尺寸未变：计划终点与当前末端一致 ⇒ 这是同一作业的收尾，允许续跑
+    let p = plan_shift_noop(&mut src, 1).expect("same-size re-run must resume the committed job");
+    assert!(p.kind == PlanKind::Shift);
+    assert_eq!(plan_requested_end(&p, 2048), Some(10239 + SHIFT));
+
+    drop(src);
+    let _ = std::fs::remove_file(&ckpt_path);
+    let _ = std::fs::remove_file(&path);
+}
+
 /// 续跑的身份比对必须含**请求数值**：同 kind、不同 SIZE 的重跑不得静默执行旧 plan。
 /// 不比对数值时的后果正是断言反面的那一幕——搬移按旧 X 落位、表项照抄旧终点，
 /// 本次请求的 Y 被静默丢弃，而写入不可逆

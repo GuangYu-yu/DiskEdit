@@ -77,18 +77,23 @@ pub(crate) fn part_dev_hint(src: &FileSource, part: u32, offset_bytes: u64) -> S
     }
 }
 
-/// 删除持久化元数据（journal / checkpoint）失败：残留不是"无害垃圾"——
-/// journal 残留会让下次 undo 重复回滚已回滚的内容，checkpoint 残留会让下次运行
-/// 被旧计划阻塞或误续传。属用户必须知道的状态，故告警（不改变本次的成功结论）。
-/// 文件本就不存在不算失败：删除的后置条件是"不残留"，此时已然成立
-pub(crate) fn warn_if_remove_failed(path: &std::path::Path) {
+/// 删除一份恢复现场（journal / checkpoint）并落盘目录项。删除成功（或本就不存在）
+/// 后 fsync 父目录：unlink 不落盘时掉电后文件可能复活，把已完成的事务报成未收尾现场。
+/// 返回删除的后置条件是否成立；失败只告警——残留会被后续运行当成现场
+pub(crate) fn remove_recovery_file(path: &std::path::Path) -> bool {
     match std::fs::remove_file(path) {
-        Ok(()) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => eprintln!(
-            "warning: cannot remove {}: {e} — a later run may re-apply this journal or be blocked by a stale checkpoint",
-            path.display()
-        ),
+        Ok(()) => {
+            best_effort_dir_fsync(path);
+            true
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => true,
+        Err(e) => {
+            eprintln!(
+                "warning: cannot remove {}: {e} — a later run may re-apply this journal or be blocked by a stale checkpoint",
+                path.display()
+            );
+            false
+        }
     }
 }
 

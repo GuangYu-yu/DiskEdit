@@ -27,13 +27,21 @@ impl PartResizeError {
     /// 无法断言 → Failed；表已写 → Applied（内核视图置为过期，退出码 20）。
     /// 具体原因（含 errno 提示）在发生处打印，契约摘要由 Outcome::report 统一输出
     pub(crate) fn into_outcome(self) -> Outcome {
+        self.into_outcome_with(Vec::new())
+    }
+
+    /// 表已写但内核未同步时，调用方可能还有因此没做的后续步骤（FS 扩缩）：这些待办
+    /// 与"内核视图过期"是两个正交事实，必须一并浮出，否则 20 只说了其中一半
+    pub(crate) fn into_outcome_with(self, pending: Vec<Pending>) -> Outcome {
         match classify_part_resize_error(&self) {
             ResizeFailClass::Refused(msg) => Outcome::refused(msg),
             ResizeFailClass::Infra(msg) => Outcome::infra(msg),
             ResizeFailClass::Failed(msg) => Outcome::failed(msg),
             ResizeFailClass::AppliedStaleKernel(msg) => {
                 eprintln!("warning: partition table written but kernel sync failed: {msg}");
-                Outcome::applied_stale_kernel()
+                let mut o = Outcome::applied_with(pending);
+                o.mark_kernel_stale();
+                o
             }
         }
     }
@@ -110,8 +118,9 @@ pub(crate) fn part_resize(t: &OnlineTarget, new_len_bytes: u64) -> Result<(), Pa
             ))));
         }
     }
-    // sfdisk 脚本里的裸数字按"设备扇区"解释（libfdisk/src/script.c parse_size_value），
-    // 即设备逻辑扇区大小（4Kn = 4096B，非恒 512B），故按 t.logical_block 换算。
+    // sfdisk 脚本里的裸数字按"设备扇区"解释（libfdisk/src/script.c：脚本不带
+    // `sector-size:` 头时 `recount_script2device_sectors` 直接返回，已解析的数值就是
+    // 设备逻辑扇区数），即 4Kn = 4096B 而非恒 512B，故按 t.logical_block 换算。
     // -N：只改指定分区、未指定字段保持原值（空 start/size 继承现值，sfdisk(8)）
     let script = format!(",{}", new_len_bytes / t.logical_block);
     // 在线路径的 durable boundary 就在这一次 sfdisk：之前 abort 表确定未写、
