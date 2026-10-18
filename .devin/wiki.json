@@ -1,150 +1,150 @@
 {
   "repo_notes": [
     {
-      "content": "DiskEdit 是一个 Rust CLI（src/main.rs 为入口，src/cmd/ 下每命令一个模块），把镜像文件与块设备统一为按偏移读写的字节存储，操作 GPT/MBR 分区表与文件系统，不使用 libparted。文档应始终围绕三个跨模块不变量组织：1) 退出码契约 0=完成/10=拒绝/20=部分完成/30=基础设施失败，与 src/outcome.rs 的 Outcome::{Refused,Infra,Failed,Applied} 一一对应；2) crash-safety 模型：append-only undo journal（CRC32 pre-image log）+ 原子检查点 + advisory TargetLock，写盘前必须通过占用闸（挂载/swap/PV 状态检查）；3) 所有 LBA/尺寸算术必须用 checked 操作。代码注释为纯描述性中文，解释 why 而非 what，wiki 正文请用中文撰写，措辞风格与代码注释一致。Linux 专属模块（src/online.rs、src/lvm.rs、src/ioctl.rs）在非 Linux 平台用 cfg 条件编译排除，文档应说明这一点。",
+      "content": "DiskEdit 是一个 Rust 命令行工具，把镜像文件与块设备统一为可按偏移读写的目标，用来查看和修改分区表与文件系统。文档按跨模块的主题组织，说明行为边界、写盘安全、平台差异和恢复路径，不要逐文件复述实现。正文用中文，措辞与代码注释一致。Linux 专属能力在非 Linux 平台上的表现需要明确说明。",
       "author": "maintainer"
     }
   ],
   "pages": [
     {
       "title": "总览",
-      "purpose": "DiskEdit 是什么、解决什么问题：无 libparted 的 Rust 分区表/文件系统编辑器，镜像与块设备统一抽象。给出 src/ 的模块分层图（命令层 / 领域层 / 基础层的划分与各自职责，含 Linux 专属模块的处理），并链接各子页。"
+      "purpose": "介绍项目定位、能力边界、主要使用场景与模块分层，给出阅读路径。"
     },
     {
       "title": "构建与配置",
-      "purpose": "Document 构建与配置：Cargo.toml 的包元信息、依赖与 feature、license 与 clippy lint 策略及其配套的命名约定；.cargo/config.toml 的 rustflags 与 release profile 以及各自的意图；LICENSES/ 的许可归属（本体、依赖、外部调用工具）；.gitattributes 的换行约定；.github/workflows 的测试、构建、产物剥离与发布流程，以及每个 workflow 的触发方式与门禁。"
+      "purpose": "说明构建方式、依赖与特性、代码规范、许可与发布流程。"
     },
     {
       "title": "执行模型与退出码",
-      "purpose": "Document src/main.rs 流程与 src/cmd/mod.rs 的 dispatch、src/support.rs 的共用支撑件（drop_journal、EXIT_OK、opens_undo_journal）：parse_args → refuse_unconsumed_flags → dispatch → 成功时 drop_journal（仅 opens_undo_journal 的命令）。重点解释退出码 0/10/20/30 与 Outcome 变体的映射（src/outcome.rs），以及 20（Applied 的 pending 与 kernel_sync）和 30（Infra vs Failed）各自的两个正交成因。"
+      "purpose": "说明命令从解析到分发的执行流程，以及成功、拒绝、部分完成和基础设施失败分别如何表达。"
     },
     {
       "title": "命令行界面",
-      "purpose": "CLI 面总览父页：命令清单、help 走 stdout 退 0 / 用法错误走 stderr 退 10 的 GNU 惯例、每命令显式旗标白名单的 fail-closed 原则。作为下列命令子页的父页。"
+      "purpose": "介绍命令行界面的组织方式、帮助与用法错误、参数校验和目标指定。作为下列命令子页的父页。"
     },
     {
       "title": "命令注册与参数解析",
-      "purpose": "Document src/args.rs：CommandSpec 与 COMMANDS 注册表、TargetMode、别名解析、大小参数（b/k/m/g/t 基于 1024 不区分大小写）、未识别旗标立即拒绝并给出有效用法。",
+      "purpose": "说明命令如何注册、别名如何解析、参数如何校验，以及未识别输入如何被拒绝。",
       "parent": "命令行界面"
     },
     {
-      "title": "检查命令（info、plan）",
-      "purpose": "Document src/cmd/info.rs 与 src/cmd/plan.rs：info 输出的 JSON 结构（table label、扇区大小、分区、src/fsid.rs 文件系统识别、LVM 布局）；plan 如何预览布局变更而不写盘。",
+      "title": "检查与预览命令",
+      "purpose": "介绍只读检查与变更预览类命令：它们读取什么、输出什么、在什么情况下拒绝。",
       "parent": "命令行界面"
     },
     {
-      "title": "布局变更命令（new、add、del、apply、move、copy、create）",
-      "purpose": "Document src/cmd/layout.rs 系列命令：GPT/MBR 分支差异（如 MBR 拒绝 --allow-move 与 --name）、对齐计算（须在解析几何后进行、GPT 用表自身扇区大小）、create 的 mkfs 失败走 Pending 通道、copy 中断后需先 undo/abandon 才能重跑。",
+      "title": "布局变更命令",
+      "purpose": "介绍分区表布局的新建、增删、应用、搬移和复制等操作，以及不同表类型的差异。",
       "parent": "命令行界面"
     },
     {
-      "title": "调整大小命令（resize 系）",
-      "purpose": "Document src/cmd/resize.rs 的 resize/resize-part/resizefs 分发：离线 vs 在线选择、绝对 vs 相对尺寸、--allow-move（仅新搬移授权，续跑豁免，需 --yes）、--grow-to-end 的 tail-packing 与精确 SIZE 的 minimal displacement 两种策略、--no-fs 与 FS 步骤的边界（哪些步骤退出后置条件、哪些照常执行，以及 FS 无法处理时它为何是必须显式给出的那个入口；判定只有一处，不散落各命令）、LVM 增长旗标、--size 与 --grow-to-end 互斥。",
+      "title": "容量调整命令",
+      "purpose": "介绍分区和文件系统的扩缩流程、离线与在线选择、搬移授权及其边界。",
       "parent": "命令行界面"
     },
     {
-      "title": "文件系统命令（mkfs、check、set）",
-      "purpose": "Document src/cmd/fs.rs 的 cmd_mkfs/cmd_check/cmd_set：busy 闸与工具缺失检查的顺序、mkfs 支持矩阵（exfat 已支持、lvm2_pv 拒绝）、set 的 UUID/label 能力映射与分支级旗标拒绝（如非 uuid 分支拒 --random）、mark_non_reversible 屏障。",
+      "title": "文件系统操作命令",
+      "purpose": "介绍文件系统的创建、检查和属性设置，以及这些操作的可用条件。",
       "parent": "命令行界面"
     },
     {
-      "title": "恢复命令（undo、abandon）",
-      "purpose": "Document src/cmd/undo.rs 与 src/cmd/abandon.rs：undo 依赖 journal 存在（成功操作已删除 journal，故不可 undo——当前产品行为）、Ambiguous 分支（两份 journal 并存时拒绝）、abandon 用 hard_link+remove 防止静默覆盖 .abandoned 文件、孤儿日志清理回退到镜像身份。",
+      "title": "恢复操作命令",
+      "purpose": "介绍撤销和放弃操作，以及恢复状态在什么条件下可用或不可用。",
       "parent": "命令行界面"
     },
     {
       "title": "存储与分区表核心",
-      "purpose": "存储抽象总览父页：字节存储层如何被 table/movepart/online 共用，ResolvedGeometry 的由来（无全仓库 Lba 新类型的取舍）。链接四个子页。"
+      "purpose": "介绍镜像与块设备的统一存储抽象，以及分区表、几何和文件系统识别之间的关系。作为下列子页的父页。"
     },
     {
-      "title": "FileSource 与目标身份",
-      "purpose": "Document src/dev.rs：镜像与块设备统一为 FileSource、read_at/write_data_at、块设备写打开 O_EXCL、sysfs 派生的设备身份（st_dev/st_ino 锁键）、state_dir 布局、目标字符串解析。",
+      "title": "存储抽象与目标身份",
+      "purpose": "说明目标如何被识别、打开、加锁和定位，以及伴随状态放在哪里。",
       "parent": "存储与分区表核心"
     },
     {
-      "title": "GPT 与 MBR 的解析与提交",
-      "purpose": "Document src/table.rs：load_gpt/commit_gpt、保护性 MBR（0xEE 的处理与 PMBR 损坏判定）、CRC 校验、primary/backup 回退与修复、四阶段 crash-safe 提交顺序（备份数组→备份头→主数组→主头，每阶段 sync）、条目越界判 damaged 的对称处理（GPT 与 MBR）、MBR 邻接重叠检查、GPT_SIGNATURE/MBR_SIGNATURE 常量的 UEFI Spec 出处。",
+      "title": "分区表解析与提交",
+      "purpose": "说明分区表的读取、校验、修复和写入顺序，以及损坏或不一致时如何处置。",
       "parent": "存储与分区表核心"
     },
     {
       "title": "几何与对齐",
-      "purpose": "Document src/geometry.rs：ValidatedGeometry、表扇区大小 vs 容器扇区大小（4Kn 表在 512e 容器上的不变量：LBA 坐标系在 Plan 阶段前确定）、对齐单位（mib/cyl/none）、free-space 计算、checked 算术要求。",
+      "purpose": "说明扇区大小、地址计算、对齐和空闲空间的处理方式。",
       "parent": "存储与分区表核心"
     },
     {
       "title": "文件系统识别",
-      "purpose": "Document src/fsid.rs：识别能力的清单与各文件系统签名的偏移出处（以模块现状为准）；识别刻意按字节区间而非 LBA + 扇区大小，以及这一取舍的由来；ext 家族为何只回一个名字；读错误与\"区间内没有已知签名\"必须分开，否则 I/O 故障会被当成没有文件系统；swap 签名位置由创建机页大小决定、盘上不记录，故按候选页大小探测，且存在识别得出而本机激活不了的一类（两个探测口径的差别）；overlay RW 层起点如何从只读根的超级块算出并对齐；识别结果如何驱动策略（对齐、grow-end、overlay 起点、mkfs/resize 支持）。",
+      "purpose": "说明如何根据盘上特征识别文件系统，以及识别结果如何影响后续策略。",
       "parent": "存储与分区表核心"
     },
     {
       "title": "事务、安全与恢复",
-      "purpose": "crash-safety 模型总览父页：Snapshot → Validate → Plan → Commit 顺序、屏障唯一落点为实际不可逆 mutation 前、三态错误分类（NoWrite/Unknown/Partial）与磁盘状态的关系。链接三个子页。"
+      "purpose": "介绍写盘操作的安全模型：何时检查、何时提交、失败后如何恢复。作为下列子页的父页。"
     },
     {
-      "title": "Undo Journal",
-      "purpose": "Document journal 格式：append-only CRC32 pre-image log、Mutation 枚举（含 ExternalFsTool 屏障语义与 MOVED_MARKER=u64::MAX 的约定）、payload 长度 u32::MAX 上限检查、lazy 创建、TruncatedTail 处理、成功时删除。",
+      "title": "操作日志",
+      "purpose": "说明用于回滚的操作记录如何组织、何时创建、何时清理，以及中断后如何读取。",
       "parent": "事务、安全与恢复"
     },
     {
-      "title": "事务管理与目标锁",
-      "purpose": "Document src/transaction.rs 的 open_target_* 网关、所有权模式、refuse_if_pending_recovery、begin_or_resume 的锁下判定签名（FnOnce(&FileSource,&[RecoveryRecord]) -> bool）；src/targetlock.rs 的 advisory 锁（镜像 <path>.diskedit.lock，块设备 state_dir 派生；锁文件不随释放删除的竞态理由）。",
+      "title": "锁与并发",
+      "purpose": "说明多个进程同时操作同一目标时如何串行化，以及锁失效或残留时如何处理。",
       "parent": "事务、安全与恢复"
     },
     {
-      "title": "检查点与前向恢复",
-      "purpose": "Document 原子检查点写（tmp→sync→rename→fsync parent）、批处理阈值（以先到者为准，最后一块始终检查点）及其在不同搬移形态下的粒度调整、PlanKind 区分策略类型防止语义冲突续跑、cur_index/chunks_done 反序列化校验、扇区大小不匹配拒绝、test-faults 故障注入点。",
+      "title": "检查点与恢复",
+      "purpose": "说明长时间操作的进度如何保存，以及中断后如何继续或拒绝继续。",
       "parent": "事务、安全与恢复"
     },
     {
       "title": "分区数据搬移与调整",
-      "purpose": "分区搬移/复制/缩扩执行总览父页：块顺序与检查点粒度共同保证自重叠搬移的安全、纯 Rust read_at+write_data_at+sync_data（默认 1MiB 块，--chunk-size 可调，范围校验在解析期）、swap 分区重定位不搬数据（mkswap 重建保留 UUID/label）。链接三个子页。"
+      "purpose": "介绍分区数据搬移、复制和调整的整体流程，以及执行过程中需要保持的安全性质。作为下列子页的父页。"
     },
     {
-      "title": "规划：尾装箱与最小位移",
-      "purpose": "Document src/movepart.rs 的 Plan/PlanEntry 生成与 src/gpt_policy.rs 的策略判定：grow 关键字的 tail-packing 与精确调整的 minimal displacement 两种策略、gpt_policy 基于文件系统识别结果约束布局决策（含禁止的类型 GUID）、重叠检查、preflight 与 durable 边界的划分；另需交代 gpt_policy 不属规划的那一半职责——全仓读表的唯一入口（表类型判定与表自身的扇区大小）、目标身份的解释（:N/:last 的纯函数解析）、GPT 专属的几何校验。",
+      "title": "规划策略",
+      "purpose": "说明如何根据目标布局生成搬移和调整计划，以及不同调整意图对应的策略差异。",
       "parent": "分区数据搬移与调整"
     },
     {
-      "title": "执行：move、copy、resize_part",
-      "purpose": "Document 执行路径：分块复制与每块 checkpoint、chunk_io_error 带精确 LBA 区间上报、commit_gpt 集成、几何变更后的文件系统收缩/扩容、swap 重建、ExternalFsTool 屏障的落点（execute_resize/execute_apply 的 mkswap 与 resize_fs 步前）。",
+      "title": "执行路径",
+      "purpose": "说明计划如何落地，包括数据复制、表提交和文件系统步骤的先后关系。",
       "parent": "分区数据搬移与调整"
     },
     {
-      "title": "已挂载卷的在线调整",
-      "purpose": "Document src/online.rs（Linux 专属）：sysfs/mountinfo 发现、sfdisk --no-reread + partx -u、BLKPG 回退、grow/shrink 顺序、sfdisk 执行前锁下重读比对分区起止的 TOCTOU 防线、resizefs --online 的 BYTES 语义与 btrfs 之外仅扩容的限制、三态失败分类（NoTool/Spawn/Exit → NoWrite/Unknown）。",
+      "title": "在线调整",
+      "purpose": "说明已挂载卷在运行时的调整方式、发现机制和限制。",
       "parent": "分区数据搬移与调整"
     },
     {
       "title": "外部工具集成",
-      "purpose": "外部工具与内核接口总览父页：工具启动失败（Infra/NoWrite）与执行中失败（Failed/可能已写盘）的分类原则、机器可读输出优先（JSON）、每次调用只做一件事。链接三个子页。"
+      "purpose": "说明与外部工具和内核接口协作时的错误分类、输出解析和调用原则。作为下列子页的父页。"
     },
     {
-      "title": "文件系统工具链（fsops）",
-      "purpose": "Document src/fsops.rs：require_linux/require_root、loop device 映射与用户自挂载检测、mount/swap 安全闸（with_scope_device 检查底层分区挂载状态）、签名擦除、每文件系统的 mkfs/fsck/resize 工具选择、fs_min_bytes 的 checked 乘法。",
+      "title": "文件系统工具",
+      "purpose": "说明各文件系统相关工具的选择、能力差异和调用方式。",
       "parent": "外部工具集成"
     },
     {
-      "title": "内核接口（ioctl 与 sysfs）",
-      "purpose": "Document src/ioctl.rs（Linux 专属）：BLKRRPART、BLKPG、手工编码 ioctl 常量的架构验证（MIPS/PowerPC/sparc 显式拒绝编译）、sysfs 属性读取与内核分区视图刷新。",
+      "title": "内核接口",
+      "purpose": "说明与内核分区视图和块设备控制相关的接口及其平台限制。",
       "parent": "外部工具集成"
     },
     {
-      "title": "LVM 支持",
-      "purpose": "Document src/lvm.rs（Linux 专属）：PV/VG/LV 发现（vg_of 验证 PV 归属）、pvresize 在线路径（锁下重读 fstype 与活动 swap 补查）、--grow-lv/--lv 语义、多 LV 拒绝策略、PV 缩容为何拒绝（操作链与扩容反向：lvreduce -r → pvresize → 改表）。",
+      "title": "卷管理",
+      "purpose": "说明逻辑卷管理的发现、扩容路径和限制。",
       "parent": "外部工具集成"
     },
     {
       "title": "测试",
-      "purpose": "测试策略总览父页：三层验证面——src/ 内的 Cargo 单元测试、tests/cli.rs 的进程级集成测试（spawn 二进制 + 结构化断言 + 字节级校验）、tests/wsl 的真块设备回归（Linux + root + 外部工具，含引导验证），以及贯穿其中的 test-faults 故障注入。链接两个子页。"
+      "purpose": "介绍测试策略和验证层次。作为下列子页的父页。"
     },
     {
-      "title": "测试套件：cli.rs 与 WSL 真块设备回归",
-      "purpose": "Document 两层集成测试。tests/cli.rs：spawn 二进制、结构化断言而非子串匹配、字节级验证与恢复场景覆盖、大几何与特殊扇区大小的用例。tests/wsl：run_all.sh 的执行顺序与判定规则（以脚本退出码为准，输出只作现场阅读）、单脚本超时、lib.sh 提供的共享件（断言、二进制定位与构建变体、临时设备与伴随文件的自动回收）、脚本的主题分组、运行前提（Linux + root + 外部工具）以及承载它的 workflow。",
+      "title": "集成测试",
+      "purpose": "说明进程级测试和真实设备回归如何组织、如何判定成功。",
       "parent": "测试"
     },
     {
-      "title": "故障注入与崩溃恢复测试",
-      "purpose": "Document test-faults feature：故障点宏、模拟中断与续跑验证、test-faults 在 CI 中的接入步骤、三态错误分类（NoWrite/Unknown/Partial）的行为断言。",
+      "title": "故障注入",
+      "purpose": "说明如何模拟中断和故障来验证恢复行为。",
       "parent": "测试"
     }
   ]
