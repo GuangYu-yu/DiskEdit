@@ -35,9 +35,20 @@ pub(crate) fn plan_resuming(src: &mut FileSource, grow_part: u32) -> Result<Plan
     make_plan_resuming(src, &g, repair, grow_part)
 }
 
+/// `shift = None` 在测试里表示缩容请求（与生产入口的 ShiftIntent::Shrink 同义）
 pub(crate) fn plan_shift(src: &mut FileSource, grow_part: u32, shift: Option<u64>) -> Result<Plan, Fail> {
+    let intent = match shift {
+        Some(s) => ShiftIntent::Grow(s),
+        None => ShiftIntent::Shrink,
+    };
     let (g, repair) = gpt_policy::resolve_geometry(src)?.ok_or_else(|| Fail::refused("no GPT on target"))?;
-    make_plan_shift_resuming(src, &g, repair, grow_part, shift)
+    make_plan_shift_resuming(src, &g, repair, grow_part, intent)
+}
+
+/// 尺寸与现状相同的请求（表已提交、只剩收尾时的原样重跑）
+pub(crate) fn plan_shift_noop(src: &mut FileSource, grow_part: u32) -> Result<Plan, Fail> {
+    let (g, repair) = gpt_policy::resolve_geometry(src)?.ok_or_else(|| Fail::refused("no GPT on target"))?;
+    make_plan_shift_resuming(src, &g, repair, grow_part, ShiftIntent::NoOp)
 }
 
 pub(crate) fn pending_relocation(src: &FileSource, grow_part: u32) -> Result<bool, Fail> {

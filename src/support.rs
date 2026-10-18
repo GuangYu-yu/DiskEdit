@@ -201,15 +201,16 @@ pub(crate) fn settle_layout(mut o: crate::outcome::Outcome, src: &FileSource) ->
 }
 
 /// 表类写命令的成功收尾：内核重读 + 报告，仅当后置条件全部满足时才打印成功字样
-/// （内核视图过期时退 20，此时打"成功"会与退出码矛盾）
-pub(crate) fn table_write_done(src: &FileSource, ok_msg: &str) -> u8 {
+/// （内核视图过期时退 20，此时打"成功"会与退出码矛盾）。返回结果而不压成码：
+/// "已应用但待办非空"与"仅内核视图过期"对撤销窗口的去留结论不同
+pub(crate) fn table_write_done(src: &FileSource, ok_msg: &str) -> crate::outcome::Outcome {
     let o = settle_layout(crate::outcome::Outcome::applied_with(Vec::new()), src);
     // 用语义判断而不是比退出码：比数字会把"部分完成"误判成成功，而且数字的含义
     // 只在 outcome 一处解释得清
     if o.is_complete() {
         println!("{ok_msg}");
     }
-    o.exit_code()
+    o
 }
 
 /// 1 MiB 折算成表内扇区的唯一落点：不足一扇区时取 1，调用点共用，

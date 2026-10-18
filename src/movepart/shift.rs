@@ -93,7 +93,7 @@ pub(crate) fn prepare_apply(
             .map(|e| e.starting_lba)
             .unwrap_or(m.first_lba);
         crate::fsops::ensure_idle_before_write(src, m.part_num, probe_lba.checked_mul(plan.ss)
-            .ok_or_else(|| Fail::infra("move source start overflows byte offset"))?)?;
+            .ok_or_else(|| Fail::infra("move source start overflows byte offset"))?, crate::fsops::WriteKind::Overwrite)?;
     }
     // 几何由调用方解析并下传（构造点即拒绝条目重叠）；几何里的上界是"修复生效后"的值，
     // ckpt 的边界校验依赖它。盘在 plan 生成之后变了的话，由下面的恢复校验拒绝
@@ -109,8 +109,9 @@ pub(crate) fn prepare_apply(
             plan.grow_part
         )));
     };
+    // 目标分区只向右扩、起点不变：DM 栈已映射的扇区不受影响，按 Extend 放行其持有
     crate::fsops::ensure_idle_before_write(src, plan.grow_part, ge.starting_lba.checked_mul(plan.ss)
-        .ok_or_else(|| Fail::infra("grow target start overflows byte offset"))?)?;
+        .ok_or_else(|| Fail::infra("grow target start overflows byte offset"))?, crate::fsops::WriteKind::Extend)?;
     if !no_fs {
         // 要动的是哪一段、里面是什么 FS 由 grow_target_at 判定——与写盘后的收尾同一判据，
         // 两处只是区间不同。区间的 LBA 单位是**表自身**的 ss（plan.ss）。此处位于
@@ -611,7 +612,7 @@ pub(crate) fn execute_apply(
     // 自重叠搬移下旧区字节已被写覆盖，重拷即把覆盖后的数据盖回新区。任何待办（FS 步
     // 或 swap 重建）都保留 ckpt——重跑按续传口径只重试未完成的部分
     if post.is_empty() {
-        crate::dev::warn_if_remove_failed(ckpt_path);
+        crate::dev::remove_recovery_file(ckpt_path);
     }
     Ok(())
 }

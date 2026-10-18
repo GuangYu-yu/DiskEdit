@@ -205,47 +205,62 @@ pub(crate) fn shift_plan_from(g: &ValidatedGeometry, repair: RepairAction, grow_
     Ok(Plan { ss, last_usable_lba: g.last_usable_lba(), grow_part, moves, kind: PlanKind::Shift, repair })
 }
 
+/// 本次 SIZE 请求相对目标当前末端的形状。续跑判定必须区分三者：缩容与"尺寸未变"
+/// 都算不出正位移，而只有后者可能是原样重跑当初的扩容命令
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum ShiftIntent {
+    /// 扩到更大的末端：带位移量
+    Grow(u64),
+    /// 请求尺寸与现状相同（缩容守卫链与搬移都不需要）
+    NoOp,
+    /// 缩容：不搬移任何分区，新末端更靠左，右侧只会更空
+    Shrink,
+}
+
 /// 中断感知的最小位移 plan：ckpt 存在时以 ckpt 的 moves 为准（见 resume_outcome），
-/// 否则按 shift 现算。`shift = None` 表示本次请求是缩容——缩容不搬移任何分区
-/// （新末端更靠左，右侧只会更空）。槽上未收尾的 plan 属于当初那条扩容请求，
-/// 执行它就是把缩容静默放大成旧扩容（违反 plan 的"执行方即请求方"归属），故
-/// 缩容一律拒绝并指向续跑/放弃两条出路；只有原样重跑当初的 grow 命令才续跑。
-/// 几何与修复动作由调用方解析并下传，本函数不读表
+/// 否则按 `intent` 现算。`Shrink` 一律拒绝并指向续跑/放弃两条出路——槽上未收尾的
+/// plan 属于当初那条扩容请求，执行它就是把缩容静默放大成旧扩容（违反 plan 的
+/// "执行方即请求方"归属）。`NoOp` 只在表已提交、只剩收尾时出现：只有 kind 相符且
+/// 计划终点恰等于当前末端，才是同一作业的续跑。几何与修复动作由调用方解析并下传，
+/// 本函数不读表
 pub fn make_plan_shift_resuming(
     src: &mut FileSource,
     g: &ValidatedGeometry,
     repair: RepairAction,
     grow_part: u32,
-    shift: Option<u64>,
+    intent: ShiftIntent,
 ) -> Result<Plan, Fail> {
     match resume_outcome(src, g, grow_part)? {
         ResumeOutcome::Belongs(p) => {
             let e = gpt_policy::live_entry(g, grow_part)?;
-            // 表已提交、只剩 FS 收尾时，目标末端已在 ckpt 记录的目标位，本次请求算不出
-            // shift（new_end > end 不成立）。这一态与"缩容撞上一份扩容作业"必须分开：
-            // 只有 kind 相符且目标终点恰等于当前末端，才是同一作业的续跑；
-            // 否则执行它就是偷偷把缩容放大成旧扩容
-            let Some(shift) = shift else {
-                if p.kind == PlanKind::Shift && plan_requested_end(&p, e.starting_lba) == Some(e.ending_lba) {
+            match intent {
+                // 缩容请求撞上任何搬移作业都不执行：那份作业的终点属于更大的请求
+                ShiftIntent::Shrink => return Err(plan_job_owns_target(p.kind, false)),
+                // 尺寸未变：只有"计划终点已在盘上"这一态是同一作业的续跑
+                ShiftIntent::NoOp => {
+                    if p.kind == PlanKind::Shift && plan_requested_end(&p, e.starting_lba) == Some(e.ending_lba) {
+                        return Ok(p);
+                    }
+                    return Err(plan_job_owns_target(p.kind, false));
+                }
+                ShiftIntent::Grow(shift) => {
+                    // 作业身份比对，两维都要对上：kind 不同 ⇒ 是另一条命令的作业；终点不同
+                    // ⇒ 是同一条命令的另一次请求。两种都不可逆——搬移已写盘，表项终点照抄旧值
+                    if p.kind != PlanKind::Shift {
+                        return Err(plan_job_owns_target(p.kind, false));
+                    }
+                    // 本次请求的终点 = 目标当前末端 + 本次位移。终点是绝对量，与 ckpt 里
+                    // 记下的那次请求的终点（plan_requested_end）同一坐标系，可直接比
+                    let want_end = e
+                        .ending_lba
+                        .checked_add(shift)
+                        .ok_or_else(|| Fail::refused("requested size overflows the LBA range"))?;
+                    if plan_requested_end(&p, e.starting_lba) != Some(want_end) {
+                        return Err(plan_job_owns_target(p.kind, true));
+                    }
                     return Ok(p);
                 }
-                return Err(plan_job_owns_target(p.kind, false));
-            };
-            // 作业身份比对，两维都要对上：kind 不同 ⇒ 是另一条命令的作业；终点不同
-            // ⇒ 是同一条命令的另一次请求。两种都不可逆——搬移已写盘，表项终点照抄旧值
-            if p.kind != PlanKind::Shift {
-                return Err(plan_job_owns_target(p.kind, false));
             }
-            // 本次请求的终点 = 目标当前末端 + 本次 shift。终点是绝对量，与 ckpt 里记下的
-            // 那次请求的终点（plan_requested_end）同一坐标系，可直接比
-            let want_end = e
-                .ending_lba
-                .checked_add(shift)
-                .ok_or_else(|| Fail::refused("requested size overflows the LBA range"))?;
-            if plan_requested_end(&p, e.starting_lba) != Some(want_end) {
-                return Err(plan_job_owns_target(p.kind, true));
-            }
-            return Ok(p);
         }
         // 与 make_plan_resuming 同判据：别的分区的作业占着槽位，本请求既不能把它
         // 当空槽、也不能按它续跑
@@ -255,9 +270,11 @@ pub fn make_plan_shift_resuming(
         ResumeOutcome::ForeignResize => return Err(foreign_resize_refusal()),
         ResumeOutcome::Empty => {}
     }
-    let shift = shift.ok_or_else(|| Fail::refused(
-        "shrink does not relocate partitions — this entry point only builds relocation plans for growth",
-    ))?;
+    let ShiftIntent::Grow(shift) = intent else {
+        return Err(Fail::refused(
+            "shrink does not relocate partitions — this entry point only builds relocation plans for growth",
+        ));
+    };
     shift_plan_from(g, repair, grow_part, shift)
 }
 

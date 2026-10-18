@@ -120,6 +120,35 @@ impl Outcome {
         }
     }
 
+    /// 同一次操作里两条收尾链（布局 + 其后的 FS/LVM 链）合并成最终结果：
+    /// 待办取并集，内核视图按更差的一侧记。两条链都必须已越过写盘边界——
+    /// 任何一侧不是 `Applied` 时，未应用的那一侧才是最终结论
+    pub fn merge_applied(self, other: Self) -> Self {
+        match (self, other) {
+            (
+                Self::Applied { pending: mut mine, kernel_sync: a },
+                Self::Applied { pending: theirs, kernel_sync: b },
+            ) => {
+                mine.extend(theirs);
+                Self::Applied {
+                    pending: mine,
+                    kernel_sync: if a == KernelSync::Stale || b == KernelSync::Stale {
+                        KernelSync::Stale
+                    } else {
+                        KernelSync::Synchronized
+                    },
+                }
+            }
+            (mine, theirs) => {
+                if theirs.is_applied() {
+                    mine
+                } else {
+                    theirs
+                }
+            }
+        }
+    }
+
     pub fn is_applied(&self) -> bool {
         matches!(self, Self::Applied { .. })
     }
@@ -175,17 +204,6 @@ impl Outcome {
                     );
                 }
             }
-        }
-    }
-
-    /// 表本次未写时只报待办清单：`Applied` 的默认措辞（"partition table updated"）
-    /// 在"请求尺寸与现状相同"这类路径上是假话，调用方知道这一点时用本函数
-    pub(crate) fn report_pending_without_table_claim(&self) {
-        if let Self::Applied { pending, .. } = self
-            && !pending.is_empty()
-        {
-            eprintln!("partition table unchanged, but {} follow-up step(s) are pending:", pending.len());
-            Self::report_pending(pending);
         }
     }
 

@@ -153,6 +153,13 @@ pub fn resize_online(
                     return Fail::from(e).into_outcome();
                 }
                 if let Err(e) = part_resize(&t, bytes) {
+                    // 表已写、内核同步失败：FS 扩步也因此没做，两条事实一并报
+                    let detail = e.detail().to_string();
+                    if matches!(&e, PartResizeError::Partial(_)) {
+                        return e.into_outcome_with(vec![fs_pending(format!(
+                            "partition resized but FS grow skipped: {detail}"
+                        ))]);
+                    }
                     return e.into_outcome();
                 }
                 if let Err(e) = verify_part_size(&t, bytes) {

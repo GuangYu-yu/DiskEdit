@@ -4,6 +4,7 @@ use crate::support::*;
 use crate::args::{parse_size_delta, Args};
 use crate::dev::Mutation;
 use crate::fsid::FsKind;
+use crate::outcome::Outcome;
 use crate::{fsid, fsops};
 
 pub(crate) const HELP_MKFS: &str = r#"diskedit mkfs <TARGET>:N <FS> --yes
@@ -68,7 +69,7 @@ fn check_uuid_request(fstype: Option<FsKind>, req: &fsops::UuidRequest) -> Resul
     }
 }
 
-pub(crate) fn cmd_mkfs(a: &Args) -> u8 {
+pub(crate) fn cmd_mkfs(a: &Args) -> Outcome {
     // FS 名是第二个位置参数（第一个是 <TARGET>:N，已解析进 a.target/a.part）
     let (Some(pref), Some(fstype_name)) = (a.part, a.pos.get(1).cloned()) else { crate::args::usage() };
     // 分区节点不是整盘：`:N` 的解析会把节点首扇区当分区表读，随后的擦写落在
@@ -104,7 +105,7 @@ pub(crate) fn cmd_mkfs(a: &Args) -> u8 {
     // 占用闸必须在屏障之前：镜像被 loop 占用（或块设备分区被挂载/活动 swap）是
     // "请求与现状不符"，此刻一个字节都没写；放到 fsops::mkfs 里探测则是屏障之后，
     // 拒绝会以 Infra(30) 退出并把目标锁进只能 abandon 的现场
-    if let Err(f) = fsops::ensure_idle_before_write(&src, part, part_off) {
+    if let Err(f) = fsops::ensure_idle_before_write(&src, part, part_off, fsops::WriteKind::Overwrite) {
         bail_fail(f);
     }
     // mkfs 是一次事务，但不可回滚：内容擦掉之后没有"回去"这回事。先落屏障（记下"这个
@@ -116,7 +117,8 @@ pub(crate) fn cmd_mkfs(a: &Args) -> u8 {
     // FS 层的失败分类在此换算成出口语义：不认得的类型 ⇒ 10（改参数有解），
     // 工具缺失 / 环境故障 ⇒ 30
     match fsops::mkfs(&src, part, fstype) {
-        Ok(()) => EXIT_OK,
+        // 分区表没动，事务已完成：无待办、无需内核重读
+        Ok(()) => Outcome::applied_with(Vec::new()),
         Err(e) => bail_fail(Fail::from(e)),
     }
 }
@@ -247,7 +249,7 @@ pub(crate) fn cmd_check(a: &Args) -> u8 {
 }
 
 /// set 的一键入口：统一 name/label/uuid/flag 四类属性
-pub(crate) fn cmd_set(a: &Args) -> u8 {
+pub(crate) fn cmd_set(a: &Args) -> Outcome {
     let Some(pref) = a.part else { crate::args::usage() };
     let key = a.pos.get(1).map(|s| s.as_str()).unwrap_or_else(|| crate::args::usage());
     // --random 是 `uuid` 子命令的专属旗标，其余分支不消费它——白名单是命令级的，
@@ -271,6 +273,13 @@ pub(crate) fn cmd_set(a: &Args) -> u8 {
     let mut src = open_target_for_write(a).unwrap_or_else(|f| bail_fail(f));
     // 锁下快照
     let part = crate::gpt_policy::resolve_part(&src, pref).unwrap_or_else(|f| bail_fail(f));
+    // name/type/flag 直接改表，走整盘占用闸；label/uuid 写的是 FS 内容，由
+    // with_partition_device 自己的占用判定把关（它同样要求目标空闲）
+    if matches!(key, "name" | "type" | "flag")
+        && let Err(f) = fsops::ensure_table_write_idle(&src)
+    {
+        bail_fail(f);
+    }
     if key == "name" {
         if value.is_empty() { crate::args::usage(); }
         crate::support::check_gpt_name_len(&value);
@@ -344,7 +353,8 @@ pub(crate) fn cmd_set(a: &Args) -> u8 {
     match r {
         Ok(()) => {
             println!("set {key} on partition #{part} ({})", fsid::fs_name(fstype));
-            EXIT_OK
+            // label/uuid 写在 FS 内容里，分区表未动：事务完成且无待办
+            Outcome::applied_with(Vec::new())
         }
         Err(e) => bail_fail(Fail::from(e).context(&format!("set {key} failed"))),
     }
