@@ -10,6 +10,8 @@
 #   D. 不可确认即拒绝——/dev 下看不到 loop 节点时退出码 30，且不得写成"空闲"
 #   G. 进程退出竞态——已退出进程的 mountinfo 是 EINVAL，跳过它不得掩盖真实探测故障
 #   G2. 权限不足——hidepid 下读不到他人 mountinfo 时按探测失败拒绝，不得当成"未挂载"
+#   G3. 可用性边界——打不开 loop 节点（root:disk 0660）的一方建不出绑定，按未绑定
+#       跳过而非拒绝，非 root 的镜像操作不被节点权限误伤
 #   H. 多 loop 归属——同一镜像的两个 loop 中只有一个被持有，拒绝消息须指向它
 # 依赖 root 与 util-linux（losetup / mount / unshare）；A 另需 python3。
 source "$(dirname "$0")/lib.sh"
@@ -374,6 +376,20 @@ else
         lo_detach "$LB"
         lo_detach "$LA"
     fi
+fi
+
+echo "=== G3: 打不开 loop 节点不等于占用"
+# loop 节点属 root:disk 0660：无 disk 组的用户打不开任何节点，也因此建不出指向
+# 本镜像的绑定。身份判定对这种 EACCES 跳过而不是拒绝，非 root 的镜像操作才可用
+if ! command -v setpriv >/dev/null 2>&1; then
+    echo "SKIP: setpriv 缺失"
+else
+    T10=$(mktemp /tmp/loopid-nobody-XXXXXX.img)
+    track_file "$T10"
+    truncate -s 8M "$T10"
+    chmod 666 "$T10"
+    out=$(setpriv --reuid=65534 --regid=65534 --clear-groups "$B" new "$T10" --yes 2>&1)
+    exp "$?" 0 "无 disk 组的用户不被 loop 节点权限误伤"
 fi
 
 exit $rc

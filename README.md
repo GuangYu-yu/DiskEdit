@@ -36,9 +36,9 @@ FS 层要 root 是因为经 `losetup` 映射分区；块设备写入靠设备节
 
 | 证据等级 | 内容 |
 |---|---|
-| 已运行验证 | loop 身份编码（`st_dev`/`st_ino` 对 `lo_device`/`lo_inode`）、未绑定 loop 的 `ENXIO`、硬链接别名与已删除 backing 路径、跨 mount namespace 的挂载命中、loop 与分区挂载、活动 swap、sysfs holders、已退出进程的 mountinfo（`EINVAL`）、探测失败 fail-closed（退出码 30）、LVM PV 无持有者时的 `--grow-lv` 全链、活动 LV 持有分区时 `AllowDm` 不被通用规则拒绝（链进入 LVM 步）且 `mkfs` 整段重写仍被拒、挂载镜像上 `new`/`add`/`del`/`create`/`set name\|type\|flag`/`undo` 全部被拒且盘面字节不变、多个 loop 命中时拒绝消息指向实际持有者 |
+| 已运行验证 | loop 身份编码（`st_dev`/`st_ino` 对 `lo_device`/`lo_inode`）、未绑定 loop 的 `ENXIO`、硬链接别名与已删除 backing 路径、跨 mount namespace 的挂载命中、loop 与分区挂载、活动 swap、sysfs holders、已退出进程的 mountinfo（`EINVAL`）、探测失败 fail-closed（退出码 30）、LVM PV 无持有者时的 `--grow-lv` 全链、活动 LV 持有分区时 `AllowDm` 不被通用规则拒绝（链进入 LVM 步）且 `mkfs` 整段重写仍被拒、挂载镜像上 `new`/`add`/`del`/`create`/`set name\|type\|flag`/`undo` 全部被拒且盘面字节不变、多个 loop 命中时拒绝消息指向实际持有者、非 root 用户（打不开 `root:disk` 的 loop 节点）的镜像操作可用 |
 | 未验证 | 容器与独立 PID namespace 组合下的 loop 枚举完整性；`hidepid` 等权限限制下 mountinfo 不可读的实际部署（代码按探测失败拒绝，未在真实 `hidepid` 环境运行验证）；上表之外的发行版与内核版本；**镜像内 PV 已被另一 loop 映射且 VG 有活动 LV 时，`--grow-lv` 的完整收尾链**（见上节，LVM 重复 PV 规则使 `pvresize` 对临时映射 no-op，本工具报 PARTIAL(20)，该场景下工具不宣称成功） |
-| 设计限制 | 占用闸是写盘前的时点判定，不阻止检查后外部新建 loop / swap / 挂载；镜像侧枚举只覆盖本进程可见的 loop 节点；fail-closed 对无关 loop 的探测失败同样生效；journal / checkpoint 的零值字段不参与比对 |
+| 设计限制 | 占用闸是写盘前的时点判定，不阻止检查后外部新建 loop / swap / 挂载；镜像侧枚举只覆盖本进程可见的 loop 节点，打不开的 loop 节点（`root:disk` 权限）按未绑定跳过——绑定与节点访问同权限类，该类用户建不出指向本镜像的绑定，此边界随内核/udev 权限模型演进；fail-closed 对无关 loop 的探测失败同样生效；journal / checkpoint 的零值字段不参与比对 |
 
 **外部工具**（按需存在即可，用到才查找）：
 
