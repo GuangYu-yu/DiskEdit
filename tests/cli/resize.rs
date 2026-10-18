@@ -157,14 +157,15 @@ fn grow_to_end() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[test]
-fn apply_swap_recreate() {
-    let dir = std::env::temp_dir().join(format!("diskedit_swr_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let img = dir.join("s.img");
-    // 16 MiB（32768 扇区，last_usable 32734）：root 2048..6143 + swap 6144..8191
-    // apply 后：swap 尾部打包 30687..32734（零数据搬移），root 扩到 32734
-    // swap 分区内预置 v1 swap 头（见下），使重建时 -U/-L 都有值可传
+/// swap 分区内预置的 v1 头身份（内核 include/linux/swap.h union swap_header）：
+/// sws_uuid @1036、sws_volume @1052。全零分区只会走"无 swap 头 → 随机 UUID"那条路，
+/// mkswap 的 -U/-L 参数构造就永远进不了自动化
+const SWAP_UUID: [u8; 16] = [0xA1; 16];
+const SWAP_LABEL: [u8; 3] = [b'A', 0xFF, b'B']; // 含非法 UTF-8 字节：按字节往返的判据
+
+/// 16 MiB（32768 扇区，last_usable 32734）：root 2048..6143 + swap 6144..8191。
+/// apply 后 swap 尾部打包 30687..32734（零数据搬移），root 扩到 32734
+fn write_swap_fixture(img: &std::path::Path) {
     let ss = 512u64;
     let data = vec![0u8; 16 * 1024 * 1024];
     let mut cur = Cursor::new(data);
@@ -188,11 +189,6 @@ fn apply_swap_recreate() {
         partition_name: "swap".into(),
     };
     gpt.write_into(&mut cur).unwrap();
-    // v1 swap 头（内核 include/linux/swap.h union swap_header）：magic 在首页尾，
-    // sws_uuid @1036、sws_volume @1052。全零分区只会走"无 swap 头 → 随机 UUID"那条路，
-    // mkswap 的 -U/-L 参数构造就永远进不了自动化
-    const SWAP_UUID: [u8; 16] = [0xA1; 16];
-    const SWAP_LABEL: [u8; 3] = [b'A', 0xFF, b'B']; // 含非法 UTF-8 字节：按字节往返的判据
     {
         let ps = 4096usize; // 探测候选里本机页优先，4096 先命中
         let base = 6144usize * 512; // swap 分区起始（LBA 6144）
@@ -201,7 +197,15 @@ fn apply_swap_recreate() {
         raw[base + 1036..base + 1052].copy_from_slice(&SWAP_UUID);
         raw[base + 1052..base + 1055].copy_from_slice(&SWAP_LABEL);
     }
-    std::fs::write(&img, with_protective_mbr(cur.into_inner())).unwrap();
+    std::fs::write(img, with_protective_mbr(cur.into_inner())).unwrap();
+}
+
+#[test]
+fn apply_swap_recreate() {
+    let dir = std::env::temp_dir().join(format!("diskedit_swr_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let img = dir.join("s.img");
+    write_swap_fixture(&img);
     let exe = env!("CARGO_BIN_EXE_DiskEdit");
     let img_s = img.to_str().unwrap();
 
@@ -244,8 +248,10 @@ fn apply_swap_recreate() {
     }
     #[cfg(not(target_os = "linux"))]
     {
-        assert_eq!(code, 20, "without mkswap the swap step is pending → PARTIAL: {stderr}");
-        assert!(stderr.contains("swap rebuild") && stderr.contains("mkswap"), "remedy must be printed: {stderr}");
+        // 新操作（无 ckpt）：非 Linux 平台必须在写盘前拒绝，不能先写表再以 pending 收场。
+        // 平台闸先于工具探测，故这里断言平台文案而非 mkswap
+        assert_eq!(code, 10, "a new swap relocation on a non-Linux host must be refused: {stderr}");
+        assert!(stderr.contains("requires Linux"), "the refusal must name the platform gate: {stderr}");
     }
 
     let mut f = std::fs::File::open(&img).unwrap();
@@ -258,13 +264,91 @@ fn apply_swap_recreate() {
         assert_eq!(gpt[1].ending_lba, 30686, "root must end before relocated swap");
         assert_eq!(gpt[2].starting_lba, 30687, "swap packed at tail");
         assert_eq!(gpt[2].ending_lba, 32734);
+    } else if code == 10 {
+        // 写盘前拒绝：表与条目都不得变化
+        assert_eq!(gpt[1].ending_lba, 6143, "a refusal must not grow the target");
+        assert_eq!(gpt[2].starting_lba, 6144, "a refusal must not relocate swap");
+        assert_eq!(gpt[2].ending_lba, 8191);
     } else {
-        // swap 未重建 → 条目循环未走完，扩容收尾跳过：root 保持原终点（收尾按全体 moves
+        // 已写盘、swap 未重建 → 条目循环未走完，扩容收尾跳过：root 保持原终点（收尾按全体 moves
         // 取 min(new_first)−1，未走完时会把未搬移条目的旧位划进扩容区）；swap 条目已落位
         assert_eq!(gpt[1].ending_lba, 6143, "growth must not be committed while the swap rebuild is pending");
         assert_eq!(gpt[2].starting_lba, 30687, "swap entry already relocated");
         assert_eq!(gpt[2].ending_lba, 32734);
     }
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// 写盘前的能力门禁：新跑搬移 swap 时平台或重建工具不满足，一律以拒绝（10）
+/// 结束——不建 checkpoint、不改分区表。PATH 只传给子进程，结论不依赖宿主装了哪些工具
+#[test]
+fn new_swap_relocation_refuses_before_writing() {
+    let dir = std::env::temp_dir().join(format!("diskedit_swgate_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let img = dir.join("s.img");
+    write_swap_fixture(&img);
+    let exe = env!("CARGO_BIN_EXE_DiskEdit");
+    let img_s = img.to_str().unwrap();
+    let ckpt = sidecar(&dir, "s.img", CHECKPOINT_SUFFIX);
+
+    let run = |path_dir: &std::path::Path| -> (i32, String) {
+        let out = Command::new(exe)
+            .args(["apply", img_s, "--grow", "1", "--no-fs"])
+            .env("PATH", path_dir)
+            .output()
+            .unwrap();
+        (out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stderr).into_owned())
+    };
+
+    // 空 PATH：Linux 上报缺 mkswap；非 Linux 上平台闸先拒绝
+    let empty = dir.join("path-empty");
+    std::fs::create_dir_all(&empty).unwrap();
+    let (code, stderr) = run(&empty);
+    assert_eq!(code, 10, "a new swap relocation must refuse before any write: {stderr}");
+    #[cfg(target_os = "linux")]
+    assert!(stderr.contains("mkswap"), "the refusal must name the missing tool: {stderr}");
+    #[cfg(not(target_os = "linux"))]
+    assert!(stderr.contains("requires Linux"), "the refusal must name the platform gate: {stderr}");
+    assert!(!ckpt.exists(), "a refusal must not create a checkpoint");
+
+    // 只放一个假的 mkswap（预检失败前不会启动它）：Linux 上镜像目标还缺 losetup
+    let only_mkswap = dir.join("path-mkswap");
+    std::fs::create_dir_all(&only_mkswap).unwrap();
+    let fake = only_mkswap.join("mkswap");
+    std::fs::write(&fake, b"").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let (code, stderr) = run(&only_mkswap);
+    assert_eq!(code, 10, "a new swap relocation must refuse before any write: {stderr}");
+    #[cfg(target_os = "linux")]
+    assert!(stderr.contains("losetup"), "the refusal must name the missing tool: {stderr}");
+    #[cfg(not(target_os = "linux"))]
+    assert!(stderr.contains("requires Linux"), "the refusal must name the platform gate: {stderr}");
+    assert!(!ckpt.exists(), "a refusal must not create a checkpoint");
+
+    // 非 Linux 上即便两个工具名都在 PATH，平台闸仍须先拒绝：不能先写表再 pending
+    #[cfg(not(target_os = "linux"))]
+    {
+        let both = dir.join("path-both");
+        std::fs::create_dir_all(&both).unwrap();
+        std::fs::write(both.join("mkswap"), b"").unwrap();
+        std::fs::write(both.join("losetup"), b"").unwrap();
+        let (code, stderr) = run(&both);
+        assert_eq!(code, 10, "a non-Linux host must be refused even with both tools in PATH: {stderr}");
+        assert!(stderr.contains("requires Linux"), "the refusal must name the platform gate: {stderr}");
+        assert!(!ckpt.exists(), "a refusal must not create a checkpoint");
+    }
+
+    // 以上拒绝都没有动表
+    let mut f = std::fs::File::open(&img).unwrap();
+    let gpt = gptman::GPT::find_from(&mut f).unwrap();
+    assert_eq!((gpt[1].starting_lba, gpt[1].ending_lba), (2048, 6143), "root unchanged");
+    assert_eq!((gpt[2].starting_lba, gpt[2].ending_lba), (6144, 8191), "swap unchanged");
 
     let _ = std::fs::remove_dir_all(&dir);
 }

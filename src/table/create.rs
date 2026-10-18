@@ -165,7 +165,10 @@ pub const SWAP_TYPE_GUID: [u8; 16] = [
 // ---------- msdos（真 MBR）表创建与主分区条目编辑 ----------
 // 限制：仅主分区槽位 1..=4，不支持扩展/逻辑分区链。
 
-/// `new --table msdos`：写空 MBR（保留 BootCode，置签名，清空 4 条记录）
+/// `new --table msdos`：写空 MBR（保留 BootCode，置签名，清空 4 条记录），并清掉
+/// LBA1 上可能残留的 GPT 主头签名。只清签名那 8 字节：同一扇区的其余字节、条目数组
+/// 与盘尾备份头都保持原样。签名留着会让这块新 msdos 盘被判成 `GptDamaged`
+/// （`table_label` 的第 3 条判据），此后一切写命令都拒绝操作它
 pub fn create_mbr(src: &mut FileSource) -> io::Result<()> {
     let ss = src.sector_size;
     let mut lba0 = vec![0u8; ss as usize];
@@ -174,6 +177,18 @@ pub fn create_mbr(src: &mut FileSource) -> io::Result<()> {
     lba0[510] = 0x55;
     lba0[511] = 0xAA;
     src.write_at(0, &lba0)?;
+    // 与解析侧同一套候选扇区大小：容器 ss 之外的候选说明旧 GPT 可能按另一种扇区
+    // 落盘，签名会落在那个候选的 LBA1 上
+    for at in candidate_sector_sizes(ss) {
+        if src.size < at + GPT_SIGNATURE.len() as u64 {
+            continue;
+        }
+        let mut sig = [0u8; GPT_SIGNATURE.len()];
+        src.read_at(at, &mut sig)?;
+        if &sig == GPT_SIGNATURE {
+            src.write_at(at, &[0u8; GPT_SIGNATURE.len()])?;
+        }
+    }
     src.sync_all()
 }
 

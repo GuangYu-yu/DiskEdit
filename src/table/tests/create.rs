@@ -28,6 +28,23 @@ pub(crate) fn create_gpt_min_capacity_boundaries() {
     assert!(create_gpt(&mut bad4, 4096, Some([0x11; 16])).is_err());
 }
 
+/// 在 GPT 镜像上建 msdos 表：LBA1 的旧主头签名必须被清掉（否则 `table_label` 判
+/// `GptDamaged`，后续写命令全部拒绝），而同一扇区的其余字节原样保留
+#[test]
+pub(crate) fn create_mbr_clears_a_stale_gpt_primary_signature() {
+    let mut src = src_from_gpt("mbr_over_gpt", 512);
+    let mut before = vec![0u8; 512];
+    src.read_at(512, &mut before).unwrap();
+    create_mbr(&mut src).unwrap();
+    let mut after = vec![0u8; 512];
+    src.read_at(512, &mut after).unwrap();
+    assert_eq!(&after[..8], &[0u8; 8], "GPT primary signature must be cleared");
+    assert_eq!(&after[8..], &before[8..], "the rest of LBA1 must be preserved");
+    assert_eq!(table_label(&src).unwrap(), TableLabel::Mbr);
+    // 残留的头/数组字节不再构成一张可读的 GPT 表
+    assert!(load_gpt(&src).unwrap().is_none());
+}
+
 #[test]
 pub(crate) fn type_guid_constants_are_disk_byte_order() {
     // 内核 include/linux/efi.h EFI_GUID 宏展开的落盘字节（前 3 字段小端）
