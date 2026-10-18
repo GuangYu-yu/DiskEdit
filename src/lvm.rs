@@ -69,6 +69,15 @@ fn run_tool(tool: &str, args: &[&str]) -> Result<String, LvmError> {
     }
 }
 
+/// lvm2 JSON 报表的外层结构是否可解析。解析失败与"报表里没有行"必须分开：
+/// 前者是工具输出损坏，后者才是"没有这个对象"
+fn report_parsable(json: &str) -> bool {
+    serde_json::from_str::<Value>(json)
+        .ok()
+        .and_then(|v| v.get("report").and_then(|r| r.as_array()).map(|_| ()))
+        .is_some()
+}
+
 /// 取 report[].<key>[] 数组（lvm2 JSON 报表的统一入口）。
 /// 遍历全部 report 元素合并：普通 lvs/pvs/vgs 恒为单元素，LVM 亦允许
 /// 单命令多 report（如 lvm fullreport）
@@ -327,6 +336,10 @@ pub fn pv_size_report(part_dev: &str) -> Result<PvSizeReport, LvmError> {
 pub fn vg_of(part_dev: &str) -> Result<Option<String>, LvmError> {
     // -o 字段名取自 man pvs
     let out = run_tool("pvs", &["--reportformat", "json", "-o", "pv_name,vg_name", part_dev])?;
+    // 与 lvs_on_pv 同一判据：解析不出不等于"这块盘不是 PV"
+    if !report_parsable(&out) {
+        return Err(LvmError::Failed("pvs: unparsable report in output".to_string()));
+    }
     parse_pv_vg(&out, part_dev)
 }
 
@@ -335,11 +348,7 @@ pub fn lvs_on_pv(vg: &str, part_dev: &str) -> Result<Vec<(String, String)>, LvmE
     let out = run_tool("lvs", &["--reportformat", "json", "-o", "lv_name,lv_path,devices", vg])?;
     // "确认无行"与"解析不出"必须分开：后者折叠成空表会被调用方当成
     // "no top-level LV"，把故障引向错误的出路（挑 --lv / 判定无从扩）
-    let parsable = serde_json::from_str::<Value>(&out)
-        .ok()
-        .and_then(|v| v.get("report").and_then(|r| r.as_array()).map(|_| ()))
-        .is_some();
-    if !parsable {
+    if !report_parsable(&out) {
         return Err(LvmError::Failed("lvs: unparsable report in output".to_string()));
     }
     parse_lvs_on_pv(&out, part_dev)

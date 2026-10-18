@@ -1,5 +1,5 @@
 #![allow(clippy::let_underscore_must_use)] // 清理临时文件有意忽略失败
-use super::{check_e2fsck_for_check, check_e2fsck_for_resize, check_grow_step, classify_shrink, erase_ranges, grow_target_at, leak_from, mkfs_tool, parse_fstype, parse_num_field, parse_num_lead, partition_byte_range, settle_release, uuid_support, DeviceScope, Growable, MkfsFs, MountLeak, ReleaseOutcome, ShrinkVerify, UuidSupport};
+use super::{check_e2fsck_for_check, check_e2fsck_for_resize, check_grow_step, classify_shrink, erase_ranges, grow_target_at, leak_from, mkfs_tool, parse_fstype, parse_num_field, parse_num_lead, partition_byte_range, settle_release, swap_rebuild_support, uuid_support, DeviceScope, Growable, MkfsFs, MountLeak, ReleaseOutcome, ShrinkVerify, ToolSupport, UuidSupport};
 use super::FsError;
 use crate::dev::FileSource;
 use crate::fsid::{self, FsKind};
@@ -37,6 +37,19 @@ pub(crate) fn e2fsck_check_context_treats_repair_as_success() {
 pub(crate) fn swap_label_and_uuid_are_wired_to_swaplabel() {
     assert!(matches!(uuid_support(Some(FsKind::Swap)), UuidSupport::Yes));
     assert!(matches!(uuid_support(Some(FsKind::Vfat)), UuidSupport::No(_)));
+}
+
+/// 搬移 swap 的重建工具矩阵：`mkswap` 恒需；镜像目标的重建对象是 loop 分区设备，
+/// 还要 `losetup`；块设备用现成分区节点，不得因探测 loop 工具而拒绝
+#[test]
+pub(crate) fn swap_rebuild_tools_follow_the_target_kind() {
+    match (swap_rebuild_support(false), swap_rebuild_support(true)) {
+        (ToolSupport::Tools(image), ToolSupport::Tools(block)) => {
+            assert_eq!(image, &["mkswap", "losetup"]);
+            assert_eq!(block, &["mkswap"]);
+        }
+        _ => panic!("swap rebuild must stay a tool-list requirement"),
+    }
 }
 
 /// btrfs 多设备检查的尺寸闸：分区装不下 superblock 头（< 0x10090）时在读之前

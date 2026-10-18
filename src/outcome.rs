@@ -178,6 +178,17 @@ impl Outcome {
         }
     }
 
+    /// 表本次未写时只报待办清单：`Applied` 的默认措辞（"partition table updated"）
+    /// 在"请求尺寸与现状相同"这类路径上是假话，调用方知道这一点时用本函数
+    pub(crate) fn report_pending_without_table_claim(&self) {
+        if let Self::Applied { pending, .. } = self
+            && !pending.is_empty()
+        {
+            eprintln!("partition table unchanged, but {} follow-up step(s) are pending:", pending.len());
+            Self::report_pending(pending);
+        }
+    }
+
     /// 未完成后置条件的逐条呈现：Applied 与 Failed 两条路径共用同一份格式
     fn report_pending(pending: &[Pending]) {
         for p in pending {

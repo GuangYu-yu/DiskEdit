@@ -125,7 +125,6 @@ pub(crate) fn prepare_apply(
     // 恢复三态：有效 → 续传 / 槽位被另一族作业占用 → 拒绝 / 空 → 新建
     // 落点取命中路径：续传写同一份现场；空槽返回本次命名落点
     let (slot, ckpt_path) = read_checkpoint(src, g0)?;
-
     let ckpt = match slot {
         CheckpointSlot::Ambiguous(paths) => return Err(ambiguous_checkpoint(&paths)),
         // 与 make_plan_resuming 共用同一句拒绝理由：同一事实的措辞只写一次
@@ -294,19 +293,37 @@ pub(crate) fn prepare_apply(
                 map: src.loop_mapping,
             }
         }
-        CheckpointSlot::Empty => Checkpoint {
-            disk_size: src.size,
-            ss: plan.ss,
-            grow_part: plan.grow_part,
-            last_usable_lba: plan.last_usable_lba,
-            moves: plan.moves.clone(),
-            kind: plan.kind,
-            cur_index: 0,
-            chunks_done: 0,
-            chunk_bytes: chunk_len,
-            fp: src.fingerprint,
-            map: src.loop_mapping,
-        },
+        CheckpointSlot::Empty => {
+            // 被搬移的 swap 条目在表项提交后由 recreate_swap 重建（mkswap；镜像目标的重建
+            // 对象是 loop 分区设备，还要 losetup），且不受 --no-fs 约束。新跑必须现在确认
+            // 平台与工具可用：否则会先把表改完，再以 pending 收场。恢复分支不套用这条——
+            // 已有 relocation ckpt 是已经开始的作业，缺工具只能在执行期以 pending 收场并
+            // 保留现场，不能反过来阻断恢复。预检只覆盖平台与工具存在性：PATH 里有可执行
+            // 文件不等于它一定能成功操作目标（权限、设备策略），那些失败仍落在执行期
+            if plan.moves.iter().any(|m| m.is_swap) {
+                crate::fsops::require_linux()
+                    .map_err(|e| crate::outcome::Fail::refused(format!("cannot rebuild swap: {e}")))?;
+                crate::fsops::check_support(
+                    "rebuild",
+                    crate::fsid::FsKind::Swap.as_str(),
+                    crate::fsops::swap_rebuild_support(src.is_block),
+                )
+                .map_err(|e| crate::outcome::Fail::refused(e.to_string()))?;
+            }
+            Checkpoint {
+                disk_size: src.size,
+                ss: plan.ss,
+                grow_part: plan.grow_part,
+                last_usable_lba: plan.last_usable_lba,
+                moves: plan.moves.clone(),
+                kind: plan.kind,
+                cur_index: 0,
+                chunks_done: 0,
+                chunk_bytes: chunk_len,
+                fp: src.fingerprint,
+                map: src.loop_mapping,
+            }
+        }
     };
     Ok(ApplyDecision { g: g0.clone(), ckpt, ckpt_path, chunk_len, no_fs })
 }

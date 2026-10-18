@@ -71,6 +71,9 @@ fn check_uuid_request(fstype: Option<FsKind>, req: &fsops::UuidRequest) -> Resul
 pub(crate) fn cmd_mkfs(a: &Args) -> u8 {
     // FS 名是第二个位置参数（第一个是 <TARGET>:N，已解析进 a.target/a.part）
     let (Some(pref), Some(fstype_name)) = (a.part, a.pos.get(1).cloned()) else { crate::args::usage() };
+    // 分区节点不是整盘：`:N` 的解析会把节点首扇区当分区表读，随后的擦写落在
+    // 一个由伪表算出的区间上。判据与 new/add/undo 等命令同一处
+    crate::support::refuse_partition_node_target("mkfs", &a.target);
     if !a.yes {
         bail_fail(Fail::refused("mkfs destroys all data on the target partition; pass --yes to confirm"));
     }

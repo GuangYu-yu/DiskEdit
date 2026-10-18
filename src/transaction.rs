@@ -300,6 +300,8 @@ impl TransactionManager {
     fn open_rw(a: &Args) -> Result<FileSource, Fail> {
         let mut src = Self::open_plain(a)?;
         src.ownership = Some(TargetLock::acquire(&src.identity)?);
+        // ckpt 残骸清扫必须在锁下：未持锁时删除会命中另一个进程正在写的暂存文件
+        crate::dev::sweep_stale_ckpt_temps(&src.identity);
         Ok(src)
     }
 

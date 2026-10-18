@@ -309,13 +309,17 @@ fn msdos_user_resize() {
     assert_eq!(slot(&raw, 1), (2048, 4096), "relative grow");
     assert_eq!(slot(&raw, 2), (6144, 2048), "partition 2 untouched");
 
-    // grow 吃满右侧：已到分区 2 起点，表不再变化（`grow` 仍属扩容语义，故同样要 --no-fs）
+    // 右侧已无空闲：grow 无法扩分区 ⇒ 拒绝（10），与 GPT 及在线路径同语义。
+    // 不带 --no-fs 时先被"类型识别不出"拦下；两次都必须一字未写
+    let raw_before = std::fs::read(&img).unwrap();
     let (c, o) = run(&["resize", &format!("{img_s}:1"), "grow"]);
     assert_eq!(c, 10, "grow must refuse an unidentifiable region without --no-fs: {o}");
     let (c, o) = run(&["resize", &format!("{img_s}:1"), "grow", "--no-fs"]);
-    assert_eq!(c, 0, "{o}");
+    assert_eq!(c, 10, "grow with no free space to the right must refuse: {o}");
+    assert!(o.contains("no free space"), "{o}");
+    assert_eq!(std::fs::read(&img).unwrap(), raw_before, "refused grow must not write");
     let raw = std::fs::read(&img).unwrap();
-    assert_eq!(slot(&raw, 1), (2048, 4096), "grow stops at partition 2");
+    assert_eq!(slot(&raw, 1), (2048, 4096), "partition 1 unchanged");
 
     // 右侧空闲不足：绝对值超界必须拒绝且未写盘
     let raw_before = std::fs::read(&img).unwrap();
@@ -349,6 +353,32 @@ fn msdos_user_resize() {
     assert_eq!(c, 10, "out-of-range MBR slot must refuse: {o}");
     assert!(o.contains("MBR covers primary slots"), "{o}");
 
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn new_msdos_over_gpt_is_recognized_as_msdos() {
+    let dir = std::env::temp_dir().join(format!("diskedit_mbr_over_gpt_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let img = dir.join("g.img");
+    std::fs::write(&img, vec![0u8; 16 * 1024 * 1024]).unwrap();
+    let exe = env!("CARGO_BIN_EXE_DiskEdit");
+    let img_s = img.to_str().unwrap();
+    let run = |args: &[&str]| -> (i32, String) {
+        let out = Command::new(exe).args(args).output().unwrap();
+        (out.status.code().unwrap_or(-1), format!("{}\n{}",
+            String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr)))
+    };
+    let (c, o) = run(&["new", img_s, "--yes"]);
+    assert_eq!(c, 0, "{o}");
+    // 覆盖已有 GPT：残留的主头签名必须一并清掉，否则这张新 MBR 盘会被判 GptDamaged
+    let (c, o) = run(&["new", img_s, "--table", "msdos", "--yes"]);
+    assert_eq!(c, 0, "{o}");
+    let (c, o) = run(&["add", img_s, "--start", "2048", "--end", "4095", "--type", "0x83"]);
+    assert_eq!(c, 0, "a stale GPT signature must not block writes after `new --table msdos`: {o}");
+    let (c, o) = run(&["info", img_s]);
+    assert_eq!(c, 0, "{o}");
+    assert!(o.contains("\"label\":\"mbr\""), "{o}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

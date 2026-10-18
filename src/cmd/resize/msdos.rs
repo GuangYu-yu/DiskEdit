@@ -104,15 +104,25 @@ pub(crate) fn mbr_grow_finish(
         } else {
             crate::outcome::Outcome::applied_with(Vec::new())
         };
-        finish_resize(a, o, Some(src), part, is_pv, is_block, cur_bytes)
-    } else {
-        let mut o = crate::outcome::Outcome::applied_with(pending);
-        if table_written && !kernel_resync(src) {
-            o.mark_kernel_stale();
-        }
-        o.report();
-        o.exit_code()
+        return finish_resize(a, o, Some(src), part, is_pv, is_block, cur_bytes);
     }
+    let mut o = crate::outcome::Outcome::applied_with(pending);
+    if table_written && !kernel_resync(src) {
+        o.mark_kernel_stale();
+    }
+    if table_written {
+        o.report();
+    } else {
+        // SIZE 与现状相同 ⇒ 表一个字节都没改：不能沿用"表已更新"的措辞
+        o.report_pending_without_table_claim();
+    }
+    // PV 的 pvresize/lvextend 链是本次操作的后置条件之一，不因 swap 等外层待办而跳过：
+    // finish_resize 只在非 PV 的未完成结果上早退，PV 则照常进链，并以两者中更严重的
+    // 退出码收口。链自身的失败在 resize_done 内另报，与上面的待办清单不是同一条
+    if is_pv {
+        return finish_resize(a, o, Some(src), part, is_pv, is_block, cur_bytes);
+    }
+    o.exit_code()
 }
 
 /// resize 的 MBR 分支（仅主分区 1..4；逻辑分区与扩展容器不支持）。原位纯扩缩：扩须右侧
@@ -205,18 +215,21 @@ pub(crate) fn cmd_resize_msdos(a: &Args, pref: PartSelector, req: &SizeRequest, 
     }
     if grow_to_end {
         let free = free_right_msdos(&mbr, p, total_sectors);
-        let mut table_written = false;
-        if free > 0 {
-            let new_size_lba = p.size_lba as u64 + free;
-            if new_size_lba > u32::MAX as u64 {
-                bail_fail(Fail::refused(format!("new size {new_size_lba} sectors exceeds MBR 32-bit LBA limit")));
-            }
-            table::resize_mdos_entry(&mut src, part, new_size_lba as u32)
-                .unwrap_or_else(|f| bail_fail(f));
-            table_written = true;
+        // 请求的分区增长无法实现：与 GPT 的 `resize grow` 及在线路径同语义拒绝，而不是
+        // 只把 FS 扩满现分区再以 0 退出——那会让调用方以为分区表也已更新
+        if free == 0 {
+            bail_fail(Fail::refused(
+                "grow would not extend the partition — no free space to its right (MBR cannot relocate blocking partitions); \
+                 use `resizefs` to fill the filesystem inside the current partition".to_string(),
+            ));
         }
-        // free == 0：分区已吃满右侧，表不动，FS 工具直接扩满现分区（与 GPT 路径同语义）
-        mbr_grow_finish(a, &mut src, p, table_written, is_pv, is_block)
+        let new_size_lba = p.size_lba as u64 + free;
+        if new_size_lba > u32::MAX as u64 {
+            bail_fail(Fail::refused(format!("new size {new_size_lba} sectors exceeds MBR 32-bit LBA limit")));
+        }
+        table::resize_mdos_entry(&mut src, part, new_size_lba as u32)
+            .unwrap_or_else(|f| bail_fail(f));
+        mbr_grow_finish(a, &mut src, p, true, is_pv, is_block)
     } else {
         let Some(bytes) = target else { crate::args::usage() };
         if bytes < ss {
