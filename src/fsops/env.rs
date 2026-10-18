@@ -103,13 +103,17 @@ pub(crate) fn os_bytes(b: &[u8]) -> OsString {
     OsString::from(String::from_utf8_lossy(b).into_owned())
 }
 
-/// 同 run，但从 stdin 喂入脚本（sfdisk -N 的分区描述只走 stdin）
+/// 同 run，但从 stdin 喂入脚本（sfdisk -N 的分区描述只走 stdin）。
+/// stdout/stderr 也必须接管道：调用方按 `Output` 消费它们，未接时 `wait_with_output`
+/// 只会返回空 Vec，子进程的失败原因就再也拿不到
 #[cfg(target_os = "linux")]
 pub(crate) fn run_input(tool: &str, args: &[&str], input: &str) -> Result<std::process::Output, FsError> {
     let path = find_tool(tool)?;
     let mut child = Command::new(path)
         .args(args)
         .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
         .env("LC_ALL", "C")
         .spawn()
         .map_err(FsError::from)?;

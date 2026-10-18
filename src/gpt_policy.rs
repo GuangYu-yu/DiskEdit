@@ -8,7 +8,7 @@
 use crate::dev::{FileSource, PartSelector};
 use crate::geometry::ValidatedGeometry;
 use crate::outcome::Fail;
-use crate::table::{self, GptState, MbrPartition, PmbrSize, RawGpt};
+use crate::table::{self, GptState, HeaderIssue, MbrPartition, PmbrSize, RawGpt};
 use std::io;
 
 /// 修复动作（互斥、穷举）。不用 bool 旗标：动作本身就是状态，
@@ -100,17 +100,22 @@ pub fn classify_repair(g: &RawGpt, file_last_lba: u64) -> io::Result<RepairActio
     let relocates = g.state != GptState::Valid;
     // stale 与 512 口径都是"可修复"：动作相同（按本容器重写），差别只在措辞
     let pmbr_needs_repair = matches!(g.pmbr, PmbrSize::NeedsRepair { .. });
-    Ok(match (relocates, pmbr_needs_repair) {
-        (false, false) => RepairAction::None,
-        (false, true) => RepairAction::RepairProtectiveMbr,
-        (true, false) => RepairAction::RelocateBackup {
-            new_backup_lba: file_last_lba,
-            new_last_usable: repaired_last_usable(g, file_last_lba)?,
-        },
-        (true, true) => RepairAction::RelocateAndRepair {
-            new_backup_lba: file_last_lba,
-            new_last_usable: repaired_last_usable(g, file_last_lba)?,
-        },
+    if !relocates {
+        return Ok(if pmbr_needs_repair { RepairAction::RepairProtectiveMbr } else { RepairAction::None });
+    }
+    // 备份副本可读而主头丢失时，可用区上界已由备份头给出：修复只补主头，不改写
+    // 这条事实轴。重定位臂的 new_last_usable 是"容器末端减跨度"，直接用它会静默
+    // 抬高可用区上界，让随后 add 能分配进原表刻意留白的尾部
+    let new_last_usable = match g.state {
+        GptState::NeedsRepair { cause: HeaderIssue::PrimaryUnreadable } => {
+            g.header.last_usable_lba.min(repaired_last_usable(g, file_last_lba)?)
+        }
+        _ => repaired_last_usable(g, file_last_lba)?,
+    };
+    Ok(if pmbr_needs_repair {
+        RepairAction::RelocateAndRepair { new_backup_lba: file_last_lba, new_last_usable }
+    } else {
+        RepairAction::RelocateBackup { new_backup_lba: file_last_lba, new_last_usable }
     })
 }
 
@@ -911,6 +916,19 @@ mod tests {
         // Inconsistent：可能是更大盘的截断副本，无论 state 如何都拒绝自动修复
         let inc = gpt(GptState::Valid, PmbrSize::Inconsistent, &[]);
         assert!(classify_repair(&inc, 2000).is_err());
+    }
+
+    /// 主头丢失而备份可读：修复只补主头，备份头里的可用区上界不被改写
+    #[test]
+    fn primary_unreadable_keeps_last_usable() {
+        let primary_unreadable =
+            GptState::NeedsRepair { cause: HeaderIssue::PrimaryUnreadable };
+        let action = classify_repair(&gpt(primary_unreadable, PmbrSize::Normal, &[]), 2000).unwrap();
+        assert_eq!(
+            action,
+            RepairAction::RelocateBackup { new_backup_lba: 2000, new_last_usable: 999 }
+        );
+        assert!(action.new_last_usable().is_some_and(|v| v < 2000 - 32 - 1));
     }
 
     /// 搬迁后的可用区上界：容量不足与既有分区越界都必须拒绝，绝不静默截断分区

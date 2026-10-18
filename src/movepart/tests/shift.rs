@@ -4,21 +4,61 @@ use super::support::*;
 
 /// 条目循环未走完（swap 重建失败就地停止）时扩容收尾必须跳过：grow_end_for 按全体
 /// moves 取 min(new_first)−1，会把尚未搬移成员的旧位划进扩容区，提交即写出与未搬移
-/// 分区重叠的表项。swap 条目只给 64 扇区（32KiB，低于 mkswap 的最小可建容量），
-/// 使重建在带 mkswap 的环境按容量拒绝、在其余环境按工具缺失/权限拒绝——两条路都进
-/// Err 臂。重跑走续传口径：位置与目的区校验须接受"成员停在本作业成员旧位"的现场
+/// 分区重叠的表项。swap 条目只给 64 扇区（32KiB，低于 mkswap 的最小可建容量）：
+/// Linux 上工具齐备时重建按容量拒绝；非 Linux 或工具缺失（mkswap 或镜像所需的
+/// losetup）时则在写盘前拒绝（10，不建 ckpt）。恢复段另起一份未动过的现场：已有
+/// relocation ckpt 时不做能力拒绝，缺工具/重建失败只以 pending 收场并保留现场
 #[test]
 pub(crate) fn swap_rebuild_failure_skips_growth_finalization() {
     const SWAP: [u8; 16] = [0x6D, 0xFD, 0x57, 0x06, 0xAB, 0xA4, 0xC4, 0x43, 0x84, 0xE5, 0x09, 0x33, 0xC8, 0x4B, 0x4F, 0x4F];
     // root 2048..6143 | home 6144..10239 | swap 10240..10303（64 扇区）
-    let (mut src, path) = plan_fixture(&[
+    let fixture = || plan_fixture(&[
         (1, [0x11; 16], 2048, 6143),
         (2, [0x22; 16], 6144, 10239),
         (3, SWAP, 10240, 10303),
     ]);
+
+    // 新跑（无 ckpt）：工具不齐时必须在写盘前拒绝，不建立 pending 事务
+    let (mut src, path) = fixture();
     let ckpt_path = src.identity.checkpoint_path().to_path_buf();
     let plan = make_plan(&mut src, 1).unwrap();
     assert!(plan.moves.iter().any(|m| m.is_swap), "fixture must carry a movable swap");
+    // 平台闸先于工具探测：非 Linux 上即使两个工具名都在 PATH，也必须按拒绝分支断言
+    let tools_ready = cfg!(target_os = "linux")
+        && crate::fsops::find_tool("mkswap").is_ok()
+        && crate::fsops::find_tool("losetup").is_ok();
+    if !tools_ready {
+        let fresh = ap(&mut src, &plan, 1024 * 1024, true, &mut |_| {});
+        assert!(
+            matches!(fresh, crate::outcome::Outcome::Refused(_)),
+            "a new swap relocation without the rebuild tools must be refused, got {fresh:?}"
+        );
+        assert_eq!(fresh.exit_code(), 10);
+        assert!(!ckpt_path.exists(), "a refusal must not create a checkpoint");
+        let g = table::load_gpt(&src).unwrap().unwrap();
+        assert_eq!((g.entries[0].starting_lba, g.entries[0].ending_lba), (2048, 6143));
+        assert_eq!((g.entries[2].starting_lba, g.entries[2].ending_lba), (10240, 10303));
+    } else {
+        // 工具在：swap 只有 64 扇区（32KiB，低于 mkswap 最小容量），重建仍以 pending 收场
+        let fresh = ap(&mut src, &plan, 1024 * 1024, true, &mut |_| {});
+        assert_eq!(fresh.exit_code(), 20, "the fresh run ends as pending: {fresh:?}");
+    }
+    drop(src);
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(&ckpt_path);
+
+    // 恢复：未动过的现场 + 已有 relocation ckpt —— 不做写盘前的能力拒绝，
+    // 缺工具/重建失败只能以 pending 收场，现场（ckpt）必须保留
+    let (mut src, path) = fixture();
+    let ckpt_path = src.identity.checkpoint_path().to_path_buf();
+    let plan = make_plan(&mut src, 1).unwrap();
+    let ckpt = Checkpoint {
+        disk_size: src.size, ss: plan.ss, grow_part: plan.grow_part,
+        last_usable_lba: plan.last_usable_lba, moves: plan.moves.clone(), kind: plan.kind,
+        cur_index: 0, chunks_done: 0, chunk_bytes: 1024 * 1024,
+        fp: src.fingerprint, map: src.loop_mapping,
+    };
+    atomic_write_ckpt(&ckpt_path, &ckpt.serialize()).unwrap();
     let o = ap(&mut src, &plan, 1024 * 1024, true, &mut |_| {});
     match &o {
         crate::outcome::Outcome::Applied { pending, .. } => {
@@ -34,11 +74,6 @@ pub(crate) fn swap_rebuild_failure_skips_growth_finalization() {
     assert_eq!((g.entries[0].starting_lba, g.entries[0].ending_lba), (2048, 6143));
     assert_eq!((g.entries[1].starting_lba, g.entries[1].ending_lba), (6144, 10239));
     assert!(ckpt_path.exists(), "有待办时 checkpoint 必须保留");
-    // 重跑：续传口径须被接受（dst 校验豁免本作业成员），并停在同一待办
-    let plan2 = plan_resuming(&mut src, 1).unwrap();
-    let o2 = ap(&mut src, &plan2, 1024 * 1024, true, &mut |_| {});
-    assert!(!o2.is_complete());
-    assert_eq!(o2.exit_code(), 20, "重跑仍以 swap 重建失败收场");
     drop(src);
     let _ = std::fs::remove_file(&path);
     let _ = std::fs::remove_file(&ckpt_path);

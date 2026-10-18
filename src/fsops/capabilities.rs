@@ -55,6 +55,13 @@ pub(crate) fn shrink_support(fstype: Option<FsKind>) -> ToolSupport {
     }
 }
 
+/// 搬移 swap 的重建前置：`mkswap` 重建 swap 区；镜像目标的重建对象是 loop 分区
+/// 设备，还要 `losetup`。块设备用 /sys 定位到的现成分区节点，不经 loop
+pub(crate) fn swap_rebuild_support(is_block: bool) -> ToolSupport {
+    let tools: &'static [&'static str] = if is_block { &["mkswap"] } else { &["mkswap", "losetup"] };
+    ToolSupport::Tools(tools)
+}
+
 /// 工具所属包名（Debian 系）。写进错误信息是为了让自动化脚本能识别缺失项
 /// 并自动安装后重试，而不必靠人读日志
 pub(crate) fn tool_package(tool: &str) -> &'static str {

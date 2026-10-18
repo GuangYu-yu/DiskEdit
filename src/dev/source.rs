@@ -95,8 +95,6 @@ impl FileSource {
                 let node = sysfs_node_from_rdev(rdev)?;
                 // 块设备身份解析失败（fail-closed）⇒ 打开失败：错误信息带设备名
                 let identity = TargetIdentity::resolve_block_at(&node, path).map_err(io::Error::other)?;
-                // 可写打开：顺手清掉落点目录里的崩溃残骸（ckpt 暂存文件）
-                sweep_stale_ckpt_temps(&identity);
                 let (fingerprint, loop_mapping) = Self::block_open_extras(&identity, &node)?;
                 return Ok(FileSource {
                     identity,
@@ -202,10 +200,6 @@ impl FileSource {
         // 已声明该平台上的别名路径各有一份现场与一把锁）
         #[cfg(not(target_os = "linux"))]
         let identity = TargetIdentity::resolve_image(path);
-        if writable {
-            // 可写打开：顺手清掉落点目录里的崩溃残骸（ckpt 暂存文件）
-            sweep_stale_ckpt_temps(&identity);
-        }
         Ok(FileSource {
             identity,
             file,

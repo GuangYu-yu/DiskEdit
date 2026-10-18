@@ -69,8 +69,9 @@ impl TargetLock {
                 return Err(Fail::infra(format!("cannot take the target lock {}: {e}", path.display())));
             }
         }
-        // 第二道凭据：镜像的数据文件本身（仅 unix）。打不开（目标不在）即放弃这道凭据
-        // ——`abandon` 的常态就是目标已消失，那时能依赖的只有锁文件
+        // 第二道凭据：镜像的数据文件本身（仅 unix）。只有"目标不在"才放弃这道凭据
+        // ——`abandon` 的常态就是目标已消失，那时能依赖的只有锁文件。其余打开失败
+        // （EACCES / EMFILE / EIO）不是"目标不在"：静默降级会丢掉 inode 级凭据
         #[cfg(unix)]
         let image = match identity.image_data_path() {
             Some(data) => match OpenOptions::new().read(true).open(data) {
@@ -81,7 +82,13 @@ impl TargetLock {
                         return Err(Fail::infra(format!("cannot lock the target {}: {e}", data.display())));
                     }
                 },
-                Err(_) => None,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+                Err(e) => {
+                    return Err(Fail::infra(format!(
+                        "cannot open the target {} to take the inode lock: {e}",
+                        data.display()
+                    )));
+                }
             },
             None => None,
         };
