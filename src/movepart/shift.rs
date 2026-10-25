@@ -247,6 +247,15 @@ pub(crate) fn prepare_apply(
             // grow_end_for 就会写出重叠表并把 FS 扩进该分区。成员豁免：grow_end 恒小于
             // 每个成员的新起点，而新起点不小于其源起点
             let future_grow_end = grow_end_for(plan, ge.starting_lba)?;
+            // 缩方向同样要拒：中断期间第三方可以把目标扩到 grow_end 之外，照 ckpt 收尾
+            // 就会把表项缩回去，而 FS 已按更大的分区扩过——尾部数据变得不可达
+            if future_grow_end < ge.ending_lba {
+                return Err(crate::outcome::Fail::refused(format!(
+                    "partition {} already ends at LBA {}, past the checkpoint's grow target {} — \
+                     finishing would shrink it below a filesystem that may already fill it; refusing",
+                    plan.grow_part, ge.ending_lba, future_grow_end
+                )));
+            }
             if future_grow_end > ge.ending_lba {
                 for (ei, e) in g0.entries().iter().enumerate() {
                     let n = ei as u32 + 1;
@@ -610,9 +619,19 @@ pub(crate) fn execute_apply(
     }
     // ckpt 在 FS 步定论后才撤：FS 步失败而 ckpt 已删时，重跑会按全新作业从旧区重拷，
     // 自重叠搬移下旧区字节已被写覆盖，重拷即把覆盖后的数据盖回新区。任何待办（FS 步
-    // 或 swap 重建）都保留 ckpt——重跑按续传口径只重试未完成的部分
-    if post.is_empty() {
-        crate::dev::remove_recovery_file(ckpt_path);
+    // 或 swap 重建）都保留 ckpt——重跑按续传口径只重试未完成的部分。
+    // 删除失败同样进待办：现场留着会被下次 resize/apply 当成续跑参数比对，而作业其实已完成
+    if post.is_empty() && !crate::dev::remove_recovery_file(ckpt_path) {
+        post.pending(Pending::new(
+            plan.grow_part,
+            PendingKind::Other("checkpoint"),
+            format!(
+                "the job finished but its checkpoint {} could not be removed — the next resize/apply \
+                 will treat this target as an unfinished job; remove the file by hand",
+                ckpt_path.display()
+            ),
+            String::new(),
+        ));
     }
     Ok(())
 }
@@ -698,7 +717,7 @@ pub(crate) fn finalize_growth(
                     part,
                     PendingKind::Fs,
                     e.to_string(),
-                    crate::fsops::rescue_hint(Some(t.fstype), &crate::dev::part_dev_hint(src, part, r.old.0 * ss)),
+                    crate::fsops::rescue_hint(Some(t.fstype), &crate::dev::part_dev_hint(src, part, r.new.0 * ss)),
                 )),
             }
         }

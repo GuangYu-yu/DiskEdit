@@ -1,6 +1,25 @@
 //! undo journal 的记录格式、文件生命周期与候选分类。
 
 use super::*;
+use std::sync::Mutex;
+
+/// 本进程用 `create_new` 建成的 journal 落点。`TransactionManager::commit` 据此区分
+/// "本次事务写下的文件"与"命令返回之后同目标另一进程建出的同名文件"——两者在路径与
+/// 记录身份上完全相同，只有创建事件本身能分开它们
+static CREATED_JOURNAL: Mutex<Option<PathBuf>> = Mutex::new(None);
+
+/// 本进程是否用 `create_new` 建过 `p`；命中即清除记录。`TransactionManager::commit` 据此
+/// 区分"本次事务写下的文件"与"命令返回之后同目标另一进程建出的同名文件"——两者在路径与
+/// 记录身份上完全相同，只有创建事件本身能分开它们
+pub(crate) fn journal_created_at(p: &Path) -> bool {
+    let mut g = CREATED_JOURNAL.lock().unwrap_or_else(|e| e.into_inner());
+    if g.as_deref() == Some(p) {
+        *g = None;
+        true
+    } else {
+        false
+    }
+}
 
 /// 一次 durable mutation 的**语义**：用户看到的"做了什么"，也是 undo policy 的输入。
 ///
@@ -520,6 +539,7 @@ impl Journal {
             }
             // 新建文件的目录项也必须落盘：否则断电后 journal 整体消失，而写入已经发生
             best_effort_dir_fsync(&self.path);
+            *CREATED_JOURNAL.lock().unwrap_or_else(|e| e.into_inner()) = Some(self.path.clone());
             self.file = Some(f);
         }
         Ok(self.file.as_mut().expect("the branch above fills an empty slot"))
@@ -593,8 +613,9 @@ impl Journal {
     /// 记录头里的 len 从 v5 起参与 CRC，故"len 被写坏"不会再被当成"载荷只写了一半"：
     /// 在记录头完整、载荷长度仍落在文件内时，校验失败即整体拒绝。v4 现场没有这层保护，
     /// 仍按旧口径（`len` 不参与 CRC）读取与追加——升级不把尚可回滚的旧现场变成只能 abandon。
-    /// 两种口径下，"len 被写坏成大值"与"数据只写了一半"都仍可能落在 TruncatedTail；
-    /// 返回的前缀每条都通过了该文件的 CRC，且各自对应的写入确实发生过
+    /// 越界帧的载荷读不全，CRC 无从校验，改由"越界之后是否还有 CRC 通过的完整帧"区分：
+    /// 有则长度字段在文件中段损坏，整体拒绝；无才是尾部撕裂。返回的前缀每条都通过了
+    /// 该文件的 CRC，且各自对应的写入确实发生过
     pub fn read_entries(path: &Path) -> io::Result<JournalRead> {
         let data = std::fs::read(path)?;
         // 头（版本 + 身份 + 头 CRC）先整体校验：版本不符在这里就报出来，不会走到记录解析
@@ -619,8 +640,15 @@ impl Journal {
             let len = u32::from_le_bytes(n_le) as usize;
             let crc = u32::from_le_bytes(data[pos + 4..pos + 8].try_into().unwrap());
             pos += REC_HDR;
-            // 头写全了但载荷没写全 → 尾部未完成的事务
+            // 头写全了但载荷没写全：可能是一次没走完的追加，也可能是中段 len 被写坏。
+            // 后者不能按撕裂丢弃——截断会把其后每条 CRC 通过、写入确实发生过的记录删掉
             if pos.checked_add(len).is_none_or(|end| end > data.len()) {
+                if Self::later_complete_record(data, pos, format) {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "journal entry length runs past the end of the file (records follow it)",
+                    ));
+                }
                 return Ok((out, true, pos - REC_HDR));
             }
             let payload = &data[pos..pos + len];
@@ -632,5 +660,26 @@ impl Journal {
             out.push(JournalRecord::decode(payload)?);
         }
         Ok((out, false, data.len()))
+    }
+
+    /// `from` 之后是否存在一条头完整、载荷落在文件内、CRC 通过且能解码的记录。
+    /// 越界帧的真实载荷起点未知（len 本身不可信），逐字节试；载荷须能解码，避免把
+    /// 随机字节序列的 CRC 巧合当成一条记录
+    fn later_complete_record(data: &[u8], from: usize, format: JournalFormat) -> bool {
+        let mut pos = from;
+        while pos + REC_HDR <= data.len() {
+            let n_le: [u8; 4] = data[pos..pos + 4].try_into().unwrap();
+            let len = u32::from_le_bytes(n_le) as usize;
+            let crc = u32::from_le_bytes(data[pos + 4..pos + 8].try_into().unwrap());
+            let start = pos + REC_HDR;
+            if start.checked_add(len).is_some_and(|end| end <= data.len()) {
+                let payload = &data[start..start + len];
+                if Self::record_crc(format, n_le, payload) == crc && JournalRecord::decode(payload).is_ok() {
+                    return true;
+                }
+            }
+            pos += 1;
+        }
+        false
     }
 }

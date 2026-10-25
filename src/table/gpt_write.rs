@@ -143,6 +143,27 @@ pub(crate) fn commit_table(
 
     src.write_at(ss, &ph)?;
     src.sync_all()?;
+    // 读回复核：`sync_all` 只是"设备声称已落盘"，缓存丢写与镜像层短写都不在其中。
+    // 修复路径（`gpt_policy::apply_repair`）对同一承诺做重读并把不符判失败，
+    // 常规提交同样不能只凭写调用的返回值就报成功。四条结构比对写入时的字节，
+    // 覆盖头 CRC、数组 CRC 与条目数三件事（它们都体现在这份字节里）
+    for (want, off, what) in [
+        (&array_bytes, backup_array_lba * ss, "backup GPT entry array"),
+        (&bh, last_lba * ss, "backup GPT header"),
+        (&array_bytes, 2 * ss, "primary GPT entry array"),
+        (&ph, ss, "primary GPT header"),
+    ] {
+        let mut got = vec![0u8; want.len()];
+        src.read_at(off, &mut got).map_err(|e| {
+            io::Error::new(e.kind(), format!("{what} read-back failed: {e} — the table may not have been written"))
+        })?;
+        if got != *want {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("{what} differs from what was written — the device or image layer dropped the write"),
+            ));
+        }
+    }
     Ok(())
 }
 

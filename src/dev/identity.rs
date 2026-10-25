@@ -45,6 +45,19 @@ impl TargetFingerprint {
             Self { dev: 0, ino: 0, size: meta.len() }
         }
     }
+
+    /// `path` 现在是否仍指向这份指纹描述的对象。无 inode 证据（真块设备节点、非 Unix）
+    /// 时无从判断，按"是"处理——此时路径本身就是唯一凭据。调用点都是"把路径交给外部
+    /// 工具之前"的最后一道核对（losetup 的 backing、第二道锁的重新打开）
+    #[cfg(unix)]
+    pub(crate) fn still_names(&self, path: &Path) -> io::Result<bool> {
+        if !self.has_inode_evidence() {
+            return Ok(true);
+        }
+        use std::os::unix::fs::MetadataExt;
+        let meta = std::fs::metadata(path)?;
+        Ok((meta.dev(), meta.ino()) == (self.dev, self.ino))
+    }
 }
 
 /// 现场记录的"创建时事实"与当前目标比对，不符即外来现场（返回一句可读的原因）。
@@ -132,6 +145,11 @@ pub struct TargetIdentity {
     /// 用户可见的目标路径：镜像日志沿用它的既有命名（canonicalize 不打断日志连续性），
     /// 块设备只取其文件名作无表时的日志名
     pub(crate) base: PathBuf,
+    /// 打开时刻**由已打开的句柄**解析出的数据路径（镜像：`/proc/self/fd` 的名字；块设备：
+    /// 命令行给出的节点路径）。伴随文件与锁都按它派生，需要再次打开数据文件的调用点
+    /// （loop attach、第二道 inode 锁）也用它——按 `base` 重新打开会落到命令返回后
+    /// 被改名或替换的另一个文件上
+    pub(crate) canonical: PathBuf,
     pub(crate) journal: Vec<PathBuf>,
     pub(crate) checkpoint: Vec<PathBuf>,
     /// 独占锁的落点（见 `targetlock`）。**恒有值**：镜像放在目标旁，块设备由设备身份
@@ -237,6 +255,7 @@ impl TargetIdentity {
         Self {
             kind: TargetKind::Image,
             base: literal.to_path_buf(),
+            canonical: canonical.to_path_buf(),
             journal,
             checkpoint,
             lock: suffix_path(canonical, LOCK_SUFFIX),
@@ -257,24 +276,49 @@ impl TargetIdentity {
         Self::image_at(path, path)
     }
 
-    /// loop 设备的身份：backing 文件本身。现场落 backing 的兄弟文件——与直接以该
+    /// loop 设备的身份：backing **对象**本身。现场落 backing 的兄弟文件——与直接以该
     /// 镜像为目标的操作天然同一序列化域，这正是 loop↔image 的收敛点。
-    /// `raw` 来自 sysfs `loop/backing_file`：内核记录的 attach 时刻路径。backing 还在
-    /// （写命令的常态）⇒ 以 realpath 为主；已消失（现场比文件活得久）⇒ 退到原始路径串
-    /// 的兄弟文件——losetup 以绝对路径 attach 时那正是现场所在地；路径含符号链接时
-    /// 由此不可达，这是 v1 文档化的恢复前提（backing 须留在原 canonical path）。
+    ///
+    /// `raw` 来自 sysfs `loop/backing_file`，内容是内核在读取属性时按读取者的 root
+    /// 与 cwd 用 `d_path` 拼出的名字（`loop_attr_backing_file_show` → `file_path`）。
+    /// 名字只是诊断信息，不是身份：同一对象在不同 mount namespace 下可以有不同名字，
+    /// 名字也可能已被另一个文件复用。故这里重新打开它，用**已打开的句柄**解析名字
+    /// （`/proc/self/fd`），并要求该名字此刻仍指向同一个 inode；backing 不是普通文件、
+    /// 打不开或名字已不指向它，一律 `Err`——退到字符串会把 journal / checkpoint / lock
+    /// 挂到一个与 loop 无关的文件旁
+    ///
     /// 旧版身份（state_dir 下按 backing 串 token 与 devname 命名的落点）列为历史候选
     #[cfg(target_os = "linux")]
-    pub(crate) fn loop_backed(dev_path: &Path, raw: PathBuf) -> Self {
-        let canonical = std::fs::canonicalize(&raw).unwrap_or_else(|_| raw.clone());
-        let mut id = Self::image_at(&canonical, &raw);
+    pub(crate) fn loop_backed(dev_path: &Path, raw: PathBuf) -> Result<Self, String> {
+        let file = std::fs::File::open(&raw).map_err(|e| {
+            format!(
+                "cannot open the backing file {} of {}: {e} — refusing to derive the target \
+                 identity from the sysfs path string alone",
+                raw.display(),
+                dev_path.display()
+            )
+        })?;
+        let meta = file.metadata().map_err(|e| {
+            format!("cannot stat the backing file {} of {}: {e}", raw.display(), dev_path.display())
+        })?;
+        if !meta.is_file() {
+            return Err(format!(
+                "{} is backed by {} (not a regular file) — its recovery state has no data file to \
+                 be placed next to",
+                dev_path.display(),
+                raw.display()
+            ));
+        }
+        let mut id = crate::dev::FileSource::identity_of_opened_image(&raw, &file, &meta).map_err(|e| {
+            format!("cannot bind the recovery state of {} to its backing file: {e}", dev_path.display())
+        })?;
         let tok = key_token(&raw.to_string_lossy());
         id.journal.push(state_dir().join(format!("{tok}{JOURNAL_SUFFIX}")));
         id.checkpoint.push(state_dir().join(format!("{tok}{CHECKPOINT_SUFFIX}")));
         // 更旧的历史命名：块设备 journal 曾以 devname 命名
         id.journal.push(state_dir().join(format!("{}{JOURNAL_SUFFIX}", file_name_lossy(dev_path))));
         id.legacy_guid_checkpoints = true;
-        id
+        Ok(id)
     }
 
     /// 块设备身份：打开目标时解析一次，设备层拓扑取自 sysfs。
@@ -300,7 +344,7 @@ impl TargetIdentity {
     pub(crate) fn resolve_block_at(node: &Path, path: &Path) -> Result<Self, String> {
         // loop 属性属于整设备节点：分区节点经设备链上溯到父 loop 设备后再读
         if let Some(raw) = loop_backing_at(node).map_err(|e| e.to_string())? {
-            return Ok(Self::loop_backed(path, raw));
+            return Self::loop_backed(path, raw);
         }
         let (self_key, disk_key) = block_keys(node, path).map_err(|e| e.to_string())?;
         Ok(Self::from_block_keys(path, self_key, disk_key))
@@ -333,6 +377,7 @@ impl TargetIdentity {
         Self {
             kind: TargetKind::Block,
             base: path.to_path_buf(),
+            canonical: path.to_path_buf(),
             journal,
             checkpoint,
             // 锁按**所在整设备**派生，与 journal / checkpoint 的盘级键一致：
@@ -350,8 +395,9 @@ impl TargetIdentity {
     /// 不可恢复（拓扑派生），其 state_dir 下的现场随之不可达：此处无从区分两者，按
     /// 镜像回退时前者得救、后者空跑——报"nothing to abandon"而不是按错身份删候选。
     /// 拓扑解析得出但解析失败的块设备仍返回 None（保守方向：宁可漏清，也不按错身份删候选）。
-    /// loop 设备的回退内建于 [`Self::loop_backed`]：backing 的 realpath 取不到时退到
-    /// sysfs 记录的原始路径串与 state_dir 历史落点，不因 backing 消失而失去现场
+    /// loop 设备的身份绑定 backing 对象：backing 打不开或已不是普通文件时
+    /// [`Self::loop_backed`] 返回 Err，这里随之返回 None——它留在原落点上的现场不再可达，
+    /// 因为定位它所需的身份在 backing 消失后已经无法从对象本身得出
     pub(crate) fn resolve_for_cleanup(path: &Path) -> Option<Self> {
         #[cfg(target_os = "linux")]
         {
@@ -379,7 +425,17 @@ impl TargetIdentity {
     /// `O_EXCL`，已覆盖同 inode 的不同路径
     #[cfg(unix)] // 消费者是 TargetLock 的 inode 级凭据，仅 unix 上取
     pub(crate) fn image_data_path(&self) -> Option<&Path> {
-        matches!(self.kind, TargetKind::Image).then_some(self.base.as_path())
+        matches!(self.kind, TargetKind::Image).then_some(self.canonical.as_path())
+    }
+
+    /// 再次打开**同一个数据文件**时用的路径：镜像取打开时刻由 fd 解析出的名字，
+    /// 块设备取节点路径（身份本就由 fd 的 rdev 派生）
+    pub(crate) fn data_path(&self) -> &Path {
+        if matches!(self.kind, TargetKind::Image) {
+            &self.canonical
+        } else {
+            &self.base
+        }
     }
 
     pub(crate) fn journal_candidates(&self) -> &[PathBuf] {

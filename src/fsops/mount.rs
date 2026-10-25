@@ -99,8 +99,11 @@ pub(crate) fn read_mounts() -> io::Result<Vec<MountEntry>> {
             continue;
         }
         // 取不到命名空间身份（权限/竞态）就不去重，照常尝试读取它
-        if let Ok(m) = std::fs::metadata(entry.path().join("ns/mnt"))
-            && !namespaces.insert((m.dev(), m.ino()))
+        let ns = std::fs::metadata(entry.path().join("ns/mnt"))
+            .ok()
+            .map(|m| (m.dev(), m.ino()));
+        if let Some(key) = ns
+            && namespaces.contains(&key)
         {
             continue;
         }
@@ -111,6 +114,11 @@ pub(crate) fn read_mounts() -> io::Result<Vec<MountEntry>> {
             Err(e) => return Err(io::Error::other(format!("cannot read {}: {e}", path.display()))),
         };
         append_mountinfo(&mut out, &s, &path)?;
+        // 读到一份视图之后才登记该命名空间：读失败的进程不能替同一命名空间里仍在运行的
+        // 进程消耗掉唯一一次读取机会
+        if let Some(key) = ns {
+            namespaces.insert(key);
+        }
     }
     Ok(out)
 }
@@ -188,6 +196,18 @@ pub(crate) enum Occupancy {
     /// （LVM PV / dm-crypt / MD 成员 / loop 源）。栈顶设备才是挂载表里出现的那个名字，
     /// 底层设备本身看不见挂载或 swap 记录
     Held(Vec<String>),
+    /// 本设备是某个 loop 的 backing，且该 loop（含 `losetup -P` 展开出的分区）在用。
+    /// loop 不会把自己登记成 backing 的 holder：`loop_configure` 只 claim loop 自己的
+    /// 设备（drivers/block/loop.c:927-935），backing 由 losetup 以普通 open 交给内核
+    /// （util-linux lib/loopdev.c: `open(filename, O_RDWR|O_CLOEXEC)`）——所以
+    /// sysfs holders 里没有它，第二方以 O_EXCL 打开 backing 也不会 EBUSY。挂载/swap
+    /// 记录落在 loop 名下，backing 自己的 mountinfo 与 swap 表同样看不见
+    LoopBacked {
+        /// 在用的一环：loop 设备本身，或它的一个分区
+        via: String,
+        /// loop 之上的块设备栈（dm/md），空 = 只有挂载或 swap
+        holders: Vec<String>,
+    },
 }
 
 /// 探测设备节点的占用状态。Err = 探测本身失败——调用方一律 fail-closed，
@@ -217,6 +237,15 @@ fn probe_occupancy_with(mounts: &[MountEntry], swaps: &str, dev: &str) -> io::Re
     let holders = holders_of_rdev(rdev)?;
     if !holders.is_empty() {
         return Ok(Occupancy::Held(holders));
+    }
+    // backing 侧的占用不留在这台设备的 mountinfo / swap 表 / holders 里：loop 只在
+    // 自己名下记挂载与持有者。按设备号认 backing，节点用哪条路径暴露都命中
+    match loop_occupancy_for(BackingMatch::Block { rdev }, mounts, swaps)? {
+        Some(LoopOccupancy::Live(via)) => return Ok(Occupancy::LoopBacked { via, holders: Vec::new() }),
+        Some(LoopOccupancy::Held { loopdev, holders }) => {
+            return Ok(Occupancy::LoopBacked { via: loopdev, holders });
+        }
+        None => {}
     }
     Ok(Occupancy::Idle)
 }
@@ -262,6 +291,10 @@ pub(crate) fn require_unmounted(dev: &str) -> Result<(), FsError> {
             "{dev} is held by {} — deactivate that stack first (FS operations require an unmounted partition)",
             holders.join(", ")
         )))),
+        Ok(Occupancy::LoopBacked { via, .. }) => Err(FsError::Io(io::Error::other(format!(
+            "{dev} is the backing of {via}, which is in use — unmount/swapoff/deactivate that loop first \
+             (FS operations require an unmounted partition)"
+        )))),
         Ok(o) => Err(FsError::Io(io::Error::other(match o {
             Occupancy::Mounted => format!("{dev} is mounted — unmount/deactivate first (FS operations require an unmounted partition)"),
             _ => format!("{dev} is active as swap — unmount/deactivate first (FS operations require an unmounted partition)"),
@@ -301,30 +334,69 @@ struct LoopInfo64 {
 #[cfg(target_os = "linux")]
 const LOOP_GET_STATUS64: libc::c_int = 0x4C05;
 
-/// loop 设备当前绑定的 backing 文件身份 `(st_dev, st_ino)`；未绑定返回 None。
+/// 一个 loop 记录的 backing 身份（三项都来自 `LOOP_GET_STATUS64`）
+#[cfg(target_os = "linux")]
+struct LoopBacking {
+    dev: u64,
+    ino: u64,
+    rdev: u64,
+}
+
+/// 要在 loop 的 backing 里找的那个对象
+#[cfg(target_os = "linux")]
+enum BackingMatch {
+    /// 普通文件：`(st_dev, st_ino)`
+    File { dev: u64, ino: u64 },
+    /// 块设备：设备号，节点以哪条路径暴露都命中
+    Block { rdev: u64 },
+}
+
+#[cfg(target_os = "linux")]
+impl BackingMatch {
+    fn matches(&self, b: &LoopBacking) -> bool {
+        match *self {
+            Self::File { dev, ino } => b.dev == dev && b.ino == ino,
+            Self::Block { rdev } => b.rdev != 0 && b.rdev == rdev,
+        }
+    }
+}
+
+/// loop 设备当前绑定的 backing 的**对象身份**；未绑定返回 None。
 ///
-/// 内核 `loop_get_status` 对 backing file 的 `f_path` 做 `vfs_getattr`，把
-/// `huge_encode_dev(stat.dev)` 与 `stat.ino` 填进 `lo_device` / `lo_inode`；
-/// `huge_encode_dev` 就是 `new_encode_dev`（include/linux/kdev_t.h），与用户态
-/// `fstat` 的 `st_dev` 同一编码。这条判定不经过任何用户态可见的文件名，所以
-/// backing file 的路径在本 mount namespace 不可解析时仍能命中。
+/// 内核 `loop_get_status` 对 backing 的 `f_path` 做 `vfs_getattr`，把
+/// `huge_encode_dev(stat.dev)` / `stat.ino` / `huge_encode_dev(stat.rdev)` 填进
+/// `lo_device` / `lo_inode` / `lo_rdevice`（drivers/block/loop.c:1205-1229）。三项都
+/// 取自已打开对象而不是路径：普通文件 backing 按 `(dev, ino)` 认，块设备 backing 按
+/// `rdev`（设备号）认——节点名、别名、bind mount 都不影响设备号，而普通文件的
+/// `st_rdev` 为 0，两种判据不会互相误命中。这条判定不经过任何用户态可见的文件名，
+/// 所以 backing 的路径在本 mount namespace 不可解析时仍能命中。
 /// ENXIO（内核在 `lo_state != Lo_bound` 时的返回）是确定的"没有绑定文件"，
 /// 不算探测失败；ioctl 被拒、getattr 失败都无法确认，上抛后由调用方按
 /// fail-closed 拒绝。
 ///
-/// 打不开设备节点（`PermissionDenied`）单独处理：节点属 root:disk 0660，无 disk
-/// 组的用户打不开任何 loop，而建立绑定也发生在同一权限类里（loop-control 与 loop
-/// 节点同组属）——打不开节点的一方也建不出指向本镜像的绑定，该方自己的占用始终
-/// 可查。把这种 EACCES 当探测失败会让非 root 用户的所有镜像操作报废。若 udev
-/// 放开 loop-control 而收紧 loop 节点，这条跳过会漏检绑定；边界随内核/udev 的
-/// 权限模型演进
+/// 打不开设备节点（`PermissionDenied`、节点不存在、节点刚被移除的 `ENODEV`）单独处理：
+/// 节点属 root:disk 0660，无 disk 组的用户打不开任何 loop，而建立绑定也发生在同一权限
+/// 类里（loop-control 与 loop 节点同组属）——打不开节点的一方建不出指向本镜像的新绑定，
+/// 该方自己的占用始终可查。把这类失败当探测失败会让非 root 用户、以及"宿主 /sys 可见、
+/// /dev 未建节点"的容器里所有镜像操作报废，故按"没有指向本镜像的绑定"处理。代价是那里
+/// 看不见**别人**已建立的绑定（宿主侧的 loop、或 udev 放开 loop-control 而收紧节点的
+/// 部署）：这条跳过会漏检占用，边界随内核/udev 的权限模型演进
 #[cfg(target_os = "linux")]
-fn loop_backing_identity(name: &str) -> io::Result<Option<(u64, u64)>> {
+fn loop_backing_identity(name: &str) -> io::Result<Option<LoopBacking>> {
     use std::os::unix::io::AsRawFd;
     let path = format!("/dev/{name}");
     let f = match std::fs::File::open(&path) {
         Ok(f) => f,
-        Err(e) if e.kind() == io::ErrorKind::PermissionDenied => return Ok(None),
+        // 打不开节点与建不出绑定是同一类：losetup 需要节点本身，节点不存在的一方建不出
+        // 指向本镜像的绑定（`ENODEV` 是节点刚被移除）。这类跳过与上面的 EACCES 同口径，
+        // 否则容器里"宿主 /sys 可见、/dev 未建节点"会让全部镜像操作报废
+        Err(e)
+            if e.kind() == io::ErrorKind::PermissionDenied
+                || e.kind() == io::ErrorKind::NotFound
+                || e.raw_os_error() == Some(libc::ENODEV) =>
+        {
+            return Ok(None);
+        }
         Err(e) => {
             return Err(io::Error::other(format!("cannot open {path} to verify its backing file: {e}")));
         }
@@ -338,7 +410,7 @@ fn loop_backing_identity(name: &str) -> io::Result<Option<(u64, u64)>> {
             _ => Err(io::Error::other(format!("LOOP_GET_STATUS64 on {path} failed: {e}"))),
         };
     }
-    Ok(Some((info.lo_device, info.lo_inode)))
+    Ok(Some(LoopBacking { dev: info.lo_device, ino: info.lo_inode, rdev: info.lo_rdevice }))
 }
 
 /// 指向本镜像的 loop 被使用的两种形态
@@ -380,7 +452,7 @@ fn loop_and_partitions(sysdir: &Path, name: &str) -> io::Result<Vec<(String, Pat
 ///
 /// 镜像是本工具内唯一没有分区节点可查的目标：本工具要经 loop 才能碰它的分区，而那个
 /// loop 与用户自己映射的是**两个设备**——只探测新建的那个看不见用户那份占用。故反向
-/// 枚举所有 loop，按 **backing 文件身份**（st_dev + st_ino，取自 LOOP_GET_STATUS64）
+/// 枚举所有 loop，按 backing 文件身份（st_dev + st_ino，取自 LOOP_GET_STATUS64）
 /// 与本镜像比对，命中后检查该 loop 及其分区的挂载、swap 与持有者。
 /// sysfs 的 `loop/backing_file` 只是路径表示，既可能在本进程的 mount namespace 不可
 /// 解析，也可能已指向被替换过的文件，故不参与判定。任一环节确认不了都上抛，由调用方
@@ -389,14 +461,23 @@ fn loop_and_partitions(sysdir: &Path, name: &str) -> io::Result<Vec<(String, Pat
 #[cfg(target_os = "linux")]
 pub(crate) fn image_loop_occupancy(src: &FileSource) -> io::Result<Option<LoopOccupancy>> {
     use std::os::unix::fs::MetadataExt;
-    let target = {
-        let md = src.file.metadata().map_err(|e| {
-            io::Error::other(format!("cannot stat the open image to identify it: {e}"))
-        })?;
-        (md.dev(), md.ino())
-    };
+    let md = src.file.metadata().map_err(|e| {
+        io::Error::other(format!("cannot stat the open image to identify it: {e}"))
+    })?;
     let mounts = read_mounts()?;
     let swaps = std::fs::read_to_string("/proc/swaps")?;
+    loop_occupancy_for(BackingMatch::File { dev: md.dev(), ino: md.ino() }, &mounts, &swaps)
+}
+
+/// 反向枚举 loop，找出 backing 命中 `target` 的那一个，并回答它是否在用。
+/// 镜像（文件 backing）与块设备（设备号 backing）共用这一份判据
+#[cfg(target_os = "linux")]
+fn loop_occupancy_for(
+    target: BackingMatch,
+    mounts: &[MountEntry],
+    swaps: &str,
+) -> io::Result<Option<LoopOccupancy>> {
+    use std::os::unix::fs::MetadataExt;
     // 每个 loop 独立成形：持有者记在真正拥有它的那个 loop 名下。跨 loop 汇总会把
     // "B 上的占用"说成"A 被持有"，而拒绝消息是用户解除占用的唯一线索
     let mut held: Vec<(String, Vec<String>)> = Vec::new();
@@ -406,8 +487,9 @@ pub(crate) fn image_loop_occupancy(src: &FileSource) -> io::Result<Option<LoopOc
         if !is_loop_name(&name) {
             continue;
         }
-        if loop_backing_identity(&name)? != Some(target) {
-            continue;
+        match loop_backing_identity(&name)? {
+            Some(b) if target.matches(&b) => {}
+            _ => continue,
         }
         let loopdev = format!("/dev/{name}");
         let mut holders: Vec<String> = Vec::new();
@@ -418,7 +500,7 @@ pub(crate) fn image_loop_occupancy(src: &FileSource) -> io::Result<Option<LoopOc
             })?;
             let rdev = m.rdev();
             let dev_no = (libc::major(rdev) as u64, libc::minor(rdev) as u64);
-            if mounted_in(&mounts, &path, dev_no) || active_swap_in(&swaps, &path, rdev)? {
+            if mounted_in(mounts, &path, dev_no) || active_swap_in(swaps, &path, rdev)? {
                 return Ok(Some(LoopOccupancy::Live(path)));
             }
             holders.extend(holders_at(&sysdir)?);
@@ -460,6 +542,21 @@ mod tests {
         assert!(!skippable_mountinfo_error(&io::Error::from_raw_os_error(libc::EACCES)));
         assert!(!skippable_mountinfo_error(&io::Error::from_raw_os_error(libc::EIO)));
     }
+
+    /// backing 的认法按对象类型分开：文件走 (dev, ino)，块设备走设备号——
+    /// 后者不随节点名/别名/bind mount 变化。普通文件的 st_rdev 为 0，
+    /// 不能与任何设备号相认
+    #[test]
+    fn backing_match_separates_file_identity_from_device_numbers() {
+        let block = LoopBacking { dev: 7, ino: 42, rdev: 0x0801 };
+        assert!(BackingMatch::File { dev: 7, ino: 42 }.matches(&block));
+        assert!(!BackingMatch::File { dev: 7, ino: 43 }.matches(&block));
+        assert!(BackingMatch::Block { rdev: 0x0801 }.matches(&block));
+
+        let file = LoopBacking { dev: 7, ino: 42, rdev: 0 };
+        assert!(!BackingMatch::Block { rdev: 0 }.matches(&file), "rdev 0 must never name a device");
+        assert!(BackingMatch::File { dev: 7, ino: 42 }.matches(&file));
+    }
 }
 
 /// 本次写入对目标区间的形状。占用判据据此分档：起点不变、末端不变或只增的写入
@@ -486,10 +583,12 @@ pub(crate) fn dm_only(holders: &[String]) -> bool {
 /// 任何写盘的唯一必经关口，把"表已写、FS 步被占"的 PARTIAL(20) 变成 REFUSED(10)：
 /// 占用是请求与现状不匹配，不是盘故障。块设备另有整盘 O_EXCL 独占打开这道内核级防线，
 /// 但其保护面要说准：它挡的是挂载 / swap / 他人的 O_EXCL 打开（open 即 EBUSY），
-/// **不挡**不守约定的普通并发写——本闸对其是纵深防御。镜像没有分区节点可查，也没有
-/// O_EXCL 这道内核防线，占用只能按"有没有 loop 绑定到同一个文件且在用"判定
-/// （[`image_loop_occupancy`]，身份取自 LOOP_GET_STATUS64 而非路径）；那一步只覆盖
-/// 已经映射出去的 loop，不覆盖别的东西按镜像路径直接写字节。`start_bytes` = 分区
+/// **不挡**不守约定的普通并发写——本闸对其是纵深防御。被 losetup 当作 backing 的
+/// 块设备这两道都看不见（loop 不登记 holder，losetup 也不以 O_EXCL 打开 backing），
+/// 由 [`Occupancy::LoopBacked`] 补：反向枚举 loop，按设备号认 backing。镜像没有分区
+/// 节点可查，也没有 O_EXCL 这道内核防线，占用只能按"有没有 loop 绑定到同一个文件且
+/// 在用"判定（[`image_loop_occupancy`]，身份取自 LOOP_GET_STATUS64 而非路径）；那一步
+/// 只覆盖已经映射出去的 loop，不覆盖别的东西按镜像路径直接写字节。`start_bytes` = 分区
 /// 起始字节（与 find_block_partition_node 的换算基准一致）
 #[cfg(target_os = "linux")]
 pub fn ensure_idle_before_write(src: &FileSource, part: u32, start_bytes: u64, kind: WriteKind) -> Result<(), crate::outcome::Fail> {
@@ -509,6 +608,17 @@ pub fn ensure_idle_before_write(src: &FileSource, part: u32, start_bytes: u64, k
         Ok(Occupancy::Held(holders)) => Err(Fail::refused(format!(
             "{node} is held by {} — deactivate that stack first (the write would change bytes the holder still maps)",
             holders.join(", ")
+        ))),
+        // 与镜像同一口径：loop 之上只挂了 DM 时纯扩容放行（增长不改已映射扇区）
+        Ok(Occupancy::LoopBacked { holders, .. })
+            if !holders.is_empty() && kind == WriteKind::Extend && dm_only(&holders) =>
+        {
+            Ok(())
+        }
+        Ok(Occupancy::LoopBacked { via, holders }) => Err(Fail::refused(format!(
+            "{node} is the backing of {via}{} — unmount/swapoff/deactivate that loop first \
+             (the write would change bytes the loop still maps)",
+            if holders.is_empty() { String::new() } else { format!(" (held by {})", holders.join(", ")) }
         ))),
         Err(e) => Err(Fail::infra(format!(
             "cannot confirm {node} is unmounted: {e} — refusing (fail-closed)"
@@ -625,6 +735,12 @@ fn ensure_whole_device_idle(src: &FileSource) -> Result<(), crate::outcome::Fail
                     holders.join(", ")
                 )));
             }
+            Ok(Occupancy::LoopBacked { via, .. }) => {
+                return Err(Fail::refused(format!(
+                    "{node} is the backing of {via}, which is in use — unmount/swapoff/deactivate that loop first \
+                     (the new table would contradict the layout the loop reports)"
+                )));
+            }
             Err(e) => {
                 return Err(Fail::infra(format!(
                     "cannot confirm {node} is unused: {e} — refusing (fail-closed)"
@@ -661,7 +777,26 @@ pub(crate) fn attach_loop(src: &FileSource, off: u64, len: u64) -> Result<String
     } else {
         vec!["-o".into(), off.to_string(), "--sizelimit".into(), len.to_string()]
     };
-    let img = src.path.clone();
+    // 镜像用的是打开时刻由 fd 解析出的名字：命令返回后命令行路径可能已被改名或替换，
+    // 按它 attach 得到的是另一个文件的映射，而写入仍走已打开的句柄
+    // 块设备给节点本身：`off`/`len` 以该设备为坐标原点。loop 设备的数据路径是它的
+    // backing 文件，而 backing 的字节坐标只在原 loop 无偏移时才与 loop 一致
+    let img = if src.is_block { src.path.clone() } else { src.identity.data_path().to_path_buf() };
+    // inode 比对只在 unix 上成立，且只对镜像有意义：块设备的指纹取自 backing（loop 设备）
+    // 或全零（真块设备节点），与节点路径的 inode 不是同一个对象
+    #[cfg(unix)]
+    if !src.is_block {
+        match src.fingerprint.still_names(&img) {
+            Ok(true) => {}
+            Ok(false) => {
+                return Err(FsError::invalid(format!(
+                    "{} no longer names the file this command opened — refusing to map a different file",
+                    img.display()
+                )))
+            }
+            Err(e) => return Err(FsError::invalid(format!("cannot re-check {} before mapping it: {e}", img.display()))),
+        }
+    }
     let mut show = Command::new(&losetup)
         .args(&base_args)
         .arg("-f")

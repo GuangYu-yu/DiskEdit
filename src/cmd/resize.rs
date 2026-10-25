@@ -67,7 +67,9 @@ pub(crate) const HELP: &str = r#"diskedit resize <TARGET>:N <SIZE> [OPTIONS]
   to be shrunk first. It is also required whenever the filesystem inside
   cannot be grown (unidentified, or not wired to a tool) — otherwise the
   request is refused (10). On an LVM PV --no-fs is refused: the PV chain has
-  no filesystem step of its own."#;
+  no filesystem step of its own. An online resize writes through the tools
+  (sfdisk / the filesystem's own resize) instead of this tool's journal, so
+  `undo` cannot roll it back — it also leaves no checkpoint to resume."#;
 
 const CONFIRM_RELOCATION: &str = "this resizes by relocating the partitions listed above — review and re-run with --yes";
 
@@ -94,6 +96,9 @@ pub(crate) fn cmd_resize(a: &Args) -> crate::outcome::Outcome {
     if a.start.is_some() || a.end.is_some() || a.start_end {
         bail_fail(Fail::refused("resize does not relocate partitions — use `move` or `resize-part --start/--end`".to_string()));
     }
+    // 载体必须是整盘：分区节点首扇区里的 FAT/NTFS 引导字节带 0x55AA 时会被 parse_mbr_raw
+    // 认成一张 MBR，MBR 分支的写路径会改写该分区自己的 LBA0。判据与 new/add/del/set 同源
+    refuse_partition_node_target("resize", &a.target);
     let src = open_target_ro(a).unwrap_or_else(|f| bail_fail(f));
     match table::table_label(&src) {
         Ok(table::TableLabel::Gpt) => {}

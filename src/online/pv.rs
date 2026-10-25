@@ -80,7 +80,7 @@ pub(crate) fn lock_disk(
     let ident = lock_identity(t)?;
     // 取锁的失败按 `Fail` 的三个变体折叠成出口语义（唯一映射点在 outcome 模块），
     // 本处不借 `finish` 做转换——那是"结束一次操作"的入口，语义不同
-    let lock = crate::targetlock::TargetLock::acquire(&ident).map_err(|f| f.into_outcome())?;
+    let lock = crate::targetlock::TargetLock::acquire(&ident, None).map_err(|f| f.into_outcome())?;
     Ok((lock, ident))
 }
 
@@ -151,6 +151,16 @@ pub(crate) fn check_new_range(t: &OnlineTarget, new_len_bytes: u64, disk: &FileS
         return Err(Fail::refused(format!(
             "new end {end} exceeds disk capacity {}",
             t.disk_cap_bytes
+        )));
+    }
+    // MBR 的起点/长度字段各是 u32 LBA：离线路径在写表前按**长度**（size_lba）拒绝，
+    // 在线把同一长度交给 sfdisk 的 size 字段，越过 u32 会在落盘时被截断成另一个区间
+    let new_len_sectors = new_len_bytes / t.logical_block;
+    if new_len_sectors > u32::MAX as u64
+        && crate::table::parse_mbr(disk).map_err(Fail::from)?.is_some()
+    {
+        return Err(Fail::refused(format!(
+            "new length {new_len_sectors} sectors exceeds the MBR size field (u32 sectors) — MBR cannot address it"
         )));
     }
     if !range_free(t.start_bytes, new_len_bytes, &t.others) {

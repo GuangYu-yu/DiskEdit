@@ -112,10 +112,20 @@ pub(crate) struct TransactionManager;
 /// `commit` 只消费它。收尾时不再按命令行路径重新解析——命令返回后路径可能已经指向另一个
 /// 文件（改名或替换），重新解析会把清理落到别人的 journal 上。
 ///
-/// 一个进程只跑一条命令，因此单槽位足够；`begin_or_resume` 是唯一的写入点
-static TRANSACTION_IDENTITY: Mutex<Option<TargetIdentity>> = Mutex::new(None);
+/// `journal_preexisting` 记的是 attach 那一刻首项落点在不在：事务开始时就存在的 journal
+/// 属于本次要续跑/收尾的作业；不存在的则由本次的记录创建（见 `dev::journal_created_at`）。
+/// 两个事实都缺席时 commit 不动任何候选——命令返回与重新取锁之间，另一进程可以在同一
+/// 落点建出它自己的 journal，按路径或身份都分不开这两者
+pub(crate) struct SessionJournal {
+    pub(crate) identity: TargetIdentity,
+    pub(crate) fingerprint: dev::TargetFingerprint,
+    pub(crate) preexisting: bool,
+}
 
-fn session_slot() -> std::sync::MutexGuard<'static, Option<TargetIdentity>> {
+/// 一个进程只跑一条命令，因此单槽位足够；`begin_or_resume` 是唯一的写入点
+static TRANSACTION_IDENTITY: Mutex<Option<SessionJournal>> = Mutex::new(None);
+
+fn session_slot() -> std::sync::MutexGuard<'static, Option<SessionJournal>> {
     TRANSACTION_IDENTITY.lock().unwrap_or_else(|e| e.into_inner())
 }
 
@@ -201,21 +211,28 @@ impl TransactionManager {
                 }
             }
         };
-        Self::attach_journal(&mut src)?;
+        let preexisting = Self::attach_journal(&mut src)?;
         // 身份在锁下、与已打开的句柄同一时刻定稿；`commit` 只消费这一个值
-        *session_slot() = Some(src.identity.clone());
+        *session_slot() = Some(SessionJournal {
+            identity: src.identity.clone(),
+            fingerprint: src.fingerprint,
+            preexisting,
+        });
         Ok((src, resumed))
     }
 
-    fn attach_journal(src: &mut FileSource) -> Result<(), Fail> {
+    /// 返回 attach 时首项落点是否已经存在（见 [`SessionJournal`]）。
+    /// 属性读不出来时不认领它：紧随其后的 `open` 若也读不到，命令在写盘之前就已返回错误
+    fn attach_journal(src: &mut FileSource) -> Result<bool, Fail> {
         let p = src.identity.journal_path().to_path_buf();
+        let preexisting = std::fs::metadata(&p).is_ok();
         // 身份随头落盘：采纳既有 journal 时 `open` 会拿它核对（见 `dev::scene_mismatch`），
         // 故新开的窗口也记的是"这个目标"
         let identity = dev::JournalIdentity { fp: src.fingerprint, map: src.loop_mapping };
         src.journal = Some(
             Journal::open(&p, identity).map_err(|e| Fail::infra(format!("journal open failed: {e}")))?,
         );
-        Ok(())
+        Ok(preexisting)
     }
 
     /// 目标被一件没做完的事占着。**出路必须按现场性质分三路**，给同一句话就是把用户
@@ -295,32 +312,37 @@ impl TransactionManager {
 
     /// 读写打开 + 取目标的独占所有权（见 `targetlock`）。
     ///
-    /// 刻意**不对外**：命令层拿不到"不取锁就能读写目标"的路径，"写命令必须持锁"
-    /// 于是由可见性保证，而不是靠每处记得调用哪一个
+    /// **三种写事务的入口都在本模块**（`begin_or_resume` 的三个 claim），它们都经这里取
+    /// 所有权，因此"写命令持锁"由入口唯一性保证。这道保证是**约定**而非类型保证：
+    /// `FileSource::open` 仍是 crate 可见（只读探测与测试要用），`write_at` 也不检查
+    /// `ownership`。新增写路径必须走 `begin_*`，不要直接 `FileSource::open` 之后写盘
     fn open_rw(a: &Args) -> Result<FileSource, Fail> {
         let mut src = Self::open_plain(a)?;
-        src.ownership = Some(TargetLock::acquire(&src.identity)?);
+        src.ownership = Some(TargetLock::acquire(&src.identity, Some(&src.fingerprint))?);
         // ckpt 残骸清扫必须在锁下：未持锁时删除会命中另一个进程正在写的暂存文件
         crate::dev::sweep_stale_ckpt_temps(&src.identity);
         Ok(src)
     }
 
-    /// 提交：事务完成，关闭它的 active 状态。删的是**事务开始时确定的那个身份**的全部
-    /// 候选落点——含历史命名那一份：留着它会被下次查找命中，把历史字节回放到一个已经
-    /// 改过的盘上。不存在即无残留、无告警；删除真失败则由 `dev::remove_recovery_file`
-    /// 告警
+    /// 提交：事务完成，关闭它的 active 状态。删除的是**本次事务确实拥有的**候选落点。
     ///
-    /// `identity` 必须来自 [`Self::begin_or_resume`] 记下的值（见 [`Self::take_identity`]），
+    /// `session` 来自 [`Self::begin_or_resume`]（见 [`Self::take_identity`]），
     /// **不得在这里按命令行路径重新解析**：命令返回时路径可能已被改名或替换，重新解析
-    /// 会得到另一个文件的伴随文件，删掉的就是别人的回滚凭据
+    /// 会得到另一个文件的伴随文件，删掉的就是别人的回滚凭据。
+    ///
+    /// 首项落点的归属取两个事实之一：attach 时它已存在（要收尾的是那份既有 journal），
+    /// 或本次进程用 `create_new` 建过它（`dev::journal_created_at`）。两者都没有时，
+    /// 路径上出现的文件必是命令返回之后别的进程新建的，一律不动——同目标的两次事务在
+    /// 路径与记录身份上完全相同，只有创建事件能分开它们
     ///
     /// 命令返回时 [`FileSource`]（连同它的所有权）已释放，故这里按同一身份重新取一次锁：
     /// 删除必须与 journal 的创建落在同一个独占窗口里。取不到锁即保留 journal
     /// （漏删会被下次运行报成 busy，但不会丢失别人的现场）
-    pub(crate) fn commit(identity: &TargetIdentity) {
+    pub(crate) fn commit(session: &SessionJournal) {
+        let identity = &session.identity;
         // 重新取锁后目标归本进程独占，下面两个动作（删除与目录落盘）才不会被别人的
         // 新建动作穿插；锁失败只影响"现在能不能关窗口"，不是数据错误
-        let _lock = match TargetLock::acquire(identity) {
+        let _lock = match TargetLock::acquire(identity, Some(&session.fingerprint)) {
             Ok(lock) => lock,
             Err(f) => {
                 let why = match f {
@@ -332,16 +354,52 @@ impl TransactionManager {
                 return;
             }
         };
-        // 删除与目录落盘在同一处：撤销窗口的关闭与创建/改写同级持久化，unlink 不落盘时
-        // 掉电后 journal 可能复活，把已完成的事务报成未收尾现场
+        let primary = identity.journal_path().to_path_buf();
+        let created = dev::journal_created_at(&primary);
+        let ours = session.preexisting || created;
+        let ours_identity = if ours {
+            match dev::Journal::read_identity(&primary) {
+                Ok(id) => Some(id),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+                Err(e) => {
+                    eprintln!(
+                        "warning: cannot read the identity of {} ({e}) — only that file is removed",
+                        primary.display()
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
         for p in identity.journal_candidates() {
-            dev::remove_recovery_file(p);
+            if *p == primary {
+                if ours {
+                    dev::remove_recovery_file(p);
+                }
+                continue;
+            }
+            let Some(ours_identity) = &ours_identity else { continue };
+            match dev::Journal::read_identity(p) {
+                Ok(id) => {
+                    if let Some(why) = dev::scene_mismatch(&id.fp, &id.map, &ours_identity.fp, &ours_identity.map) {
+                        eprintln!("warning: {why} — {} is left in place", p.display());
+                    } else {
+                        dev::remove_recovery_file(p);
+                    }
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => eprintln!(
+                    "warning: cannot read the identity of {} ({e}) — left in place",
+                    p.display()
+                ),
+            }
         }
     }
 
     /// 取走事务开始时记下的身份。没有走到 `begin_or_resume`（或它没成功）时为 None——
     /// 此时没有本进程开的撤销窗口可关
-    pub(crate) fn take_identity() -> Option<TargetIdentity> {
+    pub(crate) fn take_identity() -> Option<SessionJournal> {
         session_slot().take()
     }
 
@@ -437,7 +495,7 @@ mod tests {
         assert!(text.contains("undo"), "a damaged candidate must not withdraw the undo way out: {text}");
     }
 
-    /// commit 只清**传入身份**的候选：同一条命令行路径在不同时刻可以指向不同文件，
+    /// commit 只清**本次事务拥有**的候选：同一条命令行路径在不同时刻可以指向不同文件，
     /// 收尾时按路径重新解析会删到别人的 journal。这里用两个不同身份证明清理范围
     #[test]
     fn commit_drops_the_candidates_of_the_given_identity_only() {
@@ -449,18 +507,48 @@ mod tests {
         let id = TargetIdentity::resolve_image(&img);
         let mut mine = Vec::new();
         for p in id.journal_candidates() {
-            std::fs::write(p, b"DEJL\x05").unwrap();
+            // 头完整、零记录的空壳：read_identity 可读，身份与本次事务一致
+            let mut j = dev::Journal::open(p, dev::JournalIdentity { fp: Default::default(), map: None }).unwrap();
+            j.ensure().unwrap();
             mine.push(p.clone());
         }
         let other = TargetIdentity::resolve_image(&dir.join("b.img"));
         std::fs::write(other.journal_path(), b"keep").unwrap();
 
-        TransactionManager::commit(&id);
+        TransactionManager::commit(&SessionJournal {
+            identity: id.clone(),
+            fingerprint: Default::default(),
+            preexisting: true,
+        });
 
         for p in &mine {
             assert!(!p.exists(), "{} belongs to the committed transaction and must be dropped", p.display());
         }
         assert!(other.journal_path().exists(), "another target's journal must survive the commit");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// attach 时首项不存在、本进程也没建过它：路径上出现的文件是命令返回后别的进程
+    /// 建出的，commit 必须原样留下——否则会删掉一个刚开的事务的回滚凭据
+    #[test]
+    fn commit_keeps_a_journal_it_neither_adopted_nor_created() {
+        let dir = std::env::temp_dir().join(format!("diskedit_commitrace_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let img = dir.join("a.img");
+        std::fs::write(&img, b"x").unwrap();
+        let id = TargetIdentity::resolve_image(&img);
+        let p = id.journal_path().to_path_buf();
+        std::fs::write(&p, b"DEJL\x05").unwrap();
+
+        TransactionManager::commit(&SessionJournal {
+            identity: id.clone(),
+            fingerprint: Default::default(),
+            preexisting: false,
+        });
+
+        assert!(p.exists(), "a journal created after this transaction returned must survive");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
