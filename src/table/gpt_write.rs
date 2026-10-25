@@ -105,7 +105,7 @@ pub(crate) fn canonical_headers(h: &RawHeader, last_lba: u64, backup_array_lba: 
 /// 每个中间落点都留有一份 CRC 自洽的表；主备两份各自自洽而内容分叉时 CRC 检不出
 /// （不一致只出现在跨副本比较），解析按主副本优先收敛——中断的代价是本次提交丢失，
 /// 不是表损坏。
-pub fn commit_gpt(src: &mut FileSource, g: &RawGpt, last_lba: u64) -> io::Result<()> {
+pub fn commit_gpt(src: &mut WriteSource, g: &RawGpt, last_lba: u64) -> io::Result<()> {
     commit_table(src, g.ss, &g.header, &g.entries, last_lba)
 }
 
@@ -113,7 +113,7 @@ pub fn commit_gpt(src: &mut FileSource, g: &RawGpt, last_lba: u64) -> io::Result
 /// [`crate::geometry::ValidatedGeometry::commit`]（写入路径的可操作几何）都走这里，
 /// 于是"提交一张表"只有一份序列、一份几何推导
 pub(crate) fn commit_table(
-    src: &mut FileSource,
+    src: &mut WriteSource,
     ss: u64,
     header: &RawHeader,
     entries: &[GPTPartitionEntry],
@@ -126,6 +126,14 @@ pub(crate) fn commit_table(
     let backup_array_lba = last_lba
         .checked_sub(geom.lba_span())
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "disk too small to hold GPT entry array"))?;
+    // 备数组必须排在主数组 [2, 2+span) 之后，且两者之间留出一个可用扇区（与
+    // create.rs 的 gpt_min_sectors 同一判据）：只做上面的 checked_sub 时，last_lba 落在
+    // [span, 2·span+2] 的提交会让备数组压到 LBA0/LBA1/主数组上，四段写互相覆盖，
+    // 而写后读回比对的正是刚写进去的字节，损坏会以 Ok 返回
+    let min_sectors = 2 * geom.lba_span() + 4;
+    if last_lba.checked_add(1).is_none_or(|sectors| sectors < min_sectors) {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, gpt_too_small(min_sectors, ss)));
+    }
     let (primary, backup) = canonical_headers(header, last_lba, backup_array_lba);
     // 两份头的字节都在首次写盘之前构造完：构造会因 HeaderSize 越界而失败，
     // 那时盘必须还没被碰过（放到写作序列中间会让拒绝留下半张表）
@@ -179,21 +187,26 @@ pub(crate) fn size_in_lba(total_sectors: u64) -> u32 {
     }
 }
 
-/// 保护 MBR（LBA0）：保留 BootCode 区 0..446，仅重写 446..512。
-/// SizeInLBA = 逻辑块数 − 1（UEFI 2.10 §5.2.3；LBA 字段以 logical block 计，非恒定 512 字节），
-/// 超出 32 位表示范围才用 0xFFFFFFFF。本函数同时是规范化点：任何非规范值（stale / 512 口径）
-/// 经此重写即收敛
-pub fn ensure_protective_mbr(src: &mut FileSource) -> io::Result<()> {
-    let ss = src.sector_size;
+/// 保护 MBR（LBA0）：保留 BootCode 区 0..446，重写 446..510 与块内保留区。
+/// SizeInLBA = 逻辑块数 − 1（UEFI 2.10 §5.2.3 Table 5.4；单位是 logical block，非恒定
+/// 512 字节），超出 32 位表示范围才用 0xFFFFFFFF。本函数同时是规范化点：任何非规范值
+/// （stale / 512 口径）经此重写即收敛。
+///
+/// `ss` 是**该表自身**的逻辑块大小（不是容器的 `src.sector_size`）：两者不等时
+/// （4Kn 表放在 512 字节镜像里）按容器换算会整体差 8 倍。同一次写入同时覆盖
+/// `512..ss` 的块内保留区并按规范清零（Table 5.3 "Reserved … Set to zero"）
+pub fn ensure_protective_mbr(src: &mut WriteSource, ss: u64) -> io::Result<()> {
     // 零扇区盘的 read_at(0) 只会撞出 UnexpectedEof，把"盘没有扇区"这件事
     // 说成一次 I/O 意外：先于任何读盘把几何前提判掉
     let total_sectors = src.size / ss;
     if total_sectors == 0 {
         return Err(io::Error::new(io::ErrorKind::InvalidData, "disk has zero sectors"));
     }
+    let want_size = size_in_lba(total_sectors);
     let mut lba0 = vec![0u8; ss as usize];
     src.read_at(0, &mut lba0)?;
-    if lba0[510] == 0x55 && lba0[511] == 0xAA {
+    let reserved_zero = lba0[512..].iter().all(|&b| b == 0);
+    if lba0[510] == 0x55 && lba0[511] == 0xAA && reserved_zero {
         let rec = &lba0[446..462]; // 槽位 1（与下方写入位置一致）
         // 与 pmbr_shape_valid 同口径：槽位 2-4 必须全零，否则 hybrid MBR 残留
         // 会使 load_gpt 拒读 GPT（形状前置不满足），盘型判定就此失真
@@ -202,21 +215,21 @@ pub fn ensure_protective_mbr(src: &mut FileSource) -> io::Result<()> {
             let size = rd_u32(rec, 12);
             // 已合规即一字不写（保留外层引导代码）。比较基准是**逻辑块**口径的 total，
             // 故 512 口径值（PmbrSize::NeedsRepair{Compat512}）在此落空，会走到下面重写为规范值
-            if start == 1 && size == size_in_lba(total_sectors) {
+            if start == 1 && size == want_size {
                 return Ok(());
             }
         }
     }
-    // 保留引导代码，重写 446..512
+    // 保留引导代码，重写 446..510、块内保留区与签名
     lba0[446..510].fill(0);
+    lba0[512..].fill(0);
     let rec = &mut lba0[446..462];
     rec[0] = 0x00; // BootIndicator
     rec[1..4].copy_from_slice(&[0x00, 0x02, 0x00]); // StartCHS 惯例值
     rec[4] = PROT_MBR_TYPE;
     rec[5..8].copy_from_slice(&[0xFF, 0xFF, 0xFF]); // EndCHS
-    let size: u32 = size_in_lba(total_sectors);
     rec[8..12].copy_from_slice(&1u32.to_le_bytes());
-    rec[12..16].copy_from_slice(&size.to_le_bytes());
+    rec[12..16].copy_from_slice(&want_size.to_le_bytes());
     lba0[510] = 0x55;
     lba0[511] = 0xAA;
     src.write_at(0, &lba0)?;

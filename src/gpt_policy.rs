@@ -5,7 +5,7 @@
 //! movepart.rs = 搬移与提交（"怎么写"）。
 //! "是否需要修复、修哪一类"只在这里判一次，main 与 movepart 共用同一个动作类型。
 
-use crate::dev::{FileSource, PartSelector};
+use crate::dev::{FileSource, PartSelector, WriteSource};
 use crate::geometry::ValidatedGeometry;
 use crate::outcome::Fail;
 use crate::table::{self, GptState, HeaderIssue, MbrPartition, PmbrSize, RawGpt};
@@ -110,6 +110,8 @@ pub fn classify_repair(g: &RawGpt, file_last_lba: u64) -> io::Result<RepairActio
         GptState::NeedsRepair { cause: HeaderIssue::PrimaryUnreadable } => {
             g.header.last_usable_lba.min(repaired_last_usable(g, file_last_lba)?)
         }
+        // 主副本是权威事实：备份缺失不改写可用区上界，只把它按主头重建出来
+        GptState::NeedsRepair { cause: HeaderIssue::BackupUnreadable } => g.header.last_usable_lba,
         _ => repaired_last_usable(g, file_last_lba)?,
     };
     Ok(if pmbr_needs_repair {
@@ -125,8 +127,9 @@ pub fn classify_repair(g: &RawGpt, file_last_lba: u64) -> io::Result<RepairActio
 /// - 从首次写盘起（commit_gpt / ensure_protective_mbr 及其后）：失败按 Failed 报，
 ///   写入量已无法断定
 ///
-/// `None` 不写盘（调用方已在决策期确认无需修复）
-pub(crate) fn apply_repair(src: &mut FileSource, action: &RepairAction) -> Result<(), Fail> {
+/// `None` 不写盘（调用方已在决策期确认无需修复）。
+/// `ss` 是该表自身的逻辑块大小：保护 MBR 的 SizeInLBA 以它为单位，不能取容器口径
+pub(crate) fn apply_repair(src: &mut WriteSource, action: &RepairAction, ss: u64) -> Result<(), Fail> {
     match action {
         RepairAction::None => return Ok(()),
         // RepairProtectiveMbr：无需写 GPT（由函数尾部的 ensure_protective_mbr 统一重写，即首次写盘）
@@ -154,7 +157,7 @@ pub(crate) fn apply_repair(src: &mut FileSource, action: &RepairAction) -> Resul
             vg.commit(src).map_err(|e| Fail::failed(e.to_string()))?;
         }
     }
-    table::ensure_protective_mbr(src)?;
+    table::ensure_protective_mbr(src, ss)?;
     let g2 = table::load_gpt(src).map_err(|e| Fail::failed(table::into_io_error(e).to_string()))?.ok_or_else(|| Fail::failed("re-read after repair failed"))?;
     if g2.state != GptState::Valid || g2.pmbr != PmbrSize::Normal {
         return Err(Fail::failed("repair did not converge — refusing"));
@@ -501,7 +504,7 @@ pub(crate) fn live_entry(g: &ValidatedGeometry, part: u32) -> Result<&GPTPartiti
 
 /// add：自动派生 unique guid（与镜像路径绑定，复制盘不会拿到相同的 PARTUUID）
 pub fn add_entry(
-    src: &mut FileSource,
+    src: &mut WriteSource,
     start: u64,
     end: u64,
     name: &str,
@@ -515,7 +518,7 @@ pub fn add_entry(
 /// 传入源分区的 GUID）。`execute_copy` 在 durable boundary 之后调用它，依赖它
 /// "写盘前拒绝 ⇒ `Refused`、写盘后 ⇒ 压成 `io::Error`"这个分界——只换模块，不动契约
 pub fn add_entry_at(
-    src: &mut FileSource,
+    src: &mut WriteSource,
     start: u64,
     end: u64,
     name: &str,
@@ -553,15 +556,15 @@ pub fn add_entry_at(
     .map_err(|e| Fail::infra(format!("geometry edit rejected: {e}")))?;
     refuse_if_table_changed(src, &g)?;
     // 拒绝判定已全部结束，首次写盘从这里开始
-    apply_repair(src, &repair)?;
+    apply_repair(src, &repair, g.sector_size())?;
     g.commit(src)?;
-    table::ensure_protective_mbr(src)?;
+    table::ensure_protective_mbr(src, g.sector_size())?;
     Ok((slot + 1) as u32)
 }
 
 /// GPT 分区改名。落盘字段为 36 个 UTF-16 码元（gptman 3.1.1 PartitionName.raw_buf: [u16; 36]），
 /// 超长部分由 `From<&str>` 静默截断
-pub fn rename_entry(src: &mut FileSource, part: u32, name: &str) -> Result<(), Fail> {
+pub fn rename_entry(src: &mut WriteSource, part: u32, name: &str) -> Result<(), Fail> {
     let (mut g, repair) = resolve_geometry(src)?.ok_or_else(|| Fail::refused("no GPT"))?;
     // 空槽 / 越界的判据与文案取自唯一出口；改名只需下标
     let i = live_index(g.entries(), part)?;
@@ -569,13 +572,13 @@ pub fn rename_entry(src: &mut FileSource, part: u32, name: &str) -> Result<(), F
         .map_err(|e| Fail::infra(format!("geometry edit rejected: {e}")))?;
     refuse_if_table_changed(src, &g)?;
     // 拒绝判定已全部结束，首次写盘从这里开始
-    apply_repair(src, &repair)?;
+    apply_repair(src, &repair, g.sector_size())?;
     Ok(g.commit(src)?)
 }
 
 /// GPT 分区类型 GUID 直改（UEFI 2.10 §5.3.2 PartitionTypeGUID）。全零拒绝：
 /// 零 GUID 是"未用条目"的形状，写零等于把在用条目改成空壳，移除分区应走 `del`
-pub fn set_type_guid(src: &mut FileSource, part: u32, guid: [u8; 16]) -> Result<(), Fail> {
+pub fn set_type_guid(src: &mut WriteSource, part: u32, guid: [u8; 16]) -> Result<(), Fail> {
     if guid == [0u8; 16] {
         return Err(Fail::refused("type GUID cannot be all-zero (that marks an unused entry — use `del`)"));
     }
@@ -585,7 +588,7 @@ pub fn set_type_guid(src: &mut FileSource, part: u32, guid: [u8; 16]) -> Result<
         .map_err(|e| Fail::infra(format!("geometry edit rejected: {e}")))?;
     refuse_if_table_changed(src, &g)?;
     // 拒绝判定已全部结束，首次写盘从这里开始
-    apply_repair(src, &repair)?;
+    apply_repair(src, &repair, g.sector_size())?;
     Ok(g.commit(src)?)
 }
 
@@ -637,7 +640,7 @@ impl GptFlag {
     }
 }
 
-pub fn set_gpt_flag(src: &mut FileSource, part: u32, flag: GptFlag, on: bool) -> Result<(), Fail> {
+pub fn set_gpt_flag(src: &mut WriteSource, part: u32, flag: GptFlag, on: bool) -> Result<(), Fail> {
     let (mut g, repair) = resolve_geometry(src)?.ok_or_else(|| Fail::refused("no GPT"))?;
     let i = live_index(g.entries(), part)?;
     // 先算好新类型与属性位（ESP off 的 FS 识别要读盘），再一次性写回：
@@ -687,21 +690,21 @@ pub fn set_gpt_flag(src: &mut FileSource, part: u32, flag: GptFlag, on: bool) ->
     .map_err(|e| Fail::infra(format!("geometry edit rejected: {e}")))?;
     refuse_if_table_changed(src, &g)?;
     // 拒绝判定已全部结束，首次写盘从这里开始
-    apply_repair(src, &repair)?;
+    apply_repair(src, &repair, g.sector_size())?;
     Ok(g.commit(src)?)
 }
 
 /// `del`：清零条目（只清表项，分区数据区不动）
-pub fn del_entry(src: &mut FileSource, part: u32) -> Result<(), Fail> {
+pub fn del_entry(src: &mut WriteSource, part: u32) -> Result<(), Fail> {
     let (mut g, repair) = resolve_geometry(src)?.ok_or_else(|| Fail::refused("no GPT"))?;
     let i = live_index(g.entries(), part)?;
     g.update_entry(i, |e| *e = table::empty_entry())
         .map_err(|e| Fail::infra(format!("geometry edit rejected: {e}")))?;
     refuse_if_table_changed(src, &g)?;
     // 拒绝判定已全部结束，首次写盘从这里开始
-    apply_repair(src, &repair)?;
+    apply_repair(src, &repair, g.sector_size())?;
     g.commit(src)?;
-    Ok(table::ensure_protective_mbr(src)?)
+    Ok(table::ensure_protective_mbr(src, g.sector_size())?)
 }
 
 #[cfg(test)]
@@ -710,7 +713,7 @@ mod tests {
     use crate::table::{HeaderIssue, PmbrIssue, RawHeader};
 
     /// 带一个分区的 GPT 夹具：编排函数的端到端行为（flags / esp 切换）在真表上验证
-    fn gpt_src(tag: &str) -> crate::dev::FileSource {
+    fn gpt_src(tag: &str) -> crate::dev::WriteSource {
         let mut src = crate::support::src_from(tag, &[0u8; 8 * 1024 * 1024]);
         table::create_gpt(&mut src, 512, None).unwrap();
         add_entry(&mut src, 2048, 4095, "p", table::LINUX_FS_TYPE_GUID).unwrap();

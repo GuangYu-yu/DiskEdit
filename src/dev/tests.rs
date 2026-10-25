@@ -27,8 +27,8 @@ pub(crate) fn journal_path(tag: &str) -> PathBuf {
 
 /// 测试用的目标身份：全零指纹 + 无 loop 映射 = "取不到稳定指纹的载体"那一类，
 /// 身份核对因此不参与（判据见 `scene_mismatch`）。需要核对时另给具体值
-pub(crate) fn jid() -> JournalIdentity {
-    JournalIdentity { fp: TargetFingerprint::default(), map: None }
+pub(crate) fn jid() -> SceneIdentity {
+    SceneIdentity { fp: TargetFingerprint::default(), map: None, proof: IdentityProof::Inode }
 }
 
 /// 取错误文本。不用 `unwrap_err`：那要求 Ok 侧实现 Debug，而这些类型不必为了测试去实现它
@@ -121,6 +121,32 @@ pub(crate) fn loop_backing_is_read_from_the_device_above_the_partition() {
     );
     assert_eq!(loop_backing_at(&root.join("loop0")).unwrap(), Some(PathBuf::from("/tmp/backing.img")));
     assert_eq!(loop_backing_at(&root.join("sda/sda1")).unwrap(), None);
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// 指纹的设备 ID 与容量都取**整设备节点**：以分区节点解析与以整盘节点解析得到同一份
+/// 指纹，故整盘与它的分区共享同一份恢复现场。`dm/name` 不在身份证据里——映射名不是身份，
+/// 只有它可读时按"无 ID"处理（容量仍作为辅助证据）
+#[cfg(target_os = "linux")]
+#[test]
+pub(crate) fn disk_identity_is_shared_by_a_partition_and_its_whole_disk() {
+    let root = std::env::temp_dir().join(format!("diskedit_diskid_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("sda/sda1")).unwrap();
+    std::fs::create_dir_all(root.join("dm-0")).unwrap();
+    std::fs::write(root.join("sda/size"), "2048\n").unwrap();
+    std::fs::write(root.join("sda/wwid"), "naa.5000c500aabbccdd\n").unwrap();
+    std::fs::write(root.join("sda/sda1/partition"), "1\n").unwrap();
+    std::fs::write(root.join("sda/sda1/size"), "1024\n").unwrap();
+    // dm/name 是可读的，但它不进身份证据
+    std::fs::write(root.join("dm-0/size"), "4096\n").unwrap();
+    std::fs::write(root.join("dm-0/dm/name"), "vg-data\n").unwrap();
+
+    let whole = disk_identity(&root.join("sda")).unwrap();
+    assert_eq!(whole, (2048 * 512, Some("wwid=naa.5000c500aabbccdd".to_string())));
+    assert_eq!(disk_identity(&root.join("sda/sda1")).unwrap(), whole);
+    assert_eq!(disk_identity(&root.join("dm-0")).unwrap(), (4096 * 512, None));
 
     let _ = std::fs::remove_dir_all(&root);
 }
@@ -252,6 +278,45 @@ pub(crate) fn journal_v5_crc_covers_the_length_field() {
     let _ = std::fs::remove_file(&p);
 }
 
+/// v6 头把身份种类写在身份段最后一个字节：三种可落盘种类原样读回。这一字节是"旧格式没有
+/// 身份"与"录制时取不到身份"的唯一分界，故未知值一律按头损坏拒绝，不降级成 `Legacy`——
+/// 降级会把缺身份的块设备现场当成旧镜像现场放过
+#[test]
+pub(crate) fn journal_v6_records_identity_kind_and_refuses_an_unknown_one() {
+    let with = |proof| SceneIdentity {
+        fp: TargetFingerprint { dev: 7, ino: 42, size: 1 << 20, id: 0x1122_3344_5566_7788 },
+        map: Some((4096, 8192)),
+        proof,
+    };
+    for (proof, tag) in [
+        (IdentityProof::DeviceId, 1u8),
+        (IdentityProof::Inode, 2),
+        (IdentityProof::Unavailable, 3),
+    ] {
+        let bytes = Journal::header(&with(proof), JournalFormat::V6);
+        assert_eq!(bytes[Journal::MAGIC.len() + IDENTITY_LEN_V6 - 1], tag);
+        let (back, format) = Journal::parse_header(&bytes).unwrap();
+        assert!(format == JournalFormat::V6);
+        assert_eq!(back, with(proof));
+    }
+
+    // 旧版本格式里没有设备 ID 与种类这两个字段：id 读作零、种类读作 `Legacy`
+    let legacy = with(IdentityProof::Inode);
+    let (back, format) = Journal::parse_header(&Journal::header(&legacy, JournalFormat::V5)).unwrap();
+    assert!(format == JournalFormat::V5);
+    assert_eq!(back.proof, IdentityProof::Legacy);
+    assert_eq!(back.fp.id, 0);
+
+    // 0 留给"格式里没有这一字节"的旧版本：v6 头里出现 0 即无法判读
+    let mut bytes = Journal::header(&with(IdentityProof::Inode), JournalFormat::V6);
+    bytes[Journal::MAGIC.len() + IDENTITY_LEN_V6 - 1] = 0;
+    let crc_at = bytes.len() - 4;
+    let crc = crate::table::crc32(&bytes[..crc_at]);
+    bytes[crc_at..].copy_from_slice(&crc.to_le_bytes());
+    let e = err_text(Journal::parse_header(&bytes));
+    assert!(e.contains("identity kind"), "an unknown identity kind must be refused: {e}");
+}
+
 /// 惰性创建：打开只做校验、不落痕迹，第一条记录才建文件。若 open 就建，一条在被拒阶段
 /// 结束的命令会留下空 journal，让后续 undo 分不清"没有 journal"与"journal 是空的"
 #[test]
@@ -295,7 +360,7 @@ pub(crate) fn journal_format_boundary_refuses_older_versions_and_keeps_them_inta
 
     // v4：写出去的头 + 身份，读回来逐字段一致
     let q = journal_path("format_v4");
-    let mine = JournalIdentity { fp: TargetFingerprint { dev: 7, ino: 42, size: 1 << 20 }, map: Some((4096, 8192)) };
+    let mine = SceneIdentity { fp: TargetFingerprint { dev: 7, ino: 42, size: 1 << 20, id: 0 }, map: Some((4096, 8192)), proof: IdentityProof::Inode };
     {
         let mut j = Journal::open(&q, mine).unwrap();
         j.record(0, &[0xAA; 8], &[0xBB; 8]).unwrap();
@@ -306,12 +371,12 @@ pub(crate) fn journal_format_boundary_refuses_older_versions_and_keeps_them_inta
     assert!(matches!(Journal::read_entries(&q).unwrap(), JournalRead::Complete(v) if v.len() == 1));
     // 指纹不符 = 同一路径下换了文件：不采纳，且不动那份 journal
     let before = std::fs::read(&q).unwrap();
-    let other = JournalIdentity { fp: TargetFingerprint { dev: 7, ino: 43, size: 1 << 20 }, map: Some((4096, 8192)) };
+    let other = SceneIdentity { fp: TargetFingerprint { dev: 7, ino: 43, size: 1 << 20, id: 0 }, map: Some((4096, 8192)), proof: IdentityProof::Inode };
     let e = err_text(Journal::open(&q, other));
     assert!(e.contains("fingerprint"), "{e}");
     assert_eq!(std::fs::read(&q).unwrap(), before, "a foreign identity must not be adopted or modified");
     // loop 映射的有无之别同样拦下：同一 LBA 在两条途径下指向不同字节
-    let no_map = JournalIdentity { fp: TargetFingerprint { dev: 7, ino: 42, size: 1 << 20 }, map: None };
+    let no_map = SceneIdentity { fp: TargetFingerprint { dev: 7, ino: 42, size: 1 << 20, id: 0 }, map: None, proof: IdentityProof::Inode };
     assert!(err_text(Journal::open(&q, no_map)).contains("loop device"));
     assert_eq!(std::fs::read(&q).unwrap(), before, "no mismatch may modify the journal");
     let _ = std::fs::remove_file(&q);
@@ -323,7 +388,7 @@ pub(crate) fn journal_format_boundary_refuses_older_versions_and_keeps_them_inta
 #[test]
 pub(crate) fn journal_v4_truncated_or_damaged_is_refused_and_only_a_zero_byte_remnant_is_rewritten() {
     let p = journal_path("format_bad");
-    let id = JournalIdentity { fp: TargetFingerprint { dev: 7, ino: 42, size: 1 << 20 }, map: None };
+    let id = SceneIdentity { fp: TargetFingerprint { dev: 7, ino: 42, size: 1 << 20, id: 0 }, map: None, proof: IdentityProof::Inode };
     {
         let mut j = Journal::open(&p, id).unwrap();
         j.record(0, &[0xAA; 8], &[0xBB; 8]).unwrap();
@@ -384,7 +449,7 @@ pub(crate) fn journal_v4_truncated_or_damaged_is_refused_and_only_a_zero_byte_re
 #[test]
 pub(crate) fn journal_truncated_to_zero_is_adopted_as_a_remnant() {
     let p = journal_path("trunc_zero");
-    let id = JournalIdentity { fp: TargetFingerprint { dev: 7, ino: 42, size: 1 << 20 }, map: None };
+    let id = SceneIdentity { fp: TargetFingerprint { dev: 7, ino: 42, size: 1 << 20, id: 0 }, map: None, proof: IdentityProof::Inode };
     {
         let mut j = Journal::open(&p, id).unwrap();
         j.record(0, &[0xAA; 8], &[0xBB; 8]).unwrap();
@@ -575,6 +640,16 @@ pub(crate) fn a_torn_tail_after_the_last_record_is_truncated() {
         "the adopted journal must be cut back to its last complete record"
     );
     let _ = std::fs::remove_file(&p);
+}
+
+/// 设备 ID 摘要用标准 FNV-1a 64 向量钉住：换实现或换常量都会让旧现场里的 ID 与同一块盘
+/// 新算出的值不再相等，恢复现场随之被误判为"换了盘"
+#[cfg(target_os = "linux")]
+#[test]
+pub(crate) fn fnv1a64_matches_the_reference_vectors() {
+    assert_eq!(fnv1a64(b""), 0xcbf2_9ce4_8422_2325);
+    assert_eq!(fnv1a64(b"a"), 0xaf63_dc4c_8601_ec8c);
+    assert_eq!(fnv1a64(b"foobar"), 0x8594_4171_f739_67e8);
 }
 
 /// 非 loop 块设备的身份是**盘级**的：journal / checkpoint / lock 按 disk_key 落点，

@@ -183,14 +183,14 @@ pub(crate) fn parse_mbr_reports_overlap_damage() {
 pub(crate) fn protective_mbr_shape_and_size() {
     let mut src = src_from_gpt("pmbr", 512); // 100 扇区 → SizeInLBA = 99
     assert!(pmbr_shape_valid(&src).unwrap());
-    assert_eq!(pmbr_size_state(&src).unwrap(), PmbrSize::Normal);
+    assert_eq!(pmbr_size_state(&src, src.sector_size).unwrap(), PmbrSize::Normal);
     let good = {
         let mut b = [0u8; 512];
         src.read_at(0, &mut b).unwrap();
         b
     };
     // 每条用例：在有效布局上只改一处字节
-    let patch = |src: &mut FileSource, f: &dyn Fn(&mut [u8; 512])| {
+    let patch = |src: &mut WriteSource, f: &dyn Fn(&mut [u8; 512])| {
         let mut b = good;
         f(&mut b);
         src.write_at(0, &b).unwrap();
@@ -212,17 +212,17 @@ pub(crate) fn protective_mbr_shape_and_size() {
     patch(&mut src, &|b| b[446 + 12..446 + 16].copy_from_slice(&50u32.to_le_bytes()));
     assert!(pmbr_shape_valid(&src).unwrap());
     assert_eq!(
-        pmbr_size_state(&src).unwrap(),
+        pmbr_size_state(&src, src.sector_size).unwrap(),
         PmbrSize::NeedsRepair { cause: PmbrIssue::Stale }
     );
     // 等于容器 = Normal；大于容器且非已知口径 = 不一致（拒绝自动修复）；0 亦视为 stale
     patch(&mut src, &|b| b[446 + 12..446 + 16].copy_from_slice(&99u32.to_le_bytes()));
-    assert_eq!(pmbr_size_state(&src).unwrap(), PmbrSize::Normal);
+    assert_eq!(pmbr_size_state(&src, src.sector_size).unwrap(), PmbrSize::Normal);
     patch(&mut src, &|b| b[446 + 12..446 + 16].copy_from_slice(&200u32.to_le_bytes()));
-    assert_eq!(pmbr_size_state(&src).unwrap(), PmbrSize::Inconsistent);
+    assert_eq!(pmbr_size_state(&src, src.sector_size).unwrap(), PmbrSize::Inconsistent);
     patch(&mut src, &|b| b[446 + 12..446 + 16].copy_from_slice(&0u32.to_le_bytes()));
     assert_eq!(
-        pmbr_size_state(&src).unwrap(),
+        pmbr_size_state(&src, src.sector_size).unwrap(),
         PmbrSize::NeedsRepair { cause: PmbrIssue::Stale }
     );
 
@@ -240,14 +240,14 @@ pub(crate) fn protective_mbr_shape_and_size() {
         big.write_at(0, &b).unwrap();
     }
     assert!(pmbr_shape_valid(&big).unwrap());
-    assert_eq!(pmbr_size_state(&big).unwrap(), PmbrSize::Normal);
+    assert_eq!(pmbr_size_state(&big, big.sector_size).unwrap(), PmbrSize::Normal);
 
     // 4Kn 容器上的 512 字节口径值：UEFI 2.10 §5.2.3 的 SizeInLBA 以 logical block 计，
     // 512 口径是别的工具的历史写法 → 判为"非规范但可修复"，不得并进 Normal
     // （并入的后果：info 声称它合法，且 classify_repair 不排修复动作，兼容值永久停留）
     let mut k4 = src_from_gpt("pmbr_4kn", 4096); // 100 块 × 4096 = 409600 字节
     k4.sector_size = 4096; // 规范值 = 100 − 1 = 99；512 口径值 = 409600/512 − 1 = 799
-    let set_size = |src: &mut FileSource, v: u32| {
+    let set_size = |src: &mut WriteSource, v: u32| {
         let mut b = vec![0u8; src.sector_size as usize];
         src.read_at(0, &mut b).unwrap();
         b[446 + 4] = 0xEE;
@@ -260,7 +260,7 @@ pub(crate) fn protective_mbr_shape_and_size() {
     set_size(&mut k4, 799);
     assert!(pmbr_shape_valid(&k4).unwrap());
     assert_eq!(
-        pmbr_size_state(&k4).unwrap(),
+        pmbr_size_state(&k4, k4.sector_size).unwrap(),
         PmbrSize::NeedsRepair { cause: PmbrIssue::Compat512 }
     );
     // 策略层必须把它排进修复动作，否则写入路径不会规范化
@@ -271,11 +271,12 @@ pub(crate) fn protective_mbr_shape_and_size() {
         crate::gpt_policy::RepairAction::RepairProtectiveMbr
     );
     // 规范化点：写入路径重写一次即收敛
-    ensure_protective_mbr(&mut k4).unwrap();
-    assert_eq!(pmbr_size_state(&k4).unwrap(), PmbrSize::Normal);
+    let ss = k4.sector_size;
+    ensure_protective_mbr(&mut k4, ss).unwrap();
+    assert_eq!(pmbr_size_state(&k4, k4.sector_size).unwrap(), PmbrSize::Normal);
     // 大于规范值且非已知口径（如 800）→ 可能是更大盘的截断副本，仍拒绝自动修复
     set_size(&mut k4, 800);
-    assert_eq!(pmbr_size_state(&k4).unwrap(), PmbrSize::Inconsistent);
+    assert_eq!(pmbr_size_state(&k4, k4.sector_size).unwrap(), PmbrSize::Inconsistent);
     let g4 = load_gpt(&k4).unwrap().unwrap();
     assert!(crate::gpt_policy::classify_repair(&g4, last).is_err());
 }

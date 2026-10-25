@@ -88,7 +88,7 @@ fn journal_lifecycle_and_table_undo() {
     assert_eq!(c, 20, "{e}");
     let jb = std::fs::read(&journal).unwrap();
     let mut mid = jb.clone();
-    mid[V4_HEADER_LEN + REC_HDR + 1] ^= 0xFF; // 头之后是记录头 `[len][crc]`，再往后即第 1 条记录的数据
+    mid[V6_HEADER_LEN + REC_HDR + 1] ^= 0xFF; // 头之后是记录头 `[len][crc]`，再往后即第 1 条记录的数据
     std::fs::write(&journal, &mid).unwrap();
     let (c, e) = run(&["undo", img_s, "--yes"]);
     assert_ne!(c, 0, "mid-file corruption must refuse undo: {e}");
@@ -198,9 +198,9 @@ fn undo_refuses_a_journal_whose_recorded_scene_is_not_this_target() {
     assert!(journal.exists(), "a partial operation leaves its journal behind: {e}");
 
     let mut jb = std::fs::read(&journal).unwrap();
-    assert!(jb.len() > V4_HEADER_LEN, "the journal must hold at least one record to reach the identity check");
-    jb[5 + 24] = 1; // 记成"经 loop 写入"
-    v4_resign_header(&mut jb);
+    assert!(jb.len() > V6_HEADER_LEN, "the journal must hold at least one record to reach the identity check");
+    jb[V6_MAP_FLAG_AT] = 1; // 记成"经 loop 写入"
+    resign_header(&mut jb, V6_HEADER_LEN);
     std::fs::write(&journal, &jb).unwrap();
 
     let before = std::fs::read(&img).unwrap();
@@ -391,7 +391,7 @@ fn undo_removes_an_empty_shell_only_when_its_identity_matches() {
     std::fs::write(&journal, &foreign).unwrap();
     let (c, e) = run(&["undo", img_s, "--yes"]);
     assert_eq!(c, 10, "an empty shell of another target must be refused: {e}");
-    assert!(e.contains("not removed here"), "{e}");
+    assert!(e.contains("left in place"), "{e}");
     assert_eq!(std::fs::read(&journal).unwrap(), foreign, "a foreign shell must be left byte-identical");
 
     let _ = std::fs::remove_dir_all(&dir);

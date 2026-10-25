@@ -115,6 +115,13 @@ pub(crate) fn cmd_add(a: &Args) -> crate::outcome::Outcome {
     // 分区节点不是合法载体：表条目写在整盘最前 16KiB，落到分区节点上会直接覆盖该
     // 分区的数据——判据与文案见 refuse_partition_node_target
     refuse_partition_node_target("add", &a.target);
+    // `--start end` 是 move/copy 的"贴着可用区尾部打包"语法；add 不挪位置，
+    // 与 resize-part 同一条针对性拒绝，而非让它落进下面"缺 --start"的通用报错
+    if a.start_end {
+        bail_fail(Fail::refused(
+            "`--start end` does not apply to add (it is move/copy syntax for packing against the last usable LBA) — pass explicit --start and --end LBAs",
+        ));
+    }
     let (Some(start), Some(end)) = (a.start, a.end) else {
         bail_fail(Fail::refused("`add` needs both --start and --end".to_string()));
     };
@@ -475,8 +482,8 @@ pub(crate) fn cmd_create(a: &Args) -> crate::outcome::Outcome {
             if let Err(e) = src.mark_non_reversible() {
                 bail_fail(Fail::failed(format!(
                     "partition #{num} was created, but the transaction state could not be persisted: {e} \
-                     — verify with: diskedit info {}",
-                    a.target
+                     — verify with: diskedit info {}; if a recovery record was left behind, release it with: diskedit abandon {}",
+                    a.target, a.target
                 )));
             }
         }

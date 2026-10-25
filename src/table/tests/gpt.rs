@@ -12,7 +12,7 @@ pub(crate) fn overlapping_entries_are_diagnosable_but_never_writable() {
     let mut src = src_from("overlap", vec![0u8; (2048 * ss) as usize]);
     // 150..250 落在 100..200 内：解析层放行（诊断要看得到），写入层拒绝
     write_primary_entries(&mut src, ss, &[(100, 200), (150, 250), (400, 500)]);
-    ensure_protective_mbr(&mut src).unwrap();
+    ensure_protective_mbr(&mut src, ss).unwrap();
     let g = load_gpt(&src)
         .unwrap()
         .expect("a table with overlapping entries must stay observable for diagnostics");
@@ -25,7 +25,7 @@ pub(crate) fn overlapping_entries_are_diagnosable_but_never_writable() {
     // 紧邻但不重叠（200 / 201）：同一构造点必须放行，不得把合法表一并拒掉
     let mut ok = src_from("no_overlap", vec![0u8; (2048 * ss) as usize]);
     write_primary_entries(&mut ok, ss, &[(100, 200), (201, 250), (400, 500)]);
-    ensure_protective_mbr(&mut ok).unwrap();
+    ensure_protective_mbr(&mut ok, ss).unwrap();
     assert!(crate::gpt_policy::resolve_geometry(&ok).is_ok());
 }
 
@@ -281,7 +281,8 @@ pub(crate) fn corrupt_metadata_refused() {
     let mut data = fixture_gpt(512);
     data[600] ^= 0xFF; // LBA1 头部区域内翻转（破坏 CRC）
     let mut src = src_from("cbad1", data);
-    ensure_protective_mbr(&mut src).unwrap();
+    let ss = src.sector_size;
+    ensure_protective_mbr(&mut src, ss).unwrap();
     let g = load_gpt(&src).unwrap().expect("must fall back to backup header");
     assert!(
         matches!(g.state, GptState::NeedsRepair { cause: HeaderIssue::PrimaryUnreadable }),
@@ -293,7 +294,8 @@ pub(crate) fn corrupt_metadata_refused() {
     let mut data2 = fixture_gpt(512);
     data2[2 * 512 + 10] ^= 0xFF; // LBA2 = 主条目数组
     let mut src2 = src_from("cbad2", data2);
-    ensure_protective_mbr(&mut src2).unwrap();
+    let ss = src2.sector_size;
+    ensure_protective_mbr(&mut src2, ss).unwrap();
     let g2 = load_gpt(&src2)
         .expect("primary array damage must fall back to the backup")
         .expect("backup copy is intact");
@@ -308,7 +310,8 @@ pub(crate) fn corrupt_metadata_refused() {
     data3[2 * 512 + 10] ^= 0xFF; // 主条目数组
     data3[(67 * 512) + 10] ^= 0xFF; // 备条目数组：末块 99 − 跨度 32 = LBA 67
     let mut src3 = src_from("cbad3", data3);
-    ensure_protective_mbr(&mut src3).unwrap();
+    let ss = src3.sector_size;
+    ensure_protective_mbr(&mut src3, ss).unwrap();
     assert!(matches!(
         load_gpt(&src3),
         Err(GptError::EntryArrayCorrupt { copy: GptCopyKind::Primary })
@@ -325,7 +328,8 @@ pub(crate) fn damaged_primary_without_backup_is_reported() {
     let last = intact.len() - 512;
     intact[last..].fill(0); // 备份头所在扇区清零
     let mut ctl = src_from("hdmg_ctl", intact);
-    ensure_protective_mbr(&mut ctl).unwrap();
+    let ss = ctl.sector_size;
+    ensure_protective_mbr(&mut ctl, ss).unwrap();
     assert!(load_gpt(&ctl).unwrap().is_some(), "对照组：头完好时缺备份不影响解析");
 
     let mut data = fixture_gpt(512);
@@ -333,7 +337,8 @@ pub(crate) fn damaged_primary_without_backup_is_reported() {
     data[last..].fill(0);
     data[512 + 16] ^= 0xFF; // LBA1 头部 CRC 字段内翻转：签名完好，CRC 对不上
     let mut src = src_from("hdmg", data);
-    ensure_protective_mbr(&mut src).unwrap();
+    let ss = src.sector_size;
+    ensure_protective_mbr(&mut src, ss).unwrap();
     assert!(
         matches!(load_gpt(&src), Err(GptError::HeaderCorrupt { copy: GptCopyKind::Primary, .. })),
         "签名在而头 CRC 坏且无备份 ⇒ 必须报 HeaderCorrupt(primary)"
@@ -369,7 +374,8 @@ pub(crate) fn both_headers_unusable_is_an_error_not_absence() {
     data[512 + 16] ^= 0xFF; // 主头 CRC 字段：签名在，CRC 对不上
     data[last + 16] ^= 0xFF; // 备头同样处理
     let mut src = src_from("bothhdr", data);
-    ensure_protective_mbr(&mut src).unwrap();
+    let ss = src.sector_size;
+    ensure_protective_mbr(&mut src, ss).unwrap();
     assert!(
         matches!(load_gpt(&src), Err(GptError::HeaderCorrupt { copy: GptCopyKind::Primary, .. })),
         "两份都坏必须报错，且报首个损伤"
@@ -380,7 +386,8 @@ pub(crate) fn both_headers_unusable_is_an_error_not_absence() {
 #[test]
 pub(crate) fn no_gpt_signature_is_absence() {
     let mut src = src_from("nogpt", vec![0u8; 100 * 512]);
-    ensure_protective_mbr(&mut src).unwrap();
+    let ss = src.sector_size;
+    ensure_protective_mbr(&mut src, ss).unwrap();
     assert!(pmbr_shape_valid(&src).unwrap(), "前提：形状成立才会走到副本解析");
     assert!(load_gpt(&src).unwrap().is_none(), "无签名 ⇒ 无表，不是损伤");
 }
@@ -508,6 +515,7 @@ pub(crate) fn commit_roundtrip_via_gptman() {
     assert_eq!(p.starting_lba, 64);
     assert_eq!(p.partition_name.as_str(), "second");
     // 保护 MBR 幂等
-    ensure_protective_mbr(&mut src).unwrap();
-    ensure_protective_mbr(&mut src).unwrap();
+    let ss = src.sector_size;
+    ensure_protective_mbr(&mut src, ss).unwrap();
+    ensure_protective_mbr(&mut src, ss).unwrap();
 }

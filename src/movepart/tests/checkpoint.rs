@@ -16,6 +16,7 @@ pub(crate) fn checkpoint_slot_ownership_is_enforced() {
 
     // (a) 槽位里是单分区 resize 的 ckpt → apply 拒绝，且不得动盘、不得覆盖它
     let rs = RsCheckpoint {
+        proof: crate::dev::IdentityProof::Inode,
         disk_size: src.size, ss, part: 1,
         old_start: 2048, old_end: 6143, new_start: 2048, new_end: 3071,
         fs_shrunk: false, chunks_done: 0, chunk_bytes: chunk,
@@ -32,6 +33,7 @@ pub(crate) fn checkpoint_slot_ownership_is_enforced() {
     // (b) 槽位里是 plan 型搬移的 ckpt → resize_part 拒绝（不能按"无 ckpt"重做）
     std::fs::remove_file(&ckpt_path).unwrap();
     let ck = Checkpoint {
+        proof: crate::dev::IdentityProof::Inode,
         disk_size: src.size, ss, grow_part: 1, last_usable_lba: plan.last_usable_lba,
         moves: plan.moves.clone(), kind: PlanKind::TailPacked, cur_index: 0, chunks_done: 0, chunk_bytes: chunk,
         fp: Default::default(),
@@ -75,6 +77,7 @@ pub(crate) fn corrupt_checkpoint_is_an_error_not_an_empty_slot() {
 #[test]
 pub(crate) fn checkpoint_rejects_implausible_partition_numbers() {
     let ckpt = Checkpoint {
+        proof: crate::dev::IdentityProof::Inode,
         disk_size: 64 * 1024 * 1024,
         ss: 512,
         grow_part: 3,
@@ -115,6 +118,7 @@ pub(crate) fn checkpoint_rejects_implausible_partition_numbers() {
     // 首条 move 的 part_num = 3）在 256 槽位的几何下必须可读，在 128 槽位下被拒。
     // 少了这条，一块 256 槽位的表产生的 checkpoint 会被判成"损坏"，中断的搬移永久无法续传
     let wide = Checkpoint {
+        proof: crate::dev::IdentityProof::Inode,
         grow_part: 200,
         last_usable_lba: 100_000,
         fp: Default::default(),
@@ -149,6 +153,7 @@ pub(crate) fn relative_checkpoint_path_writes_beside_the_target() {
 pub(crate) fn checkpoint_rejects_implausible_chunk_progress() {
     // 搬移型：len_lba=100 × ss=512 = 50 KiB < 1 MiB ⇒ 该条目只有 1 个 chunk
     let ckpt = Checkpoint {
+        proof: crate::dev::IdentityProof::Inode,
         disk_size: 64 * 1024 * 1024,
         ss: 512,
         grow_part: 1,
@@ -192,6 +197,7 @@ pub(crate) fn checkpoint_rejects_implausible_chunk_progress() {
 
     // 单分区 resize 型：区间 1024 LBA × 512 B = 512 KiB < 1 MiB ⇒ 同样只有 1 个 chunk
     let rs = RsCheckpoint {
+        proof: crate::dev::IdentityProof::Inode,
         disk_size: 64 * 1024 * 1024, ss: 512, part: 1,
         old_start: 2048, old_end: 3071, new_start: 2048, new_end: 3071,
         fs_shrunk: false, chunks_done: 1, chunk_bytes: 1024 * 1024,
@@ -203,15 +209,16 @@ pub(crate) fn checkpoint_rejects_implausible_chunk_progress() {
     // 带 loop 映射与真实指纹的现场同样要原样回读：标志字节与它后面那两个 u64 是一组，
     // 偏移记账错位会在这里立刻现形
     let mapped = RsCheckpoint {
+        proof: crate::dev::IdentityProof::Inode,
         disk_size: 64 * 1024 * 1024, ss: 512, part: 1,
         old_start: 2048, old_end: 3071, new_start: 2048, new_end: 3071,
         fs_shrunk: false, chunks_done: 1, chunk_bytes: 1024 * 1024,
-        fp: crate::dev::TargetFingerprint { dev: 7, ino: 42, size: 1 << 20 },
+        fp: crate::dev::TargetFingerprint { dev: 7, ino: 42, size: 1 << 20, id: 0 },
         map: Some((1024 * 1024, 0)),
         fstype: Some(FsKind::Ext),
     };
     let back = RsCheckpoint::deserialize(&mapped.serialize(), &lim(128)).expect("mapped checkpoint must round-trip");
-    assert_eq!(back.fp, crate::dev::TargetFingerprint { dev: 7, ino: 42, size: 1 << 20 });
+    assert_eq!(back.fp, crate::dev::TargetFingerprint { dev: 7, ino: 42, size: 1 << 20, id: 0 });
     assert_eq!(back.map, Some((1024 * 1024, 0)));
     assert_eq!(back.fstype, Some(FsKind::Ext), "the filesystem kind must survive the round-trip");
     let mut b = rs.serialize();
@@ -226,6 +233,7 @@ pub(crate) fn checkpoint_rejects_implausible_chunk_progress() {
 #[test]
 pub(crate) fn relocation_ckpt_last_usable_is_bounded_by_the_usable_area() {
     let ckpt = Checkpoint {
+        proof: crate::dev::IdentityProof::Inode,
         disk_size: 64 * 1024 * 1024,
         ss: 512,
         grow_part: 1,
@@ -267,6 +275,7 @@ pub(crate) fn relocation_ckpt_last_usable_is_bounded_by_the_usable_area() {
 #[test]
 pub(crate) fn checkpoint_rejects_sector_size_mismatch() {
     let base = Checkpoint {
+        proof: crate::dev::IdentityProof::Inode,
         disk_size: 64 * 1024 * 1024,
         ss: 512,
         grow_part: 1,
@@ -292,6 +301,7 @@ pub(crate) fn checkpoint_rejects_sector_size_mismatch() {
     assert_eq!(e.kind(), io::ErrorKind::InvalidData, "{e}");
 
     let rs = RsCheckpoint {
+        proof: crate::dev::IdentityProof::Inode,
         disk_size: 64 * 1024 * 1024,
         ss: 512,
         part: 1,
@@ -318,6 +328,7 @@ pub(crate) fn checkpoint_rejects_sector_size_mismatch() {
 #[test]
 pub(crate) fn checkpoint_rejects_malformed_header_and_payload() {
     let ckpt = Checkpoint {
+        proof: crate::dev::IdentityProof::Inode,
         disk_size: 64 * 1024 * 1024,
         ss: 512,
         grow_part: 1,
@@ -413,6 +424,7 @@ pub(crate) fn checkpoint_rejects_malformed_header_and_payload() {
 #[test]
 pub(crate) fn resize_checkpoint_rejects_malformed_records() {
     let rs = RsCheckpoint {
+        proof: crate::dev::IdentityProof::Inode,
         disk_size: 64 * 1024 * 1024, ss: 512, part: 1,
         old_start: 2048, old_end: 3071, new_start: 2048, new_end: 3071,
         fs_shrunk: false, chunks_done: 0, chunk_bytes: 1024 * 1024,
@@ -481,6 +493,7 @@ pub(crate) fn resize_checkpoint_rejects_malformed_records() {
 pub(crate) fn resize_ckpt_progress_bound_follows_copy_len() {
     // move+shrink：old = 1024 LBA、new = 512 LBA、位移 2048 LBA ≥ old_len ⇒ chunk 不收敛
     let rs = RsCheckpoint {
+        proof: crate::dev::IdentityProof::Inode,
         disk_size: 64 * 1024 * 1024, ss: 512, part: 1,
         old_start: 2048, old_end: 3071, new_start: 4096, new_end: 4607,
         fs_shrunk: false, chunks_done: 0, chunk_bytes: 64 * 1024,
@@ -519,6 +532,7 @@ pub(crate) fn foreign_resize_ckpt_refuses_relocation_plans() {
     let ckpt_path = src.identity.checkpoint_path().to_path_buf();
     // 单分区 resize 作业的现场：分区号与几何取 fixture 里分区 1 的值，判定只看族别
     let rs = RsCheckpoint {
+        proof: crate::dev::IdentityProof::Inode,
         disk_size: src.size,
         ss: 512,
         part: 1,
@@ -547,6 +561,103 @@ pub(crate) fn foreign_resize_ckpt_refuses_relocation_plans() {
     let _ = std::fs::remove_file(&path);
 }
 
+/// v6 checkpoint 把身份种类写在 CRC 之前：三种可落盘种类原样回读；v5 现场没有设备 ID
+/// 与种类两个字段，读作 id 0 + `Legacy`；未知种类按损坏拒绝，不退回旧口径
+#[test]
+pub(crate) fn checkpoint_records_identity_kind_and_reads_v5_as_legacy() {
+    use crate::dev::IdentityProof::{DeviceId, Inode, Legacy, Unavailable};
+    let id = 0x1122_3344_5566_7788u64;
+    let mk = |proof| Checkpoint {
+        proof,
+        disk_size: 64 * 1024 * 1024,
+        ss: 512,
+        grow_part: 1,
+        last_usable_lba: 100_000,
+        moves: vec![PlanEntry { part_num: 1, first_lba: 2048, len_lba: 100, delta_lba: 200, is_swap: false }],
+        kind: PlanKind::TailPacked,
+        cur_index: 0,
+        chunks_done: 0,
+        chunk_bytes: 1024 * 1024,
+        fp: crate::dev::TargetFingerprint { dev: 7, ino: 42, size: 1 << 20, id },
+        map: None,
+    };
+    for proof in [DeviceId, Inode, Unavailable] {
+        let back = Checkpoint::deserialize(&mk(proof).serialize(), &lim(128)).expect("a v6 checkpoint must round-trip");
+        assert_eq!(back.proof, proof);
+        assert_eq!(back.fp.id, id, "the device id must survive the round-trip");
+    }
+
+    // 布局（count = 1）：fp.id @118、映射标志 @126、身份种类 @127
+    const ID: usize = 118;
+    const PROOF: usize = 127;
+    let v6 = mk(DeviceId).serialize();
+    let payload = &v6[..v6.len() - 4];
+    let mut v5 = Vec::with_capacity(payload.len() - 9 + 4);
+    v5.extend_from_slice(&payload[..ID]);
+    v5.extend_from_slice(&payload[ID + 8..PROOF]);
+    v5.extend_from_slice(&payload[PROOF + 1..]);
+    v5[8..12].copy_from_slice(&5u32.to_le_bytes());
+    let crc = table::crc32(&v5);
+    v5.extend_from_slice(&crc.to_le_bytes());
+    let back = Checkpoint::deserialize(&v5, &lim(128)).expect("a v5 checkpoint must stay readable");
+    assert_eq!(back.proof, Legacy);
+    assert_eq!(back.fp.id, 0, "v5 carries no device id");
+
+    let mut b = mk(Inode).serialize();
+    b[PROOF] = 0; // 0 留给"格式里没有这一字节"的旧版本
+    let crc_off = b.len() - 4;
+    let crc = table::crc32(&b[..crc_off]);
+    b[crc_off..].copy_from_slice(&crc.to_le_bytes());
+    let e = Checkpoint::deserialize(&b, &lim(128)).err().expect("an unknown identity kind must be rejected");
+    assert_eq!(e.kind(), io::ErrorKind::InvalidData, "{e}");
+}
+
+/// RsCheckpoint 同一条边界：两族 decoder 各自解析身份段，旧现场的兼容口径不能只落在一族上
+#[test]
+pub(crate) fn resize_checkpoint_records_identity_kind_and_reads_v5_as_legacy() {
+    use crate::dev::IdentityProof::{DeviceId, Inode, Legacy, Unavailable};
+    let id = 0x1122_3344_5566_7788u64;
+    let mk = |proof| RsCheckpoint {
+        proof,
+        disk_size: 64 * 1024 * 1024, ss: 512, part: 1,
+        old_start: 2048, old_end: 3071, new_start: 2048, new_end: 3071,
+        fs_shrunk: false, chunks_done: 0, chunk_bytes: 1024 * 1024,
+        fp: crate::dev::TargetFingerprint { dev: 7, ino: 42, size: 1 << 20, id },
+        map: None,
+        fstype: Some(FsKind::Ext),
+    };
+    for proof in [DeviceId, Inode, Unavailable] {
+        let back = RsCheckpoint::deserialize(&mk(proof).serialize(), &lim(128)).expect("a v6 checkpoint must round-trip");
+        assert_eq!(back.proof, proof);
+        assert_eq!(back.fp.id, id, "the device id must survive the round-trip");
+        assert_eq!(back.fstype, Some(FsKind::Ext));
+    }
+
+    // 布局：fp.id @105、映射标志 @113、文件系统类型 @114、身份种类 @115
+    const ID: usize = 105;
+    const PROOF: usize = 115;
+    let v6 = mk(Unavailable).serialize();
+    let payload = &v6[..v6.len() - 4];
+    let mut v5 = Vec::with_capacity(payload.len() - 9 + 4);
+    v5.extend_from_slice(&payload[..ID]);
+    v5.extend_from_slice(&payload[ID + 8..PROOF]);
+    v5.extend_from_slice(&payload[PROOF + 1..]);
+    v5[8..12].copy_from_slice(&5u32.to_le_bytes());
+    let crc = table::crc32(&v5);
+    v5.extend_from_slice(&crc.to_le_bytes());
+    let back = RsCheckpoint::deserialize(&v5, &lim(128)).expect("a v5 checkpoint must stay readable");
+    assert_eq!(back.proof, Legacy);
+    assert_eq!(back.fp.id, 0, "v5 carries no device id");
+
+    let mut b = mk(Inode).serialize();
+    b[PROOF] = 0;
+    let crc_off = b.len() - 4;
+    let crc = table::crc32(&b[..crc_off]);
+    b[crc_off..].copy_from_slice(&crc.to_le_bytes());
+    let e = RsCheckpoint::deserialize(&b, &lim(128)).err().expect("an unknown identity kind must be rejected");
+    assert_eq!(e.kind(), io::ErrorKind::InvalidData, "{e}");
+}
+
 /// 槽位被别的分区的作业占着：现算路径必须拒绝——当空槽会覆盖别人的现场，
 /// 当自己的续跑点会执行与盘上几何不符的 plan；has_pending_relocation 对
 /// 请求分区仍是"无作业"
@@ -556,6 +667,7 @@ pub(crate) fn foreign_checkpoint_slot_refuses_fresh_plans() {
     let ckpt_path = src.identity.checkpoint_path().to_path_buf();
     // grow_part = 2 的作业记录，moves 内容任意：resume 判定只看归属
     let ck = Checkpoint {
+        proof: crate::dev::IdentityProof::Inode,
         disk_size: src.size,
         ss: 512,
         grow_part: 2,

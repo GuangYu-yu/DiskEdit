@@ -20,6 +20,7 @@ pub(crate) fn shift_plan_none_never_ghost_relocates() {
 
     let plan = make_plan(&mut src, 1).unwrap();
     let ck = Checkpoint {
+        proof: crate::dev::IdentityProof::Inode,
         disk_size: src.size, ss: g.ss, grow_part: 1, last_usable_lba: plan.last_usable_lba,
         moves: plan.moves.clone(), kind: PlanKind::Shift, cur_index: 0, chunks_done: 0, chunk_bytes: chunk,
         fp: Default::default(),
@@ -54,6 +55,7 @@ pub(crate) fn shrink_does_not_resume_a_committed_growth_job() {
     let g = table::load_gpt(&src).unwrap().unwrap();
     let ckpt_path = src.identity.checkpoint_path().to_path_buf();
     let ck = Checkpoint {
+        proof: crate::dev::IdentityProof::Inode,
         disk_size: src.size, ss: g.ss, grow_part: 1, last_usable_lba: g.header.last_usable_lba,
         moves: vec![PlanEntry { part_num: 2, first_lba: 10240, len_lba: 2048, delta_lba: SHIFT, is_swap: false }],
         kind: PlanKind::Shift, cur_index: 0, chunks_done: 0, chunk_bytes: chunk,
@@ -95,6 +97,7 @@ pub(crate) fn shift_resume_requires_the_same_requested_size() {
     // 身份里的数值一维就是它：请求的扩容终点 = 目标原末端 + shift
     assert_eq!(grow_end_for(&plan, P1_START).unwrap(), P1_END + SHIFT);
     let ck = Checkpoint {
+        proof: crate::dev::IdentityProof::Inode,
         disk_size: src.size, ss: g.ss, grow_part: 1, last_usable_lba: plan.last_usable_lba,
         moves: plan.moves.clone(), kind: PlanKind::Shift, cur_index: 0, chunks_done: 0, chunk_bytes: chunk,
         fp: Default::default(),
@@ -279,7 +282,8 @@ pub(crate) fn stale_after_enlarge_detected_then_repaired() {
     );
     // 写入路径：修复到新末端 + 保护 MBR 与容器一致
     let (_, action) = gpt_policy::resolve_geometry(&src).unwrap().unwrap();
-    gpt_policy::apply_repair(&mut src, &action).unwrap();
+    let ss = src.sector_size;
+    gpt_policy::apply_repair(&mut src, &action, ss).unwrap();
     let g2 = table::load_gpt(&src).unwrap().unwrap();
     assert_eq!(g2.state, table::GptState::Valid);
     assert_eq!(g2.pmbr, table::PmbrSize::Normal);
@@ -309,6 +313,7 @@ pub(crate) fn refused_paths_do_not_write_the_disk() {
         let o = if via_apply {
             // 槽位被另一族（单分区 resize）作业占着 ⇒ apply 须事前拒绝
             let rs = RsCheckpoint {
+                proof: crate::dev::IdentityProof::Inode,
                 disk_size: src.size, ss: 512, part: 1, old_start: 2048, old_end: 6143,
                 new_start: 2048, new_end: 4095, fs_shrunk: false, chunks_done: 0, chunk_bytes: chunk,
                 fp: Default::default(),
@@ -405,7 +410,8 @@ pub(crate) fn stale_backup_detected_then_relocated() {
     assert_eq!(g.header.backup_lba, 20000, "解析不得偷偷改写盘上表");
     // 写入路径：就地修复并把备份头搬到设备末端
     let (_, action) = gpt_policy::resolve_geometry(&src).unwrap().unwrap();
-    gpt_policy::apply_repair(&mut src, &action).unwrap();
+    let ss = src.sector_size;
+    gpt_policy::apply_repair(&mut src, &action, ss).unwrap();
     let g2 = table::load_gpt(&src).unwrap().unwrap();
     assert_eq!(g2.state, table::GptState::Valid);
     assert_eq!(g2.pmbr, table::PmbrSize::Normal);

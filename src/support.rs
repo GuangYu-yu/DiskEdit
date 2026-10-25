@@ -4,7 +4,7 @@
 pub(crate) use crate::outcome::{Fail, EXIT_OK, EXIT_REFUSED};
 
 use crate::args::Args;
-use crate::dev::{FileSource, PartSelector};
+use crate::dev::{FileSource, PartSelector, WriteSource};
 use crate::geometry::ValidatedGeometry;
 use crate::transaction::TransactionManager;
 use crate::{movepart, table};
@@ -125,7 +125,7 @@ pub(crate) fn parse_os_type(s: &str) -> Option<u8> {
 // 这里只给命令层惯用的入口名，并把"哪一类命令可以接着做未完成的作业"这一条规则写成闭包
 
 /// 会留下 durable history 的写事务（add/del/set/resize/create/mkfs/apply…）
-pub(crate) fn open_target_for_write(a: &Args) -> Result<FileSource, crate::outcome::Fail> {
+pub(crate) fn open_target_for_write(a: &Args) -> Result<WriteSource, crate::outcome::Fail> {
     TransactionManager::begin(a)
 }
 
@@ -137,7 +137,7 @@ pub(crate) fn open_target_for_write(a: &Args) -> Result<FileSource, crate::outco
 /// 同一件事由领域层的恢复校验裁（不匹配即 `Divergent`）
 pub(crate) fn open_target_for_data_move(
     a: &Args,
-) -> Result<(FileSource, bool), crate::outcome::Fail> {
+) -> Result<(WriteSource, bool), crate::outcome::Fail> {
     TransactionManager::begin_or_resume(a, ResumeClaim::AnyCheckpoint)
 }
 
@@ -150,12 +150,12 @@ pub(crate) fn open_target_for_data_move(
 pub(crate) fn open_target_resumable(
     a: &Args,
     grow_part: PartSelector,
-) -> Result<(FileSource, bool), crate::outcome::Fail> {
+) -> Result<(WriteSource, bool), crate::outcome::Fail> {
     TransactionManager::begin_or_resume(a, ResumeClaim::OwnRelocation(grow_part))
 }
 
 /// 只持有所有权、不建 journal 的写事务（undo / check / resizefs）
-pub(crate) fn open_target_owned(a: &Args) -> Result<FileSource, crate::outcome::Fail> {
+pub(crate) fn open_target_owned(a: &Args) -> Result<WriteSource, crate::outcome::Fail> {
     TransactionManager::begin_without_history(a)
 }
 
@@ -415,12 +415,12 @@ pub(crate) fn lba_range_bytes(start: u64, end: u64, ss: u64) -> u64 {
 }
 
 #[cfg(test)]
-pub(crate) fn src_from(tag: &str, data: &[u8]) -> FileSource {
+pub(crate) fn src_from(tag: &str, data: &[u8]) -> WriteSource {
     let mut tmp = std::env::temp_dir();
     tmp.push(format!("diskedit_main_{tag}_{}.img", std::process::id()));
     std::fs::write(&tmp, data).unwrap();
     let f = std::fs::OpenOptions::new().read(true).write(true).open(&tmp).unwrap();
-    FileSource {
+    WriteSource::unowned(FileSource {
         identity: dev::TargetIdentity::resolve_image(&tmp),
         file: f,
         path: tmp,
@@ -428,10 +428,9 @@ pub(crate) fn src_from(tag: &str, data: &[u8]) -> FileSource {
         size: data.len() as u64,
         is_block: false,
         journal: None,
-        ownership: None,
         fingerprint: Default::default(),
         loop_mapping: None,
-    }
+    })
 }
 
 #[cfg(test)]

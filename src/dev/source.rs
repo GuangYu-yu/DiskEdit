@@ -1,30 +1,6 @@
-//! FileSource：镜像与块设备统一的按偏移读写句柄。
+//! FileSource：镜像与块设备统一的按偏移读写句柄；WriteSource：在其上附加独占所有权的写句柄。
 
 use super::*;
-
-pub struct FileSource {
-    pub(crate) file: File,
-    pub path: PathBuf,
-    pub sector_size: u64,
-    pub size: u64,
-    pub is_block: bool,
-    /// 目标身份：打开时解析一次，journal / checkpoint / undo 只消费它
-    pub identity: TargetIdentity,
-    /// undo journal：只记录本工具 write_at 的直接写入
-    pub journal: Option<Journal>,
-    /// 目标的独占所有权（见 `targetlock`）：写命令持有它，只读打开为 None。
-    /// 与这次打开同生命周期，因此不必由调用方各自绑定，也就不会在写盘前被提前丢掉
-    pub(crate) ownership: Option<crate::targetlock::TargetLock>,
-    /// 目标文件的稳定指纹：恢复现场（journal / checkpoint）用它确认"路径下的文件还是当时
-    /// 那个"。镜像与 loop 的 backing 文件取文件元数据；真块设备的节点 inode 不承诺稳定
-    /// （udev 重建节点即变）、节点元数据长度也恒 0，故那里三个字段全零。**比对逐字段进行**：
-    /// 零值表示该字段没有证据，不参与比对（见 [`scene_mismatch`]）
-    pub fingerprint: TargetFingerprint,
-    /// loop 映射事实（offset, sizelimit）：目标经由 loop 设备进入时在打开时读一次
-    /// sysfs。checkpoint 恢复时与记录值比对，重 attach 参数变化报"映射已变化"
-    /// 而非几何不符的泛化拒绝
-    pub loop_mapping: Option<(u64, u64)>,
-}
 
 // 测试期的定点读失败注入（模拟坏扇区），按线程生效。
 //
@@ -55,9 +31,147 @@ impl Drop for ReadFaultGuard {
     }
 }
 
+pub struct FileSource {
+    pub(crate) file: File,
+    pub path: PathBuf,
+    pub sector_size: u64,
+    pub size: u64,
+    pub is_block: bool,
+    /// 目标身份：打开时解析一次，journal / checkpoint / undo 只消费它
+    pub identity: TargetIdentity,
+    /// undo journal：只记录本工具 write_at 的直接写入
+    pub journal: Option<Journal>,
+    /// 目标文件的稳定指纹：恢复现场（journal / checkpoint）用它确认"路径下的文件还是当时
+    /// 那个"。镜像与 loop 的 backing 文件取文件元数据；真块设备取**整盘**容量与整盘设备 ID
+    /// （dev / ino 留零——节点 inode 不承诺稳定、节点元数据长度也恒 0）。**比对逐字段进行**：
+    /// 零值表示该字段没有证据，不参与比对（见 [`scene_mismatch`]）
+    pub fingerprint: TargetFingerprint,
+    /// loop 映射事实（offset, sizelimit）：目标经由 loop 设备进入时在打开时读一次
+    /// sysfs。checkpoint 恢复时与记录值比对，重 attach 参数变化报"映射已变化"
+    /// 而非几何不符的泛化拒绝
+    pub loop_mapping: Option<(u64, u64)>,
+}
+
+/// 写句柄：在 [`FileSource`] 之外**持有**一份目标独占所有权（见 `targetlock`）。
+///
+/// 写方法（`write_at` / `write_data_at` / `write_raw`，以及 journal 的屏障与语义标注）
+/// 只挂在本类型上：只读打开得到的 [`FileSource`] 在类型层面就没有写盘接口，生产写入口
+/// 因此绕不过"持锁"这一步。构造只有两条路——[`Self::acquire`] 取锁（生产唯一入口）与
+/// 测试专用的 [`Self::unowned`]（`#[cfg(test)]`，不取锁）。字段私有，crate 内没有第三种
+/// 拼装方式
+pub struct WriteSource {
+    src: FileSource,
+    /// 独占所有权的持有者。字段不被读取，存在的意义是被持有到写完为止；析构即释放锁
+    _lock: Option<crate::targetlock::TargetLock>,
+}
+
+impl std::ops::Deref for WriteSource {
+    type Target = FileSource;
+
+    fn deref(&self) -> &FileSource {
+        &self.src
+    }
+}
+
+impl std::ops::DerefMut for WriteSource {
+    fn deref_mut(&mut self) -> &mut FileSource {
+        &mut self.src
+    }
+}
+
+impl WriteSource {
+    /// 取目标的独占所有权，把已打开的句柄升格为写句柄。锁落点由身份恒给出
+    /// （见 [`TargetIdentity::lock_path`]），取不到即拒绝——没有"无锁继续写"这条路径
+    pub(crate) fn acquire(src: FileSource) -> Result<Self, crate::outcome::Fail> {
+        let lock = crate::targetlock::TargetLock::acquire(&src.identity, Some(&src.fingerprint))?;
+        // ckpt 残骸清扫必须在锁下：未持锁时删除会命中另一个进程正在写的暂存文件
+        sweep_stale_ckpt_temps(&src.identity);
+        Ok(Self { src, _lock: Some(lock) })
+    }
+
+    /// 测试专用：不取锁的写句柄。`#[cfg(test)]` 之外构造不出来，生产代码只能经
+    /// [`Self::acquire`] 拿到写权限
+    #[cfg(test)]
+    pub(crate) fn unowned(src: FileSource) -> Self {
+        Self { src, _lock: None }
+    }
+
+    /// 元数据写入：被覆盖字节的原文先入 undo journal 再写
+    pub fn write_at(&mut self, off: u64, buf: &[u8]) -> io::Result<()> {
+        self.refuse_past_end(off, buf.len())?;
+        if self.journal.is_some() {
+            // 越界已在上面拒掉，这里读到的总是目标范围内的真实原文，不需要按 EOF 截断
+            let mut orig = vec![0u8; buf.len()];
+            self.read_at(off, &mut orig)?;
+            // journal 先行落盘：写入发生前，被覆盖字节的原文必须已持久化
+            if let Some(journal) = self.journal.as_mut() {
+                journal.record(off, &orig, buf)?;
+            }
+        }
+        self.write_raw(off, buf)
+    }
+
+    /// 数据块写入（搬移的 chunk 拷贝）：不入 undo journal。
+    /// 搬移的设计是"前向恢复、无回滚"（见 movepart 模块注释），undo 不消费数据字节，
+    /// 记录它们只会产生与搬移量等大的 journal。数据一致性由 ckpt + 幂等重做保证
+    pub fn write_data_at(&mut self, off: u64, buf: &[u8]) -> io::Result<()> {
+        self.write_raw(off, buf)
+    }
+
+    pub(crate) fn write_raw(&mut self, off: u64, buf: &[u8]) -> io::Result<()> {
+        self.refuse_past_end(off, buf.len())?;
+        use std::io::{Seek, SeekFrom, Write};
+        self.file.seek(SeekFrom::Start(off))?;
+        self.file.write_all(buf)
+    }
+
+    /// 记下"本次操作含有不可回滚的写入"，undo 见到它即拒绝回滚。
+    ///
+    /// 判据是**可逆性**，不是"是不是外部进程"：数据搬移的字节（`write_data_at`）是本进程
+    /// 写的，但按设计故意不入 journal；外部 FS 工具的写入（resize2fs/mkswap/mkfs…）
+    /// 与内核侧的分区表写入同样无法回滚。凡"回滚表项会与盘上内容自相矛盾"的写入都属于这一类，
+    /// 它们共同落一条屏障，屏障上的 mutation 说明是哪一类越过了这条线
+    pub fn mark_non_reversible(&mut self) -> io::Result<()> {
+        if let Some(journal) = self.journal.as_mut() {
+            journal.barrier()?;
+        }
+        Ok(())
+    }
+
+    /// 声明"接下来这类改动是什么"，作用于随后的 pre-image 与屏障记录。
+    /// 语义由知道自己在做什么的那一层给出——journal 只负责记，不负责猜
+    pub fn set_mutation(&mut self, m: Mutation) {
+        if let Some(journal) = self.journal.as_mut() {
+            journal.set_mutation(m);
+        }
+    }
+}
+
 impl FileSource {
+    /// 现在这个目标能给出的身份证据种类。与指纹的构造一一对应：镜像恒取文件 inode；
+    /// 块设备上整盘属性可读 ⇒ `DeviceId`，loop（指纹取自 backing 文件）⇒ `Inode`，
+    /// 两者都没有 ⇒ `Unavailable`
+    pub(crate) fn proof(&self) -> IdentityProof {
+        if !self.is_block {
+            return IdentityProof::Inode;
+        }
+        if self.fingerprint.has_id_evidence() {
+            IdentityProof::DeviceId
+        } else if self.fingerprint.has_inode_evidence() {
+            IdentityProof::Inode
+        } else {
+            IdentityProof::Unavailable
+        }
+    }
+
+    /// 现场比对用的"当前身份"：与 journal / checkpoint 头里存的那三样同构
+    pub(crate) fn scene(&self) -> SceneIdentity {
+        SceneIdentity { fp: self.fingerprint, map: self.loop_mapping, proof: self.proof() }
+    }
+
     /// 块设备打开的公共附加物：指纹 + loop 映射。
-    /// loop 的身份是 backing 文件：指纹取它；真块设备节点 inode 不承诺稳定，不取。
+    /// loop 的身份是 backing 文件：指纹取它；真块设备取整盘容量与整盘设备 ID——两者都按
+    /// 整设备节点算，`/dev/sdb` 与 `/dev/sdb2` 因此共享同一份指纹（现场按盘共享）。
     /// `node` 必须与身份解析用的是同一个 sysfs 节点（打开路径按 fd 的 rdev 定位），
     /// 否则路径在窗口内被重建时映射事实会来自另一台设备
     #[cfg(target_os = "linux")]
@@ -67,7 +181,8 @@ impl FileSource {
             // 不按 sysfs 字符串：那个名字是读取者的视角，不是对象本身
             TargetFingerprint::from_meta(&std::fs::metadata(identity.data_path())?)
         } else {
-            TargetFingerprint::default()
+            let (size, id) = disk_identity(node)?;
+            TargetFingerprint { dev: 0, ino: 0, size, id: id.as_deref().map_or(0, |s| fnv1a64(s.as_bytes())) }
         };
         Ok((fp, loop_mapping_at(node)?))
     }
@@ -106,7 +221,6 @@ impl FileSource {
                     size,
                     is_block: true,
                     journal: None,
-                    ownership: None,
                     fingerprint,
                     loop_mapping,
                 });
@@ -210,7 +324,6 @@ impl FileSource {
             size,
             is_block: false,
             journal: None,
-            ownership: None,
             fingerprint: TargetFingerprint::from_meta(&meta),
             loop_mapping: None,
         })
@@ -239,7 +352,6 @@ impl FileSource {
             size,
             is_block: true,
             journal: None,
-            ownership: None,
             fingerprint,
             loop_mapping,
         })
@@ -260,7 +372,6 @@ impl FileSource {
             size,
             is_block: false,
             journal: None,
-            ownership: None,
             fingerprint: TargetFingerprint::from_meta(&meta),
             loop_mapping: None,
         })
@@ -300,28 +411,6 @@ impl FileSource {
         }
     }
 
-    /// 元数据写入：被覆盖字节的原文先入 undo journal 再写
-    pub fn write_at(&mut self, off: u64, buf: &[u8]) -> io::Result<()> {
-        self.refuse_past_end(off, buf.len())?;
-        if self.journal.is_some() {
-            // 越界已在上面拒掉，这里读到的总是目标范围内的真实原文，不需要按 EOF 截断
-            let mut orig = vec![0u8; buf.len()];
-            self.read_at(off, &mut orig)?;
-            // journal 先行落盘：写入发生前，被覆盖字节的原文必须已持久化
-            if let Some(journal) = self.journal.as_mut() {
-                journal.record(off, &orig, buf)?;
-            }
-        }
-        self.write_raw(off, buf)
-    }
-
-    /// 数据块写入（搬移的 chunk 拷贝）：不入 undo journal。
-    /// 搬移的设计是"前向恢复、无回滚"（见 movepart 模块注释），undo 不消费数据字节，
-    /// 记录它们只会产生与搬移量等大的 journal。数据一致性由 ckpt + 幂等重做保证
-    pub fn write_data_at(&mut self, off: u64, buf: &[u8]) -> io::Result<()> {
-        self.write_raw(off, buf)
-    }
-
     /// 越界写拒绝。镜像上越界写会静默把文件稀疏扩出来——分区表几何一旦算错，
     /// 那就是一次无声的目标扩张；块设备上则由内核以 EIO 拒绝。两侧同一条判据
     pub(crate) fn refuse_past_end(&self, off: u64, len: usize) -> io::Result<()> {
@@ -342,34 +431,6 @@ impl FileSource {
             ));
         }
         Ok(())
-    }
-
-    pub(crate) fn write_raw(&mut self, off: u64, buf: &[u8]) -> io::Result<()> {
-        self.refuse_past_end(off, buf.len())?;
-        use std::io::{Seek, SeekFrom, Write};
-        self.file.seek(SeekFrom::Start(off))?;
-        self.file.write_all(buf)
-    }
-
-    /// 记下"本次操作含有不可回滚的写入"，undo 见到它即拒绝回滚。
-    ///
-    /// 判据是**可逆性**，不是"是不是外部进程"：数据搬移的字节（`write_data_at`）是本进程
-    /// 写的，但按设计故意不入 journal；外部 FS 工具的写入（resize2fs/mkswap/mkfs…）
-    /// 与内核侧的分区表写入同样无法回滚。凡"回滚表项会与盘上内容自相矛盾"的写入都属于这一类，
-    /// 它们共同落一条屏障，屏障上的 mutation 说明是哪一类越过了这条线
-    pub fn mark_non_reversible(&mut self) -> io::Result<()> {
-        if let Some(journal) = self.journal.as_mut() {
-            journal.barrier()?;
-        }
-        Ok(())
-    }
-
-    /// 声明"接下来这类改动是什么"，作用于随后的 pre-image 与屏障记录。
-    /// 语义由知道自己在做什么的那一层给出——journal 只负责记，不负责猜
-    pub fn set_mutation(&mut self, m: Mutation) {
-        if let Some(journal) = self.journal.as_mut() {
-            journal.set_mutation(m);
-        }
     }
 
     /// 每步落盘。容量有变化的场景用 sync_all，纯数据覆盖用 sync_data。

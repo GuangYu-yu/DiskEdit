@@ -9,34 +9,51 @@ use super::*;
 /// （见 resize_done）只能由它落。
 /// `part` 是**本次操作的那个分区**（入口处解析一次后随行）：收尾要对它做 pvresize/
 /// lvextend，出错的代价是写到别的分区上，故不按写后的表重新解释一次
-pub(crate) fn finish_resize(a: &Args, o: crate::outcome::Outcome, wsrc: Option<&mut FileSource>, part: u32, is_pv: bool, is_block: bool, old_bytes: u64) -> crate::outcome::Outcome {
+pub(crate) fn finish_resize(a: &Args, o: crate::outcome::Outcome, wsrc: Option<&mut WriteSource>, part: u32, is_pv: bool, is_block: bool, old_bytes: u64) -> crate::outcome::Outcome {
     if !o.is_applied() {
         return o;
     }
     if !o.is_complete() && !is_pv {
         return o;
     }
-    o.merge_applied(resize_done(a, wsrc, part, is_pv, is_block, old_bytes, None))
+    // 收尾失败时上游已知的待办必须跟着失败一起报：这个函数之后没有第二次机会把它们
+    // 送到用户眼前，丢掉就等于宣称"只差这一步"，而实际上 FS 未扩/挂载点残留都还在
+    let pending = match &o {
+        crate::outcome::Outcome::Applied { pending, .. } => pending.clone(),
+        _ => Vec::new(),
+    };
+    match resize_done(a, wsrc, part, is_pv, is_block, old_bytes, None) {
+        Ok(done) => o.merge_applied(done),
+        Err(cause) => {
+            let out = crate::outcome::Outcome::failed_with(cause, pending);
+            out.report();
+            out
+        }
+    }
 }
 
 /// 分区扩容收尾：从盘上表项重读实际新尺寸（搬移路径的扩容终点由计划决定，
 /// 不能用操作前的预估）。PV 一律走 pvresize（--grow-lv 再传 LV）：块设备直接对
 /// 分区节点；镜像经 losetup 临时映射该分区（attach → pvresize/lvextend → detach）。
+///
+/// 表写入已经发生，故重读/屏障/链的失败一律以 `Err(cause)` 返回给调用方，
+/// 由 `finish_resize` 折成 `Failed`（保留上游待办）；不得返 `Outcome::infra`，
+/// 那会向用户承诺"本次未写盘"
 pub(crate) fn resize_done(
     a: &Args,
-    wsrc: Option<&mut FileSource>,
+    wsrc: Option<&mut WriteSource>,
     part: u32,
     is_pv: bool,
     is_block: bool,
     old_bytes: u64,
     online_lock: Option<crate::targetlock::TargetLock>,
-) -> crate::outcome::Outcome {
+) -> Result<crate::outcome::Outcome, String> {
     // 在线路径的独占权要覆盖到 LVM 链结束：pvresize/lvextend 是本次操作的后置条件，
     // 在它们跑之前释放锁，另一个 diskedit 就能在这段窗口内改写同一块盘
     let _online_lock = online_lock;
     if !is_pv {
         println!("resized (verify with: diskedit info {})", a.target);
-        return crate::outcome::Outcome::applied_with(Vec::new());
+        return Ok(crate::outcome::Outcome::applied_with(Vec::new()));
     }
     #[cfg(target_os = "linux")]
     {
@@ -46,27 +63,23 @@ pub(crate) fn resize_done(
         // 才自开只读句柄
         let mut opened = None;
         // 表项重读：GPT 与 MBR 的分派、表自身 ss 的换算都在 gpt_policy::partition_bytes 一处
-        let new_bytes = {
+        let (start_bytes, new_bytes) = {
             let ro: &FileSource = match wsrc.as_deref() {
                 Some(w) => w,
-                // 表已写：重开失败不得沿用 `Fail` 自带的分类（Infra 会承诺"本次未写盘"），
-                // 一律落 Failed。`into_io_error` 正是"此处已越界"的取消息方式
-                None => opened.get_or_insert_with(|| {
-                    open_target_ro(a).unwrap_or_else(|f| {
-                        bail_fail(Fail::failed(format!(
-                            "post-resize: cannot reopen {}: {}",
-                            a.target,
-                            crate::outcome::into_io_error(f)
-                        )))
-                    })
-                }),
+                None => {
+                    if opened.is_none() {
+                        opened = Some(open_target_ro(a).map_err(|f| {
+                            format!("post-resize: cannot reopen {}: {}", a.target, crate::outcome::into_io_error(f))
+                        })?);
+                    }
+                    opened.as_ref().unwrap()
+                }
             };
             match crate::gpt_policy::partition_bytes(ro, part) {
-                Ok((_, len)) => len,
+                Ok((start, len)) => (start, len),
                 // 分区号在 resize 入口已由锁下几何验证过一次，此时查不到即盘内容异常。
-                // 表已写，报 Failed 而非 Infra：后者向用户承诺"本次没写盘"，在此为假
-                //（into_io_error 正是"此处已越界"的取消息方式）
-                Err(f) => bail_fail(Fail::failed(format!("post-resize: {}", crate::outcome::into_io_error(f)))),
+                // 表已写，按失败上报（into_io_error 正是"此处已越界"的取消息方式）
+                Err(f) => return Err(format!("post-resize: {}", crate::outcome::into_io_error(f))),
             }
         };
         let delta = new_bytes.saturating_sub(old_bytes);
@@ -77,10 +90,20 @@ pub(crate) fn resize_done(
         // 在线路径不经 journal（sfdisk 用自己的 fd 写盘，事后也无 undo 可谈），无需屏障
         if let Some(ref mut w) = wsrc {
             w.set_mutation(crate::dev::Mutation::ExternalFsTool);
-            w.mark_non_reversible().unwrap_or_else(|e| bail_fail(Fail::from(e)));
+            w.mark_non_reversible()
+                .map_err(|e| format!("post-resize: cannot record the LVM barrier: {e} — the on-disk table is already committed"))?;
         }
         let r: Result<(), LvmError> = if is_block {
-            lvm_grow_chain(&part_dev_path(&a.target, part), new_bytes, delta, a.grow_lv, a.lv.as_deref())
+            // 分区节点按已打开句柄的 rdev + 起始字节 + 分区号从 sysfs 派生：命令行字符串
+            // 再拼一次会在 /dev/mapper、/dev/disk/by-uuid 这类别名上落到不存在的名字或
+            // 别人的节点上（find_block_partition_node 与 FS 路径用的是同一实现）
+            let ro: &FileSource = match wsrc.as_deref() {
+                Some(w) => w,
+                None => opened.as_ref().expect("block device path reopens the target above"),
+            };
+            let node = fsops::find_block_partition_node(ro, part, start_bytes)
+                .map_err(|e| format!("post-resize: {e}"))?;
+            lvm_grow_chain(&node, new_bytes, delta, a.grow_lv, a.lv.as_deref())
         } else {
             // offset+sizelimit 映射出的 loop 设备 = 该分区的整块设备，PV 整设备语义下
             // pvresize/lvextend 直接可用，无需 -P partscan。
@@ -90,14 +113,14 @@ pub(crate) fn resize_done(
             // 而 pvresize 写的是 PV 元数据，持有栈不解析它（判据见 with_partition_device_for_lvm）
             let ro: &FileSource = match wsrc.as_deref() {
                 Some(w) => w,
-                None => opened.as_ref().unwrap(),
+                None => opened.as_ref().expect("image PV path reopens the target above"),
             };
             fsops::with_partition_device_for_lvm(ro, part, |pv| {
                 lvm_grow_chain(pv, new_bytes, delta, a.grow_lv, a.lv.as_deref())
             })
         };
         match r {
-            Ok(()) => crate::outcome::Outcome::applied_with(Vec::new()),
+            Ok(()) => Ok(crate::outcome::Outcome::applied_with(Vec::new())),
             // LVM 链失败 = 后置条件未满足：经 Outcome 的 Pending 通道报告并换算 PARTIAL，
             // 不在此手拼退出码（退出码映射的唯一处是 outcome）
             Err(e) => {
@@ -110,7 +133,7 @@ pub(crate) fn resize_done(
                     hint,
                 )]);
                 o.report();
-                o
+                Ok(o)
             }
         }
     }
@@ -124,6 +147,6 @@ pub(crate) fn resize_done(
             "",
         )]);
         o.report();
-        o
+        Ok(o)
     }
 }

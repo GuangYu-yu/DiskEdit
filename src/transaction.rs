@@ -19,7 +19,7 @@ use std::sync::Mutex;
 use std::os::unix::fs::FileTypeExt;
 
 use crate::args::Args;
-use crate::dev::{FileSource, Journal, PartSelector, TargetIdentity};
+use crate::dev::{FileSource, Journal, PartSelector, TargetIdentity, WriteSource};
 use crate::outcome::Fail;
 use crate::targetlock::TargetLock;
 use crate::{dev, table};
@@ -168,9 +168,9 @@ impl TransactionManager {
     ///
     /// journal 是**惰性**的：`Journal::open` 在文件不存在时什么都不建，采纳既有文件时
     /// 只做校验与撕裂尾的物理截断（截掉的是设计认定可丢弃的未完成追加，见其文档）；
-    /// 真正的记录要等到第一次真正的写入（见 [`FileSource::write_at`]）。
+    /// 真正的记录要等到第一次真正的写入（见 [`WriteSource::write_at`]）。
     /// 因此一条在校验阶段就被拒的命令不会留下空 journal，也就不会占住候选落点
-    pub(crate) fn begin(a: &Args) -> Result<FileSource, Fail> {
+    pub(crate) fn begin(a: &Args) -> Result<WriteSource, Fail> {
         // FreshOnly：不接受任何现场。与 begin_or_resume 共用同一闸口——
         // "普通 mutation 永不接管别人的事务"只有一个执行处
         Self::begin_or_resume(a, ResumeClaim::FreshOnly).map(|(src, _)| src)
@@ -189,7 +189,7 @@ impl TransactionManager {
     pub(crate) fn begin_or_resume(
         a: &Args,
         claim: ResumeClaim,
-    ) -> Result<(FileSource, bool), Fail> {
+    ) -> Result<(WriteSource, bool), Fail> {
         let mut src = Self::open_rw(a)?;
         let active = Self::active_records(&src);
         let resumed = if active.is_empty() {
@@ -229,7 +229,7 @@ impl TransactionManager {
         let adopted = std::fs::metadata(&p).ok().map(|m| dev::TargetFingerprint::from_meta(&m));
         // 身份随头落盘：采纳既有 journal 时 `open` 会拿它核对（见 `dev::scene_mismatch`），
         // 故新开的窗口也记的是"这个目标"
-        let identity = dev::JournalIdentity { fp: src.fingerprint, map: src.loop_mapping };
+        let identity = src.scene();
         src.journal = Some(
             Journal::open(&p, identity).map_err(|e| Fail::infra(format!("journal open failed: {e}")))?,
         );
@@ -279,7 +279,7 @@ impl TransactionManager {
     /// 开一次**只持有所有权、不建 journal** 的写事务。两类调用方：
     /// - `undo`：它要回放的是**已经存在**的那份 journal，不能自己去建一份
     /// - `check` / `resizefs`：它们动手前先过闸口，动手时才由自己落记录
-    pub(crate) fn begin_without_history(a: &Args) -> Result<FileSource, Fail> {
+    pub(crate) fn begin_without_history(a: &Args) -> Result<WriteSource, Fail> {
         Self::open_rw(a)
     }
 
@@ -311,18 +311,13 @@ impl TransactionManager {
         Ok(src)
     }
 
-    /// 读写打开 + 取目标的独占所有权（见 `targetlock`）。
+    /// 读写打开 + 取目标的独占所有权（见 `targetlock`），返回**写句柄**。
     ///
-    /// **三种写事务的入口都在本模块**（`begin_or_resume` 的三个 claim），它们都经这里取
-    /// 所有权，因此"写命令持锁"由入口唯一性保证。这道保证是**约定**而非类型保证：
-    /// `FileSource::open` 仍是 crate 可见（只读探测与测试要用），`write_at` 也不检查
-    /// `ownership`。新增写路径必须走 `begin_*`，不要直接 `FileSource::open` 之后写盘
-    fn open_rw(a: &Args) -> Result<FileSource, Fail> {
-        let mut src = Self::open_plain(a)?;
-        src.ownership = Some(TargetLock::acquire(&src.identity, Some(&src.fingerprint))?);
-        // ckpt 残骸清扫必须在锁下：未持锁时删除会命中另一个进程正在写的暂存文件
-        crate::dev::sweep_stale_ckpt_temps(&src.identity);
-        Ok(src)
+    /// 三种写事务的入口都在本模块（`begin_or_resume` 的三个 claim），它们都经这里取
+    /// 所有权；写方法只挂在 [`WriteSource`] 上（见 `dev::source`），而本函数是 crate 内
+    /// 生产代码构造它的唯一途径——"写命令持锁"因此是类型保证，不是调用约定
+    fn open_rw(a: &Args) -> Result<WriteSource, Fail> {
+        WriteSource::acquire(Self::open_plain(a)?)
     }
 
     /// 提交：事务完成，关闭它的 active 状态。删除的是**本次事务确实拥有的**候选落点。
@@ -395,7 +390,7 @@ impl TransactionManager {
             let Some(ours_identity) = &ours_identity else { continue };
             match dev::Journal::read_identity(p) {
                 Ok(id) => {
-                    if let Some(why) = dev::scene_mismatch(&id.fp, &id.map, &ours_identity.fp, &ours_identity.map) {
+                    if let Some(why) = dev::scene_mismatch(&id, ours_identity) {
                         eprintln!("warning: {why} — {} is left in place", p.display());
                     } else {
                         dev::remove_recovery_file(p);
@@ -521,7 +516,11 @@ mod tests {
         let mut mine = Vec::new();
         for p in id.journal_candidates() {
             // 头完整、零记录的空壳：read_identity 可读，身份与本次事务一致
-            let mut j = dev::Journal::open(p, dev::JournalIdentity { fp: Default::default(), map: None }).unwrap();
+            let mut j = dev::Journal::open(
+                p,
+                dev::SceneIdentity { fp: Default::default(), map: None, proof: dev::IdentityProof::Inode },
+            )
+            .unwrap();
             j.ensure().unwrap();
             mine.push(p.clone());
         }

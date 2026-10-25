@@ -14,7 +14,7 @@ pub(crate) fn ntfs_hidden_sectors_fix() {
     drop(src);
     let f = std::fs::OpenOptions::new().read(true).write(true).open(&path).unwrap();
     let size = std::fs::metadata(&path).unwrap().len();
-    let mut src = FileSource {
+    let mut src = WriteSource::unowned(FileSource {
         identity: crate::dev::TargetIdentity::resolve_image(&path),
         file: f,
         path: path.clone(),
@@ -22,10 +22,9 @@ pub(crate) fn ntfs_hidden_sectors_fix() {
         size,
         is_block: false,
         journal: None,
-        ownership: None,
         fingerprint: Default::default(),
         loop_mapping: None,
-    };
+    });
     let mut log = |_: &str| {};
     fix_ntfs_hidden_sectors(&mut src, 30687, 512, &mut log).unwrap();
     let mut b = [0u8; 4];
@@ -55,7 +54,7 @@ pub(crate) fn resize_part_resume_skips_done_chunks() {
     std::fs::write(&tmp, cur.into_inner()).unwrap();
     let f = std::fs::OpenOptions::new().read(true).write(true).open(&tmp).unwrap();
     let size = std::fs::metadata(&tmp).unwrap().len();
-    let mut src = FileSource {
+    let mut src = WriteSource::unowned(FileSource {
         identity: crate::dev::TargetIdentity::resolve_image(&tmp),
         file: f,
         path: tmp.clone(),
@@ -63,12 +62,11 @@ pub(crate) fn resize_part_resume_skips_done_chunks() {
         size,
         is_block: false,
         journal: None,
-        ownership: None,
         fingerprint: Default::default(),
         loop_mapping: None,
-    };
+    });
     // gptman 只写 GPT 结构，保护 MBR 需自行补——load_gpt 以前者为前置
-    crate::table::ensure_protective_mbr(&mut src).unwrap();
+    crate::table::ensure_protective_mbr(&mut src, ss).unwrap();
 
     let chunk: u64 = 1024 * 1024;
     let src_off = 2048u64 * 512;
@@ -93,6 +91,7 @@ pub(crate) fn resize_part_resume_skips_done_chunks() {
     // 预置 checkpoint：chunks_done = 1
     let ckpt_path = src.identity.checkpoint_path().to_path_buf();
     let ckpt = RsCheckpoint {
+        proof: crate::dev::IdentityProof::Inode,
         disk_size: size, ss, part: 1,
         old_start: 2048, old_end: 10239, new_start: 12288, new_end: 20479,
         fs_shrunk: false, chunks_done: 1, chunk_bytes: chunk,
@@ -142,11 +141,12 @@ pub(crate) fn resize_part_resume_after_commit_without_ckpt_update() {
     }
     let last_lba = src.size / ss - 1;
     table::commit_gpt(&mut src, &g, last_lba).unwrap();
-    table::ensure_protective_mbr(&mut src).unwrap();
+    table::ensure_protective_mbr(&mut src, ss).unwrap();
 
     // ckpt 停留在搬移前形状：正是 commit 与 ckpt 更新之间的那个窗口
     let ckpt_path = src.identity.checkpoint_path().to_path_buf();
     let ckpt = RsCheckpoint {
+        proof: crate::dev::IdentityProof::Inode,
         disk_size: src.size, ss, part: 1,
         old_start, old_end, new_start, new_end,
         fs_shrunk: false,
@@ -190,9 +190,10 @@ pub(crate) fn retargeted_resize_after_crash_is_refused() {
     }
     let last_lba = src.size / ss - 1;
     table::commit_gpt(&mut src, &g, last_lba).unwrap();
-    table::ensure_protective_mbr(&mut src).unwrap();
+    table::ensure_protective_mbr(&mut src, ss).unwrap();
     let ckpt_path = src.identity.checkpoint_path().to_path_buf();
     let ckpt = RsCheckpoint {
+        proof: crate::dev::IdentityProof::Inode,
         disk_size: src.size, ss, part: 1,
         old_start, old_end, new_start, new_end,
         fs_shrunk: false, chunks_done: 4, chunk_bytes: chunk,
@@ -217,7 +218,7 @@ pub(crate) fn retargeted_resize_after_crash_is_refused() {
         e.ending_lba = 24575;
     }
     table::commit_gpt(&mut src, &g, last_lba).unwrap();
-    table::ensure_protective_mbr(&mut src).unwrap();
+    table::ensure_protective_mbr(&mut src, ss).unwrap();
     let before = std::fs::read(&path).unwrap();
     let o = rsize(&mut src,1, new_start, new_end, chunk, true, &mut |_| {});
     assert_eq!(o.exit_code(), crate::outcome::EXIT_REFUSED, "an unknown on-disk geometry must be refused");
@@ -245,6 +246,7 @@ pub(crate) fn divergent_and_no_fs_shrink_are_refused_before_any_write() {
     let mut src = plan_open(&p);
     let ckpt_path = src.identity.checkpoint_path().to_path_buf();
     let rs = RsCheckpoint {
+        proof: crate::dev::IdentityProof::Inode,
         disk_size: src.size, ss: 512, part: 1, old_start: 2048, old_end: 6143,
         new_start: 3072, new_end: 5119, fs_shrunk: false, chunks_done: 0, chunk_bytes: chunk,
         fp: Default::default(),

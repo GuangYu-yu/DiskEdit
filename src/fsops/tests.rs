@@ -262,13 +262,13 @@ pub(crate) fn unidentified_region_needs_an_explicit_opt_out() {
     }
 }
 
-pub(crate) fn fs_fixture(tag: &str, data: Vec<u8>) -> FileSource {
+pub(crate) fn fs_fixture(tag: &str, data: Vec<u8>) -> crate::dev::WriteSource {
     let mut tmp = std::env::temp_dir();
     tmp.push(format!("diskedit_fsops_{tag}_{}.img", std::process::id()));
     std::fs::write(&tmp, &data).unwrap();
     let f = std::fs::OpenOptions::new().read(true).write(true).open(&tmp).unwrap();
     let size = data.len() as u64;
-    FileSource {
+    crate::dev::WriteSource::unowned(FileSource {
         identity: crate::dev::TargetIdentity::resolve_image(&tmp),
         file: f,
         path: tmp,
@@ -276,10 +276,9 @@ pub(crate) fn fs_fixture(tag: &str, data: Vec<u8>) -> FileSource {
         size,
         is_block: false,
         journal: None,
-        ownership: None,
         fingerprint: Default::default(),
         loop_mapping: None,
-    }
+    })
 }
 
 /// 分区字节范围：GPT 与 MBR 两种表来源；空槽位/越界编号/容器分区/无表均拒绝

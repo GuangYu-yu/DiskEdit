@@ -113,7 +113,11 @@ pub(crate) fn cmd_mkfs(a: &Args) -> Outcome {
     // active 的不可回滚事务，出路是 `abandon`
     src.set_mutation(Mutation::Mkfs);
     src.mark_non_reversible()
-        .unwrap_or_else(|e| bail_fail(Fail::infra(format!("cannot persist the transaction state: {e}"))));
+        .unwrap_or_else(|e| bail_fail(Fail::infra(format!(
+            "cannot persist the transaction state: {e} — the target itself was not written, but a recovery record may \
+             remain; release it with: diskedit abandon {}",
+            a.target
+        ))));
     // 屏障之后的失败不再有"确定未写盘"的出口：类型与占用已在屏障前判过，能到达这里的
     // 只有 mkfs 自身的失败，而它可能已经在目标上留下字节。FsError 的分类在此压平成
     // Failed（报告带"盘可能已改变"），让 10/Infra 的"没写"承诺不落在一个已落屏障的现场上

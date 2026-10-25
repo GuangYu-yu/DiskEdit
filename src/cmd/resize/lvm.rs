@@ -4,14 +4,17 @@
 use super::*;
 
 /// `lvm_grow_chain` 会启动的外部命令清单。写表之前按它预检：链条在表已提交之后才跑，
-/// 缺工具那时才发现，盘已改，只剩 PARTIAL 加手工补救
+/// 缺工具那时才发现，盘已改，只剩 PARTIAL 加手工补救。
+/// `needs_loop`：镜像目标的分区要经 losetup 临时映射（块设备直接用现成分区节点），
+/// 该工具与 pvresize 一样必须在写表之前确认存在
 #[cfg(target_os = "linux")]
-pub(crate) fn preflight_lvm_tools(grow_lv: bool) -> Result<(), crate::fsops::FsError> {
+pub(crate) fn preflight_lvm_tools(grow_lv: bool, needs_loop: bool) -> Result<(), crate::fsops::FsError> {
     // pvs 供 pvresize 后的 dev_size 核对；grow-lv 另需 lvs/vgs 定位 LV 与 extent、lvextend 扩 LV
-    let tools: &[&str] = if grow_lv {
-        &["pvresize", "pvs", "lvs", "vgs", "lvextend"]
-    } else {
-        &["pvresize", "pvs"]
+    let tools: &[&str] = match (grow_lv, needs_loop) {
+        (true, true) => &["pvresize", "pvs", "lvs", "vgs", "lvextend", "losetup"],
+        (true, false) => &["pvresize", "pvs", "lvs", "vgs", "lvextend"],
+        (false, true) => &["pvresize", "pvs", "losetup"],
+        (false, false) => &["pvresize", "pvs"],
     };
     tools.iter().try_for_each(|t| crate::fsops::require_tool(t))
 }

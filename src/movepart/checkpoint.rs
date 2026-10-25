@@ -4,9 +4,13 @@ use super::*;
 
 pub const CKPT_MAGIC: &[u8; 8] = b"DKECKPT1";
 
-/// v5：追加目标指纹（3×u64）与 loop 映射（1+2×u64）。旧版本不做兼容读——
-/// checkpoint 是活操作的暂存现场而非持久资产，读到旧版本报 unsupported 并指向 abandon
-pub const CKPT_VERSION: u32 = 5;
+/// v6：指纹加设备 ID 哈希（块设备整盘身份），尾部加身份种类。读 v5 时设备 ID 按零、
+/// 种类按 `Legacy` 处理——那种旧现场只靠 inode 与尺寸，无法与"同名换过的盘"区分时
+/// 只能诊断与 abandon，不会自动续跑
+pub const CKPT_VERSION: u32 = 6;
+
+/// 兼容读取的上一代版本（没有设备 ID 字段）
+const CKPT_VERSION_LEGACY: u32 = 5;
 
 /// checkpoint 批量提交粒度：性能参数，不属于恢复协议。恢复永远从最近一次
 /// durable checkpoint 继续；此值只决定提交频率，即崩溃后最多重做多少个
@@ -25,6 +29,7 @@ pub struct Checkpoint {
     pub chunk_bytes: u64, // chunk 大小（续传不一致即拒绝）
     pub fp: crate::dev::TargetFingerprint, // 目标文件指纹（"同路径换文件"防线）
     pub map: Option<(u64, u64)>,           // 创建时的 loop 映射；None = 非 loop 进入
+    pub proof: crate::dev::IdentityProof,  // 指纹里哪一类字段才是身份证据
 }
 
 impl Checkpoint {
@@ -51,11 +56,14 @@ impl Checkpoint {
         b.extend_from_slice(&self.fp.dev.to_le_bytes());
         b.extend_from_slice(&self.fp.ino.to_le_bytes());
         b.extend_from_slice(&self.fp.size.to_le_bytes());
+        b.extend_from_slice(&self.fp.id.to_le_bytes());
         b.push(self.map.is_some() as u8);
         if let Some((off, limit)) = self.map {
             b.extend_from_slice(&off.to_le_bytes());
             b.extend_from_slice(&limit.to_le_bytes());
         }
+        // 身份种类追加在尾部：已有的字段偏移不因它变动
+        b.push(self.proof.tag());
         let crc = table::crc32(&b);
         b.extend_from_slice(&crc.to_le_bytes());
         b
@@ -74,7 +82,7 @@ impl Checkpoint {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "checkpoint magic mismatch"));
         }
         let ver = u32::from_le_bytes(b[8..12].try_into().unwrap());
-        if ver != CKPT_VERSION {
+        if ver != CKPT_VERSION && ver != CKPT_VERSION_LEGACY {
             return Err(io::Error::new(io::ErrorKind::InvalidData, format!("unsupported checkpoint version {ver}")));
         }
         let mut off = 12;
@@ -156,13 +164,18 @@ impl Checkpoint {
         };
         off += 1;
         // 指纹与映射属于"创建时事实"：解析只负责取值，比对在 read_checkpoint——那里
-        // 才有当前目标的指纹与 loop 映射可对
+        // 才有当前目标的指纹与 loop 映射可对。v5 没有设备 ID 字段，读作零（无证据）
         let fp = crate::dev::TargetFingerprint {
             dev: u64::from_le_bytes(rd(off, 8)?.try_into().unwrap()),
             ino: u64::from_le_bytes(rd(off + 8, 8)?.try_into().unwrap()),
             size: u64::from_le_bytes(rd(off + 16, 8)?.try_into().unwrap()),
+            id: if ver >= CKPT_VERSION {
+                u64::from_le_bytes(rd(off + 24, 8)?.try_into().unwrap())
+            } else {
+                0
+            },
         };
-        off += 24;
+        off += if ver >= CKPT_VERSION { 32 } else { 24 };
         let map = match rd(off, 1)?[0] {
             0 => None,
             1 => Some((
@@ -172,6 +185,15 @@ impl Checkpoint {
             _ => return Err(io::Error::new(io::ErrorKind::InvalidData, "implausible checkpoint mapping flag")),
         };
         off += 1 + if map.is_some() { 16 } else { 0 };
+        let proof = if ver >= CKPT_VERSION {
+            let tag = rd(off, 1)?[0];
+            off += 1;
+            crate::dev::IdentityProof::from_tag(tag).ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidData, "implausible checkpoint identity kind")
+            })?
+        } else {
+            crate::dev::IdentityProof::Legacy
+        };
         let stored = u32::from_le_bytes(rd(off, 4)?.try_into().unwrap());
         if table::crc32(&b[..off]) != stored {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "checkpoint CRC mismatch"));
@@ -201,14 +223,22 @@ impl Checkpoint {
         if chunks_done > chunks_limit {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "implausible checkpoint chunk progress"));
         }
-        Ok(Checkpoint { disk_size, ss, grow_part, last_usable_lba, moves, kind, cur_index, chunks_done, chunk_bytes, fp, map })
+        Ok(Checkpoint {
+            disk_size, ss, grow_part, last_usable_lba, moves, kind, cur_index, chunks_done, chunk_bytes, fp, map, proof,
+        })
     }
 }
 
 /// 当前目标与 checkpoint 记录的"创建时事实"比对：判据与 journal 共用 `dev::scene_mismatch`
 /// （同一种异常在两条恢复路径上必须得到同一个结论）
-pub(crate) fn checkpoint_foreign(src: &FileSource, fp: &crate::dev::TargetFingerprint, map: &Option<(u64, u64)>) -> Option<String> {
-    crate::dev::scene_mismatch(fp, map, &src.fingerprint, &src.loop_mapping)
+pub(crate) fn checkpoint_foreign(
+    src: &FileSource,
+    fp: &crate::dev::TargetFingerprint,
+    map: &Option<(u64, u64)>,
+    proof: crate::dev::IdentityProof,
+) -> Option<String> {
+    let recorded = crate::dev::SceneIdentity { fp: *fp, map: *map, proof };
+    crate::dev::scene_mismatch(&recorded, &src.scene())
 }
 
 /// 读 checkpoint 现场：在身份给出的候选落点上（首项为本次命名，其后是历史命名）找**可读**
@@ -245,14 +275,14 @@ pub(crate) fn read_checkpoint(src: &FileSource, g: &ValidatedGeometry) -> Result
         };
         match (Checkpoint::deserialize(&bytes, &lim), RsCheckpoint::deserialize(&bytes, &lim)) {
             (Ok(c), _) => {
-                if let Some(why) = checkpoint_foreign(src, &c.fp, &c.map) {
+                if let Some(why) = checkpoint_foreign(src, &c.fp, &c.map, c.proof) {
                     foreign.push((path.clone(), why));
                 } else {
                     found.push((path.clone(), CheckpointSlot::Relocation(Box::new(c))));
                 }
             }
             (_, Ok(c)) => {
-                if let Some(why) = checkpoint_foreign(src, &c.fp, &c.map) {
+                if let Some(why) = checkpoint_foreign(src, &c.fp, &c.map, c.proof) {
                     foreign.push((path.clone(), why));
                 } else {
                     found.push((path.clone(), CheckpointSlot::Resize(Box::new(c))));

@@ -36,7 +36,9 @@ pub(crate) fn grow_support(fstype: FsKind) -> ToolSupport {
 pub(crate) fn shrink_support(fstype: Option<FsKind>) -> ToolSupport {
     use ToolSupport::*;
     match fstype {
-        Some(FsKind::Ext) => Tools(&["e2fsck", "resize2fs"]),
+        // 缩容前要先算 FS 最小尺寸（`fs_min_bytes`：resize2fs -P × dumpe2fs 的块大小），
+        // 两个工具都必须"在写盘之前确认存在"，否则表提交后才发现缺 dumpe2fs
+        Some(FsKind::Ext) => Tools(&["e2fsck", "resize2fs", "dumpe2fs"]),
         Some(FsKind::Ntfs) => Tools(&["ntfsresize"]),
         Some(FsKind::Btrfs) => Tools(&["btrfs"]),
         // LVM PV 缩容要求新末端之后没有已分配的 extent，需经 lvreduce/pvresize 链，本工具不做
@@ -66,7 +68,7 @@ pub(crate) fn swap_rebuild_support(is_block: bool) -> ToolSupport {
 /// 并自动安装后重试，而不必靠人读日志
 pub(crate) fn tool_package(tool: &str) -> &'static str {
     match tool {
-        "e2fsck" | "resize2fs" => "e2fsprogs",
+        "e2fsck" | "resize2fs" | "dumpe2fs" | "mke2fs" => "e2fsprogs",
         "ntfsresize" => "ntfs-3g",
         "fsck.f2fs" | "resize.f2fs" => "f2fs-tools",
         "xfs_growfs" => "xfsprogs",
@@ -75,7 +77,6 @@ pub(crate) fn tool_package(tool: &str) -> &'static str {
         "mkswap" | "swaplabel" => "util-linux",
         "mount" | "umount" | "losetup" => "util-linux",
         // mkfs 的各工具（mkfs_tool 的 program）：由 mkfs_capability 的缺工具提示引用
-        "mke2fs" => "e2fsprogs",
         "mkfs.vfat" => "dosfstools",
         "mkfs.exfat" => "exfatprogs",
         "mkfs.ntfs" => "ntfs-3g",
