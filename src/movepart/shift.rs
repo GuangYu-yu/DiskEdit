@@ -32,7 +32,7 @@ pub(crate) fn swap_rebuild_pending(
 /// 因此"写盘之后仍返回 Refused"在那半边**写不出来**。
 /// 几何由调用方解析（一条命令解析一次，往下传），本函数与执行半程都不读表
 pub fn apply(
-    src: &mut FileSource,
+    src: &mut WriteSource,
     g: &ValidatedGeometry,
     plan: &Plan,
     chunk_len: u64,
@@ -48,7 +48,7 @@ pub fn apply(
     // 修复虽是写盘，但先于任何目标写入执行；放在 Fail 域是为了保住分类：
     // 其读表阶段尚未写一个字节（Infra），一旦进入 io 域就只剩 Failed 一条路
     if let Some(what) = plan.repair.describe() {
-        if let Err(f) = gpt_policy::apply_repair(src, &plan.repair) {
+        if let Err(f) = gpt_policy::apply_repair(src, &plan.repair, g.sector_size()) {
             return f.into_outcome();
         }
         log(&format!("[repair] {what}"));
@@ -74,7 +74,7 @@ pub(crate) struct ApplyDecision {
 }
 
 /// 事前判定（只读）：FS preflight → 槽位判定。
-/// 返回 `Err` 一律发生在任何写盘之前；本函数签名上就没有 `&mut FileSource`
+/// 返回 `Err` 一律发生在任何写盘之前；本函数签名上就没有 `&mut WriteSource`
 pub(crate) fn prepare_apply(
     src: &FileSource,
     g0: &ValidatedGeometry,
@@ -301,6 +301,7 @@ pub(crate) fn prepare_apply(
                 chunk_bytes: chunk_len,
                 fp: src.fingerprint,
                 map: src.loop_mapping,
+                proof: src.proof(),
             }
         }
         CheckpointSlot::Empty => {
@@ -311,14 +312,15 @@ pub(crate) fn prepare_apply(
             // 保留现场，不能反过来阻断恢复。预检只覆盖平台与工具存在性：PATH 里有可执行
             // 文件不等于它一定能成功操作目标（权限、设备策略），那些失败仍落在执行期
             if plan.moves.iter().any(|m| m.is_swap) {
-                crate::fsops::require_linux()
-                    .map_err(|e| crate::outcome::Fail::refused(format!("cannot rebuild swap: {e}")))?;
+                // 工具缺失与平台不符都归 Infra(30)：分类走 outcome 的唯一映射点，
+                // 不在这里把变体压成字符串再统一折成"改参数重试有意义"
+                crate::fsops::require_linux().map_err(crate::outcome::Fail::from)?;
                 crate::fsops::check_support(
                     "rebuild",
                     crate::fsid::FsKind::Swap.as_str(),
                     crate::fsops::swap_rebuild_support(src.is_block),
                 )
-                .map_err(|e| crate::outcome::Fail::refused(e.to_string()))?;
+                .map_err(crate::outcome::Fail::from)?;
             }
             Checkpoint {
                 disk_size: src.size,
@@ -332,6 +334,7 @@ pub(crate) fn prepare_apply(
                 chunk_bytes: chunk_len,
                 fp: src.fingerprint,
                 map: src.loop_mapping,
+                proof: src.proof(),
             }
         }
     };
@@ -359,15 +362,15 @@ pub(crate) fn chunk_io_error(
 
 pub(crate) const RESUME_HINT: &str = "the checkpoint is kept, re-run the command to retry this block (transient errors resume from here); for a permanently unreadable block, image the source with ddrescue and run the operation on the image";
 
-pub(crate) const COPY_HINT: &str = "copy has no resume — release the scene with `diskedit undo` (if rollbackable) or `diskedit abandon`, then re-run; a permanently unreadable block must be imaged with ddrescue first";
+pub(crate) const COPY_HINT: &str = "copy has no resume — the target bytes may already be overwritten; release the scene with `diskedit abandon`, then re-run; a permanently unreadable block must be imaged with ddrescue first";
 
 // ---- durable boundary：以上判定全部结束，以下开始写盘 ----
 
-/// 执行（写盘）。入参 `&mut FileSource` + 返回 `io::Result` 共同构成边界：
+/// 执行（写盘）。入参 `&mut WriteSource` + 返回 `io::Result` 共同构成边界：
 /// 函数体内**构造不出** `Fail::Refused`（返回类型里放不下它），
 /// 于是"写盘之后还能返回 Refused"在这里连编译都过不去
 pub(crate) fn execute_apply(
-    src: &mut FileSource,
+    src: &mut WriteSource,
     plan: &Plan,
     d: ApplyDecision,
     log: &mut dyn FnMut(&str),
@@ -577,6 +580,13 @@ pub(crate) fn execute_apply(
     // 与未搬移分区重叠的表项。扩容留给续跑：重跑在同一 ckpt 上从本条目重试 mkswap，
     // 条目走完后才到达这里
     if (ckpt.cur_index as usize) < plan.moves.len() {
+        // 唯一合法出口是"某条目留下待办"（swap 重建失败）：停止而不报任何待办，
+        // 调用方会按 Applied{pending:[]} 收场并关闭 journal，扩容收尾却根本没做
+        if post.is_empty() {
+            return Err(io::Error::other(
+                "relocation stopped before the grow step but recorded no pending work — the on-disk state may be incomplete",
+            ));
+        }
         log("relocation incomplete (swap rebuild pending) — growth not applied, re-run the command to continue");
         return Ok(());
     }
@@ -593,7 +603,7 @@ pub(crate) fn execute_apply(
     g.update_entry(grow_idx, |te| te.ending_lba = grow_end)?;
     let grow_len = grow_end - grow_start + 1;
     g.commit(src)?;
-    table::ensure_protective_mbr(src)?;
+    table::ensure_protective_mbr(src, g.sector_size())?;
     log(&format!("partition {} extended (FS area ends before relocated partitions)", plan.grow_part));
     // 扩到设备末端的 FS 工具（resize2fs 一类）以内核报告的尺寸为准：内核视图停在旧尺寸时
     // 它们会认为无事可做、以 0 退出，把"分区已扩、FS 未扩"洗成成功。重读失败时不跑 FS 步，
@@ -650,14 +660,16 @@ pub(crate) struct GrowthRegions {
 /// 判据与写盘前的 preflight 是同一处，只是区间取扩容后的那份——两步之间盘被改动时
 /// 结论会变，那种情形归后置条件未完成（pending），不算拒绝
 pub(crate) fn finalize_growth(
-    src: &mut FileSource,
+    src: &mut WriteSource,
     part: u32,
     r: GrowthRegions,
     ss: u64,
     log: &mut dyn FnMut(&str),
     post: &mut PostWrite,
 ) -> io::Result<()> {
-    let (base, len) = (r.new.0 * ss, r.new.1 * ss);
+    let overflow = || io::Error::new(io::ErrorKind::InvalidData, "growth byte offset overflows — refusing");
+    let base = r.new.0.checked_mul(ss).ok_or_else(overflow)?;
+    let len = r.new.1.checked_mul(ss).ok_or_else(overflow)?;
     match crate::fsops::grow_target_at(src, part, base, len) {
         // 走到这里的是写盘前已放行、没有可扩 FS 的那几种：首启 overlay、PV，以及页格式
         // 在本机激活不了的 swap——`unknown` 已由 check_grow_step 拦下，本支至多因盘在两步
@@ -765,12 +777,15 @@ pub(crate) fn swap_identity_preferring(
 /// 卷标以**字节**返回：sws_volume 是 16 字节定长字段，mkswap 存入时不校验编码，
 /// 任何 String 化（Latin-1 或替换非法序列）都会在写回时改变原值
 pub(crate) fn read_swap_identity(src: &FileSource, first_lba: u64, len_lba: u64, ss: u64) -> (Option<[u8; 16]>, Option<Vec<u8>>) {
-    let base = first_lba * ss;
+    // 换算失败与"读不出来"同一出口：本函数只做收尾时的尽力保留，保不住就按随机 UUID 走
+    let (Some(base), Some(len_bytes)) = (first_lba.checked_mul(ss), len_lba.checked_mul(ss)) else {
+        return (None, None);
+    };
     // 签名位置由唯一探测器判定；候选集取 libblkid 口径（含 32K）——本函数只读元数据，
     // 宽于"swapon 可激活"的范围是有意的：读得到就能保住 UUID/PARTUUID。
     // 探测读失败与未命中同出口：收尾时的尽力读取，保不住就按随机 UUID 走
     if !matches!(
-        crate::fsid::probe_swap_header(src, base, len_lba * ss, &crate::fsid::blkid_known_pages()),
+        crate::fsid::probe_swap_header(src, base, len_bytes, &crate::fsid::blkid_known_pages()),
         Ok(Some(_))
     ) {
         return (None, None); // 未格式化、非 swap、或读不出来 → 随机 UUID

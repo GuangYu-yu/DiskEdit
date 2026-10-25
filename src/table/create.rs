@@ -93,7 +93,7 @@ pub fn create_mbr_preflight(size_bytes: u64, ss: u64) -> Result<(), Fail> {
 /// `new`：新建空 GPT（覆盖现有表，破坏表结构但不碰分区数据区）+ 保护 MBR。
 /// 几何：128 条目 × 128B，first_usable = 数组之后，last_usable = 末端 - span - 1
 /// （由 UEFI 头/数组布局推导的实现约定，非规范逐字给出的公式）。
-pub fn create_gpt(src: &mut FileSource, ss: u64, disk_guid: Option<[u8; 16]>) -> io::Result<()> {
+pub fn create_gpt(src: &mut WriteSource, ss: u64, disk_guid: Option<[u8; 16]>) -> io::Result<()> {
     // 与 create_gpt_preflight 同一判据（同一 gpt_min_sectors）、同一措辞：命令层已先在
     // 写盘前过了一遍，这里是直接调本函数的调用方（测试）的兜底，两种入口看到同一句话
     let min_sectors = gpt_min_sectors(ss)?;
@@ -117,7 +117,7 @@ pub fn create_gpt(src: &mut FileSource, ss: u64, disk_guid: Option<[u8; 16]>) ->
     };
     let g = RawGpt { ss, header, entries: vec![empty_entry(); geom.entry_count as usize], state: GptState::Valid, pmbr: PmbrSize::Normal };
     commit_gpt(src, &g, last_lba)?;
-    ensure_protective_mbr(src)
+    ensure_protective_mbr(src, ss)
 }
 
 pub(crate) fn empty_entry() -> GPTPartitionEntry {
@@ -183,7 +183,7 @@ pub const LVM_TYPE_GUID: [u8; 16] = [
 /// LBA1 上可能残留的 GPT 主头签名。只清签名那 8 字节：同一扇区的其余字节、条目数组
 /// 与盘尾备份头都保持原样。签名留着会让这块新 msdos 盘被判成 `GptDamaged`
 /// （`table_label` 的第 3 条判据），此后一切写命令都拒绝操作它
-pub fn create_mbr(src: &mut FileSource) -> io::Result<()> {
+pub fn create_mbr(src: &mut WriteSource) -> io::Result<()> {
     let ss = src.sector_size;
     let mut lba0 = vec![0u8; ss as usize];
     src.read_at(0, &mut lba0)?;

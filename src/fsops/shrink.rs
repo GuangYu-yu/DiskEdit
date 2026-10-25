@@ -110,7 +110,10 @@ pub fn shrink_fs(src: &FileSource, part: u32, fstype: Option<FsKind>, new_bytes:
                 })
             })?;
             let verify = verify.ok_or_else(|| {
-                FsError::Io(io::Error::other("btrfs shrink did not run (internal invariant broken)"))
+                // 闭包必须执行一次：没拿到核对结论说明调用链内部不变量破裂，而不是工具失败
+                FsError::CommandFailed(
+                    "btrfs shrink did not run (internal invariant broken) — the filesystem may have been resized".to_string(),
+                )
             })?;
             Ok(ShrinkOutcome { verify, leak })
         }

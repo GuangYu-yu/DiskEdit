@@ -338,6 +338,11 @@ fn help_topic_zero_partition_and_mbr_end_overflow() {
     let (c, out, _) = run(&["--help", "resize"]);
     assert_eq!(c, 0);
     assert!(out.contains("diskedit resize <TARGET>:N"), "{out}");
+    // 命令位本身是 help 的两种写法同样过旗标白名单：帮助不是参数校验的旁路
+    let (c, _, e) = run(&["--help", "info", "--yes"]);
+    assert_eq!(c, 10, "help must not accept a flag the command rejects: {e}");
+    let (c, _, e) = run(&["help", "info", "--yes"]);
+    assert_eq!(c, 10, "help must not accept a flag the command rejects: {e}");
     // copy 没有 checkpoint，中断后重跑从头抄：帮助文本必须如实声明，
     // 否则用户会以为它能像 move 一样续传
     let (c, out, _) = run(&["copy", "whatever.img:1", "--help"]);

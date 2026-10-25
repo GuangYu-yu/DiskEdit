@@ -81,9 +81,3 @@ pub(crate) fn mbr_decider<'a>(
         Ok((ss, lba_bytes(p.size_lba as u64, ss), free_right_msdos(&mbr, p, disk.size / ss), None))
     })
 }
-
-/// 块设备的分区节点路径：命名规则唯一实现在 `dev::part_node_name`
-#[cfg(target_os = "linux")]
-pub(crate) fn part_dev_path(target: &str, part: u32) -> String {
-    crate::dev::part_node_name(target.trim_end_matches('/'), part)
-}

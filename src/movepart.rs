@@ -23,7 +23,7 @@ pub(crate) use shift::*;
 pub(crate) use resize::*;
 pub(crate) use copy::*;
 
-use crate::dev::FileSource;
+use crate::dev::{FileSource, WriteSource};
 use crate::fsid::FsKind;
 use crate::fsops::Growable;
 use crate::geometry::{GeometryLimits, ValidatedGeometry};

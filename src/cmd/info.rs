@@ -100,6 +100,11 @@ pub(crate) fn cmd_info(a: &Args) -> u8 {
                  backup copy at the device end; any partition-table write command rewrites both copies"
                     .to_string(),
             ),
+            table::GptState::NeedsRepair { cause: table::HeaderIssue::BackupUnreadable } => stale_notes.push(
+                "note: the backup GPT copy at the device end is missing or damaged — this table has no redundant \
+                 copy left; any partition-table write command rebuilds it"
+                    .to_string(),
+            ),
             table::GptState::Valid => {}
         }
         match g.pmbr {

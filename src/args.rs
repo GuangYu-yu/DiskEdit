@@ -149,6 +149,10 @@ pub(crate) fn parse_args() -> (String, Args) {
         seen: Vec::new(),
     };
     let mut positional: Vec<String> = Vec::new();
+    // `--help` 只登记、不立即退出：先把整条命令行解析完，让白名单对账看到其余旗标，
+    // 最后才打印帮助。帮助请求不能成为绕过参数校验的旁路（`del img:1 --help --bogs`
+    // 与 `del img:1 --bogs` 必须同判）
+    let mut help: Option<Option<String>> = None;
     while let Some(arg) = it.next() {
         // 同一旗标重复给出即拒绝。`seen` 本来就记着每一次出现，具备判重能力；
         // 不判的后果是 last-wins——生效值与用户第一意图相反却没有任何回显
@@ -252,16 +256,15 @@ pub(crate) fn parse_args() -> (String, Args) {
             // 不是主题（取它会让详助退化成顶层 usage）。只有 `--help <CMD>` 这种
             // 命令位本身就是 help 的写法，位置参数才当主题
             "--help" | "-h" => {
-                let topic = if matches!(cmd.as_str(), "help" | "--help" | "-h") {
-                    match positional.first() {
-                        Some(t) => t.clone(),
-                        // 命令位与旗标都是 help（`diskedit --help`）：主动求助，退 0
-                        None => usage_help(),
-                    }
-                } else {
-                    cmd.clone()
-                };
-                help_cmd(&topic);
+                // 主题：`--help <CMD>` 这种命令位本身就是 help 的写法取位置参数；
+                // `<CMD> --help` 的主题是命令名本身（取位置参数会让详助退化成顶层 usage）
+                if help.is_none() {
+                    help = Some(if matches!(cmd.as_str(), "help" | "--help" | "-h") {
+                        positional.first().cloned()
+                    } else {
+                        Some(cmd.clone())
+                    });
+                }
             }
             // 未识别的以 `-` 开头的 token 是旗标笔误，不能降级成位置参数：值槽全程不校验
             // 前缀（`set img:1 name --bogs` 会把分区名改成 `--bogs`）。`-10G` 这类相对尺寸
@@ -272,6 +275,17 @@ pub(crate) fn parse_args() -> (String, Args) {
                 )))
             }
             _ => positional.push(arg),
+        }
+    }
+    // 帮助在整条命令行解析完之后处理：走到这里说明没有未知旗标（那个分支已退出），
+    // 再按命令的白名单对账一次，帮助与执行看到同一套参数判据
+    if let Some(topic) = help {
+        match topic {
+            Some(t) => {
+                refuse_unconsumed_flags(&t, &a);
+                help_cmd(&t);
+            }
+            None => usage_help(),
         }
     }
     // 无 target（含裸调用/未知命令缺参）时打印帮助而非静默退出；但命令位本身就是

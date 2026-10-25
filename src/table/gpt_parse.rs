@@ -64,13 +64,16 @@ pub enum GptState {
     NeedsRepair { cause: HeaderIssue },
 }
 
-/// 头部需要重写的原因（互斥，二选一）
+/// 头部需要重写的原因（互斥）
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum HeaderIssue {
     /// 备份头停在旧末端（设备扩容后未搬移）：expected = 容器末端，actual = 头内记录的备份头 LBA
     BackupLbaStale { expected: u64, actual: u64 },
     /// 主副本不可用（头撕裂/清零/CRC 失效，或条目数组 CRC 不符），本表来自盘尾备份副本
     PrimaryUnreadable,
+    /// 主副本可用，但盘尾备份副本缺失或读不出来（头损伤、数组 CRC 不符、几何越界）：
+    /// 表本身可用，已没有任何冗余副本
+    BackupUnreadable,
 }
 
 /// 保护 MBR 的 SizeInLBA 与当前容器的关系。
@@ -339,7 +342,8 @@ pub(crate) fn parse_entry_array(raw: &[u8], n: usize, es: usize) -> Vec<GPTParti
 }
 
 /// 解析主头 + 条目数组（全部自研，写入路径用；保证主头有效）。
-/// `pmbr` 由调用方（load_gpt）判定后传入——PMBR 是独立结构，不随扇区候选变化。
+/// `pmbr` 由调用方（load_gpt）按该候选扇区大小算出后传入——保护 MBR 的 SizeInLBA
+/// 随扇区大小不同。
 /// 返回 Absent = 该扇区大小下 LBA1 无 GPT；返回本副本不可用 = 头/数组损伤、自述几何越界、
 /// 或这一处读不出来。任何一种都不阻止 load_gpt 继续试别的候选与盘尾备份
 pub(crate) fn parse_primary(src: &FileSource, ss: u64, pmbr: PmbrSize) -> ParsedCopy {
@@ -458,8 +462,8 @@ pub(crate) fn decode_name(raw: &[u8; 72]) -> gptman::PartitionName {
 /// 盘尾备份是否自洽到能独立给出整张表。**只用于判型**（主头不可读、LBA0 也无可竞争的
 /// 表时），`pmbr` 只作为附带的盘型元数据传给 `parse_backup`，判型不消费它
 pub(crate) fn backup_table_parseable(src: &FileSource) -> io::Result<bool> {
-    let pmbr = pmbr_size_state(src)?;
     for &ss in &candidate_sector_sizes(src.sector_size) {
+        let pmbr = pmbr_size_state(src, ss)?;
         if matches!(parse_backup(src, ss, pmbr), ParsedCopy::Usable(_)) {
             return Ok(true);
         }
@@ -511,26 +515,27 @@ pub(crate) fn gpt_header_parseable(src: &FileSource) -> io::Result<bool> {
     Ok(false)
 }
 
-/// SizeInLBA 与当前容器的关系（唯一判定点）。规范值按设备逻辑块计（UEFI 口径）；
-/// 512 口径值单独识别为"非规范但已知"，不并入 Normal——并入就等于宣称它合法。
+/// SizeInLBA 与当前容器的关系（唯一判定点）。规范值按**该表自身**的逻辑块计
+/// （UEFI 2.10 §5.2.3 Table 5.4："size of the disk minus one"，单位是 logical block）；
+/// `table_ss` 就是解析出这张表所用的扇区大小。512 口径值单独识别为"非规范但已知"，
+/// 不并入 Normal——并入就等于宣称它合法。
 /// 扇区数超出 32 位表示范围时按规范饱和写 0xFFFFFFFF（此时两种口径期望值相同）。
 /// 读取恒取前 512 字节：MBR 记录布局在 LBA0 的前 512 字节内（UEFI 2.10 §5.2.3），
-/// 与容器逻辑块大小无关，4Kn 设备上同样成立——`lba0` 的定长与 `src.sector_size`
-/// 的口径差在此说明，非遗漏
-pub(crate) fn pmbr_size_state(src: &FileSource) -> io::Result<PmbrSize> {
+/// 与逻辑块大小无关，4Kn 设备上同样成立
+pub(crate) fn pmbr_size_state(src: &FileSource, table_ss: u64) -> io::Result<PmbrSize> {
     let mut lba0 = [0u8; 512];
     src.read_at(0, &mut lba0)?;
     let size = rd_u32(&lba0, 446 + 12);
-    let e = size_in_lba(src.size / src.sector_size);
+    let e = size_in_lba(src.size / table_ss);
     let e512 = size_in_lba(src.size / 512);
     if size == e {
         return Ok(PmbrSize::Normal);
     }
-    // ss == 512 时两种口径重合，上面已返回 Normal，故此处必有 ss > 512
+    // table_ss == 512 时两种口径重合，上面已返回 Normal，故此处必有 table_ss > 512
     if size == e512 {
         return Ok(PmbrSize::NeedsRepair { cause: PmbrIssue::Compat512 });
     }
-    // e ≤ e512（扇区大小 ≥ 512），故 size < e 即小于两种口径 → 扩容后的 stale，可安全重写
+    // e ≤ e512（逻辑块 ≥ 512），故 size < e 即小于两种口径 → 扩容后的 stale，可安全重写
     Ok(if size < e {
         PmbrSize::NeedsRepair { cause: PmbrIssue::Stale }
     } else {
@@ -556,6 +561,8 @@ pub(crate) fn candidate_sector_sizes(container_ss: u64) -> Vec<u64> {
 /// **主备恢复策略只在本函数**（UEFI 2.10 §5.3.2 要求 primary 无效时改用 backup）：
 /// - 任一候选、任一份可用 → 用它（来自备份时 state 标记 PrimaryUnreadable，
 ///   写入路径会重写双头）
+/// - 主副本可用但盘尾备份不可用 → 仍返回主副本，state 标记 BackupUnreadable：
+///   表本身能用，但已无冗余副本（UEFI 2.10 §5.3.2 的双份布局只剩一份）
 /// - 单份不可用（头/条目数组的字节损伤、自述几何越界、这一处读不出来）→ 只是这一份的事：
 ///   两份副本的头与数组是各自独立写入的，换一份读的是别处字节，故继续试其余候选
 /// - 两份都不可用 → 报出首个损伤，绝不因"试过备份"就静默接受损坏的主副本
@@ -566,13 +573,24 @@ pub fn load_gpt(src: &FileSource) -> Result<Option<RawGpt>, GptError> {
     if !pmbr_shape_valid(src)? {
         return Ok(None);
     }
-    let pmbr = pmbr_size_state(src)?;
     let candidates = candidate_sector_sizes(src.sector_size);
     // 记下首个"本副本不可用"的原因：只有两份副本都给不出可用的表时才需要报它
     let mut damaged: Option<GptError> = None;
+    // SizeInLBA 的单位是**该表自身**的逻辑块，故保护 MBR 的分类与候选 ss 一起算：
+    // 用容器 ss 判 4Kn 表会把规范值误判成 Inconsistent
     for &ss in &candidates {
+        let pmbr = pmbr_size_state(src, ss)?;
         match parse_primary(src, ss, pmbr) {
-            ParsedCopy::Usable(g) => return Ok(Some(*g)),
+            ParsedCopy::Usable(mut g) => {
+                // 备份副本是这张表唯一的回退来源：主头自述的 backup_lba 与实际读得到的
+                // 备份是两件事，前者成立不代表后者还在。写入路径按 state 决定修不修，
+                // info 按 state 出 damaged——不在这里确认，损坏的备份会一直报 Valid，
+                // 直到主副本也坏掉才发现无处可回退
+                if g.state == GptState::Valid && !matches!(parse_backup(src, ss, pmbr), ParsedCopy::Usable(_)) {
+                    g.state = GptState::NeedsRepair { cause: HeaderIssue::BackupUnreadable };
+                }
+                return Ok(Some(*g));
+            }
             ParsedCopy::Absent => {}
             ParsedCopy::CopyDamaged(e) => damaged = damaged.or(Some(e)),
         }
@@ -581,6 +599,7 @@ pub fn load_gpt(src: &FileSource) -> Result<Option<RawGpt>, GptError> {
     // 此刻备份是唯一能救回分区表的数据，不回退会让工具把"主副本坏但备份完好"误判为无表，
     // 进而可能在 new 时覆盖掉这份唯一的副本
     for &ss in &candidates {
+        let pmbr = pmbr_size_state(src, ss)?;
         match parse_backup(src, ss, pmbr) {
             ParsedCopy::Usable(g) => return Ok(Some(*g)),
             ParsedCopy::Absent => {}

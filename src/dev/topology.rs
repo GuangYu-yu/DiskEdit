@@ -90,6 +90,23 @@ pub(crate) fn sysfs_capacity(node: &Path) -> io::Result<u64> {
         .ok_or_else(|| io::Error::other(format!("sysfs size {v:?} overflows u64 bytes")))
 }
 
+/// 进指纹的整盘身份：(整盘容量, 设备 ID 字符串)。两者都取**整设备节点**——`/dev/sdb` 与
+/// `/dev/sdb2` 由此得到同一份指纹（现场按盘共享）。ID 只认 [`DEVICE_IDENTITY_ATTRS`] 里的
+/// 属性，值为 `属性名=值` 原串（供哈希）；都没有时为 `None`，容量仍作为辅助证据
+#[cfg(target_os = "linux")]
+pub(crate) fn disk_identity(node: &Path) -> io::Result<(u64, Option<String>)> {
+    let disk = block_device_at(node)?;
+    let capacity = sysfs_capacity(&disk)?;
+    for attr in DEVICE_IDENTITY_ATTRS {
+        if let Some(v) = read_sysfs_attr(&disk.join(attr))?
+            && !v.is_empty()
+        {
+            return Ok((capacity, Some(format!("{attr}={v}"))));
+        }
+    }
+    Ok((capacity, None))
+}
+
 /// 块设备节点 → sysfs 设备目录。fail-closed：节点 stat 不了或 maj:min 无对应 sysfs 项
 /// 即拒绝，绝不退到"调用方 devname-容量"——那个退化会让 `/dev/sdb` 与 `/dev/sdb1`
 /// 得到两把锁，journal / checkpoint / lock 落进两个序列化域。

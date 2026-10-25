@@ -10,13 +10,13 @@ pub fn fs_min_bytes(src: &FileSource, part: u32, fstype: Option<FsKind>) -> Resu
     if fstype != Some(FsKind::Ext) {
         return Ok(None);
     }
-    let mut result: Option<io::Result<u64>> = None;
+    let mut result: Option<Result<u64, FsError>> = None;
     with_partition_device(src, part, |dev| {
         result = Some(min_bytes_ext(dev));
         Ok::<(), FsError>(())
     })?;
     match result {
-        Some(r) => r.map(Some).map_err(FsError::from),
+        Some(r) => r.map(Some),
         // 闭包在 with_partition_device 内恒执行一次，None 只能是内部不变量破裂：
         // fail-closed 报错误，不冒充"无最小尺寸可报"
         None => Err(FsError::Io(io::Error::other("partition probe did not run (internal invariant broken)"))),
@@ -45,21 +45,23 @@ pub(crate) fn parse_num_lead(text: &str, prefix: &str) -> io::Result<u64> {
 /// 不猜默认值）：resize2fs -P 打印 -M 缩到最小的块数估计（man resize2fs OPTIONS；
 /// 该 man 的 KNOWN BUGS 指出 1K/2K 块文件系统上估计值可能不准），
 /// 块大小取自 dumpe2fs -h 的 "Block size:" 行（man dumpe2fs：-h 只读超级块）
-pub(crate) fn min_bytes_ext(dev: &str) -> io::Result<u64> {
+pub(crate) fn min_bytes_ext(dev: &str) -> Result<u64, FsError> {
     let out = run("resize2fs", &["-P", dev])?;
     let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
     if !out.status.success() {
-        return Err(io::Error::other(format!("resize2fs -P failed: {}", text.trim())));
+        // 工具跑起来了但拒绝了本设备：这是"可能已写盘"的一类，不能压成 Io
+        return Err(FsError::CommandFailed(format!("resize2fs -P failed ({}): {}", describe_exit(&out.status), text.trim())));
     }
-    let blocks = parse_num_field(&text, "Estimated minimum size of the filesystem:")?;
+    let blocks = parse_num_field(&text, "Estimated minimum size of the filesystem:").map_err(FsError::from)?;
     let out2 = run("dumpe2fs", &["-h", dev])?;
     let text2 = format!("{}{}", String::from_utf8_lossy(&out2.stdout), String::from_utf8_lossy(&out2.stderr));
     if !out2.status.success() {
-        return Err(io::Error::other(format!("dumpe2fs -h failed: {}", text2.trim())));
+        return Err(FsError::CommandFailed(format!("dumpe2fs -h failed ({}): {}", describe_exit(&out2.status), text2.trim())));
     }
-    let bs = parse_num_field(&text2, "Block size:")?;
+    let bs = parse_num_field(&text2, "Block size:").map_err(FsError::from)?;
     // 两个因子都出自外部工具的 stdout：回绕的"最小尺寸"会放行本应拒绝的缩容请求
     //（分区末端切进 FS 元数据），方向危险，溢出按工具输出异常上抛
-    blocks.checked_mul(bs)
-        .ok_or_else(|| io::Error::other(format!("resize2fs -P × dumpe2fs block size overflows ({blocks} × {bs})")))
+    blocks.checked_mul(bs).ok_or_else(|| {
+        FsError::InvalidArgument(format!("resize2fs -P × dumpe2fs block size overflows ({blocks} × {bs})"))
+    })
 }

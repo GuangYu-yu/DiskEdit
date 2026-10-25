@@ -5,9 +5,9 @@ use super::*;
 /// FS 层失败的分类。fsops 只回答"操作层面发生了什么"，"这该算拒绝还是故障"要结合
 /// durable boundary 才能回答，属命令层语义（映射见 `outcome::From<FsError> for Fail`）。
 ///
-/// 只有三类是**在发生处就能确定**的，故单列；其余一律 `Io`——环境故障是最保守的缺省，
-/// 它不承诺"改参数重试有意义"。用 io::ErrorKind 反推这三类是行不通的：
-/// kind 一旦成形就分不出"类型不认得"与"设备读不到"
+/// 只有四类是在**发生处就能确定**的（未接线的类型、参数非法、缺工具、工具已跑但非零
+/// 退出），故单列；其余一律 `Io`——环境故障是最保守的缺省，它不承诺"改参数重试有意义"。
+/// 用 io::ErrorKind 反推这几类是行不通的：kind 一旦成形就分不出"类型不认得"与"设备读不到"
 #[derive(Debug)]
 pub enum FsError {
     /// 该类型/该操作没有接线的工具（不认得的 FS、本工具不负责的组合）
@@ -35,9 +35,31 @@ impl FsError {
         Self::ToolMissing(msg.into())
     }
 
-    /// 外部工具非零退出：`<tool> failed: <stderr 原文>`
+    /// 外部工具非零退出：`<tool> failed (<exit status>): <stderr 原文>`。
+    /// 退出状态必须入文：`-1` 之类的占位把"被信号杀死"与"退出码 255"混成一句话，
+    /// 而这两者指向完全不同的排查方向
     pub(crate) fn command(tool: &str, out: &std::process::Output) -> Self {
-        Self::CommandFailed(format!("{tool} failed: {}", String::from_utf8_lossy(&out.stderr).trim()))
+        Self::CommandFailed(format!(
+            "{tool} failed ({}): {}",
+            describe_exit(&out.status),
+            String::from_utf8_lossy(&out.stderr).trim()
+        ))
+    }
+}
+
+/// 退出状态的人读描述。`ExitStatus::code()` 对"被信号杀死"返回 None，
+/// 直接 `unwrap_or(-1)` 会把信号编号伪装成退出码
+pub(crate) fn describe_exit(st: &std::process::ExitStatus) -> String {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        if let Some(sig) = st.signal() {
+            return format!("killed by signal {sig}");
+        }
+    }
+    match st.code() {
+        Some(c) => format!("exit {c}"),
+        None => "exit status unavailable".to_string(),
     }
 }
 

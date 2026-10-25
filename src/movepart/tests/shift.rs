@@ -6,8 +6,9 @@ use super::support::*;
 /// moves 取 min(new_first)−1，会把尚未搬移成员的旧位划进扩容区，提交即写出与未搬移
 /// 分区重叠的表项。swap 条目只给 64 扇区（32KiB，低于 mkswap 的最小可建容量）：
 /// Linux 上工具齐备时重建按容量拒绝；非 Linux 或工具缺失（mkswap 或镜像所需的
-/// losetup）时则在写盘前拒绝（10，不建 ckpt）。恢复段另起一份未动过的现场：已有
-/// relocation ckpt 时不做能力拒绝，缺工具/重建失败只以 pending 收场并保留现场
+/// losetup）时以环境不满足（30）在写盘前停下（不建 ckpt）——分类走 outcome 的
+/// 唯一映射点，与其它 require_linux / 缺工具路径同源。恢复段另起一份未动过的现场：
+/// 已有 relocation ckpt 时不做能力拒绝，缺工具/重建失败只以 pending 收场并保留现场
 #[test]
 pub(crate) fn swap_rebuild_failure_skips_growth_finalization() {
     const SWAP: [u8; 16] = [0x6D, 0xFD, 0x57, 0x06, 0xAB, 0xA4, 0xC4, 0x43, 0x84, 0xE5, 0x09, 0x33, 0xC8, 0x4B, 0x4F, 0x4F];
@@ -23,17 +24,17 @@ pub(crate) fn swap_rebuild_failure_skips_growth_finalization() {
     let ckpt_path = src.identity.checkpoint_path().to_path_buf();
     let plan = make_plan(&mut src, 1).unwrap();
     assert!(plan.moves.iter().any(|m| m.is_swap), "fixture must carry a movable swap");
-    // 平台闸先于工具探测：非 Linux 上即使两个工具名都在 PATH，也必须按拒绝分支断言
+    // 平台闸先于工具探测：非 Linux 上即使两个工具名都在 PATH，也按环境不满足断言
     let tools_ready = cfg!(target_os = "linux")
         && crate::fsops::find_tool("mkswap").is_ok()
         && crate::fsops::find_tool("losetup").is_ok();
     if !tools_ready {
         let fresh = ap(&mut src, &plan, 1024 * 1024, true, &mut |_| {});
-        assert!(
-            matches!(fresh, crate::outcome::Outcome::Refused(_)),
-            "a new swap relocation without the rebuild tools must be refused, got {fresh:?}"
+        assert_eq!(
+            fresh.exit_code(),
+            30,
+            "a new swap relocation without the rebuild tools must stop before writing: {fresh:?}"
         );
-        assert_eq!(fresh.exit_code(), 10);
         assert!(!ckpt_path.exists(), "a refusal must not create a checkpoint");
         let g = table::load_gpt(&src).unwrap().unwrap();
         assert_eq!((g.entries[0].starting_lba, g.entries[0].ending_lba), (2048, 6143));
@@ -53,6 +54,7 @@ pub(crate) fn swap_rebuild_failure_skips_growth_finalization() {
     let ckpt_path = src.identity.checkpoint_path().to_path_buf();
     let plan = make_plan(&mut src, 1).unwrap();
     let ckpt = Checkpoint {
+        proof: crate::dev::IdentityProof::Inode,
         disk_size: src.size, ss: plan.ss, grow_part: plan.grow_part,
         last_usable_lba: plan.last_usable_lba, moves: plan.moves.clone(), kind: plan.kind,
         cur_index: 0, chunks_done: 0, chunk_bytes: 1024 * 1024,
@@ -100,6 +102,7 @@ pub(crate) fn resume_refuses_when_a_pending_partition_moved_on_disk() {
     assert_ne!(home.delta_lba, 0, "home must need a real relocation for this test");
     // 预置"尚未开始搬移"的现场：cur_index=0 ⇒ home（moves 未达下标）必须仍在 first_lba
     let ckpt = Checkpoint {
+        proof: crate::dev::IdentityProof::Inode,
         disk_size: src.size, ss: plan.ss, grow_part: plan.grow_part,
         last_usable_lba: plan.last_usable_lba, moves: plan.moves.clone(), kind: plan.kind,
         cur_index: 0, chunks_done: 0, chunk_bytes: chunk,
@@ -306,46 +309,103 @@ pub(crate) fn pure_growth_fs_pending_keeps_checkpoint_and_rerun_retries() {
     let _ = std::fs::remove_file(&p);
 }
 
-/// `dev::scene_mismatch` 的逐字段判据：device id / inode 不符拦下，尺寸不符同样拦下；每个
-/// 字段只在**两侧都有证据**时参与（零值 = 该平台或该载体给不出这个字段，不等于"匹配"）。
+/// `dev::scene_mismatch` 的判据：**先比身份种类**（整盘 ID / 文件 inode / 无身份），同一种类
+/// 内逐字段比，各字段只在**两侧都有证据**时参与（零值 = 该平台或该载体给不出这个字段，
+/// 不等于"匹配"）。旧格式（`Legacy`）只写了 inode 与尺寸：当前目标同样是 inode 身份时照旧
+/// 可比，是整盘身份或什么都给不出时拒绝；`Unavailable`（录制时就取不到身份）一律拒绝。
 /// 该判据由 checkpoint 与 journal 两族现场共用，故在这里随 checkpoint 一侧一起测
 #[test]
 pub(crate) fn scene_mismatch_guards_foreign_scenes() {
-    let fp = |dev: u64, ino: u64, size: u64| crate::dev::TargetFingerprint { dev, ino, size };
-    let scene = |fp: crate::dev::TargetFingerprint, map: Option<(u64, u64)>| FileSource {
-        fingerprint: fp,
-        loop_mapping: map,
-        ..crate::support::src_from("scene", &[])
+    use crate::dev::IdentityProof::{DeviceId, Inode, Legacy, Unavailable};
+    let fp = |dev: u64, ino: u64, size: u64| crate::dev::TargetFingerprint { dev, ino, size, id: 0 };
+    let fp_id = |size: u64, id: u64| crate::dev::TargetFingerprint { dev: 0, ino: 0, size, id };
+    let scene = |fp: crate::dev::TargetFingerprint, map: Option<(u64, u64)>| {
+        let mut s = crate::support::src_from("scene", &[]);
+        s.fingerprint = fp;
+        s.loop_mapping = map;
+        s
     };
+    let block = |fp: crate::dev::TargetFingerprint| {
+        let mut s = scene(fp, None);
+        s.is_block = true;
+        s
+    };
+    let check = |src: &crate::dev::WriteSource,
+                 rec_fp: crate::dev::TargetFingerprint,
+                 rec_map: Option<(u64, u64)>,
+                 proof: crate::dev::IdentityProof| checkpoint_foreign(src, &rec_fp, &rec_map, proof);
 
-    // device id / inode 不符 → 拦
+    // 镜像：inode 不符 → 拦
     let s = scene(fp(7, 42, 1024), None);
-    assert!(checkpoint_foreign(&s, &fp(7, 43, 1024), &None).unwrap().contains("fingerprint"));
+    assert!(check(&s, fp(7, 43, 1024), None, Inode).unwrap().contains("fingerprint"));
     // 三者一致且双方都无映射 → 放行
     let s = scene(fp(7, 42, 1024), None);
-    assert!(checkpoint_foreign(&s, &fp(7, 42, 1024), &None).is_none());
+    assert!(check(&s, fp(7, 42, 1024), None, Inode).is_none());
     // 尺寸不符 → 拦（`Metadata::len()` 处处可读，故非 Unix 平台也走这条）
     let s = scene(fp(0, 0, 1024), None);
-    assert!(checkpoint_foreign(&s, &fp(0, 0, 2048), &None).unwrap().contains("size changed"));
+    assert!(check(&s, fp(0, 0, 2048), None, Inode).unwrap().contains("size changed"));
     // 尺寸一致、inode 无证据 → 放行
     let s = scene(fp(0, 0, 1024), None);
-    assert!(checkpoint_foreign(&s, &fp(0, 0, 1024), &None).is_none());
+    assert!(check(&s, fp(0, 0, 1024), None, Inode).is_none());
     // 映射值不符 → 拦
     let s = scene(fp(7, 42, 1024), Some((0, 0)));
-    assert!(checkpoint_foreign(&s, &fp(7, 42, 1024), &Some((4096, 0))).unwrap().contains("loop mapping"));
+    assert!(check(&s, fp(7, 42, 1024), Some((4096, 0)), Inode).unwrap().contains("loop mapping"));
     // 映射有无之别 → 拦：loop 写入的现场不能改从裸镜像续跑，反之亦然
     let s = scene(fp(7, 42, 1024), None);
-    assert!(checkpoint_foreign(&s, &fp(7, 42, 1024), &Some((0, 0))).unwrap().contains("loop device"));
-    // 无字段可比的载体（真块设备节点：inode 与元数据长度都拿不到）不构成证据，放行
+    assert!(check(&s, fp(7, 42, 1024), Some((0, 0)), Inode).unwrap().contains("loop device"));
+    // 记录侧一个可比字段都没有：不构成证据，放行
     let s = scene(fp(0, 0, 0), None);
-    assert!(checkpoint_foreign(&s, &fp(7, 42, 1024), &None).is_none());
+    assert!(check(&s, fp(7, 42, 1024), None, Inode).is_none());
     // 一侧有尺寸证据、另一侧没有：不把"给不出"读成"匹配"，也不读成"不符"
     let s = scene(fp(0, 0, 0), None);
-    assert!(checkpoint_foreign(&s, &fp(0, 0, 1024), &None).is_none());
+    assert!(check(&s, fp(0, 0, 1024), None, Inode).is_none());
     let s = scene(fp(0, 0, 1024), None);
-    assert!(checkpoint_foreign(&s, &fp(0, 0, 0), &None).is_none());
+    assert!(check(&s, fp(0, 0, 0), None, Inode).is_none());
+
+    // 旧格式（v5）镜像现场：inode 与尺寸照旧可比
+    let s = scene(fp(7, 42, 1024), None);
+    assert!(check(&s, fp(7, 42, 1024), None, Legacy).is_none());
+    assert!(check(&s, fp(7, 43, 1024), None, Legacy).unwrap().contains("fingerprint"));
+    // 旧格式现场遇上现在只能给出整盘身份的目标：没有可比的身份 → 拦
+    let s = block(fp_id(1 << 30, 0x1122));
+    assert!(check(&s, fp(7, 42, 1024), None, Legacy).unwrap().contains("before device identities"));
+    // 旧格式现场遇上什么都不给出的块设备：同样拦
+    let s = block(fp(0, 0, 0));
+    assert!(check(&s, fp(0, 0, 0), None, Legacy).unwrap().contains("before device identities"));
+
+    // 整盘身份：同容量、同 ID 放行
+    let s = block(fp_id(1 << 30, 0x1122));
+    assert!(check(&s, fp_id(1 << 30, 0x1122), None, DeviceId).is_none());
+    // 同容量、ID 不同（同名换盘）⇒ 拦
+    assert!(check(&s, fp_id(1 << 30, 0x3344), None, DeviceId).unwrap().contains("device identity changed"));
+    // 同 ID、容量不同 ⇒ 拦
+    assert!(check(&s, fp_id(2 << 30, 0x1122), None, DeviceId).unwrap().contains("size changed"));
+    // 记录侧有 ID、当前侧读不出 ⇒ 无法确认，拦
+    let s = block(fp_id(1 << 30, 0));
+    assert!(check(&s, fp_id(1 << 30, 0x3344), None, DeviceId).unwrap().contains("not readable"));
+    // 记录侧有 ID、当前侧成了 backing 文件身份 ⇒ 载体变了，拦
+    let s = block(fp(7, 42, 1 << 30));
+    assert!(check(&s, fp_id(1 << 30, 0x3344), None, DeviceId).unwrap().contains("file inode identity"));
+
+    // 录制时就没有身份（v6 的 Unavailable）：同容量也不放行，尺寸不能替代身份
+    let s = block(fp_id(1 << 30, 0x1122));
+    assert!(check(&s, fp_id(1 << 30, 0), None, Unavailable).unwrap().contains("without any device identity"));
+    let s = scene(fp(7, 42, 1024), None);
+    assert!(check(&s, fp(7, 42, 1024), None, Unavailable).unwrap().contains("without any device identity"));
+
+    // loop：身份就是 backing 文件的 inode（dev / ino），相符即可续跑
+    let s = block(fp(7, 42, 1024));
+    assert!(check(&s, fp(7, 42, 1024), None, Inode).is_none());
+    // backing 换成另一个文件（同路径换了内容）⇒ 拦
+    assert!(check(&s, fp(7, 43, 1024), None, Inode).unwrap().contains("fingerprint"));
+    // 旧格式的 loop 现场同样带 inode 证据，照旧可比
+    assert!(check(&s, fp(7, 42, 1024), None, Legacy).is_none());
+    // 记录侧是 backing 文件、当前侧成了整盘身份 ⇒ 载体变了，拦
+    let s = block(fp_id(1 << 30, 0x1122));
+    assert!(check(&s, fp(7, 42, 1024), None, Inode).unwrap().contains("whole-disk identity instead"));
+
     // "一个可比字段都没有"这一档是报出身份保障范围的那一档（undo 的 note）：全零指纹
     assert!(!crate::dev::TargetFingerprint::default().has_any_evidence());
-    assert!(fp(0, 0, 1024).has_any_evidence() && fp(7, 0, 0).has_any_evidence());
+    assert!(fp(0, 0, 1024).has_any_evidence() && fp(7, 0, 0).has_any_evidence() && fp_id(1, 1).has_any_evidence());
     let _ = std::fs::remove_file(&s.path);
 }

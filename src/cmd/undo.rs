@@ -91,8 +91,9 @@ fn checkpoint_present(p: &std::path::Path) -> bool {
 /// 空壳（头完整、零记录）描述的是零次写入：没有任何东西依赖它，但它一直占着候选落点，
 /// 而写闸口与 `abandon` 都按设计跳过它——不在这里收掉就没有命令能收。
 ///
-/// 只删**确认属于本目标**的壳：头里的身份与本目标不符即拒绝，绝不按"读出来是空的"就删。
-/// 全部核验完再动手，避免删掉一个之后才在第二个上拒绝而留下半清理状态。
+/// 只删**确认属于本目标**的壳：头里的身份与本目标不符就保留并告警，绝不按"读出来是空的"
+/// 就删。逐候选判定而不是整体拒绝：一份别人的壳留在候选落点上，不该把同一次清理里
+/// 属于本目标的壳一起挡住（那会让同一条命令每次都失败在同一个与它无关的文件上）。
 ///
 /// 删除失败如实进退出码：壳留在候选落点上，写闸口与 `abandon` 仍按设计跳过它，
 /// 报 0 会让脚本以为现场已经收干净
@@ -109,18 +110,22 @@ fn remove_empty_shells(src: &FileSource, shells: Vec<std::path::PathBuf>) -> ! {
             stale.join(", ")
         )));
     }
+    let mut ours: Vec<&std::path::Path> = Vec::new();
+    let mut foreign: Vec<String> = Vec::new();
     for p in &shells {
         let identity = Journal::read_identity(p)
             .unwrap_or_else(|e| bail_fail(Fail::infra(format!("journal identity header is unreadable: {e}"))));
-        if let Some(why) = crate::dev::scene_mismatch(&identity.fp, &identity.map, &src.fingerprint, &src.loop_mapping) {
-            bail_fail(Fail::refused(format!(
-                "{why} — this empty journal is not removed here; {ROLLBACK_STUCK_REMEDY}"
-            )));
+        match crate::dev::scene_mismatch(&identity, &src.scene()) {
+            None => ours.push(p.as_path()),
+            Some(why) => foreign.push(format!("{} ({why})", p.display())),
         }
+    }
+    for f in &foreign {
+        eprintln!("warning: empty journal {f} — left in place; {ROLLBACK_STUCK_REMEDY}");
     }
     let mut removed = 0;
     let mut failed: Vec<String> = Vec::new();
-    for p in &shells {
+    for p in ours {
         // NotFound 的后置条件（不残留）已经成立；成功删除同时落盘目录项
         if crate::dev::remove_recovery_file(p) {
             removed += 1;
@@ -128,13 +133,18 @@ fn remove_empty_shells(src: &FileSource, shells: Vec<std::path::PathBuf>) -> ! {
             failed.push(p.display().to_string());
         }
     }
+    let kept = if foreign.is_empty() {
+        String::new()
+    } else {
+        format!("; {} shell(s) recorded for another target were left in place", foreign.len())
+    };
     if failed.is_empty() {
         bail_fail(Fail::refused(format!(
-            "nothing to undo ({removed} empty journal shell(s) removed — they held no records)"
+            "nothing to undo ({removed} empty journal shell(s) removed — they held no records){kept}"
         )))
     }
     bail_fail(Fail::refused(format!(
-        "nothing to undo, but {n} empty journal shell(s) could not be removed — they still occupy the candidate spots: {}",
+        "nothing to undo, but {n} empty journal shell(s) could not be removed — they still occupy the candidate spots: {}{kept}",
         failed.join(", "),
         n = failed.len()
     )))
@@ -201,7 +211,7 @@ fn check_replay_entry(src: &FileSource, rec: &JournalRecord) -> EntryCheck {
 /// 顺序完全一致（先回滚后写的，再核先写的）
 ///
 /// 虚拟盘面按起始偏移索引、只在长度相等时复用。不同长度走真盘回读的分支今天是**死路**：
-/// PreImage 的唯一生产者是 `FileSource::write_at`，pre-image 长度恒等于当次写入长度，
+/// PreImage 的唯一生产者是 `WriteSource::write_at`，pre-image 长度恒等于当次写入长度，
 /// 而生产调用点只两类——整扇区写（MBR/GPT，偏移按扇区对齐、长度恒为扇区大小或同一份
 /// 表数组）与 NTFS HiddenSectors 的 4 字节写（偏移 ≡ 0x1C mod 扇区）。起始偏移决定了
 /// 调用点类别，故同一偏移的两条记录长度必相同。失效条件：将来新增一类 journaled 局部
@@ -314,18 +324,16 @@ pub(crate) fn cmd_undo(a: &Args) -> u8 {
         // 与盘上现状相符"，这一道证明"这份历史属于这个目标"，两者都要过
         let identity = Journal::read_identity(&p)
             .unwrap_or_else(|e| bail_fail(Fail::infra(format!("journal identity header is unreadable: {e}"))));
-        if let Some(why) =
-            crate::dev::scene_mismatch(&identity.fp, &identity.map, &src.fingerprint, &src.loop_mapping)
-        {
+        if let Some(why) = crate::dev::scene_mismatch(&identity, &src.scene()) {
             // why 里已经带着"记的是什么、现在是什么"的逐字段差异；这里补的是出路——
             // 与下方逐条核对失败同一句话：把目标恢复成记录时的样子再重跑，或不再需要回滚时 abandon
             bail_fail(Fail::refused(format!("{why} — this journal is not replayed here; {ROLLBACK_STUCK_REMEDY}")));
         }
-        // 身份保障的边界要说给用户听：这个载体一个可比字段都给不出时（真块设备节点、以及
-        // 任何指纹恒零的载体），上面那道核对无从下手——字段没有证据就不参与比较，"没比"
-        // 不能表述成"已验证"。回放实际依靠的是"落点由身份键派生"加下面逐条记录的字节核对。
-        // 有尺寸证据（非 Unix 平台的镜像、以及任何元数据长度可读的载体）时不在此列：那道
-        // 核对确实跑了，只是覆盖的是尺寸这一项
+        // 身份保障的边界要说给用户听：载体一个可比字段都给不出时（`size` 为零且取不到
+        // dev / ino），上面那道核对无从下手——字段没有证据就不参与比较，"没比"不能表述成
+        // "已验证"。回放实际依靠的是"落点由身份键派生"加下面逐条记录的字节核对。
+        // 块设备不在此列：记录侧没有身份时已由 `scene_mismatch` 拒绝，有身份时 ID 与整盘
+        // 容量必然参与比较
         if !src.fingerprint.has_any_evidence() {
             eprintln!(
                 "note: identity boundary — this target exposes none of the fingerprint fields (device id, inode, \
@@ -427,7 +435,11 @@ pub(crate) fn cmd_undo(a: &Args) -> u8 {
         // 仍把它列为现场——回放既然已经成功，这个"有事没做完"的表象必须一并消失。
         // Barrier 型 journal 走不到这里（上方已整体拒绝），Ambiguous 也在挑 journal
         // 时前置拒绝，这里能多删的只有历史候选
-        let mut leftovers = clear_journal_candidates(src.identity.journal_candidates(), &p);
+        let mut leftovers = clear_journal_candidates(
+            src.identity.journal_candidates(),
+            &p,
+            &src.scene(),
+        );
         // 事务的恢复状态随回滚一并释放：这份 journal 记下的表写入已经全部回退，而 checkpoint
         // 描述的是同一个事务的进度——留下来只会描述一个已被回滚掉的世界，让后续 resize 被判成
         // Divergent 而永久拒绝（"什么也没做却被拒绝"）。
@@ -471,15 +483,18 @@ pub(crate) fn cmd_undo(a: &Args) -> u8 {
 }
 
 /// 回放成功后清掉**全部** journal 候选，不止被回放的那份 `picked`。被回放的那份
-/// 无条件删除（使命已结束）；其余候选只有首部是本工具 journal（`DEJL` 加可读版本，
-/// v4 残卷也算）才删——那说明它是我们自己写下的残卷（pick_journal 口径的"读不出"，
-/// 损伤已逐条告警过），留着会让下一次 undo 报 Unreadable、abandon 仍列为现场。
-/// 认不出版本或是陌生内容都不删：候选路径按命名派生只说明"可能是我们的落点"，
-/// 证明不了"是我们的文件"——`Journal::open` 拒绝采纳陌生文件，这里同判据保留并
-/// 告警，交 abandon 人工处置。
+/// 无条件删除（使命已结束）；其余候选要同时满足两条才删：首部是本工具 journal
+/// （`DEJL` 加可读版本，v4 残卷也算），且头里的身份与本目标相符。前者说明它是
+/// 我们自己写下的残卷（pick_journal 口径的"读不出"，损伤已逐条告警过），后者说明
+/// 它记的不是别的目标——候选路径按命名派生只说明"可能是我们的落点"，证明不了
+/// "是我们的文件"。任一条不成立都保留并告警，交 abandon 人工处置。
 ///
 /// 返回值是删不掉的路径：调用方据此把出口降到"完成但待办"
-fn clear_journal_candidates(candidates: &[std::path::PathBuf], picked: &std::path::Path) -> Vec<String> {
+fn clear_journal_candidates(
+    candidates: &[std::path::PathBuf],
+    picked: &std::path::Path,
+    actual: &crate::dev::SceneIdentity,
+) -> Vec<String> {
     let mut failed = Vec::new();
     for cand in candidates {
         if cand == picked {
@@ -498,12 +513,26 @@ fn clear_journal_candidates(candidates: &[std::path::PathBuf], picked: &std::pat
             Ok(Journal::is_own_header(&hdr))
         });
         match probe {
-            Ok(true) => {
-                eprintln!("removing stale journal candidate {}", cand.display());
-                if !crate::dev::remove_recovery_file(cand) {
-                    failed.push(cand.display().to_string());
+            Ok(true) => match Journal::read_identity(cand) {
+                Ok(id) => {
+                    if let Some(why) = crate::dev::scene_mismatch(&id, actual) {
+                        eprintln!(
+                            "warning: {} is a diskedit journal recorded for another target ({why}) — left in place; \
+                             release it with `diskedit abandon` if it is no longer needed",
+                            cand.display()
+                        );
+                        continue;
+                    }
+                    eprintln!("removing stale journal candidate {}", cand.display());
+                    if !crate::dev::remove_recovery_file(cand) {
+                        failed.push(cand.display().to_string());
+                    }
                 }
-            }
+                Err(e) => eprintln!(
+                    "warning: {} starts like a diskedit journal but its identity header is unreadable ({e}) — left in place",
+                    cand.display()
+                ),
+            },
             Ok(false) => {
                 eprintln!(
                     "warning: {} does not start with a diskedit journal header — left in place; \
@@ -540,8 +569,12 @@ mod tests {
     /// 这里也记全零——两侧都无证据时身份核对不参与，测试因此聚焦在回放本身。
     /// 身份不符的拒绝路径在 CLI 层测：`cmd_undo` 的失败出口是 process::exit，
     /// 单元测试里跑不出"拒绝之后还能继续断言"的形态
-    fn jid() -> crate::dev::JournalIdentity {
-        crate::dev::JournalIdentity { fp: Default::default(), map: None }
+    fn jid() -> crate::dev::SceneIdentity {
+        crate::dev::SceneIdentity {
+            fp: Default::default(),
+            map: None,
+            proof: crate::dev::IdentityProof::Inode,
+        }
     }
 
     fn open_src(img: &std::path::Path) -> FileSource {
@@ -555,7 +588,6 @@ mod tests {
             size,
             is_block: false,
             journal: None,
-            ownership: None,
             fingerprint: Default::default(),
             loop_mapping: None,
         }
@@ -958,7 +990,8 @@ mod tests {
         // 陌生文件：落点命名匹配，但内容不是本工具的 journal——不删
         std::fs::write(&foreign, b"not-a-journal").unwrap();
 
-        super::clear_journal_candidates(&[picked.clone(), stale.clone(), foreign.clone()], &picked);
+        let id = jid();
+        super::clear_journal_candidates(&[picked.clone(), stale.clone(), foreign.clone()], &picked, &id);
         assert!(!picked.exists(), "the replayed journal must be removed");
         assert!(!stale.exists(), "our unreadable residue must be removed after replay");
         assert!(foreign.exists(), "a file without our magic must be left in place");

@@ -56,19 +56,19 @@ pub(crate) fn pending_relocation(src: &FileSource, grow_part: u32) -> Result<boo
     has_pending_relocation(src, &g, grow_part)
 }
 
-pub(crate) fn rsize(src: &mut FileSource, part: u32, start: u64, end: u64, chunk: u64, no_fs: bool, log: &mut dyn FnMut(&str)) -> Outcome {
+pub(crate) fn rsize(src: &mut WriteSource, part: u32, start: u64, end: u64, chunk: u64, no_fs: bool, log: &mut dyn FnMut(&str)) -> Outcome {
     let (g, repair) = gpt_policy::resolve_geometry(src).unwrap().unwrap();
     resize_part(src, &g, repair, part, start, end, chunk, no_fs, log)
 }
 
-pub(crate) fn ap(src: &mut FileSource, plan: &Plan, chunk: u64, no_fs: bool, log: &mut dyn FnMut(&str)) -> Outcome {
+pub(crate) fn ap(src: &mut WriteSource, plan: &Plan, chunk: u64, no_fs: bool, log: &mut dyn FnMut(&str)) -> Outcome {
     let (g, _repair) = gpt_policy::resolve_geometry(src).unwrap().unwrap();
     apply(src, &g, plan, chunk, no_fs, log)
 }
 
 /// make_plan 边界：多 movable 尾部打包（末→首、末端对齐）、swap 标记、LUKS 拒绝、
 /// 尾部空间不足拒绝（总 movable 超出目标之后的容量）
-pub(crate) fn plan_fixture(entries: &[(u32, [u8; 16], u64, u64)]) -> (FileSource, std::path::PathBuf) {
+pub(crate) fn plan_fixture(entries: &[(u32, [u8; 16], u64, u64)]) -> (WriteSource, std::path::PathBuf) {
     let ss = 512u64;
     let data = vec![0u8; 16 * 1024 * 1024];
     let mut cur = Cursor::new(data);
@@ -92,7 +92,7 @@ pub(crate) fn plan_fixture(entries: &[(u32, [u8; 16], u64, u64)]) -> (FileSource
     std::fs::write(&tmp, cur.into_inner()).unwrap();
     let f = std::fs::OpenOptions::new().read(true).write(true).open(&tmp).unwrap();
     let size = std::fs::metadata(&tmp).unwrap().len();
-    let mut src = FileSource {
+    let mut src = WriteSource::unowned(FileSource {
         identity: crate::dev::TargetIdentity::resolve_image(&tmp),
         file: f,
         path: tmp.clone(),
@@ -100,19 +100,18 @@ pub(crate) fn plan_fixture(entries: &[(u32, [u8; 16], u64, u64)]) -> (FileSource
         size,
         is_block: false,
         journal: None,
-        ownership: None,
         fingerprint: Default::default(),
         loop_mapping: None,
-    };
+    });
     // gptman 只写 GPT 结构，保护 MBR 需自行补——load_gpt 以前者为前置
-    crate::table::ensure_protective_mbr(&mut src).unwrap();
+    crate::table::ensure_protective_mbr(&mut src, ss).unwrap();
     (src, tmp)
 }
 
-pub(crate) fn plan_open(path: &std::path::Path) -> FileSource {
+pub(crate) fn plan_open(path: &std::path::Path) -> WriteSource {
     let f = std::fs::OpenOptions::new().read(true).write(true).open(path).unwrap();
     let size = std::fs::metadata(path).unwrap().len();
-    FileSource {
+    WriteSource::unowned(FileSource {
         identity: crate::dev::TargetIdentity::resolve_image(path),
         file: f,
         path: path.into(),
@@ -120,10 +119,9 @@ pub(crate) fn plan_open(path: &std::path::Path) -> FileSource {
         size,
         is_block: false,
         journal: None,
-        ownership: None,
         fingerprint: Default::default(),
         loop_mapping: None,
-    }
+    })
 }
 
 /// 把盘上主头的 AlternateLBA 指到一个早于容器末端的值（构造"需要修复"的表）
