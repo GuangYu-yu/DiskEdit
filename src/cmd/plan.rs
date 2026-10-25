@@ -69,7 +69,7 @@ pub(crate) fn cmd_plan_apply(cmd: &str, a: &Args) -> crate::cmd::CmdResult {
     if cmd == "plan" {
         // 这一段只读：plan 不写盘，故按只读命令打开——否则一块正被使用的盘上
         // 连 `plan` 都跑不出计划
-        let mut src = open_target_ro(a).unwrap_or_else(|f| bail_fail(f));
+        let src = open_target_ro(a).unwrap_or_else(|f| bail_fail(f));
         // 解析一次（构造点即拒绝条目重叠），随后的续传判定与规划共用它
         let (g, repair) = crate::gpt_policy::require_gpt_geometry(&src, cmd).unwrap_or_else(|f| bail_fail(f));
         // 只读快照
@@ -80,7 +80,7 @@ pub(crate) fn cmd_plan_apply(cmd: &str, a: &Args) -> crate::cmd::CmdResult {
         .unwrap_or_else(|f| bail_fail(f));
         // 恢复感知：盘上有未收尾的搬移作业时，plan 要打印的就是那份 ckpt 里的计划
         // （现算的 delta 与 ckpt 不一致，会撞上恢复校验）
-        let plan = match movepart::make_plan_resuming(&mut src, &g, repair, grow) {
+        let plan = match movepart::make_plan_resuming(&src, &g, repair, grow) {
             Ok(p) => p,
             Err(f) => bail_fail(f),
         };
@@ -134,7 +134,7 @@ fn apply_cmd(a: &Args, pref: PartSelector) -> crate::outcome::Outcome {
         pref,
     )
     .unwrap_or_else(|f| bail_fail(f));
-    let plan = match movepart::make_plan_resuming(&mut src, &g, repair, grow) {
+    let plan = match movepart::make_plan_resuming(&src, &g, repair, grow) {
         Ok(p) => p,
         Err(f) => bail_fail(f),
     };

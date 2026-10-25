@@ -19,11 +19,12 @@ pub(crate) fn preflight_lvm_tools(grow_lv: bool, needs_loop: bool) -> Result<(),
     tools.iter().try_for_each(|t| crate::fsops::require_tool(t))
 }
 
-/// 分区扩容成功后的 LVM 链（仅块设备）：pvresize 吸收全部新增空间；--grow-lv 把本次新增
-/// 传给目标 LV（--lv 指定或该 PV 上唯一顶层 LV），向下取整到 VG extent，不消费原有空闲。
+/// 分区扩容成功后的 LVM 链（仅块设备）：pvresize 吸收全部新增空间；--grow-lv 把**该 PV 上
+/// 尚未分配的 extent** 交给目标 LV（--lv 指定或该 PV 上唯一顶层 LV）。
 /// lvextend 按容量扩，分配源由 LVM 决定，不限于本 PV。
 /// 后置条件：pvresize 后 `pvs` 的 dev_size 必须覆盖整段分区。`pv_size` 是 PV 可用
-/// 尺寸（extent 对齐与 PV 元数据使其不必等于设备尺寸），只随输出记录，不作为判据
+/// 尺寸（extent 对齐与 PV 元数据使其不必等于设备尺寸），只随输出记录，不作为判据。
+/// 增量是 0 时（中断重跑：分区已是新尺寸）不猜扩多少——见下面 `delta_bytes == 0` 的分支
 #[cfg(target_os = "linux")]
 pub(crate) fn lvm_grow_chain(part_dev: &str, expected_bytes: u64, delta_bytes: u64, grow_lv: bool, want_lv: Option<&str>) -> Result<(), LvmError> {
     crate::lvm::pv_resize(part_dev)?;
@@ -36,8 +37,8 @@ pub(crate) fn lvm_grow_chain(part_dev: &str, expected_bytes: u64, delta_bytes: u
         )));
     }
     println!(
-        "pvs {part_dev}: dev_size={} pv_size={} pe_start={} pv_pe_count={}",
-        pv.dev_size, pv.pv_size, pv.pe_start, pv.pv_pe_count
+        "pvs {part_dev}: dev_size={} pv_size={} pe_start={} pv_pe_count={} pv_pe_alloc_count={}",
+        pv.dev_size, pv.pv_size, pv.pe_start, pv.pv_pe_count, pv.pv_pe_alloc_count
     );
     if !grow_lv {
         return Ok(());
@@ -71,18 +72,35 @@ pub(crate) fn lvm_grow_chain(part_dev: &str, expected_bytes: u64, delta_bytes: u
         },
     };
     let ext = crate::lvm::vg_extent_size(&vg)?;
-    // 本次 resize 没有带来新空间（分区已是请求的终点）：没有可交给 LV 的增量。
-    // 报错会把一次幂等重跑变成非零退出，而 pvresize 已经做完了它该做的部分
+    let free = pv.pv_pe_count.saturating_sub(pv.pv_pe_alloc_count);
+    // 本次运行的增量在中断重跑时是 0（分区已是新尺寸），而 PV 上剩下的未分配 extent
+    // 并**不能**反推当初要扩多少——它们可能本来就被有意留着。两种猜法各错一半：按增量
+    // 猜（0）会让 LV 永久少一截却报成功，按剩余量猜会把没被请求的空间并进 LV。缺的是
+    // 一个盘上没有的事实，于是报出来由人决定，不替用户二选一
     if delta_bytes == 0 {
-        println!("no new space was added by this resize — {path} left unchanged");
-        return Ok(());
-    }
-    let n = delta_bytes / ext;
-    if n == 0 {
+        if free == 0 {
+            println!("{path} already covers what {part_dev} offers — nothing to extend");
+            return Ok(());
+        }
         return Err(LvmError::Failed(format!(
-            "added {delta_bytes} bytes < one VG extent ({ext} bytes) — LV left unchanged"
+            "{part_dev} already carries its new size, so this run has no amount to add, while {free} extent(s) on it are unallocated — the amount an interrupted resize meant for {path} is not recorded on disk, and extending by whatever is free would also take space nobody asked for. If the LV is already the size you want, nothing is missing; otherwise extend it explicitly (lvextend -l +<N> -r {path}) and rerun to confirm"
         )));
     }
+    // 增量是本次请求本身。想扩的量超出 PV 能给的量时不能只扩一半就报成功：
+    // 那正是"表已经变了、LV 少一截、命令说完成"的形态，只是换了个触发条件
+    let want = delta_bytes / ext;
+    if want == 0 {
+        return Err(LvmError::Failed(format!(
+            "added {delta_bytes} bytes, less than one extent ({ext} bytes) — LV left unchanged"
+        )));
+    }
+    if want > free {
+        return Err(LvmError::Failed(format!(
+            "added {delta_bytes} bytes = {want} extents of {ext} bytes, but {part_dev} has only {free} unallocated extent(s) — {path} would stay {} extent(s) short, so it was left unchanged",
+            want - free
+        )));
+    }
+    let n = want;
     crate::lvm::lv_extend(&path, n)?;
     println!("lvextend -l +{n} -r {path} done (lv {name})");
     Ok(())

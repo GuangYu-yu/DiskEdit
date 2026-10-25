@@ -32,18 +32,33 @@ pub fn require_root() -> Result<(), FsError> {
     }
 }
 
+/// 外部工具的搜索目录，固定，不取调用环境的 `PATH`。
+///
+/// 这些工具以 root 运行，而 `PATH` 由调用者决定（`sudo` 默认保留它，包装脚本与
+/// 服务单元也能设）：按它解析等于让调用者决定"跑哪个二进制"，再把它透传给子进程，
+/// 连工具自己调的助手程序也一起落在调用者的目录里。固定表是 `sudo` 的 secure_path
+/// 口径——这些目录在正常发行版上只归 root 可写。解析（[`find_tool`]）与执行
+/// （[`tool_command`]）用同一份表：两处各按一个来源找，就等于"检查的"与"跑的"可能不是同一个。
+///
+/// 工具不在 FHS 目录里时（NixOS 的 `/run/current-system/sw/bin`、装进 `/opt` 的
+/// 发行版包），由打包者在**构建时**用 `DISKEDIT_TOOL_PATH` 换掉这张表。取编译期
+/// 常量而不是运行时变量：让调用环境决定搜索目录，与直接读 `PATH` 是同一件事，
+/// 只是换了个名字
+const TOOL_PATH: &str = match option_env!("DISKEDIT_TOOL_PATH") {
+    Some(p) => p,
+    None => "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+};
+
 /// 工具存在性守卫：执行前 fail-fast 确认工具存在且可执行
 pub(crate) fn find_tool(name: &str) -> Result<PathBuf, FsError> {
-    let path = std::env::var_os("PATH")
-        .ok_or_else(|| FsError::missing("PATH unset — cannot locate required tools"))?;
-    for dir in std::env::split_paths(&path) {
+    for dir in std::env::split_paths(std::ffi::OsStr::new(TOOL_PATH)) {
         let p = dir.join(name);
         // 需可执行：存在但无 x 位时继续向后找，避免错误推迟到 spawn 才以裸 EACCES 冒出
         if p.is_file() && is_executable(&p) {
             return Ok(p);
         }
     }
-    Err(FsError::missing(format!("required tool not found in PATH: {name}")))
+    Err(FsError::missing(format!("required tool not found in the system tool path ({TOOL_PATH}): {name}")))
 }
 
 /// 工具存在性预检：调用点在**首次写盘之前**确认后置条件所需的工具齐备时用它，
@@ -66,17 +81,16 @@ pub(crate) fn is_executable(_p: &std::path::Path) -> bool {
     true
 }
 
-/// 外部命令的唯一构造函数：可执行路径按 PATH 解析，环境按"只保留 PATH 与 LC_ALL=C"净化。
+/// 外部命令的唯一构造函数：可执行路径按固定工具表解析（[`TOOL_PATH`]），环境按
+/// "只保留 PATH 与 LC_ALL=C"净化。
 ///
 /// 环境整体清空的原因：`LD_PRELOAD`、`IFS`、`MALLOC_*` 一类变量能改变工具行为乃至把
 /// 代码注入子进程，而它们全由调用环境决定。PATH 必须保留——工具常再调自己的助手程序；
-/// LC_ALL 固定为 C，各工具的输出格式才可解析。调用点只负责 args 与 stdio
+/// 但它必须是**上面那张固定的表**，不是调用者的 PATH，否则子进程的助手程序同样由调用者
+/// 挑。LC_ALL 固定为 C，各工具的输出格式才可解析。调用点只负责 args 与 stdio
 pub(crate) fn tool_command(tool: &str) -> Result<Command, FsError> {
     let mut cmd = Command::new(find_tool(tool)?);
-    cmd.env_clear().env("LC_ALL", "C");
-    if let Some(path) = std::env::var_os("PATH") {
-        cmd.env("PATH", path);
-    }
+    cmd.env_clear().env("LC_ALL", "C").env("PATH", TOOL_PATH);
     Ok(cmd)
 }
 

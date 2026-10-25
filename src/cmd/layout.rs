@@ -474,20 +474,10 @@ pub(crate) fn cmd_create(a: &Args) -> crate::outcome::Outcome {
     // 走 Pending 通道报 PARTIAL（补救提示由 FS 层生成），不在这里手写出口码
     let mut pending = Vec::new();
     if let Some(fstype) = fs_kind {
-        // 屏障的判据是"确实把写盘交给了外部工具"：工具不在时 mkfs 起都没起来（类型
-        // 不认得已在开事务前整体拒绝），盘上只有表写入——那条分区记录仍可整体 undo，
-        // 不落屏障；工具真的跑起来了（可能写了半个 FS）才落屏障，undo 从此拒绝
-        if crate::fsops::mkfs_capability(fstype).is_ok() {
-            src.set_mutation(crate::dev::Mutation::Mkfs);
-            if let Err(e) = src.mark_non_reversible() {
-                bail_fail(Fail::failed(format!(
-                    "partition #{num} was created, but the transaction state could not be persisted: {e} \
-                     — verify with: diskedit info {}; if a recovery record was left behind, release it with: diskedit abandon {}",
-                    a.target, a.target
-                )));
-            }
-        }
-        if let Err(e) = crate::fsops::mkfs(&src, num, fstype) {
+        // 屏障在 fsops::mkfs 内、紧贴第一次擦除：工具缺失或设备建不起来时它一个字节都
+        // 没写，盘上只有表写入——那条分区记录仍可整体 undo，不该落屏障。放在这里则
+        // 连"工具起不来"也会把目标锁进只能 abandon 的现场
+        if let Err(e) = crate::fsops::mkfs(&mut src, num, fstype) {
             // create 没有"原来的 UUID"可保：新分区上的 swap 提示不带 --uuid 占位符
             let dev_hint = crate::dev::part_dev_hint(&src, num, start * lba_bytes);
             let hint = if fstype == MkfsFs::Swap {

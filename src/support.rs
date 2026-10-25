@@ -177,7 +177,7 @@ pub(crate) fn kernel_resync(src: &FileSource) -> bool {
         return true;
     }
     // 本层只取"过期与否"：stale 的用户文案是固定句（见 Outcome::report），不携带 errno
-    crate::ioctl::blkrrpart(&src.file).is_ok()
+    src.reread_partitions().is_ok()
 }
 
 /// 非 Linux 存根：返回值**不是**"重读成功"的事实——非 Linux 目标没有内核分区视图

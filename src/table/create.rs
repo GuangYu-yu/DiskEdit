@@ -190,12 +190,15 @@ pub fn create_mbr(src: &mut WriteSource) -> io::Result<()> {
     lba0[446..510].fill(0);
     lba0[510] = 0x55;
     lba0[511] = 0xAA;
-    src.write_at(0, &lba0)?;
     // 与解析侧同一套候选扇区大小：容器 ss 之外的候选说明旧 GPT 可能按另一种扇区
-    // 落盘，签名会落在那个候选的 LBA1 上
+    // 落盘，签名会落在那个候选的 LBA1 上。**先清这些，再把 LBA0 交出去**：清掉它们
+    // 留下的中间态只是"这处没有 GPT 头"，而先写 LBA0 会在 `at == ss` 的位置造出
+    // "新 msdos 表 + 可解析的 GPT 主头"——`GptDamaged`，工具内没有修复入口
     let mut cleared = Vec::new();
+    let lba1_whole = src.size >= 2 * ss;
     for at in candidate_sector_sizes(ss) {
-        if src.size < at + GPT_SIGNATURE.len() as u64 {
+        // ss 这一处：目标装得下整扇区 1 时并入下面那次合并写，否则只能单独清签名
+        if (at == ss && lba1_whole) || src.size < at + GPT_SIGNATURE.len() as u64 {
             continue;
         }
         let mut sig = [0u8; GPT_SIGNATURE.len()];
@@ -205,9 +208,22 @@ pub fn create_mbr(src: &mut WriteSource) -> io::Result<()> {
             cleared.push(at);
         }
     }
+    // LBA0 与 LBA1 上"不再有 GPT 主头"是同一个事实的两半：分两次写出去，中断正好停在
+    // GptDamaged 上。拼进一个缓冲、一次 write，中断只可能停在"旧表"或"新表"
+    let mut head = lba0.clone();
+    if lba1_whole {
+        let mut lba1 = vec![0u8; ss as usize];
+        src.read_at(ss, &mut lba1)?;
+        if lba1[..GPT_SIGNATURE.len()] == *GPT_SIGNATURE {
+            lba1[..GPT_SIGNATURE.len()].fill(0);
+            cleared.push(ss);
+            head.extend_from_slice(&lba1);
+        }
+    }
+    src.write_at(0, &head)?;
     src.sync_all()?;
-    // 读回复核：LBA0 与签名清除的写被缓存/镜像层丢掉时，新盘会在返回 Ok 之后被判成
-    // GptDamaged，而工具内没有修复入口
+    // 读回复核：比的是**意图**（新 LBA0，以及被清掉签名的那些位置），不是刚写下去的
+    // 缓冲——写被缓存/镜像层丢掉时，盘会在返回 Ok 之后被判成 GptDamaged
     let mut got = vec![0u8; lba0.len()];
     src.read_at(0, &mut got).map_err(|e| {
         io::Error::new(e.kind(), format!("MBR read-back failed: {e} — the write may not have landed"))

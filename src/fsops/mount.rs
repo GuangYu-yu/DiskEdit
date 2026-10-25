@@ -336,10 +336,10 @@ const LOOP_GET_STATUS64: libc::c_int = 0x4C05;
 
 /// 一个 loop 记录的 backing 身份（三项都来自 `LOOP_GET_STATUS64`）
 #[cfg(target_os = "linux")]
-struct LoopBacking {
-    dev: u64,
-    ino: u64,
-    rdev: u64,
+pub(crate) struct LoopBacking {
+    pub(crate) dev: u64,
+    pub(crate) ino: u64,
+    pub(crate) rdev: u64,
 }
 
 /// 要在 loop 的 backing 里找的那个对象
@@ -411,13 +411,26 @@ fn backing_identity_from_sysfs(name: &str) -> io::Result<Option<LoopBacking>> {
 /// `/dev` 属于 mount namespace，只说明本进程确认不了
 #[cfg(target_os = "linux")]
 fn loop_backing_identity(name: &str) -> io::Result<Option<LoopBacking>> {
+    loop_backing_of_node(Path::new(&format!("/dev/{name}")))
+}
+
+/// 同一个 ioctl，按设备节点路径打开。身份层（[`crate::dev::TargetIdentity::loop_backed`]）
+/// 手里只有打开时的节点路径，而"这个 loop 现在绑的是哪个对象"只能从内核取——
+/// 与占用判定共用这一处，两处各写一遍正是"名字被复用"能混进来的原因
+#[cfg(target_os = "linux")]
+pub(crate) fn loop_backing_of_node(node: &Path) -> io::Result<Option<LoopBacking>> {
     use std::os::unix::io::AsRawFd;
-    let path = format!("/dev/{name}");
-    let f = match std::fs::File::open(&path) {
+    let f = match std::fs::File::open(node) {
         Ok(f) => f,
-        Err(e) if e.kind() == io::ErrorKind::PermissionDenied => return backing_identity_from_sysfs(name),
+        Err(e) if e.kind() == io::ErrorKind::PermissionDenied => {
+            let name = node.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            return backing_identity_from_sysfs(&name);
+        }
         Err(e) => {
-            return Err(io::Error::other(format!("cannot open {path} to verify its backing file: {e}")));
+            return Err(io::Error::other(format!(
+                "cannot open {} to verify its backing file: {e}",
+                node.display()
+            )));
         }
     };
     let mut info: LoopInfo64 = unsafe { std::mem::zeroed() };
@@ -426,7 +439,7 @@ fn loop_backing_identity(name: &str) -> io::Result<Option<LoopBacking>> {
         let e = io::Error::last_os_error();
         return match e.raw_os_error() {
             Some(libc::ENXIO) => Ok(None),
-            _ => Err(io::Error::other(format!("LOOP_GET_STATUS64 on {path} failed: {e}"))),
+            _ => Err(io::Error::other(format!("LOOP_GET_STATUS64 on {} failed: {e}", node.display()))),
         };
     }
     Ok(Some(LoopBacking { dev: info.lo_device, ino: info.lo_inode, rdev: info.lo_rdevice }))
@@ -481,7 +494,7 @@ fn loop_and_partitions(sysdir: &Path, name: &str) -> io::Result<Vec<(String, Pat
 #[cfg(target_os = "linux")]
 pub(crate) fn image_loop_occupancy(src: &FileSource) -> io::Result<Option<LoopOccupancy>> {
     use std::os::unix::fs::MetadataExt;
-    let md = src.file.metadata().map_err(|e| {
+    let md = src.metadata().map_err(|e| {
         io::Error::other(format!("cannot stat the open image to identify it: {e}"))
     })?;
     let mounts = read_mounts()?;
@@ -833,10 +846,17 @@ pub(crate) fn attach_loop(src: &FileSource, off: u64, len: u64) -> Result<String
     #[cfg(unix)]
     if !src.is_block {
         match src.fingerprint.still_names(&img) {
-            Ok(true) => {}
-            Ok(false) => {
+            Ok(Some(true)) => {}
+            Ok(Some(false)) => {
                 return Err(FsError::invalid(format!(
                     "{} no longer names the file this command opened — refusing to map a different file",
+                    img.display()
+                )))
+            }
+            // 无从判断等于没核对过：即将把路径交给 losetup，不拿"大概还是那个文件"去换
+            Ok(None) => {
+                return Err(FsError::invalid(format!(
+                    "no file identity was recorded for {} — refusing to map it without confirming which file it is",
                     img.display()
                 )))
             }

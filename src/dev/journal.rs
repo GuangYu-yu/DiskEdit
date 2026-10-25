@@ -303,6 +303,10 @@ pub struct Journal {
     /// 本份 journal 的记录 CRC 口径。新建即当前版本；采纳 v4 现场时保持 v4，
     /// 追加的记录与该文件既有记录同口径，避免同一文件里混两种 CRC 规则
     pub(crate) format: JournalFormat,
+    /// 当前 mutation 是否已落过屏障。屏障回答的是"这一类改动越界了没有"，同一 mutation 下
+    /// 重复记录不增加任何信息；`write_data_at` 逐 chunk 自带屏障，靠这个标记让每条
+    /// chunk 各落一条屏障不会发生
+    pub(crate) barred: bool,
 }
 
 /// journal 的记录 CRC 口径，版本号即 magic 的尾字节
@@ -447,7 +451,7 @@ impl Journal {
     }
 
     pub(crate) fn at(path: &Path, file: Option<File>, identity: SceneIdentity, format: JournalFormat) -> Self {
-        Journal { file, path: path.to_path_buf(), mutation: Mutation::PartitionTable, identity, format }
+        Journal { file, path: path.to_path_buf(), mutation: Mutation::PartitionTable, identity, format, barred: false }
     }
 
     /// 打开（必要时先校验）落点，**不产生任何新痕迹**：文件已存在则必须是我们自己写的
@@ -607,9 +611,20 @@ impl Journal {
             // 新建文件的目录项也必须落盘：否则断电后 journal 整体消失，而写入已经发生
             best_effort_dir_fsync(&self.path);
             // 建立时的文件身份与创建事件一起记下：commit 只凭路径删不掉已被换成
-            // 另一个文件的落点。取不到元数据时留零指纹——那一侧没有 inode 证据，
-            // 路径仍是唯一凭据（见 `TargetFingerprint`）
-            let fp = f.metadata().map(|m| TargetFingerprint::from_meta(&m)).unwrap_or_default();
+            // 另一个文件的落点。**取不到身份就清掉文件并报错**——留一份零指纹等于给
+            // commit 的删除动作发一张空白凭据，而这一侧猜错的后果是删掉别人的现场
+            let fp = match TargetFingerprint::from_file(&f) {
+                Ok(fp) => fp,
+                Err(e) => {
+                    drop(f);
+                    #[allow(clippy::let_underscore_must_use)] // 清理失败不改变主错误：残留的空文件下次打开会报成占用
+                    let _ = std::fs::remove_file(&self.path);
+                    return Err(io::Error::other(format!(
+                        "cannot read the identity of the journal just created at {}: {e} — no record was made and the file has been removed",
+                        self.path.display()
+                    )));
+                }
+            };
             *CREATED_JOURNAL.lock().unwrap_or_else(|e| e.into_inner()) = Some((self.path.clone(), fp));
             self.file = Some(f);
         }
@@ -627,13 +642,22 @@ impl Journal {
     /// 落一条屏障记录：从这一刻起，当前 mutation 已越过不可回滚点，undo 见到即整体拒绝
     /// （见 [`WriteSource::mark_non_reversible`]）
     pub fn barrier(&mut self) -> io::Result<()> {
+        if self.barred {
+            return Ok(());
+        }
         let rec = JournalRecord { mutation: self.mutation, recovery: RecoveryData::Barrier };
-        self.append(&rec)
+        self.append(&rec)?;
+        self.barred = true;
+        Ok(())
     }
 
     /// 设置后续记录的 mutation。命令层在自己即将做的那类改动发生变化时调用
     /// （例如表项写完后要搬数据、要交给外部 FS 工具）
     pub fn set_mutation(&mut self, m: Mutation) {
+        if self.mutation != m {
+            // 换了一类改动就换了一条不可回滚线：新 mutation 要自己的屏障
+            self.barred = false;
+        }
         self.mutation = m;
     }
 

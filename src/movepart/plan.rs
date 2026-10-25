@@ -138,7 +138,7 @@ pub(crate) fn plan_tail_packed(g: &ValidatedGeometry, repair: RepairAction, grow
 /// 尾打包 plan 的恢复感知版本：ckpt 存在时以 ckpt 的 moves 为准（见 resume_outcome），
 /// 否则照常现算。几何与修复动作由调用方解析（一条命令解析一次，往下传），本函数不读表
 pub fn make_plan_resuming(
-    src: &mut FileSource,
+    src: &FileSource,
     g: &ValidatedGeometry,
     repair: RepairAction,
     grow_part: u32,
@@ -229,7 +229,7 @@ pub enum ShiftIntent {
 /// 计划终点恰等于当前末端，才是同一作业的续跑。几何与修复动作由调用方解析并下传，
 /// 本函数不读表
 pub fn make_plan_shift_resuming(
-    src: &mut FileSource,
+    src: &FileSource,
     g: &ValidatedGeometry,
     repair: RepairAction,
     grow_part: u32,

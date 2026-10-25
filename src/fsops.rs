@@ -4,7 +4,7 @@
 
 mod error;
 mod env;
-mod mount;
+pub(crate) mod mount;
 mod scope;
 mod probe;
 mod swap;
