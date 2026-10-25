@@ -10,14 +10,48 @@ pub(crate) const HELP: &str = r#"diskedit info <TARGET> [--sector-size N]
   Show partition table and per-partition filesystem identification
   (an LVM PV shows up in the fs field as lvm2_pv; PV space takes effect
   through `resize --grow-lv`). Read-only.
-  --sector-size N overrides the 512B default (raw images)."#;
+  --sector-size N overrides the 512B default (raw images).
+  stdout is JSON in both outcomes; a failure adds an `error` field and keeps
+  the layout fields it could not determine at null."#;
+
+/// 失败路径的 stdout 信封。`info` 的输出是给脚本消费的，调用方不该因为故障发生在
+/// 读表阶段还是识别阶段就换一套解析：键集与成功路径相同，原因进 `error`。
+/// 没有布局可报时布局字段取 null 而不是伪造（`null` = 不知道，`partitions: []` =
+/// 确知没有条目）。退出码仍由 `Fail` 决定——"布局不可得"与"布局可用但某项失败"
+/// 靠 `error` 之外的字段区分
+fn emit_failure(error: &str, src: Option<&FileSource>) {
+    let (ss, size) = match src {
+        Some(s) => (s.sector_size.to_string(), s.size.to_string()),
+        None => ("null".to_string(), "null".to_string()),
+    };
+    println!(
+        "{{\"label\":null,\"damaged\":null,\"sector_size\":{ss},\"size_bytes\":{size},\
+         \"disk_guid\":null,\"partitions\":[],\"error\":\"{}\"}}",
+        json_escape(error)
+    );
+}
+
+/// 先落信封、再走统一出口：stdout 与 stderr 说同一句话，措辞只在 `Fail` 里拼一次
+fn fail_after_envelope(f: Fail, src: Option<&FileSource>) -> ! {
+    let msg = match &f {
+        Fail::Refused(m) | Fail::Infra(m) | Fail::Failed(m) => m.clone(),
+    };
+    emit_failure(&msg, src);
+    bail_fail(f)
+}
 
 pub(crate) fn cmd_info(a: &Args) -> u8 {
     // info 只看整盘布局：`:N` 指定了也会被静默忽略，用户会误以为输出是单分区的
     if let Some(n) = a.part {
-        bail_fail(Fail::refused(format!("`info` reports the whole target — drop :{n}")));
+        // 命令级拒绝同样走信封；参数解析阶段的拒绝（未知旗标、非法 --sector-size）在进入
+        // 本函数之前就按所有命令一致的出口退出，那里不产 JSON
+        fail_after_envelope(Fail::refused(format!("`info` reports the whole target — drop :{n}")), None);
     }
-    let src = open_target_ro(a).unwrap_or_else(|f| bail_fail(f));
+    let src = match open_target_ro(a) {
+        Ok(s) => s,
+        // 目标打不开时没有扇区大小与容量可报，信封的这两个字段为 null
+        Err(f) => fail_after_envelope(f, None),
+    };
     // info 对分区节点不拒绝（只读、观察用途），但必须点明解析对象：分区节点上没有盘级
     // 分区表，FAT/NTFS 引导扇区里形似 MBR 的字节会被当成一张表输出
     if crate::dev::target_is_partition_node(std::path::Path::new(&a.target)) {
@@ -47,7 +81,9 @@ pub(crate) fn cmd_info(a: &Args) -> u8 {
                 table::GptError::InvalidHeader(_) => "invalid GPT header",
                 table::GptError::Io(_) => "I/O error",
             };
-            bail_fail(Fail::infra(format!("parse failed ({kind}): {e}")));
+            let msg = format!("parse failed ({kind}): {e}");
+            emit_failure(&msg, Some(&src));
+            bail_fail(Fail::infra(msg));
         }
     };
     if let Some(g) = gpt {
@@ -140,7 +176,11 @@ pub(crate) fn cmd_info(a: &Args) -> u8 {
         // 否则"不可操作"会连带变成"不可观察"
         let raw = match table::parse_mbr_raw(&src) {
             Ok(m) => m,
-            Err(e) => bail_fail(Fail::infra(format!("parse failed: {e}"))),
+            Err(e) => {
+                let msg = format!("parse failed: {e}");
+                emit_failure(&msg, Some(&src));
+                bail_fail(Fail::infra(msg));
+            }
         };
         match raw {
             // 仅签名、零记录也判 mbr（`new --table msdos` 的合法初始态）
@@ -198,7 +238,11 @@ pub(crate) fn cmd_info(a: &Args) -> u8 {
                 // 不得降级成 "none"——那会把"读不出来"报成"没有表"
                 let damaged = match table::table_label(&src) {
                     Ok(l) => l.is_damaged(),
-                    Err(e) => bail_fail(Fail::infra(format!("label probe failed: {e}"))),
+                    Err(e) => {
+                        let msg = format!("label probe failed: {e}");
+                        emit_failure(&msg, Some(&src));
+                        bail_fail(Fail::infra(msg));
+                    }
                 };
                 let name = if damaged { "gpt" } else { "none" };
                 // 保护布局成立却找不到任何候选（512/4096）下的头：逻辑块更大的镜像
@@ -220,19 +264,20 @@ pub(crate) fn cmd_info(a: &Args) -> u8 {
             }
         }
     }
-    println!("{out}");
     for n in &stale_notes {
         eprintln!("{n}");
     }
-    // 识别失败如实升级结论：JSON 照常输出（结构化字段在），但退出码不伪装成功
+    // 识别失败如实升级结论：布局本身有效，保留它并补 `error` 键——既不把已读出的布局
+    // 降级成空信封，也不让失败文档与成功文档的键集分叉；退出码不伪装成功
     if !identify_errors.is_empty() {
         for e in &identify_errors {
             eprintln!("error: {e}");
         }
-        return Fail::infra("filesystem identification failed on one or more partitions")
-            .into_outcome()
-            .exit_code();
+        let msg = "filesystem identification failed on one or more partitions";
+        println!("{},\"error\":\"{}\"}}", &out[..out.len() - 1], json_escape(msg));
+        return Fail::infra(msg).into_outcome().exit_code();
     }
+    println!("{out}");
     // 非 raw 容器格式识别（qcow2/VMDK/VDI/VHD/VHDX 魔数，qemu docs block-drivers）：字节直译
     // 假设不成立（guest LBA 经容器内分配表间接映射），本工具无法处理，改用 qemu-nbd 映射为
     // 块设备（modprobe nbd max_part / qemu-nbd -c/-d，见 qemu 官方工具文档）

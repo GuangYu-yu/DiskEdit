@@ -63,7 +63,9 @@ impl FileSource {
     #[cfg(target_os = "linux")]
     pub(crate) fn block_open_extras(identity: &TargetIdentity, node: &Path) -> io::Result<(TargetFingerprint, Option<(u64, u64)>)> {
         let fp = if identity.kind == TargetKind::Image {
-            TargetFingerprint::from_meta(&std::fs::metadata(&identity.base)?)
+            // 指纹按**打开后的数据路径**取（loop 的 backing 名字由已打开句柄解析），
+            // 不按 sysfs 字符串：那个名字是读取者的视角，不是对象本身
+            TargetFingerprint::from_meta(&std::fs::metadata(identity.data_path())?)
         } else {
             TargetFingerprint::default()
         };

@@ -19,7 +19,7 @@
 
 use std::fs::{File, OpenOptions};
 
-use crate::dev::TargetIdentity;
+use crate::dev::{TargetFingerprint, TargetIdentity};
 use crate::outcome::Fail;
 
 /// 持有期间目标归本进程独占；析构即释放。
@@ -42,9 +42,14 @@ impl TargetLock {
     /// 取目标的独占所有权：在锁落点上取非阻塞独占锁。调用方随后**必须**按自己的
     /// 路径打开目标（块设备的写打开是 `O_EXCL`，见模块注释）。
     ///
+    /// `expected` 是调用方**已打开**句柄的指纹：第二道凭据按身份里的数据路径重新打开，
+    /// 若那条路径在打开之后被改名或替换，重新打开的是另一个文件——锁会落在别人身上，
+    /// 而写入仍走原句柄。有 inode 证据时按已打开句柄核对，不符即拒绝（fail-closed）；
+    /// 拿不到指纹的调用点（`abandon`、在线路径）传 `None`，只保留锁文件这一道凭据
+    ///
     /// 只有两种结局：拿到锁，或返回错误。**没有"降级为不持锁"这条路径**——锁落点由
     /// 身份恒给出（见 [`crate::dev::TargetIdentity::lock_path`]），建立失败即拒绝
-    pub(crate) fn acquire(identity: &TargetIdentity) -> Result<Self, Fail> {
+    pub(crate) fn acquire(identity: &TargetIdentity, expected: Option<&TargetFingerprint>) -> Result<Self, Fail> {
         let path = identity.lock_path();
         // 落点目录可能尚不存在：块设备的锁在 state_dir 下，而 state_dir 来自配置，
         // 任何一次调用都可能是首次。尽力创建即可——真正的失败在下面打开时以完整路径暴露
@@ -75,13 +80,34 @@ impl TargetLock {
         #[cfg(unix)]
         let image = match identity.image_data_path() {
             Some(data) => match OpenOptions::new().read(true).open(data) {
-                Ok(f) => match f.try_lock() {
-                    Ok(()) => Some(f),
-                    Err(std::fs::TryLockError::WouldBlock) => return Err(Self::busy(data)),
-                    Err(std::fs::TryLockError::Error(e)) => {
-                        return Err(Fail::infra(format!("cannot lock the target {}: {e}", data.display())));
+                Ok(f) => {
+                    // 路径可能已不再指向打开时的那个文件：比对已打开句柄的 inode 证据，
+                    // 不符即拒绝——此时"锁住了数据文件"这句话对写入的那个对象不成立
+                    if let Some(want) = expected.filter(|f| f.has_inode_evidence()) {
+                        use std::os::unix::fs::MetadataExt;
+                        let meta = f.metadata().map_err(|e| {
+                            Fail::infra(format!("cannot identify the target {} to take the inode lock: {e}", data.display()))
+                        })?;
+                        if (meta.dev(), meta.ino()) != (want.dev, want.ino) {
+                            return Err(Fail::refused(format!(
+                                "{} no longer names the file that was opened (now dev:{} ino:{}, opened dev:{} ino:{}) \
+                                 — refusing to lock a different file than the one being written",
+                                data.display(),
+                                meta.dev(),
+                                meta.ino(),
+                                want.dev,
+                                want.ino,
+                            )));
+                        }
                     }
-                },
+                    match f.try_lock() {
+                        Ok(()) => Some(f),
+                        Err(std::fs::TryLockError::WouldBlock) => return Err(Self::busy(data)),
+                        Err(std::fs::TryLockError::Error(e)) => {
+                            return Err(Fail::infra(format!("cannot lock the target {}: {e}", data.display())));
+                        }
+                    }
+                }
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
                 Err(e) => {
                     return Err(Fail::infra(format!(
@@ -95,7 +121,11 @@ impl TargetLock {
         // 非 unix 平台没有 advisory 锁：LockFileEx 是强制的，锁整个文件会让本进程随后
         // 经另一个句柄的读写撞上 ERROR_LOCK_VIOLATION（见字段注释），故只留锁文件
         #[cfg(not(unix))]
-        let image: Option<File> = None;
+        let image: Option<File> = {
+            // 第二道凭据不做：指纹在这里没有比对对象
+            let _ = expected;
+            None
+        };
         Ok(TargetLock { _file: file, _image: image })
     }
 
@@ -138,16 +168,16 @@ mod tests {
         let lock_path = identity_for(&img).lock_path().to_path_buf();
         let _ = std::fs::remove_file(&lock_path);
 
-        let first = TargetLock::acquire(&identity_for(&img)).expect("the first holder must succeed");
+        let first = TargetLock::acquire(&identity_for(&img), None).expect("the first holder must succeed");
         assert!(lock_path.exists(), "the lock file must be created next to the image");
         assert!(
-            TargetLock::acquire(&identity_for(&img)).is_err(),
+            TargetLock::acquire(&identity_for(&img), None).is_err(),
             "a second holder must not get the same target"
         );
 
         drop(first);
         assert!(lock_path.exists(), "releasing must not delete the lock file");
-        TargetLock::acquire(&identity_for(&img)).expect("a released lock must be re-acquirable");
+        TargetLock::acquire(&identity_for(&img), None).expect("a released lock must be re-acquirable");
 
         cleanup(&img);
     }
@@ -166,13 +196,13 @@ mod tests {
             cleanup(&img);
             return;
         }
-        let held = TargetLock::acquire(&identity_for(&img)).expect("the first holder must succeed");
+        let held = TargetLock::acquire(&identity_for(&img), None).expect("the first holder must succeed");
         assert!(
-            TargetLock::acquire(&identity_for(&alias)).is_err(),
+            TargetLock::acquire(&identity_for(&alias), None).is_err(),
             "a hard link names the same data — it must not get a second lock"
         );
         drop(held);
-        TargetLock::acquire(&identity_for(&alias)).expect("a released lock must be re-acquirable through the alias");
+        TargetLock::acquire(&identity_for(&alias), None).expect("a released lock must be re-acquirable through the alias");
 
         cleanup(&img);
         let _ = std::fs::remove_file(&alias);

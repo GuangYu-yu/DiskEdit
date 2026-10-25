@@ -47,7 +47,10 @@ pub(crate) fn ceil_to_unit(v: i64, unit: i64) -> i64 {
 
 /// mkfs 前残留签名擦除：分区内固定区间整段写零，一张表覆盖已知备份超级块，
 /// 不依赖旧 FS 识别。区间表布局取自 GParted erase_filesystem_signatures()
-/// （GParted_Core.cc:4108-4120），是该工具的自定策略而非 FS/磁盘规范。
+/// （GParted_Core.cc:4215-4231），是该工具的自定策略而非 FS/磁盘规范。
+/// 负偏移以分区**字节长度**（末字节 + 1）为基准、取整在分区相对坐标上进行
+/// （同函数 4251-4256：`floor_size(get_byte_length() + offset, rounding)`；
+/// 末端按扇区上取整，两端裁剪到字节长度内），与本实现 `part_len` 的语义一致。
 /// offset 为负 = 距分区尾，rounding = 对齐粒度；起点下取整到扇区界、末端上取整到
 /// 扇区界，两端裁剪到分区界内，空区间丢弃、与已入表末项相同的相邻区间跳过。
 pub(crate) fn erase_ranges(part_len: u64, ss: u64) -> Vec<(u64, u64)> {

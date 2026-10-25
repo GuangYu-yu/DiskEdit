@@ -263,6 +263,14 @@ pub(crate) fn parse_args() -> (String, Args) {
                 };
                 help_cmd(&topic);
             }
+            // 未识别的以 `-` 开头的 token 是旗标笔误，不能降级成位置参数：值槽全程不校验
+            // 前缀（`set img:1 name --bogs` 会把分区名改成 `--bogs`）。`-10G` 这类相对尺寸
+            // 是唯一合法的例外，判据与 SIZE 语法同源
+            arg if arg.starts_with('-') && parse_size_delta(arg).is_none() => {
+                bail_fail(Fail::refused(format!(
+                    "unknown flag `{arg}` — run `diskedit help` for the accepted flags (a value starting with `-` is only accepted as a relative size, e.g. -10G)"
+                )))
+            }
             _ => positional.push(arg),
         }
     }

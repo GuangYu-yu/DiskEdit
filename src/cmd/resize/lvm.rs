@@ -55,6 +55,12 @@ pub(crate) fn lvm_grow_chain(part_dev: &str, expected_bytes: u64, delta_bytes: u
         },
     };
     let ext = crate::lvm::vg_extent_size(&vg)?;
+    // 本次 resize 没有带来新空间（分区已是请求的终点）：没有可交给 LV 的增量。
+    // 报错会把一次幂等重跑变成非零退出，而 pvresize 已经做完了它该做的部分
+    if delta_bytes == 0 {
+        println!("no new space was added by this resize — {path} left unchanged");
+        return Ok(());
+    }
     let n = delta_bytes / ext;
     if n == 0 {
         return Err(LvmError::Failed(format!(

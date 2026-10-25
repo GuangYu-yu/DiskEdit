@@ -117,6 +117,26 @@ pub fn resize_online(
     match size {
         // 扩满现分区：分区不动，FS 工具直接吃满（内核视图无需变更）
         None => {
+            // FS 工具以 /dev 节点传递的内核尺寸为准：内核视图过期时（上一次 partx/BLKPG
+            // 失败、或表已缩而内核仍持旧大尺寸）grow 会空跑到旧尺寸、shrink 会把 FS 扩过
+            // 盘上分区末端。盘上表长度与内核不一致即在任何 FS 写入之前拒绝
+            let disk_len = match crate::gpt_policy::partition_bytes(&disk, t.pno) {
+                Ok((_, len)) => len,
+                Err(f) => return f.into_outcome(),
+            };
+            if disk_len != t.part_len_bytes {
+                eprintln!(
+                    "warning: the kernel reports partition {} as {} bytes but the on-disk table says {}",
+                    t.pno, t.part_len_bytes, disk_len
+                );
+                let mut o = Outcome::applied_with(vec![fs_pending(format!(
+                    "the kernel partition view is stale (kernel {} bytes, table {} bytes) — refresh it \
+                     (partprobe / partx) and re-run so the filesystem grows to the on-disk size",
+                    t.part_len_bytes, disk_len
+                ))]);
+                o.mark_kernel_stale();
+                return o;
+            }
             if let Err(e) = refuse_btrfs_multi_device(&t, fstype) {
                 return Fail::from(e).into_outcome();
             }

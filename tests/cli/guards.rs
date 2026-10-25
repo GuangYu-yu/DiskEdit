@@ -13,11 +13,14 @@ fn cli_negative_paths() {
          String::from_utf8_lossy(&out.stderr).into_owned())
     };
 
-    // 目标不存在 → 30（基础设施失败），不是"无表"
+    // 目标不存在 → 30（基础设施失败），不是"无表"；失败也产出 JSON 信封，
+    // 拿不到的字段为 null，原因进 error（调用方不必按故障阶段换一套解析）
     let missing = dir.join("nope.img");
-    let (c, _, e) = run(&["info", missing.to_str().unwrap()]);
+    let (c, out, e) = run(&["info", missing.to_str().unwrap()]);
     assert_eq!(c, 30, "missing target must be infra failure: {e}");
     assert!(e.contains("open failed"), "{e}");
+    let v: serde_json::Value = serde_json::from_str(out.trim()).expect("open failure must still emit JSON");
+    assert!(v["size_bytes"].is_null() && v["error"].is_string(), "{out}");
 
     // 有 GPT 结构但保护 MBR 缺失 → 盘型可辨、形状受损：报 "gpt (damaged)"，
     // 写命令对非 gpt/msdos 标签一律拒绝（不会被当 superfloppy 整盘扩）
@@ -78,9 +81,13 @@ fn cli_negative_paths() {
         raw[67 * 512 + 10] ^= 0xFF; // 备条目数组（末块 99 − 跨度 32 = LBA 67）
         std::fs::write(&bad2, &raw).unwrap();
     }
-    let (c, _, e) = run(&["info", bad2.to_str().unwrap()]);
+    let (c, out, e) = run(&["info", bad2.to_str().unwrap()]);
     assert_eq!(c, 30, "both copies damaged must be reported: {e}");
     assert!(e.contains("parse failed"), "{e}");
+    // 读表阶段失败：信封与成功路径同键集，未取得的布局字段为 null，原因进 error
+    let v: serde_json::Value = serde_json::from_str(out.trim()).expect("info must emit valid JSON on failure too");
+    assert!(v["label"].is_null() && v["damaged"].is_null(), "{out}");
+    assert!(v["error"].as_str().unwrap_or_default().contains("parse failed"), "{out}");
     let (c, _, e) = run(&["resize", &format!("{}:1", bad2.display()), "10M"]);
     assert_eq!(c, 30, "{e}");
     // 同一判据延伸到 plan/apply/check：表非法在任何入口都是 30
@@ -201,6 +208,44 @@ fn flag_contract_fail_closed() {
     let (c, _, e) = run(&["info", img_s, "--yes"]);
     assert_eq!(c, 10, "unconsumed flag must be refused: {e}");
     assert!(e.contains("not a valid option for `info`"), "{e}");
+}
+
+/// 值槽里的旗标笔误必须拒绝：`set img:1 name --bogs` 里的 `--bogs` 若被当成位置参数，
+/// 就会以 0 退出并把分区名改成一个以 `--` 开头的串（值路径不校验前缀）
+#[test]
+fn a_flag_typo_in_a_value_slot_is_refused() {
+    let dir = std::env::temp_dir().join(format!("diskedit_fc3_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let exe = env!("CARGO_BIN_EXE_DiskEdit");
+    let img = dir.join("a.img");
+    std::fs::write(&img, vec![0u8; 8 * 1024 * 1024]).unwrap();
+    let img_s = img.to_str().unwrap();
+    let run = |args: &[&str]| -> (i32, String, String) {
+        let out = Command::new(exe).args(args).output().unwrap();
+        (out.status.code().unwrap_or(-1),
+         String::from_utf8_lossy(&out.stdout).into_owned(),
+         String::from_utf8_lossy(&out.stderr).into_owned())
+    };
+
+    let (c, _, e) = run(&["new", img_s, "--table", "msdos", "--yes"]);
+    assert_eq!(c, 0, "{e}");
+    let (c, _, e) = run(&["add", img_s, "--start", "2048", "--end", "4095"]);
+    assert_eq!(c, 0, "{e}");
+    let before = std::fs::read(&img).unwrap();
+
+    let (c, _, e) = run(&["set", &format!("{img_s}:1"), "name", "--bogs"]);
+    assert_eq!(c, 10, "a mistyped flag in a value slot must be refused: {e}");
+    assert!(e.contains("unknown flag `--bogs`"), "{e}");
+    assert_eq!(std::fs::read(&img).unwrap(), before, "the refusal must not write");
+
+    // 相对尺寸是唯一合法的 `-` 开头值：`resize sf -1M` 不该被当成旗标笔误
+    let sf = dir.join("sf.img");
+    std::fs::write(&sf, vec![0u8; 8 * 1024 * 1024]).unwrap();
+    let (c, _, e) = run(&["resize", sf.to_str().unwrap(), "-1M", "--no-fs"]);
+    assert!(!e.contains("unknown flag"), "a relative size must not be read as a flag: {e}");
+    assert_eq!(c, 10, "superfloppy --no-fs is refused for its own reason: {e}");
+
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// 旗标契约的其余几条 fail-closed：MBR 不接受 --allow-move、superfloppy 上 --no-fs

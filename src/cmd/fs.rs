@@ -114,12 +114,15 @@ pub(crate) fn cmd_mkfs(a: &Args) -> Outcome {
     src.set_mutation(Mutation::Mkfs);
     src.mark_non_reversible()
         .unwrap_or_else(|e| bail_fail(Fail::infra(format!("cannot persist the transaction state: {e}"))));
-    // FS 层的失败分类在此换算成出口语义：不认得的类型 ⇒ 10（改参数有解），
-    // 工具缺失 / 环境故障 ⇒ 30
+    // 屏障之后的失败不再有"确定未写盘"的出口：类型与占用已在屏障前判过，能到达这里的
+    // 只有 mkfs 自身的失败，而它可能已经在目标上留下字节。FsError 的分类在此压平成
+    // Failed（报告带"盘可能已改变"），让 10/Infra 的"没写"承诺不落在一个已落屏障的现场上
     match fsops::mkfs(&src, part, fstype) {
         // 分区表没动，事务已完成：无待办、无需内核重读
         Ok(()) => Outcome::applied_with(Vec::new()),
-        Err(e) => bail_fail(Fail::from(e)),
+        Err(e) => bail_fail(match Fail::from(e) {
+            Fail::Refused(m) | Fail::Infra(m) | Fail::Failed(m) => Fail::failed(m),
+        }),
     }
 }
 
@@ -168,6 +171,9 @@ pub(crate) fn cmd_resizefs(a: &Args) -> u8 {
             bail_fail(Fail::refused(format!("size {s:?} only applies to the online form — offline resizes the filesystem into its partition")));
         }
         let Some(pref) = a.part else { crate::args::usage() };
+        // 载体必须是整盘：分区节点首扇区的引导字节可能被当成一张 MBR，按 :N 取到的区间
+        // 与实际分区无关。判据与 mkfs/resize/set 同源
+        refuse_partition_node_target("resizefs", &a.target);
         let src = open_target_owned(a).unwrap_or_else(|f| bail_fail(f));
         // 锁下快照
         let part = crate::gpt_policy::resolve_part(&src, pref).unwrap_or_else(|f| bail_fail(f));
@@ -232,6 +238,9 @@ pub(crate) fn cmd_resizefs(a: &Args) -> u8 {
 
 pub(crate) fn cmd_check(a: &Args) -> u8 {
     let Some(pref) = a.part else { crate::args::usage() };
+    // e2fsck/ntfsfix 会写回 FS：分区节点上的 :N 不是盘级表项，键按伪 MBR 解析会落到
+    // 该分区自己的引导扇区。判据与 mkfs/resize/set 同源
+    refuse_partition_node_target("check", &a.target);
     let src = open_target_owned(a).unwrap_or_else(|f| bail_fail(f));
     // 锁下快照
     let part = crate::gpt_policy::resolve_part(&src, pref).unwrap_or_else(|f| bail_fail(f));
