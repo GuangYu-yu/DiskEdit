@@ -206,6 +206,12 @@ pub(crate) fn cmd_resize_msdos(a: &Args, pref: PartSelector, req: &SizeRequest, 
     let (target, _) = resolve_size_request(req, cur_bytes).unwrap_or_else(|f| bail_fail(f));
     let shrinking = target.is_some_and(|t| t < cur_bytes);
     check_pv_intent(part, fstype, is_pv, shrinking, a.grow_lv, a.no_fs).unwrap_or_else(|f| bail_fail(f));
+    // PV 链的工具必须在写表之前齐备（与 GPT 分支同一处、同一判据）：pvresize/pvs 及
+    // grow-lv 的 lvs/vgs/lvextend 只在表提交之后启动，缺工具那时才发现就只剩 PARTIAL
+    #[cfg(target_os = "linux")]
+    if is_pv {
+        preflight_lvm_tools(a.grow_lv, !is_block).unwrap_or_else(|e| bail_fail(Fail::from(e)));
+    }
     // 占用复核在锁下（离线选择时的探测在锁前）：首次落盘前确认分区仍空闲，与 GPT 分支闸同源。
     // 起点不变、末端不变或只增的请求不挪动上层 DM 栈映射的扇区，按 Extend 放行；缩容要求无持有者
     let edit = if grow_to_end || target.is_some_and(|b| b >= cur_bytes) {

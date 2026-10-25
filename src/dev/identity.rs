@@ -5,8 +5,10 @@ use super::*;
 /// 目标载体的稳定指纹：镜像用 (st_dev, st_ino, size)；真块设备用 (整盘容量, 设备 ID 哈希)。
 /// 恢复现场用它确认"还是当时那个目标"。字段的证据强度按载体分级，比对时**逐字段**判断
 /// （见 [`scene_mismatch`]）：`size` 镜像取文件长度、块设备取整盘容量；`dev` / `ino` 是
-/// Unix 扩展接口，非 Unix 平台与真块设备的节点恒零；`id` 只在块设备上有值。零值表示该字段
-/// **没有证据**，不是"匹配"
+/// 文件层身份：Unix 取 (st_dev, st_ino)，Windows 取 (卷序列号, 文件索引)——两者都由文件系统
+/// 在**对象**上维护，改路径、路径被别的文件复用都不变。Windows 这一对只能从已打开的句柄
+/// 问到（见 [`TargetFingerprint::from_file`]）。真块设备节点恒零；其余平台也恒零。
+/// `id` 只在块设备上有值。零值表示该字段 **没有证据**，不是"匹配"
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub struct TargetFingerprint {
     pub dev: u64,
@@ -17,9 +19,60 @@ pub struct TargetFingerprint {
     pub id: u64,
 }
 
+/// 文件层身份：Windows 的 `BY_HANDLE_FILE_INFORMATION` 给出 (卷序列号, 文件索引)，
+/// 标准库的 `Metadata` 上还没有稳定接口（`windows_by_handle` 仍未稳定），只能从句柄问
+#[cfg(windows)]
+mod win {
+    use std::os::windows::io::AsRawHandle;
+
+    #[repr(C)]
+    #[derive(Default)]
+    struct FileTime {
+        low: u32,
+        high: u32,
+    }
+
+    #[repr(C)]
+    #[derive(Default)]
+    struct ByHandleFileInformation {
+        attributes: u32,
+        creation: FileTime,
+        last_access: FileTime,
+        last_write: FileTime,
+        volume_serial: u32,
+        size_high: u32,
+        size_low: u32,
+        links: u32,
+        index_high: u32,
+        index_low: u32,
+    }
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetFileInformationByHandle(
+            handle: *mut core::ffi::c_void,
+            info: *mut ByHandleFileInformation,
+        ) -> i32;
+    }
+
+    pub(super) fn identity(file: &std::fs::File) -> std::io::Result<(u64, u64)> {
+        let mut info = ByHandleFileInformation::default();
+        // SAFETY: 句柄由 `file` 在整个调用期间持有；结构体是 `#[repr(C)]` 且先置零，
+        // 窗口按 `BY_HANDLE_FILE_INFORMATION` 的布局写满它
+        let ok = unsafe {
+            GetFileInformationByHandle(file.as_raw_handle(), &mut info)
+        };
+        if ok == 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok((info.volume_serial as u64, ((info.index_high as u64) << 32) | info.index_low as u64))
+    }
+}
+
 impl TargetFingerprint {
-    /// 有没有 **inode 级**证据：dev / ino 任一非零。两者同源（`MetadataExt`），且只在 Unix 上、
-    /// 且目标不是真块设备节点时才有意义（节点 inode 不承诺稳定），故成对判断
+    /// 有没有 **inode 级**证据：dev / ino 任一非零。两者同源（Unix 的 `st_dev`/`st_ino`、
+    /// Windows 的卷序列号/文件索引），且只在目标不是真块设备节点时才有意义（节点身份不承诺
+    /// 稳定），故成对判断
     pub fn has_inode_evidence(&self) -> bool {
         self.dev != 0 || self.ino != 0
     }
@@ -40,6 +93,10 @@ impl TargetFingerprint {
         self.has_inode_evidence() || self.has_size_evidence() || self.has_id_evidence()
     }
 
+    /// 只有 `Metadata` 时的指纹。写入路径一律走 [`Self::from_file`]（Windows 的文件身份
+    /// 只能从句柄问）；这里只留给手上没有句柄、且平台能从 `Metadata` 给出身份的地方，
+    /// Windows 上它不存在——留着一个恒返回零指纹的入口，等于给"看起来有身份"再造一个来源
+    #[cfg(not(windows))]
     pub fn from_meta(meta: &std::fs::Metadata) -> Self {
         #[cfg(unix)]
         {
@@ -48,29 +105,59 @@ impl TargetFingerprint {
         }
         #[cfg(not(unix))]
         {
-            // size 出自 `Metadata::len()`，非 Unix 平台同样可读；dev / ino 没有对应接口，留零
+            // size 出自 `Metadata::len()`，同样可读；dev / ino 在这个平台上没有对应接口，
+            // 留零。消费端据此走"没有文件身份证据"那一支（见 [`Self::still_names`]）
             Self { dev: 0, ino: 0, size: meta.len(), id: 0 }
         }
     }
 
-    /// `path` 现在是否仍指向这份指纹描述的对象。无 inode 证据（真块设备节点、非 Unix）
-    /// 时无从判断，按"是"处理——此时路径本身就是唯一凭据。调用点都是"把路径交给外部
-    /// 工具之前"或"删除自己建的伴随文件之前"的最后一道核对
+    /// 从**已打开的文件**取指纹。Windows 的 (卷序列号, 文件索引) 只能从句柄问到，标准库的
+    /// `Metadata` 上没有稳定接口；Unix 与其余平台等价于 [`Self::from_meta`]。写入路径一律
+    /// 用这个构造，路径在打开之后被换掉也骗不过它
+    pub fn from_file(file: &std::fs::File) -> io::Result<Self> {
+        let meta = file.metadata()?;
+        #[cfg(windows)]
+        {
+            let (dev, ino) = win::identity(file)?;
+            Ok(Self { dev, ino, size: meta.len(), id: 0 })
+        }
+        #[cfg(not(windows))]
+        Ok(Self::from_meta(&meta))
+    }
+
+    /// `path` 现在是否仍指向这份指纹描述的对象：`Some(true)` 是，`Some(false)` 不是，
+    /// **`None` 是"没有任何按文件身份比对的证据"**（真块设备节点、平台给不出文件身份、或取
+    /// 指纹时 stat 失败）。三个答案必须分开：把"无从判断"压成一个具体的布尔值，消费端就只能靠
+    /// 约定去猜，而两个消费端的猜错方向合并起来恰好是"该拦的放行、该删的删掉别人的"
     #[cfg(unix)]
-    pub(crate) fn still_names(&self, path: &Path) -> io::Result<bool> {
+    pub(crate) fn still_names(&self, path: &Path) -> io::Result<Option<bool>> {
         if !self.has_inode_evidence() {
-            return Ok(true);
+            return Ok(None);
         }
         use std::os::unix::fs::MetadataExt;
         let meta = std::fs::metadata(path)?;
-        Ok((meta.dev(), meta.ino()) == (self.dev, self.ino))
+        Ok(Some((meta.dev(), meta.ino()) == (self.dev, self.ino)))
     }
 
-    /// 非 Unix 平台取不到 dev / ino（见本类型的字段说明）：路径是唯一凭据，
-    /// 与 [`Self::has_inode_evidence`] 恒假同口径
-    #[cfg(not(unix))]
-    pub(crate) fn still_names(&self, _path: &Path) -> io::Result<bool> {
-        Ok(true)
+    /// Windows 的判据是 (卷序列号, 文件索引)，与 Unix 的 (dev, ino) 同等力度：两者都由
+    /// 文件系统在对象上维护。任一侧取不到仍是"无从判断"
+    #[cfg(windows)]
+    pub(crate) fn still_names(&self, path: &Path) -> io::Result<Option<bool>> {
+        if !self.has_inode_evidence() {
+            return Ok(None);
+        }
+        let now = Self::from_file(&std::fs::File::open(path)?)?;
+        if !now.has_inode_evidence() {
+            return Ok(None);
+        }
+        Ok(Some((now.dev, now.ino) == (self.dev, self.ino)))
+    }
+
+    /// 其余平台取不到文件层身份（见本类型的字段说明）：与 [`Self::has_inode_evidence`]
+    /// 恒假同口径，一律"无从判断"
+    #[cfg(not(any(unix, windows)))]
+    pub(crate) fn still_names(&self, _path: &Path) -> io::Result<Option<bool>> {
+        Ok(None)
     }
 }
 
@@ -448,6 +535,38 @@ impl TargetIdentity {
         let mut id = crate::dev::FileSource::identity_of_opened_image(&raw, &file, &meta).map_err(|e| {
             format!("cannot bind the recovery state of {} to its backing file: {e}", dev_path.display())
         })?;
+        // sysfs 串只说明"内核认为这个名字是 backing"，而名字可能已被另一个文件复用。
+        // 内核里那条事实是 loop 记下的 backing **对象**（`LOOP_GET_STATUS64` 的
+        // dev / ino / rdev，由 loop_get_status 对 backing 的 f_path 做 vfs_getattr 得到）：
+        // 与刚打开的文件逐个比对，比不上一律拒绝——否则 journal / checkpoint 会落在
+        // 一个与这个 loop 无关的文件旁边
+        {
+            use std::os::unix::fs::MetadataExt;
+            let bound = crate::fsops::mount::loop_backing_of_node(dev_path)
+                .map_err(|e| format!("cannot read the backing object of {}: {e}", dev_path.display()))?
+                .ok_or_else(|| {
+                    format!(
+                        "{} reports no bound backing file — refusing to place its recovery state next to {}",
+                        dev_path.display(),
+                        raw.display()
+                    )
+                })?;
+            // 普通文件 backing 按 (dev, ino) 认，块设备 backing 按设备号认（st_rdev 为 0
+            // 的普通文件不会误命中），与占用判定同一套判据
+            let same_object = if meta.rdev() != 0 {
+                bound.rdev != 0 && bound.rdev == meta.rdev()
+            } else {
+                bound.dev == meta.dev() && bound.ino == meta.ino()
+            };
+            if !same_object {
+                return Err(format!(
+                    "{} is no longer backed by {} (the bound backing is a different object) — \
+                     refusing to derive the target identity from the sysfs path string",
+                    dev_path.display(),
+                    raw.display()
+                ));
+            }
+        }
         let tok = key_token(&raw.to_string_lossy());
         id.journal.push(state_dir().join(format!("{tok}{JOURNAL_SUFFIX}")));
         id.checkpoint.push(state_dir().join(format!("{tok}{CHECKPOINT_SUFFIX}")));

@@ -138,16 +138,18 @@ pub(crate) fn execute_copy(
         pos += len_c;
     }
     fault_copy_before_commit();
+    // 副本的 boot sector 原样带来旧 HiddenSectors，按新起始位置修正必须**先于**表项
+    // 提交：提交与修正之间中断，重跑会被 prepare_copy 的重叠判据挡在门外，副本的
+    // HiddenSectors 永久停在旧值（Windows 会按错的分区偏移认盘）
+    if crate::fsid::identify(src, dst_off, total)? == Some(FsKind::Ntfs) {
+        fix_ntfs_hidden_sectors(src, new_start, ss, log)?;
+    }
     // add_entry_at 自带"写盘前拒绝"语义，但它在本命令的边界之后：数据已经复制过去，
     // 此刻它报什么，对本次调用的结论都只能是"盘可能已改变"
     let num = gpt_policy::add_entry_at(
         src, new_start, new_end, name, p.type_guid, p.unique_guid,
     )
     .map_err(crate::outcome::into_io_error)?;
-    // 副本的 boot sector 原样带来旧 HiddenSectors，按新起始位置修正
-    if crate::fsid::identify(src, dst_off, total)? == Some(FsKind::Ntfs) {
-        fix_ntfs_hidden_sectors(src, new_start, ss, log)?;
-    }
     log(&format!("partition {part} copied to #{num} at {new_start}..{new_end}"));
     Ok(num)
 }

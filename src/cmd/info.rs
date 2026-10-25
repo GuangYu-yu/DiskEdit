@@ -26,7 +26,7 @@ fn emit_failure(error: &str, src: Option<&FileSource>) {
     };
     println!(
         "{{\"label\":null,\"damaged\":null,\"sector_size\":{ss},\"size_bytes\":{size},\
-         \"disk_guid\":null,\"partitions\":[],\"error\":\"{}\"}}",
+         \"disk_guid\":null,\"partitions\":null,\"error\":\"{}\"}}",
         json_escape(error)
     );
 }
