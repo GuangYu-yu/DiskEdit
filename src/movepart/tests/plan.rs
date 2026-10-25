@@ -127,7 +127,7 @@ pub(crate) fn shift_resume_requires_the_same_requested_size() {
 #[test]
 pub(crate) fn make_plan_pack_and_boundaries() {
     const SWAP: [u8; 16] = [0x6D, 0xFD, 0x57, 0x06, 0xAB, 0xA4, 0xC4, 0x43, 0x84, 0xE5, 0x09, 0x33, 0xC8, 0x4B, 0x4F, 0x4F];
-    const LUKS: [u8; 16] = [0x25, 0xCF, 0xD3, 0x7D, 0x31, 0x5C, 0x34, 0x47, 0xAD, 0xBF, 0xA4, 0x7E, 0x95, 0x4A, 0x9D, 0x24];
+    const LUKS: [u8; 16] = table::LUKS_TYPE_GUID;
     // root 2048..6143 | home 6144..10239 | swap 10240..12287
     let (mut src, _p1) = plan_fixture(&[
         (1, [0x11; 16], 2048, 6143),
@@ -313,6 +313,7 @@ pub(crate) fn refused_paths_do_not_write_the_disk() {
                 new_start: 2048, new_end: 4095, fs_shrunk: false, chunks_done: 0, chunk_bytes: chunk,
                 fp: Default::default(),
                 map: None,
+                fstype: None,
             };
             atomic_write_ckpt(&ckpt_path, &rs.serialize()).unwrap();
             let plan = make_plan(&mut src, 1).unwrap();

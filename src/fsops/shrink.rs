@@ -97,7 +97,8 @@ pub fn shrink_fs(src: &FileSource, part: u32, fstype: Option<FsKind>, new_bytes:
             let leak = with_scope_device_ranged(src, &DeviceScope::Partition(part), off, len, |dev| {
                 with_mount(dev, |mnt| {
                     // 裸数字 = 绝对字节数、必须挂载态（man btrfs-filesystem resize）
-                    let out = run("btrfs", &["filesystem", "resize", &new_bytes.to_string(), mnt])?;
+                    let out = run("btrfs", &["filesystem", "resize", &new_bytes.to_string(), mnt])
+                        .map_err(|e| tool_write_maybe_started("btrfs resize", mnt, e))?;
                     if !out.status.success() {
                         return Err(FsError::CommandFailed(format!(
                             "btrfs shrink failed: {} (minimum size via `btrfs inspect-internal min-dev-size` on a mount)",

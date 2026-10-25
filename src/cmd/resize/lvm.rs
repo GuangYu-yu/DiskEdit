@@ -3,6 +3,19 @@
 #[cfg(target_os = "linux")]
 use super::*;
 
+/// `lvm_grow_chain` 会启动的外部命令清单。写表之前按它预检：链条在表已提交之后才跑，
+/// 缺工具那时才发现，盘已改，只剩 PARTIAL 加手工补救
+#[cfg(target_os = "linux")]
+pub(crate) fn preflight_lvm_tools(grow_lv: bool) -> Result<(), crate::fsops::FsError> {
+    // pvs 供 pvresize 后的 dev_size 核对；grow-lv 另需 lvs/vgs 定位 LV 与 extent、lvextend 扩 LV
+    let tools: &[&str] = if grow_lv {
+        &["pvresize", "pvs", "lvs", "vgs", "lvextend"]
+    } else {
+        &["pvresize", "pvs"]
+    };
+    tools.iter().try_for_each(|t| crate::fsops::require_tool(t))
+}
+
 /// 分区扩容成功后的 LVM 链（仅块设备）：pvresize 吸收全部新增空间；--grow-lv 把本次新增
 /// 传给目标 LV（--lv 指定或该 PV 上唯一顶层 LV），向下取整到 VG extent，不消费原有空闲。
 /// lvextend 按容量扩，分配源由 LVM 决定，不限于本 PV。

@@ -39,6 +39,16 @@ pub(crate) fn err_text<T>(r: io::Result<T>) -> String {
     }
 }
 
+/// "这是不是本工具的 journal"看的是 `DEJL` 前缀与可读版本，不是当前版本的完整 magic：
+/// 旧版本现场同样是本工具的文件，按当前版本比对会把它们当陌生内容留在原地
+#[test]
+pub(crate) fn own_header_covers_every_readable_version() {
+    assert!(Journal::is_own_header(b"DEJL\x04"));
+    assert!(Journal::is_own_header(b"DEJL\x05"));
+    assert!(!Journal::is_own_header(b"DEJL\x03"), "an unreadable version is not provably ours");
+    assert!(!Journal::is_own_header(b"XXXX\x05"), "a foreign magic is not ours");
+}
+
 /// 四态分类的边界：只有 NotFound 是 absent；0 字节残骸与非普通文件也不是现场；
 /// 零记录的头是 shell；半截头与陌生文件是 damaged
 #[test]

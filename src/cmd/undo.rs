@@ -144,14 +144,33 @@ fn remove_empty_shells(src: &FileSource, shells: Vec<std::path::PathBuf>) -> ! {
 /// 对不上是"请求与现状不符"（这次回滚不该做），读不出来是"盘读不动"（做不了）；
 /// 压成一个 bool 会让调用方用同一句话报出两种性质不同的故障
 enum EntryCheck {
-    /// 盘上当前字节等于写后内容（该写入未被回滚），或等于原文（上一次 undo 中断留下的
-    /// 进度——重放同一原文幂等无害）
+    /// 盘上当前字节等于写后内容（该写入未被回滚）、等于原文（上一次 undo 中断留下的
+    /// 进度——重放同一原文幂等无害），或是一条前缀已落地的写（见
+    /// [`matches_journaled_write`]）
     Ok,
     /// 两者都不是：该写入之后有外部改动动过同一段字节（journal 不挡第三方），
     /// 回放会把它覆盖掉
     Mismatch(String),
     /// 这段区间读不出来，无从核对——不得回放
     Unreadable(String),
+}
+
+/// 盘上字节是否与本条写入相容：等于写后内容（未回滚）、等于原文（已回滚，重放幂等），
+/// 或是一条**前缀已落地**的写入——`write_all` 在中途失败或掉电时，落盘的只能是写后
+/// 内容的一段前缀加上其后的原文。第三种形态既不是 after 也不是 pre-image，只按前两者
+/// 判定会把本工具自己没写完的区间报成"外来改动"，让整卷回滚失去出路
+fn matches_journaled_write(now: &[u8], after: &[u8], pre: &[u8]) -> bool {
+    if now == after || now == pre {
+        return true;
+    }
+    if now.len() != after.len() || now.len() != pre.len() {
+        return false;
+    }
+    // 存在 k 使 now[..k] == after[..k] 且 now[k..] == pre[k..]：前缀相符长度 p 与
+    // 后缀相符长度 s 能覆盖整个区间（p + s ≥ len）即存在这样的 k
+    let p = now.iter().zip(after).take_while(|(a, b)| a == b).count();
+    let s = now.iter().zip(pre).rev().take_while(|(a, b)| a == b).count();
+    p + s >= now.len()
 }
 
 fn check_replay_entry(src: &FileSource, rec: &JournalRecord) -> EntryCheck {
@@ -161,7 +180,7 @@ fn check_replay_entry(src: &FileSource, rec: &JournalRecord) -> EntryCheck {
     };
     let mut now = vec![0u8; bytes.len()];
     match src.read_at(*off, &mut now) {
-        Ok(()) if now == *after || now == *bytes => EntryCheck::Ok,
+        Ok(()) if matches_journaled_write(&now, after, bytes) => EntryCheck::Ok,
         Ok(_) => EntryCheck::Mismatch(format!(
             "target no longer matches the journaled write at offset {off} — the disk changed outside this tool \
              (or an interrupted write by this tool itself) after that write; \
@@ -228,7 +247,7 @@ fn verify_replay_plan(src: &FileSource, entries: &[JournalRecord]) -> Result<boo
                 buf
             }
         };
-        if now != *after && now != *bytes {
+        if !matches_journaled_write(&now, after, bytes) {
             return Err(Fail::refused(format!(
                 "target no longer matches the journaled write at offset {off} — the disk changed outside \
                  this tool (or an interrupted write by this tool itself) after that write; \
@@ -452,11 +471,12 @@ pub(crate) fn cmd_undo(a: &Args) -> u8 {
 }
 
 /// 回放成功后清掉**全部** journal 候选，不止被回放的那份 `picked`。被回放的那份
-/// 无条件删除（使命已结束）；其余候选只有以本工具 magic 开头才删——那说明它是
-/// 我们自己写下的残卷（pick_journal 口径的"读不出"，损伤已逐条告警过），留着会让
-/// 下一次 undo 报 Unreadable、abandon 仍列为现场。陌生内容不删：候选路径按命名
-/// 派生只说明"可能是我们的落点"，证明不了"是我们的文件"——`Journal::open` 拒绝
-/// 采纳陌生文件，这里同判据保留并告警，交 abandon 人工处置。
+/// 无条件删除（使命已结束）；其余候选只有首部是本工具 journal（`DEJL` 加可读版本，
+/// v4 残卷也算）才删——那说明它是我们自己写下的残卷（pick_journal 口径的"读不出"，
+/// 损伤已逐条告警过），留着会让下一次 undo 报 Unreadable、abandon 仍列为现场。
+/// 认不出版本或是陌生内容都不删：候选路径按命名派生只说明"可能是我们的落点"，
+/// 证明不了"是我们的文件"——`Journal::open` 拒绝采纳陌生文件，这里同判据保留并
+/// 告警，交 abandon 人工处置。
 ///
 /// 返回值是删不掉的路径：调用方据此把出口降到"完成但待办"
 fn clear_journal_candidates(candidates: &[std::path::PathBuf], picked: &std::path::Path) -> Vec<String> {
@@ -468,14 +488,14 @@ fn clear_journal_candidates(candidates: &[std::path::PathBuf], picked: &std::pat
             }
             continue;
         }
-        // 读得出但首部不是本工具 magic ⇒ 陌生文件，保留交人工处置；
+        // 读得出但首部不是本工具 journal ⇒ 陌生文件，保留交人工处置；
         // 读不出来是另一回事（打不开 / 读不满 magic 长）——那不是"内容不像我们的"，
         // 报成后者会把用户引去查一个并不存在的陌生文件
         let probe = std::fs::File::open(cand).and_then(|mut f| {
             use std::io::Read;
             let mut hdr = [0u8; Journal::MAGIC.len()];
             f.read_exact(&mut hdr)?;
-            Ok(hdr == *Journal::MAGIC)
+            Ok(Journal::is_own_header(&hdr))
         });
         match probe {
             Ok(true) => {
@@ -546,6 +566,23 @@ mod tests {
         p.push(format!("diskedit_undo_{tag}_{}.journal", std::process::id()));
         let _ = std::fs::remove_file(&p);
         p
+    }
+
+    /// 相容形态有三种：写后内容、原文（上一次回滚的进度），以及一次没写完的写留下的
+    /// "after 前缀 + pre 后缀"。外来改动不属于任何一种，必须继续拒绝
+    #[test]
+    fn journaled_write_accepts_a_torn_prefix_but_not_a_foreign_mix() {
+        let after = [0xAAu8; 8];
+        let pre = [0x11u8; 8];
+        assert!(super::matches_journaled_write(&after, &after, &pre));
+        assert!(super::matches_journaled_write(&pre, &after, &pre), "a replayed region is idempotent");
+        let mut torn = pre;
+        torn[..5].copy_from_slice(&after[..5]);
+        assert!(
+            super::matches_journaled_write(&torn, &after, &pre),
+            "the landed prefix of this tool's own write must stay replayable"
+        );
+        assert!(!super::matches_journaled_write(&[0x22u8; 8], &after, &pre), "a foreign edit is not a torn write");
     }
 
     /// 四态挑选：空壳只在没有任何可读记录时成为结论；损坏候选不否决唯一可用的记录，

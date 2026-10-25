@@ -47,7 +47,7 @@ pub(crate) fn find_tool(name: &str) -> Result<PathBuf, FsError> {
 }
 
 /// 工具存在性预检：调用点在**首次写盘之前**确认后置条件所需的工具齐备时用它，
-/// 避免"表已提交、FS 步才发现缺工具"。当前唯一消费者是 Linux 在线路径
+/// 避免"表已提交、FS 步才发现缺工具"。消费者是 Linux 在线路径与 PV 收尾链的写表前预检
 #[cfg(target_os = "linux")]
 pub(crate) fn require_tool(name: &str) -> Result<(), FsError> {
     find_tool(name).map(|_| ())
@@ -165,13 +165,18 @@ pub(crate) fn check_e2fsck_for_resize(code: i32) -> Result<(), FsError> {
     }
 }
 
-/// 前序工具（`e2fsck -fp` 一类修复步骤）**可能已经写盘**之后，后一步的启动失败不能再走
-/// `Io`：`Io` 在命令层映射为 Infra，语义是"确定未写盘"（见 `outcome::From<FsError>`）。
-/// 启动不起来只说明这一次 spawn 没跑成，反推不出盘没被前序步骤改过
+/// 前序步骤（`e2fsck -fp` 一类修复、临时挂载触发的日志重放等）**可能已经写盘**之后，
+/// 后一步的启动失败不能再走 `Io`：`Io` 在命令层映射为 Infra，语义是"确定未写盘"
+/// （见 `outcome::From<FsError>`）。启动不起来只说明这一次 spawn 没跑成，反推不出盘
+/// 没被前序步骤改过。已启动过的失败（`CommandFailed`）原样返回——它本来就意味着
+/// "可能已改变"
 pub(crate) fn tool_write_maybe_started(tool: &str, dev: &str, e: FsError) -> FsError {
-    FsError::CommandFailed(format!(
-        "{tool} could not be started on {dev}: {e} — a preceding repair step may already have written to it"
-    ))
+    match e {
+        FsError::CommandFailed(_) => e,
+        e => FsError::CommandFailed(format!(
+            "{tool} could not be started on {dev}: {e} — an earlier step may already have written to it"
+        )),
+    }
 }
 
 /// e2fsck 退出码判定——check 语境。检查命令的本职就是修复：0（干净）、1（已修复）

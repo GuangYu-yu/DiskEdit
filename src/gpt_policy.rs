@@ -210,6 +210,13 @@ pub fn require_gpt_geometry(src: &FileSource, verb: &str) -> Result<(ValidatedGe
     resolve_geometry(src)?.ok_or_else(|| Fail::refused(format!("{verb} requires a GPT target")))
 }
 
+/// 首次写盘前的最后一道：盘上的表仍是决策期读到的那一份。窗口里第三方改过条目即拒绝；
+/// 此刻本层尚未写盘，`Refused` 的"确定未写盘"成立（等到 commit 里才发现时，修复步骤
+/// 可能已经写过头部，只能报 `Failed`）
+fn refuse_if_table_changed(src: &FileSource, g: &ValidatedGeometry) -> Result<(), Fail> {
+    g.ensure_entries_unchanged(src).map_err(|e| Fail::refused(e.to_string()))
+}
+
 // ---------- 表项编排（"读 → 判 → 修复 → 提交"） ----------
 //
 // 这些函数编排的是策略层的三步（解析出几何 → 事前拒绝判定 → 修复 + 提交），
@@ -544,6 +551,7 @@ pub fn add_entry_at(
         };
     })
     .map_err(|e| Fail::infra(format!("geometry edit rejected: {e}")))?;
+    refuse_if_table_changed(src, &g)?;
     // 拒绝判定已全部结束，首次写盘从这里开始
     apply_repair(src, &repair)?;
     g.commit(src)?;
@@ -559,6 +567,7 @@ pub fn rename_entry(src: &mut FileSource, part: u32, name: &str) -> Result<(), F
     let i = live_index(g.entries(), part)?;
     g.update_entry(i, |e| e.partition_name = name.into())
         .map_err(|e| Fail::infra(format!("geometry edit rejected: {e}")))?;
+    refuse_if_table_changed(src, &g)?;
     // 拒绝判定已全部结束，首次写盘从这里开始
     apply_repair(src, &repair)?;
     Ok(g.commit(src)?)
@@ -574,6 +583,7 @@ pub fn set_type_guid(src: &mut FileSource, part: u32, guid: [u8; 16]) -> Result<
     let i = live_index(g.entries(), part)?;
     g.update_entry(i, |e| e.partition_type_guid = guid)
         .map_err(|e| Fail::infra(format!("geometry edit rejected: {e}")))?;
+    refuse_if_table_changed(src, &g)?;
     // 拒绝判定已全部结束，首次写盘从这里开始
     apply_repair(src, &repair)?;
     Ok(g.commit(src)?)
@@ -675,6 +685,7 @@ pub fn set_gpt_flag(src: &mut FileSource, part: u32, flag: GptFlag, on: bool) ->
         e.attribute_bits = attributes;
     })
     .map_err(|e| Fail::infra(format!("geometry edit rejected: {e}")))?;
+    refuse_if_table_changed(src, &g)?;
     // 拒绝判定已全部结束，首次写盘从这里开始
     apply_repair(src, &repair)?;
     Ok(g.commit(src)?)
@@ -686,6 +697,7 @@ pub fn del_entry(src: &mut FileSource, part: u32) -> Result<(), Fail> {
     let i = live_index(g.entries(), part)?;
     g.update_entry(i, |e| *e = table::empty_entry())
         .map_err(|e| Fail::infra(format!("geometry edit rejected: {e}")))?;
+    refuse_if_table_changed(src, &g)?;
     // 拒绝判定已全部结束，首次写盘从这里开始
     apply_repair(src, &repair)?;
     g.commit(src)?;

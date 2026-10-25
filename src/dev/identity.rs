@@ -48,7 +48,7 @@ impl TargetFingerprint {
 
     /// `path` 现在是否仍指向这份指纹描述的对象。无 inode 证据（真块设备节点、非 Unix）
     /// 时无从判断，按"是"处理——此时路径本身就是唯一凭据。调用点都是"把路径交给外部
-    /// 工具之前"的最后一道核对（losetup 的 backing、第二道锁的重新打开）
+    /// 工具之前"或"删除自己建的伴随文件之前"的最后一道核对
     #[cfg(unix)]
     pub(crate) fn still_names(&self, path: &Path) -> io::Result<bool> {
         if !self.has_inode_evidence() {
@@ -57,6 +57,13 @@ impl TargetFingerprint {
         use std::os::unix::fs::MetadataExt;
         let meta = std::fs::metadata(path)?;
         Ok((meta.dev(), meta.ino()) == (self.dev, self.ino))
+    }
+
+    /// 非 Unix 平台取不到 dev / ino（见本类型的字段说明）：路径是唯一凭据，
+    /// 与 [`Self::has_inode_evidence`] 恒假同口径
+    #[cfg(not(unix))]
+    pub(crate) fn still_names(&self, _path: &Path) -> io::Result<bool> {
+        Ok(true)
     }
 }
 
