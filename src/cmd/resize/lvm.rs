@@ -19,8 +19,8 @@ pub(crate) fn preflight_lvm_tools(grow_lv: bool, needs_loop: bool) -> Result<(),
     tools.iter().try_for_each(|t| crate::fsops::require_tool(t))
 }
 
-/// 分区扩容成功后的 LVM 链（仅块设备）：pvresize 吸收全部新增空间；--grow-lv 把**该 PV 上
-/// 尚未分配的 extent** 交给目标 LV（--lv 指定或该 PV 上唯一顶层 LV）。
+/// 分区扩容成功后的 LVM 链（仅块设备）：pvresize 吸收全部新增空间；--grow-lv 把本次新增
+/// 容量折算成 extent 扩目标 LV（--lv 指定或该 PV 上唯一顶层 LV）。
 /// lvextend 按容量扩，分配源由 LVM 决定，不限于本 PV。
 /// 后置条件：pvresize 后 `pvs` 的 dev_size 必须覆盖整段分区。`pv_size` 是 PV 可用
 /// 尺寸（extent 对齐与 PV 元数据使其不必等于设备尺寸），只随输出记录，不作为判据。
