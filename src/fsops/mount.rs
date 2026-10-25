@@ -374,29 +374,22 @@ impl BackingMatch {
 /// 不算探测失败；ioctl 被拒、getattr 失败都无法确认，上抛后由调用方按
 /// fail-closed 拒绝。
 ///
-/// 打不开设备节点（`PermissionDenied`、节点不存在、节点刚被移除的 `ENODEV`）单独处理：
-/// 节点属 root:disk 0660，无 disk 组的用户打不开任何 loop，而建立绑定也发生在同一权限
-/// 类里（loop-control 与 loop 节点同组属）——打不开节点的一方建不出指向本镜像的新绑定，
-/// 该方自己的占用始终可查。把这类失败当探测失败会让非 root 用户、以及"宿主 /sys 可见、
-/// /dev 未建节点"的容器里所有镜像操作报废，故按"没有指向本镜像的绑定"处理。代价是那里
-/// 看不见**别人**已建立的绑定（宿主侧的 loop、或 udev 放开 loop-control 而收紧节点的
-/// 部署）：这条跳过会漏检占用，边界随内核/udev 的权限模型演进
+/// 打不开设备节点时只有一种情形按"没有绑定"跳过：`PermissionDenied`。节点属 root:disk
+/// 0660，无 disk 组的用户打不开任何 loop，而建立绑定也发生在同一权限类里
+/// （loop-control 与 loop 节点同组属）——打不开节点的一方建不出指向本镜像的新绑定，
+/// 该方自己的占用始终可查。把 EACCES 当探测失败会让非 root 用户的所有镜像操作报废。
+/// 其余打开失败都不是"没有绑定"的证据：`/sys` 是全局视图，`/dev` 属于 mount namespace，
+/// 绑定可以是在别的 namespace 或宿主上建立的——节点不存在、`ENODEV`（节点与 sysfs 视图
+/// 不一致）、`EIO` 都只说明本进程确认不了，上抛后由调用方按 fail-closed 拒绝。若 udev
+/// 放开 loop-control 而收紧 loop 节点，EACCES 这条跳过也会漏检绑定；该边界随内核/udev
+/// 的权限模型演进
 #[cfg(target_os = "linux")]
 fn loop_backing_identity(name: &str) -> io::Result<Option<LoopBacking>> {
     use std::os::unix::io::AsRawFd;
     let path = format!("/dev/{name}");
     let f = match std::fs::File::open(&path) {
         Ok(f) => f,
-        // 打不开节点与建不出绑定是同一类：losetup 需要节点本身，节点不存在的一方建不出
-        // 指向本镜像的绑定（`ENODEV` 是节点刚被移除）。这类跳过与上面的 EACCES 同口径，
-        // 否则容器里"宿主 /sys 可见、/dev 未建节点"会让全部镜像操作报废
-        Err(e)
-            if e.kind() == io::ErrorKind::PermissionDenied
-                || e.kind() == io::ErrorKind::NotFound
-                || e.raw_os_error() == Some(libc::ENODEV) =>
-        {
-            return Ok(None);
-        }
+        Err(e) if e.kind() == io::ErrorKind::PermissionDenied => return Ok(None),
         Err(e) => {
             return Err(io::Error::other(format!("cannot open {path} to verify its backing file: {e}")));
         }
@@ -528,6 +521,17 @@ mod tests {
         assert_eq!(std::mem::offset_of!(LoopInfo64, lo_device), 0);
         assert_eq!(std::mem::offset_of!(LoopInfo64, lo_inode), 8);
         assert_eq!(std::mem::offset_of!(LoopInfo64, lo_file_name), 56);
+    }
+
+    /// 打不开节点不等于"没有绑定"：节点不存在只说明本进程确认不了，
+    /// 必须上抛给调用方按 fail-closed 拒绝；能跳过的只有权限不足（EACCES）
+    #[test]
+    fn unopenable_loop_node_is_not_evidence_of_no_binding() {
+        let err = match loop_backing_identity("diskedit-nonexistent-loop") {
+            Err(e) => e,
+            Ok(_) => panic!("an unopenable node must not be read as 'no binding'"),
+        };
+        assert!(err.to_string().contains("cannot open /dev/diskedit-nonexistent-loop"));
     }
 
     /// 跳过 mountinfo 读取失败只在"能证明进程已不引用挂载命名空间"时成立。

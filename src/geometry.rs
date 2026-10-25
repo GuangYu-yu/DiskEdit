@@ -46,6 +46,10 @@ pub struct ValidatedGeometry {
     header: RawHeader,
     /// 分区条目，长度恒等于 `entry_geometry.entry_count`
     entries: Vec<GPTPartitionEntry>,
+    /// 构造时读到的条目，未经本层的编辑：提交前与盘上现状比对的基准
+    decided_entries: Vec<GPTPartitionEntry>,
+    /// 经 [`Self::update_entry`] 改过的槽位下标：比对时这些槽位允许已是目标样子
+    dirty: Vec<usize>,
     entry_geometry: EntryArrayGeometry,
     /// 容器最后一个 LBA（本表 ss 口径）：几何自洽性的上界，也是 checkpoint 的 LBA 上界
     file_last_lba: u64,
@@ -119,7 +123,15 @@ impl ValidatedGeometry {
         }
         // 修复后备份头位于容器末端；无修复动作时盘上值已等于它，赋值是恒等变换
         header.backup_lba = file_last_lba;
-        Ok(Self { ss: g.ss, header, entries: g.entries.clone(), entry_geometry, file_last_lba })
+        Ok(Self {
+            ss: g.ss,
+            header,
+            entries: g.entries.clone(),
+            decided_entries: g.entries.clone(),
+            dirty: Vec::new(),
+            entry_geometry,
+            file_last_lba,
+        })
     }
 
     pub fn first_usable_lba(&self) -> u64 {
@@ -194,6 +206,9 @@ impl ValidatedGeometry {
             }
         }
         self.entries[index] = draft;
+        if !self.dirty.contains(&index) {
+            self.dirty.push(index);
+        }
         Ok(())
     }
 
@@ -212,11 +227,48 @@ impl ValidatedGeometry {
         }
     }
 
+    /// 盘上的条目仍与本几何的依据一致：每个槽位要么是构造时读到的样子，要么（对本层
+    /// 改过的槽位）已是 [`Self::entries`] 里的目标样子。两者都不是的那一条只能来自窗口
+    /// 内的第三方改动——提交写的是快照，不核对就会把它的改动静默覆盖（条目消失、搬移
+    /// 落点按旧几何算）
+    ///
+    /// 窗口的长度由调用点决定：add/rename/set/del 是"读 → 判 → 修复 → 提交"，
+    /// resize 与搬移类命令则跨整个 FS 调整或数据搬移
+    pub(crate) fn ensure_entries_unchanged(&self, src: &crate::dev::FileSource) -> io::Result<()> {
+        let g = crate::table::load_gpt(src)
+            .map_err(crate::table::into_io_error)?
+            .ok_or_else(|| invalid("GPT vanished before the table write"))?;
+        if g.entries.len() != self.decided_entries.len() {
+            return Err(invalid(format!(
+                "GPT entry array holds {} entries but {} were validated — the table changed outside this tool",
+                g.entries.len(),
+                self.decided_entries.len()
+            )));
+        }
+        for (i, entry) in g.entries.iter().enumerate() {
+            if *entry == self.decided_entries[i] {
+                continue;
+            }
+            if self.dirty.contains(&i) && *entry == self.entries[i] {
+                continue;
+            }
+            return Err(invalid(format!(
+                "partition entry #{} changed outside this tool since the table was validated — \
+                 refusing to overwrite it; re-run the command",
+                i + 1
+            )));
+        }
+        Ok(())
+    }
+
     /// 用本几何提交分区表。几何已过构造校验，提交前不重新推导 header/array 的几何
     /// （崩溃安全四结构序列见 `table::commit_table`）。备份头位置（容器末 LBA）取自构造时
     /// 传入的 `file_last_lba`——同一事实不接受第二个来源，调用点不得各自重算一遍
     /// `src.size / ss - 1`
     pub fn commit(&self, src: &mut crate::dev::FileSource) -> io::Result<()> {
+        // 全表写入之前先确认盘上的表仍是本几何的依据（见
+        // [`Self::ensure_entries_unchanged`]）
+        self.ensure_entries_unchanged(src)?;
         crate::table::commit_table(src, self.ss, &self.header, &self.entries, self.file_last_lba)
     }
 }

@@ -21,6 +21,7 @@ pub(crate) fn checkpoint_slot_ownership_is_enforced() {
         fs_shrunk: false, chunks_done: 0, chunk_bytes: chunk,
         fp: Default::default(),
         map: None,
+        fstype: None,
     };
     atomic_write_ckpt(&ckpt_path, &rs.serialize()).unwrap();
     let o = ap(&mut src, &plan, chunk, true, &mut |_| {});
@@ -196,6 +197,7 @@ pub(crate) fn checkpoint_rejects_implausible_chunk_progress() {
         fs_shrunk: false, chunks_done: 1, chunk_bytes: 1024 * 1024,
         fp: Default::default(),
         map: None,
+        fstype: None,
     };
     assert!(RsCheckpoint::deserialize(&rs.serialize(), &lim(128)).is_ok(), "baseline must stay readable");
     // 带 loop 映射与真实指纹的现场同样要原样回读：标志字节与它后面那两个 u64 是一组，
@@ -206,10 +208,12 @@ pub(crate) fn checkpoint_rejects_implausible_chunk_progress() {
         fs_shrunk: false, chunks_done: 1, chunk_bytes: 1024 * 1024,
         fp: crate::dev::TargetFingerprint { dev: 7, ino: 42, size: 1 << 20 },
         map: Some((1024 * 1024, 0)),
+        fstype: Some(FsKind::Ext),
     };
     let back = RsCheckpoint::deserialize(&mapped.serialize(), &lim(128)).expect("mapped checkpoint must round-trip");
     assert_eq!(back.fp, crate::dev::TargetFingerprint { dev: 7, ino: 42, size: 1 << 20 });
     assert_eq!(back.map, Some((1024 * 1024, 0)));
+    assert_eq!(back.fstype, Some(FsKind::Ext), "the filesystem kind must survive the round-trip");
     let mut b = rs.serialize();
     b[65..73].copy_from_slice(&2u64.to_le_bytes()); // chunks_done @ 12+6×8+4+1
     rewrite_crc(&mut b);
@@ -295,6 +299,7 @@ pub(crate) fn checkpoint_rejects_sector_size_mismatch() {
         fs_shrunk: false, chunks_done: 0, chunk_bytes: 1024 * 1024,
         fp: Default::default(),
         map: None,
+        fstype: None,
     };
     assert!(RsCheckpoint::deserialize(&rs.serialize(), &lim(128)).is_ok(), "the baseline must be readable");
     let mut b = rs.serialize();
@@ -413,6 +418,7 @@ pub(crate) fn resize_checkpoint_rejects_malformed_records() {
         fs_shrunk: false, chunks_done: 0, chunk_bytes: 1024 * 1024,
         fp: Default::default(),
         map: None,
+        fstype: None,
     };
     assert!(RsCheckpoint::deserialize(&rs.serialize(), &lim(128)).is_ok(), "the baseline must be readable");
     let rewrite_crc = |b: &mut Vec<u8>| {
@@ -480,6 +486,7 @@ pub(crate) fn resize_ckpt_progress_bound_follows_copy_len() {
         fs_shrunk: false, chunks_done: 0, chunk_bytes: 64 * 1024,
         fp: Default::default(),
         map: None,
+        fstype: None,
     };
     let rewrite_crc = |b: &mut Vec<u8>| {
         let crc_off = b.len() - 4;
@@ -524,6 +531,7 @@ pub(crate) fn foreign_resize_ckpt_refuses_relocation_plans() {
         chunk_bytes: 1024 * 1024,
         fp: Default::default(),
         map: None,
+        fstype: None,
     };
     atomic_write_ckpt(&ckpt_path, &rs.serialize()).unwrap();
 

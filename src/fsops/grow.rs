@@ -183,7 +183,7 @@ pub(crate) fn resize_fs_in(src: &FileSource, scope: &DeviceScope, fstype: Option
         })
         .map(|()| None),
         Some(FsKind::Xfs) => with_scope_device(src, scope, |dev| with_mount(dev, |mnt| {
-            let out = run("xfs_growfs", &[mnt])?;
+            let out = run("xfs_growfs", &[mnt]).map_err(|e| tool_write_maybe_started("xfs_growfs", mnt, e))?;
             if !out.status.success() {
                 return Err(FsError::command("xfs_growfs", &out));
             }
@@ -195,7 +195,8 @@ pub(crate) fn resize_fs_in(src: &FileSource, scope: &DeviceScope, fstype: Option
             let (off, len) = scope_byte_range(src, scope)?;
             refuse_btrfs_multi_device_at(src, off, len)?;
             with_scope_device_ranged(src, scope, off, len, |dev| with_mount(dev, |mnt| {
-                let out = run("btrfs", &["filesystem", "resize", "max", mnt])?;
+                let out = run("btrfs", &["filesystem", "resize", "max", mnt])
+                    .map_err(|e| tool_write_maybe_started("btrfs resize", mnt, e))?;
                 if !out.status.success() {
                     return Err(FsError::command("btrfs resize", &out));
                 }
@@ -218,7 +219,8 @@ pub(crate) fn resize_fs_in(src: &FileSource, scope: &DeviceScope, fstype: Option
                     let want = dev_len.checked_sub(1).ok_or_else(|| {
                         FsError::invalid(format!("vfat device length {dev_len} — cannot derive fallback size"))
                     })?;
-                    out = run("fatresize", &["-s", &want.to_string(), dev])?;
+                    out = run("fatresize", &["-s", &want.to_string(), dev])
+                        .map_err(|e| tool_write_maybe_started("fatresize", dev, e))?;
                 }
                 if !out.status.success() {
                     return Err(FsError::command("fatresize", &out));

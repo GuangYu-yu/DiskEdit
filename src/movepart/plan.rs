@@ -12,22 +12,27 @@ pub fn chunk_bytes(mib: u64) -> io::Result<u64> {
 }
 
 /// 拒绝搬移（起始 LBA 变化）的 GPT 类型 GUID：LUKS/LVM PV——搬移后其元数据语义不明。
-/// 纯扩缩（起点不动、数据不搬）不受此限。swap 不在本表：它在 plan 层有专门处理
+/// 纯扩缩（起点不动、数据不搬）不受此限。swap 不在本判据：它在 plan 层有专门处理
 /// （内容可弃 → 不搬数据、落位后 mkswap 重建），只有 resize-part 的单分区路径会
 /// 一并拒绝它（那里没有重建流程）
-/// 同时匹配磁盘字节序（混合端）与内存自然序，两种布局都拦。
-pub(crate) const FORBIDDEN_TYPE_GUIDS: [[u8; 16]; 4] = [
-    // LUKS 7DD3CF25-5C31-4734-ADBF-A47E954A9D24
-    [
-        0x25, 0xCF, 0xD3, 0x7D, 0x31, 0x5C, 0x34, 0x47, 0xAD, 0xBF, 0xA4, 0x7E, 0x95, 0x4A, 0x9D, 0x24,
-    ],
-    [0x7D, 0xD3, 0xCF, 0x25, 0x5C, 0x31, 0x47, 0x34, 0xAD, 0xBF, 0xA4, 0x7E, 0x95, 0x4A, 0x9D, 0x24],
-    // LVM PV E6D6D379-F507-44C2-A23C-238F2A3DF928
-    [
-        0x79, 0xD3, 0xD6, 0xE6, 0x07, 0xF5, 0xC2, 0x44, 0xA2, 0x3C, 0x23, 0x8F, 0x2A, 0x3D, 0xF9, 0x28,
-    ],
-    [0xE6, 0xD6, 0xD3, 0x79, 0xF5, 0x07, 0x44, 0xC2, 0xA2, 0x3C, 0x23, 0x8F, 0x2A, 0x3D, 0xF9, 0x28],
+///
+/// 磁盘序的常量取自 [`table`]；下面两个是同一标准文本的自然序形态（按 RFC 4122
+/// 字段顺序摆放，而非 GPT 要求的混合端）。两种布局的盘都真实存在，识别两种都认
+pub(crate) const LUKS_TYPE_GUID_NATURAL: [u8; 16] = [
+    0xCA, 0x7D, 0x7C, 0xCB, 0x63, 0xED, 0x4C, 0x53, 0x86, 0x1C, 0x17, 0x42, 0x53, 0x60, 0x59, 0xCC,
 ];
+
+pub(crate) const LVM_TYPE_GUID_NATURAL: [u8; 16] = [
+    0xE6, 0xD6, 0xD3, 0x79, 0xF5, 0x07, 0x44, 0xC2, 0xA2, 0x3C, 0x23, 0x8F, 0x2A, 0x3D, 0xF9, 0x28,
+];
+
+/// LUKS / LVM PV 类型判定（磁盘序与 table 常量同源，不另抄字面量）
+pub(crate) fn is_forbidden_type_guid(g: &[u8; 16]) -> bool {
+    *g == table::LUKS_TYPE_GUID
+        || *g == LUKS_TYPE_GUID_NATURAL
+        || *g == table::LVM_TYPE_GUID
+        || *g == LVM_TYPE_GUID_NATURAL
+}
 
 #[derive(Clone)]
 pub struct PlanEntry {
@@ -91,7 +96,7 @@ pub(crate) fn blockers_after(
         if e.ending_lba < e.starting_lba {
             return Err(Fail::infra(format!("partition {num} has ending LBA below starting LBA (corrupted table)")));
         }
-        if FORBIDDEN_TYPE_GUIDS.contains(&e.partition_type_guid) {
+        if is_forbidden_type_guid(&e.partition_type_guid) {
             return Err(Fail::refused(format!("partition {num} is LUKS/LVM PV — relocation refused")));
         }
     }
