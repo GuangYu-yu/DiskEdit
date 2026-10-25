@@ -30,7 +30,7 @@ pub(crate) use gpt_write::*;
 pub(crate) use mbr::*;
 pub(crate) use create::*;
 
-use crate::dev::FileSource;
+use crate::dev::{FileSource, WriteSource};
 use crate::outcome::Fail;
 use gptman::GPTPartitionEntry;
 use std::io;

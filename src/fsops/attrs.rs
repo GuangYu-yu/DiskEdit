@@ -30,7 +30,11 @@ pub fn check_fs(src: &FileSource, part: u32, fstype: Option<FsKind>) -> Result<(
         args.push(dev);
         let out = run(cmd.0, &args)?;
         if cmd.0 == "e2fsck" {
-            return check_e2fsck_for_check(out.status.code().unwrap_or(-1));
+            // 被信号杀死时没有退出码：那是基础设施故障，不能拿 -1 冒充一个退出码
+            return match out.status.code() {
+                Some(code) => check_e2fsck_for_check(code),
+                None => Err(FsError::CommandFailed(format!("e2fsck {}", describe_exit(&out.status)))),
+            };
         }
         if !out.status.success() {
             return Err(FsError::command(cmd.0, &out));

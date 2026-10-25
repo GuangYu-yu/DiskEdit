@@ -265,7 +265,7 @@ impl ValidatedGeometry {
     /// （崩溃安全四结构序列见 `table::commit_table`）。备份头位置（容器末 LBA）取自构造时
     /// 传入的 `file_last_lba`——同一事实不接受第二个来源，调用点不得各自重算一遍
     /// `src.size / ss - 1`
-    pub fn commit(&self, src: &mut crate::dev::FileSource) -> io::Result<()> {
+    pub fn commit(&self, src: &mut crate::dev::WriteSource) -> io::Result<()> {
         // 全表写入之前先确认盘上的表仍是本几何的依据（见
         // [`Self::ensure_entries_unchanged`]）
         self.ensure_entries_unchanged(src)?;

@@ -269,7 +269,7 @@ where
     F: FnOnce(&str) -> Result<(), FsError>,
 {
     let mnt = mount_point();
-    let mount = find_tool("mount")?;
+    let mut mount = tool_command("mount")?;
     // PID 复用会撞上崩溃残留的同名目录：先试着清掉——remove_dir 只对空目录成功，
     // 非空说明残留目录上可能还挂着上次留下的文件系统，叠挂会把两个 FS 混在同一目录
     if mnt.exists() {
@@ -279,7 +279,7 @@ where
         ))))?;
     }
     std::fs::create_dir_all(&mnt).map_err(FsError::from)?;
-    let out = Command::new(mount).arg(dev).arg(&mnt).stdin(Stdio::null()).output().map_err(FsError::from)?;
+    let out = mount.arg(dev).arg(&mnt).stdin(Stdio::null()).output().map_err(FsError::from)?;
     if !out.status.success() {
         // mount 没成功就谈不上 umount：对从未挂载的目录卸载必然失败，
         // 那条"may remain"的告警只会把用户引向一个不存在的残留挂载点。
@@ -369,11 +369,11 @@ pub(crate) fn settle_release(
 
 /// 跑一次 umount，把结果归一到 [`ReleaseOutcome`]
 pub(crate) fn release_mount(mnt: &std::path::Path) -> ReleaseOutcome {
-    let u = match find_tool("umount") {
-        Ok(u) => u,
-        Err(e) => return ReleaseOutcome::Unavailable(format!("umount not found ({e})")),
+    let mut cmd = match tool_command("umount") {
+        Ok(c) => c,
+        Err(e) => return ReleaseOutcome::Unavailable(format!("umount not available ({e})")),
     };
-    match Command::new(u).arg(mnt).stdin(Stdio::null()).output() {
+    match cmd.arg(mnt).stdin(Stdio::null()).output() {
         Ok(o) if o.status.success() => ReleaseOutcome::Released,
         Ok(o) => ReleaseOutcome::Failed(String::from_utf8_lossy(&o.stderr).trim().to_string()),
         Err(e) => ReleaseOutcome::Unavailable(format!("umount did not start: {e}")),

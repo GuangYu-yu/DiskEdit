@@ -2,15 +2,19 @@
 
 use super::*;
 
-/// 目标文件的稳定指纹（st_dev, st_ino, size）：恢复现场用它确认"路径下的文件
-/// 还是当时那个"。size 参与比对——同 inode 截断/扩容即不同目标。三个字段的证据强度按平台
-/// 分级，比对时**逐字段**判断（见 [`scene_mismatch`]）：`size` 处处可读；`dev` / `ino` 是
-/// Unix 扩展接口，非 Unix 平台与真块设备的节点恒零。零值表示该字段**没有证据**，不是"匹配"
+/// 目标载体的稳定指纹：镜像用 (st_dev, st_ino, size)；真块设备用 (整盘容量, 设备 ID 哈希)。
+/// 恢复现场用它确认"还是当时那个目标"。字段的证据强度按载体分级，比对时**逐字段**判断
+/// （见 [`scene_mismatch`]）：`size` 镜像取文件长度、块设备取整盘容量；`dev` / `ino` 是
+/// Unix 扩展接口，非 Unix 平台与真块设备的节点恒零；`id` 只在块设备上有值。零值表示该字段
+/// **没有证据**，不是"匹配"
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub struct TargetFingerprint {
     pub dev: u64,
     pub ino: u64,
     pub size: u64,
+    /// 块设备整盘稳定 ID（`dm/uuid` / `md/uuid` / `wwid` / `device/wwid` / `device/serial`
+    /// 的 FNV-1a 64 哈希）；镜像与无 ID 可读的盘为 0
+    pub id: u64,
 }
 
 impl TargetFingerprint {
@@ -20,29 +24,32 @@ impl TargetFingerprint {
         self.dev != 0 || self.ino != 0
     }
 
-    /// 有没有**尺寸**证据：size 非零。`Metadata::len()` 处处可读，故它在非 Unix 平台上同样能
-    /// 构成证据；真块设备的节点元数据长度恒 0（容量由 ioctl 给出）
+    /// 有没有**尺寸**证据：size 非零。镜像取 `Metadata::len()`，块设备取整盘容量
     pub fn has_size_evidence(&self) -> bool {
         self.size != 0
     }
 
-    /// 有没有**任一**可比字段。全零的指纹出自"这个载体什么也给不出来"（真块设备节点，以及
-    /// 任何指纹恒零的载体）：那里 [`scene_mismatch`] 无从比较，调用方据此如实报出身份保障
-    /// 只到"落点由身份键派生"这一层，而不是让用户以为身份已经核对过
+    /// 有没有**设备 ID**证据：id 非零。只有真块设备的整盘节点能给出该字段
+    pub fn has_id_evidence(&self) -> bool {
+        self.id != 0
+    }
+
+    /// 有没有**任一**可比字段。全零的指纹出自"这个载体什么也给不出来"（任何指纹恒零的载体）；
+    /// undo 在回放前据此报出"一个字段都没比"的身份边界
     pub fn has_any_evidence(&self) -> bool {
-        self.has_inode_evidence() || self.has_size_evidence()
+        self.has_inode_evidence() || self.has_size_evidence() || self.has_id_evidence()
     }
 
     pub fn from_meta(meta: &std::fs::Metadata) -> Self {
         #[cfg(unix)]
         {
             use std::os::unix::fs::MetadataExt;
-            Self { dev: meta.dev(), ino: meta.ino(), size: meta.len() }
+            Self { dev: meta.dev(), ino: meta.ino(), size: meta.len(), id: 0 }
         }
         #[cfg(not(unix))]
         {
             // size 出自 `Metadata::len()`，非 Unix 平台同样可读；dev / ino 没有对应接口，留零
-            Self { dev: 0, ino: 0, size: meta.len() }
+            Self { dev: 0, ino: 0, size: meta.len(), id: 0 }
         }
     }
 
@@ -67,42 +74,145 @@ impl TargetFingerprint {
     }
 }
 
+/// 一份现场记录的"创建时目标"：指纹、loop 映射，以及**身份证据的种类**。
+///
+/// 两族现场（checkpoint / journal）都存这三样，比对只有一处（见 [`scene_mismatch`]）。
+/// 种类随现场落盘（v6 起）：`id == 0` 在旧格式里是"格式没有这个字段"，在新格式里可能是
+/// "录制时取不到"，两者在恢复时的处置不同，不能混为一谈
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SceneIdentity {
+    pub fp: TargetFingerprint,
+    pub map: Option<(u64, u64)>,
+    pub proof: IdentityProof,
+}
+
+/// 现场记录里"凭什么认这个目标"。恢复时先比种类、再比同种类的字段：种类不同说明现在的
+/// 目标不是记录时那类载体，此时逐字段的零值会把"没法比"读成"相符"
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IdentityProof {
+    /// v4 / v5 头：格式里没有这一字节。只出现在解析结果里，不写入
+    Legacy,
+    /// 整盘节点的稳定设备 ID（[`DEVICE_IDENTITY_ATTRS`] 之一的哈希）
+    DeviceId,
+    /// inode 身份：镜像文件的 (dev, ino)；loop 设备取 backing 文件的 (dev, ino)，
+    /// 即指纹里的 dev / ino
+    Inode,
+    /// 录制时一个身份都取不到：块设备节点上没有可读的身份属性，也不是 loop
+    Unavailable,
+}
+
+impl IdentityProof {
+    /// 落盘字节。`Legacy` 写 0，而 0 不是合法值（旧格式没有这一字节，解析按损坏拒绝）
+    pub(crate) fn tag(self) -> u8 {
+        match self {
+            Self::Legacy => 0,
+            Self::DeviceId => 1,
+            Self::Inode => 2,
+            Self::Unavailable => 3,
+        }
+    }
+
+    pub(crate) fn from_tag(tag: u8) -> Option<Self> {
+        match tag {
+            1 => Some(Self::DeviceId),
+            2 => Some(Self::Inode),
+            3 => Some(Self::Unavailable),
+            _ => None,
+        }
+    }
+}
+
 /// 现场记录的"创建时事实"与当前目标比对，不符即外来现场（返回一句可读的原因）。
 ///
 /// **两族现场（checkpoint / journal）共用这一处判据**：同一种异常在两条恢复路径上必须得到
 /// 同一个结论，否则拒绝理由会随入口漂移；调用方各自在原因上补齐"是哪份文件"。
 ///
-/// **逐字段比对，各字段只在两侧都有证据时参与**（零值 = 该平台或该载体给不出这个字段，
-/// 不等于"匹配"）：尺寸处处可读，故非 Unix 平台上"目标被缩短"一样拦得住；device id / inode
-/// 只在 Unix 且非真块设备节点时有值——那些载体上的身份保障只到"落点由身份键派生"这一层
-/// （见 README 的设备身份边界），强度低于有 inode 证据的情形。**尺寸不是唯一标识**：
-/// 同尺寸的替换文件照样能通过这条检查，它只关掉"被截断 / 被扩容"这一类变化。
+/// **先比身份种类，再逐字段比**：种类相同才谈得上比较字段。
+/// - `Legacy`（v4 / v5）只写了 inode 与尺寸：当前目标能给出 inode 身份（镜像、带 backing
+///   文件的 loop）时照旧可比；目标是整盘身份或什么身份都给不出时，旧现场没有可比的字段，
+///   一律拒绝——那种现场无法与"同名换过的盘"区分，只允许诊断与 abandon。
+/// - `Unavailable` 是"录制时就知道取不到身份"：同样无法与同名换过的盘区分，拒绝消费。
+/// - 整盘身份与 inode 身份互换（例如同一节点从磁盘变成 loop）说明载体变了，拒绝。
+///
+/// 同一种类内，各字段只在两侧都有证据时参与（零值 = 该平台或该载体给不出这个字段，
+/// 不等于"匹配"）：尺寸镜像取文件长度、块设备取整盘容量；inode 只在 Unix 且载体有文件
+/// 可指时有值（镜像文件、loop 的 backing 文件）；`id` 只在块设备整盘节点上有值。
+/// **尺寸与 ID 都不是唯一标识**：同尺寸、同 ID 的克隆盘照样能通过这条检查。
 ///
 /// 映射的有无本身参与比对：经 loop 写入的现场不允许改从裸镜像继续（反之亦然）——
 /// 两种途径下同一 LBA 指向的字节不同，映射差异不是可忽略的记法差
-pub(crate) fn scene_mismatch(
-    recorded_fp: &TargetFingerprint,
-    recorded_map: &Option<(u64, u64)>,
-    actual_fp: &TargetFingerprint,
-    actual_map: &Option<(u64, u64)>,
-) -> Option<String> {
-    if recorded_fp.has_inode_evidence()
-        && actual_fp.has_inode_evidence()
-        && (recorded_fp.dev, recorded_fp.ino) != (actual_fp.dev, actual_fp.ino)
+pub(crate) fn scene_mismatch(recorded: &SceneIdentity, actual: &SceneIdentity) -> Option<String> {
+    match (recorded.proof, actual.proof) {
+        (IdentityProof::Inode, IdentityProof::Inode)
+        | (IdentityProof::DeviceId, IdentityProof::DeviceId)
+        | (IdentityProof::Legacy, IdentityProof::Inode) => {}
+        (IdentityProof::Legacy, _) => {
+            return Some(
+                "this scene was recorded before device identities were stored, and the target now exposes \
+                 no file inode to compare — a block-device scene without identity cannot be matched \
+                 against the device present"
+                    .to_string(),
+            )
+        }
+        (IdentityProof::Unavailable, _) => {
+            return Some(
+                "this scene was recorded without any device identity (no stable attribute was readable), \
+                 so it cannot be matched against the device now present"
+                    .to_string(),
+            )
+        }
+        (IdentityProof::DeviceId, IdentityProof::Unavailable) => {
+            return Some(format!(
+                "the device identity recorded by this scene ({:#018x}) is not readable on the target now",
+                recorded.fp.id,
+            ))
+        }
+        (IdentityProof::DeviceId, _) => {
+            return Some(format!(
+                "the target now exposes a file inode identity instead of the whole-disk identity this scene \
+                 was recorded with ({:#018x})",
+                recorded.fp.id,
+            ))
+        }
+        (IdentityProof::Inode, IdentityProof::Unavailable) => {
+            return Some(
+                "the target now exposes no stable identity at all, so the file inode this scene was \
+                 recorded with cannot be matched"
+                    .to_string(),
+            )
+        }
+        (IdentityProof::Inode, _) => {
+            return Some(
+                "the target now exposes a whole-disk identity instead of the file inode this scene was \
+                 recorded with"
+                    .to_string(),
+            )
+        }
+    }
+    if recorded.fp.has_inode_evidence()
+        && actual.fp.has_inode_evidence()
+        && (recorded.fp.dev, recorded.fp.ino) != (actual.fp.dev, actual.fp.ino)
     {
         return Some(format!(
             "the file fingerprint changed since this recovery scene was recorded (was dev:{} ino:{}, \
              now dev:{} ino:{})",
-            recorded_fp.dev, recorded_fp.ino, actual_fp.dev, actual_fp.ino,
+            recorded.fp.dev, recorded.fp.ino, actual.fp.dev, actual.fp.ino,
         ));
     }
-    if recorded_fp.has_size_evidence() && actual_fp.has_size_evidence() && recorded_fp.size != actual_fp.size {
+    if recorded.fp.has_size_evidence() && actual.fp.has_size_evidence() && recorded.fp.size != actual.fp.size {
         return Some(format!(
             "the file size changed since this recovery scene was recorded (was {} bytes, now {})",
-            recorded_fp.size, actual_fp.size,
+            recorded.fp.size, actual.fp.size,
         ));
     }
-    match (recorded_map, actual_map) {
+    // 种类同为 `DeviceId` 时两侧都有 ID 证据（`FileSource::proof` 只在该字段非零时给出它）
+    if recorded.proof == IdentityProof::DeviceId && recorded.fp.id != actual.fp.id {
+        return Some(format!(
+            "the device identity changed since this recovery scene was recorded (was {:#018x}, now {:#018x})",
+            recorded.fp.id, actual.fp.id,
+        ));
+    }
+    match (recorded.map, actual.map) {
         (Some((ro, rl)), Some((co, cl))) if (ro, rl) != (co, cl) => Some(format!(
             "loop mapping changed since this recovery scene was recorded (was offset={ro} sizelimit={rl}, \
              now offset={co} sizelimit={cl})"
@@ -115,6 +225,19 @@ pub(crate) fn scene_mismatch(
         }
         _ => None,
     }
+}
+
+/// FNV-1a 64（http://www.isthe.com/chongo/tech/comp/fnv/）：确定性、跨版本稳定的字符串摘要。
+/// 用作设备 ID 的指纹——只参与相等比较，不承担密码学用途；标准库的 `DefaultHasher` 算法
+/// 不保证跨 Rust 版本稳定，故不用
+#[cfg(target_os = "linux")]
+pub(crate) fn fnv1a64(bytes: &[u8]) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for &b in bytes {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    h
 }
 
 /// 持久状态的默认落点
@@ -185,6 +308,12 @@ pub(crate) enum TargetKind {
 /// （见 [`TargetIdentity::resolve_block`]），不再以属性值充当设备 ID
 #[cfg(target_os = "linux")]
 pub(crate) const DEVICE_ID_ATTRS: &[&str] = &["dm/uuid", "dm/name", "md/uuid", "wwid", "device/wwid", "device/serial"];
+
+/// 进指纹的设备身份：只收**设备自己声明的事实**。`dm/name` 不在列——映射名是名字而非身份，
+/// 同名重建的另一个 DM 设备会得到同一个值，用它当"这还是不是当时那块盘"的证据等于没有证据。
+/// 属性名与值一起入哈希：不同属性下的同值字符串不构成同一个事实
+#[cfg(target_os = "linux")]
+pub(crate) const DEVICE_IDENTITY_ATTRS: &[&str] = &["dm/uuid", "md/uuid", "wwid", "device/wwid", "device/serial"];
 
 /// 在目标路径后追加后缀（不适配扩展名，只做串接）：`/a/b.img` + `.bak` ⇒ `/a/b.img.bak`，
 /// 与用户可见的目标名保持一一对应

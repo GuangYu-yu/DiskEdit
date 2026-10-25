@@ -361,6 +361,35 @@ impl BackingMatch {
     }
 }
 
+/// 打不开设备节点时（`PermissionDenied`）的身份回退：`/sys/block/<name>/loop/backing_file`
+/// 是 sysfs 属性（world-readable），不需要打开 `/dev` 节点。内容是内核对 backing 的
+/// 路径表示；对它做 `metadata` 得到与本进程识别目标同一套 `(st_dev, st_ino, st_rdev)`，
+/// 因此仍按对象身份比对，不按路径字符串比对。属性为空（未绑定）返回 None；
+/// 其余读不出、路径已失效（stat 失败）都上抛——确认不了就由调用方 fail-closed
+#[cfg(target_os = "linux")]
+fn backing_identity_from_sysfs(name: &str) -> io::Result<Option<LoopBacking>> {
+    use std::os::unix::fs::MetadataExt;
+    let attr = format!("/sys/block/{name}/loop/backing_file");
+    let raw = match std::fs::read_to_string(&attr) {
+        Ok(s) => s,
+        // 未绑定：部分内核在该属性的读取上返回 ENXIO/ENODEV
+        Err(e) if matches!(e.raw_os_error(), Some(libc::ENXIO) | Some(libc::ENODEV)) => return Ok(None),
+        Err(e) => {
+            return Err(io::Error::other(format!("cannot read {attr}: {e} — refusing (fail-closed)")));
+        }
+    };
+    let path = raw.trim();
+    if path.is_empty() {
+        return Ok(None);
+    }
+    // backing 被删除后内核在路径尾加 " (deleted)"，此时 stat 会失败——按确认不了上抛
+    let path = path.strip_suffix(" (deleted)").unwrap_or(path);
+    let md = std::fs::metadata(path).map_err(|e| {
+        io::Error::other(format!("cannot stat loop backing {path} to verify its identity: {e} — refusing (fail-closed)"))
+    })?;
+    Ok(Some(LoopBacking { dev: md.dev(), ino: md.ino(), rdev: md.rdev() }))
+}
+
 /// loop 设备当前绑定的 backing 的**对象身份**；未绑定返回 None。
 ///
 /// 内核 `loop_get_status` 对 backing 的 `f_path` 做 `vfs_getattr`，把
@@ -374,22 +403,19 @@ impl BackingMatch {
 /// 不算探测失败；ioctl 被拒、getattr 失败都无法确认，上抛后由调用方按
 /// fail-closed 拒绝。
 ///
-/// 打不开设备节点时只有一种情形按"没有绑定"跳过：`PermissionDenied`。节点属 root:disk
-/// 0660，无 disk 组的用户打不开任何 loop，而建立绑定也发生在同一权限类里
-/// （loop-control 与 loop 节点同组属）——打不开节点的一方建不出指向本镜像的新绑定，
-/// 该方自己的占用始终可查。把 EACCES 当探测失败会让非 root 用户的所有镜像操作报废。
-/// 其余打开失败都不是"没有绑定"的证据：`/sys` 是全局视图，`/dev` 属于 mount namespace，
-/// 绑定可以是在别的 namespace 或宿主上建立的——节点不存在、`ENODEV`（节点与 sysfs 视图
-/// 不一致）、`EIO` 都只说明本进程确认不了，上抛后由调用方按 fail-closed 拒绝。若 udev
-/// 放开 loop-control 而收紧 loop 节点，EACCES 这条跳过也会漏检绑定；该边界随内核/udev
-/// 的权限模型演进
+/// 打不开设备节点时（节点属 root:disk 0660）不能据此认定"没有绑定"——绑定可以是
+/// 别的用户或别的 namespace 建立的。此时改读 sysfs 的 `loop/backing_file` 并对其
+/// 目标做 stat（见 [`backing_identity_from_sysfs`]）：那条路径不需要打开 `/dev` 节点，
+/// 拿到的仍是对象身份。sysfs 也读不出时才上抛，由调用方 fail-closed。
+/// 其余打开失败（节点不存在、`ENODEV`、`EIO`）一律上抛：`/sys` 是全局视图，
+/// `/dev` 属于 mount namespace，只说明本进程确认不了
 #[cfg(target_os = "linux")]
 fn loop_backing_identity(name: &str) -> io::Result<Option<LoopBacking>> {
     use std::os::unix::io::AsRawFd;
     let path = format!("/dev/{name}");
     let f = match std::fs::File::open(&path) {
         Ok(f) => f,
-        Err(e) if e.kind() == io::ErrorKind::PermissionDenied => return Ok(None),
+        Err(e) if e.kind() == io::ErrorKind::PermissionDenied => return backing_identity_from_sysfs(name),
         Err(e) => {
             return Err(io::Error::other(format!("cannot open {path} to verify its backing file: {e}")));
         }
@@ -447,10 +473,11 @@ fn loop_and_partitions(sysdir: &Path, name: &str) -> io::Result<Vec<(String, Pat
 /// loop 与用户自己映射的是**两个设备**——只探测新建的那个看不见用户那份占用。故反向
 /// 枚举所有 loop，按 backing 文件身份（st_dev + st_ino，取自 LOOP_GET_STATUS64）
 /// 与本镜像比对，命中后检查该 loop 及其分区的挂载、swap 与持有者。
-/// sysfs 的 `loop/backing_file` 只是路径表示，既可能在本进程的 mount namespace 不可
-/// 解析，也可能已指向被替换过的文件，故不参与判定。任一环节确认不了都上抛，由调用方
-/// fail-closed；枚举本身来自全局 sysfs，不随 mount namespace 变化，但设备节点打不开
-/// 时无法查询身份，同样按无法确认处理
+/// sysfs 的 `loop/backing_file` 是路径表示，既可能在本进程的 mount namespace 不可
+/// 解析，也可能已指向被替换过的文件，故**不作为首选判据**；只有打不开 `/dev` 节点时
+/// 才用它做身份回退（对路径做 stat，仍比对象号，见 [`backing_identity_from_sysfs`]）。
+/// 任一环节确认不了都上抛，由调用方 fail-closed；枚举本身来自全局 sysfs，不随 mount
+/// namespace 变化
 #[cfg(target_os = "linux")]
 pub(crate) fn image_loop_occupancy(src: &FileSource) -> io::Result<Option<LoopOccupancy>> {
     use std::os::unix::fs::MetadataExt;
@@ -524,7 +551,7 @@ mod tests {
     }
 
     /// 打不开节点不等于"没有绑定"：节点不存在只说明本进程确认不了，
-    /// 必须上抛给调用方按 fail-closed 拒绝；能跳过的只有权限不足（EACCES）
+    /// 必须上抛给调用方按 fail-closed 拒绝；EACCES 走 sysfs 回退，回退也失败同样上抛
     #[test]
     fn unopenable_loop_node_is_not_evidence_of_no_binding() {
         let err = match loop_backing_identity("diskedit-nonexistent-loop") {
@@ -579,7 +606,9 @@ pub enum WriteKind {
 /// 故纯扩容放行；MD/loop 等栈没有这种增量语义，任何写入都可能与栈顶视图脱节
 #[cfg(target_os = "linux")]
 pub(crate) fn dm_only(holders: &[String]) -> bool {
-    holders.iter().all(|h| h.starts_with("dm-"))
+    // 空切片不是"全部持有者都是 dm-"：它意味着调用方拿不到持有者列表，
+    // `all` 在空集上恒真，会把"没有证据"读成"证据支持放行"
+    !holders.is_empty() && holders.iter().all(|h| h.starts_with("dm-"))
 }
 
 /// 写入路径的占用前置闸（表写入与 mkfs）：目标在首次落盘前须空闲。表写入的调用点在
@@ -772,7 +801,20 @@ pub fn ensure_table_write_idle(_src: &FileSource) -> Result<(), crate::outcome::
 /// 非 512 扇区镜像必须一次带 --sector-size（内核 ≥4.14）：先以 512 映射虽能成功，
 /// 但 loop 设备扇区几何错误，FS/表工具按错误扇区解析会写坏数据
 pub(crate) fn attach_loop(src: &FileSource, off: u64, len: u64) -> Result<String, FsError> {
-    let losetup = find_tool("losetup")?;
+    // `--sizelimit` 的入参自证：losetup 对零长度与越界区间照单全收，映射出的设备
+    // 直到写入时才暴露越界。先判，避免把"不代表该分区"的设备交给后续工具
+    if len == 0 {
+        return Err(FsError::invalid("refusing to map a zero-length range with losetup"));
+    }
+    let end = off
+        .checked_add(len)
+        .ok_or_else(|| FsError::invalid("loop range overflows the byte offset space"))?;
+    if end > src.size {
+        return Err(FsError::invalid(format!(
+            "loop range {off}..{end} exceeds the target size {} — refusing",
+            src.size
+        )));
+    }
     let base_args: Vec<String> = if src.sector_size != 512 {
         vec![
             "-o".into(), off.to_string(), "--sizelimit".into(), len.to_string(),
@@ -801,7 +843,7 @@ pub(crate) fn attach_loop(src: &FileSource, off: u64, len: u64) -> Result<String
             Err(e) => return Err(FsError::invalid(format!("cannot re-check {} before mapping it: {e}", img.display()))),
         }
     }
-    let mut show = Command::new(&losetup)
+    let mut show = tool_command("losetup")?
         .args(&base_args)
         .arg("-f")
         .arg("--show")
@@ -811,7 +853,7 @@ pub(crate) fn attach_loop(src: &FileSource, off: u64, len: u64) -> Result<String
         .map_err(FsError::from)?;
     if !show.status.success() && src.sector_size == 512 {
         // offset 对齐异常等少数情况需要 --sector-size，512 路径再带该选项重试一次
-        show = Command::new(&losetup)
+        show = tool_command("losetup")?
             .args(["-o", &off.to_string(), "--sizelimit", &len.to_string(), "--sector-size", &src.sector_size.to_string(), "-f", "--show"])
             .arg(&img)
             .stdin(Stdio::null())
@@ -821,7 +863,19 @@ pub(crate) fn attach_loop(src: &FileSource, off: u64, len: u64) -> Result<String
     if !show.status.success() {
         return Err(FsError::command("losetup", &show));
     }
-    Ok(String::from_utf8_lossy(&show.stdout).trim().to_string())
+    // 返回的名字会被直接拼成 /dev 路径并交给格式化/搬运工具：只接受 losetup 的
+    // 标准设备名。异常输出（空串、带附加说明、别的路径）说明本次映射不可定位，
+    // 继续用等于把写入指向一个未经验证的节点
+    let dev = String::from_utf8_lossy(&show.stdout).trim().to_string();
+    let well_formed = dev
+        .strip_prefix("/dev/loop")
+        .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
+    if !well_formed {
+        return Err(FsError::CommandFailed(format!(
+            "losetup --show returned {dev:?}, which is not a /dev/loopN device name — refusing to use it"
+        )));
+    }
+    Ok(dev)
 }
 
 /// 解除 loop 映射（losetup -d），随后等 udev 事件队列排空：
@@ -829,20 +883,24 @@ pub(crate) fn attach_loop(src: &FileSource, off: u64, len: u64) -> Result<String
 /// （udevadm settle = 等待队列内事件处理完）。上限 5s：正常 detach 远快于此，超时只提示，
 /// 不判 detach 失败（映射已解除，仅队列清空未确认）；udevadm 缺失（非 systemd 环境）忽略
 pub(crate) fn detach_loop(loopdev: &str) {
-    if let Ok(losetup) = find_tool("losetup") {
+    if let Ok(mut cmd) = tool_command("losetup") {
         // 资源释放失败不该阻断业务（数据与布局已正确），但循环设备泄漏会让后续
         // losetup 找不到空闲设备——属于用户需要知道的状态，故告警而非静默丢弃
-        match Command::new(&losetup).arg("-d").arg(loopdev).status() {
+        match cmd.arg("-d").arg(loopdev).status() {
             Ok(st) if st.success() => {}
             Ok(st) => eprintln!(
-                "warning: `losetup -d {loopdev}` exited with {} — the loop device may still be attached",
-                st.code().unwrap_or(-1)
+                "warning: `losetup -d {loopdev}` {} — the loop device may still be attached; \
+                 release it with `losetup -d {loopdev}` before relying on free loop devices",
+                crate::fsops::describe_exit(&st)
             ),
-            Err(e) => eprintln!("warning: cannot run `losetup -d {loopdev}`: {e} — the loop device may still be attached"),
+            Err(e) => eprintln!(
+                "warning: cannot run `losetup -d {loopdev}`: {e} — the loop device may still be attached; \
+                 release it with `losetup -d {loopdev}`"
+            ),
         }
     }
-    if let Ok(udevadm) = find_tool("udevadm") {
-        match Command::new(&udevadm).args(["settle", "--timeout=5"]).status() {
+    if let Ok(mut udevadm) = tool_command("udevadm") {
+        match udevadm.args(["settle", "--timeout=5"]).status() {
             Ok(st) if !st.success() => eprintln!(
                 "warning: udevadm settle timed out after 5s — {loopdev} is detached, but the udev event queue may not be empty"
             ),

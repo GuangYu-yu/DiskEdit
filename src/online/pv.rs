@@ -6,10 +6,10 @@ use crate::dev::FileSource;
 /// 从（盘名, 分区号）解析 OnlineTarget（PV 路径无挂载点，mnt 置空不用）
 pub(crate) fn resolve_pv_target(disk_name: &str, pno: u32) -> io::Result<OnlineTarget> {
     let disk_dev = PathBuf::from("/dev").join(disk_name);
-    if !disk_dev.exists() {
-        return Err(io::Error::other(format!("disk node {} not found", disk_dev.display())));
-    }
     let sysroot = Path::new("/sys/block").join(disk_name);
+    // 盘名与分区名都由 sysfs 目录名推得：节点必须与 sysfs 的设备号同源，
+    // 否则后续 pvresize 的落点与这里读到的几何分属两台设备
+    ensure_node_is_device(&disk_dev, &sysroot)?;
     let mut sysdir = None;
     for entry in fs::read_dir(&sysroot)? {
         let p = entry?.path();
@@ -29,9 +29,7 @@ pub(crate) fn resolve_pv_target(disk_name: &str, pno: u32) -> io::Result<OnlineT
         .to_string_lossy()
         .into_owned();
     let part_dev = PathBuf::from("/dev").join(&name);
-    if !part_dev.exists() {
-        return Err(io::Error::other(format!("partition node {} not found", part_dev.display())));
-    }
+    ensure_node_is_device(&part_dev, &sysdir)?;
     // 与 resolve_target 同一防线：sysfs 字节换算全部 checked（见那里的注释）
     let byte_of = |v: u64| v.checked_mul(512).ok_or_else(|| io::Error::other("sysfs sector value overflows u64 bytes"));
     let start_bytes = byte_of(sysfs_u64(&sysdir.join("start"))?)?;
@@ -101,7 +99,7 @@ pub(crate) fn verify_lock_identity(
 }
 
 /// 在线路径的现场闸口。本路径不建 journal（sfdisk / FS 工具用自己的 fd 写盘，
-/// 不经过 `FileSource::write_at`，挂 journal 只会得到空壳），因此**首次写盘之前**
+/// 不经过 `WriteSource::write_at`，挂 journal 只会得到空壳），因此**首次写盘之前**
 /// 必须确认目标上没有任何未收尾的现场：有 ⇒ 拒绝（busy 文案与离线闸口同源）。
 /// 代价也在此声明：本路径中断后没有 journal / checkpoint 可查，若 sfdisk 自身
 /// 在写主/备 GPT 结构之间被撕裂，undo 与续传都覆盖不到，只能由外部工具修复。

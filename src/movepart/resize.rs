@@ -11,7 +11,12 @@ pub(crate) const CKPT2_MAGIC: &[u8; 8] = b"DKECKPT2";
 /// 并列明死因，出路是 abandon。
 /// v4：追加目标指纹（3×u64）与 loop 映射（1+2×u64），语义同 CKPT1 v5
 /// v5：追加 FS 类型码（见 [`FSTYPE_CODES`]）：续跑不再回源起点重探
-pub(crate) const CKPT2_VERSION: u32 = 5;
+/// v6：指纹加设备 ID 哈希（块设备整盘身份），尾部加身份种类；读 v5 时设备 ID 按零、
+/// 种类按 `Legacy` 处理
+pub(crate) const CKPT2_VERSION: u32 = 6;
+
+/// 兼容读取的上一代版本（没有设备 ID 与身份种类）
+const CKPT2_VERSION_LEGACY: u32 = 5;
 
 /// 现场记下的 FS 类型码：0 = 未识别，其余为数组下标 + 1。
 /// **只允许在末尾追加**——已经在盘上的现场按码值回读，顺序变动即把类型读成另一个
@@ -50,7 +55,7 @@ fn fstype_from_code(code: u8) -> io::Result<Option<FsKind>> {
     }
 }
 
-/// resize-part 的 checkpoint（v5）：搬移覆盖源区，中途断电后新旧两处都不完整，
+/// resize-part 的 checkpoint（v6）：搬移覆盖源区，中途断电后新旧两处都不完整，
 /// 已完成位置只能由 checkpoint 判定。"表项是否已提交"不在这里存——盘上的分区几何
 /// 就是那个事实，另存一份标记只会与它分叉（见 prepare_resize 的恢复分支）
 pub(crate) struct RsCheckpoint {
@@ -66,6 +71,7 @@ pub(crate) struct RsCheckpoint {
     pub(crate) chunk_bytes: u64,
     pub(crate) fp: crate::dev::TargetFingerprint, // 目标文件指纹（"同路径换文件"防线）
     pub(crate) map: Option<(u64, u64)>,           // 创建时的 loop 映射；None = 非 loop 进入
+    pub(crate) proof: crate::dev::IdentityProof,  // 指纹里哪一类字段才是身份证据
     /// 识别出的 FS 类型：续跑直接用它，不再回源起点重探（源区头部可能已被搬移数据覆盖）
     pub(crate) fstype: Option<FsKind>,
 }
@@ -88,13 +94,15 @@ impl RsCheckpoint {
         b.extend_from_slice(&self.fp.dev.to_le_bytes());
         b.extend_from_slice(&self.fp.ino.to_le_bytes());
         b.extend_from_slice(&self.fp.size.to_le_bytes());
+        b.extend_from_slice(&self.fp.id.to_le_bytes());
         b.push(self.map.is_some() as u8);
         if let Some((off, limit)) = self.map {
             b.extend_from_slice(&off.to_le_bytes());
             b.extend_from_slice(&limit.to_le_bytes());
         }
-        // 类型码追加在尾部：已有的字段偏移不因它变动
+        // 类型码与身份种类追加在尾部：已有的字段偏移不因它们变动
         b.push(fstype_code(self.fstype));
+        b.push(self.proof.tag());
         let crc = table::crc32(&b);
         b.extend_from_slice(&crc.to_le_bytes());
         b
@@ -105,7 +113,8 @@ impl RsCheckpoint {
         if b.len() < 12 || &b[0..8] != CKPT2_MAGIC {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "resize checkpoint invalid"));
         }
-        if u32::from_le_bytes(b[8..12].try_into().unwrap()) != CKPT2_VERSION {
+        let ver = u32::from_le_bytes(b[8..12].try_into().unwrap());
+        if ver != CKPT2_VERSION && ver != CKPT2_VERSION_LEGACY {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "unsupported resize checkpoint version"));
         }
         let mut o = 12usize;
@@ -128,11 +137,13 @@ impl RsCheckpoint {
         let fs_shrunk = *b.get(o).ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "truncated"))? != 0; o += 1;
         let chunks_done = rd64(b, &mut o)?;
         let chunk_bytes = rd64(b, &mut o)?;
-        // 指纹与映射属于"创建时事实"：解析只负责取值，比对在 read_checkpoint
+        // 指纹与映射属于"创建时事实"：解析只负责取值，比对在 read_checkpoint。
+        // v5 没有设备 ID 字段，读作零（无证据）
         let fp = crate::dev::TargetFingerprint {
             dev: rd64(b, &mut o)?,
             ino: rd64(b, &mut o)?,
             size: rd64(b, &mut o)?,
+            id: if ver >= CKPT2_VERSION { rd64(b, &mut o)? } else { 0 },
         };
         // 标志字节先行跨过，再按标志决定是否读它后面那两个 u64
         let flagged = *b.get(o).ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "truncated"))?;
@@ -145,6 +156,15 @@ impl RsCheckpoint {
         // 类型码在尾部：认不出的码即现场不可判读，不退回"未识别"继续跑
         let fstype = fstype_from_code(*b.get(o).ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "truncated"))?)?;
         o += 1;
+        let proof = if ver >= CKPT2_VERSION {
+            let tag = *b.get(o).ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "truncated"))?;
+            o += 1;
+            crate::dev::IdentityProof::from_tag(tag).ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidData, "implausible resize checkpoint identity kind")
+            })?
+        } else {
+            crate::dev::IdentityProof::Legacy
+        };
         if table::crc32(&b[..o])
             != u32::from_le_bytes(
                 b.get(o..o + 4)
@@ -189,7 +209,7 @@ impl RsCheckpoint {
         }
         Ok(RsCheckpoint {
             disk_size, ss, part, old_start, old_end, new_start, new_end,
-            fs_shrunk, chunks_done, chunk_bytes, fp, map, fstype,
+            fs_shrunk, chunks_done, chunk_bytes, fp, map, fstype, proof,
         })
     }
 }
@@ -258,7 +278,7 @@ pub(crate) fn classify_restore<'a>(
 /// 几何与修复动作由调用方解析（一条命令解析一次，往下传），本函数不读表
 #[allow(clippy::too_many_arguments)] // src/几何/修复动作/区间/chunk/开关/日志各司其职：合成参数对象只是给 lint 换一层间接
 pub fn resize_part(
-    src: &mut FileSource,
+    src: &mut WriteSource,
     g: &ValidatedGeometry,
     repair: RepairAction,
     part: u32,
@@ -276,7 +296,7 @@ pub fn resize_part(
     };
     // 修复先于任何目标写入；放 Fail 域以保住分类（同 apply）
     if let Some(what) = p.repair.describe() {
-        if let Err(f) = gpt_policy::apply_repair(src, &p.repair) {
+        if let Err(f) = gpt_policy::apply_repair(src, &p.repair, g.sector_size()) {
             return f.into_outcome();
         }
         log(&format!("[repair] {what}"));
@@ -324,7 +344,7 @@ pub(crate) struct ResizeDecision {
 }
 
 /// 事前判定（只读）：几何、范围、重叠、槽位、恢复三态、FS 能力与工具 preflight。
-/// 返回 `Err` 一律发生在任何写盘之前；签名里没有 `&mut FileSource`，因此它**不可能**写盘
+/// 返回 `Err` 一律发生在任何写盘之前；签名里没有 `&mut WriteSource`，因此它**不可能**写盘
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn prepare_resize(
     src: &FileSource,
@@ -436,6 +456,14 @@ pub(crate) fn prepare_resize(
             "--no-fs cannot shrink: the filesystem has to be shrunk first, otherwise the new partition end would cut into filesystem metadata",
         ));
     }
+    // 已提交而 FS 步仍未完成的扩容：--no-fs 会让收尾以"无事可做"结束并撤掉 ckpt，
+    // 而盘上条目已停在新区间——之后再跑算出的差值为零，只会得到 Leave，那条待办
+    // 从此没有任何持久记录
+    if no_fs && committed_old.is_some() && new_bytes > old_bytes {
+        return Err(Fail::refused(
+            "--no-fs cannot drop the filesystem step of an unfinished resize: the partition is already extended but its filesystem is not — re-run without --no-fs",
+        ));
+    }
     // FS 动作是**唯一决策键**：preflight 与 execute 都 match 它，不各自从尺寸重新推导
     let fs_action = if needs_shrink {
         FsAction::Shrink
@@ -481,11 +509,11 @@ pub(crate) fn prepare_resize(
 
 // ---- durable boundary：以上判定全部结束，以下开始写盘 ----
 
-/// 执行（写盘）。入参 `&mut FileSource` + 返回 `io::Result` 共同构成边界：
+/// 执行（写盘）。入参 `&mut WriteSource` + 返回 `io::Result` 共同构成边界：
 /// 函数体内**构造不出** `Fail::Refused`（返回类型里放不下它），
 /// 于是"写盘之后还能返回 Refused"在这里连编译都过不去
 pub(crate) fn execute_resize(
-    src: &mut FileSource,
+    src: &mut WriteSource,
     p: ResizeDecision,
     log: &mut dyn FnMut(&str),
     post: &mut PostWrite,
@@ -506,6 +534,7 @@ pub(crate) fn execute_resize(
         fp: src.fingerprint,
         map: src.loop_mapping,
         fstype,
+        proof: src.proof(),
     };
     let save = |c: &RsCheckpoint| atomic_write_ckpt(&p.ckpt_path, &c.serialize());
 
@@ -615,7 +644,7 @@ pub(crate) fn execute_resize(
             te.ending_lba = new_end;
         })?;
         g2.commit(src)?;
-        table::ensure_protective_mbr(src)?;
+        table::ensure_protective_mbr(src, ss)?;
         // 提交后不写 ckpt：恢复分支以盘上几何判定"是否已提交"，不需要第二份标记。
         // 此处中断后的重放由表项的绝对赋值保证幂等 —— fault_rs_after_commit 正测这一点
         log(&format!("partition {part} committed at {new_start}..{new_end}"));
@@ -669,7 +698,7 @@ pub(crate) fn ntfs_hidden_value(start_lba: u64) -> (u32, bool) {
 /// 单位是设备逻辑扇区（4Kn 原生盘上即 4Kn LBA，不折算 512）：bytes_per_sector 记录
 /// 各自的扇区大小，hidden_sectors 语义随它计。字段只有 32 位：start ≥ 2^32 时写 0 并
 /// 警告（Windows 将无法从该分区引导，数据不受影响）。仅在分区起始 LBA 变化后调用。
-pub(crate) fn fix_ntfs_hidden_sectors(src: &mut FileSource, new_first_lba: u64, ss: u64, log: &mut dyn FnMut(&str)) -> io::Result<()> {
+pub(crate) fn fix_ntfs_hidden_sectors(src: &mut WriteSource, new_first_lba: u64, ss: u64, log: &mut dyn FnMut(&str)) -> io::Result<()> {
     let (val, warn) = ntfs_hidden_value(new_first_lba);
     // 与 execute_apply / execute_copy 的 LBA→字节换算同口径：起点来自调用方传入的
     // 几何，裸乘回绕会把 HiddenSectors 写到盘上另一个位置

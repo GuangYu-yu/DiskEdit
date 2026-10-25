@@ -66,6 +66,20 @@ pub(crate) fn is_executable(_p: &std::path::Path) -> bool {
     true
 }
 
+/// 外部命令的唯一构造函数：可执行路径按 PATH 解析，环境按"只保留 PATH 与 LC_ALL=C"净化。
+///
+/// 环境整体清空的原因：`LD_PRELOAD`、`IFS`、`MALLOC_*` 一类变量能改变工具行为乃至把
+/// 代码注入子进程，而它们全由调用环境决定。PATH 必须保留——工具常再调自己的助手程序；
+/// LC_ALL 固定为 C，各工具的输出格式才可解析。调用点只负责 args 与 stdio
+pub(crate) fn tool_command(tool: &str) -> Result<Command, FsError> {
+    let mut cmd = Command::new(find_tool(tool)?);
+    cmd.env_clear().env("LC_ALL", "C");
+    if let Some(path) = std::env::var_os("PATH") {
+        cmd.env("PATH", path);
+    }
+    Ok(cmd)
+}
+
 /// 执行外部工具。参数用 `AsRef<OsStr>` 收：绝大多数调用点传 `&[&str]` 即可，
 /// 卷标这类任意字节的参数靠它原样透传（见 os_bytes），不经任何编码转换
 ///
@@ -73,14 +87,11 @@ pub(crate) fn is_executable(_p: &std::path::Path) -> bool {
 /// （`Io`）；等待/读取输出失败 = 工具已经启动，写没写目标无法断言，故记
 /// `CommandFailed`（调用点的映射把它落成"可能已改变"）
 pub(crate) fn run<S: AsRef<OsStr>>(tool: &str, args: &[S]) -> Result<std::process::Output, FsError> {
-    let path = find_tool(tool)?;
-    // 输出需按格式解析（resize2fs -P、dumpe2fs -h 等），固定 LC_ALL=C 防本地化翻译破坏解析
-    let child = Command::new(path)
+    let child = tool_command(tool)?
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .env("LC_ALL", "C")
         .spawn()
         .map_err(FsError::from)?;
     child.wait_with_output().map_err(|e| {
@@ -108,13 +119,11 @@ pub(crate) fn os_bytes(b: &[u8]) -> OsString {
 /// 只会返回空 Vec，子进程的失败原因就再也拿不到
 #[cfg(target_os = "linux")]
 pub(crate) fn run_input(tool: &str, args: &[&str], input: &str) -> Result<std::process::Output, FsError> {
-    let path = find_tool(tool)?;
-    let mut child = Command::new(path)
+    let mut child = tool_command(tool)?
         .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .env("LC_ALL", "C")
         .spawn()
         .map_err(FsError::from)?;
     use std::io::Write as _;

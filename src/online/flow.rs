@@ -118,17 +118,13 @@ pub fn resize_online(
         Err(f) => return f.into_outcome(),
     };
     if disk_len != t.part_len_bytes {
-        eprintln!(
-            "warning: the kernel reports partition {} as {} bytes but the on-disk table says {}",
+        // 本次什么都没写：内核视图过期是环境状态，不是请求与布局不匹配。
+        // 用 Applied 表达会让退出码变成 20（"表已改"），与事实相反
+        return Outcome::infra(format!(
+            "the kernel reports partition {} as {} bytes but the on-disk table says {} bytes — \
+             the kernel partition view is stale; refresh it (partprobe / partx) and re-run",
             t.pno, t.part_len_bytes, disk_len
-        );
-        let mut o = Outcome::applied_with(vec![fs_pending(format!(
-            "the kernel partition view is stale (kernel {} bytes, table {} bytes) — refresh it \
-             (partprobe / partx) and re-run",
-            t.part_len_bytes, disk_len
-        ))]);
-        o.mark_kernel_stale();
-        return o;
+        ));
     }
     // 请求 == 现分区尺寸与"未指定尺寸"同性质：分区不动、无其他写盘步骤，合并同一臂
     let size = match size {

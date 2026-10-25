@@ -8,7 +8,7 @@ pub(crate) mod plan;
 pub(crate) mod resize;
 pub(crate) mod undo;
 
-use crate::args::{help_cmd, usage, usage_help, Args};
+use crate::args::{help_cmd, refuse_unconsumed_flags, usage, usage_help, Args};
 use crate::outcome::{Outcome, EXIT_OK};
 use crate::support::{bail_fail, Fail};
 
@@ -295,7 +295,12 @@ pub(crate) fn dispatch(cmd: &str, a: &Args) -> CmdResult {
         "help" | "--help" | "-h" => match a.pos.len() {
             // 主动请求帮助，非用法错误：打全文退 0（未知命令/缺参数才是 10）
             0 => usage_help(),
-            1 => help_cmd(&a.pos[0]),
+            // 命令位本身就是 help 的写法（`help <CMD>` / `--help <CMD>`）不走
+            // parse_args 的旗标对账，这里补同一份白名单：帮助与执行看到同一套判据
+            1 => {
+                refuse_unconsumed_flags(&a.pos[0], a);
+                help_cmd(&a.pos[0])
+            }
             _ => bail_fail(Fail::refused(format!(
                 "unexpected extra argument for `help`: {} (see `diskedit help`)",
                 a.pos[1]

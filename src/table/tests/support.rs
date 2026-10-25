@@ -18,13 +18,13 @@ pub(crate) fn fixture_gpt(ss: u64) -> Vec<u8> {
     cur.into_inner()
 }
 
-pub(crate) fn src_from(tag: &str, data: Vec<u8>) -> FileSource {
+pub(crate) fn src_from(tag: &str, data: Vec<u8>) -> WriteSource {
     let mut tmp = std::env::temp_dir();
     tmp.push(format!("diskedit_test_{tag}_{}.img", std::process::id()));
     std::fs::write(&tmp, &data).unwrap();
     let f = std::fs::OpenOptions::new().read(true).write(true).open(&tmp).unwrap();
     let size = data.len() as u64;
-    FileSource {
+    WriteSource::unowned(FileSource {
         identity: crate::dev::TargetIdentity::resolve_image(&tmp),
         file: f,
         path: tmp,
@@ -32,16 +32,15 @@ pub(crate) fn src_from(tag: &str, data: Vec<u8>) -> FileSource {
         size,
         is_block: false,
         journal: None,
-        ownership: None,
         fingerprint: Default::default(),
         loop_mapping: None,
-    }
+    })
 }
 
 /// GPT 测试镜像：gptman 只写 GPT 结构，保护 MBR 需自行补——load_gpt 以前者为前置
-pub(crate) fn src_from_gpt(tag: &str, ss: u64) -> FileSource {
+pub(crate) fn src_from_gpt(tag: &str, ss: u64) -> WriteSource {
     let mut src = src_from(tag, fixture_gpt(ss));
-    ensure_protective_mbr(&mut src).unwrap();
+    ensure_protective_mbr(&mut src, ss).unwrap();
     src
 }
 
@@ -49,7 +48,7 @@ pub(crate) fn src_from_gpt(tag: &str, ss: u64) -> FileSource {
 /// `entries` 每项 `(type, start_lba, size_lba)`，落在标准 MBR 分区槽位
 /// （off = 446 + 16*(i)，type 在 +4、start 在 +8、size 在 +12）。`img_sectors`
 /// 决定整盘大小，用于让合法条目通过越界检查
-pub(crate) fn src_from_mbr(tag: &str, entries: &[(u8, u32, u32)], img_sectors: u64) -> FileSource {
+pub(crate) fn src_from_mbr(tag: &str, entries: &[(u8, u32, u32)], img_sectors: u64) -> WriteSource {
     let mut data = vec![0u8; (img_sectors * 512) as usize];
     let lba0 = &mut data[..512];
     for (i, (ty, start, size)) in entries.iter().enumerate() {
@@ -66,7 +65,7 @@ pub(crate) fn src_from_mbr(tag: &str, entries: &[(u8, u32, u32)], img_sectors: u
 /// 以**原始字节**写入主副本条目（绕过 gptman：它的 write_into 自带 overlap 校验
 /// `InvalidPartitionBoundaries`，而盘上真实存在的重叠表正是别的工具写下的字节，
 /// 解析层必须能读到它）
-pub(crate) fn write_primary_entries(src: &mut FileSource, ss: u64, ents: &[(u64, u64)]) {
+pub(crate) fn write_primary_entries(src: &mut WriteSource, ss: u64, ents: &[(u64, u64)]) {
     let geom = geom128(ss);
     let parsed: Vec<GPTPartitionEntry> = ents
         .iter()
@@ -89,7 +88,7 @@ pub(crate) fn write_primary_entries(src: &mut FileSource, ss: u64, ents: &[(u64,
 
 /// 把 LBA1 主头的 HeaderSize 改成 `hdr_size` 并按新长度重算 CRC；
 /// `reserved` 为真时同时把 92..96 的非零保留字节写进去
-pub(crate) fn patch_primary_header(mut src: FileSource, hdr_size: u32, reserved: bool) -> FileSource {
+pub(crate) fn patch_primary_header(mut src: WriteSource, hdr_size: u32, reserved: bool) -> WriteSource {
     let ss = src.sector_size as usize;
     let mut sec = vec![0u8; ss];
     src.read_at(ss as u64, &mut sec).unwrap();
@@ -129,7 +128,7 @@ pub(crate) fn geom128(ss: u64) -> EntryArrayGeometry {
 }
 
 /// 直接把一份自定义几何的主副本写进镜像（绕过 commit_gpt 的规范化和写入序列）
-pub(crate) fn write_raw_primary(src: &mut FileSource, mut h: RawHeader, ss: u64) {
+pub(crate) fn write_raw_primary(src: &mut WriteSource, mut h: RawHeader, ss: u64) {
     let geom = EntryArrayGeometry::new(ss, h.size_of_partition_entry, h.number_of_partition_entries, MAX_ARRAY_BYTES).unwrap();
     let (bytes, crc) = serialize_array(&[], &geom);
     src.write_at(h.partition_entry_lba * ss, &bytes).unwrap();
@@ -140,7 +139,7 @@ pub(crate) fn write_raw_primary(src: &mut FileSource, mut h: RawHeader, ss: u64)
 
 /// 直接把一份自定义几何的**备份**副本写进镜像（盘尾头 + 其自述的条目数组位置）。
 /// 传入的 `h` 须为备份头语义：MyLBA = 盘尾、AltLBA = 1
-pub(crate) fn write_raw_backup(src: &mut FileSource, mut h: RawHeader, ss: u64) {
+pub(crate) fn write_raw_backup(src: &mut WriteSource, mut h: RawHeader, ss: u64) {
     let geom = EntryArrayGeometry::new(ss, h.size_of_partition_entry, h.number_of_partition_entries, MAX_ARRAY_BYTES).unwrap();
     let (bytes, crc) = serialize_array(&[], &geom);
     src.write_at(h.partition_entry_lba * ss, &bytes).unwrap();

@@ -20,7 +20,7 @@ fn after_irreversible(f: Fail) -> Fail {
 /// p 是**扩容前**解析出的条目（swap 头部探测用它原区间，原尺寸是 LVM 位移的基线）
 pub(crate) fn mbr_grow_finish(
     a: &Args,
-    src: &mut FileSource,
+    src: &mut WriteSource,
     p: &table::MbrPartition,
     is_pv: bool,
     is_block: bool,

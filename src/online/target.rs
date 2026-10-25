@@ -14,6 +14,35 @@ pub(crate) struct OnlineTarget {
     pub(crate) others: Vec<(u64, u64)>, // 相邻分区 [start, len)（字节，本分区除外）
 }
 
+/// `/dev` 下的节点必须与 sysfs 记录的设备号同源：名字只是路径，实际写入落点由设备号
+/// 决定。盘名/分区名都由 sysfs 目录名推得，同名节点若指向另一台设备，"几何来自 A、
+/// 写入落在 B"——sfdisk / partx / BLKPG / pvresize 只拿到这个路径，无从自行发现
+pub(crate) fn ensure_node_is_device(node: &Path, sys_dir: &Path) -> io::Result<()> {
+    let want = fs::read_to_string(sys_dir.join("dev"))
+        .map_err(|e| io::Error::other(format!("cannot read the sysfs device number of {}: {e}", sys_dir.display())))?;
+    let Some((dmaj, dmin)) = want
+        .trim()
+        .split_once(':')
+        .and_then(|(a, b)| Some((a.parse::<u32>().ok()?, b.parse::<u32>().ok()?)))
+    else {
+        return Err(io::Error::other(format!("unparsable sysfs device number {want:?} in {}", sys_dir.display())));
+    };
+    let md = fs::metadata(node)
+        .map_err(|e| io::Error::other(format!("device node {} is unusable: {e}", node.display())))?;
+    if !md.file_type().is_block_device() {
+        return Err(io::Error::other(format!("{} is not a block device node", node.display())));
+    }
+    let (nmaj, nmin) = (libc::major(md.st_rdev()), libc::minor(md.st_rdev()));
+    if (nmaj, nmin) != (dmaj, dmin) {
+        return Err(io::Error::other(format!(
+            "{} is device {nmaj}:{nmin} but sysfs reports {dmaj}:{dmin} for {} — refusing to write through a mismatched node",
+            node.display(),
+            sys_dir.display()
+        )));
+    }
+    Ok(())
+}
+
 pub(crate) fn sysfs_u64(path: &Path) -> io::Result<u64> {
     let s = fs::read_to_string(path)?;
     parse_sysfs_u64(&s).ok_or_else(|| io::Error::other(format!("unparsable sysfs value in {}", path.display())))
@@ -131,9 +160,10 @@ pub(crate) fn resolve_target(mountpoint: &Path) -> io::Result<OnlineTarget> {
         return Err(io::Error::other("logical_block_size reported as 0 — sysfs value invalid"));
     }
     let disk_dev = PathBuf::from("/dev").join(&disk_name);
-    if !disk_dev.exists() {
-        return Err(io::Error::other(format!("disk node {} not found", disk_dev.display())));
-    }
+    // 盘名由分区 sysfs 目录名推得，/dev 下的同名节点必须真是这台设备：容量、
+    // logical_block_size、邻居区间全部取自 sysfs，而 sfdisk / partx / BLKPG / pvresize
+    // 只拿到这个路径——名字指向另一台设备时"几何来自 A、写入落在 B"
+    ensure_node_is_device(&disk_dev, &Path::new("/sys/block").join(&disk_name))?;
 
     // 相邻分区区间（本分区除外），fail-fast 前置自查；内核 -EBUSY 兜底
     let this_dev = (maj as u64, min as u64);

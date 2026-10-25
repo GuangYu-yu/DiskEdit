@@ -8,7 +8,7 @@ use super::*;
 /// 几何与修复动作由调用方解析并下传，本函数不读表
 #[allow(clippy::too_many_arguments)] // 同 resize_part：参数即最小事实集
 pub fn copy_part(
-    src: &mut FileSource,
+    src: &mut WriteSource,
     g: &ValidatedGeometry,
     repair: RepairAction,
     part: u32,
@@ -24,7 +24,7 @@ pub fn copy_part(
     let p = prepare_copy(g, repair, part, new_start, keep_guid)?;
     // 修复先于任何目标写入；放 Fail 域以保住分类（同 apply）
     if let Some(what) = p.repair.describe() {
-        gpt_policy::apply_repair(src, &p.repair)?;
+        gpt_policy::apply_repair(src, &p.repair, p.ss)?;
         log(&format!("[repair] {what}"));
     }
     // 越界之后的 io 失败一律归 Failed（复制阶段不改表，但数据区已动）
@@ -102,7 +102,7 @@ pub(crate) fn new_partuuid() -> Result<[u8; 16], Fail> {
 
 /// 执行（写盘）。返回 `io::Result`：函数体内构造不出 `Fail::Refused`
 pub(crate) fn execute_copy(
-    src: &mut FileSource,
+    src: &mut WriteSource,
     p: &PreparedCopy,
     name: &str,
     chunk_len: u64,
@@ -145,7 +145,7 @@ pub(crate) fn execute_copy(
     )
     .map_err(crate::outcome::into_io_error)?;
     // 副本的 boot sector 原样带来旧 HiddenSectors，按新起始位置修正
-    if crate::fsid::identify(src, new_start * ss, len * ss)? == Some(FsKind::Ntfs) {
+    if crate::fsid::identify(src, dst_off, total)? == Some(FsKind::Ntfs) {
         fix_ntfs_hidden_sectors(src, new_start, ss, log)?;
     }
     log(&format!("partition {part} copied to #{num} at {new_start}..{new_end}"));

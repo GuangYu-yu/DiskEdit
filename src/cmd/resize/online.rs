@@ -45,15 +45,24 @@ pub(crate) fn resize_online(
     // BLKRRPART 返回 EBUSY，故走 sfdisk+partx 同步路径
     if is_pv {
         refuse_online_move_flags(a);
-        // PV 链在表提交之后才启动：缺工具必须在这里拒绝，不能等 sfdisk 写完表才发现
-        preflight_lvm_tools(a.grow_lv).unwrap_or_else(|e| bail_fail(Fail::from(e)));
+        // PV 链在表提交之后才启动：缺工具必须在这里拒绝，不能等 sfdisk 写完表才发现。
+        // 在线路径只对块设备开放，分区链直接用现成节点，不需要 losetup
+        preflight_lvm_tools(a.grow_lv, false).unwrap_or_else(|e| bail_fail(Fail::from(e)));
         let (o, old_bytes, pv_lock) = crate::online::resize_pv_online(&dn, part, decide);
         if !o.is_complete() {
             o.report();
             return Some(o);
         }
-        // 锁贯穿 pvresize/lvextend：它们仍属同一次操作（见 resize_done 的持有说明）
-        return Some(resize_done(a, None, part, true, true, old_bytes, pv_lock));
+        // 锁贯穿 pvresize/lvextend：它们仍属同一次操作（见 resize_done 的持有说明）。
+        // 表已提交，收尾失败必须落 Failed（不承诺"未写盘"）
+        return Some(match resize_done(a, None, part, true, true, old_bytes, pv_lock) {
+            Ok(done) => done,
+            Err(cause) => {
+                let out = crate::outcome::Outcome::failed_with(cause, Vec::new());
+                out.report();
+                out
+            }
+        });
     }
 
     // 非 PV：仅挂载中的分区能在线扩（在线不能搬移，只吃连续空闲）

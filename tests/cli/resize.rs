@@ -248,9 +248,10 @@ fn apply_swap_recreate() {
     }
     #[cfg(not(target_os = "linux"))]
     {
-        // 新操作（无 ckpt）：非 Linux 平台必须在写盘前拒绝，不能先写表再以 pending 收场。
-        // 平台闸先于工具探测，故这里断言平台文案而非 mkswap
-        assert_eq!(code, 10, "a new swap relocation on a non-Linux host must be refused: {stderr}");
+        // 新操作（无 ckpt）：非 Linux 平台必须在写盘前停下，不能先写表再以 pending 收场。
+        // 平台闸先于工具探测，故这里断言平台文案而非 mkswap；分类走 outcome 的唯一映射点
+        // （环境不满足 = 30），与其它 require_linux 路径同源
+        assert_eq!(code, 30, "a new swap relocation on a non-Linux host must stop before writing: {stderr}");
         assert!(stderr.contains("requires Linux"), "the refusal must name the platform gate: {stderr}");
     }
 
@@ -264,23 +265,23 @@ fn apply_swap_recreate() {
         assert_eq!(gpt[1].ending_lba, 30686, "root must end before relocated swap");
         assert_eq!(gpt[2].starting_lba, 30687, "swap packed at tail");
         assert_eq!(gpt[2].ending_lba, 32734);
-    } else if code == 10 {
-        // 写盘前拒绝：表与条目都不得变化
-        assert_eq!(gpt[1].ending_lba, 6143, "a refusal must not grow the target");
-        assert_eq!(gpt[2].starting_lba, 6144, "a refusal must not relocate swap");
-        assert_eq!(gpt[2].ending_lba, 8191);
-    } else {
+    } else if code == 20 {
         // 已写盘、swap 未重建 → 条目循环未走完，扩容收尾跳过：root 保持原终点（收尾按全体 moves
         // 取 min(new_first)−1，未走完时会把未搬移条目的旧位划进扩容区）；swap 条目已落位
         assert_eq!(gpt[1].ending_lba, 6143, "growth must not be committed while the swap rebuild is pending");
         assert_eq!(gpt[2].starting_lba, 30687, "swap entry already relocated");
         assert_eq!(gpt[2].ending_lba, 32734);
+    } else {
+        // 写盘前停下（30=环境不满足）：表与条目都不得变化
+        assert_eq!(gpt[1].ending_lba, 6143, "a refusal must not grow the target");
+        assert_eq!(gpt[2].starting_lba, 6144, "a refusal must not relocate swap");
+        assert_eq!(gpt[2].ending_lba, 8191);
     }
 
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// 写盘前的能力门禁：新跑搬移 swap 时平台或重建工具不满足，一律以拒绝（10）
+/// 写盘前的能力门禁：新跑搬移 swap 时平台或重建工具不满足，一律以环境不满足（30）
 /// 结束——不建 checkpoint、不改分区表。PATH 只传给子进程，结论不依赖宿主装了哪些工具
 #[test]
 fn new_swap_relocation_refuses_before_writing() {
@@ -306,7 +307,7 @@ fn new_swap_relocation_refuses_before_writing() {
     let empty = dir.join("path-empty");
     std::fs::create_dir_all(&empty).unwrap();
     let (code, stderr) = run(&empty);
-    assert_eq!(code, 10, "a new swap relocation must refuse before any write: {stderr}");
+    assert_eq!(code, 30, "a new swap relocation must stop before any write: {stderr}");
     #[cfg(target_os = "linux")]
     assert!(stderr.contains("mkswap"), "the refusal must name the missing tool: {stderr}");
     #[cfg(not(target_os = "linux"))]
@@ -324,7 +325,7 @@ fn new_swap_relocation_refuses_before_writing() {
         std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
     let (code, stderr) = run(&only_mkswap);
-    assert_eq!(code, 10, "a new swap relocation must refuse before any write: {stderr}");
+    assert_eq!(code, 30, "a new swap relocation must stop before any write: {stderr}");
     #[cfg(target_os = "linux")]
     assert!(stderr.contains("losetup"), "the refusal must name the missing tool: {stderr}");
     #[cfg(not(target_os = "linux"))]
@@ -339,7 +340,7 @@ fn new_swap_relocation_refuses_before_writing() {
         std::fs::write(both.join("mkswap"), b"").unwrap();
         std::fs::write(both.join("losetup"), b"").unwrap();
         let (code, stderr) = run(&both);
-        assert_eq!(code, 10, "a non-Linux host must be refused even with both tools in PATH: {stderr}");
+        assert_eq!(code, 30, "a non-Linux host must stop even with both tools in PATH: {stderr}");
         assert!(stderr.contains("requires Linux"), "the refusal must name the platform gate: {stderr}");
         assert!(!ckpt.exists(), "a refusal must not create a checkpoint");
     }

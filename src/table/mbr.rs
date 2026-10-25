@@ -186,15 +186,34 @@ pub fn parse_mbr(src: &FileSource) -> io::Result<Option<Vec<MbrPartition>>> {
     Ok(Some(raw.parts))
 }
 
+/// LBA0 写入 + 读回复核：msdos 的六个写原语共用这一处。
+///
+/// `sync_all` 只说明字节交给了设备，缓存丢写与镜像层短写要在重读时才可见；写调用
+/// 已经发生，故不符或读不回都落 `Fail::failed`（盘可能已改），不得报 Infra。
+/// LBA0 被丢掉而这里报成功，盘随后会被读成一张旧表，写命令全部拒
+fn write_lba0_verified(src: &mut WriteSource, lba0: &[u8]) -> Result<(), Fail> {
+    src.write_at(0, lba0)
+        .map_err(|e| Fail::failed(format!("cannot write the MBR: {e} — the on-disk state may have changed")))?;
+    src.sync_all()
+        .map_err(|e| Fail::failed(format!("cannot flush the MBR: {e} — the write may not have landed")))?;
+    let mut got = vec![0u8; lba0.len()];
+    src.read_at(0, &mut got)
+        .map_err(|e| Fail::failed(format!("MBR read-back failed: {e} — the write may not have landed")))?;
+    if got != lba0 {
+        return Err(Fail::failed("the MBR differs from what was written — the device or image layer dropped the write"));
+    }
+    Ok(())
+}
+
 /// 修改 MBR 主分区条目大小（start 不变，纯扩缩）。LBA 单位与 parse_mbr /
 /// add_mdos_entry 的现有约定一致（= 扇区大小）；CHS 字段不动（现代工具惯例，
-/// 内核按 LBA 解析）。经 FileSource 写入自动进 undo journal。
+/// 内核按 LBA 解析）。经 WriteSource 写入自动进 undo journal。
 ///
 /// 崩溃语义：普通单扇区写**不是**规范层面的原子写（untorn write 需要设备显式支持，
 /// Linux 内核对普通写只作 logical block 原子的行为假设），而 MBR 无 GPT 式 CRC，
 /// 掉电撕裂只能靠 0x55AA 签名粗检、字段区损坏不可检出。恢复不依赖"写是原子的"，
 /// 依赖的是写前已持久化的 undo journal——发现盘异常后 `undo` 整扇区重写 LBA0 即还原。
-pub fn resize_mdos_entry(src: &mut FileSource, part: u32, new_size_lba: u32) -> Result<(), Fail> {
+pub fn resize_mdos_entry(src: &mut WriteSource, part: u32, new_size_lba: u32) -> Result<(), Fail> {
     if !(1..=4).contains(&part) {
         return Err(Fail::refused(format!("invalid MBR partition number {part} (1..4)")));
     }
@@ -264,9 +283,7 @@ pub fn resize_mdos_entry(src: &mut FileSource, part: u32, new_size_lba: u32) -> 
         }
     }
     lba0[off + 12..off + 16].copy_from_slice(&new_size_lba.to_le_bytes());
-    src.write_at(0, &lba0)?;
-    src.sync_all()?;
-    Ok(())
+    write_lba0_verified(src, &lba0)
 }
 
 /// 保护 MBR 形状（UEFI 2.10 §5.2.3）：LBA0 须是有效 MBR（签名 0xAA55），槽位 1 恰为一条
@@ -293,7 +310,7 @@ pub(crate) fn pmbr_shape_valid(src: &FileSource) -> io::Result<bool> {
 
 /// msdos：主分区条目追加（槽位 1..=4）。类型判据与 `set_mdos_type` 同源：0x00 是
 /// "未用条目"的形状（本函数用它识别空闲槽），容器类型凭空多出容器语义
-pub fn add_mdos_entry(src: &mut FileSource, start: u64, end: u64, os_type: u8) -> Result<u32, Fail> {
+pub fn add_mdos_entry(src: &mut WriteSource, start: u64, end: u64, os_type: u8) -> Result<u32, Fail> {
     if os_type == 0 {
         return Err(Fail::refused("type 0x00 is the empty-entry marker — give a partition type"));
     }
@@ -368,13 +385,12 @@ pub fn add_mdos_entry(src: &mut FileSource, start: u64, end: u64, os_type: u8) -
     rec[5..8].copy_from_slice(&[0xFE, 0xFF, 0xFF]);
     rec[8..12].copy_from_slice(&(start as u32).to_le_bytes());
     rec[12..16].copy_from_slice(&((end - start + 1) as u32).to_le_bytes());
-    src.write_at(0, &lba0)?;
-    src.sync_all()?;
+    write_lba0_verified(src, &lba0)?;
     Ok((i + 1) as u32)
 }
 
 /// msdos：主分区条目删除（清零对应记录）
-pub fn del_mdos_entry(src: &mut FileSource, part: u32) -> Result<(), Fail> {
+pub fn del_mdos_entry(src: &mut WriteSource, part: u32) -> Result<(), Fail> {
     if !(1..=4).contains(&part) {
         return Err(Fail::refused("msdos supports primary slots 1..=4 only"));
     }
@@ -403,12 +419,11 @@ pub fn del_mdos_entry(src: &mut FileSource, part: u32) -> Result<(), Fail> {
         )));
     }
     rec.fill(0);
-    src.write_at(0, &lba0)?;
-    Ok(src.sync_all()?)
+    write_lba0_verified(src, &lba0)
 }
 
 /// msdos：boot 标志（0x80）开关
-pub fn set_mdos_boot(src: &mut FileSource, part: u32, on: bool) -> Result<(), Fail> {
+pub fn set_mdos_boot(src: &mut WriteSource, part: u32, on: bool) -> Result<(), Fail> {
     if !(1..=4).contains(&part) {
         return Err(Fail::refused("msdos supports primary slots 1..=4 only"));
     }
@@ -434,8 +449,7 @@ pub fn set_mdos_boot(src: &mut FileSource, part: u32, on: bool) -> Result<(), Fa
         }
     }
     lba0[off] = if on { 0x80 } else { 0x00 };
-    src.write_at(0, &lba0)?;
-    Ok(src.sync_all()?)
+    write_lba0_verified(src, &lba0)
 }
 
 /// msdos hidden：OSIndicator 换成 hidden 对应码（visible ↔ visible+0x10），映射取自
@@ -450,7 +464,7 @@ pub(crate) const MDOS_HIDDEN_PAIRS: &[(u8, u8)] = &[
     (0x0E, 0x1E), // FAT16 LBA
 ];
 
-pub fn set_mdos_hidden(src: &mut FileSource, part: u32, on: bool) -> Result<(), Fail> {
+pub fn set_mdos_hidden(src: &mut WriteSource, part: u32, on: bool) -> Result<(), Fail> {
     if !(1..=4).contains(&part) {
         return Err(Fail::refused("msdos supports primary slots 1..=4 only"));
     }
@@ -490,8 +504,7 @@ pub fn set_mdos_hidden(src: &mut FileSource, part: u32, on: bool) -> Result<(), 
         )));
     }
     lba0[off + 4] = next;
-    src.write_at(0, &lba0)?;
-    Ok(src.sync_all()?)
+    write_lba0_verified(src, &lba0)
 }
 
 /// msdos：分区类型字节直改（OSIndicator，类型名域见 util-linux pt-mbr-partnames.h）。
@@ -499,7 +512,7 @@ pub fn set_mdos_hidden(src: &mut FileSource, part: u32, on: bool) -> Result<(), 
 /// 类型字节承担结构语义，改写后解析侧不再认得出 GPT。扩展容器类型（0x05/0x0F/0x85）
 /// 双向拒绝：改成容器类型会凭空多出一条容器语义，把既有容器改走别的类型则让它管辖的
 /// 逻辑分区失去入口——本工具不管理逻辑分区，两个方向都不受理
-pub fn set_mdos_type(src: &mut FileSource, part: u32, t: u8) -> Result<(), Fail> {
+pub fn set_mdos_type(src: &mut WriteSource, part: u32, t: u8) -> Result<(), Fail> {
     if !(1..=4).contains(&part) {
         return Err(Fail::refused("msdos supports primary slots 1..=4 only"));
     }
@@ -542,6 +555,5 @@ pub fn set_mdos_type(src: &mut FileSource, part: u32, t: u8) -> Result<(), Fail>
         )));
     }
     lba0[off + 4] = t;
-    src.write_at(0, &lba0)?;
-    Ok(src.sync_all()?)
+    write_lba0_verified(src, &lba0)
 }
