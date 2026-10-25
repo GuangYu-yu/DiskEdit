@@ -21,10 +21,35 @@ pub(crate) fn scope_byte_range(src: &FileSource, scope: &DeviceScope) -> Result<
 /// 镜像上已有 loop 的放行口径。FS 步要求目标完全空闲；LVM PV 收尾（pvresize）
 /// 允许 DM 持有者——它写的是 PV 元数据，持有该分区的 dm 栈不解析这部分字节
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum ImageLoopPolicy {
+pub(crate) enum ImageLoopPolicy {
     RefuseAny,
     #[cfg(target_os = "linux")]
     AllowDm,
+}
+
+/// 已建立的目标设备：loop 由它自己撤销。存在的意义是把"建立"和"撤销"绑成一个
+/// 对象——写路径要在设备就绪之后、第一次不可回滚的写之前做决定（如 mkfs 的屏障），
+/// 那一步必须发生在 `attach_loop` 之后、`f(&dev)` 之前，而不是在这个函数外面
+pub(crate) struct ScopeDevice {
+    path: String,
+    is_loop: bool,
+}
+
+impl ScopeDevice {
+    pub(crate) fn path(&self) -> &str {
+        &self.path
+    }
+}
+
+impl Drop for ScopeDevice {
+    fn drop(&mut self) {
+        if self.is_loop {
+            // 丢弃返回值不丢信息：`detach_loop` 的每条失败路径（losetup 非零退出、起不来、
+            // udevadm settle 超时）都在内部打印 warning 并给出处置命令——映射已解除这一
+            // 事实与"设备可能仍占着"这一风险都不是 `Drop` 能改变的结论
+            detach_loop(&self.path);
+        }
+    }
 }
 
 /// 按范围执行 FS 操作的统一入口，with_partition_device 的公共底层
@@ -81,6 +106,20 @@ where
     F: FnOnce(&str) -> Result<T, E>,
     E: From<FsError>,
 {
+    let dev = resolve_scope_device(src, scope, off, len, policy)?;
+    f(dev.path())
+}
+
+/// 建立目标设备并确认它没有被别的栈占用；返回时设备已就绪，`drop` 即撤销。
+/// 写路径需要在"设备已建立、还没写第一个字节"这个位置上做决定（如 mkfs 的屏障），
+/// 那一步只有在这里拿得到设备句柄
+pub(crate) fn resolve_scope_device(
+    src: &FileSource,
+    scope: &DeviceScope,
+    off: u64,
+    len: u64,
+    policy: ImageLoopPolicy,
+) -> Result<ScopeDevice, FsError> {
     require_linux()?;
     require_root()?;
     #[cfg(not(target_os = "linux"))]
@@ -88,25 +127,34 @@ where
     if src.is_block {
         // 块设备：分区 = 定位分区节点（/sys/block/<disk>/<part>/start 匹配），不经 loop；
         // 整盘 = 盘节点本身；Range = 无"偏移节点"概念，必须 loop 映射（backing=整盘）
-        let dev = match scope {
-            DeviceScope::Partition(p) => find_block_partition_node(src, *p, off)?,
-            DeviceScope::Whole => src.path.to_string_lossy().into_owned(),
+        return match scope {
+            DeviceScope::Partition(p) => {
+                let dev = find_block_partition_node(src, *p, off)?;
+                require_unmounted(&dev)?;
+                Ok(ScopeDevice { path: dev, is_loop: false })
+            }
+            DeviceScope::Whole => {
+                let dev = src.path.to_string_lossy().into_owned();
+                require_unmounted(&dev)?;
+                Ok(ScopeDevice { path: dev, is_loop: false })
+            }
             DeviceScope::Range(..) => {
                 let loopdev = attach_loop(src, off, len)?;
                 // require 失败也要先 detach 再返回错误，? 短路会漏掉 detach
-                let res = require_unmounted(&loopdev).map_err(Into::into).and_then(|()| f(&loopdev));
-                detach_loop(&loopdev);
-                return res;
+                if let Err(e) = require_unmounted(&loopdev) {
+                    detach_loop(&loopdev);
+                    return Err(e);
+                }
+                Ok(ScopeDevice { path: loopdev, is_loop: true })
             }
         };
-        return require_unmounted(&dev).map_err(Into::into).and_then(|()| f(&dev));
     }
     // 镜像：占用只能按 backing 文件身份反查（LOOP_GET_STATUS64 的 lo_device/lo_inode，
     // 不依赖路径解析）——本工具新建的这个 loop 与用户自己映射的是两个设备，只探测
     // 新建的那个看不见用户那份挂载 / swap / 栈持有。探测本身只在 Linux 上存在，
     // 别的平台已由上面的 require_linux 拒绝
     #[cfg(target_os = "linux")]
-    if let Some(occupant) = image_loop_occupancy(src).map_err(FsError::from)? {
+    if let Some(occupant) = image_loop_occupancy(src)? {
         let why = match occupant {
             LoopOccupancy::Live(dev) => Some(format!(
                 "{dev} is a loop onto this image and is in use — unmount/swapoff it first"
@@ -122,14 +170,16 @@ where
             )),
         };
         if let Some(why) = why {
-            return Err(FsError::Io(io::Error::other(why)).into());
+            return Err(FsError::Io(io::Error::other(why)));
         }
     }
     let loopdev = attach_loop(src, off, len)?;
     // require 失败也要先 detach 再返回错误，? 短路会漏掉 detach
-    let res = require_unmounted(&loopdev).map_err(Into::into).and_then(|()| f(&loopdev));
-    detach_loop(&loopdev);
-    res
+    if let Err(e) = require_unmounted(&loopdev) {
+        detach_loop(&loopdev);
+        return Err(e);
+    }
+    Ok(ScopeDevice { path: loopdev, is_loop: true })
 }
 
 /// 在分区上执行操作的统一入口。
@@ -204,7 +254,7 @@ pub(crate) fn find_block_partition_node(src: &FileSource, part: u32, want_start:
 #[cfg(target_os = "linux")]
 pub(crate) fn block_disk_name(src: &FileSource) -> Result<String, FsError> {
     use std::os::unix::fs::MetadataExt;
-    let rdev = src.file.metadata().map_err(FsError::from)?.rdev();
+    let rdev = src.metadata().map_err(FsError::from)?.rdev();
     if rdev == 0 {
         return Err(FsError::Io(io::Error::other("open target reports no device number")));
     }

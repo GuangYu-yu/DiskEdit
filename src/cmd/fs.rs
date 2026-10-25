@@ -2,7 +2,6 @@
 
 use crate::support::*;
 use crate::args::{parse_size_delta, Args};
-use crate::dev::Mutation;
 use crate::fsid::FsKind;
 use crate::outcome::Outcome;
 use crate::{fsid, fsops};
@@ -108,25 +107,15 @@ pub(crate) fn cmd_mkfs(a: &Args) -> Outcome {
     if let Err(f) = fsops::ensure_idle_before_write(&src, part, part_off, fsops::WriteKind::Overwrite) {
         bail_fail(f);
     }
-    // mkfs 是一次事务，但不可回滚：内容擦掉之后没有"回去"这回事。先落屏障（记下"这个
-    // 分区上创建了文件系统"）再交给外部工具：成功时 main 关闭事务，失败或崩溃则留下一个
-    // active 的不可回滚事务，出路是 `abandon`
-    src.set_mutation(Mutation::Mkfs);
-    src.mark_non_reversible()
-        .unwrap_or_else(|e| bail_fail(Fail::infra(format!(
-            "cannot persist the transaction state: {e} — the target itself was not written, but a recovery record may \
-             remain; release it with: diskedit abandon {}",
-            a.target
-        ))));
-    // 屏障之后的失败不再有"确定未写盘"的出口：类型与占用已在屏障前判过，能到达这里的
-    // 只有 mkfs 自身的失败，而它可能已经在目标上留下字节。FsError 的分类在此压平成
-    // Failed（报告带"盘可能已改变"），让 10/Infra 的"没写"承诺不落在一个已落屏障的现场上
-    match fsops::mkfs(&src, part, fstype) {
+    // 屏障不在这里：建 loop、定位分区节点、开设备都会在真正擦除之前失败，把屏障放在
+    // 命令层会让这些"确定未写盘"的失败也留下一个只能 abandon 的现场。它落在
+    // fsops::mkfs 内、紧贴第一次擦除
+    match fsops::mkfs(&mut src, part, fstype) {
         // 分区表没动，事务已完成：无待办、无需内核重读
         Ok(()) => Outcome::applied_with(Vec::new()),
-        Err(e) => bail_fail(match Fail::from(e) {
-            Fail::Refused(m) | Fail::Infra(m) | Fail::Failed(m) => Fail::failed(m),
-        }),
+        // mkfs 的契约：越过屏障之后的失败一律是 CommandFailed，故分类照用即可——
+        // Refused/Infra 只可能来自擦除之前的步骤
+        Err(e) => bail_fail(Fail::from(e)),
     }
 }
 

@@ -224,13 +224,17 @@ impl TransactionManager {
 
     /// 返回 attach 时首项落点已存在时的文件指纹（见 [`SessionJournal`]）。
     /// 属性读不出来时不认领它：紧随其后的 `open` 若也读不到，命令在写盘之前就已返回错误
-    fn attach_journal(src: &mut FileSource) -> Result<Option<dev::TargetFingerprint>, Fail> {
+    fn attach_journal(src: &mut WriteSource) -> Result<Option<dev::TargetFingerprint>, Fail> {
         let p = src.identity.journal_path().to_path_buf();
-        let adopted = std::fs::metadata(&p).ok().map(|m| dev::TargetFingerprint::from_meta(&m));
+        // 指纹一律取自句柄（Windows 的文件身份只能从句柄问）；打不开就当"没有证据"，
+        // 于是 commit 不会凭路径删它
+        let adopted = std::fs::File::open(&p)
+            .ok()
+            .and_then(|f| dev::TargetFingerprint::from_file(&f).ok());
         // 身份随头落盘：采纳既有 journal 时 `open` 会拿它核对（见 `dev::scene_mismatch`），
         // 故新开的窗口也记的是"这个目标"
         let identity = src.scene();
-        src.journal = Some(
+        src.adopt_journal(
             Journal::open(&p, identity).map_err(|e| Fail::infra(format!("journal open failed: {e}")))?,
         );
         Ok(adopted)
@@ -353,31 +357,49 @@ impl TransactionManager {
             }
         };
         let primary = identity.journal_path().to_path_buf();
-        let ours_file = session.journal_fp.or_else(|| dev::take_created_journal_fp(&primary));
-        // 首项的**删除**只依据文件身份；内容身份只用于比对其余候选
+        // 两条证据，强度不同，删除要分别对待：
+        // - 采纳（`session.journal_fp`）：文件在事务开始前就存在，只能靠文件身份认它；
+        // - 自建（`CREATED_JOURNAL`）：本次运行 `create_new` 成功占下的路径，所有权来自那一刻
+        //   而不是路径字符串——没有文件身份接口的平台（Windows）也只有这一条可用
+        let created_here = dev::take_created_journal_fp(&primary);
+        let ours_file = session.journal_fp.or(created_here);
+        // 首项的**删除**只依据文件身份（或自建的所有权）；内容身份只用于比对其余候选
         let mut remove_primary = false;
         let mut ours_identity = None;
         if let Some(fp) = ours_file {
-            match fp.still_names(&primary) {
-                Ok(true) => {
-                    remove_primary = true;
-                    match dev::Journal::read_identity(&primary) {
-                        Ok(id) => ours_identity = Some(id),
-                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                        Err(e) => eprintln!(
-                            "warning: cannot read the identity of {} ({e}) — only that file is removed",
-                            primary.display()
-                        ),
-                    }
+            let delete_primary = match fp.still_names(&primary) {
+                Ok(Some(true)) => true,
+                // 身份无从比对，但这份文件是本进程本次运行建出来的：删它依据的是所有权
+                Ok(None) if created_here.is_some() => true,
+                Ok(Some(false)) => {
+                    eprintln!(
+                        "warning: {} no longer names the journal this transaction opened — left in place",
+                        primary.display()
+                    );
+                    false
                 }
-                Ok(false) => eprintln!(
-                    "warning: {} no longer names the journal this transaction opened — left in place",
-                    primary.display()
-                ),
-                Err(e) => eprintln!(
-                    "warning: cannot check the identity of {} ({e}) — left in place",
-                    primary.display()
-                ),
+                Ok(None) => {
+                    eprintln!(
+                        "warning: no file identity was recorded for {} — left in place rather than removed on the strength of its path",
+                        primary.display()
+                    );
+                    false
+                }
+                Err(e) => {
+                    eprintln!("warning: cannot check the identity of {} ({e}) — left in place", primary.display());
+                    false
+                }
+            };
+            if delete_primary {
+                remove_primary = true;
+                match dev::Journal::read_identity(&primary) {
+                    Ok(id) => ours_identity = Some(id),
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(e) => eprintln!(
+                        "warning: cannot read the identity of {} ({e}) — only that file is removed",
+                        primary.display()
+                    ),
+                }
             }
         }
         for p in identity.journal_candidates() {
@@ -527,17 +549,30 @@ mod tests {
         let other = TargetIdentity::resolve_image(&dir.join("b.img"));
         std::fs::write(other.journal_path(), b"keep").unwrap();
 
+        // 进程级的"本次运行自建"槽位只记最后一个 `ensure` 的文件；它是另一条独立的
+        // 所有权证据，本用例要检验的是"采纳来的指纹"这一条路径，故先把它清掉
+        let _ = dev::take_created_journal_fp(id.journal_path());
+
+        // 首项要按"attach 时就是它"认领，指纹取该文件此刻的身份（从**句柄**问：
+        // 有的平台只在句柄上有文件身份）
+        let adopted = std::fs::File::open(id.journal_path())
+            .ok()
+            .and_then(|f| dev::TargetFingerprint::from_file(&f).ok());
+        let has_identity = adopted.as_ref().is_some_and(|fp| fp.has_inode_evidence());
         TransactionManager::commit(&SessionJournal {
             identity: id.clone(),
             fingerprint: Default::default(),
-            // 首项要按"attach 时就是它"认领，指纹取该文件此刻的身份
-            journal_fp: std::fs::metadata(id.journal_path())
-                .ok()
-                .map(|m| dev::TargetFingerprint::from_meta(&m)),
+            journal_fp: adopted,
         });
 
+        // 交上去的指纹取自该文件此刻的身份：有证据即删；平台给不出文件身份时
+        // "属于本次事务"没有可交付的判据，必须留下
         for p in &mine {
-            assert!(!p.exists(), "{} belongs to the committed transaction and must be dropped", p.display());
+            if has_identity {
+                assert!(!p.exists(), "{} belongs to the committed transaction and must be dropped", p.display());
+            } else {
+                assert!(p.exists(), "without file identity evidence an adopted journal must stay: {}", p.display());
+            }
         }
         assert!(other.journal_path().exists(), "another target's journal must survive the commit");
 

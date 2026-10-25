@@ -249,6 +249,9 @@ pub struct PvSizeReport {
     pub pv_size: u64,
     pub pe_start: u64,
     pub pv_pe_count: u64,
+    /// 已分配给 LV 的 extent 数；`pv_pe_count - pv_pe_alloc_count` 是这块 PV 上
+    /// 还没交给任何 LV 的 extent——它是持久事实，而"本次运行新增了多少"不是
+    pub pv_pe_alloc_count: u64,
 }
 
 /// 报表里的字节/计数字段：十进制整数，或带全零小数部分的定点渲染。
@@ -285,9 +288,9 @@ fn parse_pv_size_with(
         }
     };
     let fields: Vec<&str> = row.split('|').collect();
-    if fields.len() != 5 {
+    if fields.len() != 6 {
         return Err(LvmError::Failed(format!(
-            "pvs: expected 5 fields (pv_name,dev_size,pv_size,pe_start,pv_pe_count), got {} in {row:?}",
+            "pvs: expected 6 fields (pv_name,dev_size,pv_size,pe_start,pv_pe_count,pv_pe_alloc_count), got {} in {row:?}",
             fields.len()
         )));
     }
@@ -314,6 +317,7 @@ fn parse_pv_size_with(
         pv_size: num(2, "pv_size")?,
         pe_start: num(3, "pe_start")?,
         pv_pe_count: num(4, "pv_pe_count")?,
+        pv_pe_alloc_count: num(5, "pv_pe_alloc_count")?,
     })
 }
 
@@ -325,7 +329,7 @@ pub fn pv_size_report(part_dev: &str) -> Result<PvSizeReport, LvmError> {
         "pvs",
         &[
             "--noheadings", "--nosuffix", "--units", "b", "--separator", "|",
-            "-o", "pv_name,dev_size,pv_size,pe_start,pv_pe_count", part_dev,
+            "-o", "pv_name,dev_size,pv_size,pe_start,pv_pe_count,pv_pe_alloc_count", part_dev,
         ],
     )?;
     parse_pv_size_with(&out, part_dev, &|reported| device_match(part_dev, reported))
@@ -455,6 +459,7 @@ mod tests {
                 pv_size: 21_474_834_432,
                 pe_start: 1_048_576,
                 pv_pe_count: 5_119,
+                pv_pe_alloc_count: 5_119,
             }
         );
     }

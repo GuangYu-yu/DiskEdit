@@ -32,7 +32,14 @@ impl Drop for ReadFaultGuard {
 }
 
 pub struct FileSource {
+    /// 底层句柄。**生产构建里只有本模块能碰**：`&File` 同样实现 `Write`，交出任何一个
+    /// 引用都等于在 journal 与越界检查之外重开一条写路，故外部只能经 [`Self::metadata`]
+    /// 与 [`Self::reread_partitions`] 取到它被允许的那一点能力。测试要拼装夹具，那一侧
+    /// 放宽到 crate 可见
+    #[cfg(test)]
     pub(crate) file: File,
+    #[cfg(not(test))]
+    file: File,
     pub path: PathBuf,
     pub sector_size: u64,
     pub size: u64,
@@ -73,6 +80,10 @@ impl std::ops::Deref for WriteSource {
     }
 }
 
+/// 测试专用的可变解引用：夹具常直接改 `size` / `fingerprint` 这类字段来构造几何。
+/// **生产构建里没有它**——与字段 `file` 的 `cfg` 放宽同一条边界：crate 内其余代码
+/// 拿不到 `&mut FileSource`，也就改不动 journal 与指纹
+#[cfg(test)]
 impl std::ops::DerefMut for WriteSource {
     fn deref_mut(&mut self) -> &mut FileSource {
         &mut self.src
@@ -96,6 +107,12 @@ impl WriteSource {
         Self { src, _lock: None }
     }
 
+    /// 采纳既有 journal（事务层取锁后调用）。这是 `journal` 字段唯一的对外写入口：
+    /// 其余路径只能经 pre-image 记录与屏障影响它
+    pub(crate) fn adopt_journal(&mut self, journal: Journal) {
+        self.src.journal = Some(journal);
+    }
+
     /// 元数据写入：被覆盖字节的原文先入 undo journal 再写
     pub fn write_at(&mut self, off: u64, buf: &[u8]) -> io::Result<()> {
         self.refuse_past_end(off, buf.len())?;
@@ -104,7 +121,7 @@ impl WriteSource {
             let mut orig = vec![0u8; buf.len()];
             self.read_at(off, &mut orig)?;
             // journal 先行落盘：写入发生前，被覆盖字节的原文必须已持久化
-            if let Some(journal) = self.journal.as_mut() {
+            if let Some(journal) = self.src.journal.as_mut() {
                 journal.record(off, &orig, buf)?;
             }
         }
@@ -114,15 +131,20 @@ impl WriteSource {
     /// 数据块写入（搬移的 chunk 拷贝）：不入 undo journal。
     /// 搬移的设计是"前向恢复、无回滚"（见 movepart 模块注释），undo 不消费数据字节，
     /// 记录它们只会产生与搬移量等大的 journal。数据一致性由 ckpt + 幂等重做保证
+    ///
+    /// 屏障由这里自己落，**不靠调用点先记得 mark_non_reversible**：数据一旦写下去，
+    /// 回滚表项就会与盘上内容自相矛盾。同一 mutation 下屏障只落一条（见 [`Journal::barrier`]），
+    /// 逐 chunk 调用因此不产生额外记录
     pub fn write_data_at(&mut self, off: u64, buf: &[u8]) -> io::Result<()> {
+        self.mark_non_reversible()?;
         self.write_raw(off, buf)
     }
 
     pub(crate) fn write_raw(&mut self, off: u64, buf: &[u8]) -> io::Result<()> {
         self.refuse_past_end(off, buf.len())?;
         use std::io::{Seek, SeekFrom, Write};
-        self.file.seek(SeekFrom::Start(off))?;
-        self.file.write_all(buf)
+        self.src.file.seek(SeekFrom::Start(off))?;
+        self.src.file.write_all(buf)
     }
 
     /// 记下"本次操作含有不可回滚的写入"，undo 见到它即拒绝回滚。
@@ -132,7 +154,7 @@ impl WriteSource {
     /// 与内核侧的分区表写入同样无法回滚。凡"回滚表项会与盘上内容自相矛盾"的写入都属于这一类，
     /// 它们共同落一条屏障，屏障上的 mutation 说明是哪一类越过了这条线
     pub fn mark_non_reversible(&mut self) -> io::Result<()> {
-        if let Some(journal) = self.journal.as_mut() {
+        if let Some(journal) = self.src.journal.as_mut() {
             journal.barrier()?;
         }
         Ok(())
@@ -141,13 +163,28 @@ impl WriteSource {
     /// 声明"接下来这类改动是什么"，作用于随后的 pre-image 与屏障记录。
     /// 语义由知道自己在做什么的那一层给出——journal 只负责记，不负责猜
     pub fn set_mutation(&mut self, m: Mutation) {
-        if let Some(journal) = self.journal.as_mut() {
+        if let Some(journal) = self.src.journal.as_mut() {
             journal.set_mutation(m);
         }
     }
 }
 
 impl FileSource {
+    /// 底层文件元数据。**只给这一点能力，不交出句柄**：`&File` 也实现 `Write`，
+    /// 交出去就等于在 journal 与越界检查之外重开一条写路（见字段 `file` 的注释）
+    ///
+    /// 只有 Linux 路径要它（sysfs 反查与 loop 占用探测），故与那些调用点同 cfg
+    #[cfg(target_os = "linux")]
+    pub(crate) fn metadata(&self) -> io::Result<std::fs::Metadata> {
+        self.file.metadata()
+    }
+
+    /// 让内核重读分区表。同样只此一条：调用方要的是"重读"这个动作，不是句柄
+    #[cfg(target_os = "linux")]
+    pub(crate) fn reread_partitions(&self) -> io::Result<()> {
+        crate::ioctl::blkrrpart(&self.file)
+    }
+
     /// 现在这个目标能给出的身份证据种类。与指纹的构造一一对应：镜像恒取文件 inode；
     /// 块设备上整盘属性可读 ⇒ `DeviceId`，loop（指纹取自 backing 文件）⇒ `Inode`，
     /// 两者都没有 ⇒ `Unavailable`
@@ -316,6 +353,7 @@ impl FileSource {
         // 已声明该平台上的别名路径各有一份现场与一把锁）
         #[cfg(not(target_os = "linux"))]
         let identity = TargetIdentity::resolve_image(path);
+        let fingerprint = TargetFingerprint::from_file(&file)?;
         Ok(FileSource {
             identity,
             file,
@@ -324,7 +362,7 @@ impl FileSource {
             size,
             is_block: false,
             journal: None,
-            fingerprint: TargetFingerprint::from_meta(&meta),
+            fingerprint,
             loop_mapping: None,
         })
     }
@@ -364,6 +402,7 @@ impl FileSource {
         let file = File::open(path)?;
         let meta = file.metadata()?;
         let size = meta.len();
+        let fingerprint = TargetFingerprint::from_file(&file)?;
         Ok(FileSource {
             identity: TargetIdentity::resolve_image(path),
             file,
@@ -372,7 +411,7 @@ impl FileSource {
             size,
             is_block: false,
             journal: None,
-            fingerprint: TargetFingerprint::from_meta(&meta),
+            fingerprint,
             loop_mapping: None,
         })
     }

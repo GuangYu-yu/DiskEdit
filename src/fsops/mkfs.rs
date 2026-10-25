@@ -1,6 +1,7 @@
 //! mkfs：外部工具选择、能力检查与执行。
 
 use super::*;
+use crate::dev::WriteSource;
 
 /// `--fs`/`mkfs` 请求要创建的具体类型。与识别域 [`FsKind`] 分属两件事：识别器只到 ext
 /// 家族（0xEF53 区分不出 2/3/4），而 mkfs 请求必须点名 ext2/3/4（`mke2fs -t extN`）。
@@ -143,7 +144,7 @@ pub fn mkfs_capability(fstype: MkfsFs) -> Result<(), FsError> {
 
 /// mkfs：破坏分区数据，调用方须先取确认；执行前先擦残留签名（见 erase_ranges），
 /// 防旧 btrfs/ZFS/RAID 备份超级块残留被 blkid 误认
-pub fn mkfs(src: &FileSource, part: u32, fstype: MkfsFs) -> Result<(), FsError> {
+pub fn mkfs(src: &mut WriteSource, part: u32, fstype: MkfsFs) -> Result<(), FsError> {
     let tool = mkfs_tool(fstype)?;
     // 能力检查必须发生在任何写盘之前：wipe_zero 一旦开始就不可回滚，工具缺失时
     // 目标上"什么都没写"的承诺只能在第一次擦除之前作出
@@ -161,30 +162,45 @@ pub fn mkfs(src: &FileSource, part: u32, fstype: MkfsFs) -> Result<(), FsError> 
         )));
     }
     let ss = src.sector_size;
-    with_scope_device_ranged(src, &DeviceScope::Partition(part), part_off, part_len, |dev| {
-        // wipe_zero 一旦开始就存在部分清零：之后的任何失败都不再是"确定未写盘"，
-        // 统一压成 CommandFailed（→ Failed），报告带"盘上状态可能已改变"的警示
-        wipe_zero(dev, &erase_ranges(part_len, ss)).map_err(|e| {
-            FsError::CommandFailed(format!("mkfs: signature wipe started but failed, the target may be partially erased: {e}"))
-        })?;
-        let mut args: Vec<&str> = Vec::new();
-        if tool.force {
-            args.push("-f");
-        }
-        if let Some(t) = tool.ext_type {
-            args.push("-t");
-            args.push(t.as_str());
-        }
-        args.push(dev);
-        // 工具已拿到设备：启动失败与非零退出同样无法断言写没写、写了多少
-        let out = run(&tool.program, &args).map_err(|e| {
-            FsError::CommandFailed(format!("mkfs: {} was about to run but failed to execute, the target may already be partially erased: {e}", tool.program))
-        })?;
-        if !out.status.success() {
-            return Err(FsError::command(&tool.program, &out));
-        }
-        Ok(())
-    })
+    // 建 loop、定位分区节点、开设备都在写盘之前：这些失败必须停在"确定未写盘"这一侧，
+    // 所以屏障不能由调用方在更早的位置落——它要在这条路径内部、紧贴 wipe_zero
+    let dev = resolve_scope_device(
+        src,
+        &DeviceScope::Partition(part),
+        part_off,
+        part_len,
+        ImageLoopPolicy::RefuseAny,
+    )?;
+    // 擦除一旦开始，前镜像就不再完整，undo 必须被拒；屏障写不下去时一个字节都还没动，
+    // 故报 Io（→ Infra），不报 CommandFailed
+    src.set_mutation(crate::dev::Mutation::Mkfs);
+    src.mark_non_reversible().map_err(|e| {
+        FsError::from(io::Error::other(format!(
+            "cannot persist the transaction barrier: {e} — nothing was written, the target is unchanged"
+        )))
+    })?;
+    // wipe_zero 一旦开始就存在部分清零：之后的任何失败都不再是"确定未写盘"，
+    // 统一压成 CommandFailed（→ Failed），报告带"盘上状态可能已改变"的警示
+    wipe_zero(dev.path(), &erase_ranges(part_len, ss)).map_err(|e| {
+        FsError::CommandFailed(format!("mkfs: signature wipe started but failed, the target may be partially erased: {e}"))
+    })?;
+    let mut args: Vec<&str> = Vec::new();
+    if tool.force {
+        args.push("-f");
+    }
+    if let Some(t) = tool.ext_type {
+        args.push("-t");
+        args.push(t.as_str());
+    }
+    args.push(dev.path());
+    // 工具已拿到设备：启动失败与非零退出同样无法断言写没写、写了多少
+    let out = run(&tool.program, &args).map_err(|e| {
+        FsError::CommandFailed(format!("mkfs: {} was about to run but failed to execute, the target may already be partially erased: {e}", tool.program))
+    })?;
+    if !out.status.success() {
+        return Err(FsError::command(&tool.program, &out));
+    }
+    Ok(())
 }
 
 /// btrfs 多设备拒绝：主 superblock @分区起点+0x10000 的 num_devices 字段（偏移 0x88，

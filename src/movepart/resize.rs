@@ -537,6 +537,10 @@ pub(crate) fn execute_resize(
         proof: src.proof(),
     };
     let save = |c: &RsCheckpoint| atomic_write_ckpt(&p.ckpt_path, &c.serialize());
+    // 撤 ckpt 的判据是"本次作业没留下任何待办"，所以基数必须在**开工前**取：阶段 0 的
+    // 卸载失败、阶段 2 的 HiddenSectors 未修同样会让重跑按 Fresh 算出"尺寸未变 → Leave"
+    // 而报成功，只拿阶段 3 的基数就看不见它们
+    let pending_before = post.len();
 
     // 纯扩容（不搬移、无缩容）没有其余 save 落点：FS 步失败或崩溃后，盘上条目已是新
     // 尺寸，重跑会按 Fresh 算出 old_bytes == new_bytes → Leave 而报成功，FS 永不扩。
@@ -660,7 +664,6 @@ pub(crate) fn execute_resize(
 
     // ---- 阶段 3：扩容 FS ----
     // 要不要扩由 prepare 的决策给出，此处不比尺寸；家族处置与 apply 共用同一实现
-    let pending_before = post.len();
     if p.fs_action == FsAction::Grow {
         // 扩到设备末端的工具以内核尺寸为准：内核视图停在旧尺寸时会以"无需处理"退出 0。
         // 重读失败时不跑 FS 步，把扩容记成待办
@@ -680,9 +683,9 @@ pub(crate) fn execute_resize(
     } else if no_fs {
         log("partition resized (--no-fs: filesystem left untouched)");
     }
-    // ckpt 在 FS 步定论后才撤：FS 步失败而 ckpt 已删时，重跑会按全新作业从旧区重拷，
-    // 自重叠搬移下旧区字节已被写覆盖，重拷即把覆盖后的数据盖回新区。FS 步留下待办时
-    // 保留 ckpt——重跑按续传口径只重试 FS 步
+    // ckpt 在本次作业的所有后置条件定论后才撤：留下任何待办而 ckpt 已删时，重跑会按
+    // 全新作业从旧区重拷（自重叠搬移下旧区字节已被写覆盖，重拷即把覆盖后的数据盖回
+    // 新区），或算出"尺寸未变 → Leave"而报成功、把没做完的那一步永远留在盘上
     if post.len() == pending_before {
         crate::dev::remove_recovery_file(&p.ckpt_path);
     }

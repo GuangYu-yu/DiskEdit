@@ -210,7 +210,7 @@ pub(crate) fn cmd_resize(a: &Args) -> crate::outcome::Outcome {
         if !a.allow_move && !resuming {
             bail_fail(Fail::refused("right side is occupied — pass --allow-move to relocate the blocking partitions (plan will be printed; --yes confirms)".to_string()));
         }
-        let plan = match movepart::make_plan_resuming(&mut src, &g, repair, part) {
+        let plan = match movepart::make_plan_resuming(&src, &g, repair, part) {
             Ok(p) => p,
             Err(f) => bail_fail(f),
         };
@@ -256,7 +256,7 @@ pub(crate) fn cmd_resize(a: &Args) -> crate::outcome::Outcome {
             if !a.allow_move && !resuming {
                 bail_fail(Fail::refused("not enough contiguous free space to the right — pass --allow-move to relocate the blocking partitions (plan will be printed; --yes confirms)".to_string()));
             }
-            let plan = match movepart::make_plan_shift_resuming(&mut src, &g, repair, part, intent) {
+            let plan = match movepart::make_plan_shift_resuming(&src, &g, repair, part, intent) {
                 Ok(p) => p,
                 Err(f) => bail_fail(f),
             };
