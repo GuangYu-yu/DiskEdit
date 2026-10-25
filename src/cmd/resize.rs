@@ -173,6 +173,12 @@ pub(crate) fn cmd_resize(a: &Args) -> crate::outcome::Outcome {
         .unwrap_or_else(|e| bail_fail(Fail::infra(format!("identify failed: {e}"))));
     let is_pv = fstype == Some(fsid::FsKind::Lvm2Pv);
     check_pv_intent(part, fstype, is_pv, shrinking, a.grow_lv, a.no_fs).unwrap_or_else(|f| bail_fail(f));
+    // PV 链的工具必须在写表之前齐备（pvresize/pvs 及 grow-lv 的 lvs/vgs/lvextend）：
+    // 它们在表提交之后才启动，缺工具那时才发现就只剩 PARTIAL 加手工
+    #[cfg(target_os = "linux")]
+    if is_pv {
+        preflight_lvm_tools(a.grow_lv).unwrap_or_else(|e| bail_fail(Fail::from(e)));
+    }
     // 占用闸在 movepart 的 prepare 层（本分支的每条路径都经 prepare_resize/prepare_apply），
     // 不在命令层重复判一次
     if grow_to_end {

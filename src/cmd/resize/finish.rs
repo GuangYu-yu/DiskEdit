@@ -49,7 +49,17 @@ pub(crate) fn resize_done(
         let new_bytes = {
             let ro: &FileSource = match wsrc.as_deref() {
                 Some(w) => w,
-                None => opened.get_or_insert_with(|| open_target_ro(a).unwrap_or_else(|f| bail_fail(f))),
+                // 表已写：重开失败不得沿用 `Fail` 自带的分类（Infra 会承诺"本次未写盘"），
+                // 一律落 Failed。`into_io_error` 正是"此处已越界"的取消息方式
+                None => opened.get_or_insert_with(|| {
+                    open_target_ro(a).unwrap_or_else(|f| {
+                        bail_fail(Fail::failed(format!(
+                            "post-resize: cannot reopen {}: {}",
+                            a.target,
+                            crate::outcome::into_io_error(f)
+                        )))
+                    })
+                }),
             };
             match crate::gpt_policy::partition_bytes(ro, part) {
                 Ok((_, len)) => len,

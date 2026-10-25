@@ -98,6 +98,7 @@ pub(crate) fn resize_part_resume_skips_done_chunks() {
         fs_shrunk: false, chunks_done: 1, chunk_bytes: chunk,
         fp: Default::default(),
         map: None,
+        fstype: None,
     };
     atomic_write_ckpt(&ckpt_path, &ckpt.serialize()).unwrap();
 
@@ -153,6 +154,7 @@ pub(crate) fn resize_part_resume_after_commit_without_ckpt_update() {
         chunk_bytes: chunk,
         fp: Default::default(),
         map: None,
+        fstype: None,
     };
     atomic_write_ckpt(&ckpt_path, &ckpt.serialize()).unwrap();
 
@@ -196,6 +198,7 @@ pub(crate) fn retargeted_resize_after_crash_is_refused() {
         fs_shrunk: false, chunks_done: 4, chunk_bytes: chunk,
         fp: Default::default(),
         map: None,
+        fstype: None,
     };
 
     // (a) 请求与 ckpt 记的目标不同 → 拒绝，且不写盘
@@ -246,6 +249,7 @@ pub(crate) fn divergent_and_no_fs_shrink_are_refused_before_any_write() {
         new_start: 3072, new_end: 5119, fs_shrunk: false, chunks_done: 0, chunk_bytes: chunk,
         fp: Default::default(),
         map: None,
+        fstype: None,
     };
     atomic_write_ckpt(&ckpt_path, &rs.serialize()).unwrap();
     let o = rsize(&mut src, 1, 2048, 4095, chunk, true, &mut |_| {});

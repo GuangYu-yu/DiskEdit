@@ -45,6 +45,8 @@ pub(crate) fn resize_online(
     // BLKRRPART 返回 EBUSY，故走 sfdisk+partx 同步路径
     if is_pv {
         refuse_online_move_flags(a);
+        // PV 链在表提交之后才启动：缺工具必须在这里拒绝，不能等 sfdisk 写完表才发现
+        preflight_lvm_tools(a.grow_lv).unwrap_or_else(|e| bail_fail(Fail::from(e)));
         let (o, old_bytes, pv_lock) = crate::online::resize_pv_online(&dn, part, decide);
         if !o.is_complete() {
             o.report();

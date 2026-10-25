@@ -10,9 +10,47 @@ pub(crate) const CKPT2_MAGIC: &[u8; 8] = b"DKECKPT2";
 /// 旧版本现场不会按"无 ckpt"重跑——read_checkpoint 把"现场存在但不可判读"报成 Infra
 /// 并列明死因，出路是 abandon。
 /// v4：追加目标指纹（3×u64）与 loop 映射（1+2×u64），语义同 CKPT1 v5
-pub(crate) const CKPT2_VERSION: u32 = 4;
+/// v5：追加 FS 类型码（见 [`FSTYPE_CODES`]）：续跑不再回源起点重探
+pub(crate) const CKPT2_VERSION: u32 = 5;
 
-/// resize-part 的 checkpoint（v4）：搬移覆盖源区，中途断电后新旧两处都不完整，
+/// 现场记下的 FS 类型码：0 = 未识别，其余为数组下标 + 1。
+/// **只允许在末尾追加**——已经在盘上的现场按码值回读，顺序变动即把类型读成另一个
+const FSTYPE_CODES: &[FsKind] = &[
+    FsKind::Squashfs,
+    FsKind::Erofs,
+    FsKind::Ext,
+    FsKind::Xfs,
+    FsKind::Btrfs,
+    FsKind::F2fs,
+    FsKind::Exfat,
+    FsKind::Vfat,
+    FsKind::Ntfs,
+    FsKind::HfsPlus,
+    FsKind::Apfs,
+    FsKind::Swap,
+    FsKind::Lvm2Pv,
+];
+
+fn fstype_code(kind: Option<FsKind>) -> u8 {
+    match kind {
+        None => 0,
+        // 表覆盖全部变体（新增变体必须同时追加），取不到即代码与表脱节
+        Some(k) => FSTYPE_CODES.iter().position(|c| *c == k).expect("every FsKind has a checkpoint code") as u8 + 1,
+    }
+}
+
+fn fstype_from_code(code: u8) -> io::Result<Option<FsKind>> {
+    match code {
+        0 => Ok(None),
+        c => FSTYPE_CODES
+            .get(c as usize - 1)
+            .copied()
+            .map(Some)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "unknown resize checkpoint filesystem code")),
+    }
+}
+
+/// resize-part 的 checkpoint（v5）：搬移覆盖源区，中途断电后新旧两处都不完整，
 /// 已完成位置只能由 checkpoint 判定。"表项是否已提交"不在这里存——盘上的分区几何
 /// 就是那个事实，另存一份标记只会与它分叉（见 prepare_resize 的恢复分支）
 pub(crate) struct RsCheckpoint {
@@ -28,6 +66,8 @@ pub(crate) struct RsCheckpoint {
     pub(crate) chunk_bytes: u64,
     pub(crate) fp: crate::dev::TargetFingerprint, // 目标文件指纹（"同路径换文件"防线）
     pub(crate) map: Option<(u64, u64)>,           // 创建时的 loop 映射；None = 非 loop 进入
+    /// 识别出的 FS 类型：续跑直接用它，不再回源起点重探（源区头部可能已被搬移数据覆盖）
+    pub(crate) fstype: Option<FsKind>,
 }
 
 impl RsCheckpoint {
@@ -53,6 +93,8 @@ impl RsCheckpoint {
             b.extend_from_slice(&off.to_le_bytes());
             b.extend_from_slice(&limit.to_le_bytes());
         }
+        // 类型码追加在尾部：已有的字段偏移不因它变动
+        b.push(fstype_code(self.fstype));
         let crc = table::crc32(&b);
         b.extend_from_slice(&crc.to_le_bytes());
         b
@@ -100,6 +142,9 @@ impl RsCheckpoint {
             1 => Some((rd64(b, &mut o)?, rd64(b, &mut o)?)),
             _ => return Err(io::Error::new(io::ErrorKind::InvalidData, "implausible resize checkpoint mapping flag")),
         };
+        // 类型码在尾部：认不出的码即现场不可判读，不退回"未识别"继续跑
+        let fstype = fstype_from_code(*b.get(o).ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "truncated"))?)?;
+        o += 1;
         if table::crc32(&b[..o])
             != u32::from_le_bytes(
                 b.get(o..o + 4)
@@ -142,7 +187,10 @@ impl RsCheckpoint {
         if chunks_done > chunks_limit {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "implausible resize checkpoint chunk progress"));
         }
-        Ok(RsCheckpoint { disk_size, ss, part, old_start, old_end, new_start, new_end, fs_shrunk, chunks_done, chunk_bytes, fp, map })
+        Ok(RsCheckpoint {
+            disk_size, ss, part, old_start, old_end, new_start, new_end,
+            fs_shrunk, chunks_done, chunk_bytes, fp, map, fstype,
+        })
     }
 }
 
@@ -308,7 +356,7 @@ pub(crate) fn prepare_resize(
         .ok_or_else(|| Fail::infra("partition start overflows byte offset"))?, edit)?;
     // 只拦搬移（起点变化）：LUKS/LVM PV/swap 的纯扩缩不搬数据，允许。
     // swap 在此一并拒绝：plan/apply 有 mkswap 重建流程，单分区 resize-part 没有
-    if (FORBIDDEN_TYPE_GUIDS.contains(&e.partition_type_guid) || is_swap_guid(&e.partition_type_guid))
+    if (is_forbidden_type_guid(&e.partition_type_guid) || is_swap_guid(&e.partition_type_guid))
         && new_start != e.starting_lba
     {
         return Err(Fail::refused("swap/LUKS/LVM PV relocation refused (size-only changes are allowed)"));
@@ -346,16 +394,16 @@ pub(crate) fn prepare_resize(
         None => RestoreState::Fresh,
         Some(c) => classify_restore(&requested, c, (old_start, old_end), src.size, ss),
     };
-    let (fs_shrunk, resume_chunks, committed_old) = match state {
-        RestoreState::Fresh => (false, 0, None),
+    let (fs_shrunk, resume_chunks, committed_old, recorded_fstype) = match state {
+        RestoreState::Fresh => (false, 0, None, None),
         // Y = durable 恢复点（ckpt 文件里的值），不是本进程内存进度
         RestoreState::Resume(c) => {
             log(&format!("resuming at chunk {} (durable checkpoint)", c.chunks_done));
-            (c.fs_shrunk, c.chunks_done, None)
+            (c.fs_shrunk, c.chunks_done, None, Some(c.fstype))
         }
         RestoreState::Committed(c) => {
             log("resize already committed — finishing filesystem step");
-            (c.fs_shrunk, c.chunks_done, Some((c.old_start, c.old_end)))
+            (c.fs_shrunk, c.chunks_done, Some((c.old_start, c.old_end)), Some(c.fstype))
         }
         // 有 ckpt 而三个维度对不上：不猜是哪一次作业，也不当作"没有 ckpt"重做一遍
         RestoreState::Divergent(why) => {
@@ -369,9 +417,14 @@ pub(crate) fn prepare_resize(
     let byte_overflow = || Fail::infra("resize LBA arithmetic overflows byte offset");
     let old_bytes = (fb_end - fb_start + 1).checked_mul(ss).ok_or_else(byte_overflow)?;
     let new_bytes = (new_end - new_start + 1).checked_mul(ss).ok_or_else(byte_overflow)?;
-    // 表项 LBA 的单位是表自身的 ss。identify 只读目标内容，仍属事前判定
-    let fstype = crate::fsid::identify(src, old_start.checked_mul(ss).ok_or_else(byte_overflow)?,
-        (old_end - old_start + 1).checked_mul(ss).ok_or_else(byte_overflow)?).map_err(Fail::infra_io)?;
+    // 表项 LBA 的单位是表自身的 ss。identify 只读目标内容，仍属事前判定。
+    // 续跑取 ckpt 记下的类型：源区头部可能已被搬移数据覆盖（自重叠右移且本次扩容时），
+    // 回源起点重探会认不出 FS，把"只差提交"的作业拒掉
+    let fstype = match recorded_fstype {
+        Some(kind) => kind,
+        None => crate::fsid::identify(src, old_start.checked_mul(ss).ok_or_else(byte_overflow)?,
+            (old_end - old_start + 1).checked_mul(ss).ok_or_else(byte_overflow)?).map_err(Fail::infra_io)?,
+    };
 
     // preflight：本操作的后置条件含 FS 调整，工具缺失必须在阶段 0
     // （缩容时 FS shrink 即首次写盘）之前拒绝，否则会留下"表已改、FS 未改"的中间态。
@@ -452,6 +505,7 @@ pub(crate) fn execute_resize(
         chunk_bytes: chunk_len,
         fp: src.fingerprint,
         map: src.loop_mapping,
+        fstype,
     };
     let save = |c: &RsCheckpoint| atomic_write_ckpt(&p.ckpt_path, &c.serialize());
 

@@ -3,21 +3,24 @@
 use super::*;
 use std::sync::Mutex;
 
-/// 本进程用 `create_new` 建成的 journal 落点。`TransactionManager::commit` 据此区分
-/// "本次事务写下的文件"与"命令返回之后同目标另一进程建出的同名文件"——两者在路径与
-/// 记录身份上完全相同，只有创建事件本身能分开它们
-static CREATED_JOURNAL: Mutex<Option<PathBuf>> = Mutex::new(None);
+/// 本进程用 `create_new` 建成的 journal 落点，连同建立时该文件的指纹。
+/// `TransactionManager::commit` 据此区分"本次事务写下的文件"与"命令返回之后同目标
+/// 另一进程建出的同名文件"——两者在路径与记录身份上完全相同，只有创建事件连同建立时的
+/// 文件身份能分开它们
+static CREATED_JOURNAL: Mutex<Option<(PathBuf, TargetFingerprint)>> = Mutex::new(None);
 
-/// 本进程是否用 `create_new` 建过 `p`；命中即清除记录。`TransactionManager::commit` 据此
-/// 区分"本次事务写下的文件"与"命令返回之后同目标另一进程建出的同名文件"——两者在路径与
-/// 记录身份上完全相同，只有创建事件本身能分开它们
-pub(crate) fn journal_created_at(p: &Path) -> bool {
+/// 本进程是否用 `create_new` 建过 `p`；命中即清除记录并返回建立时的文件指纹。
+/// 调用方只比 `dev` / `ino`（[`TargetFingerprint::still_names`]）：journal 的 size
+/// 随记录追加而变，不能参与比对
+pub(crate) fn take_created_journal_fp(p: &Path) -> Option<TargetFingerprint> {
     let mut g = CREATED_JOURNAL.lock().unwrap_or_else(|e| e.into_inner());
-    if g.as_deref() == Some(p) {
-        *g = None;
-        true
-    } else {
-        false
+    match g.as_ref() {
+        Some((path, fp)) if path == p => {
+            let fp = *fp;
+            *g = None;
+            Some(fp)
+        }
+        _ => None,
     }
 }
 
@@ -342,6 +345,14 @@ impl Journal {
     /// magic 的前 4 字节：凡以它开头而版本字节不同的，都是本工具别的版本写下的 journal
     const MAGIC_PREFIX: &[u8; 4] = b"DEJL";
 
+    /// 首部是否为本工具写下的 journal，任一可读版本都算。`MAGIC` 只对应当前版本，
+    /// 而 v4 现场同样是本工具的文件；判"这是不是我们的文件"时不能按当前版本比对
+    pub(crate) fn is_own_header(hdr: &[u8]) -> bool {
+        hdr.len() >= Self::MAGIC.len()
+            && &hdr[..Self::MAGIC_PREFIX.len()] == Self::MAGIC_PREFIX
+            && JournalFormat::from_version(hdr[Self::MAGIC_PREFIX.len()]).is_some()
+    }
+
     /// 头总长 = magic + 身份段 + 身份段的 CRC32。身份段不参与任何记录级 CRC，故自带一个：
     /// 头被改坏时要报"头校验失败"，而不是让改坏后的指纹去和当前目标比出个"指纹不符"。
     /// 记录扫描的起点、撕裂尾截断的下界都由它给出，故测试与 journal 的消费方也要用它
@@ -539,7 +550,11 @@ impl Journal {
             }
             // 新建文件的目录项也必须落盘：否则断电后 journal 整体消失，而写入已经发生
             best_effort_dir_fsync(&self.path);
-            *CREATED_JOURNAL.lock().unwrap_or_else(|e| e.into_inner()) = Some(self.path.clone());
+            // 建立时的文件身份与创建事件一起记下：commit 只凭路径删不掉已被换成
+            // 另一个文件的落点。取不到元数据时留零指纹——那一侧没有 inode 证据，
+            // 路径仍是唯一凭据（见 `TargetFingerprint`）
+            let fp = f.metadata().map(|m| TargetFingerprint::from_meta(&m)).unwrap_or_default();
+            *CREATED_JOURNAL.lock().unwrap_or_else(|e| e.into_inner()) = Some((self.path.clone(), fp));
             self.file = Some(f);
         }
         Ok(self.file.as_mut().expect("the branch above fills an empty slot"))

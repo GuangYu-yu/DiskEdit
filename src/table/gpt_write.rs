@@ -221,5 +221,17 @@ pub fn ensure_protective_mbr(src: &mut FileSource) -> io::Result<()> {
     lba0[511] = 0xAA;
     src.write_at(0, &lba0)?;
     src.sync_all()?;
+    // 读回复核：写调用与 sync 只说明字节交给了设备，缓存丢写或镜像层短写要在重读
+    // 时才可见。LBA0 被丢掉而这里报成功，盘随后会被判成 GPT damaged，写命令全拒
+    let mut got = vec![0u8; lba0.len()];
+    src.read_at(0, &mut got).map_err(|e| {
+        io::Error::new(e.kind(), format!("protective MBR read-back failed: {e} — the write may not have landed"))
+    })?;
+    if got != lba0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "protective MBR differs from what was written — the device or image layer dropped the write",
+        ));
+    }
     Ok(())
 }

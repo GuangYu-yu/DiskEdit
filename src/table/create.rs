@@ -162,6 +162,20 @@ pub const SWAP_TYPE_GUID: [u8; 16] = [
     0x6D, 0xFD, 0x57, 0x06, 0xAB, 0xA4, 0xC4, 0x43, 0x84, 0xE5, 0x09, 0x33, 0xC8, 0x4B, 0x4F, 0x4F,
 ];
 
+/// Linux LUKS 类型 GUID（util-linux libfdisk/src/pt-gpt-partnames.h "Linux LUKS"，
+/// 标准文本 CA7D7CCB-63ED-4C53-861C-1742536059CC 的磁盘字节序）。
+/// movepart 依赖此拒绝搬移加密容器：位移后其元数据语义不明
+pub const LUKS_TYPE_GUID: [u8; 16] = [
+    0xCB, 0x7C, 0x7D, 0xCA, 0xED, 0x63, 0x53, 0x4C, 0x86, 0x1C, 0x17, 0x42, 0x53, 0x60, 0x59, 0xCC,
+];
+
+/// Linux LVM 类型 GUID（util-linux libfdisk/src/pt-gpt-partnames.h "Linux LVM"，
+/// 标准文本 E6D6D379-F507-44C2-A23C-238F2A3DF928 的磁盘字节序）。
+/// movepart 依赖此拒绝搬移 PV
+pub const LVM_TYPE_GUID: [u8; 16] = [
+    0x79, 0xD3, 0xD6, 0xE6, 0x07, 0xF5, 0xC2, 0x44, 0xA2, 0x3C, 0x23, 0x8F, 0x2A, 0x3D, 0xF9, 0x28,
+];
+
 // ---------- msdos（真 MBR）表创建与主分区条目编辑 ----------
 // 限制：仅主分区槽位 1..=4，不支持扩展/逻辑分区链。
 
@@ -179,6 +193,7 @@ pub fn create_mbr(src: &mut FileSource) -> io::Result<()> {
     src.write_at(0, &lba0)?;
     // 与解析侧同一套候选扇区大小：容器 ss 之外的候选说明旧 GPT 可能按另一种扇区
     // 落盘，签名会落在那个候选的 LBA1 上
+    let mut cleared = Vec::new();
     for at in candidate_sector_sizes(ss) {
         if src.size < at + GPT_SIGNATURE.len() as u64 {
             continue;
@@ -187,9 +202,33 @@ pub fn create_mbr(src: &mut FileSource) -> io::Result<()> {
         src.read_at(at, &mut sig)?;
         if &sig == GPT_SIGNATURE {
             src.write_at(at, &[0u8; GPT_SIGNATURE.len()])?;
+            cleared.push(at);
         }
     }
-    src.sync_all()
+    src.sync_all()?;
+    // 读回复核：LBA0 与签名清除的写被缓存/镜像层丢掉时，新盘会在返回 Ok 之后被判成
+    // GptDamaged，而工具内没有修复入口
+    let mut got = vec![0u8; lba0.len()];
+    src.read_at(0, &mut got).map_err(|e| {
+        io::Error::new(e.kind(), format!("MBR read-back failed: {e} — the write may not have landed"))
+    })?;
+    if got != lba0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "MBR differs from what was written — the device or image layer dropped the write",
+        ));
+    }
+    for at in cleared {
+        let mut sig = [0u8; GPT_SIGNATURE.len()];
+        src.read_at(at, &mut sig)?;
+        if sig != [0u8; GPT_SIGNATURE.len()] {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("GPT signature at byte {at} was not cleared — the device or image layer dropped the write"),
+            ));
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn is_mdos_label(src: &FileSource) -> Result<bool, GptError> {
