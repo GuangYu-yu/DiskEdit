@@ -551,13 +551,8 @@ impl TargetIdentity {
                         raw.display()
                     )
                 })?;
-            // 普通文件 backing 按 (dev, ino) 认，块设备 backing 按设备号认（st_rdev 为 0
-            // 的普通文件不会误命中），与占用判定同一套判据
-            let same_object = if meta.rdev() != 0 {
-                bound.rdev != 0 && bound.rdev == meta.rdev()
-            } else {
-                bound.dev == meta.dev() && bound.ino == meta.ino()
-            };
+            // backing 上面已限定为普通文件，按 (dev, ino) 认，与占用判定同一套判据
+            let same_object = bound.dev == meta.dev() && bound.ino == meta.ino();
             if !same_object {
                 return Err(format!(
                     "{} is no longer backed by {} (the bound backing is a different object) — \
