@@ -31,7 +31,11 @@ pub(crate) fn resize_online(
     if !src.is_block {
         return None;
     }
-    let dn = std::path::Path::new(&a.target)
+    // 盘名取打开后的规范路径：`/dev/disk/by-id/…`、`/dev/mapper/…` 这类符号链接的文件名
+    // 在 /proc/swaps 与 /proc/mounts 里都对不上，会把仍在使用的目标判成未挂载
+    let resolved = std::fs::canonicalize(&a.target)
+        .unwrap_or_else(|e| bail_fail(Fail::infra(format!("cannot resolve {} to a kernel disk name: {e}", a.target))));
+    let dn = resolved
         .file_name()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| bail_fail(Fail::refused(format!("cannot derive disk name from {}", a.target))));
@@ -131,6 +135,13 @@ pub(crate) fn online_size<'a>(
                 Some(t) => t / ss * ss,
                 None => cur,
             };
+            // 下界与两条离线路径同判据：不足一个扇区的分区在写表时会被隐式下取整成 0，
+            // 而在线的拒绝点在算完 want 之后、任何写入之前
+            if want < ss {
+                return Err(Fail::refused(format!(
+                    "size {want} < one sector ({ss} bytes) — a partition must keep at least one sector"
+                )));
+            }
             // 目标终点不得越过可用区上界：与离线路径同一判据（长度按扇区下取整后比较）
             if max_len_sectors.is_some_and(|lim| want / ss > lim) {
                 return Err(Fail::refused(format!(

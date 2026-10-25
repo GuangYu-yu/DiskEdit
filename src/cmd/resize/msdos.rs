@@ -2,9 +2,10 @@
 
 use super::*;
 
-/// 表项已写盘之后的失败：任何分类都不再能断言"本次未写盘"，
-/// 出口语义一律压成 `Failed`（报告带"盘可能已改变"的警示）
-fn after_table_write(f: Fail) -> Fail {
+/// 已越过不可回滚点之后的失败：任何分类都不再能断言"本次未写盘"，
+/// 出口语义一律压成 `Failed`（报告带"盘可能已改变"的警示）。
+/// 越过点的两种形态：表项已写（grow 臂）与 FS 已缩（shrink 臂）
+fn after_irreversible(f: Fail) -> Fail {
     match f {
         Fail::Refused(m) | Fail::Infra(m) => Fail::failed(m),
         Fail::Failed(m) => Fail::Failed(m),
@@ -28,12 +29,15 @@ pub(crate) fn mbr_grow_finish(
     let ss = src.sector_size;
     let cur_bytes = lba_bytes(p.size_lba as u64, ss);
     let mut pending: Vec<crate::outcome::Pending> = Vec::new();
-    // --no-fs：分区层之外的后置条件整体出局，与 GPT 路径同语义
-    if !a.no_fs {
+    // --no-fs：分区层之外的后置条件整体出局，与 GPT 路径同语义。
+    // FS 步之前重读内核分区表：resize2fs/xfs_growfs/mkswap 都以 /dev 节点的内核尺寸为准，
+    // 而离线块设备写表后内核仍持旧长度（不会自动重读），按旧尺寸扩容会空跑并以 0 退出。
+    // 重读失败时没有可信的 FS 尺寸，改记待办交给出口（与 GPT 侧 finalize_growth 同一判据）
+    if !a.no_fs && kernel_resync(src) {
         // 区域取自**当前**表（本轮可能已写表）：起点与长度都以盘上现状为准。
         // 此处已越过写盘，判定失败不再有"本次未写盘"的出口语义，故 Refused 按 Failed 如实报
         let (base, len) = crate::gpt_policy::partition_bytes(src, part)
-            .map_err(after_table_write)
+            .map_err(after_irreversible)
             .unwrap_or_else(|f| bail_fail(f));
         match fsops::grow_target_at(src, part, base, len) {
             // 走到这里的是写盘前已放行、没有可扩 FS 的那几种：首启 overlay、PV，以及页格式
@@ -96,9 +100,16 @@ pub(crate) fn mbr_grow_finish(
                 Fail::Refused(why) => pending.push(crate::outcome::Pending::new(
                     part, crate::outcome::PendingKind::Fs, why, String::new(),
                 )),
-                other => bail_fail(after_table_write(other)),
+                other => bail_fail(after_irreversible(other)),
             },
         }
+    } else if !a.no_fs {
+        pending.push(crate::outcome::Pending::new(
+            part,
+            crate::outcome::PendingKind::Fs,
+            "the kernel still reports the old partition size, so the filesystem was not grown — refresh the kernel view (partprobe / partx) and re-run".to_string(),
+            String::new(),
+        ));
     }
     if pending.is_empty() {
         // 表已写 → 统一收尾（内核重读 + 报告）
@@ -255,7 +266,7 @@ pub(crate) fn cmd_resize_msdos(a: &Args, pref: PartSelector, req: &SizeRequest, 
             }
             crate::support::note_sector_truncation("resizing to", bytes, ss);
             table::resize_mdos_entry(&mut src, part, new_size_lba as u32)
-                .unwrap_or_else(|f| bail_fail(f));
+                .unwrap_or_else(|f| bail_fail(after_irreversible(f)));
             // 分区层做完 → 与 grow-to-end 同一条收尾
             mbr_grow_finish(a, &mut src, p, is_pv, is_block)
         } else {
@@ -289,6 +300,7 @@ pub(crate) fn cmd_resize_msdos(a: &Args, pref: PartSelector, req: &SizeRequest, 
                 println!("{line}");
             }
             table::resize_mdos_entry(&mut src, part, new_size_lba as u32)
+                .map_err(after_irreversible)
                 .unwrap_or_else(|f| bail_fail(f));
             // FS 已缩之后浮出的两条待办：回读不出来（缩容可能已完成、落点未证实）与卸载
             // 没做成（清理未完成）——都不改写缩容这一事实，只作为待办浮出

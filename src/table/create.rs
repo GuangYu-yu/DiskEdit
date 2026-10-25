@@ -258,5 +258,11 @@ pub fn table_label(src: &FileSource) -> Result<TableLabel, GptError> {
     if gpt_signature_present(src)? {
         return Ok(TableLabel::GptDamaged);
     }
+    // LBA0 连 MBR 签名都没有时不存在与之竞争的表：盘尾备份若自洽到能给出整张表，那是
+    // 这块盘仅存的一份。落成 None 会让 new 当空盘覆盖掉它，故报 GptDamaged
+    // （写命令对非 gpt/msdos 一律拒绝）
+    if !super::mbr::mbr_signature_present(src)? && super::gpt_parse::backup_table_parseable(src)? {
+        return Ok(TableLabel::GptDamaged);
+    }
     Ok(TableLabel::None)
 }

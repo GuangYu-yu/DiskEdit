@@ -72,6 +72,16 @@ pub struct RawMbr {
     pub damage: Vec<MbrDamage>,
 }
 
+/// LBA0 末两字节是否为 MBR 签名。判型用：签名缺席时不存在与 GPT 竞争的 msdos 表
+pub(crate) fn mbr_signature_present(src: &FileSource) -> io::Result<bool> {
+    if src.size < 512 {
+        return Ok(false);
+    }
+    let mut tail = [0u8; 2];
+    src.read_at(510, &mut tail)?;
+    Ok(u16::from_le_bytes(tail) == MBR_SIGNATURE)
+}
+
 /// 原样解析（不做可操作性判定）。`None` = 这不是一张 MBR 盘
 pub fn parse_mbr_raw(src: &FileSource) -> io::Result<Option<RawMbr>> {
     let ss = src.sector_size as usize;
@@ -86,6 +96,12 @@ pub fn parse_mbr_raw(src: &FileSource) -> io::Result<Option<RawMbr>> {
     // 本工具策略：保护 MBR 布局成立 → 盘交由 GPT 判定（内核探测同口径），不按 msdos 解析。
     // 布局不成立时盘型也不必然是 msdos——0xEE 记录与 LBA1 签名的处置见下方两处
     if pmbr_shape_valid(src)? {
+        return Ok(None);
+    }
+    // 保护布局被改坏而 LBA1 仍有 CRC 自洽的主头：盘仍是 GPT，只是 LBA0 被外部工具或手工
+    // 改过。按 msdos 继续解析会把被改写的槽位当作真实分区交给 mkfs/set，而后者的写入
+    // 起点就在 LBA1 附近，会直接覆盖主头。判据与 table_label 的第 3 条同源
+    if gpt_header_parseable(src)? {
         return Ok(None);
     }
     let mut parts = Vec::new();

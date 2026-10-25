@@ -257,7 +257,18 @@ pub(crate) fn read_table(src: &FileSource) -> Result<Table, Fail> {
         Ok(None) => match table::parse_mbr(src) {
             Err(e) => Err(Fail::infra(format!("parse failed: {e}"))),
             Ok(Some(parts)) => Ok(Table::Mbr(parts)),
-            Ok(None) => Err(Fail::refused("no partition table on target")),
+            Ok(None) => {
+                // 报"无表"会让 mkfs / set 按空白盘处理：而 LBA1 的主头仍 CRC 自洽时，
+                // 盘是 GPT、只是 LBA0 的保护布局被改坏，往 LBA1 起的区间写文件系统会
+                // 直接覆盖主头。此处把两种"读不出条目"分开报
+                if table::gpt_header_parseable(src).unwrap_or(false) {
+                    return Err(Fail::refused(
+                        "the protective MBR no longer has the GPT shape, but the primary GPT header at LBA1 is intact — \
+                         the disk is GPT with a damaged LBA0; repair the table instead of treating it as unpartitioned",
+                    ));
+                }
+                Err(Fail::refused("no partition table on target"))
+            }
         },
     }
 }

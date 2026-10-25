@@ -395,10 +395,10 @@ pub(crate) fn aligned_gaps(used: &[(u64, u64)], lo: u64, hi: u64, unit: u64) -> 
 /// 成功路径提交事务：关闭它的 active 状态（见 `TransactionManager::commit`）。
 /// 身份取事务开始时记下的那个值，不按命令行路径重新解析
 pub(crate) fn drop_journal() {
-    let Some(identity) = TransactionManager::take_identity() else {
+    let Some(session) = TransactionManager::take_identity() else {
         return;
     };
-    TransactionManager::commit(&identity)
+    TransactionManager::commit(&session)
 }
 
 /// checked 换算：表项 LBA 来自盘上内容，回绕的字节值会骗过下游的容量判据——溢出按表损坏报

@@ -2,6 +2,7 @@
 
 use crate::support::*;
 use crate::args::Args;
+use crate::outcome::EXIT_PARTIAL;
 use crate::dev::{classify_journal, FileSource, Journal, JournalCandidate, JournalRead, JournalRecord, RecoveryData};
 
 pub(crate) const HELP: &str = r#"diskedit undo <TARGET> --yes
@@ -91,7 +92,10 @@ fn checkpoint_present(p: &std::path::Path) -> bool {
 /// 而写闸口与 `abandon` 都按设计跳过它——不在这里收掉就没有命令能收。
 ///
 /// 只删**确认属于本目标**的壳：头里的身份与本目标不符即拒绝，绝不按"读出来是空的"就删。
-/// 全部核验完再动手，避免删掉一个之后才在第二个上拒绝而留下半清理状态
+/// 全部核验完再动手，避免删掉一个之后才在第二个上拒绝而留下半清理状态。
+///
+/// 删除失败如实进退出码：壳留在候选落点上，写闸口与 `abandon` 仍按设计跳过它，
+/// 报 0 会让脚本以为现场已经收干净
 fn remove_empty_shells(src: &FileSource, shells: Vec<std::path::PathBuf>) -> ! {
     // 空壳与"目标上留着未收尾的 checkpoint"是两件事：后者描述的是另一族作业的进度
     // （例如搬移搬到一半），undo 回放不了它，也不能假装目标干净——它会让后续 resize
@@ -115,14 +119,24 @@ fn remove_empty_shells(src: &FileSource, shells: Vec<std::path::PathBuf>) -> ! {
         }
     }
     let mut removed = 0;
+    let mut failed: Vec<String> = Vec::new();
     for p in &shells {
         // NotFound 的后置条件（不残留）已经成立；成功删除同时落盘目录项
         if crate::dev::remove_recovery_file(p) {
             removed += 1;
+        } else {
+            failed.push(p.display().to_string());
         }
     }
+    if failed.is_empty() {
+        bail_fail(Fail::refused(format!(
+            "nothing to undo ({removed} empty journal shell(s) removed — they held no records)"
+        )))
+    }
     bail_fail(Fail::refused(format!(
-        "nothing to undo ({removed} empty journal shell(s) removed; they held no records)"
+        "nothing to undo, but {n} empty journal shell(s) could not be removed — they still occupy the candidate spots: {}",
+        failed.join(", "),
+        n = failed.len()
     )))
 }
 
@@ -151,7 +165,7 @@ fn check_replay_entry(src: &FileSource, rec: &JournalRecord) -> EntryCheck {
         Ok(_) => EntryCheck::Mismatch(format!(
             "target no longer matches the journaled write at offset {off} — the disk changed outside this tool \
              (or an interrupted write by this tool itself) after that write; \
-             replaying would overwrite the foreign edit"
+             replaying would overwrite the foreign edit; {FOREIGN_EDIT_HINT}"
         )),
         Err(e) => EntryCheck::Unreadable(format!(
             "cannot verify the journaled write at offset {off} against the target: {e} — refusing to replay over an unverifiable region"
@@ -174,7 +188,29 @@ fn check_replay_entry(src: &FileSource, rec: &JournalRecord) -> EntryCheck {
 /// 调用点类别，故同一偏移的两条记录长度必相同。失效条件：将来新增一类 journaled 局部
 /// 写，其起始偏移与既有类别重合而长度不同——届时这里会退化为"多读一次真盘"的误拒
 /// （fail-closed，一字未写），并应把索引改成 (offset, length) 双键
-fn verify_replay_plan(src: &FileSource, entries: &[JournalRecord]) -> Result<(), Fail> {
+/// 返回 true = 盘上已是每条偏移回滚到底的原文（不需要回放，见下方链首判据）
+fn verify_replay_plan(src: &FileSource, entries: &[JournalRecord]) -> Result<bool, Fail> {
+    // 同一 offset 的整条链回滚到底后，盘上留下的是**最早**那条的原文。上一轮 undo 已把
+    // 每条都写回、却因掉电或 unlink 失败没删 journal 时，重跑会停在这个状态：最后一条
+    // 读到的既不是它的 after 也不是它的 bytes，逐条核对会把它误判成"盘被外部改动"。
+    // 整条链回到链首即整体已回滚，回放再写一遍这些原文是幂等的
+    let mut chain_head: std::collections::HashMap<u64, Vec<u8>> = std::collections::HashMap::new();
+    for rec in entries {
+        if let RecoveryData::PreImage { off, bytes, .. } = &rec.recovery {
+            chain_head.entry(*off).or_insert_with(|| bytes.clone());
+        }
+    }
+    let mut rolled_back = !chain_head.is_empty();
+    for (off, head) in &chain_head {
+        let mut buf = vec![0u8; head.len()];
+        if !matches!(src.read_at(*off, &mut buf), Ok(()) if buf == *head) {
+            rolled_back = false;
+            break;
+        }
+    }
+    if rolled_back {
+        return Ok(true);
+    }
     let mut staged: std::collections::HashMap<u64, Vec<u8>> = std::collections::HashMap::new();
     for rec in entries.iter().rev() {
         let RecoveryData::PreImage { off, bytes, after } = &rec.recovery else { continue };
@@ -196,12 +232,12 @@ fn verify_replay_plan(src: &FileSource, entries: &[JournalRecord]) -> Result<(),
             return Err(Fail::refused(format!(
                 "target no longer matches the journaled write at offset {off} — the disk changed outside \
                  this tool (or an interrupted write by this tool itself) after that write; \
-                 replaying would overwrite the foreign edit; {ROLLBACK_STUCK_REMEDY}"
+                 replaying would overwrite the foreign edit; {FOREIGN_EDIT_HINT}; {ROLLBACK_STUCK_REMEDY}"
             )));
         }
         staged.insert(*off, bytes.clone());
     }
-    Ok(())
+    Ok(false)
 }
 
 /// 逐条核对失败后共用的出路：两种成因（盘上字节被外部改动、目标被缩短到记录之外）下
@@ -210,6 +246,12 @@ fn verify_replay_plan(src: &FileSource, entries: &[JournalRecord]) -> Result<(),
 const ROLLBACK_STUCK_REMEDY: &str =
     "restore the target to the state it was in, then re-run `undo`; if the rollback is no longer \
      wanted, release it with `diskedit abandon`";
+
+/// 外部改动之后的另一半事实：journal 只记盘上字节，内核分区视图是否跟上是另一回事，
+/// 而后续写命令与 FS 工具都按内核视图动手
+const FOREIGN_EDIT_HINT: &str =
+    "if another tool rewrote the table, run partprobe on the disk so the kernel partition view \
+     matches the disk before retrying";
 
 /// checkpoint 的历史命名带 GPT Disk GUID，而 GUID 只在表可读时存在。undo 属恢复路径：
 /// 表读不出来时要照常工作（该候选缺席即可），故一切失败都降级为 None——判据与
@@ -297,12 +339,18 @@ pub(crate) fn cmd_undo(a: &Args) -> u8 {
             )));
         }
         // 整体核对先于任何写回：这份 journal 若不是写给当前盘面的，回滚必须在
-        // 第一个字节落地之前被拒（判据见 verify_replay_plan）
-        verify_replay_plan(&src, &entries).unwrap_or_else(|f| bail_fail(f));
+        // 第一个字节落地之前被拒（判据见 verify_replay_plan）。返回 true 表示盘上已是
+        // 每条偏移回滚到底的原文——上一次 undo 写完却没删 journal 的现场，写回去是幂等的
+        let already_rolled_back = verify_replay_plan(&src, &entries).unwrap_or_else(|f| bail_fail(f));
         // 已写回的条目数：核对失败时的退出码按它分流——refused/infra 的契约是"确定
         // 未写盘"，部分回滚已落盘后按它报会让脚本误判盘面未动（写失败臂同据归 Failed）
         let mut replayed: usize = 0;
-        for rec in entries.iter().rev() {
+        if already_rolled_back {
+            eprintln!("note: the target already holds the pre-image of every journaled write — nothing to write back");
+        }
+        // 整体已回滚时逐条核对必然对不上（链上更早的原文不等于本条 after），故不进入回放
+        let to_replay = if already_rolled_back { &entries[..0] } else { &entries[..] };
+        for rec in to_replay.iter().rev() {
             // Barrier 已在前置整体拒绝（上方 find_map），此臂只作纵深防御——真有漏网
             // 的 Barrier，跳过比回放更接近"不假装回滚了"的安全缺省
             let RecoveryData::PreImage { off, bytes, .. } = &rec.recovery else { continue };
@@ -360,7 +408,7 @@ pub(crate) fn cmd_undo(a: &Args) -> u8 {
         // 仍把它列为现场——回放既然已经成功，这个"有事没做完"的表象必须一并消失。
         // Barrier 型 journal 走不到这里（上方已整体拒绝），Ambiguous 也在挑 journal
         // 时前置拒绝，这里能多删的只有历史候选
-        clear_journal_candidates(src.identity.journal_candidates(), &p);
+        let mut leftovers = clear_journal_candidates(src.identity.journal_candidates(), &p);
         // 事务的恢复状态随回滚一并释放：这份 journal 记下的表写入已经全部回退，而 checkpoint
         // 描述的是同一个事务的进度——留下来只会描述一个已被回滚掉的世界，让后续 resize 被判成
         // Divergent 而永久拒绝（"什么也没做却被拒绝"）。
@@ -374,10 +422,32 @@ pub(crate) fn cmd_undo(a: &Args) -> u8 {
         //    + checkpoint_candidates(legacy_disk_guid)），既不会漏删、也不会删到别处的落点。
         // 新增绕过 begin_or_resume 的 ckpt 写入点，或新增接受非空 active 的入口，即推翻本结论
         for ckpt in src.identity.checkpoint_candidates(legacy_disk_guid(&src)) {
-            crate::dev::remove_recovery_file(&ckpt);
+            if !crate::dev::remove_recovery_file(&ckpt) {
+                leftovers.push(ckpt.display().to_string());
+            }
         }
         // undo 不开撤销窗口（WriteNoJournal）：结果只用于自身退出码
-        table_write_done(&src, &format!("undone {n} journal entries (verify with: diskedit info {})", a.target)).exit_code()
+        let summary = if already_rolled_back {
+            format!(
+                "the journal's writes were already rolled back — nothing written this run (verify with: diskedit info {})",
+                a.target
+            )
+        } else {
+            format!("undone {n} journal entries (verify with: diskedit info {})", a.target)
+        };
+        let code = table_write_done(&src, &summary).exit_code();
+        if leftovers.is_empty() {
+            return code;
+        }
+        // 回放已完成、但现场文件仍在：残留的 journal 让下一次写命令被判 busy，残留的 ckpt
+        // 让后续 resize/apply 被判 Divergent，而此时已无 journal 可再 undo——只能人工处理。
+        // 成功串已打印，出口按"完成但有待办"降级，并逐条指名残留路径
+        eprintln!("warning: the rollback is complete but these recovery files could not be removed:");
+        for p in &leftovers {
+            eprintln!("  {p}");
+        }
+        eprintln!("  next write commands will report this target as busy until they are gone; remove them by hand if they are stale");
+        code.max(EXIT_PARTIAL)
     }
 }
 
@@ -386,11 +456,16 @@ pub(crate) fn cmd_undo(a: &Args) -> u8 {
 /// 我们自己写下的残卷（pick_journal 口径的"读不出"，损伤已逐条告警过），留着会让
 /// 下一次 undo 报 Unreadable、abandon 仍列为现场。陌生内容不删：候选路径按命名
 /// 派生只说明"可能是我们的落点"，证明不了"是我们的文件"——`Journal::open` 拒绝
-/// 采纳陌生文件，这里同判据保留并告警，交 abandon 人工处置
-fn clear_journal_candidates(candidates: &[std::path::PathBuf], picked: &std::path::Path) {
+/// 采纳陌生文件，这里同判据保留并告警，交 abandon 人工处置。
+///
+/// 返回值是删不掉的路径：调用方据此把出口降到"完成但待办"
+fn clear_journal_candidates(candidates: &[std::path::PathBuf], picked: &std::path::Path) -> Vec<String> {
+    let mut failed = Vec::new();
     for cand in candidates {
         if cand == picked {
-            crate::dev::remove_recovery_file(cand);
+            if !crate::dev::remove_recovery_file(cand) {
+                failed.push(cand.display().to_string());
+            }
             continue;
         }
         // 读得出但首部不是本工具 magic ⇒ 陌生文件，保留交人工处置；
@@ -405,7 +480,9 @@ fn clear_journal_candidates(candidates: &[std::path::PathBuf], picked: &std::pat
         match probe {
             Ok(true) => {
                 eprintln!("removing stale journal candidate {}", cand.display());
-                crate::dev::remove_recovery_file(cand);
+                if !crate::dev::remove_recovery_file(cand) {
+                    failed.push(cand.display().to_string());
+                }
             }
             Ok(false) => {
                 eprintln!(
@@ -422,6 +499,7 @@ fn clear_journal_candidates(candidates: &[std::path::PathBuf], picked: &std::pat
             }
         }
     }
+    failed
 }
 
 #[cfg(test)]
@@ -603,6 +681,31 @@ mod tests {
         let now = std::fs::read(&img).unwrap();
         assert_eq!(&now[0..4], &[0xAA; 4], "the oldest pre-image must win");
         assert!(!journal.exists(), "a completed undo must drop the journal");
+
+        let _ = std::fs::remove_file(&img);
+    }
+
+    /// 上一轮 undo 已把整条链写回、却在删 journal 之前掉电（或 unlink 失败）：重跑时
+    /// 盘上停在链首原文。逐条核对只认"写后内容或本条原文"，这里两条都对不上——
+    /// 必须按"整条链已回滚"收尾，否则用户被要求去恢复一个本就正确的盘面
+    #[test]
+    fn a_chain_already_rolled_back_finishes_instead_of_being_rejected() {
+        let img = tmp_path("chain_done_img");
+        let mut jpath = img.clone().into_os_string();
+        jpath.push(".diskedit.journal");
+        let journal = std::path::PathBuf::from(jpath);
+        {
+            let mut j = Journal::open(&journal, jid()).unwrap();
+            j.record(0, &[0xAA; 4], &[0xBB; 4]).unwrap();
+            j.record(0, &[0xBB; 4], &[0xCC; 4]).unwrap();
+        }
+        let mut disk = vec![0u8; 1024];
+        disk[0..4].copy_from_slice(&[0xAA; 4]);
+        std::fs::write(&img, &disk).unwrap();
+
+        assert_eq!(super::cmd_undo(&args_for(&img.to_string_lossy())), 0);
+        assert_eq!(&std::fs::read(&img).unwrap()[0..4], &[0xAA; 4], "the rolled-back state must be kept as is");
+        assert!(!journal.exists(), "finishing must still drop the journal");
 
         let _ = std::fs::remove_file(&img);
     }

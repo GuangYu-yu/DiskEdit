@@ -95,7 +95,10 @@ pub(crate) fn part_resize(t: &OnlineTarget, new_len_bytes: u64) -> Result<(), Pa
                 let now_end = start.saturating_add(len);
                 let snap_end = t.start_bytes.saturating_add(t.part_len_bytes);
                 return Err(PartResizeError::Stale(io::Error::other(format!(
-                    "partition {} on disk changed since the snapshot (now at {start}..{now_end}, snapshot {}..{snap_end}) — refusing to overwrite a foreign edit",
+                    "partition {} on disk changed since the snapshot (now at {start}..{now_end}, snapshot {}..{snap_end}) — \
+                     either another tool rewrote the table, or an earlier refresh of this command's own table write did not \
+                     reach the kernel; run partprobe on the disk and re-run; refusing to overwrite an edit this command \
+                     cannot account for",
                     t.pno,
                     t.start_bytes,
                 ))));

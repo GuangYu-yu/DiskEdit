@@ -517,6 +517,56 @@ pub(crate) fn artifact_names_are_pinned_as_documented() {
     assert_eq!(id.log_path(None), suffix_path(&img, LOG_SUFFIX));
 }
 
+/// 中段某帧的 len 被写坏、其后仍有完整记录：这是损坏而不是撕裂尾。按撕裂处理会让
+/// `Journal::open` 物理截断，把后续每条已通过 CRC、写入确实发生过的原文永久删掉
+#[test]
+pub(crate) fn a_corrupt_record_length_ahead_of_valid_records_is_damage() {
+    let p = journal_path("midlen");
+    let mut j = Journal::open(&p, jid()).unwrap();
+    j.record(0, &[0xAA; 4], &[0xBB; 4]).unwrap();
+    j.record(8, &[0xCC; 4], &[0xDD; 4]).unwrap();
+    drop(j);
+
+    let mut data = std::fs::read(&p).unwrap();
+    data[Journal::HEADER_LEN..Journal::HEADER_LEN + 4].copy_from_slice(&0xFF_FFFFu32.to_le_bytes());
+    std::fs::write(&p, &data).unwrap();
+
+    let Err(e) = Journal::read_entries(&p) else {
+        panic!("a length that runs past its successors must be reported as damage");
+    };
+    assert!(e.to_string().contains("records follow it"), "unexpected error: {e}");
+    assert!(Journal::open(&p, jid()).is_err(), "open must refuse a damaged record instead of truncating it");
+    assert_eq!(std::fs::read(&p).unwrap(), data, "open must not have truncated the file");
+    let _ = std::fs::remove_file(&p);
+}
+
+/// 尾部真的只写了一半（其后没有任何完整帧）仍按撕裂尾处理：读出的前缀完整，
+/// 采纳时把文件截到最后一帧之后
+#[test]
+pub(crate) fn a_torn_tail_after_the_last_record_is_truncated() {
+    let p = journal_path("torn");
+    let mut j = Journal::open(&p, jid()).unwrap();
+    j.record(0, &[0xAA; 4], &[0xBB; 4]).unwrap();
+    drop(j);
+
+    let mut data = std::fs::read(&p).unwrap();
+    let end = data.len();
+    data.extend_from_slice(&[0x10, 0x00]);
+    std::fs::write(&p, &data).unwrap();
+
+    assert!(
+        matches!(Journal::read_entries(&p).unwrap(), JournalRead::TruncatedTail(v) if v.len() == 1),
+        "a half-written record head at the end is a torn tail"
+    );
+    drop(Journal::open(&p, jid()).unwrap());
+    assert_eq!(
+        std::fs::read(&p).unwrap().len(),
+        end,
+        "the adopted journal must be cut back to its last complete record"
+    );
+    let _ = std::fs::remove_file(&p);
+}
+
 /// 非 loop 块设备的身份是**盘级**的：journal / checkpoint / lock 按 disk_key 落点，
 /// 旧版按分区落的 self_key 落点降为历史候选（整盘目标上两个键重合，不产生重复候选）。
 /// 断言用 state_dir() 自身拼期望值——测试不改环境变量，进程内并行测试共享环境
@@ -547,9 +597,9 @@ pub(crate) fn block_identity_keys_on_the_whole_disk() {
     assert_eq!(id.journal[1], state_dir().join(format!("sdb{JOURNAL_SUFFIX}")));
 }
 
-/// loop 设备的身份收敛到 backing 文件：现场落 backing 的兄弟文件（首候选），旧版
-/// state_dir 落点降为历史候选，GUID 补列开启。realpath 取不到时退到原始路径串，
-/// 兄弟文件仍是首候选——backing 消失不等于现场不可达
+/// loop 设备的身份绑定 backing **对象**：重新打开 backing、用已打开句柄解析名字，现场落
+/// 该名字的兄弟文件（首候选），旧版 state_dir 落点降为历史候选，GUID 补列开启。
+/// backing 消失后身份不再可解析（名字已经不是对象），此处拒绝而非把现场挂到同名路径旁
 #[cfg(target_os = "linux")]
 #[test]
 pub(crate) fn loop_identity_converges_to_the_backing_file() {
@@ -558,7 +608,8 @@ pub(crate) fn loop_identity_converges_to_the_backing_file() {
     let backing = dir.join("backing.img");
     std::fs::write(&backing, b"x").unwrap();
 
-    let id = TargetIdentity::loop_backed(Path::new("/dev/loop0"), backing.clone());
+    let id = TargetIdentity::loop_backed(Path::new("/dev/loop0"), backing.clone())
+        .expect("an existing backing file resolves");
     assert_eq!(id.journal[0], suffix_path(&backing, JOURNAL_SUFFIX));
     assert_eq!(id.lock_path(), suffix_path(&backing, LOCK_SUFFIX));
     let tok = key_token(&backing.to_string_lossy());
@@ -567,10 +618,9 @@ pub(crate) fn loop_identity_converges_to_the_backing_file() {
     assert_eq!(id.journal[2], state_dir().join(format!("loop0{JOURNAL_SUFFIX}")));
     assert!(id.has_block_legacy_naming());
 
-    // backing 已删：realpath 失败退回原始路径串，兄弟文件仍是首候选
+    // backing 已删：身份不再可解析，不退到 sysfs 字符串
     std::fs::remove_file(&backing).unwrap();
-    let id = TargetIdentity::loop_backed(Path::new("/dev/loop0"), backing.clone());
-    assert_eq!(id.journal[0], suffix_path(&backing, JOURNAL_SUFFIX));
+    assert!(TargetIdentity::loop_backed(Path::new("/dev/loop0"), backing.clone()).is_err());
 
     let _ = std::fs::remove_dir_all(&dir);
 }

@@ -455,6 +455,18 @@ pub(crate) fn decode_name(raw: &[u8; 72]) -> gptman::PartitionName {
     s.trim_end_matches('\0').into()
 }
 
+/// 盘尾备份是否自洽到能独立给出整张表。**只用于判型**（主头不可读、LBA0 也无可竞争的
+/// 表时），`pmbr` 只作为附带的盘型元数据传给 `parse_backup`，判型不消费它
+pub(crate) fn backup_table_parseable(src: &FileSource) -> io::Result<bool> {
+    let pmbr = pmbr_size_state(src)?;
+    for &ss in &candidate_sector_sizes(src.sector_size) {
+        if matches!(parse_backup(src, ss, pmbr), ParsedCopy::Usable(_)) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 /// LBA1 是否带 GPT 头签名（UEFI 2.10 §5.3.1：头首 8 字节）。头不自述扇区大小，
 /// 与 load_gpt 同一套候选逐个探测。
 ///
