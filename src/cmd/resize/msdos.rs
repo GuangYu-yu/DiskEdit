@@ -62,6 +62,19 @@ pub(crate) fn mbr_grow_finish(
                             "boot the target and check that the overlay is mounted and its size covers the new space",
                         ));
                     }
+                    // 分区已扩、里面却没有可扩的 FS，类型认不出：写盘前 check_grow_step 对
+                    // 这一态是拒绝，走到这里只因盘在两步之间被改动。后置条件"新空间对该
+                    // 分区可用"未达成，不能报成完整成功（与 GPT 侧 finalize_growth 同一判据）
+                    Ok(None) if matches!(g0, fsops::Growable::NoFilesystem(None)) => {
+                        println!("partition extended (filesystem not resized — its type was not identified)");
+                        pending.push(crate::outcome::Pending::new(
+                            part,
+                            crate::outcome::PendingKind::Fs,
+                            "the partition was extended but the filesystem inside was not resized — its type was not identified",
+                            "identify the filesystem inside and grow it with its own tool, or re-run with --no-fs to change only the partition",
+                        ));
+                    }
+                    // PV 的空间在 pvresize 链里生效，本命令没有可写的后置条件
                     Ok(None) => {}
                     // 探测读失败属设备故障，且此刻表多半已写：Failed 的"盘可能已改变"
                     // 警示比伪造一条 Pending 如实
