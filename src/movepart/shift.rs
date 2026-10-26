@@ -705,15 +705,29 @@ pub(crate) fn finalize_growth(
         Ok(g @ (Growable::OverlayPending | Growable::SwapUnactivatable | Growable::NoFilesystem(_))) => {
             match swap_rebuild_pending(src, part, base, len)? {
                 Some(missed) => post.pending(missed),
-                // 这句是 FS 步的实情，不是对区域内容的断言：`unknown` 同时涵盖空区域与
-                // 认不出的类型，PV 的空间则在收尾的 pvresize 链里生效
-                None => log(match g {
-                    // 只说这句实情：内层没认出文件系统（未格式化 / 认不出的格式 / 字节不足），
-                    // 不替它断言是哪一种
-                    Growable::OverlayPending => "partition extended (no filesystem was identified in the overlay RW layer)",
-                    Growable::NoFilesystem(Some(FsKind::Lvm2Pv)) => "partition extended (the PV space takes effect through the pvresize chain)",
-                    _ => "partition extended (filesystem not resized — its type was not identified)",
-                }),
+                None => match g {
+                    // 这段空间要等目标系统启动时由 fstools 建成 overlay：本命令的默认
+                    // 后置条件（空间对该分区可用）因此未达成，出口不能报完整成功。
+                    // "does not verify" 是实情——启动期那一步失败与否本命令看不到
+                    Growable::OverlayPending => {
+                        log("partition extended (the overlay filesystem is created at system startup)");
+                        post.pending(Pending::new(
+                            part,
+                            PendingKind::RuntimeInitialization,
+                            "the overlay filesystem is initialized by the target system at startup; \
+                             this command did not verify that step",
+                            "boot the target and check that the overlay is mounted and its size covers the new space",
+                        ));
+                    }
+                    // 这句是 FS 步的实情，不是对区域内容的断言：`unknown` 同时涵盖空区域与
+                    // 认不出的类型，PV 的空间则在收尾的 pvresize 链里生效
+                    _ => log(match g {
+                        Growable::NoFilesystem(Some(FsKind::Lvm2Pv)) => {
+                            "partition extended (the PV space takes effect through the pvresize chain)"
+                        }
+                        _ => "partition extended (filesystem not resized — its type was not identified)",
+                    }),
+                },
             }
         }
         // swap：内容可弃，表项已扩 → mkswap 重建使新空间生效（UUID/卷标保持）。

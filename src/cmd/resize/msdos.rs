@@ -45,11 +45,23 @@ pub(crate) fn mbr_grow_finish(
             // 两步之间被改动而见到它。
             // 仍要探一遍"元数据是 swap 却激活不了"那类真实待办——探测用扩容前的区间：
             // swap 签名恒在分区首 32K 内，起点未变，原长度足够容纳
-            Ok(fsops::Growable::OverlayPending | fsops::Growable::SwapUnactivatable | fsops::Growable::NoFilesystem(_)) => {
+            Ok(g0 @ (fsops::Growable::OverlayPending | fsops::Growable::SwapUnactivatable | fsops::Growable::NoFilesystem(_))) => {
                 match movepart::swap_rebuild_pending(
                     src, part, lba_bytes(p.start_lba as u64, ss), lba_bytes(p.size_lba as u64, ss),
                 ) {
                     Ok(Some(missed)) => pending.push(missed),
+                    // overlay 的空间由目标系统启动时建满：与 GPT 路径同一结论、同一出口
+                    // （分区表类型不改变结果类型，只影响日志）
+                    Ok(None) if matches!(g0, fsops::Growable::OverlayPending) => {
+                        println!("partition extended (the overlay filesystem is created at system startup)");
+                        pending.push(crate::outcome::Pending::new(
+                            part,
+                            crate::outcome::PendingKind::RuntimeInitialization,
+                            "the overlay filesystem is initialized by the target system at startup; \
+                             this command did not verify that step",
+                            "boot the target and check that the overlay is mounted and its size covers the new space",
+                        ));
+                    }
                     Ok(None) => {}
                     // 探测读失败属设备故障，且此刻表多半已写：Failed 的"盘可能已改变"
                     // 警示比伪造一条 Pending 如实
