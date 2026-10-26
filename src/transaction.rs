@@ -12,6 +12,7 @@
 //! **不保存 completion_state**：能不能算"完成"由 durable journal 与盘上状态共同决定；
 //! 本层只保管盘上推导不出来的东西（独占所有权），不复制一份可能与盘上分叉的副本
 
+use std::num::NonZeroUsize;
 use std::path::Path;
 use std::sync::Mutex;
 
@@ -85,7 +86,8 @@ pub(crate) fn active_recovery_records(
             }
             dev::JournalCandidate::Records(read) => {
                 let entries = match read {
-                    dev::JournalRead::Complete(v) | dev::JournalRead::TruncatedTail(v) => v,
+                    dev::JournalRead::Complete(v) => v,
+                    dev::JournalRead::TruncatedTail { records, .. } => records,
                 };
                 out.push(RecoveryRecord::Journal { path: p.clone(), entries: Some(entries) });
             }
@@ -121,6 +123,10 @@ pub(crate) struct SessionJournal {
     pub(crate) identity: TargetIdentity,
     pub(crate) fingerprint: dev::TargetFingerprint,
     pub(crate) journal_fp: Option<dev::TargetFingerprint>,
+    /// 事务开始时采纳的 journal 有撕裂尾时，被丢掉的字节数（`None` = 文件本就在记录边界
+    /// 上）。那段记录没写完，对应的写入没有发生；但同样的形状也可能是记录被外部截掉的
+    /// 残骸。两种情况都无从回放，故本次运行不能报成完整收尾（见 [`TransactionManager::commit`]）
+    pub(crate) truncated: Option<NonZeroUsize>,
 }
 
 /// 一个进程只跑一条命令，因此单槽位足够；`begin_or_resume` 是唯一的写入点
@@ -213,12 +219,13 @@ impl TransactionManager {
                 }
             }
         };
-        let journal_fp = Self::attach_journal(&mut src)?;
+        let (journal_fp, truncated) = Self::attach_journal(&mut src)?;
         // 身份在锁下、与已打开的句柄同一时刻定稿；`commit` 只消费这一个值
         *session_slot() = Some(SessionJournal {
             identity: src.identity.clone(),
             fingerprint: src.fingerprint,
             journal_fp,
+            truncated,
         });
         Ok((src, resumed))
     }
@@ -227,7 +234,7 @@ impl TransactionManager {
     /// "哪一类字段才是身份证据"，而恢复端无法据此证明"还是那个目标"——写下的现场既
     /// 不能续跑也不能回滚。故在任何字节落盘之前拒绝，而不是等恢复时才发现已经无路可走
     fn refuse_unidentifiable(src: &FileSource) -> Result<(), Fail> {
-        if matches!(src.scene().proof, dev::IdentityProof::Unavailable) {
+        if matches!(src.scene().proof, dev::LiveProof::Unavailable) {
             return Err(Fail::refused(
                 "this target exposes no stable identity (no device ID and no file identity): an interrupted write \
                  here could neither be resumed nor undone, so it is refused before any byte is written",
@@ -236,9 +243,10 @@ impl TransactionManager {
         Ok(())
     }
 
-    /// 返回 attach 时首项落点已存在时的文件指纹（见 [`SessionJournal`]）。
+    /// 返回 attach 时首项落点已存在时的文件指纹（见 [`SessionJournal`]），以及采纳时
+    /// 被截掉的残尾字节数（`None` = 文件本就在记录边界上）。
     /// 属性读不出来时不认领它：紧随其后的 `open` 若也读不到，命令在写盘之前就已返回错误
-    fn attach_journal(src: &mut WriteSource) -> Result<Option<dev::TargetFingerprint>, Fail> {
+    fn attach_journal(src: &mut WriteSource) -> Result<(Option<dev::TargetFingerprint>, Option<NonZeroUsize>), Fail> {
         let p = src.identity.journal_path().to_path_buf();
         // 指纹一律取自句柄（Windows 的文件身份只能从句柄问）；打不开就当"没有证据"，
         // 于是 commit 不会凭路径删它
@@ -248,10 +256,10 @@ impl TransactionManager {
         // 身份随头落盘：采纳既有 journal 时 `open` 会拿它核对（见 `dev::scene_mismatch`），
         // 故新开的窗口也记的是"这个目标"
         let identity = src.scene();
-        src.adopt_journal(
-            Journal::open(&p, identity).map_err(|e| Fail::infra(format!("journal open failed: {e}")))?,
-        );
-        Ok(adopted)
+        let (journal, truncated) = Journal::adopt(&p, identity)
+            .map_err(|e| Fail::infra(format!("journal open failed: {e}")))?;
+        src.adopt_journal(journal);
+        Ok((adopted, truncated))
     }
 
     /// 目标被一件没做完的事占着。**出路必须按现场性质分三路**，给同一句话就是把用户
@@ -355,10 +363,19 @@ impl TransactionManager {
     /// 删除必须与 journal 的创建落在同一个独占窗口里。取不到锁即保留 journal
     /// （漏删会被下次运行报成 busy，但不会丢失别人的现场）
     /// 返回 `true` 表示现场已按本次事务的意图收干净；`false` 表示有文件该删而没删掉
-    /// （或没取到锁），调用方必须把这次运行报成"未完全收尾"，而不是照常给 0
+    /// （没取到锁，或认不出它是否仍属于本次事务），或者采纳过的 journal 带着无法回放的
+    /// 残尾——三种都属于"本次运行没有完全收尾"，调用方必须据此降级退出码，而不是照常给 0
     pub(crate) fn commit(session: &SessionJournal) -> bool {
         let identity = &session.identity;
         let mut clean = true;
+        // 采纳的 journal 带着撕裂尾：那截字节不构成可回放记录，已被丢弃；但它对应的
+        // 写入既不能回放也不能排除，而删掉 journal 之后这份不确定性再没有第二个载体
+        if let Some(cut) = session.truncated {
+            eprintln!(
+                "warning: the journal this transaction resumed ended in {cut} byte(s) that form no complete record — they were discarded, and whatever was recorded after the last complete record cannot be replayed"
+            );
+            clean = false;
+        }
         // 重新取锁后目标归本进程独占，下面两个动作（删除与目录落盘）才不会被别人的
         // 新建动作穿插；锁失败只影响"现在能不能关窗口"，不是数据错误
         let _lock = match TargetLock::acquire(identity, Some(&session.fingerprint)) {
@@ -388,11 +405,15 @@ impl TransactionManager {
                 Ok(Some(true)) => true,
                 // 身份无从比对，但这份文件是本进程本次运行建出来的：删它依据的是所有权
                 Ok(None) if created_here.is_some() => true,
+                // 认不出这份文件是否仍属于本次事务：不删是 fail-safe，但"该收的没收掉"
+                // 必须如实计入——否则本次运行按成功退出，这份 journal 却在下一轮把目标
+                // 顶成 busy
                 Ok(Some(false)) => {
                     eprintln!(
                         "warning: {} no longer names the journal this transaction opened — left in place",
                         primary.display()
                     );
+                    clean = false;
                     false
                 }
                 Ok(None) => {
@@ -400,10 +421,12 @@ impl TransactionManager {
                         "warning: no file identity was recorded for {} — left in place rather than removed on the strength of its path",
                         primary.display()
                     );
+                    clean = false;
                     false
                 }
                 Err(e) => {
                     eprintln!("warning: cannot check the identity of {} ({e}) — left in place", primary.display());
+                    clean = false;
                     false
                 }
             };
@@ -430,7 +453,7 @@ impl TransactionManager {
             let Some(ours_identity) = &ours_identity else { continue };
             match dev::Journal::read_identity(p) {
                 Ok(id) => {
-                    if let Some(why) = dev::scene_mismatch(&id, ours_identity) {
+                    if let Some(why) = dev::recorded_scenes_mismatch(&id, ours_identity) {
                         eprintln!("warning: {why} — {} is left in place", p.display());
                     } else if !dev::remove_recovery_file(p) {
                         eprintln!("warning: could not remove {} — it still names this target", p.display());
@@ -471,8 +494,9 @@ impl TransactionManager {
 
     /// 现场身份与 Disk GUID 取自不同节点时的入口。在线 PV 路径按**分区**节点枚举现场
     /// （`from_block_keys` 在 self_key != disk_key 时同时列出盘级键与旧版按分区命名的
-    /// 历史候选，`undo /dev/sdXN` 正是按后者枚举的），而历史 GUID 命名的 checkpoint 只能
-    /// 从**整盘**的表读——分区节点的 0 偏移不是 GPT 头
+    /// 历史候选，这是**唯一**会列出后者的入口：undo / abandon 都要求整盘目标，整盘身份
+    /// 的 self_key 与 disk_key 相同，旧版按分区键落的现场因此不在它们的候选里），而历史
+    /// GUID 命名的 checkpoint 只能从**整盘**的表读——分区节点的 0 偏移不是 GPT 头
     pub(crate) fn refuse_if_active_at(
         identity: &FileSource,
         disk: &FileSource,
@@ -561,7 +585,7 @@ mod tests {
             // 头完整、零记录的空壳：read_identity 可读，身份与本次事务一致
             let mut j = dev::Journal::open(
                 p,
-                dev::SceneIdentity { fp: Default::default(), map: None, proof: dev::IdentityProof::Inode },
+                dev::LiveScene { fp: Default::default(), map: None, proof: dev::LiveProof::Inode },
             )
             .unwrap();
             j.ensure().unwrap();
@@ -584,6 +608,7 @@ mod tests {
             identity: id.clone(),
             fingerprint: Default::default(),
             journal_fp: adopted,
+            truncated: None,
         });
 
         // 交上去的指纹取自该文件此刻的身份：有证据即删；平台给不出文件身份时
@@ -617,6 +642,7 @@ mod tests {
             identity: id.clone(),
             fingerprint: Default::default(),
             journal_fp: None,
+            truncated: None,
         });
 
         assert!(p.exists(), "a journal created after this transaction returned must survive");

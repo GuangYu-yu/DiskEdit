@@ -319,7 +319,7 @@ pub(crate) fn load_entry_array(
 ) -> Result<(Vec<u8>, EntryArrayGeometry), GptError> {
     let bad_geometry = |m: &str| GptError::InvalidHeader(m.into());
     // 条目数组几何的唯一构造点：条目数/单条目大小合规、字节数不超自定安全上限，三件事
-    // 都在那里判定，本处不重复表达（此前这里的 16 MiB 上限与 checkpoint 的 128 各说各话）
+    // 都在那里判定，本处不重复表达（两侧各写一份上限，数值会各自漂移）
     let geom = EntryArrayGeometry::new(ss, header.size_of_partition_entry, header.number_of_partition_entries, MAX_ARRAY_BYTES)
         .map_err(|e| bad_geometry(&e.to_string()))?;
     // 损坏表的 lba/size 字段不受信任，乘加全部 checked，防溢出回绕

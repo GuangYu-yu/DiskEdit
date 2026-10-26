@@ -105,7 +105,7 @@ pub(crate) fn canonical_headers(h: &RawHeader, last_lba: u64, backup_array_lba: 
 /// 每个中间落点都留有一份 CRC 自洽的表；主备两份各自自洽而内容分叉时 CRC 检不出
 /// （不一致只出现在跨副本比较），解析按主副本优先收敛——中断的代价是本次提交丢失，
 /// 不是表损坏。
-pub fn commit_gpt(src: &mut WriteSource, g: &RawGpt, last_lba: u64) -> io::Result<()> {
+pub(crate) fn commit_gpt(src: &mut WriteSource, g: &RawGpt, last_lba: u64) -> io::Result<()> {
     commit_table(src, g.ss, &g.header, &g.entries, last_lba)
 }
 

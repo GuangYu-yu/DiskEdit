@@ -173,12 +173,10 @@ pub struct SceneIdentity {
     pub proof: IdentityProof,
 }
 
-/// 现场记录里"凭什么认这个目标"。恢复时先比种类、再比同种类的字段：种类不同说明现在的
-/// 目标不是记录时那类载体，此时逐字段的零值会把"没法比"读成"相符"
+/// 当前目标能给出的"凭什么认它"。写入侧只可能是这三类：`Legacy` 是"旧格式里没有这一字节"
+/// 的解析标记，当前目标永远给不出它，故不在此枚举里
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum IdentityProof {
-    /// v4 / v5 头：格式里没有这一字节。只出现在解析结果里，不写入
-    Legacy,
+pub enum LiveProof {
     /// 整盘节点的稳定设备 ID（[`DEVICE_IDENTITY_ATTRS`] 之一的哈希）
     DeviceId,
     /// inode 身份：镜像文件的 (dev, ino)；loop 设备取 backing 文件的 (dev, ino)，
@@ -188,11 +186,34 @@ pub enum IdentityProof {
     Unavailable,
 }
 
-impl IdentityProof {
-    /// 落盘字节。`Legacy` 写 0，而 0 不是合法值（旧格式没有这一字节，解析按损坏拒绝）
+/// 当前目标的"创建时事实"：与头里存的那三样同构，种类只取 [`LiveProof`]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LiveScene {
+    pub fp: TargetFingerprint,
+    pub map: Option<(u64, u64)>,
+    pub proof: LiveProof,
+}
+
+/// 现场记录里"凭什么认这个目标"。恢复时先比种类、再比同种类的字段：种类不同说明现在的
+/// 目标不是记录时那类载体，此时逐字段的零值会把"没法比"读成"相符"
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IdentityProof {
+    /// v4 / v5 头：格式里没有这一字节。只出现在解析结果里，不写入
+    Legacy,
+    /// 记录时当前目标给出的种类
+    Live(LiveProof),
+}
+
+impl From<LiveProof> for IdentityProof {
+    fn from(p: LiveProof) -> Self {
+        Self::Live(p)
+    }
+}
+
+impl LiveProof {
+    /// 落盘字节（v6 身份段末字节）。取值范围与 [`IdentityProof::from_tag`] 接受的集合一致
     pub(crate) fn tag(self) -> u8 {
         match self {
-            Self::Legacy => 0,
             Self::DeviceId => 1,
             Self::Inode => 2,
             Self::Unavailable => 3,
@@ -206,6 +227,12 @@ impl IdentityProof {
             3 => Some(Self::Unavailable),
             _ => None,
         }
+    }
+}
+
+impl IdentityProof {
+    pub(crate) fn from_tag(tag: u8) -> Option<Self> {
+        LiveProof::from_tag(tag).map(Self::Live)
     }
 }
 
@@ -228,11 +255,26 @@ impl IdentityProof {
 ///
 /// 映射的有无本身参与比对：经 loop 写入的现场不允许改从裸镜像继续（反之亦然）——
 /// 两种途径下同一 LBA 指向的字节不同，映射差异不是可忽略的记法差
-pub(crate) fn scene_mismatch(recorded: &SceneIdentity, actual: &SceneIdentity) -> Option<String> {
-    match (recorded.proof, actual.proof) {
-        (IdentityProof::Inode, IdentityProof::Inode)
-        | (IdentityProof::DeviceId, IdentityProof::DeviceId)
-        | (IdentityProof::Legacy, IdentityProof::Inode) => {}
+pub(crate) fn scene_mismatch(recorded: &SceneIdentity, actual: &LiveScene) -> Option<String> {
+    compare(recorded, actual.proof.into(), &actual.fp, actual.map)
+}
+
+/// 两份**录制**现场描述的是否同一目标。清候选的路上没有当前目标可比，只能拿另一份现场
+/// 记录的头来比；判据与 [`scene_mismatch`] 共用同一处，只是"当前侧"也来自记录
+pub(crate) fn recorded_scenes_mismatch(recorded: &SceneIdentity, other: &SceneIdentity) -> Option<String> {
+    compare(recorded, other.proof, &other.fp, other.map)
+}
+
+fn compare(
+    recorded: &SceneIdentity,
+    actual_proof: IdentityProof,
+    actual_fp: &TargetFingerprint,
+    actual_map: Option<(u64, u64)>,
+) -> Option<String> {
+    match (recorded.proof, actual_proof) {
+        (IdentityProof::Live(LiveProof::Inode), IdentityProof::Live(LiveProof::Inode))
+        | (IdentityProof::Live(LiveProof::DeviceId), IdentityProof::Live(LiveProof::DeviceId))
+        | (IdentityProof::Legacy, IdentityProof::Live(LiveProof::Inode)) => {}
         (IdentityProof::Legacy, _) => {
             return Some(
                 "this scene was recorded before device identities were stored, and the target now exposes \
@@ -241,34 +283,41 @@ pub(crate) fn scene_mismatch(recorded: &SceneIdentity, actual: &SceneIdentity) -
                     .to_string(),
             )
         }
-        (IdentityProof::Unavailable, _) => {
+        (IdentityProof::Live(LiveProof::Unavailable), _) => {
             return Some(
                 "this scene was recorded without any device identity (no stable attribute was readable), \
                  so it cannot be matched against the device now present"
                     .to_string(),
             )
         }
-        (IdentityProof::DeviceId, IdentityProof::Unavailable) => {
+        (IdentityProof::Live(_), IdentityProof::Legacy) => {
+            return Some(
+                "the compared scene was recorded before device identities were stored, so the two \
+                 identity kinds cannot be matched"
+                    .to_string(),
+            )
+        }
+        (IdentityProof::Live(LiveProof::DeviceId), IdentityProof::Live(LiveProof::Unavailable)) => {
             return Some(format!(
                 "the device identity recorded by this scene ({:#018x}) is not readable on the target now",
                 recorded.fp.id,
             ))
         }
-        (IdentityProof::DeviceId, _) => {
+        (IdentityProof::Live(LiveProof::DeviceId), _) => {
             return Some(format!(
                 "the target now exposes a file inode identity instead of the whole-disk identity this scene \
                  was recorded with ({:#018x})",
                 recorded.fp.id,
             ))
         }
-        (IdentityProof::Inode, IdentityProof::Unavailable) => {
+        (IdentityProof::Live(LiveProof::Inode), IdentityProof::Live(LiveProof::Unavailable)) => {
             return Some(
                 "the target now exposes no stable identity at all, so the file inode this scene was \
                  recorded with cannot be matched"
                     .to_string(),
             )
         }
-        (IdentityProof::Inode, _) => {
+        (IdentityProof::Live(LiveProof::Inode), _) => {
             return Some(
                 "the target now exposes a whole-disk identity instead of the file inode this scene was \
                  recorded with"
@@ -277,29 +326,29 @@ pub(crate) fn scene_mismatch(recorded: &SceneIdentity, actual: &SceneIdentity) -
         }
     }
     if recorded.fp.has_inode_evidence()
-        && actual.fp.has_inode_evidence()
-        && (recorded.fp.dev, recorded.fp.ino) != (actual.fp.dev, actual.fp.ino)
+        && actual_fp.has_inode_evidence()
+        && (recorded.fp.dev, recorded.fp.ino) != (actual_fp.dev, actual_fp.ino)
     {
         return Some(format!(
             "the file fingerprint changed since this recovery scene was recorded (was dev:{} ino:{}, \
              now dev:{} ino:{})",
-            recorded.fp.dev, recorded.fp.ino, actual.fp.dev, actual.fp.ino,
+            recorded.fp.dev, recorded.fp.ino, actual_fp.dev, actual_fp.ino,
         ));
     }
-    if recorded.fp.has_size_evidence() && actual.fp.has_size_evidence() && recorded.fp.size != actual.fp.size {
+    if recorded.fp.has_size_evidence() && actual_fp.has_size_evidence() && recorded.fp.size != actual_fp.size {
         return Some(format!(
             "the file size changed since this recovery scene was recorded (was {} bytes, now {})",
-            recorded.fp.size, actual.fp.size,
+            recorded.fp.size, actual_fp.size,
         ));
     }
     // 种类同为 `DeviceId` 时两侧都有 ID 证据（`FileSource::proof` 只在该字段非零时给出它）
-    if recorded.proof == IdentityProof::DeviceId && recorded.fp.id != actual.fp.id {
+    if recorded.proof == IdentityProof::Live(LiveProof::DeviceId) && recorded.fp.id != actual_fp.id {
         return Some(format!(
             "the device identity changed since this recovery scene was recorded (was {:#018x}, now {:#018x})",
-            recorded.fp.id, actual.fp.id,
+            recorded.fp.id, actual_fp.id,
         ));
     }
-    match (recorded.map, actual.map) {
+    match (recorded.map, actual_map) {
         (Some((ro, rl)), Some((co, cl))) if (ro, rl) != (co, cl) => Some(format!(
             "loop mapping changed since this recovery scene was recorded (was offset={ro} sizelimit={rl}, \
              now offset={co} sizelimit={cl})"
@@ -487,8 +536,11 @@ impl TargetIdentity {
     }
 
     /// 镜像身份：Linux 上取 realpath（文件不存在——cleanup 路径的常态之一——退字面
-    /// 路径），其余平台字面路径。非 Unix 上同一文件的别名路径（硬链接、符号链接、
-    /// junction）因此各有一份现场与一把锁——见 README 的"并发边界"
+    /// 路径），其余平台字面路径。realpath 只收敛符号链接与路径写法：**硬链接不收敛**
+    /// （两个名字指向同一 inode，realpath 各给各的），因此同一镜像的两条硬链接路径各
+    /// 派生一份 journal / checkpoint——在一处写下的现场，另一处看不见。别名路径上的
+    /// 并发写入在 unix 上由数据文件自身的 inode 级第二道锁收敛（见 `image_data_path`），
+    /// 其余平台只剩锁文件这一道
     pub(crate) fn resolve_image(path: &Path) -> Self {
         #[cfg(target_os = "linux")]
         {

@@ -197,7 +197,15 @@ pub fn resize_online(
                 if let Err(e) = refuse_btrfs_multi_device(&t, fstype) {
                     return Fail::from(e).into_outcome();
                 }
-                let mnt = t.mnt.to_string_lossy().into_owned();
+                // 本函数的目标由挂载点解析得出，mnt 恒为 Some；把 None 挡在写盘之前，
+                // 免得一个推不出的挂载点变成空参数传给 btrfs（它会被当成另一个路径）
+                let Some(mnt) = t.mnt.as_deref() else {
+                    return Outcome::refused(
+                        "shrinking a filesystem online needs its mount point, and this target has none — \
+                         shrink it with the offline path",
+                    );
+                };
+                let mnt = mnt.to_string_lossy().into_owned();
                 match run("btrfs", &["filesystem", "resize", &bytes.to_string(), &mnt]) {
                     // ToolMissing / spawn 失败发生在本次首次写盘之前 → Infra；
                     // 启动后拿不到退出状态则可能已改 FS → Failed（映射见 Fail::from）
@@ -207,7 +215,39 @@ pub fn resize_online(
                     }
                     Ok(_) => {}
                 }
-                // FS 已缩：此后任何失败都不再是"未动盘"，表未写的情形只能报 Failed
+                // FS 已缩：此后任何失败都不再是"未动盘"，表未写的情形只能报 Failed。
+                // 工具退 0 不等于 FS 已缩到请求值：先回读实际尺寸，与离线侧同一条判据。
+                // 读不出或实际值仍大于请求值时分区不能缩进去——末端会落在 FS 内部，
+                // 尾部数据从此不可达
+                let fs_now = crate::fsops::read_fs_bytes(
+                    crate::fsid::FsKind::Btrfs,
+                    &t.part_dev.to_string_lossy(),
+                );
+                match fs_now {
+                    Ok(actual) if actual <= bytes => {}
+                    Ok(actual) => {
+                        return Outcome::applied_with(vec![Pending::new(
+                            t.pno,
+                            PendingKind::Fs,
+                            format!(
+                                "btrfs reported success but the filesystem is still {actual} bytes, more than the requested \
+                                 {bytes} — the partition was left at its old size"
+                            ),
+                            crate::fsops::size_read_back_hint(crate::fsid::FsKind::Btrfs),
+                        )]);
+                    }
+                    Err(e) => {
+                        return Outcome::applied_with(vec![Pending::new(
+                            t.pno,
+                            PendingKind::Fs,
+                            format!(
+                                "btrfs reported success but the filesystem size could not be read back ({e}) — the partition \
+                                 was left at its old size because the shrink cannot be confirmed"
+                            ),
+                            crate::fsops::size_read_back_hint(crate::fsid::FsKind::Btrfs),
+                        )]);
+                    }
+                }
                 match part_resize(&t, bytes) {
                     Ok(()) => {}
                     // 表已写、仅内核同步失败：FS 已缩 + 内核视图过期，两条正交事实都记上
