@@ -44,6 +44,9 @@ pub(crate) fn note_fs_writes_not_journaled() {
 pub enum PendingKind {
     Fs,
     Swap,
+    /// 该步被推迟到目标系统启动期完成（如 OpenWrt 的 overlay 初始化）：本命令没有做，
+    /// 也不保证那一侧一定成功。与 Fs/Swap 的区别在"由谁完成"，不在"是否算完成"
+    RuntimeInitialization,
     /// 其余机制（LVM 链等）：显示标签由调用方给出
     Other(&'static str),
 }
@@ -227,11 +230,16 @@ impl Outcome {
             let what = match p.kind {
                 PendingKind::Fs => "fs grow",
                 PendingKind::Swap => "swap rebuild",
+                PendingKind::RuntimeInitialization => "overlay initialization",
                 PendingKind::Other(what) => what,
             };
             eprintln!("  [part {}] {what}: {}", p.part, p.detail);
             if !p.hint.is_empty() {
-                eprintln!("           run manually: {}", p.hint);
+                match p.kind {
+                    // 这一档的后续动作不在本机、也不由用户当场执行，提示的是核实方式
+                    PendingKind::RuntimeInitialization => eprintln!("           after startup: {}", p.hint),
+                    _ => eprintln!("           run manually: {}", p.hint),
+                }
             }
         }
     }
