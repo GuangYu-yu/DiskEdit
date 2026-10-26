@@ -134,7 +134,7 @@ pub(crate) fn disk_identity_is_shared_by_a_partition_and_its_whole_disk() {
     let root = std::env::temp_dir().join(format!("diskedit_diskid_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(root.join("sda/sda1")).unwrap();
-    std::fs::create_dir_all(root.join("dm-0")).unwrap();
+    std::fs::create_dir_all(root.join("dm-0/dm")).unwrap();
     std::fs::write(root.join("sda/size"), "2048\n").unwrap();
     std::fs::write(root.join("sda/wwid"), "naa.5000c500aabbccdd\n").unwrap();
     std::fs::write(root.join("sda/sda1/partition"), "1\n").unwrap();
@@ -707,29 +707,52 @@ pub(crate) fn block_identity_keys_on_the_whole_disk() {
 /// loop 设备的身份绑定 backing **对象**：重新打开 backing、用已打开句柄解析名字，现场落
 /// 该名字的兄弟文件（首候选），旧版 state_dir 落点降为历史候选，GUID 补列开启。
 /// backing 消失后身份不再可解析（名字已经不是对象），此处拒绝而非把现场挂到同名路径旁
+///
+/// 比对的一侧来自内核给这个 loop 记下的 backing 对象，所以这里必须有一个真绑定：
+/// 绑不上（无空闲设备或没有权限，CI 的 runner 用户即如此）就没有可造出的现场，跳过
 #[cfg(target_os = "linux")]
 #[test]
 pub(crate) fn loop_identity_converges_to_the_backing_file() {
+    struct Bound {
+        dev: PathBuf,
+        dir: PathBuf,
+    }
+    impl Drop for Bound {
+        fn drop(&mut self) {
+            let _ = std::process::Command::new("losetup").arg("-d").arg(&self.dev).output();
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
     let dir = std::env::temp_dir().join(format!("diskedit_loop_id_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let backing = dir.join("backing.img");
-    std::fs::write(&backing, b"x").unwrap();
+    std::fs::write(&backing, vec![0u8; 1 << 20]).unwrap();
+    let out = match std::process::Command::new("losetup")
+        .args(["--find", "--show"])
+        .arg(&backing)
+        .output()
+    {
+        Ok(o) if o.status.success() => o,
+        _ => return,
+    };
+    let dev = PathBuf::from(String::from_utf8_lossy(&out.stdout).trim());
+    let _cleanup = Bound { dev: dev.clone(), dir: dir.clone() };
+    let name = dev.file_name().unwrap().to_string_lossy().into_owned();
 
-    let id = TargetIdentity::loop_backed(Path::new("/dev/loop0"), backing.clone())
-        .expect("an existing backing file resolves");
+    let id = TargetIdentity::loop_backed(&dev, backing.clone()).expect("a bound backing file resolves");
     assert_eq!(id.journal[0], suffix_path(&backing, JOURNAL_SUFFIX));
     assert_eq!(id.lock_path(), suffix_path(&backing, LOCK_SUFFIX));
     let tok = key_token(&backing.to_string_lossy());
     assert_eq!(id.journal[1], state_dir().join(format!("{tok}{JOURNAL_SUFFIX}")));
     assert_eq!(id.checkpoint[1], state_dir().join(format!("{tok}{CHECKPOINT_SUFFIX}")));
-    assert_eq!(id.journal[2], state_dir().join(format!("loop0{JOURNAL_SUFFIX}")));
+    assert_eq!(id.journal[2], state_dir().join(format!("{name}{JOURNAL_SUFFIX}")));
     assert!(id.has_block_legacy_naming());
 
     // backing 已删：身份不再可解析，不退到 sysfs 字符串
     std::fs::remove_file(&backing).unwrap();
-    assert!(TargetIdentity::loop_backed(Path::new("/dev/loop0"), backing.clone()).is_err());
-
-    let _ = std::fs::remove_dir_all(&dir);
+    assert!(TargetIdentity::loop_backed(&dev, backing.clone()).is_err());
 }
 
 /// 镜像身份以 realpath 为主体：经符号链接打开与直接打开收敛到同一现场，字面路径
