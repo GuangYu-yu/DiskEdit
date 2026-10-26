@@ -16,22 +16,24 @@ mk_layout() { # $1=img $2=extra create args...
 fill_p23() { # 随机数据填 p2/p3，记录整分区哈希
   local T=$1
   LD=$(lo_attach "$T")
+  lo_waitpart "${LD}p2" && lo_waitpart "${LD}p3" || { echo "分区节点未就绪"; rc=1; losetup -d "$LD"; return; }
   mount_at "${LD}p2" /testmnt && dd if=/dev/urandom of=/testmnt/b2.bin bs=1M count=350 2>/dev/null
   umount /testmnt
   mount_at "${LD}p3" /testmnt && dd if=/dev/urandom of=/testmnt/b3.bin bs=1M count=350 2>/dev/null
   umount /testmnt
-  MD2=$(md5sum "${LD}p2" | cut -d' ' -f1)
-  MD3=$(md5sum "${LD}p3" | cut -d' ' -f1)
+  MD2=$(mdsum "${LD}p2")
+  MD3=$(mdsum "${LD}p3")
   losetup -d "$LD"
 }
 
 check_data() { # $1=img
   local T=$1 rc=0
   LD=$(lo_attach "$T")
-  MD2G=$(md5sum "${LD}p2" | cut -d' ' -f1)
-  [ "$MD2" = "$MD2G" ] && echo "p2 DATA OK" || { echo "p2 DATA CORRUPT"; rc=1; }
-  MD3G=$(md5sum "${LD}p3" | cut -d' ' -f1)
-  [ "$MD3" = "$MD3G" ] && echo "p3 DATA OK" || { echo "p3 DATA CORRUPT"; rc=1; }
+  lo_waitpart "${LD}p2" && lo_waitpart "${LD}p3" || { echo "分区节点未就绪"; rc=1; losetup -d "$LD"; return 1; }
+  MD2G=$(mdsum "${LD}p2")
+  [ "$MD2" = "$MD2G" ] && echo "p2 DATA OK" || { echo "p2 DATA CORRUPT (got $MD2G)"; rc=1; }
+  MD3G=$(mdsum "${LD}p3")
+  [ "$MD3" = "$MD3G" ] && echo "p3 DATA OK" || { echo "p3 DATA CORRUPT (got $MD3G)"; rc=1; }
   e2fsck -fn "${LD}p2" >/dev/null 2>&1 || { echo "p2 e2fsck FAILED"; rc=1; }
   e2fsck -fn "${LD}p3" >/dev/null 2>&1 || { echo "p3 e2fsck FAILED"; rc=1; }
   losetup -d "$LD"
@@ -85,9 +87,10 @@ $BF create "$T" --size 300M --name p1 >/dev/null
 $BF create "$T" --size 200M --name p2 --fs swap >/dev/null
 $BF create "$T" --size 300M --name p3 --fs ext4 >/dev/null
 LD=$(lo_attach "$T")
+lo_waitpart "${LD}p3" || { echo "分区节点未就绪"; rc=1; losetup -d "$LD"; exit $rc; }
 mount_at "${LD}p3" /testmnt && dd if=/dev/urandom of=/testmnt/b3.bin bs=1M count=250 2>/dev/null
 umount /testmnt
-MD3=$(md5sum "${LD}p3" | cut -d' ' -f1)
+MD3=$(mdsum "${LD}p3")
 UUID_BEFORE=$(blkid -s UUID -o value "${LD}p2")
 losetup -d "$LD"
 echo "swap uuid before: $UUID_BEFORE"
@@ -97,9 +100,10 @@ echo "aborted (expected)"
 # （swap 重建属搬移的一环，与 --no-fs 无关；该开关只免掉 grow 目标的 FS 步骤）
 $BF resize "$T":1 +100M --allow-move --yes --no-fs >/dev/null 2>&1; echo "round2 exit=$?"
 LD=$(lo_attach "$T")
+lo_waitpart "${LD}p3" && lo_waitpart "${LD}p2" || { echo "分区节点未就绪"; rc=1; losetup -d "$LD"; exit $rc; }
 UUID_AFTER=$(blkid -s UUID -o value "${LD}p2")
-MD3G=$(md5sum "${LD}p3" | cut -d' ' -f1)
-[ "$MD3" = "$MD3G" ] && echo "p3 DATA OK" || { echo "p3 DATA CORRUPT"; rc=1; }
+MD3G=$(mdsum "${LD}p3")
+[ "$MD3" = "$MD3G" ] && echo "p3 DATA OK" || { echo "p3 DATA CORRUPT (got $MD3G)"; rc=1; }
 losetup -d "$LD"
 [ -n "$UUID_BEFORE" ] && [ "$UUID_BEFORE" = "$UUID_AFTER" ] && echo "SWAP UUID PRESERVED" || { echo "SWAP UUID MISMATCH ($UUID_BEFORE -> $UUID_AFTER)"; rc=1; }
 
@@ -113,9 +117,10 @@ $BF new "$T" --yes >/dev/null
 $BF create "$T" --size 400M --name p1 >/dev/null
 $BF create "$T" --size 300M --name p2 --fs ext4 >/dev/null
 LD=$(lo_attach "$T")
+lo_waitpart "${LD}p2" || { echo "分区节点未就绪"; rc=1; losetup -d "$LD"; exit $rc; }
 mount_at "${LD}p2" /testmnt && dd if=/dev/urandom of=/testmnt/b2.bin bs=1M count=250 2>/dev/null
 umount /testmnt
-MD2=$(md5sum "${LD}p2" | cut -d' ' -f1)
+MD2=$(mdsum "${LD}p2")
 losetup -d "$LD"
 DISKEDIT_FAULT=chunk:33 $BF resize "$T":1 +100M --allow-move --yes --no-fs >/dev/null 2>&1
 echo "aborted (expected)"
@@ -125,8 +130,9 @@ R=$(echo "$OUT" | grep -o "resuming at entry [0-9]* chunk [0-9]*" | head -1)
 echo "resume: $R (want entry 0 chunk 33)"
 [ "$R" = "resuming at entry 0 chunk 33" ] && echo "SELF-OVERLAP RESUME OK" || { echo "SELF-OVERLAP RESUME WRONG"; rc=1; }
 LD=$(lo_attach "$T")
-MD2G=$(md5sum "${LD}p2" | cut -d' ' -f1)
-[ "$MD2" = "$MD2G" ] && echo "p2 DATA OK" || { echo "p2 DATA CORRUPT"; rc=1; }
+lo_waitpart "${LD}p2" || { echo "分区节点未就绪"; rc=1; losetup -d "$LD"; exit $rc; }
+MD2G=$(mdsum "${LD}p2")
+[ "$MD2" = "$MD2G" ] && echo "p2 DATA OK" || { echo "p2 DATA CORRUPT (got $MD2G)"; rc=1; }
 e2fsck -fn "${LD}p2" >/dev/null 2>&1 && echo "e2fsck clean" || { echo "e2fsck FAILED"; rc=1; }
 losetup -d "$LD"
 sgdisk -v "$T" >/dev/null 2>&1 && echo "sgdisk clean" || { echo "sgdisk ISSUES"; rc=1; }

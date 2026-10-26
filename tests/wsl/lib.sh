@@ -22,6 +22,13 @@ _repo_root=$(cd "$_wsl_self/../.." && pwd)
 _bin_dir=${1:-${DISKEDIT_BIN_DIR:-$_repo_root/tmp}}
 B=$_bin_dir/DiskEdit
 BF=$_bin_dir/DiskEdit-fault
+# 假工具场景用的两个变体：工具表在编译期钉死（src/fsops/env.rs 的 TOOL_PATH），
+# 调用环境的 PATH 不参与解析，所以"工具失败/缺失"只能靠换掉表来实现
+#   BFK  表 = 假工具目录 + 系统目录：假工具优先，其余照常
+#   BFKO 表 = 只有假工具目录：脚本把所需真工具 symlink 进去，缺的就是真的缺
+FAKE_TOOL_DIR=/var/tmp/diskedit-fakebin
+BFK=$_bin_dir/DiskEdit-fake
+BFKO=$_bin_dir/DiskEdit-fakeonly
 
 # 落盘伴随文件后缀：与 src/dev.rs 的词表同名同值，改一处要一起改。
 # 命名空间只写一次，各后缀由它拼出。
@@ -53,6 +60,24 @@ require_fault_bin() {
     fi
 }
 
+require_fake_bin() {
+    require_bin
+    if [ ! -x "$BFK" ]; then
+        echo "工具表变体二进制不存在: $BFK" >&2
+        echo "它由 wsl-tests.yml 以 DISKEDIT_TOOL_PATH=\"$FAKE_TOOL_DIR:<系统目录>\" 构建" >&2
+        exit 1
+    fi
+}
+
+require_fakeonly_bin() {
+    require_fake_bin
+    if [ ! -x "$BFKO" ]; then
+        echo "工具表变体二进制不存在: $BFKO" >&2
+        echo "它由 wsl-tests.yml 以 DISKEDIT_TOOL_PATH=\"$FAKE_TOOL_DIR\" 构建" >&2
+        exit 1
+    fi
+}
+
 # got want label：退出码断言
 exp() {
     if [ "$1" = "$2" ]; then
@@ -73,6 +98,17 @@ assert_eq() {
         rc=1
         return 1
     fi
+}
+
+# 分区摘要，供前后对比。读失败时不返回空串（空串会让 assert_eq 报"数据不一致"，
+# 把节点消失或 I/O 错误说成产品写坏数据），而是返回带原因的值，比较时一眼可见
+mdsum() {
+    local out
+    if ! out=$(md5sum "$1" 2>&1); then
+        printf 'unreadable: %s\n' "$out"
+        return 0
+    fi
+    printf '%s\n' "${out%% *}"
 }
 
 # 断言机制自测（meta）：验证 exp/assert_eq 的通过与失败两条路径。
