@@ -445,7 +445,8 @@ pub(crate) fn slot_is_derived_from_entry_count() {
     assert_eq!(g.slot(0), None);
 }
 
-/// 条目级结构校验（UEFI 2.10 §5.3.1）：倒挂 / 越出 usable range → 结构化错误；
+/// 条目级结构校验（UEFI 2.10 §5.3.1）：倒挂 / 越出 usable range 在提交前即拒绝——
+/// 写入侧与解析侧同一判据，盘上不会出现"字节写对了但自己读不回来"的表；
 /// 两个 LBA 字段同时为零按未使用放行（本工具的规范化分类）
 #[test]
 pub(crate) fn entry_geometry_validation() {
@@ -467,23 +468,18 @@ pub(crate) fn entry_geometry_validation() {
     };
     // 倒挂：start > end
     set(&mut g, 100, 50);
-    commit_gpt(&mut src, &g, last).unwrap();
-    assert!(matches!(
-        load_gpt(&src),
-        Err(GptError::InvalidEntry { index: 1, start: 100, end: 50 })
-    ));
+    let why = commit_gpt(&mut src, &g, last).unwrap_err().to_string();
+    assert!(why.contains("partition 1") && why.contains("starting_lba 100 > ending_lba 50"), "{why}");
     // end == 0 且 start != 0：同属倒挂，不是"未使用"
     set(&mut g, 100, 0);
-    commit_gpt(&mut src, &g, last).unwrap();
-    assert!(matches!(load_gpt(&src), Err(GptError::InvalidEntry { index: 1, .. })));
-    // 越出 usable 上界（实体仍在容器内，故不是 BeyondContainer）
+    assert!(commit_gpt(&mut src, &g, last).is_err());
+    // 越出 usable 上界（实体仍在容器内，故不是越界条目）
     set(&mut g, first, last_usable + 1);
-    commit_gpt(&mut src, &g, last).unwrap();
-    assert!(matches!(load_gpt(&src), Err(GptError::BeyondUsable { index: 1, .. })));
+    let why = commit_gpt(&mut src, &g, last).unwrap_err().to_string();
+    assert!(why.contains("outside usable range"), "{why}");
     // 低于 usable 下界
     set(&mut g, first - 1, first + 5);
-    commit_gpt(&mut src, &g, last).unwrap();
-    assert!(matches!(load_gpt(&src), Err(GptError::BeyondUsable { index: 1, .. })));
+    assert!(commit_gpt(&mut src, &g, last).is_err());
     // 两字段同时为零 → 未使用（类型 GUID 残留也宽容）
     set(&mut g, 0, 0);
     commit_gpt(&mut src, &g, last).unwrap();
@@ -501,8 +497,8 @@ pub(crate) fn commit_roundtrip_via_gptman() {
     g.entries[2] = GPTPartitionEntry {
         partition_type_guid: [0x03; 16],
         unique_partition_guid: [0x04; 16],
-        starting_lba: 64,
-        ending_lba: 70,
+        starting_lba: 40,
+        ending_lba: 46,
         attribute_bits: 0,
         partition_name: "second".into(),
     };
@@ -512,7 +508,7 @@ pub(crate) fn commit_roundtrip_via_gptman() {
     let mut f = src.file.try_clone().unwrap();
     let gpt = GPT::find_from(&mut f).expect("gptman must accept our serialization");
     let p = &gpt[3];
-    assert_eq!(p.starting_lba, 64);
+    assert_eq!(p.starting_lba, 40);
     assert_eq!(p.partition_name.as_str(), "second");
     // 保护 MBR 幂等
     let ss = src.sector_size;

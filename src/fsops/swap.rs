@@ -5,7 +5,8 @@ use super::*;
 /// swap 重建：mkswap -U <uuid> [-L <label>]，保持 UUID/卷标以维持 fstab 兼容
 /// （-U/-L 见 man mkswap：UUID 存取同序、无端转换，全零视为未设置走随机生成）。
 /// 卷标按字节透传：sws_volume 是不做编码校验的固定宽度字段，转成 String 再写回必然失真。
-/// 失败由调用方降级为日志（swap 内容可弃，但 fstab 指向的 UUID 需人工 mkswap 恢复）
+/// 失败由调用方转成一条 Swap 待办（swap 内容可弃，但 fstab 指向的 UUID 需人工 mkswap
+/// 恢复），而不是把"重建没做成"洗成成功
 pub fn recreate_swap(src: &FileSource, part: u32, identity: (Option<[u8; 16]>, Option<Vec<u8>>)) -> Result<(), FsError> {
     with_partition_device(src, part, |dev| {
         let mut args: Vec<OsString> = Vec::new();

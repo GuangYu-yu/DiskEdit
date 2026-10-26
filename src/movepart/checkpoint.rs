@@ -248,8 +248,8 @@ pub(crate) fn checkpoint_foreign(
 
 /// 读 checkpoint 现场：在身份给出的候选落点上（首项为本次命名，其后是历史命名）找**可读**
 /// 的那份，不做目录扫描。多份候选同时可读即报歧义——猜错会把中断的搬移现场丢掉。
-/// 候选的历史命名带 GPT Disk GUID，故调用方须把**已解析的几何**传进来（几何是唯一来源，
-/// 本函数不再自己读一次表）。记录的合法边界同样来自该几何（见 [`GeometryLimits`]）
+/// 历史命名候选的 GUID 由 [`TargetIdentity::checkpoint_candidates`] 按需从 `src` 读表取得，
+/// 本函数不另算一份；记录的合法边界来自调用方已解析的几何（见 [`GeometryLimits`]）
 ///
 /// 返回命中的落点路径，写与删消费同一路径：命中的是历史命名候选时若仍写本次命名落点，
 /// 会同时存在两份现场（下次读取即歧义），删除也会漏掉真正承载现场的那份。
@@ -260,15 +260,17 @@ pub(crate) fn checkpoint_foreign(
 /// 一份损坏的历史命名候选遮住一份完好的本次命名候选，用户看到的是"目标坏了去 abandon"，
 /// 而真实情况是现场完好可续跑。只有"所有候选都不可读"才把损伤如实报成 Infra
 pub(crate) fn read_checkpoint(src: &FileSource, g: &ValidatedGeometry) -> Result<(CheckpointSlot, PathBuf), Fail> {
-    let legacy = Some(g.disk_guid());
-    let candidates = src.identity.checkpoint_candidates(legacy);
+    let candidates = src.identity.checkpoint_candidates(Some(src));
+    // 历史命名那份拼不出来时的说明：现场的"不存在"并未被证实，只是看不见。
+    // 本函数只在能给出几何的调用点跑（表已解析），故这里通常为空
+    let unenumerable = candidates.unenumerable;
     let lim = g.limits();
     let mut found: Vec<(PathBuf, CheckpointSlot)> = Vec::new();
     let mut damaged: Vec<(PathBuf, String)> = Vec::new();
     // 现场可读但"创建时事实"对不上：不是损坏（CRC 自洽），也不可取信（继续执行会把
     // 旧现场写进换了文件/换了映射的目标）。单独归档，唯一时给出点名拒绝
     let mut foreign: Vec<(PathBuf, String)> = Vec::new();
-    for path in &candidates {
+    for path in &candidates.paths {
         let bytes = match std::fs::read(path) {
             Ok(b) => b,
             // 两种"读不出来"性质不同，处置因此不同：**文件的可得性**故障（EIO / EACCES）
@@ -297,7 +299,18 @@ pub(crate) fn read_checkpoint(src: &FileSource, g: &ValidatedGeometry) -> Result
         }
     }
     match found.len() {
-        0 if foreign.is_empty() && damaged.is_empty() => Ok((CheckpointSlot::Empty, candidates[0].clone())),
+        0 if foreign.is_empty() && damaged.is_empty() => {
+            // "已列出的候选都不存在"不等于"没有现场"：历史命名那份拼不出来时，
+            // 缺的正是唯一可能描述中断搬移的那份。按"无现场"起步会从空槽位重做整个
+            // 搬移，把一份看不见的现场覆盖掉——只此一处必须拒绝而不是告警
+            if let Some(reason) = &unenumerable {
+                return Err(Fail::infra(format!(
+                    "cannot prove that no checkpoint exists: a checkpoint under the legacy GUID-based name \
+                     cannot be located ({reason}) — repair the table, or release it with `diskedit abandon`"
+                )));
+            }
+            Ok((CheckpointSlot::Empty, candidates.paths[0].clone()))
+        }
         // 候选全在而全部不可读：现场存在但已无法判读——如实报 Infra 并列明各份的死因，
         // 出路是 abandon，而不是让续跑路径去猜
         0 if foreign.is_empty() => Err(Fail::infra(format!(
@@ -326,7 +339,7 @@ pub(crate) fn read_checkpoint(src: &FileSource, g: &ValidatedGeometry) -> Result
         }
         _ => {
             let paths = found.into_iter().map(|(p, _)| p).collect();
-            Ok((CheckpointSlot::Ambiguous(paths), candidates[0].clone()))
+            Ok((CheckpointSlot::Ambiguous(paths), candidates.paths[0].clone()))
         }
     }
 }
@@ -350,9 +363,10 @@ pub(crate) fn atomic_write_ckpt(path: &std::path::Path, data: &[u8]) -> io::Resu
     let parent = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or_else(|| std::path::Path::new("."));
     // 落点目录归文件自己保证：路径由身份派生，身份不知道目录是否存在
     crate::dev::best_effort_mkdir(parent);
+    // 暂存名带本落点的 token：清扫侧按同一前缀认领残骸（见 `ckpt_temp_prefix`）
     let tmp = parent.join(format!(
         "{}{}.{}",
-        crate::dev::CKPT_TMP_PREFIX,
+        crate::dev::ckpt_temp_prefix(path),
         std::process::id(),
         SEQ.fetch_add(1, Ordering::Relaxed)
     ));

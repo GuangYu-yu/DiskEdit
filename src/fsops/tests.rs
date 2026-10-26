@@ -394,28 +394,29 @@ pub(crate) fn release_outcome_decides_whether_a_cleanup_todo_exists() {
     assert_eq!(missing.point, "/mnt/x");
 }
 
-/// 核心结果与清理待办的合成：两个事实各归各位，不揉成一个结果——
-/// 核心成功时待办随 `Ok` 浮出（卸载也成功则为 `None`）；核心失败时主错误原样返回，
-/// 清理待办只降为一条告警（残留挂载点仍要让人看见，但不能改写主错误）
+/// 核心结果与清理待办的合成：核心成功时待办随 `Ok` 浮出；核心失败时主错误保持自己的
+/// 分类，残留挂载点拼进它的文案（读者不必靠两路 stderr 拼现场）
 #[test]
-pub(crate) fn core_failure_and_cleanup_failure_stay_separate() {
+pub(crate) fn leftover_mount_rides_either_result() {
     let leak = || Some(MountLeak { point: "/mnt/x".into(), why: "target is busy".into() });
 
-    let (out, warn) = settle_release(Ok(()), None);
-    assert!(matches!(out, Ok(None)), "core ok + release ok has nothing left over");
-    assert!(warn.is_none());
+    assert!(matches!(settle_release(Ok(()), None), Ok(None)), "core ok + release ok has nothing left over");
 
-    let (out, warn) = settle_release(Ok(()), leak());
-    assert!(matches!(out, Ok(Some(_))), "core ok carries the cleanup todo out through Ok");
-    assert!(warn.is_none(), "a successful core op reports the todo, not a warning");
+    assert!(
+        matches!(settle_release(Ok(()), leak()), Ok(Some(_))),
+        "core ok carries the cleanup todo out through Ok"
+    );
 
-    let (out, warn) = settle_release(Err(FsError::unsupported("boom")), None);
-    assert!(out.is_err(), "core failure stays the main error");
-    assert!(warn.is_none());
+    assert!(settle_release(Err(FsError::unsupported("boom")), None).is_err(), "core failure stays the main error");
 
-    let (out, warn) = settle_release(Err(FsError::unsupported("boom")), leak());
-    assert!(out.is_err(), "the cleanup todo must not rewrite the main error");
-    assert!(warn.is_some(), "a leftover mount point is still surfaced when the core op failed");
+    let err = match settle_release(Err(FsError::unsupported("boom")), leak()) {
+        Err(e) => e,
+        Ok(_) => panic!("core failure stays the main error"),
+    };
+    assert!(
+        matches!(err, FsError::UnsupportedFs(ref m) if m.contains("boom") && m.contains("/mnt/x")),
+        "the leftover mount point is folded into the main error without changing its class"
+    );
 }
 
 #[test]

@@ -277,8 +277,10 @@ pub(crate) fn cmd_resize_msdos(a: &Args, pref: PartSelector, req: &SizeRequest, 
                 bail_fail(Fail::refused("not enough contiguous free space to the right (MBR resize cannot relocate blocking partitions)".to_string()));
             }
             crate::support::note_sector_truncation("resizing to", bytes, ss);
+            // 写 LBA0 之前的所有读与校验都已完成（见 resize_mdos_entry）：这里的失败
+            // 一律是"表确定未写"，不该套 after_irreversible 的"盘可能已改变"
             table::resize_mdos_entry(&mut src, part, new_size_lba as u32)
-                .unwrap_or_else(|f| bail_fail(after_irreversible(f)));
+                .unwrap_or_else(|f| bail_fail(f));
             // 分区层做完 → 与 grow-to-end 同一条收尾
             mbr_grow_finish(a, &mut src, p, is_pv, is_block)
         } else {
@@ -299,9 +301,10 @@ pub(crate) fn cmd_resize_msdos(a: &Args, pref: PartSelector, req: &SizeRequest, 
             }
             // 缩容预检（方向、可缩性、工具齐备、下界）全过，note 不再跟在一条拒绝后面
             crate::support::note_sector_truncation("resizing to", bytes, ss);
-            // 与 grow 臂同判据：外部 FS 工具写盘不可回滚，undo journal 从此只能如实记屏障
-            src.set_mutation(crate::dev::Mutation::ExternalFsTool);
-            src.mark_non_reversible().unwrap_or_else(|e| bail_fail(Fail::from(e)));
+            // 不落不可回滚屏障：缩小之后回滚表项只会得到"FS 小于分区"这一自洽状态，undo
+            // 仍然安全（与 GPT 缩容臂同一条判据）。屏障若抢在 shrink_fs 的预检之前落下，
+            // 之后那些"确定未写盘"的拒绝（btrfs 多设备、工具起不来）会同时把 undo 永久
+            // 禁掉、把目标顶成 busy，而盘上一个字节都没动
             // shrink_fs 的契约按旧分区尺寸比对（FS 小于分区时实为良性扩容，见其文档）；
             // 此处传入的是新分区尺寸，≤ 旧分区尺寸由缩容方向（new_size_lba < p.size_lba）保证
             let requested = new_size_lba * ss;

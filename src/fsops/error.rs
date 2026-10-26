@@ -45,6 +45,21 @@ impl FsError {
             String::from_utf8_lossy(&out.stderr).trim()
         ))
     }
+
+    /// 同一失败补一段"另外还有个后置条件没完成"：分类不变、`io::ErrorKind` 不变。
+    /// 主错误自身之外的残留（如挂载点没卸掉）拼进主错误，读者不必靠两路 stderr 拼现场
+    pub(crate) fn with_note(self, note: &str) -> Self {
+        match self {
+            Self::UnsupportedFs(m) => Self::UnsupportedFs(format!("{m}; {note}")),
+            Self::InvalidArgument(m) => Self::InvalidArgument(format!("{m}; {note}")),
+            Self::ToolMissing(m) => Self::ToolMissing(format!("{m}; {note}")),
+            Self::CommandFailed(m) => Self::CommandFailed(format!("{m}; {note}")),
+            Self::Io(e) => {
+                let kind = e.kind();
+                Self::Io(io::Error::new(kind, format!("{e}; {note}")))
+            }
+        }
+    }
 }
 
 /// 退出状态的人读描述。`ExitStatus::code()` 对"被信号杀死"返回 None，

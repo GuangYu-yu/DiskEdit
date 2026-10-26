@@ -51,7 +51,9 @@ pub fn grow_target_at(src: &FileSource, part: u32, base: u64, len: u64) -> Resul
     let fstype = crate::fsid::identify(src, base, len).map_err(FsError::from)?;
     if matches!(fstype, Some(FsKind::Squashfs | FsKind::Erofs)) {
         // OpenWrt combined 布局：同分区头部只读根 + 尾部 RW overlay（fstools rootdisk.c）。
-        // fstools 只把 RW 层造成 ext4/f2fs，故内层可扩集合就是这两者
+        // fstools 只把 RW 层造成 ext4/f2fs（common.c `use_f2fs()`：内核命令行
+        // fstools_overlay_fstype 可强制 ext4/f2fs，auto 时按剩余空间与 F2FS_MINSIZE 决定），
+        // 故内层可扩集合就是这两者
         let rel = crate::fsid::overlay_offset_at(src, base, len)
             .map_err(FsError::from)?
             .ok_or_else(|| FsError::unsupported(format!(
@@ -61,8 +63,14 @@ pub fn grow_target_at(src: &FileSource, part: u32, base: u64, len: u64) -> Resul
         if rel >= len {
             return Err(FsError::invalid("overlay offset beyond partition end"));
         }
+        // 偏移来自 fstools 的布局约定，只是提示：该位置到底有没有 RW 层，由下一行的内层
+        // 识别回答。`base + rel` 的加法在盘上可控值上仍要 checked——回绕出的假起点会落到
+        // 分区之前的字节上
+        let inner_base = base.checked_add(rel).ok_or_else(|| {
+            FsError::invalid(format!("overlay offset {rel} added to partition start {base} overflows"))
+        })?;
         // 区间量本就是字节，直接传给按字节区间识别的 identify
-        let inner = crate::fsid::identify(src, base + rel, len - rel).map_err(FsError::from)?;
+        let inner = crate::fsid::identify(src, inner_base, len - rel).map_err(FsError::from)?;
         let Some(inner_kind) = inner else {
             // 内层没认出签名有三种成因，`identify` 的 `None` 区分不了：① 尾部区域不足一个魔数
             // （`overlay_offset_at` 对 `len - rel` 没有下界保证）；② 是格式化过的格式但本工具
@@ -212,13 +220,15 @@ pub(crate) fn resize_fs_in(src: &FileSource, scope: &DeviceScope, fstype: Option
             // 不再在闭包外另读一次表
             let (off, dev_len) = scope_byte_range(src, scope)?;
             with_scope_device_ranged(src, scope, off, dev_len, |dev| {
-                let mut out = run("fatresize", &["-s", "max", dev])?;
+                // 兜底的字节数 = 设备长 − 1（见上）。长度 0 时减一会回绕成 u64::MAX，把
+                // "无从格式化"伪装成扩到天文数字——它必须在任何工具启动之前判掉，
+                // 否则就成了"工具可能已改盘"之后的一次 Refused
+                let want = dev_len.checked_sub(1).ok_or_else(|| {
+                    FsError::invalid(format!("vfat device length {dev_len} — cannot derive fallback size"))
+                })?;
+                let mut out = run("fatresize", &["-s", "max", dev])
+                    .map_err(|e| tool_write_maybe_started("fatresize", dev, e))?;
                 if !out.status.success() {
-                    // 兜底的字节数 = 设备长 − 1（见上）：长度为 0 时减一会回绕成
-                    // u64::MAX，把"无从格式化"伪装成扩到天文数字
-                    let want = dev_len.checked_sub(1).ok_or_else(|| {
-                        FsError::invalid(format!("vfat device length {dev_len} — cannot derive fallback size"))
-                    })?;
                     out = run("fatresize", &["-s", &want.to_string(), dev])
                         .map_err(|e| tool_write_maybe_started("fatresize", dev, e))?;
                 }
@@ -248,18 +258,44 @@ pub(crate) fn resize_fs_in(src: &FileSource, scope: &DeviceScope, fstype: Option
     }
 }
 
-/// 本次调用的临时挂载点（纯函数：只用 PID 与进程内序号，不碰文件系统）。
+/// 本次调用的临时挂载点（纯函数：只用 PID、进程内序号与一段随机数，不碰文件系统）。
 ///
 /// 挂载点必须唯一：只用 PID 命名时，崩溃残留的挂载点会让下一次挂载叠在同一个目录上，
-/// 而 PID 复用会直接撞上别人的残留。序号用进程内自增（与 atomic_write_ckpt 的临时名同法）
+/// 而 PID 复用会直接撞上别人的残留。
+///
+/// 名字还必须**不可预测**：`/tmp` 全局可写，可预测的名字允许别的用户抢先建出同名目录，
+/// 而 `mount` 按路径解析——挂载就会落进别人的目录，回调随后在它上面跑。随机成分取自
+/// `/dev/urandom`（非 unix 退到 std 的系统熵随机种子），不引入新依赖
 pub(crate) fn mount_point() -> PathBuf {
     use std::sync::atomic::{AtomicU64, Ordering};
     static SEQ: AtomicU64 = AtomicU64::new(0);
     std::env::temp_dir().join(format!(
-        "diskedit.mnt.{}.{}",
+        "diskedit.mnt.{}.{}.{:016x}",
         std::process::id(),
-        SEQ.fetch_add(1, Ordering::Relaxed)
+        SEQ.fetch_add(1, Ordering::Relaxed),
+        mount_token()
     ))
+}
+
+/// 挂载点名字里的不可预测部分
+fn mount_token() -> u64 {
+    #[cfg(unix)]
+    if let Ok(mut f) = std::fs::File::open("/dev/urandom") {
+        let mut b = [0u8; 8];
+        if std::io::Read::read_exact(&mut f, &mut b).is_ok() {
+            return u64::from_le_bytes(b);
+        }
+    }
+    // 没有 urandom 时可用的系统熵：`RandomState` 的键由 std 从操作系统熵源播种
+    use std::hash::{BuildHasher, Hasher};
+    let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+    h.write_u128(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos()),
+    );
+    h.write_u32(std::process::id());
+    h.finish()
 }
 
 /// 临时挂载 → 回调 → 卸载（xfs/btrfs 只支持挂载态扩容）。挂载点用后即删。
@@ -269,17 +305,34 @@ where
     F: FnOnce(&str) -> Result<(), FsError>,
 {
     let mnt = mount_point();
-    let mut mount = tool_command("mount")?;
     // PID 复用会撞上崩溃残留的同名目录：先试着清掉——remove_dir 只对空目录成功，
-    // 非空说明残留目录上可能还挂着上次留下的文件系统，叠挂会把两个 FS 混在同一目录
+    // 非空说明残留目录上可能还挂着上次留下的文件系统，叠挂会把两个 FS 混在同一目录。
+    // 同名符号链接在这一步必然 remove_dir 失败（ENOTDIR），不会被当作可复用的挂载点
     if mnt.exists() {
         std::fs::remove_dir(&mnt).map_err(|e| FsError::from(io::Error::other(format!(
             "stale mountpoint {} from a previous run is not removable (check for a residual mount there): {e}",
             mnt.display()
         ))))?;
     }
-    std::fs::create_dir_all(&mnt).map_err(FsError::from)?;
-    let out = mount.arg(dev).arg(&mnt).stdin(Stdio::null()).output().map_err(FsError::from)?;
+    // 目录权限 0700：xfs/btrfs 的扩容期间目标分区挂在这里数秒到数十秒，0777 & ~umask
+    // 的目录会让本机其他用户能遍历并读取其中的文件。`create_dir` 而非 `create_dir_all`：
+    // 父目录已存在，且目标是"本进程独占新建"——同名条目被他人抢先建出时立即失败
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        std::fs::DirBuilder::new().mode(0o700).create(&mnt).map_err(FsError::from)?;
+    }
+    #[cfg(not(unix))]
+    std::fs::create_dir(&mnt).map_err(FsError::from)?;
+    // 建目录时记下它的身份：从这一刻到 mount 之间，路径条目仍可能被同一目录里的
+    // rename 替换（`/tmp` 可写），而 mount 按路径解析
+    #[cfg(unix)]
+    let created = std::fs::metadata(&mnt).map_err(FsError::from)?;
+    // 执行走 `fsops::run`：spawn 失败 = 工具没跑起来（Io），等待失败 = 工具已启动、
+    // 写没写目标无法断言（CommandFailed）。mount 自己会重放日志（对目标的一次写），
+    // 把后者折成 Io 会让命令以"确定未写盘"退出
+    let args = [std::ffi::OsString::from(dev), mnt.clone().into_os_string()];
+    let out = run("mount", &args)?;
     if !out.status.success() {
         // mount 没成功就谈不上 umount：对从未挂载的目录卸载必然失败，
         // 那条"may remain"的告警只会把用户引向一个不存在的残留挂载点。
@@ -287,14 +340,55 @@ where
         crate::dev::best_effort_rmdir(&mnt);
         return Err(FsError::command("mount", &out));
     }
+    // 挂载后复核：路径上现在是建目录时那个 inode 才说明这次挂载落在自己的目录上。
+    // 被替换时先卸载再拒绝——mount 已触发目标 FS 的日志回放（一次写），故记
+    // CommandFailed；此时回调一个字节都没跑，回调后的清理也不必再做
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let same = std::fs::metadata(&mnt)
+            .is_ok_and(|after| created.dev() == after.dev() && created.ino() == after.ino());
+        if !same {
+            // 卸载失败时没有更好的补救：拒绝理由已经说明这条路径不再属于本进程，
+            // 残留挂载点由用户按报错里的路径处置
+            #[allow(clippy::let_underscore_must_use)]
+            let _ = run("umount", &[&mnt]);
+            crate::dev::best_effort_rmdir(&mnt);
+            return Err(FsError::CommandFailed(format!(
+                "the mountpoint {} was replaced between its creation and the mount — the filesystem was \
+                 mounted through a path this process no longer owns and has been unmounted again",
+                mnt.display()
+            )));
+        }
+    }
+    let mut guard = MountGuard { point: mnt.clone(), armed: true };
     let res = f(&mnt.to_string_lossy());
+    guard.armed = false;
     let leak = leak_from(&mnt.to_string_lossy(), release_mount(&mnt));
     crate::dev::best_effort_rmdir(&mnt);
-    let (outcome, warn) = settle_release(res, leak);
-    if let Some(l) = warn {
-        eprintln!("warning: {l}");
+    // 残留挂载点只有一条出路：核心成功时随 `Ok` 浮出成待办、核心失败时拼进主错误。
+    // 两条路都进返回的 `Outcome`，不再另打一条只有 stderr 看得见的告警
+    settle_release(res, leak)
+}
+
+/// 回调 panic 时的挂载守卫：栈展开会跳过 [`with_mount`] 顺序里的卸载与删目录，
+/// 目标分区就保持挂载到进程重启。正常路径在回调返回后 `armed = false`——仍处
+/// armed 只可能是展开，此时没有结果可报，残留只能告警
+struct MountGuard {
+    point: PathBuf,
+    armed: bool,
+}
+
+impl Drop for MountGuard {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        if let Some(leak) = leak_from(&self.point.to_string_lossy(), release_mount(&self.point)) {
+            eprintln!("warning: the filesystem may still be mounted at {} ({})", leak.point, leak.why);
+        }
+        crate::dev::best_effort_rmdir(&self.point);
     }
-    outcome
 }
 
 /// 临时挂载点的清理待办：核心 FS 操作已经完成，挂载点却没能卸掉（工具非零退出或
@@ -355,15 +449,20 @@ pub(crate) fn leak_from(point: &str, outcome: ReleaseOutcome) -> Option<MountLea
     }
 }
 
-/// 核心操作结果与清理待办的合成：核心失败是主错误，清理待办只降为一条告警——
-/// 残留挂载点仍要让人看见，但它不能改写主错误。返回 (对外结果, 需要告警的待办)
+/// 核心操作结果与清理待办的合成：核心成功时待办随 `Ok` 浮出；核心失败时残留挂载点
+/// 拼进主错误的文案（分类不变），不再另走一条只有 stderr 能看到的告警——报告的
+/// 错误行与 stderr 因此同源
 pub(crate) fn settle_release(
     core: Result<(), FsError>,
     leak: Option<MountLeak>,
-) -> (Result<Option<MountLeak>, FsError>, Option<MountLeak>) {
+) -> Result<Option<MountLeak>, FsError> {
     match (core, leak) {
-        (Ok(()), leak) => (Ok(leak), None),
-        (Err(e), leak) => (Err(e), leak),
+        (Ok(()), leak) => Ok(leak),
+        (Err(e), Some(l)) => Err(e.with_note(&format!(
+            "additionally the filesystem may still be mounted at {} ({}) — unmount it with `umount {}`",
+            l.point, l.why, l.point
+        ))),
+        (Err(e), None) => Err(e),
     }
 }
 

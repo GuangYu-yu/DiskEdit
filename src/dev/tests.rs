@@ -76,7 +76,10 @@ pub(crate) fn journal_candidate_classification_covers_every_state() {
 
     let _ = std::fs::remove_file(&p);
     std::fs::create_dir(&p).unwrap();
-    assert!(matches!(classify_journal(&p), JournalCandidate::Absent), "a directory is not written by this tool");
+    assert!(
+        matches!(classify_journal(&p), JournalCandidate::Damaged(_)),
+        "a non-regular-file path is not this tool's journal and must not be adopted"
+    );
     let _ = std::fs::remove_dir(&p);
 }
 
@@ -606,7 +609,7 @@ pub(crate) fn artifact_names_are_pinned_as_documented() {
     let img = PathBuf::from("/tmp/x.img");
     let id = TargetIdentity::resolve_image(&img);
     assert_eq!(id.journal_candidates()[0], suffix_path(&img, JOURNAL_SUFFIX));
-    assert_eq!(id.checkpoint_candidates(None)[0], suffix_path(&img, CHECKPOINT_SUFFIX));
+    assert_eq!(id.checkpoint_candidates(None).paths[0], suffix_path(&img, CHECKPOINT_SUFFIX));
     assert_eq!(id.lock_path(), suffix_path(&img, LOCK_SUFFIX));
     assert_eq!(id.log_path(None), suffix_path(&img, LOG_SUFFIX));
 }
@@ -777,8 +780,8 @@ pub(crate) fn image_identity_prefers_the_realpath() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// 可写打开清掉落点目录里的陈旧 ckpt 暂存文件：只动过期的，新鲜那份（可能属于
-/// 正在写的另一个进程）与非本前缀的文件都不碰
+/// 可写打开清掉落点目录里的陈旧 ckpt 暂存文件：只动本目标的、且只在过期之后；
+/// 新鲜那份（可能属于正在写的另一个进程）与别的目标的残骸都不碰
 #[test]
 pub(crate) fn stale_ckpt_temps_are_swept_on_open() {
     let dir = std::env::temp_dir().join(format!("diskedit_sweep_{}", std::process::id()));
@@ -787,22 +790,30 @@ pub(crate) fn stale_ckpt_temps_are_swept_on_open() {
     std::fs::write(&img, b"x").unwrap();
     // Linux 上身份取 realpath，落点目录未必是上面那个字面目录：以身份为准
     let id = TargetIdentity::resolve_image(&img);
-    let dir = id.checkpoint_candidates(None)[0].parent().unwrap().to_path_buf();
+    let ckpt = id.checkpoint_candidates(None).paths[0].clone();
+    let dir = ckpt.parent().unwrap().to_path_buf();
 
-    let stale = dir.join(format!("{CKPT_TMP_PREFIX}1.1"));
-    let fresh = dir.join(format!("{CKPT_TMP_PREFIX}2.1"));
+    let prefix = ckpt_temp_prefix(&ckpt);
+    let stale = dir.join(format!("{prefix}1.1"));
+    let fresh = dir.join(format!("{prefix}2.1"));
+    // 同目录下另一个目标的残骸：名字只差 token，清扫不得认领
+    let foreign_ckpt = dir.join("other.img.diskedit.ckpt");
+    let foreign = dir.join(format!("{}1.1", ckpt_temp_prefix(&foreign_ckpt)));
     let other = dir.join("not-ours.img");
     std::fs::File::create(&stale).unwrap()
         .set_modified(std::time::SystemTime::now() - CKPT_TMP_STALE_AFTER * 2).unwrap();
+    std::fs::copy(&stale, &foreign).unwrap();
     std::fs::File::create(&fresh).unwrap();
     std::fs::write(&other, b"x").unwrap();
 
     sweep_stale_ckpt_temps(&id);
-    assert!(!stale.exists(), "a stale temp must be swept");
+    assert!(!stale.exists(), "a stale temp of this target must be swept");
     assert!(fresh.exists(), "a fresh temp may belong to a running writer");
+    assert!(foreign.exists(), "another target's stale temp is not ours to sweep");
     assert!(other.exists(), "only the checkpoint temp prefix is ours to sweep");
 
     let _ = std::fs::remove_file(&fresh);
+    let _ = std::fs::remove_file(&foreign);
     let _ = std::fs::remove_file(&other);
     let _ = std::fs::remove_file(&img);
     let _ = std::fs::remove_dir_all(&dir);

@@ -48,6 +48,8 @@ pub struct ValidatedGeometry {
     entries: Vec<GPTPartitionEntry>,
     /// 构造时读到的条目，未经本层的编辑：提交前与盘上现状比对的基准
     decided_entries: Vec<GPTPartitionEntry>,
+    /// 构造时读到的头，未经修复动作收敛：提交前与盘上现状比对的基准
+    decided_header: RawHeader,
     /// 经 [`Self::update_entry`] 改过的槽位下标：比对时这些槽位允许已是目标样子
     dirty: Vec<usize>,
     entry_geometry: EntryArrayGeometry,
@@ -128,6 +130,7 @@ impl ValidatedGeometry {
             header,
             entries: g.entries.clone(),
             decided_entries: g.entries.clone(),
+            decided_header: g.header.clone(),
             dirty: Vec::new(),
             entry_geometry,
             file_last_lba,
@@ -227,10 +230,12 @@ impl ValidatedGeometry {
         }
     }
 
-    /// 盘上的条目仍与本几何的依据一致：每个槽位要么是构造时读到的样子，要么（对本层
-    /// 改过的槽位）已是 [`Self::entries`] 里的目标样子。两者都不是的那一条只能来自窗口
-    /// 内的第三方改动——提交写的是快照，不核对就会把它的改动静默覆盖（条目消失、搬移
-    /// 落点按旧几何算）
+    /// 盘上的条目与头仍与本几何的依据一致：每个槽位要么是构造时读到的样子，要么（对本层
+    /// 改过的槽位）已是 [`Self::entries`] 里的目标样子；头的每个字段同理——要么停在
+    /// 构造时读到的那份 `decided_header`，要么已收敛到本层的 `header`（修复动作会改写
+    /// 位置与 usable 区间，那些正是本层的目标值）。两者都不是的那一处只能来自窗口内的
+    /// 第三方改动——提交写的是快照，不核对就会把它的改动静默覆盖（条目消失、搬移落点
+    /// 按旧几何算、第三方改的 disk GUID / usable 区间被写回旧值）
     ///
     /// 窗口的长度由调用点决定：add/rename/set/del 是"读 → 判 → 修复 → 提交"，
     /// resize 与搬移类命令则跨整个 FS 调整或数据搬移
@@ -243,6 +248,48 @@ impl ValidatedGeometry {
                 "GPT entry array holds {} entries but {} were validated — the table changed outside this tool",
                 g.entries.len(),
                 self.decided_entries.len()
+            )));
+        }
+        // 位置字段（MyLBA / PartitionEntryLBA）由提交规范化，不作为"内容被改"的判据；
+        // 其余头字段一旦既不是原值也不是目标值，就是第三方在这个窗口里改过表头
+        let (d, now, target) = (&self.decided_header, &g.header, &self.header);
+        let hex = |g: &[u8; 16]| format!("{g:02x?}");
+        let changed = [
+            ("revision", d.revision.to_string(), now.revision.to_string(), target.revision.to_string()),
+            ("backup_lba", d.backup_lba.to_string(), now.backup_lba.to_string(), target.backup_lba.to_string()),
+            (
+                "first_usable_lba",
+                d.first_usable_lba.to_string(),
+                now.first_usable_lba.to_string(),
+                target.first_usable_lba.to_string(),
+            ),
+            (
+                "last_usable_lba",
+                d.last_usable_lba.to_string(),
+                now.last_usable_lba.to_string(),
+                target.last_usable_lba.to_string(),
+            ),
+            ("disk_guid", hex(&d.disk_guid), hex(&now.disk_guid), hex(&target.disk_guid)),
+            (
+                "number_of_partition_entries",
+                d.number_of_partition_entries.to_string(),
+                now.number_of_partition_entries.to_string(),
+                target.number_of_partition_entries.to_string(),
+            ),
+            (
+                "size_of_partition_entry",
+                d.size_of_partition_entry.to_string(),
+                now.size_of_partition_entry.to_string(),
+                target.size_of_partition_entry.to_string(),
+            ),
+            ("header_size", d.header_size.to_string(), now.header_size.to_string(), target.header_size.to_string()),
+        ]
+        .into_iter()
+        .find(|(_, was, is, want)| is != was && is != want);
+        if let Some((field, was, is, _)) = changed {
+            return Err(invalid(format!(
+                "GPT header field {field} changed outside this tool since the table was validated \
+                 ({was} → {is}) — refusing to overwrite it; re-run the command"
             )));
         }
         for (i, entry) in g.entries.iter().enumerate() {

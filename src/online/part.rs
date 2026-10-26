@@ -151,6 +151,29 @@ pub(crate) fn part_resize(t: &OnlineTarget, new_len_bytes: u64) -> Result<(), Pa
             String::from_utf8_lossy(&out.stderr).trim()
         ))));
     }
+    // sfdisk 退 0 只说明脚本被接受：盘上条目是否真被写成请求长度必须重读确认。内核
+    // 同步（partx 与 BLKPG 兜底）用的都是本次传入的请求值，不回读就无法发现"工具退 0
+    // 而尺寸被夹断"——FS 随后会按内核视图扩到盘上分区之外，重启后分区回缩、FS 尾部不可达
+    match crate::gpt_policy::disk_snapshot(&disk, t.pno) {
+        Ok(snap) => {
+            if snap.target != (t.start_bytes, new_len_bytes) {
+                let (start, len) = snap.target;
+                return Err(PartResizeError::Partial(io::Error::other(format!(
+                    "sfdisk reported success but the on-disk entry of partition {} is {start}..{} instead of the \
+                     requested {}..{} bytes — the table write did not produce the requested size",
+                    t.pno,
+                    start.saturating_add(len),
+                    t.start_bytes,
+                    t.start_bytes.saturating_add(new_len_bytes),
+                ))));
+            }
+        }
+        Err(f) => {
+            return Err(PartResizeError::Partial(io::Error::other(format!(
+                "sfdisk reported success but the on-disk partition table cannot be re-read to confirm it: {f}"
+            ))));
+        }
+    }
     let partx = run("partx", &["-u", "--nr", &pno_str, &disk_str]);
     let partx_ok = partx.as_ref().map(|o| o.status.success()).unwrap_or(false);
     if partx_ok {

@@ -154,12 +154,30 @@ pub(crate) enum JournalCandidate {
 /// 截掉 / 写坏"在内容上不可区分，前者没有对应的数据写入、后者有。无法证明"空"就
 /// 不能按空壳销毁——写闸口会因此放行，undo 与 abandon 会删掉唯一一份 pre-image
 pub(crate) fn classify_journal(path: &Path) -> JournalCandidate {
-    let meta = match std::fs::metadata(path) {
+    // `symlink_metadata` 不跟随符号链接：认的是落点本身的条目。跟随的话，指向别处
+    // 普通文件的链接会被当成 journal 打开，随后的收养与删除都作用在链接目标上
+    let meta = match std::fs::symlink_metadata(path) {
         Ok(m) => m,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return JournalCandidate::Absent,
         Err(e) => return JournalCandidate::Damaged(format!("cannot stat: {e}")),
     };
-    if !meta.is_file() || meta.len() == 0 {
+    // 符号链接不是本工具写下的任何东西，也绝不认领：按"读不出来"报给用户处置
+    // （`abandon` 改名保留的是链接本身，不会碰它指向的目标）
+    if meta.file_type().is_symlink() {
+        return JournalCandidate::Damaged(
+            "the journal path is a symbolic link — refusing to treat another file as this tool's journal".to_string(),
+        );
+    }
+    // 非普通文件（FIFO / 设备节点 / 目录）不是本工具写下的：`open` 一个 FIFO 会阻塞到
+    // 有写端出现，放行等于让收养卡死在这里。与符号链接同归"读不出来"
+    if !meta.is_file() {
+        return JournalCandidate::Damaged(
+            "the journal path is not a regular file — it cannot be a journal written by this tool".to_string(),
+        );
+    }
+    // 长度 0 的普通文件按"不在"处理：没有头就没有可回放的记录，与打开时的
+    // NotFound 同义
+    if meta.len() == 0 {
         return JournalCandidate::Absent;
     }
     match Journal::read_entries(path) {
@@ -547,7 +565,16 @@ impl Journal {
     /// [`Self::open`] 的完整形态：附带被截掉的残尾字节数，`None` 表示文件原本就停在
     /// 记录边界上。写路径据此把本次运行报成未完整收尾（见 `transaction::SessionJournal`）
     pub(crate) fn adopt(path: &Path, identity: LiveScene) -> io::Result<(Self, Option<NonZeroUsize>)> {
-        match OpenOptions::new().read(true).write(true).open(path) {
+        let mut opts = OpenOptions::new();
+        opts.read(true).write(true);
+        // 不跟随符号链接：分类与收养之间落点仍可能被换成链接，跟随会让写入与
+        // 后续的截断作用于链接目标而不是本工具的 journal
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.custom_flags(libc::O_NOFOLLOW);
+        }
+        match opts.open(path) {
             Ok(mut f) => {
                 use std::io::Read;
                 let len = f.metadata()?.len();

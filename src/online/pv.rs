@@ -13,8 +13,12 @@ pub(crate) fn resolve_pv_target(disk_name: &str, pno: u32) -> io::Result<OnlineT
     let mut sysdir = None;
     for entry in fs::read_dir(&sysroot)? {
         let p = entry?.path();
-        if !p.join("partition").exists() {
-            continue;
+        // `exists()` 把任意 stat 错误折成 false，一次 EIO 会被报成"这块盘上没有该分区"，
+        // 把人引去改分区号。只有 NotFound 才能当作"这一项不是分区"
+        match fs::metadata(p.join("partition")) {
+            Ok(_) => {}
+            Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(e),
         }
         if sysfs_u64(&p.join("partition"))? as u32 == pno {
             sysdir = Some(p);
@@ -264,6 +268,18 @@ pub fn resize_pv(
         return (f.into_outcome(), old_len_bytes, None);
     }
     if let Err(e) = part_resize(&t, new_len_bytes) {
+        // 表已写、内核同步失败：PV 链（pvresize/lvextend）因此没做，两条事实一并报。
+        // 只报"内核视图过期"会让 20 少说一半——分区已经大了，PV 还是旧尺寸
+        let detail = e.detail().to_string();
+        if matches!(&e, PartResizeError::Partial(_)) {
+            return (
+                e.into_outcome_with(vec![pv_chain_pending(pno, format!(
+                    "partition resized but the PV chain was skipped: {detail}"
+                ))]),
+                old_len_bytes,
+                None,
+            );
+        }
         return (e.into_outcome(), old_len_bytes, None);
     }
     (
@@ -272,11 +288,27 @@ pub fn resize_pv(
             // 表已写、内核报的尺寸却不同 → 内核视图过期（后续 PV 链不得基于旧尺寸）
             Err(e) => {
                 eprintln!("warning: partition table updated but kernel reports a different size: {e}");
-                Outcome::applied_stale_kernel()
+                let mut o = Outcome::applied_with(vec![pv_chain_pending(pno, format!(
+                    "partition resized but the PV chain was skipped: {e}"
+                ))]);
+                o.mark_kernel_stale();
+                o
             }
         },
         old_len_bytes,
         // 表已写：后面的 PV 链仍属本次操作，锁随返回值继续持有
         Some(owned),
+    )
+}
+
+/// PV 链未执行的后置条件：分区边界已经改了，`pvresize` / `lvextend` 还没跟上。
+/// 种类名与 `cmd/resize/finish.rs` 的失败路径同名——同一件待办在两处出口叫两个名字，
+/// 人会以为是两件事
+fn pv_chain_pending(part: u32, detail: String) -> Pending {
+    Pending::new(
+        part,
+        PendingKind::Other("lvm chain (pvresize/lvextend)"),
+        detail,
+        "re-run `diskedit resize` for this partition once the kernel partition view matches the table",
     )
 }

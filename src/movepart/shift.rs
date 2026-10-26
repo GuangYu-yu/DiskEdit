@@ -305,6 +305,29 @@ pub(crate) fn prepare_apply(
             }
         }
         CheckpointSlot::Empty => {
+            // 走到这里有两种来源：新跑（plan 由当前盘上几何生成，成员自然停在 first_lba），
+            // 或 plan 生成时还读到过 Relocation 现场、而它在本次 read_checkpoint 之前
+            // 消失/损坏（例如并发的 `abandon`）。后者本进程一个 chunk 都没搬过，成员必须
+            // 仍停在 first_lba：已推进到目标位的成员，其源区可能已被右邻的拷贝覆盖，按旧
+            // plan 从旧起点重读会把垃圾写回目标位，而后续表项提交照常成功
+            for m in &plan.moves {
+                let cur = g0
+                    .entry_index(m.part_num)
+                    .and_then(|i| g0.entries().get(i))
+                    .ok_or_else(|| crate::outcome::Fail::refused(format!(
+                        "the plan names partition {} that is no longer on the disk — refusing",
+                        m.part_num
+                    )))?;
+                let src_end = m.first_lba.checked_add(m.len_lba).and_then(|v| v.checked_sub(1))
+                    .ok_or_else(|| crate::outcome::Fail::infra("relocation source range overflows"))?;
+                if cur.starting_lba != m.first_lba || cur.ending_lba != src_end {
+                    return Err(crate::outcome::Fail::refused(format!(
+                        "the checkpoint vanished between reads and partition {} is not at its source position \
+                         (on disk LBA {}..{}, expected {}..{}) — the layout moved under the job; refusing",
+                        m.part_num, cur.starting_lba, cur.ending_lba, m.first_lba, src_end
+                    )));
+                }
+            }
             // 被搬移的 swap 条目在表项提交后由 recreate_swap 重建（mkswap；镜像目标的重建
             // 对象是 loop 分区设备，还要 losetup），且不受 --no-fs 约束。新跑必须现在确认
             // 平台与工具可用：否则会先把表改完，再以 pending 收场。恢复分支不套用这条——

@@ -17,7 +17,7 @@
 
 use crate::dev::{suffix_path, FileSource, RecoveryData, TargetIdentity};
 use crate::support::{
-    active_recovery_records, bail_fail, legacy_disk_guid, refuse_partition_node_target,
+    active_recovery_records, bail_fail, refuse_partition_node_target,
     RecoveryRecord, EXIT_OK, Fail,
 };
 use crate::targetlock::TargetLock;
@@ -56,30 +56,21 @@ pub(crate) fn cmd_abandon(a: &Args) -> u8 {
     // 锁文件是纯运行时 artifact，残留不构成阻挡（判据是锁本身，见 targetlock）
     let _owned = TargetLock::acquire(&identity, None).unwrap_or_else(|f| bail_fail(f));
 
-    if identity.has_block_legacy_naming() {
-        // 独占权来自锁文件（与镜像同一机制），不再依赖 O_EXCL 打开——abandon 只碰恢复
-        // 现场不碰盘上字节，没有理由要求排他写打开。打开内容只为读表里的 Disk GUID：
-        // 历史命名的 checkpoint 以它落点，不认它就会漏掉一份现场；表读不出来（abandon
-        // 的常态之一）不挡这条路，按 None 处理。loop 归一后身份是 Image kind，但其
-        // 历史落点按 Block 规则生成，同样要走这条补列路径
-        let legacy = match FileSource::open_read_only(path) {
-            Ok(src) => legacy_disk_guid(&src),
-            Err(e) => {
-                eprintln!("warning: cannot open {} to enumerate legacy checkpoint names ({e}) — \
-                           a checkpoint under the GUID-based name will not be listed",
-                    path.display());
-                None
-            }
-        };
-        abandon_records(&identity, legacy)
+    // 历史命名（按 GPT Disk GUID）的 checkpoint 只对 Block 语义的身份存在；那份 GUID
+    // 只能打开目标读表拿到。abandon 只碰恢复现场、不碰盘上字节，没有理由要求排他写
+    // 打开；打不开时由 checkpoint_candidates 记成"存在但不可枚举"，不再假装没有。
+    // loop 归一后身份是 Image kind，但其历史落点按 Block 规则生成，同样要走这条路径
+    let disk = if identity.has_block_legacy_naming() {
+        FileSource::open_read_only(path).ok()
     } else {
         // 镜像不必打开内容：abandon 只改目标的兄弟文件，碰不到盘上字节
-        abandon_records(&identity, None)
-    }
+        None
+    };
+    abandon_records(&identity, disk.as_ref())
 }
 
-fn abandon_records(identity: &TargetIdentity, legacy: Option<[u8; 16]>) -> u8 {
-    let records = active_recovery_records(identity, legacy);
+fn abandon_records(identity: &TargetIdentity, disk: Option<&FileSource>) -> u8 {
+    let records = active_recovery_records(identity, disk);
     if records.is_empty() {
         // 幂等：目标已经是"没有 active transaction"，空跑即成功
         println!("nothing to abandon: no unfinished operation on this target");
@@ -117,12 +108,26 @@ fn abandon_records(identity: &TargetIdentity, legacy: Option<[u8; 16]>) -> u8 {
                  (re-run the command that started it to resume instead)",
                 path.display()
             ),
+            RecoveryRecord::UnenumerableCheckpoint { reason } => eprintln!(
+                "warning: a relocation checkpoint may exist under the legacy GUID-based name, but it \
+                 cannot be located because {reason} — abandon cannot release what it cannot name"
+            ),
         }
     }
 
     let mut failed: Vec<String> = Vec::new();
     for r in &records {
-        let from = r.path();
+        let Some(from) = r.path() else {
+            // 无法枚举的那份：没有路径可改名，只能如实计入未完成并给出下一步
+            failed.push(format!(
+                "an unenumerable checkpoint exists but cannot be named ({}) — repair the target's table, then re-run",
+                match r {
+                    RecoveryRecord::UnenumerableCheckpoint { reason } => reason.as_str(),
+                    _ => unreachable!("path() is None only for UnenumerableCheckpoint"),
+                }
+            ));
+            continue;
+        };
         if let Err(e) = abandon_one(from) {
             failed.push(format!("{}: {e}", from.display()));
         }

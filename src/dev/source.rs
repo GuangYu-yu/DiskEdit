@@ -142,7 +142,7 @@ impl WriteSource {
         self.write_raw(off, buf)
     }
 
-    pub(crate) fn write_raw(&mut self, off: u64, buf: &[u8]) -> io::Result<()> {
+    fn write_raw(&mut self, off: u64, buf: &[u8]) -> io::Result<()> {
         self.refuse_past_end(off, buf.len())?;
         use std::io::{Seek, SeekFrom, Write};
         self.src.file.seek(SeekFrom::Start(off))?;
@@ -470,6 +470,22 @@ impl FileSource {
                     self.size
                 ),
             ));
+        }
+        // 镜像的边界取文件**此刻**的长度：`self.size` 是打开时的快照，镜像在本进程运行
+        // 期间被外部截短时，按快照放行会让 seek + write_all 把文件稀疏扩回旧长度——
+        // 正是上面那条上界要防的静默扩张。块设备的容量不受这种改写影响，故只查镜像
+        if !self.is_block {
+            let now = self.file.metadata()?.len();
+            if end > now {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "write of {len} byte(s) at offset {off} ends at {end}, but the image is now {now} byte(s) \
+                         (opened as {}) — refusing to extend the target",
+                        self.size
+                    ),
+                ));
+            }
         }
         Ok(())
     }

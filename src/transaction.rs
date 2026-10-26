@@ -20,10 +20,9 @@ use std::sync::Mutex;
 use std::os::unix::fs::FileTypeExt;
 
 use crate::args::Args;
-use crate::dev::{FileSource, Journal, PartSelector, TargetIdentity, WriteSource};
+use crate::dev::{self, FileSource, Journal, PartSelector, TargetIdentity, WriteSource};
 use crate::outcome::Fail;
 use crate::targetlock::TargetLock;
-use crate::{dev, table};
 
 /// 一份**还活着的**恢复现场。它是"目标上还有什么没做完"的唯一枚举口径：闸口
 /// （拒绝别的写命令）与 `abandon`（放弃它）都从这里取，两处不各自判断"什么算现场"
@@ -34,33 +33,27 @@ pub(crate) enum RecoveryRecord {
     /// 搬移 checkpoint：描述一次中断的搬移。它本身不含可回放的字节，
     /// 出路只有续跑原命令或放弃
     Checkpoint { path: std::path::PathBuf },
+    /// 按历史 GUID 命名的 checkpoint 可能存在，但目标的表读不出来，拼不出它的路径。
+    /// 它不是"没有"：表损坏恰好是最需要现场枚举的场合。没有路径可删，也没有名字可列，
+    /// 只能如实报成"无法枚举的现场"
+    UnenumerableCheckpoint { reason: String },
 }
 
 impl RecoveryRecord {
-    pub(crate) fn path(&self) -> &Path {
+    pub(crate) fn path(&self) -> Option<&Path> {
         match self {
-            RecoveryRecord::Journal { path, .. } | RecoveryRecord::Checkpoint { path } => path,
+            RecoveryRecord::Journal { path, .. } | RecoveryRecord::Checkpoint { path } => Some(path),
+            RecoveryRecord::UnenumerableCheckpoint { .. } => None,
         }
     }
-}
 
-/// 盘上表里的 Disk GUID，用来认**历史命名**的 checkpoint 落点。
-///
-/// 读不出来只降级为 `None` 并告警，**不改变任何判定**：目标身份取自设备层拓扑
-/// （见 [`TargetIdentity`]），与表内容无关，损坏 GPT 因此照样能 abandon；`None` 仅仅
-/// 意味着"按 GUID 命名的那份历史候选这一轮列举不到"。静默降级则会让用户以为盘上
-/// 只有一份现场，而报告里一条警告都没有
-pub(crate) fn legacy_disk_guid(src: &FileSource) -> Option<[u8; 16]> {
-    match table::load_gpt(src) {
-        Ok(Some(g)) => Some(g.header.disk_guid),
-        // 无表（MBR / 裸盘）是常态而非故障：历史命名那份本来就不存在
-        Ok(None) => None,
-        Err(e) => {
-            eprintln!(
-                "warning: cannot read the GPT Disk GUID ({e}) — a checkpoint stored under the \
-                 legacy GUID-based name cannot be enumerated in this run"
-            );
-            None
+    /// 报告用的单条描述：有路径的给路径，无法枚举的把原因说出来
+    fn describe(&self) -> String {
+        match self {
+            RecoveryRecord::Journal { path, .. } | RecoveryRecord::Checkpoint { path } => path.display().to_string(),
+            RecoveryRecord::UnenumerableCheckpoint { reason } => format!(
+                "an unenumerable checkpoint under the legacy GUID-based name ({reason})"
+            ),
         }
     }
 }
@@ -72,10 +65,13 @@ pub(crate) fn legacy_disk_guid(src: &FileSource) -> Option<[u8; 16]> {
 /// 的枚举都消费同一个分类，三处对"什么算现场"不会给出不同答案。
 ///
 /// checkpoint 没有"空壳"一说：它一落盘就描述一次中断的搬移，故只看存在性——
-/// **只有 `NotFound` 算不存在**，属性读取的其他错误按存在处理
+/// **只有 `NotFound` 算不存在**，属性读取的其他错误按存在处理。
+///
+/// `disk` 是整盘目标，仅供按 GUID 命名的那份历史 checkpoint 落点用；调用点按"身份是否
+/// 可能带 Block 语义的历史落点"决定传不传，见 [`TargetIdentity::checkpoint_candidates`]
 pub(crate) fn active_recovery_records(
     identity: &TargetIdentity,
-    legacy_disk_guid: Option<[u8; 16]>,
+    disk: Option<&FileSource>,
 ) -> Vec<RecoveryRecord> {
     let mut out = Vec::new();
     for p in identity.journal_candidates() {
@@ -93,7 +89,11 @@ pub(crate) fn active_recovery_records(
             }
         }
     }
-    for p in identity.checkpoint_candidates(legacy_disk_guid) {
+    let candidates = identity.checkpoint_candidates(disk);
+    if let Some(reason) = candidates.unenumerable {
+        out.push(RecoveryRecord::UnenumerableCheckpoint { reason });
+    }
+    for p in candidates.paths {
         // 目录等非普通文件不是本工具写下的任何东西，留着它会把一个无关路径顶成 busy 现场
         match std::fs::metadata(&p) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
@@ -271,12 +271,10 @@ impl TransactionManager {
     /// 第三路是真实存在的：`copy` 在数据复制完后、表项提交前崩溃就没有 ckpt，
     /// 此时的 journal 带着屏障——`undo` 会拒绝，说"用 undo 回滚"是错的
     fn busy(active: &[RecoveryRecord]) -> Fail {
-        let listed: Vec<String> = active.iter().map(|r| r.path().display().to_string()).collect();
+        let listed: Vec<String> = active.iter().map(RecoveryRecord::describe).collect();
         let resumable = active.iter().any(|r| matches!(r, RecoveryRecord::Checkpoint { .. }));
-        // 恰好一份 journal 且它可回滚才给这条出路：两份并存时 undo 的 pick_journal
-        // 会因无法抉择而拒绝（Ambiguous），按其中一份许诺"可以 undo"是句到不了的出路
-        // 与 `pick_journal` 同分母：只有"读出来且非空"的 journal 参与计数；损坏候选
-        // （entries: None）既不否决一份可用的记录，也不被当成第二份
+        // 恰好一份可读 journal 且它可回滚才给这条出路。无法枚举的 checkpoint 不改变
+        // 这个计数：它既不能证明"有另一份现场"，也不能被当成可回滚的那份
         let usable: Vec<&Vec<dev::JournalRecord>> = active
             .iter()
             .filter_map(|r| match r {
@@ -286,6 +284,7 @@ impl TransactionManager {
             .collect();
         let single_rollbackable = usable.len() == 1
             && usable[0].iter().all(|e| !matches!(e.recovery, dev::RecoveryData::Barrier));
+        let unenumerable = active.iter().any(|r| matches!(r, RecoveryRecord::UnenumerableCheckpoint { .. }));
         let way_out = if resumable {
             // "重跑原命令即续跑"只对 relocation 作业成立；单分区 resize 的现场
             //（RecoveryRecord 只有路径，分不出两族）必须把另一条出路一并给出
@@ -293,6 +292,12 @@ impl TransactionManager {
              resize is resumed with `resize-part` or `move`), or release it with `diskedit abandon`"
         } else if single_rollbackable {
             "roll it back with `diskedit undo`, or release it with `diskedit abandon`"
+        } else if unenumerable {
+            // 路径都拼不出来就谈不上"删掉它"：先修表让名字可枚举，或者确认盘上确实
+            // 没有按 GUID 命名的 checkpoint 后自行处置——不能许诺一条到不了的 abandon
+            "the target's partition table is unreadable, so a checkpoint under the legacy \
+             GUID-based name cannot even be located; repair the table (or verify that name \
+             yourself) before `diskedit abandon` can release it"
         } else {
             "it is already past the point of rolling back, so `diskedit abandon` is the only way to release it"
         };
@@ -478,7 +483,7 @@ impl TransactionManager {
 
     /// 目标上还活着的恢复现场
     pub(crate) fn active_records(src: &FileSource) -> Vec<RecoveryRecord> {
-        active_recovery_records(&src.identity, legacy_disk_guid(src))
+        active_recovery_records(&src.identity, Some(src))
     }
 
     /// 绕过事务入口的写盘命令（`resizefs` 与 `check` 的修复）动手前的唯一闸口：目标上若还
@@ -503,7 +508,7 @@ impl TransactionManager {
         what: &str,
     ) -> Result<(), Fail> {
         Self::refuse_unidentifiable(identity)?;
-        let active = active_recovery_records(&identity.identity, legacy_disk_guid(disk));
+        let active = active_recovery_records(&identity.identity, Some(disk));
         if active.is_empty() {
             return Ok(());
         }

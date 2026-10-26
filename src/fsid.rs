@@ -289,7 +289,17 @@ pub fn unactivatable_swap(src: &FileSource, base: u64, len_bytes: u64) -> io::Re
 ///   __le16 @0x1c/@0x1e；本布局只对 4.0 成立，其它版本的超级块按未命中处理
 /// - EROFS → blocks u32 @超级块+0x24 左移 blkszbits u8 @超级块+0x0C（超级块 @1024）
 ///
-/// 统一 64K 上对齐（fstools ROOTDEV_OVERLAY_ALIGN 的惯例，非通用规范）；
+/// 统一 64K 上对齐：fstools libfstools/rootdisk.c 的 ROOTDEV_OVERLAY_ALIGN = 64 * 1024，
+/// 对齐式 `(off + ALIGN - 1) & ~(ALIGN - 1)` 与 `rootdisk_volume_find("rootfs_data")` 同形。
+///
+/// 信任边界：以上是 OpenWrt 的镜像布局约定，不是 squashfs / EROFS 格式规范对"镜像尾
+/// 必有 RW 层"的保证。EROFS 规范（kernel.org erofs ondisk/core_ondisk：`blocks`、`inos`
+/// 供 statvfs 报告，动态生成的镜像可置 0，且明确不应以该字段校验地址合法性）意味着此处
+/// 算出的偏移只是**布局提示**，不能当作"该位置确实有一个 RW 层"的证明。真实存在与否由
+/// 调用方在该偏移处重新识别内层来确认；识别不出时不写那段区域（见 `Growable::OverlayPending`）。
+/// `blkszbits` 的格式上界没有权威取值可用，故只查下界；超大值由 `checked_shl`/`checked_mul`
+/// 与调用方的区间边界一并挡成未命中或拒绝。
+///
 /// 解析失败或 0 → None。读错误如实上抛：读不出来与"签名不命中"是两回事，
 /// 把前者折叠成 None 会让调用方把盘上事实当成"没有 overlay"。分区不足以容纳
 /// 超级块读区同样按未命中——那不是读故障，是区间不存在的事实
