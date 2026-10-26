@@ -230,6 +230,16 @@ pub(crate) fn cmd_info(a: &Args) -> u8 {
                 }).collect();
                 out.push_str(&parts.join(","));
                 out.push_str("]}");
+                // 容器内部的逻辑分区在 EBR 链里，本工具不解析：主槽列表到此为止。不点明这一点，
+                // 读者会把"未列出"读成"不存在"，并对盘上其余数据视而不见。不给数量——没解析
+                // 不等于没有
+                for p in raw.parts.iter().filter(|p| p.is_container) {
+                    stale_notes.push(format!(
+                        "note: MBR slot {} is an extended container — the logical partitions inside it are not \
+                         enumerated; the partition list above is incomplete",
+                        p.num
+                    ));
+                }
                 // 损伤逐条报出：条目本身仍在上面的列表里，用户需要知道哪一条越了界
                 for d in &raw.damage {
                     stale_notes.push(format!("note: {}", d.describe()));
