@@ -188,10 +188,9 @@ pub fn parse_mbr(src: &FileSource) -> io::Result<Option<Vec<MbrPartition>>> {
 
 /// msdos 写原语的公共入口闸：盘型是 msdos，**且**这张表可操作。
 ///
-/// 两个问题分开表达：[`table_label`] 回答"这是哪种表"——损伤不改变盘型，观察路径靠它
-/// 照实报 `mbr`；而写原语要的是"这张表能改"，损伤由 [`parse_mbr`] 拒绝。此前写命令
-/// 借 table_label 的 Err 当闸，等于让盘型判定替可操作性背书：一张条目越界的盘上，
-/// 连删分区之外的写命令都报成"读不出盘型"
+/// 两个问题分开回答：[`table_label`] 只说"这是哪种表"——损伤不改变盘型，观察路径靠它
+/// 照实报 `mbr`；可操作性由 [`parse_mbr`] 判定。盘型判定走 raw 解析，不顺带回答能不能写，
+/// 所以六个写原语都要自己问这一句，否则损伤表上的写会直接落盘
 fn require_writable_mbr(src: &FileSource) -> Result<(), Fail> {
     match parse_mbr(src) {
         Ok(Some(_)) => Ok(()),
