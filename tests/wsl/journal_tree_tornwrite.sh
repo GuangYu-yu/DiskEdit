@@ -25,7 +25,7 @@ umnt() { umount /testmnt 2>/dev/null; lo_detach "$LD"; }
 
 echo "########## A: journal 流式（数据字节不入 journal） ##########"
 mk
-mnt 2; dd if=/dev/urandom of=/testmnt/blob bs=1M count=90 2>/dev/null; umnt; LD=$(lo_attach "$T"); MD2=$(md5sum "${LD}p2" | cut -d' ' -f1); lo_detach "$LD"
+mnt 2; dd if=/dev/urandom of=/testmnt/blob bs=1M count=90 2>/dev/null; umnt; LD=$(lo_attach "$T"); MD2=$(mdsum "${LD}p2"); lo_detach "$LD"
 echo "-- A1: 中断的 100M 分区搬移后 journal 体积 --"
 DISKEDIT_FAULT=rs-chunk:60 $BF move "$T":2 --start 250000 --chunk-size 1 >/dev/null 2>&1
 JSZ=$(stat -c%s "$T$JOURNAL_SUFFIX" 2>/dev/null || echo 0)
@@ -39,7 +39,7 @@ echo "-- A3: 完成后 journal 应被删除 --"
 $B move "$T":2 --start 250000 --chunk-size 1 >/dev/null 2>&1; E=$?
 [ -f "$T$JOURNAL_SUFFIX" ] && { echo "A3 JOURNAL LEFT (bad)"; rc=1; } || echo "A3 JOURNAL DROPPED OK (exit=$E)"
 LD=$(lo_attach "$T")
-[ "$MD2" = "$(md5sum "${LD}p2" | cut -d' ' -f1)" ] && echo "A3 p2 DEV OK" || { echo "A3 p2 DEV CORRUPT"; rc=1; }
+[ "$MD2" = "$(mdsum "${LD}p2")" ] && echo "A3 p2 DEV OK" || { echo "A3 p2 DEV CORRUPT"; rc=1; }
 e2fsck -fn "${LD}p2" >/dev/null 2>&1 && echo "A3 e2fsck clean" || { echo "A3 e2fsck ISSUES"; rc=1; }
 lo_detach "$LD"
 

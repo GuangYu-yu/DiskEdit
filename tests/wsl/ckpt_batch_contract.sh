@@ -29,7 +29,7 @@ run_case() {
   # 基准哈希必须建立在"已落盘"状态上：dd 经 loop 写入，工具执行时直接读后备文件，
   # 先 sync 让两侧视图对齐，避免把未回写的现场当基准（断言时机早于落盘）
   sync
-  MD=$(md5sum "${LD}p2" | cut -d' ' -f1)
+  MD=$(mdsum "${LD}p2")
   lo_detach "$LD"
 
   echo "== case: $label =="
@@ -62,13 +62,13 @@ run_case() {
   sync
   LD=$(lo_attach "$T")
   partx -u "$LD" 2>/dev/null; sleep 1
-  MD2=$(md5sum "${LD}p2" | cut -d' ' -f1)
+  MD2=$(mdsum "${LD}p2")
   if [ "$MD" = "$MD2" ]; then
     echo "DATA OK"
   else
     echo "md5 base=$MD now=$MD2 p2size=$(blockdev --getsize64 "${LD}p2" 2>/dev/null) loops=$(losetup -a | grep -c diskedit_test15)"
     partx -u "$LD" 2>/dev/null; sleep 1
-    MD2=$(md5sum "${LD}p2" | cut -d' ' -f1)
+    MD2=$(mdsum "${LD}p2")
     if [ "$MD" = "$MD2" ]; then
       echo "DATA OK after refresh（首次读到过期分区映射——测试基建竞态，非数据损坏）"
     else

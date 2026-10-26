@@ -34,7 +34,7 @@ $B new "$T" --yes >/dev/null
 $B add "$T" --start 2048 --end 99999 --name p1 >/dev/null
 LD=$(lo_attach "$T"); mkfs.ext4 -q "${LD}p1"; lo_detach "$LD"
 BEFORE=$($B info "$T" | grep -o '"num":[^}]*}' | head -1)
-MD_BEFORE=$(md5sum "$T" | cut -d' ' -f1)
+MD_BEFORE=$(mdsum "$T")
 LD=$(lo_attach "$T" -r); echo "ro loop: $LD"
 $B info "$LD" >/dev/null 2>&1; echo "ro info exit=$? (期望 0)"
 # 三个写探针都必须"在可写设备上合法、只因只读而被拒"，否则拒绝理由会来自别处：
@@ -56,7 +56,7 @@ ro_probe resize "$B" resize "$LD":1 56M
 ro_probe set    "$B" set    "$LD":1 name ro-try
 ro_probe delete "$B" delete "$LD":1 --yes
 lo_detach "$LD"
-[ "$MD_BEFORE" = "$(md5sum "$T" | cut -d' ' -f1)" ] && echo "RO DISK UNTOUCHED OK" || { echo "RO DISK CHANGED (BAD)"; rc=1; }
+[ "$MD_BEFORE" = "$(mdsum "$T")" ] && echo "RO DISK UNTOUCHED OK" || { echo "RO DISK CHANGED (BAD)"; rc=1; }
 [ "$BEFORE" = "$($B info "$T" | grep -o '"num":[^}]*}' | head -1)" ] && echo "RO TABLE UNCHANGED OK" || { echo "RO TABLE CHANGED (BAD)"; rc=1; }
 
 echo
@@ -70,7 +70,7 @@ LD=$(lo_attach "$T")
 if mount_at "${LD}p2" /testmnt; then
   dd if=/dev/urandom of=/testmnt/blob bs=1M count=90 2>/dev/null
   umount /testmnt 2>/dev/null
-  MD=$(md5sum "${LD}p2" | cut -d' ' -f1)
+  MD=$(mdsum "${LD}p2")
 else
   echo "MOUNT FAILED (BAD): ${LD}p2 -> /testmnt，并发基线缺失"; rc=1; MD=
 fi
@@ -88,7 +88,7 @@ $B move "$T":2 --start 250000 --chunk-size 1 >/dev/null 2>&1; echo "settle rerun
 LD=$(lo_attach "$T")
 if [ -z "$MD" ]; then
   echo "CONCURRENCY DEV SKIP (基线 md5 缺失)"; rc=1
-elif [ "$MD" = "$(md5sum "${LD}p2" | cut -d' ' -f1)" ]; then
+elif [ "$MD" = "$(mdsum "${LD}p2")" ]; then
   echo "CONCURRENCY DEV OK"
 else
   echo "CONCURRENCY DEV CORRUPT"; rc=1

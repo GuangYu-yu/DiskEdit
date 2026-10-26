@@ -16,7 +16,7 @@ LD=$(lo_attach "$T")
 mount_at "${LD}p2" /testmnt
 dd if=/dev/urandom of=/testmnt/blob2.bin bs=1M count=350 2>/dev/null
 umount /testmnt
-MD=$(md5sum "${LD}p2" | cut -d' ' -f1)
+MD=$(mdsum "${LD}p2")
 echo "md5 before: $MD"
 lo_detach "$LD"
 
@@ -24,7 +24,7 @@ lo_detach "$LD"
 $B resize "$T":1 +100M --allow-move --yes --chunk-size 1 --no-fs; echo "exit=$?"
 
 LD=$(lo_attach "$T")
-MD2=$(md5sum "${LD}p2" | cut -d' ' -f1)
+MD2=$(mdsum "${LD}p2")
 echo "md5 after:  $MD2"
 [ "$MD" = "$MD2" ] && echo "NO-KILL SHIFT DATA OK" || { echo "NO-KILL SHIFT DATA CORRUPT"; rc=1; }
 umount /testmnt 2>/dev/null

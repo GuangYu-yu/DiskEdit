@@ -16,12 +16,12 @@ mk() {
 fill() {
   LD=$(lo_attach "$T"); mount_at "${LD}p$1" /testmnt
   dd if=/dev/urandom of=/testmnt/blob bs=1M count=$2 2>/dev/null
-  umount /testmnt; md5sum "${LD}p$1" | cut -d' ' -f1; losetup -d "$LD"
+  umount /testmnt; mdsum "${LD}p$1"; losetup -d "$LD"
 }
 chk() {
   LD=$(lo_attach "$T") || return
   if [ "$2" != "-" ]; then
-    [ "$2" = "$(md5sum "${LD}p$1" | cut -d' ' -f1)" ] && echo "p$1 DEV OK" || { echo "p$1 DEV CORRUPT"; rc=1; }
+    [ "$2" = "$(mdsum "${LD}p$1")" ] && echo "p$1 DEV OK" || { echo "p$1 DEV CORRUPT"; rc=1; }
   fi
   e2fsck -fn "${LD}p$1" >/dev/null 2>&1 && echo "p$1 e2fsck clean" || { echo "p$1 e2fsck ISSUES"; rc=1; }
   losetup -d "$LD"
@@ -42,7 +42,7 @@ mk; M1=$(fill 1 90)
 $B copy "$T":1 --start end >/dev/null 2>&1; exp $? 0 "copy --start end"
 $B info "$T" | grep -o '"num":4,"first_lba":[0-9]*,"last_lba":[0-9]*'
 chk 1 "$M1"
-LD=$(lo_attach "$T"); [ "$M1" = "$(md5sum "${LD}p4" | cut -d' ' -f1)" ] && echo "p4 COPY OK (device-identical)" || { echo "p4 COPY MISMATCH"; rc=1; }; losetup -d "$LD"
+LD=$(lo_attach "$T"); [ "$M1" = "$(mdsum "${LD}p4")" ] && echo "p4 COPY OK (device-identical)" || { echo "p4 COPY MISMATCH"; rc=1; }; losetup -d "$LD"
 
 echo
 echo "=== 3: 百分比 +10% ==="
