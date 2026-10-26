@@ -315,7 +315,7 @@ pub(crate) fn cmd_undo(a: &Args) -> u8 {
                 JournalRead::Complete(v) => (p, v, false),
                 // 尾部未完成的记录：append-only 下那次追加没走完，它对应的写入也就没发生，
                 // 丢弃安全；前面的完整前缀照常回放（严格契约仍守：每条都过了 CRC）
-                JournalRead::TruncatedTail(v) => (p, v, true),
+                JournalRead::TruncatedTail { records, .. } => (p, records, true),
             },
         };
         // 这份 journal 是写给**哪个目标**的：v4 起头里记着创建时的指纹与 loop 映射。
@@ -344,8 +344,9 @@ pub(crate) fn cmd_undo(a: &Args) -> u8 {
         let n = entries.len();
         if tail_incomplete {
             eprintln!(
-                "warning: the journal ends with an incomplete record (an interrupted append, or that record was damaged) — \
-                 replaying the {n} complete record(s) before it; anything recorded after that point cannot be undone"
+                "warning: the journal ends with an incomplete record (an interrupted append, or a record that was damaged) — \
+                 replaying the {n} complete record(s) before it; anything recorded after that point cannot be undone, and the \
+                 journal is archived rather than deleted so that tail stays inspectable"
             );
         }
         // 含**不可回滚写入**的 journal 不可回滚：数据搬移的字节、外部 FS 工具的写入
@@ -439,6 +440,7 @@ pub(crate) fn cmd_undo(a: &Args) -> u8 {
             src.identity.journal_candidates(),
             &p,
             &src.scene(),
+            tail_incomplete,
         );
         // 事务的恢复状态随回滚一并释放：这份 journal 记下的表写入已经全部回退，而 checkpoint
         // 描述的是同一个事务的进度——留下来只会描述一个已被回滚掉的世界，让后续 resize 被判成
@@ -467,12 +469,17 @@ pub(crate) fn cmd_undo(a: &Args) -> u8 {
             format!("undone {n} journal entries (verify with: diskedit info {})", a.target)
         };
         let code = table_write_done(&src, &summary).exit_code();
+        // 残尾对应的写入既未能回放也无法排除：完整前缀回到写入前，但整份 journal 不能说
+        // 已回滚到底，出口不能报成完整成功（journal 已归档，见 clear_journal_candidates）。
+        // 这个 20（EXIT_PARTIAL）是 undo 的出口口径：回放做了什么就报什么，与 abandon 的
+        // 30 不是同一个契约（那一条见 cmd/abandon.rs）
+        let code = if tail_incomplete { code.max(EXIT_PARTIAL) } else { code };
         if leftovers.is_empty() {
             return code;
         }
         // 回放已完成、但现场文件仍在：残留的 journal 让下一次写命令被判 busy，残留的 ckpt
         // 让后续 resize/apply 被判 Divergent，而此时已无 journal 可再 undo——只能人工处理。
-        // 成功串已打印，出口按"完成但有待办"降级，并逐条指名残留路径
+        // 成功串已打印，出口按"完成但有待办"降级（20），并逐条指名残留路径
         eprintln!("warning: the rollback is complete but these recovery files could not be removed:");
         for p in &leftovers {
             eprintln!("  {p}");
@@ -483,7 +490,12 @@ pub(crate) fn cmd_undo(a: &Args) -> u8 {
 }
 
 /// 回放成功后清掉**全部** journal 候选，不止被回放的那份 `picked`。被回放的那份
-/// 无条件删除（使命已结束）；其余候选要同时满足两条才删：首部是本工具 journal
+/// 使命已结束，通常直接删除；但 `torn` 为真时改为**归档**：残尾既可能是没走完的追加，
+/// 也可能是记录被外部截掉后的残骸，后者对应的写入可能已经落盘，而唯一能说明现场是
+/// 什么的正是这份文件。归档后候选落点腾空（目标不再被它顶成 busy），本次运行由调用方
+/// 按"完成但有待办"退出。
+///
+/// 其余候选要同时满足两条才删：首部是本工具 journal
 /// （`DEJL` 加可读版本，v4 残卷也算），且头里的身份与本目标相符。前者说明它是
 /// 我们自己写下的残卷（pick_journal 口径的"读不出"，损伤已逐条告警过），后者说明
 /// 它记的不是别的目标——候选路径按命名派生只说明"可能是我们的落点"，证明不了
@@ -493,12 +505,24 @@ pub(crate) fn cmd_undo(a: &Args) -> u8 {
 fn clear_journal_candidates(
     candidates: &[std::path::PathBuf],
     picked: &std::path::Path,
-    actual: &crate::dev::SceneIdentity,
+    actual: &crate::dev::LiveScene,
+    torn: bool,
 ) -> Vec<String> {
     let mut failed = Vec::new();
     for cand in candidates {
         if cand == picked {
-            if !crate::dev::remove_recovery_file(cand) {
+            if torn {
+                match archive_torn(cand) {
+                    Ok(to) => eprintln!(
+                        "note: archived the journal as {} — its tail is incomplete; inspect it before deleting",
+                        to.display()
+                    ),
+                    Err(why) => {
+                        eprintln!("warning: {why}");
+                        failed.push(cand.display().to_string());
+                    }
+                }
+            } else if !crate::dev::remove_recovery_file(cand) {
                 failed.push(cand.display().to_string());
             }
             continue;
@@ -551,6 +575,47 @@ fn clear_journal_candidates(
     failed
 }
 
+/// 撕裂尾 journal 的归档后缀。首选名被占用时顺延为 `.torn.N`，绝不覆盖既有归档——
+/// 那一份同样是证据（与 `abandon` 的 `.abandoned.N` 同一形态）
+const TORN_SUFFIX: &str = ".torn";
+
+/// 把撕裂尾 journal 移出候选落点。先建硬链接再删原件：目标名已存在时硬链接原子失败，
+/// 不会像 `rename` 那样静默覆盖；中途失败只留下"原件还在、副本已建"，原件仍是现场。
+/// 硬链接不可用（FAT/exFAT 等）时退到 `rename`，且只在名字空闲时用——本命令持目标锁，
+/// 窗口内不会有第二个 diskedit 来争这个名字
+fn archive_torn(from: &std::path::Path) -> Result<std::path::PathBuf, String> {
+    for n in 1..=1000u32 {
+        let to = if n == 1 {
+            crate::dev::suffix_path(from, TORN_SUFFIX)
+        } else {
+            crate::dev::suffix_path(from, &format!("{TORN_SUFFIX}.{n}"))
+        };
+        match std::fs::hard_link(from, &to) {
+            Ok(()) => {
+                if crate::dev::remove_recovery_file(from) {
+                    return Ok(to);
+                }
+                return Err(format!(
+                    "archived a copy at {} but could not remove the journal at {} — the target stays busy until it is gone",
+                    to.display(),
+                    from.display()
+                ));
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(_) if !to.exists() => {
+                return std::fs::rename(from, &to)
+                    .map(|()| to.clone())
+                    .map_err(|e| format!("cannot archive the journal at {}: {e}", from.display()));
+            }
+            Err(_) => continue,
+        }
+    }
+    Err(format!(
+        "cannot archive the journal at {}: no free {TORN_SUFFIX} name",
+        from.display()
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::let_underscore_must_use)] // 清理临时文件有意忽略失败
@@ -569,11 +634,11 @@ mod tests {
     /// 这里也记全零——两侧都无证据时身份核对不参与，测试因此聚焦在回放本身。
     /// 身份不符的拒绝路径在 CLI 层测：`cmd_undo` 的失败出口是 process::exit，
     /// 单元测试里跑不出"拒绝之后还能继续断言"的形态
-    fn jid() -> crate::dev::SceneIdentity {
-        crate::dev::SceneIdentity {
+    fn jid() -> crate::dev::LiveScene {
+        crate::dev::LiveScene {
             fp: Default::default(),
             map: None,
-            proof: crate::dev::IdentityProof::Inode,
+            proof: crate::dev::LiveProof::Inode,
         }
     }
 
@@ -819,7 +884,7 @@ mod tests {
         }
         let entries = match Journal::read_entries(&journal).unwrap() {
             JournalRead::Complete(v) => v,
-            JournalRead::TruncatedTail(_) => panic!("a completed append must read back complete"),
+            JournalRead::TruncatedTail { .. } => panic!("a completed append must read back complete"),
         };
 
         // 正常现场：两条都是写后内容
@@ -991,12 +1056,40 @@ mod tests {
         std::fs::write(&foreign, b"not-a-journal").unwrap();
 
         let id = jid();
-        super::clear_journal_candidates(&[picked.clone(), stale.clone(), foreign.clone()], &picked, &id);
+        super::clear_journal_candidates(&[picked.clone(), stale.clone(), foreign.clone()], &picked, &id, false);
         assert!(!picked.exists(), "the replayed journal must be removed");
         assert!(!stale.exists(), "our unreadable residue must be removed after replay");
         assert!(foreign.exists(), "a file without our magic must be left in place");
 
         let _ = std::fs::remove_file(&foreign);
+    }
+
+    /// 撕裂尾被回放的那份**归档**而不是删除：候选落点腾空（目标不再被它顶成 busy），
+    /// 字节留在 `.torn` 里供人工查看，残留清单为空
+    #[test]
+    fn torn_journal_is_archived_not_deleted() {
+        let picked = tmp_path("torn_pick");
+        let _ = std::fs::remove_file(&picked);
+        let _ = std::fs::remove_file(crate::dev::suffix_path(&picked, super::TORN_SUFFIX));
+        {
+            let mut j = Journal::open(&picked, jid()).unwrap();
+            j.record(0, &[0xAA; 4], &[0xBB; 4]).unwrap();
+        }
+        // 追加一截不完整的记录头，制造撕裂尾
+        {
+            use std::io::Write;
+            let mut f = std::fs::OpenOptions::new().append(true).open(&picked).unwrap();
+            f.write_all(&[0x40, 0x00, 0x00, 0x00, 0x01, 0x02]).unwrap();
+        }
+
+        let id = jid();
+        let leftovers = super::clear_journal_candidates(std::slice::from_ref(&picked), &picked, &id, true);
+        assert!(leftovers.is_empty(), "archiving must not be counted as a leftover");
+        assert!(!picked.exists(), "the candidate slot must be freed");
+        let archived = crate::dev::suffix_path(&picked, super::TORN_SUFFIX);
+        assert!(archived.exists(), "the torn bytes must stay inspectable");
+
+        let _ = std::fs::remove_file(&archived);
     }
 
     /// 精简 Args 构造：仅 target + yes，其余取默认空值（专供 cmd_undo 成功路径测试）

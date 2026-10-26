@@ -308,17 +308,23 @@ pub(crate) fn cmd_resize_msdos(a: &Args, pref: PartSelector, req: &SizeRequest, 
             let shrunk = fsops::shrink_fs(&src, part, fstype, requested)
                 .unwrap_or_else(|e| bail_fail(Fail::from(e).context("FS shrink failed")));
             // 成功行同时给出实际落点与请求值：工具按自身粒度取整，差异要看得见
-            if let Some(line) = shrunk.verify.ok_line(requested) {
-                println!("{line}");
-            }
-            table::resize_mdos_entry(&mut src, part, new_size_lba as u32)
-                .map_err(after_irreversible)
-                .unwrap_or_else(|f| bail_fail(f));
+            let line = shrunk.verify.ok_line(requested);
             // FS 已缩之后浮出的两条待办：回读不出来（缩容可能已完成、落点未证实）与卸载
-            // 没做成（清理未完成）——都不改写缩容这一事实，只作为待办浮出
+            // 没做成（清理未完成）——都不改写缩容这一事实，只作为待办浮出。
+            // 本路径（缩过 FS 再改表）把这两条计入 pending，因为表写入紧随其后：出口因此是
+            // 20。"卸载未完成"单独一档的处理与 fs / superfloppy 两条纯 FS 路径不同——那两处
+            // 只告警、成功出口保持 0（见 cmd/fs.rs 与 cmd/resize/superfloppy.rs）
             let mut pending: Vec<_> = shrunk.verify.pending(part).into_iter().collect();
             if let Some(leak) = shrunk.leak {
                 pending.push(leak.into_pending(part));
+            }
+            // 落点未证实时不切表：分区末端可能落进未缩的 FS 元数据（与 movepart 的
+            // 同一条判据）。缩容本身可能已完成，故仍按已应用收尾，把未证实作为待办浮出
+            if let Some(line) = line {
+                println!("{line}");
+                table::resize_mdos_entry(&mut src, part, new_size_lba as u32)
+                    .map_err(after_irreversible)
+                    .unwrap_or_else(|f| bail_fail(f));
             }
             let o = settle_layout(crate::outcome::Outcome::applied_with(pending), &src);
             finish_resize(a, o, Some(&mut src), part, is_pv, is_block, cur_bytes)

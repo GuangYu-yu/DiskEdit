@@ -1,6 +1,7 @@
 //! undo journal 的记录格式、文件生命周期与候选分类。
 
 use super::*;
+use std::num::NonZeroUsize;
 use std::sync::Mutex;
 
 /// 本进程用 `create_new` 建成的 journal 落点，连同建立时该文件的指纹。
@@ -148,6 +149,10 @@ pub(crate) enum JournalCandidate {
 /// 判一个落点属于哪一态。**只有 `NotFound` 是"不在"**：属性读不出来按 `Damaged` 处理，
 /// 否则一次瞬态 I/O 错误就会把一份可能完好的现场当成不存在，后续 `commit` 还会
 /// 把它静默删掉
+///
+/// **头之后还有字节却读不出一条完整记录，不是空壳**：撕裂的首次追加与"已有记录被
+/// 截掉 / 写坏"在内容上不可区分，前者没有对应的数据写入、后者有。无法证明"空"就
+/// 不能按空壳销毁——写闸口会因此放行，undo 与 abandon 会删掉唯一一份 pre-image
 pub(crate) fn classify_journal(path: &Path) -> JournalCandidate {
     let meta = match std::fs::metadata(path) {
         Ok(m) => m,
@@ -158,9 +163,13 @@ pub(crate) fn classify_journal(path: &Path) -> JournalCandidate {
         return JournalCandidate::Absent;
     }
     match Journal::read_entries(path) {
-        Ok(JournalRead::Complete(v)) | Ok(JournalRead::TruncatedTail(v)) if v.is_empty() => {
-            JournalCandidate::Shell
-        }
+        Ok(JournalRead::Complete(v)) if v.is_empty() => JournalCandidate::Shell,
+        Ok(JournalRead::TruncatedTail { records, cut }) if records.is_empty() => JournalCandidate::Damaged(
+            format!(
+                "the journal header is followed by {cut} byte(s) that form no complete record — this cannot be shown \
+                 to be empty, and it may be a torn first record or a record that was truncated away"
+            ),
+        ),
         Ok(read) => JournalCandidate::Records(read),
         // 属性读到之后文件被删掉：本次判断按"不在"处理，与打开时的 NotFound 同义
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => JournalCandidate::Absent,
@@ -276,8 +285,39 @@ impl JournalRecord {
 pub enum JournalRead {
     /// 全部记录完整且 CRC 校验通过
     Complete(Vec<JournalRecord>),
-    /// 尾部存在一条未完成的记录，已丢弃；前面已完整的记录前缀原样返回
-    TruncatedTail(Vec<JournalRecord>),
+    /// 尾部存在一条未完成的记录，已丢弃；前面已完整的记录前缀原样返回。
+    /// `cut` 是被丢掉的字节数——撕裂只在扫描停在文件内部时才成立，故它恒非零：
+    /// "撕裂但一个字节都没丢"不是一个可达状态
+    TruncatedTail { records: Vec<JournalRecord>, cut: NonZeroUsize },
+}
+
+/// 撕裂尾字节的归档后缀。内容是**被截掉的那段原始字节**，不是一份可回放的 journal：
+/// 与 undo 归档整份 journal 的 `.torn` 分开，两者不能被同一个读者当成同一种证据
+const TORN_TAIL_SUFFIX: &str = ".torn-tail";
+
+/// 把撕裂尾的原始字节复制到 journal 旁边作为归档。名字被占用时顺延，绝不覆盖既有归档——
+/// 那一份同样是一次中断留下的证据。失败只由调用方告警：拒绝收养会让目标被一份读不全的
+/// 文件永久挡住，而截断丢弃的本就是无法回放的字节
+fn archive_torn_tail(journal: &Path, tail: &[u8]) -> io::Result<PathBuf> {
+    use std::io::Write;
+    for n in 1..u32::MAX {
+        let to = if n == 1 {
+            crate::dev::suffix_path(journal, TORN_TAIL_SUFFIX)
+        } else {
+            crate::dev::suffix_path(journal, &format!("{TORN_TAIL_SUFFIX}.{n}"))
+        };
+        match OpenOptions::new().write(true).create_new(true).open(&to) {
+            Ok(mut f) => {
+                f.write_all(tail)?;
+                f.sync_all()?;
+                crate::dev::best_effort_dir_fsync(&to);
+                return Ok(to);
+            }
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    Err(io::Error::other("no free torn-tail name available"))
 }
 
 /// durable transaction log：追加式 `[len u32][crc32 u32][payload]` 记录流，其中
@@ -299,7 +339,7 @@ pub struct Journal {
     pub(crate) mutation: Mutation,
     /// 本目标是哪个目标：随头一起落盘（首条记录之前），也在采纳既有 journal 时与头里的
     /// 记录值比对（见 [`Self::open`]）
-    pub(crate) identity: SceneIdentity,
+    pub(crate) identity: LiveScene,
     /// 本份 journal 的记录 CRC 口径。新建即当前版本；采纳 v4 现场时保持 v4，
     /// 追加的记录与该文件既有记录同口径，避免同一文件里混两种 CRC 规则
     pub(crate) format: JournalFormat,
@@ -383,8 +423,9 @@ impl Journal {
     /// "指纹不符"。读取时按文件自述的版本取长度（见 [`JournalFormat::header_len`]）
     pub(crate) const HEADER_LEN: usize = Self::MAGIC.len() + IDENTITY_LEN_V6 + 4;
 
-    /// 头（含身份段的 CRC）。写出与校验两处只用这一份布局；v4 / v5 没有设备 ID 与身份种类
-    pub(crate) fn header(identity: &SceneIdentity, format: JournalFormat) -> Vec<u8> {
+    /// 头（含身份段的 CRC）。写出与校验两处只用这一份布局；v4 / v5 没有设备 ID 与身份种类。
+    /// 身份种类只从 [`LiveScene`] 取，`Legacy`（0）因此不可能落到盘上
+    pub(crate) fn header(identity: &LiveScene, format: JournalFormat) -> Vec<u8> {
         let mut b = Vec::with_capacity(format.header_len());
         b.extend_from_slice(format.magic());
         b.extend_from_slice(&identity.fp.dev.to_le_bytes());
@@ -450,7 +491,7 @@ impl Journal {
         Self::parse_header(&std::fs::read(path)?).map(|(identity, _)| identity)
     }
 
-    pub(crate) fn at(path: &Path, file: Option<File>, identity: SceneIdentity, format: JournalFormat) -> Self {
+    pub(crate) fn at(path: &Path, file: Option<File>, identity: LiveScene, format: JournalFormat) -> Self {
         Journal { file, path: path.to_path_buf(), mutation: Mutation::PartitionTable, identity, format, barred: false }
     }
 
@@ -463,20 +504,33 @@ impl Journal {
     ///
     /// 既有文件还要过身份核对：它记的是**哪个目标**（v4 起）。指纹或 loop 映射不符即拒绝
     /// 采纳——把别的目标记下的原文当成"本目标的待回滚字节"，是这条路径最坏的后果。
-    /// 唯一不适用的是**没有任何完整记录**的文件：零记录意味着无可回滚的字节，覆盖头
-    /// 收养不丢信息，而拒绝会让它永久占住本目标的 journal 落点（写命令全拒，undo 与
-    /// abandon 又都不把它当现场）
+    /// 唯一不适用的是**头之后一个字节都没有**的文件（零记录且无残尾）：零记录意味着无可
+    /// 回滚的字节，覆盖头收养不丢信息，而拒绝会让它永久占住本目标的 journal 落点（写命令
+    /// 全拒，undo 与 abandon 又都不把它当现场）。头后还有字节而读不出完整记录的**不收养**：
+    /// 那截字节可能就是被截掉的记录，与 [`classify_journal`] 的判据同源
     ///
     /// 其余例外：（0 字节的残骸 → 补写头）与
-    /// （撕裂尾物理截断，见 [`Self::scan_entries`]）。两者都是收养既有现场的一部分而非新痕迹
+    /// （撕裂尾物理截断，见 [`Self::scan_entries`]；被截掉的字节先归档到 `.torn-tail`）。
+    /// 两者都是收养既有现场的一部分而非新痕迹
     /// ——不截断的话垃圾尾会永远留在文件里，之后的新记录接在垃圾之后，`read_entries` 会把
     /// "垃圾之后的一切"都判进 TruncatedTail，新记录从此无法回放
+    ///
+    /// **截断本身要交给调用方**（[`Self::adopt`]）：那次追加没有写完，对应的写入没发生；
+    /// 但同样的形状也可能是"记录被外部截掉"的残骸，两种成因不可区分。丢弃是可以的（这段
+    /// 字节不构成可回放记录），但这次运行不能因此自称完整——见 `transaction::SessionJournal`
     ///
     /// 文件以 `read(true).write(true)` 打开（**不用 append 模式**）：补头、撕裂尾截断
     /// （`set_len`）与之后的追加全部复用这一个句柄。append 模式在 Windows 上只拿到
     /// `FILE_APPEND_DATA`、没有 `set_len` 所需的 `FILE_WRITE_DATA`，会迫使截断再按路径
     /// 开第二个句柄——两次打开之间路径可被替换，截断就落到另一个文件上
-    pub fn open(path: &Path, identity: SceneIdentity) -> io::Result<Self> {
+    #[cfg(test)]
+    pub fn open(path: &Path, identity: LiveScene) -> io::Result<Self> {
+        Self::adopt(path, identity).map(|(j, _)| j)
+    }
+
+    /// [`Self::open`] 的完整形态：附带被截掉的残尾字节数，`None` 表示文件原本就停在
+    /// 记录边界上。写路径据此把本次运行报成未完整收尾（见 `transaction::SessionJournal`）
+    pub(crate) fn adopt(path: &Path, identity: LiveScene) -> io::Result<(Self, Option<NonZeroUsize>)> {
         match OpenOptions::new().read(true).write(true).open(path) {
             Ok(mut f) => {
                 use std::io::Read;
@@ -488,7 +542,7 @@ impl Journal {
                 // 都没有"，而头没写全、身份段 CRC 验不了，证明不了这一点
                 if len == 0 {
                     Self::rewrite_header(path, &mut f, &identity)?;
-                    return Ok(Self::at(path, Some(f), identity, JournalFormat::V6));
+                    return Ok((Self::at(path, Some(f), identity, JournalFormat::V6), None));
                 }
                 let have = usize::try_from(len.min(Self::HEADER_LEN as u64)).unwrap();
                 let mut head = vec![0u8; have];
@@ -520,14 +574,16 @@ impl Journal {
                     // 路径上的空壳会永久挡住所有写命令，而 undo/abandon 都不把空壳当
                     // 现场，三条命令就都没有出路。扫描本身失败时无法证明"零记录"，
                     // 按别人的现场拒绝
-                    let no_records = matches!(Self::scan_entries(&data, format), Ok((ref out, _, _)) if out.is_empty());
+                    // 零记录指的是**头之后一个字节都没有**：头后还有字节而读不出完整记录时，
+                    // 那截字节可能就是被截掉的记录，不能按空壳收养
+                    let no_records = matches!(Self::scan_entries(&data, format), Ok((ref out, end)) if out.is_empty() && end == data.len());
                     if no_records {
                         Self::rewrite_header(path, &mut f, &identity)?;
                         eprintln!(
                             "note: journal {} held no complete records and was not recorded for this target ({why}) — reclaimed it as this target's journal",
                             path.display()
                         );
-                        return Ok(Self::at(path, Some(f), identity, JournalFormat::V6));
+                        return Ok((Self::at(path, Some(f), identity, JournalFormat::V6), None));
                     }
                     // why 里已带着逐字段差异；这里补的是"换回记录时的目标，或用 abandon 释放现场"
                     return Err(io::Error::new(
@@ -538,20 +594,29 @@ impl Journal {
                         ),
                     ));
                 }
-                let (_, truncated, end) = Self::scan_entries(&data, format)?;
-                if truncated {
-                    let cut = data.len() - end;
+                let (_, end) = Self::scan_entries(&data, format)?;
+                let cut = NonZeroUsize::new(data.len() - end);
+                if let Some(cut) = cut {
+                    // 归档先于截断：这份字节此后不再存在于 journal 里，而"没走完的追加"与
+                    // "记录被外部截掉"在这里无法区分——后者对应的写入可能已经落盘
+                    match archive_torn_tail(path, &data[end..]) {
+                        Ok(to) => eprintln!(
+                            "note: journal {} ends with an incomplete record — archived the {cut} byte(s) after the last complete record to {} and truncated the journal back to that record; what was recorded there cannot be replayed",
+                            path.display(),
+                            to.display()
+                        ),
+                        Err(e) => eprintln!(
+                            "warning: cannot archive the {cut} byte(s) the journal {} ends with ({e}) — truncating them away; what was recorded there cannot be replayed",
+                            path.display()
+                        ),
+                    }
                     f.set_len(end as u64)?;
                     f.sync_all()?;
-                    eprintln!(
-                        "note: journal {} ends with an incomplete record — truncated {cut} byte(s) back to the last complete record",
-                        path.display()
-                    );
                 }
-                Ok(Self::at(path, Some(f), identity, format))
+                Ok((Self::at(path, Some(f), identity, format), cut))
             }
             Err(e) if e.kind() == io::ErrorKind::NotFound => {
-                Ok(Self::at(path, None, identity, JournalFormat::V6))
+                Ok((Self::at(path, None, identity, JournalFormat::V6), None))
             }
             Err(e) => Err(e),
         }
@@ -559,7 +624,7 @@ impl Journal {
 
     /// 把残骸的头重写成当前格式与身份：截到 0 再写，否则残余的半个头会留在新头之前。
     /// 复用调用方已打开的那个句柄（不按路径二次打开）
-    pub(crate) fn rewrite_header(path: &Path, f: &mut File, identity: &SceneIdentity) -> io::Result<()> {
+    pub(crate) fn rewrite_header(path: &Path, f: &mut File, identity: &LiveScene) -> io::Result<()> {
         use std::io::{Seek, SeekFrom, Write};
         f.set_len(0)?;
         f.seek(SeekFrom::Start(0))?;
@@ -608,8 +673,19 @@ impl Journal {
                 let _ = std::fs::remove_file(&self.path);
                 return Err(e);
             }
-            // 新建文件的目录项也必须落盘：否则断电后 journal 整体消失，而写入已经发生
-            best_effort_dir_fsync(&self.path);
+            // 新建文件的目录项必须落盘：否则断电后 journal 整体消失，而写入已经发生。
+            // 这一步失败即中止本次写入——没有可回滚凭据的写入不做。与头没写完同一处置：
+            // 清掉自己刚建的文件，把本地 I/O 故障留成"没有 journal"，而不是一份要被
+            // 下一次运行重新认领的壳
+            if let Err(e) = sync_dir_entry(&self.path) {
+                drop(f);
+                #[allow(clippy::let_underscore_must_use)] // 清理失败不改变主错误：残留的空文件下次打开会报成占用
+                let _ = std::fs::remove_file(&self.path);
+                return Err(io::Error::other(format!(
+                    "cannot persist the directory entry of the journal at {}: {e} — no record was made",
+                    self.path.display()
+                )));
+            }
             // 建立时的文件身份与创建事件一起记下：commit 只凭路径删不掉已被换成
             // 另一个文件的落点。**取不到身份就清掉文件并报错**——留一份零指纹等于给
             // commit 的删除动作发一张空白凭据，而这一侧猜错的后果是删掉别人的现场
@@ -715,21 +791,24 @@ impl Journal {
         let data = std::fs::read(path)?;
         // 头（版本 + 身份 + 头 CRC）先整体校验：版本不符在这里就报出来，不会走到记录解析
         let (_, format) = Self::parse_header(&data)?;
-        let (out, truncated, _) = Self::scan_entries(&data, format)?;
-        Ok(if truncated { JournalRead::TruncatedTail(out) } else { JournalRead::Complete(out) })
+        let (out, end) = Self::scan_entries(&data, format)?;
+        Ok(match NonZeroUsize::new(data.len() - end) {
+            Some(cut) => JournalRead::TruncatedTail { records: out, cut },
+            None => JournalRead::Complete(out),
+        })
     }
 
     /// 逐条扫描 journal 内容（含 magic 与身份段的头），供 [`Self::read_entries`]（回放）与
     /// [`Self::open`]（采纳时的撕裂尾截断）共用同一套判据。返回
-    /// `(完整记录, 尾部是否撕裂, 最后一条完整记录的结束偏移)`——零完整记录且撕裂时
-    /// 结束偏移即头长；尾部完整时结束偏移即 `data.len()`
-    pub(crate) fn scan_entries(data: &[u8], format: JournalFormat) -> io::Result<(Vec<JournalRecord>, bool, usize)> {
+    /// `(完整记录, 最后一个完整记录的结束偏移)`——结束偏移与 `data.len()` 之差即撕裂尾的
+    /// 字节数；两者相等表示尾部完整。零完整记录且撕裂时结束偏移即头长
+    pub(crate) fn scan_entries(data: &[u8], format: JournalFormat) -> io::Result<(Vec<JournalRecord>, usize)> {
         let mut out = Vec::new();
         let mut pos = format.header_len();
         while pos < data.len() {
             // 记录头尚未写全 → 尾部未完成的事务（加法 checked：输入是外部文件内容）
             if pos.checked_add(REC_HDR).is_none_or(|end| end > data.len()) {
-                return Ok((out, true, pos));
+                return Ok((out, pos));
             }
             let n_le: [u8; 4] = data[pos..pos + 4].try_into().unwrap();
             let len = u32::from_le_bytes(n_le) as usize;
@@ -746,7 +825,7 @@ impl Journal {
                         "journal entry has zero length but complete records follow it",
                     ));
                 }
-                return Ok((out, true, pos - REC_HDR));
+                return Ok((out, pos - REC_HDR));
             }
             // 头写全了但载荷没写全：可能是一次没走完的追加，也可能是中段 len 被写坏。
             // 后者不能按撕裂丢弃——截断会把其后每条 CRC 通过、写入确实发生过的记录删掉
@@ -757,7 +836,7 @@ impl Journal {
                         "journal entry length runs past the end of the file (records follow it)",
                     ));
                 }
-                return Ok((out, true, pos - REC_HDR));
+                return Ok((out, pos - REC_HDR));
             }
             let payload = &data[pos..pos + len];
             if Self::record_crc(format, n_le, payload) != crc {
@@ -767,7 +846,7 @@ impl Journal {
             // 载荷解不出来同样是"读不出来"：宁可让调用方按"有事没做完"处理，也不静默跳过
             out.push(JournalRecord::decode(payload)?);
         }
-        Ok((out, false, data.len()))
+        Ok((out, data.len()))
     }
 
     /// `from` 之后是否存在一条头完整、载荷落在文件内、CRC 通过且能解码的记录。

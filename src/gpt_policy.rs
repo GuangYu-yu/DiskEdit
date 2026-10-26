@@ -270,8 +270,11 @@ pub(crate) fn read_table(src: &FileSource) -> Result<Table, Fail> {
             Ok(None) => {
                 // 报"无表"会让 mkfs / set 按空白盘处理：而 LBA1 的主头仍 CRC 自洽时，
                 // 盘是 GPT、只是 LBA0 的保护布局被改坏，往 LBA1 起的区间写文件系统会
-                // 直接覆盖主头。此处把两种"读不出条目"分开报
-                if table::gpt_header_parseable(src).unwrap_or(false) {
+                // 直接覆盖主头。此处把两种"读不出条目"分开报；LBA1 本身读不动是第三种，
+                // 压成 false 会把"盘读不出来"说成"没有分区表"
+                let primary_intact = table::gpt_header_parseable(src)
+                    .map_err(|e| Fail::infra(format!("cannot read the GPT header at LBA1: {e}")))?;
+                if primary_intact {
                     return Err(Fail::refused(
                         "the protective MBR no longer has the GPT shape, but the primary GPT header at LBA1 is intact — \
                          the disk is GPT with a damaged LBA0; repair the table instead of treating it as unpartitioned",
@@ -479,12 +482,30 @@ fn partition_bytes_in(t: &Table, part: u32, container_ss: u64) -> Result<(u64, u
 
 /// GPT 可用区右端点（字节）= (last_usable_lba + 1) × 表自身的 ss；无 GPT（MBR / 裸盘）
 /// 时 `None`。盘尾的备份 GPT 与其条目数组不在可用区内：越过它的表项会让备份头与
-/// 分区内容互相覆盖。在线入口的容量判据只按裸盘长，故另有这一道
+/// 分区内容互相覆盖。在线入口的容量判据只按裸盘长，故另有这一道。
+///
+/// 表状态不是 `Valid` 时不给上界：头部待修复时"哪个头的 last_usable_lba 才是本盘的"
+/// 正是修复流程要回答的问题，保护 MBR 待修复/不自洽时也无法断言这张表就是写入要落到的
+/// 那张。这些形态一律拒绝，由离线修复把表恢复成可确认的状态
 #[cfg(target_os = "linux")] // 唯一消费者是 online 的容量判据
 pub(crate) fn usable_end_bytes(src: &FileSource) -> Result<Option<u64>, Fail> {
     match table::load_gpt(src) {
         Err(e) => Err(Fail::infra(format!("parse failed: {e}"))),
         Ok(None) => Ok(None),
+        Ok(Some(g)) if g.state != GptState::Valid || g.pmbr != PmbrSize::Normal => {
+            let why = if g.state != GptState::Valid {
+                "the GPT header copies are not consistent (one is unreadable or sits elsewhere), so which \
+                 header states this disk's real usable range is exactly what repair settles"
+            } else if matches!(g.pmbr, PmbrSize::Inconsistent) {
+                "the protective MBR does not describe a GPT disk"
+            } else {
+                "the protective MBR still carries a stale or compatibility size"
+            };
+            Err(Fail::refused(format!(
+                "refusing to compute the GPT usable range: {why} — repair this table with the offline path first \
+                 (`diskedit resize` on the unmounted disk)"
+            )))
+        }
         Ok(Some(g)) => g
             .header
             .last_usable_lba

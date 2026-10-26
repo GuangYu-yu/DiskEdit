@@ -67,7 +67,7 @@ pub fn apply(
 /// `g` 随行：执行半程对表项的全部落位都基于它（不重读盘上的表）
 pub(crate) struct ApplyDecision {
     pub(crate) g: ValidatedGeometry,
-    pub(crate) ckpt: Checkpoint,
+    pub(crate) ckpt: Checkpoint<crate::dev::LiveProof>,
     pub(crate) ckpt_path: PathBuf,
     pub(crate) chunk_len: u64,
     pub(crate) no_fs: bool,

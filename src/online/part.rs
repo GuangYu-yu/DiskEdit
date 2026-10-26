@@ -4,8 +4,8 @@ use super::*;
 use crate::fsops::{run, run_input};
 
 /// part_resize 的失败按"是否知道表已落盘"与"成因在哪一侧"分四类——这不是措辞差异：
-/// - `Stale`：盘上现状与锁下快照不符（目标条目被改 / 新尺寸压到现存分区）。
-///   请求与现状不匹配且表未写 → 拒绝（10）
+/// - `Stale`：写前重读判定"当前盘上现状与请求不符"——目标条目被改、新尺寸压到现存分区，
+///   或重读本身给出拒绝（无表、LBA0 保护布局受损）。表未写 → 拒绝（10）
 /// - `NoWrite`：sfdisk 进程未启动，表确定未写
 /// - `Unknown`：sfdisk 执行了但报错。脚本被拒是未写、写入中途失败则可能已写，
 ///   两者在 stdout/stderr 上不可区分 → 不得断言未写
@@ -112,13 +112,18 @@ pub(crate) fn part_resize(t: &OnlineTarget, new_len_bytes: u64) -> Result<(), Pa
             }
         }
         Err(f) => {
-            // Fail 无 Display：压出内文重包，NoWrite = 确定未写盘（Infra 语义）
-            let (crate::outcome::Fail::Refused(m)
-            | crate::outcome::Fail::Infra(m)
-            | crate::outcome::Fail::Failed(m)) = f;
-            return Err(PartResizeError::NoWrite(io::Error::other(format!(
-                "cannot re-read the on-disk partition table before writing: {m}"
-            ))));
+            // 写前重读的分类原样保留：`Refused` 是"现状本身不允许继续"（无表、LBA0 保护
+            // 布局受损、条目已变）→ 拒绝，出口 10；`Infra` 是读不出来（确定未写盘）；
+            // `Failed` 是不可断言。一律压成 `NoWrite` 会把拒绝说成环境故障，退出码与
+            // 建议都随之走偏
+            let text = |m: String| {
+                io::Error::other(format!("cannot re-read the on-disk partition table before writing: {m}"))
+            };
+            return Err(match f {
+                crate::outcome::Fail::Refused(m) => PartResizeError::Stale(text(m)),
+                crate::outcome::Fail::Infra(m) => PartResizeError::NoWrite(text(m)),
+                crate::outcome::Fail::Failed(m) => PartResizeError::Unknown(text(m)),
+            });
         }
     }
     // sfdisk 脚本里的裸数字按"设备扇区"解释（libfdisk/src/script.c：脚本不带
@@ -156,9 +161,15 @@ pub(crate) fn part_resize(t: &OnlineTarget, new_len_bytes: u64) -> Result<(), Pa
         Err(e) => format!("partx could not be run: {e}"),
         Ok(o) => format!("partx -u failed: {}", String::from_utf8_lossy(&o.stderr).trim()),
     };
-    blkpg_resize(t, new_len_bytes).map_err(|e| {
-        PartResizeError::Partial(io::Error::other(format!("{e} (kernel sync attempts: {why})")))
-    })
+    match blkpg_resize(t, new_len_bytes) {
+        Ok(()) => {
+            eprintln!("warning: {why} — the kernel partition view was resized through the BLKPG fallback instead");
+            Ok(())
+        }
+        Err(e) => Err(PartResizeError::Partial(io::Error::other(format!(
+            "{e} (kernel sync attempts: {why})"
+        )))),
+    }
 }
 
 /// 内核同步最终判据：/sys/dev/block/<maj>:<min>/size 须等于期望值。

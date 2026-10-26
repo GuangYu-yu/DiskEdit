@@ -5,7 +5,9 @@ use super::*;
 pub(crate) struct OnlineTarget {
     pub(crate) disk_dev: PathBuf,
     pub(crate) part_dev: PathBuf,
-    pub(crate) mnt: PathBuf,
+    /// 挂载点。`None` 表示本目标不来自挂载点（PV 路径）：xfs / btrfs 的在线工具与 btrfs
+    /// 缩容都以挂载点为参数，这类目标上没有可用值
+    pub(crate) mnt: Option<PathBuf>,
     pub(crate) pno: u32,
     pub(crate) start_bytes: u64,
     pub(crate) part_len_bytes: u64,
@@ -172,7 +174,7 @@ pub(crate) fn resolve_target(mountpoint: &Path) -> io::Result<OnlineTarget> {
     Ok(OnlineTarget {
         disk_dev,
         part_dev,
-        mnt,
+        mnt: Some(mnt),
         pno,
         start_bytes,
         part_len_bytes,

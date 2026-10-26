@@ -84,7 +84,9 @@ impl FsShrink {
 /// resize-part 的 checkpoint（v7）：搬移覆盖源区，中途断电后新旧两处都不完整，
 /// 已完成位置只能由 checkpoint 判定。"表项是否已提交"不在这里存——盘上的分区几何
 /// 就是那个事实，另存一份标记只会与它分叉（见 prepare_resize 的恢复分支）
-pub(crate) struct RsCheckpoint {
+/// 与 [`Checkpoint`] 同一种两副面孔：`P` 在写入侧是 [`crate::dev::LiveProof`]，
+/// 解析侧是 [`crate::dev::IdentityProof`]
+pub(crate) struct RsCheckpoint<P = crate::dev::IdentityProof> {
     pub(crate) disk_size: u64,
     pub(crate) ss: u64,
     pub(crate) part: u32,
@@ -97,12 +99,12 @@ pub(crate) struct RsCheckpoint {
     pub(crate) chunk_bytes: u64,
     pub(crate) fp: crate::dev::TargetFingerprint, // 目标文件指纹（"同路径换文件"防线）
     pub(crate) map: Option<(u64, u64)>,           // 创建时的 loop 映射；None = 非 loop 进入
-    pub(crate) proof: crate::dev::IdentityProof,  // 指纹里哪一类字段才是身份证据
+    pub(crate) proof: P,                          // 指纹里哪一类字段才是身份证据
     /// 识别出的 FS 类型：续跑直接用它，不再回源起点重探（源区头部可能已被搬移数据覆盖）
     pub(crate) fstype: Option<FsKind>,
 }
 
-impl RsCheckpoint {
+impl RsCheckpoint<crate::dev::LiveProof> {
     pub(crate) fn serialize(&self) -> Vec<u8> {
         let mut b = Vec::new();
         b.extend_from_slice(CKPT2_MAGIC);
@@ -133,6 +135,9 @@ impl RsCheckpoint {
         b.extend_from_slice(&crc.to_le_bytes());
         b
     }
+}
+
+impl RsCheckpoint<crate::dev::IdentityProof> {
     pub(crate) fn deserialize(b: &[u8], lim: &GeometryLimits) -> io::Result<Self> {
         // 前置只护边界检查 get 之前的直接切片：magic(8) + version(4)。其后字段逐个经
         // get 兜底截断，尾部 CRC 读也走 get——截断一律 InvalidData 而非 panic
@@ -566,7 +571,7 @@ pub(crate) fn execute_resize(
         fstype,
         proof: src.proof(),
     };
-    let save = |c: &RsCheckpoint| atomic_write_ckpt(&p.ckpt_path, &c.serialize());
+    let save = |c: &RsCheckpoint<crate::dev::LiveProof>| atomic_write_ckpt(&p.ckpt_path, &c.serialize());
     // 撤 ckpt 的判据是"本次作业没留下任何待办"，所以基数必须在**开工前**取：阶段 0 的
     // 卸载失败、阶段 2 的 HiddenSectors 未修同样会让重跑按 Fresh 算出"尺寸未变 → Leave"
     // 而报成功，只拿阶段 3 的基数就看不见它们

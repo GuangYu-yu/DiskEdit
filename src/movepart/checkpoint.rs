@@ -17,7 +17,10 @@ const CKPT_VERSION_LEGACY: u32 = 5;
 /// 已完成但未持久化的 chunk。调整（或换成按字节/自适应策略）无需改恢复逻辑
 pub(crate) const CKPT_BATCH_CHUNKS: u64 = 16;
 
-pub struct Checkpoint {
+/// 现场的两副面孔由 `P` 分开：写入侧只带当前目标给出的 [`crate::dev::LiveProof`]，
+/// 解析侧带 [`crate::dev::IdentityProof`]（v5 现场解析为 `Legacy`）。这样"把解析出的
+/// 旧种类写回"在类型上就不成立，而不是靠序列化分支去兜
+pub struct Checkpoint<P = crate::dev::IdentityProof> {
     pub disk_size: u64,
     pub ss: u64,
     pub grow_part: u32,
@@ -29,10 +32,10 @@ pub struct Checkpoint {
     pub chunk_bytes: u64, // chunk 大小（续传不一致即拒绝）
     pub fp: crate::dev::TargetFingerprint, // 目标文件指纹（"同路径换文件"防线）
     pub map: Option<(u64, u64)>,           // 创建时的 loop 映射；None = 非 loop 进入
-    pub proof: crate::dev::IdentityProof,  // 指纹里哪一类字段才是身份证据
+    pub proof: P,                         // 指纹里哪一类字段才是身份证据
 }
 
-impl Checkpoint {
+impl Checkpoint<crate::dev::LiveProof> {
     pub(crate) fn serialize(&self) -> Vec<u8> {
         let mut b = Vec::new();
         b.extend_from_slice(CKPT_MAGIC);
@@ -68,7 +71,9 @@ impl Checkpoint {
         b.extend_from_slice(&crc.to_le_bytes());
         b
     }
+}
 
+impl Checkpoint<crate::dev::IdentityProof> {
     /// 判据来源 `lim` 是**已验证几何**（见 [`GeometryLimits`]）：分区号上界、可用区、
     /// 容器末端都取自盘上那张表的自述几何，故 256 槽位的表与 128 槽位的一样合法
     pub(crate) fn deserialize(b: &[u8], lim: &GeometryLimits) -> io::Result<Self> {
