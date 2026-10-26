@@ -298,6 +298,9 @@ const TORN_TAIL_SUFFIX: &str = ".torn-tail";
 /// 把撕裂尾的原始字节复制到 journal 旁边作为归档。名字被占用时顺延，绝不覆盖既有归档——
 /// 那一份同样是一次中断留下的证据。失败只由调用方告警：拒绝收养会让目标被一份读不全的
 /// 文件永久挡住，而截断丢弃的本就是无法回放的字节
+///
+/// 写不全时不留下半截文件：残缺的归档与完整归档同名同形，后一个读者无法分辨，而它比起
+/// 没有归档只多一个"看起来是证据"的误导。名字因此重新空出来，下一次归档不会顺延跳过它
 fn archive_torn_tail(journal: &Path, tail: &[u8]) -> io::Result<PathBuf> {
     use std::io::Write;
     for n in 1..u32::MAX {
@@ -308,10 +311,23 @@ fn archive_torn_tail(journal: &Path, tail: &[u8]) -> io::Result<PathBuf> {
         };
         match OpenOptions::new().write(true).create_new(true).open(&to) {
             Ok(mut f) => {
-                f.write_all(tail)?;
-                f.sync_all()?;
-                crate::dev::best_effort_dir_fsync(&to);
-                return Ok(to);
+                let written = f.write_all(tail).and_then(|()| f.sync_all());
+                drop(f);
+                match written {
+                    Ok(()) => {
+                        crate::dev::best_effort_dir_fsync(&to);
+                        return Ok(to);
+                    }
+                    Err(e) => {
+                        return Err(match std::fs::remove_file(&to) {
+                            Ok(()) => e,
+                            Err(rm) => io::Error::other(format!(
+                                "{e}; the partial archive at {} could not be removed either ({rm})",
+                                to.display()
+                            )),
+                        });
+                    }
+                }
             }
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
             Err(e) => return Err(e),
