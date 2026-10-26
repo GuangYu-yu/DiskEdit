@@ -91,7 +91,7 @@ pub(crate) fn resize_part_resume_skips_done_chunks() {
     // 预置 checkpoint：chunks_done = 1
     let ckpt_path = src.identity.checkpoint_path().to_path_buf();
     let ckpt = RsCheckpoint {
-        proof: crate::dev::IdentityProof::Inode,
+        proof: crate::dev::LiveProof::Inode,
         disk_size: size, ss, part: 1,
         old_start: 2048, old_end: 10239, new_start: 12288, new_end: 20479,
         fs_shrunk: FsShrink::NotShrunk, chunks_done: 1, chunk_bytes: chunk,
@@ -146,7 +146,7 @@ pub(crate) fn resize_part_resume_after_commit_without_ckpt_update() {
     // ckpt 停留在搬移前形状：正是 commit 与 ckpt 更新之间的那个窗口
     let ckpt_path = src.identity.checkpoint_path().to_path_buf();
     let ckpt = RsCheckpoint {
-        proof: crate::dev::IdentityProof::Inode,
+        proof: crate::dev::LiveProof::Inode,
         disk_size: src.size, ss, part: 1,
         old_start, old_end, new_start, new_end,
         fs_shrunk: FsShrink::NotShrunk,
@@ -193,7 +193,7 @@ pub(crate) fn retargeted_resize_after_crash_is_refused() {
     table::ensure_protective_mbr(&mut src, ss).unwrap();
     let ckpt_path = src.identity.checkpoint_path().to_path_buf();
     let ckpt = RsCheckpoint {
-        proof: crate::dev::IdentityProof::Inode,
+        proof: crate::dev::LiveProof::Inode,
         disk_size: src.size, ss, part: 1,
         old_start, old_end, new_start, new_end,
         fs_shrunk: FsShrink::NotShrunk, chunks_done: 4, chunk_bytes: chunk,
@@ -246,7 +246,7 @@ pub(crate) fn divergent_and_no_fs_shrink_are_refused_before_any_write() {
     let mut src = plan_open(&p);
     let ckpt_path = src.identity.checkpoint_path().to_path_buf();
     let rs = RsCheckpoint {
-        proof: crate::dev::IdentityProof::Inode,
+        proof: crate::dev::LiveProof::Inode,
         disk_size: src.size, ss: 512, part: 1, old_start: 2048, old_end: 6143,
         new_start: 3072, new_end: 5119, fs_shrunk: FsShrink::NotShrunk, chunks_done: 0, chunk_bytes: chunk,
         fp: Default::default(),
@@ -285,7 +285,7 @@ pub(crate) fn divergent_and_no_fs_shrink_are_refused_before_any_write() {
 pub(crate) fn shrink_state_is_tri_state_on_the_wire() {
     let chunk: u64 = 1024 * 1024;
     let ckpt = |fs_shrunk| RsCheckpoint {
-        proof: crate::dev::IdentityProof::Inode,
+        proof: crate::dev::LiveProof::Inode,
         disk_size: 32 * 1024 * 1024, ss: 512, part: 1,
         old_start: 2048, old_end: 6143, new_start: 3072, new_end: 5119,
         fs_shrunk, chunks_done: 0, chunk_bytes: chunk,

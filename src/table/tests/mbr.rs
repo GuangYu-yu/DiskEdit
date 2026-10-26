@@ -306,14 +306,20 @@ pub(crate) fn damaged_protective_mbr_never_parses_as_msdos() {
     assert_eq!(table_label(&src).unwrap(), TableLabel::GptDamaged);
     assert!(load_gpt(&src).unwrap().is_none(), "保护布局不成立 ⇒ load_gpt 不给表");
 
-    // 破法三：签名抹掉（GPT 全灭）+ 槽位 1 起点被改坏——无签名无从判 GPT，
-    // 0xEE 槽已排除，等价于零分区的 msdos 盘
+    // 破法三：签名抹掉（主头全灭）+ 槽位 1 起点被改坏——LBA0 已无可竞争的表，但盘尾
+    // 备份仍自洽到能给出整张表：那是这块盘仅存的一份。判 msdos 会让 add 与 msdos resize
+    // 把分区铺到盘尾，覆盖这份备份
     let mut b = good;
     b[446 + 8..446 + 12].copy_from_slice(&2u32.to_le_bytes());
     src.write_at(0, &b).unwrap();
     src.write_at(512, &vec![0u8; 512]).unwrap();
     assert!(!pmbr_shape_valid(&src).unwrap());
     assert!(parse_mbr(&src).unwrap().unwrap().is_empty());
+    assert_eq!(table_label(&src).unwrap(), TableLabel::GptDamaged);
+
+    // 同一形状，但盘尾备份头的签名也没了（`new --table msdos` 的产物）：没有可救的表，
+    // 零条记录的 MBR 就是这块盘唯一的表
+    create_mbr(&mut src).unwrap();
     assert_eq!(table_label(&src).unwrap(), TableLabel::Mbr);
 
     // hybrid 布局：0xEE + 真实槽位 → 只输出真实槽位（内核同口径按 msdos 管）

@@ -79,13 +79,20 @@ pub(crate) fn part_dev_hint(src: &FileSource, part: u32, offset_bytes: u64) -> S
 
 /// 删除一份恢复现场（journal / checkpoint）并落盘目录项。删除成功（或本就不存在）
 /// 后 fsync 父目录：unlink 不落盘时掉电后文件可能复活，把已完成的事务报成未收尾现场。
-/// 返回删除的后置条件是否成立；失败只告警——残留会被后续运行当成现场
+/// 返回删除的**后置条件**是否成立；目录项未能落盘时也返回 false——文件此刻不在，
+/// 但它可能在掉电后复活，这条欠账必须浮出，而不是只留一句告警
 pub(crate) fn remove_recovery_file(path: &std::path::Path) -> bool {
     match std::fs::remove_file(path) {
-        Ok(()) => {
-            best_effort_dir_fsync(path);
-            true
-        }
+        Ok(()) => match sync_dir_entry(path) {
+            Ok(()) => true,
+            Err(e) => {
+                eprintln!(
+                    "warning: removed {} but could not persist the parent directory entry ({e}) — it may reappear after a power loss",
+                    path.display()
+                );
+                false
+            }
+        },
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => true,
         Err(e) => {
             eprintln!(
@@ -103,12 +110,32 @@ pub(crate) fn best_effort_rmdir(dir: &std::path::Path) {
     let _ = std::fs::remove_dir(dir);
 }
 
+/// 让刚创建或删除的目录项落盘。文件自身的 fsync 不覆盖父目录项（目录项属于父目录的
+/// 元数据），所以"新建 journal 后父目录未 fsync"意味着掉电时整份 journal 可能消失，
+/// 而对应的写入已经发生——创建侧必须据此中止，不能沿用 [`best_effort_dir_fsync`]
+/// 的宽容。
+///
+/// 删除侧由 [`remove_recovery_file`] 消费：失败的含义是"现场可能复活"，计入未收尾。
+/// 非 Unix 没有可移植的目录持久化手段（Windows 的 `FlushFileBuffers` 要求可写句柄，
+/// 而目录不能按可写打开），此处返回成功；那类平台的目录项持久性不由本函数保证
+#[cfg(unix)]
+pub(crate) fn sync_dir_entry(path: &std::path::Path) -> io::Result<()> {
+    let dir = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+    std::fs::File::open(dir)?.sync_all()
+}
+
+#[cfg(not(unix))]
+pub(crate) fn sync_dir_entry(_path: &std::path::Path) -> io::Result<()> {
+    Ok(())
+}
+
 /// 尽力而为的目录 fsync：把新建/重命名后的目录项推入持久存储。
 /// 失败**不**影响安全性——只影响"崩溃后还能看到多新的元数据"：
 /// - ckpt 目录项丢失 → 恢复点回退到上一个 checkpoint（重做已完成部分，安全，不会超前）
 /// - journal 目录项丢失 → 该 journal 可能整份消失（undo 能力丢失，前向恢复不受影响）
 ///
-/// 两者都不会产生"超前于数据"的持久化状态，故此处有意忽略失败
+/// 两者都不会产生"超前于数据"的持久化状态，故此处有意忽略失败。
+/// **新建 journal 不走这一路**：那时 undo 能力是唯一的前向保证，见 [`sync_dir_entry`]
 #[cfg(unix)]
 #[allow(clippy::let_underscore_must_use)] // 有意忽略：失败只使元数据回退，见上
 pub(crate) fn best_effort_dir_fsync(path: &std::path::Path) {

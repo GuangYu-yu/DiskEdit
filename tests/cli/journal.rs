@@ -61,27 +61,36 @@ fn journal_lifecycle_and_table_undo() {
     assert!(!journal.exists(), "journal must be removed after undo");
     assert_eq!(part_count(), before, "undone partition must be gone");
 
-    // journal 尾部未完成（截断 / 未写完的记录头）⇒ 那是"未完成的事务"而非损坏：
-    // 记录先于写入落盘，故那条记录对应的写入根本没发生，丢弃它安全；完整前缀照常回放
+    // journal 尾部未完成（截断 / 未写完的记录头）⇒ 完整前缀照常回放（记录先于写入落盘，
+    // 那条没写完的记录对应的写入没有发生）；但残尾既可能是没走完的追加，也可能是记录被
+    // 外部截掉后的残骸，后者对应的写入可能已落盘——回放不能自称"回到写入前"，故退 20，
+    // 并把这份 journal 归档到 `.torn`：候选落点腾空，唯一证据不销毁
     let (c, e) = run_no_mkfs(&["create", img_s, "--size", "1M", "--fs", "ext4"]);
     assert_eq!(c, 20, "{e}");
     let jb = std::fs::read(&journal).unwrap();
     std::fs::write(&journal, &jb[..jb.len() - 2]).unwrap();
+    let torn_a = dir.join(format!("j.img{JOURNAL_SUFFIX}.torn"));
     let (c, e) = run(&["undo", img_s, "--yes"]);
-    assert_eq!(c, 0, "a truncated tail must be treated as an unfinished append: {e}");
+    assert_eq!(
+        c, 20,
+        "a truncated tail replays the complete prefix but cannot be certified complete: {e}"
+    );
     assert_eq!(part_count(), before, "the complete prefix must still be replayed");
-    assert!(!journal.exists(), "journal must be removed after a successful undo");
+    assert!(!journal.exists(), "the journal must leave the active name");
+    assert!(torn_a.exists(), "the torn tail must stay inspectable under .torn");
 
-    // 尾部垃圾 = 未写完的记录头，同样按未完成处理
+    // 尾部垃圾 = 未写完的记录头，同样按未完成处理；归档名已占用时顺延，绝不覆盖上一份
     let (c, e) = run_no_mkfs(&["create", img_s, "--size", "1M", "--fs", "ext4"]);
     assert_eq!(c, 20, "{e}");
     let jb = std::fs::read(&journal).unwrap();
     let mut tail = jb.clone();
     tail.extend_from_slice(&[0xFF; 5]);
     std::fs::write(&journal, &tail).unwrap();
+    let torn_b = dir.join(format!("j.img{JOURNAL_SUFFIX}.torn.2"));
     let (c, e) = run(&["undo", img_s, "--yes"]);
-    assert_eq!(c, 0, "an unterminated trailing header is an unfinished append: {e}");
+    assert_eq!(c, 20, "an unterminated trailing header is an unfinished append: {e}");
     assert_eq!(part_count(), before, "the complete prefix must still be replayed");
+    assert!(torn_b.exists(), "a second torn journal must not overwrite the earlier archive: {e}");
 
     // 中途损坏（第 1 条记录的数据）⇒ 整体拒绝，不碰镜像——"不做部分回放"针对的是这种情形
     let (c, e) = run_no_mkfs(&["create", img_s, "--size", "1M", "--fs", "ext4"]);

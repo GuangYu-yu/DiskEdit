@@ -63,7 +63,8 @@ pub(crate) fn cmd_resize_superfloppy(a: &Args, req: &SizeRequest) -> crate::outc
         }
     }
     // FS grow 本身不改分区表，无 kernel_resync 必要
-    // 清理待办在此只以告警呈现：本命令的成功出口保持 0，不改既有契约
+    // 清理待办在此只以告警呈现：本命令的成功出口保持 0，与"缩过 FS 再改表"路径把同一
+    // 待办计入 pending（出口 20）不同——那些路径的表写入是紧随其后的下一步，本路径没有
     match fsops::resize_fs_whole(&src, fstype) {
         Ok(Some(leak)) => eprintln!("warning: {leak}"),
         Ok(None) => {}

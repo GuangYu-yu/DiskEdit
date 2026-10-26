@@ -3,7 +3,7 @@
 use super::*;
 use crate::dev::FileSource;
 
-/// 从（盘名, 分区号）解析 OnlineTarget（PV 路径无挂载点，mnt 置空不用）
+/// 从（盘名, 分区号）解析 OnlineTarget（PV 路径不来自挂载点，mnt 为 None）
 pub(crate) fn resolve_pv_target(disk_name: &str, pno: u32) -> io::Result<OnlineTarget> {
     let disk_dev = PathBuf::from("/dev").join(disk_name);
     let sysroot = Path::new("/sys/block").join(disk_name);
@@ -49,7 +49,7 @@ pub(crate) fn resolve_pv_target(disk_name: &str, pno: u32) -> io::Result<OnlineT
     Ok(OnlineTarget {
         disk_dev,
         part_dev,
-        mnt: PathBuf::new(),
+        mnt: None,
         pno,
         start_bytes,
         part_len_bytes,
@@ -107,8 +107,9 @@ pub(crate) fn verify_lock_identity(
 /// drop_journal 只会碰到"不存在"的候选——绝无"删掉别人可回滚凭据"的可能
 pub(crate) fn refuse_if_scene_active(t: &OnlineTarget) -> Result<(), Outcome> {
     // 只读打开**分区**节点：闸口只读现场（journal / checkpoint 候选），不申请写权限。
-    // 身份按分区节点解析时，盘级键与旧版按分区命名的历史候选会被一并列出——undo
-    // /dev/sdXN 正是按后者枚举的，用整盘身份会漏掉那些现场
+    // 身份按分区节点解析时，盘级键与旧版按分区命名的历史候选会被一并列出；用整盘身份
+    // 会漏掉后者（self_key == disk_key 时那条历史候选不生成），而本闸口是唯一会检查
+    // 它的入口——undo / abandon 要求整盘目标
     let part = crate::dev::FileSource::open_read_only(&t.part_dev)
         .map_err(|e| Outcome::infra(format!("open failed: {e}")))?;
     // 历史 GUID 命名的 checkpoint 只能从整盘的表读：分区节点的 0 偏移不是 GPT 头
@@ -165,8 +166,9 @@ pub(crate) fn check_new_range(t: &OnlineTarget, new_len_bytes: u64, disk: &FileS
         return Err(Fail::refused("new size would overlap an adjacent partition".to_string()));
     }
     // 盘尾的备份 GPT 与条目数组不在可用区内：落到那段字节上的表项会让备份头与
-    // 分区内容互相覆盖。离线入口按 last_usable_lba 拒绝，在线入口此前只按裸盘长
-    // ——同一请求两个入口结论不同。表读不出来时无从判断上界，按环境故障拒绝
+    // 分区内容互相覆盖。上界取表自述的 last_usable_lba，与离线入口同一判据；
+    // 表中自身几何待修复（头副本不一致 / 保护 MBR 不自洽）时不给上界：哪个头的
+    // last_usable_lba 才是本盘的正是修复要回答的问题，故拒绝
     if let Some(max_end) = crate::gpt_policy::usable_end_bytes(disk)?
         && end > max_end
     {

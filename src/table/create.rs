@@ -90,7 +90,57 @@ pub fn create_mbr_preflight(size_bytes: u64, ss: u64) -> Result<(), Fail> {
     Ok(())
 }
 
-/// `new`：新建空 GPT（覆盖现有表，破坏表结构但不碰分区数据区）+ 保护 MBR。
+/// `new --table gpt` 的第一笔写盘是盘尾的备份条目数组（`[last−span, last]`，512B 扇区
+/// 下 16 KiB），空表时该缓冲全零。旧表若有分区落在这一段，这次写入就是清零分区数据，
+/// 与 `new` 只破坏表结构的语义相反。返回可读的冲突描述，命令层据此在写盘前拒绝。
+///
+/// 旧表读不出来时返回 `None`：`new` 本就是整体覆盖表的命令，此处只拦**可证**的相交，
+/// 不因一张读不出的表拒绝一条用于重建它的命令
+pub fn gpt_backup_span_conflict(src: &FileSource, ss: u64) -> io::Result<Option<String>> {
+    let geom = EntryArrayGeometry::new(ss, DEFAULT_ENTRY_SIZE, DEFAULT_ENTRY_COUNT, MAX_ARRAY_BYTES)?;
+    let span = geom.lba_span();
+    let last_lba = container_last_lba(src, ss);
+    let Some(first_lba) = last_lba.checked_sub(span) else {
+        return Ok(None);
+    };
+    // 备份数组占 [first_lba, last_lba]，其后还要写备份头：两者都按字节区间比
+    let span_start = first_lba.saturating_mul(ss);
+    let span_end = src.size;
+    if let Ok(Some(g)) = load_gpt(src) {
+        for (i, e) in g.entries.iter().enumerate() {
+            if e.ending_lba == 0 {
+                continue;
+            }
+            let start = e.starting_lba.saturating_mul(g.ss);
+            let end = e.ending_lba.saturating_add(1).saturating_mul(g.ss);
+            if end > span_start && start < span_end {
+                return Ok(Some(format!(
+                    "GPT partition {} occupies bytes [{start}..{end}), overlapping the backup entry array this new table \
+                     writes at [{span_start}..{span_end}) — delete or shrink that partition first",
+                    i + 1
+                )));
+            }
+        }
+    }
+    if let Some(raw) = super::mbr::parse_mbr_raw(src)? {
+        for p in &raw.parts {
+            let start = u64::from(p.start_lba).saturating_mul(ss);
+            let end = (u64::from(p.start_lba) + u64::from(p.size_lba)).saturating_mul(ss);
+            if end > span_start && start < span_end {
+                return Ok(Some(format!(
+                    "MBR partition {} occupies bytes [{start}..{end}), overlapping the backup entry array this new table \
+                     writes at [{span_start}..{span_end}) — delete or shrink that partition first",
+                    p.num
+                )));
+            }
+        }
+    }
+    Ok(None)
+}
+
+/// `new`：新建空 GPT（覆盖现有表）+ 保护 MBR。写盘只落在表结构区：LBA0/1、主条目数组
+/// 与盘尾备份数组；旧表把分区铺进这些区域的提交由命令层先经
+/// [`gpt_backup_span_conflict`] 拒绝，不在这里自查。
 /// 几何：128 条目 × 128B，first_usable = 数组之后，last_usable = 末端 - span - 1
 /// （由 UEFI 头/数组布局推导的实现约定，非规范逐字给出的公式）。
 pub fn create_gpt(src: &mut WriteSource, ss: u64, disk_guid: Option<[u8; 16]>) -> io::Result<()> {
@@ -180,9 +230,10 @@ pub const LVM_TYPE_GUID: [u8; 16] = [
 // 限制：仅主分区槽位 1..=4，不支持扩展/逻辑分区链。
 
 /// `new --table msdos`：写空 MBR（保留 BootCode，置签名，清空 4 条记录），并清掉
-/// LBA1 上可能残留的 GPT 主头签名。只清签名那 8 字节：同一扇区的其余字节、条目数组
-/// 与盘尾备份头都保持原样。签名留着会让这块新 msdos 盘被判成 `GptDamaged`
-/// （`table_label` 的第 3 条判据），此后一切写命令都拒绝操作它
+/// LBA1 与盘尾备份头上可能残留的 GPT 签名——新表是 msdos，盘上不该再留下任何能独立
+/// 给出 GPT 表的表层。只清签名那 8 字节，同一扇区的其余字节与条目数原样保留。
+/// 主头签名留着会让这块新 msdos 盘被判成 `GptDamaged`（`table_label` 的第 3 条判据）；
+/// 盘尾那个留着会让"4 条记录全空"的判据（第 5 条）把刚建的盘判成 GPT 残骸
 pub fn create_mbr(src: &mut WriteSource) -> io::Result<()> {
     let ss = src.sector_size;
     let mut lba0 = vec![0u8; ss as usize];
@@ -206,6 +257,20 @@ pub fn create_mbr(src: &mut WriteSource) -> io::Result<()> {
         if &sig == GPT_SIGNATURE {
             src.write_at(at, &[0u8; GPT_SIGNATURE.len()])?;
             cleared.push(at);
+        }
+    }
+    // 盘尾备份头也按同一套候选：备份头的位置随表自身的扇区大小而变，只清容器 ss 那一处
+    // 会漏掉另一种落盘方式留下的签名。与上面同一顺序要求——先清、后写 LBA0
+    for at in candidate_sector_sizes(ss) {
+        let off = container_last_lba(src, at).saturating_mul(at);
+        if src.size < off.saturating_add(GPT_SIGNATURE.len() as u64) {
+            continue;
+        }
+        let mut sig = [0u8; GPT_SIGNATURE.len()];
+        src.read_at(off, &mut sig)?;
+        if &sig == GPT_SIGNATURE {
+            src.write_at(off, &[0u8; GPT_SIGNATURE.len()])?;
+            cleared.push(off);
         }
     }
     // LBA0 与 LBA1 上"不再有 GPT 主头"是同一个事实的两半：分两次写出去，中断正好停在
@@ -303,7 +368,14 @@ pub fn table_label(src: &FileSource) -> Result<TableLabel, GptError> {
     if gpt_header_parseable(src)? {
         return Ok(TableLabel::GptDamaged);
     }
-    if parse_mbr(src)?.is_some() {
+    if let Some(parts) = parse_mbr(src)? {
+        // 4 条记录全空时，LBA0 的形状与"主头被毁、只剩盘尾备份的 GPT 盘"相同。备份若
+        // 自洽到能给出整张表，那块盘的盘型是 GPT——报 msdos 会让 add 与 msdos resize 把
+        // 分区铺到盘尾，覆盖唯一可救的那份备份。本工具建的 msdos 盘不会落进这一支：
+        // `create_mbr` 连盘尾备份头的签名一并清掉（见该函数）
+        if parts.is_empty() && super::gpt_parse::backup_table_parseable(src)? {
+            return Ok(TableLabel::GptDamaged);
+        }
         return Ok(TableLabel::Mbr);
     }
     // 这里探到 LBA1 签名而 load_gpt 已放行失败：保护布局不满足的 GPT 盘（保护 MBR

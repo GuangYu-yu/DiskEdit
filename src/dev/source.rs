@@ -190,22 +190,22 @@ impl FileSource {
     /// 现在这个目标能给出的身份证据种类。与指纹的构造一一对应：镜像恒取文件 inode；
     /// 块设备上整盘属性可读 ⇒ `DeviceId`，loop（指纹取自 backing 文件）⇒ `Inode`，
     /// 两者都没有 ⇒ `Unavailable`
-    pub(crate) fn proof(&self) -> IdentityProof {
+    pub(crate) fn proof(&self) -> LiveProof {
         if !self.is_block {
-            return IdentityProof::Inode;
+            return LiveProof::Inode;
         }
         if self.fingerprint.has_id_evidence() {
-            IdentityProof::DeviceId
+            LiveProof::DeviceId
         } else if self.fingerprint.has_inode_evidence() {
-            IdentityProof::Inode
+            LiveProof::Inode
         } else {
-            IdentityProof::Unavailable
+            LiveProof::Unavailable
         }
     }
 
     /// 现场比对用的"当前身份"：与 journal / checkpoint 头里存的那三样同构
-    pub(crate) fn scene(&self) -> SceneIdentity {
-        SceneIdentity { fp: self.fingerprint, map: self.loop_mapping, proof: self.proof() }
+    pub(crate) fn scene(&self) -> LiveScene {
+        LiveScene { fp: self.fingerprint, map: self.loop_mapping, proof: self.proof() }
     }
 
     /// 块设备打开的公共附加物：指纹 + loop 映射。

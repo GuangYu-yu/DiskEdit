@@ -8,12 +8,16 @@ use crate::fsops::run;
 /// xfs: xfs_growfs 挂载点；btrfs: resize max 挂载点）。
 /// 程序与参数只写这一处：补救提示复用同一份映射（fs_grow_hint），避免两处漂移
 pub(crate) fn fs_grow_cmd(t: &OnlineTarget, fstype: Option<crate::fsid::FsKind>) -> Option<(String, Vec<String>)> {
-    let mnt = t.mnt.to_string_lossy().into_owned();
+    // xfs_growfs 与 btrfs resize 都以挂载点为参数：目标不是从挂载点解析来时没有这个参数，
+    // 与"该 FS 没有在线工具"同归 None（调用方统一报"换离线路径"）
+    let mnt = || t.mnt.as_deref().map(|p| p.to_string_lossy().into_owned());
     let dev = t.part_dev.to_string_lossy().into_owned();
     match fstype {
         Some(crate::fsid::FsKind::Ext) => Some(("resize2fs".to_string(), vec![dev])),
-        Some(crate::fsid::FsKind::Xfs) => Some(("xfs_growfs".to_string(), vec![mnt])),
-        Some(crate::fsid::FsKind::Btrfs) => Some(("btrfs".to_string(), vec!["filesystem".into(), "resize".into(), "max".into(), mnt])),
+        Some(crate::fsid::FsKind::Xfs) => Some(("xfs_growfs".to_string(), vec![mnt()?])),
+        Some(crate::fsid::FsKind::Btrfs) => {
+            Some(("btrfs".to_string(), vec!["filesystem".into(), "resize".into(), "max".into(), mnt()?]))
+        }
         _ => None,
     }
 }
