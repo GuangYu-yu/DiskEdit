@@ -27,6 +27,14 @@ pub(crate) fn preflight_lvm_tools(grow_lv: bool, needs_loop: bool) -> Result<(),
 /// 增量是 0 时（中断重跑：分区已是新尺寸）不猜扩多少——见下面 `delta_bytes == 0` 的分支
 #[cfg(target_os = "linux")]
 pub(crate) fn lvm_grow_chain(part_dev: &str, expected_bytes: u64, delta_bytes: u64, grow_lv: bool, want_lv: Option<&str>) -> Result<(), LvmError> {
+    // pv_resize 只拿到路径：节点必须与 sysfs 记录的设备号同源，否则 PV 标签与元数据区
+    // 会写到另一台设备上。判据与 find_block_partition_node 共用同一实现
+    let node = std::path::Path::new(part_dev);
+    let sysdir = crate::dev::sysfs_node(node).map_err(|e| {
+        LvmError::Failed(format!("cannot resolve the sysfs node of {part_dev} for the LVM chain: {e}"))
+    })?;
+    crate::dev::ensure_node_is_device(node, &sysdir)
+        .map_err(|e| LvmError::Failed(format!("refusing the LVM chain on {part_dev}: {e}")))?;
     crate::lvm::pv_resize(part_dev)?;
     println!("pvresize {part_dev} done");
     let pv = crate::lvm::pv_size_report(part_dev)?;

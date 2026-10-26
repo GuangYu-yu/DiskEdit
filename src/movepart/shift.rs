@@ -409,6 +409,9 @@ pub(crate) fn execute_apply(
     // 修复已由 apply 的 Fail 域在调用本函数之前完成（备份头搬移 / 保护 MBR 重写），
     // 使后续所有写入都基于修复后的几何
     atomic_write_ckpt(ckpt_path, &ckpt.serialize())?;
+    // 在任何一个数据 chunk 写出之前，按 commit 的同一判据核对盘上的表仍是本次计划读到的
+    // 那一份。此刻目标盘没有任何数据写入，外部已改表时命令以"未写盘"收场
+    g.ensure_entries_unchanged(src)?;
     // 本操作含**不可回滚的写入**：搬移的数据块按设计不入 journal（前向恢复、无回滚），
     // 故留一条标记使 undo 拒绝回滚——否则表被回滚而数据未回滚，布局与盘上内容自相矛盾。
     // delta_lba 在 plan 生成处只产生非负值：目标起点 = first_lba + delta，直接 checked 相加
@@ -562,11 +565,15 @@ pub(crate) fn execute_apply(
                 continue; // durable 边界之前视为完成：恢复只认 ckpt 值，绝不用内存进度跳过
             }
             let mut buf = vec![0u8; *len as usize];
-            src.read_at(src_off + within, &mut buf).map_err(|e| {
-                chunk_io_error(e, "reading source", (src_off + within) / plan.ss, len / plan.ss, i + 1, total_chunks as usize, RESUME_HINT)
+            // 块内偏移是未 checked 的加数：与已 checked 的基址求和同样要收口，
+            // 回绕会把读源或写目标折到盘上另一个位置
+            let src_pos = src_off.checked_add(*within).ok_or_else(overflow)?;
+            let dst_pos = dst_off.checked_add(*within).ok_or_else(overflow)?;
+            src.read_at(src_pos, &mut buf).map_err(|e| {
+                chunk_io_error(e, "reading source", src_pos / plan.ss, len / plan.ss, i + 1, total_chunks as usize, RESUME_HINT)
             })?;
-            src.write_data_at(dst_off + within, &buf).map_err(|e| {
-                chunk_io_error(e, "writing target", (dst_off + within) / plan.ss, len / plan.ss, i + 1, total_chunks as usize, RESUME_HINT)
+            src.write_data_at(dst_pos, &buf).map_err(|e| {
+                chunk_io_error(e, "writing target", dst_pos / plan.ss, len / plan.ss, i + 1, total_chunks as usize, RESUME_HINT)
             })?;
             src.sync_data()?; // 数据 chunk 用 sync_data；表结构提交用 sync_all
             ckpt.chunks_done = i as u64 + 1; // 内存进度：递增发生在 sync_data 之后，永不超前于 durable 数据
@@ -719,14 +726,25 @@ pub(crate) fn finalize_growth(
                             "boot the target and check that the overlay is mounted and its size covers the new space",
                         ));
                     }
-                    // 这句是 FS 步的实情，不是对区域内容的断言：`unknown` 同时涵盖空区域与
-                    // 认不出的类型，PV 的空间则在收尾的 pvresize 链里生效
-                    _ => log(match g {
-                        Growable::NoFilesystem(Some(FsKind::Lvm2Pv)) => {
-                            "partition extended (the PV space takes effect through the pvresize chain)"
-                        }
-                        _ => "partition extended (filesystem not resized — its type was not identified)",
-                    }),
+                    // 分区已扩、里面却没有可扩的 FS，类型认不出：写盘前 check_grow_step 对
+                    // 这一态是拒绝，走到这里只因盘在两步之间被改动。后置条件"新空间对该
+                    // 分区可用"未达成，不能报成完整成功。措辞不替区域内容下结论——空区域
+                    // 与认不出的类型在 identify 口径下同属 None
+                    Growable::NoFilesystem(None) => {
+                        log("partition extended (filesystem not resized — its type was not identified)");
+                        post.pending(Pending::new(
+                            part,
+                            PendingKind::Fs,
+                            "the partition was extended but the filesystem inside was not resized — its type was not identified",
+                            "identify the filesystem inside and grow it with its own tool, or re-run with --no-fs to change only the partition",
+                        ));
+                    }
+                    // PV 的空间在收尾的 pvresize 链里生效，本命令没有可写的后置条件
+                    Growable::NoFilesystem(Some(FsKind::Lvm2Pv)) => {
+                        log("partition extended (the PV space takes effect through the pvresize chain)")
+                    }
+                    // SwapUnactivatable 在此意味着探测未命中（盘在两步之间被改动）
+                    _ => log("partition extended (filesystem not resized — its type was not identified)"),
                 },
             }
         }

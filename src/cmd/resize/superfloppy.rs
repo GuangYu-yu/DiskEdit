@@ -62,15 +62,21 @@ pub(crate) fn cmd_resize_superfloppy(a: &Args, req: &SizeRequest) -> crate::outc
             other => other.unwrap_or_else(|e| bail_fail(Fail::from(e))),
         }
     }
-    // FS grow 本身不改分区表，无 kernel_resync 必要
-    // 清理待办在此只以告警呈现：本命令的成功出口保持 0，与"缩过 FS 再改表"路径把同一
-    // 待办计入 pending（出口 20）不同——那些路径的表写入是紧随其后的下一步，本路径没有
-    match fsops::resize_fs_whole(&src, fstype) {
-        Ok(Some(leak)) => eprintln!("warning: {leak}"),
-        Ok(None) => {}
+    // FS grow 本身不改分区表，无 kernel_resync 必要。
+    // 挂载点没卸掉是一条未完成的后置条件：它随成功结果浮出，退出码因此是 20。
+    // 目标没有分区表，待办里的分区号记 0
+    let pending = match fsops::resize_fs_whole(&src, fstype) {
+        Ok(Some(leak)) => {
+            eprintln!("warning: {leak}");
+            vec![leak.into_pending(0)]
+        }
+        Ok(None) => Vec::new(),
         Err(e) => bail_fail(Fail::from(e).context("FS grow failed")),
-    }
+    };
     println!("superfloppy: {} grown to full device ({cur_bytes} bytes) — verify with: diskedit info {}", fsid::fs_name(fstype), a.target);
-    // 无分区表可写：FS 已扩，事务完成且无待办
-    crate::outcome::Outcome::applied_with(Vec::new())
+    // 无分区表可写：FS 已扩，事务完成；清理待办随结果浮出
+    let out = crate::outcome::Outcome::applied_with(pending);
+    // 待办必须让人看到：本路径的返回值直达分派，没有别处会把它呈现出来
+    out.report();
+    out
 }

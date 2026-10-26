@@ -247,6 +247,13 @@ pub fn resize_mdos_entry(src: &mut WriteSource, part: u32, new_size_lba: u32) ->
     if lba0[off + 4] == 0 {
         return Err(Fail::refused(format!("MBR partition {part} is empty")));
     }
+    // 0xEE 是 GPT 保护记录（UEFI 2.10 §5.2.3）：其 SizeInLBA 属保护布局的一部分，
+    // 改写它和 del_mdos_entry 清零该槽位一样，会毁掉识别与恢复 GPT 的依据
+    if lba0[off + 4] == PROT_MBR_TYPE {
+        return Err(Fail::refused(format!(
+            "partition {part} is the GPT protective record (0xEE) — rewriting its size destroys the record used to recognise and recover the GPT"
+        )));
+    }
     if MDOS_CONTAINER_TYPES.contains(&lba0[off + 4]) {
         return Err(Fail::refused("extended partition container cannot be resized"));
     }

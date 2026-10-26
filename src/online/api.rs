@@ -27,13 +27,14 @@ pub fn resize_online_planned(
 /// EBUSY，因此必须走与挂载分区相同的 partx/BLKPG 同步路径；pvresize/lvextend
 /// 由调用方在分区尺寸生效后执行（pvresize(8) 支持已属 VG 且有活动 LV 的 PV）。
 /// 目标长度同样由 `decide` 在锁下解析，`Ok(None)` 视作"无绝对目标"（分区层无变化）。
-/// 返回 (结果, 锁下取得的实际旧尺寸, 独占锁)：调用方计算扩量只能用第二个值——锁前快照在
-/// 窗口内可能已过期，用它算出的扩量会传导给 lvextend。前置失败时旧尺寸带 0、锁为 None，
-/// 调用方只在 complete 分支消费；complete 分支的锁必须持有到 PV 链结束
+/// 返回 (结果, 锁下取得的实际旧尺寸, 独占锁与锁下的整盘句柄)：调用方计算扩量只能用第二个值——
+/// 锁前快照在窗口内可能已过期，用它算出的扩量会传导给 lvextend。前置失败时旧尺寸带 0、
+/// 第三项为 None，调用方只在 complete 分支消费；complete 分支的锁必须持有到 PV 链结束，
+/// 收尾读表也只用那里带出的句柄
 pub fn resize_pv_online(
     disk_name: &str,
     pno: u32,
     decide: impl FnOnce(&FileSource) -> Result<Option<u64>, Fail>,
-) -> (Outcome, u64, Option<crate::targetlock::TargetLock>) {
+) -> (Outcome, u64, Option<pv::LockedPv>) {
     resize_pv(disk_name, pno, decide)
 }

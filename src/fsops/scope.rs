@@ -140,6 +140,19 @@ pub(crate) fn resolve_scope_device(
         return match scope {
             DeviceScope::Partition(p) => {
                 let dev = find_block_partition_node(src, *p, off)?;
+                // 内核分区长度与盘上表项必须同源：mkfs 的擦除区间取自表内长度，而
+                // wipe_zero 按这个路径写核心里那个设备——节点比表项长时擦除越过表项末端
+                #[cfg(target_os = "linux")]
+                {
+                    let node = crate::dev::sysfs_node(Path::new(&dev))?;
+                    let kernel_len = crate::dev::sysfs_capacity(&node)?;
+                    if kernel_len != len {
+                        return Err(FsError::invalid(format!(
+                            "kernel reports {dev} as {kernel_len} bytes but the on-disk table says {len} bytes \
+                             — kernel partition size differs from the table entry; make the kernel re-read the partition table first"
+                        )));
+                    }
+                }
                 require_unmounted(&dev)?;
                 Ok(ScopeDevice { path: dev, is_loop: false })
             }
@@ -246,7 +259,11 @@ pub(crate) fn find_block_partition_node(src: &FileSource, part: u32, want_start:
                 continue;
             }
             let name = entry.file_name().to_string_lossy().to_string();
-            return Ok(format!("/dev/{name}"));
+            let dev = format!("/dev/{name}");
+            // 节点名由 sysfs 目录名推得，只是路径；实际落点由设备号决定。同名节点指向
+            // 另一台设备时"几何来自 A、写入落在 B"，调用方拿到的路径无从自行发现
+            crate::dev::ensure_node_is_device(Path::new(&dev), &entry.path()).map_err(FsError::from)?;
+            return Ok(dev);
         }
         Err(FsError::invalid(format!("partition node for part {part} not found under /sys/block/{disk}")))
     }

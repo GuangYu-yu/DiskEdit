@@ -626,12 +626,9 @@ pub(crate) fn execute_resize(
             // 落点证实了才往下搬：回读不出实际尺寸时无法排除"工具以 0 退出但没缩到位"，
             // 而接着搬数据就会把分区末端切进未缩的 FS 元数据。此时停在缩容这一步，
             // ckpt 的 fs_shrunk 记为 Unverified——重跑先回读，仍未缩才重做一次缩容
-            let line = o.verify.ok_line(new_bytes);
-            if let Some(p) = o.verify.pending(part) {
+            let line = o.ok_line(new_bytes);
+            for p in o.pending(part) {
                 post.pending(p);
-            }
-            if let Some(leak) = o.leak {
-                post.pending(leak.into_pending(part));
             }
             if line.is_none() {
                 ckpt.fs_shrunk = FsShrink::Unverified;

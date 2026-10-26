@@ -1,10 +1,40 @@
 use super::*;
 
-/// `create --fs` 的 mkfs 步骤是否在第一次擦除之前就失败了：工具缺失、非 root、非 Linux
-/// 都停在这条能力检查上，盘上只有表写入，journal 因此可整表回滚；工具真的跑起来时
-/// 屏障先落，那份 journal 记录的是不可逆变更（undo 按设计拒绝，只能 abandon）
-fn fs_step_never_started(stderr: &str) -> bool {
-    ["requires `mkfs.xfs`", "root required", "requires Linux"].iter().any(|m| stderr.contains(m))
+/// journal 里是否已有 Barrier 记录：头是 magic + 身份段 + 身份段 CRC（定长，按版本取），
+/// 其后是 `[len u32][crc u32][payload]` 帧流；payload 开头是 mutation 标签（1 / 2 另带
+/// 20 字节 meta），紧随其后的 recovery 标签为 1 即 Barrier。undo 见到 Barrier 就整体拒绝，
+/// 故这条判据与"FS 步是否越过不可回滚点"同源，不依赖 stderr 文案。
+/// 帧头不全、帧载荷越界、标签不认识或不是本工具的 journal 时，视为其后没有可读记录
+fn journal_has_barrier(bytes: &[u8]) -> bool {
+    if !bytes.starts_with(b"DEJL") {
+        return false;
+    }
+    let header_len = match bytes.get(4) {
+        Some(4) | Some(5) => V4_HEADER_LEN,
+        Some(6) => V6_HEADER_LEN,
+        _ => return false,
+    };
+    let mut pos = header_len;
+    while pos + REC_HDR <= bytes.len() {
+        let len = u32::from_le_bytes(bytes[pos..pos + 4].try_into().unwrap()) as usize;
+        let Some(end) = pos.checked_add(REC_HDR).and_then(|start| start.checked_add(len)) else {
+            return false;
+        };
+        let Some(payload) = bytes.get(pos + REC_HDR..end) else { return false };
+        let meta = match payload.first() {
+            Some(0) | Some(3) | Some(4) => 0,
+            Some(1) | Some(2) => 20,
+            _ => return false,
+        };
+        if payload.get(1 + meta) == Some(&1) {
+            return true;
+        }
+        if len == 0 {
+            return false;
+        }
+        pos = end;
+    }
+    false
 }
 
 #[test]
@@ -56,11 +86,12 @@ fn journal_lifecycle_and_table_undo() {
     assert_eq!(c, 20, "partition created but mkfs failed must be EXIT_PARTIAL: {e}");
     assert!(journal.exists(), "journal must be kept after a partial failure");
     assert_eq!(part_count(), before + 1, "partition should exist before undo");
-    if !fs_step_never_started(&e) {
-        // FS 步真的跑起来过（Linux + root + 工具齐备）：屏障已落，journal 记的是不可逆
-        // 变更。只回滚表会让布局与盘上内容矛盾，undo 必须拒绝；现场只能由 abandon 释放，
-        // 已写下的表项与字节留在盘上。后面依赖"屏障未落"的用例（残尾回放与归档、
-        // 整份回滚）在这个环境里不成立，由非 root 的 CI 运行覆盖
+    let barrier = journal_has_barrier(&std::fs::read(&journal).unwrap());
+    if barrier {
+        // journal 里已落 Barrier：FS 步越过了不可回滚点，记下的是不可逆变更。
+        // 只回滚表会让布局与盘上内容矛盾，undo 必须拒绝；现场只能由 abandon 释放，
+        // 已写下的表项与字节留在盘上。后面依赖"没有 Barrier"的用例（残尾回放与归档、
+        // 整份回滚）在这个环境里不成立，由不落屏障的 CI 运行覆盖
         let (c, e) = run(&["undo", img_s, "--yes"]);
         assert_eq!(c, 10, "a journal past the barrier must never be replayed: {e}");
         assert!(e.contains("non-reversible"), "{e}");
@@ -271,9 +302,9 @@ fn pending_recovery_blocks_unjournaled_writers_and_empty_shell_is_not_corruption
     let (c, e) = run(&["create", img_s, "--size", "1M", "--fs", "xfs"]);
     assert_eq!(c, 20, "partition created but mkfs failed must be EXIT_PARTIAL: {e}");
     assert!(journal.exists(), "a partial operation must leave its journal behind: {e}");
-    // 屏障未落时现场可以整表 undo；屏障已落（FS 步真的跑起来过）时 undo 按设计拒绝，
-    // 出路只剩 abandon——闸口的措辞随现场性质而变
-    let table_only = fs_step_never_started(&e);
+    // journal 里没有 Barrier 时现场可以整表 undo；有 Barrier（FS 步已越过不可回滚点）
+    // 时 undo 按设计拒绝，出路只剩 abandon——闸口的措辞随现场性质而变
+    let table_only = !journal_has_barrier(&std::fs::read(&journal).unwrap());
     let way_out = if table_only { "undo" } else { "abandon" };
 
     // 未收尾现场 ⇒ 目标仍被那次事务占着：**任何**写命令都不能接手它，含开 journal 的 add。

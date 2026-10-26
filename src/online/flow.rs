@@ -4,6 +4,32 @@ use super::*;
 use crate::dev::FileSource;
 use crate::fsops::run;
 
+/// FS 步之前的挂载点复核。`xfs_growfs` / `btrfs filesystem resize` 只拿得到挂载点字符串，
+/// 对它的解析最后一次发生在 `resolve_target`；跨过 part_resize（sfdisk 写表 + partx + 回读）
+/// 到真正调用工具的窗口里，挂载点若被重挂到另一块设备，缩容会把另一个文件系统缩到请求值
+fn verify_mount_target(t: &OnlineTarget) -> Result<(), String> {
+    let Some(mnt) = t.mnt.as_deref() else { return Ok(()) };
+    let (dev, _) = resolve_part_dev(mnt).map_err(|e| {
+        format!("cannot re-resolve the block device of {} before the filesystem step: {e}", mnt.display())
+    })?;
+    let want = fs::metadata(&t.part_dev)
+        .map_err(|e| format!("cannot stat {} before the filesystem step: {e}", t.part_dev.display()))?;
+    let got = fs::metadata(&dev)
+        .map_err(|e| format!("cannot stat {} before the filesystem step: {e}", dev.display()))?;
+    if got.st_rdev() != want.st_rdev() {
+        return Err(format!(
+            "{} now names device {}:{} while partition {} is {}:{} — refusing to run the filesystem step on another device",
+            mnt.display(),
+            libc::major(got.st_rdev()),
+            libc::minor(got.st_rdev()),
+            t.part_dev.display(),
+            libc::major(want.st_rdev()),
+            libc::minor(want.st_rdev()),
+        ));
+    }
+    Ok(())
+}
+
 pub fn resize_online(
     mountpoint: &Path,
     decide: impl FnOnce(&FileSource) -> Result<Option<u64>, Fail>,
@@ -137,6 +163,10 @@ pub fn resize_online(
             if let Err(e) = refuse_btrfs_multi_device(&t, fstype) {
                 return Fail::from(e).into_outcome();
             }
+            // FS 步是本次唯一写盘步骤，挂载点偏移即"写另一个文件系统"
+            if let Err(e) = verify_mount_target(&t) {
+                return Outcome::infra(e);
+            }
             fs_grow_outcome(fs_grow(&t, fstype))
         }
         Some(bytes) => {
@@ -169,6 +199,10 @@ pub fn resize_online(
                 if let Err(e) = refuse_btrfs_multi_device(&t, fstype) {
                     return Fail::from(e).into_outcome();
                 }
+                // 写表之前复核：挂载点已偏移时连表也不该改，本次未写盘
+                if let Err(e) = verify_mount_target(&t) {
+                    return Outcome::infra(e);
+                }
                 if let Err(e) = part_resize(&t, bytes) {
                     // 表已写、内核同步失败：FS 扩步也因此没做，两条事实一并报
                     let detail = e.detail().to_string();
@@ -186,6 +220,12 @@ pub fn resize_online(
                     o.mark_kernel_stale();
                     return o;
                 }
+                // 表已写、内核已同步：挂载点若在 part_resize 期间偏移，FS 步只能跳过
+                if let Err(e) = verify_mount_target(&t) {
+                    return Outcome::applied_with(vec![fs_pending(format!(
+                        "partition resized but FS grow skipped: {e}"
+                    ))]);
+                }
                 match fs_grow(&t, fstype) {
                     Ok(()) => Outcome::applied_with(Vec::new()),
                     // 分区已扩：无论 spawn 失败还是非零退出，FS 步都是一条未满足后置条件
@@ -196,6 +236,10 @@ pub fn resize_online(
                 // 的职责包含分区几何）：FS 先缩（内核校验占用与 256MiB 下限），持久化缩分区
                 if let Err(e) = refuse_btrfs_multi_device(&t, fstype) {
                     return Fail::from(e).into_outcome();
+                }
+                // 缩容的 FS 步是首个写盘步骤：挂载点已偏移时拒绝，盘未动
+                if let Err(e) = verify_mount_target(&t) {
+                    return Outcome::infra(e);
                 }
                 // 本函数的目标由挂载点解析得出，mnt 恒为 Some；把 None 挡在写盘之前，
                 // 免得一个推不出的挂载点变成空参数传给 btrfs（它会被当成另一个路径）
