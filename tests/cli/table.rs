@@ -150,6 +150,56 @@ fn backup_header_fallback_and_repair() {
 }
 
 #[test]
+fn new_gpt_refuses_to_clear_bytes_inside_an_existing_partition() {
+    let dir = std::env::temp_dir().join(format!("diskedit_newcollide_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let img = dir.join("c.img");
+    std::fs::write(&img, vec![0u8; 8 * 1024 * 1024]).unwrap();
+    let exe = env!("CARGO_BIN_EXE_DiskEdit");
+    let img_s = img.to_str().unwrap();
+    let run = |args: &[&str]| -> (i32, String, String) {
+        let out = Command::new(exe).args(args).output().unwrap();
+        (out.status.code().unwrap_or(-1),
+         String::from_utf8_lossy(&out.stdout).into_owned(),
+         String::from_utf8_lossy(&out.stderr).into_owned())
+    };
+
+    // MBR 分区铺到盘尾（2048..16383，16384 扇区的镜像）：GPT 备份区落在这些字节里
+    let (c, _, e) = run(&["new", img_s, "--table", "msdos", "--yes"]);
+    assert_eq!(c, 0, "{e}");
+    let (c, _, e) = run(&["add", img_s, "--start", "2048", "--end", "16383"]);
+    assert_eq!(c, 0, "{e}");
+
+    let before = std::fs::read(&img).unwrap();
+    let (c, _, e) = run(&["new", img_s, "--table", "gpt", "--yes"]);
+    assert_eq!(c, 10, "--yes alone must not license clearing bytes inside a partition: {e}");
+    assert!(e.contains("backup entry array"), "the collision must be named: {e}");
+    assert!(e.contains("--overwrite-partition-data"), "the flag that unblocks it must be named: {e}");
+    assert_eq!(std::fs::read(&img).unwrap(), before, "the refusal must not write");
+
+    let (c, _, e) = run(&["new", img_s, "--table", "gpt", "--yes", "--overwrite-partition-data"]);
+    assert_eq!(c, 0, "explicit consent to overwrite those bytes must go through: {e}");
+    let (c, out, _) = run(&["info", img_s]);
+    assert_eq!(c, 0);
+    let v: serde_json::Value = serde_json::from_str(out.trim()).unwrap();
+    assert_eq!(v["label"], "gpt", "{out}");
+    assert_eq!(v["partitions"].as_array().map(|a| a.len()), Some(0), "{out}");
+
+    // 独立镜像：GPT 最后一个分区止于 last_usable（16350）时，重建同款表不得误报
+    let ok = dir.join("ok.img");
+    std::fs::write(&ok, vec![0u8; 8 * 1024 * 1024]).unwrap();
+    let ok_s = ok.to_str().unwrap();
+    let (c, _, e) = run(&["new", ok_s, "--yes"]);
+    assert_eq!(c, 0, "{e}");
+    let (c, _, e) = run(&["add", ok_s, "--start", "2048", "--end", "16350"]);
+    assert_eq!(c, 0, "{e}");
+    let (c, _, e) = run(&["new", ok_s, "--yes"]);
+    assert_eq!(c, 0, "a partition ending at last_usable does not reach the backup area: {e}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn msdos_table_flow() {
     let dir = std::env::temp_dir().join(format!("diskedit_mdos_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();

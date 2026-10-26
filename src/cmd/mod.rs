@@ -222,7 +222,7 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         name: "new",
         aliases: &[],
-        flags: &["--sector-size", "--table", "--yes"],
+        flags: &["--sector-size", "--table", "--yes", "--overwrite-partition-data"],
         help: layout::HELP_NEW,
         max_pos: 1,
         mode: TargetMode::WriteJournal,

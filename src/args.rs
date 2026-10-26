@@ -92,6 +92,9 @@ pub(crate) struct Args {
     pub(crate) type_guid: Option<String>,
     pub(crate) table: Option<crate::table::TableKind>,
     pub(crate) yes: bool,
+    /// --overwrite-partition-data：`new --table gpt` 在旧分区落入新表元数据写入区时，
+    /// 明确授权这次写入覆盖那些字节（`--yes` 只确认"重建表"，不含这项）
+    pub(crate) overwrite_partition_data: bool,
     pub(crate) online: bool,
     /// --random：`set uuid` 要求目标生成新随机值（唯一支持者是 ntfs）
     pub(crate) random: bool,
@@ -146,7 +149,7 @@ pub(crate) fn parse_args() -> (String, Args) {
     let mut a = Args {
         target: String::new(), part: None, grow: None,
         start: None, end: None, size: None, fs: None, name: None, clone: false, type_guid: None, table: None,
-        yes: false, online: false, random: false, no_fs: false, sector_size: None,
+        yes: false, overwrite_partition_data: false, online: false, random: false, no_fs: false, sector_size: None,
         align: "mib".to_string(),
         chunk_mib: 4,
         grow_to_end: false,
@@ -172,6 +175,7 @@ pub(crate) fn parse_args() -> (String, Args) {
         }
         match arg.as_str() {
             "--yes" => { a.seen.push("--yes"); a.yes = true; }
+            "--overwrite-partition-data" => { a.seen.push("--overwrite-partition-data"); a.overwrite_partition_data = true; }
             "--online" => { a.seen.push("--online"); a.online = true; }
             "--random" => { a.seen.push("--random"); a.random = true; }
             "--sector-size" => {
