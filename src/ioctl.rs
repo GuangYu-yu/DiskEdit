@@ -23,8 +23,8 @@ use std::os::fd::AsRawFd;
 /// 现值，若第一次已生效而被报 EINTR，重发会以 EINVAL 收场，成功反被读成失败
 fn ioctl_retry_eintr(mut call: impl FnMut() -> libc::c_int) -> io::Result<()> {
     loop {
-        // SAFETY: 由调用方保证 call 内部的 fd 与指针在本次调用期间有效
-        if unsafe { call() } == 0 {
+        // 闭包内的指针有效性由调用方负责；这里只调它，不需要再包一层 unsafe
+        if call() == 0 {
             return Ok(());
         }
         let e = io::Error::last_os_error();
