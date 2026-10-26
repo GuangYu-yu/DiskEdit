@@ -13,6 +13,12 @@ pub(crate) fn resolve_pv_target(disk_name: &str, pno: u32) -> io::Result<OnlineT
     let mut sysdir = None;
     for entry in fs::read_dir(&sysroot)? {
         let p = entry?.path();
+        // 非目录条目（uevent/dev/size/stat 等 sysfs 属性文件）不可能是分区：对其拼
+        // "partition" 会得到 ENOTDIR（os error 20），那是"这不是个目录"，与"分区属性
+        // 读不出来"不同类（与 collect_neighbours 同一判据）
+        if !p.is_dir() {
+            continue;
+        }
         // `exists()` 把任意 stat 错误折成 false，一次 EIO 会被报成"这块盘上没有该分区"，
         // 把人引去改分区号。只有 NotFound 才能当作"这一项不是分区"
         match fs::metadata(p.join("partition")) {
