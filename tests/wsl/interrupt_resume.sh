@@ -27,7 +27,7 @@ run_resize_part_break() {
   mount_at "${LD}p1" /testmnt
   dd if=/dev/urandom of=/testmnt/blob.bin bs=1M count=800 2>/dev/null
   umount /testmnt
-  md_before=$(md5sum "${LD}p1" | cut -d' ' -f1)
+  md_before=$(mdsum "${LD}p1")
   lo_detach "$LD"
 
   echo "== rs-chunk:$n：900M 分区右移 50M（chunk 1MiB），第 $n 块后中断 =="
@@ -42,7 +42,7 @@ run_resize_part_break() {
 
   LD=$(lo_attach "$T")
   lo_waitpart "${LD}p1" || { echo "p1 part node not ready"; rc=1; lo_detach "$LD"; return; }
-  md_after=$(md5sum "${LD}p1" | cut -d' ' -f1)
+  md_after=$(mdsum "${LD}p1")
   assert_eq "$md_after" "$md_before" "rs-chunk:$n 数据逐字节一致"
   e2fsck -fn "${LD}p1" >/dev/null 2>&1 && echo "  OK   e2fsck clean" || { echo "  BAD  e2fsck ISSUES"; rc=1; }
   lo_detach "$LD"
@@ -63,7 +63,7 @@ run_shift_break() {
   mount_at "${LD}p2" /testmnt
   dd if=/dev/urandom of=/testmnt/blob2.bin bs=1M count=350 2>/dev/null
   umount /testmnt
-  md_before=$(md5sum "${LD}p2" | cut -d' ' -f1)
+  md_before=$(mdsum "${LD}p2")
   lo_detach "$LD"
 
   echo "== chunk:$n：a 扩 100M、b 后移（chunk 1MiB），第 $n 块后中断 =="
@@ -81,7 +81,7 @@ run_shift_break() {
 
   LD=$(lo_attach "$T2")
   lo_waitpart "${LD}p2" || { echo "p2 part node not ready"; rc=1; lo_detach "$LD"; return; }
-  md_after=$(md5sum "${LD}p2" | cut -d' ' -f1)
+  md_after=$(mdsum "${LD}p2")
   assert_eq "$md_after" "$md_before" "chunk:$n 数据逐字节一致"
   e2fsck -fn "${LD}p2" >/dev/null 2>&1 && echo "  OK   e2fsck clean" || { echo "  BAD  e2fsck ISSUES"; rc=1; }
   lo_detach "$LD"

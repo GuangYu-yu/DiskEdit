@@ -17,6 +17,10 @@ run() {
   grep -E "$SHOW_RE" <<<"$out" | head -60
   if [ $rc -ne 0 ]; then
     echo "--- FAIL (rc=$rc)"; tail -8 <<<"$out" | sed 's/^/    /'
+    # 完整输出留档：过滤行只挑关键字，脚本中途静默退出时看不出是哪条命令
+    mkdir -p artifacts
+    printf '%s\n' "$out" > "artifacts/${f%.sh}.log"
+    echo "--- full output: tests/wsl/artifacts/${f%.sh}.log"
     fail=$((fail+1)); failed+=("$f")
   elif grep -q '^SKIP:' <<<"$out"; then
     echo "--- SKIP ($(grep -m1 '^SKIP:' <<<"$out"))"

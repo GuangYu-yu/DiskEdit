@@ -2,18 +2,21 @@
 # 缩容后回读**实际落点**：工具成功返回只说明它没报错，不说明 FS 落在我们请求的尺寸上。
 # 覆盖四条：正常回读（请求值 = 实际落点）、工具向下取整（实际 < 请求值）、
 # 回读到的落点大于请求值（工具行为不符合预期，分区不缩）、回读拿不到落点
-# （缩容可能已完成，落一条待办而不是报失败）。
+# （缩容可能已完成但落点无法证实：表不写、分区保持原尺寸，落一条待办而不是报失败）。
 # GPT 路径（movepart::execute_resize）与 MBR 路径（cmd/resize）各覆盖一次。
+#
+# 假 dumpe2fs 靠工具表变体生效：工具解析在编译期钉死（src/fsops/env.rs 的 TOOL_PATH），
+# PATH 影子不参与。BFK 的表把假目录排在系统目录之前，其余工具仍落到真身。
 source "$(dirname "$0")/lib.sh"
-require_bin
+require_fake_bin
 
 T=/var/tmp/t42.img
 track_file "$T"
 
-FAKE=/var/tmp/diskedit-fakebin
+FAKE=$FAKE_TOOL_DIR
 cleanup_hook() { rm -rf "$FAKE" 2>/dev/null; }
 
-# 假工具：只覆盖回读要用的那一个可执行文件，其余仍走 PATH 里的真身
+# 假工具：只覆盖回读要用的那一个可执行文件，其余仍走工具表里的系统目录
 fake() { # $1=名  $2=脚本体
     printf '%s\n' "$2" > "$FAKE/$1"
     chmod +x "$FAKE/$1"
@@ -63,7 +66,7 @@ rm -rf "$FAKE"; mkdir -p "$FAKE"
 fake dumpe2fs '#!/bin/sh
 echo "Block count:              999999999"
 echo "Block size:               4096"'
-OUT=$(PATH="$FAKE:$PATH" $B resize "$T":1 300M 2>&1); E=$?
+OUT=$($BFK resize "$T":1 300M 2>&1); E=$?
 echo "exit=$E"
 echo "$OUT" | sed 's/^/    /'
 exp "$E" 30 "落点超出请求值不是成功（可能已写盘，带警示）"
@@ -78,13 +81,13 @@ esac
 assert_eq "$(pt1)" "$BEFORE" "C 拒绝必须发生在写表之前（分区尺寸未变）"
 
 echo
-echo "===== D: 回读拿不到落点 → 落一条 fs shrink 待办，缩容本身照常完成 → 20 ====="
+echo "===== D: 回读拿不到落点 → 落一条 fs shrink 待办，表不写、分区保持原尺寸 → 20 ====="
 setup_gpt
 rm -rf "$FAKE"; mkdir -p "$FAKE"
 # 只给 Block size（预查要用），回读要的 Block count 缺失 = 回读拿不到落点
 fake dumpe2fs '#!/bin/sh
 echo "Block size:               4096"'
-OUT=$(PATH="$FAKE:$PATH" $B resize "$T":1 300M 2>&1); E=$?
+OUT=$($BFK resize "$T":1 300M 2>&1); E=$?
 echo "exit=$E"
 echo "$OUT" | sed 's/^/    /'
 exp "$E" 20 "回读不出来不是缩容失败，改出一条待办"
@@ -94,7 +97,7 @@ case "$OUT" in
     *"run manually: dumpe2fs -h <partition device>"*) echo "D remedy OK";;
     *) echo "D remedy missing (BAD)"; rc=1;;
 esac
-assert_eq "$(pt1)" '"size_bytes":314572800' "D 待办不改写缩容已发生（分区已到请求尺寸）"
+assert_eq "$(pt1)" '"size_bytes":419430400' "D 落点未证实不写表（分区保持原尺寸）"
 
 echo
 echo "===== E: MBR 路径同样报出请求值与实际落点 → 0 ====="
