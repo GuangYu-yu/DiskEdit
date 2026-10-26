@@ -162,7 +162,8 @@ echo
 echo "########## G: 首启现场（尾部 RW 层尚未格式化）扩容 ##########"
 # 依据：grow_target_at 把"没有可扩的文件系统"分开——尚未格式化的 RW 层（那块空间会被首次
 # 挂载的 fstools 建满）与类型识别不出的区域（check_grow_step 视后者为"没有信息"，写表前
-# 拒绝，须 --no-fs 才只改表）。分区层命令对首启现场算完成：分区扩到末尾即退 0
+# 拒绝，须 --no-fs 才只改表）。分区层命令对首启现场算部分完成：分区扩到末尾（20），
+# 待办写明该层由目标系统启动时初始化
 rm -f "$T" "$T"$SIDECAR_GLOB
 truncate -s 512M "$T"
 $B new "$T" --yes >/dev/null
@@ -171,11 +172,14 @@ dd if="$SQIMG" of="$T" bs=512 seek=2048 conv=notrunc 2>/dev/null
 OUT=$($B resize "$T":1 grow 2>&1); EG=$?
 NEWLAST=$($B info "$T" | grep -o '"last_lba":[0-9]*' | head -1 | cut -d: -f2)
 echo "resize grow exit=$EG : $(echo "$OUT" | tail -1)"
-if [ "$EG" = "0" ] && [ -n "$NEWLAST" ] && [ "$NEWLAST" -gt 524287 ]; then
+if [ "$EG" = "20" ] && [ -n "$NEWLAST" ] && [ "$NEWLAST" -gt 524287 ] \
+    && echo "$OUT" | grep -q "after startup:"; then
   echo "G FIRST-BOOT-OVERLAY OK（分区已扩，RW 层待首次挂载初始化）"
 else
   echo "G WRONG EXIT ($EG, last_lba=$NEWLAST): $(echo "$OUT" | tail -1)"; rc=1
 fi
+# G 的 20 保留了撤销窗口，现场未释放；G2 要验的是另一条命令的后置条件，先按提示释放
+$B abandon "$T" --yes >/dev/null 2>&1 || { echo "G abandon failed"; rc=1; }
 # G2/G3：同一个判据，两条命令的后置条件不同——resizefs 只动 FS，首启现场它没有可写的
 # 后置条件（退 0，并说明该层由首次挂载创建）；而类型识别不出（空区域同此）时它什么都没做，
 # 必须拒绝（退 10）并把识别结果带进文案——报成功会让脚本以为空间已可用

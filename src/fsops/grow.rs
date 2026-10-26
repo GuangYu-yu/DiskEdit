@@ -333,14 +333,27 @@ where
     }
     #[cfg(not(unix))]
     std::fs::create_dir(&mnt).map_err(FsError::from)?;
-    // 建目录时记下它的身份：从这一刻到 mount 之间，路径条目仍可能被同一目录里的
-    // rename 替换（`/tmp` 可写），而 mount 按路径解析
+    // 挂载目标用本进程持有的目录句柄而不是路径：从建目录到 mount 解析之间，路径条目
+    // 仍可能被替换（`/tmp` 可写），而句柄钉住的正是建目录时的那个 inode。子进程解析
+    // `/proc/<pid>/fd/<n>` 时读的是本进程的 fd 表；`/proc/self/mountinfo` 记录的仍是
+    // 真实路径，卸载与清理照常用 `mnt`
     #[cfg(unix)]
-    let created = std::fs::metadata(&mnt).map_err(FsError::from)?;
+    let (_dir, target) = {
+        use std::os::unix::io::AsRawFd as _;
+        let dir = std::fs::File::open(&mnt).map_err(FsError::from)?;
+        let target = std::ffi::OsString::from(format!(
+            "/proc/{}/fd/{}",
+            std::process::id(),
+            dir.as_raw_fd()
+        ));
+        (dir, target)
+    };
+    #[cfg(not(unix))]
+    let target = mnt.clone().into_os_string();
     // 执行走 `fsops::run`：spawn 失败 = 工具没跑起来（Io），等待失败 = 工具已启动、
     // 写没写目标无法断言（CommandFailed）。mount 自己会重放日志（对目标的一次写），
     // 把后者折成 Io 会让命令以"确定未写盘"退出
-    let args = [std::ffi::OsString::from(dev), mnt.clone().into_os_string()];
+    let args = [std::ffi::OsString::from(dev), target];
     let out = run("mount", &args)?;
     if !out.status.success() {
         // mount 没成功就谈不上 umount：对从未挂载的目录卸载必然失败，
@@ -348,27 +361,6 @@ where
         // 临时目录仍要清——它是本次调用建的，mount 失败不代表它可以留下
         crate::dev::best_effort_rmdir(&mnt);
         return Err(FsError::command("mount", &out));
-    }
-    // 挂载后复核：路径上现在是建目录时那个 inode 才说明这次挂载落在自己的目录上。
-    // 被替换时先卸载再拒绝——mount 已触发目标 FS 的日志回放（一次写），故记
-    // CommandFailed；此时回调一个字节都没跑，回调后的清理也不必再做
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        let same = std::fs::metadata(&mnt)
-            .is_ok_and(|after| created.dev() == after.dev() && created.ino() == after.ino());
-        if !same {
-            // 卸载失败时没有更好的补救：拒绝理由已经说明这条路径不再属于本进程，
-            // 残留挂载点由用户按报错里的路径处置
-            #[allow(clippy::let_underscore_must_use)]
-            let _ = run("umount", &[&mnt]);
-            crate::dev::best_effort_rmdir(&mnt);
-            return Err(FsError::CommandFailed(format!(
-                "the mountpoint {} was replaced between its creation and the mount — the filesystem was \
-                 mounted through a path this process no longer owns and has been unmounted again",
-                mnt.display()
-            )));
-        }
     }
     let mut guard = MountGuard { point: mnt.clone(), armed: true };
     let res = f(&mnt.to_string_lossy());
@@ -467,10 +459,9 @@ pub(crate) fn settle_release(
 ) -> Result<Option<MountLeak>, FsError> {
     match (core, leak) {
         (Ok(()), leak) => Ok(leak),
-        (Err(e), Some(l)) => Err(e.with_note(&format!(
-            "additionally the filesystem may still be mounted at {} ({}) — unmount it with `umount {}`",
-            l.point, l.why, l.point
-        ))),
+        // 残留挂载点的措辞只在 MountLeak 的 Display 里有一份：同一事实在
+        // "随 Ok 浮出"与"拼进主错误"两个出口叫两个名字，人会以为是两件事
+        (Err(e), Some(l)) => Err(e.with_note(&format!("additionally {l}"))),
         (Err(e), None) => Err(e),
     }
 }
