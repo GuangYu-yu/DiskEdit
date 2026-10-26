@@ -94,7 +94,7 @@ pub(crate) fn resize_part_resume_skips_done_chunks() {
         proof: crate::dev::IdentityProof::Inode,
         disk_size: size, ss, part: 1,
         old_start: 2048, old_end: 10239, new_start: 12288, new_end: 20479,
-        fs_shrunk: false, chunks_done: 1, chunk_bytes: chunk,
+        fs_shrunk: FsShrink::NotShrunk, chunks_done: 1, chunk_bytes: chunk,
         fp: Default::default(),
         map: None,
         fstype: None,
@@ -149,7 +149,7 @@ pub(crate) fn resize_part_resume_after_commit_without_ckpt_update() {
         proof: crate::dev::IdentityProof::Inode,
         disk_size: src.size, ss, part: 1,
         old_start, old_end, new_start, new_end,
-        fs_shrunk: false,
+        fs_shrunk: FsShrink::NotShrunk,
         chunks_done: (old_end - old_start + 1) * ss / chunk,
         chunk_bytes: chunk,
         fp: Default::default(),
@@ -196,7 +196,7 @@ pub(crate) fn retargeted_resize_after_crash_is_refused() {
         proof: crate::dev::IdentityProof::Inode,
         disk_size: src.size, ss, part: 1,
         old_start, old_end, new_start, new_end,
-        fs_shrunk: false, chunks_done: 4, chunk_bytes: chunk,
+        fs_shrunk: FsShrink::NotShrunk, chunks_done: 4, chunk_bytes: chunk,
         fp: Default::default(),
         map: None,
         fstype: None,
@@ -248,7 +248,7 @@ pub(crate) fn divergent_and_no_fs_shrink_are_refused_before_any_write() {
     let rs = RsCheckpoint {
         proof: crate::dev::IdentityProof::Inode,
         disk_size: src.size, ss: 512, part: 1, old_start: 2048, old_end: 6143,
-        new_start: 3072, new_end: 5119, fs_shrunk: false, chunks_done: 0, chunk_bytes: chunk,
+        new_start: 3072, new_end: 5119, fs_shrunk: FsShrink::NotShrunk, chunks_done: 0, chunk_bytes: chunk,
         fp: Default::default(),
         map: None,
         fstype: None,
@@ -275,6 +275,42 @@ pub(crate) fn divergent_and_no_fs_shrink_are_refused_before_any_write() {
         matches!(table::load_gpt(&src).unwrap().unwrap().state, table::GptState::NeedsRepair { .. }),
         "--no-fs 缩容拒绝不得写盘"
     );
+    drop(src);
+    let _ = std::fs::remove_file(&p);
+}
+
+/// shrink 状态在盘上的三态编码：版本升到 7、状态字节取 2 表示"命令已返回、落点未证实"。
+/// v6 及更早该字节是 bool，读到 2 只能当损坏——否则旧现场会被读成"已验证"
+#[test]
+pub(crate) fn shrink_state_is_tri_state_on_the_wire() {
+    let chunk: u64 = 1024 * 1024;
+    let ckpt = |fs_shrunk| RsCheckpoint {
+        proof: crate::dev::IdentityProof::Inode,
+        disk_size: 32 * 1024 * 1024, ss: 512, part: 1,
+        old_start: 2048, old_end: 6143, new_start: 3072, new_end: 5119,
+        fs_shrunk, chunks_done: 0, chunk_bytes: chunk,
+        fp: Default::default(), map: None, fstype: None,
+    };
+    // 布局未变，只是语义变：状态字节固定在 64
+    let b = ckpt(FsShrink::Unverified).serialize();
+    assert_eq!(u32::from_le_bytes(b[8..12].try_into().unwrap()), CKPT2_VERSION);
+    assert_eq!(b[64], 2, "unverified shrink must be distinguishable on disk");
+    assert_eq!(ckpt(FsShrink::Verified).serialize()[64], 1);
+    assert_eq!(ckpt(FsShrink::NotShrunk).serialize()[64], 0);
+}
+
+/// 续跑前的回读：读不出来就报"无从判断"，不得按"未缩"或"已缩"任一侧猜——
+/// 猜"已缩"会接着搬数据切进未缩的元数据，猜"未缩"会把同一次缩容再做一遍
+#[test]
+pub(crate) fn shrink_state_readback_reports_unknown_instead_of_guessing() {
+    let (src, p) = plan_fixture(&[(1, [0x11; 16], 2048, 6143)]);
+    // 分区里没有可识别的 FS：任何回读都不可能成功
+    assert_eq!(
+        crate::fsops::shrink_already_at(&src, 1, Some(crate::fsid::FsKind::Ext), 1024 * 1024),
+        None,
+        "an unreadable filesystem must not be reported as shrunk or unshrunk"
+    );
+    assert_eq!(crate::fsops::shrink_already_at(&src, 1, None, 1024 * 1024), None);
     drop(src);
     let _ = std::fs::remove_file(&p);
 }

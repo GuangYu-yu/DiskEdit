@@ -394,9 +394,9 @@ pub(crate) fn aligned_gaps(used: &[(u64, u64)], lo: u64, hi: u64, unit: u64) -> 
 
 /// 成功路径提交事务：关闭它的 active 状态（见 `TransactionManager::commit`）。
 /// 身份取事务开始时记下的那个值，不按命令行路径重新解析
-pub(crate) fn drop_journal() {
+pub(crate) fn drop_journal() -> bool {
     let Some(session) = TransactionManager::take_identity() else {
-        return;
+        return true;
     };
     TransactionManager::commit(&session)
 }
