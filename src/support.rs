@@ -316,9 +316,7 @@ pub(crate) fn note_sector_truncation(action: &str, bytes: u64, ss: u64) {
 
 /// 恢复现场的枚举口径与"未收尾就拒绝"的闸口都在 `transaction`（见 `TransactionManager`）。
 /// 这里只转发名字，命令层不必知道它是怎么判的
-pub(crate) use crate::transaction::{
-    active_recovery_records, legacy_disk_guid, RecoveryRecord, ResumeClaim,
-};
+pub(crate) use crate::transaction::{active_recovery_records, RecoveryRecord, ResumeClaim};
 
 /// 闸口：目标上还留着未收尾的现场 ⇒ 拒绝这次不写 journal 的写盘
 pub(crate) fn refuse_if_pending_recovery(src: &FileSource, what: &str) -> Result<(), Fail> {

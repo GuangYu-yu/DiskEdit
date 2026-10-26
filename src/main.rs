@@ -51,5 +51,15 @@ fn main() -> ExitCode {
         // 该删的恢复文件没删掉：事务的收尾没有完成，不能按完整成功退出
         code = crate::outcome::EXIT_PARTIAL;
     }
+    // 资源释放待办（`Drop` 里发现的，例如 loop 未解绑）不能只留在 stderr：它同样是一条
+    // 未完成的后置条件。只在完整成功时降级——失败路径的码已经表达了更严重的事实
+    let release_leaks = crate::fsops::take_release_leaks();
+    if !release_leaks.is_empty() && code == crate::outcome::EXIT_OK {
+        eprintln!(
+            "note: {} cleanup step(s) did not complete — this run left resources behind (see the warnings above)",
+            release_leaks.len()
+        );
+        code = crate::outcome::EXIT_PARTIAL;
+    }
     ExitCode::from(code)
 }

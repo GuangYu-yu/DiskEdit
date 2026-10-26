@@ -282,7 +282,12 @@ fn active_swap_in(swaps: &str, dev: &str, rdev: u64) -> io::Result<bool> {
 }
 
 /// FS 步的占用闸：占用或探测失败都拒绝（fail-closed——探测失败若被当作
-/// "未挂载"，会对已挂载的 FS 执行 resize，那是数据损坏）
+/// "未挂载"，会对已挂载的 FS 执行 resize，那是数据损坏）。
+///
+/// 四个分支都归 `Io`：这层函数分不清调用点是否已有更早的写盘步骤（缩容在表写入之前
+/// 走它，扩容在表写入之后走它），而 `Io` 不承诺"改参数重试有意义"，是两种上下文里都
+/// 不误导的那一档。写盘之后的调用点若要强调"盘可能已改变"，须在**调用方**就地改判
+/// （`tool_write_maybe_started` 同法），不在这一层猜
 #[cfg(target_os = "linux")]
 pub(crate) fn require_unmounted(dev: &str) -> Result<(), FsError> {
     match probe_occupancy(dev) {
@@ -906,23 +911,18 @@ pub(crate) fn attach_loop(src: &FileSource, off: u64, len: u64) -> Result<String
 /// detach 引发的 remove 事件可能仍在处理中，紧接着复用同一 loop 设备会读到过期状态
 /// （udevadm settle = 等待队列内事件处理完）。上限 5s：正常 detach 远快于此，超时只提示，
 /// 不判 detach 失败（映射已解除，仅队列清空未确认）；udevadm 缺失（非 systemd 环境）忽略
-pub(crate) fn detach_loop(loopdev: &str) {
-    if let Ok(mut cmd) = tool_command("losetup") {
-        // 资源释放失败不该阻断业务（数据与布局已正确），但循环设备泄漏会让后续
-        // losetup 找不到空闲设备——属于用户需要知道的状态，故告警而非静默丢弃
-        match cmd.arg("-d").arg(loopdev).status() {
-            Ok(st) if st.success() => {}
-            Ok(st) => eprintln!(
-                "warning: `losetup -d {loopdev}` {} — the loop device may still be attached; \
-                 release it with `losetup -d {loopdev}` before relying on free loop devices",
-                crate::fsops::describe_exit(&st)
-            ),
-            Err(e) => eprintln!(
-                "warning: cannot run `losetup -d {loopdev}`: {e} — the loop device may still be attached; \
-                 release it with `losetup -d {loopdev}`"
-            ),
-        }
-    }
+///
+/// 返回值只描述 `losetup -d` 的结局：调用点据此把"映射可能仍占着"记成进程级待办，
+/// 而不是让它止步于一行 warning——那会让"FS 步成功 + loop 未解绑"以 0 退出
+pub(crate) fn detach_loop(loopdev: &str) -> ReleaseOutcome {
+    let release = match tool_command("losetup") {
+        Err(e) => ReleaseOutcome::Unavailable(e.to_string()),
+        Ok(mut cmd) => match cmd.arg("-d").arg(loopdev).status() {
+            Ok(st) if st.success() => ReleaseOutcome::Released,
+            Ok(st) => ReleaseOutcome::Failed(crate::fsops::describe_exit(&st)),
+            Err(e) => ReleaseOutcome::Unavailable(e.to_string()),
+        },
+    };
     if let Ok(mut udevadm) = tool_command("udevadm") {
         match udevadm.args(["settle", "--timeout=5"]).status() {
             Ok(st) if !st.success() => eprintln!(
@@ -930,5 +930,28 @@ pub(crate) fn detach_loop(loopdev: &str) {
             ),
             _ => {}
         }
+    }
+    release
+}
+
+/// 进程级资源释放失败清单。`Drop` 拿不到调用方的返回值，也未参与 `Result` 的构造，
+/// 但它描述的"资源仍被占用"必须能影响退出码——调用链末端（`main`）统一取出并浮出，
+/// 成功路径据此降级为"完成但有待办"（20）。只在进程内生效：本工具一次运行一个命令
+static RELEASE_LEAKS: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+pub(crate) fn note_release_leak(msg: String) {
+    RELEASE_LEAKS.lock().unwrap().push(msg);
+}
+
+/// 取出并清空本进程累积的资源释放待办。顺带打印，使 stderr 与退出码同源
+pub(crate) fn take_release_leaks() -> Vec<String> {
+    std::mem::take(&mut *RELEASE_LEAKS.lock().unwrap())
+}
+
+/// 释放动作的失败描述；`Released` 为 `None`
+pub(crate) fn release_failure(outcome: ReleaseOutcome) -> Option<String> {
+    match outcome {
+        ReleaseOutcome::Released => None,
+        ReleaseOutcome::Failed(why) | ReleaseOutcome::Unavailable(why) => Some(why),
     }
 }

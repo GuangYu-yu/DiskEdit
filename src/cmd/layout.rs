@@ -80,14 +80,15 @@ pub(crate) fn cmd_new(a: &Args) -> crate::outcome::Outcome {
             table::TableKind::Msdos => table::create_mbr_preflight(src.size, ss),
         };
         preflight.unwrap_or_else(|f| bail_fail(f));
-        // GPT 的备份数组写在盘尾：旧表若把分区铺到那一段，这次写入就是清零分区数据。
-        // 相交即按可证事实拒绝并点名；旧表读不出来时只告警（new 本就是重建表的命令）
+        // GPT 的主数组与盘尾备份区都是表结构写入：旧表若把分区铺到任一段，这次写入
+        // 就是清零分区数据。相交即按可证事实拒绝并点名；旧表读不出来时只告警
+        // （new 本就是重建表的命令）
         if kind == table::TableKind::Gpt {
-            match table::gpt_backup_span_conflict(&src, ss) {
+            match table::gpt_metadata_conflict(&src, ss) {
                 Ok(Some(why)) => bail_fail(Fail::refused(why)),
                 Ok(None) => {}
                 Err(e) => eprintln!(
-                    "warning: cannot check the existing table against the backup GPT entry array ({e})"
+                    "warning: cannot check the existing table against the GPT metadata this new table writes ({e})"
                 ),
             }
         }

@@ -477,8 +477,15 @@ pub(crate) const LOCK_SUFFIX: &str = sidecar_suffix!("lock");
 pub(crate) const LOG_SUFFIX: &str = sidecar_suffix!("log");
 
 /// 暂存文件前缀：原子写先写它、再 rename 到正式落点（见 `crate::movepart::atomic_write_ckpt`）；
-/// 打开可写目标时也按它清掉崩溃残骸
+/// 打开可写目标时也按它清掉崩溃残骸。前缀之后紧跟目标自己的 token（[`ckpt_temp_prefix`]）——
+/// 落点目录可能是所有镜像或所有盘共用的，没有这个 token 就分不出残骸属于谁
 pub(crate) const CKPT_TMP_PREFIX: &str = sidecar_suffix!("ckpt.tmp.");
+
+/// 某个 checkpoint 落点的暂存文件名前缀（含目标 token）。原子写按它拼出暂存名，
+/// 清扫按它认领残骸：两者必须同源，否则"清理"会删掉别的目标的在途写入
+pub(crate) fn ckpt_temp_prefix(ckpt: &Path) -> String {
+    format!("{CKPT_TMP_PREFIX}{}.", key_token(&ckpt.to_string_lossy()))
+}
 
 /// 旧版块设备现场的命名：GUID 后只有 `.ckpt`，没有命名空间中缀
 pub(crate) const LEGACY_GUID_CKPT_SUFFIX: &str = ".ckpt";
@@ -491,8 +498,7 @@ pub(crate) fn guid_hex(g: &[u8; 16]) -> String {
 /// 身份键 → 文件名安全的 token：保留 ASCII 字母数字与 `.` `-` `_`，其余（含路径分隔符）
 /// 换成 `_` 并截断到 32 字符，末尾附值的 CRC32——身份可能是 loop 的 backing 路径，
 /// 原样落盘会带分隔符、可能超长，而截断与替换会令两个不同身份撞同一个名字。
-/// 消费者是块设备身份链，非 Linux 上只剩测试需要它
-#[cfg(any(target_os = "linux", test))]
+/// 消费者是块设备身份链与 checkpoint 暂存文件命名
 pub(crate) fn key_token(value: &str) -> String {
     let mut token: String = value
         .chars()
@@ -770,15 +776,35 @@ impl TargetIdentity {
     }
 
     /// checkpoint 的候选落点。块设备语义下的历史落点以 GPT Disk GUID 命名，而 GUID 只
-    /// 在表可读时存在，读不到就没有那一条
-    pub(crate) fn checkpoint_candidates(&self, legacy_disk_guid: Option<[u8; 16]>) -> Vec<PathBuf> {
-        let mut v = self.checkpoint.clone();
-        if self.has_block_legacy_naming()
-            && let Some(g) = legacy_disk_guid
-        {
-            v.push(state_dir().join(format!("{}{LEGACY_GUID_CKPT_SUFFIX}", guid_hex(&g))));
+    /// 在表可读时存在。
+    ///
+    /// 读表是**按需**的：只有 [`Self::has_block_legacy_naming`] 的身份才可能用到 GUID，
+    /// 镜像目标传 `None` 即可——为一个不可能存在的落点去解析盘上内容，会平白产生
+    /// "表读不出来"的告警。
+    ///
+    /// 表读不出来**不等于那份落点不存在**：它可能正是丢记录之前的唯一现场（`abandon`
+    /// 的典型入口就是一张坏表）。此时返回 [`CheckpointCandidates::unenumerable`]，由调用方
+    /// 决定按"未知现场"拒绝写命令还是如实报告无法放弃——把它折叠成"没有那一条"会让闸口
+    /// 放行，把一份看不见的 checkpoint 当成不存在
+    pub(crate) fn checkpoint_candidates(&self, disk: Option<&FileSource>) -> CheckpointCandidates {
+        let mut paths = self.checkpoint.clone();
+        if !self.has_block_legacy_naming() {
+            return CheckpointCandidates { paths, unenumerable: None };
         }
-        v
+        let unenumerable = match disk {
+            // 目标打不开：GUID 不可知，历史命名那份也就无从拼出
+            None => Some("the target could not be opened to read its GPT Disk GUID".to_string()),
+            Some(src) => match crate::table::load_gpt(src) {
+                Ok(Some(g)) => {
+                    paths.push(state_dir().join(format!("{}{LEGACY_GUID_CKPT_SUFFIX}", guid_hex(&g.header.disk_guid))));
+                    None
+                }
+                // 无表（MBR / 裸盘）是常态而非故障：历史命名那份本来就不存在
+                Ok(None) => None,
+                Err(e) => Some(e.to_string()),
+            },
+        };
+        CheckpointCandidates { paths, unenumerable }
     }
 
     /// 本身份是否可能带 Block 语义的历史落点（GUID 命名的 checkpoint）。两个消费点：
@@ -787,6 +813,13 @@ impl TargetIdentity {
     pub(crate) fn has_block_legacy_naming(&self) -> bool {
         self.kind == TargetKind::Block || self.legacy_guid_checkpoints
     }
+}
+
+/// checkpoint 候选的枚举结果。`paths` 是能拼出名字的那些；`unenumerable` 在有历史命名
+/// 落点而表读不出来时给出原因——那不是"没有"，是"看不见"。
+pub(crate) struct CheckpointCandidates {
+    pub(crate) paths: Vec<PathBuf>,
+    pub(crate) unenumerable: Option<String>,
 }
 
 /// 尽力创建目录：失败不在此处报错——真正的失败会在随后打开文件时以更具体的
@@ -830,14 +863,19 @@ pub(crate) const CKPT_TMP_STALE_AFTER: std::time::Duration = std::time::Duration
 /// 尽力而为：目录读不到、元数据拿不到、删不掉都不拦打开目标
 #[allow(clippy::let_underscore_must_use)] // 有意忽略：删不掉就留到下次打开再清
 pub(crate) fn sweep_stale_ckpt_temps(identity: &TargetIdentity) {
+    // 这里只为拿落点目录做清理，历史命名那份拼不出来也无妨（与本次命名同一目录）
     let candidates = identity.checkpoint_candidates(None);
-    let mut dirs: Vec<PathBuf> = candidates.iter().filter_map(|p| p.parent().map(Path::to_path_buf)).collect();
+    // 只认领本目标的暂存文件：同一目录里可能有别的镜像（或所有盘共用的 state_dir），
+    // 按裸前缀清扫会把它们的残骸一并删掉，而其中一份可能正等着 rename
+    let prefixes: Vec<String> = candidates.paths.iter().map(|p| ckpt_temp_prefix(p)).collect();
+    let mut dirs: Vec<PathBuf> = candidates.paths.iter().filter_map(|p| p.parent().map(Path::to_path_buf)).collect();
     dirs.sort();
     dirs.dedup();
     for dir in dirs {
         let Ok(entries) = std::fs::read_dir(&dir) else { continue };
         for entry in entries.flatten() {
-            if !entry.file_name().to_string_lossy().starts_with(CKPT_TMP_PREFIX) {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if !prefixes.iter().any(|p| name.starts_with(p.as_str())) {
                 continue;
             }
             let stale = entry

@@ -90,22 +90,33 @@ pub fn create_mbr_preflight(size_bytes: u64, ss: u64) -> Result<(), Fail> {
     Ok(())
 }
 
-/// `new --table gpt` 的第一笔写盘是盘尾的备份条目数组（`[last−span, last]`，512B 扇区
-/// 下 16 KiB），空表时该缓冲全零。旧表若有分区落在这一段，这次写入就是清零分区数据，
-/// 与 `new` 只破坏表结构的语义相反。返回可读的冲突描述，命令层据此在写盘前拒绝。
+/// `new --table gpt` 的两处表结构写入：主条目数组（`[2·ss, (2+span)·ss)`）与盘尾备份区
+/// （`[last−span, last]` 及其后的备份头）。两处缓冲在空表时都来自同一份全零数组。旧表
+/// 若有分区落在任一段，这次写入就是清零分区数据，与 `new` 只破坏表结构的语义相反。
+/// 返回可读的冲突描述，命令层据此在写盘前拒绝。
+///
+/// 主数组同样按新表几何算：旧表的 `first_usable_lba` 可以小于 `2+span`（条目数远小于
+/// 建表策略的 128 时，旧表允许从 LBA 4 起分区），只算备份段会让那段分区开头被空数组清零。
 ///
 /// 旧表读不出来时返回 `None`：`new` 本就是整体覆盖表的命令，此处只拦**可证**的相交，
 /// 不因一张读不出的表拒绝一条用于重建它的命令
-pub fn gpt_backup_span_conflict(src: &FileSource, ss: u64) -> io::Result<Option<String>> {
+pub fn gpt_metadata_conflict(src: &FileSource, ss: u64) -> io::Result<Option<String>> {
     let geom = EntryArrayGeometry::new(ss, DEFAULT_ENTRY_SIZE, DEFAULT_ENTRY_COUNT, MAX_ARRAY_BYTES)?;
     let span = geom.lba_span();
     let last_lba = container_last_lba(src, ss);
     let Some(first_lba) = last_lba.checked_sub(span) else {
         return Ok(None);
     };
-    // 备份数组占 [first_lba, last_lba]，其后还要写备份头：两者都按字节区间比
-    let span_start = first_lba.saturating_mul(ss);
-    let span_end = src.size;
+    // 写入区间按字节表达：(名字, 起点, 终点)。备份数组之后还要写备份头，故到容器尾
+    let regions: [(&str, u64, u64); 2] = [
+        ("primary entry array", 2 * ss, (2 + span) * ss),
+        ("backup entry array", first_lba.saturating_mul(ss), src.size),
+    ];
+    let conflict = |start: u64, end: u64| {
+        regions
+            .iter()
+            .find(|(_, region_start, region_end)| end > *region_start && start < *region_end)
+    };
     if let Ok(Some(g)) = load_gpt(src) {
         for (i, e) in g.entries.iter().enumerate() {
             if e.ending_lba == 0 {
@@ -113,10 +124,10 @@ pub fn gpt_backup_span_conflict(src: &FileSource, ss: u64) -> io::Result<Option<
             }
             let start = e.starting_lba.saturating_mul(g.ss);
             let end = e.ending_lba.saturating_add(1).saturating_mul(g.ss);
-            if end > span_start && start < span_end {
+            if let Some((what, region_start, region_end)) = conflict(start, end) {
                 return Ok(Some(format!(
-                    "GPT partition {} occupies bytes [{start}..{end}), overlapping the backup entry array this new table \
-                     writes at [{span_start}..{span_end}) — delete or shrink that partition first",
+                    "GPT partition {} occupies bytes [{start}..{end}), overlapping the {what} this new table \
+                     writes at [{region_start}..{region_end}) — delete or shrink that partition first",
                     i + 1
                 )));
             }
@@ -126,10 +137,10 @@ pub fn gpt_backup_span_conflict(src: &FileSource, ss: u64) -> io::Result<Option<
         for p in &raw.parts {
             let start = u64::from(p.start_lba).saturating_mul(ss);
             let end = (u64::from(p.start_lba) + u64::from(p.size_lba)).saturating_mul(ss);
-            if end > span_start && start < span_end {
+            if let Some((what, region_start, region_end)) = conflict(start, end) {
                 return Ok(Some(format!(
-                    "MBR partition {} occupies bytes [{start}..{end}), overlapping the backup entry array this new table \
-                     writes at [{span_start}..{span_end}) — delete or shrink that partition first",
+                    "MBR partition {} occupies bytes [{start}..{end}), overlapping the {what} this new table \
+                     writes at [{region_start}..{region_end}) — delete or shrink that partition first",
                     p.num
                 )));
             }
@@ -140,7 +151,7 @@ pub fn gpt_backup_span_conflict(src: &FileSource, ss: u64) -> io::Result<Option<
 
 /// `new`：新建空 GPT（覆盖现有表）+ 保护 MBR。写盘只落在表结构区：LBA0/1、主条目数组
 /// 与盘尾备份数组；旧表把分区铺进这些区域的提交由命令层先经
-/// [`gpt_backup_span_conflict`] 拒绝，不在这里自查。
+/// [`gpt_metadata_conflict`] 拒绝，不在这里自查。
 /// 几何：128 条目 × 128B，first_usable = 数组之后，last_usable = 末端 - span - 1
 /// （由 UEFI 头/数组布局推导的实现约定，非规范逐字给出的公式）。
 pub fn create_gpt(src: &mut WriteSource, ss: u64, disk_guid: Option<[u8; 16]>) -> io::Result<()> {
@@ -312,10 +323,6 @@ pub fn create_mbr(src: &mut WriteSource) -> io::Result<()> {
     Ok(())
 }
 
-pub(crate) fn is_mdos_label(src: &FileSource) -> Result<bool, GptError> {
-    Ok(table_label(src)? == TableLabel::Mbr)
-}
-
 /// 盘型。**与"表的形状是否完好"分开表达**：`GptDamaged` 是"LBA1 带 GPT 头签名、
 /// 但保护布局不满足"——盘型仍是 GPT，只是形状受损，故与 `Gpt` 分开（处置不同）。
 /// 展示层各自格式化，内部判定只认变体
@@ -368,12 +375,15 @@ pub fn table_label(src: &FileSource) -> Result<TableLabel, GptError> {
     if gpt_header_parseable(src)? {
         return Ok(TableLabel::GptDamaged);
     }
-    if let Some(parts) = parse_mbr(src)? {
+    // 用原样解析而非 `parse_mbr`：后者对条目越界/起始 LBA0/两两重叠一律 Err，盘型判定
+    // 不该因为表损坏而失败——损坏的 MBR 仍是 MBR，`info` 的 `label` 与 `damaged` 是
+    // 两个独立事实。写路径要的是"可操作的表"，它们各自仍经 `parse_mbr` 拒绝
+    if let Some(raw) = parse_mbr_raw(src)? {
         // 4 条记录全空时，LBA0 的形状与"主头被毁、只剩盘尾备份的 GPT 盘"相同。备份若
         // 自洽到能给出整张表，那块盘的盘型是 GPT——报 msdos 会让 add 与 msdos resize 把
         // 分区铺到盘尾，覆盖唯一可救的那份备份。本工具建的 msdos 盘不会落进这一支：
         // `create_mbr` 连盘尾备份头的签名一并清掉（见该函数）
-        if parts.is_empty() && super::gpt_parse::backup_table_parseable(src)? {
+        if raw.parts.is_empty() && super::gpt_parse::backup_table_parseable(src)? {
             return Ok(TableLabel::GptDamaged);
         }
         return Ok(TableLabel::Mbr);
