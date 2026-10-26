@@ -281,10 +281,11 @@ fn apply_swap_recreate() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// 写盘前的能力门禁：新跑搬移 swap 时平台或重建工具不满足，一律以环境不满足（30）
-/// 结束——不建 checkpoint、不改分区表。PATH 只传给子进程，结论不依赖宿主装了哪些工具
+/// 新跑搬移 swap：非 Linux 在写盘前以环境不满足（30）停下且不建 checkpoint；
+/// Linux 上重建工具可执行则 swap 重建成功（0）并提交扩容收尾，不可执行
+/// （非 root、mkswap 无法操作用 loop 映射）则表已更新、swap 待重建（20）
 #[test]
-fn new_swap_relocation_refuses_before_writing() {
+fn new_swap_relocation_outcome_follows_platform_and_privilege() {
     let dir = std::env::temp_dir().join(format!("diskedit_swgate_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
@@ -292,64 +293,46 @@ fn new_swap_relocation_refuses_before_writing() {
     write_swap_fixture(&img);
     let exe = env!("CARGO_BIN_EXE_DiskEdit");
     let img_s = img.to_str().unwrap();
-    let ckpt = sidecar(&dir, "s.img", CHECKPOINT_SUFFIX);
 
-    let run = |path_dir: &std::path::Path| -> (i32, String) {
-        let out = Command::new(exe)
-            .args(["apply", img_s, "--grow", "1", "--no-fs"])
-            .env("PATH", path_dir)
-            .output()
-            .unwrap();
-        (out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stderr).into_owned())
-    };
+    let out = Command::new(exe)
+        .args(["apply", img_s, "--grow", "1", "--no-fs"])
+        .output()
+        .unwrap();
+    let code = out.status.code().unwrap_or(-1);
+    let stderr = String::from_utf8_lossy(&out.stderr);
 
-    // 空 PATH：Linux 上报缺 mkswap；非 Linux 上平台闸先拒绝
-    let empty = dir.join("path-empty");
-    std::fs::create_dir_all(&empty).unwrap();
-    let (code, stderr) = run(&empty);
-    assert_eq!(code, 30, "a new swap relocation must stop before any write: {stderr}");
-    #[cfg(target_os = "linux")]
-    assert!(stderr.contains("mkswap"), "the refusal must name the missing tool: {stderr}");
-    #[cfg(not(target_os = "linux"))]
-    assert!(stderr.contains("requires Linux"), "the refusal must name the platform gate: {stderr}");
-    assert!(!ckpt.exists(), "a refusal must not create a checkpoint");
-
-    // 只放一个假的 mkswap（预检失败前不会启动它）：Linux 上镜像目标还缺 losetup
-    let only_mkswap = dir.join("path-mkswap");
-    std::fs::create_dir_all(&only_mkswap).unwrap();
-    let fake = only_mkswap.join("mkswap");
-    std::fs::write(&fake, b"").unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
-    let (code, stderr) = run(&only_mkswap);
-    assert_eq!(code, 30, "a new swap relocation must stop before any write: {stderr}");
-    #[cfg(target_os = "linux")]
-    assert!(stderr.contains("losetup"), "the refusal must name the missing tool: {stderr}");
-    #[cfg(not(target_os = "linux"))]
-    assert!(stderr.contains("requires Linux"), "the refusal must name the platform gate: {stderr}");
-    assert!(!ckpt.exists(), "a refusal must not create a checkpoint");
-
-    // 非 Linux 上即便两个工具名都在 PATH，平台闸仍须先拒绝：不能先写表再 pending
     #[cfg(not(target_os = "linux"))]
     {
-        let both = dir.join("path-both");
-        std::fs::create_dir_all(&both).unwrap();
-        std::fs::write(both.join("mkswap"), b"").unwrap();
-        std::fs::write(both.join("losetup"), b"").unwrap();
-        let (code, stderr) = run(&both);
-        assert_eq!(code, 30, "a non-Linux host must stop even with both tools in PATH: {stderr}");
+        assert_eq!(code, 30, "a non-Linux host must stop before writing: {stderr}");
         assert!(stderr.contains("requires Linux"), "the refusal must name the platform gate: {stderr}");
-        assert!(!ckpt.exists(), "a refusal must not create a checkpoint");
+        assert!(!sidecar(&dir, "s.img", CHECKPOINT_SUFFIX).exists(), "a refusal must not create a checkpoint");
+        let mut f = std::fs::File::open(&img).unwrap();
+        let gpt = gptman::GPT::find_from(&mut f).unwrap();
+        assert_eq!((gpt[1].starting_lba, gpt[1].ending_lba), (2048, 6143), "root unchanged");
+        assert_eq!((gpt[2].starting_lba, gpt[2].ending_lba), (6144, 8191), "swap unchanged");
     }
 
-    // 以上拒绝都没有动表
-    let mut f = std::fs::File::open(&img).unwrap();
-    let gpt = gptman::GPT::find_from(&mut f).unwrap();
-    assert_eq!((gpt[1].starting_lba, gpt[1].ending_lba), (2048, 6143), "root unchanged");
-    assert_eq!((gpt[2].starting_lba, gpt[2].ending_lba), (6144, 8191), "swap unchanged");
+    #[cfg(target_os = "linux")]
+    {
+        // effective UID 取自 /proc/self/status 的 Uid: 行（proc(5)：四列依次为
+        // real/effective/saved/filesystem，取第 2 列）；测试层不引入 libc 依赖
+        let is_root = std::fs::read_to_string("/proc/self/status")
+            .ok()
+            .and_then(|s| s.lines().find(|l| l.starts_with("Uid:")).map(str::to_string))
+            .and_then(|l| l.split_whitespace().nth(2).map(|f| f == "0"))
+            .unwrap_or(false);
+        let mut f = std::fs::File::open(&img).unwrap();
+        let gpt = gptman::GPT::find_from(&mut f).unwrap();
+        assert_eq!((gpt[2].starting_lba, gpt[2].ending_lba), (30687, 32734), "swap entry relocated to the tail");
+        if is_root {
+            assert_eq!(code, 0, "root: the swap rebuild must succeed: {stderr}");
+            assert_eq!(gpt[1].ending_lba, 30686, "root grows up to the relocated swap");
+        } else {
+            assert_eq!(code, 20, "non-root: the swap step is pending → PARTIAL: {stderr}");
+            assert!(stderr.contains("swap rebuild") && stderr.contains("mkswap"), "remedy must be printed: {stderr}");
+            assert_eq!(gpt[1].ending_lba, 6143, "growth must not be committed while the swap rebuild is pending");
+        }
+    }
 
     let _ = std::fs::remove_dir_all(&dir);
 }
