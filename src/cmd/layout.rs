@@ -5,9 +5,13 @@ use crate::args::Args;
 use crate::fsops::MkfsFs;
 use crate::{movepart, table};
 
-pub(crate) const HELP_NEW: &str = r#"diskedit new <TARGET> [--table gpt|msdos] --yes
+pub(crate) const HELP_NEW: &str = r#"diskedit new <TARGET> [--table gpt|msdos] --yes [--overwrite-partition-data]
 
-  Create a fresh partition table; overwrites any existing one. Default gpt."#;
+  Create a fresh partition table; overwrites any existing one. Default gpt.
+  Drawing a table writes the entry arrays at the front of the disk and, for
+  gpt, a backup copy in the last sectors — bytes an existing partition may
+  hold. Such a collision is refused and named; --overwrite-partition-data
+  accepts overwriting those bytes (--yes alone only confirms the rebuild)."#;
 
 pub(crate) const HELP_ADD: &str = r#"diskedit add <TARGET> --start LBA --end LBA [--name S] [--type T] [--align A]
 
@@ -68,7 +72,11 @@ pub(crate) fn cmd_new(a: &Args) -> crate::outcome::Outcome {
     // 该分区的数据（512B 扇区下 ext 超级块在 +1024）。建表只认整设备
     refuse_partition_node_target("new", &a.target);
     if !a.yes {
-        bail_fail(Fail::refused("`new` overwrites any existing partition table; pass --yes to confirm"));
+        bail_fail(Fail::refused(
+            "`new` rebuilds the partition table over any existing one, and the bytes it writes can land inside \
+             existing partitions (entry arrays at the front, and for gpt a backup copy in the last sectors); \
+             pass --yes to confirm",
+        ));
     } else {
         let kind = a.table.unwrap_or(table::TableKind::Gpt);
         let mut src = open_target_for_write(a).unwrap_or_else(|f| bail_fail(f));
@@ -82,11 +90,14 @@ pub(crate) fn cmd_new(a: &Args) -> crate::outcome::Outcome {
         preflight.unwrap_or_else(|f| bail_fail(f));
         // GPT 的主数组与盘尾备份区都是表结构写入：旧表若把分区铺到任一段，这次写入
         // 就是清零分区数据。相交即按可证事实拒绝并点名；旧表读不出来时只告警
-        // （new 本就是重建表的命令）
+        // （new 本就是重建表的命令）。`--yes` 只确认"重建表"，覆盖分区字节要另一项
+        // 明确授权，故相交时才要求 --overwrite-partition-data
         if kind == table::TableKind::Gpt {
             match table::gpt_metadata_conflict(&src, ss) {
-                Ok(Some(why)) => bail_fail(Fail::refused(why)),
-                Ok(None) => {}
+                Ok(Some(why)) if !a.overwrite_partition_data => bail_fail(Fail::refused(format!(
+                    "{why} — pass --overwrite-partition-data to accept overwriting those bytes"
+                ))),
+                Ok(Some(_)) | Ok(None) => {}
                 Err(e) => eprintln!(
                     "warning: cannot check the existing table against the GPT metadata this new table writes ({e})"
                 ),
