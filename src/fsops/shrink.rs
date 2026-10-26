@@ -48,6 +48,15 @@ pub struct ShrinkOutcome {
 /// 而非"≤ 当前 FS 大小"：FS 小于分区时（曾扩过分区或中断过的现场）此调用实为扩容，
 /// 方向良性——FS 工具把 FS 对到目标尺寸即可，不构成失败
 pub fn shrink_fs(src: &FileSource, part: u32, fstype: Option<FsKind>, new_bytes: u64) -> Result<ShrinkOutcome, FsError> {
+    let r = shrink_fs_step(src, part, fstype, new_bytes);
+    // 成功才提示：失败路径已有的"盘可能已改变"警示不额外承担回滚范围的说明
+    if r.is_ok() {
+        crate::outcome::note_fs_writes_not_journaled();
+    }
+    r
+}
+
+fn shrink_fs_step(src: &FileSource, part: u32, fstype: Option<FsKind>, new_bytes: u64) -> Result<ShrinkOutcome, FsError> {
     match fstype {
         Some(FsKind::Ext) => {
             // 纯参数校验必须在任何写盘之前：e2fsck -fp 本身会写盘，把它排在后面

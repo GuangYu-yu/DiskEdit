@@ -144,6 +144,15 @@ pub fn resize_fs_whole(src: &FileSource, fstype: Option<FsKind>) -> Result<Optio
 /// - vfat：`fatresize -s max <dev>`（扩满设备，man fatresize）
 /// - 其余（exfat/swap…）：无已接线的扩容工具，显式拒绝
 pub(crate) fn resize_fs_in(src: &FileSource, scope: &DeviceScope, fstype: Option<FsKind>) -> Result<Option<MountLeak>, FsError> {
+    let r = resize_fs_step(src, scope, fstype);
+    // 成功才提示：失败路径已有的"盘可能已改变"警示不额外承担回滚范围的说明
+    if r.is_ok() {
+        crate::outcome::note_fs_writes_not_journaled();
+    }
+    r
+}
+
+fn resize_fs_step(src: &FileSource, scope: &DeviceScope, fstype: Option<FsKind>) -> Result<Option<MountLeak>, FsError> {
     match fstype {
         // fsid 识别只给 0xEF53，区分不出 2/3/4；resize2fs 对三者通用（man resize2fs）
         Some(FsKind::Ext) => with_scope_device(src, scope, |dev| {
