@@ -122,6 +122,15 @@ pub(crate) fn refuse_unconsumed_flags(cmd: &str, a: &Args) {
     }
 }
 
+/// 裸 help 请求（`help` / `--help` / `-h`，无主题）不消费任何旗标。不查的话
+/// `diskedit help --yes` 会在 usage_help 直接退 0，`--bogs` 更不会被认出——
+/// 帮助请求于是成了参数校验的旁路，与 [`refuse_unconsumed_flags`] 同一条判据相悖
+pub(crate) fn refuse_flags_on_bare_help(a: &Args) {
+    if let Some(f) = a.seen.first() {
+        bail_fail(Fail::refused(format!("{f} is not a valid option for `help` (see diskedit help)")));
+    }
+}
+
 pub(crate) fn parse_args() -> (String, Args) {
     // `env::args()` 遇非 UTF-8 参数会 panic（退出码 101，越出 0/10/20/30 契约）。
     // 换成 args_os 后逐个转 &str：转不动就是一次可读的用法拒绝，而不是崩溃
@@ -285,14 +294,20 @@ pub(crate) fn parse_args() -> (String, Args) {
                 refuse_unconsumed_flags(&t, &a);
                 help_cmd(&t);
             }
-            None => usage_help(),
+            None => {
+                refuse_flags_on_bare_help(&a);
+                usage_help()
+            }
         }
     }
     // 无 target（含裸调用/未知命令缺参）时打印帮助而非静默退出；但命令位本身就是
     // help 请求（`help` / `--help` / `-h` 且无主题）时是主动求助，退 0
     let target = match positional.first() {
         Some(t) => t.clone(),
-        None if matches!(cmd.as_str(), "help" | "--help" | "-h") => usage_help(),
+        None if matches!(cmd.as_str(), "help" | "--help" | "-h") => {
+            refuse_flags_on_bare_help(&a);
+            usage_help()
+        }
         None => usage(),
     };
     let (target, part) =

@@ -186,8 +186,24 @@ pub fn parse_mbr(src: &FileSource) -> io::Result<Option<Vec<MbrPartition>>> {
     Ok(Some(raw.parts))
 }
 
-/// LBA0 写入 + 读回复核：msdos 的六个写原语共用这一处。
+/// msdos 写原语的公共入口闸：盘型是 msdos，**且**这张表可操作。
 ///
+/// 两个问题分开表达：[`table_label`] 回答"这是哪种表"——损伤不改变盘型，观察路径靠它
+/// 照实报 `mbr`；而写原语要的是"这张表能改"，损伤由 [`parse_mbr`] 拒绝。此前写命令
+/// 借 table_label 的 Err 当闸，等于让盘型判定替可操作性背书：一张条目越界的盘上，
+/// 连删分区之外的写命令都报成"读不出盘型"
+fn require_writable_mbr(src: &FileSource) -> Result<(), Fail> {
+    match parse_mbr(src) {
+        Ok(Some(_)) => Ok(()),
+        Ok(None) => Err(Fail::refused("not an msdos-labelled image")),
+        // InvalidData 是"条目读出来了但不可操作"（越界 / 起点 0 / 两两重叠）：请求本身
+        // 仍在写盘之前，按 Refused 出口，文案沿用解析侧的损伤描述；其余才是读盘故障
+        Err(e) if e.kind() == io::ErrorKind::InvalidData => Err(Fail::refused(e.to_string())),
+        Err(e) => Err(Fail::infra_io(e)),
+    }
+}
+
+/// LBA0 写入 + 读回复核：msdos 的六个写原语共用这一处。
 /// `sync_all` 只说明字节交给了设备，缓存丢写与镜像层短写要在重读时才可见；写调用
 /// 已经发生，故不符或读不回都落 `Fail::failed`（盘可能已改），不得报 Infra。
 /// LBA0 被丢掉而这里报成功，盘随后会被读成一张旧表，写命令全部拒
@@ -217,6 +233,7 @@ pub fn resize_mdos_entry(src: &mut WriteSource, part: u32, new_size_lba: u32) ->
     if !(1..=4).contains(&part) {
         return Err(Fail::refused(format!("invalid MBR partition number {part} (1..4)")));
     }
+    require_writable_mbr(src)?;
     let ss = src.sector_size as usize;
     if src.size < ss as u64 {
         return Err(Fail::infra("image too small for MBR"));
@@ -325,9 +342,7 @@ pub fn add_mdos_entry(src: &mut WriteSource, start: u64, end: u64, os_type: u8) 
         return Err(Fail::refused("extended-container types (0x05/0x0F/0x85) are not supported — logical partitions are out of scope"));
     }
     let ss = src.sector_size;
-    if !is_mdos_label(src).map_err(|e| Fail::infra(e.to_string()))? {
-        return Err(Fail::refused("not an msdos-labelled image"));
-    }
+    require_writable_mbr(src)?;
     let total = src.size / ss;
     if total == 0 {
         return Err(Fail::infra("image has zero sectors"));
@@ -394,6 +409,7 @@ pub fn del_mdos_entry(src: &mut WriteSource, part: u32) -> Result<(), Fail> {
     if !(1..=4).contains(&part) {
         return Err(Fail::refused("msdos supports primary slots 1..=4 only"));
     }
+    require_writable_mbr(src)?;
     let ss = src.sector_size;
     let mut lba0 = vec![0u8; ss as usize];
     src.read_at(0, &mut lba0).map_err(Fail::infra_io)?;
@@ -427,6 +443,7 @@ pub fn set_mdos_boot(src: &mut WriteSource, part: u32, on: bool) -> Result<(), F
     if !(1..=4).contains(&part) {
         return Err(Fail::refused("msdos supports primary slots 1..=4 only"));
     }
+    require_writable_mbr(src)?;
     let ss = src.sector_size;
     let mut lba0 = vec![0u8; ss as usize];
     src.read_at(0, &mut lba0).map_err(Fail::infra_io)?;
@@ -468,6 +485,7 @@ pub fn set_mdos_hidden(src: &mut WriteSource, part: u32, on: bool) -> Result<(),
     if !(1..=4).contains(&part) {
         return Err(Fail::refused("msdos supports primary slots 1..=4 only"));
     }
+    require_writable_mbr(src)?;
     let ss = src.sector_size;
     let mut lba0 = vec![0u8; ss as usize];
     src.read_at(0, &mut lba0).map_err(Fail::infra_io)?;
@@ -528,6 +546,7 @@ pub fn set_mdos_type(src: &mut WriteSource, part: u32, t: u8) -> Result<(), Fail
     if MDOS_CONTAINER_TYPES.contains(&t) {
         return Err(Fail::refused("extended-container types (0x05/0x0F/0x85) are not supported — logical partitions are out of scope"));
     }
+    require_writable_mbr(src)?;
     let ss = src.sector_size;
     let mut lba0 = vec![0u8; ss as usize];
     src.read_at(0, &mut lba0).map_err(Fail::infra_io)?;

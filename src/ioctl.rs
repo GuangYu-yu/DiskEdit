@@ -18,6 +18,22 @@ use std::fs::File;
 use std::io;
 use std::os::fd::AsRawFd;
 
+/// 被信号打断时重发：只给**读类**调用用（容量 / 逻辑块 / 重读分区表都幂等，重发不改变
+/// 任何状态）。会改内核状态的 `BLKPG_RESIZE_PARTITION` 不走这里——它的 start 必须等于
+/// 现值，若第一次已生效而被报 EINTR，重发会以 EINVAL 收场，成功反被读成失败
+fn ioctl_retry_eintr(mut call: impl FnMut() -> libc::c_int) -> io::Result<()> {
+    loop {
+        // SAFETY: 由调用方保证 call 内部的 fd 与指针在本次调用期间有效
+        if unsafe { call() } == 0 {
+            return Ok(());
+        }
+        let e = io::Error::last_os_error();
+        if e.raw_os_error() != Some(libc::EINTR) {
+            return Err(e);
+        }
+    }
+}
+
 /// 设备容量（字节）。BLKGETSIZE64 = _IOR(0x12, 114, size_t)（内核 include/uapi/linux/fs.h，
 /// 内容 u64）。libc 未导出该常量（0.2.139/0.2.186/0.2.189 实测），取 UAPI 定义自持；
 /// 编号含 size_t 宽度位，随指针宽度切换（64 位 0x8008_1272 / 32 位 0x8004_1272）
@@ -28,8 +44,8 @@ pub(crate) fn blkgetsize64(f: &File) -> io::Result<u64> {
     const BLKGETSIZE64: u64 = 0x8004_1272;
     let mut v: u64 = 0;
     // SAFETY: f 有效打开的 fd；内核仅写入 &mut v（输出方向 _IOR），调用期间指针有效
-    let r = unsafe { libc::ioctl(f.as_raw_fd() as libc::c_int, BLKGETSIZE64 as libc::Ioctl, &mut v as *mut u64) };
-    if r < 0 { Err(io::Error::last_os_error()) } else { Ok(v) }
+    ioctl_retry_eintr(|| unsafe { libc::ioctl(f.as_raw_fd() as libc::c_int, BLKGETSIZE64 as libc::Ioctl, &mut v as *mut u64) })?;
+    Ok(v)
 }
 
 /// 逻辑扇区大小（字节）。BLKSSZGET = _IO(0x12, 104)（include/uapi/linux/fs.h），
@@ -37,8 +53,8 @@ pub(crate) fn blkgetsize64(f: &File) -> io::Result<u64> {
 pub(crate) fn blksszget(f: &File) -> io::Result<u32> {
     let mut v: u32 = 0;
     // SAFETY: f 有效打开的 fd；内核仅写入 &mut v，调用期间指针有效
-    let r = unsafe { libc::ioctl(f.as_raw_fd() as libc::c_int, libc::BLKSSZGET as libc::Ioctl, &mut v as *mut u32) };
-    if r < 0 { Err(io::Error::last_os_error()) } else { Ok(v) }
+    ioctl_retry_eintr(|| unsafe { libc::ioctl(f.as_raw_fd() as libc::c_int, libc::BLKSSZGET as libc::Ioctl, &mut v as *mut u32) })?;
+    Ok(v)
 }
 
 /// 通知内核重读分区表。BLKRRPART = _IO(0x12, 95)（include/uapi/linux/fs.h），
@@ -46,8 +62,7 @@ pub(crate) fn blksszget(f: &File) -> io::Result<u32> {
 pub(crate) fn blkrrpart(f: &File) -> io::Result<()> {
     const BLKRRPART: u64 = 0x125F;
     // SAFETY: f 有效打开的 fd；无指针参数
-    let r = unsafe { libc::ioctl(f.as_raw_fd() as libc::c_int, BLKRRPART as libc::Ioctl, 0u32) };
-    if r < 0 { Err(io::Error::last_os_error()) } else { Ok(()) }
+    ioctl_retry_eintr(|| unsafe { libc::ioctl(f.as_raw_fd() as libc::c_int, BLKRRPART as libc::Ioctl, 0u32) })
 }
 
 /// include/uapi/linux/blkpg.h 的 blkpg_partition（start/length 单位 = 字节，

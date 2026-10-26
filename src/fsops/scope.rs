@@ -44,11 +44,21 @@ impl ScopeDevice {
 impl Drop for ScopeDevice {
     fn drop(&mut self) {
         if self.is_loop {
-            // 丢弃返回值不丢信息：`detach_loop` 的每条失败路径（losetup 非零退出、起不来、
-            // udevadm settle 超时）都在内部打印 warning 并给出处置命令——映射已解除这一
-            // 事实与"设备可能仍占着"这一风险都不是 `Drop` 能改变的结论
-            detach_loop(&self.path);
+            release_loop(&self.path);
         }
+    }
+}
+
+/// 撤销 loop 映射并把失败浮出：`Drop` 不能改返回值，故记入进程级清单，由 `main`
+/// 在成功路径上把退出码降为"完成但有待办"。映射已解除的正常情形不产生任何输出
+pub(crate) fn release_loop(loopdev: &str) {
+    if let Some(why) = release_failure(detach_loop(loopdev)) {
+        let msg = format!(
+            "loop device {loopdev} was not detached ({why}) — the image may still be held by it; \
+             release it with `losetup -d {loopdev}`"
+        );
+        eprintln!("warning: {msg}");
+        note_release_leak(msg);
     }
 }
 
@@ -142,7 +152,7 @@ pub(crate) fn resolve_scope_device(
                 let loopdev = attach_loop(src, off, len)?;
                 // require 失败也要先 detach 再返回错误，? 短路会漏掉 detach
                 if let Err(e) = require_unmounted(&loopdev) {
-                    detach_loop(&loopdev);
+                    release_loop(&loopdev);
                     return Err(e);
                 }
                 Ok(ScopeDevice { path: loopdev, is_loop: true })
@@ -176,7 +186,7 @@ pub(crate) fn resolve_scope_device(
     let loopdev = attach_loop(src, off, len)?;
     // require 失败也要先 detach 再返回错误，? 短路会漏掉 detach
     if let Err(e) = require_unmounted(&loopdev) {
-        detach_loop(&loopdev);
+        release_loop(&loopdev);
         return Err(e);
     }
     Ok(ScopeDevice { path: loopdev, is_loop: true })
