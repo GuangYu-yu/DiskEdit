@@ -15,7 +15,7 @@
 //! 本次操作的权限范围。首选名被别的文件占用时顺延到 `.abandoned.N`——既不覆盖，也不
 //! 因为"名字被占了"而把目标锁死；同一个 inode 的残局则直接收敛（判据是 inode，不是文件名）
 
-use crate::dev::{suffix_path, FileSource, RecoveryData, TargetIdentity};
+use crate::dev::{suffix_path, FileSource, Journal, RecoveryData, TargetIdentity};
 use crate::support::{
     active_recovery_records, bail_fail, refuse_partition_node_target,
     RecoveryRecord, EXIT_OK, Fail,
@@ -59,18 +59,21 @@ pub(crate) fn cmd_abandon(a: &Args) -> u8 {
     // 历史命名（按 GPT Disk GUID）的 checkpoint 只对 Block 语义的身份存在；那份 GUID
     // 只能打开目标读表拿到。abandon 只碰恢复现场、不碰盘上字节，没有理由要求排他写
     // 打开；打不开时由 checkpoint_candidates 记成"存在但不可枚举"，不再假装没有。
-    // loop 归一后身份是 Image kind，但其历史落点按 Block 规则生成，同样要走这条路径
+    // loop 归一后身份是 Image kind，但其历史落点按 Block 规则生成，同样要走这条路径。
+    // 镜像也按只读打开一次：候选头里的目标身份要与当前目标比一遍（见 abandon_records）；
+    // 打不开（目标已不存在）只影响这次比对，现场照常放弃
     let disk = if identity.has_block_legacy_naming() {
         FileSource::open_read_only(path).ok()
     } else {
-        // 镜像不必打开内容：abandon 只改目标的兄弟文件，碰不到盘上字节
-        None
+        FileSource::open_read_only_image(path, None).ok()
     };
     abandon_records(&identity, disk.as_ref())
 }
 
 fn abandon_records(identity: &TargetIdentity, disk: Option<&FileSource>) -> u8 {
     let records = active_recovery_records(identity, disk);
+    // 比对候选头身份用的当前目标现场：目标打不开时为 None，比对跳过、候选按现状处理
+    let scene = disk.map(|d| d.scene());
     if records.is_empty() {
         // 幂等：目标已经是"没有 active transaction"，空跑即成功
         println!("nothing to abandon: no unfinished operation on this target");
@@ -116,11 +119,20 @@ fn abandon_records(identity: &TargetIdentity, disk: Option<&FileSource>) -> u8 {
     }
 
     let mut failed: Vec<String> = Vec::new();
+    // 首部可读、且头里的身份与当前目标不符的候选。它们照常改名（abandon 的职责是把
+    // 目标从现场里释放出来），但这份凭据属于另一个目标场景，必须在总结里点名
+    let mut foreign: Vec<String> = Vec::new();
     for r in &records {
         let Some(from) = r.path() else {
-            // 无法枚举的那份：没有路径可改名，只能如实计入未完成并给出下一步
+            // 无法枚举的那份：没有路径可改名，只能如实计入未完成并给出下一步。
+            // 成因决定下一步：目标打不开先恢复设备可访问，表读不出才谈得上修表
+            let next = if disk.is_none() {
+                "restore access to the target (it could not be opened), then re-run"
+            } else {
+                "repair the target's table, then re-run"
+            };
             failed.push(format!(
-                "an unenumerable checkpoint exists but cannot be named ({}) — repair the target's table, then re-run",
+                "an unenumerable checkpoint exists but cannot be named ({}) — {next}",
                 match r {
                     RecoveryRecord::UnenumerableCheckpoint { reason } => reason.as_str(),
                     _ => unreachable!("path() is None only for UnenumerableCheckpoint"),
@@ -128,12 +140,46 @@ fn abandon_records(identity: &TargetIdentity, disk: Option<&FileSource>) -> u8 {
             ));
             continue;
         };
-        if let Err(e) = abandon_one(from) {
-            failed.push(format!("{}: {e}", from.display()));
+        // journal 的身份只在头里，读得出就与当前目标比一遍。checkpoint 的身份要连同
+        // 记录与几何一起解析，而 abandon 不解析表，故这一族维持现状
+        let mut foreign_why: Option<String> = None;
+        if let RecoveryRecord::Journal { path, .. } = r {
+            if let (Ok(recorded), Some(live)) = (Journal::read_identity(path), scene.as_ref()) {
+                if let Some(why) = crate::dev::scene_mismatch(&recorded, live) {
+                    eprintln!(
+                        "warning: {} was recorded for another target scene ({why}) — abandoning it here gives up \
+                         that target's rollback evidence if it returns to this path; the record is still released \
+                         so this target can be made writable again",
+                        path.display()
+                    );
+                    foreign_why = Some(format!("{} ({why})", path.display()));
+                }
+            }
+        }
+        match abandon_one(from) {
+            Ok(_) => {
+                if let Some(item) = foreign_why {
+                    foreign.push(item);
+                }
+            }
+            Err(e) => failed.push(format!("{}: {e}", from.display())),
         }
     }
+    let foreign_note = if foreign.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "; {} record(s) were recorded for another target scene, which loses that rollback evidence if it \
+             returns to this path: {}",
+            foreign.len(),
+            foreign.join(", ")
+        )
+    };
     if failed.is_empty() {
-        println!("abandoned {} recovery record(s) on this target", records.len());
+        println!(
+            "abandoned {} recovery record(s) on this target{foreign_note}",
+            records.len()
+        );
         EXIT_OK
     } else {
         // 已经改成的那些不会退回，所以这不是"什么都没做"——但也不是盘上状态被改坏。
@@ -143,7 +189,7 @@ fn abandon_records(identity: &TargetIdentity, disk: Option<&FileSource>) -> u8 {
         // 不含"表可能已写"的含义，两个命令的出口不互相参照
         let done = records.len() - failed.len();
         bail_fail(Fail::infra(format!(
-            "abandoned {done} of {} recovery record(s) on this target; the rest failed ({}) — re-run `diskedit abandon` to converge",
+            "abandoned {done} of {} recovery record(s) on this target; the rest failed ({}) — re-run `diskedit abandon` to converge{foreign_note}",
             records.len(),
             failed.join("; ")
         )))
@@ -188,17 +234,32 @@ fn abandon_one(from: &std::path::Path) -> std::io::Result<std::path::PathBuf> {
                 continue;
             }
             // 该文件系统不支持硬链接（FAT/exFAT、部分网络 FS——镜像常就放在这类盘上，
-            // 现场文件就在镜像旁边）：退到 rename。它会覆盖同名文件，故只在名字空闲时用；
-            // 本命令持目标锁，窗口内不会有第二个 diskedit 来抢名字。这里的选择是"宁可退到
-            // 会覆盖的 rename"，不能是"在不支持硬链接的盘上永远无法释放现场"
-            Err(_) if !to.exists() => {
-                std::fs::rename(from, &to)?;
-                crate::dev::best_effort_dir_fsync(from);
-                return Ok(to);
+            // 现场文件就在镜像旁边）：退到 rename。rename 会覆盖同名文件，所以先用
+            // create_new 原子占住名字（占位是空文件），再由 rename 覆盖本进程刚建的这个
+            // 占位——"名字空闲"的判据是 create_new 的返回值，不是 stat。占位已被占用
+            // （另一次放弃留下的记录）就顺延 .N。本命令持目标锁，窗口内不会有第二个
+            // diskedit 来抢名字。这里的选择是"宁可退到 rename"，不能是"在不支持硬链接的
+            // 盘上永远无法释放现场"
+            Err(_) => {
+                match std::fs::OpenOptions::new().write(true).create_new(true).open(&to) {
+                    Ok(_) => match std::fs::rename(from, &to) {
+                        Ok(()) => {
+                            // 改名转换要落盘目录项：否则掉电后原件可能复活，目标重新被判成 busy
+                            crate::dev::best_effort_dir_fsync(from);
+                            return Ok(to);
+                        }
+                        Err(e) => {
+                            // 占位删不掉只会留下一个空文件，不改变"这次改名失败"的结论
+                            let _placeholder_gone = std::fs::remove_file(&to);
+                            return Err(e);
+                        }
+                    },
+                    // 名字已被另一份放弃记录占用：顺延 .N。占用本身不能成为拒绝理由——
+                    // 拒绝会让目标永久锁死
+                    Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                    Err(e) => return Err(e),
+                }
             }
-            // 名字已被另一份放弃记录占用：顺延 .N。硬链接失败的原因与占用是两件事，
-            // 占用本身不能成为拒绝理由——拒绝会让目标永久锁死
-            Err(_) => continue,
         }
     }
     Err(std::io::Error::other("no free abandoned name available"))

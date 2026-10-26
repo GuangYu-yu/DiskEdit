@@ -157,7 +157,7 @@ fn resize_fs_step(src: &FileSource, scope: &DeviceScope, fstype: Option<FsKind>)
         // fsid 识别只给 0xEF53，区分不出 2/3/4；resize2fs 对三者通用（man resize2fs）
         Some(FsKind::Ext) => with_scope_device(src, scope, |dev| {
             let out = run("e2fsck", &["-fp", dev])?;
-            check_e2fsck_for_resize(out.status.code().unwrap_or(-1))?;
+            check_e2fsck_status_for_resize(&out.status)?;
             let out = run("resize2fs", &[dev]).map_err(|e| tool_write_maybe_started("resize2fs", dev, e))?;
             if !out.status.success() {
                 return Err(FsError::command("resize2fs", &out));
@@ -188,11 +188,11 @@ fn resize_fs_step(src: &FileSource, scope: &DeviceScope, fstype: Option<FsKind>)
             let out = run("fsck.f2fs", &[dev])?;
             if !out.status.success() {
                 return Err(FsError::CommandFailed(format!(
-                    "fsck.f2fs failed (exit {}), refuse resize",
-                    out.status.code().unwrap_or(-1)
+                    "fsck.f2fs failed ({}), refuse resize",
+                    describe_exit(&out.status)
                 )));
             }
-            let out = run("resize.f2fs", &[dev])?;
+            let out = run("resize.f2fs", &[dev]).map_err(|e| tool_write_maybe_started("resize.f2fs", dev, e))?;
             if !out.status.success() {
                 return Err(FsError::command("resize.f2fs", &out));
             }

@@ -77,6 +77,38 @@ pub(crate) fn part_dev_hint(src: &FileSource, part: u32, offset_bytes: u64) -> S
     }
 }
 
+/// `/dev` 下的节点必须与 sysfs 记录的设备号同源：名字只是路径，实际写入落点由设备号
+/// 决定。盘名/分区名都由 sysfs 目录名推得，同名节点若指向另一台设备，"几何来自 A、
+/// 写入落在 B"——sfdisk / partx / BLKPG / pvresize 只拿到这个路径，无从自行发现
+#[cfg(target_os = "linux")]
+pub(crate) fn ensure_node_is_device(node: &Path, sys_dir: &Path) -> io::Result<()> {
+    use std::os::linux::fs::MetadataExt;
+    use std::os::unix::fs::FileTypeExt;
+    let want = std::fs::read_to_string(sys_dir.join("dev"))
+        .map_err(|e| io::Error::other(format!("cannot read the sysfs device number of {}: {e}", sys_dir.display())))?;
+    let Some((dmaj, dmin)) = want
+        .trim()
+        .split_once(':')
+        .and_then(|(a, b)| Some((a.parse::<u32>().ok()?, b.parse::<u32>().ok()?)))
+    else {
+        return Err(io::Error::other(format!("unparsable sysfs device number {want:?} in {}", sys_dir.display())));
+    };
+    let md = std::fs::metadata(node)
+        .map_err(|e| io::Error::other(format!("device node {} is unusable: {e}", node.display())))?;
+    if !md.file_type().is_block_device() {
+        return Err(io::Error::other(format!("{} is not a block device node", node.display())));
+    }
+    let (nmaj, nmin) = (libc::major(md.st_rdev()), libc::minor(md.st_rdev()));
+    if (nmaj, nmin) != (dmaj, dmin) {
+        return Err(io::Error::other(format!(
+            "{} is device {nmaj}:{nmin} but sysfs reports {dmaj}:{dmin} for {} — refusing to write through a mismatched node",
+            node.display(),
+            sys_dir.display()
+        )));
+    }
+    Ok(())
+}
+
 /// 删除一份恢复现场（journal / checkpoint）并落盘目录项。删除成功（或本就不存在）
 /// 后 fsync 父目录：unlink 不落盘时掉电后文件可能复活，把已完成的事务报成未收尾现场。
 /// 返回删除的**后置条件**是否成立；目录项未能落盘时也返回 false——文件此刻不在，

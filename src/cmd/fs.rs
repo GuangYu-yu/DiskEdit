@@ -217,14 +217,20 @@ pub(crate) fn cmd_resizefs(a: &Args) -> u8 {
         }
         match target.resize_fs(&src) {
             Ok(leak) => {
-                // 清理待办在此只以告警呈现：本命令的成功出口保持 0。resizefs 只扩 FS、不写
-                // 分区表，卸载未完成不构成"表已改"的待办，故不计入 pending（对比 cmd/resize
-                // 的 msdos 路径：那里表写入紧随 FS 步骤，同一待办计入 pending、出口 20）
-                if let Some(leak) = leak {
-                    eprintln!("warning: {leak}");
-                }
+                // 挂载点没卸掉是一条未完成的后置条件：它随成功结果浮出，退出码因此是 20；
+                // 成功行照常打印
+                let pending = match leak {
+                    Some(leak) => {
+                        eprintln!("warning: {leak}");
+                        vec![leak.into_pending(part)]
+                    }
+                    None => Vec::new(),
+                };
                 println!("resized (verify with: diskedit info {})", a.target);
-                EXIT_OK
+                // 待办必须让人看到：本命令只返回退出码，没有别处会把它呈现出来
+                let out = Outcome::applied_with(pending);
+                out.report();
+                out.exit_code()
             }
             Err(e) => bail_fail(Fail::from(e)),
         }

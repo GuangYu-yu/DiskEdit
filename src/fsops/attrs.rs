@@ -43,11 +43,12 @@ pub fn check_fs(src: &FileSource, part: u32, fstype: Option<FsKind>) -> Result<(
     })
 }
 
-/// 设置 FS label。值原样传给各 FS 官方工具。
-/// 来源：tune2fs -L（man tune2fs）、xfs_admin -L ≤12 字符（man xfs_admin）、
-/// btrfs filesystem label ≤256 字符（man btrfs-filesystem）、ntfslabel（man ntfslabel）、
-/// fatlabel ≤11 字节（man fatlabel）、exfatlabel（man exfatlabel）、
-/// swaplabel -L（man swaplabel，标签写进 swap 头的 volume_name[16]）
+/// 设置 FS label。值原样传给各 FS 官方工具；卷标落在定长字段里的类型在此按字段容量前置
+/// 校验，超出即拒绝——截断与拒绝是两种结局，本层不把它们合并成一次"设置成功"。
+/// 来源：tune2fs -L（man tune2fs）、xfs_admin -L ≤12 字节（man xfs_admin）、
+/// btrfs 超级块 label（含结尾 NUL 共 256 字节）、ntfslabel 的 128 个 UTF-16 码元字段、
+/// fatlabel ≤11 个字符（fatlabel.c 的 mbstowcs 计数）、exfatlabel 的 11 个 UTF-16 码元字段、
+/// swaplabel -L 的 volume_name[16]（xstrncpy 至多 15 字节）
 pub fn set_label(src: &FileSource, part: u32, fstype: Option<FsKind>, label: &str) -> Result<(), FsError> {
     with_partition_device(src, part, |dev| {
         let (tool, args): (&str, Vec<String>) = match fstype {
@@ -63,11 +64,58 @@ pub fn set_label(src: &FileSource, part: u32, fstype: Option<FsKind>, label: &st
                 }
                 ("xfs_admin", vec!["-L".into(), label.into(), dev.into()])
             }
-            Some(FsKind::Btrfs) => ("btrfs", vec!["filesystem".into(), "label".into(), dev.into(), label.into()]),
-            Some(FsKind::Ntfs) => ("ntfslabel", vec![dev.into(), label.into()]),
-            Some(FsKind::Vfat) => ("fatlabel", vec![dev.into(), label.into()]),
-            Some(FsKind::Exfat) => ("exfatlabel", vec![dev.into(), label.into()]),
-            Some(FsKind::Swap) => ("swaplabel", vec!["-L".into(), label.into(), dev.into()]),
+            // 超级块 label 含结尾 NUL 共 256 字节，超出时 btrfs 拒绝，故提前按字节拒绝
+            Some(FsKind::Btrfs) => {
+                if label.len() > 255 {
+                    return Err(FsError::invalid(format!(
+                        "btrfs label exceeds 255 bytes (got {}); btrfs would reject it",
+                        label.len()
+                    )));
+                }
+                ("btrfs", vec!["filesystem".into(), "label".into(), dev.into(), label.into()])
+            }
+            // 卷标字段 128 个 UTF-16 码元，超出时 ntfslabel 截断，故提前拒绝
+            Some(FsKind::Ntfs) => {
+                let units = label.encode_utf16().count();
+                if units > 128 {
+                    return Err(FsError::invalid(format!(
+                        "ntfs label exceeds 128 UTF-16 units (got {units}); ntfslabel would truncate it"
+                    )));
+                }
+                ("ntfslabel", vec![dev.into(), label.into()])
+            }
+            // 卷标字段 11 字节；fatlabel 按字符数把关（fatlabel.c 的 mbstowcs 计数 > 11
+            // 即退出 1），故这里前置同一判据；编码进 DOS 代码页由工具自己做
+            Some(FsKind::Vfat) => {
+                let chars = label.chars().count();
+                if chars > 11 {
+                    return Err(FsError::invalid(format!(
+                        "vfat label exceeds 11 characters (got {chars}); fatlabel would reject it"
+                    )));
+                }
+                ("fatlabel", vec![dev.into(), label.into()])
+            }
+            // 卷标字段 11 个 UTF-16 码元，超出时 exfatlabel 以 E2BIG 拒绝，故提前拒绝
+            Some(FsKind::Exfat) => {
+                let units = label.encode_utf16().count();
+                if units > 11 {
+                    return Err(FsError::invalid(format!(
+                        "exfat label exceeds 11 UTF-16 units (got {units}); exfatlabel would reject it"
+                    )));
+                }
+                ("exfatlabel", vec![dev.into(), label.into()])
+            }
+            // volume_name[16] 留结尾 NUL，xstrncpy 至多复制 n-1 字节，故 15 字节是上限；
+            // 超出时 swaplabel 截断，故提前按字节拒绝
+            Some(FsKind::Swap) => {
+                if label.len() > 15 {
+                    return Err(FsError::invalid(format!(
+                        "swap label exceeds 15 bytes (got {}); swaplabel would truncate it",
+                        label.len()
+                    )));
+                }
+                ("swaplabel", vec!["-L".into(), label.into(), dev.into()])
+            }
             other => return Err(FsError::unsupported(format!("no label tool wired for {}", fs_name(other)))),
         };
         let argrefs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();

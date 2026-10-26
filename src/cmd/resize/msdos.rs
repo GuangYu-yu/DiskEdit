@@ -305,11 +305,15 @@ pub(crate) fn cmd_resize_msdos(a: &Args, pref: PartSelector, req: &SizeRequest, 
             // 认得 / 工具是否齐备只写一份
             fsops::check_shrink(fstype, is_block, fsops::needs_loop(&fsops::DeviceScope::Partition(part), is_block))
                 .unwrap_or_else(|e| bail_fail(Fail::from(e)));
+            // 交给 shrink_fs 的是按扇区取整后的新分区尺寸，min 的判据必须取同一个值：
+            // 按用户原始 bytes 比较会在取整下探不足一个扇区时放行，让"改参数有解"的
+            // 拒绝被跳过，失败留到 FS 工具已启动之后
+            let requested = new_size_lba * ss;
             if let Some(min) = fsops::fs_min_bytes(&src, part, fstype)
                 .unwrap_or_else(|e| bail_fail(Fail::from(e).context("min-size probe failed")))
-                && bytes < min
+                && requested < min
             {
-                bail_fail(Fail::refused(format!("target size {bytes} < minimum FS size {min} bytes (resize2fs -P)")));
+                bail_fail(Fail::refused(format!("target size {requested} < minimum FS size {min} bytes (resize2fs -P)")));
             }
             // 缩容预检（方向、可缩性、工具齐备、下界）全过，note 不再跟在一条拒绝后面
             crate::support::note_sector_truncation("resizing to", bytes, ss);
@@ -319,20 +323,14 @@ pub(crate) fn cmd_resize_msdos(a: &Args, pref: PartSelector, req: &SizeRequest, 
             // 禁掉、把目标顶成 busy，而盘上一个字节都没动
             // shrink_fs 的契约按旧分区尺寸比对（FS 小于分区时实为良性扩容，见其文档）；
             // 此处传入的是新分区尺寸，≤ 旧分区尺寸由缩容方向（new_size_lba < p.size_lba）保证
-            let requested = new_size_lba * ss;
             let shrunk = fsops::shrink_fs(&src, part, fstype, requested)
                 .unwrap_or_else(|e| bail_fail(Fail::from(e).context("FS shrink failed")));
             // 成功行同时给出实际落点与请求值：工具按自身粒度取整，差异要看得见
-            let line = shrunk.verify.ok_line(requested);
+            let line = shrunk.ok_line(requested);
             // FS 已缩之后浮出的两条待办：回读不出来（缩容可能已完成、落点未证实）与卸载
             // 没做成（清理未完成）——都不改写缩容这一事实，只作为待办浮出。
-            // 本路径（缩过 FS 再改表）把这两条计入 pending，因为表写入紧随其后：出口因此是
-            // 20。"卸载未完成"单独一档的处理与 fs / superfloppy 两条纯 FS 路径不同——那两处
-            // 只告警、成功出口保持 0（见 cmd/fs.rs 与 cmd/resize/superfloppy.rs）
-            let mut pending: Vec<_> = shrunk.verify.pending(part).into_iter().collect();
-            if let Some(leak) = shrunk.leak {
-                pending.push(leak.into_pending(part));
-            }
+            // 本路径（缩过 FS 再改表）把这两条计入 pending，因为表写入紧随其后：出口因此是 20
+            let pending = shrunk.pending(part);
             // 落点未证实时不切表：分区末端可能落进未缩的 FS 元数据（与 movepart 的
             // 同一条判据）。缩容本身可能已完成，故仍按已应用收尾，把未证实作为待办浮出
             if let Some(line) = line {

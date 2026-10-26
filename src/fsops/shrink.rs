@@ -9,14 +9,15 @@ pub enum ShrinkVerify {
     /// 回读到的实际尺寸（实测三种工具的取整方向都向下，故它 ≤ 请求值）
     Within(u64),
     /// 回读不出来（工具缺失、输出解析不了、缩容把卷标成待检查而工具拒答）：缩容**可能已经
-    /// 完成**，只是落点无法证实。这是"结果无法验证"，不是"缩容失败"——故它随成功结果
-    /// 浮出成一条待办，而不上抛成错误
+    /// 完成**，只是落点无法证实。这是"结果无法验证"，不是"缩容失败"——由
+    /// [`ShrinkOutcome::Unverified`] 携带成一条待办，不上抛成错误
     Unverifiable { why: String, hint: String },
 }
 
 impl ShrinkVerify {
     /// 缩容成功那一行：请求值与实际落点都给（工具的取整差异因此可见）。
-    /// 回读不出来时没有落点可报，这一类改由 [`Self::pending`] 浮出
+    /// 回读不出来时没有落点可报
+    #[cfg(test)]
     pub fn ok_line(&self, requested: u64) -> Option<String> {
         match self {
             Self::Within(actual) => Some(format!("fs shrunk to {actual} bytes (requested {requested})")),
@@ -25,6 +26,7 @@ impl ShrinkVerify {
     }
 
     /// 回读不出来 → 一条后置条件待办
+    #[cfg(test)]
     pub fn pending(self, part: u32) -> Option<crate::outcome::Pending> {
         match self {
             Self::Within(_) => None,
@@ -38,10 +40,54 @@ impl ShrinkVerify {
     }
 }
 
-/// 缩容这一动的结果：核对结论 + 挂载点没卸掉（只有 btrfs 路径会产生）
-pub struct ShrinkOutcome {
-    pub verify: ShrinkVerify,
-    pub leak: Option<MountLeak>,
+/// 缩容这一动的结果。两个变体是两条互斥的通道：落点已回读证实，或回读不出、结果未证实。
+/// "未证实"只出现在 [`Self::Unverified`] 上，与已证实的尺寸互斥，不藏在成功变体里
+pub enum ShrinkOutcome {
+    /// 回读证实的实际落点；`leak` 是没卸掉的挂载点（只有 btrfs 路径会产生）
+    Verified { actual: u64, leak: Option<MountLeak> },
+    /// 工具成功返回但落点回读不出：缩容可能已应用，尺寸未知
+    Unverified { why: String, hint: String, leak: Option<MountLeak> },
+}
+
+impl ShrinkOutcome {
+    /// 缩容成功那一行：请求值与实际落点都给（工具的取整差异因此可见）。
+    /// 未证实时没有落点可报
+    pub fn ok_line(&self, requested: u64) -> Option<String> {
+        match self {
+            Self::Verified { actual, .. } => Some(format!("fs shrunk to {actual} bytes (requested {requested})")),
+            Self::Unverified { .. } => None,
+        }
+    }
+
+    /// 随结果浮出的待办：未证实的原因与补救、以及没卸掉的挂载点。两者都不改写
+    /// "缩容已经执行"这一事实，只作为后置条件呈现
+    pub fn pending(self, part: u32) -> Vec<crate::outcome::Pending> {
+        let mut pending = Vec::new();
+        let leak = match self {
+            Self::Verified { leak, .. } => leak,
+            Self::Unverified { why, hint, leak } => {
+                pending.push(crate::outcome::Pending::new(
+                    part,
+                    crate::outcome::PendingKind::Other("fs shrink"),
+                    why,
+                    hint,
+                ));
+                leak
+            }
+        };
+        if let Some(leak) = leak {
+            pending.push(leak.into_pending(part));
+        }
+        pending
+    }
+}
+
+/// 核对结论 → 结果的两种变体。转换只在此一处，调用方不再自行解读 [`ShrinkVerify`]
+fn shrink_outcome(verify: ShrinkVerify, leak: Option<MountLeak>) -> ShrinkOutcome {
+    match verify {
+        ShrinkVerify::Within(actual) => ShrinkOutcome::Verified { actual, leak },
+        ShrinkVerify::Unverifiable { why, hint } => ShrinkOutcome::Unverified { why, hint, leak },
+    }
 }
 
 /// FS 缩容到指定字节数（先于分区边界收缩执行）。契约是 `new_bytes` ≤ 旧**分区**尺寸
@@ -66,7 +112,7 @@ fn shrink_fs_step(src: &FileSource, part: u32, fstype: Option<FsKind>, new_bytes
             }
             let verify = with_partition_device(src, part, |dev| {
                 let out = run("e2fsck", &["-fp", dev])?;
-                check_e2fsck_for_resize(out.status.code().unwrap_or(-1))?;
+                check_e2fsck_status_for_resize(&out.status)?;
                 // resize2fs 裸数字单位是"文件系统块数"而非字节（man resize2fs）；
                 // 's' 后缀 = 512 字节扇区。分区尺寸必为 sector_size(≥512) 整数倍
                 let sectors = format!("{}s", new_bytes / 512);
@@ -79,7 +125,7 @@ fn shrink_fs_step(src: &FileSource, part: u32, fstype: Option<FsKind>, new_bytes
                 }
                 verify_shrink(FsKind::Ext, dev, new_bytes, "resize2fs")
             })?;
-            Ok(ShrinkOutcome { verify, leak: None })
+            Ok(shrink_outcome(verify, None))
         }
         Some(FsKind::Ntfs) => {
             let verify = with_partition_device(src, part, |dev| {
@@ -93,7 +139,7 @@ fn shrink_fs_step(src: &FileSource, part: u32, fstype: Option<FsKind>, new_bytes
                 }
                 verify_shrink(FsKind::Ntfs, dev, new_bytes, "ntfsresize")
             })?;
-            Ok(ShrinkOutcome { verify, leak: None })
+            Ok(shrink_outcome(verify, None))
         }
         Some(FsKind::Btrfs) => {
             let (off, len) = partition_byte_range(src, part)?;
@@ -124,7 +170,7 @@ fn shrink_fs_step(src: &FileSource, part: u32, fstype: Option<FsKind>, new_bytes
                     "btrfs shrink did not run (internal invariant broken) — the filesystem may have been resized".to_string(),
                 )
             })?;
-            Ok(ShrinkOutcome { verify, leak })
+            Ok(shrink_outcome(verify, leak))
         }
         other => Err(FsError::unsupported(format!("fs {} cannot shrink", fs_name(other)))),
     }

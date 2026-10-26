@@ -194,6 +194,9 @@ fn write_swap_fixture(img: &std::path::Path) {
         let base = 6144usize * 512; // swap 分区起始（LBA 6144）
         let raw = cur.get_mut();
         raw[base + ps - 10..base + ps].copy_from_slice(b"SWAPSPACE2");
+        // 1 MiB 分区按 4096 页 = 256 页；mkswap 写 version = 1、last_page = 页数 − 1
+        raw[base + 1024..base + 1028].copy_from_slice(&1u32.to_le_bytes());
+        raw[base + 1028..base + 1032].copy_from_slice(&255u32.to_le_bytes());
         raw[base + 1036..base + 1052].copy_from_slice(&SWAP_UUID);
         raw[base + 1052..base + 1055].copy_from_slice(&SWAP_LABEL);
     }

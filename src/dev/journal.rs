@@ -128,7 +128,8 @@ pub(crate) fn truncated_header_error(have: usize, need: usize) -> io::Error {
 /// 一个 journal 候选落点的状态。**四态是现场判定的唯一来源**：写闸口、`undo` 的挑选
 /// 与 `abandon` 的枚举都从它派生，不各自实现"文件在不在 / 读不读得出"。
 ///
-/// `Absent` 覆盖三种"不是现场"的形态：落点不存在、0 字节残骸、非普通文件。0 字节有两种
+/// `Absent` 覆盖两种"不是现场"的形态：落点不存在、0 字节残骸。符号链接与非普通文件不在此
+/// 列——它们要么根本不是本工具写下的，要么指向别处，按 `Damaged` 交用户处置。0 字节有两种
 /// 在现有状态下不可区分的来源（`ensure` 建好文件、头还没写；已有 journal 被外部截断到 0），
 /// 一律按零次写入收养——它不可能含记录，因为记录只能接在完整头之后。这是已接受的限制而非
 /// 安全保证（见 `journal_truncated_to_zero_is_adopted_as_a_remnant` 测试）。
@@ -146,6 +147,34 @@ pub(crate) enum JournalCandidate {
     Records(JournalRead),
 }
 
+/// 认一个恢复现场的落点本身：`Ok(None)` = 不存在，`Err(reason)` = 不可认领，
+/// `Ok(Some(meta))` = 普通文件的元数据。
+///
+/// `symlink_metadata` 不跟随符号链接：认的是落点本身的条目。跟随的话，指向别处
+/// 普通文件的链接会被当成现场打开，随后的收养、截断与删除都作用在链接目标上。
+/// 符号链接不是本工具写下的任何东西，也绝不认领——`abandon` 改名保留的是链接本身，
+/// 不会碰它指向的目标。非普通文件（FIFO / 设备节点 / 目录）同归不可认领：
+/// `open` 一个 FIFO 会阻塞到有写端出现，放行等于让收养卡死在那里
+pub(crate) fn recovery_path_metadata(path: &Path) -> Result<Option<std::fs::Metadata>, String> {
+    let meta = match std::fs::symlink_metadata(path) {
+        Ok(m) => m,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(format!("cannot stat: {e}")),
+    };
+    if meta.file_type().is_symlink() {
+        return Err(
+            "the recovery path is a symbolic link — refusing to treat another file as this tool's recovery record"
+                .to_string(),
+        );
+    }
+    if !meta.is_file() {
+        return Err(
+            "the recovery path is not a regular file — it cannot be a recovery record written by this tool".to_string(),
+        );
+    }
+    Ok(Some(meta))
+}
+
 /// 判一个落点属于哪一态。**只有 `NotFound` 是"不在"**：属性读不出来按 `Damaged` 处理，
 /// 否则一次瞬态 I/O 错误就会把一份可能完好的现场当成不存在，后续 `commit` 还会
 /// 把它静默删掉
@@ -154,27 +183,11 @@ pub(crate) enum JournalCandidate {
 /// 截掉 / 写坏"在内容上不可区分，前者没有对应的数据写入、后者有。无法证明"空"就
 /// 不能按空壳销毁——写闸口会因此放行，undo 与 abandon 会删掉唯一一份 pre-image
 pub(crate) fn classify_journal(path: &Path) -> JournalCandidate {
-    // `symlink_metadata` 不跟随符号链接：认的是落点本身的条目。跟随的话，指向别处
-    // 普通文件的链接会被当成 journal 打开，随后的收养与删除都作用在链接目标上
-    let meta = match std::fs::symlink_metadata(path) {
-        Ok(m) => m,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return JournalCandidate::Absent,
-        Err(e) => return JournalCandidate::Damaged(format!("cannot stat: {e}")),
+    let meta = match recovery_path_metadata(path) {
+        Ok(Some(meta)) => meta,
+        Ok(None) => return JournalCandidate::Absent,
+        Err(reason) => return JournalCandidate::Damaged(reason),
     };
-    // 符号链接不是本工具写下的任何东西，也绝不认领：按"读不出来"报给用户处置
-    // （`abandon` 改名保留的是链接本身，不会碰它指向的目标）
-    if meta.file_type().is_symlink() {
-        return JournalCandidate::Damaged(
-            "the journal path is a symbolic link — refusing to treat another file as this tool's journal".to_string(),
-        );
-    }
-    // 非普通文件（FIFO / 设备节点 / 目录）不是本工具写下的：`open` 一个 FIFO 会阻塞到
-    // 有写端出现，放行等于让收养卡死在这里。与符号链接同归"读不出来"
-    if !meta.is_file() {
-        return JournalCandidate::Damaged(
-            "the journal path is not a regular file — it cannot be a journal written by this tool".to_string(),
-        );
-    }
     // 长度 0 的普通文件按"不在"处理：没有头就没有可回放的记录，与打开时的
     // NotFound 同义
     if meta.len() == 0 {
@@ -565,6 +578,14 @@ impl Journal {
     /// [`Self::open`] 的完整形态：附带被截掉的残尾字节数，`None` 表示文件原本就停在
     /// 记录边界上。写路径据此把本次运行报成未完整收尾（见 `transaction::SessionJournal`）
     pub(crate) fn adopt(path: &Path, identity: LiveScene) -> io::Result<(Self, Option<NonZeroUsize>)> {
+        // 打开之前先认落点本身的条目：符号链接与非普通文件都不可认领——`open` 一个 FIFO 会
+        // 阻塞到有写端出现，跟随链接则会让随后的写入与截断作用于链接目标。落点不存在时
+        // 照旧走到下面的 `NotFound` 分支（可能新建）。认领与打开之间落点仍可能被换成
+        // 链接：unix 由下面的 O_NOFOLLOW 兜住，其余平台这一段窗口依赖落点所在目录
+        // 不被本进程之外的人写入
+        if let Err(reason) = recovery_path_metadata(path) {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, reason));
+        }
         let mut opts = OpenOptions::new();
         opts.read(true).write(true);
         // 不跟随符号链接：分类与收养之间落点仍可能被换成链接，跟随会让写入与
@@ -604,7 +625,7 @@ impl Journal {
                 // 撕裂尾的物理截断与"零记录"判定共用一次全量读：截断点之前的记录
                 // 每条都通过了 CRC，其对应的写入都确实发生过；被截掉的只有"没走完的
                 // 追加"或其后的垃圾。`set_len` 与追加共用上面那个句柄：不按路径二次打开
-                let data = {
+                let mut data = {
                     use std::io::{Read, Seek, SeekFrom};
                     let mut data = Vec::new();
                     f.seek(SeekFrom::Start(0))?;
@@ -652,6 +673,17 @@ impl Journal {
                             "warning: cannot archive the {cut} byte(s) the journal {} ends with ({e}) — truncating them away; what was recorded there cannot be replayed",
                             path.display()
                         ),
+                    }
+                    // 截断只改长度：被截掉的这段字节仍留在文件占用的同一个数据块里。直接缩长度的话，
+                    // 下一次追加若只丢掉帧首所在的那个扇区、后续扇区照常落盘，再打开就会读到
+                    // "旧帧头 + 新载荷"——len 落在文件内、CRC 必不符，整份 journal 被判 Damaged。
+                    // 先把这段写零，使该形态退化成可识别的零长度撕裂尾。归档先于这一步，
+                    // 被截掉的原始字节已在 `.torn-tail` 里留底
+                    data[end..].fill(0);
+                    {
+                        use std::io::{Seek, SeekFrom, Write};
+                        f.seek(SeekFrom::Start(end as u64))?;
+                        f.write_all(&data[end..])?;
                     }
                     f.set_len(end as u64)?;
                     f.sync_all()?;
