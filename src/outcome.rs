@@ -24,6 +24,20 @@ pub const EXIT_PARTIAL: u8 = 20;
 /// 可能已写盘时（执行中途失败）同为这一码——区别在报告文字里点明
 pub const EXIT_INFRA: u8 = 30;
 
+/// 外部 FS 工具改的是文件系统内容，journal 只记分区表写入。一次命令可能走多个外部
+/// 工具步骤（先缩后扩、或在同一命令里既有表写入又有 FS 写入），故每进程只提示一次。
+/// 这条提示补的是"undo 成功"与实际回滚范围之间的差：表回去了，文件系统没有
+pub(crate) fn note_fs_writes_not_journaled() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static NOTED: AtomicBool = AtomicBool::new(false);
+    if !NOTED.swap(true, Ordering::Relaxed) {
+        eprintln!(
+            "note: filesystem writes are made by external tools and are not journaled — `undo` reverts \
+             partition-table writes only; verify the filesystem's actual size before further operations"
+        );
+    }
+}
+
 /// 后续步骤的种类：决定补救提示里出现哪条命令。
 /// Fs/Swap 之外的做法：标签随变体由调用方携带——本层不认识具体机制，只做呈现
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

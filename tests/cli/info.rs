@@ -58,6 +58,41 @@ fn info_on_gpt_image() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// 容器条目只说明"里面还有分区"，不说明有几个：观察侧必须点明列表不完整，
+/// 且不得把"未解析"写成数量 0
+#[test]
+fn info_names_an_extended_container_as_unenumerated() {
+    let dir = std::env::temp_dir().join(format!("diskedit_ctr_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let img = dir.join("mbr.img");
+    // 手写 LBA0：签名 + 槽1 = 0x05 容器（2048 起 2048 扇区）
+    let mut bytes = vec![0u8; 4 * 1024 * 1024];
+    bytes[510] = 0x55;
+    bytes[511] = 0xAA;
+    bytes[446 + 4] = 0x05;
+    bytes[446 + 8..446 + 12].copy_from_slice(&2048u32.to_le_bytes());
+    bytes[446 + 12..446 + 16].copy_from_slice(&2048u32.to_le_bytes());
+    std::fs::write(&img, &bytes).unwrap();
+
+    let out = Command::new(env!("CARGO_BIN_EXE_DiskEdit"))
+        .args(["info", img.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let v: serde_json::Value = serde_json::from_str(stdout.trim()).expect("info must emit valid JSON");
+    assert_eq!(v["label"], "mbr");
+    assert_eq!(v["partitions"].as_array().map(|a| a.len()), Some(1));
+    assert_eq!(v["partitions"][0]["type"], "0x05");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("extended container"), "{stderr}");
+    assert!(stderr.contains("not enumerated"), "{stderr}");
+    // 未解析不得被写成"没有"：任何计数词都不应出现
+    assert!(!stderr.contains("0 logical"), "{stderr}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// info 的顶层键集跨 label 分支一致：none / mbr / gpt 都含
 /// damaged、disk_guid、label、partitions、sector_size、size_bytes。
 /// `last_part` 只在有可操作条目时出现（两分支同规则）。按同一 schema 消费 JSON 的调用方

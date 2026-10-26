@@ -200,6 +200,7 @@ pub fn mkfs(src: &mut WriteSource, part: u32, fstype: MkfsFs) -> Result<(), FsEr
     if !out.status.success() {
         return Err(FsError::command(&tool.program, &out));
     }
+    crate::outcome::note_fs_writes_not_journaled();
     Ok(())
 }
 

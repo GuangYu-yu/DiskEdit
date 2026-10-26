@@ -558,6 +558,16 @@ pub(crate) fn cmd_undo(a: &Args) -> u8 {
         } else {
             format!("undone {n} journal entries (verify with: diskedit info {})", a.target)
         };
+        // 回放只覆盖 journal 记下的表写入：文件系统内容由外部工具改过，不在可回滚范围。
+        // 这句必须随成功结果一起出现——帮助文本里的同一句只在用户查帮助时可见
+        eprintln!(
+            "note: partition-table writes are reverted; filesystem changes are not — \
+             verify the filesystem's actual size and consistency ({}), then the partitions it serves",
+            match a.part {
+                Some(p) => format!("check: diskedit check {}:{p}", a.target),
+                None => format!("info: diskedit info {}", a.target),
+            }
+        );
         let code = table_write_done(&src, &summary).exit_code();
         // 残尾对应的写入既未能回放也无法排除：完整前缀回到写入前，但整份 journal 不能说
         // 已回滚到底，出口不能报成完整成功（journal 已归档，见 clear_journal_candidates）。
