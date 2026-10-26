@@ -22,13 +22,13 @@ fillp() { # part MB -> 整分区设备 md5
   LD=$(lo_attach "$T")
   lo_waitpart "${LD}p$1" || { echo "p$1 part node not ready"; rc=1; lo_detach "$LD"; return 1; }
   mount_at "${LD}p$1" /testmnt && dd if=/dev/urandom of=/testmnt/blob bs=1M count=$2 2>/dev/null
-  umount /testmnt; md5sum "${LD}p$1" | cut -d' ' -f1; lo_detach "$LD"
+  umount /testmnt; mdsum "${LD}p$1"; lo_detach "$LD"
 }
 chkp() { # part want-md5（传 "-" 则跳过哈希对比，仅 fsck；FS 扩缩后设备哈希必变）
   LD=$(lo_attach "$T") || return 1
   lo_waitpart "${LD}p$1" || { echo "p$1 part node not ready"; rc=1; lo_detach "$LD"; return 1; }
   if [ "$2" != "-" ]; then
-    if [ "$2" = "$(md5sum "${LD}p$1" | cut -d' ' -f1)" ]; then
+    if [ "$2" = "$(mdsum "${LD}p$1")" ]; then
       echo "p$1 DEV OK"
     else
       echo "p$1 DEV CORRUPT (size=$(blockdev --getsize64 "${LD}p$1" 2>/dev/null))"; rc=1
@@ -129,7 +129,7 @@ $B info "$T" | grep -q '"num":4' && echo "  OK   p4 已落表" || { echo "  BAD 
 chkp 3 "$M3"
 LD=$(lo_attach "$T")
 lo_waitpart "${LD}p4" || { echo "p4 part node not ready"; rc=1; }
-[ "$M3" = "$(md5sum "${LD}p4" | cut -d' ' -f1)" ] && echo "p4 COPY OK (device-identical)" || { echo "p4 COPY MISMATCH"; rc=1; }
+[ "$M3" = "$(mdsum "${LD}p4")" ] && echo "p4 COPY OK (device-identical)" || { echo "p4 COPY MISMATCH"; rc=1; }
 lo_detach "$LD"
 sgdisk -v "$T" >/dev/null 2>&1 && echo "sgdisk clean" || { echo "sgdisk ISSUES"; rc=1; }
 exit $rc

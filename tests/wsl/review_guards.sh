@@ -66,12 +66,12 @@ struct.pack_into('<I', bh, 16, zlib.crc32(bytes(bh[:hsize])) & 0xffffffff)
 wr(backup_lba * ss, bh)
 f.flush(); f.close()
 PY
-E1B=$(md5sum "$T1" | cut -d' ' -f1)
+E1B=$(mdsum "$T1")
 OUT=$($B mkfs "$T1":1 ext4 --yes 2>&1); E=$?
 echo "mkfs on overlapping table -> exit=$E : $(echo "$OUT" | tail -1)"
 exp "$E" 10 "E1 overlapping table refuses the FS write"
 case "$OUT" in *overlap*) echo "  OK   E1 refusal names the overlap" ;; *) echo "  BAD  E1 refusal does not name the overlap"; rc=1 ;; esac
-assert_eq "$(md5sum "$T1" | cut -d' ' -f1)" "$E1B" "E1 image bytes unchanged after the refusal"
+assert_eq "$(mdsum "$T1")" "$E1B" "E1 image bytes unchanged after the refusal"
 
 echo
 echo "########## E2: new 的目标是分区节点 ⇒ 拒绝且不写盘 ##########"
@@ -82,12 +82,12 @@ $B add "$T2" --start 65536 --end 131071 --name p2 >/dev/null
 LD=$(lo_attach "$T2")
 if lo_waitpart "${LD}p2"; then
     mkfs.ext4 -q -F "${LD}p2" >/dev/null 2>&1
-    E2B=$(md5sum "${LD}p2" | cut -d' ' -f1)
+    E2B=$(mdsum "${LD}p2")
     OUT=$($B new "${LD}p2" --table gpt --yes 2>&1); E=$?
     echo "new on partition node -> exit=$E : $(echo "$OUT" | tail -1)"
     exp "$E" 10 "E2 partition node refused as a new target"
     case "$OUT" in *"target is a partition, not a whole disk"*) echo "  OK   E2 refusal names the partition node" ;; *) echo "  BAD  E2 refusal wording"; rc=1 ;; esac
-    assert_eq "$(md5sum "${LD}p2" | cut -d' ' -f1)" "$E2B" "E2 partition node bytes unchanged after the refusal"
+    assert_eq "$(mdsum "${LD}p2")" "$E2B" "E2 partition node bytes unchanged after the refusal"
 else
     echo "  BAD  ${LD}p2 did not appear"; rc=1
 fi
@@ -109,7 +109,7 @@ fi
     echo "abandon on partition node -> exit=$E"; exp "$E" 10 "E2d abandon refused on a partition node"
     case "$OUT" in *"target is a partition, not a whole disk"*) echo "  OK   E2d refusal names the partition node" ;; *) echo "  BAD  E2d refusal wording"; rc=1 ;; esac
 
-    assert_eq "$(md5sum "${LD}p2" | cut -d ' ' -f1)" "$E2B" "E2 all refusals leave the partition node bytes unchanged"
+    assert_eq "$(mdsum "${LD}p2")" "$E2B" "E2 all refusals leave the partition node bytes unchanged"
 lo_detach "$LD"
 
 echo

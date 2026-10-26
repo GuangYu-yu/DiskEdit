@@ -33,7 +33,7 @@ for kind in trunc junk magic; do
   mk1
   LD=$(lo_attach "$T")
   mount_at "${LD}p2" /testmnt && dd if=/dev/urandom of=/testmnt/blob bs=1M count=90 2>/dev/null; umount /testmnt
-  M2=$(md5sum "${LD}p2" | cut -d' ' -f1); lo_detach "$LD"
+  M2=$(mdsum "${LD}p2"); lo_detach "$LD"
   DISKEDIT_FAULT=rs-chunk:40 $BF move "$T":2 --start 900000 --chunk-size 1 >/dev/null 2>&1
   case $kind in
     trunc) head -c 40 "$T$CKPT_SUFFIX" > "$T.ckpt.new" && mv "$T.ckpt.new" "$T$CKPT_SUFFIX" ;;
@@ -44,7 +44,7 @@ for kind in trunc junk magic; do
   RS=$(echo "$OUT" | grep -oc "resuming at chunk")
   echo "[$kind] exit=$E resume_used=$RS"
   LD=$(lo_attach "$T")
-  [ "$M2" = "$(md5sum "${LD}p2" | cut -d' ' -f1)" ] && echo "  p2 DEV OK" || { echo "  p2 DEV CORRUPT"; rc=1; }
+  [ "$M2" = "$(mdsum "${LD}p2")" ] && echo "  p2 DEV OK" || { echo "  p2 DEV CORRUPT"; rc=1; }
   e2fsck -fn "${LD}p2" >/dev/null 2>&1 && echo "  p2 e2fsck clean" || { echo "  p2 e2fsck ISSUES"; rc=1; }
   lo_detach "$LD"
   sgdisk -v "$T" >/dev/null 2>&1 && echo "  sgdisk clean" || { echo "  sgdisk ISSUES"; rc=1; }
