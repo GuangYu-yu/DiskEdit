@@ -6,15 +6,19 @@
 # 与 postcondition_contract.sh 的分工：那边覆盖 FS 步失败（PendingKind::Fs），
 # 本脚本专测卸载这一步本身失败（PendingKind::Other("mount cleanup")）。
 # btrfs 扩容走 with_mount：真实 mount → btrfs filesystem resize → umount，是本项的抓手。
+#
+# 假工具靠工具表变体生效而不是 PATH 影子：工具解析在编译期钉死（src/fsops/env.rs
+# 的 TOOL_PATH），子进程的 PATH 不参与。BFK 的表把假目录排在系统目录之前；
+# "umount 完全缺失"用 BFKO（表里只有假目录），脚本自己 symlink 所需真工具。
 source "$(dirname "$0")/lib.sh"
-require_bin
+require_fakeonly_bin
 
 T=/var/tmp/t41.img
 track_file "$T"
 
 # diskedit 的临时挂载点（mount_point()：$TMPDIR/diskedit.mnt.<pid>.<seq>）不在
 # _TRACK_MOUNTS 里：假 umount 场景下它真的留在挂载态，必须在这里用真 umount 收掉
-FAKE=/var/tmp/diskedit-fakebin
+FAKE=$FAKE_TOOL_DIR
 cleanup_hook() {
     local mp
     for mp in /tmp/diskedit.mnt.*; do
@@ -57,7 +61,7 @@ rm -rf "$FAKE"; mkdir -p "$FAKE"
 fake umount '#!/bin/sh
 echo "target is busy" >&2
 exit 32'
-OUT=$(PATH="$FAKE:$PATH" $B resize "$T":1 1500M 2>&1); E=$?
+OUT=$($BFK resize "$T":1 1500M 2>&1); E=$?
 echo "exit=$E"
 echo "$OUT" | grep -E 'mount cleanup|follow-up|run manually|left behind' | sed 's/^/    /'
 exp "$E" 20 "卸载失败不改写扩容成功，只落一条待办"
@@ -71,12 +75,12 @@ echo "===== C: umount 缺失 → 事前拒绝(30)，未写盘也就没有待办 
 # 就拒绝，比"事后留一条清理待办"更严——不留残留挂载点、也不动盘
 setup_case
 BEFORE=$(pt)
-# PATH 只留本目录：umount 不在其中，其余所需工具以符号链接补上
+# 工具表只含假目录：umount 不在其中，其余所需工具以符号链接补上
 rm -rf "$FAKE"; mkdir -p "$FAKE"
 for t in losetup mount btrfs udevadm blockdev; do
     p=$(command -v "$t") && ln -sf "$p" "$FAKE/$t"
 done
-OUT=$(PATH="$FAKE" $B resize "$T":1 1500M 2>&1); E=$?
+OUT=$($BFKO resize "$T":1 1500M 2>&1); E=$?
 echo "exit=$E"
 echo "$OUT" | sed 's/^/    /'
 exp "$E" 30 "umount 缺失在写盘前被拒（30）"
@@ -98,7 +102,7 @@ exit 1'
 fake umount '#!/bin/sh
 echo "target is busy" >&2
 exit 32'
-OUT=$(PATH="$FAKE:$PATH" $B resize "$T":1 1500M 2>&1); E=$?
+OUT=$($BFK resize "$T":1 1500M 2>&1); E=$?
 echo "exit=$E"
 echo "$OUT" | grep -E 'fs grow|mount cleanup|left behind|follow-up' | sed 's/^/    /'
 exp "$E" 20 "核心失败仍按 FS 待办报，清理告警不改写它"
@@ -115,7 +119,7 @@ rm -rf "$FAKE"; mkdir -p "$FAKE"
 fake umount '#!/bin/sh
 echo "target is busy" >&2
 exit 32'
-OUT=$(PATH="$FAKE:$PATH" $B resizefs "$T":1 2>&1); E=$?
+OUT=$($BFK resizefs "$T":1 2>&1); E=$?
 echo "exit=$E"
 echo "$OUT" | sed 's/^/    /'
 exp "$E" 0 "resizefs 的成功出口不受清理失败影响"
@@ -132,7 +136,7 @@ rm -rf "$FAKE"; mkdir -p "$FAKE"
 fake umount '#!/bin/sh
 echo "target is busy" >&2
 exit 32'
-OUT=$(PATH="$FAKE:$PATH" $B resize "$T" 800M 2>&1); E=$?
+OUT=$($BFK resize "$T" 800M 2>&1); E=$?
 echo "exit=$E"
 echo "$OUT" | sed 's/^/    /'
 exp "$E" 0 "superfloppy 的成功出口不受清理失败影响"

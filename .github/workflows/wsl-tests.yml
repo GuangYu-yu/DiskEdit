@@ -36,5 +36,25 @@ jobs:
           cargo build --release --features test-faults
           cp target/release/DiskEdit bins/DiskEdit-fault
 
+      # 假工具场景（mount_cleanup_pending / shrink_readback）要换掉工具表。
+      # cargo 不跟踪 option_env! 的取值，同名构建目录会复用旧产物，故每变体独立 target 目录
+      - name: 构建工具表变体（假目录优先 / 仅假目录）
+        run: |
+          mkdir -p bins
+          DISKEDIT_TOOL_PATH="/var/tmp/diskedit-fakebin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+            CARGO_TARGET_DIR=target/toolpath-fake cargo build --release
+          cp target/toolpath-fake/release/DiskEdit bins/DiskEdit-fake
+          DISKEDIT_TOOL_PATH="/var/tmp/diskedit-fakebin" \
+            CARGO_TARGET_DIR=target/toolpath-fakeonly cargo build --release
+          cp target/toolpath-fakeonly/release/DiskEdit bins/DiskEdit-fakeonly
+
       - name: 运行全量套件（root）
         run: sudo env DISKEDIT_BIN_DIR="$GITHUB_WORKSPACE/bins" DISKEDIT_STRICT=1 bash tests/wsl/run_all.sh
+
+      - name: 上传失败脚本的完整输出
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wsl-suite-logs
+          path: tests/wsl/artifacts/
+          if-no-files-found: ignore
