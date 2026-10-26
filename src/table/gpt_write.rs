@@ -140,9 +140,9 @@ pub(crate) fn commit_table(
     let bh = serialize_header(&backup, array_crc, ss)?;
     let ph = serialize_header(&primary, array_crc, ss)?;
     // 再用**将要写出的**两份头过一遍解析侧同一套几何与条目校验。字节级读回只能证明
-    // "写进去什么"，证明不了"写进去的表是这个工具读得回来的表"：口径不一致的调用方
-    // （另一种 ss 算的 last_lba、扩容前的头配新末端）会写出主备同时自相矛盾的表，
-    // 读回全对、命令报成功，而随后的 load_gpt 判它 invalid——盘上再没有可用副本。
+    // "写进去什么"，证明不了"写进去的表是这个工具读得回来的表"：校验端以容器真实末端
+    // 为准，而备份头落位由 last_lba 决定——两者不等的提交会被解析判成需要修复，写到盘上
+    // 就是"命令报成功、表却不可用"。非 Valid 的结论一律在写盘前拒绝。
     // 校验器按主头视角定义，备份头先归一化再以 Backup 视角过同一组判据
     let file_last_lba = (src.size / ss).saturating_sub(1);
     if last_lba > file_last_lba {
@@ -155,12 +155,18 @@ pub(crate) fn commit_table(
     for (h, view, what) in
         [(&primary, GptCopyKind::Primary, "primary"), (&backup_view, GptCopyKind::Backup, "backup")]
     {
-        validate_geometry(h, &geom, last_lba, view).map_err(into_io_error).map_err(|e| {
+        let state = validate_geometry(h, &geom, file_last_lba, view).map_err(into_io_error).map_err(|e| {
             io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!("the {what} GPT header this write would produce is not self-consistent: {e}"),
             )
         })?;
+        if state != GptState::Valid {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("the {what} GPT header this write would produce does not match the container end — refusing to write the table"),
+            ));
+        }
     }
     validate_entries(entries, &primary).map_err(into_io_error).map_err(|e| {
         io::Error::new(io::ErrorKind::InvalidData, format!("the partition entries this write would produce are invalid: {e}"))

@@ -219,9 +219,19 @@ impl TransactionManager {
                 }
             }
         };
+        // 单槽位的前提是"一个进程只跑一条命令"：槽位已被占用说明本次进程的另一条事务还
+        // 开着，覆盖会让它那份 `SessionJournal` 再也取不回来（它的 journal 永远不会被
+        // commit 清理）。故在动任何落点之前拒绝，而不挤掉已有的那一份
+        let mut slot = session_slot();
+        if slot.is_some() {
+            return Err(Fail::infra(
+                "the session slot is already held by another transaction of this process — one diskedit process \
+                 runs a single command, so a second write transaction is refused",
+            ));
+        }
         let (journal_fp, truncated) = Self::attach_journal(&mut src)?;
         // 身份在锁下、与已打开的句柄同一时刻定稿；`commit` 只消费这一个值
-        *session_slot() = Some(SessionJournal {
+        *slot = Some(SessionJournal {
             identity: src.identity.clone(),
             fingerprint: src.fingerprint,
             journal_fp,
@@ -364,12 +374,16 @@ impl TransactionManager {
     /// 可以被 abandon 改名、再由另一进程新建，而两份 journal 记录的目标身份完全相同，
     /// 重读内容分不开它们
     ///
+    /// 首项之外的候选还要过内容这一关：只有"头完整、零条记录"的壳才删；含记录或读不出来
+    /// 的那份留下并计入未收尾。本次事务只采纳了首项，那些记录从未被回放
+    ///
     /// 命令返回时 [`FileSource`]（连同它的所有权）已释放，故这里按同一身份重新取一次锁：
     /// 删除必须与 journal 的创建落在同一个独占窗口里。取不到锁即保留 journal
     /// （漏删会被下次运行报成 busy，但不会丢失别人的现场）
     /// 返回 `true` 表示现场已按本次事务的意图收干净；`false` 表示有文件该删而没删掉
-    /// （没取到锁，或认不出它是否仍属于本次事务），或者采纳过的 journal 带着无法回放的
-    /// 残尾——三种都属于"本次运行没有完全收尾"，调用方必须据此降级退出码，而不是照常给 0
+    /// （没取到锁、认不出它是否仍属于本次事务、候选里还留着未回放的记录），或者采纳过的
+    /// journal 带着无法回放的残尾——都属于"本次运行没有完全收尾"，调用方必须据此降级
+    /// 退出码，而不是照常给 0
     pub(crate) fn commit(session: &SessionJournal) -> bool {
         let identity = &session.identity;
         let mut clean = true;
@@ -440,10 +454,15 @@ impl TransactionManager {
                 match dev::Journal::read_identity(&primary) {
                     Ok(id) => ours_identity = Some(id),
                     Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                    Err(e) => eprintln!(
-                        "warning: cannot read the identity of {} ({e}) — only that file is removed",
-                        primary.display()
-                    ),
+                    Err(e) => {
+                        eprintln!(
+                            "warning: cannot read the identity of {} ({e}) — only that file is removed, and no \
+                             other candidate can be matched against this transaction",
+                            primary.display()
+                        );
+                        // 其余候选无从比对 ⇒ 该删而未删，本次运行不算收尾
+                        clean = false;
+                    }
                 }
             }
         }
@@ -455,21 +474,46 @@ impl TransactionManager {
                 }
                 continue;
             }
+            // 首项之外只删"头完整、零条记录"的壳：本次事务只采纳了首项，别的候选里的记录
+            // 从未被回放，删掉就等于永久丢掉那段回滚依据。身份相同不足以授权删除——两份
+            // journal 记录的目标身份可以完全相同
+            match dev::classify_journal(p) {
+                dev::JournalCandidate::Shell => {}
+                dev::JournalCandidate::Absent => continue,
+                dev::JournalCandidate::Records(_) => {
+                    eprintln!(
+                        "warning: {} holds recovery records this transaction did not replay — left in place; \
+                         replay it with `diskedit undo` or release it with `diskedit abandon`",
+                        p.display()
+                    );
+                    clean = false;
+                    continue;
+                }
+                dev::JournalCandidate::Damaged(why) => {
+                    eprintln!(
+                        "warning: {} cannot be read ({why}) — left in place; release it with `diskedit abandon`",
+                        p.display()
+                    );
+                    clean = false;
+                    continue;
+                }
+            }
             let Some(ours_identity) = &ours_identity else { continue };
             match dev::Journal::read_identity(p) {
                 Ok(id) => {
                     if let Some(why) = dev::recorded_scenes_mismatch(&id, ours_identity) {
                         eprintln!("warning: {why} — {} is left in place", p.display());
+                        clean = false;
                     } else if !dev::remove_recovery_file(p) {
                         eprintln!("warning: could not remove {} — it still names this target", p.display());
                         clean = false;
                     }
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                Err(e) => eprintln!(
-                    "warning: cannot read the identity of {} ({e}) — left in place",
-                    p.display()
-                ),
+                Err(e) => {
+                    eprintln!("warning: cannot read the identity of {} ({e}) — left in place", p.display());
+                    clean = false;
+                }
             }
         }
         clean

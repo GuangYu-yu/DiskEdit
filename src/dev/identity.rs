@@ -425,6 +425,10 @@ pub struct TargetIdentity {
     /// 旧版按块设备语义（kind == Block）写下的 GUID 命名 checkpoint 是否可能存在。
     /// loop 归一后本身份已是 Image kind，但历史落点按 Block 规则生成，枚举时需补列
     pub(crate) legacy_guid_checkpoints: bool,
+    /// loop 目标的指纹：由 [`Self::loop_backed`] 在核对"backing 对象仍是句柄打开的那一个"
+    /// 之后**从已打开的 backing 句柄**取得。打开数据文件的路径上取指纹的调用点直接用它，
+    /// 不再按 backing 名字二次 stat——名字在两次取用之间可能已指向另一个文件
+    pub(crate) backing_fp: Option<TargetFingerprint>,
 }
 
 /// 只用于区分历史命名约定：块设备另有 GUID / devname 两份历史落点，镜像没有
@@ -538,6 +542,7 @@ impl TargetIdentity {
             checkpoint,
             lock: suffix_path(canonical, LOCK_SUFFIX),
             legacy_guid_checkpoints: false,
+            backing_fp: None,
         }
     }
 
@@ -626,6 +631,9 @@ impl TargetIdentity {
         // 更旧的历史命名：块设备 journal 曾以 devname 命名
         id.journal.push(state_dir().join(format!("{}{JOURNAL_SUFFIX}", file_name_lossy(dev_path))));
         id.legacy_guid_checkpoints = true;
+        // 指纹取自刚核对过的那一个 backing 对象（句柄的元数据），打开数据文件的路径不再按
+        // 名字二次 stat
+        id.backing_fp = Some(TargetFingerprint::from_meta(&meta));
         Ok(id)
     }
 
@@ -694,6 +702,7 @@ impl TargetIdentity {
             // 不构成阻挡——判据是"锁取不取得到"，不是"文件在不在"（见 targetlock）
             lock: dir.join(format!("{stable}{LOCK_SUFFIX}")),
             legacy_guid_checkpoints: true,
+            backing_fp: None,
         }
     }
 

@@ -90,8 +90,8 @@ pub fn create_mbr_preflight(size_bytes: u64, ss: u64) -> Result<(), Fail> {
     Ok(())
 }
 
-/// `new --table gpt` 的两处表结构写入：主条目数组（`[2·ss, (2+span)·ss)`）与盘尾备份区
-/// （`[last−span, last]` 及其后的备份头）。两处缓冲在空表时都来自同一份全零数组。旧表
+/// `new --table gpt` 的表结构写入：主头（LBA1，字节 `[ss, 2·ss)`）、主条目数组
+/// （`[2·ss, (2+span)·ss)`）与盘尾备份区（`[last−span, last]` 及其后的备份头）。旧表
 /// 若有分区落在任一段，这次写入就是清零分区数据，与 `new` 只破坏表结构的语义相反。
 /// 返回可读的冲突描述，命令层据此在写盘前拒绝。
 ///
@@ -107,8 +107,10 @@ pub fn gpt_metadata_conflict(src: &FileSource, ss: u64) -> io::Result<Option<Str
     let Some(first_lba) = last_lba.checked_sub(span) else {
         return Ok(None);
     };
-    // 写入区间按字节表达：(名字, 起点, 终点)。备份数组之后还要写备份头，故到容器尾
-    let regions: [(&str, u64, u64); 2] = [
+    // 写入区间按字节表达：(名字, 起点, 终点)。主头在 LBA1，其后是主数组；备份数组起到
+    // 容器尾，备份头在其后一并被这段覆盖
+    let regions: [(&str, u64, u64); 3] = [
+        ("primary GPT header", ss, 2 * ss),
         ("primary entry array", 2 * ss, (2 + span) * ss),
         ("backup entry array", first_lba.saturating_mul(ss), src.size),
     ];

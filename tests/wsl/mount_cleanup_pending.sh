@@ -111,7 +111,7 @@ case "$OUT" in *"left behind"*) echo "D cleanup warning OK";; *) echo "D cleanup
 case "$OUT" in *"mount cleanup"*) echo "D cleanup must not become a pending (BAD)"; rc=1;; *) echo "D cleanup kept out of pending OK";; esac
 
 echo
-echo "===== E: resizefs 扩容 + umount 失败 → 成功出口保持 0，只出 warning ====="
+echo "===== E: resizefs 扩容 + umount 失败 → PARTIAL(20) + mount cleanup ====="
 setup_case
 # 先只改表把分区放大、FS 仍停在 400M，给 resizefs 留下可扩的那段
 $B resize "$T":1 1500M --no-fs >/dev/null 2>&1
@@ -122,12 +122,12 @@ exit 32'
 OUT=$($BFK resizefs "$T":1 2>&1); E=$?
 echo "exit=$E"
 echo "$OUT" | sed 's/^/    /'
-exp "$E" 0 "resizefs 的成功出口不受清理失败影响"
+exp "$E" 20 "FS 扩成功、挂载点未卸：按未完成的后置条件报 20"
 case "$OUT" in *"left behind"*) echo "E cleanup warning OK";; *) echo "E cleanup warning missing (BAD)"; rc=1;; esac
-case "$OUT" in *"mount cleanup"*) echo "E must not become a pending (BAD)"; rc=1;; *) echo "E no pending OK";; esac
+case "$OUT" in *"mount cleanup"*) echo "E cleanup pending OK";; *) echo "E cleanup pending missing (BAD)"; rc=1;; esac
 
 echo
-echo "===== F: superfloppy(btrfs 整盘) 扩容 + umount 失败 → 成功出口保持 0，只出 warning ====="
+echo "===== F: superfloppy(btrfs 整盘) 扩容 + umount 失败 → PARTIAL(20) + mount cleanup ====="
 rm -f "$T" "$T"$SIDECAR_GLOB
 truncate -s 400M "$T"
 mkfs.btrfs -q -f "$T" >/dev/null 2>&1
@@ -139,7 +139,7 @@ exit 32'
 OUT=$($BFK resize "$T" 800M 2>&1); E=$?
 echo "exit=$E"
 echo "$OUT" | sed 's/^/    /'
-exp "$E" 0 "superfloppy 的成功出口不受清理失败影响"
+exp "$E" 20 "superfloppy 的 FS 扩成功、挂载点未卸：按未完成的后置条件报 20"
 case "$OUT" in *"left behind"*) echo "F cleanup warning OK";; *) echo "F cleanup warning missing (BAD)"; rc=1;; esac
 
 echo

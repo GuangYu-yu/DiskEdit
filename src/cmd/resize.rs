@@ -251,6 +251,12 @@ pub(crate) fn cmd_resize(a: &Args) -> crate::outcome::Outcome {
         } else {
             movepart::ShiftIntent::Shrink
         };
+        // 请求的终点就是现状：表与 FS 都不动，不进入 resize_part。与 MBR 路径同一判据——
+        // 请求"什么都不改"时出口是 0 且文案明确，而不是先打印 resized
+        if !resuming && matches!(intent, movepart::ShiftIntent::NoOp) {
+            println!("partition {part} is already {cur_bytes} bytes — nothing to do");
+            return crate::outcome::Outcome::applied_with(Vec::new());
+        }
         // 未收尾的搬移作业 ⇒ 必须走 resume 路径（即使几何上 free_right 已足够——swap 等
         // 收尾步骤可能尚未执行，普通扩容会跳过它们）
         if resuming || matches!(intent, movepart::ShiftIntent::Grow(s) if s > free_right_gpt(&g, part)) {

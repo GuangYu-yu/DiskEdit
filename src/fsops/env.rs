@@ -188,6 +188,15 @@ pub(crate) fn check_e2fsck_for_resize(code: i32) -> Result<(), FsError> {
     }
 }
 
+/// e2fsck 退出状态判定——resize 语境。退出码与"被信号杀死"是两件事：`code()` 为 None 时
+/// 用 [`describe_exit`] 出文，不拿一个占位码冒充退出码
+pub(crate) fn check_e2fsck_status_for_resize(st: &std::process::ExitStatus) -> Result<(), FsError> {
+    match st.code() {
+        Some(code) => check_e2fsck_for_resize(code),
+        None => Err(FsError::CommandFailed(format!("e2fsck {}, refuse resize", describe_exit(st)))),
+    }
+}
+
 /// 前序步骤（`e2fsck -fp` 一类修复、临时挂载触发的日志重放等）**可能已经写盘**之后，
 /// 后一步的启动失败不能再走 `Io`：`Io` 在命令层映射为 Infra，语义是"确定未写盘"
 /// （见 `outcome::From<FsError>`）。启动不起来只说明这一次 spawn 没跑成，反推不出盘

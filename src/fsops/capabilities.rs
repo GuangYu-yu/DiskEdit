@@ -130,26 +130,26 @@ pub(crate) fn needs_loop(scope: &DeviceScope, is_block: bool) -> bool {
 }
 
 /// mount 层的公共前置：xfs/btrfs 只能挂载态扩缩（grow 与 shrink 都经 with_mount），
-/// 镜像目标还要先经 losetup 映射。这些工具不进 grow_support/shrink_support 的
-/// FS 工具清单——它们属于挂载/映射层，不随 FS 类型走；但不探测就会在表已提交、
-/// FS 工具已动盘之后才暴露缺工具 ⇒ `Io → Infra`，违背"确定未写盘"的承诺
-pub(crate) fn check_mount_layer_tools(fstype: Option<FsKind>, is_block: bool, needs_loop: bool) -> Result<(), FsError> {
+/// 需要 loop 映射的目标还要先经 losetup 建立设备。这些工具不进 grow_support/shrink_support
+/// 的 FS 工具清单——它们属于挂载/映射层，不随 FS 类型走；但不探测就会在表已提交、
+/// FS 工具已动盘之后才暴露缺工具 ⇒ `Io → Infra`，违背"确定未写盘"的承诺。
+/// 目标是不是块设备不参与判定：那一维度已由 `needs_loop` 收下
+pub(crate) fn check_mount_layer_tools(fstype: Option<FsKind>, _is_block: bool, needs_loop: bool) -> Result<(), FsError> {
     // 执行侧 `with_scope_device_ranged` 对每个目标都先过 require_linux/require_root；
-    // 镜像目标（任何 FS）与块设备的 Range 目标还要 `losetup` 建映射。这些检查必须与
-    // FS 工具一同落在写盘前，否则表提交后才以 Io → Infra(30) 暴露，谎报"确定未写盘"
+    // 需要映射的目标，设备建立这一步走 losetup。这些检查必须与 FS 工具一同落在写盘前，
+    // 否则表提交后才以 Io → Infra(30) 暴露，谎报"确定未写盘"
     require_linux()?;
     require_root()?;
     let mount_fs = matches!(fstype, Some(FsKind::Xfs | FsKind::Btrfs));
-    // 块设备上的非挂载 FS 且不需要映射：执行侧不会碰 losetup，提前返回是准确的
-    if !mount_fs && !needs_loop {
-        return Ok(());
+    // 基础项随 FS 类型取，losetup 随"这一步是否经 attach_loop 建立设备"取：两个维度分开，
+    // 镜像目标与块设备的 Range 目标都需要映射。两者都不需要时清单为空，执行侧不碰这两层
+    let mut tools: Vec<&str> = Vec::new();
+    if mount_fs {
+        tools.extend(["mount", "umount"]);
     }
-    let tools: &[&str] = if mount_fs {
-        if is_block { &["mount", "umount"] } else { &["mount", "umount", "losetup"] }
-    } else {
-        // 非挂载 FS：镜像与块设备的 Range 目标都经 attach_loop 建立设备
-        &["losetup"]
-    };
+    if needs_loop {
+        tools.push("losetup");
+    }
     for t in tools {
         if find_tool(t).is_err() {
             return Err(FsError::missing(format!(

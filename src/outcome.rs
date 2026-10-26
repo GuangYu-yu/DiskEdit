@@ -212,7 +212,9 @@ impl Outcome {
                     return;
                 }
                 if !pending.is_empty() {
-                    eprintln!("partition table updated, but {} follow-up step(s) are pending:", pending.len());
+                    // 头部不点名"分区表"：纯 FS 路径（fs / superfloppy）也走 Applied，
+                    // 那里被写下的是文件系统。头部只陈述"主步骤已生效、后置条件未全满足"
+                    eprintln!("the requested change is applied, but {} follow-up step(s) are pending:", pending.len());
                     Self::report_pending(pending);
                 }
                 if *kernel_sync == KernelSync::Stale {

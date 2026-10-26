@@ -347,16 +347,36 @@ pub(crate) fn free_right_gpt(g: &ValidatedGeometry, part: u32) -> u64 {
     e.ending_lba.checked_add(1).map_or(0, |next| bound.saturating_sub(next))
 }
 
-/// MBR 分区右侧连续空闲扇区数（到下一表项起点或盘尾为止；扩展容器起点同样
-/// 构成边界——逻辑分区藏在容器内，不可侵入）。MBR 无 usable 区概念，上界=盘尾
+/// MBR 表项实际占用的区间 [起点, 终点]（含端点）。容器项（扩展分区）的 EBR 链不被解析，
+/// 链的实际跨度可能越过容器自述尺寸（外部工具追加到容器末端之后），故容器起点之后
+/// 整体按占用计到盘尾——宁可少给空闲，也不把逻辑分区所在的扇区判成可分配
+pub(crate) fn mbr_occupied(mbr: &[table::MbrPartition], total_sectors: u64) -> Vec<(u64, u64)> {
+    mbr.iter()
+        .map(|p| {
+            let last = if p.is_container {
+                total_sectors.saturating_sub(1)
+            } else {
+                (p.start_lba as u64 + p.size_lba as u64).saturating_sub(1)
+            };
+            (p.start_lba as u64, last)
+        })
+        .collect()
+}
+
+/// MBR 分区右侧连续空闲扇区数（到下一表项起点或盘尾为止）。扩展容器项构成边界：
+/// 起点在本分区右侧时以容器起点为界；起点落本分区左侧时，链可能越出容器自述末端
+/// 进入右侧，右侧空闲整体按 0 处理。MBR 无 usable 区概念，上界=盘尾
 pub(crate) fn free_right_msdos(mbr: &[table::MbrPartition], p: &table::MbrPartition, total_sectors: u64) -> u64 {
     let end = p.start_lba as u64 + p.size_lba as u64; // 排他
     let mut bound = total_sectors;
-    for o in mbr {
-        if o.num == p.num || (o.start_lba as u64) < end {
+    for (o, (o_start, o_end)) in mbr.iter().zip(mbr_occupied(mbr, total_sectors)) {
+        if o.num == p.num {
             continue;
         }
-        bound = bound.min(o.start_lba as u64);
+        // 占用区间伸到本分区末端之后：其起点即右侧上界（起点 ≤ 本分区末端时上界落空）
+        if o_end >= end {
+            bound = bound.min(o_start);
+        }
     }
     bound.saturating_sub(end)
 }

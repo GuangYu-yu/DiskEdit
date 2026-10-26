@@ -123,7 +123,7 @@ impl Checkpoint<crate::dev::IdentityProof> {
         if count as u64 > lim.entry_count as u64 {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "implausible checkpoint move count"));
         }
-        let mut moves = Vec::with_capacity(count);
+        let mut moves: Vec<PlanEntry> = Vec::with_capacity(count);
         for _ in 0..count {
             let part_num = u32::from_le_bytes(rd(off, 4)?.try_into().unwrap());
             // 同上：搬移项的分区号也会被直接索引
@@ -152,6 +152,22 @@ impl Checkpoint<crate::dev::IdentityProof> {
                 || new_end > lim.last_usable_lba
             {
                 return Err(io::Error::new(io::ErrorKind::InvalidData, "checkpoint entry outside usable range"));
+            }
+            // 目标区间起点是源起点加无符号位移，故 `first_lba` 的可用区下界已蕴含了新起点
+            // 的下界；这里补的是 plan 生成器的另外两条保证：同一个分区只搬一次，被扩容的
+            // 那个分区不参与搬移。CRC 自洽但违反它们的现场会让同一分区被搬两次，或把正在
+            // 扩容的分区当成成员搬走，写进表项后不可逆
+            if part_num == grow_part {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "implausible checkpoint move of the grow partition",
+                ));
+            }
+            if moves.iter().any(|m| m.part_num == part_num) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "implausible checkpoint duplicate move partition number",
+                ));
             }
             moves.push(PlanEntry { part_num, first_lba, len_lba, delta_lba, is_swap });
             off += 29;
@@ -271,6 +287,17 @@ pub(crate) fn read_checkpoint(src: &FileSource, g: &ValidatedGeometry) -> Result
     // 旧现场写进换了文件/换了映射的目标）。单独归档，唯一时给出点名拒绝
     let mut foreign: Vec<(PathBuf, String)> = Vec::new();
     for path in &candidates.paths {
+        // 与 journal 同一条判据：符号链接与非普通文件在 `read` 之前就记成"内容读不出来"。
+        // 直接读会跟随链接，或在落点是 FIFO 时阻塞到有写端出现；这一份不可读只坏这一份，
+        // 后面的候选照常看
+        match crate::dev::recovery_path_metadata(path) {
+            Ok(Some(_)) => {}
+            Ok(None) => continue,
+            Err(reason) => {
+                damaged.push((path.clone(), reason));
+                continue;
+            }
+        }
         let bytes = match std::fs::read(path) {
             Ok(b) => b,
             // 两种"读不出来"性质不同，处置因此不同：**文件的可得性**故障（EIO / EACCES）

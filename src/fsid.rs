@@ -186,8 +186,12 @@ pub fn identify(src: &FileSource, base: u64, len_bytes: u64) -> io::Result<Optio
     // swap: 签名位于"创建机页大小"末尾 10 字节（内核 include/linux/swap.h
     // union swap_header：reserved[PAGE_SIZE-10] + magic[10]），盘上不记录该页大小，
     // 故由 probe_swap_header 按候选集探测。此处取 swapon 口径的候选集——
-    // 本函数回答的是"这台宿主能不能把它当 swap 处理"
-    if probe_swap_header(src, base, len_bytes, &swapon_activatable_pages())?.is_some() {
+    // 本函数回答的是"这台宿主能不能把它当 swap 处理"。签名之外还要求头内自洽
+    // （版本与页数，见 swap_header_consistent）：签名可能只是某段普通数据末尾的巧合，
+    // 而误判 swap 会让扩容路径据此 mkswap，用新头覆盖该分区首个页
+    if let Some(page) = probe_swap_header(src, base, len_bytes, &swapon_activatable_pages())?
+        && swap_header_consistent(src, base, len_bytes, page)?
+    {
         return Ok(Some(FsKind::Swap));
     }
     Ok(None)
@@ -262,6 +266,28 @@ pub fn probe_swap_header(src: &FileSource, base: u64, len_bytes: u64, page_sizes
         }
     }
     Ok(None)
+}
+
+/// swap v1 头内自洽核对：`info` 区紧跟 `bootbits[1024]`，`version` @1024、`last_page` @1028
+/// （内核 include/linux/swap.h union swap_header；mkswap 写 version = 1，last_page 为
+/// 最高页号）。页大小不记录在头里，由 magic 命中的候选页给出。
+///
+/// `last_page` 与分区页数只比"不超过"（`last_page` < 页数）：扩容前记下的旧页数小于
+/// 当前分区页数是合法状态（swap 内容随扩容重建前不会被读取），
+/// 故不要求 `last_page` 等于 页数 − 1。
+/// 读失败照旧回 Err——设备故障不能压成"未识别"
+fn swap_header_consistent(src: &FileSource, base: u64, len_bytes: u64, page: u64) -> io::Result<bool> {
+    if !(4096..=65536).contains(&page) || !page.is_power_of_two() {
+        return Ok(false);
+    }
+    let at = base
+        .checked_add(1024)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "swap header offset overflows"))?;
+    let mut info = [0u8; 8];
+    src.read_at(at, &mut info)?;
+    let version = u32::from_le_bytes(info[0..4].try_into().unwrap());
+    let last_page = u32::from_le_bytes(info[4..8].try_into().unwrap());
+    Ok(version == 1 && u64::from(last_page) < len_bytes / page)
 }
 
 /// 元数据是 swap、但**本机（swapon 口径）激活不了**的区间：libblkid 口径命中而 swapon 口径落空。
@@ -390,6 +416,9 @@ mod tests {
         let mut data = vec![0u8; 8192];
         let ps = 4096u64;
         data[(ps - 10) as usize..ps as usize].copy_from_slice(b"SWAPSPACE2");
+        // 2 页的分区：header version = 1、last_page = 1（最高页号）
+        data[1024..1028].copy_from_slice(&1u32.to_le_bytes());
+        data[1028..1032].copy_from_slice(&1u32.to_le_bytes());
         let s = src_from("swap", data);
         assert_eq!(identify(&s, 0, 8192).unwrap(), Some(FsKind::Swap));
     }
@@ -409,8 +438,23 @@ mod tests {
         let mut data = vec![0u8; 16384];
         let ps = 8192u64;
         data[(ps - 10) as usize..ps as usize].copy_from_slice(b"SWAPSPACE2");
-        let s = src_from("swap8k", data);
+        // 区间只有 8 KiB = 1 页：version = 1、last_page = 0
+        data[1024..1028].copy_from_slice(&1u32.to_le_bytes());
+        let s = src_from("swap8k", data.clone());
         assert_eq!(identify(&s, 0, 8192).unwrap(), Some(FsKind::Swap));
+        // 签名在、头内不自洽：version 为 0
+        let mut no_version = data.clone();
+        no_version[1024..1028].fill(0);
+        assert_eq!(identify(&src_from("swap8k_v0", no_version), 0, 8192).unwrap(), None);
+        // last_page 指向分区之外（这里 1 页的分区只有第 0 页）
+        let mut beyond = data.clone();
+        beyond[1028..1032].copy_from_slice(&1u32.to_le_bytes());
+        assert_eq!(identify(&src_from("swap8k_beyond", beyond), 0, 8192).unwrap(), None);
+        // 记的是扩容前的旧页数（小于当前页数）仍是合法 swap
+        let mut grown = data;
+        grown.resize(32768, 0);
+        grown[1028..1032].copy_from_slice(&1u32.to_le_bytes());
+        assert_eq!(identify(&src_from("swap8k_grown", grown), 0, 32768).unwrap(), Some(FsKind::Swap));
     }
 
     #[test]

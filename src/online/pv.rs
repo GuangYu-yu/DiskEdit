@@ -190,15 +190,25 @@ pub(crate) fn check_new_range(t: &OnlineTarget, new_len_bytes: u64, disk: &FileS
     Ok(())
 }
 
+/// 在线 PV 路径在锁下取得的独占权，连同锁下打开的那只只读整盘句柄。收尾的 LVM 链
+/// 要按新尺寸读表与派生分区节点：用这只句柄就仍然是"锁保护的那台设备"，按命令行
+/// 路径重开会在窗口内落到别的设备上
+pub struct LockedPv {
+    /// 独占权本身不被读取：它随本值存活，收尾链结束才释放
+    #[allow(dead_code)]
+    pub lock: crate::targetlock::TargetLock,
+    pub disk: FileSource,
+}
+
 /// PV 分区在线扩容：只动分区层，pvresize/lvextend 归调用方。第二返回值是
 /// 锁下取得的实际旧尺寸（前置失败时为 0，调用方只在 complete 分支消费）。
-/// 第三返回值是本函数持有的独占锁：随后的 pvresize/lvextend 仍在同一次操作里，
-/// 调用方须把它带到 LVM 链结束——在这里就释放会让那条链落在锁外
+/// 第三返回值是本函数持有的独占锁与锁下打开的整盘句柄：随后的 pvresize/lvextend
+/// 仍在同一次操作里，调用方须把它们带到 LVM 链结束——在这里就释放会让那条链落在锁外
 pub fn resize_pv(
     disk_name: &str,
     pno: u32,
     decide: impl FnOnce(&FileSource) -> Result<Option<u64>, Fail>,
-) -> (Outcome, u64, Option<crate::targetlock::TargetLock>) {
+) -> (Outcome, u64, Option<LockedPv>) {
     // 解析只读 sysfs / 路径，尚未写盘 → Infra。尚未取得独占权，旧尺寸不可信
     let t = match resolve_pv_target(disk_name, pno) {
         Ok(t) => t,
@@ -262,7 +272,7 @@ pub fn resize_pv(
     // delta 为 0 时 pvresize/lvextend 只同步现状。相等与否必须由锁下事实判定——
     // 锁前快照在窗口内可能已过期，用它短路会跳过本该做的写表
     if new_len_bytes == t.part_len_bytes {
-        return (Outcome::applied_with(Vec::new()), old_len_bytes, Some(owned));
+        return (Outcome::applied_with(Vec::new()), old_len_bytes, Some(LockedPv { lock: owned, disk }));
     }
     if new_len_bytes < t.part_len_bytes {
         return (Outcome::refused(format!(
@@ -302,8 +312,8 @@ pub fn resize_pv(
             }
         },
         old_len_bytes,
-        // 表已写：后面的 PV 链仍属本次操作，锁随返回值继续持有
-        Some(owned),
+        // 表已写：后面的 PV 链仍属本次操作，锁与锁下的整盘句柄随返回值继续持有
+        Some(LockedPv { lock: owned, disk }),
     )
 }
 

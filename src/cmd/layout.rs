@@ -176,6 +176,11 @@ pub(crate) fn cmd_add(a: &Args) -> crate::outcome::Outcome {
                 Some(s) => parse_guid(s).unwrap_or_else(|| bail_fail(Fail::refused(format!("invalid GUID {s:?} (expect standard text like C12A7328-F81F-11D2-BA4B-00A0C93EC93B, hyphens optional)")))),
                 None => table::LINUX_FS_TYPE_GUID, // Linux filesystem data（util-linux GPT_DEFAULT_ENTRY_TYPE）
             };
+            // 全零类型 GUID 是"未用条目"的形状：LBA 非零而类型为零的条目在本工具与 UEFI/内核
+            // 两套判据下含义相反，判据与文案同 gpt_policy::set_type_guid
+            if type_guid == [0u8; 16] {
+                bail_fail(Fail::refused("type GUID cannot be all-zero (that marks an unused entry — use `del`)"));
+            }
             // 名字守卫在消费点：GPT 分支是 --name 的唯一落盘处（MBR 分支已拒绝 --name）
             if let Some(n) = &a.name { crate::support::check_gpt_name_len(n); }
             match crate::gpt_policy::add_entry(&mut src, start, end, a.name.as_deref().unwrap_or(""), type_guid) {
@@ -441,8 +446,9 @@ pub(crate) fn cmd_create(a: &Args) -> crate::outcome::Outcome {
                 crate::support::note_sector_truncation("creating", b, ss);
                 b / ss
             });
-            let used: Vec<(u64, u64)> = mbr.iter().map(|p| (p.start_lba as u64, p.start_lba as u64 + p.size_lba as u64 - 1)).collect();
+            // 容器项覆盖到盘尾：EBR 链不被解析，链可能越过容器自述尺寸（见 support::mbr_occupied）
             let disk_last = table::container_last_lba(&src, ss);
+            let used = crate::support::mbr_occupied(&mbr, src.size / ss);
             (table::TableLabel::Mbr, aligned_gaps(&used, unit, disk_last, unit), want, ss)
         }
         // 可辨但受损的盘不得给出会覆盖它的下一步：new 会重写头与条目数组

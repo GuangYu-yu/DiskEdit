@@ -46,11 +46,12 @@ pub(crate) fn resize_done(
     is_pv: bool,
     is_block: bool,
     old_bytes: u64,
-    online_lock: Option<crate::targetlock::TargetLock>,
+    online_lock: Option<crate::online::LockedPv>,
 ) -> Result<crate::outcome::Outcome, String> {
     // 在线路径的独占权要覆盖到 LVM 链结束：pvresize/lvextend 是本次操作的后置条件，
-    // 在它们跑之前释放锁，另一个 diskedit 就能在这段窗口内改写同一块盘
-    let _online_lock = online_lock;
+    // 在它们跑之前释放锁，另一个 diskedit 就能在这段窗口内改写同一块盘。带出的整盘
+    // 句柄同时充当收尾读表的那一只（见 `ro` 的取用顺序）
+    let online_lock = online_lock;
     if !is_pv {
         println!("resized (verify with: diskedit info {})", a.target);
         return Ok(crate::outcome::Outcome::applied_with(Vec::new()));
@@ -59,14 +60,15 @@ pub(crate) fn resize_done(
     {
         // 屏障要经可变借用落（mark_non_reversible 是 &mut self），只有 Linux 路径用到
         let mut wsrc = wsrc;
-        // 写句柄在手（离线路径）时直接复用它读盘上现状；在线路径无 journal 句柄，
-        // 才自开只读句柄
+        // 读盘上现状的句柄，取用顺序：离线写句柄 → 在线锁下带出的整盘句柄 → 自开只读句柄。
+        // 在线路径用带出的那一只，按命令行路径重开会落到窗口内另一台设备上
         let mut opened = None;
         // 表项重读：GPT 与 MBR 的分派、表自身 ss 的换算都在 gpt_policy::partition_bytes 一处
         let (start_bytes, new_bytes) = {
-            let ro: &FileSource = match wsrc.as_deref() {
-                Some(w) => w,
-                None => {
+            let ro: &FileSource = match (wsrc.as_deref(), online_lock.as_ref()) {
+                (Some(w), _) => w,
+                (None, Some(l)) => &l.disk,
+                (None, None) => {
                     if opened.is_none() {
                         opened = Some(open_target_ro(a).map_err(|f| {
                             format!("post-resize: cannot reopen {}: {}", a.target, crate::outcome::into_io_error(f))
@@ -97,9 +99,10 @@ pub(crate) fn resize_done(
             // 分区节点按已打开句柄的 rdev + 起始字节 + 分区号从 sysfs 派生：命令行字符串
             // 再拼一次会在 /dev/mapper、/dev/disk/by-uuid 这类别名上落到不存在的名字或
             // 别人的节点上（find_block_partition_node 与 FS 路径用的是同一实现）
-            let ro: &FileSource = match wsrc.as_deref() {
-                Some(w) => w,
-                None => opened.as_ref().expect("block device path reopens the target above"),
+            let ro: &FileSource = match (wsrc.as_deref(), online_lock.as_ref()) {
+                (Some(w), _) => w,
+                (None, Some(l)) => &l.disk,
+                (None, None) => opened.as_ref().expect("block device path reopens the target above"),
             };
             let node = fsops::find_block_partition_node(ro, part, start_bytes)
                 .map_err(|e| format!("post-resize: {e}"))?;
@@ -111,9 +114,10 @@ pub(crate) fn resize_done(
             // 故走到镜像分支时 opened 必已在上面的 new_bytes 块中填好。
             // 这里用 LVM 专用入口：用户自己映射的 loop 分区被 dm 持有时是活动 VG 的常态，
             // 而 pvresize 写的是 PV 元数据，持有栈不解析它（判据见 with_partition_device_for_lvm）
-            let ro: &FileSource = match wsrc.as_deref() {
-                Some(w) => w,
-                None => opened.as_ref().expect("image PV path reopens the target above"),
+            let ro: &FileSource = match (wsrc.as_deref(), online_lock.as_ref()) {
+                (Some(w), _) => w,
+                (None, Some(l)) => &l.disk,
+                (None, None) => opened.as_ref().expect("image PV path reopens the target above"),
             };
             fsops::with_partition_device_for_lvm(ro, part, |pv| {
                 lvm_grow_chain(pv, new_bytes, delta, a.grow_lv, a.lv.as_deref())

@@ -171,6 +171,15 @@ impl WriteSource {
     }
 }
 
+/// 扇区大小须为 2 的幂且落在 512..=65536；这是本工具的自定约束，非规范要求。
+/// 换算按 LBA 的调用点以它为分母，0 或非 2 的幂会把尺寸静默压成偏移 0
+fn check_sector_size(sector_size: u64) -> io::Result<()> {
+    if !(512..=65536).contains(&sector_size) || !sector_size.is_power_of_two() {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, format!("invalid sector size {sector_size}")));
+    }
+    Ok(())
+}
+
 impl FileSource {
     /// 底层文件元数据。**只给这一点能力，不交出句柄**：`&File` 也实现 `Write`，
     /// 交出去就等于在 journal 与越界检查之外重开一条写路（见字段 `file` 的注释）
@@ -216,9 +225,12 @@ impl FileSource {
     #[cfg(target_os = "linux")]
     pub(crate) fn block_open_extras(identity: &TargetIdentity, node: &Path) -> io::Result<(TargetFingerprint, Option<(u64, u64)>)> {
         let fp = if identity.kind == TargetKind::Image {
-            // 指纹按**打开后的数据路径**取（loop 的 backing 名字由已打开句柄解析），
-            // 不按 sysfs 字符串：那个名字是读取者的视角，不是对象本身
-            TargetFingerprint::from_meta(&std::fs::metadata(identity.data_path())?)
+            // 指纹取自身份解析时核对过的那个 backing 对象（见 TargetIdentity::loop_backed）；
+            // 解析时没有留下指纹（非 loop 路径）才按打开后的数据路径取
+            match identity.backing_fp {
+                Some(fp) => fp,
+                None => TargetFingerprint::from_meta(&std::fs::metadata(identity.data_path())?),
+            }
         } else {
             let (size, id) = disk_identity(node)?;
             TargetFingerprint { dev: 0, ino: 0, size, id: id.as_deref().map_or(0, |s| fnv1a64(s.as_bytes())) }
@@ -242,6 +254,7 @@ impl FileSource {
                     .open(path)?;
                 let size = ioctl::blkgetsize64(&file)?;
                 let sector_size = ioctl::blksszget(&file)? as u64;
+                check_sector_size(sector_size)?;
                 // fd 已拿到：身份与映射都按它的 rdev 反查 sysfs，不再按路径二次 stat——
                 // /dev 节点在窗口内被 udev 重建时，fd 与身份描述会指向不同设备
                 let rdev = {
@@ -340,13 +353,7 @@ impl FileSource {
         let meta = file.metadata()?;
         let size = meta.len();
         let sector_size = sector_size_override.unwrap_or(512);
-        // 镜像扇区大小须为 2 的幂且落在 512..=65536；这是本工具的自定约束，非规范要求
-        if !(512..=65536).contains(&sector_size) || !sector_size.is_power_of_two() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("invalid sector size {sector_size}"),
-            ));
-        }
+        check_sector_size(sector_size)?;
         // 身份也取自已打开的句柄：路径在 open 与 canonicalize 之间被替换时，身份与写句柄
         // 会指向两个不同的文件（见 `identity_of_opened_image`）
         #[cfg(target_os = "linux")]
@@ -376,6 +383,7 @@ impl FileSource {
         let file = OpenOptions::new().read(true).open(path)?;
         let size = ioctl::blkgetsize64(&file)?;
         let sector_size = ioctl::blksszget(&file)? as u64;
+        check_sector_size(sector_size)?;
         // 与可写打开同口径：身份与映射都从 fd 的 rdev 派生
         let rdev = {
             use std::os::unix::fs::MetadataExt;

@@ -220,6 +220,18 @@ fn check_replay_entry(src: &FileSource, rec: &JournalRecord) -> EntryCheck {
     }
 }
 
+/// 回放计划：哪些偏移的整条链已经退回链首，以及整卷是否都已回滚。
+///
+/// 按偏移判定而不是整卷一个布尔：回滚中断可能停在"某个偏移已退到链首、另一个偏移还没
+/// 回放"的混合态；整卷判据会把本工具自己的进度当成外部改动，从而整体拒绝。
+#[derive(Debug)]
+struct ReplayPlan {
+    /// 当前字节已等于该偏移**链首**记录 pre-image 的偏移：其整条链都不再回放
+    rolled_back_offsets: std::collections::HashSet<u64>,
+    /// 每个偏移都已退回链首（本次不写回任何字节）
+    complete: bool,
+}
+
 /// 写盘前的干跑：按真实回放的顺序（逆序）在**内存里的虚拟盘面**上逐条核对并改写。
 /// 全部通过 ⇒ 回放不会在回滚到一半时才发现盘面不对；任一条不过 ⇒ 拒绝发生在第一个
 /// 字节写回之前。
@@ -235,8 +247,8 @@ fn check_replay_entry(src: &FileSource, rec: &JournalRecord) -> EntryCheck {
 /// 调用点类别，故同一偏移的两条记录长度必相同。失效条件：将来新增一类 journaled 局部
 /// 写，其起始偏移与既有类别重合而长度不同——届时这里会退化为"多读一次真盘"的误拒
 /// （fail-closed，一字未写），并应把索引改成 (offset, length) 双键
-/// 返回 true = 盘上已是每条偏移回滚到底的原文（不需要回放，见下方链首判据）
-fn verify_replay_plan(src: &FileSource, entries: &[JournalRecord]) -> Result<bool, Fail> {
+/// 返回回放计划：哪些偏移的整条链已退回链首、是否整卷都已回滚（见下方链首判据）
+fn verify_replay_plan(src: &FileSource, entries: &[JournalRecord]) -> Result<ReplayPlan, Fail> {
     // 每条记录的区间都必须在目标容量之内：越界的偏移意味着这份 journal 记的不是这张
     // 盘（或盘被换过），回放写出去会把镜像拉到文件尾之外。判据放在读盘之前，故拒绝
     // 时一个字节都没写
@@ -258,36 +270,41 @@ fn verify_replay_plan(src: &FileSource, entries: &[JournalRecord]) -> Result<boo
         }
     }
     // 同一 offset 的整条链回滚到底后，盘上留下的是**最早**那条的原文。上一轮 undo 已把
-    // 每条都写回、却因掉电或 unlink 失败没删 journal 时，重跑会停在这个状态：最后一条
-    // 读到的既不是它的 after 也不是它的 bytes，逐条核对会把它误判成"盘被外部改动"。
-    // 整条链回到链首即整体已回滚，回放再写一遍这些原文是幂等的
+    // 某条链的每条都写回、却因掉电或 unlink 失败没删 journal 时，重跑会停在这个状态：
+    // 该偏移最后一条读到的既不是它的 after 也不是它的 bytes。逐偏移认这个链首值，
+    // 命中的整条链跳过，其余偏移照常核对并回放——部分进度因此可续，而不是被当成外部
+    // 改动整体拒绝
     //
-    // 这条快路径需要身份证据：全零的 pre-image 与全零的盘面无法区分"这是本目标已经
-    // 回滚过的现场"和"盘被换成了另一张空盘"。没有可比指纹时退回逐条核对——对不上就
-    // 拒绝，对得上（含盘面仍是 pre-image 的幂等情况）再回放
+    // 快路径需要身份证据：仅在目标能给出任何身份字段时才敢走快路径。没有可比指纹时
+    // （指纹全零来自什么也给不出的载体），无法把"本目标已回滚过的现场"与"盘被换成了
+    // 另一张盘"区分开，故退回逐条核对。换盘（含换成一张全零空盘）的防护只有 cmd_undo
+    // 里那道 scene_mismatch：它拒绝身份不相符的目标。这道守卫本身只判当前目标能否给出
+    // 身份字段，不判盘面内容
     let mut chain_head: std::collections::HashMap<u64, Vec<u8>> = std::collections::HashMap::new();
     for rec in entries {
         if let RecoveryData::PreImage { off, bytes, .. } = &rec.recovery {
             chain_head.entry(*off).or_insert_with(|| bytes.clone());
         }
     }
-    let mut rolled_back = !chain_head.is_empty() && src.fingerprint.has_any_evidence();
-    for (off, head) in &chain_head {
-        if !rolled_back {
-            break;
-        }
-        let mut buf = vec![0u8; head.len()];
-        if !matches!(src.read_at(*off, &mut buf), Ok(()) if buf == *head) {
-            rolled_back = false;
-            break;
+    let mut rolled_back_offsets: std::collections::HashSet<u64> = std::collections::HashSet::new();
+    if src.fingerprint.has_any_evidence() {
+        for (off, head) in &chain_head {
+            let mut buf = vec![0u8; head.len()];
+            if matches!(src.read_at(*off, &mut buf), Ok(()) if buf == *head) {
+                rolled_back_offsets.insert(*off);
+            }
         }
     }
-    if rolled_back {
-        return Ok(true);
+    if !chain_head.is_empty() && rolled_back_offsets.len() == chain_head.len() {
+        return Ok(ReplayPlan { rolled_back_offsets, complete: true });
     }
     let mut staged: std::collections::HashMap<u64, Vec<u8>> = std::collections::HashMap::new();
     for rec in entries.iter().rev() {
         let RecoveryData::PreImage { off, bytes, after } = &rec.recovery else { continue };
+        // 已整条链退回链首的偏移不再核对也不再回放：它的中间值已不属于任何待回滚的历史
+        if rolled_back_offsets.contains(off) {
+            continue;
+        }
         // 该偏移若已被本轮更晚的记录改写，取虚拟盘面上的值；否则从真盘读一次
         let now = match staged.get(off) {
             Some(v) if v.len() == bytes.len() => v.clone(),
@@ -303,15 +320,31 @@ fn verify_replay_plan(src: &FileSource, entries: &[JournalRecord]) -> Result<boo
             }
         };
         if !matches_journaled_write(&now, after, bytes) {
-            return Err(Fail::refused(format!(
-                "target no longer matches the journaled write at offset {off} — the disk changed outside \
-                 this tool (or an interrupted write by this tool itself) after that write; \
-                 replaying would overwrite the foreign edit; {FOREIGN_EDIT_HINT}; {ROLLBACK_STUCK_REMEDY}"
-            )));
+            // 能区分时区分：当前字节等于该偏移链首的 pre-image，说明这可能是本工具自己
+            // 上次回滚到链首的进度（上一轮在写到该偏移之前就中断了），只是计划阶段没能
+            // 把它确立为进度；其余情况只能是本工具之外的改动
+            let at_chain_head = chain_head
+                .get(off)
+                .is_some_and(|h| h.as_slice() == now.as_slice());
+            return Err(Fail::refused(if at_chain_head {
+                format!(
+                    "the target already holds the chain-head pre-image of the journaled writes at offset {off} — \
+                     consistent with this tool's own rollback progress from an interrupted run, but the plan did \
+                     not establish that progress for this target, so it is not treated as progress here and nothing \
+                     is written; {ROLLBACK_STUCK_REMEDY}"
+                )
+            } else {
+                format!(
+                    "target no longer matches the journaled write at offset {off} and does not hold its chain-head \
+                     pre-image either — the disk changed outside this tool after that write, or an interrupted write \
+                     by this tool left a torn value; replaying would overwrite the foreign edit; {FOREIGN_EDIT_HINT}; \
+                     {ROLLBACK_STUCK_REMEDY}"
+                )
+            }));
         }
         staged.insert(*off, bytes.clone());
     }
-    Ok(false)
+    Ok(ReplayPlan { rolled_back_offsets, complete: false })
 }
 
 /// 逐条核对失败后共用的出路：两种成因（盘上字节被外部改动、目标被缩短到记录之外）下
@@ -399,7 +432,9 @@ pub(crate) fn cmd_undo(a: &Args) -> u8 {
             eprintln!(
                 "warning: the journal ends with an incomplete record (an interrupted append, or a record that was damaged) — \
                  replaying the {n} complete record(s) before it; anything recorded after that point cannot be undone, and the \
-                 journal is archived rather than deleted so that tail stays inspectable"
+                 journal is archived rather than deleted so that tail stays inspectable. The discarded tail may be a barrier \
+                 record: if this run's operation involved moving data or an external FS tool, verify that the partition table \
+                 and the on-disk contents agree before relying on this target"
             );
         }
         // 含**不可回滚写入**的 journal 不可回滚：数据搬移的字节、外部 FS 工具的写入
@@ -420,21 +455,31 @@ pub(crate) fn cmd_undo(a: &Args) -> u8 {
             )));
         }
         // 整体核对先于任何写回：这份 journal 若不是写给当前盘面的，回滚必须在
-        // 第一个字节落地之前被拒（判据见 verify_replay_plan）。返回 true 表示盘上已是
-        // 每条偏移回滚到底的原文——上一次 undo 写完却没删 journal 的现场，写回去是幂等的
-        let already_rolled_back = verify_replay_plan(&src, &entries).unwrap_or_else(|f| bail_fail(f));
+        // 第一个字节落地之前被拒（判据见 verify_replay_plan）。计划里已退回链首的偏移
+        // 整条链跳过；全部偏移都在其中表示上一次 undo 写完却没删 journal，写回是幂等的
+        let plan = verify_replay_plan(&src, &entries).unwrap_or_else(|f| bail_fail(f));
         // 已写回的条目数：核对失败时的退出码按它分流——refused/infra 的契约是"确定
         // 未写盘"，部分回滚已落盘后按它报会让脚本误判盘面未动（写失败臂同据归 Failed）
         let mut replayed: usize = 0;
-        if already_rolled_back {
+        if plan.complete {
             eprintln!("note: the target already holds the pre-image of every journaled write — nothing to write back");
+        } else if !plan.rolled_back_offsets.is_empty() {
+            eprintln!(
+                "note: {done} of the journaled offsets already hold their chain-head pre-image — their chains are \
+                 not replayed, the remaining offsets are checked and rolled back",
+                done = plan.rolled_back_offsets.len()
+            );
         }
-        // 整体已回滚时逐条核对必然对不上（链上更早的原文不等于本条 after），故不进入回放
-        let to_replay = if already_rolled_back { &entries[..0] } else { &entries[..] };
+        // 全部偏移都已回滚时逐条核对必然对不上（链上更早的原文不等于本条 after），故不进入回放
+        let to_replay = if plan.complete { &entries[..0] } else { &entries[..] };
         for rec in to_replay.iter().rev() {
             // Barrier 已在前置整体拒绝（上方 find_map），此臂只作纵深防御——真有漏网
             // 的 Barrier，跳过比回放更接近"不假装回滚了"的安全缺省
             let RecoveryData::PreImage { off, bytes, .. } = &rec.recovery else { continue };
+            // 整条链已退回链首的偏移不再写回：它已经停在本次回放的目标状态上
+            if plan.rolled_back_offsets.contains(off) {
+                continue;
+            }
             // 纵深：整体核对与本条写入之间，盘面仍可能被外部改动（journal 不挡第三方）
             match check_replay_entry(&src, rec) {
                 EntryCheck::Ok => {}
@@ -518,7 +563,7 @@ pub(crate) fn cmd_undo(a: &Args) -> u8 {
         // 仍把它列为现场——回放既然已经成功，这个"有事没做完"的表象必须一并消失。
         // Barrier 型 journal 走不到这里（上方已整体拒绝），Ambiguous 也在挑 journal
         // 时前置拒绝，这里能多删的只有历史候选
-        let mut leftovers = clear_journal_candidates(
+        let mut cleared = clear_journal_candidates(
             src.identity.journal_candidates(),
             &p,
             &src.scene(),
@@ -539,18 +584,18 @@ pub(crate) fn cmd_undo(a: &Args) -> u8 {
         let candidates = src.identity.checkpoint_candidates(Some(&src));
         for ckpt in candidates.paths {
             if !crate::dev::remove_recovery_file(&ckpt) {
-                leftovers.push(ckpt.display().to_string());
+                cleared.leftovers.push(ckpt.display().to_string());
             }
         }
         // 无法枚举的那份删不掉，也不能当作不存在：回放已完成，但目标的恢复状态没有
         // 清干净，随后任何写命令都会因它被拒。如实记成一条未完成的清理
         if let Some(reason) = candidates.unenumerable {
-            leftovers.push(format!(
+            cleared.leftovers.push(format!(
                 "a checkpoint under the legacy GUID-based name could not be located ({reason})"
             ));
         }
         // undo 不开撤销窗口（WriteNoJournal）：结果只用于自身退出码
-        let summary = if already_rolled_back {
+        let mut summary = if plan.complete {
             format!(
                 "the journal's writes were already rolled back — nothing written this run (verify with: diskedit info {})",
                 a.target
@@ -558,6 +603,14 @@ pub(crate) fn cmd_undo(a: &Args) -> u8 {
         } else {
             format!("undone {n} journal entries (verify with: diskedit info {})", a.target)
         };
+        // 另一份损坏 journal 的记录一条都没回放：落点已腾空，但它描述的那次写入可能仍在
+        // 盘上。成功串不能只说"已回滚"，否则脚本会据此认为盘已回到写入前
+        if !cleared.unreplayed.is_empty() {
+            summary.push_str(
+                "; the records in another damaged journal were not replayed, so the target may still hold the \
+                 post-write state they describe",
+            );
+        }
         // 回放只覆盖 journal 记下的表写入：文件系统内容由外部工具改过，不在可回滚范围。
         // 这句必须随成功结果一起出现——帮助文本里的同一句只在用户查帮助时可见
         eprintln!(
@@ -571,21 +624,52 @@ pub(crate) fn cmd_undo(a: &Args) -> u8 {
         let code = table_write_done(&src, &summary).exit_code();
         // 残尾对应的写入既未能回放也无法排除：完整前缀回到写入前，但整份 journal 不能说
         // 已回滚到底，出口不能报成完整成功（journal 已归档，见 clear_journal_candidates）。
-        // 这个 20（EXIT_PARTIAL）是 undo 的出口口径：回放做了什么就报什么，与 abandon 的
-        // 30 不是同一个契约（那一条见 cmd/abandon.rs）
-        let code = if tail_incomplete { code.max(EXIT_PARTIAL) } else { code };
-        if leftovers.is_empty() {
+        // 另一份损坏 journal 的记录同样一条都没回放：归档只腾空候选落点，那些记录描述的
+        // 写后状态可能仍在盘上。两者都按 20（EXIT_PARTIAL）报，与 abandon 的 30 不是同一个
+        // 契约（那一条见 cmd/abandon.rs）
+        if !cleared.unreplayed.is_empty() {
+            eprintln!(
+                "warning: the records in these damaged journal candidate(s) were not replayed — the target may \
+                 still hold the post-write state they describe:"
+            );
+            for p in &cleared.unreplayed {
+                eprintln!("  {p}");
+            }
+        }
+        let code = if tail_incomplete || !cleared.unreplayed.is_empty() {
+            code.max(EXIT_PARTIAL)
+        } else {
+            code
+        };
+        if cleared.leftovers.is_empty() {
             return code;
         }
         // 回放已完成、但现场文件仍在：残留的 journal 让下一次写命令被判 busy，残留的 ckpt
         // 让后续 resize/apply 被判 Divergent，而此时已无 journal 可再 undo——只能人工处理。
         // 成功串已打印，出口按"完成但有待办"降级（20），并逐条指名残留路径
         eprintln!("warning: the rollback is complete but these recovery files could not be removed:");
-        for p in &leftovers {
+        for p in &cleared.leftovers {
             eprintln!("  {p}");
         }
         eprintln!("  next write commands will report this target as busy until they are gone; remove them by hand if they are stale");
         code.max(EXIT_PARTIAL)
+    }
+}
+
+/// 清理候选的结论。两个清单性质不同：
+/// - `leftovers`：仍在候选落点上、删不掉的路径——写闸口会继续把目标判成 busy
+/// - `unreplayed`：已归档、但其记录一条都没有回放的损坏候选——落点腾空了，可盘面可能
+///   仍停在那些记录所描述的写后状态
+struct ClearedCandidates {
+    leftovers: Vec<String>,
+    unreplayed: Vec<String>,
+}
+
+#[cfg(test)]
+impl ClearedCandidates {
+    /// 候选落点上没有残留，也没有"记录未回放"的候选
+    fn is_empty(&self) -> bool {
+        self.leftovers.is_empty() && self.unreplayed.is_empty()
     }
 }
 
@@ -601,14 +685,15 @@ pub(crate) fn cmd_undo(a: &Args) -> u8 {
 /// 它记的不是别的目标——候选路径按命名派生只说明"可能是我们的落点"，证明不了
 /// "是我们的文件"。任一条不成立都保留并告警，交 abandon 人工处置。
 ///
-/// 返回值是删不掉的路径：调用方据此把出口降到"完成但待办"
+/// 返回值分两类（见 [`ClearedCandidates`]）：落点上删不掉的路径，以及已归档但记录
+/// 一条都没有回放的损坏候选
 fn clear_journal_candidates(
     candidates: &[std::path::PathBuf],
     picked: &std::path::Path,
     actual: &crate::dev::LiveScene,
     torn: bool,
-) -> Vec<String> {
-    let mut failed = Vec::new();
+) -> ClearedCandidates {
+    let mut cleared = ClearedCandidates { leftovers: Vec::new(), unreplayed: Vec::new() };
     for cand in candidates {
         if cand == picked {
             if torn {
@@ -619,11 +704,11 @@ fn clear_journal_candidates(
                     ),
                     Err(why) => {
                         eprintln!("warning: {why}");
-                        failed.push(cand.display().to_string());
+                        cleared.leftovers.push(cand.display().to_string());
                     }
                 }
             } else if !crate::dev::remove_recovery_file(cand) {
-                failed.push(cand.display().to_string());
+                cleared.leftovers.push(cand.display().to_string());
             }
             continue;
         }
@@ -647,28 +732,33 @@ fn clear_journal_candidates(
                         );
                         // 任何留在候选落点上的文件都会被写闸口当成现场：这条路径与身份无关，
                         // 只按落点判定，故留着它就把本目标顶成 busy——必须计入未完成的清理
-                        failed.push(cand.display().to_string());
+                        cleared.leftovers.push(cand.display().to_string());
                         continue;
                     }
                     // 同目标、同一身份的候选里，只有"读得出记录"或"零记录空壳"能确认
                     // 已无信息；读不出的那份可能正是丢了记录的真现场（pick_journal 的
-                    // Damaged 口径），删除不可逆，按 `.torn` 形态归档保留证据
+                    // Damaged 口径），删除不可逆，按 `.torn` 形态归档保留证据。归档只腾空
+                    // 落点：这份文件记下的写入一条都没有回放，盘面可能仍是写后状态，
+                    // 因此同时计入"未回放"清单，由调用方降级出口并说明
                     if matches!(crate::dev::classify_journal(cand), JournalCandidate::Damaged(_)) {
                         match archive_torn(cand) {
-                            Ok(to) => eprintln!(
-                                "note: archived the unreadable journal candidate as {} — inspect it before deleting",
-                                to.display()
-                            ),
+                            Ok(to) => {
+                                eprintln!(
+                                    "note: archived the unreadable journal candidate as {} — inspect it before deleting",
+                                    to.display()
+                                );
+                                cleared.unreplayed.push(to.display().to_string());
+                            }
                             Err(why) => {
                                 eprintln!("warning: {why}");
-                                failed.push(cand.display().to_string());
+                                cleared.leftovers.push(cand.display().to_string());
                             }
                         }
                         continue;
                     }
                     eprintln!("removing stale journal candidate {}", cand.display());
                     if !crate::dev::remove_recovery_file(cand) {
-                        failed.push(cand.display().to_string());
+                        cleared.leftovers.push(cand.display().to_string());
                     }
                 }
                 Err(e) => {
@@ -677,7 +767,7 @@ fn clear_journal_candidates(
                         cand.display()
                     );
                     // 留下来就会被写闸口当成现场（分类只看落点上的文件），必须计入清理
-                    failed.push(cand.display().to_string());
+                    cleared.leftovers.push(cand.display().to_string());
                 }
             },
             Ok(false) => {
@@ -687,18 +777,18 @@ fn clear_journal_candidates(
                     cand.display()
                 );
                 // 非空且读得出来的文件在落点上会被分类成 Damaged，同样把本目标顶成 busy
-                failed.push(cand.display().to_string());
+                cleared.leftovers.push(cand.display().to_string());
             }
             Err(e) => {
                 eprintln!(
                     "warning: {} could not be read to check for a diskedit journal header ({e}) — left in place",
                     cand.display()
                 );
-                failed.push(cand.display().to_string());
+                cleared.leftovers.push(cand.display().to_string());
             }
         }
     }
-    failed
+    cleared
 }
 
 /// 撕裂尾 journal 的归档后缀。首选名被占用时顺延为 `.torn.N`，绝不覆盖既有归档——
