@@ -372,8 +372,12 @@ fn backing_identity_from_sysfs(name: &str) -> io::Result<Option<LoopBacking>> {
     let attr = format!("/sys/block/{name}/loop/backing_file");
     let raw = match std::fs::read_to_string(&attr) {
         Ok(s) => s,
-        // 未绑定：部分内核在该属性的读取上返回 ENXIO/ENODEV
-        Err(e) if matches!(e.raw_os_error(), Some(libc::ENXIO) | Some(libc::ENODEV)) => return Ok(None),
+        // 未绑定：该属性组由 loop_configure 建立、在 __loop_clr_fd 里移除
+        // （drivers/block/loop.c v6.8: loop_sysfs_init :1093 / loop_sysfs_exit :1161），
+        // 所以属性不存在和 ENXIO/ENODEV 一样是确定的"没有绑定文件"
+        Err(e) if matches!(e.raw_os_error(), Some(libc::ENOENT) | Some(libc::ENXIO) | Some(libc::ENODEV)) => {
+            return Ok(None)
+        }
         Err(e) => {
             return Err(io::Error::other(format!("cannot read {attr}: {e} — refusing (fail-closed)")));
         }

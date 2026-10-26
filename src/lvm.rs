@@ -447,7 +447,7 @@ mod tests {
         assert_eq!(parse_extent_size("{}"), None);
     }
 
-    const PVS_PLAIN: &str = "/dev/sda3|21474836480.00|21474834432.00|1048576.00|5119\n";
+    const PVS_PLAIN: &str = "/dev/sda3|21474836480.00|21474834432.00|1048576.00|5119|5119\n";
 
     #[test]
     fn pv_size_row_is_parsed_strictly() {
