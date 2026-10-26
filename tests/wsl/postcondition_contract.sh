@@ -32,11 +32,11 @@ echo "exit=$E  before=$BEFORE  after=$(pt)"
 echo
 echo "===== B: ext4 扩容 → 后置条件全满足 → OK ====="
 mk ext4 400M
-LD=$(lo_attach "$T"); mount_at "${LD}p1" /testmnt && { dd if=/dev/urandom of=/testmnt/f.bin bs=1M count=100 2>/dev/null; MC=$(md5sum /testmnt/f.bin | cut -d' ' -f1); echo "before fs: $(df -h --output=size /testmnt | tail -1)"; umount /testmnt 2>/dev/null; }
+LD=$(lo_attach "$T"); mount_at "${LD}p1" /testmnt && { dd if=/dev/urandom of=/testmnt/f.bin bs=1M count=100 2>/dev/null; MC=$(mdsum /testmnt/f.bin); echo "before fs: $(df -h --output=size /testmnt | tail -1)"; umount /testmnt 2>/dev/null; }
 lo_detach "$LD"
 OUT=$($B resize "$T":1 900M 2>&1); E=$?
 echo "exit=$E"
-LD=$(lo_attach "$T"); mount_at "${LD}p1" /testmnt && { echo "after fs: $(df -h --output=size /testmnt | tail -1)"; [ "$MC" = "$(md5sum /testmnt/f.bin | cut -d' ' -f1)" ] && echo "B DATA OK" || { echo "B DATA CORRUPT"; rc=1; }; umount /testmnt 2>/dev/null; }
+LD=$(lo_attach "$T"); mount_at "${LD}p1" /testmnt && { echo "after fs: $(df -h --output=size /testmnt | tail -1)"; [ "$MC" = "$(mdsum /testmnt/f.bin)" ] && echo "B DATA OK" || { echo "B DATA CORRUPT"; rc=1; }; umount /testmnt 2>/dev/null; }
 e2fsck -fn "${LD}p1" >/dev/null 2>&1 && echo "B e2fsck clean" || { echo "B e2fsck ISSUES"; rc=1; }
 lo_detach "$LD"
 [ "$E" = "0" ] && echo "B OK" || { echo "B WRONG EXIT ($E)"; rc=1; }

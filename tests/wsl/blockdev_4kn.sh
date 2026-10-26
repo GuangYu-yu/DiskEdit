@@ -92,7 +92,7 @@ echo "loop: $LD  logical_ss=$(blockdev --getss "$LD")"
 $B info "$LD" | head -c 130; echo
 echo "-- 期望 sector_size=4096 且 LBA 与 256 对齐 --"
 $B info "$LD" | grep -o '"num":[0-9]*,"first_lba":[0-9]*,"last_lba":[0-9]*'
-mount_at "${LD}p2" /testmnt && { dd if=/dev/urandom of=/testmnt/blob bs=1M count=200 2>/dev/null; echo "p2 200M written"; umount /testmnt; M2=$(md5sum "${LD}p2" | cut -d' ' -f1); }
+mount_at "${LD}p2" /testmnt && { dd if=/dev/urandom of=/testmnt/blob bs=1M count=200 2>/dev/null; echo "p2 200M written"; umount /testmnt; M2=$(mdsum "${LD}p2"); }
 
 echo
 echo "########## B: 4Kn 自重叠左移（delta < 分区长度）##########"
@@ -100,20 +100,20 @@ MOVE_OUT=$(movek 66048); echo "move exit=$? : $(echo "$MOVE_OUT" | tail -1)"
 $B info "$LD" | grep -o '"num":2,[^}]*}'
 refresh
 e2fsck -fn "${LD}p2" >/dev/null 2>&1; echo "e2fsck -fn exit=$? (0=clean)"
-[ "$M2" = "$(md5sum "${LD}p2" | cut -d' ' -f1)" ] && echo "4KN DEV OK" || { echo "4KN DEV CORRUPT"; rc=1; }
+[ "$M2" = "$(mdsum "${LD}p2")" ] && echo "4KN DEV OK" || { echo "4KN DEV CORRUPT"; rc=1; }
 sgdisk -v "$T" >/dev/null 2>&1 && echo "sgdisk clean" || { echo "sgdisk ISSUES"; rc=1; sgdisk -v "$T" 2>&1 | tail -2; }
 
 echo
 echo "########## C: 4Kn 中断恢复（fault 注入）##########"
 setup4k
-mount_at "${LD}p2" /testmnt && { dd if=/dev/urandom of=/testmnt/blob bs=1M count=200 2>/dev/null; umount /testmnt; M2=$(md5sum "${LD}p2" | cut -d' ' -f1); }
+mount_at "${LD}p2" /testmnt && { dd if=/dev/urandom of=/testmnt/blob bs=1M count=200 2>/dev/null; umount /testmnt; M2=$(mdsum "${LD}p2"); }
 DISKEDIT_FAULT=rs-chunk:20 $BF move "$LD":2 --start 66048 --chunk-size 4 >/dev/null 2>&1
 echo "现场：$(ls /var/lib/diskedit/ 2>/dev/null | wc -l) 项"
 OUT=$($B move "$LD":2 --start 66048 --chunk-size 4 2>&1)
 R=$(echo "$OUT" | grep -o 'resuming at chunk [0-9]*')
 [ "$R" = "resuming at chunk 20" ] && echo "resume: $R" || { echo "resume: WRONG ($R，输出尾: $(echo "$OUT" | tail -1))"; rc=1; }
 refresh
-[ "$M2" = "$(md5sum "${LD}p2" | cut -d' ' -f1)" ] && echo "4KN RESUME DEV OK" || { echo "4KN RESUME DEV CORRUPT"; rc=1; }
+[ "$M2" = "$(mdsum "${LD}p2")" ] && echo "4KN RESUME DEV OK" || { echo "4KN RESUME DEV CORRUPT"; rc=1; }
 e2fsck -fn "${LD}p2" >/dev/null 2>&1 && echo "4KN RESUME e2fsck clean" || { echo "4KN RESUME e2fsck ISSUES"; rc=1; }
 
 echo

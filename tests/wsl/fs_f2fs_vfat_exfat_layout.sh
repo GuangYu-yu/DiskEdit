@@ -22,14 +22,14 @@ mk1 f2fs
 echo "before: $($B info "$T" | grep -o '"num":1,[^}]*}')"
 LD=$(lo_attach "$T")
 lo_waitpart "${LD}p1" || { echo "p1 part node not ready"; rc=1; lo_detach "$LD"; }
-mount_at "${LD}p1" /testmnt 2>/dev/null && { dd if=/dev/urandom of=/testmnt/f.bin bs=1M count=100 2>/dev/null; MF=$(md5sum /testmnt/f.bin | cut -d' ' -f1); SZ1=$(df -h --output=size /testmnt | tail -1); echo "before: $SZ1"; umount /testmnt 2>/dev/null; }
+mount_at "${LD}p1" /testmnt 2>/dev/null && { dd if=/dev/urandom of=/testmnt/f.bin bs=1M count=100 2>/dev/null; MF=$(mdsum /testmnt/f.bin); SZ1=$(df -h --output=size /testmnt | tail -1); echo "before: $SZ1"; umount /testmnt 2>/dev/null; }
 lo_detach "$LD"
 OUT=$($B resize "$T":1 900M 2>&1); echo "resize exit=$? : $(echo "$OUT" | tail -1)"
 LD=$(lo_attach "$T")
 lo_waitpart "${LD}p1" || { echo "p1 part node not ready"; rc=1; lo_detach "$LD"; }
 mount_at "${LD}p1" /testmnt 2>/dev/null && {
   echo "after : $(df -h --output=size /testmnt | tail -1)"
-  [ "$MF" = "$(md5sum /testmnt/f.bin | cut -d' ' -f1)" ] && echo "F2FS DATA OK" || { echo "F2FS DATA CORRUPT"; rc=1; }
+  [ "$MF" = "$(mdsum /testmnt/f.bin)" ] && echo "F2FS DATA OK" || { echo "F2FS DATA CORRUPT"; rc=1; }
   umount /testmnt 2>/dev/null
 }
 fsck.f2fs -f "${LD}p1" >/dev/null 2>&1; echo "fsck.f2fs exit=$? (0=clean)"
@@ -41,7 +41,7 @@ echo "########## B: vfat 扩容（fatresize 在本环境自身崩溃 → 表扩/
 mk1 vfat 600M
 LD=$(lo_attach "$T")
 lo_waitpart "${LD}p1" || { echo "p1 part node not ready"; rc=1; lo_detach "$LD"; }
-mount_at "${LD}p1" /testmnt 2>/dev/null && { dd if=/dev/urandom of=/testmnt/v.bin bs=1M count=100 2>/dev/null; MV=$(md5sum /testmnt/v.bin | cut -d' ' -f1); echo "before: $(df -h --output=size /testmnt | tail -1)"; umount /testmnt 2>/dev/null; }
+mount_at "${LD}p1" /testmnt 2>/dev/null && { dd if=/dev/urandom of=/testmnt/v.bin bs=1M count=100 2>/dev/null; MV=$(mdsum /testmnt/v.bin); echo "before: $(df -h --output=size /testmnt | tail -1)"; umount /testmnt 2>/dev/null; }
 lo_detach "$LD"
 OUT=$($B resize "$T":1 900M 2>&1); E=$?
 echo "resize exit=$E : $(echo "$OUT" | tail -1)"
@@ -51,7 +51,7 @@ echo "B 分区表: $($B info "$T" | grep -o '"num":1,[^}]*}' | grep -o '"size_by
 LD=$(lo_attach "$T")
 lo_waitpart "${LD}p1" || { echo "p1 part node not ready"; rc=1; lo_detach "$LD"; }
 mount_at "${LD}p1" /testmnt 2>/dev/null && {
-  [ "$MV" = "$(md5sum /testmnt/v.bin | cut -d' ' -f1)" ] && echo "VFAT DATA OK" || { echo "VFAT DATA CORRUPT"; rc=1; }
+  [ "$MV" = "$(mdsum /testmnt/v.bin)" ] && echo "VFAT DATA OK" || { echo "VFAT DATA CORRUPT"; rc=1; }
   umount /testmnt 2>/dev/null
 }
 fsck.vfat -n "${LD}p1" >/dev/null 2>&1; echo "fsck.vfat exit=$? (0=clean)"
@@ -62,7 +62,7 @@ echo "########## C: exfat 扩容（代码未接线 → 应明确拒绝）#######
 mk1 exfat
 LD=$(lo_attach "$T")
 lo_waitpart "${LD}p1" || { echo "p1 part node not ready"; rc=1; lo_detach "$LD"; }
-mount_at "${LD}p1" /testmnt 2>/dev/null && { echo "exfat 挂载可写测试"; dd if=/dev/urandom of=/testmnt/e.bin bs=1M count=50 2>/dev/null; ME=$(md5sum /testmnt/e.bin | cut -d' ' -f1); umount /testmnt 2>/dev/null; }
+mount_at "${LD}p1" /testmnt 2>/dev/null && { echo "exfat 挂载可写测试"; dd if=/dev/urandom of=/testmnt/e.bin bs=1M count=50 2>/dev/null; ME=$(mdsum /testmnt/e.bin); umount /testmnt 2>/dev/null; }
 lo_detach "$LD"
 OUT=$($B resize "$T":1 900M 2>&1); E=$?
 echo "resize exit=$E : $(echo "$OUT" | tail -1)"
@@ -70,7 +70,7 @@ echo "resize exit=$E : $(echo "$OUT" | tail -1)"
 echo "C 分区表: $($B info "$T" | grep -o '"num":1,[^}]*}' | grep -o '"size_bytes":[0-9]*')（应保持 419430400 — REFUSED 未改盘）"
 LD=$(lo_attach "$T")
 lo_waitpart "${LD}p1" || { echo "p1 part node not ready"; rc=1; lo_detach "$LD"; }
-mount_at "${LD}p1" /testmnt 2>/dev/null && { [ "$ME" = "$(md5sum /testmnt/e.bin | cut -d' ' -f1)" ] && echo "EXFAT DATA OK" || { echo "EXFAT DATA CORRUPT"; rc=1; }; umount /testmnt 2>/dev/null; }
+mount_at "${LD}p1" /testmnt 2>/dev/null && { [ "$ME" = "$(mdsum /testmnt/e.bin)" ] && echo "EXFAT DATA OK" || { echo "EXFAT DATA CORRUPT"; rc=1; }; umount /testmnt 2>/dev/null; }
 fsck.exfat -n "${LD}p1" >/dev/null 2>&1; echo "fsck.exfat exit=$? (0=clean)"
 lo_detach "$LD"
 
@@ -90,7 +90,7 @@ lo_waitpart "${LD}p3" || { echo "p3 part node not ready"; rc=1; lo_detach "$LD";
 mkfs.vfat -F32 -n ESP "${LD}p1" >/dev/null
 mkfs.ext4 -q -L Linux "${LD}p3"
 mount_at "${LD}p1" /testmnt && { echo "esp-file" > /testmnt/efi.txt; umount /testmnt 2>/dev/null; }
-mount_at "${LD}p3" /testmnt && { dd if=/dev/urandom of=/testmnt/lin.bin bs=1M count=200 2>/dev/null; umount /testmnt 2>/dev/null; ML=$(md5sum "${LD}p3" | cut -d' ' -f1); }
+mount_at "${LD}p3" /testmnt && { dd if=/dev/urandom of=/testmnt/lin.bin bs=1M count=200 2>/dev/null; umount /testmnt 2>/dev/null; ML=$(mdsum "${LD}p3"); }
 lo_detach "$LD"
 echo "-- 搬移中间的 Linux 分区到尾部空闲区 --"
 $B info "$T" | grep -o '"num":[0-9]*,"first_lba":[0-9]*,"last_lba":[0-9]*'
@@ -104,7 +104,7 @@ done
 LD=$(lo_attach "$T")
 lo_waitpart "${LD}p1" || { echo "p1 part node not ready"; rc=1; lo_detach "$LD"; }
 lo_waitpart "${LD}p3" || { echo "p3 part node not ready"; rc=1; lo_detach "$LD"; }
-[ "$ML" = "$(md5sum "${LD}p3" | cut -d' ' -f1)" ] && echo "D LINUX DEV OK" || { echo "D LINUX DEV CORRUPT"; rc=1; }
+[ "$ML" = "$(mdsum "${LD}p3")" ] && echo "D LINUX DEV OK" || { echo "D LINUX DEV CORRUPT"; rc=1; }
 e2fsck -fn "${LD}p3" >/dev/null 2>&1 && echo "D p3 e2fsck clean" || { echo "D p3 e2fsck ISSUES"; rc=1; }
 mount_at "${LD}p1" /testmnt && { cat /testmnt/efi.txt; umount /testmnt 2>/dev/null; }
 lo_detach "$LD"

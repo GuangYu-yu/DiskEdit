@@ -17,12 +17,12 @@ $B new "$T" --yes >/dev/null
 $B create "$T" --size 400M --name x --fs xfs; echo "create exit=$?"
 LD=$(lo_attach "$T")
 mount_at "${LD}p1" /testmnt && dd if=/dev/urandom of=/testmnt/blob bs=1M count=300 2>/dev/null
-MX=$(md5sum /testmnt/blob | cut -d' ' -f1)
+MX=$(mdsum /testmnt/blob)
 echo "before: $(df -h --output=size /testmnt | tail -1) md5=$MX"
 umount /testmnt 2>/dev/null; lo_detach "$LD"
 OUT=$($B resize "$T":1 1500M 2>&1); echo "resize exit=$? out: $(echo "$OUT" | tail -1)"
 LD=$(lo_attach "$T")
-mount_at "${LD}p1" /testmnt && { echo "after: $(df -h --output=size /testmnt | tail -1)"; G=$(md5sum /testmnt/blob | cut -d' ' -f1); [ "$MX" = "$G" ] && echo "XFS DATA OK" || { echo "XFS DATA CORRUPT"; rc=1; }; umount /testmnt 2>/dev/null; }
+mount_at "${LD}p1" /testmnt && { echo "after: $(df -h --output=size /testmnt | tail -1)"; G=$(mdsum /testmnt/blob); [ "$MX" = "$G" ] && echo "XFS DATA OK" || { echo "XFS DATA CORRUPT"; rc=1; }; umount /testmnt 2>/dev/null; }
 xfs_repair -n "${LD}p1" >/dev/null 2>&1; echo "xfs_repair -n exit=$? (0=clean)"
 lo_detach "$LD"; sgdisk -v "$T" >/dev/null 2>&1 && echo "sgdisk clean" || { echo "sgdisk ISSUES"; rc=1; }
 
@@ -33,12 +33,12 @@ $B new "$T" --yes >/dev/null
 $B create "$T" --size 400M --name b --fs btrfs; echo "create exit=$?"
 LD=$(lo_attach "$T")
 mount_at "${LD}p1" /testmnt && dd if=/dev/urandom of=/testmnt/blob bs=1M count=300 2>/dev/null
-MB=$(md5sum /testmnt/blob | cut -d' ' -f1)
+MB=$(mdsum /testmnt/blob)
 echo "before: $(df -h --output=size /testmnt | tail -1)"
 umount /testmnt 2>/dev/null; lo_detach "$LD"
 OUT=$($B resize "$T":1 1500M 2>&1); echo "resize exit=$? out: $(echo "$OUT" | tail -1)"
 LD=$(lo_attach "$T")
-mount_at "${LD}p1" /testmnt && { echo "after: $(df -h --output=size /testmnt | tail -1)"; G=$(md5sum /testmnt/blob | cut -d' ' -f1); [ "$MB" = "$G" ] && echo "BTRFS DATA OK" || { echo "BTRFS DATA CORRUPT"; rc=1; }; umount /testmnt 2>/dev/null; }
+mount_at "${LD}p1" /testmnt && { echo "after: $(df -h --output=size /testmnt | tail -1)"; G=$(mdsum /testmnt/blob); [ "$MB" = "$G" ] && echo "BTRFS DATA OK" || { echo "BTRFS DATA CORRUPT"; rc=1; }; umount /testmnt 2>/dev/null; }
 btrfs check "${LD}p1" >/dev/null 2>&1; echo "btrfs check exit=$? (0=clean)"
 lo_detach "$LD"; sgdisk -v "$T" >/dev/null 2>&1 && echo "sgdisk clean" || { echo "sgdisk ISSUES"; rc=1; }
 
@@ -51,7 +51,7 @@ $B create "$T" --size 200M --name filler --fs ext4 >/dev/null
 LD=$(lo_attach "$T")
 mount -t ntfs-3g "${LD}p1" /testmnt 2>/dev/null || mount_at "${LD}p1" /testmnt
 dd if=/dev/urandom of=/testmnt/blob bs=1M count=150 2>/dev/null
-MN=$(md5sum /testmnt/blob | cut -d' ' -f1)
+MN=$(mdsum /testmnt/blob)
 OLDS=$($B info "$T" | grep -o '"num":1,"first_lba":[0-9]*' | grep -o '[0-9]*$')
 echo "before: hidden=$(od -An -tu4 -j $((OLDS*512+28)) -N4 "$T" | tr -d ' ')"
 umount /testmnt 2>/dev/null; lo_detach "$LD"
@@ -64,7 +64,7 @@ echo "after: first_lba=$NEWS hidden=$HID"
 LD=$(lo_attach "$T")
 mount -t ntfs-3g "${LD}p1" /testmnt 2>/dev/null || mount_at "${LD}p1" /testmnt
 if mountpoint -q /testmnt; then
-  G=$(md5sum /testmnt/blob | cut -d' ' -f1)
+  G=$(mdsum /testmnt/blob)
   [ "$MN" = "$G" ] && echo "NTFS DATA OK" || { echo "NTFS DATA CORRUPT"; rc=1; }
   umount /testmnt 2>/dev/null
 fi
