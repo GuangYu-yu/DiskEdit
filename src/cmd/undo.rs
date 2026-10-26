@@ -595,11 +595,21 @@ fn archive_torn(from: &std::path::Path) -> Result<std::path::PathBuf, String> {
                 if crate::dev::remove_recovery_file(from) {
                     return Ok(to);
                 }
-                return Err(format!(
-                    "archived a copy at {} but could not remove the journal at {} — the target stays busy until it is gone",
-                    to.display(),
-                    from.display()
-                ));
+                // 两条成因不同的路：删不掉（文件还在，目标因此仍被顶成 busy），或删掉了但
+                // 父目录项未落盘（此刻不在，掉电后可能复活）。路径是否还在即可区分
+                return Err(if from.exists() {
+                    format!(
+                        "archived a copy at {} but could not remove the journal at {} — the target stays busy until it is gone",
+                        to.display(),
+                        from.display()
+                    )
+                } else {
+                    format!(
+                        "archived a copy at {} and removed the journal at {}, but the removal is not durable — a power loss can bring it back, and it would name this target again",
+                        to.display(),
+                        from.display()
+                    )
+                });
             }
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(_) if !to.exists() => {
