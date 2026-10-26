@@ -200,9 +200,10 @@ impl Outcome {
             Self::Infra { cause } => eprintln!("error: {cause}"),
             Self::Failed { cause, pending } => {
                 eprintln!("error: {cause}");
-                eprintln!("       on-disk state may have changed — verify with `diskedit info` before retrying");
+                // 每行自带标记，不在 "error: " 下面靠空格对齐：前缀一改，手写缩进就整段偏
+                eprintln!("verify: the on-disk state may have changed — check with `diskedit info` before retrying");
                 if !pending.is_empty() {
-                    eprintln!("       {} known follow-up step(s) were left undone:", pending.len());
+                    eprintln!("left undone: {} known follow-up step(s)", pending.len());
                     Self::report_pending(pending);
                 }
             }
@@ -224,7 +225,9 @@ impl Outcome {
         }
     }
 
-    /// 未完成后置条件的逐条呈现：Applied 与 Failed 两条路径共用同一份格式
+    /// 未完成后置条件的逐条呈现：Applied 与 Failed 两条路径共用同一份格式。
+    /// 续行也带同一个 `[part N]` 标记：列对齐由格式决定，不靠字面空格——用空格对齐时
+    /// 分区号一旦到两位数，整段就会偏一格，而这种偏移不会有任何一处报错
     fn report_pending(pending: &[Pending]) {
         for p in pending {
             let what = match p.kind {
@@ -235,11 +238,12 @@ impl Outcome {
             };
             eprintln!("  [part {}] {what}: {}", p.part, p.detail);
             if !p.hint.is_empty() {
-                match p.kind {
-                    // 这一档的后续动作不在本机、也不由用户当场执行，提示的是核实方式
-                    PendingKind::RuntimeInitialization => eprintln!("           after startup: {}", p.hint),
-                    _ => eprintln!("           run manually: {}", p.hint),
-                }
+                // 这一档的后续动作不在本机、也不由用户当场执行，提示的是核实方式
+                let follow_up = match p.kind {
+                    PendingKind::RuntimeInitialization => "after startup",
+                    _ => "run manually",
+                };
+                eprintln!("  [part {}] {follow_up}: {}", p.part, p.hint);
             }
         }
     }
@@ -256,6 +260,15 @@ pub enum Fail {
     Refused(String),
     Infra(String),
     Failed(String),
+}
+
+/// 文本只承载成因：10/30 的分工在变体上，不在字符串里，故三支输出同一种内容
+impl std::fmt::Display for Fail {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Refused(m) | Self::Infra(m) | Self::Failed(m) => m,
+        })
+    }
 }
 
 /// 默认按"可能已改变"归 `Failed`：写调用报错时我们并不知道实际写入多少，
