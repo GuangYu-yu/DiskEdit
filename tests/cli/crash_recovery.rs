@@ -232,6 +232,37 @@ fn copy_crash_leaves_a_transaction_that_only_abandon_can_release() {
     assert_eq!(c, 0, "the target must be usable again: {e}");
 }
 
+/// MBR 没有 checkpoint：表项已写的现场不能当"未执行"重放。重跑读到的是盘上新几何，
+/// 右侧已无空闲 ⇒ 拒绝并要求人工先看盘，而不是静默再涨一次
+#[test]
+fn mbr_grow_crash_leaves_no_checkpoint_and_rerun_refuses() {
+    let dir = std::env::temp_dir().join(format!("diskedit_mbr_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let img = dir.join("m.img");
+    std::fs::write(&img, vec![0u8; 32 * 1024 * 1024]).unwrap();
+    let img_s = img.to_str().unwrap();
+    assert_eq!(run(&["new", img_s, "--yes", "--table", "msdos"]).0, 0);
+    assert_eq!(run(&["add", img_s, "--start", "2048", "--end", "4095"]).0, 0);
+    let ckpt = sidecar(&dir, "m.img", CHECKPOINT_SUFFIX);
+    let target = format!("{img_s}:1");
+    let argv = ["resize", target.as_str(), "grow", "--no-fs"];
+
+    let (c, e) = run_fault("mbr-after-table-write", &argv);
+    assert_ne!(c, 0, "the injected abort must not look like success: {e}");
+    assert!(!ckpt.exists(), "an MBR grow must not leave a checkpoint to resume from: {e}");
+
+    // 表项已扩到盘尾，journal 还在：重跑不能续跑，只能先回滚或释放现场
+    let (c, e) = run(&argv);
+    assert_eq!(c, 30, "a re-run cannot resume an MBR grow: {e}");
+    assert!(e.contains("owns this target") && e.contains("undo"), "the way out must be undo/abandon, not a re-run: {e}");
+    let (c, e) = run(&["undo", img_s, "--yes"]);
+    assert_eq!(c, 0, "the journaled table write must be rollable: {e}");
+    let (c, e) = run(&argv);
+    assert_eq!(c, 0, "after the rollback the grow runs from the on-disk geometry again: {e}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// 64MiB 镜像 + 一条 4MiB 分区（2048..10239），分区数据区填确定性伪随机图案。
 /// 返回（镜像、图案）——图案用于搬移后逐字节对账
 fn stage_self_overlap(tag: &str) -> (std::path::PathBuf, Vec<u8>) {

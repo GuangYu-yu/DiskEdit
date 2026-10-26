@@ -34,6 +34,10 @@ pub(crate) const HELP: &str = r#"diskedit resize <TARGET>:N <SIZE> [OPTIONS]
   automatically. GPT and MBR primary partitions; superfloppy (whole-disk FS)
   omits :N — grow only, never shrinks.
 
+  MBR tables carry no checkpoint: an interrupted MBR grow cannot be resumed.
+  Inspect the partition table and the filesystem size before re-running — a
+  re-run reads the on-disk geometry and does not replay the old request.
+
   SIZE:
     10G       set size to 10 GiB (units b/k/m/g/t, 1024 base)
     +2G       grow by 2 GiB

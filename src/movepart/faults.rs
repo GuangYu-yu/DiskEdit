@@ -61,6 +61,8 @@ fault_points! {
     /// copy 的数据复制全部完成、表项提交前 abort（与 `rs-before-commit` 同形：
     /// 不可逆的一步已经迈出，而那份"发生过什么"还没写进表）
     fault_copy_before_commit() = "copy-before-commit";
+    /// MBR 分区表项写完、FS 扩满前 abort（MBR 没有 checkpoint：中断后不可自动续跑）
+    fault_mbr_after_table_write() = "mbr-after-table-write";
     /// 事务入口：本次调用的**任何判定与写入之前**。
     /// 与下面的 `chunk`/`rs-chunk` 成对使用，"边界前 abort 必须留下完全未改动的盘"、
     /// "边界后 abort 已在盘上留下可续传的现场"这两句话才有可自动断言的落点

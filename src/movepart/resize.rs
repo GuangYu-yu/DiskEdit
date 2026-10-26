@@ -13,9 +13,13 @@ pub(crate) const CKPT2_MAGIC: &[u8; 8] = b"DKECKPT2";
 /// v5：追加 FS 类型码（见 [`FSTYPE_CODES`]）：续跑不再回源起点重探
 /// v6：指纹加设备 ID 哈希（块设备整盘身份），尾部加身份种类；读 v5 时设备 ID 按零、
 /// 种类按 `Legacy` 处理
-pub(crate) const CKPT2_VERSION: u32 = 6;
+/// v7：shrink 状态由 bool 变三态（字节语义变、布局不变）；v6 及更早只接受 0/1
+pub(crate) const CKPT2_VERSION: u32 = 7;
 
-/// 兼容读取的上一代版本（没有设备 ID 与身份种类）
+/// v6：shrink 状态还是 bool（0 = 未缩、1 = 已验证）
+const CKPT2_VERSION_BOOL_SHRINK: u32 = 6;
+
+/// 兼容读取的最旧版本（没有设备 ID 与身份种类）
 const CKPT2_VERSION_LEGACY: u32 = 5;
 
 /// 现场记下的 FS 类型码：0 = 未识别，其余为数组下标 + 1。
@@ -55,7 +59,29 @@ fn fstype_from_code(code: u8) -> io::Result<Option<FsKind>> {
     }
 }
 
-/// resize-part 的 checkpoint（v6）：搬移覆盖源区，中途断电后新旧两处都不完整，
+/// checkpoint 记下的缩容状态。三态而非 bool：`Unverified` 表示缩容命令已返回、落点却
+/// 回读不出来——搬数据按它继续就可能切进未缩的元数据，故不能与 `Verified` 等同
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(u8)]
+pub(crate) enum FsShrink {
+    NotShrunk = 0,
+    Verified = 1,
+    Unverified = 2,
+}
+
+impl FsShrink {
+    fn from_code(code: u8, tri_state: bool) -> io::Result<Self> {
+        match (code, tri_state) {
+            (0, _) => Ok(Self::NotShrunk),
+            (1, _) => Ok(Self::Verified),
+            (2, true) => Ok(Self::Unverified),
+            // v6 及更早这一字节是 bool，2 只能是损坏
+            _ => Err(io::Error::new(io::ErrorKind::InvalidData, "implausible resize checkpoint shrink state")),
+        }
+    }
+}
+
+/// resize-part 的 checkpoint（v7）：搬移覆盖源区，中途断电后新旧两处都不完整，
 /// 已完成位置只能由 checkpoint 判定。"表项是否已提交"不在这里存——盘上的分区几何
 /// 就是那个事实，另存一份标记只会与它分叉（见 prepare_resize 的恢复分支）
 pub(crate) struct RsCheckpoint {
@@ -66,7 +92,7 @@ pub(crate) struct RsCheckpoint {
     pub(crate) old_end: u64,
     pub(crate) new_start: u64,
     pub(crate) new_end: u64,
-    pub(crate) fs_shrunk: bool,
+    pub(crate) fs_shrunk: FsShrink,
     pub(crate) chunks_done: u64,
     pub(crate) chunk_bytes: u64,
     pub(crate) fp: crate::dev::TargetFingerprint, // 目标文件指纹（"同路径换文件"防线）
@@ -114,7 +140,7 @@ impl RsCheckpoint {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "resize checkpoint invalid"));
         }
         let ver = u32::from_le_bytes(b[8..12].try_into().unwrap());
-        if ver != CKPT2_VERSION && ver != CKPT2_VERSION_LEGACY {
+        if ver != CKPT2_VERSION && ver != CKPT2_VERSION_BOOL_SHRINK && ver != CKPT2_VERSION_LEGACY {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "unsupported resize checkpoint version"));
         }
         let mut o = 12usize;
@@ -134,7 +160,11 @@ impl RsCheckpoint {
         let old_end = rd64(b, &mut o)?;
         let new_start = rd64(b, &mut o)?;
         let new_end = rd64(b, &mut o)?;
-        let fs_shrunk = *b.get(o).ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "truncated"))? != 0; o += 1;
+        let fs_shrunk = FsShrink::from_code(
+            *b.get(o).ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "truncated"))?,
+            ver >= CKPT2_VERSION,
+        )?;
+        o += 1;
         let chunks_done = rd64(b, &mut o)?;
         let chunk_bytes = rd64(b, &mut o)?;
         // 指纹与映射属于"创建时事实"：解析只负责取值，比对在 read_checkpoint。
@@ -143,7 +173,7 @@ impl RsCheckpoint {
             dev: rd64(b, &mut o)?,
             ino: rd64(b, &mut o)?,
             size: rd64(b, &mut o)?,
-            id: if ver >= CKPT2_VERSION { rd64(b, &mut o)? } else { 0 },
+            id: if ver >= CKPT2_VERSION_BOOL_SHRINK { rd64(b, &mut o)? } else { 0 },
         };
         // 标志字节先行跨过，再按标志决定是否读它后面那两个 u64
         let flagged = *b.get(o).ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "truncated"))?;
@@ -156,7 +186,7 @@ impl RsCheckpoint {
         // 类型码在尾部：认不出的码即现场不可判读，不退回"未识别"继续跑
         let fstype = fstype_from_code(*b.get(o).ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "truncated"))?)?;
         o += 1;
-        let proof = if ver >= CKPT2_VERSION {
+        let proof = if ver >= CKPT2_VERSION_BOOL_SHRINK {
             let tag = *b.get(o).ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "truncated"))?;
             o += 1;
             crate::dev::IdentityProof::from_tag(tag).ok_or_else(|| {
@@ -329,7 +359,7 @@ pub(crate) struct ResizeDecision {
     pub(crate) new_start: u64,
     pub(crate) new_end: u64,
     pub(crate) fstype: Option<FsKind>,
-    pub(crate) fs_shrunk: bool,
+    pub(crate) fs_shrunk: FsShrink,
     pub(crate) resume_chunks: u64,
     pub(crate) committed_old: Option<(u64, u64)>,
     /// 本次要对 FS 做的动作（唯一决策键：preflight 与 execute 同键）
@@ -415,7 +445,7 @@ pub(crate) fn prepare_resize(
         Some(c) => classify_restore(&requested, c, (old_start, old_end), src.size, ss),
     };
     let (fs_shrunk, resume_chunks, committed_old, recorded_fstype) = match state {
-        RestoreState::Fresh => (false, 0, None, None),
+        RestoreState::Fresh => (FsShrink::NotShrunk, 0, None, None),
         // Y = durable 恢复点（ckpt 文件里的值），不是本进程内存进度
         RestoreState::Resume(c) => {
             log(&format!("resuming at chunk {} (durable checkpoint)", c.chunks_done));
@@ -450,7 +480,7 @@ pub(crate) fn prepare_resize(
     // （缩容时 FS shrink 即首次写盘）之前拒绝，否则会留下"表已改、FS 未改"的中间态。
     // --no-fs 与缩容不可共存：分区末端越过未缩的 FS 元数据即数据损坏，这不是"少做一步"
     // 而是另一种操作，必须在写盘前拒绝（已缩过 FS 的续传不在此列）
-    let needs_shrink = new_bytes < old_bytes && !fs_shrunk;
+    let needs_shrink = new_bytes < old_bytes && fs_shrunk != FsShrink::Verified;
     if no_fs && needs_shrink {
         return Err(Fail::refused(
             "--no-fs cannot shrink: the filesystem has to be shrunk first, otherwise the new partition end would cut into filesystem metadata",
@@ -562,20 +592,54 @@ pub(crate) fn execute_resize(
         // FS 已缩，卸载的成败是另一条后置条件：它不改写缩容这一事实，只作为待办浮出。
         // 回读不出来（缩容可能已完成、落点未证实）同理——两者都是"核心操作已完成、
         // 某项未收口"
-        let o = crate::fsops::shrink_fs(src, part, fstype, new_bytes)?;
-        let line = o.verify.ok_line(new_bytes);
-        if let Some(p) = o.verify.pending(part) {
-            post.pending(p);
+        // 上次缩容命令已返回但落点未证实：重试前先回读实际尺寸，已缩到位就不再缩一次
+        let mut shrink_done = false;
+        if p.fs_shrunk == FsShrink::Unverified {
+            match crate::fsops::shrink_already_at(src, part, fstype, new_bytes) {
+                Some(true) => {
+                    ckpt.fs_shrunk = FsShrink::Verified;
+                    save(&ckpt)?;
+                    log(&format!("filesystem already at {new_bytes} bytes (re-read) — shrink step skipped"));
+                    fault_rs_after_fs_shrink();
+                    shrink_done = true;
+                }
+                Some(false) => {}
+                None => {
+                    // 回读仍不可用：缩容是否到位无从判断，搬数据一旦切进未缩的元数据就不可逆
+                    post.pending(crate::outcome::Pending::new(
+                        part,
+                        crate::outcome::PendingKind::Other("fs shrink"),
+                        "the filesystem size still cannot be read back, so the earlier shrink cannot be confirmed".to_string(),
+                        "inspect the filesystem size by hand, then re-run the same command".to_string(),
+                    ));
+                    return Ok(());
+                }
+            }
         }
-        if let Some(leak) = o.leak {
-            post.pending(leak.into_pending(part));
+        if !shrink_done {
+            let o = crate::fsops::shrink_fs(src, part, fstype, new_bytes)?;
+            // 落点证实了才往下搬：回读不出实际尺寸时无法排除"工具以 0 退出但没缩到位"，
+            // 而接着搬数据就会把分区末端切进未缩的 FS 元数据。此时停在缩容这一步，
+            // ckpt 的 fs_shrunk 记为 Unverified——重跑先回读，仍未缩才重做一次缩容
+            let line = o.verify.ok_line(new_bytes);
+            if let Some(p) = o.verify.pending(part) {
+                post.pending(p);
+            }
+            if let Some(leak) = o.leak {
+                post.pending(leak.into_pending(part));
+            }
+            if line.is_none() {
+                ckpt.fs_shrunk = FsShrink::Unverified;
+                save(&ckpt)?;
+                return Ok(());
+            }
+            ckpt.fs_shrunk = FsShrink::Verified;
+            save(&ckpt)?;
+            if let Some(l) = line {
+                log(&l);
+            }
+            fault_rs_after_fs_shrink();
         }
-        ckpt.fs_shrunk = true;
-        save(&ckpt)?;
-        if let Some(l) = line {
-            log(&l);
-        }
-        fault_rs_after_fs_shrink();
     }
 
     // ---- 阶段 1：数据搬移（方向感知 + chunk 续传）----
@@ -686,8 +750,17 @@ pub(crate) fn execute_resize(
     // ckpt 在本次作业的所有后置条件定论后才撤：留下任何待办而 ckpt 已删时，重跑会按
     // 全新作业从旧区重拷（自重叠搬移下旧区字节已被写覆盖，重拷即把覆盖后的数据盖回
     // 新区），或算出"尺寸未变 → Leave"而报成功、把没做完的那一步永远留在盘上
-    if post.len() == pending_before {
-        crate::dev::remove_recovery_file(&p.ckpt_path);
+    if post.len() == pending_before && !crate::dev::remove_recovery_file(&p.ckpt_path) {
+        // 撤不掉就不算收干净：残留现场会让下一次 resize 被判 Divergent 而拒绝
+        post.pending(Pending::new(
+            part,
+            PendingKind::Other("checkpoint"),
+            format!(
+                "the job finished but its checkpoint {} could not be removed — remove it by hand",
+                p.ckpt_path.display()
+            ),
+            String::new(),
+        ));
     }
     Ok(())
 }

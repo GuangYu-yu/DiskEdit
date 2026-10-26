@@ -315,7 +315,7 @@ pub(crate) fn refused_paths_do_not_write_the_disk() {
             let rs = RsCheckpoint {
                 proof: crate::dev::IdentityProof::Inode,
                 disk_size: src.size, ss: 512, part: 1, old_start: 2048, old_end: 6143,
-                new_start: 2048, new_end: 4095, fs_shrunk: false, chunks_done: 0, chunk_bytes: chunk,
+                new_start: 2048, new_end: 4095, fs_shrunk: FsShrink::NotShrunk, chunks_done: 0, chunk_bytes: chunk,
                 fp: Default::default(),
                 map: None,
                 fstype: None,

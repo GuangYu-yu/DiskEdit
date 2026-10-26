@@ -230,6 +230,11 @@ pub(crate) fn cmd_resize_msdos(a: &Args, pref: PartSelector, req: &SizeRequest, 
             .and_then(|g| fsops::check_grow_step(g, is_block))
             .unwrap_or_else(|e| bail_fail(Fail::from(e)));
     }
+    if grow_to_end || target.is_some_and(|b| b > cur_bytes) {
+        // MBR 没有 checkpoint：中断之后盘上已经是"部分执行"的现场，重跑会从现状再涨一次，
+        // 所以这里不能给一条"重跑即续跑"的暗示
+        eprintln!("note: MBR has no checkpoint — if this grow is interrupted, inspect the partition table and filesystem size before re-running");
+    }
     if grow_to_end {
         let free = free_right_msdos(&mbr, p, total_sectors);
         // 请求的分区增长无法实现：与 GPT 的 `resize grow` 及在线路径同语义拒绝，而不是
@@ -246,6 +251,7 @@ pub(crate) fn cmd_resize_msdos(a: &Args, pref: PartSelector, req: &SizeRequest, 
         }
         table::resize_mdos_entry(&mut src, part, new_size_lba as u32)
             .unwrap_or_else(|f| bail_fail(f));
+        crate::movepart::fault_mbr_after_table_write();
         mbr_grow_finish(a, &mut src, p, is_pv, is_block)
     } else {
         let Some(bytes) = target else { crate::args::usage() };

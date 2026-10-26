@@ -121,6 +121,33 @@ pub fn shrink_fs(src: &FileSource, part: u32, fstype: Option<FsKind>, new_bytes:
     }
 }
 
+/// 缩容**之前**看 FS 现在落在哪儿：中断续跑用它区分"已缩到位"与"从未缩过"，
+/// 避免按盲判把同一次缩容再做一遍。
+/// `None` 与 [`ShrinkVerify::Unverifiable`] 同义——回读不出来，无从判断。
+pub fn shrink_already_at(src: &FileSource, part: u32, fstype: Option<FsKind>, requested: u64) -> Option<bool> {
+    let kind = fstype?;
+    match kind {
+        FsKind::Ext | FsKind::Ntfs => with_partition_device(src, part, |dev| {
+            Ok::<Option<bool>, FsError>(read_fs_bytes(kind, dev).ok().map(|actual| actual <= requested))
+        })
+        .ok()?,
+        // btrfs 的尺寸由超级块给出（`dump-super -f` 直接读设备），不需要挂载；
+        // 设备区间与缩容走同一处 scope 解析，避免两读之间换映射
+        FsKind::Btrfs => {
+            let (off, len) = partition_byte_range(src, part).ok()?;
+            let mut verdict = None;
+            with_scope_device_ranged(src, &DeviceScope::Partition(part), off, len, |dev| {
+                verdict = read_fs_bytes(FsKind::Btrfs, dev).ok().map(|actual| actual <= requested);
+                Ok::<(), FsError>(())
+            })
+            .ok()?;
+            verdict
+        }
+        // 其余类型不能缩容，轮不到这里判断
+        _ => Some(false),
+    }
+}
+
 /// 缩容工具成功返回后的核对：回读实际落点，与请求值比对。三种结局对应三条出路——
 /// 落点在请求范围内 = 正常成功；落点超出请求 = 工具行为不符合预期（分区不能按请求缩进去）；
 /// 回读不出来 = 结果无法验证（工具可能已经缩好了，故不上抛成失败）

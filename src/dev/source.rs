@@ -136,6 +136,8 @@ impl WriteSource {
     /// 回滚表项就会与盘上内容自相矛盾。同一 mutation 下屏障只落一条（见 [`Journal::barrier`]），
     /// 逐 chunk 调用因此不产生额外记录
     pub fn write_data_at(&mut self, off: u64, buf: &[u8]) -> io::Result<()> {
+        // 越界判定先于屏障：屏障一旦落地 undo 即永久失效，而越界写一个字节也不会落盘
+        self.refuse_past_end(off, buf.len())?;
         self.mark_non_reversible()?;
         self.write_raw(off, buf)
     }

@@ -191,6 +191,7 @@ impl TransactionManager {
         claim: ResumeClaim,
     ) -> Result<(WriteSource, bool), Fail> {
         let mut src = Self::open_rw(a)?;
+        Self::refuse_unidentifiable(&src)?;
         let active = Self::active_records(&src);
         let resumed = if active.is_empty() {
             false
@@ -220,6 +221,19 @@ impl TransactionManager {
             journal_fp,
         });
         Ok((src, resumed))
+    }
+
+    /// 没有稳定身份证据的目标不能开事务：journal/ckpt 的头会把 `Unavailable` 记成
+    /// "哪一类字段才是身份证据"，而恢复端无法据此证明"还是那个目标"——写下的现场既
+    /// 不能续跑也不能回滚。故在任何字节落盘之前拒绝，而不是等恢复时才发现已经无路可走
+    fn refuse_unidentifiable(src: &FileSource) -> Result<(), Fail> {
+        if matches!(src.scene().proof, dev::IdentityProof::Unavailable) {
+            return Err(Fail::refused(
+                "this target exposes no stable identity (no device ID and no file identity): an interrupted write \
+                 here could neither be resumed nor undone, so it is refused before any byte is written",
+            ));
+        }
+        Ok(())
     }
 
     /// 返回 attach 时首项落点已存在时的文件指纹（见 [`SessionJournal`]）。
@@ -340,8 +354,11 @@ impl TransactionManager {
     /// 命令返回时 [`FileSource`]（连同它的所有权）已释放，故这里按同一身份重新取一次锁：
     /// 删除必须与 journal 的创建落在同一个独占窗口里。取不到锁即保留 journal
     /// （漏删会被下次运行报成 busy，但不会丢失别人的现场）
-    pub(crate) fn commit(session: &SessionJournal) {
+    /// 返回 `true` 表示现场已按本次事务的意图收干净；`false` 表示有文件该删而没删掉
+    /// （或没取到锁），调用方必须把这次运行报成"未完全收尾"，而不是照常给 0
+    pub(crate) fn commit(session: &SessionJournal) -> bool {
         let identity = &session.identity;
+        let mut clean = true;
         // 重新取锁后目标归本进程独占，下面两个动作（删除与目录落盘）才不会被别人的
         // 新建动作穿插；锁失败只影响"现在能不能关窗口"，不是数据错误
         let _lock = match TargetLock::acquire(identity, Some(&session.fingerprint)) {
@@ -353,7 +370,7 @@ impl TransactionManager {
                 eprintln!(
                     "warning: cannot re-take the target lock to drop the undo journal ({why}) — the journal is left in place"
                 );
-                return;
+                return false;
             }
         };
         let primary = identity.journal_path().to_path_buf();
@@ -404,8 +421,9 @@ impl TransactionManager {
         }
         for p in identity.journal_candidates() {
             if *p == primary {
-                if remove_primary {
-                    dev::remove_recovery_file(p);
+                if remove_primary && !dev::remove_recovery_file(p) {
+                    eprintln!("warning: could not remove {} — it still names this target", p.display());
+                    clean = false;
                 }
                 continue;
             }
@@ -414,8 +432,9 @@ impl TransactionManager {
                 Ok(id) => {
                     if let Some(why) = dev::scene_mismatch(&id, ours_identity) {
                         eprintln!("warning: {why} — {} is left in place", p.display());
-                    } else {
-                        dev::remove_recovery_file(p);
+                    } else if !dev::remove_recovery_file(p) {
+                        eprintln!("warning: could not remove {} — it still names this target", p.display());
+                        clean = false;
                     }
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
@@ -425,6 +444,7 @@ impl TransactionManager {
                 ),
             }
         }
+        clean
     }
 
     /// 取走事务开始时记下的身份。没有走到 `begin_or_resume`（或它没成功）时为 None——
@@ -458,6 +478,7 @@ impl TransactionManager {
         disk: &FileSource,
         what: &str,
     ) -> Result<(), Fail> {
+        Self::refuse_unidentifiable(identity)?;
         let active = active_recovery_records(&identity.identity, legacy_disk_guid(disk));
         if active.is_empty() {
             return Ok(());

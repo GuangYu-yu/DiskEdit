@@ -1,6 +1,6 @@
 //! diskedit — 磁盘编辑工具：镜像文件与块设备统一为按偏移读写的字节存储。
 //! 命令面与退出码契约：0=完成（分区表写入经读回复核、内核视图已刷新；FS 步以外部工具
-//! 的退出码为准——本工具不读回 FS 尺寸）/10=拒绝执行（未写盘，成因在请求与现状不匹配）/
+//! 的退出码为准；缩容另做尺寸回读，回读不出时报 20）/10=拒绝执行（未写盘，成因在请求与现状不匹配）/
 //! 20=部分完成（后置步骤未做，或表已写但内核分区视图过期）/
 //! 30=基础设施失败（盘内容/环境故障且未写盘，或写盘后失败）。
 //! 20 的两个成因正交：见 outcome::Applied 的 pending 与 kernel_sync；
@@ -46,8 +46,10 @@ fn main() -> ExitCode {
     // 若也删，会把先前失败操作留下的 journal 误清掉。删除动作须容忍文件不存在；
     // 块设备的在线路径（sfdisk、FS 工具）用自己的 fd 写盘、不经过本工具的 journal，
     // 那些写入本就不在回放范围内
-    if cmd::opens_undo_journal(&cmd) && result.closes_journal() {
-        drop_journal();
+    let mut code = result.code();
+    if cmd::opens_undo_journal(&cmd) && result.closes_journal() && !drop_journal() {
+        // 该删的恢复文件没删掉：事务的收尾没有完成，不能按完整成功退出
+        code = crate::outcome::EXIT_PARTIAL;
     }
-    ExitCode::from(result.code())
+    ExitCode::from(code)
 }
