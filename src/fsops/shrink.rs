@@ -59,6 +59,14 @@ impl ShrinkOutcome {
         }
     }
 
+    /// 临时挂载点是否没能卸掉。为真时分区仍被内核视为挂载中：搬移或改表会与活动挂载
+    /// 的元数据互相覆盖，调用方必须停在缩容这一步
+    pub fn release_failed(&self) -> bool {
+        match self {
+            Self::Verified { leak, .. } | Self::Unverified { leak, .. } => leak.is_some(),
+        }
+    }
+
     /// 随结果浮出的待办：未证实的原因与补救、以及没卸掉的挂载点。两者都不改写
     /// "缩容已经执行"这一事实，只作为后置条件呈现
     pub fn pending(self, part: u32) -> Vec<crate::outcome::Pending> {

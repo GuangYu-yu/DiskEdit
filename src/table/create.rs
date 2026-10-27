@@ -276,6 +276,13 @@ pub fn create_mbr(src: &mut WriteSource) -> io::Result<()> {
     // 会漏掉另一种落盘方式留下的签名。与上面同一顺序要求——先清、后写 LBA0
     for at in candidate_sector_sizes(ss) {
         let off = container_last_lba(src, at).saturating_mul(at);
+        // 盘尾备份头不得落在容器的 LBA0 里：容器不足一个候选扇区时 last 饱和成 0，
+        // 容器比某个候选扇区更小时（如 ss=4096 的镜像按 512 去找）该候选的盘尾也会推进
+        // LBA0 内部。那 8 个字节属于保护 MBR 所在的扇区：清掉之后 LBA0 写回又把它们盖回去，
+        // 读回复核据此报"签名未清掉"；中断正好停在两步之间就在引导区留下一个洞
+        if off < ss {
+            continue;
+        }
         if src.size < off.saturating_add(GPT_SIGNATURE.len() as u64) {
             continue;
         }

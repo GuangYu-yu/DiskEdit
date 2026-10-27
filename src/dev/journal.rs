@@ -78,27 +78,22 @@ pub struct JournalRecord {
     pub recovery: RecoveryData,
 }
 
-/// 记录头 `[len u32][crc32 u32]` 的字节数。v5 起 `len` 计入 CRC（见 [`Journal::read_entries`]）；
-/// v4 journal 仍按旧口径（CRC 只覆盖载荷）读取与追加
+/// 记录头 `[len u32][crc32 u32]` 的字节数。`len` 计入 CRC（见 [`Journal::read_entries`]）
 pub(crate) const REC_HDR: usize = 8;
 
-/// v4 / v5 身份段的字节数：dev / ino / size 各 u64 + "有无 loop 映射"1 字节 + 映射的
-/// off / limit 各 u64。映射取值即使缺席也照样占位——定长头让记录扫描的起点是个常量，
-/// 不必先解析变长字段
-pub(crate) const IDENTITY_LEN: usize = 8 * 3 + 1 + 8 * 2;
+/// 身份段：dev / ino / size / 设备 ID 哈希 各 u64 + "有无 loop 映射"1 字节 + 映射的
+/// off / limit 各 u64 + 身份种类 1 字节。映射取值即使缺席也照样占位——定长头让记录扫描
+/// 的起点是个常量，不必先解析变长字段
+pub(crate) const IDENTITY_LEN: usize = 8 * 4 + 1 + 8 * 2 + 1;
 
-/// v6 身份段：在 v4 / v5 的 size 之后加设备 ID 哈希（u64），末尾再追加身份种类（1 字节）。
-/// 种类追加在尾部，设备 ID 与映射的偏移不因它变动
-pub(crate) const IDENTITY_LEN_V6: usize = 8 * 4 + 1 + 8 * 2 + 1;
-
-/// 版本错误：本工具旧 / 新版本写下的、本构建不认识的 journal。版本识别必须先于一切
+/// 版本错误：本工具别的版本写下的、本构建不认识的 journal。版本识别必须先于一切
 /// payload 解析——旧格式的记录布局不同，按当前格式去解会把"版本不认识"报成
 /// "CRC 不符 / 记录损坏"，把用户指向错误的修法
 pub(crate) fn unsupported_version_error(version: u8) -> io::Error {
     io::Error::new(
         io::ErrorKind::InvalidData,
         format!(
-            "journal format v{version} is not supported by this build (it reads v4, v5 and v6, writes v{}) — the \
+            "journal format v{version} is not supported by this build (it reads and writes v{}) — the \
              journal cannot be replayed; release it with `diskedit abandon` (that gives up the ability to roll \
              back, not the data)",
             Journal::MAGIC[4]
@@ -387,159 +382,89 @@ pub struct Journal {
     /// 本目标是哪个目标：随头一起落盘（首条记录之前），也在采纳既有 journal 时与头里的
     /// 记录值比对（见 [`Self::open`]）
     pub(crate) identity: LiveScene,
-    /// 本份 journal 的记录 CRC 口径。新建即当前版本；采纳 v4 现场时保持 v4，
-    /// 追加的记录与该文件既有记录同口径，避免同一文件里混两种 CRC 规则
-    pub(crate) format: JournalFormat,
     /// 当前 mutation 是否已落过屏障。屏障回答的是"这一类改动越界了没有"，同一 mutation 下
     /// 重复记录不增加任何信息；`write_data_at` 逐 chunk 自带屏障，靠这个标记让每条
     /// chunk 各落一条屏障不会发生
     pub(crate) barred: bool,
 }
 
-/// journal 的记录 CRC 口径，版本号即 magic 的尾字节
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum JournalFormat {
-    /// CRC 只覆盖载荷；`len` 不受完整性保护
-    V4,
-    /// CRC 覆盖 `[len][payload]`：长度字段被位翻转时按校验失败拒绝，而不是被当成
-    /// "更长的载荷"继续扫描
-    V5,
-    /// v6 身份段追加设备 ID 哈希（整盘节点上的稳定 ID）与身份种类；记录口径与 v5 相同
-    V6,
-}
-
-impl JournalFormat {
-    pub(crate) fn from_version(version: u8) -> Option<Self> {
-        match version {
-            4 => Some(Self::V4),
-            5 => Some(Self::V5),
-            6 => Some(Self::V6),
-            _ => None,
-        }
-    }
-
-    pub(crate) fn magic(self) -> &'static [u8; 5] {
-        match self {
-            Self::V4 => b"DEJL\x04",
-            Self::V5 => b"DEJL\x05",
-            Self::V6 => b"DEJL\x06",
-        }
-    }
-
-    /// 身份段长度随版本不同：v4 / v5 没有设备 ID 字段
-    pub(crate) fn identity_len(self) -> usize {
-        match self {
-            Self::V4 | Self::V5 => IDENTITY_LEN,
-            Self::V6 => IDENTITY_LEN_V6,
-        }
-    }
-
-    /// 头总长（magic + 身份段 + 身份段 CRC）。记录扫描的起点由它给出
-    pub(crate) fn header_len(self) -> usize {
-        self.magic().len() + self.identity_len() + 4
-    }
-
-    /// 身份段里有没有设备 ID 哈希与身份种类（v6 起）
-    pub(crate) fn carries_device_identity(self) -> bool {
-        matches!(self, Self::V6)
-    }
-}
-
 impl Journal {
     /// 尾字节是格式版本。版本识别先于任何记录解析，故不认识的格式报"版本不支持"
-    /// 而非"记录损坏"。可读 v4、v5 与 v6：旧现场保持旧口径追加，回滚能力不因升级丢失
-    /// - v3：PreImage 记录补记写后内容（undo 回放前的分叉核对依据）
-    /// - v4：头里加"创建时目标身份"段（指纹 + loop 映射），采纳与回放前都先核对
-    /// - v5：记录 CRC 覆盖 `[len][payload]`，长度字段纳入完整性保护
-    /// - v6：身份段追加设备 ID 哈希；块设备现场由此能与"同名换过的盘"区分
+    /// 而非"记录损坏"
     pub(crate) const MAGIC: &[u8; 5] = b"DEJL\x06";
 
-    /// magic 的前 4 字节：凡以它开头而版本字节不同的，都是本工具别的版本写下的 journal
-    const MAGIC_PREFIX: &[u8; 4] = b"DEJL";
-
-    /// 首部是否为本工具写下的 journal，任一可读版本都算。`MAGIC` 只对应当前版本，
-    /// 而 v4 / v5 现场同样是本工具的文件；判"这是不是我们的文件"时不能按当前版本比对
+    /// 首部是否为本工具写下的 journal
     pub(crate) fn is_own_header(hdr: &[u8]) -> bool {
-        hdr.len() >= Self::MAGIC.len()
-            && &hdr[..Self::MAGIC_PREFIX.len()] == Self::MAGIC_PREFIX
-            && JournalFormat::from_version(hdr[Self::MAGIC_PREFIX.len()]).is_some()
+        hdr.len() >= Self::MAGIC.len() && &hdr[..Self::MAGIC.len()] == Self::MAGIC
     }
 
-    /// 当前版本的头总长（magic + 身份段 + 身份段 CRC32）。身份段不参与任何记录级 CRC，
+    /// 头总长（magic + 身份段 + 身份段 CRC32）。身份段不参与任何记录级 CRC，
     /// 故自带一个：头被改坏时要报"头校验失败"，而不是让改坏后的指纹去和当前目标比出个
-    /// "指纹不符"。读取时按文件自述的版本取长度（见 [`JournalFormat::header_len`]）
-    pub(crate) const HEADER_LEN: usize = Self::MAGIC.len() + IDENTITY_LEN_V6 + 4;
+    /// "指纹不符"
+    pub(crate) const HEADER_LEN: usize = Self::MAGIC.len() + IDENTITY_LEN + 4;
 
-    /// 头（含身份段的 CRC）。写出与校验两处只用这一份布局；v4 / v5 没有设备 ID 与身份种类。
-    /// 身份种类只从 [`LiveScene`] 取，`Legacy`（0）因此不可能落到盘上
-    pub(crate) fn header(identity: &LiveScene, format: JournalFormat) -> Vec<u8> {
-        let mut b = Vec::with_capacity(format.header_len());
-        b.extend_from_slice(format.magic());
+    /// 头（含身份段的 CRC）。写出与校验两处只用这一份布局。
+    /// 身份种类只从 [`LiveScene`] 取
+    pub(crate) fn header(identity: &LiveScene) -> Vec<u8> {
+        let mut b = Vec::with_capacity(Self::HEADER_LEN);
+        b.extend_from_slice(Self::MAGIC);
         b.extend_from_slice(&identity.fp.dev.to_le_bytes());
         b.extend_from_slice(&identity.fp.ino.to_le_bytes());
         b.extend_from_slice(&identity.fp.size.to_le_bytes());
-        if format.carries_device_identity() {
-            b.extend_from_slice(&identity.fp.id.to_le_bytes());
-        }
+        b.extend_from_slice(&identity.fp.id.to_le_bytes());
         b.push(identity.map.is_some() as u8);
         let (off, limit) = identity.map.unwrap_or((0, 0));
         b.extend_from_slice(&off.to_le_bytes());
         b.extend_from_slice(&limit.to_le_bytes());
-        if format.carries_device_identity() {
-            b.push(identity.proof.tag());
-        }
+        b.push(identity.proof.tag());
         let crc = crate::table::crc32(&b);
         b.extend_from_slice(&crc.to_le_bytes());
         b
     }
 
-    /// 解析并校验头。**版本识别在一切之前**：magic 前缀对上而版本字节不同，报的是版本错误，
-    /// 不是长度不足、更不是 CRC——那两种措辞会把用户送去怀疑文件被写坏。
-    /// 返回身份与记录 CRC 口径；身份段长度按版本取，v4 / v5 的设备 ID 读作零、身份种类读作
-    /// `Legacy`（格式里没有这两个字段）
-    pub(crate) fn parse_header(data: &[u8]) -> io::Result<(SceneIdentity, JournalFormat)> {
+    /// 解析并校验头。**版本识别在一切之前**：尾字节不是当前版本，报的是版本错误，
+    /// 不是长度不足、更不是 CRC——那两种措辞会把用户送去怀疑文件被写坏
+    pub(crate) fn parse_header(data: &[u8]) -> io::Result<SceneIdentity> {
         if data.len() < Self::MAGIC.len() {
-            return Err(truncated_header_error(data.len(), IDENTITY_LEN + Self::MAGIC.len() + 4));
+            return Err(truncated_header_error(data.len(), Self::HEADER_LEN));
         }
-        if &data[..Self::MAGIC_PREFIX.len()] != Self::MAGIC_PREFIX {
+        if !Self::is_own_header(&data[..Self::MAGIC.len()]) {
+            if data[..Self::MAGIC.len() - 1] == Self::MAGIC[..Self::MAGIC.len() - 1] {
+                return Err(unsupported_version_error(data[Self::MAGIC.len() - 1]));
+            }
             return Err(not_a_journal_error());
         }
-        let Some(format) = JournalFormat::from_version(data[Self::MAGIC_PREFIX.len()]) else {
-            return Err(unsupported_version_error(data[Self::MAGIC_PREFIX.len()]));
-        };
-        let id_len = format.identity_len();
-        let header_len = Self::MAGIC.len() + id_len + 4;
-        if data.len() < header_len {
-            return Err(truncated_header_error(data.len(), header_len));
+        if data.len() < Self::HEADER_LEN {
+            return Err(truncated_header_error(data.len(), Self::HEADER_LEN));
         }
-        let body = &data[..Self::MAGIC.len() + id_len];
-        let want = u32::from_le_bytes(data[Self::MAGIC.len() + id_len..header_len].try_into().unwrap());
+        let body = &data[..Self::MAGIC.len() + IDENTITY_LEN];
+        let want = u32::from_le_bytes(
+            data[Self::MAGIC.len() + IDENTITY_LEN..Self::HEADER_LEN].try_into().unwrap(),
+        );
         if crate::table::crc32(body) != want {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "journal header CRC mismatch"));
         }
-        let u64_at = |i: usize| u64::from_le_bytes(data[Self::MAGIC.len() + i..Self::MAGIC.len() + i + 8].try_into().unwrap());
-        let id = if format.carries_device_identity() { u64_at(24) } else { 0 };
-        let map_at = if format.carries_device_identity() { 32 } else { 24 };
-        let fp = TargetFingerprint { dev: u64_at(0), ino: u64_at(8), size: u64_at(16), id };
-        let map = (data[Self::MAGIC.len() + map_at] != 0).then(|| (u64_at(map_at + 1), u64_at(map_at + 9)));
-        let proof = if format.carries_device_identity() {
-            IdentityProof::from_tag(data[Self::MAGIC.len() + IDENTITY_LEN_V6 - 1]).ok_or_else(|| {
-                io::Error::new(io::ErrorKind::InvalidData, "implausible journal identity kind")
-            })?
-        } else {
-            IdentityProof::Legacy
+        let u64_at = |i: usize| {
+            u64::from_le_bytes(data[Self::MAGIC.len() + i..Self::MAGIC.len() + i + 8].try_into().unwrap())
         };
-        Ok((SceneIdentity { fp, map, proof }, format))
+        let fp = TargetFingerprint { dev: u64_at(0), ino: u64_at(8), size: u64_at(16), id: u64_at(24) };
+        const MAP_AT: usize = 32;
+        let map = (data[Self::MAGIC.len() + MAP_AT] != 0)
+            .then(|| (u64_at(MAP_AT + 1), u64_at(MAP_AT + 9)));
+        let proof = IdentityProof::from_tag(data[Self::MAGIC.len() + IDENTITY_LEN - 1]).ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidData, "implausible journal identity kind")
+        })?;
+        Ok(SceneIdentity { fp, map, proof })
     }
 
     /// 只读头：undo 在回放前用它取"这份 journal 是为哪个目标写的"。与 [`Self::open`] 用
     /// 同一份布局与同一套校验，故两条路径对"头是否可信"不会分叉
     pub fn read_identity(path: &Path) -> io::Result<SceneIdentity> {
-        Self::parse_header(&std::fs::read(path)?).map(|(identity, _)| identity)
+        Self::parse_header(&std::fs::read(path)?)
     }
 
-    pub(crate) fn at(path: &Path, file: Option<File>, identity: LiveScene, format: JournalFormat) -> Self {
-        Journal { file, path: path.to_path_buf(), mutation: Mutation::PartitionTable, identity, format, barred: false }
+    pub(crate) fn at(path: &Path, file: Option<File>, identity: LiveScene) -> Self {
+        Journal { file, path: path.to_path_buf(), mutation: Mutation::PartitionTable, identity, barred: false }
     }
 
     /// 打开（必要时先校验）落点，**不产生任何新痕迹**：文件已存在则必须是我们自己写的
@@ -549,7 +474,7 @@ impl Journal {
     /// 校验阶段就被拒的命令会留下空 journal，让后续 undo 报"journal 是空的"而不是
     /// "没有 journal"，也占住了候选落点。
     ///
-    /// 既有文件还要过身份核对：它记的是**哪个目标**（v4 起）。指纹或 loop 映射不符即拒绝
+    /// 既有文件还要过身份核对：它记的是**哪个目标**。指纹或 loop 映射不符即拒绝
     /// 采纳——把别的目标记下的原文当成"本目标的待回滚字节"，是这条路径最坏的后果。
     /// 唯一不适用的是**头之后一个字节都没有**的文件（零记录且无残尾）：零记录意味着无可
     /// 回滚的字节，覆盖头收养不丢信息，而拒绝会让它永久占住本目标的 journal 落点（写命令
@@ -606,19 +531,19 @@ impl Journal {
                 // 都没有"，而头没写全、身份段 CRC 验不了，证明不了这一点
                 if len == 0 {
                     Self::rewrite_header(path, &mut f, &identity)?;
-                    return Ok((Self::at(path, Some(f), identity, JournalFormat::V6), None));
+                    return Ok((Self::at(path, Some(f), identity), None));
                 }
                 let have = usize::try_from(len.min(Self::HEADER_LEN as u64)).unwrap();
                 let mut head = vec![0u8; have];
                 f.read_exact(&mut head)?;
-                // 版本识别排在长度与 CRC 之前：一份**旧版本**的 journal 可能只有几十字节，
+                // 版本识别排在长度与 CRC 之前：一份**别的版本**的 journal 可能只有几十字节，
                 // 按长度先判会把它说成"头没写完"，按 CRC 先判会说成"记录损坏"——两种都会把
                 // 用户送去怀疑文件被写坏，而真实原因是版本不认识
-                let (recorded, format) = if head.len() >= Self::MAGIC.len() {
+                let recorded = if head.len() >= Self::MAGIC.len() {
                     Self::parse_header(&head)? // 版本、长度、头 CRC 三关；不认的文件在此被拒
-                } else if Self::MAGIC.starts_with(&head) {
+                } else if head.len() < Self::MAGIC.len() && Self::MAGIC.starts_with(&head) {
                     // 1..4 字节且是本工具 magic 的前缀：不足一个 magic，按头截断报（不是残骸）
-                    return Err(truncated_header_error(head.len(), IDENTITY_LEN + Self::MAGIC.len() + 4));
+                    return Err(truncated_header_error(head.len(), Self::HEADER_LEN));
                 } else {
                     return Err(not_a_journal_error());
                 };
@@ -640,14 +565,14 @@ impl Journal {
                     // 按别人的现场拒绝
                     // 零记录指的是**头之后一个字节都没有**：头后还有字节而读不出完整记录时，
                     // 那截字节可能就是被截掉的记录，不能按空壳收养
-                    let no_records = matches!(Self::scan_entries(&data, format), Ok((ref out, end)) if out.is_empty() && end == data.len());
+                    let no_records = matches!(Self::scan_entries(&data), Ok((ref out, end)) if out.is_empty() && end == data.len());
                     if no_records {
                         Self::rewrite_header(path, &mut f, &identity)?;
                         eprintln!(
                             "note: journal {} held no complete records and was not recorded for this target ({why}) — reclaimed it as this target's journal",
                             path.display()
                         );
-                        return Ok((Self::at(path, Some(f), identity, JournalFormat::V6), None));
+                        return Ok((Self::at(path, Some(f), identity), None));
                     }
                     // why 里已带着逐字段差异；这里补的是"换回记录时的目标，或用 abandon 释放现场"
                     return Err(io::Error::new(
@@ -658,7 +583,7 @@ impl Journal {
                         ),
                     ));
                 }
-                let (_, end) = Self::scan_entries(&data, format)?;
+                let (_, end) = Self::scan_entries(&data)?;
                 let cut = NonZeroUsize::new(data.len() - end);
                 if let Some(cut) = cut {
                     // 归档先于截断：这份字节此后不再存在于 journal 里，而"没走完的追加"与
@@ -688,10 +613,10 @@ impl Journal {
                     f.set_len(end as u64)?;
                     f.sync_all()?;
                 }
-                Ok((Self::at(path, Some(f), identity, format), cut))
+                Ok((Self::at(path, Some(f), identity), cut))
             }
             Err(e) if e.kind() == io::ErrorKind::NotFound => {
-                Ok((Self::at(path, None, identity, JournalFormat::V6), None))
+                Ok((Self::at(path, None, identity), None))
             }
             Err(e) => Err(e),
         }
@@ -703,7 +628,7 @@ impl Journal {
         use std::io::{Seek, SeekFrom, Write};
         f.set_len(0)?;
         f.seek(SeekFrom::Start(0))?;
-        f.write_all(&Self::header(identity, JournalFormat::V6))?;
+        f.write_all(&Self::header(identity))?;
         f.sync_all()?;
         best_effort_dir_fsync(path);
         Ok(())
@@ -737,7 +662,7 @@ impl Journal {
                 }
             })?;
             use std::io::Write;
-            let head = Self::header(&self.identity, self.format);
+            let head = Self::header(&self.identity);
             let init = f.write_all(&head).and_then(|()| f.sync_all());
             if let Err(e) = init {
                 // 头没写完的文件不属于可采纳的形态（0 字节残骸或完整头），重试会报成
@@ -812,18 +737,13 @@ impl Journal {
         self.mutation = m;
     }
 
-    /// 记录的 CRC：v4 只覆盖载荷；v5 覆盖 `[len][payload]`，长度字段被改坏时校验失败。
-    /// 写入与读取共用这一处口径
-    pub(crate) fn record_crc(format: JournalFormat, len: [u8; 4], payload: &[u8]) -> u32 {
-        match format {
-            JournalFormat::V4 => crate::table::crc32(payload),
-            JournalFormat::V5 | JournalFormat::V6 => {
-                let mut frame = Vec::with_capacity(len.len() + payload.len());
-                frame.extend_from_slice(&len);
-                frame.extend_from_slice(payload);
-                crate::table::crc32(&frame)
-            }
-        }
+    /// 记录的 CRC 覆盖 `[len][payload]`：长度字段被位翻转时校验失败，而不是被当成
+    /// "更长的载荷"继续扫描。写入与读取共用这一处口径
+    pub(crate) fn record_crc(len: [u8; 4], payload: &[u8]) -> u32 {
+        let mut frame = Vec::with_capacity(len.len() + payload.len());
+        frame.extend_from_slice(&len);
+        frame.extend_from_slice(payload);
+        crate::table::crc32(&frame)
     }
 
     /// 追加一条记录。调用方必须持有目标锁（生产路径上只有 [`WriteSource::write_at`] /
@@ -838,12 +758,11 @@ impl Journal {
         // 长度字段按 u32 落盘：超限静默截断会破坏 [len][crc][payload] 的帧定位，显式拒绝
         let n = u32::try_from(payload.len())
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "journal record exceeds u32 length"))?;
-        let format = self.format;
         let f = self.ensure()?;
         f.seek(SeekFrom::End(0))?;
         let n_le = n.to_le_bytes();
         f.write_all(&n_le)?;
-        f.write_all(&Self::record_crc(format, n_le, &payload).to_le_bytes())?;
+        f.write_all(&Self::record_crc(n_le, &payload).to_le_bytes())?;
         f.write_all(&payload)?;
         f.sync_data()
     }
@@ -856,17 +775,16 @@ impl Journal {
     /// 追加，那条记录对应的数据写入**根本没有发生**，丢弃它是安全的。中途（非尾部）CRC 不符
     /// 才是真实损坏，仍整体拒绝
     ///
-    /// 记录头里的 len 从 v5 起参与 CRC，故"len 被写坏"不会再被当成"载荷只写了一半"：
-    /// 在记录头完整、载荷长度仍落在文件内时，校验失败即整体拒绝。v4 现场没有这层保护，
-    /// 仍按旧口径（`len` 不参与 CRC）读取与追加——升级不把尚可回滚的旧现场变成只能 abandon。
+    /// 记录头里的 len 参与 CRC，故"len 被写坏"不会落进"载荷只写了一半"那一类：
+    /// 在记录头完整、载荷长度仍落在文件内时，校验失败即整体拒绝。
     /// 越界帧的载荷读不全，CRC 无从校验，改由"越界之后是否还有 CRC 通过的完整帧"区分：
     /// 有则长度字段在文件中段损坏，整体拒绝；无才是尾部撕裂。返回的前缀每条都通过了
     /// 该文件的 CRC，且各自对应的写入确实发生过
     pub fn read_entries(path: &Path) -> io::Result<JournalRead> {
         let data = std::fs::read(path)?;
         // 头（版本 + 身份 + 头 CRC）先整体校验：版本不符在这里就报出来，不会走到记录解析
-        let (_, format) = Self::parse_header(&data)?;
-        let (out, end) = Self::scan_entries(&data, format)?;
+        Self::parse_header(&data)?;
+        let (out, end) = Self::scan_entries(&data)?;
         Ok(match NonZeroUsize::new(data.len() - end) {
             Some(cut) => JournalRead::TruncatedTail { records: out, cut },
             None => JournalRead::Complete(out),
@@ -877,9 +795,9 @@ impl Journal {
     /// [`Self::open`]（采纳时的撕裂尾截断）共用同一套判据。返回
     /// `(完整记录, 最后一个完整记录的结束偏移)`——结束偏移与 `data.len()` 之差即撕裂尾的
     /// 字节数；两者相等表示尾部完整。零完整记录且撕裂时结束偏移即头长
-    pub(crate) fn scan_entries(data: &[u8], format: JournalFormat) -> io::Result<(Vec<JournalRecord>, usize)> {
+    pub(crate) fn scan_entries(data: &[u8]) -> io::Result<(Vec<JournalRecord>, usize)> {
         let mut out = Vec::new();
-        let mut pos = format.header_len();
+        let mut pos = Self::HEADER_LEN;
         while pos < data.len() {
             // 记录头尚未写全 → 尾部未完成的事务（加法 checked：输入是外部文件内容）
             if pos.checked_add(REC_HDR).is_none_or(|end| end > data.len()) {
@@ -891,10 +809,10 @@ impl Journal {
             pos += REC_HDR;
             // len == 0 是"帧头只写了一半"的形态（8 个零字节）：先看其后是否还有完整
             // 记录——有则是中段损坏（截断会删掉真实记录），没有则只是撕裂尾。
-            // 不先算 CRC：v4 口径下 crc32("") == 0 会让零帧"通过"校验，再在 decode
+            // 不先算 CRC：crc32 对空载荷的取值会让零帧"通过"校验，再在 decode
             // 处炸成整份 journal 不可读，一份本可回滚的现场就只剩 abandon 一条路
             if len == 0 {
-                if Self::later_complete_record(data, pos, format) {
+                if Self::later_complete_record(data, pos) {
                     return Err(io::Error::new(
                         io::ErrorKind::InvalidData,
                         "journal entry has zero length but complete records follow it",
@@ -905,7 +823,7 @@ impl Journal {
             // 头写全了但载荷没写全：可能是一次没走完的追加，也可能是中段 len 被写坏。
             // 后者不能按撕裂丢弃——截断会把其后每条 CRC 通过、写入确实发生过的记录删掉
             if pos.checked_add(len).is_none_or(|end| end > data.len()) {
-                if Self::later_complete_record(data, pos, format) {
+                if Self::later_complete_record(data, pos) {
                     return Err(io::Error::new(
                         io::ErrorKind::InvalidData,
                         "journal entry length runs past the end of the file (records follow it)",
@@ -914,7 +832,7 @@ impl Journal {
                 return Ok((out, pos - REC_HDR));
             }
             let payload = &data[pos..pos + len];
-            if Self::record_crc(format, n_le, payload) != crc {
+            if Self::record_crc(n_le, payload) != crc {
                 return Err(io::Error::new(io::ErrorKind::InvalidData, "journal entry CRC mismatch"));
             }
             pos += len;
@@ -927,7 +845,7 @@ impl Journal {
     /// `from` 之后是否存在一条头完整、载荷落在文件内、CRC 通过且能解码的记录。
     /// 越界帧的真实载荷起点未知（len 本身不可信），逐字节试；载荷须能解码，避免把
     /// 随机字节序列的 CRC 巧合当成一条记录
-    fn later_complete_record(data: &[u8], from: usize, format: JournalFormat) -> bool {
+    fn later_complete_record(data: &[u8], from: usize) -> bool {
         let mut pos = from;
         while pos + REC_HDR <= data.len() {
             let n_le: [u8; 4] = data[pos..pos + 4].try_into().unwrap();
@@ -936,7 +854,7 @@ impl Journal {
             let start = pos + REC_HDR;
             if start.checked_add(len).is_some_and(|end| end <= data.len()) {
                 let payload = &data[start..start + len];
-                if Self::record_crc(format, n_le, payload) == crc && JournalRecord::decode(payload).is_ok() {
+                if Self::record_crc(n_le, payload) == crc && JournalRecord::decode(payload).is_ok() {
                     return true;
                 }
             }

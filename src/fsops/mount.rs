@@ -14,6 +14,8 @@ pub(crate) struct MountEntry {
     pub mount_point: String,
     /// 已解码的设备/源路径
     pub source: String,
+    /// `-` 之后的文件系统类型（如 `btrfs`）：设备身份的判据按它分派
+    pub fstype: String,
 }
 
 /// 解码八进制转义（\NNN，如空格 = \040）；非转义序列原样保留
@@ -54,13 +56,14 @@ pub(crate) fn parse_mountinfo(line: &str) -> Option<MountEntry> {
     // optional fields 数量可变，不能按固定下标取尾部字段：以单独的 "-" 为分界
     let rest: Vec<&str> = it.collect();
     let sep = rest.iter().position(|&f| f == "-")?;
-    let _fstype = rest.get(sep + 1)?;
+    let fstype = rest.get(sep + 1)?;
     let source = rest.get(sep + 2)?;
     let (maj, min) = dev.split_once(':')?;
     Some(MountEntry {
         dev_no: (maj.parse().ok()?, min.parse().ok()?),
         mount_point: decode_octal(mnt),
         source: decode_octal(source),
+        fstype: (*fstype).to_string(),
     })
 }
 
@@ -244,6 +247,16 @@ fn probe_occupancy_with(mounts: &[MountEntry], swaps: &str, dev: &str) -> io::Re
         Some(LoopOccupancy::Live(via)) => return Ok(Occupancy::LoopBacked { via, holders: Vec::new() }),
         Some(LoopOccupancy::Held { loopdev, holders }) => {
             return Ok(Occupancy::LoopBacked { via: loopdev, holders });
+        }
+        // 内核拒绝独占：这台设备已被别的使用者 claim（挂载 / swap / 他人独占）
+        Some(LoopOccupancy::KernelBusy { loopdev }) => {
+            return Ok(Occupancy::LoopBacked { via: loopdev, holders: Vec::new() });
+        }
+        // 确认不了独占权 = 确认不了空闲，按本函数的 fail-closed 口径上抛
+        Some(LoopOccupancy::Unclaimable { loopdev, why }) => {
+            return Err(io::Error::other(format!(
+                "cannot take an exclusive claim on {loopdev}, a loop onto {dev}: {why}"
+            )));
         }
         None => {}
     }
@@ -454,13 +467,17 @@ pub(crate) fn loop_backing_of_node(node: &Path) -> io::Result<Option<LoopBacking
     Ok(Some(LoopBacking { dev: info.lo_device, ino: info.lo_inode, rdev: info.lo_rdevice }))
 }
 
-/// 指向本镜像的 loop 被使用的两种形态
+/// 指向本镜像的 loop 被使用的形态
 #[cfg(target_os = "linux")]
 pub(crate) enum LoopOccupancy {
     /// loop 本身或它的分区被挂载或是活动 swap：字段是那个设备路径
     Live(String),
     /// loop（或 `losetup -P` 展开出的分区）被上层块设备栈持有
     Held { loopdev: String, holders: Vec<String> },
+    /// 内核拒绝独占打开（EBUSY）：挂载、swap 或他人的独占 claim 占着它
+    KernelBusy { loopdev: String },
+    /// 拿不到独占权（节点缺失、权限不足、I/O 错误等）：不是"空闲"的证据
+    Unclaimable { loopdev: String, why: String },
 }
 
 /// 一个 loop 及其 `losetup -P` 展开出的分区：`(设备名, sysfs 目录)`。
@@ -499,7 +516,14 @@ fn loop_and_partitions(sysdir: &Path, name: &str) -> io::Result<Vec<(String, Pat
 /// 解析，也可能已指向被替换过的文件，故**不作为首选判据**；只有打不开 `/dev` 节点时
 /// 才用它做身份回退（对路径做 stat，仍比对象号，见 [`backing_identity_from_sysfs`]）。
 /// 任一环节确认不了都上抛，由调用方 fail-closed；枚举本身来自全局 sysfs，不随 mount
-/// namespace 变化
+/// namespace 变化。
+///
+/// 挂载视图来自 procfs，可见范围取决于**挂载该 procfs 时所在的 PID 命名空间**
+/// （man pid_namespaces(7)）——只有宿主初始 PID 命名空间的 procfs 才列得出全部相关进程；
+/// 容器内自行挂载的 procfs 看不见祖先命名空间的进程，`NSpid` 一个值也证明不了"已经看到
+/// 全部"。故本函数的判据由两部分组成：可解释的挂载/swap/holder 视图，与内核独占 claim
+/// （[`loop_occupancy_for`] 取得并留持）。前者受命名空间限制，后者与命名空间无关，
+/// 两者都不成立时才是空闲；任一环节给不出结论一律拒绝
 #[cfg(target_os = "linux")]
 pub(crate) fn image_loop_occupancy(src: &FileSource) -> io::Result<Option<LoopOccupancy>> {
     use std::os::unix::fs::MetadataExt;
@@ -509,6 +533,42 @@ pub(crate) fn image_loop_occupancy(src: &FileSource) -> io::Result<Option<LoopOc
     let mounts = read_mounts()?;
     let swaps = std::fs::read_to_string("/proc/swaps")?;
     loop_occupancy_for(BackingMatch::File { dev: md.dev(), ino: md.ino() }, &mounts, &swaps)
+}
+
+/// 已取得的 loop 独占权，按 loop 节点名登记，持有到进程退出。CLI 一次调用只做一件事，
+/// 进程退出即释放；提前 drop 会把"检查通过 → 写盘"之间的窗口重新打开。按名字登记而非
+/// 只存 fd：同一进程内多处闸口（表写入、prepare、mkfs）都会走到判定，重复 claim 会与
+/// 自己已持的 claim 冲突而把空闲读成占用
+#[cfg(target_os = "linux")]
+static LOOP_CLAIMS: std::sync::Mutex<Vec<(String, std::fs::File)>> = std::sync::Mutex::new(Vec::new());
+
+/// 对 loop 设备取内核独占权：`O_RDWR | O_EXCL`、不带 `O_CREAT`。man open(2)：Linux 2.6
+/// 起，块设备正在被使用（挂载、swap、他人的独占打开）时同一组合以 EBUSY 失败；
+/// 只读挂载同样算使用。探测对象取 loop **父设备**：分区被 claim 时整盘的 claim 状态
+/// 一并变化，故对父设备 claim 能撞上挂在分区上的使用——这条冲突关系可读于 Linux 3.19 的
+/// `fs/block_dev.c`（`bd_start_claiming` / `bd_prepare_to_claim`）与当前主线
+/// `block/bdev.c`（`bd_may_claim`）。源码证据不等于所有历史内核都保证同一行为，本机也未
+/// 在项目支持的最低内核上实测，故它是额外的一层，不构成"已覆盖全部使用者"的结论
+#[cfg(target_os = "linux")]
+fn claim_loop_exclusive(loopdev: &str) -> io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .custom_flags(libc::O_EXCL)
+        .open(loopdev)
+}
+
+/// O_EXCL 打开失败的两种含义：EBUSY = 内核把它判给了别的使用者（占用）；其余错误
+/// （权限、节点缺失、I/O）不构成"设备空闲"的证据，按确认失败处理。两者都不放行，
+/// 区别只在给用户的原因与出口（占用是请求与现状不匹配，确认失败是环境不给证据）
+#[cfg(target_os = "linux")]
+fn claim_failure(loopdev: String, err: io::Error) -> LoopOccupancy {
+    if err.raw_os_error() == Some(libc::EBUSY) {
+        LoopOccupancy::KernelBusy { loopdev }
+    } else {
+        LoopOccupancy::Unclaimable { loopdev, why: err.to_string() }
+    }
 }
 
 /// 反向枚举 loop，找出 backing 命中 `target` 的那一个，并回答它是否在用。
@@ -549,6 +609,26 @@ fn loop_occupancy_for(
         }
         if !holders.is_empty() {
             held.push((loopdev, holders));
+            continue;
+        }
+        // 挂载 / swap / 持有者都没命中：向内核要独占权并留持到进程退出。这一步与
+        // mount namespace 无关，覆盖"挂载视图看不见的那个命名空间"；反过来它也只覆盖
+        // 守块设备约定的使用者，普通文件写入既不经 claim 也不产生 claim
+        let mut claims = match LOOP_CLAIMS.lock() {
+            Ok(c) => c,
+            Err(_) => {
+                return Ok(Some(LoopOccupancy::Unclaimable {
+                    loopdev,
+                    why: "loop claim registry is poisoned".to_string(),
+                }))
+            }
+        };
+        if claims.iter().any(|(n, _)| n == &loopdev) {
+            continue;
+        }
+        match claim_loop_exclusive(&loopdev) {
+            Ok(f) => claims.push((loopdev, f)),
+            Err(e) => return Ok(Some(claim_failure(loopdev, e))),
         }
     }
     // 多个 loop 都被持有时报第一个；loopdev 与 holders 来自同一次扫描
@@ -610,6 +690,26 @@ mod tests {
         assert!(!BackingMatch::Block { rdev: 0 }.matches(&file), "rdev 0 must never name a device");
         assert!(BackingMatch::File { dev: 7, ino: 42 }.matches(&file));
     }
+
+    /// O_EXCL 的两种失败含义不同，不可合并：EBUSY 是内核说"它被别人占着"（请求与现状
+    /// 不匹配），权限/节点缺失/I/O 是"确认不了"（fail-closed）。把后者读成空闲，正是
+    /// 这条防线要防的事——容器里 `/dev/loop*` 多半就不在本命名空间可见
+    #[test]
+    fn exclusive_claim_failure_is_classified_by_errno() {
+        match claim_failure("loop9".to_string(), io::Error::from_raw_os_error(libc::EBUSY)) {
+            LoopOccupancy::KernelBusy { loopdev } => assert_eq!(loopdev, "loop9"),
+            _ => panic!("EBUSY must be reported as busy, not as unclaimable"),
+        }
+        for errno in [libc::EACCES, libc::ENOENT, libc::EIO] {
+            match claim_failure("loop9".to_string(), io::Error::from_raw_os_error(errno)) {
+                LoopOccupancy::Unclaimable { loopdev, why } => {
+                    assert_eq!(loopdev, "loop9");
+                    assert!(!why.is_empty(), "the underlying error must be carried through");
+                }
+                _ => panic!("errno {errno} must not be read as an occupancy verdict"),
+            }
+        }
+    }
 }
 
 /// 本次写入对目标区间的形状。占用判据据此分档：起点不变、末端不变或只增的写入
@@ -641,10 +741,14 @@ pub(crate) fn dm_only(holders: &[String]) -> bool {
 /// **不挡**不守约定的普通并发写——本闸对其是纵深防御。被 losetup 当作 backing 的
 /// 块设备这两道都看不见（loop 不登记 holder，losetup 也不以 O_EXCL 打开 backing），
 /// 由 [`Occupancy::LoopBacked`] 补：反向枚举 loop，按设备号认 backing。镜像没有分区
-/// 节点可查，也没有 O_EXCL 这道内核防线，占用只能按"有没有 loop 绑定到同一个文件且
-/// 在用"判定（[`image_loop_occupancy`]，身份取自 LOOP_GET_STATUS64 而非路径）；那一步
-/// 只覆盖已经映射出去的 loop，不覆盖别的东西按镜像路径直接写字节。`start_bytes` = 分区
-/// 起始字节（与 find_block_partition_node 的换算基准一致）
+/// 节点可查，却仍有一道内核级防线可用：对绑定到同一文件的每个 loop 取 `O_RDWR|O_EXCL`
+/// 独占权（[`claim_loop_exclusive`]，与 mount namespace 无关）并留持到进程退出，占用
+/// 先按"有没有 loop 绑定到同一文件且在用"判定（[`image_loop_occupancy`]，身份取自
+/// LOOP_GET_STATUS64 而非路径），再用这道 claim 收口。两端保护面都要说准：claim 只挡
+/// 守块设备约定的使用者（挂载 / swap / 他人的独占打开），不挡按镜像路径直写字节的
+/// 并发写者；挂载视图只在宿主初始 PID 命名空间的 procfs 上完整
+/// （man pid_namespaces(7)），容器内的视图给不出全部进程时，只能依赖 claim 的结论。
+/// `start_bytes` = 分区起始字节（与 find_block_partition_node 的换算基准一致）
 #[cfg(target_os = "linux")]
 pub fn ensure_idle_before_write(src: &FileSource, part: u32, start_bytes: u64, kind: WriteKind) -> Result<(), crate::outcome::Fail> {
     use crate::outcome::Fail;
@@ -696,6 +800,13 @@ fn image_target_unused(src: &FileSource, kind: WriteKind) -> Result<(), crate::o
         Ok(Some(LoopOccupancy::Held { loopdev, holders })) => Err(Fail::refused(format!(
             "{loopdev} is a loop onto this image and is held by {} — deactivate that stack first (editing the image changes bytes the holder still maps)",
             holders.join(", ")
+        ))),
+        Ok(Some(LoopOccupancy::KernelBusy { loopdev })) => Err(Fail::refused(format!(
+            "{loopdev} is a loop onto this image and the kernel refuses an exclusive open (EBUSY) — \
+             it is still in use (mounted, active swap, or claimed by another stack); release it first"
+        ))),
+        Ok(Some(LoopOccupancy::Unclaimable { loopdev, why })) => Err(Fail::infra(format!(
+            "cannot take an exclusive claim on {loopdev}, a loop onto this image: {why} — refusing (fail-closed)"
         ))),
         Err(e) => Err(Fail::infra(format!(
             "cannot confirm no loop has this image in use: {e} — refusing (fail-closed)"

@@ -245,9 +245,14 @@ pub fn ensure_protective_mbr(src: &mut WriteSource, ss: u64) -> io::Result<()> {
         if lba0[462..510].iter().all(|&b| b == 0) && rec[4] == PROT_MBR_TYPE {
             let start = rd_u32(rec, 8);
             let size = rd_u32(rec, 12);
+            // 提前返回的判据必须覆盖下方重写会改动**每一个**字段：BootIndicator 与两个
+            // CHS 也在其中（UEFI 2.10 §5.2.3 Table 5.4：0x00 / 0x000200 / 0xFFFFFF）。
+            // 少查它们就会把"类型、起点、尺寸都对、余下字段非规范"的记录当作已合规，
+            // 本函数作为规范化点的承诺落空
+            let canonical = rec[0] == 0x00 && rec[1..4] == [0x00, 0x02, 0x00] && rec[5..8] == [0xFF, 0xFF, 0xFF];
             // 已合规即一字不写（保留外层引导代码）。比较基准是**逻辑块**口径的 total，
             // 故 512 口径值（PmbrSize::NeedsRepair{Compat512}）在此落空，会走到下面重写为规范值
-            if start == 1 && size == want_size {
+            if canonical && start == 1 && size == want_size {
                 return Ok(());
             }
         }

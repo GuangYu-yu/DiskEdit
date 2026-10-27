@@ -56,13 +56,10 @@ pub(crate) fn cmd_abandon(a: &Args) -> u8 {
     // 锁文件是纯运行时 artifact，残留不构成阻挡（判据是锁本身，见 targetlock）
     let _owned = TargetLock::acquire(&identity, None).unwrap_or_else(|f| bail_fail(f));
 
-    // 历史命名（按 GPT Disk GUID）的 checkpoint 只对 Block 语义的身份存在；那份 GUID
-    // 只能打开目标读表拿到。abandon 只碰恢复现场、不碰盘上字节，没有理由要求排他写
-    // 打开；打不开时由 checkpoint_candidates 记成"存在但不可枚举"，不再假装没有。
-    // loop 归一后身份是 Image kind，但其历史落点按 Block 规则生成，同样要走这条路径。
-    // 镜像也按只读打开一次：候选头里的目标身份要与当前目标比一遍（见 abandon_records）；
-    // 打不开（目标已不存在）只影响这次比对，现场照常放弃
-    let disk = if identity.has_block_legacy_naming() {
+    // 打开目标只为一件事：把候选头里的目标身份与当前目标比一遍（见 abandon_records）；
+    // 打不开（目标已不存在）只影响这次比对，现场照常放弃。abandon 只碰恢复现场、
+    // 不碰盘上字节，没有理由要求排他写打开——块设备用只读，镜像按镜像语义
+    let disk = if identity.kind == crate::dev::TargetKind::Block {
         FileSource::open_read_only(path).ok()
     } else {
         FileSource::open_read_only_image(path, None).ok()
@@ -111,10 +108,6 @@ fn abandon_records(identity: &TargetIdentity, disk: Option<&FileSource>) -> u8 {
                  (re-run the command that started it to resume instead)",
                 path.display()
             ),
-            RecoveryRecord::UnenumerableCheckpoint { reason } => eprintln!(
-                "warning: a relocation checkpoint may exist under the legacy GUID-based name, but it \
-                 cannot be located because {reason} — abandon cannot release what it cannot name"
-            ),
         }
     }
 
@@ -123,23 +116,7 @@ fn abandon_records(identity: &TargetIdentity, disk: Option<&FileSource>) -> u8 {
     // 目标从现场里释放出来），但这份凭据属于另一个目标场景，必须在总结里点名
     let mut foreign: Vec<String> = Vec::new();
     for r in &records {
-        let Some(from) = r.path() else {
-            // 无法枚举的那份：没有路径可改名，只能如实计入未完成并给出下一步。
-            // 成因决定下一步：目标打不开先恢复设备可访问，表读不出才谈得上修表
-            let next = if disk.is_none() {
-                "restore access to the target (it could not be opened), then re-run"
-            } else {
-                "repair the target's table, then re-run"
-            };
-            failed.push(format!(
-                "an unenumerable checkpoint exists but cannot be named ({}) — {next}",
-                match r {
-                    RecoveryRecord::UnenumerableCheckpoint { reason } => reason.as_str(),
-                    _ => unreachable!("path() is None only for UnenumerableCheckpoint"),
-                }
-            ));
-            continue;
-        };
+        let from = r.path();
         // journal 的身份只在头里，读得出就与当前目标比一遍。checkpoint 的身份要连同
         // 记录与几何一起解析，而 abandon 不解析表，故这一族维持现状
         let mut foreign_why: Option<String> = None;
