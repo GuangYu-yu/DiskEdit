@@ -43,11 +43,32 @@ pub fn check_fs(src: &FileSource, part: u32, fstype: Option<FsKind>) -> Result<(
     })
 }
 
+/// VFAT 卷标的准入判据。字段容量是 11 **字节**（man fatlabel），而 VFAT 按 DOS/OEM
+/// 代码页存取标签，所以判据必须是编码后的字节数。本工具不做代码页转换（无编码库依赖），
+/// 前置准入因此只收 ASCII：ASCII 每字符恰好一字节，`len()` 即编码后的长度；非 ASCII
+/// 标签在本层拒绝。这是本工具自身的限制，不是字段的限制——fatlabel 支持按代码页
+/// 设置非 ASCII 标签，需要时直接用 fatlabel
+pub(crate) fn vfat_label_check(label: &str) -> Result<(), FsError> {
+    if !label.is_ascii() {
+        return Err(FsError::invalid(format!(
+            "vfat label {label:?} cannot be represented in a DOS code page by this tool \
+             (labels here are accepted as ASCII only); set it with fatlabel directly"
+        )));
+    }
+    if label.len() > 11 {
+        return Err(FsError::invalid(format!(
+            "vfat label exceeds the 11-byte on-disk limit (got {} bytes); fatlabel would reject it",
+            label.len()
+        )));
+    }
+    Ok(())
+}
+
 /// 设置 FS label。值原样传给各 FS 官方工具；卷标落在定长字段里的类型在此按字段容量前置
 /// 校验，超出即拒绝——截断与拒绝是两种结局，本层不把它们合并成一次"设置成功"。
 /// 来源：tune2fs -L（man tune2fs）、xfs_admin -L ≤12 字节（man xfs_admin）、
 /// btrfs 超级块 label（含结尾 NUL 共 256 字节）、ntfslabel 的 128 个 UTF-16 码元字段、
-/// fatlabel ≤11 个字符（fatlabel.c 的 mbstowcs 计数）、exfatlabel 的 11 个 UTF-16 码元字段、
+/// fatlabel 的 11 字节字段（man fatlabel）、exfatlabel 的 11 个 UTF-16 码元字段、
 /// swaplabel -L 的 volume_name[16]（xstrncpy 至多 15 字节）
 pub fn set_label(src: &FileSource, part: u32, fstype: Option<FsKind>, label: &str) -> Result<(), FsError> {
     with_partition_device(src, part, |dev| {
@@ -84,15 +105,9 @@ pub fn set_label(src: &FileSource, part: u32, fstype: Option<FsKind>, label: &st
                 }
                 ("ntfslabel", vec![dev.into(), label.into()])
             }
-            // 卷标字段 11 字节；fatlabel 按字符数把关（fatlabel.c 的 mbstowcs 计数 > 11
-            // 即退出 1），故这里前置同一判据；编码进 DOS 代码页由工具自己做
+            // 卷标字段 11 字节，判据见 vfat_label_check
             Some(FsKind::Vfat) => {
-                let chars = label.chars().count();
-                if chars > 11 {
-                    return Err(FsError::invalid(format!(
-                        "vfat label exceeds 11 characters (got {chars}); fatlabel would reject it"
-                    )));
-                }
+                vfat_label_check(label)?;
                 ("fatlabel", vec![dev.into(), label.into()])
             }
             // 卷标字段 11 个 UTF-16 码元，超出时 exfatlabel 以 E2BIG 拒绝，故提前拒绝

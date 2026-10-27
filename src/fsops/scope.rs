@@ -134,6 +134,26 @@ pub(crate) fn resolve_scope_device(
     require_root()?;
     #[cfg(not(target_os = "linux"))]
     let _ = policy;
+    if matches!(scope, DeviceScope::Partition(_)) {
+        // 表项必须落在容器内。起点越过容量、或起点在盘内而末端越过盘尾，都不是
+        // "内核视图尚未同步"：block/partitions/core.c 对后者保留分区但把长度截断到
+        // 容量，原始表项与内核视图因此永远不等，重读分区表也不能让表项成立。
+        // 用减法比较：`off + len` 在 u64 上会回绕
+        if off > src.size {
+            return Err(FsError::invalid(format!(
+                "partition table entry starts at byte {off}, past the end of the device ({} bytes) \
+                 — the entry lies outside the device and cannot be repaired by re-reading the partition table",
+                src.size
+            )));
+        }
+        if len > src.size - off {
+            return Err(FsError::invalid(format!(
+                "partition table entry spans {len} bytes from byte {off} but the device is {} bytes \
+                 — the entry lies outside the device and cannot be repaired by re-reading the partition table",
+                src.size
+            )));
+        }
+    }
     if src.is_block {
         // 块设备：分区 = 定位分区节点（/sys/block/<disk>/<part>/start 匹配），不经 loop；
         // 整盘 = 盘节点本身；Range = 无"偏移节点"概念，必须 loop 映射（backing=整盘）
@@ -141,7 +161,8 @@ pub(crate) fn resolve_scope_device(
             DeviceScope::Partition(p) => {
                 let dev = find_block_partition_node(src, *p, off)?;
                 // 内核分区长度与盘上表项必须同源：mkfs 的擦除区间取自表内长度，而
-                // wipe_zero 按这个路径写核心里那个设备——节点比表项长时擦除越过表项末端
+                // wipe_zero 按这个路径写核心里那个设备——节点比表项长时擦除越过表项末端。
+                // 上面已排除越界，这里的不等只可能是内核视图尚未跟上表，重读分区表有解
                 #[cfg(target_os = "linux")]
                 {
                     let node = crate::dev::sysfs_node(Path::new(&dev))?;

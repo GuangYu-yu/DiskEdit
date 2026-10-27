@@ -213,6 +213,21 @@ pub(crate) fn table_write_done(src: &FileSource, ok_msg: &str) -> crate::outcome
     o
 }
 
+/// 已应用结果的成功措辞：**整体成功**文案只在 [`crate::outcome::Outcome::is_complete`] 为真时
+/// 打印，仍有待办时改报"这一步已完成"——两者共用同一句会让退出码 20 与文案矛盾。
+/// 只发措辞、不报告：待办仍由调用方的 `report()` 呈现
+pub(crate) fn announce_applied<F, G>(o: &crate::outcome::Outcome, ok_msg: F, step_msg: G)
+where
+    F: FnOnce() -> String,
+    G: FnOnce() -> String,
+{
+    if o.is_complete() {
+        println!("{}", ok_msg());
+    } else {
+        println!("{}", step_msg());
+    }
+}
+
 /// 1 MiB 折算成表内扇区的唯一落点：不足一扇区时取 1，调用点共用，
 /// 不各自写 `(1024 * 1024 / ss).max(1)` 第二遍。`ss` 为 0 时没有有意义的折算，
 /// 直接取 1——本函数是折算助手而非校验点，不该成为除零的崩溃点

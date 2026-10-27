@@ -1,5 +1,5 @@
 #![allow(clippy::let_underscore_must_use)] // 清理临时文件有意忽略失败
-use super::{check_e2fsck_for_check, check_e2fsck_for_resize, check_grow_step, classify_shrink, erase_ranges, grow_target_at, leak_from, mkfs_tool, parse_fstype, parse_num_field, parse_num_lead, partition_byte_range, settle_release, swap_rebuild_support, uuid_support, DeviceScope, Growable, MkfsFs, MountLeak, ReleaseOutcome, ShrinkVerify, ToolSupport, UuidSupport};
+use super::{check_e2fsck_for_check, check_e2fsck_for_resize, check_grow_step, classify_shrink, erase_ranges, grow_target_at, leak_from, mkfs_tool, parse_fstype, parse_num_field, parse_num_lead, partition_byte_range, settle_release, swap_rebuild_support, uuid_support, vfat_label_check, DeviceScope, Growable, MkfsFs, MountLeak, ReleaseOutcome, ShrinkVerify, ToolSupport, UuidSupport};
 use super::FsError;
 use crate::dev::FileSource;
 use crate::fsid::{self, FsKind};
@@ -28,6 +28,24 @@ pub(crate) fn e2fsck_check_context_treats_repair_as_success() {
     }
     assert!(matches!(check_e2fsck_for_check(4), Err(FsError::CommandFailed(_))));
     assert!(matches!(check_e2fsck_for_check(8), Err(FsError::CommandFailed(_))));
+}
+
+/// VFAT 卷标的容量是 11 字节：ASCII 下字节数等于字符数，11 个通过、12 个按字段容量拒绝
+#[test]
+pub(crate) fn vfat_label_admits_eleven_bytes_and_rejects_twelve() {
+    assert!(vfat_label_check("ABCDEFGHIJK").is_ok());
+    let err = vfat_label_check("ABCDEFGHIJKL").unwrap_err().to_string();
+    assert!(err.contains("11-byte"), "{err}");
+    assert!(err.contains("12 bytes"), "{err}");
+}
+
+/// 非 ASCII 标签在本层按"表示不了"拒绝，不归入超长：本工具不转码 DOS 代码页，
+/// 按 UTF-8 字节计会把 5 个字符的 "ÄÖÜßé"（10 字节）与真正的字段超限混成一句话
+#[test]
+pub(crate) fn vfat_label_rejects_non_ascii_without_calling_it_too_long() {
+    let err = vfat_label_check("ÄÖÜßé").unwrap_err().to_string();
+    assert!(err.contains("DOS code page"), "{err}");
+    assert!(!err.contains("11-byte"), "{err}");
 }
 
 /// swap 的 label/uuid 走 swaplabel（util-linux）：能力判定归 Yes（只收显式值，
