@@ -65,6 +65,54 @@ pub(crate) fn blkrrpart(f: &File) -> io::Result<()> {
     ioctl_retry_eintr(|| unsafe { libc::ioctl(f.as_raw_fd() as libc::c_int, BLKRRPART as libc::Ioctl, 0u32) })
 }
 
+/// include/uapi/linux/btrfs.h 的 btrfs_ioctl_fs_info_args（1024 字节）。保留字段与
+/// metadata_uuid 一并照抄：ioctl 编号里带结构体大小，裁剪字段会让内核按错的长度解读
+#[repr(C)]
+#[allow(dead_code)] // 除 num_devices/fsid 外的字段必须留在结构里，UAPI 大小才成立
+pub(crate) struct BtrfsFsInfo {
+    max_id: u64,
+    /// 内核登记的设备数（单设备 btrfs = 1）
+    pub(crate) num_devices: u64,
+    /// 文件系统 UUID，16 字节；`/sys/fs/btrfs/<64 位十六进制 FSID>/` 用它定位
+    pub(crate) fsid: [u8; 16],
+    nodesize: u32,
+    sectorsize: u32,
+    clone_alignment: u32,
+    csum_type: u16,
+    csum_size: u16,
+    flags: u64,
+    generation: u64,
+    metadata_uuid: [u8; 16],
+    reserved: [u8; 944],
+}
+
+/// BTRFS_IOC_FS_INFO = _IOR(BTRFS_IOCTL_MAGIC=0x94, 31, btrfs_ioctl_fs_info_args)。
+/// 按 asm-generic 的 _IOC 位域手写：dir(_IOC_READ=2) << 30 | size << 16 | type << 8 | nr
+/// → 0x8400_941f。编号含结构体大小，与下面的布局断言绑定：任一改动都要两处同时改
+const BTRFS_IOC_FS_INFO: u64 =
+    (2u64 << 30) | ((size_of::<BtrfsFsInfo>() as u64) << 16) | (0x94u64 << 8) | 31u64;
+
+const _: () = {
+    assert!(size_of::<BtrfsFsInfo>() == 1024);
+    assert!(std::mem::offset_of!(BtrfsFsInfo, fsid) == 16);
+    assert!(std::mem::offset_of!(BtrfsFsInfo, nodesize) == 32);
+    assert!(std::mem::offset_of!(BtrfsFsInfo, reserved) == 80);
+    assert!(BTRFS_IOC_FS_INFO == 0x8400_941f);
+};
+
+/// 读 btrfs 文件系统信息。`f` 取该文件系统内任一文件或目录的 fd（内核从 inode 的
+/// superblock 取信息）；读类调用，可安全重发
+pub(crate) fn btrfs_fs_info(f: &File) -> io::Result<BtrfsFsInfo> {
+    // SAFETY: 全零是本结构体的有效取值（整数与字节数组都没有无效位模式）
+    let mut v: BtrfsFsInfo = unsafe { std::mem::zeroed() };
+    // SAFETY: f 是调用方持有的有效 fd；_IOR 方向，内核只写 v，调用期间指针有效；编号与
+    // v 的布局同源于上面的常量与断言
+    ioctl_retry_eintr(|| unsafe {
+        libc::ioctl(f.as_raw_fd() as libc::c_int, BTRFS_IOC_FS_INFO as libc::Ioctl, &mut v as *mut BtrfsFsInfo)
+    })?;
+    Ok(v)
+}
+
 /// include/uapi/linux/blkpg.h 的 blkpg_partition（start/length 单位 = 字节，
 /// pno 标识分区，devname/volname 内核忽略）
 #[repr(C)]

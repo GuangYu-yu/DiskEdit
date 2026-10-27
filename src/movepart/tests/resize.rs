@@ -279,8 +279,8 @@ pub(crate) fn divergent_and_no_fs_shrink_are_refused_before_any_write() {
     let _ = std::fs::remove_file(&p);
 }
 
-/// shrink 状态在盘上的三态编码：版本升到 7、状态字节取 2 表示"命令已返回、落点未证实"。
-/// v6 及更早该字节是 bool，读到 2 只能当损坏——否则旧现场会被读成"已验证"
+/// shrink 状态在盘上的三态编码：状态字节取 2 表示"命令已返回、落点未证实"。
+/// 其余取值只能当损坏——读成"已验证"会让后续搬移切进未缩的元数据
 #[test]
 pub(crate) fn shrink_state_is_tri_state_on_the_wire() {
     let chunk: u64 = 1024 * 1024;

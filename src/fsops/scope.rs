@@ -212,6 +212,14 @@ pub(crate) fn resolve_scope_device(
                 "{loopdev} is a loop onto this image and is held by {} — deactivate that stack first",
                 holders.join(", ")
             )),
+            // 内核拒绝独占打开：本工具拿不到这条内核级证据，按"在用"处理
+            LoopOccupancy::KernelBusy { loopdev } => Some(format!(
+                "{loopdev} is a loop onto this image and the kernel refuses an exclusive open (EBUSY) — \
+                 it is still in use (mounted, active swap, or claimed by another stack)"
+            )),
+            LoopOccupancy::Unclaimable { loopdev, why } => Some(format!(
+                "cannot take an exclusive claim on {loopdev}, a loop onto this image: {why}"
+            )),
         };
         if let Some(why) = why {
             return Err(FsError::Io(io::Error::other(why)));

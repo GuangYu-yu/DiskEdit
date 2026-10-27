@@ -60,6 +60,80 @@ pub(crate) fn collect_neighbours(sysroot: &Path, skip: impl Fn(&Path) -> bool) -
     Ok(others)
 }
 
+/// btrfs 挂载的底层设备身份。mountinfo 字段 3 对 btrfs 是匿名设备号（内核给 btrfs 的
+/// 超级块分配 anon bdev，与成员分区的 st_rdev 必不相同），不能拿它与 st_rdev 相比；
+/// 改为从挂载点 fd 取 FSID（BTRFS_IOC_FS_INFO），再经 `/sys/fs/btrfs/<FSID UUID>/devices/`
+/// 找到内核登记的底层块设备，与节点当前的 st_rdev 比对。该 sysfs 映射自 Linux 5.6 提供：
+/// 读不到即拒绝，不退化成"路径相同就当成同一设备"
+fn verify_btrfs_device(mnt: &Path, dev_no: (u64, u64)) -> io::Result<()> {
+    let f = fs::File::open(mnt).map_err(|e| {
+        io::Error::other(format!("cannot open {} to identify its btrfs filesystem: {e}", mnt.display()))
+    })?;
+    let info = crate::ioctl::btrfs_fs_info(&f)
+        .map_err(|e| io::Error::other(format!("BTRFS_IOC_FS_INFO on {} failed: {e}", mnt.display())))?;
+    if info.num_devices != 1 {
+        return Err(io::Error::other(format!(
+            "btrfs filesystem at {} has {} devices — online resize covers single-device filesystems only",
+            mnt.display(),
+            info.num_devices
+        )));
+    }
+    let dir = Path::new("/sys/fs/btrfs").join(fsid_uuid(&info.fsid)).join("devices");
+    let rd = fs::read_dir(&dir).map_err(|e| {
+        io::Error::other(format!(
+            "cannot list {} (the btrfs sysfs device mapping exists since Linux 5.6): {e}",
+            dir.display()
+        ))
+    })?;
+    let mut names = Vec::new();
+    for entry in rd {
+        names.push(entry?.file_name().to_string_lossy().into_owned());
+    }
+    // 条目数必须与 ioctl 报的设备数一致：多出来的条目说明注册设备不止一个
+    if names.len() != 1 {
+        return Err(io::Error::other(format!(
+            "{} lists {} devices while the filesystem reports {} — which block device backs {} cannot be confirmed",
+            dir.display(),
+            names.len(),
+            info.num_devices,
+            mnt.display()
+        )));
+    }
+    let attr = dir.join(&names[0]).join("dev");
+    let s = fs::read_to_string(&attr).map_err(|e| io::Error::other(format!("cannot read {}: {e}", attr.display())))?;
+    let got = parse_dev_attr(&s)
+        .ok_or_else(|| io::Error::other(format!("unparsable device number in {}: {s:?}", attr.display())))?;
+    if got != dev_no {
+        return Err(io::Error::other(format!(
+            "btrfs filesystem at {} is registered on device {}:{} but the node now resolves to {}:{}",
+            mnt.display(),
+            got.0,
+            got.1,
+            dev_no.0,
+            dev_no.1
+        )));
+    }
+    Ok(())
+}
+
+/// FSID 在 `/sys/fs/btrfs/` 下的目录名：标准 UUID 文本，8-4-4-4-12 分组的 32 位小写
+/// 十六进制（实测 Ubuntu 26.04 / 6.18 的目录名即此形态）。字节序按 UAPI 原序，不做
+/// GUID 式的字段重排
+fn fsid_uuid(fsid: &[u8; 16]) -> String {
+    let hex: String = fsid.iter().map(|b| format!("{b:02x}")).collect();
+    let (h, rest) = hex.split_at(8);
+    let (a, rest) = rest.split_at(4);
+    let (b, rest) = rest.split_at(4);
+    let (c, d) = rest.split_at(4);
+    format!("{h}-{a}-{b}-{c}-{d}")
+}
+
+/// sysfs `dev` 属性（`major:minor`）→ 设备号；格式不符返回 None
+fn parse_dev_attr(s: &str) -> Option<(u64, u64)> {
+    let (maj, min) = s.trim().split_once(':')?;
+    Some((maj.parse().ok()?, min.parse().ok()?))
+}
+
 /// mountpoint → /proc/self/mountinfo 匹配（挂载点已解码八进制转义，man
 /// proc_pid_mountinfo(5)）→ (分区块设备节点, 规范化挂载点)。
 /// multi-device/bind 挂载不支持
@@ -82,13 +156,35 @@ pub(crate) fn resolve_part_dev(mountpoint: &Path) -> io::Result<(PathBuf, PathBu
     }
     if let Some(e) = matched.first() {
         let dev = PathBuf::from(&e.source);
-        if fs::metadata(&dev)?.file_type().is_block_device() {
-            return Ok((dev, mnt));
+        let meta = fs::metadata(&dev)?;
+        if !meta.file_type().is_block_device() {
+            return Err(io::Error::other(format!(
+                "{} is not a block device node (multi-device/bind mounts unsupported online)",
+                dev.display()
+            )));
         }
-        return Err(io::Error::other(format!(
-            "{} is not a block device node (multi-device/bind mounts unsupported online)",
-            dev.display()
-        )));
+        // mountinfo 的设备号是这次挂载实际承载的块设备；source 只是挂载当时的节点路径。
+        // 节点被删除重建或重绑到另一个次设备号之后，同一路径的 st_rdev 与 dev_no 不同，
+        // 按路径取到的 sysfs 几何就属于另一台设备——线上一律以挂载身份为准，不一致即拒绝。
+        // btrfs 例外：它的字段 3 是匿名设备号，身份改由文件系统接口认（见
+        // [`verify_btrfs_device`]），同样要求与节点当前的 st_rdev 一致
+        let rdev = meta.st_rdev();
+        let dev_no = (libc::major(rdev) as u64, libc::minor(rdev) as u64);
+        if e.fstype == "btrfs" {
+            verify_btrfs_device(&mnt, dev_no)?;
+        } else if dev_no != e.dev_no {
+            return Err(io::Error::other(format!(
+                "{} is mounted from device {}:{} but node {} now resolves to {}:{} — \
+                 the mount source no longer names the mounted device",
+                mnt.display(),
+                e.dev_no.0,
+                e.dev_no.1,
+                dev.display(),
+                dev_no.0,
+                dev_no.1
+            )));
+        }
+        return Ok((dev, mnt));
     }
     Err(io::Error::new(
         io::ErrorKind::NotFound,
@@ -163,4 +259,33 @@ pub(crate) fn resolve_target(mountpoint: &Path) -> io::Result<OnlineTarget> {
 pub(crate) fn blkpg_resize(t: &OnlineTarget, new_len_bytes: u64) -> io::Result<()> {
     let disk = fs::OpenOptions::new().read(true).write(true).open(&t.disk_dev)?;
     crate::ioctl::blkpg_resize_partition(&disk, t.start_bytes, new_len_bytes, t.pno)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fsid_uuid_matches_sysfs_directory_name() {
+        let fsid: [u8; 16] = core::array::from_fn(|i| i as u8);
+        assert_eq!(fsid_uuid(&fsid), "00010203-0405-0607-0809-0a0b0c0d0e0f");
+    }
+
+    #[test]
+    fn dev_attr_is_parsed_strictly() {
+        assert_eq!(parse_dev_attr("8:1\n"), Some((8, 1)));
+        assert_eq!(parse_dev_attr(" 0:29 "), Some((0, 29)));
+        assert_eq!(parse_dev_attr("8"), None);
+        assert_eq!(parse_dev_attr("8:x"), None);
+        assert_eq!(parse_dev_attr("8:1:2"), None);
+        assert_eq!(parse_dev_attr(""), None);
+    }
+
+    /// 拿不到 FSID 或设备映射时必须拒绝：非 btrfs 挂载点上 ioctl 即失败，
+    /// 这条与 btrfs 实机无关，Linux 上是可跑的拒绝测试
+    #[test]
+    fn mountpoint_without_btrfs_identity_is_refused() {
+        let d = std::env::temp_dir();
+        assert!(verify_btrfs_device(&d, (1, 1)).is_err(), "a mount without btrfs identity must be refused");
+    }
 }

@@ -25,16 +25,14 @@ fn sidecar(dir: &std::path::Path, name: &str, suffix: &str) -> std::path::PathBu
     dir.join(format!("{name}{suffix}"))
 }
 
-/// v4 journal 头长 = magic(5) + 身份段(dev/ino/size 各 8 字节 + 有无 loop 映射 1 字节 +
-/// offset/sizelimit 各 8 字节 = 41) + 身份段的 CRC32(4)。与 `src/dev.rs` 的
-/// `journal` 布局同值——集成测试是独立 crate 取不到那里的常量，故与上方后缀词表
-/// 一样复写一份（src 侧 `dev::tests` 有用例逐字段钉住布局，改格式时这里会一起暴露）
-const V4_HEADER_LEN: usize = 5 + 41 + 4;
-/// v6 journal 头长：身份段多一个设备 ID 哈希（8 字节）与末尾的身份种类（1 字节）
-const V6_HEADER_LEN: usize = 5 + 50 + 4;
-/// v6 身份段里"有无 loop 映射"标志的偏移（dev/ino/size/id 各 8 字节之后）
-const V6_MAP_FLAG_AT: usize = 5 + 8 * 4;
-/// 记录帧头 `[len u32][crc u32]` 的字节数（同 `src/dev.rs` 的 `REC_HDR`）
+/// journal 头长 = magic(5) + 身份段(dev/ino/size/设备 ID 哈希各 8 字节 + 有无 loop 映射
+/// 1 字节 + offset/sizelimit 各 8 字节 + 身份种类 1 字节 = 50) + 身份段的 CRC32(4)。
+/// 与 `src/dev/journal.rs` 的布局同值——集成测试是独立 crate 取不到那里的常量，故与上方
+/// 后缀词表一样复写一份（src 侧 `dev::tests` 有用例逐字段钉住布局，改格式时这里会一起暴露）
+const JOURNAL_HEADER_LEN: usize = 5 + 50 + 4;
+/// 身份段里"有无 loop 映射"标志的偏移（dev/ino/size/id 各 8 字节之后）
+const MAP_FLAG_AT: usize = 5 + 8 * 4;
+/// 记录帧头 `[len u32][crc u32]` 的字节数（同 `src/dev/journal.rs` 的 `REC_HDR`）
 const REC_HDR: usize = 8;
 
 /// 重算头里身份段的 CRC。头**自带**这个 CRC，故测试改过身份字段（或只造一个头）之后
@@ -46,17 +44,15 @@ fn resign_header(bytes: &mut [u8], header_len: usize) {
     bytes[header_len - 4..header_len].copy_from_slice(&d.finalize().to_le_bytes());
 }
 
-fn v4_resign_header(bytes: &mut [u8]) {
-    resign_header(bytes, V4_HEADER_LEN);
-}
-
-/// 一份**零记录**的 v4 journal：头 + 全零身份段（"取不到稳定身份的载体"那一类，身份核对
-/// 因此不参与）+ 身份段 CRC。它描述的是"零次写入"——`ensure` 写完头、第一条记录还没落盘
-/// 就中断，留下的就是这个形态
-fn v4_header_only() -> Vec<u8> {
-    let mut b = b"DEJL\x04".to_vec();
-    b.resize(V4_HEADER_LEN, 0);
-    v4_resign_header(&mut b);
+/// 一份**零记录**的 journal：头 + 全零身份段 + 身份段 CRC。身份种类记为 inode，其余字段
+/// 全零即"没有可比证据"（身份比对只在两侧都有证据时参与），故这份壳与任何
+/// 镜像目标相容。它描述的是"零次写入"——`ensure` 写完头、第一条记录还没落盘就中断，
+/// 留下的就是这个形态
+fn header_only() -> Vec<u8> {
+    let mut b = b"DEJL\x06".to_vec();
+    b.resize(JOURNAL_HEADER_LEN, 0);
+    b[JOURNAL_HEADER_LEN - 5] = 2;
+    resign_header(&mut b, JOURNAL_HEADER_LEN);
     b
 }
 

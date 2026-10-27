@@ -23,6 +23,12 @@
 //!
 //! 在线能力矩阵（SUSE 存储指南 + 各工具 man）：ext2/3/4 在线仅 grow、xfs 仅 grow、
 //! btrfs grow+shrink；ntfs/vfat/exfat/f2fs 工具要求未挂载，一律拒绝。
+//!
+//! btrfs 的挂载身份不取自 mountinfo 的设备号（内核为 btrfs 超级块分配 anon bdev），
+//! 而取自 `BTRFS_IOC_FS_INFO` 的 FSID + `/sys/fs/btrfs/<FSID>/devices/`（Linux 5.6 起）
+//! 与目标节点 st_rdev 的比对（见 target 模块的 `verify_btrfs_device`）。内核没有提供该
+//! sysfs 映射、或映射与 ioctl 报的设备数不符时，btrfs 在线扩缩容一律拒绝：不退化成
+//! "路径相同就算同一设备"
 
 mod guard;
 mod target;

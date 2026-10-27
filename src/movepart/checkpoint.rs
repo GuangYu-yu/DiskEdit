@@ -4,13 +4,8 @@ use super::*;
 
 pub const CKPT_MAGIC: &[u8; 8] = b"DKECKPT1";
 
-/// v6：指纹加设备 ID 哈希（块设备整盘身份），尾部加身份种类。读 v5 时设备 ID 按零、
-/// 种类按 `Legacy` 处理——那种旧现场只靠 inode 与尺寸，无法与"同名换过的盘"区分时
-/// 只能诊断与 abandon，不会自动续跑
+/// 指纹含设备 ID 哈希（块设备整盘身份），尾部带身份种类
 pub const CKPT_VERSION: u32 = 6;
-
-/// 兼容读取的上一代版本（没有设备 ID 字段）
-const CKPT_VERSION_LEGACY: u32 = 5;
 
 /// checkpoint 批量提交粒度：性能参数，不属于恢复协议。恢复永远从最近一次
 /// durable checkpoint 继续；此值只决定提交频率，即崩溃后最多重做多少个
@@ -18,8 +13,8 @@ const CKPT_VERSION_LEGACY: u32 = 5;
 pub(crate) const CKPT_BATCH_CHUNKS: u64 = 16;
 
 /// 现场的两副面孔由 `P` 分开：写入侧只带当前目标给出的 [`crate::dev::LiveProof`]，
-/// 解析侧带 [`crate::dev::IdentityProof`]（v5 现场解析为 `Legacy`）。这样"把解析出的
-/// 旧种类写回"在类型上就不成立，而不是靠序列化分支去兜
+/// 解析侧带 [`crate::dev::IdentityProof`]。这样"把解析出的种类写回"在类型上就不成立，
+/// 而不是靠序列化分支去兜
 pub struct Checkpoint<P = crate::dev::IdentityProof> {
     pub disk_size: u64,
     pub ss: u64,
@@ -87,7 +82,7 @@ impl Checkpoint<crate::dev::IdentityProof> {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "checkpoint magic mismatch"));
         }
         let ver = u32::from_le_bytes(b[8..12].try_into().unwrap());
-        if ver != CKPT_VERSION && ver != CKPT_VERSION_LEGACY {
+        if ver != CKPT_VERSION {
             return Err(io::Error::new(io::ErrorKind::InvalidData, format!("unsupported checkpoint version {ver}")));
         }
         let mut off = 12;
@@ -185,18 +180,14 @@ impl Checkpoint<crate::dev::IdentityProof> {
         };
         off += 1;
         // 指纹与映射属于"创建时事实"：解析只负责取值，比对在 read_checkpoint——那里
-        // 才有当前目标的指纹与 loop 映射可对。v5 没有设备 ID 字段，读作零（无证据）
+        // 才有当前目标的指纹与 loop 映射可对
         let fp = crate::dev::TargetFingerprint {
             dev: u64::from_le_bytes(rd(off, 8)?.try_into().unwrap()),
             ino: u64::from_le_bytes(rd(off + 8, 8)?.try_into().unwrap()),
             size: u64::from_le_bytes(rd(off + 16, 8)?.try_into().unwrap()),
-            id: if ver >= CKPT_VERSION {
-                u64::from_le_bytes(rd(off + 24, 8)?.try_into().unwrap())
-            } else {
-                0
-            },
+            id: u64::from_le_bytes(rd(off + 24, 8)?.try_into().unwrap()),
         };
-        off += if ver >= CKPT_VERSION { 32 } else { 24 };
+        off += 32;
         let map = match rd(off, 1)?[0] {
             0 => None,
             1 => Some((
@@ -206,14 +197,12 @@ impl Checkpoint<crate::dev::IdentityProof> {
             _ => return Err(io::Error::new(io::ErrorKind::InvalidData, "implausible checkpoint mapping flag")),
         };
         off += 1 + if map.is_some() { 16 } else { 0 };
-        let proof = if ver >= CKPT_VERSION {
+        let proof = {
             let tag = rd(off, 1)?[0];
             off += 1;
             crate::dev::IdentityProof::from_tag(tag).ok_or_else(|| {
                 io::Error::new(io::ErrorKind::InvalidData, "implausible checkpoint identity kind")
             })?
-        } else {
-            crate::dev::IdentityProof::Legacy
         };
         let stored = u32::from_le_bytes(rd(off, 4)?.try_into().unwrap());
         if table::crc32(&b[..off]) != stored {
@@ -262,29 +251,23 @@ pub(crate) fn checkpoint_foreign(
     crate::dev::scene_mismatch(&recorded, &src.scene())
 }
 
-/// 读 checkpoint 现场：在身份给出的候选落点上（首项为本次命名，其后是历史命名）找**可读**
-/// 的那份，不做目录扫描。多份候选同时可读即报歧义——猜错会把中断的搬移现场丢掉。
-/// 历史命名候选的 GUID 由 [`TargetIdentity::checkpoint_candidates`] 按需从 `src` 读表取得，
-/// 本函数不另算一份；记录的合法边界来自调用方已解析的几何（见 [`GeometryLimits`]）
+/// 读 checkpoint 现场：在身份给出的候选落点上找**可读**的那份，不做目录扫描。
+/// 多份候选同时可读即报歧义——猜错会把中断的搬移现场丢掉。
+/// 记录的合法边界来自调用方已解析的几何（见 [`GeometryLimits`]）
 ///
-/// 返回命中的落点路径，写与删消费同一路径：命中的是历史命名候选时若仍写本次命名落点，
-/// 会同时存在两份现场（下次读取即歧义），删除也会漏掉真正承载现场的那份。
-/// 槽位空时返回本次命名落点（候选首项），新作业照常落在那里
+/// 返回命中的落点路径，写与删消费同一路径。槽位空时返回候选首项，新作业照常落在那里
 ///
 /// 候选逐个独立定性（与 `active_recovery_records` / `pick_journal` 同一口径）：
 /// 不存在 → 跳过；损坏 → **记录后继续**看后面的候选——提前 return 会让
-/// 一份损坏的历史命名候选遮住一份完好的本次命名候选，用户看到的是"目标坏了去 abandon"，
+/// 一份损坏的候选遮住一份完好的候选，用户看到的是"目标坏了去 abandon"，
 /// 而真实情况是现场完好可续跑。只有"所有候选都不可读"才把损伤如实报成 Infra
 pub(crate) fn read_checkpoint(src: &FileSource, g: &ValidatedGeometry) -> Result<(CheckpointSlot, PathBuf), Fail> {
     let candidates = src.identity.checkpoint_candidates(Some(src));
-    // 历史命名那份拼不出来时的说明：现场的"不存在"并未被证实，只是看不见。
-    // 本函数只在能给出几何的调用点跑（表已解析），故这里通常为空
-    let unenumerable = candidates.unenumerable;
     let lim = g.limits();
     let mut found: Vec<(PathBuf, CheckpointSlot)> = Vec::new();
     let mut damaged: Vec<(PathBuf, String)> = Vec::new();
     // 现场可读但"创建时事实"对不上：不是损坏（CRC 自洽），也不可取信（继续执行会把
-    // 旧现场写进换了文件/换了映射的目标）。单独归档，唯一时给出点名拒绝
+    // 为别的目标录下的现场续进换了文件/换了映射的目标）。单独归档，唯一时给出点名拒绝
     let mut foreign: Vec<(PathBuf, String)> = Vec::new();
     for path in &candidates.paths {
         // 与 journal 同一条判据：符号链接与非普通文件在 `read` 之前就记成"内容读不出来"。
@@ -327,15 +310,6 @@ pub(crate) fn read_checkpoint(src: &FileSource, g: &ValidatedGeometry) -> Result
     }
     match found.len() {
         0 if foreign.is_empty() && damaged.is_empty() => {
-            // "已列出的候选都不存在"不等于"没有现场"：历史命名那份拼不出来时，
-            // 缺的正是唯一可能描述中断搬移的那份。按"无现场"起步会从空槽位重做整个
-            // 搬移，把一份看不见的现场覆盖掉——只此一处必须拒绝而不是告警
-            if let Some(reason) = &unenumerable {
-                return Err(Fail::infra(format!(
-                    "cannot prove that no checkpoint exists: a checkpoint under the legacy GUID-based name \
-                     cannot be located ({reason}) — repair the table, or release it with `diskedit abandon`"
-                )));
-            }
             Ok((CheckpointSlot::Empty, candidates.paths[0].clone()))
         }
         // 候选全在而全部不可读：现场存在但已无法判读——如实报 Infra 并列明各份的死因，

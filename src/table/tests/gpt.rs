@@ -29,6 +29,20 @@ pub(crate) fn overlapping_entries_are_diagnosable_but_never_writable() {
     assert!(crate::gpt_policy::resolve_geometry(&ok).is_ok());
 }
 
+/// 原始条目末端越出可用区：内核遇到这种表会先告警、再按盘尾把长度截断，
+/// 因此 sysfs 里的长度可能"看起来正常"而盘上的表项并没有。几何与实际写路径只认
+/// **盘上的字节**，解析层必须拒绝，被截断的长度不得成为后续算术的基线
+#[test]
+pub(crate) fn entry_past_last_usable_is_refused() {
+    let ss = 512u64;
+    let mut src = src_from("entry_past_usable", vec![0u8; (2048 * ss) as usize]);
+    // 头自述的可用区由容器算出（2048 扇区的 last_usable 远小于 5000）
+    write_primary_entries(&mut src, ss, &[(100, 5000)]);
+    ensure_protective_mbr(&mut src, ss).unwrap();
+    let e = crate::gpt_policy::resolve_geometry(&src).err().expect("an entry past the usable range must be refused");
+    assert!(matches!(&e, Fail::Infra(m) if m.contains("outside usable range")), "{e:?}");
+}
+
 /// 容器装不下条目数组时，commit_gpt 必须用 checked 运算返回 Err，
 /// 而不能让 last_lba − span 这类减法下溢（debug 下 panic、release 下回绕）
 #[test]

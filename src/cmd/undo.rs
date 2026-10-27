@@ -92,16 +92,12 @@ fn checkpoint_present(p: &std::path::Path) -> bool {
 /// 判据与写闸口同源（同组候选、非普通文件不算、只有 NotFound 算不在）
 fn stale_checkpoint_note(src: &FileSource) -> Option<String> {
     let leftover = src.identity.checkpoint_candidates(Some(src));
-    let mut stale: Vec<String> = leftover
+    let stale: Vec<String> = leftover
         .paths
         .iter()
         .filter(|p| checkpoint_present(p))
         .map(|p| p.display().to_string())
         .collect();
-    // 拼不出名字的那份不能当作不存在：可能还留着一份看得见却叫不出名字的现场
-    if let Some(reason) = leftover.unenumerable {
-        stale.push(format!("a checkpoint under the legacy GUID-based name ({reason})"));
-    }
     if stale.is_empty() {
         None
     } else {
@@ -360,8 +356,8 @@ const FOREIGN_EDIT_HINT: &str =
     "if another tool rewrote the table, run partprobe on the disk so the kernel partition view \
      matches the disk before retrying";
 
-/// checkpoint 的历史命名带 GPT Disk GUID，而 GUID 只在表可读时存在。undo 属恢复路径：
-/// 表读不出来时要照常工作（该候选缺席即可），降级为 None 与告警由
+/// checkpoint 候选由目标身份派生。undo 属恢复路径：
+/// 候选缺席时要照常工作，降级为 None 与告警由
 /// [`TargetIdentity::checkpoint_candidates`] 统一完成，`abandon` 与 undo 两处不各写一遍
 pub(crate) fn cmd_undo(a: &Args) -> u8 {
     // undo 回放的是整盘 journal：`:N` 指定了也会被静默忽略（与 info 同判据）
@@ -404,7 +400,7 @@ pub(crate) fn cmd_undo(a: &Args) -> u8 {
                 JournalRead::TruncatedTail { records, .. } => (p, records, true),
             },
         };
-        // 这份 journal 是写给**哪个目标**的：v4 起头里记着创建时的指纹与 loop 映射。
+        // 这份 journal 是写给**哪个目标**的：头里记着创建时的指纹与 loop 映射。
         // 不符即拒绝，且发生在任何写回之前——把别的目标记下的原文回放到本目标上，是这条
         // 路径最坏的后果。它与下面按记录字节的整体核算是两道不同判据：那一道证明"这些字节
         // 与盘上现状相符"，这一道证明"这份历史属于这个目标"，两者都要过
@@ -558,11 +554,11 @@ pub(crate) fn cmd_undo(a: &Args) -> u8 {
         src.sync_all().unwrap_or_else(|e| {
             bail_fail(Fail::failed(format!("undo wrote the journal back but sync failed: {e} — rollback may not be durable, verify before retrying")))
         });
-        // 回放成功的收尾不止删被回放的那份：历史命名候选若还留在盘上（读不出的那份，
+        // 回放成功的收尾不止删被回放的那份：其余候选若还留在盘上（读不出的那份，
         // pick_journal 已逐条告警过），下一次 undo 仍会把它报成 Unreadable、abandon
         // 仍把它列为现场——回放既然已经成功，这个"有事没做完"的表象必须一并消失。
         // Barrier 型 journal 走不到这里（上方已整体拒绝），Ambiguous 也在挑 journal
-        // 时前置拒绝，这里能多删的只有历史候选
+        // 时前置拒绝，这里能多删的只有其余候选
         let mut cleared = clear_journal_candidates(
             src.identity.journal_candidates(),
             &p,
@@ -586,13 +582,6 @@ pub(crate) fn cmd_undo(a: &Args) -> u8 {
             if !crate::dev::remove_recovery_file(&ckpt) {
                 cleared.leftovers.push(ckpt.display().to_string());
             }
-        }
-        // 无法枚举的那份删不掉，也不能当作不存在：回放已完成，但目标的恢复状态没有
-        // 清干净，随后任何写命令都会因它被拒。如实记成一条未完成的清理
-        if let Some(reason) = candidates.unenumerable {
-            cleared.leftovers.push(format!(
-                "a checkpoint under the legacy GUID-based name could not be located ({reason})"
-            ));
         }
         // undo 不开撤销窗口（WriteNoJournal）：结果只用于自身退出码
         let mut summary = if plan.complete {
@@ -680,7 +669,7 @@ impl ClearedCandidates {
 /// 按"完成但有待办"退出。
 ///
 /// 其余候选要同时满足两条才删：首部是本工具 journal
-/// （`DEJL` 加可读版本，v4 残卷也算），且头里的身份与本目标相符。前者说明它是
+/// （`DEJL` 加当前版本字节），且头里的身份与本目标相符。前者说明它是
 /// 我们自己写下的残卷（pick_journal 口径的"读不出"，损伤已逐条告警过），后者说明
 /// 它记的不是别的目标——候选路径按命名派生只说明"可能是我们的落点"，证明不了
 /// "是我们的文件"。任一条不成立都保留并告警，交 abandon 人工处置。
@@ -1151,7 +1140,7 @@ mod tests {
     }
 
     /// 候选缺席不是故障：它不得盖住另一份候选的真实损伤原因。
-    /// 两份候选里"第一份不存在、第二份是陌生文件"是最常见的现场（历史命名那份通常不存在），
+    /// "第一个候选不存在、第二个是陌生文件"是最常见的现场，
     /// 报出 No such file or directory 等于让用户去查一个根本不是原因的路径
     #[test]
     fn absent_candidate_does_not_mask_a_damaged_one() {
@@ -1280,7 +1269,7 @@ mod tests {
             let mut j = Journal::open(&picked, jid()).unwrap();
             j.record(0, &[0xAA; 4], &[0xBB; 4]).unwrap();
         }
-        // 历史命名候选：本工具写下的残卷——magic 在、载荷被翻坏一个字节（pick_journal
+        // 其余候选：本工具写下的残卷——magic 在、载荷被翻坏一个字节（pick_journal
         // 口径的"读不出"：CRC 不符）
         {
             let mut j = Journal::open(&stale, jid()).unwrap();

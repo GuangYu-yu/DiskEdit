@@ -1,6 +1,6 @@
 use super::*;
 
-/// journal 里是否已有 Barrier 记录：头是 magic + 身份段 + 身份段 CRC（定长，按版本取），
+/// journal 里是否已有 Barrier 记录：头是 magic + 身份段 + 身份段 CRC（定长），
 /// 其后是 `[len u32][crc u32][payload]` 帧流；payload 开头是 mutation 标签（1 / 2 另带
 /// 20 字节 meta），紧随其后的 recovery 标签为 1 即 Barrier。undo 见到 Barrier 就整体拒绝，
 /// 故这条判据与"FS 步是否越过不可回滚点"同源，不依赖 stderr 文案。
@@ -9,12 +9,10 @@ fn journal_has_barrier(bytes: &[u8]) -> bool {
     if !bytes.starts_with(b"DEJL") {
         return false;
     }
-    let header_len = match bytes.get(4) {
-        Some(4) | Some(5) => V4_HEADER_LEN,
-        Some(6) => V6_HEADER_LEN,
-        _ => return false,
-    };
-    let mut pos = header_len;
+    if bytes.get(4) != Some(&6) {
+        return false;
+    }
+    let mut pos = JOURNAL_HEADER_LEN;
     while pos + REC_HDR <= bytes.len() {
         let len = u32::from_le_bytes(bytes[pos..pos + 4].try_into().unwrap()) as usize;
         let Some(end) = pos.checked_add(REC_HDR).and_then(|start| start.checked_add(len)) else {
@@ -147,7 +145,7 @@ fn journal_lifecycle_and_table_undo() {
     assert_eq!(c, 20, "{e}");
     let jb = std::fs::read(&journal).unwrap();
     let mut mid = jb.clone();
-    mid[V6_HEADER_LEN + REC_HDR + 1] ^= 0xFF; // 头之后是记录头 `[len][crc]`，再往后即第 1 条记录的数据
+    mid[JOURNAL_HEADER_LEN + REC_HDR + 1] ^= 0xFF; // 头之后是记录头 `[len][crc]`，再往后即第 1 条记录的数据
     std::fs::write(&journal, &mid).unwrap();
     let (c, e) = run(&["undo", img_s, "--yes"]);
     assert_ne!(c, 0, "mid-file corruption must refuse undo: {e}");
@@ -162,7 +160,7 @@ fn journal_lifecycle_and_table_undo() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// 目标在 journal 写下之后被外部缩短：v4 的头里记着创建时的目标指纹，而尺寸处处可读，
+/// 目标在 journal 写下之后被外部缩短：journal 的头里记着创建时的目标指纹，而尺寸处处可读，
 /// 故"缩短"就是"尺寸不符"，回放因此在任何字节落地之前被拒（这条判据不区分平台）。没有尺寸
 /// 证据的载体（真块设备节点：元数据长度恒 0）上改由逐条核对在"记录越过了新的 EOF"处露出。
 /// 两条路都必须在第一个字节写回之前拦下——"越过 EOF 的写会把文件写长"正是这里要防的那条路
@@ -214,11 +212,11 @@ fn undo_refuses_when_the_target_shrank_under_its_journal() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// 身份核对拦下"为别的目标写下的 journal"：v4 的头记着创建时目标的指纹与 loop 映射，
+/// 身份核对拦下"为别的目标写下的 journal"：journal 的头记着创建时目标的指纹与 loop 映射，
 /// 与当前目标不符即拒绝回放。拒绝必须落在任何写回之前，且不动盘面、不删现场——放弃它
 /// 是用户的决定（`abandon`），不是拒绝的副作用。
 ///
-/// 这里改的是头里"经 loop 写入"这一位（magic 之后第 24 字节，即身份段里 dev/ino/size
+/// 这里改的是头里"经 loop 写入"这一位（magic 之后第 32 字节，即身份段里 dev/ino/size/id
 /// 各 8 字节之后的那一个）：真实世界里它对应"现场是经 loop 设备写下的，而当前目标不是"。它与指纹同属
 /// `dev::scene_mismatch` 的判据（两族恢复现场共用），且不依赖平台是否提供稳定 inode——
 /// 纯指纹不符的用例在 `dev::tests` 里有另一份
@@ -247,9 +245,9 @@ fn undo_refuses_a_journal_whose_recorded_scene_is_not_this_target() {
     assert!(journal.exists(), "a partial operation leaves its journal behind: {e}");
 
     let mut jb = std::fs::read(&journal).unwrap();
-    assert!(jb.len() > V6_HEADER_LEN, "the journal must hold at least one record to reach the identity check");
-    jb[V6_MAP_FLAG_AT] = 1; // 记成"经 loop 写入"
-    resign_header(&mut jb, V6_HEADER_LEN);
+    assert!(jb.len() > JOURNAL_HEADER_LEN, "the journal must hold at least one record to reach the identity check");
+    jb[MAP_FLAG_AT] = 1; // 记成"经 loop 写入"
+    resign_header(&mut jb, JOURNAL_HEADER_LEN);
     std::fs::write(&journal, &jb).unwrap();
 
     let before = std::fs::read(&img).unwrap();
@@ -353,7 +351,7 @@ fn pending_recovery_blocks_unjournaled_writers_and_empty_shell_is_not_corruption
 
     // 只含头、零记录的 journal（`ensure` 写完头、第一条记录还没落盘就中断留下的）：它描述的
     // 是零次写入，既不该挡住 mkfs，也不该被报成未收尾现场
-    std::fs::write(&journal, v4_header_only()).unwrap();
+    std::fs::write(&journal, header_only()).unwrap();
     let (c, e) = run(&["mkfs", &format!("{img_s}:1"), "ext4", "--yes"]);
     assert!(
         !e.contains("owns this target"),
@@ -364,7 +362,7 @@ fn pending_recovery_blocks_unjournaled_writers_and_empty_shell_is_not_corruption
     // 没写完的初始化，也可能是原 journal 被外部截断到这么短——两者在内容上不可区分，而后者是
     // 丢了记录的现场。故不按"零次写入"放行：写命令被挡（30）、undo 也拒绝、文件一字不动，
     // 只有 `abandon` 能释放（它是改名保留字节，不是覆盖）
-    let torn = v4_header_only()[..20].to_vec();
+    let torn = header_only()[..20].to_vec();
     std::fs::write(&journal, &torn).unwrap();
     let (c, e) = run(&["mkfs", &format!("{img_s}:1"), "ext4", "--yes"]);
     assert_eq!(c, 30, "a torn header must stop other writers: {e}");
@@ -433,14 +431,14 @@ fn undo_removes_an_empty_shell_only_when_its_identity_matches() {
     };
 
     // 全零身份段：没有可比字段，归属由"候选落点由身份派生"承担——清理
-    std::fs::write(&journal, v4_header_only()).unwrap();
+    std::fs::write(&journal, header_only()).unwrap();
     let (c, e) = run(&["undo", img_s, "--yes"]);
     assert_eq!(c, 10, "an empty shell means there is nothing to undo: {e}");
     assert!(e.contains("empty journal shell"), "the conclusion must say what was removed: {e}");
     assert!(!journal.exists(), "the empty shell must be removed: {e}");
 
     // 空壳 + 未收尾 checkpoint：不能报"目标干净"，也一字不动
-    std::fs::write(&journal, v4_header_only()).unwrap();
+    std::fs::write(&journal, header_only()).unwrap();
     std::fs::write(&ckpt, b"incomplete relocation").unwrap();
     let (c, e) = run(&["undo", img_s, "--yes"]);
     assert_eq!(c, 10, "{e}");
@@ -449,9 +447,9 @@ fn undo_removes_an_empty_shell_only_when_its_identity_matches() {
     std::fs::remove_file(&ckpt).unwrap();
 
     // 身份段写着别的尺寸：与本目标不符，拒绝删除并原样保留
-    let mut foreign = v4_header_only();
+    let mut foreign = header_only();
     foreign[5 + 8 + 8..5 + 8 + 8 + 8].copy_from_slice(&12345u64.to_le_bytes());
-    v4_resign_header(&mut foreign);
+    resign_header(&mut foreign, JOURNAL_HEADER_LEN);
     std::fs::write(&journal, &foreign).unwrap();
     let (c, e) = run(&["undo", img_s, "--yes"]);
     assert_eq!(c, 10, "an empty shell of another target must be refused: {e}");

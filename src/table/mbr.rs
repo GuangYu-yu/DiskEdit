@@ -284,6 +284,16 @@ pub fn resize_mdos_entry(src: &mut WriteSource, part: u32, new_size_lba: u32) ->
             "new size {new_size_lba} sectors from LBA {start} exceeds the disk ({total_sectors} sectors)"
         )));
     }
+    // StartLBA 与 SizeInLBA 各占 u32；末端 LBA = start + size − 1 也必须落在 u32 内，
+    // 与 add_mdos_entry 同一不变量。只查 size 会放行"起点已很大"的条目：尺寸字段本身
+    // 装得下，末端却越出 32 位，读回时末端按 u32 计算即回绕，分区落点与写下的尺寸对不上
+    if start + new_size_lba as u64 - 1 > u32::MAX as u64 {
+        return Err(Fail::refused(format!(
+            "new range {start}..{} exceeds the MBR 32-bit LBA limit (last expressible LBA {})",
+            start + new_size_lba as u64 - 1,
+            u32::MAX
+        )));
+    }
     // 邻接自守（与 add_mdos_entry 同判据）：其余槽位任一与新区间重叠即拒绝。命令层的
     // free 判据以"条目互不重叠"为前提——那由 parse_mbr 的 damage 口径把关，而本入口
     // 直接读 LBA0、不经那道闸，重叠必须在此挡在写 LBA0 之前

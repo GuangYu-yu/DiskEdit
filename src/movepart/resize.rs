@@ -6,24 +6,14 @@ use super::*;
 
 pub(crate) const CKPT2_MAGIC: &[u8; 8] = b"DKECKPT2";
 
-/// 字段变动即升版本：版本号先行拦下旧布局，CRC 覆盖长度也随之不同。
-/// 旧版本现场不会按"无 ckpt"重跑——read_checkpoint 把"现场存在但不可判读"报成 Infra
-/// 并列明死因，出路是 abandon。
-/// v4：追加目标指纹（3×u64）与 loop 映射（1+2×u64），语义同 CKPT1 v5
-/// v5：追加 FS 类型码（见 [`FSTYPE_CODES`]）：续跑不再回源起点重探
-/// v6：指纹加设备 ID 哈希（块设备整盘身份），尾部加身份种类；读 v5 时设备 ID 按零、
-/// 种类按 `Legacy` 处理
-/// v7：shrink 状态由 bool 变三态（字节语义变、布局不变）；v6 及更早只接受 0/1
+/// 字段变动即升版本：版本号先行拦下其他布局，CRC 覆盖长度也随之不同。
+/// 现场存在但不可判读时 read_checkpoint 报 Infra 并列明死因，出路是 abandon。
+/// 布局：disk_size、ss、原/新起止、缩容状态、进度、chunk、指纹（含设备 ID 与身份种类）、
+/// loop 映射、FS 类型码
 pub(crate) const CKPT2_VERSION: u32 = 7;
 
-/// v6：shrink 状态还是 bool（0 = 未缩、1 = 已验证）
-const CKPT2_VERSION_BOOL_SHRINK: u32 = 6;
-
-/// 兼容读取的最旧版本（没有设备 ID 与身份种类）
-const CKPT2_VERSION_LEGACY: u32 = 5;
-
 /// 现场记下的 FS 类型码：0 = 未识别，其余为数组下标 + 1。
-/// **只允许在末尾追加**——已经在盘上的现场按码值回读，顺序变动即把类型读成另一个
+/// 码值随现场落盘，**只允许在末尾追加**，顺序变动即把类型读成另一个
 const FSTYPE_CODES: &[FsKind] = &[
     FsKind::Squashfs,
     FsKind::Erofs,
@@ -70,18 +60,17 @@ pub(crate) enum FsShrink {
 }
 
 impl FsShrink {
-    fn from_code(code: u8, tri_state: bool) -> io::Result<Self> {
-        match (code, tri_state) {
-            (0, _) => Ok(Self::NotShrunk),
-            (1, _) => Ok(Self::Verified),
-            (2, true) => Ok(Self::Unverified),
-            // v6 及更早这一字节是 bool，2 只能是损坏
+    fn from_code(code: u8) -> io::Result<Self> {
+        match code {
+            0 => Ok(Self::NotShrunk),
+            1 => Ok(Self::Verified),
+            2 => Ok(Self::Unverified),
             _ => Err(io::Error::new(io::ErrorKind::InvalidData, "implausible resize checkpoint shrink state")),
         }
     }
 }
 
-/// resize-part 的 checkpoint（v7）：搬移覆盖源区，中途断电后新旧两处都不完整，
+/// resize-part 的 checkpoint：搬移覆盖源区，中途断电后新旧两处都不完整，
 /// 已完成位置只能由 checkpoint 判定。"表项是否已提交"不在这里存——盘上的分区几何
 /// 就是那个事实，另存一份标记只会与它分叉（见 prepare_resize 的恢复分支）
 /// 与 [`Checkpoint`] 同一种两副面孔：`P` 在写入侧是 [`crate::dev::LiveProof`]，
@@ -145,7 +134,7 @@ impl RsCheckpoint<crate::dev::IdentityProof> {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "resize checkpoint invalid"));
         }
         let ver = u32::from_le_bytes(b[8..12].try_into().unwrap());
-        if ver != CKPT2_VERSION && ver != CKPT2_VERSION_BOOL_SHRINK && ver != CKPT2_VERSION_LEGACY {
+        if ver != CKPT2_VERSION {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "unsupported resize checkpoint version"));
         }
         let mut o = 12usize;
@@ -167,18 +156,16 @@ impl RsCheckpoint<crate::dev::IdentityProof> {
         let new_end = rd64(b, &mut o)?;
         let fs_shrunk = FsShrink::from_code(
             *b.get(o).ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "truncated"))?,
-            ver >= CKPT2_VERSION,
         )?;
         o += 1;
         let chunks_done = rd64(b, &mut o)?;
         let chunk_bytes = rd64(b, &mut o)?;
-        // 指纹与映射属于"创建时事实"：解析只负责取值，比对在 read_checkpoint。
-        // v5 没有设备 ID 字段，读作零（无证据）
+        // 指纹与映射属于"创建时事实"：解析只负责取值，比对在 read_checkpoint
         let fp = crate::dev::TargetFingerprint {
             dev: rd64(b, &mut o)?,
             ino: rd64(b, &mut o)?,
             size: rd64(b, &mut o)?,
-            id: if ver >= CKPT2_VERSION_BOOL_SHRINK { rd64(b, &mut o)? } else { 0 },
+            id: rd64(b, &mut o)?,
         };
         // 标志字节先行跨过，再按标志决定是否读它后面那两个 u64
         let flagged = *b.get(o).ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "truncated"))?;
@@ -191,14 +178,12 @@ impl RsCheckpoint<crate::dev::IdentityProof> {
         // 类型码在尾部：认不出的码即现场不可判读，不退回"未识别"继续跑
         let fstype = fstype_from_code(*b.get(o).ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "truncated"))?)?;
         o += 1;
-        let proof = if ver >= CKPT2_VERSION_BOOL_SHRINK {
+        let proof = {
             let tag = *b.get(o).ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "truncated"))?;
             o += 1;
             crate::dev::IdentityProof::from_tag(tag).ok_or_else(|| {
                 io::Error::new(io::ErrorKind::InvalidData, "implausible resize checkpoint identity kind")
             })?
-        } else {
-            crate::dev::IdentityProof::Legacy
         };
         if table::crc32(&b[..o])
             != u32::from_le_bytes(
@@ -623,6 +608,8 @@ pub(crate) fn execute_resize(
         }
         if !shrink_done {
             let o = crate::fsops::shrink_fs(src, part, fstype, new_bytes)?;
+            // 卸挂结论要在消费结果之前取出：`pending` 拿走 leak 之后无从再判
+            let release_failed = o.release_failed();
             // 落点证实了才往下搬：回读不出实际尺寸时无法排除"工具以 0 退出但没缩到位"，
             // 而接着搬数据就会把分区末端切进未缩的 FS 元数据。此时停在缩容这一步，
             // ckpt 的 fs_shrunk 记为 Unverified——重跑先回读，仍未缩才重做一次缩容
@@ -639,6 +626,12 @@ pub(crate) fn execute_resize(
             save(&ckpt)?;
             if let Some(l) = line {
                 log(&l);
+            }
+            // 临时挂载点没卸掉 = 分区仍挂载中：此时搬移会把活动挂载仍映射的元数据
+            // 与搬移后的字节互相覆盖，改表也等于在挂载中挪动分区。残留挂载已随
+            // `pending` 浮出，重跑时 prepare 的占用闸会因它拒绝，直到用户按提示卸载
+            if release_failed {
+                return Ok(());
             }
             fault_rs_after_fs_shrink();
         }

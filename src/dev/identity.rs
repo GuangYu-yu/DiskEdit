@@ -164,8 +164,8 @@ impl TargetFingerprint {
 /// 一份现场记录的"创建时目标"：指纹、loop 映射，以及**身份证据的种类**。
 ///
 /// 两族现场（checkpoint / journal）都存这三样，比对只有一处（见 [`scene_mismatch`]）。
-/// 种类随现场落盘（v6 起）：`id == 0` 在旧格式里是"格式没有这个字段"，在新格式里可能是
-/// "录制时取不到"，两者在恢复时的处置不同，不能混为一谈
+/// 种类随现场落盘：`id == 0` 既可能是"这个平台给不出该字段"，也可能是"录制时取不到身份"，
+/// 后者由种类标出，两者在恢复时的处置不同，不能混为一谈
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SceneIdentity {
     pub fp: TargetFingerprint,
@@ -173,8 +173,7 @@ pub struct SceneIdentity {
     pub proof: IdentityProof,
 }
 
-/// 当前目标能给出的"凭什么认它"。写入侧只可能是这三类：`Legacy` 是"旧格式里没有这一字节"
-/// 的解析标记，当前目标永远给不出它，故不在此枚举里
+/// 当前目标能给出的"凭什么认它"
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LiveProof {
     /// 整盘节点的稳定设备 ID（[`DEVICE_IDENTITY_ATTRS`] 之一的哈希）
@@ -198,8 +197,6 @@ pub struct LiveScene {
 /// 目标不是记录时那类载体，此时逐字段的零值会把"没法比"读成"相符"
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum IdentityProof {
-    /// v4 / v5 头：格式里没有这一字节。只出现在解析结果里，不写入
-    Legacy,
     /// 记录时当前目标给出的种类
     Live(LiveProof),
 }
@@ -211,7 +208,7 @@ impl From<LiveProof> for IdentityProof {
 }
 
 impl LiveProof {
-    /// 落盘字节（v6 身份段末字节）。取值范围与 [`IdentityProof::from_tag`] 接受的集合一致
+    /// 落盘字节（身份段末字节）。取值范围与 [`IdentityProof::from_tag`] 接受的集合一致
     pub(crate) fn tag(self) -> u8 {
         match self {
             Self::DeviceId => 1,
@@ -242,9 +239,6 @@ impl IdentityProof {
 /// 同一个结论，否则拒绝理由会随入口漂移；调用方各自在原因上补齐"是哪份文件"。
 ///
 /// **先比身份种类，再逐字段比**：种类相同才谈得上比较字段。
-/// - `Legacy`（v4 / v5）只写了 inode 与尺寸：当前目标能给出 inode 身份（镜像、带 backing
-///   文件的 loop）时照旧可比；目标是整盘身份或什么身份都给不出时，旧现场没有可比的字段，
-///   一律拒绝——那种现场无法与"同名换过的盘"区分，只允许诊断与 abandon。
 /// - `Unavailable` 是"录制时就知道取不到身份"：同样无法与同名换过的盘区分，拒绝消费。
 /// - 整盘身份与 inode 身份互换（例如同一节点从磁盘变成 loop）说明载体变了，拒绝。
 ///
@@ -273,27 +267,11 @@ fn compare(
 ) -> Option<String> {
     match (recorded.proof, actual_proof) {
         (IdentityProof::Live(LiveProof::Inode), IdentityProof::Live(LiveProof::Inode))
-        | (IdentityProof::Live(LiveProof::DeviceId), IdentityProof::Live(LiveProof::DeviceId))
-        | (IdentityProof::Legacy, IdentityProof::Live(LiveProof::Inode)) => {}
-        (IdentityProof::Legacy, _) => {
-            return Some(
-                "this scene was recorded before device identities were stored, and the target now exposes \
-                 no file inode to compare — a block-device scene without identity cannot be matched \
-                 against the device present"
-                    .to_string(),
-            )
-        }
+        | (IdentityProof::Live(LiveProof::DeviceId), IdentityProof::Live(LiveProof::DeviceId)) => {}
         (IdentityProof::Live(LiveProof::Unavailable), _) => {
             return Some(
                 "this scene was recorded without any device identity (no stable attribute was readable), \
                  so it cannot be matched against the device now present"
-                    .to_string(),
-            )
-        }
-        (IdentityProof::Live(_), IdentityProof::Legacy) => {
-            return Some(
-                "the compared scene was recorded before device identities were stored, so the two \
-                 identity kinds cannot be matched"
                     .to_string(),
             )
         }
@@ -403,8 +381,8 @@ pub(crate) fn state_dir() -> PathBuf {
 /// 路径，v1 不引入这套语义）。块设备以设备层拓扑键为身份；loop 设备例外——身份是
 /// backing 文件本身，现场落镜像兄弟文件。
 ///
-/// 候选列表的首项是写入位置，其后是历史命名（旧版本写下的那份）：查找按序取首个
-/// 有效者、不扫描；两份有效候选同时存在即报歧义，不猜
+/// 候选落点由身份派生，每族一个落点（写入位置）：查找取首个有效者、不扫描；
+/// 多于一份有效候选同时存在即报歧义，不猜
 #[derive(Clone, Debug)]
 pub struct TargetIdentity {
     pub(crate) kind: TargetKind,
@@ -422,9 +400,6 @@ pub struct TargetIdentity {
     /// 派生到 `state_dir()` 下。类型上没有"没有锁落点"这一状态——取不到锁就是拒绝，
     /// 不存在无锁继续跑的路径
     pub(crate) lock: PathBuf,
-    /// 旧版按块设备语义（kind == Block）写下的 GUID 命名 checkpoint 是否可能存在。
-    /// loop 归一后本身份已是 Image kind，但历史落点按 Block 规则生成，枚举时需补列
-    pub(crate) legacy_guid_checkpoints: bool,
     /// loop 目标的指纹：由 [`Self::loop_backed`] 在核对"backing 对象仍是句柄打开的那一个"
     /// 之后**从已打开的 backing 句柄**取得。打开数据文件的路径上取指纹的调用点直接用它，
     /// 不再按 backing 名字二次 stat——名字在两次取用之间可能已指向另一个文件。
@@ -434,7 +409,8 @@ pub struct TargetIdentity {
     pub(crate) backing_fp: Option<TargetFingerprint>,
 }
 
-/// 只用于区分历史命名约定：块设备另有 GUID / devname 两份历史落点，镜像没有
+/// 目标载体的种类：镜像的伴随文件落在目标旁、按文件路径打开；块设备的伴随文件落在
+/// `state_dir()` 下、按设备节点打开
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TargetKind {
     Image,
@@ -494,10 +470,7 @@ pub(crate) fn ckpt_temp_prefix(ckpt: &Path) -> String {
     format!("{CKPT_TMP_PREFIX}{}.", key_token(&ckpt.to_string_lossy()))
 }
 
-/// 旧版块设备现场的命名：GUID 后只有 `.ckpt`，没有命名空间中缀
-pub(crate) const LEGACY_GUID_CKPT_SUFFIX: &str = ".ckpt";
-
-/// 16 字节 Disk GUID → 大写无连字符十六进制（历史落点用的就是这种写法）
+/// 16 字节 Disk GUID → 大写无连字符十六进制
 pub(crate) fn guid_hex(g: &[u8; 16]) -> String {
     g.iter().map(|b| format!("{b:02X}")).collect()
 }
@@ -518,33 +491,16 @@ pub(crate) fn key_token(value: &str) -> String {
 
 impl TargetIdentity {
     /// 镜像身份。canonical = 身份主体（journal / checkpoint / lock 落它旁边）；
-    /// literal = 用户给的路径（base，日志命名沿用既有约定）。两者不同（路径含符号链接
-    /// 或非规范化成分）时字面路径的兄弟文件降为历史候选——只用于发现，发现后照走
-    /// 完整校验；两份候选同时有效即歧义拒绝，不猜
+    /// literal = 用户给的路径，只用于日志命名（base）。两者不同（路径含符号链接或非规范
+    /// 化成分）不影响落点：身份只认 realpath 指向的那个文件
     pub(crate) fn image_at(canonical: &Path, literal: &Path) -> Self {
-        let mut journal = vec![suffix_path(canonical, JOURNAL_SUFFIX)];
-        let mut checkpoint = vec![suffix_path(canonical, CHECKPOINT_SUFFIX)];
-        if literal != canonical {
-            // 字面路径与 canonical 指同一文件时（相对路径、`./x`、`dir/../x`）两者派生的
-            // 是**同一份**候选：两份都列出来会让消费侧把"只有一个现场"判成 Ambiguous 而
-            // 全面拒绝。真·不同文件（符号链接、不同挂载点）才保留为双候选
-            let j = suffix_path(literal, JOURNAL_SUFFIX);
-            if !same_candidate_file(&journal[0], &j) {
-                journal.push(j);
-            }
-            let c = suffix_path(literal, CHECKPOINT_SUFFIX);
-            if !same_candidate_file(&checkpoint[0], &c) {
-                checkpoint.push(c);
-            }
-        }
         Self {
             kind: TargetKind::Image,
             base: literal.to_path_buf(),
             canonical: canonical.to_path_buf(),
-            journal,
-            checkpoint,
+            journal: vec![suffix_path(canonical, JOURNAL_SUFFIX)],
+            checkpoint: vec![suffix_path(canonical, CHECKPOINT_SUFFIX)],
             lock: suffix_path(canonical, LOCK_SUFFIX),
-            legacy_guid_checkpoints: false,
             backing_fp: None,
         }
     }
@@ -576,7 +532,6 @@ impl TargetIdentity {
     /// 打不开或名字已不指向它，一律 `Err`——退到字符串会把 journal / checkpoint / lock
     /// 挂到一个与 loop 无关的文件旁
     ///
-    /// 旧版身份（state_dir 下按 backing 串 token 与 devname 命名的落点）列为历史候选
     #[cfg(target_os = "linux")]
     pub(crate) fn loop_backed(dev_path: &Path, raw: PathBuf) -> Result<Self, String> {
         let file = std::fs::File::open(&raw).map_err(|e| {
@@ -628,12 +583,6 @@ impl TargetIdentity {
                 ));
             }
         }
-        let tok = key_token(&raw.to_string_lossy());
-        id.journal.push(state_dir().join(format!("{tok}{JOURNAL_SUFFIX}")));
-        id.checkpoint.push(state_dir().join(format!("{tok}{CHECKPOINT_SUFFIX}")));
-        // 更旧的历史命名：块设备 journal 曾以 devname 命名
-        id.journal.push(state_dir().join(format!("{}{JOURNAL_SUFFIX}", file_name_lossy(dev_path))));
-        id.legacy_guid_checkpoints = true;
         // 指纹取自刚核对过的那一个 backing 对象（句柄的元数据），打开数据文件的路径不再按
         // 名字二次 stat
         id.backing_fp = Some(TargetFingerprint::from_meta(&meta));
@@ -665,8 +614,8 @@ impl TargetIdentity {
         if let Some(raw) = loop_backing_at(node).map_err(|e| e.to_string())? {
             return Self::loop_backed(path, raw);
         }
-        let (self_key, disk_key) = block_keys(node, path).map_err(|e| e.to_string())?;
-        Ok(Self::from_block_keys(path, self_key, disk_key))
+        let disk_key = block_keys(node, path).map_err(|e| e.to_string())?;
+        Ok(Self::from_block_keys(path, disk_key))
     }
 
     /// 非 Linux 平台没有 sysfs，块设备判定恒 false，本入口不会到达。非 Linux 上没有块
@@ -674,25 +623,18 @@ impl TargetIdentity {
     #[cfg(all(not(target_os = "linux"), test))]
     pub(crate) fn resolve_block(path: &Path) -> Result<Self, String> {
         let k = file_name_lossy(path);
-        Ok(Self::from_block_keys(path, k.clone(), k))
+        Ok(Self::from_block_keys(path, k))
     }
 
     /// 非 loop 块设备的身份构造。**盘级**：journal / checkpoint / lock 全部按所在整设备
     /// 派生——分区号属于操作，不进落盘键，`/dev/sdb:2`（整盘节点 + 后缀）与
-    /// `/dev/sdb2`（分区节点）由此共享同一现场，旧版按分区落的那份降为历史候选
+    /// `/dev/sdb2`（分区节点）由此共享同一现场
     #[cfg(any(target_os = "linux", test))] // 非 Linux 上块设备身份只存在于测试
-    pub(crate) fn from_block_keys(path: &Path, self_key: String, disk_key: String) -> Self {
+    pub(crate) fn from_block_keys(path: &Path, disk_key: String) -> Self {
         let stable = key_token(&disk_key);
         let dir = state_dir();
-        let mut journal = vec![dir.join(format!("{stable}{JOURNAL_SUFFIX}"))];
-        let mut checkpoint = vec![dir.join(format!("{stable}{CHECKPOINT_SUFFIX}"))];
-        if self_key != disk_key {
-            // 历史命名：旧版现场按分区落（self_key 含分区号）
-            let self_tok = key_token(&self_key);
-            journal.push(dir.join(format!("{self_tok}{JOURNAL_SUFFIX}")));
-            checkpoint.push(dir.join(format!("{self_tok}{CHECKPOINT_SUFFIX}")));
-        }
-        journal.push(dir.join(format!("{}{JOURNAL_SUFFIX}", file_name_lossy(path))));
+        let journal = vec![dir.join(format!("{stable}{JOURNAL_SUFFIX}"))];
+        let checkpoint = vec![dir.join(format!("{stable}{CHECKPOINT_SUFFIX}"))];
         Self {
             kind: TargetKind::Block,
             base: path.to_path_buf(),
@@ -704,7 +646,6 @@ impl TargetIdentity {
             // 分区"落到同一把锁上。锁文件是纯运行时 artifact（重启自清也无妨），残留
             // 不构成阻挡——判据是"锁取不取得到"，不是"文件在不在"（见 targetlock）
             lock: dir.join(format!("{stable}{LOCK_SUFFIX}")),
-            legacy_guid_checkpoints: true,
             backing_fp: None,
         }
     }
@@ -787,51 +728,16 @@ impl TargetIdentity {
         state_dir().join(format!("{name}{LOG_SUFFIX}"))
     }
 
-    /// checkpoint 的候选落点。块设备语义下的历史落点以 GPT Disk GUID 命名，而 GUID 只
-    /// 在表可读时存在。
-    ///
-    /// 读表是**按需**的：只有 [`Self::has_block_legacy_naming`] 的身份才可能用到 GUID，
-    /// 镜像目标传 `None` 即可——为一个不可能存在的落点去解析盘上内容，会平白产生
-    /// "表读不出来"的告警。
-    ///
-    /// 表读不出来**不等于那份落点不存在**：它可能正是丢记录之前的唯一现场（`abandon`
-    /// 的典型入口就是一张坏表）。此时返回 [`CheckpointCandidates::unenumerable`]，由调用方
-    /// 决定按"未知现场"拒绝写命令还是如实报告无法放弃——把它折叠成"没有那一条"会让闸口
-    /// 放行，把一份看不见的 checkpoint 当成不存在
-    pub(crate) fn checkpoint_candidates(&self, disk: Option<&FileSource>) -> CheckpointCandidates {
-        let mut paths = self.checkpoint.clone();
-        if !self.has_block_legacy_naming() {
-            return CheckpointCandidates { paths, unenumerable: None };
-        }
-        let unenumerable = match disk {
-            // 目标打不开：GUID 不可知，历史命名那份也就无从拼出
-            None => Some("the target could not be opened to read its GPT Disk GUID".to_string()),
-            Some(src) => match crate::table::load_gpt(src) {
-                Ok(Some(g)) => {
-                    paths.push(state_dir().join(format!("{}{LEGACY_GUID_CKPT_SUFFIX}", guid_hex(&g.header.disk_guid))));
-                    None
-                }
-                // 无表（MBR / 裸盘）是常态而非故障：历史命名那份本来就不存在
-                Ok(None) => None,
-                Err(e) => Some(e.to_string()),
-            },
-        };
-        CheckpointCandidates { paths, unenumerable }
-    }
-
-    /// 本身份是否可能带 Block 语义的历史落点（GUID 命名的 checkpoint）。两个消费点：
-    /// checkpoint 候选补列，以及补列前打开目标读表（GUID 只在表可读时存在）。
-    /// loop 归一后身份已是 Image kind，但其历史落点按 Block 规则生成，同样适用
-    pub(crate) fn has_block_legacy_naming(&self) -> bool {
-        self.kind == TargetKind::Block || self.legacy_guid_checkpoints
+    /// checkpoint 的候选落点：镜像放在目标旁，块设备落在 `state_dir()` 下。
+    /// `disk` 保留在签名里仅为调用方形状一致，落点不依赖盘上内容
+    pub(crate) fn checkpoint_candidates(&self, _disk: Option<&FileSource>) -> CheckpointCandidates {
+        CheckpointCandidates { paths: self.checkpoint.clone() }
     }
 }
 
-/// checkpoint 候选的枚举结果。`paths` 是能拼出名字的那些；`unenumerable` 在有历史命名
-/// 落点而表读不出来时给出原因——那不是"没有"，是"看不见"。
+/// checkpoint 的候选落点
 pub(crate) struct CheckpointCandidates {
     pub(crate) paths: Vec<PathBuf>,
-    pub(crate) unenumerable: Option<String>,
 }
 
 /// 尽力创建目录：失败不在此处报错——真正的失败会在随后打开文件时以更具体的
@@ -875,7 +781,7 @@ pub(crate) const CKPT_TMP_STALE_AFTER: std::time::Duration = std::time::Duration
 /// 尽力而为：目录读不到、元数据拿不到、删不掉都不拦打开目标
 #[allow(clippy::let_underscore_must_use)] // 有意忽略：删不掉就留到下次打开再清
 pub(crate) fn sweep_stale_ckpt_temps(identity: &TargetIdentity) {
-    // 这里只为拿落点目录做清理，历史命名那份拼不出来也无妨（与本次命名同一目录）
+    // 这里只为拿落点目录做清理
     let candidates = identity.checkpoint_candidates(None);
     // 只认领本目标的暂存文件：同一目录里可能有别的镜像（或所有盘共用的 state_dir），
     // 按裸前缀清扫会把它们的残骸一并删掉，而其中一份可能正等着 rename
