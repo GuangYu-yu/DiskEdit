@@ -73,9 +73,26 @@ pub(crate) fn cmd_resize_superfloppy(a: &Args, req: &SizeRequest) -> crate::outc
         Ok(None) => Vec::new(),
         Err(e) => bail_fail(Fail::from(e).context("FS grow failed")),
     };
-    println!("superfloppy: {} grown to full device ({cur_bytes} bytes) — verify with: diskedit info {}", fsid::fs_name(fstype), a.target);
     // 无分区表可写：FS 已扩，事务完成；清理待办随结果浮出
     let out = crate::outcome::Outcome::applied_with(pending);
+    // 整体成功文案只在后置条件全部满足时打印；有待办时退出码是 20，此时只报 FS 扩容已做
+    announce_applied(
+        &out,
+        || {
+            format!(
+                "superfloppy: {} grown to full device ({cur_bytes} bytes) — verify with: diskedit info {}",
+                fsid::fs_name(fstype),
+                a.target
+            )
+        },
+        || {
+            format!(
+                "superfloppy: {} filesystem grow step completed for the whole device ({cur_bytes} bytes); follow-up steps are pending — verify with: diskedit info {}",
+                fsid::fs_name(fstype),
+                a.target
+            )
+        },
+    );
     // 待办必须让人看到：本路径的返回值直达分派，没有别处会把它呈现出来
     out.report();
     out

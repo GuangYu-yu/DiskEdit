@@ -2,6 +2,13 @@
 
 use super::*;
 
+/// 在线收尾期间持有的整盘独占权。只有 Linux 有在线路径，其余平台没有可持有之物，
+/// 别名让共享签名不引用平台专属类型（`crate::online` 本身按平台裁剪）
+#[cfg(target_os = "linux")]
+pub(crate) type OnlineLock = crate::online::LockedPv;
+#[cfg(not(target_os = "linux"))]
+pub(crate) type OnlineLock = ();
+
 /// resize 的收尾：布局结果 →（PV 时才继续）LVM 链，两侧待办取并集。
 /// 未写入 → 直接返回；已写入但后置条件未全满足 → 非 PV 也直接返回，不打印成功字样
 /// （否则与 PARTIAL 矛盾），PV 则仍需跑 pvresize/lvextend 链。
@@ -23,7 +30,15 @@ pub(crate) fn finish_resize(a: &Args, o: crate::outcome::Outcome, wsrc: Option<&
         _ => Vec::new(),
     };
     match resize_done(a, wsrc, part, is_pv, is_block, old_bytes, None) {
-        Ok(done) => o.merge_applied(done),
+        // 成功文案对**合并后**的结果发：resize_done 看不到上游待办，在那个函数里打印
+        // 只能靠本函数前面的提前返回保证"完整"，换一个调用点就成立不了
+        Ok(done) => {
+            let o = o.merge_applied(done);
+            if !is_pv && o.is_complete() {
+                println!("resized (verify with: diskedit info {})", a.target);
+            }
+            o
+        }
         Err(cause) => {
             let out = crate::outcome::Outcome::failed_with(cause, pending);
             out.report();
@@ -40,20 +55,21 @@ pub(crate) fn finish_resize(a: &Args, o: crate::outcome::Outcome, wsrc: Option<&
 /// 由 `finish_resize` 折成 `Failed`（保留上游待办）；不得返 `Outcome::infra`，
 /// 那会向用户承诺"本次未写盘"
 pub(crate) fn resize_done(
+    // `a` 只被 Linux 的重开路径（open_target_ro）取用：其余平台没有收尾链
+    #[cfg_attr(not(target_os = "linux"), allow(unused_variables))]
     a: &Args,
     wsrc: Option<&mut WriteSource>,
     part: u32,
     is_pv: bool,
     is_block: bool,
     old_bytes: u64,
-    online_lock: Option<crate::online::LockedPv>,
+    online_lock: Option<OnlineLock>,
 ) -> Result<crate::outcome::Outcome, String> {
     // 在线路径的独占权要覆盖到 LVM 链结束：pvresize/lvextend 是本次操作的后置条件，
     // 在它们跑之前释放锁，另一个 diskedit 就能在这段窗口内改写同一块盘。带出的整盘
     // 句柄同时充当收尾读表的那一只（见 `ro` 的取用顺序）
-    let online_lock = online_lock;
     if !is_pv {
-        println!("resized (verify with: diskedit info {})", a.target);
+        // 成功文案由 `finish_resize` 对合并后的结果发：此处看不到上游待办
         return Ok(crate::outcome::Outcome::applied_with(Vec::new()));
     }
     #[cfg(target_os = "linux")]
@@ -143,7 +159,7 @@ pub(crate) fn resize_done(
     }
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = (is_block, old_bytes, wsrc);
+        let _ = (is_block, old_bytes, wsrc, online_lock);
         let o = crate::outcome::Outcome::applied_with(vec![crate::outcome::Pending::new(
             part,
             crate::outcome::PendingKind::Other("lvm chain (pvresize/lvextend)"),

@@ -143,18 +143,17 @@ fn abandon_records(identity: &TargetIdentity, disk: Option<&FileSource>) -> u8 {
         // journal 的身份只在头里，读得出就与当前目标比一遍。checkpoint 的身份要连同
         // 记录与几何一起解析，而 abandon 不解析表，故这一族维持现状
         let mut foreign_why: Option<String> = None;
-        if let RecoveryRecord::Journal { path, .. } = r {
-            if let (Ok(recorded), Some(live)) = (Journal::read_identity(path), scene.as_ref()) {
-                if let Some(why) = crate::dev::scene_mismatch(&recorded, live) {
-                    eprintln!(
-                        "warning: {} was recorded for another target scene ({why}) — abandoning it here gives up \
-                         that target's rollback evidence if it returns to this path; the record is still released \
-                         so this target can be made writable again",
-                        path.display()
-                    );
-                    foreign_why = Some(format!("{} ({why})", path.display()));
-                }
-            }
+        if let RecoveryRecord::Journal { path, .. } = r
+            && let (Ok(recorded), Some(live)) = (Journal::read_identity(path), scene.as_ref())
+            && let Some(why) = crate::dev::scene_mismatch(&recorded, live)
+        {
+            eprintln!(
+                "warning: {} was recorded for another target scene ({why}) — abandoning it here gives up \
+                 that target's rollback evidence if it returns to this path; the record is still released \
+                 so this target can be made writable again",
+                path.display()
+            );
+            foreign_why = Some(format!("{} ({why})", path.display()));
         }
         match abandon_one(from) {
             Ok(_) => {
