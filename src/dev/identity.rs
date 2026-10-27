@@ -427,7 +427,10 @@ pub struct TargetIdentity {
     pub(crate) legacy_guid_checkpoints: bool,
     /// loop 目标的指纹：由 [`Self::loop_backed`] 在核对"backing 对象仍是句柄打开的那一个"
     /// 之后**从已打开的 backing 句柄**取得。打开数据文件的路径上取指纹的调用点直接用它，
-    /// 不再按 backing 名字二次 stat——名字在两次取用之间可能已指向另一个文件
+    /// 不再按 backing 名字二次 stat——名字在两次取用之间可能已指向另一个文件。
+    /// 读点只在 Linux 的 `block_open_extras`（`dev/source.rs`）；其余平台身份恒按镜像解析，
+    /// 该字段恒为 `None` 且无人读取
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub(crate) backing_fp: Option<TargetFingerprint>,
 }
 

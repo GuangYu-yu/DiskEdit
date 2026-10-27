@@ -217,8 +217,8 @@ pub(crate) fn cmd_resizefs(a: &Args) -> u8 {
         }
         match target.resize_fs(&src) {
             Ok(leak) => {
-                // 挂载点没卸掉是一条未完成的后置条件：它随成功结果浮出，退出码因此是 20；
-                // 成功行照常打印
+                // 挂载点没卸掉是一条未完成的后置条件：它随结果浮出，退出码因此是 20。
+                // 整体成功文案只由 is_complete() 放行；有待办时只报"FS 扩容这一步做完"
                 let pending = match leak {
                     Some(leak) => {
                         eprintln!("warning: {leak}");
@@ -226,9 +226,18 @@ pub(crate) fn cmd_resizefs(a: &Args) -> u8 {
                     }
                     None => Vec::new(),
                 };
-                println!("resized (verify with: diskedit info {})", a.target);
-                // 待办必须让人看到：本命令只返回退出码，没有别处会把它呈现出来
                 let out = Outcome::applied_with(pending);
+                announce_applied(
+                    &out,
+                    || format!("resized (verify with: diskedit info {})", a.target),
+                    || {
+                        format!(
+                            "filesystem grow step completed (verify with: diskedit info {}); follow-up steps are pending — see below",
+                            a.target
+                        )
+                    },
+                );
+                // 待办必须让人看到：本命令只返回退出码，没有别处会把它呈现出来
                 out.report();
                 out.exit_code()
             }

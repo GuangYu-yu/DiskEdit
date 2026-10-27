@@ -106,6 +106,7 @@ FS 层要 root 是因为经 `losetup` 映射分区；块设备写入靠设备节
 | lvm2_pv | — | ✓ | — | — | — | — |
 
 - `ntfs` 的 uuid 只能生成随机新序号，`ntfslabel` 不支持指定值。
+- `vfat` 的 label 在本工具内只收 ASCII：卷标字段是 11 **字节**、按 DOS/OEM 代码页存放，本工具不做代码页转换（非 ASCII 标签请直接用 `fatlabel` 设置）。
 - `swap` 的扩容是扩完表项后用 `mkswap` 重建，不搬数据；UUID、PARTUUID 与分区号保持。
 - `lvm2_pv` 的扩容只到 PV 层，加 `--grow-lv` 才继续扩 LV 及其文件系统；缩容一律拒绝——链与扩容反向（先 `lvreduce -r` 缩 LV+FS，再 `pvresize --setphysicalvolumesize`，最后改分区表），本工具只管后者。
 
