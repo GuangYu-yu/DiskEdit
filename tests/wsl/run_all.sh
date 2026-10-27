@@ -36,6 +36,7 @@ for f in \
   resize_move_resizefs_chain.sh \
   resize_part_and_online_fs.sh \
   online_guards.sh \
+  online_btrfs_identity.sh \
   size_units_and_refusals.sh \
   arg_guards.sh \
   middle_partition_undo.sh \

@@ -283,6 +283,14 @@ pub fn resize_pv(
     if let Err(f) = check_new_range(&t, new_len_bytes, &disk) {
         return (f.into_outcome(), old_len_bytes, None);
     }
+    // 写表前的占用闸（与离线路径同一处判据）：PV 只增长，持有者仅允许 DM 栈——
+    // pvresize 的标准流程是先长分区、再长 dm 映射，增长不改 DM 已映射的扇区。
+    // MD/loop 等持有者没有这种增量语义，写表会与栈顶视图脱节
+    if let Err(f) =
+        crate::fsops::ensure_idle_before_write(&disk, pno, t.start_bytes, crate::fsops::WriteKind::Extend)
+    {
+        return (f.into_outcome(), old_len_bytes, None);
+    }
     if let Err(e) = part_resize(&t, new_len_bytes) {
         // 表已写、内核同步失败：PV 链（pvresize/lvextend）因此没做，两条事实一并报。
         // 只报"内核视图过期"会让 20 少说一半——分区已经大了，PV 还是旧尺寸

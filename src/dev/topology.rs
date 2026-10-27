@@ -143,23 +143,21 @@ pub(crate) fn sysfs_node_from_rdev(rdev: u64) -> io::Result<PathBuf> {
     })
 }
 
-/// 设备层身份的**两个投影**，共用同一次 sysfs 解析（`node` 即 [`sysfs_node`] 的产物）：
-/// - `.0`（目标自身）：分区节点带分区号，整设备就是它自己。旧版 journal / checkpoint
-///   按它落点——现场归属曾是持久的、按分区落的
-/// - `.1`（所在整设备）：分区节点抹掉分区号。锁用它——独占权针对的是**盘**（分区表属于
-///   盘），只有盘粒度才能让"离线以分区节点为目标"与"在线对同一分区"落进同一把锁
+/// 设备层身份：**所在整设备**的键。分区节点抹掉分区号后取父设备的键——journal /
+/// checkpoint / lock 全部按这个键派生，独占权针对的是**盘**（分区表属于盘），
+/// 只有盘粒度才能让"离线以分区节点为目标"与"在线对同一分区"落进同一把锁
 ///
-/// 分区节点自身不携带设备身份（内核只给它 `partition` / `start` / `size`），故取父设备
-/// 的身份再附自己的分区号。父设备与分区号都来自 sysfs 拓扑——`/sys/dev/block/<maj>:<min>`
+/// 分区节点自身不携带设备身份（内核只给它 `partition` / `start` / `size`），故取父设备的
+/// 键。父设备与分区号都来自 sysfs 拓扑——`/sys/dev/block/<maj>:<min>`
 /// 解析出的节点、它的 `partition` 属性、它的父目录——既不解析 `sda1` / `nvme0n1p1` /
 /// `dm-0p1` 这类命名，也不自己推算分区号。容量因此不参与分区身份：分区扩容只改变自己
 /// 的容量，父设备容量不受影响，撤销窗口不会在操作中途改名
 ///
-/// 拓扑解析不出来时**拒绝**（fail-closed，见 [`block_keys`]）：journal / checkpoint /
+/// 拓扑解析不出来时**拒绝**（fail-closed）：journal / checkpoint /
 /// lock 必须落在同一个序列化域，而"调用方 devname-容量"的退化身份会让
 /// `/dev/sdb` 与 `/dev/sdb1` 得到两把锁、两个互不相干的现场命名空间
 #[cfg(target_os = "linux")]
-pub(crate) fn block_keys(node: &Path, path: &Path) -> io::Result<(String, String)> {
+pub(crate) fn block_keys(node: &Path, path: &Path) -> io::Result<String> {
     let deny = |why: String| {
         io::Error::new(
             io::ErrorKind::NotFound,
@@ -196,34 +194,16 @@ pub(crate) fn block_keys(node: &Path, path: &Path) -> io::Result<(String, String
     let part = read_sysfs_attr(&node.join("partition"))
         .map_err(|e| deny(format!("reading {}: {e}", node.join("partition").display())))?;
     let Some(part) = part else {
-        let alone = key_of(node)?;
-        return Ok((alone.clone(), alone));
+        return key_of(node);
     };
-    let n = part
-        .parse::<u32>()
+    part.parse::<u32>()
         .map_err(|e| deny(format!("partition attribute is {part:?}, not a number ({e})")))?;
     let Some(parent) = node.parent() else {
         return Err(deny("partition node without a parent device".into()));
     };
-    let disk = key_of(parent)?;
-    Ok((format!("{disk}-p{n}"), disk))
+    key_of(parent)
 }
 
 pub(crate) fn file_name_lossy(path: &Path) -> String {
     path.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "dev".into())
-}
-
-/// 两个伴随文件候选是否指向同一个文件。按"父目录 realpath + 文件名"比对：候选本身
-/// 可能还没落盘，但父目录通常在，故这条判据对"将来才出现"的候选同样成立；解析不出来
-/// 时退回字面比较。裸文件名按当前目录解析（`canonicalize("")` 不可用）
-pub(crate) fn same_candidate_file(a: &Path, b: &Path) -> bool {
-    fn settled(p: &Path) -> Option<PathBuf> {
-        let name = p.file_name()?;
-        let dir = p.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or_else(|| Path::new("."));
-        Some(std::fs::canonicalize(dir).ok()?.join(name))
-    }
-    match (settled(a), settled(b)) {
-        (Some(x), Some(y)) => x == y,
-        _ => a == b,
-    }
 }

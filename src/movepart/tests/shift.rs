@@ -311,8 +311,7 @@ pub(crate) fn pure_growth_fs_pending_keeps_checkpoint_and_rerun_retries() {
 
 /// `dev::scene_mismatch` 的判据：**先比身份种类**（整盘 ID / 文件 inode / 无身份），同一种类
 /// 内逐字段比，各字段只在**两侧都有证据**时参与（零值 = 该平台或该载体给不出这个字段，
-/// 不等于"匹配"）。旧格式（`Legacy`）只写了 inode 与尺寸：当前目标同样是 inode 身份时照旧
-/// 可比，是整盘身份或什么都给不出时拒绝；`Unavailable`（录制时就取不到身份）一律拒绝。
+/// 不等于"匹配"）；`Unavailable`（录制时就取不到身份）一律拒绝。
 /// 该判据由 checkpoint 与 journal 两族现场共用，故在这里随 checkpoint 一侧一起测
 #[test]
 pub(crate) fn scene_mismatch_guards_foreign_scenes() {
@@ -320,7 +319,6 @@ pub(crate) fn scene_mismatch_guards_foreign_scenes() {
     let inode = IdentityProof::Live(LiveProof::Inode);
     let device_id = IdentityProof::Live(LiveProof::DeviceId);
     let unavailable = IdentityProof::Live(LiveProof::Unavailable);
-    let legacy = IdentityProof::Legacy;
     let fp = |dev: u64, ino: u64, size: u64| crate::dev::TargetFingerprint { dev, ino, size, id: 0 };
     let fp_id = |size: u64, id: u64| crate::dev::TargetFingerprint { dev: 0, ino: 0, size, id };
     let scene = |fp: crate::dev::TargetFingerprint, map: Option<(u64, u64)>| {
@@ -366,17 +364,6 @@ pub(crate) fn scene_mismatch_guards_foreign_scenes() {
     let s = scene(fp(0, 0, 1024), None);
     assert!(check(&s, fp(0, 0, 0), None, inode).is_none());
 
-    // 旧格式（v5）镜像现场：inode 与尺寸照旧可比
-    let s = scene(fp(7, 42, 1024), None);
-    assert!(check(&s, fp(7, 42, 1024), None, legacy).is_none());
-    assert!(check(&s, fp(7, 43, 1024), None, legacy).unwrap().contains("fingerprint"));
-    // 旧格式现场遇上现在只能给出整盘身份的目标：没有可比的身份 → 拦
-    let s = block(fp_id(1 << 30, 0x1122));
-    assert!(check(&s, fp(7, 42, 1024), None, legacy).unwrap().contains("before device identities"));
-    // 旧格式现场遇上什么都不给出的块设备：同样拦
-    let s = block(fp(0, 0, 0));
-    assert!(check(&s, fp(0, 0, 0), None, legacy).unwrap().contains("before device identities"));
-
     // 整盘身份：同容量、同 ID 放行
     let s = block(fp_id(1 << 30, 0x1122));
     assert!(check(&s, fp_id(1 << 30, 0x1122), None, device_id).is_none());
@@ -391,7 +378,7 @@ pub(crate) fn scene_mismatch_guards_foreign_scenes() {
     let s = block(fp(7, 42, 1 << 30));
     assert!(check(&s, fp_id(1 << 30, 0x3344), None, device_id).unwrap().contains("file inode identity"));
 
-    // 录制时就没有身份（v6 的 Unavailable）：同容量也不放行，尺寸不能替代身份
+    // 录制时就没有身份（Unavailable）：同容量也不放行，尺寸不能替代身份
     let s = block(fp_id(1 << 30, 0x1122));
     assert!(check(&s, fp_id(1 << 30, 0), None, unavailable).unwrap().contains("without any device identity"));
     let s = scene(fp(7, 42, 1024), None);
@@ -402,8 +389,6 @@ pub(crate) fn scene_mismatch_guards_foreign_scenes() {
     assert!(check(&s, fp(7, 42, 1024), None, inode).is_none());
     // backing 换成另一个文件（同路径换了内容）⇒ 拦
     assert!(check(&s, fp(7, 43, 1024), None, inode).unwrap().contains("fingerprint"));
-    // 旧格式的 loop 现场同样带 inode 证据，照旧可比
-    assert!(check(&s, fp(7, 42, 1024), None, legacy).is_none());
     // 记录侧是 backing 文件、当前侧成了整盘身份 ⇒ 载体变了，拦
     let s = block(fp_id(1 << 30, 0x1122));
     assert!(check(&s, fp(7, 42, 1024), None, inode).unwrap().contains("whole-disk identity instead"));

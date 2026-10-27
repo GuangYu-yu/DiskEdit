@@ -39,6 +39,18 @@ pub(crate) fn vfat_label_admits_eleven_bytes_and_rejects_twelve() {
     assert!(err.contains("12 bytes"), "{err}");
 }
 
+/// 编码策略：判据是**编码后的字节数**（ASCII 下等于 `len()`），不是 `chars().count()`。
+/// "盘盘盘盘"只有 4 个字符却占 12 个 UTF-8 字节——按字符数会放行一个本层无法安全
+/// 落盘的标签；本工具不转 DOS 代码页，故非 ASCII 一律拒绝（不论长短）
+#[test]
+pub(crate) fn vfat_label_counts_bytes_not_chars() {
+    assert_eq!("盘盘盘盘".chars().count(), 4);
+    assert_eq!("盘盘盘盘".len(), 12);
+    let err = vfat_label_check("盘盘盘盘").unwrap_err().to_string();
+    assert!(err.contains("ASCII only"), "{err}");
+    assert!(!err.contains("11-byte"), "{err}");
+}
+
 /// 非 ASCII 标签在本层按"表示不了"拒绝，不归入超长：本工具不转码 DOS 代码页，
 /// 按 UTF-8 字节计会把 5 个字符的 "ÄÖÜßé"（10 字节）与真正的字段超限混成一句话
 #[test]

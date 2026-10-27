@@ -33,27 +33,19 @@ pub(crate) enum RecoveryRecord {
     /// 搬移 checkpoint：描述一次中断的搬移。它本身不含可回放的字节，
     /// 出路只有续跑原命令或放弃
     Checkpoint { path: std::path::PathBuf },
-    /// 按历史 GUID 命名的 checkpoint 可能存在，但目标的表读不出来，拼不出它的路径。
-    /// 它不是"没有"：表损坏恰好是最需要现场枚举的场合。没有路径可删，也没有名字可列，
-    /// 只能如实报成"无法枚举的现场"
-    UnenumerableCheckpoint { reason: String },
 }
 
 impl RecoveryRecord {
-    pub(crate) fn path(&self) -> Option<&Path> {
+    pub(crate) fn path(&self) -> &Path {
         match self {
-            RecoveryRecord::Journal { path, .. } | RecoveryRecord::Checkpoint { path } => Some(path),
-            RecoveryRecord::UnenumerableCheckpoint { .. } => None,
+            RecoveryRecord::Journal { path, .. } | RecoveryRecord::Checkpoint { path } => path,
         }
     }
 
-    /// 报告用的单条描述：有路径的给路径，无法枚举的把原因说出来
+    /// 报告用的单条描述
     fn describe(&self) -> String {
         match self {
             RecoveryRecord::Journal { path, .. } | RecoveryRecord::Checkpoint { path } => path.display().to_string(),
-            RecoveryRecord::UnenumerableCheckpoint { reason } => format!(
-                "an unenumerable checkpoint under the legacy GUID-based name ({reason})"
-            ),
         }
     }
 }
@@ -67,8 +59,7 @@ impl RecoveryRecord {
 /// checkpoint 没有"空壳"一说：它一落盘就描述一次中断的搬移，故只看存在性——
 /// **只有 `NotFound` 算不存在**，属性读取的其他错误按存在处理。
 ///
-/// `disk` 是整盘目标，仅供按 GUID 命名的那份历史 checkpoint 落点用；调用点按"身份是否
-/// 可能带 Block 语义的历史落点"决定传不传，见 [`TargetIdentity::checkpoint_candidates`]
+/// `disk` 保留在签名里仅为调用方形状一致，checkpoint 落点不依赖盘上内容
 pub(crate) fn active_recovery_records(
     identity: &TargetIdentity,
     disk: Option<&FileSource>,
@@ -90,9 +81,6 @@ pub(crate) fn active_recovery_records(
         }
     }
     let candidates = identity.checkpoint_candidates(disk);
-    if let Some(reason) = candidates.unenumerable {
-        out.push(RecoveryRecord::UnenumerableCheckpoint { reason });
-    }
     for p in candidates.paths {
         // 目录等非普通文件不是本工具写下的任何东西，留着它会把一个无关路径顶成 busy 现场
         match std::fs::metadata(&p) {
@@ -294,7 +282,6 @@ impl TransactionManager {
             .collect();
         let single_rollbackable = usable.len() == 1
             && usable[0].iter().all(|e| !matches!(e.recovery, dev::RecoveryData::Barrier));
-        let unenumerable = active.iter().any(|r| matches!(r, RecoveryRecord::UnenumerableCheckpoint { .. }));
         let way_out = if resumable {
             // "重跑原命令即续跑"只对 relocation 作业成立；单分区 resize 的现场
             //（RecoveryRecord 只有路径，分不出两族）必须把另一条出路一并给出
@@ -302,12 +289,6 @@ impl TransactionManager {
              resize is resumed with `resize-part` or `move`), or release it with `diskedit abandon`"
         } else if single_rollbackable {
             "roll it back with `diskedit undo`, or release it with `diskedit abandon`"
-        } else if unenumerable {
-            // 路径都拼不出来就谈不上"删掉它"：先修表让名字可枚举，或者确认盘上确实
-            // 没有按 GUID 命名的 checkpoint 后自行处置——不能许诺一条到不了的 abandon
-            "the target's partition table is unreadable, so a checkpoint under the legacy \
-             GUID-based name cannot even be located; repair the table (or verify that name \
-             yourself) before `diskedit abandon` can release it"
         } else {
             "it is already past the point of rolling back, so `diskedit abandon` is the only way to release it"
         };
@@ -541,11 +522,10 @@ impl TransactionManager {
         Self::refuse_if_active_at(src, src, what)
     }
 
-    /// 现场身份与 Disk GUID 取自不同节点时的入口。在线 PV 路径按**分区**节点枚举现场
-    /// （`from_block_keys` 在 self_key != disk_key 时同时列出盘级键与旧版按分区命名的
-    /// 历史候选，这是**唯一**会列出后者的入口：undo / abandon 都要求整盘目标，整盘身份
-    /// 的 self_key 与 disk_key 相同，旧版按分区键落的现场因此不在它们的候选里），而历史
-    /// GUID 命名的 checkpoint 只能从**整盘**的表读——分区节点的 0 偏移不是 GPT 头
+    /// 现场身份与 Disk GUID 取自不同节点时的入口。现场落点由**整盘**键派生
+    /// （见 `dev::TargetIdentity::from_block_keys`）：`/dev/sdb:2` 与
+    /// `/dev/sdb2` 因此共享同一处现场，而 Disk GUID 只能从**整盘**的表读——
+    /// 分区节点的 0 偏移不是 GPT 头
     pub(crate) fn refuse_if_active_at(
         identity: &FileSource,
         disk: &FileSource,

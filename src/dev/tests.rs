@@ -39,13 +39,12 @@ pub(crate) fn err_text<T>(r: io::Result<T>) -> String {
     }
 }
 
-/// "这是不是本工具的 journal"看的是 `DEJL` 前缀与可读版本，不是当前版本的完整 magic：
-/// 旧版本现场同样是本工具的文件，按当前版本比对会把它们当陌生内容留在原地
+/// "这是不是本工具的 journal"看的是 `DEJL` 前缀与可读版本。当前版本才可读，
+/// 故 `DEJL` 之后的版本字节不是当前值即不算
 #[test]
 pub(crate) fn own_header_covers_every_readable_version() {
-    assert!(Journal::is_own_header(b"DEJL\x04"));
-    assert!(Journal::is_own_header(b"DEJL\x05"));
-    assert!(!Journal::is_own_header(b"DEJL\x03"), "an unreadable version is not provably ours");
+    assert!(Journal::is_own_header(Journal::MAGIC));
+    assert!(!Journal::is_own_header(b"DEJL\x03"), "an unreadable version is not ours");
     assert!(!Journal::is_own_header(b"XXXX\x05"), "a foreign magic is not ours");
 }
 
@@ -96,7 +95,7 @@ pub(crate) fn candidate_classification_fails_closed_on_stat_errors() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let p = dir.join("j.journal");
-    std::fs::write(&p, b"DEJL\x04").unwrap();
+    std::fs::write(&p, b"DEJL").unwrap();
     std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o000)).unwrap();
     let got = classify_journal(&p);
     std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
@@ -228,46 +227,9 @@ pub(crate) fn journal_tail_truncation_is_recovered_but_corruption_is_not() {
     let _ = std::fs::remove_file(&p);
 }
 
-/// v4 现场仍可读、可追加：升级不把尚能回滚的旧 journal 变成只能 abandon。
-/// 采纳后的文件保持 v4 口径，新记录不会与既有记录混用两种 CRC 规则
+/// `len` 参与记录 CRC：长度字段被改小后按校验失败拒绝，不再被当成"载荷只写了一半"
 #[test]
-pub(crate) fn journal_v4_stays_readable_and_appendable() {
-    let p = journal_path("v4compat");
-    let ident = jid();
-    // 手工造一份 v4 文件：头布局相同，记录 CRC 只覆盖载荷
-    let rec = JournalRecord {
-        mutation: Mutation::PartitionTable,
-        recovery: RecoveryData::PreImage { off: 0, bytes: vec![0xAA; 16], after: vec![0xBB; 16] },
-    };
-    let payload = rec.encode();
-    let mut bytes = Journal::header(&ident, JournalFormat::V4);
-    assert_eq!(&bytes[..5], b"DEJL\x04");
-    bytes.extend_from_slice(&(payload.len() as u32).to_le_bytes());
-    bytes.extend_from_slice(&crate::table::crc32(&payload).to_le_bytes());
-    bytes.extend_from_slice(&payload);
-    std::fs::write(&p, &bytes).unwrap();
-
-    assert!(matches!(
-        Journal::read_entries(&p).unwrap(),
-        JournalRead::Complete(v) if v.len() == 1
-    ));
-    {
-        let mut j = Journal::open(&p, ident).unwrap();
-        j.record(4096, &[0xCC; 16], &[0xDD; 16]).unwrap();
-    }
-    let bytes = std::fs::read(&p).unwrap();
-    assert_eq!(&bytes[..5], b"DEJL\x04", "an adopted v4 journal must keep its format");
-    assert!(matches!(
-        Journal::read_entries(&p).unwrap(),
-        JournalRead::Complete(v) if v.len() == 2
-    ));
-
-    let _ = std::fs::remove_file(&p);
-}
-
-/// v5 的 len 参与 CRC：长度字段被改小后按校验失败拒绝，不再被当成"载荷只写了一半"
-#[test]
-pub(crate) fn journal_v5_crc_covers_the_length_field() {
+pub(crate) fn journal_crc_covers_the_length_field() {
     let p = journal_path("v5len");
     {
         let mut j = Journal::open(&p, jid()).unwrap();
@@ -285,11 +247,11 @@ pub(crate) fn journal_v5_crc_covers_the_length_field() {
     let _ = std::fs::remove_file(&p);
 }
 
-/// v6 头把身份种类写在身份段最后一个字节：三种可落盘种类原样读回。这一字节是"旧格式没有
-/// 身份"与"录制时取不到身份"的唯一分界，故未知值一律按头损坏拒绝，不降级成 `Legacy`——
-/// 降级会把缺身份的块设备现场当成旧镜像现场放过
+/// 头把身份种类写在身份段最后一个字节：三种可落盘种类原样读回。这一字节是"录制时取不到
+/// 身份"的唯一分界，故未知值一律按头损坏拒绝，不降级成某个"没有身份"的种类——
+/// 降级会把缺身份的块设备现场当成别的载体放过
 #[test]
-pub(crate) fn journal_v6_records_identity_kind_and_refuses_an_unknown_one() {
+pub(crate) fn journal_records_identity_kind_and_refuses_an_unknown_one() {
     let with = |proof| LiveScene {
         fp: TargetFingerprint { dev: 7, ino: 42, size: 1 << 20, id: 0x1122_3344_5566_7788 },
         map: Some((4096, 8192)),
@@ -300,26 +262,18 @@ pub(crate) fn journal_v6_records_identity_kind_and_refuses_an_unknown_one() {
         (LiveProof::Inode, 2),
         (LiveProof::Unavailable, 3),
     ] {
-        let bytes = Journal::header(&with(proof), JournalFormat::V6);
-        assert_eq!(bytes[Journal::MAGIC.len() + IDENTITY_LEN_V6 - 1], tag);
-        let (back, format) = Journal::parse_header(&bytes).unwrap();
-        assert!(format == JournalFormat::V6);
+        let bytes = Journal::header(&with(proof));
+        assert_eq!(bytes[Journal::MAGIC.len() + IDENTITY_LEN - 1], tag);
+        let back = Journal::parse_header(&bytes).unwrap();
         assert_eq!(
             (back.fp, back.map, back.proof),
             (with(proof).fp, with(proof).map, IdentityProof::from(proof))
         );
     }
 
-    // 旧版本格式里没有设备 ID 与种类这两个字段：id 读作零、种类读作 `Legacy`
-    let legacy = with(LiveProof::Inode);
-    let (back, format) = Journal::parse_header(&Journal::header(&legacy, JournalFormat::V5)).unwrap();
-    assert!(format == JournalFormat::V5);
-    assert_eq!(back.proof, IdentityProof::Legacy);
-    assert_eq!(back.fp.id, 0);
-
-    // 0 留给"格式里没有这一字节"的旧版本：v6 头里出现 0 即无法判读
-    let mut bytes = Journal::header(&with(LiveProof::Inode), JournalFormat::V6);
-    bytes[Journal::MAGIC.len() + IDENTITY_LEN_V6 - 1] = 0;
+    // 0 不是任何合法种类：头 CRC 通过也不得降级成别的种类
+    let mut bytes = Journal::header(&with(LiveProof::Inode));
+    bytes[Journal::MAGIC.len() + IDENTITY_LEN - 1] = 0;
     let crc_at = bytes.len() - 4;
     let crc = crate::table::crc32(&bytes[..crc_at]);
     bytes[crc_at..].copy_from_slice(&crc.to_le_bytes());
@@ -368,8 +322,8 @@ pub(crate) fn journal_format_boundary_refuses_older_versions_and_keeps_them_inta
     assert_eq!(std::fs::read(&p).unwrap(), v3, "the adoption path must leave the older version untouched");
     let _ = std::fs::remove_file(&p);
 
-    // v4：写出去的头 + 身份，读回来逐字段一致
-    let q = journal_path("format_v4");
+    // 写出去的头 + 身份，读回来逐字段一致
+    let q = journal_path("format_roundtrip");
     let mine = LiveScene { fp: TargetFingerprint { dev: 7, ino: 42, size: 1 << 20, id: 0 }, map: Some((4096, 8192)), proof: LiveProof::Inode };
     {
         let mut j = Journal::open(&q, mine).unwrap();
@@ -392,11 +346,11 @@ pub(crate) fn journal_format_boundary_refuses_older_versions_and_keeps_them_inta
     let _ = std::fs::remove_file(&q);
 }
 
-/// v4 的"头不完整 / 头被改坏 / 记录被改坏"三种都拒绝；**只有 0 字节**的残骸按
+/// "头不完整 / 头被改坏 / 记录被改坏"三种都拒绝；**只有 0 字节**的残骸按
 /// "零次写入"处理（补头继续用）。1..HEADER_LEN-1 字节一律拒绝：那既可能是初始化没写完，
 /// 也可能是原 journal 被外部截断（记录已丢），无法证明是前者，就不当后者不存在
 #[test]
-pub(crate) fn journal_v4_truncated_or_damaged_is_refused_and_only_a_zero_byte_remnant_is_rewritten() {
+pub(crate) fn journal_truncated_or_damaged_is_refused_and_only_a_zero_byte_remnant_is_rewritten() {
     let p = journal_path("format_bad");
     let id = LiveScene { fp: TargetFingerprint { dev: 7, ino: 42, size: 1 << 20, id: 0 }, map: None, proof: LiveProof::Inode };
     {
@@ -602,8 +556,6 @@ pub(crate) fn artifact_names_are_pinned_as_documented() {
     assert_eq!(LOCK_SUFFIX, format!("{ns}lock"));
     assert_eq!(LOG_SUFFIX, format!("{ns}log"));
     assert_eq!(CKPT_TMP_PREFIX, format!("{ns}ckpt.tmp."));
-    // 旧版 GUID 命名的 checkpoint 有意不带命名空间
-    assert_eq!(LEGACY_GUID_CKPT_SUFFIX, ".ckpt");
 
     // 镜像：四类伴随文件都是目标路径的同目录兄弟
     let img = PathBuf::from("/tmp/x.img");
@@ -667,7 +619,7 @@ pub(crate) fn a_torn_tail_after_the_last_record_is_truncated() {
     let _ = std::fs::remove_file(&p);
 }
 
-/// 设备 ID 摘要用标准 FNV-1a 64 向量钉住：换实现或换常量都会让旧现场里的 ID 与同一块盘
+/// 设备 ID 摘要用标准 FNV-1a 64 向量钉住：换实现或换常量都会让已落盘现场里的 ID 与同一块盘
 /// 新算出的值不再相等，恢复现场随之被误判为"换了盘"
 #[cfg(target_os = "linux")]
 #[test]
@@ -677,38 +629,21 @@ pub(crate) fn fnv1a64_matches_the_reference_vectors() {
     assert_eq!(fnv1a64(b"foobar"), 0x8594_4171_f739_67e8);
 }
 
-/// 非 loop 块设备的身份是**盘级**的：journal / checkpoint / lock 按 disk_key 落点，
-/// 旧版按分区落的 self_key 落点降为历史候选（整盘目标上两个键重合，不产生重复候选）。
+/// 非 loop 块设备的身份是**盘级**的：journal / checkpoint / lock 按 disk_key 落点。
 /// 断言用 state_dir() 自身拼期望值——测试不改环境变量，进程内并行测试共享环境
 #[test]
 pub(crate) fn block_identity_keys_on_the_whole_disk() {
-    let id = TargetIdentity::from_block_keys(
-        Path::new("/dev/sdb1"),
-        "sdb-1234-p1".to_string(),
-        "sdb-1234".to_string(),
-    );
+    let id = TargetIdentity::from_block_keys(Path::new("/dev/sdb1"), "sdb-1234".to_string());
     let disk_tok = key_token("sdb-1234");
-    let part_tok = key_token("sdb-1234-p1");
     assert_eq!(id.journal[0], state_dir().join(format!("{disk_tok}{JOURNAL_SUFFIX}")));
-    assert_eq!(id.journal[1], state_dir().join(format!("{part_tok}{JOURNAL_SUFFIX}")));
-    assert_eq!(id.journal[2], state_dir().join(format!("sdb1{JOURNAL_SUFFIX}")));
+    assert_eq!(id.journal.len(), 1);
     assert_eq!(id.checkpoint[0], state_dir().join(format!("{disk_tok}{CHECKPOINT_SUFFIX}")));
-    assert_eq!(id.checkpoint[1], state_dir().join(format!("{part_tok}{CHECKPOINT_SUFFIX}")));
+    assert_eq!(id.checkpoint.len(), 1);
     assert_eq!(id.lock_path(), state_dir().join(format!("{disk_tok}{LOCK_SUFFIX}")));
-    assert!(id.has_block_legacy_naming());
-
-    // 整盘目标：self_key 与 disk_key 重合，不重复列同一落点
-    let id = TargetIdentity::from_block_keys(
-        Path::new("/dev/sdb"),
-        "sdb-1234".to_string(),
-        "sdb-1234".to_string(),
-    );
-    assert_eq!(id.journal.len(), 2, "whole-disk target has no partition-level legacy entry");
-    assert_eq!(id.journal[1], state_dir().join(format!("sdb{JOURNAL_SUFFIX}")));
 }
 
 /// loop 设备的身份绑定 backing **对象**：重新打开 backing、用已打开句柄解析名字，现场落
-/// 该名字的兄弟文件（首候选），旧版 state_dir 落点降为历史候选，GUID 补列开启。
+/// 该名字的兄弟文件与其 state_dir 落点。
 /// backing 消失后身份不再可解析（名字已经不是对象），此处拒绝而非把现场挂到同名路径旁
 ///
 /// 比对的一侧来自内核给这个 loop 记下的 backing 对象，所以这里必须有一个真绑定：
@@ -742,24 +677,19 @@ pub(crate) fn loop_identity_converges_to_the_backing_file() {
     };
     let dev = PathBuf::from(String::from_utf8_lossy(&out.stdout).trim());
     let _cleanup = Bound { dev: dev.clone(), dir: dir.clone() };
-    let name = dev.file_name().unwrap().to_string_lossy().into_owned();
 
     let id = TargetIdentity::loop_backed(&dev, backing.clone()).expect("a bound backing file resolves");
-    assert_eq!(id.journal[0], suffix_path(&backing, JOURNAL_SUFFIX));
+    assert_eq!(id.journal, vec![suffix_path(&backing, JOURNAL_SUFFIX)]);
+    assert_eq!(id.checkpoint, vec![suffix_path(&backing, CHECKPOINT_SUFFIX)]);
     assert_eq!(id.lock_path(), suffix_path(&backing, LOCK_SUFFIX));
-    let tok = key_token(&backing.to_string_lossy());
-    assert_eq!(id.journal[1], state_dir().join(format!("{tok}{JOURNAL_SUFFIX}")));
-    assert_eq!(id.checkpoint[1], state_dir().join(format!("{tok}{CHECKPOINT_SUFFIX}")));
-    assert_eq!(id.journal[2], state_dir().join(format!("{name}{JOURNAL_SUFFIX}")));
-    assert!(id.has_block_legacy_naming());
 
     // backing 已删：身份不再可解析，不退到 sysfs 字符串
     std::fs::remove_file(&backing).unwrap();
     assert!(TargetIdentity::loop_backed(&dev, backing.clone()).is_err());
 }
 
-/// 镜像身份以 realpath 为主体：经符号链接打开与直接打开收敛到同一现场，字面路径
-/// 的兄弟文件降为历史候选；日志命名沿用字面路径，不因 canonicalize 打断连续性
+/// 镜像身份以 realpath 为主体：经符号链接打开与直接打开收敛到同一现场；
+/// 日志命名沿用字面路径，不因 canonicalize 打断连续性
 #[cfg(target_os = "linux")]
 #[test]
 pub(crate) fn image_identity_prefers_the_realpath() {
@@ -772,9 +702,9 @@ pub(crate) fn image_identity_prefers_the_realpath() {
 
     let via_link = TargetIdentity::resolve_image(&link);
     let direct = TargetIdentity::resolve_image(&real);
-    assert_eq!(via_link.journal[0], direct.journal[0], "both spellings must share one journal");
+    assert_eq!(via_link.journal, direct.journal, "both spellings must share one journal");
+    assert_eq!(via_link.checkpoint, direct.checkpoint);
     assert_eq!(via_link.lock_path(), direct.lock_path());
-    assert_eq!(via_link.journal[1], suffix_path(&link, JOURNAL_SUFFIX), "literal path stays a legacy candidate");
     assert_eq!(via_link.log_path(None), suffix_path(&link, LOG_SUFFIX));
 
     let _ = std::fs::remove_dir_all(&dir);

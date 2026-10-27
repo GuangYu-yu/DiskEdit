@@ -561,10 +561,10 @@ pub(crate) fn foreign_resize_ckpt_refuses_relocation_plans() {
     let _ = std::fs::remove_file(&path);
 }
 
-/// v6 checkpoint 把身份种类写在 CRC 之前：三种可落盘种类原样回读；v5 现场没有设备 ID
-/// 与种类两个字段，读作 id 0 + `Legacy`；未知种类按损坏拒绝，不退回旧口径
+/// checkpoint 把身份种类写在 CRC 之前：三种可落盘种类原样回读；
+/// 未知种类按损坏拒绝
 #[test]
-pub(crate) fn checkpoint_records_identity_kind_and_reads_v5_as_legacy() {
+pub(crate) fn checkpoint_records_identity_kind() {
     use crate::dev::{IdentityProof, LiveProof};
     let id = 0x1122_3344_5566_7788u64;
     let mk = |proof: LiveProof| Checkpoint {
@@ -582,29 +582,15 @@ pub(crate) fn checkpoint_records_identity_kind_and_reads_v5_as_legacy() {
         map: None,
     };
     for p in [LiveProof::DeviceId, LiveProof::Inode, LiveProof::Unavailable] {
-        let back = Checkpoint::deserialize(&mk(p).serialize(), &lim(128)).expect("a v6 checkpoint must round-trip");
+        let back = Checkpoint::deserialize(&mk(p).serialize(), &lim(128)).expect("a checkpoint must round-trip");
         assert_eq!(back.proof, IdentityProof::Live(p));
         assert_eq!(back.fp.id, id, "the device id must survive the round-trip");
     }
 
-    // 布局（count = 1）：fp.id @118、映射标志 @126、身份种类 @127
-    const ID: usize = 118;
+    // 布局（count = 1）：身份种类 @127
     const PROOF: usize = 127;
-    let v6 = mk(LiveProof::DeviceId).serialize();
-    let payload = &v6[..v6.len() - 4];
-    let mut v5 = Vec::with_capacity(payload.len() - 9 + 4);
-    v5.extend_from_slice(&payload[..ID]);
-    v5.extend_from_slice(&payload[ID + 8..PROOF]);
-    v5.extend_from_slice(&payload[PROOF + 1..]);
-    v5[8..12].copy_from_slice(&5u32.to_le_bytes());
-    let crc = table::crc32(&v5);
-    v5.extend_from_slice(&crc.to_le_bytes());
-    let back = Checkpoint::deserialize(&v5, &lim(128)).expect("a v5 checkpoint must stay readable");
-    assert_eq!(back.proof, IdentityProof::Legacy);
-    assert_eq!(back.fp.id, 0, "v5 carries no device id");
-
     let mut b = mk(LiveProof::Inode).serialize();
-    b[PROOF] = 0; // 0 留给"格式里没有这一字节"的旧版本
+    b[PROOF] = 0; // 0 不是任何合法种类
     let crc_off = b.len() - 4;
     let crc = table::crc32(&b[..crc_off]);
     b[crc_off..].copy_from_slice(&crc.to_le_bytes());
@@ -612,9 +598,9 @@ pub(crate) fn checkpoint_records_identity_kind_and_reads_v5_as_legacy() {
     assert_eq!(e.kind(), io::ErrorKind::InvalidData, "{e}");
 }
 
-/// RsCheckpoint 同一条边界：两族 decoder 各自解析身份段，旧现场的兼容口径不能只落在一族上
+/// RsCheckpoint 同一条边界：两族 decoder 各自解析身份段
 #[test]
-pub(crate) fn resize_checkpoint_records_identity_kind_and_reads_v5_as_legacy() {
+pub(crate) fn resize_checkpoint_records_identity_kind() {
     use crate::dev::{IdentityProof, LiveProof};
     let id = 0x1122_3344_5566_7788u64;
     let mk = |proof: LiveProof| RsCheckpoint {
@@ -627,28 +613,14 @@ pub(crate) fn resize_checkpoint_records_identity_kind_and_reads_v5_as_legacy() {
         fstype: Some(FsKind::Ext),
     };
     for p in [LiveProof::DeviceId, LiveProof::Inode, LiveProof::Unavailable] {
-        let back = RsCheckpoint::deserialize(&mk(p).serialize(), &lim(128)).expect("a v6 checkpoint must round-trip");
+        let back = RsCheckpoint::deserialize(&mk(p).serialize(), &lim(128)).expect("a checkpoint must round-trip");
         assert_eq!(back.proof, IdentityProof::Live(p));
         assert_eq!(back.fp.id, id, "the device id must survive the round-trip");
         assert_eq!(back.fstype, Some(FsKind::Ext));
     }
 
-    // 布局：fp.id @105、映射标志 @113、文件系统类型 @114、身份种类 @115
-    const ID: usize = 105;
+    // 布局：身份种类 @115
     const PROOF: usize = 115;
-    let v6 = mk(LiveProof::Unavailable).serialize();
-    let payload = &v6[..v6.len() - 4];
-    let mut v5 = Vec::with_capacity(payload.len() - 9 + 4);
-    v5.extend_from_slice(&payload[..ID]);
-    v5.extend_from_slice(&payload[ID + 8..PROOF]);
-    v5.extend_from_slice(&payload[PROOF + 1..]);
-    v5[8..12].copy_from_slice(&5u32.to_le_bytes());
-    let crc = table::crc32(&v5);
-    v5.extend_from_slice(&crc.to_le_bytes());
-    let back = RsCheckpoint::deserialize(&v5, &lim(128)).expect("a v5 checkpoint must stay readable");
-    assert_eq!(back.proof, IdentityProof::Legacy);
-    assert_eq!(back.fp.id, 0, "v5 carries no device id");
-
     let mut b = mk(LiveProof::Inode).serialize();
     b[PROOF] = 0;
     let crc_off = b.len() - 4;
