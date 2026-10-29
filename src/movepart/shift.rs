@@ -585,8 +585,8 @@ pub(crate) fn execute_apply(
             // 只能靠收紧 checkpoint 频率关死），数据与边界同一步落盘
             if overlap {
                 src.sync_data()?; // 数据 chunk 用 sync_data；表结构提交用 sync_all
-                atomic_write_ckpt(ckpt_path, &ckpt.serialize())?;
                 fault_after_data_sync(i as u64 + 1);
+                atomic_write_ckpt(ckpt_path, &ckpt.serialize())?;
                 fault_chunk(i as u64 + 1);
                 continue;
             }
@@ -596,8 +596,8 @@ pub(crate) fn execute_apply(
             if pending_chunks >= ckpt_batch || i as u64 + 1 == total_chunks {
                 let t0 = std::time::Instant::now();
                 src.sync_data()?;
-                atomic_write_ckpt(ckpt_path, &ckpt.serialize())?;
                 fault_after_data_sync(i as u64 + 1);
+                atomic_write_ckpt(ckpt_path, &ckpt.serialize())?;
                 pending_chunks = 0;
                 ckpt_batch = next_ckpt_batch(ckpt_batch, t0.elapsed(), entry_chunk);
             }
