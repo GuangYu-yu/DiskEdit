@@ -42,10 +42,10 @@ enum PickedJournal {
 }
 
 /// 在候选落点中挑出唯一可读的 journal；没有可读记录时区分"空壳"与"什么都没有"。
-/// 候选列表按"本次命名在前、历史命名在后"给出，缺席是常态而非故障：把它记成错误会让
-/// 真正的损伤原因（另一份文件存在但读不出来）被 `No such file or directory` 盖住。
-/// 损坏候选**记录后继续**看后面的候选（与 read_checkpoint 同一口径）：一份损坏的历史
-/// 命名不该遮住一份完好的本次命名；全部候选都不可读时才把死因如实带回。
+/// 每族只有一个落点，缺席因此是常态而非故障：把它记成错误会让真正的损伤原因
+/// （那份文件存在但读不出来）被 `No such file or directory` 盖住。
+/// 损坏候选**记录后继续**看后面的候选（与 read_checkpoint 同一口径）：一份损坏的候选
+/// 不该遮住一份完好的候选；全部候选都不可读时才把死因如实带回。
 ///
 /// 分类只走 [`classify_journal`]：写闸口、`abandon` 与这里对"什么算现场"因此不会分叉。
 /// 有损坏候选时不把"只剩空壳"报成干净——那份损坏的可能正是丢了记录的真现场
@@ -91,9 +91,8 @@ fn checkpoint_present(p: &std::path::Path) -> bool {
 /// 目标上还留着的 checkpoint，拼成一句可报的清单；没有则 None。
 /// 判据与写闸口同源（同组候选、非普通文件不算、只有 NotFound 算不在）
 fn stale_checkpoint_note(src: &FileSource) -> Option<String> {
-    let leftover = src.identity.checkpoint_candidates(Some(src));
+    let leftover = src.identity.checkpoint_candidates();
     let stale: Vec<String> = leftover
-        .paths
         .iter()
         .filter(|p| checkpoint_present(p))
         .map(|p| p.display().to_string())
@@ -575,11 +574,11 @@ pub(crate) fn cmd_undo(a: &Args) -> u8 {
         //    要求 ckpt 已存在、OwnRelocation 的归属判据同样要求 ckpt 已存在），因此与某份
         //    journal 并存的 ckpt 必属同一个作业；
         // ② 此处删的候选集与 `active_recovery_records` 枚举现场用的是同一组（journal_candidates
-        //    + checkpoint_candidates(Some(src))），既不会漏删、也不会删到别处的落点。
+        //    + checkpoint_candidates()），既不会漏删、也不会删到别处的落点。
         // 新增绕过 begin_or_resume 的 ckpt 写入点，或新增接受非空 active 的入口，即推翻本结论
-        let candidates = src.identity.checkpoint_candidates(Some(&src));
-        for ckpt in candidates.paths {
-            if !crate::dev::remove_recovery_file(&ckpt) {
+        let candidates = src.identity.checkpoint_candidates();
+        for ckpt in candidates {
+            if !crate::dev::remove_recovery_file(ckpt) {
                 cleared.leftovers.push(ckpt.display().to_string());
             }
         }

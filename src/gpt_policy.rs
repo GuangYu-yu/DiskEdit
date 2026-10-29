@@ -130,32 +130,33 @@ pub fn classify_repair(g: &RawGpt, file_last_lba: u64) -> io::Result<RepairActio
 /// `None` 不写盘（调用方已在决策期确认无需修复）。
 /// `ss` 是该表自身的逻辑块大小：保护 MBR 的 SizeInLBA 以它为单位，不能取容器口径
 pub(crate) fn apply_repair(src: &mut WriteSource, action: &RepairAction, ss: u64) -> Result<(), Fail> {
-    match action {
-        RepairAction::None => return Ok(()),
-        // RepairProtectiveMbr：无需写 GPT（由函数尾部的 ensure_protective_mbr 统一重写，即首次写盘）
-        RepairAction::RepairProtectiveMbr => {}
-        RepairAction::RelocateBackup { .. } | RepairAction::RelocateAndRepair { .. } => {
-            // 执行的是判定期那个动作：new_last_usable 已经算好并随动作携带，重读只用来
-            // 确认动作仍成立。两步之间表或容器可能被外部改动——重新分类的结果与动作
-            // 不一致即拒绝（此刻尚未写盘），不拿重读结果另算一个上界
-            let g = table::load_gpt(src)
-                .map_err(|e| Fail::infra_io(table::into_io_error(e)))?
-                .ok_or_else(|| Fail::infra("GPT vanished before repair"))?;
-            let file_last_lba = table::container_last_lba(src, g.ss);
-            let now = classify_repair(&g, file_last_lba).map_err(|e| Fail::infra(e.to_string()))?;
-            if now != *action {
-                return Err(Fail::infra(
-                    "GPT changed between validation and repair — re-run the command",
-                ));
-            }
-            let Some(new_last_usable) = action.new_last_usable() else {
-                return Err(Fail::infra("repair action is missing its last_usable value"));
-            };
+    if matches!(action, RepairAction::None) {
+        return Ok(());
+    }
+    // 首次写盘之前统一重读并重新分类：两条臂执行的都是判定期那个动作，
+    // 两步之间表或容器被外部改动即拒绝，此刻一个字节都没写
+    let g = table::load_gpt(src)
+        .map_err(|e| Fail::infra_io(table::into_io_error(e)))?
+        .ok_or_else(|| Fail::infra("GPT vanished before repair"))?;
+    let file_last_lba = table::container_last_lba(src, g.ss);
+    let now = classify_repair(&g, file_last_lba).map_err(|e| Fail::infra(e.to_string()))?;
+    if now != *action {
+        return Err(Fail::infra(
+            "GPT changed between validation and repair — re-run the command",
+        ));
+    }
+    match action.new_last_usable() {
+        Some(new_last_usable) => {
             // ValidatedGeometry::new 复核条目数、覆盖关系与备份元数据上界
             let vg = ValidatedGeometry::new(&g, file_last_lba, Some(new_last_usable))
                 .map_err(|e| Fail::infra(e.to_string()))?;
+            // 写前复核以 Refused 报：全表写入尚未开始，"盘可能已改变"不成立
+            refuse_if_table_changed(src, &vg)?;
             vg.commit(src).map_err(|e| Fail::failed(e.to_string()))?;
         }
+        // RepairProtectiveMbr 不需要写 GPT，由下方 ensure_protective_mbr 统一重写
+        None if matches!(action, RepairAction::RepairProtectiveMbr) => {}
+        None => return Err(Fail::infra("repair action is missing its last_usable value")),
     }
     table::ensure_protective_mbr(src, ss)?;
     let g2 = table::load_gpt(src).map_err(|e| Fail::failed(table::into_io_error(e).to_string()))?.ok_or_else(|| Fail::failed("re-read after repair failed"))?;

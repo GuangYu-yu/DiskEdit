@@ -299,11 +299,11 @@ pub(crate) fn journal_is_created_lazily() {
     let _ = std::fs::remove_file(&p);
 }
 
-/// 换格式后的头边界：旧版本的 journal 必须报"版本不支持"（不是损坏），且拒绝时**一字不动**；
+/// 头边界：不认识的版本必须报"版本不支持"（不是损坏），且拒绝时**一字不动**；
 /// 当前版本的头要能被自己写出去、读回来，身份逐字段一致。
-/// v3 的字节取自本机一份真实的 v3 journal（magic `DEJL\x03` + 一条 RelocatePartition 记录）
+/// 样本用一份 v3 字节（magic `DEJL\x03` + 一条 RelocatePartition 记录），只作陌生载荷
 #[test]
-pub(crate) fn journal_format_boundary_refuses_older_versions_and_keeps_them_intact() {
+pub(crate) fn journal_format_boundary_refuses_unknown_versions_and_keeps_them_intact() {
     let p = journal_path("format_v3");
     let mut v3 = b"DEJL\x03".to_vec();
     v3.extend_from_slice(&[
@@ -313,13 +313,13 @@ pub(crate) fn journal_format_boundary_refuses_older_versions_and_keeps_them_inta
     assert_eq!(v3.len(), 35, "the fixture must be the real v3 byte sequence");
     std::fs::write(&p, &v3).unwrap();
     let e = err_text(Journal::read_entries(&p));
-    assert!(e.contains("v3") && e.contains("not supported"), "an older version must be reported as such: {e}");
-    assert!(!e.contains("CRC"), "an older version must not be reported as record corruption: {e}");
-    assert_eq!(std::fs::read(&p).unwrap(), v3, "refusing an older version must leave the file untouched");
-    // 采纳路径（写命令打开目标时）同样拒绝，同样不动文件——旧现场只能由 abandon 释放
+    assert!(e.contains("v3") && e.contains("not supported"), "an unknown version must be reported as such: {e}");
+    assert!(!e.contains("CRC"), "an unknown version must not be reported as record corruption: {e}");
+    assert_eq!(std::fs::read(&p).unwrap(), v3, "refusing an unknown version must leave the file untouched");
+    // 采纳路径（写命令打开目标时）同样拒绝，同样不动文件——那份现场只能由 abandon 释放
     let e = err_text(Journal::open(&p, jid()));
     assert!(e.contains("v3"), "{e}");
-    assert_eq!(std::fs::read(&p).unwrap(), v3, "the adoption path must leave the older version untouched");
+    assert_eq!(std::fs::read(&p).unwrap(), v3, "the adoption path must leave the unknown version untouched");
     let _ = std::fs::remove_file(&p);
 
     // 写出去的头 + 身份，读回来逐字段一致
@@ -561,7 +561,7 @@ pub(crate) fn artifact_names_are_pinned_as_documented() {
     let img = PathBuf::from("/tmp/x.img");
     let id = TargetIdentity::resolve_image(&img);
     assert_eq!(id.journal_candidates()[0], suffix_path(&img, JOURNAL_SUFFIX));
-    assert_eq!(id.checkpoint_candidates(None).paths[0], suffix_path(&img, CHECKPOINT_SUFFIX));
+    assert_eq!(id.checkpoint_candidates()[0], suffix_path(&img, CHECKPOINT_SUFFIX));
     assert_eq!(id.lock_path(), suffix_path(&img, LOCK_SUFFIX));
     assert_eq!(id.log_path(None), suffix_path(&img, LOG_SUFFIX));
 }
@@ -720,7 +720,7 @@ pub(crate) fn stale_ckpt_temps_are_swept_on_open() {
     std::fs::write(&img, b"x").unwrap();
     // Linux 上身份取 realpath，落点目录未必是上面那个字面目录：以身份为准
     let id = TargetIdentity::resolve_image(&img);
-    let ckpt = id.checkpoint_candidates(None).paths[0].clone();
+    let ckpt = id.checkpoint_candidates()[0].clone();
     let dir = ckpt.parent().unwrap().to_path_buf();
 
     let prefix = ckpt_temp_prefix(&ckpt);

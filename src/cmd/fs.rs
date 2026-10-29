@@ -199,10 +199,12 @@ pub(crate) fn cmd_resizefs(a: &Args) -> u8 {
             Ok(fsops::Growable::NoFilesystem(Some(FsKind::Lvm2Pv))) => bail_fail(Fail::refused(format!(
                 "nothing to resize on partition #{part} — an LVM PV is not a filesystem (its space takes effect through `resize --grow-lv`)"
             ))),
-            // 类型未识别既可能是空区域，也可能是认不出的 FS：把识别结果原样带出，
-            // 不替它下"里面没有文件系统"的结论
+            // 类型未识别既可能是空区域，也可能是认不出的 FS，或可供识别的字节不足：
+            // 把识别结果原样带出，不替它下"里面没有文件系统"的结论
             Ok(fsops::Growable::NoFilesystem(f)) => bail_fail(Fail::refused(format!(
-                "nothing to resize on partition #{part} — identified as `{}`: an empty region or a filesystem this tool cannot grow (nothing was resized)",
+                "nothing to resize on partition #{part} — no growable filesystem was identified (identified as `{}`; \
+                 the region may be empty, hold a format this tool does not recognise, or be too short to carry a \
+                 signature)",
                 fsid::fs_name(f)
             ))),
             Err(e) => bail_fail(Fail::from(e)),

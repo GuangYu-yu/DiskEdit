@@ -8,18 +8,19 @@ use super::*;
 /// 结果统一为 Outcome（退出码只在 outcome 模块映射）：10=拒绝（未动盘）/
 /// 20=布局已写但后置条件或内核视图未跟上 / 30=执行失败
 pub fn resize_online(mountpoint: &Path, size: Option<u64>) -> Outcome {
-    flow::resize_online(mountpoint, move |_| Ok(size), false)
+    flow::resize_online(mountpoint, move |_| Ok(size), flow::TablePolicy::FilesystemOnly)
 }
 
 /// 在线 resize（resize 命令用）：目标长度由 `decide` 在**持有目标锁之后**、以只读打开的
 /// 整盘为输入解析——`+N`/`+N%` 锚定"当前尺寸"、`grow` 锚定右侧空闲，锁前快照在窗口内可能已作废。
-/// `Ok(None)` = 不指定绝对尺寸（仅把 FS 扩满现分区）；`Ok(Some(b))` = 绝对新尺寸；
+/// `Ok(None)` = 不指定绝对尺寸（仅把 FS 扩满现分区）；`Ok(Some(b))` = 绝对新尺寸，
+/// 等于现分区长度时不写入任何东西（与离线路径的"尺寸未变"同一判据）；
 /// 大于现分区时允许先扩分区表（本入口的职责包含分区几何）
 pub fn resize_online_planned(
     mountpoint: &Path,
     decide: impl FnOnce(&FileSource) -> Result<Option<u64>, Fail>,
 ) -> Outcome {
-    flow::resize_online(mountpoint, decide, true)
+    flow::resize_online(mountpoint, decide, flow::TablePolicy::WithTable)
 }
 
 /// PV 在线扩容（仅分区层，无 FS 层）：sfdisk 写表 → partx 同步（BLKPG 兜底）→

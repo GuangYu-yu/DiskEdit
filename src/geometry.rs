@@ -141,7 +141,7 @@ impl ValidatedGeometry {
         self.header.first_usable_lba
     }
 
-    /// 修复后将生效的可用区上界。任何调用点都不得再自行推导（历史问题：多处各算一次）
+    /// 修复后将生效的可用区上界。唯一来源：调用点只从这里取，不自行推导
     pub fn last_usable_lba(&self) -> u64 {
         self.header.last_usable_lba
     }

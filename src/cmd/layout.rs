@@ -31,7 +31,11 @@ pub(crate) const HELP_RESIZE_PART: &str = r#"diskedit resize-part <TARGET>:N --s
   relocation. --grow-to-end pins end at last_usable_lba (fill semantics);
   --align mib|cyl|none and --chunk-size MiB control placement and copy
   granularity. A grow also resizes the filesystem inside; one that cannot be
-  grown here (unidentified, or not wired to a tool) needs an explicit --no-fs."#;
+  grown here (unidentified, or not wired to a tool) needs an explicit --no-fs.
+
+  CONFIRMATION: none beyond the explicit LBAs. A start/end says where to act,
+  not that the bytes there are expendable — no equivalent of resize's
+  --allow-move --yes; check the range yourself."#;
 
 pub(crate) const HELP_MOVE: &str = r#"diskedit move <TARGET>:N --start <LBA|end>
 
@@ -42,7 +46,11 @@ pub(crate) const HELP_MOVE: &str = r#"diskedit move <TARGET>:N --start <LBA|end>
     end       tail-pack to the last possible position
 
   --no-fs skips the filesystem step for the moved partition (a swap that
-  the relocation rebuilds still runs — it belongs to the relocation)."#;
+  the relocation rebuilds still runs — it belongs to the relocation).
+
+  CONFIRMATION: none beyond the explicit LBA. The destination range is
+  overwritten as-is — no equivalent of resize's --allow-move --yes; check
+  that it holds nothing you need before running."#;
 
 pub(crate) const HELP_COPY: &str = r#"diskedit copy <TARGET>:N --start <LBA|end> [--name S] [--clone]
 
@@ -54,7 +62,11 @@ pub(crate) const HELP_COPY: &str = r#"diskedit copy <TARGET>:N --start <LBA|end>
 
   PARTUUID: the copy gets a freshly generated v4 GUID, so the two
   partitions stay distinguishable. --clone keeps the source PARTUUID
-  instead — mount-by-PARTUUID then resolves to either partition."#;
+  instead — mount-by-PARTUUID then resolves to either partition.
+
+  CONFIRMATION: none beyond the explicit LBA. The destination range is
+  overwritten as-is — no equivalent of resize's --allow-move --yes; check
+  that it holds nothing you need before running."#;
 
 pub(crate) const HELP_CREATE: &str = r#"diskedit create <TARGET> [--size SIZE] [--name S] [--fs F]
 
