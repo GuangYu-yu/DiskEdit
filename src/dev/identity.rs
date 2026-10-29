@@ -728,16 +728,10 @@ impl TargetIdentity {
         state_dir().join(format!("{name}{LOG_SUFFIX}"))
     }
 
-    /// checkpoint 的候选落点：镜像放在目标旁，块设备落在 `state_dir()` 下。
-    /// `disk` 保留在签名里仅为调用方形状一致，落点不依赖盘上内容
-    pub(crate) fn checkpoint_candidates(&self, _disk: Option<&FileSource>) -> CheckpointCandidates {
-        CheckpointCandidates { paths: self.checkpoint.clone() }
+    /// checkpoint 的候选落点：镜像放在目标旁，块设备落在 `state_dir()` 下
+    pub(crate) fn checkpoint_candidates(&self) -> &[PathBuf] {
+        &self.checkpoint
     }
-}
-
-/// checkpoint 的候选落点
-pub(crate) struct CheckpointCandidates {
-    pub(crate) paths: Vec<PathBuf>,
 }
 
 /// 尽力创建目录：失败不在此处报错——真正的失败会在随后打开文件时以更具体的
@@ -782,11 +776,11 @@ pub(crate) const CKPT_TMP_STALE_AFTER: std::time::Duration = std::time::Duration
 #[allow(clippy::let_underscore_must_use)] // 有意忽略：删不掉就留到下次打开再清
 pub(crate) fn sweep_stale_ckpt_temps(identity: &TargetIdentity) {
     // 这里只为拿落点目录做清理
-    let candidates = identity.checkpoint_candidates(None);
+    let candidates = identity.checkpoint_candidates();
     // 只认领本目标的暂存文件：同一目录里可能有别的镜像（或所有盘共用的 state_dir），
     // 按裸前缀清扫会把它们的残骸一并删掉，而其中一份可能正等着 rename
-    let prefixes: Vec<String> = candidates.paths.iter().map(|p| ckpt_temp_prefix(p)).collect();
-    let mut dirs: Vec<PathBuf> = candidates.paths.iter().filter_map(|p| p.parent().map(Path::to_path_buf)).collect();
+    let prefixes: Vec<String> = candidates.iter().map(|p| ckpt_temp_prefix(p)).collect();
+    let mut dirs: Vec<PathBuf> = candidates.iter().filter_map(|p| p.parent().map(Path::to_path_buf)).collect();
     dirs.sort();
     dirs.dedup();
     for dir in dirs {

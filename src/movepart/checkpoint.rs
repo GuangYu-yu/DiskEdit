@@ -262,14 +262,14 @@ pub(crate) fn checkpoint_foreign(
 /// 一份损坏的候选遮住一份完好的候选，用户看到的是"目标坏了去 abandon"，
 /// 而真实情况是现场完好可续跑。只有"所有候选都不可读"才把损伤如实报成 Infra
 pub(crate) fn read_checkpoint(src: &FileSource, g: &ValidatedGeometry) -> Result<(CheckpointSlot, PathBuf), Fail> {
-    let candidates = src.identity.checkpoint_candidates(Some(src));
+    let candidates = src.identity.checkpoint_candidates();
     let lim = g.limits();
     let mut found: Vec<(PathBuf, CheckpointSlot)> = Vec::new();
     let mut damaged: Vec<(PathBuf, String)> = Vec::new();
     // 现场可读但"创建时事实"对不上：不是损坏（CRC 自洽），也不可取信（继续执行会把
     // 为别的目标录下的现场续进换了文件/换了映射的目标）。单独归档，唯一时给出点名拒绝
     let mut foreign: Vec<(PathBuf, String)> = Vec::new();
-    for path in &candidates.paths {
+    for path in candidates {
         // 与 journal 同一条判据：符号链接与非普通文件在 `read` 之前就记成"内容读不出来"。
         // 直接读会跟随链接，或在落点是 FIFO 时阻塞到有写端出现；这一份不可读只坏这一份，
         // 后面的候选照常看
@@ -310,7 +310,7 @@ pub(crate) fn read_checkpoint(src: &FileSource, g: &ValidatedGeometry) -> Result
     }
     match found.len() {
         0 if foreign.is_empty() && damaged.is_empty() => {
-            Ok((CheckpointSlot::Empty, candidates.paths[0].clone()))
+            Ok((CheckpointSlot::Empty, candidates[0].clone()))
         }
         // 候选全在而全部不可读：现场存在但已无法判读——如实报 Infra 并列明各份的死因，
         // 出路是 abandon，而不是让续跑路径去猜
@@ -340,7 +340,7 @@ pub(crate) fn read_checkpoint(src: &FileSource, g: &ValidatedGeometry) -> Result
         }
         _ => {
             let paths = found.into_iter().map(|(p, _)| p).collect();
-            Ok((CheckpointSlot::Ambiguous(paths), candidates.paths[0].clone()))
+            Ok((CheckpointSlot::Ambiguous(paths), candidates[0].clone()))
         }
     }
 }

@@ -293,9 +293,9 @@ impl FileSource {
     /// 替换后，canonicalize 给出的是另一个文件的名字，而写入仍落在 fd 指向的文件上，
     /// journal / checkpoint / lock 因此会挂到另一份数据旁。
     ///
-    /// 字面路径仍用于日志命名与历史候选，但前提是它**此刻仍指向同一个 inode**：改名后
-    /// 旧路径可能已经属于别人，把它的兄弟文件当成本目标的历史候选，提交清理时就会删到
-    /// 别人的 journal。两条检查任一不成立即拒绝（fail-closed），不退到路径身份
+    /// 字面路径只用于日志命名，且前提是它**此刻仍指向同一个 inode**：改名后，改名前的
+    /// 路径可能已经属于别人，把它的兄弟文件当成本目标的伴随文件，提交清理时就会删到
+    /// 别人的 journal。检查不成立即拒绝（fail-closed），不退到路径身份
     #[cfg(target_os = "linux")]
     pub(crate) fn identity_of_opened_image(
         path: &Path,

@@ -270,7 +270,8 @@ fn undo_refuses_a_journal_whose_recorded_scene_is_not_this_target() {
 /// - 零记录的完整头同样描述"零次写入"：两者都不构成未收尾现场，否则一次在创建 journal
 ///   时掉电就会把目标永久锁死；
 /// - 1..头长-1 字节的**半截头**不是残骸：它与"原 journal 被外部截断"不可区分，按现场处理；
-/// - 旧格式（v3）同样按现场处理：版本只升不兼，拒绝不删现场，只有 `abandon` 能释放；
+/// - 不认识的版本（样本 `DEJL\x03`）同样按现场处理：版本只升不兼，拒绝不删现场，
+///   只有 `abandon` 能释放；
 /// - undo 成功回滚后要一并释放该事务的 checkpoint（否则它描述一个已被回滚掉的世界，
 ///   让后续 resize 被判成 Divergent 而永久拒绝）
 #[test]
@@ -376,17 +377,17 @@ fn pending_recovery_blocks_unjournaled_writers_and_empty_shell_is_not_corruption
     assert_eq!(c, 0, "abandon must be able to release a torn header: {e}");
     assert!(!journal.exists(), "abandon must move it out of the active name: {e}");
 
-    // 但**旧格式**的 journal（magic 的尾字节即格式版本）属于"读不出来的现场"：记录布局已经变了，
-    // 一律不猜着回放，而是当作有事没做完——目标仍被它占着（30）。版本只升不兼，拒绝也不删现场：
-    // 那份旧 journal 只能由用户显式 `abandon` 释放
+    // 但**不认识的版本**的 journal（magic 的尾字节即格式版本）属于"读不出来的现场"：记录布局
+    // 可能已经变了，一律不猜着回放，而是当作有事没做完——目标仍被它占着（30）。版本只升不兼，
+    // 拒绝也不删现场：那份 journal 只能由用户显式 `abandon` 释放
     let v3 = b"DEJL\x03".to_vec();
     std::fs::write(&journal, &v3).unwrap();
     let (c, e) = run(&["mkfs", &format!("{img_s}:1"), "ext4", "--yes"]);
-    assert_eq!(c, 30, "a journal of an older format must stop other writers: {e}");
+    assert_eq!(c, 30, "a journal of an unknown format must stop other writers: {e}");
     assert!(e.contains("abandon"), "the refusal must point at the way out: {e}");
-    assert_eq!(std::fs::read(&journal).unwrap(), v3, "refusing an older format must leave it byte-identical");
+    assert_eq!(std::fs::read(&journal).unwrap(), v3, "refusing an unknown format must leave it byte-identical");
     let (c, e) = run(&["undo", img_s, "--yes"]);
-    assert_eq!(c, 30, "an older format must not be replayed either: {e}");
+    assert_eq!(c, 30, "an unknown format must not be replayed either: {e}");
     assert!(e.contains("abandon"), "the refusal must point at the way out: {e}");
     assert_eq!(std::fs::read(&journal).unwrap(), v3, "undo must not touch a journal it cannot read");
     let (c, e) = run(&["abandon", img_s, "--yes"]);

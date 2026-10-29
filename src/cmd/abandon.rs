@@ -68,7 +68,7 @@ pub(crate) fn cmd_abandon(a: &Args) -> u8 {
 }
 
 fn abandon_records(identity: &TargetIdentity, disk: Option<&FileSource>) -> u8 {
-    let records = active_recovery_records(identity, disk);
+    let records = active_recovery_records(identity);
     // 比对候选头身份用的当前目标现场：目标打不开时为 None，比对跳过、候选按现状处理
     let scene = disk.map(|d| d.scene());
     if records.is_empty() {

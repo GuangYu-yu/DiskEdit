@@ -268,7 +268,30 @@ fn probe_occupancy_with(mounts: &[MountEntry], swaps: &str, dev: &str) -> io::Re
 /// 分区 st_rdev 必不相同），但 source 仍是成员设备路径，单靠 dev_no 会漏检
 #[cfg(target_os = "linux")]
 fn mounted_in(entries: &[MountEntry], dev: &str, dev_no: (u64, u64)) -> bool {
-    entries.iter().any(|e| e.dev_no == dev_no || e.source == dev)
+    entries.iter().any(|e| {
+        e.dev_no == dev_no || e.source == dev || (e.dev_no.0 == 0 && source_is_device(&e.source, dev_no))
+    })
+}
+
+/// source 节点的真实设备号是否即 `dev_no`。用于字段 3 报匿名设备号的挂载（btrfs 等）：
+/// 那种记录与 st_rdev 必然不等，而 `/dev/disk/by-uuid/…` 这类别名与目标路径串也不等，
+/// 只有 stat 跟随链接后得到的 st_rdev 才可比。source 不是块设备节点（tmpfs 等伪文件系统）
+/// 或已不可访问时返回 false——这类记录本就不以块设备为底
+///
+/// 非绝对路径的 source（`none`、`tmpfs`、`drvfs` 等）直接判否，不去 stat：这类名字不是
+/// 路径，stat 会按进程工作目录解析成一次真实查找——工作目录在慢速文件系统（如 WSL 的
+/// 9p/drvfs）上时，十几次这样的查找就是毫秒级开销，落进 loop 拆除的瞬态窗口里会把
+/// "节点已删、sysfs 未收"读成确认失败
+#[cfg(target_os = "linux")]
+fn source_is_device(source: &str, dev_no: (u64, u64)) -> bool {
+    use std::os::unix::fs::{FileTypeExt, MetadataExt};
+    if !source.starts_with('/') {
+        return false;
+    }
+    std::fs::metadata(source).is_ok_and(|m| {
+        m.file_type().is_block_device()
+            && (libc::major(m.rdev()) as u64, libc::minor(m.rdev()) as u64) == dev_no
+    })
 }
 
 /// /proc/swaps 里是否有该设备。同一设备的两种判据取并集：路径相同，或 st_rdev 相同。

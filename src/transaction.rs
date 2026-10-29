@@ -57,13 +57,8 @@ impl RecoveryRecord {
 /// 的枚举都消费同一个分类，三处对"什么算现场"不会给出不同答案。
 ///
 /// checkpoint 没有"空壳"一说：它一落盘就描述一次中断的搬移，故只看存在性——
-/// **只有 `NotFound` 算不存在**，属性读取的其他错误按存在处理。
-///
-/// `disk` 保留在签名里仅为调用方形状一致，checkpoint 落点不依赖盘上内容
-pub(crate) fn active_recovery_records(
-    identity: &TargetIdentity,
-    disk: Option<&FileSource>,
-) -> Vec<RecoveryRecord> {
+/// **只有 `NotFound` 算不存在**，属性读取的其他错误按存在处理
+pub(crate) fn active_recovery_records(identity: &TargetIdentity) -> Vec<RecoveryRecord> {
     let mut out = Vec::new();
     for p in identity.journal_candidates() {
         match dev::classify_journal(p) {
@@ -80,15 +75,14 @@ pub(crate) fn active_recovery_records(
             }
         }
     }
-    let candidates = identity.checkpoint_candidates(disk);
-    for p in candidates.paths {
+    for p in identity.checkpoint_candidates() {
         // 目录等非普通文件不是本工具写下的任何东西，留着它会把一个无关路径顶成 busy 现场
-        match std::fs::metadata(&p) {
+        match std::fs::metadata(p) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
             // 读不出来不是"没有"：折叠成 absent 会让闸口在 state_dir 不可读时放行写命令
-            Err(_) => out.push(RecoveryRecord::Checkpoint { path: p }),
+            Err(_) => out.push(RecoveryRecord::Checkpoint { path: p.clone() }),
             Ok(m) if !m.is_file() => continue,
-            Ok(_) => out.push(RecoveryRecord::Checkpoint { path: p }),
+            Ok(_) => out.push(RecoveryRecord::Checkpoint { path: p.clone() }),
         }
     }
     out
@@ -508,7 +502,7 @@ impl TransactionManager {
 
     /// 目标上还活着的恢复现场
     pub(crate) fn active_records(src: &FileSource) -> Vec<RecoveryRecord> {
-        active_recovery_records(&src.identity, Some(src))
+        active_recovery_records(&src.identity)
     }
 
     /// 绕过事务入口的写盘命令（`resizefs` 与 `check` 的修复）动手前的唯一闸口：目标上若还
@@ -518,21 +512,12 @@ impl TransactionManager {
     ///
     /// 经过 [`Self::begin`] 的写命令（add/del/resize/mkfs…）不靠它：`begin` 在目标被占用时
     /// 就已拒绝。本闸口覆盖的是只取所有权、不开事务的那些命令
+    ///
+    /// 现场落点由**整盘**键派生（见 `dev::TargetIdentity::from_block_keys`）：
+    /// `/dev/sdb:2` 与 `/dev/sdb2` 因此共享同一处现场，只读分区节点即可枚举完
     pub(crate) fn refuse_if_active(src: &FileSource, what: &str) -> Result<(), Fail> {
-        Self::refuse_if_active_at(src, src, what)
-    }
-
-    /// 现场身份与 Disk GUID 取自不同节点时的入口。现场落点由**整盘**键派生
-    /// （见 `dev::TargetIdentity::from_block_keys`）：`/dev/sdb:2` 与
-    /// `/dev/sdb2` 因此共享同一处现场，而 Disk GUID 只能从**整盘**的表读——
-    /// 分区节点的 0 偏移不是 GPT 头
-    pub(crate) fn refuse_if_active_at(
-        identity: &FileSource,
-        disk: &FileSource,
-        what: &str,
-    ) -> Result<(), Fail> {
-        Self::refuse_unidentifiable(identity)?;
-        let active = active_recovery_records(&identity.identity, Some(disk));
+        Self::refuse_unidentifiable(src)?;
+        let active = active_recovery_records(&src.identity);
         if active.is_empty() {
             return Ok(());
         }

@@ -53,7 +53,35 @@ pub(crate) fn commit_gpt_refuses_container_too_small() {
     assert!(e.to_string().contains("too small to hold GPT entry array"), "{e}");
 }
 
-/// HeaderSize 是规范字段而非固定 92：读到的值必须随头带回并按原值重写，
+/// 扇区大小下界由几何构造点表达：保护 MBR 缓冲按 ss 分配并索引 510 与 [512..]，
+/// ss < 512 的几何会在切片处 panic 而不是被拒绝
+#[test]
+pub(crate) fn entry_geometry_refuses_sector_size_below_512() {
+    for ss in [0u64, 1, 256, 511] {
+        let e = EntryArrayGeometry::new(ss, 128, 128, MAX_ARRAY_BYTES).unwrap_err();
+        assert!(e.to_string().contains("512-byte minimum"), "{ss}: {e}");
+    }
+    EntryArrayGeometry::new(512, 128, 128, MAX_ARRAY_BYTES).unwrap();
+}
+
+/// 条目数与头自述不符时必须在写前拒绝：serialize_array 按表头条目数截断，
+/// 长度一致性若只由调用方保证，写出的表会缺条目而本函数报成功
+#[test]
+pub(crate) fn commit_gpt_refuses_entry_count_mismatch() {
+    let mut src = src_from_gpt("entrycount", 512);
+    let g = load_gpt(&src).unwrap().unwrap();
+    let last_lba = src.size / 512 - 1;
+    let mut short = g.entries.clone();
+    short.pop();
+    let e = commit_table(&mut src, 512, &g.header, &short, last_lba).unwrap_err();
+    assert!(e.to_string().contains("partition entries given"), "{e}");
+    let mut long = g.entries.clone();
+    long.push(short[0].clone());
+    let e = commit_table(&mut src, 512, &g.header, &long, last_lba).unwrap_err();
+    assert!(e.to_string().contains("partition entries given"), "{e}");
+}
+
+/// 头自述 HeaderSize 是规范字段而非固定 92：读到的值必须随头带回并按原值重写，
 /// CRC 覆盖 HeaderSize 字节（含 92 之后的保留区）。写入端固定 92 的实现会把
 /// 合法的更大 HeaderSize 静默规范化掉——读改写不再是恒等变换
 #[test]

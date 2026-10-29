@@ -343,7 +343,6 @@ pub(crate) fn refuse_if_pending_recovery(src: &FileSource, what: &str) -> Result
 /// 前提由参数类型给出：入参是 **已验证几何**（[`ValidatedGeometry`]）——条目互不重叠且都落在
 /// 修复后的可用区内，因此"起点大于本分区末端"确实等价于"在本分区右侧"。可用区上界取自几何
 /// 本身（修复后将生效的值），不再作为参数传入：同一个事实有两个来源时，两者会分叉
-/// （历史实现即如此：调用点各自算一次有效上界，本函数只对"起点在右"的表项取最小）
 pub(crate) fn free_right_gpt(g: &ValidatedGeometry, part: u32) -> u64 {
     let Some(e) = g.entry_index(part).and_then(|i| g.entries().get(i)) else {
         return 0;

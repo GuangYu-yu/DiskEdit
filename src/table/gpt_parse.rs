@@ -146,7 +146,7 @@ pub(crate) fn probe_header(sector: &[u8]) -> HeaderProbe {
     let stored_crc = rd_u32(sector, 16);
     // UEFI 2.10 §5.3.2 Table 5.5：HeaderCRC32 是"把本字段置 0 后对 HeaderSize 字节算的 CRC"，
     // 不是固定 92 字节——同节还写明 HeaderSize ≥ 92、≤ 逻辑块大小，"may increase in the future"。
-    // 实盘 HeaderSize 恒为 0x5C(92) 故旧写法兼容性无碍，但对任何合法的更大 HeaderSize 会误判 CRC
+    // 按固定 92 字节切片对任何合法的更大 HeaderSize 会误判 CRC
     // （上面的 hdr_size 校验已保证 92 ≤ hdr_size ≤ 扇区长度，按它切片不会越界）
     let mut tmp = sector[..hdr_size].to_vec();
     tmp[16..20].fill(0); // CRC 字段置 0 后计算（规范要求）

@@ -19,46 +19,18 @@ pub(crate) fn preflight_lvm_tools(grow_lv: bool, needs_loop: bool) -> Result<(),
     tools.iter().try_for_each(|t| crate::fsops::require_tool(t))
 }
 
-/// 分区扩容成功后的 LVM 链（仅块设备）：pvresize 吸收全部新增空间；--grow-lv 把本次新增
-/// 容量折算成 extent 扩目标 LV（--lv 指定或该 PV 上唯一顶层 LV）。
-/// lvextend 按容量扩，分配源由 LVM 决定，不限于本 PV。
-/// 后置条件：pvresize 后 `pvs` 的 dev_size 必须覆盖整段分区。`pv_size` 是 PV 可用
-/// 尺寸（extent 对齐与 PV 元数据使其不必等于设备尺寸），只随输出记录，不作为判据。
-/// 增量是 0 时（中断重跑：分区已是新尺寸）不猜扩多少——见下面 `delta_bytes == 0` 的分支
+/// 只读定位 `part_dev` 上的目标顶层 LV：`--lv` 精确匹配裸名或 `/dev/<vg>/<name>`，
+/// 缺省要求该 PV 上只有一个顶层 LV；返回 (名字, 路径, VG extent 字节数)。
+/// 全部是只读查询、与 pvresize 的结果无关，因此由调用方在写盘前先做
 #[cfg(target_os = "linux")]
-pub(crate) fn lvm_grow_chain(part_dev: &str, expected_bytes: u64, delta_bytes: u64, grow_lv: bool, want_lv: Option<&str>) -> Result<(), LvmError> {
-    // pv_resize 只拿到路径：节点必须与 sysfs 记录的设备号同源，否则 PV 标签与元数据区
-    // 会写到另一台设备上。判据与 find_block_partition_node 共用同一实现
-    let node = std::path::Path::new(part_dev);
-    let sysdir = crate::dev::sysfs_node(node).map_err(|e| {
-        LvmError::Failed(format!("cannot resolve the sysfs node of {part_dev} for the LVM chain: {e}"))
-    })?;
-    crate::dev::ensure_node_is_device(node, &sysdir)
-        .map_err(|e| LvmError::Failed(format!("refusing the LVM chain on {part_dev}: {e}")))?;
-    crate::lvm::pv_resize(part_dev)?;
-    println!("pvresize {part_dev} done");
-    let pv = crate::lvm::pv_size_report(part_dev)?;
-    if pv.dev_size < expected_bytes {
-        return Err(LvmError::Failed(format!(
-            "pvresize: {part_dev} reports dev_size {} bytes, below the resized partition ({expected_bytes} bytes) — the PV did not absorb the resize",
-            pv.dev_size
-        )));
-    }
-    println!(
-        "pvs {part_dev}: dev_size={} pv_size={} pe_start={} pv_pe_count={} pv_pe_alloc_count={}",
-        pv.dev_size, pv.pv_size, pv.pe_start, pv.pv_pe_count, pv.pv_pe_alloc_count
-    );
-    if !grow_lv {
-        return Ok(());
-    }
+fn select_lv(part_dev: &str, want_lv: Option<&str>) -> Result<(String, String, u64), LvmError> {
     let vg = match crate::lvm::vg_of(part_dev) {
         Ok(Some(vg)) => vg,
-        Ok(None) => return Err(LvmError::Failed(format!("pvresize done but {part_dev} is a PV outside any VG — nothing to extend"))),
+        Ok(None) => return Err(LvmError::Failed(format!("{part_dev} is a PV outside any VG — nothing to extend"))),
         Err(e) => return Err(e),
     };
     let lvs = crate::lvm::lvs_on_pv(&vg, part_dev)?;
     let (name, path) = match want_lv {
-        // 匹配裸 LV 名或 /dev/<vg>/<name> 路径（lv_path 精确比较，不做后缀模糊匹配）
         Some(sel) => match lvs.iter().find(|(n, p)| n == sel || p == &format!("/dev/{sel}")) {
             Some(x) => x.clone(),
             None => {
@@ -80,6 +52,44 @@ pub(crate) fn lvm_grow_chain(part_dev: &str, expected_bytes: u64, delta_bytes: u
         },
     };
     let ext = crate::lvm::vg_extent_size(&vg)?;
+    Ok((name, path, ext))
+}
+
+/// 分区扩容成功后的 LVM 链（仅块设备）：pvresize 吸收全部新增空间；--grow-lv 把本次新增
+/// 容量折算成 extent 扩目标 LV（--lv 指定或该 PV 上唯一顶层 LV）。
+/// lvextend 按容量扩，分配源由 LVM 决定，不限于本 PV。
+/// 后置条件：pvresize 后 `pvs` 的 dev_size 必须覆盖整段分区。`pv_size` 是 PV 可用
+/// 尺寸（extent 对齐与 PV 元数据使其不必等于设备尺寸），只随输出记录，不作为判据。
+/// 增量是 0 时（中断重跑：分区已是新尺寸）不猜扩多少——见下面 `delta_bytes == 0` 的分支
+#[cfg(target_os = "linux")]
+pub(crate) fn lvm_grow_chain(part_dev: &str, expected_bytes: u64, delta_bytes: u64, grow_lv: bool, want_lv: Option<&str>) -> Result<(), LvmError> {
+    // pv_resize 只拿到路径：节点必须与 sysfs 记录的设备号同源，否则 PV 标签与元数据区
+    // 会写到另一台设备上。判据与 find_block_partition_node 共用同一实现
+    let node = std::path::Path::new(part_dev);
+    let sysdir = crate::dev::sysfs_node(node).map_err(|e| {
+        LvmError::Failed(format!("cannot resolve the sysfs node of {part_dev} for the LVM chain: {e}"))
+    })?;
+    crate::dev::ensure_node_is_device(node, &sysdir)
+        .map_err(|e| LvmError::Failed(format!("refusing the LVM chain on {part_dev}: {e}")))?;
+    // LV 选择是只读判定，先于 pvresize：名字写错、该 PV 上没有 LV 或 LV 不唯一
+    // 都在写盘前拒绝，而不是 pvresize 已生效之后
+    let target = if grow_lv { Some(select_lv(part_dev, want_lv)?) } else { None };
+    crate::lvm::pv_resize(part_dev)?;
+    println!("pvresize {part_dev} done");
+    let pv = crate::lvm::pv_size_report(part_dev)?;
+    if pv.dev_size < expected_bytes {
+        return Err(LvmError::Failed(format!(
+            "pvresize: {part_dev} reports dev_size {} bytes, below the resized partition ({expected_bytes} bytes) — the PV did not absorb the resize",
+            pv.dev_size
+        )));
+    }
+    println!(
+        "pvs {part_dev}: dev_size={} pv_size={} pe_start={} pv_pe_count={} pv_pe_alloc_count={}",
+        pv.dev_size, pv.pv_size, pv.pe_start, pv.pv_pe_count, pv.pv_pe_alloc_count
+    );
+    let Some((name, path, ext)) = target else {
+        return Ok(());
+    };
     let free = pv.pv_pe_count.saturating_sub(pv.pv_pe_alloc_count);
     // 本次运行的增量在中断重跑时是 0（分区已是新尺寸），而 PV 上剩下的未分配 extent
     // 并**不能**反推当初要扩多少——它们可能本来就被有意留着。两种猜法各错一半：按增量

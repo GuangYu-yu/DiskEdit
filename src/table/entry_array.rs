@@ -40,12 +40,16 @@ pub struct EntryArrayGeometry {
 }
 
 impl EntryArrayGeometry {
-    /// 唯一构造点：规范判据（扇区大小非零、条目数非零且单条目合规）在此表达；
+    /// 唯一构造点：规范判据（扇区大小不低于 512、条目数非零且单条目合规）在此表达；
     /// `max_array_bytes` 是调用方的策略输入（见 [`MAX_ARRAY_BYTES`]），不是本类型的
     /// 规范约束。解析层与写入层共用它，于是"表允许多大"只有一个答案
     pub fn new(sector_size: u64, entry_size: u32, entry_count: u32, max_array_bytes: u64) -> io::Result<Self> {
-        if sector_size == 0 {
-            return Err(invalid_geom("GPT entry geometry: zero sector size"));
+        // 512 是保护 MBR 记录（446..512）能被索引的下界，也是 UEFI 逻辑块的下界：
+        // 更小的几何会让 ensure_protective_mbr 在写缓冲时越界
+        if sector_size < 512 {
+            return Err(invalid_geom(format!(
+                "GPT entry geometry: sector size {sector_size} is below the 512-byte minimum"
+            )));
         }
         if entry_count == 0 || !entry_size_ok(entry_size) {
             return Err(invalid_geom("implausible GPT entry geometry"));

@@ -136,7 +136,7 @@ pub(crate) fn checkpoint_rejects_implausible_partition_numbers() {
 }
 
 /// 原子写的临时文件必须落在目标同目录：相对路径的 parent() 是空而非 None，
-/// 历史实现把空父目录拼上根组件，临时文件会写到当前盘的根目录
+/// 空父目录若拼上根组件，临时文件会写到当前盘的根目录
 #[test]
 pub(crate) fn relative_checkpoint_path_writes_beside_the_target() {
     let name = format!("rel_ckpt_test.{}.tmp", std::process::id());
