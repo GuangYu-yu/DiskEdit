@@ -700,8 +700,8 @@ pub(crate) fn execute_resize(
             // 只能靠收紧 checkpoint 频率关死）
             if overlap {
                 src.sync_data()?;
-                save(&ckpt)?;
                 fault_rs_after_data_sync(i as u64 + 1);
+                save(&ckpt)?;
                 fault_rs_chunk(i as u64 + 1);
                 continue;
             }
@@ -711,8 +711,8 @@ pub(crate) fn execute_resize(
             if pending_chunks >= ckpt_batch || i as u64 + 1 == order.len() as u64 {
                 let t0 = std::time::Instant::now();
                 src.sync_data()?;
-                save(&ckpt)?;
                 fault_rs_after_data_sync(i as u64 + 1);
+                save(&ckpt)?;
                 pending_chunks = 0;
                 ckpt_batch = next_ckpt_batch(ckpt_batch, t0.elapsed(), entry_chunk);
             }

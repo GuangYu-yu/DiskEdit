@@ -116,7 +116,13 @@ mk; M2=$(fillp 2 90); M3=$(fillp 3 190)
 DISKEDIT_FAULT=chunk:150 $BF resize "$T":1 grow --allow-move --yes --chunk-size 1 >/dev/null 2>&1
 OUT=$($BF resize "$T":1 grow --allow-move --yes --chunk-size 1 2>&1)
 R=$(echo "$OUT" | grep -o "resuming at entry [0-9]* chunk [0-9]*" | head -1)
-echo "resume: $R (batch 由提交耗时自适应，此处不作断言)"
+N=$(echo "$R" | sed 's/.*chunk //')
+echo "resume: $R (batch 由提交耗时自适应，只断言续跑点落在已提交边界上)"
+if [ -n "$N" ] && [ "$N" -gt 0 ] && [ "$N" -le 150 ]; then
+  echo "  RESUME OK ($R)"
+else
+  echo "  RESUME WRONG ($R)"; rc=1
+fi
 chkp 2 "$M2"; chkp 3 "$M3"
 
 echo

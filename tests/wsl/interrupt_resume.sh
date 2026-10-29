@@ -16,7 +16,7 @@ track_file "$T2"
 # resize-part 右移 50M（chunk 1MiB，共 900 块）：在第 N 块落盘后中断，
 # 重跑必须从 N 续传、数据逐字节一致
 run_resize_part_break() {
-  local n=$1 md_before md_after OUT LD
+  local n=$1 fault=${2:-rs-chunk} expect=${3:-$1} md_before md_after OUT LD
   rm -f "$T" "$T"$SIDECAR_GLOB
   truncate -s 2G "$T"
   $BF new "$T" --yes >/dev/null || { echo "new failed"; rc=1; return; }
@@ -30,15 +30,15 @@ run_resize_part_break() {
   md_before=$(mdsum "${LD}p1")
   lo_detach "$LD"
 
-  echo "== rs-chunk:$n：900M 分区右移 50M（chunk 1MiB），第 $n 块后中断 =="
-  DISKEDIT_FAULT=rs-chunk:$n $BF resize-part "$T":1 --start 104448 --end 1947647 --chunk-size 1 >/dev/null 2>&1
-  exp "$([ -f "$T$CKPT_SUFFIX" ] && echo yes || echo no)" yes "rs-chunk:$n 现场已建（checkpoint 存在）"
+  echo "== $fault:$n：900M 分区右移 50M（chunk 1MiB），第 $n 块后中断 =="
+  DISKEDIT_FAULT=$fault:$n $BF resize-part "$T":1 --start 104448 --end 1947647 --chunk-size 1 >/dev/null 2>&1
+  exp "$([ -f "$T$CKPT_SUFFIX" ] && echo yes || echo no)" yes "$fault:$n 现场已建（checkpoint 存在）"
   [ -f "$T$CKPT_SUFFIX" ] || return
 
   OUT=$($BF resize-part "$T":1 --start 104448 --end 1947647 --chunk-size 1 2>&1); E=$?
-  exp "$E" 0 "rs-chunk:$n 重跑完成"
-  echo "$OUT" | grep -o "resuming at chunk [0-9]*" | head -1 | grep -qx "resuming at chunk $n" \
-    && echo "  OK   续传点命中（resuming at chunk $n）" || { echo "  BAD  未从 chunk $n 续传"; rc=1; }
+  exp "$E" 0 "$fault:$n 重跑完成"
+  echo "$OUT" | grep -o "resuming at chunk [0-9]*" | head -1 | grep -qx "resuming at chunk $expect" \
+    && echo "  OK   续传点命中（resuming at chunk $expect）" || { echo "  BAD  未从 chunk $expect 续传"; rc=1; }
 
   LD=$(lo_attach "$T")
   lo_waitpart "${LD}p1" || { echo "p1 part node not ready"; rc=1; lo_detach "$LD"; return; }
@@ -51,7 +51,7 @@ run_resize_part_break() {
 # resize grow（a 扩 100M、b 后移打包，chunk 1MiB，共 400 块）：在第 N 块落盘后中断，
 # 重跑必须续传且 b 数据逐字节一致
 run_shift_break() {
-  local n=$1 md_before md_after OUT LD R
+  local n=$1 fault=${2:-chunk} expect=${3:-$1} md_before md_after OUT LD R
   rm -f "$T2" "$T2"$SIDECAR_GLOB
   truncate -s 1G "$T2"
   $BF new "$T2" --yes >/dev/null || { echo "new failed"; rc=1; return; }
@@ -66,18 +66,16 @@ run_shift_break() {
   md_before=$(mdsum "${LD}p2")
   lo_detach "$LD"
 
-  echo "== chunk:$n：a 扩 100M、b 后移（chunk 1MiB），第 $n 块后中断 =="
-  DISKEDIT_FAULT=chunk:$n $BF resize "$T2":1 +100M --allow-move --yes --chunk-size 1 --no-fs >/dev/null 2>&1
-  exp "$([ -f "$T2$CKPT_SUFFIX" ] && echo yes || echo no)" yes "chunk:$n 现场已建（checkpoint 存在）"
+  echo "== $fault:$n：a 扩 100M、b 后移（chunk 1MiB），第 $n 块后中断 =="
+  DISKEDIT_FAULT=$fault:$n $BF resize "$T2":1 +100M --allow-move --yes --chunk-size 1 --no-fs >/dev/null 2>&1
+  exp "$([ -f "$T2$CKPT_SUFFIX" ] && echo yes || echo no)" yes "$fault:$n 现场已建（checkpoint 存在）"
   [ -f "$T2$CKPT_SUFFIX" ] || return
 
   OUT=$($BF resize "$T2":1 +100M --allow-move --yes --chunk-size 1 --no-fs 2>&1); E=$?
-  exp "$E" 0 "chunk:$n 重跑完成"
+  exp "$E" 0 "$fault:$n 重跑完成"
   R=$(echo "$OUT" | grep -o "resuming at entry [0-9]* chunk [0-9]*" | head -1)
-  case "$R" in
-    "resuming at entry 0 chunk "*) echo "  OK   续传点命中（$R）" ;;
-    *) echo "  BAD  未续传（got: ${R:-none}）"; rc=1 ;;
-  esac
+  [ "$R" = "resuming at entry 0 chunk $expect" ] \
+    && echo "  OK   续传点命中（$R）" || { echo "  BAD  未从 entry 0 chunk $expect 续传（got: ${R:-none}）"; rc=1; }
 
   LD=$(lo_attach "$T2")
   lo_waitpart "${LD}p2" || { echo "p2 part node not ready"; rc=1; lo_detach "$LD"; return; }
@@ -88,7 +86,12 @@ run_shift_break() {
 }
 
 for n in 1 450 899; do run_resize_part_break "$n"; echo; done
+# 同步与 durable 边界的交界面：第 450 块数据已同步、checkpoint 尚未写入时中断，
+# 续跑必须从上一块（449）开始，而不是 450
+run_resize_part_break 450 rs-after-data-sync 449; echo
 for n in 1 200 399; do run_shift_break "$n"; echo; done
+# 搬移路径的同一交界面：第 200 块已同步、checkpoint 尚未写入时中断，续跑从 199 开始
+run_shift_break 200 after-data-sync 199; echo
 
 sgdisk -v "$T" | tail -2
 sgdisk -v "$T2" | tail -2
