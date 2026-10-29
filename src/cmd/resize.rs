@@ -50,7 +50,8 @@ pub(crate) const HELP: &str = r#"diskedit resize <TARGET>:N <SIZE> [OPTIONS]
     --allow-move    allow moving other partitions (plan requires --yes)
     --size BYTES    absolute target size (same units as SIZE)
     --grow-to-end   grow into the contiguous free space to the right
-    --chunk-size N  relocation copy granularity in MiB (default 4)
+    --chunk-size N  relocation copy granularity in MiB (default 4);
+                    a crash may redo up to 256 MiB of already copied data
     --sector-size N logical sector size override for raw images
                     (power of two, 512..=65536)
     --grow-lv       also grow the associated LV (--lv NAME, or the only LV)

@@ -664,3 +664,23 @@ pub(crate) fn foreign_checkpoint_slot_refuses_fresh_plans() {
     let _ = std::fs::remove_file(&ckpt_path);
     let _ = std::fs::remove_file(&path);
 }
+
+/// 提交批量的自适应：耗时反馈只在重做窗口内择优，窗口是硬约束
+#[test]
+pub(crate) fn ckpt_batch_stays_inside_redo_window() {
+    let fast = std::time::Duration::from_millis(5);
+    let slow = std::time::Duration::from_millis(400);
+    let mid = std::time::Duration::from_millis(100);
+    // 4 MiB 块：窗口允许 256 MiB / 4 MiB = 64
+    assert_eq!(next_ckpt_batch(CKPT_BATCH_CHUNKS, fast, 4 << 20), 32);
+    assert_eq!(next_ckpt_batch(64, fast, 4 << 20), 64, "批量不得越过窗口与硬上界");
+    assert_eq!(next_ckpt_batch(16, slow, 4 << 20), 8);
+    assert_eq!(next_ckpt_batch(1, slow, 4 << 20), 1, "减半的下限是一次提交");
+    assert_eq!(next_ckpt_batch(16, mid, 4 << 20), 16, "两个阈值之间不调整");
+    // 块字节等于窗口上界：只能逐 chunk 提交，缩小批量以守住窗口
+    assert_eq!(next_ckpt_batch(16, fast, REDO_WINDOW_BYTES), 1);
+    assert_eq!(next_ckpt_batch(16, fast, REDO_WINDOW_BYTES * 4), 1);
+    // 条目开始时的批量上界：4 MiB 块允许攒满 64，单块超过窗口则只能逐块
+    assert_eq!(ckpt_batch_cap(4 << 20), 64);
+    assert_eq!(ckpt_batch_cap(512 << 20), 1);
+}

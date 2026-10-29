@@ -34,8 +34,11 @@ macro_rules! fault_points {
 }
 
 fault_points! {
-    /// 第 N 个 chunk 落盘后 abort
+    /// 第 N 个 chunk 拷贝完成后 abort（非自重叠搬移按批提交，该块此时可能尚未同步；
+    /// 自重叠搬移逐块落盘，故此刻已同步）
     fault_chunk(n: u64) = "chunk", n;
+    /// 第 N 个 chunk 的数据已同步、checkpoint 尚未写入时 abort（同步与 durable 边界的交界面）
+    fault_after_data_sync(n: u64) = "after-data-sync", n;
     /// chunk 拷贝全部完成、表项 commit 前 abort
     fault_before_entry_commit() = "before-entry-commit";
     /// 表项 commit + ckpt 推进后（下一分区拷贝开始前的条目间隙）abort
@@ -48,8 +51,11 @@ fault_points! {
     fault_after_repair() = "after-repair";
     /// swap 条目 GPT commit 后、ckpt 推进前 abort（重放须幂等：GPT 绝对赋值 + 从旧位置重读 UUID 重建）
     fault_after_swap_commit(mi: usize) = "after-swap-commit", mi;
-    /// resize_part 路径第 N 个 chunk 落盘后 abort
+    /// resize_part 路径第 N 个 chunk 拷贝后 abort（非自重叠按批提交，该块此时可能尚未
+    /// 同步；自重叠逐块落盘，故此刻已同步）
     fault_rs_chunk(n: u64) = "rs-chunk", n;
+    /// resize_part 路径第 N 个 chunk 的数据已同步、checkpoint 尚未写入时 abort
+    fault_rs_after_data_sync(n: u64) = "rs-after-data-sync", n;
     /// FS 缩容完成（fs_shrunk 已落盘）、数据搬移前 abort
     fault_rs_after_fs_shrink() = "rs-after-fs-shrink";
     /// 数据搬移完成、表项提交前 abort

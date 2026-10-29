@@ -7,10 +7,40 @@ pub const CKPT_MAGIC: &[u8; 8] = b"DKECKPT1";
 /// 指纹含设备 ID 哈希（块设备整盘身份），尾部带身份种类
 pub const CKPT_VERSION: u32 = 6;
 
-/// checkpoint 批量提交粒度：性能参数，不属于恢复协议。恢复永远从最近一次
-/// durable checkpoint 继续；此值只决定提交频率，即崩溃后最多重做多少个
-/// 已完成但未持久化的 chunk。调整（或换成按字节/自适应策略）无需改恢复逻辑
+/// checkpoint 批量提交粒度的起点：性能参数，不属于恢复协议。恢复永远从最近一次
+/// durable checkpoint 继续；实际批量由 [`next_ckpt_batch`] 按提交耗时与
+/// [`REDO_WINDOW_BYTES`] 在运行时调整，此值只作初始值，并在块字节超出重做窗口时
+/// 被压到更小的批量。只决定提交频率，即崩溃后最多重做多少个已完成但未持久化的 chunk
 pub(crate) const CKPT_BATCH_CHUNKS: u64 = 16;
+
+/// 崩溃后允许重做的数据量上界（字节）：`batch × 块字节` 不超过它。它是批量的
+/// 硬约束，耗时反馈只在这个窗口内择优
+pub(crate) const REDO_WINDOW_BYTES: u64 = 256 << 20;
+
+/// 当前块字节下允许的批量上界：重做窗口除以块字节，并夹在硬上界内。
+/// 块字节大于整个窗口时为 1，即逐块提交
+pub(crate) fn ckpt_batch_cap(chunk_bytes: u64) -> u64 {
+    const MAX_BATCH: u64 = 64;
+    (REDO_WINDOW_BYTES / chunk_bytes.max(1)).clamp(1, MAX_BATCH)
+}
+
+/// 提交批量的自适应：一次提交（数据同步 + 写 ckpt + rename）耗时偏短就放大批量、
+/// 偏长就缩小，最终夹在 `[1, 64]` 与重做窗口之间。窗口优先于耗时反馈：批量越大，
+/// 崩溃后需要重做的已拷数据越多。块字节大于整个窗口时只能逐 chunk 提交（批量 1）
+pub(crate) fn next_ckpt_batch(cur: u64, took: std::time::Duration, chunk_bytes: u64) -> u64 {
+    // 一次提交的 fsync + rename 在同一台盘上近似恒定，反馈只在两个阈值之间留出
+    // 不动区，避免批量在边界附近来回跳
+    const FAST: std::time::Duration = std::time::Duration::from_millis(20);
+    const SLOW: std::time::Duration = std::time::Duration::from_millis(200);
+    let next = if took <= FAST {
+        cur.saturating_mul(2)
+    } else if took >= SLOW {
+        cur / 2
+    } else {
+        cur
+    };
+    next.clamp(1, ckpt_batch_cap(chunk_bytes))
+}
 
 /// 现场的两副面孔由 `P` 分开：写入侧只带当前目标给出的 [`crate::dev::LiveProof`]，
 /// 解析侧带 [`crate::dev::IdentityProof`]。这样"把解析出的种类写回"在类型上就不成立，

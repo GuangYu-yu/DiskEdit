@@ -41,6 +41,22 @@ pub(crate) fn shift_plan_none_never_ghost_relocates() {
     let _ = std::fs::remove_file(&path);
 }
 
+/// 自重叠判据只有一条：位移小于源区间长度即相交，位移 0 不算（没有拷贝要做）。
+/// 块布局的收敛与该判据同源——判据漂移会让"块被缩小到不重叠"与"批量提交开/关"
+/// 两处结论互相矛盾
+#[test]
+pub(crate) fn relocation_overlap_predicate_matches_chunk_layout() {
+    assert!(relocation_overlaps(1, 8), "位移小于源长度：目的区间落在源区间内");
+    assert!(!relocation_overlaps(8, 8), "位移等于源长度：两区间相邻不相交");
+    assert!(!relocation_overlaps(9, 8), "位移大于源长度");
+    assert!(!relocation_overlaps(0, 8), "位移 0 没有拷贝");
+    // 收敛只在自重叠时发生：相等位移下请求块不被压到位移字节
+    let ss = 512;
+    let chunk = 4 << 20;
+    assert_eq!(move_chunk_layout(16, ss, 8, 8, chunk), Some((chunk, 1)));
+    assert_eq!(move_chunk_layout(16, ss, 1, 8, chunk), Some((512, 16)));
+}
+
 /// 缩容撞上"表已提交、只剩 FS 收尾"的扩容作业：那份作业的终点恰好等于当前末端，
 /// 只比终点就会把缩容当成扩容续跑执行。同一现场下，尺寸未变的原样重跑才是合法续跑
 #[test]
