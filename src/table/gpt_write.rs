@@ -121,6 +121,15 @@ pub(crate) fn commit_table(
 ) -> io::Result<()> {
     // 几何只构造一次：数组字节数、扇区跨度、条目数与大小都取自它，不再各自乘一遍
     let geom = EntryArrayGeometry::new(ss, header.size_of_partition_entry, header.number_of_partition_entries, MAX_ARRAY_BYTES)?;
+    // serialize_array 按 geom.entry_count 截断，多出的条目既不校验也不落盘：
+    // 长度一致性若留给调用方，写出的表会缺条目而本函数报成功
+    let given = u32::try_from(entries.len()).unwrap_or(u32::MAX);
+    if given != geom.entry_count {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("{given} partition entries given for a header declaring {} — refusing to write the table", geom.entry_count),
+        ));
+    }
     let (array_bytes, array_crc) = serialize_array(entries, &geom);
     // 跨度只算一次（几何对象），下溢检查先于任何头部构造
     let backup_array_lba = last_lba
@@ -144,7 +153,7 @@ pub(crate) fn commit_table(
     // 为准，而备份头落位由 last_lba 决定——两者不等的提交会被解析判成需要修复，写到盘上
     // 就是"命令报成功、表却不可用"。非 Valid 的结论一律在写盘前拒绝。
     // 校验器按主头视角定义，备份头先归一化再以 Backup 视角过同一组判据
-    let file_last_lba = (src.size / ss).saturating_sub(1);
+    let file_last_lba = container_last_lba(src, ss);
     if last_lba > file_last_lba {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -184,9 +193,9 @@ pub(crate) fn commit_table(
     src.write_at(ss, &ph)?;
     src.sync_all()?;
     // 读回复核：`sync_all` 只是"设备声称已落盘"，缓存丢写与镜像层短写都不在其中。
-    // 修复路径（`gpt_policy::apply_repair`）对同一承诺做重读并把不符判失败，
-    // 常规提交同样不能只凭写调用的返回值就报成功。四条结构比对写入时的字节，
-    // 覆盖头 CRC、数组 CRC 与条目数三件事（它们都体现在这份字节里）
+    // 这里比对的是刚写出的四段字节，证明的只是"这四次写调用没有被吞掉"——
+    // 它不证明写出的表是解析侧读得回来的表；后者由上方写前的 validate_geometry /
+    // validate_entries 与修复路径的写后重解析各自承担
     for (want, off, what) in [
         (&array_bytes, backup_array_lba * ss, "backup GPT entry array"),
         (&bh, last_lba * ss, "backup GPT header"),

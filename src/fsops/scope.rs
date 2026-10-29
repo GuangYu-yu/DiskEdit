@@ -199,30 +199,32 @@ pub(crate) fn resolve_scope_device(
     // 别的平台已由上面的 require_linux 拒绝
     #[cfg(target_os = "linux")]
     if let Some(occupant) = image_loop_occupancy(src)? {
-        let why = match occupant {
-            LoopOccupancy::Live(dev) => Some(format!(
+        // 确知在用 = 请求与现状不符（解除占用后重跑有意义）→ 拒绝；拿不到内核独占
+        // 证据 = 确认不了 → 环境故障。两种性质分属不同变体，出口码随之而定
+        let refusal = match occupant {
+            LoopOccupancy::Live(dev) => Some(FsError::invalid(format!(
                 "{dev} is a loop onto this image and is in use — unmount/swapoff it first"
-            )),
+            ))),
             LoopOccupancy::Held { loopdev: _, holders }
                 if policy == ImageLoopPolicy::AllowDm && dm_only(&holders) =>
             {
                 None
             }
-            LoopOccupancy::Held { loopdev, holders } => Some(format!(
+            LoopOccupancy::Held { loopdev, holders } => Some(FsError::invalid(format!(
                 "{loopdev} is a loop onto this image and is held by {} — deactivate that stack first",
                 holders.join(", ")
-            )),
+            ))),
             // 内核拒绝独占打开：本工具拿不到这条内核级证据，按"在用"处理
-            LoopOccupancy::KernelBusy { loopdev } => Some(format!(
+            LoopOccupancy::KernelBusy { loopdev } => Some(FsError::invalid(format!(
                 "{loopdev} is a loop onto this image and the kernel refuses an exclusive open (EBUSY) — \
                  it is still in use (mounted, active swap, or claimed by another stack)"
-            )),
-            LoopOccupancy::Unclaimable { loopdev, why } => Some(format!(
+            ))),
+            LoopOccupancy::Unclaimable { loopdev, why } => Some(FsError::Io(io::Error::other(format!(
                 "cannot take an exclusive claim on {loopdev}, a loop onto this image: {why}"
-            )),
+            )))),
         };
-        if let Some(why) = why {
-            return Err(FsError::Io(io::Error::other(why)));
+        if let Some(e) = refusal {
+            return Err(e);
         }
     }
     let loopdev = attach_loop(src, off, len)?;

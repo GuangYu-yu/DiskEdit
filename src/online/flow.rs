@@ -30,10 +30,21 @@ fn verify_mount_target(t: &OnlineTarget) -> Result<(), String> {
     Ok(())
 }
 
+/// 本次在线 resize 对分区表的权限边界。两个入口（`resizefs --online` 与 `resize`）在
+/// 这一段逻辑上的区别只有两处判据，由调用方显式声明，不以两个裸 bool 由实参位置区分
+pub(crate) enum TablePolicy {
+    /// 只改文件系统，不碰分区表：缩容与越界增长都在任何写盘之前拒绝；
+    /// 请求值等于现分区长度时含义是"把 FS 扩到分区末端"，是一次真实写盘
+    FilesystemOnly,
+    /// 职责包含分区几何：越界与缩容先改表；
+    /// 请求值等于现分区长度表示"分区不动"，没有任何写盘
+    WithTable,
+}
+
 pub fn resize_online(
     mountpoint: &Path,
     decide: impl FnOnce(&FileSource) -> Result<Option<u64>, Fail>,
-    allow_partition_grow: bool,
+    table: TablePolicy,
 ) -> Outcome {
     // 解析与 FS 识别都是只读的，且先于 part_resize/sfdisk 的首次写盘 → Infra
     let t = match resolve_target(mountpoint) {
@@ -113,7 +124,7 @@ pub fn resize_online(
         // 本入口（resizefs --online）不改分区表，而缩容必须让分区跟着 FS 一起缩
         // （下方 shrink 臂的 part_resize 会写表）——承诺优先于能力，哪怕 btrfs 缩得动。
         // 与上面的拒绝同层：都在任何 FS 写入与写表之前
-        if !allow_partition_grow {
+        if matches!(table, TablePolicy::FilesystemOnly) {
             return Outcome::refused(
                 "resizefs --online does not change the partition table — shrinking the filesystem \
                  requires shrinking the partition with it; use `diskedit resize` instead"
@@ -152,8 +163,15 @@ pub fn resize_online(
             t.pno, t.part_len_bytes, disk_len
         ));
     }
-    // 请求 == 现分区尺寸与"未指定尺寸"同性质：分区不动、无其他写盘步骤，合并同一臂
+    // 请求终点 == 现状：`resize` 的分区目标落在现分区末端时，分区不动也就没有随后的
+    // FS 步，与离线 ShiftIntent::NoOp 同判据、同文案、同退出码。`resizefs --online`
+    // 的同一数值表示"把 FS 扩到分区末端"，是真实写盘，故按未指定尺寸处理——两种语义
+    // 由调用方声明（见 `TablePolicy`）
     let size = match size {
+        Some(b) if b == t.part_len_bytes && matches!(table, TablePolicy::WithTable) => {
+            println!("partition {} is already {} bytes — nothing to do", t.pno, t.part_len_bytes);
+            return Outcome::applied_with(Vec::new());
+        }
         Some(b) if b == t.part_len_bytes => None,
         other => other,
     };
@@ -172,7 +190,7 @@ pub fn resize_online(
         Some(bytes) => {
             // resizefs --online 只扩文件系统，不改分区表：越界请求在任何写盘之前拒绝，
             // 分区几何的协调由 `resize` 负责
-            if bytes > t.part_len_bytes && !allow_partition_grow {
+            if bytes > t.part_len_bytes && matches!(table, TablePolicy::FilesystemOnly) {
                 return Outcome::refused(format!(
                     "resizefs --online grows the filesystem inside the current partition ({} bytes) — \
                      enlarge the partition with `diskedit resize` first",
@@ -294,8 +312,13 @@ pub fn resize_online(
                 }
                 match part_resize(&t, bytes) {
                     Ok(()) => {}
-                    // 表已写、仅内核同步失败：FS 已缩 + 内核视图过期，两条正交事实都记上
-                    Err(e @ PartResizeError::Partial(_)) => return e.into_outcome(),
+                    // 表已写、仅内核同步失败。FS 已缩是已完成的事实，先单独报出；
+                    // 未达成的内核同步由 Outcome 的 stale 标记承接——两者不混进同一份
+                    // 待办清单（pending 只表示未做的事）
+                    Err(e @ PartResizeError::Partial(_)) => {
+                        println!("btrfs filesystem shrunk to {bytes} bytes (the partition table change did not reach the kernel)");
+                        return e.into_outcome();
+                    }
                     // 表未写或无法断言：FS 已缩，本次已改变盘上内容 → 不得报"未动盘"
                     Err(e) => {
                         return Outcome::failed(format!(

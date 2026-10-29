@@ -743,8 +743,43 @@ pub(crate) fn finalize_growth(
                     Growable::NoFilesystem(Some(FsKind::Lvm2Pv)) => {
                         log("partition extended (the PV space takes effect through the pvresize chain)")
                     }
-                    // SwapUnactivatable 在此意味着探测未命中（盘在两步之间被改动）
-                    _ => log("partition extended (filesystem not resized — its type was not identified)"),
+                    // 元数据是 swap、页格式在本机激活不了（创建机用了 32K 页）：扩容后
+                    // "swap 未重建"是真实待办，不能并入"无需处理"
+                    Growable::SwapUnactivatable => {
+                        log("partition extended (the swap signature was found but this host cannot activate it)");
+                        post.pending(Pending::new(
+                            part,
+                            PendingKind::Swap,
+                            "the partition was extended but the swap area was not rebuilt — its signature uses a \
+                             page size this host cannot activate",
+                            "boot the target or a host with a matching page size, then check that swap is active \
+                             and covers the new space",
+                        ));
+                    }
+                    // 认出了类型却没有可扩的 FS：写盘前 check_grow_step 对同一态是拒绝，走到这里
+                    // 只因盘在两步之间被改动。后置条件"新空间对该分区可用"未达成
+                    Growable::NoFilesystem(Some(kind)) => {
+                        log(&format!(
+                            "partition extended (the {kind} inside was not resized — this tool cannot grow it)"
+                        ));
+                        post.pending(Pending::new(
+                            part,
+                            PendingKind::Fs,
+                            format!("the partition was extended but the {kind} inside was not resized"),
+                            format!("grow the {kind} with its own tool, or re-run with --no-fs to change only the partition"),
+                        ));
+                    }
+                    // 外层已把 Target 交给各自的臂；走到这里只可能是类型在两步之间翻转，
+                    // 后置条件同样未达成
+                    Growable::Target(t) => {
+                        log(&format!("partition extended (the {} inside was not resized — its type changed between validation and finish)", t.fstype));
+                        post.pending(Pending::new(
+                            part,
+                            PendingKind::Fs,
+                            format!("the partition was extended but the {} inside was not resized — its type changed between validation and finish", t.fstype),
+                            format!("grow the {} with its own tool, or re-run with --no-fs to change only the partition", t.fstype),
+                        ));
+                    }
                 },
             }
         }

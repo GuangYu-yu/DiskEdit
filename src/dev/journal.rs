@@ -87,7 +87,7 @@ pub(crate) const REC_HDR: usize = 8;
 pub(crate) const IDENTITY_LEN: usize = 8 * 4 + 1 + 8 * 2 + 1;
 
 /// 版本错误：本工具别的版本写下的、本构建不认识的 journal。版本识别必须先于一切
-/// payload 解析——旧格式的记录布局不同，按当前格式去解会把"版本不认识"报成
+/// payload 解析——别的版本的记录布局可能不同，按当前格式去解会把"版本不认识"报成
 /// "CRC 不符 / 记录损坏"，把用户指向错误的修法
 pub(crate) fn unsupported_version_error(version: u8) -> io::Error {
     io::Error::new(
