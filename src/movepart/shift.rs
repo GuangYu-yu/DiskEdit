@@ -431,12 +431,14 @@ pub(crate) fn execute_apply(
         src.mark_non_reversible()?;
     }
 
-    // 恢复从最近一次 durable checkpoint 继续；batching（CKPT_BATCH_CHUNKS）只决定
+    // 恢复从最近一次 durable checkpoint 继续；batching（`next_ckpt_batch`）只决定
     // checkpoint 的提交频率，即崩溃后最多重做多少个已完成但未持久化的 chunk。
     // chunk 级进度只对"中断时正在搬的那一条"有效（后续条目从头计数）：自重叠搬移
     // （delta < 分区长度）重跑已完成 chunk 会读到被自己覆写过的源数据，chunk 级续传正是为此设计
     let resume_index = ckpt.cur_index;
     let resume_chunks = ckpt.chunks_done;
+    // 非自重叠条目按批提交：起点取常量，随后按每次提交的耗时在重做窗口内调整
+    let mut ckpt_batch = CKPT_BATCH_CHUNKS;
     // 搬移循环：单分区 = 单事务；尾→头推进
     for mi in (ckpt.cur_index as usize)..plan.moves.len() {
         let m = &plan.moves[mi];
@@ -539,7 +541,10 @@ pub(crate) fn execute_apply(
         // 分派判据是**几何**自重叠（位移小于分区长度），不是"块大小是否真被收敛"：
         // 请求的 chunk 本来就不大于位移时布局已经安全，但 durable 边界仍逐 chunk 推进
         // 并由下方的批量开关决定是否攒批——两种优化都只在非自重叠时可用
-        let overlap = m.delta_lba < m.len_lba;
+        let overlap = relocation_overlaps(m.delta_lba, m.len_lba);
+        // 条目块的字节数决定本条的批量上界：大块会把"重做一块"本身撑过窗口，
+        // 故进入循环前先按本条块字节夹紧，而不是沿用上一条的批量
+        ckpt_batch = ckpt_batch.min(ckpt_batch_cap(entry_chunk));
         if overlap && entry_chunk < chunk_len {
             log(&format!(
                 "partition {}: self-overlapping move, chunk size reduced to {} bytes to keep redo reads intact",
@@ -575,14 +580,26 @@ pub(crate) fn execute_apply(
             src.write_data_at(dst_pos, &buf).map_err(|e| {
                 chunk_io_error(e, "writing target", dst_pos / plan.ss, len / plan.ss, i + 1, total_chunks as usize, RESUME_HINT)
             })?;
-            src.sync_data()?; // 数据 chunk 用 sync_data；表结构提交用 sync_all
-            ckpt.chunks_done = i as u64 + 1; // 内存进度：递增发生在 sync_data 之后，永不超前于 durable 数据
-            pending_chunks += 1;
+            ckpt.chunks_done = i as u64 + 1; // 内存进度；落盘前不写进 ckpt 文件
             // 自重叠搬移：durable 边界逐 chunk 推进（写区间探入后续重做源区间的窗口
-            // 只能靠收紧 checkpoint 频率关死）；非自重叠照常攒批
-            if overlap || pending_chunks >= CKPT_BATCH_CHUNKS || i as u64 + 1 == total_chunks {
+            // 只能靠收紧 checkpoint 频率关死），数据与边界同一步落盘
+            if overlap {
+                src.sync_data()?; // 数据 chunk 用 sync_data；表结构提交用 sync_all
                 atomic_write_ckpt(ckpt_path, &ckpt.serialize())?;
+                fault_after_data_sync(i as u64 + 1);
+                fault_chunk(i as u64 + 1);
+                continue;
+            }
+            // 非自重叠：一批数据攒到一起，提交前同步一次，同步点覆盖到本 chunk；
+            // ckpt 里的边界因此永不超前于已落盘数据
+            pending_chunks += 1;
+            if pending_chunks >= ckpt_batch || i as u64 + 1 == total_chunks {
+                let t0 = std::time::Instant::now();
+                src.sync_data()?;
+                atomic_write_ckpt(ckpt_path, &ckpt.serialize())?;
+                fault_after_data_sync(i as u64 + 1);
                 pending_chunks = 0;
+                ckpt_batch = next_ckpt_batch(ckpt_batch, t0.elapsed(), entry_chunk);
             }
             fault_chunk(i as u64 + 1);
         }

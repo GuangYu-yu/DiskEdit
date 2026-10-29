@@ -52,15 +52,22 @@ mk_layout "$T"; fill_p23 "$T"
 # 与续跑，FS 步骤不在覆盖范围内
 DISKEDIT_FAULT=after-entry-commit:0 $BF resize "$T":1 +500M --allow-move --yes --no-fs >/dev/null 2>&1
 echo "round1 aborted (expected)"
-# 轮2：entry 1（p2，100 chunks）拷到第 70 chunk 死 → durable=64
+# 轮2：entry 1（p2，100 chunks）拷到第 70 chunk 死 → durable 停在最近一次提交点
+# （首批 16，之后按提交耗时自适应，落点不固定）
 OUT=$(DISKEDIT_FAULT=chunk:70 $BF resize "$T":1 +500M --allow-move --yes --no-fs 2>&1)
 echo "$OUT" | grep -o "resuming at entry [0-9]* chunk [0-9]*" | head -1
 echo "round2 aborted (expected)"
-# 轮3：无注入完成 → resume at entry 1 chunk 64
+# 轮3：无注入完成 → 续跑起点是某次提交时的 durable 边界；提交批量按耗时自适应，
+# 不保证停在 64（首批固定 16，之后可能放大），只断言它是 entry 1 的一个已提交点
 OUT=$($BF resize "$T":1 +500M --allow-move --yes --no-fs 2>&1)
 R=$(echo "$OUT" | grep -o "resuming at entry [0-9]* chunk [0-9]*" | head -1)
-echo "round3: $R (want entry 1 chunk 64)"
-[ "$R" = "resuming at entry 1 chunk 64" ] && echo "RESUME-CHAIN OK" || { echo "RESUME-CHAIN WRONG"; rc=1; }
+N=$(echo "$R" | sed 's/.*chunk //')
+echo "round3: $R (期望 entry 1、chunk 1..70)"
+case "$R" in
+  "resuming at entry 1 chunk "*)
+    [ "$N" -gt 0 ] && [ "$N" -le 70 ] && echo "RESUME-CHAIN OK" || { echo "RESUME-CHAIN WRONG ($R)"; rc=1; } ;;
+  *) echo "RESUME-CHAIN WRONG ($R)"; rc=1 ;;
+esac
 check_data "$T" || rc=1
 # p1 终态 = 500M + 500M = 1000M
 P1=$($B info "$T" | grep -o '"num":1,[^}]*}' | grep -o '"size_bytes":[0-9]*' | cut -d: -f2)

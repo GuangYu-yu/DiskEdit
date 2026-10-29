@@ -411,6 +411,15 @@ pub(crate) fn resume_outcome(src: &FileSource, g: &ValidatedGeometry, grow_part:
 // "搬到第几 chunk"从数据区只看得出"已覆盖"、看不出"到哪"，必须存（chunks_done）。
 // 本文两个 checkpoint（搬移的 Checkpoint 与单分区缩放的 RsCheckpoint）同受此判据约束
 
+/// 搬移是否自重叠：位移小于源区间长度，即目的区间与源区间相交。
+///
+/// 判据只取几何，与"块大小是否已被收敛"无关：请求块本来就不大于位移时布局已安全，
+/// 但重做仍会读到本批后续写覆盖过的源区，所以批量提交的开关必须按它分派。
+/// 位移为 0 时有源区间与自己重合的语义，但没有任何拷贝要做，不算自重叠
+pub(crate) fn relocation_overlaps(shift_lba: u64, src_len_lba: u64) -> bool {
+    shift_lba != 0 && shift_lba < src_len_lba
+}
+
 /// 一条搬移的块布局：返回 `(每块字节数, 块数上界)`。
 ///
 /// 逐块前移的覆盖顺序要求**自重叠**搬移（位移 < 源长度）的单次拷贝不超过位移，
@@ -419,7 +428,7 @@ pub(crate) fn resume_outcome(src: &FileSource, g: &ValidatedGeometry, grow_part:
 /// 抄在多处时，任何一处漂移都会变成"少拷却提交表项"或"重做读到已被覆盖的源"。
 ///
 /// `copy_lba` 是本次要搬的扇区数（plan 条目 = 分区长度；move+shrink = 新旧区间的
-/// 较小者），`src_len_lba` 是源区间长度：`shift != 0 && shift < src_len_lba` 即自重叠。
+/// 较小者），`src_len_lba` 是源区间长度，自重叠由 [`relocation_overlaps`] 判定。
 /// 位移为 0 的条目与块大小算成 0 的现场都没有可用的块布局，返回 `None`
 /// （调用方按"溢出/损坏"拒绝，不拿 0 当除数）
 pub(crate) fn move_chunk_layout(
@@ -429,7 +438,7 @@ pub(crate) fn move_chunk_layout(
     src_len_lba: u64,
     chunk_bytes: u64,
 ) -> Option<(u64, u64)> {
-    let chunk = if shift_lba != 0 && shift_lba < src_len_lba {
+    let chunk = if relocation_overlaps(shift_lba, src_len_lba) {
         chunk_bytes.min(shift_lba.checked_mul(ss)?)
     } else {
         chunk_bytes
