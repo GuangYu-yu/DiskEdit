@@ -661,12 +661,18 @@ pub(crate) fn execute_resize(
         let src_off = old_start.checked_mul(ss).ok_or_else(byte_overflow)?;
         let dst_off = new_start.checked_mul(ss).ok_or_else(byte_overflow)?;
         let total = copy_len.checked_mul(ss).ok_or_else(byte_overflow)?;
-        // 自重叠搬移（位移小于分区长度）下，重做 chunk 的源区间会被先落盘 chunk 的写
+        // 自重叠搬移（位移小于源长度）下，重做 chunk 的源区间会被先落盘 chunk 的写
         // 覆盖，除非每个 chunk 不大于位移（两个方向同理：写区间起点与重做源区间终点
-        // 至少隔一个位移）。chunk 收敛到位移字节以内；此处本就逐 chunk checkpoint。
+        // 至少隔一个位移）。chunk 收敛到位移字节以内；重做边界同样逐块推进
         // 块布局取自唯一实现，与 checkpoint 的进度上界同源
-        let (entry_chunk, _) = move_chunk_layout(copy_len, ss, moved, old_end - old_start + 1, chunk_len)
+        let src_len = old_end - old_start + 1;
+        let (entry_chunk, _) = move_chunk_layout(copy_len, ss, moved, src_len, chunk_len)
             .ok_or_else(byte_overflow)?;
+        // 与搬移路径同一判据：自重叠时批量攒下的未持久化块会探入重做区间，只能逐块提交；
+        // 非自重叠的写区间与源区间不相交，可攒批
+        let overlap = relocation_overlaps(moved, src_len);
+        let mut ckpt_batch = CKPT_BATCH_CHUNKS.min(ckpt_batch_cap(entry_chunk));
+        let mut pending_chunks = 0u64;
         let order: Vec<(u64, u64)> = {
             let mut v = Vec::new();
             let mut pos = 0u64;
@@ -689,9 +695,27 @@ pub(crate) fn execute_resize(
             src.write_data_at(dst_off + within, &buf).map_err(|e| {
                 chunk_io_error(e, "writing target", (dst_off + within) / ss, len / ss, i + 1, order.len(), RESUME_HINT)
             })?;
-            src.sync_data()?;
-            ckpt.chunks_done = i as u64 + 1;
-            save(&ckpt)?;
+            ckpt.chunks_done = i as u64 + 1; // 内存进度；落盘前不写进 ckpt 文件
+            // 自重叠：数据与重做边界同一步落盘（写区间探入后续重做源区间的窗口
+            // 只能靠收紧 checkpoint 频率关死）
+            if overlap {
+                src.sync_data()?;
+                save(&ckpt)?;
+                fault_rs_after_data_sync(i as u64 + 1);
+                fault_rs_chunk(i as u64 + 1);
+                continue;
+            }
+            // 非自重叠：一批数据攒到一起，提交前同步一次，同步点覆盖到本 chunk；
+            // ckpt 里的边界因此永不超前于已落盘数据
+            pending_chunks += 1;
+            if pending_chunks >= ckpt_batch || i as u64 + 1 == order.len() as u64 {
+                let t0 = std::time::Instant::now();
+                src.sync_data()?;
+                save(&ckpt)?;
+                fault_rs_after_data_sync(i as u64 + 1);
+                pending_chunks = 0;
+                ckpt_batch = next_ckpt_batch(ckpt_batch, t0.elapsed(), entry_chunk);
+            }
             fault_rs_chunk(i as u64 + 1);
         }
         log(&format!("data moved by {moved} sectors"));
