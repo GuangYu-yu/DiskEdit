@@ -2,7 +2,7 @@
 
 use super::*;
 
-// ---------- 分区创建 / 删除（CLI: new / add / del） ----------
+// ---------- 分区创建 / 删除（CLI: new / add / delete） ----------
 
 /// GUID 熵源：时间 + 路径哈希（无第三方 rand 依赖；不承诺 UUIDv4 质量）。
 /// disk GUID 与分区 unique GUID 共用播种
@@ -194,7 +194,7 @@ pub(crate) fn empty_entry() -> GPTPartitionEntry {
     }
 }
 
-// 表项编排（add/rename/flag/del：读 → 判 → 修复 → 提交）已上移策略层
+// 表项编排（add/rename/flag/delete：读 → 判 → 修复 → 提交）已上移策略层
 // （gpt_policy）；本层只保留它们用到的写入原语与常量
 
 /// GPT flags：attribute 位按 UEFI 2.10 §5（bit0=Required Partition，bit1=No Block IO

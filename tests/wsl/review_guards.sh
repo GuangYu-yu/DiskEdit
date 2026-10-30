@@ -216,7 +216,7 @@ for i in 1 2 3 4 5 6 7 8; do
         echo "  (attempt $i) loop/mount unavailable"
         lo_detach "$LD"; continue
     fi
-    $BF resizefs /testmnt 1610612736 --online >/dev/null 2>&1 &
+    $BF resizefs /testmnt 1610612736 >/dev/null 2>&1 &
     rp=$!
     # 第三方（不守本工具的锁）在 p1 将要吞掉的区间里建条目
     for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do

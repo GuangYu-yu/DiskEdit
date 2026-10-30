@@ -85,8 +85,8 @@ $B add "$T" --start 264192 --end 266239 --name over >/dev/null 2>&1; E=$?
 # 紧贴：把 p128 扩到 last_usable，再加 1 扇区应被拒
 # 1G 镜像末 LBA = 2097151；备份数组(32 扇区)位于末扇区的备份头之前，
 # 故 last_usable = 2097151 - 32 - 1 = 2097118（同 boundary_last_usable.sh）
-# --end 默认按 MiB 下取整，会把越界的 end 夹回可用区内（src/support.rs:231,235），
-# 所以这里必须 --align none，越界请求才真正到达边界校验（src/movepart.rs:1456）
+# --end 默认按 MiB 下取整，会把越界的 end 夹回可用区内（src/support.rs:258-278），
+# 所以这里必须 --align none，越界请求才真正到达边界校验（src/movepart/resize.rs:404）
 LU=2097118
 echo "last_usable=$LU (2097151 - 32 - 1)"
 # p128 里没有 FS：扩分区表要显式 --no-fs，越界判定才轮到边界校验这一关

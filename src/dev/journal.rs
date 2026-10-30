@@ -1,4 +1,4 @@
-//! undo journal 的记录格式、文件生命周期与候选分类。
+//! undo journal 的记录格式、文件生命周期与落点状态分类。
 
 use super::*;
 use std::num::NonZeroUsize;
@@ -32,7 +32,7 @@ pub(crate) fn take_created_journal_fp(p: &Path) -> Option<TargetFingerprint> {
 /// 两者各记一份在**同一条记录**里，不设第二套 history
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mutation {
-    /// 分区表/条目字节的改写：new / add / del / set / create / resize-part / 搬移的表项部分
+    /// 分区表/条目字节的改写：new / add / delete / set / create / resize-part / 搬移的表项部分
     PartitionTable,
     /// 分区数据块被搬移
     RelocatePartition { partition: u32, from_lba: u64, to_lba: u64 },
@@ -120,7 +120,7 @@ pub(crate) fn truncated_header_error(have: usize, need: usize) -> io::Error {
     )
 }
 
-/// 一个 journal 候选落点的状态。**四态是现场判定的唯一来源**：写闸口、`undo` 的挑选
+/// 一个 journal 落点的状态。**四态是现场判定的唯一来源**：写闸口、`undo` 的挑选
 /// 与 `abandon` 的枚举都从它派生，不各自实现"文件在不在 / 读不读得出"。
 ///
 /// `Absent` 覆盖两种"不是现场"的形态：落点不存在、0 字节残骸。符号链接与非普通文件不在此
@@ -472,7 +472,7 @@ impl Journal {
     ///
     /// 撤销窗口的痕迹应当由"确实记了什么"产生，而不是由"打开目标"产生：否则一条在
     /// 校验阶段就被拒的命令会留下空 journal，让后续 undo 报"journal 是空的"而不是
-    /// "没有 journal"，也占住了候选落点。
+    /// "没有 journal"，也占住了落点。
     ///
     /// 既有文件还要过身份核对：它记的是**哪个目标**。指纹或 loop 映射不符即拒绝
     /// 采纳——把别的目标记下的原文当成"本目标的待回滚字节"，是这条路径最坏的后果。

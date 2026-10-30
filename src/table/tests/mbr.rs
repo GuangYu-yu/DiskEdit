@@ -115,7 +115,7 @@ pub(crate) fn msdos_type_set_and_guards() {
     let e = set_mdos_type(&mut src, 1, 0x07).unwrap_err();
     assert!(matches!(e, Fail::Refused(_)), "existing extended container must be refused: {e:?}");
     assert_eq!(parse_mbr(&src).unwrap().unwrap()[0].os_type, 0x05);
-    // 既有条目是 GPT 保护记录：类型字节承担结构语义，与 del_mdos_entry 同判据
+    // 既有条目是 GPT 保护记录：类型字节承担结构语义，与 delete_mdos_entry 同判据
     lba0[446 + 4] = 0xEE;
     src.write_at(0, &lba0).unwrap();
     let e = set_mdos_type(&mut src, 1, 0x07).unwrap_err();
@@ -283,7 +283,7 @@ pub(crate) fn protective_mbr_shape_and_size() {
 
 /// 盘型由 LBA1 签名判定（UEFI 2.10 §5.3），保护 MBR 布局只定修复分类：
 /// 布局破损的 GPT 盘绝不能按 msdos 解析。0xEE 槽若被当成真分区输出，
-/// del/flag 会清除或改写它，恢复 GPT 所需的保护记录就此毁掉
+/// delete/flag 会清除或改写它，恢复 GPT 所需的保护记录就此毁掉
 #[test]
 pub(crate) fn damaged_protective_mbr_never_parses_as_msdos() {
     let mut src = src_from_gpt("pmbdmg", 512);

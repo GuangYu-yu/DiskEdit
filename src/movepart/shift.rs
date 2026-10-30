@@ -127,7 +127,6 @@ pub(crate) fn prepare_apply(
     // 落点取命中路径：续传写同一份现场；空槽返回本次命名落点
     let (slot, ckpt_path) = read_checkpoint(src, g0)?;
     let ckpt = match slot {
-        CheckpointSlot::Ambiguous(paths) => return Err(ambiguous_checkpoint(&paths)),
         // 与 make_plan_resuming 共用同一句拒绝理由：同一事实的措辞只写一次
         CheckpointSlot::Resize(_) => return Err(foreign_resize_refusal()),
         CheckpointSlot::Relocation(c) => {

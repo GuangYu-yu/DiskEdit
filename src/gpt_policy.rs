@@ -166,7 +166,7 @@ pub(crate) fn apply_repair(src: &mut WriteSource, action: &RepairAction, ss: u64
     Ok(())
 }
 
-/// 所有需要做空间算术的命令（add/new/del/rename/flag/resize-part/copy）都先经过这里：
+/// 所有需要做空间算术的命令（add/new/delete/rename/flag/resize-part/copy）都先经过这里：
 /// 读取 → 判定（classify_repair）→ 产出**可操作几何**（[`ValidatedGeometry`]，其
 /// `last_usable_lba` 已是修复后将生效的值）。
 ///
@@ -187,7 +187,7 @@ pub(crate) fn apply_repair(src: &mut WriteSource, action: &RepairAction, ss: u64
 /// "修复后必须两份头都有效"这一条有规范依据：UEFI 2.10 §5.3.2 规定
 /// "_Both the primary and backup GPTs must be valid before an attempt is made to grow the size
 /// of a physical volume_"，理由同节给出——GPT 的恢复方案依赖备份头位于设备末端，容量变化后
-/// 备份头必须随之搬移。本函数被所有空间算术命令共用（含不扩容的 del），对它们而言比规范更严：
+/// 备份头必须随之搬移。本函数被所有空间算术命令共用（含不扩容的 delete），对它们而言比规范更严：
 /// 规范只规定了扩容场景的下限，并未禁止其他操作也要求双头有效
 pub fn resolve_geometry(src: &FileSource) -> Result<Option<(ValidatedGeometry, RepairAction)>, Fail> {
     let g = match table::load_gpt(src) {
@@ -536,7 +536,7 @@ pub fn add_entry(
     add_entry_at(src, start, end, name, type_guid, unique)
 }
 
-/// add 的底层：显式指定 unique guid（copy 传入新生成的 v4 GUID，`--clone` 时
+/// add 的底层：显式指定 unique guid（copy 传入新生成的 v4 GUID，`--keep-partuuid` 时
 /// 传入源分区的 GUID）。`execute_copy` 在 durable boundary 之后调用它，依赖它
 /// "写盘前拒绝 ⇒ `Refused`、写盘后 ⇒ 压成 `io::Error`"这个分界——只换模块，不动契约
 pub fn add_entry_at(
@@ -599,10 +599,10 @@ pub fn rename_entry(src: &mut WriteSource, part: u32, name: &str) -> Result<(), 
 }
 
 /// GPT 分区类型 GUID 直改（UEFI 2.10 §5.3.2 PartitionTypeGUID）。全零拒绝：
-/// 零 GUID 是"未用条目"的形状，写零等于把在用条目改成空壳，移除分区应走 `del`
+/// 零 GUID 是"未用条目"的形状，写零等于把在用条目改成空壳，移除分区应走 `delete`
 pub fn set_type_guid(src: &mut WriteSource, part: u32, guid: [u8; 16]) -> Result<(), Fail> {
     if guid == [0u8; 16] {
-        return Err(Fail::refused("type GUID cannot be all-zero (that marks an unused entry — use `del`)"));
+        return Err(Fail::refused("type GUID cannot be all-zero (that marks an unused entry — use `delete`)"));
     }
     let (mut g, repair) = resolve_geometry(src)?.ok_or_else(|| Fail::refused("no GPT"))?;
     let i = live_index(g.entries(), part)?;
@@ -716,8 +716,8 @@ pub fn set_gpt_flag(src: &mut WriteSource, part: u32, flag: GptFlag, on: bool) -
     Ok(g.commit(src)?)
 }
 
-/// `del`：清零条目（只清表项，分区数据区不动）
-pub fn del_entry(src: &mut WriteSource, part: u32) -> Result<(), Fail> {
+/// `delete`：清零条目（只清表项，分区数据区不动）
+pub fn delete_entry(src: &mut WriteSource, part: u32) -> Result<(), Fail> {
     let (mut g, repair) = resolve_geometry(src)?.ok_or_else(|| Fail::refused("no GPT"))?;
     let i = live_index(g.entries(), part)?;
     g.update_entry(i, |e| *e = table::empty_entry())

@@ -53,17 +53,15 @@ impl From<u8> for CmdResult {
     }
 }
 
-/// 一条命令的全部声明。名字/别名、旗标白名单、详助文本、与目标盘的打开关系、处理函数
+/// 一条命令的全部声明。名字、旗标白名单、详助文本、与目标盘的打开关系、处理函数
 /// **同出一源**：分派、`help <CMD>` 路由、旗标消费对账、成功后的 journal 清理
 /// 都从这张表派生。
 ///
 /// 若这几处各留一份命令清单，"改了分派忘了白名单"会让命令静默接受并忽略一个旗标，
 /// 而"忘了 journal 清理"会留下撤销窗口。同一契约只有一处可改，才不会有第三处漏改
 pub(crate) struct CommandSpec {
-    /// 主名：也是 `help <CMD>` 的主题与旗标对账的键
+    /// 命令名：也是 `help <CMD>` 的主题与旗标对账的键
     pub(crate) name: &'static str,
-    /// 等价写法（分派与 help 主题同样接受）
-    pub(crate) aliases: &'static [&'static str],
     /// 命令层会读到的旗标；未列出的旗标一律拒绝（fail-closed）。
     /// 静默忽略用户显式给出的旗标是最危险的参数漂移：命令做了旗标明确排除的事却报成功
     pub(crate) flags: &'static [&'static str],
@@ -98,7 +96,6 @@ pub(crate) enum TargetMode {
 pub(crate) const COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         name: "info",
-        aliases: &[],
         flags: &["--sector-size"],
         help: info::HELP,
         max_pos: 1,
@@ -107,13 +104,12 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "resize",
-        aliases: &[],
         // --start/--end 在此不是"被消费的旗标"而是"必须明确拒绝的旗标"：声明它们，
         // 请求才会走到 resize 自己那条"改大小不挪位，用 move/resize-part"的提示，
         // 而不是被白名单拦成一句笼统的"不是本命令的选项"。--start 与 --end 是同一
         // 语义（挪位）的两半，缺一个另一半就会先死在白名单上
         flags: &[
-            "--sector-size", "--size", "--grow-to-end", "--no-fs", "--grow-lv", "--lv", "--yes",
+            "--sector-size", "--no-fs", "--grow-lv", "--lv", "--yes",
             "--allow-move", "--chunk-size", "--start", "--end",
         ],
         help: resize::HELP,
@@ -123,7 +119,6 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "move",
-        aliases: &[],
         flags: &["--sector-size", "--start", "--align", "--chunk-size", "--no-fs"],
         help: layout::HELP_MOVE,
         max_pos: 1,
@@ -132,8 +127,7 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "copy",
-        aliases: &[],
-        flags: &["--sector-size", "--start", "--align", "--chunk-size", "--name", "--clone"],
+        flags: &["--sector-size", "--start", "--align", "--chunk-size", "--name", "--keep-partuuid"],
         help: layout::HELP_COPY,
         max_pos: 1,
         mode: TargetMode::WriteJournal,
@@ -141,7 +135,6 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "create",
-        aliases: &[],
         flags: &["--sector-size", "--size", "--fs", "--name"],
         help: layout::HELP_CREATE,
         max_pos: 1,
@@ -150,16 +143,14 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "delete",
-        aliases: &["del"],
         flags: &["--sector-size", "--yes"],
         help: layout::HELP_DELETE,
         max_pos: 1,
         mode: TargetMode::WriteJournal,
-        run: |_, a| layout::cmd_del(a).into(),
+        run: |_, a| layout::cmd_delete(a).into(),
     },
     CommandSpec {
         name: "set",
-        aliases: &[],
         flags: &["--sector-size", "--random"],
         help: fs::HELP_SET,
         max_pos: 4, // TARGET:N + key + value + state
@@ -168,7 +159,6 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "check",
-        aliases: &[],
         flags: &["--sector-size"],
         // check 把分区交给外部工具，自己不动分区表；不需要撤销窗口
         help: fs::HELP_CHECK,
@@ -182,7 +172,6 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
     // 撤销窗口时，目标上不会还留着别人的现场
     CommandSpec {
         name: "mkfs",
-        aliases: &[],
         flags: &["--sector-size", "--yes"],
         help: fs::HELP_MKFS,
         max_pos: 2, // TARGET:N + FSTYPE
@@ -191,8 +180,7 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "resizefs",
-        aliases: &[],
-        flags: &["--sector-size", "--online", "--size"],
+        flags: &["--sector-size"],
         help: fs::HELP_RESIZEFS,
         max_pos: 2, // MOUNTPOINT + BYTES
         mode: TargetMode::WriteNoJournal,
@@ -200,7 +188,6 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "undo",
-        aliases: &[],
         flags: &["--sector-size", "--yes"],
         help: undo::HELP,
         max_pos: 1,
@@ -212,7 +199,6 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
     // 归 WriteNoJournal 的后果正是要的——成功时不触发 main 的 journal 清理
     CommandSpec {
         name: "abandon",
-        aliases: &[],
         flags: &["--yes"],
         help: abandon::HELP,
         max_pos: 1,
@@ -221,7 +207,6 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "new",
-        aliases: &[],
         flags: &["--sector-size", "--table", "--yes", "--overwrite-partition-data"],
         help: layout::HELP_NEW,
         max_pos: 1,
@@ -230,7 +215,6 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "add",
-        aliases: &[],
         flags: &["--sector-size", "--start", "--end", "--align", "--name", "--type"],
         help: layout::HELP_ADD,
         max_pos: 1,
@@ -239,7 +223,6 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "resize-part",
-        aliases: &[],
         flags: &["--sector-size", "--start", "--end", "--grow-to-end", "--align", "--chunk-size", "--no-fs"],
         help: layout::HELP_RESIZE_PART,
         max_pos: 1,
@@ -248,7 +231,6 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "plan",
-        aliases: &[],
         flags: &["--sector-size", "--grow"],
         help: plan::HELP,
         max_pos: 1,
@@ -257,7 +239,6 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "apply",
-        aliases: &[],
         // 无 --yes：apply 与 plan 是同一件事的两面——plan 干跑不触盘，apply 在**锁下**
         // 按盘上现状重新推导计划后执行（见 cmd::plan），没有第二个确认层；
         // 白名单声明却不消费的旗标 = 静默接受用户以为存在的确认
@@ -269,9 +250,9 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
     },
 ];
 
-/// 按主名或别名查表
+/// 按命令名查表
 pub(crate) fn find(name: &str) -> Option<&'static CommandSpec> {
-    COMMANDS.iter().find(|c| c.name == name || c.aliases.contains(&name))
+    COMMANDS.iter().find(|c| c.name == name)
 }
 
 /// `diskedit help <主题>` 的文本路由；未知主题返回 None
@@ -325,7 +306,7 @@ pub(crate) fn dispatch(cmd: &str, a: &Args) -> CmdResult {
 mod tests {
     use super::*;
 
-    /// 命令表的自洽：名字与别名互不重复；每条详助都写明自己的名字。
+    /// 命令表的自洽：名字互不重复；每条详助都写明自己的名字。
     /// 详助正文无法从表里机械生成，但"主题 → 文本"的路由是按名字走的，
     /// 文本里写着别的命令就是帮助漂移，这条对账把它变成构建期错误
     #[test]
@@ -333,9 +314,6 @@ mod tests {
         let mut seen = std::collections::HashSet::new();
         for c in COMMANDS {
             assert!(seen.insert(c.name), "duplicate command name {}", c.name);
-            for a in c.aliases {
-                assert!(seen.insert(a), "duplicate alias {a}");
-            }
             assert!(!c.help.is_empty(), "{}: missing help text", c.name);
             assert!(c.max_pos >= 1, "{}: max_pos must count the target", c.name);
             assert!(
@@ -349,11 +327,10 @@ mod tests {
         }
     }
 
-    /// 别名解析回主名；白名单是 fail-closed 的——未声明的命令没有白名单，
+    /// 白名单是 fail-closed 的——未声明的命令没有白名单，
     /// resize 声明 --start 只为走到它自己的针对性拒绝（见 cmd::resize）
     #[test]
-    fn aliases_and_flag_whitelists() {
-        assert_eq!(find("del").map(|c| c.name), Some("delete"));
+    fn flag_whitelists() {
         assert!(flags_for("resize").unwrap().contains(&"--start"));
         assert!(!flags_for("resize").unwrap().contains(&"--align"));
         assert!(flags_for("move").unwrap().contains(&"--start"));

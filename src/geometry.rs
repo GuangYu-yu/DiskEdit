@@ -237,7 +237,7 @@ impl ValidatedGeometry {
     /// 第三方改动——提交写的是快照，不核对就会把它的改动静默覆盖（条目消失、搬移落点
     /// 按旧几何算、第三方改的 disk GUID / usable 区间被写回旧值）
     ///
-    /// 窗口的长度由调用点决定：add/rename/set/del 是"读 → 判 → 修复 → 提交"，
+    /// 窗口的长度由调用点决定：add/rename/set/delete 是"读 → 判 → 修复 → 提交"，
     /// resize 与搬移类命令则跨整个 FS 调整或数据搬移
     pub(crate) fn ensure_entries_unchanged(&self, src: &crate::dev::FileSource) -> io::Result<()> {
         let g = crate::table::load_gpt(src)

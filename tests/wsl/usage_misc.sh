@@ -29,7 +29,7 @@ chk() {
 
 echo "=== 1: resize-part --grow-to-end（末分区扩到尾） ==="
 mk; M3=$(fill 3 190)
-# resize-part 的 --start 是必填：缺它直接走 usage() 出口退 10（src/cmd/layout.rs:164），
+# resize-part 的 --start 是必填：缺它即 refused 退 10（src/cmd/layout.rs:261-263），
 # 与"扩容被拒"是两回事。p3 的起点从盘上读，保持原测试意图（末分区扩到可用区尾）
 P3S=$($B info "$T" | grep -o '"num":3,[^}]*}' | grep -o '"first_lba":[0-9]*' | cut -d: -f2)
 $B resize-part "$T":3 --start "$P3S" --grow-to-end >/dev/null 2>&1; exp $? 0 "resize-part --grow-to-end"

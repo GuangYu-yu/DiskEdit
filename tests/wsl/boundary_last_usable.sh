@@ -32,12 +32,12 @@ $B resize-part "$T":1 --start 2048 --grow-to-end --no-fs >/dev/null; exp $? 0 "a
   || { echo "  BAD  p1 未到 last_usable（last_lba=$(p1_last)）"; rc=1; }
 
 echo "== 越过 last_usable 必须拒绝 =="
-# 三条都必须显式 --align none。--end 默认按 MiB **下取整**（src/support.rs:231,235 的
-# align_range），会把越界的 end 夹回可用区内（2097119 → 2095103、2097150 → 2095103）；
+# 三条都必须显式 --align none。--end 默认按 MiB **下取整**（src/support.rs:258-278 的
+# floor_align / align_range），会把越界的 end 夹回可用区内（2097119 → 2095103、2097150 → 2095103）；
 # 这样得到的仍是可用区内的合法区间，被拒的理由变成"缩容 unknown FS"或"与既有分区重叠"，
 # 于是断言虽拿到 10，却根本没走到边界校验——即"因错因通过"。
-# 加 --align none 后原始越界 LBA 直达校验：resize-part 命中 src/movepart.rs:1456 的
-# `new_end > last_usable_lba`，add 命中 src/gpt_policy.rs:290 的可用区判定，拒绝才是因越界。
+# 加 --align none 后原始越界 LBA 直达校验：resize-part 命中 src/movepart/resize.rs:404 的
+# `new_end > last_usable_lba`，add 命中 src/geometry.rs:190 的可用区判定，拒绝才是因越界。
 # 反例佐证：uncovered_branches.sh 的紧贴边界用例同样使用 --align none。
 $B resize-part "$T":1 --start 2048 --align none --end $((LU + 1)) >/dev/null 2>&1; exp $? 10 "last_usable+1 拒绝"
 $B add "$T" --start 2048 --align none --end 2097150 >/dev/null 2>&1; exp $? 10 "beyond last_usable 拒绝"

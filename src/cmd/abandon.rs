@@ -56,7 +56,7 @@ pub(crate) fn cmd_abandon(a: &Args) -> u8 {
     // 锁文件是纯运行时 artifact，残留不构成阻挡（判据是锁本身，见 targetlock）
     let _owned = TargetLock::acquire(&identity, None).unwrap_or_else(|f| bail_fail(f));
 
-    // 打开目标只为一件事：把候选头里的目标身份与当前目标比一遍（见 abandon_records）；
+    // 打开目标只为一件事：把 journal 头里的目标身份与当前目标比一遍（见 abandon_records）；
     // 打不开（目标已不存在）只影响这次比对，现场照常放弃。abandon 只碰恢复现场、
     // 不碰盘上字节，没有理由要求排他写打开——块设备用只读，镜像按镜像语义
     let disk = if identity.kind == crate::dev::TargetKind::Block {
@@ -69,7 +69,7 @@ pub(crate) fn cmd_abandon(a: &Args) -> u8 {
 
 fn abandon_records(identity: &TargetIdentity, disk: Option<&FileSource>) -> u8 {
     let records = active_recovery_records(identity);
-    // 比对候选头身份用的当前目标现场：目标打不开时为 None，比对跳过、候选按现状处理
+    // 比对 journal 头身份用的当前目标现场：目标打不开时为 None，比对跳过、现场按现状处理
     let scene = disk.map(|d| d.scene());
     if records.is_empty() {
         // 幂等：目标已经是"没有 active transaction"，空跑即成功
@@ -112,7 +112,7 @@ fn abandon_records(identity: &TargetIdentity, disk: Option<&FileSource>) -> u8 {
     }
 
     let mut failed: Vec<String> = Vec::new();
-    // 首部可读、且头里的身份与当前目标不符的候选。它们照常改名（abandon 的职责是把
+    // 首部可读、且头里的身份与当前目标不符的现场。它们照常改名（abandon 的职责是把
     // 目标从现场里释放出来），但这份凭据属于另一个目标场景，必须在总结里点名
     let mut foreign: Vec<String> = Vec::new();
     for r in &records {

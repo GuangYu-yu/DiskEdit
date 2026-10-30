@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 在线路径（挂载态）拒绝分支：resizefs --online 的形态守卫 + 非 btrfs 在线缩容拒绝。
+# 在线路径（挂载态）拒绝分支：resizefs 的形态判据 + 非 btrfs 在线缩容拒绝。
 # 每条拒绝之后核对「分区表 / FS 未被改动」（info 的 last_lba、dumpe2fs 的 block count×size）。
 # 退出码契约唯一定义在 src/outcome.rs:17-25（10=拒绝，本次未写盘）。
 # 依据以 `src/文件:行号` 标注在断言旁。
@@ -27,29 +27,29 @@ mount_at "${LD}p1" "$MP" || { echo "  BAD  mount 失败"; rc=1; exit 1; }
 LAST0=$(lba1)
 FS0=$(fs_bytes "${LD}p1")
 
-echo "== 形态守卫：在线形式只接挂载点 =="
-# src/cmd/fs.rs:89-91 —— --online 收到 <target>:N 即 refused（10）
-$B resizefs "$T":1 --online >/dev/null 2>&1; exp $? 10 "resizefs <target>:1 --online 拒绝"
+echo "== 形态即模式：尺寸给法只属于挂载点形式 =="
+# src/cmd/fs.rs:167-172 —— :N 走离线分支，BYTES 在那里无消费点，显式拒绝而非静默忽略
+$B resizefs "$T":1 8M >/dev/null 2>&1; exp $? 10 "resizefs <target>:1 带尺寸拒绝"
 exp "$(lba1)" "$LAST0" "  拒绝后分区表未变（last_lba 一致）"
 
-# src/cmd/fs.rs:94-96 —— 在线形式不消费 --sector-size，显式拒绝而非静默忽略
-$B resizefs "$MP" --online --sector-size 512 >/dev/null 2>&1; exp $? 10 "resizefs <mountpoint> --online --sector-size 拒绝"
+# src/cmd/fs.rs:136-138 —— 挂载点形式不打开镜像，--sector-size 无消费点，显式拒绝
+$B resizefs "$MP" --sector-size 512 >/dev/null 2>&1; exp $? 10 "resizefs <mountpoint> --sector-size 拒绝"
 exp "$(lba1)" "$LAST0" "  拒绝后分区表未变（last_lba 一致）"
 
-# src/cmd/fs.rs:98-99 —— 目标尺寸 BYTES 与 --size 两种给法必须二选一
-$B resizefs "$MP" 8M --online --size 8M >/dev/null 2>&1; exp $? 10 "resizefs <mountpoint> --online BYTES + --size 同给拒绝"
+# src/cmd/mod.rs:181-185 —— 目标尺寸只有位置参数一种给法，--size 不在 resizefs 的白名单里
+$B resizefs "$MP" 8M --size 8M >/dev/null 2>&1; exp $? 10 "resizefs <mountpoint> --size 非本命令选项"
 exp "$(lba1)" "$LAST0" "  拒绝后分区表未变（last_lba 一致）"
 
-echo "== resizefs --online 不改分区表 =="
-# src/online.rs resize_online：大于现分区的请求在任何写盘之前拒绝，并指向 resize
-$B resizefs "$MP" 32M --online >/dev/null 2>&1; exp $? 10 "resizefs --online 越分区尺寸拒绝"
+echo "== resizefs 在线形式不改分区表 =="
+# src/online/flow.rs:190-199 —— 挂载点形式只扩文件系统，大于现分区的请求在任何写盘之前拒绝，并指向 resize
+$B resizefs "$MP" 32M >/dev/null 2>&1; exp $? 10 "resizefs <mountpoint> 越分区尺寸拒绝"
 exp "$(lba1)" "$LAST0" "  拒绝后分区表未变（last_lba 一致）"
 exp "$(fs_bytes "${LD}p1")" "$FS0" "  拒绝后 FS 未变（block count×size 一致）"
 
 echo "== 非 btrfs 在线缩容拒绝 =="
-# src/online.rs:710-721 —— online_shrink 仅 btrfs；ext4 请求 8MiB < 现分区 16MiB
-# 走 Outcome::refused；src/cmd/fs.rs:106-114 将该 Outcome 映射为退出码 10（未写盘）
-$B resizefs "$MP" 8M --online >/dev/null 2>&1; exp $? 10 "ext4 在线缩容（8MiB < 16MiB 分区）拒绝"
+# src/online/flow.rs:110-123 —— 仅 btrfs 可在线缩容；ext4 请求 8MiB < 现分区 16MiB
+# 走 Outcome::refused；src/cmd/fs.rs:150-156 将该 Outcome 映射为退出码 10（未写盘）
+$B resizefs "$MP" 8M >/dev/null 2>&1; exp $? 10 "ext4 在线缩容（8MiB < 16MiB 分区）拒绝"
 exp "$(lba1)" "$LAST0" "  拒绝后分区表未变（last_lba 一致）"
 exp "$(fs_bytes "${LD}p1")" "$FS0" "  拒绝后 FS 未变（block count×size 一致）"
 

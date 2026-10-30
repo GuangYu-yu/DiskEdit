@@ -118,7 +118,7 @@ pub fn parse_mbr_raw(src: &FileSource) -> io::Result<Option<RawMbr>> {
         }
         // 0xEE 在 msdos 语义里不是分区（UEFI 2.10 §5.2.3：protective record），
         // 真实 msdos 盘不会合法出现。保护布局受损的 GPT 盘若按槽位解析，
-        // 这条会被当成真分区输出，del/flag 随之清除或改写它——毁掉恢复 GPT
+        // 这条会被当成真分区输出，delete/flag 随之清除或改写它——毁掉恢复 GPT
         // 所需的保护记录。只排除、不输出；hybrid MBR 的槽位 2-4 是真分区，照常输出。
         // 0xEE 也必须先于越界检查跳过：保护记录的 size 合法值可达 0xFFFFFFFF
         // （min(disk-1, u32::MAX)），小盘上 1+size 必然"越界"，那是 GPT 盘的常态而非损坏
@@ -165,7 +165,7 @@ pub fn parse_mbr_raw(src: &FileSource) -> io::Result<Option<RawMbr>> {
         }
     }
     // 只剩 0xEE 记录且 LBA1 带 GPT 头签名：盘型是 GPT（LBA1 签名定盘型，保护布局
-    // 只定修复分类），不能判成"零分区的 msdos 盘"——否则 del 会把保护记录当空槽清掉。
+    // 只定修复分类），不能判成"零分区的 msdos 盘"——否则 delete 会把保护记录当空槽清掉。
     // 无签名时（GPT 已灭）只能按 msdos 处置，0xEE 槽已排除，不会误伤残留记录
     if parts.is_empty() && saw_protective && gpt_signature_present(src)? {
         return Ok(None);
@@ -248,7 +248,7 @@ pub fn resize_mdos_entry(src: &mut WriteSource, part: u32, new_size_lba: u32) ->
         return Err(Fail::refused(format!("MBR partition {part} is empty")));
     }
     // 0xEE 是 GPT 保护记录（UEFI 2.10 §5.2.3）：其 SizeInLBA 属保护布局的一部分，
-    // 改写它和 del_mdos_entry 清零该槽位一样，会毁掉识别与恢复 GPT 的依据
+    // 改写它和 delete_mdos_entry 清零该槽位一样，会毁掉识别与恢复 GPT 的依据
     if lba0[off + 4] == PROT_MBR_TYPE {
         return Err(Fail::refused(format!(
             "partition {part} is the GPT protective record (0xEE) — rewriting its size destroys the record used to recognise and recover the GPT"
@@ -262,7 +262,7 @@ pub fn resize_mdos_entry(src: &mut WriteSource, part: u32, new_size_lba: u32) ->
     // 看不见的分区，操作者无从核对结果
     if rd_u32(&lba0[off..off + 16], 12) == 0 {
         return Err(Fail::refused(format!(
-            "partition {part} has a type byte but zero sectors — the entry is invisible to the parser; `del` clears it"
+            "partition {part} has a type byte but zero sectors — the entry is invisible to the parser; `delete` clears it"
         )));
     }
     // 条目自守（与 add_mdos_entry 同严格）：start + 新长度须落在盘内。现有调用方
@@ -389,7 +389,7 @@ pub fn add_mdos_entry(src: &mut WriteSource, start: u64, end: u64, os_type: u8) 
         // 一条解析器看不见的条目，操作者无从核对
         if rec[4] != 0 && rd_u32(rec, 12) == 0 {
             return Err(Fail::refused(format!(
-                "partition {} has a type byte but zero sectors — the entry is invisible to the parser; `del` clears it",
+                "partition {} has a type byte but zero sectors — the entry is invisible to the parser; `delete` clears it",
                 i + 1
             )));
         }
@@ -421,7 +421,7 @@ pub fn add_mdos_entry(src: &mut WriteSource, start: u64, end: u64, os_type: u8) 
 }
 
 /// msdos：主分区条目删除（清零对应记录）
-pub fn del_mdos_entry(src: &mut WriteSource, part: u32) -> Result<(), Fail> {
+pub fn delete_mdos_entry(src: &mut WriteSource, part: u32) -> Result<(), Fail> {
     if !(1..=4).contains(&part) {
         return Err(Fail::refused("msdos supports primary slots 1..=4 only"));
     }
@@ -472,7 +472,7 @@ pub fn set_mdos_boot(src: &mut WriteSource, part: u32, on: bool) -> Result<(), F
     }
     if rd_u32(&lba0[off..off + 16], 12) == 0 {
         return Err(Fail::refused(format!(
-            "partition {part} has a type byte but zero sectors — the entry is invisible to the parser; `del` clears it"
+            "partition {part} has a type byte but zero sectors — the entry is invisible to the parser; `delete` clears it"
         )));
     }
     // MBR 规范未规定 boot 标志唯一性，"至多一个"是本工具策略：置位前清掉其他
@@ -515,7 +515,7 @@ pub fn set_mdos_hidden(src: &mut WriteSource, part: u32, on: bool) -> Result<(),
     }
     if rd_u32(&lba0[off..off + 16], 12) == 0 {
         return Err(Fail::refused(format!(
-            "partition {part} has a type byte but zero sectors — the entry is invisible to the parser; `del` clears it"
+            "partition {part} has a type byte but zero sectors — the entry is invisible to the parser; `delete` clears it"
         )));
     }
     let want = |t: u8, hide: bool| -> u8 {
@@ -542,7 +542,7 @@ pub fn set_mdos_hidden(src: &mut WriteSource, part: u32, on: bool) -> Result<(),
 }
 
 /// msdos：分区类型字节直改（OSIndicator，类型名域见 util-linux pt-mbr-partnames.h）。
-/// 0x00 拒绝——那是"未用条目"的形状，移除分区应走 `del`。0xEE 是 GPT 保护记录，
+/// 0x00 拒绝——那是"未用条目"的形状，移除分区应走 `delete`。0xEE 是 GPT 保护记录，
 /// 类型字节承担结构语义，改写后解析侧不再认得出 GPT。扩展容器类型（0x05/0x0F/0x85）
 /// 双向拒绝：改成容器类型会凭空多出一条容器语义，把既有容器改走别的类型则让它管辖的
 /// 逻辑分区失去入口——本工具不管理逻辑分区，两个方向都不受理
@@ -551,7 +551,7 @@ pub fn set_mdos_type(src: &mut WriteSource, part: u32, t: u8) -> Result<(), Fail
         return Err(Fail::refused("msdos supports primary slots 1..=4 only"));
     }
     if t == 0 {
-        return Err(Fail::refused("type 0x00 marks an empty entry — use `del` to remove the partition"));
+        return Err(Fail::refused("type 0x00 marks an empty entry — use `delete` to remove the partition"));
     }
     // 与 add_mdos_entry 同一判据：0xEE 是保护记录，不是可描述的条目类型
     if t == PROT_MBR_TYPE {
@@ -576,13 +576,13 @@ pub fn set_mdos_type(src: &mut WriteSource, part: u32, t: u8) -> Result<(), Fail
     }
     if rd_u32(&lba0[off..off + 16], 12) == 0 {
         return Err(Fail::refused(format!(
-            "partition {part} has a type byte but zero sectors — the entry is invisible to the parser; `del` clears it"
+            "partition {part} has a type byte but zero sectors — the entry is invisible to the parser; `delete` clears it"
         )));
     }
     if MDOS_CONTAINER_TYPES.contains(&cur) {
         return Err(Fail::refused(format!("partition {part} is an extended container (0x{cur:02X}) — its type is structural, not descriptive")));
     }
-    // 与 del_mdos_entry 同判据：0xEE 是保护记录，改掉它会让 pmbr_shape_valid 恒假，
+    // 与 delete_mdos_entry 同判据：0xEE 是保护记录，改掉它会让 pmbr_shape_valid 恒假，
     // GPT 从此被判成损坏，写路径只能 fail-closed
     if cur == PROT_MBR_TYPE {
         return Err(Fail::refused(format!(

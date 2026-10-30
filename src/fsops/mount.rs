@@ -842,7 +842,7 @@ fn image_target_unused(src: &FileSource, kind: WriteKind) -> Result<(), crate::o
 /// 与 [`ensure_idle_before_write`] 的分区级判定不同，本闸不区分本次改哪个分区，
 /// 因此不适用于"扩容放行 DM 持有"的形状判定。
 ///
-/// 调用点是所有**直接改表**的命令：`new` / `add` / `del` / `create` /
+/// 调用点是所有**直接改表**的命令：`new` / `add` / `delete` / `create` /
 /// `set name|type|flag` / `undo`。搬移类命令（`resize-part` / `move` / `resize` /
 /// `apply`）在 prepare 层按操作形状做分区级判定，不走这里。`copy` 是显式例外：
 /// 它只在经重叠校验的空闲区新增条目，不改既有分区的起止，也不搬移目标分区的 extent

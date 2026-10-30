@@ -107,13 +107,13 @@ fn resize_part_move_copy_flag_name() {
     drop(gpt);
     drop(f);
 
-    // --clone 显式保留源 PARTUUID（复制身份，而不只是复制内容）
-    let (c, out, stderr) = run(&["copy", &format!("{img_s}:2"), "--start", "24000", "--clone"]);
-    assert_eq!(c, 0, "--clone copy must succeed: {out}{stderr}");
+    // --keep-partuuid 显式保留源 PARTUUID（复制身份，而不只是复制内容）
+    let (c, out, stderr) = run(&["copy", &format!("{img_s}:2"), "--start", "24000", "--keep-partuuid"]);
+    assert_eq!(c, 0, "--keep-partuuid copy must succeed: {out}{stderr}");
     let mut f = std::fs::File::open(&img).unwrap();
     let gpt = gptman::GPT::find_from(&mut f).unwrap();
     assert_eq!(gpt[4].starting_lba, 24576);
-    assert_eq!(gpt[4].unique_partition_guid, src_guid, "--clone must keep the source PARTUUID");
+    assert_eq!(gpt[4].unique_partition_guid, src_guid, "--keep-partuuid must keep the source PARTUUID");
 
     let _ = std::fs::remove_dir_all(&dir);
 }

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 尺寸单位与拒绝路径：create --size 单位/非法值、--fs 缺值、resizefs --online 单位、resize --size 单位
+# 尺寸单位与拒绝路径：create --size 单位/非法值、--fs 缺值、resizefs 挂载点形式单位、resize 位置参数单位
 source "$(dirname "$0")/lib.sh"
 require_bin
 
@@ -20,11 +20,11 @@ $B create "$T" --fs 2>&1; exp $? 10 "create --fs 缺值拒绝"
 echo "== resizefs online with unit =="
 LD=$(lo_attach "$T")
 mount_at "${LD}p1" /testmnt
-$B resizefs /testmnt 32M --online; exp $? 0 "resizefs online（单位）"
+$B resizefs /testmnt 32M; exp $? 0 "resizefs 挂载点形式（单位）"
 df -h /testmnt | tail -1
 umount /testmnt; losetup -d "$LD"
-echo "== resize --size with unit via flag =="
-$B resize "$T":1 --size 40M; exp $? 0 "resize --size 40M（单位）"
+echo "== resize SIZE with unit (positional) =="
+$B resize "$T":1 40M; exp $? 0 "resize 40M（单位）"
 $B info "$T"
 LD=$(lo_attach "$T"); e2fsck -fn "${LD}p1" >/dev/null 2>&1 && echo "e2fsck clean" || { echo "e2fsck ISSUES"; rc=1; }; losetup -d "$LD"
 sgdisk -v "$T" | tail -2

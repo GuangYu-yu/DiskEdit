@@ -30,7 +30,7 @@ fn verify_mount_target(t: &OnlineTarget) -> Result<(), String> {
     Ok(())
 }
 
-/// 本次在线 resize 对分区表的权限边界。两个入口（`resizefs --online` 与 `resize`）在
+/// 本次在线 resize 对分区表的权限边界。两个入口（`resizefs <mountpoint>` 与 `resize`）在
 /// 这一段逻辑上的区别只有两处判据，由调用方显式声明，不以两个裸 bool 由实参位置区分
 pub(crate) enum TablePolicy {
     /// 只改文件系统，不碰分区表：缩容与越界增长都在任何写盘之前拒绝；
@@ -121,12 +121,12 @@ pub fn resize_online(
                 crate::fsid::fs_name(fstype)
             ));
         }
-        // 本入口（resizefs --online）不改分区表，而缩容必须让分区跟着 FS 一起缩
+        // 本入口（resizefs 挂载点形式）不改分区表，而缩容必须让分区跟着 FS 一起缩
         // （下方 shrink 臂的 part_resize 会写表）——承诺优先于能力，哪怕 btrfs 缩得动。
         // 与上面的拒绝同层：都在任何 FS 写入与写表之前
         if matches!(table, TablePolicy::FilesystemOnly) {
             return Outcome::refused(
-                "resizefs --online does not change the partition table — shrinking the filesystem \
+                "resizefs given a mountpoint does not change the partition table — shrinking the filesystem \
                  requires shrinking the partition with it; use `diskedit resize` instead"
                     .to_string(),
             );
@@ -164,8 +164,8 @@ pub fn resize_online(
         ));
     }
     // 请求终点 == 现状：`resize` 的分区目标落在现分区末端时，分区不动也就没有随后的
-    // FS 步，与离线 ShiftIntent::NoOp 同判据、同文案、同退出码。`resizefs --online`
-    // 的同一数值表示"把 FS 扩到分区末端"，是真实写盘，故按未指定尺寸处理——两种语义
+    // FS 步，与离线 ShiftIntent::NoOp 同判据、同文案、同退出码。resizefs 挂载点形式的
+    // 同一数值表示"把 FS 扩到分区末端"，是真实写盘，故按未指定尺寸处理——两种语义
     // 由调用方声明（见 `TablePolicy`）
     let size = match size {
         Some(b) if b == t.part_len_bytes && matches!(table, TablePolicy::WithTable) => {
@@ -175,6 +175,9 @@ pub fn resize_online(
         Some(b) if b == t.part_len_bytes => None,
         other => other,
     };
+    // 两个分支都要落盘：`None` 让 FS 吃满现分区，`Some` 还要写表。从这一步起的写入
+    // 都由系统工具完成，不进 journal、没有 checkpoint
+    crate::support::note_online_no_undo();
     match size {
         // 扩满现分区：分区不动，FS 工具直接吃满（内核视图无需变更）
         None => {
@@ -188,11 +191,11 @@ pub fn resize_online(
             fs_grow_outcome(fs_grow(&t, fstype))
         }
         Some(bytes) => {
-            // resizefs --online 只扩文件系统，不改分区表：越界请求在任何写盘之前拒绝，
+            // resizefs 挂载点形式只扩文件系统，不改分区表：越界请求在任何写盘之前拒绝，
             // 分区几何的协调由 `resize` 负责
             if bytes > t.part_len_bytes && matches!(table, TablePolicy::FilesystemOnly) {
                 return Outcome::refused(format!(
-                    "resizefs --online grows the filesystem inside the current partition ({} bytes) — \
+                    "resizefs given a mountpoint grows the filesystem inside the current partition ({} bytes) — \
                      enlarge the partition with `diskedit resize` first",
                     t.part_len_bytes
                 ));
@@ -250,7 +253,7 @@ pub fn resize_online(
                     Err(e) => Outcome::applied_with(vec![fs_pending(format!("partition resized but FS grow skipped: {}", e.detail()))]),
                 }
             } else {
-                // shrink（仅 btrfs；--online 入口已在上方拒绝，能到这里说明本入口
+                // shrink（仅 btrfs；FilesystemOnly 入口已在上方拒绝，能到这里说明本入口
                 // 的职责包含分区几何）：FS 先缩（内核校验占用与 256MiB 下限），持久化缩分区
                 if let Err(e) = refuse_btrfs_multi_device(&t, fstype) {
                     return Fail::from(e).into_outcome();

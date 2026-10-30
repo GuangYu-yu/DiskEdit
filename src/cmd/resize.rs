@@ -28,15 +28,16 @@ use crate::{dev, fsid, fsops, movepart, table};
 #[cfg(target_os = "linux")]
 use crate::lvm::LvmError;
 
-pub(crate) const HELP: &str = r#"diskedit resize <TARGET>:N <SIZE> [OPTIONS]
+pub(crate) const HELP: &str = r#"diskedit resize <TARGET>[:N] <SIZE> [OPTIONS]
 
-  Resize partition and its filesystem. Online/offline method is chosen
-  automatically. GPT and MBR primary partitions; superfloppy (whole-disk FS)
-  omits :N — grow only, never shrinks.
+  Resize partition and its filesystem, partition -> PV -> LV -> filesystem as
+  required. The online/offline method is chosen automatically. GPT and MBR
+  primary partitions; superfloppy (whole-disk FS) omits :N — grow only, never
+  shrinks.
 
-  MBR tables carry no checkpoint: an interrupted MBR grow cannot be resumed.
-  Inspect the partition table and the filesystem size before re-running — a
-  re-run reads the on-disk geometry and does not replay the old request.
+  Examples:
+    diskedit resize /dev/sdb1 +2G
+    diskedit resize disk.img 10G --allow-move --yes
 
   SIZE:
     10G       set size to 10 GiB (units b/k/m/g/t, 1024 base)
@@ -47,35 +48,45 @@ pub(crate) const HELP: &str = r#"diskedit resize <TARGET>:N <SIZE> [OPTIONS]
     grow      grow into the contiguous free space to the right
 
   Options:
-    --allow-move    allow moving other partitions (plan requires --yes)
-    --size BYTES    absolute target size (same units as SIZE)
-    --grow-to-end   grow into the contiguous free space to the right
-    --chunk-size N  relocation copy granularity in MiB (default 4);
-                    a crash may redo up to 256 MiB of already copied data,
-                    or one chunk when the chunk exceeds that window
+    --allow-move    permit relocating the partitions in the way: the plan is
+                    printed, and --yes is needed to carry it out. Without it a
+                    grow or size that needs relocation is refused (10)
+    --chunk-size N  recovery granularity in MiB (default 4): a crash redoes
+                    at most 256 MiB of already copied data, or one chunk if
+                    the chunk is larger. Re-running an interrupted job must
+                    use the same value
+    --grow-lv       also grow the LV: the one named by --lv, else the only LV
+    --lv NAME       which LV to grow (implies --grow-lv)
+    --no-fs         skip the filesystem step of the grown partition; required
+                    when the filesystem inside cannot be grown here. Limits
+                    are under Constraints
     --sector-size N logical sector size override for raw images
                     (power of two, 512..=65536)
-    --grow-lv       also grow the associated LV (--lv NAME, or the only LV)
-    --yes           skip confirmation
+    --yes           acknowledge the action; the top-level help lists which
+                    commands ask
+
+  Constraints:
+    --no-fs   refused on an LVM PV (the PV chain has no filesystem step of
+              its own) and together with a shrink (shrink the FS first). A
+              swap partition relocated as a blocker is rebuilt regardless:
+              that step belongs to the relocation, not to the filesystem
+    PV        shrinking is refused — use the lvreduce/pvresize chain
+    MBR       tables carry no checkpoint: an interrupted MBR grow cannot be
+              resumed. Inspect the table and FS size before re-running; a
+              re-run reads the on-disk geometry, it does not replay the old
+              request
+    online    writes go through the tools (sfdisk / the FS's own resize),
+              not this tool's journal: no checkpoint to resume, and `undo`
+              cannot roll it back
+
+  Related commands: this is the single entry point — it plans and applies in
+  one run. To inspect the plan first, use `plan` then `apply`; `resize-part`
+  and `move` are the low-level single-partition commands, and they also
+  resume an interrupted job (an interrupted single-partition resize is
+  resumed by `resize-part` or `move`, not by `resize`).
 
   --start/--end are rejected here: resizing does not relocate partitions —
-  use `move` or `resize-part --start/--end`.
-
-  Automatically:
-    detects partition / filesystem / LVM PV, chooses online or offline,
-    resizes partition -> PV -> LV -> filesystem as required; long operations
-    are checkpointed and resumed by re-running the same command (an
-    interrupted single-partition resize job is resumed by re-running
-    `resize-part` or `move`, not `resize`).
-
-  Notes: PV shrink is refused (use the lvreduce/pvresize chain). --no-fs skips
-  the filesystem step of the grown partition, so it cannot shrink: the FS has
-  to be shrunk first. It is also required whenever the filesystem inside
-  cannot be grown (unidentified, or not wired to a tool) — otherwise the
-  request is refused (10). On an LVM PV --no-fs is refused: the PV chain has
-  no filesystem step of its own. An online resize writes through the tools
-  (sfdisk / the filesystem's own resize) instead of this tool's journal, so
-  `undo` cannot roll it back — it also leaves no checkpoint to resume."#;
+  use `move` or `resize-part --start/--end`."#;
 
 const CONFIRM_RELOCATION: &str = "this resizes by relocating the partitions listed above — review and re-run with --yes";
 
@@ -83,19 +94,8 @@ const CONFIRM_RELOCATION: &str = "this resizes by relocating the partitions list
 /// （挡路分区须 --allow-move，搬移计划须 --yes 确认）。LVM PV 扩容自动 pvresize，
 /// --grow-lv 再把新增传给目标 LV 并扩 FS；PV 缩容一律拒绝（走 lvreduce/pvresize 链）
 pub(crate) fn cmd_resize(a: &Args) -> crate::outcome::Outcome {
-    // 请求的形状在入口定型一次，随锁前/锁下两次解析共用：位置参数 SIZE / --size / --grow-to-end
-    let req = SizeRequest { pos: a.pos.get(1).cloned(), abs: a.size, grow_to_end: a.grow_to_end };
-    if req.pos.is_some() && (a.size.is_some() || a.grow_to_end) {
-        bail_fail(Fail::refused("SIZE and --size/--grow-to-end are mutually exclusive".to_string()));
-    }
-    // --size 与 --grow-to-end 是两种给终点的方式：都给时 grow_to_end 分支根本不读
-    // size 的值，静默丢参数比报错更害人（用户以为扩到了 10G）
-    if a.size.is_some() && a.grow_to_end {
-        bail_fail(Fail::refused("--size and --grow-to-end are mutually exclusive".to_string()));
-    }
-    if a.lv.is_some() && !a.grow_lv {
-        bail_fail(Fail::refused("--lv only works together with --grow-lv".to_string()));
-    }
+    // SIZE 只有一种给法：位置参数。原始字符串随锁前/锁下两次解析共用
+    let size = a.pos.get(1).map(String::as_str);
     // resize 只改大小、不移动。--start/--end 属 move/resize-part 的语义（挪位），
     // 静默忽略会让用户误以为分区被移动过 —— 显式拒绝。判据必须覆盖三个入口：
     // 两者各自单给、以及 `--start end` 那种尾部打包的写法
@@ -103,7 +103,7 @@ pub(crate) fn cmd_resize(a: &Args) -> crate::outcome::Outcome {
         bail_fail(Fail::refused("resize does not relocate partitions — use `move` or `resize-part --start/--end`".to_string()));
     }
     // 载体必须是整盘：分区节点首扇区里的 FAT/NTFS 引导字节带 0x55AA 时会被 parse_mbr_raw
-    // 认成一张 MBR，MBR 分支的写路径会改写该分区自己的 LBA0。判据与 new/add/del/set 同源
+    // 认成一张 MBR，MBR 分支的写路径会改写该分区自己的 LBA0。判据与 new/add/delete/set 同源
     refuse_partition_node_target("resize", &a.target);
     let src = open_target_ro(a).unwrap_or_else(|f| bail_fail(f));
     match table::table_label(&src) {
@@ -112,10 +112,10 @@ pub(crate) fn cmd_resize(a: &Args) -> crate::outcome::Outcome {
             let Some(pref) = a.part else {
                 bail_fail(Fail::refused("`resize` needs :N (the partition to resize)".to_string()));
             };
-            return cmd_resize_msdos(a, pref, &req, &src);
+            return cmd_resize_msdos(a, pref, size, &src);
         }
         // superfloppy：无分区表，FS 即整盘，无表可写——纯 FS grow
-        Ok(table::TableLabel::None) => return cmd_resize_superfloppy(a, &req),
+        Ok(table::TableLabel::None) => return cmd_resize_superfloppy(a, size),
         Ok(other) => bail_fail(Fail::refused(format!("resize requires a GPT or MBR target (label: {other})"))),
         Err(e) => bail_fail(Fail::infra(format!("parse failed: {e}"))),
     }
@@ -136,7 +136,7 @@ pub(crate) fn cmd_resize(a: &Args) -> crate::outcome::Outcome {
     let is_pv = fstype == Some(fsid::FsKind::Lvm2Pv);
 
     // SIZE → 绝对目标字节数 / grow 标记（锁前快照，仅服务参数早失败与在线路径的选择）
-    let (target, grow_to_end) = resolve_size_request(&req, cur_bytes).unwrap_or_else(|f| bail_fail(f));
+    let (target, grow_to_end) = resolve_size_request(size, cur_bytes).unwrap_or_else(|f| bail_fail(f));
     let shrinking = target.is_some_and(|t| t < cur_bytes);
 
     check_pv_intent(part, fstype, is_pv, shrinking, a.grow_lv, a.no_fs).unwrap_or_else(|f| bail_fail(f));
@@ -145,7 +145,7 @@ pub(crate) fn cmd_resize(a: &Args) -> crate::outcome::Outcome {
     // 目标长度不在锁前算：`+N` 锚定当前尺寸、`grow` 锚定右侧空闲，都由 gpt_decider 在
     // 在线自己的锁下、按重解析的盘上几何重新解析（见其注释）
     #[cfg(target_os = "linux")]
-    if let Some(o) = resize_online(a, &src, part, is_pv, gpt_decider(&req, part, is_pv)) {
+    if let Some(o) = resize_online(a, &src, part, is_pv, gpt_decider(size, part, is_pv)) {
         return o;
     }
 
@@ -170,7 +170,7 @@ pub(crate) fn cmd_resize(a: &Args) -> crate::outcome::Outcome {
     // 改写过，锁前锚点就已作废——拿旧锚点的绝对值对照新几何会把"扩"判成"缩"
     // （先缩 FS！），方向与请求相反。grow 标记是请求的形状（与盘无关），锁前锁后同值
     let cur_bytes = lba_range_bytes(start, end, ss);
-    let (target, _) = resolve_size_request(&req, cur_bytes).unwrap_or_else(|f| bail_fail(f));
+    let (target, _) = resolve_size_request(size, cur_bytes).unwrap_or_else(|f| bail_fail(f));
     let shrinking = target.is_some_and(|t| t < cur_bytes);
     // FS 类型与 PV 判据同样按锁下现状重取（与几何同理）：识别与取锁之间分区可被
     // 重新格式化（mkfs 不守本工具的锁），过期的 is_pv 会让 check_pv_intent 对着

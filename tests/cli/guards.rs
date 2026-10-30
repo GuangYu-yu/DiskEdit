@@ -113,7 +113,7 @@ fn cli_negative_paths() {
     assert_eq!(c, 10, "{e}");
     assert!(e.contains("move requires a GPT target"), "{e}");
 
-    // SIZE 语法错误 / 缩到超过当前大小 / 与 --size 互斥
+    // SIZE 语法错误 / 缩到超过当前大小 / 重复给尺寸
     let img = dir.join("ok.img");
     fixture_gpt_image(&img);
     let img_s = img.to_str().unwrap();
@@ -123,9 +123,10 @@ fn cli_negative_paths() {
     let (c, _, e) = run(&["resize", &format!("{img_s}:1"), "-1T"]);
     assert_eq!(c, 10, "{e}");
     assert!(e.contains("exceeds current size"), "{e}");
+    // SIZE 只有位置参数一种给法；`--size` 不是 resize 的选项
     let (c, _, e) = run(&["resize", &format!("{img_s}:1"), "10M", "--size", "4096"]);
     assert_eq!(c, 10, "{e}");
-    assert!(e.contains("mutually exclusive"), "{e}");
+    assert!(e.contains("--size is not a valid option for `resize`"), "{e}");
     // --sector-size 非法 → 参数解析阶段拒绝
     let (c, _, _) = run(&["info", img_s, "--sector-size", "abc"]);
     assert_eq!(c, 10);
@@ -172,14 +173,14 @@ fn fs_command_branch_level_flag_guards() {
          String::from_utf8_lossy(&out.stderr).into_owned())
     };
 
-    // 在线 resizefs 拿 <target>:N ⇒ 它只收挂载点
-    let (c, _, e) = run(&["resizefs", &format!("{img_s}:1"), "--online"]);
-    assert_eq!(c, 10, "online resizefs must refuse a :N target: {e}");
+    // 形态即模式：:N 是离线形式，尺寸给法只属于挂载点形式
+    let (c, _, e) = run(&["resizefs", &format!("{img_s}:1"), "8M"]);
+    assert_eq!(c, 10, "offline resizefs must refuse a size: {e}");
     assert!(e.contains("mountpoint"), "{e}");
-    // 在线 resizefs 携 --sector-size ⇒ 该旗标的消费点都在打开路径上
-    let (c, _, e) = run(&["resizefs", "some-mountpoint", "--online", "--sector-size", "4096"]);
+    // 扇区大小只有打开镜像的路径才消费：挂载点形式拒绝
+    let (c, _, e) = run(&["resizefs", "some-mountpoint", "--sector-size", "4096"]);
     assert_eq!(c, 10, "online resizefs must refuse --sector-size: {e}");
-    assert!(e.contains("mountpoint"), "{e}");
+    assert!(e.contains("image targets"), "{e}");
     // set 的 --random 是 uuid 分支专属
     let (c, _, e) = run(&["set", &format!("{img_s}:1"), "name", "foo", "--random"]);
     assert_eq!(c, 10, "set --random outside the uuid branch must refuse: {e}");
@@ -248,6 +249,44 @@ fn a_flag_typo_in_a_value_slot_is_refused() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// `--flag=value`、`--` 终止符与 `--version` 的解析契约：等号形式与空格形式等价，
+/// 布尔旗标带值是笔误，`--` 之后一律位置参数，版本请求退 0
+#[test]
+fn option_syntax_equals_terminator_and_version() {
+    let dir = std::env::temp_dir().join(format!("diskedit_fc4_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let exe = env!("CARGO_BIN_EXE_DiskEdit");
+    let img = dir.join("a.img");
+    std::fs::write(&img, vec![0u8; 8 * 1024 * 1024]).unwrap();
+    let img_s = img.to_str().unwrap();
+    let run = |args: &[&str]| -> (i32, String, String) {
+        let out = Command::new(exe).args(args).output().unwrap();
+        (out.status.code().unwrap_or(-1),
+         String::from_utf8_lossy(&out.stdout).into_owned(),
+         String::from_utf8_lossy(&out.stderr).into_owned())
+    };
+
+    let (c, o, e) = run(&["--version"]);
+    assert_eq!(c, 0, "{e}");
+    assert_eq!(o.trim(), format!("diskedit {}", env!("CARGO_PKG_VERSION")));
+
+    // 两种写法必须走同一条判定，结果（含拒绝理由）逐字相同
+    let space = run(&["resize", img_s, "10G", "--chunk-size", "4"]);
+    let equals = run(&["resize", img_s, "10G", "--chunk-size=4"]);
+    assert_eq!(space, equals, "--flag=value must be the same syntax as --flag value");
+
+    let (c, _, e) = run(&["delete", &format!("{img_s}:1"), "--yes=1"]);
+    assert_eq!(c, 10, "a value on a bare flag must be refused: {e}");
+    assert!(e.contains("takes no value"), "{e}");
+
+    // `--` 之后的值不再按旗标解析：`-1M` 是尺寸而不是笔误
+    let (c, _, e) = run(&["resize", img_s, "--no-fs", "--", "-1M"]);
+    assert_eq!(c, 10, "{e}");
+    assert!(!e.contains("unknown flag"), "a token after `--` is positional: {e}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// 旗标契约的其余几条 fail-closed：MBR 不接受 --allow-move、superfloppy 上 --no-fs
 /// 无事可做、离线 resizefs 没有"目标尺寸"语义、MBR --type 接受大写 0X 前缀
 #[test]
@@ -281,7 +320,8 @@ fn flag_contract_mbr_resizefs_and_type() {
     assert_eq!(c, 10, "superfloppy --no-fs must be refused: {e}");
     assert!(e.contains("--no-fs leaves nothing to do on a superfloppy"), "{e}");
 
-    // 离线 resizefs 没有"目标尺寸"语义：--size 拒绝
+    // 离线 resizefs 没有"目标尺寸"语义：尺寸参数是挂载点形式专属，离线分支消费不到它，
+    // 静默忽略会让 `resizefs img:1 10G` 报成功却仍只把 FS 扩进现分区
     let g = dir.join("g.img");
     std::fs::write(&g, vec![0u8; 8 * 1024 * 1024]).unwrap();
     let g_s = g.to_str().unwrap();
@@ -289,15 +329,10 @@ fn flag_contract_mbr_resizefs_and_type() {
     assert_eq!(c, 0, "{e}");
     let (c, _, e) = run(&["add", g_s, "--start", "2048", "--end", "6143"]);
     assert_eq!(c, 0, "{e}");
-    let (c, _, e) = run(&["resizefs", &format!("{g_s}:1"), "--size", "5G"]);
-    assert_eq!(c, 10, "offline resizefs with --size must be refused: {e}");
-    assert!(e.contains("--size only applies to the online form"), "{e}");
-    // 位置参数形式的尺寸同属在线专属：离线分支消费不到它，静默忽略会让
-    // `resizefs img:1 10G` 报成功却仍只把 FS 扩进现分区
     let raw_before = std::fs::read(&g).unwrap();
     let (c, _, e) = run(&["resizefs", &format!("{g_s}:1"), "5G"]);
     assert_eq!(c, 10, "offline resizefs with a positional size must be refused: {e}");
-    assert!(e.contains("only applies to the online form"), "{e}");
+    assert!(e.contains("only applies to the mountpoint form"), "{e}");
     assert_eq!(std::fs::read(&g).unwrap(), raw_before, "the refusal must not write");
 
     // MBR --type 的 0X 大写前缀
@@ -333,11 +368,11 @@ fn help_topic_zero_partition_and_mbr_end_overflow() {
     // <CMD> --help 的主题是命令名；位置参数是目标，取它只会退化成顶层 usage
     let (c, out, _) = run(&["resize", "whatever.img:1", "--help"]);
     assert_eq!(c, 0, "per-command help must be selected by the command name: {out}");
-    assert!(out.contains("diskedit resize <TARGET>:N"), "{out}");
+    assert!(out.contains("diskedit resize <TARGET>[:N]"), "{out}");
     // --help <CMD> 这条写法仍按位置参数取主题
     let (c, out, _) = run(&["--help", "resize"]);
     assert_eq!(c, 0);
-    assert!(out.contains("diskedit resize <TARGET>:N"), "{out}");
+    assert!(out.contains("diskedit resize <TARGET>[:N]"), "{out}");
     // 命令位本身是 help 的两种写法同样过旗标白名单：帮助不是参数校验的旁路
     let (c, _, e) = run(&["--help", "info", "--yes"]);
     assert_eq!(c, 10, "help must not accept a flag the command rejects: {e}");
@@ -379,7 +414,7 @@ fn help_topic_zero_partition_and_mbr_end_overflow() {
     assert_eq!(v["partitions"][0]["first_lba"], 4294967294u64);
     assert_eq!(v["partitions"][0]["last_lba"], 4294967297u64, "must not wrap in u32: {out}");
     // 可观察 ≠ 可操作：同一条目在写路径上必须 fail-closed
-    let (c, _, err) = run(&["del", &format!("{}:1", wrap.display()), "--yes"]);
+    let (c, _, err) = run(&["delete", &format!("{}:1", wrap.display()), "--yes"]);
     assert_ne!(c, 0, "a damaged table must not be written: {err}");
     assert!(err.contains("extends past the end"), "{err}");
 

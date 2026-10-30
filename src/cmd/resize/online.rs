@@ -112,7 +112,7 @@ pub(crate) fn refuse_online_move_flags(a: &Args) {
 /// 上界）→ 共享的 `resolve_size_request` → grow/shrink 分支。grow 零空闲时拒绝：本次
 /// grow 不会产生分区扩容（表自身的上界已到顶，或下一分区紧贴右侧），在线路径又不能搬移
 /// 挡路分区——与离线路径同口径。FS 是否已填满现分区不是这里的判据：只扩 FS 走
-/// `resizefs --online`。绝对尺寸同样按该上界拒绝——可用区是表自身的闭区间，越界目标没有
+/// `resizefs <mountpoint>`。绝对尺寸同样按该上界拒绝——可用区是表自身的闭区间，越界目标没有
 /// 交给外部工具兜底的理由。上界（可用区端点到分区起点的扇区数）由各表自己的几何给出，
 /// MBR 无此概念（其容量由 online 层的 `check_new_range` 把关）。PV 收缩在上游
 /// `check_pv_intent` 已拒（online 层还有 grow-only 闸兜底），shrink 的下取整仅在锁窗口内
@@ -120,19 +120,19 @@ pub(crate) fn refuse_online_move_flags(a: &Args) {
 /// 同语义，差异只在"事实怎么取"，故分支只此一份
 #[cfg(target_os = "linux")]
 pub(crate) fn online_size<'a>(
-    req: &'a SizeRequest,
+    size: Option<&'a str>,
     is_pv: bool,
     facts: impl FnOnce(&FileSource) -> Result<(u64, u64, u64, Option<u64>), Fail> + 'a,
 ) -> impl FnOnce(&FileSource) -> Result<Option<u64>, Fail> + 'a {
     move |disk: &FileSource| {
         let (ss, cur, free, max_len_sectors) = facts(disk)?;
-        let (target, grow) = resolve_size_request(req, cur)?;
+        let (target, grow) = resolve_size_request(size, cur)?;
         if grow {
             if free == 0 {
                 return if is_pv {
                     Err(Fail::refused("no free space to the right — a PV cannot relocate blocking partitions while LVs may be active".to_string()))
                 } else {
-                    Err(Fail::refused("grow would not extend the partition — no usable free space to its right; the online path cannot relocate blocking partitions (unmount to grow offline, or fill the filesystem with `resizefs --online`)".to_string()))
+                    Err(Fail::refused("grow would not extend the partition — no usable free space to its right; the online path cannot relocate blocking partitions (unmount to grow offline, or fill the filesystem with `resizefs <mountpoint>`)".to_string()))
                 };
             }
             free.checked_mul(ss).and_then(|f| cur.checked_add(f))

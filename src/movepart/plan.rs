@@ -381,7 +381,6 @@ pub(crate) enum ResumeOutcome {
 pub(crate) fn resume_outcome(src: &FileSource, g: &ValidatedGeometry, grow_part: u32) -> Result<ResumeOutcome, Fail> {
     let (slot, _) = read_checkpoint(src, g)?;
     Ok(match slot {
-        CheckpointSlot::Ambiguous(paths) => return Err(ambiguous_checkpoint(&paths)),
         CheckpointSlot::Relocation(c) => {
             let c = *c;
             if c.grow_part == grow_part {

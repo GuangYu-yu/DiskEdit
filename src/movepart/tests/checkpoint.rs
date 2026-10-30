@@ -52,7 +52,7 @@ pub(crate) fn checkpoint_slot_ownership_is_enforced() {
     let _ = std::fs::remove_file(&path);
 }
 
-/// 候选落点不存在即空槽（从未跑过搬移是常态）；文件在而解不出来则是故障——
+/// 落点不存在即空槽（从未跑过搬移是常态）；文件在而解不出来则是故障——
 /// 若把它当空槽，中断的搬移会被降级成一次全新规划
 #[test]
 pub(crate) fn corrupt_checkpoint_is_an_error_not_an_empty_slot() {
@@ -65,7 +65,7 @@ pub(crate) fn corrupt_checkpoint_is_an_error_not_an_empty_slot() {
     // 新契约：文件在而全部不可读 = Infra，且文案指向 abandon（不再吞成空槽）
     std::fs::write(&ckpt_path, CKPT_MAGIC).unwrap();
     let e = read_checkpoint(&src, &geom_of(&src)).err().expect("a corrupt checkpoint must not read as an empty slot");
-    assert!(matches!(&e, Fail::Infra(m) if m.contains("none is readable")), "{e:?}");
+    assert!(matches!(&e, Fail::Infra(m) if m.contains("is unreadable") && m.contains("diskedit abandon")), "{e:?}");
 
     drop(src);
     let _ = std::fs::remove_file(&ckpt_path);
