@@ -102,10 +102,10 @@ $B info "$T" | grep -o '"num":3,[^}]*}'
 sgdisk -v "$T" 2>&1 | tail -1
 
 echo "-- C5: 保护 MBR SizeInLBA 超出容器（Inconsistent）→ 拒绝自动修复 --"
-# 依据：src/table.rs:1071-1075 pmbr_size_state：size > 容器-1（两种口径都大于）→ Inconsistent；
-# src/gpt_policy.rs:88-94 classify_repair 对 Inconsistent 返回 Err（拒绝自动修复，可能是更大盘的
-# 截断副本），经 src/gpt_policy.rs:174 归 Fail::infra → 退出码 30（未写盘的环境/盘内容故障）；
-# info 走 load_gpt（不做修复）仍可读，并把提示打入 stderr（src/cmd/info.rs:65-67）
+# 依据：src/table/gpt_parse.rs:525 pmbr_size_state：size > 容器-1（两种口径都大于）→ Inconsistent；
+# src/gpt_policy.rs:93-99 classify_repair 对 Inconsistent 返回 Err（拒绝自动修复，可能是更大盘的
+# 截断副本），经 src/gpt_policy.rs:202 归 Fail::infra → 退出码 30（未写盘的环境/盘内容故障）；
+# info 走 load_gpt（不做修复）仍可读，并把提示打入 stderr（src/cmd/info.rs:110-118）
 mk
 printf '\xff\xff\xff\xff' | dd of="$T" bs=1 seek=458 conv=notrunc 2>/dev/null
 OUT=$($B info "$T" 2>&1); E=$?

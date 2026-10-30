@@ -53,37 +53,35 @@ impl RecoveryRecord {
 /// 枚举目标上还活着的恢复现场。
 ///
 /// journal 的判据集中在 [`dev::classify_journal`]（absent / shell / damaged / records 四态）：
-/// 有记录或读不出来 ⇒ 活着；空壳与 0 字节残骸 ⇒ 不是现场。`undo` 的候选挑选与 `abandon`
+/// 有记录或读不出来 ⇒ 活着；空壳与 0 字节残骸 ⇒ 不是现场。`undo` 的现场判定与 `abandon`
 /// 的枚举都消费同一个分类，三处对"什么算现场"不会给出不同答案。
 ///
 /// checkpoint 没有"空壳"一说：它一落盘就描述一次中断的搬移，故只看存在性——
 /// **只有 `NotFound` 算不存在**，属性读取的其他错误按存在处理
 pub(crate) fn active_recovery_records(identity: &TargetIdentity) -> Vec<RecoveryRecord> {
     let mut out = Vec::new();
-    for p in identity.journal_candidates() {
-        match dev::classify_journal(p) {
-            dev::JournalCandidate::Absent | dev::JournalCandidate::Shell => {}
-            dev::JournalCandidate::Damaged(_) => {
-                out.push(RecoveryRecord::Journal { path: p.clone(), entries: None });
-            }
-            dev::JournalCandidate::Records(read) => {
-                let entries = match read {
-                    dev::JournalRead::Complete(v) => v,
-                    dev::JournalRead::TruncatedTail { records, .. } => records,
-                };
-                out.push(RecoveryRecord::Journal { path: p.clone(), entries: Some(entries) });
-            }
+    let journal = identity.journal_path();
+    match dev::classify_journal(journal) {
+        dev::JournalCandidate::Absent | dev::JournalCandidate::Shell => {}
+        dev::JournalCandidate::Damaged(_) => {
+            out.push(RecoveryRecord::Journal { path: journal.to_path_buf(), entries: None });
+        }
+        dev::JournalCandidate::Records(read) => {
+            let entries = match read {
+                dev::JournalRead::Complete(v) => v,
+                dev::JournalRead::TruncatedTail { records, .. } => records,
+            };
+            out.push(RecoveryRecord::Journal { path: journal.to_path_buf(), entries: Some(entries) });
         }
     }
-    for p in identity.checkpoint_candidates() {
-        // 目录等非普通文件不是本工具写下的任何东西，留着它会把一个无关路径顶成 busy 现场
-        match std::fs::metadata(p) {
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
-            // 读不出来不是"没有"：折叠成 absent 会让闸口在 state_dir 不可读时放行写命令
-            Err(_) => out.push(RecoveryRecord::Checkpoint { path: p.clone() }),
-            Ok(m) if !m.is_file() => continue,
-            Ok(_) => out.push(RecoveryRecord::Checkpoint { path: p.clone() }),
-        }
+    let ckpt = identity.checkpoint_path();
+    // 目录等非普通文件不是本工具写下的任何东西，留着它会把一个无关路径顶成 busy 现场
+    match std::fs::metadata(ckpt) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        // 读不出来不是"没有"：折叠成 absent 会让闸口在 state_dir 不可读时放行写命令
+        Err(_) => out.push(RecoveryRecord::Checkpoint { path: ckpt.to_path_buf() }),
+        Ok(m) if !m.is_file() => {}
+        Ok(_) => out.push(RecoveryRecord::Checkpoint { path: ckpt.to_path_buf() }),
     }
     out
 }
@@ -96,9 +94,9 @@ pub(crate) struct TransactionManager;
 /// `commit` 只消费它。收尾时不再按命令行路径重新解析——命令返回后路径可能已经指向另一个
 /// 文件（改名或替换），重新解析会把清理落到别人的 journal 上。
 ///
-/// `journal_fp` 是 attach 那一刻首项落点已存在时的文件指纹（不存在为 None）：事务开始时
+/// `journal_fp` 是 attach 那一刻 journal 落点已存在时的文件指纹（不存在为 None）：事务开始时
 /// 就存在的 journal 属于本次要续跑/收尾的作业；不存在的则由本次的记录创建（见
-/// `dev::take_created_journal_fp`）。两个事实都缺席时 commit 不动任何候选——命令返回与
+/// `dev::take_created_journal_fp`）。两个事实都缺席时 commit 不动 journal 落点——命令返回与
 /// 重新取锁之间，另一进程可以在同一落点建出它自己的 journal，按路径或记录身份都分不开
 /// 这两者
 pub(crate) struct SessionJournal {
@@ -157,7 +155,7 @@ impl TransactionManager {
     /// journal 是**惰性**的：`Journal::open` 在文件不存在时什么都不建，采纳既有文件时
     /// 只做校验与撕裂尾的物理截断（截掉的是设计认定可丢弃的未完成追加，见其文档）；
     /// 真正的记录要等到第一次真正的写入（见 [`WriteSource::write_at`]）。
-    /// 因此一条在校验阶段就被拒的命令不会留下空 journal，也就不会占住候选落点
+    /// 因此一条在校验阶段就被拒的命令不会留下空 journal，也就不会占住落点
     pub(crate) fn begin(a: &Args) -> Result<WriteSource, Fail> {
         // FreshOnly：不接受任何现场。与 begin_or_resume 共用同一闸口——
         // "普通 mutation 永不接管别人的事务"只有一个执行处
@@ -235,7 +233,7 @@ impl TransactionManager {
         Ok(())
     }
 
-    /// 返回 attach 时首项落点已存在时的文件指纹（见 [`SessionJournal`]），以及采纳时
+    /// 返回 attach 时 journal 落点已存在时的文件指纹（见 [`SessionJournal`]），以及采纳时
     /// 被截掉的残尾字节数（`None` = 文件本就在记录边界上）。
     /// 属性读不出来时不认领它：紧随其后的 `open` 若也读不到，命令在写盘之前就已返回错误
     fn attach_journal(src: &mut WriteSource) -> Result<(Option<dev::TargetFingerprint>, Option<NonZeroUsize>), Fail> {
@@ -265,23 +263,21 @@ impl TransactionManager {
     fn busy(active: &[RecoveryRecord]) -> Fail {
         let listed: Vec<String> = active.iter().map(RecoveryRecord::describe).collect();
         let resumable = active.iter().any(|r| matches!(r, RecoveryRecord::Checkpoint { .. }));
-        // 恰好一份可读 journal 且它可回滚才给这条出路。无法枚举的 checkpoint 不改变
-        // 这个计数：它既不能证明"有另一份现场"，也不能被当成可回滚的那份
-        let usable: Vec<&Vec<dev::JournalRecord>> = active
+        // 一个身份对应一份 journal：可回滚与否只看它。checkpoint 不改变这个结论：它既不能
+        // 证明"还有另一份现场"，也不是可回滚的那份
+        let rollbackable = active
             .iter()
-            .filter_map(|r| match r {
+            .find_map(|r| match r {
                 RecoveryRecord::Journal { entries: Some(v), .. } => Some(v),
                 _ => None,
             })
-            .collect();
-        let single_rollbackable = usable.len() == 1
-            && usable[0].iter().all(|e| !matches!(e.recovery, dev::RecoveryData::Barrier));
+            .is_some_and(|v| v.iter().all(|e| !matches!(e.recovery, dev::RecoveryData::Barrier)));
         let way_out = if resumable {
             // "重跑原命令即续跑"只对 relocation 作业成立；单分区 resize 的现场
             //（RecoveryRecord 只有路径，分不出两族）必须把另一条出路一并给出
             "re-run the command that started it to continue (an unfinished single-partition \
              resize is resumed with `resize-part` or `move`), or release it with `diskedit abandon`"
-        } else if single_rollbackable {
+        } else if rollbackable {
             "roll it back with `diskedit undo`, or release it with `diskedit abandon`"
         } else {
             "it is already past the point of rolling back, so `diskedit abandon` is the only way to release it"
@@ -336,29 +332,28 @@ impl TransactionManager {
         WriteSource::acquire(Self::open_plain(a)?)
     }
 
-    /// 提交：事务完成，关闭它的 active 状态。删除的是**本次事务确实拥有的**候选落点。
+    /// 提交：事务完成，关闭它的 active 状态。删除的是**本次事务确实拥有的** journal 落点。
     ///
     /// `session` 来自 [`Self::begin_or_resume`]（见 [`Self::take_identity`]），
     /// **不得在这里按命令行路径重新解析**：命令返回时路径可能已被改名或替换，重新解析
     /// 会得到另一个文件的伴随文件，删掉的就是别人的回滚凭据。
     ///
-    /// 首项落点的归属取两个事实之一：attach 时它已存在（要收尾的是那份既有 journal），
+    /// 落点的归属取两个事实之一：attach 时它已存在（要收尾的是那份既有 journal），
     /// 或本次进程用 `create_new` 建过它（`dev::take_created_journal_fp`）。两者都没有时，
     /// 路径上出现的文件必是命令返回之后别的进程新建的，一律不动。归属成立也只说明
     /// **路径**属于本次事务：删除前还要按当时的文件指纹核对 `dev` / `ino`——同路径文件
-    /// 可以被 abandon 改名、再由另一进程新建，而两份 journal 记录的目标身份完全相同，
+    /// 可以被 abandon 改名、再由另一进程新建，而新建的那份记录的目标身份与本事务完全相同，
     /// 重读内容分不开它们
     ///
-    /// 首项之外的候选还要过内容这一关：只有"头完整、零条记录"的壳才删；含记录或读不出来
-    /// 的那份留下并计入未收尾。本次事务只采纳了首项，那些记录从未被回放
+    /// 落点就是本次事务采纳的那一份，它的记录由本次运行写入：归属成立即删除，不再按
+    /// 内容筛
     ///
     /// 命令返回时 [`FileSource`]（连同它的所有权）已释放，故这里按同一身份重新取一次锁：
     /// 删除必须与 journal 的创建落在同一个独占窗口里。取不到锁即保留 journal
     /// （漏删会被下次运行报成 busy，但不会丢失别人的现场）
     /// 返回 `true` 表示现场已按本次事务的意图收干净；`false` 表示有文件该删而没删掉
-    /// （没取到锁、认不出它是否仍属于本次事务、候选里还留着未回放的记录），或者采纳过的
-    /// journal 带着无法回放的残尾——都属于"本次运行没有完全收尾"，调用方必须据此降级
-    /// 退出码，而不是照常给 0
+    /// （没取到锁、认不出它是否仍属于本次事务），或者采纳过的 journal 带着无法回放的
+    /// 残尾——都属于"本次运行没有完全收尾"，调用方必须据此降级退出码，而不是照常给 0
     pub(crate) fn commit(session: &SessionJournal) -> bool {
         let identity = &session.identity;
         let mut clean = true;
@@ -391,11 +386,9 @@ impl TransactionManager {
         //   而不是路径字符串——没有文件身份接口的平台（Windows）也只有这一条可用
         let created_here = dev::take_created_journal_fp(&primary);
         let ours_file = session.journal_fp.or(created_here);
-        // 首项的**删除**只依据文件身份（或自建的所有权）；内容身份只用于比对其余候选
-        let mut remove_primary = false;
-        let mut ours_identity = None;
-        if let Some(fp) = ours_file {
-            let delete_primary = match fp.still_names(&primary) {
+        // 每个身份只有一个落点，本事务也只用过这一份：删它就只看文件身份（或自建的所有权）
+        let remove_primary = match ours_file {
+            Some(fp) => match fp.still_names(&primary) {
                 Ok(Some(true)) => true,
                 // 身份无从比对，但这份文件是本进程本次运行建出来的：删它依据的是所有权
                 Ok(None) if created_here.is_some() => true,
@@ -423,73 +416,13 @@ impl TransactionManager {
                     clean = false;
                     false
                 }
-            };
-            if delete_primary {
-                remove_primary = true;
-                match dev::Journal::read_identity(&primary) {
-                    Ok(id) => ours_identity = Some(id),
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                    Err(e) => {
-                        eprintln!(
-                            "warning: cannot read the identity of {} ({e}) — only that file is removed, and no \
-                             other candidate can be matched against this transaction",
-                            primary.display()
-                        );
-                        // 其余候选无从比对 ⇒ 该删而未删，本次运行不算收尾
-                        clean = false;
-                    }
-                }
-            }
-        }
-        for p in identity.journal_candidates() {
-            if *p == primary {
-                if remove_primary && !dev::remove_recovery_file(p) {
-                    eprintln!("warning: could not remove {} — it still names this target", p.display());
-                    clean = false;
-                }
-                continue;
-            }
-            // 首项之外只删"头完整、零条记录"的壳：本次事务只采纳了首项，别的候选里的记录
-            // 从未被回放，删掉就等于永久丢掉那段回滚依据。身份相同不足以授权删除——两份
-            // journal 记录的目标身份可以完全相同
-            match dev::classify_journal(p) {
-                dev::JournalCandidate::Shell => {}
-                dev::JournalCandidate::Absent => continue,
-                dev::JournalCandidate::Records(_) => {
-                    eprintln!(
-                        "warning: {} holds recovery records this transaction did not replay — left in place; \
-                         replay it with `diskedit undo` or release it with `diskedit abandon`",
-                        p.display()
-                    );
-                    clean = false;
-                    continue;
-                }
-                dev::JournalCandidate::Damaged(why) => {
-                    eprintln!(
-                        "warning: {} cannot be read ({why}) — left in place; release it with `diskedit abandon`",
-                        p.display()
-                    );
-                    clean = false;
-                    continue;
-                }
-            }
-            let Some(ours_identity) = &ours_identity else { continue };
-            match dev::Journal::read_identity(p) {
-                Ok(id) => {
-                    if let Some(why) = dev::recorded_scenes_mismatch(&id, ours_identity) {
-                        eprintln!("warning: {why} — {} is left in place", p.display());
-                        clean = false;
-                    } else if !dev::remove_recovery_file(p) {
-                        eprintln!("warning: could not remove {} — it still names this target", p.display());
-                        clean = false;
-                    }
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                Err(e) => {
-                    eprintln!("warning: cannot read the identity of {} ({e}) — left in place", p.display());
-                    clean = false;
-                }
-            }
+            },
+            // 没走到 journal 打开就失败：没有任何文件是本事务的
+            None => false,
+        };
+        if remove_primary && !dev::remove_recovery_file(&primary) {
+            eprintln!("warning: could not remove {} — it still names this target", primary.display());
+            clean = false;
         }
         clean
     }
@@ -510,7 +443,7 @@ impl TransactionManager {
     /// journal 所指的旧布局彻底作废，而用户随后 undo 仍会把旧表字节回放上去，形成"表与盘上
     /// 内容自相矛盾"的状态（例如 FS 自述尺寸 > 分区尺寸）。
     ///
-    /// 经过 [`Self::begin`] 的写命令（add/del/resize/mkfs…）不靠它：`begin` 在目标被占用时
+    /// 经过 [`Self::begin`] 的写命令（add/delete/resize/mkfs…）不靠它：`begin` 在目标被占用时
     /// 就已拒绝。本闸口覆盖的是只取所有权、不开事务的那些命令
     ///
     /// 现场落点由**整盘**键派生（见 `dev::TargetIdentity::from_block_keys`）：
@@ -554,12 +487,10 @@ mod tests {
         }
     }
 
-    /// 出路按现场性质分三路，给同一句话就是把用户送进注定失败的路。undo 这条出路
-    /// 要求**恰好一份可读 journal**：多份并存时 `pick_journal` 会因无法抉择而拒绝
-    /// （Ambiguous），凭其中一份许诺"可以 undo"是句到不了的出路；读不出来的候选则
-    /// 只告警、不否决那一份可用记录
+    /// 出路按现场性质分三路，给同一句话就是把用户送进注定失败的路。每个身份只有一份
+    /// journal，可回滚与否只看它：越过屏障或读不出来的那份都不许诺 undo
     #[test]
-    fn busy_offers_undo_only_when_a_single_usable_journal_is_rollbackable() {
+    fn busy_way_out_follows_the_state_of_the_journal() {
         let text = way_out(&[journal("a", false)]);
         assert!(text.contains("undo"), "a rollbackable journal must offer undo: {text}");
 
@@ -567,54 +498,49 @@ mod tests {
         assert!(!text.contains("undo"), "a journal past the barrier must not offer undo: {text}");
         assert!(text.contains("abandon"), "{text}");
 
-        // 两份并存、其一已越过不可回滚点：另一份可回滚也不足以许诺 undo
-        let text = way_out(&[journal("a", false), journal("b", true)]);
-        assert!(!text.contains("undo"), "one un-rollbackable journal must withdraw the undo way out: {text}");
-        assert!(text.contains("abandon"), "{text}");
-
-        // 两份均可回滚也不许诺 undo：pick_journal 对两份可用 journal 必拒 Ambiguous
-        let text = way_out(&[journal("a", false), journal("b", false)]);
-        assert!(!text.contains("undo"), "two journals leave undo no single choice: {text}");
-        assert!(text.contains("abandon"), "{text}");
-
-        // 一份可用 + 一份读不出来：pick_journal 按可用那份回放，损坏候选只告警，
-        // 因此它不参与计数、也不否决 "undo"
+        // 读不出来：记录内容无从判断，同样不能许诺 undo
         let damaged = RecoveryRecord::Journal { path: "b".into(), entries: None };
-        let text = way_out(&[journal("a", false), damaged]);
-        assert!(text.contains("undo"), "a damaged candidate must not withdraw the undo way out: {text}");
+        let text = way_out(&[damaged]);
+        assert!(!text.contains("undo"), "an unreadable journal must not offer undo: {text}");
+        assert!(text.contains("abandon"), "{text}");
+
+        // 只有 checkpoint：能续跑，出路是重跑原命令或 abandon
+        let ckpt = RecoveryRecord::Checkpoint { path: "c".into() };
+        let text = way_out(&[ckpt]);
+        assert!(text.contains("re-run"), "a checkpoint must offer resuming: {text}");
+        assert!(text.contains("abandon"), "{text}");
     }
 
-    /// commit 只清**本次事务拥有**的候选：同一条命令行路径在不同时刻可以指向不同文件，
-    /// 收尾时按路径重新解析会删到别人的 journal。这里用两个不同身份证明清理范围
+    /// commit 只清**本次事务拥有**的 journal 落点：同一条命令行路径在不同时刻可以指向不同
+    /// 文件，收尾时按路径重新解析会删到别人的 journal。这里用两个不同身份证明清理范围
     #[test]
-    fn commit_drops_the_candidates_of_the_given_identity_only() {
+    fn commit_drops_only_the_journal_of_the_given_identity() {
         let dir = std::env::temp_dir().join(format!("diskedit_commitid_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let img = dir.join("a.img");
         std::fs::write(&img, b"x").unwrap();
         let id = TargetIdentity::resolve_image(&img);
-        let mut mine = Vec::new();
-        for p in id.journal_candidates() {
-            // 头完整、零记录的空壳：read_identity 可读，身份与本次事务一致
+        let p = id.journal_path().to_path_buf();
+        // 头完整、零记录的空壳：read_identity 可读，身份与本次事务一致
+        {
             let mut j = dev::Journal::open(
-                p,
+                &p,
                 dev::LiveScene { fp: Default::default(), map: None, proof: dev::LiveProof::Inode },
             )
             .unwrap();
             j.ensure().unwrap();
-            mine.push(p.clone());
         }
         let other = TargetIdentity::resolve_image(&dir.join("b.img"));
         std::fs::write(other.journal_path(), b"keep").unwrap();
 
-        // 进程级的"本次运行自建"槽位只记最后一个 `ensure` 的文件；它是另一条独立的
-        // 所有权证据，本用例要检验的是"采纳来的指纹"这一条路径，故先把它清掉
-        let _ = dev::take_created_journal_fp(id.journal_path());
+        // 进程级的"本次运行自建"槽位记着刚 `ensure` 的文件；它是另一条独立的所有权证据，
+        // 本用例要检验的是"采纳来的指纹"这一条路径，故先把它清掉
+        let _ = dev::take_created_journal_fp(&p);
 
-        // 首项要按"attach 时就是它"认领，指纹取该文件此刻的身份（从**句柄**问：
+        // 落点要按"attach 时就是它"认领，指纹取该文件此刻的身份（从**句柄**问：
         // 有的平台只在句柄上有文件身份）
-        let adopted = std::fs::File::open(id.journal_path())
+        let adopted = std::fs::File::open(&p)
             .ok()
             .and_then(|f| dev::TargetFingerprint::from_file(&f).ok());
         let has_identity = adopted.as_ref().is_some_and(|fp| fp.has_inode_evidence());
@@ -627,19 +553,17 @@ mod tests {
 
         // 交上去的指纹取自该文件此刻的身份：有证据即删；平台给不出文件身份时
         // "属于本次事务"没有可交付的判据，必须留下
-        for p in &mine {
-            if has_identity {
-                assert!(!p.exists(), "{} belongs to the committed transaction and must be dropped", p.display());
-            } else {
-                assert!(p.exists(), "without file identity evidence an adopted journal must stay: {}", p.display());
-            }
+        if has_identity {
+            assert!(!p.exists(), "{} belongs to the committed transaction and must be dropped", p.display());
+        } else {
+            assert!(p.exists(), "without file identity evidence an adopted journal must stay: {}", p.display());
         }
         assert!(other.journal_path().exists(), "another target's journal must survive the commit");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// attach 时首项不存在、本进程也没建过它：路径上出现的文件是命令返回后别的进程
+    /// attach 时落点不存在、本进程也没建过它：路径上出现的文件是命令返回后别的进程
     /// 建出的，commit 必须原样留下——否则会删掉一个刚开的事务的回滚凭据
     #[test]
     fn commit_keeps_a_journal_it_neither_adopted_nor_created() {

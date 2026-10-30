@@ -2,7 +2,7 @@
 
 use super::*;
 
-/// 在线 resize 总入口（resizefs --online 用）。`size`：None = 扩满现分区；Some(字节) = 绝对新尺寸
+/// 在线 resize 总入口（resizefs 挂载点形式用）。`size`：None = 扩满现分区；Some(字节) = 绝对新尺寸
 /// （> 现分区与 < 现分区都被拒绝：本入口不改分区表，缩容需要分区跟着缩，属 `resize` 的职责）。
 /// 请求不含锚定语义，故目标在锁下原样给出。
 /// 结果统一为 Outcome（退出码只在 outcome 模块映射）：10=拒绝（未动盘）/

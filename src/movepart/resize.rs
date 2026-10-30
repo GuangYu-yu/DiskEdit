@@ -425,7 +425,6 @@ pub(crate) fn prepare_resize(
         CheckpointSlot::Relocation(_) => return Err(Fail::refused(
             "an unfinished relocation job occupies the checkpoint slot — resume it first (re-run the original `resize ... grow` / `apply`)",
         )),
-        CheckpointSlot::Ambiguous(paths) => return Err(ambiguous_checkpoint(&paths)),
         CheckpointSlot::Empty => None,
     };
     // 恢复判定取三个维度：本次请求 / 持久状态 / 盘上几何（见 classify_restore）

@@ -67,15 +67,15 @@ echo "== resize-part --grow-to-end（此刻分区终点已是 last_usable，故�
 # resize-part 与 resize 同契约：默认连 FS 一起扩，--no-fs 才只动表
 $B resize-part "$T":1 --start 2048 --grow-to-end >/dev/null; exp "$?" 0 "resize-part --grow-to-end"
 
-echo "== resizefs <mountpoint> <BYTES> --online（BYTES = 分区目标大小）=="
+echo "== resizefs <mountpoint> <BYTES>（BYTES = 分区目标大小）=="
 # 上一步 --no-fs 把 FS 留在了 42MiB（分区终点 100351，48MiB），而分区现在已是
 # 63MiB：在线扩后 FS 应长到 ~57MiB，故 50MiB 是"确实扩了"的判据
 SZ=$($B info "$T" | grep -o '"num":1,[^}]*' | grep -o '"size_bytes":[0-9]*' | grep -o '[0-9]*')
 echo "partition size_bytes=$SZ"
 LD=$(lo_attach "$T")
-mount_at "${LD}p1" "$MNT" || { echo "  BAD  --online 前挂载失败"; lo_detach "$LD"; exit 1; }
+mount_at "${LD}p1" "$MNT" || { echo "  BAD  在线形式前挂载失败"; lo_detach "$LD"; exit 1; }
 FS_BEFORE=$(df -B1M --output=size "$MNT" | tail -1 | tr -d ' ')
-$B resizefs "$MNT" "$SZ" --online; exp "$?" 0 "resizefs --online"
+$B resizefs "$MNT" "$SZ"; exp "$?" 0 "resizefs <mountpoint> BYTES"
 FS_AFTER=$(df -B1M --output=size "$MNT" | tail -1 | tr -d ' ')
 echo "  FS size: ${FS_BEFORE}MiB -> ${FS_AFTER}MiB"
 [ "$FS_AFTER" -ge 50 ] && [ "$FS_AFTER" -ge "$FS_BEFORE" ] \

@@ -124,7 +124,7 @@ pub(crate) fn parse_os_type(s: &str) -> Option<u8> {
 // 目标怎么打开、所有权怎么取、事务怎么开与提交，全部归 `transaction::TransactionManager`。
 // 这里只给命令层惯用的入口名，并把"哪一类命令可以接着做未完成的作业"这一条规则写成闭包
 
-/// 会留下 durable history 的写事务（add/del/set/resize/create/mkfs/apply…）
+/// 会留下 durable history 的写事务（add/delete/set/resize/create/mkfs/apply…）
 pub(crate) fn open_target_for_write(a: &Args) -> Result<WriteSource, crate::outcome::Fail> {
     TransactionManager::begin(a)
 }
@@ -332,6 +332,18 @@ pub(crate) fn note_sector_truncation(action: &str, bytes: u64, ss: u64) {
 /// 恢复现场的枚举口径与"未收尾就拒绝"的闸口都在 `transaction`（见 `TransactionManager`）。
 /// 这里只转发名字，命令层不必知道它是怎么判的
 pub(crate) use crate::transaction::{active_recovery_records, RecoveryRecord, ResumeClaim};
+
+/// 在线写盘前声明它的代价：写经系统工具（sfdisk / 各 FS 官方工具），不经过本工具的
+/// journal，也没有 checkpoint。中断后既不能 `undo` 回滚，也不能重跑续跑。
+/// 打印点放在首次写盘之前而非命令帮助末尾：用户此刻能否改道（先卸载走离线路径）
+/// 取决于是否知道这条事实
+#[cfg(target_os = "linux")]
+pub(crate) fn note_online_no_undo() {
+    eprintln!(
+        "note: online write goes through the system tools, not this tool's journal — no checkpoint to resume, \
+         and `undo` cannot roll it back (unmount the partition to take the offline path)"
+    );
+}
 
 /// 闸口：目标上还留着未收尾的现场 ⇒ 拒绝这次不写 journal 的写盘
 pub(crate) fn refuse_if_pending_recovery(src: &FileSource, what: &str) -> Result<(), Fail> {

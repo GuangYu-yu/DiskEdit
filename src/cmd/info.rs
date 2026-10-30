@@ -10,9 +10,18 @@ pub(crate) const HELP: &str = r#"diskedit info <TARGET> [--sector-size N]
   Show partition table and per-partition filesystem identification
   (an LVM PV shows up in the fs field as lvm2_pv; PV space takes effect
   through `resize --grow-lv`). Read-only.
-  --sector-size N overrides the 512B default (raw images).
-  stdout is JSON in both outcomes; a failure adds an `error` field and keeps
-  the layout fields it could not determine at null."#;
+  --sector-size N logical sector size override for raw images
+  stdout is JSON in both outcomes; a failure adds `error` (a string) and keeps
+  the layout fields it could not determine at null. Keys:
+    label         "gpt" | "msdos" | "none"
+    damaged       bool — the table needs repair or cannot be read as-is
+    sector_size   logical block size in bytes
+    size_bytes    target size in bytes
+    disk_guid     GPT disk GUID, null when the table has none
+    last_part     the partition number `:last` resolves to; absent when none
+    partitions    array of {num, first_lba, last_lba, size_bytes, type, fs, name};
+                  type is a GPT GUID or an MBR "0xXX", fs is the detected name
+                  (or "container" / "error"), name is null on MBR"#;
 
 /// 失败路径的 stdout 信封。`info` 的输出是给脚本消费的，调用方不该因为故障发生在
 /// 读表阶段还是识别阶段就换一套解析：键集与成功路径相同，原因进 `error`。

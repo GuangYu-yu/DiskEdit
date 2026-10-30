@@ -7,19 +7,18 @@ use crate::dev::{classify_journal, FileSource, Journal, JournalCandidate, Journa
 
 pub(crate) const HELP: &str = r#"diskedit undo <TARGET> --yes
 
-  Replay the journal to undo the partition-table bytes this tool wrote.
-  Relocated data cannot be rolled back, and writes made by external FS
-  tools are not undone."#;
+  Replay the journal: put back the bytes this tool wrote through it —
+  partition-table entries and the in-place filesystem metadata it changed
+  (NTFS backup sector pointer). Relocated data cannot be rolled back, and
+  writes made by external FS tools are not undone.
 
-/// 挑不出唯一可读 journal 的两种原因——**性质不同，出口码就该不同**，故在这里
-/// 分型而不是把文案揉成一个 String 让调用方猜：
-/// - `Unreadable`：文件在而读不出来（CRC/magic/损坏/I-O）⇒ 盘上事实，重试无用（30）；
-///   只有 abandon 能释放，提示也指向那里
-/// - `Ambiguous`：多份同时可读 ⇒ 不猜（猜错会把历史字节回放到不该回放的盘上）
+  Example: diskedit undo /dev/sdb --yes"#;
+
+/// journal 在而读不出来（CRC/magic/损坏/I-O）⇒ 盘上事实，重试无用（30）；
+/// 只有 abandon 能释放，提示也指向那里
 #[derive(Debug)]
 enum PickJournalError {
     Unreadable { detail: String },
-    Ambiguous { listed: String },
 }
 
 impl std::fmt::Display for PickJournalError {
@@ -27,54 +26,30 @@ impl std::fmt::Display for PickJournalError {
         match self {
             PickJournalError::Unreadable { detail } => write!(f, "the undo journal exists but is unreadable: {detail} — \
                  it cannot be replayed; release it with `diskedit abandon`"),
-            PickJournalError::Ambiguous { listed } => write!(f, "multiple journals found for this target — refusing: {listed}"),
         }
     }
 }
 
-/// 候选落点的挑选结论。缺席与空壳都不是"可回放的记录"，但该给出的结论不同：
+/// 挑选结论。缺席与空壳都不是"可回放的记录"，但该给出的结论不同：
 /// 前者是请求与现状不符，后者描述零次写入、清理即可
 enum PickedJournal {
     Absent,
-    /// 头完整、零记录的壳（可能有多个落点）
-    Shells(Vec<std::path::PathBuf>),
+    /// 头完整、零记录的壳
+    Shell(std::path::PathBuf),
     Records(std::path::PathBuf, JournalRead),
 }
 
-/// 在候选落点中挑出唯一可读的 journal；没有可读记录时区分"空壳"与"什么都没有"。
-/// 每族只有一个落点，缺席因此是常态而非故障：把它记成错误会让真正的损伤原因
-/// （那份文件存在但读不出来）被 `No such file or directory` 盖住。
-/// 损坏候选**记录后继续**看后面的候选（与 read_checkpoint 同一口径）：一份损坏的候选
-/// 不该遮住一份完好的候选；全部候选都不可读时才把死因如实带回。
+/// 判定唯一落点上的 journal；没有可读记录时区分"空壳"与"什么都没有"。
+/// 缺席因此是常态而非故障：把它记成错误会让真正的损伤原因（那份文件存在但读不出来）
+/// 被 `No such file or directory` 盖住。
 ///
-/// 分类只走 [`classify_journal`]：写闸口、`abandon` 与这里对"什么算现场"因此不会分叉。
-/// 有损坏候选时不把"只剩空壳"报成干净——那份损坏的可能正是丢了记录的真现场
-fn pick_journal(candidates: &[std::path::PathBuf]) -> Result<PickedJournal, PickJournalError> {
-    let mut usable: Vec<(std::path::PathBuf, JournalRead)> = Vec::new();
-    let mut shells: Vec<std::path::PathBuf> = Vec::new();
-    let mut damaged: Vec<String> = Vec::new();
-    for path in candidates {
-        match classify_journal(path) {
-            JournalCandidate::Absent => {}
-            JournalCandidate::Shell => shells.push(path.clone()),
-            JournalCandidate::Damaged(detail) => damaged.push(format!("{} ({detail})", path.display())),
-            JournalCandidate::Records(read) => usable.push((path.clone(), read)),
-        }
-    }
-    match usable.len() {
-        1 => {
-            for d in &damaged {
-                eprintln!("warning: unreadable journal {d}");
-            }
-            let (p, r) = usable.remove(0);
-            Ok(PickedJournal::Records(p, r))
-        }
-        0 if !damaged.is_empty() => Err(PickJournalError::Unreadable { detail: damaged.join("; ") }),
-        0 if !shells.is_empty() => Ok(PickedJournal::Shells(shells)),
-        0 => Ok(PickedJournal::Absent),
-        _ => Err(PickJournalError::Ambiguous {
-            listed: usable.iter().map(|(p, _)| p.display().to_string()).collect::<Vec<_>>().join(", "),
-        }),
+/// 分类只走 [`classify_journal`]：写闸口、`abandon` 与这里对"什么算现场"因此不会分叉
+fn pick_journal(path: &std::path::Path) -> Result<PickedJournal, PickJournalError> {
+    match classify_journal(path) {
+        JournalCandidate::Absent => Ok(PickedJournal::Absent),
+        JournalCandidate::Shell => Ok(PickedJournal::Shell(path.to_path_buf())),
+        JournalCandidate::Damaged(detail) => Err(PickJournalError::Unreadable { detail: format!("{} ({detail})", path.display()) }),
+        JournalCandidate::Records(read) => Ok(PickedJournal::Records(path.to_path_buf(), read)),
     }
 }
 
@@ -89,31 +64,21 @@ fn checkpoint_present(p: &std::path::Path) -> bool {
 }
 
 /// 目标上还留着的 checkpoint，拼成一句可报的清单；没有则 None。
-/// 判据与写闸口同源（同组候选、非普通文件不算、只有 NotFound 算不在）
+/// 判据与写闸口同源（非普通文件不算、只有 NotFound 算不在）
 fn stale_checkpoint_note(src: &FileSource) -> Option<String> {
-    let leftover = src.identity.checkpoint_candidates();
-    let stale: Vec<String> = leftover
-        .iter()
-        .filter(|p| checkpoint_present(p))
-        .map(|p| p.display().to_string())
-        .collect();
-    if stale.is_empty() {
-        None
-    } else {
-        Some(stale.join(", "))
-    }
+    let path = src.identity.checkpoint_path();
+    checkpoint_present(path).then(|| path.display().to_string())
 }
 
-/// 空壳（头完整、零记录）描述的是零次写入：没有任何东西依赖它，但它一直占着候选落点，
+/// 空壳（头完整、零记录）描述的是零次写入：没有任何东西依赖它，但它一直占着落点，
 /// 而写闸口与 `abandon` 都按设计跳过它——不在这里收掉就没有命令能收。
 ///
 /// 只删**确认属于本目标**的壳：头里的身份与本目标不符就保留并告警，绝不按"读出来是空的"
-/// 就删。逐候选判定而不是整体拒绝：一份别人的壳留在候选落点上，不该把同一次清理里
-/// 属于本目标的壳一起挡住（那会让同一条命令每次都失败在同一个与它无关的文件上）。
+/// 就删。
 ///
-/// 删除失败如实进退出码：壳留在候选落点上，写闸口与 `abandon` 仍按设计跳过它，
+/// 删除失败如实进退出码：壳留在落点上，写闸口与 `abandon` 仍按设计跳过它，
 /// 报 0 会让脚本以为现场已经收干净
-fn remove_empty_shells(src: &FileSource, shells: Vec<std::path::PathBuf>) -> ! {
+fn remove_empty_shell(src: &FileSource, shell: std::path::PathBuf) -> ! {
     // 空壳与"目标上留着未收尾的 checkpoint"是两件事：后者描述的是另一族作业的进度
     // （例如搬移搬到一半），undo 回放不了它，也不能假装目标干净——它会让后续 resize
     // 被判成 Divergent 而拒绝，用户看到的是"什么也没做却被拒绝"
@@ -123,43 +88,22 @@ fn remove_empty_shells(src: &FileSource, shells: Vec<std::path::PathBuf>) -> ! {
              re-run the command that started that job to resume it to completion"
         )));
     }
-    let mut ours: Vec<&std::path::Path> = Vec::new();
-    let mut foreign: Vec<String> = Vec::new();
-    for p in &shells {
-        let identity = Journal::read_identity(p)
-            .unwrap_or_else(|e| bail_fail(Fail::infra(format!("journal identity header is unreadable: {e}"))));
-        match crate::dev::scene_mismatch(&identity, &src.scene()) {
-            None => ours.push(p.as_path()),
-            Some(why) => foreign.push(format!("{} ({why})", p.display())),
-        }
-    }
-    for f in &foreign {
-        eprintln!("warning: empty journal {f} — left in place; {ROLLBACK_STUCK_REMEDY}");
-    }
-    let mut removed = 0;
-    let mut failed: Vec<String> = Vec::new();
-    for p in ours {
-        // NotFound 的后置条件（不残留）已经成立；成功删除同时落盘目录项
-        if crate::dev::remove_recovery_file(p) {
-            removed += 1;
-        } else {
-            failed.push(p.display().to_string());
-        }
-    }
-    let kept = if foreign.is_empty() {
-        String::new()
-    } else {
-        format!("; {} shell(s) recorded for another target were left in place", foreign.len())
-    };
-    if failed.is_empty() {
+    let identity = Journal::read_identity(&shell)
+        .unwrap_or_else(|e| bail_fail(Fail::infra(format!("journal identity header is unreadable: {e}"))));
+    if let Some(why) = crate::dev::scene_mismatch(&identity, &src.scene()) {
         bail_fail(Fail::refused(format!(
-            "nothing to undo ({removed} empty journal shell(s) removed — they held no records){kept}"
-        )))
+            "the empty journal {why} — left in place; {ROLLBACK_STUCK_REMEDY}"
+        )));
+    }
+    // NotFound 的后置条件（不残留）已经成立；成功删除同时落盘目录项
+    if crate::dev::remove_recovery_file(&shell) {
+        bail_fail(Fail::refused(
+            "nothing to undo (the empty journal shell was removed — it held no records)".to_string(),
+        ));
     }
     bail_fail(Fail::refused(format!(
-        "nothing to undo, but {n} empty journal shell(s) could not be removed — they still occupy the candidate spots: {}{kept}",
-        failed.join(", "),
-        n = failed.len()
+        "nothing to undo, but the empty journal shell could not be removed — it still occupies {}; {ROLLBACK_STUCK_REMEDY}",
+        shell.display()
     )))
 }
 
@@ -355,9 +299,8 @@ const FOREIGN_EDIT_HINT: &str =
     "if another tool rewrote the table, run partprobe on the disk so the kernel partition view \
      matches the disk before retrying";
 
-/// checkpoint 候选由目标身份派生。undo 属恢复路径：
-/// 候选缺席时要照常工作，降级为 None 与告警由
-/// [`TargetIdentity::checkpoint_candidates`] 统一完成，`abandon` 与 undo 两处不各写一遍
+/// undo 只认目标身份派生的那一个 journal 落点。缺席是常态：请求与现状不符（10）；
+/// 在而读不出是盘上事实，重试无用且只有 abandon 能释放（30）
 pub(crate) fn cmd_undo(a: &Args) -> u8 {
     // undo 回放的是整盘 journal：`:N` 指定了也会被静默忽略（与 info 同判据）
     if let Some(n) = a.part {
@@ -375,11 +318,10 @@ pub(crate) fn cmd_undo(a: &Args) -> u8 {
         if let Err(f) = crate::fsops::ensure_table_write_idle(&src) {
             bail_fail(f);
         }
-        // 三种挑不出各自的出口码：缺席 = 请求与现状不符（10）；在而读不出 = 盘上事实，
-        // 重试无用且只有 abandon 能释放（30）；歧义同样按拒绝处理（不猜）
-        let picked = pick_journal(src.identity.journal_candidates()).unwrap_or_else(|e| bail_fail(match e {
+        // 两种挑不出各自的出口码：缺席 = 请求与现状不符（10）；在而读不出 = 盘上事实，
+        // 重试无用且只有 abandon 能释放（30）
+        let picked = pick_journal(src.identity.journal_path()).unwrap_or_else(|e| bail_fail(match e {
             PickJournalError::Unreadable { .. } => Fail::infra(e.to_string()),
-            _ => Fail::refused(e.to_string()),
         }));
         let (p, entries, tail_incomplete) = match picked {
             // 没有 journal 也要看一眼 checkpoint：只剩未收尾作业时，报"没有可撤销的东西"
@@ -391,7 +333,7 @@ pub(crate) fn cmd_undo(a: &Args) -> u8 {
                 ))),
                 None => bail_fail(Fail::refused("no undo journal on this target".to_string())),
             },
-            PickedJournal::Shells(shells) => remove_empty_shells(&src, shells),
+            PickedJournal::Shell(shell) => remove_empty_shell(&src, shell),
             PickedJournal::Records(p, read) => match read {
                 JournalRead::Complete(v) => (p, v, false),
                 // 尾部未完成的记录：append-only 下那次追加没走完，它对应的写入也就没发生，
@@ -553,37 +495,26 @@ pub(crate) fn cmd_undo(a: &Args) -> u8 {
         src.sync_all().unwrap_or_else(|e| {
             bail_fail(Fail::failed(format!("undo wrote the journal back but sync failed: {e} — rollback may not be durable, verify before retrying")))
         });
-        // 回放成功的收尾不止删被回放的那份：其余候选若还留在盘上（读不出的那份，
-        // pick_journal 已逐条告警过），下一次 undo 仍会把它报成 Unreadable、abandon
-        // 仍把它列为现场——回放既然已经成功，这个"有事没做完"的表象必须一并消失。
-        // Barrier 型 journal 走不到这里（上方已整体拒绝），Ambiguous 也在挑 journal
-        // 时前置拒绝，这里能多删的只有其余候选
-        let mut cleared = clear_journal_candidates(
-            src.identity.journal_candidates(),
-            &p,
-            &src.scene(),
-            tail_incomplete,
-        );
+        // 回放成功即腾空 journal 落点；撕裂尾时改为归档而不是删除（见 clear_journal）。
+        // Barrier 型 journal 走不到这里（上方已整体拒绝）
+        let mut leftovers = clear_journal(&p, tail_incomplete);
         // 事务的恢复状态随回滚一并释放：这份 journal 记下的表写入已经全部回退，而 checkpoint
         // 描述的是同一个事务的进度——留下来只会描述一个已被回滚掉的世界，让后续 resize 被判成
         // Divergent 而永久拒绝（"什么也没做却被拒绝"）。
         //
-        // 这里能无条件删掉**全部** ckpt 候选，依据两条前提；改动它们必须重新审这一处：
+        // 这里能无条件删掉 checkpoint，依据两条前提；改动它们必须重新审这一处：
         // ① 写 ckpt 只能经 `TransactionManager::begin_or_resume` 的三个 claim 进入，而目标上
         //    已有"无 ckpt 的 journal"时三者都拒绝（FreshOnly 见任何 active 即拒、AnyCheckpoint
         //    要求 ckpt 已存在、OwnRelocation 的归属判据同样要求 ckpt 已存在），因此与某份
         //    journal 并存的 ckpt 必属同一个作业；
-        // ② 此处删的候选集与 `active_recovery_records` 枚举现场用的是同一组（journal_candidates
-        //    + checkpoint_candidates()），既不会漏删、也不会删到别处的落点。
+        // ② journal 与 checkpoint 各只有一个落点，删的就是 `active_recovery_records` 枚举的那份。
         // 新增绕过 begin_or_resume 的 ckpt 写入点，或新增接受非空 active 的入口，即推翻本结论
-        let candidates = src.identity.checkpoint_candidates();
-        for ckpt in candidates {
-            if !crate::dev::remove_recovery_file(ckpt) {
-                cleared.leftovers.push(ckpt.display().to_string());
-            }
+        let ckpt = src.identity.checkpoint_path();
+        if !crate::dev::remove_recovery_file(ckpt) {
+            leftovers.push(ckpt.display().to_string());
         }
         // undo 不开撤销窗口（WriteNoJournal）：结果只用于自身退出码
-        let mut summary = if plan.complete {
+        let summary = if plan.complete {
             format!(
                 "the journal's writes were already rolled back — nothing written this run (verify with: diskedit info {})",
                 a.target
@@ -591,14 +522,6 @@ pub(crate) fn cmd_undo(a: &Args) -> u8 {
         } else {
             format!("undone {n} journal entries (verify with: diskedit info {})", a.target)
         };
-        // 另一份损坏 journal 的记录一条都没回放：落点已腾空，但它描述的那次写入可能仍在
-        // 盘上。成功串不能只说"已回滚"，否则脚本会据此认为盘已回到写入前
-        if !cleared.unreplayed.is_empty() {
-            summary.push_str(
-                "; the records in another damaged journal were not replayed, so the target may still hold the \
-                 post-write state they describe",
-            );
-        }
         // 回放只覆盖 journal 记下的表写入：文件系统内容由外部工具改过，不在可回滚范围。
         // 这句必须随成功结果一起出现——帮助文本里的同一句只在用户查帮助时可见
         eprintln!(
@@ -611,32 +534,17 @@ pub(crate) fn cmd_undo(a: &Args) -> u8 {
         );
         let code = table_write_done(&src, &summary).exit_code();
         // 残尾对应的写入既未能回放也无法排除：完整前缀回到写入前，但整份 journal 不能说
-        // 已回滚到底，出口不能报成完整成功（journal 已归档，见 clear_journal_candidates）。
-        // 另一份损坏 journal 的记录同样一条都没回放：归档只腾空候选落点，那些记录描述的
-        // 写后状态可能仍在盘上。两者都按 20（EXIT_PARTIAL）报，与 abandon 的 30 不是同一个
-        // 契约（那一条见 cmd/abandon.rs）
-        if !cleared.unreplayed.is_empty() {
-            eprintln!(
-                "warning: the records in these damaged journal candidate(s) were not replayed — the target may \
-                 still hold the post-write state they describe:"
-            );
-            for p in &cleared.unreplayed {
-                eprintln!("  {p}");
-            }
-        }
-        let code = if tail_incomplete || !cleared.unreplayed.is_empty() {
-            code.max(EXIT_PARTIAL)
-        } else {
-            code
-        };
-        if cleared.leftovers.is_empty() {
+        // 已回滚到底，出口不能报成完整成功（journal 已归档，见 clear_journal）。按 20
+        // （EXIT_PARTIAL）报，与 abandon 的 30 不是同一个契约（那一条见 cmd/abandon.rs）
+        let code = if tail_incomplete { code.max(EXIT_PARTIAL) } else { code };
+        if leftovers.is_empty() {
             return code;
         }
         // 回放已完成、但现场文件仍在：残留的 journal 让下一次写命令被判 busy，残留的 ckpt
         // 让后续 resize/apply 被判 Divergent，而此时已无 journal 可再 undo——只能人工处理。
         // 成功串已打印，出口按"完成但有待办"降级（20），并逐条指名残留路径
         eprintln!("warning: the rollback is complete but these recovery files could not be removed:");
-        for p in &cleared.leftovers {
+        for p in &leftovers {
             eprintln!("  {p}");
         }
         eprintln!("  next write commands will report this target as busy until they are gone; remove them by hand if they are stale");
@@ -644,146 +552,35 @@ pub(crate) fn cmd_undo(a: &Args) -> u8 {
     }
 }
 
-/// 清理候选的结论。两个清单性质不同：
-/// - `leftovers`：仍在候选落点上、删不掉的路径——写闸口会继续把目标判成 busy
-/// - `unreplayed`：已归档、但其记录一条都没有回放的损坏候选——落点腾空了，可盘面可能
-///   仍停在那些记录所描述的写后状态
-struct ClearedCandidates {
-    leftovers: Vec<String>,
-    unreplayed: Vec<String>,
-}
-
-#[cfg(test)]
-impl ClearedCandidates {
-    /// 候选落点上没有残留，也没有"记录未回放"的候选
-    fn is_empty(&self) -> bool {
-        self.leftovers.is_empty() && self.unreplayed.is_empty()
-    }
-}
-
-/// 回放成功后清掉**全部** journal 候选，不止被回放的那份 `picked`。被回放的那份
-/// 使命已结束，通常直接删除；但 `torn` 为真时改为**归档**：残尾既可能是没走完的追加，
-/// 也可能是记录被外部截掉后的残骸，后者对应的写入可能已经落盘，而唯一能说明现场是
-/// 什么的正是这份文件。归档后候选落点腾空（目标不再被它顶成 busy），本次运行由调用方
-/// 按"完成但有待办"退出。
-///
-/// 其余候选要同时满足两条才删：首部是本工具 journal
-/// （`DEJL` 加当前版本字节），且头里的身份与本目标相符。前者说明它是
-/// 我们自己写下的残卷（pick_journal 口径的"读不出"，损伤已逐条告警过），后者说明
-/// 它记的不是别的目标——候选路径按命名派生只说明"可能是我们的落点"，证明不了
-/// "是我们的文件"。任一条不成立都保留并告警，交 abandon 人工处置。
-///
-/// 返回值分两类（见 [`ClearedCandidates`]）：落点上删不掉的路径，以及已归档但记录
-/// 一条都没有回放的损坏候选
-fn clear_journal_candidates(
-    candidates: &[std::path::PathBuf],
-    picked: &std::path::Path,
-    actual: &crate::dev::LiveScene,
-    torn: bool,
-) -> ClearedCandidates {
-    let mut cleared = ClearedCandidates { leftovers: Vec::new(), unreplayed: Vec::new() };
-    for cand in candidates {
-        if cand == picked {
-            if torn {
-                match archive_torn(cand) {
-                    Ok(to) => eprintln!(
-                        "note: archived the journal as {} — its tail is incomplete; inspect it before deleting",
-                        to.display()
-                    ),
-                    Err(why) => {
-                        eprintln!("warning: {why}");
-                        cleared.leftovers.push(cand.display().to_string());
-                    }
-                }
-            } else if !crate::dev::remove_recovery_file(cand) {
-                cleared.leftovers.push(cand.display().to_string());
-            }
-            continue;
-        }
-        // 读得出但首部不是本工具 journal ⇒ 陌生文件，保留交人工处置；
-        // 读不出来是另一回事（打不开 / 读不满 magic 长）——那不是"内容不像我们的"，
-        // 报成后者会把用户引去查一个并不存在的陌生文件
-        let probe = std::fs::File::open(cand).and_then(|mut f| {
-            use std::io::Read;
-            let mut hdr = [0u8; Journal::MAGIC.len()];
-            f.read_exact(&mut hdr)?;
-            Ok(Journal::is_own_header(&hdr))
-        });
-        match probe {
-            Ok(true) => match Journal::read_identity(cand) {
-                Ok(id) => {
-                    if let Some(why) = crate::dev::scene_mismatch(&id, actual) {
-                        eprintln!(
-                            "warning: {} is a diskedit journal recorded for another target ({why}) — left in place; \
-                             release it with `diskedit abandon` if it is no longer needed",
-                            cand.display()
-                        );
-                        // 任何留在候选落点上的文件都会被写闸口当成现场：这条路径与身份无关，
-                        // 只按落点判定，故留着它就把本目标顶成 busy——必须计入未完成的清理
-                        cleared.leftovers.push(cand.display().to_string());
-                        continue;
-                    }
-                    // 同目标、同一身份的候选里，只有"读得出记录"或"零记录空壳"能确认
-                    // 已无信息；读不出的那份可能正是丢了记录的真现场（pick_journal 的
-                    // Damaged 口径），删除不可逆，按 `.torn` 形态归档保留证据。归档只腾空
-                    // 落点：这份文件记下的写入一条都没有回放，盘面可能仍是写后状态，
-                    // 因此同时计入"未回放"清单，由调用方降级出口并说明
-                    if matches!(crate::dev::classify_journal(cand), JournalCandidate::Damaged(_)) {
-                        match archive_torn(cand) {
-                            Ok(to) => {
-                                eprintln!(
-                                    "note: archived the unreadable journal candidate as {} — inspect it before deleting",
-                                    to.display()
-                                );
-                                cleared.unreplayed.push(to.display().to_string());
-                            }
-                            Err(why) => {
-                                eprintln!("warning: {why}");
-                                cleared.leftovers.push(cand.display().to_string());
-                            }
-                        }
-                        continue;
-                    }
-                    eprintln!("removing stale journal candidate {}", cand.display());
-                    if !crate::dev::remove_recovery_file(cand) {
-                        cleared.leftovers.push(cand.display().to_string());
-                    }
-                }
-                Err(e) => {
-                    eprintln!(
-                        "warning: {} starts like a diskedit journal but its identity header is unreadable ({e}) — left in place",
-                        cand.display()
-                    );
-                    // 留下来就会被写闸口当成现场（分类只看落点上的文件），必须计入清理
-                    cleared.leftovers.push(cand.display().to_string());
-                }
-            },
-            Ok(false) => {
-                eprintln!(
-                    "warning: {} does not start with a diskedit journal header — left in place; \
-                     release it with `diskedit abandon` if it is ours",
-                    cand.display()
-                );
-                // 非空且读得出来的文件在落点上会被分类成 Damaged，同样把本目标顶成 busy
-                cleared.leftovers.push(cand.display().to_string());
-            }
-            Err(e) => {
-                eprintln!(
-                    "warning: {} could not be read to check for a diskedit journal header ({e}) — left in place",
-                    cand.display()
-                );
-                cleared.leftovers.push(cand.display().to_string());
+/// 回放成功后清理 journal 落点，返回删不掉的路径（它仍会把目标顶成 busy）。
+/// 被回放的这份使命已结束，通常直接删除；但 `torn` 为真时改为**归档**：残尾既可能是
+/// 没走完的追加，也可能是记录被外部截掉后的残骸，后者对应的写入可能已经落盘，而唯一能
+/// 说明现场是什么的正是这份文件。归档后落点腾空（目标不再被它顶成 busy），本次运行由
+/// 调用方按"完成但有待办"退出
+fn clear_journal(path: &std::path::Path, torn: bool) -> Vec<String> {
+    let mut leftovers = Vec::new();
+    if torn {
+        match archive_torn(path) {
+            Ok(to) => eprintln!(
+                "note: archived the journal as {} — its tail is incomplete; inspect it before deleting",
+                to.display()
+            ),
+            Err(why) => {
+                eprintln!("warning: {why}");
+                leftovers.push(path.display().to_string());
             }
         }
+    } else if !crate::dev::remove_recovery_file(path) {
+        leftovers.push(path.display().to_string());
     }
-    cleared
+    leftovers
 }
 
 /// 撕裂尾 journal 的归档后缀。首选名被占用时顺延为 `.torn.N`，绝不覆盖既有归档——
 /// 那一份同样是证据（与 `abandon` 的 `.abandoned.N` 同一形态）
 const TORN_SUFFIX: &str = ".torn";
 
-/// 把撕裂尾 journal 移出候选落点。先建硬链接再删原件：目标名已存在时硬链接原子失败，
+/// 把撕裂尾 journal 移出落点。先建硬链接再删原件：目标名已存在时硬链接原子失败，
 /// 不会像 `rename` 那样静默覆盖；中途失败只留下"原件还在、副本已建"，原件仍是现场。
 /// 硬链接不可用（FAT/exFAT 等）时退到 `rename`，且只在名字空闲时用——本命令持目标锁，
 /// 窗口内不会有第二个 diskedit 来争这个名字
@@ -908,19 +705,18 @@ mod tests {
         assert!(!super::matches_journaled_write(&[0x22u8; 8], &after, &pre), "a foreign edit is not a torn write");
     }
 
-    /// 四态挑选：空壳只在没有任何可读记录时成为结论；损坏候选不否决唯一可用的记录，
-    /// 也不会让"只剩空壳"被报成干净
+    /// 单一落点的三态：缺席 / 空壳 / 可回放记录，以及损坏一律报读不出
     #[test]
-    fn pick_journal_separates_shells_damaged_and_records() {
+    fn pick_journal_separates_shell_damaged_and_records() {
         let absent = tmp_path("pj_absent");
-        assert!(matches!(pick_journal(&[absent]).unwrap(), super::PickedJournal::Absent));
+        assert!(matches!(pick_journal(&absent).unwrap(), super::PickedJournal::Absent));
 
         let shell = tmp_path("pj_shell");
         std::fs::write(&shell, b"").unwrap();
         drop(Journal::open(&shell, jid()).unwrap());
         assert!(matches!(
-            pick_journal(std::slice::from_ref(&shell)).unwrap(),
-            super::PickedJournal::Shells(v) if v == vec![shell.clone()]
+            pick_journal(&shell).unwrap(),
+            super::PickedJournal::Shell(p) if p == shell
         ));
 
         let good = tmp_path("pj_good");
@@ -929,48 +725,19 @@ mod tests {
             j.record(0, &[0xAA; 4], &[0xBB; 4]).unwrap();
         }
         assert!(matches!(
-            pick_journal(std::slice::from_ref(&good)).unwrap(),
+            pick_journal(&good).unwrap(),
             super::PickedJournal::Records(p, _) if p == good
         ));
 
-        // 一份可用 + 一份读不出来：按可用那份回放（损坏候选只告警）
+        // 头在、载荷被截：报读不出，不当成缺席
         let bad = tmp_path("pj_bad");
         std::fs::write(&bad, b"DEJ").unwrap();
         assert!(matches!(
-            pick_journal(&[good.clone(), bad.clone()]).unwrap(),
-            super::PickedJournal::Records(p, _) if p == good
-        ));
-
-        // 一份可用 + 一份空壳：只按可用那份回放，空壳留在原地（回放成功后由
-        // clear_journal_candidates 清掉候选，不在这里顺手删）
-        let shell2 = tmp_path("pj_shell2");
-        std::fs::write(&shell2, b"").unwrap();
-        drop(Journal::open(&shell2, jid()).unwrap());
-        assert!(matches!(
-            pick_journal(&[good.clone(), shell2.clone()]).unwrap(),
-            super::PickedJournal::Records(p, _) if p == good
-        ));
-        assert!(good.exists(), "a usable journal must be left for the replay");
-        assert!(shell2.exists(), "picking the records must not touch the shell");
-
-        // 两份可用：不猜
-        let good2 = tmp_path("pj_good2");
-        {
-            let mut j = Journal::open(&good2, jid()).unwrap();
-            j.record(0, &[0xCC; 4], &[0xDD; 4]).unwrap();
-        }
-        assert!(matches!(
-            pick_journal(&[good.clone(), good2.clone()]),
-            Err(PickJournalError::Ambiguous { .. })
-        ));
-
-        // 只剩空壳 + 一份读不出来的：先报读不出来，不能把目标报成干净
-        assert!(matches!(
-            pick_journal(&[shell.clone(), bad.clone()]),
+            pick_journal(&bad),
             Err(PickJournalError::Unreadable { .. })
         ));
 
-        for p in [shell, shell2, good, good2, bad] {
+        for p in [shell, good, bad] {
             let _ = std::fs::remove_file(p);
         }
     }
@@ -1000,8 +767,8 @@ mod tests {
         let a = crate::args::Args {
             target: img.to_string_lossy().into_owned(),
             part: None, grow: None, start: None, end: None, size: None,
-            fs: None, name: None, clone: false, type_guid: None, table: None,
-            yes: true, overwrite_partition_data: false, online: false, random: false, sector_size: None,
+            fs: None, name: None, keep_partuuid: false, type_guid: None, table: None,
+            yes: true, overwrite_partition_data: false, random: false, sector_size: None,
             align: String::new(), chunk_mib: 0, grow_to_end: false,
             allow_move: false, no_fs: false, grow_lv: false, start_end: false, lv: None,
             pos: Vec::new(), seen: Vec::new(),
@@ -1138,60 +905,6 @@ mod tests {
         let _ = std::fs::remove_file(&journal);
     }
 
-    /// 候选缺席不是故障：它不得盖住另一份候选的真实损伤原因。
-    /// "第一个候选不存在、第二个是陌生文件"是最常见的现场，
-    /// 报出 No such file or directory 等于让用户去查一个根本不是原因的路径
-    #[test]
-    fn absent_candidate_does_not_mask_a_damaged_one() {
-        let missing = tmp_path("missing");
-        let foreign = tmp_path("foreign");
-        std::fs::write(&foreign, b"not-a-journal").unwrap();
-        let e = pick_journal(&[missing.clone(), foreign.clone()]).err().unwrap();
-        // 在而读不出 ⇒ Unreadable（下游归 Infra + abandon 提示），且死因里不含缺席路径
-        assert!(matches!(e, PickJournalError::Unreadable { .. }), "{e}");
-        assert!(e.to_string().contains(&foreign.display().to_string()), "{e}");
-        assert!(!e.to_string().contains(&missing.display().to_string()), "{e}");
-
-        // 全部候选都不存在 → Absent（请求与现状不符，10）
-        assert!(matches!(
-            pick_journal(std::slice::from_ref(&missing)).unwrap(),
-            super::PickedJournal::Absent
-        ));
-
-        // 唯一存在且可读的候选被选中（缺席的那份不影响）
-        let ok = tmp_path("ok");
-        {
-            let mut j = Journal::open(&ok, jid()).unwrap();
-            j.record(0, &[0xAA; 4], &[0xBB; 4]).unwrap();
-        }
-        let super::PickedJournal::Records(p, _) = pick_journal(&[missing, ok.clone()]).unwrap() else {
-            panic!("a single readable candidate must be picked");
-        };
-        assert_eq!(p, ok);
-
-        let _ = std::fs::remove_file(&ok);
-        let _ = std::fs::remove_file(&foreign);
-    }
-
-    /// 两份候选同时可读 → Ambiguous：不猜（回放错一份就是把历史字节写到不该写的盘上），
-    /// 错误文案列出两份路径，供 abandon 逐一定位
-    #[test]
-    fn two_readable_candidates_are_ambiguous_not_silently_picked() {
-        let a = tmp_path("amb_a");
-        let b = tmp_path("amb_b");
-        for p in [&a, &b] {
-            let mut j = Journal::open(p, jid()).unwrap();
-            j.record(0, &[0xAA; 4], &[0xBB; 4]).unwrap();
-        }
-        let e = pick_journal(&[a.clone(), b.clone()]).err().unwrap();
-        assert!(matches!(e, PickJournalError::Ambiguous { .. }), "{e}");
-        assert!(e.to_string().contains(&a.display().to_string()), "{e}");
-        assert!(e.to_string().contains(&b.display().to_string()), "{e}");
-
-        let _ = std::fs::remove_file(&a);
-        let _ = std::fs::remove_file(&b);
-    }
-
     /// D1（A1）：既有 journal 的撕裂尾在采纳时被物理截断，新记录得以回放。模拟崩溃发生在
     /// 第一条记录只写了一半——盘上只有 magic + 一条不完整的记录（头声称巨大长度、无载荷）；
     /// open 截回 magic 长，之后追加的新记录才能被 undo 成功回放，而非永远卡在 TruncatedTail
@@ -1254,43 +967,20 @@ mod tests {
         let _ = std::fs::remove_file(&img);
     }
 
-    /// D6（A6）：回放成功后清掉全部候选，不止被回放的那份——本工具的读不出残卷
-    /// （magic 在、载荷损坏）随之消失；无 magic 的陌生文件保留并告警
+    /// D6：回放成功后 journal 落点腾空——正常删除，不计入残留
     #[test]
-    fn replay_success_clears_stale_unreadable_candidate() {
+    fn replay_success_clears_the_journal() {
         let picked = tmp_path("d6_pick");
-        let stale = tmp_path("d6_stale");
-        let foreign = tmp_path("d6_foreign");
-        for p in [&picked, &stale, &foreign] {
-            let _ = std::fs::remove_file(p);
-        }
+        let _ = std::fs::remove_file(&picked);
         {
             let mut j = Journal::open(&picked, jid()).unwrap();
             j.record(0, &[0xAA; 4], &[0xBB; 4]).unwrap();
         }
-        // 其余候选：本工具写下的残卷——magic 在、载荷被翻坏一个字节（pick_journal
-        // 口径的"读不出"：CRC 不符）
-        {
-            let mut j = Journal::open(&stale, jid()).unwrap();
-            j.record(0, &[0x11; 4], &[0x22; 4]).unwrap();
-        }
-        let mut raw = std::fs::read(&stale).unwrap();
-        let last = raw.len() - 1;
-        raw[last] ^= 0xFF;
-        std::fs::write(&stale, &raw).unwrap();
-        // 陌生文件：落点命名匹配，但内容不是本工具的 journal——不删
-        std::fs::write(&foreign, b"not-a-journal").unwrap();
-
-        let id = jid();
-        super::clear_journal_candidates(&[picked.clone(), stale.clone(), foreign.clone()], &picked, &id, false);
+        assert!(super::clear_journal(&picked, false).is_empty());
         assert!(!picked.exists(), "the replayed journal must be removed");
-        assert!(!stale.exists(), "our unreadable residue must be removed after replay");
-        assert!(foreign.exists(), "a file without our magic must be left in place");
-
-        let _ = std::fs::remove_file(&foreign);
     }
 
-    /// 撕裂尾被回放的那份**归档**而不是删除：候选落点腾空（目标不再被它顶成 busy），
+    /// 撕裂尾被回放的那份**归档**而不是删除：落点腾空（目标不再被它顶成 busy），
     /// 字节留在 `.torn` 里供人工查看，残留清单为空
     #[test]
     fn torn_journal_is_archived_not_deleted() {
@@ -1308,10 +998,9 @@ mod tests {
             f.write_all(&[0x40, 0x00, 0x00, 0x00, 0x01, 0x02]).unwrap();
         }
 
-        let id = jid();
-        let leftovers = super::clear_journal_candidates(std::slice::from_ref(&picked), &picked, &id, true);
+        let leftovers = super::clear_journal(&picked, true);
         assert!(leftovers.is_empty(), "archiving must not be counted as a leftover");
-        assert!(!picked.exists(), "the candidate slot must be freed");
+        assert!(!picked.exists(), "the journal slot must be freed");
         let archived = crate::dev::suffix_path(&picked, super::TORN_SUFFIX);
         assert!(archived.exists(), "the torn bytes must stay inspectable");
 
@@ -1323,8 +1012,8 @@ mod tests {
         crate::args::Args {
             target: target.to_string(),
             part: None, grow: None, start: None, end: None, size: None,
-            fs: None, name: None, clone: false, type_guid: None, table: None,
-            yes: true, overwrite_partition_data: false, online: false, random: false, sector_size: None,
+            fs: None, name: None, keep_partuuid: false, type_guid: None, table: None,
+            yes: true, overwrite_partition_data: false, random: false, sector_size: None,
             align: String::new(), chunk_mib: 0, grow_to_end: false,
             allow_move: false, no_fs: false, grow_lv: false, start_end: false, lv: None,
             pos: Vec::new(), seen: Vec::new(),

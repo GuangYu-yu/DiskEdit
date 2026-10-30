@@ -281,104 +281,53 @@ pub(crate) fn checkpoint_foreign(
     crate::dev::scene_mismatch(&recorded, &src.scene())
 }
 
-/// 读 checkpoint 现场：在身份给出的候选落点上找**可读**的那份，不做目录扫描。
-/// 多份候选同时可读即报歧义——猜错会把中断的搬移现场丢掉。
+/// 读 checkpoint 现场：唯一的落点（`identity.checkpoint_path()`）。
 /// 记录的合法边界来自调用方已解析的几何（见 [`GeometryLimits`]）
 ///
-/// 返回命中的落点路径，写与删消费同一路径。槽位空时返回候选首项，新作业照常落在那里
-///
-/// 候选逐个独立定性（与 `active_recovery_records` / `pick_journal` 同一口径）：
-/// 不存在 → 跳过；损坏 → **记录后继续**看后面的候选——提前 return 会让
-/// 一份损坏的候选遮住一份完好的候选，用户看到的是"目标坏了去 abandon"，
-/// 而真实情况是现场完好可续跑。只有"所有候选都不可读"才把损伤如实报成 Infra
+/// 返回命中/空槽的落点路径，写与删消费同一路径。定性与 `active_recovery_records` /
+/// `pick_journal` 同一口径：不存在 → 空槽；非普通文件（符号链接、目录、FIFO）在 `read`
+/// 之前就记成"内容读不出来"——直接读会跟随链接，或在落点是 FIFO 时阻塞到有写端出现
 pub(crate) fn read_checkpoint(src: &FileSource, g: &ValidatedGeometry) -> Result<(CheckpointSlot, PathBuf), Fail> {
-    let candidates = src.identity.checkpoint_candidates();
+    let path = src.identity.checkpoint_path();
     let lim = g.limits();
-    let mut found: Vec<(PathBuf, CheckpointSlot)> = Vec::new();
-    let mut damaged: Vec<(PathBuf, String)> = Vec::new();
-    // 现场可读但"创建时事实"对不上：不是损坏（CRC 自洽），也不可取信（继续执行会把
-    // 为别的目标录下的现场续进换了文件/换了映射的目标）。单独归档，唯一时给出点名拒绝
-    let mut foreign: Vec<(PathBuf, String)> = Vec::new();
-    for path in candidates {
-        // 与 journal 同一条判据：符号链接与非普通文件在 `read` 之前就记成"内容读不出来"。
-        // 直接读会跟随链接，或在落点是 FIFO 时阻塞到有写端出现；这一份不可读只坏这一份，
-        // 后面的候选照常看
-        match crate::dev::recovery_path_metadata(path) {
-            Ok(Some(_)) => {}
-            Ok(None) => continue,
-            Err(reason) => {
-                damaged.push((path.clone(), reason));
-                continue;
-            }
-        }
-        let bytes = match std::fs::read(path) {
-            Ok(b) => b,
-            // 两种"读不出来"性质不同，处置因此不同：**文件的可得性**故障（EIO / EACCES）
-            // 说明连这份候选都取不到，其余候选大概率同样取不到 ⇒ 整体失败；**这一份的内容**
-            // 故障（CRC / 字段非法）只坏这一份，别的候选可能完好 ⇒ 记下后继续
-            // （全程在读盘阶段，尚未写盘，故按 Infra 而不是"盘可能已改变"）
-            Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
-            Err(e) => return Err(Fail::infra(format!("checkpoint read failed: {}: {e}", path.display()))),
-        };
-        match (Checkpoint::deserialize(&bytes, &lim), RsCheckpoint::deserialize(&bytes, &lim)) {
-            (Ok(c), _) => {
-                if let Some(why) = checkpoint_foreign(src, &c.fp, &c.map, c.proof) {
-                    foreign.push((path.clone(), why));
-                } else {
-                    found.push((path.clone(), CheckpointSlot::Relocation(Box::new(c))));
-                }
-            }
-            (_, Ok(c)) => {
-                if let Some(why) = checkpoint_foreign(src, &c.fp, &c.map, c.proof) {
-                    foreign.push((path.clone(), why));
-                } else {
-                    found.push((path.clone(), CheckpointSlot::Resize(Box::new(c))));
-                }
-            }
-            (Err(re), Err(_)) => damaged.push((path.clone(), re.to_string())),
+    match crate::dev::recovery_path_metadata(path) {
+        Ok(Some(_)) => {}
+        Ok(None) => return Ok((CheckpointSlot::Empty, path.to_path_buf())),
+        Err(reason) => {
+            return Err(Fail::infra(format!(
+                "checkpoint {} is not readable: {reason}; release it with `diskedit abandon`",
+                path.display()
+            )));
         }
     }
-    match found.len() {
-        0 if foreign.is_empty() && damaged.is_empty() => {
-            Ok((CheckpointSlot::Empty, candidates[0].clone()))
-        }
-        // 候选全在而全部不可读：现场存在但已无法判读——如实报 Infra 并列明各份的死因，
-        // 出路是 abandon，而不是让续跑路径去猜
-        0 if foreign.is_empty() => Err(Fail::infra(format!(
-            "checkpoint files exist but none is readable: {}; release them with `diskedit abandon`",
-            damaged.iter().map(|(p, e)| format!("{} ({e})", p.display())).collect::<Vec<_>>().join("; ")
-        ))),
-        // 全部"创建时事实"对不上：现场在，但不属于这个目标场景——点名各份的死因，
-        // 拒绝必须发生在任何写盘之前
-        0 => {
-            for (p, e) in &damaged {
-                eprintln!("warning: unreadable checkpoint {}: {e}", p.display());
-            }
-            Err(Fail::refused(format!(
-                "checkpoint does not match this target scene — refusing: {}; release it with `diskedit abandon` if that scene is no longer wanted",
-                foreign.iter().map(|(p, e)| format!("{} ({e})", p.display())).collect::<Vec<_>>().join("; ")
+    let bytes = match std::fs::read(path) {
+        Ok(b) => b,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok((CheckpointSlot::Empty, path.to_path_buf())),
+        Err(e) => return Err(Fail::infra(format!("checkpoint read failed: {}: {e}", path.display()))),
+    };
+    let parsed = match (Checkpoint::deserialize(&bytes, &lim), RsCheckpoint::deserialize(&bytes, &lim)) {
+        (Ok(c), _) => CheckpointSlot::Relocation(Box::new(c)),
+        (_, Ok(c)) => CheckpointSlot::Resize(Box::new(c)),
+        (Err(re), Err(_)) => {
+            return Err(Fail::infra(format!(
+                "checkpoint {} is unreadable: {re}; release it with `diskedit abandon`",
+                path.display()
             )))
         }
-        // 唯一可读者即取信；损坏/外来的那份要报出来——它本可能构成歧义判定，
-        // 用户需要知道盘上不止一份落点文件
-        1 => {
-            for (p, e) in damaged.iter().chain(foreign.iter()) {
-                eprintln!("warning: unusable checkpoint {}: {e}", p.display());
-            }
-            let (p, c) = found.swap_remove(0);
-            Ok((c, p))
-        }
-        _ => {
-            let paths = found.into_iter().map(|(p, _)| p).collect();
-            Ok((CheckpointSlot::Ambiguous(paths), candidates[0].clone()))
-        }
+    };
+    // 现场可读但"创建时事实"对不上：不是损坏（CRC 自洽），也不可取信——继续执行会把为
+    // 别的目标录下的现场续进换了文件/换了映射的目标。拒绝必须发生在任何写盘之前
+    let (fp, map, proof, kind) = match &parsed {
+        CheckpointSlot::Relocation(c) => (c.fp, c.map, c.proof, "relocation"),
+        CheckpointSlot::Resize(c) => (c.fp, c.map, c.proof, "resize"),
+        CheckpointSlot::Empty => unreachable!("已解析出的槽位不会是 Empty"),
+    };
+    if let Some(why) = checkpoint_foreign(src, &fp, &map, proof) {
+        return Err(Fail::refused(format!(
+            "checkpoint does not match this target scene ({kind}) — refusing: {why}; release it with `diskedit abandon` if that scene is no longer wanted"
+        )));
     }
-}
-
-/// 多份 checkpoint 同时可用 ⇒ 不猜：猜错会把中断的搬移现场丢掉
-pub(crate) fn ambiguous_checkpoint(paths: &[PathBuf]) -> Fail {
-    let listed: Vec<String> = paths.iter().map(|p| p.display().to_string()).collect();
-    Fail::refused(format!("multiple checkpoints exist for this target — refusing: {}", listed.join(", ")))
+    Ok((parsed, path.to_path_buf()))
 }
 
 /// 原子写：tmp → sync_all → rename → fsync 父目录。
@@ -424,6 +373,4 @@ pub(crate) enum CheckpointSlot {
     Empty,
     Relocation(Box<Checkpoint>),
     Resize(Box<RsCheckpoint>),
-    /// 多份候选同时可解析：不猜，交调用方拒绝
-    Ambiguous(Vec<PathBuf>),
 }

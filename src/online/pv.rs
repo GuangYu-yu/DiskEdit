@@ -114,10 +114,10 @@ pub(crate) fn verify_lock_identity(
 /// 代价也在此声明：本路径中断后没有 journal / checkpoint 可查，若 sfdisk 自身
 /// 在写主/备 GPT 结构之间被撕裂，undo 与续传都覆盖不到，只能由外部工具修复。
 /// 判定发生在锁下、与首次写盘之间无窗口；有了这道闸，命令成功后 main 的
-/// drop_journal 只会碰到"不存在"的候选——绝无"删掉别人可回滚凭据"的可能
+/// drop_journal 只会碰到"不存在"的落点——绝无"删掉别人可回滚凭据"的可能
 pub(crate) fn refuse_if_scene_active(t: &OnlineTarget) -> Result<(), Outcome> {
-    // 只读打开**分区**节点：闸口只读现场（journal / checkpoint 候选），不申请写权限。
-    // 现场落点由所在整盘的键派生，故分区节点与整盘节点枚举到同一组候选
+    // 只读打开**分区**节点：闸口只读现场（journal / checkpoint 落点），不申请写权限。
+    // 现场落点由所在整盘的键派生，故分区节点与整盘节点解析到同一对落点
     let part = crate::dev::FileSource::open_read_only(&t.part_dev)
         .map_err(|e| Outcome::infra(format!("open failed: {e}")))?;
     // 只传主语：后半句 "writes outside the undo journal" 由 refuse_if_active 统一拼
@@ -130,7 +130,8 @@ pub(crate) fn refuse_if_scene_active(t: &OnlineTarget) -> Result<(), Outcome> {
         "online resize",
     )
     .map_err(|f| f.context("a re-run would take the online path again and cannot resume the job — unmount the target (for an LVM PV: deactivate its volume group) to reach the resume path"))
-    .map_err(|f| f.into_outcome())
+    .map_err(|f| f.into_outcome())?;
+    Ok(())
 }
 
 /// 新尺寸的几何前置检查：对齐 → 容量 → 邻接 → GPT 可用区上界，两条在线写表路径共用。
@@ -285,6 +286,8 @@ pub fn resize_pv(
     {
         return (f.into_outcome(), old_len_bytes, None);
     }
+    // 分区层确实要改：此后写盘经由 sfdisk / pvresize，不落 journal、也没有 checkpoint
+    crate::support::note_online_no_undo();
     if let Err(e) = part_resize(&t, new_len_bytes) {
         // 表已写、内核同步失败：PV 链（pvresize/lvextend）因此没做，两条事实一并报。
         // 只报"内核视图过期"会让 20 少说一半——分区已经大了，PV 还是旧尺寸

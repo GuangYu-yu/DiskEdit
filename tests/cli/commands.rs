@@ -61,16 +61,16 @@ fn auto_commands_create_move_resize_set_delete() {
     assert_eq!(v["partitions"][0]["name"], "auto");
     assert_eq!(v["partitions"][0]["type"], "C12A7328-F81F-11D2-BA4B-00A0C93EC93B");
 
-    // resize --size 收缩：unknown FS 拒绝（fail-fast）
-    let (c, _, stderr) = run(&["resize", &format!("{img_s}:1"), "--size", "8388608"]);
+    // resize 位置 SIZE 收缩：unknown FS 拒绝（fail-fast）
+    let (c, _, stderr) = run(&["resize", &format!("{img_s}:1"), "8388608"]);
     assert_eq!(c, 10, "shrink of unknown FS must refuse: {stderr}");
     assert!(stderr.contains("shrink"), "{stderr}");
 
-    // delete + --size 扩容：删 #2 后 #1 扩到 12MiB（4096..28671）；#1 无 FS，同样走 --no-fs
+    // delete + 位置 SIZE 扩容：删 #2 后 #1 扩到 12MiB（4096..28671）；#1 无 FS，同样走 --no-fs
     let (c, _, e) = run(&["delete", &format!("{img_s}:2"), "--yes"]);
     assert_eq!(c, 0, "{e}");
-    let (c, _, e) = run(&["resize", &format!("{img_s}:1"), "--size", "12582912", "--no-fs"]);
-    assert_eq!(c, 0, "grow by --size must succeed: {e}");
+    let (c, _, e) = run(&["resize", &format!("{img_s}:1"), "12582912", "--no-fs"]);
+    assert_eq!(c, 0, "grow by SIZE must succeed: {e}");
     let mut f = std::fs::File::open(&img).unwrap();
     let gpt = gptman::GPT::find_from(&mut f).unwrap();
     assert_eq!(gpt[1].starting_lba, 4096);

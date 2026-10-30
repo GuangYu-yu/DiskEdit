@@ -5,7 +5,7 @@ use super::*;
 /// superfloppy resize（无分区表，FS 即整盘）：无表可写，唯一有意义的是 FS grow
 /// 到盘/镜像末端——缩无处可缩（无分区边界），显式 SIZE 只接受等于当前值。
 /// 镜像/盘须已是大尺寸（dd 后或 truncate 预扩），本命令不负责扩文件本身
-pub(crate) fn cmd_resize_superfloppy(a: &Args, req: &SizeRequest) -> crate::outcome::Outcome {
+pub(crate) fn cmd_resize_superfloppy(a: &Args, size: Option<&str>) -> crate::outcome::Outcome {
     if let Some(n) = a.part {
         bail_fail(Fail::refused(format!("target has no partition table — drop :{n} (the FS occupies the whole device)")));
     }
@@ -29,7 +29,7 @@ pub(crate) fn cmd_resize_superfloppy(a: &Args, req: &SizeRequest) -> crate::outc
     // 锁下取权威容器尺寸并解析 SIZE：+N/+% 锚定"当前尺寸"，而容器大小不受本工具锁约束
     //（镜像可被 truncate、盘可被第三方改写）——锁前锚点会算错方向，与分区路径同理
     let cur_bytes = src.size;
-    let (target, grow_to_end) = resolve_size_request(req, cur_bytes).unwrap_or_else(|f| bail_fail(f));
+    let (target, grow_to_end) = resolve_size_request(size, cur_bytes).unwrap_or_else(|f| bail_fail(f));
     if let Some(t) = target {
         if t < cur_bytes {
             bail_fail(Fail::refused("superfloppy cannot shrink — the FS occupies the whole device, there is no partition boundary to shrink to".to_string()));

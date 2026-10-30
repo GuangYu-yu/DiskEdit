@@ -158,7 +158,7 @@ pub(crate) fn mbr_grow_finish(
 /// resize 的 MBR 分支（仅主分区 1..4；逻辑分区与扩展容器不支持）。原位纯扩缩：扩须右侧
 /// 空闲足够（MBR 无搬移能力），缩走与 GPT 相同的"FS 先缩 → 写表"守卫链。块设备复用在线
 /// 路径（基于 sysfs + sfdisk，与表类型无关）
-pub(crate) fn cmd_resize_msdos(a: &Args, pref: PartSelector, req: &SizeRequest, src_ro: &FileSource) -> crate::outcome::Outcome {
+pub(crate) fn cmd_resize_msdos(a: &Args, pref: PartSelector, size: Option<&str>, src_ro: &FileSource) -> crate::outcome::Outcome {
     // MBR resize 没有搬移能力：--allow-move 承诺的"搬开挡路分区"不存在，
     // 静默按不可搬移处理会让来自脚本的调用只看到一条"空间不足"
     if a.allow_move {
@@ -190,7 +190,7 @@ pub(crate) fn cmd_resize_msdos(a: &Args, pref: PartSelector, req: &SizeRequest, 
         .unwrap_or_else(|e| bail_fail(Fail::infra(format!("identify failed: {e}"))));
     let is_pv = fstype == Some(fsid::FsKind::Lvm2Pv);
 
-    let (target, grow_to_end) = resolve_size_request(req, cur_bytes).unwrap_or_else(|f| bail_fail(f));
+    let (target, grow_to_end) = resolve_size_request(size, cur_bytes).unwrap_or_else(|f| bail_fail(f));
     let shrinking = target.is_some_and(|t| t < cur_bytes);
 
     check_pv_intent(part, fstype, is_pv, shrinking, a.grow_lv, a.no_fs).unwrap_or_else(|f| bail_fail(f));
@@ -199,7 +199,7 @@ pub(crate) fn cmd_resize_msdos(a: &Args, pref: PartSelector, req: &SizeRequest, 
     // 块设备在线路径：与 GPT 同一份实现，随表类型变的只有右侧空闲数。目标长度同样
     // 交给 mbr_decider 在在线自己的锁下重解析（理由见 gpt_decider）
     #[cfg(target_os = "linux")]
-    if let Some(o) = resize_online(a, src_ro, part, is_pv, mbr_decider(req, part, is_pv)) {
+    if let Some(o) = resize_online(a, src_ro, part, is_pv, mbr_decider(size, part, is_pv)) {
         return o;
     }
 
@@ -228,7 +228,7 @@ pub(crate) fn cmd_resize_msdos(a: &Args, pref: PartSelector, req: &SizeRequest, 
     let is_pv = fstype == Some(fsid::FsKind::Lvm2Pv);
     // SIZE 锚点按锁下的新分区尺寸重算；grow 标记是请求的形状，锁前锁后同值（见 GPT 分支）
     let cur_bytes = lba_bytes(p.size_lba as u64, ss);
-    let (target, _) = resolve_size_request(req, cur_bytes).unwrap_or_else(|f| bail_fail(f));
+    let (target, _) = resolve_size_request(size, cur_bytes).unwrap_or_else(|f| bail_fail(f));
     let shrinking = target.is_some_and(|t| t < cur_bytes);
     check_pv_intent(part, fstype, is_pv, shrinking, a.grow_lv, a.no_fs).unwrap_or_else(|f| bail_fail(f));
     // PV 链的工具必须在写表之前齐备（与 GPT 分支同一处、同一判据）：pvresize/pvs 及

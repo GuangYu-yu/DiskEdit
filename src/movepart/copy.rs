@@ -80,7 +80,7 @@ pub(crate) fn prepare_copy(
         ss, part, src_start, new_start, new_end, len,
         type_guid: e.partition_type_guid,
         // 默认给副本一个新的 PARTUUID：两份相同的 GUID 会让按 PARTUUID 的挂载
-        // 无法区分源与副本；--clone 显式要求复制身份时才沿用源值
+        // 无法区分源与副本；--keep-partuuid 显式要求复制身份时才沿用源值
         unique_guid: if keep_guid { e.unique_partition_guid } else { new_partuuid()? },
         repair,
     })

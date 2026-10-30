@@ -2,6 +2,7 @@
 
 use crate::support::*;
 use crate::args::{parse_size_delta, Args};
+use crate::dev::PartSelector;
 use crate::fsid::FsKind;
 use crate::outcome::Outcome;
 use crate::{fsid, fsops};
@@ -13,26 +14,29 @@ pub(crate) const HELP_MKFS: &str = r#"diskedit mkfs <TARGET>:N <FS> --yes
   ntfs, swap."#;
 
 pub(crate) const HELP_RESIZEFS: &str = r#"diskedit resizefs <TARGET>:N
-diskedit resizefs <MOUNTPOINT> [BYTES | --size SIZE] --online
+diskedit resizefs <MOUNTPOINT> [BYTES]
 
-  Resize a filesystem. Offline form grows the FS into its partition. A region
-  with no growable filesystem is refused: an LVM PV here (its space takes
-  effect through `resize --grow-lv`), or a type this tool cannot identify.
-  The OpenWrt overlay layer before its first mount needs nothing here
+  Resize a filesystem. The form picks the mode: <TARGET>:N is offline and grows
+  the FS into its partition; a mountpoint is online and operates on the mounted
+  partition. No growable filesystem in the region is refused: an LVM PV takes
+  its space through `resize --grow-lv`, and an unidentified type has no action
+  to take. The OpenWrt overlay layer before its first mount needs nothing here
   (exit 0): fstools creates it at first mount, filling the trailing region.
-  Online form operates on a mounted partition: the partition table is never
-  changed; the filesystem is grown inside the current partition (btrfs also
-  shrinks). A size beyond the current partition is refused — run
-  `diskedit resize` to enlarge the partition first. The target size is
-  absolute (units b/k/m/g/t, 1024 base); omitted means grow to fill the
-  partition."#;
+
+  Online form: the partition table is never changed; the filesystem is grown
+  inside the current partition (btrfs also shrinks). A size beyond the current
+  partition is refused — run `diskedit resize` to enlarge the partition first.
+  The target size is absolute (units b/k/m/g/t, 1024 base); omitted means grow
+  to fill the partition."#;
 
 pub(crate) const HELP_CHECK: &str = r#"diskedit check <TARGET>:N
 
-  Check filesystem consistency (tool-specific; ext runs e2fsck -fp and
-  ntfs runs ntfsfix -d, both may write repairs to the filesystem)."#;
+  Check filesystem consistency. The tool depends on the type: ext runs
+  e2fsck -fp, ntfs runs ntfsfix -d. Both may write repairs back to the
+  filesystem, so this needs the target to be writable."#;
 
-pub(crate) const HELP_SET: &str = r#"diskedit set <TARGET>:N name S | type GUID | type 0xXX | label S | uuid U | uuid --random | flag F on|off
+pub(crate) const HELP_SET: &str = r#"diskedit set <TARGET>:N name S | label S | uuid U | flag F on|off
+diskedit set <TARGET>:N type GUID | type 0xXX
 
   Set a partition property.
     name          GPT partition name
@@ -120,131 +124,128 @@ pub(crate) fn cmd_mkfs(a: &Args) -> Outcome {
 }
 
 pub(crate) fn cmd_resizefs(a: &Args) -> u8 {
-    if a.online {
-        // 在线路径：positional[0] = 挂载点（非 :N），positional[1] = 可选绝对字节数
-        if a.part.is_some() {
-            bail_fail(Fail::refused("--online takes a mountpoint, not <target>:N"));
+    // 目标形态即模式：带 :N 的是镜像/块设备（离线，把 FS 扩进分区），不带的是挂载点
+    // （在线，经挂载点解析）。模式由形态唯一确定，不另设一个可以与之矛盾的旗标
+    match a.part {
+        Some(pref) => resizefs_offline(a, pref),
+        None => resizefs_online(a),
+    }
+}
+
+/// 在线形式：目标就是挂载点，不打开分区表，扇区大小因而无消费点
+fn resizefs_online(a: &Args) -> u8 {
+    if a.sector_size.is_some() {
+        bail_fail(Fail::refused("--sector-size only applies to image targets — a mountpoint form takes no sector size"));
+    }
+    // 目标尺寸只有位置参数一种给法，且只接受绝对值（`+N` 锚定"当前尺寸"在在线路径
+    // 另有含义，混进来会让同一个字面量在两种命令下取不同值）
+    let size = a.pos.get(1).map(|s| match parse_size_delta(s) {
+        Some((bytes, 0, false)) => bytes,
+        _ => bail_fail(Fail::refused(format!("size {s:?} must be an absolute size (use 10G | 500M | plain bytes)"))),
+    });
+    #[cfg(target_os = "linux")]
+    {
+        let o = crate::online::resize_online(std::path::Path::new(&a.target), size);
+        if o.is_complete() {
+            println!("resized online (verify with: diskedit info {})", a.target);
+        } else {
+            o.report();
         }
-        // 在线形式不打开目标，扇区大小的全部消费点都在打开路径上——落到这里
-        // 即拒绝（fail-closed），不能静默忽略后照常成功
-        if a.sector_size.is_some() {
-            bail_fail(Fail::refused("--sector-size only applies to image targets — the online form takes a mountpoint"));
+        o.exit_code()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = size;
+        bail_fail(Fail::infra("online resize requires Linux".to_string()));
+    }
+}
+
+/// 离线形式：把 FS 扩进所在分区，没有尺寸参数——BYTES 是在线给法，消费不到即拒绝，
+/// 否则会报成功却没扩到请求的尺寸
+fn resizefs_offline(a: &Args, pref: PartSelector) -> u8 {
+    if let Some(s) = a.pos.get(1) {
+        bail_fail(Fail::refused(format!("size {s:?} only applies to the mountpoint form — offline resizes the filesystem into its partition")));
+    }
+    // 载体必须是整盘：分区节点首扇区的引导字节可能被当成一张 MBR，按 :N 取到的区间
+    // 与实际分区无关。判据与 mkfs/resize/set 同源
+    refuse_partition_node_target("resizefs", &a.target);
+    let src = open_target_owned(a).unwrap_or_else(|f| bail_fail(f));
+    // 锁下快照
+    let part = crate::gpt_policy::resolve_part(&src, pref).unwrap_or_else(|f| bail_fail(f));
+    let (start, len) = crate::gpt_policy::partition_bytes(&src, part).unwrap_or_else(|f| bail_fail(f));
+    // 与 mkfs 同判据：扩 FS 是外部写入，未收尾的恢复现场必须先收拾
+    refuse_if_pending_recovery(&src, "resizefs").unwrap_or_else(|f| bail_fail(f));
+    // 要扩哪一段、里面是什么 FS 取的是与 `resize` 同一处的判据（overlay 的 RW 层即由此
+    // 落到内层区间）。判据只有一处，两条命令的后置条件却不同：`resize` 的后置条件含
+    // 分区层，FS 那一步做不了时它在写表之前就拒绝；本命令只动 FS，同一个结论落在这里
+    // 就成了**什么都没做**，报成功会让脚本以为空间已经可用
+    let target = match fsops::grow_target_at(&src, part, start, len) {
+        Ok(fsops::Growable::Target(t)) => t,
+        Ok(fsops::Growable::OverlayPending) => {
+            // 这段区间里没有认得出的文件系统：可能是尚未格式化、可能是认不出的格式、
+            // 也可能是可供识别的字节不足——`identify` 的 `None` 分不出这三种。本命令在这
+            // 三种情形下都无事后置条件可做（该层的空间由首次挂载时的 fstools 建满），
+            // 故只报"没有可扩的文件系统"，不替用户断言是哪一种
+            println!(
+                "nothing to resize on partition #{part} — no growable filesystem was identified in the trailing region \
+                 (unformatted, unrecognised, or too short to hold a signature — this tool does not tell them apart)"
+            );
+            return EXIT_OK;
         }
-        // 目标尺寸的两种给法（BYTES 与 --size 同一单位语法，只接受绝对值）二选一
-        let size = match (a.pos.get(1), a.size) {
-            (Some(_), Some(_)) => bail_fail(Fail::refused("give the target size either as BYTES or --size, not both")),
-            (Some(s), None) => Some(match parse_size_delta(s) {
-                Some((bytes, 0, false)) => bytes,
-                _ => bail_fail(Fail::refused(format!("size {s:?} must be an absolute size (use 10G | 500M | plain bytes)"))),
-            }),
-            (None, given) => given,
-        };
-        #[cfg(target_os = "linux")]
-        {
-            let o = crate::online::resize_online(std::path::Path::new(&a.target), size);
-            if o.is_complete() {
-                println!("resized online (verify with: diskedit info {})", a.target);
-            } else {
-                o.report();
-            }
-            o.exit_code()
+        // 页格式在本机激活不了的 swap：不是"里面没有 FS"，但也不是本命令扩得了的 FS——
+        // 用了新空间要靠重建那块区域（与 `resize` 那条 Pending 的补救提示同一件事）
+        Ok(fsops::Growable::SwapUnactivatable) => bail_fail(Fail::refused(format!(
+            "nothing to resize on partition #{part} — a swap area whose page format is not activatable on this host (its space takes effect once the area is rebuilt with `mkswap`)"
+        ))),
+        // 没有可扩的文件系统就报成功等于报出一件没做过的事；PV 另有出路，指路到那条链
+        Ok(fsops::Growable::NoFilesystem(Some(FsKind::Lvm2Pv))) => bail_fail(Fail::refused(format!(
+            "nothing to resize on partition #{part} — an LVM PV is not a filesystem (its space takes effect through `resize --grow-lv`)"
+        ))),
+        // 类型未识别既可能是空区域，也可能是认不出的 FS，或可供识别的字节不足：
+        // 把识别结果原样带出，不替它下"里面没有文件系统"的结论
+        Ok(fsops::Growable::NoFilesystem(f)) => bail_fail(Fail::refused(format!(
+            "nothing to resize on partition #{part} — no growable filesystem was identified (identified as `{}`; \
+             the region may be empty, hold a format this tool does not recognise, or be too short to carry a \
+             signature)",
+            fsid::fs_name(f)
+        ))),
+        Err(e) => bail_fail(Fail::from(e)),
+    };
+    // 事前能力探测：与 superfloppy 路径同一契约（见 cmd/resize 的同名判定——check_grow
+    // 必须在首次写盘之前）。扩 FS 的修复步骤（e2fsck -fp 等）本身写盘，缺工具若在那时
+    // 才暴露，Infra(30) 会谎报"确定未写盘"。类型接线判断不在此拦：不接线的类型不会写盘，
+    // 由 resize_fs_in 按类型给出准确的拒绝文案
+    match fsops::check_grow(target.fstype, src.is_block, fsops::needs_loop(&target.scope, src.is_block)) {
+        Err(fsops::FsError::UnsupportedFs(_)) => {}
+        other => other.unwrap_or_else(|e| bail_fail(Fail::from(e))),
+    }
+    match target.resize_fs(&src) {
+        Ok(leak) => {
+            // 挂载点没卸掉是一条未完成的后置条件：它随结果浮出，退出码因此是 20。
+            // 整体成功文案只由 is_complete() 放行；有待办时只报"FS 扩容这一步做完"
+            let pending = match leak {
+                Some(leak) => {
+                    eprintln!("warning: {leak}");
+                    vec![leak.into_pending(part)]
+                }
+                None => Vec::new(),
+            };
+            let out = Outcome::applied_with(pending);
+            announce_applied(
+                &out,
+                || format!("resized (verify with: diskedit info {})", a.target),
+                || {
+                    format!(
+                        "filesystem grow step completed (verify with: diskedit info {}); follow-up steps are pending — see below",
+                        a.target
+                    )
+                },
+            );
+            // 待办必须让人看到：本命令只返回退出码，没有别处会把它呈现出来
+            out.report();
+            out.exit_code()
         }
-        #[cfg(not(target_os = "linux"))]
-        {
-            let _ = size;
-            bail_fail(Fail::infra("online resize requires Linux".to_string()));
-        }
-    } else {
-        // 离线形式"把 FS 扩进分区"，没有尺寸参数可言：--size 与位置参数 BYTES 都是在线的给法，
-        // 离线分支消费不到，静默忽略即报成功却没扩到请求的尺寸
-        if a.size.is_some() {
-            bail_fail(Fail::refused("--size only applies to the online form — offline resizes the filesystem into its partition"));
-        }
-        if let Some(s) = a.pos.get(1) {
-            bail_fail(Fail::refused(format!("size {s:?} only applies to the online form — offline resizes the filesystem into its partition")));
-        }
-        let Some(pref) = a.part else { crate::args::usage() };
-        // 载体必须是整盘：分区节点首扇区的引导字节可能被当成一张 MBR，按 :N 取到的区间
-        // 与实际分区无关。判据与 mkfs/resize/set 同源
-        refuse_partition_node_target("resizefs", &a.target);
-        let src = open_target_owned(a).unwrap_or_else(|f| bail_fail(f));
-        // 锁下快照
-        let part = crate::gpt_policy::resolve_part(&src, pref).unwrap_or_else(|f| bail_fail(f));
-        let (start, len) = crate::gpt_policy::partition_bytes(&src, part).unwrap_or_else(|f| bail_fail(f));
-        // 与 mkfs 同判据：扩 FS 是外部写入，未收尾的恢复现场必须先收拾
-        refuse_if_pending_recovery(&src, "resizefs").unwrap_or_else(|f| bail_fail(f));
-        // 要扩哪一段、里面是什么 FS 取的是与 `resize` 同一处的判据（overlay 的 RW 层即由此
-        // 落到内层区间）。判据只有一处，两条命令的后置条件却不同：`resize` 的后置条件含
-        // 分区层，FS 那一步做不了时它在写表之前就拒绝；本命令只动 FS，同一个结论落在这里
-        // 就成了**什么都没做**，报成功会让脚本以为空间已经可用
-        let target = match fsops::grow_target_at(&src, part, start, len) {
-            Ok(fsops::Growable::Target(t)) => t,
-            Ok(fsops::Growable::OverlayPending) => {
-                // 这段区间里没有认得出的文件系统：可能是尚未格式化、可能是认不出的格式、
-                // 也可能是可供识别的字节不足——`identify` 的 `None` 分不出这三种。本命令在这
-                // 三种情形下都无事后置条件可做（该层的空间由首次挂载时的 fstools 建满），
-                // 故只报"没有可扩的文件系统"，不替用户断言是哪一种
-                println!(
-                    "nothing to resize on partition #{part} — no growable filesystem was identified in the trailing region \
-                     (unformatted, unrecognised, or too short to hold a signature — this tool does not tell them apart)"
-                );
-                return EXIT_OK;
-            }
-            // 页格式在本机激活不了的 swap：不是"里面没有 FS"，但也不是本命令扩得了的 FS——
-            // 用了新空间要靠重建那块区域（与 `resize` 那条 Pending 的补救提示同一件事）
-            Ok(fsops::Growable::SwapUnactivatable) => bail_fail(Fail::refused(format!(
-                "nothing to resize on partition #{part} — a swap area whose page format is not activatable on this host (its space takes effect once the area is rebuilt with `mkswap`)"
-            ))),
-            // 没有可扩的文件系统就报成功等于报出一件没做过的事；PV 另有出路，指路到那条链
-            Ok(fsops::Growable::NoFilesystem(Some(FsKind::Lvm2Pv))) => bail_fail(Fail::refused(format!(
-                "nothing to resize on partition #{part} — an LVM PV is not a filesystem (its space takes effect through `resize --grow-lv`)"
-            ))),
-            // 类型未识别既可能是空区域，也可能是认不出的 FS，或可供识别的字节不足：
-            // 把识别结果原样带出，不替它下"里面没有文件系统"的结论
-            Ok(fsops::Growable::NoFilesystem(f)) => bail_fail(Fail::refused(format!(
-                "nothing to resize on partition #{part} — no growable filesystem was identified (identified as `{}`; \
-                 the region may be empty, hold a format this tool does not recognise, or be too short to carry a \
-                 signature)",
-                fsid::fs_name(f)
-            ))),
-            Err(e) => bail_fail(Fail::from(e)),
-        };
-        // 事前能力探测：与 superfloppy 路径同一契约（见 cmd/resize 的同名判定——check_grow
-        // 必须在首次写盘之前）。扩 FS 的修复步骤（e2fsck -fp 等）本身写盘，缺工具若在那时
-        // 才暴露，Infra(30) 会谎报"确定未写盘"。类型接线判断不在此拦：不接线的类型不会写盘，
-        // 由 resize_fs_in 按类型给出准确的拒绝文案
-        match fsops::check_grow(target.fstype, src.is_block, fsops::needs_loop(&target.scope, src.is_block)) {
-            Err(fsops::FsError::UnsupportedFs(_)) => {}
-            other => other.unwrap_or_else(|e| bail_fail(Fail::from(e))),
-        }
-        match target.resize_fs(&src) {
-            Ok(leak) => {
-                // 挂载点没卸掉是一条未完成的后置条件：它随结果浮出，退出码因此是 20。
-                // 整体成功文案只由 is_complete() 放行；有待办时只报"FS 扩容这一步做完"
-                let pending = match leak {
-                    Some(leak) => {
-                        eprintln!("warning: {leak}");
-                        vec![leak.into_pending(part)]
-                    }
-                    None => Vec::new(),
-                };
-                let out = Outcome::applied_with(pending);
-                announce_applied(
-                    &out,
-                    || format!("resized (verify with: diskedit info {})", a.target),
-                    || {
-                        format!(
-                            "filesystem grow step completed (verify with: diskedit info {}); follow-up steps are pending — see below",
-                            a.target
-                        )
-                    },
-                );
-                // 待办必须让人看到：本命令只返回退出码，没有别处会把它呈现出来
-                out.report();
-                out.exit_code()
-            }
-            Err(e) => bail_fail(Fail::from(e)),
-        }
+        Err(e) => bail_fail(Fail::from(e)),
     }
 }
 
@@ -274,7 +275,7 @@ pub(crate) fn cmd_set(a: &Args) -> Outcome {
     let Some(pref) = a.part else { crate::args::usage() };
     let key = a.pos.get(1).map(|s| s.as_str()).unwrap_or_else(|| crate::args::usage());
     // --random 是 `uuid` 子命令的专属旗标，其余分支不消费它——白名单是命令级的，
-    // 分支级差异必须在此显式拒绝（同 resizefs 离线对 --size 的处置）
+    // 分支级差异必须在此显式拒绝（同 resizefs 离线对位置 BYTES 的处置）
     if a.random && key != "uuid" {
         bail_fail(Fail::refused(format!("--random only applies to `set <target>:N uuid`, not `{key}`")));
     }
@@ -289,7 +290,7 @@ pub(crate) fn cmd_set(a: &Args) -> Outcome {
     }
     // 载体必须是整盘：MBR 的 type/flag 分支直接改目标 LBA0 的记录槽，而分区节点上被
     // parse_mbr 认成 msdos 的可能只是 FAT/NTFS 引导扇区（末尾同为 0x55AA）——写入会
-    // 落进文件系统的引导扇区。判据与 new/add/del 同源
+    // 落进文件系统的引导扇区。判据与 new/add/delete 同源
     refuse_partition_node_target("set", &a.target);
     let mut src = open_target_for_write(a).unwrap_or_else(|f| bail_fail(f));
     // 锁下快照

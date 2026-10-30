@@ -5,14 +5,18 @@ use crate::args::Args;
 use crate::dev::PartSelector;
 use crate::movepart;
 
-pub(crate) const HELP: &str = r#"diskedit plan <TARGET> --grow N
-diskedit apply <TARGET> --grow N [--chunk-size MiB] [--no-fs]
+pub(crate) const HELP: &str = r#"diskedit plan <TARGET> --grow N|last
+diskedit apply <TARGET> --grow N|last [--chunk-size MiB] [--no-fs]
 
-  Grow partition N into all following free space, relocating intervening
-  partitions tail-packed (manual multi-step form of `resize grow`).
+  Grow partition N (or `last`) into all following free space, relocating
+  intervening partitions tail-packed (manual multi-step form of `resize grow`).
   plan prints the operations without touching the disk. apply derives the
-  plan under the target lock (the disk may have changed since plan ran)
-  and executes it, resuming from its checkpoint if re-run.
+  plan under the target lock (the disk may have changed since plan ran) and
+  executes it, resuming from its checkpoint if re-run.
+
+  apply asks for no confirmation: relocating the blockers is this command's
+  job, not a side effect of a size request — run `plan` first to see the
+  operations it will perform.
 
   --no-fs (apply only) skips the filesystem step of the grown partition;
   a swap that a relocation has to rebuild still runs."#;

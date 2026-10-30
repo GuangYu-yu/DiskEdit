@@ -1,4 +1,4 @@
-//! 低阶布局命令：new / add / del / resize-part / move / copy / create。
+//! 低阶布局命令：new / add / delete / resize-part / move / copy / create。
 
 use crate::support::*;
 use crate::args::Args;
@@ -21,7 +21,6 @@ pub(crate) const HELP_ADD: &str = r#"diskedit add <TARGET> --start LBA --end LBA
   rounds down); pass --align none to use them as given."#;
 
 pub(crate) const HELP_DELETE: &str = r#"diskedit delete <TARGET>:N --yes
-diskedit del <TARGET>:N --yes
 
   Delete a partition entry (the data area is not wiped)."#;
 
@@ -52,17 +51,18 @@ pub(crate) const HELP_MOVE: &str = r#"diskedit move <TARGET>:N --start <LBA|end>
   overwritten as-is — no equivalent of resize's --allow-move --yes; check
   that it holds nothing you need before running."#;
 
-pub(crate) const HELP_COPY: &str = r#"diskedit copy <TARGET>:N --start <LBA|end> [--name S] [--clone]
+pub(crate) const HELP_COPY: &str = r#"diskedit copy <TARGET>:N --start <LBA|end> [--name S] [--keep-partuuid]
 
   Byte-wise copy a partition to a new location; the source is untouched.
   --start end packs the copy against the end of the usable range.
-  No resume: an interrupted copy cannot pick up where it left off. The
-  slot it held stays busy until released with `diskedit abandon` — then
-  re-run to rewrite the destination from the beginning.
+  No resume: an interrupted copy cannot pick up where it left off. It leaves
+  a non-rollbackable journal on the target, so write commands refuse until
+  that is released with `diskedit abandon` — re-run then to rewrite the
+  destination from the beginning.
 
   PARTUUID: the copy gets a freshly generated v4 GUID, so the two
-  partitions stay distinguishable. --clone keeps the source PARTUUID
-  instead — mount-by-PARTUUID then resolves to either partition.
+  partitions stay distinguishable. --keep-partuuid reuses the source
+  GUID instead — mount-by-PARTUUID then resolves to either partition.
 
   CONFIRMATION: none beyond the explicit LBA. The destination range is
   overwritten as-is — no equivalent of resize's --allow-move --yes; check
@@ -169,7 +169,7 @@ pub(crate) fn cmd_add(a: &Args) -> crate::outcome::Outcome {
     // 坐标系在几何计算前确定：GPT 条目按表头 ss 对齐，MBR 条目按容器 ss 对齐
     match table::table_label(&src) {
         Err(e) => bail_fail(Fail::infra(format!("label probe failed: {e}"))),
-        // 判型只用 table_label 一个来源（与 del/create 同口径）：load_gpt 单独判会把
+        // 判型只用 table_label 一个来源（与 delete/create 同口径）：load_gpt 单独判会把
         // "保护 MBR 受损、条目数组可能完好"的 GPT 盘当作无表盘降级到 msdos 分支
         Ok(table::TableLabel::GptDamaged) => bail_fail(Fail::refused(
             "the GPT on this target is damaged — repair it first (or recover it manually); \
@@ -191,7 +191,7 @@ pub(crate) fn cmd_add(a: &Args) -> crate::outcome::Outcome {
             // 全零类型 GUID 是"未用条目"的形状：LBA 非零而类型为零的条目在本工具与 UEFI/内核
             // 两套判据下含义相反，判据与文案同 gpt_policy::set_type_guid
             if type_guid == [0u8; 16] {
-                bail_fail(Fail::refused("type GUID cannot be all-zero (that marks an unused entry — use `del`)"));
+                bail_fail(Fail::refused("type GUID cannot be all-zero (that marks an unused entry — use `delete`)"));
             }
             // 名字守卫在消费点：GPT 分支是 --name 的唯一落盘处（MBR 分支已拒绝 --name）
             if let Some(n) = &a.name { crate::support::check_gpt_name_len(n); }
@@ -221,14 +221,14 @@ pub(crate) fn cmd_add(a: &Args) -> crate::outcome::Outcome {
     }
 }
 
-pub(crate) fn cmd_del(a: &Args) -> crate::outcome::Outcome {
+pub(crate) fn cmd_delete(a: &Args) -> crate::outcome::Outcome {
     let Some(pref) = a.part else { crate::args::usage() };
-    // 载体必须是整盘：del 清零的是节点 LBA0 里的条目槽，而分区节点上被判成 msdos 的
+    // 载体必须是整盘：delete 清零的是节点 LBA0 里的条目槽，而分区节点上被判成 msdos 的
     // 可能只是文件系统引导扇区——FAT/NTFS 的引导扇区末尾同为 0x55AA，MBR 判据只认
     // 这个签名。判据与 new/add/create 同源
-    refuse_partition_node_target("del", &a.target);
+    refuse_partition_node_target("delete", &a.target);
     if !a.yes {
-        bail_fail(Fail::refused("`del` removes the target partition entry; pass --yes to confirm"));
+        bail_fail(Fail::refused("`delete` removes the target partition entry; pass --yes to confirm"));
     } else {
         let mut src = open_target_for_write(a).unwrap_or_else(|f| bail_fail(f));
         // 写表前的占用闸：删掉一个仍被内核使用的分区，会让盘上表与挂载视图分叉
@@ -238,9 +238,9 @@ pub(crate) fn cmd_del(a: &Args) -> crate::outcome::Outcome {
         // 锁下快照
         let part = crate::gpt_policy::resolve_part(&src, pref).unwrap_or_else(|f| bail_fail(f));
         let r = match table::table_label(&src) {
-            Ok(table::TableLabel::Gpt) => crate::gpt_policy::del_entry(&mut src, part),
-            Ok(table::TableLabel::Mbr) => table::del_mdos_entry(&mut src, part),
-            Ok(other) => bail_fail(Fail::refused(format!("`del` needs a GPT or MBR target (label: {other})"))),
+            Ok(table::TableLabel::Gpt) => crate::gpt_policy::delete_entry(&mut src, part),
+            Ok(table::TableLabel::Mbr) => table::delete_mdos_entry(&mut src, part),
+            Ok(other) => bail_fail(Fail::refused(format!("`delete` needs a GPT or MBR target (label: {other})"))),
             Err(e) => bail_fail(Fail::infra(format!("label probe failed: {e}"))),
         };
         match r {
@@ -385,7 +385,7 @@ pub(crate) fn cmd_copy(a: &Args) -> crate::outcome::Outcome {
     let (chunk, mut logger) = chunk_logger(a, &src, g.disk_guid());
     // 名字守卫在消费点：copy 的落盘名字与 add 同一个 36 码元字段
     if let Some(n) = &a.name { crate::support::check_gpt_name_len(n); }
-    match movepart::copy_part(&mut src, &g, repair, part, start, a.name.as_deref().unwrap_or(""), a.clone, chunk, &mut |m| logger.log(m)) {
+    match movepart::copy_part(&mut src, &g, repair, part, start, a.name.as_deref().unwrap_or(""), a.keep_partuuid, chunk, &mut |m| logger.log(m)) {
         Ok(num) => table_write_done(&src, &format!("copied to partition #{num} (verify with: diskedit info {})", a.target)),
         Err(f) => bail_fail(f),
     }
@@ -419,7 +419,7 @@ pub(crate) fn cmd_create(a: &Args) -> crate::outcome::Outcome {
     // 分区节点不是合法载体（同 add：表条目写在整盘最前 16KiB）
     refuse_partition_node_target("create", &a.target);
     let mut src = open_target_for_write(a).unwrap_or_else(|f| bail_fail(f));
-    // 写表前的占用闸（与 add/del 同判据）。放在几何判定之前：占用是"目标现在能不能写"
+    // 写表前的占用闸（与 add/delete 同判据）。放在几何判定之前：占用是"目标现在能不能写"
     // 的事实，与本条命令的参数是否合法无关
     if let Err(f) = crate::fsops::ensure_table_write_idle(&src) {
         bail_fail(f);

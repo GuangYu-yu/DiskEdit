@@ -2,22 +2,15 @@
 
 use super::*;
 
-/// 尺寸请求的**形状**（与盘无关）：位置参数 SIZE / `--size` 绝对值 / `--grow-to-end`。
-/// 在线路径把它带进锁内、用锁下重取的当前分区尺寸重新解析——`+N`/`+N%` 锚定"当前尺寸"、
-/// `grow` 锚定右侧空闲，锁前解析出的绝对值在窗口内可能已作废
-#[derive(Clone, Default)]
-pub(crate) struct SizeRequest {
-    pub(crate) pos: Option<String>,
-    pub(crate) abs: Option<u64>,
-    pub(crate) grow_to_end: bool,
-}
-
-/// SIZE 请求 →（绝对目标字节数, grow 标记），GPT/MBR resize 共用。绝对值/扩/缩都锚定
-/// `cur_bytes`（调用方保证它是锁下的当前分区字节数）；两者皆缺 = 未指定 SIZE
-pub(crate) fn resolve_size_request(req: &SizeRequest, cur_bytes: u64) -> Result<(Option<u64>, bool), crate::outcome::Fail> {
-    let mut grow_to_end = req.grow_to_end;
-    let mut target: Option<u64> = req.abs;
-    if let Some(s) = req.pos.as_deref() {
+/// SIZE 请求 →（绝对目标字节数, grow 标记），GPT/MBR resize 共用。SIZE 只有位置参数一种
+/// 给法，调用点都拿同一份原始字符串在各自锁下重解析——`+N`/`+N%` 锚定"当前尺寸"、
+/// `grow` 锚定右侧空闲，锁前解析出的绝对值在窗口内可能已作废。绝对值/扩/缩都锚定
+/// `cur_bytes`（调用方保证它是锁下的当前分区字节数）；"grow" 是唯一表示"吃满右侧空闲"
+/// 的写法，两者皆缺 = 未指定 SIZE
+pub(crate) fn resolve_size_request(size: Option<&str>, cur_bytes: u64) -> Result<(Option<u64>, bool), crate::outcome::Fail> {
+    let mut grow_to_end = false;
+    let mut target: Option<u64> = None;
+    if let Some(s) = size {
         if s == "grow" {
             grow_to_end = true;
         } else {
