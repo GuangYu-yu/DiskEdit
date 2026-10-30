@@ -253,12 +253,6 @@ pub(crate) fn scene_mismatch(recorded: &SceneIdentity, actual: &LiveScene) -> Op
     compare(recorded, actual.proof.into(), &actual.fp, actual.map)
 }
 
-/// 两份**录制**现场描述的是否同一目标。清候选的路上没有当前目标可比，只能拿另一份现场
-/// 记录的头来比；判据与 [`scene_mismatch`] 共用同一处，只是"当前侧"也来自记录
-pub(crate) fn recorded_scenes_mismatch(recorded: &SceneIdentity, other: &SceneIdentity) -> Option<String> {
-    compare(recorded, other.proof, &other.fp, other.map)
-}
-
 fn compare(
     recorded: &SceneIdentity,
     actual_proof: IdentityProof,
@@ -381,8 +375,8 @@ pub(crate) fn state_dir() -> PathBuf {
 /// 路径，v1 不引入这套语义）。块设备以设备层拓扑键为身份；loop 设备例外——身份是
 /// backing 文件本身，现场落镜像兄弟文件。
 ///
-/// 候选落点由身份派生，每族一个落点（写入位置）：查找取首个有效者、不扫描；
-/// 多于一份有效候选同时存在即报歧义，不猜
+/// 现场落点由身份派生：journal 与 checkpoint 各一个（写入位置，也是唯一查找位置）。
+/// 身份只对应一个落点，因此不会出现"同一目标有两份现场"这种需要靠歧义判定处理的局面
 #[derive(Clone, Debug)]
 pub struct TargetIdentity {
     pub(crate) kind: TargetKind,
@@ -394,8 +388,8 @@ pub struct TargetIdentity {
     /// （loop attach、第二道 inode 锁）也用它——按 `base` 重新打开会落到命令返回后
     /// 被改名或替换的另一个文件上
     pub(crate) canonical: PathBuf,
-    pub(crate) journal: Vec<PathBuf>,
-    pub(crate) checkpoint: Vec<PathBuf>,
+    pub(crate) journal: PathBuf,
+    pub(crate) checkpoint: PathBuf,
     /// 独占锁的落点（见 `targetlock`）。**恒有值**：镜像放在目标旁，块设备由设备身份
     /// 派生到 `state_dir()` 下。类型上没有"没有锁落点"这一状态——取不到锁就是拒绝，
     /// 不存在无锁继续跑的路径
@@ -498,8 +492,8 @@ impl TargetIdentity {
             kind: TargetKind::Image,
             base: literal.to_path_buf(),
             canonical: canonical.to_path_buf(),
-            journal: vec![suffix_path(canonical, JOURNAL_SUFFIX)],
-            checkpoint: vec![suffix_path(canonical, CHECKPOINT_SUFFIX)],
+            journal: suffix_path(canonical, JOURNAL_SUFFIX),
+            checkpoint: suffix_path(canonical, CHECKPOINT_SUFFIX),
             lock: suffix_path(canonical, LOCK_SUFFIX),
             backing_fp: None,
         }
@@ -633,8 +627,8 @@ impl TargetIdentity {
     pub(crate) fn from_block_keys(path: &Path, disk_key: String) -> Self {
         let stable = key_token(&disk_key);
         let dir = state_dir();
-        let journal = vec![dir.join(format!("{stable}{JOURNAL_SUFFIX}"))];
-        let checkpoint = vec![dir.join(format!("{stable}{CHECKPOINT_SUFFIX}"))];
+        let journal = dir.join(format!("{stable}{JOURNAL_SUFFIX}"));
+        let checkpoint = dir.join(format!("{stable}{CHECKPOINT_SUFFIX}"));
         Self {
             kind: TargetKind::Block,
             base: path.to_path_buf(),
@@ -652,10 +646,10 @@ impl TargetIdentity {
 
     /// 清理类命令（abandon）的身份解析：目标可能已不存在，而现场文件可能比目标活得
     /// 久（用户删了镜像，journal 还在旁边）。路径 stat 不了时按镜像身份回退——镜像
-    /// 身份就是给定的路径本身，兄弟候选的枚举不需要目标存在。节点消失的块设备身份
+    /// 身份就是给定的路径本身，落点由它派生，不需要目标存在。节点消失的块设备身份
     /// 不可恢复（拓扑派生），其 state_dir 下的现场随之不可达：此处无从区分两者，按
-    /// 镜像回退时前者得救、后者空跑——报"nothing to abandon"而不是按错身份删候选。
-    /// 拓扑解析得出但解析失败的块设备仍返回 None（保守方向：宁可漏清，也不按错身份删候选）。
+    /// 镜像回退时前者得救、后者空跑——报"nothing to abandon"而不是按错身份删现场。
+    /// 拓扑解析得出但解析失败的块设备仍返回 None（保守方向：宁可漏清，也不按错身份删现场）。
     /// loop 设备的身份绑定 backing 对象：backing 打不开或已不是普通文件时
     /// [`Self::loop_backed`] 返回 Err，这里随之返回 None——它留在原落点上的现场不再可达，
     /// 因为定位它所需的身份在 backing 消失后已经无法从对象本身得出
@@ -671,8 +665,9 @@ impl TargetIdentity {
         Some(Self::resolve_image(path))
     }
 
+    /// journal 的唯一落点：镜像 = 目标旁的兄弟文件；块设备 = `<state_dir>/<盘键>` 加后缀
     pub(crate) fn journal_path(&self) -> &Path {
-        &self.journal[0]
+        &self.journal
     }
 
     /// 独占锁的落点。恒有值：取锁失败即拒绝，不提供"没有锁落点"这种状态
@@ -699,23 +694,17 @@ impl TargetIdentity {
         }
     }
 
-    pub(crate) fn journal_candidates(&self) -> &[PathBuf] {
-        &self.journal
-    }
-
-    /// checkpoint 首选落点。生产路径的写/删一律走 `checkpoint_candidates` 命中的那份
-    /// （见 movepart::read_checkpoint），本方法只剩测试在用
-    #[cfg(test)]
+    /// checkpoint 的唯一落点：镜像放在目标旁，块设备落在 `state_dir()` 下。写、读、删
+    /// 都是这一个路径
     pub(crate) fn checkpoint_path(&self) -> &Path {
-        &self.checkpoint[0]
+        &self.checkpoint
     }
 
     /// 日志落点：镜像 = 目标路径旁的兄弟文件；块设备 = `<state_dir>/<名>` 加同一后缀，
     /// 名取可读的 GPT Disk GUID（与 checkpoint 同源），读不到表时退到 devname。
     ///
-    /// 与 journal / checkpoint 的差别只有一处：日志只增、不参与恢复，因此不做候选回退，
-    /// 名字也保持既有约定不变——改名会打断已写下日志的连续性。落点只在此处拼装，
-    /// 调用方不得自行拼 `state_dir()`
+    /// 与 journal / checkpoint 的差别只有一处：日志只增、不参与恢复，名字也保持既有约定
+    /// 不变——改名会打断已写下日志的连续性。落点只在此处拼装，调用方不得自行拼 `state_dir()`
     pub(crate) fn log_path(&self, disk_guid: Option<[u8; 16]>) -> PathBuf {
         if self.kind == TargetKind::Image {
             return suffix_path(&self.base, LOG_SUFFIX);
@@ -726,11 +715,6 @@ impl TargetIdentity {
             None => file_name_lossy(&self.base),
         };
         state_dir().join(format!("{name}{LOG_SUFFIX}"))
-    }
-
-    /// checkpoint 的候选落点：镜像放在目标旁，块设备落在 `state_dir()` 下
-    pub(crate) fn checkpoint_candidates(&self) -> &[PathBuf] {
-        &self.checkpoint
     }
 }
 
@@ -776,29 +760,25 @@ pub(crate) const CKPT_TMP_STALE_AFTER: std::time::Duration = std::time::Duration
 #[allow(clippy::let_underscore_must_use)] // 有意忽略：删不掉就留到下次打开再清
 pub(crate) fn sweep_stale_ckpt_temps(identity: &TargetIdentity) {
     // 这里只为拿落点目录做清理
-    let candidates = identity.checkpoint_candidates();
+    let ckpt = identity.checkpoint_path();
     // 只认领本目标的暂存文件：同一目录里可能有别的镜像（或所有盘共用的 state_dir），
     // 按裸前缀清扫会把它们的残骸一并删掉，而其中一份可能正等着 rename
-    let prefixes: Vec<String> = candidates.iter().map(|p| ckpt_temp_prefix(p)).collect();
-    let mut dirs: Vec<PathBuf> = candidates.iter().filter_map(|p| p.parent().map(Path::to_path_buf)).collect();
-    dirs.sort();
-    dirs.dedup();
-    for dir in dirs {
-        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
-        for entry in entries.flatten() {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            if !prefixes.iter().any(|p| name.starts_with(p.as_str())) {
-                continue;
-            }
-            let stale = entry
-                .metadata()
-                .and_then(|m| m.modified())
-                .ok()
-                .and_then(|t| t.elapsed().ok())
-                .is_some_and(|age| age >= CKPT_TMP_STALE_AFTER);
-            if stale {
-                let _ = std::fs::remove_file(entry.path());
-            }
+    let prefix = ckpt_temp_prefix(ckpt);
+    let Some(dir) = ckpt.parent() else { return };
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !name.starts_with(prefix.as_str()) {
+            continue;
+        }
+        let stale = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.elapsed().ok())
+            .is_some_and(|age| age >= CKPT_TMP_STALE_AFTER);
+        if stale {
+            let _ = std::fs::remove_file(entry.path());
         }
     }
 }

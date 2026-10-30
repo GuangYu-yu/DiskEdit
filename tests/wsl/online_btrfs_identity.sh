@@ -54,7 +54,7 @@ mount_at "$P" /testmnt
 S0=$(blockdev --getsize64 "$P")
 if unshare -m --propagation private true 2>/dev/null; then
   OUT=$(unshare -m --propagation private bash -c \
-    "mount --bind '$FK/dev' '$P' && exec '$B' resizefs /testmnt --online 400M" 2>&1); E=$?
+    "mount --bind '$FK/dev' '$P' && exec '$B' resizefs /testmnt 400M" 2>&1); E=$?
   echo "rebound exit=$E : $(echo "$OUT" | tail -1)"
   exp "$E" 30 "B/重绑拒绝"
   if echo "$OUT" | grep -q "but the node now resolves to"; then

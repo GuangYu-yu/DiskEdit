@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 分区扩容 + 挂载态在线扩 FS：resize-part 改表后由 resizefs --online 把 FS 填满
+# 分区扩容 + 挂载态在线扩 FS：resize-part 改表后由 resizefs <mountpoint> 把 FS 填满
 source "$(dirname "$0")/lib.sh"
 require_bin
 
@@ -31,8 +31,8 @@ mount_at "${LD}p1" "$MP" || { echo "  BAD  mount 失败"; rc=1; exit 1; }
 echo marker-online > "$MP/marker"
 PART_BYTES=$(blockdev --getsize64 "${LD}p1")
 
-echo "== resizefs --online =="
-$B resizefs "$MP" --online >/dev/null; exp $? 0 "resizefs --online"
+echo "== resizefs <mountpoint>（在线形式）=="
+$B resizefs "$MP" >/dev/null; exp $? 0 "resizefs <mountpoint>"
 [ "$(fs_bytes "${LD}p1")" = "$PART_BYTES" ] && echo "  OK   FS 已填满分区" \
   || { echo "  BAD  FS=$(fs_bytes "${LD}p1") 分区=$PART_BYTES"; rc=1; }
 [ "$(cat "$MP/marker" 2>/dev/null)" = "marker-online" ] && echo "  OK   marker 存活" \

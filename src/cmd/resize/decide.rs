@@ -43,11 +43,11 @@ pub(crate) fn check_pv_intent(
 /// 该分区在锁下已消失/清空则由 `live_entry` 拒绝
 #[cfg(target_os = "linux")]
 pub(crate) fn gpt_decider<'a>(
-    req: &'a SizeRequest,
+    size: Option<&'a str>,
     part: u32,
     is_pv: bool,
 ) -> impl FnOnce(&FileSource) -> Result<Option<u64>, Fail> + 'a {
-    online_size(req, is_pv, move |disk| {
+    online_size(size, is_pv, move |disk| {
         let (g, _repair) = crate::gpt_policy::require_gpt_geometry(disk, "resize")?;
         let e = crate::gpt_policy::live_entry(&g, part)?;
         let cur = lba_range_bytes(e.starting_lba, e.ending_lba, g.sector_size());
@@ -67,11 +67,11 @@ pub(crate) fn gpt_decider<'a>(
 /// `part` 同 `gpt_decider`：锁前解析出的分区号，锁下不再重解释选择器
 #[cfg(target_os = "linux")]
 pub(crate) fn mbr_decider<'a>(
-    req: &'a SizeRequest,
+    size: Option<&'a str>,
     part: u32,
     is_pv: bool,
 ) -> impl FnOnce(&FileSource) -> Result<Option<u64>, Fail> + 'a {
-    online_size(req, is_pv, move |disk| {
+    online_size(size, is_pv, move |disk| {
         let mbr = table::parse_mbr(disk)
             .map_err(|e| Fail::infra(format!("parse failed: {e}")))?
             .ok_or_else(|| Fail::refused("no MBR on target".to_string()))?;

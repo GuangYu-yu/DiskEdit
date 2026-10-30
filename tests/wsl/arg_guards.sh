@@ -17,29 +17,29 @@ $B create "$T" --size 1M --name p1 >/dev/null 2>&1; exp $? 0 "create 1MiB p1"
 echo "== --chunk-size 取值域 =="
 # src/args.rs:184-193：取值必须在 1..=1024 MiB，越界当场 bad_arg → refused（10）。
 # 合法边界要真的走一次 chunk 路径才有意义：copy 由 cli.rs 证过会消费 chunk，源分区仅 1MiB，
-# 两次拷贝代价极小（chunk 大于数据时即单块），断言后立刻 del 掉落点。
+# 两次拷贝代价极小（chunk 大于数据时即单块），断言后立刻 delete 掉落点。
 $B copy "$T":1 --start 4096 --chunk-size 1 >/dev/null 2>&1; exp $? 0 "--chunk-size 1 被接受（下界）"
-$B del "$T":2 --yes >/dev/null 2>&1; exp $? 0 "  清理 copy 落点 #2"
+$B delete "$T":2 --yes >/dev/null 2>&1; exp $? 0 "  清理 copy 落点 #2"
 $B copy "$T":1 --start 4096 --chunk-size 1024 >/dev/null 2>&1; exp $? 0 "--chunk-size 1024 被接受（上界）"
-$B del "$T":2 --yes >/dev/null 2>&1; exp $? 0 "  清理 copy 落点 #2"
+$B delete "$T":2 --yes >/dev/null 2>&1; exp $? 0 "  清理 copy 落点 #2"
 $B copy "$T":1 --start 4096 --chunk-size 0 >/dev/null 2>&1; exp $? 10 "--chunk-size 0 越界拒绝"
 $B copy "$T":1 --start 4096 --chunk-size 1025 >/dev/null 2>&1; exp $? 10 "--chunk-size 1025 越界拒绝"
 
 echo "== --align 取值 =="
-# src/support.rs:218-224（align_unit）：mib|cyl|none 之外的值 refused（10）；
-# src/cmd/mod.rs:170：add 声明消费 --align，故 add 能把请求送到 align_unit
+# src/support.rs:242-249（align_unit）：mib|cyl|none 之外的值 refused（10）；
+# src/cmd/mod.rs:217-218：add 声明消费 --align，故 add 能把请求送到 align_unit
 $B add "$T" --start 8192 --end 10239 --align mib >/dev/null 2>&1; exp $? 0 "--align mib 被接受"
 $B add "$T" --start 12288 --end 14335 --align none >/dev/null 2>&1; exp $? 0 "--align none 被接受"
-# cyl = 16065 扇区/柱面（src/support.rs:222）：17000..49000 上取整/下取整为 32130..48194，
+# cyl = 16065 扇区/柱面（src/support.rs:246）：17000..49000 上取整/下取整为 32130..48194，
 # 落在 32MiB 镜像的 last_usable 内且不与上面两条重叠 ⇒ 0
 $B add "$T" --start 17000 --end 49000 --align cyl >/dev/null 2>&1; exp $? 0 "--align cyl 被接受"
 $B add "$T" --start 49152 --end 51199 --align banana >/dev/null 2>&1; exp $? 10 "--align banana 非法值拒绝"
 
 echo "== 语义 / 互斥拒绝 =="
-# src/cmd/resize.rs:275-277：--size 与 --grow-to-end 是两种给终点的方式，同给即 refused（10）
-$B resize "$T":1 --size 8M --grow-to-end >/dev/null 2>&1; exp $? 10 "resize --size + --grow-to-end 互斥拒绝"
-# src/cmd/layout.rs:164：resize-part 必须同时给出 :N 与 --start，缺 --start 落到 usage()
-# → src/args.rs:51-54 以 EXIT_REFUSED（src/outcome.rs:20）退出，即 10
+# src/cmd/mod.rs:111-114 + src/args.rs:118-125：SIZE 只有位置参数一种给法，--size 不在 resize 的
+# 白名单里，给了即 refused（10）
+$B resize "$T":1 --size 8M 16M >/dev/null 2>&1; exp $? 10 "resize --size 非本命令选项（10）"
+# src/cmd/layout.rs:261-263：resize-part 必须同时给出 :N 与 --start，缺 --start 即 refused（10）
 $B resize-part "$T":1 --end 4095 >/dev/null 2>&1; exp $? 10 "resize-part 缺 --start 用法错误（10）"
 
 echo

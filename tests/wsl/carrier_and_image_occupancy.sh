@@ -23,8 +23,8 @@ e2fsck -fn "${L1}p1" >/dev/null 2>&1
 exp "$?" 0 "基线：文件系统干净"
 
 echo "=== A: 分区节点不是建表/改表命令的载体"
-"$B" del "${L1}p1:1" --yes >/dev/null 2>&1
-exp "$?" 10 "del 打分区节点被拒"
+"$B" delete "${L1}p1:1" --yes >/dev/null 2>&1
+exp "$?" 10 "delete 打分区节点被拒"
 # 拒绝必须是"什么都没写"：判据只认 0x55AA 时这里会清零分区 LBA0 的 [446,462)
 e2fsck -fn "${L1}p1" >/dev/null 2>&1
 exp "$?" 0 "分区内容未被清零"
@@ -66,7 +66,7 @@ check_refused() {
 }
 check_refused "new"       "$B" new "$T" --yes
 check_refused "add"       "$B" add "$T" --start 102400 --end 103423
-check_refused "del"       "$B" del "$T:1" --yes
+check_refused "delete"    "$B" delete "$T:1" --yes
 check_refused "create"    "$B" create "$T" --size 8M
 check_refused "set name"  "$B" set "$T:1" name foo
 check_refused "set type"  "$B" set "$T:1" type C12A7328-F81F-11D2-BA4B-00A0C93EC93B

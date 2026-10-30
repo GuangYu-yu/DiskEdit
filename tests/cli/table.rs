@@ -39,9 +39,9 @@ fn new_add_del_roundtrip() {
     assert_eq!(c, 10, "out-of-usable-range add must refuse");
     assert!(stderr.contains("outside usable"), "{stderr}");
 
-    // del：删除 #1，info 不再含 root（JSON 结构化断言，非子串匹配）
-    let (c, _, _) = run(&["del", &format!("{img_s}:1"), "--yes"]);
-    assert_eq!(c, 0, "del must succeed");
+    // delete：删除 #1，info 不再含 root（JSON 结构化断言，非子串匹配）
+    let (c, _, _) = run(&["delete", &format!("{img_s}:1"), "--yes"]);
+    assert_eq!(c, 0, "delete must succeed");
     let (c, out, _) = run(&["info", img_s]);
     assert_eq!(c, 0);
     let v: serde_json::Value = serde_json::from_str(out.trim()).expect("info must emit valid JSON");
@@ -246,7 +246,7 @@ fn msdos_table_flow() {
     let (c, _) = run(&["set", &format!("{img_s}:1"), "flag", "hidden", "on"]);
     assert_eq!(c, 10, "0x83 has no hidden counterpart, must refuse");
 
-    let (c, _) = run(&["del", &format!("{img_s}:2"), "--yes"]);
+    let (c, _) = run(&["delete", &format!("{img_s}:2"), "--yes"]);
     assert_eq!(c, 0);
     let raw = std::fs::read(&img).unwrap();
     assert_eq!(&raw[446 + 16..446 + 32], &[0u8; 16], "slot 2 must be zeroed");

@@ -66,8 +66,8 @@ P2START=$($B info "$T" | grep -o '"num":2,[^}]*}' | grep -o '"first_lba":[0-9]*'
 lo_detach "$LD"
 OUT=$($B delete "$T":2 2>&1); E=$?
 echo "$OUT" | head -1
-[ "$E" = "10" ] && echo "del w/o --yes refused OK (exit=$E)" || { echo "del w/o --yes wrong exit ($E, want 10)"; rc=1; }
-$B delete "$T":2 --yes >/dev/null 2>&1; echo "del exit=$?"
+[ "$E" = "10" ] && echo "delete w/o --yes refused OK (exit=$E)" || { echo "delete w/o --yes wrong exit ($E, want 10)"; rc=1; }
+$B delete "$T":2 --yes >/dev/null 2>&1; echo "delete exit=$?"
 $B info "$T" | grep -o '"num":2' || echo "p2 GONE OK"
 LD=$(lo_attach "$T")
 [ "$MD2" = "$(dd if="$LD" bs=512 skip=$P2START count=16384 2>/dev/null | md5sum | cut -d' ' -f1)" ] && echo "p2 DATA-AREA NOT WIPED OK" || { echo "p2 DATA-AREA WIPED (BAD)"; rc=1; }
@@ -79,7 +79,7 @@ rm -f "$T" "$T"$SIDECAR_GLOB
 truncate -s 64M "$T"
 $B new "$T" --yes >/dev/null
 $B add "$T" --start 2048 --end 99999 --name g1 >/dev/null
-$B delete "$T":1 --yes >/dev/null 2>&1; echo "gpt del exit=$?"
+$B delete "$T":1 --yes >/dev/null 2>&1; echo "gpt delete exit=$?"
 $B info "$T" | grep -o '"num":1' || echo "g1 GONE OK"
 sgdisk -v "$T" >/dev/null 2>&1 && echo "sgdisk clean" || { echo "sgdisk ISSUES"; rc=1; }
 exit $rc

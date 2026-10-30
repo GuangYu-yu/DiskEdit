@@ -154,10 +154,9 @@ pub(crate) fn disk_identity_is_shared_by_a_partition_and_its_whole_disk() {
 }
 
 /// 字面路径与 canonical 指同一文件（相对路径 / `./` / `..` 这类非规范化成分）时，
-/// 候选只能列一份：列两份会让消费侧把"只有一个现场"判成 Ambiguous 而全面拒绝。
-/// 真·不同文件（符号链接）仍要保留双候选
+/// 落点仍只有一个：两种写法都从 canonical 派生，不因写法不同多出第二份现场
 #[test]
-pub(crate) fn non_canonical_literal_does_not_duplicate_the_candidate() {
+pub(crate) fn non_canonical_literal_yields_the_canonical_slot() {
     let dir = std::env::temp_dir();
     let img = dir.join(format!("diskedit_iddup_{}.img", std::process::id()));
     std::fs::write(&img, b"x").unwrap();
@@ -168,9 +167,8 @@ pub(crate) fn non_canonical_literal_does_not_duplicate_the_candidate() {
     let literal = sub.join("..").join(canonical.file_name().unwrap());
     assert_ne!(literal, canonical, "the fixture must be textually different");
     let id = TargetIdentity::image_at(&canonical, &literal);
-    assert_eq!(id.journal.len(), 1, "one file must yield one journal candidate: {:?}", id.journal);
-    assert_eq!(id.checkpoint.len(), 1, "one file must yield one checkpoint candidate: {:?}", id.checkpoint);
-    assert_eq!(id.journal[0], suffix_path(&canonical, JOURNAL_SUFFIX));
+    assert_eq!(id.journal_path(), suffix_path(&canonical, JOURNAL_SUFFIX));
+    assert_eq!(id.checkpoint_path(), suffix_path(&canonical, CHECKPOINT_SUFFIX));
 
     let _ = std::fs::remove_file(&img);
     let _ = std::fs::remove_dir(&sub);
@@ -560,8 +558,8 @@ pub(crate) fn artifact_names_are_pinned_as_documented() {
     // 镜像：四类伴随文件都是目标路径的同目录兄弟
     let img = PathBuf::from("/tmp/x.img");
     let id = TargetIdentity::resolve_image(&img);
-    assert_eq!(id.journal_candidates()[0], suffix_path(&img, JOURNAL_SUFFIX));
-    assert_eq!(id.checkpoint_candidates()[0], suffix_path(&img, CHECKPOINT_SUFFIX));
+    assert_eq!(id.journal_path(), suffix_path(&img, JOURNAL_SUFFIX));
+    assert_eq!(id.checkpoint_path(), suffix_path(&img, CHECKPOINT_SUFFIX));
     assert_eq!(id.lock_path(), suffix_path(&img, LOCK_SUFFIX));
     assert_eq!(id.log_path(None), suffix_path(&img, LOG_SUFFIX));
 }
@@ -635,10 +633,8 @@ pub(crate) fn fnv1a64_matches_the_reference_vectors() {
 pub(crate) fn block_identity_keys_on_the_whole_disk() {
     let id = TargetIdentity::from_block_keys(Path::new("/dev/sdb1"), "sdb-1234".to_string());
     let disk_tok = key_token("sdb-1234");
-    assert_eq!(id.journal[0], state_dir().join(format!("{disk_tok}{JOURNAL_SUFFIX}")));
-    assert_eq!(id.journal.len(), 1);
-    assert_eq!(id.checkpoint[0], state_dir().join(format!("{disk_tok}{CHECKPOINT_SUFFIX}")));
-    assert_eq!(id.checkpoint.len(), 1);
+    assert_eq!(id.journal_path(), state_dir().join(format!("{disk_tok}{JOURNAL_SUFFIX}")));
+    assert_eq!(id.checkpoint_path(), state_dir().join(format!("{disk_tok}{CHECKPOINT_SUFFIX}")));
     assert_eq!(id.lock_path(), state_dir().join(format!("{disk_tok}{LOCK_SUFFIX}")));
 }
 
@@ -679,8 +675,8 @@ pub(crate) fn loop_identity_converges_to_the_backing_file() {
     let _cleanup = Bound { dev: dev.clone(), dir: dir.clone() };
 
     let id = TargetIdentity::loop_backed(&dev, backing.clone()).expect("a bound backing file resolves");
-    assert_eq!(id.journal, vec![suffix_path(&backing, JOURNAL_SUFFIX)]);
-    assert_eq!(id.checkpoint, vec![suffix_path(&backing, CHECKPOINT_SUFFIX)]);
+    assert_eq!(id.journal_path(), suffix_path(&backing, JOURNAL_SUFFIX));
+    assert_eq!(id.checkpoint_path(), suffix_path(&backing, CHECKPOINT_SUFFIX));
     assert_eq!(id.lock_path(), suffix_path(&backing, LOCK_SUFFIX));
 
     // backing 已删：身份不再可解析，不退到 sysfs 字符串
@@ -720,7 +716,7 @@ pub(crate) fn stale_ckpt_temps_are_swept_on_open() {
     std::fs::write(&img, b"x").unwrap();
     // Linux 上身份取 realpath，落点目录未必是上面那个字面目录：以身份为准
     let id = TargetIdentity::resolve_image(&img);
-    let ckpt = id.checkpoint_candidates()[0].clone();
+    let ckpt = id.checkpoint_path().to_path_buf();
     let dir = ckpt.parent().unwrap().to_path_buf();
 
     let prefix = ckpt_temp_prefix(&ckpt);
