@@ -11,7 +11,11 @@ pub(crate) const HELP_MKFS: &str = r#"diskedit mkfs <TARGET>:N <FS> --yes
 
   Create a filesystem. Destroys all data on the partition; stale signatures
   are erased first. Supported: ext2/3/4, xfs, btrfs, f2fs, vfat, exfat,
-  ntfs, swap."#;
+  ntfs, swap.
+
+  Options:
+    --sector-size N  logical sector size override for raw images (power of two,
+                     512..=65536)"#;
 
 pub(crate) const HELP_RESIZEFS: &str = r#"diskedit resizefs <TARGET>:N
 diskedit resizefs <MOUNTPOINT> [BYTES]
@@ -26,14 +30,22 @@ diskedit resizefs <MOUNTPOINT> [BYTES]
   Online form: the partition table is never changed; the filesystem is grown
   inside the current partition (btrfs also shrinks). A size beyond the current
   partition is refused — run `diskedit resize` to enlarge the partition first.
-  The target size is absolute (units b/k/m/g/t, 1024 base); omitted means grow
-  to fill the partition."#;
+  The target size is absolute (units k/m/g/t, 1024 base; plain bytes when no
+  unit; whole numbers only); omitted means grow to fill the partition.
+
+  Options:
+    --sector-size N  logical sector size override for raw images (power of two,
+                     512..=65536)"#;
 
 pub(crate) const HELP_CHECK: &str = r#"diskedit check <TARGET>:N
 
   Check filesystem consistency. The tool depends on the type: ext runs
   e2fsck -fp, ntfs runs ntfsfix -d. Both may write repairs back to the
-  filesystem, so this needs the target to be writable."#;
+  filesystem, so this needs the target to be writable.
+
+  Options:
+    --sector-size N  logical sector size override for raw images (power of two,
+                     512..=65536)"#;
 
 pub(crate) const HELP_SET: &str = r#"diskedit set <TARGET>:N name S | label S | uuid U | flag F on|off
 diskedit set <TARGET>:N type GUID | type 0xXX
@@ -51,7 +63,11 @@ diskedit set <TARGET>:N type GUID | type 0xXX
                   it back only when the type is currently ESP (falling back to
                   Microsoft basic data for FAT/NTFS content, Linux filesystem
                   data otherwise; the previous type GUID is not preserved).
-                  Other type GUIDs are left untouched. MBR: boot|hidden"#;
+                  Other type GUIDs are left untouched. MBR: boot|hidden
+
+  Options:
+    --sector-size N  logical sector size override for raw images (power of two,
+                     512..=65536)"#;
 
 /// 请求形式与目标能力的比对。能力事实取自 `fsops::uuid_support`（不在此另抄一份），
 /// 但"不合能力该不该拒、拿什么措辞拒"是产品的决定，只有命令层能给出"改参数也许有解"

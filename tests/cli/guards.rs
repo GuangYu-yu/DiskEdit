@@ -1,5 +1,29 @@
 use super::*;
 
+/// 重复旗标：值型拒绝（两个取值的旗标语义冲突，last-wins 会让生效值与用户
+/// 第一次意图相反且无回显），布尔幂等（`--yes --yes` 与 `--yes` 同一状态，
+/// 包装脚本可以无条件追加）。`--help` 让流程止于参数层，不需要真实目标
+#[test]
+fn duplicate_flags_value_rejected_boolean_idempotent() {
+    let exe = env!("CARGO_BIN_EXE_DiskEdit");
+    let run = |args: &[&str]| -> (i32, String) {
+        let out = Command::new(exe).args(args).output().unwrap();
+        (out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stderr).into_owned())
+    };
+
+    let (c, e) = run(&["delete", "--help", "--yes", "--yes"]);
+    assert_eq!(c, 0, "a boolean flag is idempotent: {e}");
+    assert!(e.is_empty(), "help goes to stdout: {e}");
+
+    let (c, e) = run(&["create", "--help", "--size", "32M", "--size", "64M"]);
+    assert_eq!(c, 10, "a value option cannot be given twice: {e}");
+    assert!(e.contains("more than once"), "the rejection must say why: {e}");
+
+    // 布尔与值型的区别取自注册表，同一条规则也覆盖 `--flag=value` 写法
+    let (c, e) = run(&["move", "--help", "--start", "2048", "--start=4096"]);
+    assert_eq!(c, 10, "{e}");
+}
+
 /// 错误路径走真实二进制：bail_fail() 会退出进程，进程内测不到，故用 subprocess 断言退出码 + 文案
 #[test]
 fn cli_negative_paths() {

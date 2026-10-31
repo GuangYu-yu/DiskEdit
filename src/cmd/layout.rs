@@ -11,18 +11,30 @@ pub(crate) const HELP_NEW: &str = r#"diskedit new <TARGET> [--table gpt|msdos] -
   Drawing a table writes the entry arrays at the front of the disk and, for
   gpt, a backup copy in the last sectors — bytes an existing partition may
   hold. Such a collision is refused and named; --overwrite-partition-data
-  accepts overwriting those bytes (--yes alone only confirms the rebuild)."#;
+  accepts overwriting those bytes (--yes alone only confirms the rebuild).
+
+  Options:
+    --sector-size N  logical sector size override for raw images (power of two,
+                     512..=65536)"#;
 
 pub(crate) const HELP_ADD: &str = r#"diskedit add <TARGET> --start LBA --end LBA [--name S] [--type T] [--align A]
 
   Add a partition over [start, end] LBA. GPT --type takes a standard GUID
   text (default: Linux filesystem data); MBR --type takes 0xXX (default 0x83).
   LBA values are aligned per --align (default 1MiB: start rounds up, end
-  rounds down); pass --align none to use them as given."#;
+  rounds down); pass --align none to use them as given.
+
+  Options:
+    --sector-size N  logical sector size override for raw images (power of two,
+                     512..=65536)"#;
 
 pub(crate) const HELP_DELETE: &str = r#"diskedit delete <TARGET>:N --yes
 
-  Delete a partition entry (the data area is not wiped)."#;
+  Delete a partition entry (the data area is not wiped).
+
+  Options:
+    --sector-size N  logical sector size override for raw images (power of two,
+                     512..=65536)"#;
 
 pub(crate) const HELP_RESIZE_PART: &str = r#"diskedit resize-part <TARGET>:N --start LBA (--end LBA | --grow-to-end)
 
@@ -34,7 +46,11 @@ pub(crate) const HELP_RESIZE_PART: &str = r#"diskedit resize-part <TARGET>:N --s
 
   CONFIRMATION: none beyond the explicit LBAs. A start/end says where to act,
   not that the bytes there are expendable — no equivalent of resize's
-  --allow-move --yes; check the range yourself."#;
+  --allow-move --yes; check the range yourself.
+
+  Options:
+    --sector-size N  logical sector size override for raw images (power of two,
+                     512..=65536)"#;
 
 pub(crate) const HELP_MOVE: &str = r#"diskedit move <TARGET>:N --start <LBA|end>
 
@@ -49,7 +65,12 @@ pub(crate) const HELP_MOVE: &str = r#"diskedit move <TARGET>:N --start <LBA|end>
 
   CONFIRMATION: none beyond the explicit LBA. The destination range is
   overwritten as-is — no equivalent of resize's --allow-move --yes; check
-  that it holds nothing you need before running."#;
+  that it holds nothing you need before running.
+
+  Options:
+    --chunk-size N   recovery granularity in MiB (default 4)
+    --sector-size N  logical sector size override for raw images (power of two,
+                     512..=65536)"#;
 
 pub(crate) const HELP_COPY: &str = r#"diskedit copy <TARGET>:N --start <LBA|end> [--name S] [--keep-partuuid]
 
@@ -66,14 +87,25 @@ pub(crate) const HELP_COPY: &str = r#"diskedit copy <TARGET>:N --start <LBA|end>
 
   CONFIRMATION: none beyond the explicit LBA. The destination range is
   overwritten as-is — no equivalent of resize's --allow-move --yes; check
-  that it holds nothing you need before running."#;
+  that it holds nothing you need before running.
+
+  Options:
+    --align A        mib|cyl|none (default mib = 1MiB; none uses the LBA as given)
+    --chunk-size N   recovery granularity in MiB (default 4)
+    --sector-size N  logical sector size override for raw images (power of two,
+                     512..=65536)"#;
 
 pub(crate) const HELP_CREATE: &str = r#"diskedit create <TARGET> [--size SIZE] [--name S] [--fs F]
 
   Create a partition in free space. With --size, the first aligned gap that
   fits; without, the largest aligned gap. --fs formats after creation.
 
-  SIZE: absolute size (units b/k/m/g/t, 1024 base, e.g. 32M | 2G | bytes)"#;
+  SIZE: absolute size (units k/m/g/t, 1024 base; plain bytes when no unit;
+        whole numbers only, e.g. 32M | 2G | 33554432)
+
+  Options:
+    --sector-size N  logical sector size override for raw images (power of two,
+                     512..=65536)"#;
 
 pub(crate) fn cmd_new(a: &Args) -> crate::outcome::Outcome {
     // new 作用于整盘：`:N` 若被静默忽略，用户会误以为只动了某个分区

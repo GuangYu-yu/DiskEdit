@@ -19,7 +19,11 @@ diskedit apply <TARGET> --grow N|last [--chunk-size MiB] [--no-fs]
   operations it will perform.
 
   --no-fs (apply only) skips the filesystem step of the grown partition;
-  a swap that a relocation has to rebuild still runs."#;
+  a swap that a relocation has to rebuild still runs.
+
+  Options:
+    --sector-size N  logical sector size override for raw images (power of two,
+                     512..=65536)"#;
 
 /// 列出各分区的搬移（plan 命令与 apply 前的计划打印共用）。
 /// 头行不共用：两处要给出的数不同——写入前只需扩容终点，`plan` 还要额外给出

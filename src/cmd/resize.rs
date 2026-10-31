@@ -40,12 +40,15 @@ pub(crate) const HELP: &str = r#"diskedit resize <TARGET>[:N] <SIZE> [OPTIONS]
     diskedit resize disk.img 10G --allow-move --yes
 
   SIZE:
-    10G       set size to 10 GiB (units b/k/m/g/t, 1024 base)
+    10G       set size to 10 GiB (units k/m/g/t, 1024 base; plain bytes
+              when no unit)
     +2G       grow by 2 GiB
     -500M     shrink by 500 MiB
     +10%      grow by 10% of current size (rounded down to 1MiB)
     -10%      shrink by 10%
     grow      grow into the contiguous free space to the right
+    Sizes are whole numbers: 1.5G is rejected, and a size that does not land
+    on a sector boundary is truncated (the truncation is reported)
 
   Options:
     --allow-move    permit relocating the partitions in the way: the plan is

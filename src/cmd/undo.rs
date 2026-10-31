@@ -12,7 +12,11 @@ pub(crate) const HELP: &str = r#"diskedit undo <TARGET> --yes
   (NTFS backup sector pointer). Relocated data cannot be rolled back, and
   writes made by external FS tools are not undone.
 
-  Example: diskedit undo /dev/sdb --yes"#;
+  Example: diskedit undo /dev/sdb --yes
+
+  Options:
+    --sector-size N  logical sector size override for raw images (power of two,
+                     512..=65536)"#;
 
 /// journal 在而读不出来（CRC/magic/损坏/I-O）⇒ 盘上事实，重试无用（30）；
 /// 只有 abandon 能释放，提示也指向那里

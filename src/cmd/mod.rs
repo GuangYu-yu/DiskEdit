@@ -411,4 +411,84 @@ mod tests {
             );
         }
     }
+
+    /// SYNOPSIS（帮助第一行）上的旗标名：剥掉 `[ ] ( ) ,` 包裹与 `=值`。
+    /// 反向对账只扫这一行——正文会合法地引用别的命令的旗标（copy 提到
+    /// resize 的 --allow-move，resize 点名拒绝 --start/--end）
+    fn synopsis_tokens(help: &str) -> Vec<&str> {
+        help.lines().next().unwrap_or("")
+            .split_whitespace()
+            .map(|t| t.trim_matches(|c| matches!(c, '[' | ']' | '(' | ')' | ',')))
+            .collect()
+    }
+
+    fn synopsis_flags(help: &str) -> Vec<&str> {
+        synopsis_tokens(help).into_iter()
+            .filter(|t| t.starts_with("--"))
+            .map(|t| t.split('=').next().unwrap_or(t))
+            .collect()
+    }
+
+    /// 白名单与详助的双向对账：白名单里的旗标必须在帮助里出现（"这条命令接受
+    /// 什么"要能在它自己的页面上查到）；SYNOPSIS 里出现的旗标必须被接受
+    /// （帮助不许承诺解析器不认的能力）
+    #[test]
+    fn help_matches_flag_whitelists() {
+        for c in COMMANDS {
+            for f in synopsis_flags(c.help) {
+                assert!(
+                    c.flags.contains(&f),
+                    "{}: synopsis advertises {f}, which the command does not accept",
+                    c.name
+                );
+            }
+            for f in c.flags {
+                assert!(c.help.contains(f), "{}: accepts {f} but its help never mentions it", c.name);
+            }
+        }
+    }
+
+    /// SYNOPSIS 上的带值旗标必须带占位符（`--size SIZE` 或 `--size=SIZE`）：
+    /// 后面直接跟另一个旗标或就此收尾时，用户看不出它要参数
+    #[test]
+    fn synopsis_value_flags_carry_a_placeholder() {
+        for c in COMMANDS {
+            let tokens = synopsis_tokens(c.help);
+            for (i, t) in tokens.iter().enumerate() {
+                if !t.starts_with("--") || t.contains('=') {
+                    continue;
+                }
+                let Some(spec) = crate::args::flag_spec(t) else { continue };
+                if spec.value.is_none() {
+                    continue;
+                }
+                let next = tokens.get(i + 1).copied().unwrap_or("");
+                assert!(
+                    !next.is_empty() && !next.starts_with("--"),
+                    "{}: {t} takes a value but the synopsis gives it no placeholder",
+                    c.name
+                );
+            }
+        }
+    }
+
+    /// 白名单与旗标注册表的对账：两边不许出现对方没有的条目。拼错名字会让
+    /// 旗标静默失效（白名单认、解析臂不认），或让帮助提到解析器不认识的值
+    #[test]
+    fn flag_whitelists_match_the_registry() {
+        use crate::args::FLAGS;
+        let registry: Vec<&str> = FLAGS.iter().map(|f| f.name).collect();
+        for c in COMMANDS {
+            for f in c.flags {
+                assert!(registry.contains(f), "{}: {f} is not in the flag registry", c.name);
+            }
+        }
+        for spec in FLAGS {
+            assert!(
+                COMMANDS.iter().any(|c| c.flags.contains(&spec.name)),
+                "{}: registered but no command accepts it",
+                spec.name
+            );
+        }
+    }
 }
