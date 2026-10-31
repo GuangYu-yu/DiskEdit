@@ -90,7 +90,7 @@ dd if=/dev/zero of="$T$CKPT_SUFFIX" bs=1 count=64 conv=notrunc 2>/dev/null
 OUT=$($BF resize-part "$T":1 --start 2000896 --end 3844095 --chunk-size 1 2>&1); E=$?
 echo "rerun exit=$E : $(echo "$OUT" | head -1)"
 exp "$E" 30 "不可读 ckpt 时重跑被拒（不得静默重跑）"
-echo "$OUT" | grep -q "none is readable" && echo "G UNREADABLE-CKPT REPORT OK" || { echo "G report missing (BAD)"; rc=1; }
+echo "$OUT" | grep -q "is unreadable" && echo "$OUT" | grep -q "diskedit abandon" && echo "G UNREADABLE-CKPT REPORT OK" || { echo "G report missing (BAD)"; rc=1; }
 exp "$($B abandon "$T" --yes >/dev/null 2>&1; echo $?)" 0 "abandon 释放不可读现场"
 OUT=$($BF resize-part "$T":1 --start 104448 --end 1947647 --chunk-size 1 2>&1); exp "$?" 0 "abandon 后重跑完成"
 LD=$(lo_attach "$T")
