@@ -134,15 +134,28 @@ pub(crate) enum ResumeClaim {
 }
 
 /// `--sector-size` 只对镜像有意义：镜像不携带扇区信息，故由用户给出。块设备的逻辑扇区
-/// 大小由内核经 BLKSSZGET 给出，覆盖值被 `FileSource::open` 静默忽略——静默接受一个不
-/// 生效的旗标，等于让用户以为扇区大小改了。块设备上显式给出即拒绝（改参数有解，退 10）
-fn reject_sector_size_on_block(a: &Args, src: &FileSource) -> Result<(), Fail> {
-    if src.is_block && a.sector_size.is_some() {
+/// 大小由内核经 BLKSSZGET 给出，覆盖值不参与打开——静默接受一个不生效的旗标，等于让
+/// 用户以为扇区大小改了。块设备上显式给出即拒绝（改参数有解，退 10）
+fn reject_sector_size_on_block(a: &Args) -> Result<(), Fail> {
+    if a.sector_size.is_some() {
         return Err(Fail::refused(
             "--sector-size applies to image files only; a block device's logical sector size is reported by the kernel (BLKSSZGET) and cannot be overridden",
         ));
     }
     Ok(())
+}
+
+/// 目标是否为块设备。只看路径元数据、不打开目标：`--sector-size` 的适用范围要在打开
+/// 之前定，否则盘被占用时先报 open 失败（30），用法错误（10）就推不出来
+#[cfg(target_os = "linux")]
+fn target_is_block(path: &str) -> bool {
+    std::fs::metadata(path).is_ok_and(|m| m.file_type().is_block_device())
+}
+
+/// 非 Linux 没有块设备节点这种目标形态
+#[cfg(not(target_os = "linux"))]
+fn target_is_block(_path: &str) -> bool {
+    false
 }
 
 impl TransactionManager {
@@ -306,9 +319,9 @@ impl TransactionManager {
         if let Ok(meta) = std::fs::metadata(&a.target)
             && meta.file_type().is_block_device()
         {
+            reject_sector_size_on_block(a)?;
             let src = FileSource::open_read_only(Path::new(&a.target))
                 .map_err(|e| Fail::infra(format!("open failed: {e}")))?;
-            reject_sector_size_on_block(a, &src)?;
             return Ok(src);
         }
         FileSource::open_read_only_image(Path::new(&a.target), a.sector_size)
@@ -317,9 +330,11 @@ impl TransactionManager {
 
     /// 读写打开、不取所有权
     fn open_plain(a: &Args) -> Result<FileSource, Fail> {
+        if target_is_block(&a.target) {
+            reject_sector_size_on_block(a)?;
+        }
         let src = FileSource::open(Path::new(&a.target), a.sector_size)
             .map_err(|e| Fail::infra(format!("open failed: {e}")))?;
-        reject_sector_size_on_block(a, &src)?;
         Ok(src)
     }
 

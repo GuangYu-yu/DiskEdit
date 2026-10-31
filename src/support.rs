@@ -193,7 +193,7 @@ pub(crate) fn kernel_resync(src: &FileSource) -> bool {
 /// 顺序不可换：report 必须在 resync 之后，否则打不出"内核视图过期"这一项；
 /// 未写盘的命令不做重读（没东西要同步）
 pub(crate) fn settle_layout(mut o: crate::outcome::Outcome, src: &FileSource) -> crate::outcome::Outcome {
-    if o.is_applied() && !kernel_resync(src) {
+    if o.has_layout_write() && !kernel_resync(src) {
         o.mark_kernel_stale();
     }
     o.report();

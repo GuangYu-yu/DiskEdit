@@ -1,7 +1,7 @@
 //! 文件系统类命令：mkfs / resizefs / check / set（FS 属性部分）。
 
 use crate::support::*;
-use crate::args::{parse_size_delta, Args};
+use crate::args::{parse_size_delta, Args, SizeArg};
 use crate::dev::PartSelector;
 use crate::fsid::FsKind;
 use crate::outcome::Outcome;
@@ -31,7 +31,7 @@ diskedit resizefs <MOUNTPOINT> [BYTES]
   inside the current partition (btrfs also shrinks). A size beyond the current
   partition is refused — run `diskedit resize` to enlarge the partition first.
   The target size is absolute (units k/m/g/t, 1024 base; plain bytes when no
-  unit; whole numbers only); omitted means grow to fill the partition.
+  unit; fractions allowed); omitted means grow to fill the partition.
 
   Options:
     --sector-size N  logical sector size override for raw images (power of two,
@@ -90,7 +90,12 @@ fn check_uuid_request(fstype: Option<FsKind>, req: &fsops::UuidRequest) -> Resul
 
 pub(crate) fn cmd_mkfs(a: &Args) -> Outcome {
     // FS 名是第二个位置参数（第一个是 <TARGET>:N，已解析进 a.target/a.part）
-    let (Some(pref), Some(fstype_name)) = (a.part, a.pos.get(1).cloned()) else { crate::args::usage() };
+    let Some(pref) = a.part else {
+        bail_fail(Fail::refused("`mkfs` needs a partition: diskedit mkfs <TARGET>:N <FS> (see diskedit help mkfs)".to_string()));
+    };
+    let Some(fstype_name) = a.pos.get(1).cloned() else {
+        bail_fail(Fail::refused("`mkfs` needs a filesystem type: diskedit mkfs <TARGET>:N <FS> (see diskedit help mkfs)".to_string()));
+    };
     // 分区节点不是整盘：`:N` 的解析会把节点首扇区当分区表读，随后的擦写落在
     // 一个由伪表算出的区间上。判据与 new/add/undo 等命令同一处
     crate::support::refuse_partition_node_target("mkfs", &a.target);
@@ -156,8 +161,8 @@ fn resizefs_online(a: &Args) -> u8 {
     // 目标尺寸只有位置参数一种给法，且只接受绝对值（`+N` 锚定"当前尺寸"在在线路径
     // 另有含义，混进来会让同一个字面量在两种命令下取不同值）
     let size = a.pos.get(1).map(|s| match parse_size_delta(s) {
-        Some((bytes, 0, false)) => bytes,
-        _ => bail_fail(Fail::refused(format!("size {s:?} must be an absolute size (use 10G | 500M | plain bytes)"))),
+        Some(SizeArg::Bytes { kind: 0, bytes }) => bytes,
+        _ => bail_fail(Fail::refused(format!("size {s:?} must be an absolute size (use 10G | 500M | 1.5G | plain bytes)"))),
     });
     #[cfg(target_os = "linux")]
     {
@@ -266,7 +271,9 @@ fn resizefs_offline(a: &Args, pref: PartSelector) -> u8 {
 }
 
 pub(crate) fn cmd_check(a: &Args) -> u8 {
-    let Some(pref) = a.part else { crate::args::usage() };
+    let Some(pref) = a.part else {
+        bail_fail(Fail::refused("`check` needs a partition: diskedit check <TARGET>:N (see diskedit help check)".to_string()));
+    };
     // e2fsck/ntfsfix 会写回 FS：分区节点上的 :N 不是盘级表项，键按伪 MBR 解析会落到
     // 该分区自己的引导扇区。判据与 mkfs/resize/set 同源
     refuse_partition_node_target("check", &a.target);
@@ -288,8 +295,12 @@ pub(crate) fn cmd_check(a: &Args) -> u8 {
 
 /// set 的一键入口：统一 name/label/uuid/flag 四类属性
 pub(crate) fn cmd_set(a: &Args) -> Outcome {
-    let Some(pref) = a.part else { crate::args::usage() };
-    let key = a.pos.get(1).map(|s| s.as_str()).unwrap_or_else(|| crate::args::usage());
+    let Some(pref) = a.part else {
+        bail_fail(Fail::refused("`set` needs a partition: diskedit set <TARGET>:N <PROPERTY> ... (see diskedit help set)".to_string()));
+    };
+    let Some(key) = a.pos.get(1).map(|s| s.as_str()) else {
+        bail_fail(Fail::refused("`set` needs a property: name, label, uuid, flag or type (see diskedit help set)".to_string()));
+    };
     // --random 是 `uuid` 子命令的专属旗标，其余分支不消费它——白名单是命令级的，
     // 分支级差异必须在此显式拒绝（同 resizefs 离线对位置 BYTES 的处置）
     if a.random && key != "uuid" {
@@ -319,7 +330,9 @@ pub(crate) fn cmd_set(a: &Args) -> Outcome {
         bail_fail(f);
     }
     if key == "name" {
-        if value.is_empty() { crate::args::usage(); }
+        if value.is_empty() {
+            bail_fail(Fail::refused("`set ... name` needs a name (see diskedit help set)".to_string()));
+        }
         crate::support::check_gpt_name_len(&value);
         return match crate::gpt_policy::rename_entry(&mut src, part, &value) {
             Ok(()) => table_write_done(&src, &format!("renamed partition #{part} to {value:?}")),
@@ -327,7 +340,9 @@ pub(crate) fn cmd_set(a: &Args) -> Outcome {
         };
     }
     if key == "type" {
-        if value.is_empty() { crate::args::usage(); }
+        if value.is_empty() {
+            bail_fail(Fail::refused("`set ... type` needs a type (GPT: GUID text, MBR: 0xXX; see diskedit help set)".to_string()));
+        }
         let r = match crate::table::table_label(&src) {
             Ok(crate::table::TableLabel::Gpt) => {
                 let Some(guid) = crate::support::parse_guid(&value) else {
@@ -348,8 +363,16 @@ pub(crate) fn cmd_set(a: &Args) -> Outcome {
         };
     }
     if key == "flag" {
-        if value.is_empty() { crate::args::usage(); }
-        let on = match state.as_str() { "on" => true, "off" => false, _ => crate::args::usage() };
+        if value.is_empty() {
+            bail_fail(Fail::refused("`set ... flag` needs a flag name and on|off (see diskedit help set)".to_string()));
+        }
+        let on = match state.as_str() {
+            "on" => true,
+            "off" => false,
+            other => bail_fail(Fail::refused(format!(
+                "`set ... flag` takes on or off, not {other:?} (see diskedit help set)"
+            ))),
+        };
         let r = match crate::table::table_label(&src) {
             Ok(crate::table::TableLabel::Gpt) => crate::gpt_policy::GptFlag::parse(&value)
                 .and_then(|f| crate::gpt_policy::set_gpt_flag(&mut src, part, f, on)),
@@ -379,14 +402,19 @@ pub(crate) fn cmd_set(a: &Args) -> Outcome {
                 (false, false) if value == "random" => fsops::UuidRequest::NewRandom,
                 (false, false) => fsops::UuidRequest::Explicit(value.clone()),
                 // 既没给值也没给 --random：无从知道用户要什么
-                (false, true) => crate::args::usage(),
+                (false, true) => bail_fail(Fail::refused(
+                    "`set ... uuid` needs a UUID, or --random to generate one (see diskedit help set)"
+                        .to_string(),
+                )),
             };
             if let Err(msg) = check_uuid_request(fstype, &req) {
                 bail_fail(Fail::refused(msg));
             }
             fsops::set_uuid(&src, part, fstype, &req)
         }
-        _ => crate::args::usage(),
+        other => bail_fail(Fail::refused(format!(
+            "unknown property {other:?} for `set` — use name, label, uuid, flag or type (see diskedit help set)"
+        ))),
     };
     match r {
         Ok(()) => {

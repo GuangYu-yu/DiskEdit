@@ -14,7 +14,7 @@ usage:
 
 examples:
   diskedit info /dev/sdb
-  diskedit resize /dev/sdb1 +2G
+  diskedit resize /dev/sdb:1 +2G
   diskedit resize disk.img grow --allow-move --yes
   diskedit undo /dev/sdb --yes
 
@@ -162,11 +162,21 @@ pub(crate) fn flag_spec(name: &str) -> Option<&'static FlagSpec> {
     FLAGS.iter().find(|f| f.name == name)
 }
 
+/// `--start` 的两种给法。合成一个字段后"数值起点与 `end` 同时出现"不再是可构造的
+/// 状态，消费点也就不必各自判一次互斥
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StartSelector {
+    /// `--start <LBA>`
+    Lba(u64),
+    /// `--start end`：贴着可用区尾部打包（起点钉在 `last_usable_lba - len + 1`）
+    PinnedToEnd,
+}
+
 pub(crate) struct Args {
     pub(crate) target: String,
     pub(crate) part: Option<PartSelector>,
     pub(crate) grow: Option<PartSelector>,
-    pub(crate) start: Option<u64>,
+    pub(crate) start: Option<StartSelector>,
     pub(crate) end: Option<u64>,
     pub(crate) size: Option<u64>,
     pub(crate) fs: Option<String>,
@@ -190,10 +200,17 @@ pub(crate) struct Args {
     pub(crate) no_fs: bool,
     pub(crate) grow_lv: bool,
     pub(crate) lv: Option<String>,
-    pub(crate) start_end: bool,
     pub(crate) pos: Vec<String>,
     /// 用户显式给出的旗标（按出现顺序）：fail-closed 校验的消费对账依据
     pub(crate) seen: Vec<&'static str>,
+}
+
+impl Args {
+    /// 用户是否显式给出了该旗标。`seen` 是唯一记录：默认值（`align` 的 `mib`、
+    /// `chunk_mib` 的 4）与"用户给了这个值"在字段上分不开，判断"给没给"只查这里
+    pub(crate) fn given(&self, flag: &str) -> bool {
+        self.seen.contains(&flag)
+    }
 }
 
 /// 消费对账：命令收到自己不消费的旗标即拒绝。不做此检查的后果不是报错
@@ -217,10 +234,21 @@ pub(crate) fn refuse_flags_on_bare_help(a: &Args) {
     }
 }
 
+/// 该命令声明的 SIZE 槽位是不是当前的 `pos` 下标。声明取自命令表（与分派同源）；
+/// 表里没有的名字（`help`/`--help` 等）一律不收 `-` 开头的值
+fn sized_position(cmd: &str, index: usize) -> bool {
+    crate::cmd::find(cmd).is_some_and(|c| c.size_pos == Some(index))
+}
+
 pub(crate) fn parse_args() -> (String, Args) {
+    parse_args_from(std::env::args_os().skip(1))
+}
+
+/// 解析一段参数列表（不含程序名）。用法错误经 [`bail_fail`] 直接结束进程
+fn parse_args_from(argv: impl Iterator<Item = std::ffi::OsString>) -> (String, Args) {
     // `env::args()` 遇非 UTF-8 参数会 panic（退出码 101，越出 0/10/20/30 契约）。
     // 换成 args_os 后逐个转 &str：转不动就是一次可读的用法拒绝，而不是崩溃
-    let mut it = std::env::args_os().skip(1).map(|arg| {
+    let mut it = argv.map(|arg| {
         arg.into_string().unwrap_or_else(|bad| {
             bail_fail(Fail::refused(format!(
                 "argument {:?} is not valid UTF-8 — diskedit takes its arguments as text",
@@ -239,7 +267,6 @@ pub(crate) fn parse_args() -> (String, Args) {
         allow_move: false,
         grow_lv: false,
         lv: None,
-        start_end: false,
         pos: Vec::new(),
         seen: Vec::new(),
     };
@@ -317,22 +344,23 @@ pub(crate) fn parse_args() -> (String, Args) {
             "--size" => {
                 a.seen.push("--size");
                 let v = take_value(&mut inline, &mut it, "--size");
-                // 与 resize 的 SIZE 同一单位语法（k/m/g/t，1024 进制，无单位 = 字节），只接受绝对值
+                // 与 resize 的 SIZE 同一单位语法（k/m/g/t，1024 进制，无单位 = 字节，可带小数），
+                // 只接受绝对值
                 a.size = Some(match parse_size_delta(&v) {
-                    Some((bytes, 0, false)) => bytes,
+                    Some(SizeArg::Bytes { kind: 0, bytes }) => bytes,
                     Some(_) => bad_arg("--size", &v, " (absolute size only: use 32M, not +32M/-32M/32%)"),
-                    None => bad_arg("--size", &v, " (use 10G | 500M | plain bytes, e.g. 33554432)"),
+                    None => bad_arg("--size", &v, " (use 10G | 500M | 1.5G | plain bytes, e.g. 33554432)"),
                 });
             }
             "--fs" => { a.seen.push("--fs"); a.fs = Some(take_value(&mut inline, &mut it, "--fs")); }
             "--start" => {
                 a.seen.push("--start");
                 let v = take_value(&mut inline, &mut it, "--start");
-                if v.eq_ignore_ascii_case("end") {
-                    a.start_end = true; // 尾部打包：挪到 last_usable 内最后位置
+                a.start = Some(if v.eq_ignore_ascii_case("end") {
+                    StartSelector::PinnedToEnd // 尾部打包：挪到 last_usable 内最后位置
                 } else {
-                    a.start = Some(v.parse().unwrap_or_else(|_| bad_arg("--start", &v, " (LBA, e.g. 2048)")));
-                }
+                    StartSelector::Lba(v.parse().unwrap_or_else(|_| bad_arg("--start", &v, " (LBA, e.g. 2048)")))
+                });
             }
             "--end" => {
                 a.seen.push("--end");
@@ -387,9 +415,12 @@ pub(crate) fn parse_args() -> (String, Args) {
                 }
             }
             // 未识别的以 `-` 开头的 token 是旗标笔误，不能降级成位置参数：值槽全程不校验
-            // 前缀（`set img:1 name --bogs` 会把分区名改成 `--bogs`）。`-10G` 这类相对尺寸
-            // 是唯一合法的例外，判据与 SIZE 语法同源；其余以 `-` 开头的值须写在 `--` 之后
-            arg if arg.starts_with('-') && parse_size_delta(arg).is_none() => {
+            // 前缀（`set img:1 name --bogs` 会把分区名改成 `--bogs`）。相对尺寸（`-10`、
+            // `-10G`）是唯一合法的例外，且只在这个命令声明的 SIZE 槽位放行——放宽到任何
+            // 位置，`info -10` 会把一次旗标笔误变成打开失败；其余须写在 `--` 之后
+            arg if arg.starts_with('-')
+                && (parse_size_delta(arg).is_none() || !sized_position(&cmd, positional.len())) =>
+            {
                 bail_fail(Fail::refused(format!(
                     "unknown flag `{arg}` — run `diskedit help` for the accepted flags (a value starting with `-` is \
                      accepted as a relative size, e.g. -10G, or after `--`)"
@@ -424,9 +455,16 @@ pub(crate) fn parse_args() -> (String, Args) {
             }
         }
     }
-    // `--version` 与 `--help` 同样先解析完整条命令行：白名单对账仍然生效，
-    // 它不能成为绕过参数校验的旁路。帮助更具体，故排在版本之前
+    // `--version` 与 `--help` 同样先解析完整条命令行：版本是主动请求，但不是参数
+    // 校验的旁路——未消费的旗标与多余位置参数一律拒绝，而不是静默丢弃。
+    // 帮助更具体，故排在版本之前
     if version {
+        if let Some(f) = a.seen.first() {
+            bail_fail(Fail::refused(format!("`--version` takes no other options (got {f})")));
+        }
+        if let Some(t) = positional.first() {
+            bail_fail(Fail::refused(format!("`--version` takes no other arguments (got {t})")));
+        }
         version_help();
     }
     // 无 target（含裸调用/未知命令缺参）时打印帮助而非静默退出；但命令位本身就是
@@ -437,7 +475,14 @@ pub(crate) fn parse_args() -> (String, Args) {
             refuse_flags_on_bare_help(&a);
             usage_help()
         }
-        None => usage(),
+        // 已知命令缺目标：定向说缺什么；未知命令（`diskedit bogs`）仍打整份用法，
+        // 那才是"没有这条命令"该有的答复
+        None => match crate::cmd::find(cmd.as_str()) {
+            None => usage(),
+            Some(_) => bail_fail(Fail::refused(format!(
+                "`{cmd}` needs a target (an image path or block device) — see diskedit help {cmd}"
+            ))),
+        },
     };
     let (target, part) =
         crate::dev::parse_target(&target).unwrap_or_else(|e| bail_fail(Fail::refused(e)));
@@ -462,11 +507,19 @@ fn bad_arg(flag: &str, v: &str, hint: &str) -> ! {
     bail_fail(Fail::refused(format!("bad value {v:?} for {flag}{hint}")))
 }
 
-/// SIZE 字符串 →（数值, 类别 0=绝对/1=扩/-1=缩, 是否百分号）。
-/// 单位 k/m/g/t（1024 进制，大小写均可），无单位 = 字节；"+10%/-10%" 为锚定当前
-/// 分区字节数的百分比增量；绝对形式 "10%" 有歧义故不支持；"grow" 由调用方先行处理。
-/// 只有整数：小数形式（1.5G）会落到扇区截断，写下的值与实际布局不符
-pub(crate) fn parse_size_delta(s: &str) -> Option<(u64, i8, bool)> {
+/// SIZE 数值。`Bytes` 已按单位折成整字节（小数向下取整）；`Percent` 保留分子/
+/// 分母：百分比的基数是锁下才拿得到的当前尺寸，解析层除不了
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum SizeArg {
+    Bytes { kind: i8, bytes: u64 },
+    Percent { kind: i8, num: u64, denom: u64 },
+}
+
+/// SIZE 字符串解析。单位 k/m/g/t（1024 进制，大小写均可），无单位 = 字节；
+/// 小数按十进制位精确换算（1.5G = 1610612736 字节，不经浮点）；"+10%/-10%"
+/// 为锚定当前分区字节数的百分比增量，同样接受小数（+1.5%）；绝对形式 "10%"
+/// 有歧义故不受理；"grow" 由调用方先行处理
+pub(crate) fn parse_size_delta(s: &str) -> Option<SizeArg> {
     let (kind, rest) = match s.as_bytes().first()? {
         b'+' => (1i8, &s[1..]),
         b'-' => (-1i8, &s[1..]),
@@ -480,54 +533,250 @@ pub(crate) fn parse_size_delta(s: &str) -> Option<(u64, i8, bool)> {
     if rest.starts_with('+') || rest.starts_with('-') {
         return None;
     }
-    if let Some(num) = rest.strip_suffix('%') {
+    if let Some(pct) = rest.strip_suffix('%') {
         if kind == 0 {
             return None;
         }
-        return Some((num.parse().ok()?, kind, true));
+        let (num, denom) = parse_decimal(pct)?;
+        return Some(SizeArg::Percent { kind, num, denom });
     }
-    let mult = match rest.as_bytes().last()? {
-        b'k' | b'K' => 1024,
-        b'm' | b'M' => 1024 * 1024,
-        b'g' | b'G' => 1024 * 1024 * 1024,
-        b't' | b'T' => 1024u64 * 1024 * 1024 * 1024,
-        b'0'..=b'9' => return rest.parse::<u64>().ok().map(|v| (v, kind, false)),
+    let (mult, text) = match rest.as_bytes().last()? {
+        b'k' | b'K' => (1024u64, &rest[..rest.len() - 1]),
+        b'm' | b'M' => (1024 * 1024, &rest[..rest.len() - 1]),
+        b'g' | b'G' => (1024 * 1024 * 1024, &rest[..rest.len() - 1]),
+        b't' | b'T' => (1024u64 * 1024 * 1024 * 1024, &rest[..rest.len() - 1]),
+        b'0'..=b'9' | b'.' => (1u64, rest),
         _ => return None,
     };
-    let n: u64 = rest[..rest.len() - 1].parse().ok()?;
-    Some((n.checked_mul(mult)?, kind, false))
+    let (num, denom) = parse_decimal(text)?;
+    // 字节数 = num * mult / denom，向下取整；超过 u64 的尺寸不存在，直接拒绝
+    let bytes = (num as u128).checked_mul(mult as u128)?.checked_div(denom as u128)?;
+    (bytes <= u64::MAX as u128).then_some(SizeArg::Bytes { kind, bytes: bytes as u64 })
+}
+
+/// 十进制字面量 →（分子, 分母），整数写法分母为 1。小数位直接进位到分母，
+/// 全程整数运算：1.5G 必须正好是 1610612736 字节，浮点会在边界上给出相邻值
+fn parse_decimal(text: &str) -> Option<(u64, u64)> {
+    if text.is_empty() || text.ends_with('.') {
+        return None;
+    }
+    let (int_part, frac_part) = match text.split_once('.') {
+        Some((i, f)) => (i, f),
+        None => (text, ""),
+    };
+    if (int_part.is_empty() && frac_part.is_empty())
+        || !int_part.bytes().all(|b| b.is_ascii_digit())
+        || !frac_part.bytes().all(|b| b.is_ascii_digit())
+    {
+        return None;
+    }
+    // 分母 10^f 必须落在 u64：小数位上限 18
+    if frac_part.len() > 18 {
+        return None;
+    }
+    let denom = 10u64.checked_pow(frac_part.len() as u32)?;
+    let int: u64 = if int_part.is_empty() { 0 } else { int_part.parse().ok()? };
+    let frac: u64 = if frac_part.is_empty() { 0 } else { frac_part.parse().ok()? };
+    let num = (int as u128).checked_mul(denom as u128)?.checked_add(frac as u128)?;
+    (num <= u64::MAX as u128).then_some((num as u64, denom))
 }
 
 #[cfg(test)]
-mod tests {
-    use super::parse_size_delta;
+#[path = "../tests/cli/flag_probes.rs"]
+mod flag_probes;
 
-    /// SIZE 解析（单位 k/m/g/t = 1024 进制、无单位 = 字节、+/- 增量、+N%/-N%）
+#[cfg(test)]
+mod tests {
+    use super::{parse_size_delta, SizeArg};
+
+    fn bytes(kind: i8, v: u64) -> Option<SizeArg> {
+        Some(SizeArg::Bytes { kind, bytes: v })
+    }
+
+    fn percent(kind: i8, num: u64, denom: u64) -> Option<SizeArg> {
+        Some(SizeArg::Percent { kind, num, denom })
+    }
+
+    /// 探针与注册表一一对应：集合相等、双方无重名、形态一致、值型有样例且布尔
+    /// 无样例。新增第 21 个旗标却忘记写探针，会在这里失败，而不是让集成测试
+    /// 悄悄少覆盖一条
+    #[test]
+    fn flag_probes_cover_the_registry() {
+        use super::flag_probes::{Kind, PROBES};
+        use super::FLAGS;
+
+        let mut registered = std::collections::BTreeSet::new();
+        for f in FLAGS {
+            assert!(registered.insert(f.name), "duplicate registry entry: {}", f.name);
+        }
+        let mut probed = std::collections::BTreeSet::new();
+        for p in PROBES {
+            assert!(probed.insert(p.name), "duplicate probe: {}", p.name);
+            let spec = FLAGS
+                .iter()
+                .find(|f| f.name == p.name)
+                .unwrap_or_else(|| panic!("probe for unregistered flag: {}", p.name));
+            match p.kind {
+                Kind::Value => {
+                    assert!(spec.value.is_some(), "{} is a boolean in the registry", p.name);
+                    assert!(p.sample.is_some(), "value flag {} needs a sample", p.name);
+                }
+                Kind::Bool => {
+                    assert!(spec.value.is_none(), "{} takes a value in the registry", p.name);
+                    assert!(p.sample.is_none(), "boolean flag {} must not carry a sample", p.name);
+                }
+            }
+            // 探针点名的命令必须存在，且该旗标在它的白名单里
+            let allowed = crate::cmd::flags_for(p.command)
+                .unwrap_or_else(|| panic!("probe names unknown command: {}", p.command));
+            assert!(allowed.contains(&p.name), "`{}` does not accept {}", p.command, p.name);
+        }
+        assert_eq!(probed, registered, "probe set and registry must match exactly");
+    }
+
+    /// SIZE 解析（单位 k/m/g/t = 1024 进制、无单位 = 字节、小数、+/- 增量、+N%/-N%）
     #[test]
     fn size_delta_parsing() {
         const G: u64 = 1024 * 1024 * 1024;
-        assert_eq!(parse_size_delta("1024"), Some((1024, 0, false)));
-        assert_eq!(parse_size_delta("10G"), Some((10 * G, 0, false)));
-        assert_eq!(parse_size_delta("10g"), Some((10 * G, 0, false)));
-        assert_eq!(parse_size_delta("512"), Some((512, 0, false)));
-        assert_eq!(parse_size_delta("+2k"), Some((2048, 1, false)));
-        assert_eq!(parse_size_delta("-500M"), Some((500 * 1024 * 1024, -1, false)));
-        assert_eq!(parse_size_delta("1T"), Some((1024 * G, 0, false)));
-        assert_eq!(parse_size_delta("+10%"), Some((10, 1, true)));
-        assert_eq!(parse_size_delta("-10%"), Some((10, -1, true)));
+        assert_eq!(parse_size_delta("1024"), bytes(0, 1024));
+        assert_eq!(parse_size_delta("10G"), bytes(0, 10 * G));
+        assert_eq!(parse_size_delta("10g"), bytes(0, 10 * G));
+        assert_eq!(parse_size_delta("512"), bytes(0, 512));
+        assert_eq!(parse_size_delta("+2k"), bytes(1, 2048));
+        assert_eq!(parse_size_delta("-500M"), bytes(-1, 500 * 1024 * 1024));
+        assert_eq!(parse_size_delta("1T"), bytes(0, 1024 * G));
+        // 小数：十进制位精确换算，1.5G 正好是 1610612736 字节；不进位、不取近似
+        assert_eq!(parse_size_delta("1.5G"), bytes(0, 1610612736));
+        assert_eq!(parse_size_delta("+1.5G"), bytes(1, 1610612736));
+        assert_eq!(parse_size_delta(".5G"), bytes(0, 1024 * 1024 * 1024 / 2));
+        assert_eq!(parse_size_delta("0.5M"), bytes(0, 1024 * 1024 / 2));
+        // 字节数不整除时向下取整：1.1G = 1181116006.4 → 1181116006
+        assert_eq!(parse_size_delta("1.1G"), bytes(0, 1181116006));
+        // 百分比同样接受小数：基数在调用方（锁下当前尺寸），这里保留分子/分母
+        assert_eq!(parse_size_delta("+10%"), percent(1, 10, 1));
+        assert_eq!(parse_size_delta("-10%"), percent(-1, 10, 1));
+        assert_eq!(parse_size_delta("+1.5%"), percent(1, 15, 10));
         // u64 边界与乘法溢出：溢出返回 None，绝不回绕
-        assert_eq!(parse_size_delta("18446744073709551615"), Some((u64::MAX, 0, false)));
+        assert_eq!(parse_size_delta("18446744073709551615"), bytes(0, u64::MAX));
         assert_eq!(parse_size_delta("18446744073709551615G"), None);
         assert_eq!(parse_size_delta("18446744073709551616"), None);
         // 绝对百分比有歧义（盘的 10% 还是分区的 10%），不支持；其余非法输入
-        for bad in ["", "+", "-", "%", "10%", "+%", "G", "+G", "10KB", "1.5G", "10 G", "0x10", " 1G", "1b", "512B"] {
+        for bad in ["", "+", "-", "%", "10%", "+%", "G", "+G", "10KB", "10 G", "0x10", " 1G", "1b", "512B",
+                    "1.G", ".", "1..5G", "1.5.5G", "1.5%", "+.G"] {
             assert_eq!(parse_size_delta(bad), None, "{bad:?} must be rejected");
         }
         // 符号只在最前出现一次：+10G/-10G 合法，重复/混用符号一律非法
-        assert_eq!(parse_size_delta("+10G"), Some((10 * G, 1, false)));
-        assert_eq!(parse_size_delta("-10G"), Some((10 * G, -1, false)));
+        assert_eq!(parse_size_delta("+10G"), bytes(1, 10 * G));
+        assert_eq!(parse_size_delta("-10G"), bytes(-1, 10 * G));
         for bad in ["++10G", "--10G", "+++10G", "+-10G", "-+10G", "++10%", "+ 10G"] {
             assert_eq!(parse_size_delta(bad), None, "{bad:?} must be rejected");
         }
+    }
+
+    /// USAGE 的 examples 段是接口的一部分：命令名必须真实存在；把分区选择器写在
+    /// 目标后缀上的命令，块设备目标必须带 `:N`——否则示例在 Linux 上会被"目标须为
+    /// 整盘"的拒绝档拦下，用户照抄得到的是失败
+    #[test]
+    fn usage_examples_follow_the_command_syntax() {
+        let examples: Vec<&str> = super::USAGE_TEXT
+            .lines()
+            .skip_while(|l| !l.starts_with("examples:"))
+            .skip(1)
+            .take_while(|l| l.starts_with("  "))
+            .map(str::trim)
+            .collect();
+        assert!(!examples.is_empty(), "USAGE must keep an examples block");
+        // resize 的整盘镜像（superfloppy）不带后缀，故本规则只约束 `/dev/` 下的块设备路径
+        const PART_SUFFIX_REQUIRED: &[&str] = &["resize", "move", "copy", "delete", "set", "check", "mkfs"];
+        for line in examples {
+            let mut it = line.split_whitespace();
+            assert_eq!(it.next(), Some("diskedit"), "example must start with the binary name: {line}");
+            let cmd = it.next().unwrap_or_else(|| panic!("example has no command: {line}"));
+            assert!(crate::cmd::find(cmd).is_some(), "example names unknown command {cmd}: {line}");
+            let Some(target) = it.next() else { continue };
+            if PART_SUFFIX_REQUIRED.contains(&cmd) && target.starts_with("/dev/") {
+                let suffix = target.rsplit_once(':').map(|(_, p)| p).unwrap_or("");
+                assert!(
+                    (suffix.chars().all(|c| c.is_ascii_digit()) && !suffix.is_empty())
+                        || suffix.eq_ignore_ascii_case("last"),
+                    "{cmd}: block-device target {target} has no partition selector :N: {line}"
+                );
+            }
+        }
+    }
+
+    /// README 的选项表与注册表双向对账：表里每个 `--flag` 必须已注册，取值形态与
+    /// 占位符同 `FLAGS` 一致；注册表里每个旗标必须出现在表里。README 不参与解析，
+    /// 却是对用户承诺能力的第二处文本，漏写或写错只能靠这条对账发现
+    #[test]
+    fn readme_options_match_the_registry() {
+        use super::{flag_spec, FLAGS};
+
+        const README: &str = include_str!("../README.md");
+        let rows: Vec<&str> = README
+            .lines()
+            .skip_while(|l| l.trim() != "## 选项")
+            .skip(1)
+            .take_while(|l| !l.starts_with("## "))
+            .collect();
+        assert!(!rows.is_empty(), "README must carry a `## 选项` section");
+
+        // 中转字符：取值列里的 `\|` 是字面竖线，直接 split('|') 会把一个单元格切成两个
+        const PIPE: char = '\u{00A6}';
+        let mut documented: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        for line in rows {
+            let row = line.replace("\\|", &PIPE.to_string());
+            let Some(rest) = row.strip_prefix('|') else { continue };
+            let cells: Vec<&str> = rest.split('|').collect();
+            // 只有反引号包起来的 `--flag` 才是表项：表头与分隔行（`|---|`）也以 `|`
+            // 开头，但它们的第一格不是旗标写法
+            let cell = cells[0].trim();
+            if !cell.starts_with("`--") {
+                continue;
+            }
+            let name = cell.trim_matches('`');
+            assert!(documented.insert(name.to_string()), "README documents {name} twice");
+            let spec = flag_spec(name)
+                .unwrap_or_else(|| panic!("README documents an unregistered flag: {name}"));
+            let value = cells[1].trim().replace(PIPE, "|");
+            match spec.value {
+                None => assert_eq!(
+                    value, "—",
+                    "{name} is a boolean in the registry, so README must give it no value"
+                ),
+                Some(placeholder) => {
+                    assert_ne!(value, "—", "{name} takes a value but README calls it a boolean");
+                    assert_eq!(value, placeholder, "{name}: README placeholder must match the registry");
+                }
+            }
+        }
+        let registered: std::collections::BTreeSet<String> =
+            FLAGS.iter().map(|f| f.name.to_string()).collect();
+        assert_eq!(documented, registered, "README options and the registry must match exactly");
+    }
+
+    /// `given` 只认用户显式给出的旗标：默认值（`align` 的 mib、`chunk_mib` 的 4）
+    /// 与"显式给了同一个值"必须是两种事实，否则 `--start end --align mib` 会被
+    /// 当成"没给 --align"而静默忽略
+    #[test]
+    fn given_reports_only_explicit_flags() {
+        use std::ffi::OsString;
+
+        fn parse(tokens: &[&str]) -> super::Args {
+            let argv: Vec<OsString> = tokens.iter().copied().map(OsString::from).collect();
+            super::parse_args_from(argv.into_iter()).1
+        }
+
+        let a = parse(&["move", "img:1"]);
+        assert!(!a.given("--align"), "--align was not given");
+        assert!(!a.given("--chunk-size"), "--chunk-size was not given");
+        assert_eq!(a.align, "mib");
+        assert_eq!(a.chunk_mib, 4);
+
+        let a = parse(&["move", "img:1", "--align", "mib", "--chunk-size", "8"]);
+        assert!(a.given("--align"), "explicit --align mib must be distinguishable from the default");
+        assert!(a.given("--chunk-size"), "explicit --chunk-size must be recorded");
+        assert_eq!(a.align, "mib");
+        assert_eq!(a.chunk_mib, 8);
     }
 }

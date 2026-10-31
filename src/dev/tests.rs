@@ -761,8 +761,8 @@ pub(crate) fn block_identity_refuses_unresolvable_topology() {
 }
 
 /// [`read_sysfs_attr`] 的三态必须可分（上条测试的细粒度锁）："不存在 ⇒ None"
-/// 是整设备的正常路径，"读失败 ⇒ Err" 则不得降级——两者曾被 `.ok()` 压成同一个
-/// None，分区身份会在读不出来的那一刻静默变成整设备身份
+/// 是整设备的正常路径，"读失败 ⇒ Err" 则不得降级——压成同一个 None 会让分区身份
+/// 在读不出来的那一刻静默变成整设备身份
 #[cfg(target_os = "linux")]
 #[test]
 pub(crate) fn sysfs_attr_distinguishes_missing_from_read_failure() {

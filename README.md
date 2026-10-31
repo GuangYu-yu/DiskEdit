@@ -81,7 +81,34 @@ FS 层要 root 是因为经 `losetup` 映射分区；块设备写入靠设备节
 
 `resize` 的 `SIZE` 支持绝对值（`10G`）、增量（`+2G` / `-500M`）、百分比（`+10%` / `-10%`）与 `grow` 关键字。
 
-`--sector-size N` 是全局选项：镜像文件不携带扇区信息，默认按 512 处理，4Kn 镜像须显式指定。`resizefs` 的在线形式（挂载点）不适用该选项，显式拒绝。
+`--sector-size N` 只对镜像文件适用：镜像不携带扇区信息，默认按 512 处理，4Kn 镜像须显式指定。块设备的逻辑扇区大小由内核报告（BLKSSZGET），显式给出即拒绝；各命令是否接受该选项以 `help <CMD>` 为准（`abandon` 不接受，`resizefs` 的在线形式（挂载点）显式拒绝）。
+
+## 选项
+
+各命令实际接受哪些选项以 `help <CMD>` 为准；下表是全部选项与取值形态，取值列为 `—` 的选项不带值。
+
+| 选项 | 取值 | 含义 |
+|---|---|---|
+| `--align` | A | 放置对齐：`mib`、`cyl` 或 `none`（默认 `mib` = 1MiB；`none` 按给定 LBA 使用） |
+| `--allow-move` | — | `resize` 在 GPT 上允许搬开挡路的分区 |
+| `--chunk-size` | N | 搬移的恢复粒度（MiB，默认 4）；中断后续跑须用同值 |
+| `--end` | LBA | `add`、`resize-part` 的结束 LBA |
+| `--fs` | F | `create` 时一并创建的文件系统 |
+| `--grow` | N\|last | `plan`、`apply` 要扩展的分区 |
+| `--grow-lv` | — | `resize` 在 LVM PV 上继续扩 LV 及其文件系统 |
+| `--grow-to-end` | — | `resize-part` 末端钉在可用空间末尾 |
+| `--keep-partuuid` | — | `copy` 沿用源分区的 PARTUUID |
+| `--lv` | NAME | `--grow-lv` 要扩的 LV（省略时取该 PV 上唯一的 LV） |
+| `--name` | S | 分区名 |
+| `--no-fs` | — | 跳过文件系统步骤 |
+| `--overwrite-partition-data` | — | `new` 授权覆盖旧分区落入新表元数据写入区的字节 |
+| `--random` | — | `set uuid` 要求目标生成新随机值（仅 ntfs） |
+| `--sector-size` | N | 镜像逻辑扇区大小（512..=65536 的 2 的幂） |
+| `--size` | SIZE | `create` 的绝对值尺寸 |
+| `--start` | LBA\|end | 新起点 LBA；`move`、`copy` 另接受 `end` |
+| `--table` | gpt\|msdos | `new` 创建的分区表类型 |
+| `--type` | T | 分区类型（GPT 用 GUID 文本，MBR 用 `0xXX`） |
+| `--yes` | — | 确认破坏性或未点名的搬移 |
 
 **`check` 不是零写入**：ext 走 `e2fsck -fp`（preen 自动修复），ntfs 走 `ntfsfix -d`（清 dirty 位），两者都可能写入。只读检查为 xfs（`xfs_repair -n`）、btrfs（`btrfs check`）、vfat（`fsck.vfat -n`）、exfat（`fsck.exfat -n`）、f2fs（`fsck.f2fs` 无参）。
 

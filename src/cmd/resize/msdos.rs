@@ -166,7 +166,7 @@ pub(crate) fn cmd_resize_msdos(a: &Args, pref: PartSelector, size: Option<&str>,
     }
     // 离线路径不消费 chunk：在线检查（resize_online）只在块设备上执行，镜像文件
     // 与非 Linux 平台会绕过它落到这里，取值校验也随之跳过
-    if a.seen.contains(&"--chunk-size") {
+    if a.given("--chunk-size") {
         bail_fail(Fail::refused(
             "--chunk-size has no effect for MBR resize — MBR cannot relocate blocking partitions".to_string(),
         ));
@@ -279,7 +279,9 @@ pub(crate) fn cmd_resize_msdos(a: &Args, pref: PartSelector, size: Option<&str>,
         crate::movepart::fault_mbr_after_table_write();
         mbr_grow_finish(a, &mut src, p, is_pv, is_block)
     } else {
-        let Some(bytes) = target else { crate::args::usage() };
+        let Some(bytes) = target else {
+            bail_fail(Fail::refused("`resize` needs a size: diskedit resize <TARGET>[:N] <SIZE> (see diskedit help resize)".to_string()));
+        };
         if bytes < ss {
             bail_fail(Fail::refused(format!("size {bytes} < one sector ({ss})")));
         }

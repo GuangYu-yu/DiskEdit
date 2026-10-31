@@ -157,7 +157,7 @@ impl Outcome {
                 }
             }
             (mine, theirs) => {
-                if theirs.is_applied() {
+                if theirs.has_layout_write() {
                     mine
                 } else {
                     theirs
@@ -166,7 +166,9 @@ impl Outcome {
         }
     }
 
-    pub fn is_applied(&self) -> bool {
+    /// 布局写入已经发生（`Applied` 的任何形态，包括待办非空与内核视图过期）。
+    /// 只回答"盘上有没有被改过"，不回答"是否完全成功"——后者看 `is_complete`
+    pub(crate) fn has_layout_write(&self) -> bool {
         matches!(self, Self::Applied { .. })
     }
 

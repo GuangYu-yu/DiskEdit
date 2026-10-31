@@ -773,8 +773,9 @@ mod tests {
             part: None, grow: None, start: None, end: None, size: None,
             fs: None, name: None, keep_partuuid: false, type_guid: None, table: None,
             yes: true, overwrite_partition_data: false, random: false, sector_size: None,
-            align: String::new(), chunk_mib: 0, grow_to_end: false,
-            allow_move: false, no_fs: false, grow_lv: false, start_end: false, lv: None,
+            align: String::new(), chunk_mib: 0,
+            grow_to_end: false,
+            allow_move: false, no_fs: false, grow_lv: false, lv: None,
             pos: Vec::new(), seen: Vec::new(),
         };
         let code = super::cmd_undo(&a);
@@ -1018,8 +1019,9 @@ mod tests {
             part: None, grow: None, start: None, end: None, size: None,
             fs: None, name: None, keep_partuuid: false, type_guid: None, table: None,
             yes: true, overwrite_partition_data: false, random: false, sector_size: None,
-            align: String::new(), chunk_mib: 0, grow_to_end: false,
-            allow_move: false, no_fs: false, grow_lv: false, start_end: false, lv: None,
+            align: String::new(), chunk_mib: 0,
+            grow_to_end: false,
+            allow_move: false, no_fs: false, grow_lv: false, lv: None,
             pos: Vec::new(), seen: Vec::new(),
         }
     }
