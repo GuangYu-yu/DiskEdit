@@ -24,6 +24,48 @@ fn duplicate_flags_value_rejected_boolean_idempotent() {
     assert_eq!(c, 10, "{e}");
 }
 
+/// `--version` 是主动请求，但不是参数校验的旁路：任何多余旗标或位置参数都拒绝，
+/// 已知旗标（`--yes`、`--sector-size 4096`）也不例外
+#[test]
+fn version_rejects_extra_arguments() {
+    let exe = env!("CARGO_BIN_EXE_DiskEdit");
+    let run = |args: &[&str]| -> (i32, String, String) {
+        let out = Command::new(exe).args(args).output().unwrap();
+        (out.status.code().unwrap_or(-1),
+         String::from_utf8_lossy(&out.stdout).into_owned(),
+         String::from_utf8_lossy(&out.stderr).into_owned())
+    };
+
+    let (c, out, e) = run(&["--version"]);
+    assert_eq!(c, 0, "{e}");
+    assert!(out.contains(env!("CARGO_PKG_VERSION")), "{out}");
+
+    for extra in [vec!["--sector-size", "4096"], vec!["x.bin"], vec!["--yes"]] {
+        let mut args = vec!["--version"];
+        args.extend(extra.iter().copied());
+        let (c, _, e) = run(&args);
+        assert_eq!(c, 10, "extra argument must be refused: {extra:?}: {e}");
+        assert!(e.contains("`--version` takes no"), "{e}");
+    }
+}
+
+/// 详助首行必须点名命令自己：plan/apply 共用正文，首行写错命令名会让 `help apply`
+/// 显示 plan 的 SYNOPSIS；反向旗标对账只扫首行，apply 自己的旗标因此不被核对
+#[test]
+fn each_help_names_its_own_command_first() {
+    let exe = env!("CARGO_BIN_EXE_DiskEdit");
+    let run = |args: &[&str]| -> (i32, String) {
+        let out = Command::new(exe).args(args).output().unwrap();
+        (out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stdout).into_owned())
+    };
+    for cmd in ["plan", "apply", "resize", "move", "copy"] {
+        let (c, out) = run(&["help", cmd]);
+        assert_eq!(c, 0, "help {cmd} must succeed");
+        let first = out.lines().next().unwrap_or("");
+        assert!(first.contains(&format!("diskedit {cmd}")), "help {cmd} first line is {first:?}");
+    }
+}
+
 /// 错误路径走真实二进制：bail_fail() 会退出进程，进程内测不到，故用 subprocess 断言退出码 + 文案
 #[test]
 fn cli_negative_paths() {
@@ -482,4 +524,136 @@ fn targeted_refusals_are_reported_as_ten() {
     assert!(e.contains("--grow-to-end"), "{e}");
 
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[path = "flag_probes.rs"]
+mod flag_probes;
+
+/// 每条注册旗标的外部行为：两种取值写法都接受，值型重复拒绝（混用写法也拒），
+/// 值型缺值拒绝，布尔带值拒绝、重复幂等。
+///
+/// 探测通道是 `<CMD> ... --help`：帮助在整条命令行解析完、白名单对账之后才输出，
+/// 目标参数在它之后才取，所以退出 0 证明的是"参数层接受了这些形状"，与目标是否
+/// 存在无关。命令名写错或旗标不在该命令白名单里，也会以 10 退出——探针点名的
+/// 命令因此是被验证过的，不是自说自话
+#[test]
+fn every_registered_flag_parses_as_documented() {
+    use flag_probes::{Kind, PROBES};
+
+    let exe = env!("CARGO_BIN_EXE_DiskEdit");
+    let run = |args: &[&str]| -> (i32, String) {
+        let out = Command::new(exe).args(args).output().unwrap();
+        (out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stderr).into_owned())
+    };
+
+    // 每条旗标独立，按条并行：进程启动是本机最慢的一环，串行跑会把一条本应
+    // 秒级完成的契约测试拖成一分钟
+    std::thread::scope(|s| {
+        for p in PROBES {
+            let run = &run;
+            s.spawn(move || {
+                let cmd = p.command;
+                match p.kind {
+                    Kind::Value => {
+                        let sample = p.sample.expect("a value probe must carry a sample");
+                        let equal = format!("{}={}", p.name, sample);
+
+                        let (c, e) = run(&[cmd, p.name, sample, "--help"]);
+                        assert_eq!(c, 0, "`{cmd} {} {sample}` must parse: {e}", p.name);
+                        let (c, e) = run(&[cmd, equal.as_str(), "--help"]);
+                        assert_eq!(c, 0, "`{cmd} {equal}` must parse: {e}");
+
+                        // 重复：两种写法各试一次，等号写法不能绕过判重
+                        let twice_space = [cmd, p.name, sample, p.name, sample, "--help"];
+                        let (c, e) = run(&twice_space);
+                        assert_eq!(c, 10, "`{}` twice must be refused: {e}", p.name);
+                        assert!(e.contains("more than once"), "the rejection must say why: {e}");
+
+                        let twice_mixed = [cmd, p.name, sample, equal.as_str(), "--help"];
+                        let (c, e) = run(&twice_mixed);
+                        assert_eq!(c, 10, "`{equal}` after `{} {sample}` must be refused: {e}", p.name);
+                        assert!(e.contains("more than once"), "the rejection must say why: {e}");
+
+                        let (c, e) = run(&[cmd, p.name]);
+                        assert_eq!(c, 10, "`{}` without a value must be refused: {e}", p.name);
+                        assert!(e.contains("requires a value"), "the rejection must say why: {e}");
+                    }
+                    Kind::Bool => {
+                        let (c, e) = run(&[cmd, p.name, "--help"]);
+                        assert_eq!(c, 0, "`{cmd} {}` must parse: {e}", p.name);
+                        let (c, e) = run(&[cmd, p.name, p.name, "--help"]);
+                        assert_eq!(c, 0, "`{}` is idempotent: {e}", p.name);
+
+                        let with_value = format!("{}=1", p.name);
+                        let (c, e) = run(&[cmd, with_value.as_str(), "--help"]);
+                        assert_eq!(c, 10, "`{with_value}` must be refused: {e}");
+                        assert!(e.contains("takes no value"), "the rejection must say why: {e}");
+                    }
+                }
+            });
+        }
+    });
+}
+
+/// 缺参数是定向拒绝，不是整份用法：每种缺失都要点名缺的是哪一项，
+/// 并指向该命令自己的帮助。退出码仍是 10
+#[test]
+fn missing_arguments_are_named() {
+    let dir = std::env::temp_dir().join(format!("diskedit_missing_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let img = dir.join("ok.img");
+    fixture_gpt_image(&img);
+    let img_s = img.to_str().unwrap();
+    let exe = env!("CARGO_BIN_EXE_DiskEdit");
+    let run = |args: &[&str]| -> (i32, String) {
+        let out = Command::new(exe).args(args).output().unwrap();
+        (out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stderr).into_owned())
+    };
+
+    let p = format!("{img_s}:1");
+    let cases: [(&[&str], &str); 6] = [
+        (&["delete"], "`delete` needs a target"),
+        (&["move", p.as_str()], "`move` needs --start"),
+        (&["check", img_s], "`check` needs a partition"),
+        (&["mkfs", p.as_str()], "`mkfs` needs a filesystem type"),
+        (&["set", p.as_str()], "`set` needs a property"),
+        (&["resize", p.as_str()], "specify a SIZE"),
+    ];
+    for (args, needle) in cases {
+        let (c, e) = run(args);
+        assert_eq!(c, 10, "{args:?} must be a usage refusal: {e}");
+        assert!(e.contains(needle), "{args:?} must say {needle:?}: {e}");
+        assert!(!e.contains("usage:"), "{args:?} must not dump the whole usage text: {e}");
+    }
+}
+
+/// 以 `-` 开头的相对尺寸只在命令声明的 SIZE 槽位被接受：
+/// `info -10` 是旗标笔误（10），不是一次打开失败（30）
+#[test]
+fn relative_size_only_in_the_size_slot() {
+    let dir = std::env::temp_dir().join(format!("diskedit_slot_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let img = dir.join("ok.img");
+    fixture_gpt_image(&img);
+    let img_s = img.to_str().unwrap();
+    let exe = env!("CARGO_BIN_EXE_DiskEdit");
+    let run = |args: &[&str]| -> (i32, String) {
+        let out = Command::new(exe).args(args).output().unwrap();
+        (out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stderr).into_owned())
+    };
+
+    let (c, e) = run(&["info", "-10"]);
+    assert_eq!(c, 10, "a hyphen token outside the SIZE slot must be an unknown flag: {e}");
+    assert!(e.contains("unknown flag `-10`"), "{e}");
+
+    // SIZE 槽位照旧接受：`-10` 被当成相对尺寸并按盘上几何换算，报的是尺寸相关的
+    // 拒绝，而不是"未知旗标"
+    let (c, e) = run(&["resize", &format!("{img_s}:1"), "-10"]);
+    assert_eq!(c, 10, "{e}");
+    assert!(!e.contains("unknown flag"), "the size must have reached the SIZE parse: {e}");
+    assert!(e.contains("size"), "the rejection must be about the size: {e}");
+
+    // `--` 之后仍是普通位置参数：这是给以 `-` 开头的路径留的出口
+    let (c, e) = run(&["info", "--", "-10"]);
+    assert_eq!(c, 30, "after `--`, `-10` is a target path: {e}");
 }

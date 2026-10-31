@@ -17,7 +17,7 @@ pub(crate) type OnlineLock = ();
 /// `part` 是**本次操作的那个分区**（入口处解析一次后随行）：收尾要对它做 pvresize/
 /// lvextend，出错的代价是写到别的分区上，故不按写后的表重新解释一次
 pub(crate) fn finish_resize(a: &Args, o: crate::outcome::Outcome, wsrc: Option<&mut WriteSource>, part: u32, is_pv: bool, is_block: bool, old_bytes: u64) -> crate::outcome::Outcome {
-    if !o.is_applied() {
+    if !o.has_layout_write() {
         return o;
     }
     if !o.is_complete() && !is_pv {
@@ -103,8 +103,7 @@ pub(crate) fn resize_done(
         let delta = new_bytes.saturating_sub(old_bytes);
         // pvresize/lvextend 的写入不可回滚：此后回滚表项即"表与内容自相矛盾"，屏障必须
         // 先于该写入落。落点是它存在的唯一位置——GPT/MBR、镜像/块设备的 PV 收尾在此
-        // 汇合，且只有 wsrc 带 journal；比藏在各自表写入函数里少一处各自演化（GPT 旧实现
-        // 在 finalize_growth 落，距实际写入隔了整个收尾流，死亡窗口会无谓锁死 undo）。
+        // 汇合，且只有 wsrc 带 journal；屏障紧贴外部工具调用，死亡窗口不会无谓锁死 undo
         // 在线路径不经 journal（sfdisk 用自己的 fd 写盘，事后也无 undo 可谈），无需屏障
         if let Some(ref mut w) = wsrc {
             w.set_mutation(crate::dev::Mutation::ExternalFsTool);

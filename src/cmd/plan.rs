@@ -5,10 +5,12 @@ use crate::args::Args;
 use crate::dev::PartSelector;
 use crate::movepart;
 
-pub(crate) const HELP: &str = r#"diskedit plan <TARGET> --grow N|last
-diskedit apply <TARGET> --grow N|last [--chunk-size MiB] [--no-fs]
-
-  Grow partition N (or `last`) into all following free space, relocating
+macro_rules! help_with_synopsis {
+    ($synopsis:literal) => {
+        concat!(
+            $synopsis,
+            "\n\n",
+            r#"  Grow partition N (or `last`) into all following free space, relocating
   intervening partitions tail-packed (manual multi-step form of `resize grow`).
   plan prints the operations without touching the disk. apply derives the
   plan under the target lock (the disk may have changed since plan ran) and
@@ -23,7 +25,17 @@ diskedit apply <TARGET> --grow N|last [--chunk-size MiB] [--no-fs]
 
   Options:
     --sector-size N  logical sector size override for raw images (power of two,
-                     512..=65536)"#;
+                     512..=65536)"#
+        )
+    };
+}
+
+/// plan 的详助：只接受 `--grow`，SYNOPSIS 不列 apply 的旗标
+pub(crate) const HELP_PLAN: &str = help_with_synopsis!("diskedit plan <TARGET> --grow N|last");
+
+/// apply 的详助：正文与 plan 共用，SYNOPSIS 列出本命令会消费的旗标
+pub(crate) const HELP_APPLY: &str =
+    help_with_synopsis!("diskedit apply <TARGET> --grow N|last [--chunk-size MiB] [--no-fs]");
 
 /// 列出各分区的搬移（plan 命令与 apply 前的计划打印共用）。
 /// 头行不共用：两处要给出的数不同——写入前只需扩容终点，`plan` 还要额外给出
