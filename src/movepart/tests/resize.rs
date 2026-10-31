@@ -103,7 +103,7 @@ pub(crate) fn resize_part_resume_skips_done_chunks() {
 
     // 续传：跳过 chunk 0，补齐 chunk 1..3，提交表项
     let o = rsize(&mut src,1, 12288, 20479, chunk, false, &mut |_| {});
-    assert!(o.is_applied(), "resize must apply (exit {})", o.exit_code());
+    assert!(o.has_layout_write(), "resize must apply (exit {})", o.exit_code());
 
     // 终验：目标 4 块 = 指纹 0x10..0x13（chunk 0 未被重搬污染）
     for i in 0..4u8 {
@@ -159,7 +159,7 @@ pub(crate) fn resize_part_resume_after_commit_without_ckpt_update() {
     atomic_write_ckpt(&ckpt_path, &ckpt.serialize()).unwrap();
 
     let o = rsize(&mut src,1, new_start, new_end, chunk, true, &mut |_| {});
-    assert!(o.is_applied(), "must finish the FS step instead of refusing (exit {})", o.exit_code());
+    assert!(o.has_layout_write(), "must finish the FS step instead of refusing (exit {})", o.exit_code());
     assert!(!ckpt_path.exists(), "checkpoint must be removed on success");
     let g2 = table::load_gpt(&src).unwrap().unwrap();
     assert_eq!((g2.entries[0].starting_lba, g2.entries[0].ending_lba), (new_start, new_end));

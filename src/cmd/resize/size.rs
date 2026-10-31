@@ -14,26 +14,30 @@ pub(crate) fn resolve_size_request(size: Option<&str>, cur_bytes: u64) -> Result
         if s == "grow" {
             grow_to_end = true;
         } else {
-            let (v, kind, pct) = parse_size_delta(s)
-                .ok_or_else(|| Fail::refused(format!("bad SIZE {s:?} (use 10G | +2G | -500M | +10% | grow; see diskedit help resize)")))?;
-            if pct {
-                // 百分比增量：锚定当前分区字节数，先乘后除（u128 防溢出）避免丢余数，
-                // 再向下取整到 1MiB，保证结果落在扇区/对齐界内
-                let raw = (cur_bytes as u128).checked_mul(v as u128)
-                    .and_then(|x| x.checked_div(100))
-                    .filter(|x| *x <= u64::MAX as u128)
-                    .ok_or_else(|| Fail::refused(format!("{s} overflows partition size")))? as u64;
-                let delta = raw / (1024 * 1024) * (1024 * 1024);
-                target = Some(match kind {
-                    1 => cur_bytes.checked_add(delta).ok_or_else(|| Fail::refused(format!("{s} overflows partition size")))?,
-                    _ => cur_bytes.checked_sub(delta).ok_or_else(|| Fail::refused(format!("{s} exceeds current size {cur_bytes}")))?,
-                });
-            } else {
-                target = Some(match kind {
-                    0 => v,
-                    1 => cur_bytes.checked_add(v).ok_or_else(|| Fail::refused(format!("{s} overflows partition size")))?,
-                    _ => cur_bytes.checked_sub(v).ok_or_else(|| Fail::refused(format!("{s} exceeds current size {cur_bytes}")))?,
-                });
+            let ask = parse_size_delta(s)
+                .ok_or_else(|| Fail::refused(format!("bad SIZE {s:?} (use 10G | 1.5G | +2G | -500M | +10% | grow; see diskedit help resize)")))?;
+            match ask {
+                SizeArg::Percent { kind, num, denom } => {
+                    // 百分比增量：锚定当前分区字节数，先乘后除（u128 防溢出）避免丢余数，
+                    // 再向下取整到 1MiB，保证结果落在扇区/对齐界内。分母一并进除数，
+                    // 小数百分比（+1.5%）不必先折成整数百分比
+                    let raw = (cur_bytes as u128).checked_mul(num as u128)
+                        .and_then(|x| x.checked_div(100u128 * denom as u128))
+                        .filter(|x| *x <= u64::MAX as u128)
+                        .ok_or_else(|| Fail::refused(format!("{s} overflows partition size")))? as u64;
+                    let delta = raw / (1024 * 1024) * (1024 * 1024);
+                    target = Some(match kind {
+                        1 => cur_bytes.checked_add(delta).ok_or_else(|| Fail::refused(format!("{s} overflows partition size")))?,
+                        _ => cur_bytes.checked_sub(delta).ok_or_else(|| Fail::refused(format!("{s} exceeds current size {cur_bytes}")))?,
+                    });
+                }
+                SizeArg::Bytes { kind, bytes } => {
+                    target = Some(match kind {
+                        0 => bytes,
+                        1 => cur_bytes.checked_add(bytes).ok_or_else(|| Fail::refused(format!("{s} overflows partition size")))?,
+                        _ => cur_bytes.checked_sub(bytes).ok_or_else(|| Fail::refused(format!("{s} exceeds current size {cur_bytes}")))?,
+                    });
+                }
             }
         }
     }

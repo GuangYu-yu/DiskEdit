@@ -1,7 +1,7 @@
 //! 低阶布局命令：new / add / delete / resize-part / move / copy / create。
 
 use crate::support::*;
-use crate::args::Args;
+use crate::args::{Args, StartSelector};
 use crate::fsops::MkfsFs;
 use crate::{movepart, table};
 
@@ -101,7 +101,7 @@ pub(crate) const HELP_CREATE: &str = r#"diskedit create <TARGET> [--size SIZE] [
   fits; without, the largest aligned gap. --fs formats after creation.
 
   SIZE: absolute size (units k/m/g/t, 1024 base; plain bytes when no unit;
-        whole numbers only, e.g. 32M | 2G | 33554432)
+        fractions allowed, e.g. 32M | 1.5G | 33554432)
 
   Options:
     --sector-size N  logical sector size override for raw images (power of two,
@@ -184,12 +184,12 @@ pub(crate) fn cmd_add(a: &Args) -> crate::outcome::Outcome {
     refuse_partition_node_target("add", &a.target);
     // `--start end` 是 move/copy 的"贴着可用区尾部打包"语法；add 不挪位置，
     // 与 resize-part 同一条针对性拒绝，而非让它落进下面"缺 --start"的通用报错
-    if a.start_end {
+    if matches!(a.start, Some(StartSelector::PinnedToEnd)) {
         bail_fail(Fail::refused(
             "`--start end` does not apply to add (it is move/copy syntax for packing against the last usable LBA) — pass explicit --start and --end LBAs",
         ));
     }
-    let (Some(start), Some(end)) = (a.start, a.end) else {
+    let (Some(StartSelector::Lba(start)), Some(end)) = (a.start, a.end) else {
         bail_fail(Fail::refused("`add` needs both --start and --end".to_string()));
     };
     let mut src = open_target_for_write(a).unwrap_or_else(|f| bail_fail(f));
@@ -254,7 +254,9 @@ pub(crate) fn cmd_add(a: &Args) -> crate::outcome::Outcome {
 }
 
 pub(crate) fn cmd_delete(a: &Args) -> crate::outcome::Outcome {
-    let Some(pref) = a.part else { crate::args::usage() };
+    let Some(pref) = a.part else {
+        bail_fail(Fail::refused("`delete` needs a partition: diskedit delete <TARGET>:N --yes (see diskedit help delete)".to_string()));
+    };
     // 载体必须是整盘：delete 清零的是节点 LBA0 里的条目槽，而分区节点上被判成 msdos 的
     // 可能只是文件系统引导扇区——FAT/NTFS 的引导扇区末尾同为 0x55AA，MBR 判据只认
     // 这个签名。判据与 new/add/create 同源
@@ -284,14 +286,13 @@ pub(crate) fn cmd_delete(a: &Args) -> crate::outcome::Outcome {
 
 pub(crate) fn cmd_resize_part(a: &Args) -> crate::outcome::Outcome {
     // `--start end` 是 move/copy 的"贴着可用区尾部打包"语法，resize-part 不挪位置，
-    // 对应的语义是"扩到最后一个可用 LBA"。语义错与用法错共用 usage() 出口，
-    // 用户只会看到一段用法而不知该改哪个旗标
-    if a.start_end {
+    // 对应的语义是"扩到最后一个可用 LBA"
+    if matches!(a.start, Some(StartSelector::PinnedToEnd)) {
         bail_fail(Fail::refused(
             "`--start end` does not apply to resize-part (it does not relocate) — use --grow-to-end to extend the partition to the last usable LBA",
         ));
     }
-    let (Some(pref), Some(start)) = (a.part, a.start) else {
+    let (Some(pref), Some(StartSelector::Lba(start))) = (a.part, a.start) else {
         bail_fail(Fail::refused("`resize-part` needs :N and --start".to_string()));
     };
     if a.grow_to_end && a.end.is_some() {
@@ -333,27 +334,35 @@ pub(crate) fn cmd_resize_part(a: &Args) -> crate::outcome::Outcome {
 
 /// `--start end` 把起点钉在 `last_usable_lba - len + 1`，是"贴尾打包"而非"挑一个对齐
 /// 位置"；此时再给 `--align` 没有被消费的余地，静默忽略会让用户以为对齐生效。旗标白名单
-/// 是命令级的，这个分支级的消费差异只能在分支里拒绝。判据看 `seen`：`--align` 有默认值
-/// （mib），只看字段分不出"没给"与"给了 mib"
+/// 是命令级的，这个分支级的消费差异只能在分支里拒绝。判据看 [`Args::given`]：`--align`
+/// 有默认值（mib），只看 `align` 分不出"没给"与"给了 mib"
 fn refuse_align_on_start_end(a: &Args) {
-    if a.start_end && a.seen.contains(&"--align") {
+    if matches!(a.start, Some(StartSelector::PinnedToEnd)) && a.given("--align") {
         bail_fail(Fail::refused(
             "`--align` does not apply to `--start end` — the start is pinned to the last usable position; drop --align or pass an explicit start LBA",
         ));
     }
 }
 
+/// move/copy 共用的一对选择器：`:N` 与 `--start`。起点只有一个字段
+/// （[`StartSelector`]），"数值与 `end` 同时给出"因此无从构造，两条命令也不必各自
+/// 再判一次互斥
+fn require_start(a: &Args, cmd: &str) -> (crate::dev::PartSelector, StartSelector) {
+    let Some(pref) = a.part else {
+        bail_fail(Fail::refused(format!(
+            "`{cmd}` needs a partition: diskedit {cmd} <TARGET>:N (see diskedit help {cmd})"
+        )));
+    };
+    let Some(start) = a.start else {
+        bail_fail(Fail::refused(format!(
+            "`{cmd}` needs --start <LBA|end> (see diskedit help {cmd})"
+        )));
+    };
+    (pref, start)
+}
+
 pub(crate) fn cmd_move(a: &Args) -> crate::outcome::Outcome {
-    // 两种给起点的方式各写一条会都留在 Args 里：start_end 恒优先，数值被静默丢弃
-    if a.start_end && a.start.is_some() {
-        bail_fail(Fail::refused(
-            "`--start end` and a numeric --start are mutually exclusive — pass one of them".to_string(),
-        ));
-    }
-    let (Some(pref), start_opt) = (a.part, a.start) else { crate::args::usage() };
-    if !a.start_end && start_opt.is_none() {
-        crate::args::usage();
-    }
+    let (pref, selector) = require_start(a, "move");
     refuse_align_on_start_end(a);
     // 载体必须是整盘：条目按节点 LBA0 的偏移读写（判据与 new/add/create 同源）
     refuse_partition_node_target("move", &a.target);
@@ -365,12 +374,12 @@ pub(crate) fn cmd_move(a: &Args) -> crate::outcome::Outcome {
     let e = crate::gpt_policy::live_entry(&g, part).unwrap_or_else(|f| bail_fail(f));
     // 平移保持长度（本工具语义）：new_end = new_start + 原长度 - 1
     let len = e.ending_lba - e.starting_lba + 1;
-    let start = if a.start_end {
-        g.last_usable_lba()
+    let start = match selector {
+        StartSelector::PinnedToEnd => g
+            .last_usable_lba()
             .checked_sub(len - 1)
-            .unwrap_or_else(|| bail_fail(Fail::refused("partition longer than usable range".to_string())))
-    } else {
-        align_start(a, start_opt.unwrap(), g.sector_size())
+            .unwrap_or_else(|| bail_fail(Fail::refused("partition longer than usable range".to_string()))),
+        StartSelector::Lba(lba) => align_start(a, lba, g.sector_size()),
     };
     // checked：start 来自 CLI 原始输入（--align none 时无上界），回绕会骗过 resize_part 的边界校验
     let end = start.checked_add(len - 1)
@@ -384,15 +393,7 @@ pub(crate) fn cmd_move(a: &Args) -> crate::outcome::Outcome {
 }
 
 pub(crate) fn cmd_copy(a: &Args) -> crate::outcome::Outcome {
-    if a.start_end && a.start.is_some() {
-        bail_fail(Fail::refused(
-            "`--start end` and a numeric --start are mutually exclusive — pass one of them".to_string(),
-        ));
-    }
-    let (Some(pref), start_opt) = (a.part, a.start) else { crate::args::usage() };
-    if !a.start_end && start_opt.is_none() {
-        crate::args::usage();
-    }
+    let (pref, selector) = require_start(a, "copy");
     refuse_align_on_start_end(a);
     // copy 不读不写 checkpoint（见 HELP_COPY 的 "No resume"）：它没有可续跑的东西，
     // 也就没有资格接管任何未收尾的现场。走严格打开——目标上有任何 active 现场即拒绝，
@@ -405,14 +406,15 @@ pub(crate) fn cmd_copy(a: &Args) -> crate::outcome::Outcome {
     // 锁下快照
     let part = crate::gpt_policy::resolve_part_in(crate::gpt_policy::TableEntries::Gpt(g.entries()), pref)
         .unwrap_or_else(|f| bail_fail(f));
-    let start = if a.start_end {
-        let e = crate::gpt_policy::live_entry(&g, part).unwrap_or_else(|f| bail_fail(f));
-        let len = e.ending_lba - e.starting_lba + 1;
-        g.last_usable_lba()
-            .checked_sub(len - 1)
-            .unwrap_or_else(|| bail_fail(Fail::refused("partition longer than usable range".to_string())))
-    } else {
-        align_start(a, start_opt.unwrap(), g.sector_size())
+    let start = match selector {
+        StartSelector::PinnedToEnd => {
+            let e = crate::gpt_policy::live_entry(&g, part).unwrap_or_else(|f| bail_fail(f));
+            let len = e.ending_lba - e.starting_lba + 1;
+            g.last_usable_lba()
+                .checked_sub(len - 1)
+                .unwrap_or_else(|| bail_fail(Fail::refused("partition longer than usable range".to_string())))
+        }
+        StartSelector::Lba(lba) => align_start(a, lba, g.sector_size()),
     };
     let (chunk, mut logger) = chunk_logger(a, &src, g.disk_guid());
     // 名字守卫在消费点：copy 的落盘名字与 add 同一个 36 码元字段

@@ -22,7 +22,7 @@ pub(crate) use msdos::*;
 pub(crate) use finish::*;
 
 use crate::support::*;
-use crate::args::{parse_size_delta, Args};
+use crate::args::{parse_size_delta, Args, SizeArg};
 use crate::dev::{FileSource, PartSelector, WriteSource};
 use crate::{dev, fsid, fsops, movepart, table};
 #[cfg(target_os = "linux")]
@@ -47,8 +47,9 @@ pub(crate) const HELP: &str = r#"diskedit resize <TARGET>[:N] <SIZE> [OPTIONS]
     +10%      grow by 10% of current size (rounded down to 1MiB)
     -10%      shrink by 10%
     grow      grow into the contiguous free space to the right
-    Sizes are whole numbers: 1.5G is rejected, and a size that does not land
-    on a sector boundary is truncated (the truncation is reported)
+    Sizes may carry a fraction: 1.5G = 1610612736 bytes, +1.5% likewise. A
+    size that does not land on a sector boundary is truncated, and the
+    truncation is reported
 
   Options:
     --allow-move    permit relocating the partitions in the way: the plan is
@@ -100,9 +101,9 @@ pub(crate) fn cmd_resize(a: &Args) -> crate::outcome::Outcome {
     // SIZE 只有一种给法：位置参数。原始字符串随锁前/锁下两次解析共用
     let size = a.pos.get(1).map(String::as_str);
     // resize 只改大小、不移动。--start/--end 属 move/resize-part 的语义（挪位），
-    // 静默忽略会让用户误以为分区被移动过 —— 显式拒绝。判据必须覆盖三个入口：
-    // 两者各自单给、以及 `--start end` 那种尾部打包的写法
-    if a.start.is_some() || a.end.is_some() || a.start_end {
+    // 静默忽略会让用户误以为分区被移动过 —— 显式拒绝。起点只有一个字段，
+    // 数值与 `--start end` 都在 `a.start` 里，一处判据即可覆盖
+    if a.start.is_some() || a.end.is_some() {
         bail_fail(Fail::refused("resize does not relocate partitions — use `move` or `resize-part --start/--end`".to_string()));
     }
     // 载体必须是整盘：分区节点首扇区里的 FAT/NTFS 引导字节带 0x55AA 时会被 parse_mbr_raw
@@ -234,7 +235,9 @@ pub(crate) fn cmd_resize(a: &Args) -> crate::outcome::Outcome {
         finish_resize(a, o, Some(&mut src), part, is_pv, is_block, cur_bytes)
     } else {
         // SIZE：字节 → 扇区（下取整）；扩须右侧空闲足够，缩由 resize_part 内部 FS 先缩 + 守卫链
-        let Some(bytes) = target else { crate::args::usage() };
+        let Some(bytes) = target else {
+            bail_fail(Fail::refused("`resize` needs a size: diskedit resize <TARGET>[:N] <SIZE> (see diskedit help resize)".to_string()));
+        };
         if bytes < ss {
             bail_fail(Fail::refused(format!("size {bytes} < one sector ({ss})")));
         }

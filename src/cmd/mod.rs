@@ -62,8 +62,10 @@ impl From<u8> for CmdResult {
 pub(crate) struct CommandSpec {
     /// 命令名：也是 `help <CMD>` 的主题与旗标对账的键
     pub(crate) name: &'static str,
-    /// 命令层会读到的旗标；未列出的旗标一律拒绝（fail-closed）。
-    /// 静默忽略用户显式给出的旗标是最危险的参数漂移：命令做了旗标明确排除的事却报成功
+    /// 允许进入该命令解析流程的旗标；未列出的旗标一律拒绝（fail-closed）。
+    /// 列入不等于"会被采纳"：`resize` 的 `--start`/`--end` 列在这里只为走到它自己
+    /// 那条针对性拒绝。静默忽略用户显式给出的旗标是最危险的参数漂移：命令做了
+    /// 旗标明确排除的事却报成功
     pub(crate) flags: &'static [&'static str],
     /// 详助正文（`diskedit help <CMD>` / `<CMD> --help`）
     pub(crate) help: &'static str,
@@ -72,6 +74,9 @@ pub(crate) struct CommandSpec {
     pub(crate) max_pos: usize,
     /// 撤销窗口的生命周期（见 `TargetMode`）：main 据此决定成功后是否关闭它
     pub(crate) mode: TargetMode,
+    /// SIZE 落在 `pos` 的哪个下标。以 `-` 开头的相对尺寸只在这个槽位被接受：
+    /// 放宽到任何位置，`info -10` 这种旗标笔误会变成一次"打开失败"而不是用法拒绝
+    pub(crate) size_pos: Option<usize>,
     /// 处理函数。收命令名是因为 plan/apply 共用一个实现、要按名字分干跑与执行。
     /// 返回 `CmdResult` 而不是裸退出码：main 要按"已应用且无待办"决定是否关闭
     /// 撤销窗口，而码值 20 分不出待办非空与仅内核视图过期
@@ -100,6 +105,7 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
         help: info::HELP,
         max_pos: 1,
         mode: TargetMode::ReadOnly,
+        size_pos: None,
         run: |_, a| info::cmd_info(a).into(),
     },
     CommandSpec {
@@ -115,6 +121,7 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
         help: resize::HELP,
         max_pos: 2, // TARGET:N + SIZE
         mode: TargetMode::WriteJournal,
+        size_pos: Some(1), // TARGET:N + SIZE
         run: |_, a| resize::cmd_resize(a).into(),
     },
     CommandSpec {
@@ -123,6 +130,7 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
         help: layout::HELP_MOVE,
         max_pos: 1,
         mode: TargetMode::WriteJournal,
+        size_pos: None,
         run: |_, a| layout::cmd_move(a).into(),
     },
     CommandSpec {
@@ -131,6 +139,7 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
         help: layout::HELP_COPY,
         max_pos: 1,
         mode: TargetMode::WriteJournal,
+        size_pos: None,
         run: |_, a| layout::cmd_copy(a).into(),
     },
     CommandSpec {
@@ -139,6 +148,7 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
         help: layout::HELP_CREATE,
         max_pos: 1,
         mode: TargetMode::WriteJournal,
+        size_pos: None,
         run: |_, a| layout::cmd_create(a).into(),
     },
     CommandSpec {
@@ -147,6 +157,7 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
         help: layout::HELP_DELETE,
         max_pos: 1,
         mode: TargetMode::WriteJournal,
+        size_pos: None,
         run: |_, a| layout::cmd_delete(a).into(),
     },
     CommandSpec {
@@ -155,6 +166,7 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
         help: fs::HELP_SET,
         max_pos: 4, // TARGET:N + key + value + state
         mode: TargetMode::WriteJournal,
+        size_pos: None,
         run: |_, a| fs::cmd_set(a).into(),
     },
     CommandSpec {
@@ -164,6 +176,7 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
         help: fs::HELP_CHECK,
         max_pos: 1,
         mode: TargetMode::WriteNoJournal,
+        size_pos: None,
         run: |_, a| fs::cmd_check(a).into(),
     },
     // mkfs 是一次真正的**事务**（不可回滚，但要走完整的 begin/commit）：它先落一条屏障
@@ -176,6 +189,7 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
         help: fs::HELP_MKFS,
         max_pos: 2, // TARGET:N + FSTYPE
         mode: TargetMode::WriteJournal,
+        size_pos: None,
         run: |_, a| fs::cmd_mkfs(a).into(),
     },
     CommandSpec {
@@ -184,6 +198,7 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
         help: fs::HELP_RESIZEFS,
         max_pos: 2, // MOUNTPOINT + BYTES
         mode: TargetMode::WriteNoJournal,
+        size_pos: Some(1), // MOUNTPOINT + BYTES
         run: |_, a| fs::cmd_resizefs(a).into(),
     },
     CommandSpec {
@@ -192,6 +207,7 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
         help: undo::HELP,
         max_pos: 1,
         mode: TargetMode::WriteNoJournal,
+        size_pos: None,
         run: |_, a| undo::cmd_undo(a).into(),
     },
     // abandon 既不建 journal、也不回放：它把现场字节原样改名交出去，盘上一个字节都不写。
@@ -203,6 +219,7 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
         help: abandon::HELP,
         max_pos: 1,
         mode: TargetMode::WriteNoJournal,
+        size_pos: None,
         run: |_, a| abandon::cmd_abandon(a).into(),
     },
     CommandSpec {
@@ -211,6 +228,7 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
         help: layout::HELP_NEW,
         max_pos: 1,
         mode: TargetMode::WriteJournal,
+        size_pos: None,
         run: |_, a| layout::cmd_new(a).into(),
     },
     CommandSpec {
@@ -219,6 +237,7 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
         help: layout::HELP_ADD,
         max_pos: 1,
         mode: TargetMode::WriteJournal,
+        size_pos: None,
         run: |_, a| layout::cmd_add(a).into(),
     },
     CommandSpec {
@@ -227,14 +246,16 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
         help: layout::HELP_RESIZE_PART,
         max_pos: 1,
         mode: TargetMode::WriteJournal,
+        size_pos: None,
         run: |_, a| layout::cmd_resize_part(a).into(),
     },
     CommandSpec {
         name: "plan",
         flags: &["--sector-size", "--grow"],
-        help: plan::HELP,
+        help: plan::HELP_PLAN,
         max_pos: 1,
         mode: TargetMode::ReadOnly,
+        size_pos: None,
         run: plan::cmd_plan_apply,
     },
     CommandSpec {
@@ -243,9 +264,10 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
         // 按盘上现状重新推导计划后执行（见 cmd::plan），没有第二个确认层；
         // 白名单声明却不消费的旗标 = 静默接受用户以为存在的确认
         flags: &["--sector-size", "--grow", "--chunk-size", "--no-fs"],
-        help: plan::HELP,
+        help: plan::HELP_APPLY,
         max_pos: 1,
         mode: TargetMode::WriteJournal,
+        size_pos: None,
         run: plan::cmd_plan_apply,
     },
 ];
@@ -295,7 +317,16 @@ pub(crate) fn dispatch(cmd: &str, a: &Args) -> CmdResult {
                         "unexpected extra argument for `{cmd}`: {extra} (see `diskedit help {cmd}`)"
                     )));
                 }
-                (c.run)(cmd, a)
+                let result = (c.run)(cmd, a);
+                // 开了撤销窗口的命令必须带回后置状态：只给退出码时 closes_journal
+                // 退回"码是 0 即完成"，20 的待办非空与仅内核视图过期分不出来
+                if c.mode == TargetMode::WriteJournal {
+                    assert!(
+                        !matches!(result, CmdResult::Code(_)),
+                        "WriteJournal command `{cmd}` returned CmdResult::Code"
+                    );
+                }
+                result
             }
             None => usage(),
         },
@@ -412,6 +443,19 @@ mod tests {
         }
     }
 
+    /// SIZE 槽位声明必须落在该命令的位置参数范围内；声明了 SIZE 的命令恰好是
+    /// 把尺寸放在位置参数上的那两条（`--size`/`--grow` 走旗标，不在此列）
+    #[test]
+    fn size_slot_is_within_the_positional_range() {
+        for c in COMMANDS {
+            if let Some(i) = c.size_pos {
+                assert!(i < c.max_pos, "{}: SIZE slot {i} is outside max_pos {}", c.name, c.max_pos);
+            }
+        }
+        assert_eq!(find("resize").unwrap().size_pos, Some(1), "resize takes SIZE at pos 1");
+        assert_eq!(find("resizefs").unwrap().size_pos, Some(1), "resizefs takes BYTES at pos 1");
+    }
+
     /// SYNOPSIS（帮助第一行）上的旗标名：剥掉 `[ ] ( ) ,` 包裹与 `=值`。
     /// 反向对账只扫这一行——正文会合法地引用别的命令的旗标（copy 提到
     /// resize 的 --allow-move，resize 点名拒绝 --start/--end）
@@ -448,21 +492,28 @@ mod tests {
         }
     }
 
-    /// SYNOPSIS 上的带值旗标必须带占位符（`--size SIZE` 或 `--size=SIZE`）：
-    /// 后面直接跟另一个旗标或就此收尾时，用户看不出它要参数
+    /// SYNOPSIS 上的旗标形态与注册表一致：带值旗标必须带占位符（`--size SIZE`
+    /// 或 `--size=SIZE`）；布尔旗标不许带——用户看不出带值旗标要参数，或误以为
+    /// 布尔旗标也要取值
     #[test]
-    fn synopsis_value_flags_carry_a_placeholder() {
+    fn synopsis_flag_shape_matches_the_registry() {
         for c in COMMANDS {
             let tokens = synopsis_tokens(c.help);
             for (i, t) in tokens.iter().enumerate() {
-                if !t.starts_with("--") || t.contains('=') {
-                    continue;
-                }
-                let Some(spec) = crate::args::flag_spec(t) else { continue };
-                if spec.value.is_none() {
-                    continue;
-                }
+                let Some(spec) = crate::args::flag_spec(t.split('=').next().unwrap_or(t)) else { continue };
+                let inline = t.contains('=');
                 let next = tokens.get(i + 1).copied().unwrap_or("");
+                if spec.value.is_none() {
+                    assert!(
+                        !inline && (next.is_empty() || next.starts_with("--")),
+                        "{}: boolean {t} is shown with a value",
+                        c.name
+                    );
+                    continue;
+                }
+                if inline {
+                    continue;
+                }
                 assert!(
                     !next.is_empty() && !next.starts_with("--"),
                     "{}: {t} takes a value but the synopsis gives it no placeholder",
