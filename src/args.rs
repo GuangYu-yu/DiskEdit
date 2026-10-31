@@ -126,6 +126,42 @@ fn take_value(inline: &mut Option<String>, it: &mut impl Iterator<Item = String>
     }
 }
 
+/// 一个命令行旗标。`value` 是带值旗标的占位符（错误文案与帮助对账共用），
+/// `None` 表示布尔旗标
+pub(crate) struct FlagSpec {
+    pub(crate) name: &'static str,
+    pub(crate) value: Option<&'static str>,
+}
+
+/// 命令级旗标的唯一注册表：解析器判重、缺值文案、命令白名单的守护测试都读这一份。
+/// 加旗标时只改这里与它的解析臂，不再在任何别处另抄一份清单
+pub(crate) const FLAGS: &[FlagSpec] = &[
+    FlagSpec { name: "--align", value: Some("A") },
+    FlagSpec { name: "--allow-move", value: None },
+    FlagSpec { name: "--chunk-size", value: Some("N") },
+    FlagSpec { name: "--end", value: Some("LBA") },
+    FlagSpec { name: "--fs", value: Some("F") },
+    FlagSpec { name: "--grow", value: Some("N|last") },
+    FlagSpec { name: "--grow-lv", value: None },
+    FlagSpec { name: "--grow-to-end", value: None },
+    FlagSpec { name: "--keep-partuuid", value: None },
+    FlagSpec { name: "--lv", value: Some("NAME") },
+    FlagSpec { name: "--name", value: Some("S") },
+    FlagSpec { name: "--no-fs", value: None },
+    FlagSpec { name: "--overwrite-partition-data", value: None },
+    FlagSpec { name: "--random", value: None },
+    FlagSpec { name: "--sector-size", value: Some("N") },
+    FlagSpec { name: "--size", value: Some("SIZE") },
+    FlagSpec { name: "--start", value: Some("LBA|end") },
+    FlagSpec { name: "--table", value: Some("gpt|msdos") },
+    FlagSpec { name: "--type", value: Some("T") },
+    FlagSpec { name: "--yes", value: None },
+];
+
+pub(crate) fn flag_spec(name: &str) -> Option<&'static FlagSpec> {
+    FLAGS.iter().find(|f| f.name == name)
+}
+
 pub(crate) struct Args {
     pub(crate) target: String,
     pub(crate) part: Option<PartSelector>,
@@ -235,11 +271,16 @@ pub(crate) fn parse_args() -> (String, Args) {
             }
             _ => arg,
         };
-        // 同一旗标重复给出即拒绝。`seen` 本来就记着每一次出现，具备判重能力；
-        // 不判的后果是 last-wins——生效值与用户第一意图相反却没有任何回显
-        if a.seen.contains(&arg.as_str()) {
+        // 同名重复：值型拒绝（两个值互相冲突，last-wins 会让生效值与用户第一次
+        // 意图相反且无回显）；布尔幂等（`--yes --yes` 与 `--yes` 是同一状态，包装
+        // 脚本可以无条件追加）。带不带值取自注册表，不在此另写一份旗标清单
+        if let Some(spec) = flag_spec(&arg)
+            && spec.value.is_some()
+            && a.seen.contains(&arg.as_str())
+        {
             bail_fail(Fail::refused(format!(
-                "{arg} is given more than once — refusing rather than letting the last one win silently"
+                "{arg} {0} is given more than once — a value option cannot take two values",
+                spec.value.unwrap_or("VALUE")
             )));
         }
         match arg.as_str() {
@@ -276,7 +317,7 @@ pub(crate) fn parse_args() -> (String, Args) {
             "--size" => {
                 a.seen.push("--size");
                 let v = take_value(&mut inline, &mut it, "--size");
-                // 与 resize 的 SIZE 同一单位语法（b/k/m/g/t，1024 进制），但只接受绝对值
+                // 与 resize 的 SIZE 同一单位语法（k/m/g/t，1024 进制，无单位 = 字节），只接受绝对值
                 a.size = Some(match parse_size_delta(&v) {
                     Some((bytes, 0, false)) => bytes,
                     Some(_) => bad_arg("--size", &v, " (absolute size only: use 32M, not +32M/-32M/32%)"),
@@ -410,9 +451,11 @@ pub(crate) fn parse_args() -> (String, Args) {
 }
 
 /// 参数缺值/坏值的统一拒绝出口：走 `bail_fail`（报告文字与退出码都取自 outcome，
-/// 不在参数层自拼前缀绕开唯一映射）。报出旗标名，避免静默 exit 使用户无从排查
+/// 不在参数层自拼前缀绕开唯一映射）。报出旗标名与其占位符，避免静默 exit
+/// 使用户无从排查
 fn miss_arg(flag: &str) -> ! {
-    bail_fail(Fail::refused(format!("{flag} requires a value (see diskedit help)")))
+    let placeholder = flag_spec(flag).and_then(|s| s.value).unwrap_or("VALUE");
+    bail_fail(Fail::refused(format!("{flag} {placeholder} requires a value (see diskedit help)")))
 }
 
 fn bad_arg(flag: &str, v: &str, hint: &str) -> ! {
@@ -420,8 +463,9 @@ fn bad_arg(flag: &str, v: &str, hint: &str) -> ! {
 }
 
 /// SIZE 字符串 →（数值, 类别 0=绝对/1=扩/-1=缩, 是否百分号）。
-/// 单位 b/k/m/g/t（1024 进制，大小写均可），无单位 = 字节；"+10%/-10%" 为锚定当前
-/// 分区字节数的百分比增量；绝对形式 "10%" 有歧义故不支持；"grow" 由调用方先行处理
+/// 单位 k/m/g/t（1024 进制，大小写均可），无单位 = 字节；"+10%/-10%" 为锚定当前
+/// 分区字节数的百分比增量；绝对形式 "10%" 有歧义故不支持；"grow" 由调用方先行处理。
+/// 只有整数：小数形式（1.5G）会落到扇区截断，写下的值与实际布局不符
 pub(crate) fn parse_size_delta(s: &str) -> Option<(u64, i8, bool)> {
     let (kind, rest) = match s.as_bytes().first()? {
         b'+' => (1i8, &s[1..]),
@@ -443,7 +487,6 @@ pub(crate) fn parse_size_delta(s: &str) -> Option<(u64, i8, bool)> {
         return Some((num.parse().ok()?, kind, true));
     }
     let mult = match rest.as_bytes().last()? {
-        b'b' | b'B' => 1u64,
         b'k' | b'K' => 1024,
         b'm' | b'M' => 1024 * 1024,
         b'g' | b'G' => 1024 * 1024 * 1024,
@@ -459,14 +502,14 @@ pub(crate) fn parse_size_delta(s: &str) -> Option<(u64, i8, bool)> {
 mod tests {
     use super::parse_size_delta;
 
-    /// SIZE 解析（单位 b/k/m/g/t = 1024 进制、无单位 = 字节、+/- 增量、+N%/-N%）
+    /// SIZE 解析（单位 k/m/g/t = 1024 进制、无单位 = 字节、+/- 增量、+N%/-N%）
     #[test]
     fn size_delta_parsing() {
         const G: u64 = 1024 * 1024 * 1024;
         assert_eq!(parse_size_delta("1024"), Some((1024, 0, false)));
         assert_eq!(parse_size_delta("10G"), Some((10 * G, 0, false)));
         assert_eq!(parse_size_delta("10g"), Some((10 * G, 0, false)));
-        assert_eq!(parse_size_delta("512B"), Some((512, 0, false)));
+        assert_eq!(parse_size_delta("512"), Some((512, 0, false)));
         assert_eq!(parse_size_delta("+2k"), Some((2048, 1, false)));
         assert_eq!(parse_size_delta("-500M"), Some((500 * 1024 * 1024, -1, false)));
         assert_eq!(parse_size_delta("1T"), Some((1024 * G, 0, false)));
@@ -477,7 +520,7 @@ mod tests {
         assert_eq!(parse_size_delta("18446744073709551615G"), None);
         assert_eq!(parse_size_delta("18446744073709551616"), None);
         // 绝对百分比有歧义（盘的 10% 还是分区的 10%），不支持；其余非法输入
-        for bad in ["", "+", "-", "%", "10%", "+%", "G", "+G", "10KB", "1.5G", "10 G", "0x10", " 1G"] {
+        for bad in ["", "+", "-", "%", "10%", "+%", "G", "+G", "10KB", "1.5G", "10 G", "0x10", " 1G", "1b", "512B"] {
             assert_eq!(parse_size_delta(bad), None, "{bad:?} must be rejected");
         }
         // 符号只在最前出现一次：+10G/-10G 合法，重复/混用符号一律非法
