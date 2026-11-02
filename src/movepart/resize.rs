@@ -9,8 +9,8 @@ pub(crate) const CKPT2_MAGIC: &[u8; 8] = b"DKECKPT2";
 /// 字段变动即升版本：版本号先行拦下其他布局，CRC 覆盖长度也随之不同。
 /// 现场存在但不可判读时 read_checkpoint 报 Infra 并列明死因，出路是 abandon。
 /// 布局：disk_size、ss、原/新起止、缩容状态、进度、chunk、指纹（含设备 ID 与身份种类）、
-/// loop 映射、FS 类型码
-pub(crate) const CKPT2_VERSION: u32 = 7;
+/// loop 映射、FS 类型码；版本号之后是 LVM 收尾事实块
+pub(crate) const CKPT2_VERSION: u32 = 8;
 
 /// 现场记下的 FS 类型码：0 = 未识别，其余为数组下标 + 1。
 /// 码值随现场落盘，**只允许在末尾追加**，顺序变动即把类型读成另一个
@@ -91,6 +91,8 @@ pub(crate) struct RsCheckpoint<P = crate::dev::IdentityProof> {
     pub(crate) proof: P,                          // 指纹里哪一类字段才是身份证据
     /// 识别出的 FS 类型：续跑直接用它，不再回源起点重探（源区头部可能已被搬移数据覆盖）
     pub(crate) fstype: Option<FsKind>,
+    /// 分区已提交后仍未完成的 LVM 收尾（pvresize / lvextend 及其基线）
+    pub(crate) lvm: Option<LvmPostFacts>,
 }
 
 impl RsCheckpoint<crate::dev::LiveProof> {
@@ -98,6 +100,11 @@ impl RsCheckpoint<crate::dev::LiveProof> {
         let mut b = Vec::new();
         b.extend_from_slice(CKPT2_MAGIC);
         b.extend_from_slice(&CKPT2_VERSION.to_le_bytes());
+        // LVM 收尾事实紧跟版本号：只读解析（read_lvm_post）不必懂其余字段布局
+        match &self.lvm {
+            None => b.push(0),
+            Some(f) => f.encode(&mut b),
+        }
         b.extend_from_slice(&self.disk_size.to_le_bytes());
         b.extend_from_slice(&self.ss.to_le_bytes());
         b.extend_from_slice(&self.part.to_le_bytes());
@@ -138,6 +145,7 @@ impl RsCheckpoint<crate::dev::IdentityProof> {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "unsupported resize checkpoint version"));
         }
         let mut o = 12usize;
+        let lvm = LvmPostFacts::decode(b, &mut o)?;
         fn rd64(b: &[u8], o: &mut usize) -> io::Result<u64> {
             let v = b.get(*o..*o + 8).ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "truncated"))?;
             *o += 8;
@@ -230,6 +238,7 @@ impl RsCheckpoint<crate::dev::IdentityProof> {
         Ok(RsCheckpoint {
             disk_size, ss, part, old_start, old_end, new_start, new_end,
             fs_shrunk, chunks_done, chunk_bytes, fp, map, fstype, proof,
+            lvm,
         })
     }
 }
@@ -306,11 +315,13 @@ pub fn resize_part(
     new_end: u64,
     chunk_len: u64,
     no_fs: bool,
+    defer_ckpt: bool,
+    lvm: Option<LvmSelection>,
     log: &mut dyn FnMut(&str),
 ) -> Outcome {
     // 事务入口的注入点（与 apply 同义）：此刻 abort 必须与"从未运行过"不可区分
     fault_before_any_write();
-    let p = match prepare_resize(src, g, repair, part, new_start, new_end, chunk_len, no_fs, log) {
+    let p = match prepare_resize(src, g, repair, part, new_start, new_end, chunk_len, no_fs, defer_ckpt, lvm, log) {
         Ok(p) => p,
         Err(f) => return f.into_outcome(),
     };
@@ -359,6 +370,11 @@ pub(crate) struct ResizeDecision {
     pub(crate) chunk_len: u64,
     pub(crate) no_fs: bool,
     pub(crate) ckpt_path: PathBuf,
+    /// 收尾仍有后续步骤（LVM 链）时由调用方经 `finish_resize` 撤除 checkpoint：
+    /// execute 不再把它当作"作业已收口"的证据
+    pub(crate) defer_ckpt: bool,
+    /// 分区提交后仍未完成的 LVM 收尾；由写表前的只读选择与本次新增字节导出
+    pub(crate) lvm: Option<LvmPostFacts>,
     /// 随行几何：执行半程的表项提交基于它（不重读盘上的表）
     pub(crate) g: ValidatedGeometry,
 }
@@ -375,6 +391,8 @@ pub(crate) fn prepare_resize(
     new_end: u64,
     chunk_len: u64,
     no_fs: bool,
+    defer_ckpt: bool,
+    lvm: Option<LvmSelection>,
     log: &mut dyn FnMut(&str),
 ) -> Result<ResizeDecision, Fail> {
     // ---- 事前判定：全部只读，且必须在首次写盘（apply_repair）之前结束 ----
@@ -433,16 +451,16 @@ pub(crate) fn prepare_resize(
         None => RestoreState::Fresh,
         Some(c) => classify_restore(&requested, c, (old_start, old_end), src.size, ss),
     };
-    let (fs_shrunk, resume_chunks, committed_old, recorded_fstype) = match state {
-        RestoreState::Fresh => (FsShrink::NotShrunk, 0, None, None),
+    let (fs_shrunk, resume_chunks, committed_old, recorded_fstype, recorded_lvm) = match state {
+        RestoreState::Fresh => (FsShrink::NotShrunk, 0, None, None, None),
         // Y = durable 恢复点（ckpt 文件里的值），不是本进程内存进度
         RestoreState::Resume(c) => {
             log(&format!("resuming at chunk {} (durable checkpoint)", c.chunks_done));
-            (c.fs_shrunk, c.chunks_done, None, Some(c.fstype))
+            (c.fs_shrunk, c.chunks_done, None, Some(c.fstype), c.lvm.clone())
         }
         RestoreState::Committed(c) => {
             log("resize already committed — finishing filesystem step");
-            (c.fs_shrunk, c.chunks_done, Some((c.old_start, c.old_end)), Some(c.fstype))
+            (c.fs_shrunk, c.chunks_done, Some((c.old_start, c.old_end)), Some(c.fstype), c.lvm.clone())
         }
         // 有 ckpt 而三个维度对不上：不猜是哪一次作业，也不当作"没有 ckpt"重做一遍
         RestoreState::Divergent(why) => {
@@ -456,6 +474,13 @@ pub(crate) fn prepare_resize(
     let byte_overflow = || Fail::infra("resize LBA arithmetic overflows byte offset");
     let old_bytes = (fb_end - fb_start + 1).checked_mul(ss).ok_or_else(byte_overflow)?;
     let new_bytes = (new_end - new_start + 1).checked_mul(ss).ok_or_else(byte_overflow)?;
+    // LVM 收尾事实：已记录的那一份优先——同一次作业的基线只存在 ckpt 里，按本次
+    // 请求重算会在"盘上已是新尺寸"的续跑态把增量算成 0。新跑时由写表前选定的 LV
+    // 与新增字节导出，不足一个 extent 的量在首次写盘之前拒绝
+    let lvm_post = match recorded_lvm {
+        Some(f) => Some(f),
+        None => lvm_post_for(defer_ckpt, lvm.as_ref(), old_bytes, new_bytes)?,
+    };
     // 表项 LBA 的单位是表自身的 ss。identify 只读目标内容，仍属事前判定。
     // 续跑取 ckpt 记下的类型：源区头部可能已被搬移数据覆盖（自重叠右移且本次扩容时），
     // 回源起点重探会认不出 FS，把"只差提交"的作业拒掉
@@ -521,7 +546,8 @@ pub(crate) fn prepare_resize(
         ss, part, old_start, old_end, new_start, new_end, fstype,
         fs_shrunk, resume_chunks, committed_old, fs_action, repair, new_bytes,
         chunk_len, no_fs,
-        ckpt_path,
+        ckpt_path, defer_ckpt,
+        lvm: lvm_post,
         g,
     })
 }
@@ -554,6 +580,7 @@ pub(crate) fn execute_resize(
         map: src.loop_mapping,
         fstype,
         proof: src.proof(),
+        lvm: p.lvm.clone(),
     };
     let save = |c: &RsCheckpoint<crate::dev::LiveProof>| atomic_write_ckpt(&p.ckpt_path, &c.serialize());
     // 撤 ckpt 的判据是"本次作业没留下任何待办"，所以基数必须在**开工前**取：阶段 0 的
@@ -767,8 +794,26 @@ pub(crate) fn execute_resize(
     }
     // ckpt 在本次作业的所有后置条件定论后才撤：留下任何待办而 ckpt 已删时，重跑会按
     // 全新作业从旧区重拷（自重叠搬移下旧区字节已被写覆盖，重拷即把覆盖后的数据盖回
-    // 新区），或算出"尺寸未变 → Leave"而报成功、把没做完的那一步永远留在盘上
-    if post.len() == pending_before && !crate::dev::remove_recovery_file(&p.ckpt_path) {
+    // 新区），或算出"尺寸未变 → Leave"而报成功、把没做完的那一步永远留在盘上。
+    // `defer_ckpt` 把"后置条件"的范围扩到调用方的收尾（LVM 链）：那里的成功判定只
+    // 发生在 execute 之外，撤除因此也只在那里做。
+    // 现场记着 LVM 收尾事实而调用方不跑链（resize-part / move）：保留现场并把未做的
+    // 那一步作为待办浮出——删掉它等于宣称"紧凑收口"，重跑就再也没有基线可用
+    if let Some(facts) = &p.lvm
+        && !p.defer_ckpt
+    {
+        let what = match &facts.lv_path {
+            Some(lv) => format!("partition resized but pvresize / lvextend for {lv} was not run"),
+            None => "partition resized but pvresize was not run".to_string(),
+        };
+        post.pending(Pending::new(
+            part,
+            PendingKind::Other("lvm chain (pvresize/lvextend)"),
+            what,
+            "re-run `diskedit resize` on the same target to finish the PV/LV chain (the checkpoint holds the recorded extent count)".to_string(),
+        ));
+    }
+    if !p.defer_ckpt && p.lvm.is_none() && post.len() == pending_before && !crate::dev::remove_recovery_file(&p.ckpt_path) {
         // 撤不掉就不算收干净：残留现场会让下一次 resize 被判 Divergent 而拒绝
         post.pending(Pending::new(
             part,

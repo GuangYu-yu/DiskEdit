@@ -15,7 +15,7 @@ pub(crate) fn swap_rebuild_pending(
     // 读失败≠"确认存在待办"：Pending 文案断言"本机激活不了"只在探测成功且命中时成立，
     // 设备 I/O 故障属于另一码事，按故障上抛（调用点都在写盘之后，Failed 的
     // "盘可能已改变"警示才是对状态的如实表述）
-    if !crate::fsid::unactivatable_swap(src, base, len_bytes)? {
+    if !matches!(crate::fsid::probe_fs(src, base, len_bytes)?.swap, Some(h) if !h.activatable) {
         return Ok(None);
     }
     Ok(Some(Pending::new(
@@ -31,17 +31,20 @@ pub(crate) fn swap_rebuild_pending(
 /// `Refused` / `Infra`（此刻确定未写盘），`execute_apply` 的返回类型里没有 `Fail`，
 /// 因此"写盘之后仍返回 Refused"在那半边**写不出来**。
 /// 几何由调用方解析（一条命令解析一次，往下传），本函数与执行半程都不读表
+#[allow(clippy::too_many_arguments)] // src/几何/计划/chunk/开关/推迟收尾/LV 选择/日志各司其职：合成参数对象只是给 lint 换一层间接
 pub fn apply(
     src: &mut WriteSource,
     g: &ValidatedGeometry,
     plan: &Plan,
     chunk_len: u64,
     no_fs: bool,
+    defer_ckpt: bool,
+    lvm: Option<LvmSelection>,
     log: &mut dyn FnMut(&str),
 ) -> Outcome {
     // 事务入口的注入点：此刻 abort 必须与"从未运行过"不可区分
     fault_before_any_write();
-    let d = match prepare_apply(src, g, plan, chunk_len, no_fs, log) {
+    let d = match prepare_apply(src, g, plan, chunk_len, no_fs, defer_ckpt, lvm, log) {
         Ok(d) => d,
         Err(f) => return f.into_outcome(),
     };
@@ -71,16 +74,21 @@ pub(crate) struct ApplyDecision {
     pub(crate) ckpt_path: PathBuf,
     pub(crate) chunk_len: u64,
     pub(crate) no_fs: bool,
+    /// 调用方在 apply 之后还要跑 LVM 收尾链：撤 ckpt 的决定属于那条链的出口
+    pub(crate) defer_ckpt: bool,
 }
 
 /// 事前判定（只读）：FS preflight → 槽位判定。
 /// 返回 `Err` 一律发生在任何写盘之前；本函数签名上就没有 `&mut WriteSource`
+#[allow(clippy::too_many_arguments)] // 与 apply 同一组入参，理由同上
 pub(crate) fn prepare_apply(
     src: &FileSource,
     g0: &ValidatedGeometry,
     plan: &Plan,
     chunk_len: u64,
     no_fs: bool,
+    defer_ckpt: bool,
+    lvm: Option<LvmSelection>,
     log: &mut dyn FnMut(&str),
 ) -> Result<ApplyDecision, Fail> {
     // 占用闸（与 prepare_resize 同一判据）：被搬移分区的数据区会被整体重写，grow 目标
@@ -125,6 +133,22 @@ pub(crate) fn prepare_apply(
     }
     // 恢复三态：有效 → 续传 / 槽位被另一族作业占用 → 拒绝 / 空 → 新建
     // 落点取命中路径：续传写同一份现场；空槽返回本次命名落点
+    // 新跑的 LVM 收尾事实由目标分区的实际新末端与写表前选定的 LV 导出；续跑命中的
+    // 现场自带基线，不再按本次算出的增量重推（盘上可能已是新尺寸）
+    let derived_lvm = {
+        let future_grow_end = grow_end_for(plan, ge.starting_lba)?;
+        let old_len = ge.ending_lba.checked_sub(ge.starting_lba)
+            .and_then(|v| v.checked_add(1))
+            .ok_or_else(|| crate::outcome::Fail::infra("grow target entry inverted"))?;
+        let new_len = future_grow_end.checked_sub(ge.starting_lba)
+            .and_then(|v| v.checked_add(1))
+            .ok_or_else(|| crate::outcome::Fail::infra("grow target length overflows"))?;
+        let old_bytes = old_len.checked_mul(plan.ss)
+            .ok_or_else(|| crate::outcome::Fail::infra("grow target length overflows byte size"))?;
+        let new_bytes = new_len.checked_mul(plan.ss)
+            .ok_or_else(|| crate::outcome::Fail::infra("grow target length overflows byte size"))?;
+        lvm_post_for(defer_ckpt, lvm.as_ref(), old_bytes, new_bytes)?
+    };
     let (slot, ckpt_path) = read_checkpoint(src, g0)?;
     let ckpt = match slot {
         // 与 make_plan_resuming 共用同一句拒绝理由：同一事实的措辞只写一次
@@ -301,6 +325,7 @@ pub(crate) fn prepare_apply(
                 fp: src.fingerprint,
                 map: src.loop_mapping,
                 proof: src.proof(),
+                lvm: c.lvm.clone().or(derived_lvm),
             }
         }
         CheckpointSlot::Empty => {
@@ -357,10 +382,11 @@ pub(crate) fn prepare_apply(
                 fp: src.fingerprint,
                 map: src.loop_mapping,
                 proof: src.proof(),
+                lvm: derived_lvm,
             }
         }
     };
-    Ok(ApplyDecision { g: g0.clone(), ckpt, ckpt_path, chunk_len, no_fs })
+    Ok(ApplyDecision { g: g0.clone(), ckpt, ckpt_path, chunk_len, no_fs, defer_ckpt })
 }
 
 /// 数据 chunk 的 I/O 失败必须带着精确 LBA 区间上抛：errno 说不出"哪一段"，
@@ -676,8 +702,27 @@ pub(crate) fn execute_apply(
     // ckpt 在 FS 步定论后才撤：FS 步失败而 ckpt 已删时，重跑会按全新作业从旧区重拷，
     // 自重叠搬移下旧区字节已被写覆盖，重拷即把覆盖后的数据盖回新区。任何待办（FS 步
     // 或 swap 重建）都保留 ckpt——重跑按续传口径只重试未完成的部分。
+    // 现场记着 LVM 收尾事实而调用方不跑链（move / resize-part）：保留现场并把未做的
+    // 那一步作为待办浮出，重跑才有基线可用
+    if let Some(facts) = &ckpt.lvm
+        && !d.defer_ckpt
+    {
+        let what = match &facts.lv_path {
+            Some(lv) => format!("partitions moved and partition {} extended, but pvresize / lvextend for {lv} was not run", plan.grow_part),
+            None => format!("partitions moved and partition {} extended, but pvresize was not run", plan.grow_part),
+        };
+        post.pending(Pending::new(
+            plan.grow_part,
+            PendingKind::Other("lvm chain (pvresize/lvextend)"),
+            what,
+            "re-run `diskedit resize` on the same target to finish the PV/LV chain (the checkpoint holds the recorded extent count)".to_string(),
+        ));
+    }
     // 删除失败同样进待办：现场留着会被下次 resize/apply 当成续跑参数比对，而作业其实已完成
-    if post.is_empty() && !crate::dev::remove_recovery_file(ckpt_path) {
+    if ckpt.lvm.is_none()
+        && post.is_empty()
+        && !crate::dev::remove_recovery_file(ckpt_path)
+    {
         post.pending(Pending::new(
             plan.grow_part,
             PendingKind::Other("checkpoint"),

@@ -161,7 +161,7 @@ fn apply_cmd(a: &Args, pref: PartSelector) -> crate::outcome::Outcome {
     // 表的可解析性由上面那一次 require_gpt_geometry 判过（无 GPT → refused 10，表非法 → infra 30）：
     // 同一事实不设第二判据——两处判据迟早会在某个入口分叉，且自判拒绝时还不报原因
     let mut logger = Logger::open(&src, Some(g.disk_guid()));
-    let o = movepart::apply(&mut src, &g, &plan, chunk, a.no_fs, &mut |m| logger.log(m));
+    let o = movepart::apply(&mut src, &g, &plan, chunk, a.no_fs, false, None, &mut |m| logger.log(m));
     // 出问题时日志里也留一份：apply 失败后用户常回看日志——refused 的参数成因
     // 与 infra 的环境故障同样值得持久化
     if !o.is_complete() {

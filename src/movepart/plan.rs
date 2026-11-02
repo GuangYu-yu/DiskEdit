@@ -16,22 +16,12 @@ pub fn chunk_bytes(mib: u64) -> io::Result<u64> {
 /// （内容可弃 → 不搬数据、落位后 mkswap 重建），只有 resize-part 的单分区路径会
 /// 一并拒绝它（那里没有重建流程）
 ///
-/// 磁盘序的常量取自 [`table`]；下面两个是同一标准文本的自然序形态（按 RFC 4122
-/// 字段顺序摆放，而非 GPT 要求的混合端）。两种布局的盘都真实存在，识别两种都认
-pub(crate) const LUKS_TYPE_GUID_NATURAL: [u8; 16] = [
-    0xCA, 0x7D, 0x7C, 0xCB, 0x63, 0xED, 0x4C, 0x53, 0x86, 0x1C, 0x17, 0x42, 0x53, 0x60, 0x59, 0xCC,
-];
-
-pub(crate) const LVM_TYPE_GUID_NATURAL: [u8; 16] = [
-    0xE6, 0xD6, 0xD3, 0x79, 0xF5, 0x07, 0x44, 0xC2, 0xA2, 0x3C, 0x23, 0x8F, 0x2A, 0x3D, 0xF9, 0x28,
-];
-
-/// LUKS / LVM PV 类型判定（磁盘序与 table 常量同源，不另抄字面量）
+/// 磁盘序常量取自 [`table`]，另一种摆法由 [`table::guid_in_field_order`] 从同一常量
+/// 派生：两种布局的盘都真实存在，识别两种都认，但标准文本只写一份
 pub(crate) fn is_forbidden_type_guid(g: &[u8; 16]) -> bool {
-    *g == table::LUKS_TYPE_GUID
-        || *g == LUKS_TYPE_GUID_NATURAL
-        || *g == table::LVM_TYPE_GUID
-        || *g == LVM_TYPE_GUID_NATURAL
+    [table::LUKS_TYPE_GUID, table::LVM_TYPE_GUID]
+        .iter()
+        .any(|known| *g == *known || *g == table::guid_in_field_order(known))
 }
 
 #[derive(Clone)]
@@ -44,15 +34,11 @@ pub struct PlanEntry {
     pub is_swap: bool,
 }
 
-/// swap 类型 GUID 的自然序形态：同一标准文本按 RFC 4122 字段顺序摆放（而非 GPT 要求的
-/// 混合端）。识别两种都认——两种布局的盘都真实存在
-pub(crate) const SWAP_TYPE_GUID_NATURAL: [u8; 16] = [
-    0x06, 0x57, 0xFD, 0x6D, 0xA4, 0xAB, 0x43, 0xC4, 0x84, 0xE5, 0x09, 0x33, 0xC8, 0x4B, 0x4F, 0x4F,
-];
-
-/// swap 类型判定（磁盘序与 table::SWAP_TYPE_GUID 同源，不另抄字面量）
+/// swap 类型判定（磁盘序常量与 [`table::SWAP_TYPE_GUID`] 同源，另一种摆放由
+/// [`table::guid_in_field_order`] 派生）
 pub(crate) fn is_swap_guid(g: &[u8; 16]) -> bool {
-    *g == table::SWAP_TYPE_GUID || *g == SWAP_TYPE_GUID_NATURAL
+    let known = table::SWAP_TYPE_GUID;
+    *g == known || *g == table::guid_in_field_order(&known)
 }
 
 /// plan 的进入语义。`grow` 与 `SIZE` 两条命令共用同一个续跑槽位，续跑时必须
@@ -156,7 +142,7 @@ pub fn make_plan_resuming(
         ResumeOutcome::Occupied => Err(foreign_checkpoint_refusal()),
         // 槽位被单分区 resize 作业占着：与 apply 同一结论、同一文案（那里在 prepare_apply
         // 的分派处拒绝）。只修 apply 不修这里，plan 就会打印一份 apply 必然拒绝的计划并报成功
-        ResumeOutcome::ForeignResize => Err(foreign_resize_refusal()),
+        ResumeOutcome::ForeignResize { .. } => Err(foreign_resize_refusal()),
         ResumeOutcome::Empty => plan_tail_packed(g, repair, grow_part),
     }
 }
@@ -272,7 +258,7 @@ pub fn make_plan_shift_resuming(
         ResumeOutcome::Occupied => return Err(foreign_checkpoint_refusal()),
         // 另一族作业（单分区 resize）占着槽位：同上——现算的位移 plan 与那个作业的现场
         // 不符，它的续跑点由 prepare_resize 按 RsCheckpoint 决定，不在这里
-        ResumeOutcome::ForeignResize => return Err(foreign_resize_refusal()),
+        ResumeOutcome::ForeignResize { .. } => return Err(foreign_resize_refusal()),
         ResumeOutcome::Empty => {}
     }
     let ShiftIntent::Grow(shift) = intent else {
@@ -297,10 +283,21 @@ pub(crate) fn relocation_ownership(src: &FileSource, grow_part: u32) -> Result<b
     match resume_outcome_in(src, grow_part)? {
         ResumeOutcome::Belongs(_) => Ok(true),
         // 空槽与"另一族作业占着"对本事务门是同一结论：都不由它续跑（单分区
-        // resize 的现场要用 resize-part / move 续，不是重跑 resize），闸口按 busy 拒绝
-        ResumeOutcome::Empty | ResumeOutcome::ForeignResize => Ok(false),
+        // resize 的现场要用 resize-part / move 续），闸口按 busy 拒绝
+        ResumeOutcome::Empty | ResumeOutcome::ForeignResize { .. } => Ok(false),
         ResumeOutcome::Occupied => Err(foreign_checkpoint_refusal()),
     }
+}
+
+/// 槽位里的单分区 resize 作业是否属于 `part` 且记着 LVM 收尾事实。`resize` 入口的收尾链
+/// 事实（`RsCheckpoint::lvm`）只随这一类现场落盘，也只有 `resize` 的收尾能续做它。
+/// 别的分区由 `resize-part` / `move` 续；不带 LVM 收尾事实的现场沿用原有契约
+/// （`resize` 拒绝、由 `undo` 回滚或 `abandon` 释放），故这里一并返回 false
+pub(crate) fn partition_resize_ownership(src: &FileSource, part: u32) -> Result<bool, Fail> {
+    Ok(matches!(
+        resume_outcome_in(src, part)?,
+        ResumeOutcome::ForeignResize { part: p, lvm_pending: true } if p == part
+    ))
 }
 
 /// 槽位被**别的分区**的搬移作业占用时的拒绝理由。两处 plan 生成路径与事务门共用
@@ -369,9 +366,11 @@ pub(crate) enum ResumeOutcome {
     Occupied,
     /// 槽位被**另一族**作业（单分区 resize 的 `RsCheckpoint`）占用。与 `Occupied` 并列而非
     /// 并入，因为两族对它的结论不同：plan 型搬移绝不能在此现算计划——盘上几何已被那次
-    /// resize 部分改写，现算的 plan 会打印成功，apply 却必然拒绝；resize/apply 对它
-    /// 拒绝（本入口续不了它，出路是 `resize-part` / `move`）
-    ForeignResize,
+    /// resize 部分改写，现算的 plan 会打印成功，apply 却必然拒绝。带上是哪个分区，以及
+    /// 那份 ckpt 是否记着 LVM 收尾事实：`resize` 入口用它分出"这份作业就是本次请求的
+    /// 续跑"（收尾链事实只能由 `resize` 续做）与"槽位属于别的分区或不属于 LVM 收尾"
+    /// （前者归 `resize-part` / `move`，后者按原有契约拒绝）
+    ForeignResize { part: u32, lvm_pending: bool },
 }
 
 /// ckpt 里记录的 plan（仅当它属于该分区）。plan 型搬移的**任何**生成路径在恢复期都必须
@@ -398,7 +397,7 @@ pub(crate) fn resume_outcome(src: &FileSource, g: &ValidatedGeometry, grow_part:
         }
         CheckpointSlot::Empty => ResumeOutcome::Empty,
         // 另一族作业（单分区 resize）占着槽位：搬移不得在此现算计划，见 `ForeignResize`
-        CheckpointSlot::Resize(_) => ResumeOutcome::ForeignResize,
+        CheckpointSlot::Resize(c) => ResumeOutcome::ForeignResize { part: c.part, lvm_pending: c.lvm.is_some() },
     })
 }
 

@@ -4,8 +4,179 @@ use super::*;
 
 pub const CKPT_MAGIC: &[u8; 8] = b"DKECKPT1";
 
-/// 指纹含设备 ID 哈希（块设备整盘身份），尾部带身份种类
-pub const CKPT_VERSION: u32 = 6;
+/// 指纹含设备 ID 哈希（块设备整盘身份），尾部带身份种类；版本号之后紧跟 LVM 收尾事实块
+pub const CKPT_VERSION: u32 = 7;
+
+/// 写表之前只读选定的目标 LV。字段都是只读查询的结果，不落盘——落盘的是由它导出的
+/// [`LvmPostFacts`]。命令层在首次写表前用它完成选择，执行半程据此生成持久事实
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct LvmSelection {
+    pub(crate) name: String,
+    pub(crate) path: String,
+    pub(crate) extent_bytes: u64,
+    /// 选择时 LV 的当前字节数（扩 LV 的基线）
+    pub(crate) size: u64,
+}
+
+/// 分区已提交、LVM 收尾尚未完成时随 checkpoint 落盘的事实。续跑据此判定该不该扩、
+/// 扩到哪里：`lv_size_before` / `lv_target` 是同一次作业的基线，盘上没有第二份。
+/// `lv_path` 为 None 表示这次只做 pvresize（未请求 `--grow-lv`），此时三个数值为 0
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct LvmPostFacts {
+    pub(crate) lv_path: Option<String>,
+    pub(crate) lv_size_before: u64,
+    pub(crate) lv_target: u64,
+    /// 记录时的 VG extent 字节数：续跑核对 VG 的 extent 大小没有变，
+    /// 目标字节数仍与 `lvextend -l +N` 的 N 一致
+    pub(crate) extent_bytes: u64,
+}
+
+/// checkpoint 里的 LV 路径上限：路径是盘上可控输入，超长值直接当损坏拒绝
+const LV_PATH_MAX: usize = 4096;
+
+impl LvmPostFacts {
+    /// 版本号之后的第一块。两种 checkpoint（DKECKPT1 / DKECKPT2）共用同一编码，
+    /// 只读解析（[`read_lvm_post`]）因此不必知道现场属于哪一族
+    pub(crate) fn encode(&self, b: &mut Vec<u8>) {
+        b.push(1);
+        match &self.lv_path {
+            None => b.push(0),
+            Some(p) => {
+                b.push(1);
+                b.extend_from_slice(&(p.len() as u32).to_le_bytes());
+                b.extend_from_slice(p.as_bytes());
+            }
+        }
+        b.extend_from_slice(&self.lv_size_before.to_le_bytes());
+        b.extend_from_slice(&self.lv_target.to_le_bytes());
+        b.extend_from_slice(&self.extent_bytes.to_le_bytes());
+    }
+
+    /// `off` 指向版本号之后；读成功时把 `off` 推进到块尾。没有事实块时写的是 0 标志
+    pub(crate) fn decode(b: &[u8], off: &mut usize) -> io::Result<Option<Self>> {
+        let rd = |off: usize, n: usize| -> io::Result<&[u8]> {
+            b.get(off..off + n).ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "checkpoint truncated"))
+        };
+        let bad = |m: &str| io::Error::new(io::ErrorKind::InvalidData, m.to_string());
+        let flag = rd(*off, 1)?[0];
+        *off += 1;
+        match flag {
+            0 => Ok(None),
+            1 => {
+                let lv_flag = rd(*off, 1)?[0];
+                *off += 1;
+                let lv_path = match lv_flag {
+                    0 => None,
+                    1 => {
+                        let len = u32::from_le_bytes(rd(*off, 4)?.try_into().unwrap()) as usize;
+                        *off += 4;
+                        if len == 0 || len > LV_PATH_MAX {
+                            return Err(bad("implausible checkpoint LV path length"));
+                        }
+                        let bytes = rd(*off, len)?;
+                        *off += len;
+                        let p = std::str::from_utf8(bytes).map_err(|_| bad("checkpoint LV path is not UTF-8"))?;
+                        if !p.starts_with('/') {
+                            return Err(bad("checkpoint LV path is not absolute"));
+                        }
+                        Some(p.to_string())
+                    }
+                    _ => return Err(bad("implausible checkpoint LV marker")),
+                };
+                let lv_size_before = u64::from_le_bytes(rd(*off, 8)?.try_into().unwrap());
+                *off += 8;
+                let lv_target = u64::from_le_bytes(rd(*off, 8)?.try_into().unwrap());
+                *off += 8;
+                let extent_bytes = u64::from_le_bytes(rd(*off, 8)?.try_into().unwrap());
+                *off += 8;
+                if lv_path.is_some() {
+                    // 目标由 before + N×extent 算出：不整除或非正的量都无法还原成 N，
+                    // 续跑会扩出一个与作业不同的尺寸
+                    if extent_bytes == 0
+                        || lv_size_before == 0
+                        || lv_target <= lv_size_before
+                        || (lv_target - lv_size_before) % extent_bytes != 0
+                    {
+                        return Err(bad("implausible checkpoint LV resize facts"));
+                    }
+                } else if lv_size_before != 0 || lv_target != 0 || extent_bytes != 0 {
+                    return Err(bad("checkpoint LV facts present without an LV path"));
+                }
+                Ok(Some(LvmPostFacts { lv_path, lv_size_before, lv_target, extent_bytes }))
+            }
+            _ => Err(bad("implausible checkpoint LVM marker")),
+        }
+    }
+}
+
+/// 只读 checkpoint 里的 LVM 收尾事实（不校验几何限制）：收尾链在表提交之后运行，
+/// 需要的就是这一份持久事实。现场不存在 → None；现场存在但读不出事实 → Err
+/// （不能把损坏的现场当成"没有待办"而静默收口）
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))] // 收尾链只在 Linux 上存在
+pub(crate) fn read_lvm_post(path: &std::path::Path) -> io::Result<Option<LvmPostFacts>> {
+    use std::io::ErrorKind;
+    let bytes = match std::fs::read(path) {
+        Ok(b) => b,
+        Err(e) if e.kind() == ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    if bytes.len() < 12 {
+        return Err(io::Error::new(ErrorKind::InvalidData, "checkpoint truncated"));
+    }
+    let magic = &bytes[0..8];
+    let version = u32::from_le_bytes(bytes[8..12].try_into().unwrap());
+    let expected = if magic == CKPT_MAGIC {
+        CKPT_VERSION
+    } else if magic == CKPT2_MAGIC {
+        CKPT2_VERSION
+    } else {
+        return Err(io::Error::new(ErrorKind::InvalidData, "checkpoint magic mismatch"));
+    };
+    if version != expected {
+        return Err(io::Error::new(ErrorKind::InvalidData, format!("unsupported checkpoint version {version}")));
+    }
+    let mut off = 12;
+    LvmPostFacts::decode(&bytes, &mut off)
+}
+
+/// 由写表前的只读选择与本次新增字节导出持久事实。`defer` 为真表示这次操作的后置条件
+/// 含 LVM 收尾（目标是 PV）；新增字节为 0 时没有可交给 LV 的量，故没有事实可记。
+/// 不足一个 extent 的量在写表之前拒绝：表已改而 LV 分不到任何空间正是"命令说成功、
+/// 空间却不能用"的形态
+pub(crate) fn lvm_post_for(
+    defer: bool,
+    sel: Option<&LvmSelection>,
+    old_bytes: u64,
+    new_bytes: u64,
+) -> Result<Option<LvmPostFacts>, Fail> {
+    if !defer || new_bytes <= old_bytes {
+        return Ok(None);
+    }
+    let delta = new_bytes - old_bytes;
+    let Some(s) = sel else {
+        // 未请求 --grow-lv：partition 的新空间由 pvresize 吸收，没有 LV 级的量
+        return Ok(Some(LvmPostFacts { lv_path: None, lv_size_before: 0, lv_target: 0, extent_bytes: 0 }));
+    };
+    let add = delta / s.extent_bytes;
+    if add == 0 {
+        return Err(Fail::refused(format!(
+            "added {delta} bytes is less than one extent ({} bytes) — the LV cannot take any of the added space",
+            s.extent_bytes
+        )));
+    }
+    let overflow = || Fail::infra("LV target size overflows");
+    if s.size == 0 {
+        return Err(Fail::refused(format!("LV {} reports 0 bytes — nothing to extend", s.path)));
+    }
+    let grow = add.checked_mul(s.extent_bytes).ok_or_else(overflow)?;
+    let lv_target = s.size.checked_add(grow).ok_or_else(overflow)?;
+    Ok(Some(LvmPostFacts {
+        lv_path: Some(s.path.clone()),
+        lv_size_before: s.size,
+        lv_target,
+        extent_bytes: s.extent_bytes,
+    }))
+}
 
 /// checkpoint 批量提交粒度的起点：性能参数，不属于恢复协议。恢复永远从最近一次
 /// durable checkpoint 继续；实际批量由 [`next_ckpt_batch`] 按提交耗时与
@@ -58,6 +229,8 @@ pub struct Checkpoint<P = crate::dev::IdentityProof> {
     pub fp: crate::dev::TargetFingerprint, // 目标文件指纹（"同路径换文件"防线）
     pub map: Option<(u64, u64)>,           // 创建时的 loop 映射；None = 非 loop 进入
     pub proof: P,                         // 指纹里哪一类字段才是身份证据
+    /// 分区已提交后仍未完成的 LVM 收尾（pvresize / lvextend 及其基线）
+    pub lvm: Option<LvmPostFacts>,
 }
 
 impl Checkpoint<crate::dev::LiveProof> {
@@ -65,6 +238,11 @@ impl Checkpoint<crate::dev::LiveProof> {
         let mut b = Vec::new();
         b.extend_from_slice(CKPT_MAGIC);
         b.extend_from_slice(&CKPT_VERSION.to_le_bytes());
+        // LVM 收尾事实紧跟版本号：只读解析（read_lvm_post）不必懂其余字段布局
+        match &self.lvm {
+            None => b.push(0),
+            Some(f) => f.encode(&mut b),
+        }
         b.extend_from_slice(&self.disk_size.to_le_bytes());
         b.extend_from_slice(&self.ss.to_le_bytes());
         b.extend_from_slice(&self.grow_part.to_le_bytes());
@@ -119,6 +297,7 @@ impl Checkpoint<crate::dev::IdentityProof> {
         let rd = |off: usize, n: usize| -> io::Result<&[u8]> {
             b.get(off..off + n).ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "checkpoint truncated"))
         };
+        let lvm = LvmPostFacts::decode(b, &mut off)?;
         let disk_size = u64::from_le_bytes(rd(off, 8)?.try_into().unwrap());
         off += 8;
         let ss = u64::from_le_bytes(rd(off, 8)?.try_into().unwrap());
@@ -265,6 +444,7 @@ impl Checkpoint<crate::dev::IdentityProof> {
         }
         Ok(Checkpoint {
             disk_size, ss, grow_part, last_usable_lba, moves, kind, cur_index, chunks_done, chunk_bytes, fp, map, proof,
+            lvm,
         })
     }
 }

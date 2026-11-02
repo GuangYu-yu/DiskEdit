@@ -3,28 +3,33 @@
 use super::*;
 use crate::fsops::{run, run_input};
 
-/// part_resize 的失败按"是否知道表已落盘"与"成因在哪一侧"分四类——这不是措辞差异：
+/// part_resize 的失败按"是否知道表已落盘"与"成因在哪一侧"分类——这不是措辞差异：
 /// - `Stale`：写前重读判定"当前盘上现状与请求不符"——目标条目被改、新尺寸压到现存分区，
 ///   或重读本身给出拒绝（无表、LBA0 保护布局受损）。表未写 → 拒绝（10）
 /// - `NoWrite`：sfdisk 进程未启动，表确定未写
 /// - `Unknown`：sfdisk 执行了但报错。脚本被拒是未写、写入中途失败则可能已写，
 ///   两者在 stdout/stderr 上不可区分 → 不得断言未写
-/// - `Partial`：表已写，仅内核同步失败
+/// - `Unverified`：sfdisk 报成功，但盘上条目重读失败或与请求不符。写入已发出而结果
+///   不可证实：既不能据此声称内核同步失败（同步只发生在重读通过之后），也不能当成
+///   "未写盘"而安全重试
+/// - `Partial`：表已写且盘上核验通过，仅内核同步失败
 pub(crate) enum PartResizeError {
     Stale(io::Error),
     NoWrite(io::Error),
     Unknown(io::Error),
+    Unverified(io::Error),
     Partial(io::Error),
 }
 
 impl PartResizeError {
     pub(crate) fn detail(&self) -> &io::Error {
         match self {
-            Self::Stale(e) | Self::NoWrite(e) | Self::Unknown(e) | Self::Partial(e) => e,
+            Self::Stale(e) | Self::NoWrite(e) | Self::Unknown(e) | Self::Unverified(e) | Self::Partial(e) => e,
         }
     }
     /// 现状与请求不符 → 拒绝；表未写 → Infra（确定未写盘，不带"盘可能已改变"的提示）；
-    /// 无法断言 → Failed；表已写 → Applied（内核视图置为过期，退出码 20）。
+    /// 无法断言（`Unknown`，或写入结果不可证实 `Unverified`）→ Failed；表已写且核验
+    /// 通过 → Applied（内核视图置为过期，退出码 20）。
     /// 具体原因（含 errno 提示）在发生处打印，契约摘要由 Outcome::report 统一输出
     pub(crate) fn into_outcome(self) -> Outcome {
         self.into_outcome_with(Vec::new())
@@ -37,6 +42,7 @@ impl PartResizeError {
             ResizeFailClass::Refused(msg) => Outcome::refused(msg),
             ResizeFailClass::Infra(msg) => Outcome::infra(msg),
             ResizeFailClass::Failed(msg) => Outcome::failed(msg),
+            ResizeFailClass::WrittenUnverified(msg) => Outcome::failed_with(msg, pending),
             ResizeFailClass::AppliedStaleKernel(msg) => {
                 eprintln!("warning: partition table written but kernel sync failed: {msg}");
                 let mut o = Outcome::applied_with(pending);
@@ -47,7 +53,7 @@ impl PartResizeError {
     }
 }
 
-/// part_resize 失败的三态分类（纯函数核）：副作用（警告打印、Outcome 构造）留在
+/// part_resize 失败的分类（纯函数核）：副作用（警告打印、Outcome 构造）留在
 /// into_outcome，分类依据本身可单测——"知道表写没写"决定退出码语义，这是契约级判断
 #[derive(Debug)]
 pub(crate) enum ResizeFailClass {
@@ -57,7 +63,9 @@ pub(crate) enum ResizeFailClass {
     Infra(String),
     /// sfdisk 执行过但报错，表是否落盘不可断言
     Failed(String),
-    /// 表已写，仅内核同步失败（布局生效、内核视图过期）
+    /// 写命令报成功但盘上状态不可证实：写入已发生、结果未知
+    WrittenUnverified(String),
+    /// 表已写且盘上核验通过，仅内核同步失败（布局生效、内核视图过期）
     AppliedStaleKernel(String),
 }
 
@@ -66,6 +74,7 @@ pub(crate) fn classify_part_resize_error(e: &PartResizeError) -> ResizeFailClass
         PartResizeError::Stale(err) => ResizeFailClass::Refused(err.to_string()),
         PartResizeError::NoWrite(err) => ResizeFailClass::Infra(err.to_string()),
         PartResizeError::Unknown(err) => ResizeFailClass::Failed(err.to_string()),
+        PartResizeError::Unverified(err) => ResizeFailClass::WrittenUnverified(err.to_string()),
         PartResizeError::Partial(err) => ResizeFailClass::AppliedStaleKernel(err.to_string()),
     }
 }
@@ -126,6 +135,27 @@ pub(crate) fn part_resize(t: &OnlineTarget, new_len_bytes: u64) -> Result<(), Pa
             });
         }
     }
+    // 交给 sfdisk 的是这条路径，它自己再打开一次：写前把路径与本次重读所用句柄的
+    // 设备号核对一遍。核对之后到 sfdisk 打开之间仍有窗口（它只接受路径），本进程
+    // 无法消除——但窗口里"路径被重绑到另一台设备"不再是唯一的判据来源
+    let rdev = disk.metadata().map_err(|e| {
+        PartResizeError::NoWrite(io::Error::other(format!(
+            "cannot stat the re-read handle of {}: {e}",
+            t.disk_dev.display()
+        )))
+    })?.st_rdev();
+    let sysdir = crate::dev::sysfs_node_from_rdev(rdev).map_err(|e| {
+        PartResizeError::NoWrite(io::Error::other(format!(
+            "cannot resolve the sysfs node of {}: {e}",
+            t.disk_dev.display()
+        )))
+    })?;
+    crate::dev::ensure_node_is_device(&t.disk_dev, &sysdir).map_err(|e| {
+        PartResizeError::Stale(io::Error::other(format!(
+            "{} no longer denotes the device this command re-read: {e}",
+            t.disk_dev.display()
+        )))
+    })?;
     // sfdisk 脚本里的裸数字按"设备扇区"解释（libfdisk/src/script.c：脚本不带
     // `sector-size:` 头时 `recount_script2device_sectors` 直接返回，已解析的数值就是
     // 设备逻辑扇区数），即 4Kn = 4096B 而非恒 512B，故按 t.logical_block 换算。
@@ -158,7 +188,7 @@ pub(crate) fn part_resize(t: &OnlineTarget, new_len_bytes: u64) -> Result<(), Pa
         Ok(snap) => {
             if snap.target != (t.start_bytes, new_len_bytes) {
                 let (start, len) = snap.target;
-                return Err(PartResizeError::Partial(io::Error::other(format!(
+                return Err(PartResizeError::Unverified(io::Error::other(format!(
                     "sfdisk reported success but the on-disk entry of partition {} is {start}..{} instead of the \
                      requested {}..{} bytes — the table write did not produce the requested size",
                     t.pno,
@@ -169,7 +199,7 @@ pub(crate) fn part_resize(t: &OnlineTarget, new_len_bytes: u64) -> Result<(), Pa
             }
         }
         Err(f) => {
-            return Err(PartResizeError::Partial(io::Error::other(format!(
+            return Err(PartResizeError::Unverified(io::Error::other(format!(
                 "sfdisk reported success but the on-disk partition table cannot be re-read to confirm it: {f}"
             ))));
         }

@@ -37,7 +37,8 @@ pub(crate) struct TargetLock {
     /// 镜像目标的第二道凭据：对**数据文件自身**上的非阻塞排他锁（inode 级，仅 unix）。
     /// 锁文件按 canonical path 派生，硬链接等"同一 inode 的另一条路径"由此各拿一把
     /// 锁文件锁、互相看不见；对数据文件上锁才把同一份数据收敛到一把锁。
-    /// 目标不在（`abandon` 的常态）时拿不到这道凭据，退回只靠锁文件。
+    /// 调用方未给出 inode 证据（`abandon` 的常态）且目标不在时，退回只靠锁文件；
+    /// 给出预期的写路径若目标不在则取锁失败。
     /// Windows 侧不取这道凭据：那里的 LockFileEx 是**强制**的且 `File::lock` 锁整个文件，
     /// 本进程随后经另一个句柄读写同一文件会直接 ERROR_LOCK_VIOLATION（见
     /// [`crate::dev::FileSource`] 的读写句柄）
@@ -84,12 +85,14 @@ impl TargetLock {
         // ——`abandon` 的常态就是目标已消失，那时能依赖的只有锁文件。其余打开失败
         // （EACCES / EMFILE / EIO）不是"目标不在"：静默降级会丢掉 inode 级凭据
         #[cfg(unix)]
+        let want = expected.filter(|f| f.has_inode_evidence());
+        #[cfg(unix)]
         let image = match identity.image_data_path() {
             Some(data) => match OpenOptions::new().read(true).open(data) {
                 Ok(f) => {
                     // 路径可能已不再指向打开时的那个文件：比对已打开句柄的 inode 证据，
                     // 不符即拒绝——此时"锁住了数据文件"这句话对写入的那个对象不成立
-                    if let Some(want) = expected.filter(|f| f.has_inode_evidence()) {
+                    if let Some(want) = want {
                         use std::os::unix::fs::MetadataExt;
                         let meta = f.metadata().map_err(|e| {
                             Fail::infra(format!("cannot identify the target {} to take the inode lock: {e}", data.display()))
@@ -114,7 +117,17 @@ impl TargetLock {
                         }
                     }
                 }
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+                // 只有调用方没有给出 inode 证据时才允许"目标不在"：那是清理路径的常态。
+                // 正常写路径带着预期身份却打不开，就无法证明写入落在预期对象上，不能
+                // 降级成"只靠锁文件"继续写——锁文件按路径派生，硬链接别名各拿一把
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound && want.is_none() => None,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    return Err(Fail::refused(format!(
+                        "{} does not exist, but the caller opened a file expected to still be there — \
+                         refusing to write without the inode-level lock",
+                        data.display()
+                    )));
+                }
                 Err(e) => {
                     return Err(Fail::infra(format!(
                         "cannot open the target {} to take the inode lock: {e}",
@@ -186,6 +199,32 @@ mod tests {
         TargetLock::acquire(&identity_for(&img), None).expect("a released lock must be re-acquirable");
 
         cleanup(&img);
+    }
+
+    /// 正常写路径带着预期身份取锁时，目标路径若已不指向打开时的文件（这里直接消失），
+    /// 不能降级成"只靠锁文件"继续：锁文件按路径派生，别名路径各拿一把。
+    /// 没有预期身份的清理路径（`abandon`）仍允许目标不在
+    #[cfg(unix)]
+    #[test]
+    fn a_missing_target_with_expected_identity_is_refused() {
+        let img = temp_image("missing");
+        let identity = identity_for(&img);
+        let lock_path = identity.lock_path().to_path_buf();
+        let _ = std::fs::remove_file(&lock_path);
+        // 指纹取自已打开的句柄，随后删除路径：调用方仍持有那份文件，路径却已不在
+        let opened = std::fs::File::open(&img).unwrap();
+        let fp = TargetFingerprint::from_file(&opened).unwrap();
+        std::fs::remove_file(&img).unwrap();
+
+        let err = match TargetLock::acquire(&identity, Some(&fp)) {
+            Ok(_) => panic!("the expected file is gone — locking must be refused"),
+            Err(e) => e,
+        };
+        assert!(matches!(&err, Fail::Refused(m) if m.contains("does not exist")), "{err:?}");
+        // 清理路径没有预期身份：目标不在是常态，仍可只凭锁文件取锁
+        TargetLock::acquire(&identity, None).expect("a cleanup path without identity may proceed");
+
+        let _ = std::fs::remove_file(&lock_path);
     }
 
     /// 硬链接是同一份数据的另一条路径：锁文件按 canonical path 派生，两条路径各派生

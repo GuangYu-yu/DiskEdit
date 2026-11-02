@@ -618,20 +618,12 @@ fn archive_torn(from: &std::path::Path) -> Result<std::path::PathBuf, String> {
             }
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(_) if !to.exists() => {
-                // 退路同样不许覆盖：先用 create_new 占住名字（占位是空文件），
-                // rename 覆盖的是本进程刚建的这个占位，不是既有的归档
-                match std::fs::OpenOptions::new().write(true).create_new(true).open(&to) {
-                    Ok(_) => {
-                        return std::fs::rename(from, &to).map(|()| to.clone()).map_err(|e| {
-                            // 占位删不掉只是留下一个空文件，不改变"这次归档失败"的结论
-                            let _placeholder_gone = std::fs::remove_file(&to);
-                            format!("cannot archive the journal at {}: {e}", from.display())
-                        });
-                    }
+                // 退路同样不许覆盖：create_new 先占住名字，rename 覆盖的是本进程刚建的占位
+                match crate::dev::rename_over_placeholder(from, &to) {
+                    Ok(()) => return Ok(to),
                     Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-                    Err(e) => {
-                        return Err(format!("cannot archive the journal at {}: {e}", from.display()));
-                    }
+                    // 占位删不掉只是留下一个空文件，不改变"这次归档失败"的结论
+                    Err(e) => return Err(format!("cannot archive the journal at {}: {e}", from.display())),
                 }
             }
             Err(_) => continue,

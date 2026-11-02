@@ -28,6 +28,8 @@ mod movepart;
 mod support;
 mod table;
 mod targetlock;
+#[cfg(test)]
+mod testrng;
 mod transaction;
 
 use std::process::ExitCode;
