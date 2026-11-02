@@ -22,6 +22,7 @@ pub(crate) fn checkpoint_slot_ownership_is_enforced() {
         fs_shrunk: FsShrink::NotShrunk, chunks_done: 0, chunk_bytes: chunk,
         fp: Default::default(),
         map: None,
+        lvm: None,
         fstype: None,
     };
     atomic_write_ckpt(&ckpt_path, &rs.serialize()).unwrap();
@@ -38,6 +39,7 @@ pub(crate) fn checkpoint_slot_ownership_is_enforced() {
         moves: plan.moves.clone(), kind: PlanKind::TailPacked, cur_index: 0, chunks_done: 0, chunk_bytes: chunk,
         fp: Default::default(),
         map: None,
+        lvm: None,
     };
     atomic_write_ckpt(&ckpt_path, &ck.serialize()).unwrap();
     let o = rsize(&mut src,1, 2048, 3071, chunk, false, &mut |_| {});
@@ -89,13 +91,14 @@ pub(crate) fn checkpoint_rejects_implausible_partition_numbers() {
         chunk_bytes: 1024 * 1024,
         fp: Default::default(),
         map: None,
+        lvm: None,
     };
     assert!(Checkpoint::deserialize(&ckpt.serialize(), &lim(128)).is_ok(), "the baseline must be readable");
 
-    // 字段偏移：magic(8) + ver(4) + disk_size(8) + ss(8) ⇒ grow_part @28；
-    // 其后 last_usable_lba(8) + count(4) ⇒ 首条 move 的 part_num @44
-    const GROW_PART: usize = 28;
-    const MOVE_PART: usize = 44;
+    // 字段偏移：magic(8) + ver(4) + LVM 标志(1) + disk_size(8) + ss(8) ⇒ grow_part @29；
+    // 其后 last_usable_lba(8) + count(4) ⇒ 首条 move 的 part_num @45
+    const GROW_PART: usize = 29;
+    const MOVE_PART: usize = 45;
     for (off, value, what) in [
         (GROW_PART, 0u32, "grow_part = 0"),
         (GROW_PART, 129, "grow_part = 129"),
@@ -123,6 +126,7 @@ pub(crate) fn checkpoint_rejects_implausible_partition_numbers() {
         last_usable_lba: 100_000,
         fp: Default::default(),
         map: None,
+        lvm: None,
         ..ckpt
     };
     assert!(
@@ -165,11 +169,12 @@ pub(crate) fn checkpoint_rejects_implausible_chunk_progress() {
         chunk_bytes: 1024 * 1024,
         fp: Default::default(),
         map: None,
+        lvm: None,
     };
     assert!(Checkpoint::deserialize(&ckpt.serialize(), &lim(128)).is_ok(), "baseline must stay readable");
 
-    const CUR_INDEX: usize = 73;  // 头 73 字节（magic..moves[0]）之后
-    const CHUNKS_DONE: usize = 77;
+    const CUR_INDEX: usize = 74;  // 头 74 字节（magic..moves[0]）之后
+    const CHUNKS_DONE: usize = 78;
     let rewrite_crc = |b: &mut Vec<u8>| {
         let crc_off = b.len() - 4;
         let crc = table::crc32(&b[..crc_off]);
@@ -203,6 +208,7 @@ pub(crate) fn checkpoint_rejects_implausible_chunk_progress() {
         fs_shrunk: FsShrink::NotShrunk, chunks_done: 1, chunk_bytes: 1024 * 1024,
         fp: Default::default(),
         map: None,
+        lvm: None,
         fstype: None,
     };
     assert!(RsCheckpoint::deserialize(&rs.serialize(), &lim(128)).is_ok(), "baseline must stay readable");
@@ -215,6 +221,7 @@ pub(crate) fn checkpoint_rejects_implausible_chunk_progress() {
         fs_shrunk: FsShrink::NotShrunk, chunks_done: 1, chunk_bytes: 1024 * 1024,
         fp: crate::dev::TargetFingerprint { dev: 7, ino: 42, size: 1 << 20, id: 0 },
         map: Some((1024 * 1024, 0)),
+        lvm: None,
         fstype: Some(FsKind::Ext),
     };
     let back = RsCheckpoint::deserialize(&mapped.serialize(), &lim(128)).expect("mapped checkpoint must round-trip");
@@ -222,7 +229,7 @@ pub(crate) fn checkpoint_rejects_implausible_chunk_progress() {
     assert_eq!(back.map, Some((1024 * 1024, 0)));
     assert_eq!(back.fstype, Some(FsKind::Ext), "the filesystem kind must survive the round-trip");
     let mut b = rs.serialize();
-    b[65..73].copy_from_slice(&2u64.to_le_bytes()); // chunks_done @ 12+6×8+4+1
+    b[66..74].copy_from_slice(&2u64.to_le_bytes()); // chunks_done @ 12+1(LVM 标志)+6×8+4+1
     rewrite_crc(&mut b);
     let e = RsCheckpoint::deserialize(&b, &lim(128)).err().expect("chunks_done beyond the moved range must be rejected");
     assert_eq!(e.kind(), io::ErrorKind::InvalidData, "{e}");
@@ -245,6 +252,7 @@ pub(crate) fn relocation_ckpt_last_usable_is_bounded_by_the_usable_area() {
         chunk_bytes: 1024 * 1024,
         fp: Default::default(),
         map: None,
+        lvm: None,
     };
     // 容器比可用区大（200_000 vs 100_000）：两值相等时测不出上界取的是哪一个
     let bounds = GeometryLimits {
@@ -256,8 +264,8 @@ pub(crate) fn relocation_ckpt_last_usable_is_bounded_by_the_usable_area() {
     };
     assert!(Checkpoint::deserialize(&ckpt.serialize(), &bounds).is_ok(), "the baseline must be readable");
 
-    // 字段偏移：magic(8) + ver(4) + disk_size(8) + ss(8) + grow_part(4) ⇒ last_usable @32
-    const LAST_USABLE: usize = 32;
+    // 字段偏移：magic(8) + ver(4) + LVM 标志(1) + disk_size(8) + ss(8) + grow_part(4) ⇒ last_usable @33
+    const LAST_USABLE: usize = 33;
     let mut b = ckpt.serialize();
     b[LAST_USABLE..LAST_USABLE + 8].copy_from_slice(&150_000u64.to_le_bytes());
     let crc_off = b.len() - 4;
@@ -287,11 +295,12 @@ pub(crate) fn checkpoint_rejects_sector_size_mismatch() {
         chunk_bytes: 1024 * 1024,
         fp: Default::default(),
         map: None,
+        lvm: None,
     };
     assert!(Checkpoint::deserialize(&base.serialize(), &lim(128)).is_ok(), "the baseline must be readable");
 
-    // 字段偏移：magic(8) + ver(4) + disk_size(8) ⇒ ss @20（两族布局同前缀）
-    const SS: usize = 20;
+    // 字段偏移：magic(8) + ver(4) + LVM 标志(1) + disk_size(8) ⇒ ss @21（两族布局同前缀）
+    const SS: usize = 21;
     let mut b = base.serialize();
     b[SS..SS + 8].copy_from_slice(&4096u64.to_le_bytes());
     let crc_off = b.len() - 4;
@@ -309,6 +318,7 @@ pub(crate) fn checkpoint_rejects_sector_size_mismatch() {
         fs_shrunk: FsShrink::NotShrunk, chunks_done: 0, chunk_bytes: 1024 * 1024,
         fp: Default::default(),
         map: None,
+        lvm: None,
         fstype: None,
     };
     assert!(RsCheckpoint::deserialize(&rs.serialize(), &lim(128)).is_ok(), "the baseline must be readable");
@@ -323,8 +333,8 @@ pub(crate) fn checkpoint_rejects_sector_size_mismatch() {
 
 /// Checkpoint 头部与载荷判据的拒绝分支逐字段覆盖。CRC 之前的判据直接改字节即可
 /// 触发；CRC 之后的判据（chunk_bytes）须重算 CRC，证明拦住它的是字段校验本身。
-/// 布局推导沿用上方测试：moves 从 @44 起每条 29 字节，
-/// count=1 时 cur_index@73、chunks_done@77、chunk_bytes@85、kind@93
+/// 布局推导沿用上方测试：moves 从 @45 起每条 29 字节，
+/// count=1 时 cur_index@74、chunks_done@78、chunk_bytes@86、kind@94
 #[test]
 pub(crate) fn checkpoint_rejects_malformed_header_and_payload() {
     let ckpt = Checkpoint {
@@ -340,6 +350,7 @@ pub(crate) fn checkpoint_rejects_malformed_header_and_payload() {
         chunk_bytes: 1024 * 1024,
         fp: Default::default(),
         map: None,
+        lvm: None,
     };
     assert!(Checkpoint::deserialize(&ckpt.serialize(), &lim(128)).is_ok(), "the baseline must be readable");
     let rewrite_crc = |b: &mut Vec<u8>| {
@@ -359,24 +370,24 @@ pub(crate) fn checkpoint_rejects_malformed_header_and_payload() {
     let e = Checkpoint::deserialize(&b, &lim(128)).err().expect("a foreign version must be rejected");
     assert_eq!(e.kind(), io::ErrorKind::InvalidData, "{e}");
 
-    // last_usable_lba 越容器（@32）：放行会拿一个容器上并不存在的可用区去判区间
-    const LAST_USABLE: usize = 32;
+    // last_usable_lba 越容器（@33）：放行会拿一个容器上并不存在的可用区去判区间
+    const LAST_USABLE: usize = 33;
     let mut b = ckpt.serialize();
     b[LAST_USABLE..LAST_USABLE + 8].copy_from_slice(&200_001u64.to_le_bytes());
     let e = Checkpoint::deserialize(&b, &lim(128)).err().expect("last_usable beyond the container must be rejected");
     assert_eq!(e.kind(), io::ErrorKind::InvalidData, "{e}");
 
-    // 条目数越上界（@40）：防巨型 with_capacity，上界 = 表条目数
-    const COUNT: usize = 40;
+    // 条目数越上界（@41）：防巨型 with_capacity，上界 = 表条目数
+    const COUNT: usize = 41;
     let mut b = ckpt.serialize();
     b[COUNT..COUNT + 4].copy_from_slice(&129u32.to_le_bytes());
     let e = Checkpoint::deserialize(&b, &lim(128)).err().expect("a move count beyond the table's entries must be rejected");
     assert_eq!(e.kind(), io::ErrorKind::InvalidData, "{e}");
 
-    // 首条 move 的字段：first_lba@48、len_lba@56、delta_lba@64（区间算术全 checked）
-    const FIRST_LBA: usize = 48;
-    const LEN_LBA: usize = 56;
-    const DELTA_LBA: usize = 64;
+    // 首条 move 的字段：first_lba@49、len_lba@57、delta_lba@65（区间算术全 checked）
+    const FIRST_LBA: usize = 49;
+    const LEN_LBA: usize = 57;
+    const DELTA_LBA: usize = 65;
     // 源区间溢出
     let mut b = ckpt.serialize();
     b[FIRST_LBA..FIRST_LBA + 8].copy_from_slice(&u64::MAX.to_le_bytes());
@@ -395,8 +406,8 @@ pub(crate) fn checkpoint_rejects_malformed_header_and_payload() {
     let e = Checkpoint::deserialize(&b, &lim(128)).err().expect("an entry outside the usable area must be rejected");
     assert_eq!(e.kind(), io::ErrorKind::InvalidData, "{e}");
 
-    // plan kind 只认 0/1（@93）
-    const KIND: usize = 93;
+    // plan kind 只认 0/1（@94）
+    const KIND: usize = 94;
     let mut b = ckpt.serialize();
     b[KIND] = 7;
     let e = Checkpoint::deserialize(&b, &lim(128)).err().expect("an unknown plan kind must be rejected");
@@ -410,7 +421,7 @@ pub(crate) fn checkpoint_rejects_malformed_header_and_payload() {
     assert_eq!(e.kind(), io::ErrorKind::InvalidData, "{e}");
 
     // chunk_bytes = 0 在 CRC 之后判定：重算 CRC 证明拦它的是判据本身
-    const CHUNK_BYTES: usize = 85;
+    const CHUNK_BYTES: usize = 86;
     let mut b = ckpt.serialize();
     b[CHUNK_BYTES..CHUNK_BYTES + 8].copy_from_slice(&0u64.to_le_bytes());
     rewrite_crc(&mut b);
@@ -419,8 +430,8 @@ pub(crate) fn checkpoint_rejects_malformed_header_and_payload() {
 }
 
 /// 单分区 resize 型的对应拒绝分支（与搬移型逐条对称）。
-/// 布局：magic(8)+ver(4)+disk_size(8)+ss(8)+part(4) ⇒ old_start@32、old_end@40、
-/// new_start@48、new_end@56、fs_shrunk@64、chunks_done@65、chunk_bytes@73
+/// 布局：magic(8)+ver(4)+LVM 标志(1)+disk_size(8)+ss(8)+part(4) ⇒ old_start@33、old_end@41、
+/// new_start@49、new_end@57、fs_shrunk@65、chunks_done@66、chunk_bytes@74
 #[test]
 pub(crate) fn resize_checkpoint_rejects_malformed_records() {
     let rs = RsCheckpoint {
@@ -430,6 +441,7 @@ pub(crate) fn resize_checkpoint_rejects_malformed_records() {
         fs_shrunk: FsShrink::NotShrunk, chunks_done: 0, chunk_bytes: 1024 * 1024,
         fp: Default::default(),
         map: None,
+        lvm: None,
         fstype: None,
     };
     assert!(RsCheckpoint::deserialize(&rs.serialize(), &lim(128)).is_ok(), "the baseline must be readable");
@@ -450,8 +462,8 @@ pub(crate) fn resize_checkpoint_rejects_malformed_records() {
     assert_eq!(e.kind(), io::ErrorKind::InvalidData, "{e}");
 
     // 区间倒挂：放行会让 chunk 总数算式 old_end − old_start + 1 在 debug 下 panic
-    const OLD_START: usize = 32;
-    const OLD_END: usize = 40;
+    const OLD_START: usize = 33;
+    const OLD_END: usize = 41;
     let mut b = rs.serialize();
     b[OLD_START..OLD_START + 8].copy_from_slice(&3071u64.to_le_bytes());
     b[OLD_END..OLD_END + 8].copy_from_slice(&2048u64.to_le_bytes());
@@ -459,7 +471,7 @@ pub(crate) fn resize_checkpoint_rejects_malformed_records() {
     assert_eq!(e.kind(), io::ErrorKind::InvalidData, "{e}");
 
     // 分区号越上界
-    const PART: usize = 28;
+    const PART: usize = 29;
     let mut b = rs.serialize();
     b[PART..PART + 4].copy_from_slice(&129u32.to_le_bytes());
     let e = RsCheckpoint::deserialize(&b, &lim(128)).err().expect("an implausible partition number must be rejected");
@@ -479,7 +491,7 @@ pub(crate) fn resize_checkpoint_rejects_malformed_records() {
     assert_eq!(e.kind(), io::ErrorKind::InvalidData, "{e}");
 
     // chunk_bytes = 0 在 CRC 之后：重算 CRC 证明拦它的是判据本身
-    const CHUNK_BYTES: usize = 73;
+    const CHUNK_BYTES: usize = 74;
     let mut b = rs.serialize();
     b[CHUNK_BYTES..CHUNK_BYTES + 8].copy_from_slice(&0u64.to_le_bytes());
     rewrite_crc(&mut b);
@@ -499,6 +511,7 @@ pub(crate) fn resize_ckpt_progress_bound_follows_copy_len() {
         fs_shrunk: FsShrink::NotShrunk, chunks_done: 0, chunk_bytes: 64 * 1024,
         fp: Default::default(),
         map: None,
+        lvm: None,
         fstype: None,
     };
     let rewrite_crc = |b: &mut Vec<u8>| {
@@ -508,7 +521,7 @@ pub(crate) fn resize_ckpt_progress_bound_follows_copy_len() {
     };
     // 拷贝总长 = 512 × 512 = 262144 B = 4 × 65536 ⇒ 上限 4 chunk；
     // 旧区间全长 = 1024 × 512 = 524288 B ⇒ 8 chunk——5..8 这段只有按旧区间算才放行
-    const CHUNKS_DONE: usize = 65;
+    const CHUNKS_DONE: usize = 66;
     let mut b = rs.serialize();
     b[CHUNKS_DONE..CHUNKS_DONE + 8].copy_from_slice(&4u64.to_le_bytes());
     rewrite_crc(&mut b);
@@ -545,6 +558,7 @@ pub(crate) fn foreign_resize_ckpt_refuses_relocation_plans() {
         chunk_bytes: 1024 * 1024,
         fp: Default::default(),
         map: None,
+        lvm: None,
         fstype: None,
     };
     atomic_write_ckpt(&ckpt_path, &rs.serialize()).unwrap();
@@ -580,6 +594,7 @@ pub(crate) fn checkpoint_records_identity_kind() {
         chunk_bytes: 1024 * 1024,
         fp: crate::dev::TargetFingerprint { dev: 7, ino: 42, size: 1 << 20, id },
         map: None,
+        lvm: None,
     };
     for p in [LiveProof::DeviceId, LiveProof::Inode, LiveProof::Unavailable] {
         let back = Checkpoint::deserialize(&mk(p).serialize(), &lim(128)).expect("a checkpoint must round-trip");
@@ -587,8 +602,8 @@ pub(crate) fn checkpoint_records_identity_kind() {
         assert_eq!(back.fp.id, id, "the device id must survive the round-trip");
     }
 
-    // 布局（count = 1）：身份种类 @127
-    const PROOF: usize = 127;
+    // 布局（count = 1）：身份种类 @128
+    const PROOF: usize = 128;
     let mut b = mk(LiveProof::Inode).serialize();
     b[PROOF] = 0; // 0 不是任何合法种类
     let crc_off = b.len() - 4;
@@ -610,6 +625,7 @@ pub(crate) fn resize_checkpoint_records_identity_kind() {
         fs_shrunk: FsShrink::NotShrunk, chunks_done: 0, chunk_bytes: 1024 * 1024,
         fp: crate::dev::TargetFingerprint { dev: 7, ino: 42, size: 1 << 20, id },
         map: None,
+        lvm: None,
         fstype: Some(FsKind::Ext),
     };
     for p in [LiveProof::DeviceId, LiveProof::Inode, LiveProof::Unavailable] {
@@ -619,8 +635,8 @@ pub(crate) fn resize_checkpoint_records_identity_kind() {
         assert_eq!(back.fstype, Some(FsKind::Ext));
     }
 
-    // 布局：身份种类 @115
-    const PROOF: usize = 115;
+    // 布局：身份种类 @116
+    const PROOF: usize = 116;
     let mut b = mk(LiveProof::Inode).serialize();
     b[PROOF] = 0;
     let crc_off = b.len() - 4;
@@ -651,6 +667,7 @@ pub(crate) fn foreign_checkpoint_slot_refuses_fresh_plans() {
         chunk_bytes: 1024 * 1024,
         fp: Default::default(),
         map: None,
+        lvm: None,
     };
     atomic_write_ckpt(&ckpt_path, &ck.serialize()).unwrap();
 
@@ -684,3 +701,131 @@ pub(crate) fn ckpt_batch_stays_inside_redo_window() {
     assert_eq!(ckpt_batch_cap(4 << 20), 64);
     assert_eq!(ckpt_batch_cap(512 << 20), 1);
 }
+
+/// LVM 收尾事实块：两族 checkpoint 共用同一编码，只读解析按 magic 分派版本后直接取得它。
+/// 有 LV 路径时三个数值原样回读；没有 LV 路径时只写 1 字节标志
+#[test]
+pub(crate) fn lvm_post_facts_round_trip_in_both_checkpoint_families() {
+    let facts = LvmPostFacts {
+        lv_path: Some("/dev/vg0/data".into()),
+        lv_size_before: 1 << 20,
+        lv_target: (1 << 20) + 8 * 4096,
+        extent_bytes: 4096,
+    };
+    let mut b = Vec::new();
+    facts.encode(&mut b);
+    let mut off = 0;
+    assert_eq!(LvmPostFacts::decode(&b, &mut off).unwrap().unwrap(), facts);
+    assert_eq!(off, b.len(), "decode must consume the whole block");
+
+    // 只做 pvresize 的事实：没有 LV 路径，三个数值全 0
+    let pv_only = LvmPostFacts { lv_path: None, lv_size_before: 0, lv_target: 0, extent_bytes: 0 };
+    let mut b = Vec::new();
+    pv_only.encode(&mut b);
+    let mut off = 0;
+    assert_eq!(LvmPostFacts::decode(&b, &mut off).unwrap().unwrap(), pv_only);
+    assert_eq!(off, b.len());
+
+    // 没有待办：只写 0 标志，解码得 None
+    let mut off = 0;
+    assert_eq!(LvmPostFacts::decode(&[0u8], &mut off).unwrap(), None);
+    assert_eq!(off, 1);
+
+    let mut path = std::env::temp_dir();
+    path.push(format!("diskedit_lvm_facts_{}.ckpt", std::process::id()));
+    // 单分区 resize 族
+    let rs = RsCheckpoint {
+        proof: crate::dev::LiveProof::Inode,
+        disk_size: 64 * 1024 * 1024, ss: 512, part: 1,
+        old_start: 2048, old_end: 3071, new_start: 2048, new_end: 4607,
+        fs_shrunk: FsShrink::NotShrunk, chunks_done: 0, chunk_bytes: 1024 * 1024,
+        fp: Default::default(), map: None, fstype: None,
+        lvm: Some(facts.clone()),
+    };
+    std::fs::write(&path, rs.serialize()).unwrap();
+    assert_eq!(read_lvm_post(&path).unwrap().unwrap(), facts);
+    // 搬移族
+    let ck = Checkpoint {
+        proof: crate::dev::LiveProof::Inode,
+        disk_size: 64 * 1024 * 1024, ss: 512, grow_part: 2, last_usable_lba: 100_000,
+        moves: vec![PlanEntry { part_num: 1, first_lba: 2048, len_lba: 4096, delta_lba: 2048, is_swap: false }],
+        kind: PlanKind::TailPacked, cur_index: 0, chunks_done: 0, chunk_bytes: 1024 * 1024,
+        fp: Default::default(), map: None,
+        lvm: Some(facts.clone()),
+    };
+    std::fs::write(&path, ck.serialize()).unwrap();
+    assert_eq!(read_lvm_post(&path).unwrap().unwrap(), facts);
+    // 同族但没有事实 → None（不是错误）
+    let none = Checkpoint { lvm: None, ..ck };
+    std::fs::write(&path, none.serialize()).unwrap();
+    assert_eq!(read_lvm_post(&path).unwrap(), None);
+    let _ = std::fs::remove_file(&path);
+}
+
+/// 只读解析只认当前版本：旧现场无法表达 LVM 收尾事实，不能读成"已收口"的现场
+#[test]
+pub(crate) fn lvm_facts_refuse_older_checkpoint_versions() {
+    let mut path = std::env::temp_dir();
+    path.push(format!("diskedit_lvm_ver_{}.ckpt", std::process::id()));
+    let facts = LvmPostFacts {
+        lv_path: None, lv_size_before: 0, lv_target: 0, extent_bytes: 0,
+    };
+    let rs = RsCheckpoint {
+        proof: crate::dev::LiveProof::Inode,
+        disk_size: 64 * 1024 * 1024, ss: 512, part: 1,
+        old_start: 2048, old_end: 3071, new_start: 2048, new_end: 4607,
+        fs_shrunk: FsShrink::NotShrunk, chunks_done: 0, chunk_bytes: 1024 * 1024,
+        fp: Default::default(), map: None, fstype: None,
+        lvm: Some(facts.clone()),
+    };
+    let ck = Checkpoint {
+        proof: crate::dev::LiveProof::Inode,
+        disk_size: 64 * 1024 * 1024, ss: 512, grow_part: 2, last_usable_lba: 100_000,
+        moves: Vec::new(), kind: PlanKind::TailPacked, cur_index: 0, chunks_done: 0,
+        chunk_bytes: 1024 * 1024, fp: Default::default(), map: None,
+        lvm: Some(facts),
+    };
+    for (mut bytes, old) in [
+        (rs.serialize(), CKPT2_VERSION - 1),
+        (ck.serialize(), CKPT_VERSION - 1),
+    ] {
+        bytes[8..12].copy_from_slice(&old.to_le_bytes());
+        std::fs::write(&path, &bytes).unwrap();
+        let e = read_lvm_post(&path).expect_err("an older checkpoint must not be read");
+        assert_eq!(e.kind(), io::ErrorKind::InvalidData, "{e}");
+        assert!(e.to_string().contains("unsupported checkpoint version"), "{e}");
+    }
+    let _ = std::fs::remove_file(&path);
+}
+
+/// 事实只记"本次作业真正能交给 LV 的量"：非 PV、分区没变大、未请求 --grow-lv、
+/// 不足一个 extent 四种边界；最后一种必须在写表之前拒绝，而不是写完表再报待办
+#[test]
+pub(crate) fn lvm_post_for_records_only_a_usable_amount() {
+    let sel = LvmSelection {
+        name: "data".into(),
+        path: "/dev/vg0/data".into(),
+        extent_bytes: 4096,
+        size: 1 << 20,
+    };
+    // 调用方不推迟收尾（非 PV 路径）→ 没有事实
+    assert_eq!(lvm_post_for(false, Some(&sel), 1 << 20, 3 << 20).unwrap(), None);
+    // 分区没有变大 → 没有可交给 LV 的量
+    assert_eq!(lvm_post_for(true, Some(&sel), 1 << 20, 1 << 20).unwrap(), None);
+    assert_eq!(lvm_post_for(true, Some(&sel), 3 << 20, 2 << 20).unwrap(), None);
+    // 未请求 --grow-lv：只记"pvresize 待做"
+    assert_eq!(
+        lvm_post_for(true, None, 1 << 20, 3 << 20).unwrap(),
+        Some(LvmPostFacts { lv_path: None, lv_size_before: 0, lv_target: 0, extent_bytes: 0 })
+    );
+    // 新增不足一个 extent：写表之前拒绝
+    let e = lvm_post_for(true, Some(&sel), 1 << 20, (1 << 20) + 100).unwrap_err();
+    assert!(matches!(&e, Fail::Refused(m) if m.contains("less than one extent")), "{e:?}");
+    // 正常：目标 = 基线 + 整数个 extent（零头不扩）
+    let f = lvm_post_for(true, Some(&sel), 1 << 20, (1 << 20) + 4097).unwrap().unwrap();
+    assert_eq!(f.lv_path.as_deref(), Some("/dev/vg0/data"));
+    assert_eq!(f.lv_size_before, 1 << 20);
+    assert_eq!(f.extent_bytes, 4096);
+    assert_eq!(f.lv_target, (1 << 20) + 4096);
+}
+

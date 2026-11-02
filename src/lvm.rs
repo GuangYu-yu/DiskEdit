@@ -12,13 +12,19 @@
 use crate::fsops::{run, FsError};
 use serde_json::Value;
 
-/// LVM 链失败的两态：工具缺失是环境缺件（装 lvm2 后重试有意义），工具已运行的
+/// LVM 链失败的三态：工具缺失是环境缺件（装 lvm2 后重试有意义），**请求与卷现状不
+/// 匹配**（`--lv` 写错、PV 上没有 LV、LV 不唯一）改参数即可，工具已运行的
 /// 非零退出/报表不可解析则无法断言 LVM 元数据被动到什么程度。出口通道
-/// （Infra/Failed/Pending）由调用方按 durable boundary 决定，这里只携带事实
+/// （Refused/Infra/Failed/Pending）由调用方按 durable boundary 决定，这里只携带事实
 #[derive(Debug)]
 pub enum LvmError {
     /// 工具未安装（lvm2 包）
     ToolMissing(String),
+    /// 只读查询得到的结论是"这次请求与卷现状对不上"：写盘之前即可知，改参数有意义
+    Refused(String),
+    /// 请求的对象存在但当前不可用：`lvextend -r` 要有活动 LV 才能同步扩文件系统，
+    /// 本工具不代为激活——激活属于系统运行态，事后恢复失败会留下额外现场
+    Inactive(String),
     /// 工具已运行但非零退出，或输出不可解析
     Failed(String),
 }
@@ -29,6 +35,8 @@ impl LvmError {
     pub fn hint(&self) -> String {
         match self {
             Self::ToolMissing(_) => format!("install the missing tool and re-run: {self}"),
+            Self::Refused(_) => format!("{self} — pick the target LV explicitly (--lv NAME) and re-run"),
+            Self::Inactive(_) => format!("{self} — activate it (lvchange -ay <lv path>) and re-run"),
             Self::Failed(_) => "pvresize <part>; lvextend -l +<ext> -r <lv> (see pvresize(8))".to_string(),
         }
     }
@@ -37,7 +45,7 @@ impl LvmError {
 impl std::fmt::Display for LvmError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::ToolMissing(m) | Self::Failed(m) => f.write_str(m),
+            Self::ToolMissing(m) | Self::Refused(m) | Self::Inactive(m) | Self::Failed(m) => f.write_str(m),
         }
     }
 }
@@ -135,6 +143,28 @@ fn device_match(target: &str, reported: &str) -> DeviceMatch {
     if same { DeviceMatch::Same } else { DeviceMatch::Different }
 }
 
+/// 同一段存储可能经两个 loop 节点可见：镜像的分区被临时映射时，若已有别的节点
+/// 承载同一块 PV，LVM 把新节点报成 duplicate PV 并只使用先前那个——`lvs` 的
+/// `devices` 因此给的是另一个 loop 号，设备号比对必然不等。PV UUID 不能当身份：
+/// 整盘复制得到的两份存储共用同一个 UUID，而它们的 backing 对象不同。内核记录的
+/// backing 对象与数据起点（[`crate::dev::loop_storage_key`]）才说明是同一段字节。
+/// 任一侧不是 loop 或记录读不出来即维持 [`DeviceMatch::Different`]：只是失去这一
+/// 认出能力，判定方向不变，调用方照旧拒绝
+fn same_storage(target: &str, reported: &str) -> DeviceMatch {
+    match device_match(target, reported) {
+        DeviceMatch::Different => {
+            let key = |dev: &str| {
+                crate::dev::loop_storage_key(std::path::Path::new(dev)).ok().flatten()
+            };
+            match (key(target), key(reported)) {
+                (Some(a), Some(b)) if a == b => DeviceMatch::Same,
+                _ => DeviceMatch::Different,
+            }
+        }
+        other => other,
+    }
+}
+
 /// 从 pvs JSON 输出解析 part_dev 所属 VG 名。
 /// `Ok(None)` = 报告的正是本设备、但它不属于任何 VG；
 /// `Err` = 报告里没有可证明为本设备的行，或存在无法判定身份的行
@@ -179,7 +209,7 @@ fn parse_pv_vg_with(
 /// 身份按 [`DeviceMatch`] 三态判定：任一条目无法证明是否为目标设备即整体拒绝，
 /// 否则"无法证明"会被静默当成"不在本设备上"，进而漏掉持有该 PV 的 LV
 pub fn parse_lvs_on_pv(json: &str, part_dev: &str) -> Result<Vec<(String, String)>, LvmError> {
-    parse_lvs_on_pv_with(json, part_dev, &|reported| device_match(part_dev, reported))
+    parse_lvs_on_pv_with(json, part_dev, &|reported| same_storage(part_dev, reported))
 }
 
 fn parse_lvs_on_pv_with(
@@ -362,6 +392,100 @@ pub fn lvs_on_pv(vg: &str, part_dev: &str) -> Result<Vec<(String, String)>, LvmE
 pub fn vg_extent_size(vg: &str) -> Result<u64, LvmError> {
     let out = run_tool("vgs", &["--reportformat", "json", "--units", "b", "--nosuffix", "-o", "vg_extent_size", vg])?;
     parse_extent_size(&out).ok_or_else(|| LvmError::Failed("vgs: unparsable vg_extent_size in output".to_string()))
+}
+
+/// `lvs` 无表头一行（`|` 分隔）的五个字段
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LvRow {
+    name: String,
+    vg: String,
+    path: String,
+    size: u64,
+    attr: String,
+}
+
+/// `lvs --noheadings --nosuffix --units b --separator '|' -o lv_name,vg_name,lv_path,lv_size,lv_attr`
+/// 的严格解析：每行恰好五段、尺寸为纯数字字节数，多余或缺失的行都算无法验证
+fn parse_lv_rows(stdout: &str) -> Result<Vec<LvRow>, LvmError> {
+    let mut rows = Vec::new();
+    for line in stdout.lines().filter(|l| !l.trim().is_empty()) {
+        let f: Vec<&str> = line.split('|').collect();
+        if f.len() != 5 {
+            return Err(LvmError::Failed(format!(
+                "lvs: expected 5 fields (lv_name,vg_name,lv_path,lv_size,lv_attr), got {} in {line:?}",
+                f.len()
+            )));
+        }
+        let size = parse_num_field(f[3].trim())
+            .ok_or_else(|| LvmError::Failed(format!("lvs: unparsable lv_size {:?} in {line:?}", f[3])))?;
+        let (name, vg, path, attr) = (f[0].trim(), f[1].trim(), f[2].trim(), f[4].trim());
+        if name.is_empty() || vg.is_empty() {
+            return Err(LvmError::Failed(format!("lvs: empty lv_name/vg_name in {line:?}")));
+        }
+        rows.push(LvRow {
+            name: name.to_string(),
+            vg: vg.to_string(),
+            path: path.to_string(),
+            size,
+            attr: attr.to_string(),
+        });
+    }
+    Ok(rows)
+}
+
+/// `lvmreport` 的 `lv_attr` 第五位记激活状态：`a` 活动、`-` 非活动（lvmreport(7) 的
+/// 字段定义；其余取值如 `s`/`I`/`m` 都不表示可同步扩文件系统）
+fn attr_is_active(attr: &str) -> bool {
+    attr.as_bytes().get(4) == Some(&b'a')
+}
+
+/// 一条被选定的 LV 的当前尺寸与所在 VG
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LvState {
+    pub name: String,
+    pub vg: String,
+    pub size: u64,
+    /// `-r` 同步扩文件系统要求 LV 活动；非活动 LV 无法收尾
+    pub active: bool,
+}
+
+/// 按路径查找 LV 的当前尺寸，并核对它仍落在 `part_dev` 上：
+/// 路径字符串只用于定位，授权给 pvresize/lvextend 的判据是"仍在本 PV 的 VG 里
+/// 且仍由这个 PV 承载"（`lvs_on_pv` 的 DeviceMatch 三态）
+pub fn lv_state(part_dev: &str, lv_path: &str) -> Result<LvState, LvmError> {
+    let vg = vg_of(part_dev)?.ok_or_else(|| {
+        LvmError::Refused(format!("{part_dev} is a PV outside any VG — nothing to extend"))
+    })?;
+    let on_pv = lvs_on_pv(&vg, part_dev)?;
+    if !on_pv.iter().any(|(_, p)| p == lv_path) {
+        let names = on_pv.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>().join(", ");
+        return Err(LvmError::Refused(format!(
+            "LV {lv_path} is no longer one of the top-level LVs on {part_dev} (VG {vg}: {names})"
+        )));
+    }
+    let out = run_tool(
+        "lvs",
+        &[
+            "--noheadings", "--nosuffix", "--units", "b", "--separator", "|",
+            "-o", "lv_name,vg_name,lv_path,lv_size,lv_attr", &vg,
+        ],
+    )?;
+    let rows = parse_lv_rows(&out)?;
+    let mut hit: Vec<LvRow> = rows.into_iter().filter(|r| r.path == lv_path).collect();
+    if hit.len() != 1 {
+        return Err(LvmError::Failed(format!(
+            "lvs: expected exactly one row for {lv_path}, got {}",
+            hit.len()
+        )));
+    }
+    let row = hit.pop().expect("length checked above");
+    if row.vg != vg {
+        return Err(LvmError::Failed(format!(
+            "lvs: {lv_path} is reported in VG {} rather than {vg} — refusing to extend it",
+            row.vg
+        )));
+    }
+    Ok(LvState { name: row.name, vg: row.vg, size: row.size, active: attr_is_active(&row.attr) })
 }
 
 /// PV 吸收分区新增的全部空间（扩容方向无前置条件，pvresize(8)）

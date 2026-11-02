@@ -180,3 +180,21 @@ pub(crate) fn best_effort_dir_fsync(path: &std::path::Path) {
 
 #[cfg(not(unix))]
 pub(crate) fn best_effort_dir_fsync(_path: &std::path::Path) {}
+
+/// 退路改名：先 `create_new` 占住目标名（占位是空文件），再由 `rename` 覆盖本进程刚建的
+/// 占位——"名字空闲"的判据是 `create_new` 的返回值，不是 `stat`。用于不支持硬链接的文件
+/// 系统（FAT/exFAT、部分网络 FS；镜像常放在这类盘上，现场文件就在镜像旁边）。
+///
+/// 占位已被占用（另一份记录占着该名字）⇒ `AlreadyExists`，由调用方顺延下一个名字；
+/// 占位删不掉只留下一个空文件，不改变"这次改名失败"的结论
+pub(crate) fn rename_over_placeholder(from: &std::path::Path, to: &std::path::Path) -> io::Result<()> {
+    std::fs::OpenOptions::new().write(true).create_new(true).open(to)?;
+    match std::fs::rename(from, to) {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            // 占位可能已经不存在（rename 部分生效），清理结果不影响本次失败的结论
+            drop(std::fs::remove_file(to));
+            Err(e)
+        }
+    }
+}

@@ -63,6 +63,8 @@ for f in \
   carrier_and_image_occupancy.sh \
   image_loop_identity.sh \
   lvm_pv_online.sh \
+  lvm_resume.sh \
+  fs_grow_exit.sh \
   lvm_gate.sh \
   review_guards.sh \
   qemu_boot_verification.sh

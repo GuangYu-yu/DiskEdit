@@ -25,6 +25,7 @@ pub(crate) fn shift_plan_none_never_ghost_relocates() {
         moves: plan.moves.clone(), kind: PlanKind::Shift, cur_index: 0, chunks_done: 0, chunk_bytes: chunk,
         fp: Default::default(),
         map: None,
+        lvm: None,
     };
     atomic_write_ckpt(&ckpt_path, &ck.serialize()).unwrap();
     // 有 ckpt 的缩容：拒绝并指向续跑/放弃，绝不把旧 grow plan 当缩容的执行体
@@ -77,6 +78,7 @@ pub(crate) fn shrink_does_not_resume_a_committed_growth_job() {
         kind: PlanKind::Shift, cur_index: 0, chunks_done: 0, chunk_bytes: chunk,
         fp: Default::default(),
         map: None,
+        lvm: None,
     };
     atomic_write_ckpt(&ckpt_path, &ck.serialize()).unwrap();
 
@@ -118,6 +120,7 @@ pub(crate) fn shift_resume_requires_the_same_requested_size() {
         moves: plan.moves.clone(), kind: PlanKind::Shift, cur_index: 0, chunks_done: 0, chunk_bytes: chunk,
         fp: Default::default(),
         map: None,
+        lvm: None,
     };
     atomic_write_ckpt(&ckpt_path, &ck.serialize()).unwrap();
 
@@ -141,6 +144,21 @@ pub(crate) fn shift_resume_requires_the_same_requested_size() {
     drop(src);
     let _ = std::fs::remove_file(&ckpt_path);
     let _ = std::fs::remove_file(&path);
+}
+
+/// 类型 GUID 的两种摆放都识别：磁盘序（UEFI 混合端）与字段序（RFC 4122）落盘的分区
+/// 同样被判为 swap / LUKS-LVM。两种摆放由同一常量派生，标准文本只写一份
+#[test]
+pub(crate) fn type_guids_recognized_in_both_byte_orders() {
+    assert!(is_swap_guid(&table::SWAP_TYPE_GUID));
+    assert!(is_swap_guid(&table::guid_in_field_order(&table::SWAP_TYPE_GUID)));
+    for known in [table::LUKS_TYPE_GUID, table::LVM_TYPE_GUID] {
+        assert!(is_forbidden_type_guid(&known));
+        assert!(is_forbidden_type_guid(&table::guid_in_field_order(&known)));
+    }
+    let other = table::LINUX_FS_TYPE_GUID;
+    assert!(!is_swap_guid(&other));
+    assert!(!is_forbidden_type_guid(&other));
 }
 
 #[test]
@@ -334,6 +352,7 @@ pub(crate) fn refused_paths_do_not_write_the_disk() {
                 new_start: 2048, new_end: 4095, fs_shrunk: FsShrink::NotShrunk, chunks_done: 0, chunk_bytes: chunk,
                 fp: Default::default(),
                 map: None,
+                lvm: None,
                 fstype: None,
             };
             atomic_write_ckpt(&ckpt_path, &rs.serialize()).unwrap();

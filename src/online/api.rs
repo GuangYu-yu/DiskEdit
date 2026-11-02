@@ -36,6 +36,7 @@ pub fn resize_pv_online(
     disk_name: &str,
     pno: u32,
     decide: impl FnOnce(&FileSource) -> Result<Option<u64>, Fail>,
+    before_write: impl FnOnce(&FileSource, u64, u64, u64) -> Result<(), Fail>,
 ) -> (Outcome, u64, Option<pv::LockedPv>) {
-    resize_pv(disk_name, pno, decide)
+    resize_pv(disk_name, pno, decide, before_write)
 }

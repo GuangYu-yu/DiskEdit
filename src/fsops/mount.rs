@@ -375,12 +375,49 @@ struct LoopInfo64 {
 #[cfg(target_os = "linux")]
 const LOOP_GET_STATUS64: libc::c_int = 0x4C05;
 
+/// include/uapi/linux/loop.h：LOOP_SET_STATUS64。loop(4) 对它的限制只有
+/// "lo_flags 中仅 AUTOCLEAR / PARTSCAN 可改"，其余字段（含 lo_sizelimit）随结构体写回；
+/// 内核按 `min(backing 剩余, lo_sizelimit)` 重算容量并通知块层（loop_set_size）
+#[cfg(target_os = "linux")]
+const LOOP_SET_STATUS64: libc::c_int = 0x4C04;
+
 /// 一个 loop 记录的 backing 身份（三项都来自 `LOOP_GET_STATUS64`）
 #[cfg(target_os = "linux")]
 pub(crate) struct LoopBacking {
     pub(crate) dev: u64,
     pub(crate) ino: u64,
     pub(crate) rdev: u64,
+}
+
+/// 一条 loop 记录的全部几何（`LOOP_GET_STATUS64`）：backing 身份 + 数据起点 + 长度上限
+#[cfg(target_os = "linux")]
+pub(crate) struct LoopMapping {
+    pub(crate) backing: LoopBacking,
+    /// 数据起点，字节
+    pub(crate) offset: u64,
+    /// 数据终点相对起点的上限，字节
+    pub(crate) sizelimit: u64,
+}
+
+/// 对已打开的 loop 节点取状态。None = 内核报 ENXIO（`lo_state != Lo_bound`），
+/// 即确定的"没有绑定文件"
+#[cfg(target_os = "linux")]
+fn loop_status_of(node: &Path, f: &std::fs::File) -> io::Result<Option<LoopMapping>> {
+    use std::os::unix::io::AsRawFd;
+    let mut info: LoopInfo64 = unsafe { std::mem::zeroed() };
+    let rc = unsafe { libc::ioctl(f.as_raw_fd(), LOOP_GET_STATUS64 as _, &mut info) };
+    if rc != 0 {
+        let e = io::Error::last_os_error();
+        return match e.raw_os_error() {
+            Some(libc::ENXIO) => Ok(None),
+            _ => Err(io::Error::other(format!("LOOP_GET_STATUS64 on {} failed: {e}", node.display()))),
+        };
+    }
+    Ok(Some(LoopMapping {
+        backing: LoopBacking { dev: info.lo_device, ino: info.lo_inode, rdev: info.lo_rdevice },
+        offset: info.lo_offset,
+        sizelimit: info.lo_sizelimit,
+    }))
 }
 
 /// 要在 loop 的 backing 里找的那个对象
@@ -464,7 +501,6 @@ fn loop_backing_identity(name: &str) -> io::Result<Option<LoopBacking>> {
 /// 与占用判定共用这一处，两处各写一遍正是"名字被复用"能混进来的原因
 #[cfg(target_os = "linux")]
 pub(crate) fn loop_backing_of_node(node: &Path) -> io::Result<Option<LoopBacking>> {
-    use std::os::unix::io::AsRawFd;
     let f = match std::fs::File::open(node) {
         Ok(f) => f,
         Err(e) if e.kind() == io::ErrorKind::PermissionDenied => {
@@ -478,16 +514,99 @@ pub(crate) fn loop_backing_of_node(node: &Path) -> io::Result<Option<LoopBacking
             )));
         }
     };
+    Ok(loop_status_of(node, &f)?.map(|m| m.backing))
+}
+
+/// 刚由 `losetup` 建立的 loop：重读内核记录得到 backing 与映射区间。
+/// 打开失败与 ioctl 失败都上抛，不回退到 sysfs 的路径表示——那一条只回答
+/// "绑的是哪个对象"，答不出 offset/sizelimit，用它与请求比对等于少验一项
+#[cfg(target_os = "linux")]
+pub(crate) fn loop_mapping_of_node(node: &Path) -> io::Result<Option<LoopMapping>> {
+    let f = std::fs::File::open(node)
+        .map_err(|e| io::Error::other(format!("cannot open {} to read its loop mapping: {e}", node.display())))?;
+    loop_status_of(node, &f)
+}
+
+/// 把已绑定 loop 的数据上限抬到 `want`（只改 `lo_sizelimit`，其余字段原样回写）。
+///
+/// 用途：分区表已按新长度写好，而映射建立时按旧长度设了 `--sizelimit`。对同一段字节
+/// 再建第二个 loop 会让 LVM 把这块 PV 看成两个节点（duplicate PV），其中一个上的
+/// pvresize 会静默无效；故复用这只映射，就地抬高它的上限。
+///
+/// 前置：内核记录的起点必须仍是 `off`（否则改的是另一段字节），已有上限不得大于
+/// `want`（把更大的已映射区间缩回去不是本函数的语义）。改后按内核记录与设备容量
+/// （sysfs `size`，512 字节扇区）两处回读：ioctl 成功不等于容量已刷新
+#[cfg(target_os = "linux")]
+pub(crate) fn set_loop_sizelimit(node: &Path, off: u64, want: u64) -> Result<(), FsError> {
+    use std::os::unix::io::AsRawFd;
+    let f = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(node)
+        .map_err(|e| {
+            FsError::Io(io::Error::other(format!(
+                "cannot open {} to raise its loop size limit: {e}",
+                node.display()
+            )))
+        })?;
     let mut info: LoopInfo64 = unsafe { std::mem::zeroed() };
     let rc = unsafe { libc::ioctl(f.as_raw_fd(), LOOP_GET_STATUS64 as _, &mut info) };
     if rc != 0 {
-        let e = io::Error::last_os_error();
-        return match e.raw_os_error() {
-            Some(libc::ENXIO) => Ok(None),
-            _ => Err(io::Error::other(format!("LOOP_GET_STATUS64 on {} failed: {e}", node.display()))),
-        };
+        return Err(FsError::Io(io::Error::other(format!(
+            "LOOP_GET_STATUS64 on {} failed: {}",
+            node.display(),
+            io::Error::last_os_error()
+        ))));
     }
-    Ok(Some(LoopBacking { dev: info.lo_device, ino: info.lo_inode, rdev: info.lo_rdevice }))
+    if info.lo_offset != off {
+        return Err(FsError::CommandFailed(format!(
+            "{} maps from byte {} but the partition starts at {off} — refusing to change its size limit",
+            node.display(),
+            info.lo_offset
+        )));
+    }
+    if info.lo_sizelimit == want {
+        return Ok(());
+    }
+    if info.lo_sizelimit > want {
+        return Err(FsError::CommandFailed(format!(
+            "{} already maps {} bytes from its start, more than the {want}-byte partition — refusing to shrink it",
+            node.display(),
+            info.lo_sizelimit
+        )));
+    }
+    info.lo_sizelimit = want;
+    let rc = unsafe { libc::ioctl(f.as_raw_fd(), LOOP_SET_STATUS64 as _, &info) };
+    if rc != 0 {
+        return Err(FsError::Io(io::Error::other(format!(
+            "LOOP_SET_STATUS64 on {} failed: {}",
+            node.display(),
+            io::Error::last_os_error()
+        ))));
+    }
+    let map = loop_mapping_of_node(node)?.ok_or_else(|| {
+        FsError::CommandFailed(format!(
+            "{} lost its backing file while its size limit was being raised",
+            node.display()
+        ))
+    })?;
+    if map.offset != off || map.sizelimit != want {
+        return Err(FsError::CommandFailed(format!(
+            "{} maps bytes {}..{} after the size-limit update, expected {off}..{}",
+            node.display(),
+            map.offset,
+            map.offset.saturating_add(map.sizelimit),
+            off.saturating_add(want)
+        )));
+    }
+    let capacity = crate::dev::sysfs_capacity(&crate::dev::sysfs_node(node)?)?;
+    if capacity != want {
+        return Err(FsError::CommandFailed(format!(
+            "{} reports a capacity of {capacity} bytes after its size limit was raised to {want} — the kernel did not apply it",
+            node.display()
+        )));
+    }
+    Ok(())
 }
 
 /// 指向本镜像的 loop 被使用的形态
@@ -714,6 +833,33 @@ mod tests {
         assert!(BackingMatch::File { dev: 7, ino: 42 }.matches(&file));
     }
 
+    /// attach 之后的自证按三个独立维度判：backing 对象、起点、长度上限。
+    /// 只核对其中一项会让另外两项被写工具当作已核实的事实
+    #[test]
+    fn loop_mapping_covers_backing_offset_and_limit_together() {
+        let map = |dev, ino, rdev, offset, sizelimit| LoopMapping {
+            backing: LoopBacking { dev, ino, rdev },
+            offset,
+            sizelimit,
+        };
+        let file = BackingMatch::File { dev: 7, ino: 42 };
+        let block = BackingMatch::Block { rdev: 0x0801 };
+
+        let good = map(7, 42, 0, 4096, 8192);
+        assert!(file.matches(&good.backing));
+        assert!(mapping_covers(&good, 4096, 8192));
+        // 起点差一个字节、长度上限差一个字节都算另一个映射
+        assert!(!mapping_covers(&good, 4097, 8192));
+        assert!(!mapping_covers(&good, 4096, 8193));
+        // 未设上限（0）会让 loop 延伸到 backing 末端，不是请求的区间
+        assert!(!mapping_covers(&map(7, 42, 0, 4096, 0), 4096, 8192));
+
+        // backing 换了对象：区间数字再对也不是本次请求
+        assert!(!file.matches(&map(7, 43, 0, 4096, 8192).backing));
+        assert!(block.matches(&map(0, 0, 0x0801, 4096, 8192).backing));
+        assert!(!block.matches(&map(7, 42, 0, 4096, 8192).backing));
+    }
+
     /// O_EXCL 的两种失败含义不同，不可合并：EBUSY 是内核说"它被别人占着"（请求与现状
     /// 不匹配），权限/节点缺失/I/O 是"确认不了"（fail-closed）。把后者读成空闲，正是
     /// 这条防线要防的事——容器里 `/dev/loop*` 多半就不在本命名空间可见
@@ -865,7 +1011,15 @@ fn ensure_whole_device_idle(src: &FileSource) -> Result<(), crate::outcome::Fail
     use crate::outcome::Fail;
     let disk = block_disk_name(src).map_err(Fail::from)?;
     let sysdir = Path::new("/sys/block").join(&disk);
-    // 盘节点用用户给出的路径：by-id / mapper 之类的别名在 /dev/<sysfs 名> 下不一定存在
+    // 盘节点用用户给出的路径：by-id / mapper 之类的别名在 /dev/<sysfs 名> 下不一定存在。
+    // 它必须仍指 fd 打开的那台设备——探测按路径 stat，指错了设备就是用另一台的空闲
+    // 状态给本次写入放行（判据与 fsops 其余节点解析同一份）
+    crate::dev::ensure_node_is_device(Path::new(&src.path), &sysdir).map_err(|e| {
+        Fail::infra(format!(
+            "{} does not denote the device sysfs lists as {disk}: {e} — refusing (fail-closed)",
+            src.path.display()
+        ))
+    })?;
     let mut nodes = vec![src.path.to_string_lossy().into_owned()];
     let rd = std::fs::read_dir(&sysdir).map_err(|e| {
         Fail::infra(format!("cannot list {} to confirm no partition is in use: {e} — refusing (fail-closed)", sysdir.display()))
@@ -889,7 +1043,18 @@ fn ensure_whole_device_idle(src: &FileSource) -> Result<(), crate::outcome::Fail
             }
         }
         match std::fs::metadata(path.join("partition")) {
-            Ok(_) => nodes.push(format!("/dev/{}", entry.file_name().to_string_lossy())),
+            Ok(_) => {
+                let dev = format!("/dev/{}", entry.file_name().to_string_lossy());
+                // 节点名从 sysfs 目录名推得，实际落点由设备号决定：同层存在另一台设备
+                // 的同名节点时，探测会查错设备。按该条目自己的 sysfs 设备号核对
+                crate::dev::ensure_node_is_device(Path::new(&dev), &path).map_err(|e| {
+                    Fail::infra(format!(
+                        "{dev} does not denote the partition sysfs lists under {}: {e} — refusing (fail-closed)",
+                        sysdir.display()
+                    ))
+                })?;
+                nodes.push(dev);
+            }
             Err(e) if e.kind() == io::ErrorKind::NotFound => {}
             Err(e) => {
                 return Err(Fail::infra(format!(
@@ -948,6 +1113,59 @@ pub fn ensure_idle_before_write(_src: &FileSource, _part: u32, _start_bytes: u64
 /// 非 Linux 存根：该平台上没有 loop 枚举与 /proc 挂载表，占用闸只存在于 Linux
 #[cfg(not(target_os = "linux"))]
 pub fn ensure_table_write_idle(_src: &FileSource) -> Result<(), crate::outcome::Fail> {
+    Ok(())
+}
+
+/// 内核记录的映射区间是否就是请求的 `[off, off + len)`
+#[cfg(target_os = "linux")]
+fn mapping_covers(map: &LoopMapping, off: u64, len: u64) -> bool {
+    map.offset == off && map.sizelimit == len
+}
+
+/// attach 之后的自证：内核记录里的 backing、offset、sizelimit 必须与本次请求一致。
+/// 只在这一读上成立——随后按节点路径执行的 FS/表工具会各自重开该节点，那一段不在
+/// 本进程可控范围（见 [`attach_loop`] 的返回值说明）
+#[cfg(target_os = "linux")]
+pub(crate) fn verify_loop_mapping(src: &FileSource, loopdev: &str, off: u64, len: u64) -> Result<(), FsError> {
+    use std::os::unix::fs::MetadataExt;
+    let md = src.metadata().map_err(|e| {
+        FsError::Io(io::Error::other(format!("cannot stat the open target to verify {loopdev}: {e}")))
+    })?;
+    // backing 判据与占用探测同一份：文件按 (dev, ino)、块设备按设备号
+    let want = if src.is_block {
+        BackingMatch::Block { rdev: md.rdev() }
+    } else {
+        BackingMatch::File { dev: md.dev(), ino: md.ino() }
+    };
+    let Some(map) = loop_mapping_of_node(Path::new(loopdev)).map_err(|e| {
+        FsError::Io(io::Error::other(format!(
+            "losetup reported {loopdev} but its kernel mapping cannot be read: {e}"
+        )))
+    })?
+    else {
+        return Err(FsError::CommandFailed(format!(
+            "losetup reported {loopdev} but the kernel reports no backing file bound to it"
+        )));
+    };
+    if !want.matches(&map.backing) {
+        return Err(FsError::CommandFailed(format!(
+            "{loopdev} is bound to a different object than the target this command opened \
+             (kernel: backing device {} inode {} rdev {}) — it does not map the requested bytes",
+            map.backing.dev, map.backing.ino, map.backing.rdev
+        )));
+    }
+    // 两个数字都取自 `LOOP_GET_STATUS64` 的 lo_offset/lo_sizelimit，就是 losetup 传入
+    // 的那一对；不等即本次映射的区间不是请求的区间（例如同名的旧 loop 未被替换）
+    if !mapping_covers(&map, off, len) {
+        return Err(FsError::CommandFailed(format!(
+            "{loopdev} maps bytes {}..{} (limit {}) but the request was {off}..{} — \
+             refusing to hand a differently mapped device to the filesystem tool",
+            map.offset,
+            map.offset.saturating_add(map.sizelimit),
+            map.sizelimit,
+            off.saturating_add(len)
+        )));
+    }
     Ok(())
 }
 
@@ -1037,6 +1255,14 @@ pub(crate) fn attach_loop(src: &FileSource, off: u64, len: u64) -> Result<String
         return Err(FsError::CommandFailed(format!(
             "losetup --show returned {dev:?}, which is not a /dev/loopN device name — refusing to use it"
         )));
+    }
+    // 名字只是路径：按内核记录核对它此刻绑的是本次请求的对象与区间。不符即撤销
+    // 这条映射再拒绝——交给后续工具等于按错误几何写盘。核对之后到工具自己重开节点
+    // 之间仍有窗口，那一段只能由工具按路径解释，本进程无法消除
+    #[cfg(target_os = "linux")]
+    if let Err(e) = verify_loop_mapping(src, &dev, off, len) {
+        release_loop(&dev);
+        return Err(e);
     }
     Ok(dev)
 }

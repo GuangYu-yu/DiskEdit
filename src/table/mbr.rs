@@ -220,6 +220,44 @@ fn write_lba0_verified(src: &mut WriteSource, lba0: &[u8]) -> Result<(), Fail> {
     Ok(())
 }
 
+/// 主分区槽位守卫：msdos 只有 1..=4 四个主分区槽位（逻辑分区不在本工具范围内）。
+/// `resize_mdos_entry` 自带另一套文案（"invalid MBR partition number"），不经此函数
+fn primary_slot(part: u32) -> Result<(), Fail> {
+    if (1..=4).contains(&part) {
+        Ok(())
+    } else {
+        Err(Fail::refused("msdos supports primary slots 1..=4 only"))
+    }
+}
+
+/// 写前读 LBA0：可写载体校验、读入、`55AA` 签名校验。之后的字段解读都以"这是一张
+/// MBR"为前提，签名不符即拒绝
+fn read_mbr_lba0(src: &FileSource) -> Result<Vec<u8>, Fail> {
+    require_writable_mbr(src)?;
+    let mut lba0 = vec![0u8; src.sector_size as usize];
+    src.read_at(0, &mut lba0).map_err(Fail::infra_io)?;
+    if u16::from_le_bytes([lba0[510], lba0[511]]) != MBR_SIGNATURE {
+        return Err(Fail::infra("no MBR signature on target"));
+    }
+    Ok(lba0)
+}
+
+/// 条目具备可改写语义：类型字节非零（空槽不是可改写对象），且扇区数非零——
+/// 类型字节非零而长度为 0 的条目解析侧看不见，写进去等于凭空替换一条操作者
+/// 无从核对的条目
+fn require_live_entry(part: u32, lba0: &[u8], off: usize) -> Result<u8, Fail> {
+    let cur = lba0[off + 4];
+    if cur == 0 {
+        return Err(Fail::refused(format!("partition {part} is empty")));
+    }
+    if rd_u32(&lba0[off..off + 16], 12) == 0 {
+        return Err(Fail::refused(format!(
+            "partition {part} has a type byte but zero sectors — the entry is invisible to the parser; `delete` clears it"
+        )));
+    }
+    Ok(cur)
+}
+
 /// 修改 MBR 主分区条目大小（start 不变，纯扩缩）。LBA 单位与 parse_mbr /
 /// add_mdos_entry 的现有约定一致（= 扇区大小）；CHS 字段不动（现代工具惯例，
 /// 内核按 LBA 解析）。经 WriteSource 写入自动进 undo journal。
@@ -422,17 +460,10 @@ pub fn add_mdos_entry(src: &mut WriteSource, start: u64, end: u64, os_type: u8) 
 
 /// msdos：主分区条目删除（清零对应记录）
 pub fn delete_mdos_entry(src: &mut WriteSource, part: u32) -> Result<(), Fail> {
-    if !(1..=4).contains(&part) {
-        return Err(Fail::refused("msdos supports primary slots 1..=4 only"));
-    }
-    require_writable_mbr(src)?;
-    let ss = src.sector_size;
-    let mut lba0 = vec![0u8; ss as usize];
-    src.read_at(0, &mut lba0).map_err(Fail::infra_io)?;
-    if u16::from_le_bytes([lba0[510], lba0[511]]) != MBR_SIGNATURE {
-        return Err(Fail::infra("no MBR signature on target"));
-    }
-    let rec = &mut lba0[446 + (part as usize - 1) * 16..446 + (part as usize - 1) * 16 + 16];
+    primary_slot(part)?;
+    let mut lba0 = read_mbr_lba0(src)?;
+    let off = 446 + (part as usize - 1) * 16;
+    let rec = &mut lba0[off..off + 16];
     let cur = rec[4];
     if cur == 0 {
         return Err(Fail::refused(format!("partition {part} is already empty")));
@@ -456,25 +487,10 @@ pub fn delete_mdos_entry(src: &mut WriteSource, part: u32) -> Result<(), Fail> {
 
 /// msdos：boot 标志（0x80）开关
 pub fn set_mdos_boot(src: &mut WriteSource, part: u32, on: bool) -> Result<(), Fail> {
-    if !(1..=4).contains(&part) {
-        return Err(Fail::refused("msdos supports primary slots 1..=4 only"));
-    }
-    require_writable_mbr(src)?;
-    let ss = src.sector_size;
-    let mut lba0 = vec![0u8; ss as usize];
-    src.read_at(0, &mut lba0).map_err(Fail::infra_io)?;
-    if u16::from_le_bytes([lba0[510], lba0[511]]) != MBR_SIGNATURE {
-        return Err(Fail::infra("no MBR signature on target"));
-    }
+    primary_slot(part)?;
+    let mut lba0 = read_mbr_lba0(src)?;
     let off = 446 + (part as usize - 1) * 16;
-    if lba0[off + 4] == 0 {
-        return Err(Fail::refused(format!("partition {part} is empty")));
-    }
-    if rd_u32(&lba0[off..off + 16], 12) == 0 {
-        return Err(Fail::refused(format!(
-            "partition {part} has a type byte but zero sectors — the entry is invisible to the parser; `delete` clears it"
-        )));
-    }
+    require_live_entry(part, &lba0, off)?;
     // MBR 规范未规定 boot 标志唯一性，"至多一个"是本工具策略：置位前清掉其他
     if on {
         for i in 0..4usize {
@@ -498,26 +514,10 @@ pub(crate) const MDOS_HIDDEN_PAIRS: &[(u8, u8)] = &[
 ];
 
 pub fn set_mdos_hidden(src: &mut WriteSource, part: u32, on: bool) -> Result<(), Fail> {
-    if !(1..=4).contains(&part) {
-        return Err(Fail::refused("msdos supports primary slots 1..=4 only"));
-    }
-    require_writable_mbr(src)?;
-    let ss = src.sector_size;
-    let mut lba0 = vec![0u8; ss as usize];
-    src.read_at(0, &mut lba0).map_err(Fail::infra_io)?;
-    if u16::from_le_bytes([lba0[510], lba0[511]]) != MBR_SIGNATURE {
-        return Err(Fail::infra("no MBR signature on target"));
-    }
+    primary_slot(part)?;
+    let mut lba0 = read_mbr_lba0(src)?;
     let off = 446 + (part as usize - 1) * 16;
-    let cur = lba0[off + 4];
-    if cur == 0 {
-        return Err(Fail::refused(format!("partition {part} is empty")));
-    }
-    if rd_u32(&lba0[off..off + 16], 12) == 0 {
-        return Err(Fail::refused(format!(
-            "partition {part} has a type byte but zero sectors — the entry is invisible to the parser; `delete` clears it"
-        )));
-    }
+    let cur = require_live_entry(part, &lba0, off)?;
     let want = |t: u8, hide: bool| -> u8 {
         for (v, h) in MDOS_HIDDEN_PAIRS {
             if (hide && *v == t) || (!hide && *h == t) {
@@ -547,9 +547,7 @@ pub fn set_mdos_hidden(src: &mut WriteSource, part: u32, on: bool) -> Result<(),
 /// 双向拒绝：改成容器类型会凭空多出一条容器语义，把既有容器改走别的类型则让它管辖的
 /// 逻辑分区失去入口——本工具不管理逻辑分区，两个方向都不受理
 pub fn set_mdos_type(src: &mut WriteSource, part: u32, t: u8) -> Result<(), Fail> {
-    if !(1..=4).contains(&part) {
-        return Err(Fail::refused("msdos supports primary slots 1..=4 only"));
-    }
+    primary_slot(part)?;
     if t == 0 {
         return Err(Fail::refused("type 0x00 marks an empty entry — use `delete` to remove the partition"));
     }
@@ -562,23 +560,9 @@ pub fn set_mdos_type(src: &mut WriteSource, part: u32, t: u8) -> Result<(), Fail
     if MDOS_CONTAINER_TYPES.contains(&t) {
         return Err(Fail::refused("extended-container types (0x05/0x0F/0x85) are not supported — logical partitions are out of scope"));
     }
-    require_writable_mbr(src)?;
-    let ss = src.sector_size;
-    let mut lba0 = vec![0u8; ss as usize];
-    src.read_at(0, &mut lba0).map_err(Fail::infra_io)?;
-    if u16::from_le_bytes([lba0[510], lba0[511]]) != MBR_SIGNATURE {
-        return Err(Fail::infra("no MBR signature on target"));
-    }
+    let mut lba0 = read_mbr_lba0(src)?;
     let off = 446 + (part as usize - 1) * 16;
-    let cur = lba0[off + 4];
-    if cur == 0 {
-        return Err(Fail::refused(format!("partition {part} is empty")));
-    }
-    if rd_u32(&lba0[off..off + 16], 12) == 0 {
-        return Err(Fail::refused(format!(
-            "partition {part} has a type byte but zero sectors — the entry is invisible to the parser; `delete` clears it"
-        )));
-    }
+    let cur = require_live_entry(part, &lba0, off)?;
     if MDOS_CONTAINER_TYPES.contains(&cur) {
         return Err(Fail::refused(format!("partition {part} is an extended container (0x{cur:02X}) — its type is structural, not descriptive")));
     }

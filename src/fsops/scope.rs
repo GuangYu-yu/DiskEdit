@@ -179,6 +179,15 @@ pub(crate) fn resolve_scope_device(
             }
             DeviceScope::Whole => {
                 let dev = src.path.to_string_lossy().into_owned();
+                // 交给外部工具的是用户给的这条字面路径：它必须仍指本次打开的那台设备。
+                // 判据取自 fd 的 rdev（sysfs 设备目录是全局视图），不是"路径看起来没变"
+                #[cfg(target_os = "linux")]
+                {
+                    use std::os::unix::fs::MetadataExt;
+                    let rdev = src.metadata().map_err(FsError::from)?.rdev();
+                    let sysdir = crate::dev::sysfs_node_from_rdev(rdev).map_err(FsError::from)?;
+                    crate::dev::ensure_node_is_device(Path::new(&dev), &sysdir).map_err(FsError::from)?;
+                }
                 require_unmounted(&dev)?;
                 Ok(ScopeDevice { path: dev, is_loop: false })
             }
@@ -198,6 +207,8 @@ pub(crate) fn resolve_scope_device(
     // 新建的那个看不见用户那份挂载 / swap / 栈持有。探测本身只在 Linux 上存在，
     // 别的平台已由上面的 require_linux 拒绝
     #[cfg(target_os = "linux")]
+    let mut reusable: Option<String> = None;
+    #[cfg(target_os = "linux")]
     if let Some(occupant) = image_loop_occupancy(src)? {
         // 确知在用 = 请求与现状不符（解除占用后重跑有意义）→ 拒绝；拿不到内核独占
         // 证据 = 确认不了 → 环境故障。两种性质分属不同变体，出口码随之而定
@@ -205,9 +216,10 @@ pub(crate) fn resolve_scope_device(
             LoopOccupancy::Live(dev) => Some(FsError::invalid(format!(
                 "{dev} is a loop onto this image and is in use — unmount/swapoff it first"
             ))),
-            LoopOccupancy::Held { loopdev: _, holders }
+            LoopOccupancy::Held { loopdev, holders }
                 if policy == ImageLoopPolicy::AllowDm && dm_only(&holders) =>
             {
+                reusable = Some(loopdev);
                 None
             }
             LoopOccupancy::Held { loopdev, holders } => Some(FsError::invalid(format!(
@@ -225,6 +237,23 @@ pub(crate) fn resolve_scope_device(
         };
         if let Some(e) = refusal {
             return Err(e);
+        }
+    }
+    // LVM 收尾（pvresize/lvextend）放行 dm 持有者，并在**同一段字节**上复用这只映射：
+    // 那块 PV 正被活动 VG 的 LV 经它使用着。对同一段字节再建第二只 loop 会让 LVM 把它
+    // 看成两个节点（duplicate PV），其中一个上的 pvresize 静默无效。表已按新长度写好，
+    // 故把这只 loop 已有的数据上限抬到本次请求的区间，全程不经第二个映射。
+    // 复用只在 offset 相同（即这只 loop 本来就从分区起点开始）时成立；别的布局（整盘
+    // `-P` 映射等）的容量语义由持有它的栈决定，本工具不改写它，仍按原有路径另建映射
+    #[cfg(target_os = "linux")]
+    if let Some(dev) = reusable {
+        let map = loop_mapping_of_node(Path::new(&dev))?.ok_or_else(|| {
+            FsError::CommandFailed(format!("{dev} is held by a stack but reports no backing file"))
+        })?;
+        if map.offset == off {
+            set_loop_sizelimit(Path::new(&dev), off, len)?;
+            verify_loop_mapping(src, &dev, off, len)?;
+            return Ok(ScopeDevice { path: dev, is_loop: true });
         }
     }
     let loopdev = attach_loop(src, off, len)?;

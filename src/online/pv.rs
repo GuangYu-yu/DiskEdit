@@ -198,11 +198,15 @@ pub struct LockedPv {
 /// PV 分区在线扩容：只动分区层，pvresize/lvextend 归调用方。第二返回值是
 /// 锁下取得的实际旧尺寸（前置失败时为 0，调用方只在 complete 分支消费）。
 /// 第三返回值是本函数持有的独占锁与锁下打开的整盘句柄：随后的 pvresize/lvextend
-/// 仍在同一次操作里，调用方须把它们带到 LVM 链结束——在这里就释放会让那条链落在锁外
+/// 仍在同一次操作里，调用方须把它们带到 LVM 链结束——在这里就释放会让那条链落在锁外。
+/// `before_write` 在锁下、首次写表之前调用，参数为只读整盘句柄、分区起始字节、
+/// 锁下的旧尺寸与将要写入的新尺寸：调用方要在写表前拒绝的判据（例如 LV 选择与
+/// "新增不足一个 extent"）只能在这里拿到同时可信的尺寸
 pub fn resize_pv(
     disk_name: &str,
     pno: u32,
     decide: impl FnOnce(&FileSource) -> Result<Option<u64>, Fail>,
+    before_write: impl FnOnce(&FileSource, u64, u64, u64) -> Result<(), Fail>,
 ) -> (Outcome, u64, Option<LockedPv>) {
     // 解析只读 sysfs / 路径，尚未写盘 → Infra。尚未取得独占权，旧尺寸不可信
     let t = match resolve_pv_target(disk_name, pno) {
@@ -239,7 +243,7 @@ pub fn resize_pv(
             return (Outcome::refused(format!("partition {pno} became active swap during locking — run swapoff first")), old_len_bytes, None);
         }
         Ok(false) => {}
-        Err(e) => return (Outcome::infra(format!("cannot read /proc/swaps: {e}")), old_len_bytes, None),
+        Err(e) => return (Outcome::infra(format!("cannot check active swap for partition {pno}: {e}")), old_len_bytes, None),
     }
     // 锁下重取真相共用一个只读整盘句柄：PV 判据复核与"请求 → 目标长度"的解析
     // 都锚定独占权之后的盘上内容。PV 判据的复核（命令层那次是锁前粗查）：识别与
@@ -286,22 +290,38 @@ pub fn resize_pv(
     {
         return (f.into_outcome(), old_len_bytes, None);
     }
-    // 分区层确实要改：此后写盘经由 sfdisk / pvresize，不落 journal、也没有 checkpoint
+    // 分区层确实要改：此后写盘经由 sfdisk / pvresize，不落 journal、也没有 checkpoint。
+    // 这里的拒绝仍是"确定未写盘"：表一次都还没写过
+    if let Err(f) = before_write(&disk, t.start_bytes, old_len_bytes, new_len_bytes) {
+        return (f.into_outcome(), old_len_bytes, None);
+    }
     crate::support::note_online_no_undo();
     if let Err(e) = part_resize(&t, new_len_bytes) {
         // 表已写、内核同步失败：PV 链（pvresize/lvextend）因此没做，两条事实一并报。
         // 只报"内核视图过期"会让 20 少说一半——分区已经大了，PV 还是旧尺寸
         let detail = e.detail().to_string();
-        if matches!(&e, PartResizeError::Partial(_)) {
-            return (
-                e.into_outcome_with(vec![pv_chain_pending(pno, format!(
-                    "partition resized but the PV chain was skipped: {detail}"
-                ))]),
-                old_len_bytes,
-                None,
-            );
+        match &e {
+            PartResizeError::Partial(_) => {
+                return (
+                    e.into_outcome_with(vec![pv_chain_pending(pno, format!(
+                        "partition resized but the PV chain was skipped: {detail}"
+                    ))]),
+                    old_len_bytes,
+                    None,
+                );
+            }
+            // 写入已发出但盘上状态不可证实：分区尺寸未知，PV 链同样没做
+            PartResizeError::Unverified(_) => {
+                return (
+                    e.into_outcome_with(vec![pv_chain_pending(pno, format!(
+                        "partition table write could not be verified; the PV chain was skipped: {detail}"
+                    ))]),
+                    old_len_bytes,
+                    None,
+                );
+            }
+            _ => return (e.into_outcome(), old_len_bytes, None),
         }
-        return (e.into_outcome(), old_len_bytes, None);
     }
     (
         match verify_part_size(&t, new_len_bytes) {

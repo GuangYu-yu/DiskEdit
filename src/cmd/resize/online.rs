@@ -8,7 +8,7 @@ use super::*;
 #[cfg(target_os = "linux")]
 pub(crate) fn refuse_swap_active(dn: &str, part: u32) {
     let active = crate::online::swap_active(dn, part)
-        .unwrap_or_else(|e| bail_fail(Fail::infra(format!("cannot read /proc/swaps: {e}"))));
+        .unwrap_or_else(|e| bail_fail(Fail::infra(format!("cannot check active swap for partition {part}: {e}"))));
     if active {
         bail_fail(Fail::refused(format!("partition {part} is active swap — run swapoff first")));
     }
@@ -48,14 +48,32 @@ pub(crate) fn resize_online(
         // PV 链在表提交之后才启动：缺工具必须在这里拒绝，不能等 sfdisk 写完表才发现。
         // 在线路径只对块设备开放，分区链直接用现成节点，不需要 losetup
         preflight_lvm_tools(a.grow_lv, false).unwrap_or_else(|e| bail_fail(Fail::from(e)));
-        let (o, old_bytes, pv_lock) = crate::online::resize_pv_online(&dn, part, decide);
+        // 锁下、写表之前的 LVM 判据：LV 选择与"新增是否够一个 extent"都要用锁下同时
+        // 可信的旧尺寸与将写入的新尺寸。在线路径没有 checkpoint，算出的收尾事实随
+        // 独占权一路带进收尾链
+        let mut facts: Option<movepart::LvmPostFacts> = None;
+        let (o, old_bytes, pv_lock) = crate::online::resize_pv_online(
+            &dn,
+            part,
+            decide,
+            |disk, start_bytes, old_bytes, new_bytes| {
+                let sel = if a.grow_lv {
+                    Some(preflight_lv_selection(disk, part, true, start_bytes, a.lv.as_deref())
+                        .map_err(lvm_preflight_fail)?)
+                } else {
+                    None
+                };
+                facts = movepart::lvm_post_for(true, sel.as_ref(), old_bytes, new_bytes)?;
+                Ok(())
+            },
+        );
         if !o.is_complete() {
             o.report();
             return Some(o);
         }
         // 锁贯穿 pvresize/lvextend：它们仍属同一次操作（见 resize_done 的持有说明）。
         // 表已提交，收尾失败必须落 Failed（不承诺"未写盘"）
-        return Some(match resize_done(a, None, part, true, true, old_bytes, pv_lock) {
+        return Some(match resize_done(a, None, part, true, true, old_bytes, pv_lock, facts) {
             Ok(done) => done,
             Err(cause) => {
                 let out = crate::outcome::Outcome::failed_with(cause, Vec::new());

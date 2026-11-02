@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # LVM 全链 Gate：多 LV 拒绝（--lv 缺省）/ --lv 指定 / 单 LV 自动选择 / lvextend -r 后 FS 真扩 /
 # 镜像 PV 的 losetup 临时映射路径 / 活动 LV 持有 loop 分区时的 AllowDm 边界与 mkfs 拒绝 /
-# 镜像 PV + 非活动 LV 的 --grow-lv 全链 / loop 无残留。
+# 镜像 PV + 非活动 LV 的 --grow-lv 拒绝 / loop 无残留。
 # 依赖 lvm2（pvcreate/vgcreate/lvcreate…）+ e2fsprogs —— WSL 未装 lvm2 时打印 SKIP 并退出 0
 # （本脚本不自行安装依赖）。
 source "$(dirname "$0")/lib.sh"
@@ -171,9 +171,9 @@ lo_detach "$LOOP3"; LOOP3=
 VG=
 rm -f "$IMG3" "$IMG3"$SIDECAR_GLOB; IMG3=
 
-# ---- 场景四：镜像内 PV + 非活动 LV，--grow-lv 全链 ----
-# 无 dm 持有者时走 with_partition_device_for_lvm 的正常路径：pvresize 吸收新增空间，
-# lvextend -r 把同一份增量传给 LV 与 FS。与场景三合起来覆盖该入口的放行与成功两条路径。
+# ---- 场景四：镜像内 PV + 非活动 LV → --grow-lv 明确拒绝 ----
+# `lvextend -r` 要有活动 LV 才能同步扩文件系统；激活与事后恢复都属系统运行态，
+# 本工具不代为激活，因此在写表之前拒绝：分区表、PV、LV 一律不动。拒绝不是回归。
 IMG4=/var/tmp/t31d.img
 track_file "$IMG4"
 rm -f "$IMG4" "$IMG4"$SIDECAR_GLOB 2>/dev/null
@@ -185,30 +185,38 @@ lo_waitpart "${LOOP4}p1" || fail "partition node ${LOOP4}p1 not ready"
 pvcreate -f "${LOOP4}p1" >/dev/null || fail "pvcreate ${LOOP4}p1 failed"
 VG=gatevg4$$
 vgcreate "$VG" "${LOOP4}p1" >/dev/null || fail "vgcreate $VG failed"
+# 环境的 udev 会在临时映射出现时执行 pvscan --cache -aay，把 LV 自动激活，掩盖
+# "非活动"这一前提；显式关掉本 VG 的 autoactivation，让起始状态可确定
+vgchange --setautoactivation n "$VG" >/dev/null || fail "setautoactivation $VG failed"
 lvcreate -L 16M -n lv1 "$VG" >/dev/null || fail "lvcreate lv1 failed"
 mkfs.ext4 -F "/dev/$VG/lv1" >/dev/null || fail "mkfs.ext4 lv1 failed"
 lv_before=$(lv_bytes "$VG" lv1) || fail "blockdev lv1 failed"
 pv_before=$(pvs --noheadings --units b --nosuffix -o pv_size "${LOOP4}p1" 2>/dev/null | tr -d ' ')
 [ -n "$pv_before" ] || fail "cannot read pv_size from ${IMG4}:1"
+part_before=$(blockdev --getsize64 "${LOOP4}p1") || fail "read partition size"
 # 先停用 VG 再拆 loop：起始状态无 dm 持有者
 vgchange -an "$VG" >/dev/null 2>&1 || fail "vgchange -an failed"
 lo_detach "$LOOP4"; LOOP4=
+[ -z "$(losetup -j "$IMG4" -n -O NAME)" ] || fail "loop for $IMG4 still bound after detach"
 
-$B resize "$IMG4:1" +8M --grow-lv --lv lv1 >/dev/null || fail "image PV --grow-lv chain failed"
-# lvextend -r 需要设备节点；LV 若被 LVM 留在非活动态，这里显式激活再取值
-lvchange -ay "$VG/lv1" >/dev/null 2>&1
-lv_after=$(lv_bytes "$VG" lv1) || fail "blockdev lv1 (after) failed"
-fs_after=$(fs_bytes "$VG" lv1) || fail "dumpe2fs lv1 (after) failed"
-assert_eq "$lv_after" "$((lv_before + 8388608))" "LV 扩 8M"
-[ "$fs_after" -eq "$lv_after" ] || fail "FS did not grow with LV: fs=$fs_after lv=$lv_after"
+out=$($B resize "$IMG4:1" +8M --grow-lv --lv lv1 2>&1); got=$?
+echo "$out" | sed 's/^/  /'
+exp "$got" 10 "非活动 LV 的 --grow-lv 被拒"
+case "$out" in
+    *"is not active"*) echo "  OK   拒绝原因指明 LV 未激活" ;;
+    *) fail "refusal does not name the inactive LV: $out" ;;
+esac
+[ ! -e "$IMG4$CKPT_SUFFIX" ] || fail "refused run left a checkpoint behind"
 
-# 停用后 dm 释放持有，临时 loop 的 autoclear 生效；再挂一次读 PV 元数据
-vgchange -an "$VG" >/dev/null 2>&1
-for _ in {1..20}; do [ -z "$(losetup -j "$IMG4" -n -O NAME)" ] && break; sleep 0.1; done
+# 盘未改：分区、PV、LV 尺寸仍是请求前的值
 LOOP4=$(lo_attach "$IMG4") || fail "re-losetup $IMG4 failed"
 lo_waitpart "${LOOP4}p1" || fail "partition node ${LOOP4}p1 not ready"
+assert_eq "$(blockdev --getsize64 "${LOOP4}p1")" "$part_before" "分区未变"
 pv_after=$(pvs --noheadings --units b --nosuffix -o pv_size "${LOOP4}p1" 2>/dev/null | tr -d ' ')
-assert_eq "$pv_after" "$((pv_before + 8388608))" "PV 吸收新增 8M"
+assert_eq "$pv_after" "$pv_before" "PV 未变"
+lvchange -ay "$VG/lv1" >/dev/null 2>&1
+assert_eq "$(lv_bytes "$VG" lv1)" "$lv_before" "LV 未变"
+vgchange -an "$VG" >/dev/null 2>&1
 vgremove -ff "$VG" >/dev/null || fail "vgremove $VG failed"
 lo_detach "$LOOP4"; LOOP4=
 VG=

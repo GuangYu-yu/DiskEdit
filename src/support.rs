@@ -6,7 +6,7 @@ pub(crate) use crate::outcome::{Fail, EXIT_OK, EXIT_REFUSED};
 use crate::args::Args;
 use crate::dev::{FileSource, PartSelector, WriteSource};
 use crate::geometry::ValidatedGeometry;
-use crate::transaction::TransactionManager;
+use crate::transaction::{ResumeKind, TransactionManager};
 use crate::{movepart, table};
 
 #[cfg(test)]
@@ -139,18 +139,29 @@ pub(crate) fn open_target_for_data_move(
     a: &Args,
 ) -> Result<(WriteSource, bool), crate::outcome::Fail> {
     TransactionManager::begin_or_resume(a, ResumeClaim::AnyCheckpoint)
+        .map(|(src, kind)| (src, kind != ResumeKind::Fresh))
 }
 
-/// 搬移收尾类命令（resize / apply）的打开：判据是**锁下**的那份目标上还有没有自己
-/// 分区的未收尾搬移（[`ResumeClaim::OwnRelocation`] → `movepart::relocation_ownership`），
-/// 不靠打开前的只读预判。返回（目标，是否续跑）——resize 要拿后者决定 grow 分支。
+/// 搬移收尾类命令（`resize`）的打开：判据是**锁下**的那份目标上还有没有自己分区的
+/// 未收尾作业（[`ResumeClaim::ResizeOrRelocation`] → `relocation_ownership` /
+/// `partition_resize_ownership`），不靠打开前的只读预判。返回续跑族（[`ResumeKind`]）：
+/// resize 要拿它决定 grow 分支（两族作业的进入语义不同）。
 ///
 /// 槽位被别的分区的作业占着时，领域层直接给出拒绝理由：那种情形下本命令既不能当空槽
 /// （会覆盖别人的现场），也不能按别人的 ckpt 续跑，通用的 busy 文案说不出这一点
+pub(crate) fn open_target_resize_resumable(
+    a: &Args,
+    grow_part: PartSelector,
+) -> Result<(WriteSource, ResumeKind), crate::outcome::Fail> {
+    TransactionManager::begin_or_resume(a, ResumeClaim::ResizeOrRelocation(grow_part))
+}
+
+/// `apply` / `plan` 的打开：只认本分区的搬移作业。单分区 resize 的现场（`RsCheckpoint`）
+/// 归 `resize` 的收尾链，本入口不给它续跑——按 busy 拒绝，由用户重跑发起它的那条命令
 pub(crate) fn open_target_resumable(
     a: &Args,
     grow_part: PartSelector,
-) -> Result<(WriteSource, bool), crate::outcome::Fail> {
+) -> Result<(WriteSource, ResumeKind), crate::outcome::Fail> {
     TransactionManager::begin_or_resume(a, ResumeClaim::OwnRelocation(grow_part))
 }
 
