@@ -57,13 +57,19 @@ pub(crate) fn pending_relocation(src: &FileSource, grow_part: u32) -> Result<boo
 }
 
 pub(crate) fn rsize(src: &mut WriteSource, part: u32, start: u64, end: u64, chunk: u64, no_fs: bool, log: &mut dyn FnMut(&str)) -> Outcome {
+    rsize_deferred(src, part, start, end, chunk, no_fs, false, log)
+}
+
+/// `defer = true` 对应 PV 的收尾形态：checkpoint 留给调用方的后续步骤撤除
+#[allow(clippy::too_many_arguments)] // 与 resize_part 同一组入参，测试辅助不另造参数对象
+pub(crate) fn rsize_deferred(src: &mut WriteSource, part: u32, start: u64, end: u64, chunk: u64, no_fs: bool, defer: bool, log: &mut dyn FnMut(&str)) -> Outcome {
     let (g, repair) = gpt_policy::resolve_geometry(src).unwrap().unwrap();
-    resize_part(src, &g, repair, part, start, end, chunk, no_fs, log)
+    resize_part(src, &g, repair, part, start, end, chunk, no_fs, defer, None, log)
 }
 
 pub(crate) fn ap(src: &mut WriteSource, plan: &Plan, chunk: u64, no_fs: bool, log: &mut dyn FnMut(&str)) -> Outcome {
     let (g, _repair) = gpt_policy::resolve_geometry(src).unwrap().unwrap();
-    apply(src, &g, plan, chunk, no_fs, log)
+    apply(src, &g, plan, chunk, no_fs, false, None, log)
 }
 
 /// make_plan 边界：多 movable 尾部打包（末→首、末端对齐）、swap 标记、LUKS 拒绝、

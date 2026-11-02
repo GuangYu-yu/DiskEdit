@@ -90,6 +90,40 @@ pub fn create_mbr_preflight(size_bytes: u64, ss: u64) -> Result<(), Fail> {
     Ok(())
 }
 
+/// 旧表里每个条目的字节区间 `(名字, 起点, 终点)`。GPT 走不进保护 MBR 形状前置的解析，
+/// 旧的保护 MBR 被改坏时也能读到它的分区；再叠原样解析的 MBR 条目（LBA0 的 MBR 记录与
+/// 盘中的 GPT 表互不排斥，两者都要算）。表读不出来时上抛——"看不见旧表"不能当成
+/// "旧表没有分区"
+fn existing_partition_ranges(src: &FileSource, ss: u64) -> io::Result<Vec<(String, u64, u64)>> {
+    let mut out = Vec::new();
+    match load_gpt_ignoring_pmbr_shape(src) {
+        Ok(Some(g)) => {
+            for (i, e) in g.entries.iter().enumerate() {
+                if e.ending_lba == 0 {
+                    continue;
+                }
+                out.push((
+                    format!("GPT partition {}", i + 1),
+                    e.starting_lba.saturating_mul(g.ss),
+                    e.ending_lba.saturating_add(1).saturating_mul(g.ss),
+                ));
+            }
+        }
+        Ok(None) => {}
+        Err(e) => return Err(into_io_error(e)),
+    }
+    if let Some(raw) = super::mbr::parse_mbr_raw(src)? {
+        for p in &raw.parts {
+            out.push((
+                format!("MBR partition {}", p.num),
+                u64::from(p.start_lba).saturating_mul(ss),
+                (u64::from(p.start_lba) + u64::from(p.size_lba)).saturating_mul(ss),
+            ));
+        }
+    }
+    Ok(out)
+}
+
 /// `new --table gpt` 的表结构写入：主头（LBA1，字节 `[ss, 2·ss)`）、主条目数组
 /// （`[2·ss, (2+span)·ss)`）与盘尾备份区（`[last−span, last]` 及其后的备份头）。旧表
 /// 若有分区落在任一段，这次写入就是清零分区数据，与 `new` 只破坏表结构的语义相反。
@@ -98,8 +132,8 @@ pub fn create_mbr_preflight(size_bytes: u64, ss: u64) -> Result<(), Fail> {
 /// 主数组同样按新表几何算：旧表的 `first_usable_lba` 可以小于 `2+span`（条目数远小于
 /// 建表策略的 128 时，旧表允许从 LBA 4 起分区），只算备份段会让那段分区开头被空数组清零。
 ///
-/// 旧表读不出来时返回 `None`：`new` 本就是整体覆盖表的命令，此处只拦**可证**的相交，
-/// 不因一张读不出的表拒绝一条用于重建它的命令
+/// 旧表读不出来时报错而非返回 `None`：调用方无从知道新表写入是否落在分区数据里，
+/// 未获覆盖授权时不得据此写盘（由命令层判定）
 pub fn gpt_metadata_conflict(src: &FileSource, ss: u64) -> io::Result<Option<String>> {
     let geom = EntryArrayGeometry::new(ss, DEFAULT_ENTRY_SIZE, DEFAULT_ENTRY_COUNT, MAX_ARRAY_BYTES)?;
     let span = geom.lba_span();
@@ -114,36 +148,64 @@ pub fn gpt_metadata_conflict(src: &FileSource, ss: u64) -> io::Result<Option<Str
         ("primary entry array", 2 * ss, (2 + span) * ss),
         ("backup entry array", first_lba.saturating_mul(ss), src.size),
     ];
-    let conflict = |start: u64, end: u64| {
-        regions
-            .iter()
-            .find(|(_, region_start, region_end)| end > *region_start && start < *region_end)
-    };
-    if let Ok(Some(g)) = load_gpt(src) {
-        for (i, e) in g.entries.iter().enumerate() {
-            if e.ending_lba == 0 {
-                continue;
-            }
-            let start = e.starting_lba.saturating_mul(g.ss);
-            let end = e.ending_lba.saturating_add(1).saturating_mul(g.ss);
-            if let Some((what, region_start, region_end)) = conflict(start, end) {
-                return Ok(Some(format!(
-                    "GPT partition {} occupies bytes [{start}..{end}), overlapping the {what} this new table \
-                     writes at [{region_start}..{region_end}) — delete or shrink that partition first",
-                    i + 1
-                )));
-            }
+    for (name, start, end) in existing_partition_ranges(src, ss)? {
+        if let Some((what, region_start, region_end)) =
+            regions.iter().find(|(_, rs, re)| end > *rs && start < *re)
+        {
+            return Ok(Some(format!(
+                "{name} occupies bytes [{start}..{end}), overlapping the {what} this new table \
+                 writes at [{region_start}..{region_end}) — delete or shrink that partition first"
+            )));
         }
     }
-    if let Some(raw) = super::mbr::parse_mbr_raw(src)? {
-        for p in &raw.parts {
-            let start = u64::from(p.start_lba).saturating_mul(ss);
-            let end = (u64::from(p.start_lba) + u64::from(p.size_lba)).saturating_mul(ss);
-            if let Some((what, region_start, region_end)) = conflict(start, end) {
+    Ok(None)
+}
+
+/// `create_mbr` 会清零的 GPT 签名位置（字节偏移）。判据与写入路径同源：候选扇区大小
+/// 各自的 LBA1 与盘尾备份头；容器装不下该候选时该位置不存在。只在签名匹配的位置返回
+/// ——`create_mbr` 也只在这些位置写零
+fn gpt_signature_sites(src: &FileSource) -> io::Result<Vec<u64>> {
+    let ss = src.sector_size;
+    let mut sites = Vec::new();
+    for at in candidate_sector_sizes(ss) {
+        if src.size < at.saturating_add(GPT_SIGNATURE.len() as u64) {
+            continue;
+        }
+        let mut sig = [0u8; GPT_SIGNATURE.len()];
+        src.read_at(at, &mut sig)?;
+        if &sig == GPT_SIGNATURE {
+            sites.push(at);
+        }
+    }
+    // 盘尾备份头按同一套候选：备份头的落点随表自身的扇区大小而变
+    for at in candidate_sector_sizes(ss) {
+        let off = container_last_lba(src, at).saturating_mul(at);
+        // 不得落进容器的 LBA0：容器比该候选更小时盘尾会饱和到 LBA0 内部
+        if off < ss || src.size < off.saturating_add(GPT_SIGNATURE.len() as u64) {
+            continue;
+        }
+        let mut sig = [0u8; GPT_SIGNATURE.len()];
+        src.read_at(off, &mut sig)?;
+        if &sig == GPT_SIGNATURE {
+            sites.push(off);
+        }
+    }
+    Ok(sites)
+}
+
+/// `new --table msdos` 的写盘前冲突判据：`create_mbr` 除 LBA0 的表记录区外，还会把
+/// [`gpt_signature_sites`] 处的 GPT 头签名清掉。这些字节若落在旧表的分区里，清零就是
+/// 改分区数据，需要覆盖授权。签名匹配只说明"这里要清"，不说明"清掉它安全"——因此
+/// 清理位置与旧分区用同一份解析结果做相交判断，而不是以签名作为许可
+pub fn mbr_metadata_conflict(src: &FileSource, ss: u64) -> io::Result<Option<String>> {
+    let parts = existing_partition_ranges(src, ss)?;
+    for off in gpt_signature_sites(src)? {
+        let end = off.saturating_add(GPT_SIGNATURE.len() as u64);
+        for (name, start, p_end) in &parts {
+            if end > *start && off < *p_end {
                 return Ok(Some(format!(
-                    "MBR partition {} occupies bytes [{start}..{end}), overlapping the {what} this new table \
-                     writes at [{region_start}..{region_end}) — delete or shrink that partition first",
-                    p.num
+                    "{name} occupies bytes [{start}..{p_end}), overlapping the GPT header bytes \
+                     this msdos table clears at [{off}..{end})"
                 )));
             }
         }
@@ -239,6 +301,20 @@ pub const LVM_TYPE_GUID: [u8; 16] = [
     0x79, 0xD3, 0xD6, 0xE6, 0x07, 0xF5, 0xC2, 0x44, 0xA2, 0x3C, 0x23, 0x8F, 0x2A, 0x3D, 0xF9, 0x28,
 ];
 
+/// 同一 GUID 的另一种摆放：UEFI 规定的磁盘序把前三个字段（Data1 4B、Data2 2B、Data3 2B）
+/// 小端落盘，其余字段按 RFC 4122 原序；RFC 4122 文本形式则是三字段各自的正序。本函数
+/// 倒转这三段的字节即在两种摆法之间转换，施加两次回到原值（对合）。
+///
+/// 写路径的常量一律是磁盘序（[`ESP_TYPE_GUID`] 等），不经过本函数；它只用于识别外部写入
+/// 的盘——部分工具按 RFC 4122 字段序落 GUID，两种摆放的盘都真实存在
+pub(crate) fn guid_in_field_order(g: &[u8; 16]) -> [u8; 16] {
+    let mut out = *g;
+    out[0..4].reverse();
+    out[4..6].reverse();
+    out[6..8].reverse();
+    out
+}
+
 // ---------- msdos（真 MBR）表创建与主分区条目编辑 ----------
 // 限制：仅主分区槽位 1..=4，不支持扩展/逻辑分区链。
 
@@ -257,41 +333,17 @@ pub fn create_mbr(src: &mut WriteSource) -> io::Result<()> {
     // 与解析侧同一套候选扇区大小：容器 ss 之外的候选说明旧 GPT 可能按另一种扇区
     // 落盘，签名会落在那个候选的 LBA1 上。**先清这些，再把 LBA0 交出去**：清掉它们
     // 留下的中间态只是"这处没有 GPT 头"，而先写 LBA0 会在 `at == ss` 的位置造出
-    // "新 msdos 表 + 可解析的 GPT 主头"——`GptDamaged`，工具内没有修复入口
+    // "新 msdos 表 + 可解析的 GPT 主头"——`GptDamaged`，工具内没有修复入口。
+    // 待清位置与冲突检查共用 `gpt_signature_sites`，两者不会各自漂移
     let mut cleared = Vec::new();
     let lba1_whole = src.size >= 2 * ss;
-    for at in candidate_sector_sizes(ss) {
-        // ss 这一处：目标装得下整扇区 1 时并入下面那次合并写，否则只能单独清签名
-        if (at == ss && lba1_whole) || src.size < at + GPT_SIGNATURE.len() as u64 {
+    for off in gpt_signature_sites(src)? {
+        // ss 这一处并入下面那次合并写
+        if off == ss && lba1_whole {
             continue;
         }
-        let mut sig = [0u8; GPT_SIGNATURE.len()];
-        src.read_at(at, &mut sig)?;
-        if &sig == GPT_SIGNATURE {
-            src.write_at(at, &[0u8; GPT_SIGNATURE.len()])?;
-            cleared.push(at);
-        }
-    }
-    // 盘尾备份头也按同一套候选：备份头的位置随表自身的扇区大小而变，只清容器 ss 那一处
-    // 会漏掉另一种落盘方式留下的签名。与上面同一顺序要求——先清、后写 LBA0
-    for at in candidate_sector_sizes(ss) {
-        let off = container_last_lba(src, at).saturating_mul(at);
-        // 盘尾备份头不得落在容器的 LBA0 里：容器不足一个候选扇区时 last 饱和成 0，
-        // 容器比某个候选扇区更小时（如 ss=4096 的镜像按 512 去找）该候选的盘尾也会推进
-        // LBA0 内部。那 8 个字节属于保护 MBR 所在的扇区：清掉之后 LBA0 写回又把它们盖回去，
-        // 读回复核据此报"签名未清掉"；中断正好停在两步之间就在引导区留下一个洞
-        if off < ss {
-            continue;
-        }
-        if src.size < off.saturating_add(GPT_SIGNATURE.len() as u64) {
-            continue;
-        }
-        let mut sig = [0u8; GPT_SIGNATURE.len()];
-        src.read_at(off, &mut sig)?;
-        if &sig == GPT_SIGNATURE {
-            src.write_at(off, &[0u8; GPT_SIGNATURE.len()])?;
-            cleared.push(off);
-        }
+        src.write_at(off, &[0u8; GPT_SIGNATURE.len()])?;
+        cleared.push(off);
     }
     // LBA0 与 LBA1 上"不再有 GPT 主头"是同一个事实的两半：分两次写出去，中断正好停在
     // GptDamaged 上。拼进一个缓冲、一次 write，中断只可能停在"旧表"或"新表"

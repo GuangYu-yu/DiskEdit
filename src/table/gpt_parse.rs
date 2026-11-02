@@ -568,9 +568,22 @@ pub(crate) fn candidate_sector_sizes(container_ss: u64) -> Vec<u64> {
 /// - 两份都不可用 → 报出首个损伤，绝不因"试过备份"就静默接受损坏的主副本
 /// - 两份都没有 GPT 签名 → Ok(None)
 pub fn load_gpt(src: &FileSource) -> Result<Option<RawGpt>, GptError> {
+    load_gpt_impl(src, true)
+}
+
+/// 旧表探测：跳过"保护 MBR 形状成立"前置，其余解析（主备回退、CRC、几何、条目校验）
+/// 与 [`load_gpt`] 同一份实现。LBA0 被改坏而 LBA1 仍是一张 GPT 时，`load_gpt` 返回
+/// `Ok(None)`、`parse_mbr_raw` 也因主头可解析返回 `None`——两路都看不见这张表，
+/// 冲突检查会静默通过。需要判断"新表写入是否落在旧分区数据里"的调用方用本函数，
+/// 不能把"盘型不成立"当成"没有分区"
+pub(crate) fn load_gpt_ignoring_pmbr_shape(src: &FileSource) -> Result<Option<RawGpt>, GptError> {
+    load_gpt_impl(src, false)
+}
+
+fn load_gpt_impl(src: &FileSource, require_pmbr_shape: bool) -> Result<Option<RawGpt>, GptError> {
     // 形状不满足保护 MBR → 不是 GPT（挡残留 GPT 头）；满足后 SizeInLBA 单独分类，
     // Stale 只标记、不否决（设备扩容后即此形态），交写入路径修复
-    if !pmbr_shape_valid(src)? {
+    if require_pmbr_shape && !pmbr_shape_valid(src)? {
         return Ok(None);
     }
     let candidates = candidate_sector_sizes(src.sector_size);

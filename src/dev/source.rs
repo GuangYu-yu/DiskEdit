@@ -238,6 +238,35 @@ impl FileSource {
         Ok((fp, loop_mapping_at(node)?))
     }
 
+    /// 已打开块设备的事实收集：容量、逻辑扇区、身份与 loop 映射。读写与只读两个入口
+    /// 共用这一处——身份与映射一律按 fd 的 rdev 反查 sysfs，不按路径二次 stat；
+    /// /dev 节点在窗口内被 udev 重建时，fd 与身份描述会指向不同设备
+    #[cfg(target_os = "linux")]
+    fn block_source(file: File, path: &Path) -> io::Result<Self> {
+        let size = ioctl::blkgetsize64(&file)?;
+        let sector_size = ioctl::blksszget(&file)? as u64;
+        check_sector_size(sector_size)?;
+        let rdev = {
+            use std::os::unix::fs::MetadataExt;
+            file.metadata()?.rdev()
+        };
+        let node = sysfs_node_from_rdev(rdev)?;
+        // 块设备身份解析失败（fail-closed）⇒ 打开失败：错误信息带设备名
+        let identity = TargetIdentity::resolve_block_at(&node, path).map_err(io::Error::other)?;
+        let (fingerprint, loop_mapping) = Self::block_open_extras(&identity, &node)?;
+        Ok(FileSource {
+            identity,
+            file,
+            path: path.to_path_buf(),
+            sector_size,
+            size,
+            is_block: true,
+            journal: None,
+            fingerprint,
+            loop_mapping,
+        })
+    }
+
     /// `sector_size_override`：镜像默认 512（镜像不携带扇区信息），块设备经 BLKSSZGET 查询并忽略覆盖值。
     pub fn open(path: &Path, sector_size_override: Option<u64>) -> io::Result<Self> {
         // 块设备判定：块设备文件（其 metadata().len() 恒 0，容量需 ioctl 取）
@@ -252,30 +281,7 @@ impl FileSource {
                     .write(true)
                     .custom_flags(libc::O_EXCL)
                     .open(path)?;
-                let size = ioctl::blkgetsize64(&file)?;
-                let sector_size = ioctl::blksszget(&file)? as u64;
-                check_sector_size(sector_size)?;
-                // fd 已拿到：身份与映射都按它的 rdev 反查 sysfs，不再按路径二次 stat——
-                // /dev 节点在窗口内被 udev 重建时，fd 与身份描述会指向不同设备
-                let rdev = {
-                    use std::os::unix::fs::MetadataExt;
-                    file.metadata()?.rdev()
-                };
-                let node = sysfs_node_from_rdev(rdev)?;
-                // 块设备身份解析失败（fail-closed）⇒ 打开失败：错误信息带设备名
-                let identity = TargetIdentity::resolve_block_at(&node, path).map_err(io::Error::other)?;
-                let (fingerprint, loop_mapping) = Self::block_open_extras(&identity, &node)?;
-                return Ok(FileSource {
-                    identity,
-                    file,
-                    path: path.to_path_buf(),
-                    sector_size,
-                    size,
-                    is_block: true,
-                    journal: None,
-                    fingerprint,
-                    loop_mapping,
-                });
+                return Self::block_source(file, path);
             }
         }
         Self::open_image(path, sector_size_override, true)
@@ -380,29 +386,7 @@ impl FileSource {
     /// 身份解析失败（fail-closed）⇒ 打开失败
     #[cfg(target_os = "linux")]
     pub(crate) fn open_read_only(path: &Path) -> io::Result<Self> {
-        let file = OpenOptions::new().read(true).open(path)?;
-        let size = ioctl::blkgetsize64(&file)?;
-        let sector_size = ioctl::blksszget(&file)? as u64;
-        check_sector_size(sector_size)?;
-        // 与可写打开同口径：身份与映射都从 fd 的 rdev 派生
-        let rdev = {
-            use std::os::unix::fs::MetadataExt;
-            file.metadata()?.rdev()
-        };
-        let node = sysfs_node_from_rdev(rdev)?;
-        let identity = TargetIdentity::resolve_block_at(&node, path).map_err(io::Error::other)?;
-        let (fingerprint, loop_mapping) = Self::block_open_extras(&identity, &node)?;
-        Ok(FileSource {
-            identity,
-            file,
-            path: path.to_path_buf(),
-            sector_size,
-            size,
-            is_block: true,
-            journal: None,
-            fingerprint,
-            loop_mapping,
-        })
+        Self::block_source(OpenOptions::new().read(true).open(path)?, path)
     }
 
     /// 非 Linux 平台的占位实现：块设备判定与 ioctl 都不可用，只读路径按普通文件打开。

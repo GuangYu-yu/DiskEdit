@@ -60,7 +60,7 @@ pub fn find_mountpoint(disk_name: &str, pno: u32) -> std::io::Result<Option<Path
     // 别的命名空间里的挂载点路径在这里解析不了
     let entries = crate::fsops::read_own_mounts()?;
     for e in &entries {
-        if part_in_use(&e.source, disk_name, pno)? {
+        if part_in_use(&e.source, disk_name, pno, true)? {
             return Ok(Some(PathBuf::from(&e.mount_point)));
         }
     }
@@ -73,11 +73,23 @@ pub fn find_mountpoint(disk_name: &str, pno: u32) -> std::io::Result<Option<Path
 /// 折叠成"无 swap"会让活动 swap 的锁下复核被一次读故障绕过（fail-open）
 pub fn swap_active(disk_name: &str, pno: u32) -> std::io::Result<bool> {
     let s = fs::read_to_string("/proc/swaps")?;
-    for l in s.lines().skip(1) {
+    swap_active_in(&s, disk_name, pno)
+}
+
+/// 表内容的判定（与文件读取分开，便于用构造的表做确定性测试）。
+/// 逐条目反解失败**不是**"未占用"：那条 swap 的设备可能正是目标分区，反解不出来就没有
+/// 证据证明目标空闲。错误点名是哪一条解析不了，避免与"整表读失败"混淆，也不让操作者
+/// 以为目标确实在 swap 上
+pub(crate) fn swap_active_in(swaps: &str, disk_name: &str, pno: u32) -> std::io::Result<bool> {
+    for l in swaps.lines().skip(1) {
         // 首行表头已跳过；其余行首字段为设备路径
-        if let Some(d) = l.split_whitespace().next()
-            && part_in_use(d, disk_name, pno)?
-        {
+        let Some(d) = l.split_whitespace().next() else { continue };
+        let hit = part_in_use(d, disk_name, pno, false).map_err(|e| {
+            std::io::Error::other(format!(
+                "cannot resolve the /proc/swaps entry {d}: {e} — the target's swap state cannot be confirmed"
+            ))
+        })?;
+        if hit {
             return Ok(true);
         }
     }
@@ -85,13 +97,16 @@ pub fn swap_active(disk_name: &str, pno: u32) -> std::io::Result<bool> {
 }
 
 /// 命中 = 该设备是 disk_name 上的分区 pno。读失败上抛（fail-closed）：折叠成
-/// "不在使用"会让锁下占用复核被一次读故障绕过。`metadata` 与 `partition` 属性的
-/// NotFound 例外——前者是 mountinfo 里 pseudo-fs 条目（如 cgroup2，source 不是
-/// 路径）的常态；后者是整盘目录的判别结果（无 partition 属性 = 整盘非分区）
-pub(crate) fn part_in_use(dev: &str, disk_name: &str, pno: u32) -> std::io::Result<bool> {
+/// "不在使用"会让锁下占用复核被一次读故障绕过。
+///
+/// `allow_missing` 区分两种来源的语义：挂载点表的 source 可以不是设备路径
+/// （pseudo-fs 条目如 cgroup2），`metadata` 的 NotFound 是常态；`/proc/swaps` 的
+/// 首字段恒为设备路径，NotFound 意味着这条 swap 条目无法反解，不能当成"未占用"。
+/// 两种来源共用同一实现，但"目标不在"的解释必须由调用方事实决定
+pub(crate) fn part_in_use(dev: &str, disk_name: &str, pno: u32, allow_missing: bool) -> std::io::Result<bool> {
     let meta = match fs::metadata(dev) {
         Ok(m) => m,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound && allow_missing => return Ok(false),
         Err(e) => return Err(e),
     };
     if !meta.file_type().is_block_device() {

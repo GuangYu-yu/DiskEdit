@@ -217,19 +217,12 @@ fn abandon_one(from: &std::path::Path) -> std::io::Result<std::path::PathBuf> {
             // diskedit 来抢名字。这里的选择是"宁可退到 rename"，不能是"在不支持硬链接的
             // 盘上永远无法释放现场"
             Err(_) => {
-                match std::fs::OpenOptions::new().write(true).create_new(true).open(&to) {
-                    Ok(_) => match std::fs::rename(from, &to) {
-                        Ok(()) => {
-                            // 改名转换要落盘目录项：否则掉电后原件可能复活，目标重新被判成 busy
-                            crate::dev::best_effort_dir_fsync(from);
-                            return Ok(to);
-                        }
-                        Err(e) => {
-                            // 占位删不掉只会留下一个空文件，不改变"这次改名失败"的结论
-                            let _placeholder_gone = std::fs::remove_file(&to);
-                            return Err(e);
-                        }
-                    },
+                match crate::dev::rename_over_placeholder(from, &to) {
+                    Ok(()) => {
+                        // 改名转换要落盘目录项：否则掉电后原件可能复活，目标重新被判成 busy
+                        crate::dev::best_effort_dir_fsync(from);
+                        return Ok(to);
+                    }
                     // 名字已被另一份放弃记录占用：顺延 .N。占用本身不能成为拒绝理由——
                     // 拒绝会让目标永久锁死
                     Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,

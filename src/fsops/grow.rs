@@ -33,7 +33,7 @@ pub enum Growable {
     /// 路径要在放行后往里写，必须先按可用判据把三者分开，不能沿用这个"无需处理"的结论
     OverlayPending,
     /// 元数据是 swap、页格式却在本机激活不了（创建机用了 32K 页）：identify 按 swapon 口径
-    /// 回 "unknown"，但这不是"没有信息"——[`unactivatable_swap`](crate::fsid::unactivatable_swap)
+    /// 回 "unknown"，但这不是"没有信息"——[`probe_fs`](crate::fsid::probe_fs) 的 swap 命中
     /// 认得它，扩容后"swap 未重建"是一条**真实的待办**，故不并入 `NoFilesystem`
     SwapUnactivatable,
     /// 区域里没有**可扩**的文件系统：空区域、类型未识别、LVM PV。携带识别出的类型（含
@@ -48,7 +48,8 @@ pub enum Growable {
 /// 的区间，写盘后是新条目的区间，差别只在区间，不在规则。结论见 [`Growable`]；
 /// `Err` 是"认得出却不接线"（含只有只读根、没有尾部 RW 层的 squashfs/erofs）或设备读不出来
 pub fn grow_target_at(src: &FileSource, part: u32, base: u64, len: u64) -> Result<Growable, FsError> {
-    let fstype = crate::fsid::identify(src, base, len).map_err(FsError::from)?;
+    let probe = crate::fsid::probe_fs(src, base, len).map_err(FsError::from)?;
+    let fstype = probe.kind;
     if matches!(fstype, Some(FsKind::Squashfs | FsKind::Erofs)) {
         // OpenWrt combined 布局：同分区头部只读根 + 尾部 RW overlay（fstools rootdisk.c）。
         // fstools 只把 RW 层造成 ext4/f2fs（common.c `use_f2fs()`：内核命令行
@@ -93,10 +94,10 @@ pub fn grow_target_at(src: &FileSource, part: u32, base: u64, len: u64) -> Resul
         }
         return Ok(Growable::Target(GrowTarget { scope: DeviceScope::Range(base + rel, len - rel), fstype: inner_kind }));
     }
-    // 未识别的区间里有一类并非无信息——页格式激活不了的 swap（见该变体），探测认得它；
-    // 其余类型不付这次读盘
+    // 未识别的区间里有一类并非无信息——页格式激活不了的 swap（见该变体），同一次探测
+    // 的 swap 命中认得它；其余类型不付这次读盘
     let Some(kind) = fstype else {
-        return Ok(if crate::fsid::unactivatable_swap(src, base, len).map_err(FsError::from)? {
+        return Ok(if matches!(probe.swap, Some(h) if !h.activatable) {
             Growable::SwapUnactivatable
         } else {
             Growable::NoFilesystem(None)

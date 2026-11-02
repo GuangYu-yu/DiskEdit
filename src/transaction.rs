@@ -126,11 +126,30 @@ pub(crate) enum ResumeClaim {
     /// 存在 checkpoint 即按续跑进入（`resize-part` / `move`）：是否真是同一件事，
     /// 由领域层的恢复校验比对参数后裁决（不匹配即 Divergent 拒绝）
     AnyCheckpoint,
-    /// 只认本分区的 relocation 作业（`resize` / `apply`）。槽位被别的分区的作业占着
-    /// 时由领域层给出针对性拒绝理由；被另一族作业（单分区 resize 的 RsCheckpoint）
-    /// 占着时拒绝——本入口续不了它，出路是 `resize-part` / `move`。
+    /// 只认本分区的搬移作业（`apply` / `plan`）。槽位被别的分区的作业占着
+    /// 时由领域层给出针对性拒绝理由；被另一族作业（单分区 resize 的 `RsCheckpoint`）
+    /// 占着时仍拒绝——那份作业的收尾链事实只有 `resize` 续得了。
     /// 带的是分区选择器而非具体号：`:last` 落到具体号要读表，而那一刻目标刚在锁下打开
     OwnRelocation(PartSelector),
+    /// 认本分区的搬移作业，也认本分区记着 LVM 收尾事实的单分区 resize 作业
+    /// （`resize`）：两类现场由它分流续跑，别的分区或别的族仍拒绝。
+    /// 同样带分区选择器，解析时机与 [`ResumeClaim::OwnRelocation`] 一致
+    ResizeOrRelocation(PartSelector),
+}
+
+/// 事务门对目标上已有现场的续跑分类。调用方按它决定走哪条续跑分支：两族的
+/// 恢复协议不同（plan 型搬移以 ckpt 里的 moves 为准，单分区 resize 以 ckpt 的
+/// chunks/提交态为准），压成一个 bool 会让调用方在分支处再猜一次
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ResumeKind {
+    /// 目标上没有未收尾的现场
+    Fresh,
+    /// 本分区的搬移作业（`Plan` 型）
+    Relocation,
+    /// 本分区的单分区 resize 作业（`RsCheckpoint`）
+    PartitionResize,
+    /// 任意 checkpoint（`AnyCheckpoint` 入口：由领域层比对参数）
+    Checkpoint,
 }
 
 /// `--sector-size` 只对镜像有意义：镜像不携带扇区信息，故由用户给出。块设备的逻辑扇区
@@ -184,16 +203,16 @@ impl TransactionManager {
     /// 领域层判据返回 `Err` 时原样上抛：领域层知道的拒绝原因（例如"槽位被别的分区的
     /// 作业占着"）必须到达 boundary，压成一个 bool 只会让它退化成通用的 busy 文案
     ///
-    /// 返回是否按续跑进入：调用方（如 resize）要拿它决定后续分支
+    /// 返回按哪一族续跑进入（[`ResumeKind`]）：调用方（如 resize）要拿它决定后续分支
     pub(crate) fn begin_or_resume(
         a: &Args,
         claim: ResumeClaim,
-    ) -> Result<(WriteSource, bool), Fail> {
+    ) -> Result<(WriteSource, ResumeKind), Fail> {
         let mut src = Self::open_rw(a)?;
         Self::refuse_unidentifiable(&src)?;
         let active = Self::active_records(&src);
         let resumed = if active.is_empty() {
-            false
+            ResumeKind::Fresh
         } else {
             match claim {
                 ResumeClaim::FreshOnly => return Err(Self::busy(&active)),
@@ -201,14 +220,24 @@ impl TransactionManager {
                     if !active.iter().any(|r| matches!(r, RecoveryRecord::Checkpoint { .. })) {
                         return Err(Self::busy(&active));
                     }
-                    true
+                    ResumeKind::Checkpoint
                 }
                 ResumeClaim::OwnRelocation(r) => {
                     let grow_part = crate::gpt_policy::resolve_part(&src, r)?;
                     if !crate::movepart::relocation_ownership(&src, grow_part)? {
                         return Err(Self::busy(&active));
                     }
-                    true
+                    ResumeKind::Relocation
+                }
+                ResumeClaim::ResizeOrRelocation(r) => {
+                    let grow_part = crate::gpt_policy::resolve_part(&src, r)?;
+                    if crate::movepart::relocation_ownership(&src, grow_part)? {
+                        ResumeKind::Relocation
+                    } else if crate::movepart::partition_resize_ownership(&src, grow_part)? {
+                        ResumeKind::PartitionResize
+                    } else {
+                        return Err(Self::busy(&active));
+                    }
                 }
             }
         };

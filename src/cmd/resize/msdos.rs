@@ -236,6 +236,14 @@ pub(crate) fn cmd_resize_msdos(a: &Args, pref: PartSelector, size: Option<&str>,
     #[cfg(target_os = "linux")]
     if is_pv {
         preflight_lvm_tools(a.grow_lv, !is_block).unwrap_or_else(|e| bail_fail(Fail::from(e)));
+        // 要扩哪个 LV 必须在此定下来（与 GPT 分支同一处判据）：--lv 写错 / 无 LV /
+        // LV 不唯一都在写表之前发现，提交之后只剩"表已改、PV 链未做"的现场
+        if a.grow_lv {
+            let start_bytes = lba_bytes(p.start_lba as u64, ss);
+            preflight_lv_selection(&src, part, is_block, start_bytes, a.lv.as_deref())
+                .map(|_| ())
+                .unwrap_or_else(|e| bail_fail(lvm_preflight_fail(e)));
+        }
     }
     // 占用复核在锁下（离线选择时的探测在锁前）：首次落盘前确认分区仍空闲，与 GPT 分支闸同源。
     // 起点不变、末端不变或只增的请求不挪动上层 DM 栈映射的扇区，按 Extend 放行；缩容要求无持有者
@@ -265,6 +273,12 @@ pub(crate) fn cmd_resize_msdos(a: &Args, pref: PartSelector, size: Option<&str>,
         // 请求的分区增长无法实现：与 GPT 的 `resize grow` 及在线路径同语义拒绝，而不是
         // 只把 FS 扩满现分区再以 0 退出——那会让调用方以为分区表也已更新
         if free == 0 {
+            // PV 例外：分区层没有可扩的扇区，但 pvresize/lvextend 仍是本次操作的后置
+            // 条件（上一次运行可能正停在提交之后），交给收尾链续做
+            if is_pv {
+                eprintln!("partition {part} cannot grow in the table — no free space to its right; verifying the PV chain");
+                return mbr_grow_finish(a, &mut src, p, is_pv, is_block);
+            }
             bail_fail(Fail::refused(
                 "grow would not extend the partition — no free space to its right (MBR cannot relocate blocking partitions); \
                  use `resizefs` to fill the filesystem inside the current partition".to_string(),
@@ -292,8 +306,12 @@ pub(crate) fn cmd_resize_msdos(a: &Args, pref: PartSelector, size: Option<&str>,
         // 越界与右侧空闲都已判定，note 不再跟在一条拒绝后面
         if new_size_lba == p.size_lba as u64 {
             // 请求的终点就是现状：表与 FS 都不动（GPT 路径对未变尺寸同样判 FsAction::Leave）。
-            // 不跑 FS 步，请求"什么都不改"就不会因外部工具缺失而拿到非零退出码
+            // 不跑 FS 步，请求"什么都不改"就不会因外部工具缺失而拿到非零退出码。
+            // PV 例外：分区层无变化不意味着本次操作没有后置条件，收尾链仍要跑
             crate::support::note_sector_truncation("resizing to", bytes, ss);
+            if is_pv {
+                return mbr_grow_finish(a, &mut src, p, is_pv, is_block);
+            }
             println!("partition {part} is already {cur_bytes} bytes — nothing to do");
             // 表与 FS 都没动：事务已完成且没有待办
             return crate::outcome::Outcome::applied_with(Vec::new());

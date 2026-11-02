@@ -34,15 +34,6 @@ pub(crate) enum FsGrowError {
     Exit(String),
 }
 
-impl FsGrowError {
-    pub(crate) fn detail(&self) -> String {
-        match self {
-            FsGrowError::NoTool(m) | FsGrowError::Exit(m) => m.clone(),
-            FsGrowError::Spawn(e) => e.to_string(),
-        }
-    }
-}
-
 pub(crate) fn fs_grow(t: &OnlineTarget, fstype: Option<crate::fsid::FsKind>) -> Result<(), FsGrowError> {
     let Some((prog, args)) = fs_grow_cmd(t, fstype) else {
         return Err(FsGrowError::NoTool(format!(

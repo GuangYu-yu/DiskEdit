@@ -128,12 +128,6 @@ fn fsid_uuid(fsid: &[u8; 16]) -> String {
     format!("{h}-{a}-{b}-{c}-{d}")
 }
 
-/// sysfs `dev` 属性（`major:minor`）→ 设备号；格式不符返回 None
-fn parse_dev_attr(s: &str) -> Option<(u64, u64)> {
-    let (maj, min) = s.trim().split_once(':')?;
-    Some((maj.parse().ok()?, min.parse().ok()?))
-}
-
 /// mountpoint → /proc/self/mountinfo 匹配（挂载点已解码八进制转义，man
 /// proc_pid_mountinfo(5)）→ (分区块设备节点, 规范化挂载点)。
 /// multi-device/bind 挂载不支持

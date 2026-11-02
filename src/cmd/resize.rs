@@ -85,9 +85,9 @@ pub(crate) const HELP: &str = r#"diskedit resize <TARGET>[:N] <SIZE> [OPTIONS]
 
   Related commands: this is the single entry point — it plans and applies in
   one run. To inspect the plan first, use `plan` then `apply`; `resize-part`
-  and `move` are the low-level single-partition commands, and they also
-  resume an interrupted job (an interrupted single-partition resize is
-  resumed by `resize-part` or `move`, not by `resize`).
+  and `move` are the low-level single-partition commands, and they resume an
+  interrupted job of their own. A resize interrupted after its partition step
+  (the LVM finish chain still pending) is resumed by re-running `resize`.
 
   --start/--end are rejected here: resizing does not relocate partitions —
   use `move` or `resize-part --start/--end`."#;
@@ -145,7 +145,25 @@ pub(crate) fn cmd_resize(a: &Args) -> crate::outcome::Outcome {
 
     check_pv_intent(part, fstype, is_pv, shrinking, a.grow_lv, a.no_fs).unwrap_or_else(|f| bail_fail(f));
 
-    // 块设备在线路径（表类型无关，随表类型变的只有右侧空闲数）；镜像或未挂载的非 PV 落到离线路径。
+    // PV 链要扩哪个 LV 是只读判定：--lv 写错、PV 上没有 LV、LV 不唯一都必须在此之前
+    // 定下来，写表之后再发现就只剩"分区已扩、PV 链尚未做"的现场。在线与离线两条路径
+    // 共用这一次预检（收尾链在提交之后用锁下的分区节点再查一次）
+    // 选定结果随行到执行半程，由它导出 checkpoint 里的 LVM 收尾事实
+    #[cfg(target_os = "linux")]
+    let mut lv_sel: Option<movepart::LvmSelection> = None;
+    #[cfg(not(target_os = "linux"))]
+    let lv_sel: Option<movepart::LvmSelection> = None;
+    #[cfg(target_os = "linux")]
+    if is_pv && a.grow_lv {
+        let start_bytes = start
+            .checked_mul(ss)
+            .unwrap_or_else(|| bail_fail(Fail::infra("partition start overflows byte offset")));
+        lv_sel = Some(
+            preflight_lv_selection(&src, part, src.is_block, start_bytes, a.lv.as_deref())
+                .unwrap_or_else(|e| bail_fail(lvm_preflight_fail(e))),
+        );
+    }
+
     // 目标长度不在锁前算：`+N` 锚定当前尺寸、`grow` 锚定右侧空闲，都由 gpt_decider 在
     // 在线自己的锁下、按重解析的盘上几何重新解析（见其注释）
     #[cfg(target_os = "linux")]
@@ -155,11 +173,15 @@ pub(crate) fn cmd_resize(a: &Args) -> crate::outcome::Outcome {
 
     // 离线路径
     let is_block = src.is_block;
-    // 一次打开完成分类：有没有自己分区的未收尾搬移在**锁下**判定（右侧"已空"可能正是
-    // 搬了一半的结果），而不是先只读判一次再开第二次——判据与开目标之间不许留窗口。
-    // 返回的 resumed 决定 grow 分支：续跑时"右侧已空"可能是搬移的中间态
-    let (mut src, resuming) =
-        open_target_resumable(a, pref).unwrap_or_else(|f| bail_fail(f));
+    // 一次打开完成分类：目标上的未收尾作业在**锁下**判定（右侧"已空"可能正是搬了一半
+    // 的结果），而不是先只读判一次再开第二次——判据与开目标之间不许留窗口。
+    // 两族作业的进入语义不同：`reloc` 是本分区的搬移作业（"右侧已空"可能是搬移中间态，
+    // 且挡路分区已是用户确认过的那份作业）；`resuming` 是任一未收尾作业（分区层可能已
+    // 提交，只等 FS/PV 收尾），FS 无变化的短路不能把后者当成"无事可做"
+    let (mut src, resumed) =
+        open_target_resize_resumable(a, pref).unwrap_or_else(|f| bail_fail(f));
+    let reloc = resumed == crate::transaction::ResumeKind::Relocation;
+    let resuming = resumed != crate::transaction::ResumeKind::Fresh;
     // 锁下重取权威几何：写路径的每个 LBA（start/end/free/last_usable）都来自它。
     // 锁前那份只服务参数早失败与在线路径的事实快照；只读阶段与取得独占权之间
     // 盘可以被别人改写，用锁前的值驱动写分支就是把过期决定写进盘
@@ -189,6 +211,20 @@ pub(crate) fn cmd_resize(a: &Args) -> crate::outcome::Outcome {
     #[cfg(target_os = "linux")]
     if is_pv {
         preflight_lvm_tools(a.grow_lv, !is_block).unwrap_or_else(|e| bail_fail(Fail::from(e)));
+        // 锁下的 PV 判据可能已与锁前不同（mkfs 会换掉分区内容）：要扩的 LV 按锁下的
+        // 分区节点与起始字节再确认一次，仍在写表之前
+        if a.grow_lv {
+            let start_bytes = start
+                .checked_mul(ss)
+                .unwrap_or_else(|| bail_fail(Fail::infra("partition start overflows byte offset")));
+            lv_sel = Some(
+                preflight_lv_selection(&src, part, is_block, start_bytes, a.lv.as_deref())
+                    .unwrap_or_else(|e| bail_fail(lvm_preflight_fail(e))),
+            );
+        }
+    } else {
+        // 锁下已不是 PV：锁前那份选择对本次写盘没有意义（mkfs 换掉了分区内容）
+        lv_sel = None;
     }
     // 占用闸在 movepart 的 prepare 层（本分支的每条路径都经 prepare_resize/prepare_apply），
     // 不在命令层重复判一次
@@ -196,19 +232,26 @@ pub(crate) fn cmd_resize(a: &Args) -> crate::outcome::Outcome {
         let free = free_right_gpt(&g, part);
         // 右侧有空闲且没有未收尾的搬移作业 → 纯扩容。若作业未收尾，则"右侧已空"很可能
         // 正是搬了一半的结果，走普通 resize_part 会跳过剩余搬移与 swap 重建等收尾
-        if free > 0 && !resuming {
+        if free > 0 && !reloc {
             // free 的上界由 free_right_gpt 的构造保证（≤ last_usable - end）；checked
             // 把这层非局部依赖显式化，回绕值进不了计划
             let Some(new_end) = end.checked_add(free) else {
                 bail_fail(Fail::infra("free-space arithmetic overflow (geometry inconsistent)"));
             };
             let (chunk, mut logger) = chunk_logger(a, &src, g.disk_guid());
-            let o = settle_layout(movepart::resize_part(&mut src, &g, repair, part, start, new_end, chunk, a.no_fs, &mut |m| logger.log(m)), &src);
+            let o = settle_layout(movepart::resize_part(&mut src, &g, repair, part, start, new_end, chunk, a.no_fs, is_pv, lv_sel.clone(), &mut |m| logger.log(m)), &src);
             return finish_resize(a, o, Some(&mut src), part, is_pv, is_block, cur_bytes);
         }
         // 已顶到 last_usable 的分区不是"被挡"，是无可再扩：occupied 文案会把用户引进
-        // --allow-move 的空搬移（空 moves 的 plan 什么都没做却报成功）
-        if !resuming && end == last_usable {
+        // --allow-move 的空搬移（空 moves 的 plan 什么都没做却报成功）。
+        // PV 例外：分区层没有可扩的扇区，但 pvresize/lvextend 仍是本次操作的后置条件
+        // （上一次运行可能正停在提交之后），交给收尾链续做
+        if !reloc && end == last_usable {
+            if is_pv {
+                let (chunk, mut logger) = chunk_logger(a, &src, g.disk_guid());
+                let o = settle_layout(movepart::resize_part(&mut src, &g, repair, part, start, end, chunk, a.no_fs, true, lv_sel.clone(), &mut |m| logger.log(m)), &src);
+                return finish_resize(a, o, Some(&mut src), part, is_pv, is_block, cur_bytes);
+            }
             bail_fail(Fail::refused(format!(
                 "partition already ends at last_usable_lba {last_usable} — nothing to grow"
             )));
@@ -217,7 +260,7 @@ pub(crate) fn cmd_resize(a: &Args) -> crate::outcome::Outcome {
         // --allow-move 只对**新**搬移授权：续跑是"接着做用户已确认过的那件事"，
         // 被卡的挡路分区正是那份作业的一部分——再要一次授权只会把承诺"重跑原命令
         // 即续跑"变成谎话。要求豁免的两态由此分开：未收尾作业放行，真空间不足才拒绝
-        if !a.allow_move && !resuming {
+        if !a.allow_move && !reloc {
             bail_fail(Fail::refused("right side is occupied — pass --allow-move to relocate the blocking partitions (plan will be printed; --yes confirms)".to_string()));
         }
         let plan = match movepart::make_plan_resuming(&src, &g, repair, part) {
@@ -231,7 +274,7 @@ pub(crate) fn cmd_resize(a: &Args) -> crate::outcome::Outcome {
             bail_fail(Fail::refused(CONFIRM_RELOCATION));
         }
         let (chunk, mut logger) = chunk_logger(a, &src, g.disk_guid());
-        let o = settle_layout(movepart::apply(&mut src, &g, &plan, chunk, a.no_fs, &mut |m| logger.log(m)), &src);
+        let o = settle_layout(movepart::apply(&mut src, &g, &plan, chunk, a.no_fs, is_pv, lv_sel.clone(), &mut |m| logger.log(m)), &src);
         finish_resize(a, o, Some(&mut src), part, is_pv, is_block, cur_bytes)
     } else {
         // SIZE：字节 → 扇区（下取整）；扩须右侧空闲足够，缩由 resize_part 内部 FS 先缩 + 守卫链
@@ -260,18 +303,20 @@ pub(crate) fn cmd_resize(a: &Args) -> crate::outcome::Outcome {
             movepart::ShiftIntent::Shrink
         };
         // 请求的终点就是现状：表与 FS 都不动，不进入 resize_part。与 MBR 路径同一判据——
-        // 请求"什么都不改"时出口是 0 且文案明确，而不是先打印 resized
-        if !resuming && matches!(intent, movepart::ShiftIntent::NoOp) {
+        // 请求"什么都不改"时出口是 0 且文案明确，而不是先打印 resized。
+        // PV 例外：分区层无变化不意味着本次操作没有后置条件，收尾链（pvresize/lvextend）
+        // 仍要跑，故落到下面的直连路径
+        if !resuming && !is_pv && matches!(intent, movepart::ShiftIntent::NoOp) {
             println!("partition {part} is already {cur_bytes} bytes — nothing to do");
             return crate::outcome::Outcome::applied_with(Vec::new());
         }
         // 未收尾的搬移作业 ⇒ 必须走 resume 路径（即使几何上 free_right 已足够——swap 等
         // 收尾步骤可能尚未执行，普通扩容会跳过它们）
-        if resuming || matches!(intent, movepart::ShiftIntent::Grow(s) if s > free_right_gpt(&g, part)) {
+        if reloc || matches!(intent, movepart::ShiftIntent::Grow(s) if s > free_right_gpt(&g, part)) {
             // --allow-move 只对**新**搬移授权，续跑放行——两态判据与 grow 分支
             // 同一份理由（见上），真空间不足才拒绝；确认流也同一份：
             // plan 打印 → --yes 确认
-            if !a.allow_move && !resuming {
+            if !a.allow_move && !reloc {
                 bail_fail(Fail::refused("not enough contiguous free space to the right — pass --allow-move to relocate the blocking partitions (plan will be printed; --yes confirms)".to_string()));
             }
             let plan = match movepart::make_plan_shift_resuming(&src, &g, repair, part, intent) {
@@ -283,11 +328,11 @@ pub(crate) fn cmd_resize(a: &Args) -> crate::outcome::Outcome {
                 bail_fail(Fail::refused(CONFIRM_RELOCATION));
             }
             let (chunk, mut logger) = chunk_logger(a, &src, g.disk_guid());
-            let o = settle_layout(movepart::apply(&mut src, &g, &plan, chunk, a.no_fs, &mut |m| logger.log(m)), &src);
+            let o = settle_layout(movepart::apply(&mut src, &g, &plan, chunk, a.no_fs, is_pv, lv_sel.clone(), &mut |m| logger.log(m)), &src);
             return finish_resize(a, o, Some(&mut src), part, is_pv, is_block, cur_bytes);
         }
         let (chunk, mut logger) = chunk_logger(a, &src, g.disk_guid());
-        let o = settle_layout(movepart::resize_part(&mut src, &g, repair, part, start, new_end, chunk, a.no_fs, &mut |m| logger.log(m)), &src);
+        let o = settle_layout(movepart::resize_part(&mut src, &g, repair, part, start, new_end, chunk, a.no_fs, is_pv, lv_sel.clone(), &mut |m| logger.log(m)), &src);
         finish_resize(a, o, Some(&mut src), part, is_pv, is_block, cur_bytes)
     }
 }

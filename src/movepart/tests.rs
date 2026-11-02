@@ -6,3 +6,4 @@ mod checkpoint;
 mod plan;
 mod shift;
 mod copy;
+mod fuzz;

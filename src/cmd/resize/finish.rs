@@ -29,11 +29,29 @@ pub(crate) fn finish_resize(a: &Args, o: crate::outcome::Outcome, wsrc: Option<&
         crate::outcome::Outcome::Applied { pending, .. } => pending.clone(),
         _ => Vec::new(),
     };
-    match resize_done(a, wsrc, part, is_pv, is_block, old_bytes, None) {
+    let mut wsrc = wsrc;
+    match resize_done(a, wsrc.as_deref_mut(), part, is_pv, is_block, old_bytes, None, None) {
         // 成功文案对**合并后**的结果发：resize_done 看不到上游待办，在那个函数里打印
         // 只能靠本函数前面的提前返回保证"完整"，换一个调用点就成立不了
         Ok(done) => {
-            let o = o.merge_applied(done);
+            let mut o = o.merge_applied(done);
+            // PV 的 checkpoint 由 execute 留给这里撤（defer_ckpt）：撤除与"作业收口"
+            // 同一判据——链与上游待办全部完成。链未确认时现场留着，重跑按 Committed
+            // 续做，而不是让下一次运行算出"尺寸未变"而报成功
+            if is_pv && o.is_complete()
+                && let Some(w) = wsrc
+                && !crate::dev::remove_recovery_file(w.identity.checkpoint_path())
+            {
+                o = o.merge_applied(crate::outcome::Outcome::applied_with(vec![crate::outcome::Pending::new(
+                    part,
+                    crate::outcome::PendingKind::Other("checkpoint"),
+                    format!(
+                        "the job finished but its checkpoint {} could not be removed — remove it by hand",
+                        w.identity.checkpoint_path().display()
+                    ),
+                    String::new(),
+                )]));
+            }
             if !is_pv && o.is_complete() {
                 println!("resized (verify with: diskedit info {})", a.target);
             }
@@ -54,6 +72,7 @@ pub(crate) fn finish_resize(a: &Args, o: crate::outcome::Outcome, wsrc: Option<&
 /// 表写入已经发生，故重读/屏障/链的失败一律以 `Err(cause)` 返回给调用方，
 /// 由 `finish_resize` 折成 `Failed`（保留上游待办）；不得返 `Outcome::infra`，
 /// 那会向用户承诺"本次未写盘"
+#[allow(clippy::too_many_arguments)] // 写句柄/分区/开关/旧尺寸/在线锁/在线事实各司其职：合成参数对象只是给 lint 换一层间接
 pub(crate) fn resize_done(
     // `a` 只被 Linux 的重开路径（open_target_ro）取用：其余平台没有收尾链
     #[cfg_attr(not(target_os = "linux"), allow(unused_variables))]
@@ -64,6 +83,8 @@ pub(crate) fn resize_done(
     is_block: bool,
     old_bytes: u64,
     online_lock: Option<OnlineLock>,
+    // 在线路径在写表之前算出的收尾事实（在线没有 checkpoint 可读）
+    online_facts: Option<movepart::LvmPostFacts>,
 ) -> Result<crate::outcome::Outcome, String> {
     // 在线路径的独占权要覆盖到 LVM 链结束：pvresize/lvextend 是本次操作的后置条件，
     // 在它们跑之前释放锁，另一个 diskedit 就能在这段窗口内改写同一块盘。带出的整盘
@@ -101,6 +122,14 @@ pub(crate) fn resize_done(
             }
         };
         let delta = new_bytes.saturating_sub(old_bytes);
+        // checkpoint 里的 LVM 收尾事实是续跑的唯一基线：分区已提交而链未完成时，
+        // 本次算出的增量是 0，按它折算只会得出"少一截却报成功"。离线写句柄带现场时
+        // 以现场为准；在线路径没有现场，用写表之前算出的那一份
+        let facts = match wsrc.as_deref() {
+            Some(w) => crate::movepart::read_lvm_post(w.identity.checkpoint_path())
+                .map_err(|e| format!("post-resize: cannot read the LVM facts from the checkpoint: {e}"))?,
+            None => online_facts,
+        };
         // pvresize/lvextend 的写入不可回滚：此后回滚表项即"表与内容自相矛盾"，屏障必须
         // 先于该写入落。落点是它存在的唯一位置——GPT/MBR、镜像/块设备的 PV 收尾在此
         // 汇合，且只有 wsrc 带 journal；屏障紧贴外部工具调用，死亡窗口不会无谓锁死 undo
@@ -121,7 +150,7 @@ pub(crate) fn resize_done(
             };
             let node = fsops::find_block_partition_node(ro, part, start_bytes)
                 .map_err(|e| format!("post-resize: {e}"))?;
-            lvm_grow_chain(&node, new_bytes, delta, a.grow_lv, a.lv.as_deref())
+            lvm_grow_chain(&node, new_bytes, delta, a.grow_lv, a.lv.as_deref(), facts.as_ref())
         } else {
             // offset+sizelimit 映射出的 loop 设备 = 该分区的整块设备，PV 整设备语义下
             // pvresize/lvextend 直接可用，无需 -P partscan。
@@ -135,7 +164,7 @@ pub(crate) fn resize_done(
                 (None, None) => opened.as_ref().expect("image PV path reopens the target above"),
             };
             fsops::with_partition_device_for_lvm(ro, part, |pv| {
-                lvm_grow_chain(pv, new_bytes, delta, a.grow_lv, a.lv.as_deref())
+                lvm_grow_chain(pv, new_bytes, delta, a.grow_lv, a.lv.as_deref(), facts.as_ref())
             })
         };
         match r {
@@ -158,7 +187,7 @@ pub(crate) fn resize_done(
     }
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = (is_block, old_bytes, wsrc, online_lock);
+        let _ = (is_block, old_bytes, wsrc, online_lock, online_facts);
         let o = crate::outcome::Outcome::applied_with(vec![crate::outcome::Pending::new(
             part,
             crate::outcome::PendingKind::Other("lvm chain (pvresize/lvextend)"),

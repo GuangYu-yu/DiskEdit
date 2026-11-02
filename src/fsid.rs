@@ -70,6 +70,23 @@ pub fn fs_name(kind: Option<FsKind>) -> &'static str {
     kind.map_or("unknown", |k| k.as_str())
 }
 
+/// swap 探测命中：签名所在的候选页大小，以及该页是否属于本机 swapon 的页集合
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SwapHit {
+    pub page: u64,
+    pub activatable: bool,
+}
+
+/// [`probe_fs`] 的结论
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FsProbe {
+    /// 与 [`identify`] 的返回值同源：swap 只在本机可激活且头内自洽时计入
+    pub kind: Option<FsKind>,
+    /// 没有其他类型命中时才做 swap 探测；未命中为 `None`。`SwapHit` 只要求签名命中，
+    /// 头内自洽与否由 `kind` 表达
+    pub swap: Option<SwapHit>,
+}
+
 /// 按**字节区间**识别文件系统：`base` 起、`len_bytes` 长的区域。
 ///
 /// 刻意收字节而不收 LBA + 扇区大小：LBA 的单位取决于它来自哪张表——GPT 条目的 LBA 以
@@ -81,6 +98,13 @@ pub fn fs_name(kind: Option<FsKind>) -> &'static str {
 /// Err 只表达设备故障：调用方必须把它与"区间内没有已知签名"（`Ok(None)`）区分开，
 /// 否则 resize 会在 I/O 错误时把 FS 步骤整体跳过并报成功
 pub fn identify(src: &FileSource, base: u64, len_bytes: u64) -> io::Result<Option<FsKind>> {
+    Ok(probe_fs(src, base, len_bytes)?.kind)
+}
+
+/// 同一段区间的一次读盘结论：类型，以及未命中其他类型时的 swap 探测。写入路径要分辨
+/// "空区域"与"识别不出、但元数据确实是 swap"时取 `swap`——[`identify`] 的 `None` 两者
+/// 都表达，无法支撑"swap 未重建"这条待办的判据
+pub fn probe_fs(src: &FileSource, base: u64, len_bytes: u64) -> io::Result<FsProbe> {
     let rd = |off: u64, len: usize| -> io::Result<Option<Vec<u8>>> {
         // 区间外：这里确实没有那些字节，不是读失败。off/len 虽全是常量调用点，
         // checked 失败同样按不命中处理——回绕地址不得混进 read_at
@@ -98,32 +122,32 @@ pub fn identify(src: &FileSource, base: u64, len_bytes: u64) -> io::Result<Optio
     if let Some(b) = rd(0, 4)?
         && b == SQUASHFS_MAGIC
     {
-        return Ok(Some(FsKind::Squashfs));
+        return Ok(FsProbe { kind: Some(FsKind::Squashfs), swap: None });
     }
     // EROFS: 0xE0F5E1E2 (LE) @1024（内核 erofs_fs.h EROFS_SUPER_MAGIC_V1，超级块 @1024）
     if let Some(b) = rd(1024, 4)?
         && b == EROFS_MAGIC
     {
-        return Ok(Some(FsKind::Erofs));
+        return Ok(FsProbe { kind: Some(FsKind::Erofs), swap: None });
     }
     // ext2/3/4: 0xEF53 (LE) @0x438（sb @1024，s_magic @sb+0x38）。magic 区分不出 2/3/4，
     // 而 e2fsck/resize2fs/tune2fs 对三者通用，故统一收敛到 Ext（具体 extN 只存在于 --fs 请求）
     if let Some(b) = rd(0x438, 2)?
         && u16::from_le_bytes([b[0], b[1]]) == 0xEF53
     {
-        return Ok(Some(FsKind::Ext));
+        return Ok(FsProbe { kind: Some(FsKind::Ext), swap: None });
     }
     // XFS: "XFSB" @0（BE 序 magic 0xC03B3998；libxfs xfs_format.h XFS_SB_MAGIC）
     if let Some(b) = rd(0, 4)?
         && &b == b"XFSB"
     {
-        return Ok(Some(FsKind::Xfs));
+        return Ok(FsProbe { kind: Some(FsKind::Xfs), swap: None });
     }
     // btrfs: "_BHRfS_M" @0x10040（内核 fs/btrfs ctree.h BTRFS_MAGIC；超级块 @64 KiB，magic 在 +64）
     if let Some(b) = rd(0x10040, 8)?
         && &b == b"_BHRfS_M"
     {
-        return Ok(Some(FsKind::Btrfs));
+        return Ok(FsProbe { kind: Some(FsKind::Btrfs), swap: None });
     }
     // F2FS: 0xF2F52010 (LE) @0x400，第二副本 @0x1400（内核 __get_raw_super 依次读两份，
     // 主 SB 损坏时回退第二份，故两处都查）
@@ -131,32 +155,32 @@ pub fn identify(src: &FileSource, base: u64, len_bytes: u64) -> io::Result<Optio
         if let Some(b) = rd(off, 4)?
             && u32::from_le_bytes(b[..4].try_into().unwrap()) == 0xF2F5_2010
         {
-            return Ok(Some(FsKind::F2fs));
+            return Ok(FsProbe { kind: Some(FsKind::F2fs), swap: None });
         }
     }
     // exFAT: "EXFAT   "（8 字节含 3 尾随空格）@3 —— 微软规范 §3.1 FileSystemName
     if let Some(b) = rd(3, 8)?
         && &b == b"EXFAT   "
     {
-        return Ok(Some(FsKind::Exfat));
+        return Ok(FsProbe { kind: Some(FsKind::Exfat), swap: None });
     }
     // FAT32: "FAT32   " @0x52；FAT12/16 在 @0x36 —— 微软 EFI FAT32 规范 §5 的 BS_FilSysType
     if let Some(b) = rd(0x52, 8)?
         && &b == b"FAT32   "
     {
-        return Ok(Some(FsKind::Vfat));
+        return Ok(FsProbe { kind: Some(FsKind::Vfat), swap: None });
     }
     if let Some(b) = rd(0x36, 8)?
         && (&b == b"FAT12   " || &b == b"FAT16   ")
     {
-        return Ok(Some(FsKind::Vfat));
+        return Ok(FsProbe { kind: Some(FsKind::Vfat), swap: None });
     }
     // NTFS: "NTFS    " @3（$Boot OEM ID；ntfs-3g libntfs-3g/bootsect.c
     // ntfs_boot_sector_is_ntfs：oem_id == "NTFS    "）
     if let Some(b) = rd(3, 8)?
         && &b == b"NTFS    "
     {
-        return Ok(Some(FsKind::Ntfs));
+        return Ok(FsProbe { kind: Some(FsKind::Ntfs), swap: None });
     }
     // HFS+/HFSX: 卷头 @1024，签名 "H+"/"HX"（Apple TN1150 HFS Plus Volume Format：
     // "The volume signature is the value 'H+' … 'HX' for HFSX"）
@@ -164,7 +188,7 @@ pub fn identify(src: &FileSource, base: u64, len_bytes: u64) -> io::Result<Optio
         if let Some(b) = rd(0x400, 2)?
             && b == sig
         {
-            return Ok(Some(FsKind::HfsPlus));
+            return Ok(FsProbe { kind: Some(FsKind::HfsPlus), swap: None });
         }
     }
     // APFS：容器超块 nx_superblock_t 在块 0；对象头 obj_phys_t 共 32 字节
@@ -173,7 +197,7 @@ pub fn identify(src: &FileSource, base: u64, len_bytes: u64) -> io::Result<Optio
     if let Some(b) = rd(0x20, 4)?
         && &b == b"NXSB"
     {
-        return Ok(Some(FsKind::Apfs));
+        return Ok(FsProbe { kind: Some(FsKind::Apfs), swap: None });
     }
     // LVM2 PV：标签头 "LABELONE" 位于前 4 个 512B 扇区之一（pvcreate 默认第 2 扇区），
     // 标签头内偏移 24 处为类型串 "LVM2 001"（LVM2 lib/label/label.h 的 label_header：
@@ -183,21 +207,29 @@ pub fn identify(src: &FileSource, base: u64, len_bytes: u64) -> io::Result<Optio
             && &b[0..8] == b"LABELONE"
             && &b[24..32] == b"LVM2 001"
         {
-            return Ok(Some(FsKind::Lvm2Pv));
+            return Ok(FsProbe { kind: Some(FsKind::Lvm2Pv), swap: None });
         }
     }
     // swap: 签名位于"创建机页大小"末尾 10 字节（内核 include/linux/swap.h
     // union swap_header：reserved[PAGE_SIZE-10] + magic[10]），盘上不记录该页大小，
-    // 故由 probe_swap_header 按候选集探测。此处取 swapon 口径的候选集——
-    // 本函数回答的是"这台宿主能不能把它当 swap 处理"。签名之外还要求头内自洽
+    // 故由 probe_swap_header 按候选集探测。候选集是 swapon 口径在前、仅 libblkid 认得的
+    // 页大小（32K）在后：第一次命中同时给出"这台宿主能不能把它当 swap 处理"
+    // （activatable 由 SWAPON_PAGES 判定）。`kind` 仍要求命中页可激活且头内自洽
     // （版本与页数，见 swap_header_consistent）：签名可能只是某段普通数据末尾的巧合，
     // 而误判 swap 会让扩容路径据此 mkswap，用新头覆盖该分区首个页
-    if let Some(page) = probe_swap_header(src, base, len_bytes, &swapon_activatable_pages())?
-        && swap_header_consistent(src, base, len_bytes, page)?
-    {
-        return Ok(Some(FsKind::Swap));
-    }
-    Ok(None)
+    let swap = probe_swap_header(src, base, len_bytes, &swap_probe_pages())?
+        .map(|page| SwapHit { page, activatable: SWAPON_PAGES.contains(&page) });
+    let kind = match swap {
+        Some(h) if h.activatable => {
+            if swap_header_consistent(src, base, len_bytes, h.page)? {
+                Some(FsKind::Swap)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    };
+    Ok(FsProbe { kind, swap })
 }
 
 /// swap v1 签名（内核 include/linux/swap.h union swap_header）
@@ -236,14 +268,18 @@ fn ordered_pages(set: &[u64]) -> Vec<u64> {
     v
 }
 
-/// swapon 口径的候选页大小（"能否激活"，不含 32K）
-pub fn swapon_activatable_pages() -> Vec<u64> {
-    ordered_pages(&SWAPON_PAGES)
-}
-
 /// libblkid 口径的候选页大小（"能否识别出元数据"；含 32K，宽于激活能力）
 pub fn blkid_known_pages() -> Vec<u64> {
     ordered_pages(&BLKID_PAGES)
+}
+
+/// [`probe_fs`] 的 swap 候选顺序：swapon 口径（本机页优先、其余升序）在前，其后追加
+/// 仅 libblkid 认得的页大小（32K）。前者在前保证"可激活的命中"优先出现；后者只用于
+/// 认出元数据，激活与否另由 [`SWAPON_PAGES`] 判定
+fn swap_probe_pages() -> Vec<u64> {
+    let mut pages = ordered_pages(&SWAPON_PAGES);
+    pages.extend(BLKID_PAGES.iter().copied().filter(|p| !SWAPON_PAGES.contains(p)));
+    pages
 }
 
 /// swap 签名探测（唯一实现）：在候选页大小各自的末尾 10 字节找 SWAPSPACE2，
@@ -291,24 +327,6 @@ fn swap_header_consistent(src: &FileSource, base: u64, len_bytes: u64, page: u64
     let version = u32::from_le_bytes(info[0..4].try_into().unwrap());
     let last_page = u32::from_le_bytes(info[4..8].try_into().unwrap());
     Ok(version == 1 && u64::from(last_page) < len_bytes / page)
-}
-
-/// 元数据是 swap、但**本机（swapon 口径）激活不了**的区间：libblkid 口径命中而 swapon 口径落空。
-/// 两个候选集的差集只有 32K 一项（见 SWAPON_PAGES / BLKID_PAGES 的依据），故命中即
-/// "创建机用了 32K 页"。identify 对此类区间回 None，写入路径会据此跳过 FS 步骤，
-/// 而分区扩容后 swap 头里的页数还是旧值——那是一条未完成的后置条件，不能报成功。
-///
-/// **隐式契约（显式化）**：identify 的 Ok(None) 不区分"空区域"与"32K swap"。新增
-/// 写路径若只消费 identify 的 Ok(None) 就跳过 FS 步骤，必须补调本函数——否则 32K
-/// swap 扩容后会带着旧页数报成功
-pub fn unactivatable_swap(src: &FileSource, base: u64, len_bytes: u64) -> io::Result<bool> {
-    Ok(matches!(
-        (
-            probe_swap_header(src, base, len_bytes, &blkid_known_pages())?,
-            probe_swap_header(src, base, len_bytes, &swapon_activatable_pages())?,
-        ),
-        (Some(_), None)
-    ))
 }
 
 /// OpenWrt combined 布局的 RW overlay 起点（字节，相对分区头）。公式须与
@@ -470,21 +488,23 @@ mod tests {
         assert_eq!(identify(&s, 0, 65536).unwrap(), None);
     }
 
-    /// 两个具名候选集：swapon 口径不含 32K，libblkid 口径含 32K（各自的依据见常量注释）
+    /// 候选集的两个口径：swapon 口径不含 32K（各自的依据见常量注释），仅 libblkid
+    /// 认得的页大小追加在后
     #[test]
     fn swap_page_size_policies() {
-        let swapon = swapon_activatable_pages();
-        assert!(swapon.contains(&4096) && swapon.contains(&65536));
-        assert!(!swapon.contains(&32768), "swapon 循环跳过 0x8000");
-        let blkid = blkid_known_pages();
-        assert!(blkid.contains(&32768), "libblkid 的 magic 表含 0x7ff6");
-        // 顺序：本机页优先，其余按集合升序（本机页与固定集重合时去重）
-        assert_eq!(swapon[0], host_page());
-        assert_eq!(blkid[0], host_page());
-        let mut sorted = swapon.clone();
+        let pages = swap_probe_pages();
+        assert!(pages.contains(&4096) && pages.contains(&65536));
+        assert!(pages.contains(&32768), "libblkid 的 magic 表含 0x7ff6");
+        // 可激活的候选在前：本机页优先，其余按集合升序（本机页与固定集重合时去重）
+        let activatable = &pages[..SWAPON_PAGES.len()];
+        assert_eq!(activatable[0], host_page());
+        let mut sorted = activatable.to_vec();
         sorted.sort_unstable();
         sorted.dedup();
-        assert_eq!(swapon, sorted);
+        assert_eq!(activatable, sorted.as_slice());
+        assert!(!activatable.contains(&32768), "swapon 循环跳过 0x8000");
+        // 仅 libblkid 认得的页大小排在可激活候选之后
+        assert_eq!(&pages[SWAPON_PAGES.len()..], &[32768]);
     }
 
     /// 探测结果由候选集决定：同一镜像在 libblkid 口径命中 32K，在 swapon 口径不命中；
@@ -495,7 +515,7 @@ mod tests {
         data[32768 - 10..32768].copy_from_slice(b"SWAPSPACE2");
         let s = src_from("probe32k", data);
         assert_eq!(probe_swap_header(&s, 0, 65536, &blkid_known_pages()).unwrap(), Some(32768));
-        assert_eq!(probe_swap_header(&s, 0, 65536, &swapon_activatable_pages()).unwrap(), None);
+        assert_eq!(probe_swap_header(&s, 0, 65536, &SWAPON_PAGES).unwrap(), None);
         // 长度小于候选页 → 跳过该候选，不判越界为命中
         assert_eq!(probe_swap_header(&s, 0, 4096, &[65536]).unwrap(), None);
         // 非 SWAPSPACE2 的 v0 签名不认
@@ -505,26 +525,38 @@ mod tests {
         assert_eq!(probe_swap_header(&s2, 0, 8192, &blkid_known_pages()).unwrap(), None);
     }
 
-    /// "本机激活不了的 swap"判据：两口径的差集只有 32K 一项，故它等价于
-    /// "libblkid 认得出、swapon 认不出"
+    /// 一次探测给出两类事实：`kind` 只在命中页可激活且头内自洽时成立，`swap` 只要求
+    /// 签名命中。差集只有 32K 一项（见 SWAPON_PAGES / BLKID_PAGES 的依据），故 32K
+    /// 命中即"本机激活不了"——写入路径据此报"swap 未重建"而不是跳过 FS 步骤
     #[test]
-    fn unactivatable_swap_is_the_32k_case() {
-        // 4K swap：两个口径都命中 ⇒ 不是"激活不了"
+    fn probe_fs_reports_swap_hit_and_activation() {
+        // 4K swap：两个口径都命中 ⇒ 可激活，identify 认作 swap
         let mut data = vec![0u8; 65536];
         data[4096 - 10..4096].copy_from_slice(b"SWAPSPACE2");
-        assert!(!unactivatable_swap(&src_from("un_act4k", data), 0, 65536).unwrap());
-        // 32K swap：只有 libblkid 口径命中
+        data[1024..1028].copy_from_slice(&1u32.to_le_bytes());
+        data[1028..1032].copy_from_slice(&1u32.to_le_bytes());
+        let p = probe_fs(&src_from("pf4k", data), 0, 65536).unwrap();
+        assert_eq!(p.kind, Some(FsKind::Swap));
+        assert_eq!(p.swap, Some(SwapHit { page: 4096, activatable: true }));
+        // 32K swap：只有 libblkid 口径命中 ⇒ 不可激活，identify 仍是 None
         let mut data = vec![0u8; 65536];
         data[32768 - 10..32768].copy_from_slice(b"SWAPSPACE2");
-        assert!(unactivatable_swap(&src_from("un_act32k", data), 0, 65536).unwrap());
-        // 非 swap 区：两个口径都落空
-        assert!(!unactivatable_swap(&src_from("un_actnone", vec![0u8; 65536]), 0, 65536).unwrap());
+        data[1024..1028].copy_from_slice(&1u32.to_le_bytes());
+        data[1028..1032].copy_from_slice(&1u32.to_le_bytes());
+        let p = probe_fs(&src_from("pf32k", data), 0, 65536).unwrap();
+        assert_eq!(p.kind, None);
+        assert_eq!(p.swap, Some(SwapHit { page: 32768, activatable: false }));
+        // 空区域：两个事实都落空
+        let p = probe_fs(&src_from("pfnone", vec![0u8; 65536]), 0, 65536).unwrap();
+        assert_eq!(p.kind, None);
+        assert_eq!(p.swap, None);
         // 签名相对**区间起点**解释：同一段字节换个起点就不再命中
         let mut data = vec![0u8; 131072];
         data[65536 + 32768 - 10..65536 + 32768].copy_from_slice(b"SWAPSPACE2");
-        let s = src_from("un_actoff", data);
-        assert!(unactivatable_swap(&s, 65536, 65536).unwrap());
-        assert!(!unactivatable_swap(&s, 0, 65536).unwrap());
+        data[65536 + 1024..65536 + 1028].copy_from_slice(&1u32.to_le_bytes());
+        let s = src_from("pfoff", data);
+        assert_eq!(probe_fs(&s, 65536, 65536).unwrap().swap, Some(SwapHit { page: 32768, activatable: false }));
+        assert_eq!(probe_fs(&s, 0, 65536).unwrap().swap, None);
     }
 
     #[test]

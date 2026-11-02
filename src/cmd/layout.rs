@@ -9,9 +9,10 @@ pub(crate) const HELP_NEW: &str = r#"diskedit new <TARGET> [--table gpt|msdos] -
 
   Create a fresh partition table; overwrites any existing one. Default gpt.
   Drawing a table writes the entry arrays at the front of the disk and, for
-  gpt, a backup copy in the last sectors — bytes an existing partition may
-  hold. Such a collision is refused and named; --overwrite-partition-data
-  accepts overwriting those bytes (--yes alone only confirms the rebuild).
+  gpt, a backup copy in the last sectors; for msdos, residual GPT header
+  signatures are cleared — bytes an existing partition may hold. Such a
+  collision is refused and named; --overwrite-partition-data accepts
+  overwriting those bytes (--yes alone only confirms the rebuild).
 
   Options:
     --sector-size N  logical sector size override for raw images (power of two,
@@ -132,20 +133,25 @@ pub(crate) fn cmd_new(a: &Args) -> crate::outcome::Outcome {
             table::TableKind::Msdos => table::create_mbr_preflight(src.size, ss),
         };
         preflight.unwrap_or_else(|f| bail_fail(f));
-        // GPT 的主数组与盘尾备份区都是表结构写入：旧表若把分区铺到任一段，这次写入
-        // 就是清零分区数据。相交即按可证事实拒绝并点名；旧表读不出来时只告警
-        // （new 本就是重建表的命令）。`--yes` 只确认"重建表"，覆盖分区字节要另一项
-        // 明确授权，故相交时才要求 --overwrite-partition-data
-        if kind == table::TableKind::Gpt {
-            match table::gpt_metadata_conflict(&src, ss) {
-                Ok(Some(why)) if !a.overwrite_partition_data => bail_fail(Fail::refused(format!(
-                    "{why} — pass --overwrite-partition-data to accept overwriting those bytes"
-                ))),
-                Ok(Some(_)) | Ok(None) => {}
-                Err(e) => eprintln!(
-                    "warning: cannot check the existing table against the GPT metadata this new table writes ({e})"
-                ),
-            }
+        // 新表写入落在旧分区数据里的部分，必须另有明确授权：`--yes` 只确认"重建表"。
+        // 探测读不出旧表时同样不放行——无法证明写入只落在表结构区，就不是"确认无冲突"
+        let conflict = match kind {
+            table::TableKind::Gpt => table::gpt_metadata_conflict(&src, ss),
+            table::TableKind::Msdos => table::mbr_metadata_conflict(&src, ss),
+        };
+        match conflict {
+            Ok(Some(why)) if !a.overwrite_partition_data => bail_fail(Fail::refused(format!(
+                "{why} — pass --overwrite-partition-data to accept overwriting those bytes"
+            ))),
+            Ok(Some(_)) => {}
+            Ok(None) => {}
+            Err(e) if !a.overwrite_partition_data => bail_fail(Fail::refused(format!(
+                "cannot check the existing partition table against the bytes this new table writes ({e}) — \
+                 pass --overwrite-partition-data to proceed without that check"
+            ))),
+            Err(e) => eprintln!(
+                "warning: cannot check the existing table against the bytes this new table writes ({e})"
+            ),
         }
         // 写表前的占用闸：目标上任一分区在用（镜像：任一绑定到它的 loop 在用）即拒绝，
         // 否则新表会与内核仍在使用的分区视图分叉
@@ -325,7 +331,7 @@ pub(crate) fn cmd_resize_part(a: &Args) -> crate::outcome::Outcome {
         align_range(a, start, end, g.sector_size())
     };
     let (chunk, mut logger) = chunk_logger(a, &src, g.disk_guid());
-    let o = settle_layout(movepart::resize_part(&mut src, &g, repair, part, start, end, chunk, a.no_fs, &mut |m| logger.log(m)), &src);
+    let o = settle_layout(movepart::resize_part(&mut src, &g, repair, part, start, end, chunk, a.no_fs, false, None, &mut |m| logger.log(m)), &src);
     if o.is_complete() {
         println!("resize-part complete (verify with: diskedit info {})", a.target);
     }
@@ -385,7 +391,7 @@ pub(crate) fn cmd_move(a: &Args) -> crate::outcome::Outcome {
     let end = start.checked_add(len - 1)
         .unwrap_or_else(|| bail_fail(Fail::refused("end LBA overflows address space".to_string())));
     let (chunk, mut logger) = chunk_logger(a, &src, g.disk_guid());
-    let o = settle_layout(movepart::resize_part(&mut src, &g, repair, part, start, end, chunk, a.no_fs, &mut |m| logger.log(m)), &src);
+    let o = settle_layout(movepart::resize_part(&mut src, &g, repair, part, start, end, chunk, a.no_fs, false, None, &mut |m| logger.log(m)), &src);
     if o.is_complete() {
         println!("moved (verify with: diskedit info {})", a.target);
     }

@@ -97,6 +97,7 @@ pub(crate) fn resize_part_resume_skips_done_chunks() {
         fs_shrunk: FsShrink::NotShrunk, chunks_done: 1, chunk_bytes: chunk,
         fp: Default::default(),
         map: None,
+        lvm: None,
         fstype: None,
     };
     atomic_write_ckpt(&ckpt_path, &ckpt.serialize()).unwrap();
@@ -154,6 +155,7 @@ pub(crate) fn resize_part_resume_after_commit_without_ckpt_update() {
         chunk_bytes: chunk,
         fp: Default::default(),
         map: None,
+        lvm: None,
         fstype: None,
     };
     atomic_write_ckpt(&ckpt_path, &ckpt.serialize()).unwrap();
@@ -199,6 +201,7 @@ pub(crate) fn retargeted_resize_after_crash_is_refused() {
         fs_shrunk: FsShrink::NotShrunk, chunks_done: 4, chunk_bytes: chunk,
         fp: Default::default(),
         map: None,
+        lvm: None,
         fstype: None,
     };
 
@@ -251,6 +254,7 @@ pub(crate) fn divergent_and_no_fs_shrink_are_refused_before_any_write() {
         new_start: 3072, new_end: 5119, fs_shrunk: FsShrink::NotShrunk, chunks_done: 0, chunk_bytes: chunk,
         fp: Default::default(),
         map: None,
+        lvm: None,
         fstype: None,
     };
     atomic_write_ckpt(&ckpt_path, &rs.serialize()).unwrap();
@@ -290,13 +294,14 @@ pub(crate) fn shrink_state_is_tri_state_on_the_wire() {
         old_start: 2048, old_end: 6143, new_start: 3072, new_end: 5119,
         fs_shrunk, chunks_done: 0, chunk_bytes: chunk,
         fp: Default::default(), map: None, fstype: None,
+        lvm: None,
     };
-    // 布局未变，只是语义变：状态字节固定在 64
+    // 布局未变，只是语义变：状态字节固定在 65（magic(8) + ver(4) + LVM 标志(1) 之后起算）
     let b = ckpt(FsShrink::Unverified).serialize();
     assert_eq!(u32::from_le_bytes(b[8..12].try_into().unwrap()), CKPT2_VERSION);
-    assert_eq!(b[64], 2, "unverified shrink must be distinguishable on disk");
-    assert_eq!(ckpt(FsShrink::Verified).serialize()[64], 1);
-    assert_eq!(ckpt(FsShrink::NotShrunk).serialize()[64], 0);
+    assert_eq!(b[65], 2, "unverified shrink must be distinguishable on disk");
+    assert_eq!(ckpt(FsShrink::Verified).serialize()[65], 1);
+    assert_eq!(ckpt(FsShrink::NotShrunk).serialize()[65], 0);
 }
 
 /// 续跑前的回读：读不出来就报"无从判断"，不得按"未缩"或"已缩"任一侧猜——
@@ -311,6 +316,79 @@ pub(crate) fn shrink_state_readback_reports_unknown_instead_of_guessing() {
         "an unreadable filesystem must not be reported as shrunk or unshrunk"
     );
     assert_eq!(crate::fsops::shrink_already_at(&src, 1, None, 1024 * 1024), None);
+    drop(src);
+    let _ = std::fs::remove_file(&p);
+}
+
+/// 现场记着 LVM 收尾事实，而本次入口不跑链（`resize-part` / `move` 传 defer = false）：
+/// 盘上表已提交到新几何，重跑判定 Committed，LVM 那一步仍没人做。此时不能删唯一的
+/// 现场（删掉就没有"该扩到哪"的基线），未做的链以 Pending 浮出，退出码 20
+#[test]
+pub(crate) fn recorded_lvm_facts_keep_the_checkpoint_when_the_caller_runs_no_chain() {
+    let chunk: u64 = 1024 * 1024;
+    // 盘上几何已是那次 PV 作业的目标（4096..8191），与 ckpt 记的 new 一致
+    let (mut src, p) = plan_fixture(&[(1, [0x11; 16], 4096, 8191)]);
+    let ckpt_path = src.identity.checkpoint_path().to_path_buf();
+    let ck = RsCheckpoint {
+        proof: crate::dev::LiveProof::Inode,
+        disk_size: src.size, ss: 512, part: 1,
+        old_start: 2048, old_end: 6143, new_start: 4096, new_end: 8191,
+        fs_shrunk: FsShrink::NotShrunk, chunks_done: 0, chunk_bytes: chunk,
+        fp: Default::default(), map: None, fstype: None,
+        lvm: Some(LvmPostFacts {
+            lv_path: Some("/dev/vg0/data".into()),
+            lv_size_before: 1 << 20,
+            lv_target: (1 << 20) + 8 * 4096,
+            extent_bytes: 4096,
+        }),
+    };
+    atomic_write_ckpt(&ckpt_path, &ck.serialize()).unwrap();
+
+    let o = rsize(&mut src, 1, 4096, 8191, chunk, true, &mut |_| {});
+    assert_eq!(o.exit_code(), 20, "the unrun LVM chain is a pending step: {o:?}");
+    match &o {
+        Outcome::Applied { pending, .. } => {
+            assert_eq!(pending.len(), 1, "exactly the LVM chain must be reported: {pending:?}");
+            assert!(pending[0].detail.contains("/dev/vg0/data"), "{:?}", pending[0]);
+            assert!(pending[0].hint.contains("re-run"), "{:?}", pending[0]);
+        }
+        other => panic!("expected Applied, got {other:?}"),
+    }
+    assert!(ckpt_path.exists(), "dropping the checkpoint would erase the only baseline for the chain");
+    assert_eq!(read_lvm_post(&ckpt_path).unwrap().unwrap().lv_target, (1 << 20) + 8 * 4096);
+
+    drop(src);
+    let _ = std::fs::remove_file(&ckpt_path);
+    let _ = std::fs::remove_file(&p);
+}
+
+/// checkpoint 的撤除时机：`defer` 下 execute 成功也不撤，现场留给调用方的收尾
+/// （PV 的 pvresize/lvextend 在表提交之后才跑）；同一作业在非 defer 下成功即清
+#[test]
+pub(crate) fn deferred_resize_leaves_the_checkpoint_to_the_caller() {
+    let chunk: u64 = 1024 * 1024;
+    let (old_start, old_end) = (2048u64, 10239u64);
+    let (new_start, new_end) = (4096u64, 12287u64);
+
+    // defer：搬移作业（起点变化）必然在开工时落 ckpt
+    let (mut src, p) = plan_fixture(&[(1, [0x11; 16], old_start, old_end)]);
+    src.write_at(old_start * 512, &[0xA5u8; 512]).unwrap();
+    let ckpt_path = src.identity.checkpoint_path().to_path_buf();
+    let o = rsize_deferred(&mut src, 1, new_start, new_end, chunk, true, true, &mut |_| {});
+    assert!(o.has_layout_write(), "resize must apply (exit {})", o.exit_code());
+    assert!(ckpt_path.exists(), "defer must leave the checkpoint for the caller's finish step");
+    // 调用方收尾成功之后自行撤除
+    assert!(crate::dev::remove_recovery_file(&ckpt_path));
+    drop(src);
+    let _ = std::fs::remove_file(&p);
+
+    // 非 defer：同一形状的作业成功即撤
+    let (mut src, p) = plan_fixture(&[(1, [0x11; 16], old_start, old_end)]);
+    src.write_at(old_start * 512, &[0xA5u8; 512]).unwrap();
+    let ckpt_path = src.identity.checkpoint_path().to_path_buf();
+    let o = rsize_deferred(&mut src, 1, new_start, new_end, chunk, true, false, &mut |_| {});
+    assert!(o.has_layout_write(), "resize must apply (exit {})", o.exit_code());
+    assert!(!ckpt_path.exists(), "a completed job must not leave a checkpoint behind");
     drop(src);
     let _ = std::fs::remove_file(&p);
 }

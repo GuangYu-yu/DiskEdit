@@ -29,7 +29,7 @@ pub(crate) fn cmd_resize_superfloppy(a: &Args, size: Option<&str>) -> crate::out
     // 锁下取权威容器尺寸并解析 SIZE：+N/+% 锚定"当前尺寸"，而容器大小不受本工具锁约束
     //（镜像可被 truncate、盘可被第三方改写）——锁前锚点会算错方向，与分区路径同理
     let cur_bytes = src.size;
-    let (target, grow_to_end) = resolve_size_request(size, cur_bytes).unwrap_or_else(|f| bail_fail(f));
+    let (target, _) = resolve_size_request(size, cur_bytes).unwrap_or_else(|f| bail_fail(f));
     if let Some(t) = target {
         if t < cur_bytes {
             bail_fail(Fail::refused("superfloppy cannot shrink — the FS occupies the whole device, there is no partition boundary to shrink to".to_string()));
@@ -38,10 +38,6 @@ pub(crate) fn cmd_resize_superfloppy(a: &Args, size: Option<&str>) -> crate::out
             bail_fail(Fail::refused("target exceeds device/image size — extend the image or replace the disk first (this tool does not resize the container)".to_string()));
         }
         // SIZE == 当前值：与 grow 等价（FS 可能仍小于盘）
-    } else if !grow_to_end {
-        // 防御断言：resolve_size_request 对 (None,false) 已返回拒绝，正常输入到不了这里。
-        // 保留它，使将来契约放宽时未知请求也不会被静默当成"扩到盘尾"
-        bail_fail(Fail::infra("internal error: size request resolved to neither a target nor grow".to_string()));
     }
     // FS 类型在锁下识别：整盘可在取锁前被重新格式化，类型判据必须锚定独占权之后的内容
     let fstype = fsid::identify(&src, 0, cur_bytes)

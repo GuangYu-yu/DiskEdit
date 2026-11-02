@@ -30,6 +30,25 @@ fn verify_mount_target(t: &OnlineTarget) -> Result<(), String> {
     Ok(())
 }
 
+/// 分区表已扩之后 FS 步失败的三种成因：无在线工具（一个进程都没起）、进程未启动
+/// （同样没碰 FS）、已运行且非零退出（可能已部分扩过）。三态在写盘之前的调用点各自
+/// 有出口语义；到这里表已经改了盘，它们都只能是"未满足的后置条件"——但"文件系统被
+/// 改了多少"不同，合并成一句 "skipped" 会把"可能已写了一半"说成"没动"
+pub(super) fn fs_grow_skipped_after_resize(e: &FsGrowError) -> String {
+    match e {
+        FsGrowError::NoTool(m) => format!(
+            "partition resized but no filesystem grow tool was available, so the filesystem was not grown: {m}"
+        ),
+        FsGrowError::Spawn(m) => format!(
+            "partition resized but the filesystem grow tool could not be started, so the filesystem was not modified: {m}"
+        ),
+        FsGrowError::Exit(m) => format!(
+            "partition resized but the filesystem grow tool ran and exited with an error — \
+             the filesystem may be partially grown: {m}"
+        ),
+    }
+}
+
 /// 本次在线 resize 对分区表的权限边界。两个入口（`resizefs <mountpoint>` 与 `resize`）在
 /// 这一段逻辑上的区别只有两处判据，由调用方显式声明，不以两个裸 bool 由实参位置区分
 pub(crate) enum TablePolicy {
@@ -90,7 +109,7 @@ pub fn resize_online(
             return Outcome::refused(format!("partition {} became active swap during locking — run swapoff first", t.pno));
         }
         Ok(false) => {}
-        Err(e) => return Outcome::infra(format!("cannot read /proc/swaps: {e}")),
+        Err(e) => return Outcome::infra(format!("cannot check active swap for partition {}: {e}", t.pno)),
     }
     let fstype = match fstype_of(&t) {
         Ok(f) => f,
@@ -227,12 +246,20 @@ pub fn resize_online(
                 if let Err(e) = part_resize(&t, bytes) {
                     // 表已写、内核同步失败：FS 扩步也因此没做，两条事实一并报
                     let detail = e.detail().to_string();
-                    if matches!(&e, PartResizeError::Partial(_)) {
-                        return e.into_outcome_with(vec![fs_pending(format!(
-                            "partition resized but FS grow skipped: {detail}"
-                        ))]);
+                    match &e {
+                        PartResizeError::Partial(_) => {
+                            return e.into_outcome_with(vec![fs_pending(format!(
+                                "partition resized but FS grow skipped: {detail}"
+                            ))]);
+                        }
+                        // 写入已发出但盘上状态不可证实：表不一定到了请求尺寸，FS 同样没做
+                        PartResizeError::Unverified(_) => {
+                            return e.into_outcome_with(vec![fs_pending(format!(
+                                "partition table write could not be verified; FS grow skipped: {detail}"
+                            ))]);
+                        }
+                        _ => return e.into_outcome(),
                     }
-                    return e.into_outcome();
                 }
                 if let Err(e) = verify_part_size(&t, bytes) {
                     // 两个正交事实同时成立：内核视图过期 + FS 步未做
@@ -249,8 +276,9 @@ pub fn resize_online(
                 }
                 match fs_grow(&t, fstype) {
                     Ok(()) => Outcome::applied_with(Vec::new()),
-                    // 分区已扩：无论 spawn 失败还是非零退出，FS 步都是一条未满足后置条件
-                    Err(e) => Outcome::applied_with(vec![fs_pending(format!("partition resized but FS grow skipped: {}", e.detail()))]),
+                    // 分区已扩：FS 步是一条未满足的后置条件，但"工具未启动"与"已运行且
+                    // 非零退出"对文件系统的改动量不同，文案各自成句（见该函数）
+                    Err(e) => Outcome::applied_with(vec![fs_pending(fs_grow_skipped_after_resize(&e))]),
                 }
             } else {
                 // shrink（仅 btrfs；FilesystemOnly 入口已在上方拒绝，能到这里说明本入口
@@ -321,6 +349,14 @@ pub fn resize_online(
                     Err(e @ PartResizeError::Partial(_)) => {
                         println!("btrfs filesystem shrunk to {bytes} bytes (the partition table change did not reach the kernel)");
                         return e.into_outcome();
+                    }
+                    // 写入已发出但盘上状态不可证实：FS 已缩，表是否已缩无法断言。
+                    // 不得报成"表未写"（那会暗示分区仍是旧尺寸），也不得报成内核同步失败
+                    Err(e @ PartResizeError::Unverified(_)) => {
+                        return Outcome::failed(format!(
+                            "btrfs shrunk but the partition table write could not be verified: {}",
+                            e.detail()
+                        ));
                     }
                     // 表未写或无法断言：FS 已缩，本次已改变盘上内容 → 不得报"未动盘"
                     Err(e) => {

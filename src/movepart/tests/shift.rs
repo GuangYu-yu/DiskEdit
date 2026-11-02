@@ -59,6 +59,7 @@ pub(crate) fn swap_rebuild_failure_skips_growth_finalization() {
         last_usable_lba: plan.last_usable_lba, moves: plan.moves.clone(), kind: plan.kind,
         cur_index: 0, chunks_done: 0, chunk_bytes: 1024 * 1024,
         fp: src.fingerprint, map: src.loop_mapping,
+        lvm: None,
     };
     atomic_write_ckpt(&ckpt_path, &ckpt.serialize()).unwrap();
     let o = ap(&mut src, &plan, 1024 * 1024, true, &mut |_| {});
@@ -107,6 +108,7 @@ pub(crate) fn resume_refuses_when_a_pending_partition_moved_on_disk() {
         last_usable_lba: plan.last_usable_lba, moves: plan.moves.clone(), kind: plan.kind,
         cur_index: 0, chunks_done: 0, chunk_bytes: chunk,
         fp: src.fingerprint, map: src.loop_mapping,
+        lvm: None,
     };
     atomic_write_ckpt(src.identity.checkpoint_path(), &ckpt.serialize()).unwrap();
     drop(src);
@@ -130,7 +132,7 @@ pub(crate) fn resume_refuses_when_a_pending_partition_moved_on_disk() {
     // 篡改确实落到几何上：home 现在停在 20000，而非 ckpt 记的 first_lba=6144
     assert_eq!(crate::gpt_policy::live_entry(&g, 2).unwrap().starting_lba, 20000);
     // 直呼事前判定，隔离出拒绝来源：必须是 R2 的位置校验，而不是更靠前的占用/场景/槽位判定
-    match prepare_apply(&src, &g, &plan, chunk, true, &mut |_| {}) {
+    match prepare_apply(&src, &g, &plan, chunk, true, false, None, &mut |_| {}) {
         Err(Fail::Refused(m)) => assert!(m.contains("not where the checkpoint says"), "{m}"),
         Err(other) => panic!("expected a position refusal, got {other:?}"),
         Ok(_) => panic!("expected a position refusal, but the resume was accepted"),
@@ -205,7 +207,10 @@ pub(crate) fn unactivatable_swap_growth_is_pending_not_silent_success() {
     let mut src = plan_open(&p);
     let ckpt_path = src.identity.checkpoint_path().to_path_buf();
     assert_eq!(crate::fsid::identify(&src, base as u64, 4096 * 512).unwrap(), None);
-    assert!(crate::fsid::unactivatable_swap(&src, base as u64, 4096 * 512).unwrap());
+    assert!(matches!(
+        crate::fsid::probe_fs(&src, base as u64, 4096 * 512).unwrap().swap,
+        Some(h) if !h.activatable
+    ));
 
     // 起点不变、向右扩
     let o = rsize(&mut src,1, 2048, 8191, 1024 * 1024, false, &mut |_| {});
