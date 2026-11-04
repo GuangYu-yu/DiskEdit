@@ -10,11 +10,35 @@
 //! 本工具拒绝在坏几何上继续操作，但必须能告诉用户哪里坏了。
 
 use crate::table::{EntryArrayGeometry, MAX_ARRAY_BYTES, RawGpt, RawHeader};
+use crate::outcome::Fail;
 use gptman::GPTPartitionEntry;
 use std::io;
 
 fn invalid(msg: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, msg.into())
+}
+
+/// 复核失败的两类事实：盘上表已被外部改写（改参数或重跑能解决 → 拒绝 10），
+/// 或表读不出来（环境故障 → 基础设施 30）。两者都不放行；类型上分开，
+/// 使 30 不会被折叠成 10
+enum TableCheck {
+    Changed(String),
+    Unreadable(String),
+}
+
+impl TableCheck {
+    fn message(&self) -> &str {
+        match self {
+            Self::Changed(m) | Self::Unreadable(m) => m,
+        }
+    }
+
+    fn into_fail(self) -> Fail {
+        match self {
+            Self::Changed(m) => Fail::refused(m),
+            Self::Unreadable(m) => Fail::infra(m),
+        }
+    }
 }
 
 /// checkpoint 之类"盘上可控的持久状态"的合法性判据来源：它们不自己发现世界，
@@ -240,11 +264,22 @@ impl ValidatedGeometry {
     /// 窗口的长度由调用点决定：add/rename/set/delete 是"读 → 判 → 修复 → 提交"，
     /// resize 与搬移类命令则跨整个 FS 调整或数据搬移
     pub(crate) fn ensure_entries_unchanged(&self, src: &crate::dev::FileSource) -> io::Result<()> {
+        self.check_entries(src).map_err(|e| invalid(e.message()))
+    }
+
+    /// 首写前的复核，出口保留 [`TableCheck`] 的两类分类。与
+    /// [`Self::ensure_entries_unchanged`] 共用同一份比对实现，只是错误表示不同：
+    /// 写盘前的调用点要能落到"拒绝 10 / 基础设施 30"，已越界的 io 调用点只要一个原因
+    pub(crate) fn ensure_entries_unchanged_fail(&self, src: &crate::dev::FileSource) -> Result<(), Fail> {
+        self.check_entries(src).map_err(TableCheck::into_fail)
+    }
+
+    fn check_entries(&self, src: &crate::dev::FileSource) -> Result<(), TableCheck> {
         let g = crate::table::load_gpt(src)
-            .map_err(crate::table::into_io_error)?
-            .ok_or_else(|| invalid("GPT vanished before the table write"))?;
+            .map_err(|e| TableCheck::Unreadable(e.to_string()))?
+            .ok_or_else(|| TableCheck::Changed("GPT vanished before the table write".to_string()))?;
         if g.entries.len() != self.decided_entries.len() {
-            return Err(invalid(format!(
+            return Err(TableCheck::Changed(format!(
                 "GPT entry array holds {} entries but {} were validated — the table changed outside this tool",
                 g.entries.len(),
                 self.decided_entries.len()
@@ -287,7 +322,7 @@ impl ValidatedGeometry {
         .into_iter()
         .find(|(_, was, is, want)| is != was && is != want);
         if let Some((field, was, is, _)) = changed {
-            return Err(invalid(format!(
+            return Err(TableCheck::Changed(format!(
                 "GPT header field {field} changed outside this tool since the table was validated \
                  ({was} → {is}) — refusing to overwrite it; re-run the command"
             )));
@@ -299,7 +334,7 @@ impl ValidatedGeometry {
             if self.dirty.contains(&i) && *entry == self.entries[i] {
                 continue;
             }
-            return Err(invalid(format!(
+            return Err(TableCheck::Changed(format!(
                 "partition entry #{} changed outside this tool since the table was validated — \
                  refusing to overwrite it; re-run the command",
                 i + 1

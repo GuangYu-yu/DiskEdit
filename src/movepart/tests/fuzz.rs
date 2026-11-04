@@ -160,12 +160,15 @@ fn rs_checkpoint_rejects_corrupt_state_fixed_seed() {
                     bytes[p] ^= 1 << rng.below(8);
                 }
             }
-            // 3) 字段区整段改写但不补 CRC：CRC 必须挡住
+            // 3) 字段区改写但不补 CRC：CRC 必须挡住；逐字节取反保证内容确实变了
             2 => {
                 let p = rng.below(body as u64) as usize;
-                let v = rng.u64().to_le_bytes();
-                let end = (p + 1 + rng.below(8) as usize).min(body);
-                bytes[p..end].copy_from_slice(&v[..end - p]);
+                bytes[p] ^= 1 << rng.below(8);
+                assert!(
+                    RsCheckpoint::<crate::dev::IdentityProof>::deserialize(&bytes, &lim).is_err(),
+                    "{ctx} byte={p}: a field rewrite without a fresh CRC must be rejected by the CRC gate"
+                );
+                continue;
             }
             // 4) 字段区改写后按规范补 CRC：此时挡住它的只能是字段校验本身
             _ => {

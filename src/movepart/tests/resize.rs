@@ -4,6 +4,64 @@ use super::support::*;
 use gptman::{GPT, GPTPartitionEntry};
 use std::io::Cursor;
 
+/// prepare 与首写之间第三方改表：执行半程须以携带的几何复核拒绝，目标区一字未写。
+/// 源区首扇区填非零——若拒绝失效，搬移会把这些字节带进目标区
+#[test]
+pub(crate) fn execute_resize_refuses_when_table_changed_after_prepare() {
+    let ss = 512u64;
+    let (mut src, path) = plan_fixture(&[(1, [0x11; 16], 2048, 6143)]);
+    src.write_at(2048 * ss, &[0xA5u8; 512]).unwrap();
+    let (g, repair) = gpt_policy::resolve_geometry(&src).unwrap().unwrap();
+    let mut log = |_: &str| {};
+    let p = prepare_resize(&src, &g, repair, 1, 8192, 12287, 1024 * 1024, true, false, None, &mut log).unwrap();
+    tamper_disk_guid(&mut src);
+    let before = std::fs::read(&path).unwrap();
+    let mut post = PostWrite::new();
+    let r = execute_resize(&mut src, p, &mut |_| {}, &mut post);
+    assert!(r.is_err(), "execute must refuse a table changed after prepare");
+    let err = r.unwrap_err().to_string();
+    assert!(err.contains("changed outside this tool"), "unexpected error: {err}");
+    let mut b = vec![0u8; 512];
+    src.read_at(8192 * ss, &mut b).unwrap();
+    assert!(b.iter().all(|&x| x == 0), "target must stay untouched");
+    // 目标首扇区只是整段里的一格：拒绝承诺的是整镜像一字未写（含表与源区）
+    assert_eq!(std::fs::read(&path).unwrap(), before, "a refusal must leave the image byte-identical");
+    drop(src);
+    let _ = std::fs::remove_file(&path);
+}
+
+/// 纯扩容（不搬移）同样不得先落 checkpoint 再复核：复核失败时恢复路径里没有新增
+/// 现场，目标盘一字未写
+#[test]
+pub(crate) fn pure_growth_refuses_changed_table_before_any_checkpoint_is_written() {
+    let (src, path) = plan_fixture(&[(1, [0x11; 16], 2048, 6143)]);
+    drop(src);
+    // 32K 位置的 swap 签名：identify 认不出，扩容器按"不可激活的 swap"放行
+    let base = 2048 * 512;
+    let mut raw = std::fs::read(&path).unwrap();
+    raw[base + 32768 - 10..base + 32768].copy_from_slice(b"SWAPSPACE2");
+    std::fs::write(&path, &raw).unwrap();
+    let mut src = plan_open(&path);
+    let ckpt_path = src.identity.checkpoint_path().to_path_buf();
+    let (g, repair) = gpt_policy::resolve_geometry(&src).unwrap().unwrap();
+    let chunk: u64 = 1024 * 1024;
+    let p = prepare_resize(&src, &g, repair, 1, 2048, 8191, chunk, false, false, None, &mut |_| {}).unwrap();
+    assert_eq!(p.fs_action, FsAction::Grow);
+    assert_eq!(p.new_start, p.old_start, "this regression covers the pure-growth branch");
+    assert!(!ckpt_path.exists(), "prepare must not create a checkpoint");
+    tamper_disk_guid(&mut src);
+    let before = std::fs::read(&path).unwrap();
+    let mut post = PostWrite::new();
+    let r = execute_resize(&mut src, p, &mut |_| {}, &mut post);
+    let err = r.expect_err("execute must refuse a table changed after prepare").to_string();
+    assert!(err.contains("changed outside this tool"), "unexpected error: {err}");
+    assert!(!ckpt_path.exists(), "a failed pre-write recheck must not leave a checkpoint");
+    assert_eq!(std::fs::read(&path).unwrap(), before, "the target must stay byte-identical");
+    drop(src);
+    let _ = std::fs::remove_file(&path);
+    let _ = crate::dev::remove_recovery_file(&ckpt_path);
+}
+
 /// HiddenSectors 修正：0x1C 处写入 LE32 起始 LBA；≥2^32 值取 0（纯函数分支 + 落盘各验一次）
 #[test]
 pub(crate) fn ntfs_hidden_sectors_fix() {
@@ -121,6 +179,51 @@ pub(crate) fn resize_part_resume_skips_done_chunks() {
     let _ = crate::dev::remove_recovery_file(&ckpt_path);
 }
 
+/// 续传现场由生产路径产出：注入一次读失败打断 move，盘上 ckpt 的进度必须停在已同步
+/// 落盘的那一块；续跑以该 ckpt 为边界继续，把失败后剩下的块搬完。与上面的手工预置
+/// 用例互补——那条证明"给定 ckpt 时续传行为正确"，这条证明"生产确实写对了 ckpt"
+#[test]
+pub(crate) fn resize_crash_checkpoint_records_durable_progress() {
+    let (mut src, path) = plan_fixture(&[(1, [0x11; 16], 2048, 10239)]);
+    let ckpt_path = src.identity.checkpoint_path().to_path_buf();
+    let chunk: u64 = 1024 * 1024;
+    let src_off = 2048u64 * 512;
+    let dst_off = 4096u64 * 512;
+    for i in 0..4u8 {
+        src.write_at(src_off + i as u64 * chunk, &vec![0x10 + i; 512]).unwrap();
+    }
+    // 右移 1 MiB（自重叠，块收敛到 1 MiB）：尾→头推进，第 2 轮读失败时首块已同步落盘
+    let fault = crate::dev::ReadFaultGuard::at(src_off + 2 * chunk);
+    let o = rsize(&mut src,1, 4096, 12287, chunk, true, &mut |_| {});
+    assert_eq!(o.exit_code(), 30, "mid-move read failure must stay Failed: {o:?}");
+    drop(fault);
+
+    let (slot, _) = read_checkpoint(&src, &geom_of(&src)).unwrap();
+    let c = match slot {
+        CheckpointSlot::Resize(c) => c,
+        _ => panic!("a failed resize must leave an Rs checkpoint"),
+    };
+    assert_eq!(c.part, 1);
+    assert_eq!((c.old_start, c.old_end, c.new_start, c.new_end), (2048, 10239, 4096, 12287));
+    assert_eq!(c.chunk_bytes, chunk);
+    assert_eq!(c.chunks_done, 1, "只有已同步落盘的 chunk 可以进入 durable 边界");
+
+    // 已完成块（within = 3 MiB）的源区改写成垃圾：续跑若从 0 重来会把它带回目标区
+    src.write_at(src_off + 3 * chunk, &[0xEE; 512]).unwrap();
+    let resumed = rsize(&mut src,1, 4096, 12287, chunk, true, &mut |_| {});
+    assert!(resumed.is_complete(), "the resume must finish the move: {}", resumed.exit_code());
+    for i in 0..4u8 {
+        let mut b = [0u8; 512];
+        src.read_at(dst_off + i as u64 * chunk, &mut b).unwrap();
+        assert_eq!(b, [0x10 + i; 512], "chunk {i} was copied from the wrong source block");
+    }
+    let g = table::load_gpt(&src).unwrap().unwrap();
+    assert_eq!((g.entries[0].starting_lba, g.entries[0].ending_lba), (4096, 12287));
+    assert!(!ckpt_path.exists(), "a completed resume must release the checkpoint");
+    drop(src);
+    let _ = std::fs::remove_file(&path);
+}
+
 /// 提交已落盘、ckpt 尚未更新时中断：判据必须落在"盘上几何已是目标"上，否则续传会把
 /// "参数不匹配"判成永久拒绝。反向断言：源区指纹不得出现在目标区——若误走续传路径，
 /// 数据会被再搬一次
@@ -131,7 +234,18 @@ pub(crate) fn resize_part_resume_after_commit_without_ckpt_update() {
     let (old_start, old_end) = (2048u64, 10239u64);
     let (new_start, new_end) = (12288u64, 20479u64);
     let chunk: u64 = 1024 * 1024;
-    src.write_at(old_start * ss, &[0xA5u8; 512]).unwrap();
+    // 整区载荷：每个扇区各不相同。若续跑误把源区再搬一次，目标区就会带着这些字节，
+    // 源区也会被改写——只看目标首扇区为零看不出这两件事
+    let sectors = old_end - old_start + 1;
+    let mut want = Vec::with_capacity((sectors * ss) as usize);
+    for lba in old_start..=old_end {
+        let mut s = [0u8; 512];
+        for (j, b) in s.iter_mut().enumerate() {
+            *b = (lba as u8).wrapping_mul(37).wrapping_add(j as u8);
+        }
+        want.extend_from_slice(&s);
+    }
+    src.write_at(old_start * ss, &want).unwrap();
 
     // 模拟"commit 已完成"：把表项改到目标位置并落盘
     let mut g = table::load_gpt(&src).unwrap().unwrap();
@@ -168,6 +282,13 @@ pub(crate) fn resize_part_resume_after_commit_without_ckpt_update() {
     let mut b = [0u8; 512];
     src.read_at(new_start * ss, &mut b).unwrap();
     assert!(b.iter().all(|&x| x == 0), "committed resize must not move data again");
+    // 逐字节核对整段：目标区仍为空（没有再搬一次），源区载荷也未被续跑改写
+    let mut dst = vec![0u8; want.len()];
+    src.read_at(new_start * ss, &mut dst).unwrap();
+    assert!(dst.iter().all(|&x| x == 0), "the committed run must leave the target range empty");
+    let mut orig = vec![0u8; want.len()];
+    src.read_at(old_start * ss, &mut orig).unwrap();
+    assert_eq!(orig, want, "the committed run must not rewrite the source range either");
     drop(src);
     let _ = std::fs::remove_file(&path);
 }
@@ -372,10 +493,23 @@ pub(crate) fn deferred_resize_leaves_the_checkpoint_to_the_caller() {
 
     // defer：搬移作业（起点变化）必然在开工时落 ckpt
     let (mut src, p) = plan_fixture(&[(1, [0x11; 16], old_start, old_end)]);
-    src.write_at(old_start * 512, &[0xA5u8; 512]).unwrap();
+    // 整区载荷：每个扇区各不相同，复制错位或只搬首扇区都会与期望不等
+    let sectors = old_end - old_start + 1;
+    let mut want = Vec::with_capacity((sectors * 512) as usize);
+    for lba in old_start..=old_end {
+        let mut s = [0u8; 512];
+        for (j, b) in s.iter_mut().enumerate() {
+            *b = (lba as u8).wrapping_mul(37).wrapping_add(j as u8);
+        }
+        want.extend_from_slice(&s);
+    }
+    src.write_at(old_start * 512, &want).unwrap();
     let ckpt_path = src.identity.checkpoint_path().to_path_buf();
     let o = rsize_deferred(&mut src, 1, new_start, new_end, chunk, true, true, &mut |_| {});
     assert!(o.has_layout_write(), "resize must apply (exit {})", o.exit_code());
+    let mut got = vec![0u8; want.len()];
+    src.read_at(new_start * 512, &mut got).unwrap();
+    assert_eq!(got, want, "the deferred resize must have copied every byte into the new range");
     assert!(ckpt_path.exists(), "defer must leave the checkpoint for the caller's finish step");
     // 调用方收尾成功之后自行撤除
     assert!(crate::dev::remove_recovery_file(&ckpt_path));
@@ -389,6 +523,82 @@ pub(crate) fn deferred_resize_leaves_the_checkpoint_to_the_caller() {
     let o = rsize_deferred(&mut src, 1, new_start, new_end, chunk, true, false, &mut |_| {});
     assert!(o.has_layout_write(), "resize must apply (exit {})", o.exit_code());
     assert!(!ckpt_path.exists(), "a completed job must not leave a checkpoint behind");
+    drop(src);
+    let _ = std::fs::remove_file(&p);
+}
+
+/// "最终状态已核验"不成立时：表已提交、FS 步留下待办（32K 页格式的 swap 在本机认不出
+/// 且未重建）。现场必须保留，并且本次输出要说明它留在原处——静默保留会让重跑者
+/// 不知道自己撞见的是同一作业的续传点。字节仍须可判读
+#[test]
+pub(crate) fn pending_fs_step_reports_the_retained_checkpoint() {
+    let chunk: u64 = 1024 * 1024;
+    let (src, p) = plan_fixture(&[(1, [0x11; 16], 2048, 6143)]);
+    drop(src);
+    // 只在 32K 候选位置放 swap 签名：identify 给 unknown，收尾按"分区已扩、swap 未重建"记待办
+    let base = 2048 * 512;
+    let mut raw = std::fs::read(&p).unwrap();
+    raw[base + 32768 - 10..base + 32768].copy_from_slice(b"SWAPSPACE2");
+    std::fs::write(&p, &raw).unwrap();
+
+    let mut src = plan_open(&p);
+    let ckpt_path = src.identity.checkpoint_path().to_path_buf();
+    let mut logs = Vec::new();
+    let o = rsize(&mut src, 1, 2048, 8191, chunk, false, &mut |l: &str| logs.push(l.to_string()));
+    assert_eq!(o.exit_code(), 20, "{o:?}");
+    assert!(ckpt_path.exists(), "a verified-incomplete job must keep its checkpoint");
+    let (slot, _) = read_checkpoint(&src, &geom_of(&src)).unwrap();
+    assert!(matches!(slot, CheckpointSlot::Resize(_)), "the retained bytes must still parse as a resize job");
+    assert!(
+        logs.iter().any(|l| l.contains("retained") && l.contains("not verified")),
+        "the run must say the checkpoint stays and why: {logs:?}"
+    );
+
+    drop(src);
+    let _ = std::fs::remove_file(&ckpt_path);
+    let _ = std::fs::remove_file(&p);
+}
+
+/// "后续恢复不再依赖"不成立时：调用方推迟收尾（`defer`），现场要留给 LVM 链。
+/// 本次执行成功且无待办，但删除判据必须看调用方的后续步骤，并说明现场留在了原处
+#[test]
+pub(crate) fn deferred_finish_reports_the_retained_checkpoint() {
+    let chunk: u64 = 1024 * 1024;
+    let (mut src, p) = plan_fixture(&[(1, [0x11; 16], 2048, 10239)]);
+    src.write_at(2048 * 512, &[0xA5u8; 512]).unwrap();
+    let ckpt_path = src.identity.checkpoint_path().to_path_buf();
+    let mut logs = Vec::new();
+    let o = rsize_deferred(&mut src, 1, 4096, 12287, chunk, true, true, &mut |l: &str| logs.push(l.to_string()));
+    assert!(o.has_layout_write(), "resize must apply (exit {})", o.exit_code());
+    assert!(ckpt_path.exists(), "the caller's finish step still needs the checkpoint");
+    let (slot, _) = read_checkpoint(&src, &geom_of(&src)).unwrap();
+    assert!(matches!(slot, CheckpointSlot::Resize(_)), "the retained bytes must still parse as a resize job");
+    assert!(
+        logs.iter().any(|l| l.contains("retained") && l.contains("later")),
+        "the run must say the checkpoint stays and why: {logs:?}"
+    );
+
+    drop(src);
+    let _ = std::fs::remove_file(&ckpt_path);
+    let _ = std::fs::remove_file(&p);
+}
+
+/// 三条件全成立：表已提交、无待办、调用方不推迟收尾 → 现场删除，且输出里没有保留声明
+#[test]
+pub(crate) fn completed_resize_removes_the_checkpoint_without_a_retention_notice() {
+    let chunk: u64 = 1024 * 1024;
+    let (mut src, p) = plan_fixture(&[(1, [0x11; 16], 2048, 10239)]);
+    src.write_at(2048 * 512, &[0xA5u8; 512]).unwrap();
+    let ckpt_path = src.identity.checkpoint_path().to_path_buf();
+    let mut logs = Vec::new();
+    let o = rsize(&mut src, 1, 4096, 12287, chunk, true, &mut |l: &str| logs.push(l.to_string()));
+    assert!(o.has_layout_write(), "resize must apply (exit {})", o.exit_code());
+    assert!(!ckpt_path.exists(), "all three conditions hold: the checkpoint must be removed");
+    assert!(
+        !logs.iter().any(|l| l.contains("retained")),
+        "a removed checkpoint must not be reported as retained: {logs:?}"
+    );
+
     drop(src);
     let _ = std::fs::remove_file(&p);
 }

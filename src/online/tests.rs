@@ -177,3 +177,115 @@ pub(crate) fn part_resize_outcomes_keep_the_write_stage_distinct() {
         other => panic!("expected Failed, got {other:?}"),
     }
 }
+
+// ---- 真实块设备回归（Linux + root + loop + btrfs）----
+//
+// 在线缩容的首个写盘步骤是 `btrfs filesystem resize`。决策快照取自内核视图，之后到
+// 首写之间存在探测窗口；本用例在 `decide`（锁下、快照之后）里改写盘上表，模拟窗口内
+// 的第三方改动。判据：命令必须以 10 拒绝，且镜像（loop 的 backing 文件）与改动后的
+// 盘面逐字节一致——旧实现会先缩 FS 再在写表前的复核发现不一致，字节已被改小。
+//
+// 不满足环境时直接说明跳过：这台机上没有能覆盖该层的替代物（写表复核本身另有单测，
+// 但顺序缺陷只有端到端才可见）。
+
+#[cfg(target_os = "linux")]
+struct OnlineSandbox {
+    img: String,
+    mnt: String,
+    loop_dev: Option<String>,
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for OnlineSandbox {
+    fn drop(&mut self) {
+        drop(std::process::Command::new("umount").args(["-l", &self.mnt]).status());
+        if let Some(d) = &self.loop_dev {
+            drop(std::process::Command::new("losetup").args(["-d", d]).status());
+        }
+        drop(std::process::Command::new("rm").args(["-rf", &self.mnt]).status());
+        drop(std::process::Command::new("rm").args(["-f", &self.img]).status());
+        drop(
+            std::process::Command::new("sh")
+                .args(["-c", &format!("rm -f {0}.diskedit.lock {0}.diskedit.journal", self.img)])
+                .status(),
+        );
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn sh_ok(script: &str) -> String {
+    let out = std::process::Command::new("sh")
+        .args(["-c", script])
+        .output()
+        .unwrap_or_else(|e| panic!("cannot run shell: {e}"));
+    assert!(
+        out.status.success(),
+        "command failed: {script}\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+#[cfg(target_os = "linux")]
+fn sha256_file(path: &str) -> String {
+    let out = sh_ok(&format!("sha256sum {path}"));
+    out.split_whitespace().next().expect("sha256sum output").to_string()
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn shrink_recheck_refuses_table_moved_before_first_write() {
+    // 环境闸：root / 所需工具 / btrfs 内核支持；缺一项这条就无法在本机覆盖该层
+    if unsafe { libc::geteuid() } != 0 {
+        eprintln!("skip: online shrink recheck regression needs root (loop + mount + btrfs)");
+        return;
+    }
+    for t in ["sfdisk", "mkfs.btrfs", "losetup", "mount", "sha256sum"] {
+        if !std::process::Command::new("sh")
+            .args(["-c", &format!("command -v {t} >/dev/null")])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+        {
+            eprintln!("skip: online shrink recheck regression needs {t}");
+            return;
+        }
+    }
+    if !std::path::Path::new("/sys/fs/btrfs").exists() {
+        eprintln!("skip: online shrink recheck regression needs btrfs in the running kernel");
+        return;
+    }
+
+    let img = "/tmp/diskedit-online-recheck.img";
+    let mnt = "/tmp/diskedit-online-recheck-mnt";
+    let mut sb = OnlineSandbox { img: img.into(), mnt: mnt.into(), loop_dev: None };
+    drop(
+        std::process::Command::new("sh")
+            .args(["-c", &format!("umount -l {mnt} 2>/dev/null; rm -rf {mnt}; rm -f {img}")])
+            .status(),
+    );
+    // 1G 镜像、1MiB 起 400MiB 的 GPT 分区：右移 1MiB 后仍有空间，且长度不变——
+    // 长度不变才不会在 flow 的 `disk_len` 一致检查处提前出局
+    sh_ok(&format!("truncate -s 1G {img} && printf 'label: gpt\\n,400M,L\\n' | sfdisk {img}"));
+    let dev = sh_ok(&format!("losetup -fP --show {img}"));
+    sb.loop_dev = Some(dev.clone());
+    sh_ok(&format!("mkfs.btrfs -q -f {dev}p1"));
+    sh_ok(&format!("mkdir -p {mnt} && mount {dev}p1 {mnt}"));
+
+    let mut after_tamper = None;
+    let outcome = crate::online::api::resize_online_planned(std::path::Path::new(mnt), |disk| {
+        let (start, len) = crate::gpt_policy::partition_bytes(disk, 1)?;
+        // 决策已给出（快照来自内核视图），此刻改写盘上表里本分区的起点，长度保持不变
+        let moved = start + 1024 * 1024;
+        let script = format!("printf '{},{}\\n' | sfdisk --force --no-reread -N 1 {dev}", moved / 512, len / 512);
+        sh_ok(&script);
+        after_tamper = Some(sha256_file(img));
+        Ok(Some(len - 100 * 1024 * 1024))
+    });
+
+    assert_eq!(outcome.exit_code(), 10, "首写前发现盘上表已变必须拒绝，且未写盘: {outcome:?}");
+    let after = sha256_file(img);
+    let tampered = after_tamper.expect("the decide hook must have tampered the table");
+    assert_eq!(after, tampered, "拒绝时镜像必须与改写后的盘面逐字节一致（整镜像 sha256）");
+}

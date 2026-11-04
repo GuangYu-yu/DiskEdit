@@ -16,7 +16,7 @@ truncate -s 64M "$T"
 
 echo "== new + create p1（16MiB ext4）=="
 $B new "$T" --yes >/dev/null; exp $? 0 "new"
-$B create "$T" --size 16M --name p1 --fs ext4 >/dev/null; exp $? 0 "create p1（16MiB ext4）"
+$B create "$T" --size 16M --name p1 --fs ext4 --yes >/dev/null; exp $? 0 "create p1（16MiB ext4）"
 
 echo "== resize-part 扩到 67583（=32MiB）=="
 $B resize-part "$T":1 --start 2048 --end 67583 >/dev/null; exp $? 0 "resize-part 扩到 67583"

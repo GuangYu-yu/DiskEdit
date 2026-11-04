@@ -14,7 +14,7 @@ rm -f "$T" "$T"$SIDECAR_GLOB 2>/dev/null
 echo "########## A: xfs 扩容 400M → 1500M ##########"
 rm -f "$T" "$T"$SIDECAR_GLOB; truncate -s 2G "$T"
 $B new "$T" --yes >/dev/null
-$B create "$T" --size 400M --name x --fs xfs; echo "create exit=$?"
+$B create "$T" --size 400M --name x --fs xfs --yes; echo "create exit=$?"
 LD=$(lo_attach "$T")
 mount_at "${LD}p1" /testmnt && dd if=/dev/urandom of=/testmnt/blob bs=1M count=300 2>/dev/null
 MX=$(mdsum /testmnt/blob)
@@ -30,7 +30,7 @@ echo
 echo "########## B: btrfs 扩容 400M → 1500M ##########"
 rm -f "$T" "$T"$SIDECAR_GLOB; truncate -s 2G "$T"
 $B new "$T" --yes >/dev/null
-$B create "$T" --size 400M --name b --fs btrfs; echo "create exit=$?"
+$B create "$T" --size 400M --name b --fs btrfs --yes; echo "create exit=$?"
 LD=$(lo_attach "$T")
 mount_at "${LD}p1" /testmnt && dd if=/dev/urandom of=/testmnt/blob bs=1M count=300 2>/dev/null
 MB=$(mdsum /testmnt/blob)
@@ -46,8 +46,8 @@ echo
 echo "########## C: ntfs 搬移（HiddenSectors 修复） ##########"
 rm -f "$T" "$T"$SIDECAR_GLOB; truncate -s 1G "$T"
 $B new "$T" --yes >/dev/null
-$B create "$T" --size 200M --name n --fs ntfs; echo "create exit=$?"
-$B create "$T" --size 200M --name filler --fs ext4 >/dev/null
+$B create "$T" --size 200M --name n --fs ntfs --yes; echo "create exit=$?"
+$B create "$T" --size 200M --name filler --fs ext4 --yes >/dev/null
 LD=$(lo_attach "$T")
 mount -t ntfs-3g "${LD}p1" /testmnt 2>/dev/null || mount_at "${LD}p1" /testmnt
 dd if=/dev/urandom of=/testmnt/blob bs=1M count=150 2>/dev/null
@@ -55,7 +55,7 @@ MN=$(mdsum /testmnt/blob)
 OLDS=$($B info "$T" | grep -o '"num":1,"first_lba":[0-9]*' | grep -o '[0-9]*$')
 echo "before: hidden=$(od -An -tu4 -j $((OLDS*512+28)) -N4 "$T" | tr -d ' ')"
 umount /testmnt 2>/dev/null; lo_detach "$LD"
-MOVE_OUT=$($B move "$T":1 --start 900000 --chunk-size 4 2>&1); exp $? 0 "move（NTFS 重定位）"
+MOVE_OUT=$($B move "$T":1 --start 900000 --chunk-size 4 --yes 2>&1); exp $? 0 "move（NTFS 重定位）"
 printf '%s\n' "$MOVE_OUT" | tail -2
 NEWS=$($B info "$T" | grep -o '"num":1,"first_lba":[0-9]*' | grep -o '[0-9]*$')
 HID=$(od -An -tu4 -j $((NEWS*512+28)) -N4 "$T" | tr -d ' ')

@@ -138,6 +138,7 @@ pub(crate) fn refuse_online_move_flags(a: &Args) {
 /// 同语义，差异只在"事实怎么取"，故分支只此一份
 #[cfg(target_os = "linux")]
 pub(crate) fn online_size<'a>(
+    yes: bool,
     size: Option<&'a str>,
     is_pv: bool,
     facts: impl FnOnce(&FileSource) -> Result<(u64, u64, u64, Option<u64>), Fail> + 'a,
@@ -176,6 +177,14 @@ pub(crate) fn online_size<'a>(
                 return Err(Fail::refused(format!(
                     "size {want} exceeds the usable range — the partition would end past the last usable block"
                 )));
+            }
+            // 在线缩小同样截短分区与文件系统，`undo` 找不回被截掉的字节；
+            // 这一判据在锁下、任何 sfdisk/FS 工具启动之前
+            if want < cur {
+                crate::cmd::confirm::gate(yes, crate::cmd::confirm::Impact {
+                    shrinking: true,
+                    ..Default::default()
+                });
             }
             Ok(Some(want))
         }

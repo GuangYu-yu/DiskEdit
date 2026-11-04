@@ -139,6 +139,29 @@ pub(crate) fn read_lvm_post(path: &std::path::Path) -> io::Result<Option<LvmPost
     LvmPostFacts::decode(&bytes, &mut off)
 }
 
+/// 只读 checkpoint 头里的"创建时目标"，不解析搬移计划、不要求已解析几何：`abandon` 只用它
+/// 判断这份现场属于哪个目标。两族都走各自的 `parse(…, None)`——布局知识各只有一份，
+/// 身份判读与恢复解析读的是同一段字节。
+///
+/// magic、版本、截断、LVM 事实块或尾部 CRC 任一不符即 `Err`：调用方要把"读不出身份"与
+/// "身份不符"分开处置——前者没有可比的证据，后者是一份确定属于别处的现场
+pub(crate) fn read_scene_identity(path: &std::path::Path) -> io::Result<crate::dev::SceneIdentity> {
+    use std::io::ErrorKind;
+    let bytes = std::fs::read(path)?;
+    if bytes.len() < 12 {
+        return Err(io::Error::new(ErrorKind::InvalidData, "checkpoint truncated"));
+    }
+    if &bytes[0..8] == CKPT_MAGIC.as_slice() {
+        let cp = Checkpoint::parse(&bytes, None)?;
+        Ok(crate::dev::SceneIdentity { fp: cp.fp, map: cp.map, proof: cp.proof })
+    } else if &bytes[0..8] == CKPT2_MAGIC.as_slice() {
+        let cp = RsCheckpoint::parse(&bytes, None)?;
+        Ok(crate::dev::SceneIdentity { fp: cp.fp, map: cp.map, proof: cp.proof })
+    } else {
+        Err(io::Error::new(ErrorKind::InvalidData, "checkpoint magic mismatch"))
+    }
+}
+
 /// 由写表前的只读选择与本次新增字节导出持久事实。`defer` 为真表示这次操作的后置条件
 /// 含 LVM 收尾（目标是 PV）；新增字节为 0 时没有可交给 LV 的量，故没有事实可记。
 /// 不足一个 extent 的量在写表之前拒绝：表已改而 LV 分不到任何空间正是"命令说成功、
@@ -213,6 +236,53 @@ pub(crate) fn next_ckpt_batch(cur: u64, took: std::time::Duration, chunk_bytes: 
     next.clamp(1, ckpt_batch_cap(chunk_bytes))
 }
 
+/// 撤除 checkpoint 的三条件，按固定顺序判定，任一条不成立都必须保留现场
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CkptRetain {
+    /// 操作未提交：重跑只能靠这份现场续传
+    NotCommitted,
+    /// 最终状态未核验：本次作业仍有未完成的后置条件
+    NotVerified,
+    /// 后续恢复仍依赖：调用方的收尾步骤还要用它
+    StillNeeded,
+}
+
+impl CkptRetain {
+    pub(crate) fn reason(self) -> &'static str {
+        match self {
+            Self::NotCommitted => "the operation is not committed; the checkpoint is the only resume point",
+            Self::NotVerified => "the final state is not verified; pending work remains",
+            Self::StillNeeded => "later recovery steps still depend on it",
+        }
+    }
+}
+
+/// 删除判据的唯一实现：两处撤除调用点与提前收场点都只问它，不再各自拼条件。
+/// 三条件依次是"操作已提交"（`committed`）、"最终状态已核验"（写会话里的待办没有
+/// 增加）、"后续恢复不再依赖"（调用方没有延后的收尾步骤，如 LVM 链）
+pub(crate) fn checkpoint_may_be_removed(
+    committed: bool,
+    pending_before: usize,
+    pending_after: usize,
+    later_steps: bool,
+) -> Result<(), CkptRetain> {
+    if !committed {
+        return Err(CkptRetain::NotCommitted);
+    }
+    if pending_after != pending_before {
+        return Err(CkptRetain::NotVerified);
+    }
+    if later_steps {
+        return Err(CkptRetain::StillNeeded);
+    }
+    Ok(())
+}
+
+/// 条件不成立时的输出：现场留在原处，并说明是哪一条不成立
+pub(crate) fn log_ckpt_retention(log: &mut dyn FnMut(&str), path: &std::path::Path, why: CkptRetain) {
+    log(&format!("checkpoint {} retained: {}", path.display(), why.reason()));
+}
+
 /// 现场的两副面孔由 `P` 分开：写入侧只带当前目标给出的 [`crate::dev::LiveProof`]，
 /// 解析侧带 [`crate::dev::IdentityProof`]。这样"把解析出的种类写回"在类型上就不成立，
 /// 而不是靠序列化分支去兜
@@ -280,6 +350,13 @@ impl Checkpoint<crate::dev::IdentityProof> {
     /// 判据来源 `lim` 是**已验证几何**（见 [`GeometryLimits`]）：分区号上界、可用区、
     /// 容器末端都取自盘上那张表的自述几何，故 256 槽位的表与 128 槽位的一样合法
     pub(crate) fn deserialize(b: &[u8], lim: &GeometryLimits) -> io::Result<Self> {
+        Self::parse(b, Some(lim))
+    }
+
+    /// 盘上字节的唯一解析入口。`None` 表示只做身份判读：布局与 CRC 照常校验，但不构建
+    /// 搬移项、也不做依赖几何的合法性检查——abandon 只问"这份现场属于哪个目标"，
+    /// 不解析搬移计划，不能因为几何不匹配就把一份可归因的现场当成不可读
+    fn parse(b: &[u8], lim: Option<&GeometryLimits>) -> io::Result<Self> {
         // 前置只护 rd 之前的直接切片：magic(8) + version(4)。其后的字段逐个经 rd 兜底
         // 截断，尾部 CRC 读同样走 rd——手工枚举字段总长会随结构演进数错（少算时让给
         // rd 尚安全，多算则误拒合法现场），故不设第二份长度事实
@@ -302,79 +379,91 @@ impl Checkpoint<crate::dev::IdentityProof> {
         off += 8;
         let ss = u64::from_le_bytes(rd(off, 8)?.try_into().unwrap());
         off += 8;
-        // ss 是全链 LBA→字节换算的单位，写地址都经它换算：必须与目标几何一致，
-        // 否则 CRC 再对也只会把数据写进错误的位置
-        if ss != lim.sector_size {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "checkpoint sector size differs from target geometry"));
-        }
         let grow_part = u32::from_le_bytes(rd(off, 4)?.try_into().unwrap());
         off += 4;
-        // 分区号是盘上可控值，下游要拿它直接索引 entries[(n-1)]：上界是该表的条目数
-        // （来自已验证几何），超出即损坏
-        if !(1..=lim.entry_count).contains(&grow_part) {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "implausible checkpoint grow_part"));
-        }
         let last_usable_lba = u64::from_le_bytes(rd(off, 8)?.try_into().unwrap());
         off += 8;
-        // moves 为空时它就是 grow 终点（grow_end_for），直接进表项 ending_lba：只验到
-        // 容器末端不够——越过可用区末端会覆盖 GPT 备份头。上界取已验证几何的可用区
-        if last_usable_lba > lim.last_usable_lba {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "checkpoint last_usable_lba beyond usable area"));
+        // ss 是全链 LBA→字节换算的单位，写地址都经它换算：必须与目标几何一致，
+        // 否则 CRC 再对也只会把数据写进错误的位置。分区号同理会被直接索引 entries。
+        // 这些判据消费已验证几何，只有恢复路径（`Some`）才具备
+        if let Some(lim) = lim {
+            if ss != lim.sector_size {
+                return Err(io::Error::new(io::ErrorKind::InvalidData, "checkpoint sector size differs from target geometry"));
+            }
+            if !(1..=lim.entry_count).contains(&grow_part) {
+                return Err(io::Error::new(io::ErrorKind::InvalidData, "implausible checkpoint grow_part"));
+            }
+            // moves 为空时它就是 grow 终点（grow_end_for），直接进表项 ending_lba：只验到
+            // 容器末端不够——越过可用区末端会覆盖 GPT 备份头
+            if last_usable_lba > lim.last_usable_lba {
+                return Err(io::Error::new(io::ErrorKind::InvalidData, "checkpoint last_usable_lba beyond usable area"));
+            }
         }
         let count = u32::from_le_bytes(rd(off, 4)?.try_into().unwrap()) as usize;
         off += 4;
-        // count 是盘上可控值：上界是该表的条目数，超界即损坏，防巨型 with_capacity
-        if count as u64 > lim.entry_count as u64 {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "implausible checkpoint move count"));
-        }
-        let mut moves: Vec<PlanEntry> = Vec::with_capacity(count);
-        for _ in 0..count {
-            let part_num = u32::from_le_bytes(rd(off, 4)?.try_into().unwrap());
-            // 同上：搬移项的分区号也会被直接索引
-            if !(1..=lim.entry_count).contains(&part_num) {
-                return Err(io::Error::new(io::ErrorKind::InvalidData, "implausible checkpoint partition number"));
+        // count 是盘上可控值：先按"每项 29 字节"核对它落在文件内，再决定是否构建搬移项。
+        // 恢复路径另有"上界是该表条目数"的判据，防巨型 with_capacity
+        let span = count
+            .checked_mul(29)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "checkpoint truncated"))?;
+        rd(off, span)?;
+        let mut moves: Vec<PlanEntry> = Vec::new();
+        if let Some(lim) = lim {
+            if count as u64 > lim.entry_count as u64 {
+                return Err(io::Error::new(io::ErrorKind::InvalidData, "implausible checkpoint move count"));
             }
-            let first_lba = u64::from_le_bytes(rd(off + 4, 8)?.try_into().unwrap());
-            let len_lba = u64::from_le_bytes(rd(off + 12, 8)?.try_into().unwrap());
-            let delta_lba = u64::from_le_bytes(rd(off + 20, 8)?.try_into().unwrap());
-            let is_swap = rd(off + 28, 1)?[0] != 0;
-            // 区间算术全部 checked：这些值会进入 chunk 循环的地址计算
-            let end = first_lba
-                .checked_add(len_lba)
-                .and_then(|v| v.checked_sub(1))
-                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "checkpoint entry range overflow"))?;
-            let new_first = first_lba
-                .checked_add(delta_lba)
-                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "checkpoint entry target overflow"))?;
-            let new_end = new_first
-                .checked_add(len_lba)
-                .and_then(|v| v.checked_sub(1))
-                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "checkpoint entry target overflow"))?;
-            if len_lba == 0
-                || first_lba < lim.first_usable_lba
-                || end > lim.last_usable_lba
-                || new_end > lim.last_usable_lba
-            {
-                return Err(io::Error::new(io::ErrorKind::InvalidData, "checkpoint entry outside usable range"));
+            moves.reserve(count);
+            for _ in 0..count {
+                let part_num = u32::from_le_bytes(rd(off, 4)?.try_into().unwrap());
+                // 同上：搬移项的分区号也会被直接索引
+                if !(1..=lim.entry_count).contains(&part_num) {
+                    return Err(io::Error::new(io::ErrorKind::InvalidData, "implausible checkpoint partition number"));
+                }
+                let first_lba = u64::from_le_bytes(rd(off + 4, 8)?.try_into().unwrap());
+                let len_lba = u64::from_le_bytes(rd(off + 12, 8)?.try_into().unwrap());
+                let delta_lba = u64::from_le_bytes(rd(off + 20, 8)?.try_into().unwrap());
+                let is_swap = rd(off + 28, 1)?[0] != 0;
+                // 区间算术全部 checked：这些值会进入 chunk 循环的地址计算
+                let end = first_lba
+                    .checked_add(len_lba)
+                    .and_then(|v| v.checked_sub(1))
+                    .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "checkpoint entry range overflow"))?;
+                let new_first = first_lba
+                    .checked_add(delta_lba)
+                    .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "checkpoint entry target overflow"))?;
+                let new_end = new_first
+                    .checked_add(len_lba)
+                    .and_then(|v| v.checked_sub(1))
+                    .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "checkpoint entry target overflow"))?;
+                if len_lba == 0
+                    || first_lba < lim.first_usable_lba
+                    || end > lim.last_usable_lba
+                    || new_end > lim.last_usable_lba
+                {
+                    return Err(io::Error::new(io::ErrorKind::InvalidData, "checkpoint entry outside usable range"));
+                }
+                // 目标区间起点是源起点加无符号位移，故 `first_lba` 的可用区下界已蕴含了新起点
+                // 的下界；这里补的是 plan 生成器的另外两条保证：同一个分区只搬一次，被扩容的
+                // 那个分区不参与搬移。CRC 自洽但违反它们的现场会让同一分区被搬两次，或把正在
+                // 扩容的分区当成成员搬走，写进表项后不可逆
+                if part_num == grow_part {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "implausible checkpoint move of the grow partition",
+                    ));
+                }
+                if moves.iter().any(|m| m.part_num == part_num) {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "implausible checkpoint duplicate move partition number",
+                    ));
+                }
+                moves.push(PlanEntry { part_num, first_lba, len_lba, delta_lba, is_swap });
+                off += 29;
             }
-            // 目标区间起点是源起点加无符号位移，故 `first_lba` 的可用区下界已蕴含了新起点
-            // 的下界；这里补的是 plan 生成器的另外两条保证：同一个分区只搬一次，被扩容的
-            // 那个分区不参与搬移。CRC 自洽但违反它们的现场会让同一分区被搬两次，或把正在
-            // 扩容的分区当成成员搬走，写进表项后不可逆
-            if part_num == grow_part {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "implausible checkpoint move of the grow partition",
-                ));
-            }
-            if moves.iter().any(|m| m.part_num == part_num) {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "implausible checkpoint duplicate move partition number",
-                ));
-            }
-            moves.push(PlanEntry { part_num, first_lba, len_lba, delta_lba, is_swap });
-            off += 29;
+        } else {
+            // 身份判读只跨过搬移计划，不构建它
+            off += span;
         }
         let cur_index = u32::from_le_bytes(rd(off, 4)?.try_into().unwrap());
         off += 4;
@@ -420,27 +509,30 @@ impl Checkpoint<crate::dev::IdentityProof> {
         // 进度字段同属盘上可控值：CRC 自洽但值荒谬的 ckpt 会让续传把该条目的全部 chunk
         // 跳过后仍提交表项——表将指向从未复制过的位置。上界在解析期可算：当前条目的
         // chunk 总数（chunk 数按写入时确定性布局重算，自重叠条目 chunk 已收敛到位移
-        // 以内，重做读到的仍是原始源数据；越界值只会跳过未写区间，故只可能损坏）
-        if chunk_bytes == 0 {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "checkpoint chunk_bytes invalid"));
-        }
-        // cur_index 的合法区间是 0..=moves.len()（等于 len 表示全部条目已提交，此时
-        // chunks_done 必为 0）：越界值若放行，恢复比对会把它夹回 len，续传循环空转、
-        // 所有搬移被跳过，表却仍按搬移后的几何提交
-        if cur_index as usize > moves.len() {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "implausible checkpoint entry index"));
-        }
-        let chunks_limit = match moves.get(cur_index as usize) {
-            // 与搬移循环同一份确定性布局（见 `move_chunk_layout`）：chunk 数按收敛后的
-            // 块大小算，两侧口径一致才不会误判损坏
-            Some(m) => move_chunk_layout(m.len_lba, ss, m.delta_lba, m.len_lba, chunk_bytes)
-                .map(|(_, count)| count)
-                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "checkpoint chunk count overflow"))?,
-            // 全部条目已提交：进度归零，残留值即损坏
-            None => 0,
-        };
-        if chunks_done > chunks_limit {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "implausible checkpoint chunk progress"));
+        // 以内，重做读到的仍是原始源数据；越界值只会跳过未写区间，故只可能损坏）。
+        // 身份判读拿不到搬移项与几何，这些进度判据只属于恢复路径
+        if lim.is_some() {
+            if chunk_bytes == 0 {
+                return Err(io::Error::new(io::ErrorKind::InvalidData, "checkpoint chunk_bytes invalid"));
+            }
+            // cur_index 的合法区间是 0..=moves.len()（等于 len 表示全部条目已提交，此时
+            // chunks_done 必为 0）：越界值若放行，恢复比对会把它夹回 len，续传循环空转、
+            // 所有搬移被跳过，表却仍按搬移后的几何提交
+            if cur_index as usize > moves.len() {
+                return Err(io::Error::new(io::ErrorKind::InvalidData, "implausible checkpoint entry index"));
+            }
+            let chunks_limit = match moves.get(cur_index as usize) {
+                // 与搬移循环同一份确定性布局（见 `move_chunk_layout`）：chunk 数按收敛后的
+                // 块大小算，两侧口径一致才不会误判损坏
+                Some(m) => move_chunk_layout(m.len_lba, ss, m.delta_lba, m.len_lba, chunk_bytes)
+                    .map(|(_, count)| count)
+                    .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "checkpoint chunk count overflow"))?,
+                // 全部条目已提交：进度归零，残留值即损坏
+                None => 0,
+            };
+            if chunks_done > chunks_limit {
+                return Err(io::Error::new(io::ErrorKind::InvalidData, "implausible checkpoint chunk progress"));
+            }
         }
         Ok(Checkpoint {
             disk_size, ss, grow_part, last_usable_lba, moves, kind, cur_index, chunks_done, chunk_bytes, fp, map, proof,
@@ -465,17 +557,24 @@ pub(crate) fn checkpoint_foreign(
 /// 记录的合法边界来自调用方已解析的几何（见 [`GeometryLimits`]）
 ///
 /// 返回命中/空槽的落点路径，写与删消费同一路径。定性与 `active_recovery_records` /
-/// `pick_journal` 同一口径：不存在 → 空槽；非普通文件（符号链接、目录、FIFO）在 `read`
-/// 之前就记成"内容读不出来"——直接读会跟随链接，或在落点是 FIFO 时阻塞到有写端出现
+/// `pick_journal` 同一口径（同一个 [`crate::dev::RecoveryFile::at`] 构造点）：
+/// 不存在 → 空槽；符号链接、dangling 链接、目录与 FIFO 在 `read` 之前就拒绝——直接读会
+/// 跟随链接，或在落点是 FIFO 时阻塞到有写端出现
 pub(crate) fn read_checkpoint(src: &FileSource, g: &ValidatedGeometry) -> Result<(CheckpointSlot, PathBuf), Fail> {
     let path = src.identity.checkpoint_path();
     let lim = g.limits();
-    match crate::dev::recovery_path_metadata(path) {
-        Ok(Some(_)) => {}
-        Ok(None) => return Ok((CheckpointSlot::Empty, path.to_path_buf())),
-        Err(reason) => {
+    match crate::dev::RecoveryFile::at(path) {
+        Ok(crate::dev::RecoveryEntry::File(_)) => {}
+        Ok(crate::dev::RecoveryEntry::Absent) => return Ok((CheckpointSlot::Empty, path.to_path_buf())),
+        Ok(crate::dev::RecoveryEntry::NotARecoveryFile(shape)) => {
             return Err(Fail::infra(format!(
-                "checkpoint {} is not readable: {reason}; release it with `diskedit abandon`",
+                "{}; move or remove it by hand",
+                shape.message(path)
+            )));
+        }
+        Err(e) => {
+            return Err(Fail::infra(format!(
+                "checkpoint {} is not readable: cannot stat: {e}; move or remove it by hand",
                 path.display()
             )));
         }

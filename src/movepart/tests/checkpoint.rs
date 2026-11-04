@@ -42,12 +42,16 @@ pub(crate) fn checkpoint_slot_ownership_is_enforced() {
         lvm: None,
     };
     atomic_write_ckpt(&ckpt_path, &ck.serialize()).unwrap();
+    let img_before = std::fs::read(&path).unwrap();
+    let ckpt_before = std::fs::read(&ckpt_path).unwrap();
     let o = rsize(&mut src,1, 2048, 3071, chunk, false, &mut |_| {});
     assert!(
         matches!(&o, Outcome::Refused(m) if m.contains("relocation job")),
         "resize_part must refuse while a relocation job owns the slot: {o:?}"
     );
     assert!(matches!(read_checkpoint(&src, &geom_of(&src)).unwrap().0, CheckpointSlot::Relocation(_)), "the relocation checkpoint must survive");
+    assert_eq!(std::fs::read(&path).unwrap(), img_before, "a foreign-slot refusal must not write the image");
+    assert_eq!(std::fs::read(&ckpt_path).unwrap(), ckpt_before, "the occupying checkpoint must stay byte-identical");
 
     drop(src);
     let _ = std::fs::remove_file(&ckpt_path);
@@ -461,25 +465,29 @@ pub(crate) fn resize_checkpoint_rejects_malformed_records() {
     let e = RsCheckpoint::deserialize(&b, &lim(128)).err().expect("a foreign version must be rejected");
     assert_eq!(e.kind(), io::ErrorKind::InvalidData, "{e}");
 
-    // 区间倒挂：放行会让 chunk 总数算式 old_end − old_start + 1 在 debug 下 panic
+    // 区间倒挂：CRC 重算后仍须被字段判据拒绝；放行会让 chunk 总数算式
+    // old_end − old_start + 1 在 debug 下 panic
     const OLD_START: usize = 33;
     const OLD_END: usize = 41;
     let mut b = rs.serialize();
     b[OLD_START..OLD_START + 8].copy_from_slice(&3071u64.to_le_bytes());
     b[OLD_END..OLD_END + 8].copy_from_slice(&2048u64.to_le_bytes());
+    rewrite_crc(&mut b);
     let e = RsCheckpoint::deserialize(&b, &lim(128)).err().expect("an inverted range must be rejected");
     assert_eq!(e.kind(), io::ErrorKind::InvalidData, "{e}");
 
-    // 分区号越上界
+    // 分区号越上界：CRC 重算后仍须被分区号判据拒绝
     const PART: usize = 29;
     let mut b = rs.serialize();
     b[PART..PART + 4].copy_from_slice(&129u32.to_le_bytes());
+    rewrite_crc(&mut b);
     let e = RsCheckpoint::deserialize(&b, &lim(128)).err().expect("an implausible partition number must be rejected");
     assert_eq!(e.kind(), io::ErrorKind::InvalidData, "{e}");
 
-    // 出可用区（first_usable = 34）
+    // 出可用区（first_usable = 34）：CRC 重算后仍须被可用区判据拒绝
     let mut b = rs.serialize();
     b[OLD_START..OLD_START + 8].copy_from_slice(&33u64.to_le_bytes());
+    rewrite_crc(&mut b);
     let e = RsCheckpoint::deserialize(&b, &lim(128)).err().expect("a range outside the usable area must be rejected");
     assert_eq!(e.kind(), io::ErrorKind::InvalidData, "{e}");
 
@@ -562,13 +570,25 @@ pub(crate) fn foreign_resize_ckpt_refuses_relocation_plans() {
         fstype: None,
     };
     atomic_write_ckpt(&ckpt_path, &rs.serialize()).unwrap();
+    let img_before = std::fs::read(&path).unwrap();
+    let ckpt_before = std::fs::read(&ckpt_path).unwrap();
 
-    let e = plan_resuming(&mut src, 1).err().expect("a foreign resize job must refuse a fresh plan");
-    assert!(matches!(&e, Fail::Refused(m) if m.contains("single-partition resize job")), "{e:?}");
-    let e = plan_shift(&mut src, 1, Some(1024)).err().expect("the shift path must refuse it too");
-    assert!(matches!(&e, Fail::Refused(m) if m.contains("single-partition resize job")), "{e:?}");
+    let e_plan = plan_resuming(&mut src, 1).err().expect("a foreign resize job must refuse a fresh plan");
+    assert!(matches!(&e_plan, Fail::Refused(m) if m.contains("single-partition resize job")), "{e_plan:?}");
+    let e_shift = plan_shift(&mut src, 1, Some(1024)).err().expect("the shift path must refuse it too");
+    assert!(matches!(&e_shift, Fail::Refused(m) if m.contains("single-partition resize job")), "{e_shift:?}");
+    // 单分区 resize 只有 `resize` 与 `resize-part` 能接着做：上面两条路径已证明
+    // `move`/`apply` 会把它判成外来作业，指引里点 `move` 就是把人送进一条必然拒绝的路
+    for e in [&e_plan, &e_shift] {
+        assert!(
+            matches!(e, Fail::Refused(m) if m.contains("`resize-part` or `resize`") && !m.contains("`move`")),
+            "the way out must name the commands that actually resume a resize job: {e:?}"
+        );
+    }
     // 归属仍判"本分区无搬移作业"：resize 自己要按这份 RsCheckpoint 续跑，不该被搬移的门挡住
     assert!(!pending_relocation(&src, 1).unwrap());
+    assert_eq!(std::fs::read(&path).unwrap(), img_before, "a foreign-slot refusal must not write the image");
+    assert_eq!(std::fs::read(&ckpt_path).unwrap(), ckpt_before, "the foreign resize checkpoint must stay byte-identical");
 
     drop(src);
     let _ = std::fs::remove_file(&ckpt_path);
@@ -670,12 +690,16 @@ pub(crate) fn foreign_checkpoint_slot_refuses_fresh_plans() {
         lvm: None,
     };
     atomic_write_ckpt(&ckpt_path, &ck.serialize()).unwrap();
+    let img_before = std::fs::read(&path).unwrap();
+    let ckpt_before = std::fs::read(&ckpt_path).unwrap();
 
     let e = plan_resuming(&mut src, 1).err().expect("a foreign job must refuse a fresh plan");
     assert!(matches!(&e, Fail::Refused(m) if m.contains("occupies the checkpoint slot")), "{e:?}");
     let e = plan_shift(&mut src, 1, Some(4096)).err().expect("a foreign job must refuse a fresh shift plan");
     assert!(matches!(&e, Fail::Refused(m) if m.contains("occupies the checkpoint slot")), "{e:?}");
     assert!(!pending_relocation(&src, 1).unwrap(), "the occupying job belongs to another partition");
+    assert_eq!(std::fs::read(&path).unwrap(), img_before, "a foreign-slot refusal must not write the image");
+    assert_eq!(std::fs::read(&ckpt_path).unwrap(), ckpt_before, "the occupying checkpoint must stay byte-identical");
 
     drop(src);
     let _ = std::fs::remove_file(&ckpt_path);
@@ -827,5 +851,87 @@ pub(crate) fn lvm_post_for_records_only_a_usable_amount() {
     assert_eq!(f.lv_size_before, 1 << 20);
     assert_eq!(f.extent_bytes, 4096);
     assert_eq!(f.lv_target, (1 << 20) + 4096);
+}
+
+/// 一个完整的 DKECKPT2 记录供身份判读用例复用。fp / fstype / map 字段位置由 serialize
+/// 的书写顺序决定：LVM 标志后依次 disk_size(8) ss(8) part(4) 原起止(16) 新起止(16)
+/// fs_shrunk(1) chunks_done(8) chunk_bytes(8)，fp 自 82 起共 32 字节，随后 map 标志(1)、
+/// 类型码(1)、身份种类(1)、CRC(4)
+fn resize_ckpt_record() -> RsCheckpoint<crate::dev::LiveProof> {
+    RsCheckpoint {
+        proof: crate::dev::LiveProof::Inode,
+        disk_size: 64 * 1024 * 1024, ss: 512, part: 1,
+        old_start: 2048, old_end: 3071, new_start: 2048, new_end: 3071,
+        fs_shrunk: FsShrink::NotShrunk, chunks_done: 0, chunk_bytes: 1024 * 1024,
+        fp: crate::dev::TargetFingerprint { dev: 7, ino: 42, size: 1 << 20, id: 0x1122_3344_5566_7788 },
+        map: None,
+        lvm: None,
+        fstype: Some(FsKind::Ext),
+    }
+}
+
+fn rewrite_crc(b: &mut [u8]) {
+    let crc_off = b.len() - 4;
+    let crc = table::crc32(&b[..crc_off]);
+    b[crc_off..].copy_from_slice(&crc.to_le_bytes());
+}
+
+/// 身份判读走 `parse(bytes, None)`：布局、截断与 CRC 照常核对。截断记录不能因为调用方
+/// 只要身份就被读成合法的 fp / map（那会让 abandon 把别处的现场当成自己的）
+#[test]
+pub(crate) fn resize_identity_read_rejects_truncated_checkpoint() {
+    let full = resize_ckpt_record().serialize();
+    assert!(RsCheckpoint::parse(&full, None).is_ok(), "the complete record must parse");
+    // 截在指纹字段中间（100 落在 fp 区间 82..114）与截掉尾部 CRC 两种形态
+    for cut in [100, full.len() - 4] {
+        let e = RsCheckpoint::parse(&full[..cut], None).err().expect("a truncated record must not yield an identity");
+        assert_eq!(e.kind(), io::ErrorKind::InvalidData, "cut={cut}: {e}");
+    }
+
+    // 文件入口：read_scene_identity 的 DKECKPT2 分支
+    let mut path = std::env::temp_dir();
+    path.push(format!("diskedit_ckpt2_trunc_{}.ckpt", std::process::id()));
+    std::fs::write(&path, &full[..full.len() - 4]).unwrap();
+    let e = match read_scene_identity(&path) {
+        Ok(_) => panic!("a truncated resize checkpoint must not be readable as an identity"),
+        Err(e) => e,
+    };
+    assert_eq!(e.kind(), io::ErrorKind::InvalidData, "{e}");
+    let _ = std::fs::remove_file(&path);
+}
+
+/// 身份尾部与恢复解析读同一份布局：改指纹的 `dev`（@82）后两个读者看到同一个新值；
+/// 改不参与身份的 FS 类型码（@115）后身份结论不变、恢复解析看到新类型码
+#[test]
+pub(crate) fn resize_identity_and_restore_reader_share_one_layout() {
+    let base = resize_ckpt_record();
+    let mut path = std::env::temp_dir();
+    path.push(format!("diskedit_ckpt2_layout_{}.ckpt", std::process::id()));
+
+    const FP_DEV: usize = 82;
+    const FSTYPE: usize = 115;
+    let mut b = base.serialize();
+    b[FP_DEV..FP_DEV + 8].copy_from_slice(&0x99u64.to_le_bytes());
+    rewrite_crc(&mut b);
+    std::fs::write(&path, &b).unwrap();
+    let identity = read_scene_identity(&path).expect("identity read must accept a CRC-valid record");
+    assert_eq!(identity.fp.dev, 0x99);
+    assert_eq!(identity.map, None);
+    assert_eq!(identity.proof, crate::dev::IdentityProof::Live(crate::dev::LiveProof::Inode));
+    let restored = RsCheckpoint::deserialize(&b, &lim(128)).expect("restore parse must accept the same bytes");
+    assert_eq!(restored.fp.dev, 0x99, "both readers must read the same field at the same offset");
+    assert_eq!(restored.old_start, base.old_start);
+
+    let mut b2 = base.serialize();
+    b2[FSTYPE] = 9; // FsKind::Ntfs
+    rewrite_crc(&mut b2);
+    std::fs::write(&path, &b2).unwrap();
+    let identity2 = read_scene_identity(&path).expect("a different FS code must not affect identity");
+    assert_eq!(identity2.fp, base.fp, "the FS code is not part of the identity");
+    assert_eq!(identity2.proof, crate::dev::IdentityProof::Live(crate::dev::LiveProof::Inode));
+    let restored2 = RsCheckpoint::deserialize(&b2, &lim(128)).expect("restore parse must see the new code");
+    assert_eq!(restored2.fstype, Some(FsKind::Ntfs));
+
+    let _ = std::fs::remove_file(&path);
 }
 

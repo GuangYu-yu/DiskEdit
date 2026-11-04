@@ -2,21 +2,81 @@
 
 use super::*;
 
+/// 旧 swap 首部的卷标。"读不出来"与"确实没有"分开：只有后者才允许省略 -L
+#[derive(Debug)]
+pub enum SwapLabel {
+    /// 16 字节字段全零：这块 swap 本来就没有卷标
+    Absent,
+    /// 卷标字段读不出来
+    Unreadable(String),
+    Present(Vec<u8>),
+}
+
+/// 旧 swap 首部给出的身份。三态而不是两个 `Option`：读不出来时重建
+/// 无法保住 fstab/resume 依赖的内容，必须拒绝，不能当成"本来就没有"
+#[derive(Debug)]
+pub enum SwapIdentity {
+    /// 该位置没有有效 swap 签名（未格式化或非 swap）
+    NotSwap,
+    /// 有签名，但首部读不出来（探测或 UUID 读取失败、范围换算溢出）
+    Unreadable(String),
+    Known { uuid: Option<[u8; 16]>, label: SwapLabel },
+}
+
+impl SwapIdentity {
+    pub(crate) fn has_uuid(&self) -> bool {
+        matches!(self, Self::Known { uuid: Some(_), .. })
+    }
+}
+
 /// swap 重建：mkswap -U <uuid> [-L <label>]，保持 UUID/卷标以维持 fstab 兼容
 /// （-U/-L 见 man mkswap：UUID 存取同序、无端转换，全零视为未设置走随机生成）。
 /// 卷标按字节透传：sws_volume 是不做编码校验的固定宽度字段，转成 String 再写回必然失真。
+/// 返回的说明与实际写入同源，调用方不得另写一套文案。
 /// 失败由调用方转成一条 Swap 待办（swap 内容可弃，但 fstab 指向的 UUID 需人工 mkswap
 /// 恢复），而不是把"重建没做成"洗成成功
-pub fn recreate_swap(src: &FileSource, part: u32, identity: (Option<[u8; 16]>, Option<Vec<u8>>)) -> Result<(), FsError> {
+pub fn recreate_swap(
+    src: &FileSource,
+    part: u32,
+    identity: &SwapIdentity,
+) -> Result<String, FsError> {
+    let (uuid, label, note) = match identity {
+        SwapIdentity::Unreadable(why) => {
+            return Err(FsError::Io(io::Error::other(format!(
+                "cannot rebuild swap: the old signature could not be read ({why})"
+            ))))
+        }
+        SwapIdentity::NotSwap => (None, None, "old signature had no UUID — mkswap wrote a fresh one".to_string()),
+        SwapIdentity::Known { uuid, label } => {
+            let note = match (uuid.is_some(), label) {
+                (true, SwapLabel::Present(_)) => "UUID and volume label preserved".to_string(),
+                (true, SwapLabel::Absent) => "UUID preserved (the old signature had no volume label)".to_string(),
+                (true, SwapLabel::Unreadable(why)) => format!(
+                    "UUID preserved; the old volume label could not be read ({why}), so none was written"
+                ),
+                (false, SwapLabel::Present(_)) => {
+                    "old signature had no UUID — mkswap wrote a fresh one (volume label preserved)".to_string()
+                }
+                (false, SwapLabel::Absent) => {
+                    "old signature had no UUID or volume label — mkswap wrote a fresh UUID and no label".to_string()
+                }
+                (false, SwapLabel::Unreadable(why)) => format!(
+                    "old signature had no UUID — mkswap wrote a fresh one; the old volume label \
+                     could not be read ({why}), so none was written"
+                ),
+            };
+            (uuid.as_ref(), Some(label), note)
+        }
+    };
     with_partition_device(src, part, |dev| {
         let mut args: Vec<OsString> = Vec::new();
-        if let Some(u) = &identity.0 {
+        if let Some(u) = uuid {
             // swap UUID 按原字节序列化为标准 8-4-4-4-12（mkswap 存取同序，无混合端转换）
             let hex: String = u.iter().map(|b| format!("{b:02x}")).collect();
             let s = format!("{}-{}-{}-{}-{}", &hex[0..8], &hex[8..12], &hex[12..16], &hex[16..20], &hex[20..32]);
             args.extend([OsString::from("-U"), OsString::from(s)]);
         }
-        if let Some(l) = &identity.1 {
+        if let Some(SwapLabel::Present(l)) = label {
             args.extend([OsString::from("-L"), os_bytes(l)]);
         }
         args.push(OsString::from(dev));
@@ -24,7 +84,7 @@ pub fn recreate_swap(src: &FileSource, part: u32, identity: (Option<[u8; 16]>, O
         if !out.status.success() {
             return Err(FsError::command("mkswap", &out));
         }
-        Ok(())
+        Ok(note)
     })
 }
 

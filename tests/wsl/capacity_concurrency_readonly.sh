@@ -76,15 +76,15 @@ else
 fi
 lo_detach "$LD"
 # 两进程同时对 p2 自重叠左移；判定只看终态一致性（一个成功一个被拒/失败均为合法互斥结果）
-DISKEDIT_FAULT=rs-chunk:70 $BF move "$T":2 --start 250000 --chunk-size 1 >/dev/null 2>&1 &
+DISKEDIT_FAULT=rs-chunk:70 $BF move "$T":2 --start 250000 --chunk-size 1 --yes >/dev/null 2>&1 &
 P1=$!
-DISKEDIT_FAULT=rs-chunk:70 $BF move "$T":2 --start 250000 --chunk-size 1 >/dev/null 2>&1 &
+DISKEDIT_FAULT=rs-chunk:70 $BF move "$T":2 --start 250000 --chunk-size 1 --yes >/dev/null 2>&1 &
 P2=$!
 wait $P1; E1=$?
 wait $P2; E2=$?
 echo "concurrent exits: $E1 / $E2"
 echo "ckpt: $([ -f "$T$CKPT_SUFFIX" ] && echo present || echo absent)"
-$B move "$T":2 --start 250000 --chunk-size 1 >/dev/null 2>&1; echo "settle rerun exit=$?"
+$B move "$T":2 --start 250000 --chunk-size 1 --yes >/dev/null 2>&1; echo "settle rerun exit=$?"
 LD=$(lo_attach "$T")
 if [ -z "$MD" ]; then
   echo "CONCURRENCY DEV SKIP (基线 md5 缺失)"; rc=1

@@ -32,7 +32,7 @@ verify_marker() { # label
 
 truncate -s 64M "$T"
 $B new "$T" --yes >/dev/null; exp "$?" 0 "new"
-$B create "$T" --size 33554432 --name test1 --fs ext4 >/dev/null
+$B create "$T" --size 33554432 --name test1 --fs ext4 --yes >/dev/null
 exp "$?" 0 "create p1（32MiB ext4）"
 
 echo "== sgdisk verify (backup header state) =="

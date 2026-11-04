@@ -22,9 +22,9 @@ mk1() { # 1G: p1 100M p2 100M p3 200M
   rm -f "$T" "$T"$SIDECAR_GLOB; rm -f /var/lib/diskedit/*$LEGACY_CKPT_SUFFIX
   truncate -s 1G "$T"
   $B new "$T" --yes >/dev/null
-  $B create "$T" --size 100M --name p1 --fs ext4 >/dev/null
-  $B create "$T" --size 100M --name p2 --fs ext4 >/dev/null
-  $B create "$T" --size 200M --name p3 --fs ext4 >/dev/null
+  $B create "$T" --size 100M --name p1 --fs ext4 --yes >/dev/null
+  $B create "$T" --size 100M --name p2 --fs ext4 --yes >/dev/null
+  $B create "$T" --size 200M --name p3 --fs ext4 --yes >/dev/null
 }
 
 echo
@@ -34,13 +34,13 @@ for kind in trunc junk magic; do
   LD=$(lo_attach "$T")
   mount_at "${LD}p2" /testmnt && dd if=/dev/urandom of=/testmnt/blob bs=1M count=90 2>/dev/null; umount /testmnt
   M2=$(mdsum "${LD}p2"); lo_detach "$LD"
-  DISKEDIT_FAULT=rs-chunk:40 $BF move "$T":2 --start 900000 --chunk-size 1 >/dev/null 2>&1
+  DISKEDIT_FAULT=rs-chunk:40 $BF move "$T":2 --start 900000 --chunk-size 1 --yes >/dev/null 2>&1
   case $kind in
     trunc) head -c 40 "$T$CKPT_SUFFIX" > "$T.ckpt.new" && mv "$T.ckpt.new" "$T$CKPT_SUFFIX" ;;
     junk)  printf 'GARBAGE-TAIL-XXXX' >> "$T$CKPT_SUFFIX" ;;
     magic) printf 'XXXX' | dd of="$T$CKPT_SUFFIX" bs=1 seek=0 conv=notrunc 2>/dev/null ;;
   esac
-  OUT=$($B move "$T":2 --start 900000 --chunk-size 1 2>&1); E=$?
+  OUT=$($B move "$T":2 --start 900000 --chunk-size 1 --yes 2>&1); E=$?
   RS=$(echo "$OUT" | grep -oc "resuming at chunk")
   echo "[$kind] exit=$E resume_used=$RS"
   LD=$(lo_attach "$T")
@@ -54,17 +54,17 @@ echo "说明：junk 尾不影响前段有效记录解析（原子 rename 下本�
 echo
 echo "########## B: chunk-size 变更 → 拒绝 ##########"
 mk1
-DISKEDIT_FAULT=rs-chunk:30 $BF move "$T":2 --start 900000 --chunk-size 1 >/dev/null 2>&1
-OUT=$($B move "$T":2 --start 900000 --chunk-size 2 2>&1); E=$?
+DISKEDIT_FAULT=rs-chunk:30 $BF move "$T":2 --start 900000 --chunk-size 1 --yes >/dev/null 2>&1
+OUT=$($B move "$T":2 --start 900000 --chunk-size 2 --yes 2>&1); E=$?
 echo "exit=$E  msg: $(echo "$OUT" | grep -o 'does not match.*' | head -1)"
-OUT=$($B move "$T":2 --start 900000 --chunk-size 1 2>&1)
+OUT=$($B move "$T":2 --start 900000 --chunk-size 1 --yes 2>&1)
 echo "同参数重跑: $(echo "$OUT" | grep -o 'resuming at chunk [0-9]*')"
 
 echo
 echo "########## C: 大 chunk（512 MiB）##########"
 mk1
-DISKEDIT_FAULT=rs-chunk:1 $BF move "$T":2 --start 900000 --chunk-size 512 >/dev/null 2>&1
-OUT=$($B move "$T":2 --start 900000 --chunk-size 512 2>&1)
+DISKEDIT_FAULT=rs-chunk:1 $BF move "$T":2 --start 900000 --chunk-size 512 --yes >/dev/null 2>&1
+OUT=$($B move "$T":2 --start 900000 --chunk-size 512 --yes 2>&1)
 echo "resume: $(echo "$OUT" | grep -o 'resuming at chunk [0-9]*')  (分区 100M < chunk 512M → 单 chunk)"
 LD=$(lo_attach "$T")
 mount_at "${LD}p2" /testmnt && dd if=/dev/urandom of=/testmnt/b2 bs=1M count=20 2>/dev/null && umount /testmnt
@@ -74,13 +74,13 @@ sgdisk -v "$T" >/dev/null 2>&1 && echo "sgdisk clean" || { echo "sgdisk ISSUES";
 echo
 echo "########## D: --align ##########"
 mk1
-$B move "$T":2 --start 900001 --align none --chunk-size 4 >/dev/null 2>&1
+$B move "$T":2 --start 900001 --align none --chunk-size 4 --yes >/dev/null 2>&1
 echo "none: $($B info "$T" | grep -o '"num":2,"first_lba":[0-9]*')  (期望 first_lba=900001)"
 mk1
-$B move "$T":2 --start 900001 --align cyl --chunk-size 4 >/dev/null 2>&1
+$B move "$T":2 --start 900001 --align cyl --chunk-size 4 --yes >/dev/null 2>&1
 echo "cyl : $($B info "$T" | grep -o '"num":2,"first_lba":[0-9]*')  (期望 915705 = 57×16065)"
 mk1
-$B move "$T":2 --start 900001 --align mib --chunk-size 4 >/dev/null 2>&1
+$B move "$T":2 --start 900001 --align mib --chunk-size 4 --yes >/dev/null 2>&1
 echo "mib : $($B info "$T" | grep -o '"num":2,"first_lba":[0-9]*')  (期望 901120 = 440×2048)"
 
 echo

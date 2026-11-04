@@ -1,5 +1,34 @@
 use super::*;
 
+/// 每扇区内容由扇区号与字节位共同决定：只搬首扇区、跨 chunk 错位或漏掉残段都会与期望不等
+fn marker_range(first_lba: u64, sectors: u64) -> Vec<u8> {
+    let mut v = Vec::with_capacity((sectors * 512) as usize);
+    for lba in first_lba..first_lba + sectors {
+        let mut s = [0u8; 512];
+        for (j, b) in s.iter_mut().enumerate() {
+            *b = (lba as u8).wrapping_mul(37).wrapping_add(j as u8);
+        }
+        v.extend_from_slice(&s);
+    }
+    v
+}
+
+fn read_region(img: &std::path::Path, lba: u64, len: usize) -> Vec<u8> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut f = std::fs::File::open(img).unwrap();
+    f.seek(SeekFrom::Start(lba * 512)).unwrap();
+    let mut v = vec![0u8; len];
+    f.read_exact(&mut v).unwrap();
+    v
+}
+
+fn write_region(img: &std::path::Path, lba: u64, bytes: &[u8]) {
+    use std::io::{Seek, SeekFrom, Write};
+    let mut f = std::fs::OpenOptions::new().write(true).open(img).unwrap();
+    f.seek(SeekFrom::Start(lba * 512)).unwrap();
+    f.write_all(bytes).unwrap();
+}
+
 #[test]
 fn resize_part_move_copy_flag_name() {
     let dir = std::env::temp_dir().join(format!("diskedit_rp_{}", std::process::id()));
@@ -20,7 +49,8 @@ fn resize_part_move_copy_flag_name() {
     run(&["new", img_s, "--yes"]);
     let (c, _, _) = run(&["add", img_s, "--start", "2048", "--end", "6143", "--name", "a"]);
     assert_eq!(c, 0);
-    let (c, _, _) = run(&["add", img_s, "--start", "14336", "--end", "16383", "--name", "b"]);
+    // b 取 2 MiB：--chunk-size 1（1 MiB）时复制跨 chunk 边界
+    let (c, _, _) = run(&["add", img_s, "--start", "14336", "--end", "18431", "--name", "b"]);
     assert_eq!(c, 0);
 
     // 数据指纹：写入可辨识字节到分区 a 首尾
@@ -31,15 +61,23 @@ fn resize_part_move_copy_flag_name() {
     f.seek(SeekFrom::Start(6143 * 512)).unwrap();
     f.write_all(&[0xBB; 512]).unwrap();
     drop(f);
+    // b 的整区载荷：4096 个扇区各不相同，覆盖两次 chunk
+    let b_payload = marker_range(14336, 4096);
+    write_region(&img, 14336, &b_payload);
 
     // 向已占用区移动必须被拒绝（本工具策略：不做隐式避让，须先挪开挡路的分区）
-    // 12000..17407 对齐后 12288..16383，与 b（14336..16383）重叠
-    let (c, _, stderr) = run(&["resize-part", &format!("{img_s}:1"), "--start", "12000", "--end", "17407"]);
+    // 12000..17407 对齐后 12288..16383，与 b（14336..18431）重叠
+    let img_before = std::fs::read(&img).unwrap();
+    let entries_before = dir_entries(&dir);
+    let (c, _, stderr) = run(&["resize-part", &format!("{img_s}:1"), "--start", "12000", "--end", "17407", "--yes"]);
     assert_eq!(c, 10, "overlapping move must refuse");
     assert!(stderr.contains("overlaps"), "{stderr}");
+    // 拒绝承诺未写盘：整镜像逐字节不变（表项未变不等于盘面未变）
+    assert_eq!(std::fs::read(&img).unwrap(), img_before, "a refusal must leave the image byte-identical");
+    assert_eq!(dir_entries(&dir), entries_before, "a refusal must not add sidecars");
 
     // move：分区 a 右移 8100..12400 → 对齐 8192..12287（落点空闲；长度不变，故没有 FS 步骤）
-    let (c, _, stderr) = run(&["resize-part", &format!("{img_s}:1"), "--start", "8100", "--end", "12400"]);
+    let (c, _, stderr) = run(&["resize-part", &format!("{img_s}:1"), "--start", "8100", "--end", "12400", "--yes"]);
     assert_eq!(c, 0, "move must succeed: {stderr}");
     let mut f = std::fs::File::open(&img).unwrap();
     let gpt = gptman::GPT::find_from(&mut f).unwrap();
@@ -55,24 +93,36 @@ fn resize_part_move_copy_flag_name() {
     assert!(buf.iter().all(|&b| b == 0xBB), "tail fingerprint must move with partition");
     drop(f);
 
-    // shrink：unknown FS 的分区拒绝缩容（无法先缩 FS，缩表项会写坏数据——fail-fast 不落盘）
-    let (c, _, stderr) = run(&["resize-part", &format!("{img_s}:1"), "--start", "8192", "--end", "11000"]);
+    // shrink：unknown FS 的分区拒绝缩容（无法先缩 FS，缩表项会写坏数据——fail-fast 不落盘）。
+    // --yes 让请求越过确认门，命中这里要测的 FS 缩容守卫；不带它先被门拒成 10
+    let img_before = std::fs::read(&img).unwrap();
+    let entries_before = dir_entries(&dir);
+    let (c, _, stderr) = run(&["resize-part", &format!("{img_s}:1"), "--start", "8192", "--end", "11000", "--yes"]);
     assert_eq!(c, 10, "shrink of unknown-FS partition must refuse: {stderr}");
     assert!(stderr.contains("shrink"), "{stderr}");
-    // 拒绝发生在任何写入前：表项保持 move 后的 8192..12287
+    // 拒绝发生在任何写入前：表项保持 move 后的 8192..12287，盘面亦逐字节不变
     let mut f = std::fs::File::open(&img).unwrap();
     let gpt = gptman::GPT::find_from(&mut f).unwrap();
     assert_eq!(gpt[1].starting_lba, 8192);
     assert_eq!(gpt[1].ending_lba, 12287);
     drop(f);
+    assert_eq!(std::fs::read(&img).unwrap(), img_before, "a refusal must leave the image byte-identical");
+    assert_eq!(dir_entries(&dir), entries_before, "a refusal must not add sidecars");
 
-    // copy：分区 b 复制到 20000 → 对齐 20480（b 长 2048 扇区 → 20480..22527）
-    // --chunk-size 1（1MiB = 2048 扇区 = 整块单 chunk）：参数化 chunk 全程走通
-    let (c, out, stderr) = run(&["copy", &format!("{img_s}:2"), "--start", "20000", "--name", "bcopy", "--chunk-size", "1"]);
+    // copy：分区 b 复制到 20000 → 对齐 20480（b 长 4096 扇区 → 20480..24575）
+    // --chunk-size 1（1MiB = 2048 扇区）：源 2 MiB 跨两个 chunk，边界与残段都走一遍
+    let (c, out, stderr) = run(&["copy", &format!("{img_s}:2"), "--start", "20000", "--name", "bcopy", "--chunk-size", "1", "--yes"]);
     assert_eq!(c, 0, "copy must succeed: {out}{stderr}");
+    // 目标整区逐字节等于源；源必须保持原样
+    assert_eq!(read_region(&img, 20480, b_payload.len()), b_payload, "copy target must equal the source byte-for-byte");
+    assert_eq!(read_region(&img, 14336, b_payload.len()), b_payload, "copy must leave the source untouched");
     // 非法 chunk 拒绝（0 越界）
-    let (c, _, _) = run(&["copy", &format!("{img_s}:2"), "--start", "24000", "--chunk-size", "0"]);
+    let img_before = std::fs::read(&img).unwrap();
+    let entries_before = dir_entries(&dir);
+    let (c, _, _) = run(&["copy", &format!("{img_s}:2"), "--start", "24000", "--chunk-size", "0", "--yes"]);
     assert_eq!(c, 10, "invalid --chunk-size must refuse");
+    assert_eq!(std::fs::read(&img).unwrap(), img_before, "a refusal must leave the image byte-identical");
+    assert_eq!(dir_entries(&dir), entries_before, "a refusal must not add sidecars");
 
     // flag/name
     let (c, _, _) = run(&["set", &format!("{img_s}:2"), "flag", "esp", "on"]);
@@ -97,7 +147,7 @@ fn resize_part_move_copy_flag_name() {
         "esp flag must switch type GUID to EFI System Partition"
     );
     assert_eq!(gpt[3].starting_lba, 20480);
-    assert_eq!(gpt[3].ending_lba, 22527);
+    assert_eq!(gpt[3].ending_lba, 24575);
     // PARTUUID：默认 copy 生成新的 v4 GUID，不与源重复
     let src_guid = gpt[2].unique_partition_guid;
     let copy_guid = gpt[3].unique_partition_guid;
@@ -108,12 +158,17 @@ fn resize_part_move_copy_flag_name() {
     drop(f);
 
     // --keep-partuuid 显式保留源 PARTUUID（复制身份，而不只是复制内容）
-    let (c, out, stderr) = run(&["copy", &format!("{img_s}:2"), "--start", "24000", "--keep-partuuid"]);
+    let (c, out, stderr) = run(&["copy", &format!("{img_s}:2"), "--start", "24000", "--keep-partuuid", "--yes"]);
     assert_eq!(c, 0, "--keep-partuuid copy must succeed: {out}{stderr}");
     let mut f = std::fs::File::open(&img).unwrap();
     let gpt = gptman::GPT::find_from(&mut f).unwrap();
     assert_eq!(gpt[4].starting_lba, 24576);
+    assert_eq!(gpt[4].ending_lba, 28671);
     assert_eq!(gpt[4].unique_partition_guid, src_guid, "--keep-partuuid must keep the source PARTUUID");
+    drop(gpt);
+    drop(f);
+    assert_eq!(read_region(&img, 24576, b_payload.len()), b_payload, "the kept-GUID copy must still copy every byte");
+    assert_eq!(read_region(&img, 14336, b_payload.len()), b_payload, "the source must remain untouched after the second copy");
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -214,7 +269,7 @@ fn apply_swap_recreate() {
 
     // --no-fs：#1 是 grow 目标且里面没有 FS，只改表由用户显式担下（否则事前拒绝）；
     // #2 的 swap 重建是**搬移**的一环（swap 头随位置走），与本开关无关，重建照旧
-    let out = Command::new(exe).args(["apply", img_s, "--grow", "1", "--no-fs"]).output().unwrap();
+    let out = Command::new(exe).args(["apply", img_s, "--grow", "1", "--no-fs", "--yes"]).output().unwrap();
     let code = out.status.code().unwrap_or(-1);
     let stderr = String::from_utf8_lossy(&out.stderr);
     // swap 重建依赖 mkswap/losetup（仅 Linux）：工具可用 → 后置条件全满足（OK）；
@@ -298,7 +353,7 @@ fn new_swap_relocation_outcome_follows_platform_and_privilege() {
     let img_s = img.to_str().unwrap();
 
     let out = Command::new(exe)
-        .args(["apply", img_s, "--grow", "1", "--no-fs"])
+        .args(["apply", img_s, "--grow", "1", "--no-fs", "--yes"])
         .output()
         .unwrap();
     let code = out.status.code().unwrap_or(-1);
@@ -379,17 +434,25 @@ fn resize_shift_relocates_blockers() {
         f.write_all(&[0xCC; 512]).unwrap();
     }
 
-    // 无 --allow-move：右侧被 b 挡 → 拒绝
-    let (c, _, stderr) = run(&["resize", &format!("{img_s}:1"), "+3M"]);
+    // 无 --allow-move：右侧被 b 挡 → 拒绝。--yes 只让确认门让路，被测的是搬移授权
+    let img_before = std::fs::read(&img).unwrap();
+    let entries_before = dir_entries(&dir);
+    let (c, _, stderr) = run(&["resize", &format!("{img_s}:1"), "+3M", "--yes"]);
     assert_eq!(c, 10, "blocked resize without --allow-move must refuse");
     assert!(stderr.contains("--allow-move"), "{stderr}");
+    assert_eq!(std::fs::read(&img).unwrap(), img_before, "a refusal must leave the image byte-identical");
+    assert_eq!(dir_entries(&dir), entries_before, "a refusal must not add sidecars");
 
-    // --allow-move 无 --yes：打印位移计划后拒绝
+    // --allow-move 无 --yes：打印位移计划后拒绝（这一条测的就是确认门本身）
+    let img_before = std::fs::read(&img).unwrap();
+    let entries_before = dir_entries(&dir);
     let (c, out, stderr) = run(&["resize", &format!("{img_s}:1"), "+3M", "--allow-move"]);
     assert_eq!(c, 10, "plan printed but --yes missing must refuse");
     assert!(out.contains("move part 2"), "plan must be printed: {out}");
     assert!(out.contains("move part 3"), "plan must include the far blocker: {out}");
     assert!(stderr.contains("--yes"), "{stderr}");
+    assert_eq!(std::fs::read(&img).unwrap(), img_before, "a refusal must leave the image byte-identical");
+    assert_eq!(dir_entries(&dir), entries_before, "a refusal must not add sidecars");
 
     // +3M 相对当前 1M 大小 → 绝对 4M：b 让位到新末端之后，c 本就在扩容前线之外不动，
     // a 精确扩到 10239（2048+8192-1）。
@@ -419,8 +482,12 @@ fn resize_shift_relocates_blockers() {
     drop(f);
 
     // 让位后的空闲不足：d 挡在末端且无尾部空间 → 明确拒绝
+    let img_before = std::fs::read(&img).unwrap();
+    let entries_before = dir_entries(&dir);
     let (c, _, stderr) = run(&["resize", &format!("{img_s}:1"), "+64M", "--allow-move", "--yes"]);
     assert_eq!(c, 10, "grow beyond usable range must refuse: {stderr}");
+    assert_eq!(std::fs::read(&img).unwrap(), img_before, "a refusal must leave the image byte-identical");
+    assert_eq!(dir_entries(&dir), entries_before, "a refusal must not add sidecars");
 
     let _ = std::fs::remove_dir_all(&dir);
 }

@@ -20,7 +20,7 @@ pub(crate) fn resize_mdos_entry_refuses_invisible_type_only_entry() {
 #[test]
 pub(crate) fn msdos_entry_past_end_is_damaged_and_refused() {
     let mut src = src_from("past_end", vec![0u8; 300 * 512]);
-    create_mbr(&mut src).unwrap();
+    create_mbr(&mut src, false).unwrap();
     let mut lba0 = [0u8; 512];
     src.read_at(0, &mut lba0).unwrap();
     let rec = &mut lba0[446..446 + 16];
@@ -40,7 +40,7 @@ pub(crate) fn msdos_entry_past_end_is_damaged_and_refused() {
 #[test]
 pub(crate) fn msdos_entry_start_zero_is_damaged_and_refused() {
     let mut src = src_from("start_zero", vec![0u8; 300 * 512]);
-    create_mbr(&mut src).unwrap();
+    create_mbr(&mut src, false).unwrap();
     let mut lba0 = [0u8; 512];
     src.read_at(0, &mut lba0).unwrap();
     let rec = &mut lba0[446..446 + 16];
@@ -78,7 +78,7 @@ pub(crate) fn add_mdos_entry_rejects_beyond_32bit_lba() {
 pub(crate) fn msdos_hidden_toggle() {
     let data = vec![0u8; 300 * 512];
     let mut src = src_from("mhidden", data);
-    create_mbr(&mut src).unwrap();
+    create_mbr(&mut src, false).unwrap();
     add_mdos_entry(&mut src, 63, 200, 0x0B).unwrap();
     set_mdos_hidden(&mut src, 1, true).unwrap();
     assert_eq!(parse_mbr(&src).unwrap().unwrap()[0].os_type, 0x1B);
@@ -93,7 +93,7 @@ pub(crate) fn msdos_hidden_toggle() {
 pub(crate) fn msdos_type_set_and_guards() {
     let data = vec![0u8; 300 * 512];
     let mut src = src_from("mtype", data);
-    create_mbr(&mut src).unwrap();
+    create_mbr(&mut src, false).unwrap();
     add_mdos_entry(&mut src, 63, 200, 0x83).unwrap();
     // 0x 前缀大小写在命令层；此处只验落盘与领域守卫
     set_mdos_type(&mut src, 1, 0x07).unwrap();
@@ -131,7 +131,7 @@ pub(crate) fn msdos_type_set_and_guards() {
 pub(crate) fn resize_mdos_entry_rejects_beyond_disk_end() {
     let data = vec![0u8; 300 * 512];
     let mut src = src_from("mrszend", data);
-    create_mbr(&mut src).unwrap();
+    create_mbr(&mut src, false).unwrap();
     add_mdos_entry(&mut src, 63, 200, 0x83).unwrap();
     // 63 + 300 > 300 盘尾：拒绝且不落盘
     let e = resize_mdos_entry(&mut src, 1, 300).unwrap_err();
@@ -146,7 +146,7 @@ pub(crate) fn resize_mdos_entry_rejects_beyond_disk_end() {
 pub(crate) fn resize_mdos_entry_rejects_neighbor_overlap() {
     let data = vec![0u8; 300 * 512];
     let mut src = src_from("mrszovl", data);
-    create_mbr(&mut src).unwrap();
+    create_mbr(&mut src, false).unwrap();
     add_mdos_entry(&mut src, 63, 162, 0x83).unwrap();
     add_mdos_entry(&mut src, 200, 249, 0x83).unwrap();
     // [63, 162] 扩到 [63, 199] 与分区 2 [200, 249] 相接：合法（区间贴邻不重叠）
@@ -163,7 +163,7 @@ pub(crate) fn resize_mdos_entry_rejects_neighbor_overlap() {
 pub(crate) fn parse_mbr_reports_overlap_damage() {
     let data = vec![0u8; 300 * 512];
     let mut src = src_from("mbrovl", data);
-    create_mbr(&mut src).unwrap();
+    create_mbr(&mut src, false).unwrap();
     add_mdos_entry(&mut src, 63, 162, 0x83).unwrap();
     add_mdos_entry(&mut src, 200, 249, 0x83).unwrap();
     // 手工把分区 2 起点改进分区 1 的区间（add_mdos_entry 自己不会写出这种表）
@@ -319,12 +319,12 @@ pub(crate) fn damaged_protective_mbr_never_parses_as_msdos() {
 
     // 同一形状，但盘尾备份头的签名也没了（`new --table msdos` 的产物）：没有可救的表，
     // 零条记录的 MBR 就是这块盘唯一的表
-    create_mbr(&mut src).unwrap();
+    create_mbr(&mut src, false).unwrap();
     assert_eq!(table_label(&src).unwrap(), TableLabel::Mbr);
 
     // hybrid 布局：0xEE + 真实槽位 → 只输出真实槽位（内核同口径按 msdos 管）
     let mut h = src_from("hybrid", vec![0u8; 300 * 512]);
-    create_mbr(&mut h).unwrap();
+    create_mbr(&mut h, false).unwrap();
     add_mdos_entry(&mut h, 63, 200, 0x0B).unwrap();
     add_mdos_entry(&mut h, 210, 250, 0x83).unwrap(); // 第二分区进槽位 2
     let mut lba0 = [0u8; 512];
@@ -346,7 +346,7 @@ pub(crate) fn damaged_protective_mbr_never_parses_as_msdos() {
 #[test]
 pub(crate) fn mdos_hidden_is_idempotent() {
     let mut src = src_from("hidden_idem", vec![0u8; 300 * 512]);
-    create_mbr(&mut src).unwrap();
+    create_mbr(&mut src, false).unwrap();
     add_mdos_entry(&mut src, 63, 200, 0x0C).unwrap(); // FAT32 LBA（可见侧）
     let ty = |src: &FileSource| {
         let mut lba0 = [0u8; 512];
@@ -370,7 +370,7 @@ pub(crate) fn mdos_hidden_is_idempotent() {
 #[test]
 pub(crate) fn mdos_hidden_rejects_unpaired_type() {
     let mut src = src_from("hidden_unpaired", vec![0u8; 300 * 512]);
-    create_mbr(&mut src).unwrap();
+    create_mbr(&mut src, false).unwrap();
     add_mdos_entry(&mut src, 63, 200, 0x83).unwrap(); // Linux data：无 hidden 对应码
     let e = set_mdos_hidden(&mut src, 1, true).expect_err("0x83 must be refused");
     assert!(matches!(&e, Fail::Refused(m) if m.contains("no hidden counterpart")), "{e:?}");

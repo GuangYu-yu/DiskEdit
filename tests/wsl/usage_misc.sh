@@ -9,9 +9,9 @@ track_file "$T"
 mk() {
   rm -f "$T" "$T"$SIDECAR_GLOB; truncate -s 1G "$T"
   $B new "$T" --yes >/dev/null
-  $B create "$T" --size 100M --name p1 --fs ext4 >/dev/null
-  $B create "$T" --size 100M --name p2 --fs ext4 >/dev/null
-  $B create "$T" --size 200M --name p3 --fs ext4 >/dev/null
+  $B create "$T" --size 100M --name p1 --fs ext4 --yes >/dev/null
+  $B create "$T" --size 100M --name p2 --fs ext4 --yes >/dev/null
+  $B create "$T" --size 200M --name p3 --fs ext4 --yes >/dev/null
 }
 fill() {
   LD=$(lo_attach "$T"); mount_at "${LD}p$1" /testmnt
@@ -39,7 +39,7 @@ chk 3 -
 echo
 echo "=== 2: copy --start end（复制到尾部） ==="
 mk; M1=$(fill 1 90)
-$B copy "$T":1 --start end >/dev/null 2>&1; exp $? 0 "copy --start end"
+$B copy "$T":1 --start end --yes >/dev/null 2>&1; exp $? 0 "copy --start end"
 $B info "$T" | grep -o '"num":4,"first_lba":[0-9]*,"last_lba":[0-9]*'
 chk 1 "$M1"
 LD=$(lo_attach "$T"); [ "$M1" = "$(mdsum "${LD}p4")" ] && echo "p4 COPY OK (device-identical)" || { echo "p4 COPY MISMATCH"; rc=1; }; losetup -d "$LD"

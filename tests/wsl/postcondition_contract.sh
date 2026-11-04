@@ -18,7 +18,7 @@ mk() { # $1=fs  $2=size
   rm -f "$T" "$T"$SIDECAR_GLOB
   truncate -s 1G "$T"
   $B new "$T" --yes >/dev/null
-  $B create "$T" --size "$2" --name p1 --fs "$1" >/dev/null 2>&1
+  $B create "$T" --size "$2" --name p1 --fs "$1" --yes >/dev/null 2>&1
 }
 pt() { $B info "$T" | grep -o '"num":1,[^}]*}' | grep -o '"size_bytes":[0-9]*'; }
 
@@ -45,7 +45,7 @@ echo
 echo "===== C: 缩容不支持的 FS → REFUSED 且不得改盘 ====="
 mk exfat 800M
 BEFORE=$(pt)
-OUT=$($B resize "$T":1 400M 2>&1); E=$?
+OUT=$($B resize "$T":1 400M --yes 2>&1); E=$?
 echo "exit=$E  before=$BEFORE  after=$(pt)"
 echo "$OUT" | head -2
 [ "$E" = "10" ] && echo "C REFUSED OK" || { echo "C WRONG EXIT ($E)"; rc=1; }
@@ -57,7 +57,7 @@ echo "===== D: create 的 mkfs 失败 → 表已改、FS 未做 → PARTIAL(20) 
 rm -f "$T" "$T"$SIDECAR_GLOB
 truncate -s 1G "$T"
 $B new "$T" --yes >/dev/null
-OUT=$($B create "$T" --size 16M --name tiny --fs xfs 2>&1); E=$?
+OUT=$($B create "$T" --size 16M --name tiny --fs xfs --yes 2>&1); E=$?
 echo "exit=$E : $(echo "$OUT" | head -1)"
 exp "$E" 20 "create 的 mkfs 失败 → 后置条件未全满足（PARTIAL）"
 $B info "$T" | grep -q '"num":1' && echo "D PARTITION-CREATED OK（表已写）" || { echo "D partition missing (BAD)"; rc=1; }

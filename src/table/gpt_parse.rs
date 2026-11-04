@@ -555,6 +555,51 @@ pub(crate) fn candidate_sector_sizes(container_ss: u64) -> Vec<u64> {
     v
 }
 
+/// 目标盘面自述的 Disk GUID：主头优先，主头不可用时回退盘尾备份头；两份都不带签名才
+/// 是"没有 GPT"（`Ok(None)`）。签名在但头读不出 / 校验不过时返回 `Err`——这是"凭据
+/// 读不出"，不是"不符"，更不是"没有 GUID"，调用方必须按 Damaged 处置。
+///
+/// 只读头部字段，不要求条目数组可用：GUID 由头 CRC 覆盖，头的可用性足以证明它。把数组
+/// 损伤也算进来，会让一次"表写坏但头还在"的现场连身份都无法核对
+pub(crate) fn disk_guid_of(src: &FileSource) -> io::Result<Option<[u8; 16]>> {
+    let mut damaged = false;
+    for &ss in &candidate_sector_sizes(src.sector_size) {
+        if src.size < ss * 2 {
+            continue;
+        }
+        let mut sector = vec![0u8; ss as usize];
+        src.read_at(ss, &mut sector)?;
+        match probe_header(&sector) {
+            HeaderProbe::Present(h) => return Ok(Some(h.disk_guid)),
+            HeaderProbe::Absent => {}
+            HeaderProbe::Damaged(_) => damaged = true,
+        }
+    }
+    for &ss in &candidate_sector_sizes(src.sector_size) {
+        if src.size < ss * 2 {
+            continue;
+        }
+        let last = container_last_lba(src, ss);
+        let mut sector = vec![0u8; ss as usize];
+        src.read_at(last * ss, &mut sector)?;
+        match probe_header(&sector) {
+            // 备份头的 MyLBA 是盘尾、对端是 LBA1；不满足这个形状的签名不是本盘的备份头
+            HeaderProbe::Present(h) if h.primary_lba == last && h.backup_lba == 1 => {
+                return Ok(Some(h.disk_guid));
+            }
+            HeaderProbe::Present(_) | HeaderProbe::Absent => {}
+            HeaderProbe::Damaged(_) => damaged = true,
+        }
+    }
+    if damaged {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "a GPT header is present but unreadable — the target's disk identity cannot be determined",
+        ));
+    }
+    Ok(None)
+}
+
 /// 便捷读取：先要求保护 MBR 形状（否则 LBA1 的残留签名即可骗过判定），再按候选扇区大小
 /// （见 candidate_sector_sizes）解析主头，头 CRC 与数组 CRC 均须有效，取首个命中。
 ///

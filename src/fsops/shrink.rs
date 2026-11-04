@@ -254,11 +254,14 @@ pub(crate) fn read_fs_bytes(kind: FsKind, dev: &str) -> io::Result<u64> {
                 io::Error::other(format!("dumpe2fs block count × block size overflows ({blocks} × {block_size})"))
             })
         }
-        FsKind::Ntfs => parse_num_lead(&run_text("ntfsresize", &["-f", "--info", dev])?, "Current volume size:"),
-        FsKind::Btrfs => parse_num_lead(
+        FsKind::Ntfs => Ok(parse_num_lead(
+            &run_text("ntfsresize", &["-f", "--info", dev])?,
+            "Current volume size:",
+        )?),
+        FsKind::Btrfs => Ok(parse_num_lead(
             &run_text("btrfs", &["inspect-internal", "dump-super", "-f", dev])?,
             "total_bytes",
-        ),
+        )?),
         other => Err(io::Error::other(format!("no size read-back wired for {}", fs_name(Some(other))))),
     }
 }

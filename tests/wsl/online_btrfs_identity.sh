@@ -16,7 +16,7 @@ truncate -s 1G "$T"
 $B new "$T" --yes >/dev/null
 # 400M 而非 200M：btrfs 的 resize 下限是 256MiB，更小的文件系统无论扩缩都被内核
 # 以 EINVAL 拒绝（实测 btrfs filesystem resize 报 "unable to resize: Invalid argument"）
-$B create "$T" --size 400M --name bt --fs btrfs; echo "create exit=$?"
+$B create "$T" --size 400M --name bt --fs btrfs --yes; echo "create exit=$?"
 LD=$(lo_attach "$T")
 lo_waitpart "${LD}p1" || { echo "SKIP: ${LD}p1 未就绪"; exit 0; }
 P=${LD}p1
@@ -30,7 +30,7 @@ S1=$(blockdev --getsize64 "$P")
 D1=$(df -B1 --output=size /testmnt | tail -1 | tr -d ' ')
 assert_eq "$S1" "$((S0 + 16777216))" "A/分区 +16M"
 if [ "$D1" -gt "$D0" ]; then echo "  OK   A/fs 同步变大 ($D0 → $D1)"; else echo "  BAD  A/fs 未变大 ($D0 → $D1)"; rc=1; fi
-OUT=$($B resize "${LD}:1" -16M 2>&1); E=$?
+OUT=$($B resize "${LD}:1" -16M --yes 2>&1); E=$?
 echo "shrink exit=$E : $(echo "$OUT" | tail -1)"
 exp "$E" 0 "A/shrink"
 assert_eq "$(blockdev --getsize64 "$P")" "$S0" "A/回到原尺寸"

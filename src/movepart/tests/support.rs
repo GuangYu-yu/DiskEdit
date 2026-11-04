@@ -139,3 +139,15 @@ pub(crate) fn make_stale(path: &std::path::Path) {
     raw[512 + 16..512 + 20].copy_from_slice(&hdr_crc.to_le_bytes());
     std::fs::write(path, &raw).unwrap();
 }
+
+/// 模拟 prepare 与执行之间第三方改表：改主头的 disk GUID 并重算头 CRC，
+/// 既不是构造时读到的那份，也不是本层要提交的目标值
+pub(crate) fn tamper_disk_guid(src: &mut WriteSource) {
+    let mut hdr = [0u8; 512];
+    src.read_at(512, &mut hdr).unwrap();
+    hdr[56..72].copy_from_slice(&[0xEE; 16]);
+    hdr[16..20].fill(0);
+    let crc = table::crc32(&hdr[..92]);
+    hdr[16..20].copy_from_slice(&crc.to_le_bytes());
+    src.write_at(512, &hdr).unwrap();
+}

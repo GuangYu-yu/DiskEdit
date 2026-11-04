@@ -339,7 +339,7 @@ where
     // `/proc/<pid>/fd/<n>` 时读的是本进程的 fd 表；`/proc/self/mountinfo` 记录的仍是
     // 真实路径，卸载与清理照常用 `mnt`
     #[cfg(unix)]
-    let (_dir, target) = {
+    let (dir, target) = {
         use std::os::unix::io::AsRawFd as _;
         let dir = std::fs::File::open(&mnt).map_err(FsError::from)?;
         let target = std::ffi::OsString::from(format!(
@@ -351,6 +351,12 @@ where
     };
     #[cfg(not(unix))]
     let target = mnt.clone().into_os_string();
+    // 守卫先于 mount 建立：spawn 失败与 mount 非零退出都只留下本次创建的目录，
+    // 由它的 Drop 清掉（没有挂载，就没有卸载）
+    #[cfg(unix)]
+    let mut guard = MountGuard { point: mnt.clone(), dir, mounted: None, armed: true };
+    #[cfg(not(unix))]
+    let mut guard = MountGuard { point: mnt.clone(), armed: true };
     // 执行走 `fsops::run`：spawn 失败 = 工具没跑起来（Io），等待失败 = 工具已启动、
     // 写没写目标无法断言（CommandFailed）。mount 自己会重放日志（对目标的一次写），
     // 把后者折成 Io 会让命令以"确定未写盘"退出
@@ -358,27 +364,103 @@ where
     let out = run("mount", &args)?;
     if !out.status.success() {
         // mount 没成功就谈不上 umount：对从未挂载的目录卸载必然失败，
-        // 那条"may remain"的告警只会把用户引向一个不存在的残留挂载点。
-        // 临时目录仍要清——它是本次调用建的，mount 失败不代表它可以留下
-        crate::dev::best_effort_rmdir(&mnt);
+        // 那条"may remain"的告警只会把用户引向一个不存在的残留挂载点
         return Err(FsError::command("mount", &out));
     }
-    let mut guard = MountGuard { point: mnt.clone(), armed: true };
+    // 挂载成功后该路径指向的挂载根身份：卸载与删目录之前都按它重新核对
+    #[cfg(unix)]
+    {
+        guard.mounted = entry_identity(&mnt);
+        if guard.mounted.is_none() {
+            // 读不到刚挂上的挂载点身份，之后无从核对；此刻设备确由本次调用挂上，
+            // 按路径卸掉再把这条环境故障报出来
+            drop(release_mount(&mnt));
+            return Err(FsError::Io(io::Error::other(format!(
+                "cannot read the identity of the mount point {} just created",
+                mnt.display()
+            ))));
+        }
+    }
     let res = f(&mnt.to_string_lossy());
-    guard.armed = false;
-    let leak = leak_from(&mnt.to_string_lossy(), release_mount(&mnt));
-    crate::dev::best_effort_rmdir(&mnt);
+    let leak = leak_from(&mnt.to_string_lossy(), guard.release());
     // 残留挂载点只有一条出路：核心成功时随 `Ok` 浮出成待办、核心失败时拼进主错误。
     // 两条路都进返回的 `Outcome`，不再另打一条只有 stderr 看得见的告警
     settle_release(res, leak)
 }
 
-/// 回调 panic 时的挂载守卫：栈展开会跳过 [`with_mount`] 顺序里的卸载与删目录，
-/// 目标分区就保持挂载到进程重启。正常路径在回调返回后 `armed = false`——仍处
-/// armed 只可能是展开，此时没有结果可报，残留只能告警
+/// 路径此刻解析出的 `(dev, ino)`。解析失败与指向别的对象在这层同义：都说明这个路径
+/// 已不能代表记录的那个条目，不得用它卸载或删除
+#[cfg(unix)]
+fn entry_identity(path: &Path) -> Option<(u64, u64)> {
+    use std::os::unix::fs::MetadataExt;
+    std::fs::metadata(path).ok().map(|m| (m.dev(), m.ino()))
+}
+
+/// 临时挂载点的守卫：持有建目录时打开的 inode 句柄与挂载成功后路径指向的挂载根身份。
+/// `umount` 按路径解析：父目录被改名后旧路径不再解析到这个挂载；同一位置被叠了另一层
+/// 挂载时，路径解析到的是最上面那层。两种情形都拒绝卸载：残留挂载只泄漏到重启，
+/// 误拆会拆掉别人的东西。删目录同样先核对身份与空目录，不做按路径的盲删
 struct MountGuard {
     point: PathBuf,
+    /// 建目录时打开的目录句柄：钉住创建时的 inode，路径改名或替换后仍可读出目录身份
+    #[cfg(unix)]
+    dir: std::fs::File,
+    /// 挂载成功后 `point` 解析到的挂载根 `(dev, ino)`；尚未挂载成功为 None
+    #[cfg(unix)]
+    mounted: Option<(u64, u64)>,
     armed: bool,
+}
+
+impl MountGuard {
+    /// 卸载并清理挂载点，返回卸载的结局。清理是否完成由调用方经 [`MountLeak`] 表达
+    fn release(&mut self) -> ReleaseOutcome {
+        self.armed = false;
+        #[cfg(unix)]
+        {
+            let Some(mounted) = self.mounted else {
+                // 从未挂载成功：没有可卸载的东西，只清理本次建的目录
+                self.remove_own_point();
+                return ReleaseOutcome::Released;
+            };
+            if entry_identity(&self.point) != Some(mounted) {
+                return ReleaseOutcome::Failed(format!(
+                    "{} no longer resolves to the mount this process created (the directory was renamed or replaced) — refusing to unmount",
+                    self.point.display()
+                ));
+            }
+            let outcome = release_mount(&self.point);
+            if outcome == ReleaseOutcome::Released {
+                self.remove_own_point();
+            }
+            outcome
+        }
+        #[cfg(not(unix))]
+        {
+            let outcome = release_mount(&self.point);
+            if outcome == ReleaseOutcome::Released {
+                crate::dev::best_effort_rmdir(&self.point);
+            }
+            outcome
+        }
+    }
+
+    /// 删掉本次创建的挂载点目录：路径必须仍解析到创建时那个 inode，且此刻为空
+    #[cfg(unix)]
+    fn remove_own_point(&self) {
+        let Ok(own) = self.dir.metadata().map(|m| {
+            use std::os::unix::fs::MetadataExt;
+            (m.dev(), m.ino())
+        }) else {
+            return;
+        };
+        if entry_identity(&self.point) != Some(own) {
+            return;
+        }
+        if !std::fs::read_dir(&self.point).is_ok_and(|mut entries| entries.next().is_none()) {
+            return;
+        }
+        crate::dev::best_effort_rmdir(&self.point);
+    }
 }
 
 impl Drop for MountGuard {
@@ -386,10 +468,10 @@ impl Drop for MountGuard {
         if !self.armed {
             return;
         }
-        if let Some(leak) = leak_from(&self.point.to_string_lossy(), release_mount(&self.point)) {
+        let outcome = self.release();
+        if let Some(leak) = leak_from(&self.point.to_string_lossy(), outcome) {
             eprintln!("warning: the filesystem may still be mounted at {} ({})", leak.point, leak.why);
         }
-        crate::dev::best_effort_rmdir(&self.point);
     }
 }
 
@@ -477,5 +559,118 @@ pub(crate) fn release_mount(mnt: &std::path::Path) -> ReleaseOutcome {
         Ok(o) if o.status.success() => ReleaseOutcome::Released,
         Ok(o) => ReleaseOutcome::Failed(String::from_utf8_lossy(&o.stderr).trim().to_string()),
         Err(e) => ReleaseOutcome::Unavailable(format!("umount did not start: {e}")),
+    }
+}
+
+#[cfg(all(test, unix))]
+mod mount_guard_tests {
+    #![allow(clippy::let_underscore_must_use)] // 清理临时目录有意忽略失败
+    use super::*;
+
+    /// 每个用例独占一个路径，先用后清，不留残留
+    fn fresh_dir(tag: &str) -> PathBuf {
+        let p = std::env::temp_dir().join(format!("diskedit_guard_{tag}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&p);
+        std::fs::create_dir(&p).unwrap();
+        p
+    }
+
+    fn free_path(tag: &str) -> PathBuf {
+        let p = std::env::temp_dir().join(format!("diskedit_guard_{tag}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&p);
+        p
+    }
+
+    /// 记录过身份之后路径条目被换成别的对象（改名后被新目录占住）：既不按旧路径 umount
+    /// （那里没有本进程的挂载），也不删那个不是本进程创建的目录
+    #[test]
+    fn a_replaced_point_is_neither_unmounted_nor_removed() {
+        let point = fresh_dir("renamed");
+        let moved = free_path("moved");
+        let dir = std::fs::File::open(&point).unwrap();
+        let mounted = entry_identity(&point).unwrap();
+        std::fs::rename(&point, &moved).unwrap();
+        std::fs::create_dir(&point).unwrap();
+        let mut guard = MountGuard { point: point.clone(), dir, mounted: Some(mounted), armed: true };
+        match guard.release() {
+            ReleaseOutcome::Failed(why) => assert!(why.contains("refusing to unmount"), "{why}"),
+            other => panic!("an identity mismatch must refuse the unmount, got {other:?}"),
+        }
+        assert!(point.exists(), "the directory now at the old path belongs to someone else");
+        assert!(moved.exists(), "the directory this process created must not be removed by the old path");
+        let _ = std::fs::remove_dir(&point);
+        let _ = std::fs::remove_dir(&moved);
+    }
+
+    /// 挂载没成功时只有本次创建的目录要清；路径已被替换成别的条目就不动它
+    #[test]
+    fn an_unmounted_point_is_removed_only_while_it_is_still_ours() {
+        let point = fresh_dir("unmounted");
+        let dir = std::fs::File::open(&point).unwrap();
+        let mut guard = MountGuard { point: point.clone(), dir, mounted: None, armed: true };
+        assert_eq!(guard.release(), ReleaseOutcome::Released);
+        assert!(!point.exists(), "the directory created for this call must be cleaned up");
+
+        let point = fresh_dir("replaced");
+        let away = free_path("replaced-away");
+        let dir = std::fs::File::open(&point).unwrap();
+        std::fs::rename(&point, &away).unwrap();
+        std::fs::create_dir(&point).unwrap();
+        let mut guard = MountGuard { point: point.clone(), dir, mounted: None, armed: true };
+        assert_eq!(guard.release(), ReleaseOutcome::Released, "nothing was mounted, nothing to release");
+        assert!(point.exists(), "a replaced entry must not be removed through the old path");
+        let _ = std::fs::remove_dir(&point);
+        let _ = std::fs::remove_dir(&away);
+    }
+
+    fn mount_tmpfs(point: &Path) -> bool {
+        std::process::Command::new("mount")
+            .args(["-t", "tmpfs", "none"])
+            .arg(point)
+            .status()
+            .is_ok_and(|s| s.success())
+    }
+
+    fn unmount(point: &Path) -> bool {
+        std::process::Command::new("umount").arg(point).status().is_ok_and(|s| s.success())
+    }
+
+    /// 真实挂载：别人在同一个点叠了一层之后，Drop 不能拆它——按路径 umount 命中的是最上面
+    /// 那层，而那不是本进程的挂载。需要 root 与可用的 mount/umount，缺一项就打印原因并跳过
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_stacked_mount_on_the_point_is_not_unmounted() {
+        if unsafe { libc::geteuid() } != 0 {
+            eprintln!("skip: root required to mount tmpfs");
+            return;
+        }
+        let point = fresh_dir("stacked");
+        if !mount_tmpfs(&point) {
+            eprintln!("skip: this environment cannot mount tmpfs");
+            let _ = std::fs::remove_dir(&point);
+            return;
+        }
+        let dir = std::fs::File::open(&point).unwrap();
+        let recorded = entry_identity(&point).unwrap();
+        if !mount_tmpfs(&point) {
+            eprintln!("skip: this environment cannot stack a second mount on the same point");
+            unmount(&point);
+            let _ = std::fs::remove_dir(&point);
+            return;
+        }
+        let on_top = entry_identity(&point).unwrap();
+        assert_ne!(on_top, recorded, "a stacked mount must present a different mount root");
+        let mut guard = MountGuard { point: point.clone(), dir, mounted: Some(recorded), armed: true };
+        match guard.release() {
+            ReleaseOutcome::Failed(why) => assert!(why.contains("refusing to unmount"), "{why}"),
+            other => panic!("a stacked mount must refuse the unmount, got {other:?}"),
+        }
+        assert_eq!(entry_identity(&point), Some(on_top), "someone else's mount must still be on top");
+        assert!(point.exists(), "the mount point is still in use and must stay");
+        // 守卫持有的目录句柄会挡住第二次 umount，先放掉再清理
+        drop(guard);
+        unmount(&point);
+        unmount(&point);
+        let _ = std::fs::remove_dir(&point);
     }
 }

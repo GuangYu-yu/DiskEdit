@@ -213,17 +213,54 @@ pub fn mbr_metadata_conflict(src: &FileSource, ss: u64) -> io::Result<Option<Str
     Ok(None)
 }
 
+/// `new` 两族表的统一冲突判据：既有分区是否落在本次写表会改动的字节上。
+/// 族的分派只有这一处，命令层与写入口不各自挑族。
+pub(crate) fn new_table_conflict(src: &FileSource, ss: u64, kind: TableKind) -> io::Result<Option<String>> {
+    match kind {
+        TableKind::Gpt => gpt_metadata_conflict(src, ss),
+        TableKind::Msdos => mbr_metadata_conflict(src, ss),
+    }
+}
+
+/// 写入口的冲突闸：必须在首次写盘之前调用。未授权覆盖分区数据时，冲突与"旧表读不出来"
+/// 都按拒绝返回（确定未写盘）；授权时放行——`--overwrite-partition-data` 的含义就是
+/// 接受覆盖那些字节，旧表读不出来也不改变本次写入会落到的位置。
+pub(crate) fn ensure_new_table_write_clear(
+    src: &FileSource,
+    ss: u64,
+    kind: TableKind,
+    overwrite_partition_data: bool,
+) -> Result<(), Fail> {
+    match (new_table_conflict(src, ss, kind), overwrite_partition_data) {
+        (Ok(None), _) => Ok(()),
+        (Ok(Some(_)), true) | (Err(_), true) => Ok(()),
+        (Ok(Some(why)), false) => Err(Fail::refused(format!(
+            "{why} — pass --overwrite-partition-data to accept overwriting those bytes"
+        ))),
+        (Err(e), false) => Err(Fail::refused(format!(
+            "cannot check the existing partition table against the bytes this new table writes ({e}) — \
+             pass --overwrite-partition-data to proceed without that check"
+        ))),
+    }
+}
+
 /// `new`：新建空 GPT（覆盖现有表）+ 保护 MBR。写盘只落在表结构区：LBA0/1、主条目数组
-/// 与盘尾备份数组；旧表把分区铺进这些区域的提交由命令层先经
-/// [`gpt_metadata_conflict`] 拒绝，不在这里自查。
+/// 与盘尾备份数组；旧表把分区铺进这些区域的提交由 [`ensure_new_table_write_clear`]
+/// 在首次写盘前判掉——命令层的那次判定与这里之间隔着占用闸的 loop 扫描。
 /// 几何：128 条目 × 128B，first_usable = 数组之后，last_usable = 末端 - span - 1
 /// （由 UEFI 头/数组布局推导的实现约定，非规范逐字给出的公式）。
-pub fn create_gpt(src: &mut WriteSource, ss: u64, disk_guid: Option<[u8; 16]>) -> io::Result<()> {
+pub fn create_gpt(
+    src: &mut WriteSource,
+    ss: u64,
+    disk_guid: Option<[u8; 16]>,
+    overwrite_partition_data: bool,
+) -> Result<(), Fail> {
+    ensure_new_table_write_clear(src, ss, TableKind::Gpt, overwrite_partition_data)?;
     // 与 create_gpt_preflight 同一判据（同一 gpt_min_sectors）、同一措辞：命令层已先在
     // 写盘前过了一遍，这里是直接调本函数的调用方（测试）的兜底，两种入口看到同一句话
-    let min_sectors = gpt_min_sectors(ss)?;
+    let min_sectors = gpt_min_sectors(ss).map_err(|e| Fail::refused(e.to_string()))?;
     if src.size / ss < min_sectors {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, gpt_too_small(min_sectors, ss)));
+        return Err(Fail::refused(gpt_too_small(min_sectors, ss)));
     }
     let geom = EntryArrayGeometry::new(ss, DEFAULT_ENTRY_SIZE, DEFAULT_ENTRY_COUNT, MAX_ARRAY_BYTES)?;
     let span = geom.lba_span();
@@ -242,7 +279,8 @@ pub fn create_gpt(src: &mut WriteSource, ss: u64, disk_guid: Option<[u8; 16]>) -
     };
     let g = RawGpt { ss, header, entries: vec![empty_entry(); geom.entry_count as usize], state: GptState::Valid, pmbr: PmbrSize::Normal };
     commit_gpt(src, &g, last_lba)?;
-    ensure_protective_mbr(src, ss)
+    ensure_protective_mbr(src, ss)?;
+    Ok(())
 }
 
 pub(crate) fn empty_entry() -> GPTPartitionEntry {
@@ -322,8 +360,10 @@ pub(crate) fn guid_in_field_order(g: &[u8; 16]) -> [u8; 16] {
 /// LBA1 与盘尾备份头上可能残留的 GPT 签名——新表是 msdos，盘上不该再留下任何能独立
 /// 给出 GPT 表的表层。只清签名那 8 字节，同一扇区的其余字节与条目数原样保留。
 /// 主头签名留着会让这块新 msdos 盘被判成 `GptDamaged`（`table_label` 的第 3 条判据）；
-/// 盘尾那个留着会让"4 条记录全空"的判据（第 5 条）把刚建的盘判成 GPT 残骸
-pub fn create_mbr(src: &mut WriteSource) -> io::Result<()> {
+/// 盘尾那个留着会让"4 条记录全空"的判据（第 5 条）把刚建的盘判成 GPT 残骸。
+/// 会清零的签名若落在旧分区数据里，由 [`ensure_new_table_write_clear`] 在首次写盘前判掉。
+pub fn create_mbr(src: &mut WriteSource, overwrite_partition_data: bool) -> Result<(), Fail> {
+    ensure_new_table_write_clear(src, src.sector_size, TableKind::Msdos, overwrite_partition_data)?;
     let ss = src.sector_size;
     let mut lba0 = vec![0u8; ss as usize];
     src.read_at(0, &mut lba0)?;
@@ -331,20 +371,12 @@ pub fn create_mbr(src: &mut WriteSource) -> io::Result<()> {
     lba0[510] = 0x55;
     lba0[511] = 0xAA;
     // 与解析侧同一套候选扇区大小：容器 ss 之外的候选说明旧 GPT 可能按另一种扇区
-    // 落盘，签名会落在那个候选的 LBA1 上。**先清这些，再把 LBA0 交出去**：清掉它们
-    // 留下的中间态只是"这处没有 GPT 头"，而先写 LBA0 会在 `at == ss` 的位置造出
-    // "新 msdos 表 + 可解析的 GPT 主头"——`GptDamaged`，工具内没有修复入口。
+    // 落盘，签名会落在那个候选的 LBA1 上。清除位置与写回缓冲是同一个事实的两半：
+    // 落在 LBA0/LBA1 缓冲内的位置直接施加到缓冲，其余位置先写出去，最后整块回写。
+    // 先写 LBA0 再清 ss 会在 `at == ss` 的位置造出"新 msdos 表 + 可解析的 GPT 主头"
+    // ——`GptDamaged`，工具内没有修复入口。
     // 待清位置与冲突检查共用 `gpt_signature_sites`，两者不会各自漂移
-    let mut cleared = Vec::new();
     let lba1_whole = src.size >= 2 * ss;
-    for off in gpt_signature_sites(src)? {
-        // ss 这一处并入下面那次合并写
-        if off == ss && lba1_whole {
-            continue;
-        }
-        src.write_at(off, &[0u8; GPT_SIGNATURE.len()])?;
-        cleared.push(off);
-    }
     // LBA0 与 LBA1 上"不再有 GPT 主头"是同一个事实的两半：分两次写出去，中断正好停在
     // GptDamaged 上。拼进一个缓冲、一次 write，中断只可能停在"旧表"或"新表"
     let mut head = lba0.clone();
@@ -353,8 +385,17 @@ pub fn create_mbr(src: &mut WriteSource) -> io::Result<()> {
         src.read_at(ss, &mut lba1)?;
         if lba1[..GPT_SIGNATURE.len()] == *GPT_SIGNATURE {
             lba1[..GPT_SIGNATURE.len()].fill(0);
-            cleared.push(ss);
             head.extend_from_slice(&lba1);
+        }
+    }
+    let mut cleared = Vec::new();
+    for off in gpt_signature_sites(src)? {
+        cleared.push(off);
+        if off.saturating_add(GPT_SIGNATURE.len() as u64) <= head.len() as u64 {
+            let at = off as usize;
+            head[at..at + GPT_SIGNATURE.len()].fill(0);
+        } else {
+            src.write_at(off, &[0u8; GPT_SIGNATURE.len()])?;
         }
     }
     src.write_at(0, &head)?;
@@ -365,11 +406,12 @@ pub fn create_mbr(src: &mut WriteSource) -> io::Result<()> {
     src.read_at(0, &mut got).map_err(|e| {
         io::Error::new(e.kind(), format!("MBR read-back failed: {e} — the write may not have landed"))
     })?;
-    if got != lba0 {
+    if got != head[..lba0.len()] {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "MBR differs from what was written — the device or image layer dropped the write",
-        ));
+        )
+        .into());
     }
     for at in cleared {
         let mut sig = [0u8; GPT_SIGNATURE.len()];
@@ -378,7 +420,8 @@ pub fn create_mbr(src: &mut WriteSource) -> io::Result<()> {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!("GPT signature at byte {at} was not cleared — the device or image layer dropped the write"),
-            ));
+            )
+            .into());
         }
     }
     Ok(())

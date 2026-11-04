@@ -27,24 +27,28 @@ pub(crate) enum ImageLoopPolicy {
     AllowDm,
 }
 
-/// 已建立的目标设备：loop 由它自己撤销。存在的意义是把"建立"和"撤销"绑成一个
-/// 对象——写路径要在设备就绪之后、第一次不可回滚的写之前做决定（如 mkfs 的屏障），
-/// 那一步必须发生在 `attach_loop` 之后、`f(&dev)` 之前，而不是在这个函数外面
-pub(crate) struct ScopeDevice {
-    path: String,
-    is_loop: bool,
+/// 已建立的目标设备：所有权在构造点确定为二态。
+/// 存在的意义是把"建立"和"撤销"绑成一个对象——写路径要在设备就绪之后、第一次不可回滚的写之前做决定
+/// （如 mkfs 的屏障），那一步必须发生在 `attach_loop` 之后、`f(&dev)` 之前，而不是在这个函数外面
+pub(crate) enum ScopeDevice {
+    /// 本工具 attach 的 loop 映射：`Drop` 撤销
+    Created { path: String },
+    /// 外部既有设备：块设备分区节点、整盘节点，或正被别的栈持有的 loop。`Drop` 不触碰
+    Existing { path: String },
 }
 
 impl ScopeDevice {
     pub(crate) fn path(&self) -> &str {
-        &self.path
+        match self {
+            Self::Created { path } | Self::Existing { path } => path,
+        }
     }
 }
 
 impl Drop for ScopeDevice {
     fn drop(&mut self) {
-        if self.is_loop {
-            release_loop(&self.path);
+        if let Self::Created { path } = self {
+            release_loop(path);
         }
     }
 }
@@ -120,7 +124,8 @@ where
     f(dev.path())
 }
 
-/// 建立目标设备并确认它没有被别的栈占用；返回时设备已就绪，`drop` 即撤销。
+/// 建立目标设备并确认它没有被别的栈占用；返回时设备已就绪。
+/// 返回值的二态记录所有权：只有本工具新建的映射会在 `drop` 时撤销。
 /// 写路径需要在"设备已建立、还没写第一个字节"这个位置上做决定（如 mkfs 的屏障），
 /// 那一步只有在这里拿得到设备句柄
 pub(crate) fn resolve_scope_device(
@@ -175,7 +180,7 @@ pub(crate) fn resolve_scope_device(
                     }
                 }
                 require_unmounted(&dev)?;
-                Ok(ScopeDevice { path: dev, is_loop: false })
+                Ok(ScopeDevice::Existing { path: dev })
             }
             DeviceScope::Whole => {
                 let dev = src.path.to_string_lossy().into_owned();
@@ -189,7 +194,7 @@ pub(crate) fn resolve_scope_device(
                     crate::dev::ensure_node_is_device(Path::new(&dev), &sysdir).map_err(FsError::from)?;
                 }
                 require_unmounted(&dev)?;
-                Ok(ScopeDevice { path: dev, is_loop: false })
+                Ok(ScopeDevice::Existing { path: dev })
             }
             DeviceScope::Range(..) => {
                 let loopdev = attach_loop(src, off, len)?;
@@ -198,7 +203,7 @@ pub(crate) fn resolve_scope_device(
                     release_loop(&loopdev);
                     return Err(e);
                 }
-                Ok(ScopeDevice { path: loopdev, is_loop: true })
+                Ok(ScopeDevice::Created { path: loopdev })
             }
         };
     }
@@ -241,19 +246,28 @@ pub(crate) fn resolve_scope_device(
     }
     // LVM 收尾（pvresize/lvextend）放行 dm 持有者，并在**同一段字节**上复用这只映射：
     // 那块 PV 正被活动 VG 的 LV 经它使用着。对同一段字节再建第二只 loop 会让 LVM 把它
-    // 看成两个节点（duplicate PV），其中一个上的 pvresize 静默无效。表已按新长度写好，
-    // 故把这只 loop 已有的数据上限抬到本次请求的区间，全程不经第二个映射。
-    // 复用只在 offset 相同（即这只 loop 本来就从分区起点开始）时成立；别的布局（整盘
-    // `-P` 映射等）的容量语义由持有它的栈决定，本工具不改写它，仍按原有路径另建映射
+    // 看成两个节点（duplicate PV），其中一个上的 pvresize 静默无效。
+    // 复用只在映射区间与本次请求完全一致时成立：需要改 `lo_sizelimit` 才成立的复用会改动
+    // 外部栈持有的设备，而 `Existing` 的 Drop 不撤销任何东西、这里也没有恢复点，故拒绝，
+    // 由持有它的栈自行解绑重绑。offset 不同（整盘 `-P` 映射等）的容量语义由持有它的栈决定，
+    // 本工具不改写它，仍按原有路径另建映射
     #[cfg(target_os = "linux")]
     if let Some(dev) = reusable {
         let map = loop_mapping_of_node(Path::new(&dev))?.ok_or_else(|| {
             FsError::CommandFailed(format!("{dev} is held by a stack but reports no backing file"))
         })?;
         if map.offset == off {
-            set_loop_sizelimit(Path::new(&dev), off, len)?;
+            if !mapping_covers(&map, off, len) {
+                return Err(FsError::invalid(format!(
+                    "{dev} is a loop onto this image and is held by an external stack; it maps {} bytes \
+                     from byte {off}, but this command needs {len} bytes — diskedit does not change the size \
+                     limit of a loop it does not own (nothing would restore it); detach that loop \
+                     (`losetup -d {dev}`) and let the stack map it again, then retry",
+                    map.sizelimit
+                )));
+            }
             verify_loop_mapping(src, &dev, off, len)?;
-            return Ok(ScopeDevice { path: dev, is_loop: true });
+            return Ok(ScopeDevice::Existing { path: dev });
         }
     }
     let loopdev = attach_loop(src, off, len)?;
@@ -262,7 +276,7 @@ pub(crate) fn resolve_scope_device(
         release_loop(&loopdev);
         return Err(e);
     }
-    Ok(ScopeDevice { path: loopdev, is_loop: true })
+    Ok(ScopeDevice::Created { path: loopdev })
 }
 
 /// 在分区上执行操作的统一入口。
@@ -367,4 +381,122 @@ pub(crate) fn partition_byte_range(src: &FileSource, part: u32) -> Result<(u64, 
         crate::outcome::Fail::Refused(m) => FsError::invalid(m),
         crate::outcome::Fail::Infra(m) | crate::outcome::Fail::Failed(m) => FsError::Io(io::Error::other(m)),
     })
+}
+
+#[cfg(test)]
+mod ownership_tests {
+    #![allow(clippy::let_underscore_must_use)] // 清理临时镜像与 loop 有意忽略失败
+    use super::*;
+
+    /// Drop 只撤销本工具建立的映射：外部既有设备（含被别的栈持有的 loop）不得被 detach
+    #[test]
+    fn drop_releases_only_self_created_mappings() {
+        let external = ScopeDevice::Existing { path: "/dev/loop-diskedit-external".into() };
+        drop(external);
+        assert!(
+            crate::fsops::take_release_leaks().is_empty(),
+            "an externally owned mapping must not be released by Drop"
+        );
+        let own = ScopeDevice::Created { path: "/dev/loop-diskedit-own".into() };
+        drop(own);
+        assert_eq!(
+            crate::fsops::take_release_leaks().len(),
+            1,
+            "a mapping created by this tool must be released on drop"
+        );
+    }
+
+    /// 复用外部持有的 loop 的唯一放行条件：它已经映射本次请求的整段区间。
+    /// 这一点成立时复用不改动那只设备的任何字段；不成立时的复用必然要写 `lo_sizelimit`
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn external_loop_is_reused_only_when_it_already_covers_the_request() {
+        let map = |sizelimit| LoopMapping {
+            backing: LoopBacking { dev: 7, ino: 42, rdev: 0 },
+            offset: 4096,
+            sizelimit,
+        };
+        assert!(mapping_covers(&map(8192), 4096, 8192), "the exact range the loop already maps");
+        // 这两个是旧实现在返回 Existing 之前会去抬高 / 拒绝收缩的两种输入：
+        // 抬高改写了外部设备的 lo_sizelimit 且没有恢复点
+        assert!(!mapping_covers(&map(4096), 4096, 8192), "raising the limit would rewrite a loop this tool does not own");
+        assert!(!mapping_covers(&map(16384), 4096, 8192), "a wider existing mapping is not the requested range");
+    }
+
+    /// 真实 loop + dm 持有者：复用路径拒绝时，那只 loop 的 sizelimit 一个字都不能变。
+    /// 需要 root、`/dev/loop-control` 与 dmsetup，缺任何一项都跳过（不静默通过：跳过前打印原因）
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn reuse_of_a_dm_held_loop_leaves_its_size_limit_untouched() {
+        use std::process::Command;
+        // 非 root 无法建 loop / dm：跳过
+        if unsafe { libc::geteuid() } != 0 {
+            eprintln!("skip: root required for a real loop and dm holder");
+            return;
+        }
+        let img = std::env::temp_dir().join(format!("diskedit_reuse_{}.img", std::process::id()));
+        let _ = std::fs::remove_file(&img);
+        std::fs::write(&img, vec![0u8; 8 * 1024 * 1024]).unwrap();
+        let src = match crate::dev::FileSource::open(&img, None) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("skip: cannot open the test image: {e}");
+                let _ = std::fs::remove_file(&img);
+                return;
+            }
+        };
+        // 外部已经持有的映射：4 MiB 上限，dm-linear 建在它上面
+        let out = match Command::new("losetup")
+            .args(["-f", "--show", "-o", "0", "--sizelimit", "4194304"])
+            .arg(&img)
+            .output()
+        {
+            Ok(o) if o.status.success() => o,
+            Ok(o) => {
+                eprintln!("skip: losetup failed: {}", String::from_utf8_lossy(&o.stderr).trim());
+                let _ = std::fs::remove_file(&img);
+                return;
+            }
+            Err(e) => {
+                eprintln!("skip: losetup not runnable: {e}");
+                let _ = std::fs::remove_file(&img);
+                return;
+            }
+        };
+        let dev = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        let dm = format!("diskedit-reuse-{}", std::process::id());
+        let made = Command::new("dmsetup")
+            .args(["create", &dm, "--table", &format!("0 8192 linear {dev} 0")])
+            .status()
+            .is_ok_and(|s| s.success());
+        if !made {
+            eprintln!("skip: dmsetup cannot create a holder over {dev}");
+            release_loop(&dev);
+            let _ = std::fs::remove_file(&img);
+            return;
+        }
+        let before = loop_mapping_of_node(Path::new(&dev)).unwrap().unwrap();
+        assert_eq!(before.sizelimit, 4194304, "the external mapping starts at its own size limit");
+        let refused = resolve_scope_device(
+            &src,
+            &DeviceScope::Range(0, 6 * 1024 * 1024),
+            0,
+            6 * 1024 * 1024,
+            ImageLoopPolicy::AllowDm,
+        );
+        let after = loop_mapping_of_node(Path::new(&dev)).unwrap().unwrap();
+        // 先清理再断言：任何一条断言失败都不留 loop / dm / 镜像
+        let _ = Command::new("dmsetup").args(["remove", &dm]).status();
+        release_loop(&dev);
+        let _ = std::fs::remove_file(&img);
+        assert_eq!(after.sizelimit, 4194304, "the size limit of an externally held loop must not be raised");
+        assert_eq!(after.offset, before.offset, "the mapping must not be rewritten");
+        match refused {
+            Err(FsError::InvalidArgument(m)) => {
+                assert!(m.contains("does not change the size limit"), "the refusal must say why: {m}")
+            }
+            Err(other) => panic!("must be refused as a request/state mismatch, got {other:?}"),
+            Ok(_) => panic!("raising the size limit of an externally held loop must be refused"),
+        }
+    }
 }

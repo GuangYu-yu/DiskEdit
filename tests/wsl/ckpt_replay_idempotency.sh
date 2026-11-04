@@ -18,7 +18,7 @@ track_file "$T"
 truncate -s 1G "$T"
 $BF new "$T" --yes >/dev/null
 $BF create "$T" --size 300M --name p1 >/dev/null
-$BF create "$T" --size 300M --name p2 --fs ext4 >/dev/null
+$BF create "$T" --size 300M --name p2 --fs ext4 --yes >/dev/null
 truncate -s 1200M "$T"   # 预扩容器 → backup GPT/PMBR 过期 → 触发 repair 路径
 LD=$(lo_attach "$T")
 mount_at "${LD}p2" /testmnt && dd if=/dev/urandom of=/testmnt/b2.bin bs=1M count=250 2>/dev/null; umount /testmnt; MD2=$(mdsum "${LD}p2"); lo_detach "$LD"
@@ -47,8 +47,8 @@ track_file "$T"
 truncate -s 1G "$T"
 $BF new "$T" --yes >/dev/null
 $BF create "$T" --size 300M --name p1 >/dev/null
-$BF create "$T" --size 200M --name p2 --fs swap >/dev/null
-$BF create "$T" --size 300M --name p3 --fs ext4 >/dev/null
+$BF create "$T" --size 200M --name p2 --fs swap --yes >/dev/null
+$BF create "$T" --size 300M --name p3 --fs ext4 --yes >/dev/null
 LD=$(lo_attach "$T")
 UUID_BEFORE=$(blkid -s UUID -o value "${LD}p2")
 mount_at "${LD}p3" /testmnt && dd if=/dev/urandom of=/testmnt/b3.bin bs=1M count=250 2>/dev/null; umount /testmnt; MD3=$(mdsum "${LD}p3"); lo_detach "$LD"
@@ -75,7 +75,7 @@ rm -f "$T" "$T"$SIDECAR_GLOB
 track_file "$T"
 truncate -s 2G "$T"
 $BF new "$T" --yes >/dev/null
-$BF create "$T" --size 900M --name big --fs ext4 >/dev/null
+$BF create "$T" --size 900M --name big --fs ext4 --yes >/dev/null
 LD=$(lo_attach "$T")
 lo_waitpart "${LD}p1" || { echo "p1 part node not ready"; rc=1; }
 mount_at "${LD}p1" /testmnt && dd if=/dev/urandom of=/testmnt/blob.bin bs=1M count=800 2>/dev/null
@@ -83,16 +83,16 @@ umount /testmnt
 MD=$(mdsum "${LD}p1")
 lo_detach "$LD"
 # 2000896..3844095 = 2000896 起 1843200 扇区（900MiB，1MiB 对齐），与源区 2048..1845247 不相交
-DISKEDIT_FAULT=rs-chunk:200 $BF resize-part "$T":1 --start 2000896 --end 3844095 --chunk-size 1 >/dev/null 2>&1
+DISKEDIT_FAULT=rs-chunk:200 $BF resize-part "$T":1 --start 2000896 --end 3844095 --chunk-size 1 --yes >/dev/null 2>&1
 echo "aborted (expected); ckpt exists: $([ -f "$T$CKPT_SUFFIX" ] && echo yes || echo no)"
 # 头部清零：不可读的现场必须硬拒（30）并指向 abandon，不能当作"没有现场"静默重跑
 dd if=/dev/zero of="$T$CKPT_SUFFIX" bs=1 count=64 conv=notrunc 2>/dev/null
-OUT=$($BF resize-part "$T":1 --start 2000896 --end 3844095 --chunk-size 1 2>&1); E=$?
+OUT=$($BF resize-part "$T":1 --start 2000896 --end 3844095 --chunk-size 1 --yes 2>&1); E=$?
 echo "rerun exit=$E : $(echo "$OUT" | head -1)"
 exp "$E" 30 "不可读 ckpt 时重跑被拒（不得静默重跑）"
 echo "$OUT" | grep -q "is unreadable" && echo "$OUT" | grep -q "diskedit abandon" && echo "G UNREADABLE-CKPT REPORT OK" || { echo "G report missing (BAD)"; rc=1; }
 exp "$($B abandon "$T" --yes >/dev/null 2>&1; echo $?)" 0 "abandon 释放不可读现场"
-OUT=$($BF resize-part "$T":1 --start 104448 --end 1947647 --chunk-size 1 2>&1); exp "$?" 0 "abandon 后重跑完成"
+OUT=$($BF resize-part "$T":1 --start 104448 --end 1947647 --chunk-size 1 --yes 2>&1); exp "$?" 0 "abandon 后重跑完成"
 LD=$(lo_attach "$T")
 lo_waitpart "${LD}p1" || { echo "p1 part node not ready"; rc=1; }
 assert_eq "$(mdsum "${LD}p1")" "$MD" "G 重跑后数据逐字节一致"

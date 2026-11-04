@@ -41,7 +41,7 @@ $B info "$T" | grep -o '"num":1,"first_lba":[0-9]*,"last_lba":[0-9]*'
 LD=$(lo_attach "$T")
 mount_at "${LD}p1" /testmnt && { cat /testmnt/m.txt; e2fsck -fn "${LD}p1" >/dev/null 2>&1 && echo "grow e2fsck clean" || { echo "grow e2fsck ISSUES"; rc=1; }; umount /testmnt 2>/dev/null; }
 lo_detach "$LD"
-$B resize "$T":1 30M >/dev/null 2>&1; echo "shrink exit=$?"
+$B resize "$T":1 30M --yes >/dev/null 2>&1; echo "shrink exit=$?"
 LD=$(lo_attach "$T")
 mount_at "${LD}p1" /testmnt && { cat /testmnt/m.txt; umount /testmnt 2>/dev/null; }
 e2fsck -fn "${LD}p1" >/dev/null 2>&1 && echo "shrink e2fsck clean" || { echo "shrink e2fsck ISSUES"; rc=1; }

@@ -102,14 +102,14 @@ qemu_boot baseline 60
 
 echo
 echo "########## 2: 搬移 boot 分区（内核所在）后启动 ##########"
-$B move "$T":2 --start 2600000 --chunk-size 4 >/dev/null 2>&1; exp "$?" 0 "搬移 boot 分区"
+$B move "$T":2 --start 2600000 --chunk-size 4 --yes >/dev/null 2>&1; exp "$?" 0 "搬移 boot 分区"
 $B info "$T" | grep -o '"num":2,[^}]*}'
 qemu_boot after-move 60
 
 echo
 echo "########## 3: 搬移 ESP（GRUB 所在）后启动 ##########"
 # boot 搬走后其原位置(411648..1640447)空闲，ESP 移入其中一段
-$B move "$T":1 --start 411648 --chunk-size 4 >/dev/null 2>&1; exp "$?" 0 "搬移 ESP 分区"
+$B move "$T":1 --start 411648 --chunk-size 4 --yes >/dev/null 2>&1; exp "$?" 0 "搬移 ESP 分区"
 $B info "$T" | grep -o '"num":1,[^}]*}'
 qemu_boot after-esp-move 60
 
@@ -123,9 +123,9 @@ echo
 echo "########## 5: 搬移中断 → 续传完成 → 启动（端到端）##########"
 setup   # 重建可引导盘
 # resize_part 路径的确定性崩溃注入（第 20 个 chunk 落盘后 abort）
-DISKEDIT_FAULT=rs-chunk:20 $BF move "$T":2 --start 2600000 --chunk-size 4 >/dev/null 2>&1
+DISKEDIT_FAULT=rs-chunk:20 $BF move "$T":2 --start 2600000 --chunk-size 4 --yes >/dev/null 2>&1
 exp "$?" 134 "注入中断（SIGABRT）"
-OUT=$($B move "$T":2 --start 2600000 --chunk-size 4 2>&1); E=$?
+OUT=$($B move "$T":2 --start 2600000 --chunk-size 4 --yes 2>&1); E=$?
 RESUMED=$(echo "$OUT" | grep -o 'resuming at chunk [0-9]*')
 echo "  resume: $RESUMED"
 exp "$E" 0 "续传重跑"

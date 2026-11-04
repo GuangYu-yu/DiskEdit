@@ -34,7 +34,7 @@ fn resize_part_crash_leaves_a_resumable_transaction() {
     let (img, journal, ckpt) = stage("rsc");
     let img_s = img.to_str().unwrap();
     let target = format!("{img_s}:1");
-    let argv = ["resize-part", target.as_str(), "--start", "8192", "--end", "10239"];
+    let argv = ["resize-part", target.as_str(), "--start", "8192", "--end", "10239", "--yes"];
 
     let (c, e) = run_fault("rs-before-commit", &argv);
     assert_ne!(c, 0, "the injected abort must not look like success: {e}");
@@ -64,7 +64,7 @@ fn ntfs_hidden_sectors_fixed_when_resuming_after_commit() {
     let (img, journal, ckpt) = stage("nhs");
     let img_s = img.to_str().unwrap();
     let target = format!("{img_s}:1");
-    let argv = ["resize-part", target.as_str(), "--start", "8192", "--end", "10239"];
+    let argv = ["resize-part", target.as_str(), "--start", "8192", "--end", "10239", "--yes"];
 
     // 手造 NTFS 引导扇区：OEM ID @3 供 identify 认类型，HiddenSectors(u32 LE) @0x1C 记旧起点
     let boot = |hidden: u32| {
@@ -114,7 +114,7 @@ fn move_ntfs_hidden_sectors_fixed_when_resuming_after_commit() {
     use std::io::{Read, Seek, Write};
     let (img, journal, ckpt) = stage("mhs");
     let img_s = img.to_str().unwrap();
-    let argv = ["apply", img_s, "--grow", "1", "--no-fs"];
+    let argv = ["apply", img_s, "--grow", "1", "--no-fs", "--yes"];
 
     // 挡路分区 2（apply 只搬目标右侧的分区）：手造 NTFS 引导扇区，
     // OEM ID @3 供 identify 认类型，HiddenSectors(u32 LE) @0x1C 记旧起点
@@ -177,7 +177,7 @@ fn foreign_resize_slot_refuses_resize_and_copy() {
     let (img, journal, ckpt) = stage("frs");
     let img_s = img.to_str().unwrap();
     let target = format!("{img_s}:1");
-    let argv = ["resize-part", target.as_str(), "--start", "8192", "--end", "10239"];
+    let argv = ["resize-part", target.as_str(), "--start", "8192", "--end", "10239", "--yes"];
 
     let (c, e) = run_fault("rs-before-commit", &argv);
     assert_ne!(c, 0, "the injected abort must not look like success: {e}");
@@ -208,7 +208,7 @@ fn copy_crash_leaves_a_transaction_that_only_abandon_can_release() {
     let img_s = img.to_str().unwrap();
     let target = format!("{img_s}:1");
 
-    let (c, e) = run_fault("copy-before-commit", &["copy", target.as_str(), "--start", "20480", "--chunk-size", "1"]);
+    let (c, e) = run_fault("copy-before-commit", &["copy", target.as_str(), "--start", "20480", "--chunk-size", "1", "--yes"]);
     assert_ne!(c, 0, "the injected abort must not look like success: {e}");
     assert!(journal.exists(), "the history must survive the crash: {e}");
     assert!(!ckpt.exists(), "copy leaves no checkpoint to resume from: {e}");
@@ -298,7 +298,7 @@ fn self_overlap_delta_below_chunk_crash_resume_is_byte_exact() {
     let img_s = img.to_str().unwrap();
     let ckpt = sidecar(img.parent().unwrap(), "c.img", CHECKPOINT_SUFFIX);
     // 位移 1MiB（--start 4096，已对齐）< chunk 2MiB：chunk 收敛到 1MiB，共 4 块
-    let argv = ["move", &format!("{img_s}:1"), "--start", "4096", "--chunk-size", "2"];
+    let argv = ["move", &format!("{img_s}:1"), "--start", "4096", "--chunk-size", "2", "--yes"];
     let (c, e) = run_fault("rs-chunk:2", &argv);
     assert_ne!(c, 0, "the injected abort must not look like success: {e}");
     assert!(ckpt.exists(), "a mid-move crash must leave a resumable checkpoint: {e}");
@@ -318,7 +318,7 @@ fn self_overlap_delta_above_chunk_crash_resume_is_byte_exact() {
     let img_s = img.to_str().unwrap();
     let ckpt = sidecar(img.parent().unwrap(), "c.img", CHECKPOINT_SUFFIX);
     // 位移 2MiB（--start 6144，已对齐）> chunk 1MiB，共 4 块
-    let argv = ["move", &format!("{img_s}:1"), "--start", "6144", "--chunk-size", "1"];
+    let argv = ["move", &format!("{img_s}:1"), "--start", "6144", "--chunk-size", "1", "--yes"];
     let (c, e) = run_fault("rs-chunk:3", &argv);
     assert_ne!(c, 0, "the injected abort must not look like success: {e}");
     assert!(ckpt.exists(), "a mid-move crash must leave a resumable checkpoint: {e}");

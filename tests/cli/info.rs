@@ -97,6 +97,7 @@ fn info_names_an_extended_container_as_unenumerated() {
 /// damaged、disk_guid、label、partitions、sector_size、size_bytes。
 /// `last_part` 只在有可操作条目时出现（两分支同规则）。按同一 schema 消费 JSON 的调用方
 /// 不该因盘型不同而缺键——少写一个字段不报错，只会让它拿到空值
+#[cfg(unix)]
 #[test]
 fn info_json_top_level_keys_are_consistent_across_label_branches() {
     let dir = std::env::temp_dir().join(format!("diskedit_keys_{}", std::process::id()));
@@ -152,6 +153,7 @@ fn info_json_top_level_keys_are_consistent_across_label_branches() {
 
 /// `:last` 指最后一个可操作分区（GPT 上即末端最靠后的已用条目）：`info` 报告 `last_part`，
 /// 写命令上 `:last` 与具体号等价，而只报告整盘布局的命令明确拒绝分区指代
+#[cfg(unix)]
 #[test]
 fn last_partref_resolves_like_the_explicit_number() {
     let dir = std::env::temp_dir().join(format!("diskedit_last_{}", std::process::id()));
@@ -205,6 +207,7 @@ fn last_partref_resolves_like_the_explicit_number() {
 
 /// 真实扩容路径：truncate 预扩使 backup GPT 与保护 MBR 同时过期 ——
 /// info 只报告、plan 只记录（两者都不写盘），写入命令才修复（搬备份头 + 重写 PMBR）
+#[cfg(unix)]
 #[test]
 fn stale_after_enlarge_info_plan_write() {
     use std::io::Write as _;

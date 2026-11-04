@@ -66,8 +66,10 @@ pub(crate) const HELP: &str = r#"diskedit resize <TARGET>[:N] <SIZE> [OPTIONS]
                     are under Constraints
     --sector-size N logical sector size override for raw images
                     (power of two, 512..=65536)
-    --yes           acknowledge the action; the top-level help lists which
-                    commands ask
+    --yes           acknowledge the action: required to shrink, to enlarge when
+                    the resulting layout needs relocation, and when other
+                    partitions would be dragged along; the top-level help lists
+                    the commands that ask
 
   Constraints:
     --no-fs   refused on an LVM PV (the PV chain has no filesystem step of
@@ -92,7 +94,10 @@ pub(crate) const HELP: &str = r#"diskedit resize <TARGET>[:N] <SIZE> [OPTIONS]
   --start/--end are rejected here: resizing does not relocate partitions —
   use `move` or `resize-part --start/--end`."#;
 
-const CONFIRM_RELOCATION: &str = "this resizes by relocating the partitions listed above — review and re-run with --yes";
+/// 搬移计划实际要动多少分区：delta 为 0 的条目不挪位置，故不计入
+fn relocating_parts(plan: &movepart::Plan) -> usize {
+    plan.moves.iter().filter(|m| m.delta_lba != 0).count()
+}
 
 /// resize 的一键入口。SIZE：`10G`=绝对值、`+2G`/`-500M`=增量、`grow`=吃满右侧可用区
 /// （挡路分区须 --allow-move，搬移计划须 --yes 确认）。LVM PV 扩容自动 pvresize，
@@ -167,7 +172,7 @@ pub(crate) fn cmd_resize(a: &Args) -> crate::outcome::Outcome {
     // 目标长度不在锁前算：`+N` 锚定当前尺寸、`grow` 锚定右侧空闲，都由 gpt_decider 在
     // 在线自己的锁下、按重解析的盘上几何重新解析（见其注释）
     #[cfg(target_os = "linux")]
-    if let Some(o) = resize_online(a, &src, part, is_pv, gpt_decider(size, part, is_pv)) {
+    if let Some(o) = resize_online(a, &src, part, is_pv, gpt_decider(a.yes, size, part, is_pv)) {
         return o;
     }
 
@@ -229,6 +234,21 @@ pub(crate) fn cmd_resize(a: &Args) -> crate::outcome::Outcome {
     // 占用闸在 movepart 的 prepare 层（本分支的每条路径都经 prepare_resize/prepare_apply），
     // 不在命令层重复判一次
     if grow_to_end {
+        // 本分区已有一份单分区 resize 现场：请求与盘上现状是否同一件事、停在哪一步，
+        // 只有 resize_part 内的 classify_restore 一份判据。这里若再用右侧空闲与末端
+        // 另判一次，会在"表已提交、FS 收尾未做"的现场上把续跑拒成 nothing to grow
+        //（`grow` 的目标就是 last_usable，提交后右侧必无空闲）
+        if resumed == crate::transaction::ResumeKind::PartitionResize {
+            // 目标区间取记录里的那一份：作业可能已提交，现算的右边界不是同一次请求
+            let (slot, _) = movepart::read_checkpoint(&src, &g).unwrap_or_else(|f| bail_fail(f));
+            let movepart::CheckpointSlot::Resize(c) = slot else {
+                bail_fail(Fail::infra("the partition-resize checkpoint is not in its slot"));
+            };
+            let (target_start, target_end) = (c.new_start, c.new_end);
+            let (chunk, mut logger) = chunk_logger(a, &src, g.disk_guid());
+            let o = settle_layout(movepart::resize_part(&mut src, &g, repair, part, target_start, target_end, chunk, a.no_fs, is_pv, lv_sel.clone(), &mut |m| logger.log(m)), &src);
+            return finish_resize(a, o, Some(&mut src), part, is_pv, is_block, cur_bytes);
+        }
         let free = free_right_gpt(&g, part);
         // 右侧有空闲且没有未收尾的搬移作业 → 纯扩容。若作业未收尾，则"右侧已空"很可能
         // 正是搬了一半的结果，走普通 resize_part 会跳过剩余搬移与 swap 重建等收尾
@@ -270,9 +290,10 @@ pub(crate) fn cmd_resize(a: &Args) -> crate::outcome::Outcome {
         // 续跑的收尾仍须 --yes：盘上状态已与上次请求时不同，写盘前再确认一次；
         // --yes 一并覆盖"未确认的续跑"与"新的搬移"两种进入方式
         crate::cmd::plan::print_plan(&plan, start).unwrap_or_else(|e| bail_fail(Fail::infra(format!("plan failed: {e}"))));
-        if !a.yes {
-            bail_fail(Fail::refused(CONFIRM_RELOCATION));
-        }
+        crate::cmd::confirm::gate(a.yes, crate::cmd::confirm::Impact {
+            relocating: relocating_parts(&plan),
+            ..Default::default()
+        });
         let (chunk, mut logger) = chunk_logger(a, &src, g.disk_guid());
         let o = settle_layout(movepart::apply(&mut src, &g, &plan, chunk, a.no_fs, is_pv, lv_sel.clone(), &mut |m| logger.log(m)), &src);
         finish_resize(a, o, Some(&mut src), part, is_pv, is_block, cur_bytes)
@@ -324,13 +345,20 @@ pub(crate) fn cmd_resize(a: &Args) -> crate::outcome::Outcome {
                 Err(f) => bail_fail(f),
             };
             crate::cmd::plan::print_plan(&plan, start).unwrap_or_else(|e| bail_fail(Fail::infra(format!("plan failed: {e}"))));
-            if !a.yes {
-                bail_fail(Fail::refused(CONFIRM_RELOCATION));
-            }
+            crate::cmd::confirm::gate(a.yes, crate::cmd::confirm::Impact {
+                relocating: relocating_parts(&plan),
+                ..Default::default()
+            });
             let (chunk, mut logger) = chunk_logger(a, &src, g.disk_guid());
             let o = settle_layout(movepart::apply(&mut src, &g, &plan, chunk, a.no_fs, is_pv, lv_sel.clone(), &mut |m| logger.log(m)), &src);
             return finish_resize(a, o, Some(&mut src), part, is_pv, is_block, cur_bytes);
         }
+        // 缩小会截短分区，文件系统同步缩小：被截掉的字节 `undo` 找不回来。
+        // 纯扩容只改表，不在这里要求授权
+        crate::cmd::confirm::gate(a.yes, crate::cmd::confirm::Impact {
+            shrinking,
+            ..Default::default()
+        });
         let (chunk, mut logger) = chunk_logger(a, &src, g.disk_guid());
         let o = settle_layout(movepart::resize_part(&mut src, &g, repair, part, start, new_end, chunk, a.no_fs, is_pv, lv_sel.clone(), &mut |m| logger.log(m)), &src);
         finish_resize(a, o, Some(&mut src), part, is_pv, is_block, cur_bytes)

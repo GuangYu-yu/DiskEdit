@@ -135,6 +135,13 @@ impl RsCheckpoint<crate::dev::LiveProof> {
 
 impl RsCheckpoint<crate::dev::IdentityProof> {
     pub(crate) fn deserialize(b: &[u8], lim: &GeometryLimits) -> io::Result<Self> {
+        Self::parse(b, Some(lim))
+    }
+
+    /// 盘上字节的唯一解析入口。`None` 表示只做身份判读：布局、截断与 CRC 照常校验，
+    /// 但跳过依赖已验证几何与进度的判据——身份判读只问"这份现场属于哪个目标"，
+    /// 不要求调用方已经解析过目标几何
+    pub(crate) fn parse(b: &[u8], lim: Option<&GeometryLimits>) -> io::Result<Self> {
         // 前置只护边界检查 get 之前的直接切片：magic(8) + version(4)。其后字段逐个经
         // get 兜底截断，尾部 CRC 读也走 get——截断一律 InvalidData 而非 panic
         if b.len() < 12 || &b[0..8] != CKPT2_MAGIC {
@@ -153,10 +160,6 @@ impl RsCheckpoint<crate::dev::IdentityProof> {
         }
         let disk_size = rd64(b, &mut o)?;
         let ss = rd64(b, &mut o)?;
-        // 同 Checkpoint：ss 进入写地址换算，须与目标几何一致
-        if ss != lim.sector_size {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "resize checkpoint sector size differs from target geometry"));
-        }
         let part = u32::from_le_bytes(b.get(o..o + 4).ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "truncated"))?.try_into().unwrap()); o += 4;
         let old_start = rd64(b, &mut o)?;
         let old_end = rd64(b, &mut o)?;
@@ -203,7 +206,8 @@ impl RsCheckpoint<crate::dev::IdentityProof> {
         {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "resize checkpoint CRC mismatch"));
         }
-        // 字段一致性：区间端点不得倒挂，chunk_bytes 不得为 0（防除零/死循环回放）
+        // 字段一致性：区间端点不得倒挂，chunk_bytes 不得为 0（防除零/死循环回放）。
+        // 这两条不依赖目标几何，身份判读同样执行
         if old_start > old_end || new_start > new_end {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "resize checkpoint range inconsistent"));
         }
@@ -212,28 +216,34 @@ impl RsCheckpoint<crate::dev::IdentityProof> {
         }
         // 分区号与四个 LBA 的边界来自**已验证几何**：分区号上界是该表的条目数（不再是常量
         // 128），LBA 必须落在本容器的可用区内——越界值会在恢复时被当成合法目标写进表，
-        // 或让长度算术在 debug 下溢出（old_end − old_start + 1）
-        if !(1..=lim.entry_count).contains(&part) {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "resize checkpoint partition number invalid"));
-        }
-        if old_start < lim.first_usable_lba
-            || old_end > lim.last_usable_lba
-            || new_start < lim.first_usable_lba
-            || new_end > lim.last_usable_lba
-        {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "resize checkpoint range outside usable area"));
-        }
-        // 进度上界同 Checkpoint：搬移区间的 chunk 总数，块布局取自唯一实现
-        // （见 `move_chunk_layout`）。拷贝总长与搬移循环同口径：move+shrink 只拷新旧
-        // 区间的较小者，两侧一致才不会误判损坏
-        let moved = old_start.abs_diff(new_start);
-        let old_len = old_end - old_start + 1;
-        let copy_len = old_len.min(new_end - new_start + 1);
-        let chunks_limit = move_chunk_layout(copy_len, ss, moved, old_len, chunk_bytes)
-            .map(|(_, count)| count)
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "resize checkpoint chunk count overflow"))?;
-        if chunks_done > chunks_limit {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "implausible resize checkpoint chunk progress"));
+        // 或让长度算术在 debug 下溢出（old_end − old_start + 1）。身份判读不消费这些判据
+        if let Some(lim) = lim {
+            // 同 Checkpoint：ss 进入写地址换算，须与目标几何一致
+            if ss != lim.sector_size {
+                return Err(io::Error::new(io::ErrorKind::InvalidData, "resize checkpoint sector size differs from target geometry"));
+            }
+            if !(1..=lim.entry_count).contains(&part) {
+                return Err(io::Error::new(io::ErrorKind::InvalidData, "resize checkpoint partition number invalid"));
+            }
+            if old_start < lim.first_usable_lba
+                || old_end > lim.last_usable_lba
+                || new_start < lim.first_usable_lba
+                || new_end > lim.last_usable_lba
+            {
+                return Err(io::Error::new(io::ErrorKind::InvalidData, "resize checkpoint range outside usable area"));
+            }
+            // 进度上界同 Checkpoint：搬移区间的 chunk 总数，块布局取自唯一实现
+            // （见 `move_chunk_layout`）。拷贝总长与搬移循环同口径：move+shrink 只拷新旧
+            // 区间的较小者，两侧一致才不会误判损坏
+            let moved = old_start.abs_diff(new_start);
+            let old_len = old_end - old_start + 1;
+            let copy_len = old_len.min(new_end - new_start + 1);
+            let chunks_limit = move_chunk_layout(copy_len, ss, moved, old_len, chunk_bytes)
+                .map(|(_, count)| count)
+                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "resize checkpoint chunk count overflow"))?;
+            if chunks_done > chunks_limit {
+                return Err(io::Error::new(io::ErrorKind::InvalidData, "implausible resize checkpoint chunk progress"));
+            }
         }
         Ok(RsCheckpoint {
             disk_size, ss, part, old_start, old_end, new_start, new_end,
@@ -325,6 +335,12 @@ pub fn resize_part(
         Ok(p) => p,
         Err(f) => return f.into_outcome(),
     };
+    // prepare 的探测（identify/fs_min_bytes）可能耗时良久，此间的盘上表不再等于
+    // 决策依据。首写（阶段 0 的 FS 缩）之前的最后一笔复核读当前表：外部改动拒绝，
+    // 读不出来归基础设施；此刻本次调用尚未写盘，repair 与 execute 的写入都在它之后
+    if let Err(f) = p.g.ensure_entries_unchanged_fail(src) {
+        return f.into_outcome();
+    }
     // 修复先于任何目标写入；放 Fail 域以保住分类（同 apply）
     if let Some(what) = p.repair.describe() {
         if let Err(f) = gpt_policy::apply_repair(src, &p.repair, g.sector_size()) {
@@ -588,14 +604,6 @@ pub(crate) fn execute_resize(
     // 而报成功，只拿阶段 3 的基数就看不见它们
     let pending_before = post.len();
 
-    // 纯扩容（不搬移、无缩容）没有其余 save 落点：FS 步失败或崩溃后，盘上条目已是新
-    // 尺寸，重跑会按 Fresh 算出 old_bytes == new_bytes → Leave 而报成功，FS 永不扩。
-    // 开工即落 ckpt，重跑经 Committed 分支用 ckpt 记录的搬移前区间判 Grow、补试 FS 步；
-    // 成功后照常在收尾撤除
-    if p.fs_action == FsAction::Grow && new_start == old_start && committed_old.is_none() {
-        save(&ckpt)?;
-    }
-
     // ---- 阶段 0：缩容 FS 先缩（只做一次）----
     // 本块只在 !no_fs 时可达（no_fs + 缩容 + FS 未缩已在上面整体拒绝），因此
     // "能否缩 / 类型是否认得 / 工具是否齐备"三重判据已由上面的 check_shrink 一次性给出。
@@ -628,6 +636,9 @@ pub(crate) fn execute_resize(
                         "the filesystem size still cannot be read back, so the earlier shrink cannot be confirmed".to_string(),
                         "inspect the filesystem size by hand, then re-run the same command".to_string(),
                     ));
+                    if let Err(why) = checkpoint_may_be_removed(false, pending_before, post.len(), p.defer_ckpt || p.lvm.is_some()) {
+                        log_ckpt_retention(log, &p.ckpt_path, why);
+                    }
                     return Ok(());
                 }
             }
@@ -657,10 +668,25 @@ pub(crate) fn execute_resize(
             // 与搬移后的字节互相覆盖，改表也等于在挂载中挪动分区。残留挂载已随
             // `pending` 浮出，重跑时 prepare 的占用闸会因它拒绝，直到用户按提示卸载
             if release_failed {
+                if let Err(why) = checkpoint_may_be_removed(false, pending_before, post.len(), p.defer_ckpt || p.lvm.is_some()) {
+                    log_ckpt_retention(log, &p.ckpt_path, why);
+                }
                 return Ok(());
             }
             fault_rs_after_fs_shrink();
         }
+    }
+
+    // 阶段 1 的首次写盘。阶段 0 的缩容已在它自己的首写之前由 resize_part 复核过；
+    // 这里再读一次当前表，覆盖阶段 0 期间的盘上改动，避免按过时几何搬移数据
+    p.g.ensure_entries_unchanged(src)?;
+
+    // 纯扩容（不搬移、无缩容）没有其余 save 落点：FS 步失败或崩溃后，盘上条目已是新
+    // 尺寸，重跑会按 Fresh 算出 old_bytes == new_bytes → Leave 而报成功，FS 永不扩。
+    // 复核通过后、写表之前落 ckpt，重跑经 Committed 分支用 ckpt 记录的搬移前区间判
+    // Grow、补试 FS 步；成功后照常在收尾撤除
+    if p.fs_action == FsAction::Grow && new_start == old_start && committed_old.is_none() {
+        save(&ckpt)?;
     }
 
     // ---- 阶段 1：数据搬移（方向感知 + chunk 续传）----
@@ -813,17 +839,22 @@ pub(crate) fn execute_resize(
             "re-run `diskedit resize` on the same target to finish the PV/LV chain (the checkpoint holds the recorded extent count)".to_string(),
         ));
     }
-    if !p.defer_ckpt && p.lvm.is_none() && post.len() == pending_before && !crate::dev::remove_recovery_file(&p.ckpt_path) {
-        // 撤不掉就不算收干净：残留现场会让下一次 resize 被判 Divergent 而拒绝
-        post.pending(Pending::new(
-            part,
-            PendingKind::Other("checkpoint"),
-            format!(
-                "the job finished but its checkpoint {} could not be removed — remove it by hand",
-                p.ckpt_path.display()
-            ),
-            String::new(),
-        ));
+    // 删除失败同样进待办：残留现场会让下一次 resize 被判 Divergent 而拒绝
+    match checkpoint_may_be_removed(true, pending_before, post.len(), p.defer_ckpt || p.lvm.is_some()) {
+        Ok(()) => {
+            if !crate::dev::remove_recovery_file(&p.ckpt_path) {
+                post.pending(Pending::new(
+                    part,
+                    PendingKind::Other("checkpoint"),
+                    format!(
+                        "the job finished but its checkpoint {} could not be removed — remove it by hand",
+                        p.ckpt_path.display()
+                    ),
+                    String::new(),
+                ));
+            }
+        }
+        Err(why) => log_ckpt_retention(log, &p.ckpt_path, why),
     }
     Ok(())
 }

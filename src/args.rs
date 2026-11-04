@@ -21,10 +21,10 @@ examples:
 everyday:
   info <TARGET>                                     show partition table / FS identification
   resize <TARGET>[:N] <SIZE> [OPTIONS]              resize partition + FS (auto online/offline)
-  move <TARGET>:N --start <LBA|end>                 move partition
-  copy <TARGET>:N --start <LBA|end> [--name S] [--keep-partuuid]
+  move <TARGET>:N --start <LBA|end> [--yes]        move partition
+  copy <TARGET>:N --start <LBA|end> [--name S] [--keep-partuuid] [--yes]
                                                     copy partition
-  create <TARGET> [--size SIZE] [--name S] [--fs F]
+  create <TARGET> [--size SIZE] [--name S] [--fs F] [--yes]
                                                     create partition in free space
   delete <TARGET>:N --yes                           delete partition entry
   set <TARGET>:N name|label|uuid|flag|type ...      set a partition property
@@ -43,10 +43,10 @@ low-level (one step per run; long jobs stay resumable):
                                                     create a fresh partition table
   add <TARGET> --start LBA --end LBA [--name S] [--type T]
                                                     add a partition over [start, end]
-  resize-part <TARGET>:N --start LBA (--end LBA | --grow-to-end)
+  resize-part <TARGET>:N --start LBA (--end LBA | --grow-to-end) [--yes]
                                                     repartition one partition
   plan <TARGET> --grow N|last                       print the relocation plan
-  apply <TARGET> --grow N|last [--chunk-size MiB] [--no-fs]
+  apply <TARGET> --grow N|last [--chunk-size MiB] [--no-fs] [--yes]
                                                     carry out the relocation
 
 target: image path or block device; :N = partition number (1-based). :last = the last
@@ -63,14 +63,14 @@ options (availability: help <CMD>):
                     details, limits and refusals: help resize / help move
   --sector-size N   logical sector size override for raw images (power of two,
                     512..=65536)
-  --yes             acknowledge a destructive or unrequested-relocation action:
-                    required by delete, mkfs, new, undo, abandon, and by resize
-                    when it has to relocate partitions not named on the command
-                    line. Commands whose documented job is the relocation — move,
-                    copy, apply, resize-part — do not ask
-  --flag=VALUE is the same as --flag VALUE. `--` ends option parsing: every
-  later argument is positional, which is how a target or name starting with
-  `-` is passed
+  --yes             acknowledge a destructive action before it starts: required by
+                    delete, mkfs, new, undo, abandon, copy, create --fs, resize
+                    on a shrink, and by move / resize-part / apply / resize when
+                    their geometry relocates partition data; resize-part also
+                    asks when its new end shrinks the partition
+  --flag=VALUE is the same as --flag VALUE, except that a value starting with
+  `-` needs the equals form. `--` ends option parsing: every later argument is
+  positional, which is how a target or name starting with `-` is passed
 exit status:
   0   done             layout changed and the kernel partition view refreshed.
                        Every follow-up step completed, or none was needed: no
@@ -118,11 +118,16 @@ pub(crate) fn version_help() -> ! {
 }
 
 /// 带参旗标的取值入口：`--flag=value` 的等号部分已在分派前拆出，
-/// 这里只在两种写法之间取其一，各臂不必各自判断
+/// 这里只在两种写法之间取其一，各臂不必各自判断。空格写法要求下一个 token
+/// 不是选项（以 `-` 开头）：把它当值会静默改写请求的语义，而缺值是一次
+/// 可改正的用法错误；`-` 开头的值只能写成等号形式
 fn take_value(inline: &mut Option<String>, it: &mut impl Iterator<Item = String>, flag: &str) -> String {
     match inline.take() {
         Some(v) => v,
-        None => it.next().unwrap_or_else(|| miss_arg(flag)),
+        None => match it.next() {
+            Some(v) if !v.starts_with('-') => v,
+            _ => miss_arg(flag),
+        },
     }
 }
 
@@ -753,6 +758,25 @@ mod tests {
         let registered: std::collections::BTreeSet<String> =
             FLAGS.iter().map(|f| f.name.to_string()).collect();
         assert_eq!(documented, registered, "README options and the registry must match exactly");
+    }
+
+    /// 带参旗标的两种取值写法落到同一个字段；等号写法允许值以 `-` 开头，
+    /// 空格写法只接受不以 `-` 开头的值
+    #[test]
+    fn value_flags_accept_plain_and_equals_values() {
+        use std::ffi::OsString;
+
+        fn parse(tokens: &[&str]) -> super::Args {
+            let argv: Vec<OsString> = tokens.iter().copied().map(OsString::from).collect();
+            super::parse_args_from(argv.into_iter()).1
+        }
+
+        let a = parse(&["copy", "img:1", "--start", "1000", "--name", "valid-name"]);
+        assert_eq!(a.name.as_deref(), Some("valid-name"));
+        assert_eq!(a.start, Some(super::StartSelector::Lba(1000)));
+
+        let a = parse(&["copy", "img:1", "--start", "1000", "--name=-leading-value"]);
+        assert_eq!(a.name.as_deref(), Some("-leading-value"));
     }
 
     /// `given` 只认用户显式给出的旗标：默认值（`align` 的 mib、`chunk_mib` 的 4）

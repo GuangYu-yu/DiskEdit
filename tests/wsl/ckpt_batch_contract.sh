@@ -21,7 +21,7 @@ run_case() {
   truncate -s 2G "$T"
   $BF new "$T" --yes >/dev/null
   $BF create "$T" --size 500M --name a >/dev/null
-  $BF create "$T" --size 400M --name b --fs ext4 >/dev/null
+  $BF create "$T" --size 400M --name b --fs ext4 --yes >/dev/null
   LD=$(lo_attach "$T")
   mount_at "${LD}p2" /testmnt
   dd if=/dev/urandom of=/testmnt/blob.bin bs=1M count=350 2>/dev/null

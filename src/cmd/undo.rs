@@ -3,7 +3,10 @@
 use crate::support::*;
 use crate::args::Args;
 use crate::outcome::EXIT_PARTIAL;
-use crate::dev::{classify_journal, FileSource, Journal, JournalCandidate, JournalRead, JournalRecord, RecoveryData};
+use crate::dev::{
+    classify_journal, FileSource, Journal, JournalCandidate, JournalRead, JournalRecord, RecoveryData,
+    RecoveryEntry, RecoveryFile,
+};
 
 pub(crate) const HELP: &str = r#"diskedit undo <TARGET> --yes
 
@@ -20,9 +23,16 @@ pub(crate) const HELP: &str = r#"diskedit undo <TARGET> --yes
 
 /// journal 在而读不出来（CRC/magic/损坏/I-O）⇒ 盘上事实，重试无用（30）；
 /// 只有 abandon 能释放，提示也指向那里
+///
+/// 旧格式（[`PickJournalError::OldFormat`]）不是"读不出来"：现场完好，只是布局比本构建
+/// 认识的版本更早。它不是请求与现状不符，也不是盘上故障——单列一类，出口用 10 并明说
+/// 不迁移、不回放、不删除
 #[derive(Debug)]
 enum PickJournalError {
     Unreadable { detail: String },
+    OldFormat { path: String, version: u8 },
+    /// 落点存在，但不是本工具的恢复文件（符号链接 / dangling 链接 / 目录）
+    NotARecoveryFile { message: String },
 }
 
 impl std::fmt::Display for PickJournalError {
@@ -30,6 +40,14 @@ impl std::fmt::Display for PickJournalError {
         match self {
             PickJournalError::Unreadable { detail } => write!(f, "the undo journal exists but is unreadable: {detail} — \
                  it cannot be replayed; release it with `diskedit abandon`"),
+            PickJournalError::OldFormat { path, version } => write!(
+                f,
+                "the undo journal at {path} is in format v{version}, older than this build (v{}) — this build \
+                 cannot replay or migrate it, and it is left in place; release it with `diskedit abandon` if \
+                 it is no longer needed",
+                Journal::VERSION
+            ),
+            PickJournalError::NotARecoveryFile { message } => write!(f, "{message}"),
         }
     }
 }
@@ -53,25 +71,66 @@ fn pick_journal(path: &std::path::Path) -> Result<PickedJournal, PickJournalErro
         JournalCandidate::Absent => Ok(PickedJournal::Absent),
         JournalCandidate::Shell => Ok(PickedJournal::Shell(path.to_path_buf())),
         JournalCandidate::Damaged(detail) => Err(PickJournalError::Unreadable { detail: format!("{} ({detail})", path.display()) }),
+        JournalCandidate::OldFormat(version) => Err(PickJournalError::OldFormat { path: path.display().to_string(), version }),
+        JournalCandidate::NotARecoveryFile(shape) => {
+            Err(PickJournalError::NotARecoveryFile { message: shape.message(path) })
+        }
         JournalCandidate::Records(read) => Ok(PickedJournal::Records(path.to_path_buf(), read)),
     }
 }
 
-/// checkpoint 是否还在。判据与写闸口同源：非普通文件不是现场；只有 `NotFound` 算不在，
-/// 属性读不出来按存在处理——否则磁盘不可读时会把"还有未收尾作业"报成"目标干净"
-fn checkpoint_present(p: &std::path::Path) -> bool {
-    match std::fs::metadata(p) {
-        Ok(m) => m.is_file(),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
-        Err(_) => true,
+/// checkpoint 落点的三态。判据与写闸口同源（同一个 [`RecoveryFile::at`] 构造点）：
+/// 普通文件才算现场；符号链接、dangling 链接与目录**存在但不是恢复文件**，不是"无现场"；
+/// 只有 `NotFound` 算不在，属性读不出来按存在处理——否则磁盘不可读时会把"还有未收尾作业"
+/// 报成"目标干净"
+enum CheckpointSlot {
+    Absent,
+    Present(String),
+    NotARecoveryFile(String),
+}
+
+fn checkpoint_slot(p: &std::path::Path) -> CheckpointSlot {
+    match RecoveryFile::at(p) {
+        Ok(RecoveryEntry::Absent) => CheckpointSlot::Absent,
+        Ok(RecoveryEntry::File(_)) | Err(_) => CheckpointSlot::Present(p.display().to_string()),
+        Ok(RecoveryEntry::NotARecoveryFile(shape)) => CheckpointSlot::NotARecoveryFile(shape.message(p)),
     }
 }
 
 /// 目标上还留着的 checkpoint，拼成一句可报的清单；没有则 None。
-/// 判据与写闸口同源（非普通文件不算、只有 NotFound 算不在）
-fn stale_checkpoint_note(src: &FileSource) -> Option<String> {
-    let path = src.identity.checkpoint_path();
-    checkpoint_present(path).then(|| path.display().to_string())
+/// 落点是不属于本工具的条目时直接按拒绝返回——它不是"没有现场"
+fn stale_checkpoint_note(src: &FileSource) -> Result<Option<String>, Fail> {
+    match checkpoint_slot(src.identity.checkpoint_path()) {
+        CheckpointSlot::Absent => Ok(None),
+        CheckpointSlot::Present(path) => Ok(Some(path)),
+        CheckpointSlot::NotARecoveryFile(message) => Err(Fail::refused(message)),
+    }
+}
+
+/// 追加凭据的核对。记录侧没有可比的值（不可得 / 本次生成）时不参与比较——它不提供额外
+/// 判据，也绝不表述成"相符"；记录侧有 GUID 而当前读不出时是"读不出"而非"不符"，与
+/// journal 本身读不出同一出口（30 + 人工处置），不能落成可重试的账
+fn verify_disk_identity(
+    recorded: crate::dev::DiskGuidState,
+    src: &FileSource,
+    left: &str,
+) -> Result<(), Fail> {
+    if !matches!(recorded, crate::dev::DiskGuidState::Present(_)) {
+        return Ok(());
+    }
+    let current = match crate::table::disk_guid_of(src) {
+        Ok(Some(g)) => crate::dev::DiskGuidState::Present(g),
+        Ok(None) => crate::dev::DiskGuidState::Unavailable,
+        Err(e) => {
+            return Err(Fail::infra(format!(
+                "the target's GPT disk identity cannot be read ({e}) — {left}; {ROLLBACK_STUCK_REMEDY}"
+            )))
+        }
+    };
+    match crate::dev::disk_identity_mismatch(recorded, current) {
+        Some(why) => Err(Fail::refused(format!("{why} — {left}; {ROLLBACK_STUCK_REMEDY}"))),
+        None => Ok(()),
+    }
 }
 
 /// 空壳（头完整、零记录）描述的是零次写入：没有任何东西依赖它，但它一直占着落点，
@@ -86,19 +145,23 @@ fn remove_empty_shell(src: &FileSource, shell: std::path::PathBuf) -> ! {
     // 空壳与"目标上留着未收尾的 checkpoint"是两件事：后者描述的是另一族作业的进度
     // （例如搬移搬到一半），undo 回放不了它，也不能假装目标干净——它会让后续 resize
     // 被判成 Divergent 而拒绝，用户看到的是"什么也没做却被拒绝"
-    if let Some(stale) = stale_checkpoint_note(src) {
-        bail_fail(Fail::refused(format!(
+    match stale_checkpoint_note(src) {
+        Err(f) => bail_fail(f),
+        Ok(Some(stale)) => bail_fail(Fail::refused(format!(
             "the undo journal is empty, but this target still has an unfinished checkpoint ({stale}); undo cannot release it — \
              re-run the command that started that job to resume it to completion"
-        )));
+        ))),
+        Ok(None) => {}
     }
-    let identity = Journal::read_identity(&shell)
+    let header = Journal::read_header(&shell)
         .unwrap_or_else(|e| bail_fail(Fail::infra(format!("journal identity header is unreadable: {e}"))));
-    if let Some(why) = crate::dev::scene_mismatch(&identity, &src.scene()) {
+    if let Some(why) = crate::dev::scene_mismatch(&header.scene, &src.scene()) {
         bail_fail(Fail::refused(format!(
             "the empty journal {why} — left in place; {ROLLBACK_STUCK_REMEDY}"
         )));
     }
+    verify_disk_identity(header.credential, src, "the empty journal is not removed")
+        .unwrap_or_else(|f| bail_fail(f));
     // NotFound 的后置条件（不残留）已经成立；成功删除同时落盘目录项
     if crate::dev::remove_recovery_file(&shell) {
         bail_fail(Fail::refused(
@@ -322,20 +385,31 @@ pub(crate) fn cmd_undo(a: &Args) -> u8 {
         if let Err(f) = crate::fsops::ensure_table_write_idle(&src) {
             bail_fail(f);
         }
+        // checkpoint 落点若是符号链接、dangling 链接或目录，它存在但不是恢复文件：回放与
+        // 清理一律不做。只在"没有 journal / 空壳"分支里看 checkpoint 会漏掉有记录的 journal
+        // 这一路——那会直接走到写回并删掉 journal
+        if let Err(f) = stale_checkpoint_note(&src) {
+            bail_fail(f);
+        }
         // 两种挑不出各自的出口码：缺席 = 请求与现状不符（10）；在而读不出 = 盘上事实，
         // 重试无用且只有 abandon 能释放（30）
         let picked = pick_journal(src.identity.journal_path()).unwrap_or_else(|e| bail_fail(match e {
             PickJournalError::Unreadable { .. } => Fail::infra(e.to_string()),
+            // 旧格式是确定的现状，不是盘上故障：拒绝并保留现场，不引导重试
+            PickJournalError::OldFormat { .. } => Fail::refused(e.to_string()),
+            // 落点存在但不是本工具的恢复文件：请求与现状不符，保留原物
+            PickJournalError::NotARecoveryFile { .. } => Fail::refused(e.to_string()),
         }));
         let (p, entries, tail_incomplete) = match picked {
             // 没有 journal 也要看一眼 checkpoint：只剩未收尾作业时，报"没有可撤销的东西"
             // 会让用户以为目标干净，而后续 resize 会按 Divergent 拒绝
             PickedJournal::Absent => match stale_checkpoint_note(&src) {
-                Some(stale) => bail_fail(Fail::refused(format!(
+                Err(f) => bail_fail(f),
+                Ok(Some(stale)) => bail_fail(Fail::refused(format!(
                     "no undo journal on this target, but it still has an unfinished checkpoint ({stale}); undo cannot \
                      release it — re-run the command that started that job to resume it to completion"
                 ))),
-                None => bail_fail(Fail::refused("no undo journal on this target".to_string())),
+                Ok(None) => bail_fail(Fail::refused("no undo journal on this target".to_string())),
             },
             PickedJournal::Shell(shell) => remove_empty_shell(&src, shell),
             PickedJournal::Records(p, read) => match read {
@@ -349,13 +423,18 @@ pub(crate) fn cmd_undo(a: &Args) -> u8 {
         // 不符即拒绝，且发生在任何写回之前——把别的目标记下的原文回放到本目标上，是这条
         // 路径最坏的后果。它与下面按记录字节的整体核算是两道不同判据：那一道证明"这些字节
         // 与盘上现状相符"，这一道证明"这份历史属于这个目标"，两者都要过
-        let identity = Journal::read_identity(&p)
+        let header = Journal::read_header(&p)
             .unwrap_or_else(|e| bail_fail(Fail::infra(format!("journal identity header is unreadable: {e}"))));
-        if let Some(why) = crate::dev::scene_mismatch(&identity, &src.scene()) {
+        if let Some(why) = crate::dev::scene_mismatch(&header.scene, &src.scene()) {
             // why 里已经带着"记的是什么、现在是什么"的逐字段差异；这里补的是出路——
             // 与下方逐条核对失败同一句话：把目标恢复成记录时的样子再重跑，或不再需要回滚时 abandon
             bail_fail(Fail::refused(format!("{why} — this journal is not replayed here; {ROLLBACK_STUCK_REMEDY}")));
         }
+        // 头里的旧身份段只覆盖目标指纹；磁盘凭据是追加的第二道判据。记录侧写着目标有
+        // GPT Disk GUID 时，当前目标必须给出同一个——给不出不是"不符"而是"读不出"(30)，
+        // 给出了但不同才是不符（10）。记录侧没有可比的值时不参与比较，也绝不算相符
+        verify_disk_identity(header.credential, &src, "this journal is not replayed here")
+            .unwrap_or_else(|f| bail_fail(f));
         // 身份保障的边界要说给用户听：载体一个可比字段都给不出时（`size` 为零且取不到
         // dev / ino），上面那道核对无从下手——字段没有证据就不参与比较，"没比"不能表述成
         // "已验证"。回放实际依靠的是"落点由身份键派生"加下面逐条记录的字节核对。
@@ -602,7 +681,7 @@ fn archive_torn(from: &std::path::Path) -> Result<std::path::PathBuf, String> {
                 }
                 // 两条成因不同的路：删不掉（文件还在，目标因此仍被顶成 busy），或删掉了但
                 // 父目录项未落盘（此刻不在，掉电后可能复活）。路径是否还在即可区分
-                return Err(if from.exists() {
+                return Err(if std::fs::symlink_metadata(from).is_ok() {
                     format!(
                         "archived a copy at {} but could not remove the journal at {} — the target stays busy until it is gone",
                         to.display(),
@@ -617,7 +696,7 @@ fn archive_torn(from: &std::path::Path) -> Result<std::path::PathBuf, String> {
                 });
             }
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(_) if !to.exists() => {
+            Err(_) if std::fs::symlink_metadata(&to).is_err() => {
                 // 退路同样不许覆盖：create_new 先占住名字，rename 覆盖的是本进程刚建的占位
                 match crate::dev::rename_over_placeholder(from, &to) {
                     Ok(()) => return Ok(to),
@@ -682,6 +761,64 @@ mod tests {
         p.push(format!("diskedit_undo_{tag}_{}.journal", std::process::id()));
         let _ = std::fs::remove_file(&p);
         p
+    }
+
+    fn tmp_image(tag: &str) -> PathBuf {
+        let mut p = std::env::temp_dir();
+        p.push(format!("diskedit_undo_{tag}_{}.img", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        p
+    }
+
+    /// 写一个只满足头部校验的 GPT 主头：凭据读取只依赖头（GUID 由头 CRC 覆盖）
+    fn write_gpt_primary(img: &std::path::Path, guid: [u8; 16]) {
+        const SS: usize = 512;
+        let mut data = std::fs::read(img).unwrap();
+        let last = (data.len() / SS) as u64 - 1;
+        let mut hdr = vec![0u8; SS];
+        hdr[0..8].copy_from_slice(b"EFI PART");
+        hdr[8..12].copy_from_slice(&0x0001_0000u32.to_le_bytes());
+        hdr[12..16].copy_from_slice(&92u32.to_le_bytes());
+        hdr[24..32].copy_from_slice(&1u64.to_le_bytes());
+        hdr[32..40].copy_from_slice(&last.to_le_bytes());
+        hdr[56..72].copy_from_slice(&guid);
+        let crc = crate::table::crc32(&hdr[..92]);
+        hdr[16..20].copy_from_slice(&crc.to_le_bytes());
+        data[SS..SS * 2].copy_from_slice(&hdr);
+        std::fs::write(img, data).unwrap();
+    }
+
+    #[test]
+    fn disk_guid_is_read_from_the_gpt_header() {
+        let img = tmp_image("guid");
+        std::fs::write(&img, vec![0u8; 4096]).unwrap();
+        write_gpt_primary(&img, [0x5A; 16]);
+        let src = open_src(&img);
+        assert_eq!(crate::table::disk_guid_of(&src).unwrap(), Some([0x5A; 16]));
+        let _ = std::fs::remove_file(&img);
+    }
+
+    /// "读不出"与"没有 GPT"必须是两回事：签名在而头校验不过 → Err（Damaged 出口），
+    /// 任何头签名都没有 → Ok(None)（不可得）
+    #[test]
+    fn a_damaged_gpt_header_is_unreadable_not_absent() {
+        let img = tmp_image("guid_bad");
+        std::fs::write(&img, vec![0u8; 4096]).unwrap();
+        assert_eq!(
+            crate::table::disk_guid_of(&open_src(&img)).unwrap(),
+            None,
+            "a target without any GPT header must be Unavailable"
+        );
+        write_gpt_primary(&img, [0x5A; 16]);
+        // 破坏头 CRC（签名仍在）：凭据读不出
+        let mut data = std::fs::read(&img).unwrap();
+        data[512 + 16] ^= 0x01;
+        std::fs::write(&img, data).unwrap();
+        assert!(
+            crate::table::disk_guid_of(&open_src(&img)).is_err(),
+            "a present-but-broken GPT header is unreadable, not absent"
+        );
+        let _ = std::fs::remove_file(&img);
     }
 
     /// 相容形态有三种：写后内容、原文（上一次回滚的进度），以及一次没写完的写留下的

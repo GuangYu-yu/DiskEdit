@@ -20,7 +20,7 @@ run_resize_part_break() {
   rm -f "$T" "$T"$SIDECAR_GLOB
   truncate -s 2G "$T"
   $BF new "$T" --yes >/dev/null || { echo "new failed"; rc=1; return; }
-  $BF create "$T" --size 900M --name big --fs ext4 >/dev/null || { echo "create failed"; rc=1; return; }
+  $BF create "$T" --size 900M --name big --fs ext4 --yes >/dev/null || { echo "create failed"; rc=1; return; }
 
   LD=$(lo_attach "$T")
   lo_waitpart "${LD}p1" || { echo "p1 part node not ready"; rc=1; lo_detach "$LD"; return; }
@@ -31,11 +31,11 @@ run_resize_part_break() {
   lo_detach "$LD"
 
   echo "== $fault:$n：900M 分区右移 50M（chunk 1MiB），第 $n 块后中断 =="
-  DISKEDIT_FAULT=$fault:$n $BF resize-part "$T":1 --start 104448 --end 1947647 --chunk-size 1 >/dev/null 2>&1
+  DISKEDIT_FAULT=$fault:$n $BF resize-part "$T":1 --start 104448 --end 1947647 --chunk-size 1 --yes >/dev/null 2>&1
   exp "$([ -f "$T$CKPT_SUFFIX" ] && echo yes || echo no)" yes "$fault:$n 现场已建（checkpoint 存在）"
   [ -f "$T$CKPT_SUFFIX" ] || return
 
-  OUT=$($BF resize-part "$T":1 --start 104448 --end 1947647 --chunk-size 1 2>&1); E=$?
+  OUT=$($BF resize-part "$T":1 --start 104448 --end 1947647 --chunk-size 1 --yes 2>&1); E=$?
   exp "$E" 0 "$fault:$n 重跑完成"
   echo "$OUT" | grep -o "resuming at chunk [0-9]*" | head -1 | grep -qx "resuming at chunk $expect" \
     && echo "  OK   续传点命中（resuming at chunk $expect）" || { echo "  BAD  未从 chunk $expect 续传"; rc=1; }
@@ -56,7 +56,7 @@ run_shift_break() {
   truncate -s 1G "$T2"
   $BF new "$T2" --yes >/dev/null || { echo "new failed"; rc=1; return; }
   $BF create "$T2" --size 500M --name a >/dev/null || { echo "create a failed"; rc=1; return; }
-  $BF create "$T2" --size 400M --name b --fs ext4 >/dev/null || { echo "create b failed"; rc=1; return; }
+  $BF create "$T2" --size 400M --name b --fs ext4 --yes >/dev/null || { echo "create b failed"; rc=1; return; }
 
   LD=$(lo_attach "$T2")
   lo_waitpart "${LD}p2" || { echo "p2 part node not ready"; rc=1; lo_detach "$LD"; return; }

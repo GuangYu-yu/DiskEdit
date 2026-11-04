@@ -105,7 +105,10 @@ pub(crate) fn cmd_mkfs(a: &Args) -> Outcome {
     // 先问类型认不认得、工具在不在，再落不可回滚屏障：一个拼错的类型名、一个没装的
     // 工具包，都不该把目标锁进"未收尾"状态、要用户再跑一次 abandon。检查放在开事务
     // **之后**：目标被别人的未收尾现场占着时，busy 的闸口文案（含出路指引）比
-    // "工具缺失"更该先到达——journal 是惰性的，此处拒绝同样不留任何痕迹
+    // "工具缺失"更该先到达。打开会采纳既有 journal：带撕裂尾的 journal 属于 active
+    // 现场，`FreshOnly` 在闸口处就 busy，所以这些拒绝不会触发归档与截断；唯一会落笔的
+    // 是 0 字节残骸——`classify_journal` 判它 `Absent`，采纳时就地补出文件头，此后拒绝
+    // 时恢复文件已经多了一个头（有记录的现场不会按残骸收养）
     let mut src = open_target_for_write(a).unwrap_or_else(|f| bail_fail(f));
     // 锁下快照
     let part = crate::gpt_policy::resolve_part(&src, pref).unwrap_or_else(|f| bail_fail(f));

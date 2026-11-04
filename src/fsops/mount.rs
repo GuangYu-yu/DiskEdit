@@ -375,12 +375,6 @@ struct LoopInfo64 {
 #[cfg(target_os = "linux")]
 const LOOP_GET_STATUS64: libc::c_int = 0x4C05;
 
-/// include/uapi/linux/loop.h：LOOP_SET_STATUS64。loop(4) 对它的限制只有
-/// "lo_flags 中仅 AUTOCLEAR / PARTSCAN 可改"，其余字段（含 lo_sizelimit）随结构体写回；
-/// 内核按 `min(backing 剩余, lo_sizelimit)` 重算容量并通知块层（loop_set_size）
-#[cfg(target_os = "linux")]
-const LOOP_SET_STATUS64: libc::c_int = 0x4C04;
-
 /// 一个 loop 记录的 backing 身份（三项都来自 `LOOP_GET_STATUS64`）
 #[cfg(target_os = "linux")]
 pub(crate) struct LoopBacking {
@@ -527,88 +521,6 @@ pub(crate) fn loop_mapping_of_node(node: &Path) -> io::Result<Option<LoopMapping
     loop_status_of(node, &f)
 }
 
-/// 把已绑定 loop 的数据上限抬到 `want`（只改 `lo_sizelimit`，其余字段原样回写）。
-///
-/// 用途：分区表已按新长度写好，而映射建立时按旧长度设了 `--sizelimit`。对同一段字节
-/// 再建第二个 loop 会让 LVM 把这块 PV 看成两个节点（duplicate PV），其中一个上的
-/// pvresize 会静默无效；故复用这只映射，就地抬高它的上限。
-///
-/// 前置：内核记录的起点必须仍是 `off`（否则改的是另一段字节），已有上限不得大于
-/// `want`（把更大的已映射区间缩回去不是本函数的语义）。改后按内核记录与设备容量
-/// （sysfs `size`，512 字节扇区）两处回读：ioctl 成功不等于容量已刷新
-#[cfg(target_os = "linux")]
-pub(crate) fn set_loop_sizelimit(node: &Path, off: u64, want: u64) -> Result<(), FsError> {
-    use std::os::unix::io::AsRawFd;
-    let f = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(node)
-        .map_err(|e| {
-            FsError::Io(io::Error::other(format!(
-                "cannot open {} to raise its loop size limit: {e}",
-                node.display()
-            )))
-        })?;
-    let mut info: LoopInfo64 = unsafe { std::mem::zeroed() };
-    let rc = unsafe { libc::ioctl(f.as_raw_fd(), LOOP_GET_STATUS64 as _, &mut info) };
-    if rc != 0 {
-        return Err(FsError::Io(io::Error::other(format!(
-            "LOOP_GET_STATUS64 on {} failed: {}",
-            node.display(),
-            io::Error::last_os_error()
-        ))));
-    }
-    if info.lo_offset != off {
-        return Err(FsError::CommandFailed(format!(
-            "{} maps from byte {} but the partition starts at {off} — refusing to change its size limit",
-            node.display(),
-            info.lo_offset
-        )));
-    }
-    if info.lo_sizelimit == want {
-        return Ok(());
-    }
-    if info.lo_sizelimit > want {
-        return Err(FsError::CommandFailed(format!(
-            "{} already maps {} bytes from its start, more than the {want}-byte partition — refusing to shrink it",
-            node.display(),
-            info.lo_sizelimit
-        )));
-    }
-    info.lo_sizelimit = want;
-    let rc = unsafe { libc::ioctl(f.as_raw_fd(), LOOP_SET_STATUS64 as _, &info) };
-    if rc != 0 {
-        return Err(FsError::Io(io::Error::other(format!(
-            "LOOP_SET_STATUS64 on {} failed: {}",
-            node.display(),
-            io::Error::last_os_error()
-        ))));
-    }
-    let map = loop_mapping_of_node(node)?.ok_or_else(|| {
-        FsError::CommandFailed(format!(
-            "{} lost its backing file while its size limit was being raised",
-            node.display()
-        ))
-    })?;
-    if map.offset != off || map.sizelimit != want {
-        return Err(FsError::CommandFailed(format!(
-            "{} maps bytes {}..{} after the size-limit update, expected {off}..{}",
-            node.display(),
-            map.offset,
-            map.offset.saturating_add(map.sizelimit),
-            off.saturating_add(want)
-        )));
-    }
-    let capacity = crate::dev::sysfs_capacity(&crate::dev::sysfs_node(node)?)?;
-    if capacity != want {
-        return Err(FsError::CommandFailed(format!(
-            "{} reports a capacity of {capacity} bytes after its size limit was raised to {want} — the kernel did not apply it",
-            node.display()
-        )));
-    }
-    Ok(())
-}
-
 /// 指向本镜像的 loop 被使用的形态
 #[cfg(target_os = "linux")]
 pub(crate) enum LoopOccupancy {
@@ -677,12 +589,55 @@ pub(crate) fn image_loop_occupancy(src: &FileSource) -> io::Result<Option<LoopOc
     loop_occupancy_for(BackingMatch::File { dev: md.dev(), ino: md.ino() }, &mounts, &swaps)
 }
 
-/// 已取得的 loop 独占权，按 loop 节点名登记，持有到进程退出。CLI 一次调用只做一件事，
-/// 进程退出即释放；提前 drop 会把"检查通过 → 写盘"之间的窗口重新打开。按名字登记而非
-/// 只存 fd：同一进程内多处闸口（表写入、prepare、mkfs）都会走到判定，重复 claim 会与
-/// 自己已持的 claim 冲突而把空闲读成占用
+/// 已取得的一条 loop 独占权：fd 维持 claim，记录则供每次消费时重核。
+/// 名字与"fd 仍打开着"都不构成持有证据：`O_EXCL` 只排他打开、不冻结映射，另一个打开
+/// 仍可通过 `LOOP_SET_STATUS64` 改写几何，本进程的 fd 并不因此失效；故登记时把内核
+/// 给出的那份映射一并记下，之后每次按 `LOOP_GET_STATUS64` 重读比对
 #[cfg(target_os = "linux")]
-static LOOP_CLAIMS: std::sync::Mutex<Vec<(String, std::fs::File)>> = std::sync::Mutex::new(Vec::new());
+struct LoopClaim {
+    loopdev: String,
+    file: std::fs::File,
+    mapping: LoopMapping,
+}
+
+/// 登记时的映射与此刻内核给出的是不是同一条。`None` = 内核报已无绑定，同样不是持有
+#[cfg(target_os = "linux")]
+fn claim_still_holds(recorded: &LoopMapping, current: Option<&LoopMapping>) -> bool {
+    match current {
+        Some(c) => {
+            c.backing.dev == recorded.backing.dev
+                && c.backing.ino == recorded.backing.ino
+                && c.backing.rdev == recorded.backing.rdev
+                && c.offset == recorded.offset
+                && c.sizelimit == recorded.sizelimit
+        }
+        None => false,
+    }
+}
+
+/// 表里同名登记此刻是否仍代表持有：`None` = 表里没有这个名字，`Some(true)` = 重读的映射
+/// 与登记一致，`Some(false)` = 有名字但映射已不是登记那条，条目在此移除（fd 随之关闭）。
+/// 名字只用来找回登记，判定一律基于重读
+#[cfg(target_os = "linux")]
+fn consume_registered_claim(claims: &mut Vec<LoopClaim>, loopdev: &str) -> io::Result<Option<bool>> {
+    let Some(pos) = claims.iter().position(|c| c.loopdev == loopdev) else {
+        return Ok(None);
+    };
+    let now = loop_status_of(Path::new(loopdev), &claims[pos].file)?;
+    if claim_still_holds(&claims[pos].mapping, now.as_ref()) {
+        return Ok(Some(true));
+    }
+    claims.remove(pos);
+    Ok(Some(false))
+}
+
+/// 已取得的 loop 独占权，持有到进程退出。CLI 一次调用只做一件事，
+/// 进程退出即释放；提前 drop 会把"检查通过 → 写盘"之间的窗口重新打开。按 loop 节点名
+/// 索引而非用后即弃：同一进程内多处闸口（表写入、prepare、mkfs）都会走到判定，重复 claim
+/// 会与自己已持的 claim 冲突而把空闲读成占用。索引只用于找回登记，是否仍持有由
+/// [`claim_still_holds`] 按重读的映射回答
+#[cfg(target_os = "linux")]
+static LOOP_CLAIMS: std::sync::Mutex<Vec<LoopClaim>> = std::sync::Mutex::new(Vec::new());
 
 /// 对 loop 设备取内核独占权：`O_RDWR | O_EXCL`、不带 `O_CREAT`。man open(2)：Linux 2.6
 /// 起，块设备正在被使用（挂载、swap、他人的独占打开）时同一组合以 EBUSY 失败；
@@ -765,11 +720,34 @@ fn loop_occupancy_for(
                 }))
             }
         };
-        if claims.iter().any(|(n, _)| n == &loopdev) {
-            continue;
+        // 同名登记只说明本进程曾经打开过这个名字。重读到未绑定或换了映射即丢弃该条
+        // （fd 随之关闭，旧 claim 释放），按此刻的设备重新 claim——不复用过期结论
+        match consume_registered_claim(&mut claims, &loopdev) {
+            Ok(Some(true)) => continue,
+            Ok(_) => {}
+            Err(e) => {
+                return Ok(Some(LoopOccupancy::Unclaimable {
+                    loopdev,
+                    why: format!("cannot re-read its loop mapping to tell whether this process still holds it: {e}"),
+                }))
+            }
         }
         match claim_loop_exclusive(&loopdev) {
-            Ok(f) => claims.push((loopdev, f)),
+            Ok(f) => match loop_status_of(Path::new(&loopdev), &f) {
+                // 记录 claim 时内核给出的映射：之后的每次消费都按它重核
+                Ok(Some(mapping)) if target.matches(&mapping.backing) => {
+                    claims.push(LoopClaim { loopdev, file: f, mapping })
+                }
+                // claim 与登记之间这只 loop 已解绑或换成别的 backing：它不再映射本镜像，
+                // 不登记；fd 在此关闭，claim 一并释放
+                Ok(_) => {}
+                Err(e) => {
+                    return Ok(Some(LoopOccupancy::Unclaimable {
+                        loopdev,
+                        why: format!("cannot read the loop mapping just claimed: {e}"),
+                    }))
+                }
+            },
             Err(e) => return Ok(Some(claim_failure(loopdev, e))),
         }
     }
@@ -782,6 +760,7 @@ fn loop_occupancy_for(
 
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
+    #![allow(clippy::let_underscore_must_use)] // 清理临时镜像与 loop 有意忽略失败
     use super::*;
 
     #[test]
@@ -858,6 +837,103 @@ mod tests {
         assert!(!file.matches(&map(7, 43, 0, 4096, 8192).backing));
         assert!(block.matches(&map(0, 0, 0x0801, 4096, 8192).backing));
         assert!(!block.matches(&map(7, 42, 0, 4096, 8192).backing));
+    }
+
+    /// 表里有这个名字不等于仍持有：登记之后同一 loopN 可以被外部解绑并重绑，
+    /// fd 一直有效，只有重读的映射才能回答"这条 claim 还成不成立"
+    #[test]
+    fn a_registered_loop_name_is_not_proof_of_holding() {
+        let map = |dev, ino, offset, sizelimit| LoopMapping {
+            backing: LoopBacking { dev, ino, rdev: 0 },
+            offset,
+            sizelimit,
+        };
+        let recorded = map(7, 42, 4096, 8192);
+        assert!(claim_still_holds(&recorded, Some(&map(7, 42, 4096, 8192))));
+        // detach + 重绑到另一个文件：名字与 fd 都没变，映射已不是登记时那条
+        assert!(!claim_still_holds(&recorded, Some(&map(7, 43, 4096, 8192))));
+        // 同一个 backing，但起点或长度上限被换掉
+        assert!(!claim_still_holds(&recorded, Some(&map(7, 42, 0, 8192))));
+        assert!(!claim_still_holds(&recorded, Some(&map(7, 42, 4096, 16384))));
+        // 已解绑
+        assert!(!claim_still_holds(&recorded, None));
+    }
+
+    /// 真实 loop：登记之后另一个进程（不带 O_EXCL）仍能通过 LOOP_SET_STATUS64 改写同一只
+    /// loop 的几何，名字与本进程的 fd 都不变——表里有名字不再等于仍持有。
+    /// 需要 root 与 /dev/loop-control；缺就打印原因并跳过
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_claim_is_rechecked_against_the_live_mapping() {
+        use std::os::unix::io::AsRawFd;
+        if unsafe { libc::geteuid() } != 0 {
+            eprintln!("skip: root required for a real loop");
+            return;
+        }
+        let img = std::env::temp_dir().join(format!("diskedit_claim_{}.img", std::process::id()));
+        let _ = std::fs::remove_file(&img);
+        std::fs::write(&img, vec![0u8; 8 * 1024 * 1024]).unwrap();
+        let out = match std::process::Command::new("losetup")
+            .args(["-f", "--show", "-o", "0", "--sizelimit", "4194304"])
+            .arg(&img)
+            .output()
+        {
+            Ok(o) if o.status.success() => o,
+            _ => {
+                eprintln!("skip: losetup cannot create a loop here");
+                let _ = std::fs::remove_file(&img);
+                return;
+            }
+        };
+        let dev = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        let claimed = match claim_loop_exclusive(&dev) {
+            Ok(f) => f,
+            Err(e) => {
+                eprintln!("skip: cannot claim {dev}: {e}");
+                release_loop(&dev);
+                let _ = std::fs::remove_file(&img);
+                return;
+            }
+        };
+        let recorded = match loop_status_of(Path::new(&dev), &claimed) {
+            Ok(Some(m)) => m,
+            Ok(None) => {
+                eprintln!("skip: {dev} reports no mapping right after the claim");
+                drop(claimed);
+                release_loop(&dev);
+                let _ = std::fs::remove_file(&img);
+                return;
+            }
+            Err(e) => {
+                eprintln!("skip: cannot read the mapping of {dev}: {e}");
+                drop(claimed);
+                release_loop(&dev);
+                let _ = std::fs::remove_file(&img);
+                return;
+            }
+        };
+        let backing_ino = recorded.backing.ino;
+        let mut registry = vec![LoopClaim { loopdev: dev.clone(), file: claimed, mapping: recorded }];
+        // include/uapi/linux/loop.h：LOOP_SET_STATUS64。实测：另一个不带 O_EXCL 的打开
+        // 在 O_EXCL 持有者仍在时也能改 sizelimit，内核随即重算容量
+        const LOOP_SET_STATUS64: libc::c_int = 0x4C04;
+        let second = std::fs::OpenOptions::new().read(true).write(true).open(&dev).unwrap();
+        let mut info: LoopInfo64 = unsafe { std::mem::zeroed() };
+        let read_rc = unsafe { libc::ioctl(second.as_raw_fd(), LOOP_GET_STATUS64 as _, &mut info) };
+        info.lo_sizelimit = 6 * 1024 * 1024;
+        let write_rc = unsafe { libc::ioctl(second.as_raw_fd(), LOOP_SET_STATUS64 as _, &info) };
+        let verdict = consume_registered_claim(&mut registry, &dev);
+        let now = loop_status_of(Path::new(&dev), &std::fs::File::open(&dev).unwrap()).unwrap();
+        // 先清理再断言：O_EXCL 的 fd 之前，detach 只会被推迟
+        drop(second);
+        release_loop(&dev);
+        let _ = std::fs::remove_file(&img);
+        assert_eq!((read_rc, write_rc), (0, 0), "changing the geometry of a claimed loop must work");
+        assert_eq!(verdict.unwrap(), Some(false), "a name still in the table must not be read as holding");
+        assert!(registry.is_empty(), "the stale entry must have been dropped");
+        let now = now.unwrap();
+        assert_eq!(now.sizelimit, 6 * 1024 * 1024);
+        assert_eq!(now.backing.ino, backing_ino, "the backing did not move; only the geometry drifted");
     }
 
     /// O_EXCL 的两种失败含义不同，不可合并：EBUSY 是内核说"它被别人占着"（请求与现状
@@ -1118,7 +1194,7 @@ pub fn ensure_table_write_idle(_src: &FileSource) -> Result<(), crate::outcome::
 
 /// 内核记录的映射区间是否就是请求的 `[off, off + len)`
 #[cfg(target_os = "linux")]
-fn mapping_covers(map: &LoopMapping, off: u64, len: u64) -> bool {
+pub(crate) fn mapping_covers(map: &LoopMapping, off: u64, len: u64) -> bool {
     map.offset == off && map.sizelimit == len
 }
 

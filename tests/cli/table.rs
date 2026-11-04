@@ -378,7 +378,7 @@ fn msdos_user_resize() {
     assert_eq!(std::fs::read(&img).unwrap(), raw_before, "refused resize must not write");
 
     // 收缩：unknown FS（0x83 空数据）拒绝——FS 先缩守卫链，任何写入前终止
-    let (c, o) = run(&["resize", &format!("{img_s}:1"), "-1M"]);
+    let (c, o) = run(&["resize", &format!("{img_s}:1"), "-1M", "--yes"]);
     assert_eq!(c, 10, "shrinking unknown FS must refuse: {o}");
     assert_eq!(std::fs::read(&img).unwrap(), raw_before);
 
