@@ -11,7 +11,7 @@ rm -f "$T" "$T"$SIDECAR_GLOB
 truncate -s 1G "$T"
 $B new "$T" --yes
 $B create "$T" --size 500M --name a
-$B create "$T" --size 400M --name b --fs ext4
+$B create "$T" --size 400M --name b --fs ext4 --yes
 LD=$(lo_attach "$T")
 mount_at "${LD}p2" /testmnt
 dd if=/dev/urandom of=/testmnt/blob2.bin bs=1M count=350 2>/dev/null

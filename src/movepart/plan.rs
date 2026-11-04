@@ -313,7 +313,7 @@ pub(crate) fn foreign_checkpoint_refusal() -> Fail {
 /// 而两边给同一事实的措辞也会漂移
 pub(crate) fn foreign_resize_refusal() -> Fail {
     Fail::refused(
-        "an unfinished single-partition resize job occupies the checkpoint slot — resume it with `resize-part` or `move`, or release it with `diskedit abandon`",
+        "an unfinished single-partition resize job occupies the checkpoint slot — resume it with `resize-part` or `resize`, or release it with `diskedit abandon`",
     )
 }
 

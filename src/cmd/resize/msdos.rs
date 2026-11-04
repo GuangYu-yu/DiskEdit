@@ -88,12 +88,10 @@ pub(crate) fn mbr_grow_finish(
                 src.set_mutation(crate::dev::Mutation::ExternalFsTool);
                 src.mark_non_reversible().unwrap_or_else(|e| bail_fail(Fail::from(e)));
                 let ident = movepart::read_swap_identity(src, p.start_lba as u64, p.size_lba as u64, ss);
-                // 与 movepart 的两个重建点同一口径：保不住原 UUID 必须说给用户听，
-                // 否则 fstab / resume 的 UUID= 会静默失效（旧签名本就没有 UUID，或读不出来）
-                let had_uuid = ident.0.is_some();
-                match fsops::recreate_swap(src, part, ident) {
-                    Ok(()) if had_uuid => println!("swap recreated (UUID preserved)"),
-                    Ok(()) => println!("swap recreated (no UUID could be read from the old signature — mkswap wrote a fresh one)"),
+                // 与 movepart 的两个重建点同一口径：文案由 recreate_swap 按实际写入返回，
+                // 读不出来时它在动手前就拒绝，不会把随机 UUID 说成"保住了"
+                match fsops::recreate_swap(src, part, &ident) {
+                    Ok(note) => println!("swap recreated ({note})"),
                     Err(e) => pending.push(crate::outcome::Pending::new(
                         part,
                         crate::outcome::PendingKind::Swap,
@@ -199,7 +197,7 @@ pub(crate) fn cmd_resize_msdos(a: &Args, pref: PartSelector, size: Option<&str>,
     // 块设备在线路径：与 GPT 同一份实现，随表类型变的只有右侧空闲数。目标长度同样
     // 交给 mbr_decider 在在线自己的锁下重解析（理由见 gpt_decider）
     #[cfg(target_os = "linux")]
-    if let Some(o) = resize_online(a, src_ro, part, is_pv, mbr_decider(size, part, is_pv)) {
+    if let Some(o) = resize_online(a, src_ro, part, is_pv, mbr_decider(a.yes, size, part, is_pv)) {
         return o;
     }
 
@@ -349,6 +347,14 @@ pub(crate) fn cmd_resize_msdos(a: &Args, pref: PartSelector, size: Option<&str>,
                 bail_fail(Fail::refused(format!("target size {requested} < minimum FS size {min} bytes (resize2fs -P)")));
             }
             // 缩容预检（方向、可缩性、工具齐备、下界）全过，note 不再跟在一条拒绝后面
+            // FS 缩是本次首个写盘步骤：缩小前的探针（fs_min_bytes）跑完后盘上表可能已被
+            // 外部改写，这里读当前 LBA0，条目与锁下快照不一致就停在此刻（尚未写盘）
+            table::ensure_mdos_entry_unchanged(&src, p).unwrap_or_else(|f| bail_fail(f));
+            // 缩容会截短分区并让文件系统同步缩小：被截掉的字节 `undo` 找不回来
+            crate::cmd::confirm::gate(a.yes, crate::cmd::confirm::Impact {
+                shrinking: true,
+                ..Default::default()
+            });
             crate::support::note_sector_truncation("resizing to", bytes, ss);
             // 不落不可回滚屏障：缩小之后回滚表项只会得到"FS 小于分区"这一自洽状态，undo
             // 仍然安全（与 GPT 缩容臂同一条判据）。屏障若抢在 shrink_fs 的预检之前落下，

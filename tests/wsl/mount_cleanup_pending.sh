@@ -33,7 +33,7 @@ setup_case() {
     rm -f "$T" "$T"$SIDECAR_GLOB
     truncate -s 2G "$T"
     $B new "$T" --yes >/dev/null
-    $B create "$T" --size 400M --name b --fs btrfs >/dev/null 2>&1
+    $B create "$T" --size 400M --name b --fs btrfs --yes >/dev/null 2>&1
 }
 
 fake() { # $1=名  $2=脚本体

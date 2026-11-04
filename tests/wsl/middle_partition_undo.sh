@@ -9,9 +9,9 @@ track_file "$T"
 rm -f "$T" "$T"$SIDECAR_GLOB
 truncate -s 128M "$T"
 $B new "$T" --yes || exit 1
-$B create "$T" --size 16M --name p1 --fs ext4
-$B create "$T" --size 16M --name p2 --fs ext4
-$B create "$T" --size 16M --name p3 --fs ext4
+$B create "$T" --size 16M --name p1 --fs ext4 --yes
+$B create "$T" --size 16M --name p2 --fs ext4 --yes
+$B create "$T" --size 16M --name p3 --fs ext4 --yes
 
 LD=$(lo_attach "$T")
 mount_at "${LD}p2" /testmnt && echo p2-marker-content > /testmnt/m2.txt
@@ -38,10 +38,10 @@ mount_at "${LD}p2" /testmnt && cat /testmnt/m2.txt && umount /testmnt
 losetup -d "$LD"
 
 echo "== 中间分区收缩 -4M =="
-$B resize "$T":2 -4M; echo "exit=$?"
+$B resize "$T":2 -4M --yes; echo "exit=$?"
 
 echo "== 中间分区 move 到尾部空隙 =="
-$B move "$T":2 --start end; echo "exit=$?"
+$B move "$T":2 --start end --yes; echo "exit=$?"
 $B info "$T"
 
 echo "== 成功后 journal 已删，undo 应拒绝（与搬移 undo 拒绝契约一致）=="

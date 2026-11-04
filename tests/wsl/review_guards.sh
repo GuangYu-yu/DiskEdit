@@ -116,13 +116,13 @@ echo
 echo "########## E5: 未收尾搬移作业挡住反向（缩容）resize ##########"
 truncate -s 512M "$T5"
 $BF new "$T5" --yes >/dev/null
-$BF create "$T5" --size 100M --name p1 --fs ext4 >/dev/null
+$BF create "$T5" --size 100M --name p1 --fs ext4 --yes >/dev/null
 $BF add "$T5" --start 307200 --end 512000 --name p2 >/dev/null
 # 造未收尾的 Shift 作业：精确 SIZE 扩容、挡路分区搬到一半即 abort，现场保留（不 abandon）
 DISKEDIT_FAULT=chunk:20 $BF resize "$T5":1 209715200 --allow-move --yes >/dev/null 2>&1
 exp "$?" 134 "E5 grow interrupted mid-move"
 [ -f "$T5$CKPT_SUFFIX" ] && echo "  OK   relocation checkpoint present after the interruption" || { echo "  BAD  no checkpoint after the interruption"; rc=1; }
-OUT=$($BF resize "$T5":1 52428800 2>&1); E=$?
+OUT=$($BF resize "$T5":1 52428800 --yes 2>&1); E=$?
 echo "shrink against the pending job -> exit=$E : $(echo "$OUT" | tail -1)"
 exp "$E" 10 "E5 shrink refused instead of replaying the grow plan"
 case "$OUT" in *"owns this target"*) echo "  OK   E5 refusal names the pending owner" ;; *) echo "  BAD  E5 refusal wording"; rc=1 ;; esac
@@ -144,11 +144,11 @@ LD=$(lo_attach "$T3")
 D=$(basename "$LD")
 if lo_waitpart "${LD}p1"; then
     echo "  sysfs p1 start before = $(cat "/sys/block/$D/${D}p1/start" 2>/dev/null)"
-    DISKEDIT_FAULT=rs-after-commit $BF move "$LD":1 --start 400000 >/dev/null 2>&1
+    DISKEDIT_FAULT=rs-after-commit $BF move "$LD":1 --start 400000 --yes >/dev/null 2>&1
     exp "$?" 134 "E3 move interrupted right after the table commit"
     echo "  on-disk p1 = $($B info "$T3" | grep -o '"num":1,[^}]*}')"
     echo "  sysfs p1 start after the abort = $(cat "/sys/block/$D/${D}p1/start" 2>/dev/null)"
-    OUT=$($BF move "$LD":1 --start 400000 2>&1); E=$?
+    OUT=$($BF move "$LD":1 --start 400000 --yes 2>&1); E=$?
     echo "  resume -> exit=$E : $(echo "$OUT" | tail -1)"
     if [ "$E" = 10 ]; then
         echo "  BAD  E3 resume refused with 10 — a stale kernel view is not a request mismatch"
@@ -210,7 +210,7 @@ for i in 1 2 3 4 5 6 7 8; do
     rm -f "$T4" "$T4"$SIDECAR_GLOB 2>/dev/null
     truncate -s 2G "$T4"
     $B new "$T4" --yes >/dev/null
-    $B create "$T4" --size 500M --name p1 --fs ext4 >/dev/null
+    $B create "$T4" --size 500M --name p1 --fs ext4 --yes >/dev/null
     LD=$(lo_attach "$T4")
     if ! lo_waitpart "${LD}p1" || ! mount_at "${LD}p1" /testmnt; then
         echo "  (attempt $i) loop/mount unavailable"

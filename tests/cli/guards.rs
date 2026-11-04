@@ -67,6 +67,7 @@ fn each_help_names_its_own_command_first() {
 }
 
 /// 错误路径走真实二进制：bail_fail() 会退出进程，进程内测不到，故用 subprocess 断言退出码 + 文案
+#[cfg(unix)]
 #[test]
 fn cli_negative_paths() {
     let dir = std::env::temp_dir().join(format!("diskedit_neg_{}", std::process::id()));
@@ -223,7 +224,8 @@ fn cli_negative_paths() {
 }
 
 /// fs 族分支级旗标守卫：白名单是命令级的，分支差异必须显式拒绝而非静默忽略。
-/// 三处拒绝都发生在打开目标之前，任何平台上都可验证退出码与文案
+/// 三处拒绝都发生在打开目标之前；用例随写命令落在 Linux（见 tests/cli/main.rs）
+#[cfg(unix)]
 #[test]
 fn fs_command_branch_level_flag_guards() {
     let dir = std::env::temp_dir().join(format!("diskedit_fsflags_{}", std::process::id()));
@@ -279,6 +281,7 @@ fn flag_contract_fail_closed() {
 
 /// 值槽里的旗标笔误必须拒绝：`set img:1 name --bogs` 里的 `--bogs` 若被当成位置参数，
 /// 就会以 0 退出并把分区名改成一个以 `--` 开头的串（值路径不校验前缀）
+#[cfg(unix)]
 #[test]
 fn a_flag_typo_in_a_value_slot_is_refused() {
     let dir = std::env::temp_dir().join(format!("diskedit_fc3_{}", std::process::id()));
@@ -317,6 +320,7 @@ fn a_flag_typo_in_a_value_slot_is_refused() {
 
 /// `--flag=value`、`--` 终止符与 `--version` 的解析契约：等号形式与空格形式等价，
 /// 布尔旗标带值是笔误，`--` 之后一律位置参数，版本请求退 0
+#[cfg(unix)]
 #[test]
 fn option_syntax_equals_terminator_and_version() {
     let dir = std::env::temp_dir().join(format!("diskedit_fc4_{}", std::process::id()));
@@ -355,6 +359,7 @@ fn option_syntax_equals_terminator_and_version() {
 
 /// 旗标契约的其余几条 fail-closed：MBR 不接受 --allow-move、superfloppy 上 --no-fs
 /// 无事可做、离线 resizefs 没有"目标尺寸"语义、MBR --type 接受大写 0X 前缀
+#[cfg(unix)]
 #[test]
 fn flag_contract_mbr_resizefs_and_type() {
     let dir = std::env::temp_dir().join(format!("diskedit_fc2_{}", std::process::id()));
@@ -419,6 +424,7 @@ fn flag_contract_mbr_resizefs_and_type() {
 }
 
 /// 参数层与只读输出层的三处缺陷：`--help` 的主题、`:0` 分区号、MBR 条目末端算术域
+#[cfg(unix)]
 #[test]
 fn help_topic_zero_partition_and_mbr_end_overflow() {
     let dir = std::env::temp_dir().join(format!("diskedit_parse_{}", std::process::id()));
@@ -490,6 +496,7 @@ fn help_topic_zero_partition_and_mbr_end_overflow() {
 /// 三条"改参数即可解决"的拒绝必须落在 10，且提示要指向正确的旗标：
 /// 未知 FS 名（列出支持的类型）、`resize --start`（指向 move/resize-part）、
 /// `resize-part --start end`（指向 --grow-to-end）
+#[cfg(unix)]
 #[test]
 fn targeted_refusals_are_reported_as_ten() {
     let dir = std::env::temp_dir().join(format!("diskedit_refuse_{}", std::process::id()));
@@ -524,6 +531,69 @@ fn targeted_refusals_are_reported_as_ten() {
     assert!(e.contains("--grow-to-end"), "{e}");
 
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// 带参旗标不能把下一个选项吞成自己的值：`--name --align=cyl` 是缺值，
+/// 不是分区名 `--align=cyl`
+#[cfg(unix)]
+#[test]
+fn a_value_flag_does_not_swallow_the_next_option() {
+    let dir = std::env::temp_dir().join(format!("diskedit_swallow_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let exe = env!("CARGO_BIN_EXE_DiskEdit");
+    let run = |args: &[&str]| -> (i32, String) {
+        let out = Command::new(exe).args(args).output().unwrap();
+        (out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stderr).into_owned())
+    };
+
+    // 目标不存在：参数层在打开目标之前拒绝（10），不会走到 open（30）
+    let missing = dir.join("nope.img");
+    let (c, e) = run(&["copy", &format!("{}:1", missing.display()), "--start", "1000", "--name", "--align=cyl"]);
+    assert_eq!(c, 10, "a value flag followed by an option is a missing value: {e}");
+    assert!(e.contains("--name S requires a value"), "{e}");
+    assert!(!e.contains("open failed"), "the refusal must happen before the target is opened: {e}");
+    assert!(!missing.exists(), "the refused run must not create the target");
+
+    // 同一形态在能成功执行的目标上：解析层拒绝之后，镜像与伴随文件都不该变化
+    let img = dir.join("a.img");
+    let ss = 512u64;
+    let mut cur = Cursor::new(vec![0u8; 8192 * ss as usize]);
+    let mut gpt = gptman::GPT::new_from(&mut cur, ss, [0xAB; 16]).unwrap();
+    gpt[1] = gptman::GPTPartitionEntry {
+        partition_type_guid: [
+            0x6D, 0xFD, 0x57, 0x06, 0xAB, 0xA4, 0xC4, 0x43, 0x84, 0xE5, 0x09, 0x33, 0xC8, 0x4B, 0x4F, 0x4F,
+        ],
+        unique_partition_guid: [0x02; 16],
+        starting_lba: 2048,
+        ending_lba: 4095,
+        attribute_bits: 0,
+        partition_name: "smoke".into(),
+    };
+    gpt.write_into(&mut cur).unwrap();
+    std::fs::write(&img, with_protective_mbr(cur.into_inner())).unwrap();
+    let img_s = img.to_str().unwrap();
+    let before = std::fs::read(&img).unwrap();
+    let entries_before = dir_entries(&dir);
+
+    let (c, e) = run(&["copy", &format!("{img_s}:1"), "--start", "4096", "--name", "--align=cyl"]);
+    assert_eq!(c, 10, "the repro must be refused: {e}");
+    assert!(e.contains("--name S requires a value"), "{e}");
+    assert_eq!(std::fs::read(&img).unwrap(), before, "the refusal must not write the image");
+    assert_eq!(dir_entries(&dir), entries_before, "the refusal must leave no journal/lock/checkpoint");
+
+    // 下一个 token 是布尔旗标时同样是缺值：以 `-` 开头的裸 token 也是选项
+    let (c, e) = run(&["create", img_s, "--name", "--yes"]);
+    assert_eq!(c, 10, "{e}");
+    assert!(e.contains("--name S requires a value"), "{e}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[cfg(unix)]
+fn dir_entries(dir: &std::path::Path) -> Vec<std::ffi::OsString> {
+    let mut names: Vec<_> = std::fs::read_dir(dir).unwrap().map(|e| e.unwrap().file_name()).collect();
+    names.sort();
+    names
 }
 
 #[path = "flag_probes.rs"]
@@ -597,6 +667,7 @@ fn every_registered_flag_parses_as_documented() {
 
 /// 缺参数是定向拒绝，不是整份用法：每种缺失都要点名缺的是哪一项，
 /// 并指向该命令自己的帮助。退出码仍是 10
+#[cfg(unix)]
 #[test]
 fn missing_arguments_are_named() {
     let dir = std::env::temp_dir().join(format!("diskedit_missing_{}", std::process::id()));
@@ -629,6 +700,7 @@ fn missing_arguments_are_named() {
 
 /// 以 `-` 开头的相对尺寸只在命令声明的 SIZE 槽位被接受：
 /// `info -10` 是旗标笔误（10），不是一次打开失败（30）
+#[cfg(unix)]
 #[test]
 fn relative_size_only_in_the_size_slot() {
     let dir = std::env::temp_dir().join(format!("diskedit_slot_{}", std::process::id()));

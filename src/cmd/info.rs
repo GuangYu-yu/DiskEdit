@@ -305,17 +305,31 @@ pub(crate) fn cmd_info(a: &Args) -> u8 {
     // 非 raw 容器格式识别（qcow2/VMDK/VDI/VHD/VHDX 魔数，qemu docs block-drivers）：字节直译
     // 假设不成立（guest LBA 经容器内分配表间接映射），本工具无法处理，改用 qemu-nbd 映射为
     // 块设备（modprobe nbd max_part / qemu-nbd -c/-d，见 qemu 官方工具文档）
-    if let Some(fmt) = container_format(&src) {
-        eprintln!(
+    match container_format(&src) {
+        ContainerProbe::Detected(fmt) => eprintln!(
             "note: {} looks like a {fmt} container image (not raw); map it to a block device first:\n  \
              modprobe nbd max_part=8\n  \
              qemu-nbd -c /dev/nbd0 {}\n  \
              diskedit info /dev/nbd0   # then operate on /dev/nbd0 as usual\n  \
              qemu-nbd -d /dev/nbd0     # when done; writes go back to {} live",
             a.target, a.target, a.target
-        );
+        ),
+        ContainerProbe::NotContainer => {}
+        ContainerProbe::Unreadable(why) => eprintln!(
+            "note: could not check whether {} is a container image ({why}); if it is one, \
+             map it to a block device with qemu-nbd before operating on it",
+            a.target
+        ),
     }
     EXIT_OK
+}
+
+/// 容器探测的三种结局。"读不出来"不能并进"不是容器"：后者是检查过且没有命中，
+/// 前者是这次检查根本没完成
+enum ContainerProbe {
+    Detected(&'static str),
+    NotContainer,
+    Unreadable(String),
 }
 
 /// 容器格式魔数探测（仅提示，不做解析）：qcow2 @0 "QFI\xfb"；VDI @0 "<<< Oracle VM VirtualBox
@@ -324,40 +338,49 @@ pub(crate) fn cmd_info(a: &Args) -> u8 {
 /// VHD：@0 "conectix" 是 dynamic/differencing 的 footer 副本，fixed 的 footer 只在文件末尾
 /// → 先查 @0，未命中再仿 qemu block/vpc.c 的 fallback 读 EOF−512（footer 全大端、
 /// cookie@0 = "conectix"、type@60 = VHD_FIXED(2)）
-fn container_format(src: &FileSource) -> Option<&'static str> {
+fn container_format(src: &FileSource) -> ContainerProbe {
     let mut buf = [0u8; 64];
-    src.read_at(0, &mut buf).ok()?;
-    let b = &buf;
+    // 不足 64 字节的文件读不到完整头部，但任一魔数都要占满这些字节；fixed VHD 的
+    // footer 又要求至少 512 字节，这种尺寸已排除，故按"没有头部魔数"继续
+    let b: &[u8] = if src.size >= 64 {
+        match src.read_at(0, &mut buf) {
+            Ok(()) => &buf,
+            Err(e) => return ContainerProbe::Unreadable(format!("cannot read the first 64 bytes: {e}")),
+        }
+    } else {
+        &[]
+    };
     let starts = |m: &[u8]| b.len() >= m.len() && &b[..m.len()] == m;
     if starts(b"QFI\xfb".as_slice()) {
-        Some("qcow2")
+        ContainerProbe::Detected("qcow2")
     } else if starts(b"conectix".as_slice()) {
-        Some("VHD")
+        ContainerProbe::Detected("VHD")
     } else if starts(b"<<< Oracle VM".as_slice()) {
-        Some("VDI")
+        ContainerProbe::Detected("VDI")
     } else if starts(b"KDMV".as_slice()) || starts(b"# Disk DescriptorFile".as_slice()) {
-        Some("VMDK")
+        ContainerProbe::Detected("VMDK")
     } else if starts(b"vhdxfile".as_slice()) {
-        Some("VHDX")
-    } else if vhd_fixed_footer(src) {
-        Some("VHD")
+        ContainerProbe::Detected("VHDX")
     } else {
-        None
+        match vhd_fixed_footer(src) {
+            Ok(true) => ContainerProbe::Detected("VHD"),
+            Ok(false) => ContainerProbe::NotContainer,
+            Err(why) => ContainerProbe::Unreadable(why),
+        }
     }
 }
 
 /// fixed VHD 探测：footer 在文件末尾 512 字节（qemu block/vpc.c:289-320 读 offset −
 /// sizeof(VHDFooter) = 512），要求 creator@0 = "conectix"、type@60（大端 u32）= VHD_FIXED(2)
 /// （vpc.c:314-315）。本处只做格式识别，不校验 footer checksum（qemu 在随后一步校验）
-fn vhd_fixed_footer(src: &FileSource) -> bool {
+fn vhd_fixed_footer(src: &FileSource) -> Result<bool, String> {
     if src.size < 512 {
-        return false;
+        return Ok(false);
     }
     let mut f = [0u8; 512];
-    if src.read_at(src.size - 512, &mut f).is_err() {
-        return false;
-    }
-    &f[0..8] == b"conectix" && u32::from_be_bytes([f[60], f[61], f[62], f[63]]) == 2
+    src.read_at(src.size - 512, &mut f)
+        .map_err(|e| format!("cannot read the VHD footer at offset {}: {e}", src.size - 512))?;
+    Ok(&f[0..8] == b"conectix" && u32::from_be_bytes([f[60], f[61], f[62], f[63]]) == 2)
 }
 
 #[cfg(test)]
@@ -380,26 +403,34 @@ mod tests {
         let mut data = vec![0u8; 8192];
         data[8192 - 512..].copy_from_slice(&vhd_footer(2, b"conectix"));
         let src = src_from("vhd_ok", &data);
-        assert!(vhd_fixed_footer(&src));
-        assert_eq!(container_format(&src), Some("VHD"));
+        assert!(vhd_fixed_footer(&src).unwrap());
+        assert!(matches!(container_format(&src), ContainerProbe::Detected("VHD")));
 
         // EOF 处 cookie 损坏
         let mut bad = vec![0u8; 8192];
         bad[8192 - 512..].copy_from_slice(&vhd_footer(2, b"conectiX"));
-        assert!(!vhd_fixed_footer(&src_from("vhd_cookie", &bad)));
-        assert_eq!(container_format(&src_from("vhd_cookie2", &bad)), None);
+        assert!(!vhd_fixed_footer(&src_from("vhd_cookie", &bad)).unwrap());
+        assert!(matches!(container_format(&src_from("vhd_cookie2", &bad)), ContainerProbe::NotContainer));
 
         // DiskType 不是 VHD_FIXED（dynamic=3）
         let mut dyn_type = vec![0u8; 8192];
         dyn_type[8192 - 512..].copy_from_slice(&vhd_footer(3, b"conectix"));
-        assert!(!vhd_fixed_footer(&src_from("vhd_type", &dyn_type)));
+        assert!(!vhd_fixed_footer(&src_from("vhd_type", &dyn_type)).unwrap());
 
-        // 截断：文件短于 footer 起点 → 读不到完整 512 字节，不得误判
+        // 截断：footer 少了 1 字节，cookie 不再对齐，不得误判
         let truncated = &data[..data.len() - 1];
-        assert!(!vhd_fixed_footer(&src_from("vhd_trunc", truncated)));
+        assert!(!vhd_fixed_footer(&src_from("vhd_trunc", truncated)).unwrap());
 
         // 文件不足 512 字节
-        assert!(!vhd_fixed_footer(&src_from("vhd_tiny", &[0u8; 100])));
+        assert!(!vhd_fixed_footer(&src_from("vhd_tiny", &[0u8; 100])).unwrap());
+    }
+
+    /// 头部读不出来时，探测结论必须是"没查成"，不能落成"不是容器"而静默放过
+    #[test]
+    fn container_probe_reports_a_read_failure() {
+        let src = src_from("vhd_fault", &vec![0u8; 8192]);
+        let _fault = crate::dev::ReadFaultGuard::at(0);
+        assert!(matches!(container_format(&src), ContainerProbe::Unreadable(_)));
     }
 
     /// dynamic VHD 走 @0 分支（与 fixed 的 EOF 分支分工不同，两者不得互相干扰）
@@ -408,10 +439,13 @@ mod tests {
         let mut data = vec![0u8; 8192];
         data[0..512].copy_from_slice(&vhd_footer(3, b"conectix"));
         let src = src_from("vhd_dyn", &data);
-        assert_eq!(container_format(&src), Some("VHD"));
+        assert!(matches!(container_format(&src), ContainerProbe::Detected("VHD")));
         // @0 已是 VHD 时不会走到 EOF 分支：EOF 放一个 fixed footer 也不改变结论
         let mut both = data.clone();
         both[8192 - 512..].copy_from_slice(&vhd_footer(2, b"conectix"));
-        assert_eq!(container_format(&src_from("vhd_both", &both)), Some("VHD"));
+        assert!(matches!(
+            container_format(&src_from("vhd_both", &both)),
+            ContainerProbe::Detected("VHD")
+        ));
     }
 }

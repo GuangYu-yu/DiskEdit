@@ -79,13 +79,14 @@ pub(crate) fn classify_part_resize_error(e: &PartResizeError) -> ResizeFailClass
     }
 }
 
-/// 持久化分区缩放：sfdisk 改写该分区表项（start 不变，仅 size）→ partx -u
-/// 同步内核；partx 失败以 BLKPG 兜底。挂载中分区的 BLKRRPART 重读必失败，
-/// 故 --no-reread；--force 关闭 sfdisk 一致性检查，故写前先锁下重验盘上表
-/// （见函数体首段注释），边界与重叠仍由调用方预检。
-pub(crate) fn part_resize(t: &OnlineTarget, new_len_bytes: u64) -> Result<(), PartResizeError> {
-    let pno_str = t.pno.to_string();
-    let disk_str = t.disk_dev.to_string_lossy().into_owned();
+/// 读当前盘上表并对照决策快照：目标条目与邻居集都必须仍是取快照时的那一份。
+/// 写前复核的唯实现——`part_resize` 在 sfdisk 之前调用，在线缩容在 FS 步（首个
+/// 写盘步骤）之前调用。读不出来（`NoWrite`）与不一致（`Stale`）都不放行，
+/// 分类原样交给调用点的出口
+pub(crate) fn ensure_disk_snapshot_unchanged(
+    t: &OnlineTarget,
+    new_len_bytes: u64,
+) -> Result<crate::dev::FileSource, PartResizeError> {
     // 写前锁下重验（最小 TOCTOU 防线，**只覆盖目标分区自身与邻居集**）：sysfs 快照
     // 取自内核视图，取锁到 sfdisk 之间第三方（不守本工具的锁）可能已改写盘上表；
     // sfdisk 的 --force 关闭全部一致性检查，不会替我们拒绝由此造成的异常。这里
@@ -135,6 +136,17 @@ pub(crate) fn part_resize(t: &OnlineTarget, new_len_bytes: u64) -> Result<(), Pa
             });
         }
     }
+    Ok(disk)
+}
+
+/// 持久化分区缩放：sfdisk 改写该分区表项（start 不变，仅 size）→ partx -u
+/// 同步内核；partx 失败以 BLKPG 兜底。挂载中分区的 BLKRRPART 重读必失败，
+/// 故 --no-reread；--force 关闭 sfdisk 一致性检查，故写前先锁下重验盘上表
+/// （见 `ensure_disk_snapshot_unchanged`），边界与重叠仍由调用方预检。
+pub(crate) fn part_resize(t: &OnlineTarget, new_len_bytes: u64) -> Result<(), PartResizeError> {
+    let pno_str = t.pno.to_string();
+    let disk_str = t.disk_dev.to_string_lossy().into_owned();
+    let disk = ensure_disk_snapshot_unchanged(t, new_len_bytes)?;
     // 交给 sfdisk 的是这条路径，它自己再打开一次：写前把路径与本次重读所用句柄的
     // 设备号核对一遍。核对之后到 sfdisk 打开之间仍有窗口（它只接受路径），本进程
     // 无法消除——但窗口里"路径被重绑到另一台设备"不再是唯一的判据来源

@@ -27,7 +27,7 @@ echo "########## A: journal 流式（数据字节不入 journal） ##########"
 mk
 mnt 2; dd if=/dev/urandom of=/testmnt/blob bs=1M count=90 2>/dev/null; umnt; LD=$(lo_attach "$T"); MD2=$(mdsum "${LD}p2"); lo_detach "$LD"
 echo "-- A1: 中断的 100M 分区搬移后 journal 体积 --"
-DISKEDIT_FAULT=rs-chunk:60 $BF move "$T":2 --start 250000 --chunk-size 1 >/dev/null 2>&1
+DISKEDIT_FAULT=rs-chunk:60 $BF move "$T":2 --start 250000 --chunk-size 1 --yes >/dev/null 2>&1
 JSZ=$(stat -c%s "$T$JOURNAL_SUFFIX" 2>/dev/null || echo 0)
 echo "journal = $JSZ bytes (搬移量约 100M)"
 if [ "$JSZ" -gt 5 ] && [ "$JSZ" -lt 1048576 ]; then echo "A1 JOURNAL-STREAMING OK (<1MiB, 含搬移标记)"; else { echo "A1 JOURNAL SIZE ODD ($JSZ)"; rc=1; }; fi
@@ -36,7 +36,7 @@ OUT=$($B undo "$T" --yes 2>&1); E=$?
 echo "exit=$E msg: $(echo "$OUT" | head -1 | cut -c1-70)"
 [ "$E" = "10" ] && echo "$OUT" | grep -q "data was moved" && echo "A2 UNDO-REFUSED OK" || { echo "A2 UNDO NOT REFUSED"; rc=1; }
 echo "-- A3: 完成后 journal 应被删除 --"
-$B move "$T":2 --start 250000 --chunk-size 1 >/dev/null 2>&1; E=$?
+$B move "$T":2 --start 250000 --chunk-size 1 --yes >/dev/null 2>&1; E=$?
 [ -f "$T$JOURNAL_SUFFIX" ] && { echo "A3 JOURNAL LEFT (bad)"; rc=1; } || echo "A3 JOURNAL DROPPED OK (exit=$E)"
 LD=$(lo_attach "$T")
 [ "$MD2" = "$(mdsum "${LD}p2")" ] && echo "A3 p2 DEV OK" || { echo "A3 p2 DEV CORRUPT"; rc=1; }
@@ -58,7 +58,7 @@ dd if=/dev/urandom of=/testmnt/a/rand.bin bs=1M count=30 2>/dev/null
 echo "files: $(wc -l < "$SNAP.1"), symlink: $(readlink /testmnt/link1), hardlink count: $(stat -c%h /testmnt/a/f2.txt)"
 umnt
 # 自重叠左移：delta = 249856-411648 = -161792，|delta| < 长度 204800
-$B move "$T":2 --start 250000 --chunk-size 1 >/dev/null 2>&1; echo "move exit=$?"
+$B move "$T":2 --start 250000 --chunk-size 1 --yes >/dev/null 2>&1; echo "move exit=$?"
 LD=$(lo_attach "$T")
 e2fsck -fn "${LD}p2" > /var/tmp/t22e2out 2>&1; EC=$?
 echo "e2fsck -fn exit=$EC (0=clean)"

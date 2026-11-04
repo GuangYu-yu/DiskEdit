@@ -1,6 +1,7 @@
 //! 命令实现：每条命令的参数消费、逻辑与帮助文本同处一个模块。
 
 pub(crate) mod abandon;
+pub(crate) mod confirm;
 pub(crate) mod fs;
 pub(crate) mod info;
 pub(crate) mod layout;
@@ -74,6 +75,8 @@ pub(crate) struct CommandSpec {
     pub(crate) max_pos: usize,
     /// 撤销窗口的生命周期（见 `TargetMode`）：main 据此决定成功后是否关闭它
     pub(crate) mode: TargetMode,
+    /// 本命令需要的副作用能力。由能力门在**命令函数之前**判定，不交给各命令自行守门
+    pub(crate) capabilities: &'static [Capability],
     /// SIZE 落在 `pos` 的哪个下标。以 `-` 开头的相对尺寸只在这个槽位被接受：
     /// 放宽到任何位置，`info -10` 这种旗标笔误会变成一次"打开失败"而不是用法拒绝
     pub(crate) size_pos: Option<usize>,
@@ -98,6 +101,27 @@ pub(crate) enum TargetMode {
     WriteJournal,
 }
 
+/// 一条命令会造成的副作用类别：能力门据此执行平台策略。
+///
+/// 分派表里**每条命令都必须显式声明**；空声明不是"无需副作用"，而是漏声明，
+/// 能力门把它与超出平台保证的声明同样拒绝（fail-closed）。
+///
+/// 分类按"谁动手"而不是"动什么"：一条命令可以同时落入几档（resize 既改盘面字节、
+/// 又建 journal、又启动 resize2fs、又改 loop 分区设备）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Capability {
+    /// 纯读：只经只读句柄读盘面与元数据，不取锁、不建伴随文件、不启动外部工具
+    ReadOnly,
+    /// 改盘面字节（分区表与数据区都算）
+    TargetData,
+    /// 建/改/删伴随文件：lock、journal、checkpoint、log
+    CompanionFile,
+    /// 启动会写盘的外部程序：mkfs、mount、resize2fs、fsadm、btrfs、fsck、LVM 工具等
+    ExternalTool,
+    /// 改设备状态：loop attach/detach、BLKPG、BLKRRPART 等
+    DeviceState,
+}
+
 pub(crate) const COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         name: "info",
@@ -105,6 +129,7 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
         help: info::HELP,
         max_pos: 1,
         mode: TargetMode::ReadOnly,
+        capabilities: &[Capability::ReadOnly],
         size_pos: None,
         run: |_, a| info::cmd_info(a).into(),
     },
@@ -121,33 +146,52 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
         help: resize::HELP,
         max_pos: 2, // TARGET:N + SIZE
         mode: TargetMode::WriteJournal,
+        capabilities: &[
+            Capability::TargetData,
+            Capability::CompanionFile,
+            Capability::ExternalTool,
+            Capability::DeviceState,
+        ],
         size_pos: Some(1), // TARGET:N + SIZE
         run: |_, a| resize::cmd_resize(a).into(),
     },
     CommandSpec {
         name: "move",
-        flags: &["--sector-size", "--start", "--align", "--chunk-size", "--no-fs"],
+        flags: &["--sector-size", "--start", "--align", "--chunk-size", "--no-fs", "--yes"],
         help: layout::HELP_MOVE,
         max_pos: 1,
         mode: TargetMode::WriteJournal,
+        capabilities: &[
+            Capability::TargetData,
+            Capability::CompanionFile,
+            Capability::ExternalTool,
+            Capability::DeviceState,
+        ],
         size_pos: None,
         run: |_, a| layout::cmd_move(a).into(),
     },
     CommandSpec {
         name: "copy",
-        flags: &["--sector-size", "--start", "--align", "--chunk-size", "--name", "--keep-partuuid"],
+        flags: &["--sector-size", "--start", "--align", "--chunk-size", "--name", "--keep-partuuid", "--yes"],
         help: layout::HELP_COPY,
         max_pos: 1,
         mode: TargetMode::WriteJournal,
+        capabilities: &[Capability::TargetData, Capability::CompanionFile, Capability::DeviceState],
         size_pos: None,
         run: |_, a| layout::cmd_copy(a).into(),
     },
     CommandSpec {
         name: "create",
-        flags: &["--sector-size", "--size", "--fs", "--name"],
+        flags: &["--sector-size", "--size", "--fs", "--name", "--yes"],
         help: layout::HELP_CREATE,
         max_pos: 1,
         mode: TargetMode::WriteJournal,
+        capabilities: &[
+            Capability::TargetData,
+            Capability::CompanionFile,
+            Capability::ExternalTool,
+            Capability::DeviceState,
+        ],
         size_pos: None,
         run: |_, a| layout::cmd_create(a).into(),
     },
@@ -157,6 +201,7 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
         help: layout::HELP_DELETE,
         max_pos: 1,
         mode: TargetMode::WriteJournal,
+        capabilities: &[Capability::TargetData, Capability::CompanionFile, Capability::DeviceState],
         size_pos: None,
         run: |_, a| layout::cmd_delete(a).into(),
     },
@@ -166,6 +211,12 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
         help: fs::HELP_SET,
         max_pos: 4, // TARGET:N + key + value + state
         mode: TargetMode::WriteJournal,
+        capabilities: &[
+            Capability::TargetData,
+            Capability::CompanionFile,
+            Capability::ExternalTool,
+            Capability::DeviceState,
+        ],
         size_pos: None,
         run: |_, a| fs::cmd_set(a).into(),
     },
@@ -176,6 +227,7 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
         help: fs::HELP_CHECK,
         max_pos: 1,
         mode: TargetMode::WriteNoJournal,
+        capabilities: &[Capability::CompanionFile, Capability::ExternalTool, Capability::DeviceState],
         size_pos: None,
         run: |_, a| fs::cmd_check(a).into(),
     },
@@ -189,6 +241,7 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
         help: fs::HELP_MKFS,
         max_pos: 2, // TARGET:N + FSTYPE
         mode: TargetMode::WriteJournal,
+        capabilities: &[Capability::CompanionFile, Capability::ExternalTool, Capability::DeviceState],
         size_pos: None,
         run: |_, a| fs::cmd_mkfs(a).into(),
     },
@@ -198,6 +251,7 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
         help: fs::HELP_RESIZEFS,
         max_pos: 2, // MOUNTPOINT + BYTES
         mode: TargetMode::WriteNoJournal,
+        capabilities: &[Capability::CompanionFile, Capability::ExternalTool, Capability::DeviceState],
         size_pos: Some(1), // MOUNTPOINT + BYTES
         run: |_, a| fs::cmd_resizefs(a).into(),
     },
@@ -207,6 +261,12 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
         help: undo::HELP,
         max_pos: 1,
         mode: TargetMode::WriteNoJournal,
+        capabilities: &[
+            Capability::TargetData,
+            Capability::CompanionFile,
+            Capability::ExternalTool,
+            Capability::DeviceState,
+        ],
         size_pos: None,
         run: |_, a| undo::cmd_undo(a).into(),
     },
@@ -219,6 +279,8 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
         help: abandon::HELP,
         max_pos: 1,
         mode: TargetMode::WriteNoJournal,
+        // 只改伴随文件的名字与位置，盘面一个字节不写
+        capabilities: &[Capability::CompanionFile],
         size_pos: None,
         run: |_, a| abandon::cmd_abandon(a).into(),
     },
@@ -228,6 +290,7 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
         help: layout::HELP_NEW,
         max_pos: 1,
         mode: TargetMode::WriteJournal,
+        capabilities: &[Capability::TargetData, Capability::CompanionFile, Capability::DeviceState],
         size_pos: None,
         run: |_, a| layout::cmd_new(a).into(),
     },
@@ -237,15 +300,22 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
         help: layout::HELP_ADD,
         max_pos: 1,
         mode: TargetMode::WriteJournal,
+        capabilities: &[Capability::TargetData, Capability::CompanionFile, Capability::DeviceState],
         size_pos: None,
         run: |_, a| layout::cmd_add(a).into(),
     },
     CommandSpec {
         name: "resize-part",
-        flags: &["--sector-size", "--start", "--end", "--grow-to-end", "--align", "--chunk-size", "--no-fs"],
+        flags: &["--sector-size", "--start", "--end", "--grow-to-end", "--align", "--chunk-size", "--no-fs", "--yes"],
         help: layout::HELP_RESIZE_PART,
         max_pos: 1,
         mode: TargetMode::WriteJournal,
+        capabilities: &[
+            Capability::TargetData,
+            Capability::CompanionFile,
+            Capability::ExternalTool,
+            Capability::DeviceState,
+        ],
         size_pos: None,
         run: |_, a| layout::cmd_resize_part(a).into(),
     },
@@ -255,18 +325,25 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
         help: plan::HELP_PLAN,
         max_pos: 1,
         mode: TargetMode::ReadOnly,
+        // 走 open_target_ro：不取锁，也不建 ckpt/journal
+        capabilities: &[Capability::ReadOnly],
         size_pos: None,
         run: plan::cmd_plan_apply,
     },
     CommandSpec {
         name: "apply",
-        // 无 --yes：apply 与 plan 是同一件事的两面——plan 干跑不触盘，apply 在**锁下**
-        // 按盘上现状重新推导计划后执行（见 cmd::plan），没有第二个确认层；
-        // 白名单声明却不消费的旗标 = 静默接受用户以为存在的确认
-        flags: &["--sector-size", "--grow", "--chunk-size", "--no-fs"],
+        // --yes 只在几何推导出"挡路分区要真的搬数据"时才被消费（见 cmd::confirm）：
+        // 空盘扩容不需要授权，白名单放行但确认门的判据为空
+        flags: &["--sector-size", "--grow", "--chunk-size", "--no-fs", "--yes"],
         help: plan::HELP_APPLY,
         max_pos: 1,
         mode: TargetMode::WriteJournal,
+        capabilities: &[
+            Capability::TargetData,
+            Capability::CompanionFile,
+            Capability::ExternalTool,
+            Capability::DeviceState,
+        ],
         size_pos: None,
         run: plan::cmd_plan_apply,
     },
@@ -290,6 +367,34 @@ pub(crate) fn flags_for(name: &str) -> Option<&'static [&'static str]> {
 /// 该命令是否开了 undo journal（因而成功时需关闭撤销窗口）。由 `CommandSpec::mode` 派生
 pub(crate) fn opens_undo_journal(name: &str) -> bool {
     find(name).is_some_and(|c| c.mode == TargetMode::WriteJournal)
+}
+
+/// 平台能力不足时的唯一文案。门在命令分派处、任何伴随文件创建之前拒绝，
+/// 所以"没有写入"覆盖目标字节与 lock/journal/ckpt/log 全部落点
+const UNSUPPORTED_WRITE: &str = "this platform does not support safe disk writes — run this on Linux. \
+     Nothing was written (no target bytes, lock, journal, checkpoint, or log).";
+
+/// 平台策略：Linux 是本工具承诺安全写盘的平台，放行全部能力；其他平台放行纯读与只改伴随
+/// 文件的能力——`abandon` 只改名现场、盘面一个字节不写，且它正是 busy 文案给出的唯一出路，
+/// 留下它就等于在那些平台上把目标锁死。
+///
+/// 非 Linux 的放行集合是**白名单**：能力必须显式出现在 `permitted` 里才放行，新命令或
+/// 新能力不会被默认继承；名单本身由 `capability_gate_is_fail_closed` 逐条固定。
+///
+/// 空声明按漏声明处理并拒绝——能力门不替命令猜测"什么都没声明 = 什么都不做"
+fn platform_allows(caps: &[Capability]) -> bool {
+    let permitted: &[Capability] = if cfg!(target_os = "linux") {
+        &[
+            Capability::ReadOnly,
+            Capability::TargetData,
+            Capability::CompanionFile,
+            Capability::ExternalTool,
+            Capability::DeviceState,
+        ]
+    } else {
+        &[Capability::ReadOnly, Capability::CompanionFile]
+    };
+    !caps.is_empty() && caps.iter().all(|c| permitted.contains(c))
 }
 
 /// 命令分派。usage/help_cmd 不返回（直接退出进程）
@@ -316,6 +421,11 @@ pub(crate) fn dispatch(cmd: &str, a: &Args) -> CmdResult {
                     bail_fail(Fail::refused(format!(
                         "unexpected extra argument for `{cmd}`: {extra} (see `diskedit help {cmd}`)"
                     )));
+                }
+                // 统一能力门：先于任何命令函数，因而也先于锁/日志/journal/checkpoint
+                // 的一切创建。写命令在不承诺安全写盘的平台上在这里结束，不落到下层
+                if !platform_allows(c.capabilities) {
+                    bail_fail(Fail::infra(UNSUPPORTED_WRITE));
                 }
                 let result = (c.run)(cmd, a);
                 // 开了撤销窗口的命令必须带回后置状态：只给退出码时 closes_journal
@@ -439,6 +549,74 @@ mod tests {
                 expected.iter().any(|(n, _)| *n == c.name),
                 "{}: no expected journal mode — decide it and add it here",
                 c.name
+            );
+        }
+    }
+
+    /// 每条命令的副作用能力都是逐条裁定过的：表中漏一条（新命令没写 capabilities）
+    /// 与改了能力同样报错。空声明由 `capability_gate_is_fail_closed` 单独拒绝
+    #[test]
+    fn capabilities_are_as_reviewed() {
+        use Capability::{CompanionFile, DeviceState, ExternalTool, ReadOnly, TargetData};
+        let expected: &[(&str, &[Capability])] = &[
+            ("info", &[ReadOnly]),
+            ("resize", &[TargetData, CompanionFile, ExternalTool, DeviceState]),
+            ("move", &[TargetData, CompanionFile, ExternalTool, DeviceState]),
+            ("copy", &[TargetData, CompanionFile, DeviceState]),
+            ("create", &[TargetData, CompanionFile, ExternalTool, DeviceState]),
+            ("delete", &[TargetData, CompanionFile, DeviceState]),
+            ("set", &[TargetData, CompanionFile, ExternalTool, DeviceState]),
+            ("check", &[CompanionFile, ExternalTool, DeviceState]),
+            ("mkfs", &[CompanionFile, ExternalTool, DeviceState]),
+            ("resizefs", &[CompanionFile, ExternalTool, DeviceState]),
+            ("undo", &[TargetData, CompanionFile, ExternalTool, DeviceState]),
+            ("abandon", &[CompanionFile]),
+            ("new", &[TargetData, CompanionFile, DeviceState]),
+            ("add", &[TargetData, CompanionFile, DeviceState]),
+            ("resize-part", &[TargetData, CompanionFile, ExternalTool, DeviceState]),
+            ("plan", &[ReadOnly]),
+            ("apply", &[TargetData, CompanionFile, ExternalTool, DeviceState]),
+        ];
+        for (name, caps) in expected {
+            let c = find(name).unwrap_or_else(|| panic!("{name}: not a command"));
+            assert_eq!(c.capabilities, *caps, "{name}: declared capabilities changed");
+        }
+        for c in COMMANDS {
+            assert!(
+                expected.iter().any(|(n, _)| *n == c.name),
+                "{}: no expected capabilities — decide them and add them here",
+                c.name
+            );
+        }
+    }
+
+    /// 能力门 fail-closed：空声明不是"无副作用"，不能被默认放行；非 Linux 上
+    /// 只有纯读命令与只改伴随文件的 `abandon` 能过门
+    #[test]
+    fn capability_gate_is_fail_closed() {
+        assert!(!platform_allows(&[]), "empty declaration must be denied, not default-allowed");
+        assert!(platform_allows(&[Capability::ReadOnly]));
+        assert_eq!(
+            platform_allows(&[Capability::TargetData]),
+            cfg!(target_os = "linux"),
+            "only Linux carries the safe-write guarantee"
+        );
+        // busy 文案把 abandon 指为唯一出路：那条建议必须过与命令相同的门，
+        // 否则在非 Linux 上就是一句注定失败的指引
+        assert!(
+            platform_allows(find("abandon").unwrap().capabilities),
+            "the way out recommended by the busy message must be admitted on every platform"
+        );
+        for c in COMMANDS {
+            assert!(!c.capabilities.is_empty(), "{}: capabilities not declared", c.name);
+        }
+        if !cfg!(target_os = "linux") {
+            let permitted: Vec<&str> =
+                COMMANDS.iter().filter(|c| platform_allows(c.capabilities)).map(|c| c.name).collect();
+            assert_eq!(
+                permitted,
+                ["info", "abandon", "plan"],
+                "only read-only commands and the recovery-scene release may pass this platform's gate"
             );
         }
     }

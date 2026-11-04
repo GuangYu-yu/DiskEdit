@@ -19,7 +19,7 @@ mk() { # $1=fs  $2=size
   rm -f "$T" "$T"$SIDECAR_GLOB
   truncate -s 1G "$T"
   $B new "$T" --yes >/dev/null
-  $B create "$T" --size "$2" --name p1 --fs "$1" >/dev/null 2>&1
+  $B create "$T" --size "$2" --name p1 --fs "$1" --yes >/dev/null 2>&1
 }
 
 echo "########## A: check 命令（从未运行过的分支）##########"
@@ -60,7 +60,7 @@ echo "########## D: 缩容 + --allow-move（缩容不需要让位）##########"
 mk ext4 500M
 LD=$(lo_attach "$T"); mount_at "${LD}p1" /testmnt && { dd if=/dev/urandom of=/testmnt/d.bin bs=1M count=50 2>/dev/null; umount /testmnt 2>/dev/null; }
 lo_detach "$LD"
-OUT=$($B resize "$T":1 350M --allow-move 2>&1); E=$?
+OUT=$($B resize "$T":1 350M --allow-move --yes 2>&1); E=$?
 echo "exit=$E : $(echo "$OUT" | tail -1)"
 LD=$(lo_attach "$T")
 e2fsck -fn "${LD}p1" >/dev/null 2>&1 && echo "D e2fsck clean" || { echo "D e2fsck ISSUES"; rc=1; }
@@ -104,7 +104,7 @@ for fs in f2fs vfat exfat ntfs xfs btrfs; do
   rm -f "$T" "$T"$SIDECAR_GLOB
   truncate -s 1G "$T"
   $B new "$T" --yes >/dev/null
-  $B create "$T" --size "$sz" --name t --fs "$fs" >/dev/null 2>&1; E=$?
+  $B create "$T" --size "$sz" --name t --fs "$fs" --yes >/dev/null 2>&1; E=$?
   ID=$($B info "$T" | grep -o '"fs":"[^"]*"' | head -1)
   [ "$E" = "0" ] && [ -n "$ID" ] && echo "  $fs: create OK ($ID)" || { echo "  $fs: create FAILED (exit=$E, identified=$ID)"; rc=1; }
 done

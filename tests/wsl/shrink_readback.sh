@@ -26,7 +26,7 @@ setup_gpt() {
     rm -f "$T" "$T"$SIDECAR_GLOB
     truncate -s 512M "$T"
     $B new "$T" --yes >/dev/null
-    $B create "$T" --size 400M --name p1 --fs ext4 >/dev/null 2>&1
+    $B create "$T" --size 400M --name p1 --fs ext4 --yes >/dev/null 2>&1
 }
 
 # 分区 1 的字节数（info 输出里盘与分区各有一处 size_bytes，取分区那条）
@@ -34,7 +34,7 @@ pt1() { $B info "$T" | grep -o '"num":1,[^}]*}' | grep -o '"size_bytes":[0-9]*';
 
 echo "===== A: ext 缩容，回读正常 → 成功行同时给请求值与实际落点 → 0 ====="
 setup_gpt
-OUT=$($B resize "$T":1 300M 2>&1); E=$?
+OUT=$($B resize "$T":1 300M --yes 2>&1); E=$?
 echo "exit=$E"
 echo "$OUT" | sed 's/^/    /'
 exp "$E" 0 "落点在请求范围内即完整成功"
@@ -47,7 +47,7 @@ echo
 echo "===== B: 请求值不是 FS 块大小的整数倍 → 工具向下取整，实际 < 请求 → 0 ====="
 setup_gpt
 REQ=104858112   # 100MiB + 512B：512 的整数倍（204801 扇区）、4096 的非整数倍（25600.125 块）
-OUT=$($B resize "$T":1 "$REQ" 2>&1); E=$?
+OUT=$($B resize "$T":1 "$REQ" --yes 2>&1); E=$?
 echo "exit=$E"
 echo "$OUT" | grep -E 'fs shrunk|refused|error' | sed 's/^/    /'
 exp "$E" 0 "取整落点仍在请求范围内即成功"
@@ -66,7 +66,7 @@ rm -rf "$FAKE"; mkdir -p "$FAKE"
 fake dumpe2fs '#!/bin/sh
 echo "Block count:              999999999"
 echo "Block size:               4096"'
-OUT=$($BFK resize "$T":1 300M 2>&1); E=$?
+OUT=$($BFK resize "$T":1 300M --yes 2>&1); E=$?
 echo "exit=$E"
 echo "$OUT" | sed 's/^/    /'
 exp "$E" 30 "落点超出请求值不是成功（可能已写盘，带警示）"
@@ -87,7 +87,7 @@ rm -rf "$FAKE"; mkdir -p "$FAKE"
 # 只给 Block size（预查要用），回读要的 Block count 缺失 = 回读拿不到落点
 fake dumpe2fs '#!/bin/sh
 echo "Block size:               4096"'
-OUT=$($BFK resize "$T":1 300M 2>&1); E=$?
+OUT=$($BFK resize "$T":1 300M --yes 2>&1); E=$?
 echo "exit=$E"
 echo "$OUT" | sed 's/^/    /'
 exp "$E" 20 "回读不出来不是缩容失败，改出一条待办"
@@ -104,8 +104,8 @@ echo "===== E: MBR 路径同样报出请求值与实际落点 → 0 ====="
 rm -f "$T" "$T"$SIDECAR_GLOB
 truncate -s 512M "$T"
 $B new "$T" --table msdos --yes >/dev/null
-$B create "$T" --size 400M --fs ext4 >/dev/null 2>&1
-OUT=$($B resize "$T":1 300M 2>&1); E=$?
+$B create "$T" --size 400M --fs ext4 --yes >/dev/null 2>&1
+OUT=$($B resize "$T":1 300M --yes 2>&1); E=$?
 echo "exit=$E"
 echo "$OUT" | sed 's/^/    /'
 exp "$E" 0 "MBR 缩容成功"
@@ -113,6 +113,29 @@ case "$OUT" in
     *"fs shrunk to 314572800 bytes (requested 314572800)"*) echo "E both sizes OK";;
     *) echo "E size line missing (BAD)"; rc=1;;
 esac
+
+echo
+echo "===== F: 预查命令把块大小报成 0 → 写盘前拒绝，表不变 → 30 ====="
+setup_gpt
+BEFORE=$(pt1)
+rm -rf "$FAKE"; mkdir -p "$FAKE"
+# 预查要的 Block size 报 0（0 不是可用尺寸）；Block count 一并给出，贴近真实输出
+fake dumpe2fs '#!/bin/sh
+echo "Block count:              8192"
+echo "Block size:               0"'
+OUT=$($BFK resize "$T":1 300M --yes 2>&1); E=$?
+echo "exit=$E"
+echo "$OUT" | sed 's/^/    /'
+exp "$E" 30 "0 不是可用尺寸，预查拒绝"
+case "$OUT" in
+    *"not a usable size"*) echo "F unusable-value reason OK";;
+    *) echo "F reason missing (BAD)"; rc=1;;
+esac
+case "$OUT" in
+    *"fs shrunk"*) echo "F claimed a shrink (BAD)"; rc=1;;
+    *) echo "F no shrink claim OK";;
+esac
+assert_eq "$(pt1)" "$BEFORE" "F 拒绝必须发生在写表之前（分区尺寸未变）"
 
 echo
 echo "===== 收尾与残留核对 ====="

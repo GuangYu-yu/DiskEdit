@@ -28,7 +28,7 @@ pub fn copy_part(
         log(&format!("[repair] {what}"));
     }
     // 越界之后的 io 失败一律归 Failed（复制阶段不改表，但数据区已动）
-    execute_copy(src, &p, name, chunk_len, log).map_err(Fail::from)
+    execute_copy(src, g, &p, name, chunk_len, log).map_err(Fail::from)
 }
 
 /// 事前判定的产物：自有数据 + 源条目的类型 GUID 与副本的 unique GUID
@@ -100,14 +100,17 @@ pub(crate) fn new_partuuid() -> Result<[u8; 16], Fail> {
     Ok(guid)
 }
 
-/// 执行（写盘）。返回 `io::Result`：函数体内构造不出 `Fail::Refused`
+/// 执行（写盘）。返回 `io::Result`：函数体内构造不出 `Fail::Refused`。
+/// 几何由调用方下传：首次写盘前按它复核盘上的表，外来改动即拒绝
 pub(crate) fn execute_copy(
     src: &mut WriteSource,
+    g: &ValidatedGeometry,
     p: &PreparedCopy,
     name: &str,
     chunk_len: u64,
     log: &mut dyn FnMut(&str),
 ) -> io::Result<u32> {
+    g.ensure_entries_unchanged(src)?;
     let (ss, part, new_start, new_end, len) = (p.ss, p.part, p.new_start, p.new_end, p.len);
     // 与 execute_apply 的同类换算同口径（见那边的 byte_overflow）：这些 LBA 经 checked
     // 运算才能进地址计算，回绕会让复制落到盘上另一个位置

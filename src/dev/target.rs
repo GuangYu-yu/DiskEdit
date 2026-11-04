@@ -109,14 +109,108 @@ pub(crate) fn ensure_node_is_device(node: &Path, sys_dir: &Path) -> io::Result<(
     Ok(())
 }
 
+/// 恢复落点的形态。`File` 只能由 [`RecoveryFile::at`] 造出——它是"已确认指向普通
+/// 恢复文件"的唯一凭证；删除、改名、回放都只接受这一种落点。
+pub(crate) enum RecoveryEntry {
+    /// 落点不存在
+    Absent,
+    /// 落点是普通文件，可充当恢复现场
+    File(RecoveryFile),
+    /// 落点存在，但不是本工具的恢复文件（符号链接 / dangling 链接 / 目录 / 其它非普通条目）
+    NotARecoveryFile(NotARecoveryFile),
+}
+
+/// 一个**已确认**指向普通恢复文件的落点。字段私有、构造点只有 [`Self::at`]，
+/// 故符号链接、目录与 dangling 链接不可能被当成恢复文件交给删除或改名。
+pub(crate) struct RecoveryFile {
+    path: std::path::PathBuf,
+    meta: std::fs::Metadata,
+}
+
+/// 不是恢复文件的条目及其形态，`what` 只用于把拒绝理由说清
+pub(crate) struct NotARecoveryFile {
+    what: &'static str,
+}
+
+impl NotARecoveryFile {
+    pub(crate) fn what(&self) -> &'static str {
+        self.what
+    }
+
+    /// 拒绝文案：落点是 X，不是本工具的恢复文件
+    pub(crate) fn message(&self, path: &std::path::Path) -> String {
+        format!(
+            "the recovery path at {} is {}, not a recovery file written by this tool",
+            path.display(),
+            self.what
+        )
+    }
+}
+
+impl RecoveryFile {
+    /// 唯一构造点。认落点**本身**（`symlink_metadata`，不跟随链接）：跟随的话，
+    /// 指向别处的链接会被当成本工具的恢复文件，随后的删除、改名、回放都落到链接目标上。
+    /// 符号链接、目录与其它非普通条目一律 `NotARecoveryFile`——它们是"存在但不是恢复文件"，
+    /// 不是"不存在"
+    pub(crate) fn at(path: &std::path::Path) -> io::Result<RecoveryEntry> {
+        let meta = match std::fs::symlink_metadata(path) {
+            Ok(m) => m,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(RecoveryEntry::Absent),
+            Err(e) => return Err(e),
+        };
+        let ft = meta.file_type();
+        if ft.is_symlink() {
+            // 链接目标是否存在只影响文案：两种形态都不是本工具的恢复文件
+            let what = match std::fs::metadata(path) {
+                Err(e) if e.kind() == io::ErrorKind::NotFound => "a dangling symbolic link",
+                _ => "a symbolic link",
+            };
+            return Ok(RecoveryEntry::NotARecoveryFile(NotARecoveryFile { what }));
+        }
+        if ft.is_dir() {
+            return Ok(RecoveryEntry::NotARecoveryFile(NotARecoveryFile { what: "a directory" }));
+        }
+        if !meta.is_file() {
+            return Ok(RecoveryEntry::NotARecoveryFile(NotARecoveryFile { what: "not a regular file" }));
+        }
+        Ok(RecoveryEntry::File(RecoveryFile { path: path.to_path_buf(), meta }))
+    }
+
+    pub(crate) fn path(&self) -> &std::path::Path {
+        &self.path
+    }
+
+    pub(crate) fn metadata(&self) -> &std::fs::Metadata {
+        &self.meta
+    }
+}
+
 /// 删除一份恢复现场（journal / checkpoint）并落盘目录项。删除成功（或本就不存在）
 /// 后 fsync 父目录：unlink 不落盘时掉电后文件可能复活，把已完成的事务报成未收尾现场。
 /// 返回删除的**后置条件**是否成立；目录项未能落盘时也返回 false——文件此刻不在，
 /// 但它可能在掉电后复活，这条欠账必须浮出，而不是只留一句告警
+///
+/// 落点先经 [`RecoveryFile::at`] 认条目本身：符号链接、目录与 dangling 链接原样保留。
+/// 删除只作用于这个路径入口，`remove_file` 不会顺着符号链接删到目标
 pub(crate) fn remove_recovery_file(path: &std::path::Path) -> bool {
+    match RecoveryFile::at(path) {
+        Ok(RecoveryEntry::Absent) => return true,
+        Ok(RecoveryEntry::File(_)) => {}
+        Ok(RecoveryEntry::NotARecoveryFile(n)) => {
+            eprintln!("warning: {} — left in place", n.message(path));
+            return false;
+        }
+        Err(e) => {
+            eprintln!("warning: cannot stat {}: {e} — left in place", path.display());
+            return false;
+        }
+    }
     match std::fs::remove_file(path) {
         Ok(()) => match sync_dir_entry(path) {
-            Ok(()) => true,
+            Ok(()) => {
+                note_removed_unverified(path);
+                true
+            }
             Err(e) => {
                 eprintln!(
                     "warning: removed {} but could not persist the parent directory entry ({e}) — it may reappear after a power loss",
@@ -180,6 +274,34 @@ pub(crate) fn best_effort_dir_fsync(path: &std::path::Path) {
 
 #[cfg(not(unix))]
 pub(crate) fn best_effort_dir_fsync(_path: &std::path::Path) {}
+
+/// 删除成功后的持久性说明。Unix 上 [`sync_dir_entry`] 已把父目录项落盘；其余平台上
+/// 该函数直接返回 `Ok`、没有任何落盘动作，删除确实发生，但"掉电后不再出现"无法验证，
+/// 报告不得略去这一点
+#[cfg(unix)]
+fn note_removed_unverified(_path: &std::path::Path) {}
+
+#[cfg(not(unix))]
+fn note_removed_unverified(path: &std::path::Path) {
+    eprintln!(
+        "note: removed {}; persistence of the directory entry was not verified on this platform",
+        path.display()
+    );
+}
+
+/// 改名成功后的持久性说明，口径同 [`note_removed_unverified`]。
+/// 改名只作用于 `from` 这个路径入口，`rename` 不跟随符号链接
+#[cfg(unix)]
+pub(crate) fn note_rename_unverified(_from: &std::path::Path, _to: &std::path::Path) {}
+
+#[cfg(not(unix))]
+pub(crate) fn note_rename_unverified(from: &std::path::Path, to: &std::path::Path) {
+    eprintln!(
+        "note: moved {} to {}; persistence of the directory entry was not verified on this platform",
+        from.display(),
+        to.display()
+    );
+}
 
 /// 退路改名：先 `create_new` 占住目标名（占位是空文件），再由 `rename` 覆盖本进程刚建的
 /// 占位——"名字空闲"的判据是 `create_new` 的返回值，不是 `stat`。用于不支持硬链接的文件

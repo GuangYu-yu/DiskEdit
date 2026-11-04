@@ -18,12 +18,12 @@ echo "== --chunk-size 取值域 =="
 # src/args.rs:184-193：取值必须在 1..=1024 MiB，越界当场 bad_arg → refused（10）。
 # 合法边界要真的走一次 chunk 路径才有意义：copy 由 cli.rs 证过会消费 chunk，源分区仅 1MiB，
 # 两次拷贝代价极小（chunk 大于数据时即单块），断言后立刻 delete 掉落点。
-$B copy "$T":1 --start 4096 --chunk-size 1 >/dev/null 2>&1; exp $? 0 "--chunk-size 1 被接受（下界）"
+$B copy "$T":1 --start 4096 --chunk-size 1 --yes >/dev/null 2>&1; exp $? 0 "--chunk-size 1 被接受（下界）"
 $B delete "$T":2 --yes >/dev/null 2>&1; exp $? 0 "  清理 copy 落点 #2"
-$B copy "$T":1 --start 4096 --chunk-size 1024 >/dev/null 2>&1; exp $? 0 "--chunk-size 1024 被接受（上界）"
+$B copy "$T":1 --start 4096 --chunk-size 1024 --yes >/dev/null 2>&1; exp $? 0 "--chunk-size 1024 被接受（上界）"
 $B delete "$T":2 --yes >/dev/null 2>&1; exp $? 0 "  清理 copy 落点 #2"
-$B copy "$T":1 --start 4096 --chunk-size 0 >/dev/null 2>&1; exp $? 10 "--chunk-size 0 越界拒绝"
-$B copy "$T":1 --start 4096 --chunk-size 1025 >/dev/null 2>&1; exp $? 10 "--chunk-size 1025 越界拒绝"
+$B copy "$T":1 --start 4096 --chunk-size 0 --yes >/dev/null 2>&1; exp $? 10 "--chunk-size 0 越界拒绝"
+$B copy "$T":1 --start 4096 --chunk-size 1025 --yes >/dev/null 2>&1; exp $? 10 "--chunk-size 1025 越界拒绝"
 
 echo "== --align 取值 =="
 # src/support.rs:242-249（align_unit）：mib|cyl|none 之外的值 refused（10）；

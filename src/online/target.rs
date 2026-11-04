@@ -194,10 +194,20 @@ pub(crate) fn resolve_target(mountpoint: &Path) -> io::Result<OnlineTarget> {
     let (maj, min) = (libc::major(rdev), libc::minor(rdev));
 
     let sysdir = PathBuf::from(format!("/sys/dev/block/{maj}:{min}"));
-    // 内核 sysfs-block ABI：存在 partition 属性即说明该设备是分区，内容为分区号
-    let pno = sysfs_u64(&sysdir.join("partition")).map_err(|_| {
-        io::Error::other(format!("{} is not a partition (no sysfs partition attribute)", part_dev.display()))
-    })? as u32;
+    // 内核 sysfs-block ABI：存在 partition 属性即说明该设备是分区，内容为分区号。
+    // 属性不存在 = 不是分区（设备形态）；属性在但读不出来 = 环境故障，不能也报成"不是分区"
+    let pno = match sysfs_u64(&sysdir.join("partition")) {
+        Ok(n) => u32::try_from(n).map_err(|_| {
+            io::Error::new(io::ErrorKind::InvalidData, format!("sysfs partition number {n} overflows u32"))
+        })?,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            return Err(io::Error::other(format!(
+                "{} is not a partition (no sysfs partition attribute)",
+                part_dev.display()
+            )));
+        }
+        Err(e) => return Err(io::Error::other(format!("cannot read {}/partition: {e}", sysdir.display()))),
+    };
     let start_sectors = sysfs_u64(&sysdir.join("start"))?;
     let size_sectors = sysfs_u64(&sysdir.join("size"))?;
     // 内核 sysfs-block ABI：start/size 以 512 字节扇区计（与设备逻辑块大小

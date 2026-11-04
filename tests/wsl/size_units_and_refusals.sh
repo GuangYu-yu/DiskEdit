@@ -10,7 +10,7 @@ rm -f "$T" "$T$JOURNAL_SUFFIX"
 truncate -s 64M "$T"
 $B new "$T" --yes
 echo "== create --size 32M (units) =="
-$B create "$T" --size 32M --name test1 --fs ext4; exp $? 0 "create --size 32M（单位）"
+$B create "$T" --size 32M --name test1 --fs ext4 --yes; exp $? 0 "create --size 32M（单位）"
 echo "== create --size +8M (must refuse with message) =="
 $B create "$T" --size +8M 2>&1; exp $? 10 "create --size +8M 拒绝"
 echo "== create --size abc (must refuse with message) =="

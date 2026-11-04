@@ -16,9 +16,10 @@ macro_rules! help_with_synopsis {
   plan under the target lock (the disk may have changed since plan ran) and
   executes it, resuming from its checkpoint if re-run.
 
-  apply asks for no confirmation: relocating the blockers is this command's
-  job, not a side effect of a size request — run `plan` first to see the
-  operations it will perform.
+  apply asks for --yes only when the plan has to relocate blocker data:
+  growing into free space behind the partition touches only the table and
+  asks nothing. An interrupted relocation cannot be rolled back with `undo`.
+  Run `plan` first to see the operations it will perform.
 
   --no-fs (apply only) skips the filesystem step of the grown partition;
   a swap that a relocation has to rebuild still runs.
@@ -35,7 +36,7 @@ pub(crate) const HELP_PLAN: &str = help_with_synopsis!("diskedit plan <TARGET> -
 
 /// apply 的详助：正文与 plan 共用，SYNOPSIS 列出本命令会消费的旗标
 pub(crate) const HELP_APPLY: &str =
-    help_with_synopsis!("diskedit apply <TARGET> --grow N|last [--chunk-size MiB] [--no-fs]");
+    help_with_synopsis!("diskedit apply <TARGET> --grow N|last [--chunk-size MiB] [--no-fs] [--yes]");
 
 /// 列出各分区的搬移（plan 命令与 apply 前的计划打印共用）。
 /// 头行不共用：两处要给出的数不同——写入前只需扩容终点，`plan` 还要额外给出
@@ -158,6 +159,13 @@ fn apply_cmd(a: &Args, pref: PartSelector) -> crate::outcome::Outcome {
         Ok(p) => p,
         Err(f) => bail_fail(f),
     };
+    // 只有真正要挪位置的挡路分区才需要授权：delta 为 0 的条目不搬动字节。
+    // swap 挡路者的条目同样挪位、旧内容被重建覆盖，也越过回滚点
+    let relocating = plan.moves.iter().filter(|m| m.delta_lba != 0).count();
+    crate::cmd::confirm::gate(a.yes, crate::cmd::confirm::Impact {
+        relocating,
+        ..Default::default()
+    });
     // 表的可解析性由上面那一次 require_gpt_geometry 判过（无 GPT → refused 10，表非法 → infra 30）：
     // 同一事实不设第二判据——两处判据迟早会在某个入口分叉，且自判拒绝时还不报原因
     let mut logger = Logger::open(&src, Some(g.disk_guid()));

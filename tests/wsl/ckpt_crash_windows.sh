@@ -9,8 +9,8 @@ mk_layout() { # $1=img $2=extra create args...
   truncate -s 2G "$T"
   $BF new "$T" --yes >/dev/null
   $BF create "$T" --size 500M --name p1 >/dev/null
-  $BF create "$T" --size 400M --name p2 --fs ext4 >/dev/null
-  $BF create "$T" --size 400M --name p3 --fs ext4 >/dev/null
+  $BF create "$T" --size 400M --name p2 --fs ext4 --yes >/dev/null
+  $BF create "$T" --size 400M --name p3 --fs ext4 --yes >/dev/null
 }
 
 fill_p23() { # 随机数据填 p2/p3，记录整分区哈希
@@ -91,8 +91,8 @@ rm -f "$T" "$T"$SIDECAR_GLOB
 truncate -s 1G "$T"
 $BF new "$T" --yes >/dev/null
 $BF create "$T" --size 300M --name p1 >/dev/null
-$BF create "$T" --size 200M --name p2 --fs swap >/dev/null
-$BF create "$T" --size 300M --name p3 --fs ext4 >/dev/null
+$BF create "$T" --size 200M --name p2 --fs swap --yes >/dev/null
+$BF create "$T" --size 300M --name p3 --fs ext4 --yes >/dev/null
 LD=$(lo_attach "$T")
 lo_waitpart "${LD}p3" || { echo "分区节点未就绪"; rc=1; losetup -d "$LD"; exit $rc; }
 mount_at "${LD}p3" /testmnt && dd if=/dev/urandom of=/testmnt/b3.bin bs=1M count=250 2>/dev/null
@@ -122,7 +122,7 @@ rm -f "$T" "$T"$SIDECAR_GLOB
 truncate -s 1G "$T"
 $BF new "$T" --yes >/dev/null
 $BF create "$T" --size 400M --name p1 >/dev/null
-$BF create "$T" --size 300M --name p2 --fs ext4 >/dev/null
+$BF create "$T" --size 300M --name p2 --fs ext4 --yes >/dev/null
 LD=$(lo_attach "$T")
 lo_waitpart "${LD}p2" || { echo "分区节点未就绪"; rc=1; losetup -d "$LD"; exit $rc; }
 mount_at "${LD}p2" /testmnt && dd if=/dev/urandom of=/testmnt/b2.bin bs=1M count=250 2>/dev/null
