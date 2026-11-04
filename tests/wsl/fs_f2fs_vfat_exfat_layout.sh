@@ -14,7 +14,7 @@ mk1() { # $1 = fs, $2 = size (默认 400M；FAT32 需 ≥512MB)
   rm -f "$T" "$T"$SIDECAR_GLOB
   truncate -s 1G "$T"
   $B new "$T" --yes >/dev/null
-  $B create "$T" --size "${2:-400M}" --name p1 --fs "$1" >/dev/null 2>&1
+  $B create "$T" --size "${2:-400M}" --name p1 --fs "$1" --yes >/dev/null 2>&1
 }
 
 echo "########## A: f2fs 扩容 400M → 900M ##########"
@@ -94,7 +94,7 @@ mount_at "${LD}p3" /testmnt && { dd if=/dev/urandom of=/testmnt/lin.bin bs=1M co
 lo_detach "$LD"
 echo "-- 搬移中间的 Linux 分区到尾部空闲区 --"
 $B info "$T" | grep -o '"num":[0-9]*,"first_lba":[0-9]*,"last_lba":[0-9]*'
-$B move "$T":3 --start 2300000 --chunk-size 4 >/dev/null 2>&1; echo "move exit=$?"
+$B move "$T":3 --start 2300000 --chunk-size 4 --yes >/dev/null 2>&1; echo "move exit=$?"
 $B info "$T" | grep -o '"num":[0-9]*,"first_lba":[0-9]*,"last_lba":[0-9]*'
 echo "-- 未搬移分区的类型 GUID 应原样（ESP/MSR/recovery）--"
 for n in 1 2 4; do

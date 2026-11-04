@@ -24,9 +24,9 @@ mk() { # p1 扩容需要把 p2/p3 往后搬，故必有搬移相位
   rm -f "$T" "$T"$SIDECAR_GLOB
   truncate -s 1G "$T"
   $BF new "$T" --yes >/dev/null
-  $BF create "$T" --size 100M --name p1 --fs ext4 >/dev/null
-  $BF create "$T" --size 100M --name p2 --fs ext4 >/dev/null
-  $BF create "$T" --size 200M --name p3 --fs ext4 >/dev/null
+  $BF create "$T" --size 100M --name p1 --fs ext4 --yes >/dev/null
+  $BF create "$T" --size 100M --name p2 --fs ext4 --yes >/dev/null
+  $BF create "$T" --size 200M --name p3 --fs ext4 --yes >/dev/null
 }
 
 echo "===== A: resize（离线，含搬移）====="
@@ -48,23 +48,23 @@ echo "===== B: apply ====="
 mk
 BEFORE=$($B info "$T")
 $B plan "$T" --grow 1 | head -3 | sed 's/^/  plan | /'
-# apply 无 --yes（执行的是 plan 已打印的那份计划，没有第二个确认层），多传即 10
-DISKEDIT_FAULT=before-any-write $BF apply "$T" --grow 1 >/dev/null 2>&1; B1=$?
+# apply 的确认门在几何上判定：本布局的 p2/p3 需要搬移，故执行路径必须显式 --yes
+DISKEDIT_FAULT=before-any-write $BF apply "$T" --grow 1 --yes >/dev/null 2>&1; B1=$?
 chk "$B1" "134" "B1 边界前 abort"
 chk "$($B info "$T")" "$BEFORE" "B1 分区表一字未改"
 chk "$([ -e "$CK" ] && echo yes || echo no)" "no" "B1 未留下 checkpoint"
 
-DISKEDIT_FAULT=chunk:1 $BF apply "$T" --grow 1 >/dev/null 2>&1; B2=$?
+DISKEDIT_FAULT=chunk:1 $BF apply "$T" --grow 1 --yes >/dev/null 2>&1; B2=$?
 chk "$B2" "134" "B2 边界后 abort"
 chk "$([ -e "$CK" ] && echo yes || echo no)" "yes" "B2 留下 checkpoint（续传现场）"
-$B apply "$T" --grow 1 >/dev/null 2>&1; chk "$?" "0" "B2 重跑收敛（exit 0）"
+$B apply "$T" --grow 1 --yes >/dev/null 2>&1; chk "$?" "0" "B2 重跑收敛（exit 0）"
 
 echo
 echo "===== C: resize（在线，sfdisk 分界）====="
 rm -f "$T" "$T"$SIDECAR_GLOB
 truncate -s 64M "$T"
 $BF new "$T" --yes >/dev/null
-$BF create "$T" --size 16777216 --name p1 --fs ext4 >/dev/null
+$BF create "$T" --size 16777216 --name p1 --fs ext4 --yes >/dev/null
 LD=$(lo_attach "$T")
 mount_at "${LD}p1" "$MNT" || { echo "  BAD  C MOUNT-FAIL"; exit 1; }
 DISKEDIT_FAULT=online-before-write $BF resize "${LD}:1" 33554432 >/dev/null 2>&1; C1=$?
@@ -84,7 +84,7 @@ echo
 echo "===== D: 天然拒绝仍必须报 10（未写盘的承诺）====="
 mk
 BEFORE=$($B info "$T")
-$B resize "$T":1 -50M --no-fs >/dev/null 2>&1; chk "$?" "10" "D1 --no-fs + 缩容 ⇒ 10"
+$B resize "$T":1 -50M --no-fs --yes >/dev/null 2>&1; chk "$?" "10" "D1 --no-fs + 缩容 ⇒ 10"
 $B resize "$T":1 500M --start 4096 >/dev/null 2>&1; chk "$?" "10" "D2 --start ⇒ 10（resize 不搬移）"
 $B resize-part "$T":1 --start end >/dev/null 2>&1; chk "$?" "10" "D3 resize-part --start end ⇒ 10"
 chk "$($B info "$T")" "$BEFORE" "D 三次拒绝均未写盘"

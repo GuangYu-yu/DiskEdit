@@ -253,6 +253,13 @@ pub(crate) fn scene_mismatch(recorded: &SceneIdentity, actual: &LiveScene) -> Op
     compare(recorded, actual.proof.into(), &actual.fp, actual.map)
 }
 
+/// 两份现场记录的"创建时事实"互相核对：描述同一个目标时，每一处可比字段都应当一致。
+/// 目标已不可打开时这是仅剩的同源判据——没有当前目标可供比对，但两族记录仍可互证
+pub(crate) fn recorded_scene_mismatch(recorded: &SceneIdentity, other: &SceneIdentity) -> Option<String> {
+    let IdentityProof::Live(proof) = other.proof;
+    scene_mismatch(recorded, &LiveScene { fp: other.fp, map: other.map, proof })
+}
+
 fn compare(
     recorded: &SceneIdentity,
     actual_proof: IdentityProof,

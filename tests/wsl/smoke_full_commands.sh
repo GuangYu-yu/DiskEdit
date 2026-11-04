@@ -17,7 +17,7 @@ echo "== new（建表）=="
 $B new "$T" --yes; exp "$?" 0 "new" || exit 1
 
 echo "== create p1 (32M bytes, ext4) =="
-$B create "$T" --size 33554432 --name test1 --fs ext4; exp "$?" 0 "create p1 + mkfs.ext4"
+$B create "$T" --size 33554432 --name test1 --fs ext4 --yes; exp "$?" 0 "create p1 + mkfs.ext4"
 
 echo "== create p2 (16M bytes) =="
 $B create "$T" --size 16777216 --name test2; exp "$?" 0 "create p2（无 FS）"
@@ -52,10 +52,10 @@ echo "== set label =="
 $B set "$T":2 label mydata; exp "$?" 0 "set label"
 
 echo "== resize shrink -4M（带 FS ⇒ 先缩 FS 再收表，故不是 --no-fs 的 10）=="
-$B resize "$T":2 -4M; exp "$?" 0 "resize -4M（先缩 FS）"
+$B resize "$T":2 -4M --yes; exp "$?" 0 "resize -4M（先缩 FS）"
 
 echo "== move p2 =="
-$B move "$T":2 --start end; exp "$?" 0 "move p2"
+$B move "$T":2 --start end --yes; exp "$?" 0 "move p2"
 
 echo "== info final =="
 FINAL=$($B info "$T"); E=$?

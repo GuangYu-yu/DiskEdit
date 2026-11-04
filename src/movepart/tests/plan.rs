@@ -180,12 +180,14 @@ pub(crate) fn make_plan_pack_and_boundaries() {
     assert_eq!(plan.moves[1].first_lba + plan.moves[1].delta_lba, 26591, "home new first_lba");
     drop(src);
 
-    // LUKS 在目标之后 → 拒绝
-    let (mut src2, _p2) = plan_fixture(&[
+    // LUKS 在目标之后 → 拒绝，且规划不得写盘
+    let (mut src2, p2) = plan_fixture(&[
         (1, [0x11; 16], 2048, 6143),
         (2, LUKS, 6144, 10239),
     ]);
+    let img_before = std::fs::read(&p2).unwrap();
     assert!(make_plan(&mut src2, 1).is_err());
+    assert_eq!(std::fs::read(&p2).unwrap(), img_before, "a refused plan must not write the image");
     drop(src2);
 
     // 尾部容量不足：条目越过 last_usable（损坏表）→ 不得进入规划。
@@ -221,7 +223,9 @@ pub(crate) fn make_plan_pack_and_boundaries() {
         std::fs::write(&p3, &raw).unwrap();
     }
     let mut src3 = plan_open(&p3);
+    let img_before = std::fs::read(&p3).unwrap();
     assert!(make_plan(&mut src3, 1).is_err());
+    assert_eq!(std::fs::read(&p3).unwrap(), img_before, "a refused plan must not write the image");
     drop(src3);
     let _ = std::fs::remove_file(&p3);
 }
@@ -255,7 +259,7 @@ pub(crate) fn grow_end_formula_and_overflow() {
 pub(crate) fn tail_packed_rerun_only_yields_zero_delta_moves() {
     let data = vec![0u8; 4 * 1024 * 1024];
     let mut src = crate::support::src_from("tp0", &data);
-    table::create_gpt(&mut src, 512, None).unwrap();
+    table::create_gpt(&mut src, 512, None, false).unwrap();
     // 4MiB = 8192 扇区，尾部留给备份头与备份数组 ⇒ last_usable = 8158：
     // p3 紧贴尾部，p1 与 p3 之间留 2000 扇区空隙
     gpt_policy::add_entry_at(&mut src, 2048, 3000, "p1", table::LINUX_FS_TYPE_GUID, [1; 16]).unwrap();
@@ -264,13 +268,33 @@ pub(crate) fn tail_packed_rerun_only_yields_zero_delta_moves() {
     assert!(!plan.moves.is_empty(), "the tail neighbour is a blocker and must appear as a move");
     assert!(plan.moves.iter().all(|m| m.delta_lba == 0), "an already tail-packed neighbour needs no relocation");
     let before = table::load_gpt(&src).unwrap().unwrap();
+    let img_before = std::fs::read(&src.path).unwrap();
     let o = ap(&mut src, &plan, 1 << 20, true, &mut |_| {});
     assert!(o.is_complete(), "a zero-delta plan must not fail: {}", o.exit_code());
     let after = table::load_gpt(&src).unwrap().unwrap();
+    // 分区号 1 基，条目数组 0 基：邻居必须按 plan.moves 里的真实分区号定位，
+    // 否则断言落在空槽位上，永远为真
+    let nb = (plan.moves[0].part_num - 1) as usize;
     assert_eq!(
-        (before.entries[2].starting_lba, before.entries[2].ending_lba),
-        (after.entries[2].starting_lba, after.entries[2].ending_lba),
+        (before.entries[nb].starting_lba, before.entries[nb].ending_lba),
+        (after.entries[nb].starting_lba, after.entries[nb].ending_lba),
         "a zero-delta move must leave the neighbour untouched"
+    );
+    // grow 终点必须真的写进表项：复用旧终点（3000）或算到邻居起点（5001）都会让表项
+    // 不扩或重叠，而 δ=0 的空转 move 与邻居原位断言都看不出来
+    let grow_end = grow_end_for(&plan, before.entries[0].starting_lba).unwrap();
+    assert_eq!(
+        (after.entries[0].starting_lba, after.entries[0].ending_lba),
+        (before.entries[0].starting_lba, grow_end),
+        "grow must commit its computed ending_lba"
+    );
+    assert_eq!(after.entries[0].ending_lba + 1, after.entries[nb].starting_lba, "grown target must end just before the neighbour");
+    // 本作业允许写 GPT 主/备头与条目数组（LBA 1..33、8159..8191）；可用数据区整段必须一字节未变
+    let img_after = std::fs::read(&src.path).unwrap();
+    assert_eq!(
+        &img_after[512 * 34..512 * 8159],
+        &img_before[512 * 34..512 * 8159],
+        "a zero-delta replay must not write a single data byte"
     );
 }
 
@@ -342,6 +366,7 @@ pub(crate) fn refused_paths_do_not_write_the_disk() {
             matches!(table::load_gpt(&src).unwrap().unwrap().state, table::GptState::NeedsRepair { .. }),
             "夹具须是需要修复的表"
         );
+        let img_before = std::fs::read(&p).unwrap();
 
         let chunk: u64 = 1024 * 1024;
         let o = if via_apply {
@@ -363,13 +388,12 @@ pub(crate) fn refused_paths_do_not_write_the_disk() {
             rsize(&mut src, 1, 2048, 9000, chunk, true, &mut |_| {})
         };
         assert_eq!(o.exit_code(), 10, "via_apply={via_apply}");
-
-        let g = table::load_gpt(&src).unwrap().unwrap();
-        assert!(
-            matches!(g.state, table::GptState::NeedsRepair { .. }),
-            "via_apply={via_apply}: 拒绝路径不得写盘（修复不能被提前执行）"
+        // 拒绝承诺本次未写盘：整镜像逐字节等于调用前（含需要修复的 stale 头）
+        assert_eq!(
+            std::fs::read(&p).unwrap(),
+            img_before,
+            "via_apply={via_apply}: a refusal must leave the image byte-identical"
         );
-        assert_eq!(g.header.backup_lba, 20000, "via_apply={via_apply}");
         drop(src);
         let _ = std::fs::remove_file(&ckpt_path);
         let _ = std::fs::remove_file(&p);
@@ -402,19 +426,50 @@ pub(crate) fn refusal_on_an_already_valid_table_is_still_ten() {
 }
 
 /// 边界另一侧：搬移中途失败只能报 Failed（30），不得报 Refused（10）——此刻数据区
-/// 已经动过，声称"本次未写盘"就是假的。注入一次读失败让它发生在前几个 chunk 之后
+/// 已经动过，声称"本次未写盘"就是假的。注入一次读失败让它发生在前几个 chunk 之后。
+/// 失败现场必须能由盘上 ckpt 如实描述：进度停在最后同步落盘的那一块，续跑只从那之后
+/// 继续；ckpt 若在提交之后才写或写错进度，这条断言即红
 #[test]
 pub(crate) fn failure_after_the_boundary_is_failed_not_refused() {
     let (mut src, path) = plan_fixture(&[(1, [0x11; 16], 2048, 14335)]); // 源 6 MiB
     let ckpt_path = src.identity.checkpoint_path().to_path_buf();
     let chunk: u64 = 1024 * 1024;
-    // 注入点落在搬移的第三轮读（右移时尾→头推进，此刻已有 3 个 chunk 写进目标区），
+    let src_off = 2048 * 512;
+    let dst_off = 6144 * 512;
+    // 每个 1 MiB 源块一个可区分标记，续跑是否重搬已完成块可由目标内容判定
+    for i in 0..6u8 {
+        src.write_at(src_off + i as u64 * chunk, &vec![0x10 + i; 512]).unwrap();
+    }
+    // 注入点落在搬移的第三轮读（右移时尾→头推进，前两块已同步并落 ckpt），
     // 且不在 prepare 阶段的任何探测区间里
-    let _fault = crate::dev::ReadFaultGuard::at(2048 * 512 + 3 * chunk);
+    let fault = crate::dev::ReadFaultGuard::at(src_off + 3 * chunk);
     let o = rsize(&mut src,1, 6144, 18431, chunk, true, &mut |_| {});
     assert_eq!(o.exit_code(), 30, "越界之后的失败须按 Failed 报（不得声称未写盘）");
+    drop(fault);
+
+    let (slot, _) = read_checkpoint(&src, &geom_of(&src)).unwrap();
+    let c = match slot {
+        CheckpointSlot::Resize(c) => c,
+        _ => panic!("a failed resize must leave an Rs checkpoint"),
+    };
+    assert_eq!(c.part, 1);
+    assert_eq!((c.old_start, c.old_end, c.new_start, c.new_end), (2048, 14335, 6144, 18431));
+    assert_eq!(c.chunk_bytes, chunk);
+    assert_eq!(c.chunks_done, 2, "只有已同步落盘的 chunk 可以进入 durable 边界");
+
+    // 已完成块（within = 5 MiB）的源区改写成垃圾：续跑若从 0 重来会把它带回目标区
+    src.write_at(src_off + 5 * chunk, &[0xEE; 512]).unwrap();
+    let resumed = rsize(&mut src,1, 6144, 18431, chunk, true, &mut |_| {});
+    assert!(resumed.is_complete(), "the resume must finish the move: {}", resumed.exit_code());
+    for i in 0..6u8 {
+        let mut b = [0u8; 512];
+        src.read_at(dst_off + i as u64 * chunk, &mut b).unwrap();
+        assert_eq!(b, [0x10 + i; 512], "chunk {i} was copied from the wrong source block");
+    }
+    let g = table::load_gpt(&src).unwrap().unwrap();
+    assert_eq!((g.entries[0].starting_lba, g.entries[0].ending_lba), (6144, 18431));
+    assert!(!ckpt_path.exists(), "a completed resume must release the checkpoint");
     drop(src);
-    let _ = std::fs::remove_file(&ckpt_path);
     let _ = std::fs::remove_file(&path);
 }
 

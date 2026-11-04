@@ -86,6 +86,11 @@ pub(crate) const REC_HDR: usize = 8;
 /// 的起点是个常量，不必先解析变长字段
 pub(crate) const IDENTITY_LEN: usize = 8 * 4 + 1 + 8 * 2 + 1;
 
+/// 磁盘身份凭据段：状态 1 字节 + Disk GUID 16 字节。GUID 缺席时也照样占位，理由同身份段：
+/// 定长头让记录扫描的起点是个常量。段自带 CRC，与身份段的 CRC 并列——旧段的校验语义
+/// 不变，新凭据只多一道自己的校验
+pub(crate) const CREDENTIAL_LEN: usize = 1 + 16;
+
 /// 版本错误：本工具别的版本写下的、本构建不认识的 journal。版本识别必须先于一切
 /// payload 解析——别的版本的记录布局可能不同，按当前格式去解会把"版本不认识"报成
 /// "CRC 不符 / 记录损坏"，把用户指向错误的修法
@@ -120,11 +125,44 @@ pub(crate) fn truncated_header_error(have: usize, need: usize) -> io::Error {
     )
 }
 
-/// 一个 journal 落点的状态。**四态是现场判定的唯一来源**：写闸口、`undo` 的挑选
+/// 旧格式：本构建认得出这是本工具的 journal，但它的布局比本构建认识的版本更早。
+/// 这与"损坏"是两回事——现场本身是完好的，只是本构建不回放、不迁移、不删除它。
+/// 用独立错误类型是为了让 [`classify_journal`] 能把它与 `Damaged` 分开报出
+#[derive(Debug)]
+struct OldFormatError {
+    version: u8,
+}
+
+impl std::fmt::Display for OldFormatError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "journal format v{} is older than this build (which reads and writes v{}) — it is left in place; \
+             this build does not migrate, replay, or delete it. Release it with `diskedit abandon` if it is no \
+             longer needed (that gives up the ability to roll back, not the data)",
+            self.version,
+            Journal::VERSION
+        )
+    }
+}
+
+impl std::error::Error for OldFormatError {}
+
+pub(crate) fn old_format_error(version: u8) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, OldFormatError { version })
+}
+
+/// 把 [`old_format_error`] 造出来的错误认回来，供 [`classify_journal`] 分出口
+pub(crate) fn old_format_version(e: &io::Error) -> Option<u8> {
+    e.get_ref()?.downcast_ref::<OldFormatError>().map(|x| x.version)
+}
+
+/// 一个 journal 落点的状态。**五态是现场判定的唯一来源**：写闸口、`undo` 的挑选
 /// 与 `abandon` 的枚举都从它派生，不各自实现"文件在不在 / 读不读得出"。
 ///
-/// `Absent` 覆盖两种"不是现场"的形态：落点不存在、0 字节残骸。符号链接与非普通文件不在此
-/// 列——它们要么根本不是本工具写下的，要么指向别处，按 `Damaged` 交用户处置。0 字节有两种
+/// `Absent` 覆盖两种"不是现场"的形态：落点不存在、0 字节残骸。符号链接、dangling 链接与
+/// 目录等非普通条目单独归入 `NotARecoveryFile`——它们**存在**，但不是本工具写下的恢复文件，
+/// 既不算"不在"，也不与读坏了的 journal 混为一谈。0 字节有两种
 /// 在现有状态下不可区分的来源（`ensure` 建好文件、头还没写；已有 journal 被外部截断到 0），
 /// 一律按零次写入收养——它不可能含记录，因为记录只能接在完整头之后。这是已接受的限制而非
 /// 安全保证（见 `journal_truncated_to_zero_is_adopted_as_a_remnant` 测试）。
@@ -136,59 +174,130 @@ pub(crate) enum JournalCandidate {
     Absent,
     /// 头完整、零条完整记录：零次写入的壳
     Shell,
+    /// 旧格式。现场完好但布局比本构建认识的版本更早：不迁移、不回放、不删除
+    OldFormat(u8),
+    /// 落点存在，但不是本工具的恢复文件（符号链接 / dangling 链接 / 目录 / 其它非普通条目）
+    NotARecoveryFile(NotARecoveryFile),
     /// 读不出来（陌生文件、magic 不符、CRC 损坏、属性读取失败）
     Damaged(String),
     /// 至少一条完整记录
     Records(JournalRead),
 }
 
-/// 认一个恢复现场的落点本身：`Ok(None)` = 不存在，`Err(reason)` = 不可认领，
-/// `Ok(Some(meta))` = 普通文件的元数据。
+/// 目标盘面自述的 Disk GUID（GPT 头 56..72，UEFI 2.10 §5.3.2 Table 5.5）在 journal 里的
+/// 三态。它只追加在旧身份段之后：旧字段的语义与比较路径原样保留，凭据只多一道自己的判据。
 ///
-/// `symlink_metadata` 不跟随符号链接：认的是落点本身的条目。跟随的话，指向别处
-/// 普通文件的链接会被当成现场打开，随后的收养、截断与删除都作用在链接目标上。
-/// 符号链接不是本工具写下的任何东西，也绝不认领——`abandon` 改名保留的是链接本身，
-/// 不会碰它指向的目标。非普通文件（FIFO / 设备节点 / 目录）同归不可认领：
-/// `open` 一个 FIFO 会阻塞到有写端出现，放行等于让收养卡死在那里
-pub(crate) fn recovery_path_metadata(path: &Path) -> Result<Option<std::fs::Metadata>, String> {
-    let meta = match std::fs::symlink_metadata(path) {
-        Ok(m) => m,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(format!("cannot stat: {e}")),
+/// `GeneratedThisOperation` 让 `new` 明说"这张表是本次操作生出来的"。用重写前的 GUID 或
+/// 重写后的 GUID 去认目标，都是把一次本操作自己造出的值当成外部证据；两种都属于
+/// "把原本 Refused 的形态变成放行"。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DiskGuidState {
+    /// 目标上没有 GPT（MBR / 裸盘）：凭据不可得。比较时它不是证据，也绝不算相符
+    Unavailable,
+    /// 读到 GPT 头里的 Disk GUID
+    Present([u8; 16]),
+    /// `new` 本次写出整张表：GUID 由本操作产生，前后值都不作为身份证据
+    GeneratedThisOperation,
+}
+
+impl DiskGuidState {
+    const TAG_UNAVAILABLE: u8 = 0;
+    const TAG_PRESENT: u8 = 1;
+    const TAG_GENERATED: u8 = 2;
+
+    fn tag(self) -> u8 {
+        match self {
+            Self::Unavailable => Self::TAG_UNAVAILABLE,
+            Self::Present(_) => Self::TAG_PRESENT,
+            Self::GeneratedThisOperation => Self::TAG_GENERATED,
+        }
+    }
+
+    fn encode(self) -> [u8; CREDENTIAL_LEN] {
+        let mut out = [0u8; CREDENTIAL_LEN];
+        out[0] = self.tag();
+        if let Self::Present(g) = self {
+            out[1..].copy_from_slice(&g);
+        }
+        out
+    }
+
+    fn decode(bytes: &[u8]) -> io::Result<Self> {
+        let tag = bytes[0];
+        let guid: [u8; 16] = bytes[1..].try_into().unwrap();
+        match tag {
+            Self::TAG_UNAVAILABLE => Ok(Self::Unavailable),
+            Self::TAG_PRESENT => Ok(Self::Present(guid)),
+            Self::TAG_GENERATED => Ok(Self::GeneratedThisOperation),
+            _ => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "implausible journal disk-identity kind",
+            )),
+        }
+    }
+}
+
+/// 凭据比对的唯一判据。`Some(why)` = 不符；`None` = 不提供额外证据——不可得与本次生成
+/// 都不是"相符"，只是没有可比的值。用它而不是 `Option<[u8; 16]>`，是为了让"没有 GPT"
+/// 与"GUID 是 0"在数据与代码里都不可能混为一谈
+pub(crate) fn disk_identity_mismatch(
+    recorded: DiskGuidState,
+    current: DiskGuidState,
+) -> Option<String> {
+    let (DiskGuidState::Present(a), DiskGuidState::Present(b)) = (recorded, current) else {
+        return match (recorded, current) {
+            (DiskGuidState::Present(_), DiskGuidState::Unavailable) => Some(
+                "the journal records a GPT disk GUID for the target, but the target now carries no readable GPT"
+                    .to_string(),
+            ),
+            (DiskGuidState::Unavailable, DiskGuidState::Present(_)) => Some(
+                "the journal was written for a target without a GPT, but the target now carries a GPT with its own \
+                 disk GUID"
+                    .to_string(),
+            ),
+            // GeneratedThisOperation 在记录侧是"本操作自己造的表"，在目标侧永远不会出现；
+            // 两侧都不可得也不是证据
+            _ => None,
+        };
     };
-    if meta.file_type().is_symlink() {
-        return Err(
-            "the recovery path is a symbolic link — refusing to treat another file as this tool's recovery record"
-                .to_string(),
-        );
-    }
-    if !meta.is_file() {
-        return Err(
-            "the recovery path is not a regular file — it cannot be a recovery record written by this tool".to_string(),
-        );
-    }
-    Ok(Some(meta))
+    (a != b).then(|| {
+        format!(
+            "the journal records GPT disk GUID {} but the target now reports {}",
+            crate::support::hex_guid(&a),
+            crate::support::hex_guid(&b)
+        )
+    })
+}
+
+/// 头里的两段：旧身份段（语义不变）与新的磁盘身份凭据段
+pub(crate) struct JournalHeader {
+    pub(crate) scene: SceneIdentity,
+    pub(crate) credential: DiskGuidState,
 }
 
 /// 判一个落点属于哪一态。**只有 `NotFound` 是"不在"**：属性读不出来按 `Damaged` 处理，
 /// 否则一次瞬态 I/O 错误就会把一份可能完好的现场当成不存在，后续 `commit` 还会
-/// 把它静默删掉
+/// 把它静默删掉。
+///
+/// 落点形态由 [`RecoveryFile::at`] 一次认定：符号链接、dangling 链接与目录存在但
+/// 不是本工具的恢复文件，归 `NotARecoveryFile`，既不算"不在"也不算读坏
 ///
 /// **头之后还有字节却读不出一条完整记录，不是空壳**：撕裂的首次追加与"已有记录被
 /// 截掉 / 写坏"在内容上不可区分，前者没有对应的数据写入、后者有。无法证明"空"就
 /// 不能按空壳销毁——写闸口会因此放行，undo 与 abandon 会删掉唯一一份 pre-image
 pub(crate) fn classify_journal(path: &Path) -> JournalCandidate {
-    let meta = match recovery_path_metadata(path) {
-        Ok(Some(meta)) => meta,
-        Ok(None) => return JournalCandidate::Absent,
-        Err(reason) => return JournalCandidate::Damaged(reason),
+    let file = match RecoveryFile::at(path) {
+        Ok(RecoveryEntry::File(f)) => f,
+        Ok(RecoveryEntry::Absent) => return JournalCandidate::Absent,
+        Ok(RecoveryEntry::NotARecoveryFile(n)) => return JournalCandidate::NotARecoveryFile(n),
+        Err(e) => return JournalCandidate::Damaged(format!("cannot stat: {e}")),
     };
     // 长度 0 的普通文件按"不在"处理：没有头就没有可回放的记录，与打开时的
     // NotFound 同义
-    if meta.len() == 0 {
+    if file.metadata().len() == 0 {
         return JournalCandidate::Absent;
     }
-    match Journal::read_entries(path) {
+    match Journal::read_entries(file.path()) {
         Ok(JournalRead::Complete(v)) if v.is_empty() => JournalCandidate::Shell,
         Ok(JournalRead::TruncatedTail { records, cut }) if records.is_empty() => JournalCandidate::Damaged(
             format!(
@@ -199,7 +308,12 @@ pub(crate) fn classify_journal(path: &Path) -> JournalCandidate {
         Ok(read) => JournalCandidate::Records(read),
         // 属性读到之后文件被删掉：本次判断按"不在"处理，与打开时的 NotFound 同义
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => JournalCandidate::Absent,
-        Err(e) => JournalCandidate::Damaged(e.to_string()),
+        // 旧格式是独立状态：现场完好，只是本构建不回放、不迁移、不删除它。
+        // 与 `Damaged` 混同会让 undo 报"读不出来"、让写闸口把它当"越过回滚点"
+        Err(e) => match old_format_version(&e) {
+            Some(version) => JournalCandidate::OldFormat(version),
+            None => JournalCandidate::Damaged(e.to_string()),
+        },
     }
 }
 
@@ -322,8 +436,8 @@ pub enum JournalRead {
 const TORN_TAIL_SUFFIX: &str = ".torn-tail";
 
 /// 把撕裂尾的原始字节复制到 journal 旁边作为归档。名字被占用时顺延，绝不覆盖既有归档——
-/// 那一份同样是一次中断留下的证据。失败只由调用方告警：拒绝收养会让目标被一份读不全的
-/// 文件永久挡住，而截断丢弃的本就是无法回放的字节
+/// 那一份同样是一次中断留下的证据。失败即返回 `Err`，由调用方拒绝收养：这段字节在截断后
+/// 不再存在于 journal 里，归档是它唯一的副本
 ///
 /// 写不全时不留下半截文件：残缺的归档与完整归档同名同形，后一个读者无法分辨，而它比起
 /// 没有归档只多一个"看起来是证据"的误导。名字因此重新空出来，下一次归档不会顺延跳过它
@@ -382,6 +496,9 @@ pub struct Journal {
     /// 本目标是哪个目标：随头一起落盘（首条记录之前），也在采纳既有 journal 时与头里的
     /// 记录值比对（见 [`Self::open`]）
     pub(crate) identity: LiveScene,
+    /// 记在头里的磁盘身份凭据。由知道目标有没有 GPT 的那一层读出（见
+    /// `attach_journal`）；`new` 走 `GeneratedThisOperation`，不读旧值
+    pub(crate) credential: DiskGuidState,
     /// 当前 mutation 是否已落过屏障。屏障回答的是"这一类改动越界了没有"，同一 mutation 下
     /// 重复记录不增加任何信息；`write_data_at` 逐 chunk 自带屏障，靠这个标记让每条
     /// chunk 各落一条屏障不会发生
@@ -391,7 +508,15 @@ pub struct Journal {
 impl Journal {
     /// 尾字节是格式版本。版本识别先于任何记录解析，故不认识的格式报"版本不支持"
     /// 而非"记录损坏"
-    pub(crate) const MAGIC: &[u8; 5] = b"DEJL\x06";
+    pub(crate) const MAGIC: &[u8; 5] = b"DEJL\x07";
+
+    /// 本构建读写的格式版本。v7 在 v6 的身份段之后追加了磁盘身份凭据段
+    pub(crate) const VERSION: u8 = 7;
+
+    /// 有名字的上一版：布局本构建认得出（无凭据段），但不迁移、不回放、不删除。
+    /// 更早的版本布局未知，仍按"版本不支持"处理——把未知格式也叫"旧格式"会假装
+    /// 我们知道它该被怎样对待
+    const PREVIOUS_VERSION: u8 = 6;
 
     /// 首部是否为本工具写下的 journal
     pub(crate) fn is_own_header(hdr: &[u8]) -> bool {
@@ -401,11 +526,12 @@ impl Journal {
     /// 头总长（magic + 身份段 + 身份段 CRC32）。身份段不参与任何记录级 CRC，
     /// 故自带一个：头被改坏时要报"头校验失败"，而不是让改坏后的指纹去和当前目标比出个
     /// "指纹不符"
-    pub(crate) const HEADER_LEN: usize = Self::MAGIC.len() + IDENTITY_LEN + 4;
+    pub(crate) const HEADER_LEN: usize =
+        Self::MAGIC.len() + IDENTITY_LEN + 4 + CREDENTIAL_LEN + 4;
 
-    /// 头（含身份段的 CRC）。写出与校验两处只用这一份布局。
+    /// 头（身份段 CRC + 凭据段 CRC）。写出与校验两处只用这一份布局。
     /// 身份种类只从 [`LiveScene`] 取
-    pub(crate) fn header(identity: &LiveScene) -> Vec<u8> {
+    pub(crate) fn header(identity: &LiveScene, credential: DiskGuidState) -> Vec<u8> {
         let mut b = Vec::with_capacity(Self::HEADER_LEN);
         b.extend_from_slice(Self::MAGIC);
         b.extend_from_slice(&identity.fp.dev.to_le_bytes());
@@ -419,30 +545,47 @@ impl Journal {
         b.push(identity.proof.tag());
         let crc = crate::table::crc32(&b);
         b.extend_from_slice(&crc.to_le_bytes());
+        let credential = credential.encode();
+        b.extend_from_slice(&credential);
+        let crc = crate::table::crc32(&credential);
+        b.extend_from_slice(&crc.to_le_bytes());
         b
     }
 
     /// 解析并校验头。**版本识别在一切之前**：尾字节不是当前版本，报的是版本错误，
     /// 不是长度不足、更不是 CRC——那两种措辞会把用户送去怀疑文件被写坏
-    pub(crate) fn parse_header(data: &[u8]) -> io::Result<SceneIdentity> {
+    pub(crate) fn parse_header(data: &[u8]) -> io::Result<JournalHeader> {
         if data.len() < Self::MAGIC.len() {
             return Err(truncated_header_error(data.len(), Self::HEADER_LEN));
         }
         if !Self::is_own_header(&data[..Self::MAGIC.len()]) {
             if data[..Self::MAGIC.len() - 1] == Self::MAGIC[..Self::MAGIC.len() - 1] {
-                return Err(unsupported_version_error(data[Self::MAGIC.len() - 1]));
+                let version = data[Self::MAGIC.len() - 1];
+                if version == Self::PREVIOUS_VERSION {
+                    return Err(old_format_error(version));
+                }
+                return Err(unsupported_version_error(version));
             }
             return Err(not_a_journal_error());
         }
         if data.len() < Self::HEADER_LEN {
             return Err(truncated_header_error(data.len(), Self::HEADER_LEN));
         }
-        let body = &data[..Self::MAGIC.len() + IDENTITY_LEN];
-        let want = u32::from_le_bytes(
-            data[Self::MAGIC.len() + IDENTITY_LEN..Self::HEADER_LEN].try_into().unwrap(),
-        );
+        let identity_end = Self::MAGIC.len() + IDENTITY_LEN;
+        let credential_start = identity_end + 4;
+        let credential_end = credential_start + CREDENTIAL_LEN;
+        let body = &data[..identity_end];
+        let want = u32::from_le_bytes(data[identity_end..credential_start].try_into().unwrap());
         if crate::table::crc32(body) != want {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "journal header CRC mismatch"));
+        }
+        let credential = &data[credential_start..credential_end];
+        let want = u32::from_le_bytes(data[credential_end..Self::HEADER_LEN].try_into().unwrap());
+        if crate::table::crc32(credential) != want {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "journal disk-identity CRC mismatch",
+            ));
         }
         let u64_at = |i: usize| {
             u64::from_le_bytes(data[Self::MAGIC.len() + i..Self::MAGIC.len() + i + 8].try_into().unwrap())
@@ -454,17 +597,37 @@ impl Journal {
         let proof = IdentityProof::from_tag(data[Self::MAGIC.len() + IDENTITY_LEN - 1]).ok_or_else(|| {
             io::Error::new(io::ErrorKind::InvalidData, "implausible journal identity kind")
         })?;
-        Ok(SceneIdentity { fp, map, proof })
+        Ok(JournalHeader {
+            scene: SceneIdentity { fp, map, proof },
+            credential: DiskGuidState::decode(credential)?,
+        })
     }
 
     /// 只读头：undo 在回放前用它取"这份 journal 是为哪个目标写的"。与 [`Self::open`] 用
     /// 同一份布局与同一套校验，故两条路径对"头是否可信"不会分叉
-    pub fn read_identity(path: &Path) -> io::Result<SceneIdentity> {
+    pub fn read_header(path: &Path) -> io::Result<JournalHeader> {
         Self::parse_header(&std::fs::read(path)?)
     }
 
-    pub(crate) fn at(path: &Path, file: Option<File>, identity: LiveScene) -> Self {
-        Journal { file, path: path.to_path_buf(), mutation: Mutation::PartitionTable, identity, barred: false }
+    /// 只读旧身份段。只关心指纹 / 映射 / 种类、不做磁盘凭据核对的调用方用它
+    pub fn read_identity(path: &Path) -> io::Result<SceneIdentity> {
+        Self::read_header(path).map(|h| h.scene)
+    }
+
+    pub(crate) fn at(
+        path: &Path,
+        file: Option<File>,
+        identity: LiveScene,
+        credential: DiskGuidState,
+    ) -> Self {
+        Journal {
+            file,
+            path: path.to_path_buf(),
+            mutation: Mutation::PartitionTable,
+            identity,
+            credential,
+            barred: false,
+        }
     }
 
     /// 打开（必要时先校验）落点，**不产生任何新痕迹**：文件已存在则必须是我们自己写的
@@ -497,19 +660,31 @@ impl Journal {
     /// 开第二个句柄——两次打开之间路径可被替换，截断就落到另一个文件上
     #[cfg(test)]
     pub fn open(path: &Path, identity: LiveScene) -> io::Result<Self> {
-        Self::adopt(path, identity).map(|(j, _)| j)
+        Self::adopt(path, identity, DiskGuidState::Unavailable).map(|(j, _)| j)
     }
 
     /// [`Self::open`] 的完整形态：附带被截掉的残尾字节数，`None` 表示文件原本就停在
-    /// 记录边界上。写路径据此把本次运行报成未完整收尾（见 `transaction::SessionJournal`）
-    pub(crate) fn adopt(path: &Path, identity: LiveScene) -> io::Result<(Self, Option<NonZeroUsize>)> {
+    /// 记录边界上。写路径据此把本次运行报成未完整收尾（见 `transaction::SessionJournal`）。
+    /// `credential` 是**同一时刻**从目标盘面读出的磁盘身份；读不出时调用方必须在进入本函数前
+    /// 拒绝——零记录收养会改写头，若没有当前凭据就收养，等于把一次没能核对身份的现场收下
+    pub(crate) fn adopt(
+        path: &Path,
+        identity: LiveScene,
+        credential: DiskGuidState,
+    ) -> io::Result<(Self, Option<NonZeroUsize>)> {
         // 打开之前先认落点本身的条目：符号链接与非普通文件都不可认领——`open` 一个 FIFO 会
         // 阻塞到有写端出现，跟随链接则会让随后的写入与截断作用于链接目标。落点不存在时
         // 照旧走到下面的 `NotFound` 分支（可能新建）。认领与打开之间落点仍可能被换成
         // 链接：unix 由下面的 O_NOFOLLOW 兜住，其余平台这一段窗口依赖落点所在目录
         // 不被本进程之外的人写入
-        if let Err(reason) = recovery_path_metadata(path) {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, reason));
+        match RecoveryFile::at(path) {
+            Ok(RecoveryEntry::NotARecoveryFile(n)) => {
+                return Err(io::Error::new(io::ErrorKind::InvalidData, n.message(path)));
+            }
+            Ok(_) => {}
+            Err(e) => {
+                return Err(io::Error::new(io::ErrorKind::InvalidData, format!("cannot stat: {e}")));
+            }
         }
         let mut opts = OpenOptions::new();
         opts.read(true).write(true);
@@ -530,8 +705,8 @@ impl Journal {
                 // 一律走下面的三关校验——把那种现场也当残骸，就等于替用户宣布"这里什么
                 // 都没有"，而头没写全、身份段 CRC 验不了，证明不了这一点
                 if len == 0 {
-                    Self::rewrite_header(path, &mut f, &identity)?;
-                    return Ok((Self::at(path, Some(f), identity), None));
+                    Self::rewrite_header(path, &mut f, &identity, credential)?;
+                    return Ok((Self::at(path, Some(f), identity, credential), None));
                 }
                 let have = usize::try_from(len.min(Self::HEADER_LEN as u64)).unwrap();
                 let mut head = vec![0u8; have];
@@ -557,7 +732,18 @@ impl Journal {
                     f.read_to_end(&mut data)?;
                     data
                 };
-                if let Some(why) = scene_mismatch(&recorded, &identity) {
+                // 旧身份段与磁盘凭据是两道并列的判据：任一不符即不收，任一不符都不能被
+                // 另一道相符抵消。凭据的"不可得 / 本次生成"由 disk_identity_mismatch 归成
+                // 无额外证据，不会被表述成相符
+                let why = scene_mismatch(&recorded.scene, &identity)
+                    .or_else(|| disk_identity_mismatch(recorded.credential, credential));
+                // 凭据状态从"没有证据"变成"本次操作生成"（`new` 把空壳收为本次操作的
+                // journal）要求重写头，否则头会继续写着一个不属于本次操作的 GUID。
+                // 反方向（记录侧 Generated、当前是保留型）不重写：凭据不参与比较，
+                // 旧身份段已经决定能不能收养，改头没有依据
+                let produced_now = matches!(credential, DiskGuidState::GeneratedThisOperation)
+                    && recorded.credential != credential;
+                if why.is_some() || produced_now {
                     // 零完整记录：这份文件没有任何可回滚的字节，身份不符也不构成
                     // "别人的现场"。覆盖头收养它不丢信息；不收养的话，一份落在本目标
                     // 路径上的空壳会永久挡住所有写命令，而 undo/abandon 都不把空壳当
@@ -567,38 +753,50 @@ impl Journal {
                     // 那截字节可能就是被截掉的记录，不能按空壳收养
                     let no_records = matches!(Self::scan_entries(&data), Ok((ref out, end)) if out.is_empty() && end == data.len());
                     if no_records {
-                        Self::rewrite_header(path, &mut f, &identity)?;
+                        Self::rewrite_header(path, &mut f, &identity, credential)?;
                         eprintln!(
-                            "note: journal {} held no complete records and was not recorded for this target ({why}) — reclaimed it as this target's journal",
-                            path.display()
+                            "note: journal {} held no complete records and was not recorded for this target ({}) — reclaimed it as this target's journal",
+                            path.display(),
+                            why.as_deref().unwrap_or("the table is being rewritten by this operation")
                         );
-                        return Ok((Self::at(path, Some(f), identity), None));
+                        return Ok((Self::at(path, Some(f), identity, credential), None));
                     }
-                    // why 里已带着逐字段差异；这里补的是"换回记录时的目标，或用 abandon 释放现场"
+                    if let Some(why) = why {
+                        // why 里已带着逐字段差异；这里补的是"换回记录时的目标，或用 abandon 释放现场"
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            format!(
+                                "{why} — this journal is not adopted here; restore the target to the state it was in, \
+                                 or release the journal with `diskedit abandon` if it is no longer needed"
+                            ),
+                        ));
+                    }
                     return Err(io::Error::new(
                         io::ErrorKind::InvalidData,
-                        format!(
-                            "{why} — this journal is not adopted here; restore the target to the state it was in, \
-                             or release the journal with `diskedit abandon` if it is no longer needed"
-                        ),
+                        "the current operation rewrites the whole table, but this journal already holds records — \
+                         it is not adopted here; release the journal with `diskedit abandon` if it is no longer \
+                         needed",
                     ));
                 }
                 let (_, end) = Self::scan_entries(&data)?;
                 let cut = NonZeroUsize::new(data.len() - end);
                 if let Some(cut) = cut {
                     // 归档先于截断：这份字节此后不再存在于 journal 里，而"没走完的追加"与
-                    // "记录被外部截掉"在这里无法区分——后者对应的写入可能已经落盘
-                    match archive_torn_tail(path, &data[end..]) {
-                        Ok(to) => eprintln!(
-                            "note: journal {} ends with an incomplete record — archived the {cut} byte(s) after the last complete record to {} and truncated the journal back to that record; what was recorded there cannot be replayed",
-                            path.display(),
-                            to.display()
-                        ),
-                        Err(e) => eprintln!(
-                            "warning: cannot archive the {cut} byte(s) the journal {} ends with ({e}) — truncating them away; what was recorded there cannot be replayed",
+                    // "记录被外部截掉"在这里无法区分——后者对应的写入可能已经落盘。
+                    // 归档失败即拒绝收养，拒绝时原始字节一个都没动
+                    let to = archive_torn_tail(path, &data[end..]).map_err(|e| {
+                        io::Error::other(format!(
+                            "the journal {} ends with {cut} byte(s) that form no complete record, and they \
+                             cannot be archived ({e}) — the journal is left unchanged; those bytes are the only \
+                             copy of what follows the last complete record",
                             path.display()
-                        ),
-                    }
+                        ))
+                    })?;
+                    eprintln!(
+                        "note: journal {} ends with an incomplete record — archived the {cut} byte(s) after the last complete record to {} and truncated the journal back to that record; what was recorded there cannot be replayed",
+                        path.display(),
+                        to.display()
+                    );
                     // 截断只改长度：被截掉的这段字节仍留在文件占用的同一个数据块里。直接缩长度的话，
                     // 下一次追加若只丢掉帧首所在的那个扇区、后续扇区照常落盘，再打开就会读到
                     // "旧帧头 + 新载荷"——len 落在文件内、CRC 必不符，整份 journal 被判 Damaged。
@@ -613,10 +811,10 @@ impl Journal {
                     f.set_len(end as u64)?;
                     f.sync_all()?;
                 }
-                Ok((Self::at(path, Some(f), identity), cut))
+                Ok((Self::at(path, Some(f), identity, credential), cut))
             }
             Err(e) if e.kind() == io::ErrorKind::NotFound => {
-                Ok((Self::at(path, None, identity), None))
+                Ok((Self::at(path, None, identity, credential), None))
             }
             Err(e) => Err(e),
         }
@@ -624,11 +822,16 @@ impl Journal {
 
     /// 把残骸的头重写成当前格式与身份：截到 0 再写，否则残余的半个头会留在新头之前。
     /// 复用调用方已打开的那个句柄（不按路径二次打开）
-    pub(crate) fn rewrite_header(path: &Path, f: &mut File, identity: &LiveScene) -> io::Result<()> {
+    pub(crate) fn rewrite_header(
+        path: &Path,
+        f: &mut File,
+        identity: &LiveScene,
+        credential: DiskGuidState,
+    ) -> io::Result<()> {
         use std::io::{Seek, SeekFrom, Write};
         f.set_len(0)?;
         f.seek(SeekFrom::Start(0))?;
-        f.write_all(&Self::header(identity))?;
+        f.write_all(&Self::header(identity, credential))?;
         f.sync_all()?;
         best_effort_dir_fsync(path);
         Ok(())
@@ -662,7 +865,7 @@ impl Journal {
                 }
             })?;
             use std::io::Write;
-            let head = Self::header(&self.identity);
+            let head = Self::header(&self.identity, self.credential);
             let init = f.write_all(&head).and_then(|()| f.sync_all());
             if let Err(e) = init {
                 // 头没写完的文件不属于可采纳的形态（0 字节残骸或完整头），重试会报成

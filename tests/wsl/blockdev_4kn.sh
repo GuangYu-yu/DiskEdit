@@ -55,7 +55,7 @@ addk() { # $1=label $2=期望生成的分区节点  其余=传给 add 的参数
 
 movek() { # $1=目标 start（LBA）
   local start=$1 out e fl
-  out=$($B move "$LD":2 --start "$start" --chunk-size 4 2>&1); e=$?
+  out=$($B move "$LD":2 --start "$start" --chunk-size 4 --yes 2>&1); e=$?
   if [ "$e" -ne 0 ] && echo "$out" | grep -q 'stale'; then
     partx -u "$LD" 2>/dev/null; sleep 1
     fl=$($B info "$LD" | grep -o '"num":2,"first_lba":[0-9]*' | grep -o '[0-9]*$')
@@ -65,7 +65,7 @@ movek() { # $1=目标 start（LBA）
       echo "  move 首次已写盘，内核视图滞后，journal 已释放"
     else
       $B abandon "$LD" --yes >/dev/null 2>&1
-      out=$($B move "$LD":2 --start "$start" --chunk-size 4 2>&1); e=$?
+      out=$($B move "$LD":2 --start "$start" --chunk-size 4 --yes 2>&1); e=$?
     fi
   fi
   echo "$out"; return $e
@@ -107,9 +107,9 @@ echo
 echo "########## C: 4Kn 中断恢复（fault 注入）##########"
 setup4k
 mount_at "${LD}p2" /testmnt && { dd if=/dev/urandom of=/testmnt/blob bs=1M count=200 2>/dev/null; umount /testmnt; M2=$(mdsum "${LD}p2"); }
-DISKEDIT_FAULT=rs-chunk:20 $BF move "$LD":2 --start 66048 --chunk-size 4 >/dev/null 2>&1
+DISKEDIT_FAULT=rs-chunk:20 $BF move "$LD":2 --start 66048 --chunk-size 4 --yes >/dev/null 2>&1
 echo "现场：$(ls /var/lib/diskedit/ 2>/dev/null | wc -l) 项"
-OUT=$($B move "$LD":2 --start 66048 --chunk-size 4 2>&1)
+OUT=$($B move "$LD":2 --start 66048 --chunk-size 4 --yes 2>&1)
 R=$(echo "$OUT" | grep -o 'resuming at chunk [0-9]*')
 [ "$R" = "resuming at chunk 20" ] && echo "resume: $R" || { echo "resume: WRONG ($R，输出尾: $(echo "$OUT" | tail -1))"; rc=1; }
 refresh

@@ -1,5 +1,5 @@
 #![allow(clippy::let_underscore_must_use)] // 清理临时文件有意忽略失败
-use super::{check_e2fsck_for_check, check_e2fsck_for_resize, check_grow_step, classify_shrink, erase_ranges, grow_target_at, leak_from, mkfs_tool, parse_fstype, parse_num_field, parse_num_lead, partition_byte_range, settle_release, swap_rebuild_support, uuid_support, vfat_label_check, DeviceScope, Growable, MkfsFs, MountLeak, ReleaseOutcome, ShrinkVerify, ToolSupport, UuidSupport};
+use super::{check_e2fsck_for_check, check_e2fsck_for_resize, check_grow_step, classify_shrink, erase_ranges, grow_target_at, leak_from, mkfs_tool, parse_fstype, parse_num_lead, partition_byte_range, settle_release, swap_rebuild_support, uuid_support, vfat_label_check, DeviceScope, Growable, MkfsFs, MountLeak, NumError, ReleaseOutcome, ShrinkVerify, ToolSupport, Unusable, UuidSupport};
 use super::FsError;
 use crate::dev::FileSource;
 use crate::fsid::{self, FsKind};
@@ -316,7 +316,7 @@ pub(crate) fn fs_fixture(tag: &str, data: Vec<u8>) -> crate::dev::WriteSource {
 pub(crate) fn partition_byte_range_gpt_and_mbr() {
     // GPT：按解析时的扇区大小换算
     let mut src = fs_fixture("pbr_gpt", vec![0u8; 2 * 1024 * 1024]);
-    crate::table::create_gpt(&mut src, 512, None).unwrap();
+    crate::table::create_gpt(&mut src, 512, None, false).unwrap();
     crate::gpt_policy::add_entry(&mut src, 2048, 3000, "p", crate::table::LINUX_FS_TYPE_GUID).unwrap();
     assert_eq!(partition_byte_range(&src, 1).unwrap(), (2048 * 512, (3000 - 2048 + 1) * 512));
     assert!(partition_byte_range(&src, 2).is_err(), "empty slot must be rejected");
@@ -325,7 +325,7 @@ pub(crate) fn partition_byte_range_gpt_and_mbr() {
 
     // MBR：容器分区（0x05/0x0F/0x85）无法做 FS 操作
     let mut src = fs_fixture("pbr_mbr", vec![0u8; 2 * 1024 * 1024]);
-    crate::table::create_mbr(&mut src).unwrap();
+    crate::table::create_mbr(&mut src, false).unwrap();
     crate::table::add_mdos_entry(&mut src, 63, 200, 0x83).unwrap();
     crate::table::add_mdos_entry(&mut src, 201, 300, 0x83).unwrap();
     // 被测对象是"容器类型条目的区间判读"，类型字节直接写盘面：追加路径拒绝容器类型
@@ -502,10 +502,10 @@ pub(crate) fn e2fsck_exit_code_semantics() {
 pub(crate) fn parses_tool_output_formats() {
     // resize2fs -P / dumpe2fs -h 实际输出格式样本
     let a = "Estimated minimum size of the filesystem: 12345\n";
-    assert_eq!(parse_num_field(a, "Estimated minimum size of the filesystem:").unwrap(), 12345);
+    assert_eq!(parse_num_lead(a, "Estimated minimum size of the filesystem:").unwrap(), 12345);
     let b = "meta-data=/dev/loop0\nBlock size:               4096\n";
-    assert_eq!(parse_num_field(b, "Block size:").unwrap(), 4096);
-    assert!(parse_num_field("nothing here", "Block size:").is_err());
+    assert_eq!(parse_num_lead(b, "Block size:").unwrap(), 4096);
+    assert!(parse_num_lead("nothing here", "Block size:").is_err());
 }
 
 #[test]
@@ -521,6 +521,32 @@ pub(crate) fn parses_shrink_read_back_output_formats() {
     // dump-super -f 里还有 dev_item.total_bytes 与 backup_total_bytes，行首锚定只取主超级块那条
     let btrfs = "total_bytes             314572800\ndev_item.total_bytes    268435456\n             backup_total_bytes:     1073741824\n";
     assert_eq!(parse_num_lead(btrfs, "total_bytes").unwrap(), 314_572_800);
+}
+
+/// 回读值只能是"十进制数字 + 行尾或空白"：0、越界、带尾巴、非数字都不能当作有效尺寸。
+/// 拒绝理由还必须是"字段在、值不可用"，不能塌缩成"没有这个字段"——后者会被读者当成
+/// 输出里本来就没有该值
+#[test]
+pub(crate) fn shrink_read_back_rejects_unusable_values() {
+    let why = |text: &str| match parse_num_lead(text, "total_bytes") {
+        Err(NumError::UnusableValue { why, .. }) => why,
+        other => panic!("{text:?} must be an unusable value, got {other:?}"),
+    };
+    assert_eq!(why("total_bytes             0\n"), Unusable::Zero);
+    assert_eq!(why("total_bytes             0x1000\n"), Unusable::TrailingGarbage);
+    assert_eq!(
+        why("total_bytes             18446744073709551616\n"),
+        Unusable::Overflow
+    );
+    assert_eq!(why("total_bytes             12ab\n"), Unusable::TrailingGarbage);
+    assert_eq!(why("total_bytes\n"), Unusable::NotDecimal);
+    // 空输出才是"没有这个字段"：它是唯一允许报成 MissingField 的形态
+    assert!(matches!(parse_num_lead("\n", "total_bytes"), Err(NumError::MissingField(_))));
+    assert!(matches!(
+        parse_num_lead("nothing here\n", "total_bytes"),
+        Err(NumError::MissingField(_))
+    ));
+    assert_eq!(parse_num_lead("total_bytes             314572800\n", "total_bytes").unwrap(), 314_572_800);
 }
 
 /// 缩容工具成功返回后的回读判定：正常（含向下取整）、超出请求值、读不出来三种结局

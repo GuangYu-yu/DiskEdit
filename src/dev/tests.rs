@@ -48,8 +48,8 @@ pub(crate) fn own_header_covers_every_readable_version() {
     assert!(!Journal::is_own_header(b"XXXX\x05"), "a foreign magic is not ours");
 }
 
-/// 四态分类的边界：只有 NotFound 是 absent；0 字节残骸与非普通文件也不是现场；
-/// 零记录的头是 shell；半截头与陌生文件是 damaged
+/// 分类的边界：只有 NotFound 是 absent；0 字节残骸与非普通文件也不是现场；
+/// 零记录的头是 shell；上一版布局是 old-format（独立于 damaged）；半截头与陌生文件是 damaged
 #[test]
 pub(crate) fn journal_candidate_classification_covers_every_state() {
     let p = journal_path("classify");
@@ -76,10 +76,64 @@ pub(crate) fn journal_candidate_classification_covers_every_state() {
     let _ = std::fs::remove_file(&p);
     std::fs::create_dir(&p).unwrap();
     assert!(
-        matches!(classify_journal(&p), JournalCandidate::Damaged(_)),
-        "a non-regular-file path is not this tool's journal and must not be adopted"
+        matches!(classify_journal(&p), JournalCandidate::NotARecoveryFile(_)),
+        "a directory exists but is not this tool's journal"
     );
     let _ = std::fs::remove_dir(&p);
+}
+
+#[cfg(unix)]
+fn make_symlink(target: &Path, link: &Path) -> io::Result<()> {
+    std::os::unix::fs::symlink(target, link)
+}
+
+#[cfg(windows)]
+fn make_symlink(target: &Path, link: &Path) -> io::Result<()> {
+    std::os::windows::fs::symlink_file(target, link)
+}
+
+/// 唯一构造点认的是落点本身的条目：符号链接（含 dangling）与目录都归
+/// `NotARecoveryFile`——"存在但不是恢复文件"，不是"不存在"。删除入口同样只认
+/// 普通文件：对符号链接调用 `remove_file` 只会摘掉链接，链接目标保持原样
+#[test]
+pub(crate) fn recovery_entry_never_follows_a_symbolic_link() {
+    let dir = std::env::temp_dir().join(format!("diskedit_recovery_entry_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let target = dir.join("target.bin");
+    let link = dir.join("link.bin");
+    let dangling = dir.join("dangling.bin");
+    let dir_entry = dir.join("dir_entry");
+    std::fs::write(&target, b"record bytes").unwrap();
+    make_symlink(Path::new("target.bin"), &link).unwrap();
+    // 先有目标、再删掉，才能得到一条 dangling 链接（Windows 拒绝指向不存在目标的创建）。
+    // 链接目标用相对名：跟随链接时按链接所在目录解析，不依赖绝对路径
+    let missing = dir.join("missing-target");
+    std::fs::write(&missing, b"").unwrap();
+    make_symlink(&missing, &dangling).unwrap();
+    std::fs::remove_file(&missing).unwrap();
+    std::fs::create_dir(&dir_entry).unwrap();
+
+    assert!(
+        matches!(RecoveryFile::at(&link), Ok(RecoveryEntry::NotARecoveryFile(n)) if n.what() == "a symbolic link"),
+        "a symbolic link is not a recovery file"
+    );
+    assert!(
+        matches!(RecoveryFile::at(&dangling), Ok(RecoveryEntry::NotARecoveryFile(n)) if n.what() == "a dangling symbolic link"),
+        "a dangling symbolic link exists but is not a recovery file"
+    );
+    assert!(
+        matches!(RecoveryFile::at(&dir_entry), Ok(RecoveryEntry::NotARecoveryFile(n)) if n.what() == "a directory"),
+        "a directory is not a recovery file"
+    );
+    assert!(matches!(RecoveryFile::at(&target), Ok(RecoveryEntry::File(_))));
+    assert!(matches!(RecoveryFile::at(&dir.join("absent")), Ok(RecoveryEntry::Absent)));
+
+    assert!(!remove_recovery_file(&link), "a symbolic link must not be deleted as a recovery file");
+    assert_eq!(std::fs::read(&target).unwrap(), b"record bytes", "the link target keeps its bytes");
+    assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink(), "the link entry is untouched");
+
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// 属性读不出来不是"不在"：只有 `NotFound` 才算缺席，其余错误必须按 `Damaged` 收口。
@@ -260,21 +314,22 @@ pub(crate) fn journal_records_identity_kind_and_refuses_an_unknown_one() {
         (LiveProof::Inode, 2),
         (LiveProof::Unavailable, 3),
     ] {
-        let bytes = Journal::header(&with(proof));
+        let bytes = Journal::header(&with(proof), DiskGuidState::Unavailable);
         assert_eq!(bytes[Journal::MAGIC.len() + IDENTITY_LEN - 1], tag);
         let back = Journal::parse_header(&bytes).unwrap();
         assert_eq!(
-            (back.fp, back.map, back.proof),
+            (back.scene.fp, back.scene.map, back.scene.proof),
             (with(proof).fp, with(proof).map, IdentityProof::from(proof))
         );
+        assert_eq!(back.credential, DiskGuidState::Unavailable);
     }
 
     // 0 不是任何合法种类：头 CRC 通过也不得降级成别的种类
-    let mut bytes = Journal::header(&with(LiveProof::Inode));
+    let mut bytes = Journal::header(&with(LiveProof::Inode), DiskGuidState::Unavailable);
     bytes[Journal::MAGIC.len() + IDENTITY_LEN - 1] = 0;
-    let crc_at = bytes.len() - 4;
+    let crc_at = Journal::MAGIC.len() + IDENTITY_LEN;
     let crc = crate::table::crc32(&bytes[..crc_at]);
-    bytes[crc_at..].copy_from_slice(&crc.to_le_bytes());
+    bytes[crc_at..crc_at + 4].copy_from_slice(&crc.to_le_bytes());
     let e = err_text(Journal::parse_header(&bytes));
     assert!(e.contains("identity kind"), "an unknown identity kind must be refused: {e}");
 }
@@ -465,7 +520,7 @@ pub(crate) fn journal_adopts_truncates_and_appends_through_one_handle() {
     // 撕掉最后一条记录的尾部：模拟一条没走完的追加
     std::fs::write(&p, &full[..full.len() - 7]).unwrap();
 
-    let (mut j, cut) = Journal::adopt(&p, jid()).unwrap();
+    let (mut j, cut) = Journal::adopt(&p, jid(), DiskGuidState::Unavailable).unwrap();
     let cut = cut.expect("the torn record must be reported as a non-zero cut");
     assert!(
         matches!(Journal::read_entries(&p).unwrap(), JournalRead::Complete(v) if v.len() == 1),
@@ -485,6 +540,35 @@ pub(crate) fn journal_adopts_truncates_and_appends_through_one_handle() {
 
     let _ = std::fs::remove_file(&p);
     let _ = std::fs::remove_file(&archived);
+}
+
+/// 归档失败时不得进入零化与截断：归档是撕裂尾字节的唯一副本，没有它就没有恢复依据。
+/// 文件名 246 字节可建、再加 `.torn-tail`（10 字节）超出 255 的文件名上限，
+/// `archive_torn_tail` 因此拿到真实的 `ENAMETOOLONG`，不依赖权限（测试常以 root 运行）
+#[cfg(unix)]
+#[test]
+pub(crate) fn journal_refuses_adoption_when_the_tail_cannot_be_archived() {
+    let dir = std::env::temp_dir().join(format!("diskedit_arch_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let p = dir.join("j".repeat(246));
+    const DATA: usize = 32;
+    {
+        let mut j = Journal::open(&p, jid()).unwrap();
+        for i in 0..2u64 {
+            j.record(i * 512, &[0xAA; DATA], &[0xBB; DATA]).unwrap();
+        }
+    }
+    let full = std::fs::read(&p).unwrap();
+    let torn = &full[..full.len() - 7];
+    std::fs::write(&p, torn).unwrap();
+
+    let e = err_text(Journal::adopt(&p, jid(), DiskGuidState::Unavailable));
+    assert!(e.contains("cannot be archived"), "{e}");
+    assert_eq!(std::fs::read(&p).unwrap(), torn, "the journal must keep the torn bytes when no archive could be written");
+    assert!(!suffix_path(&p, ".torn-tail").exists(), "no archive means no archive file");
+
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// 身份取自已打开的句柄：符号链接只是别名，身份主体落在真实路径的兄弟文件上；
@@ -795,4 +879,146 @@ pub(crate) fn block_lock_and_journal_share_one_directory() {
     assert_eq!(id.lock_path().parent(), Some(state_dir().as_path()));
     assert_eq!(id.journal_path().parent(), Some(state_dir().as_path()));
     assert!(id.lock_path().to_string_lossy().ends_with(LOCK_SUFFIX));
+}
+
+/// 按字节拼一份头：magic 版本、身份段、身份段 CRC。布局与版本号写在测试里而不是取
+/// `Journal::MAGIC`——回归测试要固定"上一版写下的是什么"，不能跟着被测常量一起漂移
+const HEADER_BYTES: usize = 5 + 50 + 4;
+
+fn header_with_version(version: u8, scene: &LiveScene) -> Vec<u8> {
+    let mut b = vec![b'D', b'E', b'J', b'L', version];
+    b.extend_from_slice(&scene.fp.dev.to_le_bytes());
+    b.extend_from_slice(&scene.fp.ino.to_le_bytes());
+    b.extend_from_slice(&scene.fp.size.to_le_bytes());
+    b.extend_from_slice(&scene.fp.id.to_le_bytes());
+    b.push(scene.map.is_some() as u8);
+    let (off, limit) = scene.map.unwrap_or((0, 0));
+    b.extend_from_slice(&off.to_le_bytes());
+    b.extend_from_slice(&limit.to_le_bytes());
+    b.push(scene.proof.tag());
+    assert_eq!(b.len(), HEADER_BYTES - 4, "the identity section is the v6 layout");
+    let crc = crate::table::crc32(&b);
+    b.extend_from_slice(&crc.to_le_bytes());
+    b
+}
+
+/// 追加凭据段：状态标签 + 16 字节 GUID + 本段 CRC
+fn with_credential(mut b: Vec<u8>, tag: u8, guid: [u8; 16]) -> Vec<u8> {
+    assert_eq!(b.len(), HEADER_BYTES);
+    let start = b.len();
+    b.push(tag);
+    b.extend_from_slice(&guid);
+    let crc = crate::table::crc32(&b[start..]);
+    b.extend_from_slice(&crc.to_le_bytes());
+    b
+}
+
+fn pre_image_frame(off: u64, pre: &[u8], after: &[u8]) -> Vec<u8> {
+    let rec = JournalRecord {
+        mutation: Mutation::PartitionTable,
+        recovery: RecoveryData::PreImage { off, bytes: pre.to_vec(), after: after.to_vec() },
+    };
+    let payload = rec.encode();
+    let n = (payload.len() as u32).to_le_bytes();
+    let mut f = Vec::new();
+    f.extend_from_slice(&n);
+    f.extend_from_slice(&Journal::record_crc(n, &payload).to_le_bytes());
+    f.extend_from_slice(&payload);
+    f
+}
+
+/// 旧格式（v6）零记录壳：它不是本构建能收养的现场，也不是可回收的空壳。按"空壳"处理
+/// 会让 `undo` 删掉它、让写闸口跳过它——两种都把一次现场清理当成了自动迁移
+#[test]
+pub(crate) fn old_format_zero_record_journal_is_refused_not_reclaimed() {
+    let p = journal_path("oldfmt_shell");
+    let bytes = header_with_version(6, &jid());
+    std::fs::write(&p, &bytes).unwrap();
+    let e = err_text(Journal::open(&p, jid()));
+    assert!(e.contains("older"), "the refusal must name the format gap: {e}");
+    assert_eq!(std::fs::read(&p).unwrap(), bytes, "the old-format site must be left byte-for-byte");
+    let _ = std::fs::remove_file(&p);
+}
+
+/// 记录侧写着"目标有 GPT Disk GUID"、当前目标却给不出 GPT：不可得不是相符。此时既不能
+/// 按不符之外的任何路径收养，也不能把现场删掉或改写
+#[test]
+pub(crate) fn recorded_disk_guid_without_a_gpt_now_is_not_a_match() {
+    let p = journal_path("cred_gap");
+    let mut bytes = with_credential(header_with_version(7, &jid()), 1, [0x11; 16]);
+    bytes.extend_from_slice(&pre_image_frame(0, &[0xAA; 4], &[0xBB; 4]));
+    std::fs::write(&p, &bytes).unwrap();
+    let e = err_text(Journal::open(&p, jid()));
+    assert!(e.contains("disk GUID"), "an unavailable current credential is not a match: {e}");
+    assert_eq!(std::fs::read(&p).unwrap(), bytes, "a refused journal is left in place");
+    let _ = std::fs::remove_file(&p);
+}
+
+/// 容量相同、旧身份段无差别，只有 Disk GUID 不同（同盘扩容到同样大小后再回放，或克隆盘）：
+/// 凭据必须把这一格挡下。替换旧字段会放行此形态，追加字段不会
+#[test]
+pub(crate) fn a_different_disk_guid_is_refused() {
+    let p = journal_path("cred_other");
+    let mut bytes = with_credential(header_with_version(7, &jid()), 1, [0x11; 16]);
+    bytes.extend_from_slice(&pre_image_frame(0, &[0xAA; 4], &[0xBB; 4]));
+    std::fs::write(&p, &bytes).unwrap();
+    let e = err_text(Journal::adopt(&p, jid(), DiskGuidState::Present([0x22; 16])));
+    assert!(e.contains("disk GUID"), "a different GUID must be refused: {e}");
+    assert_eq!(std::fs::read(&p).unwrap(), bytes, "a refused journal is left in place");
+    let _ = std::fs::remove_file(&p);
+}
+
+/// `new` 记的是"本次操作内生成"，它不是证据：既不能用来认目标，也不能抵消旧身份段的不符。
+/// 这里旧身份段与目标不符、凭据是 Generated——若把"生成"当成可放行的凭据，收养会成立
+#[test]
+pub(crate) fn a_generated_credential_never_matches_on_its_own() {
+    let p = journal_path("cred_generated");
+    let mut authored = jid();
+    authored.fp.dev = 7;
+    authored.fp.ino = 42;
+    authored.fp.size = 1 << 20;
+    let mut bytes = with_credential(header_with_version(7, &authored), 2, [0; 16]);
+    bytes.extend_from_slice(&pre_image_frame(0, &[0xAA; 4], &[0xBB; 4]));
+    std::fs::write(&p, &bytes).unwrap();
+    let mut other = jid();
+    other.fp.dev = 9;
+    other.fp.ino = 43;
+    other.fp.size = 1 << 20;
+    let e = err_text(Journal::adopt(&p, other, DiskGuidState::GeneratedThisOperation));
+    assert!(
+        e.contains("fingerprint") || e.contains("target"),
+        "a generated credential must not bypass the old identity gate: {e}"
+    );
+    let _ = std::fs::remove_file(&p);
+}
+
+/// 反过来：旧身份段相符、记录侧是"本次生成"、当前目标报出任意 GUID 时，凭据不参与比较，
+/// 收养照旧成立。它不提供判据，也就不能成为拒绝或放行的理由
+#[test]
+pub(crate) fn a_generated_credential_is_not_compared() {
+    let p = journal_path("cred_generated_ok");
+    let mut authored = jid();
+    authored.fp.dev = 7;
+    authored.fp.ino = 42;
+    authored.fp.size = 1 << 20;
+    let mut bytes = with_credential(header_with_version(7, &authored), 2, [0; 16]);
+    bytes.extend_from_slice(&pre_image_frame(0, &[0xAA; 4], &[0xBB; 4]));
+    std::fs::write(&p, &bytes).unwrap();
+    Journal::adopt(&p, authored, DiskGuidState::Present([0x99; 16]))
+        .expect("a generated credential is not evidence either way");
+    let _ = std::fs::remove_file(&p);
+}
+
+/// 凭据段自己的 CRC 坏了：凭据读不出。这是 Damaged，不是"没有 GUID"，更不是可收养的壳
+#[test]
+pub(crate) fn credential_crc_corruption_is_damaged_not_adopted() {
+    let p = journal_path("cred_crc");
+    let mut bytes = with_credential(header_with_version(7, &jid()), 1, [0x11; 16]);
+    // 翻 GUID 里的一位而不重算凭据段 CRC
+    bytes[5 + 50 + 4 + 1] ^= 0x01;
+    std::fs::write(&p, &bytes).unwrap();
+    let e = err_text(Journal::open(&p, jid()));
+    assert!(e.contains("disk-identity CRC"), "a broken credential is unreadable: {e}");
+    assert_eq!(std::fs::read(&p).unwrap(), bytes, "an unreadable journal is left in place");
+    let _ = std::fs::remove_file(&p);
 }

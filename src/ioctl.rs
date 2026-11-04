@@ -169,17 +169,19 @@ pub(crate) fn blkpg_resize_partition(f: &File, start_bytes: u64, new_len_bytes: 
     if r == 0 {
         return Ok(());
     }
-    let code = io::Error::last_os_error().raw_os_error().unwrap_or(0);
+    // errno 可能取不到；`unwrap_or(0)` 会把"不知道"印成是一个真实 errno
+    let code = io::Error::last_os_error().raw_os_error();
     // errno 语义（内核 block/ioctl.c）：EACCES = 缺 CAP_SYS_ADMIN；EINVAL = 对分区 fd
     // 调用 / pno ≤ 0 / range 非法或溢出 / 未按逻辑块对齐 / 超出盘容量；
     // EBUSY = 与相邻分区重叠（block/partitions/core.c）
     let hint = match code {
-        libc::EACCES => "requires root (CAP_SYS_ADMIN)",
-        libc::EBUSY => "kernel rejected resize: overlaps another partition",
-        libc::EINVAL => "kernel rejected resize (invalid pno/range, misaligned, or beyond capacity)",
+        Some(libc::EACCES) => "requires root (CAP_SYS_ADMIN)",
+        Some(libc::EBUSY) => "kernel rejected resize: overlaps another partition",
+        Some(libc::EINVAL) => "kernel rejected resize (invalid pno/range, misaligned, or beyond capacity)",
         _ => "kernel rejected resize",
     };
-    Err(io::Error::other(format!(
-        "BLKPG_RESIZE_PARTITION failed: {hint} (errno {code})"
-    )))
+    Err(io::Error::other(match code {
+        Some(code) => format!("BLKPG_RESIZE_PARTITION failed: {hint} (errno {code})"),
+        None => format!("BLKPG_RESIZE_PARTITION failed: {hint} (errno unavailable)"),
+    }))
 }

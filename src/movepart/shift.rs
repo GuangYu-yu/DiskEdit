@@ -431,12 +431,16 @@ pub(crate) fn execute_apply(
     let (chunk_len, no_fs) = (d.chunk_len, d.no_fs);
     let ckpt_path = &d.ckpt_path;
     let mut g = d.g;
+    // 撤除判据的基数：只有本次执行新增的待办才使"最终状态已核验"不成立
+    let pending_before = post.len();
     // 修复已由 apply 的 Fail 域在调用本函数之前完成（备份头搬移 / 保护 MBR 重写），
     // 使后续所有写入都基于修复后的几何
-    atomic_write_ckpt(ckpt_path, &ckpt.serialize())?;
     // 在任何一个数据 chunk 写出之前，按 commit 的同一判据核对盘上的表仍是本次计划读到的
     // 那一份。此刻目标盘没有任何数据写入，外部已改表时命令以"未写盘"收场
     g.ensure_entries_unchanged(src)?;
+    // 复核通过后才落本次作业的恢复现场：复核失败时盘上没有可续的 checkpoint，
+    // 下一次运行按新跑判定
+    atomic_write_ckpt(ckpt_path, &ckpt.serialize())?;
     // 本操作含**不可回滚的写入**：搬移的数据块按设计不入 journal（前向恢复、无回滚），
     // 故留一条标记使 undo 拒绝回滚——否则表被回滚而数据未回滚，布局与盘上内容自相矛盾。
     // delta_lba 在 plan 生成处只产生非负值：目标起点 = first_lba + delta，直接 checked 相加
@@ -521,13 +525,11 @@ pub(crate) fn execute_apply(
             }
             // 旧 swap 签名区在源位置（数据区未搬移），从那里读 UUID/卷标
             let ident = swap_identity_preferring(src, m.first_lba, new_first, m.len_lba, plan.ss);
-            let had_uuid = ident.0.is_some();
             // mkswap 是外部工具的写盘，先落屏障（对齐 execute_resize 的 swap 分支）
             src.set_mutation(crate::dev::Mutation::ExternalFsTool);
             src.mark_non_reversible()?;
-            match crate::fsops::recreate_swap(src, m.part_num, ident) {
-                Ok(()) if had_uuid => log(&format!("swap {} recreated at new location (UUID preserved)", m.part_num)),
-                Ok(()) => log(&format!("swap {} recreated at new location (old signature had no UUID — mkswap wrote a fresh one)", m.part_num)),
+            match crate::fsops::recreate_swap(src, m.part_num, &ident) {
+                Ok(note) => log(&format!("swap {} recreated at new location ({note})", m.part_num)),
                 // 表项已落位、内容可弃：swap 未重建属"后续步骤未完成"，不是本次操作失败。
                 // 不推进 cur_index、就地停止条目循环，续跑从本条目重试 mkswap（表项提交与
                 // identity 读取幂等，旧签名仍在源位）。推进会让重跑的位置比对要求"后续
@@ -659,6 +661,10 @@ pub(crate) fn execute_apply(
                 "relocation stopped before the grow step but recorded no pending work — the on-disk state may be incomplete",
             ));
         }
+        let later_steps = d.defer_ckpt || ckpt.lvm.is_some();
+        if let Err(why) = checkpoint_may_be_removed(false, pending_before, post.len(), later_steps) {
+            log_ckpt_retention(log, ckpt_path, why);
+        }
         log("relocation incomplete (swap rebuild pending) — growth not applied, re-run the command to continue");
         return Ok(());
     }
@@ -719,20 +725,22 @@ pub(crate) fn execute_apply(
         ));
     }
     // 删除失败同样进待办：现场留着会被下次 resize/apply 当成续跑参数比对，而作业其实已完成
-    if ckpt.lvm.is_none()
-        && post.is_empty()
-        && !crate::dev::remove_recovery_file(ckpt_path)
-    {
-        post.pending(Pending::new(
-            plan.grow_part,
-            PendingKind::Other("checkpoint"),
-            format!(
-                "the job finished but its checkpoint {} could not be removed — the next resize/apply \
-                 will treat this target as an unfinished job; remove the file by hand",
-                ckpt_path.display()
-            ),
-            String::new(),
-        ));
+    match checkpoint_may_be_removed(true, pending_before, post.len(), d.defer_ckpt || ckpt.lvm.is_some()) {
+        Ok(()) => {
+            if !crate::dev::remove_recovery_file(ckpt_path) {
+                post.pending(Pending::new(
+                    plan.grow_part,
+                    PendingKind::Other("checkpoint"),
+                    format!(
+                        "the job finished but its checkpoint {} could not be removed — the next resize/apply \
+                         will treat this target as an unfinished job; remove the file by hand",
+                        ckpt_path.display()
+                    ),
+                    String::new(),
+                ));
+            }
+        }
+        Err(why) => log_ckpt_retention(log, ckpt_path, why),
     }
     Ok(())
 }
@@ -850,10 +858,8 @@ pub(crate) fn finalize_growth(
             src.set_mutation(crate::dev::Mutation::ExternalFsTool);
             src.mark_non_reversible()?;
             let ident = swap_identity_preferring(src, r.old.0, r.new.0, r.old.1, ss);
-            let had_uuid = ident.0.is_some();
-            match crate::fsops::recreate_swap(src, part, ident) {
-                Ok(()) if had_uuid => log("swap recreated (UUID preserved)"),
-                Ok(()) => log("swap recreated (old signature had no UUID — mkswap wrote a fresh one)"),
+            match crate::fsops::recreate_swap(src, part, &ident) {
+                Ok(note) => log(&format!("swap recreated ({note})")),
                 Err(e) => post.pending(Pending::new(
                     part,
                     PendingKind::Swap,
@@ -896,12 +902,6 @@ pub(crate) fn finalize_growth(
     Ok(())
 }
 
-/// 尽力读取附加信息（如卷标）：失败只意味着该项缺失，不影响正确性
-#[allow(clippy::let_underscore_must_use)]
-pub(crate) fn best_effort_read(src: &FileSource, off: u64, buf: &mut [u8]) {
-    let _ = src.read_at(off, buf);
-}
-
 /// 优先取旧起点上的 swap 身份；旧起点取不到 UUID 时回退到新起点。
 ///
 /// 位移小于一个 swap 头跨度时，上一次 `mkswap` 写下的新头可能覆盖旧头区域；
@@ -913,46 +913,53 @@ pub(crate) fn swap_identity_preferring(
     new_start: u64,
     len_lba: u64,
     ss: u64,
-) -> (Option<[u8; 16]>, Option<Vec<u8>>) {
+) -> crate::fsops::SwapIdentity {
     let ident = read_swap_identity(src, old_start, len_lba, ss);
-    if ident.0.is_some() || old_start == new_start {
+    if ident.has_uuid() || old_start == new_start {
         return ident;
     }
     let at_new = read_swap_identity(src, new_start, len_lba, ss);
-    if at_new.0.is_some() { at_new } else { ident }
+    if at_new.has_uuid() { at_new } else { ident }
 }
 
 /// 从 swap 首部读 UUID/卷标（内核 include/linux/swap.h union swap_header：info @1024，
-/// sws_uuid@1036、sws_volume@1052）。非 swap 签名或读取失败 → None（mkswap 生成随机 UUID）
+/// sws_uuid@1036、sws_volume@1052）。
 ///
 /// 卷标以**字节**返回：sws_volume 是 16 字节定长字段，mkswap 存入时不校验编码，
-/// 任何 String 化（Latin-1 或替换非法序列）都会在写回时改变原值
-pub(crate) fn read_swap_identity(src: &FileSource, first_lba: u64, len_lba: u64, ss: u64) -> (Option<[u8; 16]>, Option<Vec<u8>>) {
-    // 换算失败与"读不出来"同一出口：本函数只做收尾时的尽力保留，保不住就按随机 UUID 走
+/// 任何 String 化（Latin-1 或替换非法序列）都会在写回时改变原值。
+/// "没有签名"与"读不出来"必须分开：前者可以照常重建（随机 UUID），后者重建就会
+/// 悄悄丢掉 fstab/resume 依赖的 UUID 或卷标
+pub(crate) fn read_swap_identity(
+    src: &FileSource,
+    first_lba: u64,
+    len_lba: u64,
+    ss: u64,
+) -> crate::fsops::SwapIdentity {
+    use crate::fsops::{SwapIdentity, SwapLabel};
     let (Some(base), Some(len_bytes)) = (first_lba.checked_mul(ss), len_lba.checked_mul(ss)) else {
-        return (None, None);
+        return SwapIdentity::Unreadable("swap header range overflows".into());
     };
     // 签名位置由唯一探测器判定；候选集取 libblkid 口径（含 32K）——本函数只读元数据，
     // 宽于"swapon 可激活"的范围是有意的：读得到就能保住 UUID/PARTUUID。
-    // 探测读失败与未命中同出口：收尾时的尽力读取，保不住就按随机 UUID 走
-    if !matches!(
-        crate::fsid::probe_swap_header(src, base, len_bytes, &crate::fsid::blkid_known_pages()),
-        Ok(Some(_))
-    ) {
-        return (None, None); // 未格式化、非 swap、或读不出来 → 随机 UUID
+    match crate::fsid::probe_swap_header(src, base, len_bytes, &crate::fsid::blkid_known_pages()) {
+        Ok(Some(_)) => {}
+        Ok(None) => return SwapIdentity::NotSwap,
+        Err(e) => return SwapIdentity::Unreadable(format!("cannot probe the swap signature: {e}")),
     }
     // UUID/卷标偏移与页大小无关：libblkid struct swap_header_v1_2 中 uuid @1036、volume @1052
     // （与内核 union swap_header 的 info 区同布局，均在第一页内、bootbits 之后）
     let mut uuid = [0u8; 16];
-    let mut vol = [0u8; 16];
-    if src.read_at(base + 1036, &mut uuid).is_err() {
-        return (None, None);
+    if let Err(e) = src.read_at(base + 1036, &mut uuid) {
+        return SwapIdentity::Unreadable(format!("cannot read the swap UUID: {e}"));
     }
-    // 卷标是附加信息：读失败只意味着重建后没有卷标（swap 通常按 UUID 挂载），
-    // 不影响可用性；UUID 读失败已在上方显式返回 None，由 mkswap 生成新值
-    best_effort_read(src, base + 1052, &mut vol);
-    let vol_bytes: Vec<u8> = vol.iter().take_while(|&&b| b != 0).copied().collect();
-    let uuid_opt = if uuid == [0u8; 16] { None } else { Some(uuid) };
-    let vol_opt = if vol_bytes.is_empty() { None } else { Some(vol_bytes) };
-    (uuid_opt, vol_opt)
+    let mut vol = [0u8; 16];
+    let label = match src.read_at(base + 1052, &mut vol) {
+        Ok(()) => {
+            let vol_bytes: Vec<u8> = vol.iter().take_while(|&&b| b != 0).copied().collect();
+            if vol_bytes.is_empty() { SwapLabel::Absent } else { SwapLabel::Present(vol_bytes) }
+        }
+        Err(e) => SwapLabel::Unreadable(format!("cannot read the swap volume label: {e}")),
+    };
+    let uuid = (uuid != [0u8; 16]).then_some(uuid);
+    SwapIdentity::Known { uuid, label }
 }

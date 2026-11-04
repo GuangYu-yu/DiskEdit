@@ -299,6 +299,12 @@ pub fn resize_online(
                     );
                 };
                 let mnt = mnt.to_string_lossy().into_owned();
+                // FS 缩是本次首个写盘步骤：决策快照取自内核视图，到此为止的探测可能
+                // 耗时良久，期间的盘上表可能已被第三方改写。读当前表，不一致或读不出来
+                // 都在这里停下——此刻本进程尚未写盘
+                if let Err(e) = ensure_disk_snapshot_unchanged(&t, bytes) {
+                    return e.into_outcome();
+                }
                 match run("btrfs", &["filesystem", "resize", &bytes.to_string(), &mnt]) {
                     // ToolMissing / spawn 失败发生在本次首次写盘之前 → Infra；
                     // 启动后拿不到退出状态则可能已改 FS → Failed（映射见 Fail::from）

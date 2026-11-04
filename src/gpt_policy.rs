@@ -215,10 +215,10 @@ pub fn require_gpt_geometry(src: &FileSource, verb: &str) -> Result<(ValidatedGe
 }
 
 /// 首次写盘前的最后一道：盘上的表仍是决策期读到的那一份。窗口里第三方改过条目即拒绝；
-/// 此刻本层尚未写盘，`Refused` 的"确定未写盘"成立（等到 commit 里才发现时，修复步骤
-/// 可能已经写过头部，只能报 `Failed`）
+/// 表读不出来则归基础设施（10/30 两类都发生在本次写盘之前，两者都不放行）。等到 commit
+/// 里才发现时，修复步骤可能已经写过头部，只能报 `Failed`
 fn refuse_if_table_changed(src: &FileSource, g: &ValidatedGeometry) -> Result<(), Fail> {
-    g.ensure_entries_unchanged(src).map_err(|e| Fail::refused(e.to_string()))
+    g.ensure_entries_unchanged_fail(src)
 }
 
 // ---------- 表项编排（"读 → 判 → 修复 → 提交"） ----------
@@ -737,7 +737,7 @@ mod tests {
     /// 带一个分区的 GPT 夹具：编排函数的端到端行为（flags / esp 切换）在真表上验证
     fn gpt_src(tag: &str) -> crate::dev::WriteSource {
         let mut src = crate::support::src_from(tag, &[0u8; 8 * 1024 * 1024]);
-        table::create_gpt(&mut src, 512, None).unwrap();
+        table::create_gpt(&mut src, 512, None, false).unwrap();
         add_entry(&mut src, 2048, 4095, "p", table::LINUX_FS_TYPE_GUID).unwrap();
         src
     }
@@ -804,7 +804,7 @@ mod tests {
         let part_base = 2048u64 * 512;
         img[part_base as usize + 0x36..][..8].copy_from_slice(b"FAT16   ");
         let mut src = crate::support::src_from("gespfat", &img);
-        table::create_gpt(&mut src, 512, None).unwrap();
+        table::create_gpt(&mut src, 512, None, false).unwrap();
         add_entry(&mut src, 2048, 4095, "p", table::LINUX_FS_TYPE_GUID).unwrap();
         set_gpt_flag(&mut src, 1, GptFlag::Esp, true).unwrap();
         let g = table::load_gpt(&src).unwrap().unwrap();
@@ -834,7 +834,7 @@ mod tests {
     fn partition_bytes_uses_table_sector_size() {
         let data = vec![0u8; 8 * 1024 * 1024];
         let mut src = crate::support::src_from("ss4k", &data); // 容器 ss = 512
-        table::create_gpt(&mut src, 4096, None).unwrap();
+        table::create_gpt(&mut src, 4096, None, false).unwrap();
         add_entry_at(&mut src, 256, 511, "p1", table::LINUX_FS_TYPE_GUID, [0x22; 16]).unwrap();
         // 表以 4096B 逻辑块自述（LBA1 落在 offset 4096），load_gpt 的候选 ss 会选出 4096
         assert_eq!(table::load_gpt(&src).unwrap().unwrap().ss, 4096);
@@ -907,7 +907,7 @@ mod tests {
         assert!(matches!(partition_bytes(&src, 0), Err(Fail::Refused(m)) if m.contains("not found")));
         // MBR：容器分区不可当 FS 载体
         let mut src = crate::support::src_from("pb_mbr", &vec![0u8; 2 * 1024 * 1024]);
-        table::create_mbr(&mut src).unwrap();
+        table::create_mbr(&mut src, false).unwrap();
         table::add_mdos_entry(&mut src, 63, 200, 0x83).unwrap();
         table::add_mdos_entry(&mut src, 201, 300, 0x83).unwrap();
         // 被测对象是"容器类型条目的区间判读"，类型字节直接写盘面：追加路径拒绝容器类型

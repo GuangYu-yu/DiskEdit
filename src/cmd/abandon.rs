@@ -1,10 +1,17 @@
 //! abandon：放弃一次未收尾的操作——把它的恢复现场（undo journal 与搬移 checkpoint）
 //! 确定性地改名为 `*.abandoned`，让目标重新可用。
 //!
+//! 终态只有两种：目标不再被未完成作业占用（后续写命令可以正常开始），或明确拒绝并说明
+//! 现场仍被哪一条占着。放弃的是**回滚能力**，不是数据：目标字节一个不改，记录字节以
+//! `*.abandoned` 原样保留。
+//!
+//! 只放弃**属于本目标**的现场：记录头里的创建时目标与当前目标不符、或两族记录互不同源
+//! ⇒ 整体拒绝，一处也不改名。读到身份的前提是记录可读；读不出来的记录没有可比的证据，
+//! 仍按"损坏现场必须能被释放"处理——否则恢复路径上会出现"目标永久锁死"，而那恰恰是
+//! 恢复路径最不该有的性质。
+//!
 //! 与 undo 的分工：undo 把 journal 回放回盘，因此要求记录可解析、且没记过不可回滚标记；
-//! abandon 不回放任何字节，只放弃"还能回滚"这个能力。所以它**不依赖记录的可解析性**——
-//! 一份损坏或陌生的 journal 同样必须能被释放，否则恢复路径上会出现"目标永久锁死"，
-//! 而那恰恰是恢复路径最不该有的性质。
+//! abandon 不回放任何字节，只放弃"还能回滚"这个能力。
 //!
 //! 转换**不是**一个事务：多个独立 pathname 的文件操作没有跨文件的原子性。因此这里
 //! 不追求"全部成功"，而是**单文件原子创建 + 重跑幂等 + 最终收敛**：每个现场先 hard_link
@@ -15,7 +22,8 @@
 //! 本次操作的权限范围。首选名被别的文件占用时顺延到 `.abandoned.N`——既不覆盖，也不
 //! 因为"名字被占了"而把目标锁死；同一个 inode 的残局则直接收敛（判据是 inode，不是文件名）
 
-use crate::dev::{suffix_path, FileSource, Journal, RecoveryData, TargetIdentity};
+use crate::dev::{suffix_path, FileSource, Journal, RecoveryData, SceneIdentity, TargetIdentity};
+use crate::movepart::read_scene_identity;
 use crate::support::{
     active_recovery_records, bail_fail, refuse_partition_node_target,
     RecoveryRecord, EXIT_OK, Fail,
@@ -30,7 +38,9 @@ pub(crate) const HELP: &str = r#"diskedit abandon <TARGET> --yes
   written again. No byte of the target itself is touched.
 
   Unlike `undo` this does not need the journal to be readable — a damaged or
-  foreign file can still be released. The ability to roll back is lost."#;
+  unreadable file can still be released. A record that is readable but was
+  recorded for another target is refused: renaming it would destroy that
+  target's rollback evidence. The ability to roll back is lost."#;
 
 pub(crate) fn cmd_abandon(a: &Args) -> u8 {
     // abandon 释放的是整盘的恢复现场：`:N` 指定了也会被静默忽略（与 info 同判据）
@@ -56,7 +66,7 @@ pub(crate) fn cmd_abandon(a: &Args) -> u8 {
     // 锁文件是纯运行时 artifact，残留不构成阻挡（判据是锁本身，见 targetlock）
     let _owned = TargetLock::acquire(&identity, None).unwrap_or_else(|f| bail_fail(f));
 
-    // 打开目标只为一件事：把 journal 头里的目标身份与当前目标比一遍（见 abandon_records）；
+    // 打开目标只为一件事：把恢复记录头里的目标身份与当前目标比一遍（见 abandon_records）；
     // 打不开（目标已不存在）只影响这次比对，现场照常放弃。abandon 只碰恢复现场、
     // 不碰盘上字节，没有理由要求排他写打开——块设备用只读，镜像按镜像语义
     let disk = if identity.kind == crate::dev::TargetKind::Block {
@@ -69,7 +79,7 @@ pub(crate) fn cmd_abandon(a: &Args) -> u8 {
 
 fn abandon_records(identity: &TargetIdentity, disk: Option<&FileSource>) -> u8 {
     let records = active_recovery_records(identity);
-    // 比对 journal 头身份用的当前目标现场：目标打不开时为 None，比对跳过、现场按现状处理
+    // 比对记录头身份用的当前目标现场：目标打不开时为 None，比对只能靠两族记录互证
     let scene = disk.map(|d| d.scene());
     if records.is_empty() {
         // 幂等：目标已经是"没有 active transaction"，空跑即成功
@@ -108,52 +118,76 @@ fn abandon_records(identity: &TargetIdentity, disk: Option<&FileSource>) -> u8 {
                  (re-run the command that started it to resume instead)",
                 path.display()
             ),
+            RecoveryRecord::JournalOldFormat { path, version } => eprintln!(
+                "warning: {} is a journal in format v{version}, older than this build (v{}); this build cannot \
+                 replay or migrate it, and abandoning it gives up that rollback evidence for good",
+                path.display(),
+                Journal::VERSION
+            ),
+            RecoveryRecord::NotARecoveryFile { path, shape } => eprintln!("warning: {}", shape.message(path)),
         }
+    }
+    // 外来条目不是本工具的恢复文件：改名它等于把用户别的东西挪走，删除更是碰不到它指向的
+    // 目标。abandon 只转换恢复文件，遇到这类条目就整体拒绝，一处也不改名
+    if let Some(message) = records.iter().find_map(RecoveryRecord::foreign_message) {
+        bail_fail(Fail::refused(format!(
+            "{message} — abandon only renames recovery files, so nothing was renamed; move or remove it by hand"
+        )));
+    }
+
+    // 现场身份：只读记录头里的创建时目标。读不出来的记录没有可比的证据，按"不可判定"处理
+    // （它仍会被释放，见模块注释）；读得出却对不上的，是一份确定属于别处的现场
+    let recorded: Vec<Option<SceneIdentity>> = records
+        .iter()
+        .map(|r| match r {
+            RecoveryRecord::Journal { path, .. } => Journal::read_identity(path).ok(),
+            RecoveryRecord::Checkpoint { path } => read_scene_identity(path).ok(),
+            RecoveryRecord::JournalOldFormat { .. } | RecoveryRecord::NotARecoveryFile { .. } => None,
+        })
+        .collect();
+    let mut foreign: Vec<String> = Vec::new();
+    for (r, id) in records.iter().zip(&recorded) {
+        let Some(id) = id else { continue };
+        // 目标可打开时逐条与当前目标比；打不开时下面的互证是仅剩的同源判据
+        if let Some(live) = scene.as_ref()
+            && let Some(why) = crate::dev::scene_mismatch(id, live)
+        {
+            foreign.push(format!("{} ({why})", r.path().display()));
+        }
+    }
+    if scene.is_none() {
+        let readable: Vec<&SceneIdentity> = recorded.iter().flatten().collect();
+        if let (Some(first), Some(second)) = (readable.first(), readable.get(1))
+            && let Some(why) = crate::dev::recorded_scene_mismatch(first, second)
+        {
+            foreign.push(format!(
+                "the journal and the checkpoint disagree about the target scene ({why})"
+            ));
+        }
+    }
+    // 不属于本目标的现场：改名它等于替另一个目标销毁回滚凭据。整体拒绝、一处也不改名，
+    // 并说清目标仍被挡住与下一步——"看起来释放了、下次仍 busy"正是这里要消除的状态
+    if !foreign.is_empty() {
+        bail_fail(Fail::refused(format!(
+            "{} — this is not the target's own recovery scene; abandoning it here would destroy another \
+             target's rollback evidence, so nothing was renamed and this target stays blocked; move the \
+             foreign record out of the recovery path by hand, then retry",
+            foreign.join("; ")
+        )));
     }
 
     let mut failed: Vec<String> = Vec::new();
-    // 首部可读、且头里的身份与当前目标不符的现场。它们照常改名（abandon 的职责是把
-    // 目标从现场里释放出来），但这份凭据属于另一个目标场景，必须在总结里点名
-    let mut foreign: Vec<String> = Vec::new();
     for r in &records {
         let from = r.path();
-        // journal 的身份只在头里，读得出就与当前目标比一遍。checkpoint 的身份要连同
-        // 记录与几何一起解析，而 abandon 不解析表，故这一族维持现状
-        let mut foreign_why: Option<String> = None;
-        if let RecoveryRecord::Journal { path, .. } = r
-            && let (Ok(recorded), Some(live)) = (Journal::read_identity(path), scene.as_ref())
-            && let Some(why) = crate::dev::scene_mismatch(&recorded, live)
-        {
-            eprintln!(
-                "warning: {} was recorded for another target scene ({why}) — abandoning it here gives up \
-                 that target's rollback evidence if it returns to this path; the record is still released \
-                 so this target can be made writable again",
-                path.display()
-            );
-            foreign_why = Some(format!("{} ({why})", path.display()));
-        }
         match abandon_one(from) {
-            Ok(_) => {
-                if let Some(item) = foreign_why {
-                    foreign.push(item);
-                }
-            }
+            Ok(_) => {}
             Err(e) => failed.push(format!("{}: {e}", from.display())),
         }
     }
-    let foreign_note = if foreign.is_empty() {
-        String::new()
-    } else {
-        format!(
-            "; {} record(s) were recorded for another target scene, which loses that rollback evidence if it \
-             returns to this path: {}",
-            foreign.len(),
-            foreign.join(", ")
-        )
-    };
     if failed.is_empty() {
         println!(
-            "abandoned {} recovery record(s) on this target{foreign_note}",
+            "abandoned {} recovery record(s) on this target — rollback is no longer possible, the target's \
+             bytes were not changed, and the target can be written again (the records are kept as *.abandoned)",
             records.len()
         );
         EXIT_OK
@@ -165,7 +199,8 @@ fn abandon_records(identity: &TargetIdentity, disk: Option<&FileSource>) -> u8 {
         // 不含"表可能已写"的含义，两个命令的出口不互相参照
         let done = records.len() - failed.len();
         bail_fail(Fail::infra(format!(
-            "abandoned {done} of {} recovery record(s) on this target; the rest failed ({}) — re-run `diskedit abandon` to converge{foreign_note}",
+            "abandoned {done} of {} recovery record(s) on this target; the rest failed ({}) — the target stays \
+             blocked until they are released, so re-run `diskedit abandon` to converge",
             records.len(),
             failed.join("; ")
         )))
@@ -199,12 +234,14 @@ fn abandon_one(from: &std::path::Path) -> std::io::Result<std::path::PathBuf> {
                 std::fs::remove_file(from)?;
                 // 改名转换要落盘目录项：否则掉电后原件可能复活，目标重新被判成 busy
                 crate::dev::best_effort_dir_fsync(from);
+                crate::dev::note_rename_unverified(from, &to);
                 return Ok(to);
             }
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
                 if same_file(from, &to) {
                     std::fs::remove_file(from)?;
                     crate::dev::best_effort_dir_fsync(from);
+                    crate::dev::note_rename_unverified(from, &to);
                     return Ok(to);
                 }
                 continue;
@@ -221,6 +258,7 @@ fn abandon_one(from: &std::path::Path) -> std::io::Result<std::path::PathBuf> {
                     Ok(()) => {
                         // 改名转换要落盘目录项：否则掉电后原件可能复活，目标重新被判成 busy
                         crate::dev::best_effort_dir_fsync(from);
+                        crate::dev::note_rename_unverified(from, &to);
                         return Ok(to);
                     }
                     // 名字已被另一份放弃记录占用：顺延 .N。占用本身不能成为拒绝理由——
@@ -234,13 +272,18 @@ fn abandon_one(from: &std::path::Path) -> std::io::Result<std::path::PathBuf> {
     Err(std::io::Error::other("no free abandoned name available"))
 }
 
-/// 两个路径是否指向同一个 inode。非 unix 平台没有可靠的判定手段，一律按"不同文件"
-/// 处理——保守方向是不动别人的文件（顺延一个名字），而不是猜测后覆盖
+/// 两个路径是否指向同一个 inode。两侧都必须先经 [`crate::dev::RecoveryFile::at`]
+/// 确认是普通文件：跟随链接的话，指向原件的 `.abandoned` 链接会与原件同 inode，
+/// 随后删掉原件的最后一个名字，只留下一条 dangling 链接。非 unix 平台没有可靠的
+/// 判定手段，一律按"不同文件"处理——保守方向是不动别人的文件（顺延一个名字），
+/// 而不是猜测后覆盖
 #[cfg(unix)]
 fn same_file(a: &std::path::Path, b: &std::path::Path) -> bool {
     use std::os::unix::fs::MetadataExt;
-    match (std::fs::metadata(a), std::fs::metadata(b)) {
-        (Ok(x), Ok(y)) => x.dev() == y.dev() && x.ino() == y.ino(),
+    match (crate::dev::RecoveryFile::at(a), crate::dev::RecoveryFile::at(b)) {
+        (Ok(crate::dev::RecoveryEntry::File(x)), Ok(crate::dev::RecoveryEntry::File(y))) => {
+            (x.metadata().dev(), x.metadata().ino()) == (y.metadata().dev(), y.metadata().ino())
+        }
         _ => false,
     }
 }

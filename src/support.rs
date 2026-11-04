@@ -6,7 +6,7 @@ pub(crate) use crate::outcome::{Fail, EXIT_OK, EXIT_REFUSED};
 use crate::args::Args;
 use crate::dev::{FileSource, PartSelector, WriteSource};
 use crate::geometry::ValidatedGeometry;
-use crate::transaction::{ResumeKind, TransactionManager};
+use crate::transaction::{ResumeKind, TableIdentity, TransactionManager};
 use crate::{movepart, table};
 
 #[cfg(test)]
@@ -19,6 +19,14 @@ pub(crate) fn bail_fail(f: crate::outcome::Fail) -> ! {
     // 把失败折叠成 CLI 结果走 `Fail::into_outcome`（映射的唯一处），不借 `finish`——
     // 那是"结束一次操作"的入口，而这里没有任何要收尾的 pending
     let o = f.into_outcome();
+    // 10 只说明目标盘没被写；本次运行若已在打开阶段归档并截掉了 journal 的撕裂尾，
+    // 那句拒绝不能把恢复文件已发生的改动说成没发生过。20/30 时目标盘可能已写，同一句话
+    // 不成立，故只随拒绝打印
+    if o.exit_code() == EXIT_REFUSED
+        && let Some(note) = crate::transaction::pending_journal_tail_note()
+    {
+        eprintln!("{note}");
+    }
     o.report();
     std::process::exit(o.exit_code() as i32);
 }
@@ -129,6 +137,11 @@ pub(crate) fn open_target_for_write(a: &Args) -> Result<WriteSource, crate::outc
     TransactionManager::begin(a)
 }
 
+/// `new` 的打开：本次会写出整张表，表身份由本操作产生（见 [`TableIdentity::Produced`]）
+pub(crate) fn open_target_for_new_table(a: &Args) -> Result<WriteSource, crate::outcome::Fail> {
+    TransactionManager::begin_replacing_table(a)
+}
+
 /// 数据搬移类命令的打开（resize-part / move）：目标上已有 checkpoint 时以显式续跑
 /// 进入同一事务，否则开新事务。返回是否按续跑进入。
 ///
@@ -138,7 +151,7 @@ pub(crate) fn open_target_for_write(a: &Args) -> Result<WriteSource, crate::outc
 pub(crate) fn open_target_for_data_move(
     a: &Args,
 ) -> Result<(WriteSource, bool), crate::outcome::Fail> {
-    TransactionManager::begin_or_resume(a, ResumeClaim::AnyCheckpoint)
+    TransactionManager::begin_or_resume(a, ResumeClaim::AnyCheckpoint, TableIdentity::Preserved)
         .map(|(src, kind)| (src, kind != ResumeKind::Fresh))
 }
 
@@ -153,7 +166,7 @@ pub(crate) fn open_target_resize_resumable(
     a: &Args,
     grow_part: PartSelector,
 ) -> Result<(WriteSource, ResumeKind), crate::outcome::Fail> {
-    TransactionManager::begin_or_resume(a, ResumeClaim::ResizeOrRelocation(grow_part))
+    TransactionManager::begin_or_resume(a, ResumeClaim::ResizeOrRelocation(grow_part), TableIdentity::Preserved)
 }
 
 /// `apply` / `plan` 的打开：只认本分区的搬移作业。单分区 resize 的现场（`RsCheckpoint`）
@@ -162,7 +175,7 @@ pub(crate) fn open_target_resumable(
     a: &Args,
     grow_part: PartSelector,
 ) -> Result<(WriteSource, ResumeKind), crate::outcome::Fail> {
-    TransactionManager::begin_or_resume(a, ResumeClaim::OwnRelocation(grow_part))
+    TransactionManager::begin_or_resume(a, ResumeClaim::OwnRelocation(grow_part), TableIdentity::Preserved)
 }
 
 /// 只持有所有权、不建 journal 的写事务（undo / check / resizefs）

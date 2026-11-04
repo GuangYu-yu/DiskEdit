@@ -121,7 +121,7 @@ if command -v dmsetup >/dev/null 2>&1 && dmsetup version >/dev/null 2>&1; then
         DMNAME="diskedit-hold-$$"
         if dmsetup create "$DMNAME" --table "0 2048 linear ${L3}p1 0" >/dev/null 2>&1; then
             sleep 0.3
-            out=$("$B" resize-part "$T2:1" --start 2048 --end 4095 2>&1)
+            out=$("$B" resize-part "$T2:1" --start 2048 --end 4095 --yes 2>&1)
             exp "$?" 10 "分区被 dm 持有：改表被拒"
             case "$out" in
                 *"held by"*) echo "  OK   拒绝原因落在 holders 分支" ;;
@@ -134,7 +134,7 @@ if command -v dmsetup >/dev/null 2>&1 && dmsetup version >/dev/null 2>&1; then
             DMNAME="diskedit-hold-$$"
             if dmsetup create "$DMNAME" --table "0 2048 linear ${L3} 0" >/dev/null 2>&1; then
                 sleep 0.3
-                out=$("$B" resize-part "$T2:1" --start 2048 --end 4095 2>&1)
+                out=$("$B" resize-part "$T2:1" --start 2048 --end 4095 --yes 2>&1)
                 exp "$?" 10 "loop 本身被 dm 持有：改表被拒"
                 case "$out" in
                     *"held by"*) echo "  OK   拒绝原因落在 holders 分支" ;;

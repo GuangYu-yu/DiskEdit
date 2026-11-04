@@ -39,20 +39,207 @@ pub(crate) fn swap_rebuild_failure_skips_growth_finalization() {
         let g = table::load_gpt(&src).unwrap().unwrap();
         assert_eq!((g.entries[0].starting_lba, g.entries[0].ending_lba), (2048, 6143));
         assert_eq!((g.entries[2].starting_lba, g.entries[2].ending_lba), (10240, 10303));
+        drop(src);
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&ckpt_path);
+
+        // 本平台的生产闸在写盘前拒绝，产不出 relocation 现场；手工落一份只为验证续跑侧
+        // 不重复做能力拒绝。字段与生产写入同构（cur_index 指向 swap、chunks_done = 0）
+        let (mut src, path) = fixture();
+        let ckpt_path = src.identity.checkpoint_path().to_path_buf();
+        let plan = make_plan(&mut src, 1).unwrap();
+        let ckpt = Checkpoint {
+            proof: crate::dev::LiveProof::Inode,
+            disk_size: src.size, ss: plan.ss, grow_part: plan.grow_part,
+            last_usable_lba: plan.last_usable_lba, moves: plan.moves.clone(), kind: plan.kind,
+            cur_index: 0, chunks_done: 0, chunk_bytes: 1024 * 1024,
+            fp: src.fingerprint, map: src.loop_mapping,
+            lvm: None,
+        };
+        atomic_write_ckpt(&ckpt_path, &ckpt.serialize()).unwrap();
+        let o = ap(&mut src, &plan, 1024 * 1024, true, &mut |_| {});
+        match &o {
+            crate::outcome::Outcome::Applied { pending, .. } => {
+                assert_eq!(pending.len(), 1, "须报一条待办：{pending:?}");
+                assert_eq!(pending[0].kind, crate::outcome::PendingKind::Swap);
+            }
+            other => panic!("expected Applied, got {other:?}"),
+        }
+        assert!(!o.is_complete());
+        assert_eq!(o.exit_code(), 20, "swap 未重建，不能报完全成功");
+        // 扩容收尾被跳过：home 仍在旧位，root 终点未动，表无重叠
+        let g = table::load_gpt(&src).unwrap().unwrap();
+        assert_eq!((g.entries[0].starting_lba, g.entries[0].ending_lba), (2048, 6143));
+        assert_eq!((g.entries[1].starting_lba, g.entries[1].ending_lba), (6144, 10239));
+        assert!(ckpt_path.exists(), "有待办时 checkpoint 必须保留");
+        drop(src);
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&ckpt_path);
     } else {
-        // 工具在：swap 只有 64 扇区（32KiB，低于 mkswap 最小容量），重建仍以 pending 收场
         let fresh = ap(&mut src, &plan, 1024 * 1024, true, &mut |_| {});
         assert_eq!(fresh.exit_code(), 20, "the fresh run ends as pending: {fresh:?}");
-    }
-    drop(src);
-    let _ = std::fs::remove_file(&path);
-    let _ = std::fs::remove_file(&ckpt_path);
+        // 续跑输入取自生产刚写出的现场：进度字段错（晚写、写错）在这条断言上就会红
+        let (slot, _) = read_checkpoint(&src, &geom_of(&src)).unwrap();
+        let c = match slot {
+            CheckpointSlot::Relocation(c) => c,
+            _ => panic!("a pending swap relocation must leave a relocation checkpoint"),
+        };
+        assert_eq!(c.cur_index, 0, "swap 未重建时 cur_index 必须停在 swap 条目");
+        assert_eq!(c.chunks_done, 0, "swap 条目不搬数据，chunk 进度必须为 0");
+        assert_eq!(c.chunk_bytes, 1024 * 1024);
+        assert_eq!(c.moves.len(), plan.moves.len());
+        for (a, b) in c.moves.iter().zip(&plan.moves) {
+            assert_eq!(
+                (a.part_num, a.first_lba, a.len_lba, a.delta_lba, a.is_swap),
+                (b.part_num, b.first_lba, b.len_lba, b.delta_lba, b.is_swap)
+            );
+        }
+        assert_eq!((c.grow_part, c.last_usable_lba), (plan.grow_part, plan.last_usable_lba));
+        assert_eq!((c.disk_size, c.ss), (src.size, plan.ss));
 
-    // 恢复：未动过的现场 + 已有 relocation ckpt —— 不做写盘前的能力拒绝，
-    // 缺工具/重建失败只能以 pending 收场，现场（ckpt）必须保留
-    let (mut src, path) = fixture();
+        let o = ap(&mut src, &plan, 1024 * 1024, true, &mut |_| {});
+        match &o {
+            crate::outcome::Outcome::Applied { pending, .. } => {
+                assert_eq!(pending.len(), 1, "须报一条待办：{pending:?}");
+                assert_eq!(pending[0].kind, crate::outcome::PendingKind::Swap);
+            }
+            other => panic!("expected Applied, got {other:?}"),
+        }
+        assert!(!o.is_complete());
+        assert_eq!(o.exit_code(), 20, "swap 未重建，不能报完全成功");
+        let g = table::load_gpt(&src).unwrap().unwrap();
+        assert_eq!((g.entries[0].starting_lba, g.entries[0].ending_lba), (2048, 6143));
+        assert_eq!((g.entries[1].starting_lba, g.entries[1].ending_lba), (6144, 10239));
+        let sw = plan.moves.iter().find(|m| m.is_swap).expect("the plan must carry the swap move");
+        let target = sw.first_lba + sw.delta_lba;
+        assert_eq!(
+            (g.entries[2].starting_lba, g.entries[2].ending_lba),
+            (target, target + sw.len_lba - 1),
+            "swap 表项必须落在搬移后的目标位"
+        );
+        assert!(ckpt_path.exists(), "有待办时 checkpoint 必须保留");
+        drop(src);
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&ckpt_path);
+    }
+}
+
+/// apply 路径的 durable 边界：自重叠搬移中途读失败后，盘上 ckpt 只能记录已同步落盘的
+/// chunk；续跑从该边界之后继续，已完成块的源区即便被改写也不得被重新搬回目标区。
+/// ckpt 写入若被挪到提交之后、或进度写错，这两组断言都会红
+#[test]
+pub(crate) fn apply_crash_checkpoint_records_durable_progress() {
+    let (mut src, path) = plan_fixture(&[
+        (1, [0x11; 16], 2048, 6143),
+        (2, [0x22; 16], 8192, 24575),
+    ]);
     let ckpt_path = src.identity.checkpoint_path().to_path_buf();
     let plan = make_plan(&mut src, 1).unwrap();
+    let m = plan.moves.iter().find(|m| m.part_num == 2).expect("p2 must be the blocker").clone();
+    assert!(
+        m.delta_lba > 0 && m.delta_lba < m.len_lba,
+        "the fixture must produce a self-overlapping move"
+    );
+    let chunk: u64 = 1024 * 1024;
+    let total = m.len_lba * 512;
+    let blocks = (total / chunk) as u8;
+    let src_off = m.first_lba * 512;
+    let dst_off = (m.first_lba + m.delta_lba) * 512;
+    for i in 0..blocks {
+        src.write_at(src_off + i as u64 * chunk, &vec![0x10 + i; 512]).unwrap();
+    }
+    // 执行序尾→头：第 3 轮读（within = total − 3·chunk）失败时，前两块已同步并落 ckpt
+    let fault = crate::dev::ReadFaultGuard::at(src_off + total - 3 * chunk);
+    let o = ap(&mut src, &plan, chunk, true, &mut |_| {});
+    assert_eq!(o.exit_code(), 30, "mid-move read failure must stay Failed: {o:?}");
+    drop(fault);
+
+    let (slot, _) = read_checkpoint(&src, &geom_of(&src)).unwrap();
+    let c = match slot {
+        CheckpointSlot::Relocation(c) => c,
+        _ => panic!("a failed move must leave a relocation checkpoint"),
+    };
+    assert_eq!(c.cur_index, 0, "the only movable is still in flight");
+    assert_eq!(c.chunks_done, 2, "only synced-and-saved chunks may be durable");
+    assert_eq!(c.chunk_bytes, chunk);
+    assert_eq!(c.moves.len(), plan.moves.len());
+    for (a, b) in c.moves.iter().zip(&plan.moves) {
+        assert_eq!(
+            (a.part_num, a.first_lba, a.len_lba, a.delta_lba, a.is_swap),
+            (b.part_num, b.first_lba, b.len_lba, b.delta_lba, b.is_swap)
+        );
+    }
+    assert_eq!((c.grow_part, c.last_usable_lba), (plan.grow_part, plan.last_usable_lba));
+    assert_eq!((c.disk_size, c.ss), (src.size, plan.ss));
+
+    // 已完成块（within = total − chunk）的源区改写成垃圾：续跑若从 0 重来会先读它
+    src.write_at(src_off + total - chunk, &[0xEE; 512]).unwrap();
+    let resumed = ap(&mut src, &plan, chunk, true, &mut |_| {});
+    assert!(resumed.is_complete(), "the resume must finish: {resumed:?}");
+    for i in 0..blocks {
+        let mut b = [0u8; 512];
+        src.read_at(dst_off + i as u64 * chunk, &mut b).unwrap();
+        assert_eq!(b, [0x10 + i; 512], "chunk {i} came from the wrong source block");
+    }
+    let g = table::load_gpt(&src).unwrap().unwrap();
+    let grow_end = grow_end_for(&plan, 2048).unwrap();
+    assert_eq!(
+        (g.entries[0].starting_lba, g.entries[0].ending_lba),
+        (2048, grow_end),
+        "grow must commit its computed ending_lba"
+    );
+    assert_eq!(
+        (g.entries[1].starting_lba, g.entries[1].ending_lba),
+        (m.first_lba + m.delta_lba, m.first_lba + m.delta_lba + m.len_lba - 1)
+    );
+    assert_eq!(g.entries[0].ending_lba + 1, g.entries[1].starting_lba, "the two entries must stay adjacent");
+    assert!(!ckpt_path.exists(), "a completed resume must release the checkpoint");
+    drop(src);
+    let _ = std::fs::remove_file(&path);
+}
+
+/// 写盘前的复核失败时，盘上不得留下本次作业的 checkpoint：checkpoint 是恢复路径的
+/// 唯一入口，先落盘再复核会让一次"未写盘"的拒绝在下一次运行里变成一份可续跑现场
+#[test]
+pub(crate) fn apply_refuses_changed_table_before_any_checkpoint_is_written() {
+    let (mut src, path) = plan_fixture(&[
+        (1, [0x11; 16], 2048, 6143),
+        (2, [0x22; 16], 8192, 24575),
+    ]);
+    let ckpt_path = src.identity.checkpoint_path().to_path_buf();
+    let plan = make_plan(&mut src, 1).unwrap();
+    let (g, _repair) = gpt_policy::resolve_geometry(&src).unwrap().unwrap();
+    let chunk: u64 = 1024 * 1024;
+    let d = prepare_apply(&src, &g, &plan, chunk, true, false, None, &mut |_| {}).unwrap();
+    assert!(!ckpt_path.exists(), "prepare must not create a checkpoint");
+    tamper_disk_guid(&mut src);
+    let before = std::fs::read(&path).unwrap();
+    let mut post = PostWrite::new();
+    let r = execute_apply(&mut src, &plan, d, &mut |_| {}, &mut post);
+    let err = r.expect_err("execute must refuse a table changed after prepare").to_string();
+    assert!(err.contains("changed outside this tool"), "unexpected error: {err}");
+    assert!(!ckpt_path.exists(), "a failed pre-write recheck must not leave a checkpoint");
+    assert_eq!(std::fs::read(&path).unwrap(), before, "the target must stay byte-identical");
+    drop(src);
+    let _ = std::fs::remove_file(&path);
+    let _ = crate::dev::remove_recovery_file(&ckpt_path);
+}
+
+/// "操作已提交"不成立时：条目循环未走完（swap 重建失败）提前收场，现场必须留在原处，
+/// 且本次运行的输出要说明这一点——静默保留会让用户在下一次运行里撞见一份来历不明
+/// 的现场。现场字节仍须可判读（它正是下一次续跑的输入）
+#[test]
+pub(crate) fn uncommitted_relocation_reports_the_retained_checkpoint() {
+    const SWAP: [u8; 16] = [0x6D, 0xFD, 0x57, 0x06, 0xAB, 0xA4, 0xC4, 0x43, 0x84, 0xE5, 0x09, 0x33, 0xC8, 0x4B, 0x4F, 0x4F];
+    // root 2048..6143 | home 6144..10239 | swap 10240..10303（64 扇区，低于 mkswap 最小容量）
+    let (mut src, path) = plan_fixture(&[
+        (1, [0x11; 16], 2048, 6143),
+        (2, [0x22; 16], 6144, 10239),
+        (3, SWAP, 10240, 10303),
+    ]);
+    let ckpt_path = src.identity.checkpoint_path().to_path_buf();
+    let plan = make_plan(&mut src, 1).unwrap();
+    // 预置中断现场：cur_index 指向第一条（swap），续跑不做能力拒绝，重建失败即停
     let ckpt = Checkpoint {
         proof: crate::dev::LiveProof::Inode,
         disk_size: src.size, ss: plan.ss, grow_part: plan.grow_part,
@@ -62,24 +249,22 @@ pub(crate) fn swap_rebuild_failure_skips_growth_finalization() {
         lvm: None,
     };
     atomic_write_ckpt(&ckpt_path, &ckpt.serialize()).unwrap();
-    let o = ap(&mut src, &plan, 1024 * 1024, true, &mut |_| {});
-    match &o {
-        crate::outcome::Outcome::Applied { pending, .. } => {
-            assert_eq!(pending.len(), 1, "须报一条待办：{pending:?}");
-            assert_eq!(pending[0].kind, crate::outcome::PendingKind::Swap);
-        }
-        other => panic!("expected Applied, got {other:?}"),
-    }
-    assert!(!o.is_complete());
-    assert_eq!(o.exit_code(), 20, "swap 未重建，不能报完全成功");
-    // 扩容收尾被跳过：home 仍在旧位，root 终点未动，表无重叠
-    let g = table::load_gpt(&src).unwrap().unwrap();
-    assert_eq!((g.entries[0].starting_lba, g.entries[0].ending_lba), (2048, 6143));
-    assert_eq!((g.entries[1].starting_lba, g.entries[1].ending_lba), (6144, 10239));
-    assert!(ckpt_path.exists(), "有待办时 checkpoint 必须保留");
+
+    let mut logs = Vec::new();
+    let o = ap(&mut src, &plan, 1024 * 1024, true, &mut |l: &str| logs.push(l.to_string()));
+    assert!(!o.is_complete(), "swap rebuild pending is not a complete run: {o:?}");
+    assert_eq!(o.exit_code(), 20);
+    assert!(ckpt_path.exists(), "an uncommitted job must keep its checkpoint");
+    let (slot, _) = read_checkpoint(&src, &geom_of(&src)).unwrap();
+    assert!(matches!(slot, CheckpointSlot::Relocation(_)), "the retained bytes must still parse as a relocation job");
+    assert!(
+        logs.iter().any(|l| l.contains("retained") && l.contains("not committed")),
+        "the run must say the checkpoint stays and why: {logs:?}"
+    );
+
     drop(src);
-    let _ = std::fs::remove_file(&path);
     let _ = std::fs::remove_file(&ckpt_path);
+    let _ = std::fs::remove_file(&path);
 }
 
 /// 续跑前的位置一致性校验（R2）：ckpt 是持久化输入，而续跑用的 plan 由 ckpt 直接重建，
@@ -126,6 +311,7 @@ pub(crate) fn resume_refuses_when_a_pending_partition_moved_on_disk() {
     let hdr_crc = table::crc32(&raw[512..512 + 92]);
     raw[512 + 16..512 + 20].copy_from_slice(&hdr_crc.to_le_bytes());
     std::fs::write(&path, &raw).unwrap();
+    let before = std::fs::read(&path).unwrap();
 
     let src = plan_open(&path);
     let g = geom_of(&src);
@@ -138,6 +324,8 @@ pub(crate) fn resume_refuses_when_a_pending_partition_moved_on_disk() {
         Ok(_) => panic!("expected a position refusal, but the resume was accepted"),
     }
     assert!(src.identity.checkpoint_path().exists(), "a refusal must not consume the checkpoint");
+    // 拒绝承诺未写盘：第三方留下的盘面（含被篡改的表）逐字节不变
+    assert_eq!(std::fs::read(&path).unwrap(), before, "a refusal must leave the image byte-identical");
     drop(src);
     let _ = std::fs::remove_file(&path);
 }
@@ -146,6 +334,12 @@ pub(crate) fn resume_refuses_when_a_pending_partition_moved_on_disk() {
 /// 旧起点仍有有效 UUID 时不得被新起点的值替代
 #[test]
 pub(crate) fn swap_identity_falls_back_to_the_new_location_only_without_an_old_uuid() {
+    fn uuid_of(i: &crate::fsops::SwapIdentity) -> Option<[u8; 16]> {
+        match i {
+            crate::fsops::SwapIdentity::Known { uuid, .. } => *uuid,
+            _ => None,
+        }
+    }
     let ss = 512u64;
     let len_lba = 8u64;
     let old_start = 0u64;
@@ -160,11 +354,11 @@ pub(crate) fn swap_identity_falls_back_to_the_new_location_only_without_an_old_u
     put(&mut data, new_start, [0x7A; 16]);
     let src = crate::support::src_from("swapfb", &data);
     let path = src.path.clone();
-    assert_eq!(swap_identity_preferring(&src, old_start, new_start, len_lba, ss).0, Some([0x7A; 16]));
+    assert_eq!(uuid_of(&swap_identity_preferring(&src, old_start, new_start, len_lba, ss)), Some([0x7A; 16]));
     // 旧起点有有效头 → 以旧起点为准
     put(&mut data, old_start, [0x11; 16]);
     let src2 = crate::support::src_from("swapfb2", &data);
-    assert_eq!(swap_identity_preferring(&src2, old_start, new_start, len_lba, ss).0, Some([0x11; 16]));
+    assert_eq!(uuid_of(&swap_identity_preferring(&src2, old_start, new_start, len_lba, ss)), Some([0x11; 16]));
     drop(src2);
     drop(src);
     let _ = std::fs::remove_file(&path);
@@ -183,9 +377,45 @@ pub(crate) fn swap_identity_label_is_raw_bytes() {
     data[1052..1068].copy_from_slice(&[b'A', 0xFF, b'B', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
     let src = crate::support::src_from("swaplabel", &data);
     let path = src.path.clone();
-    let (uuid, label) = read_swap_identity(&src, 0, data.len() as u64 / ss, ss);
+    let crate::fsops::SwapIdentity::Known { uuid, label } = read_swap_identity(&src, 0, data.len() as u64 / ss, ss) else {
+        panic!("a labelled swap header must come back as a known identity");
+    };
     assert_eq!(uuid, Some([0x5A; 16]));
-    assert_eq!(label.as_deref(), Some(&[b'A', 0xFF, b'B'][..]));
+    match label {
+        crate::fsops::SwapLabel::Present(bytes) => assert_eq!(bytes, vec![b'A', 0xFF, b'B']),
+        other => panic!("expected the raw volume label, got {other:?}"),
+    }
+    drop(src);
+    let _ = std::fs::remove_file(&path);
+}
+
+/// 卷标字段读不出来：必须与"确实没有卷标"分开。后者省略 -L 是合法的，
+/// 前者若也省略就是把 fstab 里能看到的卷标悄悄丢掉
+#[test]
+pub(crate) fn swap_identity_label_read_failure_is_not_an_absent_label() {
+    let ss = 512u64;
+    let ps = 4096usize;
+    let mut data = vec![0u8; 4 * ps];
+    data[ps - 10..ps].copy_from_slice(b"SWAPSPACE2");
+    data[1036..1052].copy_from_slice(&[0x5A; 16]);
+    data[1052..1068].copy_from_slice(&[b'A', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+    let src = crate::support::src_from("swaplabelfault", &data);
+    let path = src.path.clone();
+    let header = read_swap_identity(&src, 0, data.len() as u64 / ss, ss);
+    let crate::fsops::SwapIdentity::Known { label, .. } = &header else {
+        panic!("the signature and UUID are readable, only the label is not");
+    };
+    assert!(matches!(label, crate::fsops::SwapLabel::Present(_)), "without the fault the label is present");
+    {
+        let _fault = crate::dev::ReadFaultGuard::at(1052);
+        match read_swap_identity(&src, 0, data.len() as u64 / ss, ss) {
+            crate::fsops::SwapIdentity::Known { uuid, label: crate::fsops::SwapLabel::Unreadable(why) } => {
+                assert_eq!(uuid, Some([0x5A; 16]));
+                assert!(why.contains("volume label"), "{why}");
+            }
+            other => panic!("label read failure must not fold into an absent label: {other:?}"),
+        }
+    }
     drop(src);
     let _ = std::fs::remove_file(&path);
 }
@@ -223,6 +453,12 @@ pub(crate) fn unactivatable_swap_growth_is_pending_not_silent_success() {
     }
     assert!(!o.is_complete());
     assert_eq!(o.exit_code(), 20, "分区已扩而 swap 未重建，不能报完全成功");
+    let g = table::load_gpt(&src).unwrap().unwrap();
+    assert_eq!(
+        (g.entries[0].starting_lba, g.entries[0].ending_lba),
+        (2048, 8191),
+        "grow 必须把请求终点写进表项；复用旧终点或算错终点都会让分区实际未扩"
+    );
 
     drop(src);
     let _ = std::fs::remove_file(&ckpt_path);
@@ -298,6 +534,12 @@ pub(crate) fn pure_growth_fs_pending_keeps_checkpoint_and_rerun_retries() {
     let o1 = rsize(&mut src, 1, 2048, 8191, 1024 * 1024, false, &mut |_| {});
     assert_eq!(o1.exit_code(), 20, "{o1:?}");
     assert!(ckpt_path.exists(), "纯扩容的 FS 待办同样要留 ckpt——重跑只能靠它落到补试分支");
+    let g1 = table::load_gpt(&src).unwrap().unwrap();
+    assert_eq!(
+        (g1.entries[0].starting_lba, g1.entries[0].ending_lba),
+        (2048, 8191),
+        "纯扩容也必须在表项里真正落终点"
+    );
 
     let o2 = rsize(&mut src, 1, 2048, 8191, 1024 * 1024, false, &mut |_| {});
     match &o2 {
@@ -308,6 +550,12 @@ pub(crate) fn pure_growth_fs_pending_keeps_checkpoint_and_rerun_retries() {
     }
     assert!(!o2.is_complete(), "重跑不得把未完成的 FS 步报成完成");
     assert_eq!(o2.exit_code(), 20);
+    let g2 = table::load_gpt(&src).unwrap().unwrap();
+    assert_eq!(
+        (g2.entries[0].starting_lba, g2.entries[0].ending_lba),
+        (2048, 8191),
+        "补试 FS 步的重跑不得把终点缩回旧值"
+    );
 
     drop(src);
     let _ = std::fs::remove_file(&ckpt_path);

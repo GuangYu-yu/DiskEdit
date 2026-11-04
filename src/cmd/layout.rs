@@ -5,6 +5,8 @@ use crate::args::{Args, StartSelector};
 use crate::fsops::MkfsFs;
 use crate::{movepart, table};
 
+use super::confirm;
+
 pub(crate) const HELP_NEW: &str = r#"diskedit new <TARGET> [--table gpt|msdos] --yes [--overwrite-partition-data]
 
   Create a fresh partition table; overwrites any existing one. Default gpt.
@@ -37,7 +39,7 @@ pub(crate) const HELP_DELETE: &str = r#"diskedit delete <TARGET>:N --yes
     --sector-size N  logical sector size override for raw images (power of two,
                      512..=65536)"#;
 
-pub(crate) const HELP_RESIZE_PART: &str = r#"diskedit resize-part <TARGET>:N --start LBA (--end LBA | --grow-to-end)
+pub(crate) const HELP_RESIZE_PART: &str = r#"diskedit resize-part <TARGET>:N --start LBA (--end LBA | --grow-to-end) [--yes]
 
   Low-level grow/shrink/move in one: repartition [start, end] with data
   relocation. --grow-to-end pins end at last_usable_lba (fill semantics);
@@ -45,15 +47,17 @@ pub(crate) const HELP_RESIZE_PART: &str = r#"diskedit resize-part <TARGET>:N --s
   granularity. A grow also resizes the filesystem inside; one that cannot be
   grown here (unidentified, or not wired to a tool) needs an explicit --no-fs.
 
-  CONFIRMATION: none beyond the explicit LBAs. A start/end says where to act,
-  not that the bytes there are expendable — no equivalent of resize's
-  --allow-move --yes; check the range yourself.
+  CONFIRMATION: a start that differs from the partition's current start
+  relocates its bytes, and an end below the current end shrinks the
+  partition together with its filesystem; either needs --yes. Growing
+  without moving the start asks nothing. A relocation or shrink that gets
+  interrupted cannot be rolled back with `undo`.
 
   Options:
     --sector-size N  logical sector size override for raw images (power of two,
                      512..=65536)"#;
 
-pub(crate) const HELP_MOVE: &str = r#"diskedit move <TARGET>:N --start <LBA|end>
+pub(crate) const HELP_MOVE: &str = r#"diskedit move <TARGET>:N --start <LBA|end> [--yes]
 
   Move a partition, data follows (chunked copy, resumable via checkpoint).
 
@@ -64,16 +68,17 @@ pub(crate) const HELP_MOVE: &str = r#"diskedit move <TARGET>:N --start <LBA|end>
   --no-fs skips the filesystem step for the moved partition (a swap that
   the relocation rebuilds still runs — it belongs to the relocation).
 
-  CONFIRMATION: none beyond the explicit LBA. The destination range is
-  overwritten as-is — no equivalent of resize's --allow-move --yes; check
-  that it holds nothing you need before running.
+  CONFIRMATION: moving the partition to a different start rewrites its bytes
+  and needs --yes; the destination range is overwritten as-is, and an
+  interrupted relocation cannot be rolled back with `undo`. A start equal to
+  the current start moves nothing and asks nothing.
 
   Options:
     --chunk-size N   recovery granularity in MiB (default 4)
     --sector-size N  logical sector size override for raw images (power of two,
                      512..=65536)"#;
 
-pub(crate) const HELP_COPY: &str = r#"diskedit copy <TARGET>:N --start <LBA|end> [--name S] [--keep-partuuid]
+pub(crate) const HELP_COPY: &str = r#"diskedit copy <TARGET>:N --start <LBA|end> [--name S] [--keep-partuuid] [--yes]
 
   Byte-wise copy a partition to a new location; the source is untouched.
   --start end packs the copy against the end of the usable range.
@@ -86,9 +91,9 @@ pub(crate) const HELP_COPY: &str = r#"diskedit copy <TARGET>:N --start <LBA|end>
   partitions stay distinguishable. --keep-partuuid reuses the source
   GUID instead — mount-by-PARTUUID then resolves to either partition.
 
-  CONFIRMATION: none beyond the explicit LBA. The destination range is
-  overwritten as-is — no equivalent of resize's --allow-move --yes; check
-  that it holds nothing you need before running.
+  CONFIRMATION: required. The destination range is overwritten with the
+  source bytes and the journal records the write as non-rollbackable —
+  `undo` cannot restore what was there before; pass --yes.
 
   Options:
     --align A        mib|cyl|none (default mib = 1MiB; none uses the LBA as given)
@@ -96,13 +101,17 @@ pub(crate) const HELP_COPY: &str = r#"diskedit copy <TARGET>:N --start <LBA|end>
     --sector-size N  logical sector size override for raw images (power of two,
                      512..=65536)"#;
 
-pub(crate) const HELP_CREATE: &str = r#"diskedit create <TARGET> [--size SIZE] [--name S] [--fs F]
+pub(crate) const HELP_CREATE: &str = r#"diskedit create <TARGET> [--size SIZE] [--name S] [--fs F] [--yes]
 
   Create a partition in free space. With --size, the first aligned gap that
   fits; without, the largest aligned gap. --fs formats after creation.
 
   SIZE: absolute size (units k/m/g/t, 1024 base; plain bytes when no unit;
         fractions allowed, e.g. 32M | 1.5G | 33554432)
+
+  CONFIRMATION: --fs writes a filesystem over the new partition's range and
+  needs --yes; creating the entry alone is journalled and asks nothing. The
+  filesystem write cannot be rolled back with `undo`.
 
   Options:
     --sector-size N  logical sector size override for raw images (power of two,
@@ -124,7 +133,7 @@ pub(crate) fn cmd_new(a: &Args) -> crate::outcome::Outcome {
         ));
     } else {
         let kind = a.table.unwrap_or(table::TableKind::Gpt);
-        let mut src = open_target_for_write(a).unwrap_or_else(|f| bail_fail(f));
+        let mut src = open_target_for_new_table(a).unwrap_or_else(|f| bail_fail(f));
         let ss = src.sector_size;
         // 尺寸/几何判据先于一切写入：过不了就该报 refused（10），而不是等建表把它当
         // 失败的 io::Error 误报成 Failed（30 + "盘可能已改变"）。两族表各有自己的下限
@@ -134,11 +143,10 @@ pub(crate) fn cmd_new(a: &Args) -> crate::outcome::Outcome {
         };
         preflight.unwrap_or_else(|f| bail_fail(f));
         // 新表写入落在旧分区数据里的部分，必须另有明确授权：`--yes` 只确认"重建表"。
-        // 探测读不出旧表时同样不放行——无法证明写入只落在表结构区，就不是"确认无冲突"
-        let conflict = match kind {
-            table::TableKind::Gpt => table::gpt_metadata_conflict(&src, ss),
-            table::TableKind::Msdos => table::mbr_metadata_conflict(&src, ss),
-        };
+        // 探测读不出旧表时同样不放行——无法证明写入只落在表结构区，就不是"确认无冲突"。
+        // 同一判据还会在写入口的首次写盘前再落一次（见 ensure_new_table_write_clear）：
+        // 这中间隔着占用闸的 loop 扫描
+        let conflict = table::new_table_conflict(&src, ss, kind);
         match conflict {
             Ok(Some(why)) if !a.overwrite_partition_data => bail_fail(Fail::refused(format!(
                 "{why} — pass --overwrite-partition-data to accept overwriting those bytes"
@@ -159,14 +167,17 @@ pub(crate) fn cmd_new(a: &Args) -> crate::outcome::Outcome {
             bail_fail(f);
         }
         let r = match kind {
-            table::TableKind::Gpt => table::create_gpt(&mut src, ss, None),
-            table::TableKind::Msdos => table::create_mbr(&mut src),
+            table::TableKind::Gpt => table::create_gpt(&mut src, ss, None, a.overwrite_partition_data),
+            table::TableKind::Msdos => table::create_mbr(&mut src, a.overwrite_partition_data),
         };
         match r {
             Ok(()) => table_write_done(&src, &format!("created {} table (verify with: diskedit info {})", kind.as_str(), a.target)),
+            // 写入口在首次写盘前重判出的拒绝保持原始文案（与命令层那次判定的措辞一致）；
+            // 只有越过写盘边界的失败才补上下文并经 Failed 报出
+            Err(f @ Fail::Refused(_)) => bail_fail(f),
             // 建表失败可能停在写完一半的中间态：此刻已不能声称"未写盘"，故经
             // `From<io::Error>` 落到 Failed（报 30 并附"盘可能已改变"的提示）
-            Err(e) => bail_fail(Fail::from(e).context("new failed")),
+            Err(f) => bail_fail(f.context("new failed")),
         }
     }
 }
@@ -330,6 +341,15 @@ pub(crate) fn cmd_resize_part(a: &Args) -> crate::outcome::Outcome {
     } else {
         align_range(a, start, end, g.sector_size())
     };
+    // 确认门看盘上几何算出的影响面：起点变化要搬数据，末端下移会截短分区
+    // （连同其中的文件系统）；两种都越过 undo 的回滚点。纯扩容与"请求范围即现状"
+    // 不在此列。e 取自锁下当前条目，start/end 是下取整后的请求值
+    let e = crate::gpt_policy::live_entry(&g, part).unwrap_or_else(|f| bail_fail(f));
+    confirm::gate(a.yes, confirm::Impact {
+        relocating: usize::from(start != e.starting_lba),
+        shrinking: end < e.ending_lba,
+        ..Default::default()
+    });
     let (chunk, mut logger) = chunk_logger(a, &src, g.disk_guid());
     let o = settle_layout(movepart::resize_part(&mut src, &g, repair, part, start, end, chunk, a.no_fs, false, None, &mut |m| logger.log(m)), &src);
     if o.is_complete() {
@@ -390,6 +410,10 @@ pub(crate) fn cmd_move(a: &Args) -> crate::outcome::Outcome {
     // checked：start 来自 CLI 原始输入（--align none 时无上界），回绕会骗过 resize_part 的边界校验
     let end = start.checked_add(len - 1)
         .unwrap_or_else(|| bail_fail(Fail::refused("end LBA overflows address space".to_string())));
+    confirm::gate(a.yes, confirm::Impact {
+        relocating: usize::from(start != e.starting_lba),
+        ..Default::default()
+    });
     let (chunk, mut logger) = chunk_logger(a, &src, g.disk_guid());
     let o = settle_layout(movepart::resize_part(&mut src, &g, repair, part, start, end, chunk, a.no_fs, false, None, &mut |m| logger.log(m)), &src);
     if o.is_complete() {
@@ -422,6 +446,8 @@ pub(crate) fn cmd_copy(a: &Args) -> crate::outcome::Outcome {
         }
         StartSelector::Lba(lba) => align_start(a, lba, g.sector_size()),
     };
+    // copy 总是把源字节写到落点，落点原有内容无法用 undo 找回
+    confirm::gate(a.yes, confirm::Impact { copying: true, ..Default::default() });
     let (chunk, mut logger) = chunk_logger(a, &src, g.disk_guid());
     // 名字守卫在消费点：copy 的落盘名字与 add 同一个 36 码元字段
     if let Some(n) = &a.name { crate::support::check_gpt_name_len(n); }
@@ -531,6 +557,8 @@ pub(crate) fn cmd_create(a: &Args) -> crate::outcome::Outcome {
         },
         None => *gaps.iter().max_by_key(|g| span(g)).unwrap(),
     };
+    // --fs 会在新分区上写文件系统；没有 --fs 时只改表，可由 undo 撤销
+    confirm::gate(a.yes, confirm::Impact { formatting: fs_kind.is_some(), ..Default::default() });
     // swap 声明落进类型 GUID：movepart 靠它识别 swap 挡路者（不搬数据、mkswap 重建）
     let is_swap = fs_kind == Some(MkfsFs::Swap);
     let r = if label == table::TableLabel::Gpt {

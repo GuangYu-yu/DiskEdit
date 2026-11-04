@@ -19,6 +19,10 @@ pub(crate) fn fixture_gpt(ss: u64) -> Vec<u8> {
 }
 
 pub(crate) fn src_from(tag: &str, data: Vec<u8>) -> WriteSource {
+    src_from_ss(tag, data, 512)
+}
+
+pub(crate) fn src_from_ss(tag: &str, data: Vec<u8>, ss: u64) -> WriteSource {
     let mut tmp = std::env::temp_dir();
     tmp.push(format!("diskedit_test_{tag}_{}.img", std::process::id()));
     std::fs::write(&tmp, &data).unwrap();
@@ -28,7 +32,7 @@ pub(crate) fn src_from(tag: &str, data: Vec<u8>) -> WriteSource {
         identity: crate::dev::TargetIdentity::resolve_image(&tmp),
         file: f,
         path: tmp,
-        sector_size: 512,
+        sector_size: ss,
         size,
         is_block: false,
         journal: None,

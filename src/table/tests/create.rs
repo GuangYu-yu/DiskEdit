@@ -7,7 +7,7 @@ use std::io::Cursor;
 pub(crate) fn create_gpt_min_capacity_boundaries() {
     // 最小容量 = 2·span+4（512B→68，4Kn→12）；first==last usable 是合法紧边界
     let mut ok = src_from("cg512ok", vec![0u8; 68 * 512]);
-    create_gpt(&mut ok, 512, Some([0x11; 16])).unwrap();
+    create_gpt(&mut ok, 512, Some([0x11; 16]), false).unwrap();
     let g = load_gpt(&ok).unwrap().unwrap();
     assert_eq!(g.header.first_usable_lba, 34);
     assert_eq!(g.header.last_usable_lba, 34);
@@ -16,16 +16,16 @@ pub(crate) fn create_gpt_min_capacity_boundaries() {
     GPT::read_from(&mut cur, 512).unwrap();
 
     let mut bad = src_from("cg512bad", vec![0u8; 67 * 512]);
-    assert!(create_gpt(&mut bad, 512, Some([0x11; 16])).is_err());
+    assert!(create_gpt(&mut bad, 512, Some([0x11; 16]), false).is_err());
 
     let mut ok4 = src_from("cg4knok", vec![0u8; 12 * 4096]);
-    create_gpt(&mut ok4, 4096, Some([0x11; 16])).unwrap();
+    create_gpt(&mut ok4, 4096, Some([0x11; 16]), false).unwrap();
     let g4 = load_gpt(&ok4).unwrap().unwrap();
     assert_eq!(g4.header.first_usable_lba, 6);
     assert_eq!(g4.header.last_usable_lba, 6);
 
     let mut bad4 = src_from("cg4knbad", vec![0u8; 11 * 4096]);
-    assert!(create_gpt(&mut bad4, 4096, Some([0x11; 16])).is_err());
+    assert!(create_gpt(&mut bad4, 4096, Some([0x11; 16]), false).is_err());
 }
 
 /// 在 GPT 镜像上建 msdos 表：LBA1 的旧主头签名必须被清掉（否则 `table_label` 判
@@ -35,7 +35,7 @@ pub(crate) fn create_mbr_clears_a_stale_gpt_primary_signature() {
     let mut src = src_from_gpt("mbr_over_gpt", 512);
     let mut before = vec![0u8; 512];
     src.read_at(512, &mut before).unwrap();
-    create_mbr(&mut src).unwrap();
+    create_mbr(&mut src, false).unwrap();
     let mut after = vec![0u8; 512];
     src.read_at(512, &mut after).unwrap();
     assert_eq!(&after[..8], &[0u8; 8], "GPT primary signature must be cleared");
@@ -43,6 +43,22 @@ pub(crate) fn create_mbr_clears_a_stale_gpt_primary_signature() {
     assert_eq!(table_label(&src).unwrap(), TableLabel::Mbr);
     // 残留的头/数组字节不再构成一张可读的 GPT 表
     assert!(load_gpt(&src).unwrap().is_none());
+}
+
+/// 容器扇区大于 512 时，候选签名位置 512 落在 LBA0 的写回缓冲里：清零必须先施加到
+/// 最终缓冲，否则整块回写会把刚清掉的签名重新覆盖成 `EFI PART`
+#[test]
+pub(crate) fn create_mbr_clears_signature_inside_lba0_on_4kn_container() {
+    let ss = 4096u64;
+    let mut data = vec![0u8; 100 * ss as usize];
+    data[512..520].copy_from_slice(GPT_SIGNATURE);
+    let mut src = src_from_ss("mbr_4kn_sig512", data, ss);
+    // 512 处的签名不是容器 ss 下的 LBA1：旧表读不出来，写入口按未授权覆盖拒绝，
+    // 显式授权才走"清零签名"这条路径（本用例测的正是清零落点）
+    create_mbr(&mut src, true).unwrap();
+    let mut got = vec![0u8; GPT_SIGNATURE.len()];
+    src.read_at(512, &mut got).unwrap();
+    assert_eq!(got, vec![0u8; GPT_SIGNATURE.len()], "signature at byte 512 must end up zero");
 }
 
 #[test]
@@ -166,4 +182,64 @@ pub(crate) fn mbr_conflict_catches_gpt_signature_inside_partition() {
     // 没有可清的签名就不报冲突：普通 msdos 建表不被这条检查误拦
     let plain = src_from_mbr("cfchk_mbr_plain", &[(0x83, 1, 99)], 100);
     assert!(mbr_metadata_conflict(&plain, ss).unwrap().is_none());
+}
+
+/// 命令层判定通过之后、首次写盘之前盘上的表已变：GPT 写入口按**当前**盘面重判，
+/// 拒绝且一个字节都不写；若只在命令层判一次，这里会照常写下新表、把旧分区数据清零
+#[test]
+pub(crate) fn create_gpt_refuses_a_table_that_changed_after_the_command_check() {
+    let mut src = src_from("gate_gpt", vec![0u8; 100 * 512]);
+    assert!(new_table_conflict(&src, 512, TableKind::Gpt).unwrap().is_none(), "the command-layer check sees a clean disk");
+
+    // 首次写盘之前表已变：旧表把分区铺进新表的主条目数组区 [LBA2, LBA34)
+    write_small_span_gpt(&mut src, 512);
+    let before = std::fs::read(&src.path).unwrap();
+
+    let e = create_gpt(&mut src, 512, Some([0x11; 16]), false)
+        .expect_err("a conflict that appeared after the command-layer check must still be refused");
+    assert!(matches!(&e, crate::outcome::Fail::Refused(_)), "{e}");
+    assert_eq!(e.into_outcome().exit_code(), crate::outcome::EXIT_REFUSED);
+    assert_eq!(std::fs::read(&src.path).unwrap(), before, "the refusal must not write a single byte");
+}
+
+/// 同一条窗口的 msdos 侧：`create_mbr` 要清零的盘尾 GPT 签名落进了新出现的 MBR 分区，
+/// 写入口拒绝且不落盘；若只在命令层判一次，这里会先清签名、再写 LBA0
+#[test]
+pub(crate) fn create_mbr_refuses_when_a_cleared_signature_lands_inside_a_partition() {
+    let ss = 512u64;
+    let mut src = src_from("gate_mbr", vec![0u8; 100 * ss as usize]);
+    assert!(new_table_conflict(&src, ss, TableKind::Msdos).unwrap().is_none(), "the command-layer check sees a clean disk");
+
+    // 首次写盘之前表已变：MBR 分区从 LBA1 铺到盘尾，盘尾带一份自洽的 GPT 备份头
+    let mut lba0 = vec![0u8; ss as usize];
+    lba0[446 + 4] = 0x83;
+    lba0[446 + 8..446 + 12].copy_from_slice(&1u32.to_le_bytes());
+    lba0[446 + 12..446 + 16].copy_from_slice(&99u32.to_le_bytes());
+    lba0[510] = 0x55;
+    lba0[511] = 0xAA;
+    src.write_at(0, &lba0).unwrap();
+    let geom = EntryArrayGeometry::new(ss, 128, 4, MAX_ARRAY_BYTES).unwrap();
+    let (bytes, crc) = serialize_array(&[], &geom);
+    src.write_at(98 * ss, &bytes).unwrap();
+    let h = RawHeader {
+        revision: 0x0001_0000,
+        primary_lba: 99,
+        backup_lba: 1,
+        first_usable_lba: 3,
+        last_usable_lba: 97,
+        disk_guid: [0; 16],
+        partition_entry_lba: 98,
+        number_of_partition_entries: 4,
+        size_of_partition_entry: 128,
+        header_size: 92,
+    };
+    let sec = serialize_header(&h, crc, ss).unwrap();
+    src.write_at(99 * ss, &sec).unwrap();
+    let before = std::fs::read(&src.path).unwrap();
+
+    let e = create_mbr(&mut src, false)
+        .expect_err("a conflict that appeared after the command-layer check must still be refused");
+    assert!(matches!(&e, crate::outcome::Fail::Refused(_)), "{e}");
+    assert_eq!(e.into_outcome().exit_code(), crate::outcome::EXIT_REFUSED);
+    assert_eq!(std::fs::read(&src.path).unwrap(), before, "the refusal must not write a single byte");
 }

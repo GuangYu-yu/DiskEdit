@@ -33,31 +33,59 @@ pub(crate) enum RecoveryRecord {
     /// 搬移 checkpoint：描述一次中断的搬移。它本身不含可回放的字节，
     /// 出路只有续跑原命令或放弃
     Checkpoint { path: std::path::PathBuf },
+    /// 旧格式 journal：现场完好，但布局比本构建认识的版本更早。不迁移、不回放、
+    /// 不删除——只有 `abandon` 能显式释放。与 `Journal { entries: None }` 分开，
+    /// 是因为"读不出来"和"读得懂但版本更早"要给出不同的出路
+    JournalOldFormat { path: std::path::PathBuf, version: u8 },
+    /// 落点存在，但不是本工具的恢复文件（符号链接 / dangling 链接 / 目录）。
+    /// 它不是"没有现场"：写闸口照旧拒绝，但它也不可被 undo / abandon 当作恢复文件处理
+    NotARecoveryFile { path: std::path::PathBuf, shape: dev::NotARecoveryFile },
 }
 
 impl RecoveryRecord {
     pub(crate) fn path(&self) -> &Path {
         match self {
-            RecoveryRecord::Journal { path, .. } | RecoveryRecord::Checkpoint { path } => path,
+            RecoveryRecord::Journal { path, .. }
+            | RecoveryRecord::Checkpoint { path }
+            | RecoveryRecord::JournalOldFormat { path, .. }
+            | RecoveryRecord::NotARecoveryFile { path, .. } => path,
         }
     }
 
     /// 报告用的单条描述
     fn describe(&self) -> String {
         match self {
-            RecoveryRecord::Journal { path, .. } | RecoveryRecord::Checkpoint { path } => path.display().to_string(),
+            RecoveryRecord::Journal { path, .. } | RecoveryRecord::Checkpoint { path } => {
+                path.display().to_string()
+            }
+            RecoveryRecord::JournalOldFormat { path, version } => {
+                format!("{} (journal format v{version}, older than this build)", path.display())
+            }
+            RecoveryRecord::NotARecoveryFile { path, shape } => {
+                format!("{} ({}, not a recovery file)", path.display(), shape.what())
+            }
+        }
+    }
+
+    /// 外来条目的拒绝文案；不是这一类时返回 None
+    pub(crate) fn foreign_message(&self) -> Option<String> {
+        match self {
+            RecoveryRecord::NotARecoveryFile { path, shape } => Some(shape.message(path)),
+            _ => None,
         }
     }
 }
 
 /// 枚举目标上还活着的恢复现场。
 ///
-/// journal 的判据集中在 [`dev::classify_journal`]（absent / shell / damaged / records 四态）：
-/// 有记录或读不出来 ⇒ 活着；空壳与 0 字节残骸 ⇒ 不是现场。`undo` 的现场判定与 `abandon`
-/// 的枚举都消费同一个分类，三处对"什么算现场"不会给出不同答案。
+/// journal 的判据集中在 [`dev::classify_journal`]（absent / shell / old-format / damaged /
+/// records 五态）：有记录、读不出来、或是本构建读不懂布局的旧格式 ⇒ 活着；空壳与 0 字节
+/// 残骸 ⇒ 不是现场。`undo` 的现场判定与 `abandon` 的枚举都消费同一个分类，三处对"什么算
+/// 现场"不会给出不同答案。
 ///
-/// checkpoint 没有"空壳"一说：它一落盘就描述一次中断的搬移，故只看存在性——
-/// **只有 `NotFound` 算不存在**，属性读取的其他错误按存在处理
+/// checkpoint 没有"空壳"一说：它一落盘就描述一次中断的搬移，故只看落点形态——
+/// **只有 `NotFound` 算不存在**，属性读取的其他错误按存在处理；符号链接、dangling 链接
+/// 与目录存在但不是恢复文件，单列一类而不是折成"不在"
 pub(crate) fn active_recovery_records(identity: &TargetIdentity) -> Vec<RecoveryRecord> {
     let mut out = Vec::new();
     let journal = identity.journal_path();
@@ -65,6 +93,12 @@ pub(crate) fn active_recovery_records(identity: &TargetIdentity) -> Vec<Recovery
         dev::JournalCandidate::Absent | dev::JournalCandidate::Shell => {}
         dev::JournalCandidate::Damaged(_) => {
             out.push(RecoveryRecord::Journal { path: journal.to_path_buf(), entries: None });
+        }
+        dev::JournalCandidate::OldFormat(version) => {
+            out.push(RecoveryRecord::JournalOldFormat { path: journal.to_path_buf(), version });
+        }
+        dev::JournalCandidate::NotARecoveryFile(shape) => {
+            out.push(RecoveryRecord::NotARecoveryFile { path: journal.to_path_buf(), shape });
         }
         dev::JournalCandidate::Records(read) => {
             let entries = match read {
@@ -75,13 +109,17 @@ pub(crate) fn active_recovery_records(identity: &TargetIdentity) -> Vec<Recovery
         }
     }
     let ckpt = identity.checkpoint_path();
-    // 目录等非普通文件不是本工具写下的任何东西，留着它会把一个无关路径顶成 busy 现场
-    match std::fs::metadata(ckpt) {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+    // 认 checkpoint 落点本身（不跟随链接）。只有普通文件才是可续跑的现场；
+    // 符号链接、dangling 链接与目录是"存在但不是恢复文件"，不是"没有现场"——
+    // 后者会让闸口对这些条目视而不见，而它们同样占着落点
+    match dev::RecoveryFile::at(ckpt) {
+        Ok(dev::RecoveryEntry::Absent) => {}
+        Ok(dev::RecoveryEntry::File(_)) => out.push(RecoveryRecord::Checkpoint { path: ckpt.to_path_buf() }),
+        Ok(dev::RecoveryEntry::NotARecoveryFile(shape)) => {
+            out.push(RecoveryRecord::NotARecoveryFile { path: ckpt.to_path_buf(), shape });
+        }
         // 读不出来不是"没有"：折叠成 absent 会让闸口在 state_dir 不可读时放行写命令
         Err(_) => out.push(RecoveryRecord::Checkpoint { path: ckpt.to_path_buf() }),
-        Ok(m) if !m.is_file() => {}
-        Ok(_) => out.push(RecoveryRecord::Checkpoint { path: ckpt.to_path_buf() }),
     }
     out
 }
@@ -116,6 +154,26 @@ fn session_slot() -> std::sync::MutexGuard<'static, Option<SessionJournal>> {
     TRANSACTION_IDENTITY.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// 拒绝发生在打开之后时随拒绝一起打印的说明。`cut` 为 `Some` 表示本次运行已在采纳
+/// journal 时归档并截掉撕裂尾：拒绝只证明目标盘没被写过，不覆盖恢复文件这处改动，
+/// 故句子必须把两者分开讲清
+pub(crate) fn journal_tail_note(cut: Option<NonZeroUsize>, journal: &Path) -> Option<String> {
+    cut.map(|cut| {
+        format!(
+            "note: nothing was written to the target disk, but this run already modified the recovery \
+             journal: {cut} byte(s) of an incomplete record tail were archived and truncated out of {}",
+            journal.display()
+        )
+    })
+}
+
+/// 取当前会话的残尾说明；没有事务、或采纳时本就在记录边界上时为 `None`
+pub(crate) fn pending_journal_tail_note() -> Option<String> {
+    session_slot()
+        .as_ref()
+        .and_then(|s| journal_tail_note(s.truncated, s.identity.journal_path()))
+}
+
 /// 入口对"目标上已有现场"的处置声明——由调用方**显式选择**，事务层只执行。
 /// 这是"每个入口接受哪几态"的类型化：判据不以闭包形式下沉（压成 bool 会让
 /// 领域结论在闸口处丢失），事务层也不为任何入口猜"这是不是续跑"
@@ -135,6 +193,16 @@ pub(crate) enum ResumeClaim {
     /// （`resize`）：两类现场由它分流续跑，别的分区或别的族仍拒绝。
     /// 同样带分区选择器，解析时机与 [`ResumeClaim::OwnRelocation`] 一致
     ResizeOrRelocation(PartSelector),
+}
+
+/// 本次写事务与"表身份"的关系，决定 journal 头里的磁盘身份凭据从哪来。
+/// 只追加凭据、不改旧身份段的比较路径：`Produced` 不是"换一个字段记"，而是明说这一格
+/// 在本事务里**不是证据**
+pub(crate) enum TableIdentity {
+    /// add/delete/set/resize/move/mkfs：已有的 Disk GUID 被重写头部时原样保留
+    Preserved,
+    /// `new`：整张表由本次操作产生，重写前后的 GUID 都不能用于认目标
+    Produced,
 }
 
 /// 事务门对目标上已有现场的续跑分类。调用方按它决定走哪条续跑分支：两族的
@@ -191,7 +259,14 @@ impl TransactionManager {
     pub(crate) fn begin(a: &Args) -> Result<WriteSource, Fail> {
         // FreshOnly：不接受任何现场。与 begin_or_resume 共用同一闸口——
         // "普通 mutation 永不接管别人的事务"只有一个执行处
-        Self::begin_or_resume(a, ResumeClaim::FreshOnly).map(|(src, _)| src)
+        Self::begin_or_resume(a, ResumeClaim::FreshOnly, TableIdentity::Preserved).map(|(src, _)| src)
+    }
+
+    /// `new` 的入口：本次事务会写出整张表（GPT 或 MBR），表身份由本操作产生，不能充当
+    /// "这个目标"的证据。于是磁盘凭据记 [`dev::DiskGuidState::GeneratedThisOperation`]，
+    /// 且**不读旧表**——在损坏的旧表上跑 `new` 正是修复路径，读旧头失败不能把修复挡在门外
+    pub(crate) fn begin_replacing_table(a: &Args) -> Result<WriteSource, Fail> {
+        Self::begin_or_resume(a, ResumeClaim::FreshOnly, TableIdentity::Produced).map(|(src, _)| src)
     }
 
     /// 数据搬移类命令的入口：目标上有可续跑的作业时按续跑进入，否则开新事务。
@@ -207,6 +282,7 @@ impl TransactionManager {
     pub(crate) fn begin_or_resume(
         a: &Args,
         claim: ResumeClaim,
+        table: TableIdentity,
     ) -> Result<(WriteSource, ResumeKind), Fail> {
         let mut src = Self::open_rw(a)?;
         Self::refuse_unidentifiable(&src)?;
@@ -251,7 +327,7 @@ impl TransactionManager {
                  runs a single command, so a second write transaction is refused",
             ));
         }
-        let (journal_fp, truncated) = Self::attach_journal(&mut src)?;
+        let (journal_fp, truncated) = Self::attach_journal(&mut src, table)?;
         // 身份在锁下、与已打开的句柄同一时刻定稿；`commit` 只消费这一个值
         *slot = Some(SessionJournal {
             identity: src.identity.clone(),
@@ -278,7 +354,10 @@ impl TransactionManager {
     /// 返回 attach 时 journal 落点已存在时的文件指纹（见 [`SessionJournal`]），以及采纳时
     /// 被截掉的残尾字节数（`None` = 文件本就在记录边界上）。
     /// 属性读不出来时不认领它：紧随其后的 `open` 若也读不到，命令在写盘之前就已返回错误
-    fn attach_journal(src: &mut WriteSource) -> Result<(Option<dev::TargetFingerprint>, Option<NonZeroUsize>), Fail> {
+    fn attach_journal(
+        src: &mut WriteSource,
+        table: TableIdentity,
+    ) -> Result<(Option<dev::TargetFingerprint>, Option<NonZeroUsize>), Fail> {
         let p = src.identity.journal_path().to_path_buf();
         // 指纹一律取自句柄（Windows 的文件身份只能从句柄问）；打不开就当"没有证据"，
         // 于是 commit 不会凭路径删它
@@ -288,7 +367,24 @@ impl TransactionManager {
         // 身份随头落盘：采纳既有 journal 时 `open` 会拿它核对（见 `dev::scene_mismatch`），
         // 故新开的窗口也记的是"这个目标"
         let identity = src.scene();
-        let (journal, truncated) = Journal::adopt(&p, identity)
+        // 新凭据与头里的旧身份段在同一时刻定稿。`Produced` 不读旧表：`new` 正是损坏
+        // GPT 的修复路径，读旧头失败不能挡在它前面。`Preserved` 读不出时不在写盘前
+        // 猜测——凭据读不出与"没有 GPT"是两回事，按后者记会让恢复端把"未知"当"无证据"
+        let credential = match table {
+            TableIdentity::Produced => dev::DiskGuidState::GeneratedThisOperation,
+            TableIdentity::Preserved => match crate::table::disk_guid_of(src) {
+                Ok(Some(g)) => dev::DiskGuidState::Present(g),
+                Ok(None) => dev::DiskGuidState::Unavailable,
+                Err(e) => {
+                    return Err(Fail::infra(format!(
+                        "the target's GPT disk identity cannot be read ({e}) — a journal written now could not \
+                         identify this target later, so no byte is written; if a recovery record already owns this \
+                         target, release it with `diskedit abandon`"
+                    )))
+                }
+            },
+        };
+        let (journal, truncated) = Journal::adopt(&p, identity, credential)
             .map_err(|e| Fail::infra(format!("journal open failed: {e}")))?;
         src.adopt_journal(journal);
         Ok((adopted, truncated))
@@ -314,15 +410,39 @@ impl TransactionManager {
                 _ => None,
             })
             .is_some_and(|v| v.iter().all(|e| !matches!(e.recovery, dev::RecoveryData::Barrier)));
-        let way_out = if resumable {
+        let old_format = active.iter().find_map(|r| match r {
+            RecoveryRecord::JournalOldFormat { version, .. } => Some(*version),
+            _ => None,
+        });
+        let foreign = active.iter().find_map(|r| match r {
+            RecoveryRecord::NotARecoveryFile { shape, .. } => Some(shape.what()),
+            _ => None,
+        });
+        let way_out: String = if let Some(what) = foreign {
+            // 本工具不会删除或改名不是恢复文件的条目：它不是本工具写下的任何东西
+            format!(
+                "the recovery path holds {what}, which is not a recovery file written by this tool; no diskedit \
+                 command will delete or rename it — move or remove it by hand, then retry"
+            )
+        } else if resumable {
             // "重跑原命令即续跑"只对 relocation 作业成立；单分区 resize 的现场
             //（RecoveryRecord 只有路径，分不出两族）必须把另一条出路一并给出
             "re-run the command that started it to continue (an unfinished single-partition \
-             resize is resumed with `resize-part` or `move`), or release it with `diskedit abandon`"
+             resize is resumed with `resize-part` or `resize`), or release it with `diskedit abandon`"
+                .to_string()
         } else if rollbackable {
-            "roll it back with `diskedit undo`, or release it with `diskedit abandon`"
+            "roll it back with `diskedit undo`, or release it with `diskedit abandon`".to_string()
+        } else if let Some(version) = old_format {
+            // 旧格式不是"越过回滚点"，而是"本构建读不懂它的布局"：说成越过回滚点会让
+            // 用户以为 undo 有能力处理它
+            format!(
+                "the journal there is in format v{version}, older than this build (v{}), so this build cannot \
+                 replay or migrate it; it is left in place, and `diskedit abandon` is the only way to release it",
+                dev::Journal::VERSION
+            )
         } else {
             "it is already past the point of rolling back, so `diskedit abandon` is the only way to release it"
+                .to_string()
         };
         Fail::infra(format!(
             "an unfinished operation still owns this target ({}); {way_out}",
@@ -630,5 +750,26 @@ mod tests {
         assert!(p.exists(), "a journal created after this transaction returned must survive");
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 拒绝只说明目标盘没被写。本次运行若已归档并截掉撕裂尾，这三件事必须同时出现：
+    /// 目标盘未写、恢复文件已被本进程改动、被截的具体字节数与路径
+    #[test]
+    fn refusal_note_names_the_tail_already_cut() {
+        let p = Path::new("/tmp/x.diskedit.journal");
+        let note = journal_tail_note(NonZeroUsize::new(37), p).expect("a cut tail must be reported");
+        assert_eq!(note.lines().count(), 1, "{note}");
+        assert!(note.contains("nothing was written to the target disk"), "{note}");
+        assert!(note.contains("this run already modified the recovery journal"), "{note}");
+        assert!(note.contains("37 byte(s)"), "{note}");
+        assert!(note.contains("archived and truncated out of /tmp/x.diskedit.journal"), "{note}");
+    }
+
+    /// `None` 分支必须静默：0 字节残骸在 `Journal::adopt` 的 `len == 0` 分支被补头，
+    /// 恢复文件确实多了一个头；但那种残骸只出现在 `fresh` 入口、`classify_journal` 判
+    /// `Absent`，没有既有记录可被误读，故不进这句说明
+    #[test]
+    fn no_note_when_adoption_kept_the_journal_at_a_record_boundary() {
+        assert_eq!(journal_tail_note(None, Path::new("/tmp/x.diskedit.journal")), None);
     }
 }

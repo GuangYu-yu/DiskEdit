@@ -9,7 +9,7 @@ fn journal_has_barrier(bytes: &[u8]) -> bool {
     if !bytes.starts_with(b"DEJL") {
         return false;
     }
-    if bytes.get(4) != Some(&6) {
+    if !matches!(bytes.get(4), Some(&6) | Some(&7)) {
         return false;
     }
     let mut pos = JOURNAL_HEADER_LEN;
@@ -80,7 +80,7 @@ fn journal_lifecycle_and_table_undo() {
     assert!(!journal.exists(), "the refusal must not open a journal");
 
     // 部分失败（分区已建、mkfs 失败）⇒ journal 保留，供 undo 撤销半成品
-    let (c, e) = run(&["create", img_s, "--size", "1M", "--fs", "xfs"]);
+    let (c, e) = run(&["create", img_s, "--size", "1M", "--fs", "xfs", "--yes"]);
     assert_eq!(c, 20, "partition created but mkfs failed must be EXIT_PARTIAL: {e}");
     assert!(journal.exists(), "journal must be kept after a partial failure");
     assert_eq!(part_count(), before + 1, "partition should exist before undo");
@@ -113,7 +113,7 @@ fn journal_lifecycle_and_table_undo() {
     // 那条没写完的记录对应的写入没有发生）；但残尾既可能是没走完的追加，也可能是记录被
     // 外部截掉后的残骸，后者对应的写入可能已落盘——回放不能自称"回到写入前"，故退 20，
     // 并把这份 journal 归档到 `.torn`：候选落点腾空，唯一证据不销毁
-    let (c, e) = run(&["create", img_s, "--size", "1M", "--fs", "xfs"]);
+    let (c, e) = run(&["create", img_s, "--size", "1M", "--fs", "xfs", "--yes"]);
     assert_eq!(c, 20, "{e}");
     let jb = std::fs::read(&journal).unwrap();
     std::fs::write(&journal, &jb[..jb.len() - 2]).unwrap();
@@ -128,7 +128,7 @@ fn journal_lifecycle_and_table_undo() {
     assert!(torn_a.exists(), "the torn tail must stay inspectable under .torn");
 
     // 尾部垃圾 = 未写完的记录头，同样按未完成处理；归档名已占用时顺延，绝不覆盖上一份
-    let (c, e) = run(&["create", img_s, "--size", "1M", "--fs", "xfs"]);
+    let (c, e) = run(&["create", img_s, "--size", "1M", "--fs", "xfs", "--yes"]);
     assert_eq!(c, 20, "{e}");
     let jb = std::fs::read(&journal).unwrap();
     let mut tail = jb.clone();
@@ -141,7 +141,7 @@ fn journal_lifecycle_and_table_undo() {
     assert!(torn_b.exists(), "a second torn journal must not overwrite the earlier archive: {e}");
 
     // 中途损坏（第 1 条记录的数据）⇒ 整体拒绝，不碰镜像——"不做部分回放"针对的是这种情形
-    let (c, e) = run(&["create", img_s, "--size", "1M", "--fs", "xfs"]);
+    let (c, e) = run(&["create", img_s, "--size", "1M", "--fs", "xfs", "--yes"]);
     assert_eq!(c, 20, "{e}");
     let jb = std::fs::read(&journal).unwrap();
     let mut mid = jb.clone();
@@ -188,7 +188,7 @@ fn undo_refuses_when_the_target_shrank_under_its_journal() {
     assert_eq!(c, 0, "{e}");
     let (c, e) = run(&["add", img_s, "--start", "2048", "--end", "4095"]);
     assert_eq!(c, 0, "{e}");
-    let (c, e) = run(&["create", img_s, "--size", "1M", "--fs", "xfs"]);
+    let (c, e) = run(&["create", img_s, "--size", "1M", "--fs", "xfs", "--yes"]);
     assert_eq!(c, 20, "partition created but mkfs failed must be EXIT_PARTIAL: {e}");
     assert!(journal.exists(), "a partial operation leaves its journal behind: {e}");
 
@@ -240,14 +240,14 @@ fn undo_refuses_a_journal_whose_recorded_scene_is_not_this_target() {
     let (c, e) = run(&["add", img_s, "--start", "2048", "--end", "4095"]);
     assert_eq!(c, 0, "{e}");
     // 1M 的目标容不下 xfs ⇒ 建成分区但 PARTIAL，留下一份带记录的真 journal
-    let (c, e) = run(&["create", img_s, "--size", "1M", "--fs", "xfs"]);
+    let (c, e) = run(&["create", img_s, "--size", "1M", "--fs", "xfs", "--yes"]);
     assert_eq!(c, 20, "{e}");
     assert!(journal.exists(), "a partial operation leaves its journal behind: {e}");
 
     let mut jb = std::fs::read(&journal).unwrap();
     assert!(jb.len() > JOURNAL_HEADER_LEN, "the journal must hold at least one record to reach the identity check");
     jb[MAP_FLAG_AT] = 1; // 记成"经 loop 写入"
-    resign_header(&mut jb, JOURNAL_HEADER_LEN);
+    resign_header(&mut jb);
     std::fs::write(&journal, &jb).unwrap();
 
     let before = std::fs::read(&img).unwrap();
@@ -298,7 +298,7 @@ fn pending_recovery_blocks_unjournaled_writers_and_empty_shell_is_not_corruption
 
     // 造一个真正的未收尾现场：create 建好了分区、随后的 mkfs 因目标过小失败，
     // 事务把 journal 留在目标上等 undo 或续跑
-    let (c, e) = run(&["create", img_s, "--size", "1M", "--fs", "xfs"]);
+    let (c, e) = run(&["create", img_s, "--size", "1M", "--fs", "xfs", "--yes"]);
     assert_eq!(c, 20, "partition created but mkfs failed must be EXIT_PARTIAL: {e}");
     assert!(journal.exists(), "a partial operation must leave its journal behind: {e}");
     // journal 里没有 Barrier 时现场可以整表 undo；有 Barrier（FS 步已越过不可回滚点）
@@ -396,7 +396,7 @@ fn pending_recovery_blocks_unjournaled_writers_and_empty_shell_is_not_corruption
 
     // 收尾释放现场 ⇒ 同一目标的 checkpoint 一并释放；屏障已落时 undo 拒绝，checkpoint
     // 随 abandon 一起改名保留
-    let (c, e) = run(&["create", img_s, "--size", "1M", "--fs", "xfs"]);
+    let (c, e) = run(&["create", img_s, "--size", "1M", "--fs", "xfs", "--yes"]);
     assert_eq!(c, 20, "partition created but mkfs failed must be EXIT_PARTIAL: {e}");
     std::fs::write(&ckpt, b"stale checkpoint bytes").unwrap();
     let (c, e) = run(&["undo", img_s, "--yes"]);
@@ -450,7 +450,7 @@ fn undo_removes_an_empty_shell_only_when_its_identity_matches() {
     // 身份段写着别的尺寸：与本目标不符，拒绝删除并原样保留
     let mut foreign = header_only();
     foreign[5 + 8 + 8..5 + 8 + 8 + 8].copy_from_slice(&12345u64.to_le_bytes());
-    resign_header(&mut foreign, JOURNAL_HEADER_LEN);
+    resign_header(&mut foreign);
     std::fs::write(&journal, &foreign).unwrap();
     let (c, e) = run(&["undo", img_s, "--yes"]);
     assert_eq!(c, 10, "an empty shell of another target must be refused: {e}");
@@ -578,7 +578,7 @@ fn abandon_releases_recovery_state_idempotently_and_converges() {
     assert!(o.contains("nothing to abandon"), "{o}");
 
     // 崩溃重跑收敛：模拟"转换到一半就崩"，剩余的那份由下一次运行补上
-    let (c, _, e) = run(&["create", img_s, "--size", "1M", "--fs", "xfs"]);
+    let (c, _, e) = run(&["create", img_s, "--size", "1M", "--fs", "xfs", "--yes"]);
     assert_eq!(c, 20, "{e}");
     std::fs::write(&ckpt, b"stale checkpoint bytes").unwrap();
     std::fs::rename(&ckpt, dir.join(format!("a.img{CHECKPOINT_SUFFIX}{ABANDONED_SUFFIX}"))).unwrap(); // 已转换完的那一份
@@ -589,7 +589,7 @@ fn abandon_releases_recovery_state_idempotently_and_converges() {
 
     // 同名冲突之一：目标名已是**同一个 inode**（上次 link 成功、删原件那步没跑完的残局）
     // ⇒ 收敛即成功：删掉原文件，绝不覆盖那份副本
-    let (c, _, e) = run(&["create", img_s, "--size", "1M", "--fs", "xfs"]);
+    let (c, _, e) = run(&["create", img_s, "--size", "1M", "--fs", "xfs", "--yes"]);
     assert_eq!(c, 20, "{e}");
     let j_abandoned = dir.join(format!("a.img{JOURNAL_SUFFIX}{ABANDONED_SUFFIX}"));
     let _ = std::fs::remove_file(&j_abandoned);
@@ -603,7 +603,7 @@ fn abandon_releases_recovery_state_idempotently_and_converges() {
 
     // 同名冲突之二：首选名是**另一个文件** ⇒ 顺延到 `.abandoned.2`：既不覆盖别人的
     // 记录，也不为了"名字冲突"把目标锁死（那会让第二次中断后再无出路）
-    let (c, _, e) = run(&["create", img_s, "--size", "1M", "--fs", "xfs"]);
+    let (c, _, e) = run(&["create", img_s, "--size", "1M", "--fs", "xfs", "--yes"]);
     assert_eq!(c, 20, "{e}");
     let _ = std::fs::remove_file(&j_abandoned);
     std::fs::write(&j_abandoned, b"an unrelated artifact").unwrap();
@@ -620,6 +620,299 @@ fn abandon_releases_recovery_state_idempotently_and_converges() {
         dir.join(format!("a.img{JOURNAL_SUFFIX}{ABANDONED_SUFFIX}.2")).exists(),
         "the released record must land on the fallback name"
     );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// 回归：现场读数能读出的身份时，abandon 只放弃**属于本目标**的那一份。
+/// 一份明确记录着别的目标（这里是另一个文件大小）的 checkpoint 与目标自带的 journal
+/// 互不同源：改名它等于替另一个目标销毁回滚凭据。整体拒绝、一个字节也不动，目标保持
+/// 被挡——不会出现"看起来释放了、下次仍 busy"
+#[test]
+fn abandon_refuses_recovery_state_recorded_for_another_target() {
+    let dir = std::env::temp_dir().join(format!("diskedit_ab_foreign_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let img = dir.join("f.img");
+    std::fs::write(&img, vec![0u8; 8 * 1024 * 1024]).unwrap();
+    let exe = env!("CARGO_BIN_EXE_DiskEdit");
+    let img_s = img.to_str().unwrap();
+    let journal = sidecar(&dir, "f.img", JOURNAL_SUFFIX);
+    let ckpt = sidecar(&dir, "f.img", CHECKPOINT_SUFFIX);
+    let run = |args: &[&str]| -> (i32, String, String) {
+        let out = Command::new(exe).args(args).output().unwrap();
+        (
+            out.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        )
+    };
+
+    let (c, _, e) = run(&["new", img_s, "--yes"]);
+    assert_eq!(c, 0, "{e}");
+    let (c, _, e) = run(&["add", img_s, "--start", "2048", "--end", "4095"]);
+    assert_eq!(c, 0, "{e}");
+    // 目标自己的 journal（能读出身份的现场）：1M 容不下 xfs，mkfs 记 PARTIAL，journal 留下
+    let (c, _, e) = run(&["create", img_s, "--size", "1M", "--fs", "xfs", "--yes"]);
+    assert_eq!(c, 20, "{e}");
+    assert!(journal.exists(), "the fixture needs the target's own journal");
+
+    // journal 族的不符分支：记录本身可解析，但记录的目标已不是现在这个（把镜像长到
+    // 12 MiB）。判据与 checkpoint 族共用一处，结论必须同样是拒绝、一处不改名
+    let own_journal = std::fs::read(&journal).unwrap();
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&img)
+        .unwrap()
+        .set_len(12 * 1024 * 1024)
+        .unwrap();
+    let (c, _, e) = run(&["abandon", img_s, "--yes"]);
+    assert_eq!(c, 10, "a journal recorded for another target must be refused: {e}");
+    assert!(e.contains("not the target's own recovery scene"), "{e}");
+    assert_eq!(std::fs::read(&journal).unwrap(), own_journal, "the foreign journal bytes must be kept");
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&img)
+        .unwrap()
+        .set_len(8 * 1024 * 1024)
+        .unwrap();
+
+    // 另一份现场：头部完整、CRC 正确，但记录的创建时目标是另一个大小的文件
+    std::fs::write(&ckpt, foreign_checkpoint(12 * 1024 * 1024)).unwrap();
+
+    let entries_before = {
+        let mut names: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    };
+    let journal_bytes = std::fs::read(&journal).unwrap();
+    let ckpt_bytes = std::fs::read(&ckpt).unwrap();
+    let img_bytes = std::fs::read(&img).unwrap();
+
+    let (c, _, e) = run(&["abandon", img_s, "--yes"]);
+    assert_eq!(c, 10, "foreign recovery state must be refused, not released: {e}");
+    assert!(e.contains("not the target's own recovery scene"), "{e}");
+    assert!(e.contains("nothing was renamed"), "the refusal must say what it did not do: {e}");
+    assert!(e.contains("stays blocked"), "and what state the target is in: {e}");
+    let entries_after = {
+        let mut names: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    };
+    assert_eq!(entries_after, entries_before, "a refusal must not rename or delete anything");
+    assert_eq!(std::fs::read(&journal).unwrap(), journal_bytes, "the journal bytes must be kept");
+    assert_eq!(std::fs::read(&ckpt).unwrap(), ckpt_bytes, "the foreign checkpoint bytes must be kept");
+    assert_eq!(std::fs::read(&img).unwrap(), img_bytes, "the target bytes must be kept");
+
+    // 明确不可：现场还在，写盘命令仍被未完成作业挡住——这是拒绝后应有的终态
+    let (_, _, e) = run(&["add", img_s, "--start", "8192", "--end", "10239"]);
+    assert!(e.contains("owns this target"), "the refused record must still block writes: {e}");
+
+    // resize 族的身份段与搬移族不同（fstype 夹在 fp/map 与身份种类之间）：
+    // 换一份同样"属于别处"的 DKECKPT2，结论必须一致
+    let foreign_resize = foreign_resize_checkpoint(12 * 1024 * 1024);
+    std::fs::write(&ckpt, &foreign_resize).unwrap();
+    let (c, _, e) = run(&["abandon", img_s, "--yes"]);
+    assert_eq!(c, 10, "a foreign resize checkpoint must be refused too: {e}");
+    assert!(e.contains("not the target's own recovery scene"), "{e}");
+    assert_eq!(std::fs::read(&ckpt).unwrap(), foreign_resize, "the foreign checkpoint bytes must be kept");
+    assert!(journal.exists() && ckpt.exists(), "nothing may be renamed on refusal");
+
+    // 目标不在了也要互证：只有两族记录可读时，它们之间的分歧同样是拒绝依据
+    std::fs::rename(&img, dir.join("moved.img")).unwrap();
+    let (c, _, e) = run(&["abandon", img_s, "--yes"]);
+    assert_eq!(c, 10, "two disagreeing records must be refused even without a live target: {e}");
+    assert!(e.contains("disagree about the target scene"), "{e}");
+    assert!(journal.exists() && ckpt.exists(), "nothing may be renamed on refusal");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// 一份身份可读、CRC 完整的 DKECKPT1 现场，指纹取给定大小（dev/ino 为 0，即只有大小证据）。
+/// abandon 只读"创建时目标"，不解析搬移计划，故这里不需要完整几何
+fn foreign_checkpoint(size: u64) -> Vec<u8> {
+    let mut b = Vec::new();
+    b.extend_from_slice(b"DKECKPT1");
+    b.extend_from_slice(&7u32.to_le_bytes());
+    b.push(0); // 无 LVM 收尾事实
+    b.extend_from_slice(&size.to_le_bytes()); // disk_size
+    b.extend_from_slice(&512u64.to_le_bytes()); // ss
+    b.extend_from_slice(&1u32.to_le_bytes()); // grow_part
+    b.extend_from_slice(&0u64.to_le_bytes()); // last_usable_lba
+    b.extend_from_slice(&0u32.to_le_bytes()); // 搬移项数
+    b.extend_from_slice(&0u32.to_le_bytes()); // cur_index
+    b.extend_from_slice(&0u64.to_le_bytes()); // chunks_done
+    b.extend_from_slice(&512u64.to_le_bytes()); // chunk_bytes
+    b.push(0); // kind
+    b.extend_from_slice(&0u64.to_le_bytes()); // fp.dev
+    b.extend_from_slice(&0u64.to_le_bytes()); // fp.ino
+    b.extend_from_slice(&size.to_le_bytes()); // fp.size
+    b.extend_from_slice(&0u64.to_le_bytes()); // fp.id
+    b.push(0); // 无映射区间
+    b.push(2); // 身份种类：inode
+    let crc = crc::Crc::<u32>::new(&crc::CRC_32_ISO_HDLC).checksum(&b);
+    b.extend_from_slice(&crc.to_le_bytes());
+    b
+}
+
+/// 一份身份可读、CRC 完整的 DKECKPT2（resize）现场，指纹取给定大小。
+/// 尾部顺序：fp / map / FS 类型码 / 身份种类 / CRC
+fn foreign_resize_checkpoint(size: u64) -> Vec<u8> {
+    let mut b = Vec::new();
+    b.extend_from_slice(b"DKECKPT2");
+    b.extend_from_slice(&8u32.to_le_bytes());
+    b.push(0); // 无 LVM 收尾事实
+    b.extend_from_slice(&size.to_le_bytes()); // disk_size
+    b.extend_from_slice(&512u64.to_le_bytes()); // ss
+    b.extend_from_slice(&1u32.to_le_bytes()); // part
+    b.extend_from_slice(&2048u64.to_le_bytes()); // old_start
+    b.extend_from_slice(&4095u64.to_le_bytes()); // old_end
+    b.extend_from_slice(&2048u64.to_le_bytes()); // new_start
+    b.extend_from_slice(&4095u64.to_le_bytes()); // new_end
+    b.push(0); // fs_shrunk
+    b.extend_from_slice(&0u64.to_le_bytes()); // chunks_done
+    b.extend_from_slice(&512u64.to_le_bytes()); // chunk_bytes
+    b.extend_from_slice(&0u64.to_le_bytes()); // fp.dev
+    b.extend_from_slice(&0u64.to_le_bytes()); // fp.ino
+    b.extend_from_slice(&size.to_le_bytes()); // fp.size
+    b.extend_from_slice(&0u64.to_le_bytes()); // fp.id
+    b.push(0); // 无映射区间
+    b.push(0); // FS 类型：未识别
+    b.push(2); // 身份种类：inode
+    let crc = crc::Crc::<u32>::new(&crc::CRC_32_ISO_HDLC).checksum(&b);
+    b.extend_from_slice(&crc.to_le_bytes());
+    b
+}
+
+/// 回归：`.abandoned` 名上是**指向原件**的符号链接时，绝不允许顺着链接把原件的最后一个
+/// 删掉。跟随链接的 same-file 判定会把链接与原件判成同一 inode，随后 unlink 原件，只留下
+/// 一条 dangling 链接并报告"已 abandon"。正确结果是把原件改到顺延名，字节一份不少
+#[test]
+fn abandon_never_removes_the_record_through_a_symlink_at_the_destination_name() {
+    let dir = std::env::temp_dir().join(format!("diskedit_ab_link_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let img = dir.join("l.img");
+    std::fs::write(&img, vec![0u8; 8 * 1024 * 1024]).unwrap();
+    let exe = env!("CARGO_BIN_EXE_DiskEdit");
+    let img_s = img.to_str().unwrap();
+    let journal = sidecar(&dir, "l.img", JOURNAL_SUFFIX);
+    let run = |args: &[&str]| -> (i32, String, String) {
+        let out = Command::new(exe).args(args).output().unwrap();
+        (
+            out.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        )
+    };
+
+    let (c, _, e) = run(&["new", img_s, "--yes"]);
+    assert_eq!(c, 0, "{e}");
+    let (c, _, e) = run(&["add", img_s, "--start", "2048", "--end", "4095"]);
+    assert_eq!(c, 0, "{e}");
+    let (c, _, e) = run(&["create", img_s, "--size", "1M", "--fs", "xfs", "--yes"]);
+    assert_eq!(c, 20, "the partial operation must leave a journal: {e}");
+    let before = std::fs::read(&journal).unwrap();
+
+    let j_abandoned = dir.join(format!("l.img{JOURNAL_SUFFIX}{ABANDONED_SUFFIX}"));
+    std::os::unix::fs::symlink(&journal, &j_abandoned).unwrap();
+
+    let (c, o, e) = run(&["abandon", img_s, "--yes"]);
+    assert_eq!(c, 0, "abandon must fall back to a free name: {e}");
+    assert!(o.contains("abandoned 1 recovery record(s)"), "{o}");
+    assert!(!journal.exists(), "the record must leave its active name");
+    assert!(std::fs::symlink_metadata(&j_abandoned).unwrap().file_type().is_symlink(), "the link entry is untouched");
+    assert_eq!(
+        std::fs::read(dir.join(format!("l.img{JOURNAL_SUFFIX}{ABANDONED_SUFFIX}.2"))).unwrap(),
+        before,
+        "the record's bytes must survive on the fallback name"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// 回归：checkpoint 落点是 dangling 符号链接时，它是"存在但不是恢复文件"，不是"无现场"。
+/// 跟随链接的判据把 NotFound 折成 false，undo 会直接回放并删掉 journal；正确行为是在任何
+/// 写回之前拒绝，journal 与链接一字不动
+#[test]
+fn undo_refuses_a_dangling_checkpoint_symlink_before_replaying() {
+    let dir = std::env::temp_dir().join(format!("diskedit_undo_dangling_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let img = dir.join("d.img");
+    std::fs::write(&img, vec![0u8; 8 * 1024 * 1024]).unwrap();
+    let exe = env!("CARGO_BIN_EXE_DiskEdit");
+    let img_s = img.to_str().unwrap();
+    let journal = sidecar(&dir, "d.img", JOURNAL_SUFFIX);
+    let ckpt = sidecar(&dir, "d.img", CHECKPOINT_SUFFIX);
+    let run = |args: &[&str]| -> (i32, String, String) {
+        let out = Command::new(exe).args(args).output().unwrap();
+        (
+            out.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        )
+    };
+
+    let (c, _, e) = run(&["new", img_s, "--yes"]);
+    assert_eq!(c, 0, "{e}");
+    let (c, _, e) = run(&["add", img_s, "--start", "2048", "--end", "4095"]);
+    assert_eq!(c, 0, "{e}");
+    let (c, _, e) = run(&["create", img_s, "--size", "1M", "--fs", "xfs", "--yes"]);
+    assert_eq!(c, 20, "the partial operation must leave a journal: {e}");
+    let before = std::fs::read(&journal).unwrap();
+
+    let _ = std::fs::remove_file(&ckpt);
+    std::os::unix::fs::symlink(dir.join("missing-checkpoint-target"), &ckpt).unwrap();
+
+    let (c, _, e) = run(&["undo", img_s, "--yes"]);
+    assert_eq!(c, 10, "a foreign checkpoint slot must be refused, not treated as absent: {e}");
+    assert!(e.contains("dangling symbolic link"), "{e}");
+    assert!(e.contains("not a recovery file"), "{e}");
+    assert_eq!(std::fs::read(&journal).unwrap(), before, "the journal must be byte-identical");
+    assert!(std::fs::symlink_metadata(&ckpt).unwrap().file_type().is_symlink(), "the link entry is untouched");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// 回归：checkpoint 落点的符号链接指向一个普通文件时，存活判定不得跟随链接把目标当成
+/// 可续跑的现场。静态判据只有一种：落点本身不是恢复文件。目标字节与链接都必须原样保留
+#[test]
+fn gate_does_not_treat_a_symlinked_checkpoint_as_a_live_scene() {
+    let dir = std::env::temp_dir().join(format!("diskedit_gate_link_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let img = dir.join("g.img");
+    std::fs::write(&img, vec![0u8; 8 * 1024 * 1024]).unwrap();
+    let exe = env!("CARGO_BIN_EXE_DiskEdit");
+    let img_s = img.to_str().unwrap();
+    let ckpt = sidecar(&dir, "g.img", CHECKPOINT_SUFFIX);
+    let run = |args: &[&str]| -> (i32, String, String) {
+        let out = Command::new(exe).args(args).output().unwrap();
+        (
+            out.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        )
+    };
+
+    let (c, _, e) = run(&["new", img_s, "--yes"]);
+    assert_eq!(c, 0, "{e}");
+    let (c, _, e) = run(&["add", img_s, "--start", "2048", "--end", "4095"]);
+    assert_eq!(c, 0, "{e}");
+
+    let elsewhere = dir.join("elsewhere.bin");
+    std::fs::write(&elsewhere, b"bytes that must survive").unwrap();
+    std::os::unix::fs::symlink(&elsewhere, &ckpt).unwrap();
+
+    let (c, _, e) = run(&["add", img_s, "--start", "6144", "--end", "8191"]);
+    assert_eq!(c, 30, "a foreign entry still occupies the slot: {e}");
+    assert!(e.contains("symbolic link"), "the refusal must name the shape: {e}");
+    assert!(e.contains("not a recovery file"), "the refusal must not claim a live scene: {e}");
+    assert_eq!(std::fs::read(&elsewhere).unwrap(), b"bytes that must survive", "the link target keeps its bytes");
+    assert!(std::fs::symlink_metadata(&ckpt).unwrap().file_type().is_symlink(), "the link entry is untouched");
 
     let _ = std::fs::remove_dir_all(&dir);
 }
