@@ -1,6 +1,8 @@
 //! 表类型决策：GPT/MBR 的目标分区与设备路径。
 
 use super::*;
+#[cfg(target_os = "linux")]
+use crate::cli::SizeSpec;
 
 /// PV / --grow-lv 的事前判据：与表类型无关，故 GPT 与 MBR 两条 resize 路径共用一份。
 /// 两条判据都必须落在任何写盘之前——PV 缩容链恰好与扩容反向：先 lvreduce -r 缩 LV
@@ -8,29 +10,29 @@ use super::*;
 /// 只管最后一步，前两步留给用户，否则先改表会留下"分区已缩、PV 元数据未动"的不一致
 pub(crate) fn check_pv_intent(
     part: u32,
-    fstype: Option<fsid::FsKind>,
+    fstype: Option<fsid::ContentKind>,
     is_pv: bool,
     shrinking: bool,
     grow_lv: bool,
     no_fs: bool,
-) -> Result<(), crate::outcome::Fail> {
+) -> Result<(), crate::outcome::RunOutcome> {
     // PV 链（pvresize/lvextend -r）没有可跳过的"分区文件系统步"：旗标在此整条链
     // 都无消费点，静默照跑即命令做了旗标明确排除的事却报成功
     if is_pv && no_fs {
-        return Err(crate::outcome::Fail::refused(
+        return Err(crate::outcome::RunOutcome::refused(
             "--no-fs has no effect on an LVM PV — the partition holds no filesystem of its own; drop --no-fs".to_string(),
         ));
     }
     if is_pv {
         if shrinking {
-            return Err(crate::outcome::Fail::refused(
+            return Err(crate::outcome::RunOutcome::refused(
                 "shrinking an LVM PV needs the lvreduce/pvresize chain — do it manually (see pvresize(8))",
             ));
         }
     } else if grow_lv {
-        return Err(crate::outcome::Fail::refused(format!(
+        return Err(crate::outcome::RunOutcome::refused(format!(
             "partition {part} is not an LVM PV (identified as {}) — --grow-lv needs a PV",
-            fsid::fs_name(fstype)
+            fsid::content_name(fstype.unwrap_or(fsid::ContentKind::Unknown))
         )));
     }
     Ok(())
@@ -42,12 +44,12 @@ pub(crate) fn check_pv_intent(
 /// 定位目标，锁下重解析 `:last` 会指向另一个分区、把某个分区的尺寸算到另一个分区头上；
 /// 该分区在锁下已消失/清空则由 `live_entry` 拒绝
 #[cfg(target_os = "linux")]
-pub(crate) fn gpt_decider<'a>(
+pub(crate) fn gpt_decider(
     yes: bool,
-    size: Option<&'a str>,
+    size: SizeSpec,
     part: u32,
     is_pv: bool,
-) -> impl FnOnce(&FileSource) -> Result<Option<u64>, Fail> + 'a {
+) -> impl FnOnce(&FileSource) -> Result<Option<u64>, RunOutcome> {
     online_size(yes, size, is_pv, move |disk| {
         let (g, _repair) = crate::gpt_policy::require_gpt_geometry(disk, "resize")?;
         let e = crate::gpt_policy::live_entry(&g, part)?;
@@ -58,7 +60,7 @@ pub(crate) fn gpt_decider<'a>(
             .last_usable_lba()
             .checked_sub(e.starting_lba)
             .and_then(|n| n.checked_add(1))
-            .ok_or_else(|| Fail::infra("usable-range arithmetic overflow".to_string()))?;
+            .ok_or_else(|| RunOutcome::no_mutation("usable-range arithmetic overflow".to_string()))?;
         Ok((g.sector_size(), cur, free_right_gpt(&g, part), Some(max_len)))
     })
 }
@@ -67,18 +69,18 @@ pub(crate) fn gpt_decider<'a>(
 /// 空闲上界由 32 位 LBA 上限与后继条目界定（见 `free_right_msdos`）。
 /// `part` 同 `gpt_decider`：锁前解析出的分区号，锁下不再重解释选择器
 #[cfg(target_os = "linux")]
-pub(crate) fn mbr_decider<'a>(
+pub(crate) fn mbr_decider(
     yes: bool,
-    size: Option<&'a str>,
+    size: SizeSpec,
     part: u32,
     is_pv: bool,
-) -> impl FnOnce(&FileSource) -> Result<Option<u64>, Fail> + 'a {
+) -> impl FnOnce(&FileSource) -> Result<Option<u64>, RunOutcome> {
     online_size(yes, size, is_pv, move |disk| {
         let mbr = table::parse_mbr(disk)
-            .map_err(|e| Fail::infra(format!("parse failed: {e}")))?
-            .ok_or_else(|| Fail::refused("no MBR on target".to_string()))?;
+            .map_err(|e| crate::outcome::mbr_parse_failure(&e, format!("parse failed: {e}")))?
+            .ok_or_else(|| RunOutcome::refused("no MBR on target".to_string()))?;
         let p = mbr.iter().find(|p| p.num == part)
-            .ok_or_else(|| Fail::refused(format!("partition {part} not found (MBR resize covers primary partitions 1..4 only)")))?;
+            .ok_or_else(|| RunOutcome::refused(format!("partition {part} not found (MBR resize covers primary partitions 1..4 only)")))?;
         let ss = disk.sector_size;
         Ok((ss, lba_bytes(p.size_lba as u64, ss), free_right_msdos(&mbr, p, disk.size / ss), None))
     })

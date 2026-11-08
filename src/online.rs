@@ -51,7 +51,8 @@ pub(crate) use faults::*;
 pub(crate) use api::*;
 
 use crate::dev::FileSource;
-use crate::outcome::{Fail, Outcome, Pending, PendingKind};
+use crate::fsid::{ContentKind, FsKind};
+use crate::outcome::{RunOutcome, Pending, PendingKind};
 use std::fs;
 use std::io;
 use std::os::linux::fs::MetadataExt;

@@ -1,37 +1,57 @@
-//! 命令层共用的支撑件：进程退出出口、目标打开/journal、几何与对齐助手、GUID/JSON 编解码。
+//! 命令层共用的支撑件：进程退出出口、目标打开/记录、几何与对齐助手、GUID/JSON 编解码。
 //! 退出码常量的唯一定义在 outcome 模块，此处重导出给命令层，避免两套常量各自漂移
 
-pub(crate) use crate::outcome::{Fail, EXIT_OK, EXIT_REFUSED};
+pub(crate) use crate::outcome::{RunOutcome, EXIT_OK};
 
-use crate::args::Args;
-use crate::dev::{FileSource, PartSelector, WriteSource};
+use crate::cli::{ChunkRequest, TargetRequest};
+use crate::dev::{FileSource, WriteSource};
 use crate::geometry::ValidatedGeometry;
-use crate::transaction::{ResumeKind, TableIdentity, TransactionManager};
+use crate::recovery::TransactionManager;
 use crate::{movepart, table};
 
 #[cfg(test)]
 use crate::dev; // 只有测试夹具 src_from 用得到
 
 /// 规划/执行失败的出口：报告文字与退出码都取自 outcome（唯一措辞与唯一映射），
-/// 调用点不得自行拼装。**本模块不提供"带裸退出码的退出"**——那会绕开 Outcome::report
+/// 调用点不得自行拼装。**本模块不提供"带裸退出码的退出"**——那会绕开 RunOutcome::report
 /// 的措辞与 exit_code 的映射，正是 10/20/30 语义分裂的入口
-pub(crate) fn bail_fail(f: crate::outcome::Fail) -> ! {
-    // 把失败折叠成 CLI 结果走 `Fail::into_outcome`（映射的唯一处），不借 `finish`——
-    // 那是"结束一次操作"的入口，而这里没有任何要收尾的 pending
-    let o = f.into_outcome();
-    // 10 只说明目标盘没被写；本次运行若已在打开阶段归档并截掉了 journal 的撕裂尾，
-    // 那句拒绝不能把恢复文件已发生的改动说成没发生过。20/30 时目标盘可能已写，同一句话
-    // 不成立，故只随拒绝打印
-    if o.exit_code() == EXIT_REFUSED
-        && let Some(note) = crate::transaction::pending_journal_tail_note()
-    {
-        eprintln!("{note}");
-    }
-    o.report();
-    std::process::exit(o.exit_code() as i32);
+pub(crate) fn bail_fail(f: crate::outcome::RunOutcome) -> ! {
+    // 报告文字与退出码都取自 outcome，不借 `finish`——那是"结束一次操作"的入口，
+    // 而这里没有任何要收尾的 pending
+    f.report();
+    std::process::exit(f.exit_code() as i32);
 }
 
-/// 日志：落点由目标身份派生（见 `dev::TargetIdentity::log_path`）；日志只增、不参与恢复
+/// 持久日志的单文件上限：打开时已有日志达到这个长度就轮转一代
+const LOG_MAX_BYTES: u64 = 8 * 1024 * 1024;
+
+/// 轮转一代：已有日志达到上限时整份改名为同名加 `.1`，原有的 `.1` 被覆盖。
+/// 打开点都在取得目标锁之后，同一目标不存在第二个进程同时轮转
+fn rotate_log_if_oversized(path: &std::path::Path) {
+    let oversized = std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.len() >= LOG_MAX_BYTES);
+    if !oversized {
+        return;
+    }
+    let mut name = path.as_os_str().to_os_string();
+    name.push(".1");
+    let rotated = std::path::PathBuf::from(name);
+    if std::fs::rename(path, &rotated).is_ok() {
+        return;
+    }
+    // Windows 的 rename 不覆盖已存在的目标：先删旧代再改名。锁内无并发轮转
+    if let Err(e) = std::fs::remove_file(&rotated)
+        && e.kind() != std::io::ErrorKind::NotFound
+    {
+        eprintln!("warning: persistent log rotation failed ({e}) — appending to the existing log");
+        return;
+    }
+    if let Err(e) = std::fs::rename(path, &rotated) {
+        eprintln!("warning: persistent log rotation failed ({e}) — appending to the existing log");
+    }
+}
+
+/// 日志：落点由目标身份派生（见 `dev::TargetIdentity::log_path`）；单个文件内只追加、
+/// 打开时按 [`LOG_MAX_BYTES`] 轮转一代，不参与恢复
 pub(crate) struct Logger {
     file: Option<std::fs::File>,
 }
@@ -42,6 +62,7 @@ impl Logger {
     pub(crate) fn open(src: &FileSource, guid: Option<[u8; 16]>) -> Self {
         let guid = if src.is_block { guid } else { None };
         let path = src.identity.log_path(guid);
+        rotate_log_if_oversized(&path);
         let file = std::fs::OpenOptions::new().create(true).append(true).open(path).ok();
         if file.is_none() {
             // 落盘失败不静默：用户需知日志只进 stdout
@@ -70,8 +91,8 @@ fn best_effort_unix_secs() -> u64 {
 
 /// chunk 大小 + 持久日志的成对构造（搬移/拷贝类命令共用）。
 /// `guid` 来自调用方已解析的几何（见 `Logger::open`）
-pub(crate) fn chunk_logger(a: &Args, src: &FileSource, guid: [u8; 16]) -> (u64, Logger) {
-    let chunk = movepart::chunk_bytes(a.chunk_mib).unwrap_or_else(|e| bail_fail(Fail::refused(e.to_string())));
+pub(crate) fn chunk_logger(a: &impl ChunkRequest, src: &FileSource, guid: [u8; 16]) -> (u64, Logger) {
+    let chunk = movepart::chunk_bytes(a.chunk_mib()).unwrap_or_else(|e| bail_fail(RunOutcome::refused(e.to_string())));
     (chunk, Logger::open(src, Some(guid)))
 }
 
@@ -84,6 +105,18 @@ pub(crate) fn hex_guid(b: &[u8; 16]) -> String {
         "{d1:08X}-{d2:04X}-{d3:04X}-{:02X}{:02X}-{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}",
         b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15]
     )
+}
+
+/// 小写十六进制（无分隔）：记录标识、场景标识与 magic 的文本形态。
+/// 四个模块曾各写一份，其中两处用 `let _ = write!` 丢弃返回，被 crate 自己的
+/// `let_underscore_must_use = "deny"` 拦住——这里用 nibble 直接拼，没有可丢的返回值
+pub(crate) fn hex_lower(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push(char::from_digit(u32::from(byte >> 4), 16).expect("a nibble is a hex digit"));
+        out.push(char::from_digit(u32::from(byte & 0x0f), 16).expect("a nibble is a hex digit"));
+    }
+    out
 }
 
 /// JSON 字符串转义：引号、反斜杠、换行/回车/制表符及全部 <0x20 控制字符（RFC 8259）
@@ -129,57 +162,47 @@ pub(crate) fn parse_os_type(s: &str) -> Option<u8> {
     u8::from_str_radix(hex, 16).ok()
 }
 
-// 目标怎么打开、所有权怎么取、事务怎么开与提交，全部归 `transaction::TransactionManager`。
+// 目标怎么打开、所有权怎么取、事务怎么开与提交，全部归 `recovery::TransactionManager`。
 // 这里只给命令层惯用的入口名，并把"哪一类命令可以接着做未完成的作业"这一条规则写成闭包
 
-/// 会留下 durable history 的写事务（add/delete/set/resize/create/mkfs/apply…）
-pub(crate) fn open_target_for_write(a: &Args) -> Result<WriteSource, crate::outcome::Fail> {
-    TransactionManager::begin(a)
+/// 表类写命令（`new` / `add` / `delete` / `copy` / `set` / `mkfs`）的打开：写路径挂
+/// 单文件恢复记录，不建旧 journal
+pub(crate) fn open_table_record(
+    a: &impl TargetRequest,
+    op: crate::recovery::OpKind,
+) -> Result<WriteSource, crate::outcome::RunOutcome> {
+    TransactionManager::begin_table_record(a, op)
 }
 
-/// `new` 的打开：本次会写出整张表，表身份由本操作产生（见 [`TableIdentity::Produced`]）
-pub(crate) fn open_target_for_new_table(a: &Args) -> Result<WriteSource, crate::outcome::Fail> {
-    TransactionManager::begin_replacing_table(a)
+/// 记录从未落盘 ⇒ 本次事务没有向目标写过任何字节。`write_at` 报出的 io 失败可据此
+/// 还原成"未写盘的拒绝"，而不是"盘可能已改变"
+pub(crate) fn record_never_persisted(src: &WriteSource) -> Option<String> {
+    let journal = src.record_journal()?;
+    if journal.is_persisted() {
+        return None;
+    }
+    journal.last_error().map(str::to_string)
 }
 
-/// 数据搬移类命令的打开（resize-part / move）：目标上已有 checkpoint 时以显式续跑
-/// 进入同一事务，否则开新事务。返回是否按续跑进入。
-///
-/// 接受态是"存在任意 checkpoint"（[`ResumeClaim::AnyCheckpoint`]），不细分是哪个分区
-/// ——这些命令本就把 ckpt 交给 `movepart::resize_part` / `copy_part` 比对，是否属于
-/// 同一件事由领域层的恢复校验裁（不匹配即 `Divergent`）
-pub(crate) fn open_target_for_data_move(
-    a: &Args,
-) -> Result<(WriteSource, bool), crate::outcome::Fail> {
-    TransactionManager::begin_or_resume(a, ResumeClaim::AnyCheckpoint, TableIdentity::Preserved)
-        .map(|(src, kind)| (src, kind != ResumeKind::Fresh))
+/// `resize` 的写入打开：判据是**锁下**那份目标上还有什么现场，不靠打开前的只读预判。
+/// 返回进入现场（[`ResizeEntry`]）。单分区 resize 与搬移作业共用同一份记录
+pub(crate) fn open_target_resize(
+    a: &impl TargetRequest,
+) -> Result<(WriteSource, crate::recovery::ResizeEntry), crate::outcome::RunOutcome> {
+    TransactionManager::begin_resize(a)
 }
 
-/// 搬移收尾类命令（`resize`）的打开：判据是**锁下**的那份目标上还有没有自己分区的
-/// 未收尾作业（[`ResumeClaim::ResizeOrRelocation`] → `relocation_ownership` /
-/// `partition_resize_ownership`），不靠打开前的只读预判。返回续跑族（[`ResumeKind`]）：
-/// resize 要拿它决定 grow 分支（两族作业的进入语义不同）。
-///
-/// 槽位被别的分区的作业占着时，领域层直接给出拒绝理由：那种情形下本命令既不能当空槽
-/// （会覆盖别人的现场），也不能按别人的 ckpt 续跑，通用的 busy 文案说不出这一点
-pub(crate) fn open_target_resize_resumable(
-    a: &Args,
-    grow_part: PartSelector,
-) -> Result<(WriteSource, ResumeKind), crate::outcome::Fail> {
-    TransactionManager::begin_or_resume(a, ResumeClaim::ResizeOrRelocation(grow_part), TableIdentity::Preserved)
+/// 搬移类命令（`move`）的记录型打开：落点上是本命令的完整记录时按续跑进入。
+/// 返回是否按续跑进入——领域层仍要自己按盘面与请求核对，这里只负责"用哪份现场"
+pub(crate) fn open_record_resumable(
+    a: &impl TargetRequest,
+    op: crate::recovery::OpKind,
+) -> Result<(WriteSource, bool), crate::outcome::RunOutcome> {
+    TransactionManager::begin_table_record_resume(a, op)
 }
 
-/// `apply` / `plan` 的打开：只认本分区的搬移作业。单分区 resize 的现场（`RsCheckpoint`）
-/// 归 `resize` 的收尾链，本入口不给它续跑——按 busy 拒绝，由用户重跑发起它的那条命令
-pub(crate) fn open_target_resumable(
-    a: &Args,
-    grow_part: PartSelector,
-) -> Result<(WriteSource, ResumeKind), crate::outcome::Fail> {
-    TransactionManager::begin_or_resume(a, ResumeClaim::OwnRelocation(grow_part), TableIdentity::Preserved)
-}
-
-/// 只持有所有权、不建 journal 的写事务（undo / check / resizefs）
-pub(crate) fn open_target_owned(a: &Args) -> Result<WriteSource, crate::outcome::Fail> {
+/// 只持有所有权、不建记录的写事务（undo / check）
+pub(crate) fn open_target_owned(a: &impl TargetRequest) -> Result<WriteSource, crate::outcome::RunOutcome> {
     TransactionManager::begin_without_history(a)
 }
 
@@ -194,13 +217,13 @@ fn best_effort_log_write(f: &mut std::fs::File, line: &str) {
 /// 表类写命令成功后通知内核重读分区表（BLKRRPART）。
 /// 返回 false = 内核视图未跟进：盘上表已写成功 ≠ 内核 partition view 已同步，
 /// 后续不得依赖旧的内核几何（实际状态以 /sys/block/<dev>/<part>/size 为准）。
-/// 只探测不打印——"内核视图过期"的措辞由 Outcome::report 一处输出
+/// 只探测不打印——"内核视图过期"的措辞由 RunOutcome::report 一处输出
 #[cfg(target_os = "linux")]
 pub(crate) fn kernel_resync(src: &FileSource) -> bool {
     if !src.is_block {
         return true;
     }
-    // 本层只取"过期与否"：stale 的用户文案是固定句（见 Outcome::report），不携带 errno
+    // 本层只取"过期与否"：stale 的用户文案是固定句（见 RunOutcome::report），不携带 errno
     src.reread_partitions().is_ok()
 }
 
@@ -216,7 +239,7 @@ pub(crate) fn kernel_resync(src: &FileSource) -> bool {
 /// 布局类命令的统一收尾：内核重读分区表 → 把内核视图状态记入结果 → 报告 → 返回结果。
 /// 顺序不可换：report 必须在 resync 之后，否则打不出"内核视图过期"这一项；
 /// 未写盘的命令不做重读（没东西要同步）
-pub(crate) fn settle_layout(mut o: crate::outcome::Outcome, src: &FileSource) -> crate::outcome::Outcome {
+pub(crate) fn settle_layout(mut o: crate::outcome::RunOutcome, src: &FileSource) -> crate::outcome::RunOutcome {
     if o.has_layout_write() && !kernel_resync(src) {
         o.mark_kernel_stale();
     }
@@ -225,10 +248,10 @@ pub(crate) fn settle_layout(mut o: crate::outcome::Outcome, src: &FileSource) ->
 }
 
 /// 表类写命令的成功收尾：内核重读 + 报告，仅当后置条件全部满足时才打印成功字样
-/// （内核视图过期时退 20，此时打"成功"会与退出码矛盾）。返回结果而不压成码：
+/// （内核视图过期时退 5，此时打"成功"会与退出码矛盾）。返回结果而不压成码：
 /// "已应用但待办非空"与"仅内核视图过期"对撤销窗口的去留结论不同
-pub(crate) fn table_write_done(src: &FileSource, ok_msg: &str) -> crate::outcome::Outcome {
-    let o = settle_layout(crate::outcome::Outcome::applied_with(Vec::new()), src);
+pub(crate) fn table_write_done(src: &FileSource, ok_msg: &str) -> crate::outcome::RunOutcome {
+    let o = settle_layout(crate::outcome::RunOutcome::applied_with(Vec::new()), src);
     // 用语义判断而不是比退出码：比数字会把"部分完成"误判成成功，而且数字的含义
     // 只在 outcome 一处解释得清
     if o.is_complete() {
@@ -237,10 +260,55 @@ pub(crate) fn table_write_done(src: &FileSource, ok_msg: &str) -> crate::outcome
     o
 }
 
-/// 已应用结果的成功措辞：**整体成功**文案只在 [`crate::outcome::Outcome::is_complete`] 为真时
-/// 打印，仍有待办时改报"这一步已完成"——两者共用同一句会让退出码 20 与文案矛盾。
+/// 搬移类命令的收尾：结果完整才提交并删除记录，否则把记录留在落点上当下一次续跑点。
+///
+/// 与 [`table_record_done`] 的区别只在这一处判定：`add` / `delete` 的待办只可能是
+/// 内核重读，记录删了也不影响续跑；搬移的待办（FS 收尾、工具步骤）还没做完，
+/// 删掉记录就再也不知道搬到哪、搬到第几块了
+pub(crate) fn table_record_done_if_complete(
+    src: &mut WriteSource,
+    o: crate::outcome::RunOutcome,
+) -> crate::outcome::RunOutcome {
+    let o = if o.is_complete() {
+        match src.take_record_journal() {
+            Some(journal) => match journal.commit_and_discard() {
+                Ok(()) => o,
+                Err(e) => o.degrade_partial(format!(
+                    "the recovery record was not cleaned up ({e}) — release it with `diskedit abandon`"
+                )),
+            },
+            None => o,
+        }
+    } else {
+        o
+    };
+    settle_layout(o, src)
+}
+
+/// 挂单文件记录的写命令的成功收尾：先提交并删除记录，再报告与内核重读。
+///
+/// 记录没删除成功时本次运行仍有待办（下一轮会把目标顶成 busy），结果据此降级，
+/// 成功字样不打印
+pub(crate) fn table_record_done(src: &mut WriteSource, ok_msg: &str) -> crate::outcome::RunOutcome {
+    let mut o = crate::outcome::RunOutcome::applied_with(Vec::new());
+    if let Some(journal) = src.take_record_journal()
+        && let Err(e) = journal.commit_and_discard()
+    {
+        o = o.degrade_partial(format!(
+            "the recovery record was not cleaned up ({e}) — release it with `diskedit abandon`"
+        ));
+    }
+    let o = settle_layout(o, src);
+    if o.is_complete() {
+        println!("{ok_msg}");
+    }
+    o
+}
+
+/// 已应用结果的成功措辞：**整体成功**文案只在 [`crate::outcome::RunOutcome::is_complete`] 为真时
+/// 打印，仍有待办时改报"这一步已完成"——两者共用同一句会让退出码 5 与文案矛盾。
 /// 只发措辞、不报告：待办仍由调用方的 `report()` 呈现
-pub(crate) fn announce_applied<F, G>(o: &crate::outcome::Outcome, ok_msg: F, step_msg: G)
+pub(crate) fn announce_applied<F, G>(o: &crate::outcome::RunOutcome, ok_msg: F, step_msg: G)
 where
     F: FnOnce() -> String,
     G: FnOnce() -> String,
@@ -259,17 +327,11 @@ pub(crate) fn mib_in_sectors(ss: u64) -> u64 {
     (1024u64 * 1024).checked_div(ss).unwrap_or(0).max(1)
 }
 
-/// 对齐单位（LBA 所属表的扇区数）。mib = 1MiB 折算成表内扇区；cyl = 255 头 × 63 扇区 =
-/// 16065 扇区/柱面（BIOS INT 13h 虚拟几何，即 fdisk 的 "cylinders of 16065 * 512"）；
-/// none = 不对齐。`table_ss` 必须是 **LBA 所属表的**扇区大小：GPT 条目按表头记录的 ss
+/// 对齐单位（LBA 所属表的扇区数）。mib = 1MiB 折算成表内扇区；none = 不对齐。
+/// `table_ss` 必须是 **LBA 所属表的**扇区大小：GPT 条目按表头记录的 ss
 /// 解释（可与容器 ss 不同，如 4Kn 表放在 512e 容器），按容器 ss 折算会把边界整体错位
-pub(crate) fn align_unit(a: &Args, table_ss: u64) -> Option<u64> {
-    match a.align.as_str() {
-        "none" => None,
-        "mib" => Some(mib_in_sectors(table_ss)),
-        "cyl" => Some(16065),
-        other => bail_fail(Fail::refused(format!("invalid --align {other:?} (mib|cyl|none)"))),
-    }
+pub(crate) fn align_unit(align: crate::domain::Align, table_ss: u64) -> Option<u64> {
+    align.unit_sectors(table_ss)
 }
 
 /// 对齐上取整（乘法全程 checked，s 逼近 u64::MAX 时回绕会伪造从 0 起的伪区间）。
@@ -283,37 +345,32 @@ fn floor_align(v: u64, unit: u64) -> u64 {
     v.saturating_add(1) / unit * unit
 }
 
-/// 对齐（选项名同 parted --align）：start 上取整、end 下取整；对齐后区间为空即拒绝。
-/// 乘法全程 checked：--start 由 CLI 原始输入落 u64，s 逼近 u64::MAX 时
-/// `div_ceil * unit` 会静默回绕，把无法对齐的区间伪造成从 0 起的伪区间
-/// （与 aligned_gaps 的 s 侧同一防线）
-pub(crate) fn align_range(a: &Args, start: u64, end: u64, table_ss: u64) -> (u64, u64) {
-    let Some(unit) = align_unit(a, table_ss) else { return (start, end) };
-    let s = ceil_align(start, unit)
-        .unwrap_or_else(|| bail_fail(Fail::refused(format!("start {start} overflows the LBA range when aligned to {}", a.align))));
+/// 只对末端下取整（resize-part 不改起点）：起点按下取整后的末端校验区间非空
+pub(crate) fn align_end(align: crate::domain::Align, start: u64, end: u64, table_ss: u64) -> u64 {
+    let Some(unit) = align_unit(align, table_ss) else { return end };
     let e1 = floor_align(end, unit);
-    if e1 == 0 || s > e1 - 1 {
-        bail_fail(Fail::refused(format!("range {start}..{end} is empty after {} alignment", a.align)));
+    if e1 == 0 || start > e1 - 1 {
+        bail_fail(RunOutcome::refused(format!("range {start}..{end} is empty after {align} alignment")));
     }
-    if s != start || e1 - 1 != end {
-        eprintln!("aligned to {}: {start}..{end} -> {s}..{}", a.align, e1 - 1);
+    if e1 - 1 != end {
+        eprintln!("aligned to {align}: end {end} -> {}", e1 - 1);
     }
-    (s, e1 - 1)
+    e1 - 1
 }
 
 /// 起点上取整（copy 的 --start 只有起点语义，长度继承源分区）。checked 同 align_range
-pub(crate) fn align_start(a: &Args, start: u64, table_ss: u64) -> u64 {
-    let Some(unit) = align_unit(a, table_ss) else { return start };
+pub(crate) fn align_start(align: crate::domain::Align, start: u64, table_ss: u64) -> u64 {
+    let Some(unit) = align_unit(align, table_ss) else { return start };
     let s = ceil_align(start, unit)
-        .unwrap_or_else(|| bail_fail(Fail::refused(format!("start {start} overflows the LBA range when aligned to {}", a.align))));
+        .unwrap_or_else(|| bail_fail(RunOutcome::refused(format!("start {start} overflows the LBA range when aligned to {align}"))));
     if s != start {
-        eprintln!("aligned to {}: {start} -> {s}", a.align);
+        eprintln!("aligned to {align}: {start} -> {s}");
     }
     s
 }
 
 /// 只读命令的打开（info / plan / resize 的只读阶段）：不取所有权
-pub(crate) fn open_target_ro(a: &Args) -> Result<FileSource, crate::outcome::Fail> {
+pub(crate) fn open_target_ro(a: &impl TargetRequest) -> Result<FileSource, crate::outcome::RunOutcome> {
     TransactionManager::read_only(a)
 }
 
@@ -323,7 +380,7 @@ pub(crate) fn open_target_ro(a: &Args) -> Result<FileSource, crate::outcome::Fai
 /// 数据、要么把整盘偏移的字节写进分区
 pub(crate) fn refuse_partition_node_target(cmd: &str, target: &str) {
     if crate::dev::target_is_partition_node(std::path::Path::new(target)) {
-        bail_fail(Fail::refused(format!(
+        bail_fail(RunOutcome::refused(format!(
             "target is a partition, not a whole disk — `{cmd}` must be given the whole device instead of {target}"
         )));
     }
@@ -335,7 +392,7 @@ pub(crate) fn refuse_partition_node_target(cmd: &str, target: &str) {
 pub(crate) fn check_gpt_name_len(name: &str) {
     let units = name.encode_utf16().count();
     if units > 36 {
-        bail_fail(Fail::refused(format!(
+        bail_fail(RunOutcome::refused(format!(
             "name is {units} UTF-16 code units; a GPT partition name holds at most 36 — refusing rather than truncating"
         )));
     }
@@ -353,24 +410,24 @@ pub(crate) fn note_sector_truncation(action: &str, bytes: u64, ss: u64) {
     }
 }
 
-/// 恢复现场的枚举口径与"未收尾就拒绝"的闸口都在 `transaction`（见 `TransactionManager`）。
+/// 恢复现场的枚举口径与"未收尾就拒绝"的闸口都在 `recovery`（见 `TransactionManager`）。
 /// 这里只转发名字，命令层不必知道它是怎么判的
-pub(crate) use crate::transaction::{active_recovery_records, RecoveryRecord, ResumeClaim};
+pub(crate) use crate::recovery::{active_recovery_records, RecoveryRecord};
 
 /// 在线写盘前声明它的代价：写经系统工具（sfdisk / 各 FS 官方工具），不经过本工具的
-/// journal，也没有 checkpoint。中断后既不能 `undo` 回滚，也不能重跑续跑。
+/// 恢复记录。中断后既不能 `undo` 回滚，也不能重跑续跑。
 /// 打印点放在首次写盘之前而非命令帮助末尾：用户此刻能否改道（先卸载走离线路径）
 /// 取决于是否知道这条事实
 #[cfg(target_os = "linux")]
 pub(crate) fn note_online_no_undo() {
     eprintln!(
-        "note: online write goes through the system tools, not this tool's journal — no checkpoint to resume, \
-         and `undo` cannot roll it back (unmount the partition to take the offline path)"
+        "note: online write goes through the system tools, not this tool's recovery record — nothing to resume \
+         from, and `undo` cannot roll it back (unmount the partition to take the offline path)"
     );
 }
 
-/// 闸口：目标上还留着未收尾的现场 ⇒ 拒绝这次不写 journal 的写盘
-pub(crate) fn refuse_if_pending_recovery(src: &FileSource, what: &str) -> Result<(), Fail> {
+/// 闸口：目标上还留着未收尾的现场 ⇒ 拒绝这次不建记录的写盘
+pub(crate) fn refuse_if_pending_recovery(src: &FileSource, what: &str) -> Result<(), RunOutcome> {
     TransactionManager::refuse_if_active(src, what)
 }
 
@@ -460,51 +517,96 @@ pub(crate) fn aligned_gaps(used: &[(u64, u64)], lo: u64, hi: u64, unit: u64) -> 
         .collect()
 }
 
-/// 成功路径提交事务：关闭它的 active 状态（见 `TransactionManager::commit`）。
-/// 身份取事务开始时记下的那个值，不按命令行路径重新解析
-pub(crate) fn drop_journal() -> bool {
-    let Some(session) = TransactionManager::take_identity() else {
-        return true;
-    };
-    TransactionManager::commit(&session)
-}
-
 /// checked 换算：表项 LBA 来自盘上内容，回绕的字节值会骗过下游的容量判据——溢出按表损坏报
 pub(crate) fn lba_bytes(n_lba: u64, ss: u64) -> u64 {
     n_lba.checked_mul(ss)
-        .unwrap_or_else(|| bail_fail(Fail::infra("LBA × sector-size overflows byte range (corrupted table)")))
+        .unwrap_or_else(|| bail_fail(RunOutcome::no_mutation("LBA × sector-size overflows byte range (corrupted table)")))
 }
 
-/// LBA 区间 [start, end]（含两端）的字节数，同上 checked
+/// LBA 区间 [start, end]（含两端）的字节数，两处换算都走 checked
 pub(crate) fn lba_range_bytes(start: u64, end: u64, ss: u64) -> u64 {
     let n = end.checked_sub(start).and_then(|d| d.checked_add(1))
-        .unwrap_or_else(|| bail_fail(Fail::infra("partition end below start (corrupted table)")));
+        .unwrap_or_else(|| bail_fail(RunOutcome::no_mutation("partition end below start (corrupted table)")));
     lba_bytes(n, ss)
 }
 
+/// 一段盘面字节的 sha256 全值：按 1 MiB 分段读入逐段喂给摘要，输入只有字节本身，
+/// 不拼分区号、长度或扇区大小。读取失败原样上抛，由调用点按"有没有写过目标"落码
+pub(crate) fn range_sha256(src: &FileSource, offset: u64, len: u64) -> std::io::Result<[u8; 32]> {
+    use sha2::{Digest, Sha256};
+    const CHUNK: u64 = 1 << 20;
+    let mut hasher = Sha256::new();
+    let mut buf = vec![0u8; CHUNK as usize];
+    let mut done = 0u64;
+    while done < len {
+        let take = (len - done).min(CHUNK) as usize;
+        let at = offset.checked_add(done).ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, "range digest offset overflows")
+        })?;
+        src.read_at(at, &mut buf[..take])?;
+        hasher.update(&buf[..take]);
+        done += take as u64;
+    }
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&hasher.finalize());
+    Ok(out)
+}
+
 #[cfg(test)]
-pub(crate) fn src_from(tag: &str, data: &[u8]) -> WriteSource {
-    let mut tmp = std::env::temp_dir();
-    tmp.push(format!("diskedit_main_{tag}_{}.img", std::process::id()));
-    std::fs::write(&tmp, data).unwrap();
-    let f = std::fs::OpenOptions::new().read(true).write(true).open(&tmp).unwrap();
-    WriteSource::unowned(FileSource {
-        identity: dev::TargetIdentity::resolve_image(&tmp),
+pub(crate) fn src_from(tag: &str, data: &[u8]) -> crate::testdir::TestSource<WriteSource> {
+    let dir = crate::testdir::test_dir(tag);
+    let path = dir.join("main.img");
+    std::fs::write(&path, data).unwrap();
+    let f = std::fs::OpenOptions::new().read(true).write(true).open(&path).unwrap();
+    let fingerprint = dev::TargetFingerprint::from_file(&f).unwrap();
+    let src = WriteSource::unowned(FileSource {
+        identity: dev::TargetIdentity::resolve_image(&path),
         file: f,
-        path: tmp,
+        path,
         sector_size: 512,
-        size: data.len() as u64,
+        size: fingerprint.size,
         is_block: false,
-        journal: None,
-        fingerprint: Default::default(),
+        record_journal: None,
+        fingerprint,
         loop_mapping: None,
-    })
+        owner: None,
+    });
+    crate::testdir::TestSource::new(dir, src)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::table;
+
+    /// 打开时轮转超限日志：旧内容整份进 `.1`，新文件从 0 开始；再次超限时覆盖已有的
+    /// `.1`（不是接在它后面），新日志同样从 0 开始
+    #[test]
+    fn an_oversized_log_rotates_to_one_generation_on_open() {
+        let src = src_from("log_rotate", b"");
+        let log = src.identity.log_path(None);
+        let mut rotated_name = log.as_os_str().to_os_string();
+        rotated_name.push(".1");
+        let rotated = std::path::PathBuf::from(rotated_name);
+
+        let first_generation = vec![b'a'; (LOG_MAX_BYTES + 1) as usize];
+        std::fs::write(&log, &first_generation).unwrap();
+        let mut logger = Logger::open(&src, None);
+        assert_eq!(std::fs::metadata(&log).unwrap().len(), 0, "the new log starts at 0");
+        assert_eq!(std::fs::read(&rotated).unwrap(), first_generation, "the old log moves to .1 intact");
+        logger.log("first run");
+        let appended = std::fs::read_to_string(&log).unwrap();
+        assert!(appended.contains("first run"), "the new log takes appends after rotation: {appended:?}");
+        drop(logger);
+
+        let second_generation = vec![b'b'; (LOG_MAX_BYTES + 2) as usize];
+        std::fs::write(&log, &second_generation).unwrap();
+        let mut logger = Logger::open(&src, None);
+        assert_eq!(std::fs::metadata(&log).unwrap().len(), 0, "the next rotation starts at 0 again");
+        assert_eq!(std::fs::read(&rotated).unwrap(), second_generation, ".1 is replaced, not appended to");
+        logger.log("second run");
+        drop(logger);
+    }
 
     /// 扇区大小为 0 时两个助手都不得 panic：它们不是校验点，把"盘没有扇区"这件事
     /// 说成一次崩溃（101）会让调用方拿不到任何可读的分类

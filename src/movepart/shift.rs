@@ -1,6 +1,12 @@
-//! 搬移/扩容的执行半程：chunk 拷贝、表项提交与扩容收尾。
+//! `resize --allow-move` 的判定半程与收尾：事前判定（只读）、绑定现场、扩容后的 FS 收尾。
+//!
+//! 写盘不在本模块：搬移、表提交与换区重建都由 [`crate::execution::execute_plan`]
+//! 执行，本模块把判定结论装配成一份计划并交给它。持久状态是恢复记录里的
+//! [`crate::recovery::Relocation`]：有序计划、双游标、块字节、作业语义与几何守卫
+//! 同属一份记录，与 `resize` 的分区层/FS/LVM 收尾共用一个事务号。
 
 use super::*;
+use crate::planner::chunk::move_chunk_layout;
 
 /// 分区已扩、swap 未重建：创建于 32K 页的 swap 在本机（4K 页）激活不了，identify 按
 /// swapon 口径认不出它，但元数据确实是 swap，头里的页数仍是扩前的值——这是一条真实的
@@ -13,7 +19,7 @@ pub(crate) fn swap_rebuild_pending(
     len_bytes: u64,
 ) -> io::Result<Option<Pending>> {
     // 读失败≠"确认存在待办"：Pending 文案断言"本机激活不了"只在探测成功且命中时成立，
-    // 设备 I/O 故障属于另一码事，按故障上抛（调用点都在写盘之后，Failed 的
+    // 设备 I/O 故障属于另一码事，按故障上抛（调用点都在写盘之后，Partial 的
     // "盘可能已改变"警示才是对状态的如实表述）
     if !matches!(crate::fsid::probe_fs(src, base, len_bytes)?.swap, Some(h) if !h.activatable) {
         return Ok(None);
@@ -22,14 +28,13 @@ pub(crate) fn swap_rebuild_pending(
         part,
         PendingKind::Swap,
         "partition grown but the swap area was not rebuilt (its page format is not activatable on this host)",
-        crate::fsops::rescue_hint(Some(FsKind::Swap), &crate::dev::part_dev_hint(src, part, base)),
+        crate::fsops::rescue_hint(Some(ContentKind::Swap), &crate::dev::part_dev_hint(src, part, base)),
     )))
 }
 
 /// 一次搬移事务 = 事前判定（只读）+ 执行（写盘）。
-/// 两半的返回类型不同，这就是 durable boundary 的类型表达：`prepare_apply` 只可能给出
-/// `Refused` / `Infra`（此刻确定未写盘），`execute_apply` 的返回类型里没有 `Fail`，
-/// 因此"写盘之后仍返回 Refused"在那半边**写不出来**。
+/// 判定的返回类型里只有 `Refused` / `NoMutation`（此刻确定未写盘）；执行半程交给
+/// [`crate::execution::execute_plan`]，它的错误分类按"首写之前 / 之后"给出，本函数不再改写。
 /// 几何由调用方解析（一条命令解析一次，往下传），本函数与执行半程都不读表
 #[allow(clippy::too_many_arguments)] // src/几何/计划/chunk/开关/推迟收尾/LV 选择/日志各司其职：合成参数对象只是给 lint 换一层间接
 pub fn apply(
@@ -41,27 +46,50 @@ pub fn apply(
     defer_ckpt: bool,
     lvm: Option<LvmSelection>,
     log: &mut dyn FnMut(&str),
-) -> Outcome {
+) -> RunOutcome {
     // 事务入口的注入点：此刻 abort 必须与"从未运行过"不可区分
     fault_before_any_write();
-    let d = match prepare_apply(src, g, plan, chunk_len, no_fs, defer_ckpt, lvm, log) {
-        Ok(d) => d,
-        Err(f) => return f.into_outcome(),
+    // 记录里的搬移状态是续跑的唯一依据；读两份并持有期结束后再进入判定
+    let (existing_relocation, existing_lvm) = match src.record_journal() {
+        Some(j) => (j.relocation().cloned(), j.lvm_post()),
+        None => (None, None),
     };
-    // 修复虽是写盘，但先于任何目标写入执行；放在 Fail 域是为了保住分类：
-    // 其读表阶段尚未写一个字节（Infra），一旦进入 io 域就只剩 Failed 一条路
+    let d = match prepare_apply(
+        src,
+        g,
+        plan,
+        chunk_len,
+        no_fs,
+        defer_ckpt,
+        lvm,
+        existing_relocation.as_ref(),
+        existing_lvm,
+        log,
+    ) {
+        Ok(d) => d,
+        Err(f) => return f,
+    };
+    // 修复虽是写盘，但先于任何目标写入执行；放在 RunOutcome 域是为了保住分类：
+    // 其读表阶段尚未写一个字节（NoMutation），一旦进入 io 域就只剩 Partial 一条路
     if let Some(what) = plan.repair.describe() {
-        if let Err(f) = gpt_policy::apply_repair(src, &plan.repair, g.sector_size()) {
-            return f.into_outcome();
+        if let Err(f) = gpt_policy::apply_repair(src, &plan.repair) {
+            return f;
         }
         log(&format!("[repair] {what}"));
     }
     fault_after_repair();
     // 越界之后只剩两条出口：写入完成，或"盘可能已改变"的执行失败
-    let mut post = PostWrite::new();
+    let mut post: Vec<Pending> = Vec::new();
     match execute_apply(src, plan, d, log, &mut post) {
-        Ok(()) => post.applied(),
-        Err(e) => post.failed(e.to_string()),
+        Ok(()) => RunOutcome::applied_with(post),
+        // 分类由执行器给：首写之前的拒绝仍是 3/4，首写之后才是 5。失败自带的待办与
+        // 本进程已攒下的待办合并，一个都不丢
+        Err(RunOutcome::Partial { cause, pending }) => {
+            RunOutcome::partial_with(cause, pending.into_iter().chain(post).collect())
+        }
+        // 待办只由写盘之后的步骤产生：非空即已越过首写，"确定未写盘"的原变体不再成立
+        Err(other) if !post.is_empty() => RunOutcome::partial_with(other.to_string(), post),
+        Err(other) => other,
     }
 }
 
@@ -70,17 +98,23 @@ pub fn apply(
 /// `g` 随行：执行半程对表项的全部落位都基于它（不重读盘上的表）
 pub(crate) struct ApplyDecision {
     pub(crate) g: ValidatedGeometry,
-    pub(crate) ckpt: Checkpoint<crate::dev::LiveProof>,
-    pub(crate) ckpt_path: PathBuf,
+    /// 本次要绑定（或确认已一致）的有序计划与双游标
+    pub(crate) relocation: crate::recovery::Relocation,
+    /// 扩容分区在表提交前的区间。写完表之后盘上只剩新区间，续跑靠它区分
+    /// "分区层已提交、只差 FS/PV 收尾"与"索引已推进但表未提交"
+    pub(crate) old_range: (u64, u64),
     pub(crate) chunk_len: u64,
     pub(crate) no_fs: bool,
-    /// 调用方在 apply 之后还要跑 LVM 收尾链：撤 ckpt 的决定属于那条链的出口
+    /// 调用方在 apply 之后还要跑 LVM 收尾链：撤记录的决定属于那条链的出口
     pub(crate) defer_ckpt: bool,
+    /// LVM 基线。新跑由本次增量算出；续跑取记录里的值（LV 路径不在记录里，
+    /// 由续跑请求重新选定）
+    pub(crate) lvm: Option<LvmPostFacts>,
 }
 
 /// 事前判定（只读）：FS preflight → 槽位判定。
 /// 返回 `Err` 一律发生在任何写盘之前；本函数签名上就没有 `&mut WriteSource`
-#[allow(clippy::too_many_arguments)] // 与 apply 同一组入参，理由同上
+#[allow(clippy::too_many_arguments)] // 与 apply 同一组入参
 pub(crate) fn prepare_apply(
     src: &FileSource,
     g0: &ValidatedGeometry,
@@ -89,8 +123,10 @@ pub(crate) fn prepare_apply(
     no_fs: bool,
     defer_ckpt: bool,
     lvm: Option<LvmSelection>,
+    existing_relocation: Option<&crate::recovery::Relocation>,
+    existing_lvm: Option<crate::recovery::LvmPost>,
     log: &mut dyn FnMut(&str),
-) -> Result<ApplyDecision, Fail> {
+) -> Result<ApplyDecision, RunOutcome> {
     // 占用闸（与 prepare_resize 同一判据）：被搬移分区的数据区会被整体重写，grow 目标
     // 随后要接 FS 步——挂载中或活动 swap 的分区必须在任何写盘前拒绝。镜像无块设备
     // 占用语义，闸内自会放行
@@ -101,7 +137,7 @@ pub(crate) fn prepare_apply(
             .map(|e| e.starting_lba)
             .unwrap_or(m.first_lba);
         crate::fsops::ensure_idle_before_write(src, m.part_num, probe_lba.checked_mul(plan.ss)
-            .ok_or_else(|| Fail::infra("move source start overflows byte offset"))?, crate::fsops::WriteKind::Overwrite)?;
+            .ok_or_else(|| RunOutcome::no_mutation("move source start overflows byte offset"))?, crate::fsops::WriteKind::Overwrite)?;
     }
     // 几何由调用方解析并下传（构造点即拒绝条目重叠）；几何里的上界是"修复生效后"的值，
     // ckpt 的边界校验依赖它。盘在 plan 生成之后变了的话，由下面的恢复校验拒绝
@@ -112,23 +148,23 @@ pub(crate) fn prepare_apply(
     let Some(ge) = grow_entry.filter(|ge| ge.ending_lba != 0) else {
         // 新跑路径 live_entry 已保证条目非空；空槽只出现在续跑——盘上布局在中断窗口
         // 被外部改动。不拒绝的话，下游会把 starting_lba=0 的空条目扩成横跨表头的大条目
-        return Err(crate::outcome::Fail::refused(format!(
+        return Err(crate::outcome::RunOutcome::refused(format!(
             "partition {} has an empty entry on disk — the layout moved under the job; refusing",
             plan.grow_part
         )));
     };
     // 目标分区只向右扩、起点不变：DM 栈已映射的扇区不受影响，按 Extend 放行其持有
     crate::fsops::ensure_idle_before_write(src, plan.grow_part, ge.starting_lba.checked_mul(plan.ss)
-        .ok_or_else(|| Fail::infra("grow target start overflows byte offset"))?, crate::fsops::WriteKind::Extend)?;
+        .ok_or_else(|| RunOutcome::no_mutation("grow target start overflows byte offset"))?, crate::fsops::WriteKind::Extend)?;
     if !no_fs {
         // 要动的是哪一段、里面是什么 FS 由 grow_target_at 判定——与写盘后的收尾同一判据，
         // 两处只是区间不同。区间的 LBA 单位是**表自身**的 ss（plan.ss）。此处位于
-        // apply_repair / 搬移之前，本次调用尚未写目标盘：它的环境故障按 Infra 报，
-        // "不支持 / 工具缺失 / 里面是什么都不知道"交 FsError 分流（10 / 30），不在此另判
+        // apply_repair / 搬移之前，本次调用尚未写目标盘：它的环境故障按 NoMutation 报，
+        // "不支持 / 工具缺失 / 里面是什么都不知道"交 FsError 分流（6 / 6 / 3），不在此另判
         let base = ge.starting_lba.checked_mul(plan.ss)
-            .ok_or_else(|| Fail::infra("grow target start overflows byte offset"))?;
+            .ok_or_else(|| RunOutcome::no_mutation("grow target start overflows byte offset"))?;
         let len = (ge.ending_lba - ge.starting_lba + 1).checked_mul(plan.ss)
-            .ok_or_else(|| Fail::infra("grow target length overflows byte size"))?;
+            .ok_or_else(|| RunOutcome::no_mutation("grow target length overflows byte size"))?;
         crate::fsops::check_grow_step(crate::fsops::grow_target_at(src, plan.grow_part, base, len)?, src.is_block)?;
     }
     // 恢复三态：有效 → 续传 / 槽位被另一族作业占用 → 拒绝 / 空 → 新建
@@ -139,27 +175,31 @@ pub(crate) fn prepare_apply(
         let future_grow_end = grow_end_for(plan, ge.starting_lba)?;
         let old_len = ge.ending_lba.checked_sub(ge.starting_lba)
             .and_then(|v| v.checked_add(1))
-            .ok_or_else(|| crate::outcome::Fail::infra("grow target entry inverted"))?;
+            .ok_or_else(|| crate::outcome::RunOutcome::no_mutation("grow target entry inverted"))?;
         let new_len = future_grow_end.checked_sub(ge.starting_lba)
             .and_then(|v| v.checked_add(1))
-            .ok_or_else(|| crate::outcome::Fail::infra("grow target length overflows"))?;
+            .ok_or_else(|| crate::outcome::RunOutcome::no_mutation("grow target length overflows"))?;
         let old_bytes = old_len.checked_mul(plan.ss)
-            .ok_or_else(|| crate::outcome::Fail::infra("grow target length overflows byte size"))?;
+            .ok_or_else(|| crate::outcome::RunOutcome::no_mutation("grow target length overflows byte size"))?;
         let new_bytes = new_len.checked_mul(plan.ss)
-            .ok_or_else(|| crate::outcome::Fail::infra("grow target length overflows byte size"))?;
+            .ok_or_else(|| crate::outcome::RunOutcome::no_mutation("grow target length overflows byte size"))?;
         lvm_post_for(defer_ckpt, lvm.as_ref(), old_bytes, new_bytes)?
     };
-    let (slot, ckpt_path) = read_checkpoint(src, g0)?;
-    let ckpt = match slot {
-        // 与 make_plan_resuming 共用同一句拒绝理由：同一事实的措辞只写一次
-        CheckpointSlot::Resize(_) => return Err(foreign_resize_refusal()),
-        CheckpointSlot::Relocation(c) => {
-            let c = *c;
+    // 记录里的 LVM 基线只存三个数，LV 路径由本次请求重新选定；续跑沿用这份基线，
+    // 不按本次算出的增量重推（盘上可能已是新尺寸）
+    let resumed_lvm = existing_lvm.map(|p| LvmPostFacts {
+        lv_path: None,
+        lv_size_before: p.lv_size_before,
+        lv_target: p.lv_target,
+        extent_bytes: p.extent_bytes,
+    });
+    let relocation = match existing_relocation {
+        Some(c) => {
             // chunk_bytes 单独先查：它是命令行可控项，混在"盘上事实不符"里报会让用户
-            // 去查盘，而真实原因是这次换了 --chunk-size
+            // 去查盘，而这一项的直接原因是本次换了 --chunk
             if c.chunk_bytes != chunk_len {
-                return Err(crate::outcome::Fail::refused(format!(
-                    "the checkpoint was written with --chunk-size {} MiB, this run uses {} — re-run with the original value",
+                return Err(crate::outcome::RunOutcome::refused(format!(
+                    "the recovery record was written with --chunk {} MiB, this run uses {} — re-run with the original value",
                     c.chunk_bytes / (1024 * 1024),
                     chunk_len / (1024 * 1024),
                 )));
@@ -172,27 +212,36 @@ pub(crate) fn prepare_apply(
             // 尚未推进（commit 与推进之间崩溃），故两个位置都接受。全部完成即终态，逐条落在
             // 目标位。此处不重算 plan——那会破坏"盘上几何已被部分改写"下的续跑语义
             if c.disk_size != src.size || c.ss != g0.sector_size() {
-                return Err(crate::outcome::Fail::refused(
-                    "existing checkpoint does not match the current disk geometry — refusing",
+                return Err(crate::outcome::RunOutcome::refused(
+                    "the recovery record does not match the current disk geometry — refusing",
                 ));
             }
-            let done = c.cur_index.min(plan.moves.len() as u32);
+            // 与下方 chunks_in_entry 的越界拒绝同一口径：entry_index 超出计划条目数
+            // 是记录被改写或两处进度字段口径分叉的信号，夹紧只会把异常放行成
+            // 「全部完成」——条目数内才允许停在任意位置
+            if c.entry_index > plan.moves.len() as u32 {
+                return Err(crate::outcome::RunOutcome::refused(format!(
+                    "recovery record entry progress {} exceeds the plan's {} entries — the record changed between reads; refusing",
+                    c.entry_index, plan.moves.len()
+                )));
+            }
+            let done = c.entry_index;
             for (mi, m) in plan.moves.iter().enumerate() {
                 let cur = g0
                     .entry_index(m.part_num)
                     .and_then(|i| g0.entries().get(i))
-                    .ok_or_else(|| crate::outcome::Fail::refused(format!(
-                        "checkpoint names partition {} that is no longer on the disk — refusing",
+                    .ok_or_else(|| crate::outcome::RunOutcome::refused(format!(
+                        "the recovery record names partition {} that is no longer on the disk — refusing",
                         m.part_num
                     )))?;
                 let target = m.first_lba.checked_add(m.delta_lba)
-                    .ok_or_else(|| crate::outcome::Fail::infra("relocation target LBA overflows"))?;
+                    .ok_or_else(|| crate::outcome::RunOutcome::no_mutation("relocation target LBA overflows"))?;
                 // 端点也要比：只比起点时，成员末端在中断窗口被改小/改大仍算"停在应停处"，
                 // 而 ckpt 里的 len_lba 会继续被当成搬移长度与扩容边界
                 let src_end = m.first_lba.checked_add(m.len_lba).and_then(|v| v.checked_sub(1))
-                    .ok_or_else(|| crate::outcome::Fail::infra("relocation source range overflows"))?;
+                    .ok_or_else(|| crate::outcome::RunOutcome::no_mutation("relocation source range overflows"))?;
                 let dst_end = target.checked_add(m.len_lba).and_then(|v| v.checked_sub(1))
-                    .ok_or_else(|| crate::outcome::Fail::infra("relocation target range overflows"))?;
+                    .ok_or_else(|| crate::outcome::RunOutcome::no_mutation("relocation target range overflows"))?;
                 let at_src = cur.starting_lba == m.first_lba && cur.ending_lba == src_end;
                 let at_dst = cur.starting_lba == target && cur.ending_lba == dst_end;
                 let ok = match (mi as u32).cmp(&done) {
@@ -201,8 +250,8 @@ pub(crate) fn prepare_apply(
                     std::cmp::Ordering::Greater => at_src,
                 };
                 if !ok {
-                    return Err(crate::outcome::Fail::refused(format!(
-                        "partition {} is not where the checkpoint says it should be (on disk LBA {}, expected {}) — the layout moved under the job; refusing",
+                    return Err(crate::outcome::RunOutcome::refused(format!(
+                        "partition {} is not where the recovery record says it should be (on disk LBA {}, expected {}) — the layout moved under the job; refusing",
                         m.part_num, cur.starting_lba, m.first_lba
                     )));
                 }
@@ -217,9 +266,9 @@ pub(crate) fn prepare_apply(
             let mut dst_ranges = Vec::with_capacity(plan.moves.len());
             for m in &plan.moves {
                 let dst = m.first_lba.checked_add(m.delta_lba)
-                    .ok_or_else(|| crate::outcome::Fail::infra("relocation target LBA overflows"))?;
+                    .ok_or_else(|| crate::outcome::RunOutcome::no_mutation("relocation target LBA overflows"))?;
                 let dst_end = dst.checked_add(m.len_lba).and_then(|v| v.checked_sub(1))
-                    .ok_or_else(|| crate::outcome::Fail::infra("relocation target range overflows"))?;
+                    .ok_or_else(|| crate::outcome::RunOutcome::no_mutation("relocation target range overflows"))?;
                 dst_ranges.push((m.part_num, dst, dst_end));
             }
             for &(pn, dst, dst_end) in &dst_ranges {
@@ -230,7 +279,7 @@ pub(crate) fn prepare_apply(
                         continue;
                     }
                     if e.starting_lba <= dst_end && dst <= e.ending_lba {
-                        return Err(crate::outcome::Fail::refused(format!(
+                        return Err(crate::outcome::RunOutcome::refused(format!(
                             "relocation target of partition {} (LBA {}..{}) overlaps partition {} on disk — the layout moved under the job; refusing",
                             pn, dst, dst_end,
                             ei + 1
@@ -242,8 +291,8 @@ pub(crate) fn prepare_apply(
             for (i, &(apn, ad, ae)) in dst_ranges.iter().enumerate() {
                 for &(bpn, bd, be) in dst_ranges.iter().skip(i + 1) {
                     if ad <= be && bd <= ae {
-                        return Err(crate::outcome::Fail::refused(format!(
-                            "relocation targets of partitions {} and {} overlap (LBA {}..{}) — inconsistent checkpoint; refusing",
+                        return Err(crate::outcome::RunOutcome::refused(format!(
+                            "relocation targets of partitions {} and {} overlap (LBA {}..{}) — inconsistent recovery record; refusing",
                             apn, bpn, ad, ae
                         )));
                     }
@@ -256,10 +305,10 @@ pub(crate) fn prepare_apply(
             for (i, &(pn, dst, dst_end)) in dst_ranges.iter().enumerate() {
                 for m in plan.moves.iter().skip(i + 1) {
                     let src_end = m.first_lba.checked_add(m.len_lba).and_then(|v| v.checked_sub(1))
-                        .ok_or_else(|| crate::outcome::Fail::infra("relocation source range overflows"))?;
+                        .ok_or_else(|| crate::outcome::RunOutcome::no_mutation("relocation source range overflows"))?;
                     if dst <= src_end && m.first_lba <= dst_end {
-                        return Err(crate::outcome::Fail::refused(format!(
-                            "relocation target of partition {} (LBA {}..{}) would overwrite the source of partition {} (LBA {}..{}) before it is copied — inconsistent checkpoint; refusing",
+                        return Err(crate::outcome::RunOutcome::refused(format!(
+                            "relocation target of partition {} (LBA {}..{}) would overwrite the source of partition {} (LBA {}..{}) before it is copied — inconsistent recovery record; refusing",
                             pn, dst, dst_end, m.part_num, m.first_lba, src_end
                         )));
                     }
@@ -273,8 +322,8 @@ pub(crate) fn prepare_apply(
             // 缩方向同样要拒：中断期间第三方可以把目标扩到 grow_end 之外，照 ckpt 收尾
             // 就会把表项缩回去，而 FS 已按更大的分区扩过——尾部数据变得不可达
             if future_grow_end < ge.ending_lba {
-                return Err(crate::outcome::Fail::refused(format!(
-                    "partition {} already ends at LBA {}, past the checkpoint's grow target {} — \
+                return Err(crate::outcome::RunOutcome::refused(format!(
+                    "partition {} already ends at LBA {}, past the recovery record's grow target {} — \
                      finishing would shrink it below a filesystem that may already fill it; refusing",
                     plan.grow_part, ge.ending_lba, future_grow_end
                 )));
@@ -286,14 +335,14 @@ pub(crate) fn prepare_apply(
                         continue;
                     }
                     if e.starting_lba <= future_grow_end && e.ending_lba > ge.ending_lba {
-                        return Err(crate::outcome::Fail::refused(format!(
-                            "the grown partition would extend into partition {} (LBA {}..{}) created since the checkpoint — the layout moved under the job; refusing",
+                        return Err(crate::outcome::RunOutcome::refused(format!(
+                            "the grown partition would extend into partition {} (LBA {}..{}) created since the record was written — the layout moved under the job; refusing",
                             n, e.starting_lba, e.ending_lba
                         )));
                     }
                 }
             }
-            // chunks_done 采信自本次 read_checkpoint，moves 重建自 resume_outcome 的第一次
+            // chunks_done 采信自本次记录读取，moves 重建自 resume_outcome 的第一次
             // 读——两次读之间文件可能被改写（CRC 自洽），deserialize 的进度上界按文件自身
             // 的 moves 推导，拼接口径下失效。此处按内存里的 plan.moves 重算当前条目的
             // chunk 上界（与搬移循环同一份确定性布局）：越界不是合法运行能产出的进度，
@@ -301,52 +350,47 @@ pub(crate) fn prepare_apply(
             let chunk_bound = match plan.moves.get(done as usize) {
                 Some(m) => move_chunk_layout(m.len_lba, plan.ss, m.delta_lba, m.len_lba, chunk_len)
                     .map(|(_, count)| count)
-                    .ok_or_else(|| crate::outcome::Fail::infra("relocation chunk count overflow"))?,
+                    .ok_or_else(|| crate::outcome::RunOutcome::no_mutation("relocation chunk count overflow"))?,
                 None => 0,
             };
-            if c.chunks_done > chunk_bound {
-                return Err(crate::outcome::Fail::refused(format!(
-                    "checkpoint chunk progress {} exceeds the bound {} recomputed from the plan — the checkpoint changed between reads; refusing",
-                    c.chunks_done, chunk_bound
+            if c.chunks_in_entry > chunk_bound {
+                return Err(crate::outcome::RunOutcome::refused(format!(
+                    "recovery record chunk progress {} exceeds the bound {} recomputed from the plan — the record changed between reads; refusing",
+                    c.chunks_in_entry, chunk_bound
                 )));
             }
-            // Y = durable 恢复点（ckpt 文件里的值），不是本进程内存进度
-            log(&format!("resuming at entry {} chunk {} (durable checkpoint)", c.cur_index, c.chunks_done));
-            Checkpoint {
+            // Y = durable 恢复点（记录里的值），不是本进程内存进度
+            log(&format!("resuming at entry {} chunk {} (durable record)", c.entry_index, c.chunks_in_entry));
+            crate::recovery::Relocation {
+                entries: plan.moves.iter().map(crate::recovery::RelocEntry::from).collect(),
+                entry_index: done,
+                chunks_in_entry: c.chunks_in_entry,
+                chunk_bytes: chunk_len,
+                kind: plan.kind.into(),
+                grow_part: plan.grow_part,
                 disk_size: src.size,
                 ss: plan.ss,
-                grow_part: plan.grow_part,
-                last_usable_lba: plan.last_usable_lba,
-                moves: plan.moves.clone(),
-                kind: plan.kind,
-                cur_index: done,
-                chunks_done: c.chunks_done,
-                chunk_bytes: chunk_len,
-                fp: src.fingerprint,
-                map: src.loop_mapping,
-                proof: src.proof(),
-                lvm: c.lvm.clone().or(derived_lvm),
             }
         }
-        CheckpointSlot::Empty => {
+        None => {
             // 走到这里有两种来源：新跑（plan 由当前盘上几何生成，成员自然停在 first_lba），
-            // 或 plan 生成时还读到过 Relocation 现场、而它在本次 read_checkpoint 之前
-            // 消失/损坏（例如并发的 `abandon`）。后者本进程一个 chunk 都没搬过，成员必须
+            // 或 plan 生成时还读到过搬移现场、而它在本次读取之前消失/损坏（例如并发的
+            // `abandon`）。后者本进程一个 chunk 都没搬过，成员必须
             // 仍停在 first_lba：已推进到目标位的成员，其源区可能已被右邻的拷贝覆盖，按旧
             // plan 从旧起点重读会把垃圾写回目标位，而后续表项提交照常成功
             for m in &plan.moves {
                 let cur = g0
                     .entry_index(m.part_num)
                     .and_then(|i| g0.entries().get(i))
-                    .ok_or_else(|| crate::outcome::Fail::refused(format!(
+                    .ok_or_else(|| crate::outcome::RunOutcome::refused(format!(
                         "the plan names partition {} that is no longer on the disk — refusing",
                         m.part_num
                     )))?;
                 let src_end = m.first_lba.checked_add(m.len_lba).and_then(|v| v.checked_sub(1))
-                    .ok_or_else(|| crate::outcome::Fail::infra("relocation source range overflows"))?;
+                    .ok_or_else(|| crate::outcome::RunOutcome::no_mutation("relocation source range overflows"))?;
                 if cur.starting_lba != m.first_lba || cur.ending_lba != src_end {
-                    return Err(crate::outcome::Fail::refused(format!(
-                        "the checkpoint vanished between reads and partition {} is not at its source position \
+                    return Err(crate::outcome::RunOutcome::refused(format!(
+                        "the recovery record vanished between reads and partition {} is not at its source position \
                          (on disk LBA {}..{}, expected {}..{}) — the layout moved under the job; refusing",
                         m.part_num, cur.starting_lba, cur.ending_lba, m.first_lba, src_end
                     )));
@@ -359,34 +403,37 @@ pub(crate) fn prepare_apply(
             // 保留现场，不能反过来阻断恢复。预检只覆盖平台与工具存在性：PATH 里有可执行
             // 文件不等于它一定能成功操作目标（权限、设备策略），那些失败仍落在执行期
             if plan.moves.iter().any(|m| m.is_swap) {
-                // 工具缺失与平台不符都归 Infra(30)：分类走 outcome 的唯一映射点，
+                // 工具缺失与平台不符都归 Unsupported(6)：分类走 outcome 的唯一映射点，
                 // 不在这里把变体压成字符串再统一折成"改参数重试有意义"
-                crate::fsops::require_linux().map_err(crate::outcome::Fail::from)?;
+                crate::fsops::require_linux().map_err(crate::outcome::RunOutcome::from)?;
                 crate::fsops::check_support(
                     "rebuild",
-                    crate::fsid::FsKind::Swap.as_str(),
+                    crate::fsid::ContentKind::Swap.as_str(),
                     crate::fsops::swap_rebuild_support(src.is_block),
                 )
-                .map_err(crate::outcome::Fail::from)?;
+                .map_err(crate::outcome::RunOutcome::from)?;
             }
-            Checkpoint {
+            crate::recovery::Relocation {
+                entries: plan.moves.iter().map(crate::recovery::RelocEntry::from).collect(),
+                entry_index: 0,
+                chunks_in_entry: 0,
+                chunk_bytes: chunk_len,
+                kind: plan.kind.into(),
+                grow_part: plan.grow_part,
                 disk_size: src.size,
                 ss: plan.ss,
-                grow_part: plan.grow_part,
-                last_usable_lba: plan.last_usable_lba,
-                moves: plan.moves.clone(),
-                kind: plan.kind,
-                cur_index: 0,
-                chunks_done: 0,
-                chunk_bytes: chunk_len,
-                fp: src.fingerprint,
-                map: src.loop_mapping,
-                proof: src.proof(),
-                lvm: derived_lvm,
             }
         }
     };
-    Ok(ApplyDecision { g: g0.clone(), ckpt, ckpt_path, chunk_len, no_fs, defer_ckpt })
+    Ok(ApplyDecision {
+        g: g0.clone(),
+        relocation,
+        old_range: (ge.starting_lba, ge.ending_lba),
+        chunk_len,
+        no_fs,
+        defer_ckpt,
+        lvm: resumed_lvm.or(derived_lvm),
+    })
 }
 
 /// 数据 chunk 的 I/O 失败必须带着精确 LBA 区间上抛：errno 说不出"哪一段"，
@@ -408,339 +455,157 @@ pub(crate) fn chunk_io_error(
     ))
 }
 
-pub(crate) const RESUME_HINT: &str = "the checkpoint is kept, re-run the command to retry this block (transient errors resume from here); for a permanently unreadable block, image the source with ddrescue and run the operation on the image";
-
+/// `copy` 的块 I/O 失败提示：副本没有续跑，目标字节可能已被覆盖
 pub(crate) const COPY_HINT: &str = "copy has no resume — the target bytes may already be overwritten; release the scene with `diskedit abandon`, then re-run; a permanently unreadable block must be imaged with ddrescue first";
 
-// ---- durable boundary：以上判定全部结束，以下开始写盘 ----
+/// 搬移进度的唯一持久载体是恢复记录；写会话里没有它就是事务装配错误
+fn record_journal(src: &mut WriteSource) -> io::Result<&mut crate::recovery::RecordJournal> {
+    src.record_journal_mut().ok_or_else(|| {
+        io::Error::other("the write session carries no recovery record — refusing to relocate")
+    })
+}
 
-/// 执行（写盘）。入参 `&mut WriteSource` + 返回 `io::Result` 共同构成边界：
-/// 函数体内**构造不出** `Fail::Refused`（返回类型里放不下它），
-/// 于是"写盘之后还能返回 Refused"在这里连编译都过不去
+/// 绑定计划与 LVM 基线（同一次写入）。已有同值计划时是 no-op，不重复落盘
+fn bind_relocation(
+    src: &mut WriteSource,
+    reloc: &crate::recovery::Relocation,
+    lvm: Option<&LvmPostFacts>,
+) -> io::Result<()> {
+    record_journal(src)?.bind_relocation(reloc.clone(), lvm.map(LvmPostFacts::to_record))
+}
+
+/// 执行（写盘）：装配 → 绑定现场 → 执行器 → 扩容收尾。
+///
+/// 搬移、表提交与换区重建都由 [`crate::execution::execute_plan`] 执行：它先做完整预扫描
+/// （执行器缺席、未装配的表步骤、块布局与地址区间），首写之后只可能给出"盘可能已改变"，
+/// 由执行器统一承担。
+/// 本函数只剩三件事：把记录绑定到这次作业、把搬移与扩容装配成一份计划、在计划完整走完
+/// 之后收尾文件系统。
 pub(crate) fn execute_apply(
     src: &mut WriteSource,
     plan: &Plan,
     d: ApplyDecision,
     log: &mut dyn FnMut(&str),
-    post: &mut PostWrite,
-) -> io::Result<()> {
-    // 决策按值收下：ckpt 就地推进；表项落位全部基于随行几何（不重读盘上的表——
-    // 搬移循环内每条重解析一次正是"解析次数随 N 增长"的根源）。条目绝对赋值 +
-    // 同一份几何连续提交，与逐条重读盘上表再提交逐字节等价（commit 幂等）
-    let mut ckpt = d.ckpt;
-    let (chunk_len, no_fs) = (d.chunk_len, d.no_fs);
-    let ckpt_path = &d.ckpt_path;
-    let mut g = d.g;
-    // 撤除判据的基数：只有本次执行新增的待办才使"最终状态已核验"不成立
-    let pending_before = post.len();
-    // 修复已由 apply 的 Fail 域在调用本函数之前完成（备份头搬移 / 保护 MBR 重写），
-    // 使后续所有写入都基于修复后的几何
-    // 在任何一个数据 chunk 写出之前，按 commit 的同一判据核对盘上的表仍是本次计划读到的
-    // 那一份。此刻目标盘没有任何数据写入，外部已改表时命令以"未写盘"收场
-    g.ensure_entries_unchanged(src)?;
-    // 复核通过后才落本次作业的恢复现场：复核失败时盘上没有可续的 checkpoint，
-    // 下一次运行按新跑判定
-    atomic_write_ckpt(ckpt_path, &ckpt.serialize())?;
-    // 本操作含**不可回滚的写入**：搬移的数据块按设计不入 journal（前向恢复、无回滚），
-    // 故留一条标记使 undo 拒绝回滚——否则表被回滚而数据未回滚，布局与盘上内容自相矛盾。
-    // delta_lba 在 plan 生成处只产生非负值：目标起点 = first_lba + delta，直接 checked 相加
-    let effective = plan.moves.iter().find(|m| m.delta_lba != 0);
-    if let Some(m) = effective {
-        let to_lba = m.first_lba.checked_add(m.delta_lba).ok_or_else(|| {
-            io::Error::new(io::ErrorKind::InvalidData, "relocation target LBA overflows — refusing")
-        })?;
-        src.set_mutation(crate::dev::Mutation::RelocatePartition {
-            partition: m.part_num,
-            from_lba: m.first_lba,
-            to_lba,
-        });
-        // 位移非零 ⇒ 存在不可回滚的写入。位移全为 0（右邻已尾打包时重跑 resize
-        // grow --allow-move 的典型产物）没有这样的写入，不落屏障：undo 的可回滚性
-        // 不受这次空转影响
-        src.mark_non_reversible()?;
-    }
-
-    // 恢复从最近一次 durable checkpoint 继续；batching（`next_ckpt_batch`）只决定
-    // checkpoint 的提交频率，即崩溃后最多重做多少个已完成但未持久化的 chunk。
-    // chunk 级进度只对"中断时正在搬的那一条"有效（后续条目从头计数）：自重叠搬移
-    // （delta < 分区长度）重跑已完成 chunk 会读到被自己覆写过的源数据，chunk 级续传正是为此设计
-    let resume_index = ckpt.cur_index;
-    let resume_chunks = ckpt.chunks_done;
-    // 非自重叠条目按批提交：起点取常量，随后按每次提交的耗时在重做窗口内调整
-    let mut ckpt_batch = CKPT_BATCH_CHUNKS;
-    // 搬移循环：单分区 = 单事务；尾→头推进
-    for mi in (ckpt.cur_index as usize)..plan.moves.len() {
-        let m = &plan.moves[mi];
-        // δ=0：条目已在目标位（右邻尾打包后重跑的产物）。自拷贝、重写表、推进 ckpt
-        // 之外的一切都是空转，跳过——表项绝对赋值下它本来就"已提交"
-        if m.delta_lba == 0 {
-            ckpt.chunks_done = 0;
-            ckpt.cur_index = mi as u32 + 1;
-            atomic_write_ckpt(ckpt_path, &ckpt.serialize())?;
-            continue;
-        }
-        // 中断时正在搬的条目号随本次 ckpt 序列化落盘，恢复侧据此定位 chunk 级进度
-        ckpt.cur_index = mi as u32;
-        // 目标区端点一次算好、全链 checked：要原样写进表项并进入字节地址换算
-        let new_first = m.first_lba.checked_add(m.delta_lba).ok_or_else(|| {
-            io::Error::new(io::ErrorKind::InvalidData, "relocation target LBA overflows — refusing")
-        })?;
-        let new_end = m.len_lba.checked_sub(1).and_then(|l| new_first.checked_add(l)).ok_or_else(|| {
-            io::Error::new(io::ErrorKind::InvalidData, "relocation target LBA overflows — refusing")
-        })?;
-        // durable 起点：只有"中断时正在搬的那一条"带 chunk 级进度，后续条目从 0 开始
-        let entry_resume = if mi as u32 == resume_index { resume_chunks } else { 0 };
-        ckpt.chunks_done = entry_resume;
-        // swap：内容可弃 → 不搬数据，表项落位后 mkswap 重建（UUID/卷标保持）
-        if m.is_swap {
-            // 类型复核：`is_swap` 来自 ckpt（当初的类型判定），锁下这份盘上表才是现状。
-            // 两次运行之间该分区被改成别的类型时，按旧判定 mkswap 会把一个已不属于
-            // swap 的分区覆写掉。类型读不出来同样按"不再成立"拒绝，绝不用无知当许可
-            let still_swap = match crate::gpt_policy::live_entry(&g, m.part_num) {
-                Ok(e) => is_swap_guid(&e.partition_type_guid),
-                Err(_) => false,
-            };
-            if !still_swap {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!(
-                        "partition {} is not a swap partition on disk any more (its type changed since the checkpoint) — \
-                         refusing to recreate it there; release the scene with `diskedit abandon`",
-                        m.part_num
-                    ),
-                ));
-            }
-            // PARTUUID/分区号由条目原样保留（unique guid 不动），只改位置。
-            // 绝对赋值而非 += delta：commit 后、ckpt 更新前崩溃的重放幂等
-            g.update_entry((m.part_num - 1) as usize, |e| {
-                e.starting_lba = new_first;
-                e.ending_lba = new_end;
-            })?;
-            g.commit(src)?;
-            fault_after_swap_commit(mi);
-            // 新起点此刻只在盘上的表里：内核视图若还停在旧位置，按新起点找不到分区节点，
-            // mkswap 会以"表已提交"的状态失败成待办
-            if !crate::support::kernel_resync(src) {
-                log("note: the kernel partition view did not follow the table write — the swap rebuild may need a re-run after the kernel re-reads the table");
-            }
-            // 旧 swap 签名区在源位置（数据区未搬移），从那里读 UUID/卷标
-            let ident = swap_identity_preferring(src, m.first_lba, new_first, m.len_lba, plan.ss);
-            // mkswap 是外部工具的写盘，先落屏障（对齐 execute_resize 的 swap 分支）
-            src.set_mutation(crate::dev::Mutation::ExternalFsTool);
-            src.mark_non_reversible()?;
-            match crate::fsops::recreate_swap(src, m.part_num, &ident) {
-                Ok(note) => log(&format!("swap {} recreated at new location ({note})", m.part_num)),
-                // 表项已落位、内容可弃：swap 未重建属"后续步骤未完成"，不是本次操作失败。
-                // 不推进 cur_index、就地停止条目循环，续跑从本条目重试 mkswap（表项提交与
-                // identity 读取幂等，旧签名仍在源位）。推进会让重跑的位置比对要求"后续
-                // 条目仍在源位"而自相矛盾；跳过待办则让重跑把未重建的 swap 洗成成功
-                Err(e) => {
-                    post.pending(Pending::new(
-                        m.part_num,
-                        PendingKind::Swap,
-                        e.to_string(),
-                        // hint 指向表项已提交的新位置（只有读旧签名区取 identity 才用旧起点）
-                        crate::fsops::rescue_hint(Some(FsKind::Swap), &crate::dev::part_dev_hint(src, m.part_num, new_first * plan.ss)),
-                    ));
-                    ckpt.chunks_done = 0;
-                    atomic_write_ckpt(ckpt_path, &ckpt.serialize())?;
-                    fault_after_swap_entry(mi);
-                    break;
-                }
-            }
-            ckpt.chunks_done = 0;
-            ckpt.cur_index = mi as u32 + 1;
-            atomic_write_ckpt(ckpt_path, &ckpt.serialize())?;
-            fault_after_swap_entry(mi);
-            continue;
-        }
-        let overflow = || io::Error::new(io::ErrorKind::InvalidData, "relocation byte offset overflows — refusing");
-        let src_off = m.first_lba.checked_mul(plan.ss).ok_or_else(overflow)?;
-        let dst_off = new_first.checked_mul(plan.ss).ok_or_else(overflow)?;
-        let total = m.len_lba.checked_mul(plan.ss).ok_or_else(overflow)?;
-        // 自重叠搬移（位移小于分区长度）下，重做 chunk 的源区间会被先落盘的更靠尾
-        // chunk 的写覆盖，除非每个 chunk 不大于位移（写区间起点 ≥ 任何重做源区间终点）。
-        // 因此 chunk 收敛到位移字节以内，且停用批量提交——批量攒下的未持久化 chunk
-        // 同样会探入重做区间。非自重叠搬移写区间与源区间不相交，两种优化照常可用。
-        // 块布局取自唯一实现，与 checkpoint 的进度上界同源
-        let (entry_chunk, _) = move_chunk_layout(m.len_lba, plan.ss, m.delta_lba, m.len_lba, chunk_len)
-            .ok_or_else(overflow)?;
-        // 分派判据是**几何**自重叠（位移小于分区长度），不是"块大小是否真被收敛"：
-        // 请求的 chunk 本来就不大于位移时布局已经安全，但 durable 边界仍逐 chunk 推进
-        // 并由下方的批量开关决定是否攒批——两种优化都只在非自重叠时可用
-        let overlap = relocation_overlaps(m.delta_lba, m.len_lba);
-        // 条目块的字节数决定本条的批量上界：大块会把"重做一块"本身撑过窗口，
-        // 故进入循环前先按本条块字节夹紧，而不是沿用上一条的批量
-        ckpt_batch = ckpt_batch.min(ckpt_batch_cap(entry_chunk));
-        if overlap && entry_chunk < chunk_len {
-            log(&format!(
-                "partition {}: self-overlapping move, chunk size reduced to {} bytes to keep redo reads intact",
-                m.part_num, entry_chunk
-            ));
-        }
-        let chunk_from_tail: Vec<(u64, u64)> = {
-            // (offset_within, len) 从尾部向头部
-            let mut v = Vec::new();
-            let mut pos = total;
-            while pos > 0 {
-                let len = entry_chunk.min(pos);
-                v.push((pos - len, len));
-                pos -= len;
-            }
-            v
-        };
-        let total_chunks = chunk_from_tail.len() as u64;
-        // volatile 进度：已完成但尚未 checkpoint 的 chunk 数；durable 边界始终只在 ckpt 文件里
-        let mut pending_chunks = 0u64;
-        for (i, (within, len)) in chunk_from_tail.iter().enumerate() {
-            if (i as u64) < entry_resume {
-                continue; // durable 边界之前视为完成：恢复只认 ckpt 值，绝不用内存进度跳过
-            }
-            let mut buf = vec![0u8; *len as usize];
-            // 块内偏移是未 checked 的加数：与已 checked 的基址求和同样要收口，
-            // 回绕会把读源或写目标折到盘上另一个位置
-            let src_pos = src_off.checked_add(*within).ok_or_else(overflow)?;
-            let dst_pos = dst_off.checked_add(*within).ok_or_else(overflow)?;
-            src.read_at(src_pos, &mut buf).map_err(|e| {
-                chunk_io_error(e, "reading source", src_pos / plan.ss, len / plan.ss, i + 1, total_chunks as usize, RESUME_HINT)
-            })?;
-            src.write_data_at(dst_pos, &buf).map_err(|e| {
-                chunk_io_error(e, "writing target", dst_pos / plan.ss, len / plan.ss, i + 1, total_chunks as usize, RESUME_HINT)
-            })?;
-            ckpt.chunks_done = i as u64 + 1; // 内存进度；落盘前不写进 ckpt 文件
-            // 自重叠搬移：durable 边界逐 chunk 推进（写区间探入后续重做源区间的窗口
-            // 只能靠收紧 checkpoint 频率关死），数据与边界同一步落盘
-            if overlap {
-                src.sync_data()?; // 数据 chunk 用 sync_data；表结构提交用 sync_all
-                fault_after_data_sync(i as u64 + 1);
-                atomic_write_ckpt(ckpt_path, &ckpt.serialize())?;
-                fault_chunk(i as u64 + 1);
-                continue;
-            }
-            // 非自重叠：一批数据攒到一起，提交前同步一次，同步点覆盖到本 chunk；
-            // ckpt 里的边界因此永不超前于已落盘数据
-            pending_chunks += 1;
-            if pending_chunks >= ckpt_batch || i as u64 + 1 == total_chunks {
-                let t0 = std::time::Instant::now();
-                src.sync_data()?;
-                fault_after_data_sync(i as u64 + 1);
-                atomic_write_ckpt(ckpt_path, &ckpt.serialize())?;
-                pending_chunks = 0;
-                ckpt_batch = next_ckpt_batch(ckpt_batch, t0.elapsed(), entry_chunk);
-            }
-            fault_chunk(i as u64 + 1);
-        }
-        fault_before_entry_commit();
-        // 本分区完成 → 按崩溃安全四结构序列提交表项（整表重写）。
-        // 绝对赋值（非 += delta）：commit 后 ckpt 更新前崩溃的重放幂等
-        g.update_entry((m.part_num - 1) as usize, |e| {
-            e.starting_lba = new_first;
-            e.ending_lba = new_end;
-        })?;
-        g.commit(src)?;
-        fault_before_hidden_fix();
-        // 起始位置变化的 NTFS 分区需修 HiddenSectors（数据是字节拷贝，boot sector 带着旧值）
-        if crate::fsid::identify(src, dst_off, total)? == Some(FsKind::Ntfs) {
-            fix_ntfs_hidden_sectors(src, new_first, plan.ss, log)?;
-        }
-        log(&format!("partition {} relocated (delta {} sectors)", m.part_num, m.delta_lba));
-        ckpt.chunks_done = 0;
-        ckpt.cur_index = mi as u32 + 1;
-        atomic_write_ckpt(ckpt_path, &ckpt.serialize())?;
-        fault_after_entry_commit(mi);
-    }
-    // 条目循环未走完（swap 重建失败就地 break）：扩容收尾不能做——grow_end_for 按
-    // 全体 moves 取 min(new_first)−1，会把尚未搬移成员的旧位也划进扩容区，提交即写出
-    // 与未搬移分区重叠的表项。扩容留给续跑：重跑在同一 ckpt 上从本条目重试 mkswap，
-    // 条目走完后才到达这里
-    if (ckpt.cur_index as usize) < plan.moves.len() {
-        // 唯一合法出口是"某条目留下待办"（swap 重建失败）：停止而不报任何待办，
-        // 调用方会按 Applied{pending:[]} 收场并关闭 journal，扩容收尾却根本没做
-        if post.is_empty() {
-            return Err(io::Error::other(
-                "relocation stopped before the grow step but recorded no pending work — the on-disk state may be incomplete",
-            ));
-        }
-        let later_steps = d.defer_ckpt || ckpt.lvm.is_some();
-        if let Err(why) = checkpoint_may_be_removed(false, pending_before, post.len(), later_steps) {
-            log_ckpt_retention(log, ckpt_path, why);
-        }
-        log("relocation incomplete (swap rebuild pending) — growth not applied, re-run the command to continue");
-        return Ok(());
-    }
-    fault_before_grow();
-
-    // 扩容收尾：目标分区扩到 movable 新区域之前（防止与刚打包的分区重叠）；
-    // 无 movable 时到 last_usable。commit → resize FS（同一份随行几何，不重读盘上的表）
+    post: &mut Vec<Pending>,
+) -> Result<(), RunOutcome> {
+    let mut g = d.g.clone();
     let grow_idx = (plan.grow_part - 1) as usize;
-    let grow_start = g.entries()[grow_idx].starting_lba;
-    let grow_end = grow_end_for(plan, grow_start)?;
-    let old_len = g.entries()[grow_idx].ending_lba.checked_sub(grow_start)
-        .map(|v| v + 1)
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "grow target entry inverted — refusing"))?;
-    g.update_entry(grow_idx, |te| te.ending_lba = grow_end)?;
-    let grow_len = grow_end - grow_start + 1;
-    g.commit(src)?;
-    table::ensure_protective_mbr(src, g.sector_size())?;
+    let grow_start = g.entries().get(grow_idx).map(|e| e.starting_lba).ok_or_else(|| {
+        RunOutcome::no_mutation(format!("partition {} is outside the entry array", plan.grow_part))
+    })?;
+    // 扩容终点由计划里的目的区决定：moves 是尾→首的紧凑序，最左的新起点即本次腾出
+    // 空间的左边界。它与搬移同属一份作业，因此和搬移写进同一份计划、同一条表戳链
+    let grow_end = grow_end_for(plan, grow_start)
+        .map_err(|e| RunOutcome::no_mutation(e.to_string()))?;
+    let old_len = d.old_range.1.checked_sub(d.old_range.0).and_then(|v| v.checked_add(1))
+        .ok_or_else(|| RunOutcome::no_mutation("grow target entry inverted"))?;
+    let grow_len = grow_end.checked_sub(grow_start).and_then(|v| v.checked_add(1))
+        .ok_or_else(|| RunOutcome::no_mutation("grow target length overflows"))?;
+
+    // 换区条目的盘上类型必须仍然是 swap：两次运行之间被改成别的类型时，按旧判定 mkswap
+    // 会把一个已不属于 swap 的分区覆写掉。类型读不出来同样按"不再成立"拒绝——
+    // 绝不用无知当许可
+    for m in &plan.moves {
+        if !m.is_swap {
+            continue;
+        }
+        let still_swap = crate::gpt_policy::live_entry(&g, m.part_num)
+            .is_ok_and(|e| is_swap_guid(&e.partition_type_guid));
+        if !still_swap {
+            return Err(RunOutcome::refused(format!(
+                "partition {} is not a swap partition on disk any more (its type changed since the \
+                 checkpoint) — refusing to recreate it there; release the scene with `diskedit abort`",
+                m.part_num
+            )));
+        }
+    }
+
+    // 判定与写盘之间的外部改动：条目必须还是锁下读到的那一份。装配会把随行几何写成
+    // 表内容，少了这一步，等待用户确认期间别人改的表会被旧几何静默覆盖
+    g.ensure_entries_unchanged_fail(src)?;
+    // 搬移与扩容装配成一份计划：每一步的写前快照是前一步的写后表戳，盘在装配之后被
+    // 外部改动时由执行器的首写前比对拒绝
+    let moves: Vec<(u32, u64)> = plan
+        .moves
+        .iter()
+        .map(|m| {
+            m.first_lba
+                .checked_add(m.delta_lba)
+                .map(|dst| (m.part_num, dst))
+                .ok_or_else(|| RunOutcome::no_mutation("relocation target LBA overflows"))
+        })
+        .collect::<Result<_, _>>()?;
+    let confirmed = crate::assembly::assemble_resize_move_plan(
+        src,
+        &mut g,
+        &moves,
+        (plan.grow_part, grow_end),
+    )?;
+
+    // 现场先绑：执行器从记录里的条目游标决定从哪继续，记录里没有搬移计划时它拒绝推进游标
+    bind_relocation(src, &d.relocation, d.lvm.as_ref()).map_err(|e| {
+        RunOutcome::no_mutation(format!("the relocation plan was not recorded ({e})"))
+    })?;
+    record_journal(src)?.bind_old_range(d.old_range).map_err(|e| {
+        RunOutcome::no_mutation(format!("the pre-commit range was not recorded ({e})"))
+    })?;
+
+    let mut sink = crate::recovery::sink::RecordSink::with_log(log);
+    match crate::execution::execute_plan(src, &confirmed, Some(d.chunk_len), &mut sink, post)? {
+        // 换区重建失败：条目循环停在那一处，扩容收尾不能做——grow_end 按全体 moves 取
+        // min(new_first)−1，把尚未搬移成员的旧位也划进扩容区，提交即写出与未搬移分区
+        // 重叠的表项。记录原样保留，重跑在同一记录上从本条目重试 mkswap
+        crate::execution::StepFlow::Stopped => {
+            log("relocation incomplete (swap rebuild pending) — growth not applied, re-run the command to continue");
+            return Ok(());
+        }
+        crate::execution::StepFlow::Complete => {}
+    }
+
     log(&format!("partition {} extended (FS area ends before relocated partitions)", plan.grow_part));
     // 扩到设备末端的 FS 工具（resize2fs 一类）以内核报告的尺寸为准：内核视图停在旧尺寸时
     // 它们会认为无事可做、以 0 退出，把"分区已扩、FS 未扩"洗成成功。重读失败时不跑 FS 步，
     // 把扩容记成待办
     let kernel_followed = crate::support::kernel_resync(src);
-
     // FS resize 是契约的一部分：失败即后置条件未满足（由调用方换算为 PARTIAL）。
     // 这里不能只打日志当成功——脚本会据此认为空间已可用
-    if no_fs {
+    if d.no_fs {
         log("partition extended (--no-fs: filesystem left untouched)");
     } else if !kernel_followed {
-        post.pending(Pending::new(
+        post.push(Pending::new(
             plan.grow_part,
             PendingKind::Fs,
             "the kernel partition view still reports the old size, so the filesystem was not resized — refresh the view (partprobe / partx) and re-run to finish",
             String::new(),
         ));
     } else {
-        finalize_growth(src, plan.grow_part, GrowthRegions {
-            old: (grow_start, old_len),
-            new: (grow_start, grow_len),
-        }, g.sector_size(), log, post)?;
+        finalize_growth(
+            src,
+            plan.grow_part,
+            GrowthRegions { old: (grow_start, old_len), new: (grow_start, grow_len) },
+            g.sector_size(),
+            log,
+            post,
+        )?;
     }
-    // ckpt 在 FS 步定论后才撤：FS 步失败而 ckpt 已删时，重跑会按全新作业从旧区重拷，
-    // 自重叠搬移下旧区字节已被写覆盖，重拷即把覆盖后的数据盖回新区。任何待办（FS 步
-    // 或 swap 重建）都保留 ckpt——重跑按续传口径只重试未完成的部分。
-    // 现场记着 LVM 收尾事实而调用方不跑链（move / resize-part）：保留现场并把未做的
-    // 那一步作为待办浮出，重跑才有基线可用
-    if let Some(facts) = &ckpt.lvm
+    // 记录的撤除由调用方的收尾出口决定（`finish_resize`）：FS 步定论且没有任何待办时
+    // 才提交并删除。FS 步失败而记录已删时，重跑会按全新作业从旧区重拷，自重叠搬移下
+    // 旧区字节已被写覆盖，重拷即把覆盖后的数据盖回新区。任何待办（FS 步或 swap 重建）
+    // 都保留记录——重跑按续传口径只重试未完成的部分。
+    // 现场记着 LVM 收尾事实而调用方不跑链：保留现场并把未做的那一步作为待办浮出
+    if let Some(facts) = &d.lvm
         && !d.defer_ckpt
     {
         let what = match &facts.lv_path {
             Some(lv) => format!("partitions moved and partition {} extended, but pvresize / lvextend for {lv} was not run", plan.grow_part),
             None => format!("partitions moved and partition {} extended, but pvresize was not run", plan.grow_part),
         };
-        post.pending(Pending::new(
+        post.push(Pending::new(
             plan.grow_part,
             PendingKind::Other("lvm chain (pvresize/lvextend)"),
             what,
-            "re-run `diskedit resize` on the same target to finish the PV/LV chain (the checkpoint holds the recorded extent count)".to_string(),
+            "re-run `diskedit resize` on the same target to finish the PV/LV chain (the recovery record holds the recorded extent count)".to_string(),
         ));
-    }
-    // 删除失败同样进待办：现场留着会被下次 resize/apply 当成续跑参数比对，而作业其实已完成
-    match checkpoint_may_be_removed(true, pending_before, post.len(), d.defer_ckpt || ckpt.lvm.is_some()) {
-        Ok(()) => {
-            if !crate::dev::remove_recovery_file(ckpt_path) {
-                post.pending(Pending::new(
-                    plan.grow_part,
-                    PendingKind::Other("checkpoint"),
-                    format!(
-                        "the job finished but its checkpoint {} could not be removed — the next resize/apply \
-                         will treat this target as an unfinished job; remove the file by hand",
-                        ckpt_path.display()
-                    ),
-                    String::new(),
-                ));
-            }
-        }
-        Err(why) => log_ckpt_retention(log, ckpt_path, why),
     }
     Ok(())
 }
@@ -764,12 +629,59 @@ pub(crate) fn finalize_growth(
     r: GrowthRegions,
     ss: u64,
     log: &mut dyn FnMut(&str),
-    post: &mut PostWrite,
-) -> io::Result<()> {
-    let overflow = || io::Error::new(io::ErrorKind::InvalidData, "growth byte offset overflows — refusing");
+    post: &mut Vec<Pending>,
+) -> Result<(), RunOutcome> {
+    // 表已提交：本函数内的失败都只能按"盘可能已改变"上报
+    let overflow = || RunOutcome::partial("growth byte offset overflows — refusing");
     let base = r.new.0.checked_mul(ss).ok_or_else(overflow)?;
     let len = r.new.1.checked_mul(ss).ok_or_else(overflow)?;
-    match crate::fsops::grow_target_at(src, part, base, len) {
+    let growable = match crate::fsops::grow_target_at(src, part, base, len) {
+        Ok(g) => g,
+        // 判定本身失败：写盘前那类"请求与现状不符"已不成立，此刻只剩后置条件做不了
+        // 与读不出来两种结局
+        Err(e) => match RunOutcome::from(e) {
+            RunOutcome::Refused(why) => {
+                post.push(Pending::new(part, PendingKind::Fs, why, String::new()));
+                return Ok(());
+            }
+            // 表已经提交过：读不出来只能按"盘可能已改变"上报
+            other => return Err(other.past_boundary()),
+        },
+    };
+    match growable {
+        // swap：内容可弃，表项已扩 → mkswap 重建使新空间生效（UUID/卷标保持）。
+        // grow_support 对 swap 承诺的就是 mkswap——漏掉它即违背承诺。外部工具写盘，先落屏障
+        Growable::Target(t) if t.fstype == ContentKind::Swap => {
+            src.mark_non_reversible()
+                .map_err(|e| RunOutcome::partial(format!("partition {part}: cannot persist the recovery barrier before rebuilding the swap area: {e}")))?;
+            let ident = swap_identity_preferring(src, r.old.0, r.new.0, r.old.1, ss);
+            match crate::fsops::recreate_swap(src, part, &ident) {
+                Ok(note) => log(&format!("swap recreated ({note})")),
+                Err(e) => post.push(Pending::new(
+                    part,
+                    PendingKind::Swap,
+                    e.to_string(),
+                    crate::fsops::rescue_hint(Some(ContentKind::Swap), &crate::dev::part_dev_hint(src, part, r.old.0 * ss)),
+                )),
+            }
+        }
+        // 有可扩的一段：装配成一条 `FsResize` 步骤交给执行器——判决与执行同源，
+        // 屏障、工具调用与挂载点清理都在那一步里，命令层不再自己调工具
+        Growable::Target(_) => {
+            let plan = crate::assembly::assemble_fs_resize(src, part, None)
+                .map_err(|e| RunOutcome::partial(e.to_string()))?;
+            // 记录存在时，FS 步的"退出后替换"要落到记录里。换了 sink
+            // 只影响这一件事：没有记录的载体本来就没有可写的地方，此时用空 sink
+            let mut sink: Box<dyn crate::execution::StepSink> = if src.record_journal().is_some() {
+                Box::new(crate::recovery::sink::RecordSink::quiet())
+            } else {
+                Box::new(crate::execution::NoProgress)
+            };
+            crate::execution::execute_plan_complete(src, &plan, None, sink.as_mut())
+                // FS 步的预扫描可能给出首写前的拒绝：表已提交，这里同样只能报 5
+                .map_err(RunOutcome::past_boundary)?;
+            log("filesystem resized");
+        }
         // 走到这里的是写盘前已放行、没有可扩 FS 的那几种：首启 overlay、PV，以及页格式
         // 在本机激活不了的 swap——`unknown` 已由 check_grow_step 拦下，本支至多因盘在两步
         // 之间被改动而见到它。swap 那一类还留着一件**真实的待办**（重建才能用上新空间），
@@ -778,126 +690,18 @@ pub(crate) fn finalize_growth(
         // resize_done 里发生，屏障由它携带 journal 写句柄在 spawn 前落——"表被回滚、
         // PV 已扩"的自相矛盾同样被排除，且 undo 不再被"屏障已落、pvresize 未跑"的
         // 死亡窗口无谓锁死。本支只探测、不写盘
-        Ok(g @ (Growable::OverlayPending | Growable::SwapUnactivatable | Growable::NoFilesystem(_))) => {
-            match swap_rebuild_pending(src, part, base, len)? {
-                Some(missed) => post.pending(missed),
-                None => match g {
-                    // 这段空间要等目标系统启动时由 fstools 建成 overlay：本命令的默认
-                    // 后置条件（空间对该分区可用）因此未达成，出口不能报完整成功。
-                    // "does not verify" 是实情——启动期那一步失败与否本命令看不到
-                    Growable::OverlayPending => {
-                        log("partition extended (the overlay filesystem is created at system startup)");
-                        post.pending(Pending::new(
-                            part,
-                            PendingKind::RuntimeInitialization,
-                            "the overlay filesystem is initialized by the target system at startup; \
-                             this command did not verify that step",
-                            "boot the target and check that the overlay is mounted and its size covers the new space",
-                        ));
-                    }
-                    // 分区已扩、里面却没有可扩的 FS，类型认不出：写盘前 check_grow_step 对
-                    // 这一态是拒绝，走到这里只因盘在两步之间被改动。后置条件"新空间对该
-                    // 分区可用"未达成，不能报成完整成功。措辞不替区域内容下结论——空区域
-                    // 与认不出的类型在 identify 口径下同属 None
-                    Growable::NoFilesystem(None) => {
-                        log("partition extended (filesystem not resized — its type was not identified)");
-                        post.pending(Pending::new(
-                            part,
-                            PendingKind::Fs,
-                            "the partition was extended but the filesystem inside was not resized — its type was not identified",
-                            "identify the filesystem inside and grow it with its own tool, or re-run with --no-fs to change only the partition",
-                        ));
-                    }
-                    // PV 的空间在收尾的 pvresize 链里生效，本命令没有可写的后置条件
-                    Growable::NoFilesystem(Some(FsKind::Lvm2Pv)) => {
-                        log("partition extended (the PV space takes effect through the pvresize chain)")
-                    }
-                    // 元数据是 swap、页格式在本机激活不了（创建机用了 32K 页）：扩容后
-                    // "swap 未重建"是真实待办，不能并入"无需处理"
-                    Growable::SwapUnactivatable => {
-                        log("partition extended (the swap signature was found but this host cannot activate it)");
-                        post.pending(Pending::new(
-                            part,
-                            PendingKind::Swap,
-                            "the partition was extended but the swap area was not rebuilt — its signature uses a \
-                             page size this host cannot activate",
-                            "boot the target or a host with a matching page size, then check that swap is active \
-                             and covers the new space",
-                        ));
-                    }
-                    // 认出了类型却没有可扩的 FS：写盘前 check_grow_step 对同一态是拒绝，走到这里
-                    // 只因盘在两步之间被改动。后置条件"新空间对该分区可用"未达成
-                    Growable::NoFilesystem(Some(kind)) => {
-                        log(&format!(
-                            "partition extended (the {kind} inside was not resized — this tool cannot grow it)"
-                        ));
-                        post.pending(Pending::new(
-                            part,
-                            PendingKind::Fs,
-                            format!("the partition was extended but the {kind} inside was not resized"),
-                            format!("grow the {kind} with its own tool, or re-run with --no-fs to change only the partition"),
-                        ));
-                    }
-                    // 外层已把 Target 交给各自的臂；走到这里只可能是类型在两步之间翻转，
-                    // 后置条件同样未达成
-                    Growable::Target(t) => {
-                        log(&format!("partition extended (the {} inside was not resized — its type changed between validation and finish)", t.fstype));
-                        post.pending(Pending::new(
-                            part,
-                            PendingKind::Fs,
-                            format!("the partition was extended but the {} inside was not resized — its type changed between validation and finish", t.fstype),
-                            format!("grow the {} with its own tool, or re-run with --no-fs to change only the partition", t.fstype),
-                        ));
-                    }
-                },
-            }
-        }
-        // swap：内容可弃，表项已扩 → mkswap 重建使新空间生效（UUID/卷标保持）。
-        // grow_support 对 swap 承诺的就是 mkswap——漏掉它即违背承诺。外部工具写盘，先落屏障
-        Ok(Growable::Target(t)) if t.fstype == FsKind::Swap => {
-            src.set_mutation(crate::dev::Mutation::ExternalFsTool);
-            src.mark_non_reversible()?;
-            let ident = swap_identity_preferring(src, r.old.0, r.new.0, r.old.1, ss);
-            match crate::fsops::recreate_swap(src, part, &ident) {
-                Ok(note) => log(&format!("swap recreated ({note})")),
-                Err(e) => post.pending(Pending::new(
-                    part,
-                    PendingKind::Swap,
-                    e.to_string(),
-                    crate::fsops::rescue_hint(Some(FsKind::Swap), &crate::dev::part_dev_hint(src, part, r.old.0 * ss)),
-                )),
-            }
-        }
-        // 外部 FS 工具（resize2fs/xfs_growfs/…）的写入不可回滚：扩完后 FS 自述尺寸大于
-        // 旧分区尺寸，此后回滚表项即"表与内容自相矛盾"。必须先于该写入落屏障
-        Ok(Growable::Target(t)) => {
-            src.set_mutation(crate::dev::Mutation::ExternalFsTool);
-            src.mark_non_reversible()?;
-            match t.resize_fs(src) {
-                Ok(leak) => {
-                    log("filesystem resized");
-                    // 扩容已成功，卸载的成败是另一条后置条件：它不改写成功这一事实，
-                    // 只作为一条待办随结果浮出
-                    if let Some(leak) = leak {
-                        post.pending(leak.into_pending(part));
+        g @ (Growable::OverlayPending | Growable::SwapUnactivatable | Growable::NoFilesystem(_)) => {
+            match swap_rebuild_pending(src, part, base, len).map_err(RunOutcome::from)? {
+                Some(missed) => post.push(missed),
+                None => {
+                    let p = grow_post(part, &g);
+                    log(&p.log);
+                    if let Some(item) = p.pending {
+                        post.push(item);
                     }
                 }
-                Err(e) => post.pending(Pending::new(
-                    part,
-                    PendingKind::Fs,
-                    e.to_string(),
-                    crate::fsops::rescue_hint(Some(t.fstype), &crate::dev::part_dev_hint(src, part, r.new.0 * ss)),
-                )),
             }
         }
-        // 判定本身失败：写盘前那类"请求与现状不符"已不成立，此刻只剩两条出路——
-        // 后置条件做不了（pending，脚本据此知道空间还没可用）与读不出来（io 域，报失败）
-        Err(e) => match crate::outcome::Fail::from(e) {
-            crate::outcome::Fail::Refused(why) => post.pending(Pending::new(part, PendingKind::Fs, why, String::new())),
-            crate::outcome::Fail::Infra(cause) | crate::outcome::Fail::Failed(cause) => {
-                return Err(io::Error::other(cause))
-            }
-        },
     }
     Ok(())
 }

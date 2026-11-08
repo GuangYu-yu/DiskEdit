@@ -1,11 +1,11 @@
 //! 确认门：按几何推导出的影响面决定是否需要用户授权，而不是按命令名。
 //!
-//! 与能力门（`cmd::platform_allows`）正交：能力门问"本平台能不能写"（30），
-//! 确认门问"用户是否授权这次破坏"（10）。分派时能力门在外，这里在内——命令函数
+//! 与能力门（`cmd::capability_gap`）正交：能力门问"本平台有没有这条命令需要的原语"（6），
+//! 确认门问"用户是否授权这次破坏"（3）。分派时能力门在外，这里在内——命令函数
 //! 在几何与影响范围算完之后、任何持久化副作用（目标字节、journal 记录、checkpoint、
 //! 日志；锁文件除外）之前调用 [`gate`]。
 
-use crate::support::{bail_fail, Fail};
+use crate::support::{bail_fail, RunOutcome};
 
 /// 一次操作对盘上数据的影响面，由命令层在几何算完后填入。
 /// 任一字段为真都意味着越过一个 `undo` 回不去的点。
@@ -55,7 +55,7 @@ pub(crate) fn required(impact: &Impact) -> Option<String> {
 pub(crate) fn gate(yes: bool, impact: Impact) {
     let Some(what) = required(&impact) else { return };
     if !yes {
-        bail_fail(Fail::refused(what));
+        bail_fail(RunOutcome::refused(what));
     }
 }
 

@@ -7,15 +7,15 @@ use crate::fsops::run;
 /// FS 在线 grow 到整分区（ext: resize2fs 对挂载设备无 size = 扩满分区，man resize2fs；
 /// xfs: xfs_growfs 挂载点；btrfs: resize max 挂载点）。
 /// 程序与参数只写这一处：补救提示复用同一份映射（fs_grow_hint），避免两处漂移
-pub(crate) fn fs_grow_cmd(t: &OnlineTarget, fstype: Option<crate::fsid::FsKind>) -> Option<(String, Vec<String>)> {
+pub(crate) fn fs_grow_cmd(t: &OnlineTarget, fstype: Option<ContentKind>) -> Option<(String, Vec<String>)> {
     // xfs_growfs 与 btrfs resize 都以挂载点为参数：目标不是从挂载点解析来时没有这个参数，
     // 与"该 FS 没有在线工具"同归 None（调用方统一报"换离线路径"）
     let mnt = || t.mnt.as_deref().map(|p| p.to_string_lossy().into_owned());
     let dev = t.part_dev.to_string_lossy().into_owned();
     match fstype {
-        Some(crate::fsid::FsKind::Ext) => Some(("resize2fs".to_string(), vec![dev])),
-        Some(crate::fsid::FsKind::Xfs) => Some(("xfs_growfs".to_string(), vec![mnt()?])),
-        Some(crate::fsid::FsKind::Btrfs) => {
+        Some(ContentKind::Filesystem(FsKind::Ext)) => Some(("resize2fs".to_string(), vec![dev])),
+        Some(ContentKind::Filesystem(FsKind::Xfs)) => Some(("xfs_growfs".to_string(), vec![mnt()?])),
+        Some(ContentKind::Filesystem(FsKind::Btrfs)) => {
             Some(("btrfs".to_string(), vec!["filesystem".into(), "resize".into(), "max".into(), mnt()?]))
         }
         _ => None,
@@ -34,11 +34,11 @@ pub(crate) enum FsGrowError {
     Exit(String),
 }
 
-pub(crate) fn fs_grow(t: &OnlineTarget, fstype: Option<crate::fsid::FsKind>) -> Result<(), FsGrowError> {
+pub(crate) fn fs_grow(t: &OnlineTarget, fstype: Option<ContentKind>) -> Result<(), FsGrowError> {
     let Some((prog, args)) = fs_grow_cmd(t, fstype) else {
         return Err(FsGrowError::NoTool(format!(
             "{} has no online grow tool; unmount the partition and use the offline path where the FS is supported",
-            crate::fsid::fs_name(fstype)
+            crate::fsid::content_name(fstype.unwrap_or(ContentKind::Unknown))
         )));
     };
     let argv: Vec<&str> = args.iter().map(String::as_str).collect();
@@ -58,24 +58,24 @@ pub(crate) fn fs_grow(t: &OnlineTarget, fstype: Option<crate::fsid::FsKind>) -> 
 }
 
 /// 在线 FS 步的补救命令（与 fs_grow 共用命令映射；无在线工具时回落到离线提示）
-pub(crate) fn fs_grow_hint(t: &OnlineTarget, fstype: Option<crate::fsid::FsKind>) -> String {
+pub(crate) fn fs_grow_hint(t: &OnlineTarget, fstype: Option<ContentKind>) -> String {
     match fs_grow_cmd(t, fstype) {
         Some((prog, args)) => format!("{prog} {}", args.join(" ")),
         None => crate::fsops::rescue_hint(fstype, &t.part_dev.to_string_lossy()),
     }
 }
 
-pub(crate) fn fstype_of(t: &OnlineTarget) -> io::Result<Option<crate::fsid::FsKind>> {
+pub(crate) fn fstype_of(t: &OnlineTarget) -> io::Result<Option<ContentKind>> {
     // 挂载中的分区不能以 O_EXCL 读写打开（dev::FileSource::open 会失败），只读识别
     let src = FileSource::open_read_only(&t.part_dev)?;
-    crate::fsid::identify(&src, 0, t.part_len_bytes)
+    crate::fsid::identify(&src, 0, t.part_len_bytes).map(Some)
 }
 
 /// btrfs 多设备防线（在线路径）：多设备 btrfs 的 resize 须按设备逐个手动处理
 /// （btrfs-filesystem(8)），与离线路径共用 fsops 的同一道判定；只对 btrfs 生效，
 /// 其余 FS 的该偏移另有布局。调用点须在任何写盘步骤之前
-pub(crate) fn refuse_btrfs_multi_device(t: &OnlineTarget, fstype: Option<crate::fsid::FsKind>) -> Result<(), crate::fsops::FsError> {
-    if fstype != Some(crate::fsid::FsKind::Btrfs) {
+pub(crate) fn refuse_btrfs_multi_device(t: &OnlineTarget, fstype: Option<ContentKind>) -> Result<(), crate::fsops::FsError> {
+    if fstype != Some(ContentKind::Filesystem(FsKind::Btrfs)) {
         return Ok(());
     }
     let src = FileSource::open_read_only(&t.part_dev)?;

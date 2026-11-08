@@ -3,15 +3,18 @@
 use super::*;
 
 /// FS 层失败的分类。fsops 只回答"操作层面发生了什么"，"这该算拒绝还是故障"要结合
-/// durable boundary 才能回答，属命令层语义（映射见 `outcome::From<FsError> for Fail`）。
+/// durable boundary 才能回答，属命令层语义（映射见 `outcome::From<FsError> for RunOutcome`）。
 ///
-/// 只有四类是在**发生处就能确定**的（未接线的类型、参数非法、缺工具、工具已跑但非零
-/// 退出），故单列；其余一律 `Io`——环境故障是最保守的缺省，它不承诺"改参数重试有意义"。
-/// 用 io::ErrorKind 反推这几类是行不通的：kind 一旦成形就分不出"类型不认得"与"设备读不到"
+/// 只有这几类是在**发生处就能确定**的（未接线的类型、平台无实现、参数非法、缺工具、
+/// 工具已跑但非零退出），故单列；其余一律 `Io`——环境故障是最保守的缺省，它不承诺
+/// "改参数重试有意义"。用 io::ErrorKind 反推这几类是行不通的：kind 一旦成形就分不出
+/// "类型不认得"与"设备读不到"
 #[derive(Debug)]
 pub enum FsError {
     /// 该类型/该操作没有接线的工具（不认得的 FS、本工具不负责的组合）
     UnsupportedFs(String),
+    /// 构建或运行平台没有该操作的实现（非 Linux 下的写路径、需要内核接口的操作）
+    UnsupportedPlatform(String),
     /// 参数非法，或目标现状与请求不符（分区不存在/为空、容器分区、尺寸不是扇区倍数）
     InvalidArgument(String),
     /// PATH 里找不到必需的工具
@@ -25,6 +28,10 @@ pub enum FsError {
 impl FsError {
     pub(crate) fn unsupported(msg: impl Into<String>) -> Self {
         Self::UnsupportedFs(msg.into())
+    }
+
+    pub(crate) fn platform(msg: impl Into<String>) -> Self {
+        Self::UnsupportedPlatform(msg.into())
     }
 
     pub(crate) fn invalid(msg: impl Into<String>) -> Self {
@@ -51,6 +58,7 @@ impl FsError {
     pub(crate) fn with_note(self, note: &str) -> Self {
         match self {
             Self::UnsupportedFs(m) => Self::UnsupportedFs(format!("{m}; {note}")),
+            Self::UnsupportedPlatform(m) => Self::UnsupportedPlatform(format!("{m}; {note}")),
             Self::InvalidArgument(m) => Self::InvalidArgument(format!("{m}; {note}")),
             Self::ToolMissing(m) => Self::ToolMissing(format!("{m}; {note}")),
             Self::CommandFailed(m) => Self::CommandFailed(format!("{m}; {note}")),
@@ -82,6 +90,7 @@ impl std::fmt::Display for FsError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::UnsupportedFs(m)
+            | Self::UnsupportedPlatform(m)
             | Self::InvalidArgument(m)
             | Self::ToolMissing(m)
             | Self::CommandFailed(m) => f.write_str(m),

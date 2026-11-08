@@ -2,12 +2,15 @@
 //!
 //! 两类目标的凭据来源不同，对外是同一个概念：
 //!
-//! - **镜像**：独立的锁文件（镜像路径加 [`crate::dev::LOCK_SUFFIX`]），非阻塞独占锁
+//! - **镜像**：记录目录内的锁文件 `<image>.diskedit/record.lock`，非阻塞独占锁
 //!   （`std::fs::File::try_lock`：Unix 上是 flock，Windows 上是 LockFileEx）。锁文件
 //!   **不随释放删除**——删它有竞态：另一个进程可能刚取到同一把锁，而删掉的正是它正持有的
 //!   那个名字。判据是"锁取不取得到"，不是"文件在不在"，因此残留的空锁文件不构成任何阻挡
-//! - **块设备**：锁文件放在 `state_dir()` 下，与 journal / checkpoint 同一身份键派生
-//!   （见 [`crate::dev`]），因此三者的路径规则只有一套、没有第二个 lock 目录概念。
+//! - **块设备**：锁文件是 `state_dir()` 下的盘键 `<state_root>/<盘键>.lock`。盘键按
+//!   整盘载体派生（有 device-id 用 device-id，否则 sysfs 父节点名 + 容量），分区号
+//!   不进锁键——`/dev/sdb` 与 `/dev/sdb1` 因此共用同一把锁，而记录目录仍按目标身份
+//!   各一份。dm / md / 只有 major:minor 的目标同样有盘键，其写命令在取锁前已退 6。
+//!   锁文件与记录不在同一层：记录在 `<state_root>/recovery/<identity-hash>/` 下。
 //!   在锁之外，块设备的写打开仍是 `O_EXCL`（见 [`crate::dev::FileSource::open`] 的
 //!   块设备分支）——两道凭据互为补充：O_EXCL 挡住别的持 fd 写者，锁文件覆盖不经过
 //!   O_EXCL 的写入路径（如 `abandon`）与在线路径。同一进程二次以 `O_EXCL` 打开同一
@@ -17,7 +20,7 @@
 //! 锁是 **advisory** 的：它只在**本工具**的各次调用之间互斥，不阻止别的程序写同一块盘。
 //! 这正是把它藏在类型后面的理由——业务代码不该依赖 flock / LockFileEx 的平台细节
 //!
-//! 平台边界：inode 级的第二道凭据只在 unix 上取（见 [`TargetLock::_image`]）。因此
+//! 平台边界：inode 级的第二道凭据只在 unix 上取（见 [`TargetLock::acquire`]）。因此
 //! **非 unix 平台只承诺锁文件这一道保护**，硬链接或其他别名路径并发写同一目标不在
 //! 保证范围内。`std::fs::File::try_lock` 虽然跨平台可用，但 Windows 的 LockFileEx 是
 //! **强制锁且锁整个文件**，本进程随后经另一个句柄读写同一文件会直接失败，故它不能
@@ -26,7 +29,7 @@
 use std::fs::{File, OpenOptions};
 
 use crate::dev::{TargetFingerprint, TargetIdentity};
-use crate::outcome::Fail;
+use crate::outcome::RunOutcome;
 
 /// 持有期间目标归本进程独占；析构即释放。
 ///
@@ -34,15 +37,16 @@ use crate::outcome::Fail;
 pub(crate) struct TargetLock {
     /// 锁的载体。下划线前缀即契约：本字段**不被读取**，存在的意义就是被持有，句柄析构即释放锁
     _file: File,
-    /// 镜像目标的第二道凭据：对**数据文件自身**上的非阻塞排他锁（inode 级，仅 unix）。
-    /// 锁文件按 canonical path 派生，硬链接等"同一 inode 的另一条路径"由此各拿一把
-    /// 锁文件锁、互相看不见；对数据文件上锁才把同一份数据收敛到一把锁。
+    /// 第二道凭据：对**目标句柄**自身的非阻塞排他锁（inode 级，仅 unix）。镜像落在
+    /// 数据文件上，块设备落在设备节点上。锁文件按 canonical path 派生，硬链接等
+    /// "同一 inode 的另一条路径"由此各拿一把锁文件锁、互相看不见；对句柄上锁才把
+    /// 同一份数据收敛到一把锁。
     /// 调用方未给出 inode 证据（`abandon` 的常态）且目标不在时，退回只靠锁文件；
     /// 给出预期的写路径若目标不在则取锁失败。
     /// Windows 侧不取这道凭据：那里的 LockFileEx 是**强制**的且 `File::lock` 锁整个文件，
     /// 本进程随后经另一个句柄读写同一文件会直接 ERROR_LOCK_VIOLATION（见
     /// [`crate::dev::FileSource`] 的读写句柄）
-    _image: Option<File>,
+    _handle: Option<File>,
 }
 
 impl TargetLock {
@@ -56,49 +60,57 @@ impl TargetLock {
     ///
     /// 只有两种结局：拿到锁，或返回错误。**没有"降级为不持锁"这条路径**——锁落点由
     /// 身份恒给出（见 [`crate::dev::TargetIdentity::lock_path`]），建立失败即拒绝
-    pub(crate) fn acquire(identity: &TargetIdentity, expected: Option<&TargetFingerprint>) -> Result<Self, Fail> {
+    pub(crate) fn acquire(identity: &TargetIdentity, expected: Option<&TargetFingerprint>) -> Result<Self, RunOutcome> {
         let path = identity.lock_path();
-        // 落点目录可能尚不存在：块设备的锁在 state_dir 下，而 state_dir 来自配置，
-        // 任何一次调用都可能是首次。尽力创建即可——真正的失败在下面打开时以完整路径暴露
-        if let Some(dir) = path.parent() {
-            crate::dev::best_effort_mkdir(dir);
-        }
-        let file = OpenOptions::new()
-            .read(true)
+        // 落点目录由调用方在取锁前准备好（`prepare_record_dir`）：锁落在记录目录内，
+        // 目录的 0700 / 所有者形状不能在这里以"尽力创建"绕过复核
+        let mut opts = OpenOptions::new();
+        opts.read(true)
             .write(true)
             .create(true)
             // 锁文件的内容自始至终无关紧要，有意义的只是它上面的锁；截断它既无必要，
             // 也会在"别人正持锁"时多写一次盘
-            .truncate(false)
+            .truncate(false);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            // 记录目录内只有本工具写的锁文件：`0600` 只留所有者可读写；
+            // `O_NOFOLLOW` 让尾分量是符号链接时直接失败，不把锁下到别处
+            opts.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+        }
+        let file = opts
             .open(path)
-            .map_err(|e| Fail::infra(format!("cannot open the target lock {}: {e}", path.display())))?;
+            .map_err(|e| RunOutcome::no_mutation(format!("cannot open the target lock {}: {e}", path.display())))?;
         match file.try_lock() {
             Ok(()) => {}
             // 另一个进程正持有 ⇒ 环境条件，不是请求与现状不匹配：换参数没用，等它做完即可。
             // 与块设备那条 O_EXCL 打开失败的归类一致（都是 30）
             Err(std::fs::TryLockError::WouldBlock) => return Err(Self::busy(path)),
             Err(std::fs::TryLockError::Error(e)) => {
-                return Err(Fail::infra(format!("cannot take the target lock {}: {e}", path.display())));
+                return Err(RunOutcome::no_mutation(format!("cannot take the target lock {}: {e}", path.display())));
             }
         }
-        // 第二道凭据：镜像的数据文件本身（仅 unix）。只有"目标不在"才放弃这道凭据
-        // ——`abandon` 的常态就是目标已消失，那时能依赖的只有锁文件。其余打开失败
-        // （EACCES / EMFILE / EIO）不是"目标不在"：静默降级会丢掉 inode 级凭据
+        // 第二道凭据：已打开的目标句柄（仅 unix）。镜像落在数据文件的 inode 上，
+        // 块设备落在设备节点的 inode 上；同一 inode 的别名路径由此收敛到一把锁。
+        // 只有"目标不在"才放弃这道凭据——`abandon` 的常态就是目标已消失，那时能
+        // 依赖的只有锁文件。其余打开失败（EACCES / EMFILE / EIO）不是"目标不在"：
+        // 静默降级会丢掉 inode 级凭据
         #[cfg(unix)]
         let want = expected.filter(|f| f.has_inode_evidence());
         #[cfg(unix)]
-        let image = match identity.image_data_path() {
-            Some(data) => match OpenOptions::new().read(true).open(data) {
+        let handle = {
+            let data = identity.data_path();
+            match OpenOptions::new().read(true).open(data) {
                 Ok(f) => {
                     // 路径可能已不再指向打开时的那个文件：比对已打开句柄的 inode 证据，
                     // 不符即拒绝——此时"锁住了数据文件"这句话对写入的那个对象不成立
                     if let Some(want) = want {
                         use std::os::unix::fs::MetadataExt;
                         let meta = f.metadata().map_err(|e| {
-                            Fail::infra(format!("cannot identify the target {} to take the inode lock: {e}", data.display()))
+                            RunOutcome::no_mutation(format!("cannot identify the target {} to take the inode lock: {e}", data.display()))
                         })?;
                         if (meta.dev(), meta.ino()) != (want.dev, want.ino) {
-                            return Err(Fail::refused(format!(
+                            return Err(RunOutcome::refused(format!(
                                 "{} no longer names the file that was opened (now dev:{} ino:{}, opened dev:{} ino:{}) \
                                  — refusing to lock a different file than the one being written",
                                 data.display(),
@@ -113,7 +125,7 @@ impl TargetLock {
                         Ok(()) => Some(f),
                         Err(std::fs::TryLockError::WouldBlock) => return Err(Self::busy(data)),
                         Err(std::fs::TryLockError::Error(e)) => {
-                            return Err(Fail::infra(format!("cannot lock the target {}: {e}", data.display())));
+                            return Err(RunOutcome::no_mutation(format!("cannot lock the target {}: {e}", data.display())));
                         }
                     }
                 }
@@ -122,34 +134,33 @@ impl TargetLock {
                 // 降级成"只靠锁文件"继续写——锁文件按路径派生，硬链接别名各拿一把
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound && want.is_none() => None,
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                    return Err(Fail::refused(format!(
+                    return Err(RunOutcome::refused(format!(
                         "{} does not exist, but the caller opened a file expected to still be there — \
                          refusing to write without the inode-level lock",
                         data.display()
                     )));
                 }
                 Err(e) => {
-                    return Err(Fail::infra(format!(
+                    return Err(RunOutcome::no_mutation(format!(
                         "cannot open the target {} to take the inode lock: {e}",
                         data.display()
                     )));
                 }
-            },
-            None => None,
+            }
         };
         // 非 unix 平台没有 advisory 锁：LockFileEx 是强制的，锁整个文件会让本进程随后
         // 经另一个句柄的读写撞上 ERROR_LOCK_VIOLATION（见字段注释），故只留锁文件
         #[cfg(not(unix))]
-        let image: Option<File> = {
+        let handle: Option<File> = {
             // 第二道凭据不做：指纹在这里没有比对对象
             let _ = expected;
             None
         };
-        Ok(TargetLock { _file: file, _image: image })
+        Ok(TargetLock { _file: file, _handle: handle })
     }
 
-    fn busy(what: &std::path::Path) -> Fail {
-        Fail::infra(format!(
+    fn busy(what: &std::path::Path) -> RunOutcome {
+        RunOutcome::no_mutation(format!(
             "another diskedit is working on this target (the lock {} is held); \
              this tool serializes writers per target — wait for it to finish and retry",
             what.display()
@@ -167,15 +178,18 @@ mod tests {
         TargetIdentity::resolve_image(path)
     }
 
-    fn temp_image(tag: &str) -> PathBuf {
-        let p = std::env::temp_dir().join(format!("diskedit_lk_{tag}_{}", std::process::id()));
-        std::fs::write(&p, b"x").unwrap();
-        p
+    /// 生产路径由 `WriteSource::acquire` 在取锁前准备记录目录；测试直接取锁，
+    /// 这里补同一步（锁文件落在记录目录内）
+    fn acquire_prepared(identity: &TargetIdentity, expected: Option<&TargetFingerprint>) -> Result<TargetLock, RunOutcome> {
+        crate::dev::prepare_record_dir(identity, None).unwrap();
+        TargetLock::acquire(identity, expected)
     }
 
-    fn cleanup(img: &std::path::Path) {
-        let _ = std::fs::remove_file(img);
-        let _ = std::fs::remove_file(identity_for(img).lock_path());
+    fn temp_image(tag: &str) -> (crate::testdir::TestDir, PathBuf) {
+        let dir = crate::testdir::test_dir(tag);
+        let p = dir.join("disk.img");
+        std::fs::write(&p, b"x").unwrap();
+        (dir, p)
     }
 
     /// 同一目标二次取锁必须失败——这是"一个目标一把锁"的最小证据。
@@ -183,22 +197,20 @@ mod tests {
     /// 不构成阻挡（它一定会残留，因为删除它有竞态）
     #[test]
     fn second_lock_on_the_same_image_is_refused() {
-        let img = temp_image("excl");
+        let (_dir, img) = temp_image("excl");
         let lock_path = identity_for(&img).lock_path().to_path_buf();
         let _ = std::fs::remove_file(&lock_path);
 
-        let first = TargetLock::acquire(&identity_for(&img), None).expect("the first holder must succeed");
+        let first = acquire_prepared(&identity_for(&img), None).expect("the first holder must succeed");
         assert!(lock_path.exists(), "the lock file must be created next to the image");
         assert!(
-            TargetLock::acquire(&identity_for(&img), None).is_err(),
+            acquire_prepared(&identity_for(&img), None).is_err(),
             "a second holder must not get the same target"
         );
 
         drop(first);
         assert!(lock_path.exists(), "releasing must not delete the lock file");
-        TargetLock::acquire(&identity_for(&img), None).expect("a released lock must be re-acquirable");
-
-        cleanup(&img);
+        acquire_prepared(&identity_for(&img), None).expect("a released lock must be re-acquirable");
     }
 
     /// 正常写路径带着预期身份取锁时，目标路径若已不指向打开时的文件（这里直接消失），
@@ -207,7 +219,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_missing_target_with_expected_identity_is_refused() {
-        let img = temp_image("missing");
+        let (_dir, img) = temp_image("missing");
         let identity = identity_for(&img);
         let lock_path = identity.lock_path().to_path_buf();
         let _ = std::fs::remove_file(&lock_path);
@@ -216,15 +228,13 @@ mod tests {
         let fp = TargetFingerprint::from_file(&opened).unwrap();
         std::fs::remove_file(&img).unwrap();
 
-        let err = match TargetLock::acquire(&identity, Some(&fp)) {
+        let err = match acquire_prepared(&identity, Some(&fp)) {
             Ok(_) => panic!("the expected file is gone — locking must be refused"),
             Err(e) => e,
         };
-        assert!(matches!(&err, Fail::Refused(m) if m.contains("does not exist")), "{err:?}");
+        assert!(matches!(&err, RunOutcome::Refused(m) if m.contains("does not exist")), "{err:?}");
         // 清理路径没有预期身份：目标不在是常态，仍可只凭锁文件取锁
-        TargetLock::acquire(&identity, None).expect("a cleanup path without identity may proceed");
-
-        let _ = std::fs::remove_file(&lock_path);
+        acquire_prepared(&identity, None).expect("a cleanup path without identity may proceed");
     }
 
     /// 硬链接是同一份数据的另一条路径：锁文件按 canonical path 派生，两条路径各派生
@@ -233,36 +243,31 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn hard_linked_paths_share_one_lock() {
-        let img = temp_image("hardlink");
+        let (_dir, img) = temp_image("hardlink");
         let alias = img.with_extension("alias");
         let _ = std::fs::remove_file(&alias);
         if std::fs::hard_link(&img, &alias).is_err() {
             // 不支持硬链接的文件系统（FAT/exFAT/部分网络盘）上没有这个场景
-            cleanup(&img);
             return;
         }
-        let held = TargetLock::acquire(&identity_for(&img), None).expect("the first holder must succeed");
+        let held = acquire_prepared(&identity_for(&img), None).expect("the first holder must succeed");
         assert!(
-            TargetLock::acquire(&identity_for(&alias), None).is_err(),
+            acquire_prepared(&identity_for(&alias), None).is_err(),
             "a hard link names the same data — it must not get a second lock"
         );
         drop(held);
-        TargetLock::acquire(&identity_for(&alias), None).expect("a released lock must be re-acquirable through the alias");
-
-        cleanup(&img);
-        let _ = std::fs::remove_file(&alias);
-        let _ = std::fs::remove_file(identity_for(&alias).lock_path());
+        acquire_prepared(&identity_for(&alias), None).expect("a released lock must be re-acquirable through the alias");
     }
 
-    /// 每个身份都有锁落点，且两侧落在各自的命名空间：镜像在目标旁（与用户给的路径
-    /// 一一对应），块设备在 `state_dir()` 下与 journal / checkpoint 同目录。
+    /// 每个身份都有锁落点，且两侧落在各自的命名空间：镜像在目标旁的记录目录内，
+    /// 块设备在记录目录内，没有记录目录时退回 `state_dir()`。
     /// 这条不变量是"不存在无锁路径"的基础——落点恒有，取不到就拒绝
     #[test]
     fn every_identity_has_a_lock_path() {
         let img = std::path::Path::new("/tmp/diskedit_lk_path.img");
         assert_eq!(
             identity_for(img).lock_path(),
-            crate::dev::suffix_path(img, crate::dev::LOCK_SUFFIX)
+            crate::dev::suffix_path(img, crate::dev::RECORD_SUFFIX).join(crate::dev::RECORD_LOCK_NAME)
         );
 
         // 块设备侧命名断言只在非 Linux 跑：Linux 上伪造设备名的拓扑解析不出（fail-closed），

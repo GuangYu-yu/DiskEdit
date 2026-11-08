@@ -2,6 +2,10 @@
 
 use super::*;
 
+/// 本进程内已提交给恢复记录的写次数。崩溃注入按"第 N 次写入后"触发，用来留下
+/// 含多条区间的记录（只按第一次触发时记录里永远只有一条）
+static RECORD_WRITES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 // 测试期的定点读失败注入（模拟坏扇区），按线程生效。
 //
 // 回退逻辑的关键情形是"某个位置读不出来、别处正常"——常规文件构造不出这种形态
@@ -44,19 +48,22 @@ pub struct FileSource {
     pub sector_size: u64,
     pub size: u64,
     pub is_block: bool,
-    /// 目标身份：打开时解析一次，journal / checkpoint / undo 只消费它
+    /// 目标身份：打开时解析一次，record / undo 只消费它
     pub identity: TargetIdentity,
-    /// undo journal：只记录本工具 write_at 的直接写入
-    pub journal: Option<Journal>,
-    /// 目标文件的稳定指纹：恢复现场（journal / checkpoint）用它确认"路径下的文件还是当时
+    /// 单文件恢复记录：每条写命令只有这一种凭据
+    pub record_journal: Option<RecordJournal>,
+    /// 目标文件的稳定指纹：恢复现场用它确认"路径下的文件还是当时
     /// 那个"。镜像与 loop 的 backing 文件取文件元数据；真块设备取**整盘**容量与整盘设备 ID
     /// （dev / ino 留零——节点 inode 不承诺稳定、节点元数据长度也恒 0）。**比对逐字段进行**：
-    /// 零值表示该字段没有证据，不参与比对（见 [`scene_mismatch`]）
+    /// 零值表示该字段没有证据，不参与比对（见 [`TargetFingerprint::has_inode_evidence`]）
     pub fingerprint: TargetFingerprint,
     /// loop 映射事实（offset, sizelimit）：目标经由 loop 设备进入时在打开时读一次
     /// sysfs。checkpoint 恢复时与记录值比对，重 attach 参数变化报"映射已变化"
     /// 而非几何不符的泛化拒绝
     pub loop_mapping: Option<(u64, u64)>,
+    /// 目标文件的所有者 (uid, gid)，取自打开句柄；块设备为 `None`。镜像侧恢复记录
+    /// 用它保证与目标同主
+    pub owner: Option<(u32, u32)>,
 }
 
 /// 写句柄：在 [`FileSource`] 之外**持有**一份目标独占所有权（见 `targetlock`）。
@@ -90,13 +97,36 @@ impl std::ops::DerefMut for WriteSource {
     }
 }
 
+/// 记录目录准备失败的出口：块设备侧缺 root 或仓库形状不符是能力缺口（6），
+/// 镜像侧目标旁的目录形状不符属前置拒绝（3），I/O 失败按未改动落 3
+fn prepare_dir_fail(src: &FileSource, e: crate::dev::HostRepoError) -> crate::outcome::RunOutcome {
+    use crate::dev::HostRepoError;
+    match e {
+        HostRepoError::NotRoot => crate::outcome::RunOutcome::unsupported(
+            "the host recovery repository must be owned by uid 0; table writes to a block device \
+             are refused when this process is not root",
+        ),
+        HostRepoError::Insecure(detail) if src.is_block => crate::outcome::RunOutcome::unsupported(format!(
+            "the host recovery repository is refused: {detail}"
+        )),
+        HostRepoError::Insecure(detail) => {
+            crate::outcome::RunOutcome::refused(format!("the recovery directory is refused: {detail}"))
+        }
+        HostRepoError::Io(e) => {
+            crate::outcome::RunOutcome::refused(format!("cannot prepare the recovery directory: {e}"))
+        }
+    }
+}
+
 impl WriteSource {
     /// 取目标的独占所有权，把已打开的句柄升格为写句柄。锁落点由身份恒给出
     /// （见 [`TargetIdentity::lock_path`]），取不到即拒绝——没有"无锁继续写"这条路径
-    pub(crate) fn acquire(src: FileSource) -> Result<Self, crate::outcome::Fail> {
+    pub(crate) fn acquire(src: FileSource) -> Result<Self, crate::outcome::RunOutcome> {
+        // 锁文件落在记录目录内，目录必须先于取锁就位
+        crate::dev::prepare_record_dir(&src.identity, src.owner).map_err(|e| prepare_dir_fail(&src, e))?;
         let lock = crate::targetlock::TargetLock::acquire(&src.identity, Some(&src.fingerprint))?;
-        // ckpt 残骸清扫必须在锁下：未持锁时删除会命中另一个进程正在写的暂存文件
-        sweep_stale_ckpt_temps(&src.identity);
+        // 锁已到手，先按路径重探身份再继续；锁前解析的身份不能直接沿用
+        src.reprobe_under_lock()?;
         Ok(Self { src, _lock: Some(lock) })
     }
 
@@ -107,34 +137,43 @@ impl WriteSource {
         Self { src, _lock: None }
     }
 
-    /// 采纳既有 journal（事务层取锁后调用）。这是 `journal` 字段唯一的对外写入口：
-    /// 其余路径只能经 pre-image 记录与屏障影响它
-    pub(crate) fn adopt_journal(&mut self, journal: Journal) {
-        self.src.journal = Some(journal);
-    }
-
-    /// 元数据写入：被覆盖字节的原文先入 undo journal 再写
+    /// 元数据写入：被覆盖字节的原文先入恢复记录再写。
     pub fn write_at(&mut self, off: u64, buf: &[u8]) -> io::Result<()> {
         self.refuse_past_end(off, buf.len())?;
-        if self.journal.is_some() {
-            // 越界已在上面拒掉，这里读到的总是目标范围内的真实原文，不需要按 EOF 截断
-            let mut orig = vec![0u8; buf.len()];
-            self.read_at(off, &mut orig)?;
-            // journal 先行落盘：写入发生前，被覆盖字节的原文必须已持久化
-            if let Some(journal) = self.src.journal.as_mut() {
-                journal.record(off, &orig, buf)?;
+        if self.src.record_journal.is_some() && !buf.is_empty() {
+            // 单文件记录的粒度是扇区：把写入区间按扇区边界扩到整扇区，
+            // 记录这些扇区的完整原文（最后一扇区可以止于文件末尾）
+            let sector_size = self.sector_size;
+            let first = off - off % sector_size;
+            let end = ((off + buf.len() as u64).div_ceil(sector_size))
+                .saturating_mul(sector_size)
+                .min(self.size);
+            let mut orig = vec![0u8; (end - first) as usize];
+            self.read_at(first, &mut orig)?;
+            // 写入后的整扇区样子：原文叠上本次写入的字节。undo 用它核对"盘面仍是记录
+            // 写后的样子"，只存原文无法把外部改动与本次写入区分开
+            let mut after = orig.clone();
+            let at = (off - first) as usize;
+            after[at..at + buf.len()].copy_from_slice(buf);
+            if let Some(journal) = self.src.record_journal.as_mut() {
+                journal.record_span(first / sector_size, orig, after)?;
             }
+            crate::movepart::fault_record_persisted();
         }
-        self.write_raw(off, buf)
+        self.write_raw(off, buf)?;
+        if self.src.record_journal.is_some() {
+            let nth = RECORD_WRITES.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+            crate::movepart::fault_record_before_commit(nth);
+        }
+        Ok(())
     }
 
     /// 数据块写入（搬移的 chunk 拷贝）：不入 undo journal。
     /// 搬移的设计是"前向恢复、无回滚"（见 movepart 模块注释），undo 不消费数据字节，
     /// 记录它们只会产生与搬移量等大的 journal。数据一致性由 ckpt + 幂等重做保证
     ///
-    /// 屏障由这里自己落，**不靠调用点先记得 mark_non_reversible**：数据一旦写下去，
-    /// 回滚表项就会与盘上内容自相矛盾。同一 mutation 下屏障只落一条（见 [`Journal::barrier`]），
-    /// 逐 chunk 调用因此不产生额外记录
+    /// 屏障由这里自己落，不靠调用点先记得 mark_non_reversible：数据一旦写下去，
+    /// 回滚表项就会与盘上内容自相矛盾。同一 mutation 下屏障只落一条
     pub fn write_data_at(&mut self, off: u64, buf: &[u8]) -> io::Result<()> {
         // 越界判定先于屏障：屏障一旦落地 undo 即永久失效，而越界写一个字节也不会落盘
         self.refuse_past_end(off, buf.len())?;
@@ -146,38 +185,50 @@ impl WriteSource {
         self.refuse_past_end(off, buf.len())?;
         use std::io::{Seek, SeekFrom, Write};
         self.src.file.seek(SeekFrom::Start(off))?;
+        crate::outcome::note_target_write();
         self.src.file.write_all(buf)
     }
 
     /// 记下"本次操作含有不可回滚的写入"，undo 见到它即拒绝回滚。
     ///
     /// 判据是**可逆性**，不是"是不是外部进程"：数据搬移的字节（`write_data_at`）是本进程
-    /// 写的，但按设计故意不入 journal；外部 FS 工具的写入（resize2fs/mkswap/mkfs…）
-    /// 与内核侧的分区表写入同样无法回滚。凡"回滚表项会与盘上内容自相矛盾"的写入都属于这一类，
-    /// 它们共同落一条屏障，屏障上的 mutation 说明是哪一类越过了这条线
+    /// 写的，但按设计不入记录；外部 FS 工具的写入（resize2fs/mkswap/mkfs…）
+    /// 与内核侧的分区表写入同样无法回滚。凡"回滚表项会与盘上内容自相矛盾"的写入都属于这一类
     pub fn mark_non_reversible(&mut self) -> io::Result<()> {
-        if let Some(journal) = self.src.journal.as_mut() {
+        if let Some(journal) = self.src.record_journal.as_mut() {
             journal.barrier()?;
         }
         Ok(())
     }
 
-    /// 声明"接下来这类改动是什么"，作用于随后的 pre-image 与屏障记录。
-    /// 语义由知道自己在做什么的那一层给出——journal 只负责记，不负责猜
-    pub fn set_mutation(&mut self, m: Mutation) {
-        if let Some(journal) = self.src.journal.as_mut() {
-            journal.set_mutation(m);
-        }
+    /// 接上单文件恢复记录
+    pub(crate) fn adopt_record_journal(&mut self, journal: RecordJournal) {
+        self.src.record_journal = Some(journal);
+    }
+
+    /// 把单文件恢复记录取回来（成功收尾后提交/清理）
+    pub(crate) fn take_record_journal(&mut self) -> Option<RecordJournal> {
+        self.src.record_journal.take()
+    }
+
+    /// 只借出记录，用于判断"记录是否已经落盘"
+    pub(crate) fn record_journal(&self) -> Option<&RecordJournal> {
+        self.src.record_journal.as_ref()
+    }
+
+    /// 借出可写的记录：搬移类命令在写盘之间推进游标/FS 相位，记录就在写句柄里
+    pub(crate) fn record_journal_mut(&mut self) -> Option<&mut RecordJournal> {
+        self.src.record_journal.as_mut()
     }
 }
 
-/// 扇区大小须为 2 的幂且落在 512..=65536；这是本工具的自定约束，非规范要求。
+/// 扇区大小经 [`SectorSize`](crate::domain::SectorSize) 的单点校验：2 的幂、不低于
+/// 512 字节，且不超过本工具 65536 字节的实现边界（字段宽度不是兼容性上限）。
 /// 换算按 LBA 的调用点以它为分母，0 或非 2 的幂会把尺寸静默压成偏移 0
 fn check_sector_size(sector_size: u64) -> io::Result<()> {
-    if !(512..=65536).contains(&sector_size) || !sector_size.is_power_of_two() {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, format!("invalid sector size {sector_size}")));
-    }
-    Ok(())
+    crate::domain::SectorSize::try_new(sector_size)
+        .map(|_| ())
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e.to_string()))
 }
 
 impl FileSource {
@@ -261,9 +312,10 @@ impl FileSource {
             sector_size,
             size,
             is_block: true,
-            journal: None,
+            record_journal: None,
             fingerprint,
             loop_mapping,
+            owner: None,
         })
     }
 
@@ -369,6 +421,13 @@ impl FileSource {
         #[cfg(not(target_os = "linux"))]
         let identity = TargetIdentity::resolve_image(path);
         let fingerprint = TargetFingerprint::from_file(&file)?;
+        #[cfg(target_os = "linux")]
+        let owner = {
+            use std::os::unix::fs::MetadataExt;
+            Some((meta.uid(), meta.gid()))
+        };
+        #[cfg(not(target_os = "linux"))]
+        let owner = None;
         Ok(FileSource {
             identity,
             file,
@@ -376,10 +435,63 @@ impl FileSource {
             sector_size,
             size,
             is_block: false,
-            journal: None,
+            record_journal: None,
             fingerprint,
             loop_mapping: None,
+            owner,
         })
+    }
+
+    /// 锁内重探身份：取锁后重新从命令行路径解析目标，与打开时解析的
+    /// 身份比对。块设备比设备身份派生的 journal / checkpoint / record 落点；镜像
+    /// 比 canonical 路径与已打开句柄的 (dev, ino)
+    pub(crate) fn reprobe_under_lock(&self) -> Result<(), crate::outcome::RunOutcome> {
+        use crate::outcome::RunOutcome;
+        if self.is_block {
+            #[cfg(target_os = "linux")]
+            {
+                let now = TargetIdentity::resolve_block(&self.path).map_err(|e| {
+                    RunOutcome::refused(format!(
+                        "the target cannot be re-read after taking the lock: {e}"
+                    ))
+                })?;
+                if now.record_path() != self.identity.record_path()
+                    || now.journal_path() != self.identity.journal_path()
+                    || now.lock_path() != self.identity.lock_path()
+                {
+                    return Err(RunOutcome::refused(
+                        "the device node now resolves to a different target than the one opened \
+                         before the lock",
+                    ));
+                }
+            }
+            return Ok(());
+        }
+        let now_identity = TargetIdentity::resolve_image(&self.path);
+        if now_identity.canonical != self.identity.canonical {
+            return Err(RunOutcome::refused(
+                "the path now resolves to a different file than the one opened before the lock",
+            ));
+        }
+        let file = std::fs::File::open(&self.path).map_err(|e| {
+            RunOutcome::refused(format!(
+                "the target cannot be reopened after taking the lock: {e}"
+            ))
+        })?;
+        let now = TargetFingerprint::from_file(&file).map_err(|e| {
+            RunOutcome::refused(format!(
+                "cannot read the target identity after taking the lock: {e}"
+            ))
+        })?;
+        if self.fingerprint.has_inode_evidence()
+            && (!now.has_inode_evidence()
+                || (now.dev, now.ino) != (self.fingerprint.dev, self.fingerprint.ino))
+        {
+            return Err(RunOutcome::refused(
+                "the path no longer names the file that was opened before the lock",
+            ));
+        }
+        Ok(())
     }
 
     /// 只读打开块设备（在线路径识别 FS 用：读写 + O_EXCL 在设备被 claim 时会失败）。
@@ -404,9 +516,10 @@ impl FileSource {
             sector_size: 512,
             size,
             is_block: false,
-            journal: None,
+            record_journal: None,
             fingerprint,
             loop_mapping: None,
+            owner: None,
         })
     }
 

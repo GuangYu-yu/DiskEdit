@@ -59,6 +59,11 @@ jobs:
       - name: 安装 Rust 工具链
         uses: dtolnay/rust-toolchain@stable
 
+      - name: 文档生成物与 schema 一致
+        run: |
+          DISKEDIT_WRITE_DOCS=1 cargo test --bin DiskEdit docs_are_generated_in_sync
+          git diff --exit-code docs/
+
       - name: cargo test
         run: cargo test --all-targets
 

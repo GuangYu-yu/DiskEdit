@@ -1,32 +1,33 @@
 #!/usr/bin/env bash
 # 边界的成对断言（批 6）：同一条事务里
-#   "写盘前 abort" 必须与「从未运行过」不可区分（表未改、无 checkpoint 残留）
-#   "写盘后 abort" 必须在盘上留下可续传的现场（checkpoint 已落盘）
-# 三条流程各成一对：resize(离线含搬移) / apply / resize(在线)。
+#   "写盘前 abort" 必须与「从未运行过」不可区分（表未改、无记录残留）
+#   "写盘后 abort" 必须在盘上留下可续传的现场（记录已落盘）
+# 三条流程各成一对：resize(离线含搬移) / resize grow / resize(在线)。
 # 注入开关默认关闭（--features test-faults），普通构建与发布二进制行为不变
 source "$(dirname "$0")/lib.sh"
 require_fault_bin
 
-T=/var/tmp/tcb.img
-CK="$T$CKPT_SUFFIX"
-MNT=/testmnt
+img T tcb.img
+MNT="$TEST_MNT"
 ok=0; bad=0
 
 chk() { # got want what
   if [ "$1" = "$2" ]; then echo "  OK   $3"; ok=$((ok+1)); else echo "  BAD  $3 (got [$1] want [$2])"; bad=$((bad+1)); fi
 }
 
-rm -f "$T" "$T"$SIDECAR_GLOB 2>/dev/null
+rm -rf "$T" "$T"$SIDECAR_GLOB 2>/dev/null
 mkdir -p "$MNT"
-track_file "$T"
 
 mk() { # p1 扩容需要把 p2/p3 往后搬，故必有搬移相位
-  rm -f "$T" "$T"$SIDECAR_GLOB
+  rm -rf "$T" "$T"$SIDECAR_GLOB
   truncate -s 1G "$T"
   $BF new "$T" --yes >/dev/null
-  $BF create "$T" --size 100M --name p1 --fs ext4 --yes >/dev/null
-  $BF create "$T" --size 100M --name p2 --fs ext4 --yes >/dev/null
-  $BF create "$T" --size 200M --name p3 --fs ext4 --yes >/dev/null
+  $BF add "$T" 100M --align mib --name p1 --yes >/dev/null
+  $BF mkfs "$T":1 ext4 --yes >/dev/null
+  $BF add "$T" 100M --align mib --name p2 --yes >/dev/null
+  $BF mkfs "$T":2 ext4 --yes >/dev/null
+  $BF add "$T" 200M --align mib --name p3 --yes >/dev/null
+  $BF mkfs "$T":3 ext4 --yes >/dev/null
 }
 
 echo "===== A: resize（离线，含搬移）====="
@@ -35,36 +36,37 @@ BEFORE=$($B info "$T")
 DISKEDIT_FAULT=before-any-write $BF resize "$T":1 +100M --allow-move --yes >/dev/null 2>&1; A1=$?
 chk "$A1" "134" "A1 边界前 abort（134 = SIGABRT）"
 chk "$($B info "$T")" "$BEFORE" "A1 分区表一字未改"
-chk "$([ -e "$CK" ] && echo yes || echo no)" "no" "A1 未留下 checkpoint"
+chk "$(record_present "$T" && echo yes || echo no)" "no" "A1 未留下记录"
 
 DISKEDIT_FAULT=chunk:40 $BF resize "$T":1 +100M --allow-move --yes >/dev/null 2>&1; A2=$?
 chk "$A2" "134" "A2 边界后 abort"
-chk "$([ -e "$CK" ] && echo yes || echo no)" "yes" "A2 留下 checkpoint（续传现场）"
+chk "$(record_present "$T" && echo yes || echo no)" "yes" "A2 留下记录（续传现场）"
 $B resize "$T":1 +100M --allow-move --yes >/dev/null 2>&1; chk "$?" "0" "A2 重跑收敛（exit 0）"
 LD=$(lo_attach "$T"); e2fsck -fn "${LD}p1" >/dev/null 2>&1 && echo "  OK   A2 e2fsck clean" || { echo "  BAD  A2 e2fsck ISSUES"; bad=$((bad+1)); }; lo_detach "$LD"
 
 echo
-echo "===== B: apply ====="
+echo "===== B: resize grow --allow-move ====="
 mk
 BEFORE=$($B info "$T")
-$B plan "$T" --grow 1 | head -3 | sed 's/^/  plan | /'
-# apply 的确认门在几何上判定：本布局的 p2/p3 需要搬移，故执行路径必须显式 --yes
-DISKEDIT_FAULT=before-any-write $BF apply "$T" --grow 1 --yes >/dev/null 2>&1; B1=$?
+$B plan "$T":1 --grow | head -3 | sed 's/^/  plan | /'
+# resize grow 与搬移联动走同一条几何路径（resize --allow-move 一次生成多条目计划）：本布局的 p2/p3 需要搬移，故必须显式 --yes
+DISKEDIT_FAULT=before-any-write $BF resize "$T":1 grow --allow-move --yes >/dev/null 2>&1; B1=$?
 chk "$B1" "134" "B1 边界前 abort"
 chk "$($B info "$T")" "$BEFORE" "B1 分区表一字未改"
-chk "$([ -e "$CK" ] && echo yes || echo no)" "no" "B1 未留下 checkpoint"
+chk "$(record_present "$T" && echo yes || echo no)" "no" "B1 未留下记录"
 
-DISKEDIT_FAULT=chunk:1 $BF apply "$T" --grow 1 --yes >/dev/null 2>&1; B2=$?
+DISKEDIT_FAULT=chunk:1 $BF resize "$T":1 grow --allow-move --yes >/dev/null 2>&1; B2=$?
 chk "$B2" "134" "B2 边界后 abort"
-chk "$([ -e "$CK" ] && echo yes || echo no)" "yes" "B2 留下 checkpoint（续传现场）"
-$B apply "$T" --grow 1 --yes >/dev/null 2>&1; chk "$?" "0" "B2 重跑收敛（exit 0）"
+chk "$(record_present "$T" && echo yes || echo no)" "yes" "B2 留下记录（续传现场）"
+$B resize "$T":1 grow --allow-move --yes >/dev/null 2>&1; chk "$?" "0" "B2 重跑收敛（exit 0）"
 
 echo
 echo "===== C: resize（在线，sfdisk 分界）====="
-rm -f "$T" "$T"$SIDECAR_GLOB
+rm -rf "$T" "$T"$SIDECAR_GLOB
 truncate -s 64M "$T"
 $BF new "$T" --yes >/dev/null
-$BF create "$T" --size 16777216 --name p1 --fs ext4 --yes >/dev/null
+$BF add "$T" 16777216 --align mib --name p1 --yes >/dev/null
+$BF mkfs "$T":1 ext4 --yes >/dev/null
 LD=$(lo_attach "$T")
 mount_at "${LD}p1" "$MNT" || { echo "  BAD  C MOUNT-FAIL"; exit 1; }
 DISKEDIT_FAULT=online-before-write $BF resize "${LD}:1" 33554432 >/dev/null 2>&1; C1=$?
@@ -81,12 +83,12 @@ chk "$C2" "134" "C2 sfdisk 后 abort"
 chk "$($B info "$T" | grep -o '"last_lba":[0-9]*' | head -1)" '"last_lba":67583' "C2 分区已 32MiB（表已改）"
 
 echo
-echo "===== D: 天然拒绝仍必须报 10（未写盘的承诺）====="
+echo "===== D: 天然拒绝仍必须报 3/2（未写盘的承诺）====="
 mk
 BEFORE=$($B info "$T")
-$B resize "$T":1 -50M --no-fs --yes >/dev/null 2>&1; chk "$?" "10" "D1 --no-fs + 缩容 ⇒ 10"
-$B resize "$T":1 500M --start 4096 >/dev/null 2>&1; chk "$?" "10" "D2 --start ⇒ 10（resize 不搬移）"
-$B resize-part "$T":1 --start end >/dev/null 2>&1; chk "$?" "10" "D3 resize-part --start end ⇒ 10"
+$B resize "$T":1 -50M --no-fs --yes >/dev/null 2>&1; chk "$?" "3" "D1 --no-fs + 缩容 ⇒ 3"
+$B resize "$T":1 500M --start 4096 >/dev/null 2>&1; chk "$?" "3" "D2 --start ⇒ 3（resize 不搬移）" # cli-surface: refused
+$B resize-part "$T":1 --start end >/dev/null 2>&1; chk "$?" "2" "D3 resize-part --start end ⇒ 2" # cli-surface: refused
 chk "$($B info "$T")" "$BEFORE" "D 三次拒绝均未写盘"
 
 echo

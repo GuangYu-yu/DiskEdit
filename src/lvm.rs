@@ -9,7 +9,7 @@
 //! pvresize --setphysicalvolumesize 缩 PV 元数据，最后改分区表。pvresize 拒绝
 //! 时需先 pvmove 把 PE 前移，后者是 LVM 内部元数据重构，不在分区工具的范围内
 
-use crate::fsops::{run, FsError};
+use crate::fsops::{run, run_write, FsError};
 use serde_json::Value;
 
 /// LVM 链失败的三态：工具缺失是环境缺件（装 lvm2 后重试有意义），**请求与卷现状不
@@ -63,7 +63,17 @@ impl From<FsError> for LvmError {
 /// 执行 lvm2 工具并取 stdout；区分"工具未安装"与"命令失败"。
 /// `run` 已固定 `LC_ALL=C`，报表文本可直接按程序解析
 fn run_tool(tool: &str, args: &[&str]) -> Result<String, LvmError> {
-    match run(tool, args) {
+    tool_stdout(run(tool, args), tool)
+}
+
+/// 改 PV 元数据或 LV 内容的工具（pvresize / lvextend -r）：启动后盘上状态不再可断言，
+/// 置位供 panic 出口使用（见 `outcome::note_target_write`）
+fn run_write_tool(tool: &str, args: &[&str]) -> Result<String, LvmError> {
+    tool_stdout(run_write(tool, args), tool)
+}
+
+fn tool_stdout(out: Result<std::process::Output, FsError>, tool: &str) -> Result<String, LvmError> {
+    match out {
         // 工具缺失要装包，与"命令跑失败"是两条不同的补救路径，分开报
         Err(FsError::ToolMissing(_)) => Err(LvmError::ToolMissing(format!(
             "LVM tooling missing: {tool} not found in PATH (install lvm2)"
@@ -490,12 +500,12 @@ pub fn lv_state(part_dev: &str, lv_path: &str) -> Result<LvState, LvmError> {
 
 /// PV 吸收分区新增的全部空间（扩容方向无前置条件，pvresize(8)）
 pub fn pv_resize(part_dev: &str) -> Result<(), LvmError> {
-    run_tool("pvresize", &[part_dev]).map(|_| ())
+    run_write_tool("pvresize", &[part_dev]).map(|_| ())
 }
 
 /// LV 增量扩 n 个 extent 并同步扩文件系统（lvextend -l +N -r）
 pub fn lv_extend(lv_path: &str, extents: u64) -> Result<(), LvmError> {
-    run_tool("lvextend", &["-l", &format!("+{extents}"), "-r", lv_path]).map(|_| ())
+    run_write_tool("lvextend", &["-l", &format!("+{extents}"), "-r", lv_path]).map(|_| ())
 }
 
 #[cfg(test)]

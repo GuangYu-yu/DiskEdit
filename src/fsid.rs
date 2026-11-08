@@ -1,73 +1,25 @@
-//! 文件系统魔数识别（偏移与特征值的来源见各行注释）。
+//! 盘上内容识别（偏移与特征值的来源见各行注释）。
+//!
+//! 结论类型 `ContentKind` 定义在 `domain`（L2，平台无关）；本模块负责读盘与签名比对，
+//! 对外的结论只有内容类别，不向上层泄漏具体偏移或字节布局。
 
 use crate::dev::FileSource;
 use std::io;
 
+pub(crate) use crate::domain::{ContentKind, FsKind};
+
 const SQUASHFS_MAGIC: &[u8; 4] = b"hsqs";
 const EROFS_MAGIC: [u8; 4] = [0xE2, 0xE1, 0xF5, 0xE0];
 
-/// 识别器对一段字节区间的结论。变体名即 [`FsKind::as_str`] 的规范名，对外文案由它回放。
+/// 把识别结论映射为对外名；`Unknown` → `"unknown"`。
 ///
-/// 这是**识别口径**：`identify` 只产出这里的变体（未识别由 `None` 表达），加上 `--fs` 也
-/// 认识的类型。`--fs` 独有的 ext2/3/4 见 `fsops::MkfsFs`——识别器区分不出 2/3/4（见 `Ext`）
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum FsKind {
-    Squashfs,
-    Erofs,
-    /// ext2/3/4 的统称：0xEF53（见 `identify`）区分不出 2/3/4，而 e2fsck/resize2fs/tune2fs
-    /// 对三者通用，故识别只到"家族"；`--fs` 请求的具体 extN 由 `MkfsFs` 承载
-    Ext,
-    Xfs,
-    Btrfs,
-    F2fs,
-    Exfat,
-    Vfat,
-    Ntfs,
-    HfsPlus,
-    Apfs,
-    Swap,
-    /// LVM2 PV 标签（`LABELONE` + 类型串 `LVM2 001`）。它不是可挂载的文件系统，
-    /// 接力的是 pvresize/lvextend 链；写入路径对它的分支与"认不出的区域"完全不同
-    /// （mkfs/check 显式拒绝，grow 记为无 FS 步骤的扩容）
-    Lvm2Pv,
-}
-
-impl FsKind {
-    /// 对外规范名（JSON、文案、支持清单都由它生成）
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            FsKind::Squashfs => "squashfs",
-            FsKind::Erofs => "erofs",
-            FsKind::Ext => "ext",
-            FsKind::Xfs => "xfs",
-            FsKind::Btrfs => "btrfs",
-            FsKind::F2fs => "f2fs",
-            FsKind::Exfat => "exfat",
-            FsKind::Vfat => "vfat",
-            FsKind::Ntfs => "ntfs",
-            FsKind::HfsPlus => "hfsplus",
-            FsKind::Apfs => "apfs",
-            FsKind::Swap => "swap",
-            FsKind::Lvm2Pv => "lvm2_pv",
-        }
-    }
-}
-
-impl std::fmt::Display for FsKind {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-/// 把识别结论（含"未识别"）映射为对外名：`None` → `"unknown"`。
-///
-/// `None` 只表示"本工具没有认出受支持的文件系统"，不表示这段区域为空，也不表示
+/// `Unknown` 只表示"本工具没有认出受支持的内容"，不表示这段区域为空，也不表示
 /// 可以安全跳过——"可供识别的字节不足"（区间太短）同样落在这里。写入路径是否跳过
 /// FS 步骤由 [`crate::fsops::Growable`] 决定；"认得出却激活不了"的情形（页格式不匹配
-/// 的 swap）在那里单独成变体，不并入 `None`。所有回放"未识别"文案/JSON 的地方都走
+/// 的 swap）在那里单独成变体，不并入 `Unknown`。所有回放"未识别"文案/JSON 的地方都走
 /// 此处，字面量不再散落
-pub fn fs_name(kind: Option<FsKind>) -> &'static str {
-    kind.map_or("unknown", |k| k.as_str())
+pub fn content_name(content: ContentKind) -> &'static str {
+    content.as_str()
 }
 
 /// swap 探测命中：签名所在的候选页大小，以及该页是否属于本机 swapon 的页集合
@@ -81,9 +33,9 @@ pub struct SwapHit {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FsProbe {
     /// 与 [`identify`] 的返回值同源：swap 只在本机可激活且头内自洽时计入
-    pub kind: Option<FsKind>,
+    pub content: ContentKind,
     /// 没有其他类型命中时才做 swap 探测；未命中为 `None`。`SwapHit` 只要求签名命中，
-    /// 头内自洽与否由 `kind` 表达
+    /// 头内自洽与否由 `content` 表达
     pub swap: Option<SwapHit>,
 }
 
@@ -95,14 +47,14 @@ pub struct FsProbe {
 /// 而它手上往往只有 LBA；改收字节后，换算发生在唯一知道单位的那一层（读到表的地方），
 /// 本模块退化为"给一段字节，判它是什么"，与 probe_swap_header / overlay_offset_at 同形
 ///
-/// Err 只表达设备故障：调用方必须把它与"区间内没有已知签名"（`Ok(None)`）区分开，
+/// Err 只表达设备故障：调用方必须把它与"区间内没有已知签名"（`Ok(Unknown)`）区分开，
 /// 否则 resize 会在 I/O 错误时把 FS 步骤整体跳过并报成功
-pub fn identify(src: &FileSource, base: u64, len_bytes: u64) -> io::Result<Option<FsKind>> {
-    Ok(probe_fs(src, base, len_bytes)?.kind)
+pub fn identify(src: &FileSource, base: u64, len_bytes: u64) -> io::Result<ContentKind> {
+    Ok(probe_fs(src, base, len_bytes)?.content)
 }
 
-/// 同一段区间的一次读盘结论：类型，以及未命中其他类型时的 swap 探测。写入路径要分辨
-/// "空区域"与"识别不出、但元数据确实是 swap"时取 `swap`——[`identify`] 的 `None` 两者
+/// 同一段区间的一次读盘结论：内容类别，以及未命中其他类型时的 swap 探测。写入路径要分辨
+/// "空区域"与"识别不出、但元数据确实是 swap"时取 `swap`——[`identify`] 的 `Unknown` 两者
 /// 都表达，无法支撑"swap 未重建"这条待办的判据
 pub fn probe_fs(src: &FileSource, base: u64, len_bytes: u64) -> io::Result<FsProbe> {
     let rd = |off: u64, len: usize| -> io::Result<Option<Vec<u8>>> {
@@ -122,32 +74,32 @@ pub fn probe_fs(src: &FileSource, base: u64, len_bytes: u64) -> io::Result<FsPro
     if let Some(b) = rd(0, 4)?
         && b == SQUASHFS_MAGIC
     {
-        return Ok(FsProbe { kind: Some(FsKind::Squashfs), swap: None });
+        return Ok(FsProbe { content: ContentKind::Filesystem(FsKind::Squashfs), swap: None });
     }
     // EROFS: 0xE0F5E1E2 (LE) @1024（内核 erofs_fs.h EROFS_SUPER_MAGIC_V1，超级块 @1024）
     if let Some(b) = rd(1024, 4)?
         && b == EROFS_MAGIC
     {
-        return Ok(FsProbe { kind: Some(FsKind::Erofs), swap: None });
+        return Ok(FsProbe { content: ContentKind::Filesystem(FsKind::Erofs), swap: None });
     }
     // ext2/3/4: 0xEF53 (LE) @0x438（sb @1024，s_magic @sb+0x38）。magic 区分不出 2/3/4，
     // 而 e2fsck/resize2fs/tune2fs 对三者通用，故统一收敛到 Ext（具体 extN 只存在于 --fs 请求）
     if let Some(b) = rd(0x438, 2)?
         && u16::from_le_bytes([b[0], b[1]]) == 0xEF53
     {
-        return Ok(FsProbe { kind: Some(FsKind::Ext), swap: None });
+        return Ok(FsProbe { content: ContentKind::Filesystem(FsKind::Ext), swap: None });
     }
     // XFS: "XFSB" @0（BE 序 magic 0xC03B3998；libxfs xfs_format.h XFS_SB_MAGIC）
     if let Some(b) = rd(0, 4)?
         && &b == b"XFSB"
     {
-        return Ok(FsProbe { kind: Some(FsKind::Xfs), swap: None });
+        return Ok(FsProbe { content: ContentKind::Filesystem(FsKind::Xfs), swap: None });
     }
     // btrfs: "_BHRfS_M" @0x10040（内核 fs/btrfs ctree.h BTRFS_MAGIC；超级块 @64 KiB，magic 在 +64）
     if let Some(b) = rd(0x10040, 8)?
         && &b == b"_BHRfS_M"
     {
-        return Ok(FsProbe { kind: Some(FsKind::Btrfs), swap: None });
+        return Ok(FsProbe { content: ContentKind::Filesystem(FsKind::Btrfs), swap: None });
     }
     // F2FS: 0xF2F52010 (LE) @0x400，第二副本 @0x1400（内核 __get_raw_super 依次读两份，
     // 主 SB 损坏时回退第二份，故两处都查）
@@ -155,32 +107,32 @@ pub fn probe_fs(src: &FileSource, base: u64, len_bytes: u64) -> io::Result<FsPro
         if let Some(b) = rd(off, 4)?
             && u32::from_le_bytes(b[..4].try_into().unwrap()) == 0xF2F5_2010
         {
-            return Ok(FsProbe { kind: Some(FsKind::F2fs), swap: None });
+            return Ok(FsProbe { content: ContentKind::Filesystem(FsKind::F2fs), swap: None });
         }
     }
     // exFAT: "EXFAT   "（8 字节含 3 尾随空格）@3 —— 微软规范 §3.1 FileSystemName
     if let Some(b) = rd(3, 8)?
         && &b == b"EXFAT   "
     {
-        return Ok(FsProbe { kind: Some(FsKind::Exfat), swap: None });
+        return Ok(FsProbe { content: ContentKind::Filesystem(FsKind::Exfat), swap: None });
     }
     // FAT32: "FAT32   " @0x52；FAT12/16 在 @0x36 —— 微软 EFI FAT32 规范 §5 的 BS_FilSysType
     if let Some(b) = rd(0x52, 8)?
         && &b == b"FAT32   "
     {
-        return Ok(FsProbe { kind: Some(FsKind::Vfat), swap: None });
+        return Ok(FsProbe { content: ContentKind::Filesystem(FsKind::Vfat), swap: None });
     }
     if let Some(b) = rd(0x36, 8)?
         && (&b == b"FAT12   " || &b == b"FAT16   ")
     {
-        return Ok(FsProbe { kind: Some(FsKind::Vfat), swap: None });
+        return Ok(FsProbe { content: ContentKind::Filesystem(FsKind::Vfat), swap: None });
     }
     // NTFS: "NTFS    " @3（$Boot OEM ID；ntfs-3g libntfs-3g/bootsect.c
     // ntfs_boot_sector_is_ntfs：oem_id == "NTFS    "）
     if let Some(b) = rd(3, 8)?
         && &b == b"NTFS    "
     {
-        return Ok(FsProbe { kind: Some(FsKind::Ntfs), swap: None });
+        return Ok(FsProbe { content: ContentKind::Filesystem(FsKind::Ntfs), swap: None });
     }
     // HFS+/HFSX: 卷头 @1024，签名 "H+"/"HX"（Apple TN1150 HFS Plus Volume Format：
     // "The volume signature is the value 'H+' … 'HX' for HFSX"）
@@ -188,7 +140,7 @@ pub fn probe_fs(src: &FileSource, base: u64, len_bytes: u64) -> io::Result<FsPro
         if let Some(b) = rd(0x400, 2)?
             && b == sig
         {
-            return Ok(FsProbe { kind: Some(FsKind::HfsPlus), swap: None });
+            return Ok(FsProbe { content: ContentKind::Filesystem(FsKind::HfsPlus), swap: None });
         }
     }
     // APFS：容器超块 nx_superblock_t 在块 0；对象头 obj_phys_t 共 32 字节
@@ -197,7 +149,7 @@ pub fn probe_fs(src: &FileSource, base: u64, len_bytes: u64) -> io::Result<FsPro
     if let Some(b) = rd(0x20, 4)?
         && &b == b"NXSB"
     {
-        return Ok(FsProbe { kind: Some(FsKind::Apfs), swap: None });
+        return Ok(FsProbe { content: ContentKind::Filesystem(FsKind::Apfs), swap: None });
     }
     // LVM2 PV：标签头 "LABELONE" 位于前 4 个 512B 扇区之一（pvcreate 默认第 2 扇区），
     // 标签头内偏移 24 处为类型串 "LVM2 001"（LVM2 lib/label/label.h 的 label_header：
@@ -207,29 +159,29 @@ pub fn probe_fs(src: &FileSource, base: u64, len_bytes: u64) -> io::Result<FsPro
             && &b[0..8] == b"LABELONE"
             && &b[24..32] == b"LVM2 001"
         {
-            return Ok(FsProbe { kind: Some(FsKind::Lvm2Pv), swap: None });
+            return Ok(FsProbe { content: ContentKind::Lvm2Pv, swap: None });
         }
     }
     // swap: 签名位于"创建机页大小"末尾 10 字节（内核 include/linux/swap.h
     // union swap_header：reserved[PAGE_SIZE-10] + magic[10]），盘上不记录该页大小，
     // 故由 probe_swap_header 按候选集探测。候选集是 swapon 口径在前、仅 libblkid 认得的
     // 页大小（32K）在后：第一次命中同时给出"这台宿主能不能把它当 swap 处理"
-    // （activatable 由 SWAPON_PAGES 判定）。`kind` 仍要求命中页可激活且头内自洽
+    // （activatable 由 SWAPON_PAGES 判定）。`content` 仍要求命中页可激活且头内自洽
     // （版本与页数，见 swap_header_consistent）：签名可能只是某段普通数据末尾的巧合，
     // 而误判 swap 会让扩容路径据此 mkswap，用新头覆盖该分区首个页
     let swap = probe_swap_header(src, base, len_bytes, &swap_probe_pages())?
         .map(|page| SwapHit { page, activatable: SWAPON_PAGES.contains(&page) });
-    let kind = match swap {
+    let content = match swap {
         Some(h) if h.activatable => {
             if swap_header_consistent(src, base, len_bytes, h.page)? {
-                Some(FsKind::Swap)
+                ContentKind::Swap
             } else {
-                None
+                ContentKind::Unknown
             }
         }
-        _ => None,
+        _ => ContentKind::Unknown,
     };
-    Ok(FsProbe { kind, swap })
+    Ok(FsProbe { content, swap })
 }
 
 /// swap v1 签名（内核 include/linux/swap.h union swap_header）
@@ -283,8 +235,8 @@ fn swap_probe_pages() -> Vec<u64> {
 }
 
 /// swap 签名探测（唯一实现）：在候选页大小各自的末尾 10 字节找 SWAPSPACE2，
-/// 返回命中的页大小（magic 偏移 = page − 10）。候选集由调用方按语义选择（见上两个
-/// 具名集合），本函数不做取舍。只认 SWAPSPACE2：v0 的 "SWAP-SPACE" 内核早已不再写入，
+/// 返回命中的页大小（magic 偏移 = page − 10）。候选集由调用方按语义选择
+/// （`SWAPON_PAGES` / `BLKID_PAGES` 两个具名集合），本函数不做取舍。只认 SWAPSPACE2：v0 的 "SWAP-SPACE" 内核早已不再写入，
 /// swsuspend 系签名（S1SUSPEND/S2SUSPEND/ULSUSPEND/TOI/LINHIB0001）是休眠镜像
 /// 而非 swap 区，二者都不认。
 /// 读取失败回 Err 而非 None：签名位置读不出来 ≠ 证明签名不在——把设备故障压成
@@ -355,7 +307,7 @@ pub fn overlay_offset_at(src: &FileSource, part_offset: u64, part_len_bytes: u64
     let mut sb = [0u8; 2048];
     // 读区越出分区尾按未命中：那不是读故障，是区间不存在的事实；且闸若缺位，
     // 越界读会吃到分区之后的邻分区字节（或 EOF 上的 UnexpectedEof，被调用方
-    // 当成 I/O 故障退 30）
+    // 当成 I/O 故障退 4）
     if sb.len() as u64 > part_len_bytes {
         return Ok(None);
     }
@@ -398,22 +350,24 @@ pub fn overlay_offset_at(src: &FileSource, part_offset: u64, part_len_bytes: u64
 mod tests {
     use super::*;
 
-    fn src_from(tag: &str, data: Vec<u8>) -> FileSource {
-        let mut tmp = std::env::temp_dir();
-        tmp.push(format!("diskedit_fsid_{tag}_{}.img", std::process::id()));
-        std::fs::write(&tmp, &data).unwrap();
-        let f = std::fs::OpenOptions::new().read(true).write(true).open(&tmp).unwrap();
-        FileSource {
-            identity: crate::dev::TargetIdentity::resolve_image(&tmp),
+    fn src_from(tag: &str, data: Vec<u8>) -> crate::testdir::TestSource<FileSource> {
+        let dir = crate::testdir::test_dir(tag);
+        let path = dir.join("disk.img");
+        std::fs::write(&path, &data).unwrap();
+        let f = std::fs::OpenOptions::new().read(true).write(true).open(&path).unwrap();
+        let src = FileSource {
+            identity: crate::dev::TargetIdentity::resolve_image(&path),
             file: f,
-            path: tmp,
+            path,
             sector_size: 512,
             size: data.len() as u64,
             is_block: false,
-            journal: None,
+            record_journal: None,
             fingerprint: Default::default(),
             loop_mapping: None,
-        }
+            owner: None,
+        };
+        crate::testdir::TestSource::new(dir, src)
     }
 
     #[test]
@@ -421,7 +375,7 @@ mod tests {
         let mut data = vec![0u8; 4096];
         data[0x438..0x43A].copy_from_slice(&0xEF53u16.to_le_bytes());
         let s = src_from("ext", data);
-        assert_eq!(identify(&s, 0, 4096).unwrap(), Some(FsKind::Ext));
+        assert_eq!(identify(&s, 0, 4096).unwrap(), ContentKind::Filesystem(FsKind::Ext));
     }
 
     #[test]
@@ -429,7 +383,7 @@ mod tests {
         let mut data = vec![0u8; 4096];
         data[3..11].copy_from_slice(b"NTFS    ");
         let s = src_from("ntfs", data);
-        assert_eq!(identify(&s, 0, 4096).unwrap(), Some(FsKind::Ntfs));
+        assert_eq!(identify(&s, 0, 4096).unwrap(), ContentKind::Filesystem(FsKind::Ntfs));
     }
 
     #[test]
@@ -441,7 +395,7 @@ mod tests {
         data[1024..1028].copy_from_slice(&1u32.to_le_bytes());
         data[1028..1032].copy_from_slice(&1u32.to_le_bytes());
         let s = src_from("swap", data);
-        assert_eq!(identify(&s, 0, 8192).unwrap(), Some(FsKind::Swap));
+        assert_eq!(identify(&s, 0, 8192).unwrap(), ContentKind::Swap);
     }
 
     /// 读失败必须与"没有已知签名"区分开：identify 对设备故障回 Err——
@@ -462,20 +416,20 @@ mod tests {
         // 区间只有 8 KiB = 1 页：version = 1、last_page = 0
         data[1024..1028].copy_from_slice(&1u32.to_le_bytes());
         let s = src_from("swap8k", data.clone());
-        assert_eq!(identify(&s, 0, 8192).unwrap(), Some(FsKind::Swap));
+        assert_eq!(identify(&s, 0, 8192).unwrap(), ContentKind::Swap);
         // 签名在、头内不自洽：version 为 0
         let mut no_version = data.clone();
         no_version[1024..1028].fill(0);
-        assert_eq!(identify(&src_from("swap8k_v0", no_version), 0, 8192).unwrap(), None);
+        assert_eq!(identify(&src_from("swap8k_v0", no_version), 0, 8192).unwrap(), ContentKind::Unknown);
         // last_page 指向分区之外（这里 1 页的分区只有第 0 页）
         let mut beyond = data.clone();
         beyond[1028..1032].copy_from_slice(&1u32.to_le_bytes());
-        assert_eq!(identify(&src_from("swap8k_beyond", beyond), 0, 8192).unwrap(), None);
+        assert_eq!(identify(&src_from("swap8k_beyond", beyond), 0, 8192).unwrap(), ContentKind::Unknown);
         // 记的是扩容前的旧页数（小于当前页数）仍是合法 swap
         let mut grown = data;
         grown.resize(32768, 0);
         grown[1028..1032].copy_from_slice(&1u32.to_le_bytes());
-        assert_eq!(identify(&src_from("swap8k_grown", grown), 0, 32768).unwrap(), Some(FsKind::Swap));
+        assert_eq!(identify(&src_from("swap8k_grown", grown), 0, 32768).unwrap(), ContentKind::Swap);
     }
 
     #[test]
@@ -485,7 +439,7 @@ mod tests {
         let ps = 32768u64;
         data[(ps - 10) as usize..ps as usize].copy_from_slice(b"SWAPSPACE2");
         let s = src_from("swap32k", data);
-        assert_eq!(identify(&s, 0, 65536).unwrap(), None);
+        assert_eq!(identify(&s, 0, 65536).unwrap(), ContentKind::Unknown);
     }
 
     /// 候选集的两个口径：swapon 口径不含 32K（各自的依据见常量注释），仅 libblkid
@@ -536,7 +490,7 @@ mod tests {
         data[1024..1028].copy_from_slice(&1u32.to_le_bytes());
         data[1028..1032].copy_from_slice(&1u32.to_le_bytes());
         let p = probe_fs(&src_from("pf4k", data), 0, 65536).unwrap();
-        assert_eq!(p.kind, Some(FsKind::Swap));
+        assert_eq!(p.content, ContentKind::Swap);
         assert_eq!(p.swap, Some(SwapHit { page: 4096, activatable: true }));
         // 32K swap：只有 libblkid 口径命中 ⇒ 不可激活，identify 仍是 None
         let mut data = vec![0u8; 65536];
@@ -544,11 +498,11 @@ mod tests {
         data[1024..1028].copy_from_slice(&1u32.to_le_bytes());
         data[1028..1032].copy_from_slice(&1u32.to_le_bytes());
         let p = probe_fs(&src_from("pf32k", data), 0, 65536).unwrap();
-        assert_eq!(p.kind, None);
+        assert_eq!(p.content, ContentKind::Unknown);
         assert_eq!(p.swap, Some(SwapHit { page: 32768, activatable: false }));
         // 空区域：两个事实都落空
         let p = probe_fs(&src_from("pfnone", vec![0u8; 65536]), 0, 65536).unwrap();
-        assert_eq!(p.kind, None);
+        assert_eq!(p.content, ContentKind::Unknown);
         assert_eq!(p.swap, None);
         // 签名相对**区间起点**解释：同一段字节换个起点就不再命中
         let mut data = vec![0u8; 131072];
@@ -564,7 +518,7 @@ mod tests {
         let mut data = vec![0u8; 4096];
         data[0x400..0x402].copy_from_slice(b"H+");
         let s = src_from("hfsplus", data);
-        assert_eq!(identify(&s, 0, 4096).unwrap(), Some(FsKind::HfsPlus));
+        assert_eq!(identify(&s, 0, 4096).unwrap(), ContentKind::Filesystem(FsKind::HfsPlus));
     }
 
     #[test]
@@ -572,7 +526,7 @@ mod tests {
         let mut data = vec![0u8; 4096];
         data[0x20..0x24].copy_from_slice(b"NXSB");
         let s = src_from("apfs", data);
-        assert_eq!(identify(&s, 0, 4096).unwrap(), Some(FsKind::Apfs));
+        assert_eq!(identify(&s, 0, 4096).unwrap(), ContentKind::Filesystem(FsKind::Apfs));
     }
 
     #[test]
@@ -581,14 +535,14 @@ mod tests {
         data[512..520].copy_from_slice(b"LABELONE");
         data[536..544].copy_from_slice(b"LVM2 001");
         let s = src_from("lvm", data);
-        assert_eq!(identify(&s, 0, 4096).unwrap(), Some(FsKind::Lvm2Pv));
+        assert_eq!(identify(&s, 0, 4096).unwrap(), ContentKind::Lvm2Pv);
     }
 
     #[test]
     fn unknown_not_guessed() {
         let data = vec![0u8; 4096];
         let s = src_from("unk", data);
-        assert_eq!(identify(&s, 0, 4096).unwrap(), None);
+        assert_eq!(identify(&s, 0, 4096).unwrap(), ContentKind::Unknown);
     }
 
     #[test]
@@ -596,12 +550,12 @@ mod tests {
         let mut data = vec![0u8; 8192];
         data[0..4].copy_from_slice(b"hsqs");
         let s = src_from("sq", data);
-        assert_eq!(identify(&s, 0, 8192).unwrap(), Some(FsKind::Squashfs));
+        assert_eq!(identify(&s, 0, 8192).unwrap(), ContentKind::Filesystem(FsKind::Squashfs));
 
         let mut data = vec![0u8; 8192];
         data[1024..1028].copy_from_slice(&[0xE2, 0xE1, 0xF5, 0xE0]);
         let s = src_from("ero", data);
-        assert_eq!(identify(&s, 0, 8192).unwrap(), Some(FsKind::Erofs));
+        assert_eq!(identify(&s, 0, 8192).unwrap(), ContentKind::Filesystem(FsKind::Erofs));
     }
 
     /// overlay 起点公式：squashfs bytes_used 上取 64K 对齐；EROFS blocks<<blkszbits 同；

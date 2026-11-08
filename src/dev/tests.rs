@@ -1,5 +1,6 @@
 #![allow(clippy::let_underscore_must_use)] // 清理临时文件有意忽略失败
 use super::*;
+use crate::testdir::test_dir;
 
 /// `:N` 后缀的判定：分区号 1-based，`:0` 必须拒绝而不是折叠成"整盘"——
 /// 折叠会把一次针对具体分区的操作放大成对整盘的表操作。
@@ -8,7 +9,10 @@ use super::*;
 pub(crate) fn parse_target_partition_suffix() {
     assert_eq!(parse_target("img").unwrap(), ("img".to_string(), None));
     assert_eq!(parse_target("img:1").unwrap(), ("img".to_string(), Some(PartSelector::Number(1))));
-    assert_eq!(parse_target("img:4294967295").unwrap(), ("img".to_string(), Some(PartSelector::Number(u32::MAX))));
+    assert_eq!(parse_target("img:128").unwrap(), ("img".to_string(), Some(PartSelector::Number(128))));
+    // 解析值域 1..=128，超出即拒绝
+    assert!(parse_target("img:129").is_err());
+    assert!(parse_target("img:4294967295").is_err());
     assert!(parse_target("img:0").is_err());
     assert!(parse_target("img:4294967296").is_err());
     assert!(parse_target("img:").is_err());
@@ -18,152 +22,13 @@ pub(crate) fn parse_target_partition_suffix() {
     assert_eq!(parse_target("/a/b:c.img").unwrap(), ("/a/b:c.img".to_string(), None));
 }
 
-pub(crate) fn journal_path(tag: &str) -> PathBuf {
-    let mut p = std::env::temp_dir();
-    p.push(format!("diskedit_jr_{tag}_{}.log", std::process::id()));
-    let _ = std::fs::remove_file(&p);
-    p
-}
-
-/// 测试用的目标身份：全零指纹 + 无 loop 映射 = "取不到稳定指纹的载体"那一类，
-/// 身份核对因此不参与（判据见 `scene_mismatch`）。需要核对时另给具体值
-pub(crate) fn jid() -> LiveScene {
-    LiveScene { fp: TargetFingerprint::default(), map: None, proof: LiveProof::Inode }
-}
-
-/// 取错误文本。不用 `unwrap_err`：那要求 Ok 侧实现 Debug，而这些类型不必为了测试去实现它
-pub(crate) fn err_text<T>(r: io::Result<T>) -> String {
-    match r {
-        Ok(_) => panic!("expected an error"),
-        Err(e) => e.to_string(),
-    }
-}
-
-/// "这是不是本工具的 journal"看的是 `DEJL` 前缀与可读版本。当前版本才可读，
-/// 故 `DEJL` 之后的版本字节不是当前值即不算
-#[test]
-pub(crate) fn own_header_covers_every_readable_version() {
-    assert!(Journal::is_own_header(Journal::MAGIC));
-    assert!(!Journal::is_own_header(b"DEJL\x03"), "an unreadable version is not ours");
-    assert!(!Journal::is_own_header(b"XXXX\x05"), "a foreign magic is not ours");
-}
-
-/// 分类的边界：只有 NotFound 是 absent；0 字节残骸与非普通文件也不是现场；
-/// 零记录的头是 shell；上一版布局是 old-format（独立于 damaged）；半截头与陌生文件是 damaged
-#[test]
-pub(crate) fn journal_candidate_classification_covers_every_state() {
-    let p = journal_path("classify");
-    assert!(matches!(classify_journal(&p), JournalCandidate::Absent), "a missing path is absent");
-
-    std::fs::write(&p, b"").unwrap();
-    assert!(matches!(classify_journal(&p), JournalCandidate::Absent), "a zero-byte remnant is not a scene");
-
-    drop(Journal::open(&p, jid()).unwrap());
-    assert!(matches!(classify_journal(&p), JournalCandidate::Shell), "a header with no records is a shell");
-
-    std::fs::write(&p, b"DEJ").unwrap();
-    assert!(matches!(classify_journal(&p), JournalCandidate::Damaged(_)), "a torn header must not be provable as empty");
-
-    let _ = std::fs::remove_file(&p);
-    let mut j = Journal::open(&p, jid()).unwrap();
-    j.record(0, &[0xAA; 4], &[0xBB; 4]).unwrap();
-    drop(j);
-    assert!(
-        matches!(classify_journal(&p), JournalCandidate::Records(JournalRead::Complete(v)) if v.len() == 1),
-        "a journal with a complete record must be classified as records"
-    );
-
-    let _ = std::fs::remove_file(&p);
-    std::fs::create_dir(&p).unwrap();
-    assert!(
-        matches!(classify_journal(&p), JournalCandidate::NotARecoveryFile(_)),
-        "a directory exists but is not this tool's journal"
-    );
-    let _ = std::fs::remove_dir(&p);
-}
-
-#[cfg(unix)]
-fn make_symlink(target: &Path, link: &Path) -> io::Result<()> {
-    std::os::unix::fs::symlink(target, link)
-}
-
-#[cfg(windows)]
-fn make_symlink(target: &Path, link: &Path) -> io::Result<()> {
-    std::os::windows::fs::symlink_file(target, link)
-}
-
-/// 唯一构造点认的是落点本身的条目：符号链接（含 dangling）与目录都归
-/// `NotARecoveryFile`——"存在但不是恢复文件"，不是"不存在"。删除入口同样只认
-/// 普通文件：对符号链接调用 `remove_file` 只会摘掉链接，链接目标保持原样
-#[test]
-pub(crate) fn recovery_entry_never_follows_a_symbolic_link() {
-    let dir = std::env::temp_dir().join(format!("diskedit_recovery_entry_{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    let target = dir.join("target.bin");
-    let link = dir.join("link.bin");
-    let dangling = dir.join("dangling.bin");
-    let dir_entry = dir.join("dir_entry");
-    std::fs::write(&target, b"record bytes").unwrap();
-    make_symlink(Path::new("target.bin"), &link).unwrap();
-    // 先有目标、再删掉，才能得到一条 dangling 链接（Windows 拒绝指向不存在目标的创建）。
-    // 链接目标用相对名：跟随链接时按链接所在目录解析，不依赖绝对路径
-    let missing = dir.join("missing-target");
-    std::fs::write(&missing, b"").unwrap();
-    make_symlink(&missing, &dangling).unwrap();
-    std::fs::remove_file(&missing).unwrap();
-    std::fs::create_dir(&dir_entry).unwrap();
-
-    assert!(
-        matches!(RecoveryFile::at(&link), Ok(RecoveryEntry::NotARecoveryFile(n)) if n.what() == "a symbolic link"),
-        "a symbolic link is not a recovery file"
-    );
-    assert!(
-        matches!(RecoveryFile::at(&dangling), Ok(RecoveryEntry::NotARecoveryFile(n)) if n.what() == "a dangling symbolic link"),
-        "a dangling symbolic link exists but is not a recovery file"
-    );
-    assert!(
-        matches!(RecoveryFile::at(&dir_entry), Ok(RecoveryEntry::NotARecoveryFile(n)) if n.what() == "a directory"),
-        "a directory is not a recovery file"
-    );
-    assert!(matches!(RecoveryFile::at(&target), Ok(RecoveryEntry::File(_))));
-    assert!(matches!(RecoveryFile::at(&dir.join("absent")), Ok(RecoveryEntry::Absent)));
-
-    assert!(!remove_recovery_file(&link), "a symbolic link must not be deleted as a recovery file");
-    assert_eq!(std::fs::read(&target).unwrap(), b"record bytes", "the link target keeps its bytes");
-    assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink(), "the link entry is untouched");
-
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-/// 属性读不出来不是"不在"：只有 `NotFound` 才算缺席，其余错误必须按 `Damaged` 收口。
-/// 权限位在 root 下不生效，机器上造不出这个错误时跳过
-#[cfg(target_os = "linux")]
-#[test]
-pub(crate) fn candidate_classification_fails_closed_on_stat_errors() {
-    use std::os::unix::fs::PermissionsExt;
-    if unsafe { libc::geteuid() } == 0 {
-        return;
-    }
-    let dir = std::env::temp_dir().join(format!("diskedit_classify_denied_{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    let p = dir.join("j.journal");
-    std::fs::write(&p, b"DEJL").unwrap();
-    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o000)).unwrap();
-    let got = classify_journal(&p);
-    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
-    assert!(matches!(got, JournalCandidate::Damaged(_)), "a stat error must fail closed");
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
 /// 分区节点不暴露 loop 属性：沿 `partition` 属性上溯到整设备节点再读。
 /// 非 loop 的盘同样上溯后得到"没有 backing_file"，不是"读不出来"
 #[cfg(target_os = "linux")]
 #[test]
 pub(crate) fn loop_backing_is_read_from_the_device_above_the_partition() {
-    let root = std::env::temp_dir().join(format!("diskedit_sysfs_{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&root);
+    let dir = test_dir("sysfs");
+    let root = dir.path();
     std::fs::create_dir_all(root.join("loop0/loop")).unwrap();
     std::fs::create_dir_all(root.join("loop0/loop0p1")).unwrap();
     std::fs::create_dir_all(root.join("sda/sda1")).unwrap();
@@ -177,8 +42,6 @@ pub(crate) fn loop_backing_is_read_from_the_device_above_the_partition() {
     );
     assert_eq!(loop_backing_at(&root.join("loop0")).unwrap(), Some(PathBuf::from("/tmp/backing.img")));
     assert_eq!(loop_backing_at(&root.join("sda/sda1")).unwrap(), None);
-
-    let _ = std::fs::remove_dir_all(&root);
 }
 
 /// 指纹的设备 ID 与容量都取**整设备节点**：以分区节点解析与以整盘节点解析得到同一份
@@ -187,8 +50,8 @@ pub(crate) fn loop_backing_is_read_from_the_device_above_the_partition() {
 #[cfg(target_os = "linux")]
 #[test]
 pub(crate) fn disk_identity_is_shared_by_a_partition_and_its_whole_disk() {
-    let root = std::env::temp_dir().join(format!("diskedit_diskid_{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&root);
+    let dir = test_dir("diskid");
+    let root = dir.path();
     std::fs::create_dir_all(root.join("sda/sda1")).unwrap();
     std::fs::create_dir_all(root.join("dm-0/dm")).unwrap();
     std::fs::write(root.join("sda/size"), "2048\n").unwrap();
@@ -203,383 +66,50 @@ pub(crate) fn disk_identity_is_shared_by_a_partition_and_its_whole_disk() {
     assert_eq!(whole, (2048 * 512, Some("wwid=naa.5000c500aabbccdd".to_string())));
     assert_eq!(disk_identity(&root.join("sda/sda1")).unwrap(), whole);
     assert_eq!(disk_identity(&root.join("dm-0")).unwrap(), (4096 * 512, None));
-
-    let _ = std::fs::remove_dir_all(&root);
 }
 
 /// 字面路径与 canonical 指同一文件（相对路径 / `./` / `..` 这类非规范化成分）时，
 /// 落点仍只有一个：两种写法都从 canonical 派生，不因写法不同多出第二份现场
 #[test]
 pub(crate) fn non_canonical_literal_yields_the_canonical_slot() {
-    let dir = std::env::temp_dir();
-    let img = dir.join(format!("diskedit_iddup_{}.img", std::process::id()));
+    let dir = test_dir("iddup");
+    let img = dir.join("x.img");
     std::fs::write(&img, b"x").unwrap();
     let canonical = std::fs::canonicalize(&img).unwrap();
     // 同一文件的另一条写法：`<tmp>/sub/../x.img` 文本上不同于 canonical，指向同一处
-    let sub = dir.join(format!("diskedit_iddup_sub_{}", std::process::id()));
+    let sub = dir.join("sub");
     std::fs::create_dir_all(&sub).unwrap();
     let literal = sub.join("..").join(canonical.file_name().unwrap());
     assert_ne!(literal, canonical, "the fixture must be textually different");
     let id = TargetIdentity::image_at(&canonical, &literal);
     assert_eq!(id.journal_path(), suffix_path(&canonical, JOURNAL_SUFFIX));
-    assert_eq!(id.checkpoint_path(), suffix_path(&canonical, CHECKPOINT_SUFFIX));
-
-    let _ = std::fs::remove_file(&img);
-    let _ = std::fs::remove_dir(&sub);
 }
 
-/// 尾部撕裂是"未完成的事务"，不是损坏：丢弃那一条、回放完整前缀；
-/// 中途 CRC 不符才是损坏，仍整体拒绝（"不做部分回放"的契约只对后者生效）
+/// 相对写法不移动记录的落点：记录目录由 canonical 派生，`..` / 相对名不会在当前
+/// 工作目录下多出一个 `<literal>.diskedit/`——那会让同一目标在不同目录下出现两份现场
 #[test]
-pub(crate) fn journal_tail_truncation_is_recovered_but_corruption_is_not() {
-    let p = journal_path("tail");
-    const DATA: usize = 512;
-    // [len u32][crc u32] + [mutation u8][recovery u8][off u64][pre_len u32][data]×2（PartitionTable 无 meta）
-    const REC: usize = REC_HDR + 14 + 2 * DATA;
-    {
-        let mut j = Journal::open(&p, jid()).unwrap();
-        for i in 0..3u64 {
-            j.record(1024 * i, &[0xAA; DATA], &[0xBB; DATA]).unwrap();
-        }
-    }
-    assert!(matches!(
-        Journal::read_entries(&p).unwrap(),
-        JournalRead::Complete(v) if v.len() == 3
-    ));
+pub(crate) fn a_relative_literal_does_not_move_the_record() {
+    let dir = test_dir("relrec");
+    let img = dir.join("x.img");
+    std::fs::write(&img, b"x").unwrap();
+    let canonical = std::fs::canonicalize(&img).unwrap();
+    // 一条相对写法：本进程的工作目录与临时目录无关，它解析不到任何文件——
+    // 若落点跟着字面路径走，这里就会在当前目录旁造出一份现场
+    let literal = Path::new("..").join(canonical.file_name().unwrap());
 
-    // 把最后一条记录截掉任意一段非空的长度 → 都应是"2 条完整 + 尾部未完成"。
-    // 上界取 REC（不含）：截满 REC 等于整条消失，那就不再是撕裂而是"到此为止"
-    let full = std::fs::read(&p).unwrap();
-    for cut in 1..REC {
-        std::fs::write(&p, &full[..full.len() - cut]).unwrap();
-        match Journal::read_entries(&p).unwrap() {
-            JournalRead::TruncatedTail { records, cut: torn } => {
-                assert_eq!(records.len(), 2, "cut {cut}");
-                // 报出的是"回滚到上一条完整记录所丢掉的字节数"，即整条记录的剩余部分
-                assert_eq!(torn.get(), REC - cut, "cut {cut}");
-            }
-            JournalRead::Complete(v) => {
-                panic!("cut {cut}: expected a truncated tail, got {} complete record(s)", v.len())
-            }
-        }
-    }
-    // 截满一条 = 该记录整条没写进去，此时应报 Complete(2)，不是撕裂
-    std::fs::write(&p, &full[..full.len() - REC]).unwrap();
-    assert!(matches!(
-        Journal::read_entries(&p).unwrap(),
-        JournalRead::Complete(v) if v.len() == 2
-    ));
-
-    // 中途（非尾部）CRC 损坏 → 整体拒绝
-    let mut corrupt = full.clone();
-    corrupt[Journal::HEADER_LEN + REC_HDR + 10 + 100] ^= 0xFF; // 第 1 条记录的 pre-image 字节中段
-    std::fs::write(&p, &corrupt).unwrap();
-    assert!(Journal::read_entries(&p).is_err(), "mid-file corruption must be refused");
-
-    let _ = std::fs::remove_file(&p);
-}
-
-/// `len` 参与记录 CRC：长度字段被改小后按校验失败拒绝，不再被当成"载荷只写了一半"
-#[test]
-pub(crate) fn journal_crc_covers_the_length_field() {
-    let p = journal_path("v5len");
-    {
-        let mut j = Journal::open(&p, jid()).unwrap();
-        j.record(0, &[0xAA; 16], &[0xBB; 16]).unwrap();
-    }
-    let mut bytes = std::fs::read(&p).unwrap();
-    assert_eq!(&bytes[..5], Journal::MAGIC);
-    let at = Journal::HEADER_LEN;
-    let n = u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap());
-    bytes[at..at + 4].copy_from_slice(&(n - 1).to_le_bytes());
-    std::fs::write(&p, &bytes).unwrap();
-    let e = err_text(Journal::read_entries(&p));
-    assert!(e.contains("CRC mismatch"), "a corrupted len must be a CRC failure: {e}");
-
-    let _ = std::fs::remove_file(&p);
-}
-
-/// 头把身份种类写在身份段最后一个字节：三种可落盘种类原样读回。这一字节是"录制时取不到
-/// 身份"的唯一分界，故未知值一律按头损坏拒绝，不降级成某个"没有身份"的种类——
-/// 降级会把缺身份的块设备现场当成别的载体放过
-#[test]
-pub(crate) fn journal_records_identity_kind_and_refuses_an_unknown_one() {
-    let with = |proof| LiveScene {
-        fp: TargetFingerprint { dev: 7, ino: 42, size: 1 << 20, id: 0x1122_3344_5566_7788 },
-        map: Some((4096, 8192)),
-        proof,
-    };
-    for (proof, tag) in [
-        (LiveProof::DeviceId, 1u8),
-        (LiveProof::Inode, 2),
-        (LiveProof::Unavailable, 3),
-    ] {
-        let bytes = Journal::header(&with(proof), DiskGuidState::Unavailable);
-        assert_eq!(bytes[Journal::MAGIC.len() + IDENTITY_LEN - 1], tag);
-        let back = Journal::parse_header(&bytes).unwrap();
-        assert_eq!(
-            (back.scene.fp, back.scene.map, back.scene.proof),
-            (with(proof).fp, with(proof).map, IdentityProof::from(proof))
-        );
-        assert_eq!(back.credential, DiskGuidState::Unavailable);
-    }
-
-    // 0 不是任何合法种类：头 CRC 通过也不得降级成别的种类
-    let mut bytes = Journal::header(&with(LiveProof::Inode), DiskGuidState::Unavailable);
-    bytes[Journal::MAGIC.len() + IDENTITY_LEN - 1] = 0;
-    let crc_at = Journal::MAGIC.len() + IDENTITY_LEN;
-    let crc = crate::table::crc32(&bytes[..crc_at]);
-    bytes[crc_at..crc_at + 4].copy_from_slice(&crc.to_le_bytes());
-    let e = err_text(Journal::parse_header(&bytes));
-    assert!(e.contains("identity kind"), "an unknown identity kind must be refused: {e}");
-}
-
-/// 惰性创建：打开只做校验、不落痕迹，第一条记录才建文件。若 open 就建，一条在被拒阶段
-/// 结束的命令会留下空 journal，让后续 undo 分不清"没有 journal"与"journal 是空的"
-#[test]
-pub(crate) fn journal_is_created_lazily() {
-    let p = journal_path("lazy");
-    let mut j = Journal::open(&p, jid()).unwrap();
-    assert!(!p.exists(), "opening a journal must not leave a trace on disk");
-    j.record(0, &[0xAA; 4], &[0xBB; 4]).unwrap();
-    assert!(p.exists(), "the first record must materialize the file");
-    drop(j);
-
-    // 已有文件必须是我们的 journal：陌生文件不得被当作 journal 追加
-    std::fs::write(&p, b"not-a-journal").unwrap();
-    assert!(Journal::open(&p, jid()).is_err(), "a foreign file must be refused, not adopted");
-
-    let _ = std::fs::remove_file(&p);
-}
-
-/// 头边界：不认识的版本必须报"版本不支持"（不是损坏），且拒绝时**一字不动**；
-/// 当前版本的头要能被自己写出去、读回来，身份逐字段一致。
-/// 样本用一份 v3 字节（magic `DEJL\x03` + 一条 RelocatePartition 记录），只作陌生载荷
-#[test]
-pub(crate) fn journal_format_boundary_refuses_unknown_versions_and_keeps_them_intact() {
-    let p = journal_path("format_v3");
-    let mut v3 = b"DEJL\x03".to_vec();
-    v3.extend_from_slice(&[
-        0x16, 0x00, 0x00, 0x00, 0xdd, 0xc5, 0xf3, 0x92, 0x01, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0xb0, 0x04,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x48, 0x06, 0x00, 0x00, 0x00, 0x00, 0x01,
-    ]);
-    assert_eq!(v3.len(), 35, "the fixture must be the real v3 byte sequence");
-    std::fs::write(&p, &v3).unwrap();
-    let e = err_text(Journal::read_entries(&p));
-    assert!(e.contains("v3") && e.contains("not supported"), "an unknown version must be reported as such: {e}");
-    assert!(!e.contains("CRC"), "an unknown version must not be reported as record corruption: {e}");
-    assert_eq!(std::fs::read(&p).unwrap(), v3, "refusing an unknown version must leave the file untouched");
-    // 采纳路径（写命令打开目标时）同样拒绝，同样不动文件——那份现场只能由 abandon 释放
-    let e = err_text(Journal::open(&p, jid()));
-    assert!(e.contains("v3"), "{e}");
-    assert_eq!(std::fs::read(&p).unwrap(), v3, "the adoption path must leave the unknown version untouched");
-    let _ = std::fs::remove_file(&p);
-
-    // 写出去的头 + 身份，读回来逐字段一致
-    let q = journal_path("format_roundtrip");
-    let mine = LiveScene { fp: TargetFingerprint { dev: 7, ino: 42, size: 1 << 20, id: 0 }, map: Some((4096, 8192)), proof: LiveProof::Inode };
-    {
-        let mut j = Journal::open(&q, mine).unwrap();
-        j.record(0, &[0xAA; 8], &[0xBB; 8]).unwrap();
-    }
-    let got = Journal::read_identity(&q).unwrap();
-    assert_eq!((got.fp.dev, got.fp.ino, got.fp.size), (7, 42, 1 << 20));
-    assert_eq!(got.map, Some((4096, 8192)));
-    assert!(matches!(Journal::read_entries(&q).unwrap(), JournalRead::Complete(v) if v.len() == 1));
-    // 指纹不符 = 同一路径下换了文件：不采纳，且不动那份 journal
-    let before = std::fs::read(&q).unwrap();
-    let other = LiveScene { fp: TargetFingerprint { dev: 7, ino: 43, size: 1 << 20, id: 0 }, map: Some((4096, 8192)), proof: LiveProof::Inode };
-    let e = err_text(Journal::open(&q, other));
-    assert!(e.contains("fingerprint"), "{e}");
-    assert_eq!(std::fs::read(&q).unwrap(), before, "a foreign identity must not be adopted or modified");
-    // loop 映射的有无之别同样拦下：同一 LBA 在两条途径下指向不同字节
-    let no_map = LiveScene { fp: TargetFingerprint { dev: 7, ino: 42, size: 1 << 20, id: 0 }, map: None, proof: LiveProof::Inode };
-    assert!(err_text(Journal::open(&q, no_map)).contains("loop device"));
-    assert_eq!(std::fs::read(&q).unwrap(), before, "no mismatch may modify the journal");
-    let _ = std::fs::remove_file(&q);
-}
-
-/// "头不完整 / 头被改坏 / 记录被改坏"三种都拒绝；**只有 0 字节**的残骸按
-/// "零次写入"处理（补头继续用）。1..HEADER_LEN-1 字节一律拒绝：那既可能是初始化没写完，
-/// 也可能是原 journal 被外部截断（记录已丢），无法证明是前者，就不当后者不存在
-#[test]
-pub(crate) fn journal_truncated_or_damaged_is_refused_and_only_a_zero_byte_remnant_is_rewritten() {
-    let p = journal_path("format_bad");
-    let id = LiveScene { fp: TargetFingerprint { dev: 7, ino: 42, size: 1 << 20, id: 0 }, map: None, proof: LiveProof::Inode };
-    {
-        let mut j = Journal::open(&p, id).unwrap();
-        j.record(0, &[0xAA; 8], &[0xBB; 8]).unwrap();
-    }
-    let full = std::fs::read(&p).unwrap();
-    assert!(full.len() > Journal::HEADER_LEN);
-
-    // 头截断
-    std::fs::write(&p, &full[..Journal::HEADER_LEN - 1]).unwrap();
-    assert!(err_text(Journal::read_entries(&p)).contains("truncated"));
-    // 头被改坏：身份段的自带 CRC 先报出来，而不是拿改坏后的指纹去比出"指纹不符"
-    let mut bad = full.clone();
-    bad[Journal::MAGIC.len() + 8] ^= 0xFF;
-    std::fs::write(&p, &bad).unwrap();
-    assert!(err_text(Journal::read_entries(&p)).contains("header CRC"));
-    // 记录被改坏
-    let mut bad = full.clone();
-    bad[Journal::HEADER_LEN + REC_HDR] ^= 0xFF;
-    std::fs::write(&p, &bad).unwrap();
-    assert!(Journal::read_entries(&p).is_err());
-    // 原样写回 → 又能读回
-    std::fs::write(&p, &full).unwrap();
-    assert!(matches!(Journal::read_entries(&p).unwrap(), JournalRead::Complete(v) if v.len() == 1));
-
-    // 0 字节 = 建头没写完的残骸（唯一的残骸判据）：补写成当前身份，不报损坏
-    std::fs::write(&p, b"").unwrap();
-    assert_eq!(std::fs::metadata(&p).unwrap().len(), 0, "an empty file is the one shape that may be rewritten");
-    drop(Journal::open(&p, id).unwrap());
-    assert_eq!(Journal::read_identity(&p).unwrap().fp.ino, 42, "the remnant must carry the current identity");
-    assert!(matches!(Journal::read_entries(&p).unwrap(), JournalRead::Complete(v) if v.is_empty()));
-
-    // 1..HEADER_LEN-1 字节**不补头**：它可能是"初始化没写完"，也可能是"原 journal 被外部
-    // 截断到这么短"（记录因此已经丢了），两者在内容上不可区分。三个消费点都按"读不出来"
-    // 处理，且一字不动——按残骸补头就等于替用户宣布"这里什么都没有"
-    for short in [
-        &b"DEJ"[..],                                   // 只写了 magic 的前 3 字节
-        &full[..Journal::HEADER_LEN - 1],               // 差最后 1 字节的头
-        &full[..Journal::MAGIC.len() + 24],             // 身份段写了 3 个字段、映射位还没写完
-    ] {
-        std::fs::write(&p, short).unwrap();
-        assert!(err_text(Journal::read_entries(&p)).contains("truncated"), "{} bytes", short.len());
-        assert!(err_text(Journal::open(&p, id)).contains("truncated"), "{} bytes", short.len());
-        assert_eq!(std::fs::read(&p).unwrap(), short, "a sub-header file must be left byte-identical");
-    }
-    // 非本工具的半截文件不得被当成残骸改写
-    std::fs::write(&p, b"XYZ").unwrap();
-    assert!(Journal::open(&p, id).is_err());
-    assert_eq!(std::fs::read(&p).unwrap(), b"XYZ", "a foreign short file must be left alone");
-
-    let _ = std::fs::remove_file(&p);
-}
-
-/// 记录判据的边界：一份**含记录的完整 journal 被外部截断到 0** 后，与"建好文件、头还没
-/// 写"在现有状态下不可区分，判据把它当残骸收养——记录就此丢失且无从提示。这是**已接受
-/// 的限制而非安全保证**；1 字节以上的截断走的是拒绝路径（见上一条测试），唯独 0 字节
-/// 例外。若产品日后要求"无法证明来源就不重新初始化"，改的是 `Journal::open` 的 0 字节
-/// 分支与本测试，不是恢复流程
-#[test]
-pub(crate) fn journal_truncated_to_zero_is_adopted_as_a_remnant() {
-    let p = journal_path("trunc_zero");
-    let id = LiveScene { fp: TargetFingerprint { dev: 7, ino: 42, size: 1 << 20, id: 0 }, map: None, proof: LiveProof::Inode };
-    {
-        let mut j = Journal::open(&p, id).unwrap();
-        j.record(0, &[0xAA; 8], &[0xBB; 8]).unwrap();
-    }
-    assert!(Journal::read_entries(&p).is_ok(), "the journal must be complete before truncation");
-
-    std::fs::write(&p, b"").unwrap();
-    assert_eq!(std::fs::metadata(&p).unwrap().len(), 0, "an externally truncated empty file fits the remnant criterion");
-    drop(Journal::open(&p, id).unwrap());
-    assert!(matches!(Journal::read_entries(&p).unwrap(), JournalRead::Complete(v) if v.is_empty()),
-        "the lost records are gone silently — that is the accepted limitation");
-
-    let _ = std::fs::remove_file(&p);
-}
-
-/// open 与首次 record 之间存在窗口：此刻冒出来的文件不是我们建的，必须拒绝而不是
-/// 把 MAGIC 追加进去（两方记录交错进同一份 journal，一次 undo 会回放出不属于本次的字节）。
-/// 抢建的文件还要原样保留——“拒绝”不包括把它截断
-#[test]
-pub(crate) fn journal_creation_refuses_a_file_that_appeared_late() {
-    let p = journal_path("toctou");
-    let mut j = Journal::open(&p, jid()).unwrap();
-    assert!(!p.exists(), "opening a journal must not leave a trace on disk");
-
-    std::fs::write(&p, b"someone else's file").unwrap();
-    assert!(j.record(0, &[0xAA; 4], &[0xBB; 4]).is_err(), "a file that appeared after open must not be adopted");
-    assert_eq!(std::fs::read(&p).unwrap(), b"someone else's file", "the intruding file must be left untouched");
-
-    let _ = std::fs::remove_file(&p);
-}
-
-/// 单句柄：采纳一份带撕裂尾的既有 journal，截断与之后的追加落在同一个句柄上。
-/// 句柄不再是 append 模式，追加位置由 `seek(End)` 显式给出——不 seek 就会把新记录
-/// 写在旧 EOF 之后（截断留下的空洞），读回来即 CRC 失败。
-/// 被截掉的那段字节在 journal 里不再存在，故截断前必须先归档，且逐字节保真
-#[test]
-pub(crate) fn journal_adopts_truncates_and_appends_through_one_handle() {
-    let p = journal_path("onehandle");
-    // 归档名是顺延的：上一次跑留下的归档会让这一次落到 .1，先清干净再断言
-    let archived = suffix_path(&p, ".torn-tail");
-    let _ = std::fs::remove_file(&archived);
-    let _ = std::fs::remove_file(suffix_path(&p, ".torn-tail.1"));
-    const DATA: usize = 32;
-    {
-        let mut j = Journal::open(&p, jid()).unwrap();
-        for i in 0..2u64 {
-            j.record(i * 512, &[0xAA; DATA], &[0xBB; DATA]).unwrap();
-        }
-    }
-    let full = std::fs::read(&p).unwrap();
-    // 撕掉最后一条记录的尾部：模拟一条没走完的追加
-    std::fs::write(&p, &full[..full.len() - 7]).unwrap();
-
-    let (mut j, cut) = Journal::adopt(&p, jid(), DiskGuidState::Unavailable).unwrap();
-    let cut = cut.expect("the torn record must be reported as a non-zero cut");
-    assert!(
-        matches!(Journal::read_entries(&p).unwrap(), JournalRead::Complete(v) if v.len() == 1),
-        "adoption must physically cut the torn tail"
-    );
-    // 落盘的是被截掉的那段：从最后一条完整记录之后，到本次写文件时的 EOF
-    let torn_end = full.len() - 7;
-    let got = std::fs::read(&archived).unwrap();
-    assert_eq!(got.len(), cut.get(), "archive length ({}) vs cut ({})", got.len(), cut);
-    assert_eq!(got, &full[torn_end - cut.get()..torn_end], "the discarded bytes must be archived byte-for-byte before the journal is truncated");
-    j.record(4096, &[0xCC; DATA], &[0xDD; DATA]).unwrap();
-    drop(j);
-    assert!(
-        matches!(Journal::read_entries(&p).unwrap(), JournalRead::Complete(v) if v.len() == 2),
-        "the append after adoption must land directly after the surviving record"
-    );
-
-    let _ = std::fs::remove_file(&p);
-    let _ = std::fs::remove_file(&archived);
-}
-
-/// 归档失败时不得进入零化与截断：归档是撕裂尾字节的唯一副本，没有它就没有恢复依据。
-/// 文件名 246 字节可建、再加 `.torn-tail`（10 字节）超出 255 的文件名上限，
-/// `archive_torn_tail` 因此拿到真实的 `ENAMETOOLONG`，不依赖权限（测试常以 root 运行）
-#[cfg(unix)]
-#[test]
-pub(crate) fn journal_refuses_adoption_when_the_tail_cannot_be_archived() {
-    let dir = std::env::temp_dir().join(format!("diskedit_arch_{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    let p = dir.join("j".repeat(246));
-    const DATA: usize = 32;
-    {
-        let mut j = Journal::open(&p, jid()).unwrap();
-        for i in 0..2u64 {
-            j.record(i * 512, &[0xAA; DATA], &[0xBB; DATA]).unwrap();
-        }
-    }
-    let full = std::fs::read(&p).unwrap();
-    let torn = &full[..full.len() - 7];
-    std::fs::write(&p, torn).unwrap();
-
-    let e = err_text(Journal::adopt(&p, jid(), DiskGuidState::Unavailable));
-    assert!(e.contains("cannot be archived"), "{e}");
-    assert_eq!(std::fs::read(&p).unwrap(), torn, "the journal must keep the torn bytes when no archive could be written");
-    assert!(!suffix_path(&p, ".torn-tail").exists(), "no archive means no archive file");
-
-    let _ = std::fs::remove_dir_all(&dir);
+    let id = TargetIdentity::image_at(&canonical, &literal);
+    let expected = suffix_path(&canonical, RECORD_SUFFIX).join(RECORD_NAME);
+    assert_eq!(id.record_path(), Some(expected.as_path()));
+    assert!(!suffix_path(&literal, RECORD_SUFFIX).exists(), "no record may be derived from the relative spelling");
 }
 
 /// 身份取自已打开的句柄：符号链接只是别名，身份主体落在真实路径的兄弟文件上；
 /// 打开之后路径被改名/替换时必须拒绝——fd 仍指向旧 inode，而字面路径已属于别人，
-/// 按字面路径派生伴随文件会把 journal 放到另一份数据旁
+/// 按字面路径派生伴随文件会把现场放到另一份数据旁
 #[cfg(target_os = "linux")]
 #[test]
 pub(crate) fn image_identity_follows_the_opened_handle_not_the_path() {
-    let dir = std::env::temp_dir().join(format!("diskedit_idfd_{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = test_dir("idfd");
     let a = dir.join("a.img");
     let link = dir.join("link.img");
     std::fs::write(&a, vec![0u8; 4096]).unwrap();
@@ -603,8 +133,6 @@ pub(crate) fn image_identity_follows_the_opened_handle_not_the_path() {
     std::fs::write(&a, vec![0u8; 4096]).unwrap();
     let e = FileSource::identity_of_opened_image(&a, &f, &meta).unwrap_err();
     assert!(e.to_string().contains("no longer names the file that was opened"), "{e}");
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// 日志落点也由身份推导：镜像与目标同层级，块设备落在 state_dir 下且以 Disk GUID /
@@ -628,77 +156,22 @@ pub(crate) fn log_path_comes_from_the_identity() {
     }
 }
 
-/// 落盘命名的契约锚点：命名空间的字面量只在这一处出现，四类伴随文件各自的后缀
+/// 落盘命名的契约锚点：命名空间的字面量只在这一处出现，三类伴随文件各自的后缀
 /// 由它派生校验——改命名空间或改某一类后缀，这里该失败
 #[test]
 pub(crate) fn artifact_names_are_pinned_as_documented() {
     let ns = JOURNAL_SUFFIX.strip_suffix("journal").expect("journal suffix ends with its stem");
     assert_eq!(ns, ".diskedit.");
-    assert_eq!(CHECKPOINT_SUFFIX, format!("{ns}ckpt"));
     assert_eq!(LOCK_SUFFIX, format!("{ns}lock"));
     assert_eq!(LOG_SUFFIX, format!("{ns}log"));
-    assert_eq!(CKPT_TMP_PREFIX, format!("{ns}ckpt.tmp."));
 
-    // 镜像：四类伴随文件都是目标路径的同目录兄弟
+    // 镜像：journal 是目标路径的同目录兄弟；锁与记录同落在
+    // `<image>.diskedit` 目录内
     let img = PathBuf::from("/tmp/x.img");
     let id = TargetIdentity::resolve_image(&img);
     assert_eq!(id.journal_path(), suffix_path(&img, JOURNAL_SUFFIX));
-    assert_eq!(id.checkpoint_path(), suffix_path(&img, CHECKPOINT_SUFFIX));
-    assert_eq!(id.lock_path(), suffix_path(&img, LOCK_SUFFIX));
+    assert_eq!(id.lock_path(), suffix_path(&img, RECORD_SUFFIX).join(RECORD_LOCK_NAME));
     assert_eq!(id.log_path(None), suffix_path(&img, LOG_SUFFIX));
-}
-
-/// 中段某帧的 len 被写坏、其后仍有完整记录：这是损坏而不是撕裂尾。按撕裂处理会让
-/// `Journal::open` 物理截断，把后续每条已通过 CRC、写入确实发生过的原文永久删掉
-#[test]
-pub(crate) fn a_corrupt_record_length_ahead_of_valid_records_is_damage() {
-    let p = journal_path("midlen");
-    let mut j = Journal::open(&p, jid()).unwrap();
-    j.record(0, &[0xAA; 4], &[0xBB; 4]).unwrap();
-    j.record(8, &[0xCC; 4], &[0xDD; 4]).unwrap();
-    drop(j);
-
-    let mut data = std::fs::read(&p).unwrap();
-    data[Journal::HEADER_LEN..Journal::HEADER_LEN + 4].copy_from_slice(&0xFF_FFFFu32.to_le_bytes());
-    std::fs::write(&p, &data).unwrap();
-
-    let Err(e) = Journal::read_entries(&p) else {
-        panic!("a length that runs past its successors must be reported as damage");
-    };
-    assert!(e.to_string().contains("records follow it"), "unexpected error: {e}");
-    assert!(Journal::open(&p, jid()).is_err(), "open must refuse a damaged record instead of truncating it");
-    assert_eq!(std::fs::read(&p).unwrap(), data, "open must not have truncated the file");
-    let _ = std::fs::remove_file(&p);
-}
-
-/// 尾部真的只写了一半（其后没有任何完整帧）仍按撕裂尾处理：读出的前缀完整，
-/// 采纳时把文件截到最后一帧之后
-#[test]
-pub(crate) fn a_torn_tail_after_the_last_record_is_truncated() {
-    let p = journal_path("torn");
-    let mut j = Journal::open(&p, jid()).unwrap();
-    j.record(0, &[0xAA; 4], &[0xBB; 4]).unwrap();
-    drop(j);
-
-    let mut data = std::fs::read(&p).unwrap();
-    let end = data.len();
-    data.extend_from_slice(&[0x10, 0x00]);
-    std::fs::write(&p, &data).unwrap();
-
-    assert!(
-        matches!(
-            Journal::read_entries(&p).unwrap(),
-            JournalRead::TruncatedTail { records, cut } if records.len() == 1 && cut.get() == 2
-        ),
-        "a half-written record head at the end is a torn tail"
-    );
-    drop(Journal::open(&p, jid()).unwrap());
-    assert_eq!(
-        std::fs::read(&p).unwrap().len(),
-        end,
-        "the adopted journal must be cut back to its last complete record"
-    );
-    let _ = std::fs::remove_file(&p);
 }
 
 /// 设备 ID 摘要用标准 FNV-1a 64 向量钉住：换实现或换常量都会让已落盘现场里的 ID 与同一块盘
@@ -711,15 +184,41 @@ pub(crate) fn fnv1a64_matches_the_reference_vectors() {
     assert_eq!(fnv1a64(b"foobar"), 0x8594_4171_f739_67e8);
 }
 
-/// 非 loop 块设备的身份是**盘级**的：journal / checkpoint / lock 按 disk_key 落点。
+/// 非 loop 块设备的身份是**盘级**的：恢复现场与锁按 disk_key 落点。
 /// 断言用 state_dir() 自身拼期望值——测试不改环境变量，进程内并行测试共享环境
 #[test]
 pub(crate) fn block_identity_keys_on_the_whole_disk() {
     let id = TargetIdentity::from_block_keys(Path::new("/dev/sdb1"), "sdb-1234".to_string());
     let disk_tok = key_token("sdb-1234");
     assert_eq!(id.journal_path(), state_dir().join(format!("{disk_tok}{JOURNAL_SUFFIX}")));
-    assert_eq!(id.checkpoint_path(), state_dir().join(format!("{disk_tok}{CHECKPOINT_SUFFIX}")));
     assert_eq!(id.lock_path(), state_dir().join(format!("{disk_tok}{LOCK_SUFFIX}")));
+}
+
+/// 锁键按**载体**收敛，记录键按目标分开：同一盘的两个分区各有自己的记录目录，
+/// 但共用同一把锁；整盘节点与它的分区节点同样共用。锁落点在全盘唯一的 state_dir
+/// 根下，与记录目录不同层
+#[test]
+pub(crate) fn block_lock_converges_to_the_carrier_while_records_stay_per_target() {
+    let dir = state_dir();
+    let with_record = |node: &str, hash: &str, disk_key: &str| {
+        TargetIdentity::from_block_parts(
+            Path::new(node),
+            disk_key.to_string(),
+            Some(dir.join(format!("recovery/{hash}/record"))),
+        )
+    };
+    let part1 = with_record("/dev/sdb1", "hash-1", "sdb-1234");
+    let part2 = with_record("/dev/sdb2", "hash-2", "sdb-1234");
+    let whole = with_record("/dev/sdb", "hash-0", "sdb-1234");
+    let expected = dir.join(format!("{}{LOCK_SUFFIX}", key_token("sdb-1234")));
+    assert_eq!(part1.lock_path(), expected.as_path());
+    assert_eq!(part2.lock_path(), expected.as_path());
+    assert_eq!(whole.lock_path(), expected.as_path());
+    assert_ne!(part1.record_path(), part2.record_path());
+    assert_ne!(part1.record_path(), whole.record_path());
+
+    let other = with_record("/dev/sdc1", "hash-3", "sdc-9999");
+    assert_ne!(other.lock_path(), part1.lock_path());
 }
 
 /// loop 设备的身份绑定 backing **对象**：重新打开 backing、用已打开句柄解析名字，现场落
@@ -733,18 +232,14 @@ pub(crate) fn block_identity_keys_on_the_whole_disk() {
 pub(crate) fn loop_identity_converges_to_the_backing_file() {
     struct Bound {
         dev: PathBuf,
-        dir: PathBuf,
     }
     impl Drop for Bound {
         fn drop(&mut self) {
             let _ = std::process::Command::new("losetup").arg("-d").arg(&self.dev).output();
-            let _ = std::fs::remove_dir_all(&self.dir);
         }
     }
 
-    let dir = std::env::temp_dir().join(format!("diskedit_loop_id_{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = test_dir("loop_id");
     let backing = dir.join("backing.img");
     std::fs::write(&backing, vec![0u8; 1 << 20]).unwrap();
     let out = match std::process::Command::new("losetup")
@@ -756,16 +251,49 @@ pub(crate) fn loop_identity_converges_to_the_backing_file() {
         _ => return,
     };
     let dev = PathBuf::from(String::from_utf8_lossy(&out.stdout).trim());
-    let _cleanup = Bound { dev: dev.clone(), dir: dir.clone() };
+    let _cleanup = Bound { dev: dev.clone() };
 
     let id = TargetIdentity::loop_backed(&dev, backing.clone()).expect("a bound backing file resolves");
     assert_eq!(id.journal_path(), suffix_path(&backing, JOURNAL_SUFFIX));
-    assert_eq!(id.checkpoint_path(), suffix_path(&backing, CHECKPOINT_SUFFIX));
-    assert_eq!(id.lock_path(), suffix_path(&backing, LOCK_SUFFIX));
+    assert_eq!(id.lock_path(), suffix_path(&backing, RECORD_SUFFIX).join(RECORD_LOCK_NAME));
 
     // backing 已删：身份不再可解析，不退到 sysfs 字符串
     std::fs::remove_file(&backing).unwrap();
     assert!(TargetIdentity::loop_backed(&dev, backing.clone()).is_err());
+}
+
+/// 同一 backing 上两个 loop 共用一把锁：v1 按载体整块独占，不重叠的区间也互斥，
+/// 这是有意的加粗：占用域覆盖整盘及其全部分区。
+/// Linux 专属用例；本机（Windows）不编译也不运行，Linux 上第二次绑定失败即跳过
+#[cfg(target_os = "linux")]
+#[test]
+pub(crate) fn two_loops_over_one_backing_share_the_carrier_lock() {
+    struct Bound(PathBuf);
+    impl Drop for Bound {
+        fn drop(&mut self) {
+            let _ = std::process::Command::new("losetup").arg("-d").arg(&self.0).output();
+        }
+    }
+    fn bind(backing: &Path) -> Option<Bound> {
+        let out = std::process::Command::new("losetup")
+            .args(["--find", "--show"])
+            .arg(backing)
+            .output()
+            .ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        Some(Bound(PathBuf::from(String::from_utf8_lossy(&out.stdout).trim())))
+    }
+
+    let dir = test_dir("loop_lock");
+    let backing = dir.join("backing.img");
+    std::fs::write(&backing, vec![0u8; 1 << 20]).unwrap();
+    // 两个映射都绑不上同一个文件时没有可造出的现场（无空闲 loop 或内核拒绝重复绑定）
+    let (Some(first_dev), Some(second_dev)) = (bind(&backing), bind(&backing)) else { return };
+    let first = TargetIdentity::loop_backed(&first_dev.0, backing.clone()).expect("a bound backing resolves");
+    let second = TargetIdentity::loop_backed(&second_dev.0, backing.clone()).expect("a bound backing resolves");
+    assert_eq!(first.lock_path(), second.lock_path());
 }
 
 /// 镜像身份以 realpath 为主体：经符号链接打开与直接打开收敛到同一现场；
@@ -773,8 +301,7 @@ pub(crate) fn loop_identity_converges_to_the_backing_file() {
 #[cfg(target_os = "linux")]
 #[test]
 pub(crate) fn image_identity_prefers_the_realpath() {
-    let dir = std::env::temp_dir().join(format!("diskedit_img_id_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = test_dir("img_id");
     let real = dir.join("real.img");
     std::fs::write(&real, b"x").unwrap();
     let link = dir.join("link.img");
@@ -783,50 +310,8 @@ pub(crate) fn image_identity_prefers_the_realpath() {
     let via_link = TargetIdentity::resolve_image(&link);
     let direct = TargetIdentity::resolve_image(&real);
     assert_eq!(via_link.journal, direct.journal, "both spellings must share one journal");
-    assert_eq!(via_link.checkpoint, direct.checkpoint);
     assert_eq!(via_link.lock_path(), direct.lock_path());
     assert_eq!(via_link.log_path(None), suffix_path(&link, LOG_SUFFIX));
-
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-/// 可写打开清掉落点目录里的陈旧 ckpt 暂存文件：只动本目标的、且只在过期之后；
-/// 新鲜那份（可能属于正在写的另一个进程）与别的目标的残骸都不碰
-#[test]
-pub(crate) fn stale_ckpt_temps_are_swept_on_open() {
-    let dir = std::env::temp_dir().join(format!("diskedit_sweep_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let img = dir.join("x.img");
-    std::fs::write(&img, b"x").unwrap();
-    // Linux 上身份取 realpath，落点目录未必是上面那个字面目录：以身份为准
-    let id = TargetIdentity::resolve_image(&img);
-    let ckpt = id.checkpoint_path().to_path_buf();
-    let dir = ckpt.parent().unwrap().to_path_buf();
-
-    let prefix = ckpt_temp_prefix(&ckpt);
-    let stale = dir.join(format!("{prefix}1.1"));
-    let fresh = dir.join(format!("{prefix}2.1"));
-    // 同目录下另一个目标的残骸：名字只差 token，清扫不得认领
-    let foreign_ckpt = dir.join("other.img.diskedit.ckpt");
-    let foreign = dir.join(format!("{}1.1", ckpt_temp_prefix(&foreign_ckpt)));
-    let other = dir.join("not-ours.img");
-    std::fs::File::create(&stale).unwrap()
-        .set_modified(std::time::SystemTime::now() - CKPT_TMP_STALE_AFTER * 2).unwrap();
-    std::fs::copy(&stale, &foreign).unwrap();
-    std::fs::File::create(&fresh).unwrap();
-    std::fs::write(&other, b"x").unwrap();
-
-    sweep_stale_ckpt_temps(&id);
-    assert!(!stale.exists(), "a stale temp of this target must be swept");
-    assert!(fresh.exists(), "a fresh temp may belong to a running writer");
-    assert!(foreign.exists(), "another target's stale temp is not ours to sweep");
-    assert!(other.exists(), "only the checkpoint temp prefix is ours to sweep");
-
-    let _ = std::fs::remove_file(&fresh);
-    let _ = std::fs::remove_file(&foreign);
-    let _ = std::fs::remove_file(&other);
-    let _ = std::fs::remove_file(&img);
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// fail-closed：sysfs 拓扑解析不出来 ⇒ 拒绝（错误信息带设备名），不退到
@@ -836,12 +321,12 @@ pub(crate) fn stale_ckpt_temps_are_swept_on_open() {
 #[test]
 pub(crate) fn block_identity_refuses_unresolvable_topology() {
     // 普通文件被当作 is_block 传入：rdev=0 ⇒ /sys/dev/block/0:0 不存在 ⇒ 拒绝
-    let fake = std::env::temp_dir().join(format!("diskedit_notablock_{}", std::process::id()));
+    let dir = test_dir("notablock");
+    let fake = dir.join("diskedit_notablock");
     std::fs::write(&fake, b"x").unwrap();
     let e = TargetIdentity::resolve_block(&fake).expect_err("an unresolvable topology must be refused");
     assert!(e.contains("fake") || e.contains("diskedit_notablock"), "the error must name the device: {e}");
     assert!(e.contains("topology"), "{e}");
-    let _ = std::fs::remove_file(&fake);
 }
 
 /// [`read_sysfs_attr`] 的三态必须可分（上条测试的细粒度锁）："不存在 ⇒ None"
@@ -855,13 +340,13 @@ pub(crate) fn sysfs_attr_distinguishes_missing_from_read_failure() {
         None,
         "不存在 ⇒ None"
     );
-    let tmp = std::env::temp_dir().join(format!("diskedit_attr_{}", std::process::id()));
+    let dir = test_dir("attr");
+    let tmp = dir.join("attr");
     std::fs::write(&tmp, "7\n").unwrap();
     assert_eq!(read_sysfs_attr(&tmp).unwrap().as_deref(), Some("7"));
     // 存在但值空：与"不存在"分开（空的 partition 属性是分区侧的异常，不该走整设备分支）
     std::fs::write(&tmp, " \n").unwrap();
     assert_eq!(read_sysfs_attr(&tmp).unwrap().as_deref(), Some(""));
-    let _ = std::fs::remove_file(&tmp);
     // 读目录：失败且 errno 非 ENOENT ⇒ 必须上抛，不得折进"不存在"
     let e = read_sysfs_attr(&std::env::temp_dir())
         .expect_err("reading a directory must not count as 'attribute missing'");
@@ -881,144 +366,135 @@ pub(crate) fn block_lock_and_journal_share_one_directory() {
     assert!(id.lock_path().to_string_lossy().ends_with(LOCK_SUFFIX));
 }
 
-/// 按字节拼一份头：magic 版本、身份段、身份段 CRC。布局与版本号写在测试里而不是取
-/// `Journal::MAGIC`——回归测试要固定"上一版写下的是什么"，不能跟着被测常量一起漂移
-const HEADER_BYTES: usize = 5 + 50 + 4;
-
-fn header_with_version(version: u8, scene: &LiveScene) -> Vec<u8> {
-    let mut b = vec![b'D', b'E', b'J', b'L', version];
-    b.extend_from_slice(&scene.fp.dev.to_le_bytes());
-    b.extend_from_slice(&scene.fp.ino.to_le_bytes());
-    b.extend_from_slice(&scene.fp.size.to_le_bytes());
-    b.extend_from_slice(&scene.fp.id.to_le_bytes());
-    b.push(scene.map.is_some() as u8);
-    let (off, limit) = scene.map.unwrap_or((0, 0));
-    b.extend_from_slice(&off.to_le_bytes());
-    b.extend_from_slice(&limit.to_le_bytes());
-    b.push(scene.proof.tag());
-    assert_eq!(b.len(), HEADER_BYTES - 4, "the identity section is the v6 layout");
-    let crc = crate::table::crc32(&b);
-    b.extend_from_slice(&crc.to_le_bytes());
-    b
-}
-
-/// 追加凭据段：状态标签 + 16 字节 GUID + 本段 CRC
-fn with_credential(mut b: Vec<u8>, tag: u8, guid: [u8; 16]) -> Vec<u8> {
-    assert_eq!(b.len(), HEADER_BYTES);
-    let start = b.len();
-    b.push(tag);
-    b.extend_from_slice(&guid);
-    let crc = crate::table::crc32(&b[start..]);
-    b.extend_from_slice(&crc.to_le_bytes());
-    b
-}
-
-fn pre_image_frame(off: u64, pre: &[u8], after: &[u8]) -> Vec<u8> {
-    let rec = JournalRecord {
-        mutation: Mutation::PartitionTable,
-        recovery: RecoveryData::PreImage { off, bytes: pre.to_vec(), after: after.to_vec() },
-    };
-    let payload = rec.encode();
-    let n = (payload.len() as u32).to_le_bytes();
-    let mut f = Vec::new();
-    f.extend_from_slice(&n);
-    f.extend_from_slice(&Journal::record_crc(n, &payload).to_le_bytes());
-    f.extend_from_slice(&payload);
-    f
-}
-
-/// 旧格式（v6）零记录壳：它不是本构建能收养的现场，也不是可回收的空壳。按"空壳"处理
-/// 会让 `undo` 删掉它、让写闸口跳过它——两种都把一次现场清理当成了自动迁移
+/// 凭据比对的判据只有一条：两侧都是 `Present` 且不同才算不符。不可得与本次生成
+/// 都不是"相符"，只是没有可比的值——它们不提供判据，也就不能成为拒绝或放行的理由
 #[test]
-pub(crate) fn old_format_zero_record_journal_is_refused_not_reclaimed() {
-    let p = journal_path("oldfmt_shell");
-    let bytes = header_with_version(6, &jid());
-    std::fs::write(&p, &bytes).unwrap();
-    let e = err_text(Journal::open(&p, jid()));
-    assert!(e.contains("older"), "the refusal must name the format gap: {e}");
-    assert_eq!(std::fs::read(&p).unwrap(), bytes, "the old-format site must be left byte-for-byte");
-    let _ = std::fs::remove_file(&p);
-}
-
-/// 记录侧写着"目标有 GPT Disk GUID"、当前目标却给不出 GPT：不可得不是相符。此时既不能
-/// 按不符之外的任何路径收养，也不能把现场删掉或改写
-#[test]
-pub(crate) fn recorded_disk_guid_without_a_gpt_now_is_not_a_match() {
-    let p = journal_path("cred_gap");
-    let mut bytes = with_credential(header_with_version(7, &jid()), 1, [0x11; 16]);
-    bytes.extend_from_slice(&pre_image_frame(0, &[0xAA; 4], &[0xBB; 4]));
-    std::fs::write(&p, &bytes).unwrap();
-    let e = err_text(Journal::open(&p, jid()));
-    assert!(e.contains("disk GUID"), "an unavailable current credential is not a match: {e}");
-    assert_eq!(std::fs::read(&p).unwrap(), bytes, "a refused journal is left in place");
-    let _ = std::fs::remove_file(&p);
-}
-
-/// 容量相同、旧身份段无差别，只有 Disk GUID 不同（同盘扩容到同样大小后再回放，或克隆盘）：
-/// 凭据必须把这一格挡下。替换旧字段会放行此形态，追加字段不会
-#[test]
-pub(crate) fn a_different_disk_guid_is_refused() {
-    let p = journal_path("cred_other");
-    let mut bytes = with_credential(header_with_version(7, &jid()), 1, [0x11; 16]);
-    bytes.extend_from_slice(&pre_image_frame(0, &[0xAA; 4], &[0xBB; 4]));
-    std::fs::write(&p, &bytes).unwrap();
-    let e = err_text(Journal::adopt(&p, jid(), DiskGuidState::Present([0x22; 16])));
-    assert!(e.contains("disk GUID"), "a different GUID must be refused: {e}");
-    assert_eq!(std::fs::read(&p).unwrap(), bytes, "a refused journal is left in place");
-    let _ = std::fs::remove_file(&p);
-}
-
-/// `new` 记的是"本次操作内生成"，它不是证据：既不能用来认目标，也不能抵消旧身份段的不符。
-/// 这里旧身份段与目标不符、凭据是 Generated——若把"生成"当成可放行的凭据，收养会成立
-#[test]
-pub(crate) fn a_generated_credential_never_matches_on_its_own() {
-    let p = journal_path("cred_generated");
-    let mut authored = jid();
-    authored.fp.dev = 7;
-    authored.fp.ino = 42;
-    authored.fp.size = 1 << 20;
-    let mut bytes = with_credential(header_with_version(7, &authored), 2, [0; 16]);
-    bytes.extend_from_slice(&pre_image_frame(0, &[0xAA; 4], &[0xBB; 4]));
-    std::fs::write(&p, &bytes).unwrap();
-    let mut other = jid();
-    other.fp.dev = 9;
-    other.fp.ino = 43;
-    other.fp.size = 1 << 20;
-    let e = err_text(Journal::adopt(&p, other, DiskGuidState::GeneratedThisOperation));
+pub(crate) fn disk_guid_mismatch_only_compares_two_present_values() {
+    let a = DiskGuidState::Present([0x11; 16]);
+    let b = DiskGuidState::Present([0x22; 16]);
+    assert!(disk_identity_mismatch(a, a).is_none(), "equal GUIDs match");
+    let why = disk_identity_mismatch(a, b).expect("different GUIDs must be refused");
+    assert!(why.contains("disk GUID"), "the refusal must name the credential: {why}");
     assert!(
-        e.contains("fingerprint") || e.contains("target"),
-        "a generated credential must not bypass the old identity gate: {e}"
+        disk_identity_mismatch(a, DiskGuidState::Unavailable).is_some(),
+        "a recorded GUID against a target without a GPT is not a match"
     );
-    let _ = std::fs::remove_file(&p);
+    assert!(
+        disk_identity_mismatch(DiskGuidState::Unavailable, a).is_some(),
+        "a target that gained a GPT is not the target the record was written for"
+    );
+    assert!(
+        disk_identity_mismatch(DiskGuidState::GeneratedThisOperation, b).is_none(),
+        "a generated credential is not evidence either way"
+    );
+    assert!(disk_identity_mismatch(DiskGuidState::Unavailable, DiskGuidState::Unavailable).is_none());
 }
 
-/// 反过来：旧身份段相符、记录侧是"本次生成"、当前目标报出任意 GUID 时，凭据不参与比较，
-/// 收养照旧成立。它不提供判据，也就不能成为拒绝或放行的理由
+/// 凭据段的编解码是定长的：种类字节 + 16 字节 GUID，未知种类必须拒绝而不是猜成某个
+/// 已知值
 #[test]
-pub(crate) fn a_generated_credential_is_not_compared() {
-    let p = journal_path("cred_generated_ok");
-    let mut authored = jid();
-    authored.fp.dev = 7;
-    authored.fp.ino = 42;
-    authored.fp.size = 1 << 20;
-    let mut bytes = with_credential(header_with_version(7, &authored), 2, [0; 16]);
-    bytes.extend_from_slice(&pre_image_frame(0, &[0xAA; 4], &[0xBB; 4]));
-    std::fs::write(&p, &bytes).unwrap();
-    Journal::adopt(&p, authored, DiskGuidState::Present([0x99; 16]))
-        .expect("a generated credential is not evidence either way");
-    let _ = std::fs::remove_file(&p);
+pub(crate) fn disk_guid_roundtrip_and_unknown_kind() {
+    for state in [
+        DiskGuidState::Unavailable,
+        DiskGuidState::Present([0x5A; 16]),
+        DiskGuidState::GeneratedThisOperation,
+    ] {
+        assert_eq!(DiskGuidState::decode(&state.encode()).unwrap(), state);
+    }
+    assert!(DiskGuidState::decode(&[0xFF; CREDENTIAL_LEN]).is_err(), "an unknown kind is not decodable");
 }
 
-/// 凭据段自己的 CRC 坏了：凭据读不出。这是 Damaged，不是"没有 GUID"，更不是可收养的壳
+/// 恒等字段按「设备类别、稳定身份串、载体 file_id」顺序拼接，
+/// 取 sha256 前 16 字节的小写 hex
 #[test]
-pub(crate) fn credential_crc_corruption_is_damaged_not_adopted() {
-    let p = journal_path("cred_crc");
-    let mut bytes = with_credential(header_with_version(7, &jid()), 1, [0x11; 16]);
-    // 翻 GUID 里的一位而不重算凭据段 CRC
-    bytes[5 + 50 + 4 + 1] ^= 0x01;
-    std::fs::write(&p, &bytes).unwrap();
-    let e = err_text(Journal::open(&p, jid()));
-    assert!(e.contains("disk-identity CRC"), "a broken credential is unreadable: {e}");
-    assert_eq!(std::fs::read(&p).unwrap(), bytes, "an unreadable journal is left in place");
-    let _ = std::fs::remove_file(&p);
+pub(crate) fn identity_hash_uses_the_contract_field_order() {
+    assert_eq!(
+        identity_hash_hex("block", "naa.5000c500aabbccdd", None),
+        "0a36fee99502f14d6517b5acd3a02885"
+    );
+    assert_eq!(
+        identity_hash_hex("partition", "naa.5000c500aabbccdd1", None),
+        "17e70bce34779eb9442a972e0915213c"
+    );
+    assert_eq!(
+        identity_hash_hex("block", "eui.0025385812345678", None),
+        "7c29cbea42661faab241a51943da9950"
+    );
+    assert_eq!(identity_hash_hex("block", "naa.5000c500aabbccdd", None).len(), 32);
+
+    let id = StableIdentity::Strong {
+        device_class: "block",
+        stable_key: "naa.5000c500aabbccdd".to_string(),
+    };
+    let hash = id.hash_hex().unwrap();
+    assert_eq!(
+        record_dir_under(Path::new("/state"), &hash),
+        Path::new("/state/recovery/0a36fee99502f14d6517b5acd3a02885")
+    );
+    assert_eq!(
+        id.record_dir().unwrap().file_name().unwrap().to_string_lossy(),
+        hash,
+        "the record directory is named by the identity-hash"
+    );
+    assert!(id.record_path().unwrap().ends_with("record"));
+    assert!(StableIdentity::Unusable("no identity".to_string()).hash_hex().is_none());
+}
+
+/// 块设备身份取 WWN → EUI → serial 的第一个非空原文；分区串是
+/// 载体串 + 分区号；dm / md / 没有身份属性都是 `Unusable`
+#[cfg(target_os = "linux")]
+#[test]
+pub(crate) fn block_identity_is_wwn_eui_or_serial_and_rejects_dm_md() {
+    let dir = test_dir("hostrepo");
+    let root = dir.path().to_path_buf();
+    let make = |name: &str| {
+        let d = root.join(name);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    };
+
+    let sda = make("sda");
+    std::fs::write(sda.join("wwid"), "naa.5000c500aabbccdd\n").unwrap();
+    std::fs::write(sda.join("size"), "2048\n").unwrap();
+    let sda1 = make("sda/sda1");
+    std::fs::write(sda1.join("partition"), "1\n").unwrap();
+    std::fs::write(sda1.join("size"), "1024\n").unwrap();
+    assert_eq!(
+        block_stable_identity(&sda),
+        StableIdentity::Strong { device_class: "block", stable_key: "naa.5000c500aabbccdd".into() }
+    );
+    assert_eq!(
+        block_stable_identity(&sda1),
+        StableIdentity::Strong {
+            device_class: "partition",
+            stable_key: "naa.5000c500aabbccdd1".into()
+        }
+    );
+
+    let nvme = make("nvme0n1");
+    std::fs::write(nvme.join("wwid"), "eui.0025385812345678\n").unwrap();
+    assert_eq!(
+        block_stable_identity(&nvme),
+        StableIdentity::Strong { device_class: "block", stable_key: "eui.0025385812345678".into() }
+    );
+
+    let serial_only = make("sdb");
+    std::fs::create_dir_all(serial_only.join("device")).unwrap();
+    std::fs::write(serial_only.join("device/serial"), "SN123456\n").unwrap();
+    assert_eq!(
+        block_stable_identity(&serial_only),
+        StableIdentity::Strong { device_class: "block", stable_key: "SN123456".into() }
+    );
+
+    let dm = make("dm-0/dm");
+    std::fs::write(dm.join("uuid"), "mpath-1234\n").unwrap();
+    assert!(matches!(block_stable_identity(&root.join("dm-0")), StableIdentity::Unusable(_)));
+
+    let md = make("md0/md");
+    std::fs::write(md.join("uuid"), "abc:def\n").unwrap();
+    assert!(matches!(block_stable_identity(&root.join("md0")), StableIdentity::Unusable(_)));
+
+    let bare = make("sdc");
+    std::fs::write(bare.join("size"), "2048\n").unwrap();
+    assert!(matches!(block_stable_identity(&bare), StableIdentity::Unusable(_)));
 }

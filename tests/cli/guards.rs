@@ -15,13 +15,13 @@ fn duplicate_flags_value_rejected_boolean_idempotent() {
     assert_eq!(c, 0, "a boolean flag is idempotent: {e}");
     assert!(e.is_empty(), "help goes to stdout: {e}");
 
-    let (c, e) = run(&["create", "--help", "--size", "32M", "--size", "64M"]);
-    assert_eq!(c, 10, "a value option cannot be given twice: {e}");
+    let (c, e) = run(&["resize", "--help", "--chunk", "4", "--chunk", "8"]);
+    assert_eq!(c, 2, "a value option cannot be given twice: {e}");
     assert!(e.contains("more than once"), "the rejection must say why: {e}");
 
     // 布尔与值型的区别取自注册表，同一条规则也覆盖 `--flag=value` 写法
     let (c, e) = run(&["move", "--help", "--start", "2048", "--start=4096"]);
-    assert_eq!(c, 10, "{e}");
+    assert_eq!(c, 2, "{e}");
 }
 
 /// `--version` 是主动请求，但不是参数校验的旁路：任何多余旗标或位置参数都拒绝，
@@ -44,13 +44,13 @@ fn version_rejects_extra_arguments() {
         let mut args = vec!["--version"];
         args.extend(extra.iter().copied());
         let (c, _, e) = run(&args);
-        assert_eq!(c, 10, "extra argument must be refused: {extra:?}: {e}");
+        assert_eq!(c, 2, "extra argument must be refused: {extra:?}: {e}");
         assert!(e.contains("`--version` takes no"), "{e}");
     }
 }
 
-/// 详助首行必须点名命令自己：plan/apply 共用正文，首行写错命令名会让 `help apply`
-/// 显示 plan 的 SYNOPSIS；反向旗标对账只扫首行，apply 自己的旗标因此不被核对
+/// 详助首行必须点名命令自己：首行写错命令名会让 `help <CMD>` 显示别的命令的
+/// SYNOPSIS；反向旗标对账只扫首行，该命令自己的旗标因此不被核对
 #[test]
 fn each_help_names_its_own_command_first() {
     let exe = env!("CARGO_BIN_EXE_DiskEdit");
@@ -58,7 +58,7 @@ fn each_help_names_its_own_command_first() {
         let out = Command::new(exe).args(args).output().unwrap();
         (out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stdout).into_owned())
     };
-    for cmd in ["plan", "apply", "resize", "move", "copy"] {
+    for cmd in ["plan", "info", "resize", "move", "copy"] {
         let (c, out) = run(&["help", cmd]);
         assert_eq!(c, 0, "help {cmd} must succeed");
         let first = out.lines().next().unwrap_or("");
@@ -80,11 +80,11 @@ fn cli_negative_paths() {
          String::from_utf8_lossy(&out.stderr).into_owned())
     };
 
-    // 目标不存在 → 30（基础设施失败），不是"无表"；失败也产出 JSON 信封，
+    // 目标不存在 → 4（写盘前的环境失败），不是"无表"；失败也产出 JSON 信封，
     // 拿不到的字段为 null，原因进 error（调用方不必按故障阶段换一套解析）
     let missing = dir.join("nope.img");
     let (c, out, e) = run(&["info", missing.to_str().unwrap()]);
-    assert_eq!(c, 30, "missing target must be infra failure: {e}");
+    assert_eq!(c, 4, "missing target must be a pre-write environment failure: {e}");
     assert!(e.contains("open failed"), "{e}");
     let v: serde_json::Value = serde_json::from_str(out.trim()).expect("open failure must still emit JSON");
     assert!(v["size_bytes"].is_null() && v["error"].is_string(), "{out}");
@@ -103,8 +103,8 @@ fn cli_negative_paths() {
     let v: serde_json::Value = serde_json::from_str(out.trim()).expect("info must emit valid JSON");
     assert_eq!(v["label"], "gpt", "{out}");
     assert_eq!(v["damaged"], true, "PMBR-less GPT must surface as damaged: {out}");
-    let (c, _, e) = run(&["resize", &format!("{}:1", no_pmbr.display()), "10M"]);
-    assert_eq!(c, 10, "resize on damaged-GPT target must refuse: {e}");
+    let (c, _, e) = run(&["resize", &format!("{}:1", no_pmbr.display()), "10M", "--yes"]);
+    assert_eq!(c, 3, "resize on damaged-GPT target must refuse: {e}");
     assert!(e.contains("resize requires"), "{e}");
 
     // 主头 CRC 损坏 → 回退盘尾备份头读取（主备互备，UEFI 2.10 §5.3.2）
@@ -134,11 +134,11 @@ fn cli_negative_paths() {
     assert!(out.contains("\"label\":\"gpt\""), "{out}");
     assert!(out.contains("smoke"), "partition must be read from the backup array: {out}");
     assert!(e.contains("recovered from the backup"), "the recovery must be reported: {e}");
-    // --grow 1 在同一备份副本上也应可规划（表可读），而不是报"表非法"
-    let (c, _, e) = run(&["plan", bad_arr.to_str().unwrap(), "--grow", "1"]);
-    assert_ne!(c, 30, "a recoverable table must not be reported as corrupt: {e}");
+    // 可恢复的表在只读入口上也应可读，而不是报"表非法"
+    let (c, _, e) = run(&["plan", bad_arr.to_str().unwrap()]);
+    assert_ne!(c, 4, "a recoverable table must not be reported as unreadable: {e}");
 
-    // 两份副本的条目数组都坏 → 无可救回：表非法 = 盘内容故障 = 30，
+    // 两份副本的条目数组都坏 → 无可救回：表结构非法 = 前置条件不满足 = 3，
     // 且因为写盘前失败，不得附"盘可能已改变"的提示
     let bad2 = dir.join("badarr2.img");
     fixture_gpt_image(&bad2);
@@ -149,35 +149,31 @@ fn cli_negative_paths() {
         std::fs::write(&bad2, &raw).unwrap();
     }
     let (c, out, e) = run(&["info", bad2.to_str().unwrap()]);
-    assert_eq!(c, 30, "both copies damaged must be reported: {e}");
+    assert_eq!(c, 3, "both copies damaged must be reported: {e}");
     assert!(e.contains("parse failed"), "{e}");
     // 读表阶段失败：信封与成功路径同键集，未取得的布局字段为 null，原因进 error
     let v: serde_json::Value = serde_json::from_str(out.trim()).expect("info must emit valid JSON on failure too");
     assert!(v["label"].is_null() && v["damaged"].is_null(), "{out}");
     assert!(v["error"].as_str().unwrap_or_default().contains("parse failed"), "{out}");
-    let (c, _, e) = run(&["resize", &format!("{}:1", bad2.display()), "10M"]);
-    assert_eq!(c, 30, "{e}");
-    // 同一判据延伸到 plan/apply/check：表非法在任何入口都是 30
-    let (c, _, e) = run(&["plan", bad2.to_str().unwrap(), "--grow", "1"]);
-    assert_eq!(c, 30, "plan on a corrupt table must be infra: {e}");
-    assert!(e.contains("parse failed"), "{e}");
-    // apply 无 --yes（apply 在锁下按盘上现状重新推导计划后执行，没有第二个确认层）
-    let (c, _, e) = run(&["apply", bad2.to_str().unwrap(), "--grow", "1"]);
-    assert_eq!(c, 30, "apply on a corrupt table must be infra: {e}");
+    let (c, _, e) = run(&["resize", &format!("{}:1", bad2.display()), "10M", "--yes"]);
+    assert_eq!(c, 3, "{e}");
+    // 同一判据延伸到 plan/check：表结构非法在任何入口都是 3
+    let (c, _, e) = run(&["plan", bad2.to_str().unwrap()]);
+    assert_eq!(c, 3, "plan on a corrupt table must refuse: {e}");
+    assert!(e.contains("GPT entry array"), "{e}");
     assert!(!e.contains("may have changed"), "a pre-write failure must not claim the disk may have changed: {e}");
     let (c, _, e) = run(&["check", &format!("{}:1", bad2.display())]);
-    assert_eq!(c, 30, "check on a corrupt table must be infra: {e}");
-    assert!(e.contains("parse failed"), "{e}");
-    // 无表 = 请求与现状不匹配 = 10（与上面的 30 必须分开）
+    assert_eq!(c, 3, "check on a corrupt table must refuse: {e}");
+    assert!(e.contains("GPT entry array"), "{e}");
+    // 只读入口对无表目标给出报告；写命令仍按请求与现状不匹配落 3
     let blank = dir.join("blank.img");
     std::fs::write(&blank, vec![0u8; 100 * 512]).unwrap();
-    let (c, _, e) = run(&["plan", blank.to_str().unwrap(), "--grow", "1"]);
-    assert_eq!(c, 10, "a target without a table must be refused, not infra: {e}");
-    // 缺表的拒绝文案出自唯一那处（gpt_policy::require_gpt_geometry），带命令名
-    assert!(e.contains("plan requires a GPT target"), "{e}");
+    let (c, out, e) = run(&["plan", blank.to_str().unwrap()]);
+    assert_eq!(c, 0, "plan reports a table-less target like info: {e}");
+    assert!(out.contains("\"label\":\"none\""), "{out}");
     // 顺序：先确认表、再解释选择器 —— 无表目标上写 `:last` 不该换一种错误
-    let (c, _, e) = run(&["move", &format!("{}:last", blank.display()), "--start", "2048"]);
-    assert_eq!(c, 10, "{e}");
+    let (c, _, e) = run(&["move", &format!("{}:last", blank.display()), "--start", "2048", "--chunk", "4", "--yes"]);
+    assert_eq!(c, 3, "{e}");
     assert!(e.contains("move requires a GPT target"), "{e}");
 
     // SIZE 语法错误 / 缩到超过当前大小 / 重复给尺寸
@@ -185,24 +181,32 @@ fn cli_negative_paths() {
     fixture_gpt_image(&img);
     let img_s = img.to_str().unwrap();
     let (c, _, e) = run(&["resize", &format!("{img_s}:1"), "10XB"]);
-    assert_eq!(c, 10, "{e}");
+    assert_eq!(c, 2, "{e}");
     assert!(e.contains("bad SIZE"), "{e}");
-    let (c, _, e) = run(&["resize", &format!("{img_s}:1"), "-1T"]);
-    assert_eq!(c, 10, "{e}");
+    let (c, _, e) = run(&["resize", &format!("{img_s}:1"), "-1T", "--yes"]);
+    assert_eq!(c, 3, "{e}");
     assert!(e.contains("exceeds current size"), "{e}");
     // SIZE 只有位置参数一种给法；`--size` 不是 resize 的选项
-    let (c, _, e) = run(&["resize", &format!("{img_s}:1"), "10M", "--size", "4096"]);
-    assert_eq!(c, 10, "{e}");
-    assert!(e.contains("--size is not a valid option for `resize`"), "{e}");
+    let (c, _, e) = run(&["resize", &format!("{img_s}:1"), "10M", "--size", "4096"]); // cli-surface: refused
+    assert_eq!(c, 2, "{e}");
+    assert!(e.contains("unknown flag `--size`"), "{e}");
     // --sector-size 非法 → 参数解析阶段拒绝
     let (c, _, _) = run(&["info", img_s, "--sector-size", "abc"]);
-    assert_eq!(c, 10);
-    let (c, _, e) = run(&["info", img_s, "--sector-size", "300"]);
-    assert_eq!(c, 10, "non-power-of-two sector size must be a usage refusal, not Infra: {e}");
+    assert_eq!(c, 2);
+    let (c, _, e) = run(&["info", img_s, "--sector-size", "513"]);
+    assert_eq!(c, 2, "non-power-of-two sector size must be a usage error: {e}");
     assert!(e.contains("power of two"), "{e}");
+    // 超过实现边界：文案必须说明这是本工具的实现限制，而 GPT 字段的 UINT32 宽度不是兼容性上限
+    let (c, _, e) = run(&["info", img_s, "--sector-size", "131072"]);
+    assert_eq!(c, 2, "a size above the implementation limit must be a usage error: {e}");
+    assert!(e.contains("implementation limit"), "{e}");
+    assert!(e.contains("not a format requirement"), "{e}");
+    // 65536 恰是实现边界之内，解析层接受
+    let (c, _, e) = run(&["info", img_s, "--sector-size", "65536"]);
+    assert_eq!(c, 0, "65536 is inside the implementation limit: {e}");
     // 位置参数超限（CommandSpec.max_pos）：多余参数是用法错误，静默忽略等于吞掉用户的笔误
     let (c, _, e) = run(&["info", img_s, "extra"]);
-    assert_eq!(c, 10, "excess positional argument must be a usage refusal: {e}");
+    assert_eq!(c, 2, "excess positional argument must be a usage error: {e}");
     assert!(e.contains("unexpected extra argument") && e.contains("help"), "refusal must name the excess argument and point at help: {e}");
 
     // fixed VHD（footer 只在 EOF）→ 提示容器格式与 qemu-nbd 出路，但不解析其内容
@@ -242,26 +246,25 @@ fn fs_command_branch_level_flag_guards() {
     };
 
     // 形态即模式：:N 是离线形式，尺寸给法只属于挂载点形式
-    let (c, _, e) = run(&["resizefs", &format!("{img_s}:1"), "8M"]);
-    assert_eq!(c, 10, "offline resizefs must refuse a size: {e}");
+    let (c, _, e) = run(&["resizefs", &format!("{img_s}:1"), "8M", "--yes"]);
+    assert_eq!(c, 2, "offline resizefs must refuse a size: {e}");
     assert!(e.contains("mountpoint"), "{e}");
     // 扇区大小只有打开镜像的路径才消费：挂载点形式拒绝
-    let (c, _, e) = run(&["resizefs", "some-mountpoint", "--sector-size", "4096"]);
-    assert_eq!(c, 10, "online resizefs must refuse --sector-size: {e}");
+    let (c, _, e) = run(&["resizefs", "some-mountpoint", "--sector-size", "4096", "--yes"]);
+    assert_eq!(c, 2, "online resizefs must refuse --sector-size: {e}");
     assert!(e.contains("image targets"), "{e}");
     // set 的 --random 是 uuid 分支专属
-    let (c, _, e) = run(&["set", &format!("{img_s}:1"), "name", "foo", "--random"]);
-    assert_eq!(c, 10, "set --random outside the uuid branch must refuse: {e}");
+    let (c, _, e) = run(&["set", &format!("{img_s}:1"), "name", "foo", "--random", "--yes"]);
+    assert_eq!(c, 2, "set --random outside the uuid branch must refuse: {e}");
     assert!(e.contains("uuid"), "{e}");
 
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// fail-closed 参数契约：命令不消费的旗标一律拒绝（而非静默忽略）
+/// fail-closed：命令不消费的旗标一律拒绝（而非静默忽略）
 #[test]
 fn flag_contract_fail_closed() {
-    let dir = std::env::temp_dir().join(format!("diskedit_fc_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = FixtureDir::new();
     let exe = env!("CARGO_BIN_EXE_DiskEdit");
     let run = |args: &[&str]| -> (i32, String, String) {
         let out = Command::new(exe).args(args).output().unwrap();
@@ -274,8 +277,8 @@ fn flag_contract_fail_closed() {
     let img = dir.join("a.img");
     std::fs::write(&img, vec![0u8; 8 * 1024 * 1024]).unwrap();
     let img_s = img.to_str().unwrap();
-    let (c, _, e) = run(&["info", img_s, "--yes"]);
-    assert_eq!(c, 10, "unconsumed flag must be refused: {e}");
+    let (c, _, e) = run(&["info", img_s, "--yes"]); // cli-surface: refused
+    assert_eq!(c, 2, "unconsumed flag must be refused: {e}");
     assert!(e.contains("not a valid option for `info`"), "{e}");
 }
 
@@ -297,28 +300,28 @@ fn a_flag_typo_in_a_value_slot_is_refused() {
          String::from_utf8_lossy(&out.stderr).into_owned())
     };
 
-    let (c, _, e) = run(&["new", img_s, "--table", "msdos", "--yes"]);
+    let (c, _, e) = run(&["new", img_s, "--table", "mbr", "--yes"]);
     assert_eq!(c, 0, "{e}");
-    let (c, _, e) = run(&["add", img_s, "--start", "2048", "--end", "4095"]);
+    let (c, _, e) = run(&["add", img_s, "1M", "--align", "mib", "--yes"]);
     assert_eq!(c, 0, "{e}");
     let before = std::fs::read(&img).unwrap();
 
-    let (c, _, e) = run(&["set", &format!("{img_s}:1"), "name", "--bogs"]);
-    assert_eq!(c, 10, "a mistyped flag in a value slot must be refused: {e}");
+    let (c, _, e) = run(&["set", &format!("{img_s}:1"), "name", "--bogs"]); // cli-surface: refused
+    assert_eq!(c, 2, "a mistyped flag in a value slot must be refused: {e}");
     assert!(e.contains("unknown flag `--bogs`"), "{e}");
     assert_eq!(std::fs::read(&img).unwrap(), before, "the refusal must not write");
 
     // 相对尺寸是唯一合法的 `-` 开头值：`resize sf -1M` 不该被当成旗标笔误
     let sf = dir.join("sf.img");
     std::fs::write(&sf, vec![0u8; 8 * 1024 * 1024]).unwrap();
-    let (c, _, e) = run(&["resize", sf.to_str().unwrap(), "-1M", "--no-fs"]);
+    let (c, _, e) = run(&["resize", sf.to_str().unwrap(), "-1M", "--no-fs", "--yes"]);
     assert!(!e.contains("unknown flag"), "a relative size must not be read as a flag: {e}");
-    assert_eq!(c, 10, "superfloppy --no-fs is refused for its own reason: {e}");
+    assert_eq!(c, 3, "superfloppy --no-fs is refused for its own reason: {e}");
 
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// `--flag=value`、`--` 终止符与 `--version` 的解析契约：等号形式与空格形式等价，
+/// `--flag=value`、`--` 终止符与 `--version` 的解析：等号形式与空格形式等价，
 /// 布尔旗标带值是笔误，`--` 之后一律位置参数，版本请求退 0
 #[cfg(unix)]
 #[test]
@@ -341,23 +344,23 @@ fn option_syntax_equals_terminator_and_version() {
     assert_eq!(o.trim(), format!("diskedit {}", env!("CARGO_PKG_VERSION")));
 
     // 两种写法必须走同一条判定，结果（含拒绝理由）逐字相同
-    let space = run(&["resize", img_s, "10G", "--chunk-size", "4"]);
-    let equals = run(&["resize", img_s, "10G", "--chunk-size=4"]);
+    let space = run(&["resize", img_s, "10G", "--chunk", "4"]);
+    let equals = run(&["resize", img_s, "10G", "--chunk=4"]);
     assert_eq!(space, equals, "--flag=value must be the same syntax as --flag value");
 
     let (c, _, e) = run(&["delete", &format!("{img_s}:1"), "--yes=1"]);
-    assert_eq!(c, 10, "a value on a bare flag must be refused: {e}");
+    assert_eq!(c, 2, "a value on a bare flag must be refused: {e}");
     assert!(e.contains("takes no value"), "{e}");
 
     // `--` 之后的值不再按旗标解析：`-1M` 是尺寸而不是笔误
-    let (c, _, e) = run(&["resize", img_s, "--no-fs", "--", "-1M"]);
-    assert_eq!(c, 10, "{e}");
+    let (c, _, e) = run(&["resize", img_s, "--no-fs", "--yes", "--", "-1M"]);
+    assert_eq!(c, 3, "{e}");
     assert!(!e.contains("unknown flag"), "a token after `--` is positional: {e}");
 
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// 旗标契约的其余几条 fail-closed：MBR 不接受 --allow-move、superfloppy 上 --no-fs
+/// 其余几条 fail-closed：MBR 不接受 --allow-move、superfloppy 上 --no-fs
 /// 无事可做、离线 resizefs 没有"目标尺寸"语义、MBR --type 接受大写 0X 前缀
 #[cfg(unix)]
 #[test]
@@ -376,19 +379,19 @@ fn flag_contract_mbr_resizefs_and_type() {
     };
 
     // MBR resize 不支持 --allow-move：显式拒绝，而非"空间不足"误导
-    let (c, _, e) = run(&["new", img_s, "--table", "msdos", "--yes"]);
+    let (c, _, e) = run(&["new", img_s, "--table", "mbr", "--yes"]);
     assert_eq!(c, 0, "{e}");
-    let (c, _, e) = run(&["add", img_s, "--start", "2048", "--end", "4095"]);
+    let (c, _, e) = run(&["add", img_s, "1M", "--align", "mib", "--yes"]);
     assert_eq!(c, 0, "{e}");
-    let (c, _, e) = run(&["resize", &format!("{img_s}:1"), "10M", "--allow-move"]);
-    assert_eq!(c, 10, "MBR resize with --allow-move must be refused: {e}");
+    let (c, _, e) = run(&["resize", &format!("{img_s}:1"), "10M", "--allow-move", "--chunk", "4", "--yes"]);
+    assert_eq!(c, 3, "MBR resize with --allow-move must be refused: {e}");
     assert!(e.contains("--allow-move is not supported for MBR"), "{e}");
 
     // superfloppy 无分区可改：--no-fs 让命令无事可做，拒绝
     let sf = dir.join("sf.img");
     std::fs::write(&sf, vec![0u8; 8 * 1024 * 1024]).unwrap();
-    let (c, _, e) = run(&["resize", sf.to_str().unwrap(), "--no-fs"]);
-    assert_eq!(c, 10, "superfloppy --no-fs must be refused: {e}");
+    let (c, _, e) = run(&["resize", sf.to_str().unwrap(), "grow", "--no-fs", "--yes"]);
+    assert_eq!(c, 3, "superfloppy --no-fs must be refused: {e}");
     assert!(e.contains("--no-fs leaves nothing to do on a superfloppy"), "{e}");
 
     // 离线 resizefs 没有"目标尺寸"语义：尺寸参数是挂载点形式专属，离线分支消费不到它，
@@ -398,11 +401,11 @@ fn flag_contract_mbr_resizefs_and_type() {
     let g_s = g.to_str().unwrap();
     let (c, _, e) = run(&["new", g_s, "--yes"]);
     assert_eq!(c, 0, "{e}");
-    let (c, _, e) = run(&["add", g_s, "--start", "2048", "--end", "6143"]);
+    let (c, _, e) = run(&["add", g_s, "2M", "--align", "mib", "--type-guid", "0fc63daf-8483-4772-8e79-3d69d8477de4", "--yes"]);
     assert_eq!(c, 0, "{e}");
     let raw_before = std::fs::read(&g).unwrap();
-    let (c, _, e) = run(&["resizefs", &format!("{g_s}:1"), "5G"]);
-    assert_eq!(c, 10, "offline resizefs with a positional size must be refused: {e}");
+    let (c, _, e) = run(&["resizefs", &format!("{g_s}:1"), "5G", "--yes"]);
+    assert_eq!(c, 2, "offline resizefs with a positional size must be refused: {e}");
     assert!(e.contains("only applies to the mountpoint form"), "{e}");
     assert_eq!(std::fs::read(&g).unwrap(), raw_before, "the refusal must not write");
 
@@ -410,9 +413,12 @@ fn flag_contract_mbr_resizefs_and_type() {
     let m = dir.join("m.img");
     std::fs::write(&m, vec![0u8; 8 * 1024 * 1024]).unwrap();
     let m_s = m.to_str().unwrap();
-    let (c, _, e) = run(&["new", m_s, "--table", "msdos", "--yes"]);
+    let (c, _, e) = run(&["new", m_s, "--table", "mbr", "--yes"]);
     assert_eq!(c, 0, "{e}");
-    let (c, _, e) = run(&["add", m_s, "--start", "2048", "--end", "4095", "--type", "0X83"]);
+    // MBR 分区类型字节的大小写前缀由 `set type` 统一解析
+    let (c, _, e) = run(&["add", m_s, "1M", "--align", "mib", "--yes"]);
+    assert_eq!(c, 0, "{e}");
+    let (c, _, e) = run(&["set", &format!("{m_s}:1"), "type", "0X83", "--yes"]);
     assert_eq!(c, 0, "uppercase 0X prefix must be accepted: {e}");
     let (c, out, _) = run(&["info", m_s]);
     assert_eq!(c, 0);
@@ -447,9 +453,9 @@ fn help_topic_zero_partition_and_mbr_end_overflow() {
     assert!(out.contains("diskedit resize <TARGET>[:N]"), "{out}");
     // 命令位本身是 help 的两种写法同样过旗标白名单：帮助不是参数校验的旁路
     let (c, _, e) = run(&["--help", "info", "--yes"]);
-    assert_eq!(c, 10, "help must not accept a flag the command rejects: {e}");
-    let (c, _, e) = run(&["help", "info", "--yes"]);
-    assert_eq!(c, 10, "help must not accept a flag the command rejects: {e}");
+    assert_eq!(c, 2, "help must not accept a flag the command rejects: {e}");
+    let (c, _, e) = run(&["help", "info", "--yes"]); // cli-surface: refused
+    assert_eq!(c, 2, "help must not accept a flag the command rejects: {e}");
     // copy 没有 checkpoint，中断后重跑从头抄：帮助文本必须如实声明，
     // 否则用户会以为它能像 move 一样续传
     let (c, out, _) = run(&["copy", "whatever.img:1", "--help"]);
@@ -461,7 +467,7 @@ fn help_topic_zero_partition_and_mbr_end_overflow() {
     std::fs::write(&blank, vec![0u8; 2 * 1024 * 1024]).unwrap();
     let blank_s = blank.to_str().unwrap();
     let (c, _, err) = run(&["info", &format!("{blank_s}:0")]);
-    assert_eq!(c, 10, "{err}");
+    assert_eq!(c, 2, "{err}");
     assert!(err.contains("1-based"), "{err}");
 
     // MBR 条目末端 = start + size − 1：两个 u32 相加必须在 u64 域算，
@@ -477,8 +483,8 @@ fn help_topic_zero_partition_and_mbr_end_overflow() {
     let wrap = dir.join("wrap.img");
     std::fs::write(&wrap, &data).unwrap();
     let (c, out, err) = run(&["info", wrap.to_str().unwrap()]);
-    // 条目越盘使 identify 短读：JSON 照常输出（可观察），但退出码如实升级为 30
-    assert_eq!(c, 30, "identify failure must be reported honestly: {err}");
+    // 条目越盘使 identify 短读：JSON 照常输出（可观察），但退出码如实升级为 4
+    assert_eq!(c, 4, "identify failure must be reported honestly: {err}");
     assert!(err.contains("identify failed"), "{err}");
     let v: serde_json::Value = serde_json::from_str(out.trim()).expect("info must emit valid JSON");
     assert_eq!(v["label"], "mbr", "{out}");
@@ -493,9 +499,9 @@ fn help_topic_zero_partition_and_mbr_end_overflow() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// 三条"改参数即可解决"的拒绝必须落在 10，且提示要指向正确的旗标：
-/// 未知 FS 名（列出支持的类型）、`resize --start`（指向 move/resize-part）、
-/// `resize-part --start end`（指向 --grow-to-end）
+/// 三条"改参数即可解决"的拒绝必须落在 2 或 3，且提示要指向正确的旗标：
+/// 未知 FS 名（列出支持的类型）、`resize --start`（未登记 → 2）、
+/// `resize-part --start`（未登记 → 2）
 #[cfg(unix)]
 #[test]
 fn targeted_refusals_are_reported_as_ten() {
@@ -514,27 +520,27 @@ fn targeted_refusals_are_reported_as_ten() {
     let img_s = img.to_str().unwrap();
     let part = format!("{img_s}:1");
 
-    // 不认得的 FS 名是"参数写错了"：必须 10，且把支持的类型列出来供改正
+    // 不认得的 FS 名 = 不支持的类型（6），且把支持的类型列出来供改正
     let (c, _, e) = run(&["mkfs", &part, "et4", "--yes"]);
-    assert_eq!(c, 10, "unknown fstype must be refused, not reported as infra: {e}");
+    assert_eq!(c, 6, "unknown fstype must be unsupported: {e}");
     assert!(e.contains("unsupported fstype et4"), "{e}");
     assert!(e.contains("supported: ext2/3/4"), "{e}");
 
-    // resize 只改大小、不搬移：--start 进白名单后由本命令给出有指向性的拒绝
-    let (c, _, e) = run(&["resize", &part, "--start", "5"]);
-    assert_eq!(c, 10, "{e}");
-    assert!(e.contains("does not relocate"), "{e}");
+    // resize 只改大小、不搬移：`--start` 未登记，收到即 2
+    let (c, _, e) = run(&["resize", &part, "1G", "--start", "5", "--yes"]); // cli-surface: refused
+    assert_eq!(c, 2, "{e}");
+    assert!(e.contains("--start is not a valid option for `resize`"), "{e}");
 
-    // resize-part 的 `--start end` 是 move/copy 的尾部打包语法：提示改用 --grow-to-end
-    let (c, _, e) = run(&["resize-part", &part, "--start", "end"]);
-    assert_eq!(c, 10, "{e}");
-    assert!(e.contains("--grow-to-end"), "{e}");
+    // resize-part 的起点由当前表决定：`--start` 未登记，收到即 2
+    let (c, _, e) = run(&["resize-part", &part, "--start", "end", "--yes"]); // cli-surface: refused
+    assert_eq!(c, 2, "{e}");
+    assert!(e.contains("--start is not a valid option for `resize-part`"), "{e}");
 
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// 带参旗标不能把下一个选项吞成自己的值：`--name --align=cyl` 是缺值，
-/// 不是分区名 `--align=cyl`
+/// 带参旗标不能把下一个选项吞成自己的值：`--name --align=none` 是缺值，
+/// 不是分区名 `--align=none`
 #[cfg(unix)]
 #[test]
 fn a_value_flag_does_not_swallow_the_next_option() {
@@ -546,10 +552,10 @@ fn a_value_flag_does_not_swallow_the_next_option() {
         (out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stderr).into_owned())
     };
 
-    // 目标不存在：参数层在打开目标之前拒绝（10），不会走到 open（30）
+    // 目标不存在：参数层在打开目标之前拒绝（2），不会走到 open（4）
     let missing = dir.join("nope.img");
-    let (c, e) = run(&["copy", &format!("{}:1", missing.display()), "--start", "1000", "--name", "--align=cyl"]);
-    assert_eq!(c, 10, "a value flag followed by an option is a missing value: {e}");
+    let (c, e) = run(&["copy", &format!("{}:1", missing.display()), "--start", "1000", "--name", "--align=none"]);
+    assert_eq!(c, 2, "a value flag followed by an option is a missing value: {e}");
     assert!(e.contains("--name S requires a value"), "{e}");
     assert!(!e.contains("open failed"), "the refusal must happen before the target is opened: {e}");
     assert!(!missing.exists(), "the refused run must not create the target");
@@ -575,15 +581,15 @@ fn a_value_flag_does_not_swallow_the_next_option() {
     let before = std::fs::read(&img).unwrap();
     let entries_before = dir_entries(&dir);
 
-    let (c, e) = run(&["copy", &format!("{img_s}:1"), "--start", "4096", "--name", "--align=cyl"]);
-    assert_eq!(c, 10, "the repro must be refused: {e}");
+    let (c, e) = run(&["copy", &format!("{img_s}:1"), "--start", "4096", "--name", "--align=none"]);
+    assert_eq!(c, 2, "the repro must be refused: {e}");
     assert!(e.contains("--name S requires a value"), "{e}");
     assert_eq!(std::fs::read(&img).unwrap(), before, "the refusal must not write the image");
     assert_eq!(dir_entries(&dir), entries_before, "the refusal must leave no journal/lock/checkpoint");
 
     // 下一个 token 是布尔旗标时同样是缺值：以 `-` 开头的裸 token 也是选项
-    let (c, e) = run(&["create", img_s, "--name", "--yes"]);
-    assert_eq!(c, 10, "{e}");
+    let (c, e) = run(&["add", img_s, "--name", "--yes"]);
+    assert_eq!(c, 2, "{e}");
     assert!(e.contains("--name S requires a value"), "{e}");
 
     let _ = std::fs::remove_dir_all(&dir);
@@ -604,7 +610,7 @@ mod flag_probes;
 ///
 /// 探测通道是 `<CMD> ... --help`：帮助在整条命令行解析完、白名单对账之后才输出，
 /// 目标参数在它之后才取，所以退出 0 证明的是"参数层接受了这些形状"，与目标是否
-/// 存在无关。命令名写错或旗标不在该命令白名单里，也会以 10 退出——探针点名的
+/// 存在无关。命令名写错或旗标不在该命令白名单里，也会以 2 退出——探针点名的
 /// 命令因此是被验证过的，不是自说自话
 #[test]
 fn every_registered_flag_parses_as_documented() {
@@ -617,7 +623,7 @@ fn every_registered_flag_parses_as_documented() {
     };
 
     // 每条旗标独立，按条并行：进程启动是本机最慢的一环，串行跑会把一条本应
-    // 秒级完成的契约测试拖成一分钟
+    // 秒级完成的用例拖成一分钟
     std::thread::scope(|s| {
         for p in PROBES {
             let run = &run;
@@ -636,16 +642,16 @@ fn every_registered_flag_parses_as_documented() {
                         // 重复：两种写法各试一次，等号写法不能绕过判重
                         let twice_space = [cmd, p.name, sample, p.name, sample, "--help"];
                         let (c, e) = run(&twice_space);
-                        assert_eq!(c, 10, "`{}` twice must be refused: {e}", p.name);
+                        assert_eq!(c, 2, "`{}` twice must be refused: {e}", p.name);
                         assert!(e.contains("more than once"), "the rejection must say why: {e}");
 
                         let twice_mixed = [cmd, p.name, sample, equal.as_str(), "--help"];
                         let (c, e) = run(&twice_mixed);
-                        assert_eq!(c, 10, "`{equal}` after `{} {sample}` must be refused: {e}", p.name);
+                        assert_eq!(c, 2, "`{equal}` after `{} {sample}` must be refused: {e}", p.name);
                         assert!(e.contains("more than once"), "the rejection must say why: {e}");
 
                         let (c, e) = run(&[cmd, p.name]);
-                        assert_eq!(c, 10, "`{}` without a value must be refused: {e}", p.name);
+                        assert_eq!(c, 2, "`{}` without a value must be refused: {e}", p.name);
                         assert!(e.contains("requires a value"), "the rejection must say why: {e}");
                     }
                     Kind::Bool => {
@@ -656,7 +662,7 @@ fn every_registered_flag_parses_as_documented() {
 
                         let with_value = format!("{}=1", p.name);
                         let (c, e) = run(&[cmd, with_value.as_str(), "--help"]);
-                        assert_eq!(c, 10, "`{with_value}` must be refused: {e}");
+                        assert_eq!(c, 2, "`{with_value}` must be refused: {e}");
                         assert!(e.contains("takes no value"), "the rejection must say why: {e}");
                     }
                 }
@@ -666,12 +672,11 @@ fn every_registered_flag_parses_as_documented() {
 }
 
 /// 缺参数是定向拒绝，不是整份用法：每种缺失都要点名缺的是哪一项，
-/// 并指向该命令自己的帮助。退出码仍是 10
+/// 并指向该命令自己的帮助。退出码仍是 2
 #[cfg(unix)]
 #[test]
 fn missing_arguments_are_named() {
-    let dir = std::env::temp_dir().join(format!("diskedit_missing_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = FixtureDir::new();
     let img = dir.join("ok.img");
     fixture_gpt_image(&img);
     let img_s = img.to_str().unwrap();
@@ -692,19 +697,18 @@ fn missing_arguments_are_named() {
     ];
     for (args, needle) in cases {
         let (c, e) = run(args);
-        assert_eq!(c, 10, "{args:?} must be a usage refusal: {e}");
+        assert_eq!(c, 2, "{args:?} must be a usage error: {e}");
         assert!(e.contains(needle), "{args:?} must say {needle:?}: {e}");
         assert!(!e.contains("usage:"), "{args:?} must not dump the whole usage text: {e}");
     }
 }
 
 /// 以 `-` 开头的相对尺寸只在命令声明的 SIZE 槽位被接受：
-/// `info -10` 是旗标笔误（10），不是一次打开失败（30）
+/// `info -10` 是旗标笔误（2），不是一次打开失败（4）
 #[cfg(unix)]
 #[test]
 fn relative_size_only_in_the_size_slot() {
-    let dir = std::env::temp_dir().join(format!("diskedit_slot_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = FixtureDir::new();
     let img = dir.join("ok.img");
     fixture_gpt_image(&img);
     let img_s = img.to_str().unwrap();
@@ -715,17 +719,17 @@ fn relative_size_only_in_the_size_slot() {
     };
 
     let (c, e) = run(&["info", "-10"]);
-    assert_eq!(c, 10, "a hyphen token outside the SIZE slot must be an unknown flag: {e}");
+    assert_eq!(c, 2, "a hyphen token outside the SIZE slot must be an unknown flag: {e}");
     assert!(e.contains("unknown flag `-10`"), "{e}");
 
     // SIZE 槽位照旧接受：`-10` 被当成相对尺寸并按盘上几何换算，报的是尺寸相关的
     // 拒绝，而不是"未知旗标"
-    let (c, e) = run(&["resize", &format!("{img_s}:1"), "-10"]);
-    assert_eq!(c, 10, "{e}");
+    let (c, e) = run(&["resize", &format!("{img_s}:1"), "-10", "--yes"]);
+    assert_ne!(c, 2, "the size must have reached the SIZE parse: {e}");
     assert!(!e.contains("unknown flag"), "the size must have reached the SIZE parse: {e}");
     assert!(e.contains("size"), "the rejection must be about the size: {e}");
 
     // `--` 之后仍是普通位置参数：这是给以 `-` 开头的路径留的出口
     let (c, e) = run(&["info", "--", "-10"]);
-    assert_eq!(c, 30, "after `--`, `-10` is a target path: {e}");
+    assert_eq!(c, 4, "after `--`, `-10` is a target path: {e}");
 }

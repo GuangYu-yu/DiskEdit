@@ -4,15 +4,12 @@
 source "$(dirname "$0")/lib.sh"
 require_bin
 
-T=/var/tmp/diskedit_test5.img
-MNT=/testmnt
+img T chain5.img
+MNT="$TEST_MNT"
 
-cleanup_hook() { rm -f /var/lib/diskedit/* 2>/dev/null; }
 
-rm -f "$T" "$T"$SIDECAR_GLOB 2>/dev/null
-rm -f /var/lib/diskedit/* 2>/dev/null
+rm -rf "$T" "$T"$SIDECAR_GLOB 2>/dev/null
 mkdir -p "$MNT"
-track_file "$T"
 
 # 表变更后内核分区视图必须刷新：每次重新 attach loop
 verify_marker() { # label
@@ -32,8 +29,10 @@ verify_marker() { # label
 
 truncate -s 64M "$T"
 $B new "$T" --yes >/dev/null; exp "$?" 0 "new"
-$B create "$T" --size 33554432 --name test1 --fs ext4 --yes >/dev/null
-exp "$?" 0 "create p1（32MiB ext4）"
+$B add "$T" 33554432 --align mib --name test1 --yes >/dev/null
+exp "$?" 0 "add p1（32MiB）"
+$B mkfs "$T":1 ext4 --yes >/dev/null
+exp "$?" 0 "mkfs p1（ext4）"
 
 echo "== sgdisk verify (backup header state) =="
 sgdisk -v "$T" >/dev/null 2>&1; exp "$?" 0 "sgdisk -v（表自洽）"
@@ -64,8 +63,8 @@ $B info "$T" | grep -q '"num":1,"first_lba":2048,"last_lba":131038,' \
 verify_marker "resize grow --no-fs"
 
 echo "== resize-part --grow-to-end（此刻分区终点已是 last_usable，故无实际变更）=="
-# resize-part 与 resize 同契约：默认连 FS 一起扩，--no-fs 才只动表
-$B resize-part "$T":1 --start 2048 --grow-to-end >/dev/null; exp "$?" 0 "resize-part --grow-to-end"
+# resize-part 只改分区表、不动 FS；此刻终点已在 last_usable，故无实际变更
+$B resize-part "$T":1 --grow-to-end >/dev/null; exp "$?" 0 "resize-part --grow-to-end"
 
 echo "== resizefs <mountpoint> <BYTES>（BYTES = 分区目标大小）=="
 # 上一步 --no-fs 把 FS 留在了 42MiB（分区终点 100351，48MiB），而分区现在已是

@@ -72,7 +72,7 @@ fn verify_btrfs_device(mnt: &Path, dev_no: (u64, u64)) -> io::Result<()> {
     let info = crate::ioctl::btrfs_fs_info(&f)
         .map_err(|e| io::Error::other(format!("BTRFS_IOC_FS_INFO on {} failed: {e}", mnt.display())))?;
     if info.num_devices != 1 {
-        return Err(io::Error::other(format!(
+        return Err(io::Error::new(io::ErrorKind::Unsupported, format!(
             "btrfs filesystem at {} has {} devices — online resize covers single-device filesystems only",
             mnt.display(),
             info.num_devices
@@ -104,7 +104,7 @@ fn verify_btrfs_device(mnt: &Path, dev_no: (u64, u64)) -> io::Result<()> {
     let got = parse_dev_attr(&s)
         .ok_or_else(|| io::Error::other(format!("unparsable device number in {}: {s:?}", attr.display())))?;
     if got != dev_no {
-        return Err(io::Error::other(format!(
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, format!(
             "btrfs filesystem at {} is registered on device {}:{} but the node now resolves to {}:{}",
             mnt.display(),
             got.0,
@@ -143,7 +143,7 @@ pub(crate) fn resolve_part_dev(mountpoint: &Path) -> io::Result<(PathBuf, PathBu
     // 共享挂载点同样落到这条或多条非块设备分支，各自的拒绝语义不变
     let matched: Vec<_> = entries.iter().filter(|e| e.mount_point == mnt_str || e.mount_point == raw_str).collect();
     if matched.len() > 1 {
-        return Err(io::Error::other(format!(
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, format!(
             "{} is mounted multiple times (overmount) — which filesystem is in effect cannot be determined",
             mnt.display()
         )));
@@ -152,7 +152,7 @@ pub(crate) fn resolve_part_dev(mountpoint: &Path) -> io::Result<(PathBuf, PathBu
         let dev = PathBuf::from(&e.source);
         let meta = fs::metadata(&dev)?;
         if !meta.file_type().is_block_device() {
-            return Err(io::Error::other(format!(
+            return Err(io::Error::new(io::ErrorKind::Unsupported, format!(
                 "{} is not a block device node (multi-device/bind mounts unsupported online)",
                 dev.display()
             )));
@@ -167,7 +167,7 @@ pub(crate) fn resolve_part_dev(mountpoint: &Path) -> io::Result<(PathBuf, PathBu
         if e.fstype == "btrfs" {
             verify_btrfs_device(&mnt, dev_no)?;
         } else if dev_no != e.dev_no {
-            return Err(io::Error::other(format!(
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, format!(
                 "{} is mounted from device {}:{} but node {} now resolves to {}:{} — \
                  the mount source no longer names the mounted device",
                 mnt.display(),
@@ -181,7 +181,7 @@ pub(crate) fn resolve_part_dev(mountpoint: &Path) -> io::Result<(PathBuf, PathBu
         return Ok((dev, mnt));
     }
     Err(io::Error::new(
-        io::ErrorKind::NotFound,
+        io::ErrorKind::InvalidInput,
         format!("mountpoint {} not found in /proc/self/mountinfo", mnt.display()),
     ))
 }
@@ -201,7 +201,7 @@ pub(crate) fn resolve_target(mountpoint: &Path) -> io::Result<OnlineTarget> {
             io::Error::new(io::ErrorKind::InvalidData, format!("sysfs partition number {n} overflows u32"))
         })?,
         Err(e) if e.kind() == io::ErrorKind::NotFound => {
-            return Err(io::Error::other(format!(
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, format!(
                 "{} is not a partition (no sysfs partition attribute)",
                 part_dev.display()
             )));
@@ -261,6 +261,13 @@ pub(crate) fn resolve_target(mountpoint: &Path) -> io::Result<OnlineTarget> {
 
 /// BLKPG_RESIZE_PARTITION：对整盘 fd 调用，pno 定位分区，start 固定为现值
 pub(crate) fn blkpg_resize(t: &OnlineTarget, new_len_bytes: u64) -> io::Result<()> {
+    // 兜底重开前再核一次节点身份：sfdisk 前的那次核对与这里的打开之间，udev 可能把
+    // /dev/<盘名> 重绑到另一台设备——BLKPG 只挡 start 不符，对同几何换盘不设防
+    // （判据与主路径同一份，见 dev::ensure_node_is_device）
+    let disk_name = t.disk_dev.file_name().ok_or_else(|| {
+        io::Error::other(format!("{} has no file name to cross-check against sysfs", t.disk_dev.display()))
+    })?;
+    crate::dev::ensure_node_is_device(&t.disk_dev, &Path::new("/sys/block").join(disk_name))?;
     let disk = fs::OpenOptions::new().read(true).write(true).open(&t.disk_dev)?;
     crate::ioctl::blkpg_resize_partition(&disk, t.start_bytes, new_len_bytes, t.pno)
 }
@@ -289,7 +296,7 @@ mod tests {
     /// 这条与 btrfs 实机无关，Linux 上是可跑的拒绝测试
     #[test]
     fn mountpoint_without_btrfs_identity_is_refused() {
-        let d = std::env::temp_dir();
-        assert!(verify_btrfs_device(&d, (1, 1)).is_err(), "a mount without btrfs identity must be refused");
+        let dir = crate::testdir::test_dir("btrfs_identity");
+        assert!(verify_btrfs_device(&dir, (1, 1)).is_err(), "a mount without btrfs identity must be refused");
     }
 }

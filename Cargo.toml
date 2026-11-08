@@ -10,6 +10,7 @@ gptman = { version = "3.1", default-features = false }
 crc = "3"
 getrandom = "0.3"
 serde_json = "1"
+sha2 = "0.10"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"
@@ -17,9 +18,14 @@ libc = "0.2"
 [features]
 # 测试专用
 test-faults = []
+# 只读骨架：把尚未接入命令执行路径的模块编入构建（默认关闭）
+skeleton = []
 
 [lints.clippy]
 # 有意忽略错误必须落在 best_effort_* / warn_* 这类命名函数内（并在该函数上 #[allow]），
 # 这样"裸 let _ ="可被静态检查拦住。lint 只能发现"结果被丢弃"，
 # "忽略是否安全"仍由函数命名与类型表达，二者配合才可机械审计
 let_underscore_must_use = "deny"
+
+[dev-dependencies]
+tempfile = "3.27.0"

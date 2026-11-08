@@ -197,8 +197,8 @@ pub(crate) fn create_gpt_refuses_a_table_that_changed_after_the_command_check() 
 
     let e = create_gpt(&mut src, 512, Some([0x11; 16]), false)
         .expect_err("a conflict that appeared after the command-layer check must still be refused");
-    assert!(matches!(&e, crate::outcome::Fail::Refused(_)), "{e}");
-    assert_eq!(e.into_outcome().exit_code(), crate::outcome::EXIT_REFUSED);
+    assert!(matches!(&e, crate::outcome::RunOutcome::Refused(_)), "{e}");
+    assert_eq!(e.exit_code(), crate::outcome::EXIT_REFUSED);
     assert_eq!(std::fs::read(&src.path).unwrap(), before, "the refusal must not write a single byte");
 }
 
@@ -208,7 +208,7 @@ pub(crate) fn create_gpt_refuses_a_table_that_changed_after_the_command_check() 
 pub(crate) fn create_mbr_refuses_when_a_cleared_signature_lands_inside_a_partition() {
     let ss = 512u64;
     let mut src = src_from("gate_mbr", vec![0u8; 100 * ss as usize]);
-    assert!(new_table_conflict(&src, ss, TableKind::Msdos).unwrap().is_none(), "the command-layer check sees a clean disk");
+    assert!(new_table_conflict(&src, ss, TableKind::Mbr).unwrap().is_none(), "the command-layer check sees a clean disk");
 
     // 首次写盘之前表已变：MBR 分区从 LBA1 铺到盘尾，盘尾带一份自洽的 GPT 备份头
     let mut lba0 = vec![0u8; ss as usize];
@@ -239,7 +239,7 @@ pub(crate) fn create_mbr_refuses_when_a_cleared_signature_lands_inside_a_partiti
 
     let e = create_mbr(&mut src, false)
         .expect_err("a conflict that appeared after the command-layer check must still be refused");
-    assert!(matches!(&e, crate::outcome::Fail::Refused(_)), "{e}");
-    assert_eq!(e.into_outcome().exit_code(), crate::outcome::EXIT_REFUSED);
+    assert!(matches!(&e, crate::outcome::RunOutcome::Refused(_)), "{e}");
+    assert_eq!(e.exit_code(), crate::outcome::EXIT_REFUSED);
     assert_eq!(std::fs::read(&src.path).unwrap(), before, "the refusal must not write a single byte");
 }
