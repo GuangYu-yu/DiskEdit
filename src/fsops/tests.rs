@@ -1,11 +1,11 @@
 #![allow(clippy::let_underscore_must_use)] // 清理临时文件有意忽略失败
-use super::{check_e2fsck_for_check, check_e2fsck_for_resize, check_grow_step, classify_shrink, erase_ranges, grow_target_at, leak_from, mkfs_tool, parse_fstype, parse_num_lead, partition_byte_range, settle_release, swap_rebuild_support, uuid_support, vfat_label_check, DeviceScope, Growable, MkfsFs, MountLeak, NumError, ReleaseOutcome, ShrinkVerify, ToolSupport, Unusable, UuidSupport};
+use super::{check_e2fsck_for_check, check_e2fsck_for_resize, check_grow_step, classify_shrink, erase_ranges, grow_target_at, leak_from, mkfs_tool, parse_fstype, parse_num_lead, partition_byte_range, settle_release, swap_rebuild_support, uuid_support, vfat_label_check, DeviceScope, Growable, MkfsFs, MountLeak, NumError, ReleaseRunOutcome, ShrinkVerify, ToolSupport, Unusable, UuidSupport};
 use super::FsError;
 use crate::dev::FileSource;
-use crate::fsid::{self, FsKind};
+use crate::fsid::{self, ContentKind, FsKind};
 
 /// e2fsck 2/3/4 归 `CommandFailed`：三者都说明工具运行过——"确定未写盘"
-/// 的 Infra 承诺不成立。exit 2 的人工复现（e2fsck -fp 改过 root fs）无需真实环境：
+/// 的 NoMutation 承诺不成立。exit 2 的人工复现（e2fsck -fp 改过 root fs）无需真实环境：
 /// 判定是纯函数，逐码断言变体即可
 #[test]
 pub(crate) fn e2fsck_exit_codes_do_not_claim_no_write() {
@@ -18,16 +18,14 @@ pub(crate) fn e2fsck_exit_codes_do_not_claim_no_write() {
     assert!(matches!(check_e2fsck_for_resize(8), Err(FsError::CommandFailed(_))));
 }
 
-/// check 语境的判定独立于 resize：修复成功（0..=3）是 check 的本职成果，
-/// 不得照搬 resize 的 REBOOT 拒绝——照搬会把修复成功报成 Failed(30)。
-/// 仅 4（未修正错误）与基础设施故障是失败
+/// check 语境以 `-n` 运行：不写盘，故 0 是唯一成功值。非零退出说明检查发现了
+/// 问题或工具本身故障，一律记失败——没有"修复成功"这种结果
 #[test]
-pub(crate) fn e2fsck_check_context_treats_repair_as_success() {
-    for ok in [0, 1, 2, 3] {
-        assert!(check_e2fsck_for_check(ok).is_ok(), "exit {ok} must pass");
+pub(crate) fn e2fsck_check_context_requires_exit_zero() {
+    assert!(check_e2fsck_for_check(0).is_ok());
+    for failed in [1, 2, 3, 4, 8] {
+        assert!(matches!(check_e2fsck_for_check(failed), Err(FsError::CommandFailed(_))), "exit {failed}");
     }
-    assert!(matches!(check_e2fsck_for_check(4), Err(FsError::CommandFailed(_))));
-    assert!(matches!(check_e2fsck_for_check(8), Err(FsError::CommandFailed(_))));
 }
 
 /// VFAT 卷标的容量是 11 字节：ASCII 下字节数等于字符数，11 个通过、12 个按字段容量拒绝
@@ -60,13 +58,13 @@ pub(crate) fn vfat_label_rejects_non_ascii_without_calling_it_too_long() {
     assert!(!err.contains("11-byte"), "{err}");
 }
 
-/// swap 的 label/uuid 走 swaplabel（util-linux）：能力判定归 Yes（只收显式值，
-/// `--random` 由命令层按 Yes+NewRandom 拒绝）。这条接线若回退，set 会退回
+/// swap 的 label/uuid 走 swaplabel（util-linux）：能力判定归 ExplicitOnly（只收显式值，
+/// `--random` 由命令层按 ExplicitOnly+NewRandom 拒绝）。这条接线若回退，set 会退回
 /// "no label tool wired for swap" 的拒绝
 #[test]
 pub(crate) fn swap_label_and_uuid_are_wired_to_swaplabel() {
-    assert!(matches!(uuid_support(Some(FsKind::Swap)), UuidSupport::Yes));
-    assert!(matches!(uuid_support(Some(FsKind::Vfat)), UuidSupport::No(_)));
+    assert!(matches!(uuid_support(Some(ContentKind::Swap)), UuidSupport::ExplicitOnly));
+    assert!(matches!(uuid_support(Some(ContentKind::Filesystem(FsKind::Vfat))), UuidSupport::No(_)));
 }
 
 /// 搬移 swap 的重建工具矩阵：`mkswap` 恒需；镜像目标的重建对象是 loop 分区设备，
@@ -87,12 +85,12 @@ pub(crate) fn swap_rebuild_tools_follow_the_target_kind() {
 /// num_devices = 0（≤1）放行
 #[test]
 pub(crate) fn btrfs_multi_device_gate_refuses_undersized_partition() {
-    let path = std::env::temp_dir().join(format!("diskedit_btrfs_gate_{}.img", std::process::id()));
+    let dir = crate::testdir::test_dir("btrfs_gate");
+    let path = dir.join("gate.img");
     std::fs::write(&path, vec![0u8; 128 * 1024]).unwrap();
     let src = FileSource::open(&path, None).unwrap();
     assert!(super::refuse_btrfs_multi_device_at(&src, 0, 4096).is_err(), "a partition smaller than the superblock must be refused before any read");
     assert!(super::refuse_btrfs_multi_device_at(&src, 0, 128 * 1024).is_ok(), "num_devices = 0 must pass the multi-device check");
-    let _ = std::fs::remove_file(&path);
 }
 
 /// `as_str` 是全仓唯一的规范名来源：任何一字漂移都会改动 info JSON 与文案，
@@ -110,11 +108,11 @@ pub(crate) fn fs_kind_and_mkfs_fs_strings_are_frozen() {
     assert_eq!(FsKind::Ntfs.as_str(), "ntfs");
     assert_eq!(FsKind::HfsPlus.as_str(), "hfsplus");
     assert_eq!(FsKind::Apfs.as_str(), "apfs");
-    assert_eq!(FsKind::Swap.as_str(), "swap");
-    assert_eq!(FsKind::Lvm2Pv.as_str(), "lvm2_pv");
+    assert_eq!(ContentKind::Swap.as_str(), "swap");
+    assert_eq!(ContentKind::Lvm2Pv.as_str(), "lvm2_pv");
 
-    assert_eq!(fsid::fs_name(None), "unknown");
-    assert_eq!(fsid::fs_name(Some(FsKind::Ext)), "ext");
+    assert_eq!(fsid::content_name(ContentKind::Unknown), "unknown");
+    assert_eq!(fsid::content_name(ContentKind::Filesystem(FsKind::Ext)), "ext");
 
     // CLI 域自有字面量：ext 只在这里分裂到 2/3/4
     assert_eq!(MkfsFs::Ext2.as_str(), "ext2");
@@ -122,14 +120,14 @@ pub(crate) fn fs_kind_and_mkfs_fs_strings_are_frozen() {
     assert_eq!(MkfsFs::Ext4.as_str(), "ext4");
     // 交集转调共享：CLI 名必须与识别名逐字节一致
     for (mk, kind) in [
-        (MkfsFs::Vfat, FsKind::Vfat),
-        (MkfsFs::Exfat, FsKind::Exfat),
-        (MkfsFs::Ntfs, FsKind::Ntfs),
-        (MkfsFs::Xfs, FsKind::Xfs),
-        (MkfsFs::Btrfs, FsKind::Btrfs),
-        (MkfsFs::F2fs, FsKind::F2fs),
-        (MkfsFs::Swap, FsKind::Swap),
-        (MkfsFs::Lvm2Pv, FsKind::Lvm2Pv),
+        (MkfsFs::Vfat, ContentKind::Filesystem(FsKind::Vfat)),
+        (MkfsFs::Exfat, ContentKind::Filesystem(FsKind::Exfat)),
+        (MkfsFs::Ntfs, ContentKind::Filesystem(FsKind::Ntfs)),
+        (MkfsFs::Xfs, ContentKind::Filesystem(FsKind::Xfs)),
+        (MkfsFs::Btrfs, ContentKind::Filesystem(FsKind::Btrfs)),
+        (MkfsFs::F2fs, ContentKind::Filesystem(FsKind::F2fs)),
+        (MkfsFs::Swap, ContentKind::Swap),
+        (MkfsFs::Lvm2Pv, ContentKind::Lvm2Pv),
     ] {
         assert_eq!(mk.as_str(), kind.as_str());
     }
@@ -204,13 +202,13 @@ pub(crate) fn grow_target_at_separates_nothing_to_do_from_unsupported() {
         Ok(Growable::Target(t)) => t,
         Ok(Growable::OverlayPending) => panic!("expected a grow target, got OverlayPending"),
         Ok(Growable::SwapUnactivatable) => panic!("expected a grow target, got SwapUnactivatable"),
-        Ok(Growable::NoFilesystem(ft)) => panic!("expected a grow target, got NoFilesystem({})", fsid::fs_name(ft)),
+        Ok(Growable::NoFilesystem(ft)) => panic!("expected a grow target, got NoFilesystem({})", fsid::content_name(ft.unwrap_or(ContentKind::Unknown))),
         Err(e) => panic!("expected a grow target, got {e}"),
     };
 
     // 内层 ext：可扩，且 scope 指向内层那段（不是整个分区）
     let t = target(grow_target_at(&fs_fixture("ovl_ext", squashfs_head(&inner_ext)), 3, 0, LEN));
-    assert_eq!(t.fstype, FsKind::Ext);
+    assert_eq!(t.fstype, ContentKind::Filesystem(FsKind::Ext));
     assert!(matches!(t.scope, DeviceScope::Range(off, len) if off == REL && len == LEN - REL));
 
     // 内层还是零（首启尚未格式化）：没有可扩的文件系统，但那块空间会被首次挂载的
@@ -241,7 +239,7 @@ pub(crate) fn grow_target_at_separates_nothing_to_do_from_unsupported() {
     let mut plain = vec![0u8; 64 * 1024];
     plain[0x438..0x43A].copy_from_slice(&0xEF53u16.to_le_bytes());
     let t = target(grow_target_at(&fs_fixture("plain_ext", plain), 2, 0, 64 * 1024));
-    assert_eq!(t.fstype, FsKind::Ext);
+    assert_eq!(t.fstype, ContentKind::Filesystem(FsKind::Ext));
     assert!(matches!(t.scope, DeviceScope::Partition(2)));
 
     // 空区域与 LVM PV：类型原样报出，供调用方分辨（PV 有别的出路）；`unknown` 不区分
@@ -255,7 +253,7 @@ pub(crate) fn grow_target_at_separates_nothing_to_do_from_unsupported() {
     pv[536..544].copy_from_slice(b"LVM2 001");
     assert!(matches!(
         grow_target_at(&fs_fixture("plain_pv", pv), 2, 0, 64 * 1024),
-        Ok(Growable::NoFilesystem(Some(FsKind::Lvm2Pv)))
+        Ok(Growable::NoFilesystem(Some(ContentKind::Lvm2Pv)))
     ));
 
     // 页格式在本机激活不了的 swap（签名只落在 32K 候选位）不是"无信息"：identify 按
@@ -276,39 +274,43 @@ pub(crate) fn grow_target_at_separates_nothing_to_do_from_unsupported() {
     ));
 }
 
-/// 分区层的写盘前判定：`unknown` 与"认得却不接线"同样要由 `--no-fs` 显式担下，
-/// 而 overlay 首启现场、PV、探测得出的 32K swap 都有下家，不得被这条规则误伤
+/// 分区层的写盘前判定：`unknown` 与"认得却不接线"都在写盘前拒绝，`unknown` 的文案
+/// 指向用该 FS 自己的工具扩容；overlay 首启现场、PV、探测得出的 32K swap 都有下家，
+/// 不得被这条规则误伤
 #[test]
-pub(crate) fn unidentified_region_needs_an_explicit_opt_out() {
+pub(crate) fn unidentified_region_is_refused_with_a_route_forward() {
     assert!(check_grow_step(Growable::OverlayPending, true).is_ok());
     assert!(check_grow_step(Growable::SwapUnactivatable, true).is_ok());
-    assert!(check_grow_step(Growable::NoFilesystem(Some(FsKind::Lvm2Pv)), true).is_ok());
+    assert!(check_grow_step(Growable::NoFilesystem(Some(ContentKind::Lvm2Pv)), true).is_ok());
     match check_grow_step(Growable::NoFilesystem(None), true) {
         Err(FsError::UnsupportedFs(m)) => {
-            assert!(m.contains("unknown") && m.contains("--no-fs"), "{m}")
+            assert!(m.contains("not identified"), "{m}");
+            assert!(m.contains("its own tool"), "{m}");
         }
         Err(e) => panic!("the refusal must stay in the unsupported domain (refused/10), got {e}"),
         Ok(()) => panic!("an unidentified region must not pass the preflight"),
     }
 }
 
-pub(crate) fn fs_fixture(tag: &str, data: Vec<u8>) -> crate::dev::WriteSource {
-    let mut tmp = std::env::temp_dir();
-    tmp.push(format!("diskedit_fsops_{tag}_{}.img", std::process::id()));
-    std::fs::write(&tmp, &data).unwrap();
-    let f = std::fs::OpenOptions::new().read(true).write(true).open(&tmp).unwrap();
+pub(crate) fn fs_fixture(tag: &str, data: Vec<u8>) -> crate::testdir::TestSource<crate::dev::WriteSource> {
+    let dir = crate::testdir::test_dir(tag);
+    let path = dir.join("fs.img");
+    std::fs::write(&path, &data).unwrap();
+    let f = std::fs::OpenOptions::new().read(true).write(true).open(&path).unwrap();
     let size = data.len() as u64;
-    crate::dev::WriteSource::unowned(FileSource {
-        identity: crate::dev::TargetIdentity::resolve_image(&tmp),
+    let src = crate::dev::WriteSource::unowned(FileSource {
+        identity: crate::dev::TargetIdentity::resolve_image(&path),
         file: f,
-        path: tmp,
+        path,
         sector_size: 512,
         size,
         is_block: false,
-        journal: None,
+        record_journal: None,
         fingerprint: Default::default(),
         loop_mapping: None,
-    })
+        owner: None,
+    });
+    crate::testdir::TestSource::new(dir, src)
 }
 
 /// 分区字节范围：GPT 与 MBR 两种表来源；空槽位/越界编号/容器分区/无表均拒绝
@@ -412,14 +414,14 @@ pub(crate) fn erase_range_table_layout() {
 /// 证明已卸掉——挂载中的目录 rmdir 必然失败，"用后即删"就此失效，故各留一条待办
 #[test]
 pub(crate) fn release_outcome_decides_whether_a_cleanup_todo_exists() {
-    assert!(leak_from("/mnt/x", ReleaseOutcome::Released).is_none());
+    assert!(leak_from("/mnt/x", ReleaseRunOutcome::Released).is_none());
 
-    let failed = leak_from("/mnt/x", ReleaseOutcome::Failed("target is busy".into())).unwrap();
+    let failed = leak_from("/mnt/x", ReleaseRunOutcome::Failed("target is busy".into())).unwrap();
     assert_eq!(failed.point, "/mnt/x");
     assert_eq!(failed.why, "target is busy", "the tool's own words are the reason");
     assert_eq!(failed.hint(), "umount /mnt/x");
 
-    let missing = leak_from("/mnt/x", ReleaseOutcome::Unavailable("umount not found".into())).unwrap();
+    let missing = leak_from("/mnt/x", ReleaseRunOutcome::Unavailable("umount not found".into())).unwrap();
     assert_eq!(missing.why, "umount not found");
     assert_eq!(missing.point, "/mnt/x");
 }
@@ -483,17 +485,15 @@ pub(crate) fn erase_ranges_boundaries() {
 #[test]
 pub(crate) fn e2fsck_exit_code_semantics() {
     // man e2fsck 按位或语义（bit1 = 改 root fs 须重启）：resize 判据 0/1 可继续，
-    // 2/3/4 拒绝，更高位为基础设施失败；check 判据 0..=3 成功
+    // 2/3/4 拒绝，更高位为基础设施失败；check 以 -n 运行，只有 0 成功
     for ok in [0, 1] {
         assert!(check_e2fsck_for_resize(ok).is_ok(), "exit {ok} must pass");
     }
     for refuse in [2, 3, 4, 8, 16] {
         assert!(check_e2fsck_for_resize(refuse).is_err(), "exit {refuse} must fail");
     }
-    for ok in [0, 1, 2, 3] {
-        assert!(check_e2fsck_for_check(ok).is_ok(), "check exit {ok} must pass");
-    }
-    for refuse in [4, 8, 16] {
+    assert!(check_e2fsck_for_check(0).is_ok());
+    for refuse in [1, 2, 3, 4, 8, 16] {
         assert!(check_e2fsck_for_check(refuse).is_err(), "check exit {refuse} must fail");
     }
 }

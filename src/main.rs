@@ -1,18 +1,22 @@
 //! diskedit — 磁盘编辑工具：镜像文件与块设备统一为按偏移读写的字节存储。
 //! 命令面与退出码契约：0=完成（分区表写入经读回复核、内核视图已刷新；FS 步以外部工具
-//! 的退出码为准；缩容另做尺寸回读，回读不出时报 20）/10=拒绝执行（未写盘，成因在请求与现状不匹配）/
-//! 20=部分完成（后置步骤未做，或表已写但内核分区视图过期）/
-//! 30=基础设施失败（盘内容/环境故障且未写盘，或写盘后失败）。
-//! 20 的两个成因正交：见 outcome::Applied 的 pending 与 kernel_sync；
-//! 30 的两个成因也正交：见 outcome::{Outcome::Infra, Outcome::Failed}
+//! 的退出码为准；缩容另做尺寸回读，回读不出时按部分完成报 5）/1=内部错误/2=参数或命令
+//! 语法错误/3=策略拒绝或前置条件不满足/4=操作失败且确认无持久化修改/5=部分完成或恢复
+//! 待处理/6=平台或能力不支持。
+//! 5 的两个成因正交：见 outcome::Applied 的 pending 与 kernel_sync 以及 RunOutcome::Partial；
+//! 退出码只在 RunOutcome::exit_code 一处映射
 //!
-//! 结构：args=命令行解析与旗标契约；support=命令层共用支撑件；cmd/=<每命令一个模块>；
-//! ioctl=Linux 块层 ioctl 集中地；其余为领域层（table/movepart/online/fsid/fsops/
-//! gpt_policy/lvm/outcome/dev）。
+//! 结构：cli=命令 schema、解析与类型化请求；support=命令层共用支撑件；cmd/=<每命令一个模块>；
+//! assembly=计划期装配（只读目标 → 表步骤装配）；ioctl=Linux 块层 ioctl 集中地；
+//! 其余为领域层（table/movepart/online/fsid/fsops/gpt_policy/lvm/outcome/dev）。
 
-mod args;
+mod assembly;
+mod cli;
 mod cmd;
 mod dev;
+mod docs;
+mod domain;
+mod execution;
 mod fsid;
 mod fsops;
 mod geometry;
@@ -25,43 +29,63 @@ mod outcome;
 #[cfg(target_os = "linux")]
 mod online;
 mod movepart;
+mod platform;
+mod planner;
+mod recovery;
 mod support;
 mod table;
 mod targetlock;
 #[cfg(test)]
+mod testdir;
+#[cfg(test)]
 mod testrng;
-mod transaction;
 
 use std::process::ExitCode;
 
-use crate::args::{parse_args, refuse_unconsumed_flags};
-use crate::support::drop_journal;
+use crate::outcome::{EXIT_INTERNAL, EXIT_OK, EXIT_PARTIAL};
 
+/// panic 走默认钩子（原样打印消息与 backtrace），退出码按本进程是否可能已写过目标
+/// 字节分：未写过是内部错误（1）；写过则无法断言盘上状态，落部分完成（5）并给出
+/// 恢复指引
 fn main() -> ExitCode {
-    let (cmd, a) = parse_args();
-    refuse_unconsumed_flags(&cmd, &a);
-    let result = cmd::dispatch(&cmd, &a);
-    // 布局已完成（Applied）且没有已知待办 ⇒ 撤销窗口可以关闭，删除 undo journal。
-    // 判据不能看退出码：20 同时覆盖"待办非空"（保留 journal 供 undo 撤销表写入）与
-    // "仅内核视图过期"（事务已完成，必须关闭——否则下一次写命令会被自己残留的
-    // journal 挡成 busy）。仅限命令表里标为开 journal 的命令：不开窗口的命令成功时
-    // 若也删，会把先前失败操作留下的 journal 误清掉。删除动作须容忍文件不存在；
-    // 块设备的在线路径（sfdisk、FS 工具）用自己的 fd 写盘、不经过本工具的 journal，
-    // 那些写入本就不在回放范围内
-    let mut code = result.code();
-    if cmd::opens_undo_journal(&cmd) && result.closes_journal() && !drop_journal() {
-        // 该删的恢复文件没删掉：事务的收尾没有完成，不能按完整成功退出
-        code = crate::outcome::EXIT_PARTIAL;
+    match std::panic::catch_unwind(run) {
+        Ok(code) => ExitCode::from(code),
+        Err(_) => {
+            if crate::outcome::target_may_have_been_written() {
+                crate::outcome::RunOutcome::report_partial_guidance();
+                ExitCode::from(EXIT_PARTIAL)
+            } else {
+                ExitCode::from(EXIT_INTERNAL)
+            }
+        }
     }
+}
+
+fn run() -> u8 {
+    let (def, request) = cli::parse();
+    let mut result = cmd::dispatch(def, &request);
+    // 收尾步骤的失败不直接改码：只把"已完整应用"的结果降级成部分完成（5），
+    // 降级与映射都落在 RunOutcome 上
+    let mut cleanup_failure: Option<String> = None;
     // 资源释放待办（`Drop` 里发现的，例如 loop 未解绑）不能只留在 stderr：它同样是一条
     // 未完成的后置条件。只在完整成功时降级——失败路径的码已经表达了更严重的事实
     let release_leaks = crate::fsops::take_release_leaks();
-    if !release_leaks.is_empty() && code == crate::outcome::EXIT_OK {
+    if !release_leaks.is_empty() && result.code() == EXIT_OK {
         eprintln!(
             "note: {} cleanup step(s) did not complete — this run left resources behind (see the warnings above)",
             release_leaks.len()
         );
-        code = crate::outcome::EXIT_PARTIAL;
+        let cause = format!("{} cleanup step(s) did not complete", release_leaks.len());
+        result = result.degrade_partial(cause.clone());
+        cleanup_failure = Some(cause);
     }
-    ExitCode::from(code)
+    let code = result.code();
+    // 收尾失败发生在命令自报成功之后，命令自己没有打印过 5 的指引，这里补上
+    if code == EXIT_PARTIAL
+        && let Some(cause) = cleanup_failure
+    {
+        eprintln!("error: {cause}");
+        crate::outcome::RunOutcome::report_partial_guidance();
+    }
+    code
 }

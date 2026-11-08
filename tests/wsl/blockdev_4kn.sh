@@ -4,33 +4,30 @@
 source "$(dirname "$0")/lib.sh"
 require_fault_bin
 
-T=/var/tmp/t24.img
+img T t24.img
 LD=""
 
 cleanup_hook() {
   [ -n "$LD" ] && lo_detach "$LD" 2>/dev/null
-  rm -f /var/tmp/t24*.img* 2>/dev/null
-  rm -f /var/lib/diskedit/* 2>/dev/null
+    rm -rf /var/lib/diskedit/* 2>/dev/null
 }
 
-rm -f /var/tmp/t24*.img* 2>/dev/null
-rm -f /var/lib/diskedit/* 2>/dev/null
-track_file "$T"
+rm -rf /var/lib/diskedit/* 2>/dev/null
 
 refresh() { sync; blockdev --rereadpt "$LD" 2>/dev/null; partx -u "$LD" 2>/dev/null; sleep 1; }
 
 # 表写命令的稳定执行：DiskEdit 在表提交后校验内核分区视图，偶发 reread 竞态会以
-# "kernel partition view is stale" 失败并保留 journal（表已写、可 undo）——错误消息
+# "kernel partition view is stale" 失败并保留记录（表已写、可 undo）——错误消息
 # 本身指引 partprobe/刷新内核视图，这里照做后重试一次，消除测试自身的时序赌运气
 set4kn() { # $1=label  其余=传给 set 的参数
   local label=$1 out e; shift
   out=$($B set "$LD":2 "$@" 2>&1); e=$?
   if [ "$e" -ne 0 ] && echo "$out" | grep -q 'stale'; then
     partx -u "$LD" 2>/dev/null; sleep 1
-    # set 首次尝试撞 stale 时 DiskEdit 保留 journal，裸重试会被 unfinished-op 闸拒绝——
+    # set 首次尝试撞 stale 时 DiskEdit 保留记录，裸重试会被 unfinished-op 闸拒绝——
     # 先 abandon 释放现场（set 幂等，表项重写无副作用）。undo/abandon 的目标必须是
     # 启动场景时的 $LD：镜像路径侧身份匹配不到现场（产品跨目标回退缺失，见报告）
-    $B abandon "$LD" --yes >/dev/null 2>&1
+    $B abandon "$LD" >/dev/null 2>&1
     out=$($B set "$LD":2 "$@" 2>&1); e=$?
   fi
   [ "$e" -eq 0 ] && echo "  OK   set $label" || { echo "  BAD  set $label FAILED: $(echo "$out" | tail -1)"; rc=1; }
@@ -42,12 +39,12 @@ addk() { # $1=label $2=期望生成的分区节点  其余=传给 add 的参数
   if [ "$e" -ne 0 ] && echo "$out" | grep -q 'stale'; then
     partx -u "$LD" 2>/dev/null; sleep 1
     if [ -b "$node" ]; then
-      # 表已写、内核视图滞后，DiskEdit 保留了 journal——不清掉会以 "unfinished
+      # 表已写、内核视图滞后，DiskEdit 保留了记录——不清掉会以 "unfinished
       # operation" 闸拒绝后续所有表写命令。abandon 只释放现场，不回滚已写表项
-      $B abandon "$LD" --yes >/dev/null 2>&1
-      echo "  OK   add $label（首次已写盘，内核视图滞后，journal 已释放）"; return 0
+      $B abandon "$LD" >/dev/null 2>&1
+      echo "  OK   add $label（首次已写盘，内核视图滞后，记录已释放）"; return 0
     fi
-    [ -f "$T$JOURNAL_SUFFIX" ] && $B undo "$LD" --yes >/dev/null 2>&1
+    record_present "$LD" && $B undo "$LD" --yes >/dev/null 2>&1
     out=$($B add "$LD" "$@" 2>&1); e=$?
   fi
   [ "$e" -eq 0 ] && echo "  OK   add $label" || { echo "  BAD  add $label FAILED: $(echo "$out" | tail -1)"; rc=1; return 1; }
@@ -55,34 +52,34 @@ addk() { # $1=label $2=期望生成的分区节点  其余=传给 add 的参数
 
 movek() { # $1=目标 start（LBA）
   local start=$1 out e fl
-  out=$($B move "$LD":2 --start "$start" --chunk-size 4 --yes 2>&1); e=$?
+  out=$($B move "$LD":2 --start "$start" --chunk 4 --yes 2>&1); e=$?
   if [ "$e" -ne 0 ] && echo "$out" | grep -q 'stale'; then
     partx -u "$LD" 2>/dev/null; sleep 1
     fl=$($B info "$LD" | grep -o '"num":2,"first_lba":[0-9]*' | grep -o '[0-9]*$')
     if [ "$fl" = "$start" ]; then
       e=0
-      $B abandon "$LD" --yes >/dev/null 2>&1
-      echo "  move 首次已写盘，内核视图滞后，journal 已释放"
+      $B abandon "$LD" >/dev/null 2>&1
+      echo "  move 首次已写盘，内核视图滞后，记录已释放"
     else
-      $B abandon "$LD" --yes >/dev/null 2>&1
-      out=$($B move "$LD":2 --start "$start" --chunk-size 4 --yes 2>&1); e=$?
+      $B abandon "$LD" >/dev/null 2>&1
+      out=$($B move "$LD":2 --start "$start" --chunk 4 --yes 2>&1); e=$?
     fi
   fi
   echo "$out"; return $e
 }
 
 setup4k() {
-  rm -f "$T" "$T"$SIDECAR_GLOB; rm -f /var/lib/diskedit/* 2>/dev/null
+  rm -rf "$T" "$T"$SIDECAR_GLOB; rm -rf /var/lib/diskedit/* 2>/dev/null
   [ -n "$LD" ] && lo_detach "$LD" 2>/dev/null
   truncate -s 2G "$T"
   LD=$(lo_attach "$T" --sector-size 4096)
   $B new "$LD" --yes >/dev/null || { echo "setup: new FAILED"; rc=1; return 1; }
   # 4Kn 下 1MiB = 256 扇区
-  addk p1 "${LD}p1" --start 256 --end 65791 --name p1 || return 1
+  addk p1 "${LD}p1" 268435456 --start 256 --name p1 || return 1
   refresh; mkfs.ext4 -q "${LD}p1" || { echo "setup: mkfs p1 FAILED"; rc=1; return 1; }
-  addk p2 "${LD}p2" --start 131072 --end 196607 --name p2 || return 1
+  addk p2 "${LD}p2" 268435456 --start 131072 --name p2 || return 1
   refresh; mkfs.ext4 -q "${LD}p2" || { echo "setup: mkfs p2 FAILED"; rc=1; return 1; }
-  addk p3 "${LD}p3" --start 262144 --end 327679 --name p3 || return 1
+  addk p3 "${LD}p3" 268435456 --start 262144 --name p3 || return 1
   refresh; mkfs.ext4 -q "${LD}p3" || { echo "setup: mkfs p3 FAILED"; rc=1; return 1; }
 }
 
@@ -92,7 +89,7 @@ echo "loop: $LD  logical_ss=$(blockdev --getss "$LD")"
 $B info "$LD" | head -c 130; echo
 echo "-- 期望 sector_size=4096 且 LBA 与 256 对齐 --"
 $B info "$LD" | grep -o '"num":[0-9]*,"first_lba":[0-9]*,"last_lba":[0-9]*'
-mount_at "${LD}p2" /testmnt && { dd if=/dev/urandom of=/testmnt/blob bs=1M count=200 2>/dev/null; echo "p2 200M written"; umount /testmnt; M2=$(mdsum "${LD}p2"); }
+mount_at "${LD}p2" "$TEST_MNT" && { dd if=/dev/urandom of="$TEST_MNT/blob" bs=1M count=200 2>/dev/null; echo "p2 200M written"; umount "$TEST_MNT"; M2=$(mdsum "${LD}p2"); }
 
 echo
 echo "########## B: 4Kn 自重叠左移（delta < 分区长度）##########"
@@ -106,10 +103,10 @@ sgdisk -v "$T" >/dev/null 2>&1 && echo "sgdisk clean" || { echo "sgdisk ISSUES";
 echo
 echo "########## C: 4Kn 中断恢复（fault 注入）##########"
 setup4k
-mount_at "${LD}p2" /testmnt && { dd if=/dev/urandom of=/testmnt/blob bs=1M count=200 2>/dev/null; umount /testmnt; M2=$(mdsum "${LD}p2"); }
-DISKEDIT_FAULT=rs-chunk:20 $BF move "$LD":2 --start 66048 --chunk-size 4 --yes >/dev/null 2>&1
+mount_at "${LD}p2" "$TEST_MNT" && { dd if=/dev/urandom of="$TEST_MNT/blob" bs=1M count=200 2>/dev/null; umount "$TEST_MNT"; M2=$(mdsum "${LD}p2"); }
+DISKEDIT_FAULT=chunk:20 $BF move "$LD":2 --start 66048 --chunk 4 --yes >/dev/null 2>&1
 echo "现场：$(ls /var/lib/diskedit/ 2>/dev/null | wc -l) 项"
-OUT=$($B move "$LD":2 --start 66048 --chunk-size 4 --yes 2>&1)
+OUT=$($B move "$LD":2 --start 66048 --chunk 4 --yes 2>&1)
 R=$(echo "$OUT" | grep -o 'resuming at chunk [0-9]*')
 [ "$R" = "resuming at chunk 20" ] && echo "resume: $R" || { echo "resume: WRONG ($R，输出尾: $(echo "$OUT" | tail -1))"; rc=1; }
 refresh
@@ -134,5 +131,5 @@ echo "$NAME_AFTER" | grep -q keepname && echo "D NAME PRESERVED OK" || { echo "D
 
 echo
 echo "########## 残留核对（cleanup 前）##########"
-echo "t24 files: $(ls /var/tmp/t24* 2>/dev/null | wc -l)  loops: $(losetup -a | wc -l)"
+echo "root files: $(ls "$WSL_ROOT" 2>/dev/null | wc -l)  loops: $(losetup -a | wc -l)"
 exit $rc

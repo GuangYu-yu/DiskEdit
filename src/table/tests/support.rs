@@ -1,4 +1,5 @@
 use super::*;
+use crate::testdir::{test_dir, TestSource};
 use gptman::GPT;
 use std::io::Cursor;
 
@@ -18,31 +19,33 @@ pub(crate) fn fixture_gpt(ss: u64) -> Vec<u8> {
     cur.into_inner()
 }
 
-pub(crate) fn src_from(tag: &str, data: Vec<u8>) -> WriteSource {
+pub(crate) fn src_from(tag: &str, data: Vec<u8>) -> TestSource<WriteSource> {
     src_from_ss(tag, data, 512)
 }
 
-pub(crate) fn src_from_ss(tag: &str, data: Vec<u8>, ss: u64) -> WriteSource {
-    let mut tmp = std::env::temp_dir();
-    tmp.push(format!("diskedit_test_{tag}_{}.img", std::process::id()));
-    std::fs::write(&tmp, &data).unwrap();
-    let f = std::fs::OpenOptions::new().read(true).write(true).open(&tmp).unwrap();
+pub(crate) fn src_from_ss(tag: &str, data: Vec<u8>, ss: u64) -> TestSource<WriteSource> {
+    let dir = test_dir(tag);
+    let path = dir.join("disk.img");
+    std::fs::write(&path, &data).unwrap();
+    let f = std::fs::OpenOptions::new().read(true).write(true).open(&path).unwrap();
     let size = data.len() as u64;
-    WriteSource::unowned(FileSource {
-        identity: crate::dev::TargetIdentity::resolve_image(&tmp),
+    let src = WriteSource::unowned(FileSource {
+        identity: crate::dev::TargetIdentity::resolve_image(&path),
         file: f,
-        path: tmp,
+        path,
         sector_size: ss,
         size,
         is_block: false,
-        journal: None,
+        record_journal: None,
         fingerprint: Default::default(),
         loop_mapping: None,
-    })
+        owner: None,
+    });
+    TestSource::new(dir, src)
 }
 
 /// GPT 测试镜像：gptman 只写 GPT 结构，保护 MBR 需自行补——load_gpt 以前者为前置
-pub(crate) fn src_from_gpt(tag: &str, ss: u64) -> WriteSource {
+pub(crate) fn src_from_gpt(tag: &str, ss: u64) -> TestSource<WriteSource> {
     let mut src = src_from(tag, fixture_gpt(ss));
     ensure_protective_mbr(&mut src, ss).unwrap();
     src
@@ -52,7 +55,7 @@ pub(crate) fn src_from_gpt(tag: &str, ss: u64) -> WriteSource {
 /// `entries` 每项 `(type, start_lba, size_lba)`，落在标准 MBR 分区槽位
 /// （off = 446 + 16*(i)，type 在 +4、start 在 +8、size 在 +12）。`img_sectors`
 /// 决定整盘大小，用于让合法条目通过越界检查
-pub(crate) fn src_from_mbr(tag: &str, entries: &[(u8, u32, u32)], img_sectors: u64) -> WriteSource {
+pub(crate) fn src_from_mbr(tag: &str, entries: &[(u8, u32, u32)], img_sectors: u64) -> TestSource<WriteSource> {
     let mut data = vec![0u8; (img_sectors * 512) as usize];
     let lba0 = &mut data[..512];
     for (i, (ty, start, size)) in entries.iter().enumerate() {
@@ -92,7 +95,7 @@ pub(crate) fn write_primary_entries(src: &mut WriteSource, ss: u64, ents: &[(u64
 
 /// 把 LBA1 主头的 HeaderSize 改成 `hdr_size` 并按新长度重算 CRC；
 /// `reserved` 为真时同时把 92..96 的非零保留字节写进去
-pub(crate) fn patch_primary_header(mut src: WriteSource, hdr_size: u32, reserved: bool) -> WriteSource {
+pub(crate) fn patch_primary_header(mut src: TestSource<WriteSource>, hdr_size: u32, reserved: bool) -> TestSource<WriteSource> {
     let ss = src.sector_size as usize;
     let mut sec = vec![0u8; ss];
     src.read_at(ss as u64, &mut sec).unwrap();

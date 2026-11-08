@@ -154,7 +154,7 @@ fn append_mountinfo(out: &mut Vec<MountEntry>, s: &str, path: &std::path::Path) 
 /// sysfs 组件名是否为 loop 设备本身（`loop0`）；`loop0p1` 这类分区名不算——
 /// 尾部不是纯数字
 #[cfg(target_os = "linux")]
-fn is_loop_name(s: &str) -> bool {
+pub(crate) fn is_loop_name(s: &str) -> bool {
     s.len() > 4 && s.starts_with("loop") && s[4..].bytes().all(|b| b.is_ascii_digit())
 }
 
@@ -870,8 +870,8 @@ mod tests {
             eprintln!("skip: root required for a real loop");
             return;
         }
-        let img = std::env::temp_dir().join(format!("diskedit_claim_{}.img", std::process::id()));
-        let _ = std::fs::remove_file(&img);
+        let dir = crate::testdir::test_dir("claim");
+        let img = dir.join("claim.img");
         std::fs::write(&img, vec![0u8; 8 * 1024 * 1024]).unwrap();
         let out = match std::process::Command::new("losetup")
             .args(["-f", "--show", "-o", "0", "--sizelimit", "4194304"])
@@ -881,7 +881,6 @@ mod tests {
             Ok(o) if o.status.success() => o,
             _ => {
                 eprintln!("skip: losetup cannot create a loop here");
-                let _ = std::fs::remove_file(&img);
                 return;
             }
         };
@@ -891,7 +890,6 @@ mod tests {
             Err(e) => {
                 eprintln!("skip: cannot claim {dev}: {e}");
                 release_loop(&dev);
-                let _ = std::fs::remove_file(&img);
                 return;
             }
         };
@@ -901,14 +899,12 @@ mod tests {
                 eprintln!("skip: {dev} reports no mapping right after the claim");
                 drop(claimed);
                 release_loop(&dev);
-                let _ = std::fs::remove_file(&img);
                 return;
             }
             Err(e) => {
                 eprintln!("skip: cannot read the mapping of {dev}: {e}");
                 drop(claimed);
                 release_loop(&dev);
-                let _ = std::fs::remove_file(&img);
                 return;
             }
         };
@@ -927,7 +923,6 @@ mod tests {
         // 先清理再断言：O_EXCL 的 fd 之前，detach 只会被推迟
         drop(second);
         release_loop(&dev);
-        let _ = std::fs::remove_file(&img);
         assert_eq!((read_rc, write_rc), (0, 0), "changing the geometry of a claimed loop must work");
         assert_eq!(verdict.unwrap(), Some(false), "a name still in the table must not be read as holding");
         assert!(registry.is_empty(), "the stale entry must have been dropped");
@@ -995,21 +990,21 @@ pub(crate) fn dm_only(holders: &[String]) -> bool {
 /// （man pid_namespaces(7)），容器内的视图给不出全部进程时，只能依赖 claim 的结论。
 /// `start_bytes` = 分区起始字节（与 find_block_partition_node 的换算基准一致）
 #[cfg(target_os = "linux")]
-pub fn ensure_idle_before_write(src: &FileSource, part: u32, start_bytes: u64, kind: WriteKind) -> Result<(), crate::outcome::Fail> {
-    use crate::outcome::Fail;
+pub fn ensure_idle_before_write(src: &FileSource, part: u32, start_bytes: u64, kind: WriteKind) -> Result<(), crate::outcome::RunOutcome> {
+    use crate::outcome::RunOutcome;
     if !src.is_block {
         return image_target_unused(src, kind);
     }
-    let node = find_block_partition_node(src, part, start_bytes).map_err(Fail::from)?;
+    let node = find_block_partition_node(src, part, start_bytes).map_err(RunOutcome::from)?;
     match probe_occupancy(&node) {
         Ok(Occupancy::Idle) => Ok(()),
-        Ok(Occupancy::Mounted) => Err(Fail::refused(format!(
+        Ok(Occupancy::Mounted) => Err(RunOutcome::refused(format!(
             "{node} is mounted — unmount before resizing (moving a mounted partition's extents invalidates the live mount)"
         ))),
-        Ok(Occupancy::ActiveSwap) => Err(Fail::refused(format!("{node} is active swap — run swapoff first"))),
+        Ok(Occupancy::ActiveSwap) => Err(RunOutcome::refused(format!("{node} is active swap — run swapoff first"))),
         // 纯扩容放行 DM：分区表变大不改变 dm 栈已映射的扇区（见 [`dm_only`]）
         Ok(Occupancy::Held(holders)) if kind == WriteKind::Extend && dm_only(&holders) => Ok(()),
-        Ok(Occupancy::Held(holders)) => Err(Fail::refused(format!(
+        Ok(Occupancy::Held(holders)) => Err(RunOutcome::refused(format!(
             "{node} is held by {} — deactivate that stack first (the write would change bytes the holder still maps)",
             holders.join(", ")
         ))),
@@ -1019,12 +1014,12 @@ pub fn ensure_idle_before_write(src: &FileSource, part: u32, start_bytes: u64, k
         {
             Ok(())
         }
-        Ok(Occupancy::LoopBacked { via, holders }) => Err(Fail::refused(format!(
+        Ok(Occupancy::LoopBacked { via, holders }) => Err(RunOutcome::refused(format!(
             "{node} is the backing of {via}{} — unmount/swapoff/deactivate that loop first \
              (the write would change bytes the loop still maps)",
             if holders.is_empty() { String::new() } else { format!(" (held by {})", holders.join(", ")) }
         ))),
-        Err(e) => Err(Fail::infra(format!(
+        Err(e) => Err(RunOutcome::refused(format!(
             "cannot confirm {node} is unmounted: {e} — refusing (fail-closed)"
         ))),
     }
@@ -1033,27 +1028,27 @@ pub fn ensure_idle_before_write(src: &FileSource, part: u32, start_bytes: u64, k
 /// 镜像目标的占用判定：目标级，不区分分区。`kind` 只在 Held 分支上参与——
 /// Extend 且仅 dm 持有时放行（LVM PV / dm-crypt 的增长语义）
 #[cfg(target_os = "linux")]
-fn image_target_unused(src: &FileSource, kind: WriteKind) -> Result<(), crate::outcome::Fail> {
-    use crate::outcome::Fail;
+fn image_target_unused(src: &FileSource, kind: WriteKind) -> Result<(), crate::outcome::RunOutcome> {
+    use crate::outcome::RunOutcome;
     match image_loop_occupancy(src) {
         Ok(None) => Ok(()),
-        Ok(Some(LoopOccupancy::Live(dev))) => Err(Fail::refused(format!(
+        Ok(Some(LoopOccupancy::Live(dev))) => Err(RunOutcome::refused(format!(
             "{dev} is a loop onto this image and is in use — unmount/swapoff it first (editing the image changes a live filesystem)"
         ))),
         Ok(Some(LoopOccupancy::Held { loopdev: _, holders }))
             if kind == WriteKind::Extend && dm_only(&holders) => Ok(()),
-        Ok(Some(LoopOccupancy::Held { loopdev, holders })) => Err(Fail::refused(format!(
+        Ok(Some(LoopOccupancy::Held { loopdev, holders })) => Err(RunOutcome::refused(format!(
             "{loopdev} is a loop onto this image and is held by {} — deactivate that stack first (editing the image changes bytes the holder still maps)",
             holders.join(", ")
         ))),
-        Ok(Some(LoopOccupancy::KernelBusy { loopdev })) => Err(Fail::refused(format!(
+        Ok(Some(LoopOccupancy::KernelBusy { loopdev })) => Err(RunOutcome::refused(format!(
             "{loopdev} is a loop onto this image and the kernel refuses an exclusive open (EBUSY) — \
              it is still in use (mounted, active swap, or claimed by another stack); release it first"
         ))),
-        Ok(Some(LoopOccupancy::Unclaimable { loopdev, why })) => Err(Fail::infra(format!(
+        Ok(Some(LoopOccupancy::Unclaimable { loopdev, why })) => Err(RunOutcome::refused(format!(
             "cannot take an exclusive claim on {loopdev}, a loop onto this image: {why} — refusing (fail-closed)"
         ))),
-        Err(e) => Err(Fail::infra(format!(
+        Err(e) => Err(RunOutcome::refused(format!(
             "cannot confirm no loop has this image in use: {e} — refusing (fail-closed)"
         ))),
     }
@@ -1073,7 +1068,7 @@ fn image_target_unused(src: &FileSource, kind: WriteKind) -> Result<(), crate::o
 /// 块设备的整盘 O_EXCL 已在打开时挡住挂载 / swap / 他人的独占打开，这里的逐分区探测
 /// 是纵深防御，覆盖不守约定的并发写者留下的内核视图
 #[cfg(target_os = "linux")]
-pub fn ensure_table_write_idle(src: &FileSource) -> Result<(), crate::outcome::Fail> {
+pub fn ensure_table_write_idle(src: &FileSource) -> Result<(), crate::outcome::RunOutcome> {
     if src.is_block {
         return ensure_whole_device_idle(src);
     }
@@ -1083,26 +1078,26 @@ pub fn ensure_table_write_idle(src: &FileSource) -> Result<(), crate::outcome::F
 /// 块设备：盘节点自身与 sysfs 列出的每个分区节点都须空闲。分区列表读不出来
 /// 按探测失败上抛——"确认不了哪些分区在用"不能读成"没有分区在用"
 #[cfg(target_os = "linux")]
-fn ensure_whole_device_idle(src: &FileSource) -> Result<(), crate::outcome::Fail> {
-    use crate::outcome::Fail;
-    let disk = block_disk_name(src).map_err(Fail::from)?;
+fn ensure_whole_device_idle(src: &FileSource) -> Result<(), crate::outcome::RunOutcome> {
+    use crate::outcome::RunOutcome;
+    let disk = block_disk_name(src).map_err(RunOutcome::from)?;
     let sysdir = Path::new("/sys/block").join(&disk);
     // 盘节点用用户给出的路径：by-id / mapper 之类的别名在 /dev/<sysfs 名> 下不一定存在。
     // 它必须仍指 fd 打开的那台设备——探测按路径 stat，指错了设备就是用另一台的空闲
     // 状态给本次写入放行（判据与 fsops 其余节点解析同一份）
     crate::dev::ensure_node_is_device(Path::new(&src.path), &sysdir).map_err(|e| {
-        Fail::infra(format!(
+        RunOutcome::no_mutation(format!(
             "{} does not denote the device sysfs lists as {disk}: {e} — refusing (fail-closed)",
             src.path.display()
         ))
     })?;
     let mut nodes = vec![src.path.to_string_lossy().into_owned()];
     let rd = std::fs::read_dir(&sysdir).map_err(|e| {
-        Fail::infra(format!("cannot list {} to confirm no partition is in use: {e} — refusing (fail-closed)", sysdir.display()))
+        RunOutcome::no_mutation(format!("cannot list {} to confirm no partition is in use: {e} — refusing (fail-closed)", sysdir.display()))
     })?;
     for entry in rd {
         let entry = entry.map_err(|e| {
-            Fail::infra(format!("cannot list {} to confirm no partition is in use: {e} — refusing (fail-closed)", sysdir.display()))
+            RunOutcome::no_mutation(format!("cannot list {} to confirm no partition is in use: {e} — refusing (fail-closed)", sysdir.display()))
         })?;
         let path = entry.path();
         // sysfs 里同层混着 uevent/size/holders 等文件与 queue 等目录；只对目录取 partition。
@@ -1112,7 +1107,7 @@ fn ensure_whole_device_idle(src: &FileSource) -> Result<(), crate::outcome::Fail
             Ok(_) => continue,
             Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
             Err(e) => {
-                return Err(Fail::infra(format!(
+                return Err(RunOutcome::no_mutation(format!(
                     "cannot stat {} to tell whether it is a partition: {e} — refusing (fail-closed)",
                     path.display()
                 )));
@@ -1124,7 +1119,7 @@ fn ensure_whole_device_idle(src: &FileSource) -> Result<(), crate::outcome::Fail
                 // 节点名从 sysfs 目录名推得，实际落点由设备号决定：同层存在另一台设备
                 // 的同名节点时，探测会查错设备。按该条目自己的 sysfs 设备号核对
                 crate::dev::ensure_node_is_device(Path::new(&dev), &path).map_err(|e| {
-                    Fail::infra(format!(
+                    RunOutcome::no_mutation(format!(
                         "{dev} does not denote the partition sysfs lists under {}: {e} — refusing (fail-closed)",
                         sysdir.display()
                     ))
@@ -1133,7 +1128,7 @@ fn ensure_whole_device_idle(src: &FileSource) -> Result<(), crate::outcome::Fail
             }
             Err(e) if e.kind() == io::ErrorKind::NotFound => {}
             Err(e) => {
-                return Err(Fail::infra(format!(
+                return Err(RunOutcome::refused(format!(
                     "cannot stat {} to tell whether it is a partition: {e} — refusing (fail-closed)",
                     path.join("partition").display()
                 )));
@@ -1141,38 +1136,38 @@ fn ensure_whole_device_idle(src: &FileSource) -> Result<(), crate::outcome::Fail
         }
     }
     let mounts = read_mounts().map_err(|e| {
-        Fail::infra(format!("cannot read mount tables to confirm {disk} is unused: {e} — refusing (fail-closed)"))
+        RunOutcome::refused(format!("cannot read mount tables to confirm {disk} is unused: {e} — refusing (fail-closed)"))
     })?;
     let swaps = std::fs::read_to_string("/proc/swaps").map_err(|e| {
-        Fail::infra(format!("cannot read /proc/swaps to confirm {disk} is unused: {e} — refusing (fail-closed)"))
+        RunOutcome::refused(format!("cannot read /proc/swaps to confirm {disk} is unused: {e} — refusing (fail-closed)"))
     })?;
     for node in nodes {
         match probe_occupancy_with(&mounts, &swaps, &node) {
             Ok(Occupancy::Idle) => {}
             Ok(Occupancy::Mounted) => {
-                return Err(Fail::refused(format!(
+                return Err(RunOutcome::refused(format!(
                     "{node} is mounted — unmount it before rewriting the partition table"
                 )));
             }
             Ok(Occupancy::ActiveSwap) => {
-                return Err(Fail::refused(format!(
+                return Err(RunOutcome::refused(format!(
                     "{node} is active swap — run swapoff before rewriting the partition table"
                 )));
             }
             Ok(Occupancy::Held(holders)) => {
-                return Err(Fail::refused(format!(
+                return Err(RunOutcome::refused(format!(
                     "{node} is held by {} — deactivate that stack first (the new table would contradict the live stack)",
                     holders.join(", ")
                 )));
             }
             Ok(Occupancy::LoopBacked { via, .. }) => {
-                return Err(Fail::refused(format!(
+                return Err(RunOutcome::refused(format!(
                     "{node} is the backing of {via}, which is in use — unmount/swapoff/deactivate that loop first \
                      (the new table would contradict the layout the loop reports)"
                 )));
             }
             Err(e) => {
-                return Err(Fail::infra(format!(
+                return Err(RunOutcome::no_mutation(format!(
                     "cannot confirm {node} is unused: {e} — refusing (fail-closed)"
                 )));
             }
@@ -1182,13 +1177,13 @@ fn ensure_whole_device_idle(src: &FileSource) -> Result<(), crate::outcome::Fail
 }
 
 #[cfg(not(target_os = "linux"))]
-pub fn ensure_idle_before_write(_src: &FileSource, _part: u32, _start_bytes: u64, _kind: WriteKind) -> Result<(), crate::outcome::Fail> {
+pub fn ensure_idle_before_write(_src: &FileSource, _part: u32, _start_bytes: u64, _kind: WriteKind) -> Result<(), crate::outcome::RunOutcome> {
     Ok(())
 }
 
 /// 非 Linux 存根：该平台上没有 loop 枚举与 /proc 挂载表，占用闸只存在于 Linux
 #[cfg(not(target_os = "linux"))]
-pub fn ensure_table_write_idle(_src: &FileSource) -> Result<(), crate::outcome::Fail> {
+pub fn ensure_table_write_idle(_src: &FileSource) -> Result<(), crate::outcome::RunOutcome> {
     Ok(())
 }
 
@@ -1350,13 +1345,13 @@ pub(crate) fn attach_loop(src: &FileSource, off: u64, len: u64) -> Result<String
 ///
 /// 返回值只描述 `losetup -d` 的结局：调用点据此把"映射可能仍占着"记成进程级待办，
 /// 而不是让它止步于一行 warning——那会让"FS 步成功 + loop 未解绑"以 0 退出
-pub(crate) fn detach_loop(loopdev: &str) -> ReleaseOutcome {
+pub(crate) fn detach_loop(loopdev: &str) -> ReleaseRunOutcome {
     let release = match tool_command("losetup") {
-        Err(e) => ReleaseOutcome::Unavailable(e.to_string()),
+        Err(e) => ReleaseRunOutcome::Unavailable(e.to_string()),
         Ok(mut cmd) => match cmd.arg("-d").arg(loopdev).status() {
-            Ok(st) if st.success() => ReleaseOutcome::Released,
-            Ok(st) => ReleaseOutcome::Failed(crate::fsops::describe_exit(&st)),
-            Err(e) => ReleaseOutcome::Unavailable(e.to_string()),
+            Ok(st) if st.success() => ReleaseRunOutcome::Released,
+            Ok(st) => ReleaseRunOutcome::Failed(crate::fsops::describe_exit(&st)),
+            Err(e) => ReleaseRunOutcome::Unavailable(e.to_string()),
         },
     };
     if let Ok(mut udevadm) = tool_command("udevadm") {
@@ -1372,7 +1367,7 @@ pub(crate) fn detach_loop(loopdev: &str) -> ReleaseOutcome {
 
 /// 进程级资源释放失败清单。`Drop` 拿不到调用方的返回值，也未参与 `Result` 的构造，
 /// 但它描述的"资源仍被占用"必须能影响退出码——调用链末端（`main`）统一取出并浮出，
-/// 成功路径据此降级为"完成但有待办"（20）。只在进程内生效：本工具一次运行一个命令
+/// 成功路径据此降级为"完成但有待办"（5）。只在进程内生效：本工具一次运行一个命令
 static RELEASE_LEAKS: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
 
 pub(crate) fn note_release_leak(msg: String) {
@@ -1385,9 +1380,9 @@ pub(crate) fn take_release_leaks() -> Vec<String> {
 }
 
 /// 释放动作的失败描述；`Released` 为 `None`
-pub(crate) fn release_failure(outcome: ReleaseOutcome) -> Option<String> {
+pub(crate) fn release_failure(outcome: ReleaseRunOutcome) -> Option<String> {
     match outcome {
-        ReleaseOutcome::Released => None,
-        ReleaseOutcome::Failed(why) | ReleaseOutcome::Unavailable(why) => Some(why),
+        ReleaseRunOutcome::Released => None,
+        ReleaseRunOutcome::Failed(why) | ReleaseRunOutcome::Unavailable(why) => Some(why),
     }
 }

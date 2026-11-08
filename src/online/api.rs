@@ -5,9 +5,9 @@ use super::*;
 /// 在线 resize 总入口（resizefs 挂载点形式用）。`size`：None = 扩满现分区；Some(字节) = 绝对新尺寸
 /// （> 现分区与 < 现分区都被拒绝：本入口不改分区表，缩容需要分区跟着缩，属 `resize` 的职责）。
 /// 请求不含锚定语义，故目标在锁下原样给出。
-/// 结果统一为 Outcome（退出码只在 outcome 模块映射）：10=拒绝（未动盘）/
-/// 20=布局已写但后置条件或内核视图未跟上 / 30=执行失败
-pub fn resize_online(mountpoint: &Path, size: Option<u64>) -> Outcome {
+/// 结果统一为 RunOutcome（退出码只在 outcome 模块映射）：3=拒绝（未动盘）/
+/// 5=布局已写但后置条件或内核视图未跟上 / 6=平台能力不支持
+pub fn resize_online(mountpoint: &Path, size: Option<u64>) -> RunOutcome {
     flow::resize_online(mountpoint, move |_| Ok(size), flow::TablePolicy::FilesystemOnly)
 }
 
@@ -18,8 +18,8 @@ pub fn resize_online(mountpoint: &Path, size: Option<u64>) -> Outcome {
 /// 大于现分区时允许先扩分区表（本入口的职责包含分区几何）
 pub fn resize_online_planned(
     mountpoint: &Path,
-    decide: impl FnOnce(&FileSource) -> Result<Option<u64>, Fail>,
-) -> Outcome {
+    decide: impl FnOnce(&FileSource) -> Result<Option<u64>, RunOutcome>,
+) -> RunOutcome {
     flow::resize_online(mountpoint, decide, flow::TablePolicy::WithTable)
 }
 
@@ -35,8 +35,8 @@ pub fn resize_online_planned(
 pub fn resize_pv_online(
     disk_name: &str,
     pno: u32,
-    decide: impl FnOnce(&FileSource) -> Result<Option<u64>, Fail>,
-    before_write: impl FnOnce(&FileSource, u64, u64, u64) -> Result<(), Fail>,
-) -> (Outcome, u64, Option<pv::LockedPv>) {
+    decide: impl FnOnce(&FileSource) -> Result<Option<u64>, RunOutcome>,
+    before_write: impl FnOnce(&FileSource, u64, u64, u64) -> Result<(), RunOutcome>,
+) -> (RunOutcome, u64, Option<pv::LockedPv>) {
     resize_pv(disk_name, pno, decide, before_write)
 }

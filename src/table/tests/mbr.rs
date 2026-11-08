@@ -3,13 +3,13 @@ use super::support::*;
 
 /// 隐形条目（type 字节非零但 size 为零）在解析侧按空槽处理：resize_mdos_entry
 /// 不得把它当真实分区改写——那是凭空造出一条解析器看不见的分区，操作者无从核对。
-/// 与 set_mdos_boot / set_mdos_hidden / set_mdos_type 同判据同文案
+/// 与 set_mdos_hidden / set_mdos_type 同判据同文案
 #[test]
 pub(crate) fn resize_mdos_entry_refuses_invisible_type_only_entry() {
     let mut src = src_from_mbr("mdosinv", &[(0x83, 2048, 0)], 32768);
     let e = resize_mdos_entry(&mut src, 1, 1000)
         .expect_err("a type-only MBR entry must be refused by resize_mdos_entry");
-    assert!(matches!(&e, Fail::Refused(m) if m.contains("invisible to the parser")), "{e:?}");
+    assert!(matches!(&e, RunOutcome::Refused(m) if m.contains("invisible to the parser")), "{e:?}");
     // 正常条目（type≠0 且 size≠0）不受影响——缩容仍走既有路径
     let mut ok = src_from_mbr("mdosok", &[(0x83, 2048, 2048)], 32768);
     assert!(resize_mdos_entry(&mut ok, 1, 4096).is_ok(), "a real entry must still be resizable");
@@ -56,22 +56,23 @@ pub(crate) fn msdos_entry_start_zero_is_damaged_and_refused() {
 }
 
 /// MBR 的 StartLBA/SizeInLBA 是 u32 字段：超出表示范围必须拒绝。
-/// 少了这条检查，`start as u32` 会静默截断成一个指向别处的条目（落盘即损坏且不报错）
+/// 少了这条检查，`start as u32` 会静默截断成一个指向别处的条目（落盘即损坏且不报错）。
+///
+/// 判定在纯函数里（`add_mdos_entry_image`），所以这里直接把 3 TiB 的**容器扇区数**
+/// 喂给它：真实夹具造不出那么大的镜像，而写路径要先读三扇区摘要（`TableStamp::head_tail`），
+/// 把 `size` 虚拟放大只会让用例在到达上限判定之前短读——这条用例此前就是这样红的。
 #[test]
 pub(crate) fn add_mdos_entry_rejects_beyond_32bit_lba() {
-    // 8KiB 让 4Kn 候选的 LBA1 探测（偏移 4096）有字节可读；下面把 size 改成 3TiB 只是
-    // 为了让 u32 上限内的请求落在容器内，文件本身不必真有那么大
-    let mut data = vec![0u8; 8192];
-    data[510] = 0x55;
-    data[511] = 0xAA;
-    let mut src = src_from("mdos32", data);
-    // 3 TiB 容器：扇区数超过 u32，但 LBA0 只需前 512 字节（真实文件无需那么大）
-    src.size = 3 << 40;
+    let mut lba0 = vec![0u8; 512];
+    lba0[510] = 0x55;
+    lba0[511] = 0xAA;
+    let total = (3u64 << 40) / 512;
     let over = u32::MAX as u64 + 1;
-    let e = add_mdos_entry(&mut src, over, over + 2047, 0x83).unwrap_err();
-    assert!(matches!(e, Fail::Refused(_)), "must be refused, not truncated: {e:?}");
-    // 上限内的值仍应照常写入（新检查不得把合法调用一并拒掉）
-    assert_eq!(add_mdos_entry(&mut src, 2048, 4095, 0x83).unwrap(), 1);
+    let e = add_mdos_entry_image(&lba0, None, over, over + 2047, 0x83, total).unwrap_err();
+    assert!(matches!(e, RunOutcome::Refused(_)), "must be refused, not truncated: {e:?}");
+    // 上限内的值仍应照常写入（这条检查不得把合法调用一并拒掉）
+    let mut src = src_from_mbr("mdos32_ok", &[], 32768);
+    assert_eq!(add_mdos_entry(&mut src, 2048, 4095, 0x83).expect("an in-range entry must be written"), 1);
 }
 
 #[test]
@@ -101,7 +102,7 @@ pub(crate) fn msdos_type_set_and_guards() {
     // 0x00 / 扩展容器类型双向拒绝，且不落盘
     for bad in [0x00u8, 0x05, 0x0F, 0x85] {
         let e = set_mdos_type(&mut src, 1, bad).unwrap_err();
-        assert!(matches!(e, Fail::Refused(_)), "0x{bad:02X} must be refused: {e:?}");
+        assert!(matches!(e, RunOutcome::Refused(_)), "0x{bad:02X} must be refused: {e:?}");
     }
     assert_eq!(parse_mbr(&src).unwrap().unwrap()[0].os_type, 0x07);
     // 空槽拒绝
@@ -113,13 +114,13 @@ pub(crate) fn msdos_type_set_and_guards() {
     lba0[446 + 4] = 0x05;
     src.write_at(0, &lba0).unwrap();
     let e = set_mdos_type(&mut src, 1, 0x07).unwrap_err();
-    assert!(matches!(e, Fail::Refused(_)), "existing extended container must be refused: {e:?}");
+    assert!(matches!(e, RunOutcome::Refused(_)), "existing extended container must be refused: {e:?}");
     assert_eq!(parse_mbr(&src).unwrap().unwrap()[0].os_type, 0x05);
     // 既有条目是 GPT 保护记录：类型字节承担结构语义，与 delete_mdos_entry 同判据
     lba0[446 + 4] = 0xEE;
     src.write_at(0, &lba0).unwrap();
     let e = set_mdos_type(&mut src, 1, 0x07).unwrap_err();
-    assert!(matches!(e, Fail::Refused(_)), "existing protective record must be refused: {e:?}");
+    assert!(matches!(e, RunOutcome::Refused(_)), "existing protective record must be refused: {e:?}");
     let mut raw = vec![0u8; 512];
     src.read_at(0, &mut raw).unwrap();
     assert_eq!(raw[446 + 4], 0xEE, "a refused write must leave the type byte unchanged");
@@ -135,7 +136,7 @@ pub(crate) fn resize_mdos_entry_rejects_beyond_disk_end() {
     add_mdos_entry(&mut src, 63, 200, 0x83).unwrap();
     // 63 + 300 > 300 盘尾：拒绝且不落盘
     let e = resize_mdos_entry(&mut src, 1, 300).unwrap_err();
-    assert!(matches!(e, Fail::Refused(_)), "must be refused: {e:?}");
+    assert!(matches!(e, RunOutcome::Refused(_)), "must be refused: {e:?}");
     // 仍在盘内的扩容照常写入（新检查不得把合法调用一并拒掉）
     resize_mdos_entry(&mut src, 1, 200).unwrap();
     assert_eq!(parse_mbr(&src).unwrap().unwrap()[0].size_lba, 200);
@@ -153,7 +154,7 @@ pub(crate) fn resize_mdos_entry_rejects_neighbor_overlap() {
     resize_mdos_entry(&mut src, 1, 137).unwrap();
     // 盖过分区 2 起点：拒绝且不落盘
     let e = resize_mdos_entry(&mut src, 1, 138).unwrap_err();
-    assert!(matches!(e, Fail::Refused(_)), "must be refused: {e:?}");
+    assert!(matches!(e, RunOutcome::Refused(_)), "must be refused: {e:?}");
     assert_eq!(parse_mbr(&src).unwrap().unwrap()[0].size_lba, 137);
 }
 
@@ -373,6 +374,6 @@ pub(crate) fn mdos_hidden_rejects_unpaired_type() {
     create_mbr(&mut src, false).unwrap();
     add_mdos_entry(&mut src, 63, 200, 0x83).unwrap(); // Linux data：无 hidden 对应码
     let e = set_mdos_hidden(&mut src, 1, true).expect_err("0x83 must be refused");
-    assert!(matches!(&e, Fail::Refused(m) if m.contains("no hidden counterpart")), "{e:?}");
+    assert!(matches!(&e, RunOutcome::Refused(m) if m.contains("no hidden counterpart")), "{e:?}");
     assert!(set_mdos_hidden(&mut src, 1, false).is_err(), "0x83 must be refused in both directions");
 }

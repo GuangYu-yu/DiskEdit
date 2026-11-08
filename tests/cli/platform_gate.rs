@@ -32,8 +32,10 @@ fn run(args: &[&str]) -> (i32, String, String) {
     )
 }
 
-/// 每条会改变目标的命令在非 Linux 上都必须停在统一能力门：退出 30、专属文案、
-/// 目标字节不变、目录里没有新增伴随文件。每个用例独立目录，一条被旧实现写坏
+const CAPABILITY_GAP: &str = "needs the";
+
+/// 需要写侧/证据侧原语的命令在非 Linux 上必须停在能力门：退出 6、专属文案、
+/// 目标字节不变、目录里没有新增伴随文件。每个用例独立目录，一条用例写坏
 /// 不会污染下一个用例的证据
 fn assert_refused(cmd: &[&str], dir: &std::path::Path) {
     std::fs::create_dir_all(dir).unwrap();
@@ -43,10 +45,10 @@ fn assert_refused(cmd: &[&str], dir: &std::path::Path) {
     let entries_before = dir_entries(dir);
 
     let (code, _out, err) = run(cmd);
-    assert_eq!(code, 30, "`{cmd:?}` must stop at the platform gate: {err}");
+    assert_eq!(code, 6, "`{cmd:?}` must stop at the capability gate: {err}");
     assert!(
-        err.contains("does not support safe disk writes"),
-        "the refusal must be the platform-capability message, not another failure: {err}"
+        err.contains(CAPABILITY_GAP),
+        "the refusal must name the missing primitive, not another failure: {err}"
     );
     assert!(err.contains("Nothing was written"), "the refusal must state the no-write promise: {err}");
     assert_eq!(std::fs::read(&img).unwrap(), before, "`{cmd:?}` must not change target bytes");
@@ -62,12 +64,10 @@ fn table_and_data_writers_are_refused_on_this_platform() {
         ("add", &["add"]),
         ("delete", &["delete"]),
         ("set", &["set"]),
-        ("create", &["create"]),
         ("resize", &["resize"]),
         ("move", &["move"]),
         ("copy", &["copy"]),
         ("resize-part", &["resize-part"]),
-        ("apply", &["apply"]),
     ];
     for (name, args) in cases {
         let dir = base.join(name.replace('-', "_"));
@@ -77,15 +77,13 @@ fn table_and_data_writers_are_refused_on_this_platform() {
         let mut full: Vec<&str> = args.to_vec();
         match *name {
             "new" => full.extend([img_s.as_str(), "--yes"]),
-            "add" => full.extend([img_s.as_str(), "--start", "8192", "--end", "10239"]),
+            "add" => full.extend([img_s.as_str(), "1M", "--yes"]),
             "delete" => full.extend([p.as_str(), "--yes"]),
-            "set" => full.extend([p.as_str(), "name", "renamed"]),
-            "create" => full.extend([img_s.as_str(), "--size", "1M"]),
-            "resize" => full.extend([p.as_str(), "+1M", "--no-fs"]),
-            "move" => full.extend([p.as_str(), "--start", "4096"]),
-            "copy" => full.extend([p.as_str(), "--start", "8192"]),
-            "resize-part" => full.extend([p.as_str(), "--start", "4096", "--end", "8191", "--no-fs"]),
-            "apply" => full.extend([img_s.as_str(), "--grow", "1", "--no-fs"]),
+            "set" => full.extend([p.as_str(), "name", "renamed", "--yes"]),
+            "resize" => full.extend([p.as_str(), "+1M", "--no-fs", "--yes"]),
+            "move" => full.extend([p.as_str(), "--start", "4096", "--chunk", "4", "--yes"]),
+            "copy" => full.extend([p.as_str(), "--start", "8192", "--chunk", "4", "--yes"]),
+            "resize-part" => full.extend([p.as_str(), "--end", "8191", "--yes"]),
             _ => unreachable!(),
         }
         assert_refused(&full, &dir);
@@ -111,7 +109,8 @@ fn external_tool_and_recovery_writers_are_refused_on_this_platform() {
         let mut full: Vec<&str> = args.to_vec();
         match *name {
             "mkfs" => full.extend([p.as_str(), "ext4", "--yes"]),
-            "check" | "resizefs" => full.extend([p.as_str()]),
+            "check" => full.extend([p.as_str()]),
+            "resizefs" => full.extend([p.as_str(), "--yes"]),
             "undo" => full.extend([img_s.as_str(), "--yes"]),
             _ => unreachable!(),
         }
@@ -120,11 +119,10 @@ fn external_tool_and_recovery_writers_are_refused_on_this_platform() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
-/// 回归：busy 文案把 abandon 指为唯一出路，所以那条出路必须在本平台真的可用。
-/// 放弃的只是回滚能力：目标字节不变、记录字节原样保留到 `.abandoned`；现场释放后
-/// 写盘命令不再被"未完成作业"挡住——本平台上改由能力门拒绝，并说清缺的是平台保证
+/// `abandon` 只改名伴随文件、盘面一个字节不写，但它需要 `CompanionFile`
+/// （`AtomicReplace` 非 Linux 不支持），故退 6。记录与目标都必须原样保留
 #[test]
-fn abandon_is_admitted_and_releases_the_scene_on_this_platform() {
+fn abandon_is_refused_like_every_other_command_on_this_platform() {
     let dir = std::env::temp_dir().join(format!("diskedit_gate_ab_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
@@ -132,32 +130,23 @@ fn abandon_is_admitted_and_releases_the_scene_on_this_platform() {
     writable_gpt(&img);
     let img_s = img.to_string_lossy().into_owned();
     let journal = dir.join("disk.img.diskedit.journal");
-    let abandoned = dir.join("disk.img.diskedit.journal.abandoned");
     let record = b"an unreadable journal left behind";
     std::fs::write(&journal, record).unwrap();
     let before = std::fs::read(&img).unwrap();
 
-    let (code, out, err) = run(&["abandon", &img_s, "--yes"]);
-    assert_eq!(code, 0, "abandon must be admitted on this platform: {err}");
-    assert!(out.contains("abandoned 1 recovery record(s)"), "{out}");
-    assert!(!journal.exists(), "the active name must be released");
-    assert_eq!(std::fs::read(&abandoned).unwrap(), record, "the record bytes must be kept");
+    let (code, _out, err) = run(&["abandon", &img_s]);
+    assert_eq!(code, 6, "abandon must stop at the same gate: {err}");
+    assert!(err.contains(CAPABILITY_GAP), "{err}");
+    assert_eq!(std::fs::read(&journal).unwrap(), record, "the active record must keep its name");
     assert_eq!(std::fs::read(&img).unwrap(), before, "abandon must not touch target bytes");
-
-    let (code, _, err) = run(&["add", &img_s, "--start", "8192", "--end", "10239"]);
-    assert!(!err.contains("owns this target"), "the unfinished operation must be gone: {err}");
-    assert_eq!(code, 30, "{err}");
-    assert!(
-        err.contains("does not support safe disk writes"),
-        "what remains missing is the platform's write guarantee, not the recovery scene: {err}"
-    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// 只读命令在能力门上照常放行：`info` 与 `plan` 都不改目标、不建 ckpt/journal。
-/// `plan` 走 open_target_ro，连锁也不取，所以目录在两次运行前后必须完全一致
+/// `info` / `plan` 只声明 `ReadOnly`，
+/// 矩阵在「非 Linux × 镜像」这一格放行它们。它们不写目标、不建任何伴随文件，
+/// 也不承诺恢复——所谓「看似可恢复的假象」只适用于写/证据命令，那些仍被门拒
 #[test]
-fn info_and_plan_are_allowed_and_read_only() {
+fn info_and_plan_run_on_images_and_write_nothing() {
     let dir = std::env::temp_dir().join(format!("diskedit_gate_ro_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
@@ -167,16 +156,32 @@ fn info_and_plan_are_allowed_and_read_only() {
     let entries_before = dir_entries(&dir);
     let img_s = img.to_str().unwrap();
 
-    let (code, out, err) = run(&["info", img_s]);
-    assert_eq!(code, 0, "info must remain available: {err}");
-    let v: serde_json::Value = serde_json::from_str(out.trim()).expect("info must emit valid JSON");
-    assert_eq!(v["label"], "gpt");
-
-    let (code, out, err) = run(&["plan", img_s, "--grow", "1"]);
-    assert_eq!(code, 0, "plan must remain available: {err}");
-    assert!(!out.is_empty(), "plan must produce a plan: {err}");
+    for cmd in [vec!["info", img_s], vec!["plan", img_s]] {
+        let (code, out, err) = run(&cmd);
+        assert_eq!(code, 0, "`{cmd:?}` is read-only and must be admitted: {err}");
+        assert!(!out.is_empty(), "`{cmd:?}` must report the layout: {err}");
+    }
 
     assert_eq!(std::fs::read(&img).unwrap(), before, "info/plan must not modify the image");
     assert_eq!(dir_entries(&dir), entries_before, "info/plan must leave no lock/journal/checkpoint");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// 帮助是元命令：`--help` 与 `help` 在参数层直接退出，不经过能力门，
+/// 因此在任何平台上都按成功返回；未知主题仍是用法错误
+#[test]
+fn help_is_not_gated_by_the_platform() {
+    for args in [
+        vec!["--help"],
+        vec!["help"],
+        vec!["help", "info"],
+        vec!["--help", "info"],
+        vec!["info", "--help"],
+    ] {
+        let (code, out, err) = run(&args);
+        assert_eq!(code, 0, "`{args:?}` must succeed on every platform: {err}");
+        assert!(!out.is_empty(), "`{args:?}` must print help: {err}");
+    }
+    let (code, _out, err) = run(&["help", "nosuchcmd"]);
+    assert_eq!(code, 2, "an unknown help topic stays a usage error: {err}");
 }

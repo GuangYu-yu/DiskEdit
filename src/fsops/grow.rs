@@ -8,7 +8,7 @@ use super::*;
 /// 不自己推算 overlay 的偏移
 pub struct GrowTarget {
     pub scope: DeviceScope,
-    pub fstype: FsKind,
+    pub fstype: ContentKind,
 }
 
 impl GrowTarget {
@@ -40,7 +40,7 @@ pub enum Growable {
     /// `None` = 未识别），供调用方分辨情形与措辞——"未识别"不等于"里面没有文件系统"，
     /// 措辞不得替它下这个结论。PV 有承担者（pvresize 链，见 `resize --grow-lv`）；
     /// 未识别没有，故分区层默认拒绝它
-    NoFilesystem(Option<FsKind>),
+    NoFilesystem(Option<ContentKind>),
 }
 
 /// 这段区域里能扩的文件系统是哪个 —— **唯一的判据**。写盘前的 preflight（能不能做、工具是否
@@ -49,8 +49,8 @@ pub enum Growable {
 /// `Err` 是"认得出却不接线"（含只有只读根、没有尾部 RW 层的 squashfs/erofs）或设备读不出来
 pub fn grow_target_at(src: &FileSource, part: u32, base: u64, len: u64) -> Result<Growable, FsError> {
     let probe = crate::fsid::probe_fs(src, base, len).map_err(FsError::from)?;
-    let fstype = probe.kind;
-    if matches!(fstype, Some(FsKind::Squashfs | FsKind::Erofs)) {
+    let content = probe.content;
+    if let ContentKind::Filesystem(outer @ (FsKind::Squashfs | FsKind::Erofs)) = content {
         // OpenWrt combined 布局：同分区头部只读根 + 尾部 RW overlay（fstools rootdisk.c）。
         // fstools 只把 RW 层造成 ext4/f2fs（common.c `use_f2fs()`：内核命令行
         // fstools_overlay_fstype 可强制 ext4/f2fs，auto 时按剩余空间与 F2FS_MINSIZE 决定），
@@ -58,8 +58,7 @@ pub fn grow_target_at(src: &FileSource, part: u32, base: u64, len: u64) -> Resul
         let rel = crate::fsid::overlay_offset_at(src, base, len)
             .map_err(FsError::from)?
             .ok_or_else(|| FsError::unsupported(format!(
-                "{} rootfs without a trailing RW overlay layer — nothing to grow",
-                fs_name(fstype)
+                "{outer} rootfs without a trailing RW overlay layer — nothing to grow"
             )))?;
         if rel >= len {
             return Err(FsError::invalid("overlay offset beyond partition end"));
@@ -72,19 +71,20 @@ pub fn grow_target_at(src: &FileSource, part: u32, base: u64, len: u64) -> Resul
         })?;
         // 区间量本就是字节，直接传给按字节区间识别的 identify
         let inner = crate::fsid::identify(src, inner_base, len - rel).map_err(FsError::from)?;
-        let Some(inner_kind) = inner else {
-            // 内层没认出签名有三种成因，`identify` 的 `None` 区分不了：① 尾部区域不足一个魔数
+        let ContentKind::Filesystem(inner_kind @ (FsKind::Ext | FsKind::F2fs)) = inner else {
+            // 内层没认出签名有三种成因，`identify` 的 `Unknown` 区分不了：① 尾部区域不足一个魔数
             // （`overlay_offset_at` 对 `len - rel` 没有下界保证）；② 是格式化过的格式但本工具
             // 认不出；③ 确实尚未格式化。本命令在这三种下都不写这段区域，故结论同为"无需处理"；
             // 但**结论里不能夹带成因**——说成"未格式化"会把 ①② 也说成空区域
-            return Ok(Growable::OverlayPending);
+            return Ok(match inner {
+                ContentKind::Unknown => Growable::OverlayPending,
+                other => {
+                    return Err(FsError::unsupported(format!(
+                        "overlay layer identified as {other} — only ext/f2fs overlays are growable"
+                    )));
+                }
+            });
         };
-        if !matches!(inner_kind, FsKind::Ext | FsKind::F2fs) {
-            return Err(FsError::unsupported(format!(
-                "overlay layer identified as {} — only ext/f2fs overlays are growable",
-                inner_kind.as_str()
-            )));
-        }
         if src.is_block {
             // Range 路径走 loop，循环节点自身的挂载检查探不到底层分区——底层分区
             // 挂载态在此显式守卫。这是判定期的时点检查：本函数每次被调用（preflight
@@ -92,22 +92,25 @@ pub fn grow_target_at(src: &FileSource, part: u32, base: u64, len: u64) -> Resul
             let node = find_block_partition_node(src, part, base)?;
             require_unmounted(&node)?;
         }
-        return Ok(Growable::Target(GrowTarget { scope: DeviceScope::Range(base + rel, len - rel), fstype: inner_kind }));
+        return Ok(Growable::Target(GrowTarget {
+            scope: DeviceScope::Range(base + rel, len - rel),
+            fstype: ContentKind::Filesystem(inner_kind),
+        }));
     }
     // 未识别的区间里有一类并非无信息——页格式激活不了的 swap（见该变体），同一次探测
     // 的 swap 命中认得它；其余类型不付这次读盘
-    let Some(kind) = fstype else {
+    if content == ContentKind::Unknown {
         return Ok(if matches!(probe.swap, Some(h) if !h.activatable) {
             Growable::SwapUnactivatable
         } else {
             Growable::NoFilesystem(None)
         });
-    };
+    }
     // 其余按 FS 自身的可扩性分流：三态与工具清单都取自 grow_support，不在此另列一份
-    match grow_support(kind) {
-        ToolSupport::Tools(_) => Ok(Growable::Target(GrowTarget { scope: DeviceScope::Partition(part), fstype: kind })),
-        ToolSupport::NotApplicable => Ok(Growable::NoFilesystem(Some(kind))),
-        ToolSupport::Unsupported(reason) => Err(FsError::unsupported(format!("cannot grow {kind}: {reason}"))),
+    match grow_support(content) {
+        ToolSupport::Tools(_) => Ok(Growable::Target(GrowTarget { scope: DeviceScope::Partition(part), fstype: content })),
+        ToolSupport::NotApplicable => Ok(Growable::NoFilesystem(Some(content))),
+        ToolSupport::Unsupported(reason) => Err(FsError::unsupported(format!("cannot grow {content}: {reason}"))),
     }
 }
 
@@ -121,16 +124,16 @@ pub fn grow_target_at(src: &FileSource, part: u32, base: u64, len: u64) -> Resul
 pub fn check_grow_step(g: Growable, is_block: bool) -> Result<(), FsError> {
     match g {
         Growable::Target(t) => check_grow(t.fstype, is_block, needs_loop(&t.scope, is_block)),
-        Growable::OverlayPending | Growable::SwapUnactivatable | Growable::NoFilesystem(Some(FsKind::Lvm2Pv)) => Ok(()),
+        Growable::OverlayPending | Growable::SwapUnactivatable | Growable::NoFilesystem(Some(ContentKind::Lvm2Pv)) => Ok(()),
         Growable::NoFilesystem(f) => Err(FsError::unsupported(format!(
-            "cannot grow {}: the filesystem type was not identified — pass --no-fs to change the partition only",
-            fs_name(f)
+            "cannot grow {}: the filesystem type was not identified — identify the filesystem and grow it with its own tool",
+            content_name(f.unwrap_or(ContentKind::Unknown))
         ))),
     }
 }
 
 /// superfloppy（无分区表，FS 即整盘）扩容：无表可写，纯 FS grow
-pub fn resize_fs_whole(src: &FileSource, fstype: Option<FsKind>) -> Result<Option<MountLeak>, FsError> {
+pub fn resize_fs_whole(src: &FileSource, fstype: Option<ContentKind>) -> Result<Option<MountLeak>, FsError> {
     resize_fs_in(src, &DeviceScope::Whole, fstype)
 }
 
@@ -144,7 +147,7 @@ pub fn resize_fs_whole(src: &FileSource, fstype: Option<FsKind>) -> Result<Optio
 /// - btrfs：临时 mount → `btrfs filesystem resize max <mnt>`（max = 占满、须挂载态，man btrfs-filesystem）→ umount
 /// - vfat：`fatresize -s max <dev>`（扩满设备，man fatresize）
 /// - 其余（exfat/swap…）：无已接线的扩容工具，显式拒绝
-pub(crate) fn resize_fs_in(src: &FileSource, scope: &DeviceScope, fstype: Option<FsKind>) -> Result<Option<MountLeak>, FsError> {
+pub(crate) fn resize_fs_in(src: &FileSource, scope: &DeviceScope, fstype: Option<ContentKind>) -> Result<Option<MountLeak>, FsError> {
     let r = resize_fs_step(src, scope, fstype);
     // 成功才提示：失败路径已有的"盘可能已改变"警示不额外承担回滚范围的说明
     if r.is_ok() {
@@ -153,20 +156,20 @@ pub(crate) fn resize_fs_in(src: &FileSource, scope: &DeviceScope, fstype: Option
     r
 }
 
-fn resize_fs_step(src: &FileSource, scope: &DeviceScope, fstype: Option<FsKind>) -> Result<Option<MountLeak>, FsError> {
+fn resize_fs_step(src: &FileSource, scope: &DeviceScope, fstype: Option<ContentKind>) -> Result<Option<MountLeak>, FsError> {
     match fstype {
         // fsid 识别只给 0xEF53，区分不出 2/3/4；resize2fs 对三者通用（man resize2fs）
-        Some(FsKind::Ext) => with_scope_device(src, scope, |dev| {
-            let out = run("e2fsck", &["-fp", dev])?;
+        Some(ContentKind::Filesystem(FsKind::Ext)) => with_scope_device(src, scope, |dev| {
+            let out = run_write("e2fsck", &["-fp", dev])?;
             check_e2fsck_status_for_resize(&out.status)?;
-            let out = run("resize2fs", &[dev]).map_err(|e| tool_write_maybe_started("resize2fs", dev, e))?;
+            let out = run_write("resize2fs", &[dev]).map_err(|e| tool_write_maybe_started("resize2fs", dev, e))?;
             if !out.status.success() {
                 return Err(FsError::command("resize2fs", &out));
             }
             Ok(())
         })
         .map(|()| None),
-        Some(FsKind::Ntfs) => with_scope_device(src, scope, |dev| {
+        Some(ContentKind::Filesystem(FsKind::Ntfs)) => with_scope_device(src, scope, |dev| {
             // 先 --no-action 演练，成功才真改，失败零副作用
             let out = run("ntfsresize", &["-f", "-f", "--no-action", dev])?;
             if !out.status.success() {
@@ -175,14 +178,14 @@ fn resize_fs_step(src: &FileSource, scope: &DeviceScope, fstype: Option<FsKind>)
                     String::from_utf8_lossy(&out.stderr).trim()
                 )));
             }
-            let out = run("ntfsresize", &["-f", "-f", dev])?;
+            let out = run_write("ntfsresize", &["-f", "-f", dev])?;
             if !out.status.success() {
                 return Err(FsError::command("ntfsresize", &out));
             }
             Ok(())
         })
         .map(|()| None),
-        Some(FsKind::F2fs) => with_scope_device(src, scope, |dev| {
+        Some(ContentKind::Filesystem(FsKind::F2fs)) => with_scope_device(src, scope, |dev| {
             // 预检：fsck.f2fs 无参 = 仅检查不修复（修复须显式 -f/-p；-a 只在内核报告 bug
             // 时才检查且默认禁用，man fsck.f2fs）。退出码负数表示失败（-1 表现为 255），
             // 非 0 即拒绝 resize
@@ -193,27 +196,27 @@ fn resize_fs_step(src: &FileSource, scope: &DeviceScope, fstype: Option<FsKind>)
                     describe_exit(&out.status)
                 )));
             }
-            let out = run("resize.f2fs", &[dev]).map_err(|e| tool_write_maybe_started("resize.f2fs", dev, e))?;
+            let out = run_write("resize.f2fs", &[dev]).map_err(|e| tool_write_maybe_started("resize.f2fs", dev, e))?;
             if !out.status.success() {
                 return Err(FsError::command("resize.f2fs", &out));
             }
             Ok(())
         })
         .map(|()| None),
-        Some(FsKind::Xfs) => with_scope_device(src, scope, |dev| with_mount(dev, |mnt| {
-            let out = run("xfs_growfs", &[mnt]).map_err(|e| tool_write_maybe_started("xfs_growfs", mnt, e))?;
+        Some(ContentKind::Filesystem(FsKind::Xfs)) => with_scope_device(src, scope, |dev| with_mount(dev, |mnt| {
+            let out = run_write("xfs_growfs", &[mnt]).map_err(|e| tool_write_maybe_started("xfs_growfs", mnt, e))?;
             if !out.status.success() {
                 return Err(FsError::command("xfs_growfs", &out));
             }
             Ok(())
         })),
-        Some(FsKind::Btrfs) => {
+        Some(ContentKind::Filesystem(FsKind::Btrfs)) => {
             // 区间只解析一次：多设备闸与设备建立消费同一份 (off, len)，两次读表之间
             // 第三方改表不会让闸和实际映射看见不同的区间
             let (off, len) = scope_byte_range(src, scope)?;
             refuse_btrfs_multi_device_at(src, off, len)?;
             with_scope_device_ranged(src, scope, off, len, |dev| with_mount(dev, |mnt| {
-                let out = run("btrfs", &["filesystem", "resize", "max", mnt])
+                let out = run_write("btrfs", &["filesystem", "resize", "max", mnt])
                     .map_err(|e| tool_write_maybe_started("btrfs resize", mnt, e))?;
                 if !out.status.success() {
                     return Err(FsError::command("btrfs resize", &out));
@@ -225,22 +228,35 @@ fn resize_fs_step(src: &FileSource, scope: &DeviceScope, fstype: Option<FsKind>)
         // max 可能报 "Can't have overlapping partitions"，此时降级为显式字节（分区大小-1）；
         // 属经验性 workaround，非工具规范保证。
         // FAT32 <512MB 由工具自身拒绝（man BUGS，Windows 限制）
-        Some(FsKind::Vfat) => {
+        Some(ContentKind::Filesystem(FsKind::Vfat)) => {
             // 区间与设备同源：fallback 尺寸用的 len 就是设备建立时的那一份，
             // 不再在闭包外另读一次表
             let (off, dev_len) = scope_byte_range(src, scope)?;
             with_scope_device_ranged(src, scope, off, dev_len, |dev| {
-                // 兜底的字节数 = 设备长 − 1（见上）。长度 0 时减一会回绕成 u64::MAX，把
+                // 兜底的字节数 = 设备长 − 1。长度 0 时减一会回绕成 u64::MAX，把
                 // "无从格式化"伪装成扩到天文数字——它必须在任何工具启动之前判掉，
                 // 否则就成了"工具可能已改盘"之后的一次 Refused
                 let want = dev_len.checked_sub(1).ok_or_else(|| {
                     FsError::invalid(format!("vfat device length {dev_len} — cannot derive fallback size"))
                 })?;
-                let mut out = run("fatresize", &["-s", "max", dev])
+                let mut out = run_write("fatresize", &["-s", "max", dev])
                     .map_err(|e| tool_write_maybe_started("fatresize", dev, e))?;
                 if !out.status.success() {
-                    out = run("fatresize", &["-s", &want.to_string(), dev])
-                        .map_err(|e| tool_write_maybe_started("fatresize", dev, e))?;
+                    // 降级重试只对「确认未写盘」的已知拒绝类：fatresize 对重叠分区的
+                    // 拒绝发生在任何写之前（man fatresize）。其余失败可能
+                    // 是半途写失败——在已改盘的设备上再写一次只会放大损害，
+                    // 边界取设备长−1 也未经工具规范保证
+                    let text = format!(
+                        "{}{}",
+                        String::from_utf8_lossy(&out.stdout),
+                        String::from_utf8_lossy(&out.stderr)
+                    );
+                    if text.contains("overlapping partitions") {
+                        out = run_write("fatresize", &["-s", &want.to_string(), dev])
+                            .map_err(|e| tool_write_maybe_started("fatresize", dev, e))?;
+                    } else {
+                        return Err(FsError::command("fatresize", &out));
+                    }
                 }
                 if !out.status.success() {
                     return Err(FsError::command("fatresize", &out));
@@ -251,19 +267,19 @@ fn resize_fs_step(src: &FileSource, scope: &DeviceScope, fstype: Option<FsKind>)
         }
         // swap 不是被"resize"的对象：新尺寸通过 mkswap 重建那一整块区域才生效。
         // 本命令只改 FS，不重建，故在此拒绝并指向真正会重建的入口
-        Some(FsKind::Swap) => Err(FsError::unsupported(
+        Some(ContentKind::Swap) => Err(FsError::unsupported(
             "swap has no in-place resize — use `resize`, which recreates the swap area so the new size takes effect",
         )),
         // squashfs/erofs 自己不可扩：能变大的是分区尾部的 RW overlay 层，那段由
         // grow_target_at 定位后交内层的分支执行。落到这里说明这个范围不是分区
         // （superfloppy），其内部没有 RW 层可扩
-        Some(FsKind::Squashfs | FsKind::Erofs) => Err(FsError::unsupported(format!(
+        Some(ContentKind::Filesystem(FsKind::Squashfs | FsKind::Erofs)) => Err(FsError::unsupported(format!(
             "{} needs a trailing RW overlay layer inside a partition — nothing to grow here",
-            fs_name(fstype)
+            content_name(fstype.unwrap_or(ContentKind::Unknown))
         ))),
         other => Err(FsError::unsupported(format!(
             "no resize tool wired for {} (supported: ext2/3/4, ntfs, f2fs, xfs, btrfs, vfat; squashfs/erofs via their trailing RW overlay layer)",
-            fs_name(other)
+            content_name(other.unwrap_or(ContentKind::Unknown))
         ))),
     }
 }
@@ -357,11 +373,11 @@ where
     let mut guard = MountGuard { point: mnt.clone(), dir, mounted: None, armed: true };
     #[cfg(not(unix))]
     let mut guard = MountGuard { point: mnt.clone(), armed: true };
-    // 执行走 `fsops::run`：spawn 失败 = 工具没跑起来（Io），等待失败 = 工具已启动、
+    // 执行走 `fsops::run_write`：spawn 失败 = 工具没跑起来（Io），等待失败 = 工具已启动、
     // 写没写目标无法断言（CommandFailed）。mount 自己会重放日志（对目标的一次写），
     // 把后者折成 Io 会让命令以"确定未写盘"退出
     let args = [std::ffi::OsString::from(dev), target];
-    let out = run("mount", &args)?;
+    let out = run_write("mount", &args)?;
     if !out.status.success() {
         // mount 没成功就谈不上 umount：对从未挂载的目录卸载必然失败，
         // 那条"may remain"的告警只会把用户引向一个不存在的残留挂载点
@@ -384,7 +400,7 @@ where
     let res = f(&mnt.to_string_lossy());
     let leak = leak_from(&mnt.to_string_lossy(), guard.release());
     // 残留挂载点只有一条出路：核心成功时随 `Ok` 浮出成待办、核心失败时拼进主错误。
-    // 两条路都进返回的 `Outcome`，不再另打一条只有 stderr 看得见的告警
+    // 两条路都进返回的 `RunOutcome`，不再另打一条只有 stderr 看得见的告警
     settle_release(res, leak)
 }
 
@@ -413,23 +429,23 @@ struct MountGuard {
 
 impl MountGuard {
     /// 卸载并清理挂载点，返回卸载的结局。清理是否完成由调用方经 [`MountLeak`] 表达
-    fn release(&mut self) -> ReleaseOutcome {
+    fn release(&mut self) -> ReleaseRunOutcome {
         self.armed = false;
         #[cfg(unix)]
         {
             let Some(mounted) = self.mounted else {
                 // 从未挂载成功：没有可卸载的东西，只清理本次建的目录
                 self.remove_own_point();
-                return ReleaseOutcome::Released;
+                return ReleaseRunOutcome::Released;
             };
             if entry_identity(&self.point) != Some(mounted) {
-                return ReleaseOutcome::Failed(format!(
+                return ReleaseRunOutcome::Failed(format!(
                     "{} no longer resolves to the mount this process created (the directory was renamed or replaced) — refusing to unmount",
                     self.point.display()
                 ));
             }
             let outcome = release_mount(&self.point);
-            if outcome == ReleaseOutcome::Released {
+            if outcome == ReleaseRunOutcome::Released {
                 self.remove_own_point();
             }
             outcome
@@ -437,7 +453,7 @@ impl MountGuard {
         #[cfg(not(unix))]
         {
             let outcome = release_mount(&self.point);
-            if outcome == ReleaseOutcome::Released {
+            if outcome == ReleaseRunOutcome::Released {
                 crate::dev::best_effort_rmdir(&self.point);
             }
             outcome
@@ -513,7 +529,7 @@ impl std::fmt::Display for MountLeak {
 
 /// 一次卸载动作归一到三态：判定与"怎么调工具"无关，故这一层可脱离真实工具单测
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) enum ReleaseOutcome {
+pub(crate) enum ReleaseRunOutcome {
     /// 工具跑完且退出码 0
     Released,
     /// 工具跑完但非零退出（携带工具原话）
@@ -524,10 +540,10 @@ pub(crate) enum ReleaseOutcome {
 
 /// 卸载结果 → 清理待办。只有"跑完且退出码 0"算没有待办：启动失败与工具缺失都不能
 /// 证明已卸掉，而挂载中的目录 rmdir 必然失败，"用后即删"就此失效
-pub(crate) fn leak_from(point: &str, outcome: ReleaseOutcome) -> Option<MountLeak> {
+pub(crate) fn leak_from(point: &str, outcome: ReleaseRunOutcome) -> Option<MountLeak> {
     match outcome {
-        ReleaseOutcome::Released => None,
-        ReleaseOutcome::Failed(why) | ReleaseOutcome::Unavailable(why) => {
+        ReleaseRunOutcome::Released => None,
+        ReleaseRunOutcome::Failed(why) | ReleaseRunOutcome::Unavailable(why) => {
             Some(MountLeak { point: point.to_string(), why })
         }
     }
@@ -549,16 +565,16 @@ pub(crate) fn settle_release(
     }
 }
 
-/// 跑一次 umount，把结果归一到 [`ReleaseOutcome`]
-pub(crate) fn release_mount(mnt: &std::path::Path) -> ReleaseOutcome {
+/// 跑一次 umount，把结果归一到 [`ReleaseRunOutcome`]
+pub(crate) fn release_mount(mnt: &std::path::Path) -> ReleaseRunOutcome {
     let mut cmd = match tool_command("umount") {
         Ok(c) => c,
-        Err(e) => return ReleaseOutcome::Unavailable(format!("umount not available ({e})")),
+        Err(e) => return ReleaseRunOutcome::Unavailable(format!("umount not available ({e})")),
     };
     match cmd.arg(mnt).stdin(Stdio::null()).output() {
-        Ok(o) if o.status.success() => ReleaseOutcome::Released,
-        Ok(o) => ReleaseOutcome::Failed(String::from_utf8_lossy(&o.stderr).trim().to_string()),
-        Err(e) => ReleaseOutcome::Unavailable(format!("umount did not start: {e}")),
+        Ok(o) if o.status.success() => ReleaseRunOutcome::Released,
+        Ok(o) => ReleaseRunOutcome::Failed(String::from_utf8_lossy(&o.stderr).trim().to_string()),
+        Err(e) => ReleaseRunOutcome::Unavailable(format!("umount did not start: {e}")),
     }
 }
 
@@ -567,60 +583,55 @@ mod mount_guard_tests {
     #![allow(clippy::let_underscore_must_use)] // 清理临时目录有意忽略失败
     use super::*;
 
-    /// 每个用例独占一个路径，先用后清，不留残留
-    fn fresh_dir(tag: &str) -> PathBuf {
-        let p = std::env::temp_dir().join(format!("diskedit_guard_{tag}_{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&p);
+    /// 用例独占的目录由调用方的临时目录持有者清理；这里只负责在里面建/取路径
+    fn fresh_dir(root: &crate::testdir::TestDir, name: &str) -> PathBuf {
+        let p = root.join(name);
         std::fs::create_dir(&p).unwrap();
         p
     }
 
-    fn free_path(tag: &str) -> PathBuf {
-        let p = std::env::temp_dir().join(format!("diskedit_guard_{tag}_{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&p);
-        p
+    fn free_path(root: &crate::testdir::TestDir, name: &str) -> PathBuf {
+        root.join(name)
     }
 
     /// 记录过身份之后路径条目被换成别的对象（改名后被新目录占住）：既不按旧路径 umount
     /// （那里没有本进程的挂载），也不删那个不是本进程创建的目录
     #[test]
     fn a_replaced_point_is_neither_unmounted_nor_removed() {
-        let point = fresh_dir("renamed");
-        let moved = free_path("moved");
+        let root = crate::testdir::test_dir("guard_renamed");
+        let point = fresh_dir(&root, "point");
+        let moved = free_path(&root, "moved");
         let dir = std::fs::File::open(&point).unwrap();
         let mounted = entry_identity(&point).unwrap();
         std::fs::rename(&point, &moved).unwrap();
         std::fs::create_dir(&point).unwrap();
         let mut guard = MountGuard { point: point.clone(), dir, mounted: Some(mounted), armed: true };
         match guard.release() {
-            ReleaseOutcome::Failed(why) => assert!(why.contains("refusing to unmount"), "{why}"),
+            ReleaseRunOutcome::Failed(why) => assert!(why.contains("refusing to unmount"), "{why}"),
             other => panic!("an identity mismatch must refuse the unmount, got {other:?}"),
         }
         assert!(point.exists(), "the directory now at the old path belongs to someone else");
         assert!(moved.exists(), "the directory this process created must not be removed by the old path");
-        let _ = std::fs::remove_dir(&point);
-        let _ = std::fs::remove_dir(&moved);
     }
 
     /// 挂载没成功时只有本次创建的目录要清；路径已被替换成别的条目就不动它
     #[test]
     fn an_unmounted_point_is_removed_only_while_it_is_still_ours() {
-        let point = fresh_dir("unmounted");
+        let root = crate::testdir::test_dir("guard_unmounted");
+        let point = fresh_dir(&root, "point");
         let dir = std::fs::File::open(&point).unwrap();
         let mut guard = MountGuard { point: point.clone(), dir, mounted: None, armed: true };
-        assert_eq!(guard.release(), ReleaseOutcome::Released);
+        assert_eq!(guard.release(), ReleaseRunOutcome::Released);
         assert!(!point.exists(), "the directory created for this call must be cleaned up");
 
-        let point = fresh_dir("replaced");
-        let away = free_path("replaced-away");
+        let point = fresh_dir(&root, "replaced");
+        let away = free_path(&root, "replaced-away");
         let dir = std::fs::File::open(&point).unwrap();
         std::fs::rename(&point, &away).unwrap();
         std::fs::create_dir(&point).unwrap();
         let mut guard = MountGuard { point: point.clone(), dir, mounted: None, armed: true };
-        assert_eq!(guard.release(), ReleaseOutcome::Released, "nothing was mounted, nothing to release");
+        assert_eq!(guard.release(), ReleaseRunOutcome::Released, "nothing was mounted, nothing to release");
         assert!(point.exists(), "a replaced entry must not be removed through the old path");
-        let _ = std::fs::remove_dir(&point);
-        let _ = std::fs::remove_dir(&away);
     }
 
     fn mount_tmpfs(point: &Path) -> bool {
@@ -644,10 +655,10 @@ mod mount_guard_tests {
             eprintln!("skip: root required to mount tmpfs");
             return;
         }
-        let point = fresh_dir("stacked");
+        let root = crate::testdir::test_dir("guard_stacked");
+        let point = fresh_dir(&root, "point");
         if !mount_tmpfs(&point) {
             eprintln!("skip: this environment cannot mount tmpfs");
-            let _ = std::fs::remove_dir(&point);
             return;
         }
         let dir = std::fs::File::open(&point).unwrap();
@@ -655,14 +666,13 @@ mod mount_guard_tests {
         if !mount_tmpfs(&point) {
             eprintln!("skip: this environment cannot stack a second mount on the same point");
             unmount(&point);
-            let _ = std::fs::remove_dir(&point);
             return;
         }
         let on_top = entry_identity(&point).unwrap();
         assert_ne!(on_top, recorded, "a stacked mount must present a different mount root");
         let mut guard = MountGuard { point: point.clone(), dir, mounted: Some(recorded), armed: true };
         match guard.release() {
-            ReleaseOutcome::Failed(why) => assert!(why.contains("refusing to unmount"), "{why}"),
+            ReleaseRunOutcome::Failed(why) => assert!(why.contains("refusing to unmount"), "{why}"),
             other => panic!("a stacked mount must refuse the unmount, got {other:?}"),
         }
         assert_eq!(entry_identity(&point), Some(on_top), "someone else's mount must still be on top");
@@ -671,6 +681,5 @@ mod mount_guard_tests {
         drop(guard);
         unmount(&point);
         unmount(&point);
-        let _ = std::fs::remove_dir(&point);
     }
 }

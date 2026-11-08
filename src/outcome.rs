@@ -3,26 +3,50 @@
 //! 命令的承诺不是"运行了什么"，而是"完成后哪些条件成立"：
 //! 默认契约 = 分区布局改变 + 空间对该分区可用（FS 扩展 / swap 重建 / LVM 链）。
 //! 退出码只是这个契约满足情况的外显，因此映射集中在此处一处，
-//! 不允许各调用点自行拼装
+//! 不允许各调用点自行拼装数字
 //!
-//! 未完成的情形按两条**正交**的轴分三类：**本次是否写盘**（决定能不能对盘上状态作断言，
-//! 从而决定给用户的下一步建议）与**成因在请求还是在环境**（决定"改参数重试"有没有意义）：
-//! - 请求与目标现状不匹配 + 未写盘 → 10：无表、无此分区、缺少确认旗标
-//! - 环境/盘内容故障 + 未写盘 → 30：I/O 失败、表结构非法（头 CRC 坏、条目越界）、工具缺失
-//! - 已写盘 → 20（后置条件未全满足）或 30（执行失败，可能已改变）
+//! 未完成的情形按三条轴分：**本次是否写盘**（能否对盘上状态作断言）、
+//! **成因在请求还是在环境**（改参数重试是否有意义）、**平台是否具备能力**：
+//! - 参数或命令语法错误 → 2，未写盘
+//! - 请求与目标现状不匹配 + 未写盘 → 3，改参数有意义
+//! - 环境/盘内容故障 + 确定未写盘 → 4，无持久化修改
+//! - 已写盘但后置条件未全满足，或无法断言写没写 → 5，须给恢复指引
+//! - 平台或目标能力不支持 → 6
+//! - 未预期的内部错误 → 1
 //!
-//! 因此**分类必须在知道成因的那一层做**：同一个成因（例如表读不出来）会因"无表"与
+//! **分类必须在知道成因的那一层做**：同一个成因（例如表读不出来）会因"无表"与
 //! "表非法"落进两个变体，而 io::Error 一旦成形就再也分不出来，只会在调用点被压成一个码
 
 pub const EXIT_OK: u8 = 0;
-/// 事前拒绝：本次未写盘，成因在请求与目标现状不匹配（无表、无此分区、缺少确认旗标）。
-/// 工具缺失不在此列：它归 30（Infra）——改参数无意义
-pub const EXIT_REFUSED: u8 = 10;
-/// 部分完成：写盘已发生，但后置条件未全部满足
-pub const EXIT_PARTIAL: u8 = 20;
-/// 环境/盘内容故障，或写盘后失败：本次没能完成。未写盘时（表非法、I/O 故障）与
-/// 可能已写盘时（执行中途失败）同为这一码——区别在报告文字里点明
-pub const EXIT_INFRA: u8 = 30;
+/// 未预期的内部错误：断言失败、内部不变量被破坏
+pub const EXIT_INTERNAL: u8 = 1;
+/// 参数或命令语法错误：argv 结构不成立、值域不符、未知命令/选项
+pub const EXIT_USAGE: u8 = 2;
+/// 策略拒绝或前置条件不满足：无表、无此分区、缺 --yes、表结构非法、目标忙
+pub const EXIT_REFUSED: u8 = 3;
+/// 操作失败，且确认没有产生持久化修改（durable boundary 之前的 I/O/环境故障）
+pub const EXIT_NO_MUTATION: u8 = 4;
+/// 部分完成或恢复待处理：写盘已发生但后置条件未全满足，或写后失败无法断言
+pub const EXIT_PARTIAL: u8 = 5;
+/// 平台或能力不支持：工具缺失、平台无对应 API、目标类型不在支持范围
+pub const EXIT_UNSUPPORTED: u8 = 6;
+
+/// 本进程是否可能已经写过目标字节。
+///
+/// panic 展开后调用栈里的进度无处安放，`main` 的 catch 点只能从这里取"目标是否可能
+/// 已改变"。置位点即全部目标写入通道：写句柄的 `write_raw`、mkfs 前的 `wipe_zero`、
+/// 启动后会改动目标的外部工具（`fsops::env::run_write*`）。置位后不复位：一次运行
+/// 越过首写之后，任何故障都不能再断言目标未改动
+static TARGET_MAY_BE_WRITTEN: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+pub(crate) fn note_target_write() {
+    TARGET_MAY_BE_WRITTEN.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub(crate) fn target_may_have_been_written() -> bool {
+    TARGET_MAY_BE_WRITTEN.load(std::sync::atomic::Ordering::Relaxed)
+}
 
 /// 外部 FS 工具改的是文件系统内容，journal 只记分区表写入。一次命令可能走多个外部
 /// 工具步骤（先缩后扩、或在同一命令里既有表写入又有 FS 写入），故每进程只提示一次。
@@ -77,19 +101,24 @@ pub enum KernelSync {
     Stale,
 }
 
-/// 一次布局操作的结果。四态而非两个字段：`Applied` 之外有三种未完成成因，
+/// 一次布局操作的结果。`Applied` 之外的分支覆盖未完成的每种成因，
 /// 它们的退出码与报告文字都不同，必须由类型区分
 #[derive(Debug, Clone)]
-pub enum Outcome {
+pub enum RunOutcome {
+    /// argv 结构、值域或命令名不成立——本次没有触碰目标
+    Usage(String),
     /// 校验阶段拒绝——确定未写盘，成因在请求与目标现状不匹配
     Refused(String),
-    /// 环境/盘内容故障——确定未写盘（I/O 失败、表结构非法）。
-    /// 与 `Failed` 同为 30，但**不能**附"盘可能已改变"的提示：本次确实没写
-    Infra { cause: String },
-    /// 执行阶段失败——**不对"是否已落盘"作断言**：写调用报错时我们并不知道
+    /// 环境/盘内容故障——确定未写盘（I/O 失败、表结构非法）
+    NoMutation { cause: String },
+    /// 平台或目标能力不支持——本次没有触碰目标，换参数无意义
+    Unsupported { cause: String },
+    /// 未预期的内部错误——本次没有产生持久化修改，但说明工具自身有缺陷
+    Internal(String),
+    /// 执行阶段失败——**不对"是否已落盘"作断言**：写调用报错时无从得知
     /// 实际写入多少，磁盘状态可能已改变，故只承诺"可能已改变，需验证"。
     /// `pending` 是已知但尚未满足的后置条件：失败发生在它们之前/中途时随失败一并报出
-    Failed {
+    Partial {
         cause: String,
         pending: Vec<Pending>,
     },
@@ -100,22 +129,34 @@ pub enum Outcome {
     },
 }
 
-impl Outcome {
+impl RunOutcome {
+    pub fn usage(msg: impl Into<String>) -> Self {
+        Self::Usage(msg.into())
+    }
+
     pub fn refused(msg: impl Into<String>) -> Self {
         Self::Refused(msg.into())
     }
 
-    pub fn infra(cause: impl Into<String>) -> Self {
-        Self::Infra { cause: cause.into() }
+    pub fn no_mutation(cause: impl Into<String>) -> Self {
+        Self::NoMutation { cause: cause.into() }
     }
 
-    pub fn failed(cause: impl Into<String>) -> Self {
-        Self::Failed { cause: cause.into(), pending: Vec::new() }
+    pub fn unsupported(cause: impl Into<String>) -> Self {
+        Self::Unsupported { cause: cause.into() }
+    }
+
+    pub fn internal(msg: impl Into<String>) -> Self {
+        Self::Internal(msg.into())
+    }
+
+    pub fn partial(cause: impl Into<String>) -> Self {
+        Self::Partial { cause: cause.into(), pending: Vec::new() }
     }
 
     /// 已写盘或无法断言的失败，另带已知未完成的后置条件
-    pub fn failed_with(cause: impl Into<String>, pending: Vec<Pending>) -> Self {
-        Self::Failed { cause: cause.into(), pending }
+    pub fn partial_with(cause: impl Into<String>, pending: Vec<Pending>) -> Self {
+        Self::Partial { cause: cause.into(), pending }
     }
 
     /// 布局已写、后置条件待办；内核视图默认按"已同步"起算，由调用方在 resync 失败后置位
@@ -134,6 +175,25 @@ impl Outcome {
     pub fn mark_kernel_stale(&mut self) {
         if let Self::Applied { kernel_sync, .. } = self {
             *kernel_sync = KernelSync::Stale;
+        }
+    }
+
+    /// 收尾步骤（关闭撤销窗口、释放资源）没有完成：已经完整应用的结果降级为部分完成（5）。
+    /// 其他形态保持原样——它们已经陈述了更差的事实，同一个收尾故障不该覆盖它
+    /// 越过 durable boundary 之后的失败：只剩一种事实可说——盘可能已改变。
+    /// 首写之前那些"确定未写盘"的分类（3/4/6）在这里不再成立
+    pub(crate) fn past_boundary(self) -> Self {
+        match self {
+            Self::Partial { .. } => self,
+            other => Self::partial(other.to_string()),
+        }
+    }
+
+    pub fn degrade_partial(self, cause: impl Into<String>) -> Self {
+        if self.is_complete() {
+            Self::Partial { cause: cause.into(), pending: Vec::new() }
+        } else {
+            self
         }
     }
 
@@ -182,11 +242,15 @@ impl Outcome {
         )
     }
 
-    /// 唯一的 Outcome → 退出码映射点
+    /// 唯一的 RunOutcome → 退出码映射点
     pub fn exit_code(&self) -> u8 {
         match self {
+            Self::Usage(_) => EXIT_USAGE,
             Self::Refused(_) => EXIT_REFUSED,
-            Self::Infra { .. } | Self::Failed { .. } => EXIT_INFRA,
+            Self::NoMutation { .. } => EXIT_NO_MUTATION,
+            Self::Unsupported { .. } => EXIT_UNSUPPORTED,
+            Self::Internal(_) => EXIT_INTERNAL,
+            Self::Partial { .. } => EXIT_PARTIAL,
             applied if applied.is_complete() => EXIT_OK,
             Self::Applied { .. } => EXIT_PARTIAL,
         }
@@ -197,13 +261,15 @@ impl Outcome {
     /// 调用方须在"内核重读"之后调用本函数，否则打不出内核视图过期这一项
     pub fn report(&self) {
         match self {
+            Self::Usage(msg) => eprintln!("usage error: {msg}"),
             Self::Refused(msg) => eprintln!("refused: {msg}"),
-            // 与 Failed 同码不同话：本次没写盘，不能提示"盘可能已改变"
-            Self::Infra { cause } => eprintln!("error: {cause}"),
-            Self::Failed { cause, pending } => {
+            // 与 Partial 不同话：本次没写盘，不能提示"盘可能已改变"
+            Self::NoMutation { cause } => eprintln!("error: {cause}\nno durable change: the target was not modified"),
+            Self::Unsupported { cause } => eprintln!("unsupported: {cause}"),
+            Self::Internal(msg) => eprintln!("internal error: {msg}"),
+            Self::Partial { cause, pending } => {
                 eprintln!("error: {cause}");
-                // 每行自带标记，不在 "error: " 下面靠空格对齐：前缀一改，手写缩进就整段偏
-                eprintln!("verify: the on-disk state may have changed — check with `diskedit info` before retrying");
+                Self::report_partial_guidance();
                 if !pending.is_empty() {
                     eprintln!("left undone: {} known follow-up step(s)", pending.len());
                     Self::report_pending(pending);
@@ -225,11 +291,33 @@ impl Outcome {
                          run `partprobe <device>` (or partx/blkpg) before relying on the new layout"
                     );
                 }
+                Self::report_partial_guidance();
             }
         }
     }
 
-    /// 未完成后置条件的逐条呈现：Applied 与 Failed 两条路径共用同一份格式。
+    /// 5 的报告必须同时给出三件事：盘可能已改变、证据路径、下一步命令。
+    /// 证据路径取本进程真正建出的 journal 落点——没有建过就直说没有，不编路径
+    pub(crate) fn report_partial_guidance() {
+        for line in Self::partial_guidance_lines() {
+            eprintln!("{line}");
+        }
+    }
+
+    fn partial_guidance_lines() -> [String; 3] {
+        [
+            "verify: the on-disk state may have changed — check with `diskedit info` before retrying"
+                .to_string(),
+            "evidence: `diskedit inspect <target>` names any recovery file left for the target".to_string(),
+            // 无条件推荐 undo 会在"已越过回滚点"的形态上指向一条必然退 3 的路：
+            // 能否回写由记录自身决定，这里只陈述两条命令各自做什么
+            "next: `diskedit undo` restores the bytes recorded for this target when the record \
+             still allows it; `diskedit abandon` releases the record and leaves those bytes in place"
+                .to_string(),
+        ]
+    }
+
+    /// 未完成后置条件的逐条呈现：Applied 与 Partial 两条路径共用同一份格式。
     /// 续行也带同一个 `[part N]` 标记：列对齐由格式决定，不靠字面空格——用空格对齐时
     /// 分区号一旦到两位数，整段就会偏一格，而这种偏移不会有任何一处报错
     fn report_pending(pending: &[Pending]) {
@@ -253,170 +341,117 @@ impl Outcome {
     }
 }
 
-/// 执行期失败的三种性质，判据是上面那两条正交的轴：
-/// - `Refused`：未写盘 + 成因在请求（目标现状与请求不匹配）→ 10，改参数有意义
-/// - `Infra`：未写盘 + 成因在环境/盘内容（I/O 失败、结构非法）→ 30，改参数没意义
-/// - `Failed`：已写盘，或无法断定没写 → 30，须提示先验证盘上状态
-///
-/// 必须在类型上分开，不能靠错误文本或 ErrorKind 反推
-#[derive(Debug)]
-pub enum Fail {
-    Refused(String),
-    Infra(String),
-    Failed(String),
-}
-
-/// 文本只承载成因：10/30 的分工在变体上，不在字符串里，故三支输出同一种内容
-impl std::fmt::Display for Fail {
+/// 文本只承载成因：退出码的分工在变体上，不在字符串里
+impl std::fmt::Display for RunOutcome {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            Self::Refused(m) | Self::Infra(m) | Self::Failed(m) => m,
-        })
+        match self {
+            Self::Usage(m) | Self::Refused(m) | Self::Internal(m) => f.write_str(m),
+            Self::NoMutation { cause } | Self::Unsupported { cause } => f.write_str(cause),
+            Self::Partial { cause, .. } => f.write_str(cause),
+            Self::Applied { .. } => f.write_str("the requested change is applied"),
+        }
     }
 }
 
-/// 默认按"可能已改变"归 `Failed`：写调用报错时我们并不知道实际写入多少，
-/// 这是唯一安全的缺省。**写盘前的环境故障必须显式写 `Fail::infra`**——
+impl RunOutcome {
+    /// 写盘前的 io 失败。存在的意义是让调用点**显式表态**：这个 `?` 位于本次调用的首次
+    /// 目标写盘之前。默认的 `From<io::Error>` 给不出这个断言，故不设默认、必须逐点写明。
+    ///
+    /// 判据只关于**本次调用**写没写目标盘。上一次中断的运行留下的改动不在此编码范围内——
+    /// 重试时工具会重读盘上几何（表项 / 记录），故不因省略"盘可能已改变"的提示而失去安全性；
+    /// 而真正需要那句提示的是写调用报错（`Partial`），那种情况下写入量确实无法断定
+    pub fn no_mutation_io(e: std::io::Error) -> Self {
+        Self::NoMutation { cause: e.to_string() }
+    }
+
+    /// 给原因加上本层上下文（变体与退出码不变）。存在的意义是让调用点补一句"当时在做什么"
+    /// 而不必丢弃已经得出的分类——为了拼文案而改用 `RunOutcome::no_mutation(..)` 会把
+    /// `Refused` 悄悄升格成 `NoMutation`
+    pub fn context(self, what: &str) -> Self {
+        match self {
+            Self::Usage(m) => Self::Usage(format!("{what}: {m}")),
+            Self::Refused(m) => Self::Refused(format!("{what}: {m}")),
+            Self::NoMutation { cause } => Self::NoMutation { cause: format!("{what}: {cause}") },
+            Self::Unsupported { cause } => Self::Unsupported { cause: format!("{what}: {cause}") },
+            Self::Internal(m) => Self::Internal(format!("{what}: {m}")),
+            Self::Partial { cause, pending } => Self::Partial { cause: format!("{what}: {cause}"), pending },
+            Self::Applied { pending, kernel_sync } => Self::Applied { pending, kernel_sync },
+        }
+    }
+}
+
+/// 默认按"可能已改变"归 `Partial`：写调用报错时无从得知实际写入多少，
+/// 这是唯一安全的缺省。**写盘前的环境故障必须显式写 `RunOutcome::no_mutation`**——
 /// 与 table::GptError 只提供单向压平同理：需要区分的地方由编译器强制它显式表态
-impl From<std::io::Error> for Fail {
+impl From<std::io::Error> for RunOutcome {
     fn from(e: std::io::Error) -> Self {
-        Self::failed(e.to_string())
+        Self::partial(e.to_string())
     }
 }
 
 /// FS 层的失败分类 → 出口语义。**这是 `FsError` 唯一的解释处**：fsops 只回答
 /// "操作层面发生了什么"，落成哪个退出码属应用层 policy，故不在 fsops 里做。
 ///
-/// 判据仍是那两条：成因在请求还是在环境；环境侧再按"写盘与否"细分。「类型没有接线 /
-/// 参数与目标现状不符」改参数（或换命令）有意义 → 拒绝（10）；工具缺失、环境故障
-/// 发生在任何写盘之前 → Infra（30，改参数无用但不警示"盘可能已改变"）；外部工具
-/// 非零退出意味着工具已经运行——它写没写、写了多少无法断言 → Failed（30，报告带
-/// 警示行）。写盘之后（`execute_*` 里）拿不到这个映射：那里 `FsError` 已被
-/// 压平成 io::Error，结论只能是 Failed。
+/// 「类型没有接线 / 参数与目标现状不符」→ 拒绝（3）；工具缺失 → 不支持（6）；
+/// 环境故障发生在任何写盘之前 → 无持久化修改（4）；外部工具非零退出意味着工具
+/// 已经运行——它写没写、写了多少无法断言 → 部分完成（5，报告带警示行）。
 ///
-/// **本映射只适用于尚未写盘的调用点**：`Io` 变体在此归 Infra（断言"确定未写盘"），
+/// **本映射只适用于尚未写盘的调用点**：`Io` 变体在此归 NoMutation（断言"确定未写盘"），
 /// 一旦本次调用已开始写目标盘（清零、格式化中……），调用点必须先把错误改判为
-/// `CommandFailed`（→ Failed），不得让 `Io` 走进这个 `From`——那会把"可能已写"
+/// `CommandFailed`（→ Partial），不得让 `Io` 走进这个 `From`——那会把"可能已写"
 /// 洗成"确定没写"
-impl From<crate::fsops::FsError> for Fail {
+impl From<crate::fsops::FsError> for RunOutcome {
     fn from(e: crate::fsops::FsError) -> Self {
         use crate::fsops::FsError;
         match e {
-            FsError::UnsupportedFs(m) | FsError::InvalidArgument(m) => Self::refused(m),
-            FsError::ToolMissing(m) => Self::infra(m),
-            FsError::Io(err) => Self::infra(err.to_string()),
-            FsError::CommandFailed(m) => Self::failed(m),
+            FsError::UnsupportedFs(m) => Self::unsupported(m),
+            FsError::UnsupportedPlatform(m) => Self::unsupported(m),
+            FsError::InvalidArgument(m) => Self::refused(m),
+            FsError::ToolMissing(m) => Self::unsupported(m),
+            FsError::Io(err) => Self::no_mutation(err.to_string()),
+            FsError::CommandFailed(m) => Self::partial(m),
         }
     }
 }
 
-impl Fail {
-    pub fn refused(msg: impl Into<String>) -> Self {
-        Self::Refused(msg.into())
-    }
-
-    /// 写盘前的环境/盘内容故障（表结构非法、I/O 失败）。与 `Failed` 同为 30，
-    /// 但不带"盘可能已改变"的提示——调用点必须确实尚未写盘才可用它
-    pub fn infra(cause: impl Into<String>) -> Self {
-        Self::Infra(cause.into())
-    }
-
-    /// 已写盘或无法断定时的执行失败（io 失败经 `From<io::Error> for Fail` 落到这一形态）
-    pub fn failed(cause: impl Into<String>) -> Self {
-        Self::Failed(cause.into())
-    }
-
-    /// 写盘前的 io 失败。存在的意义是让调用点**显式表态**：这个 `?` 位于本次调用的首次
-    /// 目标写盘之前。默认的 `From<io::Error>` 给不出这个断言，故不设默认、必须逐点写明。
-    ///
-    /// 判据只关于**本次调用**写没写目标盘。上一次中断的运行留下的改动不在此编码范围内——
-    /// 重试时工具会重读盘上几何（表项 / ckpt），故不因省略"盘可能已改变"的提示而失去安全性；
-    /// 而真正需要那句提示的是写调用报错（`Failed`），那种情况下写入量确实无法断定
-    pub fn infra_io(e: std::io::Error) -> Self {
-        Self::Infra(e.to_string())
-    }
-
-    /// 给原因加上本层上下文（变体与退出码不变）。存在的意义是让调用点补一句"当时在做什么"
-    /// 而不必丢弃已经得出的分类——为了拼文案而改用 `Fail::infra(..)` 会把
-    /// `Refused` 悄悄升格成 `Infra`
-    pub fn context(self, what: &str) -> Self {
-        match self {
-            Self::Refused(m) => Self::Refused(format!("{what}: {m}")),
-            Self::Infra(m) => Self::Infra(format!("{what}: {m}")),
-            Self::Failed(m) => Self::Failed(format!("{what}: {m}")),
+/// 表结构错误 → 出口语义：读写失败归"环境故障、未写盘"（4）；签名、CRC、几何、
+/// 条目越界都说明盘上的表不符合规范，属于"请求与现状不匹配"（3）
+impl From<crate::table::GptError> for RunOutcome {
+    fn from(e: crate::table::GptError) -> Self {
+        match e {
+            crate::table::GptError::Io(err) => Self::no_mutation(err.to_string()),
+            other => Self::refused(other.to_string()),
         }
     }
 }
 
-/// 把内层 `Fail` 并入一个"已越界"的调用点：此时对外结论只能是 `Failed`（盘可能已改变），
+/// 读表失败的文案由调用点保留（`parse failed: …` / `label probe failed: …`），
+/// 本函数只负责分类：`GptError::Io` 是读盘失败（4），其余变体都说明盘上的表
+/// 不符合规范（3）。只读命令同样按这条判：它们从不写盘，4 只留给真正的 I/O 失败
+pub(crate) fn table_parse_failure(e: &crate::table::GptError, msg: String) -> RunOutcome {
+    match e {
+        crate::table::GptError::Io(_) => RunOutcome::no_mutation(msg),
+        _ => RunOutcome::refused(msg),
+    }
+}
+
+/// MBR 解析的 `io::Error` 同判：`InvalidData` 是条目不可操作（越界、起点 0、两两重叠），
+/// 表本身非法 → 3；其余是读盘失败 → 4
+pub(crate) fn mbr_parse_failure(e: &std::io::Error, msg: String) -> RunOutcome {
+    if e.kind() == std::io::ErrorKind::InvalidData {
+        RunOutcome::refused(msg)
+    } else {
+        RunOutcome::no_mutation(msg)
+    }
+}
+
+/// 把内层失败并入一个"已越界"的调用点：此时对外结论只能是 `Partial`（盘可能已改变），
 /// 内层是 Refused 也只是因为它自己那一层还没写盘——对本层已经不算数了。
 /// 存在的意义是让这种"层级差"显式可见，而不是靠 `?` 悄悄把 Refused 透传出去。
-/// 不提供 `From<Fail> for io::Error`：压平必须逐点写明，理由同上
-pub fn into_io_error(e: Fail) -> std::io::Error {
-    let msg = match e {
-        Fail::Refused(m) | Fail::Infra(m) | Fail::Failed(m) => m,
-    };
-    std::io::Error::other(msg)
-}
-
-impl Fail {
-    /// 把失败折叠成 CLI 结果。**这是 `Fail` → `Outcome` 的唯一映射点**：三个变体各自
-    /// 对应一种出口语义（10 / 30 / 30 + "盘可能已改变"警示），调用点只表达"这次失败
-    /// 最终怎么呈现"，不自己决定退出码。名字用 `into_*` 而非 `From`：它不是纯粹的类型
-    /// 转换，而是带上出口 policy 的折叠
-    pub fn into_outcome(self) -> Outcome {
-        match self {
-            Fail::Refused(m) => Outcome::refused(m),
-            Fail::Infra(m) => Outcome::infra(m),
-            Fail::Failed(m) => Outcome::failed(m),
-        }
-    }
-}
-
-/// 越过 durable boundary 之后的写会话。入口在首次目标写盘前创建它，执行体把未完成的
-/// 后置条件记进来，出口只由 [`applied`](Self::applied) / [`failed`](Self::failed) 给出。
-///
-/// 会话的出口里放不下 `Refused` / `Infra`：此刻盘可能已改变，"确定未写盘"的结论在类型上
-/// 就写不出来。执行体只返回 `io::Result`（io 失败默认按"可能已改变"），入口把它换成
-/// `failed(cause)`，待办随失败一并报出
-pub struct PostWrite {
-    pending: Vec<Pending>,
-}
-
-impl PostWrite {
-    pub fn new() -> Self {
-        Self { pending: Vec::new() }
-    }
-
-    /// 记录一条尚未满足的后置条件
-    pub fn pending(&mut self, p: Pending) {
-        self.pending.push(p);
-    }
-
-    /// 已记录的待办条数：执行体用它判断"本次收尾是否留下未完成项"（如 ckpt 的去留）
-    pub fn len(&self) -> usize {
-        self.pending.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.pending.is_empty()
-    }
-
-    /// 执行体全部返回 `Ok`：布局已写，待办随结果浮出
-    pub fn applied(self) -> Outcome {
-        Outcome::applied_with(self.pending)
-    }
-
-    /// 执行体返回 `Err`：盘可能已改变，已知未完成的待办一并列出
-    pub fn failed(self, cause: impl Into<String>) -> Outcome {
-        Outcome::failed_with(cause, self.pending)
-    }
-}
-
-impl Default for PostWrite {
-    fn default() -> Self {
-        Self::new()
-    }
+/// 不提供 `From<RunOutcome> for io::Error`：压平必须逐点写明
+#[cfg(target_os = "linux")]
+pub fn into_io_error(e: RunOutcome) -> std::io::Error {
+    std::io::Error::other(e.to_string())
 }
 
 #[cfg(test)]
@@ -424,37 +459,133 @@ mod tests {
     use super::*;
     use crate::fsops::FsError;
 
-    /// FsError 的分类只在这一处落成出口语义：不认得的类型 / 参数与目标现状不符 ⇒ 10
-    /// （改参数有意义），工具缺失 / 环境故障 ⇒ 30（Infra，改参数无意义但不警示），
-    /// 外部工具非零退出 ⇒ 同码 30 但落 Failed（工具运行过，写没写无法断言 → 带警示行）
+    /// FsError 的分类只在这一处落成出口语义：不认得的类型 / 参数与目标现状不符 ⇒ 拒绝（3），
+    /// 工具缺失 ⇒ 不支持（6），环境故障 ⇒ 无持久化修改（4），外部工具非零退出 ⇒ 部分完成（5）
     #[test]
     fn fs_error_maps_to_exit_codes() {
-        let code = |e: FsError| Fail::from(e).into_outcome().exit_code();
-        assert_eq!(code(FsError::UnsupportedFs("no resize tool".into())), EXIT_REFUSED);
+        let code = |e: FsError| RunOutcome::from(e).exit_code();
+        assert_eq!(code(FsError::UnsupportedFs("no resize tool".into())), EXIT_UNSUPPORTED);
         assert_eq!(code(FsError::InvalidArgument("bad size".into())), EXIT_REFUSED);
-        assert_eq!(code(FsError::ToolMissing("no mkfs.xfs".into())), EXIT_INFRA);
-        assert_eq!(code(FsError::Io(std::io::Error::other("EIO"))), EXIT_INFRA);
-        assert_eq!(code(FsError::CommandFailed("mkswap failed".into())), EXIT_INFRA);
-        // 同码不同变体：30 的语义差别（有无"盘可能已改变"警示行）只体现在变体上
-        assert!(matches!(Fail::from(FsError::CommandFailed("mkswap failed".into())), Fail::Failed(_)));
-        assert!(matches!(Fail::from(FsError::ToolMissing("no mkfs.xfs".into())), Fail::Infra(_)));
+        assert_eq!(code(FsError::ToolMissing("no mkfs.xfs".into())), EXIT_UNSUPPORTED);
+        assert_eq!(code(FsError::Io(std::io::Error::other("EIO"))), EXIT_NO_MUTATION);
+        assert_eq!(code(FsError::CommandFailed("mkswap failed".into())), EXIT_PARTIAL);
+        // 同码不同变体：5 的语义差别（有无"盘可能已改变"警示行）只体现在变体上
+        assert!(matches!(
+            RunOutcome::from(FsError::CommandFailed("mkswap failed".into())),
+            RunOutcome::Partial { .. }
+        ));
+        assert!(matches!(
+            RunOutcome::from(FsError::ToolMissing("no mkfs.xfs".into())),
+            RunOutcome::Unsupported { .. }
+        ));
     }
 
-    /// 越过 durable boundary 之后，同一分类不再有出口语义：压平即只剩 Failed
+    /// 越过 durable boundary 之后，同一分类不再有出口语义：压平即只剩 Partial
     /// （报告里必须带"盘可能已改变"，此时确实无法断言）
     #[test]
-    fn fs_error_flattens_to_failed_after_the_boundary() {
+    fn fs_error_flattens_to_partial_after_the_boundary() {
         let after: std::io::Error = FsError::UnsupportedFs("no resize tool".into()).into();
-        assert!(matches!(Fail::from(after), Fail::Failed(_)));
+        assert!(matches!(RunOutcome::from(after), RunOutcome::Partial { .. }));
     }
 
-    /// 上下文只改文案，不改分类——为了补一句"当时在做什么"而改用 `Fail::infra(..)`
-    /// 会把 10 悄悄升格成 30
+    /// 上下文只改文案，不改分类
     #[test]
     fn context_keeps_the_variant() {
-        assert!(matches!(Fail::refused("x").context("doing y"), Fail::Refused(m) if m == "doing y: x"));
-        assert!(matches!(Fail::infra("x").context("doing y"), Fail::Infra(m) if m == "doing y: x"));
-        assert!(matches!(Fail::failed("x").context("doing y"), Fail::Failed(m) if m == "doing y: x"));
+        assert!(
+            matches!(RunOutcome::refused("x").context("doing y"), RunOutcome::Refused(m) if m == "doing y: x")
+        );
+        assert!(matches!(
+            RunOutcome::no_mutation("x").context("doing y"),
+            RunOutcome::NoMutation { cause } if cause == "doing y: x"
+        ));
+        assert!(matches!(
+            RunOutcome::partial("x").context("doing y"),
+            RunOutcome::Partial { cause, .. } if cause == "doing y: x"
+        ));
+    }
+
+    #[test]
+    fn exit_codes_are_the_contract() {
+        assert_eq!(RunOutcome::usage("x").exit_code(), 2);
+        assert_eq!(RunOutcome::refused("x").exit_code(), 3);
+        assert_eq!(RunOutcome::no_mutation("x").exit_code(), 4);
+        assert_eq!(RunOutcome::partial("x").exit_code(), 5);
+        assert_eq!(RunOutcome::unsupported("x").exit_code(), 6);
+        assert_eq!(RunOutcome::internal("x").exit_code(), 1);
+        assert_eq!(RunOutcome::applied_with(Vec::new()).exit_code(), 0);
+    }
+
+    /// §9 的后半张表逐行：每个旧形态落到哪个新码，都在这里钉住。
+    /// 同一码可由不同变体产生，但"哪种成因落哪个码"不能漂
+    #[test]
+    fn mapping_table_rows_hold() {
+        // Applied 的两种未完成形态都是 5：待办非空、内核视图过期
+        let pending = RunOutcome::applied_with(vec![Pending::new(1, PendingKind::Fs, "d", "h")]);
+        assert_eq!(pending.exit_code(), EXIT_PARTIAL);
+        assert!(!pending.is_complete());
+        let stale = RunOutcome::Applied { pending: Vec::new(), kernel_sync: KernelSync::Stale };
+        assert_eq!(stale.exit_code(), EXIT_PARTIAL);
+        assert!(!stale.is_complete());
+
+        // 失败六变体：用法 2、拒绝 3、未写 4、不支持 6、内部 1、部分 5
+        let code = |f: RunOutcome| f.exit_code();
+        assert_eq!(code(RunOutcome::usage("bad flag")), EXIT_USAGE);
+        assert_eq!(code(RunOutcome::refused("no such partition")), EXIT_REFUSED);
+        assert_eq!(code(RunOutcome::no_mutation("EIO before the first write")), EXIT_NO_MUTATION);
+        assert_eq!(code(RunOutcome::unsupported("tool missing")), EXIT_UNSUPPORTED);
+        assert_eq!(code(RunOutcome::internal("invariant broken")), EXIT_INTERNAL);
+        assert_eq!(code(RunOutcome::partial("write call reported an error")), EXIT_PARTIAL);
+
+        // 表结构非法归 3（未写盘，改参数或换目标有意义）；表读写失败归 4
+        assert_eq!(
+            code(RunOutcome::from(crate::table::GptError::InvalidHeader("crc".into()))),
+            EXIT_REFUSED
+        );
+        assert_eq!(
+            code(RunOutcome::from(crate::table::GptError::Io(std::io::Error::other("EIO")))),
+            EXIT_NO_MUTATION
+        );
+
+        // 越过 durable boundary 之后只有两个出口：完整 0、其余 5
+        assert_eq!(RunOutcome::applied_with(Vec::new()).exit_code(), EXIT_OK);
+        let w = vec![Pending::new(2, PendingKind::Swap, "d", "h")];
+        assert_eq!(RunOutcome::applied_with(w).exit_code(), EXIT_PARTIAL);
+        assert_eq!(RunOutcome::partial_with("fail after the boundary", Vec::new()).exit_code(), EXIT_PARTIAL);
+    }
+
+    /// 收尾失败（journal 未删、资源未释放）只把"已完整应用"降成 5；
+    /// 已有更差结论的形态不被这条收尾故障覆盖
+    #[test]
+    fn cleanup_fence_degrades_only_a_complete_applied() {
+        assert_eq!(
+            RunOutcome::applied_with(Vec::new()).degrade_partial("journal not removed").exit_code(),
+            EXIT_PARTIAL
+        );
+        // 待办非空本来就是 5，变体保持不变
+        let applied_pending = RunOutcome::applied_with(vec![Pending::new(1, PendingKind::Fs, "d", "h")]);
+        assert!(matches!(
+            applied_pending.degrade_partial("journal not removed"),
+            RunOutcome::Applied { .. }
+        ));
+        // 更差的成因不被降级改写
+        assert_eq!(
+            RunOutcome::refused("no such partition").degrade_partial("leak").exit_code(),
+            EXIT_REFUSED
+        );
+        assert_eq!(
+            RunOutcome::no_mutation("EIO").degrade_partial("leak").exit_code(),
+            EXIT_NO_MUTATION
+        );
+    }
+
+    /// 5 的 stderr 契约：三行齐备（盘可能已改变、证据路径、下一步命令），
+    /// 且下一步不是空泛的"重试"
+    #[test]
+    fn partial_guidance_names_state_evidence_and_next_step() {
+        let lines = RunOutcome::partial_guidance_lines();
+        assert!(lines[0].contains("may have changed"), "{}", lines[0]);
+        assert!(lines[1].contains("evidence:"), "{}", lines[1]);
+        assert!(lines[2].contains("`diskedit undo`") && lines[2].contains("`diskedit abandon`"), "{}", lines[2]);
     }
 
     /// 本模块是"后置条件契约 + 退出码的唯一映射点"，不认识任何具体文件系统或工具——
