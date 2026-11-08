@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::dev::FileSource;
-use crate::fsops::run;
+use crate::fsops::run_write;
 
 /// FS 步之前的挂载点复核。`xfs_growfs` / `btrfs filesystem resize` 只拿得到挂载点字符串，
 /// 对它的解析最后一次发生在 `resolve_target`；跨过 part_resize（sfdisk 写表 + partx + 回读）
@@ -28,6 +28,16 @@ fn verify_mount_target(t: &OnlineTarget) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+/// 挂载点解析失败的三类出口：身份不符/挂载形态不可判定是拒绝（3），
+/// 能力缺口（多设备、非块设备挂载）是不支持（6），其余是未写盘的环境故障（4）
+fn resolve_fail(e: io::Error) -> RunOutcome {
+    match e.kind() {
+        io::ErrorKind::InvalidInput => RunOutcome::refused(e.to_string()),
+        io::ErrorKind::Unsupported => RunOutcome::unsupported(e.to_string()),
+        _ => RunOutcome::no_mutation(e.to_string()),
+    }
 }
 
 /// 分区表已扩之后 FS 步失败的三种成因：无在线工具（一个进程都没起）、进程未启动
@@ -62,13 +72,14 @@ pub(crate) enum TablePolicy {
 
 pub fn resize_online(
     mountpoint: &Path,
-    decide: impl FnOnce(&FileSource) -> Result<Option<u64>, Fail>,
+    decide: impl FnOnce(&FileSource) -> Result<Option<u64>, RunOutcome>,
     table: TablePolicy,
-) -> Outcome {
-    // 解析与 FS 识别都是只读的，且先于 part_resize/sfdisk 的首次写盘 → Infra
+) -> RunOutcome {
+    // 解析与 FS 识别都是只读的，且先于 part_resize/sfdisk 的首次写盘：
+    // 身份/形态不符归拒绝（3），能力缺口归不支持（6），其余按未写盘的环境故障（4）
     let t = match resolve_target(mountpoint) {
         Ok(t) => t,
-        Err(e) => return Outcome::infra(e.to_string()),
+        Err(e) => return resolve_fail(e),
     };
     // 独占权必须在 FS 步之前取得：本函数既可能写 FS（fs_grow）也可能写表
     // （part_resize），等到写表才取锁会让前面的 FS 写入落在锁外
@@ -80,14 +91,14 @@ pub fn resize_online(
     // 会解析到别的分区——两次解析目标不一致即拒绝，绝不在 A 的锁下操作 B
     let fresh = match resolve_target(mountpoint) {
         Ok(t) => t,
-        Err(e) => return Outcome::infra(e.to_string()),
+        Err(e) => return resolve_fail(e),
     };
     // 先比身份再比路径串：身份是锁的载体，路径串只是它的一个投影
     if let Err(o) = verify_lock_identity(&locked_ident, &fresh) {
         return o;
     }
     if fresh.part_dev != t.part_dev {
-        return Outcome::infra(format!(
+        return RunOutcome::refused(format!(
             "mountpoint {} changed target during locking ({} -> {}) — retry",
             mountpoint.display(),
             t.part_dev.display(),
@@ -102,49 +113,49 @@ pub fn resize_online(
     // 活动 swap 的锁下复核（命令层那次是锁前粗查，理由同 resize_pv）：本路径的前提
     // 是"挂载中"，挂载本身放行，唯独 swap 激活不可——swapon 不守本工具的锁
     let Some(dn) = t.disk_dev.file_name().map(|s| s.to_string_lossy().into_owned()) else {
-        return Outcome::refused(format!("cannot derive disk name from {}", t.disk_dev.display()));
+        return RunOutcome::refused(format!("cannot derive disk name from {}", t.disk_dev.display()));
     };
     match crate::online::swap_active(&dn, t.pno) {
         Ok(true) => {
-            return Outcome::refused(format!("partition {} became active swap during locking — run swapoff first", t.pno));
+            return RunOutcome::refused(format!("partition {} became active swap during locking — run swapoff first", t.pno));
         }
         Ok(false) => {}
-        Err(e) => return Outcome::infra(format!("cannot check active swap for partition {}: {e}", t.pno)),
+        Err(e) => return RunOutcome::no_mutation(format!("cannot check active swap for partition {}: {e}", t.pno)),
     }
     let fstype = match fstype_of(&t) {
         Ok(f) => f,
-        Err(e) => return Outcome::infra(e.to_string()),
+        Err(e) => return RunOutcome::no_mutation(e.to_string()),
     };
     // 目标长度在锁下解析：请求的锚定值（`+N`/`+N%` 的当前尺寸、`grow` 的右侧空闲）
     // 必须取自独占权之后的盘上现状，锁前快照在窗口内可能已作废。只读打开整盘，
-    // 解析失败按 Fail 的出口语义直接折叠
+    // 解析失败按 RunOutcome 的出口语义直接折叠
     let disk = match FileSource::open_read_only(&t.disk_dev) {
         Ok(s) => s,
-        Err(e) => return Outcome::infra(format!("open failed: {e}")),
+        Err(e) => return RunOutcome::no_mutation(format!("open failed: {e}")),
     };
     let size = match decide(&disk) {
         Ok(v) => v,
-        Err(f) => return f.into_outcome(),
+        Err(f) => return f,
     };
-    let online_shrink = fstype == Some(crate::fsid::FsKind::Btrfs);
+    let online_shrink = fstype == Some(ContentKind::Filesystem(FsKind::Btrfs));
     if size.is_some_and(|s| s < t.part_len_bytes) {
         // xfs 离线同样不可缩（shrink_fs 兜底拒绝），单独说明以免用户改走离线路径
-        if fstype == Some(crate::fsid::FsKind::Xfs) {
-            return Outcome::refused(
+        if fstype == Some(ContentKind::Filesystem(FsKind::Xfs)) {
+            return RunOutcome::refused(
                 "xfs does not support shrinking (online or offline); only growing is possible".to_string(),
             );
         }
         if !online_shrink {
-            return Outcome::refused(format!(
+            return RunOutcome::refused(format!(
                 "{} cannot shrink online (only btrfs can); unmount and use the offline path where supported",
-                crate::fsid::fs_name(fstype)
+                crate::fsid::content_name(fstype.unwrap_or(ContentKind::Unknown))
             ));
         }
         // 本入口（resizefs 挂载点形式）不改分区表，而缩容必须让分区跟着 FS 一起缩
         // （下方 shrink 臂的 part_resize 会写表）——承诺优先于能力，哪怕 btrfs 缩得动。
         // 与上面的拒绝同层：都在任何 FS 写入与写表之前
         if matches!(table, TablePolicy::FilesystemOnly) {
-            return Outcome::refused(
+            return RunOutcome::refused(
                 "resizefs given a mountpoint does not change the partition table — shrinking the filesystem \
                  requires shrinking the partition with it; use `diskedit resize` instead"
                     .to_string(),
@@ -156,13 +167,13 @@ pub fn resize_online(
         Pending::new(t.pno, PendingKind::Fs, detail, fs_grow_hint(&t, fstype))
     };
     // fs_grow 的三态映射（唯一处）：无在线工具 = 成因在请求（换离线路径）⇒ refused；
-    // spawn 失败 = 什么都没动（infra）；非零退出 = 工具可能改了一半（failed）。
+    // spawn 失败 = 什么都没动（no_mutation）；非零退出 = 工具可能改了一半（partial）。
     // 适用前提：本分支没有更早的写盘步骤
     let fs_grow_outcome = |r: Result<(), FsGrowError>| match r {
-        Ok(()) => Outcome::applied_with(Vec::new()),
-        Err(FsGrowError::NoTool(m)) => Outcome::refused(m),
-        Err(FsGrowError::Spawn(err)) => Outcome::infra(err.to_string()),
-        Err(FsGrowError::Exit(m)) => Outcome::failed(m),
+        Ok(()) => RunOutcome::applied_with(Vec::new()),
+        Err(FsGrowError::NoTool(m)) => RunOutcome::refused(m),
+        Err(FsGrowError::Spawn(err)) => RunOutcome::no_mutation(err.to_string()),
+        Err(FsGrowError::Exit(m)) => RunOutcome::partial(m),
     };
 
     // 内核分区视图与盘上表必须同尺寸：FS 工具以 /dev 节点传递的内核尺寸为准，内核视图
@@ -171,12 +182,12 @@ pub fn resize_online(
     // 表比较。因此在任何 FS 写入与表写入之前统一拒绝，待刷新视图后重跑
     let disk_len = match crate::gpt_policy::partition_bytes(&disk, t.pno) {
         Ok((_, len)) => len,
-        Err(f) => return f.into_outcome(),
+        Err(f) => return f,
     };
     if disk_len != t.part_len_bytes {
         // 本次什么都没写：内核视图过期是环境状态，不是请求与布局不匹配。
-        // 用 Applied 表达会让退出码变成 20（"表已改"），与事实相反
-        return Outcome::infra(format!(
+        // 用 Applied 表达会让退出码变成 5（"表已改"），与事实相反
+        return RunOutcome::no_mutation(format!(
             "the kernel reports partition {} as {} bytes but the on-disk table says {} bytes — \
              the kernel partition view is stale; refresh it (partprobe / partx) and re-run",
             t.pno, t.part_len_bytes, disk_len
@@ -189,7 +200,7 @@ pub fn resize_online(
     let size = match size {
         Some(b) if b == t.part_len_bytes && matches!(table, TablePolicy::WithTable) => {
             println!("partition {} is already {} bytes — nothing to do", t.pno, t.part_len_bytes);
-            return Outcome::applied_with(Vec::new());
+            return RunOutcome::applied_with(Vec::new());
         }
         Some(b) if b == t.part_len_bytes => None,
         other => other,
@@ -201,11 +212,11 @@ pub fn resize_online(
         // 扩满现分区：分区不动，FS 工具直接吃满（内核视图无需变更）
         None => {
             if let Err(e) = refuse_btrfs_multi_device(&t, fstype) {
-                return Fail::from(e).into_outcome();
+                return RunOutcome::from(e);
             }
             // FS 步是本次唯一写盘步骤，挂载点偏移即"写另一个文件系统"
             if let Err(e) = verify_mount_target(&t) {
-                return Outcome::infra(e);
+                return RunOutcome::no_mutation(e);
             }
             fs_grow_outcome(fs_grow(&t, fstype))
         }
@@ -213,14 +224,14 @@ pub fn resize_online(
             // resizefs 挂载点形式只扩文件系统，不改分区表：越界请求在任何写盘之前拒绝，
             // 分区几何的协调由 `resize` 负责
             if bytes > t.part_len_bytes && matches!(table, TablePolicy::FilesystemOnly) {
-                return Outcome::refused(format!(
+                return RunOutcome::refused(format!(
                     "resizefs given a mountpoint grows the filesystem inside the current partition ({} bytes) — \
                      enlarge the partition with `diskedit resize` first",
                     t.part_len_bytes
                 ));
             }
             if let Err(f) = check_new_range(&t, bytes, &disk) {
-                return f.into_outcome();
+                return f;
             }
             if bytes > t.part_len_bytes {
                 // grow：先自查（内核 EBUSY 兜底），sfdisk 写表 → partx 同步 → FS 工具。
@@ -237,63 +248,63 @@ pub fn resize_online(
                     }
                 }
                 if let Err(e) = refuse_btrfs_multi_device(&t, fstype) {
-                    return Fail::from(e).into_outcome();
+                    return RunOutcome::from(e);
                 }
                 // 写表之前复核：挂载点已偏移时连表也不该改，本次未写盘
                 if let Err(e) = verify_mount_target(&t) {
-                    return Outcome::infra(e);
+                    return RunOutcome::no_mutation(e);
                 }
                 if let Err(e) = part_resize(&t, bytes) {
                     // 表已写、内核同步失败：FS 扩步也因此没做，两条事实一并报
                     let detail = e.detail().to_string();
                     match &e {
                         PartResizeError::Partial(_) => {
-                            return e.into_outcome_with(vec![fs_pending(format!(
+                            return e.into_run_outcome_with(vec![fs_pending(format!(
                                 "partition resized but FS grow skipped: {detail}"
                             ))]);
                         }
                         // 写入已发出但盘上状态不可证实：表不一定到了请求尺寸，FS 同样没做
                         PartResizeError::Unverified(_) => {
-                            return e.into_outcome_with(vec![fs_pending(format!(
+                            return e.into_run_outcome_with(vec![fs_pending(format!(
                                 "partition table write could not be verified; FS grow skipped: {detail}"
                             ))]);
                         }
-                        _ => return e.into_outcome(),
+                        _ => return e.into_run_outcome(),
                     }
                 }
                 if let Err(e) = verify_part_size(&t, bytes) {
                     // 两个正交事实同时成立：内核视图过期 + FS 步未做
                     eprintln!("warning: partition table updated but kernel reports a different size: {e}");
-                    let mut o = Outcome::applied_with(vec![fs_pending(format!("partition resized but FS grow skipped: {e}"))]);
+                    let mut o = RunOutcome::applied_with(vec![fs_pending(format!("partition resized but FS grow skipped: {e}"))]);
                     o.mark_kernel_stale();
                     return o;
                 }
                 // 表已写、内核已同步：挂载点若在 part_resize 期间偏移，FS 步只能跳过
                 if let Err(e) = verify_mount_target(&t) {
-                    return Outcome::applied_with(vec![fs_pending(format!(
+                    return RunOutcome::applied_with(vec![fs_pending(format!(
                         "partition resized but FS grow skipped: {e}"
                     ))]);
                 }
                 match fs_grow(&t, fstype) {
-                    Ok(()) => Outcome::applied_with(Vec::new()),
+                    Ok(()) => RunOutcome::applied_with(Vec::new()),
                     // 分区已扩：FS 步是一条未满足的后置条件，但"工具未启动"与"已运行且
                     // 非零退出"对文件系统的改动量不同，文案各自成句（见该函数）
-                    Err(e) => Outcome::applied_with(vec![fs_pending(fs_grow_skipped_after_resize(&e))]),
+                    Err(e) => RunOutcome::applied_with(vec![fs_pending(fs_grow_skipped_after_resize(&e))]),
                 }
             } else {
                 // shrink（仅 btrfs；FilesystemOnly 入口已在上方拒绝，能到这里说明本入口
                 // 的职责包含分区几何）：FS 先缩（内核校验占用与 256MiB 下限），持久化缩分区
                 if let Err(e) = refuse_btrfs_multi_device(&t, fstype) {
-                    return Fail::from(e).into_outcome();
+                    return RunOutcome::from(e);
                 }
                 // 缩容的 FS 步是首个写盘步骤：挂载点已偏移时拒绝，盘未动
                 if let Err(e) = verify_mount_target(&t) {
-                    return Outcome::infra(e);
+                    return RunOutcome::no_mutation(e);
                 }
                 // 本函数的目标由挂载点解析得出，mnt 恒为 Some；把 None 挡在写盘之前，
                 // 免得一个推不出的挂载点变成空参数传给 btrfs（它会被当成另一个路径）
                 let Some(mnt) = t.mnt.as_deref() else {
-                    return Outcome::refused(
+                    return RunOutcome::refused(
                         "shrinking a filesystem online needs its mount point, and this target has none — \
                          shrink it with the offline path",
                     );
@@ -303,18 +314,18 @@ pub fn resize_online(
                 // 耗时良久，期间的盘上表可能已被第三方改写。读当前表，不一致或读不出来
                 // 都在这里停下——此刻本进程尚未写盘
                 if let Err(e) = ensure_disk_snapshot_unchanged(&t, bytes) {
-                    return e.into_outcome();
+                    return e.into_run_outcome();
                 }
-                match run("btrfs", &["filesystem", "resize", &bytes.to_string(), &mnt]) {
-                    // ToolMissing / spawn 失败发生在本次首次写盘之前 → Infra；
-                    // 启动后拿不到退出状态则可能已改 FS → Failed（映射见 Fail::from）
-                    Err(e) => return Fail::from(e).into_outcome(),
+                match run_write("btrfs", &["filesystem", "resize", &bytes.to_string(), &mnt]) {
+                    // ToolMissing / spawn 失败发生在本次首次写盘之前 → NoMutation；
+                    // 启动后拿不到退出状态则可能已改 FS → Partial（映射见 RunOutcome::from）
+                    Err(e) => return RunOutcome::from(e),
                     Ok(out) if !out.status.success() => {
-                        return Outcome::failed(format!("btrfs shrink failed: {}", String::from_utf8_lossy(&out.stderr)));
+                        return RunOutcome::partial(format!("btrfs shrink failed: {}", String::from_utf8_lossy(&out.stderr)));
                     }
                     Ok(_) => {}
                 }
-                // FS 已缩：此后任何失败都不再是"未动盘"，表未写的情形只能报 Failed。
+                // FS 已缩：此后任何失败都不再是"未动盘"，表未写的情形只能报 Partial。
                 // 工具退 0 不等于 FS 已缩到请求值：先回读实际尺寸，与离线侧同一条判据。
                 // 读不出或实际值仍大于请求值时分区不能缩进去——末端会落在 FS 内部，
                 // 尾部数据从此不可达
@@ -325,7 +336,7 @@ pub fn resize_online(
                 match fs_now {
                     Ok(actual) if actual <= bytes => {}
                     Ok(actual) => {
-                        return Outcome::applied_with(vec![Pending::new(
+                        return RunOutcome::applied_with(vec![Pending::new(
                             t.pno,
                             PendingKind::Fs,
                             format!(
@@ -336,7 +347,7 @@ pub fn resize_online(
                         )]);
                     }
                     Err(e) => {
-                        return Outcome::applied_with(vec![Pending::new(
+                        return RunOutcome::applied_with(vec![Pending::new(
                             t.pno,
                             PendingKind::Fs,
                             format!(
@@ -350,33 +361,33 @@ pub fn resize_online(
                 match part_resize(&t, bytes) {
                     Ok(()) => {}
                     // 表已写、仅内核同步失败。FS 已缩是已完成的事实，先单独报出；
-                    // 未达成的内核同步由 Outcome 的 stale 标记承接——两者不混进同一份
+                    // 未达成的内核同步由 RunOutcome 的 stale 标记承接——两者不混进同一份
                     // 待办清单（pending 只表示未做的事）
                     Err(e @ PartResizeError::Partial(_)) => {
                         println!("btrfs filesystem shrunk to {bytes} bytes (the partition table change did not reach the kernel)");
-                        return e.into_outcome();
+                        return e.into_run_outcome();
                     }
                     // 写入已发出但盘上状态不可证实：FS 已缩，表是否已缩无法断言。
                     // 不得报成"表未写"（那会暗示分区仍是旧尺寸），也不得报成内核同步失败
                     Err(e @ PartResizeError::Unverified(_)) => {
-                        return Outcome::failed(format!(
+                        return RunOutcome::partial(format!(
                             "btrfs shrunk but the partition table write could not be verified: {}",
                             e.detail()
                         ));
                     }
                     // 表未写或无法断言：FS 已缩，本次已改变盘上内容 → 不得报"未动盘"
                     Err(e) => {
-                        return Outcome::failed(format!(
+                        return RunOutcome::partial(format!(
                             "btrfs shrunk but partition resize skipped: {}",
                             e.detail()
                         ));
                     }
                 }
                 match verify_part_size(&t, bytes) {
-                    Ok(()) => Outcome::applied_with(Vec::new()),
+                    Ok(()) => RunOutcome::applied_with(Vec::new()),
                     Err(e) => {
                         eprintln!("warning: partition table shrunk but kernel reports a different size: {e}");
-                        Outcome::applied_stale_kernel()
+                        RunOutcome::applied_stale_kernel()
                     }
                 }
             }

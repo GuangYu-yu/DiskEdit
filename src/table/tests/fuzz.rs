@@ -15,24 +15,26 @@ const GPT_SEED: u64 = 0x5EED_0000_0002;
 const GPT_ROUNDS: u32 = 1000;
 const SS: u64 = 512;
 
-/// 每轮覆盖同一临时路径：几千轮不会在临时目录里留下几千个文件；
-/// 上一轮的 `FileSource` 在本轮写盘前已经 drop
-fn open_src(tag: &str, data: &[u8]) -> FileSource {
-    let mut p = std::env::temp_dir();
-    p.push(format!("diskedit_fuzz_{tag}_{}.img", std::process::id()));
+/// 每轮一个独立临时目录：路径不撞、不受上一轮残留影响，目录在 `FileSource` 析构后
+/// 随 `TestDir` 一起删除
+fn open_src(tag: &str, data: &[u8]) -> crate::testdir::TestSource<FileSource> {
+    let dir = crate::testdir::test_dir(tag);
+    let p = dir.join("fuzz.img");
     std::fs::write(&p, data).unwrap();
     let f = std::fs::OpenOptions::new().read(true).write(true).open(&p).unwrap();
-    FileSource {
+    let src = FileSource {
         identity: crate::dev::TargetIdentity::resolve_image(&p),
         file: f,
         path: p,
         sector_size: SS,
         size: data.len() as u64,
         is_block: false,
-        journal: None,
+        record_journal: None,
         fingerprint: Default::default(),
         loop_mapping: None,
-    }
+        owner: None,
+    };
+    crate::testdir::TestSource::new(dir, src)
 }
 
 /// 固定种子的 MBR 输入：LBA0 的四个槽位按池取值（类型/起点/长度都含 0、
@@ -73,7 +75,6 @@ fn parse_mbr_raw_fuzz_fixed_seed() {
         let Some(r) = raw else {
             // None 只有两个合法来源：签名缺席，或 LBA0 本身是一份完好的保护 MBR
             assert!(!sig || pmbr_shape_valid(&src).unwrap(), "{ctx}: an MBR-shaped LBA0 vanished without a protective layout");
-            let _ = std::fs::remove_file(&src.path);
             continue;
         };
 
@@ -120,7 +121,6 @@ fn parse_mbr_raw_fuzz_fixed_seed() {
             let e = parse_mbr(&src).expect_err("a damaged table must be refused by the validated reader");
             assert_eq!(e.kind(), std::io::ErrorKind::InvalidData, "{ctx}: a damaged table failed on the wrong channel: {e}");
         }
-        let _ = std::fs::remove_file(&src.path);
     }
 }
 
@@ -278,9 +278,6 @@ fn gpt_copy_damage_is_rejected_not_silently_maskable() {
         matches!(parse_primary(&src, SS, pmbr_size_state(&src, SS).unwrap()), ParsedCopy::CopyDamaged(_)),
         "a header_size below the 92-byte minimum must be a copy-level damage"
     );
-    let path = src.path.clone();
-    drop(src);
-    let _ = std::fs::remove_file(&path);
 
     // (b) 主头 CRC 与备份头 CRC 同时改坏：整体必须报错（两份都不可用）
     let mut data = base.clone();
@@ -289,9 +286,6 @@ fn gpt_copy_damage_is_rejected_not_silently_maskable() {
     let src = open_src("gpt_copy_crc", &data);
     let r = load_gpt(&src);
     assert!(r.is_err(), "both copies with a bad CRC must not yield a table");
-    let path = src.path.clone();
-    drop(src);
-    let _ = std::fs::remove_file(&path);
 
     // (c) LBA1 签名被抹掉 = 此处确实没有主副本：必须由完好的备份副本回退，
     // 而不是把"主副本没有签名"当作"整盘没有表"
@@ -299,9 +293,6 @@ fn gpt_copy_damage_is_rejected_not_silently_maskable() {
     data[hdr..hdr + 8].fill(0);
     let src = open_src("gpt_copy_absent", &data);
     assert!(matches!(load_gpt(&src), Ok(Some(_))), "the intact backup copy must still be usable");
-    let path = src.path.clone();
-    drop(src);
-    let _ = std::fs::remove_file(&path);
 
     // (d) 主副本 last_usable_lba 越过盘尾（自洽 CRC）：这一份必须拒绝
     let mut data = base.clone();
@@ -312,7 +303,4 @@ fn gpt_copy_damage_is_rejected_not_silently_maskable() {
         matches!(parse_primary(&src, SS, pmbr_size_state(&src, SS).unwrap()), ParsedCopy::CopyDamaged(_)),
         "last_usable_lba beyond the container must be a copy-level damage"
     );
-    let path = src.path.clone();
-    drop(src);
-    let _ = std::fs::remove_file(&path);
 }

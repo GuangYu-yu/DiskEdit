@@ -5,7 +5,7 @@ use gptman::GPT;
 /// 重叠条目：诊断层必须仍能读出（info 要能指出哪两条重叠、用户据此修表），
 /// 而写入层必须拒绝——本工具的空间派生事实（右侧空闲、搬移打包、扩容终点）全部
 /// 以"不重叠"为前提（UEFI 2.10 §5.3.1 GPT overview：Each defined partition must not
-/// overlap with any other defined partition）。拒绝发生在任何写盘之前，故归 infra
+/// overlap with any other defined partition）。拒绝发生在任何写盘之前，故归拒绝（3）
 #[test]
 pub(crate) fn overlapping_entries_are_diagnosable_but_never_writable() {
     let ss = 512u64;
@@ -20,7 +20,7 @@ pub(crate) fn overlapping_entries_are_diagnosable_but_never_writable() {
     let e = crate::gpt_policy::resolve_geometry(&src)
         .err()
         .expect("an overlapping table must be refused by the write-path geometry");
-    assert!(matches!(&e, Fail::Infra(m) if m.contains("overlap")), "{e:?}");
+    assert!(matches!(&e, RunOutcome::Refused(m) if m.contains("overlap")), "{e:?}");
 
     // 紧邻但不重叠（200 / 201）：同一构造点必须放行，不得把合法表一并拒掉
     let mut ok = src_from("no_overlap", vec![0u8; (2048 * ss) as usize]);
@@ -40,7 +40,7 @@ pub(crate) fn entry_past_last_usable_is_refused() {
     write_primary_entries(&mut src, ss, &[(100, 5000)]);
     ensure_protective_mbr(&mut src, ss).unwrap();
     let e = crate::gpt_policy::resolve_geometry(&src).err().expect("an entry past the usable range must be refused");
-    assert!(matches!(&e, Fail::Infra(m) if m.contains("outside usable range")), "{e:?}");
+    assert!(matches!(&e, RunOutcome::Refused(m) if m.contains("outside usable range")), "{e:?}");
 }
 
 /// 容器装不下条目数组时，commit_gpt 必须用 checked 运算返回 Err，

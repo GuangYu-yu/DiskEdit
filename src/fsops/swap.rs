@@ -80,7 +80,7 @@ pub fn recreate_swap(
             args.extend([OsString::from("-L"), os_bytes(l)]);
         }
         args.push(OsString::from(dev));
-        let out = run("mkswap", &args)?;
+        let out = run_write("mkswap", &args)?;
         if !out.status.success() {
             return Err(FsError::command("mkswap", &out));
         }
@@ -164,6 +164,7 @@ pub(crate) fn wipe_zero(dev: &str, ranges: &[(u64, u64)]) -> io::Result<()> {
         let mut left = len;
         while left > 0 {
             let n = (left as usize).min(zero.len());
+            crate::outcome::note_target_write();
             f.write_all(&zero[..n])?;
             left -= n as u64;
         }

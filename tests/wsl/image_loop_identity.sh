@@ -7,7 +7,7 @@
 #   E. 块设备栈持有——loop 本身或其分区被 dm 映射时改表仍须被拒
 #   F. 活动 swap——分区作 swap 时改表仍须被拒
 #   C. 跨 mount namespace——loop 与挂载都在另一 namespace 内，本 namespace 仍须检出
-#   D. 不可确认即拒绝——/dev 下看不到 loop 节点时退出码 30，且不得写成"空闲"
+#   D. 不可确认即拒绝——/dev 下看不到 loop 节点时退出码 4，且不得写成"空闲"
 #   G. 进程退出竞态——已退出进程的 mountinfo 是 EINVAL，跳过它不得掩盖真实探测故障
 #   G2. 权限不足——hidepid 下读不到他人 mountinfo 时按探测失败拒绝，不得当成"未挂载"
 #   G3. 可用性边界——打不开 loop 节点（root:disk 0660）的一方建不出绑定，按未绑定
@@ -22,7 +22,7 @@ command -v losetup >/dev/null || { echo "SKIP: losetup 缺失"; exit 0; }
 command -v mkfs.ext4 >/dev/null || { echo "SKIP: mkfs.ext4 缺失"; exit 0; }
 unshare -m true 2>/dev/null || { echo "SKIP: unshare -m 不可用"; exit 0; }
 
-T=$(mktemp /tmp/loopid-XXXXXX.img)
+T=$(mktemp "$WSL_ROOT/loopid-XXXXXX.img")
 track_file "$T"
 truncate -s 96M "$T"
 
@@ -47,7 +47,7 @@ cleanup_hook() {
     return 0
 }
 "$B" new "$T" --yes >/dev/null 2>&1 || { echo "BAD  new 失败"; exit 1; }
-"$B" create "$T" --size 48M >/dev/null 2>&1 || { echo "BAD  create 失败"; exit 1; }
+"$B" add "$T" 48M --align mib --yes >/dev/null 2>&1 || { echo "BAD  add 失败"; exit 1; }
 L=$(lo_attach "$T") || { echo "BAD  losetup 失败"; exit 1; }
 lo_waitpart "${L}p1" || { echo "SKIP: $L 没有分区节点"; exit 0; }
 mkfs.ext4 -q "${L}p1" >/dev/null 2>&1 || { echo "BAD  mkfs.ext4 失败"; exit 1; }
@@ -97,23 +97,23 @@ LNK="${T}.alias"
 ln "$T" "$LNK" || { echo "BAD  硬链接失败"; exit 1; }
 L2=$(lo_attach "$LNK") || { echo "BAD  从硬链接建 loop 失败"; exit 1; }
 lo_waitpart "${L2}p1" || { echo "BAD  ${L2}p1 未就绪"; exit 1; }
-mount_at "${L2}p1" /testmnt || { echo "BAD  挂载 ${L2}p1 失败"; exit 1; }
-rm -f "$LNK"
+mount_at "${L2}p1" "$TEST_MNT" || { echo "BAD  挂载 ${L2}p1 失败"; exit 1; }
+rm -rf "$LNK"
 [ ! -e "$LNK" ] || { echo "BAD  硬链接未删除"; exit 1; }
-"$B" resize-part "$T:1" --start 2048 --grow-to-end >/dev/null 2>&1
-exp "$?" 10 "硬链接删除后仍按身份命中"
-unmount_now /testmnt
+"$B" resize-part "$T:1" --grow-to-end >/dev/null 2>&1
+exp "$?" 3 "硬链接删除后仍按身份命中"
+unmount_now "$TEST_MNT"
 lo_detach "$L2"
 
 echo "=== E: loop 分区被块设备栈持有"
 DMNAME=
 if command -v dmsetup >/dev/null 2>&1 && dmsetup version >/dev/null 2>&1; then
     # 独立的镜像：改表用缩小（Overwrite）形状，避免 Extend 的 dm-only 放行路径
-    T2=$(mktemp /tmp/loopid-hold-XXXXXX.img)
+    T2=$(mktemp "$WSL_ROOT/loopid-hold-XXXXXX.img")
     track_file "$T2"
     truncate -s 64M "$T2"
     "$B" new "$T2" --yes >/dev/null 2>&1 || { echo "BAD  new 失败"; exit 1; }
-    "$B" create "$T2" --size 32M >/dev/null 2>&1 || { echo "BAD  create 失败"; exit 1; }
+    "$B" add "$T2" 32M --align mib --yes >/dev/null 2>&1 || { echo "BAD  add 失败"; exit 1; }
     L3=$(lo_attach "$T2") || { echo "BAD  losetup 失败"; exit 1; }
     if ! lo_waitpart "${L3}p1"; then
         echo "SKIP: ${L3}p1 未就绪"
@@ -121,8 +121,8 @@ if command -v dmsetup >/dev/null 2>&1 && dmsetup version >/dev/null 2>&1; then
         DMNAME="diskedit-hold-$$"
         if dmsetup create "$DMNAME" --table "0 2048 linear ${L3}p1 0" >/dev/null 2>&1; then
             sleep 0.3
-            out=$("$B" resize-part "$T2:1" --start 2048 --end 4095 --yes 2>&1)
-            exp "$?" 10 "分区被 dm 持有：改表被拒"
+            out=$("$B" resize-part "$T2:1" --end 4095 --yes 2>&1)
+            exp "$?" 3 "分区被 dm 持有：改表被拒"
             case "$out" in
                 *"held by"*) echo "  OK   拒绝原因落在 holders 分支" ;;
                 *) echo "  BAD  拒绝原因不是 holders: $out"; rc=1 ;;
@@ -134,8 +134,8 @@ if command -v dmsetup >/dev/null 2>&1 && dmsetup version >/dev/null 2>&1; then
             DMNAME="diskedit-hold-$$"
             if dmsetup create "$DMNAME" --table "0 2048 linear ${L3} 0" >/dev/null 2>&1; then
                 sleep 0.3
-                out=$("$B" resize-part "$T2:1" --start 2048 --end 4095 --yes 2>&1)
-                exp "$?" 10 "loop 本身被 dm 持有：改表被拒"
+                out=$("$B" resize-part "$T2:1" --end 4095 --yes 2>&1)
+                exp "$?" 3 "loop 本身被 dm 持有：改表被拒"
                 case "$out" in
                     *"held by"*) echo "  OK   拒绝原因落在 holders 分支" ;;
                     *) echo "  BAD  拒绝原因不是 holders: $out"; rc=1 ;;
@@ -147,7 +147,7 @@ if command -v dmsetup >/dev/null 2>&1 && dmsetup version >/dev/null 2>&1; then
                 echo "SKIP: dmsetup create（整盘 loop）不可用"
             fi
             # 解除持有后改走扩容；T2 没有文件系统，改表需显式 --no-fs
-            "$B" resize-part "$T2:1" --start 2048 --grow-to-end --no-fs >/dev/null 2>&1
+            "$B" resize-part "$T2:1" --grow-to-end >/dev/null 2>&1
             exp "$?" 0 "解除持有后放行（阳性对照）"
         else
             echo "SKIP: dmsetup create 不可用"
@@ -160,21 +160,21 @@ fi
 
 echo "=== F: loop 分区是活动 swap"
 SWAPDEV=
-T3=$(mktemp /tmp/loopid-swap-XXXXXX.img)
+T3=$(mktemp "$WSL_ROOT/loopid-swap-XXXXXX.img")
 track_file "$T3"
 truncate -s 64M "$T3"
 "$B" new "$T3" --yes >/dev/null 2>&1 || { echo "BAD  new 失败"; exit 1; }
-"$B" create "$T3" --size 32M >/dev/null 2>&1 || { echo "BAD  create 失败"; exit 1; }
+"$B" add "$T3" 32M --align mib --yes >/dev/null 2>&1 || { echo "BAD  add 失败"; exit 1; }
 L4=$(lo_attach "$T3") || { echo "BAD  losetup 失败"; exit 1; }
 if ! lo_waitpart "${L4}p1"; then
     echo "SKIP: ${L4}p1 未就绪"
 elif mkswap "${L4}p1" >/dev/null 2>&1 && swapon "${L4}p1" 2>/dev/null; then
     SWAPDEV="${L4}p1"
-    "$B" resize-part "$T3:1" --start 2048 --grow-to-end --no-fs >/dev/null 2>&1
-    exp "$?" 10 "分区是活动 swap：改表被拒"
+    "$B" resize-part "$T3:1" --grow-to-end >/dev/null 2>&1
+    exp "$?" 3 "分区是活动 swap：改表被拒"
     swapoff "$SWAPDEV" >/dev/null 2>&1
     SWAPDEV=
-    "$B" resize-part "$T3:1" --start 2048 --grow-to-end --no-fs >/dev/null 2>&1
+    "$B" resize-part "$T3:1" --grow-to-end >/dev/null 2>&1
     exp "$?" 0 "swapoff 后放行（阳性对照）"
 else
     echo "SKIP: swapon 不可用"
@@ -186,10 +186,10 @@ if compgen -G "/sys/block/loop[0-9]*" >/dev/null; then
     out=$(unshare -m bash -c '
         mount --make-rprivate /
         mount -t tmpfs none /dev
-        exec "$1" resize-part "$2:1" --start 2048 --grow-to-end
+        exec "$1" resize-part "$2:1" --grow-to-end
     ' _ "$B" "$T" 2>&1)
     got=$?
-    exp "$got" 30 "loop 节点不可访问时退出码 30"
+    exp "$got" 4 "loop 节点不可访问时退出码 4"
     case "$out" in
         *"cannot open /dev/loop"*) echo "  OK   错误正文指明无法打开 loop 节点" ;;
         *) echo "  BAD  错误正文缺少诊断: $out"; rc=1 ;;
@@ -204,7 +204,7 @@ NS=$(mktemp -d /tmp/loopid-ns-XXXXXX)
 FIFO="$NS/ctl"
 mkfifo "$FIFO"
 READY="$NS/ready"
-mkdir -p /testmnt
+mkdir -p "$TEST_MNT"
 # 子进程把镜像 bind 到只存在于本 namespace 的路径上，再建 loop 并挂载其分区；
 # 挂载留在子进程的私有 namespace 里，直到 FIFO 关闭才退出
 unshare -m bash -c '
@@ -213,7 +213,7 @@ unshare -m bash -c '
     mount --bind "$1" "$2/img"
     L=$(losetup -fP --show "$2/img")
     for _ in $(seq 1 50); do [ -b "${L}p1" ] && break; sleep 0.1; done
-    mount "${L}p1" /testmnt
+    mount "${L}p1" "$TEST_MNT"
     printf "%s" "$L" > "$3"
     read -r _ < "$4"
 ' _ "$T" "$NS" "$READY" "$FIFO" &
@@ -225,13 +225,13 @@ if [ ! -s "$READY" ]; then
     exit 1
 fi
 NLOOP=$(cat "$READY")
-"$B" resize-part "$T:1" --start 2048 --grow-to-end >/dev/null 2>&1
-exp "$?" 10 "另一 namespace 的挂载被检出"
+"$B" resize-part "$T:1" --grow-to-end >/dev/null 2>&1
+exp "$?" 3 "另一 namespace 的挂载被检出"
 exec 9>&-
 wait "$NSPID" 2>/dev/null
 NSPID=
 sleep 0.3
-"$B" resize-part "$T:1" --start 2048 --grow-to-end >/dev/null 2>&1
+"$B" resize-part "$T:1" --grow-to-end >/dev/null 2>&1
 exp "$?" 0 "namespace 结束后放行（阳性对照）"
 lo_detach "$NLOOP"
 NLOOP=
@@ -274,25 +274,25 @@ sys.exit(1)
 PY
         exp "$?" 0 "内核以 EINVAL 表示该进程已失去挂载命名空间"
 
-        T5=$(mktemp /tmp/loopid-race-XXXXXX.img)
+        T5=$(mktemp "$WSL_ROOT/loopid-race-XXXXXX.img")
         track_file "$T5"
         truncate -s 64M "$T5"
         "$B" new "$T5" --yes >/dev/null 2>&1 || { echo "BAD  new 失败"; exit 1; }
-        "$B" create "$T5" --size 32M >/dev/null 2>&1 || { echo "BAD  create 失败"; exit 1; }
-        "$B" resize-part "$T5:1" --start 2048 --grow-to-end --no-fs >/dev/null 2>&1
+        "$B" add "$T5" 32M --align mib --yes >/dev/null 2>&1 || { echo "BAD  add 失败"; exit 1; }
+        "$B" resize-part "$T5:1" --grow-to-end >/dev/null 2>&1
         exp "$?" 0 "同一窗口内正常写盘不被误拒"
 
-        T6=$(mktemp /tmp/loopid-race2-XXXXXX.img)
+        T6=$(mktemp "$WSL_ROOT/loopid-race2-XXXXXX.img")
         track_file "$T6"
         truncate -s 64M "$T6"
         "$B" new "$T6" --yes >/dev/null 2>&1 || { echo "BAD  new 失败"; exit 1; }
-        "$B" create "$T6" --size 32M >/dev/null 2>&1 || { echo "BAD  create 失败"; exit 1; }
+        "$B" add "$T6" 32M --align mib --yes >/dev/null 2>&1 || { echo "BAD  add 失败"; exit 1; }
         out=$(unshare -m bash -c '
             mount --make-rprivate /
             mount -t tmpfs none /dev
-            exec "$1" resize-part "$2:1" --start 2048 --grow-to-end --no-fs
+            exec "$1" resize-part "$2:1" --grow-to-end
         ' _ "$B" "$T6" 2>&1)
-        exp "$?" 30 "真实探测故障不被 EINVAL 跳过掩盖"
+        exp "$?" 4 "真实探测故障不被 EINVAL 跳过掩盖"
         case "$out" in
             *"cannot open /dev/loop"*) echo "  OK   拒绝原因仍是无法打开 loop 节点" ;;
             *) echo "  BAD  拒绝原因不符: $out"; rc=1 ;;
@@ -301,14 +301,14 @@ PY
     [ -n "$ZPARENT" ] && kill "$ZPARENT" 2>/dev/null
     [ -n "$ZPARENT" ] && wait "$ZPARENT" 2>/dev/null
     ZPARENT=
-    rm -f "$ZFILE"
+    rm -rf "$ZFILE"
 fi
 
 echo "=== G2: 权限不足不等于进程已退出"
 if ! command -v setpriv >/dev/null 2>&1; then
     echo "SKIP: setpriv 缺失"
 else
-    T8=$(mktemp /tmp/loopid-perm-XXXXXX.img)
+    T8=$(mktemp "$WSL_ROOT/loopid-perm-XXXXXX.img")
     track_file "$T8"
     truncate -s 64M "$T8"
     "$B" new "$T8" --yes >/dev/null 2>&1 || { echo "BAD  new 失败"; exit 1; }
@@ -327,7 +327,7 @@ else
     if [ "$got" -eq 99 ]; then
         echo "SKIP: 无法以 hidepid=1 挂载 procfs"
     else
-        exp "$got" 30 "读不到他人 mountinfo 时拒绝写盘"
+        exp "$got" 4 "读不到他人 mountinfo 时拒绝写盘"
         case "$out" in
             *"cannot read /proc/"*"mountinfo"*) echo "  OK   失败原因落在 mountinfo 读取（未被当成进程退出跳过）" ;;
             *) echo "  BAD  失败原因不符: $out"; rc=1 ;;
@@ -339,11 +339,11 @@ echo "=== H: 多个 loop 命中时的持有者归属"
 if ! command -v dmsetup >/dev/null 2>&1 || ! dmsetup version >/dev/null 2>&1; then
     echo "SKIP: 没有可用的 device-mapper"
 else
-    T9=$(mktemp /tmp/loopid-attr-XXXXXX.img)
+    T9=$(mktemp "$WSL_ROOT/loopid-attr-XXXXXX.img")
     track_file "$T9"
     truncate -s 64M "$T9"
     "$B" new "$T9" --yes >/dev/null 2>&1 || { echo "BAD  new 失败"; exit 1; }
-    "$B" create "$T9" --size 32M >/dev/null 2>&1 || { echo "BAD  create 失败"; exit 1; }
+    "$B" add "$T9" 32M --align mib --yes >/dev/null 2>&1 || { echo "BAD  add 失败"; exit 1; }
     LA=$(lo_attach "$T9") || { echo "BAD  losetup 失败"; exit 1; }
     LB=$(lo_attach "$T9") || { echo "BAD  losetup 失败"; exit 1; }
     if ! lo_waitpart "${LA}p1" || ! lo_waitpart "${LB}p1"; then
@@ -353,7 +353,7 @@ else
         if dmsetup create "$DMNAME" --table "0 2048 linear ${LB}p1 0" >/dev/null 2>&1; then
             sleep 0.3
             out=$("$B" new "$T9" --yes 2>&1)
-            exp "$?" 10 "两个 loop 命中、其一被持有：改表被拒"
+            exp "$?" 3 "两个 loop 命中、其一被持有：改表被拒"
             LAB=${LA##*/}
             LBB=${LB##*/}
             # sysfs holders 里记录的是内核名 dm-N，不是 dmsetup 的映射名
@@ -384,7 +384,7 @@ echo "=== G3: 打不开 loop 节点不等于占用"
 if ! command -v setpriv >/dev/null 2>&1; then
     echo "SKIP: setpriv 缺失"
 else
-    T10=$(mktemp /tmp/loopid-nobody-XXXXXX.img)
+    T10=$(mktemp "$WSL_ROOT/loopid-nobody-XXXXXX.img")
     track_file "$T10"
     truncate -s 8M "$T10"
     chmod 666 "$T10"

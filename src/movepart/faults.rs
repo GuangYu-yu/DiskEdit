@@ -25,6 +25,7 @@ macro_rules! fault_points {
             }
         )*
         $(
+            $(#[$doc])*
             #[cfg(not(feature = "test-faults"))]
             pub(crate) fn $name($( $arg: $ty ),*) {
                 $( let _ = $arg; )*
@@ -51,11 +52,6 @@ fault_points! {
     fault_after_repair() = "after-repair";
     /// swap 条目 GPT commit 后、ckpt 推进前 abort（重放须幂等：GPT 绝对赋值 + 从旧位置重读 UUID 重建）
     fault_after_swap_commit(mi: usize) = "after-swap-commit", mi;
-    /// resize_part 路径第 N 个 chunk 拷贝后 abort（非自重叠按批提交，该块此时可能尚未
-    /// 同步；自重叠逐块落盘，故此刻已同步）
-    fault_rs_chunk(n: u64) = "rs-chunk", n;
-    /// resize_part 路径第 N 个 chunk 的数据已同步、checkpoint 尚未写入时 abort
-    fault_rs_after_data_sync(n: u64) = "rs-after-data-sync", n;
     /// FS 缩容完成（fs_shrunk 已落盘）、数据搬移前 abort
     fault_rs_after_fs_shrink() = "rs-after-fs-shrink";
     /// 数据搬移完成、表项提交前 abort
@@ -67,12 +63,20 @@ fault_points! {
     /// copy 的数据复制全部完成、表项提交前 abort（与 `rs-before-commit` 同形：
     /// 不可逆的一步已经迈出，而那份"发生过什么"还没写进表）
     fault_copy_before_commit() = "copy-before-commit";
-    /// MBR 分区表项写完、FS 扩满前 abort（MBR 没有 checkpoint：中断后不可自动续跑）
+    /// MBR 分区表项写完、FS 扩满前 abort（记录里的提交前区间已落盘，重跑据此收尾）
     fault_mbr_after_table_write() = "mbr-after-table-write";
     /// 事务入口：本次调用的**任何判定与写入之前**。
     /// 与下面的 `chunk`/`rs-chunk` 成对使用，"边界前 abort 必须留下完全未改动的盘"、
     /// "边界后 abort 已在盘上留下可续传的现场"这两句话才有可自动断言的落点
     fault_before_any_write() = "before-any-write";
+    /// 单文件记录已落盘、目标字节尚未写出时 abort（记录与数据之间的交界面）
+    fault_record_persisted() = "record-persisted";
+    /// 第 N 次目标写入已写出、记录尚未提交时 abort（N=1 即第一次写入后的交界面；
+    /// 更大的 N 用来留下含多条恢复区间的记录）
+    fault_record_before_commit(n: u64) = "record-before-commit", n;
+    /// 记录已提交、清理尚未完成时 abort（只有 Linux 会写记录，故该点只在 Linux 声明）
+    #[cfg(target_os = "linux")]
+    fault_record_committed() = "record-committed";
 }
 
 // 本模块内的调用不需要它；额外暴露给在线路径（online 的 sfdisk 分界）布点用。

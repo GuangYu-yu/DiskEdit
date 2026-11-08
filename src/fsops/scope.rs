@@ -344,7 +344,7 @@ pub(crate) fn find_block_partition_node(src: &FileSource, part: u32, want_start:
     #[cfg(not(target_os = "linux"))]
     {
         let _ = (src, part, want_start);
-        Err(FsError::Io(io::Error::new(io::ErrorKind::Unsupported, "not linux")))
+        Err(FsError::platform("not linux"))
     }
 }
 
@@ -375,11 +375,11 @@ pub(crate) fn block_disk_name(src: &FileSource) -> Result<String, FsError> {
 
 pub(crate) fn partition_byte_range(src: &FileSource, part: u32) -> Result<(u64, u64), FsError> {
     // 唯一实现在 gpt_policy::partition_bytes（GPT 优先、MBR 兜底，换算用表自身的 ss）。
-    // 出口语义由 FsError 的既有映射承担：Refused ⇒ 请求与现状不符(10)，环境/盘内容故障 ⇒
-    // Io(30)。本层不把分类重解释一遍——那会让"同一事实的第二处判据"重新长出来
+    // 出口语义由 FsError 的既有映射承担：Refused ⇒ 请求与现状不符(3)，环境/盘内容故障 ⇒
+    // NoMutation(4)。本层不把分类重解释一遍——那会让"同一事实的第二处判据"重新长出来
     crate::gpt_policy::partition_bytes(src, part).map_err(|f| match f {
-        crate::outcome::Fail::Refused(m) => FsError::invalid(m),
-        crate::outcome::Fail::Infra(m) | crate::outcome::Fail::Failed(m) => FsError::Io(io::Error::other(m)),
+        crate::outcome::RunOutcome::Refused(m) => FsError::invalid(m),
+        other => FsError::Io(io::Error::other(other.to_string())),
     })
 }
 
@@ -417,8 +417,7 @@ mod ownership_tests {
             sizelimit,
         };
         assert!(mapping_covers(&map(8192), 4096, 8192), "the exact range the loop already maps");
-        // 这两个是旧实现在返回 Existing 之前会去抬高 / 拒绝收缩的两种输入：
-        // 抬高改写了外部设备的 lo_sizelimit 且没有恢复点
+        // 这两个是必须拒绝的输入：抬高改写了外部设备的 lo_sizelimit 且没有恢复点
         assert!(!mapping_covers(&map(4096), 4096, 8192), "raising the limit would rewrite a loop this tool does not own");
         assert!(!mapping_covers(&map(16384), 4096, 8192), "a wider existing mapping is not the requested range");
     }
@@ -434,14 +433,13 @@ mod ownership_tests {
             eprintln!("skip: root required for a real loop and dm holder");
             return;
         }
-        let img = std::env::temp_dir().join(format!("diskedit_reuse_{}.img", std::process::id()));
-        let _ = std::fs::remove_file(&img);
+        let dir = crate::testdir::test_dir("reuse");
+        let img = dir.join("reuse.img");
         std::fs::write(&img, vec![0u8; 8 * 1024 * 1024]).unwrap();
         let src = match crate::dev::FileSource::open(&img, None) {
             Ok(s) => s,
             Err(e) => {
                 eprintln!("skip: cannot open the test image: {e}");
-                let _ = std::fs::remove_file(&img);
                 return;
             }
         };
@@ -454,12 +452,10 @@ mod ownership_tests {
             Ok(o) if o.status.success() => o,
             Ok(o) => {
                 eprintln!("skip: losetup failed: {}", String::from_utf8_lossy(&o.stderr).trim());
-                let _ = std::fs::remove_file(&img);
                 return;
             }
             Err(e) => {
                 eprintln!("skip: losetup not runnable: {e}");
-                let _ = std::fs::remove_file(&img);
                 return;
             }
         };
@@ -472,7 +468,6 @@ mod ownership_tests {
         if !made {
             eprintln!("skip: dmsetup cannot create a holder over {dev}");
             release_loop(&dev);
-            let _ = std::fs::remove_file(&img);
             return;
         }
         let before = loop_mapping_of_node(Path::new(&dev)).unwrap().unwrap();
@@ -485,10 +480,9 @@ mod ownership_tests {
             ImageLoopPolicy::AllowDm,
         );
         let after = loop_mapping_of_node(Path::new(&dev)).unwrap().unwrap();
-        // 先清理再断言：任何一条断言失败都不留 loop / dm / 镜像
+        // 先清理再断言：任何一条断言失败都不留 loop / dm（镜像由临时目录持有者清理）
         let _ = Command::new("dmsetup").args(["remove", &dm]).status();
         release_loop(&dev);
-        let _ = std::fs::remove_file(&img);
         assert_eq!(after.sizelimit, 4194304, "the size limit of an externally held loop must not be raised");
         assert_eq!(after.offset, before.offset, "the mapping must not be rewritten");
         match refused {

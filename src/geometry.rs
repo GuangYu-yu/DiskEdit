@@ -9,8 +9,8 @@
 //! 消费它；`info` 一类诊断路径继续读 `table::RawGpt`——那是有意的能力保留：
 //! 本工具拒绝在坏几何上继续操作，但必须能告诉用户哪里坏了。
 
-use crate::table::{EntryArrayGeometry, MAX_ARRAY_BYTES, RawGpt, RawHeader};
-use crate::outcome::Fail;
+use crate::table::{EntryArrayGeometry, GptContent, MAX_ARRAY_BYTES, RawGpt, RawHeader};
+use crate::outcome::RunOutcome;
 use gptman::GPTPartitionEntry;
 use std::io;
 
@@ -33,32 +33,19 @@ impl TableCheck {
         }
     }
 
-    fn into_fail(self) -> Fail {
+    fn into_fail(self) -> RunOutcome {
         match self {
-            Self::Changed(m) => Fail::refused(m),
-            Self::Unreadable(m) => Fail::infra(m),
+            Self::Changed(m) => RunOutcome::refused(m),
+            Self::Unreadable(m) => RunOutcome::no_mutation(m),
         }
     }
-}
-
-/// checkpoint 之类"盘上可控的持久状态"的合法性判据来源：它们不自己发现世界，
-/// 只消费已验证的几何（见 [`ValidatedGeometry::limits`]）
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct GeometryLimits {
-    pub sector_size: u64,
-    /// 分区号的上界（= 该表的条目数）。一个 256 槽位的表允许 1..=256
-    pub entry_count: u32,
-    pub first_usable_lba: u64,
-    pub last_usable_lba: u64,
-    /// 容器最后一个 LBA（本表 ss 口径）
-    pub file_last_lba: u64,
 }
 
 /// 全仓唯一的"可操作几何事实"。构造即校验（含条目重叠），因此拿到它的代码不必再问
 /// "这个几何可用吗"，也不必自己携带"条目互不重叠"的隐含前提。
 ///
 /// `header` 内是**修复完成后**的值（`last_usable_lba` / `backup_lba` 已按修复动作收敛），
-/// 于是 Planner 永远看不到 stale 几何，也不会出现"某处再算一次 effective_last_usable"
+/// 于是消费方永远看不到 stale 几何，也不会出现"某处再算一次 effective_last_usable"
 ///
 /// 字段全部私有：条目只能经 [`ValidatedGeometry::update_entry`] 修改，该入口在写回前
 /// 按构造期同一判据复核。这样"构造后改坏几何"在类型外写不出来
@@ -244,16 +231,6 @@ impl ValidatedGeometry {
         self.entry_geometry.slot(part)
     }
 
-    pub fn limits(&self) -> GeometryLimits {
-        GeometryLimits {
-            sector_size: self.ss,
-            entry_count: self.entry_geometry.entry_count,
-            first_usable_lba: self.header.first_usable_lba,
-            last_usable_lba: self.header.last_usable_lba,
-            file_last_lba: self.file_last_lba,
-        }
-    }
-
     /// 盘上的条目与头仍与本几何的依据一致：每个槽位要么是构造时读到的样子，要么（对本层
     /// 改过的槽位）已是 [`Self::entries`] 里的目标样子；头的每个字段同理——要么停在
     /// 构造时读到的那份 `decided_header`，要么已收敛到本层的 `header`（修复动作会改写
@@ -270,7 +247,7 @@ impl ValidatedGeometry {
     /// 首写前的复核，出口保留 [`TableCheck`] 的两类分类。与
     /// [`Self::ensure_entries_unchanged`] 共用同一份比对实现，只是错误表示不同：
     /// 写盘前的调用点要能落到"拒绝 10 / 基础设施 30"，已越界的 io 调用点只要一个原因
-    pub(crate) fn ensure_entries_unchanged_fail(&self, src: &crate::dev::FileSource) -> Result<(), Fail> {
+    pub(crate) fn ensure_entries_unchanged_fail(&self, src: &crate::dev::FileSource) -> Result<(), RunOutcome> {
         self.check_entries(src).map_err(TableCheck::into_fail)
     }
 
@@ -286,6 +263,8 @@ impl ValidatedGeometry {
             )));
         }
         // 位置字段（MyLBA / PartitionEntryLBA）由提交规范化，不作为"内容被改"的判据；
+        // 规范化意味着提交按规范位置写主数组，LBA2..2+span 的现有字节随之被覆盖——
+        // 其原文在写前进恢复记录、undo 可回放，声明位置非规范时装配层再显式提示一次。
         // 其余头字段一旦既不是原值也不是目标值，就是第三方在这个窗口里改过表头
         let (d, now, target) = (&self.decided_header, &g.header, &self.header);
         let hex = |g: &[u8; 16]| format!("{g:02x?}");
@@ -343,14 +322,29 @@ impl ValidatedGeometry {
         Ok(())
     }
 
+    /// 本几何要写回盘上的内容：新头、新条目数组、备份头落点与本表的 ss。纯值，不读盘、
+    /// 不写盘；[`Self::commit`] 写的也是这份内容，装配层从这里取表步骤的输入。
+    pub(crate) fn content(&self) -> GptContent {
+        GptContent {
+            ss: self.ss,
+            header: self.header.clone(),
+            entries: self.entries.clone(),
+            last_lba: self.file_last_lba,
+        }
+    }
+
     /// 用本几何提交分区表。几何已过构造校验，提交前不重新推导 header/array 的几何
     /// （崩溃安全四结构序列见 `table::commit_table`）。备份头位置（容器末 LBA）取自构造时
     /// 传入的 `file_last_lba`——同一事实不接受第二个来源，调用点不得各自重算一遍
     /// `src.size / ss - 1`
-    pub fn commit(&self, src: &mut crate::dev::WriteSource) -> io::Result<()> {
+    ///
+    /// 仅测试构建可见：生产路径把 [`Self::content`] 交给装配层生成表步骤，写入由
+    /// 执行器完成；本方法是测试里不经计划直接提交的参照物。
+    #[cfg(test)]
+    pub fn commit(&self, src: &mut crate::dev::WriteSource) -> Result<(), RunOutcome> {
         // 全表写入之前先确认盘上的表仍是本几何的依据（见
-        // [`Self::ensure_entries_unchanged`]）
-        self.ensure_entries_unchanged(src)?;
+        // [`Self::ensure_entries_unchanged_fail`]）
+        self.ensure_entries_unchanged_fail(src)?;
         crate::table::commit_table(src, self.ss, &self.header, &self.entries, self.file_last_lba)
     }
 }

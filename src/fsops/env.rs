@@ -6,10 +6,7 @@ pub fn require_linux() -> Result<(), FsError> {
     if cfg!(target_os = "linux") {
         Ok(())
     } else {
-        Err(FsError::Io(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "this operation requires Linux (build/runtime platform)",
-        )))
+        Err(FsError::platform("this operation requires Linux (build/runtime platform)"))
     }
 }
 
@@ -28,7 +25,7 @@ pub fn require_root() -> Result<(), FsError> {
     }
     #[cfg(not(target_os = "linux"))]
     {
-        Err(FsError::Io(io::Error::new(io::ErrorKind::Unsupported, "not linux")))
+        Err(FsError::platform("not linux"))
     }
 }
 
@@ -101,6 +98,16 @@ pub(crate) fn tool_command(tool: &str) -> Result<Command, FsError> {
 /// （`Io`）；等待/读取输出失败 = 工具已经启动，写没写目标无法断言，故记
 /// `CommandFailed`（调用点的映射把它落成"可能已改变"）
 pub(crate) fn run<S: AsRef<OsStr>>(tool: &str, args: &[S]) -> Result<std::process::Output, FsError> {
+    run_impl(tool, args, false)
+}
+
+/// 会改动目标的工具：进程一旦启动，盘上状态就不再可断言，故在 spawn 成功后置位
+/// （见 `outcome::note_target_write`）。只读工具仍走 [`run`]
+pub(crate) fn run_write<S: AsRef<OsStr>>(tool: &str, args: &[S]) -> Result<std::process::Output, FsError> {
+    run_impl(tool, args, true)
+}
+
+fn run_impl<S: AsRef<OsStr>>(tool: &str, args: &[S], writes: bool) -> Result<std::process::Output, FsError> {
     let child = tool_command(tool)?
         .args(args)
         .stdin(Stdio::null())
@@ -108,6 +115,9 @@ pub(crate) fn run<S: AsRef<OsStr>>(tool: &str, args: &[S]) -> Result<std::proces
         .stderr(Stdio::piped())
         .spawn()
         .map_err(FsError::from)?;
+    if writes {
+        crate::outcome::note_target_write();
+    }
     child.wait_with_output().map_err(|e| {
         FsError::CommandFailed(format!(
             "{tool} was started but its exit status could not be read ({e}) — it may have changed the target"
@@ -128,11 +138,21 @@ pub(crate) fn os_bytes(b: &[u8]) -> OsString {
     OsString::from(String::from_utf8_lossy(b).into_owned())
 }
 
-/// 同 run，但从 stdin 喂入脚本（sfdisk -N 的分区描述只走 stdin）。
+/// 从 stdin 喂脚本且会改动目标的工具（sfdisk）：spawn 成功后置位。
 /// stdout/stderr 也必须接管道：调用方按 `Output` 消费它们，未接时 `wait_with_output`
 /// 只会返回空 Vec，子进程的失败原因就再也拿不到
 #[cfg(target_os = "linux")]
-pub(crate) fn run_input(tool: &str, args: &[&str], input: &str) -> Result<std::process::Output, FsError> {
+pub(crate) fn run_write_input(tool: &str, args: &[&str], input: &str) -> Result<std::process::Output, FsError> {
+    run_input_impl(tool, args, input, true)
+}
+
+#[cfg(target_os = "linux")]
+fn run_input_impl(
+    tool: &str,
+    args: &[&str],
+    input: &str,
+    writes: bool,
+) -> Result<std::process::Output, FsError> {
     let mut child = tool_command(tool)?
         .args(args)
         .stdin(Stdio::piped())
@@ -140,6 +160,9 @@ pub(crate) fn run_input(tool: &str, args: &[&str], input: &str) -> Result<std::p
         .stderr(Stdio::piped())
         .spawn()
         .map_err(FsError::from)?;
+    if writes {
+        crate::outcome::note_target_write();
+    }
     use std::io::Write as _;
     let mut stdin = child.stdin.take().expect("stdin piped");
     if let Err(e) = stdin.write_all(input.as_bytes()) {
@@ -162,7 +185,7 @@ pub(crate) fn run_input(tool: &str, args: &[&str], input: &str) -> Result<std::p
 /// 命名即契约——与其余 `best_effort_*` 同族（见 Cargo.toml 的 lints 注释），
 /// 使"有意忽略"与"忘了处理"可被 grep 区分
 #[cfg(target_os = "linux")]
-#[allow(clippy::let_underscore_must_use)] // 有意忽略：主错误已上报，见上
+#[allow(clippy::let_underscore_must_use)] // 有意忽略：主错误已上报
 pub(crate) fn best_effort_reap_child(child: &mut std::process::Child) {
     let _ = child.kill();
     let _ = child.wait();
@@ -174,7 +197,7 @@ pub(crate) fn best_effort_reap_child(child: &mut std::process::Child) {
 /// 0/1 通过，4 = 有未修正错误即拒绝。
 /// 2/3/4 归 `CommandFailed`：三者都说明工具**运行过**——2/3 自述改过文件系统、
 /// 4 在 -p 下仍会自动修复过——"不能证明已写"不等于"已证明未写"，不足以支撑
-/// `Io → Infra` 的"确定未写盘"承诺。`Failed` 的语义正是不对是否落盘作断言
+/// `Io → NoMutation` 的"确定未写盘"承诺。`CommandFailed` 的语义正是不对是否落盘作断言
 pub(crate) fn check_e2fsck_for_resize(code: i32) -> Result<(), FsError> {
     match code {
         0 | 1 => Ok(()),
@@ -198,7 +221,7 @@ pub(crate) fn check_e2fsck_status_for_resize(st: &std::process::ExitStatus) -> R
 }
 
 /// 前序步骤（`e2fsck -fp` 一类修复、临时挂载触发的日志重放等）**可能已经写盘**之后，
-/// 后一步的启动失败不能再走 `Io`：`Io` 在命令层映射为 Infra，语义是"确定未写盘"
+/// 后一步的启动失败不能再走 `Io`：`Io` 在命令层映射为 NoMutation，语义是"确定未写盘"
 /// （见 `outcome::From<FsError>`）。启动不起来只说明这一次 spawn 没跑成，反推不出盘
 /// 没被前序步骤改过。已启动过的失败（`CommandFailed`）原样返回——它本来就意味着
 /// "可能已改变"
@@ -211,17 +234,12 @@ pub(crate) fn tool_write_maybe_started(tool: &str, dev: &str, e: FsError) -> FsE
     }
 }
 
-/// e2fsck 退出码判定——check 语境。检查命令的本职就是修复：0（干净）、1（已修复）
-/// 是成功；2/3 = 修复完成 + REBOOT 位（该位来自内核的 root 挂载标记，只影响"能否
-/// 立即继续 resize"，与修复成败无关），同为成功。仅 4（-fp 后仍有未修正错误）算
-/// 检查失败；8/16 等为基础设施故障。不复用 resize 判据——那套拒绝 2/3 的理由在
-/// check 上没有对应物，照搬会把"修复成功"报成 Failed(30)
+/// e2fsck 退出码判定——check 语境。check 以 `-n` 运行（man e2fsck(8)：只读打开、
+/// 所有提问答 `no`），不会写盘，因此 0 是唯一成功值；其余退出码都表示这次检查
+/// 发现了问题或工具本身故障（工具退出非零即检查失败）
 pub(crate) fn check_e2fsck_for_check(code: i32) -> Result<(), FsError> {
     match code {
-        0..=3 => Ok(()),
-        4 => Err(FsError::CommandFailed(
-            "e2fsck: uncorrected errors remain (exit 4)".into(),
-        )),
-        c => Err(FsError::CommandFailed(format!("e2fsck infrastructure failure (exit {c})"))),
+        0 => Ok(()),
+        c => Err(FsError::CommandFailed(format!("e2fsck reported errors (exit {c})"))),
     }
 }

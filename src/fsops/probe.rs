@@ -6,8 +6,8 @@ use super::*;
 /// 输出格式锚定 man 页示例（"Estimated minimum size of the filesystem: N" / "Block size: N"）。
 /// 其余 FS 无已验证的输出格式，返回 None，由工具自身在缩容前拒绝
 /// （shrink_fs 先于任何数据搬移执行，失败即安全终止）
-pub fn fs_min_bytes(src: &FileSource, part: u32, fstype: Option<FsKind>) -> Result<Option<u64>, FsError> {
-    if fstype != Some(FsKind::Ext) {
+pub fn fs_min_bytes(src: &FileSource, part: u32, fstype: Option<ContentKind>) -> Result<Option<u64>, FsError> {
+    if fstype != Some(ContentKind::Filesystem(FsKind::Ext)) {
         return Ok(None);
     }
     let mut result: Option<Result<u64, FsError>> = None;
@@ -24,7 +24,7 @@ pub fn fs_min_bytes(src: &FileSource, part: u32, fstype: Option<FsKind>) -> Resu
 }
 
 /// 工具输出里取不到可用数值的两个互斥原因。"没有这个字段"与"字段在、值不可信"
-/// 不是一回事：前者是输出形态不符，后者说明我们正读着的一个值不能用；两者都拒绝，
+/// 不是一回事：前者是输出形态不符，后者说明正在读的一个值不能用；两者都拒绝，
 /// 但拒绝理由不能塌缩成"看起来像没值"
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum NumError {

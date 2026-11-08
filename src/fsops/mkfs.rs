@@ -38,8 +38,8 @@ impl MkfsFs {
             MkfsFs::Xfs => FsKind::Xfs.as_str(),
             MkfsFs::Btrfs => FsKind::Btrfs.as_str(),
             MkfsFs::F2fs => FsKind::F2fs.as_str(),
-            MkfsFs::Swap => FsKind::Swap.as_str(),
-            MkfsFs::Lvm2Pv => FsKind::Lvm2Pv.as_str(),
+            MkfsFs::Swap => "swap",
+            MkfsFs::Lvm2Pv => "lvm2_pv",
         }
     }
 
@@ -61,19 +61,19 @@ impl MkfsFs {
         })
     }
 
-    /// 识别域口径的类型：ext2/3/4 折叠为 [`FsKind::Ext`]（e2fsck/resize2fs 对三者通用）。
-    /// 供需要 `FsKind` 的消费点（如 [`rescue_hint`]）跨域取值
-    pub fn as_fs_kind(self) -> FsKind {
+    /// 探测域口径的内容类别：ext2/3/4 折叠为 [`FsKind::Ext`]（e2fsck/resize2fs 对三者通用）。
+    /// 供需要 `ContentKind` 的消费点（如 [`rescue_hint`]）跨域取值
+    pub fn as_content_kind(self) -> ContentKind {
         match self {
-            MkfsFs::Ext2 | MkfsFs::Ext3 | MkfsFs::Ext4 => FsKind::Ext,
-            MkfsFs::Vfat => FsKind::Vfat,
-            MkfsFs::Exfat => FsKind::Exfat,
-            MkfsFs::Ntfs => FsKind::Ntfs,
-            MkfsFs::Xfs => FsKind::Xfs,
-            MkfsFs::Btrfs => FsKind::Btrfs,
-            MkfsFs::F2fs => FsKind::F2fs,
-            MkfsFs::Swap => FsKind::Swap,
-            MkfsFs::Lvm2Pv => FsKind::Lvm2Pv,
+            MkfsFs::Ext2 | MkfsFs::Ext3 | MkfsFs::Ext4 => ContentKind::Filesystem(FsKind::Ext),
+            MkfsFs::Vfat => ContentKind::Filesystem(FsKind::Vfat),
+            MkfsFs::Exfat => ContentKind::Filesystem(FsKind::Exfat),
+            MkfsFs::Ntfs => ContentKind::Filesystem(FsKind::Ntfs),
+            MkfsFs::Xfs => ContentKind::Filesystem(FsKind::Xfs),
+            MkfsFs::Btrfs => ContentKind::Filesystem(FsKind::Btrfs),
+            MkfsFs::F2fs => ContentKind::Filesystem(FsKind::F2fs),
+            MkfsFs::Swap => ContentKind::Swap,
+            MkfsFs::Lvm2Pv => ContentKind::Lvm2Pv,
         }
     }
 }
@@ -107,6 +107,10 @@ pub(crate) struct MkfsTool {
     pub(crate) force: bool,
     /// `mke2fs -t <ext_type>`；只有 ext2/3/4 携带
     pub(crate) ext_type: Option<MkfsFs>,
+    /// 建 FS 时顺带写卷标的旗标。拼写由各工具的官方手册规定，不类推：
+    /// mke2fs(8)/mkfs.xfs(8)/mkfs.btrfs(8)/mkfs.exfat(8)/mkntfs(8)/mkswap(8) 用 `-L`，
+    /// mkfs.f2fs(8) 用 `-l`，mkfs.vfat(8) 用 `-n`
+    pub(crate) label_flag: &'static str,
 }
 
 pub(crate) fn mkfs_tool(fstype: MkfsFs) -> Result<MkfsTool, FsError> {
@@ -122,7 +126,12 @@ pub(crate) fn mkfs_tool(fstype: MkfsFs) -> Result<MkfsTool, FsError> {
             ));
         }
     };
-    Ok(MkfsTool { program, force, ext_type })
+    let label_flag = match fstype {
+        MkfsFs::F2fs => "-l",
+        MkfsFs::Vfat => "-n",
+        _ => "-L",
+    };
+    Ok(MkfsTool { program, force, ext_type, label_flag })
 }
 
 /// 命令层"先问再做"的入口：这个 FS 类型**具备被创建的能力**吗——类型有没有接线、
@@ -143,8 +152,11 @@ pub fn mkfs_capability(fstype: MkfsFs) -> Result<(), FsError> {
 }
 
 /// mkfs：破坏分区数据，调用方须先取确认；执行前先擦残留签名（见 erase_ranges），
-/// 防旧 btrfs/ZFS/RAID 备份超级块残留被 blkid 误认
-pub fn mkfs(src: &mut WriteSource, part: u32, fstype: MkfsFs) -> Result<(), FsError> {
+/// 防旧 btrfs/ZFS/RAID 备份超级块残留被 blkid 误认。
+///
+/// `label` 直接作为建 FS 工具的卷标参数：卷标是 FS 镜像的一部分，事后另起一个工具
+/// 补写会让"FS 已建成、卷标未跟上"成为一段真实存在的中间态
+pub fn mkfs(src: &mut WriteSource, part: u32, fstype: MkfsFs, label: Option<&str>) -> Result<(), FsError> {
     let tool = mkfs_tool(fstype)?;
     // 能力检查必须发生在任何写盘之前：wipe_zero 一旦开始就不可回滚，工具缺失时
     // 目标上"什么都没写"的承诺只能在第一次擦除之前作出
@@ -172,15 +184,14 @@ pub fn mkfs(src: &mut WriteSource, part: u32, fstype: MkfsFs) -> Result<(), FsEr
         ImageLoopPolicy::RefuseAny,
     )?;
     // 擦除一旦开始，前镜像就不再完整，undo 必须被拒；屏障写不下去时一个字节都还没动，
-    // 故报 Io（→ Infra），不报 CommandFailed
-    src.set_mutation(crate::dev::Mutation::Mkfs);
+    // 故报 Io（→ NoMutation），不报 CommandFailed
     src.mark_non_reversible().map_err(|e| {
         FsError::from(io::Error::other(format!(
             "cannot persist the transaction barrier: {e} — nothing was written, the target is unchanged"
         )))
     })?;
     // wipe_zero 一旦开始就存在部分清零：之后的任何失败都不再是"确定未写盘"，
-    // 统一压成 CommandFailed（→ Failed），报告带"盘上状态可能已改变"的警示
+    // 统一压成 CommandFailed（→ Partial），报告带"盘上状态可能已改变"的警示
     wipe_zero(dev.path(), &erase_ranges(part_len, ss)).map_err(|e| {
         FsError::CommandFailed(format!("mkfs: signature wipe started but failed, the target may be partially erased: {e}"))
     })?;
@@ -192,9 +203,13 @@ pub fn mkfs(src: &mut WriteSource, part: u32, fstype: MkfsFs) -> Result<(), FsEr
         args.push("-t");
         args.push(t.as_str());
     }
+    if let Some(label) = label {
+        args.push(tool.label_flag);
+        args.push(label);
+    }
     args.push(dev.path());
     // 工具已拿到设备：启动失败与非零退出同样无法断言写没写、写了多少
-    let out = run(&tool.program, &args).map_err(|e| {
+    let out = run_write(&tool.program, &args).map_err(|e| {
         FsError::CommandFailed(format!("mkfs: {} was about to run but failed to execute, the target may already be partially erased: {e}", tool.program))
     })?;
     if !out.status.success() {

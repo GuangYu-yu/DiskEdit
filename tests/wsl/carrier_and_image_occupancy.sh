@@ -9,12 +9,12 @@ require_bin
 
 command -v mkfs.ext4 >/dev/null || { echo "SKIP: mkfs.ext4 not installed"; exit 0; }
 
-T=$(mktemp /tmp/carrier-XXXXXX.img)
+T=$(mktemp "$WSL_ROOT/carrier-XXXXXX.img")
 truncate -s 96M "$T"
 track_file "$T"
 
 "$B" new "$T" --yes >/dev/null 2>&1
-"$B" create "$T" --size 48M >/dev/null 2>&1
+"$B" add "$T" 48M --align mib --yes >/dev/null 2>&1
 
 L1=$(lo_attach "$T")
 lo_waitpart "${L1}p1" || { echo "SKIP: no partition node on $L1"; exit 0; }
@@ -24,21 +24,21 @@ exp "$?" 0 "基线：文件系统干净"
 
 echo "=== A: 分区节点不是建表/改表命令的载体"
 "$B" delete "${L1}p1:1" --yes >/dev/null 2>&1
-exp "$?" 10 "delete 打分区节点被拒"
+exp "$?" 3 "delete 打分区节点被拒"
 # 拒绝必须是"什么都没写"：判据只认 0x55AA 时这里会清零分区 LBA0 的 [446,462)
 e2fsck -fn "${L1}p1" >/dev/null 2>&1
 exp "$?" 0 "分区内容未被清零"
-"$B" resize-part "${L1}p1:1" --start 2048 --end 4095 >/dev/null 2>&1
-exp "$?" 10 "resize-part 打分区节点被拒"
+"$B" resize-part "${L1}p1:1" --end 4095 >/dev/null 2>&1
+exp "$?" 3 "resize-part 打分区节点被拒"
 
 echo "=== B: 同一镜像的另一个 loop 已挂载"
 L2=$(lo_attach "$T")
 lo_waitpart "${L2}p1"
-mount_at "${L1}p1" /testmnt || { echo "SKIP: mount failed"; exit 0; }
-"$B" resize-part "$T:1" --start 2048 --grow-to-end >/dev/null 2>&1
-exp "$?" 10 "挂载中拒绝写同一镜像"
-unmount_now /testmnt
-"$B" resize-part "$T:1" --start 2048 --grow-to-end >/dev/null 2>&1
+mount_at "${L1}p1" "$TEST_MNT" || { echo "SKIP: mount failed"; exit 0; }
+"$B" resize-part "$T:1" --grow-to-end >/dev/null 2>&1
+exp "$?" 3 "挂载中拒绝写同一镜像"
+unmount_now "$TEST_MNT"
+"$B" resize-part "$T:1" --grow-to-end >/dev/null 2>&1
 exp "$?" 0 "卸载后放行（阳性对照）"
 e2fsck -fn "${L1}p1" >/dev/null 2>&1
 exp "$?" 0 "文件系统无损伤"
@@ -51,30 +51,30 @@ echo "=== C: 挂载镜像上的直接改表命令"
 losetup -d "$L1" "$L2" 2>/dev/null
 L3=$(lo_attach "$T")
 lo_waitpart "${L3}p1" || { echo "BAD: $T 上无分区节点 $L3p1"; exit 1; }
-mount_at "${L3}p1" /testmnt || { echo "BAD: 挂载 $L3p1 失败"; exit 1; }
+mount_at "${L3}p1" "$TEST_MNT" || { echo "BAD: 挂载 $L3p1 失败"; exit 1; }
 before=$(sha256sum "$T" | awk '{print $1}')
 check_refused() {
     local label=$1 out got
     shift
     out=$("$@" 2>&1)
     got=$?
-    exp "$got" 10 "$label"
+    exp "$got" 3 "$label"
     case "$out" in
         *"is in use"*) echo "  OK   $label：拒绝原因落在 loop 在用分支" ;;
         *) echo "  BAD  $label：拒绝原因不符: $out"; rc=1 ;;
     esac
 }
 check_refused "new"       "$B" new "$T" --yes
-check_refused "add"       "$B" add "$T" --start 102400 --end 103423
+check_refused "add"       "$B" add "$T" 524288 --start 102400
 check_refused "delete"    "$B" delete "$T:1" --yes
-check_refused "create"    "$B" create "$T" --size 8M
+check_refused "mkfs"      "$B" mkfs "$T":1 ext4 --yes
 check_refused "set name"  "$B" set "$T:1" name foo
 check_refused "set type"  "$B" set "$T:1" type C12A7328-F81F-11D2-BA4B-00A0C93EC93B
 check_refused "set flag"  "$B" set "$T:1" flag hidden on
 check_refused "undo"      "$B" undo "$T" --yes
 after=$(sha256sum "$T" | awk '{print $1}')
 assert_eq "$after" "$before" "拒绝期间镜像字节未改变"
-unmount_now /testmnt
+unmount_now "$TEST_MNT"
 "$B" new "$T" --yes >/dev/null 2>&1
 exp "$?" 0 "卸载后 new 放行（阳性对照）"
 

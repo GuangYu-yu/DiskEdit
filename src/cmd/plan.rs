@@ -1,46 +1,94 @@
-//! plan / apply：把分区 N 扩到其后的全部空闲区的手动多步形式（含搬移计划打印与执行）。
+//! plan 的只读报告与搬移计划的打印。`plan` 与 `info` 共用同一份报告；
+//! `print_plan`/`print_moves` 供 resize 与 `plan --grow` 在写表之前展示将要搬动的分区。
 
-use crate::support::*;
-use crate::args::Args;
-use crate::dev::PartSelector;
+use crate::cli::{InfoRequest, PlanRequest};
+use crate::gpt_policy;
 use crate::movepart;
+use crate::support::{bail_fail, RunOutcome, EXIT_OK};
 
-macro_rules! help_with_synopsis {
-    ($synopsis:literal) => {
-        concat!(
-            $synopsis,
-            "\n\n",
-            r#"  Grow partition N (or `last`) into all following free space, relocating
-  intervening partitions tail-packed (manual multi-step form of `resize grow`).
-  plan prints the operations without touching the disk. apply derives the
-  plan under the target lock (the disk may have changed since plan ran) and
-  executes it, resuming from its checkpoint if re-run.
+/// plan 的详助：只读报告，字段与 `info` 同源
+pub(crate) const DETAILS_PLAN: &str = r#"  Read-only report on a target: geometry, partition table, filesystems and
+  space-usage conclusions. The fields are the ones `info` prints; `plan` opens
+  no recovery path and probes no write directory.
+  With --grow the report is followed by the relocation preview for growing
+  partition :N to the last usable LBA. The preview only reads: nothing is
+  written and no reusable plan is produced."#;
 
-  apply asks for --yes only when the plan has to relocate blocker data:
-  growing into free space behind the partition touches only the table and
-  asks nothing. An interrupted relocation cannot be rolled back with `undo`.
-  Run `plan` first to see the operations it will perform.
-
-  --no-fs (apply only) skips the filesystem step of the grown partition;
-  a swap that a relocation has to rebuild still runs.
-
-  Options:
-    --sector-size N  logical sector size override for raw images (power of two,
-                     512..=65536)"#
-        )
+/// 默认只读几何报告；`--grow` 追加搬迁预览，不落盘、不产出 `Plan`
+pub(crate) fn cmd_plan(a: &PlanRequest) -> u8 {
+    if !a.grow {
+        // 无 --grow 的 plan 就是全目标 info；:N 不是它的输入——拒绝主语用 plan 说，
+        // 不能借 info 之手报 "info reports ..."（用户跑的是 plan）
+        if a.part.is_some() {
+            bail_fail(RunOutcome::refused(
+                "`plan` without --grow reports the whole target — drop :N, or add --grow to preview one partition",
+            ));
+        }
+        return crate::cmd::info::cmd_info(&InfoRequest {
+            target: a.target.clone(),
+            part: None,
+            sector_size: a.sector_size,
+        });
+    }
+    let Some(selector) = a.part else {
+        bail_fail(RunOutcome::refused(
+            "`plan --grow` previews one partition — write the target as <TARGET>:N",
+        ));
     };
+    let code = crate::cmd::info::cmd_info(&InfoRequest {
+        target: a.target.clone(),
+        part: None,
+        sector_size: a.sector_size,
+    });
+    // 预览的几何报告失败（识别失败退 4）时整个 plan 同样失败：吞掉返回码会让
+    // "info 已识别失败、plan 却退 0" 同时发生
+    if code != crate::outcome::EXIT_OK {
+        return code;
+    }
+    let src = match crate::cmd::open_read_only_target(&a.target, a.sector_size) {
+        Ok(s) => s,
+        Err(f) => bail_fail(f),
+    };
+    let Some((g, repair)) = (match gpt_policy::resolve_geometry(&src) {
+        Ok(v) => v,
+        Err(f) => bail_fail(f),
+    }) else {
+        bail_fail(RunOutcome::refused("`plan --grow` needs a GPT partition table"));
+    };
+    let part = match gpt_policy::resolve_part(&src, selector) {
+        Ok(p) => p,
+        Err(f) => bail_fail(f),
+    };
+    let target_start = match gpt_policy::live_entry(&g, part) {
+        Ok(e) => e.starting_lba,
+        Err(f) => bail_fail(f),
+    };
+    // 续跑预览：落点上有属于本目标的搬移记录时按它的有序计划打印，否则现算
+    let here = crate::platform::probe::probe_of(&src)
+        .ok()
+        .map(|probe| crate::recovery::SceneIdentity::of_source(&probe, &src));
+    let relocation = src
+        .identity
+        .record_path()
+        .and_then(|path| match crate::recovery::probe_companion(path) {
+            crate::recovery::CompanionProbe::Decoded(record)
+                if here.as_ref().is_some_and(|h| record.target.matches(h)) =>
+            {
+                record.relocation
+            }
+            _ => None,
+        });
+    let plan = match movepart::make_plan_resuming(relocation.as_ref(), &g, repair, part) {
+        Ok(p) => p,
+        Err(f) => bail_fail(f),
+    };
+    if let Err(e) = print_plan(&plan, target_start) {
+        bail_fail(RunOutcome::from(e));
+    }
+    EXIT_OK
 }
 
-/// plan 的详助：只接受 `--grow`，SYNOPSIS 不列 apply 的旗标
-pub(crate) const HELP_PLAN: &str = help_with_synopsis!("diskedit plan <TARGET> --grow N|last");
-
-/// apply 的详助：正文与 plan 共用，SYNOPSIS 列出本命令会消费的旗标
-pub(crate) const HELP_APPLY: &str =
-    help_with_synopsis!("diskedit apply <TARGET> --grow N|last [--chunk-size MiB] [--no-fs] [--yes]");
-
-/// 列出各分区的搬移（plan 命令与 apply 前的计划打印共用）。
-/// 头行不共用：两处要给出的数不同——写入前只需扩容终点，`plan` 还要额外给出
-/// 尾部打包的上界 last_usable_lba
+/// 列出各分区的搬移（resize 写表之前的计划打印）
 pub(crate) fn print_moves(plan: &movepart::Plan) -> std::io::Result<()> {
     for m in &plan.moves {
         let tag = if m.is_swap { " [swap: recreate, no data move]" } else { "" };
@@ -56,133 +104,9 @@ pub(crate) fn print_moves(plan: &movepart::Plan) -> std::io::Result<()> {
     Ok(())
 }
 
+/// 写盘前的计划呈现：扩容终点按 `grow_end_for` 判定（与实际写入同一实现）
 pub(crate) fn print_plan(plan: &movepart::Plan, target_start: u64) -> std::io::Result<()> {
-    print_plan_inner(plan, target_start, None)
-}
-
-/// `plan` 命令的呈现：比写盘前的计划多给出 last_usable_lba——它是尾部打包的上界，
-/// 不等于本次扩容终点。推导与 `print_plan` 共用同一实现
-pub(crate) fn print_plan_detail(plan: &movepart::Plan, target_start: u64) -> std::io::Result<()> {
-    print_plan_inner(plan, target_start, Some(plan.last_usable_lba))
-}
-
-fn print_plan_inner(plan: &movepart::Plan, target_start: u64, last_usable: Option<u64>) -> std::io::Result<()> {
-    // 实际扩容终点由 grow_end_for 判定（与 apply 同一实现）
     let new_end = movepart::grow_end_for(plan, target_start)?;
-    match last_usable {
-        Some(last) => println!(
-            "grow partition {} → end LBA {} (last usable {})",
-            plan.grow_part, new_end, last
-        ),
-        None => println!("plan: grow partition {} → end LBA {} (blockers relocated)", plan.grow_part, new_end),
-    }
+    println!("plan: grow partition {} → end LBA {} (blockers relocated)", plan.grow_part, new_end);
     print_moves(plan)
-}
-
-pub(crate) fn cmd_plan_apply(cmd: &str, a: &Args) -> crate::cmd::CmdResult {
-    // 目标分区由 --grow N 选定：`:N` 若被静默忽略，用户会误以为只动了某个分区
-    if let Some(n) = a.part {
-        bail_fail(Fail::refused(format!("`{cmd}` selects the partition with --grow N — drop :{n}")));
-    }
-    let Some(pref) = a.grow else {
-        bail_fail(Fail::refused(format!("`{cmd}` needs --grow N")));
-    };
-    if cmd == "plan" {
-        // 这一段只读：plan 不写盘，故按只读命令打开——否则一块正被使用的盘上
-        // 连 `plan` 都跑不出计划
-        let src = open_target_ro(a).unwrap_or_else(|f| bail_fail(f));
-        // 解析一次（构造点即拒绝条目重叠），随后的续传判定与规划共用它
-        let (g, repair) = crate::gpt_policy::require_gpt_geometry(&src, cmd).unwrap_or_else(|f| bail_fail(f));
-        // 只读快照
-        let grow = crate::gpt_policy::resolve_part_in(
-            crate::gpt_policy::TableEntries::Gpt(g.entries()),
-            pref,
-        )
-        .unwrap_or_else(|f| bail_fail(f));
-        // 恢复感知：盘上有未收尾的搬移作业时，plan 要打印的就是那份 ckpt 里的计划
-        // （现算的 delta 与 ckpt 不一致，会撞上恢复校验）
-        let plan = match movepart::make_plan_resuming(&src, &g, repair, grow) {
-            Ok(p) => p,
-            Err(f) => bail_fail(f),
-        };
-        let resuming = movepart::has_pending_relocation(&src, &g, grow).unwrap_or_else(|f| bail_fail(f));
-        if resuming {
-            println!("[resume] an unfinished relocation job is on the disk — this is the plan it resumes with");
-        }
-        if let Some(what) = plan.repair.describe() {
-            // 修复动作只记录、不执行；apply 会先做这一步再搬数据
-            println!("[repair] {what}");
-        }
-        // 终点与实际写入一致（grow_end_for 是 apply 用的同一实现）；last_usable_lba
-        // 由 print_plan_detail 一并给出。下界取目标分区当前起点（与 apply 读同一张表）
-        let target_start = crate::gpt_policy::live_entry(&g, plan.grow_part)
-            .unwrap_or_else(|f| bail_fail(f))
-            .starting_lba;
-        print_plan_detail(&plan, target_start).unwrap_or_else(|e| bail_fail(Fail::infra(e.to_string())));
-        // apply 的守卫比 plan 多：plan 只读（可在被占用的盘上运行），apply 取锁后重验
-        println!(
-            "note: `apply` re-validates under the target lock — a partition-node target or an active recovery scene will be refused there"
-        );
-        // 只读干跑：没有布局事务可判定
-        EXIT_OK.into()
-    } else {
-        apply_cmd(a, pref).into()
-    }
-}
-
-fn apply_cmd(a: &Args, pref: PartSelector) -> crate::outcome::Outcome {
-    // chunk_bytes 只校验 --chunk-size 的取值，与目标无关：放在一切开盘动作之前，
-    // 请求本身不合法 ⇒ 10（改参数有解），不让它被"现有 ckpt 不匹配"之类的
-    // 盘上现状消息抢占
-    let chunk = match movepart::chunk_bytes(a.chunk_mib) {
-        Ok(c) => c,
-        Err(e) => bail_fail(Fail::refused(e.to_string())),
-    };
-    // 载体必须是整盘：条目按节点 LBA0 的偏移读写（判据与 new/add/create 同源）
-    refuse_partition_node_target("apply", &a.target);
-    // 一次打开完成分类：是否续跑在**锁下**按 ckpt 判定（见 open_target_resumable），
-    // 不沿用任何只读预判——判据与开目标之间不许留窗口
-    let (mut src, _resuming) =
-        open_target_resumable(a, pref).unwrap_or_else(|f| bail_fail(f));
-    // plan 在**锁下**构造：它是本次执行的权威值（续跑时取自 ckpt 自持）。
-    // 取锁之前构造的那份只能算草稿——只读阶段与取得独占权之间盘可以被别人改写，
-    // 执行一份与盘上现状无关的计划就是把过期决定写进盘。
-    // 几何在同一把锁下解析一次，plan、Logger 与 apply 的判定/执行全程共用它
-    let (g, repair) = crate::gpt_policy::require_gpt_geometry(&src, "apply").unwrap_or_else(|f| bail_fail(f));
-    // 锁下快照
-    let grow = crate::gpt_policy::resolve_part_in(
-        crate::gpt_policy::TableEntries::Gpt(g.entries()),
-        pref,
-    )
-    .unwrap_or_else(|f| bail_fail(f));
-    let plan = match movepart::make_plan_resuming(&src, &g, repair, grow) {
-        Ok(p) => p,
-        Err(f) => bail_fail(f),
-    };
-    // 只有真正要挪位置的挡路分区才需要授权：delta 为 0 的条目不搬动字节。
-    // swap 挡路者的条目同样挪位、旧内容被重建覆盖，也越过回滚点
-    let relocating = plan.moves.iter().filter(|m| m.delta_lba != 0).count();
-    crate::cmd::confirm::gate(a.yes, crate::cmd::confirm::Impact {
-        relocating,
-        ..Default::default()
-    });
-    // 表的可解析性由上面那一次 require_gpt_geometry 判过（无 GPT → refused 10，表非法 → infra 30）：
-    // 同一事实不设第二判据——两处判据迟早会在某个入口分叉，且自判拒绝时还不报原因
-    let mut logger = Logger::open(&src, Some(g.disk_guid()));
-    let o = movepart::apply(&mut src, &g, &plan, chunk, a.no_fs, false, None, &mut |m| logger.log(m));
-    // 出问题时日志里也留一份：apply 失败后用户常回看日志——refused 的参数成因
-    // 与 infra 的环境故障同样值得持久化
-    if !o.is_complete() {
-        let why = match &o {
-            crate::outcome::Outcome::Refused(m) => format!("refused: {m}"),
-            crate::outcome::Outcome::Infra { cause } | crate::outcome::Outcome::Failed { cause, .. } => format!("error: {cause}"),
-            crate::outcome::Outcome::Applied { pending, kernel_sync } => format!(
-                "finished with {} pending, kernel view {}",
-                pending.len(),
-                if *kernel_sync == crate::outcome::KernelSync::Stale { "stale" } else { "in sync" }
-            ),
-        };
-        logger.log(&format!("apply {why}"));
-    }
-    settle_layout(o, &src)
 }

@@ -22,8 +22,8 @@ pub(crate) fn preflight_lvm_tools(grow_lv: bool, needs_loop: bool) -> Result<(),
 }
 
 /// 只读定位 `part_dev` 上的目标顶层 LV：`--lv` 精确匹配裸名或 `/dev/<vg>/<name>`，
-/// 缺省要求该 PV 上只有一个顶层 LV。返回选择时的名字、路径、VG extent 字节数与
-/// LV 当前字节数——后者是 `lvextend -l +N` 的基线，随 checkpoint 落盘。
+/// 缺省要求该 PV 上只有一个顶层 LV。返回选择时的路径、VG extent 字节数与
+/// LV 当前字节数——后者是 `lvextend -l +N` 的基线，随恢复记录落盘。
 /// 全部是只读查询、与 pvresize 的结果无关，因此由调用方在写盘前先做。
 /// "PV 不在任何 VG / 没有 LV / LV 不唯一 / 名字对不上"都是请求与卷现状不匹配
 /// （`LvmError::Refused`），写盘之前拒绝即可让人改参数重跑
@@ -35,7 +35,7 @@ fn select_lv(part_dev: &str, want_lv: Option<&str>) -> Result<LvmSelection, LvmE
         Err(e) => return Err(e),
     };
     let lvs = crate::lvm::lvs_on_pv(&vg, part_dev)?;
-    let (name, path) = match want_lv {
+    let (_, path) = match want_lv {
         Some(sel) => match lvs.iter().find(|(n, p)| n == sel || p == &format!("/dev/{sel}")) {
             Some(x) => x.clone(),
             None => {
@@ -66,7 +66,7 @@ fn select_lv(part_dev: &str, want_lv: Option<&str>) -> Result<LvmSelection, LvmE
             "LV {path} is not active — --grow-lv extends an active LV only (lvextend -r resizes the live filesystem)"
         )));
     }
-    Ok(LvmSelection { name, path, extent_bytes, size: state.size })
+    Ok(LvmSelection { path, extent_bytes, size: state.size })
 }
 
 /// 首次写表之前的 LV 选择预检（只读）：`--lv` 写错、PV 上没有 LV、LV 不唯一都要在
@@ -92,14 +92,16 @@ pub(crate) fn preflight_lv_selection(
 }
 
 /// 写表之前的 LVM 预检错误 → 出口语义。此刻一次目标写盘都没有发生，三种成因因此
-/// 都能走"确定未写盘"的通道：工具缺失与非零退出的只读查询归环境故障（`Infra`，
+/// 都能走"确定未写盘"的通道：工具缺失与非零退出的只读查询归外部能力/环境（`Unsupported`/`NoMutation`，
 /// 改参数无解），"请求与卷现状对不上"归拒绝（`Refused`，改 `--lv` 有解）。
 /// 提交之后的链失败不走这里——那时已越过 durable boundary，只能作为待办上报
 #[cfg(target_os = "linux")]
-pub(crate) fn lvm_preflight_fail(e: LvmError) -> Fail {
+pub(crate) fn lvm_preflight_fail(e: LvmError) -> RunOutcome {
     match e {
-        LvmError::ToolMissing(m) | LvmError::Failed(m) => Fail::infra(m),
-        LvmError::Refused(m) | LvmError::Inactive(m) => Fail::refused(m),
+        // 工具缺失是能力问题：换参数也解决不了，与"查询失败"（环境故障、确定未写盘）分开
+        LvmError::ToolMissing(m) => RunOutcome::unsupported(m),
+        LvmError::Failed(m) => RunOutcome::no_mutation(m),
+        LvmError::Refused(m) | LvmError::Inactive(m) => RunOutcome::refused(m),
     }
 }
 
@@ -193,7 +195,7 @@ pub(crate) fn lvm_grow_chain(
         )));
     }
     crate::lvm::lv_extend(&path, want)?;
-    println!("lvextend -l +{want} -r {path} done (lv {})", sel.name);
+    println!("lvextend -l +{want} -r {path} done");
     // 目标按记录的增量算出，回读确认它真的到了那一尺寸：lvextend 的退出码 0 不等于
     // LV 尺寸变了（LVM 对空操作也可能成功返回）
     let after = crate::lvm::lv_state(part_dev, &path)?;
@@ -217,7 +219,7 @@ fn finish_lv_growth(part_dev: &str, lv_path: &str, f: &LvmPostFacts, free: u64) 
     let ext = crate::lvm::vg_extent_size(&st.vg)?;
     if ext != f.extent_bytes {
         return Err(LvmError::Failed(format!(
-            "VG {} reports an extent size of {ext} bytes, but the checkpoint recorded {} — the VG geometry changed since the job started; refusing to extend {lv_path}",
+            "VG {} reports an extent size of {ext} bytes, but the recovery record has {} — the VG geometry changed since the job started; refusing to extend {lv_path}",
             st.vg, f.extent_bytes
         )));
     }

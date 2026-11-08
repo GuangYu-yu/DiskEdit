@@ -23,10 +23,6 @@ impl Rng {
         z ^ (z >> 31)
     }
 
-    pub(crate) fn u64(&mut self) -> u64 {
-        self.next_u64()
-    }
-
     pub(crate) fn bool(&mut self) -> bool {
         self.next_u64() & 1 == 1
     }

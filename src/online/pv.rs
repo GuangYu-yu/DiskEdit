@@ -72,9 +72,10 @@ pub(crate) fn resolve_pv_target(disk_name: &str, pno: u32) -> io::Result<OnlineT
 /// 锁身份：锁按**取锁时刻**的拓扑派生（粒度取整盘，见 [`lock_disk`]）。路径串相同
 /// 不代表拓扑相同——同一个 `/dev/sdX` 被重新绑定到另一块盘时，锁保护的是旧身份，
 /// 而要动的是新设备。故取锁与锁下重解析之后各算一次，两处不一致即拒绝
-pub(crate) fn lock_identity(t: &OnlineTarget) -> Result<crate::dev::TargetIdentity, Outcome> {
+pub(crate) fn lock_identity(t: &OnlineTarget) -> Result<crate::dev::TargetIdentity, RunOutcome> {
     // fail-closed：拓扑解析不出来即拒绝（不退到 devname-容量身份）
-    crate::dev::TargetIdentity::resolve_block(&t.disk_dev).map_err(Outcome::infra)
+    crate::dev::TargetIdentity::resolve_block(&t.disk_dev)
+        .map_err(|cause| RunOutcome::no_mutation(format!("cannot resolve the disk identity: {cause}")))
 }
 
 /// 在线路径的独占所有权：设备已挂载 / 被 DM 持有，`O_EXCL` 不可能成功，但**同一把
@@ -84,11 +85,24 @@ pub(crate) fn lock_identity(t: &OnlineTarget) -> Result<crate::dev::TargetIdenti
 /// 身份一并交回，供锁下重解析复核（见 [`lock_identity`]）
 pub(crate) fn lock_disk(
     t: &OnlineTarget,
-) -> Result<(crate::targetlock::TargetLock, crate::dev::TargetIdentity), Outcome> {
+) -> Result<(crate::targetlock::TargetLock, crate::dev::TargetIdentity), RunOutcome> {
     let ident = lock_identity(t)?;
-    // 取锁的失败按 `Fail` 的三个变体折叠成出口语义（唯一映射点在 outcome 模块），
+    // 锁落在记录目录内，目录必须先于取锁就位
+    crate::dev::prepare_record_dir(&ident, None).map_err(|e| match e {
+        crate::dev::HostRepoError::NotRoot => RunOutcome::unsupported(
+            "the host recovery repository must be owned by uid 0; the online path is refused when this \
+             process is not root",
+        ),
+        crate::dev::HostRepoError::Insecure(detail) => {
+            RunOutcome::unsupported(format!("the host recovery repository is refused: {detail}"))
+        }
+        crate::dev::HostRepoError::Io(e) => {
+            RunOutcome::no_mutation(format!("cannot prepare the recovery directory: {e}"))
+        }
+    })?;
+    // 取锁的失败按 `RunOutcome` 的三个变体折叠成出口语义（唯一映射点在 outcome 模块），
     // 本处不借 `finish` 做转换——那是"结束一次操作"的入口，语义不同
-    let lock = crate::targetlock::TargetLock::acquire(&ident, None).map_err(|f| f.into_outcome())?;
+    let lock = crate::targetlock::TargetLock::acquire(&ident, None)?;
     Ok((lock, ident))
 }
 
@@ -97,10 +111,10 @@ pub(crate) fn lock_disk(
 pub(crate) fn verify_lock_identity(
     held: &crate::dev::TargetIdentity,
     fresh: &OnlineTarget,
-) -> Result<(), Outcome> {
+) -> Result<(), RunOutcome> {
     match lock_identity(fresh) {
         Ok(id) if id.lock_path() == held.lock_path() => Ok(()),
-        Ok(_) => Err(Outcome::infra(format!(
+        Ok(_) => Err(RunOutcome::refused(format!(
             "the device behind {} changed identity during locking — the lock protects a different target now; retry",
             fresh.disk_dev.display()
         ))),
@@ -115,22 +129,21 @@ pub(crate) fn verify_lock_identity(
 /// 在写主/备 GPT 结构之间被撕裂，undo 与续传都覆盖不到，只能由外部工具修复。
 /// 判定发生在锁下、与首次写盘之间无窗口；有了这道闸，命令成功后 main 的
 /// drop_journal 只会碰到"不存在"的落点——绝无"删掉别人可回滚凭据"的可能
-pub(crate) fn refuse_if_scene_active(t: &OnlineTarget) -> Result<(), Outcome> {
+pub(crate) fn refuse_if_scene_active(t: &OnlineTarget) -> Result<(), RunOutcome> {
     // 只读打开**分区**节点：闸口只读现场（journal / checkpoint 落点），不申请写权限。
     // 现场落点由所在整盘的键派生，故分区节点与整盘节点解析到同一对落点
     let part = crate::dev::FileSource::open_read_only(&t.part_dev)
-        .map_err(|e| Outcome::infra(format!("open failed: {e}")))?;
+        .map_err(|e| RunOutcome::no_mutation(format!("open failed: {e}")))?;
     // 只传主语：后半句 "writes outside the undo journal" 由 refuse_if_active 统一拼
     //（与之并列的调用点传的是命令名，如 "resizefs" / "check"）。
     // 在线路径的两种入口共用本闸口：挂载中的块设备，与被 device-mapper 持有的
     // LVM PV——两者的续跑出路都是先退出在线形态（卸载 / 停用卷组）再走离线分支，
     // busy 文案里的"重跑续跑"只有在离线分支才真正可达，故在此附上提示
-    crate::transaction::TransactionManager::refuse_if_active(
+    crate::recovery::TransactionManager::refuse_if_active(
         &part,
         "online resize",
     )
-    .map_err(|f| f.context("a re-run would take the online path again and cannot resume the job — unmount the target (for an LVM PV: deactivate its volume group) to reach the resume path"))
-    .map_err(|f| f.into_outcome())?;
+    .map_err(|f| f.context("a re-run would take the online path again and cannot resume the job — unmount the target (for an LVM PV: deactivate its volume group) to reach the resume path"))?;
     Ok(())
 }
 
@@ -140,9 +153,9 @@ pub(crate) fn refuse_if_scene_active(t: &OnlineTarget) -> Result<(), Outcome> {
 /// 必须全部通过才允许 part_resize 落盘：写表之后这些条件已无法"事后退出"。
 /// `disk` 是锁下的只读整盘句柄：可用区上界只能从**当下重读的表**取，sysfs 快照
 /// 里没有这一项
-pub(crate) fn check_new_range(t: &OnlineTarget, new_len_bytes: u64, disk: &FileSource) -> Result<(), Fail> {
+pub(crate) fn check_new_range(t: &OnlineTarget, new_len_bytes: u64, disk: &FileSource) -> Result<(), RunOutcome> {
     if new_len_bytes == 0 || !new_len_bytes.is_multiple_of(t.logical_block) {
-        return Err(Fail::refused(format!(
+        return Err(RunOutcome::refused(format!(
             "size {new_len_bytes} not aligned to logical block size {}",
             t.logical_block
         )));
@@ -150,9 +163,9 @@ pub(crate) fn check_new_range(t: &OnlineTarget, new_len_bytes: u64, disk: &FileS
     let end = t
         .start_bytes
         .checked_add(new_len_bytes)
-        .ok_or_else(|| Fail::refused("size overflow".to_string()))?;
+        .ok_or_else(|| RunOutcome::refused("size overflow".to_string()))?;
     if end > t.disk_cap_bytes {
-        return Err(Fail::refused(format!(
+        return Err(RunOutcome::refused(format!(
             "new end {end} exceeds disk capacity {}",
             t.disk_cap_bytes
         )));
@@ -161,14 +174,14 @@ pub(crate) fn check_new_range(t: &OnlineTarget, new_len_bytes: u64, disk: &FileS
     // 在线把同一长度交给 sfdisk 的 size 字段，越过 u32 会在落盘时被截断成另一个区间
     let new_len_sectors = new_len_bytes / t.logical_block;
     if new_len_sectors > u32::MAX as u64
-        && crate::table::parse_mbr(disk).map_err(Fail::from)?.is_some()
+        && crate::table::parse_mbr(disk).map_err(RunOutcome::from)?.is_some()
     {
-        return Err(Fail::refused(format!(
+        return Err(RunOutcome::refused(format!(
             "new length {new_len_sectors} sectors exceeds the MBR size field (u32 sectors) — MBR cannot address it"
         )));
     }
     if !range_free(t.start_bytes, new_len_bytes, &t.others) {
-        return Err(Fail::refused("new size would overlap an adjacent partition".to_string()));
+        return Err(RunOutcome::refused("new size would overlap an adjacent partition".to_string()));
     }
     // 盘尾的备份 GPT 与条目数组不在可用区内：落到那段字节上的表项会让备份头与
     // 分区内容互相覆盖。上界取表自述的 last_usable_lba，与离线入口同一判据；
@@ -177,7 +190,7 @@ pub(crate) fn check_new_range(t: &OnlineTarget, new_len_bytes: u64, disk: &FileS
     if let Some(max_end) = crate::gpt_policy::usable_end_bytes(disk)?
         && end > max_end
     {
-        return Err(Fail::refused(format!(
+        return Err(RunOutcome::refused(format!(
             "new end {end} exceeds the last usable block at {max_end} — the backup GPT and its entry array sit past it; \
              grow offline (`diskedit resize`) so the backup GPT is relocated first"
         )));
@@ -205,13 +218,13 @@ pub struct LockedPv {
 pub fn resize_pv(
     disk_name: &str,
     pno: u32,
-    decide: impl FnOnce(&FileSource) -> Result<Option<u64>, Fail>,
-    before_write: impl FnOnce(&FileSource, u64, u64, u64) -> Result<(), Fail>,
-) -> (Outcome, u64, Option<LockedPv>) {
-    // 解析只读 sysfs / 路径，尚未写盘 → Infra。尚未取得独占权，旧尺寸不可信
+    decide: impl FnOnce(&FileSource) -> Result<Option<u64>, RunOutcome>,
+    before_write: impl FnOnce(&FileSource, u64, u64, u64) -> Result<(), RunOutcome>,
+) -> (RunOutcome, u64, Option<LockedPv>) {
+    // 解析只读 sysfs / 路径，尚未写盘 → NoMutation。尚未取得独占权，旧尺寸不可信
     let t = match resolve_pv_target(disk_name, pno) {
         Ok(t) => t,
-        Err(e) => return (Outcome::infra(e.to_string()), 0, None),
+        Err(e) => return (RunOutcome::no_mutation(e.to_string()), 0, None),
     };
     // 此后每一步都是写盘（写表 / 内核重读），独占权从解析出目标起就取得
     let (owned, locked_ident) = match lock_disk(&t) {
@@ -223,10 +236,10 @@ pub fn resize_pv(
     // 下面的 shrink 判定与 check_new_range 的邻接、容量判据必须来自锁下的新鲜事实
     let t = match resolve_pv_target(disk_name, pno) {
         Ok(t) => t,
-        Err(e) => return (Outcome::infra(e.to_string()), 0, None),
+        Err(e) => return (RunOutcome::no_mutation(e.to_string()), 0, None),
     };
     // 身份复核：锁按取锁时刻的拓扑派生，窗口内同一路径被重绑到别的设备时，
-    // 路径串比对看不出来，锁保护的已不是我们要动的这块盘
+    // 路径串比对看不出来，锁保护的已不是本次要动的这块盘
     if let Err(o) = verify_lock_identity(&locked_ident, &t) {
         return (o, 0, None);
     }
@@ -240,47 +253,47 @@ pub fn resize_pv(
     // /proc/swaps 读不出来时无从断言"无 swap"——按环境故障拒绝而非放行
     match crate::online::swap_active(disk_name, pno) {
         Ok(true) => {
-            return (Outcome::refused(format!("partition {pno} became active swap during locking — run swapoff first")), old_len_bytes, None);
+            return (RunOutcome::refused(format!("partition {pno} became active swap during locking — run swapoff first")), old_len_bytes, None);
         }
         Ok(false) => {}
-        Err(e) => return (Outcome::infra(format!("cannot check active swap for partition {pno}: {e}")), old_len_bytes, None),
+        Err(e) => return (RunOutcome::no_mutation(format!("cannot check active swap for partition {pno}: {e}")), old_len_bytes, None),
     }
     // 锁下重取真相共用一个只读整盘句柄：PV 判据复核与"请求 → 目标长度"的解析
     // 都锚定独占权之后的盘上内容。PV 判据的复核（命令层那次是锁前粗查）：识别与
     // 取锁之间分区可被重新格式化，过期的 is_pv 会把 sfdisk 的表写入砸到已不是 PV 的分区上
     let disk = match FileSource::open_read_only(&t.disk_dev) {
         Ok(s) => s,
-        Err(e) => return (Outcome::infra(format!("open failed: {e}")), old_len_bytes, None),
+        Err(e) => return (RunOutcome::no_mutation(format!("open failed: {e}")), old_len_bytes, None),
     };
     match crate::fsid::identify(&disk, t.start_bytes, t.part_len_bytes) {
-        Ok(Some(crate::fsid::FsKind::Lvm2Pv)) => {}
-        Ok(ft) => return (Outcome::refused(format!(
+        Ok(ContentKind::Lvm2Pv) => {}
+        Ok(ft) => return (RunOutcome::refused(format!(
             "partition {pno} is no longer an LVM PV (identified as {}) — re-run `diskedit resize` to re-classify the target",
-            crate::fsid::fs_name(ft)
+            crate::fsid::content_name(ft)
         )), old_len_bytes, None),
-        Err(e) => return (Outcome::infra(format!("identify failed: {e}")), old_len_bytes, None),
+        Err(e) => return (RunOutcome::no_mutation(format!("identify failed: {e}")), old_len_bytes, None),
     }
     // 目标长度在锁下解析（见 `resize_online_planned` 的说明）；PV 路径无"仅扩 FS"一说，
     // `Ok(None)` 视作无绝对目标 = 分区层无变化
     let new_len_bytes = match decide(&disk) {
         Ok(Some(b)) => b,
         Ok(None) => t.part_len_bytes,
-        Err(f) => return (f.into_outcome(), old_len_bytes, None),
+        Err(f) => return (f, old_len_bytes, None),
     };
     // 相等值 = 分区层无事可做，按 complete 返回：调用方照常走完 PV 链，
     // delta 为 0 时 pvresize/lvextend 只同步现状。相等与否必须由锁下事实判定——
     // 锁前快照在窗口内可能已过期，用它短路会跳过本该做的写表
     if new_len_bytes == t.part_len_bytes {
-        return (Outcome::applied_with(Vec::new()), old_len_bytes, Some(LockedPv { lock: owned, disk }));
+        return (RunOutcome::applied_with(Vec::new()), old_len_bytes, Some(LockedPv { lock: owned, disk }));
     }
     if new_len_bytes < t.part_len_bytes {
-        return (Outcome::refused(format!(
+        return (RunOutcome::refused(format!(
             "PV partition can only grow here (current {} bytes); PV shrink needs the lvreduce/pvresize chain",
             t.part_len_bytes
         )), old_len_bytes, None);
     }
     if let Err(f) = check_new_range(&t, new_len_bytes, &disk) {
-        return (f.into_outcome(), old_len_bytes, None);
+        return (f, old_len_bytes, None);
     }
     // 写表前的占用闸（与离线路径同一处判据）：PV 只增长，持有者仅允许 DM 栈——
     // pvresize 的标准流程是先长分区、再长 dm 映射，增长不改 DM 已映射的扇区。
@@ -288,12 +301,12 @@ pub fn resize_pv(
     if let Err(f) =
         crate::fsops::ensure_idle_before_write(&disk, pno, t.start_bytes, crate::fsops::WriteKind::Extend)
     {
-        return (f.into_outcome(), old_len_bytes, None);
+        return (f, old_len_bytes, None);
     }
     // 分区层确实要改：此后写盘经由 sfdisk / pvresize，不落 journal、也没有 checkpoint。
     // 这里的拒绝仍是"确定未写盘"：表一次都还没写过
     if let Err(f) = before_write(&disk, t.start_bytes, old_len_bytes, new_len_bytes) {
-        return (f.into_outcome(), old_len_bytes, None);
+        return (f, old_len_bytes, None);
     }
     crate::support::note_online_no_undo();
     if let Err(e) = part_resize(&t, new_len_bytes) {
@@ -303,7 +316,7 @@ pub fn resize_pv(
         match &e {
             PartResizeError::Partial(_) => {
                 return (
-                    e.into_outcome_with(vec![pv_chain_pending(pno, format!(
+                    e.into_run_outcome_with(vec![pv_chain_pending(pno, format!(
                         "partition resized but the PV chain was skipped: {detail}"
                     ))]),
                     old_len_bytes,
@@ -313,23 +326,23 @@ pub fn resize_pv(
             // 写入已发出但盘上状态不可证实：分区尺寸未知，PV 链同样没做
             PartResizeError::Unverified(_) => {
                 return (
-                    e.into_outcome_with(vec![pv_chain_pending(pno, format!(
+                    e.into_run_outcome_with(vec![pv_chain_pending(pno, format!(
                         "partition table write could not be verified; the PV chain was skipped: {detail}"
                     ))]),
                     old_len_bytes,
                     None,
                 );
             }
-            _ => return (e.into_outcome(), old_len_bytes, None),
+            _ => return (e.into_run_outcome(), old_len_bytes, None),
         }
     }
     (
         match verify_part_size(&t, new_len_bytes) {
-            Ok(()) => Outcome::applied_with(Vec::new()),
+            Ok(()) => RunOutcome::applied_with(Vec::new()),
             // 表已写、内核报的尺寸却不同 → 内核视图过期（后续 PV 链不得基于旧尺寸）
             Err(e) => {
                 eprintln!("warning: partition table updated but kernel reports a different size: {e}");
-                let mut o = Outcome::applied_with(vec![pv_chain_pending(pno, format!(
+                let mut o = RunOutcome::applied_with(vec![pv_chain_pending(pno, format!(
                     "partition resized but the PV chain was skipped: {e}"
                 ))]);
                 o.mark_kernel_stale();

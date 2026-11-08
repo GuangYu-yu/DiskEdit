@@ -29,6 +29,24 @@ fn write_region(img: &std::path::Path, lba: u64, bytes: &[u8]) {
     f.write_all(bytes).unwrap();
 }
 
+/// 精确落位的 GPT 夹具：`add` 只按第一个可容纳空洞落位，这些用例需要指定坐标。
+fn write_layout(img: &std::path::Path, parts: &[(u64, u64)]) {
+    let mut cur = Cursor::new(vec![0u8; 16 * 1024 * 1024]);
+    let mut gpt = gptman::GPT::new_from(&mut cur, 512, [0xCD; 16]).unwrap();
+    for (i, (start, end)) in parts.iter().enumerate() {
+        gpt[i as u32 + 1] = gptman::GPTPartitionEntry {
+            partition_type_guid: [0x11; 16],
+            unique_partition_guid: [0x12 + i as u8; 16],
+            starting_lba: *start,
+            ending_lba: *end,
+            attribute_bits: 0,
+            partition_name: "".into(),
+        };
+    }
+    gpt.write_into(&mut cur).unwrap();
+    std::fs::write(img, with_protective_mbr(cur.into_inner())).unwrap();
+}
+
 #[test]
 fn resize_part_move_copy_flag_name() {
     let dir = std::env::temp_dir().join(format!("diskedit_rp_{}", std::process::id()));
@@ -46,12 +64,7 @@ fn resize_part_move_copy_flag_name() {
          String::from_utf8_lossy(&out.stderr).into_owned())
     };
 
-    run(&["new", img_s, "--yes"]);
-    let (c, _, _) = run(&["add", img_s, "--start", "2048", "--end", "6143", "--name", "a"]);
-    assert_eq!(c, 0);
-    // b 取 2 MiB：--chunk-size 1（1 MiB）时复制跨 chunk 边界
-    let (c, _, _) = run(&["add", img_s, "--start", "14336", "--end", "18431", "--name", "b"]);
-    assert_eq!(c, 0);
+    write_layout(&img, &[(2048, 6143), (14336, 18431)]);
 
     // 数据指纹：写入可辨识字节到分区 a 首尾
     let mut f = std::fs::OpenOptions::new().write(true).open(&img).unwrap();
@@ -69,15 +82,15 @@ fn resize_part_move_copy_flag_name() {
     // 12000..17407 对齐后 12288..16383，与 b（14336..18431）重叠
     let img_before = std::fs::read(&img).unwrap();
     let entries_before = dir_entries(&dir);
-    let (c, _, stderr) = run(&["resize-part", &format!("{img_s}:1"), "--start", "12000", "--end", "17407", "--yes"]);
-    assert_eq!(c, 10, "overlapping move must refuse");
+    let (c, _, stderr) = run(&["move", &format!("{img_s}:1"), "--start", "12000", "--align", "mib", "--chunk", "4", "--yes"]);
+    assert_eq!(c, 3, "overlapping move must refuse");
     assert!(stderr.contains("overlaps"), "{stderr}");
     // 拒绝承诺未写盘：整镜像逐字节不变（表项未变不等于盘面未变）
     assert_eq!(std::fs::read(&img).unwrap(), img_before, "a refusal must leave the image byte-identical");
     assert_eq!(dir_entries(&dir), entries_before, "a refusal must not add sidecars");
 
     // move：分区 a 右移 8100..12400 → 对齐 8192..12287（落点空闲；长度不变，故没有 FS 步骤）
-    let (c, _, stderr) = run(&["resize-part", &format!("{img_s}:1"), "--start", "8100", "--end", "12400", "--yes"]);
+    let (c, _, stderr) = run(&["move", &format!("{img_s}:1"), "--start", "8100", "--align", "mib", "--chunk", "4", "--yes"]);
     assert_eq!(c, 0, "move must succeed: {stderr}");
     let mut f = std::fs::File::open(&img).unwrap();
     let gpt = gptman::GPT::find_from(&mut f).unwrap();
@@ -94,11 +107,11 @@ fn resize_part_move_copy_flag_name() {
     drop(f);
 
     // shrink：unknown FS 的分区拒绝缩容（无法先缩 FS，缩表项会写坏数据——fail-fast 不落盘）。
-    // --yes 让请求越过确认门，命中这里要测的 FS 缩容守卫；不带它先被门拒成 10
+    // --yes 让请求越过确认门，命中这里要测的 FS 缩容守卫；不带它先被门拒成 3
     let img_before = std::fs::read(&img).unwrap();
     let entries_before = dir_entries(&dir);
-    let (c, _, stderr) = run(&["resize-part", &format!("{img_s}:1"), "--start", "8192", "--end", "11000", "--yes"]);
-    assert_eq!(c, 10, "shrink of unknown-FS partition must refuse: {stderr}");
+    let (c, _, stderr) = run(&["resize-part", &format!("{img_s}:1"), "--end", "11000", "--yes"]);
+    assert_eq!(c, 6, "shrink of unknown-FS partition must refuse: {stderr}");
     assert!(stderr.contains("shrink"), "{stderr}");
     // 拒绝发生在任何写入前：表项保持 move 后的 8192..12287，盘面亦逐字节不变
     let mut f = std::fs::File::open(&img).unwrap();
@@ -110,8 +123,8 @@ fn resize_part_move_copy_flag_name() {
     assert_eq!(dir_entries(&dir), entries_before, "a refusal must not add sidecars");
 
     // copy：分区 b 复制到 20000 → 对齐 20480（b 长 4096 扇区 → 20480..24575）
-    // --chunk-size 1（1MiB = 2048 扇区）：源 2 MiB 跨两个 chunk，边界与残段都走一遍
-    let (c, out, stderr) = run(&["copy", &format!("{img_s}:2"), "--start", "20000", "--name", "bcopy", "--chunk-size", "1", "--yes"]);
+    // --chunk 1（1MiB = 2048 扇区）：源 2 MiB 跨两个 chunk，边界与残段都走一遍
+    let (c, out, stderr) = run(&["copy", &format!("{img_s}:2"), "--start", "20000", "--align", "mib", "--name", "bcopy", "--chunk", "1", "--yes"]);
     assert_eq!(c, 0, "copy must succeed: {out}{stderr}");
     // 目标整区逐字节等于源；源必须保持原样
     assert_eq!(read_region(&img, 20480, b_payload.len()), b_payload, "copy target must equal the source byte-for-byte");
@@ -119,15 +132,15 @@ fn resize_part_move_copy_flag_name() {
     // 非法 chunk 拒绝（0 越界）
     let img_before = std::fs::read(&img).unwrap();
     let entries_before = dir_entries(&dir);
-    let (c, _, _) = run(&["copy", &format!("{img_s}:2"), "--start", "24000", "--chunk-size", "0", "--yes"]);
-    assert_eq!(c, 10, "invalid --chunk-size must refuse");
+    let (c, _, _) = run(&["copy", &format!("{img_s}:2"), "--start", "24000", "--chunk", "0", "--yes"]);
+    assert_eq!(c, 2, "invalid --chunk must refuse as a usage error");
     assert_eq!(std::fs::read(&img).unwrap(), img_before, "a refusal must leave the image byte-identical");
     assert_eq!(dir_entries(&dir), entries_before, "a refusal must not add sidecars");
 
     // flag/name
-    let (c, _, _) = run(&["set", &format!("{img_s}:2"), "flag", "esp", "on"]);
+    let (c, _, _) = run(&["set", &format!("{img_s}:2"), "flag", "esp", "on", "--yes"]);
     assert_eq!(c, 0);
-    let (c, _, _) = run(&["set", &format!("{img_s}:2"), "name", "renamed"]);
+    let (c, _, _) = run(&["set", &format!("{img_s}:2"), "name", "renamed", "--yes"]);
     assert_eq!(c, 0);
 
     // 终验：info + gptman
@@ -158,7 +171,7 @@ fn resize_part_move_copy_flag_name() {
     drop(f);
 
     // --keep-partuuid 显式保留源 PARTUUID（复制身份，而不只是复制内容）
-    let (c, out, stderr) = run(&["copy", &format!("{img_s}:2"), "--start", "24000", "--keep-partuuid", "--yes"]);
+    let (c, out, stderr) = run(&["copy", &format!("{img_s}:2"), "--start", "24000", "--align", "mib", "--keep-partuuid", "--chunk", "4", "--yes"]);
     assert_eq!(c, 0, "--keep-partuuid copy must succeed: {out}{stderr}");
     let mut f = std::fs::File::open(&img).unwrap();
     let gpt = gptman::GPT::find_from(&mut f).unwrap();
@@ -189,25 +202,21 @@ fn grow_to_end() {
 
     let (c, e) = run(&["new", img_s, "--yes"]);
     assert_eq!(c, 0, "{e}");
-    let (c, e) = run(&["add", img_s, "--start", "2048", "--end", "4095", "--name", "a"]);
+    let (c, e) = run(&["add", img_s, "1M", "--align", "mib", "--type-guid", "0fc63daf-8483-4772-8e79-3d69d8477de4", "--name", "a", "--yes"]);
     assert_eq!(c, 0, "{e}");
 
     // --end 与 --grow-to-end 互斥
-    let (c, _) = run(&["resize-part", &format!("{img_s}:1"), "--start", "2048", "--end", "6000", "--grow-to-end"]);
-    assert_eq!(c, 10, "--end + --grow-to-end must refuse");
+    let (c, _) = run(&["resize-part", &format!("{img_s}:1"), "--end", "6000", "--grow-to-end", "--yes"]);
+    assert_eq!(c, 2, "--end + --grow-to-end must refuse as a usage error");
 
-    // grow-to-end：分区里没有 FS，只改表要由 --no-fs 显式担下；不带它在写表之前就拒绝
-    let (c, e) = run(&["resize-part", &format!("{img_s}:1"), "--start", "2048", "--grow-to-end"]);
-    assert_eq!(c, 10, "an unidentifiable region must be refused without --no-fs: {e}");
-    assert!(e.contains("--no-fs"), "{e}");
+    // grow-to-end：分区里没有 FS，缺少 FS 步骤时在写表之前就拒绝；提示不得指向 resize-part 不接受的选项
+    let (c, e) = run(&["resize-part", &format!("{img_s}:1"), "--grow-to-end", "--yes"]);
+    assert_eq!(c, 6, "an unidentifiable region must be refused: {e}");
+    assert!(!e.contains("--no-fs"), "the hint must not point at an option resize-part does not accept: {e}");
 
-    // 扩到 last_usable_lba 16350
-    let (c, e) = run(&["resize-part", &format!("{img_s}:1"), "--start", "2048", "--grow-to-end", "--no-fs"]);
-    assert_eq!(c, 0, "{e}");
-    let mut f = std::fs::File::open(&img).unwrap();
-    let gpt = gptman::GPT::find_from(&mut f).unwrap();
-    assert_eq!(gpt[1].starting_lba, 2048);
-    assert_eq!(gpt[1].ending_lba, 16350);
+    // resize-part 不登记 --no-fs：收到即用法错误，不进入任何写入
+    let (c, e) = run(&["resize-part", &format!("{img_s}:1"), "--grow-to-end", "--no-fs", "--yes"]); // cli-surface: refused
+    assert_eq!(c, 2, "--no-fs is outside the resize-part surface: {e}");
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -219,7 +228,7 @@ const SWAP_UUID: [u8; 16] = [0xA1; 16];
 const SWAP_LABEL: [u8; 3] = [b'A', 0xFF, b'B']; // 含非法 UTF-8 字节：按字节往返的判据
 
 /// 16 MiB（32768 扇区，last_usable 32734）：root 2048..6143 + swap 6144..8191。
-/// apply 后 swap 尾部打包 30687..32734（零数据搬移），root 扩到 32734
+/// resize grow 后 swap 尾部打包 30687..32734（零数据搬移），root 扩到 32734
 fn write_swap_fixture(img: &std::path::Path) {
     let ss = 512u64;
     let data = vec![0u8; 16 * 1024 * 1024];
@@ -259,7 +268,7 @@ fn write_swap_fixture(img: &std::path::Path) {
 }
 
 #[test]
-fn apply_swap_recreate() {
+fn resize_grow_swap_recreate() {
     let dir = std::env::temp_dir().join(format!("diskedit_swr_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let img = dir.join("s.img");
@@ -269,7 +278,10 @@ fn apply_swap_recreate() {
 
     // --no-fs：#1 是 grow 目标且里面没有 FS，只改表由用户显式担下（否则事前拒绝）；
     // #2 的 swap 重建是**搬移**的一环（swap 头随位置走），与本开关无关，重建照旧
-    let out = Command::new(exe).args(["apply", img_s, "--grow", "1", "--no-fs", "--yes"]).output().unwrap();
+    let out = Command::new(exe)
+        .args(["resize", &format!("{img_s}:1"), "grow", "--no-fs", "--allow-move", "--chunk", "1", "--yes"])
+        .output()
+        .unwrap();
     let code = out.status.code().unwrap_or(-1);
     let stderr = String::from_utf8_lossy(&out.stderr);
     // swap 重建依赖 mkswap/losetup（仅 Linux）：工具可用 → 后置条件全满足（OK）；
@@ -285,7 +297,7 @@ fn apply_swap_recreate() {
             .and_then(|l| l.split_whitespace().nth(2).map(|f| f == "0"))
             .unwrap_or(false);
         if is_root {
-            assert_eq!(code, 0, "apply must fully succeed as root: {stderr}");
+            assert_eq!(code, 0, "resize grow must fully succeed as root: {stderr}");
             // 重建后的 swap 落在新位置（LBA 30687）：-U/-L 传下去的值必须原样出现在新 swap 头里
             use std::io::{Read, Seek, SeekFrom};
             let mut f = std::fs::File::open(&img).unwrap();
@@ -300,17 +312,20 @@ fn apply_swap_recreate() {
             assert!(label[SWAP_LABEL.len()..].iter().all(|&b| b == 0), "the rest of the label field must be NUL padding");
         } else {
             // CI runner 等非 root 环境：mkswap 无法执行 → 表已更新、swap 待重建
-            assert_eq!(code, 20, "non-root: swap step pending → PARTIAL: {stderr}");
+            assert_eq!(code, 5, "non-root: swap step pending → PARTIAL: {stderr}");
             assert!(stderr.contains("swap rebuild") && stderr.contains("mkswap"), "remedy must be printed: {stderr}");
         }
     }
     #[cfg(not(target_os = "linux"))]
     {
         // 新操作（无 ckpt）：非 Linux 平台必须在写盘前停下，不能先写表再以 pending 收场。
-        // 平台闸先于工具探测，故这里断言平台文案而非 mkswap；分类走 outcome 的唯一映射点
-        // （环境不满足 = 30），与其它 require_linux 路径同源
-        assert_eq!(code, 30, "a new swap relocation on a non-Linux host must stop before writing: {stderr}");
-        assert!(stderr.contains("requires Linux"), "the refusal must name the platform gate: {stderr}");
+        // 能力门先于工具探测，故这里断言缺失原语文案而非 mkswap；分类走 outcome 的唯一映射点
+        // （环境不满足 = 6）
+        assert_eq!(code, 6, "a new swap relocation on a non-Linux host must stop before writing: {stderr}");
+        assert!(
+            stderr.contains("needs the"),
+            "the refusal must name the missing primitive: {stderr}"
+        );
     }
 
     let mut f = std::fs::File::open(&img).unwrap();
@@ -323,7 +338,7 @@ fn apply_swap_recreate() {
         assert_eq!(gpt[1].ending_lba, 30686, "root must end before relocated swap");
         assert_eq!(gpt[2].starting_lba, 30687, "swap packed at tail");
         assert_eq!(gpt[2].ending_lba, 32734);
-    } else if code == 20 {
+    } else if code == 5 {
         // 已写盘、swap 未重建 → 条目循环未走完，扩容收尾跳过：root 保持原终点（收尾按全体 moves
         // 取 min(new_first)−1，未走完时会把未搬移条目的旧位划进扩容区）；swap 条目已落位
         assert_eq!(gpt[1].ending_lba, 6143, "growth must not be committed while the swap rebuild is pending");
@@ -339,9 +354,9 @@ fn apply_swap_recreate() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// 新跑搬移 swap：非 Linux 在写盘前以环境不满足（30）停下且不建 checkpoint；
+/// 新跑搬移 swap：非 Linux 在写盘前以能力缺口（6）停下且不留下恢复状态；
 /// Linux 上重建工具可执行则 swap 重建成功（0）并提交扩容收尾，不可执行
-/// （非 root、mkswap 无法操作用 loop 映射）则表已更新、swap 待重建（20）
+/// （非 root、mkswap 无法操作用 loop 映射）则表已更新、swap 待重建（5）
 #[test]
 fn new_swap_relocation_outcome_follows_platform_and_privilege() {
     let dir = std::env::temp_dir().join(format!("diskedit_swgate_{}", std::process::id()));
@@ -353,7 +368,7 @@ fn new_swap_relocation_outcome_follows_platform_and_privilege() {
     let img_s = img.to_str().unwrap();
 
     let out = Command::new(exe)
-        .args(["apply", img_s, "--grow", "1", "--no-fs", "--yes"])
+        .args(["resize", &format!("{img_s}:1"), "grow", "--no-fs", "--allow-move", "--chunk", "1", "--yes"])
         .output()
         .unwrap();
     let code = out.status.code().unwrap_or(-1);
@@ -361,9 +376,15 @@ fn new_swap_relocation_outcome_follows_platform_and_privilege() {
 
     #[cfg(not(target_os = "linux"))]
     {
-        assert_eq!(code, 30, "a non-Linux host must stop before writing: {stderr}");
-        assert!(stderr.contains("requires Linux"), "the refusal must name the platform gate: {stderr}");
-        assert!(!sidecar(&dir, "s.img", CHECKPOINT_SUFFIX).exists(), "a refusal must not create a checkpoint");
+        assert_eq!(code, 6, "a non-Linux host must stop before writing: {stderr}");
+        assert!(
+            stderr.contains("needs the"),
+            "the refusal must name the missing primitive: {stderr}"
+        );
+        assert!(
+            std::fs::read_dir(record_dir(&img)).map(|mut d| d.next().is_none()).unwrap_or(true),
+            "a refusal must not leave recovery state behind"
+        );
         let mut f = std::fs::File::open(&img).unwrap();
         let gpt = gptman::GPT::find_from(&mut f).unwrap();
         assert_eq!((gpt[1].starting_lba, gpt[1].ending_lba), (2048, 6143), "root unchanged");
@@ -386,7 +407,7 @@ fn new_swap_relocation_outcome_follows_platform_and_privilege() {
             assert_eq!(code, 0, "root: the swap rebuild must succeed: {stderr}");
             assert_eq!(gpt[1].ending_lba, 30686, "root grows up to the relocated swap");
         } else {
-            assert_eq!(code, 20, "non-root: the swap step is pending → PARTIAL: {stderr}");
+            assert_eq!(code, 5, "non-root: the swap step is pending → PARTIAL: {stderr}");
             assert!(stderr.contains("swap rebuild") && stderr.contains("mkswap"), "remedy must be printed: {stderr}");
             assert_eq!(gpt[1].ending_lba, 6143, "growth must not be committed while the swap rebuild is pending");
         }
@@ -413,14 +434,7 @@ fn resize_shift_relocates_blockers() {
          String::from_utf8_lossy(&out.stderr).into_owned())
     };
 
-    let (c, _, e) = run(&["new", img_s, "--yes"]);
-    assert_eq!(c, 0, "{e}");
-    let (c, _, e) = run(&["add", img_s, "--start", "2048", "--end", "4095", "--name", "a"]);
-    assert_eq!(c, 0, "{e}");
-    let (c, _, e) = run(&["add", img_s, "--start", "4096", "--end", "6143", "--name", "b"]);
-    assert_eq!(c, 0, "{e}");
-    let (c, _, e) = run(&["add", img_s, "--start", "12288", "--end", "14335", "--name", "c"]);
-    assert_eq!(c, 0, "{e}");
+    write_layout(&img, &[(2048, 4095), (4096, 6143), (12288, 14335)]);
 
     // 数据指纹：b 首尾、c 首部各写可辨识字节
     {
@@ -438,18 +452,16 @@ fn resize_shift_relocates_blockers() {
     let img_before = std::fs::read(&img).unwrap();
     let entries_before = dir_entries(&dir);
     let (c, _, stderr) = run(&["resize", &format!("{img_s}:1"), "+3M", "--yes"]);
-    assert_eq!(c, 10, "blocked resize without --allow-move must refuse");
+    assert_eq!(c, 3, "blocked resize without --allow-move must refuse");
     assert!(stderr.contains("--allow-move"), "{stderr}");
     assert_eq!(std::fs::read(&img).unwrap(), img_before, "a refusal must leave the image byte-identical");
     assert_eq!(dir_entries(&dir), entries_before, "a refusal must not add sidecars");
 
-    // --allow-move 无 --yes：打印位移计划后拒绝（这一条测的就是确认门本身）
+    // --allow-move 无 --yes：确认门在解析期拒绝，不打印计划、不动盘
     let img_before = std::fs::read(&img).unwrap();
     let entries_before = dir_entries(&dir);
-    let (c, out, stderr) = run(&["resize", &format!("{img_s}:1"), "+3M", "--allow-move"]);
-    assert_eq!(c, 10, "plan printed but --yes missing must refuse");
-    assert!(out.contains("move part 2"), "plan must be printed: {out}");
-    assert!(out.contains("move part 3"), "plan must include the far blocker: {out}");
+    let (c, _, stderr) = run(&["resize", &format!("{img_s}:1"), "+3M", "--allow-move", "--chunk", "1"]);
+    assert_eq!(c, 2, "missing --yes must be a parse-time refusal");
     assert!(stderr.contains("--yes"), "{stderr}");
     assert_eq!(std::fs::read(&img).unwrap(), img_before, "a refusal must leave the image byte-identical");
     assert_eq!(dir_entries(&dir), entries_before, "a refusal must not add sidecars");
@@ -457,7 +469,7 @@ fn resize_shift_relocates_blockers() {
     // +3M 相对当前 1M 大小 → 绝对 4M：b 让位到新末端之后，c 本就在扩容前线之外不动，
     // a 精确扩到 10239（2048+8192-1）。
     // a 里的指纹不是任何 FS 的签名（识别为 unknown），故扩分区表要显式 --no-fs
-    let (c, _, e) = run(&["resize", &format!("{img_s}:1"), "+3M", "--allow-move", "--yes", "--no-fs"]);
+    let (c, _, e) = run(&["resize", &format!("{img_s}:1"), "+3M", "--allow-move", "--chunk", "1", "--yes", "--no-fs"]);
     assert_eq!(c, 0, "shift resize must succeed: {e}");
     let mut f = std::fs::File::open(&img).unwrap();
     let gpt = gptman::GPT::find_from(&mut f).unwrap();
@@ -484,8 +496,8 @@ fn resize_shift_relocates_blockers() {
     // 让位后的空闲不足：d 挡在末端且无尾部空间 → 明确拒绝
     let img_before = std::fs::read(&img).unwrap();
     let entries_before = dir_entries(&dir);
-    let (c, _, stderr) = run(&["resize", &format!("{img_s}:1"), "+64M", "--allow-move", "--yes"]);
-    assert_eq!(c, 10, "grow beyond usable range must refuse: {stderr}");
+    let (c, _, stderr) = run(&["resize", &format!("{img_s}:1"), "+64M", "--allow-move", "--chunk", "1", "--yes"]);
+    assert_eq!(c, 3, "grow beyond usable range must refuse: {stderr}");
     assert_eq!(std::fs::read(&img).unwrap(), img_before, "a refusal must leave the image byte-identical");
     assert_eq!(dir_entries(&dir), entries_before, "a refusal must not add sidecars");
 
@@ -508,10 +520,10 @@ fn resize_non_aligned_size_emits_note() {
          String::from_utf8_lossy(&out.stderr).into_owned())
     };
     assert_eq!(run(&["new", img_s, "--yes"]).0, 0);
-    assert_eq!(run(&["add", img_s, "--start", "2048", "--end", "4095", "--name", "root"]).0, 0);
+    assert_eq!(run(&["add", img_s, "1M", "--align", "mib", "--type-guid", "0fc63daf-8483-4772-8e79-3d69d8477de4", "--name", "root", "--yes"]).0, 0);
     // 1 MiB + 1 字节非 512 整数倍：note 回显"实际生效 1 MiB"，请求本身合法（同尺寸
     // 重写）故退出 0——note 出现在越界判定之后，被拒绝的请求不会再带 note
-    let (c, _, err) = run(&["resize", &format!("{img_s}:1"), "1048577"]);
+    let (c, _, err) = run(&["resize", &format!("{img_s}:1"), "1048577", "--yes"]);
     assert!(err.contains("note: size 1048577 is not a multiple of the 512-byte sector"), "{err}");
     assert!(err.contains("resizing to 1048576 bytes"), "{err}");
     assert_eq!(c, 0, "the non-aligned but in-range request must succeed: {err}");

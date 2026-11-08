@@ -3,22 +3,21 @@
 #
 # 去重归属：exfat 扩容拒绝、vfat 扩容 PARTIAL（fatresize 崩溃）这两个场景的唯一归属是
 #          fs_f2fs_vfat_exfat_layout.sh（其中 exfat 拒绝还额外校验分区内数据哈希、更为严格）；
-#          本脚本原先的两段重复用例已删，不再重复覆盖。
+#          这两个场景不在本脚本重复覆盖。
 source "$(dirname "$0")/lib.sh"
 require_bin
 
-cleanup_hook() { rm -f /var/lib/diskedit/* 2>/dev/null; }
 
-T=/var/tmp/t26.img
-track_file "$T"
+img T t26.img
 
-rm -f "$T" "$T"$SIDECAR_GLOB 2>/dev/null
+rm -rf "$T" "$T"$SIDECAR_GLOB 2>/dev/null
 
 mk() { # $1=fs  $2=size
-  rm -f "$T" "$T"$SIDECAR_GLOB
+  rm -rf "$T" "$T"$SIDECAR_GLOB
   truncate -s 1G "$T"
   $B new "$T" --yes >/dev/null
-  $B create "$T" --size "$2" --name p1 --fs "$1" --yes >/dev/null 2>&1
+  $B add "$T" "$2" --align mib --name p1 --yes >/dev/null 2>&1
+  $B mkfs "$T":1 "$1" --yes >/dev/null 2>&1
 }
 pt() { $B info "$T" | grep -o '"num":1,[^}]*}' | grep -o '"size_bytes":[0-9]*'; }
 
@@ -32,38 +31,39 @@ echo "exit=$E  before=$BEFORE  after=$(pt)"
 echo
 echo "===== B: ext4 扩容 → 后置条件全满足 → OK ====="
 mk ext4 400M
-LD=$(lo_attach "$T"); mount_at "${LD}p1" /testmnt && { dd if=/dev/urandom of=/testmnt/f.bin bs=1M count=100 2>/dev/null; MC=$(mdsum /testmnt/f.bin); echo "before fs: $(df -h --output=size /testmnt | tail -1)"; umount /testmnt 2>/dev/null; }
+LD=$(lo_attach "$T"); mount_at "${LD}p1" "$TEST_MNT" && { dd if=/dev/urandom of="$TEST_MNT/f.bin" bs=1M count=100 2>/dev/null; MC=$(mdsum "$TEST_MNT"/f.bin); echo "before fs: $(df -h --output=size "$TEST_MNT" | tail -1)"; umount "$TEST_MNT" 2>/dev/null; }
 lo_detach "$LD"
 OUT=$($B resize "$T":1 900M 2>&1); E=$?
 echo "exit=$E"
-LD=$(lo_attach "$T"); mount_at "${LD}p1" /testmnt && { echo "after fs: $(df -h --output=size /testmnt | tail -1)"; [ "$MC" = "$(mdsum /testmnt/f.bin)" ] && echo "B DATA OK" || { echo "B DATA CORRUPT"; rc=1; }; umount /testmnt 2>/dev/null; }
+LD=$(lo_attach "$T"); mount_at "${LD}p1" "$TEST_MNT" && { echo "after fs: $(df -h --output=size "$TEST_MNT" | tail -1)"; [ "$MC" = "$(mdsum "$TEST_MNT"/f.bin)" ] && echo "B DATA OK" || { echo "B DATA CORRUPT"; rc=1; }; umount "$TEST_MNT" 2>/dev/null; }
 e2fsck -fn "${LD}p1" >/dev/null 2>&1 && echo "B e2fsck clean" || { echo "B e2fsck ISSUES"; rc=1; }
 lo_detach "$LD"
 [ "$E" = "0" ] && echo "B OK" || { echo "B WRONG EXIT ($E)"; rc=1; }
 
 echo
-echo "===== C: 缩容不支持的 FS → REFUSED 且不得改盘 ====="
+echo "===== C: 缩容不支持的 FS → UNSUPPORTED(6) 且不得改盘 ====="
 mk exfat 800M
 BEFORE=$(pt)
 OUT=$($B resize "$T":1 400M --yes 2>&1); E=$?
 echo "exit=$E  before=$BEFORE  after=$(pt)"
 echo "$OUT" | head -2
-[ "$E" = "10" ] && echo "C REFUSED OK" || { echo "C WRONG EXIT ($E)"; rc=1; }
+[ "$E" = "6" ] && echo "C UNSUPPORTED OK" || { echo "C WRONG EXIT ($E)"; rc=1; }
 [ "$BEFORE" = "$(pt)" ] && echo "C DISK UNTOUCHED OK" || { echo "C DISK CHANGED (BAD)"; rc=1; }
 
 echo
-echo "===== D: create 的 mkfs 失败 → 表已改、FS 未做 → PARTIAL(20) ====="
-# 16M 远低于 mkfs.xfs 的 300M 下限：分区建成后 FS 步必然失败，走 Pending 通道报 20
-rm -f "$T" "$T"$SIDECAR_GLOB
+echo "===== D: mkfs 失败 → 分区已建、FS 未做 → PARTIAL(5) ====="
+# 16M 远低于 mkfs.xfs 的 300M 下限：add 先把条目写进表，随后的 mkfs 越过擦除屏障即失败。
+# 两条命令各自独立：add 的成功不再由 mkfs 的失败改写，故后置条件只按 mkfs 命令自身判定
+rm -rf "$T" "$T"$SIDECAR_GLOB
 truncate -s 1G "$T"
 $B new "$T" --yes >/dev/null
-OUT=$($B create "$T" --size 16M --name tiny --fs xfs --yes 2>&1); E=$?
+$B add "$T" 16M --align mib --name tiny --yes >/dev/null 2>&1; exp "$?" 0 "add 16MiB tiny"
+OUT=$($B mkfs "$T":1 xfs --yes 2>&1); E=$?
 echo "exit=$E : $(echo "$OUT" | head -1)"
-exp "$E" 20 "create 的 mkfs 失败 → 后置条件未全满足（PARTIAL）"
+exp "$E" 5 "mkfs 失败 → 后置条件未全满足（PARTIAL）"
 $B info "$T" | grep -q '"num":1' && echo "D PARTITION-CREATED OK（表已写）" || { echo "D partition missing (BAD)"; rc=1; }
-echo "$OUT" | grep -q "follow-up step(s) are pending" && echo "D PENDING-REPORT OK" || { echo "D pending report missing (BAD)"; rc=1; }
 
 echo
 echo "===== 残留核对 ====="
-echo "t26: $(ls /var/tmp/t26* 2>/dev/null | wc -l)  loops: $(losetup -a | wc -l)"
+echo "root: $(ls "$WSL_ROOT" 2>/dev/null | wc -l)  loops: $(losetup -a | wc -l)"
 exit $rc

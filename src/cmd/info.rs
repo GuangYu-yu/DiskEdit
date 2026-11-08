@@ -1,19 +1,16 @@
 //! info：只读布局报告（分区表 + FS 识别 + 容器格式提示），JSON 输出。
 
+use crate::cli::InfoRequest;
 use crate::support::*;
-use crate::args::Args;
 use crate::dev::FileSource;
 use crate::{fsid, table};
 
-pub(crate) const HELP: &str = r#"diskedit info <TARGET> [--sector-size N]
-
-  Show partition table and per-partition filesystem identification
+pub(crate) const DETAILS: &str = r#"  Show partition table and per-partition filesystem identification
   (an LVM PV shows up in the fs field as lvm2_pv; PV space takes effect
   through `resize --grow-lv`). Read-only.
-  --sector-size N logical sector size override for raw images
   stdout is JSON in both outcomes; a failure adds `error` (a string) and keeps
   the layout fields it could not determine at null. Keys:
-    label         "gpt" | "msdos" | "none"
+    label         "gpt" | "mbr" | "none"
     damaged       bool — the table needs repair or cannot be read as-is
     sector_size   logical block size in bytes
     size_bytes    target size in bytes
@@ -26,7 +23,7 @@ pub(crate) const HELP: &str = r#"diskedit info <TARGET> [--sector-size N]
 /// 失败路径的 stdout 信封。`info` 的输出是给脚本消费的，调用方不该因为故障发生在
 /// 读表阶段还是识别阶段就换一套解析：键集与成功路径相同，原因进 `error`。
 /// 没有布局可报时布局字段取 null 而不是伪造（`null` = 不知道，`partitions: []` =
-/// 确知没有条目）。退出码仍由 `Fail` 决定——"布局不可得"与"布局可用但某项失败"
+/// 确知没有条目）。退出码仍由 `RunOutcome` 决定——"布局不可得"与"布局可用但某项失败"
 /// 靠 `error` 之外的字段区分
 fn emit_failure(error: &str, src: Option<&FileSource>) {
     let (ss, size) = match src {
@@ -40,23 +37,21 @@ fn emit_failure(error: &str, src: Option<&FileSource>) {
     );
 }
 
-/// 先落信封、再走统一出口：stdout 与 stderr 说同一句话，措辞只在 `Fail` 里拼一次
-fn fail_after_envelope(f: Fail, src: Option<&FileSource>) -> ! {
-    let msg = match &f {
-        Fail::Refused(m) | Fail::Infra(m) | Fail::Failed(m) => m.clone(),
-    };
+/// 先落信封、再走统一出口：stdout 与 stderr 说同一句话，措辞只在 `RunOutcome` 里拼一次
+fn fail_after_envelope(f: RunOutcome, src: Option<&FileSource>) -> ! {
+    let msg = f.to_string();
     emit_failure(&msg, src);
     bail_fail(f)
 }
 
-pub(crate) fn cmd_info(a: &Args) -> u8 {
+pub(crate) fn cmd_info(a: &InfoRequest) -> u8 {
     // info 只看整盘布局：`:N` 指定了也会被静默忽略，用户会误以为输出是单分区的
     if let Some(n) = a.part {
         // 命令级拒绝同样走信封；参数解析阶段的拒绝（未知旗标、非法 --sector-size）在进入
         // 本函数之前就按所有命令一致的出口退出，那里不产 JSON
-        fail_after_envelope(Fail::refused(format!("`info` reports the whole target — drop :{n}")), None);
+        fail_after_envelope(RunOutcome::refused(format!("`info` reports the whole target — drop :{n}")), None);
     }
-    let src = match open_target_ro(a) {
+    let src = match crate::cmd::open_read_only_target(&a.target, a.sector_size) {
         Ok(s) => s,
         // 目标打不开时没有扇区大小与容量可报，信封的这两个字段为 null
         Err(f) => fail_after_envelope(f, None),
@@ -70,7 +65,7 @@ pub(crate) fn cmd_info(a: &Args) -> u8 {
         );
     }
     // identify 的读失败逐条如实上报：JSON 照常输出（fs 字段记 "error"），原因逐条
-    // 打到 stderr，退出码与本文件其他读失败路径一致（infra 30）
+    // 打到 stderr，退出码与本文件其他读失败路径一致（4）
     let mut identify_errors: Vec<String> = Vec::new();
     let mut out = String::from("{\"label\":");
     let mut stale_notes: Vec<String> = Vec::new();
@@ -92,7 +87,7 @@ pub(crate) fn cmd_info(a: &Args) -> u8 {
             };
             let msg = format!("parse failed ({kind}): {e}");
             emit_failure(&msg, Some(&src));
-            bail_fail(Fail::infra(msg));
+            bail_fail(crate::outcome::table_parse_failure(&e, msg));
         }
     };
     if let Some(g) = gpt {
@@ -165,7 +160,7 @@ pub(crate) fn cmd_info(a: &Args) -> u8 {
             }
             first = false;
             let fs = match fsid::identify(&src, lba_bytes(e.starting_lba, g.ss), lba_range_bytes(e.starting_lba, e.ending_lba, g.ss)) {
-                Ok(f) => fsid::fs_name(f).to_string(),
+                Ok(f) => fsid::content_name(f).to_string(),
                 Err(e) => {
                     identify_errors.push(format!("partition {}: identify failed: {e}", i + 1));
                     "error".to_string()
@@ -193,11 +188,11 @@ pub(crate) fn cmd_info(a: &Args) -> u8 {
             Err(e) => {
                 let msg = format!("parse failed: {e}");
                 emit_failure(&msg, Some(&src));
-                bail_fail(Fail::infra(msg));
+                bail_fail(crate::outcome::mbr_parse_failure(&e, msg));
             }
         };
         match raw {
-            // 仅签名、零记录也判 mbr（`new --table msdos` 的合法初始态）
+            // 仅签名、零记录也判 mbr（`new --table mbr` 的合法初始态）
             Some(raw) => {
                 out.push_str("\"mbr\",\"damaged\":");
                 out.push_str(if raw.damage.is_empty() { "false" } else { "true" });
@@ -219,7 +214,7 @@ pub(crate) fn cmd_info(a: &Args) -> u8 {
                         "container".to_string()
                     } else {
                         match fsid::identify(&src, lba_bytes(p.start_lba as u64, src.sector_size), lba_bytes(p.size_lba as u64, src.sector_size)) {
-                            Ok(f) => fsid::fs_name(f).to_string(),
+                            Ok(f) => fsid::content_name(f).to_string(),
                             Err(e) => {
                                 identify_errors.push(format!("partition {}: identify failed: {e}", p.num));
                                 "error".to_string()
@@ -265,7 +260,7 @@ pub(crate) fn cmd_info(a: &Args) -> u8 {
                     Err(e) => {
                         let msg = format!("label probe failed: {e}");
                         emit_failure(&msg, Some(&src));
-                        bail_fail(Fail::infra(msg));
+                        bail_fail(crate::outcome::table_parse_failure(&e, msg));
                     }
                 };
                 let name = if damaged { "gpt" } else { "none" };
@@ -299,7 +294,7 @@ pub(crate) fn cmd_info(a: &Args) -> u8 {
         }
         let msg = "filesystem identification failed on one or more partitions";
         println!("{},\"error\":\"{}\"}}", &out[..out.len() - 1], json_escape(msg));
-        return Fail::infra(msg).into_outcome().exit_code();
+        return RunOutcome::no_mutation(msg).exit_code();
     }
     println!("{out}");
     // 非 raw 容器格式识别（qcow2/VMDK/VDI/VHD/VHDX 魔数，qemu docs block-drivers）：字节直译

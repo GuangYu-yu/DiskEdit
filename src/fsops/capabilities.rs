@@ -3,11 +3,11 @@
 use super::*;
 
 /// FS 的 resize 支持情况——三态而非布尔，"不适用"与"不支持"必须分开：
-/// 前者是本工具的契约边界（不该因此报错），后者是我们认得却做不了（必须事前拒绝）
+/// 前者是本工具的边界（不该因此报错），后者是认得却做不了（必须事前拒绝）
 pub(crate) enum ToolSupport {
     /// 需要这些工具；任一缺失即事前拒绝
     Tools(&'static [&'static str]),
-    /// 契约上不负责：没有可扩的 FS 可谈（空区域 / 类型未识别 / LVM PV）。它不是失败，
+    /// 不负责：没有可扩的 FS 可谈（空区域 / 类型未识别 / LVM PV）。它不是失败，
     /// 也不等于"做完了"——两种后果由下游按自己的契约分开处置，见 [`Growable`]
     NotApplicable,
     /// 认得出来但本操作不接线。**理由随变体携带**：笼统的"未接线"对用户无从下手，
@@ -16,37 +16,40 @@ pub(crate) enum ToolSupport {
     Unsupported(&'static str),
 }
 
-pub(crate) fn grow_support(fstype: FsKind) -> ToolSupport {
+pub(crate) fn grow_support(fstype: ContentKind) -> ToolSupport {
     use ToolSupport::*;
     match fstype {
-        FsKind::Ext => Tools(&["e2fsck", "resize2fs"]),
-        FsKind::Ntfs => Tools(&["ntfsresize"]),
-        FsKind::F2fs => Tools(&["fsck.f2fs", "resize.f2fs"]),
-        FsKind::Xfs => Tools(&["xfs_growfs"]),
-        FsKind::Btrfs => Tools(&["btrfs"]),
-        FsKind::Vfat => Tools(&["fatresize"]),
+        ContentKind::Filesystem(FsKind::Ext) => Tools(&["e2fsck", "resize2fs"]),
+        ContentKind::Filesystem(FsKind::Ntfs) => Tools(&["ntfsresize"]),
+        ContentKind::Filesystem(FsKind::F2fs) => Tools(&["fsck.f2fs", "resize.f2fs"]),
+        ContentKind::Filesystem(FsKind::Xfs) => Tools(&["xfs_growfs"]),
+        ContentKind::Filesystem(FsKind::Btrfs) => Tools(&["btrfs"]),
+        ContentKind::Filesystem(FsKind::Vfat) => Tools(&["fatresize"]),
         // swap 没有"原地 resize"：空间靠 mkswap 重建吸收（resize 的收尾负责），
         // 但这里仍探测 mkswap——那条收尾路径要在写表之前知道工具在不在
-        FsKind::Swap => Tools(&["mkswap"]),
-        FsKind::Lvm2Pv => NotApplicable,
-        _ => Unsupported("not wired to a tool — pass --no-fs to change the partition only"),
+        ContentKind::Swap => Tools(&["mkswap"]),
+        ContentKind::Lvm2Pv => NotApplicable,
+        ContentKind::Filesystem(_) | ContentKind::Unknown => {
+            Unsupported("not wired to a tool — pass --no-fs to change the partition only")
+        }
     }
 }
 
-pub(crate) fn shrink_support(fstype: Option<FsKind>) -> ToolSupport {
+pub(crate) fn shrink_support(fstype: Option<ContentKind>) -> ToolSupport {
     use ToolSupport::*;
     match fstype {
         // 缩容前要先算 FS 最小尺寸（`fs_min_bytes`：resize2fs -P × dumpe2fs 的块大小），
         // 两个工具都必须"在写盘之前确认存在"，否则表提交后才发现缺 dumpe2fs
-        Some(FsKind::Ext) => Tools(&["e2fsck", "resize2fs", "dumpe2fs"]),
-        Some(FsKind::Ntfs) => Tools(&["ntfsresize"]),
-        Some(FsKind::Btrfs) => Tools(&["btrfs"]),
-        // LVM PV 缩容要求新末端之后没有已分配的 extent，需经 lvreduce/pvresize 链，本工具不做
-        Some(FsKind::Lvm2Pv) => Unsupported(
+        Some(ContentKind::Filesystem(FsKind::Ext)) => Tools(&["e2fsck", "resize2fs", "dumpe2fs"]),
+        Some(ContentKind::Filesystem(FsKind::Ntfs)) => Tools(&["ntfsresize"]),
+        Some(ContentKind::Filesystem(FsKind::Btrfs)) => Tools(&["btrfs"]),
+        // LVM PV 缩容要求新末端之后没有已分配的 extent，需经 lvreduce/pvresize 链，本工具不做；
+        // 对用户的拒绝在 `check_shrink` 入口按「选项与目标形态不符」落 3
+        Some(ContentKind::Lvm2Pv) => Unsupported(
             "requires the lvreduce/pvresize chain (not implemented here; see pvresize(8))",
         ),
         // 类型认不出来就无法先缩 FS：缩分区后 FS 越界写坏数据
-        None => Unsupported(
+        None | Some(ContentKind::Unknown) => Unsupported(
             "filesystem type unrecognized — shrinking the partition without resizing the FS first would corrupt data",
         ),
         // 其余认得却不会缩的类型：唯一安全路径是先由该 FS 自己的工具缩。
@@ -111,15 +114,23 @@ pub(crate) fn check_support(verb: &str, name: &str, support: ToolSupport) -> Res
 ///
 /// `needs_loop`：这个目标的 FS 步是否要先建 loop 映射（规则见 [`needs_loop`]）。
 /// `losetup` 只在需要映射时才是这一步的必需工具
-pub fn check_grow(fstype: FsKind, is_block: bool, needs_loop: bool) -> Result<(), FsError> {
-    check_support("grow", fstype.as_str(), grow_support(fstype))?;
+pub fn check_grow(fstype: ContentKind, is_block: bool, needs_loop: bool) -> Result<(), FsError> {
+    check_support("grow", content_name(fstype), grow_support(fstype))?;
     check_mount_layer_tools(Some(fstype), is_block, needs_loop)
 }
 
-/// 缩容前置检查，语义同上。`None`（未识别）在 shrink_support 里对应"类型认不出来"，
+/// 缩容前置检查，与 `check_grow` 同一形态。`None`（未识别）在 shrink_support 里对应"类型认不出来"，
 /// 故不必在这里另开一臂
-pub fn check_shrink(fstype: Option<FsKind>, is_block: bool, needs_loop: bool) -> Result<(), FsError> {
-    check_support("shrink", fs_name(fstype), shrink_support(fstype))?;
+pub fn check_shrink(fstype: Option<ContentKind>, is_block: bool, needs_loop: bool) -> Result<(), FsError> {
+    // LVM PV 不是文件系统：缩它要先 lvreduce 缩 LV、再 pvresize 缩 PV 元数据，本命令
+    // 没有可缩的 FS 可谈。这不是能力缺口（6），而是请求与目标形态不符——
+    // 「选项与目标形态不符」落 3
+    if fstype == Some(ContentKind::Lvm2Pv) {
+        return Err(FsError::invalid(
+            "target is an LVM2 PV, not a filesystem — shrinking it needs the lvreduce/pvresize chain (see pvresize(8))",
+        ));
+    }
+    check_support("shrink", content_name(fstype.unwrap_or(ContentKind::Unknown)), shrink_support(fstype))?;
     check_mount_layer_tools(fstype, is_block, needs_loop)
 }
 
@@ -132,15 +143,15 @@ pub(crate) fn needs_loop(scope: &DeviceScope, is_block: bool) -> bool {
 /// mount 层的公共前置：xfs/btrfs 只能挂载态扩缩（grow 与 shrink 都经 with_mount），
 /// 需要 loop 映射的目标还要先经 losetup 建立设备。这些工具不进 grow_support/shrink_support
 /// 的 FS 工具清单——它们属于挂载/映射层，不随 FS 类型走；但不探测就会在表已提交、
-/// FS 工具已动盘之后才暴露缺工具 ⇒ `Io → Infra`，违背"确定未写盘"的承诺。
+/// FS 工具已动盘之后才暴露缺工具 ⇒ `Io → NoMutation`，违背"确定未写盘"的承诺。
 /// 目标是不是块设备不参与判定：那一维度已由 `needs_loop` 收下
-pub(crate) fn check_mount_layer_tools(fstype: Option<FsKind>, _is_block: bool, needs_loop: bool) -> Result<(), FsError> {
+pub(crate) fn check_mount_layer_tools(fstype: Option<ContentKind>, _is_block: bool, needs_loop: bool) -> Result<(), FsError> {
     // 执行侧 `with_scope_device_ranged` 对每个目标都先过 require_linux/require_root；
     // 需要映射的目标，设备建立这一步走 losetup。这些检查必须与 FS 工具一同落在写盘前，
-    // 否则表提交后才以 Io → Infra(30) 暴露，谎报"确定未写盘"
+    // 否则表提交后才以 Io → NoMutation(4) 暴露，谎报"确定未写盘"
     require_linux()?;
     require_root()?;
-    let mount_fs = matches!(fstype, Some(FsKind::Xfs | FsKind::Btrfs));
+    let mount_fs = matches!(fstype, Some(ContentKind::Filesystem(FsKind::Xfs | FsKind::Btrfs)));
     // 基础项随 FS 类型取，losetup 随"这一步是否经 attach_loop 建立设备"取：两个维度分开，
     // 镜像目标与块设备的 Range 目标都需要映射。两者都不需要时清单为空，执行侧不碰这两层
     let mut tools: Vec<&str> = Vec::new();
@@ -163,15 +174,15 @@ pub(crate) fn check_mount_layer_tools(fstype: Option<FsKind>, _is_block: bool, n
 
 /// 该 FS 的扩容/缩容应交给用户的补救命令（用于 PARTIAL 时的提示）。
 /// 产物是一段 shell 命令文本，属对外呈现，不参与能力判定；`None`（未识别）无补救命令
-pub fn rescue_hint(fstype: Option<FsKind>, dev: &str) -> String {
+pub fn rescue_hint(fstype: Option<ContentKind>, dev: &str) -> String {
     match fstype {
-        Some(FsKind::Ext) => format!("e2fsck -fp {dev} && resize2fs {dev}"),
-        Some(FsKind::Ntfs) => format!("ntfsresize -f -f {dev}"),
-        Some(FsKind::F2fs) => format!("fsck.f2fs {dev} && resize.f2fs {dev}"),
-        Some(FsKind::Xfs) => format!("mount {dev} <mnt> && xfs_growfs <mnt>"),
-        Some(FsKind::Btrfs) => format!("mount {dev} <mnt> && btrfs filesystem resize max <mnt>"),
-        Some(FsKind::Vfat) => format!("fatresize -s max {dev}"),
-        Some(FsKind::Swap) => format!("mkswap --uuid <uuid> {dev}"),
+        Some(ContentKind::Filesystem(FsKind::Ext)) => format!("e2fsck -fp {dev} && resize2fs {dev}"),
+        Some(ContentKind::Filesystem(FsKind::Ntfs)) => format!("ntfsresize -f -f {dev}"),
+        Some(ContentKind::Filesystem(FsKind::F2fs)) => format!("fsck.f2fs {dev} && resize.f2fs {dev}"),
+        Some(ContentKind::Filesystem(FsKind::Xfs)) => format!("mount {dev} <mnt> && xfs_growfs <mnt>"),
+        Some(ContentKind::Filesystem(FsKind::Btrfs)) => format!("mount {dev} <mnt> && btrfs filesystem resize max <mnt>"),
+        Some(ContentKind::Filesystem(FsKind::Vfat)) => format!("fatresize -s max {dev}"),
+        Some(ContentKind::Swap) => format!("mkswap --uuid <uuid> {dev}"),
         _ => String::new(),
     }
 }

@@ -3,23 +3,23 @@
 source "$(dirname "$0")/lib.sh"
 require_bin
 
-T=/var/tmp/t31.img
-MP=/testmnt
-track_file "$T"
+img T t31.img
+MP=$TEST_MNT
 
 fs_bytes() { # $1=设备：Block count × Block size
   dumpe2fs -h "$1" 2>/dev/null | awk '/^Block count:/ {c=$3} /^Block size:/ {s=$3} END {print c*s}'
 }
 
-rm -f "$T" "$T"$SIDECAR_GLOB 2>/dev/null
+rm -rf "$T" "$T"$SIDECAR_GLOB 2>/dev/null
 truncate -s 64M "$T"
 
-echo "== new + create p1（16MiB ext4）=="
+echo "== new + add + mkfs p1（16MiB ext4）=="
 $B new "$T" --yes >/dev/null; exp $? 0 "new"
-$B create "$T" --size 16M --name p1 --fs ext4 --yes >/dev/null; exp $? 0 "create p1（16MiB ext4）"
+$B add "$T" 16M --align mib --name p1 --yes >/dev/null; exp $? 0 "add p1（16MiB）"
+$B mkfs "$T":1 ext4 --yes >/dev/null; exp $? 0 "mkfs p1（ext4）"
 
 echo "== resize-part 扩到 67583（=32MiB）=="
-$B resize-part "$T":1 --start 2048 --end 67583 >/dev/null; exp $? 0 "resize-part 扩到 67583"
+$B resize-part "$T":1 --end 67583 >/dev/null; exp $? 0 "resize-part 扩到 67583"
 $B info "$T" | grep -q '"num":1,[^}]*"last_lba":67583' \
   && echo "  OK   分区已到 2048..67583" || { echo "  BAD  分区未到 67583"; rc=1; }
 

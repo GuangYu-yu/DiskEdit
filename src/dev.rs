@@ -1,13 +1,11 @@
 //! 输入源：镜像文件与块设备统一为按偏移读写的字节存储。
 //!
-//! 本模块实际承载五件事（模块文档即职责表，改职责先改这里）：
+//! 本模块实际承载四件事（模块文档即职责表，改职责先改这里）：
 //! 1. **输入源**（`FileSource`）：按偏移的 read/sync，镜像与块设备同一接口；
 //!    **写句柄**（`WriteSource`）：在已打开的目标上持有独占所有权，写方法只挂在它上面；
-//! 2. **身份落点**（`TargetIdentity`）：设备层拓扑 → journal / checkpoint / log / lock
-//!    的唯一派生处；
-//! 3. **Journal 格式**（`Journal`）：undo 记录的编解码与生命周期（惰性创建、原子性）；
-//! 4. **Mutation 语义**（`Mutation` / `RecoveryData`）：undo 的可回滚性判据与屏障；
-//! 5. **losetup 用户提示**（`part_dev_hint`）：镜像上定位分区的外部工具提示。
+//! 2. **身份落点**（`TargetIdentity`）：设备层拓扑 → record / log / lock 的唯一派生处；
+//! 3. **Disk GUID 凭据**（`DiskGuidState`）：目标盘面自述身份的编码与比较；
+//! 4. **losetup 用户提示**（`part_dev_hint`）：镜像上定位分区的外部工具提示。
 //!
 //! `TargetIdentity` 经两个具名构造取得：`resolve_image(path)` 恒成功；
 //! `resolve_block(path)` 解析不出设备拓扑即失败——块设备身份拒绝任何退化路径。
@@ -22,8 +20,11 @@
 mod source;
 mod topology;
 mod identity;
+mod host_repo;
+mod discovery;
+mod occupancy;
 mod target;
-mod journal;
+mod disk_guid;
 
 #[cfg(test)]
 mod tests;
@@ -31,8 +32,13 @@ mod tests;
 pub(crate) use source::*;
 pub(crate) use topology::*;
 pub(crate) use identity::*;
+pub(crate) use host_repo::*;
+pub(crate) use discovery::*;
+pub(crate) use occupancy::*;
 pub(crate) use target::*;
-pub(crate) use journal::*;
+pub(crate) use disk_guid::*;
+
+pub(crate) use crate::recovery::RecordJournal;
 
 use std::fs::{File, OpenOptions};
 use std::io;

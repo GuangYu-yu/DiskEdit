@@ -2,7 +2,7 @@
 # 离线 FS 扩容（未挂载镜像）的真实工具路径与失败分类：
 #   成功路径：真实 e2fsck + resize2fs 把 ext4 扩到新的分区末端，回读尺寸确实增长
 #   非零退出：假 resize2fs 直接以非零退出（进程起过但没干活），分区已提交、文件系统未变，
-#             按"后置条件未满足"报出（退出码 20，不算完成）
+#             按"后置条件未满足"报出（退出码 5，不算完成）
 # 夹具是未挂载镜像：块设备分区在未挂载时被 diskedit 自己的 O_EXCL 句柄持有，
 # e2fsck 会报 "is in use."（exit 8），走不到 resize2fs；镜像路径没有这个问题。
 # 假工具靠工具表变体生效（工具解析在编译期钉死，调用环境的 PATH 不参与）。
@@ -16,10 +16,9 @@ if ! command -v resize2fs >/dev/null 2>&1 || ! command -v mkfs.ext4 >/dev/null 2
 fi
 require_fake_bin
 
-IMG=/var/tmp/t62.img
+img IMG t62.img
 LOOP=
 PART0=
-track_file "$IMG"
 
 cleanup_hook() {
   [ -n "$LOOP" ] && lo_detach "$LOOP" 2>/dev/null
@@ -36,10 +35,10 @@ fs_sz() { dumpe2fs -h "${LOOP}p1" 2>/dev/null | awk '/^Block count:/ {print $3 *
 build_fixture() {
   [ -n "$LOOP" ] && lo_detach "$LOOP"
   LOOP=
-  rm -f "$IMG" "$IMG"$SIDECAR_GLOB 2>/dev/null
+  rm -rf "$IMG" "$IMG"$SIDECAR_GLOB 2>/dev/null
   truncate -s 64M "$IMG" || fail "truncate $IMG"
   $B new "$IMG" --yes >/dev/null || fail "new $IMG"
-  $B create "$IMG" --size 48M >/dev/null || fail "create $IMG"
+  $B add "$IMG" 48M --align mib --yes >/dev/null || fail "add $IMG"
   LOOP=$(lo_attach "$IMG") || fail "losetup $IMG"
   lo_waitpart "${LOOP}p1" || fail "partition node ${LOOP}p1 not ready"
   mkfs.ext4 -F "${LOOP}p1" >/dev/null || fail "mkfs.ext4"
@@ -74,7 +73,7 @@ printf '#!/bin/sh\necho "simulated resize2fs failure" >&2\nexit 1\n' > "$FAKE_TO
 chmod +x "$FAKE_TOOL_DIR/resize2fs"
 OUT=$($BFK resize "$IMG:1" 56M 2>&1); E=$?
 echo "$OUT" | sed 's/^/    /'
-exp "$E" 20 "FS 步未完成 → 部分完成（20），不报完全成功"
+exp "$E" 5 "FS 步未完成 → 部分完成（5），不报完全成功"
 case "$OUT" in
     *"resize2fs failed"*) echo "  OK   报出 resize2fs 的非零退出" ;;
     *) echo "  BAD  未报出 resize2fs 的失败"; rc=1 ;;

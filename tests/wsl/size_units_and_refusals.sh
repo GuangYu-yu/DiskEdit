@@ -1,28 +1,28 @@
 #!/usr/bin/env bash
-# 尺寸单位与拒绝路径：create --size 单位/非法值、--fs 缺值、resizefs 挂载点形式单位、resize 位置参数单位
+# 尺寸单位与拒绝路径：add 位置槽单位/非法值、mkfs 缺 FS、resizefs 挂载点形式单位、resize 位置参数单位
 source "$(dirname "$0")/lib.sh"
 require_bin
 
-T=/var/tmp/diskedit_test11.img
-track_file "$T"
+img T units11.img
 
-rm -f "$T" "$T$JOURNAL_SUFFIX"
+rm -rf "$T" "$T"$SIDECAR_GLOB
 truncate -s 64M "$T"
 $B new "$T" --yes
-echo "== create --size 32M (units) =="
-$B create "$T" --size 32M --name test1 --fs ext4 --yes; exp $? 0 "create --size 32M（单位）"
-echo "== create --size +8M (must refuse with message) =="
-$B create "$T" --size +8M 2>&1; exp $? 10 "create --size +8M 拒绝"
-echo "== create --size abc (must refuse with message) =="
-$B create "$T" --size abc 2>&1; exp $? 10 "create --size abc 拒绝"
-echo "== create --fs without value (must refuse with message) =="
-$B create "$T" --fs 2>&1; exp $? 10 "create --fs 缺值拒绝"
+echo "== add 32M + mkfs ext4 (units) =="
+$B add "$T" 32M --align mib --name test1 --yes; exp $? 0 "add 32M（单位）"
+$B mkfs "$T":1 ext4 --yes; exp $? 0 "mkfs ext4"
+echo "== add +8M (must refuse with message) =="
+$B add "$T" +8M --align mib --yes 2>&1; exp $? 2 "add +8M 拒绝"
+echo "== add abc (must refuse with message) =="
+$B add "$T" abc --align mib --yes 2>&1; exp $? 2 "add abc 拒绝"
+echo "== mkfs without the FS argument (must refuse with message) =="
+$B mkfs "$T":1 --yes 2>&1; exp $? 2 "mkfs 缺 FS 拒绝"
 echo "== resizefs online with unit =="
 LD=$(lo_attach "$T")
-mount_at "${LD}p1" /testmnt
-$B resizefs /testmnt 32M; exp $? 0 "resizefs 挂载点形式（单位）"
-df -h /testmnt | tail -1
-umount /testmnt; losetup -d "$LD"
+mount_at "${LD}p1" "$TEST_MNT"
+$B resizefs "$TEST_MNT" 32M; exp $? 0 "resizefs 挂载点形式（单位）"
+df -h "$TEST_MNT" | tail -1
+umount "$TEST_MNT"; losetup -d "$LD"
 echo "== resize SIZE with unit (positional) =="
 $B resize "$T":1 40M; exp $? 0 "resize 40M（单位）"
 $B info "$T"

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 临时挂载点清理失败的运行时验证：卸载的成败与核心操作分属两个事实——
-# 清理待办随 Ok 浮出（已有 pending 通道的路径进 20），核心失败时主错误分类不变；
+# 清理待办随 Ok 浮出（已有 pending 通道的路径进 5），核心失败时主错误分类不变；
 # umount 非零退出与 umount 缺失都产生待办。
 #
 # 与 postcondition_contract.sh 的分工：那边覆盖 FS 步失败（PendingKind::Fs），
@@ -13,8 +13,7 @@
 source "$(dirname "$0")/lib.sh"
 require_fakeonly_bin
 
-T=/var/tmp/t41.img
-track_file "$T"
+img T t41.img
 
 # diskedit 的临时挂载点（mount_point()：$TMPDIR/diskedit.mnt.<pid>.<seq>）不在
 # _TRACK_MOUNTS 里：假 umount 场景下它真的留在挂载态，必须在这里用真 umount 收掉
@@ -30,10 +29,11 @@ cleanup_hook() {
 }
 
 setup_case() {
-    rm -f "$T" "$T"$SIDECAR_GLOB
+    rm -rf "$T" "$T"$SIDECAR_GLOB
     truncate -s 2G "$T"
     $B new "$T" --yes >/dev/null
-    $B create "$T" --size 400M --name b --fs btrfs --yes >/dev/null 2>&1
+    $B add "$T" 400M --align mib --name b --yes >/dev/null 2>&1
+    $B mkfs "$T":1 btrfs --yes >/dev/null 2>&1
 }
 
 fake() { # $1=名  $2=脚本体
@@ -55,7 +55,7 @@ case "$OUT" in
 esac
 
 echo
-echo "===== B: btrfs 扩容 + umount 非零退出 → PARTIAL(20) + mount cleanup ====="
+echo "===== B: btrfs 扩容 + umount 非零退出 → PARTIAL(5) + mount cleanup ====="
 setup_case
 rm -rf "$FAKE"; mkdir -p "$FAKE"
 fake umount '#!/bin/sh
@@ -64,13 +64,13 @@ exit 32'
 OUT=$($BFK resize "$T":1 1500M 2>&1); E=$?
 echo "exit=$E"
 echo "$OUT" | grep -E 'mount cleanup|follow-up|run manually|left behind' | sed 's/^/    /'
-exp "$E" 20 "卸载失败不改写扩容成功，只落一条待办"
+exp "$E" 5 "卸载失败不改写扩容成功，只落一条待办"
 case "$OUT" in *"mount cleanup"*) echo "B cleanup reported OK";; *) echo "B cleanup report missing (BAD)"; rc=1;; esac
 case "$OUT" in *"target is busy"*) echo "B tool words OK";; *) echo "B tool words missing (BAD)"; rc=1;; esac
 case "$OUT" in *"run manually: umount /tmp/diskedit.mnt."*) echo "B remedy OK";; *) echo "B remedy missing (BAD)"; rc=1;; esac
 
 echo
-echo "===== C: umount 缺失 → 事前拒绝(30)，未写盘也就没有待办 ====="
+echo "===== C: umount 缺失 → 事前拒绝(6)，未写盘也就没有待办 ====="
 # umount 缺失是**事前可知**的：mount 层工具前置检查（check_mount_layer_tools）在写盘前
 # 就拒绝，比"事后留一条清理待办"更严——不留残留挂载点、也不动盘
 setup_case
@@ -83,7 +83,7 @@ done
 OUT=$($BFKO resize "$T":1 1500M 2>&1); E=$?
 echo "exit=$E"
 echo "$OUT" | sed 's/^/    /'
-exp "$E" 30 "umount 缺失在写盘前被拒（30）"
+exp "$E" 6 "umount 缺失在写盘前被拒（6）"
 if echo "$OUT" | grep -q 'requires `umount`'; then
     echo "C preflight names the tool OK"
 else
@@ -105,13 +105,13 @@ exit 32'
 OUT=$($BFK resize "$T":1 1500M 2>&1); E=$?
 echo "exit=$E"
 echo "$OUT" | grep -E 'fs grow|mount cleanup|left behind|follow-up' | sed 's/^/    /'
-exp "$E" 20 "核心失败仍按 FS 待办报，清理告警不改写它"
+exp "$E" 5 "核心失败仍按 FS 待办报，清理告警不改写它"
 case "$OUT" in *"fs grow"*) echo "D core error kept OK";; *) echo "D core error lost (BAD)"; rc=1;; esac
 case "$OUT" in *"left behind"*) echo "D cleanup warning OK";; *) echo "D cleanup warning missing (BAD)"; rc=1;; esac
 case "$OUT" in *"mount cleanup"*) echo "D cleanup must not become a pending (BAD)"; rc=1;; *) echo "D cleanup kept out of pending OK";; esac
 
 echo
-echo "===== E: resizefs 扩容 + umount 失败 → PARTIAL(20) + mount cleanup ====="
+echo "===== E: resizefs 扩容 + umount 失败 → PARTIAL(5) + mount cleanup ====="
 setup_case
 # 先只改表把分区放大、FS 仍停在 400M，给 resizefs 留下可扩的那段
 $B resize "$T":1 1500M --no-fs >/dev/null 2>&1
@@ -122,13 +122,13 @@ exit 32'
 OUT=$($BFK resizefs "$T":1 2>&1); E=$?
 echo "exit=$E"
 echo "$OUT" | sed 's/^/    /'
-exp "$E" 20 "FS 扩成功、挂载点未卸：按未完成的后置条件报 20"
+exp "$E" 5 "FS 扩成功、挂载点未卸：按未完成的后置条件报 5"
 case "$OUT" in *"left behind"*) echo "E cleanup warning OK";; *) echo "E cleanup warning missing (BAD)"; rc=1;; esac
 case "$OUT" in *"mount cleanup"*) echo "E cleanup pending OK";; *) echo "E cleanup pending missing (BAD)"; rc=1;; esac
 
 echo
-echo "===== F: superfloppy(btrfs 整盘) 扩容 + umount 失败 → PARTIAL(20) + mount cleanup ====="
-rm -f "$T" "$T"$SIDECAR_GLOB
+echo "===== F: superfloppy(btrfs 整盘) 扩容 + umount 失败 → PARTIAL(5) + mount cleanup ====="
+rm -rf "$T" "$T"$SIDECAR_GLOB
 truncate -s 400M "$T"
 mkfs.btrfs -q -f "$T" >/dev/null 2>&1
 truncate -s 800M "$T"
@@ -139,7 +139,7 @@ exit 32'
 OUT=$($BFK resize "$T" 800M 2>&1); E=$?
 echo "exit=$E"
 echo "$OUT" | sed 's/^/    /'
-exp "$E" 20 "superfloppy 的 FS 扩成功、挂载点未卸：按未完成的后置条件报 20"
+exp "$E" 5 "superfloppy 的 FS 扩成功、挂载点未卸：按未完成的后置条件报 5"
 case "$OUT" in *"left behind"*) echo "F cleanup warning OK";; *) echo "F cleanup warning missing (BAD)"; rc=1;; esac
 
 echo

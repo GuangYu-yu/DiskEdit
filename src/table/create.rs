@@ -31,14 +31,14 @@ pub(crate) fn derive_guid(path: &std::path::Path) -> [u8; 16] {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum TableKind {
     Gpt,
-    Msdos,
+    Mbr,
 }
 
 impl TableKind {
     pub fn parse(s: &str) -> Option<Self> {
         match s {
             "gpt" => Some(Self::Gpt),
-            "msdos" => Some(Self::Msdos),
+            "mbr" => Some(Self::Mbr),
             _ => None,
         }
     }
@@ -47,7 +47,7 @@ impl TableKind {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Gpt => "gpt",
-            Self::Msdos => "msdos",
+            Self::Mbr => "mbr",
         }
     }
 }
@@ -62,7 +62,7 @@ pub(crate) fn gpt_min_sectors(ss: u64) -> io::Result<u64> {
     Ok(2 * geom.lba_span() + 4)
 }
 
-/// "盘装不下 GPT"的唯一措辞：preflight（命令层写盘前拒绝，Fail::refused）与
+/// "盘装不下 GPT"的唯一措辞：preflight（命令层写盘前拒绝，RunOutcome::refused）与
 /// create_gpt（直调入口的兜底，io::Error）共用同一判据 gpt_min_sectors 与同一句话
 pub(crate) fn gpt_too_small(min_sectors: u64, ss: u64) -> String {
     format!("target too small for a GPT (needs ≥{min_sectors} sectors at {ss}-byte sector size)")
@@ -70,21 +70,22 @@ pub(crate) fn gpt_too_small(min_sectors: u64, ss: u64) -> String {
 
 /// `new` 写盘前的全部拒绝判据。命令层必须在任何写入之前先过它：这些检查若埋在
 /// create_gpt 里以 io::Error 上抛，会被"建表失败可能停在中间态"的映射误报成
-/// Failed（30 + "盘可能已改变"）——而此刻什么都没写，语义是 refused（10）
-pub fn create_gpt_preflight(size_bytes: u64, ss: u64) -> Result<(), Fail> {
-    let min_sectors = gpt_min_sectors(ss).map_err(|e| Fail::refused(e.to_string()))?;
+/// Partial（5 + "盘可能已改变"）——而此刻什么都没写，语义是 refused（3）
+pub fn create_gpt_preflight(size_bytes: u64, ss: u64) -> Result<(), RunOutcome> {
+    let min_sectors = gpt_min_sectors(ss).map_err(|e| RunOutcome::refused(e.to_string()))?;
     if size_bytes / ss < min_sectors {
-        return Err(Fail::refused(gpt_too_small(min_sectors, ss)));
+        return Err(RunOutcome::refused(gpt_too_small(min_sectors, ss)));
     }
     Ok(())
 }
 
-/// `new --table msdos` 写盘前的判据：MBR 只占 LBA0，但盘至少要有一个扇区可写。
-/// 与 GPT 侧同一理由：把"盘太小"当建表失败的 io::Error 报，会被误报成 Failed
-pub fn create_mbr_preflight(size_bytes: u64, ss: u64) -> Result<(), Fail> {
-    if size_bytes / ss < 1 {
-        return Err(Fail::refused(format!(
-            "target too small for an MBR (needs ≥1 sector at {ss}-byte sector size)"
+/// `new --table mbr` 写盘前的判据：MBR 写 LBA0、LBA1 与末 LBA 三段，可用区
+/// `[1, last-1]` 至少要留 1 个 LBA。与 GPT 侧同一理由：把"盘太小"
+/// 当建表失败的 io::Error 报，会被误报成 Partial
+pub fn create_mbr_preflight(size_bytes: u64, ss: u64) -> Result<(), RunOutcome> {
+    if size_bytes / ss < 3 {
+        return Err(RunOutcome::refused(format!(
+            "target too small for an MBR (needs ≥3 sectors at {ss}-byte sector size)"
         )));
     }
     Ok(())
@@ -161,10 +162,10 @@ pub fn gpt_metadata_conflict(src: &FileSource, ss: u64) -> io::Result<Option<Str
     Ok(None)
 }
 
-/// `create_mbr` 会清零的 GPT 签名位置（字节偏移）。判据与写入路径同源：候选扇区大小
+/// `new --table mbr` 会清零的 GPT 签名位置（字节偏移）。判据与写入路径同源：候选扇区大小
 /// 各自的 LBA1 与盘尾备份头；容器装不下该候选时该位置不存在。只在签名匹配的位置返回
-/// ——`create_mbr` 也只在这些位置写零
-fn gpt_signature_sites(src: &FileSource) -> io::Result<Vec<u64>> {
+/// ——`new --table mbr` 也只在这些位置写零
+pub(crate) fn gpt_signature_sites(src: &FileSource) -> io::Result<Vec<u64>> {
     let ss = src.sector_size;
     let mut sites = Vec::new();
     for at in candidate_sector_sizes(ss) {
@@ -218,30 +219,71 @@ pub fn mbr_metadata_conflict(src: &FileSource, ss: u64) -> io::Result<Option<Str
 pub(crate) fn new_table_conflict(src: &FileSource, ss: u64, kind: TableKind) -> io::Result<Option<String>> {
     match kind {
         TableKind::Gpt => gpt_metadata_conflict(src, ss),
-        TableKind::Msdos => mbr_metadata_conflict(src, ss),
+        TableKind::Mbr => mbr_metadata_conflict(src, ss),
     }
 }
 
-/// 写入口的冲突闸：必须在首次写盘之前调用。未授权覆盖分区数据时，冲突与"旧表读不出来"
-/// 都按拒绝返回（确定未写盘）；授权时放行——`--overwrite-partition-data` 的含义就是
-/// 接受覆盖那些字节，旧表读不出来也不改变本次写入会落到的位置。
+/// `create_gpt`/`create_mbr` 写入口的冲突闸，仅在测试构建中可见：与命令层的
+/// [`new_table_conflict`] 同一判据，未授权覆盖分区数据时，冲突与"旧表读不出来"都按拒绝
+/// 返回（确定未写盘）；授权时放行——`--overwrite-data` 的含义就是接受覆盖那些字节，
+/// 旧表读不出来也不改变本次写入会落到的位置。
+#[cfg(test)]
 pub(crate) fn ensure_new_table_write_clear(
     src: &FileSource,
     ss: u64,
     kind: TableKind,
     overwrite_partition_data: bool,
-) -> Result<(), Fail> {
+) -> Result<(), RunOutcome> {
     match (new_table_conflict(src, ss, kind), overwrite_partition_data) {
         (Ok(None), _) => Ok(()),
         (Ok(Some(_)), true) | (Err(_), true) => Ok(()),
-        (Ok(Some(why)), false) => Err(Fail::refused(format!(
+        (Ok(Some(why)), false) => Err(RunOutcome::refused(format!(
             "{why} — pass --overwrite-partition-data to accept overwriting those bytes"
         ))),
-        (Err(e), false) => Err(Fail::refused(format!(
+        (Err(e), false) => Err(RunOutcome::refused(format!(
             "cannot check the existing partition table against the bytes this new table writes ({e}) — \
              pass --overwrite-partition-data to proceed without that check"
         ))),
     }
+}
+
+/// 盘上是否已有可识别的表（GPT 或 msdos）。与 [`existing_partition_ranges`] 走同一套
+/// 探测：GPT 不受保护 MBR 形状约束，msdos 认 LBA0 的签名与记录。表读不出来时上抛，
+/// 调用方不得把"探测不出事实"当成"盘上没有表"放行。
+pub(crate) fn recognized_table(src: &FileSource) -> io::Result<bool> {
+    match load_gpt_ignoring_pmbr_shape(src) {
+        Ok(Some(_)) => Ok(true),
+        Ok(None) => Ok(super::mbr::parse_mbr_raw(src)?.is_some()),
+        Err(e) => Err(into_io_error(e)),
+    }
+}
+
+/// `new --table gpt` 的计划期内容：空条目表 + 新盘 GUID + 按容器算出的表几何。
+/// 纯计算、不读盘；写入与比对由命令层装配后执行。
+pub(crate) fn new_gpt_content(src: &FileSource, disk_guid: Option<[u8; 16]>) -> Result<GptContent, RunOutcome> {
+    // 与 create_gpt_preflight 同一判据：命令层已先过一遍，这里保证几何推导不下溢
+    let min_sectors = gpt_min_sectors(src.sector_size).map_err(|e| RunOutcome::refused(e.to_string()))?;
+    let ss = src.sector_size;
+    if src.size / ss < min_sectors {
+        return Err(RunOutcome::refused(gpt_too_small(min_sectors, ss)));
+    }
+    let geom = EntryArrayGeometry::new(ss, DEFAULT_ENTRY_SIZE, DEFAULT_ENTRY_COUNT, MAX_ARRAY_BYTES)
+        .map_err(|e| RunOutcome::refused(e.to_string()))?;
+    let span = geom.lba_span();
+    let last_lba = container_last_lba(src, ss);
+    let header = RawHeader {
+        revision: 0x0001_0000,
+        primary_lba: 1,
+        backup_lba: last_lba,
+        first_usable_lba: 2 + span,
+        last_usable_lba: last_lba - span - 1,
+        disk_guid: disk_guid.unwrap_or_else(|| derive_guid(&src.path)),
+        partition_entry_lba: 2,
+        number_of_partition_entries: geom.entry_count,
+        size_of_partition_entry: geom.entry_size,
+        header_size: 92,
+    };
+    Ok(GptContent { ss, header, entries: vec![empty_entry(); geom.entry_count as usize], last_lba })
 }
 
 /// `new`：新建空 GPT（覆盖现有表）+ 保护 MBR。写盘只落在表结构区：LBA0/1、主条目数组
@@ -249,18 +291,22 @@ pub(crate) fn ensure_new_table_write_clear(
 /// 在首次写盘前判掉——命令层的那次判定与这里之间隔着占用闸的 loop 扫描。
 /// 几何：128 条目 × 128B，first_usable = 数组之后，last_usable = 末端 - span - 1
 /// （由 UEFI 头/数组布局推导的实现约定，非规范逐字给出的公式）。
+/// 仅在测试构建中可见：生产路径由命令层装配后执行。
+#[cfg(test)]
 pub fn create_gpt(
     src: &mut WriteSource,
     ss: u64,
     disk_guid: Option<[u8; 16]>,
     overwrite_partition_data: bool,
-) -> Result<(), Fail> {
+) -> Result<(), RunOutcome> {
+    // 写前复核的基准：占用判定与几何推导都在这三扇区读定之后进行
+    let stamp = table_stamp(src, ss)?;
     ensure_new_table_write_clear(src, ss, TableKind::Gpt, overwrite_partition_data)?;
     // 与 create_gpt_preflight 同一判据（同一 gpt_min_sectors）、同一措辞：命令层已先在
     // 写盘前过了一遍，这里是直接调本函数的调用方（测试）的兜底，两种入口看到同一句话
-    let min_sectors = gpt_min_sectors(ss).map_err(|e| Fail::refused(e.to_string()))?;
+    let min_sectors = gpt_min_sectors(ss).map_err(|e| RunOutcome::refused(e.to_string()))?;
     if src.size / ss < min_sectors {
-        return Err(Fail::refused(gpt_too_small(min_sectors, ss)));
+        return Err(RunOutcome::refused(gpt_too_small(min_sectors, ss)));
     }
     let geom = EntryArrayGeometry::new(ss, DEFAULT_ENTRY_SIZE, DEFAULT_ENTRY_COUNT, MAX_ARRAY_BYTES)?;
     let span = geom.lba_span();
@@ -278,6 +324,7 @@ pub fn create_gpt(
         header_size: 92,
     };
     let g = RawGpt { ss, header, entries: vec![empty_entry(); geom.entry_count as usize], state: GptState::Valid, pmbr: PmbrSize::Normal };
+    verify_table_stamp(src, stamp, ss)?;
     commit_gpt(src, &g, last_lba)?;
     ensure_protective_mbr(src, ss)?;
     Ok(())
@@ -339,12 +386,10 @@ pub const LVM_TYPE_GUID: [u8; 16] = [
     0x79, 0xD3, 0xD6, 0xE6, 0x07, 0xF5, 0xC2, 0x44, 0xA2, 0x3C, 0x23, 0x8F, 0x2A, 0x3D, 0xF9, 0x28,
 ];
 
-/// 同一 GUID 的另一种摆放：UEFI 规定的磁盘序把前三个字段（Data1 4B、Data2 2B、Data3 2B）
-/// 小端落盘，其余字段按 RFC 4122 原序；RFC 4122 文本形式则是三字段各自的正序。本函数
-/// 倒转这三段的字节即在两种摆法之间转换，施加两次回到原值（对合）。
-///
-/// 写路径的常量一律是磁盘序（[`ESP_TYPE_GUID`] 等），不经过本函数；它只用于识别外部写入
-/// 的盘——部分工具按 RFC 4122 字段序落 GUID，两种摆放的盘都真实存在
+/// 测试夹具：把规范 EFI 编码的 GUID 转成前三个字段倒序的摆放，用来构造必须被拒绝的样本。
+/// 识别侧只比较规范编码（决策 22），不认这种摆放；写路径的常量也一律是规范编码
+/// （[`ESP_TYPE_GUID`] 等），不经过本函数
+#[cfg(test)]
 pub(crate) fn guid_in_field_order(g: &[u8; 16]) -> [u8; 16] {
     let mut out = *g;
     out[0..4].reverse();
@@ -360,10 +405,13 @@ pub(crate) fn guid_in_field_order(g: &[u8; 16]) -> [u8; 16] {
 /// LBA1 与盘尾备份头上可能残留的 GPT 签名——新表是 msdos，盘上不该再留下任何能独立
 /// 给出 GPT 表的表层。只清签名那 8 字节，同一扇区的其余字节与条目数原样保留。
 /// 主头签名留着会让这块新 msdos 盘被判成 `GptDamaged`（`table_label` 的第 3 条判据）；
-/// 盘尾那个留着会让"4 条记录全空"的判据（第 5 条）把刚建的盘判成 GPT 残骸。
+/// 盘尾那个留着会让"4 条记录全空"的判据把刚建的盘判成 GPT 残骸。
 /// 会清零的签名若落在旧分区数据里，由 [`ensure_new_table_write_clear`] 在首次写盘前判掉。
-pub fn create_mbr(src: &mut WriteSource, overwrite_partition_data: bool) -> Result<(), Fail> {
-    ensure_new_table_write_clear(src, src.sector_size, TableKind::Msdos, overwrite_partition_data)?;
+/// 仅在测试构建中可见：生产路径由命令层装配后执行。
+#[cfg(test)]
+pub fn create_mbr(src: &mut WriteSource, overwrite_partition_data: bool) -> Result<(), RunOutcome> {
+    let stamp = table_stamp(src, src.sector_size)?;
+    ensure_new_table_write_clear(src, src.sector_size, TableKind::Mbr, overwrite_partition_data)?;
     let ss = src.sector_size;
     let mut lba0 = vec![0u8; ss as usize];
     src.read_at(0, &mut lba0)?;
@@ -389,6 +437,7 @@ pub fn create_mbr(src: &mut WriteSource, overwrite_partition_data: bool) -> Resu
         }
     }
     let mut cleared = Vec::new();
+    verify_table_stamp(src, stamp, src.sector_size)?;
     for off in gpt_signature_sites(src)? {
         cleared.push(off);
         if off.saturating_add(GPT_SIGNATURE.len() as u64) <= head.len() as u64 {

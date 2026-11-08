@@ -30,7 +30,7 @@ fn write_region(img: &std::path::Path, lba: u64, bytes: &[u8]) {
 }
 
 #[test]
-fn auto_commands_create_move_resize_set_delete() {
+fn auto_commands_add_move_resize_set_delete() {
     let dir = std::env::temp_dir().join(format!("diskedit_auto_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let img = dir.join("auto.img");
@@ -47,14 +47,15 @@ fn auto_commands_create_move_resize_set_delete() {
 
     run(&["new", img_s, "--yes"]);
 
-    // create --size：4MiB → #1 2048..10239
-    let (c, out, e) = run(&["create", img_s, "--size", "4194304", "--name", "one"]);
+    // add 4MiB → #1 2048..10239（第一个可容纳的 1MiB 对齐空洞）
+    let (c, out, e) = run(&["add", img_s, "4M", "--align", "mib", "--name", "one",
+        "--type-guid", "0fc63daf-8483-4772-8e79-3d69d8477de4", "--yes"]);
     assert_eq!(c, 0, "{e}{out}");
     // #1 的整区载荷（8192 扇区，自重叠右移：源与目标区间相交）
     let one_payload = marker_range(2048, 8192);
     write_region(&img, 2048, &one_payload);
     // move：右移到 4096..12287（空闲区，自由落点）
-    let (c, _, e) = run(&["move", &format!("{img_s}:1"), "--start", "4096", "--yes"]);
+    let (c, _, e) = run(&["move", &format!("{img_s}:1"), "--start", "4096", "--chunk", "4", "--yes"]);
     assert_eq!(c, 0, "move must succeed: {e}");
     assert_eq!(
         read_region(&img, 4096, one_payload.len()),
@@ -67,8 +68,9 @@ fn auto_commands_create_move_resize_set_delete() {
         one_payload[..2048 * 512],
         "the vacated head must still hold the pre-move bytes (the tool does not scrub the source)"
     );
-    // create --size：2MiB → #2 12288..16383
-    let (c, _, e) = run(&["create", img_s, "--size", "2097152"]);
+    // add 2MiB → #2 12288..16383（#1 挪走后首个 1MiB 对齐空洞放不下 2MiB）
+    let (c, _, e) = run(&["add", img_s, "2M", "--align", "mib",
+        "--type-guid", "0fc63daf-8483-4772-8e79-3d69d8477de4", "--yes"]);
     assert_eq!(c, 0, "{e}");
     // #2 的整区载荷：扩容时它作为挡路者被搬到尾部，字节必须原样跟随
     let two_payload = marker_range(12288, 4096);
@@ -79,23 +81,24 @@ fn auto_commands_create_move_resize_set_delete() {
     let img_before = std::fs::read(&img).unwrap();
     let entries_before = dir_entries(&dir);
     let (c, out, stderr) = run(&["resize", &format!("{img_s}:1"), "grow", "--yes"]);
-    assert_eq!(c, 10, "blocked grow without --allow-move must refuse");
+    assert_eq!(c, 3, "blocked grow without --allow-move must refuse");
     assert!(!out.contains("move part 2"), "no plan without --allow-move: {out}");
     assert!(stderr.contains("--allow-move"), "{stderr}");
     assert_eq!(std::fs::read(&img).unwrap(), img_before, "a refusal must leave the image byte-identical");
     assert_eq!(dir_entries(&dir), entries_before, "a refusal must not add sidecars");
-    // --allow-move 无 --yes：打印搬移计划后拒绝（这一条测的就是确认门本身）
+    // --allow-move 无 --yes：解析期就拒绝，不打印搬移计划——确认门
+    // 不描述将要发生的事，只在动手前要求显式确认
     let img_before = std::fs::read(&img).unwrap();
     let entries_before = dir_entries(&dir);
-    let (c, out, stderr) = run(&["resize", &format!("{img_s}:1"), "grow", "--allow-move"]);
-    assert_eq!(c, 10, "plan printed but --yes missing must refuse");
-    assert!(out.contains("move part 2"), "plan must be printed: {out}");
+    let (c, out, stderr) = run(&["resize", &format!("{img_s}:1"), "grow", "--allow-move", "--chunk", "4"]);
+    assert_eq!(c, 2, "missing --yes must be a usage error");
+    assert!(!out.contains("move part 2"), "no plan before the gate is passed: {out}");
     assert!(stderr.contains("--yes"), "{stderr}");
     assert_eq!(std::fs::read(&img).unwrap(), img_before, "a refusal must leave the image byte-identical");
     assert_eq!(dir_entries(&dir), entries_before, "a refusal must not add sidecars");
-    // 带 --allow-move --yes：自动搬移 #2 到尾部并扩 #1（apply 打包到 last_usable=32734）。
+    // 带 --allow-move --yes：自动搬移 #2 到尾部并把 #1 扩到 last_usable=32734。
     // #1 里没有 FS，扩分区表这件事本身要显式声明——--no-fs 正是"只改表"的入口
-    let (c, _, e) = run(&["resize", &format!("{img_s}:1"), "grow", "--allow-move", "--yes", "--no-fs"]);
+    let (c, _, e) = run(&["resize", &format!("{img_s}:1"), "grow", "--allow-move", "--chunk", "4", "--yes", "--no-fs"]);
     assert_eq!(c, 0, "auto-relocate grow must succeed: {e}");
     let mut f = std::fs::File::open(&img).unwrap();
     let gpt = gptman::GPT::find_from(&mut f).unwrap();
@@ -123,9 +126,9 @@ fn auto_commands_create_move_resize_set_delete() {
     );
 
     // set：改名 + ESP 标志（info 回读验证）
-    let (c, _, e) = run(&["set", &format!("{img_s}:1"), "name", "auto"]);
+    let (c, _, e) = run(&["set", &format!("{img_s}:1"), "name", "auto", "--yes"]);
     assert_eq!(c, 0, "{e}");
-    let (c, _, e) = run(&["set", &format!("{img_s}:1"), "flag", "esp", "on"]);
+    let (c, _, e) = run(&["set", &format!("{img_s}:1"), "flag", "esp", "on", "--yes"]);
     assert_eq!(c, 0, "{e}");
     let (c, out, _) = run(&["info", img_s]);
     assert_eq!(c, 0);
@@ -133,15 +136,15 @@ fn auto_commands_create_move_resize_set_delete() {
     assert_eq!(v["partitions"][0]["name"], "auto");
     assert_eq!(v["partitions"][0]["type"], "C12A7328-F81F-11D2-BA4B-00A0C93EC93B");
 
-    // resize 位置 SIZE 收缩：unknown FS 拒绝（fail-fast）
+    // resize 位置 SIZE 收缩：resize 只扩；缩容拆成 resizefs + resize-part
     let (c, _, stderr) = run(&["resize", &format!("{img_s}:1"), "8388608", "--yes"]);
-    assert_eq!(c, 10, "shrink of unknown FS must refuse: {stderr}");
+    assert_eq!(c, 3, "shrink through resize must be refused: {stderr}");
     assert!(stderr.contains("shrink"), "{stderr}");
 
     // delete + 位置 SIZE 扩容：删 #2 后 #1 扩到 12MiB（4096..28671）；#1 无 FS，同样走 --no-fs
     let (c, _, e) = run(&["delete", &format!("{img_s}:2"), "--yes"]);
     assert_eq!(c, 0, "{e}");
-    let (c, _, e) = run(&["resize", &format!("{img_s}:1"), "12582912", "--no-fs"]);
+    let (c, _, e) = run(&["resize", &format!("{img_s}:1"), "12582912", "--no-fs", "--yes"]);
     assert_eq!(c, 0, "grow by SIZE must succeed: {e}");
     let mut f = std::fs::File::open(&img).unwrap();
     let gpt = gptman::GPT::find_from(&mut f).unwrap();

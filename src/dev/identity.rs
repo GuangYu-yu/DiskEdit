@@ -4,7 +4,7 @@ use super::*;
 
 /// 目标载体的稳定指纹：镜像用 (st_dev, st_ino, size)；真块设备用 (整盘容量, 设备 ID 哈希)。
 /// 恢复现场用它确认"还是当时那个目标"。字段的证据强度按载体分级，比对时**逐字段**判断
-/// （见 [`scene_mismatch`]）：`size` 镜像取文件长度、块设备取整盘容量；`dev` / `ino` 是
+/// （见 [`TargetFingerprint::has_inode_evidence`] 与 [`TargetFingerprint::has_id_evidence`]）：`size` 镜像取文件长度、块设备取整盘容量；`dev` / `ino` 是
 /// 文件层身份：Unix 取 (st_dev, st_ino)，Windows 取 (卷序列号, 文件索引)——两者都由文件系统
 /// 在**对象**上维护，改路径、路径被别的文件复用都不变。Windows 这一对只能从已打开的句柄
 /// 问到（见 [`TargetFingerprint::from_file`]）。真块设备节点恒零；其余平台也恒零。
@@ -77,20 +77,22 @@ impl TargetFingerprint {
         self.dev != 0 || self.ino != 0
     }
 
-    /// 有没有**尺寸**证据：size 非零。镜像取 `Metadata::len()`，块设备取整盘容量
-    pub fn has_size_evidence(&self) -> bool {
-        self.size != 0
-    }
-
     /// 有没有**设备 ID**证据：id 非零。只有真块设备的整盘节点能给出该字段
     pub fn has_id_evidence(&self) -> bool {
         self.id != 0
     }
 
-    /// 有没有**任一**可比字段。全零的指纹出自"这个载体什么也给不出来"（任何指纹恒零的载体）；
-    /// undo 在回放前据此报出"一个字段都没比"的身份边界
-    pub fn has_any_evidence(&self) -> bool {
-        self.has_inode_evidence() || self.has_size_evidence() || self.has_id_evidence()
+    /// 路径现在是否仍指向录制时的那个文件。`None` = 无从判断（录制时没有 inode 证据）。
+    /// 调用点把 `Some(false)` 当"路径已被换掉"处理：这条判据只用来拦住"把路径交给外部
+    /// 工具时落点已变"，不承诺它等同于一次完整复核
+    #[cfg(unix)]
+    pub(crate) fn still_names(&self, path: &Path) -> io::Result<Option<bool>> {
+        if !self.has_inode_evidence() {
+            return Ok(None);
+        }
+        use std::os::unix::fs::MetadataExt;
+        let meta = std::fs::metadata(path)?;
+        Ok(Some((meta.dev(), meta.ino()) == (self.dev, self.ino)))
     }
 
     /// 只有 `Metadata` 时的指纹。写入路径一律走 [`Self::from_file`]（Windows 的文件身份
@@ -106,7 +108,7 @@ impl TargetFingerprint {
         #[cfg(not(unix))]
         {
             // size 出自 `Metadata::len()`，同样可读；dev / ino 在这个平台上没有对应接口，
-            // 留零。消费端据此走"没有文件身份证据"那一支（见 [`Self::still_names`]）
+            // 留零。消费端据此走"没有文件身份证据"那一支
             Self { dev: 0, ino: 0, size: meta.len(), id: 0 }
         }
     }
@@ -124,53 +126,6 @@ impl TargetFingerprint {
         #[cfg(not(windows))]
         Ok(Self::from_meta(&meta))
     }
-
-    /// `path` 现在是否仍指向这份指纹描述的对象：`Some(true)` 是，`Some(false)` 不是，
-    /// **`None` 是"没有任何按文件身份比对的证据"**（真块设备节点、平台给不出文件身份、或取
-    /// 指纹时 stat 失败）。三个答案必须分开：把"无从判断"压成一个具体的布尔值，消费端就只能靠
-    /// 约定去猜，而两个消费端的猜错方向合并起来恰好是"该拦的放行、该删的删掉别人的"
-    #[cfg(unix)]
-    pub(crate) fn still_names(&self, path: &Path) -> io::Result<Option<bool>> {
-        if !self.has_inode_evidence() {
-            return Ok(None);
-        }
-        use std::os::unix::fs::MetadataExt;
-        let meta = std::fs::metadata(path)?;
-        Ok(Some((meta.dev(), meta.ino()) == (self.dev, self.ino)))
-    }
-
-    /// Windows 的判据是 (卷序列号, 文件索引)，与 Unix 的 (dev, ino) 同等力度：两者都由
-    /// 文件系统在对象上维护。任一侧取不到仍是"无从判断"
-    #[cfg(windows)]
-    pub(crate) fn still_names(&self, path: &Path) -> io::Result<Option<bool>> {
-        if !self.has_inode_evidence() {
-            return Ok(None);
-        }
-        let now = Self::from_file(&std::fs::File::open(path)?)?;
-        if !now.has_inode_evidence() {
-            return Ok(None);
-        }
-        Ok(Some((now.dev, now.ino) == (self.dev, self.ino)))
-    }
-
-    /// 其余平台取不到文件层身份（见本类型的字段说明）：与 [`Self::has_inode_evidence`]
-    /// 恒假同口径，一律"无从判断"
-    #[cfg(not(any(unix, windows)))]
-    pub(crate) fn still_names(&self, _path: &Path) -> io::Result<Option<bool>> {
-        Ok(None)
-    }
-}
-
-/// 一份现场记录的"创建时目标"：指纹、loop 映射，以及**身份证据的种类**。
-///
-/// 两族现场（checkpoint / journal）都存这三样，比对只有一处（见 [`scene_mismatch`]）。
-/// 种类随现场落盘：`id == 0` 既可能是"这个平台给不出该字段"，也可能是"录制时取不到身份"，
-/// 后者由种类标出，两者在恢复时的处置不同，不能混为一谈
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct SceneIdentity {
-    pub fp: TargetFingerprint,
-    pub map: Option<(u64, u64)>,
-    pub proof: IdentityProof,
 }
 
 /// 当前目标能给出的"凭什么认它"
@@ -185,161 +140,12 @@ pub enum LiveProof {
     Unavailable,
 }
 
-/// 当前目标的"创建时事实"：与头里存的那三样同构，种类只取 [`LiveProof`]
+/// 当前目标的"创建时事实"
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LiveScene {
     pub fp: TargetFingerprint,
     pub map: Option<(u64, u64)>,
     pub proof: LiveProof,
-}
-
-/// 现场记录里"凭什么认这个目标"。恢复时先比种类、再比同种类的字段：种类不同说明现在的
-/// 目标不是记录时那类载体，此时逐字段的零值会把"没法比"读成"相符"
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum IdentityProof {
-    /// 记录时当前目标给出的种类
-    Live(LiveProof),
-}
-
-impl From<LiveProof> for IdentityProof {
-    fn from(p: LiveProof) -> Self {
-        Self::Live(p)
-    }
-}
-
-impl LiveProof {
-    /// 落盘字节（身份段末字节）。取值范围与 [`IdentityProof::from_tag`] 接受的集合一致
-    pub(crate) fn tag(self) -> u8 {
-        match self {
-            Self::DeviceId => 1,
-            Self::Inode => 2,
-            Self::Unavailable => 3,
-        }
-    }
-
-    pub(crate) fn from_tag(tag: u8) -> Option<Self> {
-        match tag {
-            1 => Some(Self::DeviceId),
-            2 => Some(Self::Inode),
-            3 => Some(Self::Unavailable),
-            _ => None,
-        }
-    }
-}
-
-impl IdentityProof {
-    pub(crate) fn from_tag(tag: u8) -> Option<Self> {
-        LiveProof::from_tag(tag).map(Self::Live)
-    }
-}
-
-/// 现场记录的"创建时事实"与当前目标比对，不符即外来现场（返回一句可读的原因）。
-///
-/// **两族现场（checkpoint / journal）共用这一处判据**：同一种异常在两条恢复路径上必须得到
-/// 同一个结论，否则拒绝理由会随入口漂移；调用方各自在原因上补齐"是哪份文件"。
-///
-/// **先比身份种类，再逐字段比**：种类相同才谈得上比较字段。
-/// - `Unavailable` 是"录制时就知道取不到身份"：同样无法与同名换过的盘区分，拒绝消费。
-/// - 整盘身份与 inode 身份互换（例如同一节点从磁盘变成 loop）说明载体变了，拒绝。
-///
-/// 同一种类内，各字段只在两侧都有证据时参与（零值 = 该平台或该载体给不出这个字段，
-/// 不等于"匹配"）：尺寸镜像取文件长度、块设备取整盘容量；inode 只在 Unix 且载体有文件
-/// 可指时有值（镜像文件、loop 的 backing 文件）；`id` 只在块设备整盘节点上有值。
-/// **尺寸与 ID 都不是唯一标识**：同尺寸、同 ID 的克隆盘照样能通过这条检查。
-///
-/// 映射的有无本身参与比对：经 loop 写入的现场不允许改从裸镜像继续（反之亦然）——
-/// 两种途径下同一 LBA 指向的字节不同，映射差异不是可忽略的记法差
-pub(crate) fn scene_mismatch(recorded: &SceneIdentity, actual: &LiveScene) -> Option<String> {
-    compare(recorded, actual.proof.into(), &actual.fp, actual.map)
-}
-
-/// 两份现场记录的"创建时事实"互相核对：描述同一个目标时，每一处可比字段都应当一致。
-/// 目标已不可打开时这是仅剩的同源判据——没有当前目标可供比对，但两族记录仍可互证
-pub(crate) fn recorded_scene_mismatch(recorded: &SceneIdentity, other: &SceneIdentity) -> Option<String> {
-    let IdentityProof::Live(proof) = other.proof;
-    scene_mismatch(recorded, &LiveScene { fp: other.fp, map: other.map, proof })
-}
-
-fn compare(
-    recorded: &SceneIdentity,
-    actual_proof: IdentityProof,
-    actual_fp: &TargetFingerprint,
-    actual_map: Option<(u64, u64)>,
-) -> Option<String> {
-    match (recorded.proof, actual_proof) {
-        (IdentityProof::Live(LiveProof::Inode), IdentityProof::Live(LiveProof::Inode))
-        | (IdentityProof::Live(LiveProof::DeviceId), IdentityProof::Live(LiveProof::DeviceId)) => {}
-        (IdentityProof::Live(LiveProof::Unavailable), _) => {
-            return Some(
-                "this scene was recorded without any device identity (no stable attribute was readable), \
-                 so it cannot be matched against the device now present"
-                    .to_string(),
-            )
-        }
-        (IdentityProof::Live(LiveProof::DeviceId), IdentityProof::Live(LiveProof::Unavailable)) => {
-            return Some(format!(
-                "the device identity recorded by this scene ({:#018x}) is not readable on the target now",
-                recorded.fp.id,
-            ))
-        }
-        (IdentityProof::Live(LiveProof::DeviceId), _) => {
-            return Some(format!(
-                "the target now exposes a file inode identity instead of the whole-disk identity this scene \
-                 was recorded with ({:#018x})",
-                recorded.fp.id,
-            ))
-        }
-        (IdentityProof::Live(LiveProof::Inode), IdentityProof::Live(LiveProof::Unavailable)) => {
-            return Some(
-                "the target now exposes no stable identity at all, so the file inode this scene was \
-                 recorded with cannot be matched"
-                    .to_string(),
-            )
-        }
-        (IdentityProof::Live(LiveProof::Inode), _) => {
-            return Some(
-                "the target now exposes a whole-disk identity instead of the file inode this scene was \
-                 recorded with"
-                    .to_string(),
-            )
-        }
-    }
-    if recorded.fp.has_inode_evidence()
-        && actual_fp.has_inode_evidence()
-        && (recorded.fp.dev, recorded.fp.ino) != (actual_fp.dev, actual_fp.ino)
-    {
-        return Some(format!(
-            "the file fingerprint changed since this recovery scene was recorded (was dev:{} ino:{}, \
-             now dev:{} ino:{})",
-            recorded.fp.dev, recorded.fp.ino, actual_fp.dev, actual_fp.ino,
-        ));
-    }
-    if recorded.fp.has_size_evidence() && actual_fp.has_size_evidence() && recorded.fp.size != actual_fp.size {
-        return Some(format!(
-            "the file size changed since this recovery scene was recorded (was {} bytes, now {})",
-            recorded.fp.size, actual_fp.size,
-        ));
-    }
-    // 种类同为 `DeviceId` 时两侧都有 ID 证据（`FileSource::proof` 只在该字段非零时给出它）
-    if recorded.proof == IdentityProof::Live(LiveProof::DeviceId) && recorded.fp.id != actual_fp.id {
-        return Some(format!(
-            "the device identity changed since this recovery scene was recorded (was {:#018x}, now {:#018x})",
-            recorded.fp.id, actual_fp.id,
-        ));
-    }
-    match (recorded.map, actual_map) {
-        (Some((ro, rl)), Some((co, cl))) if (ro, rl) != (co, cl) => Some(format!(
-            "loop mapping changed since this recovery scene was recorded (was offset={ro} sizelimit={rl}, \
-             now offset={co} sizelimit={cl})"
-        )),
-        (Some(_), None) => {
-            Some("this recovery scene was recorded through a loop device, the target is not one".to_string())
-        }
-        (None, Some(_)) => {
-            Some("this recovery scene was recorded on a non-loop target, this one is reached through a loop device".to_string())
-        }
-        _ => None,
-    }
 }
 
 /// FNV-1a 64（http://www.isthe.com/chongo/tech/comp/fnv/）：确定性、跨版本稳定的字符串摘要。
@@ -396,10 +202,13 @@ pub struct TargetIdentity {
     /// 被改名或替换的另一个文件上
     pub(crate) canonical: PathBuf,
     pub(crate) journal: PathBuf,
-    pub(crate) checkpoint: PathBuf,
-    /// 独占锁的落点（见 `targetlock`）。**恒有值**：镜像放在目标旁，块设备由设备身份
-    /// 派生到 `state_dir()` 下。类型上没有"没有锁落点"这一状态——取不到锁就是拒绝，
-    /// 不存在无锁继续跑的路径
+    /// 恢复记录的落点：镜像为 `<image>.diskedit/record`；块设备为
+    /// `<state_root>/recovery/<identity-hash>/record`，身份为
+    /// `Unusable` 时为 `None`，写命令退 6
+    pub(crate) record: Option<PathBuf>,
+    /// 独占锁的落点（见 `targetlock`）。**恒有值**：块设备落在 `state_dir()` 下的盘键
+    /// （整盘载体，分区号不进锁键）；镜像落在记录目录内的 `record.lock`。类型上没有
+    /// "没有锁落点"这一状态——取不到锁就是拒绝，不存在无锁继续跑的路径
     pub(crate) lock: PathBuf,
     /// loop 目标的指纹：由 [`Self::loop_backed`] 在核对"backing 对象仍是句柄打开的那一个"
     /// 之后**从已打开的 backing 句柄**取得。打开数据文件的路径上取指纹的调用点直接用它，
@@ -415,6 +224,8 @@ pub struct TargetIdentity {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TargetKind {
     Image,
+    /// 块设备只在 Linux 的块路径出现；非 Linux 平台的身份恒为镜像
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     Block,
 }
 
@@ -443,9 +254,130 @@ pub(crate) fn suffix_path(base: &Path, suffix: &str) -> PathBuf {
     PathBuf::from(p)
 }
 
-// 落盘文件名的词表：journal / checkpoint / log / lock 四类伴随文件与 checkpoint 的
-// 暂存前缀只在这里定义一次，派生点（身份构造、日志落点）与写入侧（原子写）都取自这里。
-// 命名空间只在宏体里出现一次，各常量只提供自己的 stem
+/// 活跃条目的隔离区落点：记录目录里的 `record` 以隐藏名 `<stem>[.N]` 留在同一目录；
+/// 旧 journal / checkpoint 仍在各自目录里用 `<原名><stem>[.N]`——它们是迁移期现场，
+/// 迁移完成后不再产生
+fn quarantine_layout(from: &Path, stem: &str) -> (PathBuf, std::ffi::OsString) {
+    let dir = match from.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
+        _ => PathBuf::from("."),
+    };
+    let name = if from.file_name().is_some_and(|n| n == std::ffi::OsStr::new(RECORD_NAME)) {
+        std::ffi::OsString::from(stem)
+    } else {
+        let mut name = from.file_name().map(|n| n.to_os_string()).unwrap_or_default();
+        name.push(stem);
+        name
+    };
+    (dir, name)
+}
+
+/// 隔离条目的第 `index` 个候选名；0 是不带编号的首选名
+fn quarantine_path(dir: &Path, name: &std::ffi::OsStr, index: u32) -> PathBuf {
+    let mut file = name.to_os_string();
+    if index > 0 {
+        file.push(format!(".{index}"));
+    }
+    dir.join(file)
+}
+
+/// 目录里 `<name>[.N]` 的最大编号（不带编号的 `<name>` 记为 0）；一个都没有是 None。
+/// 编号只增不减：新条目取最大值 +1，不填已有的空号
+fn max_quarantine_index(dir: &Path, name: &std::ffi::OsStr) -> Option<u32> {
+    let base = name.to_string_lossy().into_owned();
+    let mut max = None;
+    for entry in std::fs::read_dir(dir).ok()?.flatten() {
+        let text = entry.file_name().to_string_lossy().into_owned();
+        let Some(rest) = text.strip_prefix(base.as_str()) else { continue };
+        let index = if rest.is_empty() {
+            0
+        } else if let Some(digits) = rest.strip_prefix('.') {
+            match digits.parse::<u32>() {
+                Ok(n) if !digits.is_empty() => n,
+                _ => continue,
+            }
+        } else {
+            continue;
+        };
+        max = Some(max.map_or(index, |m: u32| m.max(index)));
+    }
+    max
+}
+
+/// 把活跃条目移进隔离区：`hard_link` 建副本再删原名，绝不覆盖已有条目。
+///
+/// 三种结局与 `link(2)` 的返回值一一对应：
+/// - 建副本成功：删掉原名，转换完成
+/// - 目标名已存在且与原件是**同一个 inode**：上一次建了副本而删原名没跑完的残局，
+///   删原名即收敛（判据是 inode，不是文件名）
+/// - 目标名已存在但是**另一个文件**：那是另一次隔离留下的证据，不能覆盖；取更大编号重试
+///
+/// 不用 `rename` 的理由是它会静默覆盖：POSIX 的 rename 在目标存在时直接替换掉它。
+/// 硬链接不可用（FAT/exFAT、部分网络盘）时退到 `rename_over_placeholder`：先用
+/// `create_new` 原子占住名字，再覆盖本进程刚建的占位。本命令持目标锁，窗口内不会有
+/// 第二个 diskedit 来抢名字
+pub(crate) fn quarantine_move(from: &Path, stem: &str) -> std::io::Result<PathBuf> {
+    let (dir, name) = quarantine_layout(from, stem);
+    let max = max_quarantine_index(&dir, &name);
+    // 残局判据先于编号分配：副本可能是任意一个已存在编号，逐个比 inode
+    if let Some(max) = max {
+        for index in 0..=max {
+            let to = quarantine_path(&dir, &name, index);
+            if same_file(from, &to) {
+                std::fs::remove_file(from)?;
+                // 改名转换要落盘目录项：否则掉电后原件可能复活，目标重新被判成 busy
+                best_effort_dir_fsync(from);
+                note_rename_unverified(from, &to);
+                return Ok(to);
+            }
+        }
+    }
+    let start = max.map_or(0, |m| m.saturating_add(1));
+    for index in start..u32::MAX {
+        let to = quarantine_path(&dir, &name, index);
+        match std::fs::hard_link(from, &to) {
+            Ok(()) => {
+                std::fs::remove_file(from)?;
+                best_effort_dir_fsync(from);
+                note_rename_unverified(from, &to);
+                return Ok(to);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(_) => match rename_over_placeholder(from, &to) {
+                Ok(()) => {
+                    best_effort_dir_fsync(from);
+                    note_rename_unverified(from, &to);
+                    return Ok(to);
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(e) => return Err(e),
+            },
+        }
+    }
+    Err(std::io::Error::other("no free quarantine name available"))
+}
+
+/// 两个路径是否指向同一个 inode。两侧都必须是普通文件（`symlink_metadata`，不跟随
+/// 链接）：跟随链接的话，指向原件的隔离条目会与原件同 inode，随后删掉原件的最后一个
+/// 名字，只留下一条 dangling 链接。非 unix 平台没有可靠的判定手段，一律按"不同文件"
+/// 处理——保守方向是不动别人的文件（顺延一个名字），而不是猜测后覆盖
+#[cfg(unix)]
+fn same_file(a: &Path, b: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    let regular = |p: &Path| std::fs::symlink_metadata(p).ok().filter(|m| m.file_type().is_file());
+    match (regular(a), regular(b)) {
+        (Some(x), Some(y)) => (x.dev(), x.ino()) == (y.dev(), y.ino()),
+        _ => false,
+    }
+}
+
+#[cfg(not(unix))]
+fn same_file(_a: &Path, _b: &Path) -> bool {
+    false
+}
+
+// 落盘文件名的词表：journal / log / lock 三类伴随文件只在这里定义一次，派生点（身份构造、
+// 日志落点）都取自这里。命名空间只在宏体里出现一次，各常量只提供自己的 stem
 macro_rules! sidecar_suffix {
     ($stem:literal) => {
         concat!(".diskedit.", $stem)
@@ -454,21 +386,43 @@ macro_rules! sidecar_suffix {
 
 pub(crate) const JOURNAL_SUFFIX: &str = sidecar_suffix!("journal");
 
-pub(crate) const CHECKPOINT_SUFFIX: &str = sidecar_suffix!("ckpt");
-
+/// 块设备没有记录目录（身份 `Unusable`）时的锁文件名后缀
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
 pub(crate) const LOCK_SUFFIX: &str = sidecar_suffix!("lock");
 
 pub(crate) const LOG_SUFFIX: &str = sidecar_suffix!("log");
 
-/// 暂存文件前缀：原子写先写它、再 rename 到正式落点（见 `crate::movepart::atomic_write_ckpt`）；
-/// 打开可写目标时也按它清掉崩溃残骸。前缀之后紧跟目标自己的 token（[`ckpt_temp_prefix`]）——
-/// 落点目录可能是所有镜像或所有盘共用的，没有这个 token 就分不出残骸属于谁
-pub(crate) const CKPT_TMP_PREFIX: &str = sidecar_suffix!("ckpt.tmp.");
+/// 镜像旁记录目录的后缀：镜像 `/a/b.img` ⇒ 目录 `/a/b.img.diskedit/`
+pub(crate) const RECORD_SUFFIX: &str = ".diskedit";
 
-/// 某个 checkpoint 落点的暂存文件名前缀（含目标 token）。原子写按它拼出暂存名，
-/// 清扫按它认领残骸：两者必须同源，否则"清理"会删掉别的目标的在途写入
-pub(crate) fn ckpt_temp_prefix(ckpt: &Path) -> String {
-    format!("{CKPT_TMP_PREFIX}{}.", key_token(&ckpt.to_string_lossy()))
+/// 记录目录内的记录文件名
+pub(crate) const RECORD_NAME: &str = "record";
+
+/// 记录目录内的记录级锁文件名
+pub(crate) const RECORD_LOCK_NAME: &str = "record.lock";
+
+/// 隔离区条目名：记录目录内的隐藏名，`abandon` 产生 `.abandoned`，`undo` 产生 `.torn`
+pub(crate) const QUARANTINE_ABANDONED: &str = ".abandoned";
+
+pub(crate) const QUARANTINE_TORN: &str = ".torn";
+
+/// 隔离条目的产生者：两者都表示"记录已不在正式名上"，但一个是被放弃回滚能力，
+/// 一个是撕裂尾被回放后归档
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum QuarantineMark {
+    Abandoned,
+    Torn,
+}
+
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+impl QuarantineMark {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Abandoned => "abandoned",
+            Self::Torn => "torn",
+        }
+    }
 }
 
 /// 16 字节 Disk GUID → 大写无连字符十六进制
@@ -479,7 +433,8 @@ pub(crate) fn guid_hex(g: &[u8; 16]) -> String {
 /// 身份键 → 文件名安全的 token：保留 ASCII 字母数字与 `.` `-` `_`，其余（含路径分隔符）
 /// 换成 `_` 并截断到 32 字符，末尾附值的 CRC32——身份可能是 loop 的 backing 路径，
 /// 原样落盘会带分隔符、可能超长，而截断与替换会令两个不同身份撞同一个名字。
-/// 消费者是块设备身份链与 checkpoint 暂存文件命名
+/// 消费者是块设备身份的落点命名
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
 pub(crate) fn key_token(value: &str) -> String {
     let mut token: String = value
         .chars()
@@ -495,13 +450,14 @@ impl TargetIdentity {
     /// literal = 用户给的路径，只用于日志命名（base）。两者不同（路径含符号链接或非规范
     /// 化成分）不影响落点：身份只认 realpath 指向的那个文件
     pub(crate) fn image_at(canonical: &Path, literal: &Path) -> Self {
+        let record_dir = suffix_path(canonical, RECORD_SUFFIX);
         Self {
             kind: TargetKind::Image,
             base: literal.to_path_buf(),
             canonical: canonical.to_path_buf(),
             journal: suffix_path(canonical, JOURNAL_SUFFIX),
-            checkpoint: suffix_path(canonical, CHECKPOINT_SUFFIX),
-            lock: suffix_path(canonical, LOCK_SUFFIX),
+            record: Some(record_dir.join(RECORD_NAME)),
+            lock: record_dir.join(RECORD_LOCK_NAME),
             backing_fp: None,
         }
     }
@@ -616,7 +572,10 @@ impl TargetIdentity {
             return Self::loop_backed(path, raw);
         }
         let disk_key = block_keys(node, path).map_err(|e| e.to_string())?;
-        Ok(Self::from_block_keys(path, disk_key))
+        // 第 24、25 条：记录目录由 WWN / EUI / serial 派生的 identity-hash 决定；
+        // dm / md / 只有 major:minor 的目标没有目录，记录落点为 None，写命令退 6
+        let stable = block_stable_identity(node);
+        Ok(Self::from_block_parts(path, disk_key, stable.record_path()))
     }
 
     /// 非 Linux 平台没有 sysfs，块设备判定恒 false，本入口不会到达。非 Linux 上没有块
@@ -629,24 +588,32 @@ impl TargetIdentity {
 
     /// 非 loop 块设备的身份构造。**盘级**：journal / checkpoint / lock 全部按所在整设备
     /// 派生——分区号属于操作，不进落盘键，`/dev/sdb:2`（整盘节点 + 后缀）与
-    /// `/dev/sdb2`（分区节点）由此共享同一现场
-    #[cfg(any(target_os = "linux", test))] // 非 Linux 上块设备身份只存在于测试
+    /// `/dev/sdb2`（分区节点）由此共享同一现场。
+    /// 生产路径统一从 `resolve` 进入，这里只供测试构造固定身份
+    #[cfg(test)]
     pub(crate) fn from_block_keys(path: &Path, disk_key: String) -> Self {
+        Self::from_block_parts(path, disk_key, None)
+    }
+
+    /// 块设备身份构造：`record` 为 None 表示身份为 `Unusable`（dm / md / 无可读
+    /// 的 WWN / EUI / serial）。journal / checkpoint / 锁都按盘键派生——分区号属于
+    /// 记录归属，不进锁键；`/dev/sdb` 与 `/dev/sdb1` 由此共用一把锁，而记录目录
+    /// 仍按各自的目标身份分开（第 24、25 条）
+    #[cfg(any(target_os = "linux", test))]
+    pub(crate) fn from_block_parts(path: &Path, disk_key: String, record: Option<PathBuf>) -> Self {
         let stable = key_token(&disk_key);
         let dir = state_dir();
         let journal = dir.join(format!("{stable}{JOURNAL_SUFFIX}"));
-        let checkpoint = dir.join(format!("{stable}{CHECKPOINT_SUFFIX}"));
+        let lock = dir.join(format!("{stable}{LOCK_SUFFIX}"));
         Self {
             kind: TargetKind::Block,
             base: path.to_path_buf(),
             canonical: path.to_path_buf(),
             journal,
-            checkpoint,
-            // 锁按**所在整设备**派生，与 journal / checkpoint 的盘级键一致：
-            // 独占权针对盘（分区表属于盘），于是"离线以分区节点为目标"与"在线对同一
-            // 分区"落到同一把锁上。锁文件是纯运行时 artifact（重启自清也无妨），残留
-            // 不构成阻挡——判据是"锁取不取得到"，不是"文件在不在"（见 targetlock）
-            lock: dir.join(format!("{stable}{LOCK_SUFFIX}")),
+            record,
+            // 锁文件是纯运行时 artifact（重启自清也无妨），残留不构成阻挡——
+            // 判据是"锁取不取得到"，不是"文件在不在"（见 targetlock）
+            lock,
             backing_fp: None,
         }
     }
@@ -677,22 +644,19 @@ impl TargetIdentity {
         &self.journal
     }
 
+    /// 单文件恢复记录的落点；块设备在身份为 `Unusable` 时为 `None`
+    pub(crate) fn record_path(&self) -> Option<&Path> {
+        self.record.as_deref()
+    }
+
     /// 独占锁的落点。恒有值：取锁失败即拒绝，不提供"没有锁落点"这种状态
     pub(crate) fn lock_path(&self) -> &Path {
         &self.lock
     }
 
-    /// 镜像目标的**数据文件**路径；块设备给 `None`。锁文件按 canonical path 派生，
-    /// 硬链接（同一 inode 的另一条路径）因此会各拿一把锁——对数据文件自身再上一把
-    /// inode 级锁才把同一份数据收敛到一把锁。块设备没有第二道凭据可加：写打开即
-    /// `O_EXCL`，已覆盖同 inode 的不同路径
-    #[cfg(unix)] // 消费者是 TargetLock 的 inode 级凭据，仅 unix 上取
-    pub(crate) fn image_data_path(&self) -> Option<&Path> {
-        matches!(self.kind, TargetKind::Image).then_some(self.canonical.as_path())
-    }
-
-    /// 再次打开**同一个数据文件**时用的路径：镜像取打开时刻由 fd 解析出的名字，
-    /// 块设备取节点路径（身份本就由 fd 的 rdev 派生）
+    /// 再次打开**同一个目标**时用的路径：镜像取打开时刻由 fd 解析出的名字，
+    /// 块设备取节点路径（身份本就由 fd 的 rdev 派生）。目标锁会对这条路径打开的
+    /// 句柄再加一道 inode 级锁，硬链接与符号链接别名因此收敛到同一把锁
     pub(crate) fn data_path(&self) -> &Path {
         if matches!(self.kind, TargetKind::Image) {
             &self.canonical
@@ -701,16 +665,11 @@ impl TargetIdentity {
         }
     }
 
-    /// checkpoint 的唯一落点：镜像放在目标旁，块设备落在 `state_dir()` 下。写、读、删
-    /// 都是这一个路径
-    pub(crate) fn checkpoint_path(&self) -> &Path {
-        &self.checkpoint
-    }
-
     /// 日志落点：镜像 = 目标路径旁的兄弟文件；块设备 = `<state_dir>/<名>` 加同一后缀，
-    /// 名取可读的 GPT Disk GUID（与 checkpoint 同源），读不到表时退到 devname。
+    /// 名取可读的 GPT Disk GUID，读不到表时退到 devname。
     ///
-    /// 与 journal / checkpoint 的差别只有一处：日志只增、不参与恢复，名字也保持既有约定
+    /// 与 journal 的差别只有一处：日志在单个文件内只追加、不参与恢复（打开时按上限
+    /// 轮转一代，见 `support.rs` 的 `Logger`），名字也保持既有约定
     /// 不变——改名会打断已写下日志的连续性。落点只在此处拼装，调用方不得自行拼 `state_dir()`
     pub(crate) fn log_path(&self, disk_guid: Option<[u8; 16]>) -> PathBuf {
         if self.kind == TargetKind::Image {
@@ -723,13 +682,6 @@ impl TargetIdentity {
         };
         state_dir().join(format!("{name}{LOG_SUFFIX}"))
     }
-}
-
-/// 尽力创建目录：失败不在此处报错——真正的失败会在随后打开文件时以更具体的
-/// 错误（完整路径 + 原因）暴露，比这里笼统的 EACCES 更有诊断价值
-#[allow(clippy::let_underscore_must_use)] // 有意忽略：失败在打开文件时以更具体错误暴露
-pub(crate) fn best_effort_mkdir(dir: &Path) {
-    let _ = std::fs::create_dir_all(dir);
 }
 
 /// 目标是否为**分区节点**（sysfs `partition` 属性存在且可解析）。镜像恒 false。
@@ -752,40 +704,5 @@ pub(crate) fn target_is_partition_node(path: &Path) -> bool {
     {
         let _ = path;
         false
-    }
-}
-
-/// 暂存文件算"陈旧"的岁数：一次 ckpt 写入是毫秒级，正常路径下 rename 已把它带走，
-/// 超过这个岁数还留在原地的只可能是进程被 SIGKILL 打断留下的残骸
-pub(crate) const CKPT_TMP_STALE_AFTER: std::time::Duration = std::time::Duration::from_secs(3600);
-
-/// 打开**可写**目标时清掉落点目录里的陈旧 checkpoint 暂存文件。
-/// 按岁数判而不看 PID：state_dir 是所有盘共用的落点，同目录可能有别的进程正在写，
-/// 它那份暂存文件是活的——岁数阈值把"正在写"与"崩溃残骸"分开（取不到 mtime，含落在
-/// 未来的，一律当不陈旧，宁可不删）。
-/// 尽力而为：目录读不到、元数据拿不到、删不掉都不拦打开目标
-#[allow(clippy::let_underscore_must_use)] // 有意忽略：删不掉就留到下次打开再清
-pub(crate) fn sweep_stale_ckpt_temps(identity: &TargetIdentity) {
-    // 这里只为拿落点目录做清理
-    let ckpt = identity.checkpoint_path();
-    // 只认领本目标的暂存文件：同一目录里可能有别的镜像（或所有盘共用的 state_dir），
-    // 按裸前缀清扫会把它们的残骸一并删掉，而其中一份可能正等着 rename
-    let prefix = ckpt_temp_prefix(ckpt);
-    let Some(dir) = ckpt.parent() else { return };
-    let Ok(entries) = std::fs::read_dir(dir) else { return };
-    for entry in entries.flatten() {
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if !name.starts_with(prefix.as_str()) {
-            continue;
-        }
-        let stale = entry
-            .metadata()
-            .and_then(|m| m.modified())
-            .ok()
-            .and_then(|t| t.elapsed().ok())
-            .is_some_and(|age| age >= CKPT_TMP_STALE_AFTER);
-        if stale {
-            let _ = std::fs::remove_file(entry.path());
-        }
     }
 }

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 缩容后回读**实际落点**：工具成功返回只说明它没报错，不说明 FS 落在我们请求的尺寸上。
+# 缩容后回读**实际落点**：工具成功返回只说明它没报错，不说明 FS 落在请求的尺寸上。
 # 覆盖四条：正常回读（请求值 = 实际落点）、工具向下取整（实际 < 请求值）、
 # 回读到的落点大于请求值（工具行为不符合预期，分区不缩）、回读拿不到落点
 # （缩容可能已完成但落点无法证实：表不写、分区保持原尺寸，落一条待办而不是报失败）。
@@ -10,8 +10,7 @@
 source "$(dirname "$0")/lib.sh"
 require_fake_bin
 
-T=/var/tmp/t42.img
-track_file "$T"
+img T t42.img
 
 FAKE=$FAKE_TOOL_DIR
 cleanup_hook() { rm -rf "$FAKE" 2>/dev/null; }
@@ -23,10 +22,11 @@ fake() { # $1=名  $2=脚本体
 }
 
 setup_gpt() {
-    rm -f "$T" "$T"$SIDECAR_GLOB
+    rm -rf "$T" "$T"$SIDECAR_GLOB
     truncate -s 512M "$T"
     $B new "$T" --yes >/dev/null
-    $B create "$T" --size 400M --name p1 --fs ext4 --yes >/dev/null 2>&1
+    $B add "$T" 400M --align mib --name p1 --yes >/dev/null 2>&1
+    $B mkfs "$T":1 ext4 --yes >/dev/null 2>&1
 }
 
 # 分区 1 的字节数（info 输出里盘与分区各有一处 size_bytes，取分区那条）
@@ -57,7 +57,7 @@ case "$OUT" in
 esac
 
 echo
-echo "===== C: 回读落点大于请求值 → 工具行为不符合预期，分区不缩 → 30 ====="
+echo "===== C: 回读落点大于请求值 → 工具行为不符合预期，分区不缩 → 5 ====="
 setup_gpt
 BEFORE=$(pt1)
 rm -rf "$FAKE"; mkdir -p "$FAKE"
@@ -69,7 +69,7 @@ echo "Block size:               4096"'
 OUT=$($BFK resize "$T":1 300M --yes 2>&1); E=$?
 echo "exit=$E"
 echo "$OUT" | sed 's/^/    /'
-exp "$E" 30 "落点超出请求值不是成功（可能已写盘，带警示）"
+exp "$E" 5 "落点超出请求值不是成功（可能已写盘，带警示）"
 case "$OUT" in
     *4095999995904*) echo "C reported actual size OK;";;
     *) echo "C actual size missing (BAD)"; rc=1;;
@@ -81,7 +81,7 @@ esac
 assert_eq "$(pt1)" "$BEFORE" "C 拒绝必须发生在写表之前（分区尺寸未变）"
 
 echo
-echo "===== D: 回读拿不到落点 → 落一条 fs shrink 待办，表不写、分区保持原尺寸 → 20 ====="
+echo "===== D: 回读拿不到落点 → 落一条 fs shrink 待办，表不写、分区保持原尺寸 → 5 ====="
 setup_gpt
 rm -rf "$FAKE"; mkdir -p "$FAKE"
 # 只给 Block size（预查要用），回读要的 Block count 缺失 = 回读拿不到落点
@@ -90,7 +90,7 @@ echo "Block size:               4096"'
 OUT=$($BFK resize "$T":1 300M --yes 2>&1); E=$?
 echo "exit=$E"
 echo "$OUT" | sed 's/^/    /'
-exp "$E" 20 "回读不出来不是缩容失败，改出一条待办"
+exp "$E" 5 "回读不出来不是缩容失败，改出一条待办"
 case "$OUT" in *"fs shrink"*) echo "D pending labelled OK";; *) echo "D pending missing (BAD)"; rc=1;; esac
 case "$OUT" in *"could not be read back"*) echo "D unverifiable wording OK";; *) echo "D wording missing (BAD)"; rc=1;; esac
 case "$OUT" in
@@ -101,10 +101,11 @@ assert_eq "$(pt1)" '"size_bytes":419430400' "D 落点未证实不写表（分区
 
 echo
 echo "===== E: MBR 路径同样报出请求值与实际落点 → 0 ====="
-rm -f "$T" "$T"$SIDECAR_GLOB
+rm -rf "$T" "$T"$SIDECAR_GLOB
 truncate -s 512M "$T"
-$B new "$T" --table msdos --yes >/dev/null
-$B create "$T" --size 400M --fs ext4 --yes >/dev/null 2>&1
+$B new "$T" --table mbr --yes >/dev/null
+$B add "$T" 400M --align mib --yes >/dev/null 2>&1
+$B mkfs "$T":1 ext4 --yes >/dev/null 2>&1
 OUT=$($B resize "$T":1 300M --yes 2>&1); E=$?
 echo "exit=$E"
 echo "$OUT" | sed 's/^/    /'
@@ -115,7 +116,7 @@ case "$OUT" in
 esac
 
 echo
-echo "===== F: 预查命令把块大小报成 0 → 写盘前拒绝，表不变 → 30 ====="
+echo "===== F: 预查命令把块大小报成 0 → 写盘前拒绝，表不变 → 4 ====="
 setup_gpt
 BEFORE=$(pt1)
 rm -rf "$FAKE"; mkdir -p "$FAKE"
@@ -126,7 +127,7 @@ echo "Block size:               0"'
 OUT=$($BFK resize "$T":1 300M --yes 2>&1); E=$?
 echo "exit=$E"
 echo "$OUT" | sed 's/^/    /'
-exp "$E" 30 "0 不是可用尺寸，预查拒绝"
+exp "$E" 4 "0 不是可用尺寸，预查拒绝"
 case "$OUT" in
     *"not a usable size"*) echo "F unusable-value reason OK";;
     *) echo "F reason missing (BAD)"; rc=1;;

@@ -104,21 +104,54 @@ pub(crate) fn canonical_headers(h: &RawHeader, last_lba: u64, backup_array_lba: 
 /// 崩溃安全四结构序列：备数组 → 备头 → 主数组 → 主头，每步 sync。
 /// 每个中间落点都留有一份 CRC 自洽的表；主备两份各自自洽而内容分叉时 CRC 检不出
 /// （不一致只出现在跨副本比较），解析按主副本优先收敛——中断的代价是本次提交丢失，
-/// 不是表损坏。
-pub(crate) fn commit_gpt(src: &mut WriteSource, g: &RawGpt, last_lba: u64) -> io::Result<()> {
+/// 不是表损坏。仅测试构建可见：生产路径由命令层装配后执行。
+#[cfg(test)]
+pub(crate) fn commit_gpt(src: &mut WriteSource, g: &RawGpt, last_lba: u64) -> Result<(), RunOutcome> {
     commit_table(src, g.ss, &g.header, &g.entries, last_lba)
 }
 
-/// 崩溃安全四结构序列的唯一实现处：`commit_gpt`（解析侧产物）与
-/// [`crate::geometry::ValidatedGeometry::commit`]（写入路径的可操作几何）都走这里，
-/// 于是"提交一张表"只有一份序列、一份几何推导
+/// 已构造好的四段字节与落点：写前重读复核之后才交给 [`write_table`]。
+#[cfg(test)]
+struct PreparedTable {
+    ss: u64,
+    backup_array_lba: u64,
+    last_lba: u64,
+    array_bytes: Vec<u8>,
+    backup_header: Vec<u8>,
+    primary_header: Vec<u8>,
+}
+
+/// 崩溃安全四结构的参考序列（测试夹具用）：`commit_gpt` 与
+/// [`crate::geometry::ValidatedGeometry::commit`] 都走这里。
+///
+/// 生产写入不经过本函数：命令层把四段字节装配进 `TableStep`，由
+/// `execution::table` 按步骤的写入序落盘并做写前/写后 regions 比对。
+/// 本函数保留为测试的独立参照——它自己读表、算字节、写、读回，与被测路径不共享代码。
+///
+/// 首笔写盘前重读三扇区摘要并与入口记录的值比对（见 [`verify_table_stamp`]）。
+#[cfg(test)]
 pub(crate) fn commit_table(
     src: &mut WriteSource,
     ss: u64,
     header: &RawHeader,
     entries: &[GPTPartitionEntry],
     last_lba: u64,
-) -> io::Result<()> {
+) -> Result<(), RunOutcome> {
+    let stamp = table_stamp(src, ss)?;
+    let prepared = prepare_table(src, ss, header, entries, last_lba).map_err(RunOutcome::from)?;
+    verify_table_stamp(src, stamp, ss)?;
+    write_table(src, &prepared).map_err(RunOutcome::from)
+}
+
+/// 写盘前的全部校验与字节构造。本函数不写盘。
+#[cfg(test)]
+fn prepare_table(
+    src: &FileSource,
+    ss: u64,
+    header: &RawHeader,
+    entries: &[GPTPartitionEntry],
+    last_lba: u64,
+) -> io::Result<PreparedTable> {
     // 几何只构造一次：数组字节数、扇区跨度、条目数与大小都取自它，不再各自乘一遍
     let geom = EntryArrayGeometry::new(ss, header.size_of_partition_entry, header.number_of_partition_entries, MAX_ARRAY_BYTES)?;
     // serialize_array 按 geom.entry_count 截断，多出的条目既不校验也不落盘：
@@ -181,26 +214,33 @@ pub(crate) fn commit_table(
         io::Error::new(io::ErrorKind::InvalidData, format!("the partition entries this write would produce are invalid: {e}"))
     })?;
 
-    src.write_at(backup_array_lba * ss, &array_bytes)?;
+    Ok(PreparedTable { ss, backup_array_lba, last_lba, array_bytes, backup_header: bh, primary_header: ph })
+}
+
+/// 四段字节按序落盘并读回复核。调用前必须已过 [`verify_table_stamp`]。
+#[cfg(test)]
+fn write_table(src: &mut WriteSource, p: &PreparedTable) -> io::Result<()> {
+    let ss = p.ss;
+    src.write_at(p.backup_array_lba * ss, &p.array_bytes)?;
     src.sync_all()?;
 
-    src.write_at(last_lba * ss, &bh)?;
+    src.write_at(p.last_lba * ss, &p.backup_header)?;
     src.sync_all()?;
 
-    src.write_at(2 * ss, &array_bytes)?;
+    src.write_at(2 * ss, &p.array_bytes)?;
     src.sync_all()?;
 
-    src.write_at(ss, &ph)?;
+    src.write_at(ss, &p.primary_header)?;
     src.sync_all()?;
     // 读回复核：`sync_all` 只是"设备声称已落盘"，缓存丢写与镜像层短写都不在其中。
     // 这里比对的是刚写出的四段字节，证明的只是"这四次写调用没有被吞掉"——
     // 它不证明写出的表是解析侧读得回来的表；后者由上方写前的 validate_geometry /
     // validate_entries 与修复路径的写后重解析各自承担
     for (want, off, what) in [
-        (&array_bytes, backup_array_lba * ss, "backup GPT entry array"),
-        (&bh, last_lba * ss, "backup GPT header"),
-        (&array_bytes, 2 * ss, "primary GPT entry array"),
-        (&ph, ss, "primary GPT header"),
+        (&p.array_bytes, p.backup_array_lba * ss, "backup GPT entry array"),
+        (&p.backup_header, p.last_lba * ss, "backup GPT header"),
+        (&p.array_bytes, 2 * ss, "primary GPT entry array"),
+        (&p.primary_header, ss, "primary GPT header"),
     ] {
         let mut got = vec![0u8; want.len()];
         src.read_at(off, &mut got).map_err(|e| {
@@ -228,45 +268,10 @@ pub(crate) fn size_in_lba(total_sectors: u64) -> u32 {
     }
 }
 
-/// 保护 MBR（LBA0）：保留 BootCode 区 0..446，重写 446..510 与块内保留区。
-/// SizeInLBA = 逻辑块数 − 1（UEFI 2.10 §5.2.3 Table 5.4；单位是 logical block，非恒定
-/// 512 字节），超出 32 位表示范围才用 0xFFFFFFFF。本函数同时是规范化点：任何非规范值
-/// （stale / 512 口径）经此重写即收敛。
-///
-/// `ss` 是**该表自身**的逻辑块大小（不是容器的 `src.sector_size`）：两者不等时
-/// （4Kn 表放在 512 字节镜像里）按容器换算会整体差 8 倍。同一次写入同时覆盖
-/// `512..ss` 的块内保留区并按规范清零（Table 5.3 "Reserved … Set to zero"）
-pub fn ensure_protective_mbr(src: &mut WriteSource, ss: u64) -> io::Result<()> {
-    // 零扇区盘的 read_at(0) 只会撞出 UnexpectedEof，把"盘没有扇区"这件事
-    // 说成一次 I/O 意外：先于任何读盘把几何前提判掉
-    let total_sectors = src.size / ss;
-    if total_sectors == 0 {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "disk has zero sectors"));
-    }
+/// 保护 MBR 的新扇区内容：保留 `0..446` 的引导代码，重写槽位 1、`446..510` 余下槽位、
+/// 块内保留区与 `0x55AA` 签名。
+pub(crate) fn protective_mbr_image(lba0: &mut [u8], total_sectors: u64) {
     let want_size = size_in_lba(total_sectors);
-    let mut lba0 = vec![0u8; ss as usize];
-    src.read_at(0, &mut lba0)?;
-    let reserved_zero = lba0[512..].iter().all(|&b| b == 0);
-    if lba0[510] == 0x55 && lba0[511] == 0xAA && reserved_zero {
-        let rec = &lba0[446..462]; // 槽位 1（与下方写入位置一致）
-        // 与 pmbr_shape_valid 同口径：槽位 2-4 必须全零，否则 hybrid MBR 残留
-        // 会使 load_gpt 拒读 GPT（形状前置不满足），盘型判定就此失真
-        if lba0[462..510].iter().all(|&b| b == 0) && rec[4] == PROT_MBR_TYPE {
-            let start = rd_u32(rec, 8);
-            let size = rd_u32(rec, 12);
-            // 提前返回的判据必须覆盖下方重写会改动**每一个**字段：BootIndicator 与两个
-            // CHS 也在其中（UEFI 2.10 §5.2.3 Table 5.4：0x00 / 0x000200 / 0xFFFFFF）。
-            // 少查它们就会把"类型、起点、尺寸都对、余下字段非规范"的记录当作已合规，
-            // 本函数作为规范化点的承诺落空
-            let canonical = rec[0] == 0x00 && rec[1..4] == [0x00, 0x02, 0x00] && rec[5..8] == [0xFF, 0xFF, 0xFF];
-            // 已合规即一字不写（保留外层引导代码）。比较基准是**逻辑块**口径的 total，
-            // 故 512 口径值（PmbrSize::NeedsRepair{Compat512}）在此落空，会走到下面重写为规范值
-            if canonical && start == 1 && size == want_size {
-                return Ok(());
-            }
-        }
-    }
-    // 保留引导代码，重写 446..510、块内保留区与签名
     lba0[446..510].fill(0);
     lba0[512..].fill(0);
     let rec = &mut lba0[446..462];
@@ -278,19 +283,76 @@ pub fn ensure_protective_mbr(src: &mut WriteSource, ss: u64) -> io::Result<()> {
     rec[12..16].copy_from_slice(&want_size.to_le_bytes());
     lba0[510] = 0x55;
     lba0[511] = 0xAA;
-    src.write_at(0, &lba0)?;
-    src.sync_all()?;
+}
+
+/// 保护 MBR 需要规范化时给出整扇区的新内容，已合规时返回 `None`（一字不写）。
+/// 纯计算：只读 LBA0，不写盘。
+///
+/// 判据覆盖下方重写会改动的**每一个**字段：签名、槽位 2-4、块内保留区，以及槽位 1 的
+/// BootIndicator、两个 CHS、类型、起点与 SizeInLBA（UEFI 2.10 §5.2.3 Table 5.4）。
+/// 少查其中任何一项，都会把"其余字段非规范"的记录当作已合规。
+///
+/// `ss` 是**该表自身**的逻辑块大小（不是容器的 `src.sector_size`）：两者不等时
+/// （4Kn 表放在 512 字节镜像里）按容器换算会整体差 8 倍。
+pub(crate) fn protective_mbr_content(
+    src: &FileSource,
+    ss: u64,
+) -> Result<Option<Vec<u8>>, RunOutcome> {
+    // 零扇区盘的 read_at(0) 只会撞出 UnexpectedEof，把"盘没有扇区"这件事
+    // 说成一次 I/O 意外：先于任何读盘把几何前提判掉
+    let total_sectors = src.size / ss;
+    if total_sectors == 0 {
+        return Err(RunOutcome::from(io::Error::new(io::ErrorKind::InvalidData, "disk has zero sectors")));
+    }
+    let want_size = size_in_lba(total_sectors);
+    let mut lba0 = vec![0u8; ss as usize];
+    src.read_at(0, &mut lba0).map_err(RunOutcome::from)?;
+    let reserved_zero = lba0[512..].iter().all(|&b| b == 0);
+    if lba0[510] == 0x55 && lba0[511] == 0xAA && reserved_zero {
+        let rec = &lba0[446..462]; // 槽位 1（与下方写入位置一致）
+        // 与 pmbr_shape_valid 同口径：槽位 2-4 必须全零，否则 hybrid MBR 残留
+        // 会使 load_gpt 拒读 GPT（形状前置不满足），盘型判定就此失真
+        if lba0[462..510].iter().all(|&b| b == 0) && rec[4] == PROT_MBR_TYPE {
+            let start = rd_u32(rec, 8);
+            let size = rd_u32(rec, 12);
+            let canonical = rec[0] == 0x00 && rec[1..4] == [0x00, 0x02, 0x00] && rec[5..8] == [0xFF, 0xFF, 0xFF];
+            // 比较基准是**逻辑块**口径的 total，故 512 口径值
+            // （PmbrSize::NeedsRepair{Compat512}）在此落空，会走到下面重写为规范值
+            if canonical && start == 1 && size == want_size {
+                return Ok(None);
+            }
+        }
+    }
+    // 保留引导代码，重写 446..510、块内保留区与签名
+    protective_mbr_image(&mut lba0, total_sectors);
+    Ok(Some(lba0))
+}
+
+/// 保护 MBR（LBA0）：内容由 [`protective_mbr_content`] 算定；已合规即一字不写。
+/// 首次写盘前重读三扇区摘要并与入口记录的值比对（见 [`verify_table_stamp`]）。
+///
+/// 仅测试构建可见：生产路径由 `assembly::assemble_repair_plan` 装配成
+/// `TableStep::protective_mbr`，写入与前后比对都在执行器里。
+#[cfg(test)]
+pub fn ensure_protective_mbr(src: &mut WriteSource, ss: u64) -> Result<(), RunOutcome> {
+    let stamp = table_stamp(src, ss)?;
+    let Some(lba0) = protective_mbr_content(src, ss)? else {
+        return Ok(());
+    };
+    verify_table_stamp(src, stamp, ss)?;
+    src.write_at(0, &lba0).map_err(RunOutcome::from)?;
+    src.sync_all().map_err(RunOutcome::from)?;
     // 读回复核：写调用与 sync 只说明字节交给了设备，缓存丢写或镜像层短写要在重读
     // 时才可见。LBA0 被丢掉而这里报成功，盘随后会被判成 GPT damaged，写命令全拒
     let mut got = vec![0u8; lba0.len()];
     src.read_at(0, &mut got).map_err(|e| {
-        io::Error::new(e.kind(), format!("protective MBR read-back failed: {e} — the write may not have landed"))
+        RunOutcome::from(io::Error::new(e.kind(), format!("protective MBR read-back failed: {e} — the write may not have landed")))
     })?;
     if got != lba0 {
-        return Err(io::Error::new(
+        return Err(RunOutcome::from(io::Error::new(
             io::ErrorKind::InvalidData,
             "protective MBR differs from what was written — the device or image layer dropped the write",
-        ));
+        )));
     }
     Ok(())
 }

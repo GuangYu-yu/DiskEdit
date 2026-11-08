@@ -5,21 +5,16 @@
 source "$(dirname "$0")/lib.sh"
 require_fault_bin
 
-T=/var/tmp/t23.img
-ESP=/mnt/t23esp
-BOOT=/mnt/t23boot
-LOG=/var/tmp/t23qlog
+img T t23.img
+ESP=$WSL_ROOT/mnt/t23esp
+BOOT=$WSL_ROOT/mnt/t23boot
+LOG=$WSL_ROOT/t23qlog
 KERNEL=/var/tmp/vmlinuz-virt
 INITRD=/var/tmp/initramfs-virt
 OVMF=/usr/share/ovmf/OVMF.fd
-track_file "$T"
-
-rm -f "$T" "$T"$SIDECAR_GLOB "$LOG".* 2>/dev/null
 
 cleanup_hook() {
-  rm -f /var/lib/diskedit/* 2>/dev/null
   rmdir "$ESP" "$BOOT" 2>/dev/null
-  rm -f "$LOG".* 2>/dev/null
 }
 
 missing=0
@@ -41,10 +36,10 @@ fi
 setup() {
   truncate -s 2G "$T"
   $B new "$T" --yes >/dev/null
-  $B add "$T" --start 2048 --end 411647 --name ESP \
-      --type C12A7328-F81F-11D2-BA4B-00A0C93EC93B >/dev/null
-  $B add "$T" --start 411648 --end 1640447 --name boot >/dev/null
-  $B add "$T" --start 1640448 --end 2459647 --name root >/dev/null
+  $B add "$T" 209715200 --start 2048 --name ESP \
+      --type-guid C12A7328-F81F-11D2-BA4B-00A0C93EC93B >/dev/null
+  $B add "$T" 629145600 --start 411648 --name boot >/dev/null
+  $B add "$T" 419430400 --start 1640448 --name root >/dev/null
   local LD=$(lo_attach "$T")
   mkfs.vfat -F32 -n ESP "${LD}p1" >/dev/null
   mkfs.ext4 -q -L boot "${LD}p2"
@@ -102,14 +97,14 @@ qemu_boot baseline 60
 
 echo
 echo "########## 2: 搬移 boot 分区（内核所在）后启动 ##########"
-$B move "$T":2 --start 2600000 --chunk-size 4 --yes >/dev/null 2>&1; exp "$?" 0 "搬移 boot 分区"
+$B move "$T":2 --start 2600000 --chunk 4 --yes >/dev/null 2>&1; exp "$?" 0 "搬移 boot 分区"
 $B info "$T" | grep -o '"num":2,[^}]*}'
 qemu_boot after-move 60
 
 echo
 echo "########## 3: 搬移 ESP（GRUB 所在）后启动 ##########"
 # boot 搬走后其原位置(411648..1640447)空闲，ESP 移入其中一段
-$B move "$T":1 --start 411648 --chunk-size 4 --yes >/dev/null 2>&1; exp "$?" 0 "搬移 ESP 分区"
+$B move "$T":1 --start 411648 --chunk 4 --yes >/dev/null 2>&1; exp "$?" 0 "搬移 ESP 分区"
 $B info "$T" | grep -o '"num":1,[^}]*}'
 qemu_boot after-esp-move 60
 
@@ -123,9 +118,9 @@ echo
 echo "########## 5: 搬移中断 → 续传完成 → 启动（端到端）##########"
 setup   # 重建可引导盘
 # resize_part 路径的确定性崩溃注入（第 20 个 chunk 落盘后 abort）
-DISKEDIT_FAULT=rs-chunk:20 $BF move "$T":2 --start 2600000 --chunk-size 4 --yes >/dev/null 2>&1
+DISKEDIT_FAULT=chunk:20 $BF move "$T":2 --start 2600000 --chunk 4 --yes >/dev/null 2>&1
 exp "$?" 134 "注入中断（SIGABRT）"
-OUT=$($B move "$T":2 --start 2600000 --chunk-size 4 --yes 2>&1); E=$?
+OUT=$($B move "$T":2 --start 2600000 --chunk 4 --yes 2>&1); E=$?
 RESUMED=$(echo "$OUT" | grep -o 'resuming at chunk [0-9]*')
 echo "  resume: $RESUMED"
 exp "$E" 0 "续传重跑"

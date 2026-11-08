@@ -1,0 +1,12 @@
+target/
+Cargo.lock
+
+.trae/*
+*.log
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+tmp/
+src/.*
+.workbuddy/

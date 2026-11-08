@@ -1,24 +1,24 @@
 #!/usr/bin/env bash
 # 在线路径（挂载态）拒绝分支：resizefs 的形态判据 + 非 btrfs 在线缩容拒绝。
 # 每条拒绝之后核对「分区表 / FS 未被改动」（info 的 last_lba、dumpe2fs 的 block count×size）。
-# 退出码契约唯一定义在 src/outcome.rs:17-25（10=拒绝，本次未写盘）。
+# 退出码契约唯一定义在 src/outcome.rs:20-32（2=参数或命令语法错误，3=拒绝，本次未写盘）。
 # 依据以 `src/文件:行号` 标注在断言旁。
 source "$(dirname "$0")/lib.sh"
 require_bin
 
-T=/var/tmp/online_guards.img
-MP=/testmnt
-track_file "$T"
+img T online_guards.img
+MP=$TEST_MNT
 
 fs_bytes() { # 设备：Block count × Block size
   dumpe2fs -h "$1" 2>/dev/null | awk '/^Block count:/ {c=$3} /^Block size:/ {s=$3} END {print c*s}'
 }
 lba1() { $B info "$T" 2>/dev/null | grep -o '"last_lba":[0-9]*' | head -1; }
 
-rm -f "$T" "$T$JOURNAL_SUFFIX"
+rm -rf "$T" "$T"$SIDECAR_GLOB
 truncate -s 64M "$T"
 $B new "$T" --yes >/dev/null 2>&1; exp $? 0 "new（64MiB GPT）"
-$B create "$T" --size 16M --name p1 --fs ext4 --yes >/dev/null 2>&1; exp $? 0 "create 16MiB ext4 p1"
+$B add "$T" 16M --align mib --name p1 --yes >/dev/null 2>&1; exp $? 0 "add 16MiB p1"
+$B mkfs "$T":1 ext4 --yes >/dev/null 2>&1; exp $? 0 "mkfs ext4 p1"
 
 LD=$(lo_attach "$T") || { echo "  BAD  losetup 失败"; rc=1; exit 1; }
 mount_at "${LD}p1" "$MP" || { echo "  BAD  mount 失败"; rc=1; exit 1; }
@@ -29,27 +29,27 @@ FS0=$(fs_bytes "${LD}p1")
 
 echo "== 形态即模式：尺寸给法只属于挂载点形式 =="
 # src/cmd/fs.rs:167-172 —— :N 走离线分支，BYTES 在那里无消费点，显式拒绝而非静默忽略
-$B resizefs "$T":1 8M >/dev/null 2>&1; exp $? 10 "resizefs <target>:1 带尺寸拒绝"
+$B resizefs "$T":1 8M >/dev/null 2>&1; exp $? 2 "resizefs <target>:1 带尺寸拒绝"
 exp "$(lba1)" "$LAST0" "  拒绝后分区表未变（last_lba 一致）"
 
 # src/cmd/fs.rs:136-138 —— 挂载点形式不打开镜像，--sector-size 无消费点，显式拒绝
-$B resizefs "$MP" --sector-size 512 >/dev/null 2>&1; exp $? 10 "resizefs <mountpoint> --sector-size 拒绝"
+$B resizefs "$MP" --sector-size 512 >/dev/null 2>&1; exp $? 2 "resizefs <mountpoint> --sector-size 拒绝"
 exp "$(lba1)" "$LAST0" "  拒绝后分区表未变（last_lba 一致）"
 
 # src/cmd/mod.rs:181-185 —— 目标尺寸只有位置参数一种给法，--size 不在 resizefs 的白名单里
-$B resizefs "$MP" 8M --size 8M >/dev/null 2>&1; exp $? 10 "resizefs <mountpoint> --size 非本命令选项"
+$B resizefs "$MP" 8M --size 8M >/dev/null 2>&1; exp $? 2 "resizefs <mountpoint> --size 非本命令选项" # cli-surface: refused
 exp "$(lba1)" "$LAST0" "  拒绝后分区表未变（last_lba 一致）"
 
 echo "== resizefs 在线形式不改分区表 =="
 # src/online/flow.rs:190-199 —— 挂载点形式只扩文件系统，大于现分区的请求在任何写盘之前拒绝，并指向 resize
-$B resizefs "$MP" 32M >/dev/null 2>&1; exp $? 10 "resizefs <mountpoint> 越分区尺寸拒绝"
+$B resizefs "$MP" 32M >/dev/null 2>&1; exp $? 3 "resizefs <mountpoint> 越分区尺寸拒绝"
 exp "$(lba1)" "$LAST0" "  拒绝后分区表未变（last_lba 一致）"
 exp "$(fs_bytes "${LD}p1")" "$FS0" "  拒绝后 FS 未变（block count×size 一致）"
 
 echo "== 非 btrfs 在线缩容拒绝 =="
 # src/online/flow.rs:110-123 —— 仅 btrfs 可在线缩容；ext4 请求 8MiB < 现分区 16MiB
-# 走 Outcome::refused；src/cmd/fs.rs:150-156 将该 Outcome 映射为退出码 10（未写盘）
-$B resizefs "$MP" 8M >/dev/null 2>&1; exp $? 10 "ext4 在线缩容（8MiB < 16MiB 分区）拒绝"
+# 走 Outcome::refused；src/cmd/fs.rs:150-156 将该 Outcome 映射为退出码 3（未写盘）
+$B resizefs "$MP" 8M >/dev/null 2>&1; exp $? 3 "ext4 在线缩容（8MiB < 16MiB 分区）拒绝"
 exp "$(lba1)" "$LAST0" "  拒绝后分区表未变（last_lba 一致）"
 exp "$(fs_bytes "${LD}p1")" "$FS0" "  拒绝后 FS 未变（block count×size 一致）"
 

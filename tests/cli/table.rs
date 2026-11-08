@@ -1,5 +1,44 @@
 use super::*;
 
+/// Linux 数据分区类型 GUID（GPT 的 `add` 必须显式给类型）
+const DATA_GUID: &str = "0fc63daf-8483-4772-8e79-3d69d8477de4";
+
+/// 定点写入 MBR 主分区槽：`add` 只落在第一个能容纳 SIZE 的空洞，这些用例要的是
+/// 精确坐标。`parts` 为 `(起始 LBA, 扇区数, 类型字节)`，槽位从 1 起
+fn write_mbr_layout(img: &std::path::Path, parts: &[(u64, u32, u8)]) {
+    use std::io::{Seek, SeekFrom, Write};
+    let mut raw = vec![0u8; 512];
+    for (i, (start, sectors, os_type)) in parts.iter().enumerate() {
+        let off = 446 + i * 16;
+        raw[off + 4] = *os_type;
+        raw[off + 8..off + 12].copy_from_slice(&(*start as u32).to_le_bytes());
+        raw[off + 12..off + 16].copy_from_slice(&sectors.to_le_bytes());
+    }
+    raw[510] = 0x55;
+    raw[511] = 0xAA;
+    let mut f = std::fs::OpenOptions::new().write(true).open(img).unwrap();
+    f.seek(SeekFrom::Start(0)).unwrap();
+    f.write_all(&raw).unwrap();
+}
+
+/// 定点写入 GPT 条目（同样要精确坐标：GPT 的 `add` 显式给起点）
+fn write_gpt_layout(img: &std::path::Path, parts: &[(u64, u64)]) {
+    let mut cur = Cursor::new(vec![0u8; 8 * 1024 * 1024]);
+    let mut gpt = gptman::GPT::new_from(&mut cur, 512, [0xCD; 16]).unwrap();
+    for (i, (start, end)) in parts.iter().enumerate() {
+        gpt[i as u32 + 1] = gptman::GPTPartitionEntry {
+            partition_type_guid: [0x11; 16],
+            unique_partition_guid: [0x12 + i as u8; 16],
+            starting_lba: *start,
+            ending_lba: *end,
+            attribute_bits: 0,
+            partition_name: "".into(),
+        };
+    }
+    gpt.write_into(&mut cur).unwrap();
+    std::fs::write(img, with_protective_mbr(cur.into_inner())).unwrap();
+}
+
 #[test]
 fn new_add_del_roundtrip() {
     let dir = std::env::temp_dir().join(format!("diskedit_nad_{}", std::process::id()));
@@ -17,27 +56,25 @@ fn new_add_del_roundtrip() {
          String::from_utf8_lossy(&out.stderr).into_owned())
     };
 
-    // new：无 --yes 拒绝；带 --yes 成功
-    let (c, _, _) = run(&["new", img_s]);
-    assert_eq!(c, 10, "new without --yes must refuse");
+    // new：无 --yes 在解析期落 2；带 --yes 成功
+    let (c, _, stderr) = run(&["new", img_s]);
+    assert_eq!(c, 2, "new without --yes must be a usage error: {stderr}");
+    assert!(stderr.contains("--yes"), "{stderr}");
     let (c, _, _) = run(&["new", img_s, "--yes"]);
     assert_eq!(c, 0, "new with --yes must succeed");
 
-    // add：加两个 1MiB 对齐的分区
-    let (c, out, _) = run(&["add", img_s, "--start", "2048", "--end", "4095", "--name", "root"]);
+    // add：两个 1MiB 分区依次落进第一个可容纳空洞（2048 起，1MiB 对齐）
+    let (c, out, _) = run(&["add", img_s, "1M", "--align", "mib", "--name", "root", "--type-guid", DATA_GUID, "--yes"]);
     assert_eq!(c, 0, "add #1: {out}");
-    let (c, out, _) = run(&["add", img_s, "--start", "4096", "--end", "6143", "--name", "home"]);
+    let (c, out, _) = run(&["add", img_s, "1M", "--align", "mib", "--name", "home", "--type-guid", DATA_GUID, "--yes"]);
     assert_eq!(c, 0, "add #2: {out}");
 
-    // add：重叠拒绝（未对齐坐标 2049..6143 对齐后 4096..6143，与 home 撞）
-    let (c, _, stderr) = run(&["add", img_s, "--start", "2049", "--end", "6143"]);
-    assert_eq!(c, 10, "overlapping add must refuse");
-    assert!(stderr.contains("overlaps"), "{stderr}");
-
-    // add：越界拒绝（14336 已对齐；对齐后 end 16383 > last_usable 16350）
-    let (c, _, stderr) = run(&["add", img_s, "--start", "14336", "--end", "16400"]);
-    assert_eq!(c, 10, "out-of-usable-range add must refuse");
-    assert!(stderr.contains("outside usable"), "{stderr}");
+    // add：没有空洞容得下 ⇒ 拒绝，且一字未写（残余可用区 6144..14335，共 8192 扇区）
+    let before = std::fs::read(&img).unwrap();
+    let (c, _, stderr) = run(&["add", img_s, "6M", "--align", "mib", "--type-guid", DATA_GUID, "--yes"]);
+    assert_eq!(c, 3, "a SIZE no gap can hold must refuse");
+    assert!(stderr.contains("no aligned free gap fits"), "{stderr}");
+    assert_eq!(std::fs::read(&img).unwrap(), before, "a refusal must not write");
 
     // delete：删除 #1，info 不再含 root（JSON 结构化断言，非子串匹配）
     let (c, _, _) = run(&["delete", &format!("{img_s}:1"), "--yes"]);
@@ -60,11 +97,10 @@ fn new_add_del_roundtrip() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// 对齐放大到溢出的 start（`--start` 逼近 u64::MAX、`--align cyl`）必须拒绝：
-/// `div_ceil(unit) * unit` 会静默回绕成一个"从 0 起"的合法区间，把无法对齐的输入
-/// 伪装成能落盘的坐标
+/// SIZE 大到任何空洞都容纳不下时必须拒绝（拒绝先于任何写入），
+/// 不得把长度丢进 `start + len` 的回绕里
 #[test]
-fn huge_start_with_cyl_alignment_is_refused_not_wrapped() {
+fn oversized_add_is_refused() {
     let dir = std::env::temp_dir().join(format!("diskedit_ovf_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let img = dir.join("t.img");
@@ -78,10 +114,11 @@ fn huge_start_with_cyl_alignment_is_refused_not_wrapped() {
          String::from_utf8_lossy(&out.stderr).into_owned())
     };
     assert_eq!(run(&["new", img_s, "--yes"]).0, 0);
-    // cyl = 16065 扇区/柱面：上取整后乘法越过 u64::MAX
-    let (c, _, err) = run(&["add", img_s, "--start", "18446744073709551614", "--end", "18446744073709551615", "--align", "cyl", "--name", "x"]);
-    assert_eq!(c, 10, "an unalignable start must be refused, not wrapped: {err}");
-    assert!(err.contains("overflows the LBA range"), "{err}");
+    let before = std::fs::read(&img).unwrap();
+    let (c, _, err) = run(&["add", img_s, "18446744073709551615", "--align", "mib", "--type-guid", DATA_GUID, "--yes"]);
+    assert_eq!(c, 3, "a SIZE no gap can hold must be refused: {err}");
+    assert!(err.contains("no aligned free gap fits"), "{err}");
+    assert_eq!(std::fs::read(&img).unwrap(), before, "the refusal must not write");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -115,9 +152,9 @@ fn backup_header_fallback_and_repair() {
 
     let (c, _, e) = run(&["new", img_s, "--yes"]);
     assert_eq!(c, 0, "{e}");
-    let (c, _, e) = run(&["add", img_s, "--start", "2048", "--end", "6143", "--name", "a"]);
+    let (c, _, e) = run(&["add", img_s, "2M", "--align", "mib", "--name", "a", "--type-guid", DATA_GUID, "--yes"]);
     assert_eq!(c, 0, "{e}");
-    let (c, _, e) = run(&["add", img_s, "--start", "8192", "--end", "12287", "--name", "b"]);
+    let (c, _, e) = run(&["add", img_s, "2M", "--align", "mib", "--name", "b", "--type-guid", DATA_GUID, "--yes"]);
     assert_eq!(c, 0, "{e}");
 
     // 主头（LBA1）清零 → 必须回退盘尾备份头读到表
@@ -129,7 +166,7 @@ fn backup_header_fallback_and_repair() {
     assert_eq!(part_count(), 2, "partitions must be read from backup: {out}");
 
     // 写入路径应借修复重建主头
-    let (c, _, e) = run(&["set", &format!("{img_s}:1"), "name", "renamed"]);
+    let (c, _, e) = run(&["set", &format!("{img_s}:1"), "name", "renamed", "--yes"]);
     assert_eq!(c, 0, "write must succeed and repair primary: {e}");
     let mut f = std::fs::File::open(&img).unwrap();
     let gpt = gptman::GPT::find_from(&mut f).expect("primary header must be rebuilt");
@@ -165,19 +202,16 @@ fn new_gpt_refuses_to_clear_bytes_inside_an_existing_partition() {
     };
 
     // MBR 分区铺到盘尾（2048..16383，16384 扇区的镜像）：GPT 备份区落在这些字节里
-    let (c, _, e) = run(&["new", img_s, "--table", "msdos", "--yes"]);
-    assert_eq!(c, 0, "{e}");
-    let (c, _, e) = run(&["add", img_s, "--start", "2048", "--end", "16383"]);
-    assert_eq!(c, 0, "{e}");
+    write_mbr_layout(&img, &[(2048, 14336, 0x83)]);
 
     let before = std::fs::read(&img).unwrap();
     let (c, _, e) = run(&["new", img_s, "--table", "gpt", "--yes"]);
-    assert_eq!(c, 10, "--yes alone must not license clearing bytes inside a partition: {e}");
+    assert_eq!(c, 3, "--yes alone must not license clearing bytes inside a partition: {e}");
     assert!(e.contains("backup entry array"), "the collision must be named: {e}");
-    assert!(e.contains("--overwrite-partition-data"), "the flag that unblocks it must be named: {e}");
+    assert!(e.contains("--overwrite-data"), "the flag that unblocks it must be named: {e}");
     assert_eq!(std::fs::read(&img).unwrap(), before, "the refusal must not write");
 
-    let (c, _, e) = run(&["new", img_s, "--table", "gpt", "--yes", "--overwrite-partition-data"]);
+    let (c, _, e) = run(&["new", img_s, "--table", "gpt", "--yes", "--overwrite-data"]);
     assert_eq!(c, 0, "explicit consent to overwrite those bytes must go through: {e}");
     let (c, out, _) = run(&["info", img_s]);
     assert_eq!(c, 0);
@@ -185,15 +219,15 @@ fn new_gpt_refuses_to_clear_bytes_inside_an_existing_partition() {
     assert_eq!(v["label"], "gpt", "{out}");
     assert_eq!(v["partitions"].as_array().map(|a| a.len()), Some(0), "{out}");
 
-    // 独立镜像：GPT 最后一个分区止于 last_usable（16350）时，重建同款表不得误报
+    // 独立镜像：GPT 最后一个分区止于 last_usable（16350）时，重建同款表不落进备份区；
+    // 但盘上已有可识别的表，覆盖门仍要求 --overwrite-data
     let ok = dir.join("ok.img");
     std::fs::write(&ok, vec![0u8; 8 * 1024 * 1024]).unwrap();
+    write_gpt_layout(&ok, &[(2048, 16350)]);
     let ok_s = ok.to_str().unwrap();
     let (c, _, e) = run(&["new", ok_s, "--yes"]);
-    assert_eq!(c, 0, "{e}");
-    let (c, _, e) = run(&["add", ok_s, "--start", "2048", "--end", "16350"]);
-    assert_eq!(c, 0, "{e}");
-    let (c, _, e) = run(&["new", ok_s, "--yes"]);
+    assert_eq!(c, 3, "an existing GPT must need --overwrite-data: {e}");
+    let (c, _, e) = run(&["new", ok_s, "--yes", "--overwrite-data"]);
     assert_eq!(c, 0, "a partition ending at last_usable does not reach the backup area: {e}");
 
     let _ = std::fs::remove_dir_all(&dir);
@@ -212,21 +246,22 @@ fn msdos_table_flow() {
         (out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stdout).into_owned())
     };
 
-    let (c, _) = run(&["new", img_s, "--yes", "--table", "msdos"]);
+    let (c, _) = run(&["new", img_s, "--yes", "--table", "mbr"]);
     assert_eq!(c, 0);
     let (c, out) = run(&["info", img_s]);
     assert_eq!(c, 0);
     let v: serde_json::Value = serde_json::from_str(out.trim()).expect("info must emit valid JSON");
     assert_eq!(v["label"], "mbr");
 
-    let (c, _) = run(&["add", img_s, "--start", "2048", "--end", "4095", "--type", "0x83"]);
+    // MBR 条目默认 0x83（Linux 数据分区）；第二个槽的类型字节随后由 `set type` 改写
+    let (c, _) = run(&["add", img_s, "1M", "--align", "mib", "--yes"]);
     assert_eq!(c, 0);
-    let (c, _) = run(&["add", img_s, "--start", "4096", "--end", "6143", "--type", "0x0C"]);
+    let (c, _) = run(&["add", img_s, "1M", "--align", "mib", "--yes"]);
     assert_eq!(c, 0);
-    let (c, _) = run(&["add", img_s, "--start", "2049", "--end", "6143"]);
-    assert_eq!(c, 10, "overlapping msdos add must refuse");
+    let (c, _) = run(&["set", &format!("{img_s}:2"), "type", "0x0C", "--yes"]);
+    assert_eq!(c, 0);
 
-    let (c, _) = run(&["set", &format!("{img_s}:1"), "flag", "boot", "on"]);
+    let (c, _) = run(&["set", &format!("{img_s}:1"), "flag", "boot", "on", "--yes"]);
     assert_eq!(c, 0);
     let (c, _) = run(&["info", img_s]);
     assert_eq!(c, 0);
@@ -235,16 +270,20 @@ fn msdos_table_flow() {
     assert_eq!(raw[446], 0x80, "boot flag must be on slot 1");
 
     // hidden：0x0C ↔ 0x1C（util-linux pt-mbr-partnames.h 标准对）；0x83 无对应码拒绝
-    let (c, _) = run(&["set", &format!("{img_s}:2"), "flag", "hidden", "on"]);
+    let (c, _) = run(&["set", &format!("{img_s}:2"), "flag", "hidden", "on", "--yes"]);
     assert_eq!(c, 0);
     let raw = std::fs::read(&img).unwrap();
     assert_eq!(raw[446 + 16 + 4], 0x1C, "hidden must swap 0x0C -> 0x1C");
-    let (c, _) = run(&["set", &format!("{img_s}:2"), "flag", "hidden", "off"]);
+    let (c, _) = run(&["set", &format!("{img_s}:2"), "flag", "hidden", "off", "--yes"]);
     assert_eq!(c, 0);
     let raw = std::fs::read(&img).unwrap();
     assert_eq!(raw[446 + 16 + 4], 0x0C, "unhidden must restore 0x0C");
-    let (c, _) = run(&["set", &format!("{img_s}:1"), "flag", "hidden", "on"]);
-    assert_eq!(c, 10, "0x83 has no hidden counterpart, must refuse");
+    let (c, _) = run(&["set", &format!("{img_s}:1"), "flag", "hidden", "on", "--yes"]);
+    assert_eq!(c, 3, "0x83 has no hidden counterpart, must refuse");
+
+    // 剩余可用区 6144..32767（1MiB 对齐后共 13MiB）：14MiB 无空洞可容纳
+    let (c, _) = run(&["add", img_s, "14M", "--align", "mib", "--yes"]);
+    assert_eq!(c, 3, "an MBR add with no fitting gap must refuse");
 
     let (c, _) = run(&["delete", &format!("{img_s}:2"), "--yes"]);
     assert_eq!(c, 0);
@@ -278,41 +317,41 @@ fn set_type_cli() {
     let g_s = g.to_str().unwrap();
     let (c, _) = run(&["new", g_s, "--yes"]);
     assert_eq!(c, 0);
-    let (c, _) = run(&["add", g_s, "--start", "2048", "--end", "4095"]);
+    let (c, _) = run(&["add", g_s, "1M", "--align", "mib", "--type-guid", DATA_GUID, "--yes"]);
     assert_eq!(c, 0);
-    let (c, _) = run(&["set", &format!("{g_s}:1"), "type", "c12a7328f81f11d2ba4b00a0c93ec93b"]);
+    let (c, _) = run(&["set", &format!("{g_s}:1"), "type", "c12a7328f81f11d2ba4b00a0c93ec93b", "--yes"]);
     assert_eq!(c, 0);
     assert_eq!(gpt_type(&g), "C12A7328-F81F-11D2-BA4B-00A0C93EC93B");
     // 全零 GUID 是"未用条目"的形状：拒绝且不改盘
-    let (c, _) = run(&["set", &format!("{g_s}:1"), "type", "00000000-0000-0000-0000-000000000000"]);
-    assert_eq!(c, 10, "all-zero type GUID must refuse");
+    let (c, _) = run(&["set", &format!("{g_s}:1"), "type", "00000000-0000-0000-0000-000000000000", "--yes"]);
+    assert_eq!(c, 3, "all-zero type GUID must refuse");
     assert_eq!(gpt_type(&g), "C12A7328-F81F-11D2-BA4B-00A0C93EC93B", "refused set must not touch the table");
     // 类型字节不是 GUID 文本；空槽没有类型可改
-    let (c, _) = run(&["set", &format!("{g_s}:1"), "type", "0x83"]);
-    assert_eq!(c, 10, "GPT target must reject an MBR-style byte");
-    let (c, _) = run(&["set", &format!("{g_s}:2"), "type", "C12A7328-F81F-11D2-BA4B-00A0C93EC93B"]);
-    assert_eq!(c, 10, "empty slot must refuse");
+    let (c, _) = run(&["set", &format!("{g_s}:1"), "type", "0x83", "--yes"]);
+    assert_eq!(c, 3, "GPT target must reject an MBR-style byte");
+    let (c, _) = run(&["set", &format!("{g_s}:2"), "type", "C12A7328-F81F-11D2-BA4B-00A0C93EC93B", "--yes"]);
+    assert_eq!(c, 3, "empty slot must refuse");
 
     // MBR：类型字节直改，0x 前缀大小写不限
     let m = dir.join("m.img");
     std::fs::write(&m, vec![0u8; 8 * 1024 * 1024]).unwrap();
     let m_s = m.to_str().unwrap();
-    let (c, _) = run(&["new", m_s, "--yes", "--table", "msdos"]);
+    let (c, _) = run(&["new", m_s, "--yes", "--table", "mbr"]);
     assert_eq!(c, 0);
-    let (c, _) = run(&["add", m_s, "--start", "2048", "--end", "4095", "--type", "0x83"]);
+    let (c, _) = run(&["add", m_s, "1M", "--align", "mib", "--yes"]);
     assert_eq!(c, 0);
-    let (c, _) = run(&["set", &format!("{m_s}:1"), "type", "0X07"]);
+    let (c, _) = run(&["set", &format!("{m_s}:1"), "type", "0X07", "--yes"]);
     assert_eq!(c, 0);
     assert_eq!(std::fs::read(&m).unwrap()[446 + 4], 0x07, "type byte must land in slot 1");
     for bad in ["0x00", "0x05", "0x0F", "0x85"] {
-        let (c, _) = run(&["set", &format!("{m_s}:1"), "type", bad]);
-        assert_eq!(c, 10, "{bad} must be refused");
+        let (c, _) = run(&["set", &format!("{m_s}:1"), "type", bad, "--yes"]);
+        assert_eq!(c, 3, "{bad} must be refused");
     }
     assert_eq!(std::fs::read(&m).unwrap()[446 + 4], 0x07, "refused set must not touch slot 1");
-    let (c, _) = run(&["set", &format!("{m_s}:2"), "type", "0x07"]);
-    assert_eq!(c, 10, "empty slot must refuse");
-    let (c, _) = run(&["set", &format!("{m_s}:5"), "type", "0x07"]);
-    assert_eq!(c, 10, "slot 5 is outside the msdos primary range");
+    let (c, _) = run(&["set", &format!("{m_s}:2"), "type", "0x07", "--yes"]);
+    assert_eq!(c, 3, "empty slot must refuse");
+    let (c, _) = run(&["set", &format!("{m_s}:5"), "type", "0x07", "--yes"]);
+    assert_eq!(c, 3, "slot 5 is outside the msdos primary range");
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -336,36 +375,34 @@ fn msdos_user_resize() {
         (rd(off + 8), rd(off + 12))
     };
 
-    let (c, o) = run(&["new", img_s, "--yes", "--table", "msdos"]);
-    assert_eq!(c, 0, "{o}");
     // 两个主分区：1: 2048..4095（2048 扇区），2: 6144..8191——分区 1 右侧空闲 2048 扇区
-    let (c, o) = run(&["add", img_s, "--start", "2048", "--end", "4095", "--type", "0x83"]);
+    let (c, o) = run(&["new", img_s, "--yes", "--table", "mbr"]);
     assert_eq!(c, 0, "{o}");
-    let (c, o) = run(&["add", img_s, "--start", "6144", "--end", "8191", "--type", "0x83"]);
-    assert_eq!(c, 0, "{o}");
+    write_mbr_layout(&img, &[(2048, 2048, 0x83), (6144, 2048, 0x83)]);
 
     // 分区里没有 FS：只改表必须显式声明（--no-fs），否则写表之前就拒绝——"类型识别不出"
-    // 不等于"里面没东西"，不能让工具替用户下这个结论
+    // 不等于"里面没东西"，不能让工具替用户下这个结论。拒绝文案指向用该 FS 自己的工具扩容，
+    // 不点名旗标：同一条判据也服务于不接受 --no-fs 的 resize-part
     let raw_before = std::fs::read(&img).unwrap();
-    let (c, o) = run(&["resize", &format!("{img_s}:1"), "+1M"]);
-    assert_eq!(c, 10, "growing an unidentifiable region must refuse without --no-fs: {o}");
-    assert!(o.contains("--no-fs"), "{o}");
+    let (c, o) = run(&["resize", &format!("{img_s}:1"), "+1M", "--yes"]);
+    assert_eq!(c, 6, "growing an unidentifiable region must refuse without --no-fs: {o}");
+    assert!(o.contains("not identified") && o.contains("its own tool"), "{o}");
     assert_eq!(std::fs::read(&img).unwrap(), raw_before, "refused resize must not write");
 
     // +delta --no-fs：分区 1 → 4096 扇区（恰好吃掉右侧空闲）
-    let (c, o) = run(&["resize", &format!("{img_s}:1"), "+1M", "--no-fs"]);
+    let (c, o) = run(&["resize", &format!("{img_s}:1"), "+1M", "--no-fs", "--yes"]);
     assert_eq!(c, 0, "{o}");
     let raw = std::fs::read(&img).unwrap();
     assert_eq!(slot(&raw, 1), (2048, 4096), "relative grow");
     assert_eq!(slot(&raw, 2), (6144, 2048), "partition 2 untouched");
 
-    // 右侧已无空闲：grow 无法扩分区 ⇒ 拒绝（10），与 GPT 及在线路径同语义。
+    // 右侧已无空闲：grow 无法扩分区 ⇒ 拒绝（3），与 GPT 及在线路径同语义。
     // 不带 --no-fs 时先被"类型识别不出"拦下；两次都必须一字未写
     let raw_before = std::fs::read(&img).unwrap();
-    let (c, o) = run(&["resize", &format!("{img_s}:1"), "grow"]);
-    assert_eq!(c, 10, "grow must refuse an unidentifiable region without --no-fs: {o}");
-    let (c, o) = run(&["resize", &format!("{img_s}:1"), "grow", "--no-fs"]);
-    assert_eq!(c, 10, "grow with no free space to the right must refuse: {o}");
+    let (c, o) = run(&["resize", &format!("{img_s}:1"), "grow", "--yes"]);
+    assert_eq!(c, 6, "grow must refuse an unidentifiable region without --no-fs: {o}");
+    let (c, o) = run(&["resize", &format!("{img_s}:1"), "grow", "--no-fs", "--yes"]);
+    assert_eq!(c, 3, "grow with no free space to the right must refuse: {o}");
     assert!(o.contains("no free space"), "{o}");
     assert_eq!(std::fs::read(&img).unwrap(), raw_before, "refused grow must not write");
     let raw = std::fs::read(&img).unwrap();
@@ -373,34 +410,36 @@ fn msdos_user_resize() {
 
     // 右侧空闲不足：绝对值超界必须拒绝且未写盘
     let raw_before = std::fs::read(&img).unwrap();
-    let (c, o) = run(&["resize", &format!("{img_s}:1"), "3M"]);
-    assert_eq!(c, 10, "grow beyond blocking partition must refuse: {o}");
+    let (c, o) = run(&["resize", &format!("{img_s}:1"), "3M", "--no-fs", "--yes"]);
+    assert_eq!(c, 3, "grow beyond blocking partition must refuse: {o}");
     assert_eq!(std::fs::read(&img).unwrap(), raw_before, "refused resize must not write");
 
-    // 收缩：unknown FS（0x83 空数据）拒绝——FS 先缩守卫链，任何写入前终止
+    // 收缩：`resize` 只扩——缩容拆成 resizefs + resize-part，
+    // 收缩请求在准入期就拒绝，不进入 FS 守卫链，也不写盘
     let (c, o) = run(&["resize", &format!("{img_s}:1"), "-1M", "--yes"]);
-    assert_eq!(c, 10, "shrinking unknown FS must refuse: {o}");
+    assert_eq!(c, 3, "shrinking must be refused: {o}");
+    assert!(o.contains("only grows"), "{o}");
     assert_eq!(std::fs::read(&img).unwrap(), raw_before);
 
     // 不存在的分区 / 扩展容器场景的入口拒绝
-    let (c, _) = run(&["resize", &format!("{img_s}:3"), "+1M"]);
-    assert_eq!(c, 10);
+    let (c, _) = run(&["resize", &format!("{img_s}:3"), "+1M", "--yes"]);
+    assert_eq!(c, 3);
 
-    // --no-fs 与缩容不可共存：分区末端会切进未缩的 FS 元数据（与 GPT 路径同判据）
+    // 收缩与 --no-fs 的组合先落在「只扩」这道闸上：--no-fs 的提示不再是首个答案
     let raw_before = std::fs::read(&img).unwrap();
-    let (c, o) = run(&["resize", &format!("{img_s}:1"), "-1M", "--no-fs"]);
-    assert_eq!(c, 10, "--no-fs + shrink must refuse: {o}");
-    assert!(o.contains("--no-fs"), "{o}");
+    let (c, o) = run(&["resize", &format!("{img_s}:1"), "-1M", "--no-fs", "--yes"]);
+    assert_eq!(c, 3, "shrink must be refused: {o}");
+    assert!(o.contains("only grows"), "{o}");
     assert_eq!(std::fs::read(&img).unwrap(), raw_before, "refused resize must not write");
 
     // :N 命中核验按表类型分派：MBR 分区也要能解析出来，不得按"无 GPT"拒绝。
-    // 解析成功之后失败落在 FS 层：unknown 没有 check 工具 ⇒ 拒绝（10）——
-    // 与"表里没这个分区"同为 10，靠文案区分（后者会说 no GPT / MBR covers slots）
+    // 解析成功之后失败落在 FS 层：unknown 没有 check 工具 ⇒ 能力缺口（6）——
+    // 与"表里没这个分区"分开，后者是前置条件不满足（3）
     let (c, o) = run(&["check", &format!("{img_s}:1")]);
-    assert_eq!(c, 10, "empty MBR partition must resolve, then be refused for lack of FS tooling: {o}");
+    assert_eq!(c, 6, "empty MBR partition must resolve, then be refused for lack of FS tooling: {o}");
     assert!(!o.contains("no GPT"), "{o}");
     let (c, o) = run(&["check", &format!("{img_s}:9")]);
-    assert_eq!(c, 10, "out-of-range MBR slot must refuse: {o}");
+    assert_eq!(c, 3, "out-of-range MBR slot must refuse: {o}");
     assert!(o.contains("MBR covers primary slots"), "{o}");
 
     let _ = std::fs::remove_dir_all(&dir);
@@ -421,11 +460,14 @@ fn new_msdos_over_gpt_is_recognized_as_msdos() {
     };
     let (c, o) = run(&["new", img_s, "--yes"]);
     assert_eq!(c, 0, "{o}");
-    // 覆盖已有 GPT：残留的主头签名必须一并清掉，否则这张新 MBR 盘会被判 GptDamaged
-    let (c, o) = run(&["new", img_s, "--table", "msdos", "--yes"]);
+    // 覆盖已有 GPT：要求 --overwrite-data；残留的主头签名必须一并清掉，
+    // 否则这张新 MBR 盘会被判 GptDamaged
+    let (c, o) = run(&["new", img_s, "--table", "mbr", "--yes"]);
+    assert_eq!(c, 3, "an existing GPT must need --overwrite-data: {o}");
+    let (c, o) = run(&["new", img_s, "--table", "mbr", "--yes", "--overwrite-data"]);
     assert_eq!(c, 0, "{o}");
-    let (c, o) = run(&["add", img_s, "--start", "2048", "--end", "4095", "--type", "0x83"]);
-    assert_eq!(c, 0, "a stale GPT signature must not block writes after `new --table msdos`: {o}");
+    let (c, o) = run(&["add", img_s, "1M", "--align", "mib", "--yes"]);
+    assert_eq!(c, 0, "a stale GPT signature must not block writes after `new --table mbr`: {o}");
     let (c, o) = run(&["info", img_s]);
     assert_eq!(c, 0, "{o}");
     assert!(o.contains("\"label\":\"mbr\""), "{o}");
@@ -433,11 +475,11 @@ fn new_msdos_over_gpt_is_recognized_as_msdos() {
 }
 
 #[test]
-fn cyl_align_and_gpt_hidden_required() {
-    let dir = std::env::temp_dir().join(format!("diskedit_cyl_{}", std::process::id()));
+fn align_placement_and_gpt_hidden_required() {
+    let dir = std::env::temp_dir().join(format!("diskedit_align_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let img = dir.join("c.img");
-    // 16 MiB（32768 扇区）：cyl 柱面 = 16065 扇区（LBA-assist 255 头 × 63 扇区）
+    // 16 MiB（32768 扇区）
     std::fs::write(&img, vec![0u8; 16 * 1024 * 1024]).unwrap();
     let exe = env!("CARGO_BIN_EXE_DiskEdit");
     let img_s = img.to_str().unwrap();
@@ -449,44 +491,44 @@ fn cyl_align_and_gpt_hidden_required() {
     let (c, e) = run(&["new", img_s, "--yes"]);
     assert_eq!(c, 0, "{e}");
 
-    // add --align cyl：8100..32700 → 16065..32129（start 上取整、end 下取整到柱面边界）
-    let (c, e) = run(&["add", img_s, "--start", "8100", "--end", "32700", "--align", "cyl"]);
+    // 1MiB 对齐（2048 扇区）：落点从首个对齐空洞起点开始
+    let (c, e) = run(&["add", img_s, "1M", "--align", "mib", "--type-guid", DATA_GUID, "--yes"]);
     assert_eq!(c, 0, "{e}");
     let mut f = std::fs::File::open(&img).unwrap();
     let gpt = gptman::GPT::find_from(&mut f).unwrap();
-    assert_eq!(gpt[1].starting_lba, 16065);
-    assert_eq!(gpt[1].ending_lba, 32129);
+    assert_eq!(gpt[1].starting_lba, 2048);
+    assert_eq!(gpt[1].ending_lba, 4095);
     drop(f);
     // 独立交叉验证：不经 gptman，直接按 UEFI §5.3.2 条目布局读原始字节
     // （条目 0 = LBA2 起始：starting_lba@+32、ending_lba@+40，LE u64）
     let raw = std::fs::read(&img).unwrap();
     let ent = &raw[2 * 512..2 * 512 + 128];
     let get = |o: usize| u64::from_le_bytes(ent[o..o + 8].try_into().unwrap());
-    assert_eq!(get(32), 16065, "raw starting_lba must match");
-    assert_eq!(get(40), 32129, "raw ending_lba must match");
-
-    // 柱面对齐后区间为空 → 拒绝
-    let (c, _) = run(&["add", img_s, "--start", "32500", "--end", "32510", "--align", "cyl"]);
-    assert_eq!(c, 10, "empty-after-cyl-align must refuse");
+    assert_eq!(get(32), 2048, "raw starting_lba must match");
+    assert_eq!(get(40), 4095, "raw ending_lba must match");
 
     // 非法 --align 值拒绝
-    let (c, _) = run(&["add", img_s, "--start", "4096", "--end", "4097", "--align", "sector"]);
-    assert_eq!(c, 10, "invalid --align must refuse");
+    let (c, _) = run(&["add", img_s, "1M", "--align", "sector", "--type-guid", DATA_GUID, "--yes"]);
+    assert_eq!(c, 2, "invalid --align must be a usage error");
+
+    // 剩余对齐空洞 4096..30719 共 26624 扇区：15MiB（30720 扇区）无空洞可容纳
+    let (c, e) = run(&["add", img_s, "15M", "--align", "mib", "--type-guid", DATA_GUID, "--yes"]);
+    assert_eq!(c, 3, "a SIZE beyond the aligned gaps must refuse: {e}");
 
     // GPT hidden（bit1）/ required（bit0）经 CLI 置位与清除，互不干扰 legacy（bit2）
-    let (c, e) = run(&["set", &format!("{img_s}:1"), "flag", "legacy", "on"]);
+    let (c, e) = run(&["set", &format!("{img_s}:1"), "flag", "legacy", "on", "--yes"]);
     assert_eq!(c, 0, "{e}");
-    let (c, e) = run(&["set", &format!("{img_s}:1"), "flag", "hidden", "on"]);
+    let (c, e) = run(&["set", &format!("{img_s}:1"), "flag", "hidden", "on", "--yes"]);
     assert_eq!(c, 0, "{e}");
-    let (c, e) = run(&["set", &format!("{img_s}:1"), "flag", "required", "on"]);
+    let (c, e) = run(&["set", &format!("{img_s}:1"), "flag", "required", "on", "--yes"]);
     assert_eq!(c, 0, "{e}");
     let mut f = std::fs::File::open(&img).unwrap();
     let gpt = gptman::GPT::find_from(&mut f).unwrap();
     assert_eq!(gpt[1].attribute_bits, (1 << 0) | (1 << 1) | (1 << 2));
     drop(f);
-    let (c, e) = run(&["set", &format!("{img_s}:1"), "flag", "hidden", "off"]);
+    let (c, e) = run(&["set", &format!("{img_s}:1"), "flag", "hidden", "off", "--yes"]);
     assert_eq!(c, 0, "{e}");
-    let (c, e) = run(&["set", &format!("{img_s}:1"), "flag", "required", "off"]);
+    let (c, e) = run(&["set", &format!("{img_s}:1"), "flag", "required", "off", "--yes"]);
     assert_eq!(c, 0, "{e}");
     let mut f = std::fs::File::open(&img).unwrap();
     let gpt = gptman::GPT::find_from(&mut f).unwrap();
@@ -496,7 +538,7 @@ fn cyl_align_and_gpt_hidden_required() {
 }
 
 /// 布局坐标系不变量：4Kn GPT 表放在 512e 容器上（g.ss ≠ src.sector_size）时，
-/// add/create 的对齐单位与 --size 换算必须按**表头记录的 ss** 折算（1MiB = 256 个表 LBA）。
+/// add 的对齐单位必须按**表头记录的 ss** 折算（1MiB = 256 个表 LBA）。
 /// 按容器 ss 折算会把 1MiB 错算成 8MiB（2048 个容器扇区），合法 add 被误拒
 #[test]
 fn layout_uses_table_sector_size_not_container() {
@@ -519,8 +561,8 @@ fn layout_uses_table_sector_size_not_container() {
     assert_eq!(c, 0, "new with 4kn sectors: {o}");
 
     // 换 512 容器重开（不带 --sector-size）：表 ss 与容器 ss 不一致。
-    // --start 256（表 LBA 256 = 字节 1MiB）已按表坐标对齐，必须成功
-    let (c, _, o) = run(&["add", img_s, "--start", "256", "--end", "511", "--name", "t"]);
+    // 1MiB 按表 ss 折算为 256 个 LBA，1MiB 对齐后恰好落在表 LBA 256
+    let (c, _, o) = run(&["add", img_s, "1M", "--align", "mib", "--name", "t", "--type-guid", DATA_GUID, "--yes"]);
     assert_eq!(c, 0, "add on 4kn-table/512-container: {o}");
 
     let (c, out, _) = run(&["info", img_s]);
@@ -531,18 +573,6 @@ fn layout_uses_table_sector_size_not_container() {
     assert_eq!(p["first_lba"], 256);
     assert_eq!(p["last_lba"], 511);
     assert_eq!(p["size_bytes"], 1024 * 1024);
-
-    // create 的空闲区与 --size 换算同样按表 ss：下一个 1MiB 边界 = 表 LBA 512
-    let (c, _, o) = run(&["create", img_s, "--size", "1M"]);
-    assert_eq!(c, 0, "create on 4kn-table/512-container: {o}");
-    let (c, out, _) = run(&["info", img_s]);
-    assert_eq!(c, 0);
-    let v: serde_json::Value = serde_json::from_str(out.trim()).expect("info must emit valid JSON");
-    let parts = v["partitions"].as_array().unwrap();
-    assert_eq!(parts.len(), 2, "{out}");
-    assert_eq!(parts[1]["first_lba"], 512);
-    assert_eq!(parts[1]["last_lba"], 767);
-    assert_eq!(parts[1]["size_bytes"], 1024 * 1024);
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -563,17 +593,17 @@ fn set_name_over_36_code_units_is_refused() {
          String::from_utf8_lossy(&out.stderr).into_owned())
     };
     assert_eq!(run(&["new", img_s, "--yes"]).0, 0);
-    assert_eq!(run(&["add", img_s, "--start", "2048", "--end", "4095", "--name", "root"]).0, 0);
+    assert_eq!(run(&["add", img_s, "1M", "--align", "mib", "--name", "root", "--type-guid", DATA_GUID, "--yes"]).0, 0);
 
     // 37 个 ASCII 字符 = 37 码元 > 36 → 拒绝，文案点明 UTF-16 码元
     let over = "a".repeat(37);
-    let (c, _, err) = run(&["set", &format!("{img_s}:1"), "name", &over]);
-    assert_eq!(c, 10, "a name over 36 UTF-16 code units must be refused: {err}");
+    let (c, _, err) = run(&["set", &format!("{img_s}:1"), "name", &over, "--yes"]);
+    assert_eq!(c, 3, "a name over 36 UTF-16 code units must be refused: {err}");
     assert!(err.contains("UTF-16 code units"), "{err}");
 
     // 边界：恰 36 个码元应被接受
     let exact = "a".repeat(36);
-    let (c, _, err) = run(&["set", &format!("{img_s}:1"), "name", &exact]);
+    let (c, _, err) = run(&["set", &format!("{img_s}:1"), "name", &exact, "--yes"]);
     assert_eq!(c, 0, "a 36-code-unit name must be accepted: {err}");
     let _ = std::fs::remove_dir_all(&dir);
 }

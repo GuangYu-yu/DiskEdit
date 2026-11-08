@@ -94,13 +94,13 @@ pub fn parse_mbr_raw(src: &FileSource) -> io::Result<Option<RawMbr>> {
         return Ok(None);
     }
     // 本工具策略：保护 MBR 布局成立 → 盘交由 GPT 判定（内核探测同口径），不按 msdos 解析。
-    // 布局不成立时盘型也不必然是 msdos——0xEE 记录与 LBA1 签名的处置见下方两处
+    // 布局不成立时盘型也不必然是 msdos——0xEE 记录在解析侧被跳过，盘型由 LBA1 签名定
     if pmbr_shape_valid(src)? {
         return Ok(None);
     }
     // 保护布局被改坏而 LBA1 仍有 CRC 自洽的主头：盘仍是 GPT，只是 LBA0 被外部工具或手工
     // 改过。按 msdos 继续解析会把被改写的槽位当作真实分区交给 mkfs/set，而后者的写入
-    // 起点就在 LBA1 附近，会直接覆盖主头。判据与 table_label 的第 3 条同源
+    // 起点就在 LBA1 附近，会直接覆盖主头。判据与 table_label 同源
     if gpt_header_parseable(src)? {
         return Ok(None);
     }
@@ -191,53 +191,56 @@ pub fn parse_mbr(src: &FileSource) -> io::Result<Option<Vec<MbrPartition>>> {
 /// 两个问题分开回答：[`table_label`] 只说"这是哪种表"——损伤不改变盘型，观察路径靠它
 /// 照实报 `mbr`；可操作性由 [`parse_mbr`] 判定。盘型判定走 raw 解析，不顺带回答能不能写，
 /// 所以六个写原语都要自己问这一句，否则损伤表上的写会直接落盘
-fn require_writable_mbr(src: &FileSource) -> Result<(), Fail> {
+pub(crate) fn require_writable_mbr(src: &FileSource) -> Result<(), RunOutcome> {
     match parse_mbr(src) {
         Ok(Some(_)) => Ok(()),
-        Ok(None) => Err(Fail::refused("not an msdos-labelled image")),
+        Ok(None) => Err(RunOutcome::refused("not an msdos-labelled image")),
         // InvalidData 是"条目读出来了但不可操作"（越界 / 起点 0 / 两两重叠）：请求本身
         // 仍在写盘之前，按 Refused 出口，文案沿用解析侧的损伤描述；其余才是读盘故障
-        Err(e) if e.kind() == io::ErrorKind::InvalidData => Err(Fail::refused(e.to_string())),
-        Err(e) => Err(Fail::infra_io(e)),
+        Err(e) if e.kind() == io::ErrorKind::InvalidData => Err(RunOutcome::refused(e.to_string())),
+        Err(e) => Err(RunOutcome::no_mutation_io(e)),
     }
 }
 
-/// LBA0 写入 + 读回复核：msdos 的六个写原语共用这一处。
+/// LBA0 写入 + 读回复核：msdos 的六个写原语共用这一处。写前先重读三扇区摘要
+/// 并与各原语入口记录的值比对，不等即不写（见 [`verify_table_stamp`]）。
 /// `sync_all` 只说明字节交给了设备，缓存丢写与镜像层短写要在重读时才可见；写调用
-/// 已经发生，故不符或读不回都落 `Fail::failed`（盘可能已改），不得报 Infra。
+/// 已经发生，故不符或读不回都落 `RunOutcome::partial`（盘可能已改），不得报 NoMutation。
 /// LBA0 被丢掉而这里报成功，盘随后会被读成一张旧表，写命令全部拒
-fn write_lba0_verified(src: &mut WriteSource, lba0: &[u8]) -> Result<(), Fail> {
+#[cfg(test)] // 生产路径的唯一 LBA0 写入点是 execution::table；这里是测试夹具的直写入口
+fn write_lba0_verified(src: &mut WriteSource, stamp: TableStamp, lba0: &[u8]) -> Result<(), RunOutcome> {
+    verify_table_stamp(src, stamp, src.sector_size)?;
     src.write_at(0, lba0)
-        .map_err(|e| Fail::failed(format!("cannot write the MBR: {e} — the on-disk state may have changed")))?;
+        .map_err(|e| RunOutcome::partial(format!("cannot write the MBR: {e} — the on-disk state may have changed")))?;
     src.sync_all()
-        .map_err(|e| Fail::failed(format!("cannot flush the MBR: {e} — the write may not have landed")))?;
+        .map_err(|e| RunOutcome::partial(format!("cannot flush the MBR: {e} — the write may not have landed")))?;
     let mut got = vec![0u8; lba0.len()];
     src.read_at(0, &mut got)
-        .map_err(|e| Fail::failed(format!("MBR read-back failed: {e} — the write may not have landed")))?;
+        .map_err(|e| RunOutcome::partial(format!("MBR read-back failed: {e} — the write may not have landed")))?;
     if got != lba0 {
-        return Err(Fail::failed("the MBR differs from what was written — the device or image layer dropped the write"));
+        return Err(RunOutcome::partial("the MBR differs from what was written — the device or image layer dropped the write"));
     }
     Ok(())
 }
 
 /// 主分区槽位守卫：msdos 只有 1..=4 四个主分区槽位（逻辑分区不在本工具范围内）。
 /// `resize_mdos_entry` 自带另一套文案（"invalid MBR partition number"），不经此函数
-fn primary_slot(part: u32) -> Result<(), Fail> {
+pub(crate) fn primary_slot(part: u32) -> Result<(), RunOutcome> {
     if (1..=4).contains(&part) {
         Ok(())
     } else {
-        Err(Fail::refused("msdos supports primary slots 1..=4 only"))
+        Err(RunOutcome::refused("msdos supports primary slots 1..=4 only"))
     }
 }
 
 /// 写前读 LBA0：可写载体校验、读入、`55AA` 签名校验。之后的字段解读都以"这是一张
 /// MBR"为前提，签名不符即拒绝
-fn read_mbr_lba0(src: &FileSource) -> Result<Vec<u8>, Fail> {
+pub(crate) fn read_mbr_lba0(src: &FileSource) -> Result<Vec<u8>, RunOutcome> {
     require_writable_mbr(src)?;
     let mut lba0 = vec![0u8; src.sector_size as usize];
-    src.read_at(0, &mut lba0).map_err(Fail::infra_io)?;
+    src.read_at(0, &mut lba0).map_err(RunOutcome::no_mutation_io)?;
     if u16::from_le_bytes([lba0[510], lba0[511]]) != MBR_SIGNATURE {
-        return Err(Fail::infra("no MBR signature on target"));
+        return Err(RunOutcome::no_mutation("no MBR signature on target"));
     }
     Ok(lba0)
 }
@@ -245,13 +248,13 @@ fn read_mbr_lba0(src: &FileSource) -> Result<Vec<u8>, Fail> {
 /// 条目具备可改写语义：类型字节非零（空槽不是可改写对象），且扇区数非零——
 /// 类型字节非零而长度为 0 的条目解析侧看不见，写进去等于凭空替换一条操作者
 /// 无从核对的条目
-fn require_live_entry(part: u32, lba0: &[u8], off: usize) -> Result<u8, Fail> {
+fn require_live_entry(part: u32, lba0: &[u8], off: usize) -> Result<u8, RunOutcome> {
     let cur = lba0[off + 4];
     if cur == 0 {
-        return Err(Fail::refused(format!("partition {part} is empty")));
+        return Err(RunOutcome::refused(format!("partition {part} is empty")));
     }
     if rd_u32(&lba0[off..off + 16], 12) == 0 {
-        return Err(Fail::refused(format!(
+        return Err(RunOutcome::refused(format!(
             "partition {part} has a type byte but zero sectors — the entry is invisible to the parser; `delete` clears it"
         )));
     }
@@ -261,20 +264,20 @@ fn require_live_entry(part: u32, lba0: &[u8], off: usize) -> Result<u8, Fail> {
 /// FS 缩/扩之前的复核：盘上 LBA0 的目标条目仍等于决策期读到的那一份。FS 区间由这条
 /// 条目的起点与扇区数决定，越过它去写 FS 就是在可能已过期的落点上动手。读盘故障归
 /// Infra（此刻尚未写盘）；字段不一致是外部改写，归 Refused
-pub fn ensure_mdos_entry_unchanged(src: &FileSource, p: &MbrPartition) -> Result<(), Fail> {
+pub fn ensure_mdos_entry_unchanged(src: &FileSource, p: &MbrPartition) -> Result<(), RunOutcome> {
     primary_slot(p.num)?;
     require_writable_mbr(src)?;
     let mut lba0 = vec![0u8; src.sector_size as usize];
-    src.read_at(0, &mut lba0).map_err(Fail::infra_io)?;
+    src.read_at(0, &mut lba0).map_err(RunOutcome::no_mutation_io)?;
     if u16::from_le_bytes([lba0[510], lba0[511]]) != MBR_SIGNATURE {
-        return Err(Fail::refused("MBR signature vanished before the filesystem resize — re-run the command"));
+        return Err(RunOutcome::refused("MBR signature vanished before the filesystem resize — re-run the command"));
     }
     let off = 446 + (p.num as usize - 1) * 16;
     let cur_type = lba0[off + 4];
     let cur_start = rd_u32(&lba0[off..off + 16], 8);
     let cur_size = rd_u32(&lba0[off..off + 16], 12);
     if cur_type != p.os_type || cur_start != p.start_lba || cur_size != p.size_lba {
-        return Err(Fail::refused(format!(
+        return Err(RunOutcome::refused(format!(
             "MBR partition {} changed outside this tool since the table was read (type {:#04x}, start {cur_start}, {cur_size} sectors; expected type {:#04x}, start {}, {} sectors) — re-run the command",
             p.num, cur_type, p.os_type, p.start_lba, p.size_lba
         )));
@@ -282,67 +285,94 @@ pub fn ensure_mdos_entry_unchanged(src: &FileSource, p: &MbrPartition) -> Result
     Ok(())
 }
 
-/// 修改 MBR 主分区条目大小（start 不变，纯扩缩）。LBA 单位与 parse_mbr /
-/// add_mdos_entry 的现有约定一致（= 扇区大小）；CHS 字段不动（现代工具惯例，
-/// 内核按 LBA 解析）。经 WriteSource 写入自动进 undo journal。
+/// 修改 MBR 主分区条目大小（start 不变，纯扩缩）的直写外壳，仅供测试夹具使用。
+///
+/// 生产路径是命令层的 `resize_mbr_entry`：一次读定快照 → [`resize_mdos_entry_image`]
+/// 纯计算 → 装配成表步骤 → `execution::table` 落盘（写前三扇区复核、写后读回）。
+/// LBA 单位与 parse_mbr / add_mdos_entry 的现有约定一致（= 扇区大小）；CHS 字段不动
+/// （现代工具惯例，内核按 LBA 解析）。
 ///
 /// 崩溃语义：普通单扇区写**不是**规范层面的原子写（untorn write 需要设备显式支持，
 /// Linux 内核对普通写只作 logical block 原子的行为假设），而 MBR 无 GPT 式 CRC，
 /// 掉电撕裂只能靠 0x55AA 签名粗检、字段区损坏不可检出。恢复不依赖"写是原子的"，
 /// 依赖的是写前已持久化的 undo journal——发现盘异常后 `undo` 整扇区重写 LBA0 即还原。
-pub fn resize_mdos_entry(src: &mut WriteSource, part: u32, new_size_lba: u32) -> Result<(), Fail> {
-    if !(1..=4).contains(&part) {
-        return Err(Fail::refused(format!("invalid MBR partition number {part} (1..4)")));
-    }
+#[cfg(test)] // 生产路径经 resize_mbr_entry 装配成表步骤；这里保留测试用的直写外壳
+pub fn resize_mdos_entry(src: &mut WriteSource, part: u32, new_size_lba: u32) -> Result<(), RunOutcome> {
     require_writable_mbr(src)?;
-    let ss = src.sector_size as usize;
-    if src.size < ss as u64 {
-        return Err(Fail::infra("image too small for MBR"));
+    let ss = src.sector_size;
+    if src.size < ss {
+        return Err(RunOutcome::no_mutation("image too small for MBR"));
     }
-    let mut lba0 = vec![0u8; ss];
+    let stamp = table_stamp(src, ss)?;
+    let mut lba0 = vec![0u8; ss as usize];
     // 写盘前的读取：失败即盘未被改动，归 Infra（不能带"盘可能已改变"的提示）
-    src.read_at(0, &mut lba0).map_err(Fail::infra_io)?;
+    src.read_at(0, &mut lba0).map_err(RunOutcome::no_mutation_io)?;
+    let new = resize_mdos_entry_image(&lba0, part, new_size_lba, ss, src.size / ss)?;
+    write_lba0_verified(src, stamp, &new)
+}
+
+/// 纯计算：把条目 `part` 的长度改成 `new_size_lba`，返回新的 LBA0 字节。
+///
+/// 全部写前判据都在这里——槽位、签名、保护记录、容器类型、隐形条目、盘内边界、
+/// 32 位上限、与其余条目的重叠。调用方只负责取快照与装配，因此测试与生产验的是
+/// 同一份判定；`resize_mbr_entry`（命令层）走的就是这条路。
+pub(crate) fn resize_mdos_entry_image(
+    lba0: &[u8],
+    part: u32,
+    new_size_lba: u32,
+    sector_size: u64,
+    total_sectors: u64,
+) -> Result<Vec<u8>, RunOutcome> {
+    if !(1..=4).contains(&part) {
+        return Err(RunOutcome::refused(format!("invalid MBR partition number {part} (1..4)")));
+    }
+    let ss = sector_size as usize;
+    if lba0.len() != ss {
+        return Err(RunOutcome::internal(format!(
+            "the MBR snapshot is {} byte(s) for a {ss}-byte sector",
+            lba0.len()
+        )));
+    }
     if u16::from_le_bytes([lba0[510], lba0[511]]) != MBR_SIGNATURE {
-        return Err(Fail::infra("no MBR signature on target"));
+        return Err(RunOutcome::no_mutation("no MBR signature on target"));
     }
     let off = 446 + (part as usize - 1) * 16;
     if lba0[off + 4] == 0 {
-        return Err(Fail::refused(format!("MBR partition {part} is empty")));
+        return Err(RunOutcome::refused(format!("MBR partition {part} is empty")));
     }
     // 0xEE 是 GPT 保护记录（UEFI 2.10 §5.2.3）：其 SizeInLBA 属保护布局的一部分，
     // 改写它和 delete_mdos_entry 清零该槽位一样，会毁掉识别与恢复 GPT 的依据
     if lba0[off + 4] == PROT_MBR_TYPE {
-        return Err(Fail::refused(format!(
+        return Err(RunOutcome::refused(format!(
             "partition {part} is the GPT protective record (0xEE) — rewriting its size destroys the record used to recognise and recover the GPT"
         )));
     }
     if MDOS_CONTAINER_TYPES.contains(&lba0[off + 4]) {
-        return Err(Fail::refused("extended partition container cannot be resized"));
+        return Err(RunOutcome::refused("extended partition container cannot be resized"));
     }
-    // 隐形条目（type 字节非零但 size 为零，解析侧按空槽处理）：与 set_mdos_boot /
-    // set_mdos_hidden / set_mdos_type 同判据同文案——写入等于凭空造出一条解析器
-    // 看不见的分区，操作者无从核对结果
+    // 隐形条目（type 字节非零但 size 为零，解析侧按空槽处理）：与 set_mdos_hidden /
+    // set_mdos_type 同判据同文案——写入等于凭空造出一条解析器看不见的分区，
+    // 操作者无从核对结果
     if rd_u32(&lba0[off..off + 16], 12) == 0 {
-        return Err(Fail::refused(format!(
+        return Err(RunOutcome::refused(format!(
             "partition {part} has a type byte but zero sectors — the entry is invisible to the parser; `delete` clears it"
         )));
     }
     // 条目自守（与 add_mdos_entry 同严格）：start + 新长度须落在盘内。现有调用方
-    // 都先查过 free，但这是 pub 写入口——越界尺寸要挡在写 LBA0 之前，不能指望
+    // 都先查过 free，但这是共享判定——越界尺寸要挡在写 LBA0 之前，不能指望
     // 每个未来调用方都记得复核
     let start = u32::from_le_bytes(lba0[off + 8..off + 12].try_into().unwrap()) as u64;
-    let total_sectors = src.size / ss as u64;
     if start == 0 {
-        return Err(Fail::refused(format!("MBR partition {part} has invalid start LBA 0")));
+        return Err(RunOutcome::refused(format!("MBR partition {part} has invalid start LBA 0")));
     }
     // 零长度条目在解析侧按空槽处理——写进去等于隐式删分区，缩容请求不得经此入口表达
     if new_size_lba == 0 {
-        return Err(Fail::refused(format!(
+        return Err(RunOutcome::refused(format!(
             "new size 0 would erase partition {part} — use `delete` to remove the entry"
         )));
     }
     if start + new_size_lba as u64 > total_sectors {
-        return Err(Fail::refused(format!(
+        return Err(RunOutcome::refused(format!(
             "new size {new_size_lba} sectors from LBA {start} exceeds the disk ({total_sectors} sectors)"
         )));
     }
@@ -350,7 +380,7 @@ pub fn resize_mdos_entry(src: &mut WriteSource, part: u32, new_size_lba: u32) ->
     // 与 add_mdos_entry 同一不变量。只查 size 会放行"起点已很大"的条目：尺寸字段本身
     // 装得下，末端却越出 32 位，读回时末端按 u32 计算即回绕，分区落点与写下的尺寸对不上
     if start + new_size_lba as u64 - 1 > u32::MAX as u64 {
-        return Err(Fail::refused(format!(
+        return Err(RunOutcome::refused(format!(
             "new range {start}..{} exceeds the MBR 32-bit LBA limit (last expressible LBA {})",
             start + new_size_lba as u64 - 1,
             u32::MAX
@@ -371,14 +401,15 @@ pub fn resize_mdos_entry(src: &mut WriteSource, part: u32, new_size_lba: u32) ->
         let os = u32::from_le_bytes(o[8..12].try_into().unwrap()) as u64;
         let oe = os + rd_u32(o, 12) as u64 - 1;
         if !(new_end < os || oe < start) {
-            return Err(Fail::refused(format!(
+            return Err(RunOutcome::refused(format!(
                 "new range [{start}, {new_end}] overlaps partition {} [{os}, {oe}]",
                 i + 1
             )));
         }
     }
-    lba0[off + 12..off + 16].copy_from_slice(&new_size_lba.to_le_bytes());
-    write_lba0_verified(src, &lba0)
+    let mut out = lba0.to_vec();
+    out[off + 12..off + 16].copy_from_slice(&new_size_lba.to_le_bytes());
+    Ok(out)
 }
 
 /// 保护 MBR 形状（UEFI 2.10 §5.2.3）：LBA0 须是有效 MBR（签名 0xAA55），槽位 1 恰为一条
@@ -403,72 +434,127 @@ pub(crate) fn pmbr_shape_valid(src: &FileSource) -> io::Result<bool> {
     Ok(rec[4] == PROT_MBR_TYPE && rd_u32(rec, 8) == 1)
 }
 
-/// msdos：主分区条目追加（槽位 1..=4）。类型判据与 `set_mdos_type` 同源：0x00 是
-/// "未用条目"的形状（本函数用它识别空闲槽），容器类型凭空多出容器语义
-pub fn add_mdos_entry(src: &mut WriteSource, start: u64, end: u64, os_type: u8) -> Result<u32, Fail> {
+/// 测试夹具：不点名槽位的追加，等价于 `add_mdos_entry_to(src, None, ...)`
+#[cfg(test)]
+pub fn add_mdos_entry(src: &mut WriteSource, start: u64, end: u64, os_type: u8) -> Result<u32, RunOutcome> {
+    add_mdos_entry_to(src, None, start, end, os_type)
+}
+
+/// msdos：主分区条目追加的读改写外壳，仅供测试夹具使用。类型判据与 `set_mdos_type`
+/// 同源：0x00 是"未用条目"的形状（纯计算用它识别空闲槽），容器类型凭空多出容器语义。
+/// `None` 取第一个空闲槽；显式槽位必须是 1..=4 且当前为空，越界或已占用都在写盘前拒绝
+#[cfg(test)]
+pub fn add_mdos_entry_to(
+    src: &mut WriteSource,
+    slot: Option<u32>,
+    start: u64,
+    end: u64,
+    os_type: u8,
+) -> Result<u32, RunOutcome> {
+    check_mdos_add_type(os_type)?;
+    let ss = src.sector_size;
+    require_writable_mbr(src)?;
+    let total = src.size / ss;
+    let stamp = table_stamp(src, src.sector_size)?;
+    let mut lba0 = vec![0u8; ss as usize];
+    src.read_at(0, &mut lba0).map_err(RunOutcome::no_mutation_io)?;
+    let (lba0, num) = add_mdos_entry_image(&lba0, slot, start, end, os_type, total)?;
+    write_lba0_verified(src, stamp, &lba0)?;
+    Ok(num)
+}
+
+/// 条目类型的写前判据：0x00 是空槽标记，0xEE 是 GPT 保护记录（UEFI 2.10 §5.2.3），
+/// 扩展容器类型（0x05/0x0F/0x85）不在支持范围
+fn check_mdos_add_type(os_type: u8) -> Result<(), RunOutcome> {
     if os_type == 0 {
-        return Err(Fail::refused("type 0x00 is the empty-entry marker — give a partition type"));
+        return Err(RunOutcome::refused("type 0x00 is the empty-entry marker — give a partition type"));
     }
-    // 0xEE 是 GPT 保护记录（UEFI 2.10 §5.2.3），不是数据分区：解析侧已把它排除出
-    // 可操作条目，写侧若放行会凭空造出一条解析器与内核都不当分区的"分区"
     if os_type == PROT_MBR_TYPE {
-        return Err(Fail::refused(
+        return Err(RunOutcome::refused(
             "type 0xEE is the GPT protective record, not a data partition — use a real partition type",
         ));
     }
     if MDOS_CONTAINER_TYPES.contains(&os_type) {
-        return Err(Fail::refused("extended-container types (0x05/0x0F/0x85) are not supported — logical partitions are out of scope"));
+        return Err(RunOutcome::refused("extended-container types (0x05/0x0F/0x85) are not supported — logical partitions are out of scope"));
     }
-    let ss = src.sector_size;
-    require_writable_mbr(src)?;
-    let total = src.size / ss;
+    Ok(())
+}
+
+/// 在现有 LBA0 上写入一条主分区记录，返回整扇区的新内容与 1-based 槽位号。纯计算：
+/// 不读盘、不写盘。`total` 是容器的扇区数。类型、区间、条目可见性与槽位判据都在这里，
+/// 写入口只负责读原文、算新内容与复核落盘
+pub(crate) fn add_mdos_entry_image(
+    lba0: &[u8],
+    slot: Option<u32>,
+    start: u64,
+    end: u64,
+    os_type: u8,
+    total: u64,
+) -> Result<(Vec<u8>, u32), RunOutcome> {
+    check_mdos_add_type(os_type)?;
     if total == 0 {
-        return Err(Fail::infra("image has zero sectors"));
+        return Err(RunOutcome::no_mutation("image has zero sectors"));
     }
     // 单扇区容器没有可用区间，单独说明以免提示里出现空区间 (1..0)
     if total == 1 {
-        return Err(Fail::refused("image has a single sector — no usable range"));
+        return Err(RunOutcome::refused("image has a single sector — no usable range"));
     }
     if start < 1 || end >= total || start > end {
-        return Err(Fail::refused(format!("range {start}..{end} outside disk (1..{})", total - 1)));
+        return Err(RunOutcome::refused(format!("range {start}..{end} outside disk (1..{})", total - 1)));
     }
     // MBR 的 StartLBA/SizeInLBA 都是 u32 字段：超出即无法表示，必须在此拒绝。
     // 少了这一条，下面 `start as u32` / `(end - start + 1) as u32` 会静默截断——
     // 例如 start = 2^32+2048 会写出一个指向 LBA 2048 的条目，落盘即损坏且无任何报错
     if end > u32::MAX as u64 {
-        return Err(Fail::refused(format!(
+        return Err(RunOutcome::refused(format!(
             "range {start}..{end} exceeds the MBR 32-bit LBA limit (last expressible LBA {})",
             u32::MAX
         )));
     }
-    let mut lba0 = vec![0u8; ss as usize];
-    src.read_at(0, &mut lba0).map_err(Fail::infra_io)?;
-    let mut slot: Option<usize> = None;
+    let mut lba0 = lba0.to_vec();
+    let mut first_empty: Option<usize> = None;
     for i in 0..4usize {
         let rec = &lba0[446 + i * 16..446 + i * 16 + 16];
-        // 隐形条目（类型字节非零但长度为 0）：与 set_mdos_boot / set_mdos_hidden /
-        // set_mdos_type / resize_mdos_entry 同判据——把它当空闲槽写进去等于凭空替换掉
+        // 隐形条目（类型字节非零但长度为 0）：与 set_mdos_hidden / set_mdos_type /
+        // resize_mdos_entry 同判据——把它当空闲槽写进去等于凭空替换掉
         // 一条解析器看不见的条目，操作者无从核对
         if rec[4] != 0 && rd_u32(rec, 12) == 0 {
-            return Err(Fail::refused(format!(
+            return Err(RunOutcome::refused(format!(
                 "partition {} has a type byte but zero sectors — the entry is invisible to the parser; `delete` clears it",
                 i + 1
             )));
         }
         if rec[4] == 0 {
-            if slot.is_none() {
-                slot = Some(i);
+            if first_empty.is_none() {
+                first_empty = Some(i);
             }
             continue; // 仍需检查后续已用槽位的重叠
         }
         let s = rd_u32(rec, 8) as u64;
         let e = s + rd_u32(rec, 12) as u64 - 1;
         if !(end < s || start > e) {
-            return Err(Fail::refused("range overlaps an existing partition"));
+            return Err(RunOutcome::refused("range overlaps an existing partition"));
         }
     }
-    let Some(i) = slot else {
-        return Err(Fail::refused("all 4 primary slots used (extended/logical unsupported)"));
+    let i = match slot {
+        Some(n) => {
+            // 显式槽位与 GPT 侧 add_entry_at_slot 同判据：越界、已占用都在写盘前拒绝
+            let i = usize::try_from(n)
+                .ok()
+                .and_then(|n| n.checked_sub(1))
+                .filter(|i| *i < 4)
+                .ok_or_else(|| {
+                    RunOutcome::refused(format!("partition number {n} is outside 1..=4 for an MBR table"))
+                })?;
+            if lba0[446 + i * 16 + 4] != 0 {
+                return Err(RunOutcome::refused(format!(
+                    "partition {n} is already in use — pick an empty primary slot"
+                )));
+            }
+            i
+        }
+        None => first_empty
+            .ok_or_else(|| RunOutcome::refused("all 4 primary slots used (extended/logical unsupported)"))?,
     };
     let rec = &mut lba0[446 + i * 16..446 + i * 16 + 16];
     rec[0] = 0x00;
@@ -478,51 +564,58 @@ pub fn add_mdos_entry(src: &mut WriteSource, start: u64, end: u64, os_type: u8) 
     rec[5..8].copy_from_slice(&[0xFE, 0xFF, 0xFF]);
     rec[8..12].copy_from_slice(&(start as u32).to_le_bytes());
     rec[12..16].copy_from_slice(&((end - start + 1) as u32).to_le_bytes());
-    write_lba0_verified(src, &lba0)?;
-    Ok((i + 1) as u32)
+    Ok((lba0, (i + 1) as u32))
 }
 
-/// msdos：主分区条目删除（清零对应记录）
-pub fn delete_mdos_entry(src: &mut WriteSource, part: u32) -> Result<(), Fail> {
+/// 在现有 LBA0 上清掉第 `part` 条主分区记录，返回整扇区的新内容。纯计算：不读盘、
+/// 不写盘。槽位范围与条目状态判据与解析侧一致——空槽、0xEE 保护记录、扩展容器都拒绝
+pub(crate) fn cleared_mbr_image(lba0: &[u8], part: u32) -> Result<Vec<u8>, RunOutcome> {
     primary_slot(part)?;
-    let mut lba0 = read_mbr_lba0(src)?;
     let off = 446 + (part as usize - 1) * 16;
-    let rec = &mut lba0[off..off + 16];
+    let mut out = lba0.to_vec();
+    let rec = &mut out[off..off + 16];
     let cur = rec[4];
     if cur == 0 {
-        return Err(Fail::refused(format!("partition {part} is already empty")));
+        return Err(RunOutcome::refused(format!("partition {part} is already empty")));
     }
     // 两类条目的类型字节承担结构语义，清零等于把它们从盘上抹掉：0xEE 是 GPT 保护记录
     // （恢复 GPT 所需），容器类型是其中逻辑分区的入口——与 add_mdos_entry / set_mdos_type
     // 同判据拒绝。解析侧已把 0xEE 排除出可操作条目，此处是写路径的同一条判据
     if cur == PROT_MBR_TYPE {
-        return Err(Fail::refused(format!(
+        return Err(RunOutcome::refused(format!(
             "partition {part} is the GPT protective record (0xEE) — clearing it destroys the record used to recognise and recover the GPT"
         )));
     }
     if MDOS_CONTAINER_TYPES.contains(&cur) {
-        return Err(Fail::refused(format!(
+        return Err(RunOutcome::refused(format!(
             "partition {part} is an extended container (0x{cur:02X}) — its type is structural, not a partition"
         )));
     }
     rec.fill(0);
-    write_lba0_verified(src, &lba0)
+    Ok(out)
 }
 
-/// msdos：boot 标志（0x80）开关
-pub fn set_mdos_boot(src: &mut WriteSource, part: u32, on: bool) -> Result<(), Fail> {
+/// msdos：主分区条目删除。按快照里的 LBA0 原文算出清零后的整扇区新内容（纯计算，
+/// 不读盘）；目标可写判定与装配、写盘由命令层编排，本模块不反向依赖 `assembly` /
+/// `execution`。
+pub fn delete_mdos_entry(lba0: &[u8], part: u32) -> Result<Vec<u8>, RunOutcome> {
+    cleared_mbr_image(lba0, part)
+}
+
+/// msdos boot 标志的纯产出：按 LBA0 原文算出整扇区新内容（不读盘、不写盘）。置位前
+/// 清掉其他三条槽位的同一字节——MBR 规范未规定 boot 标志唯一性，"至多一个"是本工具策略
+pub(crate) fn set_mdos_boot_image(lba0: &[u8], part: u32, on: bool) -> Result<Vec<u8>, RunOutcome> {
     primary_slot(part)?;
-    let mut lba0 = read_mbr_lba0(src)?;
     let off = 446 + (part as usize - 1) * 16;
-    require_live_entry(part, &lba0, off)?;
-    // MBR 规范未规定 boot 标志唯一性，"至多一个"是本工具策略：置位前清掉其他
+    require_live_entry(part, lba0, off)?;
+    let mut out = lba0.to_vec();
     if on {
         for i in 0..4usize {
-            lba0[446 + i * 16] = 0x00;
+            out[446 + i * 16] = 0x00;
         }
     }
-    lba0[off] = if on { 0x80 } else { 0x00 };
-    write_lba0_verified(src, &lba0)
+    out[off] = if on { 0x80 } else { 0x00 };
+    Ok(out)
 }
 
 /// msdos hidden：OSIndicator 换成 hidden 对应码（visible ↔ visible+0x10），映射取自
@@ -537,32 +630,52 @@ pub(crate) const MDOS_HIDDEN_PAIRS: &[(u8, u8)] = &[
     (0x0E, 0x1E), // FAT16 LBA
 ];
 
-pub fn set_mdos_hidden(src: &mut WriteSource, part: u32, on: bool) -> Result<(), Fail> {
+#[cfg(test)]
+pub fn set_mdos_hidden(src: &mut WriteSource, part: u32, on: bool) -> Result<(), RunOutcome> {
     primary_slot(part)?;
-    let mut lba0 = read_mbr_lba0(src)?;
-    let off = 446 + (part as usize - 1) * 16;
-    let cur = require_live_entry(part, &lba0, off)?;
-    let want = |t: u8, hide: bool| -> u8 {
-        for (v, h) in MDOS_HIDDEN_PAIRS {
-            if (hide && *v == t) || (!hide && *h == t) {
-                return if hide { *h } else { *v };
-            }
-        }
-        0
-    };
-    // 已是目标态（cur 本身就是 on 所指的那一侧）即无操作：重复执行同一意图应当
-    // 幂等，而不是第二次起被当"无对应类型"拒绝
-    if MDOS_HIDDEN_PAIRS.iter().any(|&(v, h)| if on { h == cur } else { v == cur }) {
+    let stamp = table_stamp(src, src.sector_size)?;
+    let lba0 = read_mbr_lba0(src)?;
+    let Some(out) = set_mdos_hidden_image(&lba0, part, on)? else {
         return Ok(());
+    };
+    write_lba0_verified(src, stamp, &out)
+}
+
+/// msdos hidden 的纯产出：`None` 表示条目已在目标态，不需要回写。已在目标态即无操作：
+/// 重复执行同一意图应当幂等，而不是第二次起被当"无对应类型"拒绝
+pub(crate) fn set_mdos_hidden_image(
+    lba0: &[u8],
+    part: u32,
+    on: bool,
+) -> Result<Option<Vec<u8>>, RunOutcome> {
+    primary_slot(part)?;
+    let off = 446 + (part as usize - 1) * 16;
+    let cur = require_live_entry(part, lba0, off)?;
+    if MDOS_HIDDEN_PAIRS
+        .iter()
+        .any(|&(v, h)| if on { h == cur } else { v == cur })
+    {
+        return Ok(None);
     }
-    let next = want(cur, on);
+    let next = hidden_counterpart(cur, on);
     if next == 0 {
-        return Err(Fail::refused(format!(
+        return Err(RunOutcome::refused(format!(
             "type 0x{cur:02X} has no hidden counterpart (supported: fat12/16/32 incl. lba, ntfs)"
         )));
     }
-    lba0[off + 4] = next;
-    write_lba0_verified(src, &lba0)
+    let mut out = lba0.to_vec();
+    out[off + 4] = next;
+    Ok(Some(out))
+}
+
+/// visible ↔ hidden 的类型码映射；无对应码返回 0
+fn hidden_counterpart(t: u8, hide: bool) -> u8 {
+    for (v, h) in MDOS_HIDDEN_PAIRS {
+        if (hide && *v == t) || (!hide && *h == t) {
+            return if hide { *h } else { *v };
+        }
+    }
+    0
 }
 
 /// msdos：分区类型字节直改（OSIndicator，类型名域见 util-linux pt-mbr-partnames.h）。
@@ -570,33 +683,51 @@ pub fn set_mdos_hidden(src: &mut WriteSource, part: u32, on: bool) -> Result<(),
 /// 类型字节承担结构语义，改写后解析侧不再认得出 GPT。扩展容器类型（0x05/0x0F/0x85）
 /// 双向拒绝：改成容器类型会凭空多出一条容器语义，把既有容器改走别的类型则让它管辖的
 /// 逻辑分区失去入口——本工具不管理逻辑分区，两个方向都不受理
-pub fn set_mdos_type(src: &mut WriteSource, part: u32, t: u8) -> Result<(), Fail> {
+#[cfg(test)]
+pub fn set_mdos_type(src: &mut WriteSource, part: u32, t: u8) -> Result<(), RunOutcome> {
+    check_mdos_type(part, t)?;
+    let stamp = table_stamp(src, src.sector_size)?;
+    let lba0 = read_mbr_lba0(src)?;
+    let out = set_mdos_type_image(&lba0, part, t)?;
+    write_lba0_verified(src, stamp, &out)
+}
+
+/// 类型字节的写前判定：槽位、0x00、0xEE 与扩展容器类型。不读盘，写入原语与装配期
+/// 共用同一份判据
+pub(crate) fn check_mdos_type(part: u32, t: u8) -> Result<(), RunOutcome> {
     primary_slot(part)?;
     if t == 0 {
-        return Err(Fail::refused("type 0x00 marks an empty entry — use `delete` to remove the partition"));
+        return Err(RunOutcome::refused("type 0x00 marks an empty entry — use `delete` to remove the partition"));
     }
     // 与 add_mdos_entry 同一判据：0xEE 是保护记录，不是可描述的条目类型
     if t == PROT_MBR_TYPE {
-        return Err(Fail::refused(
+        return Err(RunOutcome::refused(
             "type 0xEE is the GPT protective record, not a data partition — use a real partition type",
         ));
     }
     if MDOS_CONTAINER_TYPES.contains(&t) {
-        return Err(Fail::refused("extended-container types (0x05/0x0F/0x85) are not supported — logical partitions are out of scope"));
+        return Err(RunOutcome::refused("extended-container types (0x05/0x0F/0x85) are not supported — logical partitions are out of scope"));
     }
-    let mut lba0 = read_mbr_lba0(src)?;
+    Ok(())
+}
+
+/// msdos 类型字节的纯产出：按 LBA0 原文算出整扇区新内容（不读盘、不写盘）。0xEE 与
+/// 扩展容器两类条目的类型字节承担结构语义，改掉后解析侧不再认得出它们的结构，故拒绝
+pub(crate) fn set_mdos_type_image(lba0: &[u8], part: u32, t: u8) -> Result<Vec<u8>, RunOutcome> {
+    check_mdos_type(part, t)?;
     let off = 446 + (part as usize - 1) * 16;
-    let cur = require_live_entry(part, &lba0, off)?;
+    let cur = require_live_entry(part, lba0, off)?;
     if MDOS_CONTAINER_TYPES.contains(&cur) {
-        return Err(Fail::refused(format!("partition {part} is an extended container (0x{cur:02X}) — its type is structural, not descriptive")));
+        return Err(RunOutcome::refused(format!("partition {part} is an extended container (0x{cur:02X}) — its type is structural, not descriptive")));
     }
     // 与 delete_mdos_entry 同判据：0xEE 是保护记录，改掉它会让 pmbr_shape_valid 恒假，
     // GPT 从此被判成损坏，写路径只能 fail-closed
     if cur == PROT_MBR_TYPE {
-        return Err(Fail::refused(format!(
+        return Err(RunOutcome::refused(format!(
             "partition {part} is the GPT protective record (0xEE) — its type byte is structural, not descriptive"
         )));
     }
-    lba0[off + 4] = t;
-    write_lba0_verified(src, &lba0)
+    let mut out = lba0.to_vec();
+    out[off + 4] = t;
+    Ok(out)
 }

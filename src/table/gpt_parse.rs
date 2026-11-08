@@ -22,7 +22,7 @@ impl GptCopyKind {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RawHeader {
     /// 规范 Revision 字段（UEFI 2.10 §5.3.2 Table 5.5，字节序 0x00010000 = 1.0）。
     /// 与 HeaderSize 同口径：读到的值随头带回，重写按原值输出，不固定为 1.0

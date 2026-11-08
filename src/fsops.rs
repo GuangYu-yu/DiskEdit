@@ -30,7 +30,7 @@ pub(crate) use shrink::*;
 pub(crate) use attrs::*;
 
 use crate::dev::FileSource;
-use crate::fsid::{fs_name, FsKind};
+use crate::fsid::{content_name, ContentKind, FsKind};
 use std::ffi::{OsStr, OsString};
 use std::io;
 #[cfg(target_os = "linux")]

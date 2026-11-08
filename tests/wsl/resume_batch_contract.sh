@@ -1,31 +1,31 @@
 #!/usr/bin/env bash
-# ckpt batching 恢复契约（test-faults 注入版）：
-# 恢复只认 durable checkpoint；volatile 进度不得被当作恢复起点
+# 续跑批次契约（test-faults 注入版）：
+# 恢复只认已持久化的记录进度；未提交的易失进度不得被当作恢复起点
 #
 # 稳定性：本脚本在同一镜像名上反复重建/重跑，且断言依赖 loop 设备与后备文件两侧视图一致。
-# 每次取值前 sync（断言晚于落盘），配合 lib.sh 在 source 时复位 /testmnt，消除跨运行污染。
+# 每次取值前 sync（断言晚于落盘），配合 lib.sh 在 source 时复位 "$TEST_MNT"，消除跨运行污染。
 source "$(dirname "$0")/lib.sh"
 require_fault_bin
 
-T=/var/tmp/diskedit_test15.img
+img T batch15.img
 
-track_file "$T"
 
 # 攒批契约只在非自重叠搬移（delta ≥ 分区长度）下成立：自重叠为保重放字节精确
-# 逐 chunk 落 durable ckpt（见 movepart.rs），批量断言会踩空。布局取 delta=500M > len=400M。
+# 逐 chunk 把已提交进度写进记录（见 movepart），批量断言会踩空。布局取 delta=500M > len=400M。
 # p2 400M / chunk 默认 4M → 每条目 100 chunk；batch=16
 
 run_case() {
   local fault="$1" expect="$2" forbid="$3" label="$4"
-  rm -f "$T" "$T"$SIDECAR_GLOB
+  rm -rf "$T" "$T"$SIDECAR_GLOB
   truncate -s 2G "$T"
   $BF new "$T" --yes >/dev/null
-  $BF create "$T" --size 500M --name a >/dev/null
-  $BF create "$T" --size 400M --name b --fs ext4 --yes >/dev/null
+  $BF add "$T" 500M --align mib --name a --yes >/dev/null
+  $BF add "$T" 400M --align mib --name b --yes >/dev/null
+  $BF mkfs "$T":2 ext4 --yes >/dev/null
   LD=$(lo_attach "$T")
-  mount_at "${LD}p2" /testmnt
-  dd if=/dev/urandom of=/testmnt/blob.bin bs=1M count=350 2>/dev/null
-  umount /testmnt
+  mount_at "${LD}p2" "$TEST_MNT"
+  dd if=/dev/urandom of="$TEST_MNT/blob.bin" bs=1M count=350 2>/dev/null
+  umount "$TEST_MNT"
   # 基准哈希必须建立在"已落盘"状态上：dd 经 loop 写入，工具执行时直接读后备文件，
   # 先 sync 让两侧视图对齐，避免把未回写的现场当基准（断言时机早于落盘）
   sync
@@ -34,19 +34,23 @@ run_case() {
 
   echo "== case: $label =="
   # p1 是 grow 目标且没有 FS（b 才有 ext4）：扩分区表要显式 --no-fs，
-  # 本段验的是 ckpt/续跑，与 FS 步骤无关
+  # 本段验的是续跑进度，与 FS 步骤无关
   if [ -n "$fault" ]; then
     DISKEDIT_FAULT=$fault $BF resize "$T":1 +500M --allow-move --yes --no-fs >/dev/null 2>&1
     echo "process aborted (expected)"
   else
     $BF resize "$T":1 +500M --allow-move --yes --no-fs >/dev/null 2>&1
   fi
-  [ -f "$T$CKPT_SUFFIX" ] && echo "ckpt left: yes" || echo "ckpt left: no"
+  if [ -n "$expect" ]; then
+    assert_eq "$(record_cursor "$T")" "$expect" "记录游标停在 $expect"
+  else
+    record_absent "$T" && echo "  OK   正常跑完，无记录残留" || { echo "  BAD  正常跑完仍有记录"; rc=1; }
+  fi
 
   # 重跑同命令 → 续传（无注入）
   OUT=$($BF resize "$T":1 +500M --allow-move --yes --no-fs 2>&1)
   if [ -n "$expect" ]; then
-    echo "$OUT" | grep -q "resuming at entry 0 chunk $expect (durable checkpoint)" \
+    echo "$OUT" | grep -q "resuming at entry 0 chunk $expect (durable record)" \
       && echo "RESUME-START OK ($expect)" || { echo "RESUME-START WRONG (want $expect)"; rc=1; echo "$OUT" | grep resuming; }
     if [ -n "$forbid" ]; then
       echo "$OUT" | grep -q "resuming at entry 0 chunk $forbid " \

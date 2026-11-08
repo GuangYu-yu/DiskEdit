@@ -1,12 +1,17 @@
 //! 搬移计划的推导：由几何、表项与续传状态算出每步动作和端点。纯判定，不写盘。
+//!
+//! 计划型恢复只服务 `resize --allow-move`；持久状态是恢复记录里的
+//! [`crate::recovery::Relocation`]（有序计划 + 双游标 + 几何守卫），本文件负责把它
+//! 还原成 [`Plan`]、以及在没有现场时按当前几何现算。
 
 use super::*;
+use crate::recovery::{RelocEntry, RelocKind, Relocation};
 
-/// chunk 字节数：命令行 --chunk-size（MiB）传入；checkpoint 记录该值，
+/// chunk 字节数：命令行 --chunk（MiB）传入；checkpoint 记录该值，
 /// 续传时不一致即拒绝（chunks_done 是按 chunk 计数的，换大小会错位）
 pub fn chunk_bytes(mib: u64) -> io::Result<u64> {
-    if !(1..=1024).contains(&mib) {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, "--chunk-size out of range (1..=1024 MiB)"));
+    if !(1..=64).contains(&mib) {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "--chunk out of range (1..=64 MiB)"));
     }
     Ok(mib * 1024 * 1024)
 }
@@ -16,12 +21,9 @@ pub fn chunk_bytes(mib: u64) -> io::Result<u64> {
 /// （内容可弃 → 不搬数据、落位后 mkswap 重建），只有 resize-part 的单分区路径会
 /// 一并拒绝它（那里没有重建流程）
 ///
-/// 磁盘序常量取自 [`table`]，另一种摆法由 [`table::guid_in_field_order`] 从同一常量
-/// 派生：两种布局的盘都真实存在，识别两种都认，但标准文本只写一份
+/// 类型 GUID 一律按 UEFI 规范磁盘序比较（前三字段小端、Data4 原序），不做反向编码容错
 pub(crate) fn is_forbidden_type_guid(g: &[u8; 16]) -> bool {
-    [table::LUKS_TYPE_GUID, table::LVM_TYPE_GUID]
-        .iter()
-        .any(|known| *g == *known || *g == table::guid_in_field_order(known))
+    [table::LUKS_TYPE_GUID, table::LVM_TYPE_GUID].contains(g)
 }
 
 #[derive(Clone)]
@@ -34,11 +36,51 @@ pub struct PlanEntry {
     pub is_swap: bool,
 }
 
-/// swap 类型判定（磁盘序常量与 [`table::SWAP_TYPE_GUID`] 同源，另一种摆放由
-/// [`table::guid_in_field_order`] 派生）
+impl From<&PlanEntry> for RelocEntry {
+    fn from(e: &PlanEntry) -> Self {
+        Self {
+            partition: e.part_num,
+            src_first: e.first_lba,
+            len: e.len_lba,
+            delta: e.delta_lba,
+            is_swap: e.is_swap,
+        }
+    }
+}
+
+impl From<&RelocEntry> for PlanEntry {
+    fn from(e: &RelocEntry) -> Self {
+        Self {
+            part_num: e.partition,
+            first_lba: e.src_first,
+            len_lba: e.len,
+            delta_lba: e.delta,
+            is_swap: e.is_swap,
+        }
+    }
+}
+
+impl From<PlanKind> for RelocKind {
+    fn from(k: PlanKind) -> Self {
+        match k {
+            PlanKind::TailPacked => Self::TailPacked,
+            PlanKind::Shift => Self::Shift,
+        }
+    }
+}
+
+impl From<RelocKind> for PlanKind {
+    fn from(k: RelocKind) -> Self {
+        match k {
+            RelocKind::TailPacked => Self::TailPacked,
+            RelocKind::Shift => Self::Shift,
+        }
+    }
+}
+
+/// swap 类型判定：只认 [`table::SWAP_TYPE_GUID`] 的规范磁盘序编码
 pub(crate) fn is_swap_guid(g: &[u8; 16]) -> bool {
-    let known = table::SWAP_TYPE_GUID;
-    *g == known || *g == table::guid_in_field_order(&known)
+    *g == table::SWAP_TYPE_GUID
 }
 
 /// plan 的进入语义。`grow` 与 `SIZE` 两条命令共用同一个续跑槽位，续跑时必须
@@ -46,7 +88,7 @@ pub(crate) fn is_swap_guid(g: &[u8; 16]) -> bool {
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum PlanKind {
-    /// 吃满右侧空闲的尾部打包（`resize grow` / `plan` / `apply`）
+    /// 吃满右侧空闲的尾部打包（`resize grow --allow-move` / `plan --grow` 的预览）
     TailPacked,
     /// 精确落在请求新末端的最小位移（`resize SIZE + --allow-move`）
     Shift,
@@ -58,7 +100,7 @@ pub struct Plan {
     pub grow_part: u32,
     pub moves: Vec<PlanEntry>,
     pub kind: PlanKind,
-    /// 待执行的修复动作：plan 只记录，apply 执行（plan 本身不写盘）
+    /// 待执行的修复动作：`plan --grow` 只预览，写命令把它装配成表步骤经执行器落盘
     pub repair: RepairAction,
 }
 
@@ -68,7 +110,7 @@ pub struct Plan {
 pub(crate) fn blockers_after(
     g: &ValidatedGeometry,
     target_end: u64,
-) -> Result<Vec<(u32, &gptman::GPTPartitionEntry)>, Fail> {
+) -> Result<Vec<(u32, &gptman::GPTPartitionEntry)>, RunOutcome> {
     let mut movable: Vec<(u32, &gptman::GPTPartitionEntry)> = g
         .entries()
         .iter()
@@ -80,120 +122,255 @@ pub(crate) fn blockers_after(
     for (num, e) in &movable {
         // 条目端点倒挂属盘内容故障（解析层已拦，这里是纵深防守）
         if e.ending_lba < e.starting_lba {
-            return Err(Fail::infra(format!("partition {num} has ending LBA below starting LBA (corrupted table)")));
+            return Err(RunOutcome::no_mutation(format!("partition {num} has ending LBA below starting LBA (corrupted table)")));
         }
         if is_forbidden_type_guid(&e.partition_type_guid) {
-            return Err(Fail::refused(format!("partition {num} is LUKS/LVM PV — relocation refused")));
+            return Err(RunOutcome::refused(format!("partition {num} is LUKS/LVM PV — relocation refused")));
         }
     }
     Ok(movable)
 }
 
-/// plan 生成：只解析 + 验证 + 计算，不写盘。stale 表按"修复后"的几何生成计划，
-/// 并把修复动作记入 plan.repair，由 apply 执行。
-/// 尾打包规划的唯一实现处：几何已由调用方解析，本函数不再读盘、不再重新推导边界。
-/// 生产路径只有恢复感知入口（[`make_plan_resuming`]，几何解析一次），本函数由它直接调用
-pub(crate) fn plan_tail_packed(g: &ValidatedGeometry, repair: RepairAction, grow_part: u32) -> Result<Plan, Fail> {
-    let ss = g.sector_size();
-
-    // 目标分区必须存在（唯一查找出口见 live_entry）
-    let target = gpt_policy::live_entry(g, grow_part)?;
-
-    let movable = blockers_after(g, target.ending_lba)?;
-
-    let mut moves = Vec::new();
-    let mut cursor = g.last_usable_lba();
-    for (num, e) in movable.iter().rev() {
-        let len = e.ending_lba - e.starting_lba + 1;
-        // 尾部打包：末端对齐 cursor（含），不留缝隙
-        let new_first = cursor.checked_sub(len - 1).ok_or_else(|| {
-            Fail::refused("insufficient tail space for relocation")
-        })?;
-        // 目标起点低于源起点 = 尾部空间不足
-        let delta = new_first.checked_sub(e.starting_lba).ok_or_else(|| {
-            Fail::refused("insufficient tail space for relocation")
-        })?;
-        // saturating：new_first 理论上 ≥1（LBA0 保护 MBR + LBA1 主头），
-        // 极端输入下防下溢 panic，退化为 0 后由下轮 checked_sub 报空间不足
-        cursor = new_first.saturating_sub(1);
-        moves.push(PlanEntry { part_num: *num, first_lba: e.starting_lba, len_lba: len, delta_lba: delta, is_swap: is_swap_guid(&e.partition_type_guid) });
-    }
-    Ok(Plan { ss, last_usable_lba: g.last_usable_lba(), grow_part, moves, kind: PlanKind::TailPacked, repair })
+/// 几何求解的两种用户意图。落位算法只在这里分岔一次，其余（目标查找、阻挡集合、
+/// 条目落位、溢出与越界校验、计划装配）由 [`solve_layout`] 一份实现
+#[derive(Clone, Copy)]
+pub(crate) enum Layout {
+    /// 尾部打包：阻挡分区整体推到 `last_usable`，末端对齐、不留缝隙
+    TailPacked,
+    /// 最小位移：目标末端向右 `shift` 扇区，阻挡分区按起点升序依次落位，已在目标位的不动
+    Shift(u64),
 }
 
-/// 尾打包 plan 的恢复感知版本：ckpt 存在时以 ckpt 的 moves 为准（见 resume_outcome），
-/// 否则照常现算。几何与修复动作由调用方解析（一条命令解析一次，往下传），本函数不读表
-pub fn make_plan_resuming(
-    src: &FileSource,
+impl Layout {
+    const fn kind(self) -> PlanKind {
+        match self {
+            Self::TailPacked => PlanKind::TailPacked,
+            Self::Shift(_) => PlanKind::Shift,
+        }
+    }
+}
+
+/// 单条目落位的唯一实现：长度、位移、终点越界与 swap 标记只算一遍。
+/// 端点倒挂与不可搬移类型已由 [`blockers_after`] 拒绝，这里只处理落点算术
+fn relocate_entry(
+    num: u32,
+    e: &gptman::GPTPartitionEntry,
+    new_first: u64,
+    last_usable: u64,
+) -> Result<PlanEntry, RunOutcome> {
+    let len = e.ending_lba - e.starting_lba + 1;
+    let delta = new_first
+        .checked_sub(e.starting_lba)
+        .ok_or_else(|| RunOutcome::refused("insufficient tail space for relocation"))?;
+    let new_end = new_first
+        .checked_add(len - 1)
+        .ok_or_else(|| RunOutcome::refused("relocation target LBA overflows — refusing"))?;
+    if new_end > last_usable {
+        return Err(RunOutcome::refused(
+            "insufficient tail space to relocate blockers by the requested size",
+        ));
+    }
+    Ok(PlanEntry {
+        part_num: num,
+        first_lba: e.starting_lba,
+        len_lba: len,
+        delta_lba: delta,
+        is_swap: is_swap_guid(&e.partition_type_guid),
+    })
+}
+
+/// 几何求解器：plan 生成只解析 + 验证 + 计算，不写盘。stale 表按「修复后」的几何
+/// 求解，修复动作记入 `plan.repair`，由执行链落实。几何由调用方解析一次并下传，本函数
+/// 不再读盘、不再重新推导边界。
+///
+/// 两种意图共用同一份目标查找、阻挡集合、单条目落位与计划装配；策略只决定每条目的
+/// 新起点。输出统一按起始 LBA 降序（最右侧先搬），使拷贝永不踩源
+fn solve_layout(
     g: &ValidatedGeometry,
     repair: RepairAction,
     grow_part: u32,
-) -> Result<Plan, Fail> {
-    match resume_outcome(src, g, grow_part)? {
+    layout: Layout,
+) -> Result<Plan, RunOutcome> {
+    let target_end = gpt_policy::live_entry(g, grow_part)?.ending_lba;
+    let movable = blockers_after(g, target_end)?;
+    let last_usable = g.last_usable_lba();
+    let moves: Vec<PlanEntry> = match layout {
+        Layout::TailPacked => {
+            let mut out = Vec::with_capacity(movable.len());
+            // 从右端向左排：末端对齐 cursor（含），不留缝隙
+            let mut cursor = last_usable;
+            for (num, e) in movable.iter().rev() {
+                let len = e.ending_lba - e.starting_lba + 1;
+                let new_first = cursor
+                    .checked_sub(len - 1)
+                    .ok_or_else(|| RunOutcome::refused("insufficient tail space for relocation"))?;
+                out.push(relocate_entry(*num, e, new_first, last_usable)?);
+                cursor = new_first.saturating_sub(1);
+            }
+            out
+        }
+        Layout::Shift(shift) => {
+            if shift == 0 {
+                return Err(RunOutcome::refused("shift must be positive"));
+            }
+            if movable.is_empty() {
+                return Err(RunOutcome::refused(
+                    "no partition to relocate (right side is free — no --allow-move needed)",
+                ));
+            }
+            if shift < movable[0].1.starting_lba - target_end {
+                return Err(RunOutcome::refused(
+                    "shift does not exceed the free gap before the first blocker — relocation not needed",
+                ));
+            }
+            let mut cursor = target_end
+                .checked_add(shift)
+                .and_then(|v| v.checked_add(1))
+                .ok_or_else(|| RunOutcome::refused("relocation target LBA overflows — refusing"))?;
+            let mut out = Vec::with_capacity(movable.len());
+            for (num, e) in &movable {
+                let new_first = cursor.max(e.starting_lba);
+                out.push(relocate_entry(*num, e, new_first, last_usable)?);
+                let len = e.ending_lba - e.starting_lba + 1;
+                cursor = new_first
+                    .checked_add(len)
+                    .ok_or_else(|| RunOutcome::refused("relocation target LBA overflows — refusing"))?;
+            }
+            out.reverse(); // 升序构造 → 降序排列
+            out
+        }
+    };
+    Ok(Plan {
+        ss: g.sector_size(),
+        last_usable_lba: last_usable,
+        grow_part,
+        moves,
+        kind: layout.kind(),
+        repair,
+    })
+}
+
+/// 尾打包规划：生产路径只有恢复感知入口（[`make_plan_resuming`]）
+pub(crate) fn plan_tail_packed(
+    g: &ValidatedGeometry,
+    repair: RepairAction,
+    grow_part: u32,
+) -> Result<Plan, RunOutcome> {
+    solve_layout(g, repair, grow_part, Layout::TailPacked)
+}
+
+/// 最小位移规划：`resize SIZE + --allow-move` 的几何，落位算术见 [`solve_layout`]。
+///
+/// 落点是绝对量（同 parted `move START END` 的语义）：首个挡路分区新起点恰为
+/// 目标原末端 + shift + 1，执行链的扩容终点（`min(new_first) − 1`）因此精确落在
+/// 请求的新末端——既不多吞目标与挡路者之间的间隙，也不少给。后续挡路者取
+/// 「紧随前一落点」与「当前位置」的较大者：已在目标位的挡路者得到 delta 0、执行器跳过。
+/// 计划生成因此对部分位移后的盘面幂等——中断后 `abandon` 重跑生成与一次做成相同的
+/// 落点，不会对已搬段二次位移。输出按起始 LBA 降序，各分区的目的区要么落在尾部
+/// 空闲，要么落在其右侧已被搬空分区的旧位置，拷贝永不踩源
+pub(crate) fn shift_plan_from(
+    g: &ValidatedGeometry,
+    repair: RepairAction,
+    grow_part: u32,
+    shift: u64,
+) -> Result<Plan, RunOutcome> {
+    solve_layout(g, repair, grow_part, Layout::Shift(shift))
+}
+
+/// 本次续跑选定的 LV 与它的 extent 大小
+#[derive(Clone)]
+pub struct LvmSelection {
+    pub path: String,
+    pub extent_bytes: u64,
+    /// 选择时 LV 的当前字节数（扩 LV 的基线）
+    pub size: u64,
+}
+
+/// 分区已提交、LVM 收尾尚未完成时需要的事实。续跑据此判定该不该扩、扩到哪里：
+/// `lv_size_before` / `lv_target` 是同一次作业的基线，盘上没有第二份。
+///
+/// `lv_path` 只存在于本次进程内（记录不保存路径，续跑请求重新选定 LV）；
+/// `None` 且两个数值为 0 表示这次只做 pvresize（未请求 `--grow-lv`）
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LvmPostFacts {
+    pub lv_path: Option<String>,
+    pub lv_size_before: u64,
+    pub lv_target: u64,
+    /// 记录时的 VG extent 字节数：续跑核对 VG 的 extent 大小没有变，
+    /// 目标字节数仍与 `lvextend -l +N` 的 N 一致
+    pub extent_bytes: u64,
+}
+
+impl LvmPostFacts {
+    /// 记录侧的基线（不含 LV 路径）
+    pub(crate) fn to_record(&self) -> crate::recovery::LvmPost {
+        crate::recovery::LvmPost {
+            lv_size_before: self.lv_size_before,
+            lv_target: self.lv_target,
+            extent_bytes: self.extent_bytes,
+        }
+    }
+}
+
+/// 由"分区已提交、LVM 收尾未做"这一时点的三个量推出 LVM 基线。`defer` 表示本次作业
+/// 允许把 LVM 收尾留到之后；未请求 `--grow-lv` 时 `sel` 为空，只做 pvresize
+pub(crate) fn lvm_post_for(
+    defer: bool,
+    sel: Option<&LvmSelection>,
+    old_bytes: u64,
+    new_bytes: u64,
+) -> Result<Option<LvmPostFacts>, RunOutcome> {
+    if !defer || new_bytes <= old_bytes {
+        return Ok(None);
+    }
+    let delta = new_bytes - old_bytes;
+    let Some(s) = sel else {
+        // 未请求 --grow-lv：partition 的新空间由 pvresize 吸收，没有 LV 级的量
+        return Ok(Some(LvmPostFacts { lv_path: None, lv_size_before: 0, lv_target: 0, extent_bytes: 0 }));
+    };
+    let add = delta / s.extent_bytes;
+    if add == 0 {
+        return Err(RunOutcome::refused(format!(
+            "added {delta} bytes is less than one extent ({} bytes) — the LV cannot take any of the added space",
+            s.extent_bytes
+        )));
+    }
+    let overflow = || RunOutcome::no_mutation("LV target size overflows");
+    if s.size == 0 {
+        return Err(RunOutcome::refused(format!("LV {} reports 0 bytes — nothing to extend", s.path)));
+    }
+    let grow = add.checked_mul(s.extent_bytes).ok_or_else(overflow)?;
+    let lv_target = s.size.checked_add(grow).ok_or_else(overflow)?;
+    Ok(Some(LvmPostFacts {
+        lv_path: Some(s.path.clone()),
+        lv_size_before: s.size,
+        lv_target,
+        extent_bytes: s.extent_bytes,
+    }))
+}
+
+/// 尾打包 plan 的恢复感知版本：记录里有搬移状态时以它的有序计划为准（见
+/// [`resume_outcome`]），否则照常现算。几何与修复动作由调用方解析（一条命令解析
+/// 一次，往下传），本函数不读表
+pub fn make_plan_resuming(
+    relocation: Option<&Relocation>,
+    g: &ValidatedGeometry,
+    repair: RepairAction,
+    grow_part: u32,
+) -> Result<Plan, RunOutcome> {
+    match resume_outcome(relocation, g, grow_part)? {
         // 作业身份比对：本入口的进入语义是"吃满右侧"（TailPacked）。槽上那份若是精确
         // SIZE 的最小位移 plan，它的终点停在旧请求的末端——按 grow 收尾等于把本次请求
         // 静默换成旧作业的续跑。判据与 SIZE 入口共用一处（见 make_plan_shift_resuming）
-        ResumeOutcome::Belongs(p) => match p.kind {
+        ResumeRunOutcome::Belongs(p) => match p.kind {
             PlanKind::TailPacked => Ok(p),
             PlanKind::Shift => Err(plan_job_owns_target(p.kind, false)),
         },
         // 槽位是别的分区的作业：现算的 plan 与那份作业的现场不符，打印出来会与
-        // 盘上未收尾的事自相矛盾，apply 也只会得到一次注定失败的比对
-        ResumeOutcome::Occupied => Err(foreign_checkpoint_refusal()),
-        // 槽位被单分区 resize 作业占着：与 apply 同一结论、同一文案（那里在 prepare_apply
-        // 的分派处拒绝）。只修 apply 不修这里，plan 就会打印一份 apply 必然拒绝的计划并报成功
-        ResumeOutcome::ForeignResize { .. } => Err(foreign_resize_refusal()),
-        ResumeOutcome::Empty => plan_tail_packed(g, repair, grow_part),
+        // 盘上未收尾的事自相矛盾，执行器也只会得到一次注定失败的比对
+        ResumeRunOutcome::Occupied => Err(foreign_checkpoint_refusal()),
+        ResumeRunOutcome::Empty => plan_tail_packed(g, repair, grow_part),
     }
-}
-
-/// 最小位移 plan：目标分区增长 `shift` 扇区，其右侧所有挡路分区右移让位。
-/// 与 make_plan（尾打包）相对，用于精确大小的扩容（resize SIZE + --allow-move）。
-/// 落点是绝对量（同 parted `move START END` 的语义）：首个挡路分区新起点恰为
-/// 目标原末端 + shift + 1，apply 的扩容终点（min(new_first) − 1）因此精确落在
-/// 请求的新末端——既不多吞目标与挡路者之间的间隙，也不少给。
-/// 后续挡路者取"紧随前一落点"与"当前位置"的较大者：已在目标位的挡路者得到
-/// delta 0、apply 跳过。计划生成因此对部分位移后的盘面幂等——中断后 abandon 重跑
-/// （此时 ckpt 已删，必然现算）生成与一次做成相同的落点，不会对已搬段二次位移
-///
-/// moves 按起始 LBA 降序排列（apply 升序处理 → 最右侧先搬）：
-/// 各分区的目的区要么落在尾部空闲，要么落在其右侧已被搬空分区的旧位置，拷贝永不踩源
-/// 最小位移规划的唯一实现处：几何已由调用方解析，本函数不再读盘
-pub(crate) fn shift_plan_from(g: &ValidatedGeometry, repair: RepairAction, grow_part: u32, shift: u64) -> Result<Plan, Fail> {
-    let ss = g.sector_size();
-
-    let target = gpt_policy::live_entry(g, grow_part)?;
-    if shift == 0 {
-        return Err(Fail::refused("shift must be positive"));
-    }
-
-    let movable = blockers_after(g, target.ending_lba)?;
-    if movable.is_empty() {
-        return Err(Fail::refused("no partition to relocate (right side is free — no --allow-move needed)"));
-    }
-    if shift < movable[0].1.starting_lba - target.ending_lba {
-        return Err(Fail::refused("shift does not exceed the free gap before the first blocker — relocation not needed"));
-    }
-
-    let mut moves: Vec<PlanEntry> = Vec::with_capacity(movable.len());
-    let mut cursor = target.ending_lba.checked_add(shift)
-        .and_then(|v| v.checked_add(1))
-        .ok_or_else(|| Fail::refused("relocation target LBA overflows — refusing"))?;
-    for (num, e) in &movable {
-        let len = e.ending_lba - e.starting_lba + 1;
-        let new_first = cursor.max(e.starting_lba);
-        let delta = new_first - e.starting_lba;
-        let new_end = new_first.checked_add(len - 1).ok_or_else(|| {
-            Fail::refused("relocation target LBA overflows — refusing")
-        })?;
-        if new_end > g.last_usable_lba() {
-            return Err(Fail::refused("insufficient tail space to relocate blockers by the requested size"));
-        }
-        moves.push(PlanEntry { part_num: *num, first_lba: e.starting_lba, len_lba: len, delta_lba: delta, is_swap: is_swap_guid(&e.partition_type_guid) });
-        cursor = new_end.saturating_add(1);
-    }
-    moves.reverse(); // 升序构造 → 降序排列：最右侧先搬
-    Ok(Plan { ss, last_usable_lba: g.last_usable_lba(), grow_part, moves, kind: PlanKind::Shift, repair })
 }
 
 /// 本次 SIZE 请求相对目标当前末端的形状。续跑判定必须区分三者：缩容与"尺寸未变"
@@ -208,21 +385,21 @@ pub enum ShiftIntent {
     Shrink,
 }
 
-/// 中断感知的最小位移 plan：ckpt 存在时以 ckpt 的 moves 为准（见 resume_outcome），
-/// 否则按 `intent` 现算。`Shrink` 一律拒绝并指向续跑/放弃两条出路——槽上未收尾的
-/// plan 属于当初那条扩容请求，执行它就是把缩容静默放大成旧扩容（违反 plan 的
-/// "执行方即请求方"归属）。`NoOp` 只在表已提交、只剩收尾时出现：只有 kind 相符且
-/// 计划终点恰等于当前末端，才是同一作业的续跑。几何与修复动作由调用方解析并下传，
-/// 本函数不读表
+/// 中断感知的最小位移 plan：记录里有搬移状态时以它的有序计划为准（见
+/// [`resume_outcome`]），否则按 `intent` 现算。`Shrink` 一律拒绝并指向续跑/放弃
+/// 两条出路——记录里未收尾的 plan 属于当初那条扩容请求，执行它就是把缩容静默放大
+/// 成旧扩容（违反 plan 的"执行方即请求方"归属）。`NoOp` 只在表已提交、只剩收尾时
+/// 出现：只有 kind 相符且计划终点恰等于当前末端，才是同一作业的续跑。几何与修复
+/// 动作由调用方解析并下传，本函数不读表
 pub fn make_plan_shift_resuming(
-    src: &FileSource,
+    relocation: Option<&Relocation>,
     g: &ValidatedGeometry,
     repair: RepairAction,
     grow_part: u32,
     intent: ShiftIntent,
-) -> Result<Plan, Fail> {
-    match resume_outcome(src, g, grow_part)? {
-        ResumeOutcome::Belongs(p) => {
+) -> Result<Plan, RunOutcome> {
+    match resume_outcome(relocation, g, grow_part)? {
+        ResumeRunOutcome::Belongs(p) => {
             let e = gpt_policy::live_entry(g, grow_part)?;
             match intent {
                 // 缩容请求撞上任何搬移作业都不执行：那份作业的终点属于更大的请求
@@ -245,7 +422,7 @@ pub fn make_plan_shift_resuming(
                     let want_end = e
                         .ending_lba
                         .checked_add(shift)
-                        .ok_or_else(|| Fail::refused("requested size overflows the LBA range"))?;
+                        .ok_or_else(|| RunOutcome::refused("requested size overflows the LBA range"))?;
                     if plan_requested_end(&p, e.starting_lba) != Some(want_end) {
                         return Err(plan_job_owns_target(p.kind, true));
                     }
@@ -255,89 +432,64 @@ pub fn make_plan_shift_resuming(
         }
         // 与 make_plan_resuming 同判据：别的分区的作业占着槽位，本请求既不能把它
         // 当空槽、也不能按它续跑
-        ResumeOutcome::Occupied => return Err(foreign_checkpoint_refusal()),
-        // 另一族作业（单分区 resize）占着槽位：同上——现算的位移 plan 与那个作业的现场
-        // 不符，它的续跑点由 prepare_resize 按 RsCheckpoint 决定，不在这里
-        ResumeOutcome::ForeignResize { .. } => return Err(foreign_resize_refusal()),
-        ResumeOutcome::Empty => {}
+        ResumeRunOutcome::Occupied => return Err(foreign_checkpoint_refusal()),
+        ResumeRunOutcome::Empty => {}
     }
     let ShiftIntent::Grow(shift) = intent else {
-        return Err(Fail::refused(
+        return Err(RunOutcome::refused(
             "shrink does not relocate partitions — this entry point only builds relocation plans for growth",
         ));
     };
     shift_plan_from(g, repair, grow_part, shift)
 }
 
-/// 该分区是否有未收尾的 plan 型搬移作业。命令入口据此分流：几何上"右侧已空、可直接扩容"
-/// 并不代表作业已完成——右侧变空本身可能正是搬了一半的结果，收尾步骤（剩余搬移、swap 重建、
-/// FS 扩容）都还没做。几何由调用方解析并下传
-pub fn has_pending_relocation(src: &FileSource, g: &ValidatedGeometry, grow_part: u32) -> Result<bool, Fail> {
-    Ok(matches!(resume_outcome(src, g, grow_part)?, ResumeOutcome::Belongs(_)))
+/// 该分区是否有未收尾的 plan 型搬移作业。几何上"右侧已空、可直接扩容"并不代表
+/// 作业已完成——右侧变空本身可能正是搬了一半的结果，收尾步骤（剩余搬移、swap 重建、
+/// FS 扩容）都还没做。当前调用方是 movepart 的测试
+#[cfg(test)]
+pub fn has_pending_relocation(
+    relocation: Option<&Relocation>,
+    g: &ValidatedGeometry,
+    grow_part: u32,
+) -> Result<bool, RunOutcome> {
+    Ok(matches!(resume_outcome(relocation, g, grow_part)?, ResumeRunOutcome::Belongs(_)))
 }
 
-/// 事务门用的归属判定：与 `has_pending_relocation` 同一内核，但把"槽位属于别的分区"
-/// 如实报成 `Err`。压成 `false` 的后果是用户只看到通用的"目标被占着"，而真正的原因
-/// （该去重跑哪个命令）丢失在领域层
-pub(crate) fn relocation_ownership(src: &FileSource, grow_part: u32) -> Result<bool, Fail> {
-    match resume_outcome_in(src, grow_part)? {
-        ResumeOutcome::Belongs(_) => Ok(true),
-        // 空槽与"另一族作业占着"对本事务门是同一结论：都不由它续跑（单分区
-        // resize 的现场要用 resize-part / move 续），闸口按 busy 拒绝
-        ResumeOutcome::Empty | ResumeOutcome::ForeignResize { .. } => Ok(false),
-        ResumeOutcome::Occupied => Err(foreign_checkpoint_refusal()),
-    }
-}
-
-/// 槽位里的单分区 resize 作业是否属于 `part` 且记着 LVM 收尾事实。`resize` 入口的收尾链
-/// 事实（`RsCheckpoint::lvm`）只随这一类现场落盘，也只有 `resize` 的收尾能续做它。
-/// 别的分区由 `resize-part` / `move` 续；不带 LVM 收尾事实的现场沿用原有契约
-/// （`resize` 拒绝、由 `undo` 回滚或 `abandon` 释放），故这里一并返回 false
-pub(crate) fn partition_resize_ownership(src: &FileSource, part: u32) -> Result<bool, Fail> {
-    Ok(matches!(
-        resume_outcome_in(src, part)?,
-        ResumeOutcome::ForeignResize { part: p, lvm_pending: true } if p == part
-    ))
-}
-
-/// 槽位被**别的分区**的搬移作业占用时的拒绝理由。两处 plan 生成路径与事务门共用
-/// 同一句话：同一事实的措辞只写一次，否则用户在不同入口看到的原因迟早会漂移
-pub(crate) fn foreign_checkpoint_refusal() -> Fail {
-    Fail::refused(
-        "an unfinished relocation job for a different partition occupies the checkpoint slot — re-run that job's command to finish it first",
-    )
-}
-
-/// 槽位被**另一族**作业（单分区 resize）占用时的拒绝理由。`prepare_apply` 的分派处与
-/// `make_plan_resuming` 共用同一句话：只修一处会让 plan 打印一份 apply 必然拒绝的计划，
-/// 而两边给同一事实的措辞也会漂移
-pub(crate) fn foreign_resize_refusal() -> Fail {
-    Fail::refused(
-        "an unfinished single-partition resize job occupies the checkpoint slot — resume it with `resize-part` or `resize`, or release it with `diskedit abandon`",
+/// 槽位被**别的分区**的搬移作业占用时的拒绝理由。三处 plan 生成路径共用同一句话：
+/// 同一事实的措辞只写一次，否则用户在不同入口看到的原因迟早会漂移。这里不知道那份
+/// 作业的形状，所以只说"它属于创建它的那条请求"，不把重跑说成通用的出路
+pub(crate) fn foreign_checkpoint_refusal() -> RunOutcome {
+    RunOutcome::refused(
+        "an unfinished relocation job for a different partition is recorded on this target — it belongs \
+         to the request that created it: finish it with that request, or release it with `diskedit abandon`",
     )
 }
 
 /// 续跑入口的作业身份不匹配时的拒绝理由。措辞按 pending 作业的进入语义分句：
-/// 用户拿到的必须是**唯一**能接着做下去的那条命令。四个续跑入口（grow / SIZE /
-/// plan / apply）共用这一处——只修其中一处，同一条事实在不同入口的指引迟早漂移
-pub(crate) fn plan_job_owns_target(kind: PlanKind, different_size: bool) -> Fail {
-    let verb = match kind {
-        PlanKind::TailPacked => "`resize grow`",
-        PlanKind::Shift => "`resize SIZE --allow-move`",
-    };
-    if different_size {
-        Fail::refused(format!(
-            "an unfinished {verb} job owns this target for a different size — re-run that command with its original size, or `diskedit abandon` to release it",
-        ))
-    } else {
-        Fail::refused(format!(
-            "an unfinished {verb} job owns this target — re-run that command to resume it, or `diskedit abandon` to release it",
-        ))
+/// 用户拿到的必须是**唯一**能接着做下去的那条命令。两个续跑入口（`resize grow` /
+/// `resize SIZE + --allow-move`）与只读预览 `plan --grow` 共用这一处——只修其中一处，
+/// 同一条事实在不同入口的指引迟早漂移。
+/// 两种形状的重跑都是续跑：最小位移作业按原尺寸接着做，尾部打包作业按记录里的
+/// 有序计划接着做（提交前区间与计划同一次落盘，见 `shift::execute_apply`）
+pub(crate) fn plan_job_owns_target(kind: PlanKind, different_size: bool) -> RunOutcome {
+    match kind {
+        PlanKind::TailPacked => RunOutcome::refused(
+            "an unfinished `resize grow` job owns this target — re-run that command to continue it, or \
+             release it with `diskedit abandon`",
+        ),
+        PlanKind::Shift if different_size => RunOutcome::refused(
+            "an unfinished `resize SIZE --allow-move` job owns this target for a different size — re-run \
+             that command with its original size to continue it, or `diskedit abandon` to release it",
+        ),
+        PlanKind::Shift => RunOutcome::refused(
+            "an unfinished `resize SIZE --allow-move` job owns this target — re-run that command with the \
+             original size to continue it, or `diskedit abandon` to release it",
+        ),
     }
 }
 
-/// 作业身份里的"请求数值"一维：Shift plan 的扩容终点（`min(new_first) − 1`，与 apply
-/// 实际写下的终点是同一实现）。TailPacked 的终点由几何决定、没有数值维度，返回 None
+/// 作业身份里的"请求数值"一维：Shift plan 的扩容终点（`min(new_first) − 1`，与写盘
+/// 实际落下的终点是同一实现）。TailPacked 的终点由几何决定、没有数值维度，返回 None
 /// 表示"这一维不参与比对"；几何非法时同样返回 None——比对不上即拒绝，不把损坏现场
 /// 当成"身份相符"放行
 pub(crate) fn plan_requested_end(plan: &Plan, target_start: u64) -> Option<u64> {
@@ -347,106 +499,51 @@ pub(crate) fn plan_requested_end(plan: &Plan, target_start: u64) -> Option<u64> 
     }
 }
 
-/// 三态判定的共用内核：几何在内部解析（调用方手上没有已验证几何）
-pub(crate) fn resume_outcome_in(src: &FileSource, grow_part: u32) -> Result<ResumeOutcome, Fail> {
-    let (g, _repair) = gpt_policy::resolve_geometry(src)?.ok_or_else(|| Fail::refused("no GPT on target"))?;
-    resume_outcome(src, &g, grow_part)
+/// 三态判定的内核：记录里的搬移状态 → 空 / 属于本分区 / 属于别的分区。
+///
+/// `Belongs` 时以记录里的有序计划为准：盘上几何已被部分执行改变，重算出的 delta 与
+/// 记录不一致，会撞上执行器的恢复校验而使续传永久失败。记录存在 ⇒ repair 已在执行链
+/// 开头执行过（在首次落盘之前），故 repair 记 None
+pub(crate) fn resume_outcome(
+    relocation: Option<&Relocation>,
+    g: &ValidatedGeometry,
+    grow_part: u32,
+) -> Result<ResumeRunOutcome, RunOutcome> {
+    let Some(r) = relocation else {
+        return Ok(ResumeRunOutcome::Empty);
+    };
+    if r.grow_part != grow_part {
+        return Ok(ResumeRunOutcome::Occupied);
+    }
+    Ok(ResumeRunOutcome::Belongs(Plan {
+        ss: r.ss,
+        last_usable_lba: g.last_usable_lba(),
+        grow_part: r.grow_part,
+        moves: r.entries.iter().map(PlanEntry::from).collect(),
+        kind: r.kind.into(),
+        repair: RepairAction::None,
+    }))
 }
 
 /// resume 判定的三态结论——刻意不压扁成 Option："没有作业"、"是本次请求的作业"、
 /// "槽位被别的作业占用"在调用方处各走各路：只有第一种允许现算新计划；第二种以
 /// ckpt 为准续跑；第三种必须拒绝——当空槽会覆盖别人的现场，当自己的续跑点会执行
 /// 错误的 plan（盘上几何已被那次作业部分改写，现算出的 delta 与其记录不一致）
-pub(crate) enum ResumeOutcome {
+pub(crate) enum ResumeRunOutcome {
     Empty,
     /// ckpt 属于本次请求的分区：plan 自持（盘上几何已被部分执行改变，现算必错）
     Belongs(Plan),
     /// 槽位被别的分区的 relocation ckpt 占用；`has_pending_relocation` 只回答"plan 型
     /// 搬移"，搬移路径必须拒绝——现算的 plan 与那份作业的现场不符
     Occupied,
-    /// 槽位被**另一族**作业（单分区 resize 的 `RsCheckpoint`）占用。与 `Occupied` 并列而非
-    /// 并入，因为两族对它的结论不同：plan 型搬移绝不能在此现算计划——盘上几何已被那次
-    /// resize 部分改写，现算的 plan 会打印成功，apply 却必然拒绝。带上是哪个分区，以及
-    /// 那份 ckpt 是否记着 LVM 收尾事实：`resize` 入口用它分出"这份作业就是本次请求的
-    /// 续跑"（收尾链事实只能由 `resize` 续做）与"槽位属于别的分区或不属于 LVM 收尾"
-    /// （前者归 `resize-part` / `move`，后者按原有契约拒绝）
-    ForeignResize { part: u32, lvm_pending: bool },
 }
 
-/// ckpt 里记录的 plan（仅当它属于该分区）。plan 型搬移的**任何**生成路径在恢复期都必须
-/// 以它为准：盘上几何已被部分执行改变，重算出的 delta 与 ckpt 记的不一致，会撞上 apply
-/// 的恢复校验而使续传永久失败。ckpt 存在 ⇒ repair 已在 apply 开头执行过（在初始 ckpt
-/// 写入之前），故 repair 记 None
-pub(crate) fn resume_outcome(src: &FileSource, g: &ValidatedGeometry, grow_part: u32) -> Result<ResumeOutcome, Fail> {
-    let (slot, _) = read_checkpoint(src, g)?;
-    Ok(match slot {
-        CheckpointSlot::Relocation(c) => {
-            let c = *c;
-            if c.grow_part == grow_part {
-                ResumeOutcome::Belongs(Plan {
-                    ss: c.ss,
-                    last_usable_lba: c.last_usable_lba,
-                    grow_part: c.grow_part,
-                    moves: c.moves,
-                    kind: c.kind,
-                    repair: RepairAction::None,
-                })
-            } else {
-                ResumeOutcome::Occupied
-            }
-        }
-        CheckpointSlot::Empty => ResumeOutcome::Empty,
-        // 另一族作业（单分区 resize）占着槽位：搬移不得在此现算计划，见 `ForeignResize`
-        CheckpointSlot::Resize(c) => ResumeOutcome::ForeignResize { part: c.part, lvm_pending: c.lvm.is_some() },
-    })
-}
-
-// ---------- checkpoint ----------
+// ---------- 持久状态 ----------
 //
-// 落盘状态的判据：**只持久化盘上无法判定到可枚举有限状态的事实**。按它三选一——
-// "表项是否已提交"由盘上的分区几何直接给出（commit 写绝对 LBA、重放幂等），不另存；
-// "FS 是否已缩"算得出当前大小、算不出历史（缩过就再也看不出来），必须存（fs_shrunk）；
-// "搬到第几 chunk"从数据区只看得出"已覆盖"、看不出"到哪"，必须存（chunks_done）。
-// 本文两个 checkpoint（搬移的 Checkpoint 与单分区缩放的 RsCheckpoint）同受此判据约束
-
-/// 搬移是否自重叠：位移小于源区间长度，即目的区间与源区间相交。
-///
-/// 判据只取几何，与"块大小是否已被收敛"无关：请求块本来就不大于位移时布局已安全，
-/// 但重做仍会读到本批后续写覆盖过的源区，所以批量提交的开关必须按它分派。
-/// 位移为 0 时有源区间与自己重合的语义，但没有任何拷贝要做，不算自重叠
-pub(crate) fn relocation_overlaps(shift_lba: u64, src_len_lba: u64) -> bool {
-    shift_lba != 0 && shift_lba < src_len_lba
-}
-
-/// 一条搬移的块布局：返回 `(每块字节数, 块数上界)`。
-///
-/// 逐块前移的覆盖顺序要求**自重叠**搬移（位移 < 源长度）的单次拷贝不超过位移，
-/// 否则本次拷贝会写进自己还没读的源区。故有效块大小取 `chunk_bytes` 与位移字节的
-/// 较小者。**唯一实现**：搬移循环、checkpoint 采纳与续跑校验都从这里取——同一算式
-/// 抄在多处时，任何一处漂移都会变成"少拷却提交表项"或"重做读到已被覆盖的源"。
-///
-/// `copy_lba` 是本次要搬的扇区数（plan 条目 = 分区长度；move+shrink = 新旧区间的
-/// 较小者），`src_len_lba` 是源区间长度，自重叠由 [`relocation_overlaps`] 判定。
-/// 位移为 0 的条目与块大小算成 0 的现场都没有可用的块布局，返回 `None`
-/// （调用方按"溢出/损坏"拒绝，不拿 0 当除数）
-pub(crate) fn move_chunk_layout(
-    copy_lba: u64,
-    ss: u64,
-    shift_lba: u64,
-    src_len_lba: u64,
-    chunk_bytes: u64,
-) -> Option<(u64, u64)> {
-    let chunk = if relocation_overlaps(shift_lba, src_len_lba) {
-        chunk_bytes.min(shift_lba.checked_mul(ss)?)
-    } else {
-        chunk_bytes
-    };
-    if chunk == 0 {
-        return None;
-    }
-    let count = copy_lba.checked_mul(ss)?.checked_add(chunk - 1)? / chunk;
-    Some((chunk, count))
-}
+// 落盘状态的判据：**只持久化盘上无法判定到可枚举有限状态的事实**。搬移的持久状态
+// 全部收在恢复记录的 [`crate::recovery::Relocation`] 里：有序计划、双游标、块字节、
+// 作业语义与几何守卫。"表项是否已提交"由盘上几何直接给出（commit 写绝对 LBA、重放
+// 幂等），不另存；"搬到第几 chunk"从数据区只看得出"已覆盖"、看不出"到哪"，必须存
 
 /// 扩容终点：`moves` 是按"末→首"的尾部紧凑打包序，各分区新起点中最小者即本次腾出空间的
 /// 左边界，故 grow_end = min(new_first) − 1；无 movable 时扩到 last_usable_lba。

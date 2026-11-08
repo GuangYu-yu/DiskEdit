@@ -2,7 +2,7 @@
 
 use super::*;
 
-/// 缩容后的**实际落点**核对结论。请求值只说明"我们要了多大"——工具的取整粒度各不相同
+/// 缩容后的**实际落点**核对结论。请求值只说明请求了多大——工具的取整粒度各不相同
 /// （ext 按块、ntfs 按簇、btrfs 按 sectorsize），真正决定"分区能不能缩到请求尺寸"的是
 /// 文件系统实际落在哪儿，故工具成功返回后必须回读一次
 pub enum ShrinkVerify {
@@ -10,7 +10,7 @@ pub enum ShrinkVerify {
     Within(u64),
     /// 回读不出来（工具缺失、输出解析不了、缩容把卷标成待检查而工具拒答）：缩容**可能已经
     /// 完成**，只是落点无法证实。这是"结果无法验证"，不是"缩容失败"——由
-    /// [`ShrinkOutcome::Unverified`] 携带成一条待办，不上抛成错误
+    /// [`ShrinkRunOutcome::Unverified`] 携带成一条待办，不上抛成错误
     Unverifiable { why: String, hint: String },
 }
 
@@ -42,14 +42,14 @@ impl ShrinkVerify {
 
 /// 缩容这一动的结果。两个变体是两条互斥的通道：落点已回读证实，或回读不出、结果未证实。
 /// "未证实"只出现在 [`Self::Unverified`] 上，与已证实的尺寸互斥，不藏在成功变体里
-pub enum ShrinkOutcome {
+pub enum ShrinkRunOutcome {
     /// 回读证实的实际落点；`leak` 是没卸掉的挂载点（只有 btrfs 路径会产生）
     Verified { actual: u64, leak: Option<MountLeak> },
     /// 工具成功返回但落点回读不出：缩容可能已应用，尺寸未知
     Unverified { why: String, hint: String, leak: Option<MountLeak> },
 }
 
-impl ShrinkOutcome {
+impl ShrinkRunOutcome {
     /// 缩容成功那一行：请求值与实际落点都给（工具的取整差异因此可见）。
     /// 未证实时没有落点可报
     pub fn ok_line(&self, requested: u64) -> Option<String> {
@@ -91,17 +91,17 @@ impl ShrinkOutcome {
 }
 
 /// 核对结论 → 结果的两种变体。转换只在此一处，调用方不再自行解读 [`ShrinkVerify`]
-fn shrink_outcome(verify: ShrinkVerify, leak: Option<MountLeak>) -> ShrinkOutcome {
+fn shrink_outcome(verify: ShrinkVerify, leak: Option<MountLeak>) -> ShrinkRunOutcome {
     match verify {
-        ShrinkVerify::Within(actual) => ShrinkOutcome::Verified { actual, leak },
-        ShrinkVerify::Unverifiable { why, hint } => ShrinkOutcome::Unverified { why, hint, leak },
+        ShrinkVerify::Within(actual) => ShrinkRunOutcome::Verified { actual, leak },
+        ShrinkVerify::Unverifiable { why, hint } => ShrinkRunOutcome::Unverified { why, hint, leak },
     }
 }
 
-/// FS 缩容到指定字节数（先于分区边界收缩执行）。契约是 `new_bytes` ≤ 旧**分区**尺寸
+/// FS 缩容到指定字节数（先于分区边界收缩执行）。要求是 `new_bytes` ≤ 旧**分区**尺寸
 /// 而非"≤ 当前 FS 大小"：FS 小于分区时（曾扩过分区或中断过的现场）此调用实为扩容，
 /// 方向良性——FS 工具把 FS 对到目标尺寸即可，不构成失败
-pub fn shrink_fs(src: &FileSource, part: u32, fstype: Option<FsKind>, new_bytes: u64) -> Result<ShrinkOutcome, FsError> {
+pub fn shrink_fs(src: &FileSource, part: u32, fstype: Option<ContentKind>, new_bytes: u64) -> Result<ShrinkRunOutcome, FsError> {
     let r = shrink_fs_step(src, part, fstype, new_bytes);
     // 成功才提示：失败路径已有的"盘可能已改变"警示不额外承担回滚范围的说明
     if r.is_ok() {
@@ -110,21 +110,21 @@ pub fn shrink_fs(src: &FileSource, part: u32, fstype: Option<FsKind>, new_bytes:
     r
 }
 
-fn shrink_fs_step(src: &FileSource, part: u32, fstype: Option<FsKind>, new_bytes: u64) -> Result<ShrinkOutcome, FsError> {
+fn shrink_fs_step(src: &FileSource, part: u32, fstype: Option<ContentKind>, new_bytes: u64) -> Result<ShrinkRunOutcome, FsError> {
     match fstype {
-        Some(FsKind::Ext) => {
+        Some(ContentKind::Filesystem(FsKind::Ext)) => {
             // 纯参数校验必须在任何写盘之前：e2fsck -fp 本身会写盘，把它排在后面
             // 会让一次参数错误先改文件系统、再以 Refused 退出
             if !new_bytes.is_multiple_of(512) {
                 return Err(FsError::invalid("shrink size must be a multiple of 512"));
             }
             let verify = with_partition_device(src, part, |dev| {
-                let out = run("e2fsck", &["-fp", dev])?;
+                let out = run_write("e2fsck", &["-fp", dev])?;
                 check_e2fsck_status_for_resize(&out.status)?;
                 // resize2fs 裸数字单位是"文件系统块数"而非字节（man resize2fs）；
                 // 's' 后缀 = 512 字节扇区。分区尺寸必为 sector_size(≥512) 整数倍
                 let sectors = format!("{}s", new_bytes / 512);
-                let out = run("resize2fs", &[dev, &sectors]).map_err(|e| tool_write_maybe_started("resize2fs", dev, e))?;
+                let out = run_write("resize2fs", &[dev, &sectors]).map_err(|e| tool_write_maybe_started("resize2fs", dev, e))?;
                 if !out.status.success() {
                     return Err(FsError::CommandFailed(format!(
                         "resize2fs shrink failed: {}",
@@ -135,10 +135,10 @@ fn shrink_fs_step(src: &FileSource, part: u32, fstype: Option<FsKind>, new_bytes
             })?;
             Ok(shrink_outcome(verify, None))
         }
-        Some(FsKind::Ntfs) => {
+        Some(ContentKind::Filesystem(FsKind::Ntfs)) => {
             let verify = with_partition_device(src, part, |dev| {
                 // -s 无后缀 = 字节，k/M/G = 10³/10⁶/10⁹（man ntfsresize OPTIONS）；本工具只传裸字节
-                let out = run("ntfsresize", &["-f", "-f", "-s", &new_bytes.to_string(), dev])?;
+                let out = run_write("ntfsresize", &["-f", "-f", "-s", &new_bytes.to_string(), dev])?;
                 if !out.status.success() {
                     return Err(FsError::CommandFailed(format!(
                         "ntfsresize shrink failed: {}",
@@ -149,7 +149,7 @@ fn shrink_fs_step(src: &FileSource, part: u32, fstype: Option<FsKind>, new_bytes
             })?;
             Ok(shrink_outcome(verify, None))
         }
-        Some(FsKind::Btrfs) => {
+        Some(ContentKind::Filesystem(FsKind::Btrfs)) => {
             let (off, len) = partition_byte_range(src, part)?;
             refuse_btrfs_multi_device_at(src, off, len)?;
             // 核对结论由闭包写进外层：回读失败（工具没落在请求范围内）要从 `with_mount`
@@ -160,7 +160,7 @@ fn shrink_fs_step(src: &FileSource, part: u32, fstype: Option<FsKind>, new_bytes
             let leak = with_scope_device_ranged(src, &DeviceScope::Partition(part), off, len, |dev| {
                 with_mount(dev, |mnt| {
                     // 裸数字 = 绝对字节数、必须挂载态（man btrfs-filesystem resize）
-                    let out = run("btrfs", &["filesystem", "resize", &new_bytes.to_string(), mnt])
+                    let out = run_write("btrfs", &["filesystem", "resize", &new_bytes.to_string(), mnt])
                         .map_err(|e| tool_write_maybe_started("btrfs resize", mnt, e))?;
                     if !out.status.success() {
                         return Err(FsError::CommandFailed(format!(
@@ -180,15 +180,22 @@ fn shrink_fs_step(src: &FileSource, part: u32, fstype: Option<FsKind>, new_bytes
             })?;
             Ok(shrink_outcome(verify, leak))
         }
-        other => Err(FsError::unsupported(format!("fs {} cannot shrink", fs_name(other)))),
+        other => Err(FsError::unsupported(format!(
+            "fs {} cannot shrink",
+            content_name(other.unwrap_or(ContentKind::Unknown))
+        ))),
     }
 }
 
 /// 缩容**之前**看 FS 现在落在哪儿：中断续跑用它区分"已缩到位"与"从未缩过"，
 /// 避免按盲判把同一次缩容再做一遍。
 /// `None` 与 [`ShrinkVerify::Unverifiable`] 同义——回读不出来，无从判断。
-pub fn shrink_already_at(src: &FileSource, part: u32, fstype: Option<FsKind>, requested: u64) -> Option<bool> {
-    let kind = fstype?;
+pub fn shrink_already_at(src: &FileSource, part: u32, fstype: Option<ContentKind>, requested: u64) -> Option<bool> {
+    // 不是文件系统的内容（swap / LVM PV）缩不了，也谈不上"已缩到位"：与其余不能缩的
+    // 类型同判，由 shrink_fs 给出拒绝
+    let Some(kind) = fstype?.filesystem() else {
+        return Some(false);
+    };
     match kind {
         FsKind::Ext | FsKind::Ntfs => with_partition_device(src, part, |dev| {
             Ok::<Option<bool>, FsError>(read_fs_bytes(kind, dev).ok().map(|actual| actual <= requested))
@@ -262,7 +269,10 @@ pub(crate) fn read_fs_bytes(kind: FsKind, dev: &str) -> io::Result<u64> {
             &run_text("btrfs", &["inspect-internal", "dump-super", "-f", dev])?,
             "total_bytes",
         )?),
-        other => Err(io::Error::other(format!("no size read-back wired for {}", fs_name(Some(other))))),
+        other => Err(io::Error::other(format!(
+            "no size read-back wired for {}",
+            content_name(ContentKind::Filesystem(other))
+        ))),
     }
 }
 

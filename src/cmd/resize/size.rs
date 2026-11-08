@@ -1,48 +1,45 @@
-//! SIZE 参数解析与 grow/shrink 请求归一。
+//! SIZE 请求归一：类型化的 [`SizeSpec`] →（绝对目标字节数, grow 标记）。
 
-use super::*;
+use crate::cli::SizeSpec;
+use crate::outcome::RunOutcome;
 
-/// SIZE 请求 →（绝对目标字节数, grow 标记），GPT/MBR resize 共用。SIZE 只有位置参数一种
-/// 给法，调用点都拿同一份原始字符串在各自锁下重解析——`+N`/`+N%` 锚定"当前尺寸"、
-/// `grow` 锚定右侧空闲，锁前解析出的绝对值在窗口内可能已作废。绝对值/扩/缩都锚定
-/// `cur_bytes`（调用方保证它是锁下的当前分区字节数）；"grow" 是唯一表示"吃满右侧空闲"
-/// 的写法，两者皆缺 = 未指定 SIZE
-pub(crate) fn resolve_size_request(size: Option<&str>, cur_bytes: u64) -> Result<(Option<u64>, bool), crate::outcome::Fail> {
-    let mut grow_to_end = false;
-    let mut target: Option<u64> = None;
-    if let Some(s) = size {
-        if s == "grow" {
-            grow_to_end = true;
-        } else {
-            let ask = parse_size_delta(s)
-                .ok_or_else(|| Fail::refused(format!("bad SIZE {s:?} (use 10G | 1.5G | +2G | -500M | +10% | grow; see diskedit help resize)")))?;
-            match ask {
-                SizeArg::Percent { kind, num, denom } => {
-                    // 百分比增量：锚定当前分区字节数，先乘后除（u128 防溢出）避免丢余数，
-                    // 再向下取整到 1MiB，保证结果落在扇区/对齐界内。分母一并进除数，
-                    // 小数百分比（+1.5%）不必先折成整数百分比
-                    let raw = (cur_bytes as u128).checked_mul(num as u128)
-                        .and_then(|x| x.checked_div(100u128 * denom as u128))
-                        .filter(|x| *x <= u64::MAX as u128)
-                        .ok_or_else(|| Fail::refused(format!("{s} overflows partition size")))? as u64;
-                    let delta = raw / (1024 * 1024) * (1024 * 1024);
-                    target = Some(match kind {
-                        1 => cur_bytes.checked_add(delta).ok_or_else(|| Fail::refused(format!("{s} overflows partition size")))?,
-                        _ => cur_bytes.checked_sub(delta).ok_or_else(|| Fail::refused(format!("{s} exceeds current size {cur_bytes}")))?,
-                    });
-                }
-                SizeArg::Bytes { kind, bytes } => {
-                    target = Some(match kind {
-                        0 => bytes,
-                        1 => cur_bytes.checked_add(bytes).ok_or_else(|| Fail::refused(format!("{s} overflows partition size")))?,
-                        _ => cur_bytes.checked_sub(bytes).ok_or_else(|| Fail::refused(format!("{s} exceeds current size {cur_bytes}")))?,
-                    });
-                }
-            }
+/// SIZE 请求 →（绝对目标字节数, grow 标记），GPT/MBR resize 共用。调用点都在各自锁下
+/// 用同一份请求重算——`Delta`/`Percent` 锚定"当前尺寸"、`Grow` 锚定右侧空闲，锁前算出的
+/// 绝对值在窗口内可能已作废。`Absolute`/`Delta`/`Percent` 都以 `cur_bytes` 为锚
+/// （调用方保证它是锁下的当前分区字节数）；`Grow` 是唯一表示"吃满右侧空闲"的写法
+pub(crate) fn resolve_size_request(size: SizeSpec, cur_bytes: u64) -> Result<(Option<u64>, bool), RunOutcome> {
+    match size {
+        SizeSpec::Grow => Ok((None, true)),
+        SizeSpec::Absolute(bytes) => Ok((Some(bytes), false)),
+        SizeSpec::Delta { grow: true, bytes } => cur_bytes
+            .checked_add(bytes)
+            .map(|t| (Some(t), false))
+            .ok_or_else(|| RunOutcome::refused("SIZE overflows the partition size")),
+        SizeSpec::Delta { grow: false, bytes } => cur_bytes
+            .checked_sub(bytes)
+            .map(|t| (Some(t), false))
+            .ok_or_else(|| RunOutcome::refused(format!("SIZE exceeds the current size {cur_bytes}"))),
+        SizeSpec::Percent { grow, num, denom } => {
+            // 百分比增量：锚定当前分区字节数，先乘后除（u128 防溢出）避免丢余数，
+            // 再向下取整到 1MiB，保证结果落在扇区/对齐界内。分母一并进除数，
+            // 小数百分比（+1.5%）不必先折成整数百分比
+            let raw = (cur_bytes as u128)
+                .checked_mul(num as u128)
+                .and_then(|x| x.checked_div(100u128 * denom as u128))
+                .filter(|x| *x <= u64::MAX as u128)
+                .ok_or_else(|| RunOutcome::refused("SIZE overflows the partition size"))?
+                as u64;
+            let delta = raw / (1024 * 1024) * (1024 * 1024);
+            let target = if grow {
+                cur_bytes
+                    .checked_add(delta)
+                    .ok_or_else(|| RunOutcome::refused("SIZE overflows the partition size"))?
+            } else {
+                cur_bytes
+                    .checked_sub(delta)
+                    .ok_or_else(|| RunOutcome::refused(format!("SIZE exceeds the current size {cur_bytes}")))?
+            };
+            Ok((Some(target), false))
         }
     }
-    if target.is_none() && !grow_to_end {
-        return Err(Fail::refused("specify a SIZE (e.g. +20G, -500M, 10G, grow; see diskedit help resize)".to_string()));
-    }
-    Ok((target, grow_to_end))
 }

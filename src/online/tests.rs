@@ -110,7 +110,7 @@ pub(crate) fn grow_failures_after_resize_state_what_was_touched() {
 }
 
 /// 表已写之后 FS 步失败的三种成因都只能是"未满足的后置条件"：结果仍是 Applied，
-/// 退出码 20，且不算完全成功。成因只改变文案，不改变出口契约
+/// 退出码 5，且不算完全成功。成因只改变文案，不改变出口语义
 #[test]
 pub(crate) fn grown_partition_with_skipped_fs_step_stays_partial() {
     use super::flow::fs_grow_skipped_after_resize;
@@ -123,11 +123,11 @@ pub(crate) fn grown_partition_with_skipped_fs_step_stays_partial() {
     ];
     for e in failures {
         let msg = fs_grow_skipped_after_resize(&e);
-        let o = Outcome::applied_with(vec![Pending::new(1, PendingKind::Fs, msg.clone(), "")]);
+        let o = RunOutcome::applied_with(vec![Pending::new(1, PendingKind::Fs, msg.clone(), "")]);
         assert!(!o.is_complete(), "a skipped FS step must not read as complete: {msg}");
         assert_eq!(o.exit_code(), crate::outcome::EXIT_PARTIAL, "{msg}");
         match o {
-            Outcome::Applied { pending, .. } => assert_eq!(pending.len(), 1, "{msg}"),
+            RunOutcome::Applied { pending, .. } => assert_eq!(pending.len(), 1, "{msg}"),
             other => panic!("expected Applied, got {other:?}"),
         }
     }
@@ -137,44 +137,44 @@ pub(crate) fn grown_partition_with_skipped_fs_step_stays_partial() {
 #[test]
 pub(crate) fn part_resize_error_classification() {
     let cls = |e: &PartResizeError| classify_part_resize_error(e);
-    assert!(matches!(cls(&PartResizeError::NoWrite(io::Error::other("spawn"))), ResizeFailClass::Infra(_)));
-    assert!(matches!(cls(&PartResizeError::Unknown(io::Error::other("x"))), ResizeFailClass::Failed(_)));
+    assert!(matches!(cls(&PartResizeError::NoWrite(io::Error::other("spawn"))), ResizeFailClass::NoMutation(_)));
+    assert!(matches!(cls(&PartResizeError::Unknown(io::Error::other("x"))), ResizeFailClass::Partial(_)));
     assert!(matches!(cls(&PartResizeError::Unverified(io::Error::other("x"))), ResizeFailClass::WrittenUnverified(_)));
     assert!(matches!(cls(&PartResizeError::Partial(io::Error::other("x"))), ResizeFailClass::AppliedStaleKernel(_)));
 
     // 错误详情透传（发生处打印的是它，分类不得吞掉或改写）
     match cls(&PartResizeError::Unknown(io::Error::other("sfdisk said no"))) {
-        ResizeFailClass::Failed(m) => assert!(m.contains("sfdisk said no"), "{m}"),
-        other => panic!("expected Failed, got {other:?}"),
+        ResizeFailClass::Partial(m) => assert!(m.contains("sfdisk said no"), "{m}"),
+        other => panic!("expected Partial, got {other:?}"),
     }
 }
 
 /// 三种终态必须落在不同的出口上：成功（写入 + 盘上核验 + 内核同步都完成）→ 0；
-/// 表已写且核验通过、仅内核同步失败 → 20 且内核视图置为过期；
-/// 写入已发出但盘上状态不可证实 → 30，绝不能落进 Applied（那会声称"表已写"）
+/// 表已写且核验通过、仅内核同步失败 → 5 且内核视图置为过期；
+/// 写入已发出但盘上状态不可证实 → 5，绝不能落进 Applied（那会声称"表已写"）
 #[test]
 pub(crate) fn part_resize_outcomes_keep_the_write_stage_distinct() {
-    use crate::outcome::{EXIT_INFRA, EXIT_OK, EXIT_PARTIAL, KernelSync};
+    use crate::outcome::{EXIT_OK, EXIT_PARTIAL, KernelSync};
 
     let pending = |detail: &'static str| Pending::new(1, PendingKind::Fs, detail, "grow the filesystem manually");
 
-    let ok = Outcome::applied_with(Vec::new());
+    let ok = RunOutcome::applied_with(Vec::new());
     assert_eq!(ok.exit_code(), EXIT_OK);
     assert!(ok.is_complete());
 
-    let o = PartResizeError::Partial(io::Error::other("partx failed")).into_outcome();
+    let o = PartResizeError::Partial(io::Error::other("partx failed")).into_run_outcome();
     assert_eq!(o.exit_code(), EXIT_PARTIAL);
-    assert!(matches!(o, Outcome::Applied { kernel_sync: KernelSync::Stale, .. }));
+    assert!(matches!(o, RunOutcome::Applied { kernel_sync: KernelSync::Stale, .. }));
 
     let o = PartResizeError::Unverified(io::Error::other("re-read failed"))
-        .into_outcome_with(vec![pending("FS grow skipped")]);
-    assert_eq!(o.exit_code(), EXIT_INFRA);
+        .into_run_outcome_with(vec![pending("FS grow skipped")]);
+    assert_eq!(o.exit_code(), EXIT_PARTIAL);
     match o {
-        Outcome::Failed { cause, pending } => {
+        RunOutcome::Partial { cause, pending } => {
             assert!(cause.contains("re-read failed"), "{cause}");
             assert_eq!(pending.len(), 1);
         }
-        other => panic!("expected Failed, got {other:?}"),
+        other => panic!("expected Partial, got {other:?}"),
     }
 }
 
@@ -182,8 +182,8 @@ pub(crate) fn part_resize_outcomes_keep_the_write_stage_distinct() {
 //
 // 在线缩容的首个写盘步骤是 `btrfs filesystem resize`。决策快照取自内核视图，之后到
 // 首写之间存在探测窗口；本用例在 `decide`（锁下、快照之后）里改写盘上表，模拟窗口内
-// 的第三方改动。判据：命令必须以 10 拒绝，且镜像（loop 的 backing 文件）与改动后的
-// 盘面逐字节一致——旧实现会先缩 FS 再在写表前的复核发现不一致，字节已被改小。
+// 的第三方改动。判据：命令必须以 3 拒绝，且镜像（loop 的 backing 文件）与改动后的
+// 盘面逐字节一致——若 FS 步先于写表复核执行，字节已被改小。
 //
 // 不满足环境时直接说明跳过：这台机上没有能覆盖该层的替代物（写表复核本身另有单测，
 // 但顺序缺陷只有端到端才可见）。
@@ -284,7 +284,7 @@ fn shrink_recheck_refuses_table_moved_before_first_write() {
         Ok(Some(len - 100 * 1024 * 1024))
     });
 
-    assert_eq!(outcome.exit_code(), 10, "首写前发现盘上表已变必须拒绝，且未写盘: {outcome:?}");
+    assert_eq!(outcome.exit_code(), 3, "首写前发现盘上表已变必须拒绝，且未写盘: {outcome:?}");
     let after = sha256_file(img);
     let tampered = after_tamper.expect("the decide hook must have tampered the table");
     assert_eq!(after, tampered, "拒绝时镜像必须与改写后的盘面逐字节一致（整镜像 sha256）");

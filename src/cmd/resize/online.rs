@@ -2,15 +2,17 @@
 
 #[cfg(target_os = "linux")]
 use super::*;
+#[cfg(target_os = "linux")]
+use crate::cli::SizeSpec;
 
 /// 在线路径前置守卫：活动 swap 拒绝（run swapoff 后重试）。/proc/swaps 读不出来
 /// 不是"没有 swap"——折叠成 false 就是给锁下复核开 fail-open 的口子
 #[cfg(target_os = "linux")]
 pub(crate) fn refuse_swap_active(dn: &str, part: u32) {
     let active = crate::online::swap_active(dn, part)
-        .unwrap_or_else(|e| bail_fail(Fail::infra(format!("cannot check active swap for partition {part}: {e}"))));
+        .unwrap_or_else(|e| bail_fail(RunOutcome::no_mutation(format!("cannot check active swap for partition {part}: {e}"))));
     if active {
-        bail_fail(Fail::refused(format!("partition {part} is active swap — run swapoff first")));
+        bail_fail(RunOutcome::refused(format!("partition {part} is active swap — run swapoff first")));
     }
 }
 
@@ -22,23 +24,23 @@ pub(crate) fn refuse_swap_active(dn: &str, part: u32) {
 /// 退到离线路径可能在 FS 挂载中写表
 #[cfg(target_os = "linux")]
 pub(crate) fn resize_online(
-    a: &Args,
+    a: &ResizeRequest,
     src: &FileSource,
     part: u32,
     is_pv: bool,
-    decide: impl FnOnce(&FileSource) -> Result<Option<u64>, crate::outcome::Fail>,
-) -> Option<crate::outcome::Outcome> {
+    decide: impl FnOnce(&FileSource) -> Result<Option<u64>, crate::outcome::RunOutcome>,
+) -> Option<crate::outcome::RunOutcome> {
     if !src.is_block {
         return None;
     }
     // 盘名取打开后的规范路径：`/dev/disk/by-id/…`、`/dev/mapper/…` 这类符号链接的文件名
     // 在 /proc/swaps 与 /proc/mounts 里都对不上，会把仍在使用的目标判成未挂载
     let resolved = std::fs::canonicalize(&a.target)
-        .unwrap_or_else(|e| bail_fail(Fail::infra(format!("cannot resolve {} to a kernel disk name: {e}", a.target))));
+        .unwrap_or_else(|e| bail_fail(RunOutcome::no_mutation(format!("cannot resolve {} to a kernel disk name: {e}", a.target))));
     let dn = resolved
         .file_name()
         .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_else(|| bail_fail(Fail::refused(format!("cannot derive disk name from {}", a.target))));
+        .unwrap_or_else(|| bail_fail(RunOutcome::refused(format!("cannot derive disk name from {}", a.target))));
     refuse_swap_active(&dn, part);
 
     // PV：分区层必须先按新尺寸出现在内核里，pvresize 才能吸收；活跃 LV 经 dm 持有分区使
@@ -47,7 +49,7 @@ pub(crate) fn resize_online(
         refuse_online_move_flags(a);
         // PV 链在表提交之后才启动：缺工具必须在这里拒绝，不能等 sfdisk 写完表才发现。
         // 在线路径只对块设备开放，分区链直接用现成节点，不需要 losetup
-        preflight_lvm_tools(a.grow_lv, false).unwrap_or_else(|e| bail_fail(Fail::from(e)));
+        preflight_lvm_tools(a.grow_lv, false).unwrap_or_else(|e| bail_fail(RunOutcome::from(e)));
         // 锁下、写表之前的 LVM 判据：LV 选择与"新增是否够一个 extent"都要用锁下同时
         // 可信的旧尺寸与将写入的新尺寸。在线路径没有 checkpoint，算出的收尾事实随
         // 独占权一路带进收尾链
@@ -72,11 +74,11 @@ pub(crate) fn resize_online(
             return Some(o);
         }
         // 锁贯穿 pvresize/lvextend：它们仍属同一次操作（见 resize_done 的持有说明）。
-        // 表已提交，收尾失败必须落 Failed（不承诺"未写盘"）
-        return Some(match resize_done(a, None, part, true, true, old_bytes, pv_lock, facts) {
+        // 表已提交，收尾失败必须落 Partial（不承诺"未写盘"）
+        return Some(match resize_done(a, None, part, true, true, None, old_bytes, pv_lock, facts) {
             Ok(done) => done,
             Err(cause) => {
-                let out = crate::outcome::Outcome::failed_with(cause, Vec::new());
+                let out = crate::outcome::RunOutcome::partial_with(cause, Vec::new());
                 out.report();
                 out
             }
@@ -84,20 +86,20 @@ pub(crate) fn resize_online(
     }
 
     // 非 PV：仅挂载中的分区能在线扩（在线不能搬移，只吃连续空闲）
-    // 探测失败按 Infra 拒绝而非退离线路径：读不出来 ≠ 没挂载
+    // 探测失败按 NoMutation 拒绝而非退离线路径：读不出来 ≠ 没挂载
     let mnt = match crate::online::find_mountpoint(&dn, part) {
         Ok(m) => m,
-        Err(e) => bail_fail(Fail::infra(format!("cannot probe mount state: {e}"))),
+        Err(e) => bail_fail(RunOutcome::no_mutation(format!("cannot probe mount state: {e}"))),
     };
     // 未挂载 = 在线路径不适用，None 经 `?` 返回调用方走离线路径
     let mnt = mnt?;
-    // 两个旗标只挡在线路径：未挂载的盘走离线分支，那里 --allow-move / --chunk-size 有效
+    // 两个旗标只挡在线路径：未挂载的盘走离线分支，那里 --allow-move / --chunk 有效
     refuse_online_move_flags(a);
     // 在线 grow 的表写与 FS 扩是一体的，且在线 shrink（btrfs）方向相反——先缩 FS 再写表。
     // 若只写表不动 FS，shrink 会得到"FS 大于分区"的损坏现场，故 --no-fs 不放行在线：
     // 未挂载的分区自然落离线路径，那里 --no-fs 照常生效
     if a.no_fs {
-        bail_fail(Fail::refused(
+        bail_fail(RunOutcome::refused(
             "--no-fs is not available online — the online path always includes the filesystem step; unmount the partition to skip it".to_string(),
         ));
     }
@@ -113,15 +115,15 @@ pub(crate) fn resize_online(
 /// 在线路径不搬移也不收 chunk：两个旗标的承诺在在线入口无从兑现。调用点只在实际
 /// 走在线路径时调用——未挂载的非 PV 会落到离线分支，那里两个旗标照常有效
 #[cfg(target_os = "linux")]
-pub(crate) fn refuse_online_move_flags(a: &Args) {
+pub(crate) fn refuse_online_move_flags(a: &ResizeRequest) {
     if a.allow_move {
-        bail_fail(Fail::refused(
+        bail_fail(RunOutcome::refused(
             "--allow-move is not available online — the online path cannot relocate blocking partitions".to_string(),
         ));
     }
-    if a.given("--chunk-size") {
-        bail_fail(Fail::refused(
-            "--chunk-size has no effect online — the online path does not relocate data".to_string(),
+    if a.chunk_given {
+        bail_fail(RunOutcome::refused(
+            "--chunk has no effect online — the online path does not relocate data".to_string(),
         ));
     }
 }
@@ -139,24 +141,24 @@ pub(crate) fn refuse_online_move_flags(a: &Args) {
 #[cfg(target_os = "linux")]
 pub(crate) fn online_size<'a>(
     yes: bool,
-    size: Option<&'a str>,
+    size: SizeSpec,
     is_pv: bool,
-    facts: impl FnOnce(&FileSource) -> Result<(u64, u64, u64, Option<u64>), Fail> + 'a,
-) -> impl FnOnce(&FileSource) -> Result<Option<u64>, Fail> + 'a {
+    facts: impl FnOnce(&FileSource) -> Result<(u64, u64, u64, Option<u64>), RunOutcome> + 'a,
+) -> impl FnOnce(&FileSource) -> Result<Option<u64>, RunOutcome> + 'a {
     move |disk: &FileSource| {
         let (ss, cur, free, max_len_sectors) = facts(disk)?;
         let (target, grow) = resolve_size_request(size, cur)?;
         if grow {
             if free == 0 {
                 return if is_pv {
-                    Err(Fail::refused("no free space to the right — a PV cannot relocate blocking partitions while LVs may be active".to_string()))
+                    Err(RunOutcome::refused("no free space to the right — a PV cannot relocate blocking partitions while LVs may be active".to_string()))
                 } else {
-                    Err(Fail::refused("grow would not extend the partition — no usable free space to its right; the online path cannot relocate blocking partitions (unmount to grow offline, or fill the filesystem with `resizefs <mountpoint>`)".to_string()))
+                    Err(RunOutcome::refused("grow would not extend the partition — no usable free space to its right; the online path cannot relocate blocking partitions (unmount to grow offline, or fill the filesystem with `resizefs <mountpoint>`)".to_string()))
                 };
             }
             free.checked_mul(ss).and_then(|f| cur.checked_add(f))
                 .map(Some)
-                .ok_or_else(|| Fail::infra(format!("grown size overflows ({cur} + {free} sectors × {ss} B)")))
+                .ok_or_else(|| RunOutcome::no_mutation(format!("grown size overflows ({cur} + {free} sectors × {ss} B)")))
         } else {
             // 目标长度一律下取整到扇区：MBR/GPT 的位置字段是 LBA，非整扇区值到落盘时
             // 仍会被隐式下取整。不取整会让下方上界比较（同样按扇区下取整）放过不足一个
@@ -168,13 +170,13 @@ pub(crate) fn online_size<'a>(
             // 下界与两条离线路径同判据：不足一个扇区的分区在写表时会被隐式下取整成 0，
             // 而在线的拒绝点在算完 want 之后、任何写入之前
             if want < ss {
-                return Err(Fail::refused(format!(
+                return Err(RunOutcome::refused(format!(
                     "size {want} < one sector ({ss} bytes) — a partition must keep at least one sector"
                 )));
             }
             // 目标终点不得越过可用区上界：与离线路径同一判据（长度按扇区下取整后比较）
             if max_len_sectors.is_some_and(|lim| want / ss > lim) {
-                return Err(Fail::refused(format!(
+                return Err(RunOutcome::refused(format!(
                     "size {want} exceeds the usable range — the partition would end past the last usable block"
                 )));
             }

@@ -3,20 +3,22 @@
 source "$(dirname "$0")/lib.sh"
 require_bin
 
-T=/var/tmp/t21.img
-track_file "$T"
+img T usage21.img
 
 mk() {
-  rm -f "$T" "$T"$SIDECAR_GLOB; truncate -s 1G "$T"
+  rm -rf "$T" "$T"$SIDECAR_GLOB; truncate -s 1G "$T"
   $B new "$T" --yes >/dev/null
-  $B create "$T" --size 100M --name p1 --fs ext4 --yes >/dev/null
-  $B create "$T" --size 100M --name p2 --fs ext4 --yes >/dev/null
-  $B create "$T" --size 200M --name p3 --fs ext4 --yes >/dev/null
+  $B add "$T" 100M --align mib --name p1 --yes >/dev/null
+  $B mkfs "$T":1 ext4 --yes >/dev/null
+  $B add "$T" 100M --align mib --name p2 --yes >/dev/null
+  $B mkfs "$T":2 ext4 --yes >/dev/null
+  $B add "$T" 200M --align mib --name p3 --yes >/dev/null
+  $B mkfs "$T":3 ext4 --yes >/dev/null
 }
 fill() {
-  LD=$(lo_attach "$T"); mount_at "${LD}p$1" /testmnt
-  dd if=/dev/urandom of=/testmnt/blob bs=1M count=$2 2>/dev/null
-  umount /testmnt; mdsum "${LD}p$1"; losetup -d "$LD"
+  LD=$(lo_attach "$T"); mount_at "${LD}p$1" "$TEST_MNT"
+  dd if=/dev/urandom of="$TEST_MNT/blob" bs=1M count=$2 2>/dev/null
+  umount "$TEST_MNT"; mdsum "${LD}p$1"; losetup -d "$LD"
 }
 chk() {
   LD=$(lo_attach "$T") || return
@@ -29,10 +31,8 @@ chk() {
 
 echo "=== 1: resize-part --grow-to-end（末分区扩到尾） ==="
 mk; M3=$(fill 3 190)
-# resize-part 的 --start 是必填：缺它即 refused 退 10（src/cmd/layout.rs:261-263），
-# 与"扩容被拒"是两回事。p3 的起点从盘上读，保持原测试意图（末分区扩到可用区尾）
-P3S=$($B info "$T" | grep -o '"num":3,[^}]*}' | grep -o '"first_lba":[0-9]*' | cut -d: -f2)
-$B resize-part "$T":3 --start "$P3S" --grow-to-end >/dev/null 2>&1; exp $? 0 "resize-part --grow-to-end"
+# resize-part 只用当前表里的起点（--start 未登记），末分区扩到可用区尾
+$B resize-part "$T":3 --grow-to-end >/dev/null 2>&1; exp $? 0 "resize-part --grow-to-end"
 $B info "$T" | grep -o '"num":3,"first_lba":[0-9]*,"last_lba":[0-9]*'
 chk 3 -
 
