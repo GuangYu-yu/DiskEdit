@@ -1,20 +1,19 @@
 //! 「计划步骤只有一个执行器」的结构守卫。
 //!
-//! 计划之外有三类写入：`cmd/undo` 的回退方向回放、已提交态续跑时的
-//! NTFS HiddenSectors 回填、mkfs 前的 `wipe_zero`；另有证据文件自身的原子替换与
-//! 外部工具的 stdin。本文件把「出现字节写原语的源码文件集合」钉成一张封闭清单，
-//! 任何新增写点都必须先改这张清单。
+//! 计划之外有三类写入：`undo` 的回退方向回放（原语在 `recovery/rollback.rs`）、
+//! 已提交态续跑时的 NTFS HiddenSectors 回填、mkfs 前的 `wipe_zero`；另有证据文件
+//! 自身的原子替换与外部工具的 stdin。本文件把「出现字节写原语的源码文件集合」
+//! 钉成一张封闭清单，任何新增写点都必须先改这张清单。
 
 mod guards;
 
 use guards::{rust_sources, source};
 
 /// 允许出现目标/证据写原语的文件。清单是**文件集合**而不是「生产写点」的判定：
-/// `table/*`、`gpt_policy.rs` 里的直写与整个 `fsops/tests.rs` 都只在 `#[cfg(test)]`
+/// `movepart/tests`、`table/tests`、`fsops/tests.rs` 里的写原语都只在 `#[cfg(test)]`
 /// 下可见，是测试夹具的独立参照，不在生产调用链上；单列它们是为了让集合保持
 /// 可机械复核——新增一个含写原语的文件无论生产还是夹具，都必须先过这张清单。
 const WRITE_SITES: &[&str] = &[
-    "cmd/undo.rs",
     "dev/source.rs",
     "execution/table.rs",
     "fsops/env.rs",
@@ -22,11 +21,20 @@ const WRITE_SITES: &[&str] = &[
     "fsops/tests.rs",
     "gpt_policy.rs",
     "movepart/resize.rs",
+    "movepart/tests/plan.rs",
+    "movepart/tests/resize.rs",
+    "movepart/tests/shift.rs",
+    "movepart/tests/support.rs",
     "platform/evidence_store.rs",
     "recovery/journal.rs",
+    "recovery/rollback.rs",
     "table/create.rs",
     "table/gpt_write.rs",
     "table/mbr.rs",
+    "table/tests/create.rs",
+    "table/tests/gpt.rs",
+    "table/tests/mbr.rs",
+    "table/tests/support.rs",
 ];
 
 #[test]

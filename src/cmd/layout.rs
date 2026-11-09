@@ -620,6 +620,9 @@ pub(crate) struct PlannedResizePart {
     no_fs: bool,
     defer_lvm: bool,
     lvm: Option<movepart::LvmPostFacts>,
+    /// 起点变更的搬移段 `(part, src_first, dst_first, sectors)`；None = 纯扩缩或已提交
+    relocate: Option<(u32, u64, u64, u64)>,
+    chunk_len: u64,
     g: crate::geometry::ValidatedGeometry,
 }
 
@@ -698,6 +701,47 @@ pub(crate) fn resize_part_via_plan_with(
     if let Some(journal) = src.record_journal_mut() {
         if let Err(e) = journal.bind_old_range((p.old_start, p.old_end)) {
             return RunOutcome::no_mutation(format!("the pre-commit range was not recorded ({e})"));
+        }
+        // 起点变更的搬移与 move 同构：条目表绑进记录——执行器的游标恢复、续跑一致性
+        // 校验与「已提交条目整组跳过」共用同一套机制。已提交态与纯扩缩不绑
+        if let Some((rpart, src_first, dst_first, sectors)) = p.relocate {
+            let mut reloc = crate::recovery::Relocation {
+                entries: vec![crate::recovery::RelocEntry {
+                    partition: rpart,
+                    src_first,
+                    len: sectors,
+                    delta: dst_first.abs_diff(src_first),
+                    is_swap: false,
+                }],
+                entry_index: 0,
+                chunks_in_entry: p.resume_chunks,
+                chunk_bytes: p.chunk_len,
+                kind: crate::recovery::RelocKind::Shift,
+                grow_part: 0,
+                disk_size,
+                ss: p.ss,
+            };
+            // 续跑时记录里已有同一条目表：校验计划字段一致后沿用记录里的双游标
+            if let Some(recorded) = journal.relocation() {
+                if recorded.entries != reloc.entries
+                    || recorded.chunk_bytes != reloc.chunk_bytes
+                    || recorded.kind != reloc.kind
+                    || recorded.grow_part != reloc.grow_part
+                    || recorded.disk_size != reloc.disk_size
+                    || recorded.ss != reloc.ss
+                {
+                    return RunOutcome::refused(
+                        "the recovery record's relocation plan does not match this request — nothing was written"
+                            .to_string(),
+                    );
+                }
+                reloc = recorded.clone();
+            }
+            if let Err(e) = journal.bind_relocation(reloc, None) {
+                return RunOutcome::no_mutation(format!(
+                    "the relocation plan was not recorded ({e})"
+                ));
+            }
         }
         if journal.op() == crate::recovery::OpKind::Resize
             && let Some(f) = p.lvm.as_ref().filter(|f| f.lv_path.is_some())
@@ -797,6 +841,18 @@ pub(crate) fn prepare_resize_part(
             )));
         }
     }
+    // 搬移几何对所有路径同一份：起点变更时按 min(旧长, 新长) 拷贝，块布局与 move 的
+    // 求解器同源
+    let moved = old_start.abs_diff(new_start);
+    let old_len = old_end - old_start + 1;
+    let copy_len = old_len.min(new_end - new_start + 1);
+    let (entry_chunk, _) =
+        crate::planner::chunk::move_chunk_layout(copy_len, ss, moved, old_len, chunk_len)
+            .ok_or_else(|| RunOutcome::no_mutation("resize LBA arithmetic overflows byte offset"))?;
+    let total_chunks = copy_len
+        .checked_mul(ss)
+        .ok_or_else(|| RunOutcome::no_mutation("resize LBA arithmetic overflows byte offset"))?
+        .div_ceil(entry_chunk);
     // 恢复判定取三个维度：本次请求 / 记录里的持久状态 / 盘上几何
     let (fs_shrunk, resume_chunks, committed_old, recorded_lvm) =
         if let Some(journal) = src.record_journal.as_ref()
@@ -820,18 +876,6 @@ pub(crate) fn prepare_resize_part(
                 "partition {part} sits at {old_start}..{old_end}, neither the record's pre-commit range {rs}..{re} nor the requested {new_start}..{new_end} — the layout moved under the job; refusing"
             )));
         }
-        let moved = old_start.abs_diff(new_start);
-        let old_len = old_end - old_start + 1;
-        let copy_len = old_len.min(new_end - new_start + 1);
-        let (entry_chunk, _) =
-            crate::planner::chunk::move_chunk_layout(copy_len, ss, moved, old_len, chunk_len)
-                .ok_or_else(|| {
-                    RunOutcome::no_mutation("resize LBA arithmetic overflows byte offset")
-                })?;
-        let total_bytes = copy_len
-            .checked_mul(ss)
-            .ok_or_else(|| RunOutcome::no_mutation("resize LBA arithmetic overflows byte offset"))?;
-        let total_chunks = total_bytes.div_ceil(entry_chunk);
         let at_target = (old_start, old_end) == (new_start, new_end);
         if !journal.is_persisted() {
             (movepart::FsShrink::NotShrunk, 0, None, None)
@@ -922,13 +966,18 @@ pub(crate) fn prepare_resize_part(
             crate::fsops::needs_loop(&crate::fsops::DeviceScope::Partition(part), src.is_block),
         )?,
         // 扩的目标与收尾取同一判据（grow_target_at）：要动的那段可能是分区尾部的
-        // RW overlay 层，也可能是分区自己。这道写盘前的判定放在写表之前
+        // RW overlay 层，也可能是分区自己。这道写盘前的判定放在写表之前。
+        // base 与长度必须同源——都取盘上条目：已提交续跑时盘上已是新区间（数据与
+        // swap 签名都随搬移落位），拿记录里的搬移前长度去配新起点会探到一块谁也不
+        // 认识的混合区间，FS 步被误判为 cannot grow unknown
         movepart::FsAction::Grow => crate::fsops::check_grow_step(
             crate::fsops::grow_target_at(
                 src,
                 part,
                 old_start.checked_mul(ss).ok_or_else(byte_overflow)?,
-                old_bytes,
+                (old_end - old_start + 1)
+                    .checked_mul(ss)
+                    .ok_or_else(byte_overflow)?,
             )?,
             src.is_block,
         )?,
@@ -943,6 +992,14 @@ pub(crate) fn prepare_resize_part(
             "target size {new_bytes} < minimum FS size {min} bytes (resize2fs -P)"
         )));
     }
+    // 起点变更的搬移段 `(part, src_first, dst_first, sectors)`：非空时由执行器的
+    // Relocate 步骤承担（分块、方向、自重叠收敛、durable 游标与 move 同一条机制），
+    // 表提交在其后。已提交态与纯扩缩为 None
+    let relocate = if moved != 0 && committed_old.is_none() {
+        Some((part, old_start, new_start, copy_len))
+    } else {
+        None
+    };
     Ok(PlannedResizePart {
         ss,
         part,
@@ -960,6 +1017,8 @@ pub(crate) fn prepare_resize_part(
         no_fs,
         defer_lvm,
         lvm: lvm_post,
+        relocate,
+        chunk_len,
         g,
     })
 }
@@ -1087,20 +1146,20 @@ fn execute_resize_part(
         } else {
             table::TableWriteKind::Repartition
         };
-        let plan = crate::assembly::assemble_resize_part(src, &g2, kind)
+        let plan = crate::assembly::assemble_resize_part(src, &g2, kind, p.relocate)
             .map_err(|e| RunOutcome::partial(e.to_string()))?;
         let mut sink = ResizePartSink {
             part,
             new_start,
             new_end,
-            chunks: chunks_done,
             fs_phase: fs_shrunk as u8,
             log,
         };
         // 执行器按计划内的写盘进度分类；本进程此前写过的目标字节（修复表头、缩容 FS）
-        // 不在它的视野里，那些写入一旦发生，"确定未写盘"的结论就不再成立
+        // 不在它的视野里，那些写入一旦发生，"确定未写盘"的结论就不再成立。
+        // chunk 与请求同源：Relocate 步骤的分块、durable 游标节奏都按它算
         let wrote_before = crate::outcome::target_may_have_been_written();
-        match crate::execution::execute_plan_complete(src, &plan, None, &mut sink) {
+        match crate::execution::execute_plan_complete(src, &plan, Some(p.chunk_len), &mut sink) {
             Ok(()) => {}
             Err(e) if wrote_before => return Err(past_boundary(e)),
             Err(e) => return Err(e),
@@ -1171,7 +1230,6 @@ struct ResizePartSink<'a> {
     part: u32,
     new_start: u64,
     new_end: u64,
-    chunks: u64,
     fs_phase: u8,
     log: &'a mut dyn FnMut(&str),
 }
@@ -1179,9 +1237,21 @@ struct ResizePartSink<'a> {
 impl crate::execution::StepSink for ResizePartSink<'_> {
     fn transfer_checkpoint(
         &mut self,
-        _src: &mut WriteSource,
-        _state: &crate::execution::TransferState,
+        src: &mut WriteSource,
+        state: &crate::execution::TransferState,
     ) -> Result<(), RunOutcome> {
+        // 搬移步骤的 durable 边界：只有已经 sync 过的块才允许进入记录
+        if let Some(journal) = src.record_journal_mut() {
+            journal
+                .record_transfer_checkpoint(
+                    Some((state.entry_index, state.chunks_in_entry)),
+                    state.completed_steps,
+                    state.transfer_cursor,
+                )
+                .map_err(|e| {
+                    RunOutcome::partial(format!("the transfer progress could not be persisted ({e})"))
+                })?;
+        }
         Ok(())
     }
 
@@ -1196,8 +1266,11 @@ impl crate::execution::StepSink for ResizePartSink<'_> {
         _state: &crate::execution::TransferState,
     ) -> Result<(), RunOutcome> {
         if let Some(journal) = src.record_journal_mut() {
+            // 游标取记录现值：搬移步骤可能刚把它推到 total，回写旧值会触发
+            // 「进度回退」拒绝
+            let cursor = journal.progress().transfer_cursor;
             journal
-                .record_progress(2, self.chunks, self.fs_phase)
+                .record_progress(2, cursor, self.fs_phase)
                 .map_err(|e| {
                     RunOutcome::partial(format!(
                         "the partition table was written but the progress step could not be recorded ({e})"
@@ -1212,7 +1285,7 @@ impl crate::execution::StepSink for ResizePartSink<'_> {
         Ok(())
     }
 
-    /// `resize-part` 的计划只有表步骤，文件系统步骤不经过本 sink
+    /// 文件系统步骤不经过本 sink：缩容在搬移与表提交之前、扩容在其后，都由命令层直接落地
     fn fs_step_done(
         &mut self,
         _src: &mut WriteSource,

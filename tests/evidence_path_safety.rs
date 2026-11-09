@@ -136,8 +136,9 @@ fn a_symlinked_record_is_not_followed() {
 }
 
 #[test]
-fn a_hard_linked_record_is_refused() {
-    // sidecar 目标的 st_nlink > 1 → 3。
+fn a_hard_linked_record_is_inspected_as_the_same_file() {
+    // 硬链接别名与本体是同一个 inode：判定按文件内容与目标身份走，别名照常
+    // 被认领。别名并发使用不合并、不保证，是 README 登记的已知边界
     let dir = temp_dir("hardlink");
     let spot = sidecar(&dir);
     let record = spot.join("record");
@@ -145,8 +146,8 @@ fn a_hard_linked_record_is_refused() {
     fs::hard_link(&record, spot.join("record.alias")).expect("create hard link");
 
     let (code, out, err) = run(&["inspect", path_text(&record)]);
-    assert_eq!(code, 3, "st_nlink > 1 must be refused: {out}\n{err}");
-    assert!(!out.contains("record: recognized"), "{out}");
+    assert_eq!(code, 0, "a hard link shares the record's identity: {out}\n{err}");
+    assert!(out.contains("record: recognized"), "{out}");
     fs::remove_dir_all(&dir).ok();
 }
 

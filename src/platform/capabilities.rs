@@ -18,14 +18,11 @@ pub(crate) enum CapabilityId {
     ExclusiveLock,
     AtomicReplace,
     DirPersist,
-    UsageQuery,
     StableIdentity,
-    OnlineTableEdit,
-    KernelSectorSize,
 }
 
 impl CapabilityId {
-    pub(crate) const ALL: [Self; 12] = [
+    pub(crate) const ALL: [Self; 9] = [
         Self::ReadTarget,
         Self::WriteTable,
         Self::SectorIo,
@@ -34,10 +31,7 @@ impl CapabilityId {
         Self::ExclusiveLock,
         Self::AtomicReplace,
         Self::DirPersist,
-        Self::UsageQuery,
         Self::StableIdentity,
-        Self::OnlineTableEdit,
-        Self::KernelSectorSize,
     ];
 
     /// 文档矩阵与运行期拒绝文案共用同一个名字，避免两处各写一份
@@ -51,10 +45,7 @@ impl CapabilityId {
             Self::ExclusiveLock => "ExclusiveLock",
             Self::AtomicReplace => "AtomicReplace",
             Self::DirPersist => "DirPersist",
-            Self::UsageQuery => "UsageQuery",
             Self::StableIdentity => "StableIdentity",
-            Self::OnlineTableEdit => "OnlineTableEdit",
-            Self::KernelSectorSize => "KernelSectorSize",
         }
     }
 
@@ -68,10 +59,7 @@ impl CapabilityId {
             Self::ExclusiveLock => 5,
             Self::AtomicReplace => 6,
             Self::DirPersist => 7,
-            Self::UsageQuery => 8,
-            Self::StableIdentity => 9,
-            Self::OnlineTableEdit => 10,
-            Self::KernelSectorSize => 11,
+            Self::StableIdentity => 8,
         }
     }
 }
@@ -243,14 +231,6 @@ fn design_state(platform: HostPlatform, media: MediaKind, id: CapabilityId) -> C
             Windows => DesignLimit,
             Other => Unsupported,
         },
-        // 用量查询与在线表编辑只对块设备适用
-        CapabilityId::UsageQuery | CapabilityId::OnlineTableEdit | CapabilityId::KernelSectorSize => {
-            match (platform, media) {
-                (Linux, MediaKind::Block) => Supported,
-                (_, MediaKind::Image) => NotApplicable,
-                (Windows | Other, MediaKind::Block) => Unsupported,
-            }
-        }
     }
 }
 
@@ -367,9 +347,9 @@ mod tests {
         let gap = snap.first_gap(&[CapabilityId::ReadTarget, CapabilityId::WriteTable]);
         assert_eq!(gap, Some((CapabilityId::WriteTable, CapabilityState::Unsupported)));
         assert_eq!(snap.first_gap(&[CapabilityId::ReadTarget, CapabilityId::StableIdentity]), None);
-        // 对镜像不适用 ≠ 缺能力：内核刷新与用量查询不构成缺口
+        // 对镜像不适用 ≠ 缺能力：内核刷新不构成缺口
         let image = snapshot(HostPlatform::Linux, MediaKind::Image);
-        assert_eq!(image.first_gap(&[CapabilityId::KernelResync, CapabilityId::UsageQuery]), None);
+        assert_eq!(image.first_gap(&[CapabilityId::KernelResync]), None);
         // 设计限制不是放行
         let win = snapshot(HostPlatform::Windows, MediaKind::Image);
         assert_eq!(
