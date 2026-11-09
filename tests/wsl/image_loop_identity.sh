@@ -186,7 +186,7 @@ if compgen -G "/sys/block/loop[0-9]*" >/dev/null; then
     out=$(unshare -m bash -c '
         mount --make-rprivate /
         mount -t tmpfs none /dev
-        exec "$1" resize-part "$2:1" --grow-to-end
+        exec "$1" resize-part "$2:1" --grow-to-end --yes
     ' _ "$B" "$T" 2>&1)
     got=$?
     exp "$got" 4 "loop 节点不可访问时退出码 4"
@@ -291,7 +291,7 @@ PY
         out=$(unshare -m bash -c '
             mount --make-rprivate /
             mount -t tmpfs none /dev
-            exec "$1" resize-part "$2:1" --grow-to-end
+            exec "$1" resize-part "$2:1" --grow-to-end --yes
         ' _ "$B" "$T6" 2>&1)
         exp "$?" 4 "真实探测故障不被 EINVAL 跳过掩盖"
         case "$out" in

@@ -158,6 +158,8 @@ first_run_pending() { # $1=标签
 }
 
 echo "-- 现场一：重绑后 lvextend 未执行（LV 尚未扩容）--"
+# 每次 resize 前打印映射现场：若命中占用拒绝，拒绝原因可与快照直接对上
+losetup -a | sed 's/^/  [loops] /'
 build_fixture
 mkfake lvextend "if [ ! -e \"$MARK\" ]; then
   : > \"$MARK\"
