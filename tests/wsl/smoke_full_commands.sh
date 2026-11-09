@@ -30,11 +30,11 @@ echo "== check =="
 $B check "$T":1; exp "$?" 0 "check p1"
 
 echo "== set name =="
-$B set "$T":2 name renamed2; exp "$?" 0 "set name"
+$B set --yes "$T":2 name renamed2; exp "$?" 0 "set name"
 
 echo "== resize grow +8M =="
 # p2 这时还没有 FS（下面的 mkfs 才建）：扩分区表要显式 --no-fs，否则写表之前就拒绝
-$B resize "$T":2 +8M --no-fs; exp "$?" 0 "resize +8M"
+$B resize --yes "$T":2 +8M --no-fs; exp "$?" 0 "resize +8M"
 
 echo "== info（p2 应已到 67584..116735）=="
 INFO=$($B info "$T"); E=$?
@@ -49,10 +49,11 @@ echo "== check p2 =="
 $B check "$T":2; exp "$?" 0 "check p2"
 
 echo "== set label =="
-$B set "$T":2 label mydata; exp "$?" 0 "set label"
+$B set --yes "$T":2 label mydata; exp "$?" 0 "set label"
 
-echo "== resize shrink -4M（带 FS ⇒ 先缩 FS 再收表，故不是 --no-fs 的 3）=="
-$B resize "$T":2 -4M --yes; exp "$?" 0 "resize -4M（先缩 FS）"
+echo "== resize shrink -4M（resize-part 一条命令：先离线缩 FS，再收表）=="
+# p2 现为 67584..116735（24MiB），缩到 20MiB ⇒ last_lba = 67584+40960-1 = 108543
+$B resize-part --yes "$T":2 --end 108543; exp "$?" 0 "resize-part 缩到 20M"
 
 echo "== move p2 =="
 $B move "$T":2 --start end --yes; exp "$?" 0 "move p2"

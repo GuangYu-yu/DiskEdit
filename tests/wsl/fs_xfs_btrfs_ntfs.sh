@@ -20,7 +20,7 @@ mount_at "${LD}p1" "$TEST_MNT" && dd if=/dev/urandom of="$TEST_MNT/blob" bs=1M c
 MX=$(mdsum "$TEST_MNT"/blob)
 echo "before: $(df -h --output=size "$TEST_MNT" | tail -1) md5=$MX"
 umount "$TEST_MNT" 2>/dev/null; lo_detach "$LD"
-OUT=$($B resize "$T":1 1500M 2>&1); echo "resize exit=$? out: $(echo "$OUT" | tail -1)"
+OUT=$($B resize --yes "$T":1 1500M 2>&1); echo "resize exit=$? out: $(echo "$OUT" | tail -1)"
 LD=$(lo_attach "$T")
 mount_at "${LD}p1" "$TEST_MNT" && { echo "after: $(df -h --output=size "$TEST_MNT" | tail -1)"; G=$(mdsum "$TEST_MNT"/blob); [ "$MX" = "$G" ] && echo "XFS DATA OK" || { echo "XFS DATA CORRUPT"; rc=1; }; umount "$TEST_MNT" 2>/dev/null; }
 xfs_repair -n "${LD}p1" >/dev/null 2>&1; echo "xfs_repair -n exit=$? (0=clean)"
@@ -37,7 +37,7 @@ mount_at "${LD}p1" "$TEST_MNT" && dd if=/dev/urandom of="$TEST_MNT/blob" bs=1M c
 MB=$(mdsum "$TEST_MNT"/blob)
 echo "before: $(df -h --output=size "$TEST_MNT" | tail -1)"
 umount "$TEST_MNT" 2>/dev/null; lo_detach "$LD"
-OUT=$($B resize "$T":1 1500M 2>&1); echo "resize exit=$? out: $(echo "$OUT" | tail -1)"
+OUT=$($B resize --yes "$T":1 1500M 2>&1); echo "resize exit=$? out: $(echo "$OUT" | tail -1)"
 LD=$(lo_attach "$T")
 mount_at "${LD}p1" "$TEST_MNT" && { echo "after: $(df -h --output=size "$TEST_MNT" | tail -1)"; G=$(mdsum "$TEST_MNT"/blob); [ "$MB" = "$G" ] && echo "BTRFS DATA OK" || { echo "BTRFS DATA CORRUPT"; rc=1; }; umount "$TEST_MNT" 2>/dev/null; }
 btrfs check "${LD}p1" >/dev/null 2>&1; echo "btrfs check exit=$? (0=clean)"
@@ -84,14 +84,15 @@ img D2 t20d2.img
 rm -rf "$IMGD" "$IMGD"$SIDECAR_GLOB "$D2" "$D2"$SIDECAR_GLOB 2>/dev/null
 truncate -s 1G "$IMGD"
 $B new "$IMGD" --yes >/dev/null
-$B add "$IMGD" 533725184 --start 2048 --name btrmd >/dev/null
+$B add --yes "$IMGD" 533725184 --start 2048 --name btrmd >/dev/null
 truncate -s 512M "$D2"
 LDM=$(lo_attach "$IMGD")
 LDS=$(lo_attach "$D2")
+lo_waitpart "${LDM}p1" || { echo "SKIP: ${LDM}p1 未就绪"; exit 0; }
 mkfs.btrfs -f -d single -m single "${LDM}p1" "$LDS" >/dev/null 2>&1; echo "mkfs.btrfs(2 dev) exit=$?"
 ND=$(od -An -tu8 -j $((2048 * 512 + 0x10000 + 0x88)) -N8 "$IMGD" | tr -d ' ')
 echo "num_devices=$ND (期望 2)"
-OUT=$($B resizefs "$IMGD":1 2>&1); E=$?
+OUT=$($B resizefs --yes "$IMGD":1 2>&1); E=$?
 echo "resizefs exit=$E : $(echo "$OUT" | tail -1)"
 if [ "$E" = "6" ] && echo "$OUT" | grep -q "spans multiple devices"; then
   echo "D BTRFS-MULTIDEV-REFUSED OK"

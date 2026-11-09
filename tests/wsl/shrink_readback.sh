@@ -3,7 +3,7 @@
 # 覆盖四条：正常回读（请求值 = 实际落点）、工具向下取整（实际 < 请求值）、
 # 回读到的落点大于请求值（工具行为不符合预期，分区不缩）、回读拿不到落点
 # （缩容可能已完成但落点无法证实：表不写、分区保持原尺寸，落一条待办而不是报失败）。
-# GPT 路径（movepart::execute_resize）与 MBR 路径（cmd/resize）各覆盖一次。
+# 入口是 resize-part（resize 只扩）；MBR 段钉的是命令层的只扩拒绝。
 #
 # 假 dumpe2fs 靠工具表变体生效：工具解析在编译期钉死（src/fsops/env.rs 的 TOOL_PATH），
 # PATH 影子不参与。BFK 的表把假目录排在系统目录之前，其余工具仍落到真身。
@@ -34,7 +34,8 @@ pt1() { $B info "$T" | grep -o '"num":1,[^}]*}' | grep -o '"size_bytes":[0-9]*';
 
 echo "===== A: ext 缩容，回读正常 → 成功行同时给请求值与实际落点 → 0 ====="
 setup_gpt
-OUT=$($B resize "$T":1 300M --yes 2>&1); E=$?
+# 400M（2048..821247）缩到 300M：新末端 = 2048+614400-1 = 616447
+OUT=$($B resize-part "$T":1 --end 616447 --yes 2>&1); E=$?
 echo "exit=$E"
 echo "$OUT" | sed 's/^/    /'
 exp "$E" 0 "落点在请求范围内即完整成功"
@@ -47,7 +48,8 @@ echo
 echo "===== B: 请求值不是 FS 块大小的整数倍 → 工具向下取整，实际 < 请求 → 0 ====="
 setup_gpt
 REQ=104858112   # 100MiB + 512B：512 的整数倍（204801 扇区）、4096 的非整数倍（25600.125 块）
-OUT=$($B resize "$T":1 "$REQ" --yes 2>&1); E=$?
+# 204801 扇区 ⇒ 新末端 = 2048+204801-1 = 206848
+OUT=$($B resize-part "$T":1 --end 206848 --yes 2>&1); E=$?
 echo "exit=$E"
 echo "$OUT" | grep -E 'fs shrunk|refused|error' | sed 's/^/    /'
 exp "$E" 0 "取整落点仍在请求范围内即成功"
@@ -66,7 +68,7 @@ rm -rf "$FAKE"; mkdir -p "$FAKE"
 fake dumpe2fs '#!/bin/sh
 echo "Block count:              999999999"
 echo "Block size:               4096"'
-OUT=$($BFK resize "$T":1 300M --yes 2>&1); E=$?
+OUT=$($BFK resize-part "$T":1 --end 616447 --yes 2>&1); E=$?
 echo "exit=$E"
 echo "$OUT" | sed 's/^/    /'
 exp "$E" 5 "落点超出请求值不是成功（可能已写盘，带警示）"
@@ -87,7 +89,7 @@ rm -rf "$FAKE"; mkdir -p "$FAKE"
 # 只给 Block size（预查要用），回读要的 Block count 缺失 = 回读拿不到落点
 fake dumpe2fs '#!/bin/sh
 echo "Block size:               4096"'
-OUT=$($BFK resize "$T":1 300M --yes 2>&1); E=$?
+OUT=$($BFK resize-part "$T":1 --end 616447 --yes 2>&1); E=$?
 echo "exit=$E"
 echo "$OUT" | sed 's/^/    /'
 exp "$E" 5 "回读不出来不是缩容失败，改出一条待办"
@@ -100,20 +102,22 @@ esac
 assert_eq "$(pt1)" '"size_bytes":419430400' "D 落点未证实不写表（分区保持原尺寸）"
 
 echo
-echo "===== E: MBR 路径同样报出请求值与实际落点 → 0 ====="
+echo "===== E: MBR 路径的缩容同样被命令层拒绝（resize 只扩），盘不动 ====="
 rm -rf "$T" "$T"$SIDECAR_GLOB
 truncate -s 512M "$T"
 $B new "$T" --table mbr --yes >/dev/null
 $B add "$T" 400M --align mib --yes >/dev/null 2>&1
 $B mkfs "$T":1 ext4 --yes >/dev/null 2>&1
+BEFORE=$(pt1)
 OUT=$($B resize "$T":1 300M --yes 2>&1); E=$?
 echo "exit=$E"
-echo "$OUT" | sed 's/^/    /'
-exp "$E" 0 "MBR 缩容成功"
+echo "$OUT" | head -2 | sed 's/^/    /'
+exp "$E" 3 "MBR 缩容在命令层被拒（resize 只扩）"
 case "$OUT" in
-    *"fs shrunk to 314572800 bytes (requested 314572800)"*) echo "E both sizes OK";;
-    *) echo "E size line missing (BAD)"; rc=1;;
+    *"only grows"*) echo "E only-grows reason OK";;
+    *) echo "E reason missing (BAD)"; rc=1;;
 esac
+assert_eq "$(pt1)" "$BEFORE" "E 拒绝发生在写盘之前（分区尺寸未变）"
 
 echo
 echo "===== F: 预查命令把块大小报成 0 → 写盘前拒绝，表不变 → 4 ====="
@@ -124,7 +128,7 @@ rm -rf "$FAKE"; mkdir -p "$FAKE"
 fake dumpe2fs '#!/bin/sh
 echo "Block count:              8192"
 echo "Block size:               0"'
-OUT=$($BFK resize "$T":1 300M --yes 2>&1); E=$?
+OUT=$($BFK resize-part "$T":1 --end 616447 --yes 2>&1); E=$?
 echo "exit=$E"
 echo "$OUT" | sed 's/^/    /'
 exp "$E" 4 "0 不是可用尺寸，预查拒绝"

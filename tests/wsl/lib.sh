@@ -197,15 +197,25 @@ track_file() { _TRACK_FILES+=("$1"); }
 # 它会留到 `losetup -a` 手动清理；退出路径被 KILL 时清理同样不执行
 lo_attach() {
     local img=$1; shift
-    losetup -fP "$@" --show "$img"
+    local dev
+    dev=$(losetup -fP "$@" --show "$img") || return 1
+    # -P 的分区扫描不保证节点已由 udev 物化：attach 后立即重触发一次读表，
+    # 让内核分区视图与设备节点在返回时尽量就位（未就绪的残余由 lo_waitpart 兜底）
+    partx -u "$dev" >/dev/null 2>&1
+    printf '%s\n' "$dev"
 }
 
 # 等待分区设备节点就绪：losetup -P 的分区扫描是异步的，节点可能在 attach
-# 返回后短暂不可读；attach 后立即访问分区设备的调用点必须先过这一关
+# 返回后短暂不可读；attach 后立即访问分区设备的调用点必须先过这一关。
+# 前半程只等，后半程重触发读表并补一次 udev 收尾——runner 上 udev 迟到是常态
 lo_waitpart() {
     local dev=$1
-    for _ in {1..20}; do
+    for _ in {1..100}; do
         [ -b "$dev" ] && blockdev --getsize64 "$dev" >/dev/null 2>&1 && return 0
+        if [ "$_" = 50 ] && [ -b "${dev%p[0-9]*}" ]; then
+            partx -u "${dev%p[0-9]*}" 2>/dev/null
+            udevadm settle 2>/dev/null
+        fi
         sleep 0.1
     done
     return 1

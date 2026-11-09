@@ -41,7 +41,9 @@ chk "$(record_present "$T" && echo yes || echo no)" "no" "A1 未留下记录"
 DISKEDIT_FAULT=chunk:40 $BF resize "$T":1 +100M --allow-move --yes >/dev/null 2>&1; A2=$?
 chk "$A2" "134" "A2 边界后 abort"
 chk "$(record_present "$T" && echo yes || echo no)" "yes" "A2 留下记录（续传现场）"
-$B resize "$T":1 +100M --allow-move --yes >/dev/null 2>&1; chk "$?" "0" "A2 重跑收敛（exit 0）"
+OUT=$($B resize "$T":1 +100M --allow-move --yes 2>&1); A2R=$?
+echo "  rerun exit=$A2R : $(echo "$OUT" | tail -1)"
+chk "$A2R" "0" "A2 重跑收敛（exit 0）"
 LD=$(lo_attach "$T"); e2fsck -fn "${LD}p1" >/dev/null 2>&1 && echo "  OK   A2 e2fsck clean" || { echo "  BAD  A2 e2fsck ISSUES"; bad=$((bad+1)); }; lo_detach "$LD"
 
 echo
@@ -58,7 +60,9 @@ chk "$(record_present "$T" && echo yes || echo no)" "no" "B1 未留下记录"
 DISKEDIT_FAULT=chunk:1 $BF resize "$T":1 grow --allow-move --yes >/dev/null 2>&1; B2=$?
 chk "$B2" "134" "B2 边界后 abort"
 chk "$(record_present "$T" && echo yes || echo no)" "yes" "B2 留下记录（续传现场）"
-$B resize "$T":1 grow --allow-move --yes >/dev/null 2>&1; chk "$?" "0" "B2 重跑收敛（exit 0）"
+OUT=$($B resize "$T":1 grow --allow-move --yes 2>&1); B2R=$?
+echo "  rerun exit=$B2R : $(echo "$OUT" | tail -1)"
+chk "$B2R" "0" "B2 重跑收敛（exit 0）"
 
 echo
 echo "===== C: resize（在线，sfdisk 分界）====="
@@ -69,14 +73,14 @@ $BF add "$T" 16777216 --align mib --name p1 --yes >/dev/null
 $BF mkfs "$T":1 ext4 --yes >/dev/null
 LD=$(lo_attach "$T")
 mount_at "${LD}p1" "$MNT" || { echo "  BAD  C MOUNT-FAIL"; exit 1; }
-DISKEDIT_FAULT=online-before-write $BF resize "${LD}:1" 33554432 >/dev/null 2>&1; C1=$?
+DISKEDIT_FAULT=online-before-write $BF resize --yes "${LD}:1" 33554432 >/dev/null 2>&1; C1=$?
 umount "$MNT"
 chk "$C1" "134" "C1 sfdisk 前 abort"
 # p1 的末端 LBA：16MiB = 32768 扇区 ⇒ 2048+32768-1
 chk "$($B info "$T" | grep -o '"last_lba":[0-9]*' | head -1)" '"last_lba":34815' "C1 分区仍 16MiB（表未改）"
 
 mount_at "${LD}p1" "$MNT" || { echo "  BAD  C MOUNT-FAIL(2)"; exit 1; }
-DISKEDIT_FAULT=online-after-write $BF resize "${LD}:1" 33554432 >/dev/null 2>&1; C2=$?
+DISKEDIT_FAULT=online-after-write $BF resize --yes "${LD}:1" 33554432 >/dev/null 2>&1; C2=$?
 umount "$MNT"; lo_detach "$LD"
 chk "$C2" "134" "C2 sfdisk 后 abort"
 # 32MiB = 65536 扇区 ⇒ 2048+65536-1
@@ -87,8 +91,8 @@ echo "===== D: 天然拒绝仍必须报 3/2（未写盘的承诺）====="
 mk
 BEFORE=$($B info "$T")
 $B resize "$T":1 -50M --no-fs --yes >/dev/null 2>&1; chk "$?" "3" "D1 --no-fs + 缩容 ⇒ 3"
-$B resize "$T":1 500M --start 4096 >/dev/null 2>&1; chk "$?" "3" "D2 --start ⇒ 3（resize 不搬移）" # cli-surface: refused
-$B resize-part "$T":1 --start end >/dev/null 2>&1; chk "$?" "2" "D3 resize-part --start end ⇒ 2" # cli-surface: refused
+$B resize --yes "$T":1 500M --start 4096 >/dev/null 2>&1; chk "$?" "2" "D2 --start 非本命令选项（解析期即拒，未写盘）" # cli-surface: refused
+$B resize-part --yes "$T":1 --start end >/dev/null 2>&1; chk "$?" "2" "D3 resize-part --start end ⇒ 2" # cli-surface: refused
 chk "$($B info "$T")" "$BEFORE" "D 三次拒绝均未写盘"
 
 echo

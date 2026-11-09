@@ -36,7 +36,7 @@ $B new "$T" --yes >/dev/null || { echo "  BAD  fixture: new failed"; rc=1; exit 
 $B add "$T" 400M --align mib --name p1 --yes >/dev/null || { echo "  BAD  fixture: add failed"; rc=1; exit 1; }
 $B mkfs "$T":1 ext4 --yes >/dev/null || { echo "  BAD  fixture: mkfs failed"; rc=1; exit 1; }
 
-OUT=$($BFK resize "$T":1 300M --yes 2>&1); E=$?
+OUT=$($BFK resize-part "$T":1 --end 616447 --yes 2>&1); E=$?
 echo "exit=$E"
 echo "$OUT" | sed 's/^/    /'
 exp "$E" 3 "首写之前读当前表、不一致即拒绝"

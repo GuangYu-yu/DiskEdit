@@ -20,11 +20,11 @@ $B mkfs "$T":1 --yes 2>&1; exp $? 2 "mkfs 缺 FS 拒绝"
 echo "== resizefs online with unit =="
 LD=$(lo_attach "$T")
 mount_at "${LD}p1" "$TEST_MNT"
-$B resizefs "$TEST_MNT" 32M; exp $? 0 "resizefs 挂载点形式（单位）"
+$B resizefs --yes "$TEST_MNT" 32M; exp $? 0 "resizefs 挂载点形式（单位）"
 df -h "$TEST_MNT" | tail -1
 umount "$TEST_MNT"; losetup -d "$LD"
 echo "== resize SIZE with unit (positional) =="
-$B resize "$T":1 40M; exp $? 0 "resize 40M（单位）"
+$B resize --yes "$T":1 40M; exp $? 0 "resize 40M（单位）"
 $B info "$T"
 LD=$(lo_attach "$T"); e2fsck -fn "${LD}p1" >/dev/null 2>&1 && echo "e2fsck clean" || { echo "e2fsck ISSUES"; rc=1; }; losetup -d "$LD"
 sgdisk -v "$T" | tail -2

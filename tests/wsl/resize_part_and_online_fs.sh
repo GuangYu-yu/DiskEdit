@@ -19,7 +19,7 @@ $B add "$T" 16M --align mib --name p1 --yes >/dev/null; exp $? 0 "add p1（16MiB
 $B mkfs "$T":1 ext4 --yes >/dev/null; exp $? 0 "mkfs p1（ext4）"
 
 echo "== resize-part 扩到 67583（=32MiB）=="
-$B resize-part "$T":1 --end 67583 >/dev/null; exp $? 0 "resize-part 扩到 67583"
+$B resize-part --yes "$T":1 --end 67583 >/dev/null; exp $? 0 "resize-part 扩到 67583"
 $B info "$T" | grep -q '"num":1,[^}]*"last_lba":67583' \
   && echo "  OK   分区已到 2048..67583" || { echo "  BAD  分区未到 67583"; rc=1; }
 
@@ -32,7 +32,7 @@ echo marker-online > "$MP/marker"
 PART_BYTES=$(blockdev --getsize64 "${LD}p1")
 
 echo "== resizefs <mountpoint>（在线形式）=="
-$B resizefs "$MP" >/dev/null; exp $? 0 "resizefs <mountpoint>"
+$B resizefs --yes "$MP" >/dev/null; exp $? 0 "resizefs <mountpoint>"
 [ "$(fs_bytes "${LD}p1")" = "$PART_BYTES" ] && echo "  OK   FS 已填满分区" \
   || { echo "  BAD  FS=$(fs_bytes "${LD}p1") 分区=$PART_BYTES"; rc=1; }
 [ "$(cat "$MP/marker" 2>/dev/null)" = "marker-online" ] && echo "  OK   marker 存活" \

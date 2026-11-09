@@ -12,7 +12,8 @@ img T batch15.img
 
 # 攒批契约只在非自重叠搬移（delta ≥ 分区长度）下成立：自重叠为保重放字节精确
 # 逐 chunk 把已提交进度写进记录（见 movepart），批量断言会踩空。布局取 delta=500M > len=400M。
-# p2 400M / chunk 默认 4M → 每条目 100 chunk；batch=16
+# p2 400M / chunk 默认 4M → 每条目 100 chunk；checkpoint 按 max(chunk, 8MiB) 落盘，
+# 4M chunk 即每 2 块一提交，durable 游标停在偶数上
 
 run_case() {
   local fault="$1" expect="$2" forbid="$3" label="$4"
@@ -86,7 +87,7 @@ run_case() {
 }
 
 run_case ""           ""    ""   "无注入基线"
-run_case "chunk:20"   16    20   "batch 中途崩溃：volatile=20 / durable=16"
-run_case "chunk:16"   16    ""   "恰好命中 batch 边界"
+run_case "chunk:20"   18    20   "batch 中途崩溃：volatile=20 / durable=18"
+run_case "chunk:16"   14    16   "checkpoint 边界：volatile=16 / durable=14"
 run_case "before-entry-commit" 100 "" "末 chunk 后、entry commit 前（final flush 契约）"
 exit $rc

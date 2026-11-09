@@ -49,7 +49,7 @@ build_fixture() {
 
 echo "-- 成功路径：真实 e2fsck + resize2fs 把 FS 扩到新分区末端 --"
 build_fixture
-OUT=$($B resize "$IMG:1" 56M 2>&1); E=$?
+OUT=$($B resize --yes "$IMG:1" 56M 2>&1); E=$?
 echo "$OUT" | sed 's/^/    /'
 exp "$E" 0 "分区与 FS 都扩成功"
 LOOP=$(lo_attach "$IMG") || fail "re-losetup $IMG"
@@ -71,7 +71,7 @@ build_fixture
 rm -rf "$FAKE_TOOL_DIR"; mkdir -p "$FAKE_TOOL_DIR"
 printf '#!/bin/sh\necho "simulated resize2fs failure" >&2\nexit 1\n' > "$FAKE_TOOL_DIR/resize2fs"
 chmod +x "$FAKE_TOOL_DIR/resize2fs"
-OUT=$($BFK resize "$IMG:1" 56M 2>&1); E=$?
+OUT=$($BFK resize --yes "$IMG:1" 56M 2>&1); E=$?
 echo "$OUT" | sed 's/^/    /'
 exp "$E" 5 "FS 步未完成 → 部分完成（5），不报完全成功"
 case "$OUT" in

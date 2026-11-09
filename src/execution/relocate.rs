@@ -124,6 +124,7 @@ pub(crate) fn execute(
                 .map_err(|e| checkpoint_failed(part, e))?;
             crate::movepart::fault_chunk(state.transfer_cursor);
         } else {
+            crate::movepart::fault_chunk(state.transfer_cursor);
             pending += len;
             if pending >= flush_at {
                 if let Err(e) = src.sync_data() {
@@ -131,6 +132,7 @@ pub(crate) fn execute(
                         "partition {part}: cannot flush the moved data: {e} — the transfer may be incomplete"
                     )));
                 }
+                crate::movepart::fault_after_data_sync(state.transfer_cursor);
                 sink.transfer_checkpoint(src, state)
                     .map_err(|e| checkpoint_failed(part, e))?;
                 pending = 0;

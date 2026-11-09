@@ -149,7 +149,7 @@ expect_sizelimit_pending() {
 # 首次运行：表已提交，链要的新边界超出 dm 持有的映射 → 待办，5
 first_run_pending() { # $1=标签
   local out e
-  out=$($B resize "$IMG:1" 56M --grow-lv --lv lv1 2>&1); e=$?
+  out=$($B resize --yes "$IMG:1" 56M --grow-lv --lv lv1 2>&1); e=$?
   echo "$out" | sed 's/^/    /'
   exp "$e" 5 "$1: 表已提交、映射未覆盖新边界 → 部分完成（5）"
   expect_sizelimit_pending "$1" "$out"
@@ -167,13 +167,13 @@ fi
 exec \"$REAL_LVEXTEND\" \"\$@\""
 first_run_pending "现场一/首次"
 rebind_loop
-OUT=$($BFK resize "$IMG:1" 56M --grow-lv --lv lv1 2>&1); E=$?
+OUT=$($BFK resize --yes "$IMG:1" 56M --grow-lv --lv lv1 2>&1); E=$?
 echo "$OUT" | sed 's/^/    /'
 exp "$E" 5 "链失败（lvextend 未执行）→ 部分完成（5）"
 case "$OUT" in *"simulated lvextend failure"*) echo "  OK   链失败原因随待办报出";; *) bad "未报出 lvextend 失败原因";; esac
 expect_record "现场一/注入"
 report_state "$LV0" "现场一/注入"   # LV 未被扩容
-OUT=$($BFK resize "$IMG:1" 56M --grow-lv --lv lv1 2>&1); E=$?
+OUT=$($BFK resize --yes "$IMG:1" 56M --grow-lv --lv lv1 2>&1); E=$?
 echo "$OUT" | sed 's/^/    /'
 exp "$E" 0 "重跑补做未完成的链"
 report_state "$((LV0 + 8388608))" "现场一/重跑"
@@ -190,13 +190,13 @@ fi
 exec \"$REAL_LVEXTEND\" \"\$@\""
 first_run_pending "现场二/首次"
 rebind_loop
-OUT=$($BFK resize "$IMG:1" 56M --grow-lv --lv lv1 2>&1); E=$?
+OUT=$($BFK resize --yes "$IMG:1" 56M --grow-lv --lv lv1 2>&1); E=$?
 echo "$OUT" | sed 's/^/    /'
 exp "$E" 5 "LV 已扩但核验失败 → 部分完成（5）"
 case "$OUT" in *"simulated verification failure"*) echo "  OK   核验失败原因随待办报出";; *) bad "未报出核验失败原因";; esac
 expect_record "现场二/注入"
 report_state "$((LV0 + 8388608))" "现场二/注入"   # LV 已到目标
-OUT=$($BFK resize "$IMG:1" 56M --grow-lv --lv lv1 2>&1); E=$?
+OUT=$($BFK resize --yes "$IMG:1" 56M --grow-lv --lv lv1 2>&1); E=$?
 echo "$OUT" | sed 's/^/    /'
 exp "$E" 0 "重跑确认已在目标、不重复扩"
 report_state "$((LV0 + 8388608))" "现场二/重跑"
@@ -208,7 +208,7 @@ echo "-- 现场三：已提交的 PV 作业用 grow 重跑 --"
 build_fixture
 first_run_pending "现场三/首次"
 rebind_loop
-OUT=$($B resize "$IMG:1" grow --grow-lv --lv lv1 2>&1); E=$?
+OUT=$($B resize --yes "$IMG:1" grow --grow-lv --lv lv1 2>&1); E=$?
 echo "$OUT" | sed 's/^/    /'
 exp "$E" 0 "grow 重跑按记录的目标续做 LVM 收尾"
 report_state "$((LV0 + 8388608))" "现场三/重跑"

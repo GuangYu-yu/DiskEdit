@@ -24,7 +24,7 @@ pt() { $B info "$T" | grep -o '"num":1,[^}]*}' | grep -o '"size_bytes":[0-9]*'; 
 echo "===== A: exfat + --no-fs → 只改布局 → OK ====="
 mk exfat 400M
 BEFORE=$(pt)
-OUT=$($B resize "$T":1 900M --no-fs 2>&1); E=$?
+OUT=$($B resize --yes "$T":1 900M --no-fs 2>&1); E=$?
 echo "exit=$E  before=$BEFORE  after=$(pt)"
 [ "$E" = "0" ] && echo "A OK" || { echo "A WRONG EXIT ($E)"; rc=1; }
 
@@ -33,7 +33,7 @@ echo "===== B: ext4 扩容 → 后置条件全满足 → OK ====="
 mk ext4 400M
 LD=$(lo_attach "$T"); mount_at "${LD}p1" "$TEST_MNT" && { dd if=/dev/urandom of="$TEST_MNT/f.bin" bs=1M count=100 2>/dev/null; MC=$(mdsum "$TEST_MNT"/f.bin); echo "before fs: $(df -h --output=size "$TEST_MNT" | tail -1)"; umount "$TEST_MNT" 2>/dev/null; }
 lo_detach "$LD"
-OUT=$($B resize "$T":1 900M 2>&1); E=$?
+OUT=$($B resize --yes "$T":1 900M 2>&1); E=$?
 echo "exit=$E"
 LD=$(lo_attach "$T"); mount_at "${LD}p1" "$TEST_MNT" && { echo "after fs: $(df -h --output=size "$TEST_MNT" | tail -1)"; [ "$MC" = "$(mdsum "$TEST_MNT"/f.bin)" ] && echo "B DATA OK" || { echo "B DATA CORRUPT"; rc=1; }; umount "$TEST_MNT" 2>/dev/null; }
 e2fsck -fn "${LD}p1" >/dev/null 2>&1 && echo "B e2fsck clean" || { echo "B e2fsck ISSUES"; rc=1; }
@@ -44,7 +44,8 @@ echo
 echo "===== C: 缩容不支持的 FS → UNSUPPORTED(6) 且不得改盘 ====="
 mk exfat 800M
 BEFORE=$(pt)
-OUT=$($B resize "$T":1 400M --yes 2>&1); E=$?
+# 缩容入口是 resize-part（resize 只扩）：exfat 不可缩，FS 前置检查在写表之前拒绝
+OUT=$($B resize-part --yes "$T":1 --end 821247 2>&1); E=$?
 echo "exit=$E  before=$BEFORE  after=$(pt)"
 echo "$OUT" | head -2
 [ "$E" = "6" ] && echo "C UNSUPPORTED OK" || { echo "C WRONG EXIT ($E)"; rc=1; }

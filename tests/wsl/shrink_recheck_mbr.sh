@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
-# 回归：MBR 离线缩容的判据必须在首写之前成立。
+# 回归：MBR 缩容在命令层即被拒（resize 只扩），FS 探测与任何写盘都不会发生。
 #
-# 与 GPT 版同一窗口与注入手法（假 dumpe2fs 在 fs_min_bytes 探测期间改表并记账），
-# 区别在 MBR 路径不比对表：resize_mdos_entry 只按新尺寸写条目，不比对决策期读到的
-# 起点/长度，因此会先缩 FS、再按已改写的表写条目并以 0 退出。正确行为是在
-# shrink_fs 之前拒绝（3），且镜像与改动后的盘面逐字节一致。
+# 假 dumpe2fs 与 GPT 版同一注入手法：被调到才改表并记账。命令层拒绝发生在
+# 任何探测之前——记账文件不存在即是"探测未触达"的物证，镜像保持原字节。
+# GPT 路径的探测窗口契约（首写之前复核当前表）由 shrink_recheck_gpt.sh 承担。
 source "$(dirname "$0")/lib.sh"
 require_fake_bin
 
@@ -34,13 +33,12 @@ $B mkfs "$T":1 ext4 --yes >/dev/null || { echo "  BAD  fixture: mkfs failed"; rc
 
 OUT=$($BFK resize "$T":1 300M --yes 2>&1); E=$?
 echo "exit=$E"
-echo "$OUT" | sed 's/^/    /'
-exp "$E" 3 "首写之前读当前表、不一致即拒绝"
-if [ ! -s "$HASH" ]; then
-    echo "  BAD  注入未触发：fs_min_bytes 探测期间的表改动没有发生"
+echo "$OUT" | head -2 | sed 's/^/    /'
+exp "$E" 3 "MBR 缩容在命令层被拒（resize 只扩），未触达任何探测"
+if [ -s "$HASH" ]; then
+    echo "  BAD  被拒的命令不应触达 FS 探测（表改动发生了）"
     rc=1
 fi
-assert_eq "$(sha256sum "$T" | cut -d' ' -f1)" "$(cut -d' ' -f1 "$HASH")" \
-    "拒绝时盘面逐字节不变（整镜像 sha256）"
+exp "$(record_absent "$T" && echo yes || echo no)" yes "拒绝不留记录"
 
 exit $rc

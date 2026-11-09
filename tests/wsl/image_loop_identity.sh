@@ -100,7 +100,7 @@ lo_waitpart "${L2}p1" || { echo "BAD  ${L2}p1 未就绪"; exit 1; }
 mount_at "${L2}p1" "$TEST_MNT" || { echo "BAD  挂载 ${L2}p1 失败"; exit 1; }
 rm -rf "$LNK"
 [ ! -e "$LNK" ] || { echo "BAD  硬链接未删除"; exit 1; }
-"$B" resize-part "$T:1" --grow-to-end >/dev/null 2>&1
+"$B" resize-part --yes "$T:1" --grow-to-end >/dev/null 2>&1
 exp "$?" 3 "硬链接删除后仍按身份命中"
 unmount_now "$TEST_MNT"
 lo_detach "$L2"
@@ -124,7 +124,7 @@ if command -v dmsetup >/dev/null 2>&1 && dmsetup version >/dev/null 2>&1; then
             out=$("$B" resize-part "$T2:1" --end 4095 --yes 2>&1)
             exp "$?" 3 "分区被 dm 持有：改表被拒"
             case "$out" in
-                *"held by"*) echo "  OK   拒绝原因落在 holders 分支" ;;
+                *"is in use"*) echo "  OK   拒绝原因落在在用分支" ;;
                 *) echo "  BAD  拒绝原因不是 holders: $out"; rc=1 ;;
             esac
             dmsetup remove "$DMNAME" >/dev/null 2>&1
@@ -137,7 +137,7 @@ if command -v dmsetup >/dev/null 2>&1 && dmsetup version >/dev/null 2>&1; then
                 out=$("$B" resize-part "$T2:1" --end 4095 --yes 2>&1)
                 exp "$?" 3 "loop 本身被 dm 持有：改表被拒"
                 case "$out" in
-                    *"held by"*) echo "  OK   拒绝原因落在 holders 分支" ;;
+                    *"is in use"*) echo "  OK   拒绝原因落在在用分支" ;;
                     *) echo "  BAD  拒绝原因不是 holders: $out"; rc=1 ;;
                 esac
                 dmsetup remove "$DMNAME" >/dev/null 2>&1
@@ -147,7 +147,7 @@ if command -v dmsetup >/dev/null 2>&1 && dmsetup version >/dev/null 2>&1; then
                 echo "SKIP: dmsetup create（整盘 loop）不可用"
             fi
             # 解除持有后改走扩容；T2 没有文件系统，改表需显式 --no-fs
-            "$B" resize-part "$T2:1" --grow-to-end >/dev/null 2>&1
+            "$B" resize-part --yes "$T2:1" --grow-to-end >/dev/null 2>&1
             exp "$?" 0 "解除持有后放行（阳性对照）"
         else
             echo "SKIP: dmsetup create 不可用"
@@ -170,11 +170,11 @@ if ! lo_waitpart "${L4}p1"; then
     echo "SKIP: ${L4}p1 未就绪"
 elif mkswap "${L4}p1" >/dev/null 2>&1 && swapon "${L4}p1" 2>/dev/null; then
     SWAPDEV="${L4}p1"
-    "$B" resize-part "$T3:1" --grow-to-end >/dev/null 2>&1
+    "$B" resize-part --yes "$T3:1" --grow-to-end >/dev/null 2>&1
     exp "$?" 3 "分区是活动 swap：改表被拒"
     swapoff "$SWAPDEV" >/dev/null 2>&1
     SWAPDEV=
-    "$B" resize-part "$T3:1" --grow-to-end >/dev/null 2>&1
+    "$B" resize-part --yes "$T3:1" --grow-to-end >/dev/null 2>&1
     exp "$?" 0 "swapoff 后放行（阳性对照）"
 else
     echo "SKIP: swapon 不可用"
@@ -212,11 +212,12 @@ unshare -m bash -c '
     mount --make-rprivate /
     mount --bind "$1" "$2/img"
     L=$(losetup -fP --show "$2/img")
+    partx -u "$L" 2>/dev/null
     for _ in $(seq 1 50); do [ -b "${L}p1" ] && break; sleep 0.1; done
-    mount "${L}p1" "$TEST_MNT"
+    mount "${L}p1" "$5"
     printf "%s" "$L" > "$3"
     read -r _ < "$4"
-' _ "$T" "$NS" "$READY" "$FIFO" &
+' _ "$T" "$NS" "$READY" "$FIFO" "$TEST_MNT" &
 NSPID=$!
 exec 9<>"$FIFO"
 for _ in $(seq 1 100); do [ -s "$READY" ] && break; sleep 0.1; done
@@ -225,13 +226,13 @@ if [ ! -s "$READY" ]; then
     exit 1
 fi
 NLOOP=$(cat "$READY")
-"$B" resize-part "$T:1" --grow-to-end >/dev/null 2>&1
+"$B" resize-part --yes "$T:1" --grow-to-end >/dev/null 2>&1
 exp "$?" 3 "另一 namespace 的挂载被检出"
 exec 9>&-
 wait "$NSPID" 2>/dev/null
 NSPID=
 sleep 0.3
-"$B" resize-part "$T:1" --grow-to-end >/dev/null 2>&1
+"$B" resize-part --yes "$T:1" --grow-to-end >/dev/null 2>&1
 exp "$?" 0 "namespace 结束后放行（阳性对照）"
 lo_detach "$NLOOP"
 NLOOP=
@@ -279,7 +280,7 @@ PY
         truncate -s 64M "$T5"
         "$B" new "$T5" --yes >/dev/null 2>&1 || { echo "BAD  new 失败"; exit 1; }
         "$B" add "$T5" 32M --align mib --yes >/dev/null 2>&1 || { echo "BAD  add 失败"; exit 1; }
-        "$B" resize-part "$T5:1" --grow-to-end >/dev/null 2>&1
+        "$B" resize-part --yes "$T5:1" --grow-to-end >/dev/null 2>&1
         exp "$?" 0 "同一窗口内正常写盘不被误拒"
 
         T6=$(mktemp "$WSL_ROOT/loopid-race2-XXXXXX.img")

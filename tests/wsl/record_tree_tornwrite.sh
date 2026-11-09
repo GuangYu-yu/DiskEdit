@@ -13,9 +13,9 @@ mk() { # 100M/100M/200M，p2 前后留空便于自重叠左移
   rm -rf "$T" "$T"$SIDECAR_GLOB
   truncate -s 1G "$T"
   $B new "$T" --yes >/dev/null
-  $B add "$T" 104857600 --start 2048 --name p1 >/dev/null && $B mkfs "$T":1 ext4 --yes >/dev/null
-  $B add "$T" 104857600 --start 411648 --name p2 >/dev/null && $B mkfs "$T":2 ext4 --yes >/dev/null
-  $B add "$T" 209715200 --start 1026048 --name p3 >/dev/null && $B mkfs "$T":3 ext4 --yes >/dev/null
+  $B add --yes "$T" 104857600 --start 2048 --name p1 >/dev/null && $B mkfs "$T":1 ext4 --yes >/dev/null
+  $B add --yes "$T" 104857600 --start 411648 --name p2 >/dev/null && $B mkfs "$T":2 ext4 --yes >/dev/null
+  $B add --yes "$T" 209715200 --start 1026048 --name p3 >/dev/null && $B mkfs "$T":3 ext4 --yes >/dev/null
 }
 mnt() { LD=$(lo_attach "$T"); [ -n "$1" ] && { mount_at "${LD}p$1" "$TEST_MNT" && return 0; }; true; }
 umnt() { umount "$TEST_MNT" 2>/dev/null; lo_detach "$LD"; }
@@ -24,7 +24,8 @@ echo "########## A: 记录流式（数据字节不入记录） ##########"
 mk
 mnt 2; dd if=/dev/urandom of="$TEST_MNT/blob" bs=1M count=90 2>/dev/null; umnt; LD=$(lo_attach "$T"); MD2=$(mdsum "${LD}p2"); lo_detach "$LD"
 echo "-- A1: 中断的 100M 分区搬移后记录体积 --"
-DISKEDIT_FAULT=chunk:60 $BF move "$T":2 --start 250000 --chunk 1 --yes >/dev/null 2>&1
+OUT=$(DISKEDIT_FAULT=chunk:60 $BF move "$T":2 --start 250000 --chunk 1 --yes 2>&1); E=$?
+[ "$E" = "134" ] || { echo "  BAD  中断未按预期触发（exit=$E）"; echo "$OUT" | head -2; rc=1; }
 JSZ=$(stat -c%s "$(record_file "$T")" 2>/dev/null || echo 0)
 echo "record = $JSZ bytes (搬移量约 100M)"
 if [ "$JSZ" -gt 5 ] && [ "$JSZ" -lt 1048576 ]; then echo "A1 RECORD-STREAMING OK (<1MiB, 只记进度不记数据)"; else { echo "A1 JOURNAL SIZE ODD ($JSZ)"; rc=1; }; fi
@@ -84,7 +85,7 @@ else
   echo "C1 OK: 从备份头读到表"
 fi
 echo "-- C2: 主头损坏时写操作（工具已从备份头恢复表 → 写后应自洽）--"
-$B resize-part "$T":3 --grow-to-end >/dev/null 2>&1; E=$?
+$B resize-part --yes "$T":3 --grow-to-end >/dev/null 2>&1; E=$?
 echo "write exit=$E"
 sgdisk -v "$T" >/dev/null 2>&1 && echo "C2 RECOVERED-CLEAN OK" || { echo "C2 INCONSISTENT AFTER WRITE"; rc=1; }
 echo "-- C3: 主头损坏 + new → 备份头被覆盖？（数据丢失风险） --"
@@ -97,7 +98,7 @@ mk
 SZ=$(stat -c%s "$T"); LAST=$((SZ / 512 - 1))
 dd if=/dev/zero of="$T" bs=512 seek=$LAST count=1 conv=notrunc 2>/dev/null
 echo "info: $($B info "$T" | head -c 50)"
-$B resize-part "$T":3 --grow-to-end >/dev/null 2>&1; echo "repair exit=$?"
+$B resize-part --yes "$T":3 --grow-to-end >/dev/null 2>&1; echo "repair exit=$?"
 $B info "$T" | grep -o '"num":3,[^}]*}'
 sgdisk -v "$T" 2>&1 | tail -1
 
@@ -115,7 +116,7 @@ if [ "$E" = "0" ] && echo "$OUT" | grep -q "refusing auto-repair"; then
 else
   echo "C5 INFO WRONG (exit=$E)"; rc=1
 fi
-OUT=$($B set "$T":1 flag esp on 2>&1); E=$?
+OUT=$($B set --yes "$T":1 flag esp on 2>&1); E=$?
 echo "write exit=$E : $(echo "$OUT" | tail -1 | cut -c1-90)"
 if [ "$E" = "3" ] && echo "$OUT" | grep -q "refusing auto-repair"; then
   echo "C5 INCONSISTENT-REFUSED OK"

@@ -214,6 +214,10 @@ fn a_device_with_a_serial_or_wwid_reads_as_a_strong_identity() {
     let Some(device) = device_with_serial_or_wwid() else {
         return;
     };
+    // 读命令的前提是设备打得开：无读权限的环境没有这个现场，跳过
+    if fs::File::open(&device).is_err() {
+        return;
+    }
     let (code, out, err) = run(&["info", device.to_str().expect("utf-8 device path")]);
     assert_eq!(code, 0, "{}: {out}\n{err}", device.display());
 }

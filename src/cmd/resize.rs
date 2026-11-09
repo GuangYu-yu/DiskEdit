@@ -48,9 +48,9 @@ pub(crate) const DETAILS: &str = r#"  Resize partition and its filesystem, parti
     truncation is reported
 
   Constraints:
-    shrink    refused: this command only grows. Shrink in two steps — run
-              `resizefs` on the filesystem, then `resize-part` on the
-              partition (each step leaves its own resumable record)
+    shrink    refused: this command only grows. Shrink with `resize-part`
+              --end: it shrinks the filesystem first (offline), then the
+              partition, and an interrupted shrink resumes from its record
     --no-fs   refused on an LVM PV (the PV chain has no filesystem step of
               its own). A swap partition relocated as a blocker is rebuilt
               regardless: that step belongs to the relocation, not to the
@@ -68,13 +68,12 @@ pub(crate) const DETAILS: &str = r#"  Resize partition and its filesystem, parti
   of their own. A resize interrupted after its partition step (the LVM finish
   chain still pending) is resumed by re-running `resize`."#;
 
-/// `resize` 只扩。缩容拆成两步——先 `resizefs` 缩文件系统，再
-/// `resize-part` 缩分区：一次做完中途失败给不出明确的恢复指令，拆开每一步才有一份
-/// 可回放记录
+/// `resize` 只扩。缩容由 `resize-part` 承担——先离线缩文件系统再收表，进度落在
+/// 同一份记录里，中断后同请求重跑续做
 fn refuse_shrink() -> RunOutcome {
     RunOutcome::refused(
-        "`resize` only grows — shrink in two steps: run `resizefs` to shrink the filesystem, \
-         then `resize-part` to shrink the partition"
+        "`resize` only grows — shrink with `resize-part` (--end): it shrinks the filesystem \
+         first (offline), then the partition, and an interrupted shrink resumes from its record"
             .to_string(),
     )
 }

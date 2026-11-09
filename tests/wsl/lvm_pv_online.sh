@@ -25,7 +25,7 @@ rm -rf "$T" "$T"$SIDECAR_GLOB 2>/dev/null
 truncate -s 1G "$T"
 $B new "$T" --yes >/dev/null
 # LVM 分区类型 GUID
-$B add "$T" 510951424 --start 2048 --name pv0 --type-guid E6D6D379-F507-44C2-A23C-238F2A3DF928 >/dev/null; exp $? 0 "add pv0"
+$B add --yes "$T" 510951424 --start 2048 --name pv0 --type-guid E6D6D379-F507-44C2-A23C-238F2A3DF928 >/dev/null; exp $? 0 "add pv0"
 
 LD=$(lo_attach "$T")
 pvcreate "${LD}p1" >/dev/null && echo "pvcreate OK"
@@ -37,7 +37,7 @@ lvchange -ay /dev/vgtest/lv1 2>/dev/null
 echo "PV before: $(pvs --noheadings -o pv_size "${LD}p1" 2>/dev/null | tr -d ' ')"
 
 echo "-- 活跃 LV 持有分区时 resize 分区层（应走 sfdisk+partx，不因 EBUSY 失败）--"
-$B resize "$LD":1 800M >/dev/null 2>&1; exp $? 0 "分区层扩容 800M（走 sfdisk+partx）"
+$B resize --yes "$LD":1 800M >/dev/null 2>&1; exp $? 0 "分区层扩容 800M（走 sfdisk+partx）"
 $B info "$T" | grep -o '"num":1,"first_lba":[0-9]*,"last_lba":[0-9]*'
 echo "kernel 视图: $(blockdev --getsize64 "${LD}p1") bytes (期望 838860800)"
 
@@ -48,8 +48,8 @@ echo "-- 越界目标（终点 = 容器末个 LBA，越过 last_usable_lba）：
 LAST_LBA=$(( $(stat -c %s "$T") / 512 - 1 ))
 OVERSIZE=$(( (LAST_LBA - 2048 + 1) * 512 ))
 P1_BEFORE=$($B info "$T" | grep -o '"num":1,"first_lba":[0-9]*,"last_lba":[0-9]*')
-$B resize "$LD":1 "$OVERSIZE" >/dev/null 2>&1; exp $? 3 "PV 越界目标拒绝"
-$B resize "$LD":1 "$OVERSIZE" 2>&1 >/dev/null | grep -q "exceeds the usable range" \
+$B resize --yes "$LD":1 "$OVERSIZE" >/dev/null 2>&1; exp $? 3 "PV 越界目标拒绝"
+$B resize --yes "$LD":1 "$OVERSIZE" 2>&1 >/dev/null | grep -q "exceeds the usable range" \
   && echo "  OK   拒绝理由指向可用区" || { echo "  BAD  拒绝理由不是可用区"; rc=1; }
 assert_eq "$($B info "$T" | grep -o '"num":1,"first_lba":[0-9]*,"last_lba":[0-9]*')" "$P1_BEFORE" "  拒绝后分区表未变"
 

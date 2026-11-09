@@ -21,8 +21,8 @@ track_file "$T1"; track_file "$T2"; rm -rf "$T1" "$T1"$SIDECAR_GLOB "$T2" "$T2"$
 echo "########## E1: GPT 表项重叠 ⇒ FS 写命令拒绝且不写盘 ##########"
 truncate -s 256M "$T1"
 $B new "$T1" --yes >/dev/null
-$B add "$T1" 32505856 --start 2048 --name p1 >/dev/null
-$B add "$T1" 33554432 --start 65536 --name p2 >/dev/null
+$B add --yes "$T1" 32505856 --start 2048 --name p1 >/dev/null
+$B add --yes "$T1" 33554432 --start 65536 --name p2 >/dev/null
 # 把条目 2 的 first_lba 改成 32768 ⇒ 与条目 1（2048..65535）重叠。主备两份条目数组
 # 与各自表头的 CRC 必须一并重算：只改一处会让该副本被判损坏，工具从另一副本恢复，
 # 重叠被掩盖而命令照常执行——那样测的就不是本条闸口
@@ -76,8 +76,8 @@ echo
 echo "########## E2: new 的目标是分区节点 ⇒ 拒绝且不写盘 ##########"
 truncate -s 256M "$T2"
 $B new "$T2" --yes >/dev/null
-$B add "$T2" 32505856 --start 2048 --name p1 >/dev/null
-$B add "$T2" 33554432 --start 65536 --name p2 >/dev/null
+$B add --yes "$T2" 32505856 --start 2048 --name p1 >/dev/null
+$B add --yes "$T2" 33554432 --start 65536 --name p2 >/dev/null
 LD=$(lo_attach "$T2")
 if lo_waitpart "${LD}p2"; then
     mkfs.ext4 -q -F "${LD}p2" >/dev/null 2>&1
@@ -87,12 +87,10 @@ if lo_waitpart "${LD}p2"; then
     exp "$E" 3 "E2 partition node refused as a new target"
     case "$OUT" in *"target is a partition, not a whole disk"*) echo "  OK   E2 refusal names the partition node" ;; *) echo "  BAD  E2 refusal wording"; rc=1 ;; esac
     assert_eq "$(mdsum "${LD}p2")" "$E2B" "E2 partition node bytes unchanged after the refusal"
-else
-    echo "  BAD  ${LD}p2 did not appear"; rc=1
-fi
+
     # 同一道分区节点守卫还覆盖 add / mkfs / undo / abandon（建表 / 回放类命令的载体必须是整盘）。
-    # 放在 lo_detach 之前：分区节点设备此刻仍挂着
-    OUT=$($B add "${LD}p2" 1048576 --start 2048 --name p1 2>&1); E=$?
+    # 分区节点在位才可测：节点未就绪时这些调用对着不存在的设备，退出码不构成任何断言
+    OUT=$($B add --yes "${LD}p2" 1048576 --start 2048 --name p1 2>&1); E=$?
     echo "add on partition node -> exit=$E"; exp "$E" 3 "E2a add refused on a partition node"
     case "$OUT" in *"target is a partition, not a whole disk"*) echo "  OK   E2a refusal names the partition node" ;; *) echo "  BAD  E2a refusal wording"; rc=1 ;; esac
 
@@ -109,6 +107,9 @@ fi
     case "$OUT" in *"target is a partition, not a whole disk"*) echo "  OK   E2d refusal names the partition node" ;; *) echo "  BAD  E2d refusal wording"; rc=1 ;; esac
 
     assert_eq "$(mdsum "${LD}p2")" "$E2B" "E2 all refusals leave the partition node bytes unchanged"
+else
+    echo "  BAD  ${LD}p2 did not appear"; rc=1
+fi
 lo_detach "$LD"
 
 echo
@@ -117,9 +118,10 @@ truncate -s 512M "$T5"
 $BF new "$T5" --yes >/dev/null
 $BF add "$T5" 100M --align mib --name p1 --yes >/dev/null
 $BF mkfs "$T5":1 ext4 --yes >/dev/null
-$BF add "$T5" 104858112 --start 307200 --name p2 >/dev/null
-# 造未收尾的 Shift 作业：精确 SIZE 扩容、挡路分区搬到一半即 abort，现场保留（不 abandon）
-DISKEDIT_FAULT=chunk:20 $BF resize "$T5":1 209715200 --allow-move --yes >/dev/null 2>&1
+$BF add --yes "$T5" 104858112 --start 307200 --name p2 >/dev/null
+# 造未收尾的 Shift 作业：精确 SIZE 扩容、挡路分区搬到一半即 abort，现场保留（不 abandon）。
+# p2 的搬移量为 104448 扇区（≈50MiB），4MiB chunk 共 13 块且自重叠逐块落进度——注入点取块数之内
+DISKEDIT_FAULT=chunk:8 $BF resize "$T5":1 209715200 --allow-move --yes >/dev/null 2>&1
 exp "$?" 134 "E5 grow interrupted mid-move"
 record_present "$T5" && echo "  OK   relocation record present after the interruption" || { echo "  BAD  no record after the interruption"; rc=1; }
 OUT=$($BF resize "$T5":1 52428800 --yes 2>&1); E=$?
@@ -137,8 +139,8 @@ img T3 rev_g3.img
 rm -rf "$T3" "$T3"$SIDECAR_GLOB 2>/dev/null
 truncate -s 512M "$T3"
 $BF new "$T3" --yes >/dev/null
-$BF add "$T3" 49283072 --start 2048 --name p1 >/dev/null
-$BF add "$T3" 50331648 --start 200704 --name p2 >/dev/null
+$BF add --yes "$T3" 49283072 --start 2048 --name p1 >/dev/null
+$BF add --yes "$T3" 50331648 --start 200704 --name p2 >/dev/null
 LD=$(lo_attach "$T3")
 D=$(basename "$LD")
 if lo_waitpart "${LD}p1"; then
@@ -214,7 +216,7 @@ for i in 1 2 3 4 5 6 7 8; do
         echo "  (attempt $i) loop/mount unavailable"
         lo_detach "$LD"; continue
     fi
-    $BF resizefs "$TEST_MNT" 1610612736 >/dev/null 2>&1 &
+    $BF resizefs --yes "$TEST_MNT" 1610612736 >/dev/null 2>&1 &
     rp=$!
     # 第三方（不守本工具的锁）在 p1 将要吞掉的区间里建条目
     for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
