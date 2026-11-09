@@ -133,11 +133,11 @@ setup   # 重建可引导盘
 DISKEDIT_FAULT=chunk:20 $BF move "$T":2 --start 2600000 --chunk 4 --yes >/dev/null 2>&1
 exp "$?" 134 "注入中断（SIGABRT）"
 OUT=$($B move "$T":2 --start 2600000 --chunk 4 --yes 2>&1); E=$?
-RESUMED=$(echo "$OUT" | grep -o 'resuming at entry [0-9]* chunk [0-9]*')
+RESUMED=$(echo "$OUT" | grep -o 'resuming at chunk [0-9]*')
 echo "  resume: $RESUMED"
 exp "$E" 0 "续传重跑"
 [ -n "$RESUMED" ] && echo "  OK   确实从断点续传" \
-  || { echo "  BAD  未见 resuming at entry/chunk（未续传而是从头重跑？）"; rc=1; }
+  || { echo "  BAD  未见 resuming at chunk（未续传而是从头重跑？）"; rc=1; }
 $B info "$T" | grep -o '"num":2,[^}]*}'
 qemu_boot after-interrupt-resume 60
 
