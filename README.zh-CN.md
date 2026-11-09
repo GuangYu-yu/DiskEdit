@@ -12,7 +12,7 @@
 
 ## 运行要求
 
-- **Linux**。只有 Linux 承诺写盘；其他平台在命令分派处一律拒绝（退出码 6），此时目标字节、锁、恢复记录与日志都未被写入。
+- **Linux**。只有 Linux 承诺写盘；其他平台在命令分派处按缺失的原语拒绝（退出码 6，目标字节、锁、恢复记录与日志都未被写入）。镜像上的 `info` 与 `plan` 仍可只读运行，证据类与写命令被拒——逐条答案见 [docs/capability-matrix.md](docs/capability-matrix.md)。
 - **Rust**：需要支持 edition 2024 的工具链（1.85 及以上）才能构建。
 - **root**：文件系统层命令需要，因为要经 `losetup` 映射分区。分区表写入只对块设备需要 root，对镜像文件不需要。
 
@@ -49,7 +49,7 @@ diskedit info disk.img | jq .
 ```bash
 diskedit info /dev/sdb
 diskedit plan /dev/sdb:2 --grow
-diskedit resize /dev/sdb:1 +2G
+diskedit resize /dev/sdb:1 +2G --yes
 diskedit resize disk.img grow --allow-move --chunk 4 --yes
 diskedit undo /dev/sdb --yes
 ```
@@ -75,7 +75,7 @@ diskedit undo /dev/sdb --yes
 | lvm2_pv | — | ✓ | — | — | — | — |
 
 - `check` 一律只读（`e2fsck -n`、`ntfsfix -n`、`xfs_repair -n`、`btrfs check`、`fsck.vfat -n`、`fsck.exfat -n`、`fsck.f2fs`）；工具退出非零即检查失败（退出码 3）。
-- `resize` 只扩不缩。缩容先 `resizefs` 缩文件系统，再 `resize-part` 缩分区边界；文件系统缩不动就不动表。
+- `resize` 只扩不缩。缩容用 `resize-part --end`：先离线缩文件系统，再收分区边界；`resizefs` 只扩，在线 btrfs 形式也能缩。文件系统缩不动就不动表。
 - `mkfs` 拒绝 LVM PV，重建请用 `pvcreate(8)` / `wipefs(8)`。
 - `ntfs` 的 UUID 只能重新生成（`ntfslabel --new-serial`），不能指定；该序号不是 Windows 卷 UUID。
 - `swap` 的扩容是改完表项后用 `mkswap` 重建，UUID、PARTUUID 与分区号保持。
