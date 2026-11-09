@@ -128,7 +128,8 @@ record_present "$T5" && echo "  OK   relocation record present after the interru
 # resize-part 的闸在记录准入，未收尾的搬移作业按 busy 拒
 OUT=$($BF resize-part "$T5":1 --end 104447 --yes 2>&1); E=$?
 echo "shrink against the pending job -> exit=$E : $(echo "$OUT" | tail -1)"
-exp "$E" 3 "E5 shrink refused instead of replaying the grow plan"
+# 未收尾作业的记录已写盘（provisional）：挡路拒绝按 past-boundary 口径报 5
+exp "$E" 5 "E5 shrink refused instead of replaying the grow plan"
 case "$OUT" in *"owns this target"*) echo "  OK   E5 refusal names the pending owner" ;; *) echo "  BAD  E5 refusal wording"; rc=1 ;; esac
 case "$OUT" in *"diskedit abandon"*) echo "  OK   E5 refusal points at abandon" ;; *) echo "  BAD  E5 refusal lacks the abandon exit"; rc=1 ;; esac
 

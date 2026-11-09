@@ -65,7 +65,8 @@ P2START=$($B info "$T" | grep -o '"num":2,[^}]*}' | grep -o '"first_lba":[0-9]*'
 lo_detach "$LD"
 OUT=$($B delete "$T":2 2>&1); E=$?
 echo "$OUT" | head -1
-[ "$E" = "3" ] && echo "delete w/o --yes refused OK (exit=$E)" || { echo "delete w/o --yes wrong exit ($E, want 3)"; rc=1; }
+# 缺 --yes 的确认门在命令面层拒绝（usage 2），不进入占用/几何判定
+[ "$E" = "2" ] && echo "delete w/o --yes usage-refused OK (exit=$E)" || { echo "delete w/o --yes wrong exit ($E, want 2)"; rc=1; }
 $B delete "$T":2 --yes >/dev/null 2>&1; echo "delete exit=$?"
 $B info "$T" | grep -o '"num":2' || echo "p2 GONE OK"
 LD=$(lo_attach "$T")

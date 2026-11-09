@@ -97,6 +97,9 @@ $B add --yes "$T" 1048576 --start 264192 --name over >/dev/null 2>&1; E=$?
 # 所以这里必须 --align none，越界请求才真正到达边界校验（src/movepart/resize.rs:404）
 LU=2097118
 echo "last_usable=$LU (2097151 - 32 - 1)"
+# 未识别的分区内容在 FS 步写表前被拒（6）：给 p128 一个可识别的签名，FS 步才放行；
+# fatresize 在 CI 工具清单内。越界请求的边界校验在 FS 步之前，beyond 段不受影响
+$B mkfs --yes "$T":128 vfat >/dev/null 2>&1
 $B resize-part --yes "$T":128 --align none --end "$LU" >/dev/null 2>&1; E=$?
 [ "$E" = "0" ] && echo "grow-to-usable OK (exit=$E)" || { echo "grow-to-usable failed (exit=$E)"; rc=1; }
 P=$($B info "$T" | grep -o '"num":128,[^}]*}' | grep -o '"last_lba":[0-9]*' | cut -d: -f2)
