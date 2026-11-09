@@ -65,10 +65,10 @@ jobs:
           git diff --exit-code docs/
 
       - name: cargo test
-        run: cargo test --all-targets
+        run: cargo test --all-targets --no-fail-fast
 
       - name: cargo test (test-faults)
-        run: cargo test --all-targets --features test-faults
+        run: cargo test --all-targets --features test-faults --no-fail-fast
 
   # 动态生成矩阵配置，只包含用户勾选的平台
   matrix:
