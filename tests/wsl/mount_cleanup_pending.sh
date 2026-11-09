@@ -71,6 +71,8 @@ case "$OUT" in *"run manually: umount /tmp/diskedit.mnt."*) echo "B remedy OK";;
 
 echo
 echo "===== C: umount 缺失 → 事前拒绝(6)，未写盘也就没有待办 ====="
+# resize 前打印映射现场：若命中占用拒绝，拒绝原因可与快照直接对上
+losetup -a | sed 's/^/  [loops] /'
 # umount 缺失是**事前可知**的：mount 层工具前置检查（check_mount_layer_tools）在写盘前
 # 就拒绝，比"事后留一条清理待办"更严——不留残留挂载点、也不动盘
 setup_case

@@ -23,9 +23,11 @@ $B new "$T" --yes >/dev/null; exp $? 0 "new"
 
 echo "== add p1（2048..4095）=="
 $B add --yes "$T" 1048576 --start 2048 --name p1 >/dev/null; exp $? 0 "add p1（2048..4095）"
+# resize-part 的扩容自带 FS 步：未识别内容的 grow 在写盘前被拒（6）。本段验的是
+# 边界几何，给 p1 建一个 ext4 让 FS 步成立，几何断言不受影响
+$B mkfs --yes "$T":1 ext4 >/dev/null 2>&1 || { echo "  BAD  mkfs p1 失败"; rc=1; }
 
 echo "== 扩到 last_usable =="
-# resize-part 只改分区表、不动 FS，不需要也不接受 --no-fs（本段验的是边界几何）
 $B resize-part --yes "$T":1 --grow-to-end >/dev/null; exp $? 0 "at last_usable"
 [ "$(p1_last)" = "$LU" ] && echo "  OK   p1 已到 2048..$LU" \
   || { echo "  BAD  p1 未到 last_usable（last_lba=$(p1_last)）"; rc=1; }

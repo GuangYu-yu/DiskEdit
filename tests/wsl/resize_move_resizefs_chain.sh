@@ -46,6 +46,9 @@ lo_detach "$LD"
 echo "  OK   marker 已写入"
 
 echo "== resize +8M (plain) =="
+# resize 前打印此刻的 loop 映射现场（backing 路径 + 是否带挂载）：一旦命中占用拒绝，
+# 拒绝原因可与这份快照直接对上
+losetup -a | sed 's/^/  [loops] /'
 $B resize --yes "$T":1 +8M >/dev/null; exp "$?" 0 "resize +8M"
 verify_marker "resize +8M"
 $B check "$T":1 >/dev/null; exp "$?" 0 "check p1"

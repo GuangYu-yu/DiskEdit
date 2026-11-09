@@ -131,10 +131,10 @@ case "$OUT" in *"owns this target"*) echo "  OK   E5 refusal names the pending o
 case "$OUT" in *"diskedit abandon"*) echo "  OK   E5 refusal points at abandon" ;; *) echo "  BAD  E5 refusal lacks the abandon exit"; rc=1 ;; esac
 
 echo
-echo "########## E3: 块设备搬移中断续跑（表已提交、内核重读之前）##########"
-# 中断点取 rs-after-commit：表项已落盘、命令层 settle_layout 的 BLKRRPART 尚未跑。
-# 契约：内核分区视图过期应退 5 并提示 partprobe，续跑做完退 0；退 3 的语义是
-# "未写盘且请求与现状不匹配"，而续跑时盘上真相与请求一致——3 是码与理由双错配
+echo "########## E3: 块设备搬移中断续跑（条目已提交、表步未做）##########"
+# 中断点取 after-entry-commit:0：搬移条目已提交、表步尚未做。
+# 契约：resume 完成表步后分区已在 400000——退 3 的语义是"未写盘且请求与现状不匹配"，
+# 而续跑时盘上真相与请求一致——3 是码与理由双错配
 img T3 rev_g3.img
 rm -rf "$T3" "$T3"$SIDECAR_GLOB 2>/dev/null
 truncate -s 512M "$T3"
@@ -145,8 +145,10 @@ LD=$(lo_attach "$T3")
 D=$(basename "$LD")
 if lo_waitpart "${LD}p1"; then
     echo "  sysfs p1 start before = $(cat "/sys/block/$D/${D}p1/start" 2>/dev/null)"
-    DISKEDIT_FAULT=rs-after-commit $BF move "$LD":1 --start 400000 --yes >/dev/null 2>&1
-    exp "$?" 134 "E3 move interrupted right after the table commit"
+    # move 走执行器：条目提交后、表步之前的注入点（rs-* 系列只在 resize-part 路径）。
+    # 中断后表未提交 → resume 完成表步、分区到 400000 → 输出非 3 即契约
+    DISKEDIT_FAULT=after-entry-commit:0 $BF move "$LD":1 --start 400000 --yes >/dev/null 2>&1
+    exp "$?" 134 "E3 move interrupted after the entry commit (table step pending)"
     echo "  on-disk p1 = $($B info "$T3" | grep -o '"num":1,[^}]*}')"
     echo "  sysfs p1 start after the abort = $(cat "/sys/block/$D/${D}p1/start" 2>/dev/null)"
     OUT=$($BF move "$LD":1 --start 400000 --yes 2>&1); E=$?

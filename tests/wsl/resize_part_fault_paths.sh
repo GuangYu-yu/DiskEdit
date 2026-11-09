@@ -68,9 +68,10 @@ chkp 2 "$M2"
 echo
 echo "===== 3: rs-after-commit（扩容收尾未做）→ rerun 拒 → undo 拒（越过回滚点）→ abandon → resizefs 收尾 ====="
 mk; M3=$(fillp 3 190)
-DISKEDIT_FAULT=rs-after-commit $BF resize --yes "$T":3 300M >/dev/null 2>&1
+# p3 200M → 300M：末端 = 1026048 + 614400 − 1 = 1640447。rs-* 注入点在 resize-part 路径
+DISKEDIT_FAULT=rs-after-commit $BF resize-part --yes "$T":3 --end 1640447 >/dev/null 2>&1
 echo "record: $(record_present "$T" && echo present || echo absent)"
-OUT=$($BF resize --yes "$T":3 300M 2>&1); E=$?
+OUT=$($BF resize-part --yes "$T":3 --end 1640447 2>&1); E=$?
 exp "$E" 3 "表已提交后 rerun 被拒（不得静默重跑）"
 echo "$OUT" | grep -o "unfinished operation still owns this target" | head -1
 exp "$($B undo "$T" --yes >/dev/null 2>&1; echo $?)" 3 "undo 拒绝越过回滚点的 resize（abandon 是唯一出口）"
@@ -149,8 +150,8 @@ mk; M2=$(fillp 2 90)
 DISKEDIT_FAULT=after-data-sync:1 $BF move "$T":2 --start 250000 --chunk 1 --yes >/dev/null 2>&1
 exp "$(record_present "$T" && echo yes || echo no)" yes "中断留下记录现场"
 OUT=$($BF move "$T":2 --start 250000 --chunk 1 --yes 2>&1); exp "$?" 0 "同请求重跑搬移"
-R=$(echo "$OUT" | grep -o "resuming at entry [0-9]* chunk [0-9]*" | head -1)
-[ "$R" = "resuming at entry 0 chunk 0" ] && echo "  AFTER-SYNC OK ($R)" || { echo "  AFTER-SYNC WRONG ($R)"; rc=1; }
+R=$(echo "$OUT" | grep -o "resuming at chunk [0-9]*" | head -1)
+[ "$R" = "resuming at chunk 0" ] && echo "  AFTER-SYNC OK ($R)" || { echo "  AFTER-SYNC WRONG ($R)"; rc=1; }
 chkp 2 "$M2"
 sgdisk -v "$T" >/dev/null 2>&1 && echo "sgdisk clean" || { echo "sgdisk ISSUES"; rc=1; }
 
@@ -181,8 +182,8 @@ exp "$(record_present "$T" && echo yes || echo no)" yes "第 2 块落盘后中�
 C=$(record_cursor "$T")
 assert_eq "$C" "2" "记录里的搬移游标停在第 2 块"
 OUT=$($BF move "$T":1 --start 34816 --chunk 64 --yes 2>&1); exp "$?" 0 "同请求重跑搬移"
-R=$(echo "$OUT" | grep -o "resuming at entry [0-9]* chunk [0-9]*" | head -1)
-assert_eq "$R" "resuming at entry 0 chunk 2" "续跑点取记录里的游标"
+R=$(echo "$OUT" | grep -o "resuming at chunk [0-9]*" | head -1)
+assert_eq "$R" "resuming at chunk 2" "续跑点取记录里的游标"
 $B info "$T" | grep -q '"num":1,"first_lba":34816' && echo "  OK   p1 到达 34816" || { echo "  BAD  p1 未到达目标起点"; rc=1; }
 AFTER=$(ranged_sha "$T" 34816 131072)
 assert_eq "$AFTER" "$BEFORE" "左移后源数据逐字节一致（分区内容 sha256）"
@@ -212,8 +213,8 @@ exp "$(record_present "$T" && echo yes || echo no)" yes "第 4 块存在（单�
 C=$(record_cursor "$T")
 assert_eq "$C" "4" "第 4 块后游标为 4"
 OUT=$($BF move "$T":1 --start 34816 --chunk 64 --yes 2>&1); exp "$?" 0 "续跑完成"
-R=$(echo "$OUT" | grep -o "resuming at entry [0-9]* chunk [0-9]*" | head -1)
-assert_eq "$R" "resuming at entry 0 chunk 4" "续跑点 = 4（最后一块）"
+R=$(echo "$OUT" | grep -o "resuming at chunk [0-9]*" | head -1)
+assert_eq "$R" "resuming at chunk 4" "续跑点 = 4（最后一块）"
 mk_left "$T"
 DISKEDIT_FAULT=chunk:5 $BF move "$T":1 --start 34816 --chunk 64 --yes >/dev/null 2>&1
 exp "$?" 0 "第 5 块不存在（命令行 chunk 64M 未被采用）"

@@ -42,7 +42,7 @@ read_label() { # fs 分区设备
         btrfs)          btrfs filesystem label "$2" 2>/dev/null ;;
         f2fs)           blkid -p -s LABEL -o value "$2" 2>/dev/null ;;
         vfat)           fatlabel "$2" 2>/dev/null ;;
-        exfat)          exfatlabel "$2" 2>/dev/null | tail -1 ;;
+        exfat)          exfatlabel "$2" 2>/dev/null | sed -n 's/^label: //p' | tail -1 ;;
         ntfs)           ntfslabel "$2" 2>/dev/null ;;
         swap)           swaplabel "$2" 2>/dev/null | awk '/^LABEL:/{print $2}' ;;
     esac

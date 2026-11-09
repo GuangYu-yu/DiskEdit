@@ -1476,7 +1476,12 @@ pub(crate) fn cmd_move(a: &MoveRequest) -> crate::outcome::RunOutcome {
                      {recorded_start}..{recorded_end} — the layout changed outside this job; refusing"
                 )))
             }
-            Some(_) => {}
+            // 续跑的起点随输出可见——只看输出无法区分"从断点继续"与"从头重算"，两者的
+            // 耗时相差悬殊。pre-move range 在与不在只影响那半句说明
+            Some(_) => eprintln!(
+                "note: the on-disk range matches the record's pre-move range; resuming at chunk {}",
+                journal.progress().transfer_cursor
+            ),
             None => eprintln!(
                 "note: the recovery record carries no pre-move range — the on-disk range cannot be \
                  cross-checked; resuming at chunk {}",

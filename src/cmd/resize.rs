@@ -188,6 +188,15 @@ pub(crate) fn cmd_resize(a: &ResizeRequest) -> crate::outcome::RunOutcome {
     let shrinking = target.is_some_and(|t| t < cur_bytes);
     // 锁下的方向可能因窗口内的外部改写而与锁前相反（缩容一律不走这里）
     if shrinking {
+        // 缩容撞上未收尾的搬移作业：按"目标被占用"拒绝并指向 abandon。只说"只扩"
+        // 会把用户推向 resize-part，在那里再撞一次占用拒绝，两次都不提那份作业
+        if reloc {
+            bail_fail(RunOutcome::refused(
+                "an unfinished operation still owns this target — release it with `diskedit abandon` \
+                 (or re-run the original grow request to finish it first)"
+                    .to_string(),
+            ));
+        }
         bail_fail(refuse_shrink());
     }
     // FS 类型与 PV 判据同样按锁下现状重取（与几何同理）：识别与取锁之间分区可被
