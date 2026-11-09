@@ -4,17 +4,22 @@
 use crate::cli::{InfoRequest, PlanRequest};
 use crate::gpt_policy;
 use crate::movepart;
-use crate::support::{bail_fail, RunOutcome, EXIT_OK};
+use crate::support::{bail_fail, RunOutcome};
 
 /// plan 的详助：只读报告，字段与 `info` 同源
 pub(crate) const DETAILS_PLAN: &str = r#"  Read-only report on a target: geometry, partition table, filesystems and
   space-usage conclusions. The fields are the ones `info` prints; `plan` opens
   no recovery path and probes no write directory.
-  With --grow the report is followed by the relocation preview for growing
-  partition :N to the last usable LBA. The preview only reads: nothing is
-  written and no reusable plan is produced."#;
+  With --grow the same document gains a `preview` key for growing partition :N
+  to the last usable LBA:
+    grow_part     the partition being grown
+    new_end_lba   its end LBA after the growth
+    sector_size   logical block size the LBAs are counted in
+    moves         array of {num, first_lba, last_lba, delta_lba, bytes, swap};
+                  swap marks an area recreated in place instead of copied
+  The preview only reads: nothing is written and no reusable plan is produced."#;
 
-/// 默认只读几何报告；`--grow` 追加搬迁预览，不落盘、不产出 `Plan`
+/// 默认只读几何报告；`--grow` 在同一份文档里多给一个 `preview` 键，不落盘、不产出 `Plan`
 pub(crate) fn cmd_plan(a: &PlanRequest) -> u8 {
     if !a.grow {
         // 无 --grow 的 plan 就是全目标 info；:N 不是它的输入——拒绝主语用 plan 说，
@@ -35,16 +40,6 @@ pub(crate) fn cmd_plan(a: &PlanRequest) -> u8 {
             "`plan --grow` previews one partition — write the target as <TARGET>:N",
         ));
     };
-    let code = crate::cmd::info::cmd_info(&InfoRequest {
-        target: a.target.clone(),
-        part: None,
-        sector_size: a.sector_size,
-    });
-    // 预览的几何报告失败（识别失败退 4）时整个 plan 同样失败：吞掉返回码会让
-    // "info 已识别失败、plan 却退 0" 同时发生
-    if code != crate::outcome::EXIT_OK {
-        return code;
-    }
     let src = match crate::cmd::open_read_only_target(&a.target, a.sector_size) {
         Ok(s) => s,
         Err(f) => bail_fail(f),
@@ -82,22 +77,67 @@ pub(crate) fn cmd_plan(a: &PlanRequest) -> u8 {
         Ok(p) => p,
         Err(f) => bail_fail(f),
     };
-    if let Err(e) = print_plan(&plan, target_start) {
-        bail_fail(RunOutcome::from(e));
+    let preview = match preview_json(&plan, target_start) {
+        Ok(s) => s,
+        Err(e) => bail_fail(RunOutcome::from(e)),
+    };
+    // 报告与预览是同一份文档：消费方拿到的永远是单个 JSON 对象，不必先剥掉尾部的文本行
+    crate::cmd::info::cmd_info_with(
+        &InfoRequest {
+            target: a.target.clone(),
+            part: None,
+            sector_size: a.sector_size,
+        },
+        Some(&preview),
+    )
+}
+
+/// 搬移条目的落点与字节数（值来自锁下解析的表项/ckpt）：损坏条目的下溢/溢出
+/// 宁可拒打，不回绕成假区间
+fn move_range(m: &movepart::PlanEntry, ss: u64) -> std::io::Result<(u64, u64)> {
+    let last = m
+        .first_lba
+        .checked_add(m.len_lba)
+        .and_then(|e| e.checked_sub(1))
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "corrupted move entry: range overflows"))?;
+    let bytes = m
+        .delta_lba
+        .checked_mul(ss)
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "corrupted move entry: byte size overflows"))?;
+    Ok((last, bytes))
+}
+
+/// `preview` 键的内容。终点判定与 `print_plan` 同源（`grow_end_for`），只换渲染方式
+fn preview_json(plan: &movepart::Plan, target_start: u64) -> std::io::Result<String> {
+    let new_end = movepart::grow_end_for(plan, target_start)?;
+    let mut tail = format!(
+        ",\"preview\":{{\"grow_part\":{},\"new_end_lba\":{new_end},\"sector_size\":{},\"moves\":[",
+        plan.grow_part, plan.ss
+    );
+    for (i, m) in plan.moves.iter().enumerate() {
+        let (last, bytes) = move_range(m, plan.ss)?;
+        if i > 0 {
+            tail.push(',');
+        }
+        tail.push_str(&format!(
+            "{{\"num\":{},\"first_lba\":{},\"last_lba\":{},\"delta_lba\":{},\"bytes\":{},\"swap\":{}}}",
+            m.part_num,
+            m.first_lba,
+            last,
+            m.delta_lba,
+            bytes,
+            if m.is_swap { "true" } else { "false" }
+        ));
     }
-    EXIT_OK
+    tail.push_str("]}");
+    Ok(tail)
 }
 
 /// 列出各分区的搬移（resize 写表之前的计划打印）
 pub(crate) fn print_moves(plan: &movepart::Plan) -> std::io::Result<()> {
     for m in &plan.moves {
         let tag = if m.is_swap { " [swap: recreate, no data move]" } else { "" };
-        // 值来自锁下解析的表项/ckpt；仍按库规约 checked——损坏条目的下溢/溢出
-        // 宁可拒打，不回绕成假区间误导用户
-        let last = m.first_lba.checked_add(m.len_lba).and_then(|e| e.checked_sub(1))
-            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "corrupted move entry: range overflows"))?;
-        let bytes = m.delta_lba.checked_mul(plan.ss)
-            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "corrupted move entry: byte size overflows"))?;
+        let (last, bytes) = move_range(m, plan.ss)?;
         println!("move part {} : {}..{} → +{} sectors ({} bytes){}",
             m.part_num, m.first_lba, last, m.delta_lba, bytes, tag);
     }

@@ -43,10 +43,19 @@ chk "$A2" "134" "A2 边界后 abort"
 chk "$(record_present "$T" && echo yes || echo no)" "yes" "A2 留下记录（续传现场）"
 OUT=$($B resize "$T":1 +100M --allow-move --yes 2>&1); A2R=$?
 echo "  rerun exit=$A2R"; echo "$OUT" | head -3 | sed "s/^/    /"
-# 记录在首次中断前已越过表提交：续跑按 past-boundary 口径收尾报 5，
-# 数据收敛由 e2fsck 断言兜底
-chk "$A2R" "5" "A2 重跑收敛（越过表提交按 5）"
-LD=$(lo_attach "$T"); e2fsck -fn "${LD}p1" >/dev/null 2>&1 && echo "  OK   A2 e2fsck clean" || { echo "  BAD  A2 e2fsck ISSUES"; bad=$((bad+1)); }; lo_detach "$LD"
+# 中断点在搬移相位的块边界：记录停在"搬到一半"，表还没提交。续跑从该块接着搬，
+# 再走完表提交与 FS 扩容——收敛的判据是这条请求整体完成（0）。这里若期望 5，
+# 等于把"续跑被自己的记录挡住"当成正常收尾
+chk "$A2R" "0" "A2 重跑收敛（续跑就地走完）"
+chk "$(echo "$OUT" | grep -c 'resuming at entry')" "1" "A2 续跑走记录（resuming at entry）"
+chk "$($B info "$T" | grep -o '"last_lba":[0-9]*' | head -1)" '"last_lba":411647' "A2 扩容已落到表"
+chk "$(record_present "$T" && echo yes || echo no)" "no" "A2 完成后无记录残留"
+LD=$(lo_attach "$T")
+for n in 1 2 3; do
+  e2fsck -fn "${LD}p$n" >/dev/null 2>&1 && echo "  OK   A2 p$n e2fsck clean" || { echo "  BAD  A2 p$n e2fsck ISSUES"; bad=$((bad+1)); }
+done
+lo_detach "$LD"
+sgdisk -v "$T" >/dev/null 2>&1 && echo "  OK   A2 sgdisk clean" || { echo "  BAD  A2 sgdisk ISSUES"; bad=$((bad+1)); }
 
 echo
 echo "===== B: resize grow --allow-move ====="
@@ -64,8 +73,17 @@ chk "$B2" "134" "B2 边界后 abort"
 chk "$(record_present "$T" && echo yes || echo no)" "yes" "B2 留下记录（续传现场）"
 OUT=$($B resize "$T":1 grow --allow-move --yes 2>&1); B2R=$?
 echo "  rerun exit=$B2R"; echo "$OUT" | head -3 | sed "s/^/    /"
-# 同 A2：记录已越过表提交，续跑按 past-boundary 口径收尾
-chk "$B2R" "5" "B2 重跑收敛（越过表提交按 5）"
+# 与 A2 同一判据：中断在第一个块之后，续跑必须从记录接住并走完整条请求
+chk "$B2R" "0" "B2 重跑收敛（续跑就地走完）"
+chk "$(echo "$OUT" | grep -c 'resuming at entry')" "1" "B2 续跑走记录（resuming at entry）"
+chk "$($B info "$T" | grep -o '"last_lba":[0-9]*' | head -1)" '"last_lba":1482718' "B2 扩容已落到表"
+chk "$(record_present "$T" && echo yes || echo no)" "no" "B2 完成后无记录残留"
+LD=$(lo_attach "$T")
+for n in 1 2 3; do
+  e2fsck -fn "${LD}p$n" >/dev/null 2>&1 && echo "  OK   B2 p$n e2fsck clean" || { echo "  BAD  B2 p$n e2fsck ISSUES"; bad=$((bad+1)); }
+done
+lo_detach "$LD"
+sgdisk -v "$T" >/dev/null 2>&1 && echo "  OK   B2 sgdisk clean" || { echo "  BAD  B2 sgdisk ISSUES"; bad=$((bad+1)); }
 
 echo
 echo "===== C: resize（在线，sfdisk 分界）====="

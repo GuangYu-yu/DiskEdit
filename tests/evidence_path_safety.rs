@@ -138,7 +138,7 @@ fn a_symlinked_record_is_not_followed() {
 #[test]
 fn a_hard_linked_record_is_inspected_as_the_same_file() {
     // 硬链接别名与本体是同一个 inode：判定按文件内容与目标身份走，别名照常
-    // 被认领。别名并发使用不合并、不保证，是 README 登记的已知边界
+    // 被认领。别名并发使用不合并、不保证，是 docs/internals.md 登记的已知边界
     let dir = temp_dir("hardlink");
     let spot = sidecar(&dir);
     let record = spot.join("record");
