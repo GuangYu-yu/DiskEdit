@@ -243,7 +243,8 @@ fn probe_occupancy_with(mounts: &[MountEntry], swaps: &str, dev: &str) -> io::Re
     }
     // backing 侧的占用不留在这台设备的 mountinfo / swap 表 / holders 里：loop 只在
     // 自己名下记挂载与持有者。按设备号认 backing，节点用哪条路径暴露都命中
-    match loop_occupancy_for(BackingMatch::Block { rdev }, mounts, swaps)? {
+    let view = OccupancyView { dm_held_is_idle: false, unopenable_is_skipped: false };
+    match loop_occupancy_for(BackingMatch::Block { rdev }, mounts, swaps, view)? {
         Some(LoopOccupancy::Live(via)) => return Ok(Occupancy::LoopBacked { via, holders: Vec::new() }),
         Some(LoopOccupancy::Held { loopdev, holders }) => {
             return Ok(Occupancy::LoopBacked { via: loopdev, holders });
@@ -416,7 +417,7 @@ fn loop_status_of(node: &Path, f: &std::fs::File) -> io::Result<Option<LoopMappi
 
 /// 要在 loop 的 backing 里找的那个对象
 #[cfg(target_os = "linux")]
-enum BackingMatch {
+pub(crate) enum BackingMatch {
     /// 普通文件：`(st_dev, st_ino)`
     File { dev: u64, ino: u64 },
     /// 块设备：设备号，节点以哪条路径暴露都命中
@@ -451,7 +452,10 @@ fn backing_identity_from_sysfs(name: &str) -> io::Result<Option<LoopBacking>> {
             return Ok(None)
         }
         Err(e) => {
-            return Err(io::Error::other(format!("cannot read {attr}: {e} — refusing (fail-closed)")));
+            return Err(io::Error::new(
+                e.kind(),
+                format!("cannot read {attr}: {e} — refusing (fail-closed)"),
+            ));
         }
     };
     let path = raw.trim();
@@ -461,7 +465,10 @@ fn backing_identity_from_sysfs(name: &str) -> io::Result<Option<LoopBacking>> {
     // backing 被删除后内核在路径尾加 " (deleted)"，此时 stat 会失败——按确认不了上抛
     let path = path.strip_suffix(" (deleted)").unwrap_or(path);
     let md = std::fs::metadata(path).map_err(|e| {
-        io::Error::other(format!("cannot stat loop backing {path} to verify its identity: {e} — refusing (fail-closed)"))
+        io::Error::new(
+            e.kind(),
+            format!("cannot stat loop backing {path} to verify its identity: {e} — refusing (fail-closed)"),
+        )
     })?;
     Ok(Some(LoopBacking { dev: md.dev(), ino: md.ino(), rdev: md.rdev() }))
 }
@@ -502,10 +509,10 @@ pub(crate) fn loop_backing_of_node(node: &Path) -> io::Result<Option<LoopBacking
             return backing_identity_from_sysfs(&name);
         }
         Err(e) => {
-            return Err(io::Error::other(format!(
-                "cannot open {} to verify its backing file: {e}",
-                node.display()
-            )));
+            return Err(io::Error::new(
+                e.kind(),
+                format!("cannot open {} to verify its backing file: {e}", node.display()),
+            ));
         }
     };
     Ok(loop_status_of(node, &f)?.map(|m| m.backing))
@@ -579,14 +586,17 @@ fn loop_and_partitions(sysdir: &Path, name: &str) -> io::Result<Vec<(String, Pat
 /// （[`loop_occupancy_for`] 取得并留持）。前者受命名空间限制，后者与命名空间无关，
 /// 两者都不成立时才是空闲；任一环节给不出结论一律拒绝
 #[cfg(target_os = "linux")]
-pub(crate) fn image_loop_occupancy(src: &FileSource) -> io::Result<Option<LoopOccupancy>> {
+pub(crate) fn image_loop_occupancy(
+    src: &FileSource,
+    view: OccupancyView,
+) -> io::Result<Option<LoopOccupancy>> {
     use std::os::unix::fs::MetadataExt;
     let md = src.metadata().map_err(|e| {
         io::Error::other(format!("cannot stat the open image to identify it: {e}"))
     })?;
     let mounts = read_mounts()?;
     let swaps = std::fs::read_to_string("/proc/swaps")?;
-    loop_occupancy_for(BackingMatch::File { dev: md.dev(), ino: md.ino() }, &mounts, &swaps)
+    loop_occupancy_for(BackingMatch::File { dev: md.dev(), ino: md.ino() }, &mounts, &swaps, view)
 }
 
 /// 已取得的一条 loop 独占权：fd 维持 claim，记录则供每次消费时重核。
@@ -669,12 +679,25 @@ fn claim_failure(loopdev: String, err: io::Error) -> LoopOccupancy {
 }
 
 /// 反向枚举 loop，找出 backing 命中 `target` 的那一个，并回答它是否在用。
-/// 镜像（文件 backing）与块设备（设备号 backing）共用这一份判据
+/// 镜像（文件 backing）与块设备（设备号 backing）共用这一份判据。
+///
+/// [`OccupancyView`] 的两项各管一个可用性边界：FS 步的闸在 root 下运行、随后要在
+/// 建立的设备上动手，节点打不开与 dm 持有都按原样上报（dm 的复用判定在调用方）；
+/// 记录准入的探测面向任意用户——无 disk 组的一方建不出指向镜像的绑定，节点权限
+/// 不该拦住它自己的镜像操作；`--grow-lv` 的链路则要求 dm 持有的 PV 照常放行
 #[cfg(target_os = "linux")]
-fn loop_occupancy_for(
+#[derive(Clone, Copy)]
+pub(crate) struct OccupancyView {
+    pub(crate) dm_held_is_idle: bool,
+    pub(crate) unopenable_is_skipped: bool,
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn loop_occupancy_for(
     target: BackingMatch,
     mounts: &[MountEntry],
     swaps: &str,
+    view: OccupancyView,
 ) -> io::Result<Option<LoopOccupancy>> {
     use std::os::unix::fs::MetadataExt;
     // 每个 loop 独立成形：持有者记在真正拥有它的那个 loop 名下。跨 loop 汇总会把
@@ -686,17 +709,28 @@ fn loop_occupancy_for(
         if !is_loop_name(&name) {
             continue;
         }
-        match loop_backing_identity(&name)? {
-            Some(b) if target.matches(&b) => {}
-            _ => continue,
+        match loop_backing_identity(&name) {
+            Ok(Some(b)) if target.matches(&b) => {}
+            Ok(_) => continue,
+            // 权限不足时身份无从读取，也就无法指认这只 loop 绑的是谁——按"与我无关"
+            // 跳过；FS 步闸的 fail-closed 口径在参数里区分
+            Err(e) if e.kind() == io::ErrorKind::PermissionDenied && view.unopenable_is_skipped => continue,
+            Err(e) => return Err(e),
         }
         let loopdev = format!("/dev/{name}");
         let mut holders: Vec<String> = Vec::new();
         for (node, sysdir) in loop_and_partitions(&entry.path(), &name)? {
             let path = format!("/dev/{node}");
-            let m = std::fs::metadata(&path).map_err(|e| {
-                io::Error::other(format!("cannot stat {path} to confirm it is unused: {e}"))
-            })?;
+            let m = match std::fs::metadata(&path) {
+                Ok(m) => m,
+                Err(e) if e.kind() == io::ErrorKind::PermissionDenied && view.unopenable_is_skipped => continue,
+                Err(e) => {
+                    return Err(io::Error::new(
+                        e.kind(),
+                        format!("cannot stat {path} to confirm it is unused: {e}"),
+                    ))
+                }
+            };
             let rdev = m.rdev();
             let dev_no = (libc::major(rdev) as u64, libc::minor(rdev) as u64);
             if mounted_in(mounts, &path, dev_no) || active_swap_in(swaps, &path, rdev)? {
@@ -705,6 +739,11 @@ fn loop_occupancy_for(
             holders.extend(holders_at(&sysdir)?);
         }
         if !holders.is_empty() {
+            // dm 持有在放行口径下不算占用：活动 LV 经 dm 压着 PV 是 LVM 链的常态，
+            // 真正挡路的是别的持有者——它们仍在下面被如实上报
+            if view.dm_held_is_idle && dm_only(&holders) {
+                continue;
+            }
             held.push((loopdev, holders));
             continue;
         }
@@ -748,6 +787,9 @@ fn loop_occupancy_for(
                     }))
                 }
             },
+            // 权限不足（非 root 对 root:disk 0660 的节点）与 EBUSY 不同：拿不到独占权
+            // 的同一方也建不出这只绑定，跳过而不拒绝
+            Err(e) if e.kind() == io::ErrorKind::PermissionDenied && view.unopenable_is_skipped => continue,
             Err(e) => return Ok(Some(claim_failure(loopdev, e))),
         }
     }
@@ -1030,7 +1072,8 @@ pub fn ensure_idle_before_write(src: &FileSource, part: u32, start_bytes: u64, k
 #[cfg(target_os = "linux")]
 fn image_target_unused(src: &FileSource, kind: WriteKind) -> Result<(), crate::outcome::RunOutcome> {
     use crate::outcome::RunOutcome;
-    match image_loop_occupancy(src) {
+    let view = OccupancyView { dm_held_is_idle: false, unopenable_is_skipped: false };
+    match image_loop_occupancy(src, view) {
         Ok(None) => Ok(()),
         Ok(Some(LoopOccupancy::Live(dev))) => Err(RunOutcome::refused(format!(
             "{dev} is a loop onto this image and is in use — unmount/swapoff it first (editing the image changes a live filesystem)"

@@ -244,7 +244,7 @@ pub(crate) fn cmd_resize_msdos(a: &ResizeRequest, pref: PartSelector, src_ro: &F
     // 离线路径
     // 记录按可续跑语义打开：MBR 与 GPT 共用同一族记录，表写之后的 FS/PV 收尾同样是
     // 本次作业的一部分，重跑要能接着做
-    let (mut src, entry) = open_target_resize(a).unwrap_or_else(|f| bail_fail(f));
+    let (mut src, entry) = open_target_resize(a, a.grow_lv).unwrap_or_else(|f| bail_fail(f));
     let resumed = entry.resumed;
     // 锁下重取权威几何（与 GPT 分支同一原则）：只读阶段与取得独占权之间盘可以被别人
     // 改写（sfdisk/fdisk 不守本工具的锁），用锁前的 mbr/p/free 驱动写分支就是把过期

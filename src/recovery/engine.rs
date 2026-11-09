@@ -247,8 +247,22 @@ impl TransactionManager {
         Self::open_rw(a)
     }
 
+    /// 记录准入前的两道只读核验：占用探测与块设备只读检查。它们先于记录目录与锁
+    /// 执行——目录校验要求能进目录，root 建出的 0700 目录对降权用户不可入，而
+    /// mountinfo 读不到这类环境故障必须以 4 浮出，不能被目录拒绝遮住
+    fn pre_admission(a: &impl TargetRequest, allow_dm_held: bool) -> Result<(), RunOutcome> {
+        let peek = Self::open_plain(a)?;
+        if allow_dm_held {
+            crate::dev::refuse_if_occupied_strict_dm(&peek)
+        } else {
+            crate::dev::refuse_if_occupied_strict(&peek)
+        }?;
+        crate::dev::refuse_read_only_block(&peek)?;
+        Ok(())
+    }
+
     /// 表类写命令的公共打开段：取所有权、定位记录落点、清残留临时文件。
-    /// 现场判定与占用探测留给调用方——两者的先后是判据，不在这里调换
+    /// 现场判定留给调用方——占用与可写性已在 [`Self::pre_admission`] 过闸
     fn record_target(a: &impl TargetRequest) -> Result<(WriteSource, std::path::PathBuf), RunOutcome> {
         let src = Self::open_rw(a)?;
         Self::refuse_unidentifiable(&src)?;
@@ -301,12 +315,12 @@ impl TransactionManager {
         a: &impl TargetRequest,
         op: crate::recovery::OpKind,
     ) -> Result<WriteSource, RunOutcome> {
+        Self::pre_admission(a, false)?;
         let (mut src, record_path) = Self::record_target(a)?;
         let active = Self::active_records(&src);
         if !active.is_empty() {
             return Err(Self::busy(&active));
         }
-        crate::dev::refuse_if_occupied(&src)?;
         let (scene, credential) = Self::record_scene(&src)?;
         let journal = crate::recovery::RecordJournal::create_image(
             &record_path,
@@ -329,6 +343,7 @@ impl TransactionManager {
         a: &impl TargetRequest,
         op: crate::recovery::OpKind,
     ) -> Result<(WriteSource, bool), RunOutcome> {
+        Self::pre_admission(a, false)?;
         let (mut src, record_path) = Self::record_target(a)?;
         let active = Self::active_records(&src);
         let resumable = match active.as_slice() {
@@ -341,7 +356,6 @@ impl TransactionManager {
         if !active.is_empty() && !resumable {
             return Err(Self::busy(&active));
         }
-        crate::dev::refuse_if_occupied(&src)?;
         let (scene, credential) = Self::record_scene(&src)?;
         let journal = if resumable {
             let (journal, record) =
@@ -376,7 +390,9 @@ impl TransactionManager {
     /// 会在判据与开目标之间留下窗口
     pub(crate) fn begin_resize(
         a: &impl TargetRequest,
+        allow_dm_held: bool,
     ) -> Result<(WriteSource, ResizeEntry), RunOutcome> {
+        Self::pre_admission(a, allow_dm_held)?;
         let (mut src, record_path) = Self::record_target(a)?;
         let active = Self::active_records(&src);
         let resumable = matches!(
@@ -391,7 +407,6 @@ impl TransactionManager {
         if !active.is_empty() && !resumable {
             return Err(Self::busy(&active));
         }
-        crate::dev::refuse_if_occupied(&src)?;
         let (scene, credential) = Self::record_scene(&src)?;
         let journal = if resumable {
             let (journal, record) =

@@ -17,7 +17,14 @@ mk() { # 100M/100M/200M，p2 前后留空便于自重叠左移
   $B add --yes "$T" 104857600 --start 411648 --name p2 >/dev/null && $B mkfs "$T":2 ext4 --yes >/dev/null
   $B add --yes "$T" 209715200 --start 1026048 --name p3 >/dev/null && $B mkfs "$T":3 ext4 --yes >/dev/null
 }
-mnt() { LD=$(lo_attach "$T"); [ -n "$1" ] && { mount_at "${LD}p$1" "$TEST_MNT" && return 0; }; true; }
+mnt() {
+  LD=$(lo_attach "$T") || return 1
+  if [ -n "$1" ]; then
+    lo_waitpart "${LD}p$1" || { lo_detach "$LD"; return 1; }
+    mount_at "${LD}p$1" "$TEST_MNT" || { lo_detach "$LD"; return 1; }
+  fi
+  return 0
+}
 umnt() { umount "$TEST_MNT" 2>/dev/null; lo_detach "$LD"; }
 
 echo "########## A: 记录流式（数据字节不入记录） ##########"
@@ -47,7 +54,7 @@ lo_detach "$LD"
 echo
 echo "########## B: 复杂目录树 + 自重叠搬移 + e2fsck 深校验 ##########"
 mk
-mnt 2
+mnt 2 || { echo "BAD  B 段挂载 p2 失败"; rc=1; }
 mkdir -p "$TEST_MNT"/a/b/c "$TEST_MNT"/d
 for i in $(seq 1 300); do echo "content-$i-abc" > "/testmnt/a/f$i.txt"; done
 for i in $(seq 1 100); do echo "d-$i" > "/testmnt/d/g$i"; done
