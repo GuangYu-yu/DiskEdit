@@ -75,9 +75,10 @@ check_refused "undo"      "$B" undo "$T" --yes
 after=$(sha256sum "$T" | awk '{print $1}')
 assert_eq "$after" "$before" "拒绝期间镜像字节未改变"
 unmount_now "$TEST_MNT"
-# 阳性对照先摘掉本段自建的 loop：占用拒绝靠的就是它，放行前必须还盘自由
+# 阳性对照先摘掉本段自建的 loop：占用拒绝靠的就是它，放行前必须还盘自由。
+# 对照用 delete：new 只对无表目标放行，T 已有表会因表扇区已有数据被拒
 lo_detach "$L3"
-"$B" new "$T" --yes >/dev/null 2>&1
-exp "$?" 0 "卸载后 new 放行（阳性对照）"
+"$B" delete "$T":1 --yes >/dev/null 2>&1
+exp "$?" 0 "卸载后 delete 放行（阳性对照）"
 
 exit $rc

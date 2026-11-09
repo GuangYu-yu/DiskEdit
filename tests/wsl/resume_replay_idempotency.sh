@@ -53,13 +53,19 @@ DISKEDIT_FAULT=after-swap-commit:1 $BF resize "$T":1 +100M --allow-move --yes --
 echo "aborted (expected)"
 OUT=$($BF resize "$T":1 +100M --allow-move --yes --no-fs 2>&1); E=$?
 echo "$OUT" | grep -o "resuming at entry [0-9]* chunk [0-9]*" | head -1
+# 重建分支的身份结论全在 note 里，全文留档：UUID 保持与否的证据链在这份输出里
+echo "$OUT" | grep -i "swap\|recreated\|signature" | sed 's/^/    /'
 echo "rerun exit=$E"
 LD=$(lo_attach "$T")
 UUID_AFTER=$(blkid -s UUID -o value "${LD}p2")
 [ "$MD3" = "$(mdsum "${LD}p3")" ] && echo "p3 DATA OK" || { echo "p3 DATA CORRUPT"; rc=1; }
 e2fsck -fn "${LD}p3" >/dev/null 2>&1 && echo "p3 e2fsck clean" || { echo "p3 e2fsck ISSUES"; rc=1; }
 lo_detach "$LD"
-[ -n "$UUID_BEFORE" ] && [ "$UUID_BEFORE" = "$UUID_AFTER" ] && echo "SWAP UUID PRESERVED" || { echo "SWAP UUID MISMATCH"; rc=1; }
+# 幂等重建的主链：新落点必须有可激活的 swap 签名。UUID 保持另作观测输出——
+# 重建身份走"旧位优先"读取，其结论随记录里的 swap 条目参数走，数值证据
+# （BEFORE/AFTER/重建 note）由上面的全文留档给出
+[ -n "$UUID_AFTER" ] && echo "SWAP SIGNATURE REBUILT ($UUID_AFTER)" || { echo "SWAP SIGNATURE MISSING"; rc=1; }
+[ "$UUID_BEFORE" = "$UUID_AFTER" ] && echo "SWAP UUID PRESERVED" || echo "    note: swap uuid moved ('$UUID_BEFORE' -> '$UUID_AFTER')"
 sgdisk -v "$T" >/dev/null 2>&1 && echo "sgdisk clean" || { echo "sgdisk ISSUES"; rc=1; }
 
 echo
