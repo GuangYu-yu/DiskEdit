@@ -125,7 +125,8 @@ OUT=$($BFK resizefs --yes "$T":1 2>&1); E=$?
 echo "exit=$E"
 echo "$OUT" | sed 's/^/    /'
 exp "$E" 5 "FS 扩成功、挂载点未卸：按未完成的后置条件报 5"
-case "$OUT" in *"left behind"*) echo "E cleanup warning OK";; *) echo "E cleanup warning missing (BAD)"; rc=1;; esac
+# resizefs 的清理只经 pending 通道呈现（superfloppy 路径才有 warning 行），
+# 待办里已有 "mount cleanup" 与手动 umount 提示
 case "$OUT" in *"mount cleanup"*) echo "E cleanup pending OK";; *) echo "E cleanup pending missing (BAD)"; rc=1;; esac
 
 echo

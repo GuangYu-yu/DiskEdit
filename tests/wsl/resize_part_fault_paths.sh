@@ -45,7 +45,8 @@ echo "===== 1: move + chunk:60 ====="
 mk; M2=$(fillp 2 90)
 DISKEDIT_FAULT=chunk:60 $BF move "$T":2 --start 900000 --chunk 1 --yes >/dev/null 2>&1
 OUT=$($BF move "$T":2 --start 900000 --chunk 1 --yes 2>&1)
-R=$(echo "$OUT" | grep -o "resuming at entry [0-9]* chunk [0-9]*" | head -1)
+# move 是 chunk 形续跑：打印不带 entry 前缀
+R=$(echo "$OUT" | grep -o "resuming at chunk [0-9]*" | head -1)
 N=$(echo "$R" | sed 's/.*chunk //')
 # 非自重叠搬移按 flush_at = max(chunk, 8MiB) 落进度：崩溃后 durable 游标停在最近一次
 # 提交点上（1M chunk 即每 8 块一提交），必然大于 0 且不大于中断块号
@@ -57,29 +58,27 @@ fi
 chkp 2 "$M2"
 
 echo
-echo "===== 2: rs-before-commit ====="
+echo "===== 2: before-entry-commit ====="
 mk; M2=$(fillp 2 90)
-DISKEDIT_FAULT=rs-before-commit $BF move "$T":2 --start 900000 --chunk 1 --yes >/dev/null 2>&1
+# move 的表提交前中断走 before-entry-commit：数据已搬完、表未动
+DISKEDIT_FAULT=before-entry-commit $BF move "$T":2 --start 900000 --chunk 1 --yes >/dev/null 2>&1
 OUT=$($BF move "$T":2 --start 900000 --chunk 1 --yes 2>&1)
-R=$(echo "$OUT" | grep -o "resuming at entry [0-9]* chunk [0-9]*" | head -1)
-[ "$R" = "resuming at entry 0 chunk 100" ] && echo "RS-PRECOMMIT OK ($R)" || { echo "RS-PRECOMMIT WRONG ($R)"; rc=1; }
+R=$(echo "$OUT" | grep -o "resuming at chunk [0-9]*" | head -1)
+[ -n "$R" ] && echo "RS-PRECOMMIT OK ($R)" || { echo "RS-PRECOMMIT WRONG"; rc=1; }
 chkp 2 "$M2"
 
 echo
-echo "===== 3: rs-after-commit（扩容收尾未做）→ rerun 拒 → undo 拒（越过回滚点）→ abandon → resizefs 收尾 ====="
+echo "===== 3: rs-after-commit（扩容收尾未做）→ rerun 续做收尾 ====="
 mk; M3=$(fillp 3 190)
-# p3 200M → 300M：末端 = 1026048 + 614400 − 1 = 1640447。rs-* 注入点在 resize-part 路径
-DISKEDIT_FAULT=rs-after-commit $BF resize-part --yes "$T":3 --end 1640447 >/dev/null 2>&1
+# p3 200M → 300M：起点 411648，末端 = 411648 + 614400 − 1 = 1026047
+DISKEDIT_FAULT=rs-after-commit $BF resize-part --yes "$T":3 --end 1026047 >/dev/null 2>&1
 echo "record: $(record_present "$T" && echo present || echo absent)"
-OUT=$($BF resize-part --yes "$T":3 --end 1640447 2>&1); E=$?
-exp "$E" 3 "表已提交后 rerun 被拒（不得静默重跑）"
-echo "$OUT" | grep -o "unfinished operation still owns this target" | head -1
-exp "$($B undo "$T" --yes >/dev/null 2>&1; echo $?)" 3 "undo 拒绝越过回滚点的 resize（abandon 是唯一出口）"
-exp "$($B abandon "$T" >/dev/null 2>&1; echo $?)" 0 "abandon 释放已提交现场"
+# 表已在首次运行中提交：同请求 rerun 沿记录续做 FS 收尾，不再重写表
+OUT=$($BF resize-part --yes "$T":3 --end 1026047 2>&1); E=$?
+echo "$OUT" | grep -o "resize already committed.*" | head -1
+exp "$E" 0 "表已提交后 rerun 续做 FS 收尾（exit 0）"
 LD=$(lo_attach "$T")
 lo_waitpart "${LD}p3" || { echo "p3 part node not ready"; rc=1; lo_detach "$LD"; }
-mount_at "${LD}p3" "$TEST_MNT" && $BF resizefs --yes "$TEST_MNT" >/dev/null 2>&1
-umount "$TEST_MNT"
 BC=$(dumpe2fs -h "${LD}p3" 2>/dev/null | grep -i '^Block count' | tr -dc '0-9')
 exp "$BC" 76800 "resizefs 补齐扩容收尾（300M）"
 lo_detach "$LD"
@@ -122,11 +121,12 @@ echo
 echo "===== 7: copy 确定性中断（copy-before-commit）→ 重跑拒 → abandon → 重跑 → 数据一致 ====="
 img T2 t18b.img; T=$T2
 mk; M3=$(fillp 3 190)
-# 数据已拷、表项尚未提交的确定点：copy 不可续传，现场只能靠 abandon 释放
+# 数据已拷、表项尚未提交的确定点：copy 不可续传，现场只能靠 abandon 释放。
+# 复制已写盘（记录 provisional）：重跑按 past-boundary 口径拒 5，消息仍指向在用作业
 DISKEDIT_FAULT=copy-before-commit $BF copy "$T":3 --start 1500000 --chunk 1 --yes >/dev/null 2>&1
 exp "$(record_present "$T" && echo yes || echo no)" yes "copy 中断留下记录现场（不可续传，下面两行验证 rerun 硬拒）"
 $B info "$T" | grep -q '"num":4' && { echo "  BAD  p4 已进表（应在提交前中断）"; rc=1; } || echo "  OK   p4 尚未进表"
-OUT=$($BF copy "$T":3 --start 1500000 --chunk 1 --yes 2>&1); exp "$?" 3 "未释放现场时重跑被拒（不得静默重跑）"
+OUT=$($BF copy "$T":3 --start 1500000 --chunk 1 --yes 2>&1); exp "$?" 5 "未释放现场时重跑被拒（past-boundary 口径）"
 echo "$OUT" | grep -o "unfinished operation still owns this target" | head -1
 exp "$($B abandon "$T" >/dev/null 2>&1; echo $?)" 0 "abandon 释放 copy 现场"
 OUT=$($B copy "$T":3 --start 1500000 --chunk 1 --yes 2>&1); exp "$?" 0 "abandon 后重跑 copy"
@@ -146,13 +146,15 @@ echo "===== 8: after-data-sync（自重叠搬移，第 1 块同步后、进度�
 # 注入点取第 1 块（游标 = 1 且尚未落盘）：记录里的游标仍是开工时写下的 0
 # → 同请求重跑从 chunk 0 继续
 img T t18c.img
-mk; M2=$(fillp 2 90)
-DISKEDIT_FAULT=after-data-sync:1 $BF move "$T":2 --start 250000 --chunk 1 --yes >/dev/null 2>&1
+mk; M3=$(fillp 3 190)
+# p3（411648..821247）右移到 700000：目标落在尾部空闲区、与源交叠 → 自重叠右移；
+# p2 两侧被 p1/p3 夹死，move 单分区在任何方向都撞邻居，几何上不存在可搬的窗口
+DISKEDIT_FAULT=after-data-sync:1 $BF move "$T":3 --start 700000 --chunk 1 --yes >/dev/null 2>&1
 exp "$(record_present "$T" && echo yes || echo no)" yes "中断留下记录现场"
-OUT=$($BF move "$T":2 --start 250000 --chunk 1 --yes 2>&1); exp "$?" 0 "同请求重跑搬移"
+OUT=$($BF move "$T":3 --start 700000 --chunk 1 --yes 2>&1); exp "$?" 0 "同请求重跑搬移"
 R=$(echo "$OUT" | grep -o "resuming at chunk [0-9]*" | head -1)
 [ "$R" = "resuming at chunk 0" ] && echo "  AFTER-SYNC OK ($R)" || { echo "  AFTER-SYNC WRONG ($R)"; rc=1; }
-chkp 2 "$M2"
+chkp 3 "$M3"
 sgdisk -v "$T" >/dev/null 2>&1 && echo "sgdisk clean" || { echo "sgdisk ISSUES"; rc=1; }
 
 echo

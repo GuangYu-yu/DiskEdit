@@ -63,7 +63,7 @@ MD2=$(head -c 8388608 "${LD}p2" | md5sum | cut -d' ' -f1)
 # （MBR info 的字段序是 type 在 first_lba 前，需先截取该分区对象再取字段）
 P2START=$($B info "$T" | grep -o '"num":2,[^}]*}' | grep -o '"first_lba":[0-9]*' | grep -o '[0-9]*$')
 lo_detach "$LD"
-OUT=$($B delete --yes "$T":2 2>&1); E=$?
+OUT=$($B delete "$T":2 2>&1); E=$?
 echo "$OUT" | head -1
 [ "$E" = "3" ] && echo "delete w/o --yes refused OK (exit=$E)" || { echo "delete w/o --yes wrong exit ($E, want 3)"; rc=1; }
 $B delete "$T":2 --yes >/dev/null 2>&1; echo "delete exit=$?"

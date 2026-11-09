@@ -56,14 +56,15 @@ echo "########## B: 复杂目录树 + 自重叠搬移 + e2fsck 深校验 #######
 mk
 mnt 2 || { echo "BAD  B 段挂载 p2 失败"; rc=1; }
 mkdir -p "$TEST_MNT"/a/b/c "$TEST_MNT"/d
-for i in $(seq 1 300); do echo "content-$i-abc" > "/testmnt/a/f$i.txt"; done
-for i in $(seq 1 100); do echo "d-$i" > "/testmnt/d/g$i"; done
+for i in $(seq 1 300); do echo "content-$i-abc" > "$TEST_MNT/a/f$i.txt"; done
+for i in $(seq 1 100); do echo "d-$i" > "$TEST_MNT/d/g$i"; done
 ln -s a/f1.txt "$TEST_MNT"/link1
 ln "$TEST_MNT"/a/f2.txt "$TEST_MNT"/hardlink1
 dd if=/dev/urandom of="$TEST_MNT/a/rand.bin" bs=1M count=30 2>/dev/null
 (cd "$TEST_MNT" && find . -type f -exec md5sum {} \; | sort) > "$SNAP.1"
 (cd "$TEST_MNT" && find . | sort) > "$SNAP.t1"
-echo "files: $(wc -l < "$SNAP.1"), symlink: $(readlink "$TEST_MNT"/link1), hardlink count: $(stat -c%h "$TEST_MNT"/a/f2.txt)"
+NF1=$(wc -l < "$SNAP.1")
+echo "files: $NF1, symlink: $(readlink "$TEST_MNT"/link1), hardlink count: $(stat -c%h "$TEST_MNT"/a/f2.txt)"
 umnt
 # 自重叠左移：delta = 249856-411648 = -161792，|delta| < 长度 204800
 $B move "$T":2 --start 250000 --chunk 1 --yes >/dev/null 2>&1; echo "move exit=$?"
@@ -74,7 +75,13 @@ tail -2 "$WSL_ROOT/t22e2out"
 mount_at "${LD}p2" "$TEST_MNT"
 (cd "$TEST_MNT" && find . -type f -exec md5sum {} \; | sort) > "$SNAP.2"
 (cd "$TEST_MNT" && find . | sort) > "$SNAP.t2"
-diff -q "$SNAP.1" "$SNAP.2" >/dev/null && echo "B FILE-CONTENTS OK (400+ files)" || { echo "B FILE CONTENTS DIFFER"; rc=1; diff "$SNAP.1" "$SNAP.2" | head -5; }
+# 内容一致之外还要足量：快照若因建树失败只剩零星文件，diff 相等会造出假阳性
+NF2=$(wc -l < "$SNAP.2")
+if diff -q "$SNAP.1" "$SNAP.2" >/dev/null && [ "$NF1" -ge 400 ] && [ "$NF2" -ge 400 ]; then
+  echo "B FILE-CONTENTS OK ($NF2 files)"
+else
+  echo "B FILE CONTENTS DIFFER OR INCOMPLETE ($NF1 -> $NF2)"; rc=1; diff "$SNAP.1" "$SNAP.2" | head -5;
+fi
 diff -q "$SNAP.t1" "$SNAP.t2" >/dev/null && echo "B TREE OK" || { echo "B TREE DIFFERS"; rc=1; }
 [ "$(readlink "$TEST_MNT"/link1)" = "a/f1.txt" ] && echo "B SYMLINK OK" || { echo "B SYMLINK BROKEN"; rc=1; }
 [ "$(stat -c%h "$TEST_MNT"/a/f2.txt)" -ge 2 ] && echo "B HARDLINK OK" || { echo "B HARDLINK BROKEN"; rc=1; }

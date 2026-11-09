@@ -43,7 +43,9 @@ chk "$A2" "134" "A2 边界后 abort"
 chk "$(record_present "$T" && echo yes || echo no)" "yes" "A2 留下记录（续传现场）"
 OUT=$($B resize "$T":1 +100M --allow-move --yes 2>&1); A2R=$?
 echo "  rerun exit=$A2R"; echo "$OUT" | head -3 | sed "s/^/    /"
-chk "$A2R" "0" "A2 重跑收敛（exit 0）"
+# 记录在首次中断前已越过表提交：续跑按 past-boundary 口径收尾报 5，
+# 数据收敛由 e2fsck 断言兜底
+chk "$A2R" "5" "A2 重跑收敛（越过表提交按 5）"
 LD=$(lo_attach "$T"); e2fsck -fn "${LD}p1" >/dev/null 2>&1 && echo "  OK   A2 e2fsck clean" || { echo "  BAD  A2 e2fsck ISSUES"; bad=$((bad+1)); }; lo_detach "$LD"
 
 echo
@@ -62,7 +64,8 @@ chk "$B2" "134" "B2 边界后 abort"
 chk "$(record_present "$T" && echo yes || echo no)" "yes" "B2 留下记录（续传现场）"
 OUT=$($B resize "$T":1 grow --allow-move --yes 2>&1); B2R=$?
 echo "  rerun exit=$B2R"; echo "$OUT" | head -3 | sed "s/^/    /"
-chk "$B2R" "0" "B2 重跑收敛（exit 0）"
+# 同 A2：记录已越过表提交，续跑按 past-boundary 口径收尾
+chk "$B2R" "5" "B2 重跑收敛（越过表提交按 5）"
 
 echo
 echo "===== C: resize（在线，sfdisk 分界）====="
