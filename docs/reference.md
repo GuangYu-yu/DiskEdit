@@ -627,5 +627,5 @@ diskedit plan <TARGET>[:N] [--grow] [--sector-size N]
 | 2 | usage or command syntax error |
 | 3 | policy refusal, or a precondition of the request is not met |
 | 4 | operation failed with no persistent modification |
-| 5 | partially completed, or recovery is pending (the remedy is printed) |
+| 5 | partial, or applied with follow-up steps pending or a stale kernel view (the remedy is printed) |
 | 6 | the platform or capability is not supported |

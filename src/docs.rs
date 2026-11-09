@@ -54,7 +54,7 @@ const EXIT_LEGEND: &[(u8, &str)] = &[
     (EXIT_USAGE, "usage or command syntax error"),
     (EXIT_REFUSED, "policy refusal, or a precondition of the request is not met"),
     (EXIT_NO_MUTATION, "operation failed with no persistent modification"),
-    (EXIT_PARTIAL, "partially completed, or recovery is pending (the remedy is printed)"),
+    (EXIT_PARTIAL, "partial, or applied with follow-up steps pending or a stale kernel view (the remedy is printed)"),
     (EXIT_UNSUPPORTED, "the platform or capability is not supported"),
 ];
 

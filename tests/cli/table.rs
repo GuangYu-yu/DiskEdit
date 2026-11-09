@@ -406,11 +406,12 @@ fn msdos_user_resize() {
 
     // 分区里没有 FS：只改表必须显式声明（--no-fs），否则写表之前就拒绝——"类型识别不出"
     // 不等于"里面没东西"，不能让工具替用户下这个结论。拒绝文案指向用该 FS 自己的工具扩容，
-    // 不点名旗标：同一条判据也服务于不接受 --no-fs 的 resize-part
+    // 并点名能只改分区表的命令（resize --no-fs）：同一条判据也服务于不接受该选项的 resize-part
     let raw_before = std::fs::read(&img).unwrap();
     let (c, o) = run(&["resize", &format!("{img_s}:1"), "+1M", "--yes"]);
     assert_eq!(c, 6, "growing an unidentifiable region must refuse without --no-fs: {o}");
     assert!(o.contains("not identified") && o.contains("its own tool"), "{o}");
+    assert!(o.contains("resize --no-fs"), "the refusal must name the partition-only alternative: {o}");
     assert_eq!(std::fs::read(&img).unwrap(), raw_before, "refused resize must not write");
 
     // +delta --no-fs：分区 1 → 4096 扇区（恰好吃掉右侧空闲）

@@ -58,7 +58,7 @@ pub(crate) fn cmd_resize_superfloppy(a: &ResizeRequest) -> crate::outcome::RunOu
     // 修复步骤本身写盘，缺工具若在那时才暴露，本次运行只能按 Partial(5) 报，
     // 无法再声称"确定未写盘"。
     // 类型接线判断不在此拦：不接线的类型不会写盘，由 resize_fs_in 按类型给出准确的
-    // 拒绝文案；grow_support 的 "--no-fs" 提示对无分区的 superfloppy 不适用
+    // 拒绝文案；分区层扩容拒绝里的 `resize --no-fs` 出路对无分区的 superfloppy 不适用
     if fstype != fsid::ContentKind::Unknown {
         match fsops::check_grow(fstype, src.is_block, fsops::needs_loop(&fsops::DeviceScope::Whole, src.is_block)) {
             Err(fsops::FsError::UnsupportedFs(_)) => {}

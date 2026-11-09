@@ -110,7 +110,10 @@ pub fn grow_target_at(src: &FileSource, part: u32, base: u64, len: u64) -> Resul
     match grow_support(content) {
         ToolSupport::Tools(_) => Ok(Growable::Target(GrowTarget { scope: DeviceScope::Partition(part), fstype: content })),
         ToolSupport::NotApplicable => Ok(Growable::NoFilesystem(Some(content))),
-        ToolSupport::Unsupported(reason) => Err(FsError::unsupported(format!("cannot grow {content}: {reason}"))),
+        ToolSupport::Unsupported(reason) => Err(FsError::unsupported(format!(
+            "cannot grow {content}: {reason} — {}",
+            crate::fsops::CHANGE_PARTITION_ONLY
+        ))),
     }
 }
 
@@ -126,8 +129,9 @@ pub fn check_grow_step(g: Growable, is_block: bool) -> Result<(), FsError> {
         Growable::Target(t) => check_grow(t.fstype, is_block, needs_loop(&t.scope, is_block)),
         Growable::OverlayPending | Growable::SwapUnactivatable | Growable::NoFilesystem(Some(ContentKind::Lvm2Pv)) => Ok(()),
         Growable::NoFilesystem(f) => Err(FsError::unsupported(format!(
-            "cannot grow {}: the filesystem type was not identified — identify the filesystem and grow it with its own tool",
-            content_name(f.unwrap_or(ContentKind::Unknown))
+            "cannot grow {}: the filesystem type was not identified — identify the filesystem and grow it with its own tool, or {}",
+            content_name(f.unwrap_or(ContentKind::Unknown)),
+            crate::fsops::CHANGE_PARTITION_ONLY
         ))),
     }
 }

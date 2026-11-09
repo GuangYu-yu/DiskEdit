@@ -55,131 +55,16 @@ const EXIT_LINES: &[&str] = &[
     "  2  usage or command syntax error",
     "  3  policy refusal, or a precondition of the request is not met",
     "  4  operation failed with no persistent modification",
-    "  5  partially completed, or recovery is pending (the remedy is printed)",
+    "  5  partial, or applied with follow-up steps pending or a stale kernel view (the remedy is printed)",
     "  6  the platform or capability is not supported",
 ];
 
-/// 顶层 usage 的逐字快照：`help` / `--help` / `-h` 的 stdout，去掉 `println!` 的尾换行。
+/// 顶层 usage 的逐字快照：`help` / `--help` / `-h` 的 stdout，与
+/// `tests/snapshots/usage.txt` 逐字节相等（该文件由二进制 `help` 重录，不是手抄）。
 ///
-/// 帮助文本由命令表渲染（`docs/reference.md` 同源）。本常量不是手抄：取二进制
-/// `help` 的实际 stdout 重录。帮助与校验须同源，且快照不得出现 `cyl`/CHS；
+/// 帮助文本由命令表渲染（`docs/reference.md` 同源）。快照不得出现 `cyl`/CHS；
 /// 文本随命令表或示例变化时，先核对新文本是否仍满足要求，再从二进制重新抓取。
-const USAGE_SNAPSHOT: &str = r#"diskedit — disk / image editor
-
-usage:
-  diskedit <COMMAND> [ARGS]                details for one command: diskedit help <CMD>
-  diskedit --version
-
-examples:
-  diskedit info /dev/sdb
-  diskedit plan /dev/sdb:2 --grow
-  diskedit resize /dev/sdb:1 +2G
-  diskedit resize disk.img grow --allow-move --chunk 4 --yes
-  diskedit undo /dev/sdb --yes
-
-everyday:
-  info <TARGET> [--sector-size N]
-      show partition table and per-partition filesystem identification
-  inspect <TARGET>
-  inspect <PATH>
-      show the recovery record beside a target (read-only)
-  records list [TARGET]
-      list recovery records as JSON (omit TARGET: everything under
-      <state_root>)
-  records verify <ID> <TARGET>
-      re-check one record by its 32-hex id
-  records scan <ROOT>
-      enumerate records under a container root (<state_root>/recovery, or an
-      image directory)
-  resize <TARGET>[:N] <SIZE> [OPTIONS]
-      resize partition + FS (auto online/offline)
-  move <TARGET>:N --start <LBA|end> [--chunk N] --yes [--align A]
-      move a partition, data follows (chunked copy, resumable)
-  copy <TARGET>:N --start <LBA|end> [--chunk N] --yes [--align A] [--name S] [--keep-partuuid]
-      copy a partition to a new location; the source is untouched
-  delete <TARGET>:N --yes
-      delete a partition entry (the data area is not wiped)
-  set <TARGET>:N name S | label S | uuid U | flag F on|off --yes
-  set <TARGET>:N type GUID | type 0xXX --yes
-      set a partition property (name / label / uuid / flag / type)
-  check <TARGET>:N
-      check filesystem consistency without writing
-  mkfs <TARGET>:N <FS> --yes [--label S]
-      create a filesystem (destroys all data on the partition)
-  resizefs <TARGET>:N --yes
-  resizefs <MOUNTPOINT> --yes [BYTES]
-      resize a filesystem only — the partition entry stays put
-  undo <TARGET> --yes
-      roll back the writes this tool completed (replays its record)
-  abandon <TARGET>
-      drop an unfinished operation's recovery files; no rollback
-  plan <TARGET>[:N] [--grow] [--sector-size N]
-      read-only report: geometry, table, FS and usage — the same fields as
-      `info`; --grow appends a relocation preview
-
-low-level (one step per run; long jobs stay resumable):
-  new <TARGET> [--table gpt|mbr] --yes [--overwrite-data]
-      create a fresh partition table
-  add <TARGET> SIZE [--start LBA] [--align A] [--part-number N] [--name S] [--type-guid G] --yes
-      add a partition; --start fixes where it begins
-  resize-part <TARGET>:N (--end LBA | --grow-to-end) [--align A] --yes
-      repartition one partition in place
-
-target: image path or block device; :N = partition number (1-based). :last = the last
-        partition a command can act on. On MBR an extended container does not count
-        as one; a target without a partition table has no :last
-
-options (availability: help <CMD>):
-  --align A              placement alignment: mib|none. add's automatic
-                         placement defaults to 1 MiB; an explicit --start and
-                         move/copy/resize-part align only when --align is
-                         given
-  --allow-move           permit relocating the partitions in the way: the plan
-                         is printed, then the write proceeds
-  --chunk MiB            recovery granularity in MiB, 1..=64 (default 4); an
-                         interrupted run must repeat the same value
-  --discard-replay       confirm giving up the ranges `undo` could still
-                         replay
-  --end LBA              new end LBA for resize-part (grow or shrink in place)
-  --grow-lv              also grow the LV: the one named by --lv, else the
-                         only LV
-  --grow-to-end          pin the end at the last usable LBA (fill semantics)
-  --grow                 append the relocation preview for partition :N
-  --keep-partuuid        reuse the source PARTUUID instead of generating a new
-                         one
-  --label S              filesystem label (omitted = an empty label, not a
-                         default)
-  --lv NAME              which LV to grow (implies --grow-lv)
-  --name S               name for the entry this command creates
-  --no-fs                skip the filesystem step of the grown or moved
-                         partition
-  --overwrite-data       accept overwriting bytes an existing partition holds
-  --part-number N        1-based entry slot; it must be empty
-  --random               ask the target to generate a new value
-  --sector-size N        logical sector size override for raw images (power of
-                         two, max 65536 bytes — an implementation limit, not a
-                         format requirement)
-  --start LBA|end        new start: an LBA, or `end` for pack-to-end
-  --table gpt|mbr        table kind: gpt (default) or mbr
-  --type-guid GUID|0xNN  GPT: type GUID text, e.g.
-                         0fc63daf-8483-4772-8e79-3d69d8477de4; MBR: type byte
-                         0xNN
-  --yes                  acknowledge a write before it starts
-
-  --yes is required by: resize, move, copy, delete, set, mkfs, resizefs, undo,
-  new, add, resize-part
-
-  --flag=VALUE is the same as --flag VALUE, except that a value starting with
-  `-` needs the equals form. `--` ends option parsing: every later argument is
-  positional, which is how a target or name starting with `-` is passed
-exit status:
-  0  success
-  1  unexpected internal error
-  2  usage or command syntax error
-  3  policy refusal, or a precondition of the request is not met
-  4  operation failed with no persistent modification
-  5  partially completed, or recovery is pending (the remedy is printed)
-  6  the platform or capability is not supported"#;
+const USAGE_SNAPSHOT: &str = include_str!("snapshots/usage.txt");
 
 /// 单字命令：`help CMD`、`CMD --help`、`CMD -h`、`--help CMD` 四种入口。
 const SINGLE_WORD: &[&str] = &[
@@ -213,7 +98,7 @@ fn top_level_usage_is_a_pinned_snapshot() {
         assert!(err.is_empty(), "`{}` writes to stdout only: {err}", args.join(" "));
         assert_eq!(
             out,
-            format!("{USAGE_SNAPSHOT}\n"),
+            USAGE_SNAPSHOT,
             "`{}` drifted from the pinned usage text",
             args.join(" ")
         );

@@ -168,16 +168,14 @@ fn abandon_records(identity: &TargetIdentity, disk: Option<&FileSource>, discard
                 if record.restore_blocked {
                     // Move/Copy 仍能回写表区：笼统说"越过不可回滚点"
                     // 对这两条命令是不实陈述
-                    if matches!(
-                        record.op,
-                        crate::recovery::OpKind::Move | crate::recovery::OpKind::Copy
-                    ) {
-                        println!(
-                            "    data writes are past the point of no return; only the table regions can still be rolled back"
-                        );
-                    } else {
-                        println!("    already past the point of rolling back");
-                    }
+                    let detail = match record.op {
+                        crate::recovery::OpKind::Move | crate::recovery::OpKind::Copy => {
+                            "data writes are past the point of no return; \
+                             only the table regions can still be rolled back"
+                        }
+                        _ => "already past the point of rolling back",
+                    };
+                    println!("    {detail}");
                 }
             }
             crate::recovery::CompanionProbe::Damaged(why) => eprintln!(

@@ -1,3 +1,4 @@
 *.sh text eol=lf
 *.yml text eol=lf
 docs/*.md text eol=lf
+tests/snapshots/*.txt text eol=lf
