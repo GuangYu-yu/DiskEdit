@@ -65,6 +65,16 @@ pub(crate) fn blkrrpart(f: &File) -> io::Result<()> {
     ioctl_retry_eintr(|| unsafe { libc::ioctl(f.as_raw_fd() as libc::c_int, BLKRRPART as libc::Ioctl, 0u32) })
 }
 
+/// 目标是否是内核标记为只读的块设备。BLKROGET = _IO(0x12, 94)（include/uapi/linux/fs.h），
+/// 内核把 0/1 写回 int 参数。libc 未导出该常量，取 UAPI 定义自持；读类调用，可安全重发
+pub(crate) fn blkroget(f: &File) -> io::Result<bool> {
+    const BLKROGET: u64 = 0x125E;
+    let mut ro: libc::c_int = 0;
+    // SAFETY: f 有效打开的 fd；内核仅写入 &mut ro，调用期间指针有效
+    ioctl_retry_eintr(|| unsafe { libc::ioctl(f.as_raw_fd() as libc::c_int, BLKROGET as libc::Ioctl, &mut ro) })?;
+    Ok(ro != 0)
+}
+
 /// include/uapi/linux/btrfs.h 的 btrfs_ioctl_fs_info_args（1024 字节）。保留字段与
 /// metadata_uuid 一并照抄：ioctl 编号里带结构体大小，裁剪字段会让内核按错的长度解读
 #[repr(C)]

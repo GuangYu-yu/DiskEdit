@@ -133,10 +133,7 @@ fn probe_with(src: &FileSource, allow_dm_held: bool) -> Result<Verdict, String> 
     if !src.is_block {
         return probe_image(&meta, allow_dm_held);
     }
-    let scope = match device_scope(meta.rdev()) {
-        Ok(scope) => scope,
-        Err(detail) => return Err(detail),
-    };
+    let scope = device_scope(meta.rdev())?;
     match mounts_hit(&scope) {
         Ok(Some(detail)) => return Ok(Verdict::Occupied(detail)),
         Ok(None) => {}
