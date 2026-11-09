@@ -12,6 +12,7 @@ mod engine;
 mod evidence;
 mod journal;
 mod record;
+mod rollback;
 mod scene;
 pub(crate) mod sink;
 
@@ -23,4 +24,5 @@ pub(crate) use engine::*;
 pub(crate) use evidence::*;
 pub(crate) use journal::*;
 pub(crate) use record::*;
+pub(crate) use rollback::*;
 pub(crate) use scene::*;

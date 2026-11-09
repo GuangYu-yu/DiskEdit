@@ -16,10 +16,7 @@ CI regenerates it and fails when the working tree differs. Do not edit by hand.
 | ExclusiveLock | supported | supported | design limit | design limit | unsupported | unsupported |
 | AtomicReplace | supported | supported | unsupported | unsupported | unsupported | unsupported |
 | DirPersist | supported | supported | design limit | design limit | unsupported | unsupported |
-| UsageQuery | supported | not applicable | unsupported | not applicable | unsupported | not applicable |
 | StableIdentity | supported | supported | unsupported | supported | unsupported | supported |
-| OnlineTableEdit | supported | not applicable | unsupported | not applicable | unsupported | not applicable |
-| KernelSectorSize | supported | not applicable | unsupported | not applicable | unsupported | not applicable |
 
 ## Commands
 

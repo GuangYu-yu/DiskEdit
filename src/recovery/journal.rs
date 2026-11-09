@@ -680,15 +680,16 @@ impl RecordJournal {
     /// 绑定有序搬移计划与 LVM 收尾基线并一次落盘。新记录只写一次；已有计划必须逐字段
     /// 相等——换了分区、起点、长度、位移或语义的请求不能续跑别人的游标。基线必须与
     /// 计划同一次写入：分开写时中间崩溃会让续跑看到"有计划、无基线"，按当前盘面重算
-    /// 增量必为 0，LV 收尾会被静默跳过
+    /// 增量必为 0，LV 收尾会被静默跳过。`ResizePart` 的起点变更搬移与 move 同构，
+    /// 也携带条目表（进度恢复、续跑校验共用同一套机制）
     pub(crate) fn bind_relocation(
         &mut self,
         reloc: Relocation,
         lvm_post: Option<LvmPost>,
     ) -> std::io::Result<()> {
-        if !matches!(self.record.op, OpKind::Resize | OpKind::Move) {
+        if !matches!(self.record.op, OpKind::Resize | OpKind::ResizePart | OpKind::Move) {
             return Err(std::io::Error::other(
-                "only a `move` or `resize` record carries a relocation plan",
+                "only a `move`, `resize` or `resize-part` record carries a relocation plan",
             ));
         }
         if let Some(was) = &self.record.relocation {

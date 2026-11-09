@@ -207,7 +207,8 @@ fn new_gpt_refuses_to_clear_bytes_inside_an_existing_partition() {
     let before = std::fs::read(&img).unwrap();
     let (c, _, e) = run(&["new", img_s, "--table", "gpt", "--yes"]);
     assert_eq!(c, 3, "--yes alone must not license clearing bytes inside a partition: {e}");
-    assert!(e.contains("backup entry array"), "the collision must be named: {e}");
+    // 覆盖门先于冲突点名：两道闸都以 --overwrite-data 解锁，这里命中的是第一道
+    assert!(e.contains("the table sectors already hold data"), "{e}");
     assert!(e.contains("--overwrite-data"), "the flag that unblocks it must be named: {e}");
     assert_eq!(std::fs::read(&img).unwrap(), before, "the refusal must not write");
 
@@ -229,6 +230,29 @@ fn new_gpt_refuses_to_clear_bytes_inside_an_existing_partition() {
     assert_eq!(c, 3, "an existing GPT must need --overwrite-data: {e}");
     let (c, _, e) = run(&["new", ok_s, "--yes", "--overwrite-data"]);
     assert_eq!(c, 0, "a partition ending at last_usable does not reach the backup area: {e}");
+
+    // 覆盖矩阵的其余三格：纯非零字节但无可识别表（门只看"证明不了可覆盖"）、
+    // 全零镜像的放行基线、旗标在无需时仍是合法输入
+    let dirty = dir.join("dirty.img");
+    let mut bytes = vec![0u8; 8 * 1024 * 1024];
+    bytes[0] = 0xA5;
+    std::fs::write(&dirty, &bytes).unwrap();
+    let dirty_s = dirty.to_str().unwrap();
+    let before = std::fs::read(&dirty).unwrap();
+    let (c, _, e) = run(&["new", dirty_s, "--yes"]);
+    assert_eq!(c, 3, "an unprovable first sector still needs consent: {e}");
+    assert!(e.contains("all_zero=false, recognized_table=false"), "{e}");
+    let (c, _, _) = run(&["new", dirty_s, "--yes", "--overwrite-data"]);
+    assert_eq!(c, 0, "explicit consent covers unrecognized bytes too");
+    assert_ne!(std::fs::read(&dirty).unwrap(), before, "the write must have landed");
+
+    let blank = dir.join("blank.img");
+    std::fs::write(&blank, vec![0u8; 8 * 1024 * 1024]).unwrap();
+    let blank_s = blank.to_str().unwrap();
+    let (c, _, e) = run(&["new", blank_s, "--yes"]);
+    assert_eq!(c, 0, "a provably blank target needs no consent: {e}");
+    let (c, _, _) = run(&["new", blank_s, "--yes", "--overwrite-data"]);
+    assert_eq!(c, 0, "the flag stays legal when nothing is overwritten");
 
     let _ = std::fs::remove_dir_all(&dir);
 }

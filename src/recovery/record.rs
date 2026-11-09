@@ -1149,3 +1149,34 @@ impl<'a> Cursor<'a> {
         Some(u64::from_le_bytes(self.array::<8>()?))
     }
 }
+
+#[cfg(test)]
+mod digest_golden {
+    use super::{OpKind, PlanDigest};
+
+    /// 请求摘要向量：操作码、数值与带长度前缀的字节串的编码一旦变化，这里先红。
+    /// 向量按当前码值表计算（New = 1，Resize = 10）；码值或编码变更时重新生成。
+    fn hex(s: &str) -> [u8; 32] {
+        let mut out = [0u8; 32];
+        for (i, pair) in s.as_bytes().chunks(2).enumerate() {
+            out[i] = u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap();
+        }
+        out
+    }
+
+    #[test]
+    fn request_digests_are_the_pinned_sha256_of_the_encoding() {
+        assert_eq!(
+            PlanDigest::of_request_fields(OpKind::New, &[], &[]).0,
+            hex("4bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7cce23c7785459a")
+        );
+        assert_eq!(
+            PlanDigest::of_request_fields(OpKind::New, &[7], &[b"xy"]).0,
+            hex("3abc1ab05533dbbafdca4c977603955022c173f09f630d8a8bdd765af8c1448b")
+        );
+        assert_eq!(
+            PlanDigest::of_request_fields(OpKind::Resize, &[4096], &[]).0,
+            hex("ebeb48d4c8e9c961ed68fc134a3c0ca043b7052d0a00b855148f85c71367e375")
+        );
+    }
+}

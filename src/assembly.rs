@@ -485,6 +485,7 @@ pub(crate) fn assemble_resize_part(
     src: &FileSource,
     geometry: &ValidatedGeometry,
     kind: TableWriteKind,
+    relocate: Option<(u32, u64, u64, u64)>,
 ) -> Result<ConfirmedPlan, RunOutcome> {
     let content = geometry.content();
     let probe = TableContent::Gpt {
@@ -506,7 +507,22 @@ pub(crate) fn assemble_resize_part(
             "the table's sector size is outside the supported set — geometry cannot be constructed: {e}"
         ))
     })?;
-    Ok(ConfirmedPlan::assembled_table_step(step, sector_size))
+    // 起点变更的搬移在前、表提交在后：分块、方向与 durable 游标由执行器的 Relocate
+    // 机制承担，与 move 同一条链；纯扩缩只有表步骤
+    let mut steps: Vec<crate::planner::PlanStep> = Vec::new();
+    if let Some((part, src_first, dst_first, sectors)) = relocate {
+        steps.push(crate::planner::PlanStep::Relocate {
+            part,
+            src_first,
+            dst_first,
+            sectors,
+            is_swap: false,
+        });
+    }
+    steps.push(crate::planner::PlanStep::WriteTable(step));
+    crate::planner::ConfirmedPlan::assembled_move_plan(steps, sector_size).ok_or_else(|| {
+        RunOutcome::internal("the resize-part plan assembled to an invalid step shape — refusing".to_string())
+    })
 }
 
 /// `set` 的表属性装配：读几何 → 在计划内容上落实本次变更 → 首写前复核条目仍是决策期
