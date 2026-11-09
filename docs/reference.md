@@ -587,9 +587,14 @@ diskedit plan <TARGET>[:N] [--grow] [--sector-size N]
   Read-only report on a target: geometry, partition table, filesystems and
   space-usage conclusions. The fields are the ones `info` prints; `plan` opens
   no recovery path and probes no write directory.
-  With --grow the report is followed by the relocation preview for growing
-  partition :N to the last usable LBA. The preview only reads: nothing is
-  written and no reusable plan is produced.
+  With --grow the same document gains a `preview` key for growing partition :N
+  to the last usable LBA:
+    grow_part     the partition being grown
+    new_end_lba   its end LBA after the growth
+    sector_size   logical block size the LBAs are counted in
+    moves         array of {num, first_lba, last_lba, delta_lba, bytes, swap};
+                  swap marks an area recreated in place instead of copied
+  The preview only reads: nothing is written and no reusable plan is produced.
 ```
 
 ## Global options

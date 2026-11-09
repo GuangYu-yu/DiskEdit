@@ -423,8 +423,8 @@ impl FileSource {
         // 会指向两个不同的文件（见 `identity_of_opened_image`）
         #[cfg(target_os = "linux")]
         let identity = Self::identity_of_opened_image(path, &file, &meta)?;
-        // 非 Linux 没有从 fd 取路径的标准接口：维持按路径解析（README 的"并发边界"
-        // 已声明该平台上的别名路径各有一份现场与一把锁）
+        // 非 Linux 没有从 fd 取路径的标准接口：维持按路径解析（docs/internals.md 的
+        // "并发边界"已声明该平台上的别名路径各有一份现场与一把锁）
         #[cfg(not(target_os = "linux"))]
         let identity = TargetIdentity::resolve_image(path);
         let fingerprint = TargetFingerprint::from_file(&file)?;

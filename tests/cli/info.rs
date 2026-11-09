@@ -66,7 +66,12 @@ fn info_on_gpt_image() {
     let arg = format!("{}:1", img2.display());
     let (code, out, err) = run(&["plan", &arg, "--grow"]);
     assert_eq!(code, 0, "plan --grow must stay read-only and succeed: {err}");
-    assert!(out.contains("[swap: recreate, no data move]"), "{out}");
+    // 报告与预览同在一份文档里：stdout 必须是单个可解析的 JSON 对象
+    let v: serde_json::Value = serde_json::from_str(out.trim()).expect("plan --grow must emit one JSON document");
+    let moves = v["preview"]["moves"].as_array().expect("preview.moves must be an array");
+    assert_eq!(moves[0]["swap"], true, "a swap area is recreated, not copied: {out}");
+    assert_eq!(v["preview"]["grow_part"], 1);
+    assert!(v["preview"]["new_end_lba"].is_u64(), "{out}");
 }
 
 /// 容器条目只说明「里面还有分区」，不说明有几个：观察侧必须点明列表不完整，
@@ -213,7 +218,9 @@ fn stale_after_enlarge_info_plan_write() {
     let arg = format!("{p}:1");
     let (code, out, err) = run(&["plan", &arg, "--grow"]);
     assert_eq!(code, 0, "plan --grow must stay read-only and succeed: {err}");
-    assert!(out.contains("plan: grow partition 1 → end LBA"), "{out}");
+    let v: serde_json::Value = serde_json::from_str(out.trim()).expect("plan --grow must emit one JSON document");
+    assert_eq!(v["preview"]["grow_part"], 1, "{out}");
+    assert!(v["preview"]["new_end_lba"].is_u64(), "{out}");
     assert_eq!(std::fs::read(&img).unwrap(), before, "plan must not modify the image");
 
     let (code, _, err) = run(&["set", &format!("{p}:1"), "name", "renamed", "--yes"]);
