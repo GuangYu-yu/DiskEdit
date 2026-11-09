@@ -8,59 +8,90 @@
 //! 2. `/proc/swaps` 的 Filename（块设备比 `rdev`，交换文件比 `(dev, ino)`）；
 //! 3. sysfs `holders/` 非空（首层非空即命中；下钻只为把持有链写进文案，至多 8 层）；
 //! 4. 设备作为成员出现在任一 `/sys/block/md*/md/dev-*`；
-//! 5. 目标为镜像时，任一 loop 的 `loop/backing_file` 还原后 `(dev, ino)` 与目标相同。
+//! 5. 目标为镜像时，经 loop 的反向身份比对（`fsops::mount` 的同一份机制）：身份取
+//!    `LOOP_GET_STATUS64` 的 `(lo_device, lo_inode)`，打不开节点才回退 sysfs 路径的
+//!    stat——backing 的路径表示会在镜像同路径重建后指向别的文件，不作为首选判据。
+//!    命中后按挂载 / swap / 持有者 / 独占 claim 分层回答；裸 attached 而无人使用的
+//!    loop 不算占用（内核独占权是判定"是否真有人用"的那一层）。
 //!
-//! 证据源存在却不可读、不可解析，或路径到 major:minor / `(dev, ino)` 的解析失败一律按
-//! 已占用（fail-closed）；系统没有对应子系统（`/sys/block` 下没有 loop、没有 md）是
-//! 已证明不存在。两种结论都落 `RunOutcome::refused`（3）：占用是请求与现状不匹配，不是盘故障。
-//! 只读命令不经过这里。
+//! 结论分三档：命中证据 → `refused`（3，请求与现状不匹配）；证据源存在却不可读、
+//! 不可解析 → 确认失败，`no_mutation`（4，环境不给证据）；系统没有对应子系统是
+//! 已证明不存在。loop 节点因权限打不开（非 root 对 root:disk 0660）按"与我无关"
+//! 跳过——建不出绑定的一方不被节点权限拦住自己的镜像操作。只读命令不经过这里。
 
 use super::*;
 
-/// 占用判定结论
+/// 占用判定结论。探测失败不走这里：`Err(String)` 单独成档，出口是 4
 #[cfg(target_os = "linux")]
 pub(crate) enum Verdict {
     Idle,
     /// 命中证据：文案已含设备名、证据源与解除动作
     Occupied(String),
-    /// 证据源存在却确认不了：按已占用处理（fail-closed）
-    Unknown(String),
 }
 
-/// 记录准入的占用结论：`Err` 是拒绝文案，区分"确实在用"与
-/// "确认不了"。与 [`refuse_if_occupied`] 共用同一份探测
-pub(crate) fn occupied_detail(src: &FileSource) -> Result<(), String> {
+/// 写命令准入前的可写性核验：只读块设备按 I/O 故障（4）拒绝，一个字节都没动。
+/// 与占用探测同一时刻执行——两者都要求"在记录与写盘之前给出明确结论"
+pub(crate) fn refuse_read_only_block(src: &FileSource) -> Result<(), crate::outcome::RunOutcome> {
+    #[cfg(target_os = "linux")]
+    if src.read_only_block() {
+        return Err(crate::outcome::RunOutcome::no_mutation(
+            "the target is a read-only block device (BLKROGET) — every write would be refused \
+             by the kernel; nothing was modified",
+        ));
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = src;
+    Ok(())
+}
+
+/// 探测失败单列的占用闸：确认不了空闲按 I/O 故障（4）浮出，不与"确实在用"（3）
+/// 混在一档——前者换个环境重试有意义，后者先解除占用才有意义
+pub(crate) fn refuse_if_occupied_strict(src: &FileSource) -> Result<(), crate::outcome::RunOutcome> {
     #[cfg(not(target_os = "linux"))]
     let _ = src;
     #[cfg(target_os = "linux")]
     return match probe(src) {
-        Verdict::Idle => Ok(()),
-        Verdict::Occupied(detail) => Err(format!(
+        Ok(Verdict::Idle) => Ok(()),
+        Ok(Verdict::Occupied(detail)) => Err(crate::outcome::RunOutcome::refused(format!(
             "{detail} — the target is in use; release it and retry \
              (`umount` / `swapoff` / `dmsetup remove` / `mdadm --stop` / `losetup -d`)"
-        )),
-        Verdict::Unknown(detail) => Err(format!(
-            "cannot confirm the target is unused: {detail} — refusing (fail-closed)"
-        )),
+        ))),
+        Err(why) => Err(crate::outcome::RunOutcome::no_mutation(format!(
+            "cannot confirm the target is unused: {why}"
+        ))),
     };
     #[cfg(not(target_os = "linux"))]
     Ok(())
 }
 
-/// 记录准入的占用闸。占用或不可判定都返回 [`crate::outcome::RunOutcome::refused`]（3），
-/// 文案区分"确实在用"与"确认不了"
-pub(crate) fn refuse_if_occupied(src: &FileSource) -> Result<(), crate::outcome::RunOutcome> {
-    occupied_detail(src).map_err(crate::outcome::RunOutcome::refused)
+/// 占用闸的 dm 放行口径：活动 LV 经 dm 压着 PV 是 `--grow-lv` 链路的常态，
+/// 链本身要在那个栈上工作。其余口径与 [`refuse_if_occupied_strict`] 相同
+pub(crate) fn refuse_if_occupied_strict_dm(src: &FileSource) -> Result<(), crate::outcome::RunOutcome> {
+    #[cfg(not(target_os = "linux"))]
+    let _ = src;
+    #[cfg(target_os = "linux")]
+    return match probe_with(src, true) {
+        Ok(Verdict::Idle) => Ok(()),
+        Ok(Verdict::Occupied(detail)) => Err(crate::outcome::RunOutcome::refused(format!(
+            "{detail} — the target is in use; release it and retry \
+             (`umount` / `swapoff` / `dmsetup remove` / `mdadm --stop` / `losetup -d`)"
+        ))),
+        Err(why) => Err(crate::outcome::RunOutcome::no_mutation(format!(
+            "cannot confirm the target is unused: {why}"
+        ))),
+    };
+    #[cfg(not(target_os = "linux"))]
+    Ok(())
 }
 
 /// 只读命令的事实入口：报出 [`probe`] 的结论，不做准入判定，也不影响退出码。
-/// 与 [`refuse_if_occupied`] 共用同一份探测，命中时给出首个证据
+/// 与准入闸共用同一份探测，命中时给出首个证据
 #[cfg(target_os = "linux")]
 pub(crate) fn describe(src: &FileSource) -> (&'static str, Option<String>) {
     match probe(src) {
-        Verdict::Idle => ("idle", None),
-        Verdict::Occupied(detail) => ("occupied", Some(detail)),
-        Verdict::Unknown(detail) => ("undecidable", Some(detail)),
+        Ok(Verdict::Idle) => ("idle", None),
+        Ok(Verdict::Occupied(detail)) => ("occupied", Some(detail)),
+        Err(why) => ("undecidable", Some(why)),
     }
 }
 
@@ -87,61 +118,98 @@ enum Target {
 }
 
 #[cfg(target_os = "linux")]
-fn probe(src: &FileSource) -> Verdict {
+fn probe(src: &FileSource) -> Result<Verdict, String> {
+    probe_with(src, false)
+}
+
+/// `allow_dm_held` 只在镜像路径生效：dm 持有的 loop 按空闲放行（LVM 链要经它
+/// 工作），其余持有者照常上报
+#[cfg(target_os = "linux")]
+fn probe_with(src: &FileSource, allow_dm_held: bool) -> Result<Verdict, String> {
     let meta = match src.metadata() {
         Ok(meta) => meta,
-        Err(e) => return Verdict::Unknown(format!("cannot stat the open target: {e}")),
+        Err(e) => return Err(format!("cannot stat the open target: {e}")),
     };
     if !src.is_block {
-        return probe_image(&meta);
+        return probe_image(&meta, allow_dm_held);
     }
     let scope = match device_scope(meta.rdev()) {
         Ok(scope) => scope,
-        Err(detail) => return Verdict::Unknown(detail),
+        Err(detail) => return Err(detail),
     };
     match mounts_hit(&scope) {
-        Ok(Some(detail)) => return Verdict::Occupied(detail),
+        Ok(Some(detail)) => return Ok(Verdict::Occupied(detail)),
         Ok(None) => {}
-        Err(detail) => return Verdict::Unknown(detail),
+        Err(detail) => return Err(detail),
     }
     match swaps_hit(Target::Block(meta.rdev())) {
-        Ok(Some(detail)) => return Verdict::Occupied(detail),
+        Ok(Some(detail)) => return Ok(Verdict::Occupied(detail)),
         Ok(None) => {}
-        Err(detail) => return Verdict::Unknown(detail),
+        Err(detail) => return Err(detail),
     }
     for device in &scope {
         match holder_chain(&device.sysdir) {
             Ok(Some(chain)) => {
-                return Verdict::Occupied(format!(
+                return Ok(Verdict::Occupied(format!(
                     "{} is held by {} (evidence: sysfs holders/)",
                     device.name,
                     chain.join(" -> ")
-                ))
+                )))
             }
             Ok(None) => {}
-            Err(detail) => return Verdict::Unknown(detail),
+            Err(detail) => return Err(detail),
         }
     }
     match md_member_hit(&scope) {
-        Ok(Some(detail)) => return Verdict::Occupied(detail),
+        Ok(Some(detail)) => return Ok(Verdict::Occupied(detail)),
         Ok(None) => {}
-        Err(detail) => return Verdict::Unknown(detail),
+        Err(detail) => return Err(detail),
     }
-    Verdict::Idle
+    Ok(Verdict::Idle)
 }
 
-/// 镜像没有分区节点可查：证据 1、3、4 的对象都不存在，只剩交换文件与 loop backing
+/// 镜像没有分区节点可查：证据 1、3、4 的对象都不存在，只剩交换文件与经 loop 的
+/// 反向身份比对（身份与分层判定都在 `fsops::mount`，准入与 FS 步闸共用一份）。
+/// dm 持有的 loop 在这里放行与否由调用方的口径决定；镜像准入不带 `--grow-lv`
+/// 时不放行，镜像被 dm 栈压着改表仍是占用
 #[cfg(target_os = "linux")]
-fn probe_image(meta: &std::fs::Metadata) -> Verdict {
+fn probe_image(meta: &std::fs::Metadata, allow_dm_held: bool) -> Result<Verdict, String> {
     match swaps_hit(Target::Image(meta.dev(), meta.ino())) {
-        Ok(Some(detail)) => return Verdict::Occupied(detail),
+        Ok(Some(detail)) => return Ok(Verdict::Occupied(detail)),
         Ok(None) => {}
-        Err(detail) => return Verdict::Unknown(detail),
+        Err(detail) => return Err(detail),
     }
-    match image_loop_hit(meta) {
-        Ok(Some(detail)) => Verdict::Occupied(detail),
-        Ok(None) => Verdict::Idle,
-        Err(detail) => Verdict::Unknown(detail),
+    let mounts = crate::fsops::mount::read_mounts().map_err(|e| e.to_string())?;
+    let swaps = std::fs::read_to_string("/proc/swaps")
+        .map_err(|e| format!("cannot read /proc/swaps: {e}"))?;
+    match crate::fsops::mount::loop_occupancy_for(
+        crate::fsops::mount::BackingMatch::File { dev: meta.dev(), ino: meta.ino() },
+        &mounts,
+        &swaps,
+        crate::fsops::mount::OccupancyView {
+            dm_held_is_idle: allow_dm_held,
+            unopenable_is_skipped: true,
+        },
+    ) {
+        Ok(None) => Ok(Verdict::Idle),
+        Ok(Some(crate::fsops::mount::LoopOccupancy::Live(path))) => Ok(Verdict::Occupied(format!(
+            "{path} is mounted on this image or carries an active swap"
+        ))),
+        Ok(Some(crate::fsops::mount::LoopOccupancy::Held { loopdev, holders })) => {
+            Ok(Verdict::Occupied(format!(
+                "{loopdev} is held by {} (evidence: sysfs holders/)",
+                holders.join(" -> ")
+            )))
+        }
+        Ok(Some(crate::fsops::mount::LoopOccupancy::KernelBusy { loopdev })) => {
+            Ok(Verdict::Occupied(format!(
+                "{loopdev} is claimed by another user — the kernel refuses an exclusive open (EBUSY)"
+            )))
+        }
+        Ok(Some(crate::fsops::mount::LoopOccupancy::Unclaimable { loopdev, why })) => Err(format!(
+            "cannot take an exclusive claim on {loopdev}, a loop onto this image: {why}"
+        )),
+        Err(e) => Err(e.to_string()),
     }
 }
 
@@ -368,43 +436,6 @@ fn md_member_hit(scope: &[ScopedDevice]) -> Result<Option<String>, String> {
 /// 证据 5：任一 loop 的 `loop/backing_file` 还原转义后 `stat` 到与目标相同的
 /// `(dev, ino)`。未绑定的 loop 没有该项，不算命中；读得出却 `stat` 不了按不可判定
 #[cfg(target_os = "linux")]
-fn image_loop_hit(meta: &std::fs::Metadata) -> Result<Option<String>, String> {
-    let (dev, ino) = (meta.dev(), meta.ino());
-    let entries = match std::fs::read_dir("/sys/block") {
-        Ok(entries) => entries,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(format!("cannot read /sys/block: {e}")),
-    };
-    for entry in entries {
-        let entry = entry.map_err(|e| format!("cannot read /sys/block: {e}"))?;
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if !crate::fsops::is_loop_name(&name) {
-            continue;
-        }
-        let attr = entry.path().join("loop/backing_file");
-        let text = match std::fs::read_to_string(&attr) {
-            Ok(text) => text,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(e) => return Err(format!("cannot read {}: {e}", attr.display())),
-        };
-        let text = text.trim_end_matches(&['\n', '\r'][..]);
-        if text.is_empty() {
-            continue;
-        }
-        let decoded = crate::fsops::decode_octal(text);
-        let path = decoded.strip_suffix(" (deleted)").unwrap_or(&decoded);
-        let backing = std::fs::metadata(path)
-            .map_err(|e| format!("cannot stat the loop backing file {path}: {e}"))?;
-        if (backing.dev(), backing.ino()) == (dev, ino) {
-            return Ok(Some(format!(
-                "{name} maps this image as its backing file (evidence: {})",
-                attr.display()
-            )));
-        }
-    }
-    Ok(None)
-}
-
 #[cfg(all(test, target_os = "linux"))]
 mod image_probe {
     use super::{probe_image, Verdict};
@@ -417,6 +448,6 @@ mod image_probe {
         let img = dir.path().join("disk.img");
         std::fs::write(&img, vec![0u8; 64 * 1024]).unwrap();
         let meta = std::fs::metadata(&img).unwrap();
-        assert!(matches!(probe_image(&meta), Verdict::Idle));
+        assert!(matches!(probe_image(&meta, false), Ok(Verdict::Idle)));
     }
 }

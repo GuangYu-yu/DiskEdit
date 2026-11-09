@@ -214,7 +214,12 @@ pub(crate) fn resolve_scope_device(
     #[cfg(target_os = "linux")]
     let mut reusable: Option<String> = None;
     #[cfg(target_os = "linux")]
-    if let Some(occupant) = image_loop_occupancy(src)? {
+    let view = crate::fsops::mount::OccupancyView {
+        dm_held_is_idle: false,
+        unopenable_is_skipped: false,
+    };
+    #[cfg(target_os = "linux")]
+    if let Some(occupant) = image_loop_occupancy(src, view)? {
         // 确知在用 = 请求与现状不符（解除占用后重跑有意义）→ 拒绝；拿不到内核独占
         // 证据 = 确认不了 → 环境故障。两种性质分属不同变体，出口码随之而定
         let refusal = match occupant {

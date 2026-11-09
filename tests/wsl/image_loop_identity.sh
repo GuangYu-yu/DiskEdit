@@ -147,7 +147,7 @@ if command -v dmsetup >/dev/null 2>&1 && dmsetup version >/dev/null 2>&1; then
                 echo "SKIP: dmsetup create（整盘 loop）不可用"
             fi
             # 解除持有后改走扩容；T2 没有文件系统，改表需显式 --no-fs
-            "$B" resize-part --yes "$T2:1" --grow-to-end >/dev/null 2>&1
+            "$B" resize-part --yes --no-fs "$T2:1" --grow-to-end >/dev/null 2>&1
             exp "$?" 0 "解除持有后放行（阳性对照）"
         else
             echo "SKIP: dmsetup create 不可用"
@@ -170,11 +170,11 @@ if ! lo_waitpart "${L4}p1"; then
     echo "SKIP: ${L4}p1 未就绪"
 elif mkswap "${L4}p1" >/dev/null 2>&1 && swapon "${L4}p1" 2>/dev/null; then
     SWAPDEV="${L4}p1"
-    "$B" resize-part --yes "$T3:1" --grow-to-end >/dev/null 2>&1
+    "$B" resize-part --yes --no-fs "$T3:1" --grow-to-end >/dev/null 2>&1
     exp "$?" 3 "分区是活动 swap：改表被拒"
     swapoff "$SWAPDEV" >/dev/null 2>&1
     SWAPDEV=
-    "$B" resize-part --yes "$T3:1" --grow-to-end >/dev/null 2>&1
+    "$B" resize-part --yes --no-fs "$T3:1" --grow-to-end >/dev/null 2>&1
     exp "$?" 0 "swapoff 后放行（阳性对照）"
 else
     echo "SKIP: swapon 不可用"
@@ -280,7 +280,7 @@ PY
         truncate -s 64M "$T5"
         "$B" new "$T5" --yes >/dev/null 2>&1 || { echo "BAD  new 失败"; exit 1; }
         "$B" add "$T5" 32M --align mib --yes >/dev/null 2>&1 || { echo "BAD  add 失败"; exit 1; }
-        "$B" resize-part --yes "$T5:1" --grow-to-end >/dev/null 2>&1
+        "$B" resize-part --yes --no-fs "$T5:1" --grow-to-end >/dev/null 2>&1
         exp "$?" 0 "同一窗口内正常写盘不被误拒"
 
         T6=$(mktemp "$WSL_ROOT/loopid-race2-XXXXXX.img")
@@ -385,7 +385,10 @@ echo "=== G3: 打不开 loop 节点不等于占用"
 if ! command -v setpriv >/dev/null 2>&1; then
     echo "SKIP: setpriv 缺失"
 else
-    T10=$(mktemp "$WSL_ROOT/loopid-nobody-XXXXXX.img")
+    # 记录目录建在镜像旁边：WSL_ROOT 对降权用户不可写，暂存目录单独放开
+    mkdir -p "$WSL_ROOT/nobody-pub"
+    chmod 777 "$WSL_ROOT/nobody-pub"
+    T10=$(mktemp "$WSL_ROOT/nobody-pub/loopid-nobody-XXXXXX.img")
     track_file "$T10"
     truncate -s 8M "$T10"
     chmod 666 "$T10"

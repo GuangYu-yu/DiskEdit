@@ -1,6 +1,8 @@
 //! FileSource：镜像与块设备统一的按偏移读写句柄；WriteSource：在其上附加独占所有权的写句柄。
 
 use super::*;
+#[cfg(target_os = "linux")]
+use std::os::unix::io::AsRawFd;
 
 /// 本进程内已提交给恢复记录的写次数。崩溃注入按"第 N 次写入后"触发，用来留下
 /// 含多条区间的记录（只按第一次触发时记录里永远只有一条）
@@ -236,6 +238,23 @@ impl FileSource {
     /// 交出去就等于在 journal 与越界检查之外重开一条写路（见字段 `file` 的注释）
     ///
     /// 只有 Linux 路径要它（sysfs 反查与 loop 占用探测），故与那些调用点同 cfg
+    #[cfg(target_os = "linux")]
+    /// 目标是否是内核标记为只读的块设备（BLKROGET）。只读设备上的任何写都会在
+    /// 内核处被拒，而那个拒绝以 pwrite 的错误出现在计划步上——记录已落盘，退出码
+    /// 落进"盘可能已改变"的一档。写命令准入前在这里判掉，只读目标保持未写盘
+    #[cfg(target_os = "linux")]
+    pub(crate) fn read_only_block(&self) -> bool {
+        if !self.is_block {
+            return false;
+        }
+        // BLKROGET：libc 未导出的老 ioctl 号（linux/blkzoned 之外的 fs/blkdev 常量）
+        const BLKROGET: libc::c_ulong = 0x125E;
+        let mut ro: libc::c_int = 0;
+        let rc = unsafe { libc::ioctl(self.file.as_raw_fd(), BLKROGET, &mut ro) };
+        rc == 0 && ro != 0
+    }
+
+    /// 打开句柄的元数据：占用探测与指纹构造取它。调用方都在 Linux 路径上
     #[cfg(target_os = "linux")]
     pub(crate) fn metadata(&self) -> io::Result<std::fs::Metadata> {
         self.file.metadata()

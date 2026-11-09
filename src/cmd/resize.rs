@@ -165,7 +165,7 @@ pub(crate) fn cmd_resize(a: &ResizeRequest) -> crate::outcome::RunOutcome {
     // 单分区 resize 与搬移作业共用同一份记录：`resumed` 是任一未收尾作业（分区层可能已
     // 提交，只等 FS/PV 收尾），FS 无变化的短路不能把后者当成"无事可做"；本分区的搬移
     // 进度另由记录里的搬移状态给出
-    let (mut src, entry) = open_target_resize(a).unwrap_or_else(|f| bail_fail(f));
+    let (mut src, entry) = open_target_resize(a, a.grow_lv).unwrap_or_else(|f| bail_fail(f));
     // 锁下重取权威几何：写路径的每个 LBA（start/end/free/last_usable）都来自它。
     // 锁前那份只服务参数早失败与在线路径的事实快照；只读阶段与取得独占权之间
     // 盘可以被别人改写，用锁前的值驱动写分支就是把过期决定写进盘
