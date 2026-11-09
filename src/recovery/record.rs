@@ -524,8 +524,8 @@ pub(crate) struct Record {
     pub(crate) old_range: Option<(u64, u64)>,
     /// 分区层提交后的 LVM 收尾基线；只有 [`OpKind::Resize`] 可能非 `None`
     pub(crate) lvm_post: Option<LvmPost>,
-    /// 搬移作业的可恢复状态。只有 [`OpKind::Resize`] 可能非 `None`；非搬移的
-    /// resize 记录保持为空
+    /// 搬移作业的可恢复状态。只有 [`OpKind::Resize`] / [`OpKind::ResizePart`] /
+    /// [`OpKind::Move`] 可能非 `None`；没有搬移步的记录保持为空
     pub(crate) relocation: Option<Relocation>,
     pub(crate) stages: Vec<StageFact>,
     pub(crate) action: RecoveryAction,
@@ -803,8 +803,8 @@ fn read_payload_prefix(c: &mut Cursor<'_>) -> Option<(Record, usize)> {
         1 => Some(read_relocation(c)?),
         _ => return None,
     };
-    // 搬移计划只属于 `move` / `resize`；别的操作带它即与操作类型矛盾
-    if relocation.is_some() && !matches!(op, OpKind::Resize | OpKind::Move) {
+    // 搬移计划只属于 `move` / `resize` / `resize-part`；别的操作带它即与操作类型矛盾
+    if relocation.is_some() && !matches!(op, OpKind::Resize | OpKind::ResizePart | OpKind::Move) {
         return None;
     }
     let action = match c.u8()? {
@@ -905,7 +905,8 @@ fn read_relocation(c: &mut Cursor<'_>) -> Option<Relocation> {
     if entry_index as usize == entries.len() && chunks_in_entry != 0 {
         return None;
     }
-    if grow_part == 0 || entries.iter().any(|e| e.partition == grow_part) {
+    // grow_part 为 0 表示本次作业没有扩容步（纯搬移）；有扩容步时它不得是被搬走的分区
+    if entries.iter().any(|e| e.partition == grow_part) {
         return None;
     }
     Some(Relocation {
@@ -1178,5 +1179,95 @@ mod digest_golden {
             PlanDigest::of_request_fields(OpKind::Resize, &[4096], &[]).0,
             hex("ebeb48d4c8e9c961ed68fc134a3c0ca043b7052d0a00b855148f85c71367e375")
         );
+    }
+}
+
+/// encode 合法产出的记录形态必须能整份读回；清理前的回读走的就是这套 decode
+#[cfg(test)]
+mod relocation_round_trip {
+    use super::*;
+    use crate::platform::{IdentityMaterial, TargetId};
+
+    fn image_target() -> SceneIdentity {
+        SceneIdentity::from_target(
+            TargetId::from_material(IdentityMaterial::image(Some(7), Some([3; 16])).unwrap()),
+        )
+    }
+
+    /// 完成态的纯搬移记录：游标越过末条目、块进度归零、没有扩容步（grow_part 为 0）
+    #[test]
+    fn a_completed_move_record_round_trips() {
+        let mut record = Record::new(
+            TxId::from_bytes([1; 16]),
+            image_target(),
+            PlanId::from_bytes([2; 16]),
+            PlanVersion::new(3),
+            OpKind::Move,
+            PlanDigest::from_bytes([4; 32]),
+            DiskGuidState::Present([5; 16]),
+        );
+        record.old_range = Some((2048, 4096));
+        record.progress = Progress { completed_steps: 1, transfer_cursor: 96, fs_phase: 0 };
+        record.action = RecoveryAction::Rollback(0);
+        record.commit = CommitState::Committed;
+        record.restore_blocked = true;
+        record.relocation = Some(Relocation {
+            entries: vec![RelocEntry {
+                partition: 1,
+                src_first: 2048,
+                len: 2048,
+                delta: 512,
+                is_swap: false,
+            }],
+            entry_index: 1,
+            chunks_in_entry: 0,
+            chunk_bytes: 96,
+            kind: RelocKind::Shift,
+            grow_part: 0,
+            disk_size: 16 * 1024 * 1024,
+            ss: 512,
+        });
+
+        let bytes = record.encode().unwrap();
+        let mut decoded = decode(&bytes).unwrap();
+        assert_eq!(decoded.relocation.as_ref().unwrap().grow_part, 0);
+        // Record 的 PartialEq 含 encode 才填的头，不直接比；重编码逐字节复原即整份回读
+        assert_eq!(decoded.encode().unwrap(), bytes);
+    }
+
+    /// 起点变更缩容的 resize-part 记录同样携带搬移计划，回读不得因操作类型被拒
+    #[test]
+    fn a_resize_part_record_round_trips_with_a_relocation_plan() {
+        let mut record = Record::new(
+            TxId::from_bytes([6; 16]),
+            image_target(),
+            PlanId::from_bytes([8; 16]),
+            PlanVersion::new(1),
+            OpKind::ResizePart,
+            PlanDigest::from_bytes([9; 32]),
+            DiskGuidState::Present([10; 16]),
+        );
+        record.old_range = Some((2048, 16384));
+        record.relocation = Some(Relocation {
+            entries: vec![RelocEntry {
+                partition: 1,
+                src_first: 2048,
+                len: 4096,
+                delta: 512,
+                is_swap: false,
+            }],
+            entry_index: 0,
+            chunks_in_entry: 2,
+            chunk_bytes: 96,
+            kind: RelocKind::Shift,
+            grow_part: 0,
+            disk_size: 16 * 1024 * 1024,
+            ss: 512,
+        });
+
+        let bytes = record.encode().unwrap();
+        let mut decoded = decode(&bytes).unwrap();
+        assert_eq!(decoded.op, OpKind::ResizePart);
+        assert_eq!(decoded.encode().unwrap(), bytes);
     }
 }

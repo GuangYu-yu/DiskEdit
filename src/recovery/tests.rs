@@ -174,18 +174,26 @@ fn swap_pending_is_encoded_by_the_cursor() {
     assert!(got.entries[0].is_swap);
 }
 
-/// 只有 `move` / `resize` 记录允许带搬移计划
+/// 只有 `move` / `resize` / `resize-part` 记录允许带搬移计划
 #[test]
-fn relocation_belongs_only_to_move_and_resize_records() {
+fn relocation_belongs_to_move_resize_and_resize_part_records() {
     let mut allowed = record_for(scene(6));
     allowed.op = OpKind::Move;
     allowed.relocation = Some(relocation(vec![reloc_entry(2, 6144, 4096, 2048, false)]));
     assert!(decode(&allowed.encode().unwrap()).is_ok(), "a move record carries a relocation");
 
+    let mut resize_part = record_for(scene(6));
+    resize_part.op = OpKind::ResizePart;
+    resize_part.relocation = Some(relocation(vec![reloc_entry(2, 6144, 4096, 2048, false)]));
+    assert!(
+        decode(&resize_part.encode().unwrap()).is_ok(),
+        "a resize-part record carries the relocation of its start-change move"
+    );
+
     let mut rejected = record_for(scene(6));
-    rejected.op = OpKind::ResizePart;
+    rejected.op = OpKind::Add;
     rejected.relocation = Some(relocation(vec![reloc_entry(2, 6144, 4096, 2048, false)]));
-    assert!(decode(&rejected.encode().unwrap()).is_err(), "ResizePart must not carry a relocation");
+    assert!(decode(&rejected.encode().unwrap()).is_err(), "Add must not carry a relocation");
 }
 
 /// 计划字段的非法组合在解码时拒绝：分区号 0 / 重复、零长度、grow_part 参与搬移、
