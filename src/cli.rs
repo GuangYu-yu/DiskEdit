@@ -36,7 +36,7 @@ pub(crate) fn version_help() -> ! {
 }
 
 /// 一个值的语法。解析器只按声明在这里的值域校验；`Bool` 表示旗标不带值。
-/// 占位符是帮助、错误文案与 README 对账共用的那一个字符串。
+/// 占位符是帮助、错误文案与选项总表对账共用的那一个字符串。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ValueDomain {
     Bool,
@@ -1972,19 +1972,19 @@ mod tests {
         }
     }
 
-    /// README 的选项表与注册表双向对账
+    /// 选项总表与注册表双向对账
     #[test]
-    fn readme_options_match_the_registry() {
+    fn internals_options_match_the_registry() {
         use super::{flag_spec, FLAGS};
 
-        const README: &str = include_str!("../README.md");
-        let rows: Vec<&str> = README
+        const DOC: &str = include_str!("../docs/internals.md");
+        let rows: Vec<&str> = DOC
             .lines()
-            .skip_while(|l| l.trim() != "## 选项")
+            .skip_while(|l| l.trim() != "## Options")
             .skip(1)
             .take_while(|l| !l.starts_with("## "))
             .collect();
-        assert!(!rows.is_empty(), "README must carry a `## 选项` section");
+        assert!(!rows.is_empty(), "docs/internals.md must carry an `## Options` section");
 
         const PIPE: char = '\u{00A6}';
         let mut documented: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
@@ -1997,24 +1997,24 @@ mod tests {
                 continue;
             }
             let name = cell.trim_matches('`');
-            assert!(documented.insert(name.to_string()), "README documents {name} twice");
+            assert!(documented.insert(name.to_string()), "the options table lists {name} twice");
             let spec = flag_spec(name)
-                .unwrap_or_else(|| panic!("README documents an unregistered flag: {name}"));
+                .unwrap_or_else(|| panic!("the options table lists an unregistered flag: {name}"));
             let value = cells[1].trim().replace(PIPE, "|");
             if spec.domain.takes_value() {
                 let placeholder = spec.domain.placeholder();
-                assert_ne!(value, "—", "{name} takes a value but README calls it a boolean");
-                assert_eq!(value, placeholder, "{name}: README placeholder must match the registry");
+                assert_ne!(value, "—", "{name} takes a value but the table calls it a boolean");
+                assert_eq!(value, placeholder, "{name}: table placeholder must match the registry");
             } else {
                 assert_eq!(
                     value, "—",
-                    "{name} is a boolean in the registry, so README must give it no value"
+                    "{name} is a boolean in the registry, so the table must give it no value"
                 );
             }
         }
         let registered: std::collections::BTreeSet<String> =
             FLAGS.iter().map(|f| f.name.to_string()).collect();
-        assert_eq!(documented, registered, "README options and the registry must match exactly");
+        assert_eq!(documented, registered, "the options table and the registry must match exactly");
     }
 
     /// 命令表的自洽：名字互不重复；每条命令都有摘要、用法与详助；第一条位置参数是

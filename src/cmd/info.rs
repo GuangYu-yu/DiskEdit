@@ -45,6 +45,13 @@ fn fail_after_envelope(f: RunOutcome, src: Option<&FileSource>) -> ! {
 }
 
 pub(crate) fn cmd_info(a: &InfoRequest) -> u8 {
+    cmd_info_with(a, None)
+}
+
+/// `tail` 是拼在信封末尾的顶层键片段（以逗号开头、不带收尾括号），供 `plan --grow`
+/// 把预览并进同一份文档。识别失败的信封不带它：那条路径连布局结论都不完整，
+/// 在其中追加派生产物只会让读者以为布局本身是可信的
+pub(crate) fn cmd_info_with(a: &InfoRequest, tail: Option<&str>) -> u8 {
     // info 只看整盘布局：`:N` 指定了也会被静默忽略，用户会误以为输出是单分区的
     if let Some(n) = a.part {
         // 命令级拒绝同样走信封；参数解析阶段的拒绝（未知旗标、非法 --sector-size）在进入
@@ -296,7 +303,11 @@ pub(crate) fn cmd_info(a: &InfoRequest) -> u8 {
         println!("{},\"error\":\"{}\"}}", &out[..out.len() - 1], json_escape(msg));
         return RunOutcome::no_mutation(msg).exit_code();
     }
-    println!("{out}");
+    match tail {
+        // 信封的收尾括号在这里补：调用方只给键片段，不会与括号位置互相复制
+        Some(t) => println!("{}{t}}}", &out[..out.len() - 1]),
+        None => println!("{out}"),
+    }
     // 非 raw 容器格式识别（qcow2/VMDK/VDI/VHD/VHDX 魔数，qemu docs block-drivers）：字节直译
     // 假设不成立（guest LBA 经容器内分配表间接映射），本工具无法处理，改用 qemu-nbd 映射为
     // 块设备（modprobe nbd max_part / qemu-nbd -c/-d，见 qemu 官方工具文档）
