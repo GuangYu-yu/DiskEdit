@@ -268,12 +268,12 @@ mod tests {
             c
         }
         // (支持, 不支持, 设计限制, 不适用)
-        assert_eq!(counts(&snapshot(HostPlatform::Linux, MediaKind::Block)), (12, 0, 0, 0));
-        assert_eq!(counts(&snapshot(HostPlatform::Linux, MediaKind::Image)), (8, 0, 0, 4));
-        assert_eq!(counts(&snapshot(HostPlatform::Windows, MediaKind::Block)), (0, 10, 2, 0));
-        assert_eq!(counts(&snapshot(HostPlatform::Windows, MediaKind::Image)), (2, 4, 2, 4));
-        assert_eq!(counts(&snapshot(HostPlatform::Other, MediaKind::Block)), (0, 12, 0, 0));
-        assert_eq!(counts(&snapshot(HostPlatform::Other, MediaKind::Image)), (2, 6, 0, 4));
+        assert_eq!(counts(&snapshot(HostPlatform::Linux, MediaKind::Block)), (9, 0, 0, 0));
+        assert_eq!(counts(&snapshot(HostPlatform::Linux, MediaKind::Image)), (8, 0, 0, 1));
+        assert_eq!(counts(&snapshot(HostPlatform::Windows, MediaKind::Block)), (0, 7, 2, 0));
+        assert_eq!(counts(&snapshot(HostPlatform::Windows, MediaKind::Image)), (2, 4, 2, 1));
+        assert_eq!(counts(&snapshot(HostPlatform::Other, MediaKind::Block)), (0, 9, 0, 0));
+        assert_eq!(counts(&snapshot(HostPlatform::Other, MediaKind::Image)), (2, 6, 0, 1));
     }
 
     /// 设计矩阵的关键单元格
