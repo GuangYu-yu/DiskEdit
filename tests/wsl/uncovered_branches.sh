@@ -97,13 +97,11 @@ $B add --yes "$T" 1048576 --start 264192 --name over >/dev/null 2>&1; E=$?
 # 所以这里必须 --align none，越界请求才真正到达边界校验（src/movepart/resize.rs:404）
 LU=2097118
 echo "last_usable=$LU (2097151 - 32 - 1)"
-# p128 是裸分区（无文件系统），FS 步无事可做：--no-fs 让几何断言直达边界校验，
-# --align none 让原始越界 LBA 直达边界校验
-$B resize-part --yes --no-fs "$T":128 --align none --end "$LU" >/dev/null 2>&1; E=$?
+$B resize-part --yes "$T":128 --align none --end "$LU" >/dev/null 2>&1; E=$?
 [ "$E" = "0" ] && echo "grow-to-usable OK (exit=$E)" || { echo "grow-to-usable failed (exit=$E)"; rc=1; }
 P=$($B info "$T" | grep -o '"num":128,[^}]*}' | grep -o '"last_lba":[0-9]*' | cut -d: -f2)
 [ "$P" = "$LU" ] && echo "p128 at last_usable ($P)" || { echo "p128 not at last_usable (got $P, want $LU)"; rc=1; }
-$B resize-part --yes --no-fs "$T":128 --align none --end "$((LU+1))" >/dev/null 2>&1; E=$?
+$B resize-part --yes "$T":128 --align none --end "$((LU+1))" >/dev/null 2>&1; E=$?
 [ "$E" != "0" ] && echo "beyond-usable refused OK (exit=$E)" || { echo "beyond-usable NOT refused (exit=$E)"; rc=1; }
 
 echo
