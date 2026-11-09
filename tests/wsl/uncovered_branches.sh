@@ -38,19 +38,19 @@ rm -rf "$SF" "$SF"$SIDECAR_GLOB
 truncate -s 200M "$SF"
 mkfs.ext4 -q -F "$SF"
 truncate -s 300M "$SF"      # 设备变大，FS 仍 200M
-OUT=$($B resize "$SF" grow 2>&1); E=$?
+OUT=$($B resize --yes "$SF" grow 2>&1); E=$?
 echo "exit=$E : $(echo "$OUT" | tail -1)"
 LD=$(lo_attach "$SF"); mount_at "$LD" "$TEST_MNT" 2>/dev/null && { echo "after: $(df -h --output=size "$TEST_MNT" | tail -1)（期望 ~293M）"; umount "$TEST_MNT" 2>/dev/null; }; lo_detach "$LD"
 # 拒绝路径：unknown（全零盘）
 rm -rf "$SF"; truncate -s 100M "$SF"
-OUT=$($B resize "$SF" grow 2>&1); E=$?
+OUT=$($B resize --yes "$SF" grow 2>&1); E=$?
 echo "unknown -> exit=$E : $(echo "$OUT" | tail -1)"
 [ "$E" = "3" ] && echo "B SUPERFLOPPY-REFUSAL OK" || { echo "B unexpected exit for unknown ($E)"; rc=1; }
 
 echo
 echo "########## C: resize --start 应报用法错误（非本命令选项）##########"
 mk ext4 300M
-OUT=$($B resize "$T":1 500M --start 4096 2>&1); E=$? # cli-surface: refused
+OUT=$($B resize --yes "$T":1 500M --start 4096 2>&1); E=$? # cli-surface: refused
 echo "exit=$E : $(echo "$OUT" | tail -1)"
 [ "$E" = "2" ] && echo "C USAGE-ERROR OK" || { echo "C WRONG EXIT ($E)"; rc=1; }
 
@@ -74,12 +74,12 @@ $B new "$T" --yes >/dev/null
 ok=0
 for i in $(seq 1 128); do
   s=$((2048 + (i-1)*2048)); e=$((s + 2047))
-  $B add "$T" $(( (e - s + 1) * 512 )) --start "$s" --name "p$i" >/dev/null 2>&1 && ok=$((ok+1)) || break
+  $B add --yes "$T" $(( (e - s + 1) * 512 )) --start "$s" --name "p$i" >/dev/null 2>&1 && ok=$((ok+1)) || break
 done
 [ "$ok" = "128" ] && echo "created $ok partitions (128 = limit)" || { echo "created $ok partitions (want 128)"; rc=1; }
 $B info "$T" | grep -o '"num":128[^}]*}' | head -1
 # 第 129 个应被拒绝
-$B add "$T" 1048576 --start 264192 --name over >/dev/null 2>&1; E=$?
+$B add --yes "$T" 1048576 --start 264192 --name over >/dev/null 2>&1; E=$?
 [ "$E" != "0" ] && echo "129th add refused OK (exit=$E)" || { echo "129th add NOT refused (exit=$E)"; rc=1; }
 # 紧贴：把 p128 扩到 last_usable，再加 1 扇区应被拒
 # 1G 镜像末 LBA = 2097151；备份数组(32 扇区)位于末扇区的备份头之前，
@@ -89,11 +89,11 @@ $B add "$T" 1048576 --start 264192 --name over >/dev/null 2>&1; E=$?
 LU=2097118
 echo "last_usable=$LU (2097151 - 32 - 1)"
 # resize-part 只改分区表、不动 FS；--align none 让原始越界 LBA 直达边界校验
-$B resize-part "$T":128 --align none --end "$LU" >/dev/null 2>&1; E=$?
+$B resize-part --yes "$T":128 --align none --end "$LU" >/dev/null 2>&1; E=$?
 [ "$E" = "0" ] && echo "grow-to-usable OK (exit=$E)" || { echo "grow-to-usable failed (exit=$E)"; rc=1; }
 P=$($B info "$T" | grep -o '"num":128,[^}]*}' | grep -o '"last_lba":[0-9]*' | cut -d: -f2)
 [ "$P" = "$LU" ] && echo "p128 at last_usable ($P)" || { echo "p128 not at last_usable (got $P, want $LU)"; rc=1; }
-$B resize-part "$T":128 --align none --end "$((LU+1))" >/dev/null 2>&1; E=$?
+$B resize-part --yes "$T":128 --align none --end "$((LU+1))" >/dev/null 2>&1; E=$?
 [ "$E" != "0" ] && echo "beyond-usable refused OK (exit=$E)" || { echo "beyond-usable NOT refused (exit=$E)"; rc=1; }
 
 echo
@@ -115,7 +115,7 @@ rm -rf "$T" "$T"$SIDECAR_GLOB
 truncate -s 1G "$T"
 $B new "$T" --yes --sector-size 4096 >/dev/null 2>&1; echo "new exit=$?"
 $B info "$T" | grep -o '"sector_size":[0-9]*'
-$B add "$T" 268435456 --start 256 --name p1 >/dev/null 2>&1; echo "add(256..65791) exit=$?"
+$B add --yes "$T" 268435456 --start 256 --name p1 >/dev/null 2>&1; echo "add(256..65791) exit=$?"
 $B info "$T" | grep -o '"num":1,[^}]*}'
 
 echo

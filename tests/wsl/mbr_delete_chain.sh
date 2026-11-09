@@ -15,19 +15,19 @@ echo "===== A: MBR 建表 / add --type-guid / flag ====="
 rm -rf "$T" "$T"$SIDECAR_GLOB
 truncate -s 256M "$T"
 $B new "$T" --table mbr --yes; echo "new exit=$?"
-$B add "$T" 50151424 --start 2048 >/dev/null; echo "add p1 exit=$?"
-$B add "$T" 51200000 --start 100000 --type-guid 0x07 >/dev/null; echo "add p2(0x07) exit=$?"
+$B add --yes "$T" 50151424 --start 2048 >/dev/null; echo "add p1 exit=$?"
+$B add --yes "$T" 51200000 --start 100000 --type-guid 0x07 >/dev/null; echo "add p2(0x07) exit=$?"
 $B info "$T" | grep -o '"label":"[a-z]*"'
-$B set "$T":1 flag boot on; echo "flag boot exit=$?"
+$B set --yes "$T":1 flag boot on; echo "flag boot exit=$?"
 sfdisk -d "$T" 2>/dev/null | grep -o 'bootable' | head -1
-OUT=$($B set "$T":1 flag esp on 2>&1); E=$?
+OUT=$($B set --yes "$T":1 flag esp on 2>&1); E=$?
 echo "$OUT" | head -1
 [ "$E" = "3" ] && echo "flag esp on MBR refused OK (exit=$E)" || { echo "flag esp on MBR wrong exit ($E, want 3)"; rc=1; }
 # hidden 仅对 FAT/NTFS 类型有隐藏变体映射
-$B set "$T":1 flag hidden on >/dev/null 2>&1; E=$?
+$B set --yes "$T":1 flag hidden on >/dev/null 2>&1; E=$?
 [ "$E" = "3" ] && echo "hidden on 0x83 refused OK (exit=$E)" || { echo "hidden on 0x83 wrong exit ($E, want 3)"; rc=1; }
-OUT=$($B set "$T":2 flag hidden on 2>&1); echo "$OUT" | head -1; echo "hidden on 0x07 exit=$?"
-$B set "$T":2 flag hidden off >/dev/null 2>&1; echo "hidden off exit=$?"
+OUT=$($B set --yes "$T":2 flag hidden on 2>&1); echo "$OUT" | head -1; echo "hidden on 0x07 exit=$?"
+$B set --yes "$T":2 flag hidden off >/dev/null 2>&1; echo "hidden off exit=$?"
 
 echo
 echo "===== B: MBR resize 扩 / 缩 ====="
@@ -35,7 +35,7 @@ LD=$(lo_attach "$T")
 mkfs.ext4 -q "${LD}p1"
 mount_at "${LD}p1" "$TEST_MNT" && { echo marker-mbr > "$TEST_MNT"/m.txt; dd if=/dev/urandom of="$TEST_MNT/blob" bs=1M count=20 2>/dev/null; umount "$TEST_MNT" 2>/dev/null; }
 lo_detach "$LD"
-$B resize "$T":1 48M >/dev/null 2>&1; echo "grow exit=$?"
+$B resize --yes "$T":1 48M >/dev/null 2>&1; echo "grow exit=$?"
 $B info "$T" | grep -o '"num":1,"first_lba":[0-9]*,"last_lba":[0-9]*'
 LD=$(lo_attach "$T")
 mount_at "${LD}p1" "$TEST_MNT" && { cat "$TEST_MNT"/m.txt; e2fsck -fn "${LD}p1" >/dev/null 2>&1 && echo "grow e2fsck clean" || { echo "grow e2fsck ISSUES"; rc=1; }; umount "$TEST_MNT" 2>/dev/null; }
@@ -48,9 +48,9 @@ lo_detach "$LD"
 
 echo
 echo "===== C: 扩展容器不可 resize ====="
-$B add "$T" 98926592 --start 200000 --type-guid 0x05 >/dev/null; echo "add extended exit=$?"
+$B add --yes "$T" 98926592 --start 200000 --type-guid 0x05 >/dev/null; echo "add extended exit=$?"
 $B info "$T" | grep -o '"num":3[^}]*}' | head -1
-OUT=$($B resize "$T":3 100M 2>&1); E=$?
+OUT=$($B resize --yes "$T":3 100M 2>&1); E=$?
 echo "$OUT" | head -1
 [ "$E" = "3" ] && echo "resize container refused OK (exit=$E)" || { echo "resize container wrong exit ($E, want 3)"; rc=1; }
 
@@ -63,7 +63,7 @@ MD2=$(head -c 8388608 "${LD}p2" | md5sum | cut -d' ' -f1)
 # （MBR info 的字段序是 type 在 first_lba 前，需先截取该分区对象再取字段）
 P2START=$($B info "$T" | grep -o '"num":2,[^}]*}' | grep -o '"first_lba":[0-9]*' | grep -o '[0-9]*$')
 lo_detach "$LD"
-OUT=$($B delete "$T":2 2>&1); E=$?
+OUT=$($B delete --yes "$T":2 2>&1); E=$?
 echo "$OUT" | head -1
 [ "$E" = "3" ] && echo "delete w/o --yes refused OK (exit=$E)" || { echo "delete w/o --yes wrong exit ($E, want 3)"; rc=1; }
 $B delete "$T":2 --yes >/dev/null 2>&1; echo "delete exit=$?"
@@ -77,7 +77,7 @@ echo "===== E: GPT 侧 delete ====="
 rm -rf "$T" "$T"$SIDECAR_GLOB
 truncate -s 64M "$T"
 $B new "$T" --yes >/dev/null
-$B add "$T" 50151424 --start 2048 --name g1 >/dev/null
+$B add --yes "$T" 50151424 --start 2048 --name g1 >/dev/null
 $B delete "$T":1 --yes >/dev/null 2>&1; echo "gpt delete exit=$?"
 $B info "$T" | grep -o '"num":1' || echo "g1 GONE OK"
 sgdisk -v "$T" >/dev/null 2>&1 && echo "sgdisk clean" || { echo "sgdisk ISSUES"; rc=1; }

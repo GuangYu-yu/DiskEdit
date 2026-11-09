@@ -208,9 +208,9 @@ diskedit resize <TARGET>[:N] <SIZE> [OPTIONS]
     truncation is reported
 
   Constraints:
-    shrink    refused: this command only grows. Shrink in two steps — run
-              `resizefs` on the filesystem, then `resize-part` on the
-              partition (each step leaves its own resumable record)
+    shrink    refused: this command only grows. Shrink with `resize-part`
+              --end: it shrinks the filesystem first (offline), then the
+              partition, and an interrupted shrink resumes from its record
     --no-fs   refused on an LVM PV (the PV chain has no filesystem step of
               its own). A swap partition relocated as a blocker is rebuilt
               regardless: that step belongs to the relocation, not to the

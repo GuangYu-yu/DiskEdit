@@ -23,18 +23,20 @@ P=${LD}p1
 mount_at "$P" "$TEST_MNT" || { echo "SKIP: 无法挂载 $P"; exit 0; }
 S0=$(blockdev --getsize64 "$P")
 D0=$(df -B1 --output=size "$TEST_MNT" | tail -1 | tr -d ' ')
-OUT=$($B resize "${LD}:1" +16M 2>&1); E=$?
+OUT=$($B resize --yes "${LD}:1" +16M 2>&1); E=$?
 echo "grow exit=$E : $(echo "$OUT" | tail -1)"
 exp "$E" 0 "A/grow"
 S1=$(blockdev --getsize64 "$P")
 D1=$(df -B1 --output=size "$TEST_MNT" | tail -1 | tr -d ' ')
 assert_eq "$S1" "$((S0 + 16777216))" "A/分区 +16M"
 if [ "$D1" -gt "$D0" ]; then echo "  OK   A/fs 同步变大 ($D0 → $D1)"; else echo "  BAD  A/fs 未变大 ($D0 → $D1)"; rc=1; fi
-OUT=$($B resize "${LD}:1" -16M --yes 2>&1); E=$?
-echo "shrink exit=$E : $(echo "$OUT" | tail -1)"
-exp "$E" 0 "A/shrink"
-assert_eq "$(blockdev --getsize64 "$P")" "$S0" "A/回到原尺寸"
+# 缩容的唯一入口是 resize-part（离线：临时挂载缩 FS、再收表，同一份记录）；
+# resizefs 挂载点形态不改表、一律拒绝缩容
 unmount_now "$TEST_MNT"
+OUT=$($B resize-part --yes "$T":1 --end 821247 2>&1); E=$?
+echo "shrink exit=$E : $(echo "$OUT" | tail -1)"
+exp "$E" 0 "A/resize-part 缩回原尺寸"
+assert_eq "$(blockdev --getsize64 "$P")" "$S0" "A/回到原尺寸"
 
 echo
 echo "########## B: 节点重绑（路径不变、设备号变了）必须拒绝 ##########"
@@ -53,7 +55,7 @@ mount_at "$P" "$TEST_MNT"
 S0=$(blockdev --getsize64 "$P")
 if unshare -m --propagation private true 2>/dev/null; then
   OUT=$(unshare -m --propagation private bash -c \
-    "mount --bind '$FK/dev' '$P' && exec '$B' resizefs "$TEST_MNT" 400M" 2>&1); E=$?
+    "mount --bind '$FK/dev' '$P' && exec '$B' resizefs --yes "$TEST_MNT" 400M" 2>&1); E=$?
   echo "rebound exit=$E : $(echo "$OUT" | tail -1)"
   exp "$E" 3 "B/重绑拒绝"
   if echo "$OUT" | grep -q "but the node now resolves to"; then
@@ -75,7 +77,7 @@ img T3 t21m2.img
 track_file "$T2"; rm -rf "$T2" "$T2"$SIDECAR_GLOB "$T3" "$T3"$SIDECAR_GLOB 2>/dev/null
 truncate -s 1G "$T2"
 $B new "$T2" --yes >/dev/null
-$B add "$T2" 533725184 --start 2048 --name btm >/dev/null
+$B add --yes "$T2" 533725184 --start 2048 --name btm >/dev/null
 truncate -s 512M "$T3"
 L2=$(lo_attach "$T2")
 L3=$(lo_attach "$T3")
@@ -83,7 +85,7 @@ mkfs.btrfs -f -d single -m single "${L2}p1" "$L3" >/dev/null 2>&1; echo "mkfs.bt
 lo_waitpart "${L2}p1" || { echo "SKIP: ${L2}p1 未就绪"; exit 0; }
 mount_at "${L2}p1" "$TEST_MNT"
 S0=$(blockdev --getsize64 "${L2}p1")
-OUT=$($B resize "${L2}:1" +16M 2>&1); E=$?
+OUT=$($B resize --yes "${L2}:1" +16M 2>&1); E=$?
 echo "multidev exit=$E : $(echo "$OUT" | tail -1)"
 if [ "$E" = 6 ] && echo "$OUT" | grep -q "has 2 devices"; then
   echo "  OK   C/多设备拒绝"

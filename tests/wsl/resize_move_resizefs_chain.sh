@@ -46,7 +46,7 @@ lo_detach "$LD"
 echo "  OK   marker 已写入"
 
 echo "== resize +8M (plain) =="
-$B resize "$T":1 +8M >/dev/null; exp "$?" 0 "resize +8M"
+$B resize --yes "$T":1 +8M >/dev/null; exp "$?" 0 "resize +8M"
 verify_marker "resize +8M"
 $B check "$T":1 >/dev/null; exp "$?" 0 "check p1"
 
@@ -64,7 +64,7 @@ verify_marker "resize grow --no-fs"
 
 echo "== resize-part --grow-to-end（此刻分区终点已是 last_usable，故无实际变更）=="
 # resize-part 只改分区表、不动 FS；此刻终点已在 last_usable，故无实际变更
-$B resize-part "$T":1 --grow-to-end >/dev/null; exp "$?" 0 "resize-part --grow-to-end"
+$B resize-part --yes "$T":1 --grow-to-end >/dev/null; exp "$?" 0 "resize-part --grow-to-end"
 
 echo "== resizefs <mountpoint> <BYTES>（BYTES = 分区目标大小）=="
 # 上一步 --no-fs 把 FS 留在了 42MiB（分区终点 100351，48MiB），而分区现在已是
@@ -74,7 +74,7 @@ echo "partition size_bytes=$SZ"
 LD=$(lo_attach "$T")
 mount_at "${LD}p1" "$MNT" || { echo "  BAD  在线形式前挂载失败"; lo_detach "$LD"; exit 1; }
 FS_BEFORE=$(df -B1M --output=size "$MNT" | tail -1 | tr -d ' ')
-$B resizefs "$MNT" "$SZ"; exp "$?" 0 "resizefs <mountpoint> BYTES"
+$B resizefs --yes "$MNT" "$SZ"; exp "$?" 0 "resizefs <mountpoint> BYTES"
 FS_AFTER=$(df -B1M --output=size "$MNT" | tail -1 | tr -d ' ')
 echo "  FS size: ${FS_BEFORE}MiB -> ${FS_AFTER}MiB"
 [ "$FS_AFTER" -ge 50 ] && [ "$FS_AFTER" -ge "$FS_BEFORE" ] \
@@ -87,7 +87,7 @@ umount "$MNT"
 lo_detach "$LD"
 
 echo "== resizefs <T>:N offline (grow into partition) =="
-$B resizefs "$T":1 >/dev/null; exp "$?" 0 "resizefs 离线"
+$B resizefs --yes "$T":1 >/dev/null; exp "$?" 0 "resizefs 离线"
 LD=$(lo_attach "$T")
 if mount_at "${LD}p1" "$MNT"; then
   FS_MB=$(df -B1M --output=size "$MNT" | tail -1 | tr -d ' ')

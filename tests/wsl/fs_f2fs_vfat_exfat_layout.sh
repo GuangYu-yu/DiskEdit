@@ -23,7 +23,7 @@ LD=$(lo_attach "$T")
 lo_waitpart "${LD}p1" || { echo "p1 part node not ready"; rc=1; lo_detach "$LD"; }
 mount_at "${LD}p1" "$TEST_MNT" 2>/dev/null && { dd if=/dev/urandom of="$TEST_MNT/f.bin" bs=1M count=100 2>/dev/null; MF=$(mdsum "$TEST_MNT"/f.bin); SZ1=$(df -h --output=size "$TEST_MNT" | tail -1); echo "before: $SZ1"; umount "$TEST_MNT" 2>/dev/null; }
 lo_detach "$LD"
-OUT=$($B resize "$T":1 900M 2>&1); echo "resize exit=$? : $(echo "$OUT" | tail -1)"
+OUT=$($B resize --yes "$T":1 900M 2>&1); echo "resize exit=$? : $(echo "$OUT" | tail -1)"
 LD=$(lo_attach "$T")
 lo_waitpart "${LD}p1" || { echo "p1 part node not ready"; rc=1; lo_detach "$LD"; }
 mount_at "${LD}p1" "$TEST_MNT" 2>/dev/null && {
@@ -42,7 +42,7 @@ LD=$(lo_attach "$T")
 lo_waitpart "${LD}p1" || { echo "p1 part node not ready"; rc=1; lo_detach "$LD"; }
 mount_at "${LD}p1" "$TEST_MNT" 2>/dev/null && { dd if=/dev/urandom of="$TEST_MNT/v.bin" bs=1M count=100 2>/dev/null; MV=$(mdsum "$TEST_MNT"/v.bin); echo "before: $(df -h --output=size "$TEST_MNT" | tail -1)"; umount "$TEST_MNT" 2>/dev/null; }
 lo_detach "$LD"
-OUT=$($B resize "$T":1 900M 2>&1); E=$?
+OUT=$($B resize --yes "$T":1 900M 2>&1); E=$?
 echo "resize exit=$E : $(echo "$OUT" | tail -1)"
 [ "$E" = "5" ] && echo "B PARTIAL OK（契约：表已改、FS 未扩）" || { echo "B WRONG EXIT ($E)"; rc=1; }
 echo "$OUT" | grep -q "fatresize" && echo "B REMEDY HINT OK" || echo "B NO HINT"
@@ -63,7 +63,7 @@ LD=$(lo_attach "$T")
 lo_waitpart "${LD}p1" || { echo "p1 part node not ready"; rc=1; lo_detach "$LD"; }
 mount_at "${LD}p1" "$TEST_MNT" 2>/dev/null && { echo "exfat 挂载可写测试"; dd if=/dev/urandom of="$TEST_MNT/e.bin" bs=1M count=50 2>/dev/null; ME=$(mdsum "$TEST_MNT"/e.bin); umount "$TEST_MNT" 2>/dev/null; }
 lo_detach "$LD"
-OUT=$($B resize "$T":1 900M 2>&1); E=$?
+OUT=$($B resize --yes "$T":1 900M 2>&1); E=$?
 echo "resize exit=$E : $(echo "$OUT" | tail -1)"
 [ "$E" = "6" ] && echo "C UNSUPPORTED OK（无工具 → 事前拒绝，不改盘）" || { echo "C WRONG EXIT ($E)"; rc=1; }
 echo "C 分区表: $($B info "$T" | grep -o '"num":1,[^}]*}' | grep -o '"size_bytes":[0-9]*')（应保持 419430400 — 6 未改盘）"
@@ -79,10 +79,10 @@ rm -rf "$T" "$T"$SIDECAR_GLOB
 truncate -s 2G "$T"
 $B new "$T" --yes >/dev/null
 # ESP 200M / MSR 16M / Linux 300M / recovery(NTFS) 500M
-$B add "$T" 209715200 --start 2048 --name ESP --type-guid C12A7328-F81F-11D2-BA4B-00A0C93EC93B >/dev/null
-$B add "$T" 16777216 --start 411648 --name MSR --type-guid E3C9E316-0B5C-4DB8-817D-F92DF00215AE >/dev/null
-$B add "$T" 314572800 --start 444416 --name Linux >/dev/null
-$B add "$T" 524288000 --start 1058816 --name recovery --type-guid DE94BBA4-06D1-4D40-A16A-BFD50179D6AC >/dev/null
+$B add --yes "$T" 209715200 --start 2048 --name ESP --type-guid C12A7328-F81F-11D2-BA4B-00A0C93EC93B >/dev/null
+$B add --yes "$T" 16777216 --start 411648 --name MSR --type-guid E3C9E316-0B5C-4DB8-817D-F92DF00215AE >/dev/null
+$B add --yes "$T" 314572800 --start 444416 --name Linux >/dev/null
+$B add --yes "$T" 524288000 --start 1058816 --name recovery --type-guid DE94BBA4-06D1-4D40-A16A-BFD50179D6AC >/dev/null
 LD=$(lo_attach "$T")
 lo_waitpart "${LD}p1" || { echo "p1 part node not ready"; rc=1; lo_detach "$LD"; }
 lo_waitpart "${LD}p3" || { echo "p3 part node not ready"; rc=1; lo_detach "$LD"; }
@@ -127,7 +127,7 @@ echo "squashfs bytes_used=$BU overlay_off=$OFF"
 rm -rf "$T" "$T"$SIDECAR_GLOB
 truncate -s 512M "$T"
 $B new "$T" --yes >/dev/null
-$B add "$T" 267386880 --start 2048 --name rootfs >/dev/null
+$B add --yes "$T" 267386880 --start 2048 --name rootfs >/dev/null
 PS=$((2048 * 512)); PLEN=$(( (524287 - 2048 + 1) * 512 ))
 dd if="$SQIMG" of="$T" bs=512 seek=2048 conv=notrunc 2>/dev/null
 INNER=$(( (PLEN - OFF) / 2 ))
@@ -135,7 +135,7 @@ LO1=$(losetup -f --show -o $((PS + OFF)) --sizelimit "$INNER" "$T")
 mkfs.ext4 -q -F "$LO1" >/dev/null 2>&1; echo "mkfs inner ext4 exit=$?"
 B0=$(dumpe2fs -h "$LO1" 2>/dev/null | awk '/^Block count:/ {print $3}')
 losetup -d "$LO1"
-OUT=$($B resizefs "$T":1 2>&1); E=$?
+OUT=$($B resizefs --yes "$T":1 2>&1); E=$?
 echo "resizefs exit=$E : $(echo "$OUT" | tail -1)"
 LO2=$(losetup -f --show -o $((PS + OFF)) --sizelimit "$((PLEN - OFF))" "$T")
 B1=$(dumpe2fs -h "$LO2" 2>/dev/null | awk '/^Block count:/ {print $3}')
@@ -148,7 +148,7 @@ else
 fi
 # E2：同一条链路经 resize（分区 + 内层 FS 一起）——内层由写盘前的 preflight 解析出来，
 # 不再因 squashfs/erofs 不在 grow_support 名单里而在写盘前被拒
-OUT=$($B resize "$T":1 grow 2>&1); E2=$?
+OUT=$($B resize --yes "$T":1 grow 2>&1); E2=$?
 NEWLAST=$($B info "$T" | grep -o '"last_lba":[0-9]*' | head -1 | cut -d: -f2)
 echo "resize grow exit=$E2 : $(echo "$OUT" | tail -1)"
 if [ "$E2" = "0" ] && [ -n "$NEWLAST" ] && [ "$NEWLAST" -gt 524287 ]; then
@@ -166,9 +166,9 @@ echo "########## G: 首启现场（尾部 RW 层尚未格式化）扩容 #######
 rm -rf "$T" "$T"$SIDECAR_GLOB
 truncate -s 512M "$T"
 $B new "$T" --yes >/dev/null
-$B add "$T" 267386880 --start 2048 --name rootfs >/dev/null
+$B add --yes "$T" 267386880 --start 2048 --name rootfs >/dev/null
 dd if="$SQIMG" of="$T" bs=512 seek=2048 conv=notrunc 2>/dev/null
-OUT=$($B resize "$T":1 grow 2>&1); EG=$?
+OUT=$($B resize --yes "$T":1 grow 2>&1); EG=$?
 NEWLAST=$($B info "$T" | grep -o '"last_lba":[0-9]*' | head -1 | cut -d: -f2)
 echo "resize grow exit=$EG : $(echo "$OUT" | tail -1)"
 if [ "$EG" = "5" ] && [ -n "$NEWLAST" ] && [ "$NEWLAST" -gt 524287 ] \
@@ -182,7 +182,7 @@ $B abandon "$T" >/dev/null 2>&1 || { echo "G abandon failed"; rc=1; }
 # G2/G3：同一个判据，两条命令的后置条件不同——resizefs 只动 FS，首启现场它没有可写的
 # 后置条件（退 0，并说明该层由首次挂载创建）；而类型识别不出（空区域同此）时它什么都没做，
 # 必须拒绝（退 3）并把识别结果带进文案——报成功会让脚本以为空间已可用
-OUT=$($B resizefs "$T":1 2>&1); ER=$?
+OUT=$($B resizefs --yes "$T":1 2>&1); ER=$?
 echo "resizefs (first-boot overlay) exit=$ER : $(echo "$OUT" | tail -1)"
 if [ "$ER" = "0" ]; then
   echo "G2 RESIZEFS-OVERLAY-NOOP OK"
@@ -192,8 +192,8 @@ fi
 rm -rf "$T" "$T"$SIDECAR_GLOB
 truncate -s 512M "$T"
 $B new "$T" --yes >/dev/null
-$B add "$T" 267386880 --start 2048 --name empty >/dev/null
-OUT=$($B resizefs "$T":1 2>&1); ER2=$?
+$B add --yes "$T" 267386880 --start 2048 --name empty >/dev/null
+OUT=$($B resizefs --yes "$T":1 2>&1); ER2=$?
 echo "resizefs (no filesystem) exit=$ER2 : $(echo "$OUT" | tail -1)"
 if [ "$ER2" = "3" ]; then
   echo "G3 RESIZEFS-NOFS-REFUSED OK"
@@ -223,7 +223,7 @@ echo "erofs blkszbits=$BLKSZ blocks=$NBLK overlay_off=$OFF"
 rm -rf "$T" "$T"$SIDECAR_GLOB
 truncate -s 512M "$T"
 $B new "$T" --yes >/dev/null
-$B add "$T" 267386880 --start 2048 --name rootfs >/dev/null
+$B add --yes "$T" 267386880 --start 2048 --name rootfs >/dev/null
 PS=$((2048 * 512)); PLEN=$(( (524287 - 2048 + 1) * 512 ))
 dd if="$ERIMG" of="$T" bs=512 seek=2048 conv=notrunc 2>/dev/null
 INNER=$(( (PLEN - OFF) / 2 ))
@@ -231,7 +231,7 @@ LO1=$(losetup -f --show -o $((PS + OFF)) --sizelimit "$INNER" "$T")
 mkfs.ext4 -q -F "$LO1" >/dev/null 2>&1; echo "mkfs inner ext4 exit=$?"
 B0=$(dumpe2fs -h "$LO1" 2>/dev/null | awk '/^Block count:/ {print $3}')
 losetup -d "$LO1"
-OUT=$($B resizefs "$T":1 2>&1); E=$?
+OUT=$($B resizefs --yes "$T":1 2>&1); E=$?
 echo "resizefs exit=$E : $(echo "$OUT" | tail -1)"
 LO2=$(losetup -f --show -o $((PS + OFF)) --sizelimit "$((PLEN - OFF))" "$T")
 B1=$(dumpe2fs -h "$LO2" 2>/dev/null | awk '/^Block count:/ {print $3}')

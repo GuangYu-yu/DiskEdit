@@ -28,17 +28,17 @@ exp "$?" 3 "delete 打分区节点被拒"
 # 拒绝必须是"什么都没写"：判据只认 0x55AA 时这里会清零分区 LBA0 的 [446,462)
 e2fsck -fn "${L1}p1" >/dev/null 2>&1
 exp "$?" 0 "分区内容未被清零"
-"$B" resize-part "${L1}p1:1" --end 4095 >/dev/null 2>&1
+"$B" resize-part --yes "${L1}p1:1" --end 4095 >/dev/null 2>&1
 exp "$?" 3 "resize-part 打分区节点被拒"
 
 echo "=== B: 同一镜像的另一个 loop 已挂载"
 L2=$(lo_attach "$T")
 lo_waitpart "${L2}p1"
 mount_at "${L1}p1" "$TEST_MNT" || { echo "SKIP: mount failed"; exit 0; }
-"$B" resize-part "$T:1" --grow-to-end >/dev/null 2>&1
+"$B" resize-part --yes "$T:1" --grow-to-end >/dev/null 2>&1
 exp "$?" 3 "挂载中拒绝写同一镜像"
 unmount_now "$TEST_MNT"
-"$B" resize-part "$T:1" --grow-to-end >/dev/null 2>&1
+"$B" resize-part --yes "$T:1" --grow-to-end >/dev/null 2>&1
 exp "$?" 0 "卸载后放行（阳性对照）"
 e2fsck -fn "${L1}p1" >/dev/null 2>&1
 exp "$?" 0 "文件系统无损伤"
@@ -65,16 +65,18 @@ check_refused() {
     esac
 }
 check_refused "new"       "$B" new "$T" --yes
-check_refused "add"       "$B" add "$T" 524288 --start 102400
+check_refused "add"       "$B" add --yes "$T" 524288 --start 102400
 check_refused "delete"    "$B" delete "$T:1" --yes
 check_refused "mkfs"      "$B" mkfs "$T":1 ext4 --yes
-check_refused "set name"  "$B" set "$T:1" name foo
-check_refused "set type"  "$B" set "$T:1" type C12A7328-F81F-11D2-BA4B-00A0C93EC93B
-check_refused "set flag"  "$B" set "$T:1" flag hidden on
+check_refused "set name"  "$B" set --yes "$T:1" name foo
+check_refused "set type"  "$B" set --yes "$T:1" type C12A7328-F81F-11D2-BA4B-00A0C93EC93B
+check_refused "set flag"  "$B" set --yes "$T:1" flag hidden on
 check_refused "undo"      "$B" undo "$T" --yes
 after=$(sha256sum "$T" | awk '{print $1}')
 assert_eq "$after" "$before" "拒绝期间镜像字节未改变"
 unmount_now "$TEST_MNT"
+# 阳性对照先摘掉本段自建的 loop：占用拒绝靠的就是它，放行前必须还盘自由
+lo_detach "$L3"
 "$B" new "$T" --yes >/dev/null 2>&1
 exp "$?" 0 "卸载后 new 放行（阳性对照）"
 

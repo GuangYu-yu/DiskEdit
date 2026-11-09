@@ -80,15 +80,17 @@ MD=$(mdsum "${LD}p1")
 lo_detach "$LD"
 # 2000896..3844095 = 2000896 起 1843200 扇区（900MiB，1MiB 对齐），与源区 2048..1845247 不相交
 DISKEDIT_FAULT=chunk:200 $BF move "$T":1 --start 2000896 --chunk 1 --yes >/dev/null 2>&1
+[ $? = 134 ] || echo "  WARN 注入未按预期中断（现场可能不成立）"
 REC=$(record_file "$T")
 echo "aborted (expected); record exists: $([ -f "$REC" ] && echo yes || echo no)"
-# 头部清零：不可读的现场必须硬拒（3，越过回滚点）并指向 abandon，不能当作"没有现场"静默重跑
-dd if=/dev/zero of="$REC" bs=1 count=64 conv=notrunc 2>/dev/null
+# 打坏头 CRC（保留 MAGIC）：记录成为"读不出来"而非"布局不识别"——前者 abandon 可释放，
+# 后者所有权验证不过关、abandon 一律拒绝，须手工处理
+dd if=/dev/zero of="$REC" bs=1 seek=12 count=4 conv=notrunc 2>/dev/null
 OUT=$($BF move "$T":1 --start 2000896 --chunk 1 --yes 2>&1); E=$?
 echo "rerun exit=$E : $(echo "$OUT" | head -1)"
 exp "$E" 3 "不可读记录时重跑被拒（不得静默重跑）"
 echo "$OUT" | grep -q "recovery record, unreadable" && echo "$OUT" | grep -q "diskedit abandon" && echo "G UNREADABLE-RECORD REPORT OK" || { echo "G report missing (BAD)"; rc=1; }
-exp "$($B abandon "$T" >/dev/null 2>&1; echo $?)" 0 "abandon 释放不可读现场"
+exp "$($B abandon "$T" --discard-replay >/dev/null 2>&1; echo $?)" 0 "abandon 释放不可读现场"
 OUT=$($BF move "$T":1 --start 104448 --chunk 1 --yes 2>&1); exp "$?" 0 "abandon 后重跑完成"
 record_absent "$T" && echo "  OK   完成后无记录残留" || { echo "  BAD  完成后记录仍在"; rc=1; }
 LD=$(lo_attach "$T")

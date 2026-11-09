@@ -204,6 +204,7 @@ check_shell() {
 }
 
 # ---- rust：run(&[...]) / .args([...]) / .args(&[...]) 的字面量数组 ----
+# Command::new(...).args(...) 的链式调用是外部工具或变量传参的启动，不参与判定
 check_rust() {
     local file=$1
     awk -v KNOWN2="$KNOWN2" '
@@ -227,26 +228,35 @@ check_rust() {
         if (cmd=="") return
         print nr "\t" cmd "\t" flags
     }
+    BEGIN { prev1=""; prev2="" }
     {
+        started=0
         if (!in_call) {
-            if (!match($0, /(run|args)\(&?\[/)) next
-            start=NR; depth=1; pos=1; refused=0
-            text=substr($0, RSTART+RLENGTH)
-            in_call=1
-        } else {
-            text=text " " $0
+            if (match($0, /(run|args)\(&?\[/)) {
+                pre=substr($0, 1, RSTART-1)
+                if (pre !~ /Command::new\(/ && prev1 !~ /Command::new\(/ && prev2 !~ /Command::new\(/) {
+                    start=NR; depth=1; pos=1; refused=0
+                    text=substr($0, RSTART+RLENGTH)
+                    in_call=1; started=1
+                }
+            }
         }
-        if ($0 ~ /cli-surface: refused/) refused=1
-        done=0
-        for (i=pos; i<=length(text); i++) {
-            c=substr(text, i, 1)
-            if (c=="[") depth++
-            else if (c=="]") { depth--; if (depth==0) { cut=i; done=1; break } }
+        if (in_call && !started) text=text " " $0
+        if (in_call) {
+            if ($0 ~ /cli-surface: refused/) refused=1
+            done=0
+            for (i=pos; i<=length(text); i++) {
+                c=substr(text, i, 1)
+                if (c=="[") depth++
+                else if (c=="]") { depth--; if (depth==0) { cut=i; done=1; break } }
+            }
+            pos=length(text)+1
+            if (done) {
+                if (!refused) row(substr(text, 1, cut-1), start)
+                in_call=0; text=""
+            }
         }
-        pos=length(text)+1
-        if (!done) next
-        if (!refused) row(substr(text, 1, cut-1), start)
-        in_call=0; text=""
+        prev2=prev1; prev1=$0
     }
     ' "$file"
 }
