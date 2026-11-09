@@ -185,7 +185,7 @@ fn cli_negative_paths() {
     assert!(e.contains("bad SIZE"), "{e}");
     let (c, _, e) = run(&["resize", &format!("{img_s}:1"), "-1T", "--yes"]);
     assert_eq!(c, 3, "{e}");
-    assert!(e.contains("exceeds current size"), "{e}");
+    assert!(e.contains("exceeds the current size"), "{e}");
     // SIZE 只有位置参数一种给法；`--size` 不是 resize 的选项
     let (c, _, e) = run(&["resize", &format!("{img_s}:1"), "10M", "--size", "4096"]); // cli-surface: refused
     assert_eq!(c, 2, "{e}");

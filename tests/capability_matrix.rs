@@ -164,8 +164,14 @@ fn records_commands_stop_at_the_capability_gate() {
 #[cfg(target_os = "linux")]
 #[test]
 fn write_commands_run_on_linux() {
-    let (dir, img) = case("new");
-    let (code, _out, err) = run(&["new", &img, "--yes"]);
+    // new 的目标是空镜像：预写的表会撞覆盖门（已有表 → 3），本段验的是平台放行
+    let dir = std::env::temp_dir().join(format!("diskedit_matrix_new_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let img = dir.join("disk.img");
+    std::fs::write(&img, vec![0u8; 8 * 1024 * 1024]).unwrap();
+    let img_s = img.to_string_lossy().into_owned();
+    let (code, _out, err) = run(&["new", &img_s, "--yes"]);
     assert_eq!(code, 0, "`new` is admitted here: {err}");
     let _ = std::fs::remove_dir_all(&dir);
 

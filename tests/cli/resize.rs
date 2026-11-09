@@ -84,7 +84,7 @@ fn resize_part_move_copy_flag_name() {
     let entries_before = dir_entries(&dir);
     let (c, _, stderr) = run(&["move", &format!("{img_s}:1"), "--start", "12000", "--align", "mib", "--chunk", "4", "--yes"]);
     assert_eq!(c, 3, "overlapping move must refuse");
-    assert!(stderr.contains("overlaps"), "{stderr}");
+    assert!(stderr.contains("overlap"), "{stderr}");
     // 拒绝承诺未写盘：整镜像逐字节不变（表项未变不等于盘面未变）
     assert_eq!(std::fs::read(&img).unwrap(), img_before, "a refusal must leave the image byte-identical");
     assert_eq!(dir_entries(&dir), entries_before, "a refusal must not add sidecars");

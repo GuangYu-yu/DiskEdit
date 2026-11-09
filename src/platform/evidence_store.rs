@@ -33,10 +33,31 @@ impl EvidenceStore for HostEvidenceStore {
     }
 
     fn read(&self, file: &EvidenceFile) -> Result<Vec<u8>, EvidenceIo> {
+        // try_clone 是 dup：两个 fd 共享偏移，read_to_end 会把共享偏移推到 EOF，
+        // 同一份句柄的第二次读（删除前回读）就从 EOF 拿到 0 字节。本文件的读取
+        // 一律 pread：偏移无关，也不扰动共享偏移
+        let fd = file.state().fd.as_raw_fd();
         let mut out = Vec::new();
-        let mut source = std::fs::File::from(file.state().fd.try_clone().map_err(EvidenceIo::Io)?);
-        std::io::Read::read_to_end(&mut source, &mut out).map_err(EvidenceIo::Io)?;
-        Ok(out)
+        let mut off: libc::off_t = 0;
+        loop {
+            let mut buf = [0u8; 8192];
+            let n = unsafe {
+                libc::pread(
+                    fd,
+                    buf.as_mut_ptr().cast::<libc::c_void>(),
+                    buf.len(),
+                    off,
+                )
+            };
+            if n < 0 {
+                return Err(EvidenceIo::Io(io::Error::last_os_error()));
+            }
+            if n == 0 {
+                return Ok(out);
+            }
+            out.extend_from_slice(&buf[..n as usize]);
+            off += n as libc::off_t;
+        }
     }
 
     fn replace_atomic(
@@ -145,7 +166,10 @@ fn open_file(parent: &OwnedFd, name: &OsStr) -> Result<OwnedFd, PathError> {
         libc::openat(
             parent.as_raw_fd(),
             cname.as_ptr(),
-            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            // O_NONBLOCK：目录里可能出现 FIFO——open(O_RDONLY) 对它会等写者，
+            // 而类型判别（fstat）发生在 open 之后，不加这个标志探测就先挂死。
+            // 普通文件的 I/O 不受 O_NONBLOCK 影响
+            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK,
         )
     };
     if raw < 0 {

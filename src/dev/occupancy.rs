@@ -404,3 +404,19 @@ fn image_loop_hit(meta: &std::fs::Metadata) -> Result<Option<String>, String> {
     }
     Ok(None)
 }
+
+#[cfg(all(test, target_os = "linux"))]
+mod image_probe {
+    use super::{probe_image, Verdict};
+
+    /// 没有任何 loop 关联的普通文件是空闲：五类证据全部"已证明不存在"。
+    /// 判错方向只允许把空闲判成占用，不允许反过来——这条向量钉住后者。
+    #[test]
+    fn a_plain_file_with_no_loop_backing_is_idle() {
+        let dir = tempfile::Builder::new().prefix("diskedit-occ-").tempdir().unwrap();
+        let img = dir.path().join("disk.img");
+        std::fs::write(&img, vec![0u8; 64 * 1024]).unwrap();
+        let meta = std::fs::metadata(&img).unwrap();
+        assert!(matches!(probe_image(&meta), Verdict::Idle));
+    }
+}

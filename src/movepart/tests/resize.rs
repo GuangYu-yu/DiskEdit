@@ -15,6 +15,10 @@ pub(crate) fn ntfs_hidden_sectors_fix() {
     let (src, path) = plan_fixture(&[(1, [0x11; 16], 2048, 6143)]);
     let _keep = src.release();
     let mut src = plan_open(&path);
+    // 写入前复核引导扇区签名：目标扇区先垫一个最小 NTFS 引导扇区
+    let mut boot = vec![0u8; 512];
+    boot[3..11].copy_from_slice(b"NTFS    ");
+    src.write_at(30687 * 512, &boot).unwrap();
     let mut log = |_: &str| {};
     fix_ntfs_hidden_sectors(&mut src, 30687, 512, &mut log).unwrap();
     let mut b = [0u8; 4];

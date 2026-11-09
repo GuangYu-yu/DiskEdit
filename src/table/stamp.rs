@@ -232,3 +232,30 @@ fn stamp_io_failure(src: &FileSource, e: io::Error) -> RunOutcome {
         RunOutcome::no_mutation_io(e)
     }
 }
+
+#[cfg(test)]
+mod digest_golden {
+    use super::TableStamp;
+
+    /// 计划期写入字节的摘要向量：拼接规则（按序逐段）或哈希一旦变化，这里先红。
+    fn hex(s: &str) -> [u8; 32] {
+        let mut out = [0u8; 32];
+        for (i, pair) in s.as_bytes().chunks(2).enumerate() {
+            out[i] = u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap();
+        }
+        out
+    }
+
+    #[test]
+    fn stamps_are_the_pinned_sha256_of_the_concatenation() {
+        assert_eq!(TableStamp::of_parts(&[]).0, hex("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"));
+        assert_eq!(
+            TableStamp::of_parts(&[b"abc", b"de"]).0,
+            hex("36bbe50ed96841d10443bcb670d6554f0a34b761be67ec9c4a8ad2c0c44ca42c")
+        );
+        assert_eq!(
+            TableStamp::of_parts(&[&[0u8; 512]]).0,
+            hex("076a27c79e5ace2a3d47f9dd2e83e4ff6ea8872b3c2218f66c92b89b55f36560")
+        );
+    }
+}
