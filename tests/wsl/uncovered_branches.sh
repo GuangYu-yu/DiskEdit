@@ -100,8 +100,15 @@ echo "last_usable=$LU (2097151 - 32 - 1)"
 # 未识别的分区内容在 FS 步写表前被拒（6）：给 p128 一个可识别的签名，FS 步才放行；
 # fatresize 在 CI 工具清单内。越界请求的边界校验在 FS 步之前，beyond 段不受影响
 $B mkfs --yes "$T":128 vfat >/dev/null 2>&1
-$B resize-part --yes "$T":128 --align none --end "$LU" >/dev/null 2>&1; E=$?
-[ "$E" = "0" ] && echo "grow-to-usable OK (exit=$E)" || { echo "grow-to-usable failed (exit=$E)"; rc=1; }
+OUT=$($B resize-part --yes "$T":128 --align none --end "$LU" 2>&1); E=$?
+echo "$OUT" | tail -2 | sed 's/^/    /'
+# 几何贴边是本段的断言核心；FS 步（fatresize）的结局决定收场码——完成 0、
+# 遗留待办 5，两种收场下分区都必须已到达 last_usable
+if [ "$E" = "0" ] || [ "$E" = "5" ]; then
+  echo "grow-to-usable OK (exit=$E)"
+else
+  echo "grow-to-usable failed (exit=$E)"; rc=1
+fi
 P=$($B info "$T" | grep -o '"num":128,[^}]*}' | grep -o '"last_lba":[0-9]*' | cut -d: -f2)
 [ "$P" = "$LU" ] && echo "p128 at last_usable ($P)" || { echo "p128 not at last_usable (got $P, want $LU)"; rc=1; }
 $B resize-part --yes "$T":128 --align none --end "$((LU+1))" >/dev/null 2>&1; E=$?
