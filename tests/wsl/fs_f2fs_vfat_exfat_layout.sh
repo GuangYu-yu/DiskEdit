@@ -178,7 +178,7 @@ else
   echo "G WRONG EXIT ($EG, last_lba=$NEWLAST): $(echo "$OUT" | tail -1)"; rc=1
 fi
 # G 的 5 保留了撤销窗口，现场未释放；G2 要验的是另一条命令的后置条件，先按提示释放
-$B abandon "$T" >/dev/null 2>&1 || { echo "G abandon failed"; rc=1; }
+AB=$($B abandon "$T" 2>&1); [ $? = 0 ] || { echo "G abandon failed: $(echo "$AB" | head -1)"; rc=1; }
 # G2/G3：同一个判据，两条命令的后置条件不同——resizefs 只动 FS，首启现场它没有可写的
 # 后置条件（退 0，并说明该层由首次挂载创建）；而类型识别不出（空区域同此）时它什么都没做，
 # 必须拒绝（退 3）并把识别结果带进文案——报成功会让脚本以为空间已可用

@@ -188,8 +188,9 @@ pub(crate) fn record_never_persisted(src: &WriteSource) -> Option<String> {
 /// 返回进入现场（[`ResizeEntry`]）。单分区 resize 与搬移作业共用同一份记录
 pub(crate) fn open_target_resize(
     a: &impl TargetRequest,
+    allow_dm_held: bool,
 ) -> Result<(WriteSource, crate::recovery::ResizeEntry), crate::outcome::RunOutcome> {
-    TransactionManager::begin_resize(a)
+    TransactionManager::begin_resize(a, allow_dm_held)
 }
 
 /// 搬移类命令（`move`）的记录型打开：落点上是本命令的完整记录时按续跑进入。
