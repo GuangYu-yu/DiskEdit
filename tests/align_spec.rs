@@ -136,7 +136,7 @@ fn new_does_not_accept_align() {
         "--align",
         "none",
         "--yes",
-    ]);
+    ]); // cli-surface: refused
     assert_eq!(code, 2, "{err}");
     assert!(err.contains("--align"), "{err}");
     fs::remove_dir_all(&dir).ok();

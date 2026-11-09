@@ -255,11 +255,18 @@ fn read_evidence(record: &Path, current: Option<&SceneIdentity>) -> Evidence {
 }
 
 /// 记录文件的头事实：字节数与头部的 magic、载荷长度，以及按解码结论给出的 CRC 结果。
-/// 能解码成记录或判为他人记录，说明头部与正文的 CRC 都已通过
+/// 能解码成记录或判为他人记录，说明头部与正文的 CRC 都已通过。
+/// 打开条目带 `O_NONBLOCK`——条目可能是 FIFO，`open` 会等写者；带 `O_NOFOLLOW`——
+/// 符号链接不代读，与证据分类的打开语义一致
 #[cfg(target_os = "linux")]
 fn report_header(path: &Path, evidence: &Evidence) {
+    use std::os::unix::fs::OpenOptionsExt;
     let mut head = [0u8; 8];
-    let read = std::fs::File::open(path).and_then(|mut file| std::io::Read::read(&mut file, &mut head));
+    let read = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW)
+        .open(path)
+        .and_then(|mut file| std::io::Read::read(&mut file, &mut head));
     match (&read, std::fs::metadata(path)) {
         (Ok(n), Ok(meta)) => {
             println!("  bytes: {}", meta.len());

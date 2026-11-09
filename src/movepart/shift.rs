@@ -69,6 +69,12 @@ pub fn apply(
         Ok(d) => d,
         Err(f) => return f,
     };
+    // 修复写盘之前先把现场落盘：repair 已是目标写入，它与记录绑定之间不留无记录的
+    // 窗口——那里 abort 会留下"盘已改、无从回滚"的现场，违背"写盘后 abort 必须留下
+    // 可续传现场"的边界配对。执行半程的同值绑定是幂等的
+    if let Err(e) = bind_relocation(src, &d.relocation, d.lvm.as_ref()) {
+        return RunOutcome::no_mutation(format!("the relocation plan was not recorded ({e})"));
+    }
     // 修复虽是写盘，但先于任何目标写入执行；放在 RunOutcome 域是为了保住分类：
     // 其读表阶段尚未写一个字节（NoMutation），一旦进入 io 域就只剩 Partial 一条路
     if let Some(what) = plan.repair.describe() {

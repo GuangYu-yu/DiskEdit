@@ -30,9 +30,9 @@ echo "== --align 取值 =="
 # src/support.rs:262-271（align_unit）：mib|none 之外的值 usage（2）；
 # src/cmd/mod.rs:298-306：add 声明消费 --align，故 add 能把请求送到 align_unit
 # add 的终点由 SIZE 定：2048 扇区 × 512 = 1048576 字节（8192..10239 / 12288..14335 / 49152..51199）
-$B add "$T" 1048576 --start 8192 --align mib >/dev/null 2>&1; exp $? 0 "--align mib 被接受"
-$B add "$T" 1048576 --start 12288 --align none >/dev/null 2>&1; exp $? 0 "--align none 被接受"
-$B add "$T" 1048576 --start 49152 --align banana >/dev/null 2>&1; exp $? 2 "--align banana 非法值拒绝"
+$B add --yes "$T" 1048576 --start 8192 --align mib >/dev/null 2>&1; exp $? 0 "--align mib 被接受"
+$B add --yes "$T" 1048576 --start 12288 --align none >/dev/null 2>&1; exp $? 0 "--align none 被接受"
+$B add --yes "$T" 1048576 --start 49152 --align banana >/dev/null 2>&1; exp $? 2 "--align banana 非法值拒绝"
 
 echo "== 语义 / 互斥拒绝 =="
 # src/cmd/mod.rs:111-114 + src/args.rs:118-125：SIZE 只有位置参数一种给法，--size 不在 resize 的
@@ -41,7 +41,7 @@ $B resize "$T":1 --size 8M 16M >/dev/null 2>&1; exp $? 2 "resize --size 非本�
 # resize-part 不接受 --start（未登记），起点取当前表项；
 # 该夹具里 p1 起点 2048、末端 4095
 # --end 等于当前末端即空操作，按成功报 0
-$B resize-part "$T":1 --end 4095 >/dev/null 2>&1; exp $? 0 "resize-part --end 当前末端（空操作，0）"
+$B resize-part --yes "$T":1 --end 4095 >/dev/null 2>&1; exp $? 0 "resize-part --end 当前末端（空操作，0）"
 
 echo
 echo "==== 参数守卫结束（rc=$rc）===="

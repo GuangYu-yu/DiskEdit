@@ -53,21 +53,21 @@ f1=$(fs_bytes "$VG" lv1) || fail "dumpe2fs lv1 failed"
 { [ "$b1" -eq 16777216 ] && [ "$f1" -eq "$b1" ]; } || fail "setup: lv1=$b1 fs=$f1 expected 16MiB both"
 
 # 多 LV 且无 --lv → 拒绝（分区与 pvresize 已完成，属部分完成）
-if out=$($B resize "${LOOP}:1" +16M --grow-lv 2>&1); then
+if out=$($B resize --yes "${LOOP}:1" +16M --grow-lv 2>&1); then
     fail "multi-LV without --lv must not succeed: $out"
 fi
 b2=$(lv_bytes "$VG" lv1) || fail "blockdev lv1 (after refusal) failed"
 [ "$b2" -eq "$b1" ] || fail "lv1 changed on refusal: $b2 != $b1"
 
 # --lv 指定 lv1 → lv1 +16M，FS 同步真扩
-$B resize "${LOOP}:1" +16M --grow-lv --lv lv1 >/dev/null || fail "--lv lv1 chain failed"
+$B resize --yes "${LOOP}:1" +16M --grow-lv --lv lv1 >/dev/null || fail "--lv lv1 chain failed"
 b3=$(lv_bytes "$VG" lv1) || fail "blockdev lv1 (after --lv) failed"
 f3=$(fs_bytes "$VG" lv1) || fail "dumpe2fs lv1 (after --lv) failed"
 [ "$b3" -eq "$((b1 + 16777216))" ] || fail "lv1 size: $b3 expected $((b1 + 16777216))"
 [ "$f3" -eq "$b3" ] || fail "FS did not grow with LV: fs=$f3 lv=$b3 (lvextend -r broken?)"
 
 # --lv vg/name 形式同样可用
-$B resize "${LOOP}:1" +8M --grow-lv --lv "$VG/lv1" >/dev/null || fail "--lv vg/name failed"
+$B resize --yes "${LOOP}:1" +8M --grow-lv --lv "$VG/lv1" >/dev/null || fail "--lv vg/name failed"
 [ "$(lv_bytes "$VG" lv1)" -eq "$((b3 + 8388608))" ] || fail "vg/name form did not extend"
 
 # 移除 lv2 后单 LV 自动选择。
@@ -76,7 +76,7 @@ $B resize "${LOOP}:1" +8M --grow-lv --lv "$VG/lv1" >/dev/null || fail "--lv vg/n
 lvremove -f "/dev/$VG/lv2" >/dev/null || fail "lvremove lv2 failed"
 # 诊断转储：CI 曾在此处报 candidates "lv1, lv1"（lvs 输出重复行）——留存原始 JSON 以定性
 lvs --reportformat json -o lv_name,lv_path,devices "$VG" 2>&1 | head -5
-$B resize "${LOOP}:1" +4M --grow-lv >/dev/null || fail "single-LV auto-select failed"
+$B resize --yes "${LOOP}:1" +4M --grow-lv >/dev/null || fail "single-LV auto-select failed"
 [ "$(lv_bytes "$VG" lv1)" -eq "$((b3 + 8388608 + 4194304))" ] || fail "auto-select did not extend lv1"
 
 # 收尾顺序：LV 可能仍处活动态，须先 vgchange -an 释放 dm，vgremove 也必须在
@@ -101,7 +101,7 @@ pv_before=$(pvs --noheadings --units b --nosuffix -o pv_size "${LOOP2}p1" 2>/dev
 lo_detach "$LOOP2"; LOOP2=
 [ -n "$pv_before" ] || fail "cannot read pv_size from ${IMG2}:1 before detach"
 # 分区扩 8M → 镜像内 PV 自动 attach/detach 走 pvresize
-$B resize "$IMG2:1" +8M >/dev/null || fail "image PV resize failed"
+$B resize --yes "$IMG2:1" +8M >/dev/null || fail "image PV resize failed"
 losetup -a | grep -F "$IMG2" && fail "loop device leaked after image PV resize"
 # 重新 attach 验证 PV 尺寸确实变大（pvresize 已持久化到 PV 元数据）
 LOOP2=$(lo_attach "$IMG2") || fail "re-losetup $IMG2 failed"
@@ -143,7 +143,7 @@ exp "$?" 3 "活动 LV 持有分区时 mkfs 被拒"
 pvs --noheadings -o pv_name "${LOOP3}p1" >/dev/null 2>&1 || fail "PV destroyed by refused mkfs"
 
 # a) 通用占用规则不得拒绝 LVM 链本身
-out=$($B resize "$IMG3:1" +8M --grow-lv --lv lv1 2>&1); got=$?
+out=$($B resize --yes "$IMG3:1" +8M --grow-lv --lv lv1 2>&1); got=$?
 case "$out" in
     *"held by"*) fail "generic holder gate rejected the LVM chain: $out" ;;
 esac
@@ -195,7 +195,7 @@ vgchange -an "$VG" >/dev/null 2>&1 || fail "vgchange -an failed"
 lo_detach "$LOOP4"; LOOP4=
 [ -z "$(losetup -j "$IMG4" -n -O NAME)" ] || fail "loop for $IMG4 still bound after detach"
 
-out=$($B resize "$IMG4:1" +8M --grow-lv --lv lv1 2>&1); got=$?
+out=$($B resize --yes "$IMG4:1" +8M --grow-lv --lv lv1 2>&1); got=$?
 echo "$out" | sed 's/^/  /'
 exp "$got" 3 "非活动 LV 的 --grow-lv 被拒"
 case "$out" in

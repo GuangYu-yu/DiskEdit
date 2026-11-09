@@ -21,21 +21,21 @@ refresh() { sync; blockdev --rereadpt "$LD" 2>/dev/null; partx -u "$LD" 2>/dev/n
 # 本身指引 partprobe/刷新内核视图，这里照做后重试一次，消除测试自身的时序赌运气
 set4kn() { # $1=label  其余=传给 set 的参数
   local label=$1 out e; shift
-  out=$($B set "$LD":2 "$@" 2>&1); e=$?
+  out=$($B set --yes "$LD":2 "$@" 2>&1); e=$?
   if [ "$e" -ne 0 ] && echo "$out" | grep -q 'stale'; then
     partx -u "$LD" 2>/dev/null; sleep 1
     # set 首次尝试撞 stale 时 DiskEdit 保留记录，裸重试会被 unfinished-op 闸拒绝——
     # 先 abandon 释放现场（set 幂等，表项重写无副作用）。undo/abandon 的目标必须是
     # 启动场景时的 $LD：镜像路径侧身份匹配不到现场（产品跨目标回退缺失，见报告）
     $B abandon "$LD" >/dev/null 2>&1
-    out=$($B set "$LD":2 "$@" 2>&1); e=$?
+    out=$($B set --yes "$LD":2 "$@" 2>&1); e=$?
   fi
   [ "$e" -eq 0 ] && echo "  OK   set $label" || { echo "  BAD  set $label FAILED: $(echo "$out" | tail -1)"; rc=1; }
 }
 
 addk() { # $1=label $2=期望生成的分区节点  其余=传给 add 的参数
   local label=$1 node=$2 out e; shift 2
-  out=$($B add "$LD" "$@" 2>&1); e=$?
+  out=$($B add --yes "$LD" "$@" 2>&1); e=$?
   if [ "$e" -ne 0 ] && echo "$out" | grep -q 'stale'; then
     partx -u "$LD" 2>/dev/null; sleep 1
     if [ -b "$node" ]; then
@@ -45,7 +45,7 @@ addk() { # $1=label $2=期望生成的分区节点  其余=传给 add 的参数
       echo "  OK   add $label（首次已写盘，内核视图滞后，记录已释放）"; return 0
     fi
     record_present "$LD" && $B undo "$LD" --yes >/dev/null 2>&1
-    out=$($B add "$LD" "$@" 2>&1); e=$?
+    out=$($B add --yes "$LD" "$@" 2>&1); e=$?
   fi
   [ "$e" -eq 0 ] && echo "  OK   add $label" || { echo "  BAD  add $label FAILED: $(echo "$out" | tail -1)"; rc=1; return 1; }
 }

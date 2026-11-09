@@ -46,7 +46,7 @@ pt() { $B info "$T" | grep -o '"num":1,[^}]*}' | grep -o '"size_bytes":[0-9]*'; 
 
 echo "===== A: btrfs 扩容，umount 正常 → 后置条件全满足 → 0 ====="
 setup_case
-OUT=$($B resize "$T":1 1500M 2>&1); E=$?
+OUT=$($B resize --yes "$T":1 1500M 2>&1); E=$?
 echo "exit=$E"
 exp "$E" 0 "清理也成功时仍是完整成功"
 case "$OUT" in
@@ -61,7 +61,7 @@ rm -rf "$FAKE"; mkdir -p "$FAKE"
 fake umount '#!/bin/sh
 echo "target is busy" >&2
 exit 32'
-OUT=$($BFK resize "$T":1 1500M 2>&1); E=$?
+OUT=$($BFK resize --yes "$T":1 1500M 2>&1); E=$?
 echo "exit=$E"
 echo "$OUT" | grep -E 'mount cleanup|follow-up|run manually|left behind' | sed 's/^/    /'
 exp "$E" 5 "卸载失败不改写扩容成功，只落一条待办"
@@ -80,7 +80,7 @@ rm -rf "$FAKE"; mkdir -p "$FAKE"
 for t in losetup mount btrfs udevadm blockdev; do
     p=$(command -v "$t") && ln -sf "$p" "$FAKE/$t"
 done
-OUT=$($BFKO resize "$T":1 1500M 2>&1); E=$?
+OUT=$($BFKO resize --yes "$T":1 1500M 2>&1); E=$?
 echo "exit=$E"
 echo "$OUT" | sed 's/^/    /'
 exp "$E" 6 "umount 缺失在写盘前被拒（6）"
@@ -102,7 +102,7 @@ exit 1'
 fake umount '#!/bin/sh
 echo "target is busy" >&2
 exit 32'
-OUT=$($BFK resize "$T":1 1500M 2>&1); E=$?
+OUT=$($BFK resize --yes "$T":1 1500M 2>&1); E=$?
 echo "exit=$E"
 echo "$OUT" | grep -E 'fs grow|mount cleanup|left behind|follow-up' | sed 's/^/    /'
 exp "$E" 5 "核心失败仍按 FS 待办报，清理告警不改写它"
@@ -114,12 +114,12 @@ echo
 echo "===== E: resizefs 扩容 + umount 失败 → PARTIAL(5) + mount cleanup ====="
 setup_case
 # 先只改表把分区放大、FS 仍停在 400M，给 resizefs 留下可扩的那段
-$B resize "$T":1 1500M --no-fs >/dev/null 2>&1
+$B resize --yes "$T":1 1500M --no-fs >/dev/null 2>&1
 rm -rf "$FAKE"; mkdir -p "$FAKE"
 fake umount '#!/bin/sh
 echo "target is busy" >&2
 exit 32'
-OUT=$($BFK resizefs "$T":1 2>&1); E=$?
+OUT=$($BFK resizefs --yes "$T":1 2>&1); E=$?
 echo "exit=$E"
 echo "$OUT" | sed 's/^/    /'
 exp "$E" 5 "FS 扩成功、挂载点未卸：按未完成的后置条件报 5"
@@ -136,7 +136,7 @@ rm -rf "$FAKE"; mkdir -p "$FAKE"
 fake umount '#!/bin/sh
 echo "target is busy" >&2
 exit 32'
-OUT=$($BFK resize "$T" 800M 2>&1); E=$?
+OUT=$($BFK resize --yes "$T" 800M 2>&1); E=$?
 echo "exit=$E"
 echo "$OUT" | sed 's/^/    /'
 exp "$E" 5 "superfloppy 的 FS 扩成功、挂载点未卸：按未完成的后置条件报 5"
