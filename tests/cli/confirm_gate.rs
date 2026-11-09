@@ -112,6 +112,12 @@ fn copy_requires_yes_at_parse_time() {
 
 #[test]
 fn resize_part_requires_yes() {
+    // 夹具经 losetup 真建 ext4，需要 root；无权限的环境跳过
+    // SAFETY: geteuid 无参数、不访问内存，恒成功
+    if unsafe { libc::geteuid() } != 0 {
+        eprintln!("skip: root required to build a real filesystem fixture");
+        return;
+    }
     let (dir, img) = fresh("resizepart", 16 * 1024 * 1024);
     let img_s = img.to_str().unwrap();
     let (c, _, e) = run(&["add", img_s, "8M", "--align", "mib", "--type-guid", LINUX_DATA, "--yes"]);
