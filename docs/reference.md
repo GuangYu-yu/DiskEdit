@@ -194,7 +194,7 @@ diskedit resize <TARGET>[:N] <SIZE> [OPTIONS]
   shrinks.
 
   Examples:
-    diskedit resize /dev/sdb1 +2G
+    diskedit resize /dev/sdb1 +2G --yes
     diskedit resize disk.img 10G --allow-move --chunk 4 --yes
 
   SIZE:

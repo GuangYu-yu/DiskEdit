@@ -34,7 +34,7 @@ pub(crate) const DETAILS: &str = r#"  Resize partition and its filesystem, parti
   shrinks.
 
   Examples:
-    diskedit resize /dev/sdb1 +2G
+    diskedit resize /dev/sdb1 +2G --yes
     diskedit resize disk.img 10G --allow-move --chunk 4 --yes
 
   SIZE:

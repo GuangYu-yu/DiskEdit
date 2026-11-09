@@ -2017,6 +2017,49 @@ mod tests {
         assert_eq!(documented, registered, "the options table and the registry must match exactly");
     }
 
+    /// 文档里的示例要能直接跑通：`Required` 的命令，示例行必须带 `--yes`。
+    /// 用法行（含 `<...>` 占位符）不在此列——那里用 `[OPTIONS]` 概括，不逐旗标展开。
+    #[test]
+    fn documented_examples_pass_the_confirmation_gate() {
+        const DOCS: &[(&str, &str)] = &[
+            ("README.md", include_str!("../README.md")),
+            ("README.zh-CN.md", include_str!("../README.zh-CN.md")),
+            ("docs/interop.md", include_str!("../docs/interop.md")),
+            ("docs/reference.md", include_str!("../docs/reference.md")),
+        ];
+        let mut checked = 0;
+        for (file, text) in DOCS {
+            for (index, line) in text.lines().enumerate() {
+                let line = line.trim();
+                let Some(rest) = line.strip_prefix("diskedit ") else { continue };
+                if line.contains('<') {
+                    continue;
+                }
+                let mut words = rest.split_whitespace();
+                let head = words.next().unwrap_or("");
+                let tail = words.next().unwrap_or("");
+                let group = format!("{head} {tail}");
+                let Some(def) = COMMANDS
+                    .iter()
+                    .find(|c| c.name == head)
+                    .or_else(|| COMMANDS.iter().find(|c| c.name == group.as_str()))
+                else {
+                    continue;
+                };
+                checked += 1;
+                if def.confirmation == Confirmation::Required {
+                    assert!(
+                        line.contains("--yes"),
+                        "{file}:{}: an example for `{}` must pass --yes, or it exits 2: {line}",
+                        index + 1,
+                        def.name
+                    );
+                }
+            }
+        }
+        assert!(checked >= 8, "the scan found only {checked} example lines");
+    }
+
     /// 命令表的自洽：名字互不重复；每条命令都有摘要、用法与详助；第一条位置参数是
     /// 命令的作用对象（目标、记录编号或容器根）；详助由生成器以命令名开头
     #[test]

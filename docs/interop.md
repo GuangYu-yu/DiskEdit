@@ -4,6 +4,8 @@ None of the workflows below are implemented by this tool, and none are exercised
 
 ## qcow2 / vmdk / vdi images
 
+Status: not covered by this repository's tests.
+
 ```bash
 qemu-nbd -c /dev/nbd0 disk.qcow2
 partprobe /dev/nbd0
@@ -18,6 +20,8 @@ qemu-nbd -d /dev/nbd0
 
 ## Exporting a disk as qcow2
 
+Status: not covered by this repository's tests.
+
 ```bash
 qemu-img convert -f raw -O qcow2 disk.img disk.qcow2
 ```
@@ -26,6 +30,8 @@ qemu-img convert -f raw -O qcow2 disk.img disk.qcow2
 - `-n` (`--no-create`) skips creating the target and requires it to exist untouched; `-C` (`--compress`) compresses the output and is normally only meaningful with qcow2. They control different things — pick the one matching the intent instead of relying on version defaults for an existing target.
 
 ## Sparse and preallocated images
+
+Status: not covered by this repository's tests.
 
 ```bash
 qemu-img create -f qcow2 -o preallocation=metadata disk.qcow2 20G
@@ -36,6 +42,8 @@ qemu-img convert -f raw -O qcow2 disk.img disk.qcow2
 - When a raw image is written by other means, whether unallocated zeroes are materialised is a question about the recovery record's size, not about the image's sparseness policy.
 
 ## Remote images and remote disks
+
+Status: not covered by this repository's tests; the lock behaviour below has to be checked in the deployment.
 
 ```bash
 rbd map pool/image
