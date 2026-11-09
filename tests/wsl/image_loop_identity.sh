@@ -146,8 +146,9 @@ if command -v dmsetup >/dev/null 2>&1 && dmsetup version >/dev/null 2>&1; then
             else
                 echo "SKIP: dmsetup create（整盘 loop）不可用"
             fi
-            # 解除持有后改走扩容：p1 是裸分区，FS 步无事可做，resize-part 只动表
-            "$B" resize-part --yes "$T2:1" --grow-to-end >/dev/null 2>&1
+            # 解除持有后改走扩容：p1 是裸分区，未识别的 FS 步在写表前拒绝（6），
+            # resize 的 --no-fs 是只改表的登记入口；占用闸与 resize-part 共用同一份
+            "$B" resize --yes "$T2:1" grow --no-fs >/dev/null 2>&1
             exp "$?" 0 "解除持有后放行（阳性对照）"
         else
             echo "SKIP: dmsetup create 不可用"
@@ -280,7 +281,8 @@ PY
         truncate -s 64M "$T5"
         "$B" new "$T5" --yes >/dev/null 2>&1 || { echo "BAD  new 失败"; exit 1; }
         "$B" add "$T5" 32M --align mib --yes >/dev/null 2>&1 || { echo "BAD  add 失败"; exit 1; }
-        "$B" resize-part --yes "$T5:1" --grow-to-end >/dev/null 2>&1
+        # 同段 1：裸分区扩容用 resize --no-fs（未识别 FS 不放行，--no-fs 只改表）
+        "$B" resize --yes "$T5:1" grow --no-fs >/dev/null 2>&1
         exp "$?" 0 "同一窗口内正常写盘不被误拒"
 
         T6=$(mktemp "$WSL_ROOT/loopid-race2-XXXXXX.img")
@@ -369,8 +371,9 @@ else
             dmsetup remove "$DMNAME" >/dev/null 2>&1
             DMNAME=
             sleep 0.3
-            # 阳性对照走改表命令：new 只对无表目标放行，T9 已有表会因表扇区已有数据被拒
-            "$B" resize-part --yes "$T9:1" --grow-to-end >/dev/null 2>&1
+            # 阳性对照走改表命令：new 只对无表目标放行，T9 已有表会因表扇区已有数据被拒；
+            # 裸分区扩容用 resize --no-fs（未识别 FS 不放行，--no-fs 只改表）
+            "$B" resize --yes "$T9:1" grow --no-fs >/dev/null 2>&1
             exp "$?" 0 "解除持有后改表放行（阳性对照）"
         else
             echo "SKIP: dmsetup create 不可用"
