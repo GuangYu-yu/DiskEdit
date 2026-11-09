@@ -45,7 +45,7 @@ lo_detach "$LD"
 OUT=$($B resize --yes "$T":1 900M 2>&1); E=$?
 echo "resize exit=$E : $(echo "$OUT" | tail -1)"
 [ "$E" = "5" ] && echo "B PARTIAL OK（契约：表已改、FS 未扩）" || { echo "B WRONG EXIT ($E)"; rc=1; }
-echo "$OUT" | grep -q "fatresize" && echo "B REMEDY HINT OK" || echo "B NO HINT"
+echo "$OUT" | grep -q "fatresize" && echo "B REMEDY HINT OK" || { echo "B NO HINT（部分完成必须给出补救命令）"; rc=1; }
 echo "B 分区表: $($B info "$T" | grep -o '"num":1,[^}]*}' | grep -o '"size_bytes":[0-9]*')（期望 943718400）"
 LD=$(lo_attach "$T")
 lo_waitpart "${LD}p1" || { echo "p1 part node not ready"; rc=1; lo_detach "$LD"; }

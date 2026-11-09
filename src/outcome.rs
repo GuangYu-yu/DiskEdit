@@ -26,7 +26,8 @@ pub const EXIT_USAGE: u8 = 2;
 pub const EXIT_REFUSED: u8 = 3;
 /// 操作失败，且确认没有产生持久化修改（durable boundary 之前的 I/O/环境故障）
 pub const EXIT_NO_MUTATION: u8 = 4;
-/// 部分完成或恢复待处理：写盘已发生但后置条件未全满足，或写后失败无法断言
+/// 写盘已发生，但结论不是整体成功：部分完成、已应用而后续步骤待办，或表已写而内核
+/// 视图未同步（[`KernelSync::Stale`]）。补救指引随结果打印
 pub const EXIT_PARTIAL: u8 = 5;
 /// 平台或能力不支持：工具缺失、平台无对应 API、目标类型不在支持范围
 pub const EXIT_UNSUPPORTED: u8 = 6;

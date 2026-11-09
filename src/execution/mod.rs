@@ -492,12 +492,14 @@ fn prepare_steps<'a>(
         None
     };
 
-    // 记录与本次计划的搬移形状必须一致：按别人的条目数或块大小续跑会把块进度落到错误的位置
-    if let Some(reloc) = record {
-        let planned = raw
-            .iter()
-            .filter(|s| matches!(s, PlanStep::Relocate { .. }))
-            .count();
+    // 记录与本次计划的搬移形状必须一致：按别人的条目数或块大小续跑会把块进度落到错误的位置。
+    // 只有带搬移步骤的计划才是记录里那份作业本身；repair 一类的表子计划在记录绑定之后执行，
+    // 它没有块布局，块进度也就不属于它——拿它和记录的条目数比较只会把"还没开始搬"误判成"搬丢了"
+    let planned = raw
+        .iter()
+        .filter(|s| matches!(s, PlanStep::Relocate { .. }))
+        .count();
+    if let Some(reloc) = record.filter(|_| planned > 0) {
         let chunk_matches = match chunk {
             Some(chunk) => chunk == reloc.chunk_bytes,
             None => true,

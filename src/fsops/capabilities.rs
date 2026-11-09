@@ -16,6 +16,11 @@ pub(crate) enum ToolSupport {
     Unsupported(&'static str),
 }
 
+/// 扩容做不了时唯一可行的替代：只改分区表。措辞指向 `resize --no-fs` 而不是裸
+/// `--no-fs`——同一条拒绝也会从 `resize-part` / `resizefs` 这类不声明该选项的命令面
+/// 报出，指向它们不认识的开关就是错误指引。所有扩容拒绝文案引用这一句
+pub(crate) const CHANGE_PARTITION_ONLY: &str = "change the partition only with `resize --no-fs`";
+
 pub(crate) fn grow_support(fstype: ContentKind) -> ToolSupport {
     use ToolSupport::*;
     match fstype {
@@ -30,7 +35,9 @@ pub(crate) fn grow_support(fstype: ContentKind) -> ToolSupport {
         ContentKind::Swap => Tools(&["mkswap"]),
         ContentKind::Lvm2Pv => NotApplicable,
         ContentKind::Filesystem(_) | ContentKind::Unknown => {
-            Unsupported("not wired to a tool — pass --no-fs to change the partition only")
+            // 出路在渲染点追加（[`CHANGE_PARTITION_ONLY`]）：本层不知道调用它的
+            // 命令面是否真的声明了 --no-fs
+            Unsupported("not wired to a tool")
         }
     }
 }
@@ -53,7 +60,7 @@ pub(crate) fn shrink_support(fstype: Option<ContentKind>) -> ToolSupport {
             "filesystem type unrecognized — shrinking the partition without resizing the FS first would corrupt data",
         ),
         // 其余认得却不会缩的类型：唯一安全路径是先由该 FS 自己的工具缩。
-        // 提示不能是 grow 的 "pass --no-fs"：--no-fs 与缩容互斥，那样等于给出错误指引
+        // 提示不能给出扩容侧的 `--no-fs` 出路：--no-fs 与缩容互斥，那样等于给出错误指引
         _ => Unsupported(
             "not wired to a tool; the filesystem must be shrunk by its own tool first, and --no-fs cannot stand in (the new partition end would cut into filesystem metadata)",
         ),

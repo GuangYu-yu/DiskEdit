@@ -209,10 +209,12 @@ fn grow_to_end() {
     let (c, _) = run(&["resize-part", &format!("{img_s}:1"), "--end", "6000", "--grow-to-end", "--yes"]);
     assert_eq!(c, 2, "--end + --grow-to-end must refuse as a usage error");
 
-    // grow-to-end：分区里没有 FS，缺少 FS 步骤时在写表之前就拒绝；提示不得指向 resize-part 不接受的选项
+    // grow-to-end：分区里没有 FS，缺少 FS 步骤时在写表之前就拒绝；出路必须点名
+    // 真正能只改分区表的命令，而不是让用户给 resize-part 加一个它不接受的开关
     let (c, e) = run(&["resize-part", &format!("{img_s}:1"), "--grow-to-end", "--yes"]);
     assert_eq!(c, 6, "an unidentifiable region must be refused: {e}");
-    assert!(!e.contains("--no-fs"), "the hint must not point at an option resize-part does not accept: {e}");
+    assert!(e.contains("resize --no-fs"), "the hint must name the command that can change the partition alone: {e}");
+    assert!(!e.contains("pass --no-fs"), "the hint must not tell the user to pass --no-fs to this command: {e}");
 
     // resize-part 不登记 --no-fs：收到即用法错误，不进入任何写入
     let (c, e) = run(&["resize-part", &format!("{img_s}:1"), "--grow-to-end", "--no-fs", "--yes"]); // cli-surface: refused
