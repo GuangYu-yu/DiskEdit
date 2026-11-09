@@ -12,7 +12,7 @@ English | [简体中文](README.zh-CN.md)
 
 ## Requirements
 
-- **Linux.** Writing is supported on Linux only. On any other platform every command is refused at dispatch with exit code 6, before any target byte, lock, recovery record or log is written.
+- **Linux.** Writing is supported on Linux only. Elsewhere the dispatch gate refuses any command whose primitives are missing, with exit code 6 and nothing written; on an image file `info` and `plan` still run read-only while evidence and write commands are refused — [docs/capability-matrix.md](docs/capability-matrix.md) has the per-command answer.
 - **Rust** with edition 2024 support (1.85 or newer) to build.
 - **root** for filesystem-layer commands: they map the partition through `losetup`. Table writes need root only for block devices, never for image files.
 
@@ -49,7 +49,7 @@ More examples, as printed by `diskedit help`:
 ```bash
 diskedit info /dev/sdb
 diskedit plan /dev/sdb:2 --grow
-diskedit resize /dev/sdb:1 +2G
+diskedit resize /dev/sdb:1 +2G --yes
 diskedit resize disk.img grow --allow-move --chunk 4 --yes
 diskedit undo /dev/sdb --yes
 ```
@@ -75,7 +75,7 @@ Identification (`info`): ext, xfs, btrfs, f2fs, ntfs, vfat, exfat, swap, squashf
 | lvm2_pv | — | ✓ | — | — | — | — |
 
 - `check` is read-only in every case (`e2fsck -n`, `ntfsfix -n`, `xfs_repair -n`, `btrfs check`, `fsck.vfat -n`, `fsck.exfat -n`, `fsck.f2fs`); a non-zero tool exit is a failed check (exit code 3).
-- `resize` only grows. Shrinking goes `resizefs` (filesystem first) then `resize-part` (partition boundary); if the filesystem cannot shrink, the table is left alone.
+- `resize` only grows. Shrinking is `resize-part --end`: it shrinks the filesystem offline first, then moves the boundary. `resizefs` only grows, except the online btrfs form, which can also shrink. If the filesystem cannot shrink, the table is left alone.
 - `mkfs` refuses an LVM PV; use `pvcreate(8)` / `wipefs(8)`.
 - `ntfs` UUID can only be regenerated (`ntfslabel --new-serial`), not set; that serial is not the Windows volume UUID.
 - `swap` grows by rebuilding with `mkswap` after the entry is resized; UUID, PARTUUID and partition number are kept.
