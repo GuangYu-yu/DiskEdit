@@ -79,6 +79,8 @@ struct Fixture {
     commit: u8,
     digest: [u8; 32],
     restore_blocked: bool,
+    /// 一条搬移计划的游标：`(entry_index, chunks_in_entry)`；`None` 表示没有搬移计划
+    relocation: Option<(u32, u64)>,
 }
 
 impl Fixture {
@@ -90,6 +92,7 @@ impl Fixture {
             commit: 0,
             digest: [0u8; 32],
             restore_blocked: false,
+            relocation: None,
         }
     }
 
@@ -105,7 +108,25 @@ impl Fixture {
         out.push(0); // fs phase
         out.push(0); // old range absent
         out.push(0); // lvm post absent
-        out.push(0); // relocation absent
+        match self.relocation {
+            None => out.push(0),
+            Some((entry_index, chunks_in_entry)) => {
+                out.push(1);
+                out.extend_from_slice(&1u32.to_le_bytes()); // 一条搬移
+                out.extend_from_slice(&1u32.to_le_bytes()); // 分区号
+                out.extend_from_slice(&2048u64.to_le_bytes()); // 源起点
+                out.extend_from_slice(&2048u64.to_le_bytes()); // 长度
+                out.extend_from_slice(&2048i64.to_le_bytes()); // 位移
+                out.push(0); // 不是 swap
+                out.extend_from_slice(&entry_index.to_le_bytes());
+                out.extend_from_slice(&chunks_in_entry.to_le_bytes());
+                out.extend_from_slice(&512u64.to_le_bytes()); // chunk 字节
+                out.push(0); // TailPacked
+                out.extend_from_slice(&0u32.to_le_bytes()); // 无扩容步
+                out.extend_from_slice(&self.size.to_le_bytes());
+                out.extend_from_slice(&512u64.to_le_bytes()); // 扇区大小
+            }
+        }
         out.push(3); // RecoveryAction::InspectOnly
         out.extend_from_slice(&0u64.to_le_bytes());
         out.push(self.commit);
@@ -229,4 +250,49 @@ fn a_blocked_record_leaves_abandon_as_the_only_exit() {
     assert_eq!(code, 0, "{out}{err}");
     assert!(!record_path(&image).exists());
     assert!(sidecar(&image).join(".abandoned").exists());
+}
+
+#[test]
+fn an_unfinished_relocation_is_not_settled_as_already_reverted() {
+    // 表区没有预映像、搬移已越过屏障：记录里只剩进度。`AlreadyReverted` 会把这份
+    // 唯一副本当终态删掉，故必须拒绝并保留现场。
+    let dir = temp_dir("reloc_progress");
+    let image = image_with(&dir, 8 * 1024 * 1024);
+    let mut fixture = Fixture::image(8 * 1024 * 1024, file_id(&image), 5);
+    fixture.relocation = Some((0, 0));
+    fixture.restore_blocked = true;
+    let bytes = fixture.bytes();
+    write_record(&image, &bytes);
+
+    let (code, out, err) = run(&["undo", image.to_str().unwrap(), "--yes"]);
+    assert_eq!(code, 3, "{out}{err}");
+    assert!(err.contains("re-run `diskedit move`"), "{err}");
+    assert_eq!(
+        fs::read(record_path(&image)).unwrap(),
+        bytes,
+        "the only copy of the relocation progress must survive the refusal"
+    );
+}
+
+#[test]
+fn a_written_table_without_a_preimage_is_not_settled_as_already_reverted() {
+    // 全部条目已提交、表区预映像还没落：游标已在终点，但盘上数据已搬走、表项仍是旧位。
+    // 阶段是 `TableWritten`，按阶段拒绝并把后续步骤指回原命令。
+    let dir = temp_dir("table_written_no_preimage");
+    let image = image_with(&dir, 8 * 1024 * 1024);
+    let mut fixture = Fixture::image(8 * 1024 * 1024, file_id(&image), 5);
+    fixture.relocation = Some((1, 0));
+    fixture.restore_blocked = true;
+    let bytes = fixture.bytes();
+    write_record(&image, &bytes);
+
+    let (code, out, err) = run(&["undo", image.to_str().unwrap(), "--yes"]);
+    assert_eq!(code, 3, "{out}{err}");
+    assert!(err.contains("table write is already on the target"), "{err}");
+    assert!(err.contains("re-run `diskedit move`"), "{err}");
+    assert_eq!(
+        fs::read(record_path(&image)).unwrap(),
+        bytes,
+        "the record is the only account of the relocation progress and must survive"
+    );
 }

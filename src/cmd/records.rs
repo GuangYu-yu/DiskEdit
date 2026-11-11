@@ -237,7 +237,7 @@ fn probe_at(path: &Path, current: Option<&crate::recovery::SceneIdentity>) -> Ev
             Some(current) => Evidence::classify(&bytes, current),
             None => Evidence::classify_structure(&bytes),
         },
-        Err(EvidenceIo::Io(e)) => Evidence::unreadable(Cause::Io(e.to_string())),
+        Err(EvidenceIo::Io(e) | EvidenceIo::RenamedNotDurable(e)) => Evidence::unreadable(Cause::Io(e.to_string())),
         Err(EvidenceIo::Unsupported(reason)) => Evidence::unreadable(Cause::Unsupported(reason)),
     }
 }

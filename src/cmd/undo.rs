@@ -95,20 +95,28 @@ fn undo_record(src: &mut WriteSource) -> Option<u8> {
                 )
             }
             Err(e) => {
-                let msg = format!(
-                    "the recorded operation had already committed, but its recovery record could not be released ({e}); \
-                     the record is left in place"
-                );
                 // 回读不符是「要删的不是这份记录」的拒绝，不是收尾故障：本次未写目标字节，落 3
                 if matches!(e, crate::recovery::RecordJournalError::ReadbackMismatch(_)) {
+                    let msg = format!(
+                        "the recorded operation had already committed, but its recovery record could not be \
+                         released ({e}); the record is left in place"
+                    );
                     let o = RunOutcome::refused(format!("{msg} — release it with `diskedit abandon`"));
                     // 本分支返回裸退出码，不经过调用方的 report：拒绝理由在这里自己打印，
                     // 否则命令退 3 而 stdout/stderr 全空，用户无从知道为什么
                     return Some(o.report_final().exit_code());
-                } else {
-                    let o = RunOutcome::partial_postcondition(msg, Vec::new());
-                    return Some(o.report_final().exit_code());
                 }
+                // 删除已发生、目录 fsync 未确认：不陈述"记录还在"，也不指向必然的 `abandon`
+                let msg = if e.record_still_on_disk() {
+                    format!(
+                        "the recorded operation had already committed, but its recovery record could not be \
+                         released ({e}); the record is left in place"
+                    )
+                } else {
+                    format!("the recorded operation had already committed — {e}")
+                };
+                let o = RunOutcome::partial_postcondition(msg, Vec::new());
+                return Some(o.report_final().exit_code());
             }
         };
         return Some(outcome.exit_code());
@@ -118,6 +126,7 @@ fn undo_record(src: &mut WriteSource) -> Option<u8> {
     // 盘面已回到原文时不签发，走零写入收尾
     match crate::recovery::RecoveryEngine::admit_rollback(&*src, record, &path) {
         crate::recovery::Admission::AlreadyReverted(record, path) => {
+            let restore_empty = record.restore.is_empty();
             let mut outcome = crate::outcome::RunOutcome::applied_with(Vec::new());
             if let Err(e) = crate::recovery::settle_companion(&path, &record, true) {
                 if matches!(e, crate::recovery::RecordJournalError::ReadbackMismatch(_)) {
@@ -126,16 +135,26 @@ fn undo_record(src: &mut WriteSource) -> Option<u8> {
                          the record is left in place — release it with `diskedit abandon`"
                     )));
                 }
-                outcome = outcome.degrade_partial(format!(
-                    "the recovery record could not be released ({e}); release it with `diskedit abandon`"
-                ));
+                // 目录项已移除、持久化未确认：只说这一事实，不承诺记录还在
+                let msg = if e.record_still_on_disk() {
+                    format!("the recovery record could not be released ({e}); release it with `diskedit abandon`")
+                } else {
+                    format!("{e}")
+                };
+                outcome = outcome.degrade_partial(msg);
             }
             let record = src.record_journal().map(|j| j.record());
             let outcome = crate::support::settle_layout(outcome, src, record);
             if outcome.is_complete() {
-                println!(
-                    "the target already held the recorded pre-images — nothing was written back (verify with: diskedit info)"
-                );
+                if restore_empty {
+                    println!(
+                        "the recovery record held no written ranges — nothing was written back (verify with: diskedit info)"
+                    );
+                } else {
+                    println!(
+                        "the target already held the recorded pre-images — nothing was written back (verify with: diskedit info)"
+                    );
+                }
             }
             Some(outcome.exit_code())
         }
@@ -205,6 +224,7 @@ fn undo_record_prefix(
             path.display()
         )));
     }
+    crate::recovery::validate_record_capacity(src, &prefix.record, path);
     crate::recovery::validate_record_ranges(src, &prefix.record.restore, path);
     if let Err(f) = crate::recovery::verify_disk_identity(prefix.record.disk_guid, src, "the recovery record") {
         bail_fail(f);

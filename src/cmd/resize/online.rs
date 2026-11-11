@@ -131,19 +131,32 @@ pub(crate) fn refuse_online_move_flags(a: &ResizeRequest) {
     }
 }
 
+/// 锁下尺寸判定：入参只有 `want` 与锁下重读的 `cur`。缩容走 `resize` 唯一的缩容出口
+/// （`refuse_shrink`），等于现状原样返回——下游按"分区不动"收成 nothing to do（0），
+/// 大于现状照目标长度放行。
+///
+/// 属性只为非 Linux 的正式构建不带一个无人调用的条目：判定本身与平台无关，
+/// 各平台的测试走同一份实现
+#[cfg(any(target_os = "linux", test))]
+fn online_size_gate(want: u64, cur: u64) -> Result<Option<u64>, crate::outcome::RunOutcome> {
+    if want < cur {
+        return Err(super::refuse_shrink());
+    }
+    Ok(Some(want))
+}
+
 /// 在线目标长度的公共骨架：锁下取事实（扇区大小、当前字节、右侧空闲扇区、表自身的长度
 /// 上界）→ 共享的 `resolve_size_request` → grow/shrink 分支。grow 零空闲时拒绝：本次
 /// grow 不会产生分区扩容（表自身的上界已到顶，或下一分区紧贴右侧），在线路径又不能搬移
 /// 挡路分区——与离线路径同口径。FS 是否已填满现分区不是这里的判据：只扩 FS 走
 /// `resizefs <mountpoint>`。绝对尺寸同样按该上界拒绝——可用区是表自身的闭区间，越界目标没有
 /// 交给外部工具兜底的理由。上界（可用区端点到分区起点的扇区数）由各表自己的几何给出，
-/// MBR 无此概念（其容量由 online 层的 `check_new_range` 把关）。PV 收缩在上游
-/// `check_pv_intent` 已拒（online 层还有 grow-only 闸兜底），shrink 的下取整仅在锁窗口内
-/// 分区被第三方扩大的竞态下可达——与离线路径的字节→LBA 隐式下取整同规则。两族表必须
+/// MBR 无此概念（其容量由 online 层的 `check_new_range` 把关）。缩容一律拒绝（与离线
+/// 路径同一出口）：锁前快照通过的方向在锁窗口内可能被第三方改写反转，判据只能用锁下
+/// 重读的 `cur`；`want` 的下取整与离线路径同规则。两族表必须
 /// 同语义，差异只在"事实怎么取"，故分支只此一份
 #[cfg(target_os = "linux")]
 pub(crate) fn online_size<'a>(
-    yes: bool,
     size: SizeSpec,
     is_pv: bool,
     facts: impl FnOnce(&FileSource) -> Result<(u64, u64, u64, Option<u64>), RunOutcome> + 'a,
@@ -183,15 +196,33 @@ pub(crate) fn online_size<'a>(
                     "size {want} exceeds the usable range — the partition would end past the last usable block"
                 )));
             }
-            // 在线缩小同样截短分区与文件系统，`undo` 找不回被截掉的字节；
-            // 这一判据在锁下、任何 sfdisk/FS 工具启动之前
-            if want < cur {
-                crate::cmd::confirm::gate(yes, crate::cmd::confirm::Impact {
-                    shrinking: true,
-                    ..Default::default()
-                });
-            }
-            Ok(Some(want))
+            // 缩容会截短分区与文件系统，`undo` 找不回被截掉的字节：锁下重读的 `cur`
+            // 是唯一权威，与离线路径同一出口。该判据在任何 sfdisk/FS 工具启动之前
+            online_size_gate(want, cur)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::online_size_gate;
+    use crate::outcome::{EXIT_REFUSED, RunOutcome};
+
+    /// 锁下判定的三种情形：缩容走 `refuse_shrink`（不是确认门），等于现状原样返回
+    /// （`resize` 的在线路径把它收成 nothing to do，0），大于现状放行
+    #[test]
+    fn lock_under_size_gate_refuses_shrink_and_passes_equal_or_grow() {
+        let refused = online_size_gate(4096, 8192).unwrap_err();
+        match (refused, super::super::refuse_shrink()) {
+            (RunOutcome::Refused(got), RunOutcome::Refused(want)) => assert_eq!(got, want),
+            (got, _) => panic!("a smaller target must be refused: {got:?}"),
+        }
+        assert_eq!(online_size_gate(4096, 8192).unwrap_err().exit_code(), EXIT_REFUSED);
+        assert_eq!(
+            online_size_gate(8192, 8192).unwrap(),
+            Some(8192),
+            "a target equal to the current size leaves the partition in place"
+        );
+        assert_eq!(online_size_gate(16384, 8192).unwrap(), Some(16384));
     }
 }

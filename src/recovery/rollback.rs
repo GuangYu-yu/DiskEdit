@@ -5,7 +5,7 @@
 //! 把记录里的原字节逆序写回并释放记录。两个凭据都不可克隆：构造字段私有，
 //! crate 内除签发点外拿不到，回放的每一步写入因此都处在同一套核对之下。
 
-use super::{OpKind, Record, RestoreEntry, settle_companion};
+use super::{OpKind, Record, RestoreEntry, Stage, settle_companion};
 use crate::dev::{FileSource, WriteSource};
 use crate::outcome::RunOutcome;
 use crate::support::bail_fail;
@@ -50,8 +50,9 @@ pub(crate) fn table_only_replay(op: OpKind) -> bool {
     matches!(op, OpKind::Move | OpKind::Copy)
 }
 
-/// 准入结论。`Proceed` 携带写入许可；`AlreadyReverted` 表示盘面已全部回到原文，
-/// 没有需要写回的字节，把记录与落点交还调用方做零写入收尾
+/// 准入结论。`Proceed` 携带写入许可；`AlreadyReverted` 表示没有需要写回的字节
+/// （记录里的区间都已回到原文，或记录里没有可回写区间且阶段仍停在初始态），把记录与落点
+/// 交还调用方做零写入收尾
 pub(crate) enum Admission {
     Proceed(ProvisionalRecord, RollbackPermit),
     AlreadyReverted(Record, std::path::PathBuf),
@@ -76,6 +77,7 @@ impl crate::recovery::RecoveryEngine {
                 path.display()
             )));
         }
+        validate_record_capacity(src, &record, path);
         validate_record_ranges(src, &record.restore, path);
         if let Err(f) = verify_disk_identity(record.disk_guid, src, "the recovery record") {
             bail_fail(f);
@@ -86,9 +88,65 @@ impl crate::recovery::RecoveryEngine {
             Err(f) => bail_fail(f),
         };
         if complete {
+            // `restore` 只覆盖表区：它为空只说明表区没记过原文，推不出作业没开始。
+            // 记录里还留着什么按派生阶段判：阶段越过 `Planned` 时剩下的就是进度
+            // （`move` 数据区的唯一副本），签发 `AlreadyReverted` 会把它当终态删掉
+            let stage = record.derive_stage().unwrap_or_else(|f| bail_fail(f));
+            // 没有搬移步的操作派生不出 `Planned`（`new` / `add` / `copy` 等）：
+            // 进度全零且没有写事实时，记录自身就证明还没动手，仍是零写入收尾
+            let untouched = record.relocation.is_none()
+                && record.progress.completed_steps == 0
+                && record.progress.transfer_cursor == 0
+                && !record.dirty();
+            if record.restore.is_empty() && stage != Stage::Planned && !untouched {
+                bail_fail(RunOutcome::refused(format!(
+                    "the recovery record at {} holds no table pre-image, and an empty pre-image set only says \
+                     the table was not recorded, not that the operation is already rolled back; {}",
+                    path.display(),
+                    unfinished_stage_remedy(&record, stage)
+                )));
+            }
             return Admission::AlreadyReverted(record, path.to_path_buf());
         }
         Admission::Proceed(ProvisionalRecord { record, path: path.to_path_buf() }, RollbackPermit { _seal: Seal })
+    }
+}
+
+/// 记录里还留着进度时，按派生阶段指向该走的路：续跑、表已提交后的收尾，或释放现场。
+/// 游标到终点不等于作业走完——表已提交与收尾未做是两份不同的事实
+fn unfinished_stage_remedy(record: &Record, stage: Stage) -> String {
+    let command = record.op.command_name();
+    match stage {
+        Stage::Relocating { entry, .. } => format!(
+            "the recorded relocation stopped at entry {entry}; re-run `diskedit {command}` with the same \
+             request to continue it, or release the record with `diskedit abandon` only if it is stale"
+        ),
+        Stage::Relocated => format!(
+            "the data for the current relocation entry is already copied and its cursor was not advanced, so \
+             the recorded progress cannot be discarded; re-run `diskedit {command}` with the same request to \
+             continue it, or release the record with `diskedit abandon` only if it is stale"
+        ),
+        Stage::TableWritten => format!(
+            "the partition table write is already on the target and the steps after it are still pending; \
+             re-run `diskedit {command}` with the same request to finish them (`diskedit inspect` shows what \
+             is left), or release the record with `diskedit abandon` only if it is stale"
+        ),
+        Stage::Finishing => format!(
+            "the partition step is done and the finishing steps are still pending; re-run `diskedit {command}` \
+             with the same request to finish them, or release the record with `diskedit abandon` only if it is \
+             stale"
+        ),
+        // 字段不足以判定阶段：不代做动作，只指路。有续跑路径的用原命令完成；
+        // `copy` 明确不续跑，只能释放现场后整条重跑
+        _ if record.op.resumable() => format!(
+            "the record's fields do not decide how far the operation got; inspect it with `diskedit inspect`, \
+             then re-run `diskedit {command}` with the same request to finish it, or release the record with \
+             `diskedit abandon` only if it is stale"
+        ),
+        _ => format!(
+            "`{command}` has no resume path and `undo` cannot remove the bytes it already wrote; release the \
+             record with `diskedit abandon`, then run `diskedit {command}` again"
+        ),
     }
 }
 
@@ -107,7 +165,10 @@ pub(crate) fn execute_rollback(
     replay_record(src, &record.restore, &path);
     let mut outcome = RunOutcome::applied_with(Vec::new());
     if let Err(e) = settle_companion(&path, &record, true) {
-        if crate::outcome::target_may_have_been_written() {
+        if !e.record_still_on_disk() {
+            // 目录项已移除、持久化未确认：只陈述这一事实，不承诺记录还在
+            outcome = outcome.degrade_partial(format!("{e}"));
+        } else if crate::outcome::target_may_have_been_written() {
             outcome = outcome.degrade_partial(format!(
                 "the rollback is complete but the recovery record could not be released ({e}); \
                  the record is left in place — release it with `diskedit abandon`"
@@ -218,6 +279,23 @@ fn verify_copy_source(src: &FileSource, record: &Record, path: &std::path::Path)
             "source partition #{} no longer holds the bytes recorded when the copy ran (digest differs) — the \
              recorded bytes are not written back; {ROLLBACK_STUCK_REMEDY}",
             source.partition
+        )));
+    }
+}
+
+/// 记录里的目标容量与当前容量不符即拒绝：回放按记录里的 LBA 与字节数写回，
+/// 容量变了说明这份记录描述的不是当前这张盘。`None` 是没有记下容量，不参与判定
+pub(crate) fn validate_record_capacity(src: &WriteSource, record: &Record, path: &std::path::Path) {
+    let Some(recorded) = record.target.size() else {
+        return;
+    };
+    if recorded != src.size {
+        bail_fail(RunOutcome::refused(format!(
+            "the target size changed since the recovery record was written (recorded {recorded} byte(s), \
+             current {} byte(s)) — the recorded bytes are not written back; release the record at {} with \
+             `diskedit abandon`",
+            src.size,
+            path.display()
         )));
     }
 }

@@ -241,7 +241,7 @@ fn record_table_preimages(
         return Ok(());
     };
     journal.record_spans(spans).map_err(|e| {
-        RunOutcome::no_mutation(format!("the pre-image of the table regions was not recorded: {e}"))
+        RunOutcome::no_mutation(e.record_failure("the pre-image of the table regions"))
     })
 }
 
@@ -729,7 +729,7 @@ fn resize_part_via_plan_unreconciled(
     // 盘上只剩新区间，再想记搬移前形状就已经没有了
     if let Some(journal) = src.record_journal_mut() {
         if let Err(e) = journal.bind_old_range((p.old_start, p.old_end)) {
-            return RunOutcome::no_mutation(format!("the pre-commit range was not recorded ({e})"));
+            return RunOutcome::no_mutation(e.record_failure("the pre-commit range"));
         }
         // 起点变更的搬移与 move 同构：条目表绑进记录——执行器的游标恢复、续跑一致性
         // 校验与「已提交条目整组跳过」共用同一套机制。已提交态与纯扩缩不绑
@@ -771,18 +771,14 @@ fn resize_part_via_plan_unreconciled(
                 reloc = recorded.clone();
             }
             if let Err(e) = journal.bind_relocation(reloc, None) {
-                return RunOutcome::no_mutation(format!(
-                    "the relocation plan was not recorded ({e})"
-                ));
+                return RunOutcome::no_mutation(e.bind_failure());
             }
         }
         if journal.op() == crate::recovery::OpKind::Resize
             && let Some(f) = p.lvm.as_ref().filter(|f| f.lv_path.is_some())
             && let Err(e) = journal.record_lvm_post(f.to_record())
         {
-            return RunOutcome::no_mutation(format!(
-                "the LVM finish baseline was not recorded ({e})"
-            ));
+            return RunOutcome::no_mutation(e.record_failure("the LVM finish baseline"));
         }
     }
     // 探测（identify/fs_min_bytes）可能耗时良久，此间的盘上表不再等于决策依据。
@@ -830,6 +826,20 @@ pub(crate) fn prepare_resize_part(
     defer_lvm: bool,
     log: &mut dyn FnMut(&str),
 ) -> Result<PlannedResizePart, RunOutcome> {
+    // F5：记录已绑搬移计划、本次读到的备份头不可读、请求终点越过主头
+    // `last_usable_lba`。三条同时成立才拒绝——备份头坏而主头上界够用时续跑合法。
+    // 本函数只读，且位于 bind 与 repair 之前，故此刻确实一个目标字节都没写
+    let relocation_bound = src.record_journal.as_ref().is_some_and(|j| j.relocation().is_some());
+    if crate::gpt_policy::resume_boundary_unavailable(g, relocation_bound, new_end) {
+        return Err(RunOutcome::refused(format!(
+            "the recovery record carries a relocation plan, the requested end LBA {new_end} is past the \
+             primary header's last usable LBA {}, and the backup header cannot be read — the boundary facts \
+             needed to resume are unavailable; this run wrote no bytes and the disk is where the previous job \
+             stopped. Check the record with `diskedit inspect`, then release it with `diskedit abandon`; a \
+             fresh run records the job again",
+            g.decided_last_usable_lba()
+        )));
+    }
     let g = g.clone();
     let ss = g.sector_size();
     let e = crate::gpt_policy::live_entry(&g, part)?;
@@ -1064,7 +1074,9 @@ fn save_resize_part_progress(
     step: u32,
 ) -> std::io::Result<()> {
     match src.record_journal_mut() {
-        Some(journal) => journal.record_progress(step, chunks, fs_shrunk as u8),
+        Some(journal) => journal
+            .record_progress(step, chunks, fs_shrunk as u8)
+            .map_err(|e| e.into_io()),
         None => Ok(()),
     }
 }
@@ -1281,7 +1293,7 @@ impl crate::execution::StepSink for ResizePartSink<'_> {
                     state.transfer_cursor,
                 )
                 .map_err(|e| {
-                    RunOutcome::partial(format!("the transfer progress could not be persisted ({e})"))
+                    RunOutcome::partial(e.record_failure("the transfer progress"))
                 })?;
         }
         Ok(())
@@ -1305,7 +1317,8 @@ impl crate::execution::StepSink for ResizePartSink<'_> {
                 .record_progress(2, cursor, self.fs_phase)
                 .map_err(|e| {
                     RunOutcome::partial(format!(
-                        "the partition table was written but the progress step could not be recorded ({e})"
+                        "the partition table is written — {}",
+                        e.record_failure("the progress step")
                     ))
                 })?;
         }
@@ -1663,9 +1676,7 @@ pub(crate) fn cmd_move(a: &MoveRequest) -> crate::outcome::RunOutcome {
             )))
         });
         journal.bind_relocation(reloc, None).unwrap_or_else(|e| {
-            bail_fail(RunOutcome::refused(format!(
-                "cannot record the relocation plan: {e}"
-            )))
+            bail_fail(RunOutcome::refused(e.bind_failure()))
         });
     }
     let mut sink = crate::recovery::sink::RecordSink::quiet();

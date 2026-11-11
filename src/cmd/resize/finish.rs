@@ -47,10 +47,18 @@ pub(crate) fn finish_resize(a: &ResizeRequest, o: crate::outcome::RunOutcome, ws
                     && let Some(journal) = w.take_record_journal()
                     && let Err(e) = journal.commit_and_discard()
                 {
+                    // 目录项已移除、持久化未确认：只陈述这一事实，不承诺记录还在
+                    let detail = if e.record_still_on_disk() {
+                        format!(
+                            "the job finished but its recovery record could not be removed ({e}) — release it with `diskedit abandon`"
+                        )
+                    } else {
+                        format!("{e}")
+                    };
                     o = o.merge_applied(crate::outcome::RunOutcome::applied_with(vec![crate::outcome::Pending::new(
                         part,
                         crate::outcome::PendingKind::Other("recovery record"),
-                        format!("the job finished but its recovery record could not be removed ({e}) — release it with `diskedit abandon`"),
+                        detail,
                         String::new(),
                     )]));
                 }
@@ -145,7 +153,7 @@ pub(crate) fn resize_done(
         // 在线路径不经 journal（sfdisk 用自己的 fd 写盘，事后也无 undo 可谈），无需屏障
         if let Some(ref mut w) = wsrc {
             w.mark_non_reversible()
-                .map_err(|e| format!("post-resize: cannot record the LVM barrier: {e} — the on-disk table is already committed"))?;
+                .map_err(|e| format!("post-resize: {} — the on-disk table is already committed", e.record_failure("the LVM barrier")))?;
         }
         let r: Result<(), LvmError> = if is_block {
             // 分区节点按已打开句柄的 rdev + 起始字节 + 分区号从 sysfs 派生：命令行字符串

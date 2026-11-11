@@ -36,13 +36,15 @@ OUT=$(DISKEDIT_FAULT=chunk:60 $BF move "$T":2 --start 250000 --chunk 1 --yes 2>&
 JSZ=$(stat -c%s "$(record_file "$T")" 2>/dev/null || echo 0)
 echo "record = $JSZ bytes (搬移量约 100M)"
 if [ "$JSZ" -gt 5 ] && [ "$JSZ" -lt 1048576 ]; then echo "A1 RECORD-STREAMING OK (<1MiB, 只记进度不记数据)"; else { echo "A1 JOURNAL SIZE ODD ($JSZ)"; rc=1; }; fi
-echo "-- A2: 中断搬移的 undo——表区回放、数据不回滚--"
-# 表步骤未提交，preimage（只覆盖表区）与盘面一致 → 无字节可写，按 complete 收尾退 0；
-# 已搬走的数据留在落点上，undo 从不回收它
+echo "-- A2: 中断搬移的 undo——记录里只剩搬移进度，undo 拒绝 --"
+# 表步骤未提交，preimage 为空；空 preimage 只说明表区没记过原文，不说明作业没开始。
+# 记录里留着搬移进度（数据区的唯一副本），undo 不代删：退 3，指路续跑或 abandon
 OUT=$($B undo "$T" --yes 2>&1); E=$?
 echo "exit=$E msg: $(echo "$OUT" | head -1 | cut -c1-70)"
-[ "$E" = "0" ] && echo "$OUT" | grep -q "nothing was written back" && echo "A2 UNDO-TABLE-ONLY OK" \
-  || { echo "A2 UNDO WRONG (want 0 + nothing was written back)"; rc=1; }
+[ "$E" = "3" ] && echo "$OUT" | grep -q "holds no table pre-image" \
+  && echo "$OUT" | grep -q 're-run `diskedit move`' && [ -e "$(record_file "$T")" ] \
+  && echo "A2 UNDO-REFUSES-PROGRESS OK" \
+  || { echo "A2 UNDO WRONG (want 3 + holds no table pre-image + record kept)"; rc=1; }
 echo "-- A3: 完成后记录应被删除 --"
 $B move "$T":2 --start 250000 --chunk 1 --yes >/dev/null 2>&1; E=$?
 record_absent "$T" && echo "A3 RECORD DROPPED OK (exit=$E)" || { echo "A3 RECORD LEFT (bad)"; rc=1; }

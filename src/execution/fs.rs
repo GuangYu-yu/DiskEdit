@@ -79,9 +79,9 @@ pub(crate) fn preflight(
 
 /// 执行一个 FsResize 步骤。
 ///
-/// 屏障落下之后失败不再回退成"确定未写盘"：外部工具可能已改过文件系统，按
-/// [`crate::outcome::crossed_irreversible_point`] 交成待办。屏障之前的失败只报 FS 层的原因
-/// （[`RunOutcome::from`] 的原分类）。
+/// 恢复屏障由 [`fsops::GrowTarget::resize_fs`] 在设备建立之后、第一个工具启动之前落下。
+/// 屏障之前的失败按 [`RunOutcome::from`] 的原分类上报；工具启动之后的失败由
+/// [`crate::outcome::crossed_irreversible_point`] 交成待办。
 ///
 /// `Ok(Some(pending))` 是本步**做过一部分、后置条件未达成**：表已扩而文件系统侧没有
 /// 可写的动作，或外部工具失败。它与失败的区别是"盘上的状态是已知的、还差一步"，
@@ -110,32 +110,31 @@ pub(crate) fn execute(
             return Err(RunOutcome::refused(no_target_reason(step.part, &other)));
         }
     };
-    // 外部工具改写的字节不进 journal：屏障落在工具启动之前，undo 见屏障即拒绝回滚
-    src.mark_non_reversible().map_err(|e| {
-        RunOutcome::no_mutation(format!(
-            "partition {}: cannot persist the recovery barrier before resizing the filesystem: {e}",
-            step.part
-        ))
-    })?;
-    let hint = |e: &fsops::FsError| {
-        crate::fsops::rescue_hint(
-            Some(target.fstype),
-            &crate::dev::part_dev_hint(src, step.part, base),
-            e.unsupported_reason(),
-        )
-    };
+    // 补救文案的两份材料在写句柄借用之前取好：`resize_fs` 需要 `&mut`，闭包持有 `&src`
+    // 会与它冲突
+    let fstype = target.fstype;
+    let dev = crate::dev::part_dev_hint(src, step.part, base);
     match target.resize_fs(src) {
         // 核心已完成；挂载点没卸掉是一条未完成的后置条件，不是本步失败
         Ok(Some(leak)) => Ok(Some(leak.into_pending(step.part))),
         Ok(None) => Ok(None),
-        // 屏障已落下：盘上的状态是已知的（表已扩、FS 未扩），补救命令由 FS 层给
-        Err(e) => Ok(Some(Pending::new(
+        // 工具已启动：盘上状态不再可断言，交成待办，补救命令由 FS 层给
+        Err(e) if started_tool(&e) => Ok(Some(Pending::new(
             step.part,
             PendingKind::Fs,
             e.to_string(),
-            hint(&e),
+            crate::fsops::rescue_hint(Some(fstype), &dev, e.unsupported_reason()),
         ))),
+        // 工具没起来、或在启动之前就被拒：目标字节没有被写，按原分类交出。屏障已落下的
+        // 此类失败由出口的归责改判为部分完成
+        Err(e) => Err(fs_failure(e, step.part)),
     }
+}
+
+/// 失败是否以外部工具已启动为前提。`CommandFailed` 来自非零退出或等待失败；其余变体
+/// （能力缺口、前置拒绝、工具缺失、启动前的 I/O 失败）都没有写过目标字节
+fn started_tool(e: &fsops::FsError) -> bool {
+    matches!(e, fsops::FsError::CommandFailed(_))
 }
 
 /// 首写之前看到"没有可扩的目标"时的措辞：说本步没做成，不说"扩了但没做完"。
@@ -164,4 +163,21 @@ fn no_target_reason(part: u32, g: &Growable) -> String {
 /// 已写过目标字节时由出口的归责改判为部分完成
 fn fs_failure(e: FsError, part: u32) -> RunOutcome {
     RunOutcome::from(e).context(&format!("partition {part}: the filesystem resize failed"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_a_started_tool_is_folded_into_a_pending() {
+        // 进程已启动：非零退出与等待失败都在这里
+        assert!(started_tool(&FsError::CommandFailed("resize2fs exited 1".into())));
+        // 启动之前：能力缺口、前置拒绝、工具缺失、启动前的 I/O 失败
+        assert!(!started_tool(&FsError::unsupported_multi_device_btrfs("spans multiple devices")));
+        assert!(!started_tool(&FsError::platform("not linux")));
+        assert!(!started_tool(&FsError::invalid("bad range")));
+        assert!(!started_tool(&FsError::missing("required tool not found: e2fsck")));
+        assert!(!started_tool(&FsError::Io(std::io::Error::other("read failed"))));
+    }
 }

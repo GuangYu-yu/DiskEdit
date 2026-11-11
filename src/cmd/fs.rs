@@ -218,9 +218,15 @@ fn resizefs_offline(a: &ResizefsRequest, pref: PartSelector) -> RunOutcome {
                     if let Some(journal) = src.take_record_journal()
                         && let Err(e) = journal.commit_and_discard()
                     {
-                        let out = RunOutcome::applied_with(Vec::new()).degrade_partial(format!(
-                            "the recovery record was not cleaned up ({e}) — release it with `diskedit abandon`"
-                        ));
+                        // 目录项已移除、持久化未确认：只陈述这一事实，不承诺记录还在
+                        let cause = if e.record_still_on_disk() {
+                            format!(
+                                "the recovery record was not cleaned up ({e}) — release it with `diskedit abandon`"
+                            )
+                        } else {
+                            format!("{e}")
+                        };
+                        let out = RunOutcome::applied_with(Vec::new()).degrade_partial(cause);
                         return out.report_final();
                     }
                 }
@@ -288,9 +294,13 @@ fn resizefs_offline(a: &ResizefsRequest, pref: PartSelector) -> RunOutcome {
             if let Some(journal) = src.take_record_journal()
                 && let Err(e) = journal.commit_and_discard()
             {
-                out = out.degrade_partial(format!(
-                    "the recovery record was not cleaned up ({e}) — release it with `diskedit abandon`"
-                ));
+                // 目录项已移除、持久化未确认：只陈述这一事实，不承诺记录还在
+                let cause = if e.record_still_on_disk() {
+                    format!("the recovery record was not cleaned up ({e}) — release it with `diskedit abandon`")
+                } else {
+                    format!("{e}")
+                };
+                out = out.degrade_partial(cause);
             }
             announce_applied(
                 &out,

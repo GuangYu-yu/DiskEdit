@@ -228,8 +228,9 @@ fn wrap(text: &str, width: usize) -> Vec<String> {
     lines
 }
 
-/// 首行缩进 `indent`，后续行缩进 `hanging`；折行宽度按 `width - indent` 计算，
-/// `hanging < indent` 时后续行会超出 `width`
+/// 首行缩进 `indent`，后续行缩进 `hanging`；正文按 `width - indent` 个字符折行
+/// （`width` 不大于 `indent` 时按 1 个），因此首行总宽是 `indent + 该宽度`，
+/// 后续行总宽是 `hanging + 该宽度`：`hanging > indent` 时超出 `width`，反之短于 `width`
 fn push_wrapped(out: &mut String, text: &str, indent: usize, hanging: usize, width: usize) {
     let width = width.saturating_sub(indent).max(1);
     for (i, line) in wrap(text, width).into_iter().enumerate() {
