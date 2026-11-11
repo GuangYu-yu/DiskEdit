@@ -67,7 +67,7 @@ fn temp_name(name: &Path) -> Result<PathBuf, RecordJournalError> {
     Ok(PathBuf::from(temp))
 }
 
-/// 清掉本目标落点的残留临时文件（第 26、41 条）：只认
+/// 清掉本目标落点的残留临时文件：只认
 /// `.<正式名>.<pid>.<32 位 hex>.tmp`，范围限于该落点的父目录。
 ///
 /// 目录按句柄打开（末级不跟随符号链接），逐条 `fstatat(AT_SYMLINK_NOFOLLOW)`
@@ -362,8 +362,7 @@ pub(crate) fn settle_companion(record_path: &Path, record: &Record, persist_comm
     })?;
     if current != *record {
         return Err(RecordJournalError::ReadbackMismatch(
-            "the record on disk differs from the snapshot this call was given; nothing was written or removed"
-                .to_string(),
+            "the record on disk differs from the snapshot this call was given".to_string(),
         ));
     }
     let mut settled = record.clone();
@@ -406,15 +405,28 @@ pub(crate) fn settle_companion(
     ))
 }
 
+/// 记录与本次请求的身份比对。摘要把 op、分区、区间、扇区大小与盘大小一起编码，
+/// 是判断"这份记录是不是本次请求留下的"的唯一依据
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RequestMatch {
+    /// 摘要相同：记录属于本次请求
+    Same,
+    /// 记录从未绑定摘要（旧格式或刚创建）：不能证明它属于本次请求
+    Unbound,
+    /// 摘要不同：记录属于另一个请求
+    Other,
+}
+
 #[cfg(target_os = "linux")]
 pub(crate) struct RecordJournal {
     anchor: DirFd,
     relative: RelativePath,
     temp: RelativePath,
+    /// 记录落点的绝对路径：拒绝文案与诊断要把它原样报给用户
+    record_path: PathBuf,
     file: Option<EvidenceFile>,
     record: Record,
     sector_size: u64,
-    last_error: Option<String>,
     /// 目标文件的所有者；镜像侧记录必须与目标同主
     owner: Option<(u32, u32)>,
     /// persist 的整份替换/创建已成功但句柄重开失败：盘上记录还在，本进程却再无
@@ -436,7 +448,7 @@ pub(crate) enum PersistFailure {
 
 #[cfg(target_os = "linux")]
 impl PersistFailure {
-    fn written(&self) -> bool {
+    fn record_bytes_persisted(&self) -> bool {
         matches!(self, Self::Written(_))
     }
 
@@ -535,7 +547,17 @@ impl RecordJournal {
             disk_guid,
         );
         record.action = RecoveryAction::Rollback(0);
-        Ok(Self { anchor, relative, temp, file: None, record, sector_size, last_error: None, owner, handle_lost: false })
+        Ok(Self {
+            anchor,
+            relative,
+            temp,
+            record_path: record_path.to_path_buf(),
+            file: None,
+            record,
+            sector_size,
+            owner,
+            handle_lost: false,
+        })
     }
 
     /// 打开既有记录以续跑。返回的 [`Record`] 是只读快照，写路径继续走 `self`。
@@ -577,28 +599,57 @@ impl RecordJournal {
             anchor,
             relative,
             temp,
+            record_path: record_path.to_path_buf(),
             file: Some(file),
             record: record.clone(),
             sector_size,
-            last_error: None,
             owner,
             handle_lost: false,
         };
         Ok((journal, record))
     }
 
-    /// 绑定本次请求的摘要。新记录只写一次；已有摘要必须与本次请求一致——
-    /// 换了参数（含 `--chunk`，它决定游标到字节的映射）的请求不能续跑别人的游标
-    pub(crate) fn bind_plan(&mut self, digest: PlanDigest) -> Result<(), String> {
+    /// 记录是否属于本次请求。基于既有记录的每个决定（续跑、提交、删除）都从这里取结论，
+    /// 不在调用点另立一套比对
+    pub(crate) fn request_match(&self, digest: PlanDigest) -> RequestMatch {
         if self.record.plan_digest == digest {
-            return Ok(());
+            RequestMatch::Same
+        } else if self.record.plan_digest == PlanDigest::from_bytes([0u8; 32]) {
+            RequestMatch::Unbound
+        } else {
+            RequestMatch::Other
         }
-        if self.record.plan_digest != PlanDigest::from_bytes([0u8; 32]) {
-            return Err(format!(
-                "the existing record belongs to a different `{}` request — its identity digest differs \
-                 (the partition, size, or options changed)",
-                self.record.op.command_name()
-            ));
+    }
+
+    /// 记录落点的绝对路径
+    pub(crate) fn record_path(&self) -> &Path {
+        &self.record_path
+    }
+
+    /// 绑定本次请求的摘要。新记录只写一次；已有摘要必须与本次请求一致——
+    /// 换了目标（操作、分区、区间、扇区大小、盘大小）的请求不能接管这份记录
+    pub(crate) fn bind_plan(&mut self, digest: PlanDigest) -> Result<(), String> {
+        match self.request_match(digest) {
+            RequestMatch::Same => return Ok(()),
+            RequestMatch::Other => {
+                return Err(format!(
+                    "the existing record belongs to a different `{}` request — its identity digest differs \
+                     (the partition, size, or options changed)",
+                    self.record.op.command_name()
+                ));
+            }
+            // 已落盘却仍无摘要：无法证明它属于本次请求，
+            // 它留下的中间态（搬了一半、表已提交）只能由 inspect/undo 处理——放行等于
+            // 替它做结论。新建记录在首次落盘之前就绑好摘要，故只有旧记录命中这里
+            RequestMatch::Unbound if self.is_persisted() => {
+                return Err(format!(
+                    "the recovery record at {} carries no request identity — it was written before \
+                     requests bound one, so this run cannot prove it belongs here; run `diskedit inspect` \
+                     then `diskedit undo` on this target first",
+                    self.record_path.display()
+                ));
+            }
+            RequestMatch::Unbound => {}
         }
         self.record.plan_digest = digest;
         Ok(())
@@ -606,6 +657,11 @@ impl RecordJournal {
 
     pub(crate) fn op(&self) -> OpKind {
         self.record.op
+    }
+
+    /// 整份记录：阶段派生等只读判定用它，不必逐字段再取一遍
+    pub(crate) fn record(&self) -> &Record {
+        &self.record
     }
 
     /// 记录里绑定的请求摘要；尚未绑定（还没走到第一次写）时为零值
@@ -659,10 +715,9 @@ impl RecordJournal {
         }
         self.record.old_range = Some(range);
         if let Err(e) = self.persist() {
-            if !e.written() {
+            if !e.record_bytes_persisted() {
                 self.record.old_range = None;
             }
-            self.last_error = Some(e.to_string());
             return Err(e.into_io());
         }
         Ok(())
@@ -707,11 +762,10 @@ impl RecordJournal {
             self.record.lvm_post = self.record.lvm_post.or(lvm_post);
         }
         if let Err(e) = self.persist() {
-            if !e.written() {
+            if !e.record_bytes_persisted() {
                 self.record.relocation = None;
                 self.record.lvm_post = lvm_before;
             }
-            self.last_error = Some(e.to_string());
             return Err(e.into_io());
         }
         Ok(())
@@ -748,7 +802,7 @@ impl RecordJournal {
         }
         self.record.progress = Progress { completed_steps, transfer_cursor, fs_phase: was_progress.fs_phase };
         if let Err(e) = self.persist() {
-            if !e.written() {
+            if !e.record_bytes_persisted() {
                 if let Some((entry_index, chunks_in_entry)) = was_reloc {
                     let current = self.record.relocation.as_mut().expect("checked above");
                     current.entry_index = entry_index;
@@ -756,7 +810,6 @@ impl RecordJournal {
                 }
                 self.record.progress = was_progress;
             }
-            self.last_error = Some(e.to_string());
             return Err(e.into_io());
         }
         Ok(())
@@ -780,10 +833,9 @@ impl RecordJournal {
         }
         self.record.lvm_post = Some(post);
         if let Err(e) = self.persist() {
-            if !e.written() {
+            if !e.record_bytes_persisted() {
                 self.record.lvm_post = None;
             }
-            self.last_error = Some(e.to_string());
             return Err(e.into_io());
         }
         Ok(())
@@ -801,10 +853,9 @@ impl RecordJournal {
         ensure_progress_forward(was, completed_steps, transfer_cursor)?;
         self.record.progress = Progress { completed_steps, transfer_cursor, fs_phase };
         if let Err(e) = self.persist() {
-            if !e.written() {
+            if !e.record_bytes_persisted() {
                 self.record.progress = was;
             }
-            self.last_error = Some(e.to_string());
             return Err(e.into_io());
         }
         Ok(())
@@ -874,13 +925,12 @@ impl RecordJournal {
         match self.persist() {
             Ok(()) => Ok(()),
             Err(e) => {
-                if !e.written() {
+                if !e.record_bytes_persisted() {
                     self.record.restore.truncate(base);
                     for (i, old) in replaced {
                         self.record.restore[i].after = old;
                     }
                 }
-                self.last_error = Some(e.to_string());
                 Err(e.into_io())
             }
         }
@@ -889,11 +939,6 @@ impl RecordJournal {
     /// 记录是否已落盘。为 false 时本次事务没有向目标写过任何字节
     pub(crate) fn is_persisted(&self) -> bool {
         self.file.is_some()
-    }
-
-    /// 最近一次持久化失败的说明
-    pub(crate) fn last_error(&self) -> Option<&str> {
-        self.last_error.as_deref()
     }
 
     /// 不可逆写入的屏障：记录一旦越过这一点，`undo` 只报告不回写。
@@ -907,10 +952,9 @@ impl RecordJournal {
         }
         self.record.restore_blocked = true;
         if let Err(e) = self.persist() {
-            if !e.written() {
+            if !e.record_bytes_persisted() {
                 self.record.restore_blocked = false;
             }
-            self.last_error = Some(e.to_string());
             return Err(e.into_io());
         }
         Ok(())
@@ -923,10 +967,9 @@ impl RecordJournal {
         }
         self.record.commit = CommitState::Committed;
         if let Err(e) = self.persist() {
-            if !e.written() {
+            if !e.record_bytes_persisted() {
                 self.record.commit = CommitState::Prepared;
             }
-            self.last_error = Some(e.to_string());
             return Err(e.into_io());
         }
         crate::movepart::fault_record_committed();
@@ -1008,6 +1051,7 @@ impl RecordJournal {
             store
                 .replace_atomic(&self.anchor, file, &self.temp, &bytes)
                 .map_err(|e| PersistFailure::NotWritten(record_io(e)))?;
+            crate::outcome::note_record_persisted();
             // 与 settle_companion 同理：整份替换后旧句柄已不是名字指向的那份。
             // 每次 persist 都换上重新解析的句柄，后续 commit_and_discard 的
             // 删除前回读才能验到真正会被删掉的字节。重开失败时旧句柄必须丢弃
@@ -1045,6 +1089,7 @@ impl RecordJournal {
             store
                 .create_atomic_owned(&self.anchor, &self.relative, &self.temp, &bytes, self.owner)
                 .map_err(|e| PersistFailure::NotWritten(record_io(e)))?;
+            crate::outcome::note_record_persisted();
             match store.open_at(&self.anchor, &self.relative) {
                 Ok(file) => self.file = Some(file),
                 Err(e) => {
@@ -1111,10 +1156,6 @@ impl RecordJournal {
         false
     }
 
-    pub(crate) fn last_error(&self) -> Option<&str> {
-        None
-    }
-
     pub(crate) fn barrier(&mut self) -> std::io::Result<()> {
         Err(std::io::Error::other("recovery records are not written on this platform"))
     }
@@ -1146,6 +1187,14 @@ impl RecordJournal {
         Err("recovery records are not written on this platform".to_string())
     }
 
+    pub(crate) fn request_match(&self, _digest: crate::recovery::PlanDigest) -> RequestMatch {
+        match self._never {}
+    }
+
+    pub(crate) fn record_path(&self) -> &Path {
+        match self._never {}
+    }
+
     pub(crate) fn bind_source(&mut self, _source: crate::recovery::CopySource) -> Result<(), String> {
         Err("recovery records are not written on this platform".to_string())
     }
@@ -1155,6 +1204,10 @@ impl RecordJournal {
     }
 
     pub(crate) fn op(&self) -> OpKind {
+        match self._never {}
+    }
+
+    pub(crate) fn record(&self) -> &Record {
         match self._never {}
     }
 

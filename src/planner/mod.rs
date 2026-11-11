@@ -91,7 +91,6 @@ pub(crate) enum PlanStep {
     FsSet { part: u32, attr: FsSetAttr, fstype: Option<ContentKind> },
 }
 
-/// `FsSet` 改写的 FS 内部属性。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum FsSetAttr {
     /// 卷标，原样作为工具参数

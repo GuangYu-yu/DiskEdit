@@ -7,10 +7,21 @@
 //! 参考文档与能力矩阵只在测试构建里产出（`docs/`），CI 生成后与工作树比对。
 
 // 本模块只拼装文本：目标始终是 `String`，`fmt::Write` 对这个实现永不失败。
-// crate 默认把 `let_underscore_must_use` 设为 deny（见 Cargo.toml），而这里 58 处
-// 写入都没有可上报的错误——统一在模块级放行，避免每行各挂一个 allow 把正文淹没。
-// 其它模块仍按"忽略必须落在 best_effort_* 函数内"执行。
-#![allow(clippy::let_underscore_must_use)]
+// crate 把 `let_underscore_must_use` 设为 deny（见 Cargo.toml），所以写入统一走
+// `emit!` / `emit_raw!`：`expect` 只在宏里出现一次，把"不可失败"写成显式断言，
+// 而不是丢弃返回值
+macro_rules! emit {
+    ($out:expr $(, $arg:expr)* $(,)?) => {
+        writeln!($out $(, $arg)*).expect("writing to a String cannot fail")
+    };
+}
+
+#[cfg(test)]
+macro_rules! emit_raw {
+    ($out:expr $(, $arg:expr)* $(,)?) => {
+        write!($out $(, $arg)*).expect("writing to a String cannot fail")
+    };
+}
 
 use std::fmt::Write as _;
 
@@ -61,36 +72,36 @@ const EXIT_LEGEND: &[(u8, &str)] = &[
 /// 顶层帮助。用法错误与主动请求帮助读同一个函数，只差出口
 pub(crate) fn usage_text() -> String {
     let mut out = String::new();
-    let _ = writeln!(out, "{TITLE}");
-    let _ = writeln!(out);
-    let _ = writeln!(out, "usage:");
+    emit!(out, "{TITLE}");
+    emit!(out);
+    emit!(out, "usage:");
     for line in USAGE_LINES {
-        let _ = writeln!(out, "  {line}");
+        emit!(out, "  {line}");
     }
-    let _ = writeln!(out);
-    let _ = writeln!(out, "examples:");
+    emit!(out);
+    emit!(out, "examples:");
     for line in EXAMPLES {
-        let _ = writeln!(out, "  {line}");
+        emit!(out, "  {line}");
     }
     for (group, heading) in [
         (CommandGroup::Everyday, "everyday:"),
         (CommandGroup::LowLevel, "low-level (one step per run; long jobs stay resumable):"),
     ] {
-        let _ = writeln!(out);
-        let _ = writeln!(out, "{heading}");
+        emit!(out);
+        emit!(out, "{heading}");
         for c in cli::COMMANDS.iter().filter(|c| c.group == group) {
             for line in c.syntax {
-                let _ = writeln!(out, "  {} {}", c.name, line);
+                emit!(out, "  {} {}", c.name, line);
             }
             push_wrapped(&mut out, c.summary, 6, 6, WIDTH);
         }
     }
-    let _ = writeln!(out);
+    emit!(out);
     for line in TARGET_NOTE {
-        let _ = writeln!(out, "{line}");
+        emit!(out, "{line}");
     }
-    let _ = writeln!(out);
-    let _ = writeln!(out, "options (availability: help <CMD>):");
+    emit!(out);
+    emit!(out, "options (availability: help <CMD>):");
     let rows: Vec<(String, &'static str)> =
         cli::FLAGS.iter().map(|f| (flag_synopsis(f.name), f.desc)).collect();
     let column = rows.iter().map(|(s, _)| s.chars().count()).max().unwrap_or(0) + 2;
@@ -99,9 +110,9 @@ pub(crate) fn usage_text() -> String {
         let lines = wrap(desc, WIDTH.saturating_sub(2 + column).max(20));
         for (i, line) in lines.into_iter().enumerate() {
             if i == 0 {
-                let _ = writeln!(out, "  {synopsis}{pad}{line}");
+                emit!(out, "  {synopsis}{pad}{line}");
             } else {
-                let _ = writeln!(out, "{}{line}", " ".repeat(2 + column));
+                emit!(out, "{}{line}", " ".repeat(2 + column));
             }
         }
     }
@@ -110,7 +121,7 @@ pub(crate) fn usage_text() -> String {
         .filter(|c| c.confirmation == Confirmation::Required)
         .map(|c| c.name)
         .collect();
-    let _ = writeln!(out);
+    emit!(out);
     push_wrapped(
         &mut out,
         &format!("--yes is required by: {}", required.join(", ")),
@@ -118,13 +129,13 @@ pub(crate) fn usage_text() -> String {
         2,
         WIDTH,
     );
-    let _ = writeln!(out);
+    emit!(out);
     for line in FLAG_NOTE {
-        let _ = writeln!(out, "  {line}");
+        emit!(out, "  {line}");
     }
-    let _ = writeln!(out, "exit status:");
+    emit!(out, "exit status:");
     for (code, desc) in EXIT_LEGEND {
-        let _ = writeln!(out, "  {code}  {desc}");
+        emit!(out, "  {code}  {desc}");
     }
     trim_trailing_newlines(out)
 }
@@ -134,13 +145,13 @@ pub(crate) fn help_text(name: &str) -> Option<String> {
     let c = cli::find(name)?;
     let mut out = String::new();
     for line in c.syntax {
-        let _ = writeln!(out, "diskedit {} {}", c.name, line);
+        emit!(out, "diskedit {} {}", c.name, line);
     }
-    let _ = writeln!(out);
+    emit!(out);
     push_wrapped(&mut out, c.summary, 2, 2, WIDTH);
-    let _ = writeln!(out);
-    let _ = writeln!(out, "{}", c.details);
-    let _ = writeln!(out);
+    emit!(out);
+    emit!(out, "{}", c.details);
+    emit!(out);
     push_options(&mut out, c);
     Some(trim_trailing_newlines(out))
 }
@@ -178,21 +189,21 @@ fn option_desc(c: &CommandDef, name: &str) -> String {
 fn push_options(out: &mut String, c: &CommandDef) {
     let names = option_names(c);
     if names.is_empty() {
-        let _ = writeln!(out, "options: none");
+        emit!(out, "options: none");
         return;
     }
     let synopses: Vec<String> = names.iter().map(|n| flag_synopsis(n)).collect();
     let column = synopses.iter().map(|s| s.chars().count()).max().unwrap_or(0) + 2;
-    let _ = writeln!(out, "options:");
+    emit!(out, "options:");
     for (name, synopsis) in names.iter().zip(synopses) {
         let desc = option_desc(c, name);
         let pad = " ".repeat(column.saturating_sub(synopsis.chars().count()));
         let lines = wrap(&desc, WIDTH.saturating_sub(4 + column).max(20));
         for (i, line) in lines.into_iter().enumerate() {
             if i == 0 {
-                let _ = writeln!(out, "    {synopsis}{pad}{line}");
+                emit!(out, "    {synopsis}{pad}{line}");
             } else {
-                let _ = writeln!(out, "{}{line}", " ".repeat(4 + column));
+                emit!(out, "{}{line}", " ".repeat(4 + column));
             }
         }
     }
@@ -217,12 +228,13 @@ fn wrap(text: &str, width: usize) -> Vec<String> {
     lines
 }
 
-/// 首行缩进 `indent`，后续行缩进 `hanging`
+/// 首行缩进 `indent`，后续行缩进 `hanging`；折行宽度按 `width - indent` 计算，
+/// `hanging < indent` 时后续行会超出 `width`
 fn push_wrapped(out: &mut String, text: &str, indent: usize, hanging: usize, width: usize) {
     let width = width.saturating_sub(indent).max(1);
     for (i, line) in wrap(text, width).into_iter().enumerate() {
         let pad = if i == 0 { indent } else { hanging };
-        let _ = writeln!(out, "{:pad$}{line}", "");
+        emit!(out, "{:pad$}{line}", "");
     }
 }
 
@@ -238,6 +250,7 @@ fn trim_trailing_newlines(mut text: String) -> String {
 mod published {
     use super::*;
     use crate::domain::MediaKind;
+    use crate::outcome::NOTHING_WRITTEN;
     use crate::platform::capabilities::{CapabilityId, CapabilitySnapshot, HostPlatform};
 
     const REFERENCE: &str = "docs/reference.md";
@@ -292,26 +305,26 @@ mod published {
         out.push_str("CI regenerates it and fails when the working tree differs. Do not edit by hand.\n\n");
         out.push_str("## Commands\n");
         for c in cli::COMMANDS {
-            let _ = writeln!(out, "\n### `{}`\n", c.name);
-            let _ = writeln!(out, "{}\n", c.summary);
-            let _ = writeln!(out, "```text");
+            emit!(out, "\n### `{}`\n", c.name);
+            emit!(out, "{}\n", c.summary);
+            emit!(out, "```text");
             for line in c.syntax {
-                let _ = writeln!(out, "diskedit {} {}", c.name, line);
+                emit!(out, "diskedit {} {}", c.name, line);
             }
-            let _ = writeln!(out, "```\n");
-            let _ = writeln!(out, "| property | value |");
-            let _ = writeln!(out, "|---|---|");
-            let _ = writeln!(
+            emit!(out, "```\n");
+            emit!(out, "| property | value |");
+            emit!(out, "|---|---|");
+            emit!(
                 out,
                 "| positionals | {} |",
                 join_or_none(c.positionals.iter().map(|p| format!("`{}`", p.name)))
             );
-            let _ = writeln!(
+            emit!(
                 out,
                 "| options | {} |",
                 join_or_none(option_names(c).into_iter().map(|n| format!("`{n}`")))
             );
-            let _ = writeln!(
+            emit!(
                 out,
                 "| confirmation | {} |",
                 match c.confirmation {
@@ -319,15 +332,15 @@ mod published {
                     Confirmation::None => "none",
                 }
             );
-            let _ = writeln!(out, "| journal | {} |", mode_name(c.mode));
-            let _ = writeln!(
+            emit!(out, "| journal | {} |", mode_name(c.mode));
+            emit!(
                 out,
                 "| capabilities | {} |",
                 join_or_none(c.capabilities.iter().map(|cap| capability_category(*cap).to_string()))
             );
-            let _ = writeln!(out, "\n```text");
-            let _ = writeln!(out, "{}", c.details);
-            let _ = writeln!(out, "```");
+            emit!(out, "\n```text");
+            emit!(out, "{}", c.details);
+            emit!(out, "```");
         }
         out.push_str("\n## Global options\n\n");
         out.push_str("| flag | value | description |\n|---|---|---|\n");
@@ -337,7 +350,7 @@ mod published {
             } else {
                 "—".to_string()
             };
-            let _ = writeln!(
+            emit!(
                 out,
                 "| `{}` | {} | {} |",
                 f.name,
@@ -347,7 +360,7 @@ mod published {
         }
         out.push_str("\n## Exit status\n\n| code | meaning |\n|---|---|\n");
         for (code, desc) in EXIT_LEGEND {
-            let _ = writeln!(out, "| {code} | {desc} |");
+            emit!(out, "| {code} | {desc} |");
         }
         trim_trailing_newlines(out)
     }
@@ -383,26 +396,26 @@ mod published {
 
         out.push_str("## Capability states\n\n| capability |");
         for (platform, media) in SHAPES {
-            let _ = write!(out, " {} |", shape_name(platform, media));
+            emit_raw!(out, " {} |", shape_name(platform, media));
         }
-        let _ = writeln!(out, "\n|---|{}", "---|".repeat(SHAPES.len()));
+        emit!(out, "\n|---|{}", "---|".repeat(SHAPES.len()));
         for id in CapabilityId::ALL {
-            let _ = write!(out, "| {} |", id.as_str());
+            emit_raw!(out, "| {} |", id.as_str());
             for (platform, media) in SHAPES {
                 let snapshot = CapabilitySnapshot::design(platform, media);
-                let _ = write!(out, " {} |", snapshot.state(id).as_str());
+                emit_raw!(out, " {} |", snapshot.state(id).as_str());
             }
-            let _ = writeln!(out);
+            emit!(out);
         }
 
         out.push_str("\n## Commands\n\n| command |");
         for (platform, media) in SHAPES {
-            let _ = write!(out, " {} |", shape_name(platform, media));
+            emit_raw!(out, " {} |", shape_name(platform, media));
         }
-        let _ = writeln!(out, "\n|---|{}", "---|".repeat(SHAPES.len()));
+        emit!(out, "\n|---|{}", "---|".repeat(SHAPES.len()));
         for c in cli::COMMANDS {
             let needs = crate::planner::needs_for(c.capabilities);
-            let _ = write!(out, "| `{}` |", c.name);
+            emit_raw!(out, "| `{}` |", c.name);
             for (platform, media) in SHAPES {
                 let snapshot = CapabilitySnapshot::design(platform, media);
                 let cell = match snapshot.first_gap(&needs) {
@@ -411,26 +424,93 @@ mod published {
                         format!("blocked: {} ({})", id.as_str(), state.as_str())
                     }
                 };
-                let _ = write!(out, " {cell} |");
+                emit_raw!(out, " {cell} |");
             }
-            let _ = writeln!(out);
+            emit!(out);
         }
 
         out.push_str("\n## Runtime gate\n\n");
+        // 只列本平台真正能打开的形态，且平台固定在 Linux：生成物在两个构建目标上
+        // 必须逐字一致，`HostPlatform::current()` 会让同一份文档随宿主变化
+        let gate_shapes = HostPlatform::Linux.openable_media();
+        let listed = gate_shapes
+            .iter()
+            .map(|media| shape_name(HostPlatform::Linux, *media))
+            .collect::<Vec<_>>()
+            .join(", ");
+        emit!(
+            out,
+            "The gate evaluates only the target shapes the build can open. This table lists the {} \
+             target shapes it evaluates on Linux (`HostPlatform::openable_media`): {}. Other shapes \
+             do not enter the gate's decision — `cmd::capability_gap` iterates only the openable set.",
+            gate_shapes.len(),
+            listed
+        );
         out.push_str(
-            "A cell records whether that platform/media pair has the primitives the command needs.\n\
-             The runtime gate reads the same matrix, restricted to the media the host can actually open\n\
-             (`HostPlatform::openable_media`): Linux opens block devices and image files; other hosts open\n\
-             image files only. A read-only command therefore runs on a non-Linux image file, while any\n\
-             command needing a write-side or evidence-side primitive answers exit 6.\n",
+            "The table is generated from the Linux capability set; a non-Linux build's openable set \
+             is decided at run time by `HostPlatform::openable_media`, and this document does not \
+             copy it.\n\n",
+        );
+        out.push_str("| command |");
+        for media in gate_shapes {
+            emit_raw!(out, " {} |", shape_name(HostPlatform::Linux, *media));
+        }
+        emit!(out, "\n|---|{}", "---|".repeat(gate_shapes.len()));
+        for c in cli::COMMANDS {
+            let needs = crate::planner::needs_for(c.capabilities);
+            emit_raw!(out, "| `{}` |", c.name);
+            for media in gate_shapes {
+                let snapshot = CapabilitySnapshot::design(HostPlatform::Linux, *media);
+                let cell = match snapshot.first_gap(&needs) {
+                    None => "admitted".to_string(),
+                    Some((id, state)) => {
+                        format!("blocked: {} ({})", id.as_str(), state.as_str())
+                    }
+                };
+                emit_raw!(out, " {cell} |");
+            }
+            emit!(out);
+        }
+        emit!(
+            out,
+            "\nThe process-level exit prints the cause sentence of a failure. Exit {} and exit {} are \
+             followed by a second line, `{}`; exit {} prints `unsupported: <cause>` and appends no \
+             such line.",
+            EXIT_REFUSED,
+            EXIT_NO_MUTATION,
+            NOTHING_WRITTEN,
+            EXIT_UNSUPPORTED
         );
         trim_trailing_newlines(out)
+    }
+
+    /// `internals.md` 只留顺序陈述：一句话里同时出现 `exit code 6` 与命令名，等于把
+    /// 矩阵的逐命令结论又抄了一份。命令名取自命令表，不另写清单
+    fn assert_no_per_command_gate_claims(root: &std::path::Path) {
+        const INTERNALS: &str = "docs/internals.md";
+        let path = root.join(INTERNALS);
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        for sentence in text.split(['.', '。', '\n']) {
+            if !sentence.contains("exit code 6") {
+                continue;
+            }
+            if let Some(command) = cli::COMMANDS.iter().find(|c| sentence.contains(c.name)) {
+                panic!(
+                    "{}: one sentence names both `exit code 6` and the command `{}` — the \
+                     per-command answer belongs to {MATRIX}",
+                    path.display(),
+                    command.name
+                );
+            }
+        }
     }
 
     /// 生成物与工作树逐字一致。设置 `DISKEDIT_WRITE_DOCS` 时先写盘，再比对
     #[test]
     fn docs_are_generated_in_sync() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        assert_no_per_command_gate_claims(root);
         for (rel, text) in [(REFERENCE, render_reference()), (MATRIX, render_matrix())] {
             let lower = text.to_ascii_lowercase();
             assert!(!lower.contains("cyl"), "{rel}: cylinder alignment leaked into the generated text");

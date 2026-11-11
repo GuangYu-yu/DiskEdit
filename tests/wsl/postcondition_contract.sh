@@ -54,7 +54,7 @@ echo "$OUT" | head -2
 echo
 echo "===== D: mkfs 失败 → 分区已建、FS 未做 → PARTIAL(5) ====="
 # 16M 远低于 mkfs.xfs 的 300M 下限：add 先把条目写进表，随后的 mkfs 越过擦除屏障即失败。
-# 两条命令各自独立：add 的成功不再由 mkfs 的失败改写，故后置条件只按 mkfs 命令自身判定
+# 两条命令各自独立：add 的成功与 mkfs 的失败互不影响，故后置条件只按 mkfs 命令自身判定
 rm -rf "$T" "$T"$SIDECAR_GLOB
 truncate -s 1G "$T"
 $B new "$T" --yes >/dev/null

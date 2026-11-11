@@ -9,7 +9,7 @@
 //! - `cmd/undo` 的回退方向回放。
 //! - `fsops::wipe_zero` 在 mkfs 前擦除旧签名。
 //!
-//! 三者不写分区表项，也不经计划步骤，故「全仓唯一」的说法不成立。
+//! 三者不写分区表项，也不经计划步骤。
 //!
 //! 每个步骤要么完成、要么给出"后置条件未达成"（返回 [`StepFlow::Stopped`] 并留下待办），
 //! 要么按"首写之前 / 之后"分类失败。预扫描在第一个目标字节写入之前跑完：执行器缺席、
@@ -48,12 +48,10 @@ pub(crate) struct TransferState {
     pub transfer_cursor: u64,
 }
 
-impl TransferState {
-    /// 本计划此前是否已经写过目标字节：已有块进度、更早的条目已提交或已有步骤完成。
-    /// 续跑时这些字段由恢复记录注入。
-    pub(crate) fn wrote_target(&self) -> bool {
-        self.chunks_in_entry > 0 || self.entry_index > 0 || self.completed_steps > 0
-    }
+/// 一条搬移条目是否已完成：记录游标已越过它，数据与表都不再碰。
+/// 早退、清理与续跑共用这一处判断
+pub(crate) fn entry_done(entry: u32, state: &TransferState) -> bool {
+    entry < state.entry_index
 }
 
 /// 执行过程中的持久化回调。
@@ -148,6 +146,23 @@ enum PreparedStep<'a> {
     FsSet(FsSet),
 }
 
+/// 首次目标写入之前的只读核对：计划里第一条表步骤的比对区间必须与盘上表区逐段相符。
+///
+/// 多表步骤的计划按前后表戳串成一条链（装配期已核对），只有第一条的写前区间对应
+/// 盘上现状；核对它即核对了整张表。这条腿给出 3：表在计划读出之后被外部改动，
+/// 属于"请求与现状不符"，此时本次运行还没有写下任何字节。
+fn verify_tables_before_write(src: &WriteSource, steps: &[PreparedStep<'_>]) -> Result<(), RunOutcome> {
+    let first = steps.iter().find_map(|step| match step {
+        PreparedStep::Transfer { commit, .. } | PreparedStep::Copy { commit, .. } => Some(*commit),
+        PreparedStep::TableOnly(commit) => Some(*commit),
+        PreparedStep::FsResize(_) | PreparedStep::FsCreate(_) | PreparedStep::FsSet(_) => None,
+    });
+    match first {
+        Some(table) => crate::table::verify_regions_before(src, &table.expect_regions),
+        None => Ok(()),
+    }
+}
+
 /// 执行一份已确认的计划。
 ///
 /// 整份计划先扫描一遍再开始写：执行器缺席的步骤、未装配的表步骤、不合法的搬移形状与
@@ -167,7 +182,9 @@ pub(crate) fn execute_plan(
     let sector_size = plan.plan().sector_size().get();
     let record = src.record_journal().and_then(|j| j.relocation());
     let steps = prepare_steps(src, plan, chunk_bytes, sector_size, record)?;
-    verify_first_table(src, &steps)?;
+    // 数据搬移与表写入都在这个核对之后：外部在计划读出之后改了表，要在这里以 3 拒绝，
+    // 而不是搬完数据才在表步发现
+    verify_tables_before_write(src, &steps)?;
     let mut state = journal_state(src)?;
     // 只有搬移计划才带"搬完之后的那一次扩容"；delete/add/set 的单表步与它无关，
     // 不能让测试注入点在那些命令上误触发
@@ -180,7 +197,7 @@ pub(crate) fn execute_plan(
         match step {
             PreparedStep::Transfer { reloc, commit, swap } => {
                 // 记录里已提交的条目整组跳过：数据与表都不再碰
-                if entry < state.entry_index {
+                if entry_done(entry, &state) {
                     entry += 1;
                     continue;
                 }
@@ -191,7 +208,7 @@ pub(crate) fn execute_plan(
                         .map_err(|e| e.context(&format!("plan step {}", index + 1)))?;
                 }
                 crate::movepart::fault_before_entry_commit();
-                table::execute(src, commit, state.wrote_target())
+                table::execute(src, commit)
                     .map_err(|e| e.context(&format!("plan step {}", index + 1)))?;
                 // 换区条目的表项刚落位、内容尚未重建：重放必须在同一个记录游标上重做重建
                 if swap.is_some() {
@@ -227,10 +244,10 @@ pub(crate) fn execute_plan(
             PreparedStep::Copy { copy, commit } => {
                 let chunk = chunk_bytes
                     .expect("prepare_steps refuses a copy plan without a chunk size");
-                copy::execute(src, &copy, sector_size, chunk, state.wrote_target())
+                copy::execute(src, &copy, sector_size, chunk)
                     .map_err(|e| e.context(&format!("plan step {}", index + 1)))?;
                 // 复制步骤只在写完数据之后返回 Ok，表步骤此前已写过目标字节
-                table::execute(src, commit, true)
+                table::execute(src, commit)
                     .map_err(|e| e.context(&format!("plan step {}", index + 1)))?;
                 state.completed_steps += 1;
                 sink.table_step_done(src, index, &state)?;
@@ -241,13 +258,13 @@ pub(crate) fn execute_plan(
                     crate::movepart::fault_before_grow();
                     grow_faulted = true;
                 }
-                table::execute(src, commit, state.wrote_target())
+                table::execute(src, commit)
                     .map_err(|e| e.context(&format!("plan step {}", index + 1)))?;
                 state.completed_steps += 1;
                 sink.table_step_done(src, index, &state)?;
             }
             PreparedStep::FsResize(step) => {
-                let unmet = fs::execute(src, &step, sector_size, state.wrote_target(), sink)
+                let unmet = fs::execute(src, &step, sector_size, sink)
                     .map_err(|e| e.context(&format!("plan step {}", index + 1)))?;
                 state.completed_steps += 1;
                 sink.fs_step_done(src, index, &state)?;
@@ -260,13 +277,13 @@ pub(crate) fn execute_plan(
             }
             PreparedStep::FsCreate(step) => {
                 // 建立步骤只出现在单步计划里，失败原因直接沿用 fsops 的措辞，不加步骤前缀
-                mkfs::execute(src, &step, sector_size, state.wrote_target())?;
+                mkfs::execute(src, &step, sector_size)?;
                 state.completed_steps += 1;
                 sink.fs_step_done(src, index, &state)?;
             }
             PreparedStep::FsSet(step) => {
                 // 属性步骤同样只出现在单步计划里，屏障在启动外部工具之前落盘
-                set::execute(src, &step, state.wrote_target())?;
+                set::execute(src, &step)?;
                 state.completed_steps += 1;
                 sink.fs_step_done(src, index, &state)?;
             }
@@ -290,7 +307,7 @@ pub(crate) fn execute_plan_complete(
         StepFlow::Complete if pending.is_empty() => Ok(()),
         // 待办是"已写盘、还差一步"，按 5 带出明细；报成内部错误会把"盘已改变"洗成
         // "未产生持久化修改"
-        _ => Err(RunOutcome::partial_with(
+        _ => Err(RunOutcome::partial_postcondition(
             "a step of this plan left its postcondition unmet",
             pending,
         )),
@@ -323,39 +340,8 @@ fn fix_hidden_sectors(
     }
     crate::movepart::fault_before_hidden_fix();
     let mut emit = |m: &str| sink.note(m);
-    crate::movepart::fix_ntfs_hidden_sectors(src, reloc.dst_first, sector_size, &mut emit)
+    crate::movepart::fix_ntfs_hidden_sectors(src, reloc.dst_first, sector_size, reloc.part, &mut emit)
         .map_err(|e| RunOutcome::partial(e.to_string()))
-}
-
-/// 首写前比对计划里第一个表步的表区。
-///
-/// 搬移按计划里的 LBA 直接读写：表在装配取快照之后被外部改动时，搬移会覆盖别人正在
-/// 用的区间，等到表步骤执行才发现已经太晚。这里用该步骤自己的 `expect_before` 与
-/// `regions` 与盘面现状做字节比较。
-///
-/// 只看第一个表步：后续表步的前置状态由前一步的写后比对与步前戳链给出。只有 `Relocate`
-/// 没有表步的计划已在预扫描的形状校验里拒绝，因此进入本函数的搬移计划必有表步。
-fn verify_first_table(src: &WriteSource, steps: &[PreparedStep<'_>]) -> Result<(), RunOutcome> {
-    let Some(first) = steps.iter().find_map(|s| match s {
-        PreparedStep::Transfer { commit, .. } => Some(*commit),
-        PreparedStep::Copy { commit, .. } => Some(*commit),
-        PreparedStep::TableOnly(commit) => Some(*commit),
-        PreparedStep::FsResize(_) | PreparedStep::FsCreate(_) | PreparedStep::FsSet(_) => None,
-    }) else {
-        return Ok(());
-    };
-    let Some(expected) = first.expect_before else {
-        return Err(RunOutcome::internal(
-            "the first table step carries no expected pre-write stamp — the plan was not assembled; nothing was written",
-        ));
-    };
-    if crate::table::regions_match(src, &first.regions, expected)? {
-        return Ok(());
-    }
-    // 此刻尚未写过任何目标字节，按请求被拒上报
-    Err(RunOutcome::refused(
-        "the table changed on disk before the transfer started — re-run the command",
-    ))
 }
 
 /// 首次写入前的全量扫描：类型、装配完整性、表写入范围、计划形状、swap、块参数、
@@ -374,7 +360,7 @@ fn prepare_steps<'a>(
             PlanStep::WriteTable(table) => {
                 if table.expect_before.is_none() || table.expect_after.is_none() {
                     return Err(RunOutcome::internal(format!(
-                        "plan step {} writes the table but carries no expected stamp — the plan was not assembled; nothing was written",
+                        "plan step {} writes the table but carries no expected stamp — the plan was not assembled",
                         index + 1
                     )));
                 }
@@ -385,7 +371,7 @@ fn prepare_steps<'a>(
                 });
                 if !aligned {
                     return Err(RunOutcome::internal(format!(
-                        "plan step {} writes table bytes outside its comparison regions — nothing was written",
+                        "plan step {} writes table bytes outside its comparison regions",
                         index + 1
                     )));
                 }
@@ -395,13 +381,13 @@ fn prepare_steps<'a>(
                 has_data |= !*is_swap;
                 if *sectors == 0 {
                     return Err(RunOutcome::internal(format!(
-                        "plan step {} relocates zero sectors — nothing was written",
+                        "plan step {} relocates zero sectors",
                         index + 1
                     )));
                 }
                 if !matches!(raw.get(index + 1), Some(PlanStep::WriteTable(_))) {
                     return Err(RunOutcome::internal(format!(
-                        "plan step {} relocates data but is not followed by the table step that commits it — nothing was written",
+                        "plan step {} relocates data but is not followed by the table step that commits it",
                         index + 1
                     )));
                 }
@@ -412,7 +398,7 @@ fn prepare_steps<'a>(
                 has_data = true;
                 if !matches!(raw.get(index + 1), Some(PlanStep::WriteTable(_))) {
                     return Err(RunOutcome::internal(format!(
-                        "plan step {} copies data but is not followed by the table step that commits it — nothing was written",
+                        "plan step {} copies data but is not followed by the table step that commits it",
                         index + 1
                     )));
                 }
@@ -477,14 +463,14 @@ fn prepare_steps<'a>(
     let chunk = if has_data {
         let Some(chunk) = chunk_bytes else {
             return Err(RunOutcome::refused(
-                "this plan relocates data but no chunk size was given — nothing was written",
+                "this plan relocates data but no chunk size was given",
             ));
         };
         const MIN_CHUNK: u64 = 1024 * 1024;
         const MAX_CHUNK: u64 = 64 * 1024 * 1024;
         if !(MIN_CHUNK..=MAX_CHUNK).contains(&chunk) || chunk % sector_size != 0 {
             return Err(RunOutcome::refused(format!(
-                "chunk size {chunk} bytes must be within 1 MiB..=64 MiB and a multiple of the {sector_size}-byte sector — nothing was written"
+                "chunk size {chunk} bytes must be within 1 MiB..=64 MiB and a multiple of the {sector_size}-byte sector"
             )));
         }
         Some(chunk)
@@ -536,32 +522,32 @@ fn prepare_steps<'a>(
                 move_chunk_layout(*sectors, sector_size, shift, *sectors, chunk)
             else {
                 return Err(RunOutcome::internal(format!(
-                    "plan step {} has no usable relocation block layout — nothing was written",
+                    "plan step {} has no usable relocation block layout",
                     index + 1
                 )));
             };
             // 地址区间的溢出判定与布局同源：执行期再遇到时前面的条目可能已写过
             let src_base = src_first.checked_mul(sector_size).ok_or_else(|| {
                 RunOutcome::internal(format!(
-                    "plan step {}: the source offset of partition {part} overflows the address space — nothing was written",
+                    "plan step {}: the source offset of partition {part} overflows the address space",
                     index + 1
                 ))
             })?;
             let dst_base = dst_first.checked_mul(sector_size).ok_or_else(|| {
                 RunOutcome::internal(format!(
-                    "plan step {}: the target offset of partition {part} overflows the address space — nothing was written",
+                    "plan step {}: the target offset of partition {part} overflows the address space",
                     index + 1
                 ))
             })?;
             let total = sectors.checked_mul(sector_size).ok_or_else(|| {
                 RunOutcome::internal(format!(
-                    "plan step {}: the relocation length of partition {part} overflows the address space — nothing was written",
+                    "plan step {}: the relocation length of partition {part} overflows the address space",
                     index + 1
                 ))
             })?;
             if src_base.checked_add(total).is_none() || dst_base.checked_add(total).is_none() {
                 return Err(RunOutcome::internal(format!(
-                    "plan step {}: the relocation byte range of partition {part} overflows the address space — nothing was written",
+                    "plan step {}: the relocation byte range of partition {part} overflows the address space",
                     index + 1
                 )));
             }
@@ -571,7 +557,7 @@ fn prepare_steps<'a>(
                 && reloc.chunks_in_entry > count
             {
                 return Err(RunOutcome::internal(format!(
-                    "plan step {}: {} chunks are recorded as done but the step only has {count} — nothing was written",
+                    "plan step {}: {} chunks are recorded as done but the step only has {count}",
                     index + 1,
                     reloc.chunks_in_entry
                 )));
@@ -588,7 +574,7 @@ fn prepare_steps<'a>(
                 // 形状校验在装配层，但计划是外部输入：越界必须是错误而不是 panic
                 let Some(PlanStep::WriteTable(commit)) = raw.get(index + 1) else {
                     return Err(RunOutcome::internal(
-                        "the relocation step is not followed by a table step — nothing was written",
+                        "the relocation step is not followed by a table step",
                     ));
                 };
                 // 换区条目在表提交之后多一步重建；两处对"这是不是换区"必须同答，
@@ -601,7 +587,7 @@ fn prepare_steps<'a>(
                 };
                 if swap.is_some() != *is_swap {
                     return Err(RunOutcome::internal(format!(
-                        "plan step {}: the swap-rebuild step and the relocation entry disagree on the partition type — nothing was written",
+                        "plan step {}: the swap-rebuild step and the relocation entry disagree on the partition type",
                         index + 1
                     )));
                 }
@@ -619,13 +605,13 @@ fn prepare_steps<'a>(
             }
             PlanStep::RebuildSwap { .. } => {
                 return Err(RunOutcome::internal(
-                    "a swap-rebuild step is not attached to the relocation entry that owns it — nothing was written",
+                    "a swap-rebuild step is not attached to the relocation entry that owns it",
                 ));
             }
             PlanStep::CopyPartition { part, src_first, dst_first, sectors } => {
                 let Some(PlanStep::WriteTable(commit)) = raw.get(index + 1) else {
                     return Err(RunOutcome::internal(
-                        "the copy step is not followed by a table step — nothing was written",
+                        "the copy step is not followed by a table step",
                     ));
                 };
                 steps.push(PreparedStep::Copy {
@@ -701,13 +687,13 @@ fn journal_state(src: &WriteSource) -> Result<TransferState, RunOutcome> {
         let count = recorded_entry_chunks(entry, reloc)?;
         recomputed = recomputed.checked_add(count).ok_or_else(|| {
             RunOutcome::internal(
-                "the recorded move cursor overflows the address space — nothing was written",
+                "the recorded move cursor overflows the address space",
             )
         })?;
     }
     recomputed = recomputed.checked_add(reloc.chunks_in_entry).ok_or_else(|| {
         RunOutcome::internal(
-            "the recorded move cursor overflows the address space — nothing was written",
+            "the recorded move cursor overflows the address space",
         )
     })?;
     state.transfer_cursor = state.transfer_cursor.max(recomputed);
@@ -719,7 +705,7 @@ fn recorded_entry_chunks(entry: &RelocEntry, reloc: &Relocation) -> Result<u64, 
     if entry.delta == 0 || entry.is_swap {
         return Ok(0);
     }
-    move_chunk_layout(entry.len, reloc.ss, entry.delta, entry.len, reloc.chunk_bytes)
+    move_chunk_layout(entry.len, reloc.ss, entry.delta.unsigned_abs(), entry.len, reloc.chunk_bytes)
         .map(|(_, count)| count)
         .ok_or_else(|| {
             RunOutcome::partial(format!(

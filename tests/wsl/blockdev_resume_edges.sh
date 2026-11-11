@@ -2,7 +2,6 @@
 # 记录损坏 / --chunk 变更 / 大 chunk / align / 边界
 # 去重归属：块设备路径（is_block=true / 4Kn）的唯一归属是 blockdev_4kn.sh；
 #           move + chunk 注入续传的唯一归属是 resize_part_fault_paths.sh。
-#           原"块设备 move + chunk:50 中断"用例与上述两处语义重复（且续传断言更弱），已删。
 source "$(dirname "$0")/lib.sh"
 require_fault_bin
 

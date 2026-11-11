@@ -160,10 +160,10 @@ fn resizefs_online(a: &ResizefsRequest, size: Option<u64>) -> RunOutcome {
     let o = crate::online::resize_online(std::path::Path::new(&a.target), size);
     if o.is_complete() {
         println!("resized online (verify with: diskedit info {})", a.target);
+        o
     } else {
-        o.report();
+        o.report_final()
     }
-    o
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -185,6 +185,16 @@ fn resizefs_offline(a: &ResizefsRequest, pref: PartSelector) -> RunOutcome {
     // 锁下快照
     let part = crate::gpt_policy::resolve_part(&src, pref).unwrap_or_else(|f| bail_fail(f));
     let (start, len) = crate::gpt_policy::partition_bytes(&src, part).unwrap_or_else(|f| bail_fail(f));
+    // 续跑时只认同一份请求：操作、分区与区间一致（摘要只作请求身份比对）。
+    // 早退分支也要用同一份判据——它可以决定删除一条既有记录
+    let digest = crate::recovery::PlanDigest::of_request(
+        crate::recovery::OpKind::ResizeFs,
+        part,
+        start,
+        len,
+        src.sector_size,
+        src.size,
+    );
     // 要扩哪一段、里面是什么 FS 取的是与 `resize` 同一处的判据（overlay 的 RW 层即由此
     // 落到内层区间）。判据只有一处，两条命令的后置条件却不同：`resize` 的后置条件含
     // 分区层，FS 那一步做不了时它在写表之前就拒绝；本命令只动 FS，同一个结论落在这里
@@ -196,16 +206,38 @@ fn resizefs_offline(a: &ResizefsRequest, pref: PartSelector) -> RunOutcome {
             // 也可能是可供识别的字节不足——`identify` 的 `None` 分不出这三种。本命令在这
             // 三种情形下都无事后置条件可做（该层的空间由首次挂载时的 fstools 建满），
             // 故只报"没有可扩的文件系统"，不替用户断言是哪一种。
-            // 续跑进来的记录在此已有结论（无事可做），随本次成功收尾一并清理，不留到下次
-            if src.record_journal().is_some_and(|j| j.is_persisted())
-                && let Some(journal) = src.take_record_journal()
-                && let Err(e) = journal.commit_and_discard()
-            {
-                let out = RunOutcome::applied_with(Vec::new()).degrade_partial(format!(
-                    "the recovery record was not cleaned up ({e}) — release it with `diskedit abandon`"
-                ));
-                out.report();
-                return out;
+            // 仅当记录属于本次请求时，此处才没有可做的事：续跑进来、盘面已无可扩层，
+            // 记录的结论与本次请求一致，随本次成功收尾一并清理。记录属于别的请求时
+            // 既不能删，也不能带着它继续写
+            let persisted = src
+                .record_journal()
+                .filter(|j| j.is_persisted())
+                .map(|j| (j.request_match(digest), j.record_path().to_path_buf()));
+            match persisted {
+                Some((crate::recovery::RequestMatch::Same, _)) => {
+                    if let Some(journal) = src.take_record_journal()
+                        && let Err(e) = journal.commit_and_discard()
+                    {
+                        let out = RunOutcome::applied_with(Vec::new()).degrade_partial(format!(
+                            "the recovery record was not cleaned up ({e}) — release it with `diskedit abandon`"
+                        ));
+                        return out.report_final();
+                    }
+                }
+                Some((verdict, path)) => {
+                    let why = if verdict == crate::recovery::RequestMatch::Unbound {
+                        "carries no request identity, so this run cannot prove it belongs here"
+                    } else {
+                        "belongs to a different `resizefs` request (the partition, range, size, or options changed)"
+                    };
+                    bail_fail(RunOutcome::refused(format!(
+                        "the recovery record at {} {why} — run `diskedit inspect {}` or `diskedit undo {}` first",
+                        path.display(),
+                        a.target,
+                        a.target
+                    )));
+                }
+                None => {}
             }
             println!(
                 "nothing to resize on partition #{part} — no growable filesystem was identified in the trailing region \
@@ -237,25 +269,15 @@ fn resizefs_offline(a: &ResizefsRequest, pref: PartSelector) -> RunOutcome {
     // 才暴露，本次运行只能按 Partial(5) 报，无法再声称"确定未写盘"。类型接线判断不在此拦：不接线的类型不会写盘，
     // 由 resize_fs_in 按类型给出准确的拒绝文案
     match fsops::check_grow(target.fstype, src.is_block, fsops::needs_loop(&target.scope, src.is_block)) {
-        Err(fsops::FsError::UnsupportedFs(_)) => {}
+        Err(fsops::FsError::UnsupportedFs { .. }) => {}
         other => other.unwrap_or_else(|e| bail_fail(RunOutcome::from(e))),
     }
-    // 续跑时只认同一份请求：操作、分区与区间一致（摘要只作请求身份比对）
-    let digest = crate::recovery::PlanDigest::of_request(
-        crate::recovery::OpKind::ResizeFs,
-        part,
-        start,
-        len,
-        src.sector_size,
-        src.size,
-        0,
-    );
+    // 屏障不在这里：执行器在启动外部工具之前落盘（`execution::fs::execute`）
     if let Some(journal) = src.record_journal_mut()
         && let Err(why) = journal.bind_plan(digest)
     {
         bail_fail(RunOutcome::refused(why));
     }
-    // 屏障不在这里：执行器在启动外部工具之前落盘（`execution::fs::execute`）
     let plan = crate::assembly::assemble_fs_resize(&src, part, Some(target.fstype))
         .unwrap_or_else(|f| bail_fail(f));
     // 计划里没有搬移步骤，块大小无人消费；FS 步骤也不写游标，sink 不落任何进度
@@ -281,8 +303,7 @@ fn resizefs_offline(a: &ResizefsRequest, pref: PartSelector) -> RunOutcome {
                 },
             );
             // 待办必须让人看到：分派处只取退出码，不会把它呈现出来
-            out.report();
-            out
+            out.report_final()
         }
         Err(f) => bail_fail(f),
     }

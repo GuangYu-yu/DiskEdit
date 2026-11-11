@@ -180,13 +180,28 @@ pub(crate) fn check_mount_layer_tools(fstype: Option<ContentKind>, _is_block: bo
 }
 
 /// 该 FS 的扩容/缩容应交给用户的补救命令（用于 PARTIAL 时的提示）。
-/// 产物是一段 shell 命令文本，属对外呈现，不参与能力判定；`None`（未识别）无补救命令
-pub fn rescue_hint(fstype: Option<ContentKind>, dev: &str) -> String {
+/// 产物是一段 shell 命令文本，属对外呈现，不参与能力判定；`None`（未识别）无补救命令。
+///
+/// `reason` 由失败现场给出（`FsError::unsupported_reason`），本函数不重读
+/// 超级块：只有拒绝的那一侧能同时拿到原因与设备，这里只决定措辞
+pub(crate) fn rescue_hint(
+    fstype: Option<ContentKind>,
+    dev: &str,
+    reason: Option<UnsupportedReason>,
+) -> String {
     match fstype {
         Some(ContentKind::Filesystem(FsKind::Ext)) => format!("e2fsck -fp {dev} && resize2fs {dev}"),
         Some(ContentKind::Filesystem(FsKind::Ntfs)) => format!("ntfsresize -f -f {dev}"),
         Some(ContentKind::Filesystem(FsKind::F2fs)) => format!("fsck.f2fs {dev} && resize.f2fs {dev}"),
         Some(ContentKind::Filesystem(FsKind::Xfs)) => format!("mount {dev} <mnt> && xfs_growfs <mnt>"),
+        // `resize` 的 devid 缺省为 1，`max` 只作用于该设备：多设备 fs 上不带 `devid:`
+        // 会去扩另一块成员，故先经 `btrfs filesystem show` 取本设备的 devid
+        // （btrfs-progs v6.12 `Documentation/btrfs-filesystem.rst:229-249`，查询日期 2026-11-10）
+        Some(ContentKind::Filesystem(FsKind::Btrfs))
+            if matches!(reason, Some(UnsupportedReason::MultiDeviceBtrfs)) => format!(
+            "mount {dev} <mnt> && btrfs filesystem show <mnt> && btrfs filesystem resize <devid>:max <mnt> — \
+             take <devid> for {dev} from that output (resize without it targets devid 1)"
+        ),
         Some(ContentKind::Filesystem(FsKind::Btrfs)) => format!("mount {dev} <mnt> && btrfs filesystem resize max <mnt>"),
         Some(ContentKind::Filesystem(FsKind::Vfat)) => format!("fatresize -s max {dev}"),
         Some(ContentKind::Swap) => format!("mkswap --uuid <uuid> {dev}"),

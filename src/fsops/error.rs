@@ -2,6 +2,18 @@
 
 use super::*;
 
+/// `UnsupportedFs` 的拒绝缘由。调用方按它选措辞（如补救命令）；
+/// 用户可见文案仍由 `FsError::UnsupportedFs::detail` 原样承载，不从这里派生
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnsupportedReason {
+    /// btrfs 跨多设备（`num_devices > 1`）。`resize` 的 devid 缺省为 1，
+    /// 多设备时落到的成员不一定是被扩分区所在的那一块
+    /// （btrfs-progs v6.12 `Documentation/btrfs-filesystem.rst:229-249`，查询日期 2026-11-10）
+    MultiDeviceBtrfs,
+    /// 其余「该类型/该操作没有接线」的原因
+    Other,
+}
+
 /// FS 层失败的分类。fsops 只回答"操作层面发生了什么"，"这该算拒绝还是故障"要结合
 /// durable boundary 才能回答，属命令层语义（映射见 `outcome::From<FsError> for RunOutcome`）。
 ///
@@ -12,7 +24,12 @@ use super::*;
 #[derive(Debug)]
 pub enum FsError {
     /// 该类型/该操作没有接线的工具（不认得的 FS、本工具不负责的组合）
-    UnsupportedFs(String),
+    UnsupportedFs {
+        /// 拒绝缘由，供调用方分支；不参与文案
+        reason: UnsupportedReason,
+        /// 用户可见文案；`Display` 逐字输出
+        detail: String,
+    },
     /// 构建或运行平台没有该操作的实现（非 Linux 下的写路径、需要内核接口的操作）
     UnsupportedPlatform(String),
     /// 参数非法，或目标现状与请求不符（分区不存在/为空、容器分区、尺寸不是扇区倍数）
@@ -27,7 +44,20 @@ pub enum FsError {
 
 impl FsError {
     pub(crate) fn unsupported(msg: impl Into<String>) -> Self {
-        Self::UnsupportedFs(msg.into())
+        Self::UnsupportedFs { reason: UnsupportedReason::Other, detail: msg.into() }
+    }
+
+    /// 多设备 btrfs 拒绝：`detail` 逐字承载面向用户的正文
+    pub(crate) fn unsupported_multi_device_btrfs(msg: impl Into<String>) -> Self {
+        Self::UnsupportedFs { reason: UnsupportedReason::MultiDeviceBtrfs, detail: msg.into() }
+    }
+
+    /// 拒绝缘由；不是 `UnsupportedFs` 时为 `None`
+    pub(crate) fn unsupported_reason(&self) -> Option<UnsupportedReason> {
+        match self {
+            Self::UnsupportedFs { reason, .. } => Some(*reason),
+            _ => None,
+        }
     }
 
     pub(crate) fn platform(msg: impl Into<String>) -> Self {
@@ -57,7 +87,10 @@ impl FsError {
     /// 主错误自身之外的残留（如挂载点没卸掉）拼进主错误，读者不必靠两路 stderr 拼现场
     pub(crate) fn with_note(self, note: &str) -> Self {
         match self {
-            Self::UnsupportedFs(m) => Self::UnsupportedFs(format!("{m}; {note}")),
+            Self::UnsupportedFs { reason, detail } => Self::UnsupportedFs {
+                reason,
+                detail: format!("{detail}; {note}"),
+            },
             Self::UnsupportedPlatform(m) => Self::UnsupportedPlatform(format!("{m}; {note}")),
             Self::InvalidArgument(m) => Self::InvalidArgument(format!("{m}; {note}")),
             Self::ToolMissing(m) => Self::ToolMissing(format!("{m}; {note}")),
@@ -89,8 +122,8 @@ pub(crate) fn describe_exit(st: &std::process::ExitStatus) -> String {
 impl std::fmt::Display for FsError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::UnsupportedFs(m)
-            | Self::UnsupportedPlatform(m)
+            Self::UnsupportedFs { detail, .. } => f.write_str(detail),
+            Self::UnsupportedPlatform(m)
             | Self::InvalidArgument(m)
             | Self::ToolMissing(m)
             | Self::CommandFailed(m) => f.write_str(m),

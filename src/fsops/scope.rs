@@ -214,16 +214,11 @@ pub(crate) fn resolve_scope_device(
     #[cfg(target_os = "linux")]
     let mut reusable: Option<String> = None;
     #[cfg(target_os = "linux")]
-    let view = crate::fsops::mount::OccupancyView {
-        dm_held_is_idle: false,
-        unopenable_is_skipped: false,
-    };
-    #[cfg(target_os = "linux")]
-    if let Some(occupant) = image_loop_occupancy(src, view)? {
-        // 确知在用 = 请求与现状不符（解除占用后重跑有意义）→ 拒绝；拿不到内核独占
-        // 证据 = 确认不了 → 环境故障。两种性质分属不同变体，出口码随之而定
+    if let Some(occupant) = image_loop_occupancy(src)? {
+        // 出口码由事实类决定（[`OccupancyFact`]）：确知在用 3、无法确认 4。
+        // 文案留在本处——每条都要说清解除动作或取不到什么证据
         let refusal = match occupant {
-            LoopOccupancy::Live(dev) => Some(FsError::invalid(format!(
+            LoopOccupancy::Live(dev) => Some(crate::dev::OccupancyFact::LoopOccupied.fs_error(format!(
                 "{dev} is a loop onto this image and is in use — unmount/swapoff it first"
             ))),
             LoopOccupancy::Held { loopdev, holders }
@@ -232,18 +227,24 @@ pub(crate) fn resolve_scope_device(
                 reusable = Some(loopdev);
                 None
             }
-            LoopOccupancy::Held { loopdev, holders } => Some(FsError::invalid(format!(
-                "{loopdev} is a loop onto this image and is held by {} — deactivate that stack first",
-                holders.join(", ")
-            ))),
+            LoopOccupancy::Held { loopdev, holders } => {
+                Some(crate::dev::OccupancyFact::LoopOccupied.fs_error(format!(
+                    "{loopdev} is a loop onto this image and is held by {} — deactivate that stack first",
+                    holders.join(", ")
+                )))
+            }
             // 内核拒绝独占打开：本工具拿不到这条内核级证据，按"在用"处理
-            LoopOccupancy::KernelBusy { loopdev } => Some(FsError::invalid(format!(
-                "{loopdev} is a loop onto this image and the kernel refuses an exclusive open (EBUSY) — \
-                 it is still in use (mounted, active swap, or claimed by another stack)"
-            ))),
-            LoopOccupancy::Unclaimable { loopdev, why } => Some(FsError::Io(io::Error::other(format!(
-                "cannot take an exclusive claim on {loopdev}, a loop onto this image: {why}"
-            )))),
+            LoopOccupancy::KernelBusy { loopdev } => {
+                Some(crate::dev::OccupancyFact::LoopOccupied.fs_error(format!(
+                    "{loopdev} is a loop onto this image and the kernel refuses an exclusive open (EBUSY) — \
+                     it is still in use (mounted, active swap, or claimed by another stack)"
+                )))
+            }
+            LoopOccupancy::Unclaimable { loopdev, why } => {
+                Some(crate::dev::OccupancyFact::LoopUnreadable.fs_error(format!(
+                    "cannot take an exclusive claim on {loopdev}, a loop onto this image: {why}"
+                )))
+            }
         };
         if let Some(e) = refusal {
             return Err(e);

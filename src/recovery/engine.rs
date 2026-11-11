@@ -29,6 +29,9 @@ pub(crate) struct RecoveryRecord {
     pub(crate) path: std::path::PathBuf,
     /// `probe` 只回答"落点上是什么"；身份由 `undo` / `abandon` 在打开目标后按当前场景再比
     pub(crate) probe: Box<crate::recovery::CompanionProbe>,
+    /// 载荷身份与当前目标不符的原因。`None` 才是本目标可认领的记录；`Some` 只用于展示：
+    /// 不阻塞写命令、不回放、不隔离
+    pub(crate) foreign: Option<String>,
 }
 
 impl RecoveryRecord {
@@ -36,10 +39,15 @@ impl RecoveryRecord {
         &self.path
     }
 
+    /// 本目标能否认领这条记录：身份必须严格相等（或身份读不出时按落点认领）
+    pub(crate) fn claimable(&self) -> bool {
+        self.foreign.is_none()
+    }
+
     /// 报告用的单条描述
-    fn describe(&self) -> String {
+    pub(crate) fn describe(&self) -> String {
         let path = &self.path;
-        match self.probe.as_ref() {
+        let line = match self.probe.as_ref() {
             crate::recovery::CompanionProbe::Decoded(record) => format!(
                 "{} (recovery record: {:?}, {} written range(s))",
                 path.display(),
@@ -59,6 +67,10 @@ impl RecoveryRecord {
                 format!("{} (recovery record, cannot be read: {why})", path.display())
             }
             crate::recovery::CompanionProbe::Absent => path.display().to_string(),
+        };
+        match &self.foreign {
+            Some(why) => format!("{line} — identity does not match the current target ({why})"),
+            None => line,
         }
     }
 
@@ -76,19 +88,122 @@ impl RecoveryRecord {
 
 /// 枚举目标上还活着的恢复现场。
 ///
-/// 判据只看记录落点：只有普通文件且可解码（或可被识别为损坏 / 布局不认识 / 外来文件）才算
-/// 现场；缺席不是。旧 journal 与旧 checkpoint 不在这里认领——它们不是记录，不进本枚举，
-/// 也不阻塞任何命令（不认领、不改名、不删除、不进扫描）。
-pub(crate) fn active_recovery_records(identity: &TargetIdentity) -> Vec<RecoveryRecord> {
+/// 身份派生落点上的记录按落点认领：只有普通文件且可解码（或可被识别为损坏 / 布局不认识 /
+/// 外来文件）才算现场；缺席不是。旧 journal 与旧 checkpoint 不在这里认领——它们不是记录，
+/// 不进本枚举，也不阻塞任何命令（不认领、不改名、不删除、不进扫描）。
+///
+/// 块设备的记录目录名由身份派生，身份漂移、目录被改名或搬移后，按当前身份拼出的路径就
+/// 找不到它。`src` 在场时另扫记录根：候选由**记录自己的载荷**认领（解码与身份比对全过）。
+/// 身份不符或无法比对的候选照样列出，但带 [`RecoveryRecord::claimable`] 为 false 的标记——
+/// 记录因此对 `records` / `inspect` / `undo` / `abandon` 都看得见，却不被任何一方认领
+pub(crate) fn active_recovery_records(identity: &TargetIdentity, src: Option<&FileSource>) -> Vec<RecoveryRecord> {
     let mut out = Vec::new();
-    // 单文件记录只在镜像上有已定的落点；块设备的记录状态根未定，写路径在迁移完成前拒绝
+    let current = src.and_then(current_scene);
     if let Some(path) = identity.record_path() {
+        // 身份派生的落点：镜像落在镜像旁的记录目录，块设备落在整盘键派生的记录目录
         let probe = crate::recovery::probe_companion(path);
         if !matches!(probe, crate::recovery::CompanionProbe::Absent) {
-            out.push(RecoveryRecord { path: path.to_path_buf(), probe: Box::new(probe) });
+            out.push(RecoveryRecord {
+                path: path.to_path_buf(),
+                probe: Box::new(probe),
+                foreign: mismatch_reason(path, current.as_ref()),
+            });
         }
     }
+    scan_record_root(identity, current.as_ref(), &mut out);
     out
+}
+
+/// 归属判定的共同入口：只认目标当前能给出的身份证据。
+/// 打不开、探测失败、身份材料为 `Unavailable` 时，任何记录都无法被证明属于它——
+/// `abandon`、`undo` 的清理与记录枚举共用这里，不各自解释身份证据
+pub(crate) fn ownership_scene(
+    src: &crate::dev::FileSource,
+) -> Result<crate::recovery::SceneIdentity, crate::platform::PlatformError> {
+    let probe = crate::platform::probe::probe_of(src)?;
+    let scene = crate::recovery::SceneIdentity::of_source(&probe, src);
+    match scene.proof() {
+        crate::recovery::SceneProof::Unavailable => Err(crate::platform::PlatformError::Unidentifiable(
+            "no device id and no backing-file id".to_string(),
+        )),
+        _ => Ok(scene),
+    }
+}
+
+/// 目标当前的场景身份；身份读不出时返回 `None`，调用方据此区分"不符"与"无法比对"
+fn current_scene(src: &crate::dev::FileSource) -> Option<crate::recovery::SceneIdentity> {
+    ownership_scene(src).ok()
+}
+
+/// 记录载荷声明的身份与当前场景不符的原因；身份读不出、记录不可解码或不是身份问题时
+/// 返回 `None`——那些类别由 `probe` 的形态说明，不是"身份不符"
+fn mismatch_reason(path: &Path, current: Option<&crate::recovery::SceneIdentity>) -> Option<String> {
+    let current = current?;
+    match crate::recovery::read_companion(path, current) {
+        Ok(crate::recovery::Evidence::ForeignTarget { recorded, current }) => Some(
+            recorded
+                .mismatch_reason(&current)
+                .unwrap_or_else(|| "the recorded identity differs from the target".to_string()),
+        ),
+        _ => None,
+    }
+}
+
+/// 扫记录根补充身份派生路径找不到的记录。只有块设备的落点是
+/// `<state_root>/recovery/<identity-hash>/record`，根因此有可扫的兄弟目录；
+/// 镜像的落点旁没有这样的根，且其路径本身不随身份漂移。
+///
+/// 身份派生路径拼不出来时（块设备身份读不出），根退回主机仓库：候选按结构列出并标为
+/// 不可认领，而不是整批消失
+fn scan_record_root(
+    identity: &TargetIdentity,
+    current: Option<&crate::recovery::SceneIdentity>,
+    out: &mut Vec<RecoveryRecord>,
+) {
+    use crate::dev::TargetKind;
+    if identity.kind != TargetKind::Block {
+        return;
+    }
+    let derived = identity.record_path();
+    let root = derived
+        .and_then(|p| p.parent().and_then(Path::parent))
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| crate::dev::host_state_root().join("recovery"));
+    let Ok(entries) = std::fs::read_dir(&root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let candidate = entry.path().join(crate::dev::RECORD_NAME);
+        if derived == Some(candidate.as_path()) || out.iter().any(|r| r.path == candidate) {
+            continue;
+        }
+        let probe = crate::recovery::probe_companion(&candidate);
+        if matches!(probe, crate::recovery::CompanionProbe::Absent) {
+            continue;
+        }
+        // 身份可读：候选由载荷认领。身份相符的候选同样进入枚举（可认领），
+        // 身份不符的候选列出原因
+        let foreign = match current {
+            Some(current) => match crate::recovery::read_companion(&candidate, current) {
+                Ok(crate::recovery::Evidence::Recognized(_)) => None,
+                Ok(crate::recovery::Evidence::ForeignTarget { recorded, current }) => Some(
+                    recorded
+                        .mismatch_reason(&current)
+                        .unwrap_or_else(|| "the recorded identity differs from the target".to_string()),
+                ),
+                _ => continue,
+            },
+            // 身份读不出：无法比对。可解码的候选仍列出，但不可认领
+            None => match &probe {
+                crate::recovery::CompanionProbe::Decoded(_) => Some(
+                    "the current target identity could not be established, so this record cannot be matched to it"
+                        .to_string(),
+                ),
+                _ => continue,
+            },
+        };
+        out.push(RecoveryRecord { path: candidate, probe: Box::new(probe), foreign });
+    }
 }
 
 /// 事务的控制层。它不持状态——"这次事务开到哪了"的唯一事实就是盘上那份记录
@@ -161,8 +276,7 @@ impl TransactionManager {
                 // move/copy 的数据搬移越过不可逆点后，表区仍在 preimage 里，
                 // undo 仍可回写——"可否撤销"因此按操作类型判，不只看屏障位
                 crate::recovery::CompanionProbe::Decoded(record) => Some(
-                    !record.restore_blocked
-                        || matches!(record.op, crate::recovery::OpKind::Move | crate::recovery::OpKind::Copy),
+                    !record.restore_blocked || crate::recovery::table_only_replay(record.op),
                 ),
                 _ => None,
             })
@@ -252,11 +366,12 @@ impl TransactionManager {
     /// mountinfo 读不到这类环境故障必须以 4 浮出，不能被目录拒绝遮住
     fn pre_admission(a: &impl TargetRequest, allow_dm_held: bool) -> Result<(), RunOutcome> {
         let peek = Self::open_plain(a)?;
-        if allow_dm_held {
-            crate::dev::refuse_if_occupied_strict_dm(&peek)
+        let shape = if allow_dm_held {
+            crate::dev::OpShape::Extend
         } else {
-            crate::dev::refuse_if_occupied_strict(&peek)
-        }?;
+            crate::dev::OpShape::Overwrite
+        };
+        crate::dev::refuse_if_occupied(&peek, shape)?;
         crate::dev::refuse_read_only_block(&peek)?;
         Ok(())
     }
@@ -266,7 +381,7 @@ impl TransactionManager {
     fn record_target(a: &impl TargetRequest) -> Result<(WriteSource, std::path::PathBuf), RunOutcome> {
         let src = Self::open_rw(a)?;
         Self::refuse_unidentifiable(&src)?;
-        // 第 24、25 条：块设备的记录目录由 WWN / EUI / serial 派生的 identity-hash
+        // 块设备的记录目录由 WWN / EUI / serial 派生的 identity-hash
         // 决定。dm、md、只有 major:minor、或 serial 读数不一致的目标没有目录，
         // 写命令退 6，不降级到旧 journal
         let Some(record_path) = src.identity.record_path().map(Path::to_path_buf) else {
@@ -285,7 +400,7 @@ impl TransactionManager {
     }
 
     /// 记录头要用的两件事实：目标场景与盘身份。身份取自已打开的句柄
-    /// （不是命令行的第二份解析），读不出时不在写盘前猜测（同旧 journal 的判据）
+    /// （不是命令行的第二份解析），读不出时不在写盘前猜测
     fn record_scene(
         src: &WriteSource,
     ) -> Result<(crate::recovery::SceneIdentity, crate::dev::DiskGuidState), RunOutcome> {
@@ -308,8 +423,7 @@ impl TransactionManager {
 
     /// 挂上写路径。
     ///
-    /// 本次事务不建旧 journal（[`Self::begin_without_history`] 不采纳历史），于是写路径上
-    /// 同时只有一条凭据。记录本身在第一次写盘前才落盘（见 [`crate::recovery::RecordJournal`]）：
+    /// 写路径上只有恢复记录一条凭据；记录本身在第一次写盘前才落盘（见 [`crate::recovery::RecordJournal`]）：
     /// 写盘前就被拒的命令不会留下空记录占住落点
     pub(crate) fn begin_table_record(
         a: &impl TargetRequest,
@@ -317,7 +431,7 @@ impl TransactionManager {
     ) -> Result<WriteSource, RunOutcome> {
         Self::pre_admission(a, false)?;
         let (mut src, record_path) = Self::record_target(a)?;
-        let active = Self::active_records(&src);
+        let active = Self::claimed_records(&src);
         if !active.is_empty() {
             return Err(Self::busy(&active));
         }
@@ -345,7 +459,7 @@ impl TransactionManager {
     ) -> Result<(WriteSource, bool), RunOutcome> {
         Self::pre_admission(a, false)?;
         let (mut src, record_path) = Self::record_target(a)?;
-        let active = Self::active_records(&src);
+        let active = Self::claimed_records(&src);
         let resumable = match active.as_slice() {
             [one] => match one.probe.as_ref() {
                 crate::recovery::CompanionProbe::Decoded(record) => record.op == op,
@@ -394,7 +508,7 @@ impl TransactionManager {
     ) -> Result<(WriteSource, ResizeEntry), RunOutcome> {
         Self::pre_admission(a, allow_dm_held)?;
         let (mut src, record_path) = Self::record_target(a)?;
-        let active = Self::active_records(&src);
+        let active = Self::claimed_records(&src);
         let resumable = matches!(
             active.as_slice(),
             [one]
@@ -482,9 +596,15 @@ impl TransactionManager {
         WriteSource::acquire(Self::open_plain(a)?)
     }
 
-    /// 目标上还活着的恢复现场
+    /// 目标上还活着的恢复现场（含身份不符的候选：供展示，供调用方过滤）
     pub(crate) fn active_records(src: &FileSource) -> Vec<RecoveryRecord> {
-        active_recovery_records(&src.identity)
+        active_recovery_records(&src.identity, Some(src))
+    }
+
+    /// 本目标可认领的恢复现场：闸口只看这一份。身份不符/不可比的候选不阻塞目标，
+    /// 也不参与续跑判定
+    pub(crate) fn claimed_records(src: &FileSource) -> Vec<RecoveryRecord> {
+        Self::active_records(src).into_iter().filter(RecoveryRecord::claimable).collect()
     }
 
     /// 绕过事务入口的写盘命令（`resizefs` 与 `check` 的修复）动手前的唯一闸口：目标上若还
@@ -499,7 +619,7 @@ impl TransactionManager {
     /// `/dev/sdb:2` 与 `/dev/sdb2` 因此共享同一处现场，只读分区节点即可枚举完
     pub(crate) fn refuse_if_active(src: &FileSource, what: &str) -> Result<(), RunOutcome> {
         Self::refuse_unidentifiable(src)?;
-        let active = active_recovery_records(&src.identity);
+        let active = Self::claimed_records(src);
         if active.is_empty() {
             return Ok(());
         }
@@ -513,7 +633,7 @@ mod tests {
     use super::*;
 
     fn record(probe: crate::recovery::CompanionProbe) -> RecoveryRecord {
-        RecoveryRecord { path: "r".into(), probe: Box::new(probe) }
+        RecoveryRecord { path: "r".into(), probe: Box::new(probe), foreign: None }
     }
 
     fn way_out(active: &[RecoveryRecord]) -> String {

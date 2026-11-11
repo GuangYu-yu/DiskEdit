@@ -58,7 +58,11 @@ pub(crate) struct StepWrite {
 pub(crate) struct TableStep {
     pub(crate) kind: TableWriteKind,
     pub(crate) regions: Vec<TableRegion>,
+    /// 与 `regions` 等长同序的写前期望：首次写盘之前逐段核对盘上表区用
+    pub(crate) expect_regions: Vec<RegionStamp>,
     pub(crate) writes: Vec<StepWrite>,
+    /// 与 `writes` 等长同序的写前期望：每条写入段自己的区间摘要，取自同一份快照
+    pub(crate) before: Vec<RegionStamp>,
     pub(crate) expect_before: Option<TableStamp>,
     pub(crate) expect_after: Option<TableStamp>,
 }
@@ -365,11 +369,23 @@ impl TableStep {
                 None => parts.push(&snapshot.bytes[i]),
             }
         }
+        // 写前期望按写入段的实际顺序排：每条写入段取它在快照里的那段原文
+        let mut before = Vec::with_capacity(writes.len());
+        for w in &writes {
+            let i = regions.iter().position(|r| *r == w.region).ok_or_else(|| {
+                RunOutcome::internal("a write target is not in the compare regions — the step was not assembled")
+            })?;
+            before.push(RegionStamp::of_bytes(w.region.offset, &snapshot.bytes[i]));
+        }
         let expect_after = table_stamp_of(&parts);
+        let expect_regions =
+            regions.iter().zip(&snapshot.bytes).map(|(r, b)| RegionStamp::of_bytes(r.offset, b)).collect();
         Ok(Self {
             kind,
             regions,
+            expect_regions,
             writes,
+            before,
             expect_before: Some(snapshot.stamp),
             expect_after: Some(expect_after),
         })

@@ -1,4 +1,4 @@
-//! §8 阶段 5 的验收入口：坏参数在打开目标之前就被拒掉，一律退 2 且原因在 stderr。
+//! 坏参数在打开目标之前就被拒掉，一律退 2 且原因在 stderr。
 use std::process::Command;
 
 fn run(args: &[&str]) -> (i32, String) {

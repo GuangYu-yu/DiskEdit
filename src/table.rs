@@ -36,7 +36,7 @@ pub(crate) use create::*;
 pub(crate) use stamp::*;
 pub(crate) use step::*;
 
-use crate::dev::FileSource;
+use crate::dev::{FileSource, RegionStamp};
 #[cfg(test)]
 use crate::dev::WriteSource;
 use crate::outcome::RunOutcome;

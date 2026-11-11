@@ -1,23 +1,18 @@
-//! 提交与清理：六条合取的落点。
+//! 提交与清理：提交门的落点。
 //!
 //! [`RecoveryEngine::commit`] 是唯一的签发点：它产出 [`CommittedRecord`]，并在留存、
 //! 身份与表写位置都允许时附带 [`CleanupPermit`]。[`RecoveryEngine::cleanup`] 只做记录侧
 //! 动作（删除 + 目录 fsync），准入判定不在这里重做。
 //!
-//! 六条在现有记录模型里的承载：
-//!
 //! | 条件 | 落点 |
 //! | --- | --- |
 //! | `Recognized` | [`Evidence::Recognized`]；否则 [`CommitRefusal::NotRecognized`] |
 //! | `commit == Committed` | 产出值固定携带该状态；持久化由调用方在此之前完成 |
-//! | 身份相符 | 删除前回读：从即将被删除的句柄读回字节，`Evidence::classify` 已识别且 `tx_id` 相等；否则 [`CleanupError::ReadbackMismatch`]，不删、保留记录 |
+//! | 身份相符 | 删除前从待删句柄回读，`Evidence::classify` 识别且 `tx_id` 相等；否则 [`CleanupError::ReadbackMismatch`]，不删、保留记录 |
 //! | `persist == Confirmed` | 记录没有独立字段；`Committed` 只在整份替换落盘后写入 |
-//! | 后置回读通过 | 记录模型没有承载位，不判定 |
-//! | `plan_index` 之后的表写步骤 | 调用方以 `table_change_pending` 报告 |
-//!
-//! 未确定：上表后两行的映射是从现有 `Record` 字段反推的——记录状态机写的是六项，
-//! 而 `Record` 只留下 `commit` / `retention` / `stages` / `progress`，没有
-//! `persist` 与 `plan_index` 的同名字段。
+//! | 留存 | [`Record::retention`] 不允许清理时落 [`NoPermitReason::Retention`] |
+//! | 后置回读 | 本模块不判定：`Record` 没有承载字段 |
+//! | `plan_index` 之后的表写步骤 | [`RecoveryEngine::commit`] 的 `table_change_pending` 入参为真时落 [`NoPermitReason::PendingTableChange`] |
 
 use crate::platform::{DirDurability, DirFd, EvidenceFile, EvidenceIo, EvidenceStore};
 
@@ -140,11 +135,8 @@ impl RecoveryEngine {
 
     /// 清理：删除已提交的记录文件并让目录项持久化。删除前从句柄读回字节，
     /// 分类已识别且 `tx_id` 与待删记录相等才删；不符则不删、保留记录。
-    /// 许可与记录不匹配是内部不变量破坏，同样拒绝。
-    ///
-    /// 未确定：把"许可与记录不匹配"记为 D7（内部不变量破坏），但端口
-    /// [`EvidenceStore::remove`] 的返回类型只有 [`EvidenceIo`]，此处只能以
-    /// `EvidenceIo::Unsupported` 拒绝，落不到 D7
+    /// 许可与记录不匹配是内部不变量破坏，同样拒绝；[`EvidenceStore::remove`] 只返回
+    /// [`EvidenceIo`]，因此以 `EvidenceIo::Unsupported` 拒绝。
     pub(crate) fn cleanup<S: EvidenceStore>(
         store: &S,
         anchor: &DirFd,

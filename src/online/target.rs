@@ -133,9 +133,10 @@ fn fsid_uuid(fsid: &[u8; 16]) -> String {
 /// multi-device/bind 挂载不支持
 pub(crate) fn resolve_part_dev(mountpoint: &Path) -> io::Result<(PathBuf, PathBuf)> {
     let mnt = fs::canonicalize(mountpoint)?;
-    // 本命名空间的挂载表：叠挂判定针对"此刻在这台机器上叠上去的层"，
-    // 全命名空间视图会把同一挂载经 shared 传播进其他命名空间的副本也算进来
-    let entries = crate::fsops::read_own_mounts()?;
+    // 本命名空间的表：叠挂判定针对"此刻在这台机器上叠上去的层"，
+    // 全命名空间视图会把同一挂载经 shared 传播进其他命名空间的副本也算进来。
+    // 这一份不承担占用判定
+    let entries = crate::fsops::read_current_namespace_mounts()?;
     let mnt_str = mnt.to_string_lossy().into_owned();
     let raw_str = mountpoint.to_string_lossy().into_owned();
     // 同一挂载点多条记录 = 发生过叠挂（overmount）：mountinfo 里首条是被遮的下层，
@@ -190,7 +191,6 @@ pub(crate) fn resolve_target(mountpoint: &Path) -> io::Result<OnlineTarget> {
     let (part_dev, mnt) = resolve_part_dev(mountpoint)?;
     let meta = fs::metadata(&part_dev)?;
     let rdev = meta.st_rdev();
-    // dev_t 分解主次设备号（man makedev(3) 的 major()/minor()）
     let (maj, min) = (libc::major(rdev), libc::minor(rdev));
 
     let sysdir = PathBuf::from(format!("/sys/dev/block/{maj}:{min}"));

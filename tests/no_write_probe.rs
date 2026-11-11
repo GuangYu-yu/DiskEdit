@@ -84,7 +84,7 @@ fn sha256_hex(bytes: &[u8]) -> String {
     out
 }
 
-/// 第 14、51 条：`info` 与 `plan` 不打开证据路径，也不探测写目录——目标旁不出现
+/// `info` 与 `plan` 不打开证据路径，也不探测写目录——目标旁不出现
 /// `<name>.diskedit`，目录树逐项不变。
 #[test]
 fn info_and_plan_never_create_the_sidecar() {

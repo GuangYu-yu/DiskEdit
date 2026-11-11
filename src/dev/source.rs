@@ -1,6 +1,85 @@
 //! FileSource：镜像与块设备统一的按偏移读写句柄；WriteSource：在其上附加独占所有权的写句柄。
 
 use super::*;
+use crate::outcome::WriteStep;
+use sha2::{Digest, Sha256};
+
+/// 一段区间的写前期望：偏移、长度与区间内字节的 sha256。
+///
+/// `digest` 为 `None` 表示该区间没有可比对的期望内容（数据搬移的目的区间不承诺
+/// 原来是什么），写入口因此只做写后回读，不做写前比对。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RegionStamp {
+    offset: u64,
+    len: u64,
+    digest: Option<[u8; 32]>,
+}
+
+impl RegionStamp {
+    /// 由已读到的区间原文构造（计划期快照、调用点刚读的扇区）
+    pub(crate) fn of_bytes(offset: u64, bytes: &[u8]) -> Self {
+        Self { offset, len: bytes.len() as u64, digest: Some(Sha256::digest(bytes).into()) }
+    }
+
+    /// 没有期望内容的区间：写入只受写后回读约束
+    pub(crate) fn unconstrained(offset: u64, len: u64) -> Self {
+        Self { offset, len, digest: None }
+    }
+
+    pub(crate) fn offset(&self) -> u64 {
+        self.offset
+    }
+
+    pub(crate) fn len(&self) -> u64 {
+        self.len
+    }
+
+    /// 区间字节是否就是这份期望；没有期望内容时恒为真
+    pub(crate) fn accepts(&self, bytes: &[u8]) -> bool {
+        match self.digest {
+            Some(digest) => <[u8; 32]>::from(Sha256::digest(bytes)) == digest,
+            None => true,
+        }
+    }
+}
+
+/// 受守卫写入的拒绝理由：写前重读与期望不等，或重读/写入本身失败。
+/// 两种情形都意味着"这一刻没有按计划写出"，调用方据此决定不推进进度
+#[derive(Debug)]
+pub(crate) struct WriteConflict {
+    reason: String,
+    kind: io::ErrorKind,
+}
+
+impl WriteConflict {
+    fn changed(offset: u64, len: usize) -> Self {
+        Self {
+            reason: format!(
+                "the target bytes at [{offset}..{}) no longer match what was read before writing — \
+                 refusing to overwrite them",
+                offset.saturating_add(len as u64)
+            ),
+            kind: io::ErrorKind::InvalidData,
+        }
+    }
+
+    fn io(offset: u64, len: usize, what: &str, e: io::Error) -> Self {
+        Self {
+            reason: format!("{what} at byte {offset} ({len} byte(s)): {e}"),
+            kind: e.kind(),
+        }
+    }
+
+    pub(crate) fn into_io_error(self) -> io::Error {
+        io::Error::new(self.kind, self.reason)
+    }
+}
+
+impl std::fmt::Display for WriteConflict {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.reason)
+    }
+}
 
 /// 本进程内已提交给恢复记录的写次数。崩溃注入按"第 N 次写入后"触发，用来留下
 /// 含多条区间的记录（只按第一次触发时记录里永远只有一条）
@@ -77,6 +156,9 @@ pub struct WriteSource {
     src: FileSource,
     /// 独占所有权的持有者。字段不被读取，存在的意义是被持有到写完为止；析构即释放锁
     _lock: Option<crate::targetlock::TargetLock>,
+    /// 即将落盘的那一笔写入的归属。写入口在调用写通道前设置、返回后清除；
+    /// `write_raw` 据此把首写步骤记入本进程的写事实
+    pending_step: Option<WriteStep>,
 }
 
 impl std::ops::Deref for WriteSource {
@@ -122,19 +204,88 @@ impl WriteSource {
     /// 取目标的独占所有权，把已打开的句柄升格为写句柄。锁落点由身份恒给出
     /// （见 [`TargetIdentity::lock_path`]），取不到即拒绝——没有"无锁继续写"这条路径
     pub(crate) fn acquire(src: FileSource) -> Result<Self, crate::outcome::RunOutcome> {
+        // 运行边界：新的写句柄即新的运行，写事实从这里重新起算
+        crate::outcome::reset_run_facts();
         // 锁文件落在记录目录内，目录必须先于取锁就位
         crate::dev::prepare_record_dir(&src.identity, src.owner).map_err(|e| prepare_dir_fail(&src, e))?;
         let lock = crate::targetlock::TargetLock::acquire(&src.identity, Some(&src.fingerprint))?;
         // 锁已到手，先按路径重探身份再继续；锁前解析的身份不能直接沿用
         src.reprobe_under_lock()?;
-        Ok(Self { src, _lock: Some(lock) })
+        Ok(Self { src, _lock: Some(lock), pending_step: None })
     }
 
     /// 测试专用：不取锁的写句柄。`#[cfg(test)]` 之外构造不出来，生产代码只能经
     /// [`Self::acquire`] 拿到写权限
     #[cfg(test)]
     pub(crate) fn unowned(src: FileSource) -> Self {
-        Self { src, _lock: None }
+        // 运行边界：每个用例自建写句柄，写事实从构造点重新起算
+        crate::outcome::reset_run_facts();
+        Self { src, _lock: None, pending_step: None }
+    }
+
+    /// 受守卫写入：先重读区间与 `expect` 比对，相符才写。
+    ///
+    /// 写通道按步骤分派：`Relocate` 是数据块，走不入记录的 `write_data_at`；
+    /// 其余是元数据，走先登记原文的 `write_at`。步骤因此只由施加者给出一次，
+    /// 既决定归属也决定通道，调用点不再各自挑
+    pub(crate) fn write_guarded(
+        &mut self,
+        off: u64,
+        buf: &[u8],
+        expect: RegionStamp,
+        step: WriteStep,
+    ) -> Result<(), WriteConflict> {
+        if let Some(digest) = expect.digest {
+            if expect.offset != off || expect.len != buf.len() as u64 {
+                return Err(WriteConflict::changed(off, buf.len()));
+            }
+            let mut current = vec![0u8; buf.len()];
+            self.read_at(off, &mut current)
+                .map_err(|e| WriteConflict::io(off, buf.len(), "cannot re-read the target before writing", e))?;
+            if <[u8; 32]>::from(Sha256::digest(&current)) != digest {
+                return Err(WriteConflict::changed(off, buf.len()));
+            }
+        }
+        self.pending_step = Some(step);
+        let result = if matches!(step, WriteStep::Relocate { .. }) {
+            self.write_data_at(off, buf)
+        } else {
+            self.write_at(off, buf)
+        };
+        self.pending_step = None;
+        result.map_err(|e| WriteConflict::io(off, buf.len(), "cannot write the target", e))
+    }
+
+    /// 受守卫写入 + 写后立刻回读比对。回读不等按 `InvalidData` 返回，
+    /// 调用方不得推进进度
+    pub(crate) fn write_converged(
+        &mut self,
+        off: u64,
+        buf: &[u8],
+        expect: RegionStamp,
+        step: WriteStep,
+    ) -> io::Result<()> {
+        self.write_guarded(off, buf, expect, step).map_err(WriteConflict::into_io_error)?;
+        self.read_back(off, buf)
+    }
+
+    /// 回读一段并与期望字节比对。批量落盘的数据搬移按批次调用它，
+    /// 回读粒度因此跟住 durable 批次而不是单块
+    pub(crate) fn read_back(&self, off: u64, expected: &[u8]) -> io::Result<()> {
+        let mut now = vec![0u8; expected.len()];
+        self.read_at(off, &mut now).map_err(|e| {
+            io::Error::new(e.kind(), format!("cannot read back the bytes written at byte {off}: {e}"))
+        })?;
+        if now != expected {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "the bytes read back at byte {off} differ from what was written ({} byte(s)) — the write may not have landed",
+                    expected.len()
+                ),
+            ));
+        }
+        Ok(())
     }
 
     /// 元数据写入：被覆盖字节的原文先入恢复记录再写。
@@ -185,7 +336,10 @@ impl WriteSource {
         self.refuse_past_end(off, buf.len())?;
         use std::io::{Seek, SeekFrom, Write};
         self.src.file.seek(SeekFrom::Start(off))?;
-        crate::outcome::note_target_write();
+        match self.pending_step {
+            Some(step) => crate::outcome::note_target_write_step(step),
+            None => crate::outcome::note_target_write(),
+        }
         self.src.file.write_all(buf)
     }
 
@@ -197,12 +351,17 @@ impl WriteSource {
     pub fn mark_non_reversible(&mut self) -> io::Result<()> {
         if let Some(journal) = self.src.record_journal.as_mut() {
             journal.barrier()?;
+            crate::outcome::note_record_past_irreversible_point();
         }
         Ok(())
     }
 
-    /// 接上单文件恢复记录
     pub(crate) fn adopt_record_journal(&mut self, journal: RecordJournal) {
+        let record = journal.record();
+        crate::outcome::note_record_present(record.committed());
+        if record.restore_blocked || record.committed() {
+            crate::outcome::note_record_past_irreversible_point();
+        }
         self.src.record_journal = Some(journal);
     }
 
@@ -423,8 +582,7 @@ impl FileSource {
         // 会指向两个不同的文件（见 `identity_of_opened_image`）
         #[cfg(target_os = "linux")]
         let identity = Self::identity_of_opened_image(path, &file, &meta)?;
-        // 非 Linux 没有从 fd 取路径的标准接口：维持按路径解析（docs/internals.md 的
-        // "并发边界"已声明该平台上的别名路径各有一份现场与一把锁）
+        // 非 Linux 没有从 fd 取路径的标准接口：维持按路径解析；该平台上别名路径各有一份现场与一把锁
         #[cfg(not(target_os = "linux"))]
         let identity = TargetIdentity::resolve_image(path);
         let fingerprint = TargetFingerprint::from_file(&file)?;

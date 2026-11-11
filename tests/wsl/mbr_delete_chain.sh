@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# MBR 全链路 + delete（GPT/MBR）——产品已实现但集成测试零覆盖的路径
+# MBR 全链路 + delete（GPT/MBR）
 # 覆盖：new --table mbr / add --type-guid 0xNN / resize 扩缩 / flag boot|hidden /
 #       扩展容器拒绝 / esp flag 拒绝 / delete（--yes 确认、数据区不擦除、GPT 侧）
 source "$(dirname "$0")/lib.sh"

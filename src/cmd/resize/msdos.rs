@@ -27,7 +27,7 @@ fn record_old_range(src: &mut WriteSource, p: &table::MbrPartition) -> Result<()
 
 /// MBR 表项改长度：一次读定快照 → 纯计算新 LBA0 → 装配成表步骤 → 执行器落盘。
 ///
-/// 与 `delete`/`add` 同一条链：命令层不再自己调 `write_at`，写前按三扇区复核、
+/// 与 `delete`/`add` 同一条链：命令层不自己调 `write_at`，写前按三扇区复核、
 /// 写后读回、逐段落盘都由 `execution::table` 承担。`kind` 只记录方向，不影响写入字节。
 fn resize_mbr_entry(
     src: &mut WriteSource,
@@ -131,7 +131,11 @@ pub(crate) fn mbr_grow_finish(
                         part,
                         crate::outcome::PendingKind::Swap,
                         e.to_string(),
-                        fsops::rescue_hint(Some(fsid::ContentKind::Swap), &dev::part_dev_hint(src, part, lba_bytes(p.start_lba as u64, ss))),
+                        fsops::rescue_hint(
+                            Some(fsid::ContentKind::Swap),
+                            &dev::part_dev_hint(src, part, lba_bytes(p.start_lba as u64, ss)),
+                            None,
+                        ),
                     )),
                 }
             }
@@ -147,8 +151,20 @@ pub(crate) fn mbr_grow_finish(
                     Err(e) => pending.push(crate::outcome::Pending::new(
                         part,
                         crate::outcome::PendingKind::Fs,
-                        e.to_string(),
-                        fsops::rescue_hint(Some(t.fstype), &dev::part_dev_hint(src, part, lba_bytes(p.start_lba as u64, ss))),
+                        match &e {
+                            // 拒绝类失败发生在任何 FS 字节之前（btrfs 多设备闸在工具启动前
+                            // 返回）：此时可断言两件事——表是刚写下的新表，文件系统仍是旧尺寸。
+                            // 其余失败可能已改动 FS，不补这句
+                            fsops::FsError::UnsupportedFs { .. } => format!(
+                                "the partition table is already written and the filesystem keeps its previous size — {e}"
+                            ),
+                            _ => e.to_string(),
+                        },
+                        fsops::rescue_hint(
+                            Some(t.fstype),
+                            &dev::part_dev_hint(src, part, lba_bytes(p.start_lba as u64, ss)),
+                            e.unsupported_reason(),
+                        ),
                     )),
                 }
             }
@@ -170,14 +186,15 @@ pub(crate) fn mbr_grow_finish(
     }
     if pending.is_empty() {
         // 表已写 → 统一收尾（内核重读 + 报告）
-        let o = settle_layout(crate::outcome::RunOutcome::applied_with(Vec::new()), src);
+        let record = src.record_journal().map(|j| j.record());
+        let o = settle_layout(crate::outcome::RunOutcome::applied_with(Vec::new()), src, record);
         return finish_resize(a, o, Some(src), part, is_pv, is_block, None, cur_bytes);
     }
     let mut o = crate::outcome::RunOutcome::applied_with(pending);
     if !kernel_resync(src) {
         o.mark_kernel_stale();
     }
-    o.report();
+    o = o.report_final();
     // PV 的 pvresize/lvextend 链是本次操作的后置条件之一，不因 swap 等外层待办而跳过：
     // finish_resize 只在非 PV 的未完成结果上早退，PV 则照常进链，并以两者中更严重的
     // 退出码收口。链自身的失败在 resize_done 内另报，与上面的待办清单不是同一条
@@ -456,7 +473,8 @@ pub(crate) fn cmd_resize_msdos(a: &ResizeRequest, pref: PartSelector, src_ro: &F
                         .unwrap_or_else(|f| bail_fail(f));
                 }
             }
-            let o = settle_layout(crate::outcome::RunOutcome::applied_with(pending), &src);
+            let record = src.record_journal().map(|j| j.record());
+            let o = settle_layout(crate::outcome::RunOutcome::applied_with(pending), &src, record);
             finish_resize(a, o, Some(&mut src), part, is_pv, is_block, None, cur_bytes)
         }
     }

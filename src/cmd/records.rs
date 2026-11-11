@@ -115,10 +115,10 @@ impl Row {
             Evidence::Recognized(record) => {
                 if backend_mismatch(record, self.backend) {
                     State::BackendMismatch
-                } else if record.commit == crate::recovery::CommitState::Prepared {
-                    State::Unfinished
-                } else {
+                } else if record.committed() {
                     State::Valid
+                } else {
+                    State::Unfinished
                 }
             }
             Evidence::ForeignTarget { .. } => State::IdentityMismatch,

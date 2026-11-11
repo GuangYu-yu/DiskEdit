@@ -59,12 +59,10 @@ pub(crate) fn preflight(
     step: &FsCreate,
     sector_size: u64,
 ) -> Result<(), RunOutcome> {
-    let (base, len) = step
-        .byte_range(sector_size)
-        .map_err(|why| RunOutcome::internal(format!("{why} — nothing was written")))?;
+    let (base, len) = step.byte_range(sector_size).map_err(RunOutcome::internal)?;
     if base > src.size || len > src.size - base {
         return Err(RunOutcome::internal(format!(
-            "partition {}: the {len}-byte range at byte {base} is outside the target's {} bytes — nothing was written",
+            "partition {}: the {len}-byte range at byte {base} is outside the target's {} bytes",
             step.part, src.size
         )));
     }
@@ -74,29 +72,17 @@ pub(crate) fn preflight(
 
 /// 执行一个 FsCreate 步骤。
 ///
-/// `wrote_target` 是进入本步时计划是否已经写过目标字节：只有它为 false 时，FS 层的
-/// 失败才能按 [`RunOutcome::from`] 的原分类上报。越过首写之后一律改判为
-/// [`RunOutcome::partial`]，否则擦除前的 IO 失败会把"可能已写"洗成"确定未写盘"。
+/// 失败只报 `fsops` 的原因与本次在做什么（[`RunOutcome::from`] 的原分类）：本进程是否
+/// 已经写过目标字节由出口的归责点判，擦除前的 IO 失败不会把"可能已写"洗成"确定未写盘"。
 pub(crate) fn execute(
     src: &mut WriteSource,
     step: &FsCreate,
     sector_size: u64,
-    wrote_target: bool,
 ) -> Result<(), RunOutcome> {
-    // 预扫描已经判过同一份载荷，这里的失败只是兜底
-    step.byte_range(sector_size).map_err(|why| {
-        if wrote_target {
-            RunOutcome::partial(why)
-        } else {
-            RunOutcome::internal(why)
-        }
-    })?;
-    match fsops::mkfs(src, step.part, step.fstype, step.label.as_deref()) {
-        Ok(()) => Ok(()),
-        Err(e) if wrote_target => Err(RunOutcome::partial(format!(
-            "partition {}: creating the filesystem failed: {e}",
-            step.part
-        ))),
-        Err(e) => Err(RunOutcome::from(e)),
-    }
+    // 预扫描已经判过同一份载荷，这里的失败只是兜底：计划不合法
+    step.byte_range(sector_size).map_err(RunOutcome::internal)?;
+    fsops::mkfs(src, step.part, step.fstype, step.label.as_deref()).map_err(|e| {
+        RunOutcome::from(e)
+            .context(&format!("partition {}: creating the filesystem failed", step.part))
+    })
 }

@@ -23,14 +23,14 @@ pub(crate) fn swap_rebuild_failure_skips_growth_finalization() {
     // 新跑（无记录）：工具不齐时必须在写盘前拒绝，不建立 pending 事务
     let (mut src, _path) = fixture();
     let record_path = src.identity.record_path().expect("image targets have a record path").to_path_buf();
-    let plan = make_plan(&mut src, 1).unwrap();
+    let mut plan = make_plan(&mut src, 1).unwrap();
     assert!(plan.moves.iter().any(|m| m.is_swap), "fixture must carry a movable swap");
     // 平台闸先于工具探测：非 Linux 上即使两个工具名都在 PATH，也按环境不满足断言
     let tools_ready = cfg!(target_os = "linux")
         && crate::fsops::find_tool("mkswap").is_ok()
         && crate::fsops::find_tool("losetup").is_ok();
     if !tools_ready {
-        let fresh = ap(&mut src, &plan, chunk, true, &mut |_| {});
+        let fresh = ap(&mut src, &mut plan, chunk, true, &mut |_| {});
         assert_eq!(
             fresh.exit_code(),
             6,
@@ -45,8 +45,13 @@ pub(crate) fn swap_rebuild_failure_skips_growth_finalization() {
         #[cfg(target_os = "linux")]
         {
             // 生产闸已放行：挂上记录，让作业在 swap 重建处停下并留下可续跑的进度
-            attach_record(&mut src, crate::recovery::OpKind::Resize, (10240, 10303));
-            let fresh = ap(&mut src, &plan, chunk, true, &mut |_| {});
+            attach_record(
+                &mut src,
+                crate::recovery::OpKind::Resize,
+                (10240, 10303),
+                (plan.grow_part, 2048, grow_end_for(&plan, 2048).unwrap()),
+            );
+            let fresh = ap(&mut src, &mut plan, chunk, true, &mut |_| {});
             assert_eq!(fresh.exit_code(), 5, "the fresh run ends as pending: {fresh:?}");
             // 续跑输入取自生产刚写出的现场：进度字段错（晚写、写错）在这条断言上就会红
             let c = relocation_of(&src).expect("a pending swap relocation must leave a relocation record");
@@ -63,7 +68,7 @@ pub(crate) fn swap_rebuild_failure_skips_growth_finalization() {
             assert_eq!(c.grow_part, plan.grow_part);
             assert_eq!((c.disk_size, c.ss), (src.size, plan.ss));
 
-            let o = ap(&mut src, &plan, chunk, true, &mut |_| {});
+            let o = ap(&mut src, &mut plan, chunk, true, &mut |_| {});
             match &o {
                 crate::outcome::RunOutcome::Applied { pending, .. } => {
                     assert_eq!(pending.len(), 1, "须报一条待办：{pending:?}");
@@ -77,7 +82,7 @@ pub(crate) fn swap_rebuild_failure_skips_growth_finalization() {
             assert_eq!((g.entries[0].starting_lba, g.entries[0].ending_lba), (2048, 6143));
             assert_eq!((g.entries[1].starting_lba, g.entries[1].ending_lba), (6144, 10239));
             let sw = plan.moves.iter().find(|m| m.is_swap).expect("the plan must carry the swap move");
-            let target = sw.first_lba + sw.delta_lba;
+            let target = sw.first_lba.checked_add_signed(sw.delta_lba).unwrap();
             assert_eq!(
                 (g.entries[2].starting_lba, g.entries[2].ending_lba),
                 (target, target + sw.len_lba - 1),
@@ -99,24 +104,29 @@ pub(crate) fn apply_crash_leaves_durable_progress_in_the_record() {
         (1, [0x11; 16], 2048, 6143),
         (2, [0x22; 16], 8192, 24575),
     ]);
-    let plan = make_plan(&mut src, 1).unwrap();
-    let record_path = attach_record(&mut src, crate::recovery::OpKind::Resize, (2048, 6143));
+    let mut plan = make_plan(&mut src, 1).unwrap();
+    let record_path = attach_record(
+        &mut src,
+        crate::recovery::OpKind::Resize,
+        (2048, 6143),
+        (plan.grow_part, 2048, grow_end_for(&plan, 2048).unwrap()),
+    );
     let m = plan.moves.iter().find(|m| m.part_num == 2).expect("p2 must be the blocker").clone();
     assert!(
-        m.delta_lba > 0 && m.delta_lba < m.len_lba,
+        m.delta_lba > 0 && m.delta_lba.unsigned_abs() < m.len_lba,
         "the fixture must produce a self-overlapping move"
     );
     let chunk: u64 = 1024 * 1024;
     let total = m.len_lba * 512;
     let blocks = (total / chunk) as u8;
     let src_off = m.first_lba * 512;
-    let dst_off = (m.first_lba + m.delta_lba) * 512;
+    let dst_off = m.first_lba.checked_add_signed(m.delta_lba).unwrap() * 512;
     for i in 0..blocks {
         src.write_at(src_off + i as u64 * chunk, &vec![0x10 + i; 512]).unwrap();
     }
     // 执行序尾→头：第 3 轮读（within = total − 3·chunk）失败时，前两块已同步并落 ckpt
     let fault = crate::dev::ReadFaultGuard::at(src_off + total - 3 * chunk);
-    let o = ap(&mut src, &plan, chunk, true, &mut |_| {});
+    let o = ap(&mut src, &mut plan, chunk, true, &mut |_| {});
     assert_eq!(o.exit_code(), 5, "mid-move read failure must stay Partial: {o:?}");
     drop(fault);
 
@@ -136,7 +146,7 @@ pub(crate) fn apply_crash_leaves_durable_progress_in_the_record() {
 
     // 已完成块（within = total − chunk）的源区改写成垃圾：续跑若从 0 重来会先读它
     src.write_at(src_off + total - chunk, &[0xEE; 512]).unwrap();
-    let resumed = ap(&mut src, &plan, chunk, true, &mut |_| {});
+    let resumed = ap(&mut src, &mut plan, chunk, true, &mut |_| {});
     assert!(resumed.is_complete(), "the resume must finish: {resumed:?}");
     for i in 0..blocks {
         let mut b = [0u8; 512];
@@ -150,9 +160,10 @@ pub(crate) fn apply_crash_leaves_durable_progress_in_the_record() {
         (2048, grow_end),
         "grow must commit its computed ending_lba"
     );
+    let dst = m.first_lba.checked_add_signed(m.delta_lba).unwrap();
     assert_eq!(
         (g.entries[1].starting_lba, g.entries[1].ending_lba),
-        (m.first_lba + m.delta_lba, m.first_lba + m.delta_lba + m.len_lba - 1)
+        (dst, dst + m.len_lba - 1)
     );
     assert_eq!(g.entries[0].ending_lba + 1, g.entries[1].starting_lba, "the two entries must stay adjacent");
     // 收口由命令层做：完整结果才提交并删除记录
@@ -200,13 +211,19 @@ pub(crate) fn uncommitted_relocation_keeps_its_record() {
         (3, SWAP, 10240, 10303),
     ]);
     let chunk: u64 = 1024 * 1024;
-    let plan = make_plan(&mut src, 1).unwrap();
+    let mut plan = make_plan(&mut src, 1).unwrap();
     // 预置中断现场：entry_index 指向第一条（swap），续跑不做能力拒绝，重建失败即停
     let size = src.size;
-    let record_path = attach_relocation(&mut src, (2048, 6143), reloc_for(&plan, chunk, size), None);
+    let record_path = attach_relocation(
+        &mut src,
+        (2048, 6143),
+        (plan.grow_part, 2048, grow_end_for(&plan, 2048).unwrap()),
+        reloc_for(&plan, chunk, size),
+        None,
+    );
 
     let mut logs = Vec::new();
-    let o = ap(&mut src, &plan, chunk, true, &mut |l: &str| logs.push(l.to_string()));
+    let o = ap(&mut src, &mut plan, chunk, true, &mut |l: &str| logs.push(l.to_string()));
     assert!(!o.is_complete(), "swap rebuild pending is not a complete run: {o:?}");
     assert_eq!(o.exit_code(), 5);
     assert!(record_path.exists(), "an uncommitted job must keep its record");
@@ -220,7 +237,7 @@ pub(crate) fn uncommitted_relocation_keeps_its_record() {
     drop(src);
 }
 
-/// 续跑前的位置一致性校验（R2）：记录是持久化输入，而续跑用的 plan 由记录直接重建，
+/// 续跑前的位置一致性校验：记录是持久化输入，而续跑用的 plan 由记录直接重建，
 /// 拿两者互比是自循环——唯一独立证据是盘上**当前**起点。此处把一条尚未开始搬移的
 /// 条目挪到别处，模拟"表在作业中断后被第三方改过"：必须拒绝，而不是把别人的布局
 /// 当成自己的续跑点继续搬
@@ -242,7 +259,13 @@ pub(crate) fn resume_refuses_when_a_pending_partition_moved_on_disk() {
     assert_ne!(home.delta_lba, 0, "home must need a real relocation for this test");
     // 预置"尚未开始搬移"的现场：entry_index=0 ⇒ home（moves 未达下标）必须仍在 first_lba
     let size = src.size;
-    let record_path = attach_relocation(&mut src, (2048, 6143), reloc_for(&plan, chunk, size), None);
+    let record_path = attach_relocation(
+        &mut src,
+        (2048, 6143),
+        (plan.grow_part, 2048, grow_end_for(&plan, 2048).unwrap()),
+        reloc_for(&plan, chunk, size),
+        None,
+    );
     // 释放写句柄但保留目录：后面还要读写同一个镜像文件
     let _keep = src.release();
 
@@ -265,7 +288,7 @@ pub(crate) fn resume_refuses_when_a_pending_partition_moved_on_disk() {
     let g = geom_of(&src);
     // 篡改确实落到几何上：home 现在停在 20000，而非记录里的 first_lba=6144
     assert_eq!(crate::gpt_policy::live_entry(&g, 2).unwrap().starting_lba, 20000);
-    // 直呼事前判定，隔离出拒绝来源：必须是 R2 的位置校验，而不是更靠前的占用/场景/槽位判定
+    // 直呼事前判定，隔离出拒绝来源：必须是位置校验，而不是更靠前的占用/场景/槽位判定
     let reloc = relocation_of(&src).expect("the seeded record must still decode");
     match prepare_apply(&src, &g, &plan, chunk, true, false, None, Some(&reloc), None, &mut |_| {}) {
         Err(RunOutcome::Refused(m)) => assert!(m.contains("not where the recovery record says"), "{m}"),
@@ -363,9 +386,8 @@ pub(crate) fn swap_identity_label_read_failure_is_not_an_absent_label() {
 }
 
 /// 32K 页格式的 swap 在本机（4K 页）认不出类型：identify 走 swapon 口径给出 "unknown"，
-/// 扩容收尾因此整段跳过 FS 步骤。但它确实是"分区已扩、swap 未重建"这一未完成的后置条件，
-/// 必须报 Pending（5）而不是又一次静默成功。MBR 的 resize 与 apply 两条路径已有同一判据，
-/// 这条守住 resize_part 那条
+/// 但 swap 探测认得出它。该支不写盘，不与表项的普通分区声明对账，按内容判据产出 Swap
+/// 待办；此刻表已提交，待办以退出码 5 浮出，不能报完全成功
 #[test]
 pub(crate) fn unactivatable_swap_growth_is_pending_not_silent_success() {
     let (src, p) = plan_fixture(&[(1, [0x11; 16], 2048, 6143)]);
@@ -377,6 +399,10 @@ pub(crate) fn unactivatable_swap_growth_is_pending_not_silent_success() {
     std::fs::write(&p, &raw).unwrap();
 
     let mut src = plan_open(&p);
+    // 本请求不搬移：分区内的一段字节在整轮作业里都不该被改写
+    let marker = base as u64 + 4096;
+    let sentinel = [0xA5u8; 512];
+    src.write_at(marker, &sentinel).unwrap();
     assert_eq!(crate::fsid::identify(&src, base as u64, 4096 * 512).unwrap(), crate::fsid::ContentKind::Unknown);
     assert!(matches!(
         crate::fsid::probe_fs(&src, base as u64, 4096 * 512).unwrap().swap,
@@ -388,17 +414,57 @@ pub(crate) fn unactivatable_swap_growth_is_pending_not_silent_success() {
     match &o {
         crate::outcome::RunOutcome::Applied { pending, .. } => {
             assert_eq!(pending.len(), 1, "须报一条待办：{pending:?}");
-            assert_eq!(pending[0].kind, crate::outcome::PendingKind::Swap);
+            assert_eq!(pending[0].kind, crate::outcome::PendingKind::Swap, "{:?}", pending[0]);
         }
         other => panic!("expected Applied, got {other:?}"),
     }
-    assert!(!o.is_complete());
-    assert_eq!(o.exit_code(), 5, "分区已扩而 swap 未重建，不能报完全成功");
+    assert!(!o.is_complete(), "swap 未重建，不能报完全成功");
+    assert_eq!(o.exit_code(), 5, "swap 未重建，不能报完全成功");
     let g = table::load_gpt(&src).unwrap().unwrap();
     assert_eq!(
         (g.entries[0].starting_lba, g.entries[0].ending_lba),
         (2048, 8191),
         "grow 必须把请求终点写进表项；复用旧终点或算错终点都会让分区实际未扩"
+    );
+    let mut after = [0u8; 512];
+    src.read_at(marker, &mut after).unwrap();
+    assert_eq!(after, sentinel, "不搬移的请求不得改写分区内已有的字节");
+
+    drop(src);
+}
+
+/// 表项声明普通分区、内容是 4K 页可激活的 swap：这一支会改写（mkswap 重建），两侧
+/// 对账因此在使用写原语之前执行，冲突即拒绝。表已提交，拒绝由本次写事实改判为
+/// Partial（5），且不附带待办——冲突不是"未完成的后置条件"
+#[cfg(target_os = "linux")]
+#[test]
+pub(crate) fn target_swap_conflict_is_refused_after_the_table_commit() {
+    let (src, p) = plan_fixture(&[(1, [0x11; 16], 2048, 6143)]);
+    let _keep = src.release();
+    // 4K 页签名 + 头内自洽（version=1，last_page < 分区页数）：identify 给 Swap，
+    // 与表项的普通分区声明冲突
+    let base = 2048 * 512;
+    let mut raw = std::fs::read(&p).unwrap();
+    raw[base + 1024..base + 1028].copy_from_slice(&1u32.to_le_bytes());
+    raw[base + 4096 - 10..base + 4096].copy_from_slice(b"SWAPSPACE2");
+    std::fs::write(&p, &raw).unwrap();
+
+    let mut src = plan_open(&p);
+    assert_eq!(crate::fsid::identify(&src, base as u64, 4096 * 512).unwrap(), crate::fsid::ContentKind::Swap);
+    let o = rsize(&mut src, 1, 2048, 8191, 1024 * 1024, false, &mut |_| {});
+    match &o {
+        crate::outcome::RunOutcome::Partial { cause, pending, .. } => {
+            assert!(cause.contains("the two readings disagree"), "{cause}");
+            assert!(pending.is_empty(), "冲突不是未完成的后置条件，不带待办：{pending:?}");
+        }
+        other => panic!("expected Partial, got {other:?}"),
+    }
+    assert_eq!(o.exit_code(), 5);
+    let g = table::load_gpt(&src).unwrap().unwrap();
+    assert_eq!(
+        (g.entries[0].starting_lba, g.entries[0].ending_lba),
+        (2048, 8191),
+        "冲突在表提交之后才发现：表项终点已是新值"
     );
 
     drop(src);
@@ -420,7 +486,7 @@ pub(crate) fn swap_pending_keeps_record_and_rerun_retries_the_fs_step() {
     std::fs::write(&p, &raw).unwrap();
 
     let mut src = plan_open(&p);
-    let record_path = attach_record(&mut src, crate::recovery::OpKind::Resize, (2048, 10239));
+    let record_path = attach_record(&mut src, crate::recovery::OpKind::Resize, (2048, 10239), (1, 12288, 24575));
     // 旧区间哨兵：正向搬移不与目标区重叠，旧区字节在整轮作业里都不该被改写
     let marker = base as u64 + 4096;
     let sentinel = [0xA5u8; 512];
@@ -452,6 +518,80 @@ pub(crate) fn swap_pending_keeps_record_and_rerun_retries_the_fs_step() {
     drop(src);
 }
 
+/// 左移（Δ<0）在"表已提交、收尾未做"窗口的重跑：记录游标停在已搬完的条目上
+/// （`chunks_in_entry` == 块数、条目游标未推进），盘上表项已在记录的目的位。
+/// 命令层必须按 `src_first + delta` 的有符号算式认出目的位并把这一条收尾，
+/// 而不是按"未完成"拒绝，也不得把负位移取绝对值后比对
+#[cfg(target_os = "linux")]
+#[test]
+pub(crate) fn leftward_move_finishes_from_the_committed_table() {
+    let (mut src, p) = plan_fixture(&[
+        (1, [0x11; 16], 1024, 2047),
+        (2, [0x22; 16], 4096, 8191),
+    ]);
+    let chunk: u64 = 1024 * 1024;
+    let reloc = crate::recovery::Relocation {
+        entries: vec![crate::recovery::RelocEntry {
+            partition: 2,
+            src_first: 4096,
+            len: 4096,
+            delta: -2048,
+            is_swap: false,
+        }],
+        entry_index: 0,
+        // 2 MiB / 1 MiB：数据已搬完，游标还停在这一条
+        chunks_in_entry: 2,
+        chunk_bytes: chunk,
+        kind: crate::recovery::RelocKind::Shift,
+        grow_part: 0,
+        disk_size: src.size,
+        ss: 512,
+    };
+    let record_path = attach_record(&mut src, crate::recovery::OpKind::Move, (4096, 8191), (2, 2048, 6143));
+    src.record_journal_mut()
+        .expect("attach_record adopts a record journal")
+        .bind_relocation(reloc, None)
+        .expect("a legal relocation must bind");
+    let _keep = src.release();
+
+    // 表已提交：p2 已在记录的目的位 2048..6143
+    {
+        use gptman::GPT;
+        let mut raw = std::fs::read(&p).unwrap();
+        let mut cur = std::io::Cursor::new(&mut raw);
+        let mut gpt = GPT::read_from(&mut cur, 512).unwrap();
+        gpt[2].starting_lba = 2048;
+        gpt[2].ending_lba = 6143;
+        gpt.write_into(&mut cur).unwrap();
+        std::fs::write(&p, raw).unwrap();
+    }
+
+    let req = crate::cli::MoveRequest {
+        target: p.display().to_string(),
+        part: Some(crate::dev::PartSelector::Number(2)),
+        sector_size: None,
+        start: Some(crate::cli::StartSelector::Lba(2048)),
+        align: crate::domain::Align::none(),
+        align_given: false,
+        chunk_mib: 1,
+        no_fs: false,
+        yes: true,
+    };
+    let o = crate::cmd::layout::cmd_move(&req);
+    assert_eq!(o.exit_code(), 0, "the rerun must finish the move: {o:?}");
+    assert!(o.is_complete(), "the rerun must finish the move: {o:?}");
+    assert!(!record_path.exists(), "a finished move must release the record");
+
+    let reopened = plan_open(&p);
+    let g = table::load_gpt(&reopened).unwrap().unwrap();
+    assert_eq!(
+        (g.entries[1].starting_lba, g.entries[1].ending_lba),
+        (2048, 6143),
+        "收尾只释放记录：表项必须仍在记录的目的位"
+    );
+    drop(reopened);
+}
+
 /// 纯扩容（不搬移）FS 步留下待办时记录同样保留、重跑补试 FS 步：
 /// 无搬移就没有 chunk 循环的 save 落点，写表前的这一次落盘是重跑落到
 /// "已提交、补 FS 步"分支的唯一凭据——缺了它重跑按现算几何算出
@@ -468,7 +608,7 @@ pub(crate) fn pure_growth_fs_pending_keeps_record_and_rerun_retries() {
     std::fs::write(&p, &raw).unwrap();
 
     let mut src = plan_open(&p);
-    let record_path = attach_record(&mut src, crate::recovery::OpKind::Resize, (2048, 6143));
+    let record_path = attach_record(&mut src, crate::recovery::OpKind::Resize, (2048, 6143), (1, 2048, 8191));
 
     let o1 = rsize(&mut src, 1, 2048, 8191, 1024 * 1024, false, &mut |_| {});
     assert_eq!(o1.exit_code(), 5, "{o1:?}");

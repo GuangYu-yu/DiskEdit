@@ -130,23 +130,17 @@ impl TableSnapshot {
 /// 记录三扇区摘要。写入路径在首笔写盘之前调用；从这次读定到首笔写盘之间不得有写。
 /// `ss` 的取法见 [`TableStamp::head_tail`]。
 pub(crate) fn table_stamp(src: &FileSource, ss: u64) -> Result<TableStamp, RunOutcome> {
-    TableStamp::head_tail(src, ss).map_err(|e| stamp_io_failure(src, e))
+    TableStamp::head_tail(src, ss).map_err(stamp_io_failure)
 }
 
-/// 写前复核：重读三扇区并与 `expected` 比对。不等即不写：记录已落盘 → 5，
-/// 尚未落盘（首跑）→ 3；重读 I/O 失败按同一分界落 5 / 4。
+/// 写前复核：重读三扇区并与 `expected` 比对。不等即不写，按"请求与现状不符"拒绝；
+/// 重读 I/O 失败按"本次未发出写"上报。本次是否已写过目标字节由出口的归责改判。
 pub(crate) fn verify_table_stamp(src: &FileSource, expected: TableStamp, ss: u64) -> Result<(), RunOutcome> {
-    let now = TableStamp::head_tail(src, ss).map_err(|e| stamp_io_failure(src, e))?;
+    let now = TableStamp::head_tail(src, ss).map_err(stamp_io_failure)?;
     if now != expected {
-        return Err(if record_persisted(src) {
-            RunOutcome::partial(format!(
-                "the table changed on disk before the write (stamp {expected:?} → {now:?}) — the on-disk state may have changed"
-            ))
-        } else {
-            RunOutcome::refused(format!(
-                "the table changed on disk after it was read (stamp {expected:?} → {now:?}) — re-run the command"
-            ))
-        });
+        return Err(RunOutcome::refused(format!(
+            "the table changed on disk after it was read (stamp {expected:?} → {now:?}) — re-run the command"
+        )));
     }
     Ok(())
 }
@@ -160,45 +154,6 @@ pub(crate) fn table_snapshot(src: &FileSource, regions: &[TableRegion]) -> Resul
 /// 计划期算出的写入字节的摘要：与 [`TableStamp::over`] 同一拼接规则，执行期不重算。
 pub(crate) fn table_stamp_of(parts: &[&[u8]]) -> TableStamp {
     TableStamp::of_parts(parts)
-}
-
-/// 表步骤写前复核：按 `regions` 重读并与 `expected` 比对。不等即不执行——
-/// 整体落到 5（InspectOnly）；重读失败时按本计划是否已写过目标字节分码：未写过按
-/// 4（NoMutation）报，写过按 5 报。
-///
-/// `wrote_target` 由执行器从执行进度状态读出，表示这一表步之前本计划是否已经写过目标字节。
-pub(crate) fn verify_regions_before(
-    src: &FileSource,
-    regions: &[TableRegion],
-    expected: TableStamp,
-    wrote_target: bool,
-) -> Result<(), RunOutcome> {
-    let now = TableStamp::over(src, regions).map_err(|e| {
-        if wrote_target {
-            RunOutcome::partial(format!(
-                "re-reading the table regions before the write failed: {e} — earlier steps may already have written the target"
-            ))
-        } else {
-            RunOutcome::no_mutation_io(e)
-        }
-    })?;
-    if now != expected {
-        return Err(RunOutcome::partial(format!(
-            "the table changed on disk before the write (stamp {expected:?} → {now:?}) — the on-disk state may have changed"
-        )));
-    }
-    Ok(())
-}
-
-/// 表区现状是否仍等于 `expected`。只读比较，不含退出码决策：首写前的调用点落 3，
-/// 表步骤执行期的调用点落 5，两者的时点不同。重读失败按 4 报（一笔未写）。
-pub(crate) fn regions_match(
-    src: &FileSource,
-    regions: &[TableRegion],
-    expected: TableStamp,
-) -> Result<bool, RunOutcome> {
-    let now = TableStamp::over(src, regions).map_err(RunOutcome::no_mutation_io)?;
-    Ok(now == expected)
 }
 
 /// 表步骤写后复核：按 `regions` 重读并与计划期由写入字节算出的 `expected` 比对。
@@ -221,16 +176,31 @@ pub(crate) fn verify_regions_after(
     Ok(())
 }
 
-fn record_persisted(src: &FileSource) -> bool {
-    src.record_journal.as_ref().is_some_and(crate::recovery::RecordJournal::is_persisted)
+/// 表步骤写入前的只读核对：逐段重读盘上表区，与计划期读定的原文比对。
+///
+/// 比对区间就是该步骤的 compare regions，因此盘上整张表都被核过。不等说明表在
+/// 计划期读出之后被外部改动，属于"请求与现状不符"，按 3 拒绝；此时本次运行尚未写下
+/// 任何字节。重读本身失败属于环境故障，按"未发出写"上报 4。
+pub(crate) fn verify_regions_before(src: &FileSource, expected: &[RegionStamp]) -> Result<(), RunOutcome> {
+    for stamp in expected {
+        let len = usize::try_from(stamp.len())
+            .map_err(|_| RunOutcome::refused("a table region is too large to compare on this host"))?;
+        let mut now = vec![0u8; len];
+        src.read_at(stamp.offset(), &mut now).map_err(RunOutcome::no_mutation_io)?;
+        if !stamp.accepts(&now) {
+            return Err(RunOutcome::refused(format!(
+                "the partition table changed on disk after it was read (region at byte {} differs) — re-run the command",
+                stamp.offset()
+            )));
+        }
+    }
+    Ok(())
 }
 
-fn stamp_io_failure(src: &FileSource, e: io::Error) -> RunOutcome {
-    if record_persisted(src) {
-        RunOutcome::partial(format!("re-reading the table stamp failed: {e} — the on-disk state may have changed"))
-    } else {
-        RunOutcome::no_mutation_io(e)
-    }
+/// 重读表戳失败：原因只陈述读失败。本次是否写过目标字节由出口判
+/// （见 [`crate::outcome::RunOutcome::reconcile_with_writes`]）
+fn stamp_io_failure(e: io::Error) -> RunOutcome {
+    RunOutcome::no_mutation(format!("re-reading the table stamp failed: {e}"))
 }
 
 #[cfg(test)]

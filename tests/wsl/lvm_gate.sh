@@ -74,7 +74,7 @@ $B resize --yes "${LOOP}:1" +8M --grow-lv --lv "$VG/lv1" >/dev/null || fail "--l
 # 分区尺寸账：80M 起步，多 LV 拒绝用例按契约已扩 16M（部分完成），--lv lv1 再 +16M，
 # vg/name 再 +8M → 此刻分区 120M；若再 +8M 会到 128M，加 1MiB 起始间隙恰好越盘，故收 +4M
 lvremove -f "/dev/$VG/lv2" >/dev/null || fail "lvremove lv2 failed"
-# 诊断转储：CI 曾在此处报 candidates "lv1, lv1"（lvs 输出重复行）——留存原始 JSON 以定性
+# 诊断转储：留存 lvs 原始 JSON，用于定性 candidates 出现重复条目（lvs 输出重复行）
 lvs --reportformat json -o lv_name,lv_path,devices "$VG" 2>&1 | head -5
 $B resize --yes "${LOOP}:1" +4M --grow-lv >/dev/null || fail "single-LV auto-select failed"
 [ "$(lv_bytes "$VG" lv1)" -eq "$((b3 + 8388608 + 4194304))" ] || fail "auto-select did not extend lv1"
@@ -170,7 +170,7 @@ rm -rf "$IMG3" "$IMG3"$SIDECAR_GLOB; IMG3=
 
 # ---- 场景四：镜像内 PV + 非活动 LV → --grow-lv 明确拒绝 ----
 # `lvextend -r` 要有活动 LV 才能同步扩文件系统；激活与事后恢复都属系统运行态，
-# 本工具不代为激活，因此在写表之前拒绝：分区表、PV、LV 一律不动。拒绝不是回归。
+# 本工具不代为激活，因此在写表之前拒绝：分区表、PV、LV 一律不动。
 img IMG4 t31d.img
 rm -rf "$IMG4" "$IMG4"$SIDECAR_GLOB 2>/dev/null
 truncate -s 64M "$IMG4"

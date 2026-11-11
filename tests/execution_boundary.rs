@@ -6,7 +6,7 @@
 
 mod guards;
 
-use guards::{assert_order, pos, rust_sources, source};
+use guards::{assert_order, rust_sources, source};
 
 #[test]
 fn the_execution_entry_takes_a_confirmed_plan_only() {
@@ -24,7 +24,7 @@ fn the_execution_entry_takes_a_confirmed_plan_only() {
         &[
             "pub(crate) fn execute_plan(",
             "let steps = prepare_steps(",
-            "verify_first_table(src, &steps)?;",
+            "verify_tables_before_write(src, &steps)?;",
         ],
         "the whole preflight must complete before the step loop",
     );
@@ -45,24 +45,41 @@ fn the_execution_entry_takes_a_confirmed_plan_only() {
 
 #[test]
 fn the_write_gate_opens_only_once_the_record_is_durable() {
+    // 表步骤只经守卫入口：写前比对与写后回读都在这个入口内，顺序固定
     let table = source("execution/table.rs");
-    let before = pos(&table, "verify_regions_before(", "table step");
-    let write = pos(&table, "src.write_at(", "table step");
-    let after = pos(&table, "verify_regions_after(", "table step");
-    assert!(
-        before < write && write < after,
-        "the table step must compare before writing and compare again after writing"
+    assert_order(
+        &table,
+        &[
+            "src.write_converged(",
+            "src.sync_all()",
+            "verify_regions_after(src, &step.regions, expect_after)",
+        ],
+        "the table step must compare before writing, write, then compare again after writing",
     );
-    // 写前比对自带「写过目标字节就只剩 5」的分流，不能在调用点另立一套码值
-    let stamp = source("table/stamp.rs");
-    assert!(
-        stamp.contains("wrote_target"),
-        "verify_regions_before must know whether earlier steps already wrote"
+    assert_order(
+        &source("dev/source.rs"),
+        &[
+            "pub(crate) fn write_guarded(",
+            "self.read_at(off, &mut current)",
+            "self.write_at(off, buf)",
+            "pub(crate) fn write_converged(",
+            "self.write_guarded(off, buf, expect, step)",
+            "self.read_back(off, buf)",
+        ],
+        "write_converged must compare before writing and read back after",
     );
-    let module = source("execution/mod.rs");
+    // 写事实只有一个来源：4 / 5 的分流都读进程级标志
     assert!(
-        module.contains("past_boundary") || module.contains("state.wrote_target()"),
-        "the executor must carry the write boundary through later steps"
+        source("outcome.rs").contains("fn target_may_have_been_written"),
+        "the process write fact must stay in the result type"
+    );
+    assert!(
+        source("execution/fs.rs").contains("crossed_irreversible_point("),
+        "the fs step must take its 4/5 split from the write fact"
+    );
+    assert!(
+        !source("execution/mod.rs").contains("state.wrote_target()"),
+        "the executor must not derive the write boundary from the record's progress"
     );
 }
 
