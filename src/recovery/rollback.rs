@@ -41,6 +41,15 @@ pub(crate) struct RollbackPermit {
 /// 签发点的封印：字段私有，其它模块构造不了带它的值
 struct Seal;
 
+/// `restore_blocked` 的豁免口径：`move` / `copy` 的数据搬移越过不可逆点后，表区
+/// preimage 仍在记录里——回放表区、不碰数据区。
+///
+/// `undo` 的准入、`inspect` 的下一步提示、`abandon` 的放弃计数与"目标忙"的出路文案
+/// 共用这一份判据：各处各写一遍匹配式，就会出现"提示说能撤、`undo` 说不能"的漂移
+pub(crate) fn table_only_replay(op: OpKind) -> bool {
+    matches!(op, OpKind::Move | OpKind::Copy)
+}
+
 /// 准入结论。`Proceed` 携带写入许可；`AlreadyReverted` 表示盘面已全部回到原文，
 /// 没有需要写回的字节，把记录与落点交还调用方做零写入收尾
 pub(crate) enum Admission {
@@ -59,9 +68,8 @@ impl crate::recovery::RecoveryEngine {
     ) -> Admission {
         // `move` / `copy` 的已搬数据不回滚，但 preimage 只覆盖表区、仍可回写。
         // 这两条命令的数据写入必然越过不可逆点，若按 `restore_blocked` 一律拒绝，表区
-        // 就再也没有回滚路径——那不是保守，是把契约规定的可回滚部分一并丢掉
-        let table_only_replay = matches!(record.op, OpKind::Move | OpKind::Copy);
-        if record.restore_blocked && !table_only_replay {
+        // 就再也没有回滚路径——那不是保守，是把可回滚的部分一并丢掉
+        if record.restore_blocked && !table_only_replay(record.op) {
             bail_fail(RunOutcome::refused(format!(
                 "the recovery record at {} marks a non-reversible mutation, so the recorded bytes are not written back; \
                  release the transaction with `diskedit abandon`",
@@ -117,7 +125,8 @@ pub(crate) fn execute_rollback(
     } else {
         format!("undid {n} recorded write range(s) (verify with: diskedit info)")
     };
-    let outcome = crate::support::settle_layout(outcome, src);
+    let record = src.record_journal().map(|j| j.record());
+    let outcome = crate::support::settle_layout(outcome, src, record);
     if outcome.is_complete() {
         println!("{taking}");
     }
@@ -200,7 +209,7 @@ fn verify_copy_source(src: &FileSource, record: &Record, path: &std::path::Path)
     }
     let now = crate::support::range_sha256(src, offset, len).unwrap_or_else(|e| {
         bail_fail(RunOutcome::no_mutation(format!(
-            "cannot read source partition #{} of the recovery record ({e}) — nothing was written",
+            "cannot read source partition #{} of the recovery record ({e})",
             source.partition
         )))
     });

@@ -98,9 +98,8 @@ $B info "$T" | grep -o '"num":1,"first_lba":[0-9]*,"last_lba":[0-9]*' | grep -q 
 chkp 1 -
 
 echo
-# 原 "5: 收缩+搬移（resize-part）chunk:30" 用例已删除：
-# `resize-part --start` 列为未登记，resize-part 只能改终点，不再产生 chunk 搬移，
-# chunk 标签在该命令上不可达（rs- 前缀的旧注入点名已并入 chunk）。搬移中断的覆盖在同文件的 1/2/6 段（move / resize）。
+# `resize-part --start` 列为未登记，resize-part 只能改终点，不产生 chunk 搬移，
+# chunk 注入标签在该命令上不可达；搬移中断的覆盖在同文件的 1/2/6 段（move / resize）。
 
 echo
 echo "===== 6: grow 路径（尾打包）chunk:150 ====="

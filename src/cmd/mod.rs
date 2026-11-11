@@ -49,6 +49,14 @@ impl CmdResult {
             Self::Code(code) => Self::Code(code),
         }
     }
+
+    /// 出口归责：返回结果同样要按本次写事实对齐；只带退出码的命令没有可改判的形态
+    pub(crate) fn reconcile_with_writes(self) -> Self {
+        match self {
+            Self::RunOutcome(o) => Self::RunOutcome(o.reconcile_with_writes()),
+            Self::Code(code) => Self::Code(code),
+        }
+    }
 }
 
 impl From<RunOutcome> for CmdResult {
@@ -68,7 +76,7 @@ impl From<u8> for CmdResult {
 /// 只是让这些 Linux 专用模块在其它平台仍可编译，运行期不可达
 #[cfg(not(target_os = "linux"))]
 const NO_EVIDENCE_BACKEND: &str = "this command needs the directory-relative evidence backend, \
-     which is Linux-only. Nothing was written (no target bytes, lock, recovery record, or log).";
+     which is Linux-only.";
 
 /// 运行期唯一的能力判据：`CommandDef.capabilities` → [`crate::planner::needs_for`] →
 /// [`CapabilitySnapshot::first_gap`]，与文档矩阵读同一份事实来源。
@@ -130,6 +138,8 @@ pub(crate) fn open_read_only_target(
 /// 命令分派：请求变体与处理函数一一对应。帮助与用法错误在 [`crate::cli::parse`] 里
 /// 已退出进程，走到这里的都是结构完整的请求
 pub(crate) fn dispatch(def: &CommandDef, req: &Request) -> CmdResult {
+    // 运行边界：一条命令一次运行，写事实从入口起算
+    crate::outcome::reset_run_facts();
     // 请求变体与分派所用声明必须同一条命令；确认规则与 `--yes` 的声明也必须一致
     debug_assert_eq!(req.def().name, def.name, "request variant and command definition disagree");
     match def.confirmation {
@@ -143,8 +153,7 @@ pub(crate) fn dispatch(def: &CommandDef, req: &Request) -> CmdResult {
     // 声明门：空 capabilities 是漏声明，不是"无副作用"。能力门不替命令猜这个
     if def.capabilities.is_empty() {
         bail_fail(crate::support::RunOutcome::unsupported(format!(
-            "command `{}` declares no capabilities — the gate refuses an undeclared command. \
-             Nothing was written (no target bytes, lock, recovery record, or log).",
+            "command `{}` declares no capabilities — the gate refuses an undeclared command.",
             def.name
         )));
     }
@@ -152,8 +161,7 @@ pub(crate) fn dispatch(def: &CommandDef, req: &Request) -> CmdResult {
     // 的一切创建。拒绝文案点名缺失的原语与载体形态，不另立"Linux only"的第二套判据
     if let Some((media, id, state)) = capability_gap(def.capabilities) {
         bail_fail(crate::support::RunOutcome::unsupported(format!(
-            "command `{}` needs the {} primitive, which is {} on this platform for a {} target. \
-             Nothing was written (no target bytes, lock, recovery record, or log).",
+            "command `{}` needs the {} primitive, which is {} on this platform for a {} target.",
             def.name,
             id.as_str(),
             state.as_str(),
@@ -334,7 +342,7 @@ mod tests {
         );
     }
 
-    /// 与迁移前等价：Linux 上每条命令在块设备与镜像两种形态都过能力门
+    /// Linux 上每条命令在块设备与镜像两种形态都过能力门
     #[cfg(target_os = "linux")]
     #[test]
     fn every_command_passes_the_capability_gate_on_linux() {
@@ -351,7 +359,7 @@ mod tests {
         }
     }
 
-    /// SIZE 槽位由位置参数声明给出，不再有数字下标
+    /// SIZE 槽位由位置参数声明给出
     #[test]
     fn positional_slots_declare_size() {
         use crate::cli::Slot;

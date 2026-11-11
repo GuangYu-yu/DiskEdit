@@ -44,15 +44,16 @@ use std::process::ExitCode;
 
 use crate::outcome::{EXIT_INTERNAL, EXIT_OK, EXIT_PARTIAL};
 
-/// panic 走默认钩子（原样打印消息与 backtrace），退出码按本进程是否可能已写过目标
-/// 字节分：未写过是内部错误（1）；写过则无法断言盘上状态，落部分完成（5）并给出
-/// 恢复指引
+/// panic 走默认钩子（原样打印消息与 backtrace），结论交给同一个归责点：本次已写则
+/// 落部分完成（5）并给出恢复指引；从未写过则是内部错误（1）
 fn main() -> ExitCode {
     match std::panic::catch_unwind(run) {
         Ok(code) => ExitCode::from(code),
         Err(_) => {
-            if crate::outcome::target_may_have_been_written() {
-                crate::outcome::RunOutcome::report_partial_guidance();
+            let outcome = crate::outcome::RunOutcome::internal("the process panicked")
+                .reconcile_with_writes();
+            if matches!(outcome, crate::outcome::RunOutcome::Partial { .. }) {
+                outcome.report();
                 ExitCode::from(EXIT_PARTIAL)
             } else {
                 ExitCode::from(EXIT_INTERNAL)
@@ -79,13 +80,21 @@ fn run() -> u8 {
         result = result.degrade_partial(cause.clone());
         cleanup_failure = Some(cause);
     }
+    // 返回结果同样要归责：命令内部的错误出口已在各自打印前归责（bail_fail /
+    // report_final），这里兜住直接带着旧结论回到 main 的路径，改判时补一次呈现
+    let before = result.code();
+    result = result.reconcile_with_writes();
+    if result.code() != before
+        && let cmd::CmdResult::RunOutcome(o) = &result
+    {
+        o.report();
+    }
     let code = result.code();
     // 收尾失败发生在命令自报成功之后，命令自己没有打印过 5 的指引，这里补上
     if code == EXIT_PARTIAL
         && let Some(cause) = cleanup_failure
     {
-        eprintln!("error: {cause}");
-        crate::outcome::RunOutcome::report_partial_guidance();
+        crate::outcome::RunOutcome::partial_postcondition(cause, Vec::new()).report();
     }
     code
 }

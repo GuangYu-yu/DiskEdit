@@ -7,11 +7,6 @@ require_fault_bin
 img T resume13.img
 img T2 resume13b.img
 
-# 原「resize-part 右移 50M，chunk 中断后可续传」用例已删除：
-# `resize-part --start` 列为未登记（收到即 2），resize-part 只能改终点、
-# 不搬移数据，因此 chunk / after-data-sync 这两个注入点在 CLI 上不可达。
-# 搬移中断的等价覆盖在下面的 run_shift_break（resize grow --allow-move）里。
-
 # resize grow（a 扩 100M、b 后移打包，chunk 1MiB，共 400 块）：在第 N 块落盘后中断，
 # 重跑必须续传且 b 数据逐字节一致
 run_shift_break() {
@@ -52,7 +47,6 @@ run_shift_break() {
   record_absent "$T2" && echo "  OK   完成后无记录残留" || { echo "  BAD  完成后记录仍在"; rc=1; }
 }
 
-# chunk / after-data-sync 的用例随 resize-part --start 一并移除。
 for n in 1 200 399; do run_shift_break "$n"; echo; done
 # 搬移路径的同一交界面：第 200 块已同步、checkpoint 尚未写入时中断，续跑从 199 开始
 run_shift_break 200 after-data-sync 199; echo

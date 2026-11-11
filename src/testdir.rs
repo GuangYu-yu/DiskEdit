@@ -2,7 +2,7 @@
 //! 设置 `DISKEDIT_KEEP_TEST_DIR=1` 时保留现场（路径打印到 stderr）便于事后查看。
 //!
 //! 名字由 `tempfile` 随机生成（`diskedit_<name>_<随机>`），同一用例重复运行、
-//! 多个测试并行都不会撞名，也不再需要把 pid 拼进名字。
+//! 多个测试并行都不会撞名。
 
 use std::path::{Path, PathBuf};
 

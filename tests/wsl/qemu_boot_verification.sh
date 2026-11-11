@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-# QEMU 引导验证 v2：GRUB(ESP) + 内核(boot 分区，按 label 搜索)
-# 修正 v1 的两个问题：(1) grub 配置与 prefix 不一致导致 GRUB 进交互 shell；
-#                      (2) QEMU 等 stdin 造成"卡住"
+# QEMU 引导验证：GRUB(ESP) + 内核(boot 分区，按 label 搜索)
+# grub 配置与 prefix 不一致会让 GRUB 进交互 shell；QEMU 等 stdin 会造成"卡住"
 source "$(dirname "$0")/lib.sh"
 require_fault_bin
 

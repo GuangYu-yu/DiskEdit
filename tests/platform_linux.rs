@@ -71,7 +71,7 @@ fn an_image_honours_the_declared_sector_size() {
     assert_eq!(json["sector_size"], 4096, "{out}");
 }
 
-/// 第 49、50 条：Linux 具备写表能力，`new`/`add`/`delete` 不得落 6。
+/// Linux 具备写表能力，`new`/`add`/`delete` 不得落 6。
 #[test]
 fn the_linux_port_runs_the_table_write_commands() {
     let dir = temp_dir("write");

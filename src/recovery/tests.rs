@@ -112,7 +112,7 @@ fn pre_commit_range_belongs_to_placement_operations() {
     assert!(decode(&other.encode().unwrap()).is_err());
 }
 
-fn reloc_entry(partition: u32, src_first: u64, len: u64, delta: u64, is_swap: bool) -> RelocEntry {
+fn reloc_entry(partition: u32, src_first: u64, len: u64, delta: i64, is_swap: bool) -> RelocEntry {
     RelocEntry { partition, src_first, len, delta, is_swap }
 }
 
@@ -152,6 +152,22 @@ fn relocation_roundtrip_preserves_entry_order() {
     let decoded = decode(&record.encode().unwrap()).expect("a resize record with a relocation decodes");
     assert_eq!(decoded.relocation, Some(plan.clone()));
     assert_eq!(decoded.relocation.unwrap().entries, plan.entries);
+}
+
+/// 位移是有符号量：向左（Δ<0）的条目往返后仍是同一个负数，不被当成无符号量重读
+#[test]
+fn relocation_roundtrip_preserves_a_leftward_shift() {
+    let plan = Relocation {
+        entries: vec![reloc_entry(2, 6144, 4096, -2048, false)],
+        ..relocation(Vec::new())
+    };
+    let mut record = record_for(scene(4));
+    record.op = OpKind::Move;
+    record.relocation = Some(plan.clone());
+    let decoded = decode(&record.encode().unwrap()).expect("a leftward move record decodes");
+    let got = decoded.relocation.expect("the relocation survives");
+    assert_eq!(got.entries[0].delta, -2048);
+    assert_eq!(got.entries, plan.entries);
 }
 
 /// swap 待重建由游标表达：entry_index 指向 swap 条目、chunks 为 0。记录里没有
@@ -197,7 +213,7 @@ fn relocation_belongs_to_move_resize_and_resize_part_records() {
 }
 
 /// 计划字段的非法组合在解码时拒绝：分区号 0 / 重复、零长度、grow_part 参与搬移、
-/// 游标越过条目数、全体提交仍带 chunk 进度、块大小或扇区为 0
+/// 游标越过条目数、全体提交仍带 chunk 进度、块大小或扇区为 0、负位移越过 LBA 0
 #[test]
 fn relocation_rejects_impossible_jobs() {
     let legal = || relocation(vec![reloc_entry(2, 6144, 4096, 2048, false)]);
@@ -206,6 +222,8 @@ fn relocation_rejects_impossible_jobs() {
         Relocation { entries: vec![reloc_entry(2, 6144, 0, 2048, false)], ..legal() },
         Relocation { entries: vec![reloc_entry(2, 6144, 4096, 2048, false), reloc_entry(2, 8192, 512, 0, false)], ..legal() },
         Relocation { entries: vec![reloc_entry(1, 2048, 4096, 0, false)], ..legal() },
+        // 负位移越过 LBA 0：目标端点算不出来
+        Relocation { entries: vec![reloc_entry(2, 0, 4096, -1, false)], ..legal() },
         Relocation { entry_index: 2, ..legal() },
         Relocation { entry_index: 1, chunks_in_entry: 3, ..legal() },
         Relocation { chunk_bytes: 0, ..legal() },

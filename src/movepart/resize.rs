@@ -51,7 +51,13 @@ pub(crate) fn ntfs_hidden_value(start_lba: u64) -> (u32, bool) {
 /// 单位是设备逻辑扇区（4Kn 原生盘上即 4Kn LBA，不折算 512）：bytes_per_sector 记录
 /// 各自的扇区大小，hidden_sectors 语义随它计。字段只有 32 位：start ≥ 2^32 时写 0 并
 /// 警告（Windows 将无法从该分区引导，数据不受影响）。仅在分区起始 LBA 变化后调用。
-pub(crate) fn fix_ntfs_hidden_sectors(src: &mut WriteSource, new_first_lba: u64, ss: u64, log: &mut dyn FnMut(&str)) -> io::Result<()> {
+pub(crate) fn fix_ntfs_hidden_sectors(
+    src: &mut WriteSource,
+    new_first_lba: u64,
+    ss: u64,
+    part: u32,
+    log: &mut dyn FnMut(&str),
+) -> io::Result<()> {
     let (val, warn) = ntfs_hidden_value(new_first_lba);
     // 与执行器的 LBA→字节换算同口径：起点来自调用方传入的几何，裸乘回绕会把
     // HiddenSectors 写到盘上另一个位置
@@ -80,7 +86,21 @@ pub(crate) fn fix_ntfs_hidden_sectors(src: &mut WriteSource, new_first_lba: u64,
             format!("the first sector at LBA {new_first_lba} is not an NTFS boot sector; refusing to write HiddenSectors"),
         ));
     }
-    src.write_at(off, &val.to_le_bytes())?;
+    // 写前比对与写入都在写入口内完成：比较区间就是这 4 个字节，与探测读到的原文一致
+    // 才写；不一致说明扇区在这中间变了，拒绝覆盖
+    let current = probe.get(0x1C..0x20).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("the boot sector at LBA {new_first_lba} is shorter than the HiddenSectors field"),
+        )
+    })?;
+    src.write_guarded(
+        off,
+        &val.to_le_bytes(),
+        crate::dev::RegionStamp::of_bytes(off, current),
+        crate::outcome::WriteStep::Fs { part },
+    )
+    .map_err(crate::dev::WriteConflict::into_io_error)?;
     src.sync_data()?;
     if warn {
         log("warning: partition starts beyond 2^32; HiddenSectors zeroed — Windows cannot boot from it");

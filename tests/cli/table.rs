@@ -241,7 +241,7 @@ fn new_gpt_refuses_to_clear_bytes_inside_an_existing_partition() {
     let before = std::fs::read(&dirty).unwrap();
     let (c, _, e) = run(&["new", dirty_s, "--yes"]);
     assert_eq!(c, 3, "an unprovable first sector still needs consent: {e}");
-    assert!(e.contains("all_zero=false, recognized_table=false"), "{e}");
+    assert!(e.contains("probe=unrecognized-non-empty"), "{e}");
     let (c, _, _) = run(&["new", dirty_s, "--yes", "--overwrite-data"]);
     assert_eq!(c, 0, "explicit consent covers unrecognized bytes too");
     assert_ne!(std::fs::read(&dirty).unwrap(), before, "the write must have landed");
@@ -602,7 +602,7 @@ fn layout_uses_table_sector_size_not_container() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// D5（C1）：set name 超过 36 个 UTF-16 码元必须拒绝（而非静默截断）；恰 36 个码元可接受
+/// set name 超过 36 个 UTF-16 码元必须拒绝（而非静默截断）；恰 36 个码元可接受
 #[test]
 fn set_name_over_36_code_units_is_refused() {
     let dir = std::env::temp_dir().join(format!("diskedit_nm36_{}", std::process::id()));

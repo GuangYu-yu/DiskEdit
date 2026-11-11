@@ -30,22 +30,18 @@ impl FsSet {
     /// 准入期拒绝 → 3；UUID 文本不能解析为 UUID → 2
     fn check(&self) -> Result<(), RunOutcome> {
         if self.part == 0 {
-            return Err(RunOutcome::internal(
-                "the step targets partition 0 — nothing was written",
-            ));
+            return Err(RunOutcome::internal("the step targets partition 0"));
         }
         match &self.attr {
             FsSetAttr::Label(label) => {
                 fsops::check_label_limits(self.fstype, label)
-                    .map_err(|why| RunOutcome::refused(format!("{why} — nothing was written")))
+                    .map_err(|why| RunOutcome::refused(why.to_string()))
             }
             FsSetAttr::Uuid(UuidValue::Explicit(text)) => {
                 if crate::support::parse_guid(text).is_some() {
                     Ok(())
                 } else {
-                    Err(RunOutcome::usage(format!(
-                        "{text:?} is not a UUID — nothing was written"
-                    )))
+                    Err(RunOutcome::usage(format!("{text:?} is not a UUID")))
                 }
             }
             FsSetAttr::Uuid(UuidValue::Generate) => Ok(()),
@@ -61,23 +57,15 @@ pub(crate) fn preflight(step: &FsSet) -> Result<(), RunOutcome> {
 /// 执行一个 FsSet 步骤。
 ///
 /// 屏障落在调用外部工具的同一函数里、紧贴首次写盘之前：记录随屏障落盘，之后工具无论
-/// 成败，目标都处于不可回滚状态。`wrote_target` 与 `FsCreate`/`FsResize` 同义：进入本步
-/// 时计划若已写过目标字节，任何失败都只剩「盘可能已改变」这一种事实可说，不能被
-/// `FsError::Io` 的 `From` 映射洗成 4。
-pub(crate) fn execute(
-    src: &mut WriteSource,
-    step: &FsSet,
-    wrote_target: bool,
-) -> Result<(), RunOutcome> {
-    let past = |outcome: RunOutcome| {
-        if wrote_target { outcome.past_boundary() } else { outcome }
-    };
+/// 成败，目标都处于不可回滚状态。本步之前的失败按各自的原变体返回；越过首写之后
+/// 的失败由退出点的归责统一改判，调用点不再自行降级
+pub(crate) fn execute(src: &mut WriteSource, step: &FsSet) -> Result<(), RunOutcome> {
     // 预扫描已经判过同一份载荷，这里的失败只是兜底
-    step.check().map_err(past)?;
+    step.check()?;
     if let Err(e) = src.mark_non_reversible() {
-        return Err(past(RunOutcome::no_mutation(format!(
+        return Err(RunOutcome::no_mutation(format!(
             "cannot persist the recovery barrier: {e}"
-        ))));
+        )));
     }
     let result = match &step.attr {
         FsSetAttr::Label(label) => fsops::set_label(src, step.part, step.fstype, label),
@@ -89,5 +77,5 @@ pub(crate) fn execute(
             fsops::set_uuid(src, step.part, step.fstype, &request)
         }
     };
-    result.map_err(|e| past(RunOutcome::from(e).context(&format!("set {} failed", step.name()))))
+    result.map_err(|e| RunOutcome::from(e).context(&format!("set {} failed", step.name())))
 }

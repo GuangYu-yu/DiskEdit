@@ -20,7 +20,13 @@ pub(crate) fn shift_plan_none_never_ghost_relocates() {
 
     let plan = make_plan(&mut src, 1).unwrap();
     let size = src.size;
-    let _record_path = attach_relocation(&mut src, (2048, 6143), reloc_for(&plan, chunk, size), None);
+    let _record_path = attach_relocation(
+        &mut src,
+        (2048, 6143),
+        (plan.grow_part, 2048, grow_end_for(&plan, 2048).unwrap()),
+        reloc_for(&plan, chunk, size),
+        None,
+    );
     // 有记录的缩容：拒绝并指向续跑/放弃，绝不把旧 grow plan 当缩容的执行体
     let e = match plan_shift(&mut src, 1, None) {
         Err(e) => e,
@@ -67,7 +73,7 @@ pub(crate) fn shrink_does_not_resume_a_committed_growth_job() {
             partition: 2,
             src_first: 10240,
             len: 2048,
-            delta: SHIFT,
+            delta: i64::try_from(SHIFT).expect("the fixture shift fits a signed LBA offset"),
             is_swap: false,
         }],
         entry_index: 0,
@@ -78,7 +84,7 @@ pub(crate) fn shrink_does_not_resume_a_committed_growth_job() {
         disk_size: src.size,
         ss: g.ss,
     };
-    let _record_path = attach_relocation(&mut src, (2048, 10239), reloc, None);
+    let _record_path = attach_relocation(&mut src, (2048, 10239), (1, 2048, 10239 + SHIFT), reloc, None);
 
     let e = plan_shift(&mut src, 1, None).err().expect("shrink must not resume the committed growth job");
     assert!(matches!(&e, RunOutcome::Refused(m) if m.contains("unfinished")), "{e:?}");
@@ -110,7 +116,13 @@ pub(crate) fn shift_resume_requires_the_same_requested_size() {
     // 身份里的数值一维就是它：请求的扩容终点 = 目标原末端 + shift
     assert_eq!(grow_end_for(&plan, P1_START).unwrap(), P1_END + SHIFT);
     let size = src.size;
-    let _record_path = attach_relocation(&mut src, (P1_START, P1_END), reloc_for(&plan, chunk, size), None);
+    let _record_path = attach_relocation(
+        &mut src,
+        (P1_START, P1_END),
+        (1, P1_START, P1_END + SHIFT),
+        reloc_for(&plan, chunk, size),
+        None,
+    );
 
     // 原样重跑：两维都对上 ⇒ 续跑，终点仍是当初请求的那个
     let resumed = plan_shift(&mut src, 1, Some(SHIFT)).expect("re-running the same size must resume");
@@ -194,9 +206,9 @@ pub(crate) fn make_plan_pack_and_boundaries() {
     assert_eq!(plan.moves.len(), 2);
     // 末→首执行序：swap 先（重建），home 后（搬移）；末端对齐 last_usable=32734
     assert!(plan.moves[0].is_swap && plan.moves[0].part_num == 3);
-    assert_eq!(plan.moves[0].first_lba + plan.moves[0].delta_lba, 30687, "swap new first_lba");
+    assert_eq!(plan.moves[0].first_lba.checked_add_signed(plan.moves[0].delta_lba).unwrap(), 30687, "swap new first_lba");
     assert!(!plan.moves[1].is_swap && plan.moves[1].part_num == 2);
-    assert_eq!(plan.moves[1].first_lba + plan.moves[1].delta_lba, 26591, "home new first_lba");
+    assert_eq!(plan.moves[1].first_lba.checked_add_signed(plan.moves[1].delta_lba).unwrap(), 26591, "home new first_lba");
     drop(src);
 
     // LUKS 在目标之后 → 拒绝，且规划不得写盘
@@ -252,7 +264,13 @@ pub(crate) fn make_plan_pack_and_boundaries() {
 #[test]
 pub(crate) fn grow_end_formula_and_overflow() {
     let plan_of = |moves: Vec<PlanEntry>, last_usable: u64| Plan { ss: 512, last_usable_lba: last_usable, grow_part: 1, moves, kind: PlanKind::TailPacked, repair: RepairAction::None };
-    let mv = |first_lba: u64, delta_lba: u64| PlanEntry { part_num: 1, first_lba, len_lba: 10, delta_lba, is_swap: false };
+    let mv = |first_lba: u64, delta_lba: i64| PlanEntry {
+        part_num: 1,
+        first_lba,
+        len_lba: 10,
+        delta_lba,
+        is_swap: false,
+    };
 
     // 无 movable → last_usable_lba
     assert_eq!(grow_end_for(&plan_of(vec![], 32734), 0).unwrap(), 32734);
@@ -283,13 +301,18 @@ pub(crate) fn tail_packed_rerun_only_yields_zero_delta_moves() {
     // p3 紧贴尾部，p1 与 p3 之间留 2000 扇区空隙
     gpt_policy::add_entry_at(&mut src, 2048, 3000, "p1", table::LINUX_FS_TYPE_GUID, [1; 16]).unwrap();
     gpt_policy::add_entry_at(&mut src, 5001, 8158, "p3", table::LINUX_FS_TYPE_GUID, [3; 16]).unwrap();
-    let plan = make_plan(&mut src, 1).unwrap();
+    let mut plan = make_plan(&mut src, 1).unwrap();
     assert!(!plan.moves.is_empty(), "the tail neighbour is a blocker and must appear as a move");
     assert!(plan.moves.iter().all(|m| m.delta_lba == 0), "an already tail-packed neighbour needs no relocation");
     let before = table::load_gpt(&src).unwrap().unwrap();
     let img_before = std::fs::read(&src.path).unwrap();
-    let _record_path = attach_record(&mut src, crate::recovery::OpKind::Resize, (2048, 3000));
-    let o = ap(&mut src, &plan, 1 << 20, true, &mut |_| {});
+    let _record_path = attach_record(
+        &mut src,
+        crate::recovery::OpKind::Resize,
+        (2048, 3000),
+        (1, 2048, grow_end_for(&plan, 2048).unwrap()),
+    );
+    let o = ap(&mut src, &mut plan, 1 << 20, true, &mut |_| {});
     assert!(o.is_complete(), "a zero-delta plan must not fail: {}", o.exit_code());
     let after = table::load_gpt(&src).unwrap().unwrap();
     // 分区号 1 基，条目数组 0 基：邻居必须按 plan.moves 里的真实分区号定位，
@@ -409,11 +432,17 @@ pub(crate) fn apply_refusal_does_not_write_the_disk() {
     );
     let img_before = std::fs::read(&p).unwrap();
     let chunk: u64 = 1024 * 1024;
-    let plan = make_plan(&mut src, 1).unwrap();
+    let mut plan = make_plan(&mut src, 1).unwrap();
     // 记录里的块大小与本次请求不同 ⇒ apply 在修复与搬移之前拒绝
     let size = src.size;
-    let _record_path = attach_relocation(&mut src, (2048, 6143), reloc_for(&plan, 2 * chunk, size), None);
-    let o = ap(&mut src, &plan, chunk, true, &mut |_| {});
+    let _record_path = attach_relocation(
+        &mut src,
+        (2048, 6143),
+        (plan.grow_part, 2048, grow_end_for(&plan, 2048).unwrap()),
+        reloc_for(&plan, 2 * chunk, size),
+        None,
+    );
+    let o = ap(&mut src, &mut plan, chunk, true, &mut |_| {});
     assert_eq!(o.exit_code(), 3);
     assert_eq!(std::fs::read(&p).unwrap(), img_before, "a refusal must leave the image byte-identical");
     drop(src);
@@ -441,6 +470,35 @@ pub(crate) fn refusal_on_an_already_valid_table_is_still_ten() {
 
     assert_eq!(std::fs::read(&p).unwrap(), before, "拒绝路径不得写盘");
     assert!(!record_path.exists(), "拒绝早于记录落盘");
+}
+
+/// 计划期的两侧对账：被搬移条目的内容是可激活的 4K 页 swap，表项却声明普通分区。
+/// 这条冲突在计划期就拒绝（3），盘一个字节都不改——与收尾期那条互补：收尾期只能报
+/// "表已提交"的 5，计划期能停在写盘之前
+#[test]
+pub(crate) fn swap_declaration_conflict_is_refused_at_plan_time() {
+    let (src, p) = plan_fixture(&[(1, [0x11; 16], 2048, 6143), (2, [0x22; 16], 8192, 24575)]);
+    let _keep = src.release();
+    // 4K 页签名 + 头内自洽（version=1，last_page < 分区页数）：identify 给 Swap，
+    // 与分区 2 的普通分区声明冲突
+    let base = 8192 * 512;
+    let mut raw = std::fs::read(&p).unwrap();
+    raw[base + 1024..base + 1028].copy_from_slice(&1u32.to_le_bytes());
+    raw[base + 4096 - 10..base + 4096].copy_from_slice(b"SWAPSPACE2");
+    std::fs::write(&p, &raw).unwrap();
+
+    let mut src = plan_open(&p);
+    let record_path = src.identity.record_path().expect("image targets have a record path").to_path_buf();
+    let before = std::fs::read(&p).unwrap();
+    let e = match make_plan(&mut src, 1) {
+        Err(e) => e,
+        Ok(_) => panic!("a declaration/content conflict must refuse at plan time"),
+    };
+    assert!(matches!(&e, RunOutcome::Refused(m) if m.contains("the two readings disagree")), "{e:?}");
+    assert_eq!(e.exit_code(), 3);
+    assert_eq!(std::fs::read(&p).unwrap(), before, "计划期拒绝不得写盘");
+    assert!(!record_path.exists(), "计划期拒绝早于记录落盘");
+    drop(src);
 }
 
 /// 只有 backup 头过期（保护 MBR 与容器一致）时：PMBR 无需重写，只搬移备份头

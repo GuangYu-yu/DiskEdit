@@ -126,7 +126,7 @@ impl Fixture {
         out.extend_from_slice(&0u32.to_le_bytes()); // restore entry count
 
         let mut file = vec![0u8; 16];
-        file[0..4].copy_from_slice(b"DSKR");
+        file[0..4].copy_from_slice(b"DSK2");
         file[4..8].copy_from_slice(&(out.len() as u32).to_le_bytes());
         file[8..12].copy_from_slice(&crc32(&out).to_le_bytes());
         let header_crc = crc32(&file[0..12]);

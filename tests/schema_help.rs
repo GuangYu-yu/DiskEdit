@@ -1,4 +1,4 @@
-//! §8 阶段 5 的验收入口：帮助来自同一张命令表，入口一致，且不再出现柱面几何。
+//! 帮助来自同一张命令表，入口一致，且不出现柱面几何。
 use std::process::Command;
 
 /// 每条命令按词拆开：`records list` 这类双词命令的每个词都是一个参数
@@ -94,7 +94,7 @@ fn top_level_usage_lists_every_command() {
     usage_lists_every_command(&e);
 }
 
-/// 帮助里不再出现柱面对齐或 CHS 几何
+/// 帮助里不出现柱面对齐或 CHS 几何
 #[test]
 fn help_output_has_no_cylinder_geometry() {
     let mut all = run(&["help"]).1;

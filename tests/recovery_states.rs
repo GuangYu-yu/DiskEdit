@@ -138,7 +138,7 @@ impl Fixture {
     fn bytes(&self) -> Vec<u8> {
         let payload = self.payload();
         let mut out = vec![0u8; 16];
-        out[0..4].copy_from_slice(b"DSKR");
+        out[0..4].copy_from_slice(b"DSK2");
         out[4..8].copy_from_slice(&(payload.len() as u32).to_le_bytes());
         out[8..12].copy_from_slice(&crc32(&payload).to_le_bytes());
         let header_crc = crc32(&out[0..12]);
@@ -211,6 +211,56 @@ fn evidence_unrecognized_format_is_a_structure_failure() {
     let (code, out, _) = run(&["inspect", image.to_str().unwrap()]);
     assert_eq!(code, 3);
     assert!(out.contains("record: unrecognized format"), "{out}");
+}
+
+#[test]
+fn a_record_in_the_previous_layout_is_never_resumed_by_a_write_command() {
+    // 旧格式（magic 不是本构建认的值）一律不可解码：写命令既不把它当续跑现场，也不碰
+    // 目标字节。两条命令都在打开写事务时判成外来布局，退出 3，出路只有 abandon
+    let prepare = |tag: &str, op: u8, size: usize| {
+        let dir = temp_dir(tag);
+        let image = image_with(&dir, size);
+        let mut fixture = Fixture::image(size as u64, file_id(&image));
+        fixture.op = op;
+        let mut bytes = fixture.bytes();
+        bytes[0..4].copy_from_slice(b"DSKR");
+        reseal_header(&mut bytes);
+        (image, bytes)
+    };
+    let check = |tag: &str, image: &std::path::Path, bytes: &[u8], before: Vec<u8>, code: i32, out: &str, err: &str| {
+        assert_eq!(code, 3, "{tag}: {out}{err}");
+        assert!(
+            err.contains("uses a layout this build does not recognize"),
+            "{tag}: {err}"
+        );
+        assert!(
+            err.contains("`diskedit abandon` is the only way to release it"),
+            "{tag}: {err}"
+        );
+        assert_eq!(fs::read(image).unwrap(), before, "{tag}: the target must not change");
+        assert_eq!(fs::read(record_path(image)).unwrap(), bytes, "{tag}: the record is left in place");
+    };
+
+    // move：记录在打开写事务时就被判成外来布局，不需要先有分区表
+    let (image, bytes) = prepare("old_magic_move", 5, 4096);
+    write_record(&image, &bytes);
+    let before = fs::read(&image).unwrap();
+    let target = format!("{}:1", image.display());
+    let (code, out, err) = run(&["move", &target, "--start", "2048", "--yes"]);
+    check("old_magic_move", &image, &bytes, before, code, &out, &err);
+
+    // resize --allow-move：锁前的只读阶段要先认出表与分区，故先建一张 GPT 与一个分区；
+    // 记录仍是外来布局，写事务打开时同样退出 3。旧 magic 的记录连身份字段都读不出来，
+    // 建表后镜像尺寸与记录里的不一致不影响这条路径
+    let (image, bytes) = prepare("old_magic_resize", 10, 8 * 1024 * 1024);
+    let img = image.display().to_string();
+    assert_eq!(run(&["new", &img, "--yes"]).0, 0);
+    assert_eq!(run(&["add", &img, "1M", "--yes"]).0, 0);
+    write_record(&image, &bytes);
+    let before = fs::read(&image).unwrap();
+    let target = format!("{img}:1");
+    let (code, out, err) = run(&["resize", &target, "grow", "--allow-move", "--yes"]);
+    check("old_magic_resize", &image, &bytes, before, code, &out, &err);
 }
 
 #[test]

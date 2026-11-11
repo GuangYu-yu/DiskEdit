@@ -11,7 +11,6 @@ use crate::dev::FileSource;
 use crate::domain::{ContentKind, SectorSize};
 use crate::geometry::ValidatedGeometry;
 use crate::gpt_policy::GptFlag;
-use crate::movepart::{is_forbidden_type_guid, is_swap_guid};
 use crate::outcome::RunOutcome;
 use crate::planner::{
     ConfirmedPlan, FsSetAttr, PartitionFact, PlanStep, TableFacts, TableObservation, UuidValue,
@@ -656,50 +655,57 @@ pub(crate) fn assemble_set_mbr_hidden(
 }
 
 /// 多步搬移计划的装配：按 `moves` 的顺序逐条目推进 `geometry`，每个条目得到
-/// 「`Relocate` + 该条目的表提交」一对。`moves` 的每一项是 1-based 分区号与目标起始
-/// LBA；顺序即执行顺序，落点与尚未搬移的条目重叠时 [`ValidatedGeometry::update_entry`]
-/// 拒绝该次推进。
+/// 「`Relocate` + 该条目的表提交」一对，换区条目在表提交之后多一步 `RebuildSwap`。
+/// `moves` 的每一项是 1-based 分区号与目标起始 LBA；顺序即执行顺序，落点与尚未搬移的
+/// 条目重叠时 [`ValidatedGeometry::update_entry`] 拒绝该次推进。
 ///
 /// 第 i 个条目的表内容取自「条目 0..=i 已就位」的几何，表步骤的两端表戳随之一条链：
 /// 第一个表步骤的 `expect_before` 是调用时盘上的表区快照，之后每个表步骤的
 /// `expect_before` 等于前一个表步骤的 `expect_after`。链不一致按内部错误拒绝。
 ///
-/// swap 条目不在这里装配 `Relocate`：搬移执行器不重建 swap 内容，遇到时返回 6（能力缺口）、
-/// 不产出计划。类型 GUID 为 LUKS / LVM PV 的条目只允许改尺寸，搬移按请求不成立返回 3。
+/// 类型 GUID 为 LUKS / LVM PV 的条目只允许改尺寸，搬移按请求不成立返回 3。
 /// 保护性 MBR 由 [`crate::table::protective_mbr_content`] 判定，需要规范化时并入每个表步骤
 /// 的 LBA0 写入段，已合规时不写 LBA0。本函数不产 `FsResize` / `FsCreate` / repair 步骤。
+/// `record` 是本次作业已落盘的搬移记录：已在目的位的条目由它给出 swap 结论，
+/// 见 [`crate::movepart::move_entry_swap`]
 pub(crate) fn assemble_relocation_plan(
     src: &FileSource,
     geometry: &mut ValidatedGeometry,
     moves: &[(u32, u64)],
+    record: Option<&crate::recovery::Relocation>,
+    log: &mut dyn FnMut(&str),
 ) -> Result<ConfirmedPlan, RunOutcome> {
-    assemble_move_steps(src, geometry, moves, None, false)
+    assemble_move_steps(src, geometry, moves, None, record, log)
 }
 
 /// `resize --allow-move` 的整份已装配计划：搬移 + 表提交 + 换区重建，末尾是把目标分区
 /// 扩到 `grow_end` 的表步骤。
 ///
-/// 与 [`assemble_relocation_plan`] 是同一条装配链，差别只在两处：换区条目允许出现
-/// （内容可弃，表提交之后多一步 `RebuildSwap`），以及末尾带一个扩容表步骤。扩容与搬移
-/// 同属一份作业，表戳链因此必须一路串到最后一步——续跑时前一步写完的表正是后一步的
-/// 写前快照。
+/// 与 [`assemble_relocation_plan`] 是同一条装配链，差别只在末尾带一个扩容表步骤。
+/// 扩容与搬移同属一份作业，表戳链因此必须一路串到最后一步——续跑时前一步写完的表
+/// 正是后一步的写前快照。`record` 与前者同义
 pub(crate) fn assemble_resize_move_plan(
     src: &FileSource,
     geometry: &mut ValidatedGeometry,
     moves: &[(u32, u64)],
     grow: (u32, u64),
+    record: Option<&crate::recovery::Relocation>,
+    log: &mut dyn FnMut(&str),
 ) -> Result<ConfirmedPlan, RunOutcome> {
-    assemble_move_steps(src, geometry, moves, Some(grow), true)
+    assemble_move_steps(src, geometry, moves, Some(grow), record, log)
 }
 
 /// 搬移作业的装配内核：`moves` 按执行顺序给出（最右侧先搬），`grow` 是末尾那次扩容
-/// 的 `(分区号, 新末端)`。`allow_swap` 决定换区条目是"装配一步重建"还是"拒绝"。
+/// 的 `(分区号, 新末端)`。条目是不是 swap 不由这里单判：声明侧（类型 GUID）与证据侧
+/// （内容签名）一起交给 [`crate::movepart::move_entry_swap`]，只有一方给出答案时用
+/// 那一方并把依据写进 `log`；已在目的位的条目以记录为准
 fn assemble_move_steps(
     src: &FileSource,
     geometry: &mut ValidatedGeometry,
     moves: &[(u32, u64)],
     grow: Option<(u32, u64)>,
-    allow_swap: bool,
+    record: Option<&crate::recovery::Relocation>,
+    log: &mut dyn FnMut(&str),
 ) -> Result<ConfirmedPlan, RunOutcome> {
     if moves.is_empty() && grow.is_none() {
         return Err(RunOutcome::internal(
@@ -721,15 +727,20 @@ fn assemble_move_steps(
     let mut previous_after: Option<TableStamp> = None;
     let mut steps: Vec<PlanStep> = Vec::with_capacity(moves.len() * 3 + 1);
     for &(part, dst_first) in moves {
-        let (src_first, sectors, is_swap) = move_entry(geometry, part)?;
-        if is_swap && !allow_swap {
-            return Err(RunOutcome::unsupported(format!(
-                "partition #{part} is a swap partition — the relocation executor does not rebuild swap contents"
-            )));
+        // 内容证据取自搬移前的源区间：几何随后会被推进到目的位，那时这段字节已是
+        // 右邻搬过来的新内容。已在目的位的条目由记录给出源起点与结论
+        let (src_first, sectors, verdict) = crate::movepart::move_entry_swap(src, geometry, part, record)?;
+        if let Some(note) = verdict.note(part) {
+            log(&note);
         }
         let end = dst_first
             .checked_add(sectors - 1)
             .ok_or_else(|| RunOutcome::refused(format!("partition #{part} would end beyond the LBA range")))?;
+        // 目的区上界与 update_entry 共用同一份几何：表内 LBA 的右界是 last_usable_lba
+        let usable_end = geometry.last_usable_lba();
+        if end > usable_end {
+            return Err(destination_past_usable_end(src, part, dst_first, end, usable_end));
+        }
         let index = geometry.entry_index(part).ok_or_else(|| {
             RunOutcome::refused(format!("partition #{part} is outside the entry array"))
         })?;
@@ -740,9 +751,9 @@ fn assemble_move_steps(
             })
             .map_err(|e| RunOutcome::refused(format!("partition #{part} cannot move to LBA {dst_first}: {e}")))?;
         let step = assemble_after(src, geometry, &protective_mbr, &mut state, &mut previous_after)?;
-        steps.push(PlanStep::Relocate { part, src_first, dst_first, sectors, is_swap });
+        steps.push(PlanStep::Relocate { part, src_first, dst_first, sectors, is_swap: verdict.is_swap });
         steps.push(PlanStep::WriteTable(step));
-        if is_swap {
+        if verdict.is_swap {
             steps.push(PlanStep::RebuildSwap { part, src_first, dst_first, sectors });
         }
     }
@@ -769,38 +780,30 @@ fn assemble_move_steps(
     })
 }
 
-/// 一条被搬移条目的当前几何：盘上起点、长度与它是不是换区。三种拒绝在这里给出——
-/// 不在条目数组里、未定义、端点倒挂、LUKS/LVM PV 不可搬移
-fn move_entry(
-    geometry: &ValidatedGeometry,
+/// 目的区间末端越过 `last_usable_lba`。没有恢复记录即规划期拒绝；有记录时看作业是否已越过
+/// 不可逆写入点（[`crate::outcome::crossed_irreversible_point`]）：已越过即 5，否则 4
+fn destination_past_usable_end(
+    src: &FileSource,
     part: u32,
-) -> Result<(u64, u64, bool), RunOutcome> {
-    let index = geometry
-        .entry_index(part)
-        .ok_or_else(|| RunOutcome::refused(format!("partition #{part} is outside the entry array")))?;
-    let entry = geometry.entries().get(index).ok_or_else(|| {
-        RunOutcome::internal(format!("partition #{part} has no entry in the geometry"))
-    })?;
-    if entry.starting_lba == 0 && entry.ending_lba == 0 {
-        return Err(RunOutcome::refused(format!("partition #{part} is not defined")));
+    dst_first: u64,
+    end: u64,
+    last_usable: u64,
+) -> RunOutcome {
+    let detail = format!(
+        "partition #{part}'s destination (LBA {dst_first}..{end}) ends past the table's last usable LBA {last_usable}"
+    );
+    if src.record_journal.is_none() {
+        return RunOutcome::refused(format!("{detail} — refusing"));
     }
-    if entry.starting_lba > entry.ending_lba {
-        return Err(RunOutcome::internal(format!(
-            "partition #{part} has an inverted range {}..{}",
-            entry.starting_lba, entry.ending_lba
-        )));
+    if crate::outcome::crossed_irreversible_point() {
+        RunOutcome::partial(format!(
+            "{detail} — the job may already have written the target; inspect it and use `diskedit undo` before retrying"
+        ))
+    } else {
+        RunOutcome::no_mutation(format!(
+            "{detail} — this run has not written the target; the recovery record can be abandoned"
+        ))
     }
-    if is_forbidden_type_guid(&entry.partition_type_guid) {
-        return Err(RunOutcome::refused(format!(
-            "partition #{part} is a LUKS / LVM PV partition — this tool does not relocate it, only size \
-             changes are allowed"
-        )));
-    }
-    Ok((
-        entry.starting_lba,
-        entry.ending_lba - entry.starting_lba + 1,
-        is_swap_guid(&entry.partition_type_guid),
-    ))
 }
 
 /// 按当前几何装配一个表步骤，并把表戳链接上下一个。调用方保证几何刚被推进过

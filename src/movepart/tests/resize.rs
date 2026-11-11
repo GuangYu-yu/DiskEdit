@@ -20,7 +20,7 @@ pub(crate) fn ntfs_hidden_sectors_fix() {
     boot[3..11].copy_from_slice(b"NTFS    ");
     src.write_at(30687 * 512, &boot).unwrap();
     let mut log = |_: &str| {};
-    fix_ntfs_hidden_sectors(&mut src, 30687, 512, &mut log).unwrap();
+    fix_ntfs_hidden_sectors(&mut src, 30687, 512, 1, &mut log).unwrap();
     let mut b = [0u8; 4];
     src.read_at(30687 * 512 + 0x1C, &mut b).unwrap();
     assert_eq!(b, 30687u32.to_le_bytes());
@@ -71,7 +71,9 @@ pub(crate) fn resize_part_resume_skips_done_chunks() {
     // 污染源尾块首字节：若续传错误重搬 chunk 3，目标尾块会变 0xEE
     src.write_at(src_off + 3 * chunk, &[0xEEu8]).unwrap();
 
-    // 预置记录：已同步落盘 1 块
+    // 预置记录：已同步落盘 1 块。本请求的新区间与下面的 rsize 入参同值，
+    // 摘要按生产的取法绑定（操作取记录自己的，扇区与盘大小取目标现场）
+    let (new_start, new_end) = (12288u64, 20479u64);
     let record_path = src.identity.record_path().expect("image targets have a record path").to_path_buf();
     std::fs::create_dir_all(record_path.parent().unwrap()).unwrap();
     let probe = crate::platform::probe::probe_of(&src).unwrap();
@@ -85,13 +87,22 @@ pub(crate) fn resize_part_resume_skips_done_chunks() {
         None,
     )
     .unwrap();
+    let digest = crate::recovery::PlanDigest::of_request(
+        journal.op(),
+        1,
+        new_start,
+        new_end,
+        ss,
+        src.size,
+    );
+    journal.bind_plan(digest).expect("a fresh record binds the request");
     journal.bind_old_range((2048, 10239)).unwrap();
     journal.record_progress(1, 1, 0).unwrap();
     src.adopt_record_journal(journal);
 
     // 续传：跳过 chunk 0，补齐 chunk 1..3，提交表项
-    let o = rsize(&mut src,1, 12288, 20479, chunk, false, &mut |_| {});
-    assert!(o.has_layout_write(), "resize must apply (exit {})", o.exit_code());
+    let o = rsize(&mut src, 1, new_start, new_end, chunk, false, &mut |_| {});
+    assert!(o.is_layout_applied(), "resize must apply (exit {})", o.exit_code());
 
     // 终验：目标 4 块 = 指纹 0x10..0x13（chunk 0 未被重搬污染）
     for i in 0..4u8 {
@@ -119,6 +130,8 @@ pub(crate) fn resize_crash_records_durable_progress() {
     for i in 0..4u8 {
         src.write_at(src_off + i as u64 * chunk, &vec![0x10 + i; 512]).unwrap();
     }
+    // 本请求的新区间与下面的 rsize 入参同值；摘要按生产的取法在首次落盘前绑定
+    let (new_start, new_end) = (4096u64, 12287u64);
     let record_path = src.identity.record_path().expect("image targets have a record path").to_path_buf();
     std::fs::create_dir_all(record_path.parent().unwrap()).unwrap();
     let probe = crate::platform::probe::probe_of(&src).unwrap();
@@ -132,12 +145,21 @@ pub(crate) fn resize_crash_records_durable_progress() {
         None,
     )
     .unwrap();
+    let digest = crate::recovery::PlanDigest::of_request(
+        journal.op(),
+        1,
+        new_start,
+        new_end,
+        512,
+        src.size,
+    );
+    journal.bind_plan(digest).expect("a fresh record binds the request");
     journal.bind_old_range((2048, 10239)).unwrap();
     src.adopt_record_journal(journal);
 
     // 右移 1 MiB（自重叠，块收敛到 1 MiB）：尾→头推进，第 2 轮读失败时首块已同步落盘
     let fault = crate::dev::ReadFaultGuard::at(src_off + 2 * chunk);
-    let o = rsize(&mut src,1, 4096, 12287, chunk, true, &mut |_| {});
+    let o = rsize(&mut src, 1, new_start, new_end, chunk, true, &mut |_| {});
     assert_eq!(o.exit_code(), 5, "mid-move read failure must stay Partial: {o:?}");
     drop(fault);
 
@@ -146,7 +168,7 @@ pub(crate) fn resize_crash_records_durable_progress() {
 
     // 已完成块（within = 3 MiB）的源区改写成垃圾：续跑若从 0 重来会把它带回目标区
     src.write_at(src_off + 3 * chunk, &[0xEE; 512]).unwrap();
-    let resumed = rsize(&mut src,1, 4096, 12287, chunk, true, &mut |_| {});
+    let resumed = rsize(&mut src, 1, new_start, new_end, chunk, true, &mut |_| {});
     assert!(resumed.is_complete(), "the resume must finish the move: {}", resumed.exit_code());
     for i in 0..4u8 {
         let mut b = [0u8; 512];
@@ -161,7 +183,7 @@ pub(crate) fn resize_crash_records_durable_progress() {
 /// 记录型"分区层已提交、FS 收尾未做"的现场：表项停在目标区间，记录里留着搬移前几何。
 /// 分区首扇区写一个 LVM PV 标签——FS 判据认它，且它的扩容不需要外部工具
 #[cfg(target_os = "linux")]
-fn committed_record_fixture(op: crate::recovery::OpKind, old: (u64, u64), new: (u64, u64)) -> crate::testdir::TestSource<WriteSource> {
+fn committed_record_fixture(part: u32, op: crate::recovery::OpKind, old: (u64, u64), new: (u64, u64)) -> crate::testdir::TestSource<WriteSource> {
     let ss = 512u64;
     let (mut src, _path) = plan_fixture(&[(1, [0x11; 16], old.0, old.1)]);
 
@@ -190,6 +212,8 @@ fn committed_record_fixture(op: crate::recovery::OpKind, old: (u64, u64), new: (
         None,
     )
     .unwrap();
+    let digest = crate::recovery::PlanDigest::of_request(journal.op(), part, new.0, new.1, ss, src.size);
+    journal.bind_plan(digest).expect("a fresh record binds the request");
     journal.bind_old_range(old).unwrap();
     src.adopt_record_journal(journal);
     src
@@ -209,7 +233,7 @@ pub(crate) fn record_resume_after_commit_keeps_the_filesystem_step() {
         (crate::recovery::OpKind::Resize, "resize"),
         (crate::recovery::OpKind::ResizePart, "resize-part"),
     ] {
-        let src = committed_record_fixture(op, old, new);
+        let src = committed_record_fixture(1, op, old, new);
         let (g, repair) = gpt_policy::resolve_geometry(&src).unwrap().unwrap();
         let p = crate::cmd::layout::prepare_resize_part(
             &src, &g, repair, 1, new.0, new.1, 1024 * 1024, false, None, false, &mut |_| {},
@@ -269,7 +293,7 @@ pub(crate) fn recorded_lvm_facts_surface_the_unrun_chain() {
     let chunk: u64 = 1024 * 1024;
     let old = (2048u64, 6143u64);
     let new = (4096u64, 8191u64);
-    let mut src = committed_record_fixture(crate::recovery::OpKind::Resize, old, new);
+    let mut src = committed_record_fixture(1, crate::recovery::OpKind::Resize, old, new);
     src.record_journal_mut()
         .expect("the fixture attaches a record")
         .record_lvm_post(crate::recovery::LvmPost {
@@ -293,28 +317,45 @@ pub(crate) fn recorded_lvm_facts_surface_the_unrun_chain() {
     assert_eq!(kept.lv_target, (1 << 20) + 8 * 4096);
 }
 
-/// "最终状态已核验"不成立时：表已提交、FS 步留下待办（32K 页格式的 swap 在本机认不出
-/// 且未重建）。待办必须以退出码 5 浮出，不能被当成成功
+/// 32K 页格式的 swap 在本机（4K 页）认不出类型：identify 走 swapon 口径给出 "unknown"，
+/// 但 swap 探测认得出它。该支不写盘，不与表项的普通分区声明对账，按内容判据产出 Swap
+/// 待办；此刻表已提交，待办以退出码 5 浮出，不能被当成成功
 #[test]
 pub(crate) fn pending_fs_step_is_reported() {
     let chunk: u64 = 1024 * 1024;
     let (src, p) = plan_fixture(&[(1, [0x11; 16], 2048, 6143)]);
     let _keep = src.release();
-    // 只在 32K 候选位置放 swap 签名：identify 给 unknown，收尾按"分区已扩、swap 未重建"记待办
+    // 只在 32K 候选位置放 swap 签名：identify 给 unknown，但 swap 探测认得出它，
+    // 本机激活不了它，收尾按"扩了但未重建"记待办
     let base = 2048 * 512;
     let mut raw = std::fs::read(&p).unwrap();
     raw[base + 32768 - 10..base + 32768].copy_from_slice(b"SWAPSPACE2");
     std::fs::write(&p, &raw).unwrap();
 
     let mut src = plan_open(&p);
+    // 纯扩容没有搬移：分区内的一段字节在整轮作业里都不该被改写
+    let marker = base as u64 + 4096;
+    let sentinel = [0xA5u8; 512];
+    src.write_at(marker, &sentinel).unwrap();
     let o = rsize(&mut src, 1, 2048, 8191, chunk, false, &mut |_| {});
     assert_eq!(o.exit_code(), 5, "{o:?}");
     match &o {
         RunOutcome::Applied { pending, .. } => {
-            assert!(!pending.is_empty(), "the unbuilt swap must surface as pending")
+            assert_eq!(pending.len(), 1, "the swap rebuild is one pending step: {pending:?}");
+            assert_eq!(pending[0].kind, crate::outcome::PendingKind::Swap, "{:?}", pending[0]);
         }
         other => panic!("expected Applied, got {other:?}"),
     }
+    assert!(!o.is_complete(), "a pending swap rebuild must not report completion");
+    let g = table::load_gpt(&src).unwrap().unwrap();
+    assert_eq!(
+        (g.entries[0].starting_lba, g.entries[0].ending_lba),
+        (2048, 8191),
+        "grow 必须把请求终点写进表项"
+    );
+    let mut after = [0u8; 512];
+    src.read_at(marker, &mut after).unwrap();
+    assert_eq!(after, sentinel, "纯扩容不得改写分区内已有的字节");
 
     drop(src);
 }

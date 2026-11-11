@@ -177,10 +177,10 @@ pub(crate) fn mbr_conflict_catches_gpt_signature_inside_partition() {
 
     let why = mbr_metadata_conflict(&src, ss).unwrap().expect("the conflict must be found");
     assert!(why.contains("MBR partition 1"), "{why}");
-    assert!(why.contains("GPT header bytes"), "{why}");
+    assert!(why.contains("the whole LBA1 sector"), "{why}");
 
     // 没有可清的签名就不报冲突：普通 msdos 建表不被这条检查误拦
-    let plain = src_from_mbr("cfchk_mbr_plain", &[(0x83, 1, 99)], 100);
+    let plain = src_from_mbr("cfchk_mbr_plain", &[(0x83, 2, 97)], 100);
     assert!(mbr_metadata_conflict(&plain, ss).unwrap().is_none());
 }
 
