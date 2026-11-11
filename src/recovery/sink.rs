@@ -51,7 +51,8 @@ impl StepSink for RecordSink<'_> {
             )
             .map_err(|e| {
                 RunOutcome::partial(format!(
-                    "the transfer checkpoint was not persisted: {e} — the transfer may be incomplete"
+                    "{} — the transfer may be incomplete",
+                    e.record_failure("the transfer checkpoint")
                 ))
             })
     }
@@ -80,7 +81,8 @@ impl StepSink for RecordSink<'_> {
             )
             .map_err(|e| {
                 RunOutcome::partial(format!(
-                    "the table step completion was not persisted: {e} — the on-disk state may have changed"
+                    "{} — the on-disk state may have changed",
+                    e.record_failure("the table step completion")
                 ))
             })
     }
@@ -102,7 +104,8 @@ impl StepSink for RecordSink<'_> {
             .record_transfer_checkpoint(None, state.completed_steps, state.transfer_cursor)
             .map_err(|e| {
                 RunOutcome::partial(format!(
-                    "the filesystem step completion was not persisted: {e} — the on-disk state may have changed"
+                    "{} — the on-disk state may have changed",
+                    e.record_failure("the filesystem step completion")
                 ))
             })
     }

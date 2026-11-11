@@ -63,9 +63,12 @@ pub(crate) fn execute(src: &mut WriteSource, step: &FsSet) -> Result<(), RunOutc
     // 预扫描已经判过同一份载荷，这里的失败只是兜底
     step.check()?;
     if let Err(e) = src.mark_non_reversible() {
-        return Err(RunOutcome::no_mutation(format!(
-            "cannot persist the recovery barrier: {e}"
-        )));
+        let msg = e.record_failure("the recovery barrier");
+        return Err(if e.record_bytes_persisted() {
+            RunOutcome::partial(msg)
+        } else {
+            RunOutcome::no_mutation(msg)
+        });
     }
     let result = match &step.attr {
         FsSetAttr::Label(label) => fsops::set_label(src, step.part, step.fstype, label),

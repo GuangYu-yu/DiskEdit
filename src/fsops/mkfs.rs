@@ -186,9 +186,7 @@ pub fn mkfs(src: &mut WriteSource, part: u32, fstype: MkfsFs, label: Option<&str
     // 擦除一旦开始，前镜像就不再完整，undo 必须被拒；屏障写不下去时一个字节都还没动，
     // 故报 Io（→ NoMutation），不报 CommandFailed
     src.mark_non_reversible().map_err(|e| {
-        FsError::from(io::Error::other(format!(
-            "cannot persist the transaction barrier: {e}"
-        )))
+        FsError::from(io::Error::other(e.record_failure("the transaction barrier")))
     })?;
     // wipe_zero 一旦开始就存在部分清零：之后的任何失败都不再是"确定未写盘"，
     // 统一压成 CommandFailed（→ Partial），报告带"盘上状态可能已改变"的警示

@@ -11,7 +11,8 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::{Component, Path};
 
 use super::{
-    DirDurability, DirFd, EvidenceFile, EvidenceIo, EvidenceStore, PathError, RelativePath, sealed,
+    DirDurability, DirFd, EvidenceFile, EvidenceIo, EvidenceStore, PathError, RelativePath,
+    RemoveOutcome, sealed,
 };
 
 /// `open_at` 解析出来的文件句柄组
@@ -78,7 +79,11 @@ impl EvidenceStore for HostEvidenceStore {
         drop(temp_fd);
 
         rename_sibling(&state.parent, &temp_name, &state.name)?;
-        sync_dir(&state.parent)?;
+        sync_dir(&state.parent).map_err(|e| {
+            EvidenceIo::RenamedNotDurable(io::Error::other(format!(
+                "the record was renamed into place but its directory fsync failed: {e}"
+            )))
+        })?;
         Ok(DirDurability::Persisted)
     }
 
@@ -88,15 +93,20 @@ impl EvidenceStore for HostEvidenceStore {
         file: EvidenceFile,
         _committed: &crate::recovery::CommittedRecord,
         _permit: &crate::recovery::CleanupPermit,
-    ) -> Result<DirDurability, EvidenceIo> {
+    ) -> RemoveOutcome {
         let state = file.state();
-        let name = c_name(&state.name).map_err(EvidenceIo::Io)?;
+        let name = match c_name(&state.name) {
+            Ok(name) => name,
+            Err(e) => return RemoveOutcome::NotRemoved(EvidenceIo::Io(e)),
+        };
         let raw = unsafe { libc::unlinkat(state.parent.as_raw_fd(), name.as_ptr(), 0) };
         if raw != 0 {
-            return Err(EvidenceIo::Io(io::Error::last_os_error()));
+            return RemoveOutcome::NotRemoved(EvidenceIo::Io(io::Error::last_os_error()));
         }
-        sync_dir(&state.parent)?;
-        Ok(DirDurability::Persisted)
+        match sync_dir(&state.parent) {
+            Ok(()) => RemoveOutcome::RemovedAndDurable,
+            Err(_) => RemoveOutcome::RemovedDurabilityUnconfirmed,
+        }
     }
 }
 
@@ -120,7 +130,11 @@ impl HostEvidenceStore {
         drop(temp_fd);
 
         rename_sibling(&parent, &temp_name, &name)?;
-        sync_dir(&parent)?;
+        sync_dir(&parent).map_err(|e| {
+            EvidenceIo::RenamedNotDurable(io::Error::other(format!(
+                "the record was created but its directory fsync failed: {e}"
+            )))
+        })?;
         Ok(DirDurability::Persisted)
     }
 }
@@ -272,12 +286,9 @@ fn sync_fd(fd: RawFd) -> io::Result<()> {
 }
 
 /// 目录 fsync 失败时改名/删除已经发生：错误信息显式带上这一事实，调用方不得宣称已持久化
-fn sync_dir(dir: &OwnedFd) -> Result<(), EvidenceIo> {
+fn sync_dir(dir: &OwnedFd) -> Result<(), io::Error> {
     if unsafe { libc::fsync(dir.as_raw_fd()) } != 0 {
-        let err = io::Error::last_os_error();
-        return Err(EvidenceIo::Io(io::Error::other(format!(
-            "the directory entry changed but its directory fsync failed: {err}"
-        ))));
+        return Err(io::Error::last_os_error());
     }
     Ok(())
 }

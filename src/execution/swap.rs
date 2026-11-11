@@ -34,8 +34,9 @@ pub(crate) fn rebuild(
     // mkswap 是外部工具的写盘，屏障必须先于它：此后回滚表项即"表与内容自相矛盾"
     src.mark_non_reversible().map_err(|e| {
         RunOutcome::partial(format!(
-            "partition {}: cannot persist the recovery barrier before rebuilding the swap area: {e} — the table entry is committed",
-            step.part
+            "partition {}: {} — the table entry is committed",
+            step.part,
+            e.record_failure("the recovery barrier")
         ))
     })?;
     // 新起点此刻只在盘上的表里：内核视图若还停在旧位置，按新起点找不到分区节点，

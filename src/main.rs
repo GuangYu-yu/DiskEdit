@@ -63,6 +63,11 @@ fn main() -> ExitCode {
 }
 
 fn run() -> u8 {
+    // 注入标签在命令解析之前校验：拼错或失效的标签若被静默放过，表现与"注入点没有被
+    // 走到"完全相同。按内部错误直接结束，不做任何判定与写盘
+    if let Some(msg) = crate::movepart::validate_fault_env() {
+        return crate::outcome::RunOutcome::internal(msg).report_final().exit_code();
+    }
     let (def, request) = cli::parse();
     let mut result = cmd::dispatch(def, &request);
     // 收尾步骤的失败不直接改码：只把"已完整应用"的结果降级成部分完成（5），

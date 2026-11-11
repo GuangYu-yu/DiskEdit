@@ -22,7 +22,7 @@ fn record_old_range(src: &mut WriteSource, p: &table::MbrPartition) -> Result<()
     let end = start + u64::from(p.size_lba) - 1;
     journal
         .bind_old_range((start, end))
-        .map_err(|e| RunOutcome::no_mutation(format!("the pre-commit range was not recorded ({e})")))
+        .map_err(|e| RunOutcome::no_mutation(e.record_failure("the pre-commit range")))
 }
 
 /// MBR 表项改长度：一次读定快照 → 纯计算新 LBA0 → 装配成表步骤 → 执行器落盘。
@@ -121,7 +121,7 @@ pub(crate) fn mbr_grow_finish(
             // 离线路径仅镜像，块设备走在线路径且 active swap 已被守卫拒绝）
             Ok(fsops::Growable::Target(t)) if t.fstype == fsid::ContentKind::Swap => {
                 // swap 的承诺就是 mkswap：外部工具写盘不可回滚，先落屏障
-                src.mark_non_reversible().unwrap_or_else(|e| bail_fail(RunOutcome::from(e)));
+                src.mark_non_reversible().unwrap_or_else(|e| bail_fail(RunOutcome::from(e.into_io())));
                 let ident = movepart::read_swap_identity(src, p.start_lba as u64, p.size_lba as u64, ss);
                 // 与 movepart 的两个重建点同一口径：文案由 recreate_swap 按实际写入返回，
                 // 读不出来时它在动手前就拒绝，不会把随机 UUID 说成"保住了"
@@ -142,7 +142,7 @@ pub(crate) fn mbr_grow_finish(
             Ok(fsops::Growable::Target(t)) => {
                 // 外部 FS 工具（resize2fs/xfs_growfs/…）写盘不可回滚：FS 自述尺寸随即大于
                 // 旧分区尺寸，此后回滚表项即"表与内容自相矛盾"，先落屏障
-                src.mark_non_reversible().unwrap_or_else(|e| bail_fail(RunOutcome::from(e)));
+                src.mark_non_reversible().unwrap_or_else(|e| bail_fail(RunOutcome::from(e.into_io())));
                 match t.resize_fs(src) {
                     // 扩容已成功，卸载的成败是另一条后置条件：它不改写成功这一事实，
                     // 只作为一条待办随结果浮出
@@ -254,7 +254,7 @@ pub(crate) fn cmd_resize_msdos(a: &ResizeRequest, pref: PartSelector, src_ro: &F
     // 块设备在线路径：与 GPT 同一份实现，随表类型变的只有右侧空闲数。目标长度同样
     // 交给 mbr_decider 在在线自己的锁下重解析（理由见 gpt_decider）
     #[cfg(target_os = "linux")]
-    if let Some(o) = resize_online(a, src_ro, part, is_pv, mbr_decider(a.yes, a.size, part, is_pv)) {
+    if let Some(o) = resize_online(a, src_ro, part, is_pv, mbr_decider(a.size, part, is_pv)) {
         return o;
     }
 
@@ -417,65 +417,8 @@ pub(crate) fn cmd_resize_msdos(a: &ResizeRequest, pref: PartSelector, src_ro: &F
             // 分区层做完 → 与 grow-to-end 同一条收尾
             mbr_grow_finish(a, &mut src, p, is_pv, is_block)
         } else {
-            // 缩：与 movepart GPT 路径同守卫链——FS 先缩成功才写表。
-            // --no-fs 与缩容不可共存（分区末端会切进未缩的 FS 元数据），与 GPT 同判据
-            if a.no_fs {
-                bail_fail(RunOutcome::refused("--no-fs cannot shrink: the filesystem has to be shrunk first, otherwise the new partition end would cut into filesystem metadata".to_string()));
-            }
-            // FS 收缩的前置检查与 GPT 路径同一处（fsops::check_shrink）：能否缩 / 类型是否
-            // 认得 / 工具是否齐备只写一份
-            fsops::check_shrink(Some(fstype), is_block, fsops::needs_loop(&fsops::DeviceScope::Partition(part), is_block))
-                .unwrap_or_else(|e| bail_fail(RunOutcome::from(e)));
-            // 交给 shrink_fs 的是按扇区取整后的新分区尺寸，min 的判据必须取同一个值：
-            // 按用户原始 bytes 比较会在取整下探不足一个扇区时放行，让"改参数有解"的
-            // 拒绝被跳过，失败留到 FS 工具已启动之后
-            let requested = new_size_lba * ss;
-            if let Some(min) = fsops::fs_min_bytes(&src, part, Some(fstype))
-                .unwrap_or_else(|e| bail_fail(RunOutcome::from(e).context("min-size probe failed")))
-                && requested < min
-            {
-                bail_fail(RunOutcome::refused(format!("target size {requested} < minimum FS size {min} bytes (resize2fs -P)")));
-            }
-            // 缩容预检（方向、可缩性、工具齐备、下界）全过，note 不再跟在一条拒绝后面
-            // FS 缩是本次首个写盘步骤：缩小前的探针（fs_min_bytes）跑完后盘上表可能已被
-            // 外部改写，这里读当前 LBA0，条目与锁下快照不一致就停在此刻（尚未写盘）
-            table::ensure_mdos_entry_unchanged(&src, p).unwrap_or_else(|f| bail_fail(f));
-            // 缩容会截短分区并让文件系统同步缩小：被截掉的字节 `undo` 找不回来
-            crate::cmd::confirm::gate(a.yes, crate::cmd::confirm::Impact {
-                shrinking: true,
-                ..Default::default()
-            });
-            crate::support::note_sector_truncation("resizing to", bytes, ss);
-            // 不落不可回滚屏障：缩小之后回滚表项只会得到"FS 小于分区"这一自洽状态，undo
-            // 仍然安全（与 GPT 缩容臂同一条判据）。屏障若抢在 shrink_fs 的预检之前落下，
-            // 之后那些"确定未写盘"的拒绝（btrfs 多设备、工具起不来）会同时把 undo 永久
-            // 禁掉、把目标顶成 busy，而盘上一个字节都没动
-            // shrink_fs 的契约按旧分区尺寸比对（FS 小于分区时实为良性扩容，见其文档）；
-            // 此处传入的是新分区尺寸，≤ 旧分区尺寸由缩容方向（new_size_lba < p.size_lba）保证
-            let shrunk = fsops::shrink_fs(&src, part, Some(fstype), requested)
-                .unwrap_or_else(|e| bail_fail(RunOutcome::from(e).context("FS shrink failed")));
-            // 成功行同时给出实际落点与请求值：工具按自身粒度取整，差异要看得见
-            let release_failed = shrunk.release_failed();
-            let line = shrunk.ok_line(requested);
-            // FS 已缩之后浮出的两条待办：回读不出来（缩容可能已完成、落点未证实）与卸载
-            // 没做成（清理未完成）——都不改写缩容这一事实，只作为待办浮出。
-            // 本路径（缩过 FS 再改表）把这两条计入 pending，因为表写入紧随其后：出口因此是 5
-            let pending = shrunk.pending(part);
-            // 落点未证实时不切表：分区末端可能落进未缩的 FS 元数据（与 movepart 的
-            // 同一条判据）。缩容本身可能已完成，故仍按已应用收尾，把未证实作为待办浮出。
-            // 临时挂载点没卸掉同样不切表：分区仍在挂载中，改表会让末端切进活动挂载
-            // 仍在使用的文件系统
-            if let Some(line) = line {
-                println!("{line}");
-                if !release_failed {
-                    resize_mbr_entry(&mut src, part, new_size_lba as u32)
-                        .map_err(after_irreversible)
-                        .unwrap_or_else(|f| bail_fail(f));
-                }
-            }
-            let record = src.record_journal().map(|j| j.record());
-            let o = settle_layout(crate::outcome::RunOutcome::applied_with(pending), &src, record);
-            finish_resize(a, o, Some(&mut src), part, is_pv, is_block, None, cur_bytes)
+            // 相等已在上面短路；到这里只剩缩小，锁前与锁下两处 `refuse_shrink` 本应先拦住
+            bail_fail(super::refuse_shrink())
         }
     }
 }

@@ -266,6 +266,8 @@ impl EvidenceFile {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum DirDurability {
     Persisted,
+    /// 目录项已改变、目录 `fsync` 失败：名字空间里的变化可能随掉电回退
+    Unconfirmed,
 }
 
 /// 证据路径解析失败：每一类都对应一次显式拒绝
@@ -288,7 +290,21 @@ pub(crate) enum PathError {
 #[derive(Debug)]
 pub(crate) enum EvidenceIo {
     Io(std::io::Error),
+    /// 改名/创建已发生、目录 `fsync` 失败：目录项已指向新记录，掉电后是否保留未确认
+    RenamedNotDurable(std::io::Error),
     Unsupported(String),
+}
+
+/// 删除的落点：`unlink` 是否发生与目录项是否持久化分开陈述。
+/// 下游按变体分流，不从 I/O 错误反推"记录还在"
+#[derive(Debug)]
+pub(crate) enum RemoveOutcome {
+    /// 名字空间已移除，目录 `fsync` 成功
+    RemovedAndDurable,
+    /// 名字空间已移除，目录 `fsync` 失败：掉电后可能重新出现
+    RemovedDurabilityUnconfirmed,
+    /// `unlink` 未发生：记录仍在落点上
+    NotRemoved(EvidenceIo),
 }
 
 /// 恢复记录存储端口：整份原子替换 + 目录持久化。
@@ -310,14 +326,15 @@ pub(crate) trait EvidenceStore: sealed::Sealed {
     ) -> Result<DirDurability, EvidenceIo>;
 
     /// 删除已持有的证据文件并再次目录 fsync。两个凭据都由恢复引擎签发，
-    /// 本原语不接受缺任一凭据的调用
+    /// 本原语不接受缺任一凭据的调用。返回三态：删除是否发生与目录项是否持久化
+    /// 分开陈述，下游不从 [`EvidenceIo`] 反推"记录还在"
     fn remove(
         &self,
         anchor: &DirFd,
         file: EvidenceFile,
         committed: &crate::recovery::CommittedRecord,
         permit: &crate::recovery::CleanupPermit,
-    ) -> Result<DirDurability, EvidenceIo>;
+    ) -> RemoveOutcome;
 }
 
 /// 平台探测/打开失败。分类在这里不压成 io：成因决定上层是拒绝还是能力不支持

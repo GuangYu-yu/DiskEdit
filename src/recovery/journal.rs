@@ -172,6 +172,8 @@ pub(crate) enum RecordJournalError {
     Unsupported(String),
     /// 删除前回读与待删记录不符：记录保留。已写目标字节时落 5，未写时落 3
     ReadbackMismatch(String),
+    /// 删除已发生、目录 fsync 失败：名字空间里已没有它，掉电后是否重新出现未确认
+    RemovedDurabilityUnconfirmed,
 }
 
 impl std::fmt::Display for RecordJournalError {
@@ -179,7 +181,20 @@ impl std::fmt::Display for RecordJournalError {
         match self {
             Self::Io(e) => write!(f, "{e}"),
             Self::Unsupported(message) | Self::ReadbackMismatch(message) => f.write_str(message),
+            Self::RemovedDurabilityUnconfirmed => f.write_str(
+                "the record was removed from its directory, but the directory fsync failed, so the removal is \
+                 not durable; if it reappears after an unclean shutdown, release it with `diskedit abandon`",
+            ),
         }
+    }
+}
+
+impl RecordJournalError {
+    /// 记录是否仍在落点上：删除未发生、被拒绝，或清理未获许可。这几个变体可以按
+    /// "记录还在"陈述并指路 `abandon`；`RemovedDurabilityUnconfirmed` 为假——
+    /// 名字空间里已经移除，只有掉电后是否重新出现未确认
+    pub(crate) fn record_still_on_disk(&self) -> bool {
+        !matches!(self, Self::RemovedDurabilityUnconfirmed)
     }
 }
 
@@ -198,6 +213,7 @@ fn path_error(e: PathError) -> RecordJournalError {
 fn evidence_io(e: EvidenceIo) -> RecordJournalError {
     match e {
         EvidenceIo::Io(e) => RecordJournalError::Io(e),
+        EvidenceIo::RenamedNotDurable(e) => RecordJournalError::Io(e),
         EvidenceIo::Unsupported(message) => RecordJournalError::Unsupported(message),
     }
 }
@@ -250,7 +266,7 @@ pub(crate) fn probe_companion(record: &Path) -> CompanionProbe {
     };
     match store.read(&file) {
         Ok(bytes) => classify_bytes(&bytes),
-        Err(EvidenceIo::Io(e)) => CompanionProbe::Unreadable(e.to_string()),
+        Err(EvidenceIo::Io(e) | EvidenceIo::RenamedNotDurable(e)) => CompanionProbe::Unreadable(e.to_string()),
         Err(EvidenceIo::Unsupported(message)) => CompanionProbe::Unreadable(message),
     }
 }
@@ -294,7 +310,7 @@ pub(crate) fn read_companion(record: &Path, current: &SceneIdentity) -> Result<E
     match store.open_at(&anchor, &relative) {
         Ok(file) => match store.read(&file) {
             Ok(bytes) => Ok(Evidence::classify(&bytes, current)),
-            Err(EvidenceIo::Io(e)) => Ok(Evidence::unreadable(Cause::Io(e.to_string()))),
+            Err(EvidenceIo::Io(e) | EvidenceIo::RenamedNotDurable(e)) => Ok(Evidence::unreadable(Cause::Io(e.to_string()))),
             Err(EvidenceIo::Unsupported(message)) => Ok(Evidence::unreadable(Cause::Unsupported(message))),
         },
         Err(e) => Ok(Evidence::from_path_error(e)),
@@ -330,7 +346,7 @@ pub(crate) fn read_companion_prefix(
     };
     match store.read(&file) {
         Ok(bytes) => Ok(super::record::decode_prefix(&bytes)),
-        Err(EvidenceIo::Io(e)) => Err(RecordJournalError::Io(e)),
+        Err(EvidenceIo::Io(e) | EvidenceIo::RenamedNotDurable(e)) => Err(RecordJournalError::Io(e)),
         Err(EvidenceIo::Unsupported(message)) => {
             Err(RecordJournalError::Unsupported(message))
         }
@@ -387,11 +403,12 @@ pub(crate) fn settle_companion(record_path: &Path, record: &Record, persist_comm
     let permit = permit.ok_or_else(|| {
         RecordJournalError::Unsupported(format!("cleanup is withheld for this record: {withheld:?}"))
     })?;
-    RecoveryEngine::cleanup(&store, &anchor, file, &committed, permit).map_err(|e| match e {
-        CleanupError::Io(e) => evidence_io(e),
-        CleanupError::ReadbackMismatch(why) => RecordJournalError::ReadbackMismatch(why),
-    })?;
-    Ok(())
+    match RecoveryEngine::cleanup(&store, &anchor, file, &committed, permit) {
+        Ok(DirDurability::Persisted) => Ok(()),
+        Ok(DirDurability::Unconfirmed) => Err(RecordJournalError::RemovedDurabilityUnconfirmed),
+        Err(CleanupError::Io(e)) => Err(evidence_io(e)),
+        Err(CleanupError::ReadbackMismatch(why)) => Err(RecordJournalError::ReadbackMismatch(why)),
+    }
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -437,33 +454,71 @@ pub(crate) struct RecordJournal {
 /// [`RecordJournal::persist`] 的失败分类。整份替换或首次创建成功之后，盘上事实
 /// 已经是新记录：此时回滚内存会让「记录内容、盘面事实、报错文案」三者互相矛盾
 /// ——调用方中止后盘上是新态，下一次命令读到的是新态，而回滚后的内存与本次报错
-/// 描述的却是旧态。`Written` 分支要求调用方保持内存为新态、只中止。
-#[cfg(target_os = "linux")]
+/// 描述的却是旧态。`Written` 与 `RenamedNotDurable` 分支要求调用方保持内存为新态、只中止。
+#[derive(Debug)]
 pub(crate) enum PersistFailure {
     /// 盘上未变：内存回滚是安全的
     NotWritten(std::io::Error),
+    /// 目录项已换到新记录、目录 fsync 失败：名字已改，掉电后是否保留未确认
+    RenamedNotDurable(std::io::Error),
     /// 盘上已是新字节：内存不得回滚
     Written(std::io::Error),
 }
 
-#[cfg(target_os = "linux")]
 impl PersistFailure {
-    fn record_bytes_persisted(&self) -> bool {
-        matches!(self, Self::Written(_))
+    /// 盘上是否已有本次的新字节。`Written` 与 `RenamedNotDurable` 都为真：后者
+    /// 的目录项已指向新记录，掉电后是否保留未确认，但此刻的内存不得回退
+    pub(crate) fn record_bytes_persisted(&self) -> bool {
+        matches!(self, Self::Written(_) | Self::RenamedNotDurable(_))
     }
 
-    fn into_io(self) -> std::io::Error {
+    pub(crate) fn into_io(self) -> std::io::Error {
         match self {
-            Self::NotWritten(e) | Self::Written(e) => e,
+            Self::NotWritten(e) => e,
+            // 目录项已改：外层说「没写」「没有记录」都是假话，错误文本自己带上事实
+            Self::RenamedNotDurable(e) => std::io::Error::new(
+                e.kind(),
+                format!(
+                    "{e}; the record's directory entry now names the new bytes, but the directory fsync failed, \
+                     so the rename's durability is unconfirmed"
+                ),
+            ),
+            Self::Written(e) => std::io::Error::new(
+                e.kind(),
+                format!("{e}; the record was already written to disk, so the on-disk record is the new one"),
+            ),
         }
+    }
+
+    /// 某份载荷落盘失败的陈述。`RenamedNotDurable` 分支只说目录项已改、持久化
+    /// 未确认，不使用「未写入」「没有记录」
+    pub(crate) fn record_failure(&self, what: &str) -> String {
+        match self {
+            Self::NotWritten(e) => format!("{what} was not recorded ({e})"),
+            Self::RenamedNotDurable(e) => format!(
+                "{what} was renamed into place but its directory fsync failed ({e}); its durability is unconfirmed"
+            ),
+            Self::Written(e) => {
+                format!("{what} was written to disk but its handle could not be reopened ({e})")
+            }
+        }
+    }
+
+    /// 绑定搬移计划失败的文案
+    pub(crate) fn bind_failure(&self) -> String {
+        self.record_failure("the relocation plan")
     }
 }
 
-#[cfg(target_os = "linux")]
 impl std::fmt::Display for PersistFailure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::NotWritten(e) => write!(f, "{e}"),
+            Self::RenamedNotDurable(e) => write!(
+                f,
+                "{e}; the record's directory entry now names the new bytes, but the directory fsync failed, so \
+                 the rename's durability is unconfirmed"
+            ),
             Self::Written(e) => write!(
                 f,
                 "{e}; the record was already written to disk, so the on-disk record is the new one"
@@ -583,7 +638,7 @@ impl RecordJournal {
         })?;
         let bytes = match store.read(&file) {
             Ok(bytes) => bytes,
-            Err(EvidenceIo::Io(e)) => return Err(RecordJournalError::Io(e)),
+            Err(EvidenceIo::Io(e) | EvidenceIo::RenamedNotDurable(e)) => return Err(RecordJournalError::Io(e)),
             Err(EvidenceIo::Unsupported(message)) => return Err(RecordJournalError::Unsupported(message)),
         };
         let record = match Evidence::classify(&bytes, &current) {
@@ -707,7 +762,7 @@ impl RecordJournal {
     /// 写下分区层提交前的原区间并落盘。新记录只写一次；已有值不因续跑时的
     /// 盘上几何（表可能已提交）而改写。`resize`、`resize-part` 与 `move` 会改动分区落位，
     /// 需要这份原区间；其余操作保持为空
-    pub(crate) fn bind_old_range(&mut self, range: (u64, u64)) -> std::io::Result<()> {
+    pub(crate) fn bind_old_range(&mut self, range: (u64, u64)) -> Result<(), PersistFailure> {
         if self.record.old_range.is_some()
             || !matches!(self.record.op, OpKind::Resize | OpKind::ResizePart | OpKind::Move)
         {
@@ -718,7 +773,7 @@ impl RecordJournal {
             if !e.record_bytes_persisted() {
                 self.record.old_range = None;
             }
-            return Err(e.into_io());
+            return Err(e);
         }
         Ok(())
     }
@@ -735,25 +790,41 @@ impl RecordJournal {
     /// 绑定有序搬移计划与 LVM 收尾基线并一次落盘。新记录只写一次；已有计划必须逐字段
     /// 相等——换了分区、起点、长度、位移或语义的请求不能续跑别人的游标。基线必须与
     /// 计划同一次写入：分开写时中间崩溃会让续跑看到"有计划、无基线"，按当前盘面重算
-    /// 增量必为 0，LV 收尾会被静默跳过。`ResizePart` 的起点变更搬移与 move 同构，
-    /// 也携带条目表（进度恢复、续跑校验共用同一套机制）
+    /// 增量必为 0，LV 收尾会被静默跳过。已有计划再次绑定时只处理基线：计划相等不蕴含
+    /// 基线相等，合并结果与记录相等才允许完全不写，否则基线单独落盘。
+    /// `ResizePart` 的起点变更搬移与 move 同构，也携带条目表（进度恢复、续跑校验共用
+    /// 同一套机制）
     pub(crate) fn bind_relocation(
         &mut self,
         reloc: Relocation,
         lvm_post: Option<LvmPost>,
-    ) -> std::io::Result<()> {
+    ) -> Result<(), PersistFailure> {
         if !matches!(self.record.op, OpKind::Resize | OpKind::ResizePart | OpKind::Move) {
-            return Err(std::io::Error::other(
+            return Err(PersistFailure::NotWritten(std::io::Error::other(
                 "only a `move`, `resize` or `resize-part` record carries a relocation plan",
-            ));
+            )));
         }
         if let Some(was) = &self.record.relocation {
-            if *was == reloc {
+            if *was != reloc {
+                return Err(PersistFailure::NotWritten(std::io::Error::other(
+                    "the existing record was written for a different relocation plan",
+                )));
+            }
+            // `Relocation` 的相等只覆盖搬移几何，不含任何 LV 事实：合并结果与记录
+            // 相等时才是恒等，可以完全不写；否则基线必须落盘，不允许只改内存
+            let merged = self.record.lvm_post.or(lvm_post);
+            if merged == self.record.lvm_post {
                 return Ok(());
             }
-            return Err(std::io::Error::other(
-                "the existing record was written for a different relocation plan",
-            ));
+            let lvm_before = self.record.lvm_post;
+            self.record.lvm_post = merged;
+            if let Err(e) = self.persist() {
+                if !e.record_bytes_persisted() {
+                    self.record.lvm_post = lvm_before;
+                }
+                return Err(e);
+            }
+            return Ok(());
         }
         self.record.relocation = Some(reloc);
         let lvm_before = self.record.lvm_post;
@@ -766,7 +837,7 @@ impl RecordJournal {
                 self.record.relocation = None;
                 self.record.lvm_post = lvm_before;
             }
-            return Err(e.into_io());
+            return Err(e);
         }
         Ok(())
     }
@@ -779,7 +850,7 @@ impl RecordJournal {
         reloc: Option<(u32, u64)>,
         completed_steps: u32,
         transfer_cursor: u64,
-    ) -> std::io::Result<()> {
+    ) -> Result<(), PersistFailure> {
         let was_progress = self.record.progress;
         let was_reloc = self
             .record
@@ -788,13 +859,15 @@ impl RecordJournal {
             .map(|r| (r.entry_index, r.chunks_in_entry));
         if let Some((entry_index, chunks_in_entry)) = reloc {
             let Some(current) = self.record.relocation.as_ref() else {
-                return Err(std::io::Error::other(
+                return Err(PersistFailure::NotWritten(std::io::Error::other(
                     "the recovery record carries no relocation plan",
-                ));
+                )));
             };
-            ensure_reloc_forward(current, entry_index, chunks_in_entry)?;
+            ensure_reloc_forward(current, entry_index, chunks_in_entry)
+                .map_err(PersistFailure::NotWritten)?;
         }
-        ensure_progress_forward(was_progress, completed_steps, transfer_cursor)?;
+        ensure_progress_forward(was_progress, completed_steps, transfer_cursor)
+            .map_err(PersistFailure::NotWritten)?;
         if let Some((entry_index, chunks_in_entry)) = reloc {
             let current = self.record.relocation.as_mut().expect("checked above");
             current.entry_index = entry_index;
@@ -810,33 +883,33 @@ impl RecordJournal {
                 }
                 self.record.progress = was_progress;
             }
-            return Err(e.into_io());
+            return Err(e);
         }
         Ok(())
     }
 
     /// 写下分区层提交后的 LVM 收尾基线并落盘。只有 `resize` 的记录带这一步；
     /// 一旦写下就不再接受另一个基线，换了作业的请求会被拒绝
-    pub(crate) fn record_lvm_post(&mut self, post: LvmPost) -> std::io::Result<()> {
+    pub(crate) fn record_lvm_post(&mut self, post: LvmPost) -> Result<(), PersistFailure> {
         if self.record.op != OpKind::Resize {
-            return Err(std::io::Error::other(
+            return Err(PersistFailure::NotWritten(std::io::Error::other(
                 "only a `resize` record carries the LVM finish baseline",
-            ));
+            )));
         }
         if let Some(was) = self.record.lvm_post {
             if was == post {
                 return Ok(());
             }
-            return Err(std::io::Error::other(
+            return Err(PersistFailure::NotWritten(std::io::Error::other(
                 "the existing record was written for a different LVM finish step",
-            ));
+            )));
         }
         self.record.lvm_post = Some(post);
         if let Err(e) = self.persist() {
             if !e.record_bytes_persisted() {
                 self.record.lvm_post = None;
             }
-            return Err(e.into_io());
+            return Err(e);
         }
         Ok(())
     }
@@ -848,15 +921,16 @@ impl RecordJournal {
         completed_steps: u32,
         transfer_cursor: u64,
         fs_phase: u8,
-    ) -> std::io::Result<()> {
+    ) -> Result<(), PersistFailure> {
         let was = self.record.progress;
-        ensure_progress_forward(was, completed_steps, transfer_cursor)?;
+        ensure_progress_forward(was, completed_steps, transfer_cursor)
+            .map_err(PersistFailure::NotWritten)?;
         self.record.progress = Progress { completed_steps, transfer_cursor, fs_phase };
         if let Err(e) = self.persist() {
             if !e.record_bytes_persisted() {
                 self.record.progress = was;
             }
-            return Err(e.into_io());
+            return Err(e);
         }
         Ok(())
     }
@@ -869,7 +943,7 @@ impl RecordJournal {
         first_lba: u64,
         original: Vec<u8>,
         after: Vec<u8>,
-    ) -> std::io::Result<()> {
+    ) -> Result<(), PersistFailure> {
         self.record_spans(vec![(first_lba, original, after)])
     }
 
@@ -878,9 +952,12 @@ impl RecordJournal {
     pub(crate) fn record_spans(
         &mut self,
         spans: Vec<(u64, Vec<u8>, Vec<u8>)>,
-    ) -> std::io::Result<()> {
+    ) -> Result<(), PersistFailure> {
         let sector_size = u32::try_from(self.sector_size).map_err(|_| {
-            std::io::Error::new(std::io::ErrorKind::InvalidInput, "the sector size does not fit the record")
+            PersistFailure::NotWritten(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "the sector size does not fit the record",
+            ))
         })?;
         let base = self.record.restore.len();
         let mut replaced: Vec<(usize, Vec<u8>)> = Vec::new();
@@ -890,17 +967,17 @@ impl RecordJournal {
                 continue;
             }
             let sectors = u32::try_from((original.len() as u64).div_ceil(self.sector_size)).map_err(|_| {
-                std::io::Error::new(
+                PersistFailure::NotWritten(std::io::Error::new(
                     std::io::ErrorKind::InvalidInput,
                     "the write spans too many sectors for the record",
-                )
+                ))
             })?;
             if after.len() != original.len() {
                 self.record.restore.truncate(base);
-                return Err(std::io::Error::new(
+                return Err(PersistFailure::NotWritten(std::io::Error::new(
                     std::io::ErrorKind::InvalidInput,
                     "the recorded pre-image and post-image spans differ in length",
-                ));
+                )));
             }
             if let Some(i) = self
                 .record
@@ -931,7 +1008,7 @@ impl RecordJournal {
                         self.record.restore[i].after = old;
                     }
                 }
-                Err(e.into_io())
+                Err(e)
             }
         }
     }
@@ -946,7 +1023,7 @@ impl RecordJournal {
     /// 记录尚未落盘时这里把它创建出来：第一次目标写入之前记录必须已经持久化，
     /// 而数据搬移类命令的第一次写入正是 `write_data_at`（它先调本函数再写字节）。
     /// 表区 preimage 要等表步骤才追加，因此此刻的记录只有屏障位、没有区间
-    pub(crate) fn barrier(&mut self) -> std::io::Result<()> {
+    pub(crate) fn barrier(&mut self) -> Result<(), PersistFailure> {
         if self.record.restore_blocked {
             return Ok(());
         }
@@ -955,13 +1032,13 @@ impl RecordJournal {
             if !e.record_bytes_persisted() {
                 self.record.restore_blocked = false;
             }
-            return Err(e.into_io());
+            return Err(e);
         }
         Ok(())
     }
 
     /// 越过 durable boundary：把 `Committed` 落盘
-    pub(crate) fn commit(&mut self) -> std::io::Result<()> {
+    pub(crate) fn commit(&mut self) -> Result<(), PersistFailure> {
         if self.file.is_none() || self.record.commit == CommitState::Committed {
             return Ok(());
         }
@@ -970,15 +1047,16 @@ impl RecordJournal {
             if !e.record_bytes_persisted() {
                 self.record.commit = CommitState::Prepared;
             }
-            return Err(e.into_io());
+            return Err(e);
         }
+        crate::outcome::note_record_finalized();
         crate::movepart::fault_record_committed();
         Ok(())
     }
 
     /// 提交并删除记录。没有任何写入时不做任何 I/O
     pub(crate) fn commit_and_discard(mut self) -> Result<(), RecordJournalError> {
-        self.commit()?;
+        self.commit().map_err(|e| RecordJournalError::Io(e.into_io()))?;
         let Some(file) = self.file.take() else {
             // file 为 None 的两种情形必须区分：记录从未创建（无盘上事实，无事可做）
             // 与 persist 替换成功后句柄重开失败（盘上记录还在）。后者当「无事可做」
@@ -1001,6 +1079,7 @@ impl RecordJournal {
         let store = HostEvidenceStore;
         match RecoveryEngine::cleanup(&store, &self.anchor, file, &committed, permit) {
             Ok(DirDurability::Persisted) => Ok(()),
+            Ok(DirDurability::Unconfirmed) => Err(RecordJournalError::RemovedDurabilityUnconfirmed),
             Err(CleanupError::Io(e)) => Err(evidence_io(e)),
             // 已写路径的清理侧拒绝：目标字节已落盘，调用方一律降级为 5
             Err(CleanupError::ReadbackMismatch(why)) => Err(RecordJournalError::ReadbackMismatch(why)),
@@ -1048,9 +1127,25 @@ impl RecordJournal {
                     )));
                 }
             }
-            store
-                .replace_atomic(&self.anchor, file, &self.temp, &bytes)
-                .map_err(|e| PersistFailure::NotWritten(record_io(e)))?;
+            match store.replace_atomic(&self.anchor, file, &self.temp, &bytes) {
+                Ok(_) => {}
+                Err(EvidenceIo::RenamedNotDurable(e)) => {
+                    // 目录项已指向新记录：内存保持新态，句柄按名字重新解析
+                    crate::outcome::note_record_persisted();
+                    match store.open_at(&self.anchor, &self.relative) {
+                        Ok(fresh) => self.file = Some(fresh),
+                        Err(reopen) => {
+                            self.file = None;
+                            self.handle_lost = true;
+                            return Err(PersistFailure::RenamedNotDurable(std::io::Error::other(
+                                format!("{e}; the record's handle could not be reopened: {reopen:?}"),
+                            )));
+                        }
+                    }
+                    return Err(PersistFailure::RenamedNotDurable(e));
+                }
+                Err(e) => return Err(PersistFailure::NotWritten(record_io(e))),
+            }
             crate::outcome::note_record_persisted();
             // 与 settle_companion 同理：整份替换后旧句柄已不是名字指向的那份。
             // 每次 persist 都换上重新解析的句柄，后续 commit_and_discard 的
@@ -1086,9 +1181,26 @@ impl RecordJournal {
                     ))));
                 }
             }
-            store
+            match store
                 .create_atomic_owned(&self.anchor, &self.relative, &self.temp, &bytes, self.owner)
-                .map_err(|e| PersistFailure::NotWritten(record_io(e)))?;
+            {
+                Ok(_) => {}
+                Err(EvidenceIo::RenamedNotDurable(e)) => {
+                    // 目录项已指向新记录：内存保持新态，句柄按名字解析
+                    crate::outcome::note_record_persisted();
+                    match store.open_at(&self.anchor, &self.relative) {
+                        Ok(file) => self.file = Some(file),
+                        Err(reopen) => {
+                            self.handle_lost = true;
+                            return Err(PersistFailure::RenamedNotDurable(std::io::Error::other(
+                                format!("{e}; the record's handle could not be reopened: {reopen:?}"),
+                            )));
+                        }
+                    }
+                    return Err(PersistFailure::RenamedNotDurable(e));
+                }
+                Err(e) => return Err(PersistFailure::NotWritten(record_io(e))),
+            }
             crate::outcome::note_record_persisted();
             match store.open_at(&self.anchor, &self.relative) {
                 Ok(file) => self.file = Some(file),
@@ -1109,6 +1221,7 @@ impl RecordJournal {
 fn record_io(e: EvidenceIo) -> std::io::Error {
     match e {
         EvidenceIo::Io(e) => e,
+        EvidenceIo::RenamedNotDurable(e) => e,
         EvidenceIo::Unsupported(message) => std::io::Error::other(message),
     }
 }
@@ -1141,27 +1254,35 @@ impl RecordJournal {
         _first_lba: u64,
         _original: Vec<u8>,
         _after: Vec<u8>,
-    ) -> std::io::Result<()> {
-        Err(std::io::Error::other("recovery records are not written on this platform"))
+    ) -> Result<(), PersistFailure> {
+        Err(PersistFailure::NotWritten(std::io::Error::other(
+            "recovery records are not written on this platform",
+        )))
     }
 
     pub(crate) fn record_spans(
         &mut self,
         _spans: Vec<(u64, Vec<u8>, Vec<u8>)>,
-    ) -> std::io::Result<()> {
-        Err(std::io::Error::other("recovery records are not written on this platform"))
+    ) -> Result<(), PersistFailure> {
+        Err(PersistFailure::NotWritten(std::io::Error::other(
+            "recovery records are not written on this platform",
+        )))
     }
 
     pub(crate) fn is_persisted(&self) -> bool {
         false
     }
 
-    pub(crate) fn barrier(&mut self) -> std::io::Result<()> {
-        Err(std::io::Error::other("recovery records are not written on this platform"))
+    pub(crate) fn barrier(&mut self) -> Result<(), PersistFailure> {
+        Err(PersistFailure::NotWritten(std::io::Error::other(
+            "recovery records are not written on this platform",
+        )))
     }
 
-    pub(crate) fn commit(&mut self) -> std::io::Result<()> {
-        Err(std::io::Error::other("recovery records are not written on this platform"))
+    pub(crate) fn commit(&mut self) -> Result<(), PersistFailure> {
+        Err(PersistFailure::NotWritten(std::io::Error::other(
+            "recovery records are not written on this platform",
+        )))
     }
 
     pub(crate) fn commit_and_discard(self) -> Result<(), RecordJournalError> {
@@ -1223,8 +1344,10 @@ impl RecordJournal {
         match self._never {}
     }
 
-    pub(crate) fn bind_old_range(&mut self, _range: (u64, u64)) -> std::io::Result<()> {
-        Err(std::io::Error::other("recovery records are not written on this platform"))
+    pub(crate) fn bind_old_range(&mut self, _range: (u64, u64)) -> Result<(), PersistFailure> {
+        Err(PersistFailure::NotWritten(std::io::Error::other(
+            "recovery records are not written on this platform",
+        )))
     }
 
     pub(crate) fn lvm_post(&self) -> Option<crate::recovery::LvmPost> {
@@ -1239,8 +1362,10 @@ impl RecordJournal {
         &mut self,
         _reloc: crate::recovery::Relocation,
         _lvm_post: Option<crate::recovery::LvmPost>,
-    ) -> std::io::Result<()> {
-        Err(std::io::Error::other("recovery records are not written on this platform"))
+    ) -> Result<(), PersistFailure> {
+        Err(PersistFailure::NotWritten(std::io::Error::other(
+            "recovery records are not written on this platform",
+        )))
     }
 
     pub(crate) fn record_transfer_checkpoint(
@@ -1248,22 +1373,28 @@ impl RecordJournal {
         _reloc: Option<(u32, u64)>,
         _completed_steps: u32,
         _transfer_cursor: u64,
-    ) -> std::io::Result<()> {
-        Err(std::io::Error::other("recovery records are not written on this platform"))
+    ) -> Result<(), PersistFailure> {
+        Err(PersistFailure::NotWritten(std::io::Error::other(
+            "recovery records are not written on this platform",
+        )))
     }
 
     pub(crate) fn record_lvm_post(
         &mut self,
         _post: crate::recovery::LvmPost,
-    ) -> std::io::Result<()> {
-        Err(std::io::Error::other("recovery records are not written on this platform"))
+    ) -> Result<(), PersistFailure> {
+        Err(PersistFailure::NotWritten(std::io::Error::other(
+            "recovery records are not written on this platform",
+        )))
     }
     pub(crate) fn record_progress(
         &mut self,
         _completed_steps: u32,
         _transfer_cursor: u64,
         _fs_phase: u8,
-    ) -> std::io::Result<()> {
-        Err(std::io::Error::other("recovery records are not written on this platform"))
+    ) -> Result<(), PersistFailure> {
+        Err(PersistFailure::NotWritten(std::io::Error::other(
+            "recovery records are not written on this platform",
+        )))
     }
 }

@@ -27,7 +27,7 @@ pub(crate) fn cmd_resize_superfloppy(a: &ResizeRequest) -> crate::outcome::RunOu
     }
     // 只取所有权，不建撤销凭据：本路径唯一的写盘是外部 FS 工具，不经过写句柄，
     // 落点上一个字节都不由本事务记录（与 resizefs 同一条边界）
-    let src = open_target_owned(a).unwrap_or_else(|f| bail_fail(f));
+    let mut src = open_target_owned(a).unwrap_or_else(|f| bail_fail(f));
     refuse_if_pending_recovery(&src, "resize").unwrap_or_else(|f| bail_fail(f));
     // 锁下取权威容器尺寸并解析 SIZE：+N/+% 锚定"当前尺寸"，而容器大小不受本工具锁约束
     //（镜像可被 truncate、盘可被第三方改写）——锁前锚点会算错方向，与分区路径同理
@@ -68,7 +68,7 @@ pub(crate) fn cmd_resize_superfloppy(a: &ResizeRequest) -> crate::outcome::RunOu
     // FS grow 本身不改分区表，无 kernel_resync 必要。
     // 挂载点没卸掉是一条未完成的后置条件：它随成功结果浮出，退出码因此是 5。
     // 目标没有分区表，待办里的分区号记 0
-    let pending = match fsops::resize_fs_whole(&src, Some(fstype)) {
+    let pending = match fsops::resize_fs_whole(&mut src, Some(fstype)) {
         Ok(Some(leak)) => {
             eprintln!("warning: {leak}");
             vec![leak.into_pending(0)]

@@ -175,7 +175,9 @@ elif mkswap "${L4}p1" >/dev/null 2>&1 && swapon "${L4}p1" 2>/dev/null; then
     exp "$?" 3 "分区是活动 swap：改表被拒"
     swapoff "$SWAPDEV" >/dev/null 2>&1
     SWAPDEV=
-    "$B" resize-part --yes "$T3:1" --grow-to-end >/dev/null 2>&1
+    # 释放后要验证的是"占用闸放行"。`resize --no-fs` 只改表，不要求识别 FS，
+    # 分区里残留的 swap 签名不参与这次判定；占用闸与 resize-part 共用同一份
+    "$B" resize --yes "$T3:1" grow --no-fs >/dev/null 2>&1
     exp "$?" 0 "swapoff 后放行（阳性对照）"
 else
     echo "SKIP: swapon 不可用"

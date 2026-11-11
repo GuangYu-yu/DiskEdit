@@ -651,7 +651,8 @@ impl Record {
 
     /// 报告面的作业阶段：作业到哪一步，据实说。
     ///
-    /// 只在 `inspect` 的展示里使用；决策路径一律走 [`Record::stage`]。
+    /// 只在 `inspect` 的展示里使用；决策路径走 [`Record::stage`]（收尾窗口折成
+    /// [`Stage::Undecidable`]）或 [`Record::derive_stage`]（回滚准入按阶段分文案）。
     #[cfg(target_os = "linux")]
     pub(crate) fn progress_stage(&self) -> Result<Stage, RunOutcome> {
         self.derive_stage()
@@ -662,7 +663,7 @@ impl Record {
     /// 规则有序、先命中先用；`completed_steps` 的口径按 `op` 分家，不可跨 op 解释。
     /// 能自证前后矛盾的组合（块数超过布局上界、布局无解、条目已全部提交而步骤数落后）
     /// 按内部错误返回；其余无法判定的合法组合落到 [`Stage::Undecidable`]。
-    fn derive_stage(&self) -> Result<Stage, RunOutcome> {
+    pub(crate) fn derive_stage(&self) -> Result<Stage, RunOutcome> {
         if self.committed() {
             return Ok(Stage::Complete);
         }

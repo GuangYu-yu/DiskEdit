@@ -307,7 +307,7 @@ impl WriteSource {
             let at = (off - first) as usize;
             after[at..at + buf.len()].copy_from_slice(buf);
             if let Some(journal) = self.src.record_journal.as_mut() {
-                journal.record_span(first / sector_size, orig, after)?;
+                journal.record_span(first / sector_size, orig, after).map_err(|e| e.into_io())?;
             }
             crate::movepart::fault_record_persisted();
         }
@@ -328,7 +328,7 @@ impl WriteSource {
     pub fn write_data_at(&mut self, off: u64, buf: &[u8]) -> io::Result<()> {
         // 越界判定先于屏障：屏障一旦落地 undo 即永久失效，而越界写一个字节也不会落盘
         self.refuse_past_end(off, buf.len())?;
-        self.mark_non_reversible()?;
+        self.mark_non_reversible().map_err(|e| e.into_io())?;
         self.write_raw(off, buf)
     }
 
@@ -348,17 +348,30 @@ impl WriteSource {
     /// 判据是**可逆性**，不是"是不是外部进程"：数据搬移的字节（`write_data_at`）是本进程
     /// 写的，但按设计不入记录；外部 FS 工具的写入（resize2fs/mkswap/mkfs…）
     /// 与内核侧的分区表写入同样无法回滚。凡"回滚表项会与盘上内容自相矛盾"的写入都属于这一类
-    pub fn mark_non_reversible(&mut self) -> io::Result<()> {
+    pub fn mark_non_reversible(&mut self) -> Result<(), crate::recovery::PersistFailure> {
         if let Some(journal) = self.src.record_journal.as_mut() {
-            journal.barrier()?;
-            crate::outcome::note_record_past_irreversible_point();
+            match journal.barrier() {
+                Ok(()) => crate::outcome::note_record_past_irreversible_point(),
+                Err(e) => {
+                    // 目录项已换到新记录（含目录 fsync 未确认）：`restore_blocked` 已在盘上，
+                    // undo 此后拒绝回滚，与成功同样按越过不可逆点计；`NotWritten` 才是真没写
+                    if e.record_bytes_persisted() {
+                        crate::outcome::note_record_past_irreversible_point();
+                    }
+                    return Err(e);
+                }
+            }
         }
         Ok(())
     }
 
     pub(crate) fn adopt_record_journal(&mut self, journal: RecordJournal) {
         let record = journal.record();
-        crate::outcome::note_record_present(record.committed());
+        // 只有从盘上读到的记录才算"盘上已有记录"；内存里新建的记录要等第一次
+        // persist 成功后由 `note_record_persisted` 置位
+        if journal.is_persisted() {
+            crate::outcome::note_record_present(record.committed());
+        }
         if record.restore_blocked || record.committed() {
             crate::outcome::note_record_past_irreversible_point();
         }

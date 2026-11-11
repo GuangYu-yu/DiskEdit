@@ -35,7 +35,7 @@ mod target;
 mod part;
 mod fs_grow;
 mod pv;
-mod faults;
+pub(crate) mod faults;
 mod flow;
 mod api;
 

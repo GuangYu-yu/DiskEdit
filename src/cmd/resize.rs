@@ -158,7 +158,7 @@ pub(crate) fn cmd_resize(a: &ResizeRequest) -> crate::outcome::RunOutcome {
     // 目标长度不在锁前算：`+N` 锚定当前尺寸、`grow` 锚定右侧空闲，都由 gpt_decider 在
     // 在线自己的锁下、按重解析的盘上几何重新解析（见其注释）
     #[cfg(target_os = "linux")]
-    if let Some(o) = resize_online(a, &src, part, is_pv, gpt_decider(a.yes, a.size, part, is_pv)) {
+    if let Some(o) = resize_online(a, &src, part, is_pv, gpt_decider(a.size, part, is_pv)) {
         return o;
     }
 
@@ -246,6 +246,16 @@ pub(crate) fn cmd_resize(a: &ResizeRequest) -> crate::outcome::RunOutcome {
         bail_fail(RunOutcome::refused(
             "an unfinished resize recorded an LV growth — re-run with --grow-lv (the record does not \
              store the LV path)"
+                .to_string(),
+        ));
+    }
+    // 盘上记录没有 LV 收尾基线，本次却给了 --grow-lv：记录是那次作业的完整意图，
+    // 在已提交作业上追加一步没有记录承载的动作，失败后没有载体能解释它从哪来。
+    // 首次运行（`entry.resumed` 为假）的记录是本次新建的，不在此列
+    if entry.resumed && a.grow_lv && src.record_journal().is_some_and(|j| j.lvm_post().is_none()) {
+        bail_fail(RunOutcome::refused(
+            "an unfinished resize record carries no LV growth step — adding one to a job already recorded \
+             leaves nothing behind to explain it if it fails; re-run without `--grow-lv`"
                 .to_string(),
         ));
     }

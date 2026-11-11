@@ -107,7 +107,7 @@ fn apply_unreconciled(
     // 窗口——那里 abort 会留下"盘已改、无从回滚"的现场，违背"写盘后 abort 必须留下
     // 可续传现场"的边界配对。执行半程的同值绑定是幂等的
     if let Err(e) = bind_relocation(src, &d.relocation, d.lvm.as_ref()) {
-        return RunOutcome::no_mutation(format!("the relocation plan was not recorded ({e})"));
+        return RunOutcome::no_mutation(e.bind_failure());
     }
     // 修复虽是写盘，但先于任何目标写入执行；放在 RunOutcome 域是为了保住分类：
     // 其读表阶段尚未写一个字节（NoMutation），一旦进入 io 域就只剩 Partial 一条路
@@ -179,6 +179,34 @@ pub(crate) fn prepare_apply(
     existing_lvm: Option<crate::recovery::LvmPost>,
     log: &mut dyn FnMut(&str),
 ) -> Result<ApplyDecision, RunOutcome> {
+    // F5：记录已绑搬移计划、本次读到的备份头不可读、记录里的目的区末端越过主头
+    // `last_usable_lba`。三条同时成立才拒绝——备份头坏而主头上界够用时续跑合法。
+    // 本函数只读，且位于 bind 与 repair 之前，故此刻确实一个目标字节都没写
+    if let Some(reloc) = existing_relocation {
+        let mut request_end = 0u64;
+        let mut complete = true;
+        for e in &reloc.entries {
+            match e
+                .src_first
+                .checked_add_signed(e.delta)
+                .and_then(|d| d.checked_add(e.len))
+                .and_then(|v| v.checked_sub(1))
+            {
+                Some(end) => request_end = request_end.max(end),
+                None => complete = false,
+            }
+        }
+        if complete && crate::gpt_policy::resume_boundary_unavailable(g0, true, request_end) {
+            return Err(RunOutcome::refused(format!(
+                "the recovery record's relocation ends at LBA {request_end}, past the primary header's last \
+                 usable LBA {}, and the backup header cannot be read — the boundary facts needed to resume are \
+                 unavailable; this run wrote no bytes and the disk is where the previous job stopped. Check the \
+                 record with `diskedit inspect`, then release it with `diskedit abandon`; a fresh run records \
+                 the job again",
+                g0.decided_last_usable_lba()
+            )));
+        }
+    }
     // 占用闸（与 prepare_resize 同一判据）：被搬移分区的数据区会被整体重写，grow 目标
     // 随后要接 FS 步——挂载中或活动 swap 的分区必须在任何写盘前拒绝。镜像无块设备
     // 占用语义，闸内自会放行
@@ -354,8 +382,10 @@ fn bind_relocation(
     src: &mut WriteSource,
     reloc: &crate::recovery::Relocation,
     lvm: Option<&LvmPostFacts>,
-) -> io::Result<()> {
-    record_journal(src)?.bind_relocation(reloc.clone(), lvm.map(LvmPostFacts::to_record))
+) -> Result<(), crate::recovery::PersistFailure> {
+    record_journal(src)
+        .map_err(crate::recovery::PersistFailure::NotWritten)?
+        .bind_relocation(reloc.clone(), lvm.map(LvmPostFacts::to_record))
 }
 
 /// 执行（写盘）：装配 → 绑定现场 → 执行器 → 扩容收尾。
@@ -429,11 +459,10 @@ pub(crate) fn execute_apply(
     )?;
 
     // 现场先绑：执行器从记录里的条目游标决定从哪继续，记录里没有搬移计划时它拒绝推进游标
-    bind_relocation(src, &d.relocation, d.lvm.as_ref()).map_err(|e| {
-        RunOutcome::no_mutation(format!("the relocation plan was not recorded ({e})"))
-    })?;
+    bind_relocation(src, &d.relocation, d.lvm.as_ref())
+        .map_err(|e| RunOutcome::no_mutation(e.bind_failure()))?;
     record_journal(src)?.bind_old_range(d.old_range).map_err(|e| {
-        RunOutcome::no_mutation(format!("the pre-commit range was not recorded ({e})"))
+        RunOutcome::no_mutation(e.record_failure("the pre-commit range"))
     })?;
 
     let mut sink = crate::recovery::sink::RecordSink::with_log(log);
@@ -555,7 +584,7 @@ pub(crate) fn finalize_growth(
             }
             if swap.is_swap {
                 src.mark_non_reversible()
-                    .map_err(|e| RunOutcome::partial(format!("partition {part}: cannot persist the recovery barrier before rebuilding the swap area: {e}")))?;
+                    .map_err(|e| RunOutcome::partial(format!("partition {part}: {} — the table entry is committed", e.record_failure("the recovery barrier"))))?;
                 let ident = swap_identity_preferring(src, r.old.0, r.new.0, r.old.1, ss);
                 match crate::fsops::recreate_swap(src, part, &ident) {
                     Ok(note) => log(&format!("swap recreated ({note})")),

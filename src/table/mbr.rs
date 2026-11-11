@@ -261,29 +261,6 @@ fn require_live_entry(part: u32, lba0: &[u8], off: usize) -> Result<u8, RunOutco
     Ok(cur)
 }
 
-/// FS 缩/扩之前的复核：盘上 LBA0 的目标条目仍等于决策期读到的那一份。FS 区间由这条
-/// 条目的起点与扇区数决定，越过它去写 FS 就是在可能已过期的落点上动手。读盘故障归
-/// Infra（此刻尚未写盘）；字段不一致是外部改写，归 Refused
-pub fn ensure_mdos_entry_unchanged(src: &FileSource, p: &MbrPartition) -> Result<(), RunOutcome> {
-    primary_slot(p.num)?;
-    require_writable_mbr(src)?;
-    let mut lba0 = vec![0u8; src.sector_size as usize];
-    src.read_at(0, &mut lba0).map_err(RunOutcome::no_mutation_io)?;
-    if u16::from_le_bytes([lba0[510], lba0[511]]) != MBR_SIGNATURE {
-        return Err(RunOutcome::refused("MBR signature vanished before the filesystem resize — re-run the command"));
-    }
-    let off = 446 + (p.num as usize - 1) * 16;
-    let cur_type = lba0[off + 4];
-    let cur_start = rd_u32(&lba0[off..off + 16], 8);
-    let cur_size = rd_u32(&lba0[off..off + 16], 12);
-    if cur_type != p.os_type || cur_start != p.start_lba || cur_size != p.size_lba {
-        return Err(RunOutcome::refused(format!(
-            "MBR partition {} changed outside this tool since the table was read (type {:#04x}, start {cur_start}, {cur_size} sectors; expected type {:#04x}, start {}, {} sectors) — re-run the command",
-            p.num, cur_type, p.os_type, p.start_lba, p.size_lba
-        )));
-    }
-    Ok(())
-}
 
 /// 修改 MBR 主分区条目大小（start 不变，纯扩缩）的直写外壳，仅供测试夹具使用。
 ///

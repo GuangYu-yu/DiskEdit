@@ -151,6 +151,8 @@ pub(crate) fn target_may_have_been_written() -> bool {
     RUN_FACTS.with(|f| f.target_may_be_written.get())
 }
 
+/// 接管盘上已有的记录时置位。调用方只在记录确实从盘上读到时才调它；
+/// 本次运行内存里新建的记录由 [`note_record_persisted`] 在落盘成功后置位
 pub(crate) fn note_record_present(committed: bool) {
     RUN_FACTS.with(|f| {
         f.record_present.set(true);
@@ -162,6 +164,19 @@ pub(crate) fn note_record_present(committed: bool) {
 
 pub(crate) fn record_is_present() -> bool {
     RUN_FACTS.with(|f| f.record_present.get())
+}
+
+/// 记录已从落点移除：不再有盘上记录可续跑或需释放。名字空间移除与目录持久化
+/// 是否确认不影响这条事实，两者都由调用方按自己的三态分别陈述
+pub(crate) fn note_record_removed() {
+    RUN_FACTS.with(|f| f.record_present.set(false));
+}
+
+/// `Committed` 已持久化：本次新建的记录越过 durable boundary 后由 `commit` 置位。
+/// 置位点只在 Linux：其余平台没有记录落点
+#[cfg(target_os = "linux")]
+pub(crate) fn note_record_finalized() {
+    RUN_FACTS.with(|f| f.record_finalized.set(true));
 }
 
 /// 记录是否已定型：接管时 `commit == Committed`（表步已提交，只剩释放）
@@ -179,12 +194,16 @@ pub(crate) fn crossed_irreversible_point() -> bool {
     RUN_FACTS.with(|f| f.target_may_be_written.get() || f.record_past_irreversible.get())
 }
 
-/// 置位点在 `RecordJournal::persist` 的整份替换/创建成功之后。barrier 只在记录尚未
-/// 落盘时经它落盘，表区 preimage 等路径同样经它落盘；只读打开既有记录不置位。
-/// 置位点只在 Linux：其余平台没有记录落点
+/// 置位点在 `RecordJournal::persist` 的整份替换/创建成功之后（含目录项已改、
+/// 目录 fsync 未确认的分支）。barrier 只在记录尚未落盘时经它落盘，表区 preimage
+/// 等路径同样经它落盘；只读打开既有记录不置位。落盘成功同时说明盘上已有记录，
+/// 因此与 [`note_record_present`] 一样置 `record_present`
 #[cfg(target_os = "linux")]
 pub(crate) fn note_record_persisted() {
-    RUN_FACTS.with(|f| f.record_persisted.set(true));
+    RUN_FACTS.with(|f| {
+        f.record_persisted.set(true);
+        f.record_present.set(true);
+    });
 }
 
 pub(crate) fn record_persisted() -> bool {
