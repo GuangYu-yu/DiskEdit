@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # 在线 btrfs 的挂载身份（src/online/target.rs）：
-# mountinfo 字段 3 对 btrfs 是匿名设备号，身份改由 FSID → /sys/fs/btrfs/<fsid>/devices/
+# mountinfo 字段 3 对 btrfs 是匿名设备号，身份由 FSID → /sys/fs/btrfs/<fsid>/devices/
 # → 该条目的 dev 属性 → 与节点 st_rdev 比对。本脚本守三件事：
-#   A 单设备 btrfs 在线扩缩容仍可用（该判据曾把整条路径拒掉，须有回归）
+#   A 单设备 btrfs 在线扩缩容可用
 #   B 路径不变而节点指向另一设备时拒绝，且不写盘
 #   C 多设备 btrfs 在线拒绝
 source "$(dirname "$0")/lib.sh"

@@ -126,8 +126,7 @@ fn with_protective_mbr(mut data: Vec<u8>) -> Vec<u8> {
 /// 崩溃恢复。注入点只在 `test-faults` 构建下存在，故整块按 feature 隔离：
 /// **默认 `cargo test` 不会跑这里**，要跑得显式 `cargo test --features test-faults`。
 ///
-/// 这两条补的是"共用执行入口"覆盖不到的那一半：`move` 已被 Linux 冒烟验过，
-/// 而 `resize-part` / `copy` 各有自己的收尾形状——一个留下可续跑的 ckpt，
+/// `resize-part` / `copy` 各有自己的收尾形状——一个留下可续跑的 ckpt，
 /// 一个什么都不留、且已越过不可回滚点。断言必须落在它们**各自的**后效上
 #[cfg(all(unix, feature = "test-faults"))]
 mod crash_recovery;

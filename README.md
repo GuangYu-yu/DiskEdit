@@ -12,7 +12,7 @@ English | [简体中文](README.zh-CN.md)
 
 ## Requirements
 
-- **Linux.** Writing is supported on Linux only. Elsewhere the dispatch gate refuses any command whose primitives are missing, with exit code 6 and nothing written; on an image file `info` and `plan` still run read-only while evidence and write commands are refused — [docs/capability-matrix.md](docs/capability-matrix.md) has the per-command answer.
+- **Linux.** Writing is supported on Linux only. Elsewhere the dispatch gate refuses any command whose primitives are missing — [docs/capability-matrix.md](docs/capability-matrix.md) has the per-command answer.
 - **Rust** with edition 2024 support (1.85 or newer) to build.
 - **root** for filesystem-layer commands: they map the partition through `losetup`. Table writes need root only for block devices, never for image files.
 

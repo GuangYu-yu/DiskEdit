@@ -20,7 +20,7 @@ pub(crate) type OnlineLock = ();
 // 参数是一次作业的独立事实（几何 / 区间 / 开关 / 日志），合成结构体只是把它们换个位置
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn finish_resize(a: &ResizeRequest, o: crate::outcome::RunOutcome, wsrc: Option<&mut WriteSource>, part: u32, is_pv: bool, is_block: bool, lv_path: Option<&str>, old_bytes: u64) -> crate::outcome::RunOutcome {
-    if !o.has_layout_write() {
+    if !o.is_layout_applied() {
         return o;
     }
     if !o.is_complete() && !is_pv {
@@ -60,11 +60,7 @@ pub(crate) fn finish_resize(a: &ResizeRequest, o: crate::outcome::RunOutcome, ws
             }
             o
         }
-        Err(cause) => {
-            let out = crate::outcome::RunOutcome::partial_with(cause, pending);
-            out.report();
-            out
-        }
+        Err(cause) => crate::outcome::RunOutcome::partial_with(cause, pending).report_final(),
     }
 }
 
@@ -75,7 +71,7 @@ pub(crate) fn finish_resize(a: &ResizeRequest, o: crate::outcome::RunOutcome, ws
 /// 表写入已经发生，故重读/屏障/链的失败一律以 `Err(cause)` 返回给调用方，
 /// 由 `finish_resize` 折成 `Partial`（保留上游待办）；不得返 `RunOutcome::no_mutation`，
 /// 那会向用户承诺"本次未写盘"
-#[allow(clippy::too_many_arguments)] // 写句柄/分区/开关/旧尺寸/在线锁/在线事实各司其职：合成参数对象只是给 lint 换一层间接
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn resize_done(
     // `a` 只被 Linux 的重开路径（open_target_ro）取用：其余平台没有收尾链
     #[cfg_attr(not(target_os = "linux"), allow(unused_variables))]
@@ -192,8 +188,7 @@ pub(crate) fn resize_done(
                     e.to_string(),
                     hint,
                 )]);
-                o.report();
-                Ok(o)
+                Ok(o.report_final())
             }
         }
     }
@@ -206,7 +201,6 @@ pub(crate) fn resize_done(
             "pvresize/lvextend require Linux — run pvresize on the partition manually",
             "",
         )]);
-        o.report();
-        Ok(o)
+        Ok(o.report_final())
     }
 }

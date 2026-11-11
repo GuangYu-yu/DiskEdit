@@ -50,7 +50,10 @@ fn assert_refused(cmd: &[&str], dir: &std::path::Path) {
         err.contains(CAPABILITY_GAP),
         "the refusal must name the missing primitive, not another failure: {err}"
     );
-    assert!(err.contains("Nothing was written"), "the refusal must state the no-write promise: {err}");
+    assert!(
+        err.contains(&format!("command `{}`", cmd[0])),
+        "the refusal must name the command it refused: {err}"
+    );
     assert_eq!(std::fs::read(&img).unwrap(), before, "`{cmd:?}` must not change target bytes");
     assert_eq!(dir_entries(dir), entries_before, "`{cmd:?}` must leave no lock/journal/checkpoint/log");
 }

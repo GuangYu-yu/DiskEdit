@@ -92,7 +92,7 @@ fn record_bytes() -> Vec<u8> {
     p.extend_from_slice(&0u32.to_le_bytes());
 
     let mut out = vec![0u8; 16];
-    out[0..4].copy_from_slice(b"DSKR");
+    out[0..4].copy_from_slice(b"DSK2");
     out[4..8].copy_from_slice(&(p.len() as u32).to_le_bytes());
     out[8..12].copy_from_slice(&crc32(&p).to_le_bytes());
     let header_crc = crc32(&out[0..12]);

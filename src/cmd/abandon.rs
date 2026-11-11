@@ -6,9 +6,10 @@
 //!
 //! 旧 journal 与旧 checkpoint 不是恢复记录：本命令不认领、不改名、不删除它们。
 //! 它们不参与枚举，也不阻塞任何命令。
-//! 只放弃**属于本目标**的记录：记录头里的目标载体与当前目标不符 ⇒ 整体拒绝，一处也不
-//! 改名。读到身份的前提是记录可读；读不出来的记录没有可比的证据，仍按"损坏现场必须能被
-//! 释放"处理——否则恢复路径上会出现"目标永久锁死"，而那恰恰是恢复路径最不该有的性质。
+//! 只放弃**属于本目标**的记录：目标身份读不出（打不开、探测失败、身份材料不足）⇒ 无法
+//! 证明归属，整体拒绝，一份也不释放；记录头里的目标载体与当前目标不符 ⇒ 同样整体拒绝，
+//! 一处也不改名。记录字节自身读不出来不妨碍释放——否则恢复路径上会出现"目标永久锁死"，
+//! 而那恰恰是恢复路径最不该有的性质。
 //!
 //! 与 undo 的分工：undo 把记录里的字节回放回盘，因此要求记录可解析、且没记过不可回滚
 //! 标记；abandon 不回放任何字节，只放弃"还能回滚"这个能力。
@@ -108,11 +109,7 @@ fn replay_ranges(records: &[RecoveryRecord]) -> Option<usize> {
                 // 与 undo 的豁免同一口径：Move/Copy 的 restore_blocked 只封锁
                 // 数据区，表区 preimage 仍可回写。restore_blocked 按 0 计会让 abandon
                 // 静默跳过 --discard-replay 的确认，无声放弃表区回滚能力
-                let table_only_replay = matches!(
-                    record.op,
-                    crate::recovery::OpKind::Move | crate::recovery::OpKind::Copy
-                );
-                if !record.restore_blocked || table_only_replay {
+                if !record.restore_blocked || crate::recovery::table_only_replay(record.op) {
                     total += record.restore.len();
                 }
             }
@@ -139,7 +136,10 @@ fn target_is_block_node(path: &Path) -> bool {
 }
 
 fn abandon_records(identity: &TargetIdentity, disk: Option<&FileSource>, discard_replay: bool) -> u8 {
-    let records = active_recovery_records(identity);
+    // 身份不符的候选照样参与释放：abandon 是显式放弃，不是认领——它不清空目标、
+    // 不回放、不阻塞，只把记录挪出活跃集。真正属于别的载体时由下面的 `same_carrier`
+    // 整体拒绝，释放前逐条打印会让用户看见自己在放弃什么
+    let records = active_recovery_records(identity, disk);
     if records.is_empty() {
         // 幂等：目标已经是"没有 active transaction"，空跑即成功
         println!("nothing to abandon: no unfinished operation on this target");
@@ -153,12 +153,36 @@ fn abandon_records(identity: &TargetIdentity, disk: Option<&FileSource>, discard
         }
         return EXIT_OK;
     }
+    // 归属判定：目标身份读不出时，记录归属无法证明，一份也不释放。
+    // 只认同一载体（`same_carrier`，不是含 loop 映射的 `matches` 或完整身份比对）：容量变化
+    // 或 loop 映射变化说明记录不可回放，但仍属于这个目标，abandon 存在的意义正是让这种记录
+    // 能被释放。逐条打印用的也是这一个口径
+    let live = match disk {
+        Some(d) => match crate::recovery::ownership_scene(d) {
+            Ok(live) => live,
+            Err(e) => bail_fail(RunOutcome::refused(format!(
+                "the target's identity could not be read ({e:?}), so no recovery record can be proven to \
+                 belong to it — nothing was renamed; inspect the target and the record with `diskedit inspect` \
+                 before retrying"
+            ))),
+        },
+        None => bail_fail(RunOutcome::refused(
+            "the target could not be opened, so no recovery record can be proven to belong to it — nothing was \
+             renamed; inspect the target and the record with `diskedit inspect` before retrying",
+        )),
+    };
     // 先把要放弃的东西如实报出来。放弃的是一种能力而非数据，所以解析不出来的那些
     // 尤其要说清楚：用户无法知道自己在放弃什么
     for r in &records {
         let path = r.path();
         match r.probe.as_ref() {
             crate::recovery::CompanionProbe::Decoded(record) => {
+                if !record.target.same_carrier(&live) {
+                    println!(
+                        "{}: recorded identity is a different carrier than the current target",
+                        path.display()
+                    );
+                }
                 println!(
                     "{}: recovery record from {:?}, {} written range(s)",
                     path.display(),
@@ -204,39 +228,38 @@ fn abandon_records(identity: &TargetIdentity, disk: Option<&FileSource>, discard
         crate::recovery::CompanionProbe::Foreign => Some(r.path()),
         _ => None,
     }) {
+        let dir = path.parent().unwrap_or(path);
         bail_fail(RunOutcome::refused(format!(
             "{} is a recovery record in a layout this build does not recognize — the header check is \
              part of ownership, so `abandon` will not quarantine it automatically; nothing was renamed. \
-             Handle it by hand",
-            path.display()
+             The record directory is {}; remove that file by hand",
+            path.display(),
+            dir.display()
         )));
     }
     // 外来条目不是本工具的恢复文件：改名它等于把用户别的东西挪走，删除更是碰不到它指向的
     // 目标。abandon 只转换恢复文件，遇到这类条目就整体拒绝，一处也不改名
-    if let Some(message) = records.iter().find_map(RecoveryRecord::foreign_message) {
+    if let Some((message, path)) = records
+        .iter()
+        .find_map(|r| r.foreign_message().map(|m| (m, r.path())))
+    {
+        let dir = path.parent().unwrap_or(path);
         bail_fail(RunOutcome::refused(format!(
-            "{message} — abandon only renames recovery files, so nothing was renamed; move or remove it by hand"
+            "{message} — abandon only renames recovery files, so nothing was renamed; the record directory is \
+             {}; remove that file by hand",
+            dir.display()
         )));
     }
 
-    // 记录头里的目标身份：目标打不开时没有可比的当前身份，记录照常可释放（与"读不出来的
-    // 记录仍可释放"同一判据）
-    let mut foreign: Vec<String> = Vec::new();
-    if let Some(live) = disk.and_then(|d| {
-        crate::platform::probe::probe_of(d)
-            .ok()
-            .map(|probe| crate::recovery::SceneIdentity::of_source(&probe, d))
-    }) {
-        for r in &records {
-            if let crate::recovery::CompanionProbe::Decoded(record) = r.probe.as_ref()
-                // 可释放判据只认同一载体：容量变化或 loop 映射变化说明记录不可回放，
-                // 但仍属于这个目标，abandon 存在的意义正是让这种记录能被释放
-                && !record.target.same_carrier(&live)
-            {
-                foreign.push(format!("{} (recorded for a different target)", r.path().display()));
+    let foreign: Vec<String> = records
+        .iter()
+        .filter_map(|r| match r.probe.as_ref() {
+            crate::recovery::CompanionProbe::Decoded(record) if !record.target.same_carrier(&live) => {
+                Some(format!("{} (recorded for a different target)", r.path().display()))
             }
-        }
-    }
+            _ => None,
+        })
+        .collect();
     // 不属于本目标的现场：改名它等于替另一个目标销毁回滚凭据。整体拒绝、一处也不改名，
     // 并说清目标仍被挡住与下一步——"看起来释放了、下次仍 busy"正是这里要消除的状态
     if !foreign.is_empty() {

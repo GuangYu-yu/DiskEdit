@@ -76,24 +76,25 @@ pub(crate) fn blkroget(f: &File) -> io::Result<bool> {
 }
 
 /// include/uapi/linux/btrfs.h 的 btrfs_ioctl_fs_info_args（1024 字节）。保留字段与
-/// metadata_uuid 一并照抄：ioctl 编号里带结构体大小，裁剪字段会让内核按错的长度解读
+/// metadata_uuid 一并照抄：ioctl 编号里带结构体大小，裁剪字段会让内核按错的长度解读。
+/// 本工具只读 `num_devices` 与 `fsid`，其余字段只为布局存在，故按 Rust 的"不读"约定
+/// 加下划线前缀——它们仍是 `#[repr(C)]` 的一部分，偏移与总长由下面的断言钉住
 #[repr(C)]
-#[allow(dead_code)] // 除 num_devices/fsid 外的字段必须留在结构里，UAPI 大小才成立
 pub(crate) struct BtrfsFsInfo {
-    max_id: u64,
+    _max_id: u64,
     /// 内核登记的设备数（单设备 btrfs = 1）
     pub(crate) num_devices: u64,
     /// 文件系统 UUID，16 字节；`/sys/fs/btrfs/<64 位十六进制 FSID>/` 用它定位
     pub(crate) fsid: [u8; 16],
-    nodesize: u32,
-    sectorsize: u32,
-    clone_alignment: u32,
-    csum_type: u16,
-    csum_size: u16,
-    flags: u64,
-    generation: u64,
-    metadata_uuid: [u8; 16],
-    reserved: [u8; 944],
+    _nodesize: u32,
+    _sectorsize: u32,
+    _clone_alignment: u32,
+    _csum_type: u16,
+    _csum_size: u16,
+    _flags: u64,
+    _generation: u64,
+    _metadata_uuid: [u8; 16],
+    _reserved: [u8; 944],
 }
 
 /// BTRFS_IOC_FS_INFO = _IOR(BTRFS_IOCTL_MAGIC=0x94, 31, btrfs_ioctl_fs_info_args)。
@@ -104,9 +105,10 @@ const BTRFS_IOC_FS_INFO: u64 =
 
 const _: () = {
     assert!(size_of::<BtrfsFsInfo>() == 1024);
+    assert!(std::mem::offset_of!(BtrfsFsInfo, num_devices) == 8);
     assert!(std::mem::offset_of!(BtrfsFsInfo, fsid) == 16);
-    assert!(std::mem::offset_of!(BtrfsFsInfo, nodesize) == 32);
-    assert!(std::mem::offset_of!(BtrfsFsInfo, reserved) == 80);
+    assert!(std::mem::offset_of!(BtrfsFsInfo, _nodesize) == 32);
+    assert!(std::mem::offset_of!(BtrfsFsInfo, _reserved) == 80);
     assert!(BTRFS_IOC_FS_INFO == 0x8400_941f);
 };
 

@@ -16,6 +16,9 @@ pub(crate) struct MountEntry {
     pub source: String,
     /// `-` 之后的文件系统类型（如 `btrfs`）：设备身份的判据按它分派
     pub fstype: String,
+    /// 读到这条记录的进程号：该进程所在 mount namespace 的可查标识。
+    /// 本进程命名空间视图（/proc/self/mountinfo）没有对应进程号，为 `None`
+    pub pid: Option<u32>,
 }
 
 /// 解码八进制转义（\NNN，如空格 = \040）；非转义序列原样保留
@@ -64,6 +67,7 @@ pub(crate) fn parse_mountinfo(line: &str) -> Option<MountEntry> {
         mount_point: decode_octal(mnt),
         source: decode_octal(source),
         fstype: (*fstype).to_string(),
+        pid: None,
     })
 }
 
@@ -74,7 +78,10 @@ pub(crate) fn parse_mountinfo(line: &str) -> Option<MountEntry> {
 ///   时返回 EINVAL（fs/proc_namespace.c），该进程不再引用任何挂载
 ///
 /// 权限不足（`EACCES`）不在此列：`hidepid` 隐藏的是"能不能看"，不是"有没有挂载"。
-/// 读不到别人的 mountinfo 时，那些命名空间里的挂载仍然可能存在，按探测失败上抛
+/// 读不到别人的 mountinfo 时，那些命名空间里的挂载仍然可能存在，按探测失败上抛。
+///
+/// 这几类读不到**等于已证明不存在**：挂载命名空间随最后一个引用它的进程退出而销毁，
+/// 进程既然已经不在了，它名下不可能还挂着东西——这不是"证据源缺失"，不能升级成未知。
 #[cfg(target_os = "linux")]
 fn skippable_mountinfo_error(e: &io::Error) -> bool {
     e.kind() == io::ErrorKind::NotFound
@@ -101,6 +108,8 @@ pub(crate) fn read_mounts() -> io::Result<Vec<MountEntry>> {
         if name.is_empty() || !name.bytes().all(|b| b.is_ascii_digit()) {
             continue;
         }
+        // 目录名是 pid：填不进 u32 的名字不可能对应可读的 /proc 项
+        let Ok(pid) = name.parse::<u32>() else { continue };
         // 取不到命名空间身份（权限/竞态）就不去重，照常尝试读取它
         let ns = std::fs::metadata(entry.path().join("ns/mnt"))
             .ok()
@@ -116,7 +125,7 @@ pub(crate) fn read_mounts() -> io::Result<Vec<MountEntry>> {
             Err(e) if skippable_mountinfo_error(&e) => continue,
             Err(e) => return Err(io::Error::other(format!("cannot read {}: {e}", path.display()))),
         };
-        append_mountinfo(&mut out, &s, &path)?;
+        append_mountinfo(&mut out, &s, &path, Some(pid))?;
         // 读到一份视图之后才登记该命名空间：读失败的进程不能替同一命名空间里仍在运行的
         // 进程消耗掉唯一一次读取机会
         if let Some(key) = ns {
@@ -128,25 +137,33 @@ pub(crate) fn read_mounts() -> io::Result<Vec<MountEntry>> {
 
 /// 本进程 mount namespace 的挂载表（/proc/self/mountinfo）。
 ///
-/// 占用闸之外的场景（在线流程解析挂载点/判叠挂）必须用这一份而不是
-/// [`read_mounts`]：宿主的 shared 传播会把同一挂载带进其他命名空间，全命名空间
-/// 视图里同一条记录出现多份，叠挂判定会把"同一个挂载的多个视图"误读成
+/// 这一份**不承担占用判定**：占用必须读 [`read_mounts`] 的全部可读命名空间视图，
+/// 否则别的命名空间里的挂载会被读成空闲。它只用于本命名空间里可操作对象的解析
+/// （挂载点/叠挂）：宿主的 shared 传播会把同一挂载带进其他命名空间，全视图里
+/// 同一条记录出现多份，叠挂判定会把"同一个挂载的多个视图"误读成
 /// "mounted multiple times"
 #[cfg(target_os = "linux")]
-pub(crate) fn read_own_mounts() -> io::Result<Vec<MountEntry>> {
+pub(crate) fn read_current_namespace_mounts() -> io::Result<Vec<MountEntry>> {
     let path = std::path::Path::new("/proc/self/mountinfo");
     let s = std::fs::read_to_string(path)?;
     let mut out = Vec::new();
-    append_mountinfo(&mut out, &s, path)?;
+    append_mountinfo(&mut out, &s, path, None)?;
     Ok(out)
 }
 
 #[cfg(target_os = "linux")]
-fn append_mountinfo(out: &mut Vec<MountEntry>, s: &str, path: &std::path::Path) -> io::Result<()> {
+fn append_mountinfo(
+    out: &mut Vec<MountEntry>,
+    s: &str,
+    path: &std::path::Path,
+    pid: Option<u32>,
+) -> io::Result<()> {
     for l in s.lines() {
-        out.push(parse_mountinfo(l).ok_or_else(|| {
+        let mut entry = parse_mountinfo(l).ok_or_else(|| {
             io::Error::other(format!("unparseable {} line: {l}", path.display()))
-        })?);
+        })?;
+        entry.pid = pid;
+        out.push(entry);
     }
     Ok(())
 }
@@ -174,16 +191,8 @@ fn holders_at(sysdir: &Path) -> io::Result<Vec<String>> {
     Ok(out)
 }
 
-/// 设备号所属块设备的持有者。调用方已 stat 出 rdev（探测里免得再 stat 一次）
-#[cfg(target_os = "linux")]
-fn holders_of_rdev(rdev: u64) -> io::Result<Vec<String>> {
-    let sysdir = Path::new("/sys/dev/block")
-        .join(format!("{}:{}", libc::major(rdev), libc::minor(rdev)));
-    holders_at(&sysdir)
-}
-
 /// 设备占用探测结果（所有可读 mount namespace 的 mountinfo + /proc/swaps +
-/// 块设备持有者，路径、st_rdev 与 sysfs holders 并集匹配）。FS 操作要求分区未挂载、
+/// 块设备持有者 + loop 反向身份 + 多设备文件系统成员）。FS 操作要求分区未挂载、
 /// 未作 swap、未被别的块设备栈持有，是本工具策略，内核并不强制（man resize2fs：
 /// 内核支持在线扩容时可直接扩已挂载的 ext）；挂载态扩容走 xfs/btrfs 的临时挂载路径，
 /// 不经此判定
@@ -211,57 +220,23 @@ pub(crate) enum Occupancy {
         /// loop 之上的块设备栈（dm/md），空 = 只有挂载或 swap
         holders: Vec<String>,
     },
+    /// 目标的多设备文件系统成员关系：它只是某个 btrfs 文件系统（或 md 阵列）的一员，
+    /// 未挂载时既不在挂载表里、也没有持有者，单独整段重写会毁掉同组其它设备仍引用的元数据
+    Member {
+        /// 含设备名、所属文件系统/阵列与解除动作的完整句子
+        detail: String,
+    },
 }
 
-/// 探测设备节点的占用状态。Err = 探测本身失败——调用方一律 fail-closed，
+/// 探测设备节点的占用状态。`shape` 由调用方给：整段重写传 `Overwrite`，
+/// 只扩末端的表写入传 `Extend`。放行条件（`Extend` 下持有者全是 dm）在
+/// [`crate::dev::verdict`] 内判定，调用方不再对单条持有链复算。
+/// Err = 探测本身失败——调用方一律 fail-closed，
 /// "确认不了空闲"不得当成"空闲"
 #[cfg(target_os = "linux")]
-pub(crate) fn probe_occupancy(dev: &str) -> io::Result<Occupancy> {
-    let mounts = read_mounts()?;
-    let swaps = std::fs::read_to_string("/proc/swaps")?;
-    probe_occupancy_with(&mounts, &swaps, dev)
-}
-
-/// 判据本体。挂载表与 swap 表由调用方一次读好：整盘逐分区判定时不必重复扫描 /proc
-#[cfg(target_os = "linux")]
-fn probe_occupancy_with(mounts: &[MountEntry], swaps: &str, dev: &str) -> io::Result<Occupancy> {
-    use std::os::unix::fs::MetadataExt;
-    let m = std::fs::metadata(dev).map_err(|e| {
-        io::Error::other(format!("cannot stat {dev} to confirm it is unmounted: {e}"))
-    })?;
-    let rdev = m.rdev();
-    let dev_no = (libc::major(rdev) as u64, libc::minor(rdev) as u64);
-    if mounted_in(mounts, dev, dev_no) {
-        return Ok(Occupancy::Mounted);
-    }
-    if active_swap_in(swaps, dev, rdev)? {
-        return Ok(Occupancy::ActiveSwap);
-    }
-    let holders = holders_of_rdev(rdev)?;
-    if !holders.is_empty() {
-        return Ok(Occupancy::Held(holders));
-    }
-    // backing 侧的占用不留在这台设备的 mountinfo / swap 表 / holders 里：loop 只在
-    // 自己名下记挂载与持有者。按设备号认 backing，节点用哪条路径暴露都命中
-    let view = OccupancyView { dm_held_is_idle: false, unopenable_is_skipped: false };
-    match loop_occupancy_for(BackingMatch::Block { rdev }, mounts, swaps, view)? {
-        Some(LoopOccupancy::Live(via)) => return Ok(Occupancy::LoopBacked { via, holders: Vec::new() }),
-        Some(LoopOccupancy::Held { loopdev, holders }) => {
-            return Ok(Occupancy::LoopBacked { via: loopdev, holders });
-        }
-        // 内核拒绝独占：这台设备已被别的使用者 claim（挂载 / swap / 他人独占）
-        Some(LoopOccupancy::KernelBusy { loopdev }) => {
-            return Ok(Occupancy::LoopBacked { via: loopdev, holders: Vec::new() });
-        }
-        // 确认不了独占权 = 确认不了空闲，按本函数的 fail-closed 口径上抛
-        Some(LoopOccupancy::Unclaimable { loopdev, why }) => {
-            return Err(io::Error::other(format!(
-                "cannot take an exclusive claim on {loopdev}, a loop onto {dev}: {why}"
-            )));
-        }
-        None => {}
-    }
-    Ok(Occupancy::Idle)
+pub(crate) fn probe_occupancy(dev: &str, shape: crate::dev::OpShape) -> io::Result<Occupancy> {
+    let facts = crate::dev::collect_node(dev).map_err(io::Error::other)?;
+    Ok(crate::dev::verdict(shape, &facts))
 }
 
 /// mountinfo 里是否有指向该设备的记录。双判据取并集：dev_no（st_rdev）之外比对
@@ -284,7 +259,7 @@ fn mounted_in(entries: &[MountEntry], dev: &str, dev_no: (u64, u64)) -> bool {
 /// 9p/drvfs）上时，十几次这样的查找就是毫秒级开销，落进 loop 拆除的瞬态窗口里会把
 /// "节点已删、sysfs 未收"读成确认失败
 #[cfg(target_os = "linux")]
-fn source_is_device(source: &str, dev_no: (u64, u64)) -> bool {
+pub(crate) fn source_is_device(source: &str, dev_no: (u64, u64)) -> bool {
     use std::os::unix::fs::{FileTypeExt, MetadataExt};
     if !source.starts_with('/') {
         return false;
@@ -321,29 +296,34 @@ fn active_swap_in(swaps: &str, dev: &str, rdev: u64) -> io::Result<bool> {
 /// FS 步的占用闸：占用或探测失败都拒绝（fail-closed——探测失败若被当作
 /// "未挂载"，会对已挂载的 FS 执行 resize，那是数据损坏）。
 ///
-/// 四个分支都归 `Io`：这层函数分不清调用点是否已有更早的写盘步骤（缩容在表写入之前
-/// 走它，扩容在表写入之后走它），而 `Io` 不承诺"改参数重试有意义"，是两种上下文里都
-/// 不误导的那一档。写盘之后的调用点若要强调"盘可能已改变"，须在**调用方**就地改判
-/// （`tool_write_maybe_started` 同法），不在这一层猜
+/// 分类只回答"成因在请求还是在环境"：确定被占用 ⇒ 请求与现状不符（`InvalidArgument`，3）；
+/// 探测失败 ⇒ 环境故障（`Io`，4）。"本次是否写过盘"由命令层的归责点
+/// `reconcile_with_writes` 统一处理——写过的调用点会被抬成 5，这一层不替它混码
 #[cfg(target_os = "linux")]
 pub(crate) fn require_unmounted(dev: &str) -> Result<(), FsError> {
-    match probe_occupancy(dev) {
+    use crate::dev::OccupancyFact;
+    match probe_occupancy(dev, crate::dev::OpShape::Overwrite) {
         Ok(Occupancy::Idle) => Ok(()),
-        Ok(Occupancy::Held(holders)) => Err(FsError::Io(io::Error::other(format!(
+        Ok(Occupancy::Held(holders)) => Err(OccupancyFact::Occupied.fs_error(format!(
             "{dev} is held by {} — deactivate that stack first (FS operations require an unmounted partition)",
             holders.join(", ")
-        )))),
-        Ok(Occupancy::LoopBacked { via, .. }) => Err(FsError::Io(io::Error::other(format!(
+        ))),
+        Ok(Occupancy::LoopBacked { via, .. }) => Err(OccupancyFact::Occupied.fs_error(format!(
             "{dev} is the backing of {via}, which is in use — unmount/swapoff/deactivate that loop first \
              (FS operations require an unmounted partition)"
-        )))),
-        Ok(o) => Err(FsError::Io(io::Error::other(match o {
-            Occupancy::Mounted => format!("{dev} is mounted — unmount/deactivate first (FS operations require an unmounted partition)"),
-            _ => format!("{dev} is active as swap — unmount/deactivate first (FS operations require an unmounted partition)"),
-        }))),
-        Err(e) => Err(FsError::Io(io::Error::other(format!(
+        ))),
+        Ok(Occupancy::Member { detail }) => Err(OccupancyFact::Occupied.fs_error(format!(
+            "{detail} (FS operations require a standalone partition)"
+        ))),
+        Ok(Occupancy::Mounted) => Err(OccupancyFact::Occupied.fs_error(format!(
+            "{dev} is mounted — unmount/deactivate first (FS operations require an unmounted partition)"
+        ))),
+        Ok(Occupancy::ActiveSwap) => Err(OccupancyFact::Occupied.fs_error(format!(
+            "{dev} is active as swap — unmount/deactivate first (FS operations require an unmounted partition)"
+        ))),
+        Err(e) => Err(OccupancyFact::Unreadable.fs_error(format!(
             "cannot confirm {dev} is unmounted: {e} — refusing (fail-closed)"
-        )))),
+        ))),
     }
 }
 
@@ -586,17 +566,14 @@ fn loop_and_partitions(sysdir: &Path, name: &str) -> io::Result<Vec<(String, Pat
 /// （[`loop_occupancy_for`] 取得并留持）。前者受命名空间限制，后者与命名空间无关，
 /// 两者都不成立时才是空闲；任一环节给不出结论一律拒绝
 #[cfg(target_os = "linux")]
-pub(crate) fn image_loop_occupancy(
-    src: &FileSource,
-    view: OccupancyView,
-) -> io::Result<Option<LoopOccupancy>> {
+pub(crate) fn image_loop_occupancy(src: &FileSource) -> io::Result<Option<LoopOccupancy>> {
     use std::os::unix::fs::MetadataExt;
     let md = src.metadata().map_err(|e| {
         io::Error::other(format!("cannot stat the open image to identify it: {e}"))
     })?;
     let mounts = read_mounts()?;
     let swaps = std::fs::read_to_string("/proc/swaps")?;
-    loop_occupancy_for(BackingMatch::File { dev: md.dev(), ino: md.ino() }, &mounts, &swaps, view)
+    loop_occupancy_for(BackingMatch::File { dev: md.dev(), ino: md.ino() }, &mounts, &swaps)
 }
 
 /// 已取得的一条 loop 独占权：fd 维持 claim，记录则供每次消费时重核。
@@ -681,23 +658,13 @@ fn claim_failure(loopdev: String, err: io::Error) -> LoopOccupancy {
 /// 反向枚举 loop，找出 backing 命中 `target` 的那一个，并回答它是否在用。
 /// 镜像（文件 backing）与块设备（设备号 backing）共用这一份判据。
 ///
-/// [`OccupancyView`] 的两项各管一个可用性边界：FS 步的闸在 root 下运行、随后要在
-/// 建立的设备上动手，节点打不开与 dm 持有都按原样上报（dm 的复用判定在调用方）；
-/// 记录准入的探测面向任意用户——无 disk 组的一方建不出指向镜像的绑定，节点权限
-/// 不该拦住它自己的镜像操作；`--grow-lv` 的链路则要求 dm 持有的 PV 照常放行
-#[cfg(target_os = "linux")]
-#[derive(Clone, Copy)]
-pub(crate) struct OccupancyView {
-    pub(crate) dm_held_is_idle: bool,
-    pub(crate) unopenable_is_skipped: bool,
-}
-
+/// 这里只报事实，不套策略：dm 持有是否放行由 [`crate::dev::verdict`] 按操作形状决定，
+/// 节点打不开一律上抛（调用方 fail-closed），不因"建不出这只绑定的用户无权读取"而跳过
 #[cfg(target_os = "linux")]
 pub(crate) fn loop_occupancy_for(
     target: BackingMatch,
     mounts: &[MountEntry],
     swaps: &str,
-    view: OccupancyView,
 ) -> io::Result<Option<LoopOccupancy>> {
     use std::os::unix::fs::MetadataExt;
     // 每个 loop 独立成形：持有者记在真正拥有它的那个 loop 名下。跨 loop 汇总会把
@@ -712,25 +679,19 @@ pub(crate) fn loop_occupancy_for(
         match loop_backing_identity(&name) {
             Ok(Some(b)) if target.matches(&b) => {}
             Ok(_) => continue,
-            // 权限不足时身份无从读取，也就无法指认这只 loop 绑的是谁——按"与我无关"
-            // 跳过；FS 步闸的 fail-closed 口径在参数里区分
-            Err(e) if e.kind() == io::ErrorKind::PermissionDenied && view.unopenable_is_skipped => continue,
+            // 身份读不出来就无法指认这只 loop 绑的是谁：确认不了，按 fail-closed 上抛
             Err(e) => return Err(e),
         }
         let loopdev = format!("/dev/{name}");
         let mut holders: Vec<String> = Vec::new();
         for (node, sysdir) in loop_and_partitions(&entry.path(), &name)? {
             let path = format!("/dev/{node}");
-            let m = match std::fs::metadata(&path) {
-                Ok(m) => m,
-                Err(e) if e.kind() == io::ErrorKind::PermissionDenied && view.unopenable_is_skipped => continue,
-                Err(e) => {
-                    return Err(io::Error::new(
-                        e.kind(),
-                        format!("cannot stat {path} to confirm it is unused: {e}"),
-                    ))
-                }
-            };
+            let m = std::fs::metadata(&path).map_err(|e| {
+                io::Error::new(
+                    e.kind(),
+                    format!("cannot stat {path} to confirm it is unused: {e}"),
+                )
+            })?;
             let rdev = m.rdev();
             let dev_no = (libc::major(rdev) as u64, libc::minor(rdev) as u64);
             if mounted_in(mounts, &path, dev_no) || active_swap_in(swaps, &path, rdev)? {
@@ -739,11 +700,6 @@ pub(crate) fn loop_occupancy_for(
             holders.extend(holders_at(&sysdir)?);
         }
         if !holders.is_empty() {
-            // dm 持有在放行口径下不算占用：活动 LV 经 dm 压着 PV 是 LVM 链的常态，
-            // 真正挡路的是别的持有者——它们仍在下面被如实上报
-            if view.dm_held_is_idle && dm_only(&holders) {
-                continue;
-            }
             held.push((loopdev, holders));
             continue;
         }
@@ -787,9 +743,7 @@ pub(crate) fn loop_occupancy_for(
                     }))
                 }
             },
-            // 权限不足（非 root 对 root:disk 0660 的节点）与 EBUSY 不同：拿不到独占权
-            // 的同一方也建不出这只绑定，跳过而不拒绝
-            Err(e) if e.kind() == io::ErrorKind::PermissionDenied && view.unopenable_is_skipped => continue,
+            // 拿不到独占权不等于"没人用"：EBUSY 已有单独变体，其余原因按确认不了上报
             Err(e) => return Ok(Some(claim_failure(loopdev, e))),
         }
     }
@@ -1025,75 +979,72 @@ pub(crate) fn dm_only(holders: &[String]) -> bool {
 /// 由 [`Occupancy::LoopBacked`] 补：反向枚举 loop，按设备号认 backing。镜像没有分区
 /// 节点可查，却仍有一道内核级防线可用：对绑定到同一文件的每个 loop 取 `O_RDWR|O_EXCL`
 /// 独占权（[`claim_loop_exclusive`]，与 mount namespace 无关）并留持到进程退出，占用
-/// 先按"有没有 loop 绑定到同一文件且在用"判定（[`image_loop_occupancy`]，身份取自
-/// LOOP_GET_STATUS64 而非路径），再用这道 claim 收口。两端保护面都要说准：claim 只挡
+/// 先按"有没有 loop 绑定到同一文件且在用"判定（[`crate::dev::verdict`] 的
+/// loop 证据，身份取自 LOOP_GET_STATUS64 而非路径），再用这道 claim 收口。两端保护面都要说准：claim 只挡
 /// 守块设备约定的使用者（挂载 / swap / 他人的独占打开），不挡按镜像路径直写字节的
 /// 并发写者；挂载视图只在宿主初始 PID 命名空间的 procfs 上完整
 /// （man pid_namespaces(7)），容器内的视图给不出全部进程时，只能依赖 claim 的结论。
 /// `start_bytes` = 分区起始字节（与 find_block_partition_node 的换算基准一致）
 #[cfg(target_os = "linux")]
 pub fn ensure_idle_before_write(src: &FileSource, part: u32, start_bytes: u64, kind: WriteKind) -> Result<(), crate::outcome::RunOutcome> {
-    use crate::outcome::RunOutcome;
+    use crate::dev::OccupancyFact;
     if !src.is_block {
         return image_target_unused(src, kind);
     }
-    let node = find_block_partition_node(src, part, start_bytes).map_err(RunOutcome::from)?;
-    match probe_occupancy(&node) {
+    let node = find_block_partition_node(src, part, start_bytes).map_err(crate::outcome::RunOutcome::from)?;
+    // 形态决定放行范围：`Extend` 只放行持有者全是 dm 的栈，判定与文案都在
+    // [`crate::dev::verdict`] 的结论里；这里不再对 `Held` 的返回值做第二次放行
+    match probe_occupancy(&node, crate::dev::OpShape::from(kind)) {
         Ok(Occupancy::Idle) => Ok(()),
-        Ok(Occupancy::Mounted) => Err(RunOutcome::refused(format!(
+        Ok(Occupancy::Mounted) => Err(OccupancyFact::Occupied.outcome(format!(
             "{node} is mounted — unmount before resizing (moving a mounted partition's extents invalidates the live mount)"
         ))),
-        Ok(Occupancy::ActiveSwap) => Err(RunOutcome::refused(format!("{node} is active swap — run swapoff first"))),
-        // 纯扩容放行 DM：分区表变大不改变 dm 栈已映射的扇区（见 [`dm_only`]）
-        Ok(Occupancy::Held(holders)) if kind == WriteKind::Extend && dm_only(&holders) => Ok(()),
-        Ok(Occupancy::Held(holders)) => Err(RunOutcome::refused(format!(
+        Ok(Occupancy::ActiveSwap) => Err(OccupancyFact::Occupied.outcome(format!("{node} is active swap — run swapoff first"))),
+        Ok(Occupancy::Held(holders)) => Err(OccupancyFact::Occupied.outcome(format!(
             "{node} is held by {} — deactivate that stack first (the write would change bytes the holder still maps)",
             holders.join(", ")
         ))),
-        // 与镜像同一口径：loop 之上只挂了 DM 时纯扩容放行（增长不改已映射扇区）
-        Ok(Occupancy::LoopBacked { holders, .. })
-            if !holders.is_empty() && kind == WriteKind::Extend && dm_only(&holders) =>
-        {
-            Ok(())
-        }
-        Ok(Occupancy::LoopBacked { via, holders }) => Err(RunOutcome::refused(format!(
+        Ok(Occupancy::LoopBacked { via, holders }) => Err(OccupancyFact::Occupied.outcome(format!(
             "{node} is the backing of {via}{} — unmount/swapoff/deactivate that loop first \
              (the write would change bytes the loop still maps)",
             if holders.is_empty() { String::new() } else { format!(" (held by {})", holders.join(", ")) }
         ))),
-        Err(e) => Err(RunOutcome::refused(format!(
+        Ok(Occupancy::Member { detail }) => Err(OccupancyFact::Occupied.outcome(detail)),
+        Err(e) => Err(OccupancyFact::Unreadable.outcome(format!(
             "cannot confirm {node} is unmounted: {e} — refusing (fail-closed)"
         ))),
     }
 }
 
-/// 镜像目标的占用判定：目标级，不区分分区。`kind` 只在 Held 分支上参与——
-/// Extend 且仅 dm 持有时放行（LVM PV / dm-crypt 的增长语义）
+/// 镜像目标的占用判定：目标级，不区分分区。结论来自与记录准入同一份事实与
+/// [`crate::dev::verdict`]：形状只影响 dm 持有（`Extend` 放行、`Overwrite` 拦），
+/// 探测失败一律是"一个字节都没写"的 4，不是"请求与现状不符"的 3
 #[cfg(target_os = "linux")]
 fn image_target_unused(src: &FileSource, kind: WriteKind) -> Result<(), crate::outcome::RunOutcome> {
-    use crate::outcome::RunOutcome;
-    let view = OccupancyView { dm_held_is_idle: false, unopenable_is_skipped: false };
-    match image_loop_occupancy(src, view) {
-        Ok(None) => Ok(()),
-        Ok(Some(LoopOccupancy::Live(dev))) => Err(RunOutcome::refused(format!(
-            "{dev} is a loop onto this image and is in use — unmount/swapoff it first (editing the image changes a live filesystem)"
-        ))),
-        Ok(Some(LoopOccupancy::Held { loopdev: _, holders }))
-            if kind == WriteKind::Extend && dm_only(&holders) => Ok(()),
-        Ok(Some(LoopOccupancy::Held { loopdev, holders })) => Err(RunOutcome::refused(format!(
-            "{loopdev} is a loop onto this image and is held by {} — deactivate that stack first (editing the image changes bytes the holder still maps)",
+    use crate::dev::OccupancyFact;
+    let facts = crate::dev::collect(src).map_err(|why| {
+        OccupancyFact::Unreadable.outcome(format!(
+            "cannot confirm no loop has this image in use: {why} — refusing (fail-closed)"
+        ))
+    })?;
+    match crate::dev::verdict(crate::dev::OpShape::from(kind), &facts) {
+        Occupancy::Idle => Ok(()),
+        Occupancy::Mounted => Err(OccupancyFact::Occupied.outcome(
+            "the image is mounted — unmount it first (editing the image changes a live filesystem)",
+        )),
+        Occupancy::ActiveSwap => Err(OccupancyFact::Occupied.outcome(
+            "the image is active as swap — run swapoff first (editing the image changes a live swap area)",
+        )),
+        Occupancy::Held(holders) => Err(OccupancyFact::Occupied.outcome(format!(
+            "the image is held by {} — deactivate that stack first (editing the image changes bytes the holder still maps)",
             holders.join(", ")
         ))),
-        Ok(Some(LoopOccupancy::KernelBusy { loopdev })) => Err(RunOutcome::refused(format!(
-            "{loopdev} is a loop onto this image and the kernel refuses an exclusive open (EBUSY) — \
-             it is still in use (mounted, active swap, or claimed by another stack); release it first"
+        Occupancy::LoopBacked { via, holders } => Err(OccupancyFact::Occupied.outcome(format!(
+            "{via} is a loop onto this image and is in use — unmount/swapoff/deactivate it first \
+             (editing the image changes bytes that view still maps){}",
+            if holders.is_empty() { String::new() } else { format!(" (held by {})", holders.join(", ")) }
         ))),
-        Ok(Some(LoopOccupancy::Unclaimable { loopdev, why })) => Err(RunOutcome::refused(format!(
-            "cannot take an exclusive claim on {loopdev}, a loop onto this image: {why} — refusing (fail-closed)"
-        ))),
-        Err(e) => Err(RunOutcome::refused(format!(
-            "cannot confirm no loop has this image in use: {e} — refusing (fail-closed)"
-        ))),
+        Occupancy::Member { detail } => Err(OccupancyFact::Occupied.outcome(detail)),
     }
 }
 
@@ -1122,6 +1073,7 @@ pub fn ensure_table_write_idle(src: &FileSource) -> Result<(), crate::outcome::R
 /// 按探测失败上抛——"确认不了哪些分区在用"不能读成"没有分区在用"
 #[cfg(target_os = "linux")]
 fn ensure_whole_device_idle(src: &FileSource) -> Result<(), crate::outcome::RunOutcome> {
+    use crate::dev::OccupancyFact;
     use crate::outcome::RunOutcome;
     let disk = block_disk_name(src).map_err(RunOutcome::from)?;
     let sysdir = Path::new("/sys/block").join(&disk);
@@ -1171,54 +1123,52 @@ fn ensure_whole_device_idle(src: &FileSource) -> Result<(), crate::outcome::RunO
             }
             Err(e) if e.kind() == io::ErrorKind::NotFound => {}
             Err(e) => {
-                return Err(RunOutcome::refused(format!(
+                return Err(RunOutcome::no_mutation(format!(
                     "cannot stat {} to tell whether it is a partition: {e} — refusing (fail-closed)",
                     path.join("partition").display()
                 )));
             }
         }
     }
-    let mounts = read_mounts().map_err(|e| {
-        RunOutcome::refused(format!("cannot read mount tables to confirm {disk} is unused: {e} — refusing (fail-closed)"))
+    // 证据源只读一遍：整盘逐分区判定共用同一份 mountinfo 与 /proc/swaps
+    let facts = crate::dev::collect_nodes(&nodes).map_err(|why| {
+        OccupancyFact::Unreadable.outcome(format!(
+            "cannot confirm {disk} is unused: {why} — refusing (fail-closed)"
+        ))
     })?;
-    let swaps = std::fs::read_to_string("/proc/swaps").map_err(|e| {
-        RunOutcome::refused(format!("cannot read /proc/swaps to confirm {disk} is unused: {e} — refusing (fail-closed)"))
-    })?;
-    for node in nodes {
-        match probe_occupancy_with(&mounts, &swaps, &node) {
-            Ok(Occupancy::Idle) => {}
-            Ok(Occupancy::Mounted) => {
-                return Err(RunOutcome::refused(format!(
+    for (node, facts) in nodes.into_iter().zip(facts) {
+        match crate::dev::verdict(crate::dev::OpShape::Overwrite, &facts) {
+            Occupancy::Idle => {}
+            Occupancy::Mounted => {
+                return Err(OccupancyFact::Occupied.outcome(format!(
                     "{node} is mounted — unmount it before rewriting the partition table"
                 )));
             }
-            Ok(Occupancy::ActiveSwap) => {
-                return Err(RunOutcome::refused(format!(
+            Occupancy::ActiveSwap => {
+                return Err(OccupancyFact::Occupied.outcome(format!(
                     "{node} is active swap — run swapoff before rewriting the partition table"
                 )));
             }
-            Ok(Occupancy::Held(holders)) => {
-                return Err(RunOutcome::refused(format!(
+            Occupancy::Held(holders) => {
+                return Err(OccupancyFact::Occupied.outcome(format!(
                     "{node} is held by {} — deactivate that stack first (the new table would contradict the live stack)",
                     holders.join(", ")
                 )));
             }
-            Ok(Occupancy::LoopBacked { via, .. }) => {
-                return Err(RunOutcome::refused(format!(
+            Occupancy::LoopBacked { via, .. } => {
+                return Err(OccupancyFact::Occupied.outcome(format!(
                     "{node} is the backing of {via}, which is in use — unmount/swapoff/deactivate that loop first \
                      (the new table would contradict the layout the loop reports)"
                 )));
             }
-            Err(e) => {
-                return Err(RunOutcome::no_mutation(format!(
-                    "cannot confirm {node} is unused: {e} — refusing (fail-closed)"
-                )));
-            }
+            Occupancy::Member { detail } => return Err(OccupancyFact::Occupied.outcome(detail)),
         }
     }
     Ok(())
 }
 
+/// 非 Linux 存根。该平台没有块设备节点与 loop 子系统：挂载、swap、块设备栈持有这些
+/// 占用来源根本不存在，不是"探测不到"——读不到等于已证明不存在，故这里不构成未知
 #[cfg(not(target_os = "linux"))]
 pub fn ensure_idle_before_write(_src: &FileSource, _part: u32, _start_bytes: u64, _kind: WriteKind) -> Result<(), crate::outcome::RunOutcome> {
     Ok(())

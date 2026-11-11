@@ -1,8 +1,11 @@
 //! 数据搬移步骤：按块布局在源区间与目的区间之间逐块直读直写，块边界向 sink 报进度。
+//!
+//! 每块经写入口落盘并带步骤归属；回读按 durable 批次做：同步之后、推进游标之前
+//! 回读整批并比对，不逐块回读。
 
-use crate::dev::WriteSource;
-use crate::outcome::RunOutcome;
-use crate::planner::chunk::{move_chunk_layout, relocation_overlaps};
+use crate::dev::{RegionStamp, WriteSource};
+use crate::outcome::{RunOutcome, WriteStep};
+use crate::planner::chunk::{move_chunk_layout, relocation_overlaps, spans, ChunkSpan};
 
 use super::{StepSink, TransferState};
 
@@ -73,9 +76,20 @@ pub(crate) fn execute(
     }
 
     // 序列方向由位移符号决定：目的区间在源之后（正位移）时从尾往头逐块搬，否则从头往尾。
-    // `chunks_in_entry` 是这条序列的前缀长度，两个方向共用下面同一段迭代。
+    // 块边界由 [`spans`] 唯一给出；`chunks_in_entry` 是这条序列的前缀长度
     let from_tail = dst_first > src_first;
-    let index_at = |n: u64| if from_tail { count - 1 - n } else { n };
+    let mut ordered: Vec<ChunkSpan> = spans(src_first, sectors, chunk / sector_size).collect();
+    if from_tail {
+        ordered.reverse();
+    }
+    // 边界与块数同源：不一致说明块大小不是扇区的整数倍，宁可停在这里也不按错位搬
+    if ordered.len() as u64 != count {
+        return Err(RunOutcome::partial(format!(
+            "partition {part}: the relocation block layout is inconsistent ({count} chunks expected, {} produced) — \
+             the transfer may be incomplete",
+            ordered.len()
+        )));
+    }
     let overlap = relocation_overlaps(shift, sectors);
     if overlap && chunk < chunk_bytes {
         sink.note(&format!(
@@ -83,34 +97,31 @@ pub(crate) fn execute(
         ));
     }
     let flush_at = chunk_bytes.max(CHECKPOINT_FLOOR);
-    // 已有块进度或更早的条目已提交，都表示目标字节已被写过：后续失败不再属于"未改动"
-    let mut written = state.wrote_target();
     let mut pending = 0u64;
+    // 当前 durable 批次的起点与已写字节：回读用它们，批次跟随同步点推进
+    let mut batch_start = dst_base;
+    let mut batch: Vec<u8> = Vec::new();
 
-    for n in state.chunks_in_entry..count {
-        let i = index_at(n);
-        let within = i * chunk;
-        let len = chunk.min(total - within);
+    for span in ordered.iter().skip(state.chunks_in_entry as usize) {
+        let within = (span.first_lba - src_first) * sector_size;
+        let len = span.len_lba * sector_size;
         let mut buf = vec![0u8; len as usize];
         if let Err(e) = src.read_at(src_base + within, &mut buf) {
             let off = src_base + within;
-            return Err(if written {
-                RunOutcome::partial(format!(
-                    "partition {part}: cannot read the source at byte {off}: {e} — the transfer may be incomplete"
-                ))
-            } else {
-                RunOutcome::no_mutation(format!(
-                    "partition {part}: cannot read the source at byte {off}: {e} — nothing was written"
-                ))
-            });
-        }
-        written = true;
-        if let Err(e) = src.write_data_at(dst_base + within, &buf) {
-            return Err(RunOutcome::partial(format!(
-                "partition {part}: cannot write the target at byte {}: {e} — the transfer may be incomplete",
-                dst_base + within
+            return Err(RunOutcome::no_mutation(format!(
+                "partition {part}: cannot read the source at byte {off}: {e} — the transfer may be incomplete"
             )));
         }
+        let dst = dst_base + within;
+        // 目的区间没有可比的期望内容：只受写后回读约束
+        if let Err(e) =
+            src.write_guarded(dst, &buf, RegionStamp::unconstrained(dst, len), WriteStep::Relocate { part })
+        {
+            return Err(RunOutcome::partial(format!(
+                "partition {part}: cannot write the target at byte {dst}: {e} — the transfer may be incomplete"
+            )));
+        }
+        append_batch(&mut batch, &mut batch_start, dst, &buf);
         state.chunks_in_entry += 1;
         state.transfer_cursor += 1;
         if overlap {
@@ -119,6 +130,8 @@ pub(crate) fn execute(
                     "partition {part}: cannot flush the moved data: {e} — the transfer may be incomplete"
                 )));
             }
+            verify_batch(src, batch_start, &batch, part)?;
+            batch.clear();
             crate::movepart::fault_after_data_sync(state.transfer_cursor);
             sink.transfer_checkpoint(src, state)
                 .map_err(|e| checkpoint_failed(part, e))?;
@@ -132,6 +145,8 @@ pub(crate) fn execute(
                         "partition {part}: cannot flush the moved data: {e} — the transfer may be incomplete"
                     )));
                 }
+                verify_batch(src, batch_start, &batch, part)?;
+                batch.clear();
                 crate::movepart::fault_after_data_sync(state.transfer_cursor);
                 sink.transfer_checkpoint(src, state)
                     .map_err(|e| checkpoint_failed(part, e))?;
@@ -145,10 +160,37 @@ pub(crate) fn execute(
                 "partition {part}: cannot flush the moved data: {e} — the transfer may be incomplete"
             )));
         }
+        verify_batch(src, batch_start, &batch, part)?;
         sink.transfer_checkpoint(src, state)
             .map_err(|e| checkpoint_failed(part, e))?;
     }
     Ok(())
+}
+
+/// 同步之后回读一个 durable 批次：批次内字节必须在盘上原样可读，否则不推进游标
+fn verify_batch(src: &WriteSource, start: u64, batch: &[u8], part: u32) -> Result<(), RunOutcome> {
+    src.read_back(start, batch).map_err(|e| {
+        RunOutcome::partial(format!(
+            "partition {part}: the moved data did not read back as written: {e} — the transfer may be incomplete"
+        ))
+    })
+}
+
+/// 把刚写的一块拼进当前批次。块序可能自尾向头（正位移），批次因此按地址升序排，
+/// 回读区间才是一段连续字节
+fn append_batch(batch: &mut Vec<u8>, batch_start: &mut u64, dst: u64, buf: &[u8]) {
+    if batch.is_empty() {
+        *batch_start = dst;
+        batch.extend_from_slice(buf);
+    } else if dst < *batch_start {
+        let mut grown = Vec::with_capacity(batch.len() + buf.len());
+        grown.extend_from_slice(buf);
+        grown.extend_from_slice(batch);
+        *batch = grown;
+        *batch_start = dst;
+    } else {
+        batch.extend_from_slice(buf);
+    }
 }
 
 /// 回调发生在数据已经写下去之后：无论 sink 报的是哪一类，结论都是搬移可能不完整

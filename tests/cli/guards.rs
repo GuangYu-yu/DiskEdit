@@ -429,7 +429,7 @@ fn flag_contract_mbr_resizefs_and_type() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// 参数层与只读输出层的三处缺陷：`--help` 的主题、`:0` 分区号、MBR 条目末端算术域
+/// 参数层与只读输出层的三处回归：`--help` 的主题、`:0` 分区号、MBR 条目末端算术域
 #[cfg(unix)]
 #[test]
 fn help_topic_zero_partition_and_mbr_end_overflow() {

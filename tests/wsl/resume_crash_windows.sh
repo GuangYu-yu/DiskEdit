@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# test-faults 补全：跨条目间隙 / 连续多次中断 / before-grow 完整重放 / swap 分支 / 自重叠
+# 跨条目间隙 / 连续多次中断 / before-grow 完整重放 / swap 分支 / 自重叠
 source "$(dirname "$0")/lib.sh"
 require_fault_bin
 

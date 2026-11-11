@@ -85,8 +85,8 @@ options (availability: help <CMD>):
                          default)
   --lv NAME              which LV to grow (implies --grow-lv)
   --name S               name for the entry this command creates
-  --no-fs                skip the filesystem step of the grown or moved
-                         partition
+  --no-fs                skip the filesystem step of the grown partition (a
+                         move has no such step)
   --overwrite-data       accept overwriting bytes an existing partition holds
   --part-number N        1-based entry slot; it must be empty
   --random               ask the target to generate a new value

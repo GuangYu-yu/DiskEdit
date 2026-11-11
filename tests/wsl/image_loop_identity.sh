@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 镜像占用反查的身份判定：以 `LOOP_GET_STATUS64` 的 (lo_device, lo_inode) 与
-# 已打开文件句柄的 (st_dev, st_ino) 比对，取代 sysfs `loop/backing_file` 路径匹配。
+# 已打开文件句柄的 (st_dev, st_ino) 比对，不以 sysfs `loop/backing_file` 路径为依据。
 # 覆盖：
 #   A. 编码一致性——同一 backing file 上，ioctl 返回的身份与 fstat 相等
 #   B. 路径不可解析——从硬链接建 loop 后删除该链接，占用仍须被拒

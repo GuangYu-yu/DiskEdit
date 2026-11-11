@@ -1,6 +1,6 @@
 //! 命令行 schema 与解析：每条命令一份 [`CommandDef`]，解析产物是类型化 [`Request`]。
 //!
-//! 参数的位置由 `positionals` 里的槽位名声明，命令层不再按数字下标取值。
+//! 参数的位置由 `positionals` 里的槽位名声明，命令层按槽位名取值。
 //! 每个槽位与每个旗标各自声明一份 [`ValueDomain`]：解析器只按它校验文本，
 //! 命令层拿到的是已经解析好的类型化取值。
 
@@ -276,7 +276,7 @@ pub(crate) const FLAGS: &[FlagSpec] = &[
     FlagSpec {
         name: "--no-fs",
         domain: ValueDomain::Bool,
-        desc: "skip the filesystem step of the grown or moved partition",
+        desc: "skip the filesystem step of the grown partition (a move has no such step)",
         effect: Effect::NoFs,
     },
     FlagSpec {
@@ -459,8 +459,7 @@ pub(crate) enum Capability {
     DeviceState,
 }
 
-/// 确认门。`Required` 的命令在解析期必须拿到 `--yes`，
-/// 缺了就是用法错误；运行期不再按几何推导第二个确认层。
+/// 确认门。`Required` 的命令在解析期必须拿到 `--yes`，缺了就是用法错误。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Confirmation {
     /// 解析期必须有 `--yes`
@@ -634,7 +633,7 @@ pub(crate) const COMMANDS: &[CommandDef] = &[
             opt_desc("--chunk", "default 4 MiB; an interrupted run must repeat the same value"),
             opt_desc(
                 "--no-fs",
-                "skip the filesystem step for the moved partition",
+                "no effect: a move keeps the partition's size, so there is no filesystem step",
             ),
             opt("--sector-size"),
             opt("--start"),
@@ -1772,8 +1771,7 @@ fn store_flag(opts: &mut Options, spec: &FlagSpec, value: Option<Parsed>) {
         (Effect::NoFs, None) => opts.no_fs = true,
         (Effect::GrowLv, None) => opts.grow_lv = true,
         // --lv 的 desc（"implies --grow-lv"）与消费点共用这一承诺：给了 --lv 却不扩
-        // LV 的第三种状态不存在（旧 args 解析的归一化 `a.grow_lv |= a.lv.is_some()`
-        // 在同一落点完成）。漏了这一步，四处消费点全按 grow_lv 门控读 lv，
+        // LV 的第三种状态不存在。漏了这一步，四处消费点全按 grow_lv 门控读 lv，
         // 单给 --lv 的请求会被静默忽略且报成功
         (Effect::Lv, Some(Parsed::Text(v))) => {
             opts.lv = Some(v);
@@ -2129,7 +2127,7 @@ mod tests {
         assert!(find("nosuchcmd").is_none());
     }
 
-    /// 对齐只有 mib / none：帮助与用法里不得再出现柱面对齐或 CHS 几何
+    /// 对齐只有 mib / none：帮助与用法里不得出现柱面对齐或 CHS 几何
     #[test]
     fn help_never_advertises_cyl_alignment() {
         let mut texts = vec![crate::docs::usage_text()];

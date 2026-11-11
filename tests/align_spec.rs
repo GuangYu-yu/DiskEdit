@@ -57,7 +57,7 @@ fn gpt_image(dir: &Path, name: &str, sector_size: &str) -> PathBuf {
 
 #[test]
 fn add_without_align_starts_at_the_first_mib_aligned_lba() {
-    // 第 6、11 条：省略 `--align` 时，自动放置按 1 MiB 对齐（512 字节扇区下是 LBA 2048）。
+    // 省略 `--align` 时，自动放置按 1 MiB 对齐（512 字节扇区下是 LBA 2048）。
     // 显式 `--start` 不在此列：起点是用户给的精确 LBA，不隐式挪动。
     let dir = temp_dir("default");
     let image = gpt_image(&dir, "disk.img", "512");
@@ -94,7 +94,7 @@ fn explicit_none_uses_the_given_lbas() {
 
 #[test]
 fn mib_alignment_is_converted_into_the_declared_sector_size() {
-    // 第 6、23 条：对齐值以字节给出，落到目标扇区大小上。
+    // 对齐值以字节给出，落到目标扇区大小上。
     // 1 MiB / 512 = 2048，1 MiB / 4096 = 256。
     let dir = temp_dir("mib");
     for (sector_size, expected) in [("512", 2048u64), ("4096", 256u64)] {

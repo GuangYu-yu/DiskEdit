@@ -12,7 +12,7 @@
 
 ## 运行要求
 
-- **Linux**。只有 Linux 承诺写盘；其他平台在命令分派处按缺失的原语拒绝（退出码 6，目标字节、锁、恢复记录与日志都未被写入）。镜像上的 `info` 与 `plan` 仍可只读运行，证据类与写命令被拒——逐条答案见 [docs/capability-matrix.md](docs/capability-matrix.md)。
+- **Linux**。只有 Linux 承诺写盘；其他平台在命令分派处按缺失的原语拒绝——逐条答案见 [docs/capability-matrix.md](docs/capability-matrix.md)。
 - **Rust**：需要支持 edition 2024 的工具链（1.85 及以上）才能构建。
 - **root**：文件系统层命令需要，因为要经 `losetup` 映射分区。分区表写入只对块设备需要 root，对镜像文件不需要。
 

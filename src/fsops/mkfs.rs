@@ -187,7 +187,7 @@ pub fn mkfs(src: &mut WriteSource, part: u32, fstype: MkfsFs, label: Option<&str
     // 故报 Io（→ NoMutation），不报 CommandFailed
     src.mark_non_reversible().map_err(|e| {
         FsError::from(io::Error::other(format!(
-            "cannot persist the transaction barrier: {e} — nothing was written, the target is unchanged"
+            "cannot persist the transaction barrier: {e}"
         )))
     })?;
     // wipe_zero 一旦开始就存在部分清零：之后的任何失败都不再是"确定未写盘"，
@@ -219,14 +219,18 @@ pub fn mkfs(src: &mut WriteSource, part: u32, fstype: MkfsFs, label: Option<&str
     Ok(())
 }
 
-/// btrfs 多设备拒绝：主 superblock @分区起点+0x10000 的 num_devices 字段（偏移 0x88，
-/// u64 LE，内核 fs/btrfs ctree.h 字段序）。>1 时 resize/max 按 devid 作用于所映射的
-/// 单个 member，"分区扩满即 FS 扩满"前提不成立，直接拒绝，多设备布局交用户手动处理。
+/// btrfs 多设备拒绝：主超级块 @分区起点+0x10000，`num_devices` 在超级块内偏移 0x88
+/// （`__le64`）。偏移从超级块起点计；下面与 `part_len` 比较的是绝对字节位置。
+/// 出处（2026-11-10 核对）：内核 `fs/btrfs/fs.h`（`BTRFS_SUPER_INFO_OFFSET SZ_64K`、
+/// `sizeof(struct btrfs_super_block) == 4096`）、内核 `include/uapi/linux/btrfs_tree.h`
+/// 与 btrfs-progs `kernel-shared/uapi/btrfs_tree.h` 的 `struct btrfs_super_block` 字段序、
+/// 官方 On-disk Format §Superblock。>1 时 resize/max 按 devid 作用于所映射的单个 member，
+/// "分区扩满即 FS 扩满"前提不成立，直接拒绝，多设备布局交用户手动处理。
 /// 离线（resize_fs_in / shrink_fs）与在线路径（online::fs_grow / 在线 shrink）共用同一道防线。
-/// `part_len` 是该分区的字节长度：读 superblock 前先校验它装得下 superblock 头
+/// `part_len` 是该分区的字节长度：读超级块前先校验它覆盖到 `num_devices` 的末字节
 /// （≥ 0x10090），不足即拒绝——分区之外读到的是邻居的字节，比"读失败"更危险
 pub(crate) fn refuse_btrfs_multi_device_at(src: &FileSource, off: u64, part_len: u64) -> Result<(), FsError> {
-    const SB_NEED: u64 = 0x10090; // 0x10000 基址 + 0x90 头内最大字段偏移（num_devices @0x88 是 u64）
+    const SB_NEED: u64 = 0x10090; // 0x10000 基址 + 0x90 头内最远字段（num_devices @0x88，8 字节）的末字节
     if part_len < SB_NEED {
         return Err(FsError::unsupported(
             "partition is smaller than a btrfs superblock — the identified btrfs header does not fit this partition; refusing",
@@ -235,7 +239,7 @@ pub(crate) fn refuse_btrfs_multi_device_at(src: &FileSource, off: u64, part_len:
     let mut raw = [0u8; 8];
     src.read_at(off + 0x10000 + 0x88, &mut raw).map_err(FsError::from)?;
     if u64::from_le_bytes(raw) > 1 {
-        return Err(FsError::unsupported(
+        return Err(FsError::unsupported_multi_device_btrfs(
             "btrfs filesystem spans multiple devices (num_devices > 1) — resize manually per btrfs-filesystem(8)",
         ));
     }

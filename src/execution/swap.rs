@@ -67,6 +67,7 @@ pub(crate) fn rebuild(
                 crate::fsops::rescue_hint(
                     Some(ContentKind::Swap),
                     &crate::dev::part_dev_hint(src, step.part, hinted),
+                    None,
                 ),
             )))
         }

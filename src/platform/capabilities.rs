@@ -1,13 +1,13 @@
-//! 能力矩阵：平台 × 目标形态 × 原语的三态结论。
+//! 能力矩阵：平台 × 目标形态 × 原语的设计结论。
 //!
-//! 本表只回答设计结论：支持 / 不支持 / 设计限制 / 不适用。只有「支持」放行；
-//! 「设计限制」在写路径上等同「不支持」。实测状态不混入本表。
+//! 结论分四类：支持 / 不支持 / 设计限制 / 不适用。`admit` 放行「支持」与「不适用」，
+//! 「设计限制」与「不支持」都不放行。实测状态不混入本表。
 //!
-//! 快照由平台探测产出后作为值传给命令层；命令层只读，不查询平台。
+//! 快照由 `CapabilitySnapshot::design` 按平台与载体形态构造，作为值传给命令层；
+//! 命令层只读，不查询平台。
 
 use crate::domain::MediaKind;
 
-/// 原语清单
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum CapabilityId {
     ReadTarget,
@@ -34,7 +34,7 @@ impl CapabilityId {
         Self::StableIdentity,
     ];
 
-    /// 文档矩阵与运行期拒绝文案共用同一个名字，避免两处各写一份
+    /// 能力名的唯一定义处：运行期拒绝文案直接取用
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::ReadTarget => "ReadTarget",
@@ -75,7 +75,7 @@ pub(crate) enum CapabilityState {
 }
 
 impl CapabilityState {
-    /// 文档矩阵与运行期拒绝文案共用同一份措辞
+    /// 状态措辞的唯一定义处：运行期拒绝文案直接取用
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Supported => "supported",
@@ -106,12 +106,11 @@ impl HostPlatform {
         }
     }
 
-    /// 本平台真正能打开的载体形态。与 `platform::probe::open_read_only` 的编译分支
-    /// 一一对应：只有 Linux 有块设备分支，其余平台一律把目标当普通文件（镜像）打开；
-    /// 非 Linux 的 `block_probe` 也直接返回 `Unsupported`。
+    /// 本平台真正能打开的载体形态。与 `probe::open_read_only` 的编译分支一一对应：
+    /// 只有 Linux 有块设备分支，其余平台一律把目标当普通文件（镜像）打开；非 Linux 的
+    /// `block_probe` 直接返回 `Unsupported`。
     ///
-    /// 能力门只查这些形态。查一个本平台根本打不开的形态，会让「块设备列缺能力」
-    /// 反过来挡住一个完全可运行的只读镜像命令——这正是删掉平台硬门之后必须补的一步
+    /// 能力门只查这些形态：本平台打不开的形态不参与判定，否则块设备列会挡住只读镜像命令。
     pub(crate) const fn openable_media(self) -> &'static [MediaKind] {
         match self {
             Self::Linux => &[MediaKind::Block, MediaKind::Image],
@@ -138,8 +137,7 @@ impl CapabilitySet {
     }
 }
 
-/// 一次探测得到的能力快照：每项能力的结论。
-/// 字段私有，只能由 [`CapabilitySnapshot::design`] 产出
+/// 能力快照：每项能力的结论。字段私有，只能由 [`CapabilitySnapshot::design`] 产出
 #[derive(Clone, Debug)]
 pub(crate) struct CapabilitySnapshot {
     supported: CapabilitySet,
@@ -198,8 +196,7 @@ fn design_state(platform: HostPlatform, media: MediaKind, id: CapabilityId) -> C
 
     match id {
         // 只读与稳定身份：镜像在所有平台都能按路径打开并取文件身份；块设备只有 Linux
-        // 能从 sysfs 取设备号与稳定 ID（非 Linux 的 block_probe 直接 Unsupported）。
-        // 此前这两行无条件 Supported，与探测侧实现相反，把矩阵变成了谎报
+        // 能从 sysfs 取设备号与稳定 ID（非 Linux 的 block_probe 直接 Unsupported）
         CapabilityId::ReadTarget | CapabilityId::StableIdentity => match (platform, media) {
             (_, MediaKind::Image) => Supported,
             (Linux, MediaKind::Block) => Supported,
@@ -276,7 +273,6 @@ mod tests {
         assert_eq!(counts(&snapshot(HostPlatform::Other, MediaKind::Image)), (2, 6, 0, 1));
     }
 
-    /// 设计矩阵的关键单元格
     #[test]
     fn design_matrix_key_cells() {
         use CapabilityId::*;
@@ -296,13 +292,12 @@ mod tests {
         assert_eq!(linux_block.state(KernelResync), CapabilityState::Supported);
         assert_eq!(linux_image.state(KernelResync), CapabilityState::NotApplicable);
 
-        // Windows 的两项设计限制
         assert_eq!(win_block.state(ExclusiveLock), CapabilityState::DesignLimit);
         assert_eq!(win_image.state(DirPersist), CapabilityState::DesignLimit);
         assert_eq!(win_block.state(DirPersist), CapabilityState::DesignLimit);
 
-        // 只读与身份：镜像六列里三列都支持；块设备只有 Linux 支持。
-        // 与 probe.rs 的 block_probe 非 Linux 分支一致，不再谎报
+        // 只读与身份：镜像六列里三列都支持；块设备只有 Linux 支持，
+        // 与 probe.rs 的 block_probe 非 Linux 分支一致
         for platform in [HostPlatform::Linux, HostPlatform::Windows, HostPlatform::Other] {
             let image = snapshot(platform, MediaKind::Image);
             assert_eq!(image.state(ReadTarget), CapabilityState::Supported, "{platform:?}/image");

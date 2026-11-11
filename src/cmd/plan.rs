@@ -66,6 +66,8 @@ pub(crate) fn cmd_plan(a: &PlanRequest) -> u8 {
         .identity
         .record_path()
         .and_then(|path| match crate::recovery::probe_companion(path) {
+            // 认领：这份记录是不是本次目标的（含 loop 映射比对）。释放另走
+            // `same_carrier`，两者不得互换
             crate::recovery::CompanionProbe::Decoded(record)
                 if here.as_ref().is_some_and(|h| record.target.matches(h)) =>
             {
@@ -73,7 +75,7 @@ pub(crate) fn cmd_plan(a: &PlanRequest) -> u8 {
             }
             _ => None,
         });
-    let plan = match movepart::make_plan_resuming(relocation.as_ref(), &g, repair, part) {
+    let plan = match movepart::make_plan_resuming(&src, relocation.as_ref(), &g, repair, part) {
         Ok(p) => p,
         Err(f) => bail_fail(f),
     };
@@ -102,6 +104,7 @@ fn move_range(m: &movepart::PlanEntry, ss: u64) -> std::io::Result<(u64, u64)> {
         .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "corrupted move entry: range overflows"))?;
     let bytes = m
         .delta_lba
+        .unsigned_abs()
         .checked_mul(ss)
         .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "corrupted move entry: byte size overflows"))?;
     Ok((last, bytes))

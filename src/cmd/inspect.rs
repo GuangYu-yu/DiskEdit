@@ -66,6 +66,7 @@ pub(crate) fn cmd_inspect(a: &InspectRequest) -> CmdResult {
             println!("target: {}", a.target);
             println!("identity check: ForeignCheckUnavailable");
             println!("verdict: identity unavailable — the record cannot be compared");
+            report_candidates(crate::dev::TargetIdentity::resolve_for_cleanup(path).as_ref());
             report_occupancy(path);
             return CmdResult::Code(EXIT_OK);
         }
@@ -83,6 +84,7 @@ pub(crate) fn cmd_inspect(a: &InspectRequest) -> CmdResult {
         println!("target: {}", a.target);
         println!("recovery state root: no record path is resolved for this target");
         println!("verdict: nothing inspected");
+        report_candidates(identity.as_ref());
         report_occupancy(path);
         return CmdResult::Code(EXIT_OK);
     };
@@ -96,6 +98,51 @@ pub(crate) fn cmd_inspect(a: &InspectRequest) -> CmdResult {
         eprintln!("{note}");
     }
     CmdResult::Code(code)
+}
+
+/// 身份不可证明时的候选清单：按结构解码记录根下的条目并逐条报告。
+///
+/// 身份读不出时既拼不出块设备的记录目录名，也无法做身份比对；此时若直接返回，
+/// 这些记录就对 `inspect` 消失了。候选一律按结构展示，并说明它们不能与本目标匹配
+/// （列出，不认领）
+#[cfg(target_os = "linux")]
+fn report_candidates(identity: Option<&crate::dev::TargetIdentity>) {
+    use crate::dev::TargetKind;
+    let Some(identity) = identity else {
+        return;
+    };
+    let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+    match identity.kind {
+        TargetKind::Image => {
+            if let Some(path) = identity.record_path() {
+                candidates.push(path.to_path_buf());
+            }
+        }
+        TargetKind::Block => {
+            let root = crate::dev::host_state_root().join("recovery");
+            if let Ok(entries) = std::fs::read_dir(&root) {
+                for entry in entries.flatten() {
+                    candidates.push(entry.path().join(crate::dev::RECORD_NAME));
+                }
+            }
+        }
+    }
+    let mut shown = 0usize;
+    for path in candidates {
+        if matches!(crate::recovery::probe_companion(&path), crate::recovery::CompanionProbe::Absent) {
+            continue;
+        }
+        println!("candidate: {}", path.display());
+        let evidence = read_evidence(&path, None);
+        report(&evidence);
+        shown += 1;
+    }
+    if shown > 0 {
+        eprintln!(
+            "the target's identity could not be established, so none of the {shown} candidate record(s) above \
+             can be matched to it — they are listed, not claimed"
+        );
+    }
 }
 
 /// 记录目录里的一个条目：解码它本身，而不是去猜它服务的目标。
@@ -385,37 +432,44 @@ fn verdict_with(evidence: &Evidence, target: &str) -> (u8, Option<String>) {
 
 #[cfg(target_os = "linux")]
 fn map_recognized(record: &Record, target: &str) -> (u8, Option<String>) {
-    use crate::recovery::{CommitState, OpKind, Retention};
+    use crate::recovery::Retention;
 
     let retention_note = match record.retention {
         Retention::Unverified => Some("retention: unverified — this record is annotated but keeps its verdict's exit status".to_string()),
         Retention::Quarantined => Some("retention: quarantined — this record is annotated but keeps its verdict's exit status".to_string()),
         Retention::Active | Retention::CommittedPending => None,
     };
-    match record.commit {
-        CommitState::Prepared => {
-            // move/copy 的数据搬移越过不可逆点后表区仍可回写；其余操作越过该点
-            // 就只有 `abandon` 一条路，`undo` 会在这里退 3
-            let rollbackable = !record.restore_blocked || matches!(record.op, OpKind::Move | OpKind::Copy);
-            let mut note = if rollbackable {
-                format!(
-                    "unfinished: the record is not committed — run `diskedit undo {target} --yes` to roll back, \
-                     or `diskedit abandon {target}` to set it aside"
-                )
-            } else {
-                format!(
-                    "unfinished: the record is not committed and past the point of rolling back — run \
-                     `diskedit abandon {target}` to set it aside, then run the whole command again"
-                )
-            };
-            if let Some(extra) = retention_note {
-                note.push('\n');
-                note.push_str(&extra);
-            }
-            (EXIT_PARTIAL, Some(note))
-        }
-        CommitState::Committed => (EXIT_OK, retention_note),
+    // 完成与否只看提交点（`Record::committed`），未提交的其余阶段差异不影响这里的码值
+    if record.committed() {
+        return (EXIT_OK, retention_note);
     }
+    // move/copy 的数据搬移越过不可逆点后表区仍可回写；其余操作越过该点
+    // 就只有 `abandon` 一条路，`undo` 会在这里退 3。判据与 `undo` 共用
+    // 同一份 `table_only_replay`，提示不会许诺 `undo` 不接受的事
+    let rollbackable =
+        !record.restore_blocked || crate::recovery::table_only_replay(record.op);
+    let mut note = if record.restore_blocked && rollbackable {
+        format!(
+            "unfinished: the record is not committed and its data writes are past the point of rolling \
+             back — `diskedit undo {target} --yes` replays only the recorded table regions, or \
+             `diskedit abandon {target}` sets it aside"
+        )
+    } else if rollbackable {
+        format!(
+            "unfinished: the record is not committed — run `diskedit undo {target} --yes` to roll back, \
+             or `diskedit abandon {target}` to set it aside"
+        )
+    } else {
+        format!(
+            "unfinished: the record is not committed and past the point of rolling back — run \
+             `diskedit abandon {target}` to set it aside, then run the whole command again"
+        )
+    };
+    if let Some(extra) = retention_note {
+        note.push('\n');
+        note.push_str(&extra);
+    }
+    (EXIT_PARTIAL, Some(note))
 }
 
 #[cfg(target_os = "linux")]
@@ -428,6 +482,13 @@ fn describe_record(record: &Record) -> Vec<String> {
         format!(
             "progress: steps={} cursor={} fs_phase={}",
             record.progress.completed_steps, record.progress.transfer_cursor, record.progress.fs_phase
+        ),
+        format!(
+            "stage: {}",
+            match record.progress_stage() {
+                Ok(stage) => format!("{stage:?}"),
+                Err(e) => format!("inconsistent ({e})"),
+            }
         ),
         format!("commit: {:?}", record.commit),
         format!("retention: {:?}", record.retention),

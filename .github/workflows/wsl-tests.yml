@@ -56,6 +56,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: wsl-suite-logs
-          # run_all 的留档目录在 /var/tmp（见其头部说明），不在仓库树内
+          # run_all 的留档目录在 /var/tmp/diskedit-wsl-artifacts/，不在仓库树内
           path: /var/tmp/diskedit-wsl-artifacts/
           if-no-files-found: ignore

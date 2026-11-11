@@ -28,9 +28,8 @@ pub(crate) enum SceneProof {
 /// （`FileSource::loop_mapping` 就是这一对），编码侧按 8+8 字节顺序写；访问器名字沿用
 /// 编码侧的 `major` / `minor`，不表示设备号。
 ///
-/// 未确定：`Mapping` 没有第二处定义，槽位语义是由 `FileSource` 上唯一的 `(u64, u64)`
-/// 对（`loop_mapping`）和"身份材料相同、映射不同即外来目标"的用例推出的，没有直接证据
-/// 写明这两个槽位就是 offset / sizelimit。
+/// 槽位语义由 `FileSource` 上唯一的 `(u64, u64)` 对与「身份材料相同、映射不同即外来
+/// 目标」的用例确定；`Mapping` 没有第二处定义，编码里也没有槽位名的直接依据。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Mapping {
     major: u64,
@@ -75,9 +74,8 @@ impl SceneIdentity {
 
     /// 只有身份材料时的现场：容量、loop 映射都未知
     ///
-    /// 未确定：`record` 只钉死了字段形状，没有钉死这两个只带材料的构造器怎么填
-    /// `proof`。这里按 [`TargetId`] 的强度划分：镜像与带稳定设备 ID 的块设备取材料
-    /// 对应的种类，只有设备号的块设备没有跨现场身份，记 `Unavailable`
+    /// `proof` 按 [`TargetId`] 的材料强度取：镜像与带稳定设备 ID 的块设备取材料对应的
+    /// 种类，只有设备号的块设备没有跨现场身份，记 [`SceneProof::Unavailable`]
     pub(crate) fn from_target(id: TargetId) -> Self {
         let (proof, file_id) = match id.material() {
             IdentityMaterial::Image { file_id, .. } => (SceneProof::FileId, Some(*file_id)),
@@ -157,13 +155,16 @@ impl SceneIdentity {
         None
     }
 
-    /// 同一个目标：恒等字段全部相符。清理与回放都以此为准
+    /// 同一个目标：恒等字段全部相符（含 loop 映射）。**只用于认领**：判断这条记录
+    /// 是不是本次目标的（`Evidence::classify` 的 `Recognized`、续跑的现场匹配）。
+    /// 释放不得用它——loop 映射已经改了也仍是同一载体上的旧记录
     pub(crate) fn matches(&self, other: &Self) -> bool {
         self.mismatch_reason(other).is_none()
     }
 
-    /// 同一个载体：只比身份材料与载体 `file_id`。容量变化或 loop 映射变化说明记录
-    /// 不可回放，但仍属于这个目标——`abandon` 据此决定这份记录能不能释放
+    /// 同一个载体：只比身份材料与载体 `file_id`。**只用于释放**：`abandon` 据此决定
+    /// 这份记录能不能释放；容量变化或 loop 映射变化说明记录不可回放，但仍属于这个目标。
+    /// 认领不得用它——少了 loop 映射就会把已指向别处的映射当成本次目标
     pub(crate) fn same_carrier(&self, other: &Self) -> bool {
         self.id.material() == other.id.material()
             && (match (self.file_id, other.file_id) {

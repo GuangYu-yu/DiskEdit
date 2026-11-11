@@ -70,29 +70,32 @@ pub(crate) fn resize_online(
             },
         );
         if !o.is_complete() {
-            o.report();
-            return Some(o);
+            return Some(o.report_final());
         }
         // 锁贯穿 pvresize/lvextend：它们仍属同一次操作（见 resize_done 的持有说明）。
         // 表已提交，收尾失败必须落 Partial（不承诺"未写盘"）
         return Some(match resize_done(a, None, part, true, true, None, old_bytes, pv_lock, facts) {
             Ok(done) => done,
-            Err(cause) => {
-                let out = crate::outcome::RunOutcome::partial_with(cause, Vec::new());
-                out.report();
-                out
-            }
+            Err(cause) => crate::outcome::RunOutcome::partial_with(cause, Vec::new()).report_final(),
         });
     }
 
     // 非 PV：仅挂载中的分区能在线扩（在线不能搬移，只吃连续空闲）
     // 探测失败按 NoMutation 拒绝而非退离线路径：读不出来 ≠ 没挂载
     let mnt = match crate::online::find_mountpoint(&dn, part) {
-        Ok(m) => m,
+        Ok(Some(crate::online::MountView::Here(mnt))) => mnt,
+        // 占用判定取全部命名空间：只在别的命名空间里挂着同样是占用，这里既卸不掉也不能改。
+        // 那个挂载点不在本命名空间的路径里，必须点明它挂在哪里，否则用户按提示去找会找不到
+        Ok(Some(crate::online::MountView::Elsewhere { mount_point, pid })) => bail_fail(RunOutcome::refused(format!(
+            "partition {part} of {dn} is mounted at {mount_point} in another mount namespace{} — it cannot be resized from this one; unmount it there or run inside that namespace",
+            match pid {
+                Some(pid) => format!(" (pid {pid})"),
+                None => " (the namespace id could not be determined)".to_string(),
+            }
+        ))),
+        Ok(None) => return None,
         Err(e) => bail_fail(RunOutcome::no_mutation(format!("cannot probe mount state: {e}"))),
     };
-    // 未挂载 = 在线路径不适用，None 经 `?` 返回调用方走离线路径
-    let mnt = mnt?;
     // 两个旗标只挡在线路径：未挂载的盘走离线分支，那里 --allow-move / --chunk 有效
     refuse_online_move_flags(a);
     // 在线 grow 的表写与 FS 扩是一体的，且在线 shrink（btrfs）方向相反——先缩 FS 再写表。
@@ -106,10 +109,10 @@ pub(crate) fn resize_online(
     let o = crate::online::resize_online_planned(&mnt, decide);
     if o.is_complete() {
         println!("resized online (verify with: diskedit info {})", a.target);
+        Some(o)
     } else {
-        o.report();
+        Some(o.report_final())
     }
-    Some(o)
 }
 
 /// 在线路径不搬移也不收 chunk：两个旗标的承诺在在线入口无从兑现。调用点只在实际

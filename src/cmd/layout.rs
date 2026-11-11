@@ -44,7 +44,11 @@ pub(crate) const DETAILS_MOVE: &str = r#"  Move a partition, data follows (chunk
     <LBA>     new start LBA (aligned per --align; default none = the LBA as given)
     end       tail-pack to the last possible position
 
-  --no-fs skips the filesystem step for the moved partition.
+  --no-fs has no effect: a move keeps the partition's size, so there is no
+  filesystem step to skip.
+
+  A swap partition is relocated by committing its entry and rebuilding the area
+  at the new position (mkswap); its contents are not copied.
 
   CONFIRMATION: required. The destination range is overwritten as-is and an
   interrupted relocation cannot be rolled back with `undo`; pass --yes."#;
@@ -116,9 +120,8 @@ pub(crate) fn cmd_new(a: &NewRequest) -> crate::outcome::RunOutcome {
         None => crate::assembly::take_table_snapshot(&src, &crate::assembly::TableContent::NewMbr),
     }
     .unwrap_or_else(|f| bail_fail(f));
-    // 覆盖门：三段全零 且 盘上没有可识别的表，才不用 --overwrite-data。
-    // 表读不出来时不拿"看起来是空的"兜底——无法证明这些字节可以覆盖，就不写
-    let all_zero = snapshot.head_tail_all_zero(ss, table::container_last_lba(&src, ss));
+    // 覆盖门：三态探测为「空」才不用 --overwrite-data。可识别表与非空但读不出表
+    // 都不算空——前者是重建已有表，后者无法证明这些字节只属于表结构区
     let recognized = match table::recognized_table(&src) {
         Ok(v) => v,
         Err(e) => bail_fail(RunOutcome::refused(format!(
@@ -126,10 +129,15 @@ pub(crate) fn cmd_new(a: &NewRequest) -> crate::outcome::RunOutcome {
              blank, so the rebuild is refused"
         ))),
     };
-    if (!all_zero || recognized) && !a.overwrite_data && !resume_confirmed {
+    let probe = table::TableProbe::classify(
+        recognized,
+        snapshot.head_tail_all_zero(ss, table::container_last_lba(&src, ss)),
+    );
+    if probe != table::TableProbe::Empty && !a.overwrite_data && !resume_confirmed {
         bail_fail(RunOutcome::refused(format!(
-            "the table sectors already hold data (all_zero={all_zero}, recognized_table={recognized}); \
+            "the table sectors already hold data (probe={}); \
              regions {} would be overwritten — pass --overwrite-data to accept it",
+            probe.as_str(),
             region_list(&snapshot.regions)
         )));
     }
@@ -192,11 +200,9 @@ pub(crate) fn cmd_new(a: &NewRequest) -> crate::outcome::RunOutcome {
         ),
         // 执行前扫描出的拒绝发生在首次写盘之前，原样报 3
         Err(f @ RunOutcome::Refused(_)) => bail_fail(f),
-        Err(f) => match record_never_persisted(&src) {
-            Some(why) => bail_fail(RunOutcome::refused(format!("new wrote nothing: {why}"))),
-            // 写盘已经开始：不能再声称"未写盘"，故落到 Partial（报 5 并附"盘可能已改变"）
-            None => bail_fail(f.context("new failed")),
-        },
+        // 3 / 4 的分工由执行器按写事实（`target_may_have_been_written`）与 FsError 映射
+        // 给出；命令层不再拿"记录落没落盘"二次改判
+        Err(f) => bail_fail(f.context("new failed")),
     }
 }
 
@@ -342,7 +348,7 @@ pub(crate) fn cmd_add(a: &AddRequest) -> crate::outcome::RunOutcome {
             };
             let unique_guid = table::derive_guid(&src.path);
             // 几何准备含修复：盘上的表需要修复时这里会写盘，之后失败不再能声称"未写盘"，
-            // 是否落盘由记录判定
+            // 是否写过由进程写事实判定（写原语入口置位）
             let (geometry, num) = match crate::gpt_policy::add_entry_geometry(
                 &mut src,
                 a.part_number,
@@ -353,15 +359,15 @@ pub(crate) fn cmd_add(a: &AddRequest) -> crate::outcome::RunOutcome {
                 unique_guid,
             ) {
                 Ok(v) => v,
-                Err(f) => bail_fail(add_write_failure(&src, f)),
+                Err(f) => bail_fail(f),
             };
             let plan = match crate::assembly::assemble_gpt_add(&src, &geometry) {
                 Ok(p) => p,
-                Err(f) => bail_fail(add_write_failure(&src, f)),
+                Err(f) => bail_fail(f),
             };
             match crate::execution::execute_plan_complete(&mut src, &plan, None, &mut crate::execution::NoProgress) {
                 Ok(()) => table_record_done(&mut src, &format!("added partition #{num} (verify with: diskedit info {})", a.target)),
-                Err(f) => bail_fail(add_write_failure(&src, f)),
+                Err(f) => bail_fail(f),
             }
         }
         Ok(table::TableLabel::Mbr) => match table::parse_mbr(&src) {
@@ -399,20 +405,12 @@ pub(crate) fn cmd_add(a: &AddRequest) -> crate::outcome::RunOutcome {
                 };
                 match add_mbr_entry(&mut src, a.part_number, start, end, os_type) {
                     Ok(num) => table_record_done(&mut src, &format!("added partition #{num} (verify with: diskedit info {})", a.target)),
-                    Err(f) => bail_fail(add_write_failure(&src, f)),
+                    Err(f) => bail_fail(f),
                 }
             }
             Ok(None) => bail_fail(RunOutcome::no_mutation("the MBR disappeared between reads — retry".to_string())),
         },
         Ok(table::TableLabel::None) => bail_fail(RunOutcome::refused("cannot add on none label — run `new` first".to_string())),
-    }
-}
-
-/// `add` 写前失败的归类：记录从未落盘即本次一个字节都没写，否则原样上报
-fn add_write_failure(src: &crate::dev::WriteSource, f: RunOutcome) -> RunOutcome {
-    match record_never_persisted(src) {
-        Some(why) => RunOutcome::refused(format!("add wrote nothing: {why}")),
-        None => f,
     }
 }
 
@@ -543,10 +541,7 @@ pub(crate) fn cmd_delete(a: &DeleteRequest) -> crate::outcome::RunOutcome {
         };
         match r {
             Ok(()) => table_record_done(&mut src, &format!("deleted partition #{part} (verify with: diskedit info {})", a.target)),
-            Err(f) => bail_fail(match record_never_persisted(&src) {
-                Some(why) => RunOutcome::refused(format!("delete wrote nothing: {why}")),
-                None => f,
-            }),
+            Err(f) => bail_fail(f),
         }
     }
 }
@@ -661,10 +656,45 @@ pub(crate) fn resize_part_via_plan_with(
     defer_lvm: bool,
     log: &mut dyn FnMut(&str),
 ) -> RunOutcome {
+    // 出口归责：执行器只看计划内的写入，repair 与阶段 0 的 FS 缩容不在它的视野里。
+    // 函数体内各早退原样返回，由这一处统一过判定点
+    resize_part_via_plan_unreconciled(
+        src,
+        g,
+        repair,
+        (part, new_start, new_end, chunk_len),
+        (no_fs, defer_lvm),
+        lvm,
+        log,
+    )
+    .reconcile_with_writes()
+}
+
+/// 两个 LBA 的有符号差：Δ<0 表示目标在源左侧
+fn signed_delta(dst: u64, src: u64) -> Result<i64, RunOutcome> {
+    let magnitude = i64::try_from(dst.abs_diff(src)).map_err(|_| {
+        RunOutcome::refused("the relocation shift exceeds a signed LBA offset — refusing")
+    })?;
+    Ok(if dst >= src { magnitude } else { -magnitude })
+}
+
+/// [`resize_part_via_plan_with`] 的主体：各出口只陈述本步结论，归责留给外层。
+/// `range` = (分区号, 起点, 终点, 块大小)；`switches` = (`no_fs`, `defer_lvm`)
+fn resize_part_via_plan_unreconciled(
+    src: &mut WriteSource,
+    g: &crate::geometry::ValidatedGeometry,
+    repair: crate::gpt_policy::RepairAction,
+    range: (u32, u64, u64, u64),
+    switches: (bool, bool),
+    lvm: Option<movepart::LvmSelection>,
+    log: &mut dyn FnMut(&str),
+) -> RunOutcome {
+    let (part, new_start, new_end, chunk_len) = range;
+    let (no_fs, defer_lvm) = switches;
     // 事务入口的注入点（与 apply 同义）：此刻 abort 必须与"从未运行过"不可区分
     movepart::fault_before_any_write();
     // 记录型现场：先把"这是哪一次请求"写进记录。新记录只写一次，已有记录必须与
-    // 本次请求一致——`--chunk` 决定游标到字节的映射，换了值就不能接着用旧游标
+    // 本次请求一致；`--chunk` 是执行参数、不在摘要里，由搬移校验单独核对
     let disk_size = src.size;
     if let Some(journal) = src.record_journal_mut() {
         let digest = crate::recovery::PlanDigest::of_request(
@@ -674,7 +704,6 @@ pub(crate) fn resize_part_via_plan_with(
             new_end,
             g.sector_size(),
             disk_size,
-            chunk_len,
         );
         if let Err(why) = journal.bind_plan(digest) {
             return RunOutcome::refused(format!("{why} — refusing to resume it"));
@@ -705,12 +734,16 @@ pub(crate) fn resize_part_via_plan_with(
         // 起点变更的搬移与 move 同构：条目表绑进记录——执行器的游标恢复、续跑一致性
         // 校验与「已提交条目整组跳过」共用同一套机制。已提交态与纯扩缩不绑
         if let Some((rpart, src_first, dst_first, sectors)) = p.relocate {
+            let delta = match signed_delta(dst_first, src_first) {
+                Ok(d) => d,
+                Err(f) => return f,
+            };
             let mut reloc = crate::recovery::Relocation {
                 entries: vec![crate::recovery::RelocEntry {
                     partition: rpart,
                     src_first,
                     len: sectors,
-                    delta: dst_first.abs_diff(src_first),
+                    delta,
                     is_swap: false,
                 }],
                 entry_index: 0,
@@ -731,7 +764,7 @@ pub(crate) fn resize_part_via_plan_with(
                     || recorded.ss != reloc.ss
                 {
                     return RunOutcome::refused(
-                        "the recovery record's relocation plan does not match this request — nothing was written"
+                        "the recovery record's relocation plan does not match this request"
                             .to_string(),
                     );
                 }
@@ -769,9 +802,11 @@ pub(crate) fn resize_part_via_plan_with(
     match execute_resize_part(src, p, log, &mut post) {
         Ok(()) => RunOutcome::applied_with(post),
         // 越过首写之后的执行器失败已折成 Partial，已知待办随它一并报出
-        Err(RunOutcome::Partial { cause, pending }) => {
-            RunOutcome::partial_with(cause, pending.into_iter().chain(post).collect())
-        }
+        Err(RunOutcome::Partial { cause, pending, origin }) => RunOutcome::Partial {
+            cause,
+            pending: pending.into_iter().chain(post).collect(),
+            origin,
+        },
         // 待办只由写盘之后的步骤产生：非空即已越过首写，"确定未写盘"的原变体不再成立
         Err(other) if !post.is_empty() => RunOutcome::partial_with(other.to_string(), post),
         Err(other) => other,
@@ -846,13 +881,11 @@ pub(crate) fn prepare_resize_part(
     let moved = old_start.abs_diff(new_start);
     let old_len = old_end - old_start + 1;
     let copy_len = old_len.min(new_end - new_start + 1);
-    let (entry_chunk, _) =
-        crate::planner::chunk::move_chunk_layout(copy_len, ss, moved, old_len, chunk_len)
-            .ok_or_else(|| RunOutcome::no_mutation("resize LBA arithmetic overflows byte offset"))?;
-    let total_chunks = copy_len
-        .checked_mul(ss)
-        .ok_or_else(|| RunOutcome::no_mutation("resize LBA arithmetic overflows byte offset"))?
-        .div_ceil(entry_chunk);
+    // 自重叠判据取**本次实际读取的扇区数**（= copy_len）：缩容时旧区尾部不读，
+    // 位移落在 copy_len..old_len 之间时目的区与读区并不相交，按旧长判会把块白白缩小
+    let total_chunks = crate::planner::chunk::move_chunk_layout(copy_len, ss, moved, copy_len, chunk_len)
+        .map(|(_, count)| count)
+        .ok_or_else(|| RunOutcome::no_mutation("resize LBA arithmetic overflows byte offset"))?;
     // 恢复判定取三个维度：本次请求 / 记录里的持久状态 / 盘上几何
     let (fs_shrunk, resume_chunks, committed_old, recorded_lvm) =
         if let Some(journal) = src.record_journal.as_ref()
@@ -1036,15 +1069,8 @@ fn save_resize_part_progress(
     }
 }
 
-/// 越过首写之后的失败：执行器给出的"确定未写盘"分类不再成立，一律折成 `Partial`，
-/// 原文与它自己的待办保持不变。
-fn past_boundary(e: RunOutcome) -> RunOutcome {
-    e.past_boundary()
-}
-
 /// 执行（写盘）：缩容 FS → 表步骤（装配 + 执行器）→ 扩容 FS（执行器）。
-/// 越过本次调用首写之后的失败一律折成 `Partial`；尚未写过目标字节时，
-/// 执行器的失败按原变体上抛。
+/// 失败按原变体上抛：越过首写之后的改判由退出点的归责按写事实完成。
 fn execute_resize_part(
     src: &mut WriteSource,
     p: PlannedResizePart,
@@ -1085,7 +1111,10 @@ fn execute_resize_part(
                         "the filesystem size still cannot be read back, so the earlier shrink cannot be confirmed".to_string(),
                         "inspect the filesystem size by hand, then re-run the same command".to_string(),
                     ));
-                    return Ok(());
+                    return Err(RunOutcome::partial_unverified(
+                        "the earlier filesystem shrink cannot be confirmed",
+                        std::mem::take(post),
+                    ));
                 }
             }
         }
@@ -1094,15 +1123,19 @@ fn execute_resize_part(
                 .map_err(|e| RunOutcome::partial(e.to_string()))?;
             // 卸挂结论要在消费结果之前取出：`pending` 拿走 leak 之后无从再判
             let release_failed = o.release_failed();
+            let unverified = match &o {
+                crate::fsops::ShrinkRunOutcome::Unverified { why, .. } => Some(why.clone()),
+                crate::fsops::ShrinkRunOutcome::Verified { .. } => None,
+            };
             let line = o.ok_line(new_bytes);
             for p in o.pending(part) {
                 post.push(p);
             }
-            if line.is_none() {
+            if let Some(why) = unverified {
                 fs_shrunk = movepart::FsShrink::Unverified;
                 save_resize_part_progress(src, chunks_done, fs_shrunk, 1)
                     .map_err(RunOutcome::from)?;
-                return Ok(());
+                return Err(RunOutcome::partial_unverified(why, std::mem::take(post)));
             }
             fs_shrunk = movepart::FsShrink::Verified;
             save_resize_part_progress(src, chunks_done, fs_shrunk, 1)
@@ -1156,14 +1189,9 @@ fn execute_resize_part(
             log,
         };
         // 执行器按计划内的写盘进度分类；本进程此前写过的目标字节（修复表头、缩容 FS）
-        // 不在它的视野里，那些写入一旦发生，"确定未写盘"的结论就不再成立。
+        // 不在它的视野里，改判由退出点的归责按写事实完成。
         // chunk 与请求同源：Relocate 步骤的分块、durable 游标节奏都按它算
-        let wrote_before = crate::outcome::target_may_have_been_written();
-        match crate::execution::execute_plan_complete(src, &plan, Some(p.chunk_len), &mut sink) {
-            Ok(()) => {}
-            Err(e) if wrote_before => return Err(past_boundary(e)),
-            Err(e) => return Err(e),
-        }
+        crate::execution::execute_plan_complete(src, &plan, Some(p.chunk_len), &mut sink)?;
     }
 
     // 起始 LBA 变了才需要修 NTFS HiddenSectors（扩缩不动 start 时跳过；已提交态续跑时
@@ -1171,7 +1199,7 @@ fn execute_resize_part(
     if committed_old.is_some()
         && fstype == crate::fsid::ContentKind::Filesystem(crate::fsid::FsKind::Ntfs)
     {
-        movepart::fix_ntfs_hidden_sectors(src, new_start, ss, log).map_err(RunOutcome::from)?;
+        movepart::fix_ntfs_hidden_sectors(src, new_start, ss, part, log).map_err(RunOutcome::from)?;
     }
 
     // ---- 阶段 3：扩容 FS ----
@@ -1185,6 +1213,9 @@ fn execute_resize_part(
             let new_len = new_end.checked_sub(new_start).and_then(|v| v.checked_add(1))
                 .ok_or_else(overflow)?;
             // 扩容收尾只有一份实现：与 `resize --allow-move` 走同一条判定与同一条执行链
+            let declared = Some(movepart::is_swap_guid(
+                &crate::gpt_policy::live_entry(&p.g, part)?.partition_type_guid,
+            ));
             movepart::finalize_growth(
                 src,
                 part,
@@ -1193,6 +1224,7 @@ fn execute_resize_part(
                     new: (new_start, new_len),
                 },
                 ss,
+                declared,
                 log,
                 post,
             )?;
@@ -1370,6 +1402,47 @@ pub(crate) fn cmd_move(a: &MoveRequest) -> crate::outcome::RunOutcome {
     // 落位与长度取锁下几何：后面装配与记录绑定都用这一份，不按请求推算
     let (old_start, old_end) = (e.starting_lba, e.ending_lba);
     let ss = g.sector_size();
+    // 请求摘要只推导一次：早退收尾与正常续跑绑定的是同一份值，两处不各算一次
+    let digest = crate::recovery::PlanDigest::of_request(
+        crate::recovery::OpKind::Move,
+        part,
+        start,
+        end,
+        ss,
+        src.size,
+    );
+    // 盘上条目是否已在记录的目的位：move 的表步只改这一条，读回它的起点与末端即表已写下的
+    // 证据。记录字段只说目的位是 `src_first + delta`，说不出现在在不在，故必须与锁下几何比对；
+    // 长度、其他条目与目的区是否仍空闲由本命令后续的整份条目比对、
+    // `verify_relocation_resume` 与 `ensure_entries_unchanged_fail` 分别回答
+    let at_recorded_destination = start == old_start
+        && resumed
+        && src
+            .record_journal()
+            .and_then(|j| j.relocation())
+            .is_some_and(|r| {
+                r.entries.iter().any(|e| {
+                    e.partition == part
+                        && e.delta != 0
+                        && e.src_first.checked_add_signed(e.delta) == Some(old_start)
+                        && e.src_first
+                            .checked_add_signed(e.delta)
+                            .and_then(|d| d.checked_add(e.len))
+                            .and_then(|v| v.checked_sub(1))
+                            == Some(old_end)
+                })
+            });
+    // 换区条目的重建在表提交之后：条目游标仍指着这条换区条目时，重建还没做。盘上条目
+    // 已在目的位而重建未完的现场，剩下的重建要按同一条装配与执行路径重放
+    let swap_rebuild_pending = at_recorded_destination
+        && src
+            .record_journal()
+            .and_then(|j| j.relocation())
+            .is_some_and(|r| {
+                r.entries
+                    .get(r.entry_index as usize)
+                    .is_some_and(|e| e.partition == part && e.is_swap)
+            });
     // 起点未变：不产生任何步骤，也不写表
     if start == old_start {
         if !resumed {
@@ -1379,27 +1452,28 @@ pub(crate) fn cmd_move(a: &MoveRequest) -> crate::outcome::RunOutcome {
             );
             return RunOutcome::applied_with(Vec::new());
         }
-        // 记录在场。本分支的收尾只对「表已提交、数据已搬完」的记录合法：表是 move
-        // 计划的最后一步，盘上条目离开搬移前区间即表已提交；其余状态的记录在这里
-        // 收尾只会删掉前向恢复的唯一凭据，把进行中的作业伪装成已完成
+        // 记录在场。收尾只对"表已提交、数据已搬完"的记录合法：表是 move 计划的最后
+        // 一步，阶段由记录字段派生；记录判不出阶段时，以盘上表项这一独立事实补足。
+        // 补足失败只指路：不 undo、不清理、不续跑。
         let Some(journal) = src.record_journal() else {
             bail_fail(RunOutcome::refused(
                 "the target was opened as resumable but its recovery record is gone; refusing".to_string(),
             ));
         };
-        match (journal.op(), journal.old_range()) {
-            // 表已提交：只剩搬移后的回填与记录收尾。请求身份先核——早退不绕过
-            // bind_plan 的管辖，`--chunk` 不同的重跑不能收尾别人的作业
-            (crate::recovery::OpKind::Move, Some((recorded_start, _))) if recorded_start != start => {
-                let digest = crate::recovery::PlanDigest::of_request(
-                    crate::recovery::OpKind::Move,
-                    part,
-                    start,
-                    end,
-                    ss,
-                    src.size,
-                    chunk,
-                );
+        if journal.op() != crate::recovery::OpKind::Move {
+            bail_fail(RunOutcome::refused(format!(
+                "this target carries an unfinished `{}` record — finish or release it first \
+                 (re-run the original command, or `diskedit abandon`)",
+                journal.op().command_name()
+            )));
+        }
+        match journal.record().stage() {
+            // 表已提交：盘上条目已到记录的目的位（`at_recorded_destination`），只剩搬移后的
+            // 回填与记录收尾。请求身份先核——早退不绕过 bind_plan 的管辖，换了目标的请求
+            // 不能收尾别人的作业
+            Ok(crate::recovery::Stage::Undecidable | crate::recovery::Stage::Relocated)
+                if at_recorded_destination =>
+            {
                 src.record_journal_mut()
                     .expect("journal checked above")
                     .bind_plan(digest)
@@ -1413,7 +1487,7 @@ pub(crate) fn cmd_move(a: &MoveRequest) -> crate::outcome::RunOutcome {
                 let kind = crate::fsid::identify(&src, base, bytes)
                     .unwrap_or_else(|e| bail_fail(RunOutcome::no_mutation_io(e)));
                 if kind == crate::fsid::ContentKind::Filesystem(crate::fsid::FsKind::Ntfs) {
-                    movepart::fix_ntfs_hidden_sectors(&mut src, start, ss, &mut |m| println!("{m}"))
+                    movepart::fix_ntfs_hidden_sectors(&mut src, start, ss, part, &mut |m| println!("{m}"))
                         .unwrap_or_else(|e| bail_fail(RunOutcome::partial_with(e.to_string(), Vec::new())));
                 }
                 let o = table_record_done_if_complete(&mut src, RunOutcome::applied_with(Vec::new()));
@@ -1425,37 +1499,46 @@ pub(crate) fn cmd_move(a: &MoveRequest) -> crate::outcome::RunOutcome {
                 }
                 return o;
             }
-            // 盘上条目仍在记录的搬移前区间 ⇒ 表未提交、数据搬移仍在进行中。
-            // 本请求的起点又与原请求必然不同（原请求的起点不是原位），续跑只能
-            // 用原命令——这里既不能收尾，也不能替用户续跑
-            (crate::recovery::OpKind::Move, Some(_)) => {
+            // 数据搬移或收尾没走完。盘上条目仍在搬移前区间时，续跑只能用原命令（本请求的
+            // 起点与原请求的起点不同），这里既不能收尾也不能替用户续跑。换区条目是例外：
+            // 重建在表提交之后，中断时条目已在目的位而游标还指着它（见 `swap_rebuild_pending`），
+            // 剩下的重建继续走下面同一条装配与执行路径
+            Ok(crate::recovery::Stage::Planned | crate::recovery::Stage::Relocating { .. }) => {
+                if !swap_rebuild_pending {
+                    bail_fail(RunOutcome::refused(format!(
+                        "the recorded move for partition {part} is unfinished — resume it by re-running \
+                         the original `diskedit move` with its original --start"
+                    )));
+                }
+            }
+            // 字段不足以判定阶段：不自动 undo、不清理、不续跑，只指路。阶段本身不定码值：
+            // 本次没写落 3、本次写过落 5，由 `bail_fail` 后的归责点按本次的写事实改判
+            Ok(
+                crate::recovery::Stage::Undecidable
+                | crate::recovery::Stage::Relocated
+                | crate::recovery::Stage::TableWritten
+                | crate::recovery::Stage::Finishing,
+            ) => {
                 bail_fail(RunOutcome::refused(format!(
-                    "partition {part} still sits in the recorded pre-move range — the recorded move is \
-                     unfinished; resume it by re-running the original `diskedit move` with its original --start"
+                    "the recovery record for partition {part} cannot be decided from its fields — \
+                     inspect it with `diskedit inspect {}`; release it with `diskedit abandon` only if it is stale",
+                    a.target
                 )));
             }
-            // 别的作业，或还没绑定搬移前区间的 move 记录（准备期中断，未写盘）：
-            // 都不由本命令收尾
-            (op, _) => {
+            // `Complete`：已定型、只差释放——不代做动作，指 `undo` / `abandon`
+            Ok(crate::recovery::Stage::Complete) => {
                 bail_fail(RunOutcome::refused(format!(
-                    "this target carries an unfinished `{}` record — finish or release it first \
-                     (re-run the original command, or `diskedit abandon`)",
-                    op.command_name()
+                    "the recovery record for partition {part} is complete and only waits to be released — \
+                     roll the recorded bytes back with `diskedit undo {}`, or release the record with \
+                     `diskedit abandon {}`",
+                    a.target, a.target
                 )));
             }
+            Err(e) => bail_fail(e),
         }
     }
     // 请求摘要在任何写盘之前绑定：已有记录属于别的请求时在此拒绝。绑定只改内存，
     // 真正的落盘随下面的原区间与搬移计划一起发生
-    let digest = crate::recovery::PlanDigest::of_request(
-        crate::recovery::OpKind::Move,
-        part,
-        start,
-        end,
-        ss,
-        src.size,
-        chunk,
-    );
     if let Some(journal) = src.record_journal_mut() {
         journal.bind_plan(digest).unwrap_or_else(|msg| bail_fail(RunOutcome::refused(msg)));
     }
@@ -1467,8 +1550,9 @@ pub(crate) fn cmd_move(a: &MoveRequest) -> crate::outcome::RunOutcome {
     crate::fsops::ensure_idle_before_write(&src, part, start_bytes, crate::fsops::WriteKind::Overwrite)
         .unwrap_or_else(|f| bail_fail(f));
     // 续跑：盘上条目必须仍在记录里的搬移前区间。请求区间与盘上相同时已在上面收口，
-    // 走到这里两者必然不同，故只比对搬移前区间
-    if resumed && let Some(journal) = src.record_journal() {
+    // 走到这里两者必然不同，故只比对搬移前区间。表已提交、重建未做的换区现场条目
+    // 已在目的位，原区间只在记录里，不参与比对
+    if resumed && !swap_rebuild_pending && let Some(journal) = src.record_journal() {
         match journal.old_range() {
             Some((recorded_start, recorded_end)) if (old_start, old_end) != (recorded_start, recorded_end) => {
                 bail_fail(RunOutcome::refused(format!(
@@ -1491,6 +1575,15 @@ pub(crate) fn cmd_move(a: &MoveRequest) -> crate::outcome::RunOutcome {
     }
     // 决策与写盘之间的外部改动：条目必须还是锁下读到的那一份
     g.ensure_entries_unchanged_fail(&src).unwrap_or_else(|f| bail_fail(f));
+    // 换区条目在表提交之后由 mkswap 重建（镜像目标还要 losetup）：平台与工具必须在
+    // 任何目标写入之前确认，否则会先把修复与表改完、再以 pending 收场。判据与
+    // `resize --allow-move` 共用 movepart 的一处
+    let (_, _, swap) =
+        movepart::move_entry_swap(&src, &g, part, src.record_journal().and_then(|j| j.relocation()))
+            .unwrap_or_else(|f| bail_fail(f));
+    if swap.is_swap {
+        movepart::ensure_swap_rebuild_tools(src.is_block).unwrap_or_else(|f| bail_fail(f));
+    }
     if repair != crate::gpt_policy::RepairAction::None {
         crate::gpt_policy::apply_repair(&mut src, &repair).unwrap_or_else(|f| bail_fail(f));
         // 修复窗口内的外部改动再看一次：基线仍是修复前的读取，修复自身的写入收敛到目标值
@@ -1503,16 +1596,26 @@ pub(crate) fn cmd_move(a: &MoveRequest) -> crate::outcome::RunOutcome {
             )),
         };
     }
-    let plan = crate::assembly::assemble_relocation_plan(&src, &mut g, &[(part, start)])
-        .unwrap_or_else(|f| bail_fail(f));
+    let plan = crate::assembly::assemble_relocation_plan(
+        &src,
+        &mut g,
+        &[(part, start)],
+        src.record_journal().and_then(|j| j.relocation()),
+        &mut |m| eprintln!("{m}"),
+    )
+    .unwrap_or_else(|f| bail_fail(f));
     let mut entries = Vec::new();
     for step in plan.plan().steps() {
         if let crate::planner::PlanStep::Relocate { part: moved, src_first, dst_first, sectors, is_swap } = step {
+            let delta = match signed_delta(*dst_first, *src_first) {
+                Ok(d) => d,
+                Err(f) => bail_fail(f),
+            };
             entries.push(crate::recovery::RelocEntry {
                 partition: *moved,
                 src_first: *src_first,
                 len: *sectors,
-                delta: dst_first.abs_diff(*src_first),
+                delta,
                 is_swap: *is_swap,
             });
         }
@@ -1539,10 +1642,13 @@ pub(crate) fn cmd_move(a: &MoveRequest) -> crate::outcome::RunOutcome {
                     || recorded.ss != reloc.ss
                 {
                     bail_fail(RunOutcome::refused(
-                        "the recovery record's relocation plan does not match this request — nothing was written"
+                        "the recovery record's relocation plan does not match this request"
                             .to_string(),
                     ));
                 }
+                // 记录与盘面的位置/目的区/块数判据与 `resize --allow-move` 共用一处
+                crate::movepart::verify_relocation_resume(recorded, &g, src.size, chunk)
+                    .unwrap_or_else(|f| bail_fail(f));
                 reloc = recorded.clone();
             }
             // 只写了全局游标的记录：单条目作业里它就是本条目已完成的块数
@@ -1553,12 +1659,12 @@ pub(crate) fn cmd_move(a: &MoveRequest) -> crate::outcome::RunOutcome {
     if let Some(journal) = src.record_journal_mut() {
         journal.bind_old_range((old_start, old_end)).unwrap_or_else(|e| {
             bail_fail(RunOutcome::refused(format!(
-                "cannot record the pre-move range: {e} — nothing was written"
+                "cannot record the pre-move range: {e}"
             )))
         });
         journal.bind_relocation(reloc, None).unwrap_or_else(|e| {
             bail_fail(RunOutcome::refused(format!(
-                "cannot record the relocation plan: {e} — nothing was written"
+                "cannot record the relocation plan: {e}"
             )))
         });
     }
@@ -1619,7 +1725,7 @@ pub(crate) fn cmd_copy(a: &CopyRequest) -> crate::outcome::RunOutcome {
             lba_range_bytes(entry.starting_lba, entry.ending_lba, g.sector_size()),
         )
         .unwrap_or_else(|e| bail_fail(RunOutcome::no_mutation(format!(
-            "cannot read partition #{part} to digest the copy source ({e}) — nothing was written"
+            "cannot read partition #{part} to digest the copy source ({e})"
         )))),
     };
     // 绑定即搬移前的复核：未绑定则写入，已绑定则逐字段比对，不同即拒绝（拒时记录未落盘）

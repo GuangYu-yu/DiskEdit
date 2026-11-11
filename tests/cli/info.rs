@@ -1,7 +1,5 @@
-//! `info` 的 Linux 端到端用例，按现行 CLI 语法与 `src/cmd/info.rs` /
-//! `src/cmd/plan.rs` 的实际文案编写，覆盖六个主题。
-//!
-//! Linux 上的测试已搁置：本文件只有编译期证据，零行为验证。
+//! `info` 的 Linux 端到端用例，断言对齐 `src/cmd/info.rs` / `src/cmd/plan.rs` 的输出文案，
+//! 覆盖六个主题。
 
 use super::*;
 

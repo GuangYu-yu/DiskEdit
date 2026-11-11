@@ -137,7 +137,6 @@ impl TargetId {
     }
 }
 
-/// 探测结果：身份 + 目标容量
 #[derive(Clone, Debug)]
 pub(crate) struct TargetProbe {
     id: TargetId,
@@ -187,7 +186,7 @@ impl DirFd {
         Ok(unsafe { OwnedFd::from_raw_fd(raw) })
     }
 
-    /// 打开一个已存在的目录作为可信锚点（不做符号链接解析）
+    /// 打开一个已存在的目录作为可信锚点：按路径直接 open，锚点本身不逐级校验分量
     pub(crate) fn open_anchor(path: &Path) -> std::io::Result<Self> {
         use std::os::fd::{FromRawFd, OwnedFd};
         use std::os::unix::ffi::OsStrExt;
@@ -269,7 +268,7 @@ pub(crate) enum DirDurability {
     Persisted,
 }
 
-/// 证据路径解析失败：每一类都来自 §4.7 的一次显式拒绝
+/// 证据路径解析失败：每一类都对应一次显式拒绝
 #[derive(Debug)]
 pub(crate) enum PathError {
     Empty,
@@ -286,7 +285,6 @@ pub(crate) enum PathError {
     Inaccessible(String),
 }
 
-/// 证据读写的失败形态
 #[derive(Debug)]
 pub(crate) enum EvidenceIo {
     Io(std::io::Error),
@@ -395,7 +393,6 @@ mod tests {
         assert_eq!(before, after);
     }
 
-    /// 探测结果携带身份与容量
     #[test]
     fn probe_carries_identity_and_capacity() {
         let material = IdentityMaterial::image(None, Some([1; 16])).unwrap();

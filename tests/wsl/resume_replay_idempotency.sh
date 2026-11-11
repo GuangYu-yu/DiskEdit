@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 补全中断窗口：after-repair（初始进度前）/ after-swap-commit（进度推进前），
+# 中断窗口：after-repair（初始进度前）/ after-swap-commit（进度推进前），
 # 以及记录不可读时的硬拒（G）
 source "$(dirname "$0")/lib.sh"
 require_fault_bin

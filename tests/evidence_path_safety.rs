@@ -98,7 +98,7 @@ fn record_bytes() -> Vec<u8> {
     p.extend_from_slice(&0u32.to_le_bytes());
 
     let mut out = vec![0u8; HEADER_LEN];
-    out[0..4].copy_from_slice(b"DSKR");
+    out[0..4].copy_from_slice(b"DSK2");
     out[4..8].copy_from_slice(&(p.len() as u32).to_le_bytes());
     out[8..12].copy_from_slice(&crc32(&p).to_le_bytes());
     let header_crc = crc32(&out[0..12]);
@@ -138,7 +138,7 @@ fn a_symlinked_record_is_not_followed() {
 #[test]
 fn a_hard_linked_record_is_inspected_as_the_same_file() {
     // 硬链接别名与本体是同一个 inode：判定按文件内容与目标身份走，别名照常
-    // 被认领。别名并发使用不合并、不保证，是 docs/internals.md 登记的已知边界
+    // 被认领。别名并发使用不合并、不保证。
     let dir = temp_dir("hardlink");
     let spot = sidecar(&dir);
     let record = spot.join("record");
@@ -153,7 +153,7 @@ fn a_hard_linked_record_is_inspected_as_the_same_file() {
 
 #[test]
 fn a_directory_entry_is_not_ours() {
-    // 第 26、35 条：非普通文件不认领。
+    // 非普通文件不认领。
     let dir = temp_dir("directory");
     let spot = sidecar(&dir);
     fs::create_dir_all(spot.join("record")).expect("create record directory as entry");

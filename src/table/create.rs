@@ -194,19 +194,34 @@ pub(crate) fn gpt_signature_sites(src: &FileSource) -> io::Result<Vec<u64>> {
     Ok(sites)
 }
 
-/// `new --table msdos` 的写盘前冲突判据：`create_mbr` 除 LBA0 的表记录区外，还会把
-/// [`gpt_signature_sites`] 处的 GPT 头签名清掉。这些字节若落在旧表的分区里，清零就是
-/// 改分区数据，需要覆盖授权。签名匹配只说明"这里要清"，不说明"清掉它安全"——因此
-/// 清理位置与旧分区用同一份解析结果做相交判断，而不是以签名作为许可
+/// `new --table msdos` 的写盘前冲突判据：实际清零写集是 LBA1 与末 LBA 的整扇区，
+/// 加上 [`gpt_signature_sites`] 里其余候选位置的 GPT 头签名。这些字节若落在旧表的分区里，
+/// 清零就是改分区数据，需要覆盖授权。
+///
+/// 判定按**实际写集**，不按签名位置：整扇区清零与签名是否匹配无关，
+/// 只看 8 字节签名位会漏掉同扇区里的分区数据
 pub fn mbr_metadata_conflict(src: &FileSource, ss: u64) -> io::Result<Option<String>> {
     let parts = existing_partition_ranges(src, ss)?;
+    let last_off = container_last_lba(src, ss).saturating_mul(ss);
+    let mut cleared: Vec<(u64, u64, String)> = Vec::new();
+    for (off, label) in [(ss, "LBA1"), (last_off, "the last LBA")] {
+        let len = src.size.saturating_sub(off).min(ss);
+        if len > 0 {
+            cleared.push((off, off.saturating_add(len), format!("the whole {label} sector this msdos table zeros")));
+        }
+    }
     for off in gpt_signature_sites(src)? {
-        let end = off.saturating_add(GPT_SIGNATURE.len() as u64);
+        // 整扇区已经覆盖的位置不重复登记
+        if off == ss || off == last_off {
+            continue;
+        }
+        cleared.push((off, off.saturating_add(GPT_SIGNATURE.len() as u64), "the GPT header bytes this msdos table clears".to_string()));
+    }
+    for (off, end, what) in cleared {
         for (name, start, p_end) in &parts {
             if end > *start && off < *p_end {
                 return Ok(Some(format!(
-                    "{name} occupies bytes [{start}..{p_end}), overlapping the GPT header bytes \
-                     this msdos table clears at [{off}..{end})"
+                    "{name} occupies bytes [{start}..{p_end}), overlapping {what} at [{off}..{end})"
                 )));
             }
         }
@@ -255,6 +270,40 @@ pub(crate) fn recognized_table(src: &FileSource) -> io::Result<bool> {
         Ok(Some(_)) => Ok(true),
         Ok(None) => Ok(super::mbr::parse_mbr_raw(src)?.is_some()),
         Err(e) => Err(into_io_error(e)),
+    }
+}
+
+/// 表探测的三态。空盘与"有数据但读不出表"必须分开：前者无需覆盖授权，
+/// 后者不能断言写入只落在表结构区，也不能把它的非零字节当成空盘
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TableProbe {
+    /// 三处表扇区全零，且解析不出表
+    Empty,
+    /// 有非零数据，但解析不出可识别的表
+    Unrecognized,
+    /// 盘上有一份可解析的 GPT 或 msdos 表
+    Recognized,
+}
+
+impl TableProbe {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Empty => "empty",
+            Self::Unrecognized => "unrecognized-non-empty",
+            Self::Recognized => "recognized",
+        }
+    }
+
+    /// 由同一次快照得到的两个判定合成三态：识别结果与三处表扇区是否全零。
+    /// 两者都不成立才是"非空但读不出表"，不把这一态折进空盘
+    pub(crate) fn classify(recognized: bool, blank: bool) -> Self {
+        if recognized {
+            Self::Recognized
+        } else if blank {
+            Self::Empty
+        } else {
+            Self::Unrecognized
+        }
     }
 }
 
@@ -341,8 +390,7 @@ pub(crate) fn empty_entry() -> GPTPartitionEntry {
     }
 }
 
-// 表项编排（add/rename/flag/delete：读 → 判 → 修复 → 提交）已上移策略层
-// （gpt_policy）；本层只保留它们用到的写入原语与常量
+// 表项编排（add/rename/flag/delete：读 → 判 → 修复 → 提交）在策略层（gpt_policy）；本层只保留写入原语与常量
 
 /// GPT flags：attribute 位按 UEFI 2.10 §5（bit0=Required Partition，bit1=No Block IO
 /// Protocol 即 hidden，bit2=Legacy BIOS Bootable）；esp/boot 为类型 GUID 切换
@@ -387,7 +435,7 @@ pub const LVM_TYPE_GUID: [u8; 16] = [
 ];
 
 /// 测试夹具：把规范 EFI 编码的 GUID 转成前三个字段倒序的摆放，用来构造必须被拒绝的样本。
-/// 识别侧只比较规范编码（决策 22），不认这种摆放；写路径的常量也一律是规范编码
+/// 识别侧只比较规范编码，不认这种摆放；写路径的常量也一律是规范编码
 /// （[`ESP_TYPE_GUID`] 等），不经过本函数
 #[cfg(test)]
 pub(crate) fn guid_in_field_order(g: &[u8; 16]) -> [u8; 16] {
@@ -496,9 +544,7 @@ impl TableLabel {
 }
 
 /// 人读文案。**只用于给人看的措辞**，不是机器接口的一部分：脚本读的是 `info` 的结构化
-/// 字段（`label` + `damaged`），两者各自独立、互不推导，改这里的措辞不会影响那个契约。
-/// 由 `Display` 承载：Rust 里"人读格式化"的惯用表达就是它，出现之处一眼
-/// 可辨（`{label}`），不会被人当成可以解析的稳定词汇
+/// 字段（`label` + `damaged`），两者各自独立、互不推导，改这里的措辞不会影响那个契约
 impl std::fmt::Display for TableLabel {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {

@@ -4,10 +4,10 @@
 //! 个目标字节之前落不可回滚屏障。文件系统的 HiddenSectors 修正在表提交之前完成——提交
 //! 之后落点被占用，重跑会被判据拒绝，修正就再没有机会补上。
 
-use crate::dev::WriteSource;
+use crate::dev::{RegionStamp, WriteSource};
 use crate::fsid::{ContentKind, FsKind};
 use crate::movepart::{chunk_io_error, fault_copy_before_commit, fix_ntfs_hidden_sectors, COPY_HINT};
-use crate::outcome::RunOutcome;
+use crate::outcome::{RunOutcome, WriteStep};
 
 /// 一个复制步骤：字段与 [`crate::planner::PlanStep::CopyPartition`] 一一对应。
 pub(crate) struct CopyPartition {
@@ -92,8 +92,7 @@ pub(crate) fn preflight(
     step: &CopyPartition,
     sector_size: u64,
 ) -> Result<(), RunOutcome> {
-    step.check_shape(src.size, sector_size)
-        .map_err(|why| RunOutcome::internal(format!("{why} — nothing was written")))
+    step.check_shape(src.size, sector_size).map_err(RunOutcome::internal)
 }
 
 /// 执行（写盘）：屏障 → 逐块读源、喂摘要、写目标并同步 → 核对源摘要 → NTFS HiddenSectors 修正。
@@ -105,31 +104,19 @@ pub(crate) fn execute(
     step: &CopyPartition,
     sector_size: u64,
     chunk_bytes: u64,
-    wrote_target: bool,
 ) -> Result<(), RunOutcome> {
     use sha2::{Digest, Sha256};
 
-    let (src_off, dst_off, total) = step.byte_range(sector_size).map_err(|why| {
-        if wrote_target {
-            RunOutcome::partial(why)
-        } else {
-            RunOutcome::internal(why)
-        }
-    })?;
+    let (src_off, dst_off, total) = step.byte_range(sector_size).map_err(RunOutcome::internal)?;
     // 记录里的源摘要是这次搬移的核对基准。首跑没有可比对的先前值，核对只能落在实际读到
     // 的字节上；缺摘要说明计划没有经过绑定，不能在写完之后才发现这件事
     let expected = match src.record_journal().and_then(|j| j.source()) {
         Some(source) => source.digest,
-        None if wrote_target => {
-            return Err(RunOutcome::partial(format!(
-                "partition {}: the copy step carries no recorded source digest — the copy may not be \
-                 faithful to the source",
-                step.part
-            )))
-        }
+        // 没有基准就无法核对这次拷贝；本次是否写过目标字节由出口的归责改判
         None => {
             return Err(RunOutcome::internal(format!(
-                "partition {}: the copy step carries no recorded source digest — nothing was written",
+                "partition {}: the copy step carries no recorded source digest — the copy cannot be \
+                 verified against the source",
                 step.part
             )))
         }
@@ -157,12 +144,31 @@ pub(crate) fn execute(
             )
         })?;
         hasher.update(&buf);
-        src.write_data_at(dst_off + pos, &buf).map_err(|e| {
+        // 目的区间没有可比的期望内容：写入只受写后回读约束
+        let dst = dst_off + pos;
+        src.write_guarded(dst, &buf, RegionStamp::unconstrained(dst, len), WriteStep::Relocate { part: step.part })
+            .map_err(|e| {
+                RunOutcome::partial(
+                    chunk_io_error(
+                        e.into_io_error(),
+                        "writing target",
+                        dst / sector_size,
+                        len / sector_size,
+                        (pos / chunk_bytes + 1) as usize,
+                        total_n,
+                        COPY_HINT,
+                    )
+                    .to_string(),
+                )
+            })?;
+        src.sync_data().map_err(|e| RunOutcome::partial(e.to_string()))?;
+        // 单块即一个 durable 批次：同步之后回读，落盘的字节必须原样可读
+        src.read_back(dst, &buf).map_err(|e| {
             RunOutcome::partial(
                 chunk_io_error(
                     e,
-                    "writing target",
-                    (dst_off + pos) / sector_size,
+                    "reading back the written target",
+                    dst / sector_size,
                     len / sector_size,
                     (pos / chunk_bytes + 1) as usize,
                     total_n,
@@ -171,7 +177,6 @@ pub(crate) fn execute(
                 .to_string(),
             )
         })?;
-        src.sync_data().map_err(|e| RunOutcome::partial(e.to_string()))?;
         pos += len;
     }
     let copied: [u8; 32] = hasher.finalize().into();
@@ -189,7 +194,7 @@ pub(crate) fn execute(
     if crate::fsid::identify(src, dst_off, total).map_err(|e| RunOutcome::partial(e.to_string()))?
         == ContentKind::Filesystem(FsKind::Ntfs)
     {
-        fix_ntfs_hidden_sectors(src, step.dst_first, sector_size, &mut |m| println!("{m}"))
+        fix_ntfs_hidden_sectors(src, step.dst_first, sector_size, step.part, &mut |m| println!("{m}"))
             .map_err(|e| RunOutcome::partial(e.to_string()))?;
     }
     Ok(())

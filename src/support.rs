@@ -12,12 +12,13 @@ use crate::{movepart, table};
 #[cfg(test)]
 use crate::dev; // 只有测试夹具 src_from 用得到
 
-/// 规划/执行失败的出口：报告文字与退出码都取自 outcome（唯一措辞与唯一映射），
-/// 调用点不得自行拼装。**本模块不提供"带裸退出码的退出"**——那会绕开 RunOutcome::report
-/// 的措辞与 exit_code 的映射，正是 10/20/30 语义分裂的入口
+/// 规划/执行失败的出口：先按本次写事实归责，报告文字与退出码都取自 outcome
+/// （唯一措辞与唯一映射），调用点不得自行拼装。**本模块不提供"带裸退出码的退出"**——
+/// 那会绕开 RunOutcome::report 的措辞与 exit_code 的映射，正是 10/20/30 语义分裂的入口
 pub(crate) fn bail_fail(f: crate::outcome::RunOutcome) -> ! {
     // 报告文字与退出码都取自 outcome，不借 `finish`——那是"结束一次操作"的入口，
     // 而这里没有任何要收尾的 pending
+    let f = f.reconcile_with_writes();
     f.report();
     std::process::exit(f.exit_code() as i32);
 }
@@ -108,8 +109,7 @@ pub(crate) fn hex_guid(b: &[u8; 16]) -> String {
 }
 
 /// 小写十六进制（无分隔）：记录标识、场景标识与 magic 的文本形态。
-/// 四个模块曾各写一份，其中两处用 `let _ = write!` 丢弃返回，被 crate 自己的
-/// `let_underscore_must_use = "deny"` 拦住——这里用 nibble 直接拼，没有可丢的返回值
+/// 用 nibble 直接拼，没有可丢弃的返回值（crate 的 `let_underscore_must_use = "deny"`）
 pub(crate) fn hex_lower(bytes: &[u8]) -> String {
     let mut out = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
@@ -174,16 +174,6 @@ pub(crate) fn open_table_record(
     TransactionManager::begin_table_record(a, op)
 }
 
-/// 记录从未落盘 ⇒ 本次事务没有向目标写过任何字节。`write_at` 报出的 io 失败可据此
-/// 还原成"未写盘的拒绝"，而不是"盘可能已改变"
-pub(crate) fn record_never_persisted(src: &WriteSource) -> Option<String> {
-    let journal = src.record_journal()?;
-    if journal.is_persisted() {
-        return None;
-    }
-    journal.last_error().map(str::to_string)
-}
-
 /// `resize` 的写入打开：判据是**锁下**那份目标上还有什么现场，不靠打开前的只读预判。
 /// 返回进入现场（[`ResizeEntry`]）。单分区 resize 与搬移作业共用同一份记录
 pub(crate) fn open_target_resize(
@@ -239,20 +229,29 @@ pub(crate) fn kernel_resync(src: &FileSource) -> bool {
 
 /// 布局类命令的统一收尾：内核重读分区表 → 把内核视图状态记入结果 → 报告 → 返回结果。
 /// 顺序不可换：report 必须在 resync 之后，否则打不出"内核视图过期"这一项；
-/// 未写盘的命令不做重读（没东西要同步）
-pub(crate) fn settle_layout(mut o: crate::outcome::RunOutcome, src: &FileSource) -> crate::outcome::RunOutcome {
-    if o.has_layout_write() && !kernel_resync(src) {
+/// 未写盘的命令不做重读（没东西要同步）。`record` 是本次仍持有的恢复记录，没有记录时
+/// 传 `None`——判据是"本次已应用，或记录里留着写入证据"
+pub(crate) fn settle_layout(
+    mut o: crate::outcome::RunOutcome,
+    src: &FileSource,
+    record: Option<&crate::recovery::Record>,
+) -> crate::outcome::RunOutcome {
+    if o.disk_may_have_changed(record) && !kernel_resync(src) {
         o.mark_kernel_stale();
     }
-    o.report();
-    o
+    // 归责必须在打印之前：改判后打出的变体与调用方拿到的退出码同源
+    o.report_final()
 }
 
 /// 表类写命令的成功收尾：内核重读 + 报告，仅当后置条件全部满足时才打印成功字样
 /// （内核视图过期时退 5，此时打"成功"会与退出码矛盾）。返回结果而不压成码：
 /// "已应用但待办非空"与"仅内核视图过期"对撤销窗口的去留结论不同
-pub(crate) fn table_write_done(src: &FileSource, ok_msg: &str) -> crate::outcome::RunOutcome {
-    let o = settle_layout(crate::outcome::RunOutcome::applied_with(Vec::new()), src);
+pub(crate) fn table_write_done(
+    src: &FileSource,
+    record: Option<&crate::recovery::Record>,
+    ok_msg: &str,
+) -> crate::outcome::RunOutcome {
+    let o = settle_layout(crate::outcome::RunOutcome::applied_with(Vec::new()), src, record);
     // 用语义判断而不是比退出码：比数字会把"部分完成"误判成成功，而且数字的含义
     // 只在 outcome 一处解释得清
     if o.is_complete() {
@@ -283,7 +282,8 @@ pub(crate) fn table_record_done_if_complete(
     } else {
         o
     };
-    settle_layout(o, src)
+    let record = src.record_journal().map(|j| j.record());
+    settle_layout(o, src, record)
 }
 
 /// 挂单文件记录的写命令的成功收尾：先提交并删除记录，再报告与内核重读。
@@ -299,7 +299,8 @@ pub(crate) fn table_record_done(src: &mut WriteSource, ok_msg: &str) -> crate::o
             "the recovery record was not cleaned up ({e}) — release it with `diskedit abandon`"
         ));
     }
-    let o = settle_layout(o, src);
+    let record = src.record_journal().map(|j| j.record());
+    let o = settle_layout(o, src, record);
     if o.is_complete() {
         println!("{ok_msg}");
     }
@@ -436,7 +437,7 @@ pub(crate) fn refuse_if_pending_recovery(src: &FileSource, what: &str) -> Result
 ///
 /// 前提由参数类型给出：入参是 **已验证几何**（[`ValidatedGeometry`]）——条目互不重叠且都落在
 /// 修复后的可用区内，因此"起点大于本分区末端"确实等价于"在本分区右侧"。可用区上界取自几何
-/// 本身（修复后将生效的值），不再作为参数传入：同一个事实有两个来源时，两者会分叉
+/// 本身（修复后将生效的值）：同一个事实有两个来源时，两者会分叉
 pub(crate) fn free_right_gpt(g: &ValidatedGeometry, part: u32) -> u64 {
     let Some(e) = g.entry_index(part).and_then(|i| g.entries().get(i)) else {
         return 0;

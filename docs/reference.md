@@ -218,6 +218,10 @@ diskedit resize <TARGET>[:N] <SIZE> [OPTIONS]
     MBR       uses the same recovery record as GPT: an interrupted grow is
               resumed by re-running the same command; `undo` rolls the
               recorded table write back instead
+    record    a relocation record written before requests were bound to
+              their digest carries none: it cannot be tied to this request,
+              so re-running `resize --allow-move` is refused. Inspect it with
+              `inspect`, then release it with `undo`
     online    writes go through the tools (sfdisk / the FS's own resize),
               not this tool's record: nothing to resume, and `undo`
               cannot roll it back
@@ -252,7 +256,11 @@ diskedit move <TARGET>:N --start <LBA|end> [--chunk N] --yes [--align A]
     <LBA>     new start LBA (aligned per --align; default none = the LBA as given)
     end       tail-pack to the last possible position
 
-  --no-fs skips the filesystem step for the moved partition.
+  --no-fs has no effect: a move keeps the partition's size, so there is no
+  filesystem step to skip.
+
+  A swap partition is relocated by committing its entry and rebuilding the area
+  at the new position (mkswap); its contents are not copied.
 
   CONFIRMATION: required. The destination range is overwritten as-is and an
   interrupted relocation cannot be rolled back with `undo`; pass --yes.
@@ -613,7 +621,7 @@ diskedit plan <TARGET>[:N] [--grow] [--sector-size N]
 | `--label` | `S` | filesystem label (omitted = an empty label, not a default) |
 | `--lv` | `NAME` | which LV to grow (implies --grow-lv) |
 | `--name` | `S` | name for the entry this command creates |
-| `--no-fs` | — | skip the filesystem step of the grown or moved partition |
+| `--no-fs` | — | skip the filesystem step of the grown partition (a move has no such step) |
 | `--overwrite-data` | — | accept overwriting bytes an existing partition holds |
 | `--part-number` | `N` | 1-based entry slot; it must be empty |
 | `--random` | — | ask the target to generate a new value |

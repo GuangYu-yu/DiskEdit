@@ -1,4 +1,4 @@
-//! `inspect` 的进程级验收：命令结构、证据落点与 §9.1 的退出码。
+//! `inspect` 的进程级验收：命令结构、证据落点与退出码。
 //!
 //! 记录字节由本文件按 `src/recovery/record.rs` 的落盘布局构造；解码端的固定头与
 //! 载荷 CRC 若漂移，这里会先以 3 暴露出来，而不是静默放过。
@@ -75,7 +75,7 @@ fn payload(file_id: [u8; 16], commit: u8, retention: u8) -> Vec<u8> {
 fn record(file_id: [u8; 16], commit: u8, retention: u8) -> Vec<u8> {
     let payload = payload(file_id, commit, retention);
     let mut out = vec![0u8; HEADER_LEN];
-    out[0..4].copy_from_slice(b"DSKR");
+    out[0..4].copy_from_slice(b"DSK2");
     out[4..8].copy_from_slice(&(payload.len() as u32).to_le_bytes());
     out[8..12].copy_from_slice(&crc32(&payload).to_le_bytes());
     let header_crc = crc32(&out[0..12]);

@@ -91,7 +91,7 @@ pub fn recreate_swap(
 /// 下取整到 unit 的整数倍
 ///
 /// 用 div_euclid 而非 `/`：Rust 的整数除法对负数是向零取整，而这里要的是 floor
-/// （如 pos = part_len−1MiB 相对桶界的回退），两者在负值上不同
+/// （如末尾行相对 256 KiB 对齐界的回退），两者在负值上不同
 pub(crate) fn floor_to_unit(v: i64, unit: i64) -> i64 {
     v.div_euclid(unit) * unit
 }
@@ -106,38 +106,66 @@ pub(crate) fn ceil_to_unit(v: i64, unit: i64) -> i64 {
     }
 }
 
-/// mkfs 前残留签名擦除：分区内固定区间整段写零，一张表覆盖已知备份超级块，
-/// 不依赖旧 FS 识别。区间表布局取自 GParted erase_filesystem_signatures()
-/// （GParted_Core.cc:4215-4231），是该工具的自定策略而非 FS/磁盘规范。
-/// 负偏移以分区**字节长度**（末字节 + 1）为基准、取整在分区相对坐标上进行
-/// （同函数 4251-4256：`floor_size(get_byte_length() + offset, rounding)`；
-/// 末端按扇区上取整，两端裁剪到字节长度内），与本实现 `part_len` 的语义一致。
-/// offset 为负 = 距分区尾，rounding = 对齐粒度；起点下取整到扇区界、末端上取整到
-/// 扇区界，两端裁剪到分区界内，空区间丢弃、与已入表末项相同的相邻区间跳过。
+/// mkfs 前残留签名擦除：分区内固定区间整段写零，不依赖旧 FS 识别。
+///
+/// 位置写死，不按任何文件系统的内部布局推算。bcachefs 两组区间的口径是
+/// libblkid 的探测候选，不是 `bch_sb_layout`：`wipefs`/`blkid` 只读 4 KiB、
+/// 2 MiB、末尾−1 MiB 三处（util-linux v2.42.4 `libblkid/src/superblocks/
+/// bcache.c` 的 `bcachefs_idinfo`，查询日期 2026-11-10），不会顺着布局找副本。
+///
+/// 负偏移以分区**字节长度**（末字节 + 1）为基准；起点先按该行 rounding 下取整、
+/// 再落到扇区界，末端上取整到扇区界，两端裁剪到分区界内，空区间丢弃、
+/// 与已入表末项相同的相邻区间跳过。
 pub(crate) fn erase_ranges(part_len: u64, ss: u64) -> Vec<(u64, u64)> {
     const K: u64 = 1024;
     const M: u64 = 1024 * K;
     const G: u64 = 1024 * M;
-    const P: u64 = 1024 * G;
     // (offset, rounding, length)
     let raw: &[(i64, u64, u64)] = &[
-        (0, 1, 512 * K),           // 头部：ZFS L0/L1 及全部前部超级块
-        (64 * M as i64, 1, 4 * K), // btrfs 镜像超级块
+        // 头部 512 KiB：覆盖 0 与 0x1000。bcachefs 主超级块在扇区 8（4 KiB），
+        // libblkid 候选 kboff=4（util-linux v2.42.4 libblkid/src/superblocks/
+        // bcache.c，查询 2026-11-10）；ZFS L0/L1 标签在 0 与 256 KiB
+        // （ZFS On-Disk Specification, DRAFT 2005, Illustration 2）。
+        (0, 1, 512 * K),
+        // 2 MiB：只按 libblkid 的固定候选覆盖（kboff = 1 << 11）。该候选在
+        // bcachefs 各版本布局里推不出来：默认 sb_size=2048 扇区时 sb[1] 在
+        // 2056 扇区（1.003 MiB），sb_size=2 MiB 时在 4104 扇区（2.004 MiB）
+        // （bcachefs-tools v1.39.7 src/wrappers/super_io.rs、v1.6.4
+        // c_src/libbcachefs.c 的 init_layout，查询 2026-11-10）。
+        (2 * M as i64, 1, 4 * K),
+        // 64 MiB：btrfs 超级块镜像 0x4000000（btrfs On-disk Format，
+        // btrfs.readthedocs.io，查询 2026-11-10）。
+        (64 * M as i64, 1, 4 * K),
+        // 256 GiB：btrfs 超级块镜像 0x4000000000（同上）。
         (256 * G as i64, 1, 4 * K),
-        (P as i64, 1, 4 * K),
-        (-(3087 * 512), 1, 512), // Promise FastTrack RAID
-        (-(M as i64), 128 * K, 4 * K), // bcachefs 备份超级块（4 种桶对齐）
-        (-(M as i64), 256 * K, 4 * K),
-        (-(M as i64), 512 * K, 4 * K),
-        (-(M as i64), M, 4 * K),
-        (-(512 * K as i64), 256 * K, 768 * K), // 尾部：ZFS L2/L3、md、ATARAID、nilfs2
+        // 末尾−3087 扇区：Promise FastTrack RAID 元数据（util-linux v2.42.4
+        // libblkid/src/superblocks/promise_raid.c 的 sectors[] 含 3087，
+        // 查询 2026-11-10）；厂商规范未查到。
+        (-(3087 * 512), 1, 512),
+        // 末尾−1 MiB：libblkid 固定候选，探针读 L−1 MiB+24 的 16 字节 magic
+        // （util-linux v2.42.4 bcache.c 的 kboff = -(1 << 10)、libblkid/src/
+        // probe.c 的负 kboff 换算，查询 2026-11-10）。本行擦不到的副本有两处：
+        // 末尾副本在 floor((L − sb_max_size)/桶)×桶，桶值或对齐不落到 L−1 MiB
+        // 时擦不到；第二副本默认在 2056 扇区（约 1.003 MiB，init_layout 的
+        // sb_pos = round_up(8 + sb_size, block_size >> 9)），本表没有任何一行
+        // 覆盖它（头部行到 512 KiB 为止，2 MiB 行从 2 MiB 起）。
+        // 两处仍可接受：头部行同时清掉 0..4 KiB 的布局扇区
+        // （BCH_SB_LAYOUT_SECTOR=7），内核无从枚举副本；libblkid 只读
+        // 4 KiB、2 MiB、L−1 MiB 三个候选，都不在这两处。
+        (-(M as i64), 1, 4 * K),
+        // 尾部：最后 512 KiB（起点按 256 KiB 下取整，最多向前 768 KiB）。
+        // ZFS L2/L3 在 L−512 KiB / L−256 KiB（ZFS On-Disk Specification,
+        // DRAFT 2005）；md 0.90 超级块落在末尾 128 KiB 内、1.0 在末尾
+        // 8–12 KiB（man 4 md、kernel v6.12 drivers/md/md.c，查询 2026-11-10）；
+        // nilfs2 第二超级块在 L−4 KiB（NILFS_SB2_OFFSET_BYTES）。
+        (-(512 * K as i64), 256 * K, 768 * K),
     ];
     let ss_i = ss as i64;
     let part_end = part_len as i64; // 实际容量远小于 2^63，i64 足以容纳负的中间量
     let mut out: Vec<(u64, u64)> = Vec::new();
     for &(off, rounding, len) in raw {
-        // 起点：负偏移从分区尾回退，先按该行 rounding 下取整（bcachefs 备份超级块在
-        // -1MiB 的桶对齐处，须先取整才能命中），再落到扇区界；越界部分由下方裁剪兜住
+        // 起点：负偏移从分区尾回退，先按该行 rounding 下取整，再落到扇区界；
+        // 越界部分由下方裁剪兜住。末尾−1 MiB 行取 rounding=1，位置不随桶大小移动。
         let start = if off >= 0 {
             floor_to_unit(off, ss_i)
         } else {

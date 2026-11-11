@@ -79,7 +79,6 @@ jobs:
     steps:
       - id: set
         run: |
-          # 根据用户输入动态构建矩阵
           arr=()
           [[ "${{ inputs.build_windows_amd64 }}" == true ]] && arr+=('{"os":"Windows","arch":"AMD64","target":"x86_64-pc-windows-msvc","runner":"windows-latest","bin":"${{ inputs.project_name }}.exe"}')
           [[ "${{ inputs.build_windows_arm64 }}" == true ]] && arr+=('{"os":"Windows","arch":"ARM64","target":"aarch64-pc-windows-msvc","runner":"windows-latest","bin":"${{ inputs.project_name }}.exe"}')
@@ -94,7 +93,6 @@ jobs:
   build:
     name: 构建 ${{ matrix.os }}_${{ matrix.arch }}
     needs: [matrix, test]
-    # 只有当矩阵不为空时才执行构建
     if: ${{ needs.matrix.outputs.include != '[]' }}
     runs-on: ${{ matrix.runner }}
     strategy:

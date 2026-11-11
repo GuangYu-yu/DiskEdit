@@ -4,9 +4,9 @@
 //! 只有顶层 usage 和每条命令的 help，能力矩阵的可见形态是命令是否登记
 //! 与退出码 6 的平台闸门。
 //!
-//! 顶层 usage 按当前构建的文本做逐字快照；**文本可能随主线修示例而变化**（本快照已
-//! 跟随当前示例 `resize disk.img grow --allow-move --chunk 4 --yes`）。快照失败时先核对
-//! 改动是否符合帮助与校验同源的要求，不要为让快照通过而迁就错误文本。每条命令的帮助做结构
+//! 顶层 usage 按当前构建的文本做逐字快照，当前示例是
+//! `resize disk.img grow --allow-move --chunk 4 --yes`。快照失败时先核对改动是否
+//! 符合帮助与校验同源的要求，不要为让快照通过而迁就错误文本。每条命令的帮助做结构
 //! 断言：只解析语义字段，不比对整段输出。
 //!
 //! 帮助请求在平台闸门之前就返回，因此本文件在 Windows 与 Linux 都运行。
@@ -62,7 +62,7 @@ const EXIT_LINES: &[&str] = &[
 /// 顶层 usage 的逐字快照：`help` / `--help` / `-h` 的 stdout，与
 /// `tests/snapshots/usage.txt` 逐字节相等（该文件由二进制 `help` 重录，不是手抄）。
 ///
-/// 帮助文本由命令表渲染（`docs/reference.md` 同源）。快照不得出现 `cyl`/CHS；
+/// 帮助文本由命令表渲染。快照不得出现 `cyl`/CHS；
 /// 文本随命令表或示例变化时，先核对新文本是否仍满足要求，再从二进制重新抓取。
 const USAGE_SNAPSHOT: &str = include_str!("snapshots/usage.txt");
 

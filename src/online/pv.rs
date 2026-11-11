@@ -202,9 +202,9 @@ pub(crate) fn check_new_range(t: &OnlineTarget, new_len_bytes: u64, disk: &FileS
 /// 要按新尺寸读表与派生分区节点：用这只句柄就仍然是"锁保护的那台设备"，按命令行
 /// 路径重开会在窗口内落到别的设备上
 pub struct LockedPv {
-    /// 独占权本身不被读取：它随本值存活，收尾链结束才释放
-    #[allow(dead_code)]
-    pub lock: crate::targetlock::TargetLock,
+    /// 独占权本身不被读取：它随本值存活，收尾链结束才释放。下划线是"只为存续"的
+    /// 约定，不是漏用
+    pub _lock: crate::targetlock::TargetLock,
     pub disk: FileSource,
 }
 
@@ -284,7 +284,7 @@ pub fn resize_pv(
     // delta 为 0 时 pvresize/lvextend 只同步现状。相等与否必须由锁下事实判定——
     // 锁前快照在窗口内可能已过期，用它短路会跳过本该做的写表
     if new_len_bytes == t.part_len_bytes {
-        return (RunOutcome::applied_with(Vec::new()), old_len_bytes, Some(LockedPv { lock: owned, disk }));
+        return (RunOutcome::applied_with(Vec::new()), old_len_bytes, Some(LockedPv { _lock: owned, disk }));
     }
     if new_len_bytes < t.part_len_bytes {
         return (RunOutcome::refused(format!(
@@ -351,7 +351,7 @@ pub fn resize_pv(
         },
         old_len_bytes,
         // 表已写：后面的 PV 链仍属本次操作，锁与锁下的整盘句柄随返回值继续持有
-        Some(LockedPv { lock: owned, disk }),
+        Some(LockedPv { _lock: owned, disk }),
     )
 }
 

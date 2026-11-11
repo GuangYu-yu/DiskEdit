@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # 全量回归：必须以 root 运行（losetup/mount 需要内核权限）
-# 判定规则：脚本进程退出码非 0 即失败；OK/CORRUPT 等关键字行仅作为现场输出展示，
-# 不参与判定（历史版本用 grep 结果当判定，脚本失败会被管道吞掉）
+# 判定规则：脚本进程退出码非 0 即失败；OK/CORRUPT 等关键字行仅作为现场输出展示，不参与判定
 # 脚本在输出里打印以 `SKIP:` 开头的行＝有子项因依赖缺失被跳过：记 SKIP，既不算通过
 # 也不算失败。DISKEDIT_STRICT=1（CI 用）时 SKIP 直接判失败——CI 依赖齐全，跳过即缺陷
 # 失败留档不写仓库：落在 /var/tmp 下的固定目录（WSL 之内、跨次保留、可 DISKEDIT_WSL_ARTIFACTS

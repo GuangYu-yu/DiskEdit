@@ -170,7 +170,7 @@ pub(crate) fn part_resize_outcomes_keep_the_write_stage_distinct() {
         .into_run_outcome_with(vec![pending("FS grow skipped")]);
     assert_eq!(o.exit_code(), EXIT_PARTIAL);
     match o {
-        RunOutcome::Partial { cause, pending } => {
+        RunOutcome::Partial { cause, pending, .. } => {
             assert!(cause.contains("re-read failed"), "{cause}");
             assert_eq!(pending.len(), 1);
         }

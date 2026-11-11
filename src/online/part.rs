@@ -42,7 +42,7 @@ impl PartResizeError {
             ResizeFailClass::Refused(msg) => RunOutcome::refused(msg),
             ResizeFailClass::NoMutation(msg) => RunOutcome::no_mutation(msg),
             ResizeFailClass::Partial(msg) => RunOutcome::partial(msg),
-            ResizeFailClass::WrittenUnverified(msg) => RunOutcome::partial_with(msg, pending),
+            ResizeFailClass::WrittenUnverified(msg) => RunOutcome::partial_unverified(msg, pending),
             ResizeFailClass::AppliedStaleKernel(msg) => {
                 eprintln!("warning: partition table written but kernel sync failed: {msg}");
                 let mut o = RunOutcome::applied_with(pending);

@@ -16,16 +16,39 @@ pub(crate) const DETAILS: &str = r#"  Roll back this target's recovery record: p
 
 
 fn undo_record(src: &mut WriteSource) -> Option<u8> {
-    let path = src.identity.record_path()?.to_path_buf();
-    // 落点缺席是常态：判据用平台无关的探测——没有目录相对原语的平台上
-    // [`read_companion`] 一律报"读不出来"，会把缺席也算成故障
-    if matches!(crate::recovery::probe_companion(&path), crate::recovery::CompanionProbe::Absent) {
-        return None;
+    // 记录不按单一派生落点认：身份漂移或目录被改名后，派生路径找不到它。枚举把
+    // 身份不符/无法比对的候选一并列出，但只认领身份严格相符的那些
+    let records = crate::support::active_recovery_records(&src.identity, Some(&*src));
+    let (claimed, mismatched): (Vec<_>, Vec<_>) =
+        records.into_iter().partition(crate::support::RecoveryRecord::claimable);
+    for r in &mismatched {
+        println!("candidate: {}", r.describe());
     }
-    let current = match crate::platform::probe::probe_of(&*src) {
-        Ok(probe) => crate::recovery::SceneIdentity::of_source(&probe, &*src),
-        Err(e) => bail_fail(RunOutcome::no_mutation(format!(
-            "cannot establish the target identity for the recovery record ({e:?}) — nothing was read or written"
+    let path = match claimed.as_slice() {
+        [] => {
+            if !mismatched.is_empty() {
+                println!(
+                    "none of the {} candidate record(s) above belongs to this target — they are left in place",
+                    mismatched.len()
+                );
+            }
+            return None;
+        }
+        // 身份与落点都唯一：按原路径回放
+        [one] => one.path().to_path_buf(),
+        many => bail_fail(RunOutcome::refused(format!(
+            "this target has {} recovery records that would be replayed — `undo` rolls back exactly one and \
+             does not pick one for you; release the extra records with `diskedit abandon`, or move one out of \
+             the record set by hand: {}",
+            many.len(),
+            many.iter().map(|r| r.path().display().to_string()).collect::<Vec<_>>().join("; ")
+        ))),
+    };
+    let current = match crate::recovery::ownership_scene(&*src) {
+        Ok(current) => current,
+        Err(e) => bail_fail(RunOutcome::refused(format!(
+            "the target's identity could not be read ({e:?}), so the recovery record's ownership cannot be \
+             proven — nothing was read or written; rerun once the target can be probed"
         ))),
     };
     let evidence = match crate::recovery::read_companion(&path, &current) {
@@ -62,11 +85,15 @@ fn undo_record(src: &mut WriteSource) -> Option<u8> {
     if record.commit == crate::recovery::CommitState::Committed {
         // 提交后未清理：目标字节已定型，本次运行只释放记录
         let outcome = match crate::recovery::settle_companion(&path, &record, false) {
-            Ok(()) => table_write_done(
-                src,
-                "the recorded operation had already committed — its recovery record was released and nothing was \
-                 rolled back (verify with: diskedit info)",
-            ),
+            Ok(()) => {
+                let journal_record = src.record_journal().map(|j| j.record());
+                table_write_done(
+                    src,
+                    journal_record,
+                    "the recorded operation had already committed — its recovery record was released and nothing was \
+                     rolled back (verify with: diskedit info)",
+                )
+            }
             Err(e) => {
                 let msg = format!(
                     "the recorded operation had already committed, but its recovery record could not be released ({e}); \
@@ -77,12 +104,10 @@ fn undo_record(src: &mut WriteSource) -> Option<u8> {
                     let o = RunOutcome::refused(format!("{msg} — release it with `diskedit abandon`"));
                     // 本分支返回裸退出码，不经过调用方的 report：拒绝理由在这里自己打印，
                     // 否则命令退 3 而 stdout/stderr 全空，用户无从知道为什么
-                    o.report();
-                    return Some(o.exit_code());
+                    return Some(o.report_final().exit_code());
                 } else {
-                    let o = RunOutcome::partial(msg);
-                    o.report();
-                    return Some(o.exit_code());
+                    let o = RunOutcome::partial_postcondition(msg, Vec::new());
+                    return Some(o.report_final().exit_code());
                 }
             }
         };
@@ -105,7 +130,8 @@ fn undo_record(src: &mut WriteSource) -> Option<u8> {
                     "the recovery record could not be released ({e}); release it with `diskedit abandon`"
                 ));
             }
-            let outcome = crate::support::settle_layout(outcome, src);
+            let record = src.record_journal().map(|j| j.record());
+            let outcome = crate::support::settle_layout(outcome, src, record);
             if outcome.is_complete() {
                 println!(
                     "the target already held the recorded pre-images — nothing was written back (verify with: diskedit info)"
@@ -158,10 +184,13 @@ fn undo_record_prefix(
                 ))
             }
         }
-        let outcome = crate::support::settle_layout(outcome, src);
+        let record = src.record_journal().map(|j| j.record());
+        let outcome = crate::support::settle_layout(outcome, src, record);
         return outcome.exit_code();
     }
-    if prefix.record.restore_blocked {
+    // 与全量路径同一豁免：`move` / `copy` 的 preimage 只覆盖表区，撕裂载荷里已经
+    // 解出的那部分仍可回放；数据区本就没有记录，不存在"回放到一半"的问题
+    if prefix.record.restore_blocked && !crate::recovery::table_only_replay(prefix.record.op) {
         bail_fail(RunOutcome::refused(format!(
             "the recovery record at {} marks a non-reversible mutation, so the recorded bytes are not written back; \
              release the transaction with `diskedit abandon`",
@@ -203,7 +232,8 @@ fn undo_record_prefix(
             ))
         }
     }
-    let outcome = crate::support::settle_layout(outcome, src);
+    let record = src.record_journal().map(|j| j.record());
+    let outcome = crate::support::settle_layout(outcome, src, record);
     outcome.exit_code()
 }
 
@@ -214,7 +244,7 @@ fn refuse_legacy_journal(src: &FileSource) {
     match std::fs::symlink_metadata(path) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => bail_fail(RunOutcome::no_mutation(format!(
-            "cannot determine whether a legacy undo journal exists at {}: {e} — nothing was written",
+            "cannot determine whether a legacy undo journal exists at {}: {e}",
             path.display()
         ))),
         Ok(_) => bail_fail(RunOutcome::refused(format!(

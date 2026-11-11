@@ -136,7 +136,7 @@ fn write_and_evidence_commands_stop_at_the_capability_gate() {
         let (code, _out, err) = run(&full);
         assert_eq!(code, 6, "`{name}` must stop at the capability gate: {err}");
         assert!(err.contains(CAPABILITY_GAP), "`{name}`: {err}");
-        assert!(err.contains("Nothing was written"), "`{name}`: {err}");
+        assert!(err.contains(&format!("command `{name}`")), "`{name}`: {err}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -255,8 +255,7 @@ pub(crate) fn suffix_path(base: &Path, suffix: &str) -> PathBuf {
 }
 
 /// 活跃条目的隔离区落点：记录目录里的 `record` 以隐藏名 `<stem>[.N]` 留在同一目录；
-/// 旧 journal / checkpoint 仍在各自目录里用 `<原名><stem>[.N]`——它们是迁移期现场，
-/// 迁移完成后不再产生
+/// 旧 journal / checkpoint 在各自目录里用 `<原名><stem>[.N]`
 fn quarantine_layout(from: &Path, stem: &str) -> (PathBuf, std::ffi::OsString) {
     let dir = match from.parent() {
         Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
@@ -572,7 +571,7 @@ impl TargetIdentity {
             return Self::loop_backed(path, raw);
         }
         let disk_key = block_keys(node, path).map_err(|e| e.to_string())?;
-        // 第 24、25 条：记录目录由 WWN / EUI / serial 派生的 identity-hash 决定；
+        // 记录目录由 WWN / EUI / serial 派生的 identity-hash 决定；
         // dm / md / 只有 major:minor 的目标没有目录，记录落点为 None，写命令退 6
         let stable = block_stable_identity(node);
         Ok(Self::from_block_parts(path, disk_key, stable.record_path()))
@@ -598,7 +597,7 @@ impl TargetIdentity {
     /// 块设备身份构造：`record` 为 None 表示身份为 `Unusable`（dm / md / 无可读
     /// 的 WWN / EUI / serial）。journal / checkpoint / 锁都按盘键派生——分区号属于
     /// 记录归属，不进锁键；`/dev/sdb` 与 `/dev/sdb1` 由此共用一把锁，而记录目录
-    /// 仍按各自的目标身份分开（第 24、25 条）
+    /// 仍按各自的目标身份分开
     #[cfg(any(target_os = "linux", test))]
     pub(crate) fn from_block_parts(path: &Path, disk_key: String, record: Option<PathBuf>) -> Self {
         let stable = key_token(&disk_key);

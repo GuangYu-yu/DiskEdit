@@ -288,7 +288,6 @@ fn resize_grow_swap_recreate() {
     let stderr = String::from_utf8_lossy(&out.stderr);
     // swap 重建依赖 mkswap/losetup（仅 Linux）：工具可用 → 后置条件全满足（OK）；
     // 不可用 → 分区表已更新但 swap 未重建，属部分完成（PARTIAL），且必须给出补救命令。
-    // 这里不再把"FS/swap 步骤失败"当作成功——那正是让脚本误判空间可用的根源
     #[cfg(target_os = "linux")]
     {
         // effective UID 取自 /proc/self/status 的 Uid: 行（proc(5)：四列依次为
@@ -506,7 +505,7 @@ fn resize_shift_relocates_blockers() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// D5（C2）：resize SIZE 非扇区对齐时回显 note（实际生效的下取整值），且不改变落盘值
+/// resize SIZE 非扇区对齐时回显 note（实际生效的下取整值），且不改变落盘值
 #[test]
 fn resize_non_aligned_size_emits_note() {
     let dir = std::env::temp_dir().join(format!("diskedit_na_{}", std::process::id()));

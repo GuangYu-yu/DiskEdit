@@ -95,7 +95,7 @@ fn payload(size: u64, file_id: [u8; 16]) -> Vec<u8> {
 fn record_bytes(size: u64, file_id: [u8; 16]) -> Vec<u8> {
     let payload = payload(size, file_id);
     let mut out = vec![0u8; 16];
-    out[0..4].copy_from_slice(b"DSKR");
+    out[0..4].copy_from_slice(b"DSK2");
     out[4..8].copy_from_slice(&(payload.len() as u32).to_le_bytes());
     out[8..12].copy_from_slice(&crc32(&payload).to_le_bytes());
     let header_crc = crc32(&out[0..12]);
@@ -194,6 +194,34 @@ fn abandon_refuses_a_record_from_another_target() {
 }
 
 #[test]
+fn abandon_refuses_a_record_in_an_unknown_layout_without_renaming_anything() {
+    // 头都读不懂就不算"归属已确认"：整体拒绝，一处也不改名
+    let dir = temp_dir("foreign_layout");
+    let image = image_with(&dir, 4096);
+    let mut bytes = record_bytes(4096, file_id(&image));
+    bytes[0..4].copy_from_slice(b"DSKR");
+    let header_crc = crc32(&bytes[0..12]);
+    bytes[12..16].copy_from_slice(&header_crc.to_le_bytes());
+    write_record(&image, &bytes);
+    // abandon 取锁会在记录目录里留下 record.lock：先建出来，前后目录条目才可比
+    fs::write(sidecar(&image).join("record.lock"), b"").unwrap();
+    let entries = |dir: &Path| {
+        let mut names: Vec<_> = fs::read_dir(dir).unwrap().map(|e| e.unwrap().file_name()).collect();
+        names.sort();
+        names
+    };
+    let before = entries(&sidecar(&image));
+
+    let (code, out, err) = run(&["abandon", image.to_str().unwrap()]);
+    assert_eq!(code, 3, "{out}{err}");
+    assert!(err.contains("a layout this build does not recognize"), "{err}");
+    assert!(err.contains("will not quarantine it automatically"), "{err}");
+    assert!(err.contains("nothing was renamed"), "{err}");
+    assert_eq!(entries(&sidecar(&image)), before);
+    assert_eq!(fs::read(record_path(&image)).unwrap(), bytes);
+}
+
+#[test]
 fn abandon_refuses_a_non_regular_entry() {
     // 符号链接不是恢复文件，整体拒绝。
     let dir = temp_dir("not_ours");
@@ -206,7 +234,7 @@ fn abandon_refuses_a_non_regular_entry() {
     let (code, out, err) = run(&["abandon", image.to_str().unwrap()]);
     assert_eq!(code, 3, "{out}{err}");
     assert!(err.contains("symbolic link"), "{err}");
-    assert!(err.contains("move or remove it by hand"), "{err}");
+    assert!(err.contains("remove that file by hand"), "{err}");
     assert!(record_path(&image).is_symlink());
     assert_eq!(fs::read(&elsewhere).unwrap(), b"user data");
 }

@@ -49,7 +49,7 @@ pub(crate) enum ReadOnlyOpen {
 
 /// 只读命令的数据句柄：只打开目标，不走平台端口的身份探测。
 ///
-/// 身份是写命令的门槛（「写命令 → 6」）；只读命令在身份不可得时
+/// 身份是写命令的门槛（拿不到身份时按退出码 6 拒绝）；只读命令在身份不可得时
 /// 照常工作，不新增失败面。
 pub(crate) fn open_read_only_source(spec: &TargetSpec) -> Result<FileSource, ReadOnlyOpen> {
     match open_read_only(spec) {

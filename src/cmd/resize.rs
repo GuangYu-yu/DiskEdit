@@ -58,6 +58,10 @@ pub(crate) const DETAILS: &str = r#"  Resize partition and its filesystem, parti
     MBR       uses the same recovery record as GPT: an interrupted grow is
               resumed by re-running the same command; `undo` rolls the
               recorded table write back instead
+    record    a relocation record written before requests were bound to
+              their digest carries none: it cannot be tied to this request,
+              so re-running `resize --allow-move` is refused. Inspect it with
+              `inspect`, then release it with `undo`
     online    writes go through the tools (sfdisk / the FS's own resize),
               not this tool's record: nothing to resume, and `undo`
               cannot roll it back
@@ -254,7 +258,9 @@ pub(crate) fn cmd_resize(a: &ResizeRequest) -> crate::outcome::RunOutcome {
         //（`grow` 的目标就是右侧空闲的末端，提交后右侧必无空闲）
         if record_committed {
             let (chunk, mut logger) = chunk_logger(a, &src, g.disk_guid());
-            let o = settle_layout(crate::cmd::layout::resize_part_via_plan_with(&mut src, &g, repair, part, start, end, chunk, a.no_fs, lv_sel.clone(), is_pv, &mut |m| logger.log(m)), &src);
+            let o = crate::cmd::layout::resize_part_via_plan_with(&mut src, &g, repair, part, start, end, chunk, a.no_fs, lv_sel.clone(), is_pv, &mut |m| logger.log(m));
+            let record = src.record_journal().map(|j| j.record());
+            let o = settle_layout(o, &src, record);
             return finish_resize(a, o, Some(&mut src), part, is_pv, is_block, lv_sel.as_ref().map(|s| s.path.as_str()), cur_bytes);
         }
         let free = free_right_gpt(&g, part);
@@ -267,7 +273,9 @@ pub(crate) fn cmd_resize(a: &ResizeRequest) -> crate::outcome::RunOutcome {
                 bail_fail(RunOutcome::no_mutation("free-space arithmetic overflow (geometry inconsistent)"));
             };
             let (chunk, mut logger) = chunk_logger(a, &src, g.disk_guid());
-            let o = settle_layout(crate::cmd::layout::resize_part_via_plan_with(&mut src, &g, repair, part, start, new_end, chunk, a.no_fs, lv_sel.clone(), is_pv, &mut |m| logger.log(m)), &src);
+            let o = crate::cmd::layout::resize_part_via_plan_with(&mut src, &g, repair, part, start, new_end, chunk, a.no_fs, lv_sel.clone(), is_pv, &mut |m| logger.log(m));
+            let record = src.record_journal().map(|j| j.record());
+            let o = settle_layout(o, &src, record);
             return finish_resize(a, o, Some(&mut src), part, is_pv, is_block, lv_sel.as_ref().map(|s| s.path.as_str()), cur_bytes);
         }
         // 已顶到 last_usable 的分区不是"被挡"，是无可再扩：occupied 文案会把用户引进
@@ -277,7 +285,9 @@ pub(crate) fn cmd_resize(a: &ResizeRequest) -> crate::outcome::RunOutcome {
         if !reloc && end == last_usable {
             if is_pv {
                 let (chunk, mut logger) = chunk_logger(a, &src, g.disk_guid());
-                let o = settle_layout(crate::cmd::layout::resize_part_via_plan_with(&mut src, &g, repair, part, start, end, chunk, a.no_fs, lv_sel.clone(), true, &mut |m| logger.log(m)), &src);
+                let o = crate::cmd::layout::resize_part_via_plan_with(&mut src, &g, repair, part, start, end, chunk, a.no_fs, lv_sel.clone(), true, &mut |m| logger.log(m));
+                let record = src.record_journal().map(|j| j.record());
+                let o = settle_layout(o, &src, record);
                 return finish_resize(a, o, Some(&mut src), part, is_pv, is_block, lv_sel.as_ref().map(|s| s.path.as_str()), cur_bytes);
             }
             bail_fail(RunOutcome::refused(format!(
@@ -292,7 +302,7 @@ pub(crate) fn cmd_resize(a: &ResizeRequest) -> crate::outcome::RunOutcome {
             bail_fail(RunOutcome::refused("right side is occupied — pass --allow-move to relocate the blocking partitions (plan will be printed; --yes confirms)".to_string()));
         }
         // 记录型现场直接承载搬移计划：没有第二族现场需要让位
-        let plan = match movepart::make_plan_resuming(relocation.as_ref(), &g, repair, part) {
+        let mut plan = match movepart::make_plan_resuming(&src, relocation.as_ref(), &g, repair, part) {
             Ok(p) => p,
             Err(f) => bail_fail(f),
         };
@@ -304,7 +314,32 @@ pub(crate) fn cmd_resize(a: &ResizeRequest) -> crate::outcome::RunOutcome {
             ..Default::default()
         });
         let (chunk, mut logger) = chunk_logger(a, &src, g.disk_guid());
-        let o = settle_layout(movepart::apply(&mut src, &g, &plan, chunk, a.no_fs, is_pv, lv_sel.clone(), &mut |m| logger.log(m)), &src);
+        // 槽位在进入搬移前绑定本请求：记录属于另一份 resize 时在这里拒绝，不让搬移
+        // 按别人的游标继续。终点取本作业落定的新末端（`grow_end_for`，与执行半程同一
+        // 算式）：提交后的重跑走 `record_committed` 分支，那里按盘上末端绑摘要，两者
+        // 必须同值，否则"表已提交、FS 未收尾"的合法续跑会被自己拒掉。
+        // 这条稳定性依赖**续跑时 plan 由记录重建**（`resume_outcome`）：改成"从盘上
+        // 现算 plan 再比对"后，逐条位置检查会先拒，摘要随盘面漂移。`grow` 的摘要因此
+        // 不对"磁盘变大导致 grow 终点变化"敏感——那由 `verify_relocation_resume` 的
+        // `disk_size` 与条目位置检查兜住
+        let grow_end = movepart::grow_end_for(&plan, start)
+            .unwrap_or_else(|e| bail_fail(RunOutcome::no_mutation(e.to_string())));
+        let digest = crate::recovery::PlanDigest::of_request(
+            crate::recovery::OpKind::Resize,
+            part,
+            start,
+            grow_end,
+            g.sector_size(),
+            src.size,
+        );
+        if let Some(journal) = src.record_journal_mut()
+            && let Err(why) = journal.bind_plan(digest)
+        {
+            bail_fail(RunOutcome::refused(why));
+        }
+        let o = movepart::apply(&mut src, &g, &mut plan, chunk, a.no_fs, is_pv, lv_sel.clone(), &mut |m| logger.log(m));
+        let record = src.record_journal().map(|j| j.record());
+        let o = settle_layout(o, &src, record);
         finish_resize(a, o, Some(&mut src), part, is_pv, is_block, lv_sel.as_ref().map(|s| s.path.as_str()), cur_bytes)
     } else {
         // SIZE：字节 → 扇区（下取整）；扩须右侧空闲足够，缩由 resize_part 内部 FS 先缩 + 守卫链
@@ -350,7 +385,7 @@ pub(crate) fn cmd_resize(a: &ResizeRequest) -> crate::outcome::RunOutcome {
                 bail_fail(RunOutcome::refused("not enough contiguous free space to the right — pass --allow-move to relocate the blocking partitions (plan will be printed; --yes confirms)".to_string()));
             }
             // 记录型现场直接承载搬移计划：没有第二族现场需要让位
-            let plan = match movepart::make_plan_shift_resuming(relocation.as_ref(), &g, repair, part, intent) {
+            let mut plan = match movepart::make_plan_shift_resuming(&src, relocation.as_ref(), &g, repair, part, intent) {
                 Ok(p) => p,
                 Err(f) => bail_fail(f),
             };
@@ -360,7 +395,24 @@ pub(crate) fn cmd_resize(a: &ResizeRequest) -> crate::outcome::RunOutcome {
                 ..Default::default()
             });
             let (chunk, mut logger) = chunk_logger(a, &src, g.disk_guid());
-            let o = settle_layout(movepart::apply(&mut src, &g, &plan, chunk, a.no_fs, is_pv, lv_sel.clone(), &mut |m| logger.log(m)), &src);
+            // 与 `grow` 分支同一处绑定：请求终点是 SIZE 换算出的新末端，改名/改大小
+            // 重跑都会在进入搬移前被拒；`--chunk` 不在摘要里，由搬移校验单独核对
+            let digest = crate::recovery::PlanDigest::of_request(
+                crate::recovery::OpKind::Resize,
+                part,
+                start,
+                new_end,
+                g.sector_size(),
+                src.size,
+            );
+            if let Some(journal) = src.record_journal_mut()
+                && let Err(why) = journal.bind_plan(digest)
+            {
+                bail_fail(RunOutcome::refused(why));
+            }
+            let o = movepart::apply(&mut src, &g, &mut plan, chunk, a.no_fs, is_pv, lv_sel.clone(), &mut |m| logger.log(m));
+            let record = src.record_journal().map(|j| j.record());
+            let o = settle_layout(o, &src, record);
             return finish_resize(a, o, Some(&mut src), part, is_pv, is_block, lv_sel.as_ref().map(|s| s.path.as_str()), cur_bytes);
         }
         // 缩小会截短分区，文件系统同步缩小：被截掉的字节 `undo` 找不回来。
@@ -370,7 +422,9 @@ pub(crate) fn cmd_resize(a: &ResizeRequest) -> crate::outcome::RunOutcome {
             ..Default::default()
         });
         let (chunk, mut logger) = chunk_logger(a, &src, g.disk_guid());
-        let o = settle_layout(crate::cmd::layout::resize_part_via_plan_with(&mut src, &g, repair, part, start, new_end, chunk, a.no_fs, lv_sel.clone(), is_pv, &mut |m| logger.log(m)), &src);
+        let o = crate::cmd::layout::resize_part_via_plan_with(&mut src, &g, repair, part, start, new_end, chunk, a.no_fs, lv_sel.clone(), is_pv, &mut |m| logger.log(m));
+        let record = src.record_journal().map(|j| j.record());
+        let o = settle_layout(o, &src, record);
         finish_resize(a, o, Some(&mut src), part, is_pv, is_block, lv_sel.as_ref().map(|s| s.path.as_str()), cur_bytes)
     }
 }

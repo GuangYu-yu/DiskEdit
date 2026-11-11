@@ -11,6 +11,12 @@ pub(crate) use crate::domain::{ContentKind, FsKind};
 const SQUASHFS_MAGIC: &[u8; 4] = b"hsqs";
 const EROFS_MAGIC: [u8; 4] = [0xE2, 0xE1, 0xF5, 0xE0];
 
+/// btrfs magic：磁盘上是 `__le64` 的 `BTRFS_MAGIC = 0x4D5F_5366_5248_425F`，小端落地即
+/// `_BHRfS_M`（内核 `include/uapi/linux/btrfs_tree.h`、btrfs-progs
+/// `kernel-shared/uapi/btrfs_tree.h`）。识别（[`probe_fs`]）与成员数判据
+/// （[`crate::dev::occupancy::btrfs_members`]）共用这一份，按 8 字节原值比较
+pub(crate) const BTRFS_MAGIC: [u8; 8] = 0x4D5F_5366_5248_425Fu64.to_le_bytes();
+
 /// 把识别结论映射为对外名；`Unknown` → `"unknown"`。
 ///
 /// `Unknown` 只表示"本工具没有认出受支持的内容"，不表示这段区域为空，也不表示
@@ -29,7 +35,7 @@ pub struct SwapHit {
     pub activatable: bool,
 }
 
-/// [`probe_fs`] 的结论
+/// 一次字节区间探测的结果：命中的内容种类，以及未命中其他类型时探测到的 swap 候选
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FsProbe {
     /// 与 [`identify`] 的返回值同源：swap 只在本机可激活且头内自洽时计入
@@ -95,9 +101,9 @@ pub fn probe_fs(src: &FileSource, base: u64, len_bytes: u64) -> io::Result<FsPro
     {
         return Ok(FsProbe { content: ContentKind::Filesystem(FsKind::Xfs), swap: None });
     }
-    // btrfs: "_BHRfS_M" @0x10040（内核 fs/btrfs ctree.h BTRFS_MAGIC；超级块 @64 KiB，magic 在 +64）
+    // btrfs: magic @0x10040（超级块 @64 KiB，magic 在 +0x40，按 8 字节原值比较）
     if let Some(b) = rd(0x10040, 8)?
-        && &b == b"_BHRfS_M"
+        && b == BTRFS_MAGIC
     {
         return Ok(FsProbe { content: ContentKind::Filesystem(FsKind::Btrfs), swap: None });
     }

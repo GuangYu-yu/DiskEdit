@@ -9,13 +9,15 @@
 //! 验证并回放（见 [`decode_prefix`]）。
 
 use crate::dev::DiskGuidState;
+use crate::outcome::RunOutcome;
 use crate::platform::{IdentityMaterial, TargetId};
+use crate::planner::chunk::move_chunk_layout;
 use sha2::{Digest, Sha256};
 
 use super::scene::{Mapping, SceneIdentity, SceneProof};
 
-/// 格式家族的标识字节
-pub(crate) const MAGIC: [u8; 4] = *b"DSKR";
+/// 格式家族的标识字节：此标识下的搬移位移是有符号值，别的标识一律解码失败
+pub(crate) const MAGIC: [u8; 4] = *b"DSK2";
 /// 头部的固定字节数
 pub(crate) const HEADER_LEN: usize = 16;
 
@@ -96,8 +98,9 @@ impl PlanDigest {
     /// 请求摘要：把决定"这是哪一次作业"的字段按固定顺序编码后取 sha256。
     ///
     /// 盘面上的旧起点/旧末端**不入摘要**：表提交之后重算必然对不上，而那一维由
-    /// "盘上条目是否已停在新区间"单独判定。入摘要的是用户请求本身，续跑据此拒绝
-    /// 换了参数的请求（例如另换 `--chunk`，它决定游标到字节的映射）
+    /// "盘上条目是否已停在新区间"单独判定。入摘要的是目标请求本身（操作、分区、
+    /// 新区间、扇区大小、盘大小）；`--chunk` 是执行参数而非目标身份，不入摘要——
+    /// 它决定游标到字节的映射，由续跑校验单独核对
     pub(crate) fn of_request(
         op: OpKind,
         part: u32,
@@ -105,16 +108,14 @@ impl PlanDigest {
         new_end: u64,
         sector_size: u64,
         disk_size: u64,
-        chunk_len: u64,
     ) -> Self {
-        let mut input = Vec::with_capacity(1 + 4 + 8 * 5);
+        let mut input = Vec::with_capacity(1 + 4 + 8 * 4);
         input.push(op.tag());
         input.extend_from_slice(&part.to_le_bytes());
         input.extend_from_slice(&new_start.to_le_bytes());
         input.extend_from_slice(&new_end.to_le_bytes());
         input.extend_from_slice(&sector_size.to_le_bytes());
         input.extend_from_slice(&disk_size.to_le_bytes());
-        input.extend_from_slice(&chunk_len.to_le_bytes());
         let mut out = [0u8; 32];
         out.copy_from_slice(&Sha256::digest(&input));
         Self(out)
@@ -139,7 +140,7 @@ impl PlanDigest {
 
 /// 记录对应的布局操作。
 ///
-/// 码值取契约的唯一映射：`New`=1、`Add`=2、`Delete`=3、
+/// 码值固定：`New`=1、`Add`=2、`Delete`=3、
 /// `ResizePart`=4、`Move`=5、`Copy`=6、`Mkfs`=7、`ResizeFs`=8、`Set`=9、`Resize`=10。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum OpKind {
@@ -270,7 +271,8 @@ pub(crate) struct RelocEntry {
     pub(crate) partition: u32,
     pub(crate) src_first: u64,
     pub(crate) len: u64,
-    pub(crate) delta: u64,
+    /// 目标起点相对源起点的位移（扇区）；负值表示向左移动
+    pub(crate) delta: i64,
     pub(crate) is_swap: bool,
 }
 
@@ -506,6 +508,49 @@ impl CopySource {
     }
 }
 
+/// 记录侧字段派生的作业阶段。
+///
+/// 只有 [`Self::Undecidable`] 表示"组合合法但记录不足以判定"；记录能自证前后矛盾的
+/// 组合不由它表达，[`Record::stage`] 直接返回内部错误。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Stage {
+    /// 尚未越过任何写前落盘点
+    Planned,
+    /// 数据搬移进行中：当前条目与全局块游标
+    Relocating { entry: u32, cursor: u64 },
+    /// 当前条目的块已全部搬完、条目游标尚未推进。两个面都据实给出该答案；
+    /// 决策面把它与 [`Self::Undecidable`] 同等处理——记录字段里没有「表已提交」，不能据此继续
+    Relocated,
+    /// 表已提交，作业的后续步骤未完成
+    TableWritten,
+    /// 分区层已完成，收尾步骤（扩容 / FS / LVM）未完成
+    Finishing,
+    /// 作业已提交，记录只等清理
+    Complete,
+    /// 字段组合合法（解码放行）但记录不足以判定阶段
+    Undecidable,
+}
+
+/// 第 `entry` 条搬移的块数：swap 恒 0；布局无解即记录自相矛盾。
+/// 与执行器共用 [`move_chunk_layout`]，不另算一遍
+fn entry_chunks(reloc: &Relocation, entry: u32) -> Result<u64, RunOutcome> {
+    let e = reloc.entries.get(entry as usize).ok_or_else(|| {
+        RunOutcome::internal(format!("relocation entry {entry} is outside the recorded plan — the record contradicts itself"))
+    })?;
+    if e.is_swap {
+        return Ok(0);
+    }
+    move_chunk_layout(e.len, reloc.ss, e.delta.unsigned_abs(), e.len, reloc.chunk_bytes)
+        .map(|(_, count)| count)
+        .ok_or_else(|| {
+            RunOutcome::internal(format!(
+                "the recovery record has no block layout for relocation entry {entry} \
+                 (len {} sectors, delta {} sectors, {}-byte chunks) — it contradicts itself",
+                e.len, e.delta, reloc.chunk_bytes
+            ))
+        })
+}
+
 /// 一份恢复记录的全部字段
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Record {
@@ -571,6 +616,124 @@ impl Record {
             restore_blocked: false,
             restore: Vec::new(),
             source: None,
+        }
+    }
+
+    /// 记录是否越过提交点。完成与否只由 `commit` 回答：`derive_stage` 的
+    /// `Complete`、`records` 的 `valid`/`unfinished`、`inspect` 的 0/5 都从这里派生。
+    /// 穷尽匹配留在这里，新增 `CommitState` 变体时由编译器指出未处理的分支
+    pub(crate) fn committed(&self) -> bool {
+        match self.commit {
+            CommitState::Prepared => false,
+            CommitState::Committed => true,
+        }
+    }
+
+    /// 记录里是否留着"目标可能已经被写过"的证据：表区的原文已登记，或已越过不可回滚点。
+    /// 这是**持久侧的写事实**，用来回答"盘上是否可能已改过"；它不回答作业进行到哪
+    /// （那是 [`Self::stage`] 的事），也不决定记录能否清理或能否报 `Applied`
+    pub(crate) fn dirty(&self) -> bool {
+        self.restore_blocked || !self.restore.is_empty()
+    }
+
+    /// 决策面的作业阶段：记录字段能不能支撑「继续」。
+    ///
+    /// 与报告面共用 [`Record::derive_stage`] 的派生，只在收尾窗口不同：
+    /// [`Stage::TableWritten`] 与 [`Stage::Finishing`] 说明表步之后还有步骤没走完，但
+    /// 「表步已写」只在盘上表项里，记录字段给不出这个答案，折成 [`Stage::Undecidable`]；
+    /// [`Stage::Relocated`] 据实返回，调用方按不可继续处理。
+    pub(crate) fn stage(&self) -> Result<Stage, RunOutcome> {
+        Ok(match self.derive_stage()? {
+            Stage::TableWritten | Stage::Finishing => Stage::Undecidable,
+            other => other,
+        })
+    }
+
+    /// 报告面的作业阶段：作业到哪一步，据实说。
+    ///
+    /// 只在 `inspect` 的展示里使用；决策路径一律走 [`Record::stage`]。
+    #[cfg(target_os = "linux")]
+    pub(crate) fn progress_stage(&self) -> Result<Stage, RunOutcome> {
+        self.derive_stage()
+    }
+
+    /// 由既有字段派生作业阶段：不读盘、不读执行期的 `TransferState`、不新增字段。
+    ///
+    /// 规则有序、先命中先用；`completed_steps` 的口径按 `op` 分家，不可跨 op 解释。
+    /// 能自证前后矛盾的组合（块数超过布局上界、布局无解、条目已全部提交而步骤数落后）
+    /// 按内部错误返回；其余无法判定的合法组合落到 [`Stage::Undecidable`]。
+    fn derive_stage(&self) -> Result<Stage, RunOutcome> {
+        if self.committed() {
+            return Ok(Stage::Complete);
+        }
+        let progress = self.progress;
+        let dirty = self.dirty();
+        let clean = progress.completed_steps == 0 && progress.transfer_cursor == 0 && !dirty;
+        let Some(reloc) = self.relocation.as_ref() else {
+            // 落盘窗口按 op 分家：move 先落旧区间再落搬移表，resize-part 的纯扩缩路径
+            // 不落 relocation；resize 的首次落盘必然带 relocation，停在空表即不可判定
+            return Ok(match self.op {
+                OpKind::Move | OpKind::ResizePart if clean => Stage::Planned,
+                OpKind::ResizePart if progress.completed_steps == 2 => Stage::Finishing,
+                _ => Stage::Undecidable,
+            });
+        };
+        if reloc.entries.is_empty() {
+            // 只有 resize 的纯扩缩会绑一张空搬移表；move 至少搬自身条目，
+            // resize-part 的纯扩缩路径不绑 relocation
+            return Ok(match self.op {
+                OpKind::Resize if progress.completed_steps == 0 => Stage::Planned,
+                OpKind::Resize if progress.completed_steps >= 1 => Stage::Finishing,
+                _ => Stage::Undecidable,
+            });
+        }
+        let len = reloc.entries.len();
+        if (reloc.entry_index as usize) < len {
+            let chunks = entry_chunks(reloc, reloc.entry_index)?;
+            if reloc.chunks_in_entry > chunks {
+                return Err(RunOutcome::internal(format!(
+                    "the recovery record records {} of {chunks} chunks for relocation entry {} — it contradicts itself",
+                    reloc.chunks_in_entry, reloc.entry_index
+                )));
+            }
+            if reloc.chunks_in_entry > 0 && reloc.chunks_in_entry < chunks {
+                return Ok(Stage::Relocating { entry: reloc.entry_index, cursor: progress.transfer_cursor });
+            }
+            // 块已搬完、条目游标未推进：数据这一半是确定的事实，表那一半不在记录里。
+            // 报告面据此说「已搬移」，决策面（`stage`）折成不可判定，盘面侧的问题由
+            // 调用方按表项位置回答（move 的换区条目见 `committed_swap`）
+            if reloc.chunks_in_entry > 0 && reloc.chunks_in_entry == chunks {
+                return Ok(Stage::Relocated);
+            }
+            // 走到这里块进度必为 0：上面两支覆盖了大于 0 的全部组合
+            if reloc.entry_index == 0
+                && progress.completed_steps == 0
+                && progress.transfer_cursor == 0
+                && !dirty
+            {
+                return Ok(Stage::Planned);
+            }
+            return Ok(if self.op == OpKind::ResizePart {
+                Stage::Undecidable
+            } else {
+                Stage::Relocating { entry: reloc.entry_index, cursor: progress.transfer_cursor }
+            });
+        }
+        match self.op {
+            OpKind::Move => Ok(Stage::TableWritten),
+            OpKind::Resize => {
+                let done = progress.completed_steps as usize;
+                if done == len {
+                    Ok(Stage::TableWritten)
+                } else if done > len {
+                    Ok(Stage::Finishing)
+                } else {
+                    Err(RunOutcome::internal(format!(
+                        "the recovery record marks all {len} relocation entries as committed but only {done} plan steps as done — it contradicts itself"
+                    )))
+                }
+            }
+            _ => Ok(Stage::Undecidable),
         }
     }
 
@@ -872,7 +1035,7 @@ fn read_relocation(c: &mut Cursor<'_>) -> Option<Relocation> {
         let partition = c.u32()?;
         let src_first = c.u64()?;
         let len = c.u64()?;
-        let delta = c.u64()?;
+        let delta = c.i64()?;
         let is_swap = match c.u8()? {
             0 => false,
             1 => true,
@@ -881,10 +1044,9 @@ fn read_relocation(c: &mut Cursor<'_>) -> Option<Relocation> {
         if partition == 0 || len == 0 {
             return None;
         }
-        // 源区间与目标区间都要能算出端点，且目标起点不越过源起点（位移只减不增的
-        // 搬移计划不会产出负位移）
+        // 源区间与目标区间都要能算出端点，位移可正可负
         src_first.checked_add(len)?;
-        let dst_first = src_first.checked_add(delta)?;
+        let dst_first = src_first.checked_add_signed(delta)?;
         dst_first.checked_add(len)?;
         if entries.iter().any(|e| e.partition == partition) {
             return None;
@@ -1148,6 +1310,10 @@ impl<'a> Cursor<'a> {
 
     fn u64(&mut self) -> Option<u64> {
         Some(u64::from_le_bytes(self.array::<8>()?))
+    }
+
+    fn i64(&mut self) -> Option<i64> {
+        Some(i64::from_le_bytes(self.array::<8>()?))
     }
 }
 

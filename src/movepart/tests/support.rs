@@ -12,12 +12,15 @@ pub(crate) fn geom_of(src: &FileSource) -> ValidatedGeometry {
 }
 
 /// 给镜像测试夹具挂上一份恢复记录，模拟"命令层打开后"的写句柄。
-/// 记录是此类作业唯一的持久进度点，故续跑/崩溃用例必须先有它
+/// 记录是此类作业唯一的持久进度点，故续跑/崩溃用例必须先有它。
+/// `request` 是这条记录要执行的请求（分区、新起点、新末端）：摘要必须在首次落盘前
+/// 绑定，取法与生产入口一致——操作取记录自己的，扇区大小与盘大小取目标现场
 #[cfg(target_os = "linux")]
 pub(crate) fn attach_record(
     src: &mut WriteSource,
     op: crate::recovery::OpKind,
     old: (u64, u64),
+    request: (u32, u64, u64),
 ) -> std::path::PathBuf {
     let record_path = src.identity.record_path().expect("image targets have a record path").to_path_buf();
     std::fs::create_dir_all(record_path.parent().unwrap()).unwrap();
@@ -32,6 +35,15 @@ pub(crate) fn attach_record(
         None,
     )
     .unwrap();
+    let digest = crate::recovery::PlanDigest::of_request(
+        journal.op(),
+        request.0,
+        request.1,
+        request.2,
+        src.sector_size,
+        src.size,
+    );
+    journal.bind_plan(digest).expect("a fresh record binds the request");
     journal.bind_old_range(old).unwrap();
     src.adopt_record_journal(journal);
     record_path
@@ -59,10 +71,11 @@ pub(crate) fn relocation_of(src: &FileSource) -> Option<crate::recovery::Relocat
 pub(crate) fn attach_relocation(
     src: &mut WriteSource,
     old: (u64, u64),
+    request: (u32, u64, u64),
     reloc: crate::recovery::Relocation,
     lvm: Option<crate::recovery::LvmPost>,
 ) -> std::path::PathBuf {
-    let path = attach_record(src, crate::recovery::OpKind::Resize, old);
+    let path = attach_record(src, crate::recovery::OpKind::Resize, old, request);
     src.record_journal_mut()
         .expect("attach_record adopts a record journal")
         .bind_relocation(reloc, lvm)
@@ -90,13 +103,13 @@ pub(crate) fn reloc_for(plan: &Plan, chunk: u64, disk_size: u64) -> crate::recov
 /// 本函数显式解析后走同一实现，避免测试与生产各有一条规划路径
 pub(crate) fn make_plan(src: &mut FileSource, grow_part: u32) -> Result<Plan, RunOutcome> {
     let (g, repair) = gpt_policy::resolve_geometry(src)?.ok_or_else(|| RunOutcome::refused("no GPT on target"))?;
-    plan_tail_packed(&g, repair, grow_part)
+    plan_tail_packed(src, &g, repair, grow_part, None)
 }
 
 pub(crate) fn plan_resuming(src: &mut FileSource, grow_part: u32) -> Result<Plan, RunOutcome> {
     let (g, repair) = gpt_policy::resolve_geometry(src)?.ok_or_else(|| RunOutcome::refused("no GPT on target"))?;
     let reloc = relocation_of(src);
-    make_plan_resuming(reloc.as_ref(), &g, repair, grow_part)
+    make_plan_resuming(src, reloc.as_ref(), &g, repair, grow_part)
 }
 
 /// `shift = None` 在测试里表示缩容请求（与生产入口的 ShiftIntent::Shrink 同义）
@@ -107,14 +120,14 @@ pub(crate) fn plan_shift(src: &mut FileSource, grow_part: u32, shift: Option<u64
     };
     let (g, repair) = gpt_policy::resolve_geometry(src)?.ok_or_else(|| RunOutcome::refused("no GPT on target"))?;
     let reloc = relocation_of(src);
-    make_plan_shift_resuming(reloc.as_ref(), &g, repair, grow_part, intent)
+    make_plan_shift_resuming(src, reloc.as_ref(), &g, repair, grow_part, intent)
 }
 
 /// 尺寸与现状相同的请求（表已提交、只剩收尾时的原样重跑）
 pub(crate) fn plan_shift_noop(src: &mut FileSource, grow_part: u32) -> Result<Plan, RunOutcome> {
     let (g, repair) = gpt_policy::resolve_geometry(src)?.ok_or_else(|| RunOutcome::refused("no GPT on target"))?;
     let reloc = relocation_of(src);
-    make_plan_shift_resuming(reloc.as_ref(), &g, repair, grow_part, ShiftIntent::NoOp)
+    make_plan_shift_resuming(src, reloc.as_ref(), &g, repair, grow_part, ShiftIntent::NoOp)
 }
 
 pub(crate) fn pending_relocation(src: &FileSource, grow_part: u32) -> Result<bool, RunOutcome> {
@@ -138,7 +151,7 @@ pub(crate) fn rsize_deferred(src: &mut WriteSource, part: u32, start: u64, end: 
     )
 }
 
-pub(crate) fn ap(src: &mut WriteSource, plan: &Plan, chunk: u64, no_fs: bool, log: &mut dyn FnMut(&str)) -> RunOutcome {
+pub(crate) fn ap(src: &mut WriteSource, plan: &mut Plan, chunk: u64, no_fs: bool, log: &mut dyn FnMut(&str)) -> RunOutcome {
     let (g, _repair) = gpt_policy::resolve_geometry(src).unwrap().unwrap();
     apply(src, &g, plan, chunk, no_fs, false, None, log)
 }
@@ -164,9 +177,16 @@ pub(crate) fn plan_fixture(entries: &[(u32, [u8; 16], u64, u64)]) -> (crate::tes
     let dir = crate::testdir::test_dir("plan");
     let tmp = dir.join("plan.img");
     std::fs::write(&tmp, cur.into_inner()).unwrap();
-    let mut src = plan_open(&tmp);
-    // gptman 只写 GPT 结构，保护 MBR 需自行补——load_gpt 以前者为前置
-    crate::table::ensure_protective_mbr(&mut src, ss).unwrap();
+    // gptman 只写 GPT 结构，保护 MBR 需自行补——load_gpt 以前者为前置。
+    // 补写直接落在文件字节上：夹具不经写原语，进入被测函数前进程写事实保持为假
+    let probe = file_source(&tmp);
+    let lba0 = crate::table::protective_mbr_content(&probe, ss)
+        .unwrap()
+        .expect("a zeroed LBA0 has to be replaced by a protective MBR");
+    let mut raw = std::fs::read(&tmp).unwrap();
+    raw[..lba0.len()].copy_from_slice(&lba0);
+    std::fs::write(&tmp, raw).unwrap();
+    let src = plan_open(&tmp);
     (crate::testdir::TestSource::new(dir, src), tmp)
 }
 
@@ -174,9 +194,14 @@ pub(crate) fn plan_fixture(entries: &[(u32, [u8; 16], u64, u64)]) -> (crate::tes
 /// 构造点），尺寸与指纹出自同一句柄；零指纹会被 `probe_of` 判为「没有 inode 证据」，
 /// 依赖目标身份的用例随即被拒绝
 pub(crate) fn plan_open(path: &std::path::Path) -> WriteSource {
+    WriteSource::unowned(file_source(path))
+}
+
+/// 镜像的 `FileSource` 视图（未挂记录）：夹具在写原语之外读盘面时用它
+fn file_source(path: &std::path::Path) -> FileSource {
     let f = std::fs::OpenOptions::new().read(true).write(true).open(path).unwrap();
     let fingerprint = crate::dev::TargetFingerprint::from_file(&f).unwrap();
-    WriteSource::unowned(FileSource {
+    FileSource {
         identity: crate::dev::TargetIdentity::resolve_image(path),
         file: f,
         path: path.into(),
@@ -187,7 +212,7 @@ pub(crate) fn plan_open(path: &std::path::Path) -> WriteSource {
         fingerprint,
         loop_mapping: None,
         owner: None,
-    })
+    }
 }
 
 /// 把盘上主头的 AlternateLBA 指到一个早于容器末端的值（构造"需要修复"的表）

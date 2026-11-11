@@ -115,7 +115,7 @@ echo "########## E: squashfs + 尾部 overlay（OpenWrt combined）扩容 ######
 # erofs 只读根取分区尾部的 RW overlay 层（src/fsid.rs overlay_offset_at：bytes_used@0x28
 # 按 64KiB 上对齐），内层仅 ext/f2fs 可扩，其余类型拒绝。
 # 本段先经 resizefs（离线，只动 FS），再由 E2 走 resize 整条链路（表 + FS）——
-# 写盘前的 preflight 与写盘后的收尾取同一判据，故 squashfs/erofs 不再被一律先拒
+# 写盘前的 preflight 与写盘后的收尾取同一判据，squashfs/erofs 由该判据决定是否可扩
 SQSRC=$WSL_ROOT/t25sqsrc
 SQIMG=$WSL_ROOT/t25sq.sqfs
 rm -rf "$SQSRC" "$SQIMG"; mkdir -p "$SQSRC"
@@ -147,7 +147,7 @@ else
   echo "E NO GROW (exit=$E, $B0 -> $B1)"; rc=1
 fi
 # E2：同一条链路经 resize（分区 + 内层 FS 一起）——内层由写盘前的 preflight 解析出来，
-# 不再因 squashfs/erofs 不在 grow_support 名单里而在写盘前被拒
+# 是否放行由 grow_target_at 判定，与 grow_support 名单无关
 OUT=$($B resize --yes "$T":1 grow 2>&1); E2=$?
 NEWLAST=$($B info "$T" | grep -o '"last_lba":[0-9]*' | head -1 | cut -d: -f2)
 echo "resize grow exit=$E2 : $(echo "$OUT" | tail -1)"

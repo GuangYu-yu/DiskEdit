@@ -26,7 +26,7 @@ set4kn() { # $1=label  其余=传给 set 的参数
     partx -u "$LD" 2>/dev/null; sleep 1
     # set 首次尝试撞 stale 时 DiskEdit 保留记录，裸重试会被 unfinished-op 闸拒绝——
     # 先 abandon 释放现场（set 幂等，表项重写无副作用）。undo/abandon 的目标必须是
-    # 启动场景时的 $LD：镜像路径侧身份匹配不到现场（产品跨目标回退缺失，见报告）
+    # 启动场景时的 $LD：镜像路径侧身份匹配不到现场（产品未实现跨目标回退）
     $B abandon "$LD" >/dev/null 2>&1
     out=$($B set --yes "$LD":2 "$@" 2>&1); e=$?
   fi

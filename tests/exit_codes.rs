@@ -92,7 +92,7 @@ fn failure_before_any_write_is_four() {
     let missing = dir.join("missing.img");
     let (code, _out, err) = run(&["info", missing.to_str().unwrap()]);
     assert_eq!(code, 4, "{err}");
-    assert!(err.contains("no durable change"), "4 must state the target was not modified: {err}");
+    assert!(err.contains("nothing was written by this run"), "4 must state the target was not modified: {err}");
     assert!(!err.contains("may have changed"), "4 must not borrow the 5 wording: {err}");
     std::fs::remove_dir_all(&dir).unwrap();
 }

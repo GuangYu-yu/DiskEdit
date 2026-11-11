@@ -31,7 +31,8 @@ pub struct PlanEntry {
     pub part_num: u32,
     pub first_lba: u64,
     pub len_lba: u64,
-    pub delta_lba: u64,
+    /// 目标起点相对旧起点的位移（扇区）；负值表示向左移动
+    pub delta_lba: i64,
     /// swap：不搬数据，落位后 mkswap 重建（UUID/PARTUUID/分区号保持）
     pub is_swap: bool,
 }
@@ -83,6 +84,192 @@ pub(crate) fn is_swap_guid(g: &[u8; 16]) -> bool {
     *g == table::SWAP_TYPE_GUID
 }
 
+/// 内容签名对"这条分区是不是 swap"的回答：`Some(true)` 是 swap（可激活且头自洽，或本机
+/// 激活不了、但元数据确实是 swap 的 32K 页——与
+/// [`crate::fsops::Growable::SwapUnactivatable`] 同一口径）；`Some(false)` 认出了**别的**
+/// 文件系统，是正面证据；`None` 什么都没认出来，那不是"不是 swap"，只是这一侧没有答案
+pub(crate) fn content_swap_evidence(p: &crate::fsid::FsProbe) -> Option<bool> {
+    if p.content == crate::fsid::ContentKind::Swap
+        || matches!(p.swap, Some(h) if !h.activatable)
+    {
+        Some(true)
+    } else if p.content == crate::fsid::ContentKind::Unknown {
+        None
+    } else {
+        Some(false)
+    }
+}
+
+/// 结论的依据：两方一致，或只有一方给出答案
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SwapBasis {
+    Agreed,
+    /// 只有分区表的类型声明（内容探测失败 / 读不出来）
+    Declaration,
+    /// 只有内容签名（表里没有可用的类型 GUID，MBR 是其正常情形）
+    Content,
+    /// 记录里的已决策事实（表已提交的现场：目的区内容不再参与判定）
+    Recorded,
+    /// 两方都没有答案
+    Neither,
+}
+
+/// 一条分区的 swap 结论，连同它的依据
+pub(crate) struct SwapVerdict {
+    pub(crate) is_swap: bool,
+    pub(crate) basis: SwapBasis,
+}
+
+impl SwapVerdict {
+    /// 记录里的已决策事实：条目已落在记录的目的位，表提交时这一条的类型已经写成 swap
+    /// （或不是）。目的区此刻装的是右邻搬走前的旧内容，对它的内容签名回答的是
+    /// "这里以前是什么"，不能用来推翻已提交的判定
+    pub(crate) fn recorded(is_swap: bool) -> Self {
+        Self { is_swap, basis: SwapBasis::Recorded }
+    }
+
+    /// 只有一方给出答案时，把"用的是哪一方"变成一句可打印的说明；两方一致时没有可说的
+    pub(crate) fn note(&self, part: u32) -> Option<String> {
+        let which = match self.basis {
+            SwapBasis::Agreed | SwapBasis::Recorded => return None,
+            SwapBasis::Declaration => {
+                "the partition table's type GUID (its content signature could not be read)"
+            }
+            SwapBasis::Content => {
+                "the content signature (the table carries no type GUID for this entry)"
+            }
+            SwapBasis::Neither => {
+                return Some(format!(
+                    "partition #{part}: neither source answers whether this is a swap area \
+                     (no type GUID and no readable content signature) — treating it as non-swap \
+                     and relocating the data as it is"
+                ));
+            }
+        };
+        Some(format!(
+            "partition #{part}: the swap decision comes from {which} — {}",
+            if self.is_swap { "treated as a swap area" } else { "treated as ordinary data" }
+        ))
+    }
+}
+
+/// "这条分区是不是 swap"的**唯一**对账点：声明侧（分区表的类型 GUID）与证据侧
+/// （区间内的内容签名）各答一次，三种情形分别落定。
+///
+/// 两方都有且一致：按一致结果。一方缺失：用另一方——MBR 没有类型 GUID 是正常情形，
+/// 缺声明不等于冲突；内容读不出来也只说明这一侧没答案。两方都有且冲突：**拒绝**，
+/// 并说明声明说什么、证据说什么。
+///
+/// 冲突只能停，不许静默选一个：按声明判，签名被抹过而声明仍是 swap 的分区会被当普通
+/// 数据搬走，重建那一步随之消失；按内容判，MBR 上没有类型 GUID 的真 swap 会漏判，搬完
+/// 不重建，新位置留下一个起不来的 swap 区。两种错都只有"冲突就停"能挡住。
+///
+/// 两方都缺时不拒绝，按非 swap 处理并按原始数据搬移：无条件拒绝会挡住所有内容未知的
+/// 分区（加密卷、未知文件系统），那是比漏判更大的倒退；而原始搬移不破坏 swap——swap
+/// 头随数据一起走、不含绝对偏移，搬完重新 `swapon` 即可用。退的方向是"不做额外动作"
+/// （不重建、不覆写），不是拒绝
+pub(crate) fn reconcile_swap(
+    part: u32,
+    declared: Option<bool>,
+    evidence: Option<bool>,
+) -> Result<SwapVerdict, RunOutcome> {
+    Ok(match (declared, evidence) {
+        (Some(d), Some(e)) if d == e => SwapVerdict { is_swap: d, basis: SwapBasis::Agreed },
+        (Some(d), Some(e)) => {
+            let word = |v: bool| if v { "a swap area" } else { "an ordinary partition" };
+            return Err(RunOutcome::refused(format!(
+                "partition #{part}: the partition table declares {} but the content signature says {} — \
+                 the two readings disagree, so this tool cannot tell whether rewriting the range would \
+                 destroy a swap area; inspect the partition with `diskedit inspect` before moving it",
+                word(d),
+                word(e)
+            )));
+        }
+        (Some(d), None) => SwapVerdict { is_swap: d, basis: SwapBasis::Declaration },
+        (None, Some(e)) => SwapVerdict { is_swap: e, basis: SwapBasis::Content },
+        // 两方都缺：按非 swap 处理、数据原样搬移。判定里不出现 mkswap，故不会覆写任何
+        // 内容；真正的 swap 区搬完只差一次 `swapon`
+        (None, None) => SwapVerdict { is_swap: false, basis: SwapBasis::Neither },
+    })
+}
+
+/// 一条被搬移条目的当前几何：盘上起点、长度与它在表里的 swap 声明。四种拒绝在这里
+/// 给出——不在条目数组里、未定义、端点倒挂、LUKS / LVM PV 不可搬移
+fn move_entry(geometry: &ValidatedGeometry, part: u32) -> Result<(u64, u64, bool), RunOutcome> {
+    let index = geometry
+        .entry_index(part)
+        .ok_or_else(|| RunOutcome::refused(format!("partition #{part} is outside the entry array")))?;
+    let entry = geometry.entries().get(index).ok_or_else(|| {
+        RunOutcome::internal(format!("partition #{part} has no entry in the geometry"))
+    })?;
+    if entry.starting_lba == 0 && entry.ending_lba == 0 {
+        return Err(RunOutcome::refused(format!("partition #{part} is not defined")));
+    }
+    if entry.starting_lba > entry.ending_lba {
+        return Err(RunOutcome::internal(format!(
+            "partition #{part} has an inverted range {}..{}",
+            entry.starting_lba, entry.ending_lba
+        )));
+    }
+    if is_forbidden_type_guid(&entry.partition_type_guid) {
+        return Err(RunOutcome::refused(format!(
+            "partition #{part} is a LUKS / LVM PV partition — this tool does not relocate it, only size \
+             changes are allowed"
+        )));
+    }
+    Ok((
+        entry.starting_lba,
+        entry.ending_lba - entry.starting_lba + 1,
+        is_swap_guid(&entry.partition_type_guid),
+    ))
+}
+
+/// 记录里这一条是否已经落在它的目的位、且当初规划过位移（表已提交的现场）
+fn committed_entry(record: Option<&Relocation>, part: u32, at: u64) -> Option<&RelocEntry> {
+    record?.entries.iter().find(|e| {
+        e.partition == part && e.delta != 0 && e.src_first.checked_add_signed(e.delta) == Some(at)
+    })
+}
+
+/// 装配与命令层预检共用的条目判定：几何 +「这一条是不是 swap」的结论。
+///
+/// 源区间已经在记录的目的位时，表已提交、作业停在后置步骤上：结论取记录里的已决策
+/// 事实，见 [`SwapVerdict::recorded`]；返回的源起点也取记录里的搬移前起点——重建要从
+/// 那里读旧头的 UUID / 卷标，落在目的位上的字节是右邻搬走前的旧内容。其余情形由
+/// 声明侧（类型 GUID）与证据侧（源区间的内容签名）对账，见 [`reconcile_swap`]
+pub(crate) fn move_entry_swap(
+    src: &FileSource,
+    geometry: &ValidatedGeometry,
+    part: u32,
+    record: Option<&Relocation>,
+) -> Result<(u64, u64, SwapVerdict), RunOutcome> {
+    let (src_first, sectors, declared) = move_entry(geometry, part)?;
+    if let Some(e) = committed_entry(record, part, src_first) {
+        // 表里的类型与记录不一致：表在作业之外被改过。按记录的判定重建会覆写一个已不
+        // 属于 swap 的分区，按表走则记录里的重建步会消失。两种都只能停
+        if declared != e.is_swap {
+            return Err(RunOutcome::refused(format!(
+                "partition #{part} sits at the recorded destination but its type on disk no longer \
+                 matches the relocation record — refusing to finish the swap step there"
+            )));
+        }
+        return Ok((e.src_first, sectors, SwapVerdict::recorded(e.is_swap)));
+    }
+    let ss = geometry.sector_size();
+    let base = src_first
+        .checked_mul(ss)
+        .ok_or_else(|| RunOutcome::no_mutation(format!("partition #{part} start overflows byte offset")))?;
+    let bytes = sectors
+        .checked_mul(ss)
+        .ok_or_else(|| RunOutcome::no_mutation(format!("partition #{part} length overflows byte size")))?;
+    // 读不出来只是"这一侧没有答案"，不是错误：声明侧仍可独立作数
+    let evidence = crate::fsid::probe_fs(src, base, bytes)
+        .ok()
+        .and_then(|p| content_swap_evidence(&p));
+    let verdict = reconcile_swap(part, Some(declared), evidence)?;
+    Ok((src_first, sectors, verdict))
+}
+
 /// plan 的进入语义。`grow` 与 `SIZE` 两条命令共用同一个续跑槽位，续跑时必须
 /// 对上号：按自己的语义执行对方的 plan，就是把用户的请求静默放大或缩水
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -102,6 +289,26 @@ pub struct Plan {
     pub kind: PlanKind,
     /// 待执行的修复动作：`plan --grow` 只预览，写命令把它装配成表步骤经执行器落盘
     pub repair: RepairAction,
+}
+
+/// 一条搬移条目在给定块大小下的块布局，是块布局的唯一来源：命令期与续跑的块数上界
+/// （[`verify_relocation_resume`]）都从这里取，同一个条目在两处算出的块数必须相等，
+/// 否则续跑会把"跳过未拷贝的 chunk"放行成提交
+fn entry_spans(
+    first_lba: u64,
+    len_lba: u64,
+    delta_lba: i64,
+    is_swap: bool,
+    ss: u64,
+    chunk_bytes: u64,
+) -> Vec<crate::planner::chunk::ChunkSpan> {
+    if is_swap || delta_lba == 0 || len_lba == 0 {
+        return Vec::new();
+    }
+    match crate::planner::chunk::move_chunk_layout(len_lba, ss, delta_lba.unsigned_abs(), len_lba, chunk_bytes) {
+        Some((chunk, _)) => crate::planner::chunk::spans(first_lba, len_lba, chunk / ss).collect(),
+        None => Vec::new(),
+    }
 }
 
 /// movable 集合与两条硬拒绝的唯一构造处：目标之后所有已定义条目（按起点升序）。
@@ -151,12 +358,14 @@ impl Layout {
 }
 
 /// 单条目落位的唯一实现：长度、位移、终点越界与 swap 标记只算一遍。
-/// 端点倒挂与不可搬移类型已由 [`blockers_after`] 拒绝，这里只处理落点算术
+/// 端点倒挂与不可搬移类型已由 [`blockers_after`] 拒绝，这里只处理落点算术。
+/// `is_swap` 由调用方经 [`move_entry_swap`] 给出（声明侧与内容签名对账后的结论）
 fn relocate_entry(
     num: u32,
     e: &gptman::GPTPartitionEntry,
     new_first: u64,
     last_usable: u64,
+    is_swap: bool,
 ) -> Result<PlanEntry, RunOutcome> {
     let len = e.ending_lba - e.starting_lba + 1;
     let delta = new_first
@@ -170,26 +379,31 @@ fn relocate_entry(
             "insufficient tail space to relocate blockers by the requested size",
         ));
     }
+    let delta_lba = i64::try_from(delta)
+        .map_err(|_| RunOutcome::refused("the relocation shift exceeds a signed LBA offset — refusing"))?;
     Ok(PlanEntry {
         part_num: num,
         first_lba: e.starting_lba,
         len_lba: len,
-        delta_lba: delta,
-        is_swap: is_swap_guid(&e.partition_type_guid),
+        delta_lba,
+        is_swap,
     })
 }
 
 /// 几何求解器：plan 生成只解析 + 验证 + 计算，不写盘。stale 表按「修复后」的几何
 /// 求解，修复动作记入 `plan.repair`，由执行链落实。几何由调用方解析一次并下传，本函数
-/// 不再读盘、不再重新推导边界。
+/// 不再读表、不再重新推导边界；每条目的 swap 结论经 [`move_entry_swap`] 给出，与
+/// [`crate::assembly::assemble_relocation_plan`] 装配时用的是同一处判定
 ///
 /// 两种意图共用同一份目标查找、阻挡集合、单条目落位与计划装配；策略只决定每条目的
 /// 新起点。输出统一按起始 LBA 降序（最右侧先搬），使拷贝永不踩源
 fn solve_layout(
+    src: &FileSource,
     g: &ValidatedGeometry,
     repair: RepairAction,
     grow_part: u32,
     layout: Layout,
+    record: Option<&Relocation>,
 ) -> Result<Plan, RunOutcome> {
     let target_end = gpt_policy::live_entry(g, grow_part)?.ending_lba;
     let movable = blockers_after(g, target_end)?;
@@ -204,7 +418,8 @@ fn solve_layout(
                 let new_first = cursor
                     .checked_sub(len - 1)
                     .ok_or_else(|| RunOutcome::refused("insufficient tail space for relocation"))?;
-                out.push(relocate_entry(*num, e, new_first, last_usable)?);
+                let is_swap = move_entry_swap(src, g, *num, record)?.2.is_swap;
+                out.push(relocate_entry(*num, e, new_first, last_usable, is_swap)?);
                 cursor = new_first.saturating_sub(1);
             }
             out
@@ -230,13 +445,14 @@ fn solve_layout(
             let mut out = Vec::with_capacity(movable.len());
             for (num, e) in &movable {
                 let new_first = cursor.max(e.starting_lba);
-                out.push(relocate_entry(*num, e, new_first, last_usable)?);
+                let is_swap = move_entry_swap(src, g, *num, record)?.2.is_swap;
+                out.push(relocate_entry(*num, e, new_first, last_usable, is_swap)?);
                 let len = e.ending_lba - e.starting_lba + 1;
                 cursor = new_first
                     .checked_add(len)
                     .ok_or_else(|| RunOutcome::refused("relocation target LBA overflows — refusing"))?;
             }
-            out.reverse(); // 升序构造 → 降序排列
+            out.reverse();
             out
         }
     };
@@ -252,11 +468,13 @@ fn solve_layout(
 
 /// 尾打包规划：生产路径只有恢复感知入口（[`make_plan_resuming`]）
 pub(crate) fn plan_tail_packed(
+    src: &FileSource,
     g: &ValidatedGeometry,
     repair: RepairAction,
     grow_part: u32,
+    record: Option<&Relocation>,
 ) -> Result<Plan, RunOutcome> {
-    solve_layout(g, repair, grow_part, Layout::TailPacked)
+    solve_layout(src, g, repair, grow_part, Layout::TailPacked, record)
 }
 
 /// 最小位移规划：`resize SIZE + --allow-move` 的几何，落位算术见 [`solve_layout`]。
@@ -269,12 +487,14 @@ pub(crate) fn plan_tail_packed(
 /// 落点，不会对已搬段二次位移。输出按起始 LBA 降序，各分区的目的区要么落在尾部
 /// 空闲，要么落在其右侧已被搬空分区的旧位置，拷贝永不踩源
 pub(crate) fn shift_plan_from(
+    src: &FileSource,
     g: &ValidatedGeometry,
     repair: RepairAction,
     grow_part: u32,
     shift: u64,
+    record: Option<&Relocation>,
 ) -> Result<Plan, RunOutcome> {
-    solve_layout(g, repair, grow_part, Layout::Shift(shift))
+    solve_layout(src, g, repair, grow_part, Layout::Shift(shift), record)
 }
 
 /// 本次续跑选定的 LV 与它的 extent 大小
@@ -353,6 +573,7 @@ pub(crate) fn lvm_post_for(
 /// [`resume_outcome`]），否则照常现算。几何与修复动作由调用方解析（一条命令解析
 /// 一次，往下传），本函数不读表
 pub fn make_plan_resuming(
+    src: &FileSource,
     relocation: Option<&Relocation>,
     g: &ValidatedGeometry,
     repair: RepairAction,
@@ -369,7 +590,7 @@ pub fn make_plan_resuming(
         // 槽位是别的分区的作业：现算的 plan 与那份作业的现场不符，打印出来会与
         // 盘上未收尾的事自相矛盾，执行器也只会得到一次注定失败的比对
         ResumeRunOutcome::Occupied => Err(foreign_checkpoint_refusal()),
-        ResumeRunOutcome::Empty => plan_tail_packed(g, repair, grow_part),
+        ResumeRunOutcome::Empty => plan_tail_packed(src, g, repair, grow_part, relocation),
     }
 }
 
@@ -392,6 +613,7 @@ pub enum ShiftIntent {
 /// 出现：只有 kind 相符且计划终点恰等于当前末端，才是同一作业的续跑。几何与修复
 /// 动作由调用方解析并下传，本函数不读表
 pub fn make_plan_shift_resuming(
+    src: &FileSource,
     relocation: Option<&Relocation>,
     g: &ValidatedGeometry,
     repair: RepairAction,
@@ -440,7 +662,7 @@ pub fn make_plan_shift_resuming(
             "shrink does not relocate partitions — this entry point only builds relocation plans for growth",
         ));
     };
-    shift_plan_from(g, repair, grow_part, shift)
+    shift_plan_from(src, g, repair, grow_part, shift, relocation)
 }
 
 /// 该分区是否有未收尾的 plan 型搬移作业。几何上"右侧已空、可直接扩容"并不代表
@@ -551,9 +773,39 @@ pub(crate) enum ResumeRunOutcome {
 /// `target_start`：moves 可整份来自 ckpt，其 first+delta 的下界只到 LBA 1——终点低于
 /// 目标分区自身起点就是端点倒挂的表项。上、下两个边界在此收口成唯一判据
 pub fn grow_end_for(plan: &Plan, target_start: u64) -> io::Result<u64> {
+    grow_end_of(
+        plan.moves.iter().map(|m| (m.first_lba, m.delta_lba)),
+        plan.last_usable_lba,
+        target_start,
+    )
+}
+
+/// 同一公式的记录侧入口：续跑校验只能读记录（[`Relocation`]），不能先造一份 `Plan`
+fn grow_end_for_relocations(
+    entries: &[RelocEntry],
+    last_usable: u64,
+    target_start: u64,
+) -> io::Result<u64> {
+    grow_end_of(entries.iter().map(|e| (e.src_first, e.delta)), last_usable, target_start)
+}
+
+/// `(旧起点, 位移)` 序列 → 扩容终点：min(新起点) − 1；无成员时取 `last_usable`。
+/// 上、下两个边界在 [`grow_end_of`] 收口，plan 与记录两条入口共用
+fn grow_end_of(
+    targets: impl Iterator<Item = (u64, i64)>,
+    last_usable: u64,
+    target_start: u64,
+) -> io::Result<u64> {
     let mut leftmost: Option<u64> = None;
-    for m in &plan.moves {
-        let new_first = m.first_lba.checked_add(m.delta_lba).ok_or_else(|| {
+    for (first_lba, delta_lba) in targets {
+        // 端点只供扩容推导，左移的条目推不出扩容终点：不取绝对值顶替，直接拒绝
+        if delta_lba < 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "relocation moves left, so no grow endpoint can be derived from it — refusing",
+            ));
+        }
+        let new_first = first_lba.checked_add_signed(delta_lba).ok_or_else(|| {
             io::Error::new(io::ErrorKind::InvalidData, "relocation target LBA overflows — refusing")
         })?;
         leftmost = Some(leftmost.map_or(new_first, |f| f.min(new_first)));
@@ -563,13 +815,199 @@ pub fn grow_end_for(plan: &Plan, target_start: u64) -> io::Result<u64> {
         Some(f) => f.checked_sub(1).ok_or_else(|| {
             io::Error::new(io::ErrorKind::InvalidData, "relocation target below LBA 1 — refusing")
         })?,
-        None => plan.last_usable_lba,
+        None => last_usable,
     };
-    if grow_end > plan.last_usable_lba {
+    if grow_end > last_usable {
         return Err(io::Error::new(io::ErrorKind::InvalidData, "relocation target beyond last usable LBA — refusing"));
     }
     if grow_end < target_start {
         return Err(io::Error::new(io::ErrorKind::InvalidData, "grow target below its own start — refusing"));
     }
     Ok(grow_end)
+}
+
+/// 续跑一致性：记录里的有序计划、双游标与几何守卫对上"盘上现在是什么"。
+/// 全部检查在写任何字节之前完成，任一不成立都拒绝（3）。`move` 与
+/// `resize --allow-move` 共用这一份，不再各写一套。
+///
+/// 只读记录与几何，不按当前盘面重算 plan：盘上几何已被部分改写时，现算的 delta
+/// 与记录不一致，续跑必须以记录为准。`grow_part == 0` 表示本记录不属于扩容作业
+/// （`move`），扩容相关的两条守卫随之不适用。
+///
+/// 本函数是 `move` 与 `resize --allow-move` 的共享层：只依赖 movepart 的求值规则与
+/// `recovery` 的记录结构，不得 import `cmd::*`——否则它就不是共享层，只是换了个
+/// 地方的命令层
+pub(crate) fn verify_relocation_resume(
+    r: &Relocation,
+    g: &ValidatedGeometry,
+    disk_size: u64,
+    chunk_len: u64,
+) -> Result<(), RunOutcome> {
+    // --chunk 是命令行可控项，单独先查：混进"盘上事实不符"里报会让用户去查盘，
+    // 而这一项的直接原因是本次换了 --chunk
+    if r.chunk_bytes != chunk_len {
+        return Err(RunOutcome::refused(format!(
+            "the recovery record was written with --chunk {} MiB, this run uses {} — re-run with the original value",
+            r.chunk_bytes / (1024 * 1024),
+            chunk_len / (1024 * 1024),
+        )));
+    }
+    // 记录与盘同源的两维：换了目标尺寸或表扇区大小，游标到字节的映射不再成立
+    if r.disk_size != disk_size || r.ss != g.sector_size() {
+        return Err(RunOutcome::refused(
+            "the recovery record does not match the current disk geometry — refusing",
+        ));
+    }
+    // 与下面块数上界同一口径：entry_index 超出条目数是记录被改写或两处进度字段
+    // 口径分叉的信号，夹紧只会把异常放行成「全部完成」
+    if r.entry_index as usize > r.entries.len() {
+        return Err(RunOutcome::refused(format!(
+            "recovery record entry progress {} exceeds the plan's {} entries — the record changed between reads; refusing",
+            r.entry_index,
+            r.entries.len()
+        )));
+    }
+    let done = r.entry_index;
+    for (mi, e) in r.entries.iter().enumerate() {
+        // 已完成的停在 first + delta（表项绝对赋值，重放幂等），未开始的仍在 first；
+        // 正在搬的那一条可能已提交表项而 ckpt 尚未推进，故两个位置都接受
+        let cur = g.entry_index(e.partition).and_then(|i| g.entries().get(i)).ok_or_else(|| {
+            RunOutcome::refused(format!(
+                "the recovery record names partition {} that is no longer on the disk — refusing",
+                e.partition
+            ))
+        })?;
+        let target = e
+            .src_first
+            .checked_add_signed(e.delta)
+            .ok_or_else(|| RunOutcome::no_mutation("relocation target LBA overflows"))?;
+        // 端点也要比：只比起点时，成员末端在中断窗口被改小/改大仍算"停在应停处"，
+        // 而记录里的 len 会继续被当成搬移长度与扩容边界
+        let src_end = e
+            .src_first
+            .checked_add(e.len)
+            .and_then(|v| v.checked_sub(1))
+            .ok_or_else(|| RunOutcome::no_mutation("relocation source range overflows"))?;
+        let dst_end = target
+            .checked_add(e.len)
+            .and_then(|v| v.checked_sub(1))
+            .ok_or_else(|| RunOutcome::no_mutation("relocation target range overflows"))?;
+        let at_src = cur.starting_lba == e.src_first && cur.ending_lba == src_end;
+        let at_dst = cur.starting_lba == target && cur.ending_lba == dst_end;
+        let ok = match (mi as u32).cmp(&done) {
+            std::cmp::Ordering::Less => at_dst,
+            std::cmp::Ordering::Equal => at_src || at_dst,
+            std::cmp::Ordering::Greater => at_src,
+        };
+        if !ok {
+            return Err(RunOutcome::refused(format!(
+                "partition {} is not where the recovery record says it should be (on disk LBA {}, expected {}) — the layout moved under the job; refusing",
+                e.partition, cur.starting_lba, e.src_first
+            )));
+        }
+    }
+    // 目的区校验：上面的位置比对只覆盖源位置这半个维度。目的区同样是盘上可控值——
+    // 中断期间第三方改表（尾打包的目的区恰在 last_usable 端空闲带，最易被新建分区
+    // 占用），或记录被改写出 CRC 自洽的目的区。与**非本作业**条目重叠的续跑会把
+    // chunk 拷贝写到别人的分区并提交重叠表项；本作业成员全部豁免——移位/尾打包的
+    // 目的区合法落在其他成员的旧位
+    let mut dst_ranges = Vec::with_capacity(r.entries.len());
+    for e in &r.entries {
+        let dst = e
+            .src_first
+            .checked_add_signed(e.delta)
+            .ok_or_else(|| RunOutcome::no_mutation("relocation target LBA overflows"))?;
+        let dst_end = dst
+            .checked_add(e.len)
+            .and_then(|v| v.checked_sub(1))
+            .ok_or_else(|| RunOutcome::no_mutation("relocation target range overflows"))?;
+        dst_ranges.push((e.partition, dst, dst_end));
+    }
+    for &(pn, dst, dst_end) in &dst_ranges {
+        for (ei, e) in g.entries().iter().enumerate() {
+            // 空条目（0,0）不可能命中：dst 下界 ≥ first_usable ≥ 2
+            let n = ei as u32 + 1;
+            if n == pn || r.entries.iter().any(|m| m.partition == n) {
+                continue;
+            }
+            if e.starting_lba <= dst_end && dst <= e.ending_lba {
+                return Err(RunOutcome::refused(format!(
+                    "relocation target of partition {} (LBA {}..{}) overlaps partition {} on disk — the layout moved under the job; refusing",
+                    pn, dst, dst_end, n
+                )));
+            }
+        }
+    }
+    // 目的区两两不相交：重叠的目的区无论执行顺序如何都互相覆写
+    for (i, &(apn, ad, ae)) in dst_ranges.iter().enumerate() {
+        for &(bpn, bd, be) in dst_ranges.iter().skip(i + 1) {
+            if ad <= be && bd <= ae {
+                return Err(RunOutcome::refused(format!(
+                    "relocation targets of partitions {} and {} overlap (LBA {}..{}) — inconsistent recovery record; refusing",
+                    apn, bpn, ad, ae
+                )));
+            }
+        }
+    }
+    // 顺序不变量：成员按降序处理（最右侧先搬），故一个目的区可以复写**已处理**
+    // 成员的旧位，但不得覆盖尚未处理成员的源区——那次拷贝会读到已被本目的区覆写
+    // 的数据
+    for (i, &(pn, dst, dst_end)) in dst_ranges.iter().enumerate() {
+        for m in r.entries.iter().skip(i + 1) {
+            let src_end = m
+                .src_first
+                .checked_add(m.len)
+                .and_then(|v| v.checked_sub(1))
+                .ok_or_else(|| RunOutcome::no_mutation("relocation source range overflows"))?;
+            if dst <= src_end && m.src_first <= dst_end {
+                return Err(RunOutcome::refused(format!(
+                    "relocation target of partition {} (LBA {}..{}) would overwrite the source of partition {} (LBA {}..{}) before it is copied — inconsistent recovery record; refusing",
+                    pn, dst, dst_end, m.partition, m.src_first, src_end
+                )));
+            }
+        }
+    }
+    if r.grow_part != 0 {
+        // 扩容区间同样会写进表项并扩进 FS：中断期间第三方可能在"目标当前末端+1 ..
+        // 最左目的区−1"的空闲段新建分区（它与任何目的区都不重叠），照旧扩到
+        // grow_end 就会写出重叠表并把 FS 扩进该分区。成员豁免：grow_end 恒小于
+        // 每个成员的新起点，而新起点不小于其源起点
+        let ge = gpt_policy::live_entry(g, r.grow_part)?;
+        let future_grow_end = grow_end_for_relocations(&r.entries, g.last_usable_lba(), ge.starting_lba)?;
+        // 缩方向同样要拒：中断期间第三方可以把目标扩到 grow_end 之外，照 ckpt
+        // 收尾就会把表项缩回去，而 FS 已按更大的分区扩过
+        if future_grow_end < ge.ending_lba {
+            return Err(RunOutcome::refused(format!(
+                "partition {} already ends at LBA {}, past the recovery record's grow target {} — \
+                 finishing would shrink it below a filesystem that may already fill it; refusing",
+                r.grow_part, ge.ending_lba, future_grow_end
+            )));
+        }
+        if future_grow_end > ge.ending_lba {
+            for (ei, e) in g.entries().iter().enumerate() {
+                let n = ei as u32 + 1;
+                if n == r.grow_part || r.entries.iter().any(|m| m.partition == n) {
+                    continue;
+                }
+                if e.starting_lba <= future_grow_end && e.ending_lba > ge.ending_lba {
+                    return Err(RunOutcome::refused(format!(
+                        "the grown partition would extend into partition {} (LBA {}..{}) created since the record was written — the layout moved under the job; refusing",
+                        n, e.starting_lba, e.ending_lba
+                    )));
+                }
+            }
+        }
+    }
+    // 块数上界：越界不是合法运行能产出的进度，静默 min 会把"跳过未拷贝的 chunk"
+    // 放行成提交。布局规则只来自 [`entry_spans`]
+    let chunk_bound = r.entries.get(done as usize).map_or(0, |e| {
+        entry_spans(e.src_first, e.len, e.delta, e.is_swap, r.ss, r.chunk_bytes).len() as u64
+    });
+    if r.chunks_in_entry > chunk_bound {
+        return Err(RunOutcome::refused(format!(
+            "recovery record chunk progress {} exceeds the bound {} fixed in the plan — the record changed between reads; refusing",
+            r.chunks_in_entry, chunk_bound
+        )));
+    }
+    Ok(())
 }

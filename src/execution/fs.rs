@@ -63,16 +63,14 @@ pub(crate) fn preflight(
     step: &FsResize,
     sector_size: u64,
 ) -> Result<(), RunOutcome> {
-    let (base, len) = step
-        .byte_range(sector_size)
-        .map_err(|why| RunOutcome::internal(format!("{why} — nothing was written")))?;
+    let (base, len) = step.byte_range(sector_size).map_err(RunOutcome::internal)?;
     let growable = fsops::grow_target_at(src, step.part, base, len).map_err(RunOutcome::from)?;
     if let Some(planned) = step.fstype
         && let Growable::Target(target) = &growable
         && target.fstype != planned
     {
         return Err(RunOutcome::refused(format!(
-            "partition {} holds {} on disk but the plan was made for {planned} — nothing was written",
+            "partition {} holds {} on disk but the plan was made for {planned}",
             step.part, target.fstype
         )));
     }
@@ -81,9 +79,9 @@ pub(crate) fn preflight(
 
 /// 执行一个 FsResize 步骤。
 ///
-/// `wrote_target` 是进入本步时计划是否已经写过目标字节：只有它为 false 时，FS 层的
-/// 失败才能按 [`RunOutcome::from`] 的原分类上报。越过首写之后一律改判为
-/// [`RunOutcome::partial`]，否则 [`FsError::Io`] 会把"可能已写"洗成"确定未写盘"。
+/// 屏障落下之后失败不再回退成"确定未写盘"：外部工具可能已改过文件系统，按
+/// [`crate::outcome::crossed_irreversible_point`] 交成待办。屏障之前的失败只报 FS 层的原因
+/// （[`RunOutcome::from`] 的原分类）。
 ///
 /// `Ok(Some(pending))` 是本步**做过一部分、后置条件未达成**：表已扩而文件系统侧没有
 /// 可写的动作，或外部工具失败。它与失败的区别是"盘上的状态是已知的、还差一步"，
@@ -92,64 +90,51 @@ pub(crate) fn execute(
     src: &mut WriteSource,
     step: &FsResize,
     sector_size: u64,
-    wrote_target: bool,
     sink: &mut dyn StepSink,
 ) -> Result<Option<Pending>, RunOutcome> {
-    let (base, len) = step.byte_range(sector_size).map_err(|why| {
-        // 预扫描已经判过同一份载荷，这里的失败只是兜底：首写之前仍是计划不合法，
-        // 首写之后按"盘可能已改变"上报
-        if wrote_target {
-            RunOutcome::partial(why)
-        } else {
-            RunOutcome::internal(why)
-        }
-    })?;
-    let growable = fsops::grow_target_at(src, step.part, base, len)
-        .map_err(|e| fs_failure(e, step.part, wrote_target))?;
+    // 预扫描已经判过同一份载荷，这里的失败只是兜底：计划不合法
+    let (base, len) = step.byte_range(sector_size).map_err(RunOutcome::internal)?;
+    let growable =
+        fsops::grow_target_at(src, step.part, base, len).map_err(|e| fs_failure(e, step.part))?;
     let target = match growable {
         Growable::Target(target) => target,
         // 预扫描按同一份结论放行过，走到这里说明判定与执行之间盘被改过。
-        // 已写过目标字节：表已扩、文件系统侧没有可写的动作——用与命令级收尾同一份分类
-        // 交出一条待办；没写过：仍是"本步没有可做的事"，按拒绝上报
+        // 已越过不可逆写入点：表已扩、文件系统侧没有可写的动作——用与命令级收尾同一份分类
+        // 交出一条待办；未越过：仍是"本步没有可做的事"，按拒绝上报
         other => {
-            if wrote_target {
+            if crate::outcome::crossed_irreversible_point() {
                 let p = crate::movepart::grow_post(step.part, &other);
                 sink.note(&p.log);
                 return Ok(p.pending);
             }
-            return Err(unfinished(false, no_target_reason(step.part, &other)));
+            return Err(RunOutcome::refused(no_target_reason(step.part, &other)));
         }
     };
     // 外部工具改写的字节不进 journal：屏障落在工具启动之前，undo 见屏障即拒绝回滚
     src.mark_non_reversible().map_err(|e| {
-        let cause = format!(
+        RunOutcome::no_mutation(format!(
             "partition {}: cannot persist the recovery barrier before resizing the filesystem: {e}",
             step.part
-        );
-        if wrote_target {
-            RunOutcome::partial(cause)
-        } else {
-            RunOutcome::no_mutation(cause)
-        }
+        ))
     })?;
-    let hint = || {
+    let hint = |e: &fsops::FsError| {
         crate::fsops::rescue_hint(
             Some(target.fstype),
             &crate::dev::part_dev_hint(src, step.part, base),
+            e.unsupported_reason(),
         )
     };
     match target.resize_fs(src) {
         // 核心已完成；挂载点没卸掉是一条未完成的后置条件，不是本步失败
         Ok(Some(leak)) => Ok(Some(leak.into_pending(step.part))),
         Ok(None) => Ok(None),
-        // 写过目标字节：盘上的状态是已知的（表已扩、FS 未扩），补救命令由 FS 层给
-        Err(e) if wrote_target => Ok(Some(Pending::new(
+        // 屏障已落下：盘上的状态是已知的（表已扩、FS 未扩），补救命令由 FS 层给
+        Err(e) => Ok(Some(Pending::new(
             step.part,
             PendingKind::Fs,
             e.to_string(),
-            hint(),
+            hint(&e),
         ))),
-        Err(e) => Err(fs_failure(e, step.part, false)),
     }
 }
 
@@ -175,23 +160,8 @@ fn no_target_reason(part: u32, g: &Growable) -> String {
     }
 }
 
-/// FS 层失败落成出口语义。越过首写之后只有一种事实可说：盘可能已改变
-fn fs_failure(e: FsError, part: u32, wrote_target: bool) -> RunOutcome {
-    if wrote_target {
-        RunOutcome::partial(format!(
-            "partition {part}: the filesystem resize failed: {e}"
-        ))
-    } else {
-        RunOutcome::from(e).context(&format!("partition {part}: the filesystem resize failed"))
-    }
-}
-
-/// 本步没有做成、也没有产生本步的写入：已写过目标字节时归部分完成，
-/// 否则按请求与现状不符拒绝
-fn unfinished(wrote_target: bool, cause: impl Into<String>) -> RunOutcome {
-    if wrote_target {
-        RunOutcome::partial(cause)
-    } else {
-        RunOutcome::refused(cause)
-    }
+/// FS 层失败落成出口语义：原因按 [`RunOutcome::from`] 的原分类交出，
+/// 已写过目标字节时由出口的归责改判为部分完成
+fn fs_failure(e: FsError, part: u32) -> RunOutcome {
+    RunOutcome::from(e).context(&format!("partition {part}: the filesystem resize failed"))
 }

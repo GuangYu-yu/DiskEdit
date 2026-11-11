@@ -1,10 +1,9 @@
-//! 旧 journal 的拒绝口径与目标锁：这两条在单记录模型下仍然成立。
+//! 旧 journal 的拒绝口径与目标锁。
 //!
-//! 恢复现场已统一落在记录目录内（`<image>.diskedit/record`），旧 journal 与旧 checkpoint
-//! 既不再由任何命令写出，也不再参与现场枚举——它们只是"落点上存在的未识别条目"。
+//! 恢复现场统一落在记录目录内（`<image>.diskedit/record`），旧 journal 与旧 checkpoint
+//! 不由任何命令写出，也不参与现场枚举——它们只是"落点上存在的未识别条目"。
 //! 等价的状态类覆盖见 `tests/recovery_crash.rs` / `tests/recovery_states.rs` /
-//! `tests/recovery_quarantine.rs`，以及 `tests/cli/record.rs` 的三档崩溃注入
-//! （原文的"生命周期"与"目标缩短后拒绝"两条由那里的 record 用例覆盖）。
+//! `tests/recovery_quarantine.rs`，以及 `tests/cli/record.rs` 的三档崩溃注入。
 //! 本文件只保留两条：旧 journal 的拒绝口径（不迁移、不回放、不删除），
 //! 以及目标锁的序列化与陈旧锁无害。
 
@@ -44,7 +43,7 @@ fn a_legacy_journal_is_refused_and_left_in_place() {
 
     let (c, _, e) = run(&["new", img_s, "--yes"]);
     assert_eq!(c, 0, "{e}");
-    // 迁移期残留的形态：落点上有条目，但它不是记录
+    // 旧 journal 的形态：落点上有条目，但它不是记录
     std::fs::write(&journal, b"DEJL\x07 not a recovery record").unwrap();
     let before = std::fs::read(&img).unwrap();
 

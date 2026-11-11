@@ -3,7 +3,6 @@
 use std::fmt;
 
 /// 目标载体的种类：能力矩阵按它与平台共同裁定
-#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum MediaKind {
     Block,

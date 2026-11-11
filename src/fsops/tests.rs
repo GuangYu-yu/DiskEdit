@@ -166,7 +166,7 @@ pub(crate) fn mkfs_tool_keeps_ext_family_split() {
 #[test]
 pub(crate) fn unsupported_fstype_message_is_frozen() {
     let e = parse_fstype("zfs").unwrap_err();
-    assert!(matches!(e, FsError::UnsupportedFs(_)));
+    assert!(matches!(e, FsError::UnsupportedFs { .. }));
     assert_eq!(
         e.to_string(),
         "unsupported fstype zfs (supported: ext2/3/4, xfs, btrfs, f2fs, vfat, exfat, ntfs, swap)"
@@ -222,7 +222,9 @@ pub(crate) fn grow_target_at_separates_nothing_to_do_from_unsupported() {
     let mut xfs = vec![0u8; 4096];
     xfs[0..4].copy_from_slice(b"XFSB");
     match grow_target_at(&fs_fixture("ovl_xfs", squashfs_head(&xfs)), 3, 0, LEN) {
-        Err(FsError::UnsupportedFs(m)) => assert!(m.contains("overlay layer identified as xfs"), "{m}"),
+        Err(FsError::UnsupportedFs { detail: m, .. }) => {
+            assert!(m.contains("overlay layer identified as xfs"), "{m}")
+        }
         Err(e) => panic!("expected the inner layer to be named in the refusal, got {e}"),
         Ok(_) => panic!("xfs overlay layer must be refused"),
     }
@@ -232,7 +234,7 @@ pub(crate) fn grow_target_at_separates_nothing_to_do_from_unsupported() {
     no_layer[0..4].copy_from_slice(b"hsqs");
     assert!(matches!(
         grow_target_at(&fs_fixture("ovl_none", no_layer), 3, 0, LEN),
-        Err(FsError::UnsupportedFs(m)) if m.contains("without a trailing RW overlay layer")
+        Err(FsError::UnsupportedFs { detail: m, .. }) if m.contains("without a trailing RW overlay layer")
     ));
 
     // 普通分区：可扩目标就是分区自己
@@ -270,7 +272,7 @@ pub(crate) fn grow_target_at_separates_nothing_to_do_from_unsupported() {
     exfat[3..11].copy_from_slice(b"EXFAT   ");
     assert!(matches!(
         grow_target_at(&fs_fixture("plain_exfat", exfat), 2, 0, 64 * 1024),
-        Err(FsError::UnsupportedFs(m)) if m.contains("cannot grow exfat")
+        Err(FsError::UnsupportedFs { detail: m, .. }) if m.contains("cannot grow exfat")
     ));
 }
 
@@ -283,7 +285,7 @@ pub(crate) fn unidentified_region_is_refused_with_a_route_forward() {
     assert!(check_grow_step(Growable::SwapUnactivatable, true).is_ok());
     assert!(check_grow_step(Growable::NoFilesystem(Some(ContentKind::Lvm2Pv)), true).is_ok());
     match check_grow_step(Growable::NoFilesystem(None), true) {
-        Err(FsError::UnsupportedFs(m)) => {
+        Err(FsError::UnsupportedFs { detail: m, .. }) => {
             assert!(m.contains("not identified"), "{m}");
             assert!(m.contains("its own tool"), "{m}");
         }
@@ -379,35 +381,38 @@ pub(crate) fn temp_mount_points_are_unique() {
 
 #[test]
 pub(crate) fn erase_range_table_layout() {
-    // 2 PiB 分区：原始表 10 行，其中 4 条 bcachefs 桶行取整后同址，被相邻重复项去重，
-    // 无越界时产出 7 个区间
-    let big = 2 * 1024 * 1024 * 1024 * 1024 * 1024u64; // 2 PiB
+    // 2 PiB 分区：新表 7 行全在界内，产出 7 个区间
+    let big = 2 * 1024 * 1024 * 1024 * 1024 * 1024u64;
     let rs = erase_ranges(big, 512);
     assert_eq!(rs.len(), 7);
     assert_eq!(rs[0], (0, 512 * 1024));
-    assert_eq!(rs[1], (64 * 1024 * 1024, 4096));
+    assert_eq!(rs[1], (2 * 1024 * 1024, 4096));
+    assert_eq!(rs[2], (64 * 1024 * 1024, 4096));
+    assert_eq!(rs[3], (256 * 1024 * 1024 * 1024, 4096));
     // FastTrack：起点 = 末尾 -3087 扇区，长度 512B 恰整扇区
     assert_eq!(rs[4], (big - 3087 * 512, 512));
-    // 尾部 768KiB 区间不越界
-    let tail = rs.last().unwrap();
-    assert_eq!(tail.1 % 512, 0);
-    assert!(tail.0 + tail.1 <= big);
-    // 8MiB 分区：64MiB/256GiB/1PiB 越界裁掉，头部+FT+bcachefs+尾部 = 4 区间
+    // 末尾行固定在 L−1 MiB，不做桶对齐
+    assert_eq!(rs[5], (big - 1024 * 1024, 4096));
+    // 尾部 768KiB 区间不越界，末端裁剪到分区界
+    assert_eq!(rs[6], (big - 512 * 1024, 512 * 1024));
+    // 8MiB 分区：64MiB/256GiB 越界裁掉，头部+2MiB+FT+末尾+尾部 = 5 区间
     let small = erase_ranges(8 * 1024 * 1024, 512);
-    assert_eq!(small.len(), 4);
+    assert_eq!(small.len(), 5);
     assert_eq!(small[0], (0, 512 * 1024));
-    assert_eq!(small[1], (8 * 1024 * 1024 - 3087 * 512, 512));
-    // 尾部区间裁剪后长度 = 768K−(768K−512K) = 512K（末端到分区界）
+    assert_eq!(small[1], (2 * 1024 * 1024, 4096));
+    assert_eq!(small[2], (8 * 1024 * 1024 - 3087 * 512, 512));
+    assert_eq!(small[3], (8 * 1024 * 1024 - 1024 * 1024, 4096));
+    // 尾部区间裁剪后长度 = 512K（末端到分区界）
     let tail = small.last().unwrap();
     assert_eq!(tail.0 + tail.1, 8 * 1024 * 1024);
-    // 256GiB 分区：头部+64MiB+FT+bcachefs+尾部 = 5 区间
+    // 256GiB 分区：256GiB 行起点落在分区界、裁剪为空；
+    // 头部+2MiB+64MiB+FT+末尾+尾部 = 6 区间
     let mid = erase_ranges(256 * 1024 * 1024 * 1024u64, 512);
-    assert_eq!(mid.len(), 5);
-    assert_eq!(mid[1], (64 * 1024 * 1024, 4096));
-    // bcachefs 桶对齐：-1MiB 先按 rounding 下取整再落扇区界
-    // （part_len−1MiB 非桶对齐时命中更低位）
+    assert_eq!(mid.len(), 6);
+    assert_eq!(mid[2], (64 * 1024 * 1024, 4096));
+    // 末尾行不随桶对齐移动：8288K 分区仍落在 L−1 MiB
     let odd = erase_ranges(8288 * 1024, 512);
-    assert_eq!(odd[2], (7168 * 1024, 4096)); // floor(7288K, 128K) = 7168K
+    assert_eq!(odd[3], (8288 * 1024 - 1024 * 1024, 4096));
 }
 
 /// 卸载侧的判定：只有"跑完且退出码 0"算没有待办。非零退出与工具缺失都不能
@@ -446,7 +451,7 @@ pub(crate) fn leftover_mount_rides_either_result() {
         Ok(_) => panic!("core failure stays the main error"),
     };
     assert!(
-        matches!(err, FsError::UnsupportedFs(ref m) if m.contains("boom") && m.contains("/mnt/x")),
+        matches!(err, FsError::UnsupportedFs { detail: ref m, .. } if m.contains("boom") && m.contains("/mnt/x")),
         "the leftover mount point is folded into the main error without changing its class"
     );
 }
@@ -455,15 +460,15 @@ pub(crate) fn leftover_mount_rides_either_result() {
 pub(crate) fn erase_ranges_boundaries() {
     const K: u64 = 1024;
     const M: u64 = 1024 * K;
-    // part_len 恰为 rounding（bcachefs 128K 桶）整数倍：pos = part_len−1M 落桶界，无需取整
-    // （FT 行起点算成负数后被裁剪丢弃，bcachefs 是第 2 个产出区间）
+    // part_len−1 MiB 恰在 128 KiB 边界：末尾行固定 L−1 MiB，取整不改变位置
+    // （FT 行起点为负被裁剪丢弃，末尾行是第 2 个产出区间）
     let exact = erase_ranges(M + 128 * K, 512);
     assert_eq!(exact[1], (128 * K, 4 * K));
     // 多 1 字节：floor 后命中同一桶界
     let plus1 = erase_ranges(M + 128 * K + 1, 512);
     assert_eq!(plus1[1], (128 * K, 4 * K));
     // 1MiB 分区：头部 512K + 尾部 512K——尾部行（-512K, 768K）跨尾裁剪保留半段
-    // （不整段跳过），bcachefs 四行起点被 floor 到 0、产出的 (0,4K) 与头部不同址故保留
+    // （不整段跳过）；末尾行起点被 floor 到 0，产出的 (0,4K) 与头部不同址故保留
     // （重复写零幂等，只去重相邻的完全相同项，不做区间合并）
     let tiny = erase_ranges(M, 512);
     assert!(tiny.contains(&(0, 512 * K)));
@@ -472,7 +477,7 @@ pub(crate) fn erase_ranges_boundaries() {
     // part_len = 1536K：尾部区间（from_end=512K）起点 = 1M（256K 取整后恰对齐），与头部不重叠
     let tail_fit = erase_ranges(1536 * K, 512);
     assert_eq!(tail_fit.last().unwrap(), &(M, 512 * K));
-    // 所有区间：整扇区、落在分区界内（不同 rounding 的桶对齐不保证产出有序，
+    // 所有区间：整扇区、落在分区界内（负偏移行不保证产出有序，
     // 未排序——wipe_zero 逐区间写零与顺序无关）
     for len in [M, 768 * K + 1, M + 128 * K + 1, 8 * M + 1, 8288 * K] {
         for &(s, l) in erase_ranges(len, 512).iter() {

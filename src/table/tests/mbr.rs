@@ -60,7 +60,7 @@ pub(crate) fn msdos_entry_start_zero_is_damaged_and_refused() {
 ///
 /// 判定在纯函数里（`add_mdos_entry_image`），所以这里直接把 3 TiB 的**容器扇区数**
 /// 喂给它：真实夹具造不出那么大的镜像，而写路径要先读三扇区摘要（`TableStamp::head_tail`），
-/// 把 `size` 虚拟放大只会让用例在到达上限判定之前短读——这条用例此前就是这样红的。
+/// 把 `size` 虚拟放大只会让用例在到达上限判定之前短读。
 #[test]
 pub(crate) fn add_mdos_entry_rejects_beyond_32bit_lba() {
     let mut lba0 = vec![0u8; 512];

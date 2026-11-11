@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 补测：从未运行过的分支 + 新改动 + 边界
+# 覆盖分支与边界
 #  A check 命令   B superfloppy（整盘 FS）   C resize --start 用法错误（非本命令选项）
 #  D 缩容+--allow-move   E 边界（128 分区 / 紧贴 last_usable）
 #  F mkfs 各 FS   G --sector-size 显式传参（镜像）

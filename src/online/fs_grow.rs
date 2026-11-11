@@ -61,7 +61,7 @@ pub(crate) fn fs_grow(t: &OnlineTarget, fstype: Option<ContentKind>) -> Result<(
 pub(crate) fn fs_grow_hint(t: &OnlineTarget, fstype: Option<ContentKind>) -> String {
     match fs_grow_cmd(t, fstype) {
         Some((prog, args)) => format!("{prog} {}", args.join(" ")),
-        None => crate::fsops::rescue_hint(fstype, &t.part_dev.to_string_lossy()),
+        None => crate::fsops::rescue_hint(fstype, &t.part_dev.to_string_lossy(), None),
     }
 }
 

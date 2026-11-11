@@ -24,7 +24,9 @@ pub const EXIT_INTERNAL: u8 = 1;
 pub const EXIT_USAGE: u8 = 2;
 /// 策略拒绝或前置条件不满足：无表、无此分区、缺 --yes、表结构非法、目标忙
 pub const EXIT_REFUSED: u8 = 3;
-/// 操作失败，且确认没有产生持久化修改（durable boundary 之前的 I/O/环境故障）
+/// 操作失败，且本次运行未向目标发出过写：判据是本次运行从未调到写原语
+/// （[`target_may_have_been_written`] 在写原语之前置位，取反即「从未调用」）。
+/// 不排除外部写者改过盘；锁、恢复记录、日志等伴随文件不计入
 pub const EXIT_NO_MUTATION: u8 = 4;
 /// 写盘已发生，但结论不是整体成功：部分完成、已应用而后续步骤待办，或表已写而内核
 /// 视图未同步（[`KernelSync::Stale`]）。补救指引随结果打印
@@ -32,21 +34,161 @@ pub const EXIT_PARTIAL: u8 = 5;
 /// 平台或能力不支持：工具缺失、平台无对应 API、目标类型不在支持范围
 pub const EXIT_UNSUPPORTED: u8 = 6;
 
-/// 本进程是否可能已经写过目标字节。
-///
-/// panic 展开后调用栈里的进度无处安放，`main` 的 catch 点只能从这里取"目标是否可能
-/// 已改变"。置位点即全部目标写入通道：写句柄的 `write_raw`、mkfs 前的 `wipe_zero`、
-/// 启动后会改动目标的外部工具（`fsops::env::run_write*`）。置位后不复位：一次运行
-/// 越过首写之后，任何故障都不能再断言目标未改动
-static TARGET_MAY_BE_WRITTEN: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
+/// 统一出口在「本次未写盘」的失败之后追加的一行。生成文档引用本常量，
+/// 不另抄字面量
+pub(crate) const NOTHING_WRITTEN: &str = "— nothing was written by this run";
+
+thread_local! {
+    /// 一次运行的写事实。线程作用域：生产一条命令一个线程一次运行，单测每个用例各占
+    /// 一个线程；同一线程被复用（如串行跑测试）时由 [`reset_run_facts`] 显式复位
+    static RUN_FACTS: RunFacts = const { RunFacts::new() };
+}
+
+struct RunFacts {
+    /// 本次运行是否可能已经写过目标字节。置位点即全部目标写入通道：写句柄的
+    /// `write_raw`、mkfs 前的 `wipe_zero`、启动后会改动目标的外部工具
+    /// （`fsops::env::run_write*`）。一次运行内置位后不复位
+    target_may_be_written: std::cell::Cell<bool>,
+    /// 恢复记录是否已越过不可逆写入点（`restore_blocked` 或已提交）
+    record_past_irreversible: std::cell::Cell<bool>,
+    /// 本次运行是否已记下首写步骤。区分"还没写过"与"首写不可归属"：后者记为空，
+    /// 但此后带归属的写不能改写它
+    first_write_seen: std::cell::Cell<bool>,
+    /// 本次运行第一次向目标写出字节时所属的步骤。由施加者在写入口传入，只记第一次。
+    /// 未经写入口的首写（`wipe_zero`、`fsops::env::run_write*`）记为空，此后即使有
+    /// 带归属的写入也不能改写它——诊断行陈述的是"首写"，不是"首个可归属的写"
+    first_write_step: std::cell::Cell<Option<WriteStep>>,
+    /// 本次运行是否已经建出或接管过一份恢复记录。呈现层据此区分"本次没写、但记录还在
+    /// 盘上可续"与"本次什么也没留下"
+    record_present: std::cell::Cell<bool>,
+    /// 接管到的记录是否已越过提交点。已提交的记录说明目标字节已定型，只差释放；
+    /// 未提交的才是可以接着做的作业
+    record_finalized: std::cell::Cell<bool>,
+    /// 本次运行是否把恢复记录写出过盘。回答的是「本次运行落过盘没有」，不是记录内容：
+    /// 不决定记录能否清理，也不决定能否报 `Applied`
+    record_persisted: std::cell::Cell<bool>,
+}
+
+impl RunFacts {
+    const fn new() -> Self {
+        Self {
+            target_may_be_written: std::cell::Cell::new(false),
+            record_past_irreversible: std::cell::Cell::new(false),
+            first_write_seen: std::cell::Cell::new(false),
+            first_write_step: std::cell::Cell::new(None),
+            record_present: std::cell::Cell::new(false),
+            record_finalized: std::cell::Cell::new(false),
+            record_persisted: std::cell::Cell::new(false),
+        }
+    }
+}
+
+/// 复位本次运行的写事实。两处运行边界各调一次：命令入口与每次构造
+/// [`crate::dev::WriteSource`]
+pub(crate) fn reset_run_facts() {
+    RUN_FACTS.with(|f| {
+        f.target_may_be_written.set(false);
+        f.record_past_irreversible.set(false);
+        f.first_write_seen.set(false);
+        f.first_write_step.set(None);
+        f.record_present.set(false);
+        f.record_finalized.set(false);
+        f.record_persisted.set(false);
+    });
+}
+
+/// 一次写入的归属。诊断行只报这个值，不报命令名——同一命令的多个写步骤
+/// 失败含义不同，命令名区分不了
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WriteStep {
+    /// 数据搬移/复制的块写入；`part` 是被搬移的条目号
+    Relocate { part: u32 },
+    /// 分区表写入
+    Table,
+    /// 文件系统内部字段的写入
+    Fs { part: u32 },
+    /// 不含数据搬移的修复写入
+    Repair,
+}
+
+impl std::fmt::Display for WriteStep {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Relocate { part } => write!(f, "Relocate(part {part})"),
+            Self::Table => write!(f, "Table"),
+            Self::Fs { part } => write!(f, "Fs(part {part})"),
+            Self::Repair => write!(f, "Repair"),
+        }
+    }
+}
 
 pub(crate) fn note_target_write() {
-    TARGET_MAY_BE_WRITTEN.store(true, std::sync::atomic::Ordering::Relaxed);
+    RUN_FACTS.with(|f| {
+        if !f.first_write_seen.get() {
+            f.first_write_seen.set(true);
+            f.first_write_step.set(None);
+        }
+        f.target_may_be_written.set(true);
+    });
+}
+
+/// 写入口专用：记下首写步骤，并照常置位写事实
+pub(crate) fn note_target_write_step(step: WriteStep) {
+    RUN_FACTS.with(|f| {
+        if !f.first_write_seen.get() {
+            f.first_write_seen.set(true);
+            f.first_write_step.set(Some(step));
+        }
+        f.target_may_be_written.set(true);
+    });
+}
+
+pub(crate) fn first_write_step() -> Option<WriteStep> {
+    RUN_FACTS.with(|f| f.first_write_step.get())
 }
 
 pub(crate) fn target_may_have_been_written() -> bool {
-    TARGET_MAY_BE_WRITTEN.load(std::sync::atomic::Ordering::Relaxed)
+    RUN_FACTS.with(|f| f.target_may_be_written.get())
+}
+
+pub(crate) fn note_record_present(committed: bool) {
+    RUN_FACTS.with(|f| {
+        f.record_present.set(true);
+        if committed {
+            f.record_finalized.set(true);
+        }
+    });
+}
+
+pub(crate) fn record_is_present() -> bool {
+    RUN_FACTS.with(|f| f.record_present.get())
+}
+
+/// 记录是否已定型：接管时 `commit == Committed`（表步已提交，只剩释放）
+pub(crate) fn record_is_finalized() -> bool {
+    RUN_FACTS.with(|f| f.record_finalized.get())
+}
+
+pub(crate) fn note_record_past_irreversible_point() {
+    RUN_FACTS.with(|f| f.record_past_irreversible.set(true));
+}
+
+/// 作业是否已越过不可逆写入点：本次运行写过目标字节，或恢复记录已落屏障/
+/// 提交。出口归责、FS 步的"表已扩"分支与装配期的越界判定都只问这一处
+pub(crate) fn crossed_irreversible_point() -> bool {
+    RUN_FACTS.with(|f| f.target_may_be_written.get() || f.record_past_irreversible.get())
+}
+
+/// 置位点在 `RecordJournal::persist` 的整份替换/创建成功之后。barrier 只在记录尚未
+/// 落盘时经它落盘，表区 preimage 等路径同样经它落盘；只读打开既有记录不置位。
+/// 置位点只在 Linux：其余平台没有记录落点
+#[cfg(target_os = "linux")]
+pub(crate) fn note_record_persisted() {
+    RUN_FACTS.with(|f| f.record_persisted.set(true));
+}
+
+pub(crate) fn record_persisted() -> bool {
+    RUN_FACTS.with(|f| f.record_persisted.get())
 }
 
 /// 外部 FS 工具改的是文件系统内容，journal 只记分区表写入。一次命令可能走多个外部
@@ -102,26 +244,56 @@ pub enum KernelSync {
     Stale,
 }
 
+/// `Partial` 的来源。退出码相同，只能靠这一项分清四种成因：执行器在写原语处观察到的失败
+/// （`ObservedWriteFailure`）、写已成功但写后核对或后置条件不成立（`PostconditionAfterWrite`）、
+/// 已应用但读回证据拿不到（`UnverifiedAfterWrite`）、归责点据"本次已写过"把别的结论改判
+/// （`DerivedFromPriorWrite`）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PartialOrigin {
+    /// 执行器在写原语处直接观察到失败（写调用返回 Err）
+    ObservedWriteFailure,
+    /// 写已成功，写后核对或后置条件不成立
+    PostconditionAfterWrite,
+    /// 已应用，但读回证据拿不到：不是失败，也不构成 Applied
+    UnverifiedAfterWrite,
+    /// 归责点据「作业已越过不可逆写入点」把原先的 Refused/NoMutation/Internal 改判为 5
+    DerivedFromPriorWrite,
+}
+
+impl PartialOrigin {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::ObservedWriteFailure => "observed-write-failure",
+            Self::PostconditionAfterWrite => "postcondition-after-write",
+            Self::UnverifiedAfterWrite => "unverified-after-write",
+            Self::DerivedFromPriorWrite => "derived-from-prior-write",
+        }
+    }
+}
+
 /// 一次布局操作的结果。`Applied` 之外的分支覆盖未完成的每种成因，
 /// 它们的退出码与报告文字都不同，必须由类型区分
 #[derive(Debug, Clone)]
 pub enum RunOutcome {
     /// argv 结构、值域或命令名不成立——本次没有触碰目标
     Usage(String),
-    /// 校验阶段拒绝——确定未写盘，成因在请求与目标现状不匹配
+    /// 校验阶段拒绝——成因在请求与目标现状不匹配
     Refused(String),
-    /// 环境/盘内容故障——确定未写盘（I/O 失败、表结构非法）
+    /// 环境/盘内容故障——I/O 失败、表结构非法
     NoMutation { cause: String },
-    /// 平台或目标能力不支持——本次没有触碰目标，换参数无意义
+    /// 平台或目标能力不支持——换参数无意义
     Unsupported { cause: String },
-    /// 未预期的内部错误——本次没有产生持久化修改，但说明工具自身有缺陷
+    /// 未预期的内部错误——说明工具自身有缺陷
     Internal(String),
     /// 执行阶段失败——**不对"是否已落盘"作断言**：写调用报错时无从得知
     /// 实际写入多少，磁盘状态可能已改变，故只承诺"可能已改变，需验证"。
-    /// `pending` 是已知但尚未满足的后置条件：失败发生在它们之前/中途时随失败一并报出
+    /// `pending` 是已知但尚未满足的后置条件：失败发生在它们之前/中途时随失败一并报出。
+    /// `origin` 记录这个 5 从哪来：执行器观察到的失败、写后核对不成立、读回拿不到证据，
+    /// 或归责点据本次写事实改判
     Partial {
         cause: String,
         pending: Vec<Pending>,
+        origin: PartialOrigin,
     },
     /// 布局写入完成；`pending` 为空且内核视图已同步即后置条件全部满足
     Applied {
@@ -152,12 +324,34 @@ impl RunOutcome {
     }
 
     pub fn partial(cause: impl Into<String>) -> Self {
-        Self::Partial { cause: cause.into(), pending: Vec::new() }
+        Self::Partial {
+            cause: cause.into(),
+            pending: Vec::new(),
+            origin: PartialOrigin::ObservedWriteFailure,
+        }
     }
 
     /// 已写盘或无法断言的失败，另带已知未完成的后置条件
     pub fn partial_with(cause: impl Into<String>, pending: Vec<Pending>) -> Self {
-        Self::Partial { cause: cause.into(), pending }
+        Self::Partial { cause: cause.into(), pending, origin: PartialOrigin::ObservedWriteFailure }
+    }
+
+    /// 写已成功、写后核对或后置条件不成立
+    pub fn partial_postcondition(cause: impl Into<String>, pending: Vec<Pending>) -> Self {
+        Self::Partial {
+            cause: cause.into(),
+            pending,
+            origin: PartialOrigin::PostconditionAfterWrite,
+        }
+    }
+
+    /// 已应用但读回证据拿不到：不是失败，也不构成 Applied
+    pub fn partial_unverified(cause: impl Into<String>, pending: Vec<Pending>) -> Self {
+        Self::Partial {
+            cause: cause.into(),
+            pending,
+            origin: PartialOrigin::UnverifiedAfterWrite,
+        }
     }
 
     /// 布局已写、后置条件待办；内核视图默认按"已同步"起算，由调用方在 resync 失败后置位
@@ -181,21 +375,61 @@ impl RunOutcome {
 
     /// 收尾步骤（关闭撤销窗口、释放资源）没有完成：已经完整应用的结果降级为部分完成（5）。
     /// 其他形态保持原样——它们已经陈述了更差的事实，同一个收尾故障不该覆盖它
-    /// 越过 durable boundary 之后的失败：只剩一种事实可说——盘可能已改变。
-    /// 首写之前那些"确定未写盘"的分类（3/4/6）在这里不再成立
-    pub(crate) fn past_boundary(self) -> Self {
-        match self {
-            Self::Partial { .. } => self,
-            other => Self::partial(other.to_string()),
-        }
-    }
-
     pub fn degrade_partial(self, cause: impl Into<String>) -> Self {
         if self.is_complete() {
-            Self::Partial { cause: cause.into(), pending: Vec::new() }
+            Self::Partial {
+                cause: cause.into(),
+                pending: Vec::new(),
+                origin: PartialOrigin::PostconditionAfterWrite,
+            }
         } else {
             self
         }
+    }
+
+    /// 唯一归责点：按作业是否已越过不可逆写入点（[`crossed_irreversible_point`]）对齐
+    /// 结论。越过时，原先"没写"的四种结论（拒绝、无修改、内部错误、能力缺口）都不再
+    /// 成立，改判为 5 并保留原结论的正文；`Partial`/`Applied` 原样返回，来源不被改写，
+    /// 因此重复调用不会重复改写正文
+    pub(crate) fn reconcile_with_writes(self) -> Self {
+        if !crossed_irreversible_point() {
+            return self;
+        }
+        match self {
+            Self::Refused(msg) => Self::Partial {
+                cause: format!("{msg} — the job has already written the target, so the refusal does not describe the on-disk state"),
+                pending: Vec::new(),
+                origin: PartialOrigin::DerivedFromPriorWrite,
+            },
+            Self::NoMutation { cause } => Self::Partial {
+                cause: format!("{cause} — the job has already written the target, so this is not a no-mutation failure"),
+                pending: Vec::new(),
+                origin: PartialOrigin::DerivedFromPriorWrite,
+            },
+            Self::Internal(msg) => Self::Partial {
+                cause: format!(
+                    "internal error (bug): {msg} — the job has already written the target; keep the recovery record and report it"
+                ),
+                pending: Vec::new(),
+                origin: PartialOrigin::DerivedFromPriorWrite,
+            },
+            Self::Unsupported { cause } => Self::Partial {
+                cause: format!(
+                    "{cause} — the job has already written the target, so this is a partial completion, not an unsupported operation"
+                ),
+                pending: Vec::new(),
+                origin: PartialOrigin::DerivedFromPriorWrite,
+            },
+            other => other,
+        }
+    }
+
+    /// 打印前归责：归责 → 报告 → 把归责后的结果交回调用方，
+    /// 退出码与打印出的变体因此同源
+    pub(crate) fn report_final(self) -> Self {
+        let outcome = self.reconcile_with_writes();
+        outcome.report();
+        outcome
     }
 
     /// 同一次操作里两条收尾链（布局 + 其后的 FS/LVM 链）合并成最终结果：
@@ -218,7 +452,7 @@ impl RunOutcome {
                 }
             }
             (mine, theirs) => {
-                if theirs.has_layout_write() {
+                if theirs.is_layout_applied() {
                     mine
                 } else {
                     theirs
@@ -227,10 +461,19 @@ impl RunOutcome {
         }
     }
 
-    /// 布局写入已经发生（`Applied` 的任何形态，包括待办非空与内核视图过期）。
-    /// 只回答"盘上有没有被改过"，不回答"是否完全成功"——后者看 `is_complete`
-    pub(crate) fn has_layout_write(&self) -> bool {
+    /// 本次运行的布局写入已经应用（`Applied` 的任何形态，包括待办非空与内核视图过期）。
+    /// 只回答"这次运行是否给出过 `Applied`"，不回答"盘上是否可能已改过"——后者看
+    /// [`Self::disk_may_have_changed`]
+    pub(crate) fn is_layout_applied(&self) -> bool {
         matches!(self, Self::Applied { .. })
+    }
+
+    /// 盘上字节可能已经改变：本次已应用、本次运行已置写事实，或恢复记录里留着写入证据。
+    /// 只用于**保守动作**（内核重读、状态复核）；不决定记录能否清理，也不决定能否报 `Applied`
+    pub(crate) fn disk_may_have_changed(&self, record: Option<&crate::recovery::Record>) -> bool {
+        self.is_layout_applied()
+            || target_may_have_been_written()
+            || record.is_some_and(crate::recovery::Record::dirty)
     }
 
     /// 后置条件全部满足：无待办且内核视图已同步。这是**唯一**对应退出码 0 的形态，
@@ -263,13 +506,14 @@ impl RunOutcome {
     pub fn report(&self) {
         match self {
             Self::Usage(msg) => eprintln!("usage error: {msg}"),
-            Self::Refused(msg) => eprintln!("refused: {msg}"),
+            Self::Refused(msg) => eprintln!("refused: {msg}\n{NOTHING_WRITTEN}"),
             // 与 Partial 不同话：本次没写盘，不能提示"盘可能已改变"
-            Self::NoMutation { cause } => eprintln!("error: {cause}\nno durable change: the target was not modified"),
+            Self::NoMutation { cause } => eprintln!("error: {cause}\n{NOTHING_WRITTEN}"),
             Self::Unsupported { cause } => eprintln!("unsupported: {cause}"),
             Self::Internal(msg) => eprintln!("internal error: {msg}"),
-            Self::Partial { cause, pending } => {
+            Self::Partial { cause, pending, origin } => {
                 eprintln!("error: {cause}");
+                Self::report_attribution(*origin);
                 Self::report_partial_guidance();
                 if !pending.is_empty() {
                     eprintln!("left undone: {} known follow-up step(s)", pending.len());
@@ -292,9 +536,46 @@ impl RunOutcome {
                          run `partprobe <device>` (or partx/blkpg) before relying on the new layout"
                     );
                 }
+                Self::report_attribution(PartialOrigin::PostconditionAfterWrite);
                 Self::report_partial_guidance();
             }
         }
+        // 本次一个目标字节也没写，但记录还在盘上：已提交的记录只差释放，未提交的才能接着做
+        if record_is_present() && !target_may_have_been_written() {
+            if record_is_finalized() {
+                eprintln!(
+                    "the recovery record on disk belongs to a job already applied — only its release \
+                     remains: `diskedit undo` releases it (the recorded bytes are past their rollback \
+                     point), `diskedit abandon` releases it as is; re-running the command does not \
+                     continue it"
+                );
+            } else {
+                eprintln!(
+                    "the unfinished recovery record is still on disk — `diskedit undo` or re-running the \
+                     command continues from it"
+                );
+            }
+        }
+    }
+
+    /// 5 的诊断行：来源、首个写步骤、记录侧事实。首个写步骤取自写入口记录的
+    /// [`first_write_step`]；未经写入口的首写（wipe_zero、外部工具）报 unknown。
+    /// 记录侧只报本次运行有没有把记录落过盘
+    fn report_attribution(origin: PartialOrigin) {
+        let origin = match origin {
+            PartialOrigin::UnverifiedAfterWrite => "unverified-after-write (unverified, not a failure)",
+            other => other.as_str(),
+        };
+        let first = match first_write_step() {
+            Some(step) => step.to_string(),
+            None => "unknown (write entry not instrumented)".to_string(),
+        };
+        let record = if record_persisted() {
+            "persisted by this run"
+        } else {
+            "not persisted by this run"
+        };
+        eprintln!("origin={origin} first write: {first} record: {record}");
     }
 
     /// 5 的报告必须同时给出三件事：盘可能已改变、证据路径、下一步命令。
@@ -307,7 +588,7 @@ impl RunOutcome {
 
     fn partial_guidance_lines() -> [String; 3] {
         [
-            "verify: the on-disk state may have changed — check with `diskedit info` before retrying"
+            "— the target may already have been changed; check with `diskedit info` before retrying"
                 .to_string(),
             "evidence: `diskedit inspect <target>` names any recovery file left for the target".to_string(),
             // 无条件推荐 undo 会在"已越过回滚点"的形态上指向一条必然退 3 的路：
@@ -375,7 +656,9 @@ impl RunOutcome {
             Self::NoMutation { cause } => Self::NoMutation { cause: format!("{what}: {cause}") },
             Self::Unsupported { cause } => Self::Unsupported { cause: format!("{what}: {cause}") },
             Self::Internal(m) => Self::Internal(format!("{what}: {m}")),
-            Self::Partial { cause, pending } => Self::Partial { cause: format!("{what}: {cause}"), pending },
+            Self::Partial { cause, pending, origin } => {
+                Self::Partial { cause: format!("{what}: {cause}"), pending, origin }
+            }
             Self::Applied { pending, kernel_sync } => Self::Applied { pending, kernel_sync },
         }
     }
@@ -405,7 +688,7 @@ impl From<crate::fsops::FsError> for RunOutcome {
     fn from(e: crate::fsops::FsError) -> Self {
         use crate::fsops::FsError;
         match e {
-            FsError::UnsupportedFs(m) => Self::unsupported(m),
+            FsError::UnsupportedFs { detail, .. } => Self::unsupported(detail),
             FsError::UnsupportedPlatform(m) => Self::unsupported(m),
             FsError::InvalidArgument(m) => Self::refused(m),
             FsError::ToolMissing(m) => Self::unsupported(m),
@@ -465,7 +748,7 @@ mod tests {
     #[test]
     fn fs_error_maps_to_exit_codes() {
         let code = |e: FsError| RunOutcome::from(e).exit_code();
-        assert_eq!(code(FsError::UnsupportedFs("no resize tool".into())), EXIT_UNSUPPORTED);
+        assert_eq!(code(FsError::unsupported("no resize tool")), EXIT_UNSUPPORTED);
         assert_eq!(code(FsError::InvalidArgument("bad size".into())), EXIT_REFUSED);
         assert_eq!(code(FsError::ToolMissing("no mkfs.xfs".into())), EXIT_UNSUPPORTED);
         assert_eq!(code(FsError::Io(std::io::Error::other("EIO"))), EXIT_NO_MUTATION);
@@ -485,7 +768,7 @@ mod tests {
     /// （报告里必须带"盘可能已改变"，此时确实无法断言）
     #[test]
     fn fs_error_flattens_to_partial_after_the_boundary() {
-        let after: std::io::Error = FsError::UnsupportedFs("no resize tool".into()).into();
+        let after: std::io::Error = FsError::unsupported("no resize tool").into();
         assert!(matches!(RunOutcome::from(after), RunOutcome::Partial { .. }));
     }
 
@@ -516,7 +799,7 @@ mod tests {
         assert_eq!(RunOutcome::applied_with(Vec::new()).exit_code(), 0);
     }
 
-    /// §9 的后半张表逐行：每个旧形态落到哪个新码，都在这里钉住。
+    /// 每种成因落到哪个退出码都在这里钉住。
     /// 同一码可由不同变体产生，但"哪种成因落哪个码"不能漂
     #[test]
     fn mapping_table_rows_hold() {
@@ -584,7 +867,7 @@ mod tests {
     #[test]
     fn partial_guidance_names_state_evidence_and_next_step() {
         let lines = RunOutcome::partial_guidance_lines();
-        assert!(lines[0].contains("may have changed"), "{}", lines[0]);
+        assert!(lines[0].contains("may already have been changed"), "{}", lines[0]);
         assert!(lines[1].contains("evidence:"), "{}", lines[1]);
         assert!(lines[2].contains("`diskedit undo`") && lines[2].contains("`diskedit abandon`"), "{}", lines[2]);
     }

@@ -630,7 +630,7 @@ mod tests {
 
     #[test]
     fn duplicate_report_rows_collapse() {
-        // 同一 LV 经多 report 对象重复出现（duplicate PV 扫描的 CI 实测形态）：
+        // 同一 LV 经多 report 对象重复出现（duplicate PV 扫描）：
         // 去重后单 LV 自动选择不得误判为多 LV
         let json = r#"{"report":[
             {"lv":[{"lv_name":"lv1","lv_path":"/dev/vg/lv1","devices":"/dev/loop0p1(0)"}]},

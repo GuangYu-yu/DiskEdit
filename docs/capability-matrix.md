@@ -44,8 +44,29 @@ CI regenerates it and fails when the working tree differs. Do not edit by hand.
 
 ## Runtime gate
 
-A cell records whether that platform/media pair has the primitives the command needs.
-The runtime gate reads the same matrix, restricted to the media the host can actually open
-(`HostPlatform::openable_media`): Linux opens block devices and image files; other hosts open
-image files only. A read-only command therefore runs on a non-Linux image file, while any
-command needing a write-side or evidence-side primitive answers exit 6.
+The gate evaluates only the target shapes the build can open. This table lists the 2 target shapes it evaluates on Linux (`HostPlatform::openable_media`): linux / block, linux / image. Other shapes do not enter the gate's decision — `cmd::capability_gap` iterates only the openable set.
+The table is generated from the Linux capability set; a non-Linux build's openable set is decided at run time by `HostPlatform::openable_media`, and this document does not copy it.
+
+| command | linux / block | linux / image |
+|---|---|---|
+| `info` | admitted | admitted |
+| `inspect` | admitted | admitted |
+| `records list` | admitted | admitted |
+| `records verify` | admitted | admitted |
+| `records scan` | admitted | admitted |
+| `resize` | admitted | admitted |
+| `move` | admitted | admitted |
+| `copy` | admitted | admitted |
+| `delete` | admitted | admitted |
+| `set` | admitted | admitted |
+| `check` | admitted | admitted |
+| `mkfs` | admitted | admitted |
+| `resizefs` | admitted | admitted |
+| `undo` | admitted | admitted |
+| `abandon` | admitted | admitted |
+| `new` | admitted | admitted |
+| `add` | admitted | admitted |
+| `resize-part` | admitted | admitted |
+| `plan` | admitted | admitted |
+
+The process-level exit prints the cause sentence of a failure. Exit 3 and exit 4 are followed by a second line, `— nothing was written by this run`; exit 6 prints `unsupported: <cause>` and appends no such line.
