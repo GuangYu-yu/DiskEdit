@@ -14,7 +14,7 @@
 //! | 后置回读 | 本模块不判定：`Record` 没有承载字段 |
 //! | `plan_index` 之后的表写步骤 | [`RecoveryEngine::commit`] 的 `table_change_pending` 入参为真时落 [`NoPermitReason::PendingTableChange`] |
 
-use crate::platform::{DirDurability, DirFd, EvidenceFile, EvidenceIo, EvidenceStore};
+use crate::platform::{DirDurability, DirFd, EvidenceFile, EvidenceIo, EvidenceStore, RemoveOutcome};
 
 use super::evidence::Evidence;
 use super::record::{CommitState, Record, Retention, TxId};
@@ -135,8 +135,9 @@ impl RecoveryEngine {
 
     /// 清理：删除已提交的记录文件并让目录项持久化。删除前从句柄读回字节，
     /// 分类已识别且 `tx_id` 与待删记录相等才删；不符则不删、保留记录。
-    /// 许可与记录不匹配是内部不变量破坏，同样拒绝；[`EvidenceStore::remove`] 只返回
-    /// [`EvidenceIo`]，因此以 `EvidenceIo::Unsupported` 拒绝。
+    /// 许可与记录不匹配是内部不变量破坏，同样拒绝。[`EvidenceStore::remove`] 的三态
+    /// 把「删除是否发生」与「目录项是否持久化」分开：只有 `NotRemoved` 转成
+    /// [`CleanupError::Io`]，另两态都表示名字空间里已经没有了这条记录
     pub(crate) fn cleanup<S: EvidenceStore>(
         store: &S,
         anchor: &DirFd,
@@ -169,6 +170,16 @@ impl RecoveryEngine {
                 ));
             }
         }
-        store.remove(anchor, file, committed, &permit).map_err(CleanupError::Io)
+        match store.remove(anchor, file, committed, &permit) {
+            RemoveOutcome::NotRemoved(e) => Err(CleanupError::Io(e)),
+            RemoveOutcome::RemovedAndDurable => {
+                crate::outcome::note_record_removed();
+                Ok(DirDurability::Persisted)
+            }
+            RemoveOutcome::RemovedDurabilityUnconfirmed => {
+                crate::outcome::note_record_removed();
+                Ok(DirDurability::Unconfirmed)
+            }
+        }
     }
 }

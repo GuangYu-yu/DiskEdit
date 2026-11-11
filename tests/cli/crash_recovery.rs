@@ -114,7 +114,7 @@ fn resize_part_crash_leaves_a_resumable_transaction() {
     let target = format!("{img_s}:1");
     let argv = ["move", target.as_str(), "--start", "8192", "--chunk", "4", "--yes"];
 
-    let (c, e) = run_fault("rs-before-commit", &argv);
+    let (c, e) = run_fault("before-entry-commit", &argv);
     assert_ne!(c, 0, "the injected abort must not look like success: {e}");
     assert!(record_present(&img), "the transaction's record must survive the crash: {e}");
     assert!(
@@ -158,7 +158,7 @@ fn ntfs_hidden_sectors_fixed_when_resuming_after_commit() {
     f.write_all(&boot(2048)).unwrap();
     drop(f);
 
-    let (c, e) = run_fault("rs-after-commit", &argv);
+    let (c, e) = run_fault("before-hidden-fix", &argv);
     assert_ne!(c, 0, "the injected abort must not look like success: {e}");
     assert!(record_present(&img), "a committed-but-unfinished crash leaves the record: {e}");
 
@@ -197,7 +197,7 @@ fn foreign_resize_slot_refuses_resize_and_copy() {
     let target = format!("{img_s}:1");
     let argv = ["move", target.as_str(), "--start", "8192", "--chunk", "4", "--yes"];
 
-    let (c, e) = run_fault("rs-before-commit", &argv);
+    let (c, e) = run_fault("before-entry-commit", &argv);
     assert_ne!(c, 0, "the injected abort must not look like success: {e}");
     assert!(record_present(&img), "a mid-move crash must leave a resumable record: {e}");
     let record_before = inspect_out(&img);
@@ -222,9 +222,9 @@ fn foreign_resize_slot_refuses_resize_and_copy() {
 }
 
 /// `copy`：数据已复制、表项未提交时崩溃。它**没有续跑路径**（`help copy` 的 "No resume"），
-/// 表区 preimage 仍记在记录里 ⇒ 出路是 undo 回滚或 abandon 释放；文案绝不能建议"重跑 copy"
+/// 表未被触碰 ⇒ undo 不做释放，需要显式 `abandon`；文案绝不能建议"重跑 copy"
 #[test]
-fn copy_crash_has_no_resume_path_and_undo_rolls_the_table_back() {
+fn copy_crash_has_no_resume_path_and_undo_refuses() {
     let img = stage("cpc");
     let img_s = img.to_str().unwrap();
     let target = format!("{img_s}:1");
@@ -242,9 +242,13 @@ fn copy_crash_has_no_resume_path_and_undo_rolls_the_table_back() {
         "copy must never be advertised as resumable: {e}"
     );
 
-    // 被推荐的那条出路必须真的走得通：undo 回滚表区并清理记录
+    // 表未被触碰、copy 无续跑路径：undo 不把这份现场当"无事可做"释放——`restore_blocked`
+    // 就是"写过目标字节"这条事实，静默等价于 `abandon` 会抹掉它的存在。释放需要显式 `abandon`
     let (c, e) = run(&["undo", img_s, "--yes"]);
-    assert_eq!(c, 0, "the recorded table pre-images must roll back: {e}");
+    assert_eq!(c, 3, "undo must not release a copy record in place of `abandon`: {e}");
+    assert!(record_present(&img), "the record must stay until it is explicitly released: {e}");
+    let (c, e) = run(&["abandon", img_s]);
+    assert_eq!(c, 0, "an explicit `abandon` must release the record: {e}");
     assert!(!record_present(&img), "{e}");
     let (c, e) = run(&["add", img_s, "1M", "--align", "mib", "--type-guid", "0fc63daf-8483-4772-8e79-3d69d8477de4", "--yes"]);
     assert_eq!(c, 0, "the target must be usable again: {e}");
@@ -329,14 +333,14 @@ fn stage_self_overlap(tag: &str) -> (std::path::PathBuf, Vec<u8>) {
 /// 重做的 chunk 读到的必须是原始源数据：位移小于 chunk 时 chunk 收敛到位移以内，
 /// 且自重叠条目停用批量提交——两条保证缺一，中断续跑都会把覆写过的源字节当数据搬走
 ///
-/// `move` 走单分区路径（rs-chunk 故障点），起点按 MiB 对齐，故位移取对齐后的值
+/// `move` 走单分区路径（chunk 故障点），起点按 MiB 对齐，故位移取对齐后的值
 #[test]
 fn self_overlap_delta_below_chunk_crash_resume_is_byte_exact() {
     let (img, pattern) = stage_self_overlap("sov");
     let img_s = img.to_str().unwrap();
     // 位移 1MiB（--start 4096，已对齐）< chunk 2MiB：chunk 收敛到 1MiB，共 4 块
     let argv = ["move", &format!("{img_s}:1"), "--start", "4096", "--chunk", "2", "--yes"];
-    let (c, e) = run_fault("rs-chunk:2", &argv);
+    let (c, e) = run_fault("chunk:2", &argv);
     assert_ne!(c, 0, "the injected abort must not look like success: {e}");
     assert!(
         record_cursor(&img).unwrap_or(0) > 0,
@@ -358,7 +362,7 @@ fn self_overlap_delta_above_chunk_crash_resume_is_byte_exact() {
     let img_s = img.to_str().unwrap();
     // 位移 2MiB（--start 6144，已对齐）> chunk 1MiB，共 4 块
     let argv = ["move", &format!("{img_s}:1"), "--start", "6144", "--chunk", "1", "--yes"];
-    let (c, e) = run_fault("rs-chunk:3", &argv);
+    let (c, e) = run_fault("chunk:3", &argv);
     assert_ne!(c, 0, "the injected abort must not look like success: {e}");
     assert!(
         record_cursor(&img).unwrap_or(0) > 0,
@@ -488,7 +492,8 @@ fn tail_packed_multi_partition_crash_resumes_from_the_durable_cursor() {
 /// 各自只有走搬移才能完成，而两条命令共用同一个续跑槽位。按对方的语义执行槽上
 /// 那份现场，就是把请求静默放大或缩水——故必须拒绝，且现场原样留给原命令续跑。
 ///
-/// 两个方向都在写表之前被身份判据挡下；各自的原命令重跑则接着槽上的进度做完
+/// 两个方向都在写表之前被身份判据挡下；各自的原命令重跑则接着槽上的进度做完。
+/// 退出码是 5：本次运行未写目标，但记录表明上次作业已越过不可逆点，因此不按 3 报
 #[test]
 fn pending_relocation_job_refuses_the_other_resize_semantic() {
     let dir = std::env::temp_dir().join(format!("diskedit_sem_{}", std::process::id()));
@@ -512,7 +517,7 @@ fn pending_relocation_job_refuses_the_other_resize_semantic() {
     // grow 语义与它不符：拒绝并保持现场
     let grow_argv = ["resize", target.as_str(), "grow", "--allow-move", "--chunk", "1", "--yes", "--no-fs"];
     let (c, e) = run(&grow_argv);
-    assert_eq!(c, 3, "grow must refuse a pending SIZE job: {e}");
+    assert_eq!(c, 5, "grow must refuse a pending SIZE job: {e}");
     assert!(e.contains("`resize SIZE --allow-move`"), "the refusal must name the job it belongs to: {e}");
     assert!(!e.contains("re-run `diskedit resize"), "a mismatched semantic must not be advertised as the way out: {e}");
     assert!(record_present(&img), "a refusal must not touch the scene");
@@ -527,7 +532,7 @@ fn pending_relocation_job_refuses_the_other_resize_semantic() {
     assert_ne!(c, 0, "{e}");
     assert!(record_present(&img), "{e}");
     let (c, e) = run(&size_argv);
-    assert_eq!(c, 3, "SIZE must refuse a pending grow job: {e}");
+    assert_eq!(c, 5, "SIZE must refuse a pending grow job: {e}");
     assert!(e.contains("`resize grow`"), "the refusal must name the job it belongs to: {e}");
     assert!(record_present(&img), "a refusal must not touch the scene");
 

@@ -29,6 +29,40 @@ macro_rules! fault_points {
                 $( let _ = $arg; )*
             }
         )*
+        /// 声明清单的书写形式；未知标签的报错正文直接由它给出，不另维护一份。
+        /// 带参点写作 `标签:<n>`
+        #[cfg(feature = "test-faults")]
+        pub(crate) fn fault_tags() -> Vec<&'static str> {
+            let mut tags = Vec::new();
+            $(
+                tags.push(if stringify!($($ty),*).is_empty() {
+                    $tag
+                } else {
+                    concat!($tag, ":<n>")
+                });
+            )*
+            tags
+        }
+        /// 标签是否由上面某一条声明给出：无参点精确匹配；带参点还要求参数按声明类型
+        /// 解析。裸标签不算命中——注入点的比较式永远带参数，放过裸标签等于静默不触发
+        #[cfg(feature = "test-faults")]
+        pub(crate) fn tag_declared(spec: &str) -> bool {
+            $(
+                $(
+                    if spec
+                        .strip_prefix(concat!($tag, ":"))
+                        .and_then(|rest| rest.parse::<$ty>().ok())
+                        .is_some()
+                    {
+                        return true;
+                    }
+                )*
+                if spec == $tag && stringify!($($ty),*).is_empty() {
+                    return true;
+                }
+            )*
+            false
+        }
     };
 }
 
@@ -64,7 +98,7 @@ fault_points! {
     /// MBR 分区表项写完、FS 扩满前 abort（记录里的提交前区间已落盘，重跑据此收尾）
     fault_mbr_after_table_write() = "mbr-after-table-write";
     /// 事务入口：本次调用的**任何判定与写入之前**。
-    /// 与下面的 `chunk`/`rs-chunk` 成对使用，"边界前 abort 必须留下完全未改动的盘"、
+    /// 与 `chunk` 成对使用，"边界前 abort 必须留下完全未改动的盘"、
     /// "边界后 abort 已在盘上留下可续传的现场"这两句话才有可自动断言的落点
     fault_before_any_write() = "before-any-write";
     /// 单文件记录已落盘、目标字节尚未写出时 abort（记录与数据之间的交界面）
@@ -81,3 +115,38 @@ fault_points! {
 // 在线路径仅 Linux，故非 Linux 构建下这个再导出没有使用者
 #[cfg(target_os = "linux")]
 pub(crate) use fault_points;
+
+/// 校验 `DISKEDIT_FAULT`：`Some(正文)` 表示标签不在声明表里。
+///
+/// 解析点放在命令入口而不是各个注入点：拼错或失效的标签必须让命令直接失败，否则
+/// 它的表现与"注入点没有被走到"完全相同，测试会红在毫不相干的地方。
+///
+/// 声明组有两处：本文件的搬移/分区表一组，在线路径一组（模块只在 Linux 编入）
+#[cfg(feature = "test-faults")]
+pub(crate) fn validate_fault_env() -> Option<String> {
+    let given = std::env::var("DISKEDIT_FAULT").ok()?;
+    #[cfg(target_os = "linux")]
+    let online_declared = crate::online::faults::tag_declared(&given);
+    #[cfg(not(target_os = "linux"))]
+    let online_declared = false;
+    if tag_declared(&given) || online_declared {
+        return None;
+    }
+    #[cfg(target_os = "linux")]
+    let available: Vec<&str> = fault_tags()
+        .into_iter()
+        .chain(crate::online::faults::fault_tags())
+        .collect();
+    #[cfg(not(target_os = "linux"))]
+    let available: Vec<&str> = fault_tags();
+    Some(format!(
+        "DISKEDIT_FAULT={given:?} is not a declared fault point (available: {})",
+        available.join(", ")
+    ))
+}
+
+/// 非 test-faults 构建不读 `DISKEDIT_FAULT`：注入点在两侧同形，存根不做比对
+#[cfg(not(feature = "test-faults"))]
+pub(crate) fn validate_fault_env() -> Option<String> {
+    None
+}

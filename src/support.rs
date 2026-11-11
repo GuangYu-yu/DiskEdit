@@ -273,9 +273,12 @@ pub(crate) fn table_record_done_if_complete(
         match src.take_record_journal() {
             Some(journal) => match journal.commit_and_discard() {
                 Ok(()) => o,
-                Err(e) => o.degrade_partial(format!(
-                    "the recovery record was not cleaned up ({e}) — release it with `diskedit abandon`"
-                )),
+                // 目录项已移除、持久化未确认：只陈述这一事实，不承诺记录还在
+                Err(e) => o.degrade_partial(if e.record_still_on_disk() {
+                    format!("the recovery record was not cleaned up ({e}) — release it with `diskedit abandon`")
+                } else {
+                    format!("{e}")
+                }),
             },
             None => o,
         }
@@ -295,9 +298,11 @@ pub(crate) fn table_record_done(src: &mut WriteSource, ok_msg: &str) -> crate::o
     if let Some(journal) = src.take_record_journal()
         && let Err(e) = journal.commit_and_discard()
     {
-        o = o.degrade_partial(format!(
-            "the recovery record was not cleaned up ({e}) — release it with `diskedit abandon`"
-        ));
+        o = o.degrade_partial(if e.record_still_on_disk() {
+            format!("the recovery record was not cleaned up ({e}) — release it with `diskedit abandon`")
+        } else {
+            format!("{e}")
+        });
     }
     let record = src.record_journal().map(|j| j.record());
     let o = settle_layout(o, src, record);

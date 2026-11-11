@@ -121,6 +121,19 @@ pub fn classify_repair(g: &RawGpt, file_last_lba: u64) -> io::Result<RepairActio
     })
 }
 
+/// 续跑的边界事实缺失：记录已绑搬移计划、构造时读到的主头处于备份头不可读状态、
+/// 请求终点越过主头 `last_usable_lba`。三条同时成立才拒绝——少了第三条，备份头本
+/// 来就坏而主头上界够用的合法续跑会被一起拒掉。决策期派生，不落盘、不进记录格式
+pub(crate) fn resume_boundary_unavailable(
+    g: &ValidatedGeometry,
+    relocation_bound: bool,
+    requested_end: u64,
+) -> bool {
+    relocation_bound
+        && g.decided_state() == GptState::NeedsRepair { cause: HeaderIssue::BackupUnreadable }
+        && requested_end > g.decided_last_usable_lba()
+}
+
 /// 执行修复（写入路径唯一出口）：按动作装配一条表步骤，交给执行器，再重读校验收敛。
 ///
 /// 修复先于命令自己的目标写入：装配期的读表失败落 4（一个字节都没写），表在装配与执行

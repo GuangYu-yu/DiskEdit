@@ -1,6 +1,7 @@
 //! grow：目标解析、工具调用与挂载清理。
 
 use super::*;
+use crate::dev::WriteSource;
 
 /// 本次扩容要动的**那一段**与它里面的文件系统：`scope` 是既有的范围表达（普通 FS = 分区
 /// 本身；OpenWrt overlay 的 RW 层 = 分区内的一段），`fstype` 是 identify 口径的类型。
@@ -13,7 +14,7 @@ pub struct GrowTarget {
 
 impl GrowTarget {
     /// 按判断期的同一份结论执行扩容
-    pub fn resize_fs(&self, src: &FileSource) -> Result<Option<MountLeak>, FsError> {
+    pub fn resize_fs(&self, src: &mut WriteSource) -> Result<Option<MountLeak>, FsError> {
         resize_fs_in(src, &self.scope, Some(self.fstype))
     }
 }
@@ -137,7 +138,7 @@ pub fn check_grow_step(g: Growable, is_block: bool) -> Result<(), FsError> {
 }
 
 /// superfloppy（无分区表，FS 即整盘）扩容：无表可写，纯 FS grow
-pub fn resize_fs_whole(src: &FileSource, fstype: Option<ContentKind>) -> Result<Option<MountLeak>, FsError> {
+pub fn resize_fs_whole(src: &mut WriteSource, fstype: Option<ContentKind>) -> Result<Option<MountLeak>, FsError> {
     resize_fs_in(src, &DeviceScope::Whole, fstype)
 }
 
@@ -151,7 +152,7 @@ pub fn resize_fs_whole(src: &FileSource, fstype: Option<ContentKind>) -> Result<
 /// - btrfs：临时 mount → `btrfs filesystem resize max <mnt>`（max = 占满、须挂载态，man btrfs-filesystem）→ umount
 /// - vfat：`fatresize -s max <dev>`（扩满设备，man fatresize）
 /// - 其余（exfat/swap…）：无已接线的扩容工具，显式拒绝
-pub(crate) fn resize_fs_in(src: &FileSource, scope: &DeviceScope, fstype: Option<ContentKind>) -> Result<Option<MountLeak>, FsError> {
+pub(crate) fn resize_fs_in(src: &mut WriteSource, scope: &DeviceScope, fstype: Option<ContentKind>) -> Result<Option<MountLeak>, FsError> {
     let r = resize_fs_step(src, scope, fstype);
     // 成功才提示：失败路径已有的"盘可能已改变"警示不额外承担回滚范围的说明
     if r.is_ok() {
@@ -160,73 +161,106 @@ pub(crate) fn resize_fs_in(src: &FileSource, scope: &DeviceScope, fstype: Option
     r
 }
 
-fn resize_fs_step(src: &FileSource, scope: &DeviceScope, fstype: Option<ContentKind>) -> Result<Option<MountLeak>, FsError> {
+/// 设备建立之后、第一个工具启动之前落下恢复屏障。
+///
+/// 区间、占用判定与挂载守卫都走 [`resolve_scope_device`] 的同一条路径，本函数只多做一件事：
+/// 拿到设备句柄之后落屏障。`losetup` 建映射不写目标字节，目标字节的第一次写入发生在 `f`
+/// 内，故屏障早于本次调用可能产生的任何目标字节写入
+fn with_write_scope<T, F>(src: &mut WriteSource, scope: &DeviceScope, off: u64, len: u64, f: F) -> Result<T, FsError>
+where
+    F: FnOnce(&str) -> Result<T, FsError>,
+{
+    let dev = resolve_scope_device(src, scope, off, len, ImageLoopPolicy::RefuseAny)?;
+    src.mark_non_reversible().map_err(|e| FsError::from(e.into_io()))?;
+    f(dev.path())
+}
+
+fn resize_fs_step(src: &mut WriteSource, scope: &DeviceScope, fstype: Option<ContentKind>) -> Result<Option<MountLeak>, FsError> {
     match fstype {
         // fsid 识别只给 0xEF53，区分不出 2/3/4；resize2fs 对三者通用（man resize2fs）
-        Some(ContentKind::Filesystem(FsKind::Ext)) => with_scope_device(src, scope, |dev| {
-            let out = run_write("e2fsck", &["-fp", dev])?;
-            check_e2fsck_status_for_resize(&out.status)?;
-            let out = run_write("resize2fs", &[dev]).map_err(|e| tool_write_maybe_started("resize2fs", dev, e))?;
-            if !out.status.success() {
-                return Err(FsError::command("resize2fs", &out));
-            }
-            Ok(())
-        })
-        .map(|()| None),
-        Some(ContentKind::Filesystem(FsKind::Ntfs)) => with_scope_device(src, scope, |dev| {
-            // 先 --no-action 演练，成功才真改，失败零副作用
-            let out = run("ntfsresize", &["-f", "-f", "--no-action", dev])?;
-            if !out.status.success() {
-                return Err(FsError::CommandFailed(format!(
-                    "ntfsresize simulation failed: {}",
-                    String::from_utf8_lossy(&out.stderr).trim()
-                )));
-            }
-            let out = run_write("ntfsresize", &["-f", "-f", dev])?;
-            if !out.status.success() {
-                return Err(FsError::command("ntfsresize", &out));
-            }
-            Ok(())
-        })
-        .map(|()| None),
-        Some(ContentKind::Filesystem(FsKind::F2fs)) => with_scope_device(src, scope, |dev| {
-            // 预检：fsck.f2fs 无参 = 仅检查不修复（修复须显式 -f/-p；-a 只在内核报告 bug
-            // 时才检查且默认禁用，man fsck.f2fs）。退出码负数表示失败（-1 表现为 255），
-            // 非 0 即拒绝 resize
-            let out = run("fsck.f2fs", &[dev])?;
-            if !out.status.success() {
-                return Err(FsError::CommandFailed(format!(
-                    "fsck.f2fs failed ({}), refuse resize",
-                    describe_exit(&out.status)
-                )));
-            }
-            let out = run_write("resize.f2fs", &[dev]).map_err(|e| tool_write_maybe_started("resize.f2fs", dev, e))?;
-            if !out.status.success() {
-                return Err(FsError::command("resize.f2fs", &out));
-            }
-            Ok(())
-        })
-        .map(|()| None),
-        Some(ContentKind::Filesystem(FsKind::Xfs)) => with_scope_device(src, scope, |dev| with_mount(dev, |mnt| {
-            let out = run_write("xfs_growfs", &[mnt]).map_err(|e| tool_write_maybe_started("xfs_growfs", mnt, e))?;
-            if !out.status.success() {
-                return Err(FsError::command("xfs_growfs", &out));
-            }
-            Ok(())
-        })),
+        Some(ContentKind::Filesystem(FsKind::Ext)) => {
+            let (off, len) = scope_byte_range(src, scope)?;
+            with_write_scope(src, scope, off, len, |dev| {
+                let out = run_write("e2fsck", &["-fp", dev])?;
+                check_e2fsck_status_for_resize(&out.status)?;
+                let out = run_write("resize2fs", &[dev])
+                    .map_err(|e| tool_write_maybe_started("resize2fs", dev, e))?;
+                if !out.status.success() {
+                    return Err(FsError::command("resize2fs", &out));
+                }
+                Ok(())
+            })
+            .map(|()| None)
+        }
+        Some(ContentKind::Filesystem(FsKind::Ntfs)) => {
+            let (off, len) = scope_byte_range(src, scope)?;
+            with_write_scope(src, scope, off, len, |dev| {
+                // 先 --no-action 演练，成功才真改，失败零副作用
+                let out = run("ntfsresize", &["-f", "-f", "--no-action", dev])?;
+                if !out.status.success() {
+                    return Err(FsError::CommandFailed(format!(
+                        "ntfsresize simulation failed: {}",
+                        String::from_utf8_lossy(&out.stderr).trim()
+                    )));
+                }
+                let out = run_write("ntfsresize", &["-f", "-f", dev])?;
+                if !out.status.success() {
+                    return Err(FsError::command("ntfsresize", &out));
+                }
+                Ok(())
+            })
+            .map(|()| None)
+        }
+        Some(ContentKind::Filesystem(FsKind::F2fs)) => {
+            let (off, len) = scope_byte_range(src, scope)?;
+            with_write_scope(src, scope, off, len, |dev| {
+                // 预检：fsck.f2fs 无参 = 仅检查不修复（修复须显式 -f/-p；-a 只在内核报告 bug
+                // 时才检查且默认禁用，man fsck.f2fs）。退出码负数表示失败（-1 表现为 255），
+                // 非 0 即拒绝 resize
+                let out = run("fsck.f2fs", &[dev])?;
+                if !out.status.success() {
+                    return Err(FsError::CommandFailed(format!(
+                        "fsck.f2fs failed ({}), refuse resize",
+                        describe_exit(&out.status)
+                    )));
+                }
+                let out = run_write("resize.f2fs", &[dev])
+                    .map_err(|e| tool_write_maybe_started("resize.f2fs", dev, e))?;
+                if !out.status.success() {
+                    return Err(FsError::command("resize.f2fs", &out));
+                }
+                Ok(())
+            })
+            .map(|()| None)
+        }
+        Some(ContentKind::Filesystem(FsKind::Xfs)) => {
+            let (off, len) = scope_byte_range(src, scope)?;
+            with_write_scope(src, scope, off, len, |dev| {
+                with_mount(dev, |mnt| {
+                    let out = run_write("xfs_growfs", &[mnt])
+                        .map_err(|e| tool_write_maybe_started("xfs_growfs", mnt, e))?;
+                    if !out.status.success() {
+                        return Err(FsError::command("xfs_growfs", &out));
+                    }
+                    Ok(())
+                })
+            })
+        }
         Some(ContentKind::Filesystem(FsKind::Btrfs)) => {
             // 区间只解析一次：多设备闸与设备建立消费同一份 (off, len)，两次读表之间
             // 第三方改表不会让闸和实际映射看见不同的区间
             let (off, len) = scope_byte_range(src, scope)?;
             refuse_btrfs_multi_device_at(src, off, len)?;
-            with_scope_device_ranged(src, scope, off, len, |dev| with_mount(dev, |mnt| {
-                let out = run_write("btrfs", &["filesystem", "resize", "max", mnt])
-                    .map_err(|e| tool_write_maybe_started("btrfs resize", mnt, e))?;
-                if !out.status.success() {
-                    return Err(FsError::command("btrfs resize", &out));
-                }
-                Ok(())
-            }))
+            with_write_scope(src, scope, off, len, |dev| {
+                with_mount(dev, |mnt| {
+                    let out = run_write("btrfs", &["filesystem", "resize", "max", mnt])
+                        .map_err(|e| tool_write_maybe_started("btrfs resize", mnt, e))?;
+                    if !out.status.success() {
+                        return Err(FsError::command("btrfs resize", &out));
+                    }
+                    Ok(())
+                })
+            })
         }
         // fatresize -s max = 扩满设备（man fatresize EXAMPLES；-s max 自 1.0.4 起支持）。
         // max 可能报 "Can't have overlapping partitions"，此时降级为显式字节（分区大小-1）；
@@ -236,13 +270,13 @@ fn resize_fs_step(src: &FileSource, scope: &DeviceScope, fstype: Option<ContentK
             // 区间与设备同源：fallback 尺寸用的 len 就是设备建立时的那一份，
             // 不再在闭包外另读一次表
             let (off, dev_len) = scope_byte_range(src, scope)?;
-            with_scope_device_ranged(src, scope, off, dev_len, |dev| {
-                // 兜底的字节数 = 设备长 − 1。长度 0 时减一会回绕成 u64::MAX，把
-                // "无从格式化"伪装成扩到天文数字——它必须在任何工具启动之前判掉，
-                // 否则就成了"工具可能已改盘"之后的一次 Refused
-                let want = dev_len.checked_sub(1).ok_or_else(|| {
-                    FsError::invalid(format!("vfat device length {dev_len} — cannot derive fallback size"))
-                })?;
+            // 兜底的字节数 = 设备长 − 1。长度 0 时减一会回绕成 u64::MAX，把
+            // "无从格式化"伪装成扩到天文数字——它必须在任何工具启动之前判掉，
+            // 否则就成了"工具可能已改盘"之后的一次 Refused
+            let want = dev_len.checked_sub(1).ok_or_else(|| {
+                FsError::invalid(format!("vfat device length {dev_len} — cannot derive fallback size"))
+            })?;
+            with_write_scope(src, scope, off, dev_len, |dev| {
                 let mut out = run_write("fatresize", &["-s", "max", dev])
                     .map_err(|e| tool_write_maybe_started("fatresize", dev, e))?;
                 if !out.status.success() {
@@ -393,12 +427,13 @@ where
         guard.mounted = entry_identity(&mnt);
         if guard.mounted.is_none() {
             // 读不到刚挂上的挂载点身份，之后无从核对；此刻设备确由本次调用挂上，
-            // 按路径卸掉再把这条环境故障报出来
+            // 按路径卸掉再把这条环境故障报出来。mount 已启动、可能已重放日志改过目标，
+            // 该失败按"可能已写盘"交出，不落成"确定未写盘"
             drop(release_mount(&mnt));
-            return Err(FsError::Io(io::Error::other(format!(
+            return Err(FsError::CommandFailed(format!(
                 "cannot read the identity of the mount point {} just created",
                 mnt.display()
-            ))));
+            )));
         }
     }
     let res = f(&mnt.to_string_lossy());

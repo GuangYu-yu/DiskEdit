@@ -9,7 +9,7 @@
 //! 消费它；`info` 一类诊断路径继续读 `table::RawGpt`——那是有意的能力保留：
 //! 本工具拒绝在坏几何上继续操作，但必须能告诉用户哪里坏了。
 
-use crate::table::{EntryArrayGeometry, GptContent, MAX_ARRAY_BYTES, RawGpt, RawHeader};
+use crate::table::{EntryArrayGeometry, GptContent, GptState, MAX_ARRAY_BYTES, RawGpt, RawHeader};
 use crate::outcome::RunOutcome;
 use gptman::GPTPartitionEntry;
 use std::io;
@@ -61,6 +61,8 @@ pub struct ValidatedGeometry {
     decided_entries: Vec<GPTPartitionEntry>,
     /// 构造时读到的头，未经修复动作收敛：提交前与盘上现状比对的基准
     decided_header: RawHeader,
+    /// 构造时读到的主头几何状态：`NeedsRepair` 的原因即本次操作开始时盘上的现状
+    decided_state: GptState,
     /// 经 [`Self::update_entry`] 改过的槽位下标：比对时这些槽位允许已是目标样子
     dirty: Vec<usize>,
     entry_geometry: EntryArrayGeometry,
@@ -142,6 +144,7 @@ impl ValidatedGeometry {
             entries: g.entries.clone(),
             decided_entries: g.entries.clone(),
             decided_header: g.header.clone(),
+            decided_state: g.state,
             dirty: Vec::new(),
             entry_geometry,
             file_last_lba,
@@ -150,6 +153,16 @@ impl ValidatedGeometry {
 
     pub fn first_usable_lba(&self) -> u64 {
         self.header.first_usable_lba
+    }
+
+    /// 构造时读到的主头 `last_usable_lba`（修复动作可能已把生效值收敛到别处）
+    pub(crate) fn decided_last_usable_lba(&self) -> u64 {
+        self.decided_header.last_usable_lba
+    }
+
+    /// 构造时读到的主头几何状态（`NeedsRepair` 的原因即盘上现状）
+    pub(crate) fn decided_state(&self) -> GptState {
+        self.decided_state
     }
 
     /// 修复后将生效的可用区上界。唯一来源：调用点只从这里取，不自行推导

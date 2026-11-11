@@ -122,7 +122,8 @@ pub(crate) fn execute(
         }
     };
     // 屏障必须早于首个目标写入：数据字节不入记录，undo 见到它即永久拒绝回滚
-    src.mark_non_reversible().map_err(|e| RunOutcome::partial(e.to_string()))?;
+    src.mark_non_reversible()
+        .map_err(|e| RunOutcome::partial(e.record_failure("the recovery barrier")))?;
     let total_n = total.div_ceil(chunk_bytes) as usize;
     let mut hasher = Sha256::new();
     let mut pos = 0u64;
