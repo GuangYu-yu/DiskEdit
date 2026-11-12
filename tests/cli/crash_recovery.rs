@@ -543,3 +543,54 @@ fn pending_relocation_job_refuses_the_other_resize_semantic() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// 修复动作不随记录持久化：绑定记录之后、执行修复之前崩溃，续跑必须补做修复。
+/// 盘面：镜像被扩到 48MiB，双头自述的备份位置仍停在 32MiB 末端
+#[test]
+fn resume_after_relocation_bound_replays_the_repair() {
+    let img = stage("rbr");
+    let img_s = img.to_str().unwrap();
+    // 被搬的成员：扩容要动它，记录里才会绑上搬移计划（`Belongs` 续跑路径）
+    let (c, e) = run(&["add", img_s, "1M", "--align", "mib", "--type-guid", "0fc63daf-8483-4772-8e79-3d69d8477de4", "--yes"]);
+    assert_eq!(c, 0, "the second partition must be added: {e}");
+    let grown = 48 * 1024 * 1024u64;
+    let f = std::fs::OpenOptions::new().write(true).open(&img).unwrap();
+    f.set_len(grown).unwrap();
+    drop(f);
+    let last = grown / 512 - 1;
+    let target = format!("{img_s}:1");
+    let argv = ["resize", target.as_str(), "+1M", "--allow-move", "--chunk", "1", "--yes", "--no-fs"];
+
+    let (c, e) = run_fault("after-relocation-bound", &argv);
+    assert_ne!(c, 0, "the injected abort must not look like success: {e}");
+    assert!(record_present(&img), "the bound record must survive the crash: {e}");
+    let stale = read_region(&img, last, 512);
+    assert_ne!(
+        &stale[0..8],
+        b"EFI PART".as_slice(),
+        "the crash must land before the repair: no backup header at the new end"
+    );
+
+    let (c, out, e) = run_out(&argv);
+    assert_eq!(c, 0, "re-running must resume and finish: {e}");
+    // 日志行是本次进程真的走过修复步骤的证据；提交本身也会把双头写到容器末端，
+    // 只凭末态分不出修复是否执行
+    assert!(out.contains("[repair]"), "the resume must run the repair step: {out}\n{e}");
+    let primary = read_region(&img, 1, 512);
+    let backup = read_region(&img, last, 512);
+    assert_eq!(&primary[0..8], b"EFI PART".as_slice());
+    assert_eq!(&backup[0..8], b"EFI PART".as_slice(), "the resume must write the backup header at the container end");
+    assert_eq!(
+        u64::from_le_bytes(primary[32..40].try_into().unwrap()),
+        last,
+        "the primary must point at the relocated backup"
+    );
+    assert_eq!(
+        u64::from_le_bytes(backup[24..32].try_into().unwrap()),
+        last,
+        "the backup header must describe itself as the last LBA"
+    );
+    assert!(!record_present(&img), "{e}");
+
+    std::fs::remove_dir_all(img.parent().unwrap()).ok();
+}

@@ -109,6 +109,7 @@ fn apply_unreconciled(
     if let Err(e) = bind_relocation(src, &d.relocation, d.lvm.as_ref()) {
         return RunOutcome::no_mutation(e.bind_failure());
     }
+    fault_after_relocation_bound();
     // 修复虽是写盘，但先于任何目标写入执行；放在 RunOutcome 域是为了保住分类：
     // 其读表阶段尚未写一个字节（NoMutation），一旦进入 io 域就只剩 Partial 一条路
     if let Some(what) = plan.repair.describe() {

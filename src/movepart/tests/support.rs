@@ -131,9 +131,9 @@ pub(crate) fn plan_shift_noop(src: &mut FileSource, grow_part: u32) -> Result<Pl
 }
 
 pub(crate) fn pending_relocation(src: &FileSource, grow_part: u32) -> Result<bool, RunOutcome> {
-    let (g, _repair) = gpt_policy::resolve_geometry(src)?.ok_or_else(|| RunOutcome::refused("no GPT on target"))?;
+    let (g, repair) = gpt_policy::resolve_geometry(src)?.ok_or_else(|| RunOutcome::refused("no GPT on target"))?;
     let reloc = relocation_of(src);
-    has_pending_relocation(reloc.as_ref(), &g, grow_part)
+    has_pending_relocation(reloc.as_ref(), &g, repair, grow_part)
 }
 
 pub(crate) fn rsize(src: &mut WriteSource, part: u32, start: u64, end: u64, chunk: u64, no_fs: bool, log: &mut dyn FnMut(&str)) -> RunOutcome {

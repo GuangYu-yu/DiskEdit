@@ -579,7 +579,7 @@ pub fn make_plan_resuming(
     repair: RepairAction,
     grow_part: u32,
 ) -> Result<Plan, RunOutcome> {
-    match resume_outcome(relocation, g, grow_part)? {
+    match resume_outcome(relocation, g, repair.clone(), grow_part)? {
         // 作业身份比对：本入口的进入语义是"吃满右侧"（TailPacked）。槽上那份若是精确
         // SIZE 的最小位移 plan，它的终点停在旧请求的末端——按 grow 收尾等于把本次请求
         // 静默换成旧作业的续跑。判据与 SIZE 入口共用一处（见 make_plan_shift_resuming）
@@ -620,7 +620,7 @@ pub fn make_plan_shift_resuming(
     grow_part: u32,
     intent: ShiftIntent,
 ) -> Result<Plan, RunOutcome> {
-    match resume_outcome(relocation, g, grow_part)? {
+    match resume_outcome(relocation, g, repair.clone(), grow_part)? {
         ResumeRunOutcome::Belongs(p) => {
             let e = gpt_policy::live_entry(g, grow_part)?;
             match intent {
@@ -672,9 +672,10 @@ pub fn make_plan_shift_resuming(
 pub fn has_pending_relocation(
     relocation: Option<&Relocation>,
     g: &ValidatedGeometry,
+    repair: RepairAction,
     grow_part: u32,
 ) -> Result<bool, RunOutcome> {
-    Ok(matches!(resume_outcome(relocation, g, grow_part)?, ResumeRunOutcome::Belongs(_)))
+    Ok(matches!(resume_outcome(relocation, g, repair, grow_part)?, ResumeRunOutcome::Belongs(_)))
 }
 
 /// 槽位被**别的分区**的搬移作业占用时的拒绝理由。三处 plan 生成路径共用同一句话：
@@ -724,11 +725,13 @@ pub(crate) fn plan_requested_end(plan: &Plan, target_start: u64) -> Option<u64> 
 /// 三态判定的内核：记录里的搬移状态 → 空 / 属于本分区 / 属于别的分区。
 ///
 /// `Belongs` 时以记录里的有序计划为准：盘上几何已被部分执行改变，重算出的 delta 与
-/// 记录不一致，会撞上执行器的恢复校验而使续传永久失败。记录存在 ⇒ repair 已在执行链
-/// 开头执行过（在首次落盘之前），故 repair 记 None
+/// 记录不一致，会撞上执行器的恢复校验而使续传永久失败。修复动作不在记录里：执行链
+/// 先绑记录、再执行修复（`movepart::shift::apply_unreconciled`），中断可以落在两者
+/// 之间，故续跑按本次读到的表重新分类，把动作原样带进 plan
 pub(crate) fn resume_outcome(
     relocation: Option<&Relocation>,
     g: &ValidatedGeometry,
+    repair: RepairAction,
     grow_part: u32,
 ) -> Result<ResumeRunOutcome, RunOutcome> {
     let Some(r) = relocation else {
@@ -743,7 +746,7 @@ pub(crate) fn resume_outcome(
         grow_part: r.grow_part,
         moves: r.entries.iter().map(PlanEntry::from).collect(),
         kind: r.kind.into(),
-        repair: RepairAction::None,
+        repair,
     }))
 }
 
