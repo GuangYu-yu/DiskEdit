@@ -163,6 +163,7 @@ fn an_entry_over_sixty_four_mib_stops_the_scan() {
 fn a_root_inside_the_host_repository_is_refused() {
     // 只接受镜像目录与 `recovery/` 本身；两者内部的路径一律 3。
     if !is_root() {
+        eprintln!("skipping a_root_inside_the_host_repository_is_refused: needs euid 0 for a block-device target");
         return;
     }
     let dir = temp_dir("scan-root");
@@ -191,6 +192,7 @@ fn the_host_repository_lists_identity_hash_directories() {
     // 块设备侧落点是 `recovery/<身份哈希>/`；目录名不是 32 位小写
     // 十六进制的条目不进扫描结果。
     if !is_root() {
+        eprintln!("skipping the_host_repository_lists_identity_hash_directories: needs euid 0 for a block-device target");
         return;
     }
     let dir = temp_dir("host-repo");

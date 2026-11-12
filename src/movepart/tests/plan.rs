@@ -393,6 +393,34 @@ pub(crate) fn stale_after_enlarge_detected_then_repaired() {
     drop(src);
 }
 
+/// 纯 `RelocateBackup`（保护 MBR 仍与容器一致）执行后的重分类：修复把双头与可用区
+/// 落到容器末端，此后同一盘面的分类必须是 `None`——否则每次续跑都会再写一遍修复
+#[test]
+pub(crate) fn relocate_backup_reclassifies_to_none() {
+    let (src, p) = plan_fixture(&[(1, [0x11; 16], 2048, 6143)]);
+    let file_last = src.size / 512 - 1;
+    let _keep = src.release();
+    make_stale(&p);
+    let mut src = plan_open(&p);
+    let (_, action) = gpt_policy::resolve_geometry(&src).unwrap().unwrap();
+    assert!(
+        matches!(action, RepairAction::RelocateBackup { .. }),
+        "主头自述的备份位置过期、保护 MBR 与容器一致时，动作须是纯 RelocateBackup"
+    );
+    gpt_policy::apply_repair(&mut src, &action).unwrap();
+    let g = table::load_gpt(&src).unwrap().unwrap();
+    assert_eq!(g.state, table::GptState::Valid);
+    assert_eq!(g.pmbr, table::PmbrSize::Normal);
+    assert_eq!(g.header.backup_lba, file_last);
+    assert_eq!(g.header.last_usable_lba, file_last - 32 - 1);
+    assert_eq!(
+        gpt_policy::classify_repair(&g, file_last).unwrap(),
+        RepairAction::None,
+        "修复后的盘面不得再要求修复"
+    );
+    drop(src);
+}
+
 /// 「写盘前的拒绝承诺本次未写盘」的落地检验：需要修复的 stale 表遇到事前拒绝时，
 /// 盘上必须**仍是** stale。修复写盘若发生在事前判定之前，这条断言就会红
 #[test]
@@ -445,6 +473,48 @@ pub(crate) fn apply_refusal_does_not_write_the_disk() {
     let o = ap(&mut src, &mut plan, chunk, true, &mut |_| {});
     assert_eq!(o.exit_code(), 3);
     assert_eq!(std::fs::read(&p).unwrap(), img_before, "a refusal must leave the image byte-identical");
+    drop(src);
+}
+
+/// 中断落在"记录已绑、修复未执行"之间：`bind_relocation` 已把现场落盘，
+/// `apply_repair` 还没跑。修复动作不在记录里，续跑按本次读到的表重新分类之后，
+/// 必须把它带进 plan 并在绑记录之后执行——否则这张待修的表会被当成已修过
+#[cfg(target_os = "linux")]
+#[test]
+pub(crate) fn resume_after_bind_replays_the_pending_repair() {
+    let chunk: u64 = 1024 * 1024;
+    let shift: u64 = 4096;
+    let (mut src, path) = plan_fixture(&[(1, [0x11; 16], 2048, 6143), (2, [0x22; 16], 8192, 24575)]);
+    let plan = plan_shift(&mut src, 1, Some(shift)).expect("a fresh shift plan");
+    let size = src.size;
+    let _record_path = attach_relocation(
+        &mut src,
+        (2048, 6143),
+        (plan.grow_part, 2048, 6143 + shift),
+        reloc_for(&plan, chunk, size),
+        None,
+    );
+    // 记录已在盘上、修复尚未执行：主头自述的备份位置仍停在容器末端之前
+    make_stale(&path);
+    assert!(
+        matches!(table::load_gpt(&src).unwrap().unwrap().state, table::GptState::NeedsRepair { .. }),
+        "夹具须是待修的表"
+    );
+
+    let mut resumed = plan_shift(&mut src, 1, Some(shift)).expect("the bound job must resume");
+    assert!(
+        resumed.repair.describe().is_some(),
+        "续跑须带上尚未执行的修复动作: {:?}",
+        resumed.repair
+    );
+
+    let o = ap(&mut src, &mut resumed, chunk, true, &mut |_| {});
+    assert_eq!(o.exit_code(), 0, "resume must complete: {o:?}");
+    assert_eq!(
+        table::load_gpt(&src).unwrap().unwrap().state,
+        table::GptState::Valid,
+        "续跑须把修复补做：双头都落在本容器"
+    );
     drop(src);
 }
 

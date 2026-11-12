@@ -96,6 +96,7 @@ fn a_loop_backing_identity_permits_the_write_path() {
     let dir = temp_dir("loop");
     let image = image_with(&dir, 32 * 1024 * 1024);
     let Some(device) = attach_loop(&image, false) else {
+        eprintln!("skipping a_loop_backing_identity_permits_the_write_path: losetup could not attach the image");
         fs::remove_dir_all(&dir).ok();
         return;
     };
@@ -125,11 +126,13 @@ fn a_partition_node_reads_with_the_carrier_identity() {
     assert_eq!(run(&["add", path, "4M", "--yes"]).0, 0);
 
     let Some(device) = attach_loop(&image, true) else {
+        eprintln!("skipping a_partition_node_reads_with_the_carrier_identity: losetup could not attach the image");
         fs::remove_dir_all(&dir).ok();
         return;
     };
     let partition = format!("{device}p1");
     if !Path::new(&partition).exists() {
+        eprintln!("skipping a_partition_node_reads_with_the_carrier_identity: the partition node {partition} did not appear");
         detach_loop(&device);
         fs::remove_dir_all(&dir).ok();
         return;
@@ -147,7 +150,12 @@ fn a_partition_node_reads_with_the_carrier_identity() {
 fn a_dm_device_is_unusable_for_writes() {
     // dm 只有主次设备号，身份为 Unusable → 写被拒。
     // 身份不可得不阻断读命令。
-    if !is_root() || !Path::new("/dev/mapper/control").exists() {
+    if !is_root() {
+        eprintln!("skipping a_dm_device_is_unusable_for_writes: needs euid 0 to create the dm device");
+        return;
+    }
+    if !Path::new("/dev/mapper/control").exists() {
+        eprintln!("skipping a_dm_device_is_unusable_for_writes: needs /dev/mapper/control");
         return;
     }
     let dir = temp_dir("dm");
@@ -155,6 +163,7 @@ fn a_dm_device_is_unusable_for_writes() {
     fs::create_dir_all(&state).expect("create state dir");
     let image = image_with(&dir, 32 * 1024 * 1024);
     let Some(device) = attach_loop(&image, false) else {
+        eprintln!("skipping a_dm_device_is_unusable_for_writes: losetup could not attach the image");
         fs::remove_dir_all(&dir).ok();
         return;
     };
@@ -165,6 +174,7 @@ fn a_dm_device_is_unusable_for_writes() {
         .and_then(|out| String::from_utf8(out.stdout).ok())
         .map(|text| text.trim().to_string());
     let Some(sectors) = sectors else {
+        eprintln!("skipping a_dm_device_is_unusable_for_writes: blockdev --getsz gave no size for {device}");
         detach_loop(&device);
         fs::remove_dir_all(&dir).ok();
         return;
@@ -177,6 +187,7 @@ fn a_dm_device_is_unusable_for_writes() {
         .stderr(Stdio::null())
         .status();
     if !matches!(created, Ok(status) if status.success()) {
+        eprintln!("skipping a_dm_device_is_unusable_for_writes: dmsetup could not create the device");
         detach_loop(&device);
         fs::remove_dir_all(&dir).ok();
         return;
@@ -212,10 +223,15 @@ fn a_device_with_a_serial_or_wwid_reads_as_a_strong_identity() {
     // 有 WWN/EUI 或一致 serial 的真实盘是 Strong。
     // 只发只读命令；测试不写真实磁盘。
     let Some(device) = device_with_serial_or_wwid() else {
+        eprintln!("skipping a_device_with_a_serial_or_wwid_reads_as_a_strong_identity: no device with a WWN or serial");
         return;
     };
     // 读命令的前提是设备打得开：无读权限的环境没有这个现场，跳过
     if fs::File::open(&device).is_err() {
+        eprintln!(
+            "skipping a_device_with_a_serial_or_wwid_reads_as_a_strong_identity: cannot open {}",
+            device.display()
+        );
         return;
     }
     let (code, out, err) = run(&["info", device.to_str().expect("utf-8 device path")]);
