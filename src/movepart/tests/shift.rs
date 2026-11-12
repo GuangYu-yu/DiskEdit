@@ -435,7 +435,9 @@ pub(crate) fn unactivatable_swap_growth_is_pending_not_silent_success() {
 
 /// 表项声明普通分区、内容是 4K 页可激活的 swap：这一支会改写（mkswap 重建），两侧
 /// 对账因此在使用写原语之前执行，冲突即拒绝。表已提交，拒绝由本次写事实改判为
-/// Partial（5），且不附带待办——冲突不是"未完成的后置条件"
+/// Partial（5），且不附带待办——冲突不是"未完成的后置条件"。
+/// 非 root：swap 重建的能力门（`require_root`）在首次目标写入之前拒绝，走不到
+/// "表已提交、对账才发现冲突"这一现场
 #[cfg(target_os = "linux")]
 #[test]
 pub(crate) fn target_swap_conflict_is_refused_after_the_table_commit() {
@@ -452,6 +454,24 @@ pub(crate) fn target_swap_conflict_is_refused_after_the_table_commit() {
     let mut src = plan_open(&p);
     assert_eq!(crate::fsid::identify(&src, base as u64, 4096 * 512).unwrap(), crate::fsid::ContentKind::Swap);
     let o = rsize(&mut src, 1, 2048, 8191, 1024 * 1024, false, &mut |_| {});
+    // 非 root：能力门在首个目标写入前把这次 resize 拒成 NoMutation(4)，表项仍是旧值
+    if unsafe { libc::geteuid() } != 0 {
+        match &o {
+            crate::outcome::RunOutcome::NoMutation { cause } => {
+                assert!(cause.contains("root required"), "{cause}");
+            }
+            other => panic!("non-root must stop at the privilege gate before writing, got {other:?}"),
+        }
+        assert_eq!(o.exit_code(), 4);
+        let g = table::load_gpt(&src).unwrap().unwrap();
+        assert_eq!(
+            (g.entries[0].starting_lba, g.entries[0].ending_lba),
+            (2048, 6143),
+            "the refusal precedes the table write: the entry still names the old end"
+        );
+        drop(src);
+        return;
+    }
     match &o {
         crate::outcome::RunOutcome::Partial { cause, pending, .. } => {
             assert!(cause.contains("the two readings disagree"), "{cause}");

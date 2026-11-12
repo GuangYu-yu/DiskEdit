@@ -82,6 +82,8 @@ fault_points! {
     fault_after_swap_entry(mi: usize) = "after-swap-entry", mi;
     /// 修复完成、初始 ckpt 写入前 abort
     fault_after_repair() = "after-repair";
+    /// 现场已绑进记录、修复尚未执行时 abort（写路径上两者之间的窗口）
+    fault_after_relocation_bound() = "after-relocation-bound";
     /// swap 条目 GPT commit 后、ckpt 推进前 abort（重放须幂等：GPT 绝对赋值 + 从旧位置重读 UUID 重建）
     fault_after_swap_commit(mi: usize) = "after-swap-commit", mi;
     /// FS 缩容完成（fs_shrunk 已落盘）、数据搬移前 abort
