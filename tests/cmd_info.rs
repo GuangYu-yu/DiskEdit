@@ -73,14 +73,14 @@ fn info_refuses_a_partition_selector_and_keeps_the_envelope() {
 }
 
 #[test]
-fn info_reports_an_unopenable_target_as_no_mutation() {
+fn info_reports_an_unopenable_target_as_three() {
     let dir = tempfile::Builder::new()
         .prefix("diskedit_cmd_info_missing_")
         .tempdir()
         .expect("create the fixture directory");
     let absent = dir.path().join("not-there.img");
     let (code, out, err) = run(&["info", absent.to_str().expect("utf-8 path")]);
-    assert_eq!(code, 4, "an open failure wrote nothing: {err}");
+    assert_eq!(code, 3, "an unreadable target is an unmet precondition: {err}");
     let v = json(&out);
     assert!(v["error"].is_string(), "{out}");
     assert!(v["sector_size"].is_null() && v["size_bytes"].is_null());

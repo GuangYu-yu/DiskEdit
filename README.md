@@ -92,8 +92,8 @@ Identification (`info`): ext, xfs, btrfs, f2fs, ntfs, vfat, exfat, swap, squashf
 | 1 | unexpected internal error |
 | 2 | usage or command syntax error |
 | 3 | policy refusal, or a precondition of the request is not met |
-| 4 | operation failed with no persistent modification |
-| 5 | partial, applied with follow-up steps pending, or a stale kernel view (the remedy is printed) |
+| 4 | this run wrote no target bytes and no record entry was created, renamed, moved away or deleted (the records directory and `record.lock` do not count) |
+| 5 | partial, records changed while the target was not fully written, or applied with follow-up steps pending or a stale kernel view (the remedy is printed) |
 | 6 | the platform or capability is not supported |
 
 `--sector-size N` applies to image files only: an image carries no sector information and is read as 512-byte sectors unless told otherwise (4Kn images must say so). A block device reports its logical sector size through the kernel, and giving the option for one is refused.

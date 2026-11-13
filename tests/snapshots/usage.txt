@@ -14,13 +14,12 @@ examples:
 everyday:
   info <TARGET> [--sector-size N]
       show partition table and per-partition filesystem identification
-  inspect <TARGET>
-  inspect <PATH>
+  inspect <TARGET|PATH>
       show the recovery record beside a target (read-only)
   records list [TARGET]
       list recovery records as JSON (omit TARGET: everything under
       <state_root>)
-  records verify <ID> <TARGET>
+  records verify <TARGET> <ID>
       re-check one record by its 32-hex id
   records scan <ROOT>
       enumerate records under a container root (<state_root>/recovery, or an
@@ -45,7 +44,7 @@ everyday:
       resize a filesystem only — the partition entry stays put
   undo <TARGET> --yes
       roll back the writes this tool completed (replays its record)
-  abandon <TARGET>
+  abandon <TARGET> --yes [--discard-replay]
       drop an unfinished operation's recovery files; no rollback
   plan <TARGET>[:N] [--grow] [--sector-size N]
       read-only report: geometry, table, FS and usage — the same fields as
@@ -70,8 +69,8 @@ options (availability: help <CMD>):
                          given
   --allow-move           permit relocating the partitions in the way: the plan
                          is printed, then the write proceeds
-  --chunk MiB            recovery granularity in MiB, 1..=64 (default 4); an
-                         interrupted run must repeat the same value
+  --chunk MiB            recovery granularity in MiB, 1..=64; a resumed job
+                         keeps the record's value, a new job uses 4
   --discard-replay       confirm giving up the ranges `undo` could still
                          replay
   --end LBA              new end LBA for resize-part (grow or shrink in place)
@@ -85,11 +84,13 @@ options (availability: help <CMD>):
                          default)
   --lv NAME              which LV to grow (implies --grow-lv)
   --name S               name for the entry this command creates
-  --no-fs                skip the filesystem step of the grown partition (a
-                         move has no such step)
+  --no-fs                skip the filesystem step of the grown partition
   --overwrite-data       accept overwriting bytes an existing partition holds
   --part-number N        1-based entry slot; it must be empty
   --random               ask the target to generate a new value
+  --replay-table-only    allow `undo` to replay only the recorded table
+                         regions of a move whose data has already moved; the
+                         data those ranges name is not restored
   --sector-size N        logical sector size override for raw images (power of
                          two, max 65536 bytes — an implementation limit, not a
                          format requirement)
@@ -101,7 +102,7 @@ options (availability: help <CMD>):
   --yes                  acknowledge a write before it starts
 
   --yes is required by: resize, move, copy, delete, set, mkfs, resizefs, undo,
-  new, add, resize-part
+  abandon, new, add, resize-part
 
   --flag=VALUE is the same as --flag VALUE, except that a value starting with
   `-` needs the equals form. `--` ends option parsing: every later argument is
@@ -111,6 +112,6 @@ exit status:
   1  unexpected internal error
   2  usage or command syntax error
   3  policy refusal, or a precondition of the request is not met
-  4  operation failed with no persistent modification
-  5  partial, or applied with follow-up steps pending or a stale kernel view (the remedy is printed)
+  4  this run wrote no target bytes and no record entry was created, renamed, moved away or deleted (the records directory and record.lock do not count)
+  5  partial, records changed while the target was not fully written, or applied with follow-up steps pending or a stale kernel view (the remedy is printed)
   6  the platform or capability is not supported

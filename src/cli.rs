@@ -172,6 +172,7 @@ enum Effect {
     GrowToEnd,
     Grow,
     DiscardReplay,
+    ReplayTableOnly,
     AlignValue,
     ChunkSize,
     SectorSize,
@@ -195,10 +196,6 @@ pub(crate) struct FlagSpec {
     effect: Effect,
 }
 
-/// 注册表里对每个命令都成立的旗标。
-/// 命令白名单仍按 `accepts()` 判，只是这几项不写进每条 `options`。
-pub(crate) const GLOBAL_FLAGS: &[&str] = &["--discard-replay"];
-
 /// 旗标注册表：解析器判重、缺值文案、命令白名单与帮助/参考文档都读这一份。
 pub(crate) const FLAGS: &[FlagSpec] = &[
     FlagSpec {
@@ -216,7 +213,7 @@ pub(crate) const FLAGS: &[FlagSpec] = &[
     FlagSpec {
         name: "--chunk",
         domain: ValueDomain::Chunk,
-        desc: "recovery granularity in MiB, 1..=64 (default 4); an interrupted run must repeat the same value",
+        desc: "recovery granularity in MiB, 1..=64; a resumed job keeps the record's value, a new job uses 4",
         effect: Effect::ChunkSize,
     },
     FlagSpec {
@@ -276,7 +273,7 @@ pub(crate) const FLAGS: &[FlagSpec] = &[
     FlagSpec {
         name: "--no-fs",
         domain: ValueDomain::Bool,
-        desc: "skip the filesystem step of the grown partition (a move has no such step)",
+        desc: "skip the filesystem step of the grown partition",
         effect: Effect::NoFs,
     },
     FlagSpec {
@@ -296,6 +293,12 @@ pub(crate) const FLAGS: &[FlagSpec] = &[
         domain: ValueDomain::Bool,
         desc: "ask the target to generate a new value",
         effect: Effect::Random,
+    },
+    FlagSpec {
+        name: "--replay-table-only",
+        domain: ValueDomain::Bool,
+        desc: "allow `undo` to replay only the recorded table regions of a move whose data has already moved; the data those ranges name is not restored",
+        effect: Effect::ReplayTableOnly,
     },
     FlagSpec {
         name: "--sector-size",
@@ -517,7 +520,7 @@ pub(crate) struct CommandDef {
 impl CommandDef {
     /// 该命令是否声明了这个选项；拒绝路径与帮助对账读同一份白名单
     pub(crate) fn accepts(&self, flag: &str) -> bool {
-        self.options.iter().any(|o| o.name == flag) || GLOBAL_FLAGS.contains(&flag)
+        self.options.iter().any(|o| o.name == flag)
     }
 
     /// 该命令是否声明了这个槽位
@@ -545,7 +548,7 @@ pub(crate) const COMMANDS: &[CommandDef] = &[
         name: "inspect",
         group: CommandGroup::Everyday,
         summary: "show the recovery record beside a target (read-only)",
-        syntax: &["<TARGET>", "<PATH>"],
+        syntax: &["<TARGET|PATH>"],
         positionals: &[TARGET_ARG],
         options: &[],
         details: crate::cmd::inspect::DETAILS,
@@ -571,8 +574,8 @@ pub(crate) const COMMANDS: &[CommandDef] = &[
         name: "records verify",
         group: CommandGroup::Everyday,
         summary: "re-check one record by its 32-hex id",
-        syntax: &["<ID> <TARGET>"],
-        positionals: &[RECORD_ID_ARG, TARGET_ARG],
+        syntax: &["<TARGET> <ID>"],
+        positionals: &[TARGET_ARG, RECORD_ID_ARG],
         options: &[],
         details: crate::cmd::records::DETAILS_VERIFY,
         mode: TargetMode::ReadOnly,
@@ -630,11 +633,7 @@ pub(crate) const COMMANDS: &[CommandDef] = &[
         positionals: &[TARGET_ARG],
         options: &[
             opt("--align"),
-            opt_desc("--chunk", "default 4 MiB; an interrupted run must repeat the same value"),
-            opt_desc(
-                "--no-fs",
-                "no effect: a move keeps the partition's size, so there is no filesystem step",
-            ),
+            opt_desc("--chunk", "default 4 MiB; a resumed job keeps the record's value"),
             opt("--sector-size"),
             opt("--start"),
             opt("--yes"),
@@ -658,7 +657,7 @@ pub(crate) const COMMANDS: &[CommandDef] = &[
         positionals: &[TARGET_ARG],
         options: &[
             opt("--align"),
-            opt_desc("--chunk", "default 4 MiB; an interrupted run must repeat the same value"),
+            opt_desc("--chunk", "default 4 MiB; a resumed job keeps the record's value"),
             opt("--keep-partuuid"),
             opt("--name"),
             opt("--sector-size"),
@@ -750,7 +749,7 @@ pub(crate) const COMMANDS: &[CommandDef] = &[
         summary: "roll back the writes this tool completed (replays its record)",
         syntax: &["<TARGET> --yes"],
         positionals: &[TARGET_ARG],
-        options: &[opt("--sector-size"), opt("--yes")],
+        options: &[opt("--replay-table-only"), opt("--sector-size"), opt("--yes")],
         details: crate::cmd::undo::DETAILS,
         mode: TargetMode::WriteNoJournal,
         capabilities: &[
@@ -766,13 +765,13 @@ pub(crate) const COMMANDS: &[CommandDef] = &[
         name: "abandon",
         group: CommandGroup::Everyday,
         summary: "drop an unfinished operation's recovery files; no rollback",
-        syntax: &["<TARGET>"],
+        syntax: &["<TARGET> --yes [--discard-replay]"],
         positionals: &[TARGET_ARG],
-        options: &[opt("--discard-replay")],
+        options: &[opt("--discard-replay"), opt("--sector-size"), opt("--yes")],
         details: crate::cmd::abandon::DETAILS,
         mode: TargetMode::WriteNoJournal,
         capabilities: &[Capability::CompanionFile],
-        confirmation: Confirmation::None,
+        confirmation: Confirmation::Required,
         build: build_abandon,
     },
     CommandDef {
@@ -859,7 +858,7 @@ pub(crate) trait TargetRequest {
 }
 
 pub(crate) trait ChunkRequest {
-    fn chunk_mib(&self) -> u64;
+    fn chunk_mib(&self) -> Option<u64>;
 }
 
 macro_rules! impl_target_request {
@@ -874,7 +873,7 @@ macro_rules! impl_target_request {
 macro_rules! impl_chunk_request {
     ($t:ty) => {
         impl ChunkRequest for $t {
-            fn chunk_mib(&self) -> u64 { self.chunk_mib }
+            fn chunk_mib(&self) -> Option<u64> { self.chunk_mib }
         }
     };
 }
@@ -929,9 +928,8 @@ pub(crate) struct ResizeRequest {
     pub(crate) grow_lv: bool,
     pub(crate) lv: Option<String>,
     pub(crate) allow_move: bool,
-    pub(crate) chunk_mib: u64,
-    /// `--chunk` 是否被显式给出：给在无搬移能力的路径上是用法拒绝，缺省值不算“给了”
-    pub(crate) chunk_given: bool,
+    /// `--chunk` 的显式值；`None` 表示未给出（续跑取记录值，新作业取默认值）
+    pub(crate) chunk_mib: Option<u64>,
 }
 
 pub(crate) struct MoveRequest {
@@ -941,8 +939,7 @@ pub(crate) struct MoveRequest {
     pub(crate) start: Option<StartSelector>,
     pub(crate) align: Align,
     pub(crate) align_given: bool,
-    pub(crate) chunk_mib: u64,
-    pub(crate) no_fs: bool,
+    pub(crate) chunk_mib: Option<u64>,
 }
 
 pub(crate) struct CopyRequest {
@@ -952,7 +949,7 @@ pub(crate) struct CopyRequest {
     pub(crate) start: Option<StartSelector>,
     pub(crate) align: Align,
     pub(crate) align_given: bool,
-    pub(crate) chunk_mib: u64,
+    pub(crate) chunk_mib: Option<u64>,
     pub(crate) name: Option<String>,
     pub(crate) keep_partuuid: bool,
 }
@@ -1004,6 +1001,8 @@ pub(crate) struct UndoRequest {
     pub(crate) part: Option<PartSelector>,
     pub(crate) sector_size: Option<SectorSize>,
     pub(crate) yes: bool,
+    /// 显式允许只回放 `move` 的表区：数据已搬走，旧布局指名的区间不再可信
+    pub(crate) replay_table_only: bool,
 }
 
 pub(crate) struct AbandonRequest {
@@ -1159,11 +1158,11 @@ struct Options {
     sector_size: Option<SectorSize>,
     align: Align,
     align_given: bool,
-    chunk_mib: u64,
-    chunk_given: bool,
+    chunk_mib: Option<u64>,
     grow_to_end: bool,
     grow: bool,
     discard_replay: bool,
+    replay_table_only: bool,
     allow_move: bool,
     no_fs: bool,
     grow_lv: bool,
@@ -1187,11 +1186,11 @@ impl Default for Options {
             sector_size: None,
             align: Align::none(),
             align_given: false,
-            chunk_mib: 4,
-            chunk_given: false,
+            chunk_mib: None,
             grow_to_end: false,
             grow: false,
             discard_replay: false,
+            replay_table_only: false,
             allow_move: false,
             no_fs: false,
             grow_lv: false,
@@ -1324,7 +1323,6 @@ fn build_resize(p: &Positionals, o: Options) -> Request {
         lv: o.lv,
         allow_move: o.allow_move,
         chunk_mib: o.chunk_mib,
-        chunk_given: o.chunk_given,
     })
 }
 
@@ -1344,7 +1342,6 @@ fn build_move(p: &Positionals, o: Options) -> Request {
         align: o.align,
         align_given: o.align_given,
         chunk_mib: o.chunk_mib,
-        no_fs: o.no_fs,
     })
 }
 
@@ -1449,12 +1446,23 @@ fn build_resizefs(p: &Positionals, o: Options) -> Request {
 
 fn build_undo(p: &Positionals, o: Options) -> Request {
     let (target, part) = target_of(p);
-    Request::Undo(UndoRequest { target, part, sector_size: o.sector_size, yes: o.yes })
+    Request::Undo(UndoRequest {
+        target,
+        part,
+        sector_size: o.sector_size,
+        yes: o.yes,
+        replay_table_only: o.replay_table_only,
+    })
 }
 
 fn build_abandon(p: &Positionals, o: Options) -> Request {
     let (target, part) = target_of(p);
-    Request::Abandon(AbandonRequest { target, part, sector_size: None, discard_replay: o.discard_replay })
+    Request::Abandon(AbandonRequest {
+        target,
+        part,
+        sector_size: o.sector_size,
+        discard_replay: o.discard_replay,
+    })
 }
 
 fn build_new(p: &Positionals, o: Options) -> Request {
@@ -1759,6 +1767,7 @@ fn store_flag(opts: &mut Options, spec: &FlagSpec, value: Option<Parsed>) {
         (Effect::GrowToEnd, None) => opts.grow_to_end = true,
         (Effect::Grow, None) => opts.grow = true,
         (Effect::DiscardReplay, None) => opts.discard_replay = true,
+        (Effect::ReplayTableOnly, None) => opts.replay_table_only = true,
         (Effect::AllowMove, None) => opts.allow_move = true,
         (Effect::NoFs, None) => opts.no_fs = true,
         (Effect::GrowLv, None) => opts.grow_lv = true,
@@ -1780,10 +1789,7 @@ fn store_flag(opts: &mut Options, spec: &FlagSpec, value: Option<Parsed>) {
             opts.align = v;
             opts.align_given = true;
         }
-        (Effect::ChunkSize, Some(Parsed::Mebibytes(v))) => {
-            opts.chunk_mib = v;
-            opts.chunk_given = true;
-        }
+        (Effect::ChunkSize, Some(Parsed::Mebibytes(v))) => opts.chunk_mib = Some(v),
         (Effect::Table, Some(Parsed::TableKind(v))) => opts.table = Some(v),
         _ => bail_fail(RunOutcome::internal(format!("{} does not match its value domain", spec.name))),
     }
@@ -1861,7 +1867,7 @@ mod flag_probes;
 
 #[cfg(test)]
 mod tests {
-    use super::{find, parse_size_delta, SizeArg, COMMANDS, Confirmation, Slot};
+    use super::{find, parse_size_delta, SizeArg, COMMANDS, Confirmation, Slot, TargetMode};
 
     fn bytes(kind: i8, v: u64) -> Option<SizeArg> {
         Some(SizeArg::Bytes { kind, bytes: v })
@@ -1938,26 +1944,42 @@ mod tests {
         }
     }
 
-    /// USAGE 的 examples 段：命令名必须真实存在；把分区选择器写在目标后缀上的命令，
-    /// 块设备目标必须带 `:N`
+    /// 把分区选择器写在目标后缀上的命令，块设备目标必须带 `:N` 或 `:last`
+    fn assert_part_suffix_on_block_target(cmd: &str, target: &str, line: &str) {
+        const PART_SUFFIX_REQUIRED: &[&str] = &["resize", "move", "copy", "delete", "set", "check", "mkfs"];
+        if !PART_SUFFIX_REQUIRED.contains(&cmd) || !target.starts_with("/dev/") {
+            return;
+        }
+        let suffix = target.rsplit_once(':').map(|(_, p)| p).unwrap_or("");
+        assert!(
+            (suffix.chars().all(|c| c.is_ascii_digit()) && !suffix.is_empty())
+                || suffix.eq_ignore_ascii_case("last"),
+            "{cmd}: block-device target {target} has no partition selector :N: {line}"
+        );
+    }
+
+    /// USAGE 的 examples 段与各命令的详助正文：命令名必须真实存在；把分区选择器
+    /// 写在目标后缀上的命令，块设备目标必须带 `:N`
     #[test]
     fn usage_examples_follow_the_command_syntax() {
         let examples = crate::docs::EXAMPLES;
         assert!(!examples.is_empty(), "USAGE must keep an examples block");
-        const PART_SUFFIX_REQUIRED: &[&str] = &["resize", "move", "copy", "delete", "set", "check", "mkfs"];
         for line in examples {
             let mut it = line.split_whitespace();
             assert_eq!(it.next(), Some("diskedit"), "example must start with the binary name: {line}");
             let cmd = it.next().unwrap_or_else(|| panic!("example has no command: {line}"));
             assert!(find(cmd).is_some(), "example names unknown command {cmd}: {line}");
             let Some(target) = it.next() else { continue };
-            if PART_SUFFIX_REQUIRED.contains(&cmd) && target.starts_with("/dev/") {
-                let suffix = target.rsplit_once(':').map(|(_, p)| p).unwrap_or("");
-                assert!(
-                    (suffix.chars().all(|c| c.is_ascii_digit()) && !suffix.is_empty())
-                        || suffix.eq_ignore_ascii_case("last"),
-                    "{cmd}: block-device target {target} has no partition selector :N: {line}"
-                );
+            assert_part_suffix_on_block_target(cmd, target, line);
+        }
+        for def in COMMANDS {
+            for line in def.details.lines() {
+                let line = line.trim();
+                let Some(rest) = line.strip_prefix("diskedit ") else { continue };
+                let mut it = rest.split_whitespace();
+                let Some(cmd) = it.next() else { continue };
+                let Some(target) = it.next() else { continue };
+                assert_part_suffix_on_block_target(cmd, target, line);
             }
         }
     }
@@ -2149,7 +2171,7 @@ mod tests {
             ("mkfs", Confirmation::Required),
             ("resizefs", Confirmation::Required),
             ("undo", Confirmation::Required),
-            ("abandon", Confirmation::None),
+            ("abandon", Confirmation::Required),
             ("new", Confirmation::Required),
             ("add", Confirmation::Required),
             ("resize-part", Confirmation::Required),
@@ -2163,6 +2185,19 @@ mod tests {
             assert!(
                 expected.iter().any(|(n, _)| *n == c.name),
                 "{}: no expected confirmation rule — decide it and add it here",
+                c.name
+            );
+        }
+    }
+
+    /// 写入模式的命令都要打开目标：镜像的扇区大小没有别的来源，给了覆盖才读得对。
+    /// 集合级约束——新增写入命令必须自己声明这个开关
+    #[test]
+    fn write_commands_take_sector_size() {
+        for c in COMMANDS.iter().filter(|c| c.mode != TargetMode::ReadOnly) {
+            assert!(
+                c.options.iter().any(|o| o.name == "--sector-size"),
+                "{}: writes to the target but does not take --sector-size",
                 c.name
             );
         }
@@ -2233,8 +2268,7 @@ mod tests {
         let super::Request::Resize(r) = parse(&["resize", "img:1", "grow", "--yes"]) else {
             panic!("expected a resize request");
         };
-        assert!(!r.chunk_given, "--chunk was not given");
-        assert_eq!(r.chunk_mib, 4, "the default chunk is 4 MiB");
+        assert_eq!(r.chunk_mib, None, "an omitted --chunk stays distinguishable from an explicit one");
 
         let super::Request::Move(r) = parse(&[
             "move", "img:1", "--start", "2048", "--align", "mib", "--chunk", "8", "--yes",
@@ -2243,14 +2277,13 @@ mod tests {
         };
         assert!(r.align_given, "explicit --align mib must be distinguishable from the default");
         assert_eq!(r.align, crate::domain::Align::mib(1).unwrap());
-        assert_eq!(r.chunk_mib, 8);
+        assert_eq!(r.chunk_mib, Some(8));
 
         let super::Request::Resize(r) =
             parse(&["resize", "img:1", "grow", "--chunk", "8", "--yes"])
         else {
             panic!("expected a resize request");
         };
-        assert!(r.chunk_given, "explicit --chunk must be recorded");
-        assert_eq!(r.chunk_mib, 8);
+        assert_eq!(r.chunk_mib, Some(8));
     }
 }

@@ -28,9 +28,9 @@ fn run(args: &[&str]) -> (i32, String, String) {
 const USAGE_COMMANDS: &[&str] = &[
     "  info <TARGET>",
     "  plan <TARGET>",
-    "  inspect <TARGET>",
+    "  inspect <TARGET|PATH>",
     "  records list [TARGET]",
-    "  records verify <ID> <TARGET>",
+    "  records verify <TARGET> <ID>",
     "  records scan <ROOT>",
     "  resize <TARGET>",
     "  move <TARGET>:N",
@@ -52,8 +52,8 @@ const EXIT_LINES: &[&str] = &[
     "  1  unexpected internal error",
     "  2  usage or command syntax error",
     "  3  policy refusal, or a precondition of the request is not met",
-    "  4  operation failed with no persistent modification",
-    "  5  partial, or applied with follow-up steps pending or a stale kernel view (the remedy is printed)",
+    "  4  this run wrote no target bytes and no record entry was created, renamed, moved away or deleted (the records directory and record.lock do not count)",
+    "  5  partial, records changed while the target was not fully written, or applied with follow-up steps pending or a stale kernel view (the remedy is printed)",
     "  6  the platform or capability is not supported",
 ];
 
@@ -199,7 +199,7 @@ fn unknown_help_topics_and_unknown_commands_are_usage_errors() {
     assert!(out.is_empty(), "a usage error must not write stdout: {out}");
     assert!(err.contains("usage:"), "a usage error must print usage: {err}");
 
-    let (code, out, err) = run(&["frobnicate"]);
+    let (code, out, err) = run(&["frobnicate"]); // cli-surface: refused
     assert_eq!(code, 2, "an unknown command is a usage error");
     assert!(out.is_empty(), "a usage error must not write stdout: {out}");
     assert!(err.contains("usage:"), "a usage error must print usage: {err}");
@@ -215,7 +215,7 @@ fn help_documents_the_registered_flags_of_the_contract() {
         ("add", &["--start", "--align", "--part-number", "--name", "--type-guid"]),
         ("set", &["--random"]),
         ("mkfs", &["--label"]),
-        ("abandon", &["--discard-replay"]),
+        ("abandon", &["--discard-replay", "--yes"]),
     ];
     for (name, flags) in cases {
         let (code, out, err) = run(&["help", name]);

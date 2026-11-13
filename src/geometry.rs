@@ -36,7 +36,7 @@ impl TableCheck {
     fn into_fail(self) -> RunOutcome {
         match self {
             Self::Changed(m) => RunOutcome::refused(m),
-            Self::Unreadable(m) => RunOutcome::no_mutation(m),
+            Self::Unreadable(m) => RunOutcome::refused(m),
         }
     }
 }

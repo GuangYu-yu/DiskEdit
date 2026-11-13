@@ -30,7 +30,6 @@ use crate::outcome::{
     EXIT_INTERNAL, EXIT_NO_MUTATION, EXIT_OK, EXIT_PARTIAL, EXIT_REFUSED, EXIT_UNSUPPORTED, EXIT_USAGE,
 };
 
-/// 折行宽度
 const WIDTH: usize = 78;
 
 /// 顶层帮助的示例。示例是命令的组合用法，不是单条声明能推出的；
@@ -64,8 +63,16 @@ const EXIT_LEGEND: &[(u8, &str)] = &[
     (EXIT_INTERNAL, "unexpected internal error"),
     (EXIT_USAGE, "usage or command syntax error"),
     (EXIT_REFUSED, "policy refusal, or a precondition of the request is not met"),
-    (EXIT_NO_MUTATION, "operation failed with no persistent modification"),
-    (EXIT_PARTIAL, "partial, or applied with follow-up steps pending or a stale kernel view (the remedy is printed)"),
+    (
+        EXIT_NO_MUTATION,
+        "this run wrote no target bytes and no record entry was created, renamed, moved away or \
+         deleted (the records directory and record.lock do not count)",
+    ),
+    (
+        EXIT_PARTIAL,
+        "partial, records changed while the target was not fully written, or applied with follow-up \
+         steps pending or a stale kernel view (the remedy is printed)",
+    ),
     (EXIT_UNSUPPORTED, "the platform or capability is not supported"),
 ];
 

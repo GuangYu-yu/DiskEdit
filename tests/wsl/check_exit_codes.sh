@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# `check` 的验收载体。
+# `check` 退出码的运行时测试用例。
 #
-# 四码：工具退出 0 → 0；工具非零 → 3；工具不在 PATH 或路径不存在 → 6；
-# 已找到但启动失败 → 4。工具表的搜索目录在编译期钉死（src/fsops/env.rs 的 TOOL_PATH），
+# 三码：工具退出 0 → 0；工具非零、或已找到但启动失败 → 3；工具不在 PATH
+# 或路径不存在 → 6。工具表的搜索目录在编译期钉死（src/fsops/env.rs 的 TOOL_PATH），
 # 调用环境的 PATH 不参与解析，所以后两条只能换表来造：
 #   BFKO 的表只有假工具目录 → 把 losetup 等真工具 symlink 进去，e2fsck 真的缺失 → 6
-#   BFK  的表是假目录 + 系统目录 → 假目录里放带 x 位的非可执行文件 → 启动失败 → 4
+#   BFK  的表是假目录 + 系统目录 → 假目录里放带 x 位的非可执行文件 → 启动失败 → 3
 #
 # 本脚本钉住工具侧三条；非工具路径的三条（缺 :N 的 2、空槽的 3、缺文件系统的 6、
-# 缺目标的 4）与只读零写由 tests/cmd_check.rs 覆盖。
+# 缺目标的 3）与只读零写由 tests/cmd_check.rs 覆盖。
 #
 # 依赖：root、/dev/loop-control、e2fsprogs（mke2fs/e2fsck）、util-linux（losetup/dd）。
 source "$(dirname "$0")/lib.sh"
@@ -84,13 +84,13 @@ expect_text "$OUT" "e2fsck" "the gap names the missing tool"
 assert_eq "$(mdsum "$T")" "$BASE" "a capability gap did not write the target"
 assert_eq "$(loops_on_target)" 0 "a capability gap released its loop"
 
-echo "== 已找到但启动失败 -> 4"
+echo "== 已找到但启动失败 -> 3"
 rm -rf "$FAKE_TOOL_DIR"
 mkdir -p "$FAKE_TOOL_DIR"
 printf 'not an executable\n' > "$FAKE_TOOL_DIR/e2fsck"
 chmod +x "$FAKE_TOOL_DIR/e2fsck"
 OUT=$("$BFK" check "$T:1" 2>&1)
-exp "$?" 4 "a tool that cannot start is an I/O failure"
+exp "$?" 3 "a tool that cannot start did not complete the read"
 expect_text "$OUT" "check failed" "the failure keeps the check context"
 assert_eq "$(mdsum "$T")" "$BASE" "a failed start did not write the target"
 assert_eq "$(loops_on_target)" 0 "a failed start released its loop"

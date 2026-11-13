@@ -132,13 +132,16 @@ impl Fixture {
         out.extend_from_slice(&[0u8; 16]);
         out.push(0); // restore not blocked
         out.extend_from_slice(&0u32.to_le_bytes()); // restore entry count
+        out.push(0); // no entry with its table step in flight
+        out.push(0); // no table repair
+        out.push(0); // table fence: pending
         out
     }
 
     fn bytes(&self) -> Vec<u8> {
         let payload = self.payload();
         let mut out = vec![0u8; 16];
-        out[0..4].copy_from_slice(b"DSK3");
+        out[0..4].copy_from_slice(b"DSK4");
         out[4..8].copy_from_slice(&(payload.len() as u32).to_le_bytes());
         out[8..12].copy_from_slice(&crc32(&payload).to_le_bytes());
         let header_crc = crc32(&out[0..12]);
@@ -342,7 +345,7 @@ fn evidence_unreadable_requires_a_non_root_reader() {
     }
 
     let (code, out, _) = run(&["inspect", image.to_str().unwrap()]);
-    assert_eq!(code, 4);
+    assert_eq!(code, 3);
     assert!(out.contains("record: unreadable"), "{out}");
 }
 
@@ -420,11 +423,11 @@ fn prepared_goes_to_quarantine_and_committed_goes_to_cleanup() {
     write_record(&image, &prepared.bytes());
 
     let (code, out, err) = run(&["inspect", image.to_str().unwrap()]);
-    assert_eq!(code, 5, "{out}{err}");
+    assert_eq!(code, 0, "{out}{err}");
     assert!(out.contains("commit: Prepared"), "{out}");
     assert!(err.contains("unfinished:"), "{err}");
 
-    let (code, out, err) = run(&["abandon", image.to_str().unwrap()]);
+    let (code, out, err) = run(&["abandon", image.to_str().unwrap(), "--yes"]);
     assert_eq!(code, 0, "{out}{err}");
     assert!(out.contains("abandoned 1 recovery record(s)"), "{out}");
     assert!(!record_path(&image).exists());
@@ -449,10 +452,13 @@ fn prepared_goes_to_quarantine_and_committed_goes_to_cleanup() {
     assert_eq!(code, 0);
     assert!(out.contains("commit: Committed"), "{out}");
 
+    // 已提交记录：本次只释放记录、不回滚任何区间。记录文件被移走是持久状态变化，
+    // 因此不是 NoMutation（4）而是 Partial（5），文案必须写清这一点
     let (code, out, err) = run(&["undo", committed_image.to_str().unwrap(), "--yes"]);
-    assert_eq!(code, 0, "{out}{err}");
-    assert!(out.contains("already committed"), "{out}");
-    assert!(out.contains("released"), "{out}");
+    assert_eq!(code, 5, "{out}{err}");
+    assert!(err.contains("already committed"), "{err}");
+    assert!(err.contains("no recorded range was rolled back"), "{err}");
+    assert!(err.contains("the recovery record was removed"), "{err}");
     assert!(!record_path(&committed_image).exists());
     let (code, out, _) = run(&["inspect", committed_image.to_str().unwrap()]);
     assert_eq!(code, 0);

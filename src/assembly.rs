@@ -28,7 +28,7 @@ pub(crate) fn observe_table(src: &FileSource) -> Result<(TableObservation, u64),
     let label = match table_label(src) {
         Ok(label) => label,
         Err(GptError::Io(e)) => {
-            return Err(RunOutcome::no_mutation(format!("cannot read the partition table: {e}")));
+            return Err(RunOutcome::refused(format!("cannot read the partition table: {e}")));
         }
         Err(e) => return Ok((TableObservation::Unusable { reason: e.to_string() }, src.sector_size)),
     };
@@ -47,7 +47,7 @@ pub(crate) fn observe_table(src: &FileSource) -> Result<(TableObservation, u64),
                 reason: "the GPT disappeared between the label check and the table read".into(),
             },
             Err(GptError::Io(e)) => {
-                return Err(RunOutcome::no_mutation(format!("cannot read the GPT: {e}")));
+                return Err(RunOutcome::refused(format!("cannot read the GPT: {e}")));
             }
             Err(e) => TableObservation::Unusable { reason: e.to_string() },
         },
@@ -59,7 +59,7 @@ pub(crate) fn observe_table(src: &FileSource) -> Result<(TableObservation, u64),
             Err(e) if e.kind() == std::io::ErrorKind::InvalidData => {
                 TableObservation::Unusable { reason: e.to_string() }
             }
-            Err(e) => return Err(RunOutcome::no_mutation(format!("cannot read the MBR: {e}"))),
+            Err(e) => return Err(RunOutcome::refused(format!("cannot read the MBR: {e}"))),
         },
     };
     Ok((observation, table_ss))

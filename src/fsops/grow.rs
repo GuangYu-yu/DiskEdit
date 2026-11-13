@@ -554,7 +554,6 @@ impl MountLeak {
         )
     }
 
-    /// 补救命令
     pub(crate) fn hint(&self) -> String {
         format!("umount {}", self.point)
     }

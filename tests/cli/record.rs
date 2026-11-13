@@ -1,6 +1,6 @@
-//! 单条恢复记录（`<image>.diskedit/record`）的崩溃注入验收：记录落盘、数据改写、提交三档。
+//! 单条恢复记录（`<image>.diskedit/record`）的崩溃注入测试：记录落盘、数据改写、提交三档。
 //!
-//! 三条表类写命令（`new` / `add` / `delete`）已不再写旧 journal。这里同时钉住"禁双写"：
+//! 三条表类写命令（`new` / `add` / `delete`）不写旧 journal。这里同时钉住"禁双写"：
 //! 任一条崩溃档位都不得出现 `.diskedit.journal`，记录的落点只有记录目录内的 `record`。
 
 use super::{sidecar, JOURNAL_SUFFIX};
@@ -80,6 +80,22 @@ fn add_1m(img: &str) -> [&str; 8] {
     ]
 }
 
+/// 4 MiB 分区：起始 LBA 2048、结束 LBA 10239，右移时有足够的落脚空间
+fn add_4m(img: &str) -> [&str; 8] {
+    [
+        "add", img, "4M", "--align", "mib", "--type-guid", "0fc63daf-8483-4772-8e79-3d69d8477de4", "--yes",
+    ]
+}
+
+fn partition_start(img: &Path) -> u64 {
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_DiskEdit"))
+        .args(["info", img.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_str(String::from_utf8_lossy(&out.stdout).trim()).unwrap();
+    v["partitions"][0]["first_lba"].as_u64().unwrap()
+}
+
 /// 记录已落盘、目标未改：`undo` 把原文写回（等价于重写同一份字节）并释放记录
 #[test]
 fn record_persisted_before_data_write() {
@@ -94,8 +110,9 @@ fn record_persisted_before_data_write() {
     assert_eq!(partition_count(&img), 0, "no target byte may change before the record lands: {e}");
 
     let (c, e) = inspect_code(&img);
-    assert_eq!(c, 5, "an unfinished record is reported as partial: {e}");
+    assert_eq!(c, 0, "inspect reports an unfinished record as a readable result: {e}");
     assert!(e.contains("diskedit undo"), "inspect must name the way out: {e}");
+    assert!(e.contains("diskedit abandon"), "inspect must name the way out: {e}");
 
     let (c, e) = run(&["undo", img_s, "--yes"]);
     assert_eq!(c, 0, "undo must replay the recorded bytes and release the record: {e}");
@@ -129,7 +146,9 @@ fn record_before_commit_rolls_the_data_back() {
     assert!(e.contains("undo"), "the refusal must name the rollback: {e}");
 
     let (c, e) = inspect_code(&img);
-    assert_eq!(c, 5, "an unfinished record is reported as partial: {e}");
+    assert_eq!(c, 0, "inspect reports an unfinished record as a readable result: {e}");
+    assert!(e.contains("diskedit undo"), "inspect must name the way out: {e}");
+    assert!(e.contains("diskedit abandon"), "inspect must name the way out: {e}");
 
     let (c, e) = run(&["undo", img_s, "--yes"]);
     assert_eq!(c, 0, "undo must roll the table write back: {e}");
@@ -156,10 +175,103 @@ fn record_committed_is_settled_without_rollback() {
     assert!(e.contains("commit: Committed"), "{e}");
 
     let (c, e) = run(&["undo", img_s, "--yes"]);
-    assert_eq!(c, 0, "undo must release a committed record: {e}");
-    assert!(e.contains("nothing was rolled back"), "{e}");
+    assert_eq!(c, 5, "releasing a committed record changes persistent state without rolling anything back: {e}");
+    assert!(e.contains("no recorded range was rolled back"), "{e}");
+    assert!(e.contains("the recovery record was removed"), "{e}");
     assert!(!record.exists(), "{e}");
     assert_eq!(partition_count(&img), 1, "a committed table write must stay: {e}");
+}
+
+/// 搬移的表步已写、记录未提交：目的区压到旧表所指区间时，只回放表会让旧布局指向被覆盖的数据
+#[test]
+fn undo_refuses_a_move_whose_destinations_overlap_the_old_ranges() {
+    let (img, record, _journal) = stage("mvx");
+    let img_s = img.to_str().unwrap();
+    let part = format!("{img_s}:1");
+    let (c, e) = run(&add_4m(img_s));
+    assert_eq!(c, 0, "{e}");
+
+    let (c, e) = run_fault("after-entry-commit:0", &["move", &part, "--start", "4096", "--yes"]);
+    assert_ne!(c, 0, "the injected abort must not look like success: {e}");
+    assert!(record.exists(), "the record must survive the crash: {e}");
+    assert_eq!(partition_start(&img), 4096, "the table step must have landed: {e}");
+
+    let (c, e) = run(&["undo", img_s, "--yes"]);
+    assert_eq!(c, 3, "destinations that cover the old ranges must be refused: {e}");
+    assert!(e.contains("finish the relocation"), "the refusal names the two ways out: {e}");
+    assert!(record.exists(), "a refused replay keeps the record: {e}");
+    assert_eq!(partition_start(&img), 4096, "no table byte may be written back: {e}");
+}
+
+/// 目的区与旧区间不相交：只回放表是安全的，但输出必须说清数据没有回滚
+#[test]
+fn undo_replays_a_move_whose_destinations_stay_clear_of_the_old_ranges() {
+    let (img, record, _journal) = stage("mvc");
+    let img_s = img.to_str().unwrap();
+    let part = format!("{img_s}:1");
+    let (c, e) = run(&add_4m(img_s));
+    assert_eq!(c, 0, "{e}");
+
+    let (c, e) = run_fault("after-entry-commit:0", &["move", &part, "--start", "10240", "--yes"]);
+    assert_ne!(c, 0, "the injected abort must not look like success: {e}");
+    assert!(record.exists(), "the record must survive the crash: {e}");
+    assert_eq!(partition_start(&img), 10240, "the table step must have landed: {e}");
+
+    let (c, e) = run(&["undo", img_s, "--yes"]);
+    assert_eq!(c, 0, "a move clear of the old ranges may replay its table: {e}");
+    assert!(e.contains("the recorded ranges were not rolled back"), "{e}");
+    assert!(
+        e.contains("no destination range the move has written, or may have written, overlaps a range that layout names"),
+        "{e}"
+    );
+    assert!(!record.exists(), "{e}");
+    assert_eq!(partition_start(&img), 2048, "the table must be back to the old layout: {e}");
+}
+
+/// 相交情形只有显式开关才放行；放行输出必须点名旧区间数据不可信
+#[test]
+fn undo_replays_over_an_overlap_only_with_the_explicit_switch() {
+    let (img, record, _journal) = stage("mvf");
+    let img_s = img.to_str().unwrap();
+    let part = format!("{img_s}:1");
+    let (c, e) = run(&add_4m(img_s));
+    assert_eq!(c, 0, "{e}");
+
+    let (c, e) = run_fault("after-entry-commit:0", &["move", &part, "--start", "4096", "--yes"]);
+    assert_ne!(c, 0, "the injected abort must not look like success: {e}");
+    assert!(record.exists(), "{e}");
+
+    let (c, e) = run(&["undo", img_s, "--yes", "--replay-table-only"]);
+    assert_eq!(c, 0, "the explicit switch must let the table replay through: {e}");
+    assert!(e.contains("no longer trustworthy"), "a forced replay states the data risk: {e}");
+    assert!(!record.exists(), "{e}");
+    assert_eq!(partition_start(&img), 2048, "the table must be back to the old layout: {e}");
+}
+
+/// 数据搬移中断在表步之前：记录里只有屏障位、没有旧表快照，显式开关也不得放行；
+/// 拒绝原因必须说"没有可回放的旧表"，不能说成"已写区间相交"
+#[test]
+fn replay_table_only_refuses_when_the_record_holds_no_table_snapshot() {
+    let (img, record, _journal) = stage("mvn");
+    let img_s = img.to_str().unwrap();
+    let part = format!("{img_s}:1");
+    let (c, e) = run(&add_4m(img_s));
+    assert_eq!(c, 0, "{e}");
+
+    let (c, e) = run_fault(
+        "chunk:2",
+        &["move", &part, "--start", "10240", "--chunk", "1", "--yes"],
+    );
+    assert_ne!(c, 0, "the injected abort must not look like success: {e}");
+    assert!(record.exists(), "the record must survive the crash: {e}");
+    assert_eq!(partition_start(&img), 2048, "the table step must not have run: {e}");
+
+    let (c, e) = run(&["undo", img_s, "--yes", "--replay-table-only"]);
+    assert_eq!(c, 3, "an empty pre-image must not pass the explicit switch: {e}");
+    assert!(e.contains("no replayable copy of the old partition table"), "{e}");
+    assert!(!e.contains("has already written"), "the reason must not claim an overlap: {e}");
+    assert!(record.exists(), "a refused replay keeps the record: {e}");
+    assert_eq!(partition_start(&img), 2048, "no table byte may be written back: {e}");
 }
 
 fn first_change(before: &[u8], after: &[u8]) -> Option<usize> {
@@ -208,7 +320,7 @@ fn undo_refuses_after_an_external_edit() {
     );
 
     // 拒绝不是死锁：记录里仍有 undo 可回放的范围，故释放要带 --discard-replay
-    let (c, e) = run(&["abandon", img_s, "--discard-replay"]);
+    let (c, e) = run(&["abandon", img_s, "--yes", "--discard-replay"]);
     assert_eq!(c, 0, "abandon must release the refused record: {e}");
     assert!(!record.exists(), "{e}");
 }
@@ -238,7 +350,7 @@ fn undo_refuses_after_the_image_grew() {
         "no recorded byte may be written back: {e}"
     );
 
-    let (c, e) = run(&["abandon", img_s, "--discard-replay"]);
+    let (c, e) = run(&["abandon", img_s, "--yes", "--discard-replay"]);
     assert_eq!(c, 0, "abandon must release a record whose size drifted: {e}");
     assert!(!record.exists(), "{e}");
 }

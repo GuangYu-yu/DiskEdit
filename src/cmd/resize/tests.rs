@@ -46,8 +46,8 @@ pub(crate) fn size_request_resolution() {
         (Some(G - 500 * MIB), false)
     );
     // 百分比：raw = cur×10/100 后向下取整到 1MiB
-    let raw = G * 10 / 100; // 107374182
-    let delta = raw / MIB * MIB; // 106954752
+    let raw = G * 10 / 100;
+    let delta = raw / MIB * MIB;
     let ten = crate::cli::SizeSpec::Percent { grow: true, num: 10, denom: 1 };
     assert_eq!(r(ten, G), (Some(G + delta), false));
     assert_eq!(

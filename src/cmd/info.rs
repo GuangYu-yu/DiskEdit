@@ -94,7 +94,7 @@ pub(crate) fn cmd_info_with(a: &InfoRequest, tail: Option<&str>) -> u8 {
             };
             let msg = format!("parse failed ({kind}): {e}");
             emit_failure(&msg, Some(&src));
-            bail_fail(crate::outcome::table_parse_failure(&e, msg));
+            bail_fail(RunOutcome::refused(msg));
         }
     };
     if let Some(g) = gpt {
@@ -195,7 +195,7 @@ pub(crate) fn cmd_info_with(a: &InfoRequest, tail: Option<&str>) -> u8 {
             Err(e) => {
                 let msg = format!("parse failed: {e}");
                 emit_failure(&msg, Some(&src));
-                bail_fail(crate::outcome::mbr_parse_failure(&e, msg));
+                bail_fail(RunOutcome::refused(msg));
             }
         };
         match raw {
@@ -260,14 +260,14 @@ pub(crate) fn cmd_info_with(a: &InfoRequest, tail: Option<&str>) -> u8 {
                 // 走到这里已确定不是 GPT（load_gpt 为 None）也不是 MBR（raw 解析为 None），
                 // 只可能在 GptDamaged（LBA1 有签名、保护布局不满足）与 None 之间。
                 // 判据取自唯一判定点 table_label，与写命令的拒绝理由同源
-                // 与上面 MBR 分支同一口径（见本文件前一处 label 判定的注释）：探测失败
+                // 与 MBR 分支同一口径：探测失败
                 // 不得降级成 "none"——那会把"读不出来"报成"没有表"
                 let damaged = match table::table_label(&src) {
                     Ok(l) => l.is_damaged(),
                     Err(e) => {
                         let msg = format!("label probe failed: {e}");
                         emit_failure(&msg, Some(&src));
-                        bail_fail(crate::outcome::table_parse_failure(&e, msg));
+                        bail_fail(RunOutcome::refused(msg));
                     }
                 };
                 let name = if damaged { "gpt" } else { "none" };
@@ -301,7 +301,7 @@ pub(crate) fn cmd_info_with(a: &InfoRequest, tail: Option<&str>) -> u8 {
         }
         let msg = "filesystem identification failed on one or more partitions";
         println!("{},\"error\":\"{}\"}}", &out[..out.len() - 1], json_escape(msg));
-        return RunOutcome::no_mutation(msg).exit_code();
+        return RunOutcome::refused(msg).exit_code();
     }
     match tail {
         // 信封的收尾括号在这里补：调用方只给键片段，不会与括号位置互相复制

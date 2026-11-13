@@ -312,7 +312,7 @@ pub(crate) fn blockers_after(
     for (num, e) in &movable {
         // 条目端点倒挂属盘内容故障（解析层已拦，这里是纵深防守）
         if e.ending_lba < e.starting_lba {
-            return Err(RunOutcome::no_mutation(format!("partition {num} has ending LBA below starting LBA (corrupted table)")));
+            return Err(RunOutcome::refused(format!("partition {num} has ending LBA below starting LBA (corrupted table)")));
         }
         if is_forbidden_type_guid(&e.partition_type_guid) {
             return Err(RunOutcome::refused(format!("partition {num} is LUKS/LVM PV — relocation refused")));
@@ -713,6 +713,13 @@ pub(crate) fn resume_outcome(
     let Some(r) = relocation else {
         return Ok(ResumeRunOutcome::Empty);
     };
+    if r.entries.is_empty() {
+        // 空计划重建出的 `moves` 是空集，续跑的几何与相交判据都会在空集上通过
+        return Err(RunOutcome::refused(
+            "the recorded relocation job has no entries — nothing can be resumed from it; release it with \
+             `diskedit abandon`",
+        ));
+    }
     if r.grow_part != grow_part {
         return Ok(ResumeRunOutcome::Occupied);
     }

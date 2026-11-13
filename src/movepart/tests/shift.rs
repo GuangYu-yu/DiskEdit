@@ -654,8 +654,7 @@ pub(crate) fn leftward_move_finishes_from_the_committed_table() {
         start: Some(crate::cli::StartSelector::Lba(2048)),
         align: crate::domain::Align::none(),
         align_given: false,
-        chunk_mib: 1,
-        no_fs: false,
+        chunk_mib: Some(1),
     };
     let o = crate::cmd::layout::cmd_move(&req);
     assert_eq!(o.exit_code(), 0, "the rerun must finish the move: {o:?}");

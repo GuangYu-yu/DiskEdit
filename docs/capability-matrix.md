@@ -69,4 +69,4 @@ The table is generated from the Linux capability set; a non-Linux build's openab
 | `resize-part` | admitted | admitted |
 | `plan` | admitted | admitted |
 
-The process-level exit prints the cause sentence of a failure. Exit 3 and exit 4 are followed by a second line, `— nothing was written by this run`; exit 6 prints `unsupported: <cause>` and appends no such line.
+The process-level exit prints the cause sentence of a failure. Exit 3 and exit 4 are followed by a second line, `— this run changed no persistent state`; exit 6 prints `unsupported: <cause>` and appends no such line.

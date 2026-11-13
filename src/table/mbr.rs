@@ -196,7 +196,7 @@ pub(crate) fn require_writable_mbr(src: &FileSource) -> Result<(), RunOutcome> {
         // InvalidData 是"条目读出来了但不可操作"（越界 / 起点 0 / 两两重叠）：请求本身
         // 仍在写盘之前，按 Refused 出口，文案沿用解析侧的损伤描述；其余才是读盘故障
         Err(e) if e.kind() == io::ErrorKind::InvalidData => Err(RunOutcome::refused(e.to_string())),
-        Err(e) => Err(RunOutcome::no_mutation_io(e)),
+        Err(e) => Err(RunOutcome::unreadable_io(e)),
     }
 }
 
@@ -236,7 +236,7 @@ pub(crate) fn primary_slot(part: u32) -> Result<(), RunOutcome> {
 pub(crate) fn read_mbr_lba0(src: &FileSource) -> Result<Vec<u8>, RunOutcome> {
     require_writable_mbr(src)?;
     let mut lba0 = vec![0u8; src.sector_size as usize];
-    src.read_at(0, &mut lba0).map_err(RunOutcome::no_mutation_io)?;
+    src.read_at(0, &mut lba0).map_err(RunOutcome::unreadable_io)?;
     if u16::from_le_bytes([lba0[510], lba0[511]]) != MBR_SIGNATURE {
         return Err(RunOutcome::no_mutation("no MBR signature on target"));
     }
@@ -276,7 +276,7 @@ pub fn resize_mdos_entry(src: &mut WriteSource, part: u32, new_size_lba: u32) ->
     let stamp = table_stamp(src, ss)?;
     let mut lba0 = vec![0u8; ss as usize];
     // 写盘前的读取：失败即盘未被改动，归 Infra（不能带"盘可能已改变"的提示）
-    src.read_at(0, &mut lba0).map_err(RunOutcome::no_mutation_io)?;
+    src.read_at(0, &mut lba0).map_err(RunOutcome::unreadable_io)?;
     let new = resize_mdos_entry_image(&lba0, part, new_size_lba, ss, src.size / ss)?;
     write_lba0_verified(src, stamp, &new)
 }
@@ -425,7 +425,7 @@ pub fn add_mdos_entry_to(
     let total = src.size / ss;
     let stamp = table_stamp(src, src.sector_size)?;
     let mut lba0 = vec![0u8; ss as usize];
-    src.read_at(0, &mut lba0).map_err(RunOutcome::no_mutation_io)?;
+    src.read_at(0, &mut lba0).map_err(RunOutcome::unreadable_io)?;
     let (lba0, num) = add_mdos_entry_image(&lba0, slot, start, end, os_type, total)?;
     write_lba0_verified(src, stamp, &lba0)?;
     Ok(num)

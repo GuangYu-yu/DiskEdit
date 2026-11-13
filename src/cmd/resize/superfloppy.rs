@@ -20,7 +20,7 @@ pub(crate) fn cmd_resize_superfloppy(a: &ResizeRequest) -> crate::outcome::RunOu
     if a.allow_move {
         bail_fail(RunOutcome::refused("--allow-move has nothing to do on a superfloppy — there are no partitions to relocate".to_string()));
     }
-    if a.chunk_given {
+    if a.chunk_mib.is_some() {
         bail_fail(RunOutcome::refused(
             "--chunk has no effect on a superfloppy — there is nothing to relocate".to_string(),
         ));

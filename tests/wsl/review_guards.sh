@@ -102,7 +102,7 @@ if lo_waitpart "${LD}p2"; then
     echo "undo on partition node -> exit=$E"; exp "$E" 3 "E2c undo refused on a partition node"
     case "$OUT" in *"target is a partition, not a whole disk"*) echo "  OK   E2c refusal names the partition node" ;; *) echo "  BAD  E2c refusal wording"; rc=1 ;; esac
 
-    OUT=$($B abandon "${LD}p2" 2>&1); E=$?
+    OUT=$($B abandon "${LD}p2" --yes 2>&1); E=$?
     echo "abandon on partition node -> exit=$E"; exp "$E" 3 "E2d abandon refused on a partition node"
     case "$OUT" in *"target is a partition, not a whole disk"*) echo "  OK   E2d refusal names the partition node" ;; *) echo "  BAD  E2d refusal wording"; rc=1 ;; esac
 
@@ -192,7 +192,7 @@ echo "  reference layout:"; echo "$SIG_REF" | sed 's/^/    /'
 mk6 "$T6"
 DISKEDIT_FAULT=after-entry-commit:0 $BF resize "$T6":1 1000M --allow-move --yes --no-fs >/dev/null 2>&1
 exp "$?" 134 "E6 shift interrupted after the first entry commit"
-$BF abandon "$T6" >/dev/null 2>&1
+$BF abandon "$T6" --yes >/dev/null 2>&1
 exp "$?" 0 "E6 abandon releases the scene"
 OUT=$($BF resize "$T6":1 1000M --allow-move --yes --no-fs 2>&1); E=$?
 echo "  rerun after abandon -> exit=$E : $(echo "$OUT" | tail -1)"

@@ -134,7 +134,7 @@ pub(crate) fn new_mbr_regions(src: &FileSource) -> Result<Vec<TableRegion>, RunO
         regions.push(region);
     }
     let sig_len = GPT_SIGNATURE.len() as u64;
-    for off in gpt_signature_sites(src).map_err(RunOutcome::no_mutation_io)? {
+    for off in gpt_signature_sites(src).map_err(RunOutcome::unreadable_io)? {
         if regions
             .iter()
             .any(|r| off < r.offset.saturating_add(r.len) && r.offset < off.saturating_add(sig_len))

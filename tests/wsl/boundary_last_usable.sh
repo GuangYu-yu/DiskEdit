@@ -7,7 +7,7 @@ require_bin
 img T t28.img
 LU=2097118   # 1GiB/512 = 2097152 扇区；去掉备份数组(32)与备份头(1)后的末个可用 LBA
 
-p1_last() { last_lba1 "$T"; } # p1 的 last_lba
+p1_last() { last_lba1 "$T"; }
 last_lba1() { # $1=镜像：分区 1 的 last_lba
   $B info "$1" | grep -o '"num":1,[^}]*}' | grep -o '"last_lba":[0-9]*' | cut -d: -f2
 }
@@ -35,7 +35,7 @@ $B resize-part --yes "$T":1 --grow-to-end >/dev/null; exp $? 0 "at last_usable"
 echo "== 越过 last_usable 必须拒绝 =="
 # 三条都必须显式 --align none：--align mib 会把起点向上对齐（src/support.rs 的
 # align_start），越界判断拿到的就不是原始 LBA，断言可能"因错因通过"。
-# 加 --align none 后原始起点与长度直达校验：resize-part 命中 src/movepart/resize.rs:404 的
+# 加 --align none 后原始起点与长度直达校验：resize-part 命中 src/movepart/resize.rs 的
 # `new_end > last_usable_lba`，add 命中 src/cmd/layout.rs 的 fixed_start 可用区判定，
 # 拒绝才是因越界。
 # 反例佐证：uncovered_branches.sh 的紧贴边界用例同样使用 --align none。

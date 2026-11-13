@@ -137,7 +137,6 @@ fn resize_part_move_copy_flag_name() {
     assert_eq!(std::fs::read(&img).unwrap(), img_before, "a refusal must leave the image byte-identical");
     assert_eq!(dir_entries(&dir), entries_before, "a refusal must not add sidecars");
 
-    // flag/name
     let (c, _, _) = run(&["set", &format!("{img_s}:2"), "flag", "esp", "on", "--yes"]);
     assert_eq!(c, 0);
     let (c, _, _) = run(&["set", &format!("{img_s}:2"), "name", "renamed", "--yes"]);

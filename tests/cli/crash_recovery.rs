@@ -247,7 +247,7 @@ fn copy_crash_has_no_resume_path_and_undo_refuses() {
     let (c, e) = run(&["undo", img_s, "--yes"]);
     assert_eq!(c, 3, "undo must not release a copy record in place of `abandon`: {e}");
     assert!(record_present(&img), "the record must stay until it is explicitly released: {e}");
-    let (c, e) = run(&["abandon", img_s]);
+    let (c, e) = run(&["abandon", img_s, "--yes"]);
     assert_eq!(c, 0, "an explicit `abandon` must release the record: {e}");
     assert!(!record_present(&img), "{e}");
     let (c, e) = run(&["add", img_s, "1M", "--align", "mib", "--type-guid", "0fc63daf-8483-4772-8e79-3d69d8477de4", "--yes"]);
@@ -889,7 +889,7 @@ fn delete_records_the_table_step_before_its_first_write() {
     );
     assert_eq!(table_bytes(&img), before, "no table byte may be written before the fence");
 
-    assert_eq!(run(&["abandon", img_s.as_str()]).0, 0);
+    assert_eq!(run(&["abandon", img_s.as_str(), "--yes"]).0, 0);
     assert!(!record_present(&img));
 
     let (c, e) = run(&argv);

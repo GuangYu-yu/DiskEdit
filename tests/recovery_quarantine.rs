@@ -89,13 +89,16 @@ fn payload(size: u64, file_id: [u8; 16]) -> Vec<u8> {
     out.extend_from_slice(&[0u8; 16]);
     out.push(0); // restore not blocked
     out.extend_from_slice(&0u32.to_le_bytes()); // restore entry count
+    out.push(0); // no entry with its table step in flight
+    out.push(0); // no table repair
+    out.push(0); // table fence: pending
     out
 }
 
 fn record_bytes(size: u64, file_id: [u8; 16]) -> Vec<u8> {
     let payload = payload(size, file_id);
     let mut out = vec![0u8; 16];
-    out[0..4].copy_from_slice(b"DSK3");
+    out[0..4].copy_from_slice(b"DSK4");
     out[4..8].copy_from_slice(&(payload.len() as u32).to_le_bytes());
     out[8..12].copy_from_slice(&crc32(&payload).to_le_bytes());
     let header_crc = crc32(&out[0..12]);
@@ -116,7 +119,7 @@ fn abandon_moves_the_record_into_the_quarantine_area() {
     write_record(&image, &bytes);
     let before = fs::read(&image).unwrap();
 
-    let (code, out, err) = run(&["abandon", image.to_str().unwrap()]);
+    let (code, out, err) = run(&["abandon", image.to_str().unwrap(), "--yes"]);
     assert_eq!(code, 0, "{out}{err}");
     assert!(
         out.contains("abandoned 1 recovery record(s) on this target"),
@@ -147,13 +150,13 @@ fn a_second_abandon_is_idempotent() {
     let image = image_with(&dir, 4096);
     write_record(&image, &record_bytes(4096, file_id(&image)));
 
-    assert_eq!(run(&["abandon", image.to_str().unwrap()]).0, 0);
+    assert_eq!(run(&["abandon", image.to_str().unwrap(), "--yes"]).0, 0);
     let quarantined = sidecar(&image).join(".abandoned");
     let kept = fs::read(&quarantined).unwrap();
 
-    let (code, out, err) = run(&["abandon", image.to_str().unwrap()]);
+    let (code, out, err) = run(&["abandon", image.to_str().unwrap(), "--yes"]);
     assert_eq!(code, 0, "{out}{err}");
-    assert!(out.contains("nothing to abandon"), "{out}");
+    assert!(out.contains("this enumeration found no unfinished operation"), "{out}");
     assert_eq!(fs::read(&quarantined).unwrap(), kept);
     assert!(!sidecar(&image).join(".abandoned.1").exists());
 }
@@ -168,7 +171,7 @@ fn quarantine_never_overwrites_an_existing_entry() {
     let old = sidecar(&image).join(".abandoned");
     fs::write(&old, b"earlier evidence").unwrap();
 
-    let (code, out, err) = run(&["abandon", image.to_str().unwrap()]);
+    let (code, out, err) = run(&["abandon", image.to_str().unwrap(), "--yes"]);
     assert_eq!(code, 0, "{out}{err}");
     assert_eq!(fs::read(&old).unwrap(), b"earlier evidence");
     assert_eq!(fs::read(sidecar(&image).join(".abandoned.1")).unwrap(), bytes);
@@ -183,7 +186,7 @@ fn abandon_refuses_a_record_from_another_target() {
     let bytes = record_bytes(4096, other);
     write_record(&image, &bytes);
 
-    let (code, out, err) = run(&["abandon", image.to_str().unwrap()]);
+    let (code, out, err) = run(&["abandon", image.to_str().unwrap(), "--yes"]);
     assert_eq!(code, 3, "{out}{err}");
     assert!(err.contains("not the target's own recovery scene"), "{err}");
     assert_eq!(fs::read(record_path(&image)).unwrap(), bytes);
@@ -208,7 +211,7 @@ fn abandon_refuses_a_record_in_an_unknown_layout_without_renaming_anything() {
     };
     let before = entries(&sidecar(&image));
 
-    let (code, out, err) = run(&["abandon", image.to_str().unwrap()]);
+    let (code, out, err) = run(&["abandon", image.to_str().unwrap(), "--yes"]);
     assert_eq!(code, 3, "{out}{err}");
     assert!(err.contains("a layout this build does not recognize"), "{err}");
     assert!(err.contains("will not quarantine it automatically"), "{err}");
@@ -226,7 +229,7 @@ fn abandon_refuses_a_non_regular_entry() {
     fs::write(&elsewhere, b"user data").unwrap();
     std::os::unix::fs::symlink(&elsewhere, record_path(&image)).unwrap();
 
-    let (code, out, err) = run(&["abandon", image.to_str().unwrap()]);
+    let (code, out, err) = run(&["abandon", image.to_str().unwrap(), "--yes"]);
     assert_eq!(code, 3, "{out}{err}");
     assert!(err.contains("symbolic link"), "{err}");
     assert!(err.contains("remove that file by hand"), "{err}");
@@ -242,12 +245,12 @@ fn abandoning_a_damaged_record_needs_discard_replay() {
     bytes.truncate(bytes.len() - 2);
     write_record(&image, &bytes);
 
-    let (code, out, err) = run(&["abandon", image.to_str().unwrap()]);
+    let (code, out, err) = run(&["abandon", image.to_str().unwrap(), "--yes"]);
     assert_eq!(code, 3, "{out}{err}");
-    assert!(err.contains("add --discard-replay"), "{err}");
+    assert!(err.contains("--discard-replay"), "{err}");
     assert_eq!(fs::read(record_path(&image)).unwrap(), bytes);
 
-    let (code, out, err) = run(&["abandon", image.to_str().unwrap(), "--discard-replay"]);
+    let (code, out, err) = run(&["abandon", image.to_str().unwrap(), "--yes", "--discard-replay"]);
     assert_eq!(code, 0, "{out}{err}");
     assert_eq!(fs::read(sidecar(&image).join(".abandoned")).unwrap(), bytes);
 }
@@ -262,7 +265,7 @@ fn a_renamed_image_still_lists_and_releases_its_old_scene() {
     let renamed = dir.join("renamed.img");
     fs::rename(&image, &renamed).unwrap();
 
-    let (code, out, err) = run(&["abandon", renamed.to_str().unwrap()]);
+    let (code, out, err) = run(&["abandon", renamed.to_str().unwrap(), "--yes"]);
     assert_eq!(code, 0, "{out}{err}");
     assert!(out.contains("abandoned 1 recovery record"), "{out}");
     assert!(dir.join("disk.img.diskedit").join(".abandoned").exists());
@@ -276,8 +279,8 @@ fn a_sibling_images_record_is_not_part_of_this_target() {
     fs::write(&other, vec![0u8; 4096]).unwrap();
     write_record(&other, &record_bytes(4096, file_id(&other)));
 
-    let (code, out, err) = run(&["abandon", image.to_str().unwrap()]);
+    let (code, out, err) = run(&["abandon", image.to_str().unwrap(), "--yes"]);
     assert_eq!(code, 0, "{out}{err}");
-    assert!(out.contains("nothing to abandon"), "{out}");
+    assert!(out.contains("this enumeration found no unfinished operation"), "{out}");
     assert!(record_path(&other).exists(), "another target's scene must be left alone");
 }

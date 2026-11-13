@@ -83,7 +83,7 @@ pub(crate) fn prepare_apply(
     existing_lvm: Option<crate::recovery::LvmPost>,
     log: &mut dyn FnMut(&str),
 ) -> Result<ApplyDecision, RunOutcome> {
-    // F5：记录已绑搬移计划、本次读到的备份头不可读、记录里的目的区末端越过主头
+    // 记录已绑搬移计划、本次读到的备份头不可读、记录里的目的区末端越过主头
     // `last_usable_lba`。三条同时成立才拒绝——备份头坏而主头上界够用时续跑合法。
     // 本函数只读，且位于 bind 与 repair 之前，故此刻确实一个目标字节都没写
     if let Some(reloc) = existing_relocation {
@@ -314,7 +314,7 @@ pub(crate) fn execute_apply(
     // 扩容终点由计划里的目的区决定：moves 是尾→首的紧凑序，最左的新起点即本次腾出
     // 空间的左边界。它与搬移同属一份作业，因此和搬移写进同一份计划、同一条表戳链
     let grow_end = grow_end_for(plan, grow_start)
-        .map_err(|e| RunOutcome::no_mutation(e.to_string()))?;
+        .map_err(|e| RunOutcome::refused(e.to_string()))?;
     let old_len = d.old_range.1.checked_sub(d.old_range.0).and_then(|v| v.checked_add(1))
         .ok_or_else(|| RunOutcome::no_mutation("grow target entry inverted"))?;
     let grow_len = grow_end.checked_sub(grow_start).and_then(|v| v.checked_add(1))

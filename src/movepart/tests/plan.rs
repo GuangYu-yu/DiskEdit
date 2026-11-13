@@ -144,6 +144,28 @@ pub(crate) fn shift_resume_requires_the_same_requested_size() {
     drop(src);
 }
 
+/// 记录里的搬移计划为空时不能重建出空 plan 续跑：空集上几何、归属与相交判据都会
+/// "通过"，等于把一次没记录下来的作业当成已完成
+#[test]
+pub(crate) fn an_empty_relocation_plan_is_not_a_resumable_job() {
+    let (src, _path) = plan_fixture(&[(1, [0x11; 16], 2048, 6143)]);
+    let (g, _repair) = gpt_policy::resolve_geometry(&src).unwrap().unwrap();
+    let empty = crate::recovery::Relocation {
+        entries: Vec::new(),
+        entry_index: 0,
+        chunks_in_entry: 0,
+        chunk_bytes: 1024 * 1024,
+        kind: crate::recovery::RelocKind::Shift,
+        grow_part: 1,
+        disk_size: src.size,
+        ss: 512,
+    };
+    let e = resume_outcome(Some(&empty), &g, RepairAction::None, 1)
+        .err()
+        .expect("a plan without entries must not resume as an empty move list");
+    assert!(matches!(&e, RunOutcome::Refused(m) if m.contains("no entries")), "{e:?}");
+}
+
 /// 事实只记"本次作业真正能交给 LV 的量"：非 PV、分区没变大、未请求 --grow-lv、
 /// 不足一个 extent 四种边界；最后一种必须在写表之前拒绝，而不是写完表再报待办
 #[test]

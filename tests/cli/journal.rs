@@ -52,9 +52,9 @@ fn a_legacy_journal_is_refused_and_left_in_place() {
     assert_eq!(std::fs::read(&img).unwrap(), before, "a refused undo must not write");
     assert!(journal.exists(), "the legacy journal must be left in place");
 
-    let (c, o, e) = run(&["abandon", img_s]);
+    let (c, o, e) = run(&["abandon", img_s, "--yes"]);
     assert_eq!(c, 0, "abandoning a clean target must be a no-op: {e}");
-    assert!(o.contains("nothing to abandon"), "{o}");
+    assert!(o.contains("this enumeration found no unfinished operation"), "{o}");
     assert!(
         o.contains("legacy undo journal") && o.contains("handle it by hand"),
         "the no-op must disclose the artifact it will not release: {o}"

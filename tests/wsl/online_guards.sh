@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # 在线路径（挂载态）拒绝分支：resizefs 的形态判据 + 非 btrfs 在线缩容拒绝。
 # 每条拒绝之后核对「分区表 / FS 未被改动」（info 的 last_lba、dumpe2fs 的 block count×size）。
-# 退出码契约唯一定义在 src/outcome.rs:20-32（2=参数或命令语法错误，3=拒绝，本次未写盘）。
-# 依据以 `src/文件:行号` 标注在断言旁。
+# 退出码契约唯一定义在 src/outcome.rs（2=参数或命令语法错误，3=拒绝，本次未写盘）。
 source "$(dirname "$0")/lib.sh"
 require_bin
 
@@ -28,27 +27,27 @@ LAST0=$(lba1)
 FS0=$(fs_bytes "${LD}p1")
 
 echo "== 形态即模式：尺寸给法只属于挂载点形式 =="
-# src/cmd/fs.rs:167-172 —— :N 走离线分支，BYTES 在那里无消费点，显式拒绝而非静默忽略
+# src/cmd/fs.rs —— :N 走离线分支，BYTES 在那里无消费点，显式拒绝而非静默忽略
 $B resizefs --yes "$T":1 8M >/dev/null 2>&1; exp $? 2 "resizefs <target>:1 带尺寸拒绝"
 exp "$(lba1)" "$LAST0" "  拒绝后分区表未变（last_lba 一致）"
 
-# src/cmd/fs.rs:136-138 —— 挂载点形式不打开镜像，--sector-size 无消费点，显式拒绝
+# src/cmd/fs.rs —— 挂载点形式不打开镜像，--sector-size 无消费点，显式拒绝
 $B resizefs --yes "$MP" --sector-size 512 >/dev/null 2>&1; exp $? 2 "resizefs <mountpoint> --sector-size 拒绝"
 exp "$(lba1)" "$LAST0" "  拒绝后分区表未变（last_lba 一致）"
 
-# src/cmd/mod.rs:181-185 —— 目标尺寸只有位置参数一种给法，--size 不在 resizefs 的白名单里
-$B resizefs --yes "$MP" 8M --size 8M >/dev/null 2>&1; exp $? 2 "resizefs <mountpoint> --size 非本命令选项"
+# src/cmd/mod.rs —— 目标尺寸只有位置参数一种给法，--size 不在 resizefs 的白名单里
+$B resizefs --yes "$MP" 8M --size 8M >/dev/null 2>&1; exp $? 2 "resizefs <mountpoint> --size 非本命令选项" # cli-surface: refused
 exp "$(lba1)" "$LAST0" "  拒绝后分区表未变（last_lba 一致）"
 
 echo "== resizefs 在线形式不改分区表 =="
-# src/online/flow.rs:190-199 —— 挂载点形式只扩文件系统，大于现分区的请求在任何写盘之前拒绝，并指向 resize
+# src/online/flow.rs —— 挂载点形式只扩文件系统，大于现分区的请求在任何写盘之前拒绝，并指向 resize
 $B resizefs --yes "$MP" 32M >/dev/null 2>&1; exp $? 3 "resizefs <mountpoint> 越分区尺寸拒绝"
 exp "$(lba1)" "$LAST0" "  拒绝后分区表未变（last_lba 一致）"
 exp "$(fs_bytes "${LD}p1")" "$FS0" "  拒绝后 FS 未变（block count×size 一致）"
 
 echo "== 非 btrfs 在线缩容拒绝 =="
-# src/online/flow.rs:110-123 —— 仅 btrfs 可在线缩容；ext4 请求 8MiB < 现分区 16MiB
-# 走 Outcome::refused；src/cmd/fs.rs:150-156 将该 Outcome 映射为退出码 3（未写盘）
+# src/online/flow.rs —— 仅 btrfs 可在线缩容；ext4 请求 8MiB < 现分区 16MiB
+# 走 Outcome::refused；src/cmd/fs.rs 将该 Outcome 映射为退出码 3（未写盘）
 $B resizefs --yes "$MP" 8M >/dev/null 2>&1; exp $? 3 "ext4 在线缩容（8MiB < 16MiB 分区）拒绝"
 exp "$(lba1)" "$LAST0" "  拒绝后分区表未变（last_lba 一致）"
 exp "$(fs_bytes "${LD}p1")" "$FS0" "  拒绝后 FS 未变（block count×size 一致）"

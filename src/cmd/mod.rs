@@ -116,7 +116,7 @@ fn media_name(media: MediaKind) -> &'static str {
 /// 失败分类：
 /// - `SectorOverrideOnBlock`：`--sector-size` 落在块设备上，属「选项与目标形态不符」→ 3
 /// - `SectorSizeNotConstructible`：扇区大小不在允许集合，几何无法构造 → 6
-/// - `Io`：打开失败，尚未写目标字节 → 4
+/// - `Io`：打开失败，尚未写目标字节 → 3（读不出目标，请求的前置条件不满足）
 pub(crate) fn open_read_only_target(
     target: &str,
     sector_size: Option<crate::domain::SectorSize>,
@@ -130,7 +130,7 @@ pub(crate) fn open_read_only_target(
         ReadOnlyOpen::SectorSizeNotConstructible => crate::support::RunOutcome::unsupported(
             "the target's sector size is outside the supported set — geometry cannot be constructed",
         ),
-        ReadOnlyOpen::Io(e) => crate::support::RunOutcome::no_mutation(format!("open failed: {e}")),
+        ReadOnlyOpen::Io(e) => crate::support::RunOutcome::refused(format!("open failed: {e}")),
     })
 }
 

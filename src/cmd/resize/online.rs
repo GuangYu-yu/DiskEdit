@@ -124,7 +124,7 @@ pub(crate) fn refuse_online_move_flags(a: &ResizeRequest) {
             "--allow-move is not available online — the online path cannot relocate blocking partitions".to_string(),
         ));
     }
-    if a.chunk_given {
+    if a.chunk_mib.is_some() {
         bail_fail(RunOutcome::refused(
             "--chunk has no effect online — the online path does not relocate data".to_string(),
         ));

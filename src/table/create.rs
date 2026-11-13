@@ -268,7 +268,7 @@ pub(crate) fn recognized_table(src: &FileSource) -> io::Result<bool> {
 /// 后者不能断言写入只落在表结构区，也不能把它的非零字节当成空盘
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TableProbe {
-    /// 三处表扇区全零，且解析不出表
+    /// 本步骤要写的表区全部为零，且解析不出表
     Empty,
     /// 有非零数据，但解析不出可识别的表
     Unrecognized,
@@ -285,7 +285,7 @@ impl TableProbe {
         }
     }
 
-    /// 由同一次快照得到的两个判定合成三态：识别结果与三处表扇区是否全零。
+    /// 由同一次快照得到的两个判定合成三态：识别结果与写入区间是否全零。
     /// 两者都不成立才是"非空但读不出表"，不把这一态折进空盘
     pub(crate) fn classify(recognized: bool, blank: bool) -> Self {
         if recognized {
@@ -443,7 +443,7 @@ pub(crate) fn guid_in_field_order(g: &[u8; 16]) -> [u8; 16] {
 /// `new --table msdos`：写空 MBR（保留 BootCode，置签名，清空 4 条记录），并清掉
 /// LBA1 与盘尾备份头上可能残留的 GPT 签名——新表是 msdos，盘上不该再留下任何能独立
 /// 给出 GPT 表的表层。只清签名那 8 字节，同一扇区的其余字节与条目数原样保留。
-/// 主头签名留着会让这块新 msdos 盘被判成 `GptDamaged`（`table_label` 的第 3 条判据）；
+/// 主头签名留着会让这块新 msdos 盘被判成 `GptDamaged`；
 /// 盘尾那个留着会让"4 条记录全空"的判据把刚建的盘判成 GPT 残骸。
 /// 会清零的签名若落在旧分区数据里，由 [`ensure_new_table_write_clear`] 在首次写盘前判掉。
 /// 仅在测试构建中可见：生产路径由命令层装配后执行。

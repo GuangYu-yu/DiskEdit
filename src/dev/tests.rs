@@ -2,6 +2,18 @@
 use super::*;
 use crate::testdir::test_dir;
 
+/// 隔离目录列不出来时不能当成"没有既有编号"：编号会从 0 重来，盖掉已有证据
+#[test]
+fn a_quarantine_directory_that_cannot_be_listed_is_an_error() {
+    let root = test_dir("quarantine_unreadable");
+    let blocker = root.join("not-a-directory");
+    std::fs::write(&blocker, b"x").unwrap();
+    let from = blocker.join(RECORD_NAME);
+    let e = quarantine_move(&from, QUARANTINE_ABANDONED)
+        .expect_err("listing the quarantine directory must not be taken as empty");
+    assert!(e.to_string().contains("cannot enumerate the quarantine directory"), "{e}");
+}
+
 /// `:N` 后缀的判定：分区号 1-based，`:0` 必须拒绝而不是折叠成"整盘"——
 /// 折叠会把一次针对具体分区的操作放大成对整盘的表操作。
 /// `:last` 与数字号并列，大小写不敏感

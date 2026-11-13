@@ -9,8 +9,8 @@
 //! **成因在请求还是在环境**（改参数重试是否有意义）、**平台是否具备能力**：
 //! - 参数或命令语法错误 → 2，未写盘
 //! - 请求与目标现状不匹配 + 未写盘 → 3，改参数有意义
-//! - 环境/盘内容故障 + 确定未写盘 → 4，无持久化修改
-//! - 已写盘但后置条件未全满足，或无法断言写没写 → 5，须给恢复指引
+//! - 环境/盘内容故障 + 本次未改变任何持久状态（目标字节与记录条目都未变）→ 4
+//! - 记录条目已变而目标未全改，或已写盘但后置条件未全满足，或无法断言写没写 → 5，须给恢复指引
 //! - 平台或目标能力不支持 → 6
 //! - 未预期的内部错误 → 1
 //!
@@ -24,19 +24,20 @@ pub const EXIT_INTERNAL: u8 = 1;
 pub const EXIT_USAGE: u8 = 2;
 /// 策略拒绝或前置条件不满足：无表、无此分区、缺 --yes、表结构非法、目标忙
 pub const EXIT_REFUSED: u8 = 3;
-/// 操作失败，且本次运行未向目标发出过写：判据是本次运行从未调到写原语
-/// （[`target_may_have_been_written`] 在写原语之前置位，取反即「从未调用」）。
-/// 不排除外部写者改过盘；锁、恢复记录、日志等伴随文件不计入
+/// 本次运行没有改变任何持久状态：目标字节未写，恢复记录条目也没有被本次运行创建、
+/// 改名、移走或删除（记录目录与 `record.lock` 不计）。判据见 [`PersistedChange`]。
+/// 不排除外部写者改过盘
 pub const EXIT_NO_MUTATION: u8 = 4;
-/// 写盘已发生，但结论不是整体成功：部分完成、已应用而后续步骤待办，或表已写而内核
-/// 视图未同步（[`KernelSync::Stale`]）。补救指引随结果打印
+/// 写盘已发生，但结论不是整体成功：部分完成、记录已变而目标未全改、已应用而后续步骤
+/// 待办，或表已写而内核视图未同步（[`KernelSync::Stale`]）。补救指引随结果打印
 pub const EXIT_PARTIAL: u8 = 5;
 /// 平台或能力不支持：工具缺失、平台无对应 API、目标类型不在支持范围
 pub const EXIT_UNSUPPORTED: u8 = 6;
 
-/// 统一出口在「本次未写盘」的失败之后追加的一行。生成文档引用本常量，
-/// 不另抄字面量
-pub(crate) const NOTHING_WRITTEN: &str = "— nothing was written by this run";
+/// 统一出口在「本次未改变任何持久状态」的失败之后追加的一行。生成文档引用本常量，
+/// 不另抄字面量。陈述的是本次运行对持久状态的全部效果（目标字节与恢复记录文件都未变），
+/// 不是对目标字节单独作断言
+pub(crate) const NOTHING_WRITTEN: &str = "— this run changed no persistent state";
 
 thread_local! {
     /// 一次运行的写事实。线程作用域：生产一条命令一个线程一次运行，单测每个用例各占
@@ -276,10 +277,10 @@ pub enum KernelSync {
     Stale,
 }
 
-/// `Partial` 的来源。退出码相同，只能靠这一项分清四种成因：执行器在写原语处观察到的失败
+/// `Partial` 的来源。退出码相同，只能靠这一项分清五种成因：执行器在写原语处观察到的失败
 /// （`ObservedWriteFailure`）、写已成功但写后核对或后置条件不成立（`PostconditionAfterWrite`）、
 /// 已应用但读回证据拿不到（`UnverifiedAfterWrite`）、归责点据"本次已写过"把别的结论改判
-/// （`DerivedFromPriorWrite`）
+/// （`DerivedFromPriorWrite`）、本次只改动了恢复记录文件（`RecordsChanged`）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PartialOrigin {
     /// 执行器在写原语处直接观察到失败（写调用返回 Err）
@@ -290,6 +291,8 @@ pub enum PartialOrigin {
     UnverifiedAfterWrite,
     /// 归责点据「作业已越过不可逆写入点」把 Refused/NoMutation/Internal 改判为 5
     DerivedFromPriorWrite,
+    /// 目标字节未写，但恢复记录文件被本次运行创建、改名、移走或删除
+    RecordsChanged,
 }
 
 impl PartialOrigin {
@@ -299,6 +302,53 @@ impl PartialOrigin {
             Self::PostconditionAfterWrite => "postcondition-after-write",
             Self::UnverifiedAfterWrite => "unverified-after-write",
             Self::DerivedFromPriorWrite => "derived-from-prior-write",
+            Self::RecordsChanged => "records-changed",
+        }
+    }
+}
+
+/// 一次运行对持久状态的改变。退出码 4（[`EXIT_NO_MUTATION`]）只对应 `Nothing`：
+/// 恢复记录条目被创建、改名、移走或删除，同样是持久状态变化，即使目标字节一个也没写。
+/// 记录目录与 `record.lock` 不计入
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PersistedChange {
+    /// 目标字节与恢复记录条目都没有改变
+    Nothing,
+    /// 只动了恢复记录条目：目标字节未写，记录里的数据未回滚
+    Records,
+    /// 目标字节已写
+    TargetBytes,
+}
+
+impl PersistedChange {
+    /// 判据：写入口是否置位，与调用方是否动过恢复记录文件
+    pub(crate) fn of(target_written: bool, records_changed: bool) -> Self {
+        match (target_written, records_changed) {
+            (true, _) => Self::TargetBytes,
+            (false, true) => Self::Records,
+            (false, false) => Self::Nothing,
+        }
+    }
+
+    /// 失败收口：持久状态没变才是 4，变了就是 5
+    pub(crate) fn failure(self, cause: impl Into<String>) -> RunOutcome {
+        let cause = cause.into();
+        match self {
+            Self::Nothing => RunOutcome::no_mutation(cause),
+            Self::Records => RunOutcome::partial_records_changed(format!("{cause}; {self}")),
+            Self::TargetBytes => RunOutcome::partial(cause),
+        }
+    }
+}
+
+impl std::fmt::Display for PersistedChange {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Nothing => f.write_str("this run changed no persistent state"),
+            Self::Records => {
+                f.write_str("the recovery record files changed on disk, and no data was rolled back")
+            }
+            Self::TargetBytes => f.write_str("the target may already have been changed"),
         }
     }
 }
@@ -311,7 +361,8 @@ pub enum RunOutcome {
     Usage(String),
     /// 校验阶段拒绝——成因在请求与目标现状不匹配
     Refused(String),
-    /// 环境/盘内容故障——I/O 失败、表结构非法
+    /// 环境故障且本次运行没有改变任何持久状态——锁、临时映射、外部工具探测、几何算术溢出
+    /// 等
     NoMutation { cause: String },
     /// 平台或目标能力不支持——换参数无意义
     Unsupported { cause: String },
@@ -386,6 +437,15 @@ impl RunOutcome {
         }
     }
 
+    /// 目标字节未写，但恢复记录文件被本次运行动过
+    pub(crate) fn partial_records_changed(cause: impl Into<String>) -> Self {
+        Self::Partial {
+            cause: cause.into(),
+            pending: Vec::new(),
+            origin: PartialOrigin::RecordsChanged,
+        }
+    }
+
     /// 布局已写、后置条件待办；内核视图默认按"已同步"起算，由调用方在 resync 失败后置位
     pub fn applied_with(pending: Vec<Pending>) -> Self {
         Self::Applied { pending, kernel_sync: KernelSync::Synchronized }
@@ -424,11 +484,24 @@ impl RunOutcome {
     /// 并保留原结论的正文；`Partial`/`Applied` 原样返回，来源不被改写，
     /// 因此重复调用不会重复改写正文。
     ///
+    /// 4 的定义是「本次运行没有改变任何持久状态」，因此"目标字节没写、但本次已把恢复
+    /// 记录落过盘"不是 4：记录文件本身就是持久状态变化，按 `RecordsChanged` 升到 5
+    ///
     /// 私有：外部只能经 [`Self::settled`]（对齐、不打印）或 [`Self::report_final`]
     /// （对齐 + 打印）取得归责后的结论。调用点因此只有一个，归责语义也只有这一处产生
     fn reconcile_with_writes(self) -> Self {
         if !crossed_irreversible_point() {
-            return self;
+            return match self {
+                Self::NoMutation { cause } if record_persisted() => Self::Partial {
+                    cause: format!(
+                        "{cause} — this run created or changed a recovery record, so this is not a \
+                         no-mutation failure"
+                    ),
+                    pending: Vec::new(),
+                    origin: PartialOrigin::RecordsChanged,
+                },
+                other => other,
+            };
         }
         match self {
             Self::Refused(msg) => Self::Partial {
@@ -557,7 +630,7 @@ impl RunOutcome {
             Self::Partial { cause, pending, origin } => {
                 eprintln!("error: {cause}");
                 Self::report_attribution(*origin);
-                Self::report_partial_guidance();
+                Self::report_partial_guidance(*origin);
                 if !pending.is_empty() {
                     eprintln!("left undone: {} known follow-up step(s)", pending.len());
                     Self::report_pending(pending);
@@ -580,7 +653,7 @@ impl RunOutcome {
                     );
                 }
                 Self::report_attribution(PartialOrigin::PostconditionAfterWrite);
-                Self::report_partial_guidance();
+                Self::report_partial_guidance(PartialOrigin::PostconditionAfterWrite);
             }
         }
         // 本次一个目标字节也没写，但记录还在盘上：已提交的记录只差释放，未提交的才能接着做
@@ -621,15 +694,27 @@ impl RunOutcome {
         eprintln!("origin={origin} first write: {first} record: {record}");
     }
 
-    /// 5 的报告必须同时给出三件事：盘可能已改变、证据路径、下一步命令。
-    /// 证据路径取本进程真正建出的 journal 落点——没有建过就直说没有，不编路径
-    pub(crate) fn report_partial_guidance() {
-        for line in Self::partial_guidance_lines() {
+    /// 5 的报告必须同时给出三件事：持久状态变了什么、证据路径、下一步命令。
+    /// 证据路径取本进程真正建出的 journal 落点——没有建过就直说没有，不编路径。
+    /// 只有恢复记录被动过时不能说目标字节可能已改变，那一档改用记录侧的事实
+    pub(crate) fn report_partial_guidance(origin: PartialOrigin) {
+        for line in Self::partial_guidance_lines(origin) {
             eprintln!("{line}");
         }
     }
 
-    fn partial_guidance_lines() -> [String; 3] {
+    fn partial_guidance_lines(origin: PartialOrigin) -> [String; 3] {
+        if origin == PartialOrigin::RecordsChanged {
+            return [
+                "— the target bytes were not written; the recovery record files changed on disk"
+                    .to_string(),
+                "evidence: `diskedit inspect <target>` names any recovery file left for the target"
+                    .to_string(),
+                "next: `diskedit inspect <target>` lists any recovery file left; `diskedit abandon` releases \
+                 one that remains"
+                    .to_string(),
+            ];
+        }
         [
             "— the target may already have been changed; check with `diskedit info` before retrying"
                 .to_string(),
@@ -679,14 +764,11 @@ impl std::fmt::Display for RunOutcome {
 }
 
 impl RunOutcome {
-    /// 写盘前的 io 失败。存在的意义是让调用点**显式表态**：这个 `?` 位于本次调用的首次
-    /// 目标写盘之前。默认的 `From<io::Error>` 给不出这个断言，故不设默认、必须逐点写明。
-    ///
-    /// 判据只关于**本次调用**写没写目标盘。上一次中断的运行留下的改动不在此编码范围内——
-    /// 重试时工具会重读盘上几何（表项 / 记录），故不因省略"盘可能已改变"的提示而失去安全性；
-    /// 而真正需要那句提示的是写调用报错（`Partial`），那种情况下写入量确实无法断定
-    pub fn no_mutation_io(e: std::io::Error) -> Self {
-        Self::NoMutation { cause: e.to_string() }
+    /// 读目标（或读它承载的记录、文件系统元数据）失败。存在的意义是让调用点**显式表态**：
+    /// 这个 `?` 只读不写，失败说明读不到继续所需的事实，属于前置条件不满足（3）。
+    /// 默认的 `From<io::Error>` 归 `Partial`，不适用于读路径
+    pub fn unreadable_io(e: std::io::Error) -> Self {
+        Self::refused(e.to_string())
     }
 
     /// 给原因加上本层上下文（变体与退出码不变）。存在的意义是让调用点补一句"当时在做什么"
@@ -708,7 +790,7 @@ impl RunOutcome {
 }
 
 /// 默认按"可能已改变"归 `Partial`：写调用报错时无从得知实际写入多少，
-/// 这是唯一安全的缺省。**写盘前的环境故障必须显式写 `RunOutcome::no_mutation`**——
+/// 这是唯一安全的缺省。**写盘前的非读操作环境故障必须显式写 `RunOutcome::no_mutation`**——
 /// 与 table::GptError 只提供单向压平同理：需要区分的地方由编译器强制它显式表态
 impl From<std::io::Error> for RunOutcome {
     fn from(e: std::io::Error) -> Self {
@@ -720,12 +802,13 @@ impl From<std::io::Error> for RunOutcome {
 /// "操作层面发生了什么"，落成哪个退出码属应用层 policy，故不在 fsops 里做。
 ///
 /// 「类型没有接线 / 参数与目标现状不符」→ 拒绝（3）；工具缺失 → 不支持（6）；
-/// 环境故障发生在任何写盘之前 → 无持久化修改（4）；外部工具非零退出意味着工具
-/// 已经运行——它写没写、写了多少无法断言 → 部分完成（5，报告带警示行）。
+/// 任何写盘之前的 I/O 失败（打开或读取目标）→ 前置条件不满足（3）；
+/// 外部工具非零退出意味着工具已经运行——它写没写、写了多少无法断言 →
+/// 部分完成（5，报告带警示行）。
 ///
-/// **本映射只适用于尚未写盘的调用点**：`Io` 变体在此归 NoMutation（断言"确定未写盘"），
-/// 一旦本次调用已开始写目标盘（清零、格式化中……），调用点必须先把错误改判为
-/// `CommandFailed`（→ Partial），不得让 `Io` 走进这个 `From`——那会把"可能已写"
+/// **本映射只适用于尚未写盘的调用点**：`Io` 变体在此归 Refused（读到的事实不足以
+/// 继续），一旦本次调用已开始写目标盘（清零、格式化中……），调用点必须先把错误改判
+/// 为 `CommandFailed`（→ Partial），不得让 `Io` 走进这个 `From`——那会把"可能已写"
 /// 洗成"确定没写"
 impl From<crate::fsops::FsError> for RunOutcome {
     fn from(e: crate::fsops::FsError) -> Self {
@@ -735,40 +818,17 @@ impl From<crate::fsops::FsError> for RunOutcome {
             FsError::UnsupportedPlatform(m) => Self::unsupported(m),
             FsError::InvalidArgument(m) => Self::refused(m),
             FsError::ToolMissing(m) => Self::unsupported(m),
-            FsError::Io(err) => Self::no_mutation(err.to_string()),
+            FsError::Io(err) => Self::refused(err.to_string()),
             FsError::CommandFailed(m) => Self::partial(m),
         }
     }
 }
 
-/// 表结构错误 → 出口语义：读写失败归"环境故障、未写盘"（4）；签名、CRC、几何、
-/// 条目越界都说明盘上的表不符合规范，属于"请求与现状不匹配"（3）
+/// 表结构错误 → 出口语义：读不出来、签名/CRC/几何/条目越界都说明"目标给不出可用的
+/// 表"，属于前置条件不满足（3）
 impl From<crate::table::GptError> for RunOutcome {
     fn from(e: crate::table::GptError) -> Self {
-        match e {
-            crate::table::GptError::Io(err) => Self::no_mutation(err.to_string()),
-            other => Self::refused(other.to_string()),
-        }
-    }
-}
-
-/// 读表失败的文案由调用点保留（`parse failed: …` / `label probe failed: …`），
-/// 本函数只负责分类：`GptError::Io` 是读盘失败（4），其余变体都说明盘上的表
-/// 不符合规范（3）。只读命令同样按这条判：它们从不写盘，4 只留给真正的 I/O 失败
-pub(crate) fn table_parse_failure(e: &crate::table::GptError, msg: String) -> RunOutcome {
-    match e {
-        crate::table::GptError::Io(_) => RunOutcome::no_mutation(msg),
-        _ => RunOutcome::refused(msg),
-    }
-}
-
-/// MBR 解析的 `io::Error` 同判：`InvalidData` 是条目不可操作（越界、起点 0、两两重叠），
-/// 表本身非法 → 3；其余是读盘失败 → 4
-pub(crate) fn mbr_parse_failure(e: &std::io::Error, msg: String) -> RunOutcome {
-    if e.kind() == std::io::ErrorKind::InvalidData {
-        RunOutcome::refused(msg)
-    } else {
-        RunOutcome::no_mutation(msg)
+        Self::refused(e.to_string())
     }
 }
 
@@ -787,14 +847,14 @@ mod tests {
     use crate::fsops::FsError;
 
     /// FsError 的分类只在这一处落成出口语义：不认得的类型 / 参数与目标现状不符 ⇒ 拒绝（3），
-    /// 工具缺失 ⇒ 不支持（6），环境故障 ⇒ 无持久化修改（4），外部工具非零退出 ⇒ 部分完成（5）
+    /// 工具缺失 ⇒ 不支持（6），读写目标失败 ⇒ 前置条件不满足（3），外部工具非零退出 ⇒ 部分完成（5）
     #[test]
     fn fs_error_maps_to_exit_codes() {
         let code = |e: FsError| RunOutcome::from(e).exit_code();
         assert_eq!(code(FsError::unsupported("no resize tool")), EXIT_UNSUPPORTED);
         assert_eq!(code(FsError::InvalidArgument("bad size".into())), EXIT_REFUSED);
         assert_eq!(code(FsError::ToolMissing("no mkfs.xfs".into())), EXIT_UNSUPPORTED);
-        assert_eq!(code(FsError::Io(std::io::Error::other("EIO"))), EXIT_NO_MUTATION);
+        assert_eq!(code(FsError::Io(std::io::Error::other("EIO"))), EXIT_REFUSED);
         assert_eq!(code(FsError::CommandFailed("mkswap failed".into())), EXIT_PARTIAL);
         // 同码不同变体：5 的语义差别（有无"盘可能已改变"警示行）只体现在变体上
         assert!(matches!(
@@ -863,14 +923,14 @@ mod tests {
         assert_eq!(code(RunOutcome::internal("invariant broken")), EXIT_INTERNAL);
         assert_eq!(code(RunOutcome::partial("write call reported an error")), EXIT_PARTIAL);
 
-        // 表结构非法归 3（未写盘，改参数或换目标有意义）；表读写失败归 4
+        // 表结构非法与表读写失败同归 3：目标给不出可用的表，改参数或换目标才有意义
         assert_eq!(
             code(RunOutcome::from(crate::table::GptError::InvalidHeader("crc".into()))),
             EXIT_REFUSED
         );
         assert_eq!(
             code(RunOutcome::from(crate::table::GptError::Io(std::io::Error::other("EIO")))),
-            EXIT_NO_MUTATION
+            EXIT_REFUSED
         );
 
         // 越过 durable boundary 之后只有两个出口：完整 0、其余 5
@@ -905,14 +965,43 @@ mod tests {
         );
     }
 
-    /// 5 的 stderr 契约：三行齐备（盘可能已改变、证据路径、下一步命令），
-    /// 且下一步不是空泛的"重试"
+    /// 5 的 stderr 契约：三行齐备（持久状态、证据路径、下一步命令），
+    /// 且下一步不是空泛的"重试"；记录侧成因不得声称目标字节可能已改变
     #[test]
     fn partial_guidance_names_state_evidence_and_next_step() {
-        let lines = RunOutcome::partial_guidance_lines();
+        let lines = RunOutcome::partial_guidance_lines(PartialOrigin::ObservedWriteFailure);
         assert!(lines[0].contains("may already have been changed"), "{}", lines[0]);
         assert!(lines[1].contains("evidence:"), "{}", lines[1]);
         assert!(lines[2].contains("`diskedit undo`") && lines[2].contains("`diskedit abandon`"), "{}", lines[2]);
+
+        let records = RunOutcome::partial_guidance_lines(PartialOrigin::RecordsChanged);
+        assert!(records[0].contains("target bytes were not written"), "{}", records[0]);
+        assert!(!records[0].contains("may already have been changed"), "{}", records[0]);
+        assert!(records[2].contains("`diskedit abandon`"), "{}", records[2]);
+    }
+
+    /// 4 与 5 的分界只看持久状态：记录文件被本次运行动过就不是 4
+    #[test]
+    fn persisted_change_picks_the_exit_family() {
+        assert_eq!(PersistedChange::of(false, false).failure("EIO").exit_code(), EXIT_NO_MUTATION);
+        assert_eq!(PersistedChange::of(false, true).failure("EIO").exit_code(), EXIT_PARTIAL);
+        assert_eq!(PersistedChange::of(true, false).failure("EIO").exit_code(), EXIT_PARTIAL);
+        assert!(PersistedChange::of(false, true).failure("EIO").to_string().contains("no data was rolled back"));
+    }
+
+    /// 本次已把记录落过盘：即使目标字节一个也没写，也不能报 4
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_persisted_record_turns_no_mutation_into_partial() {
+        reset_run_facts();
+        note_record_persisted();
+        let o = RunOutcome::no_mutation("cannot read the source").settled();
+        assert_eq!(o.exit_code(), EXIT_PARTIAL, "{o:?}");
+        assert!(matches!(
+            o,
+            RunOutcome::Partial { origin: PartialOrigin::RecordsChanged, .. }
+        ));
+        reset_run_facts();
     }
 
     /// 本模块是"后置条件契约 + 退出码的唯一映射点"，不认识任何具体文件系统或工具——
@@ -932,9 +1021,7 @@ mod tests {
         // 门禁自己也要有门禁：截取或去注释若吃掉了全文，下面的断言会全部空过
         assert!(code.contains("exit_refused"), "门禁没扫到代码：截取或去注释把它吃空了");
         for t in [
-            // 文件系统类型
             "ntfs", "ext2", "ext3", "ext4", "xfs", "btrfs", "f2fs", "vfat", "exfat", "msdos",
-            // 文件系统与卷管理工具
             "mkfs", "mkswap", "fsck", "tune2fs", "resize2fs", "lvm", "pvresize", "lvextend",
         ] {
             assert!(!code.contains(t), "本模块不该提到 {t:?}：那是 fsops/movepart 的知识");

@@ -13,7 +13,7 @@ use crate::cli::InspectRequest;
 #[cfg(target_os = "linux")]
 use crate::cmd::CmdResult;
 #[cfg(target_os = "linux")]
-use crate::outcome::{RunOutcome, EXIT_OK, EXIT_PARTIAL};
+use crate::outcome::{RunOutcome, EXIT_OK};
 #[cfg(target_os = "linux")]
 use crate::platform::probe::HostPlatform;
 #[cfg(target_os = "linux")]
@@ -41,11 +41,11 @@ output:
   target identity; the record is not compared.
 
 exit status:
-  0  no record, a complete record that may be cleaned up, or an identity check
-     that cannot be made
-  3  torn/truncated bytes, CRC or magic mismatch, identity mismatch, or a non-regular entry
-  4  the anchor directory or the record cannot be read
-  5  the record is unfinished; the output names the rollback / set-aside commands
+  0  a readable result: no record, a complete record, an unfinished record (the
+     output names the rollback / set-aside commands), or an identity check that
+     cannot be made
+  3  torn/truncated bytes, CRC or magic mismatch, identity mismatch, a non-regular
+     entry, or the anchor directory, the record, or the target cannot be read
   6  this platform does not provide the command set
   `Unverified` records are annotated and keep their verdict's exit status"#;
 
@@ -111,7 +111,13 @@ fn report_candidates(identity: Option<&crate::dev::TargetIdentity>) {
     let Some(identity) = identity else {
         return;
     };
-    let candidates = crate::recovery::active_recovery_records(identity, None);
+    let candidates = match crate::recovery::active_recovery_records(identity, None) {
+        Ok(candidates) => candidates,
+        Err(why) => {
+            eprintln!("cannot enumerate the candidate records: {why}");
+            return;
+        }
+    };
     let mut shown = 0usize;
     for record in candidates {
         let path = record.path();
@@ -128,6 +134,22 @@ fn report_candidates(identity: Option<&crate::dev::TargetIdentity>) {
     }
 }
 
+/// 记录条目指向的目标场景。条目本身不指向路径、名字不是 UTF-8、目标认不出是三种
+/// 不同的"身份核对不可用"，分开报，不合成一句
+#[cfg(target_os = "linux")]
+fn sidecar_scene(spot: &crate::dev::RecordSpot) -> Result<SceneIdentity, String> {
+    let Some(named) = spot.sidecar_target() else {
+        return Err("this record path does not name a target".to_string());
+    };
+    let Some(target) = named.to_str() else {
+        return Err("the target this record names is not valid UTF-8".to_string());
+    };
+    let probe = HostPlatform
+        .identify(&TargetSpec::new(target, None))
+        .map_err(|e| format!("the target this record names could not be identified: {e:?}"))?;
+    Ok(scene_of_target(&probe, Path::new(target)))
+}
+
 /// 记录目录里的一个条目：解码它本身，而不是去猜它服务的目标。
 ///
 /// 身份核对只有 sidecar 做得到——目录名去掉 `.diskedit` 就是目标路径。主机仓库目录名是
@@ -142,20 +164,15 @@ fn inspect_record_entry(spot: &crate::dev::RecordSpot, a: &InspectRequest) -> Cm
         println!("state: quarantined ({})", mark.as_str());
     }
     let target = spot.sidecar_target();
-    let current = target
-        .as_deref()
-        .and_then(|target| target.to_str())
-        .and_then(|target| {
-            HostPlatform
-                .identify(&TargetSpec::new(target, None))
-                .ok()
-                .map(|probe| scene_of_target(&probe, Path::new(target)))
-        });
+    let (current, unavailable) = match sidecar_scene(spot) {
+        Ok(scene) => (Some(scene), None),
+        Err(why) => (None, Some(why)),
+    };
     let evidence = read_evidence(&path, current.as_ref());
     report(&evidence);
     report_header(&path, &evidence);
-    if current.is_none() {
-        println!("identity check: unavailable — this record path does not name a target");
+    if let Some(why) = unavailable {
+        println!("identity check: unavailable — {why}");
     }
     let (code, note) = match (&evidence, spot.quarantine) {
         (Evidence::Recognized(_), Some(mark)) => (
@@ -241,7 +258,7 @@ fn platform_failure(target: &str, err: PlatformError) -> RunOutcome {
         PlatformError::Io(e) if e.kind() == std::io::ErrorKind::NotFound => {
             RunOutcome::refused(format!("target {target} does not exist — nothing to inspect"))
         }
-        PlatformError::Io(e) => RunOutcome::no_mutation(format!("cannot read {target}: {e}")),
+        PlatformError::Io(e) => RunOutcome::refused(format!("cannot read {target}: {e}")),
         PlatformError::Unidentifiable(reason) => RunOutcome::refused(reason),
         PlatformError::Unsupported(reason) => RunOutcome::unsupported(reason),
     }
@@ -264,7 +281,7 @@ fn read_evidence(record: &Path, current: Option<&SceneIdentity>) -> Evidence {
         _ => Path::new("."),
     };
     let anchor = DirFd::open_anchor(dir).unwrap_or_else(|e| {
-        bail_fail(RunOutcome::no_mutation(format!(
+        bail_fail(RunOutcome::refused(format!(
             "the anchor directory {} cannot be opened: {e}",
             dir.display()
         )))
@@ -397,7 +414,8 @@ fn verdict_with(evidence: &Evidence, target: &str) -> (u8, Option<String>) {
         Evidence::Recognized(record) => map_recognized(record, target),
         Evidence::UnrecognizedFormat { magic, .. } => match crate::recovery::legacy_layout(*magic) {
             Some(name) => (3, Some(format!(
-                "structure: the record was written in the previous record layout ({name}); this build reads the current layout only — the record cannot be decoded, resumed, or undone. Keep the file; `diskedit abandon` is the only command that will move it aside, after the unfinished operation is settled by hand"
+                "structure: the record was {}",
+                crate::recovery::legacy_layout_refusal(name)
             ))),
             None => (3, Some("structure: the record's magic is not recognized or its payload does not match the layout this build reads — keep the file; `diskedit abandon` is the only command that will move it aside, and nothing may write to this target until then".to_string())),
         },
@@ -414,7 +432,7 @@ fn verdict_with(evidence: &Evidence, target: &str) -> (u8, Option<String>) {
             (3, Some("path: the entry is not a regular record file — evidence paths never follow symlinks or directories".to_string()))
         }
         Evidence::Unreadable { .. } => {
-            (4, Some("io: the record could not be read; no structural conclusion was reached".to_string()))
+            (3, Some("io: the record could not be read; no structural conclusion was reached".to_string()))
         }
     }
 }
@@ -432,33 +450,41 @@ fn map_recognized(record: &Record, target: &str) -> (u8, Option<String>) {
     if record.committed() {
         return (EXIT_OK, retention_note);
     }
-    // move/copy 的数据搬移越过不可逆点后表区仍可回写；其余操作越过该点
-    // 就只有 `abandon` 一条路，`undo` 会在这里退 3。判据与 `undo` 共用
-    // 同一份 `table_only_replay`，提示不会许诺 `undo` 不接受的事
-    let rollbackable =
-        !record.restore_blocked || crate::recovery::table_only_replay(record.op);
-    let mut note = if record.restore_blocked && rollbackable {
-        format!(
+    // 回放资格与 `undo` 共用同一份 `TableReplay`：提示不会许诺 `undo` 不接受的事。
+    // 相交的 move 在 undo 准入处退 3，这里的出路只剩续跑或 abandon
+    let replay = crate::recovery::TableReplay::of(record, false);
+    let mut note = match replay {
+        crate::recovery::TableReplay::MoveBlocked => format!(
+            "unfinished: the record is not committed and restoring its table could point the old layout \
+             at overwritten data — `diskedit undo {target} --yes` refuses; re-run the recorded move with \
+             the same request to finish the relocation, or `diskedit abandon {target} --yes --discard-replay` \
+             sets it aside"
+        ),
+        crate::recovery::TableReplay::MoveNoPreimage => format!(
+            "unfinished: the record is not committed and holds no replayable copy of the old partition \
+             table — `diskedit undo {target} --yes` refuses; re-run the recorded move with the same \
+             request to finish the relocation, or `diskedit abandon {target} --yes --discard-replay` \
+             sets it aside"
+        ),
+        crate::recovery::TableReplay::CopyTableOnly | crate::recovery::TableReplay::MoveClear => format!(
             "unfinished: the record is not committed and its data writes are past the point of rolling \
-             back — `diskedit undo {target} --yes` replays only the recorded table regions, or \
-             `diskedit abandon {target}` sets it aside"
-        )
-    } else if rollbackable {
-        format!(
-            "unfinished: the record is not committed — run `diskedit undo {target} --yes` to roll back, \
-             or `diskedit abandon {target}` to set it aside"
-        )
-    } else {
-        format!(
+             back — `diskedit undo {target} --yes` replays only the recorded table regions ({replay}), or \
+             `diskedit abandon {target} --yes --discard-replay` sets it aside"
+        ),
+        crate::recovery::TableReplay::Refused => format!(
             "unfinished: the record is not committed and past the point of rolling back — run \
-             `diskedit abandon {target}` to set it aside, then run the whole command again"
-        )
+             `diskedit abandon {target} --yes` to set it aside, then run the whole command again"
+        ),
+        crate::recovery::TableReplay::Full | crate::recovery::TableReplay::MoveForced => format!(
+            "unfinished: the record is not committed — run `diskedit undo {target} --yes` to roll back, \
+             or `diskedit abandon {target} --yes --discard-replay` to set it aside"
+        ),
     };
     if let Some(extra) = retention_note {
         note.push('\n');
         note.push_str(&extra);
     }
-    (EXIT_PARTIAL, Some(note))
+    (EXIT_OK, Some(note))
 }
 
 #[cfg(target_os = "linux")]
@@ -472,7 +498,7 @@ fn describe_record(record: &Record) -> Vec<String> {
             "progress: steps={} cursor={} fs_phase={}",
             record.progress.completed_steps, record.progress.transfer_cursor, record.progress.fs_phase
         ),
-        format!("entry commits: {}", describe_entry_commits(record)),
+        format!("entry table steps: {}", describe_entry_table_steps(record)),
         format!("repair: {}", describe_repair(record)),
         format!("table fence: {}", describe_table_fence(record)),
         format!(
@@ -491,26 +517,23 @@ fn describe_record(record: &Record) -> Vec<String> {
 }
 
 #[cfg(target_os = "linux")]
-fn describe_entry_commits(record: &Record) -> String {
-    use crate::recovery::EntryCommit;
-
+fn describe_entry_table_steps(record: &Record) -> String {
     let Some(reloc) = record.relocation.as_ref() else {
         return "not applicable".to_string();
     };
-    if reloc.entries.is_empty() {
+    let total = reloc.entries.len();
+    if total == 0 {
         return "none (no relocation entries)".to_string();
     }
-    let committed = record
-        .entry_commits
-        .iter()
-        .filter(|s| **s == EntryCommit::Committed)
-        .count();
-    match record.entry_commits.iter().position(|s| *s == EntryCommit::InFlight) {
-        Some(i) => format!(
-            "{committed}/{} committed, entry {i} table write in flight",
-            reloc.entries.len()
+    // 表步已开始的条目可能已经落盘：把它计入已提交。少报会让人以为旧布局还没被
+    // 改写，而对未写完的条目多报的代价只是"按已改写对待"
+    let in_flight = record.entry_table_in_flight;
+    let committed = reloc.entry_index as usize + usize::from(in_flight == Some(reloc.entry_index));
+    match in_flight {
+        Some(entry) => format!(
+            "{committed}/{total} committed (entry {entry} table write in flight, counted as committed)"
         ),
-        None => format!("{committed}/{} committed", reloc.entries.len()),
+        None => format!("{committed}/{total} committed"),
     }
 }
 
@@ -541,7 +564,7 @@ fn describe_table_fence(record: &Record) -> String {
     use crate::recovery::TableFence;
 
     if record.relocation.is_some() {
-        return "not applicable (per-entry commits)".to_string();
+        return "not applicable (per-entry table steps)".to_string();
     }
     match record.table_fence {
         TableFence::Pending => "pending".to_string(),
@@ -570,7 +593,8 @@ mod tests {
     use super::*;
     use crate::platform::TargetId;
     use crate::recovery::{
-        CommitState, CrcRegion, EntryKind, OpKind, PlanDigest, PlanId, PlanVersion, Record, Retention, TxId,
+        CommitState, CrcRegion, EntryKind, OpKind, PlanDigest, PlanId, PlanVersion, Record, RelocEntry,
+        RelocKind, Relocation, Retention, TxId,
     };
 
     fn request(target: &str) -> InspectRequest {
@@ -598,6 +622,54 @@ mod tests {
         record
     }
 
+    /// 表步已开始、游标还没推进的条目不能算作未提交：swap 的表项可能已经落盘，
+    /// 少报会让人以为旧布局还没被改写
+    #[test]
+    fn an_entry_with_a_table_step_in_flight_counts_as_committed() {
+        let mut record = record(CommitState::Prepared, Retention::Active);
+        record.op = OpKind::Move;
+        record.relocation = Some(Relocation {
+            entries: vec![
+                RelocEntry { partition: 1, src_first: 2048, len: 4096, delta: 2048, is_swap: false },
+                RelocEntry { partition: 2, src_first: 8192, len: 2048, delta: 0, is_swap: true },
+            ],
+            entry_index: 1,
+            chunks_in_entry: 0,
+            chunk_bytes: 1 << 20,
+            kind: RelocKind::Shift,
+            grow_part: 0,
+            disk_size: 16 * 1024 * 1024,
+            ss: 512,
+        });
+        record.entry_table_in_flight = Some(1);
+        assert_eq!(
+            describe_entry_table_steps(&record),
+            "2/2 committed (entry 1 table write in flight, counted as committed)"
+        );
+    }
+
+    /// 记录条目不指向路径与目标认不出是两种原因，不能合成同一句
+    #[test]
+    fn a_record_entry_separates_no_target_from_an_unidentifiable_one() {
+        let dir = crate::testdir::test_dir("inspect_scene_kinds");
+        let spot = |dir: std::path::PathBuf, backend: crate::dev::RecordBackend| crate::dev::RecordSpot {
+            dir,
+            name: crate::dev::RECORD_NAME.into(),
+            backend,
+            quarantine: None,
+        };
+
+        let host = spot(dir.join("0123456789abcdef0123456789abcdef"), crate::dev::RecordBackend::HostRepo);
+        assert_eq!(sidecar_scene(&host).unwrap_err(), "this record path does not name a target");
+
+        let missing = spot(dir.join("gone.diskedit"), crate::dev::RecordBackend::Sidecar);
+        let why = sidecar_scene(&missing).unwrap_err();
+        assert!(
+            why.starts_with("the target this record names could not be identified:"),
+            "{why}"
+        );
+    }
+
     #[test]
     fn absent_is_clean() {
         assert_eq!(verdict(&Evidence::Absent, &request("disk.img")), (0, None));
@@ -621,10 +693,10 @@ mod tests {
     }
 
     #[test]
-    fn prepared_record_is_partial_with_both_commands_named() {
+    fn prepared_record_is_zero_with_both_commands_named() {
         let (code, note) =
             verdict(&Evidence::Recognized(record(CommitState::Prepared, Retention::Active)), &request("disk.img"));
-        assert_eq!(code, EXIT_PARTIAL);
+        assert_eq!(code, EXIT_OK);
         let note = note.unwrap();
         assert!(note.contains("diskedit undo disk.img --yes"), "{note}");
         assert!(note.contains("diskedit abandon disk.img"), "{note}");
@@ -636,19 +708,19 @@ mod tests {
         r.restore_blocked = true;
         r.op = OpKind::Resize;
         let (code, note) = verdict(&Evidence::Recognized(r), &request("disk.img"));
-        assert_eq!(code, EXIT_PARTIAL);
+        assert_eq!(code, EXIT_OK);
         let note = note.unwrap();
         assert!(note.contains("diskedit abandon disk.img"), "{note}");
         assert!(!note.contains("diskedit undo"), "a blocked record cannot be rolled back: {note}");
     }
 
     #[test]
-    fn prepared_unverified_record_keeps_five_and_annotates() {
+    fn prepared_unverified_record_keeps_zero_and_annotates() {
         let (code, note) = verdict(
             &Evidence::Recognized(record(CommitState::Prepared, Retention::Unverified)),
             &request("disk.img"),
         );
-        assert_eq!(code, EXIT_PARTIAL);
+        assert_eq!(code, EXIT_OK);
         assert!(note.unwrap().contains("unverified"));
     }
 
@@ -666,12 +738,19 @@ mod tests {
         }
     }
 
+    /// 读不出的记录退 3，且报告里点明"没有得出结论"——读失败本身不能被静默当成
+    /// 结构结论或"没有记录"
     #[test]
-    fn unreadable_evidence_is_four() {
+    fn unreadable_evidence_is_three() {
         let evidence = Evidence::Unreadable {
             cause: crate::recovery::Cause::Inaccessible("permission denied".to_string()),
         };
-        assert_eq!(verdict(&evidence, &request("disk.img")).0, 4);
+        let (code, note) = verdict(&evidence, &request("disk.img"));
+        assert_eq!(code, 3, "{note:?}");
+        assert!(
+            note.as_deref().is_some_and(|n| n.starts_with("io: the record could not be read")),
+            "{note:?}"
+        );
     }
 
     #[test]

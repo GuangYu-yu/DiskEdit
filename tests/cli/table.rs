@@ -258,6 +258,32 @@ fn new_gpt_refuses_to_clear_bytes_inside_an_existing_partition() {
 }
 
 #[test]
+fn new_refuses_a_superblock_outside_the_stamped_sectors() {
+    let dir = std::env::temp_dir().join(format!("diskedit_newsb_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let img = dir.join("sb.img");
+    // 首尾扇区为零，但 LBA2 起是一份文件系统的超级块：只比首尾会把整盘 FS 当空盘
+    let mut bytes = vec![0u8; 8 * 1024 * 1024];
+    bytes[1024 + 0x38..1024 + 0x3A].copy_from_slice(&[0x53, 0xEF]);
+    std::fs::write(&img, &bytes).unwrap();
+    let exe = env!("CARGO_BIN_EXE_DiskEdit");
+    let img_s = img.to_str().unwrap();
+
+    let out = Command::new(exe).args(["new", img_s, "--yes"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(3), "a superblock in the written regions must need consent");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.stdout.is_empty(), "a refusal must not print layout output");
+    assert!(stderr.contains("probe=unrecognized-non-empty"), "{stderr}");
+    assert!(stderr.contains("--overwrite-data"), "{stderr}");
+    assert_eq!(std::fs::read(&img).unwrap(), bytes, "the refusal must not write");
+
+    let out = Command::new(exe).args(["new", img_s, "--yes", "--overwrite-data"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(0), "explicit consent must go through");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn msdos_table_flow() {
     let dir = std::env::temp_dir().join(format!("diskedit_mdos_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
