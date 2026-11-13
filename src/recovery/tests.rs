@@ -1,4 +1,4 @@
-//! 状态转移表：每一行对应 [`Evidence`] 或清理许可的一次判定，按行可查。
+//! 状态转移表：每一行对应 [`Evidence`] 或清理许可的一次判定。
 
 use super::*;
 use crate::platform::{IdentityMaterial, PathError, TargetId};
@@ -254,10 +254,10 @@ fn evidence_rows_stay_in_their_own_state() {
     let good = encoded(current.clone(), Retention::Active, CommitState::Prepared);
     let total = good.len() as u64;
 
-    // 行 1：不存在的路径
+    // 不存在的路径
     assert_eq!(Evidence::absent(), Evidence::Absent);
 
-    // 行 2：magic 不属于本工具
+    // magic 不属于本工具
     match Evidence::classify(&[0x58u8; 40], &current) {
         Evidence::UnrecognizedFormat { magic, recorded } => {
             assert_eq!(magic, [0x58; 4]);
@@ -266,7 +266,7 @@ fn evidence_rows_stay_in_their_own_state() {
         other => panic!("unknown magic became {other:?}"),
     }
 
-    // 行 3：magic 是本工具的、载荷形状不认识（长度与两段 CRC 自洽，但内容多一个字节）
+    // magic 是本工具的、载荷形状不认识（长度与两段 CRC 自洽，但内容多一个字节）
     let mut unknown_shape = good.clone();
     unknown_shape.push(0);
     let payload_len = (unknown_shape.len() - HEADER_LEN) as u32;
@@ -283,7 +283,7 @@ fn evidence_rows_stay_in_their_own_state() {
         other => panic!("unknown shape became {other:?}"),
     }
 
-    // 行 4：头还没读满
+    // 头还没读满
     match Evidence::classify(&good[..12], &current) {
         Evidence::Incomplete { observed, expected } => {
             assert_eq!(observed, 12);
@@ -292,7 +292,7 @@ fn evidence_rows_stay_in_their_own_state() {
         other => panic!("truncated header became {other:?}"),
     }
 
-    // 行 5：头 CRC 不符（长度字段被改、CRC 未重算）
+    // 头 CRC 不符（长度字段被改、CRC 未重算）
     let mut damaged_header = good.clone();
     damaged_header[10] ^= 0xFF;
     assert_eq!(
@@ -300,7 +300,7 @@ fn evidence_rows_stay_in_their_own_state() {
         Evidence::CrcMismatch { region: CrcRegion::Header }
     );
 
-    // 行 6：头完整、载荷被截短
+    // 头完整、载荷被截短
     match Evidence::classify(&good[..good.len() - 8], &current) {
         Evidence::Incomplete { observed, expected } => {
             assert_eq!(observed, total - 8);
@@ -309,7 +309,7 @@ fn evidence_rows_stay_in_their_own_state() {
         other => panic!("truncated payload became {other:?}"),
     }
 
-    // 行 7：载荷 CRC 不符
+    // 载荷 CRC 不符
     let mut damaged_payload = good.clone();
     let last = damaged_payload.len() - 1;
     damaged_payload[last] ^= 0xFF;
@@ -318,7 +318,7 @@ fn evidence_rows_stay_in_their_own_state() {
         Evidence::CrcMismatch { region: CrcRegion::Payload }
     );
 
-    // 行 8：记录比声明的长度更长
+    // 记录比声明的长度更长
     let mut longer = good.clone();
     longer.extend_from_slice(&[0xAA; 4]);
     match Evidence::classify(&longer, &current) {
@@ -329,11 +329,11 @@ fn evidence_rows_stay_in_their_own_state() {
         other => panic!("overlong record became {other:?}"),
     }
 
-    // 行 9：全部检查通过、身份相同
+    // 全部检查通过、身份相同
     let evidence = Evidence::classify(&good, &current);
     assert!(matches!(evidence, Evidence::Recognized(_)));
 
-    // 行 10：全部检查通过、身份不同
+    // 全部检查通过、身份不同
     match Evidence::classify(&good, &scene(2)) {
         Evidence::ForeignTarget { recorded, current: seen } => {
             assert_eq!(recorded, current);
@@ -342,7 +342,7 @@ fn evidence_rows_stay_in_their_own_state() {
         other => panic!("foreign record became {other:?}"),
     }
 
-    // 行 11：身份材料相同、loop 映射不同 ⇒ 不再是同一目标
+    // 身份材料相同、loop 映射不同 ⇒ 不是同一目标
     let mapped = SceneIdentity::with_details(
         current.id().clone(),
         Some(Mapping::new(7, 8)),
@@ -356,11 +356,11 @@ fn evidence_rows_stay_in_their_own_state() {
         Evidence::ForeignTarget { .. }
     ));
 
-    // 行 12：留存状态不阻止识别
+    // 留存状态不阻止识别
     let unverified = encoded(current.clone(), Retention::Unverified, CommitState::Prepared);
     assert!(matches!(Evidence::classify(&unverified, &current), Evidence::Recognized(_)));
 
-    // 行 13：路径式 inspect 没有当前目标可比，按结构仍判识别成功
+    // 路径式 inspect 没有当前目标可比，按结构仍判识别成功
     assert!(matches!(Evidence::classify_structure(&good), Evidence::Recognized(_)));
 }
 
@@ -542,4 +542,64 @@ fn a_zero_write_resize_record_without_relocation_is_planned() {
 
     record.progress.completed_steps = 1;
     assert_eq!(record.stage().unwrap(), Stage::Undecidable);
+}
+
+/// 记录目录里的一份空记录，用于观测绑定与表步的落盘结果
+#[cfg(target_os = "linux")]
+fn journal_in(dir: &crate::testdir::TestDir, op: OpKind) -> RecordJournal {
+    let path = dir.path().join("t.diskedit").join("record");
+    std::fs::create_dir_all(path.parent().expect("the record path has a directory")).unwrap();
+    RecordJournal::create_image(
+        &path,
+        scene(1),
+        op,
+        512,
+        crate::dev::DiskGuidState::Unavailable,
+        None,
+    )
+    .expect("a fresh record opens in a writable directory")
+}
+
+#[cfg(target_os = "linux")]
+fn relocation_of(entries: Vec<RelocEntry>, entry_index: u32) -> Relocation {
+    Relocation {
+        entries,
+        entry_index,
+        chunks_in_entry: 0,
+        chunk_bytes: 1024 * 1024,
+        kind: RelocKind::Shift,
+        grow_part: 1,
+        disk_size: 16 * 1024 * 1024,
+        ss: 512,
+    }
+}
+
+/// 没有条目的搬移计划绑不进记录：空计划没有可续跑的对象
+#[cfg(target_os = "linux")]
+#[test]
+fn an_empty_relocation_plan_is_refused_at_bind() {
+    let dir = crate::testdir::test_dir("journal_empty_relocation");
+    let mut journal = journal_in(&dir, OpKind::Move);
+    let err = journal.bind_relocation(relocation_of(Vec::new(), 0), None).unwrap_err();
+    assert!(err.to_string().contains("no entries"), "{err}");
+    assert!(journal.record().relocation.is_none(), "a refused bind leaves no plan in the record");
+}
+
+/// 条目越界的表步开始不是可跳过的调用：拒绝，而不是把少写的一条事实当成功
+#[cfg(target_os = "linux")]
+#[test]
+fn a_table_step_outside_the_recorded_plan_is_refused() {
+    let dir = crate::testdir::test_dir("journal_entry_bounds");
+    let mut journal = journal_in(&dir, OpKind::Move);
+    let entry = RelocEntry { partition: 1, src_first: 2048, len: 4096, delta: 4096, is_swap: false };
+    journal
+        .bind_relocation(relocation_of(vec![entry], 0), None)
+        .expect("a plan with one entry binds");
+    let err = journal.mark_entry_table_in_flight(1).unwrap_err();
+    assert!(err.to_string().contains("outside the recorded relocation plan"), "{err}");
+    assert_eq!(journal.record().entry_table_in_flight, None);
+    assert!(
+        journal.mark_entry_table_in_flight(0).is_ok(),
+        "the current entry still records its table step"
+    );
 }

@@ -30,8 +30,8 @@ use super::cleanup::{CleanupError, RecoveryEngine};
 use super::record::{OpKind, Record};
 #[cfg(target_os = "linux")]
 use super::record::{
-    CommitState, CopySource, EntryCommit, LvmPost, PlanDigest, PlanId, PlanVersion, Progress,
-    RecoveryAction, Relocation, RepairFact, RepairKind, RepairState, RestoreEntry, TableFence, TxId,
+    CommitState, CopySource, LvmPost, PlanDigest, PlanId, PlanVersion, Progress, RecoveryAction,
+    Relocation, RepairFact, RepairKind, RepairState, RestoreEntry, TableFence, TxId,
 };
 use super::scene::SceneIdentity;
 use crate::dev::DiskGuidState;
@@ -659,10 +659,10 @@ impl RecordJournal {
             Evidence::UnrecognizedFormat { magic, .. } => {
                 if let Some(name) = super::record::legacy_layout(magic) {
                     return Err(RecordJournalError::Unsupported(format!(
-                        "the record at {} was written in the previous record layout ({name}); this build reads the \
-                         current layout only — it cannot be resumed or undone. Keep it and release it with \
+                        "the record at {} was {} — it cannot be resumed or undone. Keep it and release it with \
                          `diskedit abandon`, after the unfinished operation is settled by hand",
-                        record_path.display()
+                        record_path.display(),
+                        super::record::legacy_layout_sentence(name)
                     )));
                 }
                 return Err(RecordJournalError::Unsupported(format!(
@@ -831,6 +831,12 @@ impl RecordJournal {
                 "only a `move`, `resize` or `resize-part` record carries a relocation plan",
             )));
         }
+        if reloc.entries.is_empty() {
+            // 空计划没有条目可续跑，回放时所有判据都会在空集上通过
+            return Err(PersistFailure::NotWritten(std::io::Error::other(
+                "a relocation plan with no entries cannot be recorded",
+            )));
+        }
         if let Some(was) = &self.record.relocation {
             if *was != reloc {
                 return Err(PersistFailure::NotWritten(std::io::Error::other(
@@ -854,16 +860,6 @@ impl RecordJournal {
             return Ok(());
         }
         self.record.relocation = Some(reloc);
-        let entry_count = self
-            .record
-            .relocation
-            .as_ref()
-            .map(|r| r.entries.len())
-            .unwrap_or(0);
-        let commits_before = std::mem::replace(
-            &mut self.record.entry_commits,
-            vec![EntryCommit::Pending; entry_count],
-        );
         let lvm_before = self.record.lvm_post;
         if lvm_post.is_some() {
             // 上一次作业已经写下基线时沿用旧值
@@ -872,7 +868,6 @@ impl RecordJournal {
         if let Err(e) = self.persist() {
             if !e.record_bytes_persisted() {
                 self.record.relocation = None;
-                self.record.entry_commits = commits_before;
                 self.record.lvm_post = lvm_before;
             }
             return Err(e);
@@ -893,7 +888,7 @@ impl RecordJournal {
     }
 
     /// 表步完成：进度与围栏 `Landed` 同一笔落盘。没有搬移表的记录靠它把"表已写"
-    /// 写进盘上；有搬移表时围栏停在 `Pending`，由逐条目事实承载
+    /// 写进盘上；有搬移表时围栏停在 `Pending`，表步由在飞位与条目游标承载
     pub(crate) fn record_table_step_done(
         &mut self,
         reloc: Option<(u32, u64)>,
@@ -916,7 +911,7 @@ impl RecordJournal {
             .relocation
             .as_ref()
             .map(|r| (r.entry_index, r.chunks_in_entry));
-        let was_commits = self.record.entry_commits.clone();
+        let was_in_flight = self.record.entry_table_in_flight;
         let was_fence = self.record.table_fence;
         if let Some((entry_index, chunks_in_entry)) = reloc {
             let Some(current) = self.record.relocation.as_ref() else {
@@ -931,20 +926,11 @@ impl RecordJournal {
             .map_err(PersistFailure::NotWritten)?;
         if let Some((entry_index, chunks_in_entry)) = reloc {
             let current = self.record.relocation.as_mut().expect("checked above");
-            let advanced_from = current.entry_index as usize;
             current.entry_index = entry_index;
             current.chunks_in_entry = chunks_in_entry;
-            // 游标推进与条目的表步提交事实同一笔落盘：中间崩溃不会留下
-            // "游标已过、条目仍 InFlight" 的组合
-            for state in self
-                .record
-                .entry_commits
-                .iter_mut()
-                .take(entry_index as usize)
-                .skip(advanced_from)
-            {
-                *state = EntryCommit::Committed;
-            }
+            // 游标推进意味着该条目的表步结果已记入，在飞位与游标同一笔落盘清空：
+            // 中间崩溃不会留下"游标已过、条目仍在飞"的组合
+            self.record.entry_table_in_flight = None;
         }
         self.record.progress = Progress { completed_steps, transfer_cursor, fs_phase: was_progress.fs_phase };
         if land_table && self.record.relocation.is_none() {
@@ -957,7 +943,7 @@ impl RecordJournal {
                     current.entry_index = entry_index;
                     current.chunks_in_entry = chunks_in_entry;
                 }
-                self.record.entry_commits = was_commits;
+                self.record.entry_table_in_flight = was_in_flight;
                 self.record.progress = was_progress;
                 self.record.table_fence = was_fence;
             }
@@ -982,22 +968,33 @@ impl RecordJournal {
         Ok(())
     }
 
-    /// 条目的表步开始前落盘：把该条标为 `InFlight`。表步的结果此后才写入记录，
+    /// 条目的表步开始前落盘：把在飞位置为该条。表步的结果此后才写入记录，
     /// 这中间崩溃时记录仍能说明"这条的表可能已经写过"
     pub(crate) fn mark_entry_table_in_flight(&mut self, entry: u32) -> Result<(), PersistFailure> {
-        let Some(state) = self.record.entry_commits.get_mut(entry as usize) else {
+        let Some(reloc) = self.record.relocation.as_ref() else {
             return Ok(());
         };
-        if *state != EntryCommit::Pending {
+        if entry as usize >= reloc.entries.len() {
+            // 条目越界说明调用点与记录里的计划对不上：静默成功等于少写一条事实
+            return Err(PersistFailure::NotWritten(std::io::Error::other(format!(
+                "entry {entry} is outside the recorded relocation plan ({} entries) — refusing to skip its table step",
+                reloc.entries.len()
+            ))));
+        }
+        if entry != reloc.entry_index {
+            return Err(PersistFailure::NotWritten(std::io::Error::other(format!(
+                "entry {entry} is not the current relocation entry — refusing to record its table step"
+            ))));
+        }
+        if self.record.entry_table_in_flight == Some(entry) {
             return Ok(());
         }
-        *state = EntryCommit::InFlight;
+        let was = self.record.entry_table_in_flight;
+        self.record.entry_table_in_flight = Some(entry);
         if let Err(e) = self.persist() {
-            // 未落盘时回滚内存里的标记；已经落盘的失败保留它
-            if !e.record_bytes_persisted()
-                && let Some(state) = self.record.entry_commits.get_mut(entry as usize)
-            {
-                *state = EntryCommit::Pending;
+            // 未落盘时回滚内存里的在飞位；已经落盘的失败保留它
+            if !e.record_bytes_persisted() {
+                self.record.entry_table_in_flight = was;
             }
             return Err(e);
         }

@@ -42,9 +42,6 @@ pub(crate) const DETAILS_MOVE: &str = r#"  Move a partition, data follows (chunk
     <LBA>     new start LBA (aligned per --align; default none = the LBA as given)
     end       tail-pack to the last possible position
 
-  --no-fs has no effect: a move keeps the partition's size, so there is no
-  filesystem step to skip.
-
   A swap partition is relocated by committing its entry and rebuilding the area
   at the new position (mkswap); its contents are not copied.
 
@@ -118,8 +115,10 @@ pub(crate) fn cmd_new(a: &NewRequest) -> crate::outcome::RunOutcome {
         None => crate::assembly::take_table_snapshot(&src, &crate::assembly::TableContent::NewMbr),
     }
     .unwrap_or_else(|f| bail_fail(f));
-    // 覆盖门：三态探测为「空」才不用 --overwrite-data。可识别表与非空但读不出表
-    // 都不算空——前者是重建已有表，后者无法证明这些字节只属于表结构区
+    // 覆盖门：三态探测为「空」才不用 --overwrite-data。判定按本步骤要写的整段表区
+    // （两端表头、主条目数组、盘尾备份数组）逐字节核零：只比首尾扇区会把 LBA2 起的
+    // 超级块当成空盘。可识别表与非零但读不出表都不算空——前者是重建已有表，
+    // 后者无法证明这些字节只属于表结构区
     let recognized = match table::recognized_table(&src) {
         Ok(v) => v,
         Err(e) => bail_fail(RunOutcome::refused(format!(
@@ -127,10 +126,12 @@ pub(crate) fn cmd_new(a: &NewRequest) -> crate::outcome::RunOutcome {
              blank, so the rebuild is refused"
         ))),
     };
-    let probe = table::TableProbe::classify(
-        recognized,
-        snapshot.head_tail_all_zero(ss, table::container_last_lba(&src, ss)),
-    );
+    let write_regions = match &content {
+        Some(c) => table::gpt_compare_regions(&src, c),
+        None => table::new_mbr_regions(&src),
+    }
+    .unwrap_or_else(|f| bail_fail(f));
+    let probe = table::TableProbe::classify(recognized, snapshot.write_regions_all_zero(&write_regions));
     if probe != table::TableProbe::Empty && !a.overwrite_data && !resume_confirmed {
         bail_fail(RunOutcome::refused(format!(
             "the table sectors already hold data (probe={}); \
@@ -141,7 +142,8 @@ pub(crate) fn cmd_new(a: &NewRequest) -> crate::outcome::RunOutcome {
     }
     // 新表写入落在旧分区数据里的部分，必须另有明确授权：`--yes` 只确认"重建表"。
     // 探测读不出旧表时同样不放行——无法证明写入只落在表结构区，就不是"确认无冲突"。
-    // 候选扇区大小的签名位置由这道门探测，它们不在本次写入范围内，不会被静默覆盖
+    // 核对按实际写集：GPT 是主头、主数组与盘尾备份区；MBR 是 LBA1、末 LBA 的整扇区
+    // 与它清零的候选扇区大小 GPT 签名位——两类表的写集都逐处比对过旧分区区间
     let conflict = table::new_table_conflict(&src, ss, kind);
     match conflict {
         Ok(Some(why)) if !a.overwrite_data => bail_fail(RunOutcome::refused(format!(
@@ -228,7 +230,7 @@ fn record_table_preimages(
                 continue;
             }
             let mut original = vec![0u8; (end - first) as usize];
-            src.read_at(first, &mut original).map_err(RunOutcome::no_mutation_io)?;
+            src.read_at(first, &mut original).map_err(RunOutcome::unreadable_io)?;
             let mut after = original.clone();
             let at = (w.region.offset - first) as usize;
             after[at..at + w.bytes.len()].copy_from_slice(&w.bytes);
@@ -284,7 +286,7 @@ pub(crate) fn cmd_add(a: &AddRequest) -> crate::outcome::RunOutcome {
     }
     // 坐标系在几何计算前确定：GPT 条目按表头 ss 对齐，MBR 条目按容器 ss 对齐
     match table::table_label(&src) {
-        Err(e) => bail_fail(crate::outcome::table_parse_failure(&e, format!("label probe failed: {e}"))),
+        Err(e) => bail_fail(RunOutcome::refused(format!("label probe failed: {e}"))),
         // 判型只用 table_label 一个来源（与 delete 同口径）：load_gpt 单独判会把
         // "保护 MBR 受损、条目数组可能完好"的 GPT 盘当作无表盘降级到 msdos 分支
         Ok(table::TableLabel::GptDamaged) => bail_fail(RunOutcome::refused(
@@ -296,8 +298,8 @@ pub(crate) fn cmd_add(a: &AddRequest) -> crate::outcome::RunOutcome {
             // 判型刚由 load_gpt 成功得出；这里再取一次几何只有读盘，没有第二个判据
             let g = match table::load_gpt(&src) {
                 Ok(Some(g)) => g,
-                Ok(None) => bail_fail(RunOutcome::no_mutation("the GPT disappeared between reads — retry".to_string())),
-                Err(e) => bail_fail(crate::outcome::table_parse_failure(&e, format!("label probe failed: {e}"))),
+                Ok(None) => bail_fail(RunOutcome::refused("the GPT disappeared between reads — retry".to_string())),
+                Err(e) => bail_fail(RunOutcome::refused(format!("label probe failed: {e}"))),
             };
             // 省略 --type-guid 取 Linux filesystem data 类型 GUID
             let type_guid = match a.type_guid {
@@ -369,7 +371,7 @@ pub(crate) fn cmd_add(a: &AddRequest) -> crate::outcome::RunOutcome {
             }
         }
         Ok(table::TableLabel::Mbr) => match table::parse_mbr(&src) {
-            Err(e) => bail_fail(crate::outcome::mbr_parse_failure(&e, format!("label probe failed: {e}"))),
+            Err(e) => bail_fail(RunOutcome::refused(format!("label probe failed: {e}"))),
             Ok(Some(parts)) => {
                 refuse_name_on_msdos(a.name.as_deref());
                 // MBR 收 `0xNN`，省略取 0x83（util-linux pt-mbr.h MBR_LINUX_DATA_PARTITION）
@@ -406,7 +408,7 @@ pub(crate) fn cmd_add(a: &AddRequest) -> crate::outcome::RunOutcome {
                     Err(f) => bail_fail(f),
                 }
             }
-            Ok(None) => bail_fail(RunOutcome::no_mutation("the MBR disappeared between reads — retry".to_string())),
+            Ok(None) => bail_fail(RunOutcome::refused("the MBR disappeared between reads — retry".to_string())),
         },
         Ok(table::TableLabel::None) => bail_fail(RunOutcome::refused("cannot add on none label — run `new` first".to_string())),
     }
@@ -535,7 +537,7 @@ pub(crate) fn cmd_delete(a: &DeleteRequest) -> crate::outcome::RunOutcome {
             Ok(table::TableLabel::Gpt) => crate::gpt_policy::delete_entry(&mut src, part),
             Ok(table::TableLabel::Mbr) => delete_mbr_entry(&mut src, part),
             Ok(other) => bail_fail(RunOutcome::refused(format!("`delete` needs a GPT or MBR target (label: {other})"))),
-            Err(e) => bail_fail(crate::outcome::table_parse_failure(&e, format!("label probe failed: {e}"))),
+            Err(e) => bail_fail(RunOutcome::refused(format!("label probe failed: {e}"))),
         };
         match r {
             Ok(()) => table_record_done(&mut src, &format!("deleted partition #{part} (verify with: diskedit info {})", a.target)),
@@ -967,7 +969,7 @@ pub(crate) fn prepare_resize_part(
         old_start.checked_mul(ss).ok_or_else(byte_overflow)?,
         (old_end - old_start + 1).checked_mul(ss).ok_or_else(byte_overflow)?,
     )
-    .map_err(RunOutcome::no_mutation_io)?;
+    .map_err(RunOutcome::unreadable_io)?;
     // 缩容的 FS 步就是首次写盘：工具缺失或类型不可缩必须在它之前拒绝
     let needs_shrink = new_bytes < old_bytes && fs_shrunk != movepart::FsShrink::Verified;
     // --no-fs 与缩容不可共存：分区末端越过未缩的 FS 元数据即数据损坏
@@ -1383,15 +1385,7 @@ pub(crate) fn cmd_move(a: &MoveRequest) -> crate::outcome::RunOutcome {
     // checked：start 来自 CLI 原始输入（--align none 时无上界），回绕会让目标区间越过可用范围
     let end = start.checked_add(len - 1)
         .unwrap_or_else(|| bail_fail(RunOutcome::refused("end LBA overflows address space".to_string())));
-    // move 保持长度：没有可跳过的文件系统步骤
-    if a.no_fs {
-        eprintln!(
-            "note: `move` keeps the partition's size unchanged, so there is no filesystem step to \
-             skip — --no-fs has no effect on this command"
-        );
-    }
-    let chunk = movepart::chunk_bytes(a.chunk_mib)
-        .unwrap_or_else(|e| bail_fail(RunOutcome::refused(e.to_string())));
+    let chunk = crate::support::resolve_chunk(a.chunk_mib, &src);
     // 落位与长度取锁下几何：后面装配与记录绑定都用这一份，不按请求推算
     let (old_start, old_end) = (e.starting_lba, e.ending_lba);
     let ss = g.sector_size();
@@ -1478,7 +1472,7 @@ pub(crate) fn cmd_move(a: &MoveRequest) -> crate::outcome::RunOutcome {
                     .checked_mul(ss)
                     .unwrap_or_else(|| bail_fail(RunOutcome::no_mutation("partition length overflows byte offset")));
                 let kind = crate::fsid::identify(&src, base, bytes)
-                    .unwrap_or_else(|e| bail_fail(RunOutcome::no_mutation_io(e)));
+                    .unwrap_or_else(|e| bail_fail(RunOutcome::unreadable_io(e)));
                 if kind == crate::fsid::ContentKind::Filesystem(crate::fsid::FsKind::Ntfs) {
                     crate::execution::fix_ntfs_hidden_sectors(&mut src, start, ss, part, &mut |m| println!("{m}"))
                         .unwrap_or_else(|e| bail_fail(RunOutcome::partial_with(e.to_string(), Vec::new())));
@@ -1522,8 +1516,8 @@ pub(crate) fn cmd_move(a: &MoveRequest) -> crate::outcome::RunOutcome {
             Ok(crate::recovery::Stage::Complete) => {
                 bail_fail(RunOutcome::refused(format!(
                     "the recovery record for partition {part} is complete and only waits to be released — \
-                     roll the recorded bytes back with `diskedit undo {}`, or release the record with \
-                     `diskedit abandon {}`",
+                     roll the recorded bytes back with `diskedit undo {} --yes`, or release the record with \
+                     `diskedit abandon {} --yes --discard-replay`",
                     a.target, a.target
                 )));
             }

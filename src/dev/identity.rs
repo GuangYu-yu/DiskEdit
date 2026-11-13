@@ -281,11 +281,18 @@ fn quarantine_path(dir: &Path, name: &std::ffi::OsStr, index: u32) -> PathBuf {
 }
 
 /// 目录里 `<name>[.N]` 的最大编号（不带编号的 `<name>` 记为 0）；一个都没有是 None。
-/// 编号只增不减：新条目取最大值 +1，不填已有的空号
-fn max_quarantine_index(dir: &Path, name: &std::ffi::OsStr) -> Option<u32> {
+/// 编号只增不减：新条目取最大值 +1，不填已有的空号。
+/// 列不出目录是错误而不是空集：把它当成"没有既有编号"会从 0 重号，覆盖掉已有证据
+fn max_quarantine_index(dir: &Path, name: &std::ffi::OsStr) -> std::io::Result<Option<u32>> {
     let base = name.to_string_lossy().into_owned();
     let mut max = None;
-    for entry in std::fs::read_dir(dir).ok()?.flatten() {
+    let entries = std::fs::read_dir(dir).map_err(|e| {
+        std::io::Error::new(e.kind(), format!("cannot enumerate the quarantine directory {}: {e}", dir.display()))
+    })?;
+    for entry in entries {
+        let entry = entry.map_err(|e| {
+            std::io::Error::new(e.kind(), format!("cannot read an entry of the quarantine directory {}: {e}", dir.display()))
+        })?;
         let text = entry.file_name().to_string_lossy().into_owned();
         let Some(rest) = text.strip_prefix(base.as_str()) else { continue };
         let index = if rest.is_empty() {
@@ -300,7 +307,7 @@ fn max_quarantine_index(dir: &Path, name: &std::ffi::OsStr) -> Option<u32> {
         };
         max = Some(max.map_or(index, |m: u32| m.max(index)));
     }
-    max
+    Ok(max)
 }
 
 /// 把活跃条目移进隔离区：`hard_link` 建副本再删原名，绝不覆盖已有条目。
@@ -317,7 +324,7 @@ fn max_quarantine_index(dir: &Path, name: &std::ffi::OsStr) -> Option<u32> {
 /// 第二个 diskedit 来抢名字
 pub(crate) fn quarantine_move(from: &Path, stem: &str) -> std::io::Result<PathBuf> {
     let (dir, name) = quarantine_layout(from, stem);
-    let max = max_quarantine_index(&dir, &name);
+    let max = max_quarantine_index(&dir, &name)?;
     // 残局判据先于编号分配：副本可能是任意一个已存在编号，逐个比 inode
     if let Some(max) = max {
         for index in 0..=max {

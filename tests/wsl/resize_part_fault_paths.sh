@@ -114,7 +114,7 @@ exp "$(record_present "$T" && echo yes || echo no)" yes "copy 中断留下记录
 $B info "$T" | grep -q '"num":4' && { echo "  BAD  p4 已进表（应在提交前中断）"; rc=1; } || echo "  OK   p4 尚未进表"
 OUT=$($BF copy "$T":3 --start 1500000 --chunk 1 --yes 2>&1); exp "$?" 5 "未释放现场时重跑被拒（past-boundary 口径）"
 echo "$OUT" | grep -o "unfinished operation still owns this target" | head -1
-exp "$($B abandon "$T" >/dev/null 2>&1; echo $?)" 0 "abandon 释放 copy 现场"
+exp "$($B abandon "$T" --yes >/dev/null 2>&1; echo $?)" 0 "abandon 释放 copy 现场"
 OUT=$($B copy "$T":3 --start 1500000 --chunk 1 --yes 2>&1); exp "$?" 0 "abandon 后重跑 copy"
 $B info "$T" | grep -q '"num":4' && echo "  OK   p4 已落表" || { echo "  BAD  p4 未进表"; rc=1; }
 chkp 3 "$M3"

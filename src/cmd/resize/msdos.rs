@@ -214,14 +214,14 @@ pub(crate) fn cmd_resize_msdos(a: &ResizeRequest, pref: PartSelector, src_ro: &F
     }
     // 离线路径不消费 chunk：在线检查（resize_online）只在块设备上执行，镜像文件
     // 与非 Linux 平台会绕过它落到这里，取值校验也随之跳过
-    if a.chunk_given {
+    if a.chunk_mib.is_some() {
         bail_fail(RunOutcome::refused(
             "--chunk has no effect for MBR resize — MBR cannot relocate blocking partitions".to_string(),
         ));
     }
     let mbr = table::parse_mbr(src_ro)
         .unwrap_or_else(|e| {
-            bail_fail(crate::outcome::mbr_parse_failure(&e, format!("parse failed: {e}")))
+            bail_fail(RunOutcome::refused(format!("parse failed: {e}")))
         })
         .unwrap_or_else(|| bail_fail(RunOutcome::refused("no MBR on target".to_string())));
     // 只读快照
@@ -267,7 +267,7 @@ pub(crate) fn cmd_resize_msdos(a: &ResizeRequest, pref: PartSelector, src_ro: &F
     // 决定写进盘——resize_mdos_entry 不复核邻接，过期的 free 没有第二道防线
     let mbr = table::parse_mbr(&src)
         .unwrap_or_else(|e| {
-            bail_fail(crate::outcome::mbr_parse_failure(&e, format!("parse failed: {e}")))
+            bail_fail(RunOutcome::refused(format!("parse failed: {e}")))
         })
         .unwrap_or_else(|| bail_fail(RunOutcome::refused("no MBR on target".to_string())));
     // 锁下快照

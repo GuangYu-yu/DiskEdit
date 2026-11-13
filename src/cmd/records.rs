@@ -2,11 +2,11 @@
 //!
 //! - `records list [TARGET]`：列出可解码的记录；省略目标时列主机仓库里的全部记录。
 //!   未知格式不进列表，隔离项标出但不参与活跃判定。
-//! - `records verify <ID> <TARGET>`：按记录编号在记录后端里定位唯一一条，并对目标重新
+//! - `records verify <TARGET> <ID>`：按记录编号在记录后端里定位唯一一条，并对目标重新
 //!   探测身份。未找到或命中两处及以上都退 3，文案区分。
 //! - `records scan <ROOT>`：根是容器目录——块设备侧 `<state_root>/recovery`，镜像侧是
 //!   镜像所在目录。深度 ≤3、单文件 ≤64 MiB、总量 ≤512 MiB、30 s；任一超出即"结果不完整"
-//!   退 4，不返回半份结果。
+//!   退 3，不返回半份结果。
 //!
 //! 没有索引：条目全部在内存里枚举并标 `registered: false`。因此
 //! `LocationUnavailable` 不会出现——那是"索引登记了而文件不在"的状态，没有索引就没有
@@ -24,7 +24,7 @@ use std::time::{Duration, Instant};
 use crate::cli::{RecordsListRequest, RecordsScanRequest, RecordsVerifyRequest};
 use crate::cmd::CmdResult;
 use crate::dev::{RecordBackend, TargetIdentity};
-use crate::outcome::{RunOutcome, EXIT_NO_MUTATION, EXIT_OK, EXIT_REFUSED};
+use crate::outcome::{RunOutcome, EXIT_OK, EXIT_REFUSED};
 use crate::recovery::{Evidence, Record};
 use crate::support::{bail_fail, json_escape};
 
@@ -39,14 +39,14 @@ pub(crate) const DETAILS_LIST: &str = r#"  List recovery records as JSON. Only d
   that holds the images."#;
 
 pub(crate) const DETAILS_VERIFY: &str = r#"  Locate the record whose id is ID (32 lowercase hex digits, as printed by
-  `records list`), re-probe the identity of TARGET, and print the verdict as
-  JSON.
+  `records list`) on TARGET, re-probe the identity of TARGET, and print the
+  verdict as JSON.
 
   Exit status:
-    0  exactly one record, and the identity check did not RunOutcome
+    0  exactly one record, and the identity check did not fail
     3  the id was not found (A4), or it exists in two or more places, or the
-       single record fails its identity / backend / structure check
-    4  the record, its directory, or the target could not be read"#;
+       single record fails its identity / backend / structure check, or the
+       record, its directory, or the target could not be read"#;
 
 pub(crate) const DETAILS_SCAN: &str = r#"  Enumerate records under a container root and print them as JSON.
 
@@ -57,7 +57,7 @@ pub(crate) const DETAILS_SCAN: &str = r#"  Enumerate records under a container r
   A subdirectory of <state_root> other than `recovery` is refused: a record
   directory is not a container. Scanning is bounded to depth 3, 64 MiB per file,
   512 MiB in total and 30 seconds. Exceeding a bound reports an incomplete
-  result and exits 4; no partial list is printed.
+  result and exits 3; no partial list is printed.
 
   There is no index yet: every row carries "registered": false."#;
 
@@ -398,10 +398,10 @@ pub(crate) fn cmd_records_list(a: &RecordsListRequest) -> CmdResult {
         Some(target) => {
             let path = Path::new(target);
             let identity = TargetIdentity::resolve_for_cleanup(path).unwrap_or_else(|| {
-                bail_fail(RunOutcome::no_mutation(format!("cannot determine the identity of {}", path.display())))
+                bail_fail(RunOutcome::refused(format!("cannot determine the identity of {}", path.display())))
             });
             let Some(record) = identity.record_path() else {
-                bail_fail(RunOutcome::no_mutation(format!(
+                bail_fail(RunOutcome::refused(format!(
                     "{} has no record directory — records are kept beside images and in the host \
                      recovery repository for block devices",
                     path.display()
@@ -411,7 +411,7 @@ pub(crate) fn cmd_records_list(a: &RecordsListRequest) -> CmdResult {
             let backend = crate::dev::record_backend(dir).unwrap_or(RecordBackend::Sidecar);
             let current = current_scene(path);
             if let Err(reason) = collect_dir(dir, backend, current.as_ref(), &mut budget, None, &mut rows) {
-                bail_fail(RunOutcome::no_mutation(format!("cannot list records: {reason}")));
+                bail_fail(RunOutcome::refused(format!("cannot list records: {reason}")));
             }
             Some(
                 "only TARGET's own record directory is listed; sidecars beside other targets are not \
@@ -422,7 +422,7 @@ pub(crate) fn cmd_records_list(a: &RecordsListRequest) -> CmdResult {
             let root = crate::dev::host_state_root().join("recovery");
             // 仓库还没建起来时没有记录可列，不是读失败（缺失按「不存在」处理）
             let dirs = if root.is_dir() {
-                host_record_dirs(&root).unwrap_or_else(|e| bail_fail(RunOutcome::no_mutation(e)))
+                host_record_dirs(&root).unwrap_or_else(|e| bail_fail(RunOutcome::refused(e)))
             } else {
                 Vec::new()
             };
@@ -431,7 +431,7 @@ pub(crate) fn cmd_records_list(a: &RecordsListRequest) -> CmdResult {
                 if let Err(reason) =
                     collect_dir(&dir, RecordBackend::HostRepo, None, &mut budget, None, &mut rows)
                 {
-                    bail_fail(RunOutcome::no_mutation(format!("cannot list records: {reason}")));
+                    bail_fail(RunOutcome::refused(format!("cannot list records: {reason}")));
                 }
             }
             Some(
@@ -441,6 +441,7 @@ pub(crate) fn cmd_records_list(a: &RecordsListRequest) -> CmdResult {
         }
     };
     rows.retain(|row| row.state().is_some_and(State::listed));
+    warn_legacy_layout(&rows);
     print_rows(&rows, note);
     CmdResult::Code(EXIT_OK)
 }
@@ -450,7 +451,7 @@ pub(crate) fn cmd_records_verify(a: &RecordsVerifyRequest) -> CmdResult {
     let path = Path::new(&a.target);
     // verify 的语义是拿盘面重新核对一遍身份；目标探测不出来就没有"核对过"这回事
     let Some(current) = current_scene(path) else {
-        bail_fail(RunOutcome::no_mutation(format!(
+        bail_fail(RunOutcome::refused(format!(
             "cannot probe the identity of {} — the record was not verified",
             path.display()
         )));
@@ -470,37 +471,74 @@ pub(crate) fn cmd_records_verify(a: &RecordsVerifyRequest) -> CmdResult {
             if let Err(reason) =
                 collect_dir(&dir, backend, Some(&current), &mut budget, Some(&a.id), &mut rows)
             {
-                bail_fail(RunOutcome::no_mutation(format!("cannot verify the record: {reason}")));
+                bail_fail(RunOutcome::refused(format!("cannot verify the record: {reason}")));
             }
         }
     }
     // 主机仓库里的其余记录目录：同一编号出现在两处是"命中两处及以上"的唯一来源
     let root = crate::dev::host_state_root().join("recovery");
-    if let Ok(dirs) = host_record_dirs(&root) {
-        for dir in dirs {
-            if searched.contains(&dir) {
-                continue;
+    // 枚举失败不等于"主机仓库里没有"：与 `scan` 同口径，不报完整
+    let mut host_failure = None;
+    let host_dirs = match std::fs::metadata(&root) {
+        Ok(meta) if meta.is_dir() => match host_record_dirs(&root) {
+            Ok(dirs) => dirs,
+            Err(reason) => {
+                host_failure = Some(reason);
+                Vec::new()
             }
-            if let Err(reason) = collect_dir(
-                &dir,
-                RecordBackend::HostRepo,
-                None,
-                &mut budget,
-                Some(&a.id),
-                &mut rows,
-            ) {
-                bail_fail(RunOutcome::no_mutation(format!("cannot verify the record: {reason}")));
-            }
+        },
+        Ok(_) => {
+            host_failure = Some(format!("{} is not a directory", root.display()));
+            Vec::new()
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(e) => {
+            host_failure = Some(format!("cannot inspect {}: {e}", root.display()));
+            Vec::new()
+        }
+    };
+    for dir in host_dirs {
+        if searched.contains(&dir) {
+            continue;
+        }
+        searched.push(dir.clone());
+        if let Err(reason) = collect_dir(
+            &dir,
+            RecordBackend::HostRepo,
+            None,
+            &mut budget,
+            Some(&a.id),
+            &mut rows,
+        ) {
+            bail_fail(RunOutcome::refused(format!("cannot verify the record: {reason}")));
         }
     }
     if rows.is_empty() {
         println!(
-            "{{\"id\":\"{}\",\"hits\":0,\"records\":[],\"complete\":true}}",
-            json_escape(&a.id)
+            "{{\"id\":\"{}\",\"hits\":0,\"records\":[],\"complete\":{}{}}}",
+            json_escape(&a.id),
+            host_failure.is_none(),
+            host_failure
+                .as_ref()
+                .map(|reason| format!(",\"reason\":\"{}\"", json_escape(reason)))
+                .unwrap_or_default()
         );
+        if let Some(reason) = &host_failure {
+            eprintln!(
+                "the verification is incomplete: {reason} — the host recovery repository was not searched, so no \
+                 claim of completeness is made"
+            );
+        }
+        let searched = if searched.is_empty() {
+            "none: the target's record directory could not be determined and the host repository has no record \
+             directories"
+                .to_string()
+        } else {
+            searched.iter().map(|d| d.display().to_string()).collect::<Vec<_>>().join(", ")
+        };
         eprintln!(
-            "no record with id {} was found in the target's record directory or the host recovery \
-             repository — run `diskedit records scan <root>` to look elsewhere",
+            "no record with id {} was found in the record directories searched ({searched}) — run `diskedit \
+             records scan <root>` to search a whole repository",
             a.id
         );
         return CmdResult::Code(EXIT_REFUSED);
@@ -514,10 +552,18 @@ pub(crate) fn cmd_records_verify(a: &RecordsVerifyRequest) -> CmdResult {
         return CmdResult::Code(EXIT_REFUSED);
     }
     let row = &rows[0];
+    warn_legacy_layout(std::slice::from_ref(row));
     print_rows(std::slice::from_ref(row), None);
+    if let Some(reason) = &host_failure {
+        eprintln!(
+            "the verification is incomplete: {reason} — the host recovery repository was not searched, so this \
+             hit may not be the only copy"
+        );
+        return CmdResult::Code(EXIT_REFUSED);
+    }
     match row.state() {
         Some(State::Valid | State::Unfinished) => CmdResult::Code(EXIT_OK),
-        Some(State::Unreadable) => CmdResult::Code(EXIT_NO_MUTATION),
+        Some(State::Unreadable) => CmdResult::Code(EXIT_REFUSED),
         Some(_) => CmdResult::Code(EXIT_REFUSED),
         None => CmdResult::Code(EXIT_REFUSED),
     }
@@ -538,7 +584,7 @@ pub(crate) fn cmd_records_scan(a: &RecordsScanRequest) -> CmdResult {
         )));
     }
     let (dirs, backend) = if root == host_recovery {
-        let dirs = host_record_dirs(root).unwrap_or_else(|e| bail_fail(RunOutcome::no_mutation(e)));
+        let dirs = host_record_dirs(root).unwrap_or_else(|e| bail_fail(RunOutcome::refused(e)));
         (dirs, RecordBackend::HostRepo)
     } else if root.starts_with(&state_root) {
         bail_fail(RunOutcome::refused(format!(
@@ -548,10 +594,10 @@ pub(crate) fn cmd_records_scan(a: &RecordsScanRequest) -> CmdResult {
             host_recovery.display()
         )));
     } else if root.is_dir() {
-        let dirs = sidecar_record_dirs(root).unwrap_or_else(|e| bail_fail(RunOutcome::no_mutation(e)));
+        let dirs = sidecar_record_dirs(root).unwrap_or_else(|e| bail_fail(RunOutcome::refused(e)));
         (dirs, RecordBackend::Sidecar)
     } else {
-        bail_fail(RunOutcome::no_mutation(format!("{} is not a directory", root.display())));
+        bail_fail(RunOutcome::refused(format!("{} is not a directory", root.display())));
     };
 
     let mut budget = Budget::new();
@@ -566,9 +612,10 @@ pub(crate) fn cmd_records_scan(a: &RecordsScanRequest) -> CmdResult {
                 json_escape(&reason)
             );
             eprintln!("the scan is incomplete: {reason} — no partial result was returned");
-            return CmdResult::Code(EXIT_NO_MUTATION);
+            return CmdResult::Code(EXIT_REFUSED);
         }
     }
+    warn_legacy_layout(&rows);
     println!(
         "{{\"root\":\"{}\",\"complete\":true,\"index\":\"unavailable\",\"records\":[{}],\
          \"note\":\"records are not indexed; every entry is enumerated in memory and marked unregistered\"}}",
@@ -588,6 +635,22 @@ fn rows_json(rows: &[Row]) -> String {
         out.push_str(&row.json());
     }
     out
+}
+
+/// 旧布局记录的统一说明：只对人说（stderr），JSON 形态不变
+#[cfg(target_os = "linux")]
+fn warn_legacy_layout(rows: &[Row]) {
+    for row in rows {
+        if let Evidence::UnrecognizedFormat { magic, .. } = &row.evidence
+            && let Some(name) = crate::recovery::legacy_layout(*magic)
+        {
+            eprintln!(
+                "{}: the record was {}",
+                row.path.display(),
+                crate::recovery::legacy_layout_refusal(name)
+            );
+        }
+    }
 }
 
 #[cfg(target_os = "linux")]

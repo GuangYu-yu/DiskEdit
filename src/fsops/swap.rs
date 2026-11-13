@@ -88,15 +88,12 @@ pub fn recreate_swap(
     })
 }
 
-/// 下取整到 unit 的整数倍
-///
 /// 用 div_euclid 而非 `/`：Rust 的整数除法对负数是向零取整，而这里要的是 floor
 /// （如末尾行相对 256 KiB 对齐界的回退），两者在负值上不同
 pub(crate) fn floor_to_unit(v: i64, unit: i64) -> i64 {
     v.div_euclid(unit) * unit
 }
 
-/// 上取整到 unit 的整数倍（取整方向说明见 floor_to_unit）
 pub(crate) fn ceil_to_unit(v: i64, unit: i64) -> i64 {
     let f = floor_to_unit(v, unit);
     if f == v {

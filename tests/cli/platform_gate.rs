@@ -137,7 +137,7 @@ fn abandon_is_refused_like_every_other_command_on_this_platform() {
     std::fs::write(&journal, record).unwrap();
     let before = std::fs::read(&img).unwrap();
 
-    let (code, _out, err) = run(&["abandon", &img_s]);
+    let (code, _out, err) = run(&["abandon", &img_s, "--yes"]);
     assert_eq!(code, 6, "abandon must stop at the same gate: {err}");
     assert!(err.contains(CAPABILITY_GAP), "{err}");
     assert_eq!(std::fs::read(&journal).unwrap(), record, "the active record must keep its name");

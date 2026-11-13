@@ -75,7 +75,7 @@ pub(crate) fn resolve_pv_target(disk_name: &str, pno: u32) -> io::Result<OnlineT
 pub(crate) fn lock_identity(t: &OnlineTarget) -> Result<crate::dev::TargetIdentity, RunOutcome> {
     // fail-closed：拓扑解析不出来即拒绝（不退到 devname-容量身份）
     crate::dev::TargetIdentity::resolve_block(&t.disk_dev)
-        .map_err(|cause| RunOutcome::no_mutation(format!("cannot resolve the disk identity: {cause}")))
+        .map_err(|cause| RunOutcome::refused(format!("cannot resolve the disk identity: {cause}")))
 }
 
 /// 在线路径的独占所有权：设备已挂载 / 被 DM 持有，`O_EXCL` 不可能成功，但**同一把
@@ -97,7 +97,7 @@ pub(crate) fn lock_disk(
             RunOutcome::unsupported(format!("the host recovery repository is refused: {detail}"))
         }
         crate::dev::HostRepoError::Io(e) => {
-            RunOutcome::no_mutation(format!("cannot prepare the recovery directory: {e}"))
+            RunOutcome::refused(format!("cannot prepare the recovery directory: {e}"))
         }
     })?;
     // 取锁的失败按 `RunOutcome` 的三个变体折叠成出口语义（唯一映射点在 outcome 模块），
@@ -133,7 +133,7 @@ pub(crate) fn refuse_if_scene_active(t: &OnlineTarget) -> Result<(), RunOutcome>
     // 只读打开**分区**节点：闸口只读现场（journal / checkpoint 落点），不申请写权限。
     // 现场落点由所在整盘的键派生，故分区节点与整盘节点解析到同一对落点
     let part = crate::dev::FileSource::open_read_only(&t.part_dev)
-        .map_err(|e| RunOutcome::no_mutation(format!("open failed: {e}")))?;
+        .map_err(|e| RunOutcome::refused(format!("open failed: {e}")))?;
     // 只传主语：后半句 "writes outside the undo journal" 由 refuse_if_active 统一拼
     //（与之并列的调用点传的是命令名，如 "resizefs" / "check"）。
     // 在线路径的两种入口共用本闸口：挂载中的块设备，与被 device-mapper 持有的
@@ -224,7 +224,7 @@ pub fn resize_pv(
     // 解析只读 sysfs / 路径，尚未写盘 → NoMutation。尚未取得独占权，旧尺寸不可信
     let t = match resolve_pv_target(disk_name, pno) {
         Ok(t) => t,
-        Err(e) => return (RunOutcome::no_mutation(e.to_string()), 0, None),
+        Err(e) => return (RunOutcome::refused(e.to_string()), 0, None),
     };
     // 此后每一步都是写盘（写表 / 内核重读），独占权从解析出目标起就取得
     let (owned, locked_ident) = match lock_disk(&t) {
@@ -236,7 +236,7 @@ pub fn resize_pv(
     // 下面的 shrink 判定与 check_new_range 的邻接、容量判据必须来自锁下的新鲜事实
     let t = match resolve_pv_target(disk_name, pno) {
         Ok(t) => t,
-        Err(e) => return (RunOutcome::no_mutation(e.to_string()), 0, None),
+        Err(e) => return (RunOutcome::refused(e.to_string()), 0, None),
     };
     // 身份复核：锁按取锁时刻的拓扑派生，窗口内同一路径被重绑到别的设备时，
     // 路径串比对看不出来，锁保护的已不是本次要动的这块盘
@@ -256,14 +256,14 @@ pub fn resize_pv(
             return (RunOutcome::refused(format!("partition {pno} became active swap during locking — run swapoff first")), old_len_bytes, None);
         }
         Ok(false) => {}
-        Err(e) => return (RunOutcome::no_mutation(format!("cannot check active swap for partition {pno}: {e}")), old_len_bytes, None),
+        Err(e) => return (RunOutcome::refused(format!("cannot check active swap for partition {pno}: {e}")), old_len_bytes, None),
     }
     // 锁下重取真相共用一个只读整盘句柄：PV 判据复核与"请求 → 目标长度"的解析
     // 都锚定独占权之后的盘上内容。PV 判据的复核（命令层那次是锁前粗查）：识别与
     // 取锁之间分区可被重新格式化，过期的 is_pv 会把 sfdisk 的表写入砸到已不是 PV 的分区上
     let disk = match FileSource::open_read_only(&t.disk_dev) {
         Ok(s) => s,
-        Err(e) => return (RunOutcome::no_mutation(format!("open failed: {e}")), old_len_bytes, None),
+        Err(e) => return (RunOutcome::refused(format!("open failed: {e}")), old_len_bytes, None),
     };
     match crate::fsid::identify(&disk, t.start_bytes, t.part_len_bytes) {
         Ok(ContentKind::Lvm2Pv) => {}
@@ -271,7 +271,7 @@ pub fn resize_pv(
             "partition {pno} is no longer an LVM PV (identified as {}) — re-run `diskedit resize` to re-classify the target",
             crate::fsid::content_name(ft)
         )), old_len_bytes, None),
-        Err(e) => return (RunOutcome::no_mutation(format!("identify failed: {e}")), old_len_bytes, None),
+        Err(e) => return (RunOutcome::refused(format!("identify failed: {e}")), old_len_bytes, None),
     }
     // 目标长度在锁下解析（见 `resize_online_planned` 的说明）；PV 路径无"仅扩 FS"一说，
     // `Ok(None)` 视作无绝对目标 = 分区层无变化

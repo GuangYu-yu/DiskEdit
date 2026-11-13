@@ -75,7 +75,7 @@ pub(crate) fn mbr_decider(
 ) -> impl FnOnce(&FileSource) -> Result<Option<u64>, RunOutcome> {
     online_size(size, is_pv, move |disk| {
         let mbr = table::parse_mbr(disk)
-            .map_err(|e| crate::outcome::mbr_parse_failure(&e, format!("parse failed: {e}")))?
+            .map_err(|e| RunOutcome::refused(format!("parse failed: {e}")))?
             .ok_or_else(|| RunOutcome::refused("no MBR on target".to_string()))?;
         let p = mbr.iter().find(|p| p.num == part)
             .ok_or_else(|| RunOutcome::refused(format!("partition {part} not found (MBR resize covers primary partitions 1..4 only)")))?;

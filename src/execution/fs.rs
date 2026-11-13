@@ -77,8 +77,6 @@ pub(crate) fn preflight(
     fsops::check_grow_step(growable, src.is_block).map_err(RunOutcome::from)
 }
 
-/// 执行一个 FsResize 步骤。
-///
 /// 恢复屏障由 [`fsops::GrowTarget::resize_fs`] 在设备建立之后、第一个工具启动之前落下。
 /// 屏障之前的失败按 [`RunOutcome::from`] 的原分类上报；工具启动之后的失败由
 /// [`crate::outcome::crossed_irreversible_point`] 交成待办。

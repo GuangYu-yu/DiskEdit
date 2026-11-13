@@ -92,9 +92,22 @@ fn best_effort_unix_secs() -> u64 {
 /// chunk 大小 + 持久日志的成对构造（搬移/拷贝类命令共用）。
 /// `guid` 来自调用方已解析的几何（见 `Logger::open`）
 pub(crate) fn chunk_logger(a: &impl ChunkRequest, src: &FileSource, guid: [u8; 16]) -> (u64, Logger) {
-    let chunk = movepart::chunk_bytes(a.chunk_mib()).unwrap_or_else(|e| bail_fail(RunOutcome::refused(e.to_string())));
-    (chunk, Logger::open(src, Some(guid)))
+    (resolve_chunk(a.chunk_mib(), src), Logger::open(src, Some(guid)))
 }
+
+/// `--chunk` 的生效值（字节）：显式给出就换算它，与记录不符由建计划处拒绝；
+/// 未给出时续跑沿用记录里的块大小，新作业取 4 MiB
+pub(crate) fn resolve_chunk(mib: Option<u64>, src: &FileSource) -> u64 {
+    if let Some(mib) = mib {
+        return movepart::chunk_bytes(mib).unwrap_or_else(|e| bail_fail(RunOutcome::refused(e.to_string())));
+    }
+    src.record_journal
+        .as_ref()
+        .and_then(|j| j.relocation())
+        .map_or(DEFAULT_CHUNK_BYTES, |r| r.chunk_bytes)
+}
+
+pub(crate) const DEFAULT_CHUNK_BYTES: u64 = 4 * 1024 * 1024;
 
 /// 磁盘字节序 16 字节 → 标准文本 GUID（前 3 字段小端重排；内核 efi.h EFI_GUID 宏的逆变换）
 pub(crate) fn hex_guid(b: &[u8; 16]) -> String {
@@ -240,23 +253,6 @@ pub(crate) fn settle_layout(
     }
     // 归责必须在打印之前：改判后打出的变体与调用方拿到的退出码同源
     o.report_final()
-}
-
-/// 表类写命令的成功收尾：内核重读 + 报告，仅当后置条件全部满足时才打印成功字样
-/// （内核视图过期时退 5，此时打"成功"会与退出码矛盾）。返回结果而不压成码：
-/// "已应用但待办非空"与"仅内核视图过期"对撤销窗口的去留结论不同
-pub(crate) fn table_write_done(
-    src: &FileSource,
-    record: Option<&crate::recovery::Record>,
-    ok_msg: &str,
-) -> crate::outcome::RunOutcome {
-    let o = settle_layout(crate::outcome::RunOutcome::applied_with(Vec::new()), src, record);
-    // 用语义判断而不是比退出码：比数字会把"部分完成"误判成成功，而且数字的含义
-    // 只在 outcome 一处解释得清
-    if o.is_complete() {
-        println!("{ok_msg}");
-    }
-    o
 }
 
 /// 搬移类命令的收尾：结果完整才提交并删除记录，否则把记录留在落点上当下一次续跑点。
@@ -526,13 +522,13 @@ pub(crate) fn aligned_gaps(used: &[(u64, u64)], lo: u64, hi: u64, unit: u64) -> 
 /// checked 换算：表项 LBA 来自盘上内容，回绕的字节值会骗过下游的容量判据——溢出按表损坏报
 pub(crate) fn lba_bytes(n_lba: u64, ss: u64) -> u64 {
     n_lba.checked_mul(ss)
-        .unwrap_or_else(|| bail_fail(RunOutcome::no_mutation("LBA × sector-size overflows byte range (corrupted table)")))
+        .unwrap_or_else(|| bail_fail(RunOutcome::refused("LBA × sector-size overflows byte range (corrupted table)")))
 }
 
 /// LBA 区间 [start, end]（含两端）的字节数，两处换算都走 checked
 pub(crate) fn lba_range_bytes(start: u64, end: u64, ss: u64) -> u64 {
     let n = end.checked_sub(start).and_then(|d| d.checked_add(1))
-        .unwrap_or_else(|| bail_fail(RunOutcome::no_mutation("partition end below start (corrupted table)")));
+        .unwrap_or_else(|| bail_fail(RunOutcome::refused("partition end below start (corrupted table)")));
     lba_bytes(n, ss)
 }
 

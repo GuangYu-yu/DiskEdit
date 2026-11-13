@@ -1,4 +1,4 @@
-//! 退出码契约的进程级验收：同一张表（0–6）在命令行上的可观察落点。
+//! 退出码 0–6 的进程级测试：每个码在命令行上的可观察落点。
 //! 只能在内部构造的形态（1、5）由 `src/outcome.rs` 的映射测试钉住；
 //! 这里覆盖能真实跑出来的 0/2/3/4/6，以及 4 与 5 的文案分界
 
@@ -71,7 +71,7 @@ fn argument_errors_are_two() {
         vec!["records"],
         vec!["records", "frobnicate"],
         vec!["records", "list", "--sector-size", "512"],
-        vec!["records", "verify", "nothex", img_s],
+        vec!["records", "verify", img_s, "nothex"],
         vec!["records", "scan"],
     ] {
         let (code, _out, err) = run(&args);
@@ -82,13 +82,23 @@ fn argument_errors_are_two() {
 
 #[cfg(target_os = "linux")]
 #[test]
-fn failure_before_any_write_is_four() {
-    let dir = temp_dir("nomutation");
+fn unreadable_target_is_three() {
+    let dir = temp_dir("unreadable");
     let missing = dir.join("missing.img");
-    let (code, _out, err) = run(&["info", missing.to_str().unwrap()]);
-    assert_eq!(code, 4, "{err}");
-    assert!(err.contains("nothing was written by this run"), "4 must state the target was not modified: {err}");
-    assert!(!err.contains("may have changed"), "4 must not borrow the 5 wording: {err}");
+    let missing_s = missing.to_str().unwrap();
+    for args in [
+        vec!["info", missing_s],
+        vec!["move", missing_s, "1:2", "--yes"],
+        vec!["records", "list", missing_s],
+    ] {
+        let (code, _out, err) = run(&args);
+        assert_eq!(code, 3, "`{args:?}` must report an unmet precondition: {err}");
+        assert!(
+            !err.contains("this run changed no persistent state"),
+            "a read failure is not a no-mutation report: {err}"
+        );
+        assert!(!err.contains("may have changed"), "a read failure is not a partial report: {err}");
+    }
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
@@ -106,7 +116,7 @@ fn refused_request_is_three() {
 #[cfg(target_os = "linux")]
 #[test]
 fn corrupt_table_is_three() {
-    // 损坏的表仍走 3，不是 4。结构损坏不是 I/O 失败。
+    // 损坏的表走 3：解析失败说明目标给不出可用的表，是前置条件不满足
     let dir = temp_dir("corrupt");
     let img = dir.join("disk.img");
     fixture_gpt_image(&img);

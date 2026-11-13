@@ -80,11 +80,11 @@ fn cli_negative_paths() {
          String::from_utf8_lossy(&out.stderr).into_owned())
     };
 
-    // 目标不存在 → 4（写盘前的环境失败），不是"无表"；失败也产出 JSON 信封，
+    // 目标不存在 → 3（读不出目标，前置条件不满足），不是"无表"；失败也产出 JSON 信封，
     // 拿不到的字段为 null，原因进 error（调用方不必按故障阶段换一套解析）
     let missing = dir.join("nope.img");
     let (c, out, e) = run(&["info", missing.to_str().unwrap()]);
-    assert_eq!(c, 4, "missing target must be a pre-write environment failure: {e}");
+    assert_eq!(c, 3, "missing target is an unmet precondition: {e}");
     assert!(e.contains("open failed"), "{e}");
     let v: serde_json::Value = serde_json::from_str(out.trim()).expect("open failure must still emit JSON");
     assert!(v["size_bytes"].is_null() && v["error"].is_string(), "{out}");
@@ -483,8 +483,8 @@ fn help_topic_zero_partition_and_mbr_end_overflow() {
     let wrap = dir.join("wrap.img");
     std::fs::write(&wrap, &data).unwrap();
     let (c, out, err) = run(&["info", wrap.to_str().unwrap()]);
-    // 条目越盘使 identify 短读：JSON 照常输出（可观察），但退出码如实升级为 4
-    assert_eq!(c, 4, "identify failure must be reported honestly: {err}");
+    // 条目越盘使 identify 短读：JSON 照常输出（可观察），退出码如实报为读失败
+    assert_eq!(c, 3, "identify failure must be reported honestly: {err}");
     assert!(err.contains("identify failed"), "{err}");
     let v: serde_json::Value = serde_json::from_str(out.trim()).expect("info must emit valid JSON");
     assert_eq!(v["label"], "mbr", "{out}");
@@ -731,5 +731,5 @@ fn relative_size_only_in_the_size_slot() {
 
     // `--` 之后仍是普通位置参数：这是给以 `-` 开头的路径留的出口
     let (c, e) = run(&["info", "--", "-10"]);
-    assert_eq!(c, 4, "after `--`, `-10` is a target path: {e}");
+    assert_eq!(c, 3, "after `--`, `-10` is a target path: {e}");
 }

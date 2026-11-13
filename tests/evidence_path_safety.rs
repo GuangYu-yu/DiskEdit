@@ -96,9 +96,12 @@ fn record_bytes() -> Vec<u8> {
     p.extend_from_slice(&[0u8; 16]);
     p.push(0); // restore not blocked
     p.extend_from_slice(&0u32.to_le_bytes());
+    p.push(0); // no entry with its table step in flight
+    p.push(0); // no table repair
+    p.push(0); // table fence: pending
 
     let mut out = vec![0u8; HEADER_LEN];
-    out[0..4].copy_from_slice(b"DSK3");
+    out[0..4].copy_from_slice(b"DSK4");
     out[4..8].copy_from_slice(&(p.len() as u32).to_le_bytes());
     out[8..12].copy_from_slice(&crc32(&p).to_le_bytes());
     let header_crc = crc32(&out[0..12]);
@@ -186,7 +189,7 @@ fn a_socket_entry_is_unreadable() {
 
     let (code, out, err) = run(&["inspect", path_text(&spot.join("record"))]);
     drop(listener);
-    assert_eq!(code, 4, "{out}\n{err}");
+    assert_eq!(code, 3, "{out}\n{err}");
     assert!(out.contains("record: unreadable"), "{out}");
     fs::remove_dir_all(&dir).ok();
 }
@@ -215,7 +218,7 @@ fn only_direct_children_of_a_record_directory_are_evidence() {
     fs::write(spot.join("sub/record"), record_bytes()).expect("write nested record");
 
     let (code, out, err) = run(&["inspect", path_text(&spot.join("sub/record"))]);
-    assert_eq!(code, 4, "{out}\n{err}");
+    assert_eq!(code, 3, "{out}\n{err}");
     assert!(!out.contains("backend:"), "a nested path is not an evidence path: {out}");
     assert!(!out.contains("record: recognized"), "{out}");
     fs::remove_dir_all(&dir).ok();
@@ -228,7 +231,7 @@ fn a_record_lock_file_is_probed_as_a_target() {
     fs::write(spot.join("record.lock"), b"").expect("write lock file");
 
     let (code, out, err) = run(&["inspect", path_text(&spot.join("record.lock"))]);
-    assert_eq!(code, 4, "{out}\n{err}");
+    assert_eq!(code, 3, "{out}\n{err}");
     assert!(!out.contains("backend:"), "record.lock is not evidence: {out}");
     assert!(!out.contains("record: recognized"), "{out}");
     fs::remove_dir_all(&dir).ok();

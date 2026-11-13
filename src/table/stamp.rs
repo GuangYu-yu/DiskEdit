@@ -113,17 +113,19 @@ pub(crate) struct TableSnapshot {
 }
 
 impl TableSnapshot {
-    /// 首 LBA、LBA1、容器末 LBA 三段是否全零。快照缺任一段即按"非全零"处理：
-    /// 无法证明这些位置是空的，就不许把它当成空白盘放行。
-    pub(crate) fn head_tail_all_zero(&self, ss: u64, last_lba: u64) -> bool {
-        [0u64, 1, last_lba].iter().all(|&lba| {
-            let offset = lba.saturating_mul(ss);
-            self.regions
-                .iter()
-                .zip(&self.bytes)
-                .find(|(r, _)| r.offset == offset)
-                .is_some_and(|(_, b)| b.iter().all(|&x| x == 0))
-        })
+    /// 写入区间是否全零：`required` 的每一段都必须在快照里读到、且逐字节为零。
+    /// 区间清单来自 `gpt_compare_regions` / `new_mbr_regions`，覆盖步骤实际写到的
+    /// 主条目数组、盘尾备份数组与两端表头。缺段即按"非零"处理：看不见的区间
+    /// 无法证明是空的，不许把它当成空白盘放行。
+    pub(crate) fn write_regions_all_zero(&self, required: &[TableRegion]) -> bool {
+        !required.is_empty()
+            && required.iter().all(|want| {
+                self.regions
+                    .iter()
+                    .position(|have| have.offset == want.offset && have.len == want.len)
+                    .and_then(|i| self.bytes.get(i))
+                    .is_some_and(|b| b.iter().all(|&x| x == 0))
+            })
     }
 }
 
@@ -148,7 +150,7 @@ pub(crate) fn verify_table_stamp(src: &FileSource, expected: TableStamp, ss: u64
 /// 计划期写前快照：按 `regions` 读一次，同时得到写前摘要与各区间原文。取点由调用方定——
 /// 必须在读出表内容之后立刻取，装配层不再读盘。
 pub(crate) fn table_snapshot(src: &FileSource, regions: &[TableRegion]) -> Result<TableSnapshot, RunOutcome> {
-    TableStamp::over_snapshot(src, regions).map_err(RunOutcome::no_mutation_io)
+    TableStamp::over_snapshot(src, regions).map_err(RunOutcome::unreadable_io)
 }
 
 /// 计划期算出的写入字节的摘要：与 [`TableStamp::over`] 同一拼接规则，执行期不重算。
@@ -186,7 +188,7 @@ pub(crate) fn verify_regions_before(src: &FileSource, expected: &[RegionStamp]) 
         let len = usize::try_from(stamp.len())
             .map_err(|_| RunOutcome::refused("a table region is too large to compare on this host"))?;
         let mut now = vec![0u8; len];
-        src.read_at(stamp.offset(), &mut now).map_err(RunOutcome::no_mutation_io)?;
+        src.read_at(stamp.offset(), &mut now).map_err(RunOutcome::unreadable_io)?;
         if !stamp.accepts(&now) {
             return Err(RunOutcome::refused(format!(
                 "the partition table changed on disk after it was read (region at byte {} differs) — re-run the command",
@@ -201,6 +203,49 @@ pub(crate) fn verify_regions_before(src: &FileSource, expected: &[RegionStamp]) 
 /// （见 [`crate::outcome::RunOutcome::settled`]）
 fn stamp_io_failure(e: io::Error) -> RunOutcome {
     RunOutcome::no_mutation(format!("re-reading the table stamp failed: {e}"))
+}
+
+#[cfg(test)]
+mod blank_regions {
+    use super::{TableRegion, TableSnapshot, TableStamp};
+
+    fn snapshot(regions: Vec<TableRegion>, bytes: Vec<Vec<u8>>) -> TableSnapshot {
+        TableSnapshot { stamp: TableStamp([0u8; 32]), regions, bytes }
+    }
+
+    /// 空盘判据按要求的整段清单核对：任一段缺失或非零都不得判成空
+    #[test]
+    fn every_required_region_must_be_present_and_zero() {
+        let zero = snapshot(
+            vec![TableRegion { offset: 0, len: 4 }, TableRegion { offset: 8, len: 4 }],
+            vec![vec![0u8; 4], vec![0u8; 4]],
+        );
+        assert!(zero.write_regions_all_zero(&[
+            TableRegion { offset: 0, len: 4 },
+            TableRegion { offset: 8, len: 4 }
+        ]));
+        assert!(
+            !zero.write_regions_all_zero(&[
+                TableRegion { offset: 0, len: 4 },
+                TableRegion { offset: 8, len: 4 },
+                TableRegion { offset: 16, len: 4 }
+            ]),
+            "a region the snapshot does not cover cannot prove blankness"
+        );
+        assert!(
+            !zero.write_regions_all_zero(&[]),
+            "an empty requirement proves nothing"
+        );
+
+        let occupied = snapshot(
+            vec![TableRegion { offset: 0, len: 4 }],
+            vec![vec![0u8, 0, 1, 0]],
+        );
+        assert!(
+            !occupied.write_regions_all_zero(&[TableRegion { offset: 0, len: 4 }]),
+            "a non-zero byte inside the region is data"
+        );
+    }
 }
 
 #[cfg(test)]

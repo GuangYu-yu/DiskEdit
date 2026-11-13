@@ -135,7 +135,7 @@ pub(crate) const DETAILS: &str = r#"  Resize partition and its filesystem, parti
   shrinks.
 
   Examples:
-    diskedit resize /dev/sdb1 +2G --yes
+    diskedit resize /dev/sdb:1 +2G --yes
     diskedit resize disk.img 10G --allow-move --chunk 4 --yes
 
   SIZE:
@@ -204,7 +204,7 @@ pub(crate) fn cmd_resize(a: &ResizeRequest) -> crate::outcome::RunOutcome {
         // superfloppy：无分区表，FS 即整盘，无表可写——纯 FS grow
         Ok(table::TableLabel::None) => return cmd_resize_superfloppy(a),
         Ok(other) => bail_fail(RunOutcome::refused(format!("resize requires a GPT or MBR target (label: {other})"))),
-        Err(e) => bail_fail(crate::outcome::table_parse_failure(&e, format!("parse failed: {e}"))),
+        Err(e) => bail_fail(RunOutcome::refused(format!("parse failed: {e}"))),
     }
     let Some(pref) = a.part else {
         bail_fail(RunOutcome::refused("`resize` needs :N (the partition to resize)".to_string()));
@@ -219,7 +219,7 @@ pub(crate) fn cmd_resize(a: &ResizeRequest) -> crate::outcome::RunOutcome {
     let (start, end, ss) = (e.starting_lba, e.ending_lba, g.sector_size());
     let cur_bytes = lba_range_bytes(start, end, ss);
     let fstype = fsid::identify(&src, lba_bytes(start, ss), cur_bytes)
-        .unwrap_or_else(|e| bail_fail(RunOutcome::no_mutation(format!("identify failed: {e}"))));
+        .unwrap_or_else(|e| bail_fail(RunOutcome::refused(format!("identify failed: {e}"))));
     let is_pv = fstype == fsid::ContentKind::Lvm2Pv;
 
     // SIZE → 绝对目标字节数 / grow 标记（锁前快照，仅服务参数早失败与在线路径的选择）
@@ -303,7 +303,7 @@ pub(crate) fn cmd_resize(a: &ResizeRequest) -> crate::outcome::RunOutcome {
     // 重新格式化（mkfs 不守本工具的锁），过期的 is_pv 会让 check_pv_intent 对着
     // 已不是 PV 的分区说 PV 的话
     let fstype = fsid::identify(&src, lba_bytes(start, ss), cur_bytes)
-        .unwrap_or_else(|e| bail_fail(RunOutcome::no_mutation(format!("identify failed: {e}"))));
+        .unwrap_or_else(|e| bail_fail(RunOutcome::refused(format!("identify failed: {e}"))));
     let is_pv = fstype == fsid::ContentKind::Lvm2Pv;
     check_pv_intent(part, Some(fstype), is_pv, shrinking, a.grow_lv, a.no_fs).unwrap_or_else(|f| bail_fail(f));
     // 记录型续跑：记录里有提交前区间、且盘上区间已不是它 ⇒ 分区层提交过，当前区间
@@ -425,7 +425,7 @@ pub(crate) fn cmd_resize(a: &ResizeRequest) -> crate::outcome::RunOutcome {
         // 不对"磁盘变大导致 grow 终点变化"敏感——那由 `verify_relocation_resume` 的
         // `disk_size` 与条目位置检查兜住
         let grow_end = movepart::grow_end_for(&plan, start)
-            .unwrap_or_else(|e| bail_fail(RunOutcome::no_mutation(e.to_string())));
+            .unwrap_or_else(|e| bail_fail(RunOutcome::refused(e.to_string())));
         let digest = crate::recovery::PlanDigest::of_request(
             crate::recovery::OpKind::Resize,
             part,

@@ -119,7 +119,7 @@ OUT=$($BF move "$T":1 --start 2000896 --chunk 1 --yes 2>&1); E=$?
 echo "rerun exit=$E : $(echo "$OUT" | head -1)"
 exp "$E" 3 "不可读记录时重跑被拒（不得静默重跑）"
 echo "$OUT" | grep -q "recovery record, unreadable" && echo "$OUT" | grep -q "diskedit abandon" && echo "G UNREADABLE-RECORD REPORT OK" || { echo "G report missing (BAD)"; rc=1; }
-exp "$($B abandon "$T" --discard-replay >/dev/null 2>&1; echo $?)" 0 "abandon 释放不可读现场"
+exp "$($B abandon "$T" --yes --discard-replay >/dev/null 2>&1; echo $?)" 0 "abandon 释放不可读现场"
 OUT=$($BF move "$T":1 --start 104448 --chunk 1 --yes 2>&1); exp "$?" 0 "abandon 后重跑完成"
 record_absent "$T" && echo "  OK   完成后无记录残留" || { echo "  BAD  完成后记录仍在"; rc=1; }
 LD=$(lo_attach "$T")
