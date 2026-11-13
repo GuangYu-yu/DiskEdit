@@ -7,6 +7,12 @@
 //!
 //! 每条恢复区间自带 CRC（覆盖该条的全部字段），载荷尾段被截断时完整的前缀仍可逐条
 //! 验证并回放（见 [`decode_prefix`]）。
+//!
+//! 兼容约定：同一 `MAGIC` 下只有一种布局，尾段可选。**后向可读**——载荷在某个尾段
+//! 之前结束，该段取缺省值（`entry_commits` 为空表、`repair` 为无、`table_fence` 为
+//! `Pending`）。**前向必拒**——已知尾段之后出现无法识别的字节即按 `Format` 拒读，
+//! 不跳过、不当缺省。不做前向兼容是因为记录决定"要不要再写一遍"：看不懂的尾段被跳过，
+//! 等于让旧构建在不知道修复或表步已经落地的状态下重写第二遍。
 
 use crate::dev::DiskGuidState;
 use crate::outcome::RunOutcome;
@@ -17,12 +23,19 @@ use sha2::{Digest, Sha256};
 use super::scene::{Mapping, SceneIdentity, SceneProof};
 
 /// 格式家族的标识字节：此标识下的搬移位移是有符号值，别的标识一律解码失败
-pub(crate) const MAGIC: [u8; 4] = *b"DSK2";
+pub(crate) const MAGIC: [u8; 4] = *b"DSK3";
+/// 旧格式家族的标识：只用于把拒读的原因说成「旧布局」，解码器不认识它
+pub(crate) const LEGACY_MAGIC: [u8; 4] = *b"DSK2";
 /// 头部的固定字节数
 pub(crate) const HEADER_LEN: usize = 16;
 
 const HEADER_CRC_RANGE: std::ops::Range<usize> = 0..12;
 pub(crate) const MAX_RECORD_BYTES: u64 = 16 * 1024 * 1024;
+
+/// 认出旧格式家族的名字，供各入口把拒读原因说清楚；别的值都不是识别过的布局
+pub(crate) fn legacy_layout(magic: [u8; 4]) -> Option<&'static str> {
+    (magic == LEGACY_MAGIC).then_some("DSK2")
+}
 
 fn crc32(bytes: &[u8]) -> u32 {
     crc::Crc::<u32>::new(&crc::CRC_32_ISO_HDLC).checksum(bytes)
@@ -208,7 +221,7 @@ impl OpKind {
 
     /// 重跑原命令能否接着这份记录：只有请求可重放、且重放不会产生第二次效果的操作为真。
     /// `add` / `delete` 的请求依赖当前表（重放会重复添加或删除不存在的条目），
-    /// `copy` 明确不提供续跑（见 `help copy` 的 "No resume"）
+    /// `copy` 不提供续跑
     pub(crate) fn resumable(self) -> bool {
         match self {
             Self::Add | Self::Delete | Self::Copy => false,
@@ -262,6 +275,139 @@ impl RelocKind {
     }
 }
 
+/// 一条搬移条目的表步提交标记。记录里第一次出现"表已开始写、游标未推进"这个事实：
+/// 表步之前先落 `InFlight`，条目完成时与游标推进同一笔落 `Committed`
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum EntryCommit {
+    /// 表步尚未开始
+    Pending,
+    /// 表步已开始，结果尚未记入记录
+    InFlight,
+    /// 条目完成，表已写入
+    Committed,
+}
+
+impl EntryCommit {
+    pub(crate) fn tag(self) -> u8 {
+        match self {
+            Self::Pending => 0,
+            Self::InFlight => 1,
+            Self::Committed => 2,
+        }
+    }
+
+    fn from_tag(tag: u8) -> Option<Self> {
+        match tag {
+            0 => Some(Self::Pending),
+            1 => Some(Self::InFlight),
+            2 => Some(Self::Committed),
+            _ => None,
+        }
+    }
+}
+
+/// 表区修复的种类。码值固定：`RelocateBackup`=0、`RepairProtectiveMbr`=1、
+/// `RelocateAndRepair`=2
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RepairKind {
+    /// 只把备份头搬到容器末端
+    RelocateBackup,
+    /// 只重建保护 MBR 的 SizeInLBA
+    RepairProtectiveMbr,
+    /// 两者一起
+    RelocateAndRepair,
+}
+
+impl RepairKind {
+    fn tag(self) -> u8 {
+        match self {
+            Self::RelocateBackup => 0,
+            Self::RepairProtectiveMbr => 1,
+            Self::RelocateAndRepair => 2,
+        }
+    }
+
+    fn from_tag(tag: u8) -> Option<Self> {
+        match tag {
+            0 => Some(Self::RelocateBackup),
+            1 => Some(Self::RepairProtectiveMbr),
+            2 => Some(Self::RelocateAndRepair),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::RelocateBackup => "relocate the backup GPT",
+            Self::RepairProtectiveMbr => "rewrite the protective MBR",
+            Self::RelocateAndRepair => "relocate the backup GPT and rewrite the protective MBR",
+        }
+    }
+}
+
+/// 修复动作在记录里的状态：`InFlight` = 已开始、结果未记入；`Landed` = 收敛并已记入
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RepairState {
+    InFlight,
+    Landed,
+}
+
+impl RepairState {
+    fn tag(self) -> u8 {
+        match self {
+            Self::InFlight => 0,
+            Self::Landed => 1,
+        }
+    }
+
+    fn from_tag(tag: u8) -> Option<Self> {
+        match tag {
+            0 => Some(Self::InFlight),
+            1 => Some(Self::Landed),
+            _ => None,
+        }
+    }
+}
+
+/// 记录下来的表区修复：种类、搬移后的备份头位置与重建后的末端，以及它走到哪一步。
+/// 只重建保护 MBR 的动作没有 LBA 值，两处写零
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct RepairFact {
+    pub(crate) kind: RepairKind,
+    pub(crate) new_backup_lba: u64,
+    pub(crate) new_last_usable: u64,
+    pub(crate) state: RepairState,
+}
+
+/// 表步围栏：没有搬移计划的记录（表类命令）用它表达"表可能已写"。
+/// `Pending` = 表步未开始，`InFlight` = 已开始、结果未记入，`Landed` = 已写并记入
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum TableFence {
+    #[default]
+    Pending,
+    InFlight,
+    Landed,
+}
+
+impl TableFence {
+    fn tag(self) -> u8 {
+        match self {
+            Self::Pending => 0,
+            Self::InFlight => 1,
+            Self::Landed => 2,
+        }
+    }
+
+    fn from_tag(tag: u8) -> Option<Self> {
+        match tag {
+            0 => Some(Self::Pending),
+            1 => Some(Self::InFlight),
+            2 => Some(Self::Landed),
+            _ => None,
+        }
+    }
+}
+
 /// 一条搬移：分区号、源起点、长度、无符号位移、是否 swap。
 ///
 /// 数组顺序即执行顺序，**必须原样持久化**：尾部打包与最小位移都按"末→头"处理，
@@ -297,44 +443,6 @@ pub(crate) struct Relocation {
     /// 创建时的容器字节数与扇区大小：续跑换了目标尺寸/几何即拒绝
     pub(crate) disk_size: u64,
     pub(crate) ss: u64,
-}
-
-/// 某阶段校验结果的种类
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum StageKind {
-    TableReadBack,
-    ToolExit,
-    KernelResync,
-    TransferCursor,
-}
-
-impl StageKind {
-    fn tag(self) -> u8 {
-        match self {
-            Self::TableReadBack => 1,
-            Self::ToolExit => 2,
-            Self::KernelResync => 3,
-            Self::TransferCursor => 4,
-        }
-    }
-
-    fn from_tag(tag: u8) -> Option<Self> {
-        match tag {
-            1 => Some(Self::TableReadBack),
-            2 => Some(Self::ToolExit),
-            3 => Some(Self::KernelResync),
-            4 => Some(Self::TransferCursor),
-            _ => None,
-        }
-    }
-}
-
-/// 某阶段的校验事实
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct StageFact {
-    pub(crate) kind: StageKind,
-    pub(crate) ok: bool,
-    pub(crate) detail: String,
 }
 
 /// 恢复动作
@@ -518,8 +626,9 @@ pub(crate) enum Stage {
     Planned,
     /// 数据搬移进行中：当前条目与全局块游标
     Relocating { entry: u32, cursor: u64 },
-    /// 当前条目的块已全部搬完、条目游标尚未推进。两个面都据实给出该答案；
-    /// 决策面把它与 [`Self::Undecidable`] 同等处理——记录字段里没有「表已提交」，不能据此继续
+    /// 当前条目的块已全部搬完、条目游标尚未推进，且表步尚未开始。决策面把它与
+    /// [`Self::Undecidable`] 同等处理；表步已开始（`InFlight`）时直接返回
+    /// [`Self::Undecidable`]，盘面可能已经改过
     Relocated,
     /// 表已提交，作业的后续步骤未完成
     TableWritten,
@@ -572,7 +681,15 @@ pub(crate) struct Record {
     /// 搬移作业的可恢复状态。只有 [`OpKind::Resize`] / [`OpKind::ResizePart`] /
     /// [`OpKind::Move`] 可能非 `None`；没有搬移步的记录保持为空
     pub(crate) relocation: Option<Relocation>,
-    pub(crate) stages: Vec<StageFact>,
+    /// 逐条目的表步提交标记，与 `relocation.entries` 一一对应；没有搬移计划时为空
+    pub(crate) entry_commits: Vec<EntryCommit>,
+    /// 本作业执行过的表区修复；没有修复动作时为空
+    pub(crate) repair: Option<RepairFact>,
+    /// 表步围栏：没有搬移计划的记录用它表达表步走到哪一步
+    pub(crate) table_fence: TableFence,
+    /// 盘上 `stages[]` 段的原始字节（含两字节条数）。解码只校验定长头与取值，
+    /// 不解释语义；重写时逐字节回写，条数不属于本类型的字段
+    pub(crate) stages: Vec<u8>,
     pub(crate) action: RecoveryAction,
     pub(crate) commit: CommitState,
     pub(crate) retention: Retention,
@@ -608,7 +725,10 @@ impl Record {
             old_range: None,
             lvm_post: None,
             relocation: None,
-            stages: Vec::new(),
+            entry_commits: Vec::new(),
+            repair: None,
+            table_fence: TableFence::Pending,
+            stages: vec![0, 0],
             action: RecoveryAction::InspectOnly,
             commit: CommitState::Prepared,
             retention: Retention::Active,
@@ -619,8 +739,7 @@ impl Record {
         }
     }
 
-    /// 记录是否越过提交点。完成与否只由 `commit` 回答：`derive_stage` 的
-    /// `Complete`、`records` 的 `valid`/`unfinished`、`inspect` 的 0/5 都从这里派生。
+    /// 记录是否越过提交点。完成与否只由 `commit` 回答；
     /// 穷尽匹配留在这里，新增 `CommitState` 变体时由编译器指出未处理的分支
     pub(crate) fn committed(&self) -> bool {
         match self.commit {
@@ -671,11 +790,22 @@ impl Record {
         let dirty = self.dirty();
         let clean = progress.completed_steps == 0 && progress.transfer_cursor == 0 && !dirty;
         let Some(reloc) = self.relocation.as_ref() else {
+            // 表步围栏先于 op 规则：没有搬移计划的记录靠它说明表步走到哪
+            match self.table_fence {
+                TableFence::InFlight => return Ok(Stage::Undecidable),
+                TableFence::Landed => return Ok(Stage::TableWritten),
+                TableFence::Pending => {}
+            }
             // 落盘窗口按 op 分家：move 先落旧区间再落搬移表，resize-part 的纯扩缩路径
-            // 不落 relocation；resize 的首次落盘必然带 relocation，停在空表即不可判定
+            // 不落 relocation，resize 的 MBR 表项路径同样只落旧区间。进度全零且没有
+            // 写事实时，记录自身就证明还没动手
             return Ok(match self.op {
-                OpKind::Move | OpKind::ResizePart if clean => Stage::Planned,
+                OpKind::Resize if clean => Stage::Planned,
+                OpKind::Resize => Stage::Undecidable,
                 OpKind::ResizePart if progress.completed_steps == 2 => Stage::Finishing,
+                // 不含搬移步的操作派生不出搬移进度：进度全零且没有写事实时，
+                // 记录自身就证明还没动手
+                _ if clean => Stage::Planned,
                 _ => Stage::Undecidable,
             });
         };
@@ -696,6 +826,10 @@ impl Record {
                     "the recovery record records {} of {chunks} chunks for relocation entry {} — it contradicts itself",
                     reloc.chunks_in_entry, reloc.entry_index
                 )));
+            }
+            // 表步已开始、结果未记入记录：盘面可能已经改过，记录给不出确定答案
+            if self.entry_commits.get(reloc.entry_index as usize) == Some(&EntryCommit::InFlight) {
+                return Ok(Stage::Undecidable);
             }
             if reloc.chunks_in_entry > 0 && reloc.chunks_in_entry < chunks {
                 return Ok(Stage::Relocating { entry: reloc.entry_index, cursor: progress.transfer_cursor });
@@ -807,14 +941,8 @@ impl Record {
         self.action.write(&mut out);
         out.push(self.commit.tag());
         out.push(self.retention.tag());
-        out.extend((u16::try_from(self.stages.len()).expect("stage count fits in 16 bits")).to_le_bytes());
-        for stage in &self.stages {
-            out.push(stage.kind.tag());
-            out.push(u8::from(stage.ok));
-            let detail = stage.detail.as_bytes();
-            out.extend((u32::try_from(detail.len()).expect("stage detail fits in 32 bits")).to_le_bytes());
-            out.extend_from_slice(detail);
-        }
+        // `stages` 段原字节回写：条数、各条定长头与正文都不重新生成
+        out.extend_from_slice(&self.stages);
         write_scene(&self.target, &mut out);
         out.extend(self.disk_guid.encode());
         out.push(u8::from(self.restore_blocked));
@@ -825,7 +953,7 @@ impl Record {
         for entry in &self.restore {
             write_entry(entry, &mut out);
         }
-        // 源区间段在载荷最末，段的存在由操作类型决定：`copy` 必带，其余操作没有
+        // 源区间段的存在由操作类型决定：`copy` 必带，其余操作没有
         if self.op == OpKind::Copy {
             let s = self.source.ok_or_else(|| {
                 std::io::Error::other("a `copy` record carries its source range")
@@ -836,6 +964,27 @@ impl Record {
             out.extend(s.sector_size.to_le_bytes());
             out.extend_from_slice(&s.digest);
         }
+        // 尾段：逐条目的表步提交标记。没有搬移计划时是零条，空段也照常写出
+        out.extend(
+            (u32::try_from(self.entry_commits.len()).expect("entry commit count fits in 32 bits"))
+                .to_le_bytes(),
+        );
+        for state in &self.entry_commits {
+            out.push(state.tag());
+        }
+        // 尾段：表区修复。无动作写一个零 tag，动作的取值按固定宽度写出
+        match self.repair {
+            None => out.push(0),
+            Some(fact) => {
+                out.push(1);
+                out.push(fact.kind.tag());
+                out.extend(fact.new_backup_lba.to_le_bytes());
+                out.extend(fact.new_last_usable.to_le_bytes());
+                out.push(fact.state.tag());
+            }
+        }
+        // 尾段：表步围栏，固定一字节
+        out.push(self.table_fence.tag());
         Ok(out)
     }
 }
@@ -905,15 +1054,92 @@ fn decode_payload(bytes: &[u8]) -> Option<Record> {
         restore.push(entry);
     }
     record.restore = restore;
-    // 源区间段只属于 `copy`，且是它必带的末段。段按 `op` 直接解析：`copy` 缺段与
+    // 源区间段只属于 `copy`，且是它必带的段。段按 `op` 直接解析：`copy` 缺段与
     // 其余操作多出字节都说明载荷与操作类型不符
     if record.op == OpKind::Copy {
         record.source = Some(read_source(&mut c)?);
     }
+    // 尾段一律可缺省：载荷在这里结束即取默认值。出现字节就必须是完整的段，
+    // 段后的剩余字节必须是空，多出任何无法识别的内容都拒读
+    record.entry_commits = read_entry_commits(&mut c, &record)?;
+    record.repair = read_repair(&mut c)?;
+    record.table_fence = read_table_fence(&mut c, &record)?;
     if !c.is_empty() {
         return None;
     }
     Some(record)
+}
+
+/// 尾段：表区修复。`None` = 段不完整或 tag 不认识；载荷在段首结束返回"无修复"
+fn read_repair(c: &mut Cursor<'_>) -> Option<Option<RepairFact>> {
+    if c.is_empty() {
+        return Some(None);
+    }
+    match c.u8()? {
+        0 => Some(None),
+        1 => Some(Some(RepairFact {
+            kind: RepairKind::from_tag(c.u8()?)?,
+            new_backup_lba: c.u64()?,
+            new_last_usable: c.u64()?,
+            state: RepairState::from_tag(c.u8()?)?,
+        })),
+        _ => None,
+    }
+}
+
+/// 尾段：表步围栏。载荷在段首结束取 `Pending`；出现字节必须是已知取值。
+/// 有搬移计划的记录由逐条目事实承载表步，围栏必须停在 `Pending`；
+/// 表步确认必然伴随步数前进，`Landed` 与零步数不能同时成立
+fn read_table_fence(c: &mut Cursor<'_>, record: &Record) -> Option<TableFence> {
+    let fence = if c.is_empty() {
+        TableFence::Pending
+    } else {
+        TableFence::from_tag(c.u8()?)?
+    };
+    if record.relocation.is_some() && fence != TableFence::Pending {
+        return None;
+    }
+    if fence == TableFence::Landed && record.progress.completed_steps == 0 {
+        return None;
+    }
+    Some(fence)
+}
+
+/// 尾段：逐条目的表步提交标记。`None` = 段不完整、取值不认识或与搬移进度矛盾。
+/// 载荷在段首结束返回空表（缺省），此时不做与进度的一致性校验
+fn read_entry_commits(c: &mut Cursor<'_>, record: &Record) -> Option<Vec<EntryCommit>> {
+    if c.is_empty() {
+        return Some(Vec::new());
+    }
+    let count = c.u32()? as usize;
+    let mut commits = Vec::with_capacity(count.min(1024));
+    for _ in 0..count {
+        commits.push(EntryCommit::from_tag(c.u8()?)?);
+    }
+    // 零条与缺段同义：没有逐条目事实可读，此时不与搬移进度做一致性校验
+    if count == 0 {
+        return Some(commits);
+    }
+    // 有逐条目事实就必须有对应的搬移计划，条数必须与计划一致
+    let reloc = record.relocation.as_ref()?;
+    if count != reloc.entries.len() {
+        return None;
+    }
+    let cursor = reloc.entry_index as usize;
+    if cursor > count {
+        return None;
+    }
+    for (i, state) in commits.iter().enumerate() {
+        let consistent = match state {
+            EntryCommit::Committed => i < cursor,
+            EntryCommit::InFlight => i == cursor,
+            EntryCommit::Pending => i >= cursor,
+        };
+        if !consistent {
+            return None;
+        }
+    }
+    Some(commits)
 }
 
 /// `copy` 载荷末段的源区间：字段固定，没有标签字节。`None` = 段不完整或形状不成立
@@ -982,19 +1208,24 @@ fn read_payload_prefix(c: &mut Cursor<'_>) -> Option<(Record, usize)> {
     };
     let commit = CommitState::from_tag(c.u8()?)?;
     let retention = Retention::from_tag(c.u8()?)?;
+    // `stages` 段：条数之后逐条是 1 字节 tag、1 字节 ok、4 字节正文长度与正文。
+    // 只校验结构（tag 属于已知集合、ok 为 0/1、正文是 UTF-8、长度不越界），
+    // 不做语义映射；整段原始字节留给重写回放
+    let stages_start = c.pos;
     let stage_count = c.u16()? as usize;
-    let mut stages = Vec::with_capacity(stage_count.min(1024));
     for _ in 0..stage_count {
-        let kind = StageKind::from_tag(c.u8()?)?;
-        let ok = match c.u8()? {
-            0 => false,
-            1 => true,
+        match c.u8()? {
+            1..=4 => {}
             _ => return None,
-        };
+        }
+        match c.u8()? {
+            0 | 1 => {}
+            _ => return None,
+        }
         let len = c.u32()? as usize;
-        let detail = String::from_utf8(c.take(len)?.to_vec()).ok()?;
-        stages.push(StageFact { kind, ok, detail });
+        std::str::from_utf8(c.take(len)?).ok()?;
     }
+    let stages = c.bytes_between(stages_start, c.pos).to_vec();
     let target = read_scene(c)?;
     let disk_guid = DiskGuidState::decode(c.take(crate::dev::CREDENTIAL_LEN)?).ok()?;
     let restore_blocked = match c.u8()? {
@@ -1015,6 +1246,9 @@ fn read_payload_prefix(c: &mut Cursor<'_>) -> Option<(Record, usize)> {
         old_range,
         lvm_post,
         relocation,
+        entry_commits: Vec::new(),
+        repair: None,
+        table_fence: TableFence::Pending,
         stages,
         action,
         commit,
@@ -1323,7 +1557,7 @@ mod digest_golden {
     use super::{OpKind, PlanDigest};
 
     /// 请求摘要向量：操作码、数值与带长度前缀的字节串的编码一旦变化，这里先红。
-    /// 向量按当前码值表计算（New = 1，Resize = 10）；码值或编码变更时重新生成。
+    /// 码值或编码变更时重新生成。
     fn hex(s: &str) -> [u8; 32] {
         let mut out = [0u8; 32];
         for (i, pair) in s.as_bytes().chunks(2).enumerate() {
@@ -1436,5 +1670,415 @@ mod relocation_round_trip {
         let mut decoded = decode(&bytes).unwrap();
         assert_eq!(decoded.op, OpKind::ResizePart);
         assert_eq!(decoded.encode().unwrap(), bytes);
+    }
+}
+
+/// `stages` 段：解码保留原始字节，重写时逐字节回写；非法 tag / ok / UTF-8 仍被拒
+#[cfg(test)]
+mod stages_segment {
+    use super::*;
+
+    /// `stages` 段在载荷内的起点：条数之前的定长字段
+    /// （tx_id、plan_id、版本、操作、摘要、进度、三个可选段标记、动作、提交、保留）
+    const STAGES_AT: usize = 100;
+
+    fn image_target() -> SceneIdentity {
+        SceneIdentity::from_target(
+            TargetId::from_material(IdentityMaterial::image(None, Some([3; 16])).unwrap()),
+        )
+    }
+
+    fn fresh() -> Vec<u8> {
+        let mut record = Record::new(
+            TxId::from_bytes([1; 16]),
+            image_target(),
+            PlanId::from_bytes([2; 16]),
+            PlanVersion::new(1),
+            OpKind::ResizePart,
+            PlanDigest::from_bytes([4; 32]),
+            DiskGuidState::Unavailable,
+        );
+        record.encode().unwrap()
+    }
+
+    fn stages(entries: &[(u8, u8, &[u8])]) -> Vec<u8> {
+        let mut out = u16::try_from(entries.len()).unwrap().to_le_bytes().to_vec();
+        for (tag, ok, detail) in entries {
+            out.push(*tag);
+            out.push(*ok);
+            out.extend(u32::try_from(detail.len()).unwrap().to_le_bytes());
+            out.extend_from_slice(detail);
+        }
+        out
+    }
+
+    /// 把构造好的段替进一份新记录，并重算载荷长度、载荷 CRC 与头 CRC
+    fn with_stages(segment: &[u8]) -> Vec<u8> {
+        let bytes = fresh();
+        let mut payload = bytes[HEADER_LEN..].to_vec();
+        payload.splice(STAGES_AT..STAGES_AT + 2, segment.iter().copied());
+        let mut out = bytes[..HEADER_LEN].to_vec();
+        out[4..8].copy_from_slice(&u32::try_from(payload.len()).unwrap().to_le_bytes());
+        out[8..12].copy_from_slice(&crc32(&payload).to_le_bytes());
+        let header_crc = crc32(&out[HEADER_CRC_RANGE]);
+        out[12..16].copy_from_slice(&header_crc.to_le_bytes());
+        out.extend_from_slice(&payload);
+        out
+    }
+
+    #[test]
+    fn a_non_empty_stages_segment_is_written_back_byte_for_byte() {
+        let segment = stages(&[(1, 1, b"ok"), (4, 0, b"cursor short")]);
+        let bytes = with_stages(&segment);
+        let mut decoded = decode(&bytes).expect("a non-empty stages segment still decodes");
+        let reencoded = decoded.encode().unwrap();
+        assert_eq!(reencoded, bytes);
+        let at = HEADER_LEN + STAGES_AT;
+        assert_eq!(&reencoded[at..at + segment.len()], segment.as_slice());
+    }
+
+    #[test]
+    fn unknown_tag_bad_ok_and_non_utf8_detail_are_rejected() {
+        for (label, segment) in [
+            ("unknown tag", stages(&[(5, 1, b"x")])),
+            ("zero tag", stages(&[(0, 1, b"x")])),
+            ("ok is not a bit", stages(&[(1, 2, b"x")])),
+            ("detail is not utf-8", stages(&[(1, 1, &[0x80])])),
+        ] {
+            assert!(decode(&with_stages(&segment)).is_err(), "{label} must be rejected");
+        }
+    }
+
+    #[test]
+    fn a_zero_count_segment_keeps_the_scene_at_its_offset() {
+        let bytes = fresh();
+        let payload = &bytes[HEADER_LEN..];
+        let mut scene = Vec::new();
+        write_scene(&image_target(), &mut scene);
+        assert_eq!(&payload[STAGES_AT..STAGES_AT + 2], &0u16.to_le_bytes());
+        let scene_at = STAGES_AT + 2;
+        assert_eq!(&payload[scene_at..scene_at + scene.len()], scene.as_slice());
+    }
+}
+
+/// 尾段：逐条目的表步提交标记。段可缺省，出现即整段校验，段后不得有多余字节
+#[cfg(test)]
+mod entry_commit_ledger {
+    use super::*;
+
+    fn image_target() -> SceneIdentity {
+        SceneIdentity::from_target(
+            TargetId::from_material(IdentityMaterial::image(None, Some([3; 16])).unwrap()),
+        )
+    }
+
+    /// 一条搬移计划上的记录：`entries` 条目的计划，游标停在 `cursor`
+    fn moving_record(entries: u32, cursor: u32) -> Record {
+        let mut record = Record::new(
+            TxId::from_bytes([1; 16]),
+            image_target(),
+            PlanId::from_bytes([2; 16]),
+            PlanVersion::new(1),
+            OpKind::Move,
+            PlanDigest::from_bytes([4; 32]),
+            DiskGuidState::Unavailable,
+        );
+        record.old_range = Some((2048, 4096));
+        record.relocation = Some(Relocation {
+            entries: (0..entries)
+                .map(|i| RelocEntry {
+                    partition: i + 1,
+                    src_first: 2048,
+                    len: 2048,
+                    delta: 512,
+                    is_swap: false,
+                })
+                .collect(),
+            entry_index: cursor,
+            chunks_in_entry: 0,
+            chunk_bytes: 96,
+            kind: RelocKind::Shift,
+            grow_part: 0,
+            disk_size: 16 * 1024 * 1024,
+            ss: 512,
+        });
+        record
+    }
+
+    /// 没有搬移计划的一条表步记录（`delete`）：表步围栏是它唯一的表步事实
+    fn table_only_record() -> Record {
+        Record::new(
+            TxId::from_bytes([7; 16]),
+            image_target(),
+            PlanId::from_bytes([8; 16]),
+            PlanVersion::new(1),
+            OpKind::Delete,
+            PlanDigest::from_bytes([9; 32]),
+            DiskGuidState::Unavailable,
+        )
+    }
+
+    /// 改完字节后重算载荷长度、载荷 CRC 与头 CRC
+    fn rehash(bytes: &mut [u8]) {
+        let payload_len = u32::try_from(bytes.len() - HEADER_LEN).unwrap();
+        bytes[4..8].copy_from_slice(&payload_len.to_le_bytes());
+        let payload_crc = crc32(&bytes[HEADER_LEN..]);
+        bytes[8..12].copy_from_slice(&payload_crc.to_le_bytes());
+        let header_crc = crc32(&bytes[HEADER_CRC_RANGE]);
+        bytes[12..16].copy_from_slice(&header_crc.to_le_bytes());
+    }
+
+    #[test]
+    fn the_ledger_round_trips() {
+        let mut record = moving_record(2, 1);
+        record.entry_commits = vec![EntryCommit::Committed, EntryCommit::InFlight];
+        record.repair = Some(RepairFact {
+            kind: RepairKind::RelocateAndRepair,
+            new_backup_lba: 97_728,
+            new_last_usable: 97_727,
+            state: RepairState::Landed,
+        });
+        record.table_fence = TableFence::Pending;
+        let bytes = record.encode().unwrap();
+
+        let mut decoded = decode(&bytes).expect("the tail segments are part of the current layout");
+        assert_eq!(
+            decoded.entry_commits,
+            vec![EntryCommit::Committed, EntryCommit::InFlight]
+        );
+        assert_eq!(decoded.repair, record.repair);
+        assert_eq!(decoded.encode().unwrap(), bytes);
+    }
+
+    /// 没有搬移计划的记录：围栏 `Landed` 整份回读，阶段随之落到表步已写
+    #[test]
+    fn a_fence_lands_on_a_record_without_a_relocation_plan() {
+        let mut record = table_only_record();
+        record.table_fence = TableFence::Landed;
+        record.progress.completed_steps = 1;
+        let bytes = record.encode().unwrap();
+
+        let decoded = decode(&bytes).expect("a fence is part of the current layout");
+        assert_eq!(decoded.table_fence, TableFence::Landed);
+        assert_eq!(decoded.derive_stage().unwrap(), Stage::TableWritten);
+    }
+
+    /// 围栏 `Landed` 而步数还是零：表步已确认与进度未前进互相矛盾，整份拒读
+    #[test]
+    fn a_landed_fence_without_a_completed_step_is_refused() {
+        let mut record = table_only_record();
+        record.table_fence = TableFence::Landed;
+        record.progress.completed_steps = 0;
+        let bytes = record.encode().unwrap();
+
+        assert!(matches!(decode(&bytes), Err(DecodeFailure::Format { .. })));
+    }
+
+    /// 有搬移计划的记录不接受已落定的围栏：表步由逐条目事实承载
+    #[test]
+    fn a_moved_fence_on_a_relocation_record_is_refused() {
+        let mut record = moving_record(1, 0);
+        record.table_fence = TableFence::Landed;
+        let bytes = record.encode().unwrap();
+
+        assert!(matches!(decode(&bytes), Err(DecodeFailure::Format { .. })));
+    }
+
+    /// 围栏已开始而表步结果未记入：盘面可能已经改过，阶段给不出确定答案
+    #[test]
+    fn an_in_flight_fence_makes_the_stage_undecidable() {
+        let mut record = table_only_record();
+        record.table_fence = TableFence::InFlight;
+        assert_eq!(record.derive_stage().unwrap(), Stage::Undecidable);
+
+        record.table_fence = TableFence::Pending;
+        assert_eq!(record.derive_stage().unwrap(), Stage::Planned);
+    }
+
+    /// 旧格式的记录被拒读：同样的载荷只换头部的格式标识即被拒读，前缀回放也不接手
+    #[test]
+    fn the_previous_layout_is_refused_by_magic() {
+        let mut record = moving_record(1, 0);
+        record.entry_commits = vec![EntryCommit::Pending];
+        let mut bytes = record.encode().unwrap();
+        bytes[0..4].copy_from_slice(&LEGACY_MAGIC);
+        rehash(&mut bytes);
+
+        assert_eq!(
+            decode(&bytes),
+            Err(DecodeFailure::Format { magic: LEGACY_MAGIC, recorded: None })
+        );
+        assert!(decode_prefix(&bytes).is_none());
+        assert_eq!(legacy_layout(LEGACY_MAGIC), Some("DSK2"));
+        assert_eq!(legacy_layout(MAGIC), None);
+    }
+
+    #[test]
+    fn an_unknown_state_tag_is_refused() {
+        let mut record = moving_record(2, 1);
+        record.entry_commits = vec![EntryCommit::Committed, EntryCommit::InFlight];
+        let mut bytes = record.encode().unwrap();
+        // 尾部是"无修复"tag 与围栏各一字节，逐条目段的末字节在它们之前
+        let last_state = bytes.len() - 3;
+        bytes[last_state] = 3;
+        rehash(&mut bytes);
+
+        assert!(matches!(decode(&bytes), Err(DecodeFailure::Format { .. })));
+    }
+
+    #[test]
+    fn an_unknown_repair_tag_is_refused() {
+        let mut record = moving_record(1, 0);
+        record.entry_commits = vec![EntryCommit::Pending];
+        record.repair = Some(RepairFact {
+            kind: RepairKind::RelocateBackup,
+            new_backup_lba: 97_728,
+            new_last_usable: 97_727,
+            state: RepairState::InFlight,
+        });
+        let mut bytes = record.encode().unwrap();
+        // 修复段占 tag + kind + 两个 u64 + state 共 19 字节，其 tag 在围栏之前
+        const REPAIR_WIDTH: usize = 19;
+        let repair_tag = bytes.len() - 1 - REPAIR_WIDTH;
+        bytes[repair_tag] = 2;
+        rehash(&mut bytes);
+
+        assert!(matches!(decode(&bytes), Err(DecodeFailure::Format { .. })));
+    }
+
+    #[test]
+    fn an_unknown_fence_tag_is_refused() {
+        let mut bytes = moving_record(1, 0).encode().unwrap();
+        let last = bytes.len() - 1;
+        bytes[last] = 3;
+        rehash(&mut bytes);
+
+        assert!(matches!(decode(&bytes), Err(DecodeFailure::Format { .. })));
+    }
+
+    /// 有搬移计划而逐条目事实写成零条：解码按缺省接纳，阶段退回进度判据
+    #[test]
+    fn a_zero_count_ledger_on_a_relocation_record_falls_back_to_progress() {
+        let mut record = moving_record(2, 1);
+        let bytes = record.encode().unwrap();
+
+        let decoded = decode(&bytes).expect("a zero-count ledger takes its default");
+        assert!(decoded.entry_commits.is_empty());
+        assert_eq!(
+            decoded.derive_stage().unwrap(),
+            Stage::Relocating { entry: 1, cursor: 0 }
+        );
+    }
+
+    /// 逐条目事实必须与游标一致，条数必须与计划一致
+    #[test]
+    fn a_ledger_that_contradicts_the_cursor_is_refused() {
+        for (label, entries, cursor, commits) in [
+            (
+                "a committed entry at the cursor",
+                2,
+                1,
+                vec![EntryCommit::Pending, EntryCommit::Committed],
+            ),
+            (
+                "a pending entry before the cursor",
+                2,
+                1,
+                vec![EntryCommit::Pending, EntryCommit::Pending],
+            ),
+            (
+                "an in-flight entry before the cursor",
+                3,
+                2,
+                vec![EntryCommit::Pending, EntryCommit::InFlight, EntryCommit::Pending],
+            ),
+            ("fewer states than entries", 2, 1, vec![EntryCommit::Committed]),
+            (
+                "more states than entries",
+                2,
+                1,
+                vec![EntryCommit::Pending, EntryCommit::Pending, EntryCommit::Pending],
+            ),
+        ] {
+            let mut record = moving_record(entries, cursor);
+            record.entry_commits = commits;
+            let bytes = record.encode().unwrap();
+            assert!(matches!(decode(&bytes), Err(DecodeFailure::Format { .. })), "{label}");
+        }
+    }
+
+    #[test]
+    fn an_in_flight_entry_makes_the_stage_undecidable() {
+        let mut record = moving_record(1, 0);
+        record.entry_commits = vec![EntryCommit::InFlight];
+        assert_eq!(record.derive_stage().unwrap(), Stage::Undecidable);
+
+        // 同一条记录去掉标记就是一个干净的起点
+        let mut plain = moving_record(1, 0);
+        plain.entry_commits = vec![EntryCommit::Pending];
+        assert_eq!(plain.derive_stage().unwrap(), Stage::Planned);
+    }
+
+    /// 载荷在段首结束即取缺省：没有逐条目事实，搬移进度照常保留
+    #[test]
+    fn a_payload_ending_before_the_ledger_decodes_with_no_entry_facts() {
+        let mut record = moving_record(2, 1);
+        record.entry_commits = vec![EntryCommit::Committed, EntryCommit::InFlight];
+        let mut bytes = record.encode().unwrap();
+        // 逐条目段（4 字节条数 + 2 字节状态）之后还有"无修复"tag 与围栏各一字节
+        bytes.truncate(bytes.len() - (4 + 2 + 2));
+        rehash(&mut bytes);
+
+        let decoded = decode(&bytes).expect("a payload ending before the ledger takes its defaults");
+        assert!(decoded.entry_commits.is_empty());
+        assert_eq!(decoded.relocation.as_ref().unwrap().entry_index, 1);
+        assert_eq!(decoded.repair, None);
+        assert_eq!(decoded.table_fence, TableFence::Pending);
+    }
+
+    /// 缺修复段：取"没有修复动作"，其余照常
+    #[test]
+    fn a_payload_ending_before_the_repair_segment_decodes_with_no_repair() {
+        let mut record = moving_record(1, 0);
+        record.entry_commits = vec![EntryCommit::Pending];
+        let mut bytes = record.encode().unwrap();
+        // 只去掉"无修复"tag 与围栏
+        bytes.truncate(bytes.len() - 2);
+        rehash(&mut bytes);
+
+        let decoded = decode(&bytes).expect("a payload ending before the repair segment takes its defaults");
+        assert_eq!(decoded.repair, None);
+        assert_eq!(decoded.table_fence, TableFence::Pending);
+        assert_eq!(decoded.entry_commits, vec![EntryCommit::Pending]);
+    }
+
+    /// 缺围栏段：取 `Pending`，已有的修复事实照常保留
+    #[test]
+    fn a_payload_ending_before_the_fence_segment_decodes_with_a_pending_fence() {
+        let mut record = moving_record(1, 0);
+        record.entry_commits = vec![EntryCommit::Pending];
+        record.repair = Some(RepairFact {
+            kind: RepairKind::RepairProtectiveMbr,
+            new_backup_lba: 0,
+            new_last_usable: 0,
+            state: RepairState::Landed,
+        });
+        let mut bytes = record.encode().unwrap();
+        bytes.truncate(bytes.len() - 1);
+        rehash(&mut bytes);
+
+        let decoded = decode(&bytes).expect("a payload ending before the fence takes its default");
+        assert_eq!(decoded.table_fence, TableFence::Pending);
+        assert_eq!(decoded.repair, record.repair);
+    }
+
+    /// 缺段不算错，段后的未知字节才算错
+    #[test]
+    fn trailing_bytes_after_the_known_tail_are_refused() {
+        let mut bytes = moving_record(1, 0).encode().unwrap();
+        bytes.push(0);
+        rehash(&mut bytes);
+
+        assert!(matches!(decode(&bytes), Err(DecodeFailure::Format { .. })));
     }
 }

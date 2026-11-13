@@ -5,8 +5,7 @@ use crate::dev::FileSource;
 use crate::fsid::{self, ContentKind, FsKind};
 
 /// e2fsck 2/3/4 归 `CommandFailed`：三者都说明工具运行过——"确定未写盘"
-/// 的 NoMutation 承诺不成立。exit 2 的人工复现（e2fsck -fp 改过 root fs）无需真实环境：
-/// 判定是纯函数，逐码断言变体即可
+/// 的 NoMutation 承诺不成立。判定是纯函数，逐码断言变体即可
 #[test]
 pub(crate) fn e2fsck_exit_codes_do_not_claim_no_write() {
     assert!(check_e2fsck_for_resize(0).is_ok());
@@ -59,8 +58,7 @@ pub(crate) fn vfat_label_rejects_non_ascii_without_calling_it_too_long() {
 }
 
 /// swap 的 label/uuid 走 swaplabel（util-linux）：能力判定归 ExplicitOnly（只收显式值，
-/// `--random` 由命令层按 ExplicitOnly+NewRandom 拒绝）。这条接线若回退，set 会退回
-/// "no label tool wired for swap" 的拒绝
+/// `--random` 由命令层按 ExplicitOnly+NewRandom 拒绝）
 #[test]
 pub(crate) fn swap_label_and_uuid_are_wired_to_swaplabel() {
     assert!(matches!(uuid_support(Some(ContentKind::Swap)), UuidSupport::ExplicitOnly));
@@ -162,7 +160,7 @@ pub(crate) fn mkfs_tool_keeps_ext_family_split() {
     assert!(mkfs_tool(MkfsFs::Xfs).ok().is_some_and(|t| t.ext_type.is_none()));
 }
 
-/// 非法 `--fs` 的拒绝文案与分类：`UnsupportedFs`（拒绝/10），逐字节冻结
+/// 非法 `--fs` 的拒绝文案与分类：`UnsupportedFs`，逐字节冻结
 #[test]
 pub(crate) fn unsupported_fstype_message_is_frozen() {
     let e = parse_fstype("zfs").unwrap_err();
@@ -258,7 +256,7 @@ pub(crate) fn grow_target_at_separates_nothing_to_do_from_unsupported() {
         Ok(Growable::NoFilesystem(Some(ContentKind::Lvm2Pv)))
     ));
 
-    // 页格式在本机激活不了的 swap（签名只落在 32K 候选位）不是"无信息"：identify 按
+    // 签名只落在 32K 候选位的 swap（32K 页格式）不是"无信息"：identify 按
     // swapon 口径给 "unknown"，而探测认得它——扩容后有一条真实待办，故与空区域分道
     let mut swap32k = vec![0u8; 64 * 1024];
     swap32k[32768 - 10..32768].copy_from_slice(b"SWAPSPACE2");
@@ -302,6 +300,7 @@ pub(crate) fn fs_fixture(tag: &str, data: Vec<u8>) -> crate::testdir::TestSource
     let size = data.len() as u64;
     let src = crate::dev::WriteSource::unowned(FileSource {
         identity: crate::dev::TargetIdentity::resolve_image(&path),
+        block_identity: None,
         file: f,
         path,
         sector_size: 512,
@@ -336,7 +335,7 @@ pub(crate) fn partition_byte_range_gpt_and_mbr() {
     let mut lba0 = vec![0u8; 512];
     src.read_at(0, &mut lba0).unwrap();
     lba0[446 + 16 + 4] = 0x05;
-    src.write_at(0, &lba0).unwrap();
+    src.write_fixture(0, &lba0).unwrap();
     assert_eq!(partition_byte_range(&src, 1).unwrap(), (63 * 512, (200 - 63 + 1) * 512));
     let err = partition_byte_range(&src, 2).unwrap_err();
     assert!(err.to_string().contains("container"), "{err}");
@@ -515,8 +514,7 @@ pub(crate) fn parses_tool_output_formats() {
 
 #[test]
 pub(crate) fn parses_shrink_read_back_output_formats() {
-    // 三个回读命令的实际输出样本（本机实测：dumpe2fs 1.47.2 / ntfsresize v2022.10.3 /
-    // btrfs-progs v6.17.1）
+    // 三个回读命令的输出样本（dumpe2fs 1.47.2 / ntfsresize v2022.10.3 / btrfs-progs v6.17.1）
     let ext = "Filesystem volume name:   <none>\nBlock count:              8192\nBlock size:               4096\n";
     assert_eq!(parse_num_lead(ext, "Block count:").unwrap(), 8192);
     assert_eq!(parse_num_lead(ext, "Block size:").unwrap(), 4096);

@@ -1,6 +1,6 @@
 //! 盘上内容识别（偏移与特征值的来源见各行注释）。
 //!
-//! 结论类型 `ContentKind` 定义在 `domain`（L2，平台无关）；本模块负责读盘与签名比对，
+//! 结论类型 `ContentKind` 定义在 `domain`（平台无关）；本模块负责读盘与签名比对，
 //! 对外的结论只有内容类别，不向上层泄漏具体偏移或字节布局。
 
 use crate::dev::FileSource;
@@ -23,7 +23,7 @@ pub(crate) const BTRFS_MAGIC: [u8; 8] = 0x4D5F_5366_5248_425Fu64.to_le_bytes();
 /// 可以安全跳过——"可供识别的字节不足"（区间太短）同样落在这里。写入路径是否跳过
 /// FS 步骤由 [`crate::fsops::Growable`] 决定；"认得出却激活不了"的情形（页格式不匹配
 /// 的 swap）在那里单独成变体，不并入 `Unknown`。所有回放"未识别"文案/JSON 的地方都走
-/// 此处，字面量不再散落
+/// 此处，不另写字面量
 pub fn content_name(content: ContentKind) -> &'static str {
     content.as_str()
 }
@@ -50,7 +50,7 @@ pub struct FsProbe {
 /// 刻意收字节而不收 LBA + 扇区大小：LBA 的单位取决于它来自哪张表——GPT 条目的 LBA 以
 /// **表自身的** ss 计（4Kn 镜像未加 --sector-size 时 `g.ss != src.sector_size`），
 /// MBR 条目的 LBA 以容器 ss 计。签名里带 ss 就等于要求每个调用点都为**别人的**单位负责，
-/// 而它手上往往只有 LBA；改收字节后，换算发生在唯一知道单位的那一层（读到表的地方），
+/// 而它手上往往只有 LBA；收字节后，换算发生在唯一知道单位的那一层（读到表的地方），
 /// 本模块退化为"给一段字节，判它是什么"，与 probe_swap_header / overlay_offset_at 同形
 ///
 /// Err 只表达设备故障：调用方必须把它与"区间内没有已知签名"（`Ok(Unknown)`）区分开，
@@ -363,6 +363,7 @@ mod tests {
         let f = std::fs::OpenOptions::new().read(true).write(true).open(&path).unwrap();
         let src = FileSource {
             identity: crate::dev::TargetIdentity::resolve_image(&path),
+            block_identity: None,
             file: f,
             path,
             sector_size: 512,

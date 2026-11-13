@@ -40,7 +40,7 @@ pub(crate) fn resolve_pv_target(disk_name: &str, pno: u32) -> io::Result<OnlineT
         .into_owned();
     let part_dev = PathBuf::from("/dev").join(&name);
     ensure_node_is_device(&part_dev, &sysdir)?;
-    // 与 resolve_target 同一防线：sysfs 字节换算全部 checked（见那里的注释）
+    // 与 resolve_target 同一防线：sysfs 字节换算全部 checked
     let byte_of = |v: u64| v.checked_mul(512).ok_or_else(|| io::Error::other("sysfs sector value overflows u64 bytes"));
     let start_bytes = byte_of(sysfs_u64(&sysdir.join("start"))?)?;
     let part_len_bytes = byte_of(sysfs_u64(&sysdir.join("size"))?)?;
@@ -311,7 +311,7 @@ pub fn resize_pv(
     crate::support::note_online_no_undo();
     if let Err(e) = part_resize(&t, new_len_bytes) {
         // 表已写、内核同步失败：PV 链（pvresize/lvextend）因此没做，两条事实一并报。
-        // 只报"内核视图过期"会让 20 少说一半——分区已经大了，PV 还是旧尺寸
+        // 只报"内核视图过期"会少说一半——分区已经大了，PV 还是旧尺寸
         let detail = e.detail().to_string();
         match &e {
             PartResizeError::Partial(_) => {

@@ -84,7 +84,7 @@ impl TargetLock {
         match file.try_lock() {
             Ok(()) => {}
             // 另一个进程正持有 ⇒ 环境条件，不是请求与现状不匹配：换参数没用，等它做完即可。
-            // 与块设备那条 O_EXCL 打开失败的归类一致（都是 30）
+            // 与块设备那条 O_EXCL 打开失败的归类一致
             Err(std::fs::TryLockError::WouldBlock) => return Err(Self::busy(path)),
             Err(std::fs::TryLockError::Error(e)) => {
                 return Err(RunOutcome::no_mutation(format!("cannot take the target lock {}: {e}", path.display())));
@@ -239,7 +239,7 @@ mod tests {
 
     /// 硬链接是同一份数据的另一条路径：锁文件按 canonical path 派生，两条路径各派生
     /// 一把锁文件，只有对**数据文件本身**上锁才把同一 inode 收敛到一把锁。
-    /// 这道凭据只在 unix 上取（见 `TargetLock::image` 的说明），故断言也只在 unix 跑
+    /// 这道凭据只在 unix 上取（见 `TargetLock::acquire` 的说明），故断言也只在 unix 跑
     #[cfg(unix)]
     #[test]
     fn hard_linked_paths_share_one_lock() {

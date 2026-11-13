@@ -30,8 +30,8 @@ pub(crate) fn loop_backing_at(node: &Path) -> io::Result<Option<PathBuf>> {
         .map(PathBuf::from))
 }
 
-/// 读 loop 映射事实：backing_file 在 ⇒ 这台设备是 loop，offset / sizelimit 与它
-/// 同批引入（Documentation/ABI/testing/sysfs-block-devloop），缺失即读失败如实上抛。
+/// 读 loop 映射事实：backing_file 在 ⇒ 这台设备是 loop，offset / sizelimit 与它同在
+/// loop/ 下（Documentation/ABI/testing/sysfs-block-devloop），缺失即读失败如实上抛。
 /// sizelimit 0 = 无限制（losetup(8)），按原值记录，比对也按原值
 /// 已解析出 sysfs 节点时用它：打开路径按 fd 的 rdev 定位节点，不再二次 stat 路径
 #[cfg(target_os = "linux")]

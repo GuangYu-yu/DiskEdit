@@ -98,8 +98,8 @@ pub(crate) fn resize_online(
     };
     // 两个旗标只挡在线路径：未挂载的盘走离线分支，那里 --allow-move / --chunk 有效
     refuse_online_move_flags(a);
-    // 在线 grow 的表写与 FS 扩是一体的，且在线 shrink（btrfs）方向相反——先缩 FS 再写表。
-    // 若只写表不动 FS，shrink 会得到"FS 大于分区"的损坏现场，故 --no-fs 不放行在线：
+    // 在线 grow 的表写与 FS 扩是一体的：只写表不动 FS 会留下"分区大于 FS"的现场，
+    // 故 --no-fs 不放行在线：
     // 未挂载的分区自然落离线路径，那里 --no-fs 照常生效
     if a.no_fs {
         bail_fail(RunOutcome::refused(
@@ -146,7 +146,7 @@ fn online_size_gate(want: u64, cur: u64) -> Result<Option<u64>, crate::outcome::
 }
 
 /// 在线目标长度的公共骨架：锁下取事实（扇区大小、当前字节、右侧空闲扇区、表自身的长度
-/// 上界）→ 共享的 `resolve_size_request` → grow/shrink 分支。grow 零空闲时拒绝：本次
+/// 上界）→ 共享的 `resolve_size_request` → grow / 显式尺寸两条支路。grow 零空闲时拒绝：本次
 /// grow 不会产生分区扩容（表自身的上界已到顶，或下一分区紧贴右侧），在线路径又不能搬移
 /// 挡路分区——与离线路径同口径。FS 是否已填满现分区不是这里的判据：只扩 FS 走
 /// `resizefs <mountpoint>`。绝对尺寸同样按该上界拒绝——可用区是表自身的闭区间，越界目标没有

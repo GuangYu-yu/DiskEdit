@@ -45,8 +45,6 @@ fn temp_dir(tag: &str) -> std::path::PathBuf {
     dir
 }
 
-/// 0 = 后置条件全部成立。`info` 是只读路径，读回成功即是它自己的完整成功。
-/// 非 Linux 没有只读端口，这条路径在那里不可观察
 #[cfg(target_os = "linux")]
 #[test]
 fn complete_operation_is_zero() {
@@ -58,7 +56,6 @@ fn complete_operation_is_zero() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
-/// 2 = argv 结构或值域不成立：未知命令、缺位置参数、未声明旗标、非法值域
 #[test]
 fn argument_errors_are_two() {
     let dir = temp_dir("usage");
@@ -83,8 +80,6 @@ fn argument_errors_are_two() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
-/// 4 = 操作失败且确认没有产生持久化修改。打开失败发生在任何写入之前，
-/// 因此文案必须明确说目标未被修改（这正是 4 与 5 的分界）
 #[cfg(target_os = "linux")]
 #[test]
 fn failure_before_any_write_is_four() {
@@ -97,8 +92,6 @@ fn failure_before_any_write_is_four() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
-/// 3 = 请求与目标现状不匹配、确定未写盘（改参数有意义）。
-/// 这条路径要写命令能过平台门
 #[cfg(target_os = "linux")]
 #[test]
 fn refused_request_is_three() {
@@ -110,11 +103,10 @@ fn refused_request_is_three() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
-/// 3 也覆盖“盘上的表不合规范”：结构损坏不是 I/O 失败，只读命令同样不给 4。
-/// 两份条目数组都损坏时 `info` 走失败信封，退出码与写命令同一判据
 #[cfg(target_os = "linux")]
 #[test]
 fn corrupt_table_is_three() {
+    // 损坏的表仍走 3，不是 4。结构损坏不是 I/O 失败。
     let dir = temp_dir("corrupt");
     let img = dir.join("disk.img");
     fixture_gpt_image(&img);
@@ -132,8 +124,6 @@ fn corrupt_table_is_three() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
-/// 6 = 平台不具备命令所需的能力：非 Linux 镜像上纯只读命令可用，写命令因缺原语退 6。
-/// 能力门是唯一判据，先于确认门与任何伴随文件创建
 #[cfg(not(target_os = "linux"))]
 #[test]
 fn unsupported_platform_is_six() {
@@ -141,8 +131,6 @@ fn unsupported_platform_is_six() {
     let img = dir.join("disk.img");
     fixture_gpt_image(&img);
     let img_s = img.to_str().unwrap();
-    // 能力门是唯一判据：纯只读命令在非 Linux 镜像上放行，
-    // 写命令因 WriteTable 等非 Linux 不支持而落 6，文案点名缺失原语
     for args in [vec!["info", img_s], vec!["plan", img_s]] {
         let (code, _out, err) = run(&args);
         assert_eq!(code, 0, "`{args:?}` is read-only and must be admitted: {err}");

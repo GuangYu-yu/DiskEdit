@@ -104,36 +104,19 @@ pub(crate) fn cmd_inspect(a: &InspectRequest) -> CmdResult {
 ///
 /// 身份读不出时既拼不出块设备的记录目录名，也无法做身份比对；此时若直接返回，
 /// 这些记录就对 `inspect` 消失了。候选一律按结构展示，并说明它们不能与本目标匹配
-/// （列出，不认领）
+/// （列出，不认领）。候选集来自 [`crate::recovery::active_recovery_records`]：
+/// `abandon` 的候选列表与这里取自同一处枚举，不各自拼落点
 #[cfg(target_os = "linux")]
 fn report_candidates(identity: Option<&crate::dev::TargetIdentity>) {
-    use crate::dev::TargetKind;
     let Some(identity) = identity else {
         return;
     };
-    let mut candidates: Vec<std::path::PathBuf> = Vec::new();
-    match identity.kind {
-        TargetKind::Image => {
-            if let Some(path) = identity.record_path() {
-                candidates.push(path.to_path_buf());
-            }
-        }
-        TargetKind::Block => {
-            let root = crate::dev::host_state_root().join("recovery");
-            if let Ok(entries) = std::fs::read_dir(&root) {
-                for entry in entries.flatten() {
-                    candidates.push(entry.path().join(crate::dev::RECORD_NAME));
-                }
-            }
-        }
-    }
+    let candidates = crate::recovery::active_recovery_records(identity, None);
     let mut shown = 0usize;
-    for path in candidates {
-        if matches!(crate::recovery::probe_companion(&path), crate::recovery::CompanionProbe::Absent) {
-            continue;
-        }
+    for record in candidates {
+        let path = record.path();
         println!("candidate: {}", path.display());
-        let evidence = read_evidence(&path, None);
+        let evidence = read_evidence(path, None);
         report(&evidence);
         shown += 1;
     }
@@ -366,6 +349,9 @@ fn report(evidence: &Evidence) {
         Evidence::UnrecognizedFormat { magic, recorded } => {
             println!("record: unrecognized format");
             println!("  magic: {}", crate::support::hex_lower(magic));
+            if let Some(name) = crate::recovery::legacy_layout(*magic) {
+                println!("  layout: previous record layout ({name})");
+            }
             if let Some(scene) = recorded {
                 println!("  recorded identity: {}", describe_identity(scene));
             } else {
@@ -409,9 +395,12 @@ fn verdict_with(evidence: &Evidence, target: &str) -> (u8, Option<String>) {
     match evidence {
         Evidence::Absent => (EXIT_OK, None),
         Evidence::Recognized(record) => map_recognized(record, target),
-        Evidence::UnrecognizedFormat { .. } => {
-            (3, Some("structure: the record's magic is not recognized or its payload does not match the layout this build reads — keep the file; `diskedit abandon` is the only command that will move it aside, and nothing may write to this target until then".to_string()))
-        }
+        Evidence::UnrecognizedFormat { magic, .. } => match crate::recovery::legacy_layout(*magic) {
+            Some(name) => (3, Some(format!(
+                "structure: the record was written in the previous record layout ({name}); this build reads the current layout only — the record cannot be decoded, resumed, or undone. Keep the file; `diskedit abandon` is the only command that will move it aside, after the unfinished operation is settled by hand"
+            ))),
+            None => (3, Some("structure: the record's magic is not recognized or its payload does not match the layout this build reads — keep the file; `diskedit abandon` is the only command that will move it aside, and nothing may write to this target until then".to_string())),
+        },
         Evidence::ForeignTarget { .. } => {
             (3, Some("identity: the record belongs to a different target — it must not be cleaned up or replayed for this target".to_string()))
         }
@@ -474,7 +463,7 @@ fn map_recognized(record: &Record, target: &str) -> (u8, Option<String>) {
 
 #[cfg(target_os = "linux")]
 fn describe_record(record: &Record) -> Vec<String> {
-    let mut lines = vec![
+    let lines = vec![
         format!("transaction: {}", crate::support::hex_lower(&record.tx_id.bytes())),
         format!("plan: {} version {}", crate::support::hex_lower(&record.plan_id.bytes()), record.plan_version.get()),
         format!("operation: {:?}", record.op),
@@ -483,6 +472,9 @@ fn describe_record(record: &Record) -> Vec<String> {
             "progress: steps={} cursor={} fs_phase={}",
             record.progress.completed_steps, record.progress.transfer_cursor, record.progress.fs_phase
         ),
+        format!("entry commits: {}", describe_entry_commits(record)),
+        format!("repair: {}", describe_repair(record)),
+        format!("table fence: {}", describe_table_fence(record)),
         format!(
             "stage: {}",
             match record.progress_stage() {
@@ -495,10 +487,67 @@ fn describe_record(record: &Record) -> Vec<String> {
         format!("action: {:?}", record.action),
         format!("target: {}", describe_identity(&record.target)),
     ];
-    for stage in &record.stages {
-        lines.push(format!("stage {:?}: ok={} {}", stage.kind, stage.ok, stage.detail));
-    }
     lines
+}
+
+#[cfg(target_os = "linux")]
+fn describe_entry_commits(record: &Record) -> String {
+    use crate::recovery::EntryCommit;
+
+    let Some(reloc) = record.relocation.as_ref() else {
+        return "not applicable".to_string();
+    };
+    if reloc.entries.is_empty() {
+        return "none (no relocation entries)".to_string();
+    }
+    let committed = record
+        .entry_commits
+        .iter()
+        .filter(|s| **s == EntryCommit::Committed)
+        .count();
+    match record.entry_commits.iter().position(|s| *s == EntryCommit::InFlight) {
+        Some(i) => format!(
+            "{committed}/{} committed, entry {i} table write in flight",
+            reloc.entries.len()
+        ),
+        None => format!("{committed}/{} committed", reloc.entries.len()),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn describe_repair(record: &Record) -> String {
+    use crate::recovery::{RepairKind, RepairState};
+
+    let Some(fact) = record.repair else {
+        return "none".to_string();
+    };
+    let state = match fact.state {
+        RepairState::InFlight => "in flight",
+        RepairState::Landed => "landed",
+    };
+    match fact.kind {
+        RepairKind::RelocateBackup | RepairKind::RelocateAndRepair => format!(
+            "{} — backup header at LBA {}, last usable {}; {state}",
+            fact.kind.name(),
+            fact.new_backup_lba,
+            fact.new_last_usable
+        ),
+        RepairKind::RepairProtectiveMbr => format!("{}; {state}", fact.kind.name()),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn describe_table_fence(record: &Record) -> String {
+    use crate::recovery::TableFence;
+
+    if record.relocation.is_some() {
+        return "not applicable (per-entry commits)".to_string();
+    }
+    match record.table_fence {
+        TableFence::Pending => "pending".to_string(),
+        TableFence::InFlight => "table step in flight".to_string(),
+        TableFence::Landed => "landed".to_string(),
+    }
 }
 
 #[cfg(target_os = "linux")]

@@ -1,5 +1,5 @@
 //! GPT 修复策略层：消费 table 解析出的事实（GptState / PmbrSize / 几何），
-//! 产出可执行的 RepairAction，并用 table 的写入原语落盘。
+//! 产出可执行的 RepairAction，并把它装配成表步骤交给执行器落盘。
 //!
 //! 分层：table.rs = 事实与解析（"是什么"）/ 本模块 = 决定做什么（"怎么办"）/
 //! movepart.rs = 搬移与提交（"怎么写"）。
@@ -138,7 +138,11 @@ pub(crate) fn resume_boundary_unavailable(
 ///
 /// 修复先于命令自己的目标写入：装配期的读表失败落 4（一个字节都没写），表在装配与执行
 /// 之间被外部改动由执行器的首表复核落 3，写入开始后的失败落 5。这三档分类只由执行器给出，
-/// 本函数不再手写相位判据。
+/// 本函数不自行判断相位。
+///
+/// 修复动作进记录：装配成功后先落 `InFlight`，收敛并复读确认后再落 `Landed`。记录里已有
+/// 修复事实时不执行——`InFlight` 说明可能写过一半、结果没记下，`Landed` 说明盘面在作业
+/// 之外又变脏了；两者都按拒绝落 3。没有记录上下文（测试直连写源）时跳过这两笔。
 ///
 /// `None` 不写盘（调用方已在决策期确认无需修复）。
 pub(crate) fn apply_repair(
@@ -148,13 +152,47 @@ pub(crate) fn apply_repair(
     if matches!(action, RepairAction::None) {
         return Ok(());
     }
+    // 记录里已有修复事实：已经开始而结果未记入，或已经收敛却又需要修复，都不能再写一遍
+    if let Some(fact) = src.record_journal().and_then(|journal| journal.repair()) {
+        let why = match fact.state {
+            crate::recovery::RepairState::InFlight => format!(
+                "the recovery record says a table repair ({}) was started but its outcome was never \
+                 recorded — the table may be half-repaired; inspect the target, then settle the table \
+                 by hand and release the record with `diskedit abandon`",
+                fact.kind.name()
+            ),
+            crate::recovery::RepairState::Landed => format!(
+                "the recovery record says the table repair ({}) already landed, but the table needs \
+                 repair again — the target changed outside this job, so it is not repaired a second time",
+                fact.kind.name()
+            ),
+        };
+        return Err(RunOutcome::refused(why));
+    }
     let plan = crate::assembly::assemble_repair_plan(&*src, action)?;
+    if let Some(journal) = src.record_journal_mut() {
+        journal.mark_repair_started(action).map_err(|e| {
+            RunOutcome::no_mutation(format!(
+                "{} — the table repair was not started",
+                e.record_failure("the table repair")
+            ))
+        })?;
+    }
+    crate::movepart::fault_repair_recorded();
     crate::execution::execute_plan_complete(src, &plan, None, &mut crate::execution::NoProgress)?;
     let g2 = table::load_gpt(src)
         .map_err(|e| RunOutcome::partial(table::into_io_error(e).to_string()))?
         .ok_or_else(|| RunOutcome::partial("re-read after repair failed"))?;
     if g2.state != GptState::Valid || g2.pmbr != PmbrSize::Normal {
         return Err(RunOutcome::partial("repair did not converge — refusing"));
+    }
+    if let Some(journal) = src.record_journal_mut() {
+        journal.mark_repair_landed().map_err(|e| {
+            RunOutcome::partial(format!(
+                "{} — the table repair landed but that fact is not recorded",
+                e.record_failure("the table repair's result")
+            ))
+        })?;
     }
     Ok(())
 }
@@ -194,7 +232,7 @@ pub fn resolve_geometry(src: &FileSource) -> Result<Option<(ValidatedGeometry, R
     // 这些拒绝（PMBR SizeInLBA 越出容器、容器装不下备份头跨度、分区越出修复后的可用区）
     // 都是盘上的表不符合规范：改请求参数也无解，故归拒绝（3）
     let action = classify_repair(&g, file_last_lba).map_err(|e| RunOutcome::refused(e.to_string()))?;
-    // 修复后的可用区上界只从动作取（决策期已算好），不再由调用点各自推导一次
+    // 修复后的可用区上界只从动作取（决策期已算好），调用点不自行推导
     let vg = ValidatedGeometry::new(&g, file_last_lba, action.new_last_usable())
         .map_err(|e| RunOutcome::refused(e.to_string()))?;
     Ok(Some((vg, action)))
@@ -893,7 +931,7 @@ pub fn delete_entry(src: &mut WriteSource, part: u32) -> Result<(), RunOutcome> 
         .map_err(|e| RunOutcome::refused(format!("geometry edit rejected: {e}")))?;
     let content = fresh.content();
     let ss = fresh.sector_size();
-    // 快照紧接内容计算读定，装配层不再读盘。保护 MBR 的读取排在快照之后：
+    // 快照紧接内容计算读定，装配层不读盘。保护 MBR 的读取排在快照之后：
     // 它若在快照之后被第三方改动，写前按 regions 比对会落 5，不会写出与快照不符的内容
     let probe = crate::assembly::TableContent::Gpt {
         kind: table::TableWriteKind::Remove,
@@ -908,9 +946,9 @@ pub fn delete_entry(src: &mut WriteSource, part: u32) -> Result<(), RunOutcome> 
         protective_mbr: protective_mbr.as_deref(),
     };
     let plan = crate::assembly::confirmed_table_step(src, content_view, snapshot)?;
-    // 表步之后的整份替换由 `cmd_delete` 的 `table_record_done` 完成：sink 只接收进度，
-    // 不写记录
-    crate::execution::execute_plan_complete(src, &plan, None, &mut crate::execution::NoProgress)
+    // 整份替换由 `cmd_delete` 的 `table_record_done` 完成：sink 只把进度与表步围栏
+    // 写进记录
+    crate::execution::execute_plan_complete(src, &plan, None, &mut crate::recovery::sink::RecordSink::quiet())
 }
 
 #[cfg(test)]
@@ -1098,7 +1136,7 @@ mod tests {
         let mut lba0 = vec![0u8; 512];
         src.read_at(0, &mut lba0).unwrap();
         lba0[446 + 16 + 4] = 0x05;
-        src.write_at(0, &lba0).unwrap();
+        src.write_fixture(0, &lba0).unwrap();
         assert_eq!(partition_bytes(&src, 1).unwrap(), (63 * 512, (200u64 - 63 + 1) * 512));
         assert!(matches!(partition_bytes(&src, 2), Err(RunOutcome::Refused(m)) if m.contains("container")));
     }

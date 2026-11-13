@@ -103,7 +103,7 @@ fn repeated_and_malformed_flags_are_refused() {
     rejected(&["move", "img.bin:1", "--start", "2048", "--start=4096"], "more than once");
     rejected(&["delete", "img.bin:1", "--yes=1"], "takes no value");
     rejected(&["--version", "img.bin"], "`--version` takes no");
-    // uuid 的显式值与 --random 互斥：argv 已能判定，打开目标之前就该退 2
+    // uuid 的显式值与 --random 互斥：argv 层拒，打开目标之前退 2。
     rejected(&["set", "img.bin:1", "uuid", "1234", "--random", "--yes"], "not both");
 }
 

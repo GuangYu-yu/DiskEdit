@@ -238,7 +238,7 @@ impl RelativePath {
 }
 
 /// 已按锚点解析、仍由后端持有的证据文件。Linux 上同时持有父目录 FD、文件名与
-/// 只读 FD；删除与改名都复用这两个句柄，不再按路径二次解析
+/// 只读 FD；删除与改名都复用这两个句柄，不按路径二次解析
 pub(crate) struct EvidenceFile {
     relative: RelativePath,
     #[cfg(target_os = "linux")]

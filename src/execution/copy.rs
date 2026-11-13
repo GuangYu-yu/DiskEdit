@@ -6,7 +6,8 @@
 
 use crate::dev::{RegionStamp, WriteSource};
 use crate::fsid::{ContentKind, FsKind};
-use crate::movepart::{chunk_io_error, fault_copy_before_commit, fix_ntfs_hidden_sectors, COPY_HINT};
+use crate::execution::fix_ntfs_hidden_sectors;
+use crate::movepart::{chunk_io_error, fault_copy_before_commit, COPY_HINT};
 use crate::outcome::{RunOutcome, WriteStep};
 
 /// 一个复制步骤：字段与 [`crate::planner::PlanStep::CopyPartition`] 一一对应。

@@ -8,8 +8,6 @@ use crate::dev::WriteSource;
 use crate::support::*;
 use crate::{movepart, table};
 
-use super::confirm;
-
 pub(crate) const DETAILS_NEW: &str = r#"  Create a fresh partition table; overwrites any existing one. Default gpt.
   Drawing a table writes the entry arrays at the front of the disk and, for
   gpt, a backup copy in the last sectors; for mbr, residual GPT header
@@ -192,8 +190,8 @@ pub(crate) fn cmd_new(a: &NewRequest) -> crate::outcome::RunOutcome {
     let plan = crate::assembly::confirmed_table_step(&src, view, snapshot).unwrap_or_else(|f| bail_fail(f));
     // 全部写区间的原文先一次登记并落盘，这些步骤成功后才有第一次目标写入
     record_table_preimages(&mut src, &plan).unwrap_or_else(|f| bail_fail(f));
-    // 表步之后的整份替换由 `table_record_done` 完成：sink 只接收进度，不写记录
-    match crate::execution::execute_plan_complete(&mut src, &plan, None, &mut crate::execution::NoProgress) {
+    // 整份替换由 `table_record_done` 完成：sink 只把进度与表步围栏写进记录
+    match crate::execution::execute_plan_complete(&mut src, &plan, None, &mut crate::recovery::sink::RecordSink::quiet()) {
         Ok(()) => table_record_done(
             &mut src,
             &format!("created {} table (verify with: diskedit info {})", kind.as_str(), a.target),
@@ -201,7 +199,7 @@ pub(crate) fn cmd_new(a: &NewRequest) -> crate::outcome::RunOutcome {
         // 执行前扫描出的拒绝发生在首次写盘之前，原样报 3
         Err(f @ RunOutcome::Refused(_)) => bail_fail(f),
         // 3 / 4 的分工由执行器按写事实（`target_may_have_been_written`）与 FsError 映射
-        // 给出；命令层不再拿"记录落没落盘"二次改判
+        // 给出，命令层不拿"记录落没落盘"二次改判
         Err(f) => bail_fail(f.context("new failed")),
     }
 }
@@ -287,7 +285,7 @@ pub(crate) fn cmd_add(a: &AddRequest) -> crate::outcome::RunOutcome {
     // 坐标系在几何计算前确定：GPT 条目按表头 ss 对齐，MBR 条目按容器 ss 对齐
     match table::table_label(&src) {
         Err(e) => bail_fail(crate::outcome::table_parse_failure(&e, format!("label probe failed: {e}"))),
-        // 判型只用 table_label 一个来源（与 delete/create 同口径）：load_gpt 单独判会把
+        // 判型只用 table_label 一个来源（与 delete 同口径）：load_gpt 单独判会把
         // "保护 MBR 受损、条目数组可能完好"的 GPT 盘当作无表盘降级到 msdos 分支
         Ok(table::TableLabel::GptDamaged) => bail_fail(RunOutcome::refused(
             "the GPT on this target is damaged — repair it first (or recover it manually); \
@@ -365,7 +363,7 @@ pub(crate) fn cmd_add(a: &AddRequest) -> crate::outcome::RunOutcome {
                 Ok(p) => p,
                 Err(f) => bail_fail(f),
             };
-            match crate::execution::execute_plan_complete(&mut src, &plan, None, &mut crate::execution::NoProgress) {
+            match crate::execution::execute_plan_complete(&mut src, &plan, None, &mut crate::recovery::sink::RecordSink::quiet()) {
                 Ok(()) => table_record_done(&mut src, &format!("added partition #{num} (verify with: diskedit info {})", a.target)),
                 Err(f) => bail_fail(f),
             }
@@ -434,12 +432,12 @@ fn add_mbr_entry(
     let (lba0, num) = table::add_mdos_entry_image(lba0, slot, start, end, os_type, total)?;
     let content = crate::assembly::TableContent::Mbr { kind: table::TableWriteKind::Add, lba0: &lba0 };
     let plan = crate::assembly::confirmed_table_step(src, content, snapshot)?;
-    crate::execution::execute_plan_complete(src, &plan, None, &mut crate::execution::NoProgress)?;
+    crate::execution::execute_plan_complete(src, &plan, None, &mut crate::recovery::sink::RecordSink::quiet())?;
     Ok(num)
 }
 
-/// 自动放置的对齐单位：未显式给 `--align` 时按 1 MiB（分区对齐是性能与寿命的基本要求，
-/// 也是 `create` 一直以来的行为）；显式给了就按值，`none` 为 1 个 LBA。
+/// 自动放置的对齐单位：未显式给 `--align` 时按 1 MiB（分区对齐是性能与寿命的基本要求）；
+/// 显式给了就按值，`none` 为 1 个 LBA。
 ///
 /// 显式 `--start` 不走这里：起点是用户给的精确 LBA，缺省不隐式挪动。
 fn placement_unit(align: crate::domain::Align, align_given: bool, sector_size: u64) -> u64 {
@@ -510,9 +508,9 @@ fn delete_mbr_entry(src: &mut crate::dev::WriteSource, part: u32) -> Result<(), 
     let lba0 = table::delete_mdos_entry(lba0, part)?;
     let content = crate::assembly::TableContent::Mbr { kind: table::TableWriteKind::Remove, lba0: &lba0 };
     let plan = crate::assembly::confirmed_table_step(src, content, snapshot)?;
-    // 表步之后的整份替换由 `cmd_delete` 的 `table_record_done` 完成：sink 只接收进度，
-    // 不写记录
-    crate::execution::execute_plan_complete(src, &plan, None, &mut crate::execution::NoProgress)
+    // 整份替换由 `cmd_delete` 的 `table_record_done` 完成：sink 只把进度与表步围栏
+    // 写进记录
+    crate::execution::execute_plan_complete(src, &plan, None, &mut crate::recovery::sink::RecordSink::quiet())
 }
 
 pub(crate) fn cmd_delete(a: &DeleteRequest) -> crate::outcome::RunOutcome {
@@ -521,7 +519,7 @@ pub(crate) fn cmd_delete(a: &DeleteRequest) -> crate::outcome::RunOutcome {
     };
     // 载体必须是整盘：delete 清零的是节点 LBA0 里的条目槽，而分区节点上被判成 msdos 的
     // 可能只是文件系统引导扇区——FAT/NTFS 的引导扇区末尾同为 0x55AA，MBR 判据只认
-    // 这个签名。判据与 new/add/create 同源
+    // 这个签名。判据见 `refuse_partition_node_target`
     refuse_partition_node_target("delete", &a.target);
     if !a.yes {
         bail_fail(RunOutcome::refused("`delete` removes the target partition entry; pass --yes to confirm"));
@@ -553,7 +551,7 @@ pub(crate) fn cmd_resize_part(a: &ResizePartRequest) -> crate::outcome::RunOutco
     if a.grow_to_end && a.end.is_some() {
         bail_fail(RunOutcome::refused("--end and --grow-to-end are mutually exclusive".to_string()));
     }
-    // 载体必须是整盘：条目按节点 LBA0 的偏移读写（判据与 new/add/create 同源）
+    // 载体必须是整盘：条目按节点 LBA0 的偏移读写（判据见 `refuse_partition_node_target`）
     refuse_partition_node_target("resize-part", &a.target);
     let (mut src, _resumed) =
         open_record_resumable(a, crate::recovery::OpKind::ResizePart).unwrap_or_else(|f| bail_fail(f));
@@ -577,12 +575,6 @@ pub(crate) fn cmd_resize_part(a: &ResizePartRequest) -> crate::outcome::RunOutco
         // --grow-to-end 钉死 last_usable 不做下取整；常规路径只对末端下取整
         align_end(a.align, start, e, g.sector_size())
     };
-    // 确认门看盘上几何算出的影响面：末端下移会截短分区（连同其中的文件系统），
-    // 越过 undo 的回滚点。纯扩容与"请求范围即现状"不在此列
-    confirm::gate(a.yes, confirm::Impact {
-        shrinking: end < e.ending_lba,
-        ..Default::default()
-    });
     // resize-part 不登记 --chunk：恢复粒度取记录层的默认块字节
     let chunk = crate::execution::DEFAULT_CHUNK_BYTES;
     let mut logger = Logger::open(&src, Some(g.disk_guid()));
@@ -667,7 +659,7 @@ pub(crate) fn resize_part_via_plan_with(
         lvm,
         log,
     )
-    .reconcile_with_writes()
+    .settled()
 }
 
 /// 两个 LBA 的有符号差：Δ<0 表示目标在源左侧
@@ -691,7 +683,7 @@ fn resize_part_via_plan_unreconciled(
 ) -> RunOutcome {
     let (part, new_start, new_end, chunk_len) = range;
     let (no_fs, defer_lvm) = switches;
-    // 事务入口的注入点（与 apply 同义）：此刻 abort 必须与"从未运行过"不可区分
+    // 事务入口的注入点：此刻 abort 必须与"从未运行过"不可区分
     movepart::fault_before_any_write();
     // 记录型现场：先把"这是哪一次请求"写进记录。新记录只写一次，已有记录必须与
     // 本次请求一致；`--chunk` 是执行参数、不在摘要里，由搬移校验单独核对
@@ -826,7 +818,7 @@ pub(crate) fn prepare_resize_part(
     defer_lvm: bool,
     log: &mut dyn FnMut(&str),
 ) -> Result<PlannedResizePart, RunOutcome> {
-    // F5：记录已绑搬移计划、本次读到的备份头不可读、请求终点越过主头
+    // 记录已绑搬移计划、本次读到的备份头不可读、请求终点越过主头
     // `last_usable_lba`。三条同时成立才拒绝——备份头坏而主头上界够用时续跑合法。
     // 本函数只读，且位于 bind 与 repair 之前，故此刻确实一个目标字节都没写
     let relocation_bound = src.record_journal.as_ref().is_some_and(|j| j.relocation().is_some());
@@ -922,13 +914,7 @@ pub(crate) fn prepare_resize_part(
         let at_target = (old_start, old_end) == (new_start, new_end);
         if !journal.is_persisted() {
             (movepart::FsShrink::NotShrunk, 0, None, None)
-        } else if at_target && progress.transfer_cursor != total_chunks && moved != 0 {
-            // 表已停在新区间、游标却停在半途：只可能是盘面被外部改到了目标位
-            return Err(RunOutcome::refused(format!(
-                "partition {part} already sits at the requested range but the record's cursor is {}/{} — the layout moved under the job; refusing",
-                progress.transfer_cursor, total_chunks
-            )));
-        } else if at_target && (moved == 0 || progress.transfer_cursor == total_chunks) {
+        } else if at_target {
             log("resize already committed — finishing filesystem step");
             // 表提交之后盘上只剩新区间；FS 步按记录里的搬移前几何判 Grow
             let pre_commit = match (journal.op(), recorded_old) {
@@ -944,7 +930,8 @@ pub(crate) fn prepare_resize_part(
             };
             (
                 movepart::fs_shrunk_from_phase(progress.fs_phase),
-                progress.transfer_cursor,
+                // 已提交态没有块要继续搬：起点未变时本就没有块，否则记录里的游标已到终点
+                if moved == 0 { 0 } else { total_chunks },
                 Some(pre_commit),
                 recorded_lvm,
             )
@@ -1211,7 +1198,7 @@ fn execute_resize_part(
     if committed_old.is_some()
         && fstype == crate::fsid::ContentKind::Filesystem(crate::fsid::FsKind::Ntfs)
     {
-        movepart::fix_ntfs_hidden_sectors(src, new_start, ss, part, log).map_err(RunOutcome::from)?;
+        crate::execution::fix_ntfs_hidden_sectors(src, new_start, ss, part, log).map_err(RunOutcome::from)?;
     }
 
     // ---- 阶段 3：扩容 FS ----
@@ -1286,12 +1273,9 @@ impl crate::execution::StepSink for ResizePartSink<'_> {
     ) -> Result<(), RunOutcome> {
         // 搬移步骤的 durable 边界：只有已经 sync 过的块才允许进入记录
         if let Some(journal) = src.record_journal_mut() {
+            let (entry, chunks, steps, cursor) = state.durable();
             journal
-                .record_transfer_checkpoint(
-                    Some((state.entry_index, state.chunks_in_entry)),
-                    state.completed_steps,
-                    state.transfer_cursor,
-                )
+                .record_transfer_checkpoint(Some((entry, chunks)), steps, cursor)
                 .map_err(|e| {
                     RunOutcome::partial(e.record_failure("the transfer progress"))
                 })?;
@@ -1378,7 +1362,7 @@ fn require_start(
 pub(crate) fn cmd_move(a: &MoveRequest) -> crate::outcome::RunOutcome {
     let (pref, selector) = require_start(a.part, a.start, "move");
     refuse_align_on_start_end(a.start, a.align_given);
-    // 载体必须是整盘：条目按节点 LBA0 的偏移读写（判据与 new/add/create 同源）
+    // 载体必须是整盘：条目按节点 LBA0 的偏移读写（判据见 `refuse_partition_node_target`）
     refuse_partition_node_target("move", &a.target);
     let (mut src, resumed) =
         open_record_resumable(a, crate::recovery::OpKind::Move).unwrap_or_else(|f| bail_fail(f));
@@ -1399,10 +1383,6 @@ pub(crate) fn cmd_move(a: &MoveRequest) -> crate::outcome::RunOutcome {
     // checked：start 来自 CLI 原始输入（--align none 时无上界），回绕会让目标区间越过可用范围
     let end = start.checked_add(len - 1)
         .unwrap_or_else(|| bail_fail(RunOutcome::refused("end LBA overflows address space".to_string())));
-    confirm::gate(a.yes, confirm::Impact {
-        relocating: usize::from(start != e.starting_lba),
-        ..Default::default()
-    });
     // move 保持长度：没有可跳过的文件系统步骤
     if a.no_fs {
         eprintln!(
@@ -1500,7 +1480,7 @@ pub(crate) fn cmd_move(a: &MoveRequest) -> crate::outcome::RunOutcome {
                 let kind = crate::fsid::identify(&src, base, bytes)
                     .unwrap_or_else(|e| bail_fail(RunOutcome::no_mutation_io(e)));
                 if kind == crate::fsid::ContentKind::Filesystem(crate::fsid::FsKind::Ntfs) {
-                    movepart::fix_ntfs_hidden_sectors(&mut src, start, ss, part, &mut |m| println!("{m}"))
+                    crate::execution::fix_ntfs_hidden_sectors(&mut src, start, ss, part, &mut |m| println!("{m}"))
                         .unwrap_or_else(|e| bail_fail(RunOutcome::partial_with(e.to_string(), Vec::new())));
                 }
                 let o = table_record_done_if_complete(&mut src, RunOutcome::applied_with(Vec::new()));
@@ -1699,7 +1679,7 @@ pub(crate) fn cmd_copy(a: &CopyRequest) -> crate::outcome::RunOutcome {
     // copy 不读不写 checkpoint（见 copy 的详助 "No resume"）：它没有可续跑的东西，
     // 也就没有资格接管任何未收尾的现场。走严格打开——目标上有任何 active 现场即拒绝，
     // 绝不出现"copy 成功后把别人的记录当自己的清掉、而那份记录原样留在槽里"
-    // 载体必须是整盘：条目按节点 LBA0 的偏移读写（判据与 new/add/create 同源）
+    // 载体必须是整盘：条目按节点 LBA0 的偏移读写（判据见 `refuse_partition_node_target`）
     refuse_partition_node_target("copy", &a.target);
     let mut src = open_table_record(a, crate::recovery::OpKind::Copy).unwrap_or_else(|f| bail_fail(f));
     // 坐标系在几何计算前确定：copy 仅支持 GPT，条目按表头 ss 对齐（可与容器 ss 不同）
@@ -1717,8 +1697,6 @@ pub(crate) fn cmd_copy(a: &CopyRequest) -> crate::outcome::RunOutcome {
         }
         StartSelector::Lba(lba) => align_start(a.align, lba, g.sector_size()),
     };
-    // copy 总是把源字节写到落点，落点原有内容无法用 undo 找回
-    confirm::gate(a.yes, confirm::Impact { copying: true, ..Default::default() });
     let (chunk, mut logger) = chunk_logger(a, &src, g.disk_guid());
     // 名字守卫在消费点：copy 的落盘名字与 add 同一个 36 码元字段
     if let Some(n) = &a.name { crate::support::check_gpt_name_len(n); }
@@ -1743,12 +1721,11 @@ pub(crate) fn cmd_copy(a: &CopyRequest) -> crate::outcome::RunOutcome {
     if let Some(journal) = src.record_journal_mut() {
         journal.bind_source(source).unwrap_or_else(|why| bail_fail(RunOutcome::refused(why)));
     }
-    // 事务入口的注入点与 apply / resize_part 同形：durable boundary 之前 abort 必须
-    // 留下完全未改动的盘
+    // 事务入口的注入点：durable boundary 之前 abort 必须留下完全未改动的盘
     movepart::fault_before_any_write();
     let p = movepart::prepare_copy(&g, repair, part, start, a.keep_partuuid)
         .unwrap_or_else(|f| bail_fail(f));
-    // 修复先于任何目标写入；放 RunOutcome 域以保住分类（同 apply / move）
+    // 修复先于任何目标写入；放 RunOutcome 域以保住分类（同 move）
     if let Some(what) = p.repair.describe() {
         crate::gpt_policy::apply_repair(&mut src, &p.repair).unwrap_or_else(|f| bail_fail(f));
         logger.log(&format!("[repair] {what}"));
@@ -1766,8 +1743,9 @@ pub(crate) fn cmd_copy(a: &CopyRequest) -> crate::outcome::RunOutcome {
     )
     .unwrap_or_else(|f| bail_fail(f));
     let plan = crate::assembly::assemble_copy(&src, &geometry, &p).unwrap_or_else(|f| bail_fail(f));
-    // copy 没有续跑（见详助 "No resume"），进度不落记录：复制与表提交成对完成或整体失败
-    match crate::execution::execute_plan_complete(&mut src, &plan, Some(chunk), &mut crate::execution::NoProgress) {
+    // copy 没有续跑（见详助 "No resume"），步数只作为记录的围栏同伴：表步是否写出
+    // 由记录里的围栏回答，复制与表提交仍成对完成或整体失败
+    match crate::execution::execute_plan_complete(&mut src, &plan, Some(chunk), &mut crate::recovery::sink::RecordSink::quiet()) {
         Ok(()) => {
             logger.log(&format!("partition {part} copied to #{num} at {}..{}", p.new_start, p.new_end));
             table_record_done(&mut src, &format!("copied to partition #{num} (verify with: diskedit info {})", a.target))

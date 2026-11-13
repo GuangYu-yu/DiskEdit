@@ -71,6 +71,21 @@ fn undo_record(src: &mut WriteSource) -> Option<u8> {
             )))
         }
         other => {
+            let legacy = match &other {
+                crate::recovery::Evidence::UnrecognizedFormat { magic, .. } => {
+                    crate::recovery::legacy_layout(*magic)
+                }
+                _ => None,
+            };
+            if let Some(name) = legacy {
+                bail_fail(RunOutcome::refused(format!(
+                    "the recovery record at {} was written in the previous record layout ({name}); this build \
+                     reads the current layout only — it cannot be decoded, resumed, or undone. It is left in \
+                     place; `diskedit abandon` is the only way to release it, after the unfinished operation is \
+                     settled by hand",
+                    path.display()
+                )));
+            }
             // 整份载荷验证不过：完整前缀仍可能逐条验证并回放
             #[cfg(target_os = "linux")]
             return Some(undo_record_prefix(src, &path, &current, other));
@@ -82,7 +97,7 @@ fn undo_record(src: &mut WriteSource) -> Option<u8> {
             )))
         }
     };
-    if record.commit == crate::recovery::CommitState::Committed {
+    if record.committed() {
         // 提交后未清理：目标字节已定型，本次运行只释放记录
         let outcome = match crate::recovery::settle_companion(&path, &record, false) {
             Ok(()) => {
@@ -188,7 +203,7 @@ fn undo_record_prefix(
             path.display()
         )));
     }
-    if prefix.record.commit == crate::recovery::CommitState::Committed {
+    if prefix.record.committed() {
         let mut outcome = crate::outcome::RunOutcome::applied_with(Vec::new());
         match crate::recovery::archive_torn(path) {
             Ok(to) => outcome = outcome.degrade_partial(format!(
@@ -289,7 +304,7 @@ pub(crate) fn cmd_undo(a: &UndoRequest) -> u8 {
     } else {
         let mut src = open_target_owned(a).unwrap_or_else(|f| bail_fail(f));
         // 回放写回的是整盘表字节：目标仍在被使用时回放，会让内核分区视图与盘面
-        // 从"分叉"变成"按历史布局分叉"。闸门在任何写回与记录处理之前
+        // 从"分叉"变成"按记录里的旧布局分叉"。闸门在任何写回与记录处理之前
         if let Err(f) = crate::fsops::ensure_table_write_idle(&src) {
             bail_fail(f);
         }
@@ -312,6 +327,7 @@ mod tests {
         let size = std::fs::metadata(img).unwrap().len();
         FileSource {
             identity: crate::dev::TargetIdentity::resolve_image(img),
+            block_identity: None,
             file,
             path: img.to_path_buf(),
             sector_size: 512,

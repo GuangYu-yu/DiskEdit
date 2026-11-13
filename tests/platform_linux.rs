@@ -38,7 +38,6 @@ fn image_with(dir: &Path, name: &str, size: u64) -> PathBuf {
     path
 }
 
-/// `info` 的语义项是目标几何与表摘要；断言按字段解析，不比较整段字节。
 #[test]
 fn info_reports_the_geometry_and_table_fields() {
     let dir = temp_dir("info");
@@ -56,7 +55,6 @@ fn info_reports_the_geometry_and_table_fields() {
     assert!(json["partitions"].is_array(), "{out}");
 }
 
-/// 镜像的扇区大小用命令行声明值；`new` 与 `info` 必须看到同一个口径。
 #[test]
 fn an_image_honours_the_declared_sector_size() {
     let dir = temp_dir("sector-size");
@@ -71,7 +69,6 @@ fn an_image_honours_the_declared_sector_size() {
     assert_eq!(json["sector_size"], 4096, "{out}");
 }
 
-/// Linux 具备写表能力，`new`/`add`/`delete` 不得落 6。
 #[test]
 fn the_linux_port_runs_the_table_write_commands() {
     let dir = temp_dir("write");
@@ -86,9 +83,6 @@ fn the_linux_port_runs_the_table_write_commands() {
     assert_eq!(code, 0, "{err}");
 }
 
-/// 需要真机/root/外部工具 `losetup`：条件不满足时提前返回。
-///
-/// 块设备只用内核报告值；`--sector-size` 与块设备形态不符 → 3。
 #[test]
 fn a_block_device_refuses_the_sector_size_override() {
     let dir = temp_dir("loop");

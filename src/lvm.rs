@@ -66,7 +66,7 @@ fn run_tool(tool: &str, args: &[&str]) -> Result<String, LvmError> {
     tool_stdout(run(tool, args), tool)
 }
 
-/// 改 PV 元数据或 LV 内容的工具（pvresize / lvextend -r）：启动后盘上状态不再可断言，
+/// 改 PV 元数据或 LV 内容的工具（pvresize / lvextend -r）：启动后盘上状态无法断言，
 /// 置位供 panic 出口使用（见 `outcome::note_target_write`）
 fn run_write_tool(tool: &str, args: &[&str]) -> Result<String, LvmError> {
     tool_stdout(run_write(tool, args), tool)

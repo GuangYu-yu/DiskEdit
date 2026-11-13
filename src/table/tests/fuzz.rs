@@ -24,6 +24,7 @@ fn open_src(tag: &str, data: &[u8]) -> crate::testdir::TestSource<FileSource> {
     let f = std::fs::OpenOptions::new().read(true).write(true).open(&p).unwrap();
     let src = FileSource {
         identity: crate::dev::TargetIdentity::resolve_image(&p),
+        block_identity: None,
         file: f,
         path: p,
         sector_size: SS,
@@ -67,7 +68,7 @@ fn parse_mbr_raw_fuzz_fixed_seed() {
         let ctx = format!("seed={seed} round={round} total_sectors={total} signature={sig} entries={written:?}");
         let src = open_src("mbr", &data);
 
-        // 1) 任意字节都不 panic，且结果来自可解释的判型分支
+        // 任意字节都不 panic，且结果来自可解释的判型分支
         let raw = match parse_mbr_raw(&src) {
             Ok(r) => r,
             Err(e) => panic!("{ctx}: parse_mbr_raw reported an io error on a well-formed file: {e}"),
@@ -78,7 +79,7 @@ fn parse_mbr_raw_fuzz_fixed_seed() {
             continue;
         };
 
-        // 2) 合法输入的观测结果必须与盘上字节一致
+        // 合法输入的观测结果必须与盘上字节一致
         for p in &r.parts {
             assert!((1..=4).contains(&p.num), "{ctx}: partition number out of range");
             assert_ne!(p.os_type, 0, "{ctx}: an empty record must not be reported as a partition");
@@ -110,7 +111,7 @@ fn parse_mbr_raw_fuzz_fixed_seed() {
             }
         }
 
-        // 3) 可操作性：有损伤的表必须被拒绝，无损伤的表必须与 raw 逐字段一致
+        // 可操作性：有损伤的表必须被拒绝，无损伤的表必须与 raw 逐字段一致
         if r.damage.is_empty() {
             let parts = parse_mbr(&src).unwrap().expect("an undamaged table must stay operable");
             assert_eq!(parts.len(), r.parts.len(), "{ctx}: the validated reader dropped entries");
@@ -267,7 +268,7 @@ fn gpt_copy_damage_is_rejected_not_silently_maskable() {
     let total = (base.len() as u64) / SS;
     let backup = ((total - 1) * SS) as usize;
 
-    // (a) 主头 header_size = 91（自洽 CRC）：这一份必须判损伤
+    // 主头 header_size = 91（自洽 CRC）：这一份必须判损伤
     let mut data = base.clone();
     data[hdr + 12..hdr + 16].copy_from_slice(&91u32.to_le_bytes());
     fix_header_crc(&mut data[hdr..hdr + SS as usize]);
@@ -277,7 +278,7 @@ fn gpt_copy_damage_is_rejected_not_silently_maskable() {
         "a header_size below the 92-byte minimum must be a copy-level damage"
     );
 
-    // (b) 主头 CRC 与备份头 CRC 同时改坏：整体必须报错（两份都不可用）
+    // 主头 CRC 与备份头 CRC 同时改坏：整体必须报错（两份都不可用）
     let mut data = base.clone();
     data[hdr + 16..hdr + 20].fill(0x5A);
     data[backup + 16..backup + 20].fill(0x5A);
@@ -285,14 +286,14 @@ fn gpt_copy_damage_is_rejected_not_silently_maskable() {
     let r = load_gpt(&src);
     assert!(r.is_err(), "both copies with a bad CRC must not yield a table");
 
-    // (c) LBA1 签名被抹掉 = 此处确实没有主副本：必须由完好的备份副本回退，
+    // LBA1 签名被抹掉 = 此处确实没有主副本：必须由完好的备份副本回退，
     // 而不是把"主副本没有签名"当作"整盘没有表"
     let mut data = base.clone();
     data[hdr..hdr + 8].fill(0);
     let src = open_src("gpt_copy_absent", &data);
     assert!(matches!(load_gpt(&src), Ok(Some(_))), "the intact backup copy must still be usable");
 
-    // (d) 主副本 last_usable_lba 越过盘尾（自洽 CRC）：这一份必须拒绝
+    // 主副本 last_usable_lba 越过盘尾（自洽 CRC）：这一份必须拒绝
     let mut data = base.clone();
     data[hdr + 48..hdr + 56].copy_from_slice(&(total + 1).to_le_bytes());
     fix_header_crc(&mut data[hdr..hdr + SS as usize]);

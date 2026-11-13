@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# 4Kn（4096 逻辑扇区）—— 经**块设备**路径（工具从设备探测逻辑扇区大小）
-# 残留控制：t24 前缀 + trap 自清理
+# 4Kn（4096 逻辑扇区）—— 块设备路径
 source "$(dirname "$0")/lib.sh"
 require_fault_bin
 

@@ -24,7 +24,7 @@ pub(crate) fn fs_grow_cmd(t: &OnlineTarget, fstype: Option<ContentKind>) -> Opti
 
 /// fs_grow 的三态失败：**该 FS 没有在线工具**意味着本次一个进程都没起，
 /// 成因在请求（换离线路径才有解）⇒ 拒绝；**工具没跑起来**（找不到 / 无法执行）
-/// 是环境故障，FS 同样未被触碰 ⇒ infra；**非零退出**说明工具可能改了一半 ⇒ failed。
+/// 是环境故障，FS 同样未被触碰 ⇒ 未写盘（4）；**非零退出**说明工具可能改了一半 ⇒ 部分完成（5）。
 /// 三者出口语义各异，压成一个错误类型会让调用点无从区分
 pub(crate) enum FsGrowError {
     /// 该 FS 无在线 grow 工具（`fs_grow_cmd` 映射缺失）
@@ -42,7 +42,7 @@ pub(crate) fn fs_grow(t: &OnlineTarget, fstype: Option<ContentKind>) -> Result<(
         )));
     };
     let argv: Vec<&str> = args.iter().map(String::as_str).collect();
-    // spawn 失败 = 工具没跑起来；启动后拿不到退出状态 = 可能已改 FS，归 Exit（failed）
+    // spawn 失败 = 工具没跑起来；启动后拿不到退出状态 = 可能已改 FS，归 Exit（部分完成）
     let out = match run(&prog, &argv) {
         Ok(o) => o,
         Err(crate::fsops::FsError::CommandFailed(m)) => return Err(FsGrowError::Exit(m)),

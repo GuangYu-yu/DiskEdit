@@ -28,7 +28,6 @@ echo "===== B: 只读 loop → 写操作拒绝且不改盘 ====="
 rm -rf "$T" "$T"$SIDECAR_GLOB
 truncate -s 64M "$T"
 $B new "$T" --yes >/dev/null
-# add 只建表项，不建文件系统（无 --fs 旗标）；格式化由下一行的 mkfs.ext4 显式完成
 $B add --yes "$T" 50151424 --start 2048 --name p1 >/dev/null
 LD=$(lo_attach "$T"); mkfs.ext4 -q "${LD}p1"; lo_detach "$LD"
 BEFORE=$($B info "$T" | grep -o '"num":[^}]*}' | head -1)
@@ -73,7 +72,6 @@ else
   echo "MOUNT FAILED (BAD): ${LD}p2 -> $TEST_MNT，并发基线缺失"; rc=1; MD=
 fi
 lo_detach "$LD"
-# 两进程同时对 p2 自重叠左移；判定只看终态一致性（一个成功一个被拒/失败均为合法互斥结果）
 DISKEDIT_FAULT=chunk:70 $BF move "$T":2 --start 250000 --chunk 1 --yes >/dev/null 2>&1 &
 P1=$!
 DISKEDIT_FAULT=chunk:70 $BF move "$T":2 --start 250000 --chunk 1 --yes >/dev/null 2>&1 &

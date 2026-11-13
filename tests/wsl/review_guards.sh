@@ -23,9 +23,9 @@ truncate -s 256M "$T1"
 $B new "$T1" --yes >/dev/null
 $B add --yes "$T1" 32505856 --start 2048 --name p1 >/dev/null
 $B add --yes "$T1" 33554432 --start 65536 --name p2 >/dev/null
-# 把条目 2 的 first_lba 改成 32768 ⇒ 与条目 1（2048..65535）重叠。主备两份条目数组
-# 与各自表头的 CRC 必须一并重算：只改一处会让该副本被判损坏，工具从另一副本恢复，
-# 重叠被掩盖而命令照常执行——那样测的就不是本条闸口
+# 把条目 2 的 first_lba 改成 32768 ⇒ 与条目 1（2048..65535）重叠。
+# 主备两份条目数组与各自表头的 CRC 必须一并重算，否则工具会从另一副本恢复、
+# 掩盖重叠
 python3 - "$T1" <<'PY'
 import struct, sys, zlib
 

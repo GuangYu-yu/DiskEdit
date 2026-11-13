@@ -2,9 +2,8 @@
 
 use super::*;
 
-/// 已越过不可回滚点之后的失败：任何分类都不再能断言"本次未写盘"，
+/// 已越过不可回滚点之后的失败：任何分类都无法断言"本次未写盘"，
 /// 出口语义一律压成 `Partial`（报告带"盘可能已改变"的警示）。
-/// 越过点的两种形态：表项已写（grow 臂）与 FS 已缩（shrink 臂）
 fn after_irreversible(f: RunOutcome) -> RunOutcome {
     match f {
         RunOutcome::Refused(m) | RunOutcome::Internal(m) | RunOutcome::Usage(m) => RunOutcome::partial(m),
@@ -67,8 +66,8 @@ fn mbr_entry_size(lba0: &[u8], part: u32) -> Option<u32> {
 /// MBR 分区被扩到更大之后的收尾：FS 步（swap 重建 / FS 扩容）→ 内核重读 → 统一收尾。
 /// grow-to-end 与显式 SIZE 扩容的后置条件完全相同，故两条路径共用本函数——
 /// FS 步是后置条件的一部分，缺了会"分区变大、文件系统没变大"却报成功。
-/// 调用点均已把新表项写盘，故表写入不再可回滚：外部 FS 工具一旦写完，回滚表项
-/// 就会留下"表小于内容"的自相矛盾（与 GPT 侧 finalize_growth 同一不变量）。
+/// 外部 FS 工具一旦写完，回滚表项就会留下"表小于内容"的自相矛盾
+/// （与 GPT 侧 finalize_growth 同一不变量）。
 /// p 是锁下解析出的条目：新跑时是**扩容前**的区间（swap 头部探测用它原区间，原尺寸
 /// 是 LVM 位移的基线）；记录型续跑时是已提交的新区间——FS 步按盘上新区间扩满，
 /// LVM 链按记录里的基线收尾
@@ -88,8 +87,8 @@ pub(crate) fn mbr_grow_finish(
     // 而离线块设备写表后内核仍持旧长度（不会自动重读），按旧尺寸扩容会空跑并以 0 退出。
     // 重读失败时没有可信的 FS 尺寸，改记待办交给出口（与 GPT 侧 finalize_growth 同一判据）
     if !a.no_fs && kernel_resync(src) {
-        // 区域取自**当前**表（本轮可能已写表）：起点与长度都以盘上现状为准。
-        // 此处已越过写盘，判定失败不再有"本次未写盘"的出口语义，故 Refused 按 Partial 如实报
+        // 区域取自**当前**表（本次运行可能已写表）：起点与长度都以盘上现状为准。
+        // 此处已越过写盘，判定失败没有"本次未写盘"的出口语义，故 Refused 按 Partial 如实报
         let (base, len) = crate::gpt_policy::partition_bytes(src, part)
             .map_err(after_irreversible)
             .unwrap_or_else(|f| bail_fail(f));
@@ -204,8 +203,8 @@ pub(crate) fn mbr_grow_finish(
     o
 }
 
-/// resize 的 MBR 分支（仅主分区 1..4；逻辑分区与扩展容器不支持）。原位纯扩缩：扩须右侧
-/// 空闲足够（MBR 无搬移能力），缩走与 GPT 相同的"FS 先缩 → 写表"守卫链。块设备复用在线
+/// resize 的 MBR 分支（仅主分区 1..4；逻辑分区与扩展容器不支持）。原位扩容：扩须右侧
+/// 空闲足够（MBR 无搬移能力），缩容由 `resize-part` 承担（本命令直接拒绝）。块设备复用在线
 /// 路径（基于 sysfs + sfdisk，与表类型无关）
 pub(crate) fn cmd_resize_msdos(a: &ResizeRequest, pref: PartSelector, src_ro: &FileSource) -> crate::outcome::RunOutcome {
     // MBR resize 没有搬移能力：--allow-move 承诺的"搬开挡路分区"不存在，
@@ -320,7 +319,7 @@ pub(crate) fn cmd_resize_msdos(a: &ResizeRequest, pref: PartSelector, src_ro: &F
         ));
     }
     // 占用复核在锁下（离线选择时的探测在锁前）：首次落盘前确认分区仍空闲，与 GPT 分支闸同源。
-    // 起点不变、末端不变或只增的请求不挪动上层 DM 栈映射的扇区，按 Extend 放行；缩容要求无持有者
+    // 起点不变、末端不变或只增的请求不挪动上层 DM 栈映射的扇区，按 Extend 放行；缩容在入口即拒绝
     let edit = if grow_to_end || target.is_some_and(|b| b >= cur_bytes) {
         crate::fsops::WriteKind::Extend
     } else {
@@ -330,7 +329,7 @@ pub(crate) fn cmd_resize_msdos(a: &ResizeRequest, pref: PartSelector, src_ro: &F
     let total_sectors = src.size / ss;
     // 后置条件含 FS 调整：请求在扩（`grow` 即便右侧无空闲，也仍要把 FS 扩满现分区，
     // 见 `free == 0` 那支）就必须在写表之前问出"里面是什么、那一步做得了吗"——判据与 GPT 路径
-    // 同一处。缩容有下面的 check_shrink 守卫链，no-op 两不动，故都不在此列
+    // 同一处。缩容在入口即拒绝，no-op 两不动，故都不在此列
     let extends = grow_to_end || target.is_some_and(|b| b / ss > p.size_lba as u64);
     if extends && !a.no_fs {
         fsops::grow_target_at(&src, part, lba_bytes(p.start_lba as u64, ss), lba_bytes(p.size_lba as u64, ss))
@@ -345,7 +344,7 @@ pub(crate) fn cmd_resize_msdos(a: &ResizeRequest, pref: PartSelector, src_ro: &F
         && src.record_journal()
             .and_then(|j| j.old_range())
             .is_some_and(|old| old != table_range);
-    // 提交过的事实只对"本次不再要求写表"的请求成立：请求更大的尺寸时按新尺寸再扩一次，
+    // 提交过的事实只对"本次不要求再写表"的请求成立：请求更大的尺寸时按新尺寸再扩一次，
     // 记录里的旧区间随下一次写表保持有效
     let grow_again = !grow_to_end && target.is_some_and(|b| b / ss > u64::from(p.size_lba));
     if record_committed && !grow_again {
@@ -387,7 +386,7 @@ pub(crate) fn cmd_resize_msdos(a: &ResizeRequest, pref: PartSelector, src_ro: &F
         if new_size_lba > u32::MAX as u64 {
             bail_fail(RunOutcome::refused(format!("size {new_size_lba} sectors exceeds MBR 32-bit LBA limit")));
         }
-        // 越界与右侧空闲都已判定，note 不再跟在一条拒绝后面
+        // 越界与右侧空闲均已判定，取整提示不会跟在一条拒绝后面
         if new_size_lba == p.size_lba as u64 {
             // 请求的终点就是现状：表与 FS 都不动（GPT 路径对未变尺寸同样判 FsAction::Leave）。
             // 不跑 FS 步，请求"什么都不改"就不会因外部工具缺失而拿到非零退出码。

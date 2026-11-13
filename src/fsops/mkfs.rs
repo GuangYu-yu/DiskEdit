@@ -84,7 +84,7 @@ impl std::fmt::Display for MkfsFs {
     }
 }
 
-/// `--fs` 值 → 类型。失败归 `UnsupportedFs`（拒绝/10）：拼错的类型名改参数即可解
+/// `--fs` 值 → 类型。失败归 `UnsupportedFs`
 pub fn parse_fstype(name: &str) -> Result<MkfsFs, FsError> {
     MkfsFs::from_cli_name(name).ok_or_else(|| {
         FsError::unsupported(format!(

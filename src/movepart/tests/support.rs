@@ -153,7 +153,7 @@ pub(crate) fn rsize_deferred(src: &mut WriteSource, part: u32, start: u64, end: 
 
 pub(crate) fn ap(src: &mut WriteSource, plan: &mut Plan, chunk: u64, no_fs: bool, log: &mut dyn FnMut(&str)) -> RunOutcome {
     let (g, _repair) = gpt_policy::resolve_geometry(src).unwrap().unwrap();
-    apply(src, &g, plan, chunk, no_fs, false, None, log)
+    crate::cmd::resize::apply_move(src, &g, plan, chunk, no_fs, false, None, log)
 }
 
 /// make_plan 边界：多 movable 尾部打包（末→首、末端对齐）、swap 标记、LUKS 拒绝、
@@ -203,6 +203,7 @@ fn file_source(path: &std::path::Path) -> FileSource {
     let fingerprint = crate::dev::TargetFingerprint::from_file(&f).unwrap();
     FileSource {
         identity: crate::dev::TargetIdentity::resolve_image(path),
+        block_identity: None,
         file: f,
         path: path.into(),
         sector_size: 512,
@@ -234,5 +235,5 @@ pub(crate) fn tamper_disk_guid(src: &mut WriteSource) {
     hdr[16..20].fill(0);
     let crc = table::crc32(&hdr[..92]);
     hdr[16..20].copy_from_slice(&crc.to_le_bytes());
-    src.write_at(512, &hdr).unwrap();
+    src.write_fixture(512, &hdr).unwrap();
 }

@@ -50,7 +50,7 @@ echo "unknown -> exit=$E : $(echo "$OUT" | tail -1)"
 echo
 echo "########## C: resize --start 应报用法错误（非本命令选项）##########"
 mk ext4 300M
-OUT=$($B resize --yes "$T":1 500M --start 4096 2>&1); E=$? # cli-surface: refused
+OUT=$($B resize --yes "$T":1 500M --start 4096 2>&1); E=$?
 echo "exit=$E : $(echo "$OUT" | tail -1)"
 [ "$E" = "2" ] && echo "C USAGE-ERROR OK" || { echo "C WRONG EXIT ($E)"; rc=1; }
 

@@ -26,7 +26,6 @@ T=$(mktemp "$WSL_ROOT/loopid-XXXXXX.img")
 track_file "$T"
 truncate -s 96M "$T"
 
-# C/E/F 段的收尾在失败路径也要执行：先定义，变量在用到时才赋值
 DMNAME=
 SWAPDEV=
 ZPARENT=
@@ -108,7 +107,7 @@ lo_detach "$L2"
 echo "=== E: loop 分区被块设备栈持有"
 DMNAME=
 if command -v dmsetup >/dev/null 2>&1 && dmsetup version >/dev/null 2>&1; then
-    # 独立的镜像：改表用缩小（Overwrite）形状，避免 Extend 的 dm-only 放行路径
+    # 独立的镜像：改表用缩小形状，避免 Extend 的 dm-only 放行路径
     T2=$(mktemp "$WSL_ROOT/loopid-hold-XXXXXX.img")
     track_file "$T2"
     truncate -s 64M "$T2"

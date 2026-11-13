@@ -45,7 +45,6 @@ fn the_execution_entry_takes_a_confirmed_plan_only() {
 
 #[test]
 fn the_write_gate_opens_only_once_the_record_is_durable() {
-    // 表步骤只经守卫入口：写前比对与写后回读都在这个入口内，顺序固定
     let table = source("execution/table.rs");
     assert_order(
         &table,
@@ -61,7 +60,7 @@ fn the_write_gate_opens_only_once_the_record_is_durable() {
         &[
             "pub(crate) fn write_guarded(",
             "self.read_at(off, &mut current)",
-            "self.write_at(off, buf)",
+            "self.write_at(&guard, off, buf)",
             "pub(crate) fn write_converged(",
             "self.write_guarded(off, buf, expect, step)",
             "self.read_back(off, buf)",
@@ -74,7 +73,7 @@ fn the_write_gate_opens_only_once_the_record_is_durable() {
         "the process write fact must stay in the result type"
     );
     assert!(
-        source("execution/fs.rs").contains("crossed_irreversible_point("),
+        source("execution/fs.rs").contains("outcome::attribute("),
         "the fs step must take its 4/5 split from the write fact"
     );
     assert!(

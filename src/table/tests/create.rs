@@ -100,7 +100,7 @@ fn write_small_span_gpt(src: &mut WriteSource, ss: u64) {
         partition_name: "".into(),
     }];
     let (bytes, crc) = serialize_array(&entries, &geom);
-    src.write_at(2 * ss, &bytes).unwrap();
+    src.write_fixture(2 * ss, &bytes).unwrap();
     let last_lba = src.size / ss - 1;
     let h = RawHeader {
         revision: 0x0001_0000,
@@ -115,7 +115,7 @@ fn write_small_span_gpt(src: &mut WriteSource, ss: u64) {
         header_size: 92,
     };
     let sec = serialize_header(&h, crc, ss).unwrap();
-    src.write_at(ss, &sec).unwrap();
+    src.write_fixture(ss, &sec).unwrap();
 }
 
 /// GPT 冲突检查不得依赖保护 MBR 形状：LBA0 被外部工具改坏而 LBA1 仍是完整 GPT 时，
@@ -144,7 +144,7 @@ pub(crate) fn gpt_conflict_check_fails_closed_on_unreadable_old_table() {
     let mut sec = vec![0u8; 512];
     src.read_at(512, &mut sec).unwrap();
     sec[16..20].fill(0);
-    src.write_at(512, &sec).unwrap();
+    src.write_fixture(512, &sec).unwrap();
 
     let e = gpt_metadata_conflict(&src, 512).expect_err("an unverifiable old table must not read as 'no conflict'");
     assert!(e.to_string().contains("header"), "{e}");
@@ -159,7 +159,7 @@ pub(crate) fn mbr_conflict_catches_gpt_signature_inside_partition() {
     let mut src = src_from_mbr("cfchk_mbr", &[(0x83, 1, 99)], 100);
     let geom = EntryArrayGeometry::new(ss, 128, 4, MAX_ARRAY_BYTES).unwrap();
     let (bytes, crc) = serialize_array(&[], &geom);
-    src.write_at(98 * ss, &bytes).unwrap();
+    src.write_fixture(98 * ss, &bytes).unwrap();
     let h = RawHeader {
         revision: 0x0001_0000,
         primary_lba: 99,
@@ -173,7 +173,7 @@ pub(crate) fn mbr_conflict_catches_gpt_signature_inside_partition() {
         header_size: 92,
     };
     let sec = serialize_header(&h, crc, ss).unwrap();
-    src.write_at(99 * ss, &sec).unwrap();
+    src.write_fixture(99 * ss, &sec).unwrap();
 
     let why = mbr_metadata_conflict(&src, ss).unwrap().expect("the conflict must be found");
     assert!(why.contains("MBR partition 1"), "{why}");
@@ -217,10 +217,10 @@ pub(crate) fn create_mbr_refuses_when_a_cleared_signature_lands_inside_a_partiti
     lba0[446 + 12..446 + 16].copy_from_slice(&99u32.to_le_bytes());
     lba0[510] = 0x55;
     lba0[511] = 0xAA;
-    src.write_at(0, &lba0).unwrap();
+    src.write_fixture(0, &lba0).unwrap();
     let geom = EntryArrayGeometry::new(ss, 128, 4, MAX_ARRAY_BYTES).unwrap();
     let (bytes, crc) = serialize_array(&[], &geom);
-    src.write_at(98 * ss, &bytes).unwrap();
+    src.write_fixture(98 * ss, &bytes).unwrap();
     let h = RawHeader {
         revision: 0x0001_0000,
         primary_lba: 99,
@@ -234,7 +234,7 @@ pub(crate) fn create_mbr_refuses_when_a_cleared_signature_lands_inside_a_partiti
         header_size: 92,
     };
     let sec = serialize_header(&h, crc, ss).unwrap();
-    src.write_at(99 * ss, &sec).unwrap();
+    src.write_fixture(99 * ss, &sec).unwrap();
     let before = std::fs::read(&src.path).unwrap();
 
     let e = create_mbr(&mut src, false)

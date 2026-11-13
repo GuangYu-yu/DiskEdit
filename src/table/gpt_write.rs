@@ -72,10 +72,6 @@ pub fn serialize_array(entries: &[GPTPartitionEntry], geom: &EntryArrayGeometry)
 /// 重建规范化主/备头（写入路径：无论读到的是哪份副本，输出总为规范位置）
 /// - 主头：MyLBA=1, Alt=last_lba, 数组=2
 /// - 备头：MyLBA=last_lba, Alt=1, 数组=backup_array_lba（= last_lba − span）
-///
-/// `backup_array_lba` 由调用方算好传入（commit_gpt 已用 checked_sub 校验容器装得下数组）：
-/// 本函数再算一次既与 serialize_array 的同一个跨度重复，又会先于调用方的下溢保护执行——
-/// debug 下 panic、release 下先回绕再被调用方拦下，同一个事实两处推导
 pub(crate) fn canonical_headers(h: &RawHeader, last_lba: u64, backup_array_lba: u64) -> (RawHeader, RawHeader) {
     let primary = RawHeader {
         revision: h.revision,
@@ -123,11 +119,7 @@ struct PreparedTable {
 
 /// 崩溃安全四结构的参考序列（测试夹具用）：`commit_gpt` 与
 /// [`crate::geometry::ValidatedGeometry::commit`] 都走这里。
-///
-/// 生产写入不经过本函数：命令层把四段字节装配进 `TableStep`，由
-/// `execution::table` 按步骤的写入序落盘并做写前/写后 regions 比对。
-/// 本函数保留为测试的独立参照——它自己读表、算字节、写、读回，与被测路径不共享代码。
-///
+/// 生产写入由命令层装配成 `TableStep` 经 `execution::table` 落盘。
 /// 首笔写盘前重读三扇区摘要并与入口记录的值比对（见 [`verify_table_stamp`]）。
 #[cfg(test)]
 pub(crate) fn commit_table(
@@ -154,8 +146,8 @@ fn prepare_table(
 ) -> io::Result<PreparedTable> {
     // 几何只构造一次：数组字节数、扇区跨度、条目数与大小都取自它，不再各自乘一遍
     let geom = EntryArrayGeometry::new(ss, header.size_of_partition_entry, header.number_of_partition_entries, MAX_ARRAY_BYTES)?;
-    // serialize_array 按 geom.entry_count 截断，多出的条目既不校验也不落盘：
-    // 长度一致性若留给调用方，写出的表会缺条目而本函数报成功
+    // serialize_array 按 geom.entry_count 截断，多出的条目既不校验也不落盘——
+    // 长度一致性必须在这里挡住
     let given = u32::try_from(entries.len()).unwrap_or(u32::MAX);
     if given != geom.entry_count {
         return Err(io::Error::new(
@@ -221,16 +213,16 @@ fn prepare_table(
 #[cfg(test)]
 fn write_table(src: &mut WriteSource, p: &PreparedTable) -> io::Result<()> {
     let ss = p.ss;
-    src.write_at(p.backup_array_lba * ss, &p.array_bytes)?;
+    src.write_fixture(p.backup_array_lba * ss, &p.array_bytes)?;
     src.sync_all()?;
 
-    src.write_at(p.last_lba * ss, &p.backup_header)?;
+    src.write_fixture(p.last_lba * ss, &p.backup_header)?;
     src.sync_all()?;
 
-    src.write_at(2 * ss, &p.array_bytes)?;
+    src.write_fixture(2 * ss, &p.array_bytes)?;
     src.sync_all()?;
 
-    src.write_at(ss, &p.primary_header)?;
+    src.write_fixture(ss, &p.primary_header)?;
     src.sync_all()?;
     // 读回复核：`sync_all` 只是"设备声称已落盘"，缓存丢写与镜像层短写都不在其中。
     // 这里比对的是刚写出的四段字节，证明的只是"这四次写调用没有被吞掉"——
@@ -330,9 +322,7 @@ pub(crate) fn protective_mbr_content(
 
 /// 保护 MBR（LBA0）：内容由 [`protective_mbr_content`] 算定；已合规即一字不写。
 /// 首次写盘前重读三扇区摘要并与入口记录的值比对（见 [`verify_table_stamp`]）。
-///
-/// 仅测试构建可见：生产路径由 `assembly::assemble_repair_plan` 装配成
-/// `TableStep::protective_mbr`，写入与前后比对都在执行器里。
+/// 仅测试构建可见。
 #[cfg(test)]
 pub fn ensure_protective_mbr(src: &mut WriteSource, ss: u64) -> Result<(), RunOutcome> {
     let stamp = table_stamp(src, ss)?;
@@ -340,7 +330,7 @@ pub fn ensure_protective_mbr(src: &mut WriteSource, ss: u64) -> Result<(), RunOu
         return Ok(());
     };
     verify_table_stamp(src, stamp, ss)?;
-    src.write_at(0, &lba0).map_err(RunOutcome::from)?;
+    src.write_fixture(0, &lba0).map_err(RunOutcome::from)?;
     src.sync_all().map_err(RunOutcome::from)?;
     // 读回复核：写调用与 sync 只说明字节交给了设备，缓存丢写或镜像层短写要在重读
     // 时才可见。LBA0 被丢掉而这里报成功，盘随后会被判成 GPT damaged，写命令全拒

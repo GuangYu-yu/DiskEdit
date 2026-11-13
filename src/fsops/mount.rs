@@ -230,7 +230,7 @@ pub(crate) enum Occupancy {
 
 /// 探测设备节点的占用状态。`shape` 由调用方给：整段重写传 `Overwrite`，
 /// 只扩末端的表写入传 `Extend`。放行条件（`Extend` 下持有者全是 dm）在
-/// [`crate::dev::verdict`] 内判定，调用方不再对单条持有链复算。
+/// [`crate::dev::verdict`] 内判定，调用方不对单条持有链复算。
 /// Err = 探测本身失败——调用方一律 fail-closed，
 /// "确认不了空闲"不得当成"空闲"
 #[cfg(target_os = "linux")]
@@ -298,7 +298,7 @@ fn active_swap_in(swaps: &str, dev: &str, rdev: u64) -> io::Result<bool> {
 ///
 /// 分类只回答"成因在请求还是在环境"：确定被占用 ⇒ 请求与现状不符（`InvalidArgument`，3）；
 /// 探测失败 ⇒ 环境故障（`Io`，4）。"本次是否写过盘"由命令层的归责点
-/// `reconcile_with_writes` 统一处理——写过的调用点会被抬成 5，这一层不替它混码
+/// `settled` 统一处理——写过的调用点会被抬成 5，这一层不替它混码
 #[cfg(target_os = "linux")]
 pub(crate) fn require_unmounted(dev: &str) -> Result<(), FsError> {
     use crate::dev::OccupancyFact;
@@ -631,8 +631,8 @@ static LOOP_CLAIMS: std::sync::Mutex<Vec<LoopClaim>> = std::sync::Mutex::new(Vec
 /// 只读挂载同样算使用。探测对象取 loop **父设备**：分区被 claim 时整盘的 claim 状态
 /// 一并变化，故对父设备 claim 能撞上挂在分区上的使用——这条冲突关系可读于 Linux 3.19 的
 /// `fs/block_dev.c`（`bd_start_claiming` / `bd_prepare_to_claim`）与当前主线
-/// `block/bdev.c`（`bd_may_claim`）。源码证据不等于所有历史内核都保证同一行为，本机也未
-/// 在项目支持的最低内核上实测，故它是额外的一层，不构成"已覆盖全部使用者"的结论
+/// `block/bdev.c`（`bd_may_claim`）。它只覆盖守块设备约定的使用者，是额外的一层防线，
+/// 不构成"已覆盖全部使用者"的结论
 #[cfg(target_os = "linux")]
 fn claim_loop_exclusive(loopdev: &str) -> io::Result<std::fs::File> {
     use std::os::unix::fs::OpenOptionsExt;
@@ -856,7 +856,7 @@ mod tests {
     }
 
     /// 真实 loop：登记之后另一个进程（不带 O_EXCL）仍能通过 LOOP_SET_STATUS64 改写同一只
-    /// loop 的几何，名字与本进程的 fd 都不变——表里有名字不再等于仍持有。
+    /// loop 的几何，名字与本进程的 fd 都不变——表里有名字不等于仍持有。
     /// 需要 root 与 /dev/loop-control；缺就打印原因并跳过
     #[cfg(target_os = "linux")]
     #[test]
@@ -906,7 +906,7 @@ mod tests {
         };
         let backing_ino = recorded.backing.ino;
         let mut registry = vec![LoopClaim { loopdev: dev.clone(), file: claimed, mapping: recorded }];
-        // include/uapi/linux/loop.h：LOOP_SET_STATUS64。实测：另一个不带 O_EXCL 的打开
+        // include/uapi/linux/loop.h：LOOP_SET_STATUS64。另一个不带 O_EXCL 的打开
         // 在 O_EXCL 持有者仍在时也能改 sizelimit，内核随即重算容量
         const LOOP_SET_STATUS64: libc::c_int = 0x4C04;
         let second = std::fs::OpenOptions::new().read(true).write(true).open(&dev).unwrap();
@@ -971,8 +971,8 @@ pub(crate) fn dm_only(holders: &[String]) -> bool {
 
 /// 写入路径的占用前置闸（表写入与 mkfs）：目标在首次落盘前须空闲。表写入的调用点在
 /// prepare 层（movepart 的 prepare_resize / prepare_apply）与 MBR resize 命令层——那是
-/// 任何写盘的唯一必经关口，把"表已写、FS 步被占"的 PARTIAL(20) 变成 REFUSED(10)：
-/// 占用是请求与现状不匹配，不是盘故障。块设备另有整盘 O_EXCL 独占打开这道内核级防线，
+/// 任何写盘的唯一必经关口：占用在这里被判成 Refused（请求与现状不匹配）而不是 Partial，
+/// 不会留下"表已写、FS 步被占"的一半状态。块设备另有整盘 O_EXCL 独占打开这道内核级防线，
 /// 但其保护面要说准：它挡的是挂载 / swap / 他人的 O_EXCL 打开（open 即 EBUSY），
 /// **不挡**不守约定的普通并发写——本闸对其是纵深防御。被 losetup 当作 backing 的
 /// 块设备这两道都看不见（loop 不登记 holder，losetup 也不以 O_EXCL 打开 backing），
@@ -993,7 +993,7 @@ pub fn ensure_idle_before_write(src: &FileSource, part: u32, start_bytes: u64, k
     }
     let node = find_block_partition_node(src, part, start_bytes).map_err(crate::outcome::RunOutcome::from)?;
     // 形态决定放行范围：`Extend` 只放行持有者全是 dm 的栈，判定与文案都在
-    // [`crate::dev::verdict`] 的结论里；这里不再对 `Held` 的返回值做第二次放行
+    // [`crate::dev::verdict`] 的结论里；这里不对 `Held` 的返回值做第二次放行
     match probe_occupancy(&node, crate::dev::OpShape::from(kind)) {
         Ok(Occupancy::Idle) => Ok(()),
         Ok(Occupancy::Mounted) => Err(OccupancyFact::Occupied.outcome(format!(

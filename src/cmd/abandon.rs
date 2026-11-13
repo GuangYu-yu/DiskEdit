@@ -65,7 +65,7 @@ pub(crate) fn cmd_abandon(a: &AbandonRequest) -> u8 {
     let identity = TargetIdentity::resolve_for_cleanup(path)
         .unwrap_or_else(|| bail_fail(RunOutcome::no_mutation(format!("cannot determine the identity of {}", path.display()))));
 
-    // 锁的独占权针对"对本目标的操作"，目标不存在也照取：abandon_one 的 rename 兜底
+    // 锁的独占权针对"对本目标的操作"，目标不存在也照取：隔离条目的编号分配与占位命名
     // 以"持锁 ⇒ 窗口内无并发 diskedit 抢名"为前提，跳锁会让该前提失效。
     // 锁文件是纯运行时 artifact，残留不构成阻挡（判据是锁本身，见 targetlock）
     // 锁文件落在记录目录内，目录必须先于取锁就位。目标可能已不存在，
@@ -115,7 +115,7 @@ fn replay_ranges(records: &[RecoveryRecord]) -> Option<usize> {
             }
             crate::recovery::CompanionProbe::Absent => {}
             crate::recovery::CompanionProbe::Damaged(_)
-            | crate::recovery::CompanionProbe::Foreign
+            | crate::recovery::CompanionProbe::Foreign { .. }
             | crate::recovery::CompanionProbe::Unreadable(_)
             | crate::recovery::CompanionProbe::NotOurs(_) => return None,
         }
@@ -207,9 +207,15 @@ fn abandon_records(identity: &TargetIdentity, disk: Option<&FileSource>, discard
                  and abandoning it gives that up for good",
                 path.display()
             ),
-            crate::recovery::CompanionProbe::Foreign => eprintln!(
-                "{}: recovery record in a layout this build does not recognize",
-                path.display()
+            crate::recovery::CompanionProbe::Foreign { magic } => eprintln!(
+                "{}: {}",
+                path.display(),
+                match crate::recovery::legacy_layout(*magic) {
+                    Some(name) => format!(
+                        "recovery record in the previous layout ({name}); this build reads the current layout only"
+                    ),
+                    None => "recovery record in a layout this build does not recognize".to_string(),
+                }
             ),
             crate::recovery::CompanionProbe::Unreadable(why) => eprintln!(
                 "warning: {} is a recovery record that cannot be read here ({why}); abandoning it gives up \
@@ -225,7 +231,7 @@ fn abandon_records(identity: &TargetIdentity, disk: Option<&FileSource>, discard
     // 自动隔离要求头、身份段 CRC、身份链全部通过。头读不懂就不算
     // "归属已确认"，拒绝自动隔离，一处也不改名
     if let Some(path) = records.iter().find_map(|r| match r.probe.as_ref() {
-        crate::recovery::CompanionProbe::Foreign => Some(r.path()),
+        crate::recovery::CompanionProbe::Foreign { .. } => Some(r.path()),
         _ => None,
     }) {
         let dir = path.parent().unwrap_or(path);

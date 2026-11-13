@@ -198,7 +198,7 @@ pub(crate) fn verify_regions_before(src: &FileSource, expected: &[RegionStamp]) 
 }
 
 /// 重读表戳失败：原因只陈述读失败。本次是否写过目标字节由出口判
-/// （见 [`crate::outcome::RunOutcome::reconcile_with_writes`]）
+/// （见 [`crate::outcome::RunOutcome::settled`]）
 fn stamp_io_failure(e: io::Error) -> RunOutcome {
     RunOutcome::no_mutation(format!("re-reading the table stamp failed: {e}"))
 }

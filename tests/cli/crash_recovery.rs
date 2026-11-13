@@ -215,7 +215,7 @@ fn foreign_resize_slot_refuses_resize_and_copy() {
     // 两次拒绝都不得动现场
     assert_eq!(inspect_out(&img), record_before, "a refusal must not touch the record");
 
-    // 重跑原命令收尾（对账：现场本身仍是可续跑的）
+    // 重跑原命令收尾
     let (c, e) = run(&argv);
     assert_eq!(c, 0, "re-running must resume and finish: {e}");
     assert!(!record_present(&img));
@@ -488,6 +488,179 @@ fn tail_packed_multi_partition_crash_resumes_from_the_durable_cursor() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// 真实文件系统的收尾步骤要 root、loop 与 e2fsprogs；缺任一项时依赖它的用例跳过
+fn fs_tooling_ready() -> bool {
+    #[cfg(unix)]
+    {
+        if unsafe { libc::geteuid() } != 0 {
+            return false;
+        }
+        if !Path::new("/dev/loop-control").exists() {
+            return false;
+        }
+        ["losetup", "mke2fs", "resize2fs", "e2fsck"].iter().all(|name| {
+            ["/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin"]
+                .iter()
+                .any(|dir| {
+                    let path = Path::new(dir).join(name);
+                    path.is_file()
+                        && path
+                            .metadata()
+                            .is_ok_and(|m| std::os::unix::fs::PermissionsExt::mode(&m.permissions()) & 0o111 != 0)
+                })
+        })
+    }
+    #[cfg(not(unix))]
+    {
+        false
+    }
+}
+
+/// 带搬移的扩容计划没有围栏载体（围栏只服务无搬移记录）：扩容表已写、进度尚未推进时中断。
+/// 重跑必须按盘上的目标区间认出扩容已落、幂等重放该表步。末态按可观测事实对账：两次
+/// `resize2fs` 相隔数秒，ext4 的超级块时间戳与日志校验和必然不同，整盘字节不能作为判据
+#[test]
+fn grow_table_write_crash_converges_to_the_uninterrupted_layout() {
+    if !fs_tooling_ready() {
+        eprintln!(
+            "skipping grow_table_write_crash_converges_to_the_uninterrupted_layout: needs euid 0, \
+             /dev/loop-control and losetup/mke2fs/resize2fs/e2fsck"
+        );
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("diskedit_gtw_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let img = dir.join("g.img");
+    let base = dir.join("b.img");
+    std::fs::write(&img, vec![0u8; 64 * 1024 * 1024]).unwrap();
+    let img_s = img.to_str().unwrap().to_string();
+    assert_eq!(run(&["new", &img_s, "--yes"]).0, 0);
+    // 目标 8MiB（2048..18431），两条挡路分区各 1MiB（18432..20479、20480..22527）
+    assert_eq!(run(&["add", &img_s, "8M", "--align", "mib", "--type-guid", "0fc63daf-8483-4772-8e79-3d69d8477de4", "--yes"]).0, 0);
+    for _ in 0..2 {
+        assert_eq!(run(&["add", &img_s, "1M", "--align", "mib", "--type-guid", "0fc63daf-8483-4772-8e79-3d69d8477de4", "--yes"]).0, 0);
+    }
+    // 挡路分区填可辨识图案；目标分区建真实 ext4，收尾步骤才有对象可扩
+    let pattern = |seed: u32| {
+        let mut v = vec![0u8; 1024 * 1024];
+        let mut x = seed;
+        for b in v.iter_mut() {
+            x = x.wrapping_mul(1664525).wrapping_add(1013904223);
+            *b = (x >> 24) as u8;
+        }
+        v
+    };
+    let (p2, p3) = (pattern(0x1111), pattern(0x2222));
+    write_region(&img, 18432, &p2);
+    write_region(&img, 20480, &p3);
+    let target = format!("{img_s}:1");
+    let (c, e) = run(&["mkfs", target.as_str(), "ext4", "--yes"]);
+    assert_eq!(c, 0, "the fixture must get a real ext4: {e}");
+
+    // 基线副本与中断现场同源：两边只差一次注入
+    std::fs::copy(&img, &base).unwrap();
+    let base_s = base.to_str().unwrap().to_string();
+    let base_target = format!("{base_s}:1");
+    let base_argv = ["resize", base_target.as_str(), "grow", "--allow-move", "--chunk", "1", "--yes"];
+    assert_eq!(run(&base_argv).0, 0);
+    let base_range = gpt_range(&base, 1);
+
+    let argv = ["resize", target.as_str(), "grow", "--allow-move", "--chunk", "1", "--yes"];
+    let (c, e) = run_fault("after-grow-table-write", &argv);
+    assert_ne!(c, 0, "the injected abort must not look like success: {e}");
+    assert!(record_present(&img), "the interrupted job must leave its record: {e}");
+    // 中断点必须在扩容表已落之后：目标分区的表项已经等于基线的末态
+    assert_eq!(
+        gpt_range(&img, 1),
+        base_range,
+        "the crash must sit after the grow table write and before its record: {e}"
+    );
+
+    // 让续跑的 resize2fs 与基线的落进不同秒：末态对账不得依赖时间戳恰好相同
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    let (c, e) = run(&argv);
+    assert_eq!(c, 0, "re-running must converge: {e}");
+    assert!(!record_present(&img), "a converged job must commit its record: {e}");
+
+    assert_eq!(
+        std::fs::metadata(&img).unwrap().len(),
+        std::fs::metadata(&base).unwrap().len(),
+        "the capacity must match the uninterrupted baseline"
+    );
+    assert_eq!(
+        info_out(&img),
+        info_out(&base),
+        "`info` must describe the same layout on both sides"
+    );
+    assert_eq!(
+        table_bytes(&img),
+        table_bytes(&base),
+        "PMBR, primary header, entry array and backup header must match the baseline"
+    );
+    for num in 1..=3 {
+        assert_eq!(
+            gpt_range(&img, num),
+            gpt_range(&base, num),
+            "partition {num} must land where the baseline puts it"
+        );
+    }
+    // 用户数据：两条被搬分区的数据区原样落在新位置，且与基线同位置逐字节相同
+    for (num, want) in [(2usize, &p2), (3usize, &p3)] {
+        let (s, t) = gpt_range(&img, num);
+        let len = ((t - s + 1) * 512) as usize;
+        let bytes = read_region(&img, s, len);
+        assert_eq!(bytes, *want, "partition {num} must carry its relocated pattern intact");
+        assert_eq!(
+            bytes,
+            read_region(&base, s, len),
+            "partition {num} user data must match the baseline at the same position"
+        );
+    }
+    let (start, end) = gpt_range(&img, 1);
+    assert!(
+        e2fsck_clean(&img, start, end - start + 1),
+        "the resumed filesystem must pass a read-only check"
+    );
+    assert!(
+        e2fsck_clean(&base, start, end - start + 1),
+        "the baseline filesystem must pass a read-only check"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `info` 的版面描述（JSON，含容量、扇区、各分区起止与文件系统类型）
+fn info_out(img: &Path) -> String {
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_DiskEdit"))
+        .args(["info", img.to_str().unwrap()])
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+/// 把分区按 loop 映射出来跑只读 `e2fsck -fn`，退出 0 视为干净
+fn e2fsck_clean(img: &Path, start: u64, sectors: u64) -> bool {
+    let show = std::process::Command::new("losetup")
+        .args([
+            "--find",
+            "--show",
+            "--offset",
+            &(start * 512).to_string(),
+            "--sizelimit",
+            &(sectors * 512).to_string(),
+        ])
+        .arg(img)
+        .output()
+        .unwrap();
+    if !show.status.success() {
+        return false;
+    }
+    let dev = String::from_utf8_lossy(&show.stdout).trim().to_string();
+    let check = std::process::Command::new("e2fsck").args(["-fn", &dev]).output().unwrap();
+    let _ = std::process::Command::new("losetup").args(["-d", &dev]).output();
+    check.status.success()
+}
+
 /// 目标分区右侧紧邻挡路者：`resize grow`（尾部打包）与 `resize SIZE`（最小位移）
 /// 各自只有走搬移才能完成，而两条命令共用同一个续跑槽位。按对方的语义执行槽上
 /// 那份现场，就是把请求静默放大或缩水——故必须拒绝，且现场原样留给原命令续跑。
@@ -507,7 +680,7 @@ fn pending_relocation_job_refuses_the_other_resize_semantic() {
     assert_eq!(run(&["add", img_s, "1M", "--align", "mib", "--type-guid", "0fc63daf-8483-4772-8e79-3d69d8477de4", "--yes"]).0, 0);
     assert_eq!(run(&["add", img_s, "1M", "--align", "mib", "--type-guid", "0fc63daf-8483-4772-8e79-3d69d8477de4", "--yes"]).0, 0);
 
-    // ① 精确 SIZE 作业（最小位移 plan）中断
+    // 精确 SIZE 作业（最小位移 plan）中断
     // 两个分区都没有 FS：扩分区表要显式 --no-fs（槽位/续跑语义与它无关）
     let size_argv = ["resize", target.as_str(), "+3M", "--allow-move", "--chunk", "1", "--yes", "--no-fs"];
     let (c, e) = run_fault("chunk:1", &size_argv);
@@ -527,7 +700,7 @@ fn pending_relocation_job_refuses_the_other_resize_semantic() {
     assert_eq!(c, 0, "re-running the original command must resume and finish: {e}");
     assert!(!record_present(&img), "{e}");
 
-    // ② 反向：grow 作业（尾部打包 plan）中断 → SIZE 语义必须拒绝
+    // 反向：grow 作业（尾部打包 plan）中断 → SIZE 语义必须拒绝
     let (c, e) = run_fault("chunk:1", &grow_argv);
     assert_ne!(c, 0, "{e}");
     assert!(record_present(&img), "{e}");
@@ -544,7 +717,7 @@ fn pending_relocation_job_refuses_the_other_resize_semantic() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// 修复动作不随记录持久化：绑定记录之后、执行修复之前崩溃，续跑必须补做修复。
+/// 记录里还没有修复事实：绑定记录之后、修复开始之前崩溃，续跑按本次读到的表重新分类并补做修复。
 /// 盘面：镜像被扩到 48MiB，双头自述的备份位置仍停在 32MiB 末端
 #[test]
 fn resume_after_relocation_bound_replays_the_repair() {
@@ -591,6 +764,167 @@ fn resume_after_relocation_bound_replays_the_repair() {
         "the backup header must describe itself as the last LBA"
     );
     assert!(!record_present(&img), "{e}");
+
+    std::fs::remove_dir_all(img.parent().unwrap()).ok();
+}
+
+/// 表区的可观测量：PMBR、主头、条目数组与容器末端的备份头
+fn table_bytes(img: &Path) -> Vec<u8> {
+    let sectors = std::fs::metadata(img).unwrap().len() / 512;
+    let mut out = read_region(img, 0, 512);
+    out.extend(read_region(img, 1, 512));
+    out.extend(read_region(img, 2, 1024));
+    out.extend(read_region(img, sectors - 1, 512));
+    out
+}
+
+/// `delete` 的首次落盘就是修复事实：修复的第一个目标字节写出之前，记录已在盘上；
+/// 该记录只有修复事实、没有恢复区间，`undo` 仍必须能结算它
+#[test]
+fn delete_records_the_table_repair_before_its_first_write() {
+    let img = stage("drep");
+    let img_s = img.to_str().unwrap().to_string();
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&img)
+        .unwrap()
+        .set_len(48 * 1024 * 1024)
+        .unwrap();
+    let before = table_bytes(&img);
+    let target = format!("{img_s}:1");
+    let argv = ["delete", target.as_str(), "--yes"];
+
+    let (c, e) = run_fault("repair-recorded", &argv);
+    assert_ne!(c, 0, "the fault must abort the run: {e}");
+    assert!(
+        record_present(&img),
+        "the record must be on disk before the repair writes: {e}"
+    );
+    let shown = inspect_out(&img);
+    assert!(shown.contains("repair: "), "inspect must show the repair fact: {shown}");
+    assert!(shown.contains("in flight"), "the repair must still be in flight: {shown}");
+    assert_eq!(table_bytes(&img), before, "no table byte may be written before the repair record");
+
+    // 记录里只有修复事实、没有可回写的区间：结算不写盘，但记录必须被释放
+    let (c, e) = run(&["undo", img_s.as_str(), "--yes"]);
+    assert_eq!(c, 0, "undo must settle a record that holds only a repair fact: {e}");
+    assert!(!record_present(&img), "{e}");
+
+    let (c, e) = run(&argv);
+    assert_eq!(c, 0, "the delete must run again after the record is released: {e}");
+    assert!(!record_present(&img), "{e}");
+
+    std::fs::remove_dir_all(img.parent().unwrap()).ok();
+}
+
+/// `copy` 同一条路径：记录由修复事实首次落盘，之前没有任何目标字节写出
+#[test]
+fn copy_records_the_table_repair_before_its_first_write() {
+    let img = stage("crep");
+    let img_s = img.to_str().unwrap().to_string();
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&img)
+        .unwrap()
+        .set_len(48 * 1024 * 1024)
+        .unwrap();
+    let before = table_bytes(&img);
+    let target = format!("{img_s}:1");
+    let argv = [
+        "copy",
+        target.as_str(),
+        "--start",
+        "24576",
+        "--chunk",
+        "1",
+        "--yes",
+    ];
+
+    let (c, e) = run_fault("repair-recorded", &argv);
+    assert_ne!(c, 0, "the fault must abort the run: {e}");
+    assert!(
+        record_present(&img),
+        "the record must be on disk before the repair writes: {e}"
+    );
+    let shown = inspect_out(&img);
+    assert!(shown.contains("repair: "), "inspect must show the repair fact: {shown}");
+    assert!(shown.contains("in flight"), "the repair must still be in flight: {shown}");
+    assert_eq!(table_bytes(&img), before, "no table byte may be written before the repair record");
+
+    let (c, e) = run(&["undo", img_s.as_str(), "--yes"]);
+    assert_eq!(c, 0, "undo must settle a record that holds only a repair fact: {e}");
+    assert!(!record_present(&img), "{e}");
+
+    let (c, e) = run(&argv);
+    assert_eq!(c, 0, "the copy must run again after the record is released: {e}");
+    assert!(!record_present(&img), "{e}");
+
+    std::fs::remove_dir_all(img.parent().unwrap()).ok();
+}
+
+/// `delete` 的表步围栏先于表写入：围栏在途时表字节未动，阶段判不可判定，
+/// 记录没有可回写的区间，只能用 `abandon` 释放
+#[test]
+fn delete_records_the_table_step_before_its_first_write() {
+    let img = stage("dfence");
+    let img_s = img.to_str().unwrap().to_string();
+    let before = table_bytes(&img);
+    let target = format!("{img_s}:1");
+    let argv = ["delete", target.as_str(), "--yes"];
+
+    let (c, e) = run_fault("table-step-recorded", &argv);
+    assert_ne!(c, 0, "the fault must abort the run: {e}");
+    assert!(
+        record_present(&img),
+        "the record must be on disk before the table writes: {e}"
+    );
+    let shown = inspect_out(&img);
+    assert!(
+        shown.contains("table fence: table step in flight"),
+        "inspect must show the in-flight fence: {shown}"
+    );
+    assert!(
+        shown.contains("stage: Undecidable"),
+        "an in-flight fence must leave the stage undecidable: {shown}"
+    );
+    assert_eq!(table_bytes(&img), before, "no table byte may be written before the fence");
+
+    assert_eq!(run(&["abandon", img_s.as_str()]).0, 0);
+    assert!(!record_present(&img));
+
+    let (c, e) = run(&argv);
+    assert_eq!(c, 0, "the delete must run again after the record is released: {e}");
+    assert!(!record_present(&img), "{e}");
+
+    std::fs::remove_dir_all(img.parent().unwrap()).ok();
+}
+
+/// 表步写完、记录尚未提交：围栏已经 `Landed`，阶段说明表已写，`undo` 按恢复区间回放
+#[test]
+fn delete_records_the_landed_table_step() {
+    let img = stage("dfence2");
+    let img_s = img.to_str().unwrap().to_string();
+    let before = table_bytes(&img);
+    let target = format!("{img_s}:1");
+    let argv = ["delete", target.as_str(), "--yes"];
+
+    let (c, e) = run_fault("after-table-step", &argv);
+    assert_ne!(c, 0, "the fault must abort the run: {e}");
+    assert!(record_present(&img), "the record must survive the crash: {e}");
+    let shown = inspect_out(&img);
+    assert!(
+        shown.contains("table fence: landed"),
+        "inspect must show the landed fence: {shown}"
+    );
+    assert!(
+        shown.contains("stage: TableWritten"),
+        "a landed fence must report the table as written: {shown}"
+    );
+
+    let (c, e) = run(&["undo", img_s.as_str(), "--yes"]);
+    assert_eq!(c, 0, "undo must replay the recorded table preimages: {e}");
+    assert!(!record_present(&img), "{e}");
+    assert_eq!(table_bytes(&img), before, "undo must restore the table bytes");
 
     std::fs::remove_dir_all(img.parent().unwrap()).ok();
 }

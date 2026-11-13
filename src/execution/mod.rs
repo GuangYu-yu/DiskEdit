@@ -1,9 +1,9 @@
 //! 执行编排：已确认计划的步骤分派。
 //!
 //! 入口 [`execute_plan`] 只收 [`ConfirmedPlan`]。**计划步骤**的写盘只有这一条路径：
-//! 搬移、复制、表提交、换区重建、文件系统扩缩与属性改写都从这里走，命令层不再自己
+//! 搬移、复制、表提交、换区重建、文件系统扩缩与属性改写都从这里走，命令层不自己
 //! 调工具或写表。计划之外另有三类补写：
-//! - `cmd/layout.rs` 两处在**已提交态续跑**时直接调 `movepart::fix_ntfs_hidden_sectors`
+//! - `cmd/layout.rs` 两处在**已提交态续跑**时直接调 [`fix_ntfs_hidden_sectors`]
 //!   改引导扇区（`resize-part` 起点变化、`move` 已提交条目的收尾）。同名函数在本模块的
 //!   `fix_hidden_sectors`（表提交之后）属于计划步骤，不是链外写入。
 //! - `cmd/undo` 的回退方向回放。
@@ -33,25 +33,57 @@ use crate::dev::WriteSource;
 use crate::outcome::{Pending, RunOutcome};
 use crate::planner::chunk::move_chunk_layout;
 use crate::planner::{ConfirmedPlan, PlanStep};
-use crate::recovery::{RelocEntry, Relocation};
+use crate::recovery::Relocation;
 use crate::table::TableStep;
+use std::io;
 
 /// 搬移进度的内存载体：条目内块位置、全局块游标与已完成步骤数都从这里读写。
 ///
-/// 续跑时由恢复记录注入（见 [`journal_state`]），执行过程中只前进。
+/// 续跑时由恢复记录注入（见 [`journal_state`]），执行过程中只前进。字段私有：读取只有
+/// 两个用途——推进游标，以及把 durable 进度交给记录的 sink。判定层（作业是否完成）
+/// 只看记录里的阶段，不读这里。
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct TransferState {
-    pub entry_index: u32,
-    pub chunks_in_entry: u64,
-    pub completed_steps: u32,
+    entry_index: u32,
+    chunks_in_entry: u64,
+    completed_steps: u32,
     /// 全局累计块数，跨条目只增不减
-    pub transfer_cursor: u64,
+    transfer_cursor: u64,
 }
 
-/// 一条搬移条目是否已完成：记录游标已越过它，数据与表都不再碰。
-/// 早退、清理与续跑共用这一处判断
-pub(crate) fn entry_done(entry: u32, state: &TransferState) -> bool {
-    entry < state.entry_index
+impl TransferState {
+    /// 本条目已搬的块数：搬移序列从它之后继续
+    fn chunks_done(&self) -> u64 {
+        self.chunks_in_entry
+    }
+
+    /// 全局累计块数，供测试注入点定位
+    fn cursor(&self) -> u64 {
+        self.transfer_cursor
+    }
+
+    /// 一块搬完：条目内计数与全局游标同时前进
+    fn advance_chunk(&mut self) {
+        self.chunks_in_entry += 1;
+        self.transfer_cursor += 1;
+    }
+
+    /// 一条目完成：条目游标前进、条目内块数归零、步数加一
+    fn advance_entry(&mut self) {
+        self.entry_index += 1;
+        self.chunks_in_entry = 0;
+        self.completed_steps += 1;
+    }
+
+    /// 一个不搬数据的步骤完成
+    fn note_step(&mut self) {
+        self.completed_steps += 1;
+    }
+
+    /// 落盘用的 durable 快照：(条目游标, 条目内块数, 已完成步骤数, 全局块数)
+    pub(crate) fn durable(&self) -> (u32, u64, u32, u64) {
+        (self.entry_index, self.chunks_in_entry, self.completed_steps, self.transfer_cursor)
+    }
 }
 
 /// 执行过程中的持久化回调。
@@ -61,14 +93,30 @@ pub(crate) fn entry_done(entry: u32, state: &TransferState) -> bool {
 /// [`Self::fs_step_done`]，自身不写记录。
 ///
 /// 实现方在方法内部用 `src.record_journal_mut()` 短借用记录并立即归还，不得跨调用
-/// 持有。[`Self::table_step_done`] 与 [`Self::fs_step_done`] 收到的
-/// `state.entry_index` 已经是推进后的值，实现方只落盘，不再加一。
+/// 持有。[`Self::table_step_done`] 与 [`Self::fs_step_done`] 收到的状态里，条目游标
+/// 已经是推进后的值，实现方只落盘，不重复加一。
 pub(crate) trait StepSink {
     fn transfer_checkpoint(
         &mut self,
         src: &mut WriteSource,
         state: &TransferState,
     ) -> Result<(), RunOutcome>;
+
+    /// 条目的表步开始前的落盘时点：表步一旦写出，记录里必须已经有"这条的表可能已写"
+    /// 的事实。返回错误时表步不得开始
+    fn entry_table_started(
+        &mut self,
+        _src: &mut WriteSource,
+        _entry: u32,
+    ) -> Result<(), RunOutcome> {
+        Ok(())
+    }
+
+    /// 不带搬移条目的表步开始前的落盘时点：表步一旦写出，记录里必须已经有"表可能已写"
+    /// 的事实。返回错误时表步不得开始
+    fn table_step_started(&mut self, _src: &mut WriteSource) -> Result<(), RunOutcome> {
+        Ok(())
+    }
 
     fn table_step_done(
         &mut self,
@@ -149,7 +197,7 @@ enum PreparedStep<'a> {
 /// 首次目标写入之前的只读核对：计划里第一条表步骤的比对区间必须与盘上表区逐段相符。
 ///
 /// 多表步骤的计划按前后表戳串成一条链（装配期已核对），只有第一条的写前区间对应
-/// 盘上现状；核对它即核对了整张表。这条腿给出 3：表在计划读出之后被外部改动，
+/// 盘上现状；核对它即核对了整张表。返回 3：表在计划读出之后被外部改动，
 /// 属于"请求与现状不符"，此时本次运行还没有写下任何字节。
 fn verify_tables_before_write(src: &WriteSource, steps: &[PreparedStep<'_>]) -> Result<(), RunOutcome> {
     let first = steps.iter().find_map(|step| match step {
@@ -185,29 +233,32 @@ pub(crate) fn execute_plan(
     // 数据搬移与表写入都在这个核对之后：外部在计划读出之后改了表，要在这里以 3 拒绝，
     // 而不是搬完数据才在表步发现
     verify_tables_before_write(src, &steps)?;
-    let mut state = journal_state(src)?;
+    let mut state = journal_state(src, &steps)?;
     // 只有搬移计划才带"搬完之后的那一次扩容"；delete/add/set 的单表步与它无关，
     // 不能让测试注入点在那些命令上误触发
     let has_transfer = steps
         .iter()
         .any(|s| matches!(s, PreparedStep::Transfer { .. }));
     let mut entry = 0u32;
+    // 记录里已提交的搬移条目整组跳过：计数在进循环前取一次，循环里只递减，
+    // 不按条目回读进度字段
+    let mut committed_entries = state.durable().0;
     let mut grow_faulted = false;
     for (index, step) in steps.into_iter().enumerate() {
         match step {
             PreparedStep::Transfer { reloc, commit, swap } => {
-                // 记录里已提交的条目整组跳过：数据与表都不再碰
-                if entry_done(entry, &state) {
+                // 记录里已提交的条目整组跳过：数据与表都不碰
+                if committed_entries > 0 {
+                    committed_entries -= 1;
                     entry += 1;
                     continue;
                 }
                 if swap.is_none() {
-                    let chunk = chunk_bytes
-                        .expect("prepare_steps refuses a relocation plan without a chunk size");
-                    relocate::execute(src, reloc, sector_size, chunk, &mut state, sink)
+                    relocate::execute(src, reloc, sector_size, &mut state, sink)
                         .map_err(|e| e.context(&format!("plan step {}", index + 1)))?;
                 }
                 crate::movepart::fault_before_entry_commit();
+                sink.entry_table_started(src, entry)?;
                 table::execute(src, commit)
                     .map_err(|e| e.context(&format!("plan step {}", index + 1)))?;
                 // 换区条目的表项刚落位、内容尚未重建：重放必须在同一个记录游标上重做重建
@@ -234,9 +285,7 @@ pub(crate) fn execute_plan(
                         reloc.dst_first.abs_diff(reloc.src_first)
                     ));
                 }
-                state.entry_index += 1;
-                state.chunks_in_entry = 0;
-                state.completed_steps += 1;
+                state.advance_entry();
                 sink.table_step_done(src, index, &state)?;
                 crate::movepart::fault_after_entry_commit(entry as usize);
                 entry += 1;
@@ -246,11 +295,13 @@ pub(crate) fn execute_plan(
                     .expect("prepare_steps refuses a copy plan without a chunk size");
                 copy::execute(src, &copy, sector_size, chunk)
                     .map_err(|e| e.context(&format!("plan step {}", index + 1)))?;
-                // 复制步骤只在写完数据之后返回 Ok，表步骤此前已写过目标字节
+                // 复制步骤只在写完数据之后返回 Ok；表步之前先落"表可能已写"
+                sink.table_step_started(src)?;
                 table::execute(src, commit)
                     .map_err(|e| e.context(&format!("plan step {}", index + 1)))?;
-                state.completed_steps += 1;
+                state.note_step();
                 sink.table_step_done(src, index, &state)?;
+                crate::movepart::fault_after_table_step();
             }
             PreparedStep::TableOnly(commit) => {
                 // 全部条目搬完之后的那一个表步骤就是扩容：崩溃注入点在这个相位边界上
@@ -258,15 +309,22 @@ pub(crate) fn execute_plan(
                     crate::movepart::fault_before_grow();
                     grow_faulted = true;
                 }
+                // 表步之前先落"表可能已写"；落不下去就不写表
+                sink.table_step_started(src)?;
                 table::execute(src, commit)
                     .map_err(|e| e.context(&format!("plan step {}", index + 1)))?;
-                state.completed_steps += 1;
+                // 扩容表已落盘、进度尚未推进：重跑按盘上现状重放这一步
+                if has_transfer {
+                    crate::movepart::fault_after_grow_table_write();
+                }
+                state.note_step();
                 sink.table_step_done(src, index, &state)?;
+                crate::movepart::fault_after_table_step();
             }
             PreparedStep::FsResize(step) => {
                 let unmet = fs::execute(src, &step, sector_size, sink)
                     .map_err(|e| e.context(&format!("plan step {}", index + 1)))?;
-                state.completed_steps += 1;
+                state.note_step();
                 sink.fs_step_done(src, index, &state)?;
                 // 文件系统侧没有做成：表已扩、空间尚未可用。后续步骤（若有）不再执行，
                 // 记录保留，重跑从这一处继续
@@ -278,13 +336,13 @@ pub(crate) fn execute_plan(
             PreparedStep::FsCreate(step) => {
                 // 建立步骤只出现在单步计划里，失败原因直接沿用 fsops 的措辞，不加步骤前缀
                 mkfs::execute(src, &step, sector_size)?;
-                state.completed_steps += 1;
+                state.note_step();
                 sink.fs_step_done(src, index, &state)?;
             }
             PreparedStep::FsSet(step) => {
                 // 属性步骤同样只出现在单步计划里，屏障在启动外部工具之前落盘
                 set::execute(src, &step)?;
-                state.completed_steps += 1;
+                state.note_step();
                 sink.fs_step_done(src, index, &state)?;
             }
         }
@@ -294,7 +352,7 @@ pub(crate) fn execute_plan(
 
 /// 执行一份不含后置条件步骤的计划：表步骤、FS 建立与属性步骤都不留未达成的后置条件。
 ///
-/// 待办非空说明装配出了本命令不该有的步骤（今天只有换区重建会产生待办）。按内部错误
+/// 待办非空说明装配出了本命令不该有的步骤（只有换区重建会产生待办）。按内部错误
 /// 报出而不是丢弃——把"后置条件未达成"洗成成功，正是本模块要消灭的那类报告。
 pub(crate) fn execute_plan_complete(
     src: &mut WriteSource,
@@ -312,6 +370,72 @@ pub(crate) fn execute_plan_complete(
             pending,
         )),
     }
+}
+
+pub(crate) fn ntfs_hidden_value(start_lba: u64) -> (u32, bool) {
+    if start_lba >> 32 == 0 { (start_lba as u32, false) } else { (0u32, true) }
+}
+
+/// NTFS boot sector BPB HiddenSectors（偏移 0x1C，u32 LE，值 = 分区起始 LBA；
+/// NTFS 引导扇区布局，ntfs-3g bootsect.c 与微软 NTFS 规范同此定义）。
+/// 单位是设备逻辑扇区（4Kn 原生盘上即 4Kn LBA，不折算 512）：bytes_per_sector 记录
+/// 各自的扇区大小，hidden_sectors 语义随它计。字段只有 32 位：start ≥ 2^32 时写 0 并
+/// 警告（Windows 将无法从该分区引导，数据不受影响）。仅在分区起始 LBA 变化后调用。
+pub(crate) fn fix_ntfs_hidden_sectors(
+    src: &mut WriteSource,
+    new_first_lba: u64,
+    ss: u64,
+    part: u32,
+    log: &mut dyn FnMut(&str),
+) -> io::Result<()> {
+    let (val, warn) = ntfs_hidden_value(new_first_lba);
+    // 与执行器的 LBA→字节换算同口径：起点来自调用方传入的几何，裸乘回绕会把
+    // HiddenSectors 写到盘上另一个位置
+    let sector_off = new_first_lba
+        .checked_mul(ss)
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("NTFS HiddenSectors offset overflows ({new_first_lba} × {ss})"),
+            )
+        })?;
+    let off = sector_off.checked_add(0x1C).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("NTFS HiddenSectors offset overflows ({new_first_lba} × {ss} + 0x1C)"),
+        )
+    })?;
+    // 写 4 字节前复核目标扇区仍是 NTFS 引导扇区：调用点的 identify 与这里的写入
+    // 之间盘面可能变化。签名不符即拒绝——把 HiddenSectors 写进
+    // 非引导扇区比不写更糟
+    let mut probe = vec![0u8; ss as usize];
+    src.read_at(sector_off, &mut probe)?;
+    if probe.len() < 11 || probe[3..11] != *b"NTFS    " {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("the first sector at LBA {new_first_lba} is not an NTFS boot sector; refusing to write HiddenSectors"),
+        ));
+    }
+    // 写前比对与写入都在写入口内完成：比较区间就是这 4 个字节，与探测读到的原文一致
+    // 才写；不一致说明扇区在这中间变了，拒绝覆盖
+    let current = probe.get(0x1C..0x20).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("the boot sector at LBA {new_first_lba} is shorter than the HiddenSectors field"),
+        )
+    })?;
+    src.write_guarded(
+        off,
+        &val.to_le_bytes(),
+        crate::dev::RegionStamp::of_bytes(off, current),
+        crate::outcome::WriteStep::Fs { part },
+    )
+    .map_err(crate::dev::WriteConflict::into_io_error)?;
+    src.sync_data()?;
+    if warn {
+        log("warning: partition starts beyond 2^32; HiddenSectors zeroed — Windows cannot boot from it");
+    }
+    Ok(())
 }
 
 /// 搬移之后按新起点修正 NTFS 的 HiddenSectors。位移为 0 的条目没有可修的东西：
@@ -340,7 +464,7 @@ fn fix_hidden_sectors(
     }
     crate::movepart::fault_before_hidden_fix();
     let mut emit = |m: &str| sink.note(m);
-    crate::movepart::fix_ntfs_hidden_sectors(src, reloc.dst_first, sector_size, reloc.part, &mut emit)
+    fix_ntfs_hidden_sectors(src, reloc.dst_first, sector_size, reloc.part, &mut emit)
         .map_err(|e| RunOutcome::partial(e.to_string()))
 }
 
@@ -506,71 +630,67 @@ fn prepare_steps<'a>(
         }
     }
 
-    if let Some(chunk) = chunk {
-        let mut reloc_index = 0u32;
-        for (index, step) in raw.iter().enumerate() {
-            let PlanStep::Relocate { part, src_first, dst_first, sectors, is_swap } = step else {
-                continue;
-            };
-            // 换区不搬数据：它没有块布局，块的进度恒为 0（记录里也是 0）
-            if *is_swap {
-                reloc_index += 1;
-                continue;
-            }
-            let shift = dst_first.abs_diff(*src_first);
-            let Some((_, count)) =
-                move_chunk_layout(*sectors, sector_size, shift, *sectors, chunk)
-            else {
-                return Err(RunOutcome::internal(format!(
-                    "plan step {} has no usable relocation block layout",
-                    index + 1
-                )));
-            };
-            // 地址区间的溢出判定与布局同源：执行期再遇到时前面的条目可能已写过
-            let src_base = src_first.checked_mul(sector_size).ok_or_else(|| {
-                RunOutcome::internal(format!(
-                    "plan step {}: the source offset of partition {part} overflows the address space",
-                    index + 1
-                ))
-            })?;
-            let dst_base = dst_first.checked_mul(sector_size).ok_or_else(|| {
-                RunOutcome::internal(format!(
-                    "plan step {}: the target offset of partition {part} overflows the address space",
-                    index + 1
-                ))
-            })?;
-            let total = sectors.checked_mul(sector_size).ok_or_else(|| {
-                RunOutcome::internal(format!(
-                    "plan step {}: the relocation length of partition {part} overflows the address space",
-                    index + 1
-                ))
-            })?;
-            if src_base.checked_add(total).is_none() || dst_base.checked_add(total).is_none() {
-                return Err(RunOutcome::internal(format!(
-                    "plan step {}: the relocation byte range of partition {part} overflows the address space",
-                    index + 1
-                )));
-            }
-            // 记录里当前条目已完成的块数不能超过该条目的块数
-            if let Some(reloc) = record
-                && reloc.entry_index == reloc_index
-                && reloc.chunks_in_entry > count
-            {
-                return Err(RunOutcome::internal(format!(
-                    "plan step {}: {} chunks are recorded as done but the step only has {count}",
-                    index + 1,
-                    reloc.chunks_in_entry
-                )));
-            }
-            reloc_index += 1;
-        }
-    }
-
     let mut steps = Vec::with_capacity(raw.len());
+    let mut reloc_index = 0u32;
     let mut index = 0;
     while index < raw.len() {
         match &raw[index] {
             PlanStep::Relocate { part, src_first, dst_first, sectors, is_swap } => {
+                // 块布局在此算一次并随步骤交出：执行循环与记录游标都读这份结果，
+                // 不按同一条几何各自重算
+                let (chunk_bytes, chunk, chunks) = if *is_swap {
+                    // 换区不搬数据：没有块布局，块进度恒为 0（记录里也是 0）
+                    (chunk.unwrap_or(0), 0, 0)
+                } else {
+                    let requested = chunk.expect("a moving entry needs a chunk size");
+                    let shift = dst_first.abs_diff(*src_first);
+                    let Some((chunk, count)) =
+                        move_chunk_layout(*sectors, sector_size, shift, *sectors, requested)
+                    else {
+                        return Err(RunOutcome::internal(format!(
+                            "plan step {} has no usable relocation block layout",
+                            index + 1
+                        )));
+                    };
+                    // 地址区间的溢出判定与布局同源：执行期再遇到时前面的条目可能已写过
+                    let src_base = src_first.checked_mul(sector_size).ok_or_else(|| {
+                        RunOutcome::internal(format!(
+                            "plan step {}: the source offset of partition {part} overflows the address space",
+                            index + 1
+                        ))
+                    })?;
+                    let dst_base = dst_first.checked_mul(sector_size).ok_or_else(|| {
+                        RunOutcome::internal(format!(
+                            "plan step {}: the target offset of partition {part} overflows the address space",
+                            index + 1
+                        ))
+                    })?;
+                    let total = sectors.checked_mul(sector_size).ok_or_else(|| {
+                        RunOutcome::internal(format!(
+                            "plan step {}: the relocation length of partition {part} overflows the address space",
+                            index + 1
+                        ))
+                    })?;
+                    if src_base.checked_add(total).is_none() || dst_base.checked_add(total).is_none() {
+                        return Err(RunOutcome::internal(format!(
+                            "plan step {}: the relocation byte range of partition {part} overflows the address space",
+                            index + 1
+                        )));
+                    }
+                    // 记录里当前条目已完成的块数不能超过该条目的块数
+                    if let Some(reloc) = record
+                        && reloc.entry_index == reloc_index
+                        && reloc.chunks_in_entry > count
+                    {
+                        return Err(RunOutcome::internal(format!(
+                            "plan step {}: {} chunks are recorded as done but the step only has {count}",
+                            index + 1,
+                            reloc.chunks_in_entry
+                        )));
+                    }
+                    (requested, chunk, count)
+                };
+                reloc_index += 1;
                 // 形状校验在装配层，但计划是外部输入：越界必须是错误而不是 panic
                 let Some(PlanStep::WriteTable(commit)) = raw.get(index + 1) else {
                     return Err(RunOutcome::internal(
@@ -598,6 +718,9 @@ fn prepare_steps<'a>(
                         src_first: *src_first,
                         dst_first: *dst_first,
                         sectors: *sectors,
+                        chunk_bytes,
+                        chunk,
+                        chunks,
                     },
                     commit,
                     swap,
@@ -664,9 +787,10 @@ fn prepare_steps<'a>(
 
 /// 执行状态从记录纳入：游标跨运行累计，续跑必须从已落盘的值继续。
 ///
-/// 记录里存在搬移计划时，全局块游标由计划重算：已提交条目的块数之和加当前条目已完成的
-/// 块数，与 `progress.transfer_cursor` 取较大者。
-fn journal_state(src: &WriteSource) -> Result<TransferState, RunOutcome> {
+/// 记录里存在搬移计划时，全局块游标由步骤上的块布局累计：已提交条目的块数之和加
+/// 当前条目已完成的块数，与 `progress.transfer_cursor` 取较大者。块数取自
+/// [`prepare_steps`] 的布局结果，不按记录重新计算
+fn journal_state(src: &WriteSource, steps: &[PreparedStep]) -> Result<TransferState, RunOutcome> {
     let Some(journal) = src.record_journal() else {
         return Ok(TransferState::default());
     };
@@ -683,8 +807,11 @@ fn journal_state(src: &WriteSource) -> Result<TransferState, RunOutcome> {
     state.entry_index = reloc.entry_index;
     state.chunks_in_entry = reloc.chunks_in_entry;
     let mut recomputed = 0u64;
-    for entry in reloc.entries.iter().take(reloc.entry_index as usize) {
-        let count = recorded_entry_chunks(entry, reloc)?;
+    let counts = steps.iter().filter_map(|s| match s {
+        PreparedStep::Transfer { reloc, .. } => Some(reloc.chunks),
+        _ => None,
+    });
+    for count in counts.take(reloc.entry_index as usize) {
         recomputed = recomputed.checked_add(count).ok_or_else(|| {
             RunOutcome::internal(
                 "the recorded move cursor overflows the address space",
@@ -698,21 +825,6 @@ fn journal_state(src: &WriteSource) -> Result<TransferState, RunOutcome> {
     })?;
     state.transfer_cursor = state.transfer_cursor.max(recomputed);
     Ok(state)
-}
-
-/// 记录里一条搬移已完成的块数。位移为 0 与 swap 条目不搬数据，块数为 0。
-fn recorded_entry_chunks(entry: &RelocEntry, reloc: &Relocation) -> Result<u64, RunOutcome> {
-    if entry.delta == 0 || entry.is_swap {
-        return Ok(0);
-    }
-    move_chunk_layout(entry.len, reloc.ss, entry.delta.unsigned_abs(), entry.len, reloc.chunk_bytes)
-        .map(|(_, count)| count)
-        .ok_or_else(|| {
-            RunOutcome::partial(format!(
-                "the recovery record's relocation entry for partition {} has no usable block layout — the transfer may be incomplete",
-                entry.partition
-            ))
-        })
 }
 
 /// 恢复记录的默认块字节数：8 MiB。

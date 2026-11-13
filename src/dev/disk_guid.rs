@@ -7,9 +7,8 @@ pub(crate) const CREDENTIAL_LEN: usize = 1 + 16;
 
 /// 目标盘面自述的 Disk GUID（GPT 头 56..72，UEFI 2.10 §5.3.2 Table 5.5）的三态。
 ///
-/// `GeneratedThisOperation` 表示"这张表由写下这条记录的同一个操作生出"。用重写前的
-/// GUID 或重写后的 GUID 去认目标，都是把本操作自己造出的值当成外部证据；两种都属于
-/// "把原本 Refused 的形态变成放行"。
+/// `GeneratedThisOperation` 表示"这张表由写下这条记录的同一个操作生出"。重写前后的
+/// GUID 都由本操作自己产生，不是外部证据：两种取值都不参与比对。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DiskGuidState {
     /// 目标上没有 GPT（MBR / 裸盘）：凭据不可得。比较时它不是证据，也绝不算相符
@@ -63,8 +62,8 @@ impl DiskGuidState {
 }
 
 /// 凭据比对的唯一判据。`Some(why)` = 不符；`None` = 不提供额外证据——不可得与本次生成
-/// 都不是"相符"，只是没有可比的值。用它而不是 `Option<[u8; 16]>`，是为了让"没有 GPT"
-/// 与"GUID 是 0"在数据与代码里都不可能混为一谈
+/// 都不是"相符"，只是没有可比的值。`Unavailable` 与 `Present([0; 16])` 是两种不同的
+/// 取值，在数据与代码里都不会混为一谈
 pub(crate) fn disk_identity_mismatch(
     recorded: DiskGuidState,
     current: DiskGuidState,

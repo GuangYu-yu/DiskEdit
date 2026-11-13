@@ -149,7 +149,7 @@ pub(crate) fn part_resize(t: &OnlineTarget, new_len_bytes: u64) -> Result<(), Pa
     let disk = ensure_disk_snapshot_unchanged(t, new_len_bytes)?;
     // 交给 sfdisk 的是这条路径，它自己再打开一次：写前把路径与本次重读所用句柄的
     // 设备号核对一遍。核对之后到 sfdisk 打开之间仍有窗口（它只接受路径），本进程
-    // 无法消除——但窗口里"路径被重绑到另一台设备"不再是唯一的判据来源
+    // 无法消除。
     let rdev = disk.metadata().map_err(|e| {
         PartResizeError::NoWrite(io::Error::other(format!(
             "cannot stat the re-read handle of {}: {e}",

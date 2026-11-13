@@ -4,9 +4,7 @@
 use std::io::Cursor;
 use std::process::Command;
 
-/// 集成测试是独立 crate，取不到 `src/testdir.rs` 的 `TestDir`（bin crate 的
-/// `pub(crate)`）。这里复用同一个 `tempfile` 后端，并在析构时重试删除：
-/// `TempDir::drop` 吞掉删除错误，而首次 `remove_dir_all` 可能因目录非空返回 145
+/// 夹具目录：复用 tempfile 后端，析构时重试删除。
 struct FixtureDir(tempfile::TempDir);
 
 impl FixtureDir {
@@ -38,10 +36,7 @@ impl Drop for FixtureDir {
     }
 }
 
-/// 落盘伴随文件名的词表：与 `src/dev.rs` 的同名常量同值。集成测试是独立 crate，
-/// 取不到 crate 内的常量，故在这里复写一份——改拼法时两处一起改（src 侧有
-/// `dev::tests::artifact_names_are_pinned_as_documented` 会提醒）。
-/// 命名空间也只在宏体里写一次；跨 crate 无法共享宏，故宏同样复写一份
+/// 落盘伴随文件名的词表与生成宏。跨 crate 无法共享，故在这里维护一份。
 #[cfg(unix)]
 macro_rules! sidecar_suffix {
     ($stem:literal) => {
@@ -49,8 +44,7 @@ macro_rules! sidecar_suffix {
     };
 }
 
-/// 旧 undo journal 的落点名。它已不承载恢复现场（见 `JOURNAL_SUFFIX` 的使用点：
-/// 只用于断言"不得再写出它"与"拒绝回放"）
+/// 旧 undo journal 的落点名。
 #[cfg(unix)]
 const JOURNAL_SUFFIX: &str = sidecar_suffix!("journal");
 /// 恢复记录目录（记录与目标锁都在里面）
@@ -137,14 +131,14 @@ mod record;
 
 #[cfg(not(target_os = "linux"))]
 mod platform_gate;
-// 写入型用例的目标平台是 Linux：非 Linux 由统一能力门拒绝全部命令（见
-// src/cmd/mod.rs），这些用例在那里没有可观察的成功路径
+// 写入型用例的目标平台是 Linux：非 Linux 由统一能力门拒绝全部命令，
+// 这些用例在那里没有可观察的成功路径
 #[cfg(target_os = "linux")]
 mod commands;
 #[cfg(target_os = "linux")]
 mod confirm_gate;
 mod guards;
-// info 的可观察成功路径只在 Linux 上：非 Linux 由统一能力门拒绝（见 src/cmd/mod.rs）
+// info 的可观察成功路径只在 Linux 上：非 Linux 由统一能力门拒绝
 #[cfg(target_os = "linux")]
 mod info;
 #[cfg(target_os = "linux")]

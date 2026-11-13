@@ -2,12 +2,7 @@
 
 use super::*;
 
-/// FS 一致性检查（不修改分区边界；是否写盘取决于各工具的只读/修复开关）。
-/// 各工具与开关：e2fsck -fp（man e2fsck）、ntfsfix -d/--clear-dirty（能修复并成功
-/// 挂载时清除 NTFS dirty 标志，否则保持/置位 dirty 交 Windows 下次检查；ntfsfix 非
-/// chkdsk，检查语义偏弱，man ntfsfix）、fsck.f2fs 无参 = 仅检查（man fsck.f2fs）、
-/// xfs_repair -n = no modify（man xfs_repair）、btrfs check = 默认只读（man btrfs-check）、
-/// fsck.vfat -n = no-operation 只读（man fsck.fat）、fsck.exfat -n = read-only 不修复（man fsck.exfat）
+/// FS 一致性检查（不修改分区边界）。各类型的工具与开关见下方匹配臂
 pub fn check_fs(src: &FileSource, part: u32, fstype: Option<ContentKind>) -> Result<(), FsError> {
     if fstype == Some(ContentKind::Lvm2Pv) {
         return Err(FsError::invalid(

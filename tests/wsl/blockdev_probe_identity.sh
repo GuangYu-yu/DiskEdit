@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
 # 真实块设备的平台识别：HostPlatform::identify 对块设备节点给出 Block 介质、
-# 内核报告的扇区大小与设备号身份。用例断言的三项与承载方式同源——块设备节点、
-# BLKSSZGET、sysfs 的 maj:min——loop 设备因此满足前提。缺 root / losetup / cargo
-# 时明确失败，不跳过：一个永远不跑的用例等于不存在。
+# 内核报告的扇区大小与设备号身份。缺 root / losetup / cargo 时明确失败，不跳过。
 source "$(dirname "$0")/lib.sh"
 
 missing() { echo "BAD: $*"; exit 1; }

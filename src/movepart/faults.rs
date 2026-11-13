@@ -78,10 +78,18 @@ fault_points! {
     fault_after_entry_commit(mi: usize) = "after-entry-commit", mi;
     /// 全部条目完成、扩容收尾前 abort
     fault_before_grow() = "before-grow";
+    /// 扩容表写完、`table_step_done` 尚未推进时 abort（表已落与记录提交之间的交界面）
+    fault_after_grow_table_write() = "after-grow-table-write";
     /// swap 条目落位重建完成后 abort
     fault_after_swap_entry(mi: usize) = "after-swap-entry", mi;
     /// 修复完成、初始 ckpt 写入前 abort
     fault_after_repair() = "after-repair";
+    /// 修复事实已落盘、修复的第一个目标字节尚未写出时 abort（记录与修复写入之间的交界面）
+    fault_repair_recorded() = "repair-recorded";
+    /// 表步围栏已落盘、表步的第一个目标字节尚未写出时 abort（记录与表写入之间的交界面）
+    fault_table_step_recorded() = "table-step-recorded";
+    /// 表步写完、围栏落定之后 abort（表已写与记录提交之间的交界面）
+    fault_after_table_step() = "after-table-step";
     /// 现场已绑进记录、修复尚未执行时 abort（写路径上两者之间的窗口）
     fault_after_relocation_bound() = "after-relocation-bound";
     /// swap 条目 GPT commit 后、ckpt 推进前 abort（重放须幂等：GPT 绝对赋值 + 从旧位置重读 UUID 重建）

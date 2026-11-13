@@ -54,7 +54,7 @@ pub(crate) fn cmd_resize_superfloppy(a: &ResizeRequest) -> crate::outcome::RunOu
             fsid::content_name(fstype)
         )));
     }
-    // 事前能力探测（check_grow 的契约：必须在首次写盘之前）。本路径的 e2fsck -fp 一类
+    // 事前能力探测（必须在首次写盘之前）。本路径的 e2fsck -fp 一类
     // 修复步骤本身写盘，缺工具若在那时才暴露，本次运行只能按 Partial(5) 报，
     // 无法再声称"确定未写盘"。
     // 类型接线判断不在此拦：不接线的类型不会写盘，由 resize_fs_in 按类型给出准确的

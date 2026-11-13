@@ -117,7 +117,7 @@ pub(crate) fn image_identity_follows_the_opened_handle_not_the_path() {
 
     let f = std::fs::OpenOptions::new().read(true).write(true).open(&link).unwrap();
     let meta = f.metadata().unwrap();
-    let id = FileSource::identity_of_opened_image(&link, &f, &meta).unwrap();
+    let id = FileSource::sample_image(&link, Some((&f, &meta))).unwrap();
     let canonical = std::fs::canonicalize(&a).unwrap();
     assert_eq!(
         id.journal_path(),
@@ -131,7 +131,7 @@ pub(crate) fn image_identity_follows_the_opened_handle_not_the_path() {
     let meta = f.metadata().unwrap();
     std::fs::rename(&a, dir.join("moved.img")).unwrap();
     std::fs::write(&a, vec![0u8; 4096]).unwrap();
-    let e = FileSource::identity_of_opened_image(&a, &f, &meta).unwrap_err();
+    let e = FileSource::sample_image(&a, Some((&f, &meta))).unwrap_err();
     assert!(e.to_string().contains("no longer names the file that was opened"), "{e}");
 }
 
@@ -156,8 +156,7 @@ pub(crate) fn log_path_comes_from_the_identity() {
     }
 }
 
-/// 落盘命名的契约锚点：命名空间的字面量只在这一处出现，三类伴随文件各自的后缀
-/// 由它派生校验——改命名空间或改某一类后缀，这里该失败
+/// 落盘命名：命名空间的字面量只在这一处出现，三类伴随文件各自的后缀由它派生校验
 #[test]
 pub(crate) fn artifact_names_are_pinned_as_documented() {
     let ns = JOURNAL_SUFFIX.strip_suffix("journal").expect("journal suffix ends with its stem");
@@ -226,7 +225,7 @@ pub(crate) fn block_lock_converges_to_the_carrier_while_records_stay_per_target(
 /// backing 消失后身份不再可解析（名字已经不是对象），此处拒绝而非把现场挂到同名路径旁
 ///
 /// 比对的一侧来自内核给这个 loop 记下的 backing 对象，所以这里必须有一个真绑定：
-/// 绑不上（无空闲设备或没有权限，CI 的 runner 用户即如此）就没有可造出的现场，跳过
+/// 绑不上（无空闲设备或没有权限）就没有可造出的现场，跳过
 #[cfg(target_os = "linux")]
 #[test]
 pub(crate) fn loop_identity_converges_to_the_backing_file() {
@@ -262,9 +261,9 @@ pub(crate) fn loop_identity_converges_to_the_backing_file() {
     assert!(TargetIdentity::loop_backed(&dev, backing.clone()).is_err());
 }
 
-/// 同一 backing 上两个 loop 共用一把锁：v1 按载体整块独占，不重叠的区间也互斥，
-/// 这是有意的加粗：占用域覆盖整盘及其全部分区。
-/// Linux 专属用例；本机（Windows）不编译也不运行，Linux 上第二次绑定失败即跳过
+/// 同一 backing 上两个 loop 共用一把锁：锁按载体独占，占用域覆盖整盘及其全部分区，
+/// 不重叠的区间也互斥。
+/// Linux 专属用例；第二次绑定失败即跳过
 #[cfg(target_os = "linux")]
 #[test]
 pub(crate) fn two_loops_over_one_backing_share_the_carrier_lock() {
@@ -297,7 +296,7 @@ pub(crate) fn two_loops_over_one_backing_share_the_carrier_lock() {
 }
 
 /// 镜像身份以 realpath 为主体：经符号链接打开与直接打开收敛到同一现场；
-/// 日志命名沿用字面路径，不因 canonicalize 打断连续性
+/// 日志命名取字面路径，不因 canonicalize 打断连续性
 #[cfg(target_os = "linux")]
 #[test]
 pub(crate) fn image_identity_prefers_the_realpath() {
@@ -329,7 +328,7 @@ pub(crate) fn block_identity_refuses_unresolvable_topology() {
     assert!(e.contains("topology"), "{e}");
 }
 
-/// [`read_sysfs_attr`] 的三态必须可分（上条测试的细粒度锁）："不存在 ⇒ None"
+/// [`read_sysfs_attr`] 的三态必须可分："不存在 ⇒ None"
 /// 是整设备的正常路径，"读失败 ⇒ Err" 则不得降级——压成同一个 None 会让分区身份
 /// 在读不出来的那一刻静默变成整设备身份
 #[cfg(target_os = "linux")]

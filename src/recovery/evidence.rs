@@ -26,8 +26,6 @@ pub(crate) enum Cause {
 
 /// 恢复现场的判定结果
 #[derive(Clone, Debug, PartialEq, Eq)]
-// 记录是固定布局的落盘形态（488 字节）；装箱只把同一份字节搬到堆上，
-// 而每个匹配臂都要多一次解引用。差异来自"这就是那份字节"，不是设计遗漏
 #[allow(clippy::large_enum_variant)]
 pub(crate) enum Evidence {
     Absent,
@@ -101,7 +99,7 @@ impl Evidence {
         Self::Unreadable { cause }
     }
 
-    /// 路径解析失败按 §4.7 映射：不存在的路径是 `Absent`，符号链接/目录/非普通文件
+    /// 路径解析失败映射：不存在的路径是 `Absent`，符号链接/目录/非普通文件
     /// 是 `NotOurs`，其余一律 `Unreadable`
     pub(crate) fn from_path_error(err: PathError) -> Self {
         match err {

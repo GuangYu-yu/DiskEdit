@@ -37,11 +37,6 @@ fn crc32(bytes: &[u8]) -> u32 {
 fn record_roundtrip_preserves_every_field() {
     let mut record = record_for(scene(1));
     record.progress = Progress { completed_steps: 3, transfer_cursor: 4096, fs_phase: 2 };
-    record.stages = vec![StageFact {
-        kind: StageKind::TableReadBack,
-        ok: true,
-        detail: "table reloaded".to_string(),
-    }];
     record.action = RecoveryAction::Rollback(8192);
     record.retention = Retention::CommittedPending;
     record.commit = CommitState::Committed;
@@ -534,4 +529,17 @@ fn malformed_restore_entries_are_refused() {
         after: vec![0; 512],
     };
     assert_eq!(overflow.byte_offset(), None);
+}
+
+/// 零写入的 resize 记录：MBR 表项路径只落旧区间、不落搬移表，记录自身即证明未动工；
+/// 进度一旦前进，缺搬移表就不再足以判定，按不可判定拒绝
+#[test]
+fn a_zero_write_resize_record_without_relocation_is_planned() {
+    let mut record = record_for(scene(4));
+    record.op = OpKind::Resize;
+    assert!(record.relocation.is_none());
+    assert_eq!(record.stage().unwrap(), Stage::Planned);
+
+    record.progress.completed_steps = 1;
+    assert_eq!(record.stage().unwrap(), Stage::Undecidable);
 }

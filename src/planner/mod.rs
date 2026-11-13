@@ -64,7 +64,7 @@ pub(crate) enum PlanStep {
     /// 不改表、不动数据区。失败是"后置条件未达成"而不是本步没做成：旧签名仍在源位，
     /// 记录保留，重跑从本条目重试
     RebuildSwap { part: u32, src_first: u64, dst_first: u64, sectors: u64 },
-    /// 把分区里的文件系统改写到分区尺寸；当前唯一语义是扩到分区满。
+    /// 把分区里的文件系统改写到分区尺寸；语义是扩到分区满。
     ///
     /// 几何按表的扇区口径：`first_lba` 是分区起点，`sectors` 是分区长度，
     /// `target_bytes` 是这段区间的字节数。`fstype` 由装配点填写；装配层不做
@@ -87,7 +87,7 @@ pub(crate) enum PlanStep {
         label: Option<String>,
     },
     /// 改写分区文件系统内部的属性。`attr` 表达要写什么：UUID 可以是具体文本，也可以是
-    /// 交给工具生成的意图；`fstype` 取命令层 `identify` 的结论，执行期不再探测
+    /// 交给工具生成的意图；`fstype` 取命令层 `identify` 的结论，执行期不探测
     FsSet { part: u32, attr: FsSetAttr, fstype: Option<ContentKind> },
 }
 

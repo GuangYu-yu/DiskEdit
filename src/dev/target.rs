@@ -26,7 +26,7 @@ impl std::fmt::Display for PartSelector {
 /// `:0` 同样拒绝——分区号是 1-based，静默折叠成"整盘"会把一次针对具体分区的操作
 /// 放大成对整盘的表操作。
 /// `:last` 指**最后一个可操作分区**（不是字面上的末端最大表项）；它落到具体号要等读到
-/// 分区表，故本层只判定形式（大小写不敏感，与 `--start end` 同一先例）
+/// 分区表，故本层只判定形式（大小写不敏感，与 `--start end` 一致）
 pub fn parse_target(s: &str) -> Result<(String, Option<PartSelector>), &'static str> {
     match s.rfind(':') {
         // 尾冒号（`img:`）多半是分区号漏写的笔误：按整路径打开只会报"文件不存在"，

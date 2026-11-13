@@ -27,7 +27,7 @@ pub(crate) fn msdos_entry_past_end_is_damaged_and_refused() {
     rec[4] = 0x0C;
     rec[8..12].copy_from_slice(&1u32.to_le_bytes());
     rec[12..16].copy_from_slice(&10_000u32.to_le_bytes()); // 1 + 10_000 > 300 扇区
-    src.write_at(0, &lba0).unwrap();
+    src.write_fixture(0, &lba0).unwrap();
 
     let raw = parse_mbr_raw(&src).unwrap().expect("the entry must stay observable for diagnostics");
     assert!(matches!(raw.damage.first(), Some(MbrDamage::PastEnd { .. })), "{:?}", raw.damage);
@@ -47,7 +47,7 @@ pub(crate) fn msdos_entry_start_zero_is_damaged_and_refused() {
     rec[4] = 0x83;
     rec[8..12].copy_from_slice(&0u32.to_le_bytes()); // 起始 LBA 0
     rec[12..16].copy_from_slice(&100u32.to_le_bytes());
-    src.write_at(0, &lba0).unwrap();
+    src.write_fixture(0, &lba0).unwrap();
 
     let raw = parse_mbr_raw(&src).unwrap().expect("the entry must stay observable for diagnostics");
     assert!(matches!(raw.damage.first(), Some(MbrDamage::StartZero { .. })), "{:?}", raw.damage);
@@ -58,9 +58,7 @@ pub(crate) fn msdos_entry_start_zero_is_damaged_and_refused() {
 /// MBR 的 StartLBA/SizeInLBA 是 u32 字段：超出表示范围必须拒绝。
 /// 少了这条检查，`start as u32` 会静默截断成一个指向别处的条目（落盘即损坏且不报错）。
 ///
-/// 判定在纯函数里（`add_mdos_entry_image`），所以这里直接把 3 TiB 的**容器扇区数**
-/// 喂给它：真实夹具造不出那么大的镜像，而写路径要先读三扇区摘要（`TableStamp::head_tail`），
-/// 把 `size` 虚拟放大只会让用例在到达上限判定之前短读。
+/// 判定在纯函数里（`add_mdos_entry_image`），直接喂入 3 TiB 级别的容器扇区数。
 #[test]
 pub(crate) fn add_mdos_entry_rejects_beyond_32bit_lba() {
     let mut lba0 = vec![0u8; 512];
@@ -112,13 +110,13 @@ pub(crate) fn msdos_type_set_and_guards() {
     let mut lba0 = vec![0u8; 512];
     src.read_at(0, &mut lba0).unwrap();
     lba0[446 + 4] = 0x05;
-    src.write_at(0, &lba0).unwrap();
+    src.write_fixture(0, &lba0).unwrap();
     let e = set_mdos_type(&mut src, 1, 0x07).unwrap_err();
     assert!(matches!(e, RunOutcome::Refused(_)), "existing extended container must be refused: {e:?}");
     assert_eq!(parse_mbr(&src).unwrap().unwrap()[0].os_type, 0x05);
     // 既有条目是 GPT 保护记录：类型字节承担结构语义，与 delete_mdos_entry 同判据
     lba0[446 + 4] = 0xEE;
-    src.write_at(0, &lba0).unwrap();
+    src.write_fixture(0, &lba0).unwrap();
     let e = set_mdos_type(&mut src, 1, 0x07).unwrap_err();
     assert!(matches!(e, RunOutcome::Refused(_)), "existing protective record must be refused: {e:?}");
     let mut raw = vec![0u8; 512];
@@ -171,7 +169,7 @@ pub(crate) fn parse_mbr_reports_overlap_damage() {
     let mut lba0 = vec![0u8; 512];
     src.read_at(0, &mut lba0).unwrap();
     lba0[446 + 16 + 8..446 + 16 + 12].copy_from_slice(&100u32.to_le_bytes());
-    src.write_at(0, &lba0).unwrap();
+    src.write_fixture(0, &lba0).unwrap();
     let raw = parse_mbr_raw(&src).unwrap().unwrap();
     assert!(raw.damage.iter().any(|d| matches!(d, MbrDamage::Overlap { .. })), "{:?}", raw.damage);
     assert_eq!(raw.parts.len(), 2, "重叠条目必须保留在 raw 视图里");
@@ -194,7 +192,7 @@ pub(crate) fn protective_mbr_shape_and_size() {
     let patch = |src: &mut WriteSource, f: &dyn Fn(&mut [u8; 512])| {
         let mut b = good;
         f(&mut b);
-        src.write_at(0, &b).unwrap();
+        src.write_fixture(0, &b).unwrap();
     };
     // 形状：签名丢失 / 类型非 0xEE / StartingLBA != 1 / 其余三条记录非零
     patch(&mut src, &|b| b[510] = 0);
@@ -238,7 +236,7 @@ pub(crate) fn protective_mbr_shape_and_size() {
         b[446 + 12..446 + 16].copy_from_slice(&u32::MAX.to_le_bytes());
         b[510] = 0x55;
         b[511] = 0xAA;
-        big.write_at(0, &b).unwrap();
+        big.write_fixture(0, &b).unwrap();
     }
     assert!(pmbr_shape_valid(&big).unwrap());
     assert_eq!(pmbr_size_state(&big, big.sector_size).unwrap(), PmbrSize::Normal);
@@ -256,7 +254,7 @@ pub(crate) fn protective_mbr_shape_and_size() {
         b[446 + 12..446 + 16].copy_from_slice(&v.to_le_bytes());
         b[510] = 0x55;
         b[511] = 0xAA;
-        src.write_at(0, &b).unwrap();
+        src.write_fixture(0, &b).unwrap();
     };
     set_size(&mut k4, 799);
     assert!(pmbr_shape_valid(&k4).unwrap());
@@ -294,7 +292,7 @@ pub(crate) fn damaged_protective_mbr_never_parses_as_msdos() {
     // 破法一：槽位 1 仍是 0xEE 但 StartingLBA 被改坏——签名在 ⇒ 盘型 GPT，不判 msdos
     let mut b = good;
     b[446 + 8..446 + 12].copy_from_slice(&2u32.to_le_bytes());
-    src.write_at(0, &b).unwrap();
+    src.write_fixture(0, &b).unwrap();
     assert!(!pmbr_shape_valid(&src).unwrap());
     assert!(parse_mbr(&src).unwrap().is_none(), "0xEE 槽不是分区，签名在 ⇒ 不判 msdos");
     assert_eq!(table_label(&src).unwrap(), TableLabel::GptDamaged);
@@ -303,7 +301,7 @@ pub(crate) fn damaged_protective_mbr_never_parses_as_msdos() {
     // 盘型仍是 GPT；按 msdos 解析会让写入只改 MBR 视图、GPT 视图不动
     let mut b = good;
     b[446 + 4] = 0x0B;
-    src.write_at(0, &b).unwrap();
+    src.write_fixture(0, &b).unwrap();
     assert_eq!(table_label(&src).unwrap(), TableLabel::GptDamaged);
     assert!(load_gpt(&src).unwrap().is_none(), "保护布局不成立 ⇒ load_gpt 不给表");
 
@@ -312,8 +310,8 @@ pub(crate) fn damaged_protective_mbr_never_parses_as_msdos() {
     // 把分区铺到盘尾，覆盖这份备份
     let mut b = good;
     b[446 + 8..446 + 12].copy_from_slice(&2u32.to_le_bytes());
-    src.write_at(0, &b).unwrap();
-    src.write_at(512, &vec![0u8; 512]).unwrap();
+    src.write_fixture(0, &b).unwrap();
+    src.write_fixture(512, &vec![0u8; 512]).unwrap();
     assert!(!pmbr_shape_valid(&src).unwrap());
     assert!(parse_mbr(&src).unwrap().unwrap().is_empty());
     assert_eq!(table_label(&src).unwrap(), TableLabel::GptDamaged);
@@ -331,11 +329,11 @@ pub(crate) fn damaged_protective_mbr_never_parses_as_msdos() {
     let mut lba0 = [0u8; 512];
     h.read_at(0, &mut lba0).unwrap();
     lba0[446 + 4] = 0xEE;
-    h.write_at(0, &lba0).unwrap();
+    h.write_fixture(0, &lba0).unwrap();
     // msdos 盘上 LBA1 的残留 GPT 头：槽位是真实分区 → 照常按 msdos 管
     let mut sig = vec![0u8; 512];
     sig[..8].copy_from_slice(GPT_SIGNATURE);
-    h.write_at(512, &sig).unwrap();
+    h.write_fixture(512, &sig).unwrap();
     let m = parse_mbr(&h).unwrap().unwrap();
     assert_eq!(m.len(), 1, "0xEE 槽不输出");
     assert_eq!(m[0].num, 2);

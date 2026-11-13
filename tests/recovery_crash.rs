@@ -147,7 +147,7 @@ impl Fixture {
         out.extend_from_slice(&0u32.to_le_bytes()); // restore entry count
 
         let mut file = vec![0u8; 16];
-        file[0..4].copy_from_slice(b"DSK2");
+        file[0..4].copy_from_slice(b"DSK3");
         file[4..8].copy_from_slice(&(out.len() as u32).to_le_bytes());
         file[8..12].copy_from_slice(&crc32(&out).to_le_bytes());
         let header_crc = crc32(&file[0..12]);
@@ -163,7 +163,6 @@ fn crc32(bytes: &[u8]) -> u32 {
 
 #[test]
 fn the_same_request_continues_a_provisional_new_record() {
-    // 可续跑的操作按记录接续；成功后记录清理（→ 0）。
     let dir = temp_dir("resume");
     let image = image_with(&dir, 8 * 1024 * 1024);
     let mut fixture = Fixture::image(8 * 1024 * 1024, file_id(&image), 1);
@@ -181,7 +180,6 @@ fn the_same_request_continues_a_provisional_new_record() {
 
 #[test]
 fn a_different_request_does_not_continue_the_record() {
-    // 摘要不同即另一份请求（摘要与载荷不符）→ 3。
     let dir = temp_dir("different");
     let image = image_with(&dir, 8 * 1024 * 1024);
     let mut fixture = Fixture::image(8 * 1024 * 1024, file_id(&image), 1);
@@ -202,7 +200,6 @@ fn a_different_request_does_not_continue_the_record() {
 
 #[test]
 fn a_committed_record_blocks_new_record_creation() {
-    // Committed + 将创建新记录 → 3。
     let dir = temp_dir("committed");
     let image = image_with(&dir, 8 * 1024 * 1024);
     let mut fixture = Fixture::image(8 * 1024 * 1024, file_id(&image), 2);
@@ -218,7 +215,6 @@ fn a_committed_record_blocks_new_record_creation() {
 
 #[test]
 fn non_resumable_provisional_is_recovery_pending() {
-    // Recognized + Provisional → 5，不改判 3。
     let dir = temp_dir("pending");
     let image = image_with(&dir, 8 * 1024 * 1024);
     let fixture = Fixture::image(8 * 1024 * 1024, file_id(&image), 2);
@@ -233,7 +229,6 @@ fn non_resumable_provisional_is_recovery_pending() {
 
 #[test]
 fn a_blocked_record_leaves_abandon_as_the_only_exit() {
-    // 不可逆记录拒绝 undo；abandon 释放现场。
     let dir = temp_dir("only_abandon");
     let image = image_with(&dir, 4096);
     let mut fixture = Fixture::image(4096, file_id(&image), 2);

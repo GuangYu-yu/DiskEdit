@@ -92,13 +92,8 @@ impl crate::recovery::RecoveryEngine {
             // 记录里还留着什么按派生阶段判：阶段越过 `Planned` 时剩下的就是进度
             // （`move` 数据区的唯一副本），签发 `AlreadyReverted` 会把它当终态删掉
             let stage = record.derive_stage().unwrap_or_else(|f| bail_fail(f));
-            // 没有搬移步的操作派生不出 `Planned`（`new` / `add` / `copy` 等）：
-            // 进度全零且没有写事实时，记录自身就证明还没动手，仍是零写入收尾
-            let untouched = record.relocation.is_none()
-                && record.progress.completed_steps == 0
-                && record.progress.transfer_cursor == 0
-                && !record.dirty();
-            if record.restore.is_empty() && stage != Stage::Planned && !untouched {
+            // 阶段由记录字段派生：`Planned` 就是"还没动手"，不再另判一次进度字段
+            if record.restore.is_empty() && stage != Stage::Planned {
                 bail_fail(RunOutcome::refused(format!(
                     "the recovery record at {} holds no table pre-image, and an empty pre-image set only says \
                      the table was not recorded, not that the operation is already rolled back; {}",
@@ -163,23 +158,25 @@ pub(crate) fn execute_rollback(
     let record = provisional.record;
     let n = record.restore.len();
     replay_record(src, &record.restore, &path);
-    let mut outcome = RunOutcome::applied_with(Vec::new());
-    if let Err(e) = settle_companion(&path, &record, true) {
-        if !e.record_still_on_disk() {
-            // 目录项已移除、持久化未确认：只陈述这一事实，不承诺记录还在
-            outcome = outcome.degrade_partial(format!("{e}"));
-        } else if crate::outcome::target_may_have_been_written() {
-            outcome = outcome.degrade_partial(format!(
-                "the rollback is complete but the recovery record could not be released ({e}); \
-                 the record is left in place — release it with `diskedit abandon`"
-            ));
-        } else {
-            bail_fail(RunOutcome::refused(format!(
-                "the recovery record could not be released ({e}); the record is left in place — \
-                 release it with `diskedit abandon`"
-            )));
+    let outcome = match settle_companion(&path, &record, true) {
+        Ok(()) => RunOutcome::applied_with(Vec::new()),
+        // 目录项已移除、持久化未确认：只陈述这一事实，不承诺记录还在
+        Err(e) if !e.record_still_on_disk() => {
+            RunOutcome::applied_with(Vec::new()).degrade_partial(format!("{e}"))
         }
-    }
+        Err(e) => {
+            let cause = format!(
+                "the recovery record could not be released ({e}); the record is left in place — release it with `diskedit abandon`"
+            );
+            // 判据：记录仍在盘上而释放失败。已越过不可逆写入点的运行盘面可能已改，
+            // 降级为 5 并保留记录；未越过的仍是拒绝
+            let unwritten = cause.clone();
+            crate::outcome::attribute(
+                || RunOutcome::applied_with(Vec::new()).degrade_partial(cause),
+                || bail_fail(RunOutcome::refused(unwritten)),
+            )
+        }
+    };
     let taking = if n == 0 {
         "the recovery record held no written ranges — nothing was written back (verify with: diskedit info)"
             .to_string()
@@ -387,6 +384,27 @@ fn read_virtual(
     Ok(buf)
 }
 
+/// 回放凭据：携带一条记录条目，`WriteSource::write_recorded` 按它写回原文。
+///
+/// 字段私有，铸造点只有 [`replay_record`]，写记录原文的能力因此只落在回放路径上
+pub(crate) struct RecordedPreImage<'a> {
+    entry: &'a RestoreEntry,
+}
+
+impl<'a> RecordedPreImage<'a> {
+    fn of(entry: &'a RestoreEntry) -> Self {
+        Self { entry }
+    }
+
+    pub(crate) fn offset(&self) -> u64 {
+        self.entry.byte_offset().expect("validated before replay")
+    }
+
+    pub(crate) fn bytes(&self) -> &'a [u8] {
+        self.entry.original.as_slice()
+    }
+}
+
 /// 逆序写回原文，然后逐条读回、sync。任一步失败都保留记录并退 5
 pub(crate) fn replay_record(
     src: &mut WriteSource,
@@ -395,10 +413,11 @@ pub(crate) fn replay_record(
 ) {
     // 逆序：同一区间被后续写入覆盖时，先回放后写的那段，链首原文才落得回去
     for entry in restore.iter().rev() {
-        let offset = entry.byte_offset().expect("validated before replay");
-        if let Err(e) = src.write_at(offset, &entry.original) {
+        let pre_image = RecordedPreImage::of(entry);
+        if let Err(e) = src.write_recorded(&pre_image) {
             bail_fail(RunOutcome::partial(format!(
-                "undo write failed at offset {offset}: {e} — the recovery record at {} is kept; retry `diskedit undo`",
+                "undo write failed at offset {}: {e} — the recovery record at {} is kept; retry `diskedit undo`",
+                pre_image.offset(),
                 path.display()
             )));
         }

@@ -58,7 +58,7 @@ pub(crate) fn preflight(step: &FsSet) -> Result<(), RunOutcome> {
 ///
 /// 屏障落在调用外部工具的同一函数里、紧贴首次写盘之前：记录随屏障落盘，之后工具无论
 /// 成败，目标都处于不可回滚状态。本步之前的失败按各自的原变体返回；越过首写之后
-/// 的失败由退出点的归责统一改判，调用点不再自行降级
+/// 的失败由退出点的归责统一改判，调用点不自行降级
 pub(crate) fn execute(src: &mut WriteSource, step: &FsSet) -> Result<(), RunOutcome> {
     // 预扫描已经判过同一份载荷，这里的失败只是兜底
     step.check()?;

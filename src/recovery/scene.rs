@@ -25,11 +25,7 @@ pub(crate) enum SceneProof {
 }
 
 /// loop 载体的映射事实。两个槽位承载 sysfs 的 `loop/offset` 与 `loop/sizelimit`
-/// （`FileSource::loop_mapping` 就是这一对），编码侧按 8+8 字节顺序写；访问器名字沿用
-/// 编码侧的 `major` / `minor`，不表示设备号。
-///
-/// 槽位语义由 `FileSource` 上唯一的 `(u64, u64)` 对与「身份材料相同、映射不同即外来
-/// 目标」的用例确定；`Mapping` 没有第二处定义，编码里也没有槽位名的直接依据。
+/// （`FileSource::loop_mapping` 就是这一对），编码侧按 8+8 字节顺序写。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Mapping {
     major: u64,

@@ -1,6 +1,6 @@
-//! 记录驱动的进度 sink：把执行器报出的搬移检查点与表步完成写进恢复记录。
+//! 记录驱动的进度 sink：把执行器报出的搬移检查点、表步开始/完成与围栏写进恢复记录。
 //!
-//! 只落进度：表内容与整份替换归命令层，本类型不写表字节，也不替换记录。
+//! 只落记录：表内容与整份替换归命令层，本类型不写表字节，也不替换记录。
 
 use crate::dev::WriteSource;
 use crate::execution::{StepSink, TransferState};
@@ -43,18 +43,54 @@ impl StepSink for RecordSink<'_> {
             )
         })?;
         // 单次 persist 同时落条目游标与 progress；缩容状态沿用记录里的值
+        let (entry, chunks, steps, cursor) = state.durable();
         journal
-            .record_transfer_checkpoint(
-                Some((state.entry_index, state.chunks_in_entry)),
-                state.completed_steps,
-                state.transfer_cursor,
-            )
+            .record_transfer_checkpoint(Some((entry, chunks)), steps, cursor)
             .map_err(|e| {
                 RunOutcome::partial(format!(
                     "{} — the transfer may be incomplete",
                     e.record_failure("the transfer checkpoint")
                 ))
             })
+    }
+
+    fn entry_table_started(
+        &mut self,
+        src: &mut WriteSource,
+        entry: u32,
+    ) -> Result<(), RunOutcome> {
+        let journal = src.record_journal_mut().ok_or_else(|| {
+            RunOutcome::partial(
+                "the target carries no recovery record — the table step must not start",
+            )
+        })?;
+        // 表步之前先落"这条的表可能已写"；落不下去就不写表
+        journal.mark_entry_table_in_flight(entry).map_err(|e| {
+            RunOutcome::partial(format!(
+                "{} — the table step must not start",
+                e.record_failure("the relocation entry's table write")
+            ))
+        })
+    }
+
+    fn table_step_started(&mut self, src: &mut WriteSource) -> Result<(), RunOutcome> {
+        let journal = src.record_journal_mut().ok_or_else(|| {
+            RunOutcome::partial(
+                "the target carries no recovery record — the table step must not start",
+            )
+        })?;
+        // 表步之前先落"表可能已写"；落不下去就不写表
+        let relocated = journal.relocation().is_some();
+        journal.mark_table_step_started().map_err(|e| {
+            RunOutcome::partial(format!(
+                "{} — the table step must not start",
+                e.record_failure("the table step start")
+            ))
+        })?;
+        if !relocated {
+            crate::movepart::fault_table_step_recorded();
+        }
+        Ok(())
     }
 
     fn table_step_done(
@@ -68,17 +104,11 @@ impl StepSink for RecordSink<'_> {
                 "the target carries no recovery record — the table step may not be durably recorded",
             )
         })?;
-        // 执行器在调用前已把 entry_index 加一、chunks_in_entry 归零、completed_steps 加一，
-        // 这里只持久化这三个值，不再加一
-        let reloc = journal
-            .relocation()
-            .map(|_| (state.entry_index, state.chunks_in_entry));
+        // 没有搬移表时围栏与步数同一笔落 `Landed`
+        let (entry, chunks, steps, cursor) = state.durable();
+        let reloc = journal.relocation().map(|_| (entry, chunks));
         journal
-            .record_transfer_checkpoint(
-                reloc,
-                state.completed_steps,
-                state.transfer_cursor,
-            )
+            .record_table_step_done(reloc, steps, cursor)
             .map_err(|e| {
                 RunOutcome::partial(format!(
                     "{} — the on-disk state may have changed",
@@ -98,10 +128,10 @@ impl StepSink for RecordSink<'_> {
                 "the target carries no recovery record — the filesystem step may not be durably recorded",
             )
         })?;
-        // 文件系统步骤不动搬移游标（reloc 传 None），只落已完成的步数：外部工具已退出，
-        // 这一步做过与否不能只留在内存里
+        // 文件系统步骤不动搬移游标（reloc 传 None），只落已完成的步数
+        let (_, _, steps, cursor) = state.durable();
         journal
-            .record_transfer_checkpoint(None, state.completed_steps, state.transfer_cursor)
+            .record_transfer_checkpoint(None, steps, cursor)
             .map_err(|e| {
                 RunOutcome::partial(format!(
                     "{} — the on-disk state may have changed",

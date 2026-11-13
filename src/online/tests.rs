@@ -178,7 +178,7 @@ pub(crate) fn part_resize_outcomes_keep_the_write_stage_distinct() {
     }
 }
 
-// ---- 真实块设备回归（Linux + root + loop + btrfs）----
+// ---- 真实块设备测试（Linux + root + loop + btrfs）----
 //
 // 在线缩容的首个写盘步骤是 `btrfs filesystem resize`。决策快照取自内核视图，之后到
 // 首写之间存在探测窗口；本用例在 `decide`（锁下、快照之后）里改写盘上表，模拟窗口内
