@@ -1,5 +1,5 @@
 //! plan 的只读报告与搬移计划的打印。`plan` 与 `info` 共用同一份报告；
-//! `print_plan`/`print_moves` 供 resize 与 `plan --grow` 在写表之前展示将要搬动的分区。
+//! `print_plan`/`print_moves` 供 resize 在写表之前展示将要搬动的分区。
 
 use crate::cli::{InfoRequest, PlanRequest};
 use crate::gpt_policy;

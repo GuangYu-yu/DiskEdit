@@ -16,12 +16,8 @@ pub fn chunk_bytes(mib: u64) -> io::Result<u64> {
     Ok(mib * 1024 * 1024)
 }
 
-/// 拒绝搬移（起始 LBA 变化）的 GPT 类型 GUID：LUKS/LVM PV——搬移后其元数据语义不明。
-/// 纯扩缩（起点不动、数据不搬）不受此限。swap 不在本判据：它在 plan 层有专门处理
-/// （内容可弃 → 不搬数据、落位后 mkswap 重建），只有 resize-part 的单分区路径会
-/// 一并拒绝它（那里没有重建流程）
-///
-/// 类型 GUID 一律按 UEFI 规范磁盘序比较（前三字段小端、Data4 原序），不做反向编码容错
+/// 拒绝搬移的 GPT 类型 GUID（搬移改变起始 LBA）。
+/// 类型 GUID 按 UEFI 规范磁盘序比较（前三字段小端、Data4 原序），不做反向编码容错。
 pub(crate) fn is_forbidden_type_guid(g: &[u8; 16]) -> bool {
     [table::LUKS_TYPE_GUID, table::LVM_TYPE_GUID].contains(g)
 }
@@ -153,21 +149,9 @@ impl SwapVerdict {
     }
 }
 
-/// "这条分区是不是 swap"的**唯一**对账点：声明侧（分区表的类型 GUID）与证据侧
-/// （区间内的内容签名）各答一次，三种情形分别落定。
-///
-/// 两方都有且一致：按一致结果。一方缺失：用另一方——MBR 没有类型 GUID 是正常情形，
-/// 缺声明不等于冲突；内容读不出来也只说明这一侧没答案。两方都有且冲突：**拒绝**，
-/// 并说明声明说什么、证据说什么。
-///
-/// 冲突只能停，不许静默选一个：按声明判，签名被抹过而声明仍是 swap 的分区会被当普通
-/// 数据搬走，重建那一步随之消失；按内容判，MBR 上没有类型 GUID 的真 swap 会漏判，搬完
-/// 不重建，新位置留下一个起不来的 swap 区。两种错都只有"冲突就停"能挡住。
-///
-/// 两方都缺时不拒绝，按非 swap 处理并按原始数据搬移：无条件拒绝会挡住所有内容未知的
-/// 分区（加密卷、未知文件系统），那是比漏判更大的倒退；而原始搬移不破坏 swap——swap
-/// 头随数据一起走、不含绝对偏移，搬完重新 `swapon` 即可用。退的方向是"不做额外动作"
-/// （不重建、不覆写），不是拒绝
+/// "这条分区是不是 swap"的对账点：声明侧（分区表的类型 GUID）与证据侧（区间内的
+/// 内容签名）各答一次。两方一致按一致结果；一方缺失用另一方；两方都有且冲突则拒绝；
+/// 两方都缺失时按非 swap 处理、原样搬移。
 pub(crate) fn reconcile_swap(
     part: u32,
     declared: Option<bool>,
@@ -187,8 +171,7 @@ pub(crate) fn reconcile_swap(
         }
         (Some(d), None) => SwapVerdict { is_swap: d, basis: SwapBasis::Declaration },
         (None, Some(e)) => SwapVerdict { is_swap: e, basis: SwapBasis::Content },
-        // 两方都缺：按非 swap 处理、数据原样搬移。判定里不出现 mkswap，故不会覆写任何
-        // 内容；真正的 swap 区搬完只差一次 `swapon`
+        // 两方都缺：按非 swap 处理、数据原样搬移
         (None, None) => SwapVerdict { is_swap: false, basis: SwapBasis::Neither },
     })
 }
@@ -678,9 +661,7 @@ pub fn has_pending_relocation(
     Ok(matches!(resume_outcome(relocation, g, repair, grow_part)?, ResumeRunOutcome::Belongs(_)))
 }
 
-/// 槽位被**别的分区**的搬移作业占用时的拒绝理由。三处 plan 生成路径共用同一句话：
-/// 同一事实的措辞只写一次，否则用户在不同入口看到的原因迟早会漂移。这里不知道那份
-/// 作业的形状，所以只说"它属于创建它的那条请求"，不把重跑说成通用的出路
+/// 槽位被别的分区的搬移作业占用时的拒绝理由。
 pub(crate) fn foreign_checkpoint_refusal() -> RunOutcome {
     RunOutcome::refused(
         "an unfinished relocation job for a different partition is recorded on this target — it belongs \
@@ -688,12 +669,7 @@ pub(crate) fn foreign_checkpoint_refusal() -> RunOutcome {
     )
 }
 
-/// 续跑入口的作业身份不匹配时的拒绝理由。措辞按 pending 作业的进入语义分句：
-/// 用户拿到的必须是**唯一**能接着做下去的那条命令。两个续跑入口（`resize grow` /
-/// `resize SIZE + --allow-move`）与只读预览 `plan --grow` 共用这一处——只修其中一处，
-/// 同一条事实在不同入口的指引迟早漂移。
-/// 两种形状的重跑都是续跑：最小位移作业按原尺寸接着做，尾部打包作业按记录里的
-/// 有序计划接着做（提交前区间与计划同一次落盘，见 `shift::execute_apply`）
+/// 续跑入口作业身份不匹配时的拒绝理由。
 pub(crate) fn plan_job_owns_target(kind: PlanKind, different_size: bool) -> RunOutcome {
     match kind {
         PlanKind::TailPacked => RunOutcome::refused(
@@ -726,7 +702,7 @@ pub(crate) fn plan_requested_end(plan: &Plan, target_start: u64) -> Option<u64> 
 ///
 /// `Belongs` 时以记录里的有序计划为准：盘上几何已被部分执行改变，重算出的 delta 与
 /// 记录不一致，会撞上执行器的恢复校验而使续传永久失败。修复动作不在记录里：执行链
-/// 先绑记录、再执行修复（`movepart::shift::apply_unreconciled`），中断可以落在两者
+/// 先绑记录、再执行修复（`cmd/resize.rs::apply_move`），中断可以落在两者
 /// 之间，故续跑按本次读到的表重新分类，把动作原样带进 plan
 pub(crate) fn resume_outcome(
     relocation: Option<&Relocation>,
@@ -750,10 +726,7 @@ pub(crate) fn resume_outcome(
     }))
 }
 
-/// resume 判定的三态结论——刻意不压扁成 Option："没有作业"、"是本次请求的作业"、
-/// "槽位被别的作业占用"在调用方处各走各路：只有第一种允许现算新计划；第二种以
-/// ckpt 为准续跑；第三种必须拒绝——当空槽会覆盖别人的现场，当自己的续跑点会执行
-/// 错误的 plan（盘上几何已被那次作业部分改写，现算出的 delta 与其记录不一致）
+/// resume 判定的三态结论。
 pub(crate) enum ResumeRunOutcome {
     Empty,
     /// ckpt 属于本次请求的分区：plan 自持（盘上几何已被部分执行改变，现算必错）
@@ -830,16 +803,14 @@ fn grow_end_of(
 }
 
 /// 续跑一致性：记录里的有序计划、双游标与几何守卫对上"盘上现在是什么"。
-/// 全部检查在写任何字节之前完成，任一不成立都拒绝（3）。`move` 与
+/// 全部检查在写任何字节之前完成，任一不成立都拒绝。`move` 与
 /// `resize --allow-move` 共用这一份，不再各写一套。
 ///
 /// 只读记录与几何，不按当前盘面重算 plan：盘上几何已被部分改写时，现算的 delta
 /// 与记录不一致，续跑必须以记录为准。`grow_part == 0` 表示本记录不属于扩容作业
 /// （`move`），扩容相关的两条守卫随之不适用。
 ///
-/// 本函数是 `move` 与 `resize --allow-move` 的共享层：只依赖 movepart 的求值规则与
-/// `recovery` 的记录结构，不得 import `cmd::*`——否则它就不是共享层，只是换了个
-/// 地方的命令层
+/// 本函数是 `move` 与 `resize --allow-move` 的共享层，不依赖 `cmd::*`。
 pub(crate) fn verify_relocation_resume(
     r: &Relocation,
     g: &ValidatedGeometry,

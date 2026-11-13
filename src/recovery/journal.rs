@@ -30,8 +30,8 @@ use super::cleanup::{CleanupError, RecoveryEngine};
 use super::record::{OpKind, Record};
 #[cfg(target_os = "linux")]
 use super::record::{
-    CommitState, CopySource, LvmPost, PlanDigest, PlanId, PlanVersion, Progress, RecoveryAction,
-    Relocation, RestoreEntry, TxId,
+    CommitState, CopySource, EntryCommit, LvmPost, PlanDigest, PlanId, PlanVersion, Progress,
+    RecoveryAction, Relocation, RepairFact, RepairKind, RepairState, RestoreEntry, TableFence, TxId,
 };
 use super::scene::SceneIdentity;
 use crate::dev::DiskGuidState;
@@ -170,7 +170,7 @@ pub(crate) fn sweep_record_temps(_record_path: &Path) {}
 pub(crate) enum RecordJournalError {
     Io(std::io::Error),
     Unsupported(String),
-    /// 删除前回读与待删记录不符：记录保留。已写目标字节时落 5，未写时落 3
+    /// 删除前回读与待删记录不符：记录保留
     ReadbackMismatch(String),
     /// 删除已发生、目录 fsync 失败：名字空间里已没有它，掉电后是否重新出现未确认
     RemovedDurabilityUnconfirmed,
@@ -220,8 +220,6 @@ fn evidence_io(e: EvidenceIo) -> RecordJournalError {
 
 /// 闸口看到的记录现场：只回答"落点上是什么"，不做身份比较
 #[derive(Clone, Debug)]
-// 记录是固定布局的落盘形态（488 字节）；装箱只把同一份字节搬到堆上，
-// 而每个匹配臂都要多一次解引用。差异来自"这就是那份字节"，不是设计遗漏
 #[allow(clippy::large_enum_variant)]
 pub(crate) enum CompanionProbe {
     /// 落点没有条目
@@ -230,8 +228,8 @@ pub(crate) enum CompanionProbe {
     Decoded(Record),
     /// 本工具的记录，但撕裂 / CRC 不符
     Damaged(String),
-    /// 布局不属于本构建
-    Foreign,
+    /// 布局不属于本构建；`magic` 用于把已知的旧布局说清楚
+    Foreign { magic: [u8; 4] },
     /// 落点存在但不是普通文件（符号链接 / 目录 / 其他条目）
     NotOurs(String),
     /// 读不出来：权限、I/O 或平台没有读取原语
@@ -290,7 +288,7 @@ pub(crate) fn probe_companion(record: &Path) -> CompanionProbe {
 fn classify_bytes(bytes: &[u8]) -> CompanionProbe {
     match super::record::decode(bytes) {
         Ok(record) => CompanionProbe::Decoded(record),
-        Err(super::record::DecodeFailure::Format { .. }) => CompanionProbe::Foreign,
+        Err(super::record::DecodeFailure::Format { magic, .. }) => CompanionProbe::Foreign { magic },
         Err(super::record::DecodeFailure::Incomplete { observed, expected }) => CompanionProbe::Damaged(format!(
             "the record is incomplete ({observed} of {expected} byte(s))"
         )),
@@ -368,10 +366,7 @@ pub(crate) fn settle_companion(record_path: &Path, record: &Record, persist_comm
     let mut file = store
         .open_at(&anchor, &relative)
         .map_err(|e| RecordJournalError::Unsupported(format!("the record path is refused: {e:?}")))?;
-    // 删除前复核盘上事实：传入的 record 是调用方此前读出的快照，从读到删之间盘上
-    // 记录可能已被改写，persist_commit=true 更会把快照整份替换回盘上。与盘上当前
-    // 字节整份比对一致才动手，不一致则不动盘、保留记录——
-    // 「读回不符则不删」的落点
+    // 删除前复核盘上事实：与盘上当前字节整份比对一致才动手，不一致则不动盘、保留记录
     let current_bytes = store.read(&file).map_err(evidence_io)?;
     let current = crate::recovery::record::decode(&current_bytes).map_err(|why| {
         RecordJournalError::ReadbackMismatch(format!("the record on disk no longer decodes: {why:?}"))
@@ -428,7 +423,7 @@ pub(crate) fn settle_companion(
 pub(crate) enum RequestMatch {
     /// 摘要相同：记录属于本次请求
     Same,
-    /// 记录从未绑定摘要（旧格式或刚创建）：不能证明它属于本次请求
+    /// 记录从未绑定摘要：不能证明它属于本次请求
     Unbound,
     /// 摘要不同：记录属于另一个请求
     Other,
@@ -475,7 +470,7 @@ impl PersistFailure {
     pub(crate) fn into_io(self) -> std::io::Error {
         match self {
             Self::NotWritten(e) => e,
-            // 目录项已改：外层说「没写」「没有记录」都是假话，错误文本自己带上事实
+            // 目录项已改，错误文本自己带上事实
             Self::RenamedNotDurable(e) => std::io::Error::new(
                 e.kind(),
                 format!(
@@ -571,6 +566,24 @@ fn ensure_progress_forward(
     Ok(())
 }
 
+/// 把策略侧的表区修复动作折算成记录里的事实；`None` 动作不落任何事实。
+/// 只重建保护 MBR 的动作没有 LBA 值，两处写零
+#[cfg(target_os = "linux")]
+fn repair_fact(action: &crate::gpt_policy::RepairAction) -> Option<RepairFact> {
+    use crate::gpt_policy::RepairAction;
+    let (kind, new_backup_lba, new_last_usable) = match action {
+        RepairAction::None => return None,
+        RepairAction::RelocateBackup { new_backup_lba, new_last_usable } => {
+            (RepairKind::RelocateBackup, *new_backup_lba, *new_last_usable)
+        }
+        RepairAction::RepairProtectiveMbr => (RepairKind::RepairProtectiveMbr, 0, 0),
+        RepairAction::RelocateAndRepair { new_backup_lba, new_last_usable } => {
+            (RepairKind::RelocateAndRepair, *new_backup_lba, *new_last_usable)
+        }
+    };
+    Some(RepairFact { kind, new_backup_lba, new_last_usable, state: RepairState::InFlight })
+}
+
 #[cfg(target_os = "linux")]
 impl RecordJournal {
     /// 确定落点与记录头；此时**不产生文件**，记录在第一次 [`Self::record_span`] 时创建。
@@ -643,6 +656,20 @@ impl RecordJournal {
         };
         let record = match Evidence::classify(&bytes, &current) {
             Evidence::Recognized(record) => record,
+            Evidence::UnrecognizedFormat { magic, .. } => {
+                if let Some(name) = super::record::legacy_layout(magic) {
+                    return Err(RecordJournalError::Unsupported(format!(
+                        "the record at {} was written in the previous record layout ({name}); this build reads the \
+                         current layout only — it cannot be resumed or undone. Keep it and release it with \
+                         `diskedit abandon`, after the unfinished operation is settled by hand",
+                        record_path.display()
+                    )));
+                }
+                return Err(RecordJournalError::Unsupported(format!(
+                    "the record at {} is not a complete record of this target, so it cannot be resumed",
+                    record_path.display()
+                )));
+            }
             _ => {
                 return Err(RecordJournalError::Unsupported(format!(
                     "the record at {} is not a complete record of this target, so it cannot be resumed",
@@ -695,7 +722,7 @@ impl RecordJournal {
             }
             // 已落盘却仍无摘要：无法证明它属于本次请求，
             // 它留下的中间态（搬了一半、表已提交）只能由 inspect/undo 处理——放行等于
-            // 替它做结论。新建记录在首次落盘之前就绑好摘要，故只有旧记录命中这里
+            // 替它做结论
             RequestMatch::Unbound if self.is_persisted() => {
                 return Err(format!(
                     "the recovery record at {} carries no request identity — it was written before \
@@ -827,14 +854,25 @@ impl RecordJournal {
             return Ok(());
         }
         self.record.relocation = Some(reloc);
+        let entry_count = self
+            .record
+            .relocation
+            .as_ref()
+            .map(|r| r.entries.len())
+            .unwrap_or(0);
+        let commits_before = std::mem::replace(
+            &mut self.record.entry_commits,
+            vec![EntryCommit::Pending; entry_count],
+        );
         let lvm_before = self.record.lvm_post;
         if lvm_post.is_some() {
-            // 上一次作业已经写下基线时沿用旧值：续跑不重新选定 LV
+            // 上一次作业已经写下基线时沿用旧值
             self.record.lvm_post = self.record.lvm_post.or(lvm_post);
         }
         if let Err(e) = self.persist() {
             if !e.record_bytes_persisted() {
                 self.record.relocation = None;
+                self.record.entry_commits = commits_before;
                 self.record.lvm_post = lvm_before;
             }
             return Err(e);
@@ -851,12 +889,35 @@ impl RecordJournal {
         completed_steps: u32,
         transfer_cursor: u64,
     ) -> Result<(), PersistFailure> {
+        self.record_checkpoint(reloc, completed_steps, transfer_cursor, false)
+    }
+
+    /// 表步完成：进度与围栏 `Landed` 同一笔落盘。没有搬移表的记录靠它把"表已写"
+    /// 写进盘上；有搬移表时围栏停在 `Pending`，由逐条目事实承载
+    pub(crate) fn record_table_step_done(
+        &mut self,
+        reloc: Option<(u32, u64)>,
+        completed_steps: u32,
+        transfer_cursor: u64,
+    ) -> Result<(), PersistFailure> {
+        self.record_checkpoint(reloc, completed_steps, transfer_cursor, true)
+    }
+
+    fn record_checkpoint(
+        &mut self,
+        reloc: Option<(u32, u64)>,
+        completed_steps: u32,
+        transfer_cursor: u64,
+        land_table: bool,
+    ) -> Result<(), PersistFailure> {
         let was_progress = self.record.progress;
         let was_reloc = self
             .record
             .relocation
             .as_ref()
             .map(|r| (r.entry_index, r.chunks_in_entry));
+        let was_commits = self.record.entry_commits.clone();
+        let was_fence = self.record.table_fence;
         if let Some((entry_index, chunks_in_entry)) = reloc {
             let Some(current) = self.record.relocation.as_ref() else {
                 return Err(PersistFailure::NotWritten(std::io::Error::other(
@@ -870,10 +931,25 @@ impl RecordJournal {
             .map_err(PersistFailure::NotWritten)?;
         if let Some((entry_index, chunks_in_entry)) = reloc {
             let current = self.record.relocation.as_mut().expect("checked above");
+            let advanced_from = current.entry_index as usize;
             current.entry_index = entry_index;
             current.chunks_in_entry = chunks_in_entry;
+            // 游标推进与条目的表步提交事实同一笔落盘：中间崩溃不会留下
+            // "游标已过、条目仍 InFlight" 的组合
+            for state in self
+                .record
+                .entry_commits
+                .iter_mut()
+                .take(entry_index as usize)
+                .skip(advanced_from)
+            {
+                *state = EntryCommit::Committed;
+            }
         }
         self.record.progress = Progress { completed_steps, transfer_cursor, fs_phase: was_progress.fs_phase };
+        if land_table && self.record.relocation.is_none() {
+            self.record.table_fence = TableFence::Landed;
+        }
         if let Err(e) = self.persist() {
             if !e.record_bytes_persisted() {
                 if let Some((entry_index, chunks_in_entry)) = was_reloc {
@@ -881,11 +957,97 @@ impl RecordJournal {
                     current.entry_index = entry_index;
                     current.chunks_in_entry = chunks_in_entry;
                 }
+                self.record.entry_commits = was_commits;
                 self.record.progress = was_progress;
+                self.record.table_fence = was_fence;
             }
             return Err(e);
         }
         Ok(())
+    }
+
+    /// 表步开始前落盘：没有搬移表的记录据此说明"表可能已经写过"。有搬移表时
+    /// 由 [`Self::mark_entry_table_in_flight`] 按条目承载，本方法不写
+    pub(crate) fn mark_table_step_started(&mut self) -> Result<(), PersistFailure> {
+        if self.record.relocation.is_some() || self.record.table_fence != TableFence::Pending {
+            return Ok(());
+        }
+        self.record.table_fence = TableFence::InFlight;
+        if let Err(e) = self.persist() {
+            if !e.record_bytes_persisted() {
+                self.record.table_fence = TableFence::Pending;
+            }
+            return Err(e);
+        }
+        Ok(())
+    }
+
+    /// 条目的表步开始前落盘：把该条标为 `InFlight`。表步的结果此后才写入记录，
+    /// 这中间崩溃时记录仍能说明"这条的表可能已经写过"
+    pub(crate) fn mark_entry_table_in_flight(&mut self, entry: u32) -> Result<(), PersistFailure> {
+        let Some(state) = self.record.entry_commits.get_mut(entry as usize) else {
+            return Ok(());
+        };
+        if *state != EntryCommit::Pending {
+            return Ok(());
+        }
+        *state = EntryCommit::InFlight;
+        if let Err(e) = self.persist() {
+            // 未落盘时回滚内存里的标记；已经落盘的失败保留它
+            if !e.record_bytes_persisted()
+                && let Some(state) = self.record.entry_commits.get_mut(entry as usize)
+            {
+                *state = EntryCommit::Pending;
+            }
+            return Err(e);
+        }
+        Ok(())
+    }
+
+    /// 表区修复开始前落盘：写下"已开始、结果未记入"。`None` 动作没有可记的事实
+    pub(crate) fn mark_repair_started(
+        &mut self,
+        action: &crate::gpt_policy::RepairAction,
+    ) -> Result<(), PersistFailure> {
+        let Some(fact) = repair_fact(action) else {
+            return Ok(());
+        };
+        let was = self.record.repair;
+        self.record.repair = Some(fact);
+        if let Err(e) = self.persist() {
+            if !e.record_bytes_persisted() {
+                self.record.repair = was;
+            }
+            return Err(e);
+        }
+        Ok(())
+    }
+
+    /// 修复收敛后落盘：把已记下的修复标为 `Landed`
+    pub(crate) fn mark_repair_landed(&mut self) -> Result<(), PersistFailure> {
+        let Some(fact) = self.record.repair.as_mut() else {
+            return Err(PersistFailure::NotWritten(std::io::Error::other(
+                "the record carries no table repair to mark as landed",
+            )));
+        };
+        if fact.state == RepairState::Landed {
+            return Ok(());
+        }
+        fact.state = RepairState::Landed;
+        if let Err(e) = self.persist() {
+            if !e.record_bytes_persisted()
+                && let Some(fact) = self.record.repair.as_mut()
+            {
+                fact.state = RepairState::InFlight;
+            }
+            return Err(e);
+        }
+        Ok(())
+    }
+
+    /// 记录下来的表区修复事实；没有修复动作时为 `None`
+    pub(crate) fn repair(&self) -> Option<RepairFact> {
+        self.record.repair
     }
 
     /// 写下分区层提交后的 LVM 收尾基线并落盘。只有 `resize` 的记录带这一步；
@@ -914,8 +1076,7 @@ impl RecordJournal {
         Ok(())
     }
 
-    /// 推进持久进度并落盘。只允许前进（stage 只前进或不变）——
-    /// 倒退只会来自两处游标口径分叉，静默接受就等于让搬移循环跳过已覆盖的区间
+    /// 推进持久进度并落盘。只允许前进（stage 只前进或不变）
     pub(crate) fn record_progress(
         &mut self,
         completed_steps: u32,
@@ -1081,7 +1242,6 @@ impl RecordJournal {
             Ok(DirDurability::Persisted) => Ok(()),
             Ok(DirDurability::Unconfirmed) => Err(RecordJournalError::RemovedDurabilityUnconfirmed),
             Err(CleanupError::Io(e)) => Err(evidence_io(e)),
-            // 已写路径的清理侧拒绝：目标字节已落盘，调用方一律降级为 5
             Err(CleanupError::ReadbackMismatch(why)) => Err(RecordJournalError::ReadbackMismatch(why)),
         }
     }
@@ -1377,6 +1537,51 @@ impl RecordJournal {
         Err(PersistFailure::NotWritten(std::io::Error::other(
             "recovery records are not written on this platform",
         )))
+    }
+
+    pub(crate) fn record_table_step_done(
+        &mut self,
+        _reloc: Option<(u32, u64)>,
+        _completed_steps: u32,
+        _transfer_cursor: u64,
+    ) -> Result<(), PersistFailure> {
+        Err(PersistFailure::NotWritten(std::io::Error::other(
+            "recovery records are not written on this platform",
+        )))
+    }
+
+    pub(crate) fn mark_table_step_started(&mut self) -> Result<(), PersistFailure> {
+        Err(PersistFailure::NotWritten(std::io::Error::other(
+            "recovery records are not written on this platform",
+        )))
+    }
+
+    pub(crate) fn mark_entry_table_in_flight(
+        &mut self,
+        _entry: u32,
+    ) -> Result<(), PersistFailure> {
+        Err(PersistFailure::NotWritten(std::io::Error::other(
+            "recovery records are not written on this platform",
+        )))
+    }
+
+    pub(crate) fn mark_repair_started(
+        &mut self,
+        _action: &crate::gpt_policy::RepairAction,
+    ) -> Result<(), PersistFailure> {
+        Err(PersistFailure::NotWritten(std::io::Error::other(
+            "recovery records are not written on this platform",
+        )))
+    }
+
+    pub(crate) fn mark_repair_landed(&mut self) -> Result<(), PersistFailure> {
+        Err(PersistFailure::NotWritten(std::io::Error::other(
+            "recovery records are not written on this platform",
+        )))
+    }
+
+    pub(crate) fn repair(&self) -> Option<super::record::RepairFact> {
+        None
     }
 
     pub(crate) fn record_lvm_post(

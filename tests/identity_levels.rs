@@ -72,7 +72,6 @@ fn snapshot(path: &Path) -> Vec<u8> {
 
 #[test]
 fn an_image_identity_permits_the_write_path() {
-    // 镜像的 (dev, ino) 是 Strong，写命令照常执行。
     let dir = temp_dir("image");
     let image = image_with(&dir, 8 * 1024 * 1024);
     let path = image.to_str().expect("utf-8 path");
@@ -91,8 +90,7 @@ fn an_image_identity_permits_the_write_path() {
 
 #[test]
 fn a_loop_backing_identity_permits_the_write_path() {
-    // loop 的后备文件身份是 Strong。写盘落在后备文件上。
-    // 持久状态已达成但内核拒绝重扫 → 5，不算身份拒绝。
+    // 5 不算身份拒绝（持久状态已达成但内核拒绝重扫）。
     let dir = temp_dir("loop");
     let image = image_with(&dir, 32 * 1024 * 1024);
     let Some(device) = attach_loop(&image, false) else {
@@ -118,7 +116,6 @@ fn a_loop_backing_identity_permits_the_write_path() {
 
 #[test]
 fn a_partition_node_reads_with_the_carrier_identity() {
-    // 分区身份 = 载体 + 分区号；读命令可用。
     let dir = temp_dir("partition");
     let image = image_with(&dir, 32 * 1024 * 1024);
     let path = image.to_str().expect("utf-8 path");
@@ -148,8 +145,7 @@ fn a_partition_node_reads_with_the_carrier_identity() {
 
 #[test]
 fn a_dm_device_is_unusable_for_writes() {
-    // dm 只有主次设备号，身份为 Unusable → 写被拒。
-    // 身份不可得不阻断读命令。
+    // dm 只有主次设备号，写被拒；读命令不受阻断。
     if !is_root() {
         eprintln!("skipping a_dm_device_is_unusable_for_writes: needs euid 0 to create the dm device");
         return;
@@ -220,13 +216,12 @@ fn a_dm_device_is_unusable_for_writes() {
 
 #[test]
 fn a_device_with_a_serial_or_wwid_reads_as_a_strong_identity() {
-    // 有 WWN/EUI 或一致 serial 的真实盘是 Strong。
-    // 只发只读命令；测试不写真实磁盘。
+    // 测试不写真实磁盘，只发只读命令。
     let Some(device) = device_with_serial_or_wwid() else {
         eprintln!("skipping a_device_with_a_serial_or_wwid_reads_as_a_strong_identity: no device with a WWN or serial");
         return;
     };
-    // 读命令的前提是设备打得开：无读权限的环境没有这个现场，跳过
+    // 读命令的前提是设备打得开；无读权限的环境没有这个现场，跳过。
     if fs::File::open(&device).is_err() {
         eprintln!(
             "skipping a_device_with_a_serial_or_wwid_reads_as_a_strong_identity: cannot open {}",

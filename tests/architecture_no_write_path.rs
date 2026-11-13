@@ -12,17 +12,18 @@ use guards::{rust_sources, source};
 /// 允许出现目标/证据写原语的文件。清单与 `rust_sources` 的扫描范围一致：
 /// `tests/` 目录被跳过，其中的夹具直写只存在于 `#[cfg(test)]`，不在生产调用链上；
 /// `fsops/tests.rs` 是文件而非目录，仍在扫描范围内。`write_guarded`/`write_converged`
-/// 是派发到写入原语的守卫入口，调用它们的文件同样计入清单。
+/// 是派发到写入原语的守卫入口，`write_recorded`（回放写）与 `write_fixture`（测试夹具写）
+/// 同样是写入入口，调用它们的文件一并计入清单。
 const WRITE_SITES: &[&str] = &[
     "dev/source.rs",
     "execution/copy.rs",
+    "execution/mod.rs",
     "execution/relocate.rs",
     "execution/table.rs",
     "fsops/env.rs",
     "fsops/swap.rs",
     "fsops/tests.rs",
     "gpt_policy.rs",
-    "movepart/resize.rs",
     "platform/evidence_store.rs",
     "recovery/journal.rs",
     "recovery/rollback.rs",
@@ -39,6 +40,8 @@ fn no_production_module_opens_a_new_write_path() {
             || text.contains(".write_all(")
             || text.contains(".write_guarded(")
             || text.contains(".write_converged(")
+            || text.contains(".write_recorded(")
+            || text.contains(".write_fixture(")
             || text.contains("pwrite(")
             || text.contains("renameat(")
             || text.contains("unlinkat(");
@@ -247,7 +250,7 @@ fn partial_is_built_only_at_the_result_type_and_the_pending_merges() {
             "待办合并点：把本进程攒下的 post 串进执行器已给出的 5，5 本身由执行器产生",
         ),
         (
-            "movepart/shift.rs",
+            "cmd/resize.rs",
             "Err(RunOutcome::Partial { cause, pending, origin }) => RunOutcome::Partial {",
             "扩容路径的待办合并点：同上，只补 pending，不新造 5",
         ),

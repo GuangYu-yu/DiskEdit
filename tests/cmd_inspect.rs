@@ -75,7 +75,7 @@ fn payload(file_id: [u8; 16], commit: u8, retention: u8) -> Vec<u8> {
 fn record(file_id: [u8; 16], commit: u8, retention: u8) -> Vec<u8> {
     let payload = payload(file_id, commit, retention);
     let mut out = vec![0u8; HEADER_LEN];
-    out[0..4].copy_from_slice(b"DSK2");
+    out[0..4].copy_from_slice(b"DSK3");
     out[4..8].copy_from_slice(&(payload.len() as u32).to_le_bytes());
     out[8..12].copy_from_slice(&crc32(&payload).to_le_bytes());
     let header_crc = crc32(&out[0..12]);

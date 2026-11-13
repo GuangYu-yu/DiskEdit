@@ -87,7 +87,7 @@ pub fn resize_online(
         Ok(v) => v,
         Err(o) => return o,
     };
-    // 同 resize_pv：锁下重取 sysfs 快照（理由见彼处）。mountpoint 在窗口内被重挂载
+    // 同 resize_pv：锁下重取 sysfs 快照。mountpoint 在窗口内被重挂载
     // 会解析到别的分区——两次解析目标不一致即拒绝，绝不在 A 的锁下操作 B
     let fresh = match resolve_target(mountpoint) {
         Ok(t) => t,
@@ -288,7 +288,7 @@ pub fn resize_online(
                 match fs_grow(&t, fstype) {
                     Ok(()) => RunOutcome::applied_with(Vec::new()),
                     // 分区已扩：FS 步是一条未满足的后置条件，但"工具未启动"与"已运行且
-                    // 非零退出"对文件系统的改动量不同，文案各自成句（见该函数）
+                    // 非零退出"对文件系统的改动量不同，文案各自成句
                     Err(e) => RunOutcome::applied_with(vec![fs_pending(fs_grow_skipped_after_resize(&e))]),
                 }
             } else {
@@ -325,7 +325,7 @@ pub fn resize_online(
                     }
                     Ok(_) => {}
                 }
-                // FS 已缩：此后任何失败都不再是"未动盘"，表未写的情形只能报 Partial。
+                // FS 已缩：此后任何失败都只能报 Partial，表未写的情形也一样。
                 // 工具退 0 不等于 FS 已缩到请求值：先回读实际尺寸，与离线侧同一条判据。
                 // 读不出或实际值仍大于请求值时分区不能缩进去——末端会落在 FS 内部，
                 // 尾部数据从此不可达

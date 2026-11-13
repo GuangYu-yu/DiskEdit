@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# 单文件记录流式（数据字节不入记录）/ FS 深度校验 / 复杂目录树 / torn write 模拟
-# 残留控制：所有产物用 t22 前缀，trap EXIT 强制清理
+# 单文件记录流式 / FS 深度校验 / 复杂目录树 / torn write 模拟
 source "$(dirname "$0")/lib.sh"
 require_fault_bin
 
@@ -9,7 +8,7 @@ require_fault_bin
 img T t22a.img
 SNAP=$WSL_ROOT/t22snap
 
-mk() { # 100M/100M/200M，p2 前后留空便于自重叠左移
+mk() { # 100M/100M/200M
   rm -rf "$T" "$T"$SIDECAR_GLOB
   truncate -s 1G "$T"
   $B new "$T" --yes >/dev/null
@@ -37,8 +36,7 @@ JSZ=$(stat -c%s "$(record_file "$T")" 2>/dev/null || echo 0)
 echo "record = $JSZ bytes (搬移量约 100M)"
 if [ "$JSZ" -gt 5 ] && [ "$JSZ" -lt 1048576 ]; then echo "A1 RECORD-STREAMING OK (<1MiB, 只记进度不记数据)"; else { echo "A1 JOURNAL SIZE ODD ($JSZ)"; rc=1; }; fi
 echo "-- A2: 中断搬移的 undo——记录里只剩搬移进度，undo 拒绝 --"
-# 表步骤未提交，preimage 为空；空 preimage 只说明表区没记过原文，不说明作业没开始。
-# 记录里留着搬移进度（数据区的唯一副本），undo 不代删：退 3，指路续跑或 abandon
+# 表步骤未提交，preimage 为空；undo 不代删：退 3，指路续跑或 abandon
 OUT=$($B undo "$T" --yes 2>&1); E=$?
 echo "exit=$E msg: $(echo "$OUT" | head -1 | cut -c1-70)"
 [ "$E" = "3" ] && echo "$OUT" | grep -q "holds no table pre-image" \
@@ -68,7 +66,6 @@ dd if=/dev/urandom of="$TEST_MNT/a/rand.bin" bs=1M count=30 2>/dev/null
 NF1=$(wc -l < "$SNAP.1")
 echo "files: $NF1, symlink: $(readlink "$TEST_MNT"/link1), hardlink count: $(stat -c%h "$TEST_MNT"/a/f2.txt)"
 umnt
-# 自重叠左移：delta = 249856-411648 = -161792，|delta| < 长度 204800
 $B move "$T":2 --start 250000 --chunk 1 --yes >/dev/null 2>&1; echo "move exit=$?"
 LD=$(lo_attach "$T")
 e2fsck -fn "${LD}p2" > "$WSL_ROOT/t22e2out" 2>&1; EC=$?

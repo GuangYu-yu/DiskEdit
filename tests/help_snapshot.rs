@@ -25,7 +25,6 @@ fn run(args: &[&str]) -> (i32, String, String) {
     )
 }
 
-/// 命令集在 usage 里的行首片段。
 const USAGE_COMMANDS: &[&str] = &[
     "  info <TARGET>",
     "  plan <TARGET>",
@@ -48,7 +47,6 @@ const USAGE_COMMANDS: &[&str] = &[
     "  resize-part <TARGET>:N",
 ];
 
-/// 退出码表。
 const EXIT_LINES: &[&str] = &[
     "  0  success",
     "  1  unexpected internal error",
@@ -66,7 +64,6 @@ const EXIT_LINES: &[&str] = &[
 /// 文本随命令表或示例变化时，先核对新文本是否仍满足要求，再从二进制重新抓取。
 const USAGE_SNAPSHOT: &str = include_str!("snapshots/usage.txt");
 
-/// 单字命令：`help CMD`、`CMD --help`、`CMD -h`、`--help CMD` 四种入口。
 const SINGLE_WORD: &[&str] = &[
     "info",
     "plan",
@@ -86,12 +83,10 @@ const SINGLE_WORD: &[&str] = &[
     "resize-part",
 ];
 
-/// 两字命令：`help records X`、`records X --help`、`records X -h` 三种入口。
 const RECORD_SUBCOMMANDS: &[&[&str]] = &[&["records", "list"], &["records", "verify"], &["records", "scan"]];
 
 #[test]
 fn top_level_usage_is_a_pinned_snapshot() {
-    // `help`、`--help`、`-h` 都是元命令，按成功返回且输出同一份用法文本
     for args in [vec!["help"], vec!["--help"], vec!["-h"]] {
         let (code, out, err) = run(&args);
         assert_eq!(code, 0, "`{}` must exit 0: {err}", args.join(" "));
@@ -204,7 +199,7 @@ fn unknown_help_topics_and_unknown_commands_are_usage_errors() {
     assert!(out.is_empty(), "a usage error must not write stdout: {out}");
     assert!(err.contains("usage:"), "a usage error must print usage: {err}");
 
-    let (code, out, err) = run(&["frobnicate"]); // cli-surface: refused —— 断言未登记命令退 2
+    let (code, out, err) = run(&["frobnicate"]);
     assert_eq!(code, 2, "an unknown command is a usage error");
     assert!(out.is_empty(), "a usage error must not write stdout: {out}");
     assert!(err.contains("usage:"), "a usage error must print usage: {err}");

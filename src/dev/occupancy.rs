@@ -418,7 +418,7 @@ fn gather(tables: &Tables, subject: &Subject, src: &FileSource) -> Result<Occupa
 }
 
 /// 目标的占用域。整盘与分区的区分取自 sysfs 的 `partition` 属性；dm/md 整设备按条
-/// 退化为自身，不再展开分区
+/// 退化为自身，不展开分区
 #[cfg(target_os = "linux")]
 fn device_scope(rdev: u64) -> Result<Vec<ScopedDevice>, String> {
     let link = Path::new("/sys/dev/block")
@@ -830,7 +830,7 @@ mod image_probe {
 }
 
 /// 持有者与成员关系直接构造事实，钉住 [`verdict`] 的形状规则。
-/// 这些用例不产生运行证据（本机不跑 Linux 目标）：它们只保证判据被写下来
+/// 这些用例不产生运行证据：它们只保证判据被写下来
 #[cfg(all(test, target_os = "linux"))]
 mod holder_decisions {
     use super::{verdict, HolderRef, MemberRef, OccupancyFacts, OpShape};

@@ -1,4 +1,4 @@
-//! 表类型决策：GPT/MBR 的目标分区与设备路径。
+//! 表类型决策：GPT/MBR 的锁下目标长度与 PV 事前判据。
 
 use super::*;
 #[cfg(target_os = "linux")]
@@ -66,7 +66,7 @@ pub(crate) fn gpt_decider(
 
 /// 锁下解析在线目标长度（MBR）：几何与右侧空闲同样取自锁下的整盘；MBR 无搬移能力，
 /// 空闲上界由 32 位 LBA 上限与后继条目界定（见 `free_right_msdos`）。
-/// `part` 同 `gpt_decider`：锁前解析出的分区号，锁下不再重解释选择器
+/// `part` 同 `gpt_decider`：锁前解析出的分区号，锁下不重解释选择器
 #[cfg(target_os = "linux")]
 pub(crate) fn mbr_decider(
     size: SizeSpec,

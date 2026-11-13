@@ -2,8 +2,6 @@
 //!
 //! 恢复现场统一落在记录目录内（`<image>.diskedit/record`），旧 journal 与旧 checkpoint
 //! 不由任何命令写出，也不参与现场枚举——它们只是"落点上存在的未识别条目"。
-//! 等价的状态类覆盖见 `tests/recovery_crash.rs` / `tests/recovery_states.rs` /
-//! `tests/recovery_quarantine.rs`，以及 `tests/cli/record.rs` 的三档崩溃注入。
 //! 本文件只保留两条：旧 journal 的拒绝口径（不迁移、不回放、不删除），
 //! 以及目标锁的序列化与陈旧锁无害。
 

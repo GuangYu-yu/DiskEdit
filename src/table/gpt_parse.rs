@@ -80,10 +80,6 @@ pub enum HeaderIssue {
 /// UEFI 2.10 §5.2.3 把 SizeInLBA 定义为 "disk size minus one"，而 Legacy MBR 的 LBA 字段
 /// 一律以设备的 **logical block** 计（不是恒定 512 字节）——故规范值只由
 /// `容器大小 / 逻辑块大小` 决定，与 512 字节无关。
-///
-/// 与 GptState 同构："形状可解析"与"值合乎规范"不共用一个状态。非规范值若被并进 Normal，
-/// info 会对外声称该值合法（无任何提示），且 classify_repair 不排修复动作——
-/// 兼容值会永久停留，等于把"暂时容忍"变成"永久接受"
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PmbrSize {
     /// 等于规范值（含大盘合法的 0xFFFFFFFF 饱和写法），无需处理
@@ -95,8 +91,7 @@ pub enum PmbrSize {
     Inconsistent,
 }
 
-/// 保护 MBR 需要修复的两种成因（穷举，不合并）：两者的写入动作相同——都按本容器
-/// 重写一次 SizeInLBA——但对外措辞不同，故必须在类型上分开
+/// 保护 MBR 需要修复的两种成因（穷举，不合并）
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PmbrIssue {
     /// 小于规范值：设备扩容后保护 MBR 未随容器更新
@@ -174,9 +169,7 @@ pub(crate) fn probe_header(sector: &[u8]) -> HeaderProbe {
 /// 备份头早于末端 = NeedsRepair（设备扩容后未搬移，由写入路径经 apply_repair 修复）；
 /// 越过末端 = 拒绝
 ///
-/// 主/备两个视角的数组位置约束不同，**必须分开**：主数组在可用区**之前**（上界是
-/// FirstUsableLBA），备份数组在可用区**之后**（上界是盘尾的备份头）。两条一起写会把
-/// 所有合法盘的备份副本误拒
+/// 主/备两个视角的数组位置约束不同，必须分开校验。
 ///
 /// 调用前提：条目数组几何已由 [`EntryArrayGeometry`] 判定合理（跨度不会溢出）
 pub(crate) fn validate_geometry(
@@ -291,10 +284,6 @@ pub(crate) fn validate_entries(entries: &[GPTPartitionEntry], header: &RawHeader
 ///
 /// 与 `GptError` 分开：同一个错误码在不同副本上的可恢复性不同，而"要不要换另一份"是盘级
 /// 策略，统一由 load_gpt 决定；解析函数只上报事实。
-///
-/// 没有"本副本不可恢复"这一档：两份副本的头与数组是各自独立写入的，任何一份的损伤换个
-/// 候选都可能避开——包括读取失败，换候选读的是另一个位置。故解析函数不会让整次 load_gpt
-/// 提前失败，这一点由返回类型（不带 Err）承担，回退与否全部收敛到 load_gpt
 pub(crate) enum ParsedCopy {
     /// 该候选扇区大小下此处没有 GPT
     Absent,
@@ -316,8 +305,8 @@ pub(crate) fn load_entry_array(
     copy: GptCopyKind,
 ) -> Result<(Vec<u8>, EntryArrayGeometry), GptError> {
     let bad_geometry = |m: &str| GptError::InvalidHeader(m.into());
-    // 条目数组几何的唯一构造点：条目数/单条目大小合规、字节数不超自定安全上限，三件事
-    // 都在那里判定，本处不重复表达（两侧各写一份上限，数值会各自漂移）
+    // 条目数组几何的唯一构造点：条目数/单条目大小合规、字节数不超自定安全上限，
+    // 都在那里判定，本处不重复表达
     let geom = EntryArrayGeometry::new(ss, header.size_of_partition_entry, header.number_of_partition_entries, MAX_ARRAY_BYTES)
         .map_err(|e| bad_geometry(&e.to_string()))?;
     // 损坏表的 lba/size 字段不受信任，乘加全部 checked，防溢出回绕
@@ -423,7 +412,7 @@ pub(crate) fn parse_backup(src: &FileSource, ss: u64, pmbr: PmbrSize) -> ParsedC
     let n = header.number_of_partition_entries as usize;
     let es = header.size_of_partition_entry as usize;
     let entries = parse_entry_array(&raw, n, es);
-    // 与主头路径共用同一份条目校验：只修一条路径等于留洞
+    // 与主头路径共用同一份条目校验
     if let Err(e) = validate_entries(&entries, &header) {
         return ParsedCopy::CopyDamaged(e);
     }

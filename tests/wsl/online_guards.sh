@@ -37,7 +37,7 @@ $B resizefs --yes "$MP" --sector-size 512 >/dev/null 2>&1; exp $? 2 "resizefs <m
 exp "$(lba1)" "$LAST0" "  拒绝后分区表未变（last_lba 一致）"
 
 # src/cmd/mod.rs:181-185 —— 目标尺寸只有位置参数一种给法，--size 不在 resizefs 的白名单里
-$B resizefs --yes "$MP" 8M --size 8M >/dev/null 2>&1; exp $? 2 "resizefs <mountpoint> --size 非本命令选项" # cli-surface: refused
+$B resizefs --yes "$MP" 8M --size 8M >/dev/null 2>&1; exp $? 2 "resizefs <mountpoint> --size 非本命令选项"
 exp "$(lba1)" "$LAST0" "  拒绝后分区表未变（last_lba 一致）"
 
 echo "== resizefs 在线形式不改分区表 =="

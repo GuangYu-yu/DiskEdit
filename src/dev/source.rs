@@ -81,6 +81,15 @@ impl std::fmt::Display for WriteConflict {
     }
 }
 
+/// 写入令牌：持有它才能调用写原语。
+///
+/// 类型与字段都只在本模块可见，因此模块外既无法命名也无法拼装；铸造点全部落在
+/// [`WriteSource`] 的写入口内
+struct Guarded {
+    /// 私有字段：模块外拼不出结构体字面量
+    _seal: (),
+}
+
 /// 本进程内已提交给恢复记录的写次数。崩溃注入按"第 N 次写入后"触发，用来留下
 /// 含多条区间的记录（只按第一次触发时记录里永远只有一条）
 static RECORD_WRITES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -129,6 +138,9 @@ pub struct FileSource {
     pub is_block: bool,
     /// 目标身份：打开时解析一次，record / undo 只消费它
     pub identity: TargetIdentity,
+    /// 块设备身份材料 `(设备号主, 设备号次, sysfs 设备 ID 原串)`：打开时按 fd 的 rdev
+    /// 与同一 sysfs 节点采一次，记录头只消费。镜像为 `None`（身份由 `fingerprint` 编码）
+    pub(crate) block_identity: Option<(u32, u32, Option<String>)>,
     /// 单文件恢复记录：每条写命令只有这一种凭据
     pub record_journal: Option<RecordJournal>,
     /// 目标文件的稳定指纹：恢复现场用它确认"路径下的文件还是当时
@@ -227,7 +239,7 @@ impl WriteSource {
     ///
     /// 写通道按步骤分派：`Relocate` 是数据块，走不入记录的 `write_data_at`；
     /// 其余是元数据，走先登记原文的 `write_at`。步骤因此只由施加者给出一次，
-    /// 既决定归属也决定通道，调用点不再各自挑
+    /// 既决定归属也决定通道，调用点不各自挑
     pub(crate) fn write_guarded(
         &mut self,
         off: u64,
@@ -246,11 +258,12 @@ impl WriteSource {
                 return Err(WriteConflict::changed(off, buf.len()));
             }
         }
+        let guard = Guarded { _seal: () };
         self.pending_step = Some(step);
         let result = if matches!(step, WriteStep::Relocate { .. }) {
-            self.write_data_at(off, buf)
+            self.write_data_at(&guard, off, buf)
         } else {
-            self.write_at(off, buf)
+            self.write_at(&guard, off, buf)
         };
         self.pending_step = None;
         result.map_err(|e| WriteConflict::io(off, buf.len(), "cannot write the target", e))
@@ -288,8 +301,18 @@ impl WriteSource {
         Ok(())
     }
 
+    /// 记录授权的写入：只写记录条目里的原文。回放时盘上通常已是记录写后的样子，
+    /// 写前比对的前提不成立，故不比对；本入口不设步骤，`write_raw` 按未带步骤登记
+    pub(crate) fn write_recorded(
+        &mut self,
+        pre_image: &crate::recovery::RecordedPreImage<'_>,
+    ) -> io::Result<()> {
+        let guard = Guarded { _seal: () };
+        self.write_at(&guard, pre_image.offset(), pre_image.bytes())
+    }
+
     /// 元数据写入：被覆盖字节的原文先入恢复记录再写。
-    pub fn write_at(&mut self, off: u64, buf: &[u8]) -> io::Result<()> {
+    fn write_at(&mut self, _guard: &Guarded, off: u64, buf: &[u8]) -> io::Result<()> {
         self.refuse_past_end(off, buf.len())?;
         if self.src.record_journal.is_some() && !buf.is_empty() {
             // 单文件记录的粒度是扇区：把写入区间按扇区边界扩到整扇区，
@@ -325,7 +348,7 @@ impl WriteSource {
     ///
     /// 屏障由这里自己落，不靠调用点先记得 mark_non_reversible：数据一旦写下去，
     /// 回滚表项就会与盘上内容自相矛盾。同一 mutation 下屏障只落一条
-    pub fn write_data_at(&mut self, off: u64, buf: &[u8]) -> io::Result<()> {
+    fn write_data_at(&mut self, _guard: &Guarded, off: u64, buf: &[u8]) -> io::Result<()> {
         // 越界判定先于屏障：屏障一旦落地 undo 即永久失效，而越界写一个字节也不会落盘
         self.refuse_past_end(off, buf.len())?;
         self.mark_non_reversible().map_err(|e| e.into_io())?;
@@ -341,6 +364,14 @@ impl WriteSource {
             None => crate::outcome::note_target_write(),
         }
         self.src.file.write_all(buf)
+    }
+
+    /// 测试夹具直写：夹具铺的是"写前盘面"，写前比对的前提在这里不成立；
+    /// 令牌在本模块铸造
+    #[cfg(test)]
+    pub(crate) fn write_fixture(&mut self, off: u64, buf: &[u8]) -> io::Result<()> {
+        let guard = Guarded { _seal: () };
+        self.write_at(&guard, off, buf)
     }
 
     /// 记下"本次操作含有不可回滚的写入"，undo 见到它即拒绝回滚。
@@ -403,6 +434,10 @@ fn check_sector_size(sector_size: u64) -> io::Result<()> {
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e.to_string()))
 }
 
+/// 块设备打开的附加事实：指纹、loop 映射（仅 loop 设备有）、整盘设备 ID 原文
+#[cfg(target_os = "linux")]
+type BlockOpenExtras = (TargetFingerprint, Option<(u64, u64)>, Option<String>);
+
 impl FileSource {
     /// 目标是否是内核标记为只读的块设备（BLKROGET）。只读设备上的任何写都会在
     /// 内核处被拒，而那个拒绝以 pwrite 的错误出现在计划步上——记录已落盘，退出码
@@ -453,19 +488,30 @@ impl FileSource {
     /// `node` 必须与身份解析用的是同一个 sysfs 节点（打开路径按 fd 的 rdev 定位），
     /// 否则路径在窗口内被重建时映射事实会来自另一台设备
     #[cfg(target_os = "linux")]
-    pub(crate) fn block_open_extras(identity: &TargetIdentity, node: &Path) -> io::Result<(TargetFingerprint, Option<(u64, u64)>)> {
-        let fp = if identity.kind == TargetKind::Image {
+    pub(crate) fn block_open_extras(
+        identity: &TargetIdentity,
+        node: &Path,
+    ) -> io::Result<BlockOpenExtras> {
+        let (fp, device_id) = if identity.kind == TargetKind::Image {
             // 指纹取自身份解析时核对过的那个 backing 对象（见 TargetIdentity::loop_backed）；
             // 解析时没有留下指纹（非 loop 路径）才按打开后的数据路径取
-            match identity.backing_fp {
+            let fp = match identity.backing_fp {
                 Some(fp) => fp,
                 None => TargetFingerprint::from_meta(&std::fs::metadata(identity.data_path())?),
-            }
+            };
+            // loop 设备没有 device ID 属性，与 disk_identity 对它的结果一致
+            (fp, None)
         } else {
             let (size, id) = disk_identity(node)?;
-            TargetFingerprint { dev: 0, ino: 0, size, id: id.as_deref().map_or(0, |s| fnv1a64(s.as_bytes())) }
+            let fp = TargetFingerprint {
+                dev: 0,
+                ino: 0,
+                size,
+                id: id.as_deref().map_or(0, |s| fnv1a64(s.as_bytes())),
+            };
+            (fp, id)
         };
-        Ok((fp, loop_mapping_at(node)?))
+        Ok((fp, loop_mapping_at(node)?, device_id))
     }
 
     /// 已打开块设备的事实收集：容量、逻辑扇区、身份与 loop 映射。读写与只读两个入口
@@ -483,9 +529,11 @@ impl FileSource {
         let node = sysfs_node_from_rdev(rdev)?;
         // 块设备身份解析失败（fail-closed）⇒ 打开失败：错误信息带设备名
         let identity = TargetIdentity::resolve_block_at(&node, path).map_err(io::Error::other)?;
-        let (fingerprint, loop_mapping) = Self::block_open_extras(&identity, &node)?;
+        let (fingerprint, loop_mapping, device_id) = Self::block_open_extras(&identity, &node)?;
+        let block_identity = Some((libc::major(rdev) as u32, libc::minor(rdev) as u32, device_id));
         Ok(FileSource {
             identity,
+            block_identity,
             file,
             path: path.to_path_buf(),
             sector_size,
@@ -526,55 +574,67 @@ impl FileSource {
     }
 
     /// 已打开镜像的身份。canonical 取自**已打开的句柄**（Linux：`/proc/self/fd/<n>`），
-    /// 不再按命令行路径 canonicalize：open 与 canonicalize 之间有一个窗口，路径被改名或
-    /// 替换后，canonicalize 给出的是另一个文件的名字，而写入仍落在 fd 指向的文件上，
-    /// journal / checkpoint / lock 因此会挂到另一份数据旁。
+    /// 不给句柄时按路径 canonicalize（锁后复核）。
+    ///
+    /// 打开时不按命令行路径 canonicalize：open 与 canonicalize 之间有一个窗口，路径被
+    /// 改名或替换后，canonicalize 给出的是另一个文件的名字，而写入仍落在 fd 指向的文件
+    /// 上，journal / checkpoint / lock 因此会挂到另一份数据旁。
     ///
     /// 字面路径只用于日志命名，且前提是它**此刻仍指向同一个 inode**：改名后，改名前的
     /// 路径可能已经属于别人，把它的兄弟文件当成本目标的伴随文件，提交清理时就会删到
     /// 别人的 journal。检查不成立即拒绝（fail-closed），不退到路径身份
-    #[cfg(target_os = "linux")]
-    pub(crate) fn identity_of_opened_image(
+    pub(crate) fn sample_image(
         path: &Path,
-        file: &File,
-        meta: &std::fs::Metadata,
+        opened: Option<(&File, &std::fs::Metadata)>,
     ) -> io::Result<TargetIdentity> {
-        use std::os::fd::AsRawFd;
-        use std::os::unix::fs::MetadataExt;
-        let link = PathBuf::from(format!("/proc/self/fd/{}", file.as_raw_fd()));
-        let canonical = std::fs::read_link(&link).map_err(|e| {
-            io::Error::other(format!(
-                "cannot resolve the path of the opened target through {}: {e} — refusing to \
-                 derive the target identity from the command-line path alone",
-                link.display()
-            ))
-        })?;
-        // 打开之后被 unlink：内核在链接尾部标 " (deleted)"，这个名字已不再指向任何可达
-        // 文件，伴随文件无处安放
-        if canonical.as_os_str().to_string_lossy().ends_with(" (deleted)") {
-            return Err(io::Error::other(format!(
-                "the target {} was removed after it was opened — refusing to write through an unnamed file",
-                path.display()
-            )));
+        #[cfg(target_os = "linux")]
+        {
+            use std::os::fd::AsRawFd;
+            use std::os::unix::fs::MetadataExt;
+            let Some((file, meta)) = opened else {
+                let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+                return Ok(TargetIdentity::image_at(&canonical, path));
+            };
+            let link = PathBuf::from(format!("/proc/self/fd/{}", file.as_raw_fd()));
+            let canonical = std::fs::read_link(&link).map_err(|e| {
+                io::Error::other(format!(
+                    "cannot resolve the path of the opened target through {}: {e} — refusing to \
+                     derive the target identity from the command-line path alone",
+                    link.display()
+                ))
+            })?;
+            // 打开之后被 unlink：内核在链接尾部标 " (deleted)"，这个名字不指向任何可达
+            // 文件，伴随文件无处安放
+            if canonical.as_os_str().to_string_lossy().ends_with(" (deleted)") {
+                return Err(io::Error::other(format!(
+                    "the target {} was removed after it was opened — refusing to write through an unnamed file",
+                    path.display()
+                )));
+            }
+            let literal = std::fs::metadata(path).map_err(|e| {
+                io::Error::other(format!(
+                    "cannot verify that {} still names the opened target: {e}",
+                    path.display()
+                ))
+            })?;
+            if (literal.dev(), literal.ino()) != (meta.dev(), meta.ino()) {
+                return Err(io::Error::other(format!(
+                    "{} no longer names the file that was opened (path dev:{} ino:{}, opened dev:{} ino:{}) \
+                     — refusing to place the undo journal next to another file",
+                    path.display(),
+                    literal.dev(),
+                    literal.ino(),
+                    meta.dev(),
+                    meta.ino(),
+                )));
+            }
+            Ok(TargetIdentity::image_at(&canonical, path))
         }
-        let literal = std::fs::metadata(path).map_err(|e| {
-            io::Error::other(format!(
-                "cannot verify that {} still names the opened target: {e}",
-                path.display()
-            ))
-        })?;
-        if (literal.dev(), literal.ino()) != (meta.dev(), meta.ino()) {
-            return Err(io::Error::other(format!(
-                "{} no longer names the file that was opened (path dev:{} ino:{}, opened dev:{} ino:{}) \
-                 — refusing to place the undo journal next to another file",
-                path.display(),
-                literal.dev(),
-                literal.ino(),
-                meta.dev(),
-                meta.ino(),
-            )));
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = opened;
+            Ok(TargetIdentity::image_at(path, path))
         }
-        Ok(TargetIdentity::image_at(&canonical, path))
     }
 
     /// 镜像打开的唯一实现：可写性是显式参数，读写与只读两个入口不各自拼一份
@@ -592,12 +652,9 @@ impl FileSource {
         let sector_size = sector_size_override.unwrap_or(512);
         check_sector_size(sector_size)?;
         // 身份也取自已打开的句柄：路径在 open 与 canonicalize 之间被替换时，身份与写句柄
-        // 会指向两个不同的文件（见 `identity_of_opened_image`）
-        #[cfg(target_os = "linux")]
-        let identity = Self::identity_of_opened_image(path, &file, &meta)?;
-        // 非 Linux 没有从 fd 取路径的标准接口：维持按路径解析；该平台上别名路径各有一份现场与一把锁
-        #[cfg(not(target_os = "linux"))]
-        let identity = TargetIdentity::resolve_image(path);
+        // 会指向两个不同的文件（见 `sample_image`）。非 Linux 没有从 fd 取路径的标准接口，
+        // 该平台上别名路径各有一份现场与一把锁
+        let identity = Self::sample_image(path, Some((&file, &meta)))?;
         let fingerprint = TargetFingerprint::from_file(&file)?;
         #[cfg(target_os = "linux")]
         let owner = {
@@ -608,6 +665,7 @@ impl FileSource {
         let owner = None;
         Ok(FileSource {
             identity,
+            block_identity: None,
             file,
             path: path.to_path_buf(),
             sector_size,
@@ -645,7 +703,7 @@ impl FileSource {
             }
             return Ok(());
         }
-        let now_identity = TargetIdentity::resolve_image(&self.path);
+        let now_identity = Self::sample_image(&self.path, None)?;
         if now_identity.canonical != self.identity.canonical {
             return Err(RunOutcome::refused(
                 "the path now resolves to a different file than the one opened before the lock",
@@ -689,6 +747,7 @@ impl FileSource {
         let fingerprint = TargetFingerprint::from_file(&file)?;
         Ok(FileSource {
             identity: TargetIdentity::resolve_image(path),
+            block_identity: None,
             file,
             path: path.to_path_buf(),
             sector_size: 512,

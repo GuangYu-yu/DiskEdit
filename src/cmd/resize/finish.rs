@@ -17,7 +17,7 @@ pub(crate) type OnlineLock = ();
 /// `part` 是**本次操作的那个分区**（入口处解析一次后随行）：收尾要对它做 pvresize/
 /// lvextend，出错的代价是写到别的分区上，故不按写后的表重新解释一次
 /// `lv_path` 是记录型续跑时按本次请求重新选出的 LV（记录不存路径）
-// 参数是一次作业的独立事实（几何 / 区间 / 开关 / 日志），合成结构体只是把它们换个位置
+// 参数是一次作业的独立事实，合成结构体只是把它们换个位置
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn finish_resize(a: &ResizeRequest, o: crate::outcome::RunOutcome, wsrc: Option<&mut WriteSource>, part: u32, is_pv: bool, is_block: bool, lv_path: Option<&str>, old_bytes: u64) -> crate::outcome::RunOutcome {
     if !o.is_layout_applied() {

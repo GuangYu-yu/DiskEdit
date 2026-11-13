@@ -84,8 +84,6 @@ fn sha256_hex(bytes: &[u8]) -> String {
     out
 }
 
-/// `info` 与 `plan` 不打开证据路径，也不探测写目录——目标旁不出现
-/// `<name>.diskedit`，目录树逐项不变。
 #[test]
 fn info_and_plan_never_create_the_sidecar() {
     let dir = temp_dir("bare");
@@ -110,8 +108,6 @@ fn info_and_plan_never_create_the_sidecar() {
     }
 }
 
-/// 目标已有记录区时，只读命令也不得建临时文件、改名、fsync 之外的删除，
-/// 更不能改写记录或镜像字节。
 #[test]
 fn read_only_commands_leave_an_existing_record_area_untouched() {
     let dir = temp_dir("existing");

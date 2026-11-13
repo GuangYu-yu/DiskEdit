@@ -43,17 +43,17 @@ pub(crate) fn execute(src: &mut WriteSource, step: &TableStep) -> Result<(), Run
         // 写前比对与写入在同一入口内完成：快照之后被外部改动的区间不会静默覆盖
         src.write_converged(w.region.offset, &w.bytes, *expect, write_step)
             .map_err(|e| {
-                // 写前重读失败、比对不等或写调用报错：写事实已置位时目标可能
-                // 已改变，按 5 报；否则本次写没有成立，按 4 报
+                // 写前重读失败、比对不等或写调用报错。判据：写入口在写调用前已置写
+                // 写事实，已置位时目标可能已改变、按 5 报；否则本次写没有成立、按 4 报
                 let cause = format!(
                     "cannot write the table at byte {}: {e}",
                     w.region.offset
                 );
-                if crate::outcome::crossed_irreversible_point() {
-                    RunOutcome::partial(cause)
-                } else {
-                    RunOutcome::no_mutation(cause)
-                }
+                let unwritten = cause.clone();
+                crate::outcome::attribute(
+                    || RunOutcome::partial(cause),
+                    || RunOutcome::no_mutation(unwritten),
+                )
             })?;
         // 每段写完整段落盘，而不是全部写完再 flush 一次：一次 sync_all 只保证
         // "这些字节都已提交"，不保证四段按写序抵达介质。掉电可能留下"主头已写、

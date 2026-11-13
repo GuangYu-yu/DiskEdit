@@ -30,7 +30,7 @@ pub enum Growable {
     /// 尾部 RW 层里没有认得出的文件系统：`identify` 的 `None` 分不出"尚未格式化"、"是格式化
     /// 过的格式但本工具认不出"与"可供识别的字节不足"三者，本变体也不替它下结论——它只说
     /// "这段没有可扩的文件系统"，本次因此没有可写的后置条件。
-    /// 放行的前提是**本命令不写这段区域**（空间随后由首次挂载时的 fstools 建满）：将来若有
+    /// 放行的前提是**本命令不写这段区域**（空间随后由首次挂载时的 fstools 建满）：若有
     /// 路径要在放行后往里写，必须先按可用判据把三者分开，不能沿用这个"无需处理"的结论
     OverlayPending,
     /// 元数据是 swap、页格式却在本机激活不了（创建机用了 32K 页）：identify 按 swapon 口径
@@ -89,7 +89,7 @@ pub fn grow_target_at(src: &FileSource, part: u32, base: u64, len: u64) -> Resul
         if src.is_block {
             // Range 路径走 loop，循环节点自身的挂载检查探不到底层分区——底层分区
             // 挂载态在此显式守卫。这是判定期的时点检查：本函数每次被调用（preflight
-            // 与收尾各一次）各守一次，判定之后的执行窗口不再复核
+            // 与收尾各一次）各守一次，判定之后的执行窗口不复核
             let node = find_block_partition_node(src, part, base)?;
             require_unmounted(&node)?;
         }
@@ -268,7 +268,7 @@ fn resize_fs_step(src: &mut WriteSource, scope: &DeviceScope, fstype: Option<Con
         // FAT32 <512MB 由工具自身拒绝（man BUGS，Windows 限制）
         Some(ContentKind::Filesystem(FsKind::Vfat)) => {
             // 区间与设备同源：fallback 尺寸用的 len 就是设备建立时的那一份，
-            // 不再在闭包外另读一次表
+            // 不在闭包外另读一次表
             let (off, dev_len) = scope_byte_range(src, scope)?;
             // 兜底的字节数 = 设备长 − 1。长度 0 时减一会回绕成 u64::MAX，把
             // "无从格式化"伪装成扩到天文数字——它必须在任何工具启动之前判掉，
@@ -439,7 +439,7 @@ where
     let res = f(&mnt.to_string_lossy());
     let leak = leak_from(&mnt.to_string_lossy(), guard.release());
     // 残留挂载点只有一条出路：核心成功时随 `Ok` 浮出成待办、核心失败时拼进主错误。
-    // 两条路都进返回的 `RunOutcome`，不再另打一条只有 stderr 看得见的告警
+    // 两条路都进返回的 `RunOutcome`，不另打一条只有 stderr 看得见的告警
     settle_release(res, leak)
 }
 
@@ -452,7 +452,7 @@ fn entry_identity(path: &Path) -> Option<(u64, u64)> {
 }
 
 /// 临时挂载点的守卫：持有建目录时打开的 inode 句柄与挂载成功后路径指向的挂载根身份。
-/// `umount` 按路径解析：父目录被改名后旧路径不再解析到这个挂载；同一位置被叠了另一层
+/// `umount` 按路径解析：父目录被改名后旧路径解析不到这个挂载；同一位置被叠了另一层
 /// 挂载时，路径解析到的是最上面那层。两种情形都拒绝卸载：残留挂载只泄漏到重启，
 /// 误拆会拆掉别人的东西。删目录同样先核对身份与空目录，不做按路径的盲删
 struct MountGuard {
@@ -589,7 +589,7 @@ pub(crate) fn leak_from(point: &str, outcome: ReleaseRunOutcome) -> Option<Mount
 }
 
 /// 核心操作结果与清理待办的合成：核心成功时待办随 `Ok` 浮出；核心失败时残留挂载点
-/// 拼进主错误的文案（分类不变），不再另走一条只有 stderr 能看到的告警——报告的
+/// 拼进主错误的文案（分类不变），不另走一条只有 stderr 能看到的告警——报告的
 /// 错误行与 stderr 因此同源
 pub(crate) fn settle_release(
     core: Result<(), FsError>,

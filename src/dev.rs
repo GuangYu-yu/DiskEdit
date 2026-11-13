@@ -7,8 +7,10 @@
 //! 3. **Disk GUID 凭据**（`DiskGuidState`）：目标盘面自述身份的编码与比较；
 //! 4. **losetup 用户提示**（`part_dev_hint`）：镜像上定位分区的外部工具提示。
 //!
-//! `TargetIdentity` 经两个具名构造取得：`resolve_image(path)` 恒成功；
-//! `resolve_block(path)` 解析不出设备拓扑即失败——块设备身份拒绝任何退化路径。
+//! `TargetIdentity` 的镜像采样只有 `FileSource::sample_image` 一处：打开传已打开的
+//! 句柄，锁后复核传 `None`（按路径 canonicalize）；`resolve_image(path)` 是它的
+//! 不可失败路径入口。块设备走 `resolve_block(path)`，解析不出设备拓扑即失败——块设备
+//! 身份拒绝任何退化路径。
 //!
 //! 身份一律是**盘级**的：分区号属于操作与校验，不进落盘键。loop 设备的身份是
 //! backing 文件的 realpath（Linux；`/dev/loop0:2` 与直接以该镜像为目标的操作由此

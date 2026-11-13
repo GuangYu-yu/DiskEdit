@@ -57,8 +57,17 @@ impl RecoveryRecord {
             crate::recovery::CompanionProbe::Damaged(why) => {
                 format!("{} (recovery record, unreadable: {why})", path.display())
             }
-            crate::recovery::CompanionProbe::Foreign => {
-                format!("{} (recovery record layout not recognized by this build)", path.display())
+            crate::recovery::CompanionProbe::Foreign { magic } => {
+                format!(
+                    "{} ({})",
+                    path.display(),
+                    match crate::recovery::legacy_layout(*magic) {
+                        Some(name) => format!(
+                            "previous recovery-record layout ({name}), not readable by this build"
+                        ),
+                        None => "recovery record layout not recognized by this build".to_string(),
+                    }
+                )
             }
             crate::recovery::CompanionProbe::NotOurs(shape) => {
                 format!("{} ({shape}, not a recovery file)", path.display())
@@ -86,16 +95,22 @@ impl RecoveryRecord {
     }
 }
 
-/// 枚举目标上还活着的恢复现场。
+/// 枚举目标上还活着的恢复现场，是「这个目标有哪些现场」的唯一入口：
+/// `abandon` 的候选列表与身份不可用时的候选展示都从它取，调用方不各自拼落点。
 ///
-/// 身份派生落点上的记录按落点认领：只有普通文件且可解码（或可被识别为损坏 / 布局不认识 /
-/// 外来文件）才算现场；缺席不是。旧 journal 与旧 checkpoint 不在这里认领——它们不是记录，
-/// 不进本枚举，也不阻塞任何命令（不认领、不改名、不删除、不进扫描）。
+/// 落点有两类，合并成一册再按记录载荷里的身份归并：
+/// - 身份派生的落点（镜像旁的 `<image>.diskedit/record`，块设备的
+///   `<state_root>/recovery/<identity-hash>/record`）；
+/// - 同目录下的兄弟落点（块设备扫记录根，镜像扫目标所在目录里的 `*.diskedit`）。
 ///
-/// 块设备的记录目录名由身份派生，身份漂移、目录被改名或搬移后，按当前身份拼出的路径就
-/// 找不到它。`src` 在场时另扫记录根：候选由**记录自己的载荷**认领（解码与身份比对全过）。
-/// 身份不符或无法比对的候选照样列出，但带 [`RecoveryRecord::claimable`] 为 false 的标记——
-/// 记录因此对 `records` / `inspect` / `undo` / `abandon` 都看得见，却不被任何一方认领
+/// 镜像被改名后，其落点目录名仍是旧名，只有扫目录才看得见；`src` 给出当前场景时，
+/// 兄弟落点按载荷身份归并——身份相符的进入本目标的候选集，其余留在别处、
+/// 既不列出也不参与释放。身份派生的落点无论能否解码都列出：它就在本目标名下。
+///
+/// 只有普通文件且可解码（或可被识别为损坏 / 布局不认识 / 外来文件）才算现场；缺席不是。
+/// 旧 journal 与旧 checkpoint 不在这里认领——它们不是记录，不进本枚举，也不阻塞任何命令。
+/// 节点消失的块设备身份不可恢复（拓扑派生），其落点随身份失去引用，不在本入口的
+/// 可枚举范围内
 pub(crate) fn active_recovery_records(identity: &TargetIdentity, src: Option<&FileSource>) -> Vec<RecoveryRecord> {
     let mut out = Vec::new();
     let current = src.and_then(current_scene);
@@ -111,6 +126,7 @@ pub(crate) fn active_recovery_records(identity: &TargetIdentity, src: Option<&Fi
         }
     }
     scan_record_root(identity, current.as_ref(), &mut out);
+    scan_image_directory(identity, current.as_ref(), &mut out);
     out
 }
 
@@ -193,16 +209,71 @@ fn scan_record_root(
                 ),
                 _ => continue,
             },
-            // 身份读不出：无法比对。可解码的候选仍列出，但不可认领
-            None => match &probe {
-                crate::recovery::CompanionProbe::Decoded(_) => Some(
-                    "the current target identity could not be established, so this record cannot be matched to it"
-                        .to_string(),
-                ),
-                _ => continue,
-            },
+            // 身份读不出：无法比对。现场一律列出——读不懂的也列，否则它们对诊断与清理
+            // 都消失了；不可认领的标记仍照写
+            None => Some(
+                "the current target identity could not be established, so this record cannot be matched to it"
+                    .to_string(),
+            ),
         };
         out.push(RecoveryRecord { path: candidate, probe: Box::new(probe), foreign });
+    }
+}
+
+/// 扫镜像所在目录，补充身份派生路径找不到的兄弟落点：镜像改名后落点目录名仍是旧名，
+/// 按新路径拼出的落点不存在，只有扫目录才看得见旧现场。
+///
+/// 兄弟落点由**记录载荷**归并：只有身份与当前场景相符的才进入候选集。别的主体的落点
+/// 不列出，也不参与释放——`abandon` 是显式放弃本目标的场景，不是清空整个目录。
+/// 身份不可得时无从归并，兄弟落点全部略过（身份派生的落点照旧列出）
+fn scan_image_directory(
+    identity: &TargetIdentity,
+    current: Option<&crate::recovery::SceneIdentity>,
+    out: &mut Vec<RecoveryRecord>,
+) {
+    use crate::dev::TargetKind;
+    if identity.kind != TargetKind::Image {
+        return;
+    }
+    let Some(current) = current else {
+        return;
+    };
+    let Some(dir) = identity.canonical.parent() else {
+        return;
+    };
+    let derived = identity.record_path();
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+            continue;
+        }
+        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+            continue;
+        };
+        let Some(stem) = name.strip_suffix(crate::dev::RECORD_SUFFIX) else {
+            continue;
+        };
+        if stem.is_empty() {
+            continue;
+        }
+        let candidate = entry.path().join(crate::dev::RECORD_NAME);
+        if derived == Some(candidate.as_path()) || out.iter().any(|r| r.path == candidate) {
+            continue;
+        }
+        // 身份不符或读不出来：这是别的主体的落点（或无从归并的条目），不进本目标的候选集
+        if !matches!(
+            crate::recovery::read_companion(&candidate, current),
+            Ok(crate::recovery::Evidence::Recognized(_))
+        ) {
+            continue;
+        }
+        let probe = crate::recovery::probe_companion(&candidate);
+        if matches!(probe, crate::recovery::CompanionProbe::Absent) {
+            continue;
+        }
+        out.push(RecoveryRecord { path: candidate, probe: Box::new(probe), foreign: None });
     }
 }
 
@@ -288,9 +359,12 @@ impl TransactionManager {
         });
         let resumable = recorded.is_some_and(|r| r.op.resumable());
         let foreign_format = active.iter().find_map(|r| match r.probe.as_ref() {
-            crate::recovery::CompanionProbe::Foreign => {
-                Some("the recovery record there uses a layout this build does not recognize".to_string())
-            }
+            crate::recovery::CompanionProbe::Foreign { magic } => Some(match crate::recovery::legacy_layout(*magic) {
+                Some(name) => format!(
+                    "the recovery record there was written in the previous layout ({name}); this build reads the current layout only"
+                ),
+                None => "the recovery record there uses a layout this build does not recognize".to_string(),
+            }),
             _ => None,
         });
         let foreign = active.iter().find_map(|r| match r.probe.as_ref() {
@@ -652,7 +726,9 @@ mod tests {
         assert!(!text.contains("re-run"), "an unreadable record must not offer resuming: {text}");
         assert!(text.contains("abandon"), "{text}");
 
-        let text = way_out(&[record(crate::recovery::CompanionProbe::Foreign)]);
+        let text = way_out(&[record(crate::recovery::CompanionProbe::Foreign {
+            magic: *b"JRNL",
+        })]);
         assert!(text.contains("does not"), "an unknown layout must say it is unreadable: {text}");
         assert!(text.contains("abandon"), "{text}");
 

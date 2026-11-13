@@ -59,8 +59,7 @@ pub(crate) enum CommitRefusal {
 #[derive(Debug)]
 pub(crate) enum CleanupError {
     Io(EvidenceIo),
-    /// 回读字节不是这份记录：不删、保留。码值由调用方按本次是否已写目标字节分流
-    /// （已写落 5：`commit_and_discard` 与回放写回后的 `settle_companion`；未写落 3）
+    /// 回读字节不是这份记录：不删、保留
     ReadbackMismatch(String),
 }
 

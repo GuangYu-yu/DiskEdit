@@ -117,7 +117,7 @@ fn verify_btrfs_device(mnt: &Path, dev_no: (u64, u64)) -> io::Result<()> {
 }
 
 /// FSID 在 `/sys/fs/btrfs/` 下的目录名：标准 UUID 文本，8-4-4-4-12 分组的 32 位小写
-/// 十六进制（实测 Ubuntu 26.04 / 6.18 的目录名即此形态）。字节序按 UAPI 原序，不做
+/// 十六进制。字节序按 UAPI 原序，不做
 /// GUID 式的字段重排
 fn fsid_uuid(fsid: &[u8; 16]) -> String {
     let hex: String = fsid.iter().map(|b| format!("{b:02x}")).collect();

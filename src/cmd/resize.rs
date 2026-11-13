@@ -28,6 +28,107 @@ use crate::{dev, fsid, fsops, movepart, table};
 #[cfg(target_os = "linux")]
 use crate::lvm::LvmError;
 
+/// 一次搬移事务 = 事前判定（只读）+ 执行（写盘）。
+///
+/// 判定的返回类型里只有 `Refused` / `NoMutation`（此刻确定未写盘）；执行半程交给
+/// [`crate::movepart::execute_apply`]（内部走 [`crate::execution::execute_plan`]），
+/// 它的错误分类按"首写之前 / 之后"给出；本函数的出口按本次写事实归责，把执行器
+/// 视野之外的目标写入（repair）算进结论。几何由调用方解析（一条命令解析一次，
+/// 往下传），本函数与执行半程都不读表
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn apply_move(
+    src: &mut WriteSource,
+    g: &crate::geometry::ValidatedGeometry,
+    plan: &mut crate::movepart::Plan,
+    chunk_len: u64,
+    no_fs: bool,
+    defer_ckpt: bool,
+    lvm: Option<crate::movepart::LvmSelection>,
+    log: &mut dyn FnMut(&str),
+) -> RunOutcome {
+    // 出口归责：执行器的分类只看计划内的写入，repair 的位置不在它的视野里。
+    // 函数体内各早退原样返回，由这一处统一过判定点
+    apply_move_unreconciled(src, g, plan, chunk_len, (no_fs, defer_ckpt), lvm, log)
+        .settled()
+}
+
+/// [`apply_move`] 的主体：各出口只陈述本步结论，归责留给外层。
+/// `switches` = (`no_fs`, `defer_ckpt`)
+fn apply_move_unreconciled(
+    src: &mut WriteSource,
+    g: &crate::geometry::ValidatedGeometry,
+    plan: &mut crate::movepart::Plan,
+    chunk_len: u64,
+    switches: (bool, bool),
+    lvm: Option<crate::movepart::LvmSelection>,
+    log: &mut dyn FnMut(&str),
+) -> RunOutcome {
+    let (no_fs, defer_ckpt) = switches;
+    // 事务入口的注入点：此刻 abort 必须与"从未运行过"不可区分
+    movepart::fault_before_any_write();
+    // 记录里的搬移状态是续跑的唯一依据；读两份并持有期结束后再进入判定
+    let (existing_relocation, existing_lvm) = match src.record_journal() {
+        Some(j) => (j.relocation().cloned(), j.lvm_post()),
+        None => (None, None),
+    };
+    let mut d = match movepart::prepare_apply(
+        src,
+        g,
+        plan,
+        chunk_len,
+        no_fs,
+        defer_ckpt,
+        lvm,
+        existing_relocation.as_ref(),
+        existing_lvm,
+        log,
+    ) {
+        Ok(d) => d,
+        Err(f) => return f,
+    };
+    // 修复写盘之前先把现场落盘：repair 已是目标写入，它与记录绑定之间不留无记录的
+    // 窗口——那里 abort 会留下"盘已改、无从回滚"的现场，违背"写盘后 abort 必须留下
+    // 可续传现场"的边界配对。执行半程的同值绑定是幂等的
+    if let Err(e) = movepart::bind_relocation(src, &d.relocation, d.lvm.as_ref()) {
+        return RunOutcome::no_mutation(e.bind_failure());
+    }
+    movepart::fault_after_relocation_bound();
+    // 修复虽是写盘，但先于任何目标写入执行；放在 RunOutcome 域是为了保住分类：
+    // 其读表阶段尚未写一个字节（NoMutation），一旦进入 io 域就只剩 Partial 一条路
+    if let Some(what) = plan.repair.describe() {
+        if let Err(f) = crate::gpt_policy::apply_repair(src, &plan.repair) {
+            return f;
+        }
+        log(&format!("[repair] {what}"));
+        // 修复是目标写入：此后装配步骤的表内容、首写前比对与扩容区间都按修复后的表读。
+        // 判定期那份读取在修复前，不能继续当基线。`old_range` 描述的是提交前区间，
+        // 修复不改条目位置，保持原值
+        d.g = match crate::gpt_policy::resolve_geometry(src) {
+            Ok(Some((fresh, _))) => fresh,
+            Ok(None) => {
+                return RunOutcome::refused("the GPT disappeared after the repair — refusing");
+            }
+            Err(f) => return f,
+        };
+    }
+    movepart::fault_after_repair();
+    // 越界之后只剩两条出口：写入完成，或"盘可能已改变"的执行失败
+    let mut post: Vec<crate::outcome::Pending> = Vec::new();
+    match movepart::execute_apply(src, plan, d, log, &mut post) {
+        Ok(()) => RunOutcome::applied_with(post),
+        // 分类由执行器给：首写之前的拒绝仍是 3/4，首写之后才是 5。失败自带的待办与
+        // 本进程已攒下的待办合并，一个都不丢
+        Err(RunOutcome::Partial { cause, pending, origin }) => RunOutcome::Partial {
+            cause,
+            pending: pending.into_iter().chain(post).collect(),
+            origin,
+        },
+        // 待办只由写盘之后的步骤产生：非空即已越过首写，"确定未写盘"的变体在这里不适用
+        Err(other) if !post.is_empty() => RunOutcome::partial_with(other.to_string(), post),
+        Err(other) => other,
+    }
+}
+
 pub(crate) const DETAILS: &str = r#"  Resize partition and its filesystem, partition -> PV -> LV -> filesystem as
   required. The online/offline method is chosen automatically. GPT and MBR
   primary partitions; superfloppy (whole-disk FS) omits :N — grow only, never
@@ -80,11 +181,6 @@ fn refuse_shrink() -> RunOutcome {
          first (offline), then the partition, and an interrupted shrink resumes from its record"
             .to_string(),
     )
-}
-
-/// 搬移计划实际要动多少分区：delta 为 0 的条目不挪位置，故不计入
-fn relocating_parts(plan: &movepart::Plan) -> usize {
-    plan.moves.iter().filter(|m| m.delta_lba != 0).count()
 }
 
 /// resize 的一键入口。SIZE：`10G`=绝对值、`+2G`=增量、`grow`=吃满右侧可用区
@@ -319,10 +415,6 @@ pub(crate) fn cmd_resize(a: &ResizeRequest) -> crate::outcome::RunOutcome {
         // 续跑的收尾仍须 --yes：盘上状态已与上次请求时不同，写盘前再确认一次；
         // --yes 一并覆盖"未确认的续跑"与"新的搬移"两种进入方式
         crate::cmd::plan::print_plan(&plan, start).unwrap_or_else(|e| bail_fail(RunOutcome::no_mutation(format!("plan failed: {e}"))));
-        crate::cmd::confirm::gate(a.yes, crate::cmd::confirm::Impact {
-            relocating: relocating_parts(&plan),
-            ..Default::default()
-        });
         let (chunk, mut logger) = chunk_logger(a, &src, g.disk_guid());
         // 槽位在进入搬移前绑定本请求：记录属于另一份 resize 时在这里拒绝，不让搬移
         // 按别人的游标继续。终点取本作业落定的新末端（`grow_end_for`，与执行半程同一
@@ -347,7 +439,7 @@ pub(crate) fn cmd_resize(a: &ResizeRequest) -> crate::outcome::RunOutcome {
         {
             bail_fail(RunOutcome::refused(why));
         }
-        let o = movepart::apply(&mut src, &g, &mut plan, chunk, a.no_fs, is_pv, lv_sel.clone(), &mut |m| logger.log(m));
+        let o = apply_move(&mut src, &g, &mut plan, chunk, a.no_fs, is_pv, lv_sel.clone(), &mut |m| logger.log(m));
         let record = src.record_journal().map(|j| j.record());
         let o = settle_layout(o, &src, record);
         finish_resize(a, o, Some(&mut src), part, is_pv, is_block, lv_sel.as_ref().map(|s| s.path.as_str()), cur_bytes)
@@ -368,7 +460,7 @@ pub(crate) fn cmd_resize(a: &ResizeRequest) -> crate::outcome::RunOutcome {
         }
         // 请求已通过越界判定，note 不会再跟在一条拒绝后面
         crate::support::note_sector_truncation("resizing to", bytes, ss);
-        // 请求的形状三选一：尺寸未变算不出正位移，它可能是原样重跑当初的扩容命令；
+        // 请求的形状三选一：尺寸未变算不出正位移，它可能是原样重跑同一条扩容命令；
         // 缩容已在入口拒绝，这里只剩扩与不变两种。搬移量只在扩时有定义
         let intent = if new_end > end {
             movepart::ShiftIntent::Grow(new_end - end)
@@ -400,10 +492,6 @@ pub(crate) fn cmd_resize(a: &ResizeRequest) -> crate::outcome::RunOutcome {
                 Err(f) => bail_fail(f),
             };
             crate::cmd::plan::print_plan(&plan, start).unwrap_or_else(|e| bail_fail(RunOutcome::no_mutation(format!("plan failed: {e}"))));
-            crate::cmd::confirm::gate(a.yes, crate::cmd::confirm::Impact {
-                relocating: relocating_parts(&plan),
-                ..Default::default()
-            });
             let (chunk, mut logger) = chunk_logger(a, &src, g.disk_guid());
             // 与 `grow` 分支同一处绑定：请求终点是 SIZE 换算出的新末端，改名/改大小
             // 重跑都会在进入搬移前被拒；`--chunk` 不在摘要里，由搬移校验单独核对
@@ -420,17 +508,11 @@ pub(crate) fn cmd_resize(a: &ResizeRequest) -> crate::outcome::RunOutcome {
             {
                 bail_fail(RunOutcome::refused(why));
             }
-            let o = movepart::apply(&mut src, &g, &mut plan, chunk, a.no_fs, is_pv, lv_sel.clone(), &mut |m| logger.log(m));
+            let o = apply_move(&mut src, &g, &mut plan, chunk, a.no_fs, is_pv, lv_sel.clone(), &mut |m| logger.log(m));
             let record = src.record_journal().map(|j| j.record());
             let o = settle_layout(o, &src, record);
             return finish_resize(a, o, Some(&mut src), part, is_pv, is_block, lv_sel.as_ref().map(|s| s.path.as_str()), cur_bytes);
         }
-        // 缩小会截短分区，文件系统同步缩小：被截掉的字节 `undo` 找不回来。
-        // 纯扩容只改表，不在这里要求授权
-        crate::cmd::confirm::gate(a.yes, crate::cmd::confirm::Impact {
-            shrinking,
-            ..Default::default()
-        });
         let (chunk, mut logger) = chunk_logger(a, &src, g.disk_guid());
         let o = crate::cmd::layout::resize_part_via_plan_with(&mut src, &g, repair, part, start, new_end, chunk, a.no_fs, lv_sel.clone(), is_pv, &mut |m| logger.log(m));
         let record = src.record_journal().map(|j| j.record());

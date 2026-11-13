@@ -240,7 +240,7 @@ pub(crate) fn geometry_invariant_reaches_load_gpt() {
     let mut src = src_from_gpt("geo_e2e", ss);
     let file_last = src.size / ss - 1;
     // 抹掉盘尾备份头：本用例只考主副本的判定
-    src.write_at(file_last * ss, &vec![0u8; ss as usize]).unwrap();
+    src.write_fixture(file_last * ss, &vec![0u8; ss as usize]).unwrap();
     let mut h = geo_header(1, 66, 2);
     h.backup_lba = file_last;
     write_raw_primary(&mut src, h, ss);
@@ -256,7 +256,7 @@ pub(crate) fn backup_first_usable_floor_reaches_load_gpt() {
     let mut src = src_from_gpt("geo_bak", ss);
     let file_last = src.size / ss - 1;
     // 抹掉主头：本轮只考备份副本的判定
-    src.write_at(ss, &vec![0u8; ss as usize]).unwrap();
+    src.write_fixture(ss, &vec![0u8; ss as usize]).unwrap();
     let entry_lba = file_last - SPAN_128_512;
     let mut h = geo_header(0, entry_lba - 1, entry_lba);
     h.primary_lba = file_last; // 备份头自述 MyLBA = 盘尾
@@ -271,7 +271,6 @@ pub(crate) fn backup_first_usable_floor_reaches_load_gpt() {
 #[test]
 pub(crate) fn entry_size_rules() {
     // UEFI 2.10 §5.3.3 Table 5.6：SizeOfPartitionEntry = 128 × 2^n；192/136 等非法。
-    // 判据的唯一实现在 geometry（数组几何的构造点），此处直接消费它
     assert!(entry_size_ok(128));
     assert!(entry_size_ok(256));
     assert!(entry_size_ok(1024));
@@ -365,7 +364,6 @@ pub(crate) fn corrupt_metadata_refused() {
 #[test]
 pub(crate) fn damaged_primary_without_backup_is_reported() {
     // 对照组：只抹掉盘尾备份头、头本身完好 → 仍是可用的表。
-    // 有它才能证明下面那个 Err 来自头损伤，而不是"没有备份"本身
     let mut intact = fixture_gpt(512);
     let last = intact.len() - 512;
     intact[last..].fill(0); // 备份头所在扇区清零
@@ -442,9 +440,9 @@ pub(crate) fn no_gpt_signature_is_absence() {
 pub(crate) fn pmbr_intact_without_gpt_headers_is_damaged_not_absence() {
     let mut src = src_from_gpt("pmbrdead", 512);
     // 两份头都毁到 EFI PART 不在：主头 LBA1、备头镜像尾 LBA
-    src.write_at(512, &[0u8; 512]).unwrap();
+    src.write_fixture(512, &[0u8; 512]).unwrap();
     let last = (src.size / 512 - 1) * 512;
-    src.write_at(last, &[0u8; 512]).unwrap();
+    src.write_fixture(last, &[0u8; 512]).unwrap();
     assert!(pmbr_shape_valid(&src).unwrap(), "前提：保护记录未动");
     assert!(load_gpt(&src).unwrap().is_none(), "前提：表解析不出，缺口只在盘型判定层");
     assert_eq!(table_label(&src).unwrap(), TableLabel::GptDamaged);

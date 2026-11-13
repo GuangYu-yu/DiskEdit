@@ -90,7 +90,7 @@ impl ShrinkRunOutcome {
     }
 }
 
-/// 核对结论 → 结果的两种变体。转换只在此一处，调用方不再自行解读 [`ShrinkVerify`]
+/// 核对结论 → 结果的两种变体。转换只在此一处，调用方不自行解读 [`ShrinkVerify`]
 fn shrink_outcome(verify: ShrinkVerify, leak: Option<MountLeak>) -> ShrinkRunOutcome {
     match verify {
         ShrinkVerify::Within(actual) => ShrinkRunOutcome::Verified { actual, leak },

@@ -1,7 +1,8 @@
-//! `resize --allow-move` 的判定半程与收尾：事前判定（只读）、绑定现场、扩容后的 FS 收尾。
+//! `resize --allow-move` 的判定半程与执行装配：事前判定（只读）、绑定现场、扩容后的 FS 收尾。
 //!
 //! 写盘不在本模块：搬移、表提交与换区重建都由 [`crate::execution::execute_plan`]
-//! 执行，本模块把判定结论装配成一份计划并交给它。持久状态是恢复记录里的
+//! 执行，本模块把判定结论装配成一份计划并交给它。事务入口与归责在
+//! [`crate::cmd::resize::apply_move`]。持久状态是恢复记录里的
 //! [`crate::recovery::Relocation`]：有序计划、双游标、块字节、作业语义与几何守卫
 //! 同属一份记录，与 `resize` 的分区层/FS/LVM 收尾共用一个事务号。
 
@@ -46,104 +47,6 @@ pub(crate) fn ensure_swap_rebuild_tools(is_block: bool) -> Result<(), RunOutcome
     )
     .map_err(RunOutcome::from)?;
     Ok(())
-}
-
-/// 一次搬移事务 = 事前判定（只读）+ 执行（写盘）。
-/// 判定的返回类型里只有 `Refused` / `NoMutation`（此刻确定未写盘）；执行半程交给
-/// [`crate::execution::execute_plan`]，它的错误分类按"首写之前 / 之后"给出；本函数的
-/// 出口按本次写事实归责，把执行器视野之外的目标写入（repair）算进结论。
-/// 几何由调用方解析（一条命令解析一次，往下传），本函数与执行半程都不读表
-#[allow(clippy::too_many_arguments)]
-pub fn apply(
-    src: &mut WriteSource,
-    g: &ValidatedGeometry,
-    plan: &mut Plan,
-    chunk_len: u64,
-    no_fs: bool,
-    defer_ckpt: bool,
-    lvm: Option<LvmSelection>,
-    log: &mut dyn FnMut(&str),
-) -> RunOutcome {
-    // 出口归责：执行器的分类只看计划内的写入，repair 的位置不在它的视野里。
-    // 函数体内各早退原样返回，由这一处统一过判定点
-    apply_unreconciled(src, g, plan, chunk_len, (no_fs, defer_ckpt), lvm, log)
-        .reconcile_with_writes()
-}
-
-/// [`apply`] 的主体：各出口只陈述本步结论，归责留给外层。`switches` = (`no_fs`, `defer_ckpt`)
-fn apply_unreconciled(
-    src: &mut WriteSource,
-    g: &ValidatedGeometry,
-    plan: &mut Plan,
-    chunk_len: u64,
-    switches: (bool, bool),
-    lvm: Option<LvmSelection>,
-    log: &mut dyn FnMut(&str),
-) -> RunOutcome {
-    let (no_fs, defer_ckpt) = switches;
-    // 事务入口的注入点：此刻 abort 必须与"从未运行过"不可区分
-    fault_before_any_write();
-    // 记录里的搬移状态是续跑的唯一依据；读两份并持有期结束后再进入判定
-    let (existing_relocation, existing_lvm) = match src.record_journal() {
-        Some(j) => (j.relocation().cloned(), j.lvm_post()),
-        None => (None, None),
-    };
-    let mut d = match prepare_apply(
-        src,
-        g,
-        plan,
-        chunk_len,
-        no_fs,
-        defer_ckpt,
-        lvm,
-        existing_relocation.as_ref(),
-        existing_lvm,
-        log,
-    ) {
-        Ok(d) => d,
-        Err(f) => return f,
-    };
-    // 修复写盘之前先把现场落盘：repair 已是目标写入，它与记录绑定之间不留无记录的
-    // 窗口——那里 abort 会留下"盘已改、无从回滚"的现场，违背"写盘后 abort 必须留下
-    // 可续传现场"的边界配对。执行半程的同值绑定是幂等的
-    if let Err(e) = bind_relocation(src, &d.relocation, d.lvm.as_ref()) {
-        return RunOutcome::no_mutation(e.bind_failure());
-    }
-    fault_after_relocation_bound();
-    // 修复虽是写盘，但先于任何目标写入执行；放在 RunOutcome 域是为了保住分类：
-    // 其读表阶段尚未写一个字节（NoMutation），一旦进入 io 域就只剩 Partial 一条路
-    if let Some(what) = plan.repair.describe() {
-        if let Err(f) = gpt_policy::apply_repair(src, &plan.repair) {
-            return f;
-        }
-        log(&format!("[repair] {what}"));
-        // 修复是目标写入：此后装配步骤的表内容、首写前比对与扩容区间都按修复后的表读。
-        // 判定期那份读取在修复前，不能继续当基线。`old_range` 描述的是提交前区间，
-        // 修复不改条目位置，保持原值
-        d.g = match gpt_policy::resolve_geometry(src) {
-            Ok(Some((fresh, _))) => fresh,
-            Ok(None) => {
-                return RunOutcome::refused("the GPT disappeared after the repair — refusing");
-            }
-            Err(f) => return f,
-        };
-    }
-    fault_after_repair();
-    // 越界之后只剩两条出口：写入完成，或"盘可能已改变"的执行失败
-    let mut post: Vec<Pending> = Vec::new();
-    match execute_apply(src, plan, d, log, &mut post) {
-        Ok(()) => RunOutcome::applied_with(post),
-        // 分类由执行器给：首写之前的拒绝仍是 3/4，首写之后才是 5。失败自带的待办与
-        // 本进程已攒下的待办合并，一个都不丢
-        Err(RunOutcome::Partial { cause, pending, origin }) => RunOutcome::Partial {
-            cause,
-            pending: pending.into_iter().chain(post).collect(),
-            origin,
-        },
-        // 待办只由写盘之后的步骤产生：非空即已越过首写，"确定未写盘"的原变体不再成立
-        Err(other) if !post.is_empty() => RunOutcome::partial_with(other.to_string(), post),
-        Err(other) => other,
-    }
 }
 
 /// 事前判定的产物，也是 execute 的**唯一输入源**：凡是执行阶段要用的都在这里带过去。
@@ -379,7 +282,7 @@ fn record_journal(src: &mut WriteSource) -> io::Result<&mut crate::recovery::Rec
 }
 
 /// 绑定计划与 LVM 基线（同一次写入）。已有同值计划时是 no-op，不重复落盘
-fn bind_relocation(
+pub(crate) fn bind_relocation(
     src: &mut WriteSource,
     reloc: &crate::recovery::Relocation,
     lvm: Option<&LvmPostFacts>,

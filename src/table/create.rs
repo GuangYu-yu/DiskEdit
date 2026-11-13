@@ -68,9 +68,8 @@ pub(crate) fn gpt_too_small(min_sectors: u64, ss: u64) -> String {
     format!("target too small for a GPT (needs ≥{min_sectors} sectors at {ss}-byte sector size)")
 }
 
-/// `new` 写盘前的全部拒绝判据。命令层必须在任何写入之前先过它：这些检查若埋在
-/// create_gpt 里以 io::Error 上抛，会被"建表失败可能停在中间态"的映射误报成
-/// Partial（5 + "盘可能已改变"）——而此刻什么都没写，语义是 refused（3）
+/// `new` 写盘前的全部拒绝判据，命令层必须在任何写入之前先过它。
+/// 拒绝返回 RunOutcome::refused（盘未被改动）。
 pub fn create_gpt_preflight(size_bytes: u64, ss: u64) -> Result<(), RunOutcome> {
     let min_sectors = gpt_min_sectors(ss).map_err(|e| RunOutcome::refused(e.to_string()))?;
     if size_bytes / ss < min_sectors {
@@ -80,8 +79,7 @@ pub fn create_gpt_preflight(size_bytes: u64, ss: u64) -> Result<(), RunOutcome> 
 }
 
 /// `new --table mbr` 写盘前的判据：MBR 写 LBA0、LBA1 与末 LBA 三段，可用区
-/// `[1, last-1]` 至少要留 1 个 LBA。与 GPT 侧同一理由：把"盘太小"
-/// 当建表失败的 io::Error 报，会被误报成 Partial
+/// `[1, last-1]` 至少要留 1 个 LBA。拒绝返回 RunOutcome::refused。
 pub fn create_mbr_preflight(size_bytes: u64, ss: u64) -> Result<(), RunOutcome> {
     if size_bytes / ss < 3 {
         return Err(RunOutcome::refused(format!(
@@ -125,16 +123,9 @@ fn existing_partition_ranges(src: &FileSource, ss: u64) -> io::Result<Vec<(Strin
     Ok(out)
 }
 
-/// `new --table gpt` 的表结构写入：主头（LBA1，字节 `[ss, 2·ss)`）、主条目数组
-/// （`[2·ss, (2+span)·ss)`）与盘尾备份区（`[last−span, last]` 及其后的备份头）。旧表
-/// 若有分区落在任一段，这次写入就是清零分区数据，与 `new` 只破坏表结构的语义相反。
+/// `new --table gpt` 的表结构写入区间（主头 LBA1、主条目数组、盘尾备份区）与旧表分区的冲突判定。
+/// 主数组按新表几何算；旧表读不出来时报错而非静默返回 None。
 /// 返回可读的冲突描述，命令层据此在写盘前拒绝。
-///
-/// 主数组同样按新表几何算：旧表的 `first_usable_lba` 可以小于 `2+span`（条目数远小于
-/// 建表策略的 128 时，旧表允许从 LBA 4 起分区），只算备份段会让那段分区开头被空数组清零。
-///
-/// 旧表读不出来时报错而非返回 `None`：调用方无从知道新表写入是否落在分区数据里，
-/// 未获覆盖授权时不得据此写盘（由命令层判定）
 pub fn gpt_metadata_conflict(src: &FileSource, ss: u64) -> io::Result<Option<String>> {
     let geom = EntryArrayGeometry::new(ss, DEFAULT_ENTRY_SIZE, DEFAULT_ENTRY_COUNT, MAX_ARRAY_BYTES)?;
     let span = geom.lba_span();
@@ -492,10 +483,10 @@ pub fn create_mbr(src: &mut WriteSource, overwrite_partition_data: bool) -> Resu
             let at = off as usize;
             head[at..at + GPT_SIGNATURE.len()].fill(0);
         } else {
-            src.write_at(off, &[0u8; GPT_SIGNATURE.len()])?;
+            src.write_fixture(off, &[0u8; GPT_SIGNATURE.len()])?;
         }
     }
-    src.write_at(0, &head)?;
+    src.write_fixture(0, &head)?;
     src.sync_all()?;
     // 读回复核：比的是**意图**（新 LBA0，以及被清掉签名的那些位置），不是刚写下去的
     // 缓冲——写被缓存/镜像层丢掉时，盘会在返回 Ok 之后被判成 GptDamaged
