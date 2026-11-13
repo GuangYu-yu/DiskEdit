@@ -70,8 +70,6 @@ pub(crate) fn preflight(
     Ok(())
 }
 
-/// 执行一个 FsCreate 步骤。
-///
 /// 失败只报 `fsops` 的原因与本次在做什么（[`RunOutcome::from`] 的原分类）：本进程是否
 /// 已经写过目标字节由出口的归责点判，擦除前的 IO 失败不会把"可能已写"洗成"确定未写盘"。
 pub(crate) fn execute(

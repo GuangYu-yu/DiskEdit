@@ -111,8 +111,8 @@ echo "===== D: 天然拒绝仍必须报 3/2（未写盘的承诺）====="
 mk
 BEFORE=$($B info "$T")
 $B resize "$T":1 -50M --no-fs --yes >/dev/null 2>&1; chk "$?" "3" "D1 --no-fs + 缩容 ⇒ 3"
-$B resize --yes "$T":1 500M --start 4096 >/dev/null 2>&1; chk "$?" "2" "D2 --start 非本命令选项（解析期即拒，未写盘）"
-$B resize-part --yes "$T":1 --start end >/dev/null 2>&1; chk "$?" "2" "D3 resize-part --start end ⇒ 2"
+$B resize --yes "$T":1 500M --start 4096 >/dev/null 2>&1; chk "$?" "2" "D2 --start 非本命令选项（解析期即拒，未写盘）" # cli-surface: refused
+$B resize-part --yes "$T":1 --start end >/dev/null 2>&1; chk "$?" "2" "D3 resize-part --start end ⇒ 2" # cli-surface: refused
 chk "$($B info "$T")" "$BEFORE" "D 三次拒绝均未写盘"
 
 echo

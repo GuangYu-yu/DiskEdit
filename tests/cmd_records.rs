@@ -1,5 +1,5 @@
 #![allow(clippy::let_underscore_must_use)] // 测试的清理步骤有意忽略失败（临时目录 / 进程 / 设备）
-//! `records list/verify/scan` 的进程级验收：JSON 字段、八态映射与退出码。
+//! `records list/verify/scan` 的进程级测试：JSON 字段、八态映射与退出码。
 //!
 //! 记录字节按 `src/recovery/record.rs` 的落盘布局构造，与 `cmd_inspect.rs` 同源；
 //! 目标身份取镜像的 `(dev, ino)`，这样 sidecar 的目录名还原出的目标与记录头一致。
@@ -74,13 +74,16 @@ fn payload(file_id: [u8; 16], commit: u8, retention: u8) -> Vec<u8> {
     out.extend_from_slice(&[0u8; 16]);
     out.push(0); // restore_blocked: no non-reversible write recorded
     out.extend_from_slice(&0u32.to_le_bytes()); // restore_count
+    out.push(0); // no entry with its table step in flight
+    out.push(0); // no table repair
+    out.push(0); // table fence: pending
     out
 }
 
 fn record(file_id: [u8; 16], commit: u8, retention: u8) -> Vec<u8> {
     let payload = payload(file_id, commit, retention);
     let mut out = vec![0u8; HEADER_LEN];
-    out[0..4].copy_from_slice(b"DSK3");
+    out[0..4].copy_from_slice(b"DSK4");
     out[4..8].copy_from_slice(&(payload.len() as u32).to_le_bytes());
     out[8..12].copy_from_slice(&crc32(&payload).to_le_bytes());
     let header_crc = crc32(&out[0..12]);
@@ -201,10 +204,23 @@ fn verify_finds_the_record_it_names() {
     let dir = temp_dir("verify");
     let img = image_with(&dir);
     write_record(&img, &record(file_id(&img), 1, 0));
-    let (code, out, err) = run(&["records", "verify", TX_HEX, img.to_str().unwrap()]);
+    let (code, out, err) = run(&["records", "verify", img.to_str().unwrap(), TX_HEX]);
     assert_eq!(code, 0, "{out}\n{err}");
     assert!(out.contains("\"state\":\"valid\""), "{out}");
     assert!(out.contains("\"identity_check\":\"checked\""), "{out}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn verify_takes_the_target_before_the_id() {
+    let dir = temp_dir("verify-order");
+    let img = image_with(&dir);
+    write_record(&img, &record(file_id(&img), 1, 0));
+    let (code, out, err) = run(&["records", "verify", img.to_str().unwrap(), TX_HEX]);
+    assert_eq!(code, 0, "{out}\n{err}");
+    // 反过来写时第二个位置是路径，不是 32 位十六进制，解析期就拒绝
+    let (code, _out, err) = run(&["records", "verify", TX_HEX, img.to_str().unwrap()]);
+    assert_eq!(code, 2, "{err}");
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
@@ -216,8 +232,8 @@ fn verify_of_an_unknown_id_is_three() {
     let (code, out, err) = run(&[
         "records",
         "verify",
-        "00000000000000000000000000000000",
         img.to_str().unwrap(),
+        "00000000000000000000000000000000",
     ]);
     assert_eq!(code, 3, "{out}\n{err}");
     assert!(err.contains("no record with id"), "{err}");
@@ -225,12 +241,42 @@ fn verify_of_an_unknown_id_is_three() {
 }
 
 #[test]
-fn verify_of_a_target_that_cannot_be_probed_is_four() {
+fn verify_of_a_target_that_cannot_be_probed_is_three() {
     let dir = temp_dir("verify-absent");
     let img = dir.join("absent.img");
-    let (code, _out, err) = run(&["records", "verify", TX_HEX, img.to_str().unwrap()]);
-    assert_eq!(code, 4, "{err}");
+    let (code, _out, err) = run(&["records", "verify", img.to_str().unwrap(), TX_HEX]);
+    assert_eq!(code, 3, "{err}");
     assert!(err.contains("not verified"), "{err}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// 主机仓库枚举失败不得报完整：记录根是普通文件时 `read_dir` 失败，与 `scan` 同口径
+#[test]
+fn verify_does_not_claim_complete_when_the_host_repository_cannot_be_read() {
+    // DISKEDIT_STATE_DIR 只在 uid 0 下生效
+    if unsafe { libc::geteuid() } != 0 {
+        eprintln!("skipped: the host state root is fixed for non-root users");
+        return;
+    }
+    let dir = temp_dir("verify-host-unreadable");
+    let img = image_with(&dir);
+    let state = dir.join("state");
+    std::fs::create_dir_all(&state).unwrap();
+    std::fs::write(state.join("recovery"), b"not a directory").unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_DiskEdit"))
+        .args(["records", "verify", img.to_str().unwrap(), TX_HEX])
+        .env("DISKEDIT_STATE_DIR", &state)
+        .output()
+        .unwrap();
+    let (code, stdout, stderr) = (
+        out.status.code().unwrap_or(-1),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    );
+    assert_eq!(code, 3, "{stdout}\n{stderr}");
+    assert!(stdout.contains("\"complete\":false"), "{stdout}");
+    assert!(!stdout.contains("\"complete\":true"), "{stdout}");
+    assert!(stderr.contains("host recovery repository was not searched"), "{stderr}");
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
@@ -266,7 +312,7 @@ fn list_takes_a_whole_target_only() {
     let part = format!("{}:1", img.display());
     let (code, _out, err) = run(&["records", "list", &part]);
     assert_eq!(code, 2, "{err}");
-    let (code, _out, err) = run(&["records", "verify", TX_HEX, &part]);
+    let (code, _out, err) = run(&["records", "verify", &part, TX_HEX]);
     assert_eq!(code, 2, "{err}");
     std::fs::remove_dir_all(&dir).unwrap();
 }

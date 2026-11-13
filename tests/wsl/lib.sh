@@ -137,7 +137,7 @@ mdsum() {
 
 # ---- 恢复记录现场 ----
 # 落点与进度都从 inspect 的输出里取：目录名/文件名只在 src/dev/identity.rs 定义，
-# 脚本不复刻路径规则。未收尾时 inspect 退 5，命令替换里不影响后续判断。
+# 脚本不复刻路径规则。未收尾时 inspect 也退 0，命令替换里不影响后续判断。
 record_file() {
     "$B" inspect "$1" 2>/dev/null | sed -n 's/^evidence: //p' | head -1
 }

@@ -1,4 +1,4 @@
-//! `check` 的验收载体。
+//! `check` 的进程级测试。
 //!
 //! 四码：工具退出 0 → 0；工具非零 → 3；工具不在 `PATH` 或路径不存在
 //! → 6；已找到但启动失败 → 4。工具侧的非零、缺失、启动失败要替换工具表才能造
@@ -139,7 +139,7 @@ fn an_absent_target_is_an_io_failure() {
     let entries = listing(dir.path());
 
     let (code, _, err) = run(&["check", &target(&absent, "1")]);
-    assert_eq!(code, 4, "an absent target is an I/O failure: {err}");
+    assert_eq!(code, 3, "an absent target is an unmet precondition: {err}");
     assert!(err.contains("open failed"), "{err}");
 
     assert!(!absent.exists(), "check must not create the target");

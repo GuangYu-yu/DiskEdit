@@ -44,8 +44,7 @@ diskedit info <TARGET> [--sector-size N]
 show the recovery record beside a target (read-only)
 
 ```text
-diskedit inspect <TARGET>
-diskedit inspect <PATH>
+diskedit inspect <TARGET|PATH>
 ```
 
 | property | value |
@@ -75,11 +74,11 @@ output:
   target identity; the record is not compared.
 
 exit status:
-  0  no record, a complete record that may be cleaned up, or an identity check
-     that cannot be made
-  3  torn/truncated bytes, CRC or magic mismatch, identity mismatch, or a non-regular entry
-  4  the anchor directory or the record cannot be read
-  5  the record is unfinished; the output names the rollback / set-aside commands
+  0  a readable result: no record, a complete record, an unfinished record (the
+     output names the rollback / set-aside commands), or an identity check that
+     cannot be made
+  3  torn/truncated bytes, CRC or magic mismatch, identity mismatch, a non-regular
+     entry, or the anchor directory, the record, or the target cannot be read
   6  this platform does not provide the command set
   `Unverified` records are annotated and keep their verdict's exit status
 ```
@@ -117,12 +116,12 @@ diskedit records list [TARGET]
 re-check one record by its 32-hex id
 
 ```text
-diskedit records verify <ID> <TARGET>
+diskedit records verify <TARGET> <ID>
 ```
 
 | property | value |
 |---|---|
-| positionals | `ID`, `TARGET` |
+| positionals | `TARGET`, `ID` |
 | options | none |
 | confirmation | none |
 | journal | read-only |
@@ -130,14 +129,14 @@ diskedit records verify <ID> <TARGET>
 
 ```text
   Locate the record whose id is ID (32 lowercase hex digits, as printed by
-  `records list`), re-probe the identity of TARGET, and print the verdict as
-  JSON.
+  `records list`) on TARGET, re-probe the identity of TARGET, and print the
+  verdict as JSON.
 
   Exit status:
-    0  exactly one record, and the identity check did not RunOutcome
+    0  exactly one record, and the identity check did not fail
     3  the id was not found (A4), or it exists in two or more places, or the
-       single record fails its identity / backend / structure check
-    4  the record, its directory, or the target could not be read
+       single record fails its identity / backend / structure check, or the
+       record, its directory, or the target could not be read
 ```
 
 ### `records scan`
@@ -166,7 +165,7 @@ diskedit records scan <ROOT>
   A subdirectory of <state_root> other than `recovery` is refused: a record
   directory is not a container. Scanning is bounded to depth 3, 64 MiB per file,
   512 MiB in total and 30 seconds. Exceeding a bound reports an incomplete
-  result and exits 4; no partial list is printed.
+  result and exits 3; no partial list is printed.
 
   There is no index yet: every row carries "registered": false.
 ```
@@ -194,7 +193,7 @@ diskedit resize <TARGET>[:N] <SIZE> [OPTIONS]
   shrinks.
 
   Examples:
-    diskedit resize /dev/sdb1 +2G --yes
+    diskedit resize /dev/sdb:1 +2G --yes
     diskedit resize disk.img 10G --allow-move --chunk 4 --yes
 
   SIZE:
@@ -244,7 +243,7 @@ diskedit move <TARGET>:N --start <LBA|end> [--chunk N] --yes [--align A]
 | property | value |
 |---|---|
 | positionals | `TARGET` |
-| options | `--align`, `--chunk`, `--no-fs`, `--sector-size`, `--start`, `--yes` |
+| options | `--align`, `--chunk`, `--sector-size`, `--start`, `--yes` |
 | confirmation | required (`--yes`) |
 | journal | writes, undo journal |
 | capabilities | target data, companion file, external tool, device state |
@@ -255,9 +254,6 @@ diskedit move <TARGET>:N --start <LBA|end> [--chunk N] --yes [--align A]
   LOCATION:
     <LBA>     new start LBA (aligned per --align; default none = the LBA as given)
     end       tail-pack to the last possible position
-
-  --no-fs has no effect: a move keeps the partition's size, so there is no
-  filesystem step to skip.
 
   A swap partition is relocated by committing its entry and rebuilding the area
   at the new position (mkswap); its contents are not copied.
@@ -443,7 +439,7 @@ diskedit undo <TARGET> --yes
 | property | value |
 |---|---|
 | positionals | `TARGET` |
-| options | `--sector-size`, `--yes` |
+| options | `--replay-table-only`, `--sector-size`, `--yes` |
 | confirmation | required (`--yes`) |
 | journal | writes, no undo journal |
 | capabilities | target data, companion file, external tool, device state |
@@ -465,14 +461,14 @@ diskedit undo <TARGET> --yes
 drop an unfinished operation's recovery files; no rollback
 
 ```text
-diskedit abandon <TARGET>
+diskedit abandon <TARGET> --yes [--discard-replay]
 ```
 
 | property | value |
 |---|---|
 | positionals | `TARGET` |
-| options | `--discard-replay` |
-| confirmation | none |
+| options | `--discard-replay`, `--sector-size`, `--yes` |
+| confirmation | required (`--yes`) |
 | journal | writes, no undo journal |
 | capabilities | companion file |
 
@@ -491,8 +487,9 @@ diskedit abandon <TARGET>
 
   When the scene still holds at least one range `undo` could replay — or the
   payload is damaged, so the count is unknown — the command refuses until
-  --discard-replay is given. A scene with nothing left to replay needs no
-  flag.
+  --discard-replay is given. That flag confirms giving up a replayable range;
+  it is not another spelling of --yes. A scene with nothing left to replay
+  needs no flag.
 ```
 
 ### `new`
@@ -611,7 +608,7 @@ diskedit plan <TARGET>[:N] [--grow] [--sector-size N]
 |---|---|---|
 | `--align` | `A` | placement alignment: mib\|none. add's automatic placement defaults to 1 MiB; an explicit --start and move/copy/resize-part align only when --align is given |
 | `--allow-move` | — | permit relocating the partitions in the way: the plan is printed, then the write proceeds |
-| `--chunk` | `MiB` | recovery granularity in MiB, 1..=64 (default 4); an interrupted run must repeat the same value |
+| `--chunk` | `MiB` | recovery granularity in MiB, 1..=64; a resumed job keeps the record's value, a new job uses 4 |
 | `--discard-replay` | — | confirm giving up the ranges `undo` could still replay |
 | `--end` | `LBA` | new end LBA for resize-part (grow or shrink in place) |
 | `--grow-lv` | — | also grow the LV: the one named by --lv, else the only LV |
@@ -621,10 +618,11 @@ diskedit plan <TARGET>[:N] [--grow] [--sector-size N]
 | `--label` | `S` | filesystem label (omitted = an empty label, not a default) |
 | `--lv` | `NAME` | which LV to grow (implies --grow-lv) |
 | `--name` | `S` | name for the entry this command creates |
-| `--no-fs` | — | skip the filesystem step of the grown partition (a move has no such step) |
+| `--no-fs` | — | skip the filesystem step of the grown partition |
 | `--overwrite-data` | — | accept overwriting bytes an existing partition holds |
 | `--part-number` | `N` | 1-based entry slot; it must be empty |
 | `--random` | — | ask the target to generate a new value |
+| `--replay-table-only` | — | allow `undo` to replay only the recorded table regions of a move whose data has already moved; the data those ranges name is not restored |
 | `--sector-size` | `N` | logical sector size override for raw images (power of two, max 65536 bytes — an implementation limit, not a format requirement) |
 | `--start` | `LBA\|end` | new start: an LBA, or `end` for pack-to-end |
 | `--table` | `gpt\|mbr` | table kind: gpt (default) or mbr |
@@ -639,6 +637,6 @@ diskedit plan <TARGET>[:N] [--grow] [--sector-size N]
 | 1 | unexpected internal error |
 | 2 | usage or command syntax error |
 | 3 | policy refusal, or a precondition of the request is not met |
-| 4 | operation failed with no persistent modification |
-| 5 | partial, or applied with follow-up steps pending or a stale kernel view (the remedy is printed) |
+| 4 | this run wrote no target bytes and no record entry was created, renamed, moved away or deleted (the records directory and record.lock do not count) |
+| 5 | partial, records changed while the target was not fully written, or applied with follow-up steps pending or a stale kernel view (the remedy is printed) |
 | 6 | the platform or capability is not supported |

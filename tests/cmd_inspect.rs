@@ -1,4 +1,4 @@
-//! `inspect` 的进程级验收：命令结构、证据落点与退出码。
+//! `inspect` 的进程级测试：命令结构、证据落点与退出码。
 //!
 //! 记录字节由本文件按 `src/recovery/record.rs` 的落盘布局构造；解码端的固定头与
 //! 载荷 CRC 若漂移，这里会先以 3 暴露出来，而不是静默放过。
@@ -68,6 +68,9 @@ fn payload(file_id: [u8; 16], commit: u8, retention: u8) -> Vec<u8> {
     out.extend_from_slice(&[0u8; 16]);
     out.push(0); // restore_blocked: no non-reversible write recorded
     out.extend_from_slice(&0u32.to_le_bytes()); // restore_count: no written ranges
+    out.push(0); // no entry with its table step in flight
+    out.push(0); // no table repair
+    out.push(0); // table fence: pending
     out
 }
 
@@ -75,7 +78,7 @@ fn payload(file_id: [u8; 16], commit: u8, retention: u8) -> Vec<u8> {
 fn record(file_id: [u8; 16], commit: u8, retention: u8) -> Vec<u8> {
     let payload = payload(file_id, commit, retention);
     let mut out = vec![0u8; HEADER_LEN];
-    out[0..4].copy_from_slice(b"DSK3");
+    out[0..4].copy_from_slice(b"DSK4");
     out[4..8].copy_from_slice(&(payload.len() as u32).to_le_bytes());
     out[8..12].copy_from_slice(&crc32(&payload).to_le_bytes());
     let header_crc = crc32(&out[0..12]);
@@ -135,14 +138,13 @@ mod linux {
         id
     }
 
-    /// 目标没有 `<img>.diskedit` 落点：锚点目录打不开，命令已进入执行且
-    /// `MutationState == None`，落 4
+    /// 目标没有 `<img>.diskedit` 落点：锚点目录打不开，目标/记录读不出 → 3
     #[test]
-    fn no_companion_is_four() {
+    fn no_companion_is_three() {
         let dir = temp_dir("absent");
         let img = image_with(&dir, 4096);
         let (code, out, err) = run(&["inspect", img.to_str().unwrap()]);
-        assert_eq!(code, 4, "{err}");
+        assert_eq!(code, 3, "{err}");
         assert!(err.contains("cannot be opened"), "{err}");
         assert!(!out.contains("verdict:"), "no verdict is reached: {out}");
         std::fs::remove_dir_all(&dir).unwrap();
@@ -187,12 +189,12 @@ mod linux {
     }
 
     #[test]
-    fn prepared_record_is_partial_with_guidance() {
+    fn prepared_record_is_zero_with_guidance() {
         let dir = temp_dir("prepared");
         let img = image_with(&dir, 4096);
         write_companion(&img, &record(file_id(&img), 0, 0));
         let (code, out, err) = run(&["inspect", img.to_str().unwrap()]);
-        assert_eq!(code, 5, "{out}\n{err}");
+        assert_eq!(code, 0, "{out}\n{err}");
         assert!(err.contains("diskedit undo") && err.contains("diskedit abandon"), "{err}");
         std::fs::remove_dir_all(&dir).unwrap();
     }

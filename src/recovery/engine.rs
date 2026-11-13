@@ -110,8 +110,13 @@ impl RecoveryRecord {
 /// 只有普通文件且可解码（或可被识别为损坏 / 布局不认识 / 外来文件）才算现场；缺席不是。
 /// 旧 journal 与旧 checkpoint 不在这里认领——它们不是记录，不进本枚举，也不阻塞任何命令。
 /// 节点消失的块设备身份不可恢复（拓扑派生），其落点随身份失去引用，不在本入口的
-/// 可枚举范围内
-pub(crate) fn active_recovery_records(identity: &TargetIdentity, src: Option<&FileSource>) -> Vec<RecoveryRecord> {
+/// 可枚举范围内。
+///
+/// 枚举失败即报错：先把"读不到"当成"没有"，闸口就会在没有证据的情况下放行
+pub(crate) fn active_recovery_records(
+    identity: &TargetIdentity,
+    src: Option<&FileSource>,
+) -> Result<Vec<RecoveryRecord>, String> {
     let mut out = Vec::new();
     let current = src.and_then(current_scene);
     if let Some(path) = identity.record_path() {
@@ -121,13 +126,13 @@ pub(crate) fn active_recovery_records(identity: &TargetIdentity, src: Option<&Fi
             out.push(RecoveryRecord {
                 path: path.to_path_buf(),
                 probe: Box::new(probe),
-                foreign: mismatch_reason(path, current.as_ref()),
+                foreign: mismatch_reason(path, current.as_ref())?,
             });
         }
     }
-    scan_record_root(identity, current.as_ref(), &mut out);
-    scan_image_directory(identity, current.as_ref(), &mut out);
-    out
+    scan_record_root(identity, current.as_ref(), &mut out)?;
+    scan_image_directory(identity, current.as_ref(), &mut out)?;
+    Ok(out)
 }
 
 /// 归属判定的共同入口：只认目标当前能给出的身份证据。
@@ -152,16 +157,23 @@ fn current_scene(src: &crate::dev::FileSource) -> Option<crate::recovery::SceneI
 }
 
 /// 记录载荷声明的身份与当前场景不符的原因；身份读不出、记录不可解码或不是身份问题时
-/// 返回 `None`——那些类别由 `probe` 的形态说明，不是"身份不符"
-fn mismatch_reason(path: &Path, current: Option<&crate::recovery::SceneIdentity>) -> Option<String> {
-    let current = current?;
+/// 返回 `Ok(None)`——那些类别由 `probe` 的形态说明，不是"身份不符"。
+/// 读失败是错误：折成 `None` 会让读不出的记录被当成可认领
+fn mismatch_reason(
+    path: &Path,
+    current: Option<&crate::recovery::SceneIdentity>,
+) -> Result<Option<String>, String> {
+    let Some(current) = current else {
+        return Ok(None);
+    };
     match crate::recovery::read_companion(path, current) {
-        Ok(crate::recovery::Evidence::ForeignTarget { recorded, current }) => Some(
+        Ok(crate::recovery::Evidence::ForeignTarget { recorded, current }) => Ok(Some(
             recorded
                 .mismatch_reason(&current)
                 .unwrap_or_else(|| "the recorded identity differs from the target".to_string()),
-        ),
-        _ => None,
+        )),
+        Ok(_) => Ok(None),
+        Err(e) => Err(format!("cannot read the record at {}: {e}", path.display())),
     }
 }
 
@@ -170,25 +182,31 @@ fn mismatch_reason(path: &Path, current: Option<&crate::recovery::SceneIdentity>
 /// 镜像的落点旁没有这样的根，且其路径本身不随身份漂移。
 ///
 /// 身份派生路径拼不出来时（块设备身份读不出），根退回主机仓库：候选按结构列出并标为
-/// 不可认领，而不是整批消失
+/// 不可认领，而不是整批消失。
+///
+/// 根读不出来、或候选读不懂时不跳过：那份候选可能是本目标自己的现场，跳过等于把
+/// "读不到"当成"没有"
 fn scan_record_root(
     identity: &TargetIdentity,
     current: Option<&crate::recovery::SceneIdentity>,
     out: &mut Vec<RecoveryRecord>,
-) {
+) -> Result<(), String> {
     use crate::dev::TargetKind;
     if identity.kind != TargetKind::Block {
-        return;
+        return Ok(());
     }
     let derived = identity.record_path();
     let root = derived
         .and_then(|p| p.parent().and_then(Path::parent))
         .map(Path::to_path_buf)
         .unwrap_or_else(|| crate::dev::host_state_root().join("recovery"));
-    let Ok(entries) = std::fs::read_dir(&root) else {
-        return;
+    let entries = match std::fs::read_dir(&root) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(format!("cannot enumerate the recovery root {}: {e}", root.display())),
     };
-    for entry in entries.flatten() {
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("cannot enumerate the recovery root {}: {e}", root.display()))?;
         let candidate = entry.path().join(crate::dev::RECORD_NAME);
         if derived == Some(candidate.as_path()) || out.iter().any(|r| r.path == candidate) {
             continue;
@@ -207,7 +225,16 @@ fn scan_record_root(
                         .mismatch_reason(&current)
                         .unwrap_or_else(|| "the recorded identity differs from the target".to_string()),
                 ),
-                _ => continue,
+                Ok(crate::recovery::Evidence::Absent) => continue,
+                Ok(other) => {
+                    return Err(format!(
+                        "{} is in the recovery root but cannot be read as a recovery record ({other:?})",
+                        candidate.display()
+                    ))
+                }
+                Err(e) => {
+                    return Err(format!("cannot read the record at {}: {e}", candidate.display()))
+                }
             },
             // 身份读不出：无法比对。现场一律列出——读不懂的也列，否则它们对诊断与清理
             // 都消失了；不可认领的标记仍照写
@@ -218,6 +245,7 @@ fn scan_record_root(
         };
         out.push(RecoveryRecord { path: candidate, probe: Box::new(probe), foreign });
     }
+    Ok(())
 }
 
 /// 扫镜像所在目录，补充身份派生路径找不到的兄弟落点：镜像改名后落点目录名仍是旧名，
@@ -230,22 +258,25 @@ fn scan_image_directory(
     identity: &TargetIdentity,
     current: Option<&crate::recovery::SceneIdentity>,
     out: &mut Vec<RecoveryRecord>,
-) {
+) -> Result<(), String> {
     use crate::dev::TargetKind;
     if identity.kind != TargetKind::Image {
-        return;
+        return Ok(());
     }
     let Some(current) = current else {
-        return;
+        return Ok(());
     };
     let Some(dir) = identity.canonical.parent() else {
-        return;
+        return Ok(());
     };
     let derived = identity.record_path();
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(format!("cannot enumerate {}: {e}", dir.display())),
     };
-    for entry in entries.flatten() {
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("cannot enumerate {}: {e}", dir.display()))?;
         if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
             continue;
         }
@@ -275,6 +306,7 @@ fn scan_image_directory(
         }
         out.push(RecoveryRecord { path: candidate, probe: Box::new(probe), foreign: None });
     }
+    Ok(())
 }
 
 /// 事务的控制层。它不持状态——"这次事务开到哪了"的唯一事实就是盘上那份记录
@@ -333,7 +365,8 @@ impl TransactionManager {
     /// 送进一条注定失败的路：
     /// - 记录可续跑 ⇒ 重跑原命令
     /// - 记录未越过不可回滚点 ⇒ 可以回滚（`undo`）
-    /// - 其余（越过回滚点、损坏、布局不认识、外来文件）⇒ 只有 `abandon` 能释放
+    /// - 数据写越过回滚点、表区仍可显式回放 ⇒ `undo --replay-table-only`
+    /// - 其余（损坏、布局不认识、外来文件）⇒ 只有 `abandon` 能释放
     ///
     /// 退出码按证据类别分：`Recognized + Provisional` ⇒ 5（先于"目标忙"）；
     /// 其余类别 ⇒ 3。`Provisional` 表示记录尚未标为提交，盘上字节可能已部分写入
@@ -344,10 +377,9 @@ impl TransactionManager {
         let rollbackable = active
             .iter()
             .find_map(|r| match r.probe.as_ref() {
-                // move/copy 的数据搬移越过不可逆点后，表区仍在 preimage 里，
-                // undo 仍可回写——"可否撤销"因此按操作类型判，不只看屏障位
+                // 能否撤销按同一份回放判据算：相交的 move 没有显式许可时 undo 会拒绝
                 crate::recovery::CompanionProbe::Decoded(record) => Some(
-                    !record.restore_blocked || crate::recovery::table_only_replay(record.op),
+                    crate::recovery::TableReplay::of(record, false).writes_back(),
                 ),
                 _ => None,
             })
@@ -358,10 +390,16 @@ impl TransactionManager {
             _ => None,
         });
         let resumable = recorded.is_some_and(|r| r.op.resumable());
+        // 数据写已越过回滚点、但表区仍能显式回放：`undo --replay-table-only` 是一条真实出路
+        let replay_only = recorded.is_some_and(|r| {
+            !crate::recovery::TableReplay::of(r, false).writes_back()
+                && crate::recovery::TableReplay::of(r, true).writes_back()
+        });
         let foreign_format = active.iter().find_map(|r| match r.probe.as_ref() {
             crate::recovery::CompanionProbe::Foreign { magic } => Some(match crate::recovery::legacy_layout(*magic) {
                 Some(name) => format!(
-                    "the recovery record there was written in the previous layout ({name}); this build reads the current layout only"
+                    "the recovery record there was {}",
+                    crate::recovery::legacy_layout_sentence(name)
                 ),
                 None => "the recovery record there uses a layout this build does not recognize".to_string(),
             }),
@@ -394,16 +432,27 @@ impl TransactionManager {
                      `diskedit undo`, or release it with `diskedit abandon`"
                 )
             } else if resumable {
+                let replay = if replay_only {
+                    ", or replay its partition-table regions with `diskedit undo --replay-table-only`"
+                } else {
+                    ""
+                };
                 format!(
-                    "re-run `diskedit {cmd}` with the same request to continue it, or release it with \
+                    "re-run `diskedit {cmd}` with the same request to continue it{replay}, or release it with \
                      `diskedit abandon`"
                 )
             } else if rollbackable {
                 "this operation has no resume path; roll it back with `diskedit undo`, or release it \
                  with `diskedit abandon`"
                     .to_string()
+            } else if replay_only {
+                // 数据已越过回滚点，但表区仍能显式回放：说成"只剩 abandon"会漏掉真实出路
+                "this operation has no resume path and its data writes are past the point of no return; its \
+                 partition-table regions can still be replayed with `diskedit undo --replay-table-only`, or \
+                 release it with `diskedit abandon`"
+                    .to_string()
             } else {
-                "this operation has no resume path and is already past the point of rolling back, so \
+                "this operation has no resume path and its writes are past the point of no return, so \
                  `diskedit abandon` is the only way to release it"
                     .to_string()
             }
@@ -413,8 +462,8 @@ impl TransactionManager {
             // 布局读不懂不是"越过回滚点"：说成越过回滚点会让用户以为 undo 有能力处理它
             format!("{what}; it is left in place, and `diskedit abandon` is the only way to release it")
         } else {
-            "it is already past the point of rolling back, so `diskedit abandon` is the only way to release it"
-                .to_string()
+            // 没有可解码的记录就无从判定阶段：只说"证明不了能回滚"，不说"已过回滚点"
+            "no rollback can be proven for it, so `diskedit abandon` is the only way to release it".to_string()
         };
         let report = format!(
             "an unfinished operation still owns this target ({}); {way_out}",
@@ -486,7 +535,7 @@ impl TransactionManager {
             Ok(Some(g)) => crate::dev::DiskGuidState::Present(g),
             Ok(None) => crate::dev::DiskGuidState::Unavailable,
             Err(e) => {
-                return Err(RunOutcome::no_mutation(format!(
+                return Err(RunOutcome::refused(format!(
                     "the target's GPT disk identity cannot be read ({e}) — a recovery record written now \
                      could not identify this target later, so no byte is written"
                 )))
@@ -505,7 +554,7 @@ impl TransactionManager {
     ) -> Result<WriteSource, RunOutcome> {
         Self::pre_admission(a, false)?;
         let (mut src, record_path) = Self::record_target(a)?;
-        let active = Self::claimed_records(&src);
+        let active = Self::claimed_records(&src)?;
         if !active.is_empty() {
             return Err(Self::busy(&active));
         }
@@ -533,7 +582,7 @@ impl TransactionManager {
     ) -> Result<(WriteSource, bool), RunOutcome> {
         Self::pre_admission(a, false)?;
         let (mut src, record_path) = Self::record_target(a)?;
-        let active = Self::claimed_records(&src);
+        let active = Self::claimed_records(&src)?;
         let resumable = match active.as_slice() {
             [one] => match one.probe.as_ref() {
                 crate::recovery::CompanionProbe::Decoded(record) => record.op == op,
@@ -572,7 +621,7 @@ impl TransactionManager {
     }
 
     /// `resize` 的入口。单分区 resize 与搬移作业（`--allow-move`）共用同一份记录，
-    /// 搬移计划落在记录的 [`crate::recovery::Relocation`] 里，不再有第二族现场。
+    /// 搬移计划只落在记录的 [`crate::recovery::Relocation`] 里，没有第二族现场。
     ///
     /// 分类发生在锁下、已打开的那个句柄上，理由与记录型入口相同：先判一次再开第二次
     /// 会在判据与开目标之间留下窗口
@@ -582,7 +631,7 @@ impl TransactionManager {
     ) -> Result<(WriteSource, ResizeEntry), RunOutcome> {
         Self::pre_admission(a, allow_dm_held)?;
         let (mut src, record_path) = Self::record_target(a)?;
-        let active = Self::claimed_records(&src);
+        let active = Self::claimed_records(&src)?;
         let resumable = matches!(
             active.as_slice(),
             [one]
@@ -635,11 +684,11 @@ impl TransactionManager {
         {
             reject_sector_size_on_block(a)?;
             let src = FileSource::open_read_only(Path::new(a.target()))
-                .map_err(|e| RunOutcome::no_mutation(format!("open failed: {e}")))?;
+                .map_err(|e| RunOutcome::refused(format!("open failed: {e}")))?;
             return Ok(src);
         }
         FileSource::open_read_only_image(Path::new(a.target()), a.sector_size().map(|s| s.get()))
-            .map_err(|e| RunOutcome::no_mutation(format!("open failed: {e}")))
+            .map_err(|e| RunOutcome::refused(format!("open failed: {e}")))
     }
 
     /// 读写打开、不取所有权
@@ -648,7 +697,7 @@ impl TransactionManager {
             reject_sector_size_on_block(a)?;
         }
         let src = FileSource::open(Path::new(a.target()), a.sector_size().map(|s| s.get()))
-            .map_err(|e| RunOutcome::no_mutation(format!("open failed: {e}")))?;
+            .map_err(|e| RunOutcome::refused(format!("open failed: {e}")))?;
         Ok(src)
     }
 
@@ -671,14 +720,18 @@ impl TransactionManager {
     }
 
     /// 目标上还活着的恢复现场（含身份不符的候选：供展示，供调用方过滤）
-    pub(crate) fn active_records(src: &FileSource) -> Vec<RecoveryRecord> {
-        active_recovery_records(&src.identity, Some(src))
+    pub(crate) fn active_records(src: &FileSource) -> Result<Vec<RecoveryRecord>, RunOutcome> {
+        active_recovery_records(&src.identity, Some(src)).map_err(|why| {
+            RunOutcome::refused(format!(
+                "the recovery scene of this target cannot be enumerated: {why} — refusing to treat it as empty"
+            ))
+        })
     }
 
     /// 本目标可认领的恢复现场：闸口只看这一份。身份不符/不可比的候选不阻塞目标，
     /// 也不参与续跑判定
-    pub(crate) fn claimed_records(src: &FileSource) -> Vec<RecoveryRecord> {
-        Self::active_records(src).into_iter().filter(RecoveryRecord::claimable).collect()
+    pub(crate) fn claimed_records(src: &FileSource) -> Result<Vec<RecoveryRecord>, RunOutcome> {
+        Ok(Self::active_records(src)?.into_iter().filter(RecoveryRecord::claimable).collect())
     }
 
     /// 绕过事务入口的写盘命令（`resizefs` 与 `check` 的修复）动手前的唯一闸口：目标上若还
@@ -693,7 +746,7 @@ impl TransactionManager {
     /// `/dev/sdb:2` 与 `/dev/sdb2` 因此共享同一处现场，只读分区节点即可枚举完
     pub(crate) fn refuse_if_active(src: &FileSource, what: &str) -> Result<(), RunOutcome> {
         Self::refuse_unidentifiable(src)?;
-        let active = Self::claimed_records(src);
+        let active = Self::claimed_records(src)?;
         if active.is_empty() {
             return Ok(());
         }
@@ -724,6 +777,8 @@ mod tests {
         let text = way_out(&[record(crate::recovery::CompanionProbe::Damaged("bad payload".into()))]);
         assert!(!text.contains("undo"), "an unreadable record must not offer undo: {text}");
         assert!(!text.contains("re-run"), "an unreadable record must not offer resuming: {text}");
+        assert!(text.contains("no rollback can be proven"), "without a record the stage is unknown: {text}");
+        assert!(!text.contains("past the point"), "an unknown stage is not a point of no return: {text}");
         assert!(text.contains("abandon"), "{text}");
 
         let text = way_out(&[record(crate::recovery::CompanionProbe::Foreign {
@@ -735,5 +790,129 @@ mod tests {
         let text = way_out(&[record(crate::recovery::CompanionProbe::NotOurs("a directory".into()))]);
         assert!(text.contains("by hand"), "a foreign entry is left for manual handling: {text}");
         assert!(!text.contains("abandon"), "this tool will not release a file it did not write: {text}");
+    }
+
+    /// 一条越过回滚点、目的区压在旧表区间上的搬移记录：普通 `undo` 拒绝，显式许可下表区可回放
+    fn blocked_move_record() -> crate::recovery::Record {
+        let mut sector = vec![0u8; 512];
+        sector[446 + 4] = 0x83;
+        sector[446 + 8..446 + 12].copy_from_slice(&2048u32.to_le_bytes());
+        sector[446 + 12..446 + 16].copy_from_slice(&4096u32.to_le_bytes());
+        sector[510] = 0x55;
+        sector[511] = 0xAA;
+        let mut record = crate::recovery::Record::new(
+            crate::recovery::TxId::from_bytes([1; 16]),
+            crate::recovery::SceneIdentity::from_target(crate::platform::TargetId::from_material(
+                crate::platform::IdentityMaterial::image(Some(7), Some([3; 16]))
+                    .expect("an image identity needs a file ID"),
+            )),
+            crate::recovery::PlanId::from_bytes([2; 16]),
+            crate::recovery::PlanVersion::new(1),
+            crate::recovery::OpKind::Move,
+            crate::recovery::PlanDigest::from_bytes([4; 32]),
+            crate::dev::DiskGuidState::Unavailable,
+        );
+        record.restore_blocked = true;
+        record.commit = crate::recovery::CommitState::Committed;
+        record.restore = vec![crate::recovery::RestoreEntry {
+            sector_size: 512,
+            first_lba: 0,
+            sectors: 1,
+            original: sector.clone(),
+            after: sector,
+        }];
+        record.relocation = Some(crate::recovery::Relocation {
+            entries: vec![crate::recovery::RelocEntry {
+                partition: 1,
+                src_first: 2048,
+                len: 4096,
+                delta: 2048,
+                is_swap: false,
+            }],
+            entry_index: 0,
+            chunks_in_entry: 0,
+            chunk_bytes: 1 << 20,
+            kind: crate::recovery::RelocKind::Shift,
+            grow_part: 0,
+            disk_size: 8 * 1024 * 1024,
+            ss: 512,
+        });
+        record
+    }
+
+    /// 数据已越过回滚点不等于"没有回滚办法"：表区仍能用显式许可回放，出路必须说出这条
+    #[test]
+    fn busy_offers_the_table_only_replay_when_it_exists() {
+        let blocked = blocked_move_record();
+        assert_eq!(
+            crate::recovery::TableReplay::of(&blocked, false),
+            crate::recovery::TableReplay::MoveBlocked
+        );
+        let text = way_out(&[record(crate::recovery::CompanionProbe::Decoded(blocked))]);
+        assert!(text.contains("--replay-table-only"), "{text}");
+        assert!(!text.contains("past the point of no return"), "{text}");
+        assert!(text.contains("abandon"), "{text}");
+    }
+
+    /// 块设备身份只借落点形状：扫描只看 `kind` 与 `record` 派生出的记录根
+    fn block_at(record: &Path) -> crate::dev::TargetIdentity {
+        crate::dev::TargetIdentity {
+            kind: crate::dev::TargetKind::Block,
+            base: record.to_path_buf(),
+            canonical: record.to_path_buf(),
+            journal: record.with_file_name("undo.journal"),
+            record: Some(record.to_path_buf()),
+            lock: record.with_file_name("record.lock"),
+            backing_fp: None,
+        }
+    }
+
+    fn current_scene_for_test() -> crate::recovery::SceneIdentity {
+        crate::recovery::SceneIdentity::from_target(crate::platform::TargetId::from_material(
+            crate::platform::IdentityMaterial::image(None, Some([1; 16])).expect("an image identity needs a file ID"),
+        ))
+    }
+
+    /// 记录读不出来时不能当成"身份相符"：读失败不是"没有不符的证据"，那条记录
+    /// 可能是本目标自己的现场
+    #[test]
+    fn an_unreadable_identity_record_is_not_treated_as_matching() {
+        let dir = crate::testdir::test_dir("mismatch_unreadable");
+        let blocker = dir.join("not-a-directory");
+        std::fs::write(&blocker, b"x").unwrap();
+        let path = blocker.join(crate::dev::RECORD_NAME);
+        let e = mismatch_reason(&path, Some(&current_scene_for_test()))
+            .expect_err("a failed read is not a matching identity");
+        assert!(e.contains("cannot read the record at"), "{e}");
+    }
+
+    /// 记录根读不出来不是"没有记录"：闸口在没有证据时放行，写命令就会压着别人的
+    /// 未完成作业继续写
+    #[test]
+    fn an_unreadable_record_root_is_not_an_empty_scene() {
+        let dir = crate::testdir::test_dir("record_root_unreadable");
+        let root = dir.join("recovery");
+        std::fs::write(&root, b"not a directory").unwrap();
+        let identity = block_at(&root.join("hash").join(crate::dev::RECORD_NAME));
+        let mut out = Vec::new();
+        let err = scan_record_root(&identity, None, &mut out).unwrap_err();
+        assert!(err.contains("cannot enumerate the recovery root"), "{err}");
+        assert!(out.is_empty());
+    }
+
+    /// 记录根里读不懂的兄弟候选一律报错：身份可读时无法证明它不是本目标的现场
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn an_unreadable_sibling_in_the_record_root_is_refused() {
+        let dir = crate::testdir::test_dir("record_root_unreadable_sibling");
+        let root = dir.join("recovery");
+        std::fs::create_dir_all(root.join("other")).unwrap();
+        std::fs::write(root.join("other").join(crate::dev::RECORD_NAME), [b'Z'; 64]).unwrap();
+        let identity = block_at(&root.join("mine").join(crate::dev::RECORD_NAME));
+        let current = current_scene_for_test();
+        let mut out = Vec::new();
+        let err = scan_record_root(&identity, Some(&current), &mut out).unwrap_err();
+        assert!(err.contains("cannot be read as a recovery record"), "{err}");
+        assert!(out.is_empty());
     }
 }

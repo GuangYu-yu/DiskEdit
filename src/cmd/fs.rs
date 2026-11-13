@@ -237,7 +237,7 @@ fn resizefs_offline(a: &ResizefsRequest, pref: PartSelector) -> RunOutcome {
                         "belongs to a different `resizefs` request (the partition, range, size, or options changed)"
                     };
                     bail_fail(RunOutcome::refused(format!(
-                        "the recovery record at {} {why} — run `diskedit inspect {}` or `diskedit undo {}` first",
+                        "the recovery record at {} {why} — run `diskedit inspect {}` or `diskedit undo {} --yes` first",
                         path.display(),
                         a.target,
                         a.target
@@ -330,7 +330,7 @@ pub(crate) fn cmd_check(a: &CheckRequest) -> u8 {
     let src = crate::cmd::open_read_only_target(&a.target, a.sector_size).unwrap_or_else(|f| bail_fail(f));
     let part = crate::gpt_policy::resolve_part(&src, pref).unwrap_or_else(|f| bail_fail(f));
     let (start, len) = crate::gpt_policy::partition_bytes(&src, part).unwrap_or_else(|f| bail_fail(f));
-    let fstype = fsid::identify(&src, start, len).unwrap_or_else(|e| bail_fail(RunOutcome::no_mutation(format!("identify failed: {e}"))));
+    let fstype = fsid::identify(&src, start, len).unwrap_or_else(|e| bail_fail(RunOutcome::refused(format!("identify failed: {e}"))));
     match fsops::check_fs(&src, part, Some(fstype)) {
         Ok(()) => {
             println!("check done on partition #{part} ({})", fsid::content_name(fstype));
@@ -416,7 +416,7 @@ pub(crate) fn cmd_set(a: &SetRequest) -> RunOutcome {
                 None => bail_fail(RunOutcome::refused(format!("invalid MBR type {value:?} (expect 0xXX)"))),
             },
             Ok(other) => bail_fail(RunOutcome::refused(format!("cannot set type on {other} label"))),
-            Err(e) => bail_fail(crate::outcome::table_parse_failure(&e, format!("label probe failed: {e}"))),
+            Err(e) => bail_fail(RunOutcome::refused(format!("label probe failed: {e}"))),
         };
         let plan = plan.unwrap_or_else(|f| bail_fail(f));
         // 计划里只有一条表步骤：块大小无人消费，sink 只把进度与表步围栏写进记录
@@ -449,7 +449,7 @@ pub(crate) fn cmd_set(a: &SetRequest) -> RunOutcome {
             }
             Ok(crate::table::TableLabel::Mbr) => bail_fail(RunOutcome::refused("mbr flags: only `boot` and `hidden` are supported".to_string())),
             Ok(other) => bail_fail(RunOutcome::refused(format!("cannot set flag on {other} label"))),
-            Err(e) => bail_fail(crate::outcome::table_parse_failure(&e, format!("label probe failed: {e}"))),
+            Err(e) => bail_fail(RunOutcome::refused(format!("label probe failed: {e}"))),
         };
         let plan = plan.unwrap_or_else(|f| bail_fail(f));
         if let Some(plan) = plan {
@@ -462,7 +462,7 @@ pub(crate) fn cmd_set(a: &SetRequest) -> RunOutcome {
     }
     // label/uuid 需要 FS 识别
     let (start, len) = crate::gpt_policy::partition_bytes(&src, part).unwrap_or_else(|f| bail_fail(f));
-    let fstype = fsid::identify(&src, start, len).unwrap_or_else(|e| bail_fail(RunOutcome::no_mutation(format!("identify failed: {e}"))));
+    let fstype = fsid::identify(&src, start, len).unwrap_or_else(|e| bail_fail(RunOutcome::refused(format!("identify failed: {e}"))));
     // 请求先变成可执行形式：参数错误必须在屏障之前拒绝，否则会为一次零写入留下记录
     let request = match key {
         "uuid" => {

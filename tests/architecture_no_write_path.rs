@@ -85,6 +85,8 @@ fn no_write_claims_live_only_in_the_result_presenter() {
         "nothing has been modified",
         "no bytes were written",
         "no data was written",
+        "no persistent state was changed",
+        "changed no persistent state",
     ];
     const EXCEPTIONS: &[(&str, &str, &str)] = &[
         (
@@ -110,7 +112,7 @@ fn no_write_claims_live_only_in_the_result_presenter() {
             if !CLAIMS.iter().any(|claim| lower.contains(claim)) {
                 continue;
             }
-            let presenter = rel == "outcome.rs" && lower.contains("nothing was written by this run");
+            let presenter = rel == "outcome.rs" && lower.contains("changed no persistent state");
             let excepted = EXCEPTIONS
                 .iter()
                 .any(|(file, needle, _)| rel == *file && lower.contains(needle));
@@ -127,7 +129,7 @@ fn no_write_claims_live_only_in_the_result_presenter() {
     // 豁免锚在呈现层的原句上：原句改了措辞，上面那条 `presenter` 就永远不命中，
     // 断言会在别处失败而不是静默放行
     assert!(
-        source("outcome.rs").contains("nothing was written by this run"),
+        source("outcome.rs").contains("changed no persistent state"),
         "the presenter sentence this guard exempts is gone — the exemption covers nothing"
     );
 }

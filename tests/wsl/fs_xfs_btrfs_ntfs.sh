@@ -75,9 +75,9 @@ lo_detach "$LD"; sgdisk -v "$T" >/dev/null 2>&1 && echo "sgdisk clean" || { echo
 
 echo
 echo "########## D: btrfs 多设备拒绝（num_devices > 1 不可按单成员扩）##########"
-# 依据：src/fsops/mkfs.rs:213 refuse_btrfs_multi_device_at 读主 superblock
+# 依据：src/fsops/mkfs.rs 的 refuse_btrfs_multi_device_at 读主 superblock
 # num_devices（分区起点 + 0x10000 + 0x88，u64 LE）> 1 即拒绝；grow 侧调用点
-# src/fsops/grow.rs:16,146（resize_fs → resize_fs_in），失败经 src/outcome.rs:339 归
+# src/fsops/grow.rs 的 resize_fs → resize_fs_in，失败经 src/outcome.rs 归
 # UnsupportedFs → unsupported（6，未写盘）。
 img IMGD t20d.img
 img D2 t20d2.img

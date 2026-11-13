@@ -103,9 +103,9 @@ flag_ok() { # 命令 旗标
     case "$opts_current " in
         *" $2 "*) return 0 ;;
     esac
-    # 注册表之外的三个接受位：cli.rs 的 GLOBAL_FLAGS 与解析器里的 --help/--version 出口
+    # 注册表之外的两个接受位：解析器里的 --help/--version 出口
     case "$2" in
-        --discard-replay|--help|--version) return 0 ;;
+        --help|--version) return 0 ;;
     esac
     return 1
 }

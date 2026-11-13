@@ -71,7 +71,7 @@ fn read_only_commands_are_available_on_linux() {
     assert_eq!(code, 0, "`info` is read-only and stays available: {err}");
     let (code, _out, err) = run(&["plan", &img]);
     assert_eq!(code, 0, "`plan` is read-only and stays available: {err}");
-    let (code, _out, err) = run(&["abandon", &img]);
+    let (code, _out, err) = run(&["abandon", &img, "--yes"]);
     assert_eq!(code, 0, "`abandon` only touches companion files: {err}");
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -127,7 +127,7 @@ fn write_and_evidence_commands_stop_at_the_capability_gate() {
             "resizefs" => vec![name, &p, "--yes"],
             "mkfs" => vec![name, &p, "ext4", "--yes"],
             "undo" => vec![name, &img, "--yes"],
-            "abandon" => vec![name, &img],
+            "abandon" => vec![name, &img, "--yes"],
             "new" => vec![name, &img, "--yes"],
             "add" => vec![name, &img, "1M", "--yes"],
             "resize-part" => vec![name, &p, "--end", "8191", "--yes"],
@@ -150,7 +150,7 @@ fn records_commands_stop_at_the_capability_gate() {
     let cases: [&[&str]; 4] = [
         &["records", "list"],
         &["records", "list", &root],
-        &["records", "verify", id, &root],
+        &["records", "verify", &root, id],
         &["records", "scan", &root],
     ];
     for args in cases {

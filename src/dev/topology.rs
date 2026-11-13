@@ -205,7 +205,6 @@ pub(crate) fn block_keys(node: &Path, path: &Path) -> io::Result<String> {
     // "名字-0"：容量进过身份键，写死 0 会在下一次成功读取时把身份改名（换序列化域）。
     // 退化键不含绑到具体物理盘的成分：同一槽位先后出现同节点名、同容量的两块盘共用
     // 一个身份域；要区分它们需要 device-id，本函数不消费
-    // 分区内容摘要
     let key_of = |n: &Path| -> io::Result<String> {
         let id = node_device_id(n)
             .map_err(|e| topology_denied(path, format!("reading device-id attribute of {}: {e}", n.display())))?;

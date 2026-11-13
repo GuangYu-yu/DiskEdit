@@ -298,7 +298,7 @@ pub(crate) fn read_table(src: &FileSource) -> Result<Table, RunOutcome> {
         // 无 GPT → 按 MBR 解析。不这么做的话真 MBR 盘在这里被一律当成"无表"，
         // mkfs / set label|uuid 在 MBR 上完全不可用
         Ok(None) => match table::parse_mbr(src) {
-            Err(e) => Err(crate::outcome::mbr_parse_failure(&e, format!("parse failed: {e}"))),
+            Err(e) => Err(RunOutcome::refused(format!("parse failed: {e}"))),
             Ok(Some(parts)) => Ok(Table::Mbr(parts)),
             Ok(None) => {
                 // 报"无表"会让 mkfs / set 按空白盘处理：而 LBA1 的主头仍 CRC 自洽时，
@@ -306,7 +306,7 @@ pub(crate) fn read_table(src: &FileSource) -> Result<Table, RunOutcome> {
                 // 直接覆盖主头。此处把两种"读不出条目"分开报；LBA1 本身读不动是第三种，
                 // 压成 false 会把"盘读不出来"说成"没有分区表"
                 let primary_intact = table::gpt_header_parseable(src)
-                    .map_err(|e| RunOutcome::no_mutation(format!("cannot read the GPT header at LBA1: {e}")))?;
+                    .map_err(|e| RunOutcome::refused(format!("cannot read the GPT header at LBA1: {e}")))?;
                 if primary_intact {
                     return Err(RunOutcome::refused(
                         "the protective MBR no longer has the GPT shape, but the primary GPT header at LBA1 is intact — \
@@ -810,7 +810,7 @@ pub(crate) fn esp_off_fallback(
         .and_then(|d| d.checked_add(1))
         .and_then(|n| n.checked_mul(ss))
         .ok_or_else(|| RunOutcome::refused("partition length overflows byte size"))?;
-    let recognized = crate::fsid::identify(src, base, len).map_err(RunOutcome::no_mutation_io)?;
+    let recognized = crate::fsid::identify(src, base, len).map_err(RunOutcome::unreadable_io)?;
     Ok(Some(match recognized {
         crate::fsid::ContentKind::Filesystem(
             crate::fsid::FsKind::Vfat | crate::fsid::FsKind::Ntfs,

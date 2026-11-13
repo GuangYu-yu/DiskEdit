@@ -120,18 +120,18 @@ pub fn resize_online(
             return RunOutcome::refused(format!("partition {} became active swap during locking — run swapoff first", t.pno));
         }
         Ok(false) => {}
-        Err(e) => return RunOutcome::no_mutation(format!("cannot check active swap for partition {}: {e}", t.pno)),
+        Err(e) => return RunOutcome::refused(format!("cannot check active swap for partition {}: {e}", t.pno)),
     }
     let fstype = match fstype_of(&t) {
         Ok(f) => f,
-        Err(e) => return RunOutcome::no_mutation(e.to_string()),
+        Err(e) => return RunOutcome::refused(e.to_string()),
     };
     // 目标长度在锁下解析：请求的锚定值（`+N`/`+N%` 的当前尺寸、`grow` 的右侧空闲）
     // 必须取自独占权之后的盘上现状，锁前快照在窗口内可能已作废。只读打开整盘，
     // 解析失败按 RunOutcome 的出口语义直接折叠
     let disk = match FileSource::open_read_only(&t.disk_dev) {
         Ok(s) => s,
-        Err(e) => return RunOutcome::no_mutation(format!("open failed: {e}")),
+        Err(e) => return RunOutcome::refused(format!("open failed: {e}")),
     };
     let size = match decide(&disk) {
         Ok(v) => v,

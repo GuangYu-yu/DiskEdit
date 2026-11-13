@@ -50,7 +50,7 @@ echo "unknown -> exit=$E : $(echo "$OUT" | tail -1)"
 echo
 echo "########## C: resize --start 应报用法错误（非本命令选项）##########"
 mk ext4 300M
-OUT=$($B resize --yes "$T":1 500M --start 4096 2>&1); E=$?
+OUT=$($B resize --yes "$T":1 500M --start 4096 2>&1); E=$? # cli-surface: refused
 echo "exit=$E : $(echo "$OUT" | tail -1)"
 [ "$E" = "2" ] && echo "C USAGE-ERROR OK" || { echo "C WRONG EXIT ($E)"; rc=1; }
 
@@ -93,8 +93,8 @@ $B add --yes "$T" 1048576 --start 264192 --name over >/dev/null 2>&1; E=$?
 # 紧贴：把 p128 扩到 last_usable，再加 1 扇区应被拒
 # 1G 镜像末 LBA = 2097151；备份数组(32 扇区)位于末扇区的备份头之前，
 # 故 last_usable = 2097151 - 32 - 1 = 2097118（同 boundary_last_usable.sh）
-# --end 默认按 MiB 下取整，会把越界的 end 夹回可用区内（src/support.rs:258-278），
-# 所以这里必须 --align none，越界请求才真正到达边界校验（src/movepart/resize.rs:404）
+# --end 默认按 MiB 下取整，会把越界的 end 夹回可用区内（src/support.rs），
+# 所以这里必须 --align none，越界请求才真正到达边界校验（src/movepart/resize.rs）
 LU=2097118
 echo "last_usable=$LU (2097151 - 32 - 1)"
 # 未识别的分区内容在 FS 步写表前被拒（6）：给 p128 一个可识别的签名，FS 步才放行；

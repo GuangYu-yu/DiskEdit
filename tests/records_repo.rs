@@ -90,9 +90,12 @@ fn record_bytes() -> Vec<u8> {
     p.extend_from_slice(&[0u8; 16]);
     p.push(0);
     p.extend_from_slice(&0u32.to_le_bytes());
+    p.push(0); // no entry with its table step in flight
+    p.push(0); // no table repair
+    p.push(0); // table fence: pending
 
     let mut out = vec![0u8; 16];
-    out[0..4].copy_from_slice(b"DSK3");
+    out[0..4].copy_from_slice(b"DSK4");
     out[4..8].copy_from_slice(&(p.len() as u32).to_le_bytes());
     out[8..12].copy_from_slice(&crc32(&p).to_le_bytes());
     let header_crc = crc32(&out[0..12]);
@@ -143,7 +146,7 @@ fn an_entry_over_sixty_four_mib_stops_the_scan() {
         .expect("size oversized record");
 
     let (code, out, err) = run(&["records", "scan", dir.to_str().expect("utf-8 path")]);
-    assert_eq!(code, 4, "{out}\n{err}");
+    assert_eq!(code, 3, "{out}\n{err}");
     let json: serde_json::Value = serde_json::from_str(&out).expect("scan JSON");
     assert_eq!(json["complete"], false, "{out}");
     assert_eq!(json["records"].as_array().expect("records array").len(), 0, "{out}");

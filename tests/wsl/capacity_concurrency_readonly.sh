@@ -47,7 +47,7 @@ ro_probe() { # label cmd args...
   if [ "$e" != "4" ]; then
     echo "  RO WRONG EXIT (BAD): $(echo "$out" | head -1)"; rc=1
   fi
-  $B abandon "$LD" >/dev/null 2>&1
+  $B abandon "$LD" --yes >/dev/null 2>&1
 }
 ro_probe resize "$B" resize --yes "$LD":1 56M
 ro_probe set    "$B" set --yes    "$LD":1 name ro-try

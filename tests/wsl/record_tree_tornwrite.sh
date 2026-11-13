@@ -35,14 +35,14 @@ OUT=$(DISKEDIT_FAULT=chunk:60 $BF move "$T":2 --start 250000 --chunk 1 --yes 2>&
 JSZ=$(stat -c%s "$(record_file "$T")" 2>/dev/null || echo 0)
 echo "record = $JSZ bytes (搬移量约 100M)"
 if [ "$JSZ" -gt 5 ] && [ "$JSZ" -lt 1048576 ]; then echo "A1 RECORD-STREAMING OK (<1MiB, 只记进度不记数据)"; else { echo "A1 JOURNAL SIZE ODD ($JSZ)"; rc=1; }; fi
-echo "-- A2: 中断搬移的 undo——记录里只剩搬移进度，undo 拒绝 --"
-# 表步骤未提交，preimage 为空；undo 不代删：退 3，指路续跑或 abandon
+echo "-- A2: 中断搬移的 undo——记录里没有表快照，undo 拒绝 --"
+# 表步骤未提交，preimage 为空。判定只看拒绝类别：退 3、记录保留、拒绝指向记录本身；
+# 不绑具体原因文案
 OUT=$($B undo "$T" --yes 2>&1); E=$?
 echo "exit=$E msg: $(echo "$OUT" | head -1 | cut -c1-70)"
-[ "$E" = "3" ] && echo "$OUT" | grep -q "holds no table pre-image" \
-  && echo "$OUT" | grep -q 're-run `diskedit move`' && [ -e "$(record_file "$T")" ] \
+[ "$E" = "3" ] && [ -e "$(record_file "$T")" ] && echo "$OUT" | grep -q "the recovery record at" \
   && echo "A2 UNDO-REFUSES-PROGRESS OK" \
-  || { echo "A2 UNDO WRONG (want 3 + holds no table pre-image + record kept)"; rc=1; }
+  || { echo "A2 UNDO WRONG (want 3 + refusal naming the record + record kept)"; rc=1; }
 echo "-- A3: 完成后记录应被删除 --"
 $B move "$T":2 --start 250000 --chunk 1 --yes >/dev/null 2>&1; E=$?
 record_absent "$T" && echo "A3 RECORD DROPPED OK (exit=$E)" || { echo "A3 RECORD LEFT (bad)"; rc=1; }
@@ -116,10 +116,10 @@ $B info "$T" | grep -o '"num":3,[^}]*}'
 sgdisk -v "$T" 2>&1 | tail -1
 
 echo "-- C5: 保护 MBR SizeInLBA 超出容器（Inconsistent）→ 拒绝自动修复 --"
-# 依据：src/table/gpt_parse.rs:525 pmbr_size_state：size > 容器-1（两种口径都大于）→ Inconsistent；
-# src/gpt_policy.rs:93-99 classify_repair 对 Inconsistent 返回 Err（拒绝自动修复，可能是更大盘的
-# 截断副本），经 src/gpt_policy.rs:203 归 Fail::refused → 退出码 3（表结构非法，未写盘）；
-# info 走 load_gpt（不做修复）仍可读，并把提示打入 stderr（src/cmd/info.rs:110-118）
+# 依据：src/table/gpt_parse.rs 的 pmbr_size_state：size > 容器-1（两种口径都大于）→ Inconsistent；
+# src/gpt_policy.rs 的 classify_repair 对 Inconsistent 返回 Err（拒绝自动修复，可能是更大盘的
+# 截断副本），经 src/gpt_policy.rs 归 Fail::refused → 退出码 3（表结构非法，未写盘）；
+# info 走 load_gpt（不做修复）仍可读，并把提示打入 stderr（src/cmd/info.rs）
 mk
 printf '\xff\xff\xff\xff' | dd of="$T" bs=1 seek=458 conv=notrunc 2>/dev/null
 OUT=$($B info "$T" 2>&1); E=$?

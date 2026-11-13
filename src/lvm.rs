@@ -98,16 +98,20 @@ fn report_parsable(json: &str) -> bool {
 
 /// 取 report[].<key>[] 数组（lvm2 JSON 报表的统一入口）。
 /// 遍历全部 report 元素合并：普通 lvs/pvs/vgs 恒为单元素，LVM 亦允许
-/// 单命令多 report（如 lvm fullreport）
-fn report_rows(json: &str, key: &str) -> Vec<Value> {
-    let Ok(v) = serde_json::from_str::<Value>(json) else { return Vec::new() };
-    let Some(reports) = v.get("report").and_then(|r| r.as_array()) else { return Vec::new() };
-    reports
+/// 单命令多 report（如 lvm fullreport）。
+/// 报表不可解析是错误而不是空表：空表在调用方等于"没有这个对象"
+fn report_rows(json: &str, key: &str) -> Result<Vec<Value>, LvmError> {
+    let v = serde_json::from_str::<Value>(json)
+        .map_err(|e| LvmError::Failed(format!("LVM report is not valid JSON: {e}")))?;
+    let Some(reports) = v.get("report").and_then(|r| r.as_array()) else {
+        return Err(LvmError::Failed("LVM report has no `report` array".to_string()));
+    };
+    Ok(reports
         .iter()
         .filter_map(|rep| rep.get(key).and_then(|k| k.as_array()))
         .flatten()
         .cloned()
-        .collect()
+        .collect())
 }
 
 /// 报告里的设备名与目标设备是不是同一块设备：路径字符串只用于定位与诊断，
@@ -188,7 +192,7 @@ fn parse_pv_vg_with(
     matches: &dyn Fn(&str) -> DeviceMatch,
 ) -> Result<Option<String>, LvmError> {
     let mut saw_target = false;
-    for row in report_rows(json, "pv") {
+    for row in report_rows(json, "pv")? {
         let Some(name) = row.get("pv_name").and_then(|v| v.as_str()) else { continue };
         match matches(name) {
             DeviceMatch::Same => {
@@ -232,7 +236,7 @@ fn parse_lvs_on_pv_with(
     // 否则单 LV 自动选择会被重复行误判成多 LV 拒绝
     let mut seen = std::collections::HashSet::new();
     let mut out = Vec::new();
-    for row in report_rows(json, "lv") {
+    for row in report_rows(json, "lv")? {
         let Some(name) = row.get("lv_name").and_then(|v| v.as_str()).map(str::to_string) else { continue };
         if name.starts_with('[') {
             continue;
@@ -263,20 +267,24 @@ fn parse_lvs_on_pv_with(
 }
 
 /// 从 vgs JSON 输出解析 VG extent 大小（字节）。--units b --nosuffix 下
-/// 值形如 "4194304.00"，取小数点前整部
-pub fn parse_extent_size(json: &str) -> Option<u64> {
-    let tok = report_rows(json, "vg")
+/// 值形如 "4194304.00"，取小数点前整部。报表不可解析、缺行、缺字段都是错误：
+/// 这里没有"没有这个对象"的语义
+pub fn parse_extent_size(json: &str) -> Result<u64, LvmError> {
+    let row = report_rows(json, "vg")?
         .into_iter()
-        .next()?
-        .get("vg_extent_size")?
-        .as_str()?
+        .next()
+        .ok_or_else(|| LvmError::Failed("vgs: report has no VG row".to_string()))?;
+    let tok = row
+        .get("vg_extent_size")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| LvmError::Failed("vgs: no vg_extent_size in report".to_string()))?
         .to_string();
-    let int_part = tok.trim().split('.').next()?;
+    let int_part = tok.trim().split('.').next().unwrap_or("");
     // extent 大小要当下一步除法的分母（lvm_grow_chain 的 delta_bytes / ext）：
-    // "0" 是畸形报告不是合法 VG，放过去就是除零 panic（release 也一样），这里拒绝成 None
+    // "0" 是畸形报告不是合法 VG，放过去就是除零 panic（release 也一样），这里拒绝
     match int_part.parse() {
-        Ok(ext @ 1..) => Some(ext),
-        _ => None,
+        Ok(ext @ 1..) => Ok(ext),
+        _ => Err(LvmError::Failed(format!("vgs: vg_extent_size is not a positive integer: {tok}"))),
     }
 }
 
@@ -401,7 +409,7 @@ pub fn lvs_on_pv(vg: &str, part_dev: &str) -> Result<Vec<(String, String)>, LvmE
 /// VG extent 大小（字节）
 pub fn vg_extent_size(vg: &str) -> Result<u64, LvmError> {
     let out = run_tool("vgs", &["--reportformat", "json", "--units", "b", "--nosuffix", "-o", "vg_extent_size", vg])?;
-    parse_extent_size(&out).ok_or_else(|| LvmError::Failed("vgs: unparsable vg_extent_size in output".to_string()))
+    parse_extent_size(&out)
 }
 
 /// `lvs` 无表头一行（`|` 分隔）的五个字段
@@ -577,8 +585,16 @@ mod tests {
     #[test]
     fn extent_size_strips_decimal() {
         let json = r#"{"report":[{"vg":[{"vg_extent_size":"4194304.00"}]}]}"#;
-        assert_eq!(parse_extent_size(json), Some(4194304));
-        assert_eq!(parse_extent_size("{}"), None);
+        assert!(matches!(parse_extent_size(json), Ok(4194304)));
+        assert!(parse_extent_size("{}").is_err());
+    }
+
+    /// 报表损坏是错误，不是空表：空表在调用方等于"没有这个对象"
+    #[test]
+    fn a_malformed_report_is_an_error_not_an_empty_list() {
+        assert!(report_rows("not json", "pv").is_err());
+        assert!(report_rows("{}", "pv").is_err());
+        assert!(report_rows(r#"{"report":[{"pv":[]}]}"#, "pv").unwrap().is_empty());
     }
 
     const PVS_PLAIN: &str = "/dev/sda3|21474836480.00|21474834432.00|1048576.00|5119|5119\n";
@@ -622,6 +638,7 @@ mod tests {
         // 单命令多 report（lvm fullreport 形态）：行分属不同 report 元素，合并后可见
         let json = r#"{"report":[{"lv":[{"lv_name":"a"}]},{"lv":[{"lv_name":"b"}]}]}"#;
         let names: Vec<String> = report_rows(json, "lv")
+            .unwrap()
             .iter()
             .filter_map(|r| r.get("lv_name").and_then(|v| v.as_str()).map(|s| s.to_string()))
             .collect();
