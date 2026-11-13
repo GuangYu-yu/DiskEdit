@@ -50,7 +50,7 @@ pub(crate) enum ReadOnlyOpen {
 /// 只读命令的数据句柄：只打开目标，不走平台端口的身份探测。
 ///
 /// 身份是写命令的门槛（拿不到身份时按退出码 6 拒绝）；只读命令在身份不可得时
-/// 照常工作，不新增失败面。
+/// 照常工作。
 pub(crate) fn open_read_only_source(spec: &TargetSpec) -> Result<FileSource, ReadOnlyOpen> {
     match open_read_only(spec) {
         Ok(src) => Ok(src),
@@ -72,44 +72,15 @@ pub(crate) fn probe_of(src: &FileSource) -> Result<TargetProbe, PlatformError> {
         ))
     })?;
     if src.is_block {
-        return block_probe(src);
+        let (major, minor, device_id) = src.block_identity.as_ref().ok_or_else(|| {
+            PlatformError::Unidentifiable(
+                "the block device identity was not sampled when the target was opened".to_string(),
+            )
+        })?;
+        let id = TargetId::from_material(IdentityMaterial::block(*major, *minor, device_id.as_deref()));
+        return Ok(TargetProbe::new(id, src.size));
     }
     image_probe(src)
-}
-
-/// 块设备：整盘设备号 + 平台读到的稳定设备 ID。设备 ID 缺项时仍保留设备号；
-/// 设备号单独不构成跨现场身份，写命令由 `TransactionManager::refuse_unidentifiable`
-/// 与记录落点派生（`TargetIdentity::record_path`）在任何字节落盘前拒绝
-#[cfg(target_os = "linux")]
-fn block_probe(src: &FileSource) -> Result<TargetProbe, PlatformError> {
-    let node = crate::dev::sysfs_node(&src.path).map_err(PlatformError::Io)?;
-    let (major, minor) = sysfs_device_number(&node)?;
-    let (_, raw_id) = crate::dev::disk_identity(&node).map_err(PlatformError::Io)?;
-    let id = TargetId::from_material(IdentityMaterial::block(major, minor, raw_id.as_deref()));
-    Ok(TargetProbe::new(id, src.size))
-}
-
-/// 整盘设备号取自 sysfs 的 `dev` 文件（`maj:min`）：按设备号而非节点名认盘，
-/// 分区节点因此与整盘共享同一份身份
-#[cfg(target_os = "linux")]
-fn sysfs_device_number(node: &Path) -> Result<(u32, u32), PlatformError> {
-    let text = std::fs::read_to_string(node.join("dev")).map_err(PlatformError::Io)?;
-    text.trim()
-        .split_once(':')
-        .and_then(|(a, b)| Some((a.parse::<u32>().ok()?, b.parse::<u32>().ok()?)))
-        .ok_or_else(|| {
-            PlatformError::Unidentifiable(format!(
-                "cannot parse the device number {text:?} of {}",
-                node.display()
-            ))
-        })
-}
-
-#[cfg(not(target_os = "linux"))]
-fn block_probe(_src: &FileSource) -> Result<TargetProbe, PlatformError> {
-    Err(PlatformError::Unsupported(
-        "block devices are not identified on this platform".to_string(),
-    ))
 }
 
 /// 镜像：文件 ID 必需（复制/移动得到新 ID ⇒ 新目标）；卷序列号只作画像，不参与比较

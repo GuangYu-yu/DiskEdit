@@ -2,7 +2,7 @@
 //! 删除与写入后都对目录 FD 执行 `fsync`。
 //!
 //! 父目录链中的每一级都要求目录且拒绝符号链接；最终分量要求普通文件。
-//! 删除与改名复用解析时持有的父目录 FD 与文件名，不再按路径二次解析。
+//! 删除与改名复用解析时持有的父目录 FD 与文件名，不按路径二次解析。
 
 use std::ffi::{CString, OsStr, OsString};
 use std::io;
@@ -393,7 +393,7 @@ mod tests {
         assert!(matches!(store.open_at(&anchor, &relative), Err(PathError::IsDirectory)));
     }
 
-    /// 整份替换后读到新内容，临时文件不再存在
+    /// 整份替换后读到新内容，临时文件已不存在
     #[test]
     fn replace_is_atomic_and_readable() {
         let root = temp_dir("replace");

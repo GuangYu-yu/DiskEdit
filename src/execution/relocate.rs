@@ -5,17 +5,21 @@
 
 use crate::dev::{RegionStamp, WriteSource};
 use crate::outcome::{RunOutcome, WriteStep};
-use crate::planner::chunk::{move_chunk_layout, relocation_overlaps, spans, ChunkSpan};
+use crate::planner::chunk::{relocation_overlaps, spans, ChunkSpan};
 
 use super::{StepSink, TransferState};
 
-/// 一个搬移步骤的几何：分区号、源/目的起点与要搬的扇区数
+/// 一个搬移步骤的几何与块布局：分区号、源/目的起点、要搬的扇区数，
+/// 请求的块字节数与首次写入前算定的有效块字节数、块数
 #[derive(Clone, Copy)]
 pub(crate) struct Relocate {
     pub part: u32,
     pub src_first: u64,
     pub dst_first: u64,
     pub sectors: u64,
+    pub chunk_bytes: u64,
+    pub chunk: u64,
+    pub chunks: u64,
 }
 
 /// 非自重叠搬移攒批落盘的检查点阈值下限
@@ -25,32 +29,19 @@ pub(crate) fn execute(
     src: &mut WriteSource,
     step: Relocate,
     sector_size: u64,
-    chunk_bytes: u64,
     state: &mut TransferState,
     sink: &mut dyn StepSink,
 ) -> Result<(), RunOutcome> {
-    let Relocate { part, src_first, dst_first, sectors } = step;
+    let Relocate { part, src_first, dst_first, sectors, chunk_bytes, chunk, chunks: count } = step;
     let shift = dst_first.abs_diff(src_first);
-    let layout = if sectors == 0 {
-        None
-    } else {
-        move_chunk_layout(sectors, sector_size, shift, sectors, chunk_bytes)
-    };
-    // 同一布局已在首次写入前的预扫描里算过；这里仍算不出说明计划与执行输入不一致，
-    // 此刻前面的条目可能已经写过目标字节，按"可能已改变"报告
-    let Some((chunk, count)) = layout else {
-        return Err(RunOutcome::partial(format!(
-            "partition {part}: the relocation block layout cannot be computed — the transfer may be incomplete"
-        )));
-    };
-    if state.chunks_in_entry > count {
+    if state.chunks_done() > count {
         return Err(RunOutcome::partial(format!(
             "partition {part}: {} chunks are recorded as done but this step only has {count} — the transfer may be incomplete",
-            state.chunks_in_entry
+            state.chunks_done()
         )));
     }
     // 位移 0 没有拷贝要做；块进度已满说明数据搬完、只差表步
-    if shift == 0 || state.chunks_in_entry == count {
+    if shift == 0 || state.chunks_done() == count {
         return Ok(());
     }
 
@@ -102,7 +93,7 @@ pub(crate) fn execute(
     let mut batch_start = dst_base;
     let mut batch: Vec<u8> = Vec::new();
 
-    for span in ordered.iter().skip(state.chunks_in_entry as usize) {
+    for span in ordered.iter().skip(state.chunks_done() as usize) {
         let within = (span.first_lba - src_first) * sector_size;
         let len = span.len_lba * sector_size;
         let mut buf = vec![0u8; len as usize];
@@ -122,8 +113,7 @@ pub(crate) fn execute(
             )));
         }
         append_batch(&mut batch, &mut batch_start, dst, &buf);
-        state.chunks_in_entry += 1;
-        state.transfer_cursor += 1;
+        state.advance_chunk();
         if overlap {
             if let Err(e) = src.sync_data() {
                 return Err(RunOutcome::partial(format!(
@@ -132,12 +122,12 @@ pub(crate) fn execute(
             }
             verify_batch(src, batch_start, &batch, part)?;
             batch.clear();
-            crate::movepart::fault_after_data_sync(state.transfer_cursor);
+            crate::movepart::fault_after_data_sync(state.cursor());
             sink.transfer_checkpoint(src, state)
                 .map_err(|e| checkpoint_failed(part, e))?;
-            crate::movepart::fault_chunk(state.transfer_cursor);
+            crate::movepart::fault_chunk(state.cursor());
         } else {
-            crate::movepart::fault_chunk(state.transfer_cursor);
+            crate::movepart::fault_chunk(state.cursor());
             pending += len;
             if pending >= flush_at {
                 if let Err(e) = src.sync_data() {
@@ -147,7 +137,7 @@ pub(crate) fn execute(
                 }
                 verify_batch(src, batch_start, &batch, part)?;
                 batch.clear();
-                crate::movepart::fault_after_data_sync(state.transfer_cursor);
+                crate::movepart::fault_after_data_sync(state.cursor());
                 sink.transfer_checkpoint(src, state)
                     .map_err(|e| checkpoint_failed(part, e))?;
                 pending = 0;

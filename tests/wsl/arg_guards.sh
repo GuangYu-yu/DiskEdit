@@ -18,7 +18,7 @@ echo "== --chunk-size 未登记 / --chunk 取值域 =="
 # `--chunk` 登记给 move/copy/resize，取值 1..=64 MiB。
 # 合法边界要真的走一次 chunk 路径才有意义：copy 由 cli.rs 证过会消费 chunk，源分区仅 1MiB，
 # 两次拷贝代价极小（chunk 大于数据时即单块），断言后立刻 delete 掉落点。
-$B copy "$T":1 --start 4096 --chunk-size 1 --yes >/dev/null 2>&1; exp $? 2 "--chunk-size 未登记（2）" # cli-surface: refused
+$B copy "$T":1 --start 4096 --chunk-size 1 --yes >/dev/null 2>&1; exp $? 2 "--chunk-size 未登记（2）"
 $B copy "$T":1 --start 4096 --chunk 1 --yes >/dev/null 2>&1; exp $? 0 "--chunk 1 被接受（下界）"
 $B delete "$T":2 --yes >/dev/null 2>&1; exp $? 0 "  清理 copy 落点 #2"
 $B copy "$T":1 --start 4096 --chunk 64 --yes >/dev/null 2>&1; exp $? 0 "--chunk 64 被接受（上界）"
@@ -37,7 +37,7 @@ $B add --yes "$T" 1048576 --start 49152 --align banana >/dev/null 2>&1; exp $? 2
 echo "== 语义 / 互斥拒绝 =="
 # src/cmd/mod.rs:111-114 + src/args.rs:118-125：SIZE 只有位置参数一种给法，--size 不在 resize 的
 # 白名单里，给了即 usage（2）
-$B resize "$T":1 --size 8M 16M >/dev/null 2>&1; exp $? 2 "resize --size 非本命令选项（2）" # cli-surface: refused
+$B resize "$T":1 --size 8M 16M >/dev/null 2>&1; exp $? 2 "resize --size 非本命令选项（2）"
 # resize-part 不接受 --start（未登记），起点取当前表项；
 # 该夹具里 p1 起点 2048、末端 4095
 # --end 等于当前末端即空操作，按成功报 0

@@ -3,7 +3,6 @@
 #   "写盘前 abort" 必须与「从未运行过」不可区分（表未改、无记录残留）
 #   "写盘后 abort" 必须在盘上留下可续传的现场（记录已落盘）
 # 三条流程各成一对：resize(离线含搬移) / resize grow / resize(在线)。
-# 注入开关默认关闭（--features test-faults），普通构建与发布二进制行为不变
 source "$(dirname "$0")/lib.sh"
 require_fault_bin
 
@@ -18,7 +17,7 @@ chk() { # got want what
 rm -rf "$T" "$T"$SIDECAR_GLOB 2>/dev/null
 mkdir -p "$MNT"
 
-mk() { # p1 扩容需要把 p2/p3 往后搬，故必有搬移相位
+mk() { # p1 扩容需要把 p2/p3 往后搬
   rm -rf "$T" "$T"$SIDECAR_GLOB
   truncate -s 1G "$T"
   $BF new "$T" --yes >/dev/null
@@ -112,8 +111,8 @@ echo "===== D: 天然拒绝仍必须报 3/2（未写盘的承诺）====="
 mk
 BEFORE=$($B info "$T")
 $B resize "$T":1 -50M --no-fs --yes >/dev/null 2>&1; chk "$?" "3" "D1 --no-fs + 缩容 ⇒ 3"
-$B resize --yes "$T":1 500M --start 4096 >/dev/null 2>&1; chk "$?" "2" "D2 --start 非本命令选项（解析期即拒，未写盘）" # cli-surface: refused
-$B resize-part --yes "$T":1 --start end >/dev/null 2>&1; chk "$?" "2" "D3 resize-part --start end ⇒ 2" # cli-surface: refused
+$B resize --yes "$T":1 500M --start 4096 >/dev/null 2>&1; chk "$?" "2" "D2 --start 非本命令选项（解析期即拒，未写盘）"
+$B resize-part --yes "$T":1 --start end >/dev/null 2>&1; chk "$?" "2" "D3 resize-part --start end ⇒ 2"
 chk "$($B info "$T")" "$BEFORE" "D 三次拒绝均未写盘"
 
 echo

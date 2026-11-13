@@ -98,7 +98,7 @@ fn record_bytes() -> Vec<u8> {
     p.extend_from_slice(&0u32.to_le_bytes());
 
     let mut out = vec![0u8; HEADER_LEN];
-    out[0..4].copy_from_slice(b"DSK2");
+    out[0..4].copy_from_slice(b"DSK3");
     out[4..8].copy_from_slice(&(p.len() as u32).to_le_bytes());
     out[8..12].copy_from_slice(&crc32(&p).to_le_bytes());
     let header_crc = crc32(&out[0..12]);
@@ -120,7 +120,6 @@ fn path_text(path: &Path) -> &str {
 
 #[test]
 fn a_symlinked_record_is_not_followed() {
-    // 末级为符号链接 → 3；指向的字节再完整也不解码。
     let dir = temp_dir("symlink");
     let spot = sidecar(&dir);
     let outside = dir.join("outside.record");
@@ -137,8 +136,7 @@ fn a_symlinked_record_is_not_followed() {
 
 #[test]
 fn a_hard_linked_record_is_inspected_as_the_same_file() {
-    // 硬链接别名与本体是同一个 inode：判定按文件内容与目标身份走，别名照常
-    // 被认领。别名并发使用不合并、不保证。
+    // 别名并发使用不合并、不保证。
     let dir = temp_dir("hardlink");
     let spot = sidecar(&dir);
     let record = spot.join("record");
@@ -153,7 +151,6 @@ fn a_hard_linked_record_is_inspected_as_the_same_file() {
 
 #[test]
 fn a_directory_entry_is_not_ours() {
-    // 非普通文件不认领。
     let dir = temp_dir("directory");
     let spot = sidecar(&dir);
     fs::create_dir_all(spot.join("record")).expect("create record directory as entry");
@@ -167,7 +164,6 @@ fn a_directory_entry_is_not_ours() {
 
 #[test]
 fn a_fifo_entry_does_not_block() {
-    // 末级不是普通文件 → NotOurs(3)；打开不能等待写者。
     let dir = temp_dir("fifo");
     let spot = sidecar(&dir);
     let made = Command::new("mkfifo").arg(spot.join("record")).status().expect("run mkfifo");
@@ -184,7 +180,6 @@ fn a_fifo_entry_does_not_block() {
 
 #[test]
 fn a_socket_entry_is_unreadable() {
-    // 末级打开失败 → Unreadable；单条证据读取失败 → 4。
     let dir = temp_dir("socket");
     let spot = sidecar(&dir);
     let listener = UnixListener::bind(spot.join("record")).expect("bind unix socket");
@@ -214,7 +209,6 @@ fn a_symlinked_anchor_still_checks_the_entry() {
 
 #[test]
 fn only_direct_children_of_a_record_directory_are_evidence() {
-    // 父目录必须是两个记录后端之一；嵌套路径按目标探测。
     let dir = temp_dir("nested");
     let spot = sidecar(&dir);
     fs::create_dir_all(spot.join("sub")).expect("create nested directory");
@@ -229,7 +223,6 @@ fn only_direct_children_of_a_record_directory_are_evidence() {
 
 #[test]
 fn a_record_lock_file_is_probed_as_a_target() {
-    // 文件名为 record.lock 时按目标探测，不做证据解码。
     let dir = temp_dir("lock");
     let spot = sidecar(&dir);
     fs::write(spot.join("record.lock"), b"").expect("write lock file");

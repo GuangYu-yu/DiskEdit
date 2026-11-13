@@ -138,7 +138,7 @@ impl Fixture {
     fn bytes(&self) -> Vec<u8> {
         let payload = self.payload();
         let mut out = vec![0u8; 16];
-        out[0..4].copy_from_slice(b"DSK2");
+        out[0..4].copy_from_slice(b"DSK3");
         out[4..8].copy_from_slice(&(payload.len() as u32).to_le_bytes());
         out[8..12].copy_from_slice(&crc32(&payload).to_le_bytes());
         let header_crc = crc32(&out[0..12]);
@@ -159,7 +159,6 @@ fn reseal_header(bytes: &mut [u8]) {
 
 #[test]
 fn evidence_absent_is_success() {
-    // 目标存在但没有记录 → 0。
     let dir = temp_dir("absent");
     let image = image_with(&dir, 4096);
     fs::create_dir_all(sidecar(&image)).unwrap();
@@ -171,7 +170,6 @@ fn evidence_absent_is_success() {
 
 #[test]
 fn evidence_recognized_reports_commit_state() {
-    // Recognized + 提交态 → 0。
     let dir = temp_dir("recognized");
     let image = image_with(&dir, 4096);
     let mut fixture = Fixture::image(4096, file_id(&image));
@@ -215,8 +213,6 @@ fn evidence_unrecognized_format_is_a_structure_failure() {
 
 #[test]
 fn a_record_in_the_previous_layout_is_never_resumed_by_a_write_command() {
-    // 旧格式（magic 不是本构建认的值）一律不可解码：写命令既不把它当续跑现场，也不碰
-    // 目标字节。两条命令都在打开写事务时判成外来布局，退出 3，出路只有 abandon
     let prepare = |tag: &str, op: u8, size: usize| {
         let dir = temp_dir(tag);
         let image = image_with(&dir, size);
@@ -265,7 +261,6 @@ fn a_record_in_the_previous_layout_is_never_resumed_by_a_write_command() {
 
 #[test]
 fn evidence_foreign_target_is_refused() {
-    // ForeignTarget：结构完整但归属不同 → 3。
     let dir = temp_dir("foreign");
     let image = image_with(&dir, 4096);
     let mut other = [0u8; 16];
@@ -282,7 +277,7 @@ fn evidence_foreign_target_is_refused() {
 
 #[test]
 fn evidence_truncated_and_crc_mismatch_are_distinguished() {
-    // Truncated（CLI 拼作 incomplete）与 CrcMismatch → 3，且必须区分区域。
+    // Truncated CLI 拼作 incomplete；两者都退 3，且必须区分损坏区域。
     let dir = temp_dir("damaged");
     let image = image_with(&dir, 4096);
     let fixture = Fixture::image(4096, file_id(&image));
@@ -314,7 +309,6 @@ fn evidence_truncated_and_crc_mismatch_are_distinguished() {
 
 #[test]
 fn evidence_not_ours_covers_symlink_and_directory() {
-    // NotOurs：符号链接与目录都不是本工具的记录 → 3（不跟随链接）。
     let dir = temp_dir("not_ours");
     let image = image_with(&dir, 4096);
     fs::create_dir_all(sidecar(&image)).unwrap();
@@ -335,7 +329,7 @@ fn evidence_not_ours_covers_symlink_and_directory() {
 
 #[test]
 fn evidence_unreadable_requires_a_non_root_reader() {
-    // Unreadable → 4。root 无视权限位，无法构造该形态，运行期探测后返回。
+    // root 无视权限位，该用例运行期探测后返回。
     let dir = temp_dir("unreadable");
     let image = image_with(&dir, 4096);
     let fixture = Fixture::image(4096, file_id(&image));
@@ -420,8 +414,6 @@ fn records_list_maps_every_observable_state() {
 
 #[test]
 fn prepared_goes_to_quarantine_and_committed_goes_to_cleanup() {
-    // Provisional（Unfinished）→ 5，remedy 指向 undo/abandon；
-    // abandon 把记录移入隔离区；已提交记录由 undo 释放。
     let dir = temp_dir("transition");
     let image = image_with(&dir, 4096);
     let prepared = Fixture::image(4096, file_id(&image));

@@ -9,8 +9,7 @@ pub(crate) const MBR_SIGNATURE: u16 = 0xAA55;
 /// 保护 MBR 分区类型：OS Type 0xEE = GPT Protective（UEFI §5.2.2–§5.2.3 Tables 5.2–5.4）
 pub(crate) const PROT_MBR_TYPE: u8 = 0xEE;
 
-/// 扩展容器分区类型（OSIndicator）：解析、尺寸改写与类型改写三处共用同一份集合，
-/// 免得"哪些码是容器"在多处各写一遍
+/// 扩展容器分区类型（OSIndicator）：解析、尺寸改写与类型改写三处共用同一份集合
 pub(crate) const MDOS_CONTAINER_TYPES: [u8; 3] = [0x05, 0x0F, 0x85];
 
 /// 容器末 LBA（按给定表的扇区大小计）。全仓唯一的算式落点：
@@ -174,7 +173,6 @@ pub fn parse_mbr_raw(src: &FileSource) -> io::Result<Option<RawMbr>> {
 }
 
 /// 校验过的 MBR：与 GPT 侧只接受 `GptState::Valid` 同一口径——有损伤即 Err。
-/// 于是所有写路径与依赖表内容的判定，都只可能在一张无损伤的表上进行
 pub fn parse_mbr(src: &FileSource) -> io::Result<Option<Vec<MbrPartition>>> {
     let Some(raw) = parse_mbr_raw(src)? else { return Ok(None) };
     if let Some(d) = raw.damage.first() {
@@ -210,7 +208,7 @@ pub(crate) fn require_writable_mbr(src: &FileSource) -> Result<(), RunOutcome> {
 #[cfg(test)] // 生产路径的唯一 LBA0 写入点是 execution::table；这里是测试夹具的直写入口
 fn write_lba0_verified(src: &mut WriteSource, stamp: TableStamp, lba0: &[u8]) -> Result<(), RunOutcome> {
     verify_table_stamp(src, stamp, src.sector_size)?;
-    src.write_at(0, lba0)
+    src.write_fixture(0, lba0)
         .map_err(|e| RunOutcome::partial(format!("cannot write the MBR: {e} — the on-disk state may have changed")))?;
     src.sync_all()
         .map_err(|e| RunOutcome::partial(format!("cannot flush the MBR: {e} — the write may not have landed")))?;
@@ -268,11 +266,6 @@ fn require_live_entry(part: u32, lba0: &[u8], off: usize) -> Result<u8, RunOutco
 /// 纯计算 → 装配成表步骤 → `execution::table` 落盘（写前三扇区复核、写后读回）。
 /// LBA 单位与 parse_mbr / add_mdos_entry 的现有约定一致（= 扇区大小）；CHS 字段不动
 /// （现代工具惯例，内核按 LBA 解析）。
-///
-/// 崩溃语义：普通单扇区写**不是**规范层面的原子写（untorn write 需要设备显式支持，
-/// Linux 内核对普通写只作 logical block 原子的行为假设），而 MBR 无 GPT 式 CRC，
-/// 掉电撕裂只能靠 0x55AA 签名粗检、字段区损坏不可检出。恢复不依赖"写是原子的"，
-/// 依赖的是写前已持久化的 undo journal——发现盘异常后 `undo` 整扇区重写 LBA0 即还原。
 #[cfg(test)] // 生产路径经 resize_mbr_entry 装配成表步骤；这里保留测试用的直写外壳
 pub fn resize_mdos_entry(src: &mut WriteSource, part: u32, new_size_lba: u32) -> Result<(), RunOutcome> {
     require_writable_mbr(src)?;
@@ -335,9 +328,8 @@ pub(crate) fn resize_mdos_entry_image(
             "partition {part} has a type byte but zero sectors — the entry is invisible to the parser; `delete` clears it"
         )));
     }
-    // 条目自守（与 add_mdos_entry 同严格）：start + 新长度须落在盘内。现有调用方
-    // 都先查过 free，但这是共享判定——越界尺寸要挡在写 LBA0 之前，不能指望
-    // 每个未来调用方都记得复核
+    // 条目自守（与 add_mdos_entry 同严格）：start + 新长度须落在盘内，
+    // 越界尺寸挡在写 LBA0 之前
     let start = u32::from_le_bytes(lba0[off + 8..off + 12].try_into().unwrap()) as u64;
     if start == 0 {
         return Err(RunOutcome::refused(format!("MBR partition {part} has invalid start LBA 0")));
@@ -363,9 +355,8 @@ pub(crate) fn resize_mdos_entry_image(
             u32::MAX
         )));
     }
-    // 邻接自守（与 add_mdos_entry 同判据）：其余槽位任一与新区间重叠即拒绝。命令层的
-    // free 判据以"条目互不重叠"为前提——那由 parse_mbr 的 damage 口径把关，而本入口
-    // 直接读 LBA0、不经那道闸，重叠必须在此挡在写 LBA0 之前
+    // 邻接自守（与 add_mdos_entry 同判据）：其余槽位任一与新区间重叠即拒绝，
+    // 重叠必须在此挡在写 LBA0 之前
     let new_end = start + new_size_lba as u64 - 1;
     for i in 0..4u32 {
         if i + 1 == part {
@@ -493,8 +484,7 @@ pub(crate) fn add_mdos_entry_image(
     for i in 0..4usize {
         let rec = &lba0[446 + i * 16..446 + i * 16 + 16];
         // 隐形条目（类型字节非零但长度为 0）：与 set_mdos_hidden / set_mdos_type /
-        // resize_mdos_entry 同判据——把它当空闲槽写进去等于凭空替换掉
-        // 一条解析器看不见的条目，操作者无从核对
+        // resize_mdos_entry 同判据，拒绝写入
         if rec[4] != 0 && rd_u32(rec, 12) == 0 {
             return Err(RunOutcome::refused(format!(
                 "partition {} has a type byte but zero sectors — the entry is invisible to the parser; `delete` clears it",

@@ -290,8 +290,6 @@ fn resize_grow_swap_recreate() {
     // 不可用 → 分区表已更新但 swap 未重建，属部分完成（PARTIAL），且必须给出补救命令。
     #[cfg(target_os = "linux")]
     {
-        // effective UID 取自 /proc/self/status 的 Uid: 行（proc(5)：四列依次为
-        // real/effective/saved/filesystem，取第 2 列）；测试层不引入 libc 依赖
         let is_root = std::fs::read_to_string("/proc/self/status")
             .ok()
             .and_then(|s| s.lines().find(|l| l.starts_with("Uid:")).map(str::to_string))
@@ -394,8 +392,6 @@ fn new_swap_relocation_outcome_follows_platform_and_privilege() {
 
     #[cfg(target_os = "linux")]
     {
-        // effective UID 取自 /proc/self/status 的 Uid: 行（proc(5)：四列依次为
-        // real/effective/saved/filesystem，取第 2 列）；测试层不引入 libc 依赖
         let is_root = std::fs::read_to_string("/proc/self/status")
             .ok()
             .and_then(|s| s.lines().find(|l| l.starts_with("Uid:")).map(str::to_string))

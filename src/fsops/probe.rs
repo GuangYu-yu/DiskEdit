@@ -89,7 +89,7 @@ impl From<NumError> for FsError {
 /// 取字段值**开头**的十进制数字。回读用的行里数值后面还跟着人读注解
 /// （`Current volume size: 33554944 bytes (34 MB)`），故不能要求整段就是一个数。
 /// 数字必须止于行尾或空白——`0x…` 这类前缀不是本字段的十进制值；0 也不是可用的尺寸。
-/// 首个匹配前缀的行即该字段的唯一定义，它的值不可用就拒绝，不再到后面的行里另找一个
+/// 首个匹配前缀的行即该字段的唯一定义，它的值不可用就拒绝，不到后面的行里另找一个
 /// 能解析的值（那会把"这一个值读坏了"掩盖成"读出来了另一个数"）
 pub(crate) fn parse_num_lead(text: &str, prefix: &str) -> Result<u64, NumError> {
     for line in text.lines() {

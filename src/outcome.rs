@@ -194,6 +194,19 @@ pub(crate) fn crossed_irreversible_point() -> bool {
     RUN_FACTS.with(|f| f.target_may_be_written.get() || f.record_past_irreversible.get())
 }
 
+/// 未完成点的归责分岔：本次运行是否可能已写目标字节。
+///
+/// 写事实只在这里读一次；调用点只提供两支各自的结论，不自行判定
+/// 「写了还是没写」。已写的一支按 5（或带待办）上报，未写的一支保留
+/// 该判定点自己的拒绝 / 无修改分类
+pub(crate) fn attribute<T>(written: impl FnOnce() -> T, unwritten: impl FnOnce() -> T) -> T {
+    if crossed_irreversible_point() {
+        written()
+    } else {
+        unwritten()
+    }
+}
+
 /// 置位点在 `RecordJournal::persist` 的整份替换/创建成功之后（含目录项已改、
 /// 目录 fsync 未确认的分支）。barrier 只在记录尚未落盘时经它落盘，表区 preimage
 /// 等路径同样经它落盘；只读打开既有记录不置位。落盘成功同时说明盘上已有记录，
@@ -275,7 +288,7 @@ pub enum PartialOrigin {
     PostconditionAfterWrite,
     /// 已应用，但读回证据拿不到：不是失败，也不构成 Applied
     UnverifiedAfterWrite,
-    /// 归责点据「作业已越过不可逆写入点」把原先的 Refused/NoMutation/Internal 改判为 5
+    /// 归责点据「作业已越过不可逆写入点」把 Refused/NoMutation/Internal 改判为 5
     DerivedFromPriorWrite,
 }
 
@@ -406,11 +419,14 @@ impl RunOutcome {
         }
     }
 
-    /// 唯一归责点：按作业是否已越过不可逆写入点（[`crossed_irreversible_point`]）对齐
-    /// 结论。越过时，原先"没写"的四种结论（拒绝、无修改、内部错误、能力缺口）都不再
-    /// 成立，改判为 5 并保留原结论的正文；`Partial`/`Applied` 原样返回，来源不被改写，
-    /// 因此重复调用不会重复改写正文
-    pub(crate) fn reconcile_with_writes(self) -> Self {
+    /// 归责投影：按作业是否已越过不可逆写入点（[`crossed_irreversible_point`]）对齐
+    /// 结论。越过时，"没写"的四种结论（拒绝、无修改、内部错误、能力缺口）改判为 5
+    /// 并保留原结论的正文；`Partial`/`Applied` 原样返回，来源不被改写，
+    /// 因此重复调用不会重复改写正文。
+    ///
+    /// 私有：外部只能经 [`Self::settled`]（对齐、不打印）或 [`Self::report_final`]
+    /// （对齐 + 打印）取得归责后的结论。调用点因此只有一个，归责语义也只有这一处产生
+    fn reconcile_with_writes(self) -> Self {
         if !crossed_irreversible_point() {
             return self;
         }
@@ -443,10 +459,18 @@ impl RunOutcome {
         }
     }
 
-    /// 打印前归责：归责 → 报告 → 把归责后的结果交回调用方，
+    /// 出口归责的唯一投影：把本次运行的写事实折进结论，不打印。
+    ///
+    /// 命令层的归责出口与 `main` 的兜底都从这里取，不直接调用
+    /// [`Self::reconcile_with_writes`]——投影点只有一处
+    pub(crate) fn settled(self) -> Self {
+        self.reconcile_with_writes()
+    }
+
+    /// 打印前归责：投影 → 报告 → 把归责后的结果交回调用方，
     /// 退出码与打印出的变体因此同源
     pub(crate) fn report_final(self) -> Self {
-        let outcome = self.reconcile_with_writes();
+        let outcome = self.settled();
         outcome.report();
         outcome
     }

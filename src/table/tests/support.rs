@@ -31,6 +31,7 @@ pub(crate) fn src_from_ss(tag: &str, data: Vec<u8>, ss: u64) -> TestSource<Write
     let size = data.len() as u64;
     let src = WriteSource::unowned(FileSource {
         identity: crate::dev::TargetIdentity::resolve_image(&path),
+        block_identity: None,
         file: f,
         path,
         sector_size: ss,
@@ -86,11 +87,11 @@ pub(crate) fn write_primary_entries(src: &mut WriteSource, ss: u64, ents: &[(u64
         })
         .collect();
     let (bytes, crc) = serialize_array(&parsed, &geom);
-    src.write_at(2 * ss, &bytes).unwrap();
+    src.write_fixture(2 * ss, &bytes).unwrap();
     let file_last = src.size / ss - 1;
     let h = geo_header(34, file_last - geom.lba_span() - 1, 2);
     let sec = serialize_header(&h, crc, ss).unwrap();
-    src.write_at(ss, &sec).unwrap();
+    src.write_fixture(ss, &sec).unwrap();
 }
 
 /// 把 LBA1 主头的 HeaderSize 改成 `hdr_size` 并按新长度重算 CRC；
@@ -106,7 +107,7 @@ pub(crate) fn patch_primary_header(mut src: TestSource<WriteSource>, hdr_size: u
     sec[16..20].fill(0);
     let crc = crc32(&sec[..hdr_size as usize]);
     sec[16..20].copy_from_slice(&crc.to_le_bytes());
-    src.write_at(ss as u64, &sec).unwrap();
+    src.write_fixture(ss as u64, &sec).unwrap();
     src
 }
 
@@ -138,10 +139,10 @@ pub(crate) fn geom128(ss: u64) -> EntryArrayGeometry {
 pub(crate) fn write_raw_primary(src: &mut WriteSource, mut h: RawHeader, ss: u64) {
     let geom = EntryArrayGeometry::new(ss, h.size_of_partition_entry, h.number_of_partition_entries, MAX_ARRAY_BYTES).unwrap();
     let (bytes, crc) = serialize_array(&[], &geom);
-    src.write_at(h.partition_entry_lba * ss, &bytes).unwrap();
+    src.write_fixture(h.partition_entry_lba * ss, &bytes).unwrap();
     h.header_size = 92;
     let sec = serialize_header(&h, crc, ss).unwrap();
-    src.write_at(ss, &sec).unwrap();
+    src.write_fixture(ss, &sec).unwrap();
 }
 
 /// 直接把一份自定义几何的**备份**副本写进镜像（盘尾头 + 其自述的条目数组位置）。
@@ -149,9 +150,9 @@ pub(crate) fn write_raw_primary(src: &mut WriteSource, mut h: RawHeader, ss: u64
 pub(crate) fn write_raw_backup(src: &mut WriteSource, mut h: RawHeader, ss: u64) {
     let geom = EntryArrayGeometry::new(ss, h.size_of_partition_entry, h.number_of_partition_entries, MAX_ARRAY_BYTES).unwrap();
     let (bytes, crc) = serialize_array(&[], &geom);
-    src.write_at(h.partition_entry_lba * ss, &bytes).unwrap();
+    src.write_fixture(h.partition_entry_lba * ss, &bytes).unwrap();
     h.header_size = 92;
     let file_last = src.size / ss - 1;
     let sec = serialize_header(&h, crc, ss).unwrap();
-    src.write_at(file_last * ss, &sec).unwrap();
+    src.write_fixture(file_last * ss, &sec).unwrap();
 }

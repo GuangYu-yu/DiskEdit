@@ -122,7 +122,7 @@ pub(crate) fn apply_crash_leaves_durable_progress_in_the_record() {
     let src_off = m.first_lba * 512;
     let dst_off = m.first_lba.checked_add_signed(m.delta_lba).unwrap() * 512;
     for i in 0..blocks {
-        src.write_at(src_off + i as u64 * chunk, &vec![0x10 + i; 512]).unwrap();
+        src.write_fixture(src_off + i as u64 * chunk, &vec![0x10 + i; 512]).unwrap();
     }
     // 执行序尾→头：第 3 轮读（within = total − 3·chunk）失败时，前两块已同步并落 ckpt
     let fault = crate::dev::ReadFaultGuard::at(src_off + total - 3 * chunk);
@@ -145,7 +145,7 @@ pub(crate) fn apply_crash_leaves_durable_progress_in_the_record() {
     assert_eq!((c.disk_size, c.ss), (src.size, plan.ss));
 
     // 已完成块（within = total − chunk）的源区改写成垃圾：续跑若从 0 重来会先读它
-    src.write_at(src_off + total - chunk, &[0xEE; 512]).unwrap();
+    src.write_fixture(src_off + total - chunk, &[0xEE; 512]).unwrap();
     let resumed = ap(&mut src, &mut plan, chunk, true, &mut |_| {});
     assert!(resumed.is_complete(), "the resume must finish: {resumed:?}");
     for i in 0..blocks {
@@ -167,6 +167,67 @@ pub(crate) fn apply_crash_leaves_durable_progress_in_the_record() {
     );
     assert_eq!(g.entries[0].ending_lba + 1, g.entries[1].starting_lba, "the two entries must stay adjacent");
     // 收口由命令层做：完整结果才提交并删除记录
+    let done = crate::support::table_record_done_if_complete(&mut src, resumed);
+    assert!(done.is_complete(), "the record cleanup must not degrade the result: {done:?}");
+    assert!(!record_path.exists(), "a completed resume must release the record");
+    drop(src);
+}
+
+/// 续跑时整条已提交的条目不再重搬：上一轮已把它搬完并提交表项，记录游标停在
+/// 下一条；即便已提交条目的源区被改写，续跑也不得再读它覆盖目标区
+#[cfg(target_os = "linux")]
+#[test]
+pub(crate) fn resume_skips_an_entry_whose_table_was_committed() {
+    let (mut src, _path) = plan_fixture(&[
+        (1, [0x11; 16], 2048, 6143),
+        (2, [0x22; 16], 6144, 10239),
+        (3, [0x33; 16], 10240, 12287),
+    ]);
+    let chunk: u64 = 1024 * 1024;
+    let mut plan = make_plan(&mut src, 1).unwrap();
+    assert_eq!(plan.moves.len(), 2, "the fixture must produce two moves");
+    let record_path = attach_record(
+        &mut src,
+        crate::recovery::OpKind::Resize,
+        (2048, 6143),
+        (plan.grow_part, 2048, grow_end_for(&plan, 2048).unwrap()),
+    );
+    let first = plan.moves[0].clone();
+    let second = plan.moves[1].clone();
+    // moves 按尾→头排（`solve_layout` 的 TailPacked 对 movable 取 rev）：尾段 p3 先搬，
+    // p2 后搬。长度取自 fixture 自身，仍逐条断言
+    assert_eq!(first.len_lba, 2048, "the tail entry moves first");
+    assert_eq!(second.len_lba, 4096, "the blocker entry moves second");
+    let first_src = first.first_lba * 512;
+    let first_dst = first.first_lba.checked_add_signed(first.delta_lba).unwrap() * 512;
+    let second_src = second.first_lba * 512;
+    src.write_fixture(first_src, &vec![0x3A; chunk as usize]).unwrap();
+    src.write_fixture(second_src, &vec![0x2B; chunk as usize]).unwrap();
+
+    // 条目 1 的源区读失败：条目 0 的数据、表项与记录游标都已落盘
+    let fault = crate::dev::ReadFaultGuard::at(second_src);
+    let o = ap(&mut src, &mut plan, chunk, true, &mut |_| {});
+    assert_eq!(o.exit_code(), 5, "the read fault must leave a resumable job: {o:?}");
+    drop(fault);
+    let c = relocation_of(&src).expect("a stopped move must leave a relocation record");
+    assert_eq!(c.entry_index, 1, "entry 0 must be durably committed: {c:?}");
+    assert_eq!(c.chunks_in_entry, 0);
+
+    // 已提交条目的源区改写成垃圾：续跑若从它重来，垃圾会覆盖它的目标区
+    src.write_fixture(first_src, &vec![0xEE; chunk as usize]).unwrap();
+    let resumed = ap(&mut src, &mut plan, chunk, true, &mut |_| {});
+    assert!(resumed.is_complete(), "the resume must finish: {resumed:?}");
+    let mut got = vec![0u8; chunk as usize];
+    src.read_at(first_dst, &mut got).unwrap();
+    assert!(got.iter().all(|&b| b == 0x3A), "a committed entry must not be recopied on resume");
+    let g = table::load_gpt(&src).unwrap().unwrap();
+    let second_dst = second.first_lba.checked_add_signed(second.delta_lba).unwrap();
+    let e = &g.entries[(second.part_num - 1) as usize];
+    assert_eq!(
+        (e.starting_lba, e.ending_lba),
+        (second_dst, second_dst + second.len_lba - 1),
+        "the resumed entry must be committed at its planned position"
+    );
     let done = crate::support::table_record_done_if_complete(&mut src, resumed);
     assert!(done.is_complete(), "the record cleanup must not degrade the result: {done:?}");
     assert!(!record_path.exists(), "a completed resume must release the record");
@@ -385,7 +446,7 @@ pub(crate) fn swap_identity_label_read_failure_is_not_an_absent_label() {
     drop(src);
 }
 
-/// 32K 页格式的 swap 在本机（4K 页）认不出类型：identify 走 swapon 口径给出 "unknown"，
+/// 32K 页格式的 swap 在 4K 页内核上认不出类型：identify 走 swapon 口径给出 "unknown"，
 /// 但 swap 探测认得出它。该支不写盘，不与表项的普通分区声明对账，按内容判据产出 Swap
 /// 待办；此刻表已提交，待办以退出码 5 浮出，不能报完全成功
 #[test]
@@ -402,7 +463,7 @@ pub(crate) fn unactivatable_swap_growth_is_pending_not_silent_success() {
     // 本请求不搬移：分区内的一段字节在整轮作业里都不该被改写
     let marker = base as u64 + 4096;
     let sentinel = [0xA5u8; 512];
-    src.write_at(marker, &sentinel).unwrap();
+    src.write_fixture(marker, &sentinel).unwrap();
     assert_eq!(crate::fsid::identify(&src, base as u64, 4096 * 512).unwrap(), crate::fsid::ContentKind::Unknown);
     assert!(matches!(
         crate::fsid::probe_fs(&src, base as u64, 4096 * 512).unwrap().swap,
@@ -510,7 +571,7 @@ pub(crate) fn swap_pending_keeps_record_and_rerun_retries_the_fs_step() {
     // 旧区间哨兵：正向搬移不与目标区重叠，旧区字节在整轮作业里都不该被改写
     let marker = base as u64 + 4096;
     let sentinel = [0xA5u8; 512];
-    src.write_at(marker, &sentinel).unwrap();
+    src.write_fixture(marker, &sentinel).unwrap();
 
     // move+grow：起点 2048 → 12288，区间 8192 LBA → 12288 LBA，
     // 拷贝量取 min = 4 MiB ⇒ 4 个 chunk
@@ -595,7 +656,6 @@ pub(crate) fn leftward_move_finishes_from_the_committed_table() {
         align_given: false,
         chunk_mib: 1,
         no_fs: false,
-        yes: true,
     };
     let o = crate::cmd::layout::cmd_move(&req);
     assert_eq!(o.exit_code(), 0, "the rerun must finish the move: {o:?}");

@@ -99,15 +99,17 @@ pub(crate) fn execute(
     let target = match growable {
         Growable::Target(target) => target,
         // 预扫描按同一份结论放行过，走到这里说明判定与执行之间盘被改过。
-        // 已越过不可逆写入点：表已扩、文件系统侧没有可写的动作——用与命令级收尾同一份分类
-        // 交出一条待办；未越过：仍是"本步没有可做的事"，按拒绝上报
+        // 判据：表已扩（越过不可逆写入点）时，这条事实只能作为待办交出；
+        // 未越过的仍是"本步没有可做的事"，按拒绝上报
         other => {
-            if crate::outcome::crossed_irreversible_point() {
-                let p = crate::movepart::grow_post(step.part, &other);
+            return crate::outcome::attribute(
+                || Ok(crate::movepart::grow_post(step.part, &other)),
+                || Err(RunOutcome::refused(no_target_reason(step.part, &other))),
+            )
+            .map(|p| {
                 sink.note(&p.log);
-                return Ok(p.pending);
-            }
-            return Err(RunOutcome::refused(no_target_reason(step.part, &other)));
+                p.pending
+            });
         }
     };
     // 补救文案的两份材料在写句柄借用之前取好：`resize_fs` 需要 `&mut`，闭包持有 `&src`

@@ -142,7 +142,7 @@ impl ValueDomain {
     }
 }
 
-/// 值域解析后的类型化取值。builder 只从这些变体取字段，不再看原始文本。
+/// 值域解析后的类型化取值。builder 只从这些变体取字段，不看原始文本。
 #[derive(Debug)]
 enum Parsed {
     Text(String),
@@ -928,7 +928,6 @@ pub(crate) struct ResizeRequest {
     pub(crate) no_fs: bool,
     pub(crate) grow_lv: bool,
     pub(crate) lv: Option<String>,
-    pub(crate) yes: bool,
     pub(crate) allow_move: bool,
     pub(crate) chunk_mib: u64,
     /// `--chunk` 是否被显式给出：给在无搬移能力的路径上是用法拒绝，缺省值不算“给了”
@@ -944,7 +943,6 @@ pub(crate) struct MoveRequest {
     pub(crate) align_given: bool,
     pub(crate) chunk_mib: u64,
     pub(crate) no_fs: bool,
-    pub(crate) yes: bool,
 }
 
 pub(crate) struct CopyRequest {
@@ -957,7 +955,6 @@ pub(crate) struct CopyRequest {
     pub(crate) chunk_mib: u64,
     pub(crate) name: Option<String>,
     pub(crate) keep_partuuid: bool,
-    pub(crate) yes: bool,
 }
 
 pub(crate) struct DeleteRequest {
@@ -1048,7 +1045,6 @@ pub(crate) struct ResizePartRequest {
     pub(crate) end: Option<u64>,
     pub(crate) grow_to_end: bool,
     pub(crate) align: Align,
-    pub(crate) yes: bool,
 }
 
 pub(crate) enum Request {
@@ -1326,7 +1322,6 @@ fn build_resize(p: &Positionals, o: Options) -> Request {
         no_fs: o.no_fs,
         grow_lv: o.grow_lv,
         lv: o.lv,
-        yes: o.yes,
         allow_move: o.allow_move,
         chunk_mib: o.chunk_mib,
         chunk_given: o.chunk_given,
@@ -1350,7 +1345,6 @@ fn build_move(p: &Positionals, o: Options) -> Request {
         align_given: o.align_given,
         chunk_mib: o.chunk_mib,
         no_fs: o.no_fs,
-        yes: o.yes,
     })
 }
 
@@ -1372,7 +1366,6 @@ fn build_copy(p: &Positionals, o: Options) -> Request {
         chunk_mib: o.chunk_mib,
         name: o.name,
         keep_partuuid: o.keep_partuuid,
-        yes: o.yes,
     })
 }
 
@@ -1516,7 +1509,6 @@ fn build_resize_part(p: &Positionals, o: Options) -> Request {
         end: o.end,
         grow_to_end: o.grow_to_end,
         align: o.align,
-        yes: o.yes,
     })
 }
 

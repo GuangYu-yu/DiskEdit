@@ -6,8 +6,8 @@
 //!
 //! [`ValidatedGeometry`] 是"写操作的唯一入口事实"：它只由解析结果 + 修复动作构造，
 //! 携带**修复完成后将成立**的几何（见 `new` 的 `post_repair_last_usable`）。写入路径只准
-//! 消费它；`info` 一类诊断路径继续读 `table::RawGpt`——那是有意的能力保留：
-//! 本工具拒绝在坏几何上继续操作，但必须能告诉用户哪里坏了。
+//! 消费它；`info` 一类诊断路径继续读 `table::RawGpt`：写入路径在坏几何上被拒绝，
+//! 诊断路径仍要告诉用户哪里坏了。
 
 use crate::table::{EntryArrayGeometry, GptContent, GptState, MAX_ARRAY_BYTES, RawGpt, RawHeader};
 use crate::outcome::RunOutcome;

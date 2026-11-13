@@ -14,11 +14,10 @@ use crate::dev; // 只有测试夹具 src_from 用得到
 
 /// 规划/执行失败的出口：先按本次写事实归责，报告文字与退出码都取自 outcome
 /// （唯一措辞与唯一映射），调用点不得自行拼装。**本模块不提供"带裸退出码的退出"**——
-/// 那会绕开 RunOutcome::report 的措辞与 exit_code 的映射，正是 10/20/30 语义分裂的入口
+/// 那会绕开 RunOutcome::report 的措辞与 exit_code 的映射
 pub(crate) fn bail_fail(f: crate::outcome::RunOutcome) -> ! {
-    // 报告文字与退出码都取自 outcome，不借 `finish`——那是"结束一次操作"的入口，
-    // 而这里没有任何要收尾的 pending
-    let f = f.reconcile_with_writes();
+    // 报告文字与退出码都取自 outcome；这里没有要收尾的 pending
+    let f = f.settled();
     f.report();
     std::process::exit(f.exit_code() as i32);
 }
@@ -166,7 +165,7 @@ pub(crate) fn parse_os_type(s: &str) -> Option<u8> {
 // 这里只给命令层惯用的入口名，并把"哪一类命令可以接着做未完成的作业"这一条规则写成闭包
 
 /// 表类写命令（`new` / `add` / `delete` / `copy` / `set` / `mkfs`）的打开：写路径挂
-/// 单文件恢复记录，不建旧 journal
+/// 单文件恢复记录
 pub(crate) fn open_table_record(
     a: &impl TargetRequest,
     op: crate::recovery::OpKind,
@@ -568,6 +567,7 @@ pub(crate) fn src_from(tag: &str, data: &[u8]) -> crate::testdir::TestSource<Wri
     let fingerprint = dev::TargetFingerprint::from_file(&f).unwrap();
     let src = WriteSource::unowned(FileSource {
         identity: dev::TargetIdentity::resolve_image(&path),
+        block_identity: None,
         file: f,
         path,
         sector_size: 512,

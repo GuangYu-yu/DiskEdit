@@ -1,7 +1,6 @@
 //! 帮助来自同一张命令表，入口一致，且不出现柱面几何。
 use std::process::Command;
 
-/// 每条命令按词拆开：`records list` 这类双词命令的每个词都是一个参数
 const COMMANDS: &[&[&str]] = &[
     &["info"],
     &["inspect"],
@@ -43,8 +42,6 @@ fn usage_lists_every_command(text: &str) {
     }
 }
 
-/// 每条命令都有详助，首行自报命令名；`help CMD`、`CMD --help`、`CMD -h`、`--help CMD`
-/// 四个入口都要给出同一份文本
 #[test]
 fn every_command_has_detail_help_naming_itself() {
     for cmd in COMMANDS {
@@ -75,7 +72,6 @@ fn every_command_has_detail_help_naming_itself() {
     }
 }
 
-/// 顶层用法把全部命令列出来；主动请求帮助退 0，不写命令退 2 且原因在 stderr
 #[test]
 fn top_level_usage_lists_every_command() {
     let (code, out, err) = run(&["help"]);
@@ -94,7 +90,6 @@ fn top_level_usage_lists_every_command() {
     usage_lists_every_command(&e);
 }
 
-/// 帮助里不出现柱面对齐或 CHS 几何
 #[test]
 fn help_output_has_no_cylinder_geometry() {
     let mut all = run(&["help"]).1;
@@ -108,7 +103,6 @@ fn help_output_has_no_cylinder_geometry() {
     assert!(!lower.contains("chs"), "help still advertises CHS geometry");
 }
 
-/// 未知帮助主题走顶层用法，退 2
 #[test]
 fn unknown_help_topic_is_a_usage_error() {
     let (code, _, err) = run(&["help", "frobnicate"]);

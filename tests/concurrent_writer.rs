@@ -41,7 +41,6 @@ fn new_gpt(image: &Path) {
 
 #[test]
 fn an_external_rewrite_is_visible_to_the_next_read() {
-    // 每次读取按当前字节判定，不沿用上一条命令的视图。
     let dir = temp_dir("rewrite");
     let image = image_with(&dir, 16 * 1024 * 1024);
     new_gpt(&image);
@@ -62,7 +61,6 @@ fn an_external_rewrite_is_visible_to_the_next_read() {
 
 #[test]
 fn an_external_truncation_is_visible_to_the_next_read() {
-    // 尺寸按打开时的当前值判定；表几何越界时读取直接拒绝(3)，不沿用旧尺寸。
     let dir = temp_dir("truncate");
     let image = image_with(&dir, 16 * 1024 * 1024);
     new_gpt(&image);
@@ -81,7 +79,6 @@ fn an_external_truncation_is_visible_to_the_next_read() {
 
 #[test]
 fn an_external_lock_blocks_writers_but_not_readers() {
-    // 目标锁是 flock。持有者存在时写命令落 4 且不写盘；读命令照常。
     let dir = temp_dir("lock");
     let image = image_with(&dir, 16 * 1024 * 1024);
     new_gpt(&image);
@@ -111,7 +108,6 @@ fn an_external_lock_blocks_writers_but_not_readers() {
 
 #[test]
 fn bytes_outside_the_table_survive_a_table_change() {
-    // 写命令只落表结构区；外部写在分区数据区的字节保持原样。
     let dir = temp_dir("scope");
     let image = image_with(&dir, 16 * 1024 * 1024);
     new_gpt(&image);

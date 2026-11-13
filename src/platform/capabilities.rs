@@ -65,7 +65,7 @@ impl CapabilityId {
 }
 
 /// 一项能力的结论。`DesignLimit` 与 `Unsupported` 分开记录：前者是这个平台
-/// 没有等价原语，后者是尚未提供；两者在写路径上都不放行
+/// 没有等价原语，后者是本项目未提供该原语；两者在写路径上都不放行
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CapabilityState {
     Supported,
@@ -107,8 +107,8 @@ impl HostPlatform {
     }
 
     /// 本平台真正能打开的载体形态。与 `probe::open_read_only` 的编译分支一一对应：
-    /// 只有 Linux 有块设备分支，其余平台一律把目标当普通文件（镜像）打开；非 Linux 的
-    /// `block_probe` 直接返回 `Unsupported`。
+    /// 只有 Linux 有块设备分支，其余平台一律把目标当普通文件（镜像）打开；矩阵里非
+    /// Linux 的块设备形态为 `Unsupported`。
     ///
     /// 能力门只查这些形态：本平台打不开的形态不参与判定，否则块设备列会挡住只读镜像命令。
     pub(crate) const fn openable_media(self) -> &'static [MediaKind] {
@@ -196,7 +196,7 @@ fn design_state(platform: HostPlatform, media: MediaKind, id: CapabilityId) -> C
 
     match id {
         // 只读与稳定身份：镜像在所有平台都能按路径打开并取文件身份；块设备只有 Linux
-        // 能从 sysfs 取设备号与稳定 ID（非 Linux 的 block_probe 直接 Unsupported）
+        // 能从 sysfs 取设备号与稳定 ID（非 Linux 的块设备形态在矩阵里为 Unsupported）
         CapabilityId::ReadTarget | CapabilityId::StableIdentity => match (platform, media) {
             (_, MediaKind::Image) => Supported,
             (Linux, MediaKind::Block) => Supported,
@@ -296,8 +296,8 @@ mod tests {
         assert_eq!(win_image.state(DirPersist), CapabilityState::DesignLimit);
         assert_eq!(win_block.state(DirPersist), CapabilityState::DesignLimit);
 
-        // 只读与身份：镜像六列里三列都支持；块设备只有 Linux 支持，
-        // 与 probe.rs 的 block_probe 非 Linux 分支一致
+        // 只读与身份：镜像在三个平台上都支持；块设备只有 Linux 支持，
+        // 与 probe.rs 非 Linux 平台没有块设备分支一致
         for platform in [HostPlatform::Linux, HostPlatform::Windows, HostPlatform::Other] {
             let image = snapshot(platform, MediaKind::Image);
             assert_eq!(image.state(ReadTarget), CapabilityState::Supported, "{platform:?}/image");
@@ -317,7 +317,7 @@ mod tests {
         assert_eq!(HostPlatform::Linux.openable_media(), &[MediaKind::Block, MediaKind::Image]);
         assert_eq!(HostPlatform::Windows.openable_media(), &[MediaKind::Image]);
         assert_eq!(HostPlatform::Other.openable_media(), &[MediaKind::Image]);
-        // 每个本平台可打开的形态上，只读原语都必须真的支持；六个组合逐一核过
+        // 每个本平台可打开的形态上，只读原语都必须真的支持；六个组合逐一覆盖
         for (platform, media) in SHAPES {
             let expected = matches!(
                 (platform, media),
@@ -353,7 +353,7 @@ mod tests {
         );
     }
 
-    /// 构建平台与矩阵的平台轴一致（Windows 测试机读到 Windows）
+    /// 构建平台与矩阵的平台轴一致
     #[test]
     fn host_platform_matches_the_build_target() {
         let expected = if cfg!(target_os = "linux") {

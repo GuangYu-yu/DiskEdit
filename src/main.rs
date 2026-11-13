@@ -50,8 +50,7 @@ fn main() -> ExitCode {
     match std::panic::catch_unwind(run) {
         Ok(code) => ExitCode::from(code),
         Err(_) => {
-            let outcome = crate::outcome::RunOutcome::internal("the process panicked")
-                .reconcile_with_writes();
+            let outcome = crate::outcome::RunOutcome::internal("the process panicked").settled();
             if matches!(outcome, crate::outcome::RunOutcome::Partial { .. }) {
                 outcome.report();
                 ExitCode::from(EXIT_PARTIAL)
@@ -88,7 +87,7 @@ fn run() -> u8 {
     // 返回结果同样要归责：命令内部的错误出口已在各自打印前归责（bail_fail /
     // report_final），这里兜住直接带着旧结论回到 main 的路径，改判时补一次呈现
     let before = result.code();
-    result = result.reconcile_with_writes();
+    result = result.settled();
     if result.code() != before
         && let cmd::CmdResult::RunOutcome(o) = &result
     {

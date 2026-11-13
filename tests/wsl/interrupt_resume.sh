@@ -4,11 +4,8 @@
 source "$(dirname "$0")/lib.sh"
 require_fault_bin
 
-img T resume13.img
 img T2 resume13b.img
 
-# resize grow（a 扩 100M、b 后移打包，chunk 1MiB，共 400 块）：在第 N 块落盘后中断，
-# 重跑必须续传且 b 数据逐字节一致
 run_shift_break() {
   local n=$1 fault=${2:-chunk} expect=${3:-$1} md_before md_after OUT LD R
   rm -rf "$T2" "$T2"$SIDECAR_GLOB
@@ -48,9 +45,9 @@ run_shift_break() {
 }
 
 for n in 1 200 399; do run_shift_break "$n"; echo; done
-# 搬移路径的同一交界面：第 200 块已同步、checkpoint 尚未写入时中断，续跑从 199 开始
 run_shift_break 200 after-data-sync 199; echo
 
-sgdisk -v "$T" | tail -2
-sgdisk -v "$T2" | tail -2
+SG_OUT=$(sgdisk -v "$T2" 2>&1); SG_RC=$?
+printf '%s\n' "$SG_OUT" | tail -2
+[ "$SG_RC" -eq 0 ] || { echo "  BAD  sgdisk -v $T2 失败 (exit=$SG_RC)"; rc=1; }
 exit $rc

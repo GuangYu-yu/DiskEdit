@@ -185,7 +185,7 @@ pub(crate) fn state_dir() -> PathBuf {
 /// 镜像以 canonicalize 后的 realpath 为身份（Linux；loop 设备的 backing 侧用同一规则，
 /// 两种目标表示由此收敛），realpath 取不到（cleanup 路径上文件已删）退到字面路径；
 /// 非 Linux 无 loop、不 canonicalize（Windows 上 canonicalize 产生 `\\?\` verbatim
-/// 路径，v1 不引入这套语义）。块设备以设备层拓扑键为身份；loop 设备例外——身份是
+/// 路径）。块设备以设备层拓扑键为身份；loop 设备例外——身份是
 /// backing 文件本身，现场落镜像兄弟文件。
 ///
 /// 现场落点由身份派生：journal 与 checkpoint 各一个（写入位置，也是唯一查找位置）。
@@ -212,7 +212,7 @@ pub struct TargetIdentity {
     pub(crate) lock: PathBuf,
     /// loop 目标的指纹：由 [`Self::loop_backed`] 在核对"backing 对象仍是句柄打开的那一个"
     /// 之后**从已打开的 backing 句柄**取得。打开数据文件的路径上取指纹的调用点直接用它，
-    /// 不再按 backing 名字二次 stat——名字在两次取用之间可能已指向另一个文件。
+    /// 不按 backing 名字二次 stat——名字在两次取用之间可能已指向另一个文件。
     /// 读点只在 Linux 的 `block_open_extras`（`dev/source.rs`）；其余平台身份恒按镜像解析，
     /// 该字段恒为 `None` 且无人读取
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
@@ -236,7 +236,7 @@ pub(crate) enum TargetKind {
 /// `dm/name` 是 DM 自己的退路（映射名，改名即变），不是全局物理身份，故只排在
 /// `dm/uuid` 之后；`wwid` 及其后的条目才是跨设备类型通用的那几层。
 /// `loop/backing_file` 不在列：loop 设备在进入本链之前就走专用的 backing 身份解析
-/// （见 [`TargetIdentity::resolve_block`]），不再以属性值充当设备 ID
+/// （见 [`TargetIdentity::resolve_block`]），不以属性值充当设备 ID
 #[cfg(target_os = "linux")]
 pub(crate) const DEVICE_ID_ATTRS: &[&str] = &["dm/uuid", "dm/name", "md/uuid", "wwid", "device/wwid", "device/serial"];
 
@@ -465,13 +465,14 @@ impl TargetIdentity {
     /// 路径），其余平台字面路径。realpath 只收敛符号链接与路径写法：**硬链接不收敛**
     /// （两个名字指向同一 inode，realpath 各给各的），因此同一镜像的两条硬链接路径各
     /// 派生一份 journal / checkpoint——在一处写下的现场，另一处看不见。别名路径上的
-    /// 并发写入在 unix 上由数据文件自身的 inode 级第二道锁收敛（见 `image_data_path`），
+    /// 并发写入在 unix 上由数据文件自身的 inode 级第二道锁收敛（见 `targetlock`），
     /// 其余平台只剩锁文件这一道
     pub(crate) fn resolve_image(path: &Path) -> Self {
+        // 路径采样的不可失败入口：采样实现只有 `FileSource::sample_image` 一处
         #[cfg(target_os = "linux")]
         {
-            let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-            Self::image_at(&canonical, path)
+            crate::dev::FileSource::sample_image(path, None)
+                .unwrap_or_else(|_| Self::image_at(path, path))
         }
         #[cfg(not(target_os = "linux"))]
         Self::image_at(path, path)
@@ -509,7 +510,7 @@ impl TargetIdentity {
                 raw.display()
             ));
         }
-        let mut id = crate::dev::FileSource::identity_of_opened_image(&raw, &file, &meta).map_err(|e| {
+        let mut id = crate::dev::FileSource::sample_image(&raw, Some((&file, &meta))).map_err(|e| {
             format!("cannot bind the recovery state of {} to its backing file: {e}", dev_path.display())
         })?;
         // sysfs 串只说明"内核认为这个名字是 backing"，而名字可能已被另一个文件复用。
@@ -539,7 +540,7 @@ impl TargetIdentity {
                 ));
             }
         }
-        // 指纹取自刚核对过的那一个 backing 对象（句柄的元数据），打开数据文件的路径不再按
+        // 指纹取自刚核对过的那一个 backing 对象（句柄的元数据），打开数据文件的路径不按
         // 名字二次 stat
         id.backing_fp = Some(TargetFingerprint::from_meta(&meta));
         Ok(id)
@@ -551,7 +552,7 @@ impl TargetIdentity {
     /// 必须落在同一个序列化域。
     ///
     /// loop 设备走专用解析：`loop/backing_file` 属性在 ⇒ 身份是 backing 文件（见
-    /// [`Self::loop_backed`]），不再以属性值充当设备 ID。读失败原样上抛；属性不存在
+    /// [`Self::loop_backed`]），不以属性值充当设备 ID。读失败原样上抛；属性不存在
     /// （含空值）按非 loop 走拓扑链
     ///
     /// 不接收容量：容量不参与身份（分区扩容会改变自己的容量，父设备容量不受影响，
@@ -624,8 +625,8 @@ impl TargetIdentity {
     /// 镜像回退时前者得救、后者空跑——报"nothing to abandon"而不是按错身份删现场。
     /// 拓扑解析得出但解析失败的块设备仍返回 None（保守方向：宁可漏清，也不按错身份删现场）。
     /// loop 设备的身份绑定 backing 对象：backing 打不开或已不是普通文件时
-    /// [`Self::loop_backed`] 返回 Err，这里随之返回 None——它留在原落点上的现场不再可达，
-    /// 因为定位它所需的身份在 backing 消失后已经无法从对象本身得出
+    /// [`Self::loop_backed`] 返回 Err，这里随之返回 None——它留在原落点上的现场无从定位，
+    /// 因为定位它所需的身份在 backing 消失后无法从对象本身得出
     pub(crate) fn resolve_for_cleanup(path: &Path) -> Option<Self> {
         #[cfg(target_os = "linux")]
         {

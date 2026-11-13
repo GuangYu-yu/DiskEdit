@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # 全命令冒烟：每一步都断言退出码。
-# 契约见 src/outcome.rs：0 完成 / 2 参数或命令语法错误 / 3 拒绝（未写盘，请求与现状不匹配）/
-# 4 未写盘的环境故障 / 5 部分完成 / 6 平台或能力不支持
+# 退出码契约：0 完成 / 2 参数错误 / 3 拒绝（未写盘）/ 4 环境故障 / 5 部分完成 / 6 能力不支持
 source "$(dirname "$0")/lib.sh"
 require_bin
 
@@ -33,7 +32,7 @@ echo "== set name =="
 $B set --yes "$T":2 name renamed2; exp "$?" 0 "set name"
 
 echo "== resize grow +8M =="
-# p2 这时还没有 FS（下面的 mkfs 才建）：扩分区表要显式 --no-fs，否则写表之前就拒绝
+# p2 还没有 FS，扩分区表要显式 --no-fs
 $B resize --yes "$T":2 +8M --no-fs; exp "$?" 0 "resize +8M"
 
 echo "== info（p2 应已到 67584..116735）=="
@@ -51,8 +50,7 @@ $B check "$T":2; exp "$?" 0 "check p2"
 echo "== set label =="
 $B set --yes "$T":2 label mydata; exp "$?" 0 "set label"
 
-echo "== resize shrink -4M（resize-part 一条命令：先离线缩 FS，再收表）=="
-# p2 现为 67584..116735（24MiB），缩到 20MiB ⇒ last_lba = 67584+40960-1 = 108543
+echo "== resize shrink -4M（resize-part 先离线缩 FS，再收表）=="
 $B resize-part --yes "$T":2 --end 108543; exp "$?" 0 "resize-part 缩到 20M"
 
 echo "== move p2 =="

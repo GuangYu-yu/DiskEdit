@@ -134,7 +134,7 @@ impl AssembledTableStep {
 
 /// 计划期写前快照：按 [`TableContent`] 推出比对区间并一次读定。调用点必须在读出表内容
 /// 之后立刻调用它，随后把快照交给 [`assemble_table_step`]/[`confirmed_table_step`]——
-/// 装配层不再读盘，写前摘要就是这份快照里的 `stamp`。
+/// 装配层不读盘，写前摘要就是这份快照里的 `stamp`。
 pub(crate) fn take_table_snapshot(
     src: &FileSource,
     content: &TableContent<'_>,
@@ -369,7 +369,7 @@ pub(crate) fn assemble_fs_set(
 }
 
 /// UUID 请求 → 载荷：`Generate` 只留给只能自生成的 FS（ntfs）；其余目标按具体值写入，
-/// 包括 `--random` 在这里解析出的新文本。请求与能力的匹配已由命令层判定，这里不再拒绝
+/// 包括 `--random` 在这里解析出的新文本。请求与能力的匹配已由命令层判定，这里不做拒绝
 fn uuid_value(
     fstype: Option<ContentKind>,
     request: crate::fsops::UuidRequest,
@@ -595,7 +595,7 @@ pub(crate) fn assemble_set_gpt_type(
 }
 
 /// `set flag` 的 GPT 表步骤：`esp off` 的回退落点在装配期读盘识别 FS（只读），结论作为
-/// 参数交给内容变更，步骤里不再读盘
+/// 参数交给内容变更，步骤里不读盘
 pub(crate) fn assemble_set_gpt_flag(
     src: &FileSource,
     part: u32,
@@ -780,8 +780,8 @@ fn assemble_move_steps(
     })
 }
 
-/// 目的区间末端越过 `last_usable_lba`。没有恢复记录即规划期拒绝；有记录时看作业是否已越过
-/// 不可逆写入点（[`crate::outcome::crossed_irreversible_point`]）：已越过即 5，否则 4
+/// 目的区间末端越过 `last_usable_lba`。没有恢复记录即规划期拒绝；有记录时由写事实
+/// 分流（[`crate::outcome::attribute`]）：已越过不可逆写入点即 5，否则 4
 fn destination_past_usable_end(
     src: &FileSource,
     part: u32,
@@ -795,15 +795,18 @@ fn destination_past_usable_end(
     if src.record_journal.is_none() {
         return RunOutcome::refused(format!("{detail} — refusing"));
     }
-    if crate::outcome::crossed_irreversible_point() {
-        RunOutcome::partial(format!(
-            "{detail} — the job may already have written the target; inspect it and use `diskedit undo` before retrying"
-        ))
-    } else {
-        RunOutcome::no_mutation(format!(
-            "{detail} — this run has not written the target; the recovery record can be abandoned"
-        ))
-    }
+    crate::outcome::attribute(
+        || {
+            RunOutcome::partial(format!(
+                "{detail} — the job may already have written the target; inspect it and use `diskedit undo` before retrying"
+            ))
+        },
+        || {
+            RunOutcome::no_mutation(format!(
+                "{detail} — this run has not written the target; the recovery record can be abandoned"
+            ))
+        },
+    )
 }
 
 /// 按当前几何装配一个表步骤，并把表戳链接上下一个。调用方保证几何刚被推进过

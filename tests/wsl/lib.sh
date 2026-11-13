@@ -39,7 +39,7 @@ BFK=$_bin_dir/DiskEdit-fake
 BFKO=$_bin_dir/DiskEdit-fakeonly
 
 # ---- 残留的唯一根 ----
-# 带 PID：并行跑两套回归互不踩；退出整根删除，残留严格为零。
+# 带 PID，并行跑互不踩；退出整根删除。
 WSL_ROOT=${DISKEDIT_WSL_ROOT:-/var/tmp/diskedit-wsl.$$}
 mkdir -p "$WSL_ROOT" 2>/dev/null || { echo "cannot create WSL_ROOT=$WSL_ROOT" >&2; exit 1; }
 TEST_MNT=$WSL_ROOT/mnt/testmnt
@@ -47,10 +47,9 @@ TEST_MNT=$WSL_ROOT/mnt/testmnt
 use_default_state_dir() { export DISKEDIT_STATE_DIR=/var/lib/diskedit; }
 export DISKEDIT_STATE_DIR=$WSL_ROOT/state
 
-# img <变量名> <name>：把根下产物路径赋给指定变量并登记清理。所有落盘文件都
-# 从这里取路径，不得直接写 /var/tmp、/tmp 或仓库目录。按变量名赋值而不是命令
-# 替换回显——`T=$(img x)` 会让登记发生在子 shell 里，父 shell 收不到，loop 反查
-# 就会漏（与 lo_attach 的注释同一坑）
+# img <变量名> <name>：把根下产物路径赋给指定变量并登记清理。不得直接写 /var/tmp、
+# /tmp 或仓库目录。必须按变量名赋值，不能 T=$(img x)——命令替换在子 shell 里，
+# 父 shell 收不到登记，loop 反查会漏
 img() {
     local __var=$1
     local p=$WSL_ROOT/$2
@@ -205,9 +204,9 @@ lo_attach() {
     printf '%s\n' "$dev"
 }
 
-# 等待分区设备节点就绪：losetup -P 的分区扫描是异步的，节点可能在 attach
+# 等待分区设备节点就绪：losetup -P 分区扫描是异步的，节点可能在 attach
 # 返回后短暂不可读；attach 后立即访问分区设备的调用点必须先过这一关。
-# 前半程只等，后半程重触发读表并补一次 udev 收尾——runner 上 udev 迟到是常态
+# 超时后半程重触发读表并补 udev 收尾
 lo_waitpart() {
     local dev=$1
     for _ in {1..100}; do

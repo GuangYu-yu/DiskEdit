@@ -30,8 +30,9 @@ fn the_cursor_is_global_across_entries_and_steps() {
         "let mut recomputed = 0u64",
         "recomputed.checked_add(count)",
         "state.transfer_cursor = state.transfer_cursor.max(recomputed)",
-        "state.entry_index += 1",
-        "state.chunks_in_entry = 0",
+        "state.advance_entry()",
+        "self.entry_index += 1",
+        "self.chunks_in_entry = 0",
     ] {
         assert!(
             executor.contains(marker),
@@ -53,8 +54,13 @@ fn self_overlap_is_detected_from_the_shift() {
     );
     let relocate = source("execution/relocate.rs");
     assert!(
-        relocate.contains("move_chunk_layout(sectors, sector_size, shift, sectors, chunk_bytes)"),
-        "execution must reuse the planner's chunk layout, not derive a second one"
+        !relocate.contains("move_chunk_layout("),
+        "the relocate step must consume the planned layout, not derive a second one"
+    );
+    let executor = source("execution/mod.rs");
+    assert!(
+        executor.contains("move_chunk_layout(*sectors, sector_size, shift, *sectors, requested)"),
+        "the plan executor must be the one place that derives the chunk layout"
     );
     assert!(
         relocate.contains("relocation_overlaps(shift, sectors)"),

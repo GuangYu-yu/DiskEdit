@@ -1,5 +1,4 @@
 pub(crate) mod abandon;
-pub(crate) mod confirm;
 pub(crate) mod fs;
 pub(crate) mod info;
 pub(crate) mod inspect;
@@ -51,9 +50,9 @@ impl CmdResult {
     }
 
     /// 出口归责：返回结果同样要按本次写事实对齐；只带退出码的命令没有可改判的形态
-    pub(crate) fn reconcile_with_writes(self) -> Self {
+    pub(crate) fn settled(self) -> Self {
         match self {
-            Self::RunOutcome(o) => Self::RunOutcome(o.reconcile_with_writes()),
+            Self::RunOutcome(o) => Self::RunOutcome(o.settled()),
             Self::Code(code) => Self::Code(code),
         }
     }
@@ -217,9 +216,8 @@ pub(crate) fn dispatch(def: &CommandDef, req: &Request) -> CmdResult {
 mod tests {
     use super::*;
 
-    /// 每条命令与撤销窗口的关系都是逐条裁定过的：这里把结论钉住——
-    /// 表中漏一条（新命令随手选了个 mode）与改了 mode 同样报错：
-    /// 错了的代价是静默留下一个撤销窗口，或静默抹掉别人的撤销窗口
+    /// 命令表与撤销窗口模式的关系在此固定：表中漏一条，或改了某条的模式，都会失败。
+    /// 漏写的代价是静默留下一个撤销窗口，或静默抹掉别人的撤销窗口
     #[test]
     fn journal_modes_are_as_reviewed() {
         use TargetMode::{ReadOnly, WriteJournal, WriteNoJournal};
@@ -257,8 +255,8 @@ mod tests {
         }
     }
 
-    /// 每条命令的副作用能力都是逐条裁定过的：表中漏一条（新命令没写 capabilities）
-    /// 与改了能力同样报错。空声明由 `capability_gate_is_fail_closed` 单独拒绝
+    /// 每条命令的副作用能力在此固定：表中漏一条与改了能力同样报错。
+    /// 空声明由 `capability_gate_admits_only_what_the_platform_can_open` 断言
     #[test]
     fn capabilities_are_as_reviewed() {
         use Capability::{CompanionFile, DeviceState, ExternalTool, ReadOnly, TargetData};
@@ -327,7 +325,7 @@ mod tests {
     }
 
     /// 能力门必须真的读矩阵：快照给「不支持」时判定命中，而不是照常执行。
-    /// 今天的 Linux 设计矩阵全绿，这种组合只能取非 Linux 的矩阵单元
+    /// Linux 的设计矩阵全绿，这种组合只能取非 Linux 的矩阵单元
     #[test]
     fn an_unsupported_primitive_is_a_gap() {
         use crate::domain::MediaKind;

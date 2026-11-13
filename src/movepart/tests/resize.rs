@@ -1,6 +1,7 @@
 #![allow(clippy::let_underscore_must_use)] // 测试的清理步骤有意忽略失败
 use super::*;
 use super::support::*;
+use crate::execution::{fix_ntfs_hidden_sectors, ntfs_hidden_value};
 #[cfg(target_os = "linux")]
 use gptman::{GPT, GPTPartitionEntry};
 #[cfg(target_os = "linux")]
@@ -18,7 +19,7 @@ pub(crate) fn ntfs_hidden_sectors_fix() {
     // 写入前复核引导扇区签名：目标扇区先垫一个最小 NTFS 引导扇区
     let mut boot = vec![0u8; 512];
     boot[3..11].copy_from_slice(b"NTFS    ");
-    src.write_at(30687 * 512, &boot).unwrap();
+    src.write_fixture(30687 * 512, &boot).unwrap();
     let mut log = |_: &str| {};
     fix_ntfs_hidden_sectors(&mut src, 30687, 512, 1, &mut log).unwrap();
     let mut b = [0u8; 4];
@@ -57,7 +58,7 @@ pub(crate) fn resize_part_resume_skips_done_chunks() {
     // 每块填不同指纹
     let mut w = |off: u64, b: u8| {
         let buf = vec![b; chunk as usize];
-        src.write_at(off, &buf).unwrap();
+        src.write_fixture(off, &buf).unwrap();
     };
     w(src_off, 0x10);
     w(src_off + chunk, 0x11);
@@ -67,9 +68,9 @@ pub(crate) fn resize_part_resume_skips_done_chunks() {
     // 手工复制尾块到目标
     let mut last = vec![0u8; chunk as usize];
     src.read_at(src_off + 3 * chunk, &mut last).unwrap();
-    src.write_at(dst_off + 3 * chunk, &last).unwrap();
+    src.write_fixture(dst_off + 3 * chunk, &last).unwrap();
     // 污染源尾块首字节：若续传错误重搬 chunk 3，目标尾块会变 0xEE
-    src.write_at(src_off + 3 * chunk, &[0xEEu8]).unwrap();
+    src.write_fixture(src_off + 3 * chunk, &[0xEEu8]).unwrap();
 
     // 预置记录：已同步落盘 1 块。本请求的新区间与下面的 rsize 入参同值，
     // 摘要按生产的取法绑定（操作取记录自己的，扇区与盘大小取目标现场）
@@ -128,7 +129,7 @@ pub(crate) fn resize_crash_records_durable_progress() {
     let src_off = 2048u64 * 512;
     let dst_off = 4096u64 * 512;
     for i in 0..4u8 {
-        src.write_at(src_off + i as u64 * chunk, &vec![0x10 + i; 512]).unwrap();
+        src.write_fixture(src_off + i as u64 * chunk, &vec![0x10 + i; 512]).unwrap();
     }
     // 本请求的新区间与下面的 rsize 入参同值；摘要按生产的取法在首次落盘前绑定
     let (new_start, new_end) = (4096u64, 12287u64);
@@ -167,7 +168,7 @@ pub(crate) fn resize_crash_records_durable_progress() {
     assert_eq!(progress.transfer_cursor, 1, "只有已同步落盘的 chunk 可以进入 durable 边界");
 
     // 已完成块（within = 3 MiB）的源区改写成垃圾：续跑若从 0 重来会把它带回目标区
-    src.write_at(src_off + 3 * chunk, &[0xEE; 512]).unwrap();
+    src.write_fixture(src_off + 3 * chunk, &[0xEE; 512]).unwrap();
     let resumed = rsize(&mut src, 1, new_start, new_end, chunk, true, &mut |_| {});
     assert!(resumed.is_complete(), "the resume must finish the move: {}", resumed.exit_code());
     for i in 0..4u8 {
@@ -197,7 +198,7 @@ fn committed_record_fixture(part: u32, op: crate::recovery::OpKind, old: (u64, u
     let mut label = [0u8; 32];
     label[..8].copy_from_slice(b"LABELONE");
     label[24..32].copy_from_slice(b"LVM2 001");
-    src.write_at(new.0 * ss + 512, &label).unwrap();
+    src.write_fixture(new.0 * ss + 512, &label).unwrap();
 
     let record_path = src.identity.record_path().expect("image targets have a record path").to_path_buf();
     std::fs::create_dir_all(record_path.parent().unwrap()).unwrap();
@@ -250,6 +251,63 @@ pub(crate) fn record_resume_after_commit_keeps_the_filesystem_step() {
             "{name}: the filesystem step must not be skipped after a committed resume"
         );
     }
+}
+
+/// 盘上表项已停在请求区间时，完成判据只看盘上几何，不看记录里的搬移阶段：
+/// 带搬移计划、游标停在半途（`Stage::Relocating`）的记录同样按已提交收尾，
+/// 不再搬任何块，只按记录里的搬移前区间补 FS 步。
+///
+/// 这之所以安全：`at_target` 的两端与"起点是否变化"取自同一份几何快照，
+/// 表项在目标区间即起点同值，外部把表项改到目标位的现场以盘上表项定案；
+/// 已提交态不重放搬移（`relocate` 只在起点变化且无已提交基线时给出），
+/// 剩下的 FS 步仍要过只读识别与记录里的搬移前区间判定
+#[cfg(target_os = "linux")]
+#[test]
+pub(crate) fn record_at_target_finishes_even_with_an_unfinished_relocation_stage() {
+    let chunk: u64 = 1024 * 1024;
+    let old = (2048u64, 6143u64);
+    let new = (4096u64, 10239u64);
+    let mut src = committed_record_fixture(1, crate::recovery::OpKind::Resize, old, new);
+    let disk_size = src.size;
+    src.record_journal_mut()
+        .expect("the fixture attaches a record")
+        .bind_relocation(
+            crate::recovery::Relocation {
+                entries: vec![crate::recovery::RelocEntry {
+                    partition: 1,
+                    src_first: old.0,
+                    len: 4096,
+                    delta: (new.0 - old.0) as i64,
+                    is_swap: false,
+                }],
+                entry_index: 0,
+                chunks_in_entry: 1,
+                chunk_bytes: chunk,
+                kind: crate::recovery::RelocKind::Shift,
+                grow_part: 1,
+                disk_size,
+                ss: 512,
+            },
+            None,
+        )
+        .unwrap();
+    assert_eq!(
+        src.record_journal().unwrap().record().stage().unwrap(),
+        crate::recovery::Stage::Relocating { entry: 0, cursor: 0 },
+        "the fixture must leave the record mid-transfer"
+    );
+
+    let (g, repair) = gpt_policy::resolve_geometry(&src).unwrap().unwrap();
+    let p = crate::cmd::layout::prepare_resize_part(
+        &src, &g, repair, 1, new.0, new.1, chunk, false, None, false, &mut |_| {},
+    )
+    .unwrap_or_else(|f| panic!("a disk already at the requested range must resume, got {f:?}"));
+    assert_eq!(
+        p.committed_old,
+        Some(old),
+        "the pre-commit range must still come from the record"
+    );
+    assert_eq!(p.fs_action, FsAction::Grow, "only the filesystem step is left");
 }
 
 /// `--no-fs` 与缩容不可共存：分区末端会切进未缩的 FS 元数据。判定必须在写盘之前，
@@ -317,7 +375,7 @@ pub(crate) fn recorded_lvm_facts_surface_the_unrun_chain() {
     assert_eq!(kept.lv_target, (1 << 20) + 8 * 4096);
 }
 
-/// 32K 页格式的 swap 在本机（4K 页）认不出类型：identify 走 swapon 口径给出 "unknown"，
+/// 32K 页格式的 swap 在 4K 页内核上认不出类型：identify 走 swapon 口径给出 "unknown"，
 /// 但 swap 探测认得出它。该支不写盘，不与表项的普通分区声明对账，按内容判据产出 Swap
 /// 待办；此刻表已提交，待办以退出码 5 浮出，不能被当成成功
 #[test]
@@ -326,7 +384,7 @@ pub(crate) fn pending_fs_step_is_reported() {
     let (src, p) = plan_fixture(&[(1, [0x11; 16], 2048, 6143)]);
     let _keep = src.release();
     // 只在 32K 候选位置放 swap 签名：identify 给 unknown，但 swap 探测认得出它，
-    // 本机激活不了它，收尾按"扩了但未重建"记待办
+    // 内核激活不了它，收尾按"扩了但未重建"记待办
     let base = 2048 * 512;
     let mut raw = std::fs::read(&p).unwrap();
     raw[base + 32768 - 10..base + 32768].copy_from_slice(b"SWAPSPACE2");
@@ -336,7 +394,7 @@ pub(crate) fn pending_fs_step_is_reported() {
     // 纯扩容没有搬移：分区内的一段字节在整轮作业里都不该被改写
     let marker = base as u64 + 4096;
     let sentinel = [0xA5u8; 512];
-    src.write_at(marker, &sentinel).unwrap();
+    src.write_fixture(marker, &sentinel).unwrap();
     let o = rsize(&mut src, 1, 2048, 8191, chunk, false, &mut |_| {});
     assert_eq!(o.exit_code(), 5, "{o:?}");
     match &o {

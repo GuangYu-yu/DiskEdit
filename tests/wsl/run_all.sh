@@ -1,10 +1,8 @@
 #!/usr/bin/env bash
 # 全量回归：必须以 root 运行（losetup/mount 需要内核权限）
-# 判定规则：脚本进程退出码非 0 即失败；OK/CORRUPT 等关键字行仅作为现场输出展示，不参与判定
-# 脚本在输出里打印以 `SKIP:` 开头的行＝有子项因依赖缺失被跳过：记 SKIP，既不算通过
-# 也不算失败。DISKEDIT_STRICT=1（CI 用）时 SKIP 直接判失败——CI 依赖齐全，跳过即缺陷
-# 失败留档不写仓库：落在 /var/tmp 下的固定目录（WSL 之内、跨次保留、可 DISKEDIT_WSL_ARTIFACTS
-# 重定向），脚本自身的临时产物由 lib.sh 的 WSL_ROOT 收口，两条路径互不相干
+# 判定规则：脚本进程退出码非 0 即失败；OK/CORRUPT 等关键字行仅作为现场输出展示
+# DISKEDIT_STRICT=1（CI 用）时 SKIP 直接判失败——CI 依赖齐全，跳过即缺陷
+# 失败留档不写仓库：落在 /var/tmp 下的固定目录（WSL 之内、跨次保留、可 DISKEDIT_WSL_ARTIFACTS 重定向）
 set -u
 cd "$(dirname "$0")" || exit 1
 WSL_ARTIFACTS=${DISKEDIT_WSL_ARTIFACTS:-/var/tmp/diskedit-wsl-artifacts}
@@ -18,8 +16,7 @@ run() {
     blockdev_probe_identity.sh) t=1800 ;;
   esac
   echo "=== $f"
-  # -k 30：TERM 之后 30 秒仍未退出就 KILL，避免单个脚本卡死整套回归。
-  # KILL 下脚本的 EXIT trap 不执行，loop/挂载/镜像留在现场，只能下次开跑复位或手动清
+  # -k 30：TERM 后 30 秒仍未退出就 KILL（EXIT trap 不执行，loop 留在现场）
   out=$(timeout -k 30 "$t" bash "$f" 2>&1); rc=$?
   # 命令面校验的每一行都是一处失效点：全量展示，不按关键字过滤
   if [ "$f" = check_cli_surface.sh ]; then

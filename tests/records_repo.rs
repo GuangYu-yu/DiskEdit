@@ -92,7 +92,7 @@ fn record_bytes() -> Vec<u8> {
     p.extend_from_slice(&0u32.to_le_bytes());
 
     let mut out = vec![0u8; 16];
-    out[0..4].copy_from_slice(b"DSK2");
+    out[0..4].copy_from_slice(b"DSK3");
     out[4..8].copy_from_slice(&(p.len() as u32).to_le_bytes());
     out[8..12].copy_from_slice(&crc32(&p).to_le_bytes());
     let header_crc = crc32(&out[0..12]);
@@ -105,15 +105,12 @@ fn is_root() -> bool {
     unsafe { libc::geteuid() == 0 }
 }
 
-/// 身份哈希目录名：32 位小写十六进制。
 fn identity_hash() -> String {
     "0123456789abcdef".repeat(2)
 }
 
 #[test]
 fn an_image_keeps_its_records_beside_the_image() {
-    // 镜像侧落点是 `<img>.diskedit/`，目录 0700、锁 0600；
-    // 成功的写命令会清掉 record。
     let dir = temp_dir("image-layout");
     let image = image_with(&dir, "disk.img", 8 * 1024 * 1024);
     let path = image.to_str().expect("utf-8 path");
@@ -135,7 +132,6 @@ fn an_image_keeps_its_records_beside_the_image() {
 
 #[test]
 fn an_entry_over_sixty_four_mib_stops_the_scan() {
-    // 单条记录 64 MiB 上限；超限时整体失败(4)，不给部分结果。
     let dir = temp_dir("scan-limit");
     let image = image_with(&dir, "disk.img", 4096);
     let spot = sidecar(&image);
@@ -161,7 +157,6 @@ fn an_entry_over_sixty_four_mib_stops_the_scan() {
 
 #[test]
 fn a_root_inside_the_host_repository_is_refused() {
-    // 只接受镜像目录与 `recovery/` 本身；两者内部的路径一律 3。
     if !is_root() {
         eprintln!("skipping a_root_inside_the_host_repository_is_refused: needs euid 0 for a block-device target");
         return;
@@ -189,8 +184,7 @@ fn a_root_inside_the_host_repository_is_refused() {
 
 #[test]
 fn the_host_repository_lists_identity_hash_directories() {
-    // 块设备侧落点是 `recovery/<身份哈希>/`；目录名不是 32 位小写
-    // 十六进制的条目不进扫描结果。
+    // 目录名不是 32 位小写十六进制的条目不进扫描结果。
     if !is_root() {
         eprintln!("skipping the_host_repository_lists_identity_hash_directories: needs euid 0 for a block-device target");
         return;
@@ -224,7 +218,6 @@ fn the_host_repository_lists_identity_hash_directories() {
 
 #[test]
 fn a_refused_repeat_leaves_the_image_and_the_records_untouched() {
-    // 同一分区号重复提交被拒；被拒的重复执行不改目标字节，也不改记录目录。
     let dir = temp_dir("repeat");
     let image = image_with(&dir, "disk.img", 8 * 1024 * 1024);
     let path = image.to_str().expect("utf-8 path");
@@ -257,7 +250,7 @@ fn a_refused_repeat_leaves_the_image_and_the_records_untouched() {
 #[cfg(feature = "test-faults")]
 #[test]
 fn a_persisted_record_is_private() {
-    // 记录文件 0600、所在目录 0700。用故障注入停在记录落盘之后。
+    // 用故障注入停在记录落盘之后，才能看到记录文件本身。
     let dir = temp_dir("modes");
     let image = image_with(&dir, "disk.img", 8 * 1024 * 1024);
     let path = image.to_str().expect("utf-8 path");

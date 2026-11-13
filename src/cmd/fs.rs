@@ -47,7 +47,7 @@ pub(crate) const DETAILS_SET: &str = r#"  Set a partition property.
                   Other type GUIDs are left untouched. MBR: boot|hidden"#;
 
 /// 请求形式与目标能力的比对。能力事实取自 `fsops::uuid_support`（不在此另抄一份），
-/// 但"不合能力该不该拒、拿什么措辞拒"是产品的决定，只有命令层能给出"改参数也许有解"
+/// 但"不合能力该不该拒、拿什么措辞拒"由命令层给出"改参数也许有解"
 /// 的可读拒绝（退出码 3）
 fn check_uuid_request(fstype: Option<ContentKind>, req: &fsops::UuidRequest) -> Result<(), String> {
     use fsops::{UuidRequest, UuidSupport};
@@ -394,8 +394,8 @@ pub(crate) fn cmd_set(a: &SetRequest) -> RunOutcome {
         }
         crate::support::check_gpt_name_len(&value);
         let plan = crate::assembly::assemble_set_name(&src, part, &value).unwrap_or_else(|f| bail_fail(f));
-        // 计划里只有一条表步骤：块大小无人消费，步骤也不写游标，sink 不落任何进度
-        return match crate::execution::execute_plan_complete(&mut src, &plan, None, &mut crate::execution::NoProgress) {
+        // 计划里只有一条表步骤：块大小无人消费，sink 只把进度与表步围栏写进记录
+        return match crate::execution::execute_plan_complete(&mut src, &plan, None, &mut crate::recovery::sink::RecordSink::quiet()) {
             Ok(()) => table_record_done(&mut src, &format!("renamed partition #{part} to {value:?}")),
             Err(f) => bail_fail(f),
         };
@@ -419,8 +419,8 @@ pub(crate) fn cmd_set(a: &SetRequest) -> RunOutcome {
             Err(e) => bail_fail(crate::outcome::table_parse_failure(&e, format!("label probe failed: {e}"))),
         };
         let plan = plan.unwrap_or_else(|f| bail_fail(f));
-        // 计划里只有一条表步骤：块大小无人消费，步骤也不写游标，sink 不落任何进度
-        return match crate::execution::execute_plan_complete(&mut src, &plan, None, &mut crate::execution::NoProgress) {
+        // 计划里只有一条表步骤：块大小无人消费，sink 只把进度与表步围栏写进记录
+        return match crate::execution::execute_plan_complete(&mut src, &plan, None, &mut crate::recovery::sink::RecordSink::quiet()) {
             Ok(()) => table_record_done(&mut src, &format!("type set on partition #{part} (verify with: diskedit info {})", a.target)),
             Err(f) => bail_fail(f),
         };
@@ -453,8 +453,8 @@ pub(crate) fn cmd_set(a: &SetRequest) -> RunOutcome {
         };
         let plan = plan.unwrap_or_else(|f| bail_fail(f));
         if let Some(plan) = plan {
-            // 计划里只有一条表步骤：块大小无人消费，步骤也不写游标，sink 不落任何进度
-            if let Err(f) = crate::execution::execute_plan_complete(&mut src, &plan, None, &mut crate::execution::NoProgress) {
+            // 计划里只有一条表步骤：块大小无人消费，sink 只把进度与表步围栏写进记录
+            if let Err(f) = crate::execution::execute_plan_complete(&mut src, &plan, None, &mut crate::recovery::sink::RecordSink::quiet()) {
                 bail_fail(f);
             }
         }

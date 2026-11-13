@@ -13,7 +13,6 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// 仓库内的源码根
 pub fn src_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("src")
 }
@@ -57,13 +56,11 @@ pub fn rust_sources() -> Vec<(String, String)> {
     out
 }
 
-/// 首个出现的字节位置；找不到时给出带上下文的失败信息
 pub fn pos(text: &str, needle: &str, what: &str) -> usize {
     text.find(needle)
         .unwrap_or_else(|| panic!("{what}: expected marker {needle:?} is gone"))
 }
 
-/// 一组标记必须在源码里按给定顺序出现
 pub fn assert_order(text: &str, needles: &[&str], what: &str) {
     let mut at = 0usize;
     for needle in needles {
@@ -74,7 +71,6 @@ pub fn assert_order(text: &str, needles: &[&str], what: &str) {
     }
 }
 
-/// 进程级用例的统一入口
 pub fn run(args: &[&str]) -> (i32, String, String) {
     let out = Command::new(env!("CARGO_BIN_EXE_DiskEdit"))
         .args(args)

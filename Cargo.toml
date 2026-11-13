@@ -16,9 +16,8 @@ sha2 = "0.10"
 libc = "0.2"
 
 [features]
-# 测试专用
-test-faults = []
-# 只读骨架：把尚未接入命令执行路径的模块编入构建（默认关闭）
+test-faults = []   # 故障注入用，tests/wsl 依赖此变体
+# 只读骨架：把命令执行路径之外的模块编入构建（默认关闭）
 skeleton = []
 
 [lints.clippy]

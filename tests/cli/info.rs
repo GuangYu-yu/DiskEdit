@@ -1,5 +1,4 @@
-//! `info` 的 Linux 端到端用例，断言对齐 `src/cmd/info.rs` / `src/cmd/plan.rs` 的输出文案，
-//! 覆盖六个主题。
+//! `info` 的 Linux 端到端用例，覆盖六种场景。
 
 use super::*;
 

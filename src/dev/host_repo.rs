@@ -16,8 +16,8 @@ use sha2::{Digest, Sha256};
 /// 默认状态根：FHS §5.8 的 `/var/lib/<name>`，主机级、跨重启保留
 pub(crate) const DEFAULT_STATE_ROOT: &str = "/var/lib/diskedit";
 
-/// 状态根。Linux 上 euid 非 0 时忽略 `DISKEDIT_STATE_DIR`；其余平台沿用
-/// [`super::state_dir`] 的既有语义（这些平台没有块设备目标）
+/// 状态根。Linux 上 euid 非 0 时忽略 `DISKEDIT_STATE_DIR`；其余平台返回
+/// [`super::state_dir`]（这些平台没有块设备目标）
 pub(crate) fn host_state_root() -> PathBuf {
     #[cfg(target_os = "linux")]
     {

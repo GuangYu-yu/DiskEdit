@@ -27,9 +27,9 @@ pub(crate) enum ImageLoopPolicy {
     AllowDm,
 }
 
-/// 已建立的目标设备：所有权在构造点确定为二态。
-/// 存在的意义是把"建立"和"撤销"绑成一个对象——写路径要在设备就绪之后、第一次不可回滚的写之前做决定
-/// （如 mkfs 的屏障），那一步必须发生在 `attach_loop` 之后、`f(&dev)` 之前，而不是在这个函数外面
+/// 已建立的目标设备：所有权在构造点确定为二态。把"建立"和"撤销"绑成一个对象——
+/// 写路径要在设备就绪之后、第一次不可回滚的写之前做决定（如 mkfs 的屏障），那一步
+/// 必须发生在 `attach_loop` 之后、`f(&dev)` 之前，而不是在这个函数外面
 pub(crate) enum ScopeDevice {
     /// 本工具 attach 的 loop 映射：`Drop` 撤销
     Created { path: String },
@@ -256,7 +256,7 @@ pub(crate) fn resolve_scope_device(
     // 复用只在映射区间与本次请求完全一致时成立：需要改 `lo_sizelimit` 才成立的复用会改动
     // 外部栈持有的设备，而 `Existing` 的 Drop 不撤销任何东西、这里也没有恢复点，故拒绝，
     // 由持有它的栈自行解绑重绑。offset 不同（整盘 `-P` 映射等）的容量语义由持有它的栈决定，
-    // 本工具不改写它，仍按原有路径另建映射
+    // 本工具不改写它，仍另建映射
     #[cfg(target_os = "linux")]
     if let Some(dev) = reusable {
         let map = loop_mapping_of_node(Path::new(&dev))?.ok_or_else(|| {
@@ -382,7 +382,7 @@ pub(crate) fn block_disk_name(src: &FileSource) -> Result<String, FsError> {
 pub(crate) fn partition_byte_range(src: &FileSource, part: u32) -> Result<(u64, u64), FsError> {
     // 唯一实现在 gpt_policy::partition_bytes（GPT 优先、MBR 兜底，换算用表自身的 ss）。
     // 出口语义由 FsError 的既有映射承担：Refused ⇒ 请求与现状不符(3)，环境/盘内容故障 ⇒
-    // NoMutation(4)。本层不把分类重解释一遍——那会让"同一事实的第二处判据"重新长出来
+    // NoMutation(4)。本层沿用这个映射，不重新解释分类
     crate::gpt_policy::partition_bytes(src, part).map_err(|f| match f {
         crate::outcome::RunOutcome::Refused(m) => FsError::invalid(m),
         other => FsError::Io(io::Error::other(other.to_string())),
