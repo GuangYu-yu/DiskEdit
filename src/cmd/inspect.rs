@@ -2,8 +2,9 @@
 //!
 //! 参数按路径结构分派：路径是记录后端的直接子项时，把它本身当证据解码；
 //! 否则按目标探测记录落点。命令不写目标字节，也不产生清理资格。
-//! 退出码口径：无记录 0、完整可清理 0、未收尾 5、结构损坏/身份不符 3、
-//! 读不出 4、平台不提供命令集 6；`Unverified` 只做标注。
+//! 退出码口径：0 是读出了结论（无记录、完整记录、未收尾记录，后者在输出里给出
+//! 下一步命令）；3 是证据不可用（结构损坏、身份不符、条目不是普通记录文件、读不出）；
+//! 6 是平台不提供命令集。`Unverified` 只做标注。
 
 #[cfg(target_os = "linux")]
 use std::path::Path;
@@ -154,7 +155,8 @@ fn sidecar_scene(spot: &crate::dev::RecordSpot) -> Result<SceneIdentity, String>
 ///
 /// 身份核对只有 sidecar 做得到——目录名去掉 `.diskedit` 就是目标路径。主机仓库目录名是
 /// `identity-hash`，不可逆，所以给 `ForeignCheckUnavailable`，不判
-/// `ForeignTarget`。隔离项不参与活跃判定：它可读、可报告，但既不要求 `undo`，也不退 5
+/// `ForeignTarget`。隔离项不参与活跃判定：它可读、可报告，但不计入未收尾现场，
+/// 也不要求 `undo`
 #[cfg(target_os = "linux")]
 fn inspect_record_entry(spot: &crate::dev::RecordSpot, a: &InspectRequest) -> CmdResult {
     let path = spot.path();
@@ -451,14 +453,16 @@ fn map_recognized(record: &Record, target: &str) -> (u8, Option<String>) {
         return (EXIT_OK, retention_note);
     }
     // 回放资格与 `undo` 共用同一份 `TableReplay`：提示不会许诺 `undo` 不接受的事。
-    // 相交的 move 在 undo 准入处退 3，这里的出路只剩续跑或 abandon
+    // 相交的 move 在无许可时被 `undo` 拒绝（3），带 `--replay-table-only` 则按
+    // `MoveForced` 回放表区；这里的出路是续跑、表区回放或 abandon
     let replay = crate::recovery::TableReplay::of(record, false);
     let mut note = match replay {
         crate::recovery::TableReplay::MoveBlocked => format!(
             "unfinished: the record is not committed and restoring its table could point the old layout \
              at overwritten data — `diskedit undo {target} --yes` refuses; re-run the recorded move with \
-             the same request to finish the relocation, or `diskedit abandon {target} --yes --discard-replay` \
-             sets it aside"
+             the same request to finish the relocation, replay its partition-table regions with \
+             `diskedit undo {target} --yes --replay-table-only`, or `diskedit abandon {target} --yes \
+             --discard-replay` sets it aside"
         ),
         crate::recovery::TableReplay::MoveNoPreimage => format!(
             "unfinished: the record is not committed and holds no replayable copy of the old partition \

@@ -802,13 +802,13 @@ impl From<std::io::Error> for RunOutcome {
 /// "操作层面发生了什么"，落成哪个退出码属应用层 policy，故不在 fsops 里做。
 ///
 /// 「类型没有接线 / 参数与目标现状不符」→ 拒绝（3）；工具缺失 → 不支持（6）；
-/// 任何写盘之前的 I/O 失败（打开或读取目标）→ 前置条件不满足（3）；
+/// 任何写盘之前的 I/O 失败（打开或读取目标）→ 本次未改变持久状态（4）；
 /// 外部工具非零退出意味着工具已经运行——它写没写、写了多少无法断言 →
 /// 部分完成（5，报告带警示行）。
 ///
-/// **本映射只适用于尚未写盘的调用点**：`Io` 变体在此归 Refused（读到的事实不足以
-/// 继续），一旦本次调用已开始写目标盘（清零、格式化中……），调用点必须先把错误改判
-/// 为 `CommandFailed`（→ Partial），不得让 `Io` 走进这个 `From`——那会把"可能已写"
+/// **本映射只适用于尚未写盘的调用点**：`Io` 变体在此归 NoMutation（断言"确定未写盘"），
+/// 一旦本次调用已开始写目标盘（清零、格式化中……），调用点必须先把错误改判为
+/// `CommandFailed`（→ Partial），不得让 `Io` 走进这个 `From`——那会把"可能已写"
 /// 洗成"确定没写"
 impl From<crate::fsops::FsError> for RunOutcome {
     fn from(e: crate::fsops::FsError) -> Self {
@@ -818,17 +818,23 @@ impl From<crate::fsops::FsError> for RunOutcome {
             FsError::UnsupportedPlatform(m) => Self::unsupported(m),
             FsError::InvalidArgument(m) => Self::refused(m),
             FsError::ToolMissing(m) => Self::unsupported(m),
-            FsError::Io(err) => Self::refused(err.to_string()),
+            FsError::Io(err) => Self::no_mutation(err.to_string()),
             FsError::CommandFailed(m) => Self::partial(m),
         }
     }
 }
 
-/// 表结构错误 → 出口语义：读不出来、签名/CRC/几何/条目越界都说明"目标给不出可用的
-/// 表"，属于前置条件不满足（3）
+/// 表结构错误 → 出口语义：签名/CRC/几何/条目越界说明"目标给不出可用的表"，属于
+/// 前置条件不满足（3）；读盘失败本身是环境故障且本次未改变持久状态（4）
+///
+/// 恢复记录与证据的读取不归这一支：它们读不出时按"证据不可用"归 3（见 `cmd::inspect`），
+/// 因为那里要回答的是"这条记录陈述了什么"，而表读失败要回答的是"盘还能不能读"
 impl From<crate::table::GptError> for RunOutcome {
     fn from(e: crate::table::GptError) -> Self {
-        Self::refused(e.to_string())
+        match e {
+            crate::table::GptError::Io(err) => Self::no_mutation(err.to_string()),
+            other => Self::refused(other.to_string()),
+        }
     }
 }
 
@@ -847,14 +853,14 @@ mod tests {
     use crate::fsops::FsError;
 
     /// FsError 的分类只在这一处落成出口语义：不认得的类型 / 参数与目标现状不符 ⇒ 拒绝（3），
-    /// 工具缺失 ⇒ 不支持（6），读写目标失败 ⇒ 前置条件不满足（3），外部工具非零退出 ⇒ 部分完成（5）
+    /// 工具缺失 ⇒ 不支持（6），读写目标失败 ⇒ 未改变持久状态（4），外部工具非零退出 ⇒ 部分完成（5）
     #[test]
     fn fs_error_maps_to_exit_codes() {
         let code = |e: FsError| RunOutcome::from(e).exit_code();
         assert_eq!(code(FsError::unsupported("no resize tool")), EXIT_UNSUPPORTED);
         assert_eq!(code(FsError::InvalidArgument("bad size".into())), EXIT_REFUSED);
         assert_eq!(code(FsError::ToolMissing("no mkfs.xfs".into())), EXIT_UNSUPPORTED);
-        assert_eq!(code(FsError::Io(std::io::Error::other("EIO"))), EXIT_REFUSED);
+        assert_eq!(code(FsError::Io(std::io::Error::other("EIO"))), EXIT_NO_MUTATION);
         assert_eq!(code(FsError::CommandFailed("mkswap failed".into())), EXIT_PARTIAL);
         // 同码不同变体：5 的语义差别（有无"盘可能已改变"警示行）只体现在变体上
         assert!(matches!(
@@ -923,14 +929,14 @@ mod tests {
         assert_eq!(code(RunOutcome::internal("invariant broken")), EXIT_INTERNAL);
         assert_eq!(code(RunOutcome::partial("write call reported an error")), EXIT_PARTIAL);
 
-        // 表结构非法与表读写失败同归 3：目标给不出可用的表，改参数或换目标才有意义
+        // 表结构非法归 3（改参数或换目标有意义）；表读写失败是环境故障且未改变持久状态，归 4
         assert_eq!(
             code(RunOutcome::from(crate::table::GptError::InvalidHeader("crc".into()))),
             EXIT_REFUSED
         );
         assert_eq!(
             code(RunOutcome::from(crate::table::GptError::Io(std::io::Error::other("EIO")))),
-            EXIT_REFUSED
+            EXIT_NO_MUTATION
         );
 
         // 越过 durable boundary 之后只有两个出口：完整 0、其余 5

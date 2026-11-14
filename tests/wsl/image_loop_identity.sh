@@ -183,13 +183,24 @@ else
 fi
 lo_detach "$L4"
 
-echo "=== D: loop 设备节点不可访问"
-if compgen -G "/sys/block/loop[0-9]*" >/dev/null; then
-    out=$(unshare -m bash -c '
+# /proc/swaps 可能列出宿主机的 swap 节点；tmpfs /dev 会把这些节点全遮住，
+# 占用探测在 swap 条目的 stat 处就失败。D 与 G 只考察 loop 节点，因此在命名空间内
+# 用空文件盖住 /proc/swaps，隔离与 loop 无关的证据源。
+EMPTY_SWAPS=$WSL_ROOT/empty-swaps
+track_file "$EMPTY_SWAPS"
+: > "$EMPTY_SWAPS"
+run_without_dev() {
+    unshare -m bash -c '
         mount --make-rprivate /
         mount -t tmpfs none /dev
+        mount --bind "$3" /proc/swaps
         exec "$1" resize-part "$2:1" --grow-to-end --yes
-    ' _ "$B" "$T" 2>&1)
+    ' _ "$B" "$1" "$EMPTY_SWAPS" 2>&1
+}
+
+echo "=== D: loop 设备节点不可访问"
+if compgen -G "/sys/block/loop[0-9]*" >/dev/null; then
+    out=$(run_without_dev "$T")
     got=$?
     exp "$got" 4 "loop 节点不可访问时退出码 4"
     case "$out" in
@@ -291,11 +302,7 @@ PY
         truncate -s 64M "$T6"
         "$B" new "$T6" --yes >/dev/null 2>&1 || { echo "BAD  new 失败"; exit 1; }
         "$B" add "$T6" 32M --align mib --yes >/dev/null 2>&1 || { echo "BAD  add 失败"; exit 1; }
-        out=$(unshare -m bash -c '
-            mount --make-rprivate /
-            mount -t tmpfs none /dev
-            exec "$1" resize-part "$2:1" --grow-to-end --yes
-        ' _ "$B" "$T6" 2>&1)
+        out=$(run_without_dev "$T6")
         exp "$?" 4 "真实探测故障不被 EINVAL 跳过掩盖"
         case "$out" in
             *"cannot open /dev/loop"*) echo "  OK   拒绝原因仍是无法打开 loop 节点" ;;
