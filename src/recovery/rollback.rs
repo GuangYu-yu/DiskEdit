@@ -114,7 +114,8 @@ impl std::fmt::Display for TableReplay {
             Self::MoveBlocked => f.write_str(
                 "the ranges the old layout names cannot be shown to be clear of the ranges the move has \
                  already written, so its bytes are not written back; re-run `diskedit move` with the same \
-                 request to finish the relocation, or release the record with `diskedit abandon`",
+                 request to finish the relocation, replay the recorded table regions with \
+                 `diskedit undo --replay-table-only`, or release the record with `diskedit abandon`",
             ),
             Self::MoveNoPreimage => f.write_str(
                 "the record holds no replayable copy of the old partition table — the table step never ran, \
