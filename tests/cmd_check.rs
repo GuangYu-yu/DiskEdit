@@ -9,7 +9,9 @@
 //!   - 缺 `:N` 落 2：「缺参数」归 schema 解析失败（语法层失败，不进入 `RunOutcome`）
 //!   - `:99` 不存在 → 3
 //!   - 分区没有已知文件系统 → 6（`no check tool wired`）
-//!   - 目标不存在 → 4（`MutationState::None` 的打开失败）
+//!   - 目标不存在 → 3（打开失败，属前置条件不满足；3/4 的边界见
+//!     `docs/reference.md` 的退出状态表：3 = 策略拒绝或前置条件不满足，
+//!     4 = 本次未改变任何持久状态）
 //!   - 只读零写：目标字节、所在目录条目、证据目录都不因 `check` 改变
 //!   - 真 ext4 → 0 且零写；需要 root、`/dev/loop-control` 与 e2fsprogs，
 //!     运行期探测，缺任一项时提前返回（`check` 要走 loop 才能把分区交给 e2fsck）
@@ -131,7 +133,8 @@ fn a_partition_without_a_filesystem_has_no_check_tool() {
     assert_eq!(listing(dir.path()), entries, "a capability gap must not create sidecars");
 }
 
-/// 目标不存在 → 4：打开失败发生在任何写入之前
+/// 目标不存在 → 3：打开失败属前置条件不满足（`docs/reference.md` 的退出状态表：
+/// 3 = 策略拒绝或前置条件不满足）
 #[test]
 fn an_absent_target_is_an_io_failure() {
     let (dir, _img) = fixture("absent", 32, "8M");
@@ -147,7 +150,8 @@ fn an_absent_target_is_an_io_failure() {
 }
 
 /// `check` 不写目标、不建临时文件、不 rename、不 fsync、不删除。
-/// 三条可观察路径（3 / 6 / 4）前后，目标字节与所在目录条目必须逐一相同
+/// 三条可观察路径（空槽拒绝 3、无已知文件系统 6、目标不存在 3）前后，目标字节与
+/// 所在目录条目必须逐一相同
 #[test]
 fn a_refused_check_writes_nothing() {
     let (dir, img) = fixture("zero_write", 32, "8M");
