@@ -12,8 +12,8 @@
 //!   各一份。dm / md / 只有 major:minor 的目标同样有盘键，其写命令在取锁前已退 6。
 //!   锁文件与记录不在同一层：记录在 `<state_root>/recovery/<identity-hash>/` 下。
 //!   在锁之外，块设备的写打开仍是 `O_EXCL`（见 [`crate::dev::FileSource::open`] 的
-//!   块设备分支）——两道凭据互为补充：O_EXCL 挡住别的持 fd 写者，锁文件覆盖不经过
-//!   O_EXCL 的写入路径（如 `abandon`）与在线路径。同一进程二次以 `O_EXCL` 打开同一
+//!   块设备分支）——两道凭据互为补充：O_EXCL 使同一目标上的其他独占打开失败，锁文件
+//!   覆盖不经过 O_EXCL 的写入路径（如 `abandon`）与在线路径，普通非独占写入两道都挡不住。同一进程二次以 `O_EXCL` 打开同一
 //!   设备是否 EBUSY 取决于内核的 holder 语义（holder 是每次 open 的 `struct file`），
 //!   不值得把正确性押在那上面
 //!

@@ -310,10 +310,6 @@ fn first_change(before: &[u8], after: &[u8]) -> Option<usize> {
     before.iter().zip(after).position(|(a, b)| a != b)
 }
 
-fn torn_path(record: &Path) -> PathBuf {
-    record.parent().unwrap().join(".torn")
-}
-
 fn overwrite(img: &Path, at: usize, bytes: &[u8]) {
     use std::io::{Seek, SeekFrom, Write};
     let mut f = std::fs::OpenOptions::new().write(true).open(img).unwrap();
@@ -387,42 +383,38 @@ fn undo_refuses_after_the_image_grew() {
     assert!(!record.exists(), "{e}");
 }
 
-/// 记录载荷撕裂：逐条 CRC 通过的完整前缀照常回放，尾部归档，出口 5
+/// 记录载荷撕裂：整份载荷不再通过长度与 CRC 校验，一个区间都不写回，记录留在原地
 #[test]
-fn torn_record_replays_the_intact_prefix() {
+fn a_torn_record_is_refused_without_writing() {
     let (img, record, _journal) = stage("t");
     let img_s = img.to_str().unwrap();
     let argv = add_1m(img_s);
-    let baseline = std::fs::read(&img).unwrap();
 
     // 第二次目标写入后崩溃：记录里留下两条区间
     let (c, e) = run_fault("record-before-commit:2", &argv);
     assert_ne!(c, 0, "the injected abort must not look like success: {e}");
     assert!(record.exists(), "the record must survive the crash: {e}");
     let crashed = std::fs::read(&img).unwrap();
-    let at = first_change(&baseline, &crashed).expect("the crash must leave a written span behind");
 
-    // 截掉尾部 300 字节：最后一条区间不完整，前一条仍可逐条验证
+    // 截掉尾部 300 字节：载荷声明的长度不再是文件长度，整份记录不可读
     let len = std::fs::metadata(&record).unwrap().len();
     assert!(len > 600, "the record must hold more than one entry: {len}");
     std::fs::OpenOptions::new().write(true).open(&record).unwrap().set_len(len - 300).unwrap();
 
     let (c, e) = run(&["undo", img_s, "--yes"]);
-    assert_eq!(c, 5, "a torn record is a partial completion: {e}");
-    assert!(e.contains("replayed the 1 verified range(s)"), "{e}");
-    assert!(e.contains("archived the torn record as"), "{e}");
-    assert!(!record.exists(), "the torn record must leave the slot: {e}");
-    assert!(torn_path(&record).exists(), "the torn bytes are archived: {e}");
+    assert_eq!(c, 3, "a torn record must not be replayed: {e}");
+    assert!(e.contains("is not replayable"), "{e}");
+    assert!(record.exists(), "a refused replay must keep the record: {e}");
     assert_eq!(
-        std::fs::read(&img).unwrap()[at],
-        baseline[at],
-        "the verified prefix must be back to its pre-image: {e}"
+        std::fs::read(&img).unwrap()[..],
+        crashed[..],
+        "no recorded byte may be written back: {e}"
     );
 
-    // 落点腾空后目标不再被判 busy
-    let (c, e) = run(&["inspect", img_s]);
-    assert_eq!(c, 0, "no record must remain after the prefix replay: {e}");
-    assert!(e.contains("no recovery record"), "{e}");
+    // 记录损坏时回滚能力未知，弃权要显式确认
+    let (c, e) = run(&["abandon", img_s, "--yes", "--discard-replay"]);
+    assert_eq!(c, 0, "abandon must release a torn record: {e}");
+    assert!(!record.exists(), "{e}");
 }
 
 /// 禁双写：成功路径也不得留下旧 journal 或记录

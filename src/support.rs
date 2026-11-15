@@ -12,6 +12,21 @@ use crate::{movepart, table};
 #[cfg(test)]
 use crate::dev; // 只有测试夹具 src_from 用得到
 
+/// 库层的退出请求：携带进程应当采用的退出码。`main` 把这类载荷与真正的 panic 分开，
+/// 按码退出且不打印 panic 报告
+#[derive(Debug)]
+pub(crate) struct ExitRequest(pub(crate) u8);
+
+/// 库层唯一的退出出口。库代码（解析、命令、收尾）不得调用 `process::exit`：那会连
+/// 调用者一起终止——测试目标里一条用例退出就丢掉整份结果，上层也拦不住。请求沿展开栈
+/// 回到入口，由 `main` 收敛成进程退出码；`code` 的呈现由调用点负责。
+///
+/// 这条通道依赖展开：panic 策略保持 unwind（`.cargo/config.toml` 的 release 段）。
+/// 改成 abort 后载荷到不了 `main`，退出码与 panic 归责一起丢失
+pub(crate) fn exit_with(code: u8) -> ! {
+    std::panic::panic_any(ExitRequest(code))
+}
+
 /// 规划/执行失败的出口：先按本次写事实归责，报告文字与退出码都取自 outcome
 /// （唯一措辞与唯一映射），调用点不得自行拼装。**本模块不提供"带裸退出码的退出"**——
 /// 那会绕开 RunOutcome::report 的措辞与 exit_code 的映射
@@ -19,7 +34,7 @@ pub(crate) fn bail_fail(f: crate::outcome::RunOutcome) -> ! {
     // 报告文字与退出码都取自 outcome；这里没有要收尾的 pending
     let f = f.settled();
     f.report();
-    std::process::exit(f.exit_code() as i32);
+    exit_with(f.exit_code())
 }
 
 /// 持久日志的单文件上限：打开时已有日志达到这个长度就轮转一代
@@ -445,7 +460,7 @@ pub(crate) fn free_right_gpt(g: &ValidatedGeometry, part: u32) -> u64 {
     };
     let mut bound = g.last_usable_lba().saturating_add(1); // 排他上界（饱和防损坏几何下 +1 回绕成 0）
     for (i, o) in g.entries().iter().enumerate() {
-        if (i + 1) as u32 == part || (o.starting_lba == 0 && o.ending_lba == 0) {
+        if (i + 1) as u32 == part || crate::table::is_unused(o) {
             continue;
         }
         if o.starting_lba > e.ending_lba {

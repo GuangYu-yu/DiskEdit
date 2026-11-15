@@ -90,13 +90,11 @@ fn undo_record(src: &mut WriteSource, permit_move: bool) -> Option<u8> {
                     crate::recovery::legacy_layout_refusal(name)
                 )));
             }
-            // 整份载荷验证不过：完整前缀仍可能逐条验证并回放
-            #[cfg(target_os = "linux")]
-            return Some(undo_record_prefix(src, &path, &current, other, permit_move));
-            #[cfg(not(target_os = "linux"))]
+            // 载荷未通过完整校验：记录里的字节无法逐项验证，任何区间都不写回，
+            // 记录留在原地等人工处理或显式 `abandon`
             bail_fail(RunOutcome::refused(format!(
-                "the recovery record at {} is not replayable ({other:?}) — it is left in place; \
-                 release it with `diskedit abandon`",
+                "the recovery record at {} is not replayable ({other:?}) — nothing was read or written; \
+                 it is left in place, release it with `diskedit abandon`",
                 path.display()
             )))
         }
@@ -178,101 +176,6 @@ fn undo_record(src: &mut WriteSource, permit_move: bool) -> Option<u8> {
         }
     }
 }
-#[cfg(target_os = "linux")]
-fn undo_record_prefix(
-    src: &mut WriteSource,
-    path: &std::path::Path,
-    current: &crate::recovery::SceneIdentity,
-    evidence: crate::recovery::Evidence,
-    permit_move: bool,
-) -> u8 {
-    let prefix = match crate::recovery::read_companion_prefix(path) {
-        Ok(Some(prefix)) => prefix,
-        Ok(None) => bail_fail(RunOutcome::refused(format!(
-            "the recovery record at {} is not replayable ({evidence:?}) — it is left in place; \
-             release it with `diskedit abandon`",
-            path.display()
-        ))),
-        Err(e) => bail_fail(RunOutcome::refused(format!(
-            "the recovery record cannot be read ({e}) — nothing was read or written; release it with `diskedit abandon`"
-        ))),
-    };
-    if let Some(why) = prefix.record.target.mismatch_reason(current) {
-        bail_fail(RunOutcome::refused(format!(
-            "the recovery record at {} was written for a different target ({why}) — it is not replayed here; \
-             release it with `diskedit abandon`",
-            path.display()
-        )));
-    }
-    if prefix.record.committed() {
-        let mut outcome = crate::outcome::RunOutcome::applied_with(Vec::new());
-        match crate::recovery::archive_torn(path) {
-            Ok(to) => outcome = outcome.degrade_partial(format!(
-                "the record's payload is incomplete and belonged to an already committed operation — nothing was \
-                 rolled back; the torn record was archived as {}",
-                to.display()
-            )),
-            Err(why) => {
-                outcome = outcome.degrade_partial(format!(
-                    "the record's payload is incomplete and belonged to an already committed operation — nothing was \
-                     rolled back; {why}"
-                ))
-            }
-        }
-        let record = src.record_journal().map(|j| j.record());
-        let outcome = crate::support::settle_layout(outcome, src, record);
-        return outcome.exit_code();
-    }
-    // 与全量路径同一判据：`move` / `copy` 的 preimage 只覆盖表区，撕裂载荷里已经
-    // 解出的那部分仍可回放；数据区本就没有记录，不存在"回放到一半"的问题
-    let scope = crate::recovery::TableReplay::of(&prefix.record, permit_move);
-    if !scope.writes_back() {
-        bail_fail(RunOutcome::refused(format!(
-            "the recovery record at {}: {scope}",
-            path.display()
-        )));
-    }
-    // 撕裂载荷的末段无法验证，`copy` 的源区间就读不回来：没有源复核就不回放它的表区
-    if prefix.record.op == crate::recovery::OpKind::Copy {
-        bail_fail(RunOutcome::refused(format!(
-            "the recovery record at {} is torn, so the source range its `copy` recorded cannot be read back — its \
-             bytes are not written back; release it with `diskedit abandon`",
-            path.display()
-        )));
-    }
-    crate::recovery::validate_record_capacity(src, &prefix.record, path);
-    crate::recovery::validate_record_ranges(src, &prefix.record.restore, path);
-    if let Err(f) = crate::recovery::verify_disk_identity(prefix.record.disk_guid, src, "the recovery record") {
-        bail_fail(f);
-    }
-    if let Err(f) = crate::recovery::verify_record_plan(&*src, &prefix.record.restore) {
-        bail_fail(f);
-    }
-    crate::recovery::replay_record(src, &prefix.record.restore, path);
-    let mut outcome = crate::outcome::RunOutcome::applied_with(Vec::new());
-    let kept = prefix.kept;
-    let total = prefix.total;
-    match crate::recovery::archive_torn(path) {
-        Ok(to) => {
-            outcome = outcome.degrade_partial(format!(
-                "the record's payload is incomplete: replayed the {kept} verified range(s) before the tear \
-                 (of {total} recorded) and archived the torn record as {} — the ranges past the tear were not \
-                 rolled back",
-                to.display()
-            ))
-        }
-        Err(why) => {
-            outcome = outcome.degrade_partial(format!(
-                "the record's payload is incomplete: replayed the {kept} verified range(s) before the tear \
-                 (of {total} recorded), but {why}"
-            ))
-        }
-    }
-    let record = src.record_journal().map(|j| j.record());
-    let outcome = crate::support::settle_layout(outcome, src, record);
-    outcome.exit_code()
-}
-
 /// 旧 journal 不是恢复记录：它早于记录格式，本构建不回放、不迁移、不删除。
 /// 落点上只要存在条目（含符号链接与 dangling 链接）就按未识别证据拒绝（3）。
 fn refuse_legacy_journal(src: &FileSource) {

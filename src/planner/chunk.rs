@@ -16,6 +16,14 @@ pub(crate) struct ChunkSpan {
     pub(crate) len_lba: u64,
 }
 
+/// 该条目是否需要逐块拷贝：`swap` 条目由重建代替拷贝，零位移与零长度没有字节要搬。
+/// 写入侧按它决定搬哪些条目（`movepart::plan::entry_spans`），记录侧按它算块数上界
+/// （`recovery::record::entry_chunks`）；两处对「这条有没有块」的回答必须相同，
+/// 否则续跑会把没搬的条目当成搬完或反之
+pub(crate) fn relocation_copies(is_swap: bool, delta_lba: i64, len_lba: u64) -> bool {
+    !is_swap && delta_lba != 0 && len_lba != 0
+}
+
 /// 把 `first_lba..first_lba + len_lba` 按 `chunk_lba` 切成有序块：**唯一的块边界实现**，
 /// 块的起点、长度与块数都只由这里给出。
 ///

@@ -176,6 +176,26 @@ pub(crate) fn reconcile_swap(
     })
 }
 
+/// 扩容前的同一份对账：声明侧取表条目的类型 GUID，证据侧取 [`grow_target_at`]
+/// 对**将要改动的那段区域**给出的结论。写盘前的判定与提交后的收尾各调一次，判据相同，
+/// 差别只在区间（写盘前是旧条目，提交后是新条目）与此刻谁在作数。
+///
+/// 冲突必须在该段区域被改写之前拒绝：提交后才发现时，两种处置（`mkswap` 重建或扩 FS）
+/// 都已经落在那段区域上，而"是不是 swap"恰恰没定。没有可扩 FS 的几种（`OverlayPending`
+/// / `SwapUnactivatable` / `NoFilesystem`）不改写该区域，不与声明侧对账
+///
+/// [`grow_target_at`]: crate::fsops::grow_target_at
+pub(crate) fn preflight_growth_swap(
+    part: u32,
+    declared: bool,
+    growable: &Growable,
+) -> Result<(), RunOutcome> {
+    if let Growable::Target(t) = growable {
+        reconcile_swap(part, Some(declared), Some(t.fstype == ContentKind::Swap))?;
+    }
+    Ok(())
+}
+
 /// 一条被搬移条目的当前几何：盘上起点、长度与它在表里的 swap 声明。四种拒绝在这里
 /// 给出——不在条目数组里、未定义、端点倒挂、LUKS / LVM PV 不可搬移
 fn move_entry(geometry: &ValidatedGeometry, part: u32) -> Result<(u64, u64, bool), RunOutcome> {
@@ -185,7 +205,7 @@ fn move_entry(geometry: &ValidatedGeometry, part: u32) -> Result<(u64, u64, bool
     let entry = geometry.entries().get(index).ok_or_else(|| {
         RunOutcome::internal(format!("partition #{part} has no entry in the geometry"))
     })?;
-    if entry.starting_lba == 0 && entry.ending_lba == 0 {
+    if crate::table::is_unused(entry) {
         return Err(RunOutcome::refused(format!("partition #{part} is not defined")));
     }
     if entry.starting_lba > entry.ending_lba {
@@ -285,7 +305,7 @@ fn entry_spans(
     ss: u64,
     chunk_bytes: u64,
 ) -> Vec<crate::planner::chunk::ChunkSpan> {
-    if is_swap || delta_lba == 0 || len_lba == 0 {
+    if !crate::planner::chunk::relocation_copies(is_swap, delta_lba, len_lba) {
         return Vec::new();
     }
     match crate::planner::chunk::move_chunk_layout(len_lba, ss, delta_lba.unsigned_abs(), len_lba, chunk_bytes) {
@@ -305,7 +325,7 @@ pub(crate) fn blockers_after(
         .entries()
         .iter()
         .enumerate()
-        .filter(|(_, e)| e.ending_lba != 0 && e.starting_lba > target_end)
+        .filter(|(_, e)| !crate::table::is_unused(e) && e.starting_lba > target_end)
         .map(|(i, e)| ((i + 1) as u32, e))
         .collect();
     movable.sort_by_key(|(_, e)| e.starting_lba);

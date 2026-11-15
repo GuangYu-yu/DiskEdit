@@ -33,7 +33,7 @@ pub(crate) fn prepare_copy(
         return Err(RunOutcome::refused("copy target outside usable range"));
     }
     for (i, other) in g.entries().iter().enumerate() {
-        if other.ending_lba == 0 {
+        if crate::table::is_unused(other) {
             continue;
         }
         if !(new_end < other.starting_lba || new_start > other.ending_lba) {

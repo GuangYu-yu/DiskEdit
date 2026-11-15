@@ -10,7 +10,9 @@ rustflags = [
 opt-level = 3
 lto = "fat"
 codegen-units = 1
-panic = "abort"
+# panic 策略必须是 unwind：库层不退出进程，退出请求与 panic 归责都靠 main 的
+# catch_unwind 展开到入口后统一处理。改成 abort 会让 3/4/5 三个退出码与
+# "panic → 部分完成/内部错误"的报告一并失效
 strip = "symbols"
 debug = 0
 incremental = false

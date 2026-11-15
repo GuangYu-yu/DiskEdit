@@ -7,18 +7,18 @@
 use crate::dev::PartSelector;
 use crate::domain::{Align, SectorSize};
 use crate::outcome::{EXIT_OK, EXIT_USAGE};
-use crate::support::{bail_fail, parse_guid, RunOutcome};
+use crate::support::{bail_fail, exit_with, parse_guid, RunOutcome};
 
 /// 用法错误打到 stderr 退 2；主动请求帮助打到 stdout 退 0
 pub(crate) fn usage() -> ! {
     eprintln!("{}", crate::docs::usage_text());
-    std::process::exit(EXIT_USAGE as i32);
+    exit_with(EXIT_USAGE)
 }
 
 /// 主动请求帮助（`help` 无主题、`--help`、`-h`）的出口：请求有效，退 0
 pub(crate) fn usage_help() -> ! {
     println!("{}", crate::docs::usage_text());
-    std::process::exit(EXIT_OK as i32);
+    exit_with(EXIT_OK)
 }
 
 /// 单命令详助；未知主题 → 顶层 usage
@@ -27,12 +27,12 @@ pub(crate) fn help_cmd(name: &str) -> ! {
         Some(text) => println!("{text}"),
         None => usage(),
     }
-    std::process::exit(EXIT_OK as i32);
+    exit_with(EXIT_OK)
 }
 
 pub(crate) fn version_help() -> ! {
     println!("diskedit {}", env!("CARGO_PKG_VERSION"));
-    std::process::exit(EXIT_OK as i32);
+    exit_with(EXIT_OK)
 }
 
 /// 一个值的语法。解析器只按声明在这里的值域校验；`Bool` 表示旗标不带值。

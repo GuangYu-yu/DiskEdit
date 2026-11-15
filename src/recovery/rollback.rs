@@ -23,9 +23,6 @@ const FOREIGN_EDIT_HINT: &str =
     "if another tool rewrote the table, run partprobe on the disk so the kernel partition view \
      matches the disk before retrying";
 
-/// 撕裂载荷归档的后缀：归档保留记录全文，留给人工核验
-pub(crate) const TORN_SUFFIX: &str = crate::dev::QUARANTINE_TORN;
-
 /// 准入通过的进行中记录。字段私有，只能由 [`RecoveryEngine::admit_rollback`] 产出
 pub(crate) struct ProvisionalRecord {
     record: Record,
@@ -257,10 +254,12 @@ fn gpt_preimage_ranges(restore: &[RestoreEntry], primary: &[u8]) -> Option<Vec<(
         header.number_of_partition_entries as usize,
         header.size_of_partition_entry as usize,
     ) {
-        if entry.starting_lba == 0 && entry.ending_lba == 0 {
+        if crate::table::is_unused(&entry) {
             continue;
         }
-        if entry.starting_lba > entry.ending_lba {
+        // 类型非零的条目起点为 LBA0 或区间倒挂，在盘上都不是合法条目：这张预映像
+        // 不构成可回放的旧表，调用方按"没有可回放的旧表"处理
+        if entry.starting_lba == 0 || entry.starting_lba > entry.ending_lba {
             return None;
         }
         out.push((entry.starting_lba, entry.ending_lba - entry.starting_lba + 1));
@@ -625,6 +624,13 @@ pub(crate) fn verify_record_plan(
     src: &FileSource,
     restore: &[RestoreEntry],
 ) -> Result<bool, RunOutcome> {
+    // 盘面已整体回到原文（上一轮回放写完、记录未释放）：无需再逐条判定。
+    // 同一区间被写过多次时，中间态各自成条，只有按并集算出的最终原文能回答
+    // "全部回滚完成了吗"
+    let image = rolled_back_image(restore);
+    if target_matches_image(src, &image)? {
+        return Ok(true);
+    }
     let mut patches: Vec<(u64, Vec<u8>)> = Vec::new();
     let mut complete = true;
     for entry in restore.iter().rev() {
@@ -643,6 +649,56 @@ pub(crate) fn verify_record_plan(
         patches.push((offset, entry.original.clone()));
     }
     Ok(complete)
+}
+
+/// 记录覆盖的区间"全部回滚完成后"应有的字节：每条区间的原文按回放顺序（逆序）叠加，
+/// 记录里更早的条目后写、覆盖更晚的条目。返回按偏移排序、互不重叠的段
+fn rolled_back_image(restore: &[RestoreEntry]) -> Vec<(u64, Vec<u8>)> {
+    let mut image: Vec<(u64, Vec<u8>)> = Vec::new();
+    for entry in restore.iter().rev() {
+        let offset = entry.byte_offset().expect("ranges were validated before the image is built");
+        overlay(&mut image, offset, &entry.original);
+    }
+    image
+}
+
+/// 把一段字节叠加到按偏移排序、互不重叠的段集合上，覆盖其中的重叠部分
+fn overlay(image: &mut Vec<(u64, Vec<u8>)>, offset: u64, bytes: &[u8]) {
+    let end = offset.saturating_add(bytes.len() as u64);
+    let mut kept: Vec<(u64, Vec<u8>)> = Vec::with_capacity(image.len() + 2);
+    for (piece_offset, piece) in std::mem::take(image) {
+        let piece_end = piece_offset.saturating_add(piece.len() as u64);
+        if piece_end <= offset || piece_offset >= end {
+            kept.push((piece_offset, piece));
+            continue;
+        }
+        if piece_offset < offset {
+            kept.push((piece_offset, piece[..(offset - piece_offset) as usize].to_vec()));
+        }
+        if piece_end > end {
+            kept.push((end, piece[(end - piece_offset) as usize..].to_vec()));
+        }
+    }
+    kept.push((offset, bytes.to_vec()));
+    kept.sort_by_key(|(offset, _)| *offset);
+    *image = kept;
+}
+
+/// 盘面是否逐字节等于并集图像
+fn target_matches_image(src: &FileSource, image: &[(u64, Vec<u8>)]) -> Result<bool, RunOutcome> {
+    for (offset, expected) in image {
+        let mut now = vec![0u8; expected.len()];
+        src.read_at(*offset, &mut now).map_err(|e| {
+            RunOutcome::refused(format!(
+                "cannot verify the recorded write at offset {offset} against the target: {e} — refusing to replay \
+                 over an unverifiable region; {ROLLBACK_STUCK_REMEDY}"
+            ))
+        })?;
+        if &now != expected {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 /// 虚拟盘面读：先读真盘，再按回放顺序叠加已核对区间的原文（后叠加的覆盖先叠加的）
@@ -714,12 +770,12 @@ pub(crate) fn replay_record(
         }
     }
     // 写后读回：缓存丢写与镜像层短写只有重读才可见。回放是唯一的回退路径，
-    // 这一段丢了就没有第二处能发现
-    for entry in restore {
-        let offset = entry.byte_offset().expect("validated before replay");
-        let mut got = vec![0u8; entry.original.len()];
+    // 这一段丢了就没有第二处能发现。比对的是并集图像：区间可以重叠，逐条比对会把
+    // 重叠处的后写原文误报成不一致
+    for (offset, expected) in rolled_back_image(restore) {
+        let mut got = vec![0u8; expected.len()];
         match src.read_at(offset, &mut got) {
-            Ok(()) if got == entry.original => {}
+            Ok(()) if got == expected => {}
             Ok(()) => bail_fail(RunOutcome::partial(format!(
                 "undo wrote the pre-image at offset {offset} but the target holds different bytes; \
                  the recovery record at {} is kept — retry `diskedit undo`",
@@ -739,12 +795,6 @@ pub(crate) fn replay_record(
             path.display()
         )))
     });
-}
-
-/// 记录改名到同目录的 `.torn`，目录 fsync 由改名函数承担
-pub(crate) fn archive_torn(from: &std::path::Path) -> Result<std::path::PathBuf, String> {
-    crate::dev::quarantine_move(from, TORN_SUFFIX)
-        .map_err(|e| format!("cannot archive the recovery record at {}: {e}", from.display()))
 }
 
 #[cfg(test)]

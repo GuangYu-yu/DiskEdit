@@ -303,7 +303,7 @@ fn abandon_records(target: &str, identity: &TargetIdentity, disk: Option<&FileSo
     let mut failed: Vec<String> = Vec::new();
     for r in &records {
         let from = r.path();
-        match crate::dev::quarantine_move(from, crate::dev::QUARANTINE_ABANDONED) {
+        match crate::dev::quarantine_move(from) {
             Ok(_) => {}
             Err(e) => failed.push(format!("{}: {e}", from.display())),
         }

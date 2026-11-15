@@ -155,8 +155,18 @@ pub fn mkfs_capability(fstype: MkfsFs) -> Result<(), FsError> {
 /// 防旧 btrfs/ZFS/RAID 备份超级块残留被 blkid 误认。
 ///
 /// `label` 直接作为建 FS 工具的卷标参数：卷标是 FS 镜像的一部分，事后另起一个工具
-/// 补写会让"FS 已建成、卷标未跟上"成为一段真实存在的中间态
-pub fn mkfs(src: &mut WriteSource, part: u32, fstype: MkfsFs, label: Option<&str>) -> Result<(), FsError> {
+/// 补写会让"FS 已建成、卷标未跟上"成为一段真实存在的中间态。
+///
+/// `expected` 是计划里这一条的字节区间 `(base, len)`：解析出实际分区设备之后、任何写盘
+/// 之前，两者的字节区间必须一致。表在装配之后被改动时，`scope_byte_range` 会解析出
+/// 另一个区间，照它建 FS 就是在计划没有选择的字节上格式化
+pub fn mkfs(
+    src: &mut WriteSource,
+    part: u32,
+    expected: (u64, u64),
+    fstype: MkfsFs,
+    label: Option<&str>,
+) -> Result<(), FsError> {
     let tool = mkfs_tool(fstype)?;
     // 能力检查必须发生在任何写盘之前：wipe_zero 一旦开始就不可回滚，工具缺失时
     // 目标上"什么都没写"的承诺只能在第一次擦除之前作出
@@ -164,6 +174,16 @@ pub fn mkfs(src: &mut WriteSource, part: u32, fstype: MkfsFs, label: Option<&str
     // 区间只解析一次：擦除区间与实际建立的那个设备必须同源——分两次读表的话，
     // 两次读数之间表被改动会让"擦哪一段"与"擦的是哪个设备"对不上
     let (part_off, part_len) = scope_byte_range(src, &DeviceScope::Partition(part))?;
+    if (part_off, part_len) != expected {
+        return Err(FsError::invalid(format!(
+            "partition {part} now covers bytes {part_off}..{} but the create step was planned for \
+             {}..{} — the partition table changed under the job; refusing to create a filesystem \
+             on a range the plan did not choose",
+            part_off.saturating_add(part_len),
+            expected.0,
+            expected.0.saturating_add(expected.1)
+        )));
+    }
     // part_len 上界断言（入口拒绝，替代 erase_ranges 内 `as i64` 的回绕面）：区间表
     // 以 i64 承载"分区尾 − 回退量"的中间负值，≥ 2^63 的长度回绕成负数后裁剪逻辑
     // 静默失效。真实设备远到不了这么大，但入口输入来自盘上表——畸形表配巨型镜像
@@ -176,13 +196,7 @@ pub fn mkfs(src: &mut WriteSource, part: u32, fstype: MkfsFs, label: Option<&str
     let ss = src.sector_size;
     // 建 loop、定位分区节点、开设备都在写盘之前：这些失败必须停在"确定未写盘"这一侧，
     // 所以屏障不能由调用方在更早的位置落——它要在这条路径内部、紧贴 wipe_zero
-    let dev = resolve_scope_device(
-        src,
-        &DeviceScope::Partition(part),
-        part_off,
-        part_len,
-        ImageLoopPolicy::RefuseAny,
-    )?;
+    let dev = attach_partition_device(src, part, (part_off, part_len))?;
     // 擦除一旦开始，前镜像就不再完整，undo 必须被拒；屏障写不下去时一个字节都还没动，
     // 故报 Io（→ NoMutation），不报 CommandFailed
     src.mark_non_reversible().map_err(|e| {

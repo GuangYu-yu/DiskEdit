@@ -90,6 +90,23 @@ impl ValidatedGeometry {
             g.header.number_of_partition_entries,
             MAX_ARRAY_BYTES,
         )?;
+        // 端点倒挂的条目不是可操作的几何：下游的跨度、搬移打包与拷贝长度都按
+        // `ending - starting + 1` 计算，未检查的减法在 debug 下 panic、release 下回绕。
+        // 解析层已拒绝这种条目；这里在"唯一可操作几何"构造点再钉一次，任何调用方
+        // 拿着未经解析层校验的 RawGpt 也进不来
+        if let Some((i, e)) = g
+            .entries
+            .iter()
+            .enumerate()
+            .find(|(_, e)| !crate::table::is_unused(e) && e.starting_lba > e.ending_lba)
+        {
+            return Err(invalid(format!(
+                "GPT partition entry #{} ends before it starts (LBA {}..{}) — refusing to operate on an inverted entry",
+                i + 1,
+                e.starting_lba,
+                e.ending_lba
+            )));
+        }
         if let Some((a, b)) = find_overlap(&g.entries) {
             return Err(invalid(format!(
                 "GPT partition entries #{a} and #{b} overlap — this tool refuses to operate on a table whose \
@@ -112,7 +129,7 @@ impl ValidatedGeometry {
         let max_end = g
             .entries
             .iter()
-            .filter(|e| e.ending_lba != 0)
+            .filter(|e| !crate::table::is_unused(e))
             .map(|e| e.ending_lba)
             .max()
             .unwrap_or(0);
@@ -197,8 +214,11 @@ impl ValidatedGeometry {
         };
         let mut draft = cur.clone();
         f(&mut draft);
-        // 未使用条目的判据与解析层一致：两个 LBA 字段同时为零
-        if !(draft.starting_lba == 0 && draft.ending_lba == 0) {
+        // 未使用条目的判据全仓只有 [`crate::table::is_unused`] 一处：只看类型 GUID。
+        // 写入一个"类型非零、区间 0..0"的草稿会得到畸形条目，故它按已定义处理并走下面
+        // 的范围/重叠复核——那一刻它必然落在 usable 区外，被拒绝
+        let unused = crate::table::is_unused(&draft);
+        if !unused {
             if draft.starting_lba > draft.ending_lba {
                 return Err(invalid(format!(
                     "entry #{} has an inverted range {}..{}",
@@ -220,7 +240,7 @@ impl ValidatedGeometry {
                 )));
             }
             for (i, other) in self.entries.iter().enumerate() {
-                if i == index || (other.starting_lba == 0 && other.ending_lba == 0) {
+                if i == index || crate::table::is_unused(other) {
                     continue;
                 }
                 if draft.starting_lba <= other.ending_lba && other.starting_lba <= draft.ending_lba {
@@ -367,12 +387,12 @@ impl ValidatedGeometry {
 /// （A 与 C 重叠而 B 夹在中间时，B 必与 A 或 C 之一重叠）。
 ///
 /// 返回第一个重叠对的两个 **1-based 分区号**（= 数组槽位号），与 CLI 的 `:N` 一致。
-/// 未使用条目的判据与解析层一致：两个 LBA 字段同时为零
+/// 未使用条目的判据与解析层同一处：[`crate::table::is_unused`]
 pub fn find_overlap(entries: &[GPTPartitionEntry]) -> Option<(usize, usize)> {
     let mut defined: Vec<(u64, u64, usize)> = entries
         .iter()
         .enumerate()
-        .filter(|(_, e)| !(e.starting_lba == 0 && e.ending_lba == 0))
+        .filter(|(_, e)| !crate::table::is_unused(e))
         .map(|(i, e)| (e.starting_lba, e.ending_lba, i + 1))
         .collect();
     defined.sort_by_key(|&(start, end, num)| (start, end, num));
