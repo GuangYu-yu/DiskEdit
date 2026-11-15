@@ -23,7 +23,14 @@ pub(crate) fn attach_record(
     request: (u32, u64, u64),
 ) -> std::path::PathBuf {
     let record_path = src.identity.record_path().expect("image targets have a record path").to_path_buf();
+    // 记录目录的形状由生产侧复核（镜像旁 0700，group/other 无权限）；夹具自己建目录，
+    // 就必须按同一形状建，否则写句柄在 `prepare_record_dir` 处被拒
     std::fs::create_dir_all(record_path.parent().unwrap()).unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(record_path.parent().unwrap(), std::fs::Permissions::from_mode(0o700))
+            .unwrap();
+    }
     let probe = crate::platform::probe::probe_of(src).unwrap();
     let scene = crate::recovery::SceneIdentity::of_source(&probe, src);
     let mut journal = crate::recovery::RecordJournal::create_image(

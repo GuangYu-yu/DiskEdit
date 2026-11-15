@@ -35,7 +35,7 @@ pub(crate) struct RecordSpot {
     pub(crate) dir: PathBuf,
     pub(crate) name: std::ffi::OsString,
     pub(crate) backend: RecordBackend,
-    /// 隔离区条目：`.abandoned[.N]`，或旧构建留下的 `.torn[.N]`
+    /// 隔离区条目：`.abandoned[.N]` 或 `.torn[.N]`
     pub(crate) quarantine: Option<QuarantineMark>,
 }
 
@@ -105,8 +105,8 @@ pub(crate) fn record_spot(path: &Path) -> Option<RecordSpot> {
 }
 
 /// 文件名属于哪个隔离类别。编号只认十进制数字，`0` 也接受：本工具只产生不带编号的名字，
-/// 但按名字识别出来比把它当活跃记录更接近事实。`.torn` 没有产生者，识别它是为了把旧构建
-/// 留在盘上的归档仍归到隔离区，而不是当成一条待解码的证据
+/// 但按名字识别出来比把它当活跃记录更接近事实。`.torn` 没有产生者，识别它是让这类名字
+/// 仍归入隔离区，而不是当成一条待解码的证据
 pub(crate) fn quarantine_mark(name: &std::ffi::OsStr) -> Option<QuarantineMark> {
     let text = name.to_str()?;
     for (stem, mark) in [

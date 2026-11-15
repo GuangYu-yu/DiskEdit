@@ -640,8 +640,10 @@ mod tests {
         // 头自述 128 条目，条目数组必须凑满同样的长度：ValidatedGeometry 拒绝
         // "数组长度 ≠ 头自述条目数"的表
         let mut entries: Vec<_> = ents.iter().map(|&(s, e)| gptman::GPTPartitionEntry {
-            partition_type_guid: [1; 16],
-            unique_partition_guid: [2; 16],
+            // (0, 0) 表示空槽：类型 GUID 为零才是"未使用"的判据（UEFI 2.10 §5.3.1），
+            // 夹具里的空槽不能靠"区间为零"表达，否则它是一条类型非零的畸形条目
+            partition_type_guid: if (s, e) == (0, 0) { [0; 16] } else { [1; 16] },
+            unique_partition_guid: if (s, e) == (0, 0) { [0; 16] } else { [2; 16] },
             starting_lba: s,
             ending_lba: e,
             attribute_bits: 0,

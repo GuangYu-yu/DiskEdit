@@ -538,6 +538,53 @@ pub(crate) fn entry_geometry_validation() {
     assert!(crate::table::is_unused(&g2.entries[0]));
 }
 
+/// 两份副本各自 CRC 自洽、但陈述不同的表：不能报 Valid（否则备份坏掉后这份未提交的
+/// 表会被当成已提交的事实）。解析以主副本为准，写入路径按主副本把两份重写一遍
+#[test]
+pub(crate) fn divergent_copies_are_reported_and_repaired_from_the_primary() {
+    let ss = 512u64;
+    let mut src = src_from_gpt("diverge", ss);
+    let g = load_gpt(&src).unwrap().unwrap();
+    assert_eq!(g.state, GptState::Valid, "前提：夹具的两份副本一致");
+    let file_last = src.size / ss - 1;
+
+    // 只动主副本：分区 1 终点 60 → 61，条目数组与主头 CRC 一并重算。
+    // 主副本自洽，备份仍是旧表——差异只出现在跨副本比较里
+    let mut entries = g.entries.clone();
+    entries[0].ending_lba = 61;
+    let geom = geom128(ss);
+    let (bytes, crc) = serialize_array(&entries, &geom);
+    src.write_fixture(2 * ss, &bytes).unwrap();
+    let h = RawHeader {
+        revision: g.header.revision,
+        primary_lba: 1,
+        backup_lba: file_last,
+        first_usable_lba: g.header.first_usable_lba,
+        last_usable_lba: g.header.last_usable_lba,
+        disk_guid: g.header.disk_guid,
+        partition_entry_lba: 2,
+        number_of_partition_entries: g.header.number_of_partition_entries,
+        size_of_partition_entry: g.header.size_of_partition_entry,
+        header_size: 92,
+    };
+    src.write_fixture(ss, &serialize_header(&h, crc, ss).unwrap()).unwrap();
+
+    let g2 = load_gpt(&src).unwrap().unwrap();
+    assert_eq!(g2.state, GptState::NeedsRepair { cause: HeaderIssue::CopiesDiverge });
+    assert_eq!(g2.entries[0].ending_lba, 61, "the primary is the copy the write path follows");
+
+    // 写入路径按主副本重写两份：收敛后两份陈述同一张表，状态回到 Valid
+    commit_gpt(&mut src, &g2, file_last).unwrap();
+    let g3 = load_gpt(&src).unwrap().unwrap();
+    assert_eq!(g3.state, GptState::Valid);
+    assert_eq!(g3.entries[0].ending_lba, 61);
+    // 读回的是盘尾的备份副本本身：只写主副本会让下一次 load 又报分叉
+    let backup_array = (file_last - geom.lba_span()) * ss;
+    let mut raw = vec![0u8; geom.lba_span() as usize * ss as usize];
+    src.read_at(backup_array, &mut raw).unwrap();
+    assert_eq!(crate::table::parse_entry_array(&raw, 128, 128)[0].ending_lba, 61);
+}
+
 #[test]
 pub(crate) fn commit_roundtrip_via_gptman() {
     // 写入后用 gptman 读回，验证序列化与 CRC 符合规范

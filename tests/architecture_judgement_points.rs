@@ -12,12 +12,12 @@ mod guards;
 
 use guards::{rust_sources, source};
 
-/// `TableReplay::of(` 的调用者：定义与执行器在 `rollback.rs`，消费点在下列文件。
-/// 多一个文件就说明有调用点在自己决定回放走向
+/// `TableReplay::of(` 的调用者：定义与执行器在 `rollback.rs`，其余三处是准入与
+/// 报告侧。多一个文件就说明有调用点在自己决定回放走向。`cmd/undo.rs` 不在此列：
+/// 它拿到的是 `recovery::engine` 给出的准入结果，回放由该处构造
 const TABLE_REPLAY_CALLERS: &[&str] = &[
     "cmd/abandon.rs",
     "cmd/inspect.rs",
-    "cmd/undo.rs",
     "recovery/engine.rs",
     "recovery/rollback.rs",
 ];

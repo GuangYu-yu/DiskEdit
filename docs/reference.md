@@ -64,8 +64,10 @@ path:
   PATH is dispatched by structure: a direct entry inside a recovery-record
   directory (`<image>.diskedit/...` or `<state_root>/recovery/<identity-hash>/...`,
   excluding `record.lock`) is itself decoded as evidence. Entries in the
-  quarantine area (`.abandoned[.N]`, and `.torn[.N]` left by older builds) are
-  marked as such and do not count as active records. Any other path is treated as a TARGET.
+  quarantine area (`.abandoned[.N]`, `.torn[.N]`) are marked as such and do
+  not count as active records. This build never writes `.torn[.N]`; the name
+  is recognized so such an entry is treated as quarantine instead of an active
+  record. Any other path is treated as a TARGET.
 
 output:
   the evidence path, the record fields (transaction, plan, operation, progress,
@@ -102,8 +104,10 @@ diskedit records list [TARGET]
 ```text
   List recovery records as JSON. Only decodable records are listed; an entry in
   an unknown format is left out (use `records scan` to see it). Quarantine
-  entries (`.abandoned[.N]`, and `.torn[.N]` left by older builds) are listed and
-  marked, but they are not part of the active record set.
+  entries (`.abandoned[.N]`, `.torn[.N]`) are listed and marked, but they are
+  not part of the active record set. This build never writes `.torn[.N]`; the
+  name is recognized so such an entry is treated as quarantine, not as an
+  active record.
 
   There is no index yet: every row carries "registered": false, and records are
   enumerated in memory. Sidecars that are not addressed by TARGET are not
