@@ -214,7 +214,7 @@ pub(crate) fn block_lock_converges_to_the_carrier_while_records_stay_per_target(
         TargetIdentity::from_block_parts(
             Path::new(node),
             disk_key.to_string(),
-            disk_key.to_string(),
+            crate::dev::LockKey::new(disk_key.to_string()),
             Some(key_for_test("sdb-carrier", partition)),
         )
     };
@@ -245,13 +245,13 @@ pub(crate) fn a_dm_rename_does_not_change_the_lock_slot() {
     std::fs::write(node.join("dm/name"), "vg-data\n").unwrap();
 
     let before = TargetIdentity::resolve_block_at(&node, Path::new("/dev/dm-0")).unwrap();
-    assert_eq!(block_lock_key(&node).unwrap(), format!("dm-0-{}", 4096 * 512));
+    assert_eq!(block_lock_key(&node).unwrap().as_str(), format!("dm-0-{}", 4096 * 512));
     std::fs::write(node.join("dm/name"), "renamed\n").unwrap();
     let after = TargetIdentity::resolve_block_at(&node, Path::new("/dev/dm-0")).unwrap();
     assert_eq!(after.lock_path(), before.lock_path());
 
     std::fs::write(node.join("dm/uuid"), "mpath-1234\n").unwrap();
-    assert_eq!(block_lock_key(&node).unwrap(), "mpath-1234");
+    assert_eq!(block_lock_key(&node).unwrap().as_str(), "mpath-1234");
 }
 
 /// 续跑只从当前目标的键派生出的唯一落点开始：同一个键得到同一落点（允许续跑），
@@ -262,7 +262,7 @@ pub(crate) fn the_same_identity_key_is_the_same_resume_slot() {
         TargetIdentity::from_block_parts(
             Path::new(node),
             "sdb-1234".to_string(),
-            "sdb-1234".to_string(),
+            crate::dev::LockKey::new("sdb-1234".to_string()),
             Some(key_for_test(target, partition)),
         )
         .record_path()
@@ -288,6 +288,7 @@ pub(crate) fn loop_identity_converges_to_the_backing_file() {
     }
     impl Drop for Bound {
         fn drop(&mut self) {
+            // audit-allow: D-14
             let _ = std::process::Command::new("losetup").arg("-d").arg(&self.dev).output();
         }
     }
@@ -324,6 +325,7 @@ pub(crate) fn two_loops_over_one_backing_share_the_carrier_lock() {
     struct Bound(PathBuf);
     impl Drop for Bound {
         fn drop(&mut self) {
+            // audit-allow: D-15
             let _ = std::process::Command::new("losetup").arg("-d").arg(&self.0).output();
         }
     }

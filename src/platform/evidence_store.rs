@@ -372,6 +372,7 @@ fn open_error(parent: RawFd, name: &OsStr, err: io::Error) -> PathError {
 }
 
 fn is_symlink(parent: RawFd, name: &OsStr) -> bool {
+    // audit-allow: S2-16
     let Ok(cname) = c_name(name) else {
         return false;
     };

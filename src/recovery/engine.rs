@@ -22,6 +22,26 @@ use crate::cli::TargetRequest;
 use crate::dev::{self, FileSource, TargetIdentity, WriteSource};
 use crate::outcome::RunOutcome;
 
+/// 记录落点相对"本目标当前键派生的那个落点"的位置。读取落点关系的地方都经
+/// [`RecordSlot::resumes_in_place`]，新增一种落点关系时那里的 match 会编译失败
+pub(crate) enum RecordSlot {
+    /// 本目标当前键派生的落点：可续跑，也可回放
+    Derived,
+    /// 记录根下的兄弟目录：目录名不是任何目标的当前落点，靠载荷认领，
+    /// 只能回放或释放，重新执行命令不从那里续跑
+    Sibling,
+}
+
+impl RecordSlot {
+    /// 能否从派生落点进入续跑
+    pub(crate) fn resumes_in_place(&self) -> bool {
+        match self {
+            Self::Derived => true,
+            Self::Sibling => false,
+        }
+    }
+}
+
 /// 一份**还活着的**恢复现场。它是"目标上还有什么没做完"的唯一枚举口径：闸口
 /// （拒绝别的写命令）与 `abandon`（放弃它）都从这里取，两处不各自判断"什么算现场"
 pub(crate) struct RecoveryRecord {
@@ -33,10 +53,8 @@ pub(crate) struct RecoveryRecord {
     /// 载荷身份与当前目标不符的原因。`None` 才是本目标可认领的记录；`Some` 不参与回放
     /// 与隔离，身份派生的落点被它占住时写命令拒绝
     pub(crate) foreign: Option<String>,
-    /// 记录落在记录根下的兄弟目录里，而不是本目标当前键派生的那个落点。旧拼接键算出的
-    /// 目录名不是任何目标的当前落点：那里的记录靠载荷认领，但续跑只从派生落点进入，
-    /// 故对它只能回放或释放，重新执行命令不改用它
-    pub(crate) sibling_slot: bool,
+    /// 记录落在记录根下的兄弟目录里，而不是本目标当前键派生的那个落点
+    pub(crate) slot: RecordSlot,
 }
 
 impl RecoveryRecord {
@@ -132,7 +150,7 @@ pub(crate) fn active_recovery_records(
                 path: path.to_path_buf(),
                 probe: Box::new(probe),
                 foreign: mismatch_reason(path, current.as_ref())?,
-                sibling_slot: false,
+                slot: RecordSlot::Derived,
             });
         }
     }
@@ -208,6 +226,7 @@ pub(crate) fn refuse_foreign_record_slot(src: &FileSource) -> Result<(), RunOutc
     let Some(path) = src.identity.record_path() else {
         return Ok(());
     };
+    // audit-allow: S2-22
     let Ok(scene) = ownership_scene(src) else {
         return Ok(());
     };
@@ -288,7 +307,7 @@ fn scan_record_root(
                     .to_string(),
             ),
         };
-        out.push(RecoveryRecord { path: candidate, probe: Box::new(probe), foreign, sibling_slot: true });
+        out.push(RecoveryRecord { path: candidate, probe: Box::new(probe), foreign, slot: RecordSlot::Sibling });
     }
     Ok(())
 }
@@ -366,7 +385,7 @@ fn scan_image_directory(
             path: candidate,
             probe: Box::new(probe),
             foreign: None,
-            sibling_slot: false,
+            slot: RecordSlot::Derived,
         });
     }
     Ok(())
@@ -484,7 +503,7 @@ impl TransactionManager {
         // 把"重跑"当出路会让用户连试几次都落回同一句拒绝
         let recorded = active.iter().find_map(|r| match r.probe.as_ref() {
             crate::recovery::CompanionProbe::Decoded(record)
-                if active.len() == 1 && !r.sibling_slot =>
+                if active.len() == 1 && r.slot.resumes_in_place() =>
             {
                 Some(record)
             }
@@ -575,7 +594,7 @@ impl TransactionManager {
         // 但路径落在另一个目录，不说明白就无法把这条记录与本目标的落点联系起来
         let sibling: Vec<String> = active
             .iter()
-            .filter(|r| r.sibling_slot)
+            .filter(|r| !r.slot.resumes_in_place())
             .map(|r| r.path().display().to_string())
             .collect();
         let stray = if sibling.is_empty() {
@@ -713,7 +732,7 @@ impl TransactionManager {
         let resumable = match active.as_slice() {
             [one] => match one.probe.as_ref() {
                 // 续跑从本目标当前键派生的落点打开；兄弟目录里的记录不在这里续跑
-                crate::recovery::CompanionProbe::Decoded(record) => !one.sibling_slot && record.op == op,
+                crate::recovery::CompanionProbe::Decoded(record) => one.slot.resumes_in_place() && record.op == op,
                 _ => false,
             },
             _ => false,
@@ -763,7 +782,7 @@ impl TransactionManager {
         let resumable = matches!(
             active.as_slice(),
             [one]
-                if !one.sibling_slot
+                if one.slot.resumes_in_place()
                     && matches!(
                         one.probe.as_ref(),
                         crate::recovery::CompanionProbe::Decoded(record)
@@ -808,6 +827,7 @@ impl TransactionManager {
     /// 镜像同样真只读：调用面已核清无一处写盘，只读镜像/介质不被拒之门外
     pub(crate) fn read_only(a: &impl TargetRequest) -> Result<FileSource, RunOutcome> {
         #[cfg(target_os = "linux")]
+        // audit-allow: S2-17
         if let Ok(meta) = std::fs::metadata(a.target())
             && meta.file_type().is_block_device()
         {
@@ -909,7 +929,7 @@ mod tests {
     use super::*;
 
     fn record(probe: crate::recovery::CompanionProbe) -> RecoveryRecord {
-        RecoveryRecord { path: "r".into(), probe: Box::new(probe), foreign: None, sibling_slot: false }
+        RecoveryRecord { path: "r".into(), probe: Box::new(probe), foreign: None, slot: RecordSlot::Derived }
     }
 
     fn way_out(active: &[RecoveryRecord]) -> String {
@@ -1022,7 +1042,7 @@ mod tests {
     #[test]
     fn a_record_in_a_sibling_slot_is_reported_with_its_own_way_out() {
         let mut stray = record(crate::recovery::CompanionProbe::Decoded(blocked_move_record()));
-        stray.sibling_slot = true;
+        stray.slot = RecordSlot::Sibling;
         let text = way_out(&[stray]);
         assert!(!text.contains("re-run `diskedit"), "a sibling slot is not resumed in place: {text}");
         assert!(text.contains("sibling record directory"), "{text}");

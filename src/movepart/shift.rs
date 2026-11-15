@@ -70,6 +70,7 @@ pub(crate) struct ApplyDecision {
 
 /// 事前判定（只读）：FS preflight → 槽位判定。
 /// 返回 `Err` 一律发生在任何写盘之前；本函数签名上就没有 `&mut WriteSource`
+// audit-allow: A-7
 #[allow(clippy::too_many_arguments)] // 与 apply 同一组入参
 pub(crate) fn prepare_apply(
     src: &FileSource,

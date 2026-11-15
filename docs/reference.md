@@ -374,10 +374,11 @@ diskedit check <TARGET>:N
 ```text
   Check filesystem consistency without repairing. The tool depends on the
   type: ext e2fsck -n, ntfs ntfsfix -n, xfs xfs_repair -n, btrfs check,
-  vfat/exfat fsck -n, f2fs fsck.f2fs. A non-zero tool exit is a failed check
-  (exit 3). f2fs is not strictly read-only: when a SIT segment type disagrees
-  with its recorded type, fsck.f2fs rewrites global metadata even without -f,
-  and --dry-run does not stop it.
+  vfat/exfat fsck -n, f2fs fsck.f2fs. A non-zero tool exit is a failed check:
+  exit 3 for the read-only checkers; f2fs can have written, so its failure is
+  exit 5. It is not strictly read-only: when a SIT segment type disagrees with
+  its recorded type, fsck.f2fs rewrites global metadata even without -f, and
+  --dry-run does not stop it.
 ```
 
 ### `mkfs`

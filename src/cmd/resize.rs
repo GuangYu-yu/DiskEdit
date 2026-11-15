@@ -35,6 +35,7 @@ use crate::lvm::LvmError;
 /// 它的错误分类按"首写之前 / 之后"给出；本函数的出口按本次写事实归责，把执行器
 /// 视野之外的目标写入（repair）算进结论。几何由调用方解析（一条命令解析一次，
 /// 往下传），本函数与执行半程都不读表
+// audit-allow: A-4
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn apply_move(
     src: &mut WriteSource,
@@ -118,6 +119,7 @@ fn apply_move_unreconciled(
         Ok(()) => RunOutcome::applied_with(post),
         // 分类由执行器给：首写之前的拒绝仍是 3/4，首写之后才是 5。失败自带的待办与
         // 本进程已攒下的待办合并，一个都不丢
+        // audit-allow: P-2
         Err(RunOutcome::Partial { cause, pending, origin }) => RunOutcome::Partial {
             cause,
             pending: pending.into_iter().chain(post).collect(),

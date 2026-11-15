@@ -603,7 +603,7 @@ impl TargetIdentity {
     /// 这里只供测试构造固定身份
     #[cfg(test)]
     pub(crate) fn from_block_keys(path: &Path, disk_key: String) -> Self {
-        let lock_key = disk_key.clone();
+        let lock_key = crate::dev::LockKey::new(disk_key.clone());
         Self::from_block_parts(path, disk_key, lock_key, None)
     }
 
@@ -615,13 +615,13 @@ impl TargetIdentity {
     pub(crate) fn from_block_parts(
         path: &Path,
         disk_key: String,
-        lock_key: String,
+        lock_key: crate::dev::LockKey,
         record_key: Option<IdentityKey>,
     ) -> Self {
         let stable = key_token(&disk_key);
         let dir = state_dir();
         let journal = dir.join(format!("{stable}{JOURNAL_SUFFIX}"));
-        let lock = dir.join(format!("{}{LOCK_SUFFIX}", key_token(&lock_key)));
+        let lock = dir.join(format!("{}{LOCK_SUFFIX}", key_token(lock_key.as_str())));
         let record = record_key.as_ref().map(IdentityKey::record_path);
         Self {
             kind: TargetKind::Block,
@@ -714,6 +714,7 @@ pub(crate) fn target_is_partition_node(path: &Path) -> bool {
             Ok(true) => {}
             _ => return false,
         }
+        // audit-allow: S2-4
         let Ok(node) = sysfs_node(path) else { return true };
         // 只有"属性不存在"才是整设备；值存在（无论能否解析成数字）与读失败都按分区
         // 节点处理——判据读不出来就拒，与上面的口径一致
@@ -721,6 +722,7 @@ pub(crate) fn target_is_partition_node(path: &Path) -> bool {
     }
     #[cfg(not(target_os = "linux"))]
     {
+        // audit-allow: D-22
         let _ = path;
         false
     }

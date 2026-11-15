@@ -666,6 +666,7 @@ impl FileSource {
         }
         #[cfg(not(target_os = "linux"))]
         {
+            // audit-allow: D-19
             let _ = opened;
             Ok(TargetIdentity::image_at(path, path))
         }
@@ -827,6 +828,7 @@ impl FileSource {
         }
         #[cfg(not(any(unix, windows)))]
         {
+            // audit-allow: D-20
             let _ = (off, buf);
             Err(io::Error::new(io::ErrorKind::Unsupported, "no read_at on this platform"))
         }

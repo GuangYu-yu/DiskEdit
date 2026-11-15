@@ -27,6 +27,7 @@ pub(crate) enum Cause {
 /// 恢复现场的判定结果
 #[derive(Clone, Debug)]
 #[cfg_attr(test, derive(PartialEq, Eq))]
+// audit-allow: A-14
 #[allow(clippy::large_enum_variant)]
 pub(crate) enum Evidence {
     Absent,

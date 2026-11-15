@@ -14,6 +14,7 @@ macro_rules! fault_points {
             $(#[$doc])*
             #[cfg(feature = "test-faults")]
             pub(crate) fn $name($( $arg: $ty ),*) {
+                // audit-allow: S2-18
                 let Ok(v) = std::env::var("DISKEDIT_FAULT") else { return };
                 let want = String::from($tag);
                 $( let want = format!("{want}:{}", $tag_arg); )?
@@ -26,6 +27,7 @@ macro_rules! fault_points {
             $(#[$doc])*
             #[cfg(not(feature = "test-faults"))]
             pub(crate) fn $name($( $arg: $ty ),*) {
+                // audit-allow: D-26
                 $( let _ = $arg; )*
             }
         )*

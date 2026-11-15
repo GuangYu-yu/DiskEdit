@@ -619,6 +619,7 @@ pub(crate) struct PlannedResizePart {
 
 /// 事务入口：绑定计划身份与搬移前区间，跑完只读判定后把表与扩容交给装配与执行器。
 // 参数是一次作业的独立事实（几何 / 区间 / 开关 / 日志），合成结构体只是把它们换个位置
+// audit-allow: A-1
 #[allow(clippy::too_many_arguments)]
 fn resize_part_via_plan(
     src: &mut WriteSource,
@@ -638,6 +639,7 @@ fn resize_part_via_plan(
 /// `resize` 的原地入口：与 `resize-part` 共用装配-执行链，额外带上 `--no-fs` 与
 /// LVM 收尾基线。`defer_lvm` 表示 LVM 链由命令层在表提交之后单独收口。
 // 参数是一次作业的独立事实（几何 / 区间 / 开关 / 日志），合成结构体只是把它们换个位置
+// audit-allow: A-2
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn resize_part_via_plan_with(
     src: &mut WriteSource,
@@ -794,6 +796,7 @@ fn resize_part_via_plan_unreconciled(
     match execute_resize_part(src, p, log, &mut post) {
         Ok(()) => RunOutcome::applied_with(post),
         // 越过首写之后的执行器失败已折成 Partial，已知待办随它一并报出
+        // audit-allow: P-1
         Err(RunOutcome::Partial { cause, pending, origin }) => RunOutcome::Partial {
             cause,
             pending: pending.into_iter().chain(post).collect(),
@@ -808,6 +811,7 @@ fn resize_part_via_plan_unreconciled(
 /// 事前判定（只读）：占用闸、范围、重叠、恢复三态与 FS 能力。返回 `Err` 一律发生在
 /// 任何写盘之前；签名里没有 `&mut WriteSource`，因此它不可能写盘。
 // 参数是一次作业的独立事实（几何 / 区间 / 开关 / 日志），合成结构体只是把它们换个位置
+// audit-allow: A-3
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn prepare_resize_part(
     src: &crate::dev::FileSource,

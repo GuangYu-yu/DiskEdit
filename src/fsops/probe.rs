@@ -124,7 +124,7 @@ pub(crate) fn parse_num_lead(text: &str, prefix: &str) -> Result<u64, NumError> 
 /// 该 man 的 KNOWN BUGS 指出 1K/2K 块文件系统上估计值可能不准），
 /// 块大小取自 dumpe2fs -h 的 "Block size:" 行（man dumpe2fs：-h 只读超级块）
 pub(crate) fn min_bytes_ext(dev: &str) -> Result<u64, FsError> {
-    let out = run("resize2fs", &["-P", dev])?;
+    let out = run_read("resize2fs", &["-P", dev])?;
     let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
     if !out.status.success() {
         // 工具跑起来了但退非零。`-P` 是只读查询，实际未写盘；这里按 `CommandFailed`
@@ -132,7 +132,7 @@ pub(crate) fn min_bytes_ext(dev: &str) -> Result<u64, FsError> {
         return Err(FsError::CommandFailed(format!("resize2fs -P failed ({}): {}", describe_exit(&out.status), text.trim())));
     }
     let blocks = parse_num_lead(&text, "Estimated minimum size of the filesystem:")?;
-    let out2 = run("dumpe2fs", &["-h", dev])?;
+    let out2 = run_read("dumpe2fs", &["-h", dev])?;
     let text2 = format!("{}{}", String::from_utf8_lossy(&out2.stdout), String::from_utf8_lossy(&out2.stderr));
     if !out2.status.success() {
         return Err(FsError::CommandFailed(format!("dumpe2fs -h failed ({}): {}", describe_exit(&out2.status), text2.trim())));

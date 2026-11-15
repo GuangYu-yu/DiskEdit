@@ -26,10 +26,11 @@ pub(crate) const DETAILS_RESIZEFS: &str = r#"  Resize a filesystem. The form pic
 
 pub(crate) const DETAILS_CHECK: &str = r#"  Check filesystem consistency without repairing. The tool depends on the
   type: ext e2fsck -n, ntfs ntfsfix -n, xfs xfs_repair -n, btrfs check,
-  vfat/exfat fsck -n, f2fs fsck.f2fs. A non-zero tool exit is a failed check
-  (exit 3). f2fs is not strictly read-only: when a SIT segment type disagrees
-  with its recorded type, fsck.f2fs rewrites global metadata even without -f,
-  and --dry-run does not stop it."#;
+  vfat/exfat fsck -n, f2fs fsck.f2fs. A non-zero tool exit is a failed check:
+  exit 3 for the read-only checkers; f2fs can have written, so its failure is
+  exit 5. It is not strictly read-only: when a SIT segment type disagrees with
+  its recorded type, fsck.f2fs rewrites global metadata even without -f, and
+  --dry-run does not stop it."#;
 
 pub(crate) const DETAILS_SET: &str = r#"  Set a partition property.
     name          GPT partition name
@@ -344,8 +345,13 @@ pub(crate) fn cmd_check(a: &CheckRequest) -> u8 {
             println!("check done on partition #{part} ({})", fsid::content_name(fstype));
             EXIT_OK
         }
-        // 外部工具退出非零是拒绝（3），不是"可能已写"（5）
-        Err(crate::fsops::FsError::CommandFailed(m)) => bail_fail(RunOutcome::refused(format!("check failed: {m}"))),
+        // 外部工具退出非零：只读检查工具（e2fsck -n 等）没有写盘通道，失败即"拒绝"（3）；
+        // fsck.f2fs 的 force 分支会写回全局元数据，一旦它启动过就不能再说"未改动"，
+        // 归责交给写事实，不按工具名分辨
+        Err(crate::fsops::FsError::CommandFailed(m)) => bail_fail(crate::outcome::attribute(
+            || RunOutcome::partial(format!("check failed: {m}")),
+            || RunOutcome::refused(format!("check failed: {m}")),
+        )),
         Err(e) => bail_fail(RunOutcome::from(e).context("check failed")),
     }
 }

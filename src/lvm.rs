@@ -9,7 +9,7 @@
 //! pvresize --setphysicalvolumesize 缩 PV 元数据，最后改分区表。pvresize 拒绝
 //! 时需先 pvmove 把 PE 前移，后者是 LVM 内部元数据重构，不在分区工具的范围内
 
-use crate::fsops::{run, run_write, FsError};
+use crate::fsops::{run_read, run_write, FsError};
 use serde_json::Value;
 
 /// LVM 链失败的三态：工具缺失是环境缺件（装 lvm2 后重试有意义），**请求与卷现状不
@@ -63,7 +63,7 @@ impl From<FsError> for LvmError {
 /// 执行 lvm2 工具并取 stdout；区分"工具未安装"与"命令失败"。
 /// `run` 已固定 `LC_ALL=C`，报表文本可直接按程序解析
 fn run_tool(tool: &str, args: &[&str]) -> Result<String, LvmError> {
-    tool_stdout(run(tool, args), tool)
+    tool_stdout(run_read(tool, args), tool)
 }
 
 /// 改 PV 元数据或 LV 内容的工具（pvresize / lvextend -r）：启动后盘上状态无法断言，
