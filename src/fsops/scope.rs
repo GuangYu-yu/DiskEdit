@@ -345,7 +345,11 @@ pub(crate) fn find_block_partition_node(src: &FileSource, part: u32, want_start:
             crate::dev::ensure_node_is_device(Path::new(&dev), &entry.path()).map_err(FsError::from)?;
             return Ok(dev);
         }
-        Err(FsError::invalid(format!("partition node for part {part} not found under /sys/block/{disk}")))
+        Err(FsError::invalid(format!(
+            "no kernel partition with number {part} starts at byte {want_start} under /sys/block/{disk} — \
+             the kernel partition view does not match this table entry; after a table write the kernel may \
+             not have re-read the partition table yet — make it re-read the table, then retry"
+        )))
     }
     #[cfg(not(target_os = "linux"))]
     {

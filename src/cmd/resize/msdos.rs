@@ -327,8 +327,8 @@ pub(crate) fn cmd_resize_msdos(a: &ResizeRequest, pref: PartSelector, src_ro: &F
     };
     crate::fsops::ensure_idle_before_write(&src, part, lba_bytes(p.start_lba as u64, ss), edit).unwrap_or_else(|f| bail_fail(f));
     let total_sectors = src.size / ss;
-    // 后置条件含 FS 调整：请求在扩（`grow` 即便右侧无空闲，也仍要把 FS 扩满现分区，
-    // 见 `free == 0` 那支）就必须在写表之前问出"里面是什么、那一步做得了吗"——判据与 GPT 路径
+    // 后置条件含 FS 调整：请求在扩（`grow` 要吃掉右侧空闲；无空闲时非 PV 拒绝、PV 交给
+    // 收尾链，见 `free == 0` 那支）就必须在写表之前问出"里面是什么、那一步做得了吗"——判据与 GPT 路径
     // 同一处。缩容在入口即拒绝，no-op 两不动，故都不在此列
     let extends = grow_to_end || target.is_some_and(|b| b / ss > p.size_lba as u64);
     if extends && !a.no_fs {

@@ -41,12 +41,16 @@ macro_rules! fault_points {
                     concat!($tag, ":<n>")
                 });
             )*
+            tags.extend_from_slice(error_tags());
             tags
         }
         /// 标签是否由上面某一条声明给出：无参点精确匹配；带参点还要求参数按声明类型
         /// 解析。裸标签不算命中——注入点的比较式永远带参数，放过裸标签等于静默不触发
         #[cfg(feature = "test-faults")]
         pub(crate) fn tag_declared(spec: &str) -> bool {
+            if error_tags().contains(&spec) {
+                return true;
+            }
             $(
                 $(
                     if spec
@@ -66,6 +70,43 @@ macro_rules! fault_points {
     };
 }
 
+/// 不中止进程的注入标签：让某个只读查询返回错误，供拒绝分支的用例使用。
+/// `blkroget` 只影响 Linux 的只读位读取；`read-at` 让目标读取在所有平台上失败
+#[cfg(feature = "test-faults")]
+fn error_tags() -> &'static [&'static str] {
+    #[cfg(target_os = "linux")]
+    {
+        &["blkroget", "read-at"]
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        &["read-at"]
+    }
+}
+
+/// `BLKROGET` 返回 `EIO`：读只读位失败。标签在解析期校验，拼错不会静默不触发
+#[cfg(all(feature = "test-faults", target_os = "linux"))]
+pub(crate) fn fail_blkroget() -> bool {
+    std::env::var("DISKEDIT_FAULT").is_ok_and(|v| v == "blkroget")
+}
+
+#[cfg(all(not(feature = "test-faults"), target_os = "linux"))]
+pub(crate) fn fail_blkroget() -> bool {
+    false
+}
+
+/// 目标读取返回 `EIO`：`FileSource::read_at` 的每次调用都失败。
+/// 标签在解析期校验，拼错不会静默不触发
+#[cfg(feature = "test-faults")]
+pub(crate) fn fail_read_at() -> bool {
+    std::env::var("DISKEDIT_FAULT").is_ok_and(|v| v == "read-at")
+}
+
+#[cfg(not(feature = "test-faults"))]
+pub(crate) fn fail_read_at() -> bool {
+    false
+}
+
 fault_points! {
     /// 第 N 个 chunk 拷贝完成后 abort（非自重叠搬移按批提交，该块此时可能尚未同步；
     /// 自重叠搬移逐块落盘，故此刻已同步）
@@ -78,6 +119,8 @@ fault_points! {
     fault_after_entry_commit(mi: usize) = "after-entry-commit", mi;
     /// 全部条目完成、扩容收尾前 abort
     fault_before_grow() = "before-grow";
+    /// 表步骤写完、`table_step_done` 尚未推进时 abort（表已写与记录落定之间的交界面）
+    fault_after_table_write() = "after-table-write";
     /// 扩容表写完、`table_step_done` 尚未推进时 abort（表已落与记录提交之间的交界面）
     fault_after_grow_table_write() = "after-grow-table-write";
     /// swap 条目落位重建完成后 abort

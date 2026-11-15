@@ -353,7 +353,7 @@ diskedit set <TARGET>:N type GUID | type 0xXX --yes
 
 ### `check`
 
-check filesystem consistency without writing
+check filesystem consistency (no repair; f2fs writes metadata on a SIT mismatch)
 
 ```text
 diskedit check <TARGET>:N
@@ -368,10 +368,12 @@ diskedit check <TARGET>:N
 | capabilities | readonly, external tool |
 
 ```text
-  Check filesystem consistency without writing. The tool depends on the type
-  and always runs in its read-only form: ext e2fsck -n, ntfs ntfsfix -n,
-  xfs xfs_repair -n, btrfs check, vfat/exfat fsck -n. A non-zero tool exit
-  is a failed check (exit 3).
+  Check filesystem consistency without repairing. The tool depends on the
+  type: ext e2fsck -n, ntfs ntfsfix -n, xfs xfs_repair -n, btrfs check,
+  vfat/exfat fsck -n, f2fs fsck.f2fs. A non-zero tool exit is a failed check
+  (exit 3). f2fs is not strictly read-only: when a SIT segment type disagrees
+  with its recorded type, fsck.f2fs rewrites global metadata even without -f,
+  and --dry-run does not stop it.
 ```
 
 ### `mkfs`

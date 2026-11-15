@@ -36,7 +36,8 @@ everyday:
   set <TARGET>:N type GUID | type 0xXX --yes
       set a partition property (name / label / uuid / flag / type)
   check <TARGET>:N
-      check filesystem consistency without writing
+      check filesystem consistency (no repair; f2fs writes metadata on a SIT
+      mismatch)
   mkfs <TARGET>:N <FS> --yes [--label S]
       create a filesystem (destroys all data on the partition)
   resizefs <TARGET>:N --yes

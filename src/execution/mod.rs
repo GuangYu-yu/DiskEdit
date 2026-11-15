@@ -2,14 +2,16 @@
 //!
 //! 入口 [`execute_plan`] 只收 [`ConfirmedPlan`]。**计划步骤**的写盘只有这一条路径：
 //! 搬移、复制、表提交、换区重建、文件系统扩缩与属性改写都从这里走，命令层不自己
-//! 调工具或写表。计划之外另有三类补写：
+//! 调工具或写表。计划之外另有几类补写：
 //! - `cmd/layout.rs` 两处在**已提交态续跑**时直接调 [`fix_ntfs_hidden_sectors`]
 //!   改引导扇区（`resize-part` 起点变化、`move` 已提交条目的收尾）。同名函数在本模块的
 //!   `fix_hidden_sectors`（表提交之后）属于计划步骤，不是链外写入。
 //! - `cmd/undo` 的回退方向回放。
 //! - `fsops::wipe_zero` 在 mkfs 前擦除旧签名。
+//! - `cmd/resize/finish.rs` 的 pvresize / lvextend 收尾链。
+//! - `movepart/shift.rs` 的 `recreate_swap`：换区之后按旧头重建 swap 签名。
 //!
-//! 三者不写分区表项，也不经计划步骤。
+//! 这些补写不写分区表项，也不经计划步骤。
 //!
 //! 每个步骤要么完成、要么给出"后置条件未达成"（返回 [`StepFlow::Stopped`] 并留下待办），
 //! 要么按"首写之前 / 之后"分类失败。预扫描在第一个目标字节写入之前跑完：执行器缺席、
@@ -311,6 +313,8 @@ pub(crate) fn execute_plan(
                 sink.table_step_started(src)?;
                 table::execute(src, commit)
                     .map_err(|e| e.context(&format!("plan step {}", index + 1)))?;
+                // 表已写完、围栏尚未落定：这是记录与盘面之间的交界面
+                crate::movepart::fault_after_table_write();
                 // 扩容表已落盘、进度尚未推进：重跑按盘上现状重放这一步
                 if has_transfer {
                     crate::movepart::fault_after_grow_table_write();
@@ -350,8 +354,8 @@ pub(crate) fn execute_plan(
 
 /// 执行一份不含后置条件步骤的计划：表步骤、FS 建立与属性步骤都不留未达成的后置条件。
 ///
-/// 待办非空说明装配出了本命令不该有的步骤（只有换区重建会产生待办）。按内部错误
-/// 报出而不是丢弃——把"后置条件未达成"洗成成功，正是本模块要消灭的那类报告。
+/// 待办非空说明装配出了本命令不该有的步骤（只有换区重建会产生待办）。按 5 带出明细
+/// 而不是丢弃——报成内部错误会把"盘已改变"洗成"未产生持久化修改"，正是本模块要消灭的那类报告。
 pub(crate) fn execute_plan_complete(
     src: &mut WriteSource,
     plan: &ConfirmedPlan,
@@ -374,21 +378,11 @@ pub(crate) fn ntfs_hidden_value(start_lba: u64) -> (u32, bool) {
     if start_lba >> 32 == 0 { (start_lba as u32, false) } else { (0u32, true) }
 }
 
-/// NTFS boot sector BPB HiddenSectors（偏移 0x1C，u32 LE，值 = 分区起始 LBA；
-/// NTFS 引导扇区布局，ntfs-3g bootsect.c 与微软 NTFS 规范同此定义）。
-/// 单位是设备逻辑扇区（4Kn 原生盘上即 4Kn LBA，不折算 512）：bytes_per_sector 记录
-/// 各自的扇区大小，hidden_sectors 语义随它计。字段只有 32 位：start ≥ 2^32 时写 0 并
-/// 警告（Windows 将无法从该分区引导，数据不受影响）。仅在分区起始 LBA 变化后调用。
-pub(crate) fn fix_ntfs_hidden_sectors(
-    src: &mut WriteSource,
-    new_first_lba: u64,
-    ss: u64,
-    part: u32,
-    log: &mut dyn FnMut(&str),
-) -> io::Result<()> {
-    let (val, warn) = ntfs_hidden_value(new_first_lba);
-    // 与执行器的 LBA→字节换算同口径：起点来自调用方传入的几何，裸乘回绕会把
-    // HiddenSectors 写到盘上另一个位置
+/// 定位 HiddenSectors 并读出它所在的扇区。偏移按调用方传入的 LBA 与扇区大小换算
+/// （裸乘回绕会把字段写到盘上另一处）；签名不是 NTFS 引导扇区即拒绝——把
+/// HiddenSectors 写进非引导扇区比不写更糟。"值是否已经正确"的判定与写入前的
+/// 复核共用这一份读取
+fn ntfs_hidden_field(src: &WriteSource, new_first_lba: u64, ss: u64) -> io::Result<(u64, Vec<u8>)> {
     let sector_off = new_first_lba
         .checked_mul(ss)
         .ok_or_else(|| {
@@ -403,9 +397,6 @@ pub(crate) fn fix_ntfs_hidden_sectors(
             format!("NTFS HiddenSectors offset overflows ({new_first_lba} × {ss} + 0x1C)"),
         )
     })?;
-    // 写 4 字节前复核目标扇区仍是 NTFS 引导扇区：调用点的 identify 与这里的写入
-    // 之间盘面可能变化。签名不符即拒绝——把 HiddenSectors 写进
-    // 非引导扇区比不写更糟
     let mut probe = vec![0u8; ss as usize];
     src.read_at(sector_off, &mut probe)?;
     if probe.len() < 11 || probe[3..11] != *b"NTFS    " {
@@ -414,14 +405,50 @@ pub(crate) fn fix_ntfs_hidden_sectors(
             format!("the first sector at LBA {new_first_lba} is not an NTFS boot sector; refusing to write HiddenSectors"),
         ));
     }
-    // 写前比对与写入都在写入口内完成：比较区间就是这 4 个字节，与探测读到的原文一致
-    // 才写；不一致说明扇区在这中间变了，拒绝覆盖
-    let current = probe.get(0x1C..0x20).ok_or_else(|| {
+    Ok((off, probe))
+}
+
+fn hidden_sectors_at(probe: &[u8], new_first_lba: u64) -> io::Result<&[u8]> {
+    probe.get(0x1C..0x20).ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::InvalidData,
             format!("the boot sector at LBA {new_first_lba} is shorter than the HiddenSectors field"),
         )
-    })?;
+    })
+}
+
+/// 盘上的 HiddenSectors 是否已是 `new_first_lba` 对应的值。起点未变的续跑据此决定
+/// 跳过修正：只有读出来确实相等才可跳过，不等说明字段没跟上分区（例如分区被别的
+/// 工具搬过），仍要照修
+pub(crate) fn ntfs_hidden_sectors_match(src: &WriteSource, new_first_lba: u64, ss: u64) -> io::Result<bool> {
+    let (_, probe) = ntfs_hidden_field(src, new_first_lba, ss)?;
+    hidden_sector_matches(&probe, new_first_lba)
+}
+
+/// 纯判定：给定引导扇区内容，盘上的 HiddenSectors 是否已等于期望值
+fn hidden_sector_matches(probe: &[u8], new_first_lba: u64) -> io::Result<bool> {
+    let current = hidden_sectors_at(probe, new_first_lba)?;
+    let (val, _) = ntfs_hidden_value(new_first_lba);
+    Ok(current == val.to_le_bytes().as_slice())
+}
+
+/// NTFS boot sector BPB HiddenSectors（偏移 0x1C，u32 LE，值 = 分区起始 LBA；
+/// NTFS 引导扇区布局，ntfs-3g bootsect.c 与微软 NTFS 规范同此定义）。
+/// 单位是设备逻辑扇区（4Kn 原生盘上即 4Kn LBA，不折算 512）：bytes_per_sector 记录
+/// 各自的扇区大小，hidden_sectors 语义随它计。字段只有 32 位：start ≥ 2^32 时写 0 并
+/// 警告（Windows 将无法从该分区引导，数据不受影响）
+pub(crate) fn fix_ntfs_hidden_sectors(
+    src: &mut WriteSource,
+    new_first_lba: u64,
+    ss: u64,
+    part: u32,
+    log: &mut dyn FnMut(&str),
+) -> io::Result<()> {
+    let (val, warn) = ntfs_hidden_value(new_first_lba);
+    let (off, probe) = ntfs_hidden_field(src, new_first_lba, ss)?;
+    // 写前比对与写入都在写入口内完成：比较区间就是这 4 个字节，与探测读到的原文一致
+    // 才写；不一致说明扇区在这中间变了，拒绝覆盖
+    let current = hidden_sectors_at(&probe, new_first_lba)?;
     src.write_guarded(
         off,
         &val.to_le_bytes(),
@@ -830,3 +857,47 @@ fn journal_state(src: &WriteSource, steps: &[PreparedStep]) -> Result<TransferSt
 /// 依据：`Transfer` 每前进 `max(ChunkSize, 8 MiB)` 替换一次记录并只
 /// 更新 `cursor`，而 `resize-part` 不登记 `--chunk`，恢复粒度取该下限
 pub(crate) const DEFAULT_CHUNK_BYTES: u64 = 8 * 1024 * 1024;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 512 字节 NTFS 引导扇区：签名在 3..11，HiddenSectors 在 0x1C
+    fn boot_sector(hidden: u32) -> Vec<u8> {
+        let mut sector = vec![0u8; 512];
+        sector[3..11].copy_from_slice(b"NTFS    ");
+        sector[0x1C..0x20].copy_from_slice(&hidden.to_le_bytes());
+        sector
+    }
+
+    /// 跳过与照修的分岔：只有盘上值确实等于期望值才跳过
+    #[test]
+    fn hidden_sectors_match_decides_skip_and_fix() {
+        assert!(hidden_sector_matches(&boot_sector(2048), 2048).unwrap(), "值已正确时跳过");
+        assert!(!hidden_sector_matches(&boot_sector(0), 2048).unwrap(), "值不对时必须照修");
+        // 期望值超过 32 位时字段按 0 记：此时盘上的 0 也算对
+        assert!(hidden_sector_matches(&boot_sector(0), 1 << 32).unwrap());
+    }
+
+    /// 字段缺失不是"值不对"，而是读不出。签名的判据不在这条纯判定里，见下一条用例
+    #[test]
+    fn hidden_sector_matches_refuses_a_sector_shorter_than_the_field() {
+        assert!(hidden_sector_matches(&[0u8; 16], 0).is_err());
+    }
+
+    /// 非 NTFS 扇区不按 NTFS 的字段去比：签名判据在读取端 `ntfs_hidden_field`，
+    /// 纯判定只比 `0x1C..0x20` 四字节。这里让字段值本身已经对上，拒绝仍必须发生
+    #[test]
+    fn a_non_ntfs_sector_is_refused_before_the_field_is_compared() {
+        let mut sector = boot_sector(0);
+        sector[3] = b'X';
+        let src = crate::support::src_from("ntfs_signature", &sector);
+        assert!(hidden_sector_matches(&sector, 0).unwrap(), "纯判定只比四字节，签名不归它管");
+        let err = ntfs_hidden_sectors_match(&src, 0, 512).expect_err("签名不符必须拒绝");
+        assert!(err.to_string().contains("not an NTFS boot sector"), "got {err}");
+
+        // 同一份现场换成正确签名：路径通，读到的是同一个字段（排除夹具写错的假通过）
+        let ok = crate::support::src_from("ntfs_signature_ok", &boot_sector(0));
+        assert!(ntfs_hidden_sectors_match(&ok, 0, 512).unwrap());
+    }
+}

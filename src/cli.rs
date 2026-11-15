@@ -142,7 +142,8 @@ impl ValueDomain {
     }
 }
 
-/// 值域解析后的类型化取值。builder 只从这些变体取字段，不看原始文本。
+/// 值域解析后的类型化取值。多数 builder 只从这些变体取字段、不看原始文本；
+/// `resizefs` 的离线形式例外，会把 BYTES 原文一并交给命令层（先按挂载点/离线分流再解析）。
 #[derive(Debug)]
 enum Parsed {
     Text(String),
@@ -707,7 +708,7 @@ pub(crate) const COMMANDS: &[CommandDef] = &[
     CommandDef {
         name: "check",
         group: CommandGroup::Everyday,
-        summary: "check filesystem consistency without writing",
+        summary: "check filesystem consistency (no repair; f2fs writes metadata on a SIT mismatch)",
         syntax: &["<TARGET>:N"],
         positionals: &[TARGET_ARG],
         options: &[opt("--sector-size")],
@@ -1944,9 +1945,13 @@ mod tests {
         }
     }
 
-    /// 把分区选择器写在目标后缀上的命令，块设备目标必须带 `:N` 或 `:last`
+    /// 把分区选择器写在目标后缀上的命令，块设备目标必须带 `:N` 或 `:last`。
+    /// `resize-part` 的 `:N` 是硬要求（缺了退 3）；`resizefs` 只允许挂载点形式省略，
+    /// 块设备目标仍要 `:N` 才走离线形式
     fn assert_part_suffix_on_block_target(cmd: &str, target: &str, line: &str) {
-        const PART_SUFFIX_REQUIRED: &[&str] = &["resize", "move", "copy", "delete", "set", "check", "mkfs"];
+        const PART_SUFFIX_REQUIRED: &[&str] = &[
+            "resize", "resize-part", "resizefs", "move", "copy", "delete", "set", "check", "mkfs",
+        ];
         if !PART_SUFFIX_REQUIRED.contains(&cmd) || !target.starts_with("/dev/") {
             return;
         }

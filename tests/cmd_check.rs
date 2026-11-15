@@ -136,7 +136,7 @@ fn a_partition_without_a_filesystem_has_no_check_tool() {
 /// 目标不存在 → 3：打开失败属前置条件不满足（`docs/reference.md` 的退出状态表：
 /// 3 = 策略拒绝或前置条件不满足）
 #[test]
-fn an_absent_target_is_an_io_failure() {
+fn an_absent_target_is_an_unmet_precondition() {
     let (dir, _img) = fixture("absent", 32, "8M");
     let absent = dir.path().join("absent.img");
     let entries = listing(dir.path());

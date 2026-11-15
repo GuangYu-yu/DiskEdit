@@ -291,9 +291,10 @@ fn refuse_legacy_journal(src: &FileSource) {
     }
 }
 
-/// `undo` 只认目标身份派生的那一份恢复记录。记录缺席是常态：请求与现状不符（3）。
+/// `undo` 认领的是载荷声明为本目标的记录：不按单一派生落点找，兄弟目录里的落点同样
+/// 参与枚举（见 `undo_record`）。记录缺席是常态，按拒绝（3）上报
 pub(crate) fn cmd_undo(a: &UndoRequest) -> u8 {
-    // undo 回滚的是整盘记录：`:N` 指定了也会被静默忽略（与 info 同判据）
+    // undo 回滚的是整盘记录：与 info 同判据，`:` 后给了编号即拒绝，不静默忽略
     if let Some(n) = a.part {
         bail_fail(RunOutcome::refused(format!("`undo` rolls back the whole target's recovery record — drop :{n}")));
     }

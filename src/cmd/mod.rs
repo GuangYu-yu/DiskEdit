@@ -10,7 +10,7 @@ pub(crate) mod undo;
 
 use crate::cli::{CommandDef, Confirmation, Request, TargetMode};
 use crate::domain::MediaKind;
-use crate::outcome::RunOutcome;
+use crate::outcome::{EXIT_OK, EXIT_PARTIAL, RunOutcome};
 use crate::platform::capabilities::HostPlatform;
 use crate::platform::{CapabilityId, CapabilitySnapshot, CapabilityState};
 use crate::support::bail_fail;
@@ -40,11 +40,12 @@ impl CmdResult {
         }
     }
 
-    /// 收尾步骤失败：只有"已完整应用"的结果降为 5；没有后置条件契约的命令
-    /// 只带退出码，其成功路径也不存在可降级的 Applied 形态
+    /// 收尾步骤失败：已完整应用的结果降为 5；只带退出码的结果在成功（0）时同样
+    /// 降为 5，其余码已经陈述了更差的事实，保持原样
     pub(crate) fn degrade_partial(self, cause: impl Into<String>) -> Self {
         match self {
             Self::RunOutcome(o) => Self::RunOutcome(o.degrade_partial(cause)),
+            Self::Code(EXIT_OK) => Self::Code(EXIT_PARTIAL),
             Self::Code(code) => Self::Code(code),
         }
     }
@@ -447,5 +448,25 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// 只带退出码的成功结果同样被收尾故障改判：0 → 5
+    #[test]
+    fn degrade_partial_moves_a_successful_code() {
+        assert_eq!(CmdResult::from(EXIT_OK).degrade_partial("leak").code(), EXIT_PARTIAL);
+    }
+
+    /// 失败码不被收尾故障改写：它已经陈述了比 5 更具体的事实
+    #[test]
+    fn degrade_partial_keeps_a_failure_code() {
+        let usage = crate::outcome::EXIT_USAGE;
+        assert_eq!(CmdResult::from(usage).degrade_partial("leak").code(), usage);
+    }
+
+    /// `RunOutcome` 的成功路径行为不变：完整应用降 5
+    #[test]
+    fn degrade_partial_moves_a_complete_run_outcome() {
+        let applied = CmdResult::from(RunOutcome::applied_with(Vec::new()));
+        assert_eq!(applied.degrade_partial("leak").code(), EXIT_PARTIAL);
     }
 }

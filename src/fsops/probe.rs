@@ -127,7 +127,8 @@ pub(crate) fn min_bytes_ext(dev: &str) -> Result<u64, FsError> {
     let out = run("resize2fs", &["-P", dev])?;
     let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
     if !out.status.success() {
-        // 工具跑起来了但拒绝了本设备：这是"可能已写盘"的一类，不能压成 Io
+        // 工具跑起来了但退非零。`-P` 是只读查询，实际未写盘；这里按 `CommandFailed`
+        // 报出，执行层据此把"工具已启动"的失败折成 5
         return Err(FsError::CommandFailed(format!("resize2fs -P failed ({}): {}", describe_exit(&out.status), text.trim())));
     }
     let blocks = parse_num_lead(&text, "Estimated minimum size of the filesystem:")?;

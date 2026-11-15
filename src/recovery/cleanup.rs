@@ -12,12 +12,13 @@
 //! | `persist == Confirmed` | 记录没有独立字段；`Committed` 只在整份替换落盘后写入 |
 //! | 留存 | [`Record::retention`] 不允许清理时落 [`NoPermitReason::Retention`] |
 //! | 后置回读 | 本模块不判定：`Record` 没有承载字段 |
-//! | `plan_index` 之后的表写步骤 | [`RecoveryEngine::commit`] 的 `table_change_pending` 入参为真时落 [`NoPermitReason::PendingTableChange`] |
+//! | 表步围栏在飞 | 记录自己的表步围栏在飞、某条目的表步在飞，或尾段没有解出时落 [`NoPermitReason::PendingTableChange`] |
 
+use crate::domain::Fact;
 use crate::platform::{DirDurability, DirFd, EvidenceFile, EvidenceIo, EvidenceStore, RemoveOutcome};
 
 use super::evidence::Evidence;
-use super::record::{CommitState, Record, Retention, TxId};
+use super::record::{CommitState, Record, Retention, TableFence, TxId};
 
 /// 已提交的记录。只由 [`RecoveryEngine::commit`] 产出，字段私有
 #[derive(Debug)]
@@ -44,7 +45,7 @@ pub(crate) struct CleanupPermit {
 pub(crate) enum NoPermitReason {
     /// 留存状态不允许清理（`Unverified` / `Quarantined`）
     Retention(Retention),
-    /// `plan_index` 之后还有表写步骤没有落地
+    /// 表步可能仍未落定：围栏或某条目在飞，或尾段没有解出
     PendingTableChange,
 }
 
@@ -104,14 +105,12 @@ impl CommitOutcome {
 pub(crate) struct RecoveryEngine;
 
 impl RecoveryEngine {
-    /// 提交：把识别出的记录转为 `Committed`，并在留存状态允许、
-    /// `plan_index` 之后没有表写步骤时签发清理许可。
+    /// 提交：把识别出的记录转为 `Committed`，并在留存状态允许、表步没有未落定
+    /// 事实时签发清理许可。
     ///
-    /// 对已经 `Committed` 的记录再次调用只重新签发许可，不改变状态
-    pub(crate) fn commit(
-        evidence: Evidence,
-        table_change_pending: bool,
-    ) -> Result<CommitOutcome, CommitRefusal> {
+    /// 表步是否仍可能未落定由记录自己说明。对已经 `Committed` 的记录再次调用只重新
+    /// 签发许可，不改变状态
+    pub(crate) fn commit(evidence: Evidence) -> Result<CommitOutcome, CommitRefusal> {
         let Evidence::Recognized(record) = evidence else {
             return Err(CommitRefusal::NotRecognized);
         };
@@ -119,7 +118,7 @@ impl RecoveryEngine {
         record.commit = CommitState::Committed;
         let withheld = if !record.retention.allows_cleanup() {
             Some(NoPermitReason::Retention(record.retention))
-        } else if table_change_pending {
+        } else if table_change_pending(&record) {
             Some(NoPermitReason::PendingTableChange)
         } else {
             None
@@ -181,4 +180,16 @@ impl RecoveryEngine {
             }
         }
     }
+}
+
+/// 表步是否仍可能未落定：围栏在飞、某条目的表可能已写而结果未记入，或尾段四项
+/// 事实没有解出来。围栏 `Pending`/`Landed` 且没有在飞位是「表步已定」的唯一形态；
+/// 其余形态（含读不出）都按未落定处理，不签发清理许可
+fn table_change_pending(record: &Record) -> bool {
+    let fence_settled = matches!(
+        &record.table_fence,
+        Fact::Known(TableFence::Pending) | Fact::Known(TableFence::Landed)
+    );
+    let no_in_flight = matches!(record.entry_table_in_flight, Fact::Absent);
+    !(fence_settled && no_in_flight)
 }

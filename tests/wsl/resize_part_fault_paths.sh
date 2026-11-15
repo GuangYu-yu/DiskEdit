@@ -91,6 +91,23 @@ chkp 1 -
 
 echo
 echo
+echo "===== 5: after-table-write（表已写、table_step_done 前崩）→ 围栏落在飞 ====="
+# 崩溃点取在 table::execute 之后：盘上的表已指向新几何，记录还没推进到表步完成
+img T t18f.img
+mk; M3=$(fillp 3 190)
+DISKEDIT_FAULT=after-table-write $BF resize-part --yes "$T":3 --end 1026047 >/dev/null 2>&1
+exp "$(record_present "$T" && echo yes || echo no)" yes "表写完后中断留下记录现场"
+$B info "$T" | grep -q '"num":3,"first_lba":[0-9]*,"last_lba":1026047' \
+  && echo "  OK   崩溃前表已写到新几何（last_lba=1026047）" || { echo "  BAD  表未写到新几何"; rc=1; }
+INS=$($B inspect "$T" 2>/dev/null || true)
+echo "$INS" | grep -q 'table fence: table step in flight' \
+  && echo "  OK   记录写明表步可能已写（table fence: table step in flight）" \
+  || { echo "  BAD  记录没有表步围栏现场"; echo "$INS" | grep -i 'table fence'; rc=1; }
+OUT=$($BF resize-part --yes "$T":3 --end 1026047 2>&1); exp "$?" 0 "同请求重跑收尾"
+exp "$(record_absent "$T" && echo yes || echo no)" yes "收尾后记录释放（围栏已落定）"
+chkp 3 -
+
+echo
 echo "===== 6: grow 路径（尾打包）chunk:150 ====="
 mk; M2=$(fillp 2 90); M3=$(fillp 3 190)
 DISKEDIT_FAULT=chunk:150 $BF resize "$T":1 grow --allow-move --yes --chunk 1 >/dev/null 2>&1
@@ -203,5 +220,41 @@ DISKEDIT_FAULT=chunk:5 $BF move "$T":1 --start 34816 --chunk 64 --yes >/dev/null
 exp "$?" 0 "第 5 块不存在（命令行 chunk 64M 未被采用）"
 exp "$(record_absent "$T" && echo yes || echo no)" yes "正常跑完，无残留记录"
 $B info "$T" | grep -q '"num":1,"first_lba":34816' && echo "  OK   p1 到达 34816" || { echo "  BAD  p1 未到达目标起点"; rc=1; }
+sgdisk -v "$T" >/dev/null 2>&1 && echo "sgdisk clean" || { echo "sgdisk ISSUES"; rc=1; }
+
+echo
+echo "===== 11: 换区条目的早退收尾（after-swap-commit 后同请求重跑）====="
+# p3 是 swap：表项先到目的位，重建是表步之后的后置动作。注入点在表已写完、重建未做，
+# 盘上条目已在目的位而记录游标仍指着它。重跑必须完成重建并把表步写回记录——只写回
+# 表步会清在飞位、放过清理许可、删掉记录，重建就再也没人做了。
+img T t18f.img
+rm -rf "$T" "$T"$SIDECAR_GLOB
+truncate -s 1G "$T"
+$BF new "$T" --yes >/dev/null
+$BF add "$T" 100M --align mib --name p1 --yes >/dev/null
+$BF mkfs "$T":1 ext4 --yes >/dev/null 2>&1
+$BF add "$T" 100M --align mib --name p2 --yes >/dev/null
+$BF mkfs "$T":2 ext4 --yes >/dev/null 2>&1
+$BF add "$T" 100M --align mib --name p3 --type-guid 0657fd6d-a4ab-43c4-84e5-0933c84b4f4f --yes >/dev/null
+$BF mkfs "$T":3 swap --yes >/dev/null
+LD=$(lo_attach "$T")
+lo_waitpart "${LD}p3" || { echo "  BAD  p3 未就绪"; rc=1; }
+UUID_BEFORE=$(blkid -s UUID -o value "${LD}p3")
+lo_detach "$LD"
+DISKEDIT_FAULT=after-swap-commit:0 $BF move "$T":3 --start 900000 --chunk 1 --yes >/dev/null 2>&1
+exp "$?" 134 "after-swap-commit 注入命中并中止"
+exp "$(record_present "$T" && echo yes || echo no)" yes "表已写、重建未做的现场留在记录里"
+OUT=$($BF move "$T":3 --start 900000 --chunk 1 --yes 2>&1); E=$?
+exp "$E" 0 "同请求重跑完成（重建并写回表步）"
+echo "$OUT" | grep -i "swap\|recreated\|signature" | sed 's/^/    /'
+$B info "$T" | grep -q '"num":3,"first_lba":900000' && echo "  OK   p3 到达 900000" || { echo "  BAD  p3 未到达目标起点"; rc=1; }
+exp "$(record_absent "$T" && echo yes || echo no)" yes "收尾后记录释放"
+LD=$(lo_attach "$T")
+lo_waitpart "${LD}p3" || { echo "  BAD  p3 未就绪"; rc=1; }
+UUID_AFTER=$(blkid -s UUID -o value "${LD}p3")
+TYPE_AFTER=$(blkid -o value -s TYPE "${LD}p3" 2>/dev/null)
+lo_detach "$LD"
+assert_eq "$TYPE_AFTER" "swap" "目的位的 swap 签名已重建"
+assert_eq "$UUID_AFTER" "$UUID_BEFORE" "旧位 UUID 在重建中保持"
 sgdisk -v "$T" >/dev/null 2>&1 && echo "sgdisk clean" || { echo "sgdisk ISSUES"; rc=1; }
 exit $rc

@@ -14,8 +14,9 @@ pub(crate) const MDOS_CONTAINER_TYPES: [u8; 3] = [0x05, 0x0F, 0x85];
 
 /// 容器末 LBA（按给定表的扇区大小计）。全仓唯一的算式落点：
 /// 不允许在任何调用点重写第二遍——同一事实两个来源迟早分叉。
-/// 调用点各有前置（读到扇区 / ≥68 扇区等），`size < ss` 不可达；仍用 saturating
-/// 收口而不是裸 `- 1`：release 未开 overflow-checks，下溢会静默回绕成 u64::MAX
+/// 调用点大多先读过扇区，但 `create.rs` 以候选扇区大小调本函数时容器可能小于该候选，
+/// `size < ss` 可达；故用 saturating 收口而不是裸 `- 1`：release 未开 overflow-checks，
+/// 下溢会静默回绕成 u64::MAX
 ///（一个"无限大的容器"），debug 下才 panic——单点算式不该把正确性押在编译模式上
 pub(crate) fn container_last_lba(src: &FileSource, ss: u64) -> u64 {
     (src.size / ss).saturating_sub(1)

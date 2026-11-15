@@ -129,7 +129,19 @@ impl HostEvidenceStore {
         sync_fd(temp_fd.as_raw_fd()).map_err(EvidenceIo::Io)?;
         drop(temp_fd);
 
-        rename_sibling(&parent, &temp_name, &name)?;
+        rename_sibling_noreplace(&parent, &temp_name, &name).map_err(|e| match e {
+            // 换一句带落点的说明：调用方按"未写盘"上报，不让用户从裸 EEXIST 猜是哪个文件
+            EvidenceIo::Io(e) if e.kind() == io::ErrorKind::AlreadyExists => {
+                EvidenceIo::Io(io::Error::new(
+                    io::ErrorKind::AlreadyExists,
+                    format!(
+                        "{} already holds a recovery record — first create does not replace it",
+                        relative.as_path().display()
+                    ),
+                ))
+            }
+            other => other,
+        })?;
         sync_dir(&parent).map_err(|e| {
             EvidenceIo::RenamedNotDurable(io::Error::other(format!(
                 "the record was created but its directory fsync failed: {e}"
@@ -278,6 +290,28 @@ fn rename_sibling(parent: &OwnedFd, from: &OsStr, to: &OsStr) -> Result<(), Evid
     Ok(())
 }
 
+/// 首次创建用的改名：目标已存在即失败，不覆盖。
+/// VFS 在目标已被占用时对 `RENAME_NOREPLACE` 返回 EEXIST（fs/namei.c），因此"检查后写入"
+/// 之间的窗口不会把别人的记录换成自己的字节。整份替换走 [`rename_sibling`]——那份记录
+/// 本来就该被替换
+fn rename_sibling_noreplace(parent: &OwnedFd, from: &OsStr, to: &OsStr) -> Result<(), EvidenceIo> {
+    let from = c_name(from).map_err(EvidenceIo::Io)?;
+    let to = c_name(to).map_err(EvidenceIo::Io)?;
+    let raw = unsafe {
+        libc::renameat2(
+            parent.as_raw_fd(),
+            from.as_ptr(),
+            parent.as_raw_fd(),
+            to.as_ptr(),
+            libc::RENAME_NOREPLACE,
+        )
+    };
+    if raw != 0 {
+        return Err(EvidenceIo::Io(io::Error::last_os_error()));
+    }
+    Ok(())
+}
+
 fn sync_fd(fd: RawFd) -> io::Result<()> {
     if unsafe { libc::fsync(fd) } != 0 {
         return Err(io::Error::last_os_error());
@@ -411,6 +445,27 @@ mod tests {
         assert_eq!(store.read(&reopened).unwrap(), b"record bytes");
     }
 
+    /// 首次创建遇到已存在的落点：拒绝，既有字节原样保留（`RENAME_NOREPLACE` 挡住覆盖）
+    #[test]
+    fn first_create_keeps_an_existing_record() {
+        let root = temp_dir("create_noreplace");
+        let anchor = DirFd::open_anchor(&root).unwrap();
+        let store = HostEvidenceStore;
+        let relative = RelativePath::try_new("evidence.bin").unwrap();
+        let temp = RelativePath::try_new("evidence.tmp.0001").unwrap();
+        let existing = b"another writer's record";
+        std::fs::write(root.join("evidence.bin"), existing).unwrap();
+
+        let err = store
+            .create_atomic_owned(&anchor, &relative, &temp, b"mine", None)
+            .unwrap_err();
+        assert!(
+            matches!(&err, EvidenceIo::Io(e) if e.kind() == std::io::ErrorKind::AlreadyExists),
+            "{err:?}"
+        );
+        assert_eq!(std::fs::read(root.join("evidence.bin")).unwrap(), existing);
+    }
+
     /// 临时文件与正式文件不同目录时拒绝替换
     #[test]
     fn a_temp_file_must_be_a_sibling() {
@@ -453,7 +508,7 @@ mod tests {
         let relative = RelativePath::try_new("evidence.bin").unwrap();
         let file = store.open_at(&anchor, &relative).unwrap();
         let evidence = Evidence::classify(&store.read(&file).unwrap(), &current);
-        let outcome = RecoveryEngine::commit(evidence, false).unwrap();
+        let outcome = RecoveryEngine::commit(evidence).unwrap();
         let (committed, permit, withheld) = outcome.into_parts();
         assert!(withheld.is_none());
 
@@ -492,7 +547,7 @@ mod tests {
             PlanDigest::from_bytes([3; 32]),
             crate::dev::DiskGuidState::Unavailable,
         );
-        let outcome = RecoveryEngine::commit(Evidence::Recognized(other), false).unwrap();
+        let outcome = RecoveryEngine::commit(Evidence::Recognized(other)).unwrap();
         let (committed, permit, withheld) = outcome.into_parts();
         assert!(withheld.is_none());
         let relative = RelativePath::try_new("evidence.bin").unwrap();
@@ -504,7 +559,7 @@ mod tests {
         // 字节已不可识别：同样不删。remove 消费句柄，拒绝后需重新打开
         std::fs::write(root.join("evidence.bin"), b"torn").unwrap();
         let file = store.open_at(&anchor, &relative).unwrap();
-        let outcome = RecoveryEngine::commit(Evidence::Recognized(on_disk), false).unwrap();
+        let outcome = RecoveryEngine::commit(Evidence::Recognized(on_disk)).unwrap();
         let (committed, permit, _) = outcome.into_parts();
         let err = RecoveryEngine::cleanup(&store, &anchor, file, &committed, permit.unwrap()).unwrap_err();
         assert!(matches!(err, CleanupError::ReadbackMismatch(_)), "{err:?}");

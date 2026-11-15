@@ -3,6 +3,8 @@
 #   "写盘前 abort" 必须与「从未运行过」不可区分（表未改、无记录残留）
 #   "写盘后 abort" 必须在盘上留下可续传的现场（记录已落盘）
 # 三条流程各成一对：resize(离线含搬移) / resize grow / resize(在线)。
+# E 只读位读不出（BLKROGET 注入）必须按未写盘拒绝。
+# F 镜像改名后兄弟落点里的截断记录必须让枚举失败，不得当成"没有现场"。
 source "$(dirname "$0")/lib.sh"
 require_fault_bin
 
@@ -114,6 +116,36 @@ $B resize "$T":1 -50M --no-fs --yes >/dev/null 2>&1; chk "$?" "3" "D1 --no-fs + 
 $B resize --yes "$T":1 500M --start 4096 >/dev/null 2>&1; chk "$?" "2" "D2 --start 非本命令选项（解析期即拒，未写盘）" # cli-surface: refused
 $B resize-part --yes "$T":1 --start end >/dev/null 2>&1; chk "$?" "2" "D3 resize-part --start end ⇒ 2" # cli-surface: refused
 chk "$($B info "$T")" "$BEFORE" "D 三次拒绝均未写盘"
+
+echo
+echo "===== E: 只读位读不出 ⇒ 4，目标零写 ====="
+mk
+BEFORE=$($B info "$T")
+LD=$(lo_attach "$T")
+DISKEDIT_FAULT=blkroget $BF add "$LD" 50M --align mib --name p4 --yes >/dev/null 2>&1; E1=$?
+lo_detach "$LD"
+chk "$E1" "4" "E1 BLKROGET 失败 ⇒ 4（环境读失败，未写盘）"
+chk "$($B info "$T")" "$BEFORE" "E1 分区表一字未改"
+chk "$(record_present "$T" && echo yes || echo no)" "no" "E1 未留下记录"
+
+echo
+echo "===== F: 镜像改名 + 兄弟落点里的截断记录 ⇒ 枚举拒绝 ====="
+mk
+DISKEDIT_FAULT=chunk:40 $BF resize "$T":1 +100M --allow-move --yes >/dev/null 2>&1
+chk "$(record_present "$T" && echo yes || echo no)" "yes" "F1 中断后留下可读记录"
+REC=$(record_file "$T")
+RENAMED="$T.renamed"
+mv "$T" "$RENAMED"
+BEFORE=$($B info "$RENAMED")
+# 同目录另放一份只写了开头的记录：它不是本目标的现场，也读不成任何结论
+mkdir -p "$T.trunc.diskedit"
+cp "$REC" "$T.trunc.diskedit/record"
+truncate -s 64 "$T.trunc.diskedit/record"
+OUT=$($B add "$RENAMED" 50M --align mib --name p4 --yes 2>&1); F2RC=$?
+chk "$F2RC" "3" "F2 兄弟落点读不出 ⇒ 3（枚举失败，不当作没有现场）"
+chk "$(echo "$OUT" | grep -c 'cannot be enumerated')" "1" "F2 拒绝指向枚举失败"
+chk "$(echo "$OUT" | grep -c 'may already have changed')" "0" "F2 不声明目标可能已写"
+chk "$($B info "$RENAMED")" "$BEFORE" "F2 分区表一字未改"
 
 echo
 echo "==== 汇总：$ok 通过，$bad 失败 ===="

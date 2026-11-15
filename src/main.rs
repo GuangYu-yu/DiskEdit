@@ -75,13 +75,10 @@ fn run() -> u8 {
     // 资源释放待办（`Drop` 里发现的，例如 loop 未解绑）不能只留在 stderr：它同样是一条
     // 未完成的后置条件。只在完整成功时降级——失败路径的码已经表达了更严重的事实
     let release_leaks = crate::fsops::take_release_leaks();
-    if !release_leaks.is_empty() && result.code() == EXIT_OK {
-        eprintln!(
-            "note: {} cleanup step(s) did not complete — this run left resources behind (see the warnings above)",
-            release_leaks.len()
-        );
-        let cause = format!("{} cleanup step(s) did not complete", release_leaks.len());
-        result = result.degrade_partial(cause.clone());
+    let (settled_result, cause) = apply_release_leaks(result, release_leaks.len());
+    result = settled_result;
+    if let Some(cause) = cause {
+        eprintln!("{}", release_leak_note(release_leaks.len()));
         cleanup_failure = Some(cause);
     }
     // 返回结果同样要归责：命令内部的错误出口已在各自打印前归责（bail_fail /
@@ -101,4 +98,55 @@ fn run() -> u8 {
         crate::outcome::RunOutcome::partial_postcondition(cause, Vec::new()).report();
     }
     code
+}
+
+/// 资源释放待办的 stderr 提示；与降级后的退出码同源，说明 5 从哪来
+fn release_leak_note(count: usize) -> String {
+    format!(
+        "note: {count} cleanup step(s) did not complete — this run left resources behind \
+         (see the warnings above)"
+    )
+}
+
+/// 资源释放待办对最终结论的作用：成功（0）降为部分完成（5）并带回成因；
+/// 其余码已经陈述了更差的事实，原样返回
+fn apply_release_leaks(result: cmd::CmdResult, count: usize) -> (cmd::CmdResult, Option<String>) {
+    if count == 0 || result.code() != EXIT_OK {
+        return (result, None);
+    }
+    let cause = format!("{count} cleanup step(s) did not complete");
+    (result.degrade_partial(cause.clone()), Some(cause))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{apply_release_leaks, release_leak_note};
+    use crate::cmd::CmdResult;
+    use crate::outcome::{EXIT_OK, EXIT_PARTIAL, EXIT_REFUSED, EXIT_USAGE, RunOutcome};
+
+    /// 资源释放待办 × 结果形态：只有成功结论被降为 5 并给出提示；
+    /// 失败结论保持自己的码，提示不出现
+    #[test]
+    fn release_leak_matrix() {
+        let cases = [
+            (CmdResult::from(RunOutcome::applied_with(Vec::new())), EXIT_PARTIAL, true),
+            (CmdResult::from(RunOutcome::refused("no such partition")), EXIT_REFUSED, false),
+            (CmdResult::from(EXIT_OK), EXIT_PARTIAL, true),
+            (CmdResult::from(EXIT_USAGE), EXIT_USAGE, false),
+        ];
+        for (result, expected, noted) in cases {
+            let (settled, cause) = apply_release_leaks(result, 2);
+            assert_eq!(settled.code(), expected);
+            assert_eq!(cause.as_deref(), noted.then_some("2 cleanup step(s) did not complete"));
+        }
+        assert_eq!(
+            release_leak_note(2),
+            "note: 2 cleanup step(s) did not complete — this run left resources behind \
+             (see the warnings above)"
+        );
+        let report =
+            RunOutcome::partial_postcondition("2 cleanup step(s) did not complete", Vec::new());
+        assert_eq!(report.exit_code(), EXIT_PARTIAL);
+        assert_eq!(report.to_string(), "2 cleanup step(s) did not complete");
+    }
 }

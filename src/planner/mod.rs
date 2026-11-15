@@ -67,8 +67,8 @@ pub(crate) enum PlanStep {
     /// 把分区里的文件系统改写到分区尺寸；语义是扩到分区满。
     ///
     /// 几何按表的扇区口径：`first_lba` 是分区起点，`sectors` 是分区长度，
-    /// `target_bytes` 是这段区间的字节数。`fstype` 由装配点填写；装配层不做
-    /// FS 探测，产出的计划恒为 `None`，执行期按区间识别
+    /// `target_bytes` 是这段区间的字节数。`fstype` 由装配点按请求填写（`cmd/fs.rs`
+    /// 传请求里的类型）；装配层不做 FS 探测，`None` 表示执行期按区间识别
     FsResize {
         part: u32,
         first_lba: u64,
@@ -233,7 +233,16 @@ fn move_plan_shape(steps: &[PlanStep]) -> bool {
     }
     steps.iter().enumerate().all(|(i, step)| match step {
         PlanStep::Relocate { .. } => matches!(steps.get(i + 1), Some(PlanStep::WriteTable(_))),
-        PlanStep::RebuildSwap { .. } => i > 0 && matches!(steps.get(i - 1), Some(PlanStep::WriteTable(_))),
+        // 换区重建紧跟"提交该条目的表步骤"，而那张表由同一条目的换区搬移带出来：
+        // 前两步必须是本分区、is_swap 为真的 Relocate 与 WriteTable
+        PlanStep::RebuildSwap { part, .. } => {
+            i >= 2
+                && matches!(steps.get(i - 1), Some(PlanStep::WriteTable(_)))
+                && matches!(
+                    steps.get(i - 2),
+                    Some(PlanStep::Relocate { part: p, is_swap: true, .. }) if p == part
+                )
+        }
         PlanStep::WriteTable(table) => table.expect_before.is_some() && table.expect_after.is_some(),
         PlanStep::CopyPartition { .. } | PlanStep::FsResize { .. } | PlanStep::FsCreate { .. } | PlanStep::FsSet { .. } => false,
     })

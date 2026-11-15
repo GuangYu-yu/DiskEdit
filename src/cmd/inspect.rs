@@ -211,11 +211,7 @@ fn inspect_record_entry(spot: &crate::dev::RecordSpot, a: &InspectRequest) -> Cm
 /// 但不会把可读的记录误判成别人的）
 #[cfg(target_os = "linux")]
 fn scene_of_target(probe: &crate::platform::TargetProbe, path: &Path) -> SceneIdentity {
-    let opened = if block_node(path) {
-        crate::dev::FileSource::open_read_only(path)
-    } else {
-        crate::dev::FileSource::open_read_only_image(path, None)
-    };
+    let opened = open_target(path, None);
     match opened.ok().and_then(|src| {
         crate::platform::probe::probe_of(&src)
             .ok()
@@ -226,23 +222,28 @@ fn scene_of_target(probe: &crate::platform::TargetProbe, path: &Path) -> SceneId
     }
 }
 
+/// 按节点形态只读打开目标；`stat` 判不出形态时带原因失败，不按镜像去开
 #[cfg(target_os = "linux")]
-fn block_node(path: &Path) -> bool {
-    use std::os::unix::fs::FileTypeExt;
+fn open_target(path: &Path, sector_size: Option<u64>) -> Result<crate::dev::FileSource, String> {
+    use crate::domain::Fact;
 
-    std::fs::metadata(path).map(|m| m.file_type().is_block_device()).unwrap_or(false)
+    let opened = match crate::dev::target_node_is_block(path) {
+        Fact::Known(true) => crate::dev::FileSource::open_read_only(path),
+        Fact::Known(false) | Fact::Absent => {
+            crate::dev::FileSource::open_read_only_image(path, sector_size)
+        }
+        Fact::Undecidable(why) => {
+            return Err(format!("the target's node shape cannot be determined: {why}"))
+        }
+    };
+    opened.map_err(|e| format!("the target cannot be opened read-only: {e}"))
 }
 
 /// 占用与挂载事实：复用 [`crate::dev::describe`] 的同一份探测，只读打开目标。
 /// 打不开目标或子系统读不到都只报「不可判定」，退出码仍只由路径分派与证据状态决定
 #[cfg(target_os = "linux")]
 fn report_occupancy(path: &Path) {
-    let opened = if block_node(path) {
-        crate::dev::FileSource::open_read_only(path)
-    } else {
-        crate::dev::FileSource::open_read_only_image(path, None)
-    };
-    match opened {
+    match open_target(path, None) {
         Ok(src) => {
             let (state, detail) = crate::dev::describe(&src);
             println!("occupancy: {state}");
@@ -250,7 +251,7 @@ fn report_occupancy(path: &Path) {
                 println!("occupancy evidence: {detail}");
             }
         }
-        Err(e) => println!("occupancy: undecidable — the target cannot be opened read-only: {e}"),
+        Err(why) => println!("occupancy: undecidable — {why}"),
     }
 }
 
@@ -531,22 +532,31 @@ fn describe_entry_table_steps(record: &Record) -> String {
     }
     // 表步已开始的条目可能已经落盘：把它计入已提交。少报会让人以为旧布局还没被
     // 改写，而对未写完的条目多报的代价只是"按已改写对待"
-    let in_flight = record.entry_table_in_flight;
-    let committed = reloc.entry_index as usize + usize::from(in_flight == Some(reloc.entry_index));
-    match in_flight {
-        Some(entry) => format!(
-            "{committed}/{total} committed (entry {entry} table write in flight, counted as committed)"
+    match &record.entry_table_in_flight {
+        crate::domain::Fact::Known(entry) => {
+            let committed = reloc.entry_index as usize + usize::from(*entry == reloc.entry_index);
+            format!(
+                "{committed}/{total} committed (entry {entry} table write in flight, counted as committed)"
+            )
+        }
+        crate::domain::Fact::Absent => format!("{}/{} committed", reloc.entry_index as usize, total),
+        crate::domain::Fact::Undecidable(why) => format!(
+            "{}/{} committed at least (the table step state was not decoded: {why})",
+            reloc.entry_index as usize,
+            total
         ),
-        None => format!("{committed}/{total} committed"),
     }
 }
 
 #[cfg(target_os = "linux")]
 fn describe_repair(record: &Record) -> String {
+    use crate::domain::Fact;
     use crate::recovery::{RepairKind, RepairState};
 
-    let Some(fact) = record.repair else {
-        return "none".to_string();
+    let fact = match &record.repair {
+        Fact::Known(fact) => fact,
+        Fact::Absent => return "none".to_string(),
+        Fact::Undecidable(why) => return format!("undecidable ({why})"),
     };
     let state = match fact.state {
         RepairState::InFlight => "in flight",
@@ -565,15 +575,20 @@ fn describe_repair(record: &Record) -> String {
 
 #[cfg(target_os = "linux")]
 fn describe_table_fence(record: &Record) -> String {
+    use crate::domain::Fact;
     use crate::recovery::TableFence;
 
     if record.relocation.is_some() {
         return "not applicable (per-entry table steps)".to_string();
     }
-    match record.table_fence {
-        TableFence::Pending => "pending".to_string(),
-        TableFence::InFlight => "table step in flight".to_string(),
-        TableFence::Landed => "landed".to_string(),
+    match &record.table_fence {
+        Fact::Known(TableFence::Pending) => "pending".to_string(),
+        Fact::Known(TableFence::InFlight) => "table step in flight".to_string(),
+        Fact::Known(TableFence::Landed) => "landed".to_string(),
+        // 记录编码总带表步围栏：解码只给出 `Known`，尾段没解出来时整条记录落到
+        // `Undecidable`，所以这一支只在内存里构造的记录上出现
+        Fact::Absent => "absent (the record carries no table fence)".to_string(),
+        Fact::Undecidable(why) => format!("undecidable ({why})"),
     }
 }
 
@@ -645,7 +660,7 @@ mod tests {
             disk_size: 16 * 1024 * 1024,
             ss: 512,
         });
-        record.entry_table_in_flight = Some(1);
+        record.entry_table_in_flight = crate::domain::Fact::Known(1);
         assert_eq!(
             describe_entry_table_steps(&record),
             "2/2 committed (entry 1 table write in flight, counted as committed)"

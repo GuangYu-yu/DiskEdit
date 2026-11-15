@@ -214,9 +214,10 @@ fn resize_fs_step(src: &mut WriteSource, scope: &DeviceScope, fstype: Option<Con
         Some(ContentKind::Filesystem(FsKind::F2fs)) => {
             let (off, len) = scope_byte_range(src, scope)?;
             with_write_scope(src, scope, off, len, |dev| {
-                // 预检：fsck.f2fs 无参 = 仅检查不修复（修复须显式 -f/-p；-a 只在内核报告 bug
-                // 时才检查且默认禁用，man fsck.f2fs）。退出码负数表示失败（-1 表现为 255），
-                // 非 0 即拒绝 resize
+                // 预检：fsck.f2fs 默认不修复（-f/-p 才修；-a 只在内核报告 bug 时才检查，
+                // 默认禁用，man v1.16.0）。例外：SIT 段类型不一致时 force 置位，无参也把
+                // 全局元数据写回（fsck/fsck.c 的 force 分支，--dry-run 挡不住）。退出码
+                // 负数表示失败（-1 表现为 255），非 0 即拒绝 resize
                 let out = run("fsck.f2fs", &[dev])?;
                 if !out.status.success() {
                     return Err(FsError::CommandFailed(format!(

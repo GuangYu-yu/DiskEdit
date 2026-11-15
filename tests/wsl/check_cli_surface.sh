@@ -18,7 +18,11 @@
 #   1. 外部工具白名单：$B 族变量被指向 dmsetup/sgdisk 等工具时不按本工具命令面判；
 #      直接调用的外部工具本来就不在抽取集里（扫描只锚定 $B 族变量，不做整文件旗标扫描，
 #      否则注释与 echo 文案里的 --xxx 会淹没结果）；
-#   2. `cli-surface: refused`：该调用刻意传未登记的命令或旗标并断言退出 2。
+#   2. `cli-surface: refused`：该调用刻意传未登记的命令或旗标。标记不是放行：
+#      被标记的调用必须真的落在命令面外（未知命令或未登记旗标），且其下文必须
+#      断言退出 2（rust 在调用结束后 6 行内出现 `assert_eq!(.., 2`，shell 在同一段
+#      到断言之间）。未知命令与未登记旗标两类理由各至少要有一条标记。
+#      没标记的命令面外调用仍按失效点报错。
 #
 # 判定只用二进制的 help：命令必须在 help 的命令清单里，旗标必须在该命令
 # help <CMD> 的 options 里。src/cli.rs 只参与前提检查（二进制是不是当前源码的构建
@@ -32,6 +36,8 @@ source "$(dirname "$0")/lib.sh"
 EXTERNAL="dmsetup sgdisk losetup blockdev partx sfdisk mount umount unshare setpriv"
 
 bad=0
+seen_refusal_cmd=0
+seen_refusal_flag=0
 fail_line() { # 文件:行号: 文案
     echo "$1: $2"
     bad=1
@@ -110,22 +116,67 @@ flag_ok() { # 命令 旗标
     return 1
 }
 
-check_invocation() { # 文件 行号 命令 旗标...
-    local file=$1 nr=$2 cmd=$3; shift 3
+check_invocation() { # 显示名 路径 行号 已标记 断言扫描起始行 命令 旗标...
+    local label=$1 file=$2 nr=$3 marked=$4 from=$5 cmd=$6; shift 6
     case " $EXTERNAL " in *" $cmd "*) return 0 ;; esac
+    local unknown_cmd=0 unknown_flag=0 f
     if [ "$cmd" = "help" ] || [ "$cmd" = "--version" ]; then
-        [ $# -eq 0 ] && return 0
-        fail_line "$file:$nr" "\`$cmd\` 不接受旗标：$(printf '%s ' "$@")"
+        [ $# -gt 0 ] && unknown_flag=1
+    else
+        cmd_known "$cmd" || unknown_cmd=1
+        if [ "$unknown_cmd" -eq 0 ]; then
+            for f in "$@"; do
+                flag_ok "$cmd" "$f" || { unknown_flag=1; break; }
+            done
+        fi
+    fi
+    if [ "$marked" = "1" ]; then
+        if [ "$unknown_cmd" -eq 0 ] && [ "$unknown_flag" -eq 0 ]; then
+            fail_line "$label:$nr" "\`cli-surface: refused\` 标在命令面内的调用上（\`$cmd\`）：标记不是放行"
+            return 0
+        fi
+        [ "$unknown_cmd" -eq 1 ] && seen_refusal_cmd=1
+        [ "$unknown_flag" -eq 1 ] && seen_refusal_flag=1
+        marker_asserts_usage "$file" "$from" \
+            || fail_line "$label:$nr" "\`cli-surface: refused\` 的下文没有断言退出 2（命令 \`$cmd\`）"
         return 0
     fi
-    if ! cmd_known "$cmd"; then
-        fail_line "$file:$nr" "命令 \`$cmd\` 不在命令面内"
+    if [ "$cmd" = "help" ] || [ "$cmd" = "--version" ]; then
+        [ $# -gt 0 ] && fail_line "$label:$nr" "\`$cmd\` 不接受旗标：$(printf '%s ' "$@")"
         return 0
     fi
-    local f
+    if [ "$unknown_cmd" -eq 1 ]; then
+        fail_line "$label:$nr" "命令 \`$cmd\` 不在命令面内"
+        return 0
+    fi
     for f in "$@"; do
-        flag_ok "$cmd" "$f" || fail_line "$file:$nr" "旗标 \`$f\` 不在 \`$cmd\` 的命令面内"
+        flag_ok "$cmd" "$f" || fail_line "$label:$nr" "旗标 \`$f\` 不在 \`$cmd\` 的命令面内"
     done
+}
+
+# 标记必须与拒绝断言绑在一起：读调用结束之后若干行，遇到下一次调用即停止
+marker_asserts_usage() { # 文件 起始行
+    local file=$1 from=$2
+    case "$file" in
+        *.rs)
+            awk -v from="$from" '
+                NR>from && NR<=from+6 && !done {
+                    if ($0 ~ /(run|args)\(&?\[/) done=1
+                    else if (index($0, "assert_eq!") && $0 ~ /, *2[,)]/) found=1
+                }
+                END { exit !found }
+            ' "$file"
+            ;;
+        *)
+            awk -v from="$from" '
+                NR>=from && NR<=from+4 {
+                    if (NR>from && $0 ~ /\$B/) exit
+                    if ($0 ~ /exp \$\? 2/ || $0 ~ /chk "\$\?" "2"/ || $0 ~ /\[ "\$E" = "2" \]/) found=1
+                }
+                END { exit !found }
+            ' "$file"
+            ;;
+    esac
 }
 
 # ---- shell：拼接续行 → 去引号外注释 → 逐处 $B/$BF... 取调用词与该段旗标 ----
@@ -159,8 +210,8 @@ check_shell() {
         }
         return out
     }
-    function emit(s, nr, raw,   rest,pre,post,p2,cmd,tail,nextw,seg,flags,flag,before) {
-        if (raw ~ /cli-surface: refused/) return
+    function emit(s, nr, raw,   rest,pre,post,p2,cmd,tail,nextw,seg,flags,flag,before,marked) {
+        marked=(raw ~ /cli-surface: refused/) ? 1 : 0
         rest=s
         while (match(rest, /\$(BFKO|BFK|BIN|BF|B)/)) {
             pre=substr(rest,1,RSTART-1)
@@ -187,7 +238,7 @@ check_shell() {
                 if (index(flags " ", " " flag " ")) continue
                 flags=flags " " flag
             }
-            print nr "\t" cmd "\t" flags
+            print nr "\t" marked "\t" nr "\t" cmd "\t" flags
         }
     }
     BEGIN { buf=""; raw=""; start=0 }
@@ -208,7 +259,7 @@ check_shell() {
 check_rust() {
     local file=$1
     awk -v KNOWN2="$KNOWN2" '
-    function row(s, nr,   n,lit,cmd,flags) {
+    function row(s, nr, marked, end,   n,lit,cmd,flags) {
         n=0; cmd="";
         while (match(s, /"[^"]*"/)) {
             lit=substr(s, RSTART+1, RLENGTH-2)
@@ -226,7 +277,7 @@ check_rust() {
             }
         }
         if (cmd=="") return
-        print nr "\t" cmd "\t" flags
+        print nr "\t" marked "\t" end "\t" cmd "\t" flags
     }
     BEGIN { prev1=""; prev2="" }
     {
@@ -252,7 +303,7 @@ check_rust() {
             }
             pos=length(text)+1
             if (done) {
-                if (!refused) row(substr(text, 1, cut-1), start)
+                row(substr(text, 1, cut-1), start, refused, NR)
                 in_call=0; text=""
             }
         }
@@ -272,19 +323,24 @@ fi
 
 for f in "${sh_files[@]}"; do
     rel=${f#"$_repo_root"/}
-    while IFS=$'\t' read -r nr cmd flags; do
+    while IFS=$'\t' read -r nr marked from cmd flags; do
         [ -z "$cmd" ] && continue
-        check_invocation "$rel" "$nr" "$cmd" $flags
+        check_invocation "$rel" "$f" "$nr" "$marked" "$from" "$cmd" $flags
     done < <(check_shell "$f")
 done
 
 for f in "$_repo_root"/tests/*.rs "$_repo_root"/tests/cli/*.rs; do
     [ -f "$f" ] || continue
-    while IFS=$'\t' read -r nr cmd flags; do
+    while IFS=$'\t' read -r nr marked from cmd flags; do
         [ -z "$cmd" ] && continue
-        check_invocation "$(basename "$f")" "$nr" "$cmd" $flags
+        check_invocation "${f#"$_repo_root"/}" "$f" "$nr" "$marked" "$from" "$cmd" $flags
     done < <(check_rust "$f")
 done
+
+# 标记覆盖的理由类别：未知命令与未登记旗标各至少一条，否则标记可以整体消失
+if [ "$seen_refusal_cmd" -eq 0 ] || [ "$seen_refusal_flag" -eq 0 ]; then
+    fail_line "tests" "cli-surface 标记缺少一类拒绝理由（未知命令=$seen_refusal_cmd，未登记旗标=$seen_refusal_flag）"
+fi
 
 if [ "$bad" -ne 0 ]; then
     echo "命令面校验失败"

@@ -184,8 +184,8 @@ fn refuse_shrink() -> RunOutcome {
 }
 
 /// resize 的一键入口。SIZE：`10G`=绝对值、`+2G`=增量、`grow`=吃满右侧可用区
-/// （挡路分区须 --allow-move，搬移计划须 --yes 确认）。只扩不缩：缩容拆成
-/// `resizefs` + `resize-part`。LVM PV 扩容自动 pvresize，
+/// （挡路分区须 --allow-move，搬移计划须 --yes 确认）。只扩不缩：缩容走
+/// `resize-part`（离线 `resizefs` 不接受尺寸）。LVM PV 扩容自动 pvresize，
 /// --grow-lv 再把新增传给目标 LV 并扩 FS
 pub(crate) fn cmd_resize(a: &ResizeRequest) -> crate::outcome::RunOutcome {
     // SIZE 已由命令行层解析成形状 + 数值，锁前/锁下两次锚定共用同一份（请求里的 a.size）
@@ -444,7 +444,7 @@ pub(crate) fn cmd_resize(a: &ResizeRequest) -> crate::outcome::RunOutcome {
         let o = settle_layout(o, &src, record);
         finish_resize(a, o, Some(&mut src), part, is_pv, is_block, lv_sel.as_ref().map(|s| s.path.as_str()), cur_bytes)
     } else {
-        // SIZE：字节 → 扇区（下取整）；扩须右侧空闲足够，缩由 resize_part 内部 FS 先缩 + 守卫链
+        // SIZE：字节 → 扇区（下取整）；缩容已在入口拒绝，这里只剩扩与不变两种
         let Some(bytes) = target else {
             bail_fail(RunOutcome::refused("`resize` needs a size: diskedit resize <TARGET>[:N] <SIZE> (see diskedit help resize)".to_string()));
         };

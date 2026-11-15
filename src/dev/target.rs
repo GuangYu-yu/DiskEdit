@@ -40,7 +40,7 @@ pub fn parse_target(s: &str) -> Result<(String, Option<PartSelector>), &'static 
             if n == 0 {
                 return Err("partition number is 1-based (:0 is not a partition)");
             }
-            // PartitionSpec 的解析值域是 1..=128（GPT 条目数上限）；
+            // `PartSelector::Number` 的解析值域是 1..=128（GPT 条目数上限）；
             // MBR 目标上 5..=128 由主分区槽位守卫拒绝（3），解析期不区分盘型
             if n > 128 {
                 return Err("partition number out of range (1..=128)");

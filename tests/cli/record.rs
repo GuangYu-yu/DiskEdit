@@ -96,6 +96,38 @@ fn partition_start(img: &Path) -> u64 {
     v["partitions"][0]["first_lba"].as_u64().unwrap()
 }
 
+/// 撞键遗留：本目标的记录落点里坐着另一身份的记录时，写命令在取锁前拒绝，
+/// 不落锁文件、不写目标字节
+#[test]
+fn a_record_slot_holding_another_identity_is_refused_before_the_lock() {
+    let (a, a_record, _) = stage("f4a");
+    let (c, e) = run_fault("record-persisted", &add_1m(a.to_str().unwrap()));
+    assert_ne!(c, 0, "the injected abort must not look like success: {e}");
+    assert!(a_record.exists(), "the fixture record must land: {e}");
+
+    let (b, b_record, _) = stage("f4b");
+    let (c, e) = run_fault("record-persisted", &add_1m(b.to_str().unwrap()));
+    assert_ne!(c, 0, "the injected abort must not look like success: {e}");
+    assert!(b_record.exists(), "the fixture record must land: {e}");
+
+    // 落点相同（都是 <image>.diskedit/record），载荷身份不同（另一份文件）
+    std::fs::copy(&a_record, &b_record).unwrap();
+    let foreign = std::fs::read(&b_record).unwrap();
+    let baseline = std::fs::read(&b).unwrap();
+    let lock = b_record.parent().unwrap().join("record.lock");
+    let _ = std::fs::remove_file(&lock);
+
+    let (c, e) = run(&add_1m(b.to_str().unwrap()));
+    assert_eq!(c, 3, "a record for another identity must be refused: {e}");
+    assert!(
+        e.contains("the record directory and the target identity do not match"),
+        "{e}"
+    );
+    assert!(!lock.exists(), "the refusal must come before the lock is taken: {e}");
+    assert_eq!(std::fs::read(&b).unwrap(), baseline, "no target byte may be written: {e}");
+    assert_eq!(std::fs::read(&b_record).unwrap(), foreign, "the foreign record is left as it was: {e}");
+}
+
 /// 记录已落盘、目标未改：`undo` 把原文写回（等价于重写同一份字节）并释放记录
 #[test]
 fn record_persisted_before_data_write() {
