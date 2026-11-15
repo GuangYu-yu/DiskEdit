@@ -23,21 +23,36 @@ fail_report() { # $1=标签 $2=退出码 $3=完整输出
 }
 
 # 表已提交、后置条件未满足时的退出码（Partial，见 src/outcome.rs）。
-# 脚本只按这个契约判断"要不要刷新内核视图后重试"，不解析人类可读文案
+# 脚本在这个码上做内核视图刷新与现场释放，成败只看盘上内容，不解析人类可读文案
 RC_PARTIAL=5
 
-# 表写命令的稳定执行：DiskEdit 在表提交后校验内核分区视图，偶发 reread 竞态会以
-# Partial 收场并保留记录（表已写、可 undo）——此时刷新内核视图、释放现场后重试一次，
-# 消除测试自身的时序赌运气
-set4kn() { # $1=label  其余=传给 set 的参数
-  local label=$1 out e; shift
+# 分区 2 的记录里是否出现给定片段。info 读的是盘上的表，不依赖内核分区视图
+part2_has() {
+  $B info "$LD" 2>/dev/null | grep -o '"num":2,[^}]*}' | grep -Fq -- "$1"
+}
+
+# 释放现场并放弃记录里的表区原文：这些调用点的表项已经写定，undo 没有可回滚的
+# 目标。带 --discard-replay 是必须的——记录里留着的表区 preimage 会让不带它的
+# abandon 以 3 拒绝。失败不静默：记录留着会挡住后续每一条表写命令
+abandon_now() {
+  local out e
+  out=$($B abandon "$LD" --yes --discard-replay 2>&1); e=$?
+  [ "$e" -eq 0 ] || fail_report "abandon" "$e" "$out"
+  return "$e"
+}
+
+# 表写命令的稳定执行：DiskEdit 在表提交后校验内核分区视图，reread 竞态会以
+# Partial 收场（表已写、记录保留，可 undo）。这一种结果的契约落在盘上：
+# 按 $2 核对分区 2 的记录，对上了才刷新内核视图、释放现场并判成功；
+# 对不上说明表项没写成该有的样子，按失败原样上报
+set4kn() { # $1=label $2=成功后分区 2 记录里应出现的片段  其余=传给 set 的参数
+  local label=$1 want=$2 out e; shift 2
   out=$($B set --yes "$LD":2 "$@" 2>&1); e=$?
-  if [ "$e" -eq "$RC_PARTIAL" ]; then
-    partx -u "$LD" 2>/dev/null; sleep 1
-    # set 幂等，表项重写无副作用；abandon 只释放现场。undo/abandon 的目标必须是
-    # 启动场景时的 $LD：镜像路径侧身份匹配不到现场（产品未实现跨目标回退）
-    $B abandon "$LD" --yes >/dev/null 2>&1
-    out=$($B set --yes "$LD":2 "$@" 2>&1); e=$?
+  if [ "$e" -eq "$RC_PARTIAL" ] && part2_has "$want"; then
+    e=0
+    echo "  set $label：表已写盘，内核视图滞后"
+    record_present "$LD" && abandon_now
+    refresh
   fi
   [ "$e" -eq 0 ] && echo "  OK   set $label" || fail_report "set $label" "$e" "$out"
 }
@@ -49,9 +64,11 @@ addk() { # $1=label $2=期望生成的分区节点  其余=传给 add 的参数
     partx -u "$LD" 2>/dev/null; sleep 1
     if [ -b "$node" ]; then
       # 表已写、内核视图滞后，DiskEdit 保留了记录——不清掉会以 "unfinished
-      # operation" 闸拒绝后续所有表写命令。abandon 只释放现场，不回滚已写表项
-      $B abandon "$LD" --yes >/dev/null 2>&1
-      echo "  OK   add $label（首次已写盘，内核视图滞后，记录已释放）"; return 0
+      # operation" 闸拒绝后续所有表写命令
+      if abandon_now; then
+        echo "  OK   add $label（首次已写盘，内核视图滞后，记录已释放）"; return 0
+      fi
+      return 1
     fi
     record_present "$LD" && $B undo "$LD" --yes >/dev/null 2>&1
     out=$($B add --yes "$LD" "$@" 2>&1); e=$?
@@ -67,10 +84,9 @@ movek() { # $1=目标 start（LBA）
     fl=$($B info "$LD" | grep -o '"num":2,"first_lba":[0-9]*' | grep -o '[0-9]*$')
     if [ "$fl" = "$start" ]; then
       e=0
-      $B abandon "$LD" --yes >/dev/null 2>&1
-      echo "  move 首次已写盘，内核视图滞后，记录已释放"
+      abandon_now && echo "  move 首次已写盘，内核视图滞后，记录已释放"
     else
-      $B abandon "$LD" --yes >/dev/null 2>&1
+      abandon_now || return 1
       out=$($B move "$LD":2 --start "$start" --chunk 4 --yes 2>&1); e=$?
     fi
   fi
@@ -78,11 +94,19 @@ movek() { # $1=目标 start（LBA）
 }
 
 setup4k() {
+  local out e
   rm -rf "$T" "$T"$SIDECAR_GLOB; rm -rf /var/lib/diskedit/* 2>/dev/null
   [ -n "$LD" ] && lo_detach "$LD" 2>/dev/null
   truncate -s 2G "$T"
   LD=$(lo_attach "$T" --sector-size 4096)
-  $B new "$LD" --yes >/dev/null || { echo "setup: new FAILED"; rc=1; return 1; }
+  out=$($B new "$LD" --yes 2>&1); e=$?
+  if [ "$e" -eq "$RC_PARTIAL" ] && $B info "$LD" 2>/dev/null | grep -q '"gpt","damaged":false'; then
+    e=0
+    echo "  new：表已写盘，内核视图滞后"
+    record_present "$LD" && abandon_now
+    refresh
+  fi
+  [ "$e" -eq 0 ] || { echo "setup: new FAILED (exit $e)"; printf '%s\n' "$out" | sed 's/^/    /'; rc=1; return 1; }
   # 4Kn 下 1MiB = 256 扇区
   addk p1 "${LD}p1" 268435456 --start 256 --name p1 || return 1
   refresh; mkfs.ext4 -q "${LD}p1" || { echo "setup: mkfs p1 FAILED"; rc=1; return 1; }
@@ -126,11 +150,12 @@ e2fsck -fn "${LD}p2" >/dev/null 2>&1 && echo "4KN RESUME e2fsck clean" || { echo
 echo
 echo "########## D: 分区身份/属性搬移后保持（4Kn 块设备）##########"
 setup4k
-set4kn "name keepname" name keepname
-set4kn "flag esp on" flag esp on
+set4kn "name keepname" '"name":"keepname"' name keepname
+set4kn "flag esp on" '"type":"C12A7328-F81F-11D2-BA4B-00A0C93EC93B"' flag esp on
 echo "move 前现场：$(ls /var/lib/diskedit/ 2>/dev/null | wc -l) 项"
 PU_BEFORE=$(sgdisk -i 2 "$LD" 2>/dev/null | grep -i "unique GUID" | awk '{print $NF}')
 TY_BEFORE=$($B info "$LD" | grep -o '"num":2,[^}]*}' | grep -o '"type":"[^"]*"')
+assert_eq "$TY_BEFORE" '"type":"C12A7328-F81F-11D2-BA4B-00A0C93EC93B"' "D 搬移前类型为 esp"
 MOVE_OUT=$(movek 66048); MOVE_E=$?
 if [ "$MOVE_E" -eq 0 ]; then echo "move exit=0"; else fail_report "move 66048" "$MOVE_E" "$MOVE_OUT"; fi
 PU_AFTER=$(sgdisk -i 2 "$LD" 2>/dev/null | grep -i "unique GUID" | awk '{print $NF}')
