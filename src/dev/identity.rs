@@ -408,12 +408,12 @@ pub(crate) const RECORD_LOCK_NAME: &str = "record.lock";
 /// 隔离区条目名：`abandon` 把记录目录里的 `record` 换成这个隐藏名，重名时取 `.abandoned.N`
 pub(crate) const QUARANTINE_ABANDONED: &str = ".abandoned";
 
-/// 旧构建把撕裂尾回放后归档用的名字。本构建只识别、不产生：记录必须通过两段 CRC 才解析，
-/// 撕裂的记录一律拒绝回放并保留原名，`undo` 不再归档
+/// 隔离区的第二个识别名 `.torn[.N]`。本构建不产生它：记录必须通过两段 CRC 才解析，
+/// 撕裂的记录一律拒绝回放并保留原名
 pub(crate) const QUARANTINE_TORN: &str = ".torn";
 
 /// 隔离条目的类别。两者都表示"记录已不在正式名上"：`abandoned` 是被放弃回滚能力，
-/// `torn` 是旧构建留下的归档。只参与识别与报告，不参与活跃记录判定
+/// `torn` 是同一隔离区的另一个识别名。只参与识别与报告，不参与活跃记录判定
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum QuarantineMark {

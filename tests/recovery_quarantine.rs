@@ -147,6 +147,33 @@ fn abandon_moves_the_record_into_the_quarantine_area() {
 }
 
 #[test]
+fn a_torn_entry_is_reported_as_quarantine() {
+    // 本构建不产生 `.torn[.N]`，但盘上可能有：按名字归入隔离区，而不是当成待解码的证据
+    let dir = temp_dir("torn-mark");
+    let image = image_with(&dir, 4096);
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let d = sidecar(&image);
+        fs::create_dir_all(&d).unwrap();
+        fs::set_permissions(&d, fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let torn = sidecar(&image).join(".torn.3");
+    fs::write(&torn, record_bytes(4096, file_id(&image))).unwrap();
+
+    let (code, out, err) = run(&["inspect", torn.to_str().unwrap()]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(out.contains("state: quarantined (torn)"), "{out}");
+    assert!(err.contains("this torn entry is kept as evidence"), "{err}");
+
+    // 读不出也不改变它属于隔离区这一事实：保留判定码，注记照打
+    fs::write(&torn, vec![0u8; 4096]).unwrap();
+    let (code, out, err) = run(&["inspect", torn.to_str().unwrap()]);
+    assert_eq!(code, 3, "{out}{err}");
+    assert!(out.contains("state: quarantined (torn)"), "{out}");
+    assert!(err.contains("this torn entry is kept as evidence"), "{err}");
+}
+
+#[test]
 fn a_second_abandon_is_idempotent() {
     // 身份相等的隔离条目恰好一条时重跑不报错（“不是恰好 1 条 → 3”的另一侧）。
     let dir = temp_dir("idempotent");
@@ -227,7 +254,14 @@ fn abandon_refuses_a_record_in_an_unknown_layout_without_renaming_anything() {
 fn abandon_refuses_a_non_regular_entry() {
     let dir = temp_dir("not_ours");
     let image = image_with(&dir, 4096);
-    fs::create_dir_all(sidecar(&image)).unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        // 记录目录按产品形状（0700）建：本用例要考的是记录落点本身非普通文件，
+        // 目录权限若不先达标，拒绝会停在目录那一关，走不到这一条判据
+        let d = sidecar(&image);
+        fs::create_dir_all(&d).unwrap();
+        fs::set_permissions(&d, fs::Permissions::from_mode(0o700)).unwrap();
+    }
     let elsewhere = dir.join("elsewhere");
     fs::write(&elsewhere, b"user data").unwrap();
     std::os::unix::fs::symlink(&elsewhere, record_path(&image)).unwrap();

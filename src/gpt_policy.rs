@@ -1237,10 +1237,21 @@ mod tests {
             attribute_bits: 0,
             partition_name: "".into(),
         };
-        // 空槽（类型 GUID 为零）不计入：取末端最大的已用条目，而不是下标最大的槽
-        assert_eq!(last_used_gpt(&[ent(34, 100), ent(0, 0), ent(200, 300), ent(500, 600)]), Some(4));
-        assert_eq!(last_used_gpt(&[ent(34, 100), ent(200, 300), ent(0, 0)]), Some(2));
-        assert_eq!(last_used_gpt(&[ent(0, 0), ent(0, 0)]), None);
+        // 空槽：类型 GUID 为零。残留 LBA 不使它变成分区（UEFI 2.10 §5.3.1）
+        let empty = |s: u64, e: u64| gptman::GPTPartitionEntry {
+            partition_type_guid: [0; 16],
+            unique_partition_guid: [0; 16],
+            starting_lba: s,
+            ending_lba: e,
+            attribute_bits: 0,
+            partition_name: "".into(),
+        };
+        // 空槽不计入：取末端最大的已用条目，而不是下标最大的槽
+        assert_eq!(last_used_gpt(&[ent(34, 100), empty(0, 0), ent(200, 300), ent(500, 600)]), Some(4));
+        assert_eq!(last_used_gpt(&[ent(34, 100), ent(200, 300), empty(0, 0)]), Some(2));
+        // 残留 LBA 的空槽同样不计入：判据只有类型 GUID
+        assert_eq!(last_used_gpt(&[ent(34, 100), empty(700, 800)]), Some(1));
+        assert_eq!(last_used_gpt(&[empty(0, 0), empty(700, 800)]), None);
         assert_eq!(last_used_gpt(&[]), None);
 
         let part = |num: u32, start: u32, size: u32, is_container: bool| MbrPartition {

@@ -30,8 +30,10 @@ use crate::support::{bail_fail, json_escape};
 
 pub(crate) const DETAILS_LIST: &str = r#"  List recovery records as JSON. Only decodable records are listed; an entry in
   an unknown format is left out (use `records scan` to see it). Quarantine
-  entries (`.abandoned[.N]`, and `.torn[.N]` left by older builds) are listed and
-  marked, but they are not part of the active record set.
+  entries (`.abandoned[.N]`, `.torn[.N]`) are listed and marked, but they are
+  not part of the active record set. This build never writes `.torn[.N]`; the
+  name is recognized so such an entry is treated as quarantine, not as an
+  active record.
 
   There is no index yet: every row carries "registered": false, and records are
   enumerated in memory. Sidecars that are not addressed by TARGET are not
@@ -316,8 +318,10 @@ fn collect_dir(
     for entry in entries {
         let entry = entry.map_err(|e| format!("cannot read {}: {e}", dir.display()))?;
         let name = entry.file_name();
-        let Some(text) = name.to_str() else { continue };
-        if text == crate::dev::RECORD_LOCK_NAME || is_temp_name(text) {
+        let text = name.to_str();
+        // 锁与残留临时文件按名字排除。非 UTF-8 的名字不可能是这两类，照常探测：名字转
+        // 不成文本不等于记录缺席，这一条照进列表，状态按探测结果给（读不出就报读不出）
+        if text == Some(crate::dev::RECORD_LOCK_NAME) || text.is_some_and(is_temp_name) {
             continue;
         }
         let path = entry.path();
