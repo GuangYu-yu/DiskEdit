@@ -153,6 +153,7 @@ impl TargetLock {
         #[cfg(not(unix))]
         let handle: Option<File> = {
             // 第二道凭据不做：指纹在这里没有比对对象
+            // audit-allow: D-10
             let _ = expected;
             None
         };
@@ -199,6 +200,7 @@ mod tests {
     fn second_lock_on_the_same_image_is_refused() {
         let (_dir, img) = temp_image("excl");
         let lock_path = identity_for(&img).lock_path().to_path_buf();
+        // audit-allow: D-11
         let _ = std::fs::remove_file(&lock_path);
 
         let first = acquire_prepared(&identity_for(&img), None).expect("the first holder must succeed");
@@ -222,6 +224,7 @@ mod tests {
         let (_dir, img) = temp_image("missing");
         let identity = identity_for(&img);
         let lock_path = identity.lock_path().to_path_buf();
+        // audit-allow: D-12
         let _ = std::fs::remove_file(&lock_path);
         // 指纹取自已打开的句柄，随后删除路径：调用方仍持有那份文件，路径却已不在
         let opened = std::fs::File::open(&img).unwrap();
@@ -245,6 +248,7 @@ mod tests {
     fn hard_linked_paths_share_one_lock() {
         let (_dir, img) = temp_image("hardlink");
         let alias = img.with_extension("alias");
+        // audit-allow: D-13
         let _ = std::fs::remove_file(&alias);
         if std::fs::hard_link(&img, &alias).is_err() {
             // 不支持硬链接的文件系统（FAT/exFAT/部分网络盘）上没有这个场景

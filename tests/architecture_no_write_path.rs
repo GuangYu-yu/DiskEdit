@@ -73,10 +73,11 @@ fn no_production_module_opens_a_new_write_path() {
 fn no_write_claims_live_only_in_the_result_presenter() {
     // 「本次运行没有写」由结果呈现层按最终变体说一次，构造点的文案不得自带该断言。
     // 判据是结论的几种写法，不是一个字面量：只钉一种写法时，换个说法就能绕过去。
-    // 例外按「文件 + 判别子串 + 为什么它不是运行级结论」逐行登记，不做整文件豁免；
-    // 步骤级/组件级/对象级的句子必须自带范围词（this step / the filesystem / LV 等）。
-    // 呈现层那句原句由本用例末尾单独断言：措辞一改就报错，不会静默放行。
-    // 大小写不构成另一种写法，比较前统一折成小写；同义措辞一并列出
+    // 例外按「文件 + 站点 id + 为什么它不是运行级结论」登记，id 写在声明上一行的
+    // `// audit-allow:` 标记里，不做整文件豁免；步骤级/组件级/对象级的句子必须自带
+    // 范围词（this step / the filesystem / LV 等）。大小写不构成另一种写法，比较前
+    // 统一折成小写；同义措辞一并列出。呈现层那句原句由本用例末尾单独断言：措辞一改
+    // 就报错，不会静默放行
     const CLAIMS: &[&str] = &[
         "nothing was written",
         "nothing has been written",
@@ -88,48 +89,55 @@ fn no_write_claims_live_only_in_the_result_presenter() {
         "no persistent state was changed",
         "changed no persistent state",
     ];
-    const EXCEPTIONS: &[(&str, &str, &str)] = &[
+    const CLAIM_EXCEPTIONS: &[(&str, &str, &str)] = &[
         (
             "cmd/undo.rs",
-            "nothing was written back",
+            "N-1",
             "回放结论：说的是没有回写记录里的字节，不是本次运行没写",
         ),
         (
+            "cmd/undo.rs",
+            "N-2",
+            "回放结论：盘面已是记录里的原文，同样只针对记录区间",
+        ),
+        (
             "recovery/rollback.rs",
-            "nothing was written back",
+            "N-3",
             "回放结论：同上，范围是记录里的区间",
         ),
         (
             "execution/table.rs",
-            "this step wrote nothing",
+            "N-4",
             "步骤级，且同句声明 earlier steps may already have written the target",
         ),
+        (
+            "execution/table.rs",
+            "N-5",
+            "步骤级：写后表戳缺失，本步骤未进写路径",
+        ),
+        (
+            "execution/table.rs",
+            "N-6",
+            "步骤级：写入段与区间不符，本步骤未进写路径",
+        ),
     ];
-    let mut found = Vec::new();
-    for (rel, text) in rust_sources() {
-        for (n, line) in text.lines().enumerate() {
+    const PRESENTER: &str = "changed no persistent state";
+    guards::compare_sites(
+        "无写声明",
+        &rust_sources(),
+        "N-",
+        guards::all_lines,
+        |rel, line| {
             let lower = line.to_lowercase();
-            if !CLAIMS.iter().any(|claim| lower.contains(claim)) {
-                continue;
-            }
-            let presenter = rel == "outcome.rs" && lower.contains("changed no persistent state");
-            let excepted = EXCEPTIONS
-                .iter()
-                .any(|(file, needle, _)| rel == *file && lower.contains(needle));
-            if !presenter && !excepted {
-                found.push(format!("{rel}:{}: {}", n + 1, line.trim()));
-            }
-        }
-    }
-    assert!(
-        found.is_empty(),
-        "a no-write claim outside the result presenter is not backed by anything:\n{}",
-        found.join("\n")
+            CLAIMS.iter().any(|claim| lower.contains(claim))
+                && !(rel == "outcome.rs" && lower.contains(PRESENTER))
+        },
+        CLAIM_EXCEPTIONS.iter().map(|(file, id, _)| (file.to_string(), *id)),
     );
-    // 豁免锚在呈现层的原句上：原句改了措辞，上面那条 `presenter` 就永远不命中，
+    // 豁免锚在呈现层的原句上：原句改了措辞，上面的排除条件就永远不命中，
     // 断言会在别处失败而不是静默放行
     assert!(
-        source("outcome.rs").contains("changed no persistent state"),
+        source("outcome.rs").contains(PRESENTER),
         "the presenter sentence this guard exempts is gone — the exemption covers nothing"
     );
 }
@@ -227,6 +235,39 @@ fn every_unsupported_reason_has_a_build_site() {
     }
 }
 
+/// 一处 `RunOutcome::Partial` 的字面构造（不是模式匹配）
+fn partial_construction(line: &str) -> bool {
+    let Some(at) = line.rfind("RunOutcome::Partial") else {
+        return false;
+    };
+    let rest = line[at + "RunOutcome::Partial".len()..].trim();
+    let Some(block) = rest.strip_prefix('{') else {
+        return false;
+    };
+    match block.find('}') {
+        Some(close) => {
+            let inner = &block[..close];
+            let after = block[close + 1..].trim_start();
+            !(inner.contains("..") || after.starts_with("=>") || after.starts_with("if "))
+        }
+        None => true,
+    }
+}
+
+/// 待办合并点：(文件, 站点 id, 为什么它只补待办、不新造 5)
+const PARTIAL_MERGES: &[(&str, &str, &str)] = &[
+    (
+        "cmd/layout.rs",
+        "P-1",
+        "待办合并点：把本进程攒下的 post 串进执行器已给出的 5，5 本身由执行器产生",
+    ),
+    (
+        "cmd/resize.rs",
+        "P-2",
+        "扩容路径的待办合并点：同上，只补 pending，不新造 5",
+    ),
+];
+
 #[test]
 fn partial_is_built_only_at_the_result_type_and_the_pending_merges() {
     // `RunOutcome::Partial` 在源码里有两种形态：字面构造，与模式匹配（match 分支、
@@ -244,72 +285,14 @@ fn partial_is_built_only_at_the_result_type_and_the_pending_merges() {
     // - 跨行书写的模式（`{` 在行尾、字段与 `} =>` 在后续行）会反过来被误计为构造，
     //   此时断言失败而不是漏报，按新增例外登记或调整判据；
     // - 经类型别名构造（`use ... RunOutcome as R` 后写 `R::Partial {`）不再命中。
-    // 例外按「文件 + 判别子串 + 理由」登记，与上面的 CLAIMS 同形，不做整文件豁免。
-    const MERGES: &[(&str, &str, &str)] = &[
-        (
-            "cmd/layout.rs",
-            "Err(RunOutcome::Partial { cause, pending, origin }) => RunOutcome::Partial {",
-            "待办合并点：把本进程攒下的 post 串进执行器已给出的 5，5 本身由执行器产生",
-        ),
-        (
-            "cmd/resize.rs",
-            "Err(RunOutcome::Partial { cause, pending, origin }) => RunOutcome::Partial {",
-            "扩容路径的待办合并点：同上，只补 pending，不新造 5",
-        ),
-    ];
-    let mut found = Vec::new();
-    let mut constructs = 0usize;
-    for (rel, text) in rust_sources() {
-        if rel == "outcome.rs" {
-            continue;
-        }
-        for (n, line) in text.lines().enumerate() {
-            let Some(at) = line.rfind("RunOutcome::Partial") else {
-                continue;
-            };
-            let rest = line[at + "RunOutcome::Partial".len()..].trim();
-            let Some(block) = rest.strip_prefix('{') else {
-                continue;
-            };
-            let is_pattern = match block.find('}') {
-                Some(close) => {
-                    let inner = &block[..close];
-                    let after = block[close + 1..].trim_start();
-                    inner.contains("..") || after.starts_with("=>") || after.starts_with("if ")
-                }
-                None => false,
-            };
-            if is_pattern {
-                continue;
-            }
-            constructs += 1;
-            let merged = MERGES
-                .iter()
-                .any(|(file, needle, _)| rel == *file && line.trim() == *needle);
-            if !merged {
-                found.push(format!("{rel}:{}: {}", n + 1, line.trim()));
-            }
-        }
-    }
-    assert_eq!(
-        constructs,
-        MERGES.len(),
-        "the guard classified {constructs} RunOutcome::Partial constructions outside outcome.rs, \
-         expected the {} registered merges — the scan no longer sees a construction it is anchored \
-         to, so it would pass while a new build site went unnoticed",
-        MERGES.len()
+    //
+    // 例外按「文件 + 站点 id + 理由」登记，id 写在语句上一行的 `// audit-allow:` 标记里
+    guards::compare_sites(
+        "RunOutcome::Partial 构造点",
+        &rust_sources(),
+        "P-",
+        guards::all_lines,
+        |rel, line| rel != "outcome.rs" && partial_construction(line),
+        PARTIAL_MERGES.iter().map(|(file, id, _)| (file.to_string(), *id)),
     );
-    assert!(
-        found.is_empty(),
-        "a RunOutcome::Partial literal appeared outside the result type and the two pending \
-         merges — the five entry points must stay inside outcome.rs:\n{}",
-        found.join("\n")
-    );
-    for (file, needle, _) in MERGES {
-        assert!(
-            source(file).lines().any(|line| line.trim() == *needle),
-            "{file}: the pending merge this guard is anchored to is gone — the guard must be \
-             updated together with the code"
-        );
-    }
 }

@@ -12,9 +12,10 @@
 //! 3. `Fact::Absent | Fact::Undecidable(..)` 合流成同一个臂：读不出与「确实没有」
 //!    走同一条路，正是 `Fact` 存在的理由所在。
 //!
-//! 每条按「文件 + 该行原文」登记，原文改了定位就失效；新增一处就失败，必须同时
-//! 给出豁免理由与台账行号。台账缺失时跳过台账核对（`.trae/` 是工作区资料，不随
-//! crate 分发）；台账在时，每条豁免的台账行号必须能查到。
+//! 每条豁免按「文件 + 站点 id」登记，id 由源码里紧邻折叠点上一行的
+//! `// audit-allow: <id>` 标记给出。折叠点换行、重排或改写措辞都不会让登记失配；
+//! 新增折叠点没有标记即失败，标记在而折叠点已不在也失败。台账缺失时跳过台账核对
+//! （`.trae/` 是工作区资料，不随 crate 分发）；台账在时，每条豁免的 id 必须能查到。
 //!
 //! `if let Fact::Known(..)` 也在这份清单里：非 `Known` 一律落进 `else`，是否构成
 //! 放行由人工逐条判。当前生产代码里没有这种写法，清单为空；新增即失败。
@@ -31,61 +32,53 @@ mod guards;
 
 use guards::{production_lines, rust_sources, source};
 
-/// 白名单：(文件, 该行 trim 后的原文, 台账行号, 为什么它不是「缺失折成放行」)
-const ALLOWED: &[(&str, &str, &str, &str)] = &[
+/// 白名单：(文件, 站点 id, 为什么它不是「缺失折成放行」)。id 同时是台账行号，
+/// 也是折叠点上一行 `// audit-allow:` 标记里的那个词
+const ALLOWED: &[(&str, &str, &str)] = &[
     (
         "cmd/records.rs",
-        "if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {",
         "W-2",
         "主机仓库目录枚举跳过类型读不出的项；不签发写许可（站点 S1-6，待修）",
     ),
     (
         "cmd/records.rs",
-        "if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {",
         "W-3",
         "sidecar 目录枚举同上（站点 S1-7，待修）",
     ),
     (
         "online/part.rs",
-        "let partx_ok = partx.as_ref().map(|o| o.status.success()).unwrap_or(false);",
         "W-4",
         "partx 状态读不出时走 BLKPG 回退，回退失败即报错（站点 S1-10，待复核）",
     ),
     (
         "recovery/cleanup.rs",
-        "let fence_settled = matches!(",
         "W-5",
         "表步围栏只有 Pending/Landed 算已定；Absent/Undecidable 落扣留许可一侧",
     ),
     (
         "recovery/cleanup.rs",
-        "let no_in_flight = matches!(record.entry_table_in_flight, Fact::Absent);",
         "W-6",
         "条目在飞位只有「确实没有」才放行；Known/Undecidable 落扣留许可一侧",
     ),
     (
         "recovery/record.rs",
-        "matches!(self.entry_table_in_flight, Fact::Known(in_flight) if in_flight == entry)",
         "W-7",
         "受控访问器 `table_step_in_flight`：只有 Known 且等于该条目才答「在飞」，Absent/Undecidable \
          都答否。调用点据此返回 Stage::Undecidable，不签发写许可",
     ),
     (
         "recovery/journal.rs",
-        "Fact::Absent | Fact::Undecidable(_) => None,",
         "W-8",
         "`source()` 把「没有源区间」与「源区间读不出」都答成 None；唯一调用点在首写前拒绝 \
          None，不构成放行",
     ),
     (
         "recovery/journal.rs",
-        "Fact::Absent | Fact::Undecidable(_) => {",
         "W-9",
         "`mark_table_step_started`：围栏读不出时不猜「表步未开始」，按拒绝返回",
     ),
     (
         "recovery/journal.rs",
-        "Fact::Absent | Fact::Undecidable(_) => None,",
         "W-10",
         "`repair()` 的 `None` 有两条来源：`Absent` 是确实没有修复动作，`apply_repair` 据此\
          继续是正常路径；`Undecidable` 只由前缀解码产生，而写入路径的日志只来自新建记录\
@@ -95,31 +88,45 @@ const ALLOWED: &[(&str, &str, &str, &str)] = &[
     ),
     (
         "recovery/record.rs",
-        "Fact::Absent | Fact::Undecidable(_) => return Ok(Stage::Undecidable),",
         "W-11",
         "`derive_stage` 把围栏读不出与「没有围栏」都折成 Undecidable 阶段——两者都不签发\
          写许可",
     ),
     (
         "recovery/record.rs",
-        "Fact::Absent | Fact::Undecidable(_) => return Err(tail_not_decoded()),",
         "W-12",
         "载荷编码：尾段读不出的记录不得重写，编码直接失败，不把 Undecidable 写成 Absent",
     ),
     (
         "recovery/rollback.rs",
-        "crate::domain::Fact::Absent | crate::domain::Fact::Undecidable(_) => {",
         "W-13",
         "`copy` 回滚前的源复核：拿不到源区间就拒绝写回，两条 `None` 都走同一条拒绝分支，\
          不构成放行",
     ),
     (
         "recovery/record.rs",
-        "} else if matches!(self.table_fence, Fact::Known(TableFence::InFlight)) {",
         "W-14",
         "`settle_table_step_after_rollback`：只在回滚把记录登记的表区原文写回并核对之后调用，\
          围栏明确记着 `InFlight` 才退回 `Pending`。`Absent` / `Undecidable` / `Pending` / \
          `Landed` 都不动，清理许可仍按记录原值判——读不出的围栏不会被当成「已落定」",
+    ),
+    (
+        "recovery/record.rs",
+        "W-15",
+        "`copy` 记录的载荷必须带源区间：`Absent` 是记录自相矛盾，`Undecidable` 是尾段没解出来，\
+         两者都拒绝编码，不写出缺段的记录",
+    ),
+    (
+        "recovery/journal.rs",
+        "W-16",
+        "`mark_repair_landed` 要有可标记的表区修复：`Absent`（没有修复）与 `Undecidable`（修复\
+         事实读不出）都按「没有可标记的修复」返回 `NotWritten`，调用方不得据此推进进度",
+    ),
+    (
+        "recovery/journal.rs",
+        "W-17",
+        "落盘失败后的内存补偿：只有重读到 `Known` 才把 `repair.state` 退回 `InFlight`；\
+         `Absent` / `Undecidable` 没有可补偿的状态，且无论哪条都照常返回 `persist` 的错误",
     ),
 ];
 
@@ -136,9 +143,26 @@ fn merges_absent_with_undecidable(line: &str) -> bool {
         || (left.contains("Fact::Undecidable") && right.contains("Fact::Absent"))
 }
 
-/// 这段代码是否用 `if let` 只接住 `Known`，把其余两态推进 `else`
-fn if_let_known(line: &str) -> bool {
-    line.contains("if let Fact::Known") || line.contains("if let crate::domain::Fact::Known")
+/// 这段代码是否用 `if let` / `let-else` 只接住 `Known`，把其余两态推进同一出口。
+/// 两种写法都让 `Absent` 与 `Undecidable` 走同一条路，区别只在出口是 `else` 块还是
+/// `else` 分叉
+fn known_only_guard(line: &str) -> bool {
+    line.contains("if let Fact::Known")
+        || line.contains("if let crate::domain::Fact::Known")
+        || line.contains("let Fact::Known")
+        || line.contains("let crate::domain::Fact::Known")
+}
+
+/// 这一段是否是 `match` 一个 `Fact` 且带 `_` 臂——`_` 会把 `Absent` 与 `Undecidable`
+/// 一并接住，等价于显式合并两臂。窗口按物理行取
+fn match_with_wildcard_arm(prod: &[(usize, &str)], idx: usize, line: &str) -> bool {
+    if !line.contains("match ") {
+        return false;
+    }
+    let window: Vec<&str> = prod.iter().skip(idx).take(14).map(|(_, l)| *l).collect();
+    let mentions_fact = window.iter().any(|l| l.contains("Fact::"));
+    let wildcard = window.iter().any(|l| l.trim_start().starts_with("_ =>"));
+    mentions_fact && wildcard
 }
 
 /// `|` 折行时把 or-pattern 接成一条逻辑行（行尾悬着单个 `|`，或下一个非注释行以单个 `|`
@@ -225,41 +249,67 @@ fn a_comment_between_pattern_operands_is_skipped() {
     );
 }
 
+/// 这一行（逻辑行）是否把三态折成布尔量。`matches!` 的窗口按物理行取
+fn folds_fact(prod: &[(usize, &str)], idx: usize, line: &str) -> bool {
+    if line.contains("unwrap_or(false)")
+        || line.contains("unwrap_or(true)")
+        || merges_absent_with_undecidable(line)
+        || known_only_guard(line)
+        || match_with_wildcard_arm(prod, idx, line)    {
+        return true;
+    }
+    line.contains("matches!(")
+        && prod
+            .iter()
+            .skip(idx)
+            .take(6)
+            .map(|(_, l)| *l)
+            .collect::<String>()
+            .contains("Fact::")
+}
+
 #[test]
 fn facts_are_not_folded_back_into_booleans() {
     let mut found: Vec<(String, String)> = Vec::new();
+    let mut unmarked: Vec<String> = Vec::new();
     for (rel, text) in rust_sources() {
         if rel == "tests.rs" || rel.ends_with("/tests.rs") {
             continue;
         }
         let prod = production(&text);
         for (idx, line) in logical_lines(&prod) {
-            if line.contains("unwrap_or(false)") || line.contains("unwrap_or(true)") {
-                found.push((rel.clone(), line.clone()));
+            if !folds_fact(&prod, idx, &line) {
+                continue;
             }
-            if merges_absent_with_undecidable(&line) || if_let_known(&line) {
-                found.push((rel.clone(), line.clone()));
+            let ids = guards::marked_ids(&prod, idx, "W-");
+            if ids.is_empty() {
+                unmarked.push(format!("{rel}: {line}"));
+                continue;
             }
-            if line.contains("matches!(") {
-                let window: String = prod.iter().skip(idx).take(6).map(|(_, l)| *l).collect();
-                if window.contains("Fact::") {
-                    found.push((rel.clone(), line));
-                }
+            for id in ids {
+                found.push((rel.clone(), id.to_string()));
             }
         }
     }
     found.sort();
 
+    assert!(
+        unmarked.is_empty(),
+        "these lines fold a three-state fact but carry no `{}{{id}}` marker on the line directly \
+         above — register the site in ALLOWED and mark it:\n{}",
+        guards::MARKER,
+        unmarked.join("\n")
+    );
+
     let mut expected: Vec<(String, String)> = ALLOWED
         .iter()
-        .map(|(file, line, _, _)| (file.to_string(), line.to_string()))
+        .map(|(file, id, _)| (file.to_string(), id.to_string()))
         .collect();
     expected.sort();
     assert_eq!(
         found, expected,
-        "the set of sites that fold a three-state fact into a bool changed — every new site \
-         must be registered in ALLOWED together with a ledger row, and every removed site must \
-         lose its row"
+        "the set of registered fact-fold sites changed — every marker id needs exactly one \
+         ALLOWED row (file + id), and every ALLOWED row exactly one marker in that file"
     );
 }
 
@@ -310,16 +360,16 @@ fn fact_types_derive_equality_only_under_test() {
 #[test]
 fn every_allowance_is_anchored_in_the_source_and_the_ledger() {
     let sources: Vec<(String, String)> = rust_sources();
-    for (file, line, ledger, why) in ALLOWED {
+    for (file, id, why) in ALLOWED {
         let text = sources
             .iter()
             .find(|(rel, _)| rel == file)
             .map(|(_, text)| text.as_str())
-            .unwrap_or_else(|| panic!("{file} is gone; rewrite the allowance for {ledger}: {why}"));
+            .unwrap_or_else(|| panic!("{file} is gone; rewrite the allowance for {id}: {why}"));
         assert!(
-            logical_lines(&production(text)).iter().any(|(_, l)| l == line),
-            "{file}: the line this allowance pins is gone — update the allowance together with \
-             the code ({ledger}: {why})"
+            text.lines().any(|line| guards::marker_ids(line).contains(id)),
+            "{file}: no `{}{id}` marker — the allowance points at nothing ({id}: {why})",
+            guards::MARKER
         );
     }
 
@@ -329,7 +379,7 @@ fn every_allowance_is_anchored_in_the_source_and_the_ledger() {
         // `.trae/` 是工作区资料，不随 crate 分发；缺档时只保留源码侧锚点
         return;
     };
-    for (_, _, id, _) in ALLOWED {
+    for (_, id, _) in ALLOWED {
         assert!(
             ledger_text.contains(id),
             "the ledger has no row {id} for an allowed fact fold — add the row before allowing it"

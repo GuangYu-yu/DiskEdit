@@ -62,8 +62,10 @@ impl Drop for TestDir {
 }
 
 /// 析构里清理失败无处上报，也不能 panic：这是全仓唯一允许丢弃删除结果的地方
+// audit-allow: A-11
 #[allow(clippy::let_underscore_must_use)] // 有意忽略：Drop 没有返回通道
 fn best_effort_remove_all(path: &Path) {
+    // audit-allow: D-5
     let _ = remove_all(path);
 }
 

@@ -276,6 +276,7 @@ pub(crate) fn ensure_sidecar_dir(dir: &Path, owner: Option<(u32, u32)>) -> Resul
     }
     #[cfg(not(target_os = "linux"))]
     {
+        // audit-allow: D-23
         let _ = owner;
         std::fs::create_dir_all(dir).map_err(HostRepoError::Io)
     }

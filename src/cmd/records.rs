@@ -69,9 +69,13 @@ const MAX_FILE_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_TOTAL_BYTES: u64 = 512 * 1024 * 1024;
 /// 一次枚举的时间上限
 const MAX_ELAPSED: Duration = Duration::from_secs(30);
-/// 目录层级上限：ROOT 是第 0 层，直接子目录（记录目录）是第 1 层。
-/// 更深的目录递归读取到第 3 层为止；再深即报「结果不完整」，不静默跳过
-const MAX_DEPTH: usize = 3;
+/// 布局本身生产的最深目录层数。ROOT 是第 0 层；块设备侧的布局
+/// `<state_root>/recovery/<identity-hash>/record` 到第 2 层是记录目录，镜像侧的
+/// `<image>.diskedit/record` 只到第 1 层。这个数跟着布局走，不单独维护一个魔数
+const LAYOUT_DEPTH: usize = 2;
+/// 目录层级上限：布局层数 + 1。比布局深一层的目录仍读得到（隔离区、残留的中间目录），
+/// 再深即报「结果不完整」，不静默跳过
+const MAX_DEPTH: usize = LAYOUT_DEPTH + 1;
 
 /// 七态。`LocationUnavailable` 需要索引才能产生，本版没有索引
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -379,6 +383,7 @@ fn host_record_dirs(root: &Path) -> Result<Vec<PathBuf>, String> {
     let mut dirs = Vec::new();
     for entry in entries {
         let entry = entry.map_err(|e| format!("cannot read {}: {e}", root.display()))?;
+        // audit-allow: W-2 S1-6
         if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
             continue;
         }
@@ -397,6 +402,7 @@ fn sidecar_record_dirs(root: &Path) -> Result<Vec<PathBuf>, String> {
     let mut dirs = Vec::new();
     for entry in entries {
         let entry = entry.map_err(|e| format!("cannot read {}: {e}", root.display()))?;
+        // audit-allow: W-3 S1-7
         if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
             continue;
         }

@@ -226,9 +226,11 @@ pub(crate) fn open_target_owned(a: &impl TargetRequest) -> Result<WriteSource, c
 
 /// 尽力写日志行：诊断设施失败不改变业务结论（数据与布局不受影响），故忽略。
 /// 命名表达"可失败且无副作用"的意图，便于静态审计区分"有意忽略"与"忘了处理"
+// audit-allow: A-10
 #[allow(clippy::let_underscore_must_use)] // 有意忽略：诊断设施失败不改变业务结论
 fn best_effort_log_write(f: &mut std::fs::File, line: &str) {
     use std::io::Write;
+    // audit-allow: D-3
     let _ = writeln!(f, "{line}");
 }
 
@@ -250,6 +252,7 @@ pub(crate) fn kernel_resync(src: &FileSource) -> bool {
 /// 把它读成"内核已重读"是错的；支持新平台时这里须按该平台的重读机制重新实现
 #[cfg(not(target_os = "linux"))]
 pub(crate) fn kernel_resync(src: &FileSource) -> bool {
+    // audit-allow: D-4
     let _ = src;
     true
 }

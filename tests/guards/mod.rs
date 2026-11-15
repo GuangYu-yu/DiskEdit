@@ -10,6 +10,7 @@
 
 #![allow(dead_code)]
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -83,6 +84,102 @@ pub fn production_lines(text: &str) -> Vec<(usize, &str)> {
         out.push((i + 1, *line));
     }
     out
+}
+
+/// 豁免标记的行首。标记写在被豁免语句的上一行，形如 `// audit-allow: W-2 S1-6`：
+/// 一个标记可列多个 id，各守卫只取自己命名空间下的那些
+pub const MARKER: &str = "// audit-allow:";
+
+/// 一条标记行里的 id 列表；不是标记行时为空
+pub fn marker_ids(line: &str) -> Vec<&str> {
+    line.trim()
+        .strip_prefix(MARKER)
+        .map(|rest| rest.split_whitespace().collect())
+        .unwrap_or_default()
+}
+
+/// `prod[i]` 所述语句的标记里属于 `prefix` 命名空间的 id。标记写在语句上一行，只对它
+/// 紧邻的下一行生效——中间隔了空行或其他注释就不再算数。属性行（`#[...]`）属于它下面
+/// 那条语句，因此标记写在属性之上时仍算作对整条语句的标注
+pub fn marked_ids<'a>(prod: &'a [(usize, &'a str)], i: usize, prefix: &str) -> Vec<&'a str> {
+    let mut j = i;
+    while j > 0 {
+        j -= 1;
+        if prod[j].1.trim_start().starts_with("#[") {
+            continue;
+        }
+        return marker_ids(prod[j].1)
+            .into_iter()
+            .filter(|id| id.starts_with(prefix))
+            .collect();
+    }
+    Vec::new()
+}
+
+/// 全部行，含 `#[cfg(test)] mod` 块；返回 (1-based 行号, 行文本)
+pub fn all_lines(text: &str) -> Vec<(usize, &str)> {
+    text.lines().enumerate().map(|(i, line)| (i + 1, line)).collect()
+}
+
+/// 按标记普查一类站点：返回已标记站点的 (文件, id) 与没有标记的命中行。
+/// `lines_of` 决定扫哪个行集（生产行或全部行），`match_line` 收 (文件相对路径, trimmed 行)
+pub fn census(
+    sources: &[(String, String)],
+    prefix: &str,
+    lines_of: for<'a> fn(&'a str) -> Vec<(usize, &'a str)>,
+    match_line: impl Fn(&str, &str) -> bool,
+) -> (Vec<(String, String)>, Vec<String>) {
+    let mut found = Vec::new();
+    let mut unmarked = Vec::new();
+    for (path, text) in sources {
+        let lines = lines_of(text);
+        for (i, (n, line)) in lines.iter().enumerate() {
+            let trimmed = line.trim();
+            if !match_line(path, trimmed) {
+                continue;
+            }
+            let ids = marked_ids(&lines, i, prefix);
+            if ids.is_empty() {
+                unmarked.push(format!("{path}:{n}: {trimmed}"));
+                continue;
+            }
+            for id in ids {
+                found.push((path.clone(), id.to_string()));
+            }
+        }
+    }
+    (found, unmarked)
+}
+
+/// 普查并与登记表比对：每个标记 id 恰好一条登记，每条登记恰好一个标记。
+/// 计数按 (文件, id) 累加，同一个 id 标在两处同样失败
+pub fn compare_sites(
+    label: &str,
+    sources: &[(String, String)],
+    prefix: &str,
+    lines_of: for<'a> fn(&'a str) -> Vec<(usize, &'a str)>,
+    match_line: impl Fn(&str, &str) -> bool,
+    registered: impl Iterator<Item = (String, &'static str)>,
+) {
+    let (found, mut unmarked) = census(sources, prefix, lines_of, match_line);
+    unmarked.sort();
+    assert!(
+        unmarked.is_empty(),
+        "{label}：这些行没有 `{MARKER} <{prefix}id>` 标记（写在紧邻的上一行）——先登记再标记：\n{}",
+        unmarked.join("\n")
+    );
+    let mut actual: BTreeMap<(String, String), usize> = BTreeMap::new();
+    for site in found {
+        *actual.entry(site).or_insert(0) += 1;
+    }
+    let mut want: BTreeMap<(String, String), usize> = BTreeMap::new();
+    for (file, id) in registered {
+        *want.entry((file, id.to_string())).or_insert(0) += 1;
+    }
+    assert_eq!(
+        actual, want,
+        "{label} 与登记表不一致，先复核再改登记：每个标记 id 需要恰好一条登记，每条登记需要恰好一个标记"
+    );
 }
 
 pub fn pos(text: &str, needle: &str, what: &str) -> usize {

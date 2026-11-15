@@ -109,6 +109,7 @@ pub(crate) fn read_mounts() -> io::Result<Vec<MountEntry>> {
             continue;
         }
         // 目录名是 pid：填不进 u32 的名字不可能对应可读的 /proc 项
+        // audit-allow: S2-12
         let Ok(pid) = name.parse::<u32>() else { continue };
         // 取不到命名空间身份（权限/竞态）就不去重，照常尝试读取它
         let ns = std::fs::metadata(entry.path().join("ns/mnt"))
@@ -1415,6 +1416,7 @@ pub(crate) fn detach_loop(loopdev: &str) -> ReleaseRunOutcome {
             Err(e) => ReleaseRunOutcome::Unavailable(e.to_string()),
         },
     };
+    // audit-allow: S2-13
     if let Ok(mut udevadm) = tool_command("udevadm") {
         match udevadm.args(["settle", "--timeout=5"]).status() {
             Ok(st) if !st.success() => eprintln!(

@@ -1,7 +1,7 @@
 //! 在线分区表缩放：sfdisk 写入与内核视图同步。
 
 use super::*;
-use crate::fsops::{run, run_write_input};
+use crate::fsops::{run_read, run_write_input};
 
 /// part_resize 的失败按"是否知道表已落盘"与"成因在哪一侧"分类——这不是措辞差异：
 /// - `Stale`：写前重读判定"当前盘上现状与请求不符"——目标条目被改、新尺寸压到现存分区，
@@ -236,7 +236,8 @@ pub(crate) fn part_resize(t: &OnlineTarget, new_len_bytes: u64) -> Result<(), Pa
             ))));
         }
     }
-    let partx = run("partx", &["-u", "--nr", &pno_str, &disk_str]);
+    let partx = run_read("partx", &["-u", "--nr", &pno_str, &disk_str]);
+    // audit-allow: W-4 S1-10
     let partx_ok = partx.as_ref().map(|o| o.status.success()).unwrap_or(false);
     if partx_ok {
         return Ok(());

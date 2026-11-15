@@ -102,6 +102,7 @@ fn undo_record(src: &mut WriteSource, permit_move: bool) -> Option<u8> {
     if record.committed() {
         // 提交后未清理：目标字节已定型，本次运行只释放记录、不回滚任何区间。
         // 记录文件被移走本身是持久状态变化，故不是 NoMutation（4），而是 Partial（5）
+        // audit-allow: C-1
         let outcome = match crate::recovery::settle_companion(&path, &record, false) {
             Ok(()) => RunOutcome::partial_records_changed(
                 "the recorded operation had already committed — no recorded range was rolled back; the recovery \
@@ -141,6 +142,7 @@ fn undo_record(src: &mut WriteSource, permit_move: bool) -> Option<u8> {
         crate::recovery::Admission::AlreadyReverted(record, path) => {
             let restore_empty = record.restore.is_empty();
             let mut outcome = crate::outcome::RunOutcome::applied_with(Vec::new());
+            // audit-allow: C-2
             if let Err(e) = crate::recovery::settle_companion(&path, &record, true) {
                 if matches!(e, crate::recovery::RecordJournalError::ReadbackMismatch(_)) {
                     bail_fail(RunOutcome::refused(format!(
@@ -160,13 +162,13 @@ fn undo_record(src: &mut WriteSource, permit_move: bool) -> Option<u8> {
             let outcome = crate::support::settle_layout(outcome, src, record);
             if outcome.is_complete() {
                 if restore_empty {
-                    println!(
-                        "the recovery record held no written ranges — nothing was written back (verify with: diskedit info)"
-                    );
+                    // audit-allow: N-1
+                    let msg = "the recovery record held no written ranges — nothing was written back (verify with: diskedit info)";
+                    println!("{msg}");
                 } else {
-                    println!(
-                        "the target already held the recorded pre-images — nothing was written back (verify with: diskedit info)"
-                    );
+                    // audit-allow: N-2
+                    let msg = "the target already held the recorded pre-images — nothing was written back (verify with: diskedit info)";
+                    println!("{msg}");
                 }
             }
             Some(outcome.exit_code())

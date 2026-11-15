@@ -156,12 +156,15 @@ pub(crate) fn blkpg_resize_partition(f: &File, start_bytes: u64, new_len_bytes: 
     const BLKPG_RESIZE_PARTITION: i32 = 3;
     // UAPI 字段是 i64：上游算出来的 u64 若已回绕（> i64::MAX），静默 as 会变成负数，
     // 内核看到的区间与请求南辕北辙——这类值不如当场拒掉
+    // audit-allow: S2-1
     let Ok(start) = i64::try_from(start_bytes) else {
         return Err(io::Error::new(io::ErrorKind::InvalidData, format!("start {start_bytes} overflows BLKPG's signed range")));
     };
+    // audit-allow: S2-2
     let Ok(length) = i64::try_from(new_len_bytes) else {
         return Err(io::Error::new(io::ErrorKind::InvalidData, format!("length {new_len_bytes} overflows BLKPG's signed range")));
     };
+    // audit-allow: S2-3
     let Ok(pno) = i32::try_from(pno) else {
         return Err(io::Error::new(io::ErrorKind::InvalidData, format!("partition number {pno} overflows BLKPG's signed range")));
     };

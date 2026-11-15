@@ -186,10 +186,12 @@ impl RecoveryEngine {
 /// 事实没有解出来。围栏 `Pending`/`Landed` 且没有在飞位是「表步已定」的唯一形态；
 /// 其余形态（含读不出）都按未落定处理，不签发清理许可
 fn table_change_pending(record: &Record) -> bool {
+    // audit-allow: W-5
     let fence_settled = matches!(
         &record.table_fence,
         Fact::Known(TableFence::Pending) | Fact::Known(TableFence::Landed)
     );
+    // audit-allow: W-6
     let no_in_flight = matches!(record.entry_table_in_flight, Fact::Absent);
     !(fence_settled && no_in_flight)
 }

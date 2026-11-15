@@ -241,6 +241,24 @@ pub(crate) fn block_keys(node: &Path, path: &Path) -> io::Result<String> {
     key_of(parent)
 }
 
+/// 独占锁的落点键：整设备口径，属性表见 [`DEVICE_IDENTITY_ATTRS`]。与 journal /
+/// checkpoint 的盘键（[`node_device_id`] 的序列）取自不同的属性表——`dm/name` 只进后者。
+/// 两者各成一个类型：都是 `String` 时把其中一个当另一个传进去照样编译
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LockKey(String);
+
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+impl LockKey {
+    pub(crate) fn new(raw: String) -> Self {
+        Self(raw)
+    }
+
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 /// 锁键：整设备的身份口径，与指纹同源（[`DEVICE_IDENTITY_ATTRS`]）。`dm/name` 不参与——
 /// 映射名由用户指定、改名即变，用它派生锁会让同一台设备在改名前后各落一把锁，
 /// 两个进程因此互不相见。有 `dm/uuid` / `md/uuid` / wwid / serial 取其一；
@@ -249,14 +267,14 @@ pub(crate) fn block_keys(node: &Path, path: &Path) -> io::Result<String> {
 /// journal / checkpoint 仍按 [`node_device_id`] 的序列派生：`dm/name` 只影响这两类旧现场
 /// 的落点，不参与锁
 #[cfg(target_os = "linux")]
-pub(crate) fn block_lock_key(node: &Path) -> io::Result<String> {
+pub(crate) fn block_lock_key(node: &Path) -> io::Result<LockKey> {
     let disk = block_device_at(node)?;
     match device_id_from(&disk, DEVICE_IDENTITY_ATTRS)? {
-        Some(id) => Ok(id),
+        Some(id) => Ok(LockKey::new(id)),
         // 退到 sysfs 节点名 + 容量（DM 上即 `dm-N` + 容量）：锁键与 journal / checkpoint
         // 的盘键不同源是有意的——锁只管「同一台设备」，改名不能把一把锁拆成两把；
         // 那两类现场要标出落点，沿用带 `dm/name` 的序列。两处不是同一条，不是漏改
-        None => Ok(format!("{}-{}", file_name_lossy(&disk), sysfs_capacity(&disk)?)),
+        None => Ok(LockKey::new(format!("{}-{}", file_name_lossy(&disk), sysfs_capacity(&disk)?))),
     }
 }
 

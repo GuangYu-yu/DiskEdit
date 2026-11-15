@@ -76,7 +76,9 @@ fn temp_name(name: &Path) -> Result<PathBuf, RecordJournalError> {
 /// 确认是常规文件后才 `unlinkat` 删除：不递归、不删目录、不碰正式文件与锁文件
 #[cfg(target_os = "linux")]
 pub(crate) fn sweep_record_temps(record_path: &Path) {
+    // audit-allow: S2-5
     let Ok((dir, name)) = companion_parts(record_path) else { return };
+    // audit-allow: S2-6
     let Ok(dir_c) = std::ffi::CString::new(dir.as_os_str().as_bytes()) else { return };
     let raw = unsafe {
         libc::openat(
@@ -100,6 +102,7 @@ pub(crate) fn sweep_record_temps(record_path: &Path) {
         if !is_stale_temp_name(text, &prefix) {
             continue;
         }
+        // audit-allow: S2-7
         let Ok(entry) = std::ffi::CString::new(file_name.as_bytes()) else { continue };
         let fd = unsafe { libc::dirfd(stream.0) };
         let mut stat = std::mem::MaybeUninit::<libc::stat>::uninit();
@@ -222,6 +225,7 @@ fn evidence_io(e: EvidenceIo) -> RecordJournalError {
 
 /// 闸口看到的记录现场：只回答"落点上是什么"，不做身份比较
 #[derive(Clone, Debug)]
+// audit-allow: A-15
 #[allow(clippy::large_enum_variant)]
 pub(crate) enum CompanionProbe {
     /// 落点没有条目
@@ -783,6 +787,7 @@ impl RecordJournal {
     pub(crate) fn source(&self) -> Option<CopySource> {
         match &self.record.source {
             Fact::Known(source) => Some(*source),
+            // audit-allow: W-8
             Fact::Absent | Fact::Undecidable(_) => None,
         }
     }
@@ -995,6 +1000,7 @@ impl RecordJournal {
             // 已经记过表步或表步已落地：重复调用是幂等的
             Fact::Known(TableFence::InFlight) | Fact::Known(TableFence::Landed) => return Ok(()),
             // 围栏没读出来：不知道表步是否已开始，不能当作"未开始"继续写表
+            // audit-allow: W-9
             Fact::Absent | Fact::Undecidable(_) => {
                 return Err(PersistFailure::NotWritten(std::io::Error::other(
                     "the record does not carry a decodable table fence, so starting the table step \
@@ -1066,6 +1072,7 @@ impl RecordJournal {
 
     /// 修复收敛后落盘：把已记下的修复标为 `Landed`
     pub(crate) fn mark_repair_landed(&mut self) -> Result<(), PersistFailure> {
+        // audit-allow: W-16
         let Fact::Known(fact) = &mut self.record.repair else {
             return Err(PersistFailure::NotWritten(std::io::Error::other(
                 "the record carries no table repair to mark as landed",
@@ -1077,6 +1084,7 @@ impl RecordJournal {
         fact.state = RepairState::Landed;
         if let Err(e) = self.persist() {
             if !e.record_bytes_persisted()
+                // audit-allow: W-17
                 && let Fact::Known(fact) = &mut self.record.repair
             {
                 fact.state = RepairState::InFlight;
@@ -1090,6 +1098,7 @@ impl RecordJournal {
     pub(crate) fn repair(&self) -> Option<RepairFact> {
         match &self.record.repair {
             Fact::Known(fact) => Some(*fact),
+            // audit-allow: W-10
             Fact::Absent | Fact::Undecidable(_) => None,
         }
     }

@@ -18,6 +18,7 @@ pub(crate) type OnlineLock = ();
 /// lvextend，出错的代价是写到别的分区上，故不按写后的表重新解释一次
 /// `lv_path` 是记录型续跑时按本次请求重新选出的 LV（记录不存路径）
 // 参数是一次作业的独立事实，合成结构体只是把它们换个位置
+// audit-allow: A-5
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn finish_resize(a: &ResizeRequest, o: crate::outcome::RunOutcome, wsrc: Option<&mut WriteSource>, part: u32, is_pv: bool, is_block: bool, lv_path: Option<&str>, old_bytes: u64) -> crate::outcome::RunOutcome {
     if !o.is_layout_applied() {
@@ -80,6 +81,7 @@ pub(crate) fn finish_resize(a: &ResizeRequest, o: crate::outcome::RunOutcome, ws
 /// 表写入已经发生，故重读/屏障/链的失败一律以 `Err(cause)` 返回给调用方，
 /// 由 `finish_resize` 折成 `Partial`（保留上游待办）；不得返 `RunOutcome::no_mutation`，
 /// 那会向用户承诺"本次未写盘"
+// audit-allow: A-6
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn resize_done(
     // `a` 只被 Linux 的重开路径（open_target_ro）取用：其余平台没有收尾链
@@ -203,6 +205,7 @@ pub(crate) fn resize_done(
     }
     #[cfg(not(target_os = "linux"))]
     {
+        // audit-allow: D-18
         let _ = (is_block, lv_path, old_bytes, wsrc, online_lock, online_facts);
         let o = crate::outcome::RunOutcome::applied_with(vec![crate::outcome::Pending::new(
             part,

@@ -15,11 +15,13 @@ use crate::table::{verify_regions_after, TableStep};
 pub(crate) fn execute(src: &mut WriteSource, step: &TableStep) -> Result<(), RunOutcome> {
     if step.expect_before.is_none() {
         return Err(RunOutcome::partial(
+            // audit-allow: N-4
             "the table step carries no expected pre-write stamp — the plan was not assembled; this step wrote nothing, earlier steps may already have written the target",
         ));
     }
     let Some(expect_after) = step.expect_after else {
         return Err(RunOutcome::partial(
+            // audit-allow: N-5
             "the table step carries no expected post-write stamp — the plan was not assembled; this step wrote nothing, earlier steps may already have written the target",
         ));
     };
@@ -28,6 +30,7 @@ pub(crate) fn execute(src: &mut WriteSource, step: &TableStep) -> Result<(), Run
     });
     if !aligned || step.before.len() != step.writes.len() {
         return Err(RunOutcome::partial(
+            // audit-allow: N-6
             "the table step's writes do not match its regions — this step wrote nothing, earlier steps may already have written the target",
         ));
     }

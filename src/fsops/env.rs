@@ -91,20 +91,46 @@ pub(crate) fn tool_command(tool: &str) -> Result<Command, FsError> {
     Ok(cmd)
 }
 
-/// 执行外部工具。参数用 `AsRef<OsStr>` 收：绝大多数调用点传 `&[&str]` 即可，
-/// 卷标这类任意字节的参数靠它原样透传（见 os_bytes），不经任何编码转换
+/// 工具与目标的写关系。工具是否改盘由工具与它收到的参数共同决定（同一支 `e2fsck`
+/// 在 `-n` 下只读、在 `-fp` 下修复；`fsck.f2fs` 无参也可能写回全局元数据），
+/// 编译期无从判定，故由调用点显式声明。声明成 [`ReadsOnly`](Self::ReadsOnly) 却
+/// 实际写盘时，写事实不置位：失败会被报成"确定未改动"
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ToolAccess {
+    /// 工具不写目标：只读开关、查询、`--dry-run` 一类
+    ReadsOnly,
+    /// 进程一旦启动就可能改过目标
+    WritesTarget,
+}
+
+/// 只读工具：不写目标的查询与探测。与 [`run_write`] 之间不设默认入口——每个调用点
+/// 必须写明是哪一类，写目标的工具从只读入口启动在这一层不可能发生
+///
+/// 参数用 `AsRef<OsStr>` 收：绝大多数调用点传 `&[&str]` 即可，卷标这类任意字节的参数
+/// 靠它原样透传（见 os_bytes），不经任何编码转换
 ///
 /// 先 `spawn` 再 `wait_with_output`：两者的失败不是一回事。spawn 失败 = 工具没跑起来
 /// （`Io`）；等待/读取输出失败 = 工具已经启动，写没写目标无法断言，故记
 /// `CommandFailed`（调用点的映射把它落成"可能已改变"）
-pub(crate) fn run<S: AsRef<OsStr>>(tool: &str, args: &[S]) -> Result<std::process::Output, FsError> {
-    run_impl(tool, args, false)
+pub(crate) fn run_read<S: AsRef<OsStr>>(tool: &str, args: &[S]) -> Result<std::process::Output, FsError> {
+    run_with(tool, args, ToolAccess::ReadsOnly)
 }
 
 /// 会改动目标的工具：进程一旦启动，盘上状态就不再可断言，故在 spawn 成功后置位
-/// （见 `outcome::note_target_write`）。只读工具仍走 [`run`]
+/// （见 `outcome::note_target_write`）。参数决定读写时（如 `fsck.f2fs` 的修复分支）
+/// 用 [`run_with`] 按实际取值声明
 pub(crate) fn run_write<S: AsRef<OsStr>>(tool: &str, args: &[S]) -> Result<std::process::Output, FsError> {
-    run_impl(tool, args, true)
+    run_with(tool, args, ToolAccess::WritesTarget)
+}
+
+/// 启动外部工具的唯一入口。两个包装函数与它的差别只有访问方式：写事实的置位点
+/// 因此只有这一处
+pub(crate) fn run_with<S: AsRef<OsStr>>(
+    tool: &str,
+    args: &[S],
+    access: ToolAccess,
+) -> Result<std::process::Output, FsError> {
+    run_impl(tool, args, access == ToolAccess::WritesTarget)
 }
 
 fn run_impl<S: AsRef<OsStr>>(tool: &str, args: &[S], writes: bool) -> Result<std::process::Output, FsError> {
@@ -185,9 +211,12 @@ fn run_input_impl(
 /// 命名即契约——与其余 `best_effort_*` 同族（见 Cargo.toml 的 lints 注释），
 /// 使"有意忽略"与"忘了处理"可被 grep 区分
 #[cfg(target_os = "linux")]
+// audit-allow: A-9
 #[allow(clippy::let_underscore_must_use)] // 有意忽略：主错误已上报
 pub(crate) fn best_effort_reap_child(child: &mut std::process::Child) {
+    // audit-allow: D-1
     let _ = child.kill();
+    // audit-allow: D-2
     let _ = child.wait();
 }
 
