@@ -1,6 +1,7 @@
 //! 状态转移表：每一行对应 [`Evidence`] 或清理许可的一次判定。
 
 use super::*;
+use crate::domain::Fact;
 use crate::platform::{IdentityMaterial, PathError, TargetId};
 
 fn scene(seed: u8) -> SceneIdentity {
@@ -96,7 +97,7 @@ fn pre_commit_range_belongs_to_placement_operations() {
 
     let mut other = record_for(scene(3));
     other.op = OpKind::Copy;
-    other.source = Some(CopySource {
+    other.source = crate::domain::Fact::Known(CopySource {
         partition: 1,
         first_lba: 2048,
         sectors: 8,
@@ -230,6 +231,16 @@ fn relocation_rejects_impossible_jobs() {
         record.relocation = Some(case.clone());
         assert!(decode(&record.encode().unwrap()).is_err(), "must reject {case:?}");
     }
+}
+
+/// 空搬移计划写不进来，也读不出去：没有条目就没有可续跑的作业
+#[test]
+fn an_empty_relocation_plan_refuses_to_decode() {
+    let mut record = record_for(scene(9));
+    record.op = OpKind::Resize;
+    record.relocation = Some(Relocation { entries: Vec::new(), ..relocation(Vec::new()) });
+    let bytes = record.encode().expect("the encoder writes the shape it is given");
+    assert!(decode(&bytes).is_err(), "an empty plan must not decode");
 }
 
 /// 载荷长度是形状的唯一声明：尾部多一个字节即整份拒绝
@@ -401,21 +412,20 @@ fn parse_failures_never_commit() {
     ];
     for evidence in failures {
         assert!(evidence.recognized_record().is_none(), "{evidence:?}");
-        assert!(RecoveryEngine::commit(evidence.clone(), false).is_err(), "{evidence:?}");
+        assert!(RecoveryEngine::commit(evidence.clone()).is_err(), "{evidence:?}");
     }
 }
 
-/// 清理许可的逐行判定：留存状态、待办与提交前状态各自一行
+/// 清理许可的逐行判定：留存状态各自一行；表步状态由记录自己说明
 #[test]
 fn cleanup_permit_rows() {
     let current = scene(1);
     let rows = [
-        ("active", Retention::Active, false, true, None),
-        ("committed pending", Retention::CommittedPending, false, true, None),
+        ("active", Retention::Active, true, None),
+        ("committed pending", Retention::CommittedPending, true, None),
         (
             "unverified",
             Retention::Unverified,
-            false,
             false,
             Some(NoPermitReason::Retention(Retention::Unverified)),
         ),
@@ -423,24 +433,16 @@ fn cleanup_permit_rows() {
             "quarantined",
             Retention::Quarantined,
             false,
-            false,
             Some(NoPermitReason::Retention(Retention::Quarantined)),
-        ),
-        (
-            "active with a table change pending",
-            Retention::Active,
-            true,
-            false,
-            Some(NoPermitReason::PendingTableChange),
         ),
     ];
 
-    for (name, retention, pending, expect_permit, expect_reason) in rows {
+    for (name, retention, expect_permit, expect_reason) in rows {
         let evidence = Evidence::classify(
             &encoded(current.clone(), retention, CommitState::Prepared),
             &current,
         );
-        let outcome = RecoveryEngine::commit(evidence, pending)
+        let outcome = RecoveryEngine::commit(evidence)
             .expect("a recognized record commits");
         assert_eq!(outcome.permit().is_some(), expect_permit, "{name}");
         assert_eq!(outcome.withheld(), expect_reason, "{name}");
@@ -452,8 +454,130 @@ fn cleanup_permit_rows() {
         &encoded(current.clone(), Retention::Active, CommitState::Committed),
         &current,
     );
-    let outcome = RecoveryEngine::commit(evidence, false).expect("committed field commits");
+    let outcome = RecoveryEngine::commit(evidence).expect("committed field commits");
     assert!(outcome.permit().is_some());
+}
+
+/// 表步仍可能未落定时不签发许可：围栏在飞、条目在飞，或尾段四项事实没有解出来
+#[test]
+fn an_unsettled_table_step_withholds_the_cleanup_permit() {
+    let current = scene(1);
+
+    let settled = record_for(current.clone());
+    let outcome = RecoveryEngine::commit(Evidence::Recognized(settled))
+        .expect("a recognized record commits");
+    assert!(outcome.permit().is_some(), "fence pending with no entry in flight");
+
+    let mut fence_in_flight = record_for(current.clone());
+    fence_in_flight.table_fence = Fact::Known(TableFence::InFlight);
+    let outcome = RecoveryEngine::commit(Evidence::Recognized(fence_in_flight))
+        .expect("a recognized record commits");
+    assert_eq!(outcome.withheld(), Some(NoPermitReason::PendingTableChange));
+    assert!(outcome.permit().is_none());
+
+    let mut entry_in_flight = record_for(current.clone());
+    entry_in_flight.entry_table_in_flight = Fact::Known(2);
+    let outcome = RecoveryEngine::commit(Evidence::Recognized(entry_in_flight))
+        .expect("a recognized record commits");
+    assert_eq!(outcome.withheld(), Some(NoPermitReason::PendingTableChange));
+    assert!(outcome.permit().is_none());
+
+    let mut tail_unread = record_for(current);
+    tail_unread.table_fence = Fact::Undecidable("the payload's tail was not decoded".to_string());
+    let outcome = RecoveryEngine::commit(Evidence::Recognized(tail_unread))
+        .expect("a recognized record commits");
+    assert_eq!(outcome.withheld(), Some(NoPermitReason::PendingTableChange));
+    assert!(outcome.permit().is_none());
+}
+
+/// 回滚收尾把「表步已落定」写回记录，同一条判据前后作答相反：
+/// 写回前扣留许可，写回后签发。非搬移记录退回围栏，搬移记录清空在飞位
+#[cfg(target_os = "linux")]
+#[test]
+fn settling_the_table_step_after_rollback_turns_the_cleanup_permit_around() {
+    let mut fence = record_for(scene(1));
+    fence.table_fence = Fact::Known(TableFence::InFlight);
+    assert_eq!(withheld_reason(&fence), Some(NoPermitReason::PendingTableChange));
+
+    fence.settle_table_step_after_rollback();
+    assert_eq!(fence.table_fence, Fact::Known(TableFence::Pending), "the fence returns to pending");
+    assert_eq!(withheld_reason(&fence), None);
+
+    let mut entry = record_for(scene(1));
+    entry.op = OpKind::Move;
+    entry.relocation = Some(relocation(vec![reloc_entry(2, 6144, 4096, 2048, false)]));
+    entry.entry_table_in_flight = Fact::Known(0);
+    assert_eq!(withheld_reason(&entry), Some(NoPermitReason::PendingTableChange));
+
+    entry.settle_table_step_after_rollback();
+    assert_eq!(entry.entry_table_in_flight, Fact::Absent, "the entry is no longer in flight");
+    assert_eq!(withheld_reason(&entry), None);
+}
+
+/// 提交一次，只取清理许可被扣留的原因
+#[cfg(target_os = "linux")]
+fn withheld_reason(record: &Record) -> Option<NoPermitReason> {
+    RecoveryEngine::commit(Evidence::Recognized(record.clone()))
+        .expect("a recognized record commits")
+        .withheld()
+}
+
+/// 早退收尾的表步写回：条目游标只前移一条、完成步数只加一、传输游标不动
+#[cfg(target_os = "linux")]
+#[test]
+fn the_settle_point_advances_one_entry_and_one_step() {
+    let dir = crate::testdir::test_dir("journal_settle_point");
+    let mut journal = journal_in(&dir, OpKind::Move);
+    let entries = vec![
+        reloc_entry(2, 6144, 4096, 2048, false),
+        reloc_entry(3, 10240, 4096, 2048, false),
+    ];
+    journal.bind_relocation(relocation(entries), None).expect("a two-entry plan binds");
+    journal.record_transfer_checkpoint(None, 3, 2048).expect("progress moves forward");
+    journal.mark_entry_table_in_flight(0).expect("the current entry records its table step");
+
+    let (reloc, steps, cursor) = journal
+        .settle_point_after_table_step(2)
+        .expect("the entry under the cursor is this partition's table step");
+    assert_eq!(reloc, (1, 0), "the cursor advances by exactly one entry");
+    assert_eq!(
+        (steps, cursor),
+        (4, 2048),
+        "the step count advances by one and the byte cursor stays"
+    );
+    assert_eq!(
+        journal.settle_point_after_table_step(3),
+        None,
+        "another partition's entry is not this step"
+    );
+
+    journal.record_table_step_done(Some(reloc), steps, cursor).expect("the settle point persists");
+    let stored = journal.relocation().expect("a move keeps its relocation");
+    assert_eq!((stored.entry_index, stored.chunks_in_entry), (1, 0));
+    let progress = journal.progress();
+    assert_eq!((progress.completed_steps, progress.transfer_cursor), (4, 2048));
+    assert_eq!(journal.record().entry_table_in_flight, Fact::Absent);
+}
+
+/// 换区条目在早退收尾点不定案：它的重建在表提交之后，游标前移会把它记成已落定
+#[cfg(target_os = "linux")]
+#[test]
+fn a_swap_entry_is_not_settled_at_the_early_return_point() {
+    let dir = crate::testdir::test_dir("journal_settle_point_swap");
+    let mut journal = journal_in(&dir, OpKind::Move);
+    let entries = vec![reloc_entry(2, 6144, 4096, 2048, true)];
+    journal.bind_relocation(relocation(entries), None).expect("a swap entry binds");
+    journal.mark_entry_table_in_flight(0).expect("the swap entry records its table step");
+
+    assert_eq!(
+        journal.settle_point_after_table_step(2),
+        None,
+        "a swap entry keeps its rebuild pending"
+    );
+    let outcome = RecoveryEngine::commit(Evidence::Recognized(journal.record().clone()))
+        .expect("a recognized record commits");
+    assert_eq!(outcome.withheld(), Some(NoPermitReason::PendingTableChange));
+    assert!(outcome.permit().is_none(), "the record stays on disk until the rebuild runs");
 }
 
 /// 回滚载荷按扇区粒度往返：完整扇区，以及文件末尾只存到实际长度的半扇区
@@ -597,9 +721,39 @@ fn a_table_step_outside_the_recorded_plan_is_refused() {
         .expect("a plan with one entry binds");
     let err = journal.mark_entry_table_in_flight(1).unwrap_err();
     assert!(err.to_string().contains("outside the recorded relocation plan"), "{err}");
-    assert_eq!(journal.record().entry_table_in_flight, None);
+    assert_eq!(journal.record().entry_table_in_flight, crate::domain::Fact::Absent);
     assert!(
         journal.mark_entry_table_in_flight(0).is_ok(),
         "the current entry still records its table step"
     );
+}
+
+/// 临时文件清扫只认 `.<正式名>.<pid>.<32 位 hex>.tmp` 的常规文件：正式记录、目录、
+/// 符号链接、hex 少一位、pid 非数字都不动
+#[cfg(target_os = "linux")]
+#[test]
+fn a_temp_sweep_removes_only_matching_regular_files() {
+    let dir = crate::testdir::test_dir("journal_temp_sweep");
+    let record = dir.join("record");
+    std::fs::write(&record, b"record").unwrap();
+    let pid = std::process::id();
+    let matched = dir.join(format!(".record.{pid}.{}.tmp", "0123456789abcdef0123456789abcdef"));
+    std::fs::write(&matched, b"x").unwrap();
+    let nested = dir.join(format!(".record.{pid}.{}.tmp", "11111111111111111111111111111111"));
+    std::fs::create_dir(&nested).unwrap();
+    let linked = dir.join(format!(".record.{pid}.{}.tmp", "ffffffffffffffffffffffffffffffff"));
+    std::os::unix::fs::symlink(&record, &linked).unwrap();
+    let short_hex = dir.join(format!(".record.{pid}.{}.tmp", "0123456789abcdef0123456789abcde"));
+    std::fs::write(&short_hex, b"x").unwrap();
+    let bad_pid = dir.join(format!(".record.{}.{}.tmp", "pid", "0123456789abcdef0123456789abcdef"));
+    std::fs::write(&bad_pid, b"x").unwrap();
+
+    sweep_record_temps(&record);
+
+    assert!(!matched.exists(), "the matching regular temp file must be removed");
+    assert!(record.exists(), "the record itself must stay");
+    assert!(nested.is_dir(), "a directory with a temp-like name must stay");
+    assert!(std::fs::symlink_metadata(&linked).is_ok(), "a symlink with a temp-like name must stay");
+    assert!(short_hex.exists(), "a 31-digit hex suffix must not match");
+    assert!(bad_pid.exists(), "a non-numeric pid must not match");
 }

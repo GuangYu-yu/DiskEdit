@@ -80,8 +80,8 @@ fn read_only_commands_are_available_on_linux() {
 #[test]
 fn inspect_of_an_image_without_a_record_succeeds() {
     let (dir, img) = case("inspect");
-    // `record: absent` 的前提是记录落点存在：`inspect` 先打开 `<img>.diskedit`，
-    // 落点缺席按 `inspect --help` 的「anchor directory cannot be read」落 4
+    // `record: absent` 的前提是记录落点存在：`inspect` 先打开 `<img>.diskedit`，落点
+    // 缺席按前置条件不满足拒绝（3），文案是「anchor directory cannot be read」
     std::fs::create_dir_all(format!("{img}.diskedit")).unwrap();
     let (code, out, err) = run(&["inspect", &img]);
     assert_eq!(code, 0, "an absent record is not a failure: {err}");

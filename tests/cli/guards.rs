@@ -499,12 +499,11 @@ fn help_topic_zero_partition_and_mbr_end_overflow() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// 三条"改参数即可解决"的拒绝必须落在 2 或 3，且提示要指向正确的旗标：
-/// 未知 FS 名（列出支持的类型）、`resize --start`（未登记 → 2）、
-/// `resize-part --start`（未登记 → 2）
+/// 三条拒绝各自的出口与提示：未知 FS 名落 6（不支持的类型，列出支持的类型）、
+/// `resize --start` 与 `resize-part --start` 未登记落 2（用法错误）
 #[cfg(unix)]
 #[test]
-fn targeted_refusals_are_reported_as_ten() {
+fn targeted_refusals_carry_their_own_codes() {
     let dir = std::env::temp_dir().join(format!("diskedit_refuse_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let exe = env!("CARGO_BIN_EXE_DiskEdit");
@@ -552,7 +551,7 @@ fn a_value_flag_does_not_swallow_the_next_option() {
         (out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stderr).into_owned())
     };
 
-    // 目标不存在：参数层在打开目标之前拒绝（2），不会走到 open（4）
+    // 目标不存在：参数层在打开目标之前拒绝（2），不会走到 open 失败（3）
     let missing = dir.join("nope.img");
     let (c, e) = run(&["copy", &format!("{}:1", missing.display()), "--start", "1000", "--name", "--align=none"]);
     assert_eq!(c, 2, "a value flag followed by an option is a missing value: {e}");

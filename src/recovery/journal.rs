@@ -34,6 +34,8 @@ use super::record::{
     Relocation, RepairFact, RepairKind, RepairState, RestoreEntry, TableFence, TxId,
 };
 use super::scene::SceneIdentity;
+#[cfg(target_os = "linux")]
+use crate::domain::Fact;
 use crate::dev::DiskGuidState;
 
 #[cfg(target_os = "linux")]
@@ -353,9 +355,9 @@ pub(crate) fn read_companion_prefix(
 
 /// 把已回滚的记录标记为已提交并删除。
 ///
-/// 回滚字节先写回目标，再走这里：先把 `Committed` 落盘，再经 [`RecoveryEngine`] 的
-/// 提交与清理许可删除。两次之间中断只会留下"已提交、待清理"的记录，再跑一次 `undo`
-/// 即收尾
+/// 回滚字节先写回目标，再走这里：先把 `Committed` 与"表步不再有未落定内容"同一笔
+/// 落盘，再经 [`RecoveryEngine`] 的提交与清理许可删除。两次之间中断只会留下
+/// "已提交、待清理"的记录，再跑一次 `undo` 即收尾
 #[cfg(target_os = "linux")]
 pub(crate) fn settle_companion(record_path: &Path, record: &Record, persist_commit: bool) -> Result<(), RecordJournalError> {
     let (dir, name) = companion_parts(record_path)?;
@@ -366,18 +368,26 @@ pub(crate) fn settle_companion(record_path: &Path, record: &Record, persist_comm
     let mut file = store
         .open_at(&anchor, &relative)
         .map_err(|e| RecordJournalError::Unsupported(format!("the record path is refused: {e:?}")))?;
-    // 删除前复核盘上事实：与盘上当前字节整份比对一致才动手，不一致则不动盘、保留记录
+    // 删除前复核盘上事实：盘上字节先要解得出完整记录，再与这份快照的编码逐字节比对；
+    // 两者任一不成立都不动盘、保留记录
     let current_bytes = store.read(&file).map_err(evidence_io)?;
-    let current = crate::recovery::record::decode(&current_bytes).map_err(|why| {
-        RecordJournalError::ReadbackMismatch(format!("the record on disk no longer decodes: {why:?}"))
-    })?;
-    if current != *record {
+    if let Err(why) = crate::recovery::record::decode(&current_bytes) {
+        return Err(RecordJournalError::ReadbackMismatch(format!(
+            "the record on disk no longer decodes: {why:?}"
+        )));
+    }
+    let mut snapshot = record.clone();
+    let snapshot_bytes = snapshot.encode().map_err(RecordJournalError::Io)?;
+    if current_bytes != snapshot_bytes {
         return Err(RecordJournalError::ReadbackMismatch(
             "the record on disk differs from the snapshot this call was given".to_string(),
         ));
     }
     let mut settled = record.clone();
     settled.commit = CommitState::Committed;
+    // 这两种收尾（本次回滚已写回并核对 / 记录本就已提交）都说明表步不再有待写内容；
+    // 把这一事实写进记录，清理许可仍由记录自己给出
+    settled.settle_table_step_after_rollback();
     if persist_commit {
         let bytes = settled.encode().map_err(RecordJournalError::Io)?;
         store
@@ -392,7 +402,7 @@ pub(crate) fn settle_companion(record_path: &Path, record: &Record, persist_comm
             ))
         })?;
     }
-    let outcome = RecoveryEngine::commit(Evidence::Recognized(settled), false)
+    let outcome = RecoveryEngine::commit(Evidence::Recognized(settled))
         .map_err(|refusal| RecordJournalError::Unsupported(format!("the record cannot be committed: {refusal:?}")))?;
     let (committed, permit, withheld) = outcome.into_parts();
     let permit = permit.ok_or_else(|| {
@@ -586,8 +596,8 @@ fn repair_fact(action: &crate::gpt_policy::RepairAction) -> Option<RepairFact> {
 
 #[cfg(target_os = "linux")]
 impl RecordJournal {
-    /// 确定落点与记录头；此时**不产生文件**，记录在第一次 [`Self::record_span`] 时创建。
-    /// 于是"在写盘前就被拒的命令"不会留下空记录占住落点
+    /// 确定落点与记录头；此时**不产生文件**，记录在第一次 `barrier` 或
+    /// [`Self::record_span`] 时创建。于是"在写盘前就被拒的命令"不会留下空记录占住落点
     pub(crate) fn create_image(
         record_path: &Path,
         current: SceneIdentity,
@@ -758,24 +768,37 @@ impl RecordJournal {
         if self.record.op != OpKind::Copy {
             return Err("only a `copy` record carries a source range".to_string());
         }
-        if let Some(was) = self.record.source {
-            if was == source {
-                return Ok(());
+        match &self.record.source {
+            Fact::Known(was) if *was == source => return Ok(()),
+            Fact::Known(_) => {
+                return Err(
+                    "the existing record was written for a different source range (partition, extent, \
+                     sector size or digest)"
+                        .to_string(),
+                );
             }
-            return Err(
-                "the existing record was written for a different source range (partition, extent, \
-                 sector size or digest)"
-                    .to_string(),
-            );
+            // 源区间读不出与「没有源区间」不是同一件事：前者说明记录尾段不可信，
+            // 覆盖它会把一份读不懂的记录伪装成新计划的一部分
+            Fact::Undecidable(why) => {
+                return Err(format!(
+                    "the existing record's source range cannot be read ({why}) — refusing to \
+                     overwrite it with this copy plan"
+                ));
+            }
+            Fact::Absent => {}
         }
-        self.record.source = Some(source);
+        self.record.source = Fact::Known(source);
         Ok(())
     }
 
     /// 记录里登记的 `copy` 源区间与摘要；非 `copy` 记录为 `None`。搬移中用它核对所读
-    /// 字节，续跑与 `undo` 用它核对盘上现状
+    /// 字节，续跑与 `undo` 用它核对盘上现状。`None` 同时覆盖「没有源区间」与「源区间
+    /// 读不出」：唯一调用点是 `execution/copy.rs`，两种 `None` 都在首写前拒绝
     pub(crate) fn source(&self) -> Option<CopySource> {
-        self.record.source
+        match &self.record.source {
+            Fact::Known(source) => Some(*source),
+            Fact::Absent | Fact::Undecidable(_) => None,
+        }
     }
 
     pub(crate) fn progress(&self) -> Progress {
@@ -887,6 +910,29 @@ impl RecordJournal {
         self.record_checkpoint(reloc, completed_steps, transfer_cursor, false)
     }
 
+    /// 早退收尾要写回的表步：条目游标只前移一条、完成步数只加一、传输游标不动。
+    /// 只对「记录写着当前条目的表步在飞，且这条就是本分区、不是换区条目」成立——
+    /// 换区条目的重建在表提交之后，游标前移会把它记成已落定
+    pub(crate) fn settle_point_after_table_step(
+        &self,
+        part: u32,
+    ) -> Option<((u32, u64), u32, u64)> {
+        let reloc = self.relocation()?;
+        let current = reloc.entries.get(reloc.entry_index as usize)?;
+        if current.partition != part
+            || current.is_swap
+            || !self.record.table_step_in_flight(reloc.entry_index)
+        {
+            return None;
+        }
+        let progress = self.progress();
+        Some((
+            (reloc.entry_index + 1, 0),
+            progress.completed_steps + 1,
+            progress.transfer_cursor,
+        ))
+    }
+
     /// 表步完成：进度与围栏 `Landed` 同一笔落盘。没有搬移表的记录靠它把"表已写"
     /// 写进盘上；有搬移表时围栏停在 `Pending`，表步由在飞位与条目游标承载
     pub(crate) fn record_table_step_done(
@@ -911,8 +957,8 @@ impl RecordJournal {
             .relocation
             .as_ref()
             .map(|r| (r.entry_index, r.chunks_in_entry));
-        let was_in_flight = self.record.entry_table_in_flight;
-        let was_fence = self.record.table_fence;
+        let was_in_flight = self.record.entry_table_in_flight.clone();
+        let was_fence = self.record.table_fence.clone();
         if let Some((entry_index, chunks_in_entry)) = reloc {
             let Some(current) = self.record.relocation.as_ref() else {
                 return Err(PersistFailure::NotWritten(std::io::Error::other(
@@ -930,11 +976,11 @@ impl RecordJournal {
             current.chunks_in_entry = chunks_in_entry;
             // 游标推进意味着该条目的表步结果已记入，在飞位与游标同一笔落盘清空：
             // 中间崩溃不会留下"游标已过、条目仍在飞"的组合
-            self.record.entry_table_in_flight = None;
+            self.record.entry_table_in_flight = Fact::Absent;
         }
         self.record.progress = Progress { completed_steps, transfer_cursor, fs_phase: was_progress.fs_phase };
         if land_table && self.record.relocation.is_none() {
-            self.record.table_fence = TableFence::Landed;
+            self.record.table_fence = Fact::Known(TableFence::Landed);
         }
         if let Err(e) = self.persist() {
             if !e.record_bytes_persisted() {
@@ -955,13 +1001,25 @@ impl RecordJournal {
     /// 表步开始前落盘：没有搬移表的记录据此说明"表可能已经写过"。有搬移表时
     /// 由 [`Self::mark_entry_table_in_flight`] 按条目承载，本方法不写
     pub(crate) fn mark_table_step_started(&mut self) -> Result<(), PersistFailure> {
-        if self.record.relocation.is_some() || self.record.table_fence != TableFence::Pending {
+        if self.record.relocation.is_some() {
             return Ok(());
         }
-        self.record.table_fence = TableFence::InFlight;
+        match &self.record.table_fence {
+            Fact::Known(TableFence::Pending) => {}
+            // 已经记过表步或表步已落地：重复调用是幂等的
+            Fact::Known(TableFence::InFlight) | Fact::Known(TableFence::Landed) => return Ok(()),
+            // 围栏没读出来：不知道表步是否已开始，不能当作"未开始"继续写表
+            Fact::Absent | Fact::Undecidable(_) => {
+                return Err(PersistFailure::NotWritten(std::io::Error::other(
+                    "the record does not carry a decodable table fence, so starting the table step \
+                     cannot be recorded",
+                )));
+            }
+        }
+        self.record.table_fence = Fact::Known(TableFence::InFlight);
         if let Err(e) = self.persist() {
             if !e.record_bytes_persisted() {
-                self.record.table_fence = TableFence::Pending;
+                self.record.table_fence = Fact::Known(TableFence::Pending);
             }
             return Err(e);
         }
@@ -986,11 +1044,11 @@ impl RecordJournal {
                 "entry {entry} is not the current relocation entry — refusing to record its table step"
             ))));
         }
-        if self.record.entry_table_in_flight == Some(entry) {
+        if self.record.table_step_in_flight(entry) {
             return Ok(());
         }
-        let was = self.record.entry_table_in_flight;
-        self.record.entry_table_in_flight = Some(entry);
+        let was = self.record.entry_table_in_flight.clone();
+        self.record.entry_table_in_flight = Fact::Known(entry);
         if let Err(e) = self.persist() {
             // 未落盘时回滚内存里的在飞位；已经落盘的失败保留它
             if !e.record_bytes_persisted() {
@@ -1009,8 +1067,8 @@ impl RecordJournal {
         let Some(fact) = repair_fact(action) else {
             return Ok(());
         };
-        let was = self.record.repair;
-        self.record.repair = Some(fact);
+        let was = self.record.repair.clone();
+        self.record.repair = Fact::Known(fact);
         if let Err(e) = self.persist() {
             if !e.record_bytes_persisted() {
                 self.record.repair = was;
@@ -1022,7 +1080,7 @@ impl RecordJournal {
 
     /// 修复收敛后落盘：把已记下的修复标为 `Landed`
     pub(crate) fn mark_repair_landed(&mut self) -> Result<(), PersistFailure> {
-        let Some(fact) = self.record.repair.as_mut() else {
+        let Fact::Known(fact) = &mut self.record.repair else {
             return Err(PersistFailure::NotWritten(std::io::Error::other(
                 "the record carries no table repair to mark as landed",
             )));
@@ -1033,7 +1091,7 @@ impl RecordJournal {
         fact.state = RepairState::Landed;
         if let Err(e) = self.persist() {
             if !e.record_bytes_persisted()
-                && let Some(fact) = self.record.repair.as_mut()
+                && let Fact::Known(fact) = &mut self.record.repair
             {
                 fact.state = RepairState::InFlight;
             }
@@ -1044,7 +1102,10 @@ impl RecordJournal {
 
     /// 记录下来的表区修复事实；没有修复动作时为 `None`
     pub(crate) fn repair(&self) -> Option<RepairFact> {
-        self.record.repair
+        match &self.record.repair {
+            Fact::Known(fact) => Some(*fact),
+            Fact::Absent | Fact::Undecidable(_) => None,
+        }
     }
 
     /// 写下分区层提交后的 LVM 收尾基线并落盘。只有 `resize` 的记录带这一步；
@@ -1228,7 +1289,7 @@ impl RecordJournal {
             }
             return Ok(());
         };
-        let outcome = RecoveryEngine::commit(Evidence::Recognized(self.record.clone()), false)
+        let outcome = RecoveryEngine::commit(Evidence::Recognized(self.record.clone()))
             .map_err(|refusal| RecordJournalError::Unsupported(format!("the record cannot be committed: {refusal:?}")))?;
         let (committed, permit, withheld) = outcome.into_parts();
         let permit = permit.ok_or_else(|| {
@@ -1512,6 +1573,13 @@ impl RecordJournal {
     }
 
     pub(crate) fn relocation(&self) -> Option<&crate::recovery::Relocation> {
+        match self._never {}
+    }
+
+    pub(crate) fn settle_point_after_table_step(
+        &self,
+        _part: u32,
+    ) -> Option<((u32, u64), u32, u64)> {
         match self._never {}
     }
 

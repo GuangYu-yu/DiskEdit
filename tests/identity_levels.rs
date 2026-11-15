@@ -215,16 +215,16 @@ fn a_dm_device_is_unusable_for_writes() {
 }
 
 #[test]
-fn a_device_with_a_serial_or_wwid_reads_as_a_strong_identity() {
+fn info_reads_a_device_that_exposes_a_serial_or_wwid() {
     // 测试不写真实磁盘，只发只读命令。
     let Some(device) = device_with_serial_or_wwid() else {
-        eprintln!("skipping a_device_with_a_serial_or_wwid_reads_as_a_strong_identity: no device with a WWN or serial");
+        eprintln!("skipping info_reads_a_device_that_exposes_a_serial_or_wwid: no device with a WWN or serial");
         return;
     };
     // 读命令的前提是设备打得开；无读权限的环境没有这个现场，跳过。
     if fs::File::open(&device).is_err() {
         eprintln!(
-            "skipping a_device_with_a_serial_or_wwid_reads_as_a_strong_identity: cannot open {}",
+            "skipping info_reads_a_device_that_exposes_a_serial_or_wwid: cannot open {}",
             device.display()
         );
         return;

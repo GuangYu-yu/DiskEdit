@@ -210,26 +210,68 @@ pub(crate) fn block_identity_keys_on_the_whole_disk() {
 /// 根下，与记录目录不同层
 #[test]
 pub(crate) fn block_lock_converges_to_the_carrier_while_records_stay_per_target() {
-    let dir = state_dir();
-    let with_record = |node: &str, hash: &str, disk_key: &str| {
+    let with_record = |node: &str, partition: Option<u32>, disk_key: &str| {
         TargetIdentity::from_block_parts(
             Path::new(node),
             disk_key.to_string(),
-            Some(dir.join(format!("recovery/{hash}/record"))),
+            disk_key.to_string(),
+            Some(key_for_test("sdb-carrier", partition)),
         )
     };
-    let part1 = with_record("/dev/sdb1", "hash-1", "sdb-1234");
-    let part2 = with_record("/dev/sdb2", "hash-2", "sdb-1234");
-    let whole = with_record("/dev/sdb", "hash-0", "sdb-1234");
-    let expected = dir.join(format!("{}{LOCK_SUFFIX}", key_token("sdb-1234")));
+    let part1 = with_record("/dev/sdb1", Some(1), "sdb-1234");
+    let part2 = with_record("/dev/sdb2", Some(2), "sdb-1234");
+    let whole = with_record("/dev/sdb", None, "sdb-1234");
+    let expected = state_dir().join(format!("{}{LOCK_SUFFIX}", key_token("sdb-1234")));
     assert_eq!(part1.lock_path(), expected.as_path());
     assert_eq!(part2.lock_path(), expected.as_path());
     assert_eq!(whole.lock_path(), expected.as_path());
     assert_ne!(part1.record_path(), part2.record_path());
     assert_ne!(part1.record_path(), whole.record_path());
 
-    let other = with_record("/dev/sdc1", "hash-3", "sdc-9999");
+    let other = with_record("/dev/sdc1", Some(1), "sdc-9999");
     assert_ne!(other.lock_path(), part1.lock_path());
+}
+
+/// 锁键不取 `dm/name`：映射名是用户可改的标签，`dmsetup rename` 不能把同一台设备拆成
+/// 两把锁。有 `dm/uuid` 用它；没有就退到内核给的 `dm-N` 与容量——改名前后锁落点一致
+#[cfg(target_os = "linux")]
+#[test]
+pub(crate) fn a_dm_rename_does_not_change_the_lock_slot() {
+    let dir = test_dir("dmkey");
+    let root = dir.path().to_path_buf();
+    let node = root.join("dm-0");
+    std::fs::create_dir_all(node.join("dm")).unwrap();
+    std::fs::write(node.join("size"), "4096\n").unwrap();
+    std::fs::write(node.join("dm/name"), "vg-data\n").unwrap();
+
+    let before = TargetIdentity::resolve_block_at(&node, Path::new("/dev/dm-0")).unwrap();
+    assert_eq!(block_lock_key(&node).unwrap(), format!("dm-0-{}", 4096 * 512));
+    std::fs::write(node.join("dm/name"), "renamed\n").unwrap();
+    let after = TargetIdentity::resolve_block_at(&node, Path::new("/dev/dm-0")).unwrap();
+    assert_eq!(after.lock_path(), before.lock_path());
+
+    std::fs::write(node.join("dm/uuid"), "mpath-1234\n").unwrap();
+    assert_eq!(block_lock_key(&node).unwrap(), "mpath-1234");
+}
+
+/// 续跑只从当前目标的键派生出的唯一落点开始：同一个键得到同一落点（允许续跑），
+/// 键不同则落点不同（读不到另一目标的记录）
+#[test]
+pub(crate) fn the_same_identity_key_is_the_same_resume_slot() {
+    let slot = |node: &str, target: &str, partition: Option<u32>| {
+        TargetIdentity::from_block_parts(
+            Path::new(node),
+            "sdb-1234".to_string(),
+            "sdb-1234".to_string(),
+            Some(key_for_test(target, partition)),
+        )
+        .record_path()
+        .map(Path::to_path_buf)
+    };
+    assert_eq!(slot("/dev/sdb1", "carrier", Some(1)), slot("/dev/sdb1", "carrier", Some(1)));
+    assert_ne!(slot("/dev/sdb1", "carrier", Some(1)), slot("/dev/sdb2", "carrier", Some(2)));
+    assert_ne!(slot("/dev/sdb1", "carrier", Some(1)), slot("/dev/sdb", "carrier", None));
+    assert_ne!(slot("/dev/sdb1", "carrier1", Some(2)), slot("/dev/sdb1", "carrier", Some(12)));
 }
 
 /// loop 设备的身份绑定 backing **对象**：重新打开 backing、用已打开句柄解析名字，现场落
@@ -415,44 +457,8 @@ pub(crate) fn disk_guid_roundtrip_and_unknown_kind() {
     assert!(DiskGuidState::decode(&[0xFF; CREDENTIAL_LEN]).is_err(), "an unknown kind is not decodable");
 }
 
-/// 恒等字段按「设备类别、稳定身份串、载体 file_id」顺序拼接，
-/// 取 sha256 前 16 字节的小写 hex
-#[test]
-pub(crate) fn identity_hash_uses_the_contract_field_order() {
-    assert_eq!(
-        identity_hash_hex("block", "naa.5000c500aabbccdd", None),
-        "0a36fee99502f14d6517b5acd3a02885"
-    );
-    assert_eq!(
-        identity_hash_hex("partition", "naa.5000c500aabbccdd1", None),
-        "17e70bce34779eb9442a972e0915213c"
-    );
-    assert_eq!(
-        identity_hash_hex("block", "eui.0025385812345678", None),
-        "7c29cbea42661faab241a51943da9950"
-    );
-    assert_eq!(identity_hash_hex("block", "naa.5000c500aabbccdd", None).len(), 32);
-
-    let id = StableIdentity::Strong {
-        device_class: "block",
-        stable_key: "naa.5000c500aabbccdd".to_string(),
-    };
-    let hash = id.hash_hex().unwrap();
-    assert_eq!(
-        record_dir_under(Path::new("/state"), &hash),
-        Path::new("/state/recovery/0a36fee99502f14d6517b5acd3a02885")
-    );
-    assert_eq!(
-        id.record_dir().unwrap().file_name().unwrap().to_string_lossy(),
-        hash,
-        "the record directory is named by the identity-hash"
-    );
-    assert!(id.record_path().unwrap().ends_with("record"));
-    assert!(StableIdentity::Unusable("no identity".to_string()).hash_hex().is_none());
-}
-
-/// 块设备身份取 WWN → EUI → serial 的第一个非空原文；分区串是
-/// 载体串 + 分区号；dm / md / 没有身份属性都是 `Unusable`
+/// 块设备身份取 WWN → EUI → serial 的第一个非空原文；分区号是独立分量；
+/// dm / md / 没有身份属性都没有键
 #[cfg(target_os = "linux")]
 #[test]
 pub(crate) fn block_identity_is_wwn_eui_or_serial_and_rejects_dm_md() {
@@ -470,42 +476,54 @@ pub(crate) fn block_identity_is_wwn_eui_or_serial_and_rejects_dm_md() {
     let sda1 = make("sda/sda1");
     std::fs::write(sda1.join("partition"), "1\n").unwrap();
     std::fs::write(sda1.join("size"), "1024\n").unwrap();
-    assert_eq!(
-        block_stable_identity(&sda),
-        StableIdentity::Strong { device_class: "block", stable_key: "naa.5000c500aabbccdd".into() }
-    );
-    assert_eq!(
-        block_stable_identity(&sda1),
-        StableIdentity::Strong {
-            device_class: "partition",
-            stable_key: "naa.5000c500aabbccdd1".into()
-        }
-    );
+    let whole = block_stable_identity(&sda).unwrap();
+    assert_eq!(whole, key_for_test("naa.5000c500aabbccdd", None));
+    let partition = block_stable_identity(&sda1).unwrap();
+    assert_eq!(partition, key_for_test("naa.5000c500aabbccdd", Some(1)));
+    assert_ne!(whole, partition);
 
     let nvme = make("nvme0n1");
     std::fs::write(nvme.join("wwid"), "eui.0025385812345678\n").unwrap();
     assert_eq!(
-        block_stable_identity(&nvme),
-        StableIdentity::Strong { device_class: "block", stable_key: "eui.0025385812345678".into() }
+        block_stable_identity(&nvme).unwrap(),
+        key_for_test("eui.0025385812345678", None)
     );
 
     let serial_only = make("sdb");
     std::fs::create_dir_all(serial_only.join("device")).unwrap();
     std::fs::write(serial_only.join("device/serial"), "SN123456\n").unwrap();
     assert_eq!(
-        block_stable_identity(&serial_only),
-        StableIdentity::Strong { device_class: "block", stable_key: "SN123456".into() }
+        block_stable_identity(&serial_only).unwrap(),
+        key_for_test("SN123456", None)
     );
 
     let dm = make("dm-0/dm");
     std::fs::write(dm.join("uuid"), "mpath-1234\n").unwrap();
-    assert!(matches!(block_stable_identity(&root.join("dm-0")), StableIdentity::Unusable(_)));
+    assert!(block_stable_identity(&root.join("dm-0")).is_err());
 
     let md = make("md0/md");
     std::fs::write(md.join("uuid"), "abc:def\n").unwrap();
-    assert!(matches!(block_stable_identity(&root.join("md0")), StableIdentity::Unusable(_)));
+    assert!(block_stable_identity(&root.join("md0")).is_err());
 
     let bare = make("sdc");
     std::fs::write(bare.join("size"), "2048\n").unwrap();
-    assert!(matches!(block_stable_identity(&bare), StableIdentity::Unusable(_)));
+    assert!(block_stable_identity(&bare).is_err());
 }
+
+/// 只读位读不出不是"可写"：准入必须在记录落盘之前按 I/O 故障（4）拒绝，
+/// 否则只读状态要等第一次 pwrite 才暴露，那时记录已在盘上
+#[test]
+fn an_unreadable_read_only_bit_refuses_before_any_write() {
+    let refused = read_only_verdict(crate::domain::Fact::Undecidable("BLKROGET failed: EIO".into()))
+        .expect_err("an unreadable read-only bit must not be taken as writable");
+    assert_eq!(refused.exit_code(), crate::outcome::EXIT_NO_MUTATION);
+    assert!(refused.to_string().contains("BLKROGET"), "{refused}");
+
+    let read_only = read_only_verdict(crate::domain::Fact::Known(true))
+        .expect_err("a read-only block device must be refused");
+    assert_eq!(read_only.exit_code(), crate::outcome::EXIT_NO_MUTATION);
+
+    read_only_verdict(crate::domain::Fact::Known(false)).expect("a writable block device passes");
+    read_only_verdict(crate::domain::Fact::Absent).expect("a non-block target has no read-only bit");
+}
+

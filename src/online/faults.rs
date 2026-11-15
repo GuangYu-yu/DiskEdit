@@ -1,5 +1,10 @@
 //! 在线路径的崩溃注入点（sfdisk 前后各一）。
 
+/// 本模块没有"返回错误而不中止"的注入标签
+#[cfg(feature = "test-faults")]
+fn error_tags() -> &'static [&'static str] {
+    &[]
+}
 
 // 在线路径的成对注入点：表是否已落盘全看这一对之间的那次 sfdisk
 crate::movepart::fault_points! {

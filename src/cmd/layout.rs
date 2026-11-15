@@ -1086,6 +1086,18 @@ fn execute_resize_part(
     let mut fs_shrunk = p.fs_shrunk;
     let chunks_done = p.resume_chunks;
 
+    // 盘上已是请求区间：表步的事实由盘面证明。记录里没有逐条目围栏时把围栏落定，
+    // 否则"表可能已写"会一直扣住收尾（清理许可只认 Pending/Landed）
+    if committed_old.is_some()
+        && src.record_journal.as_ref().is_some_and(|j| j.relocation().is_none())
+    {
+        let journal = src.record_journal_mut().expect("checked above");
+        let cursor = journal.progress().transfer_cursor;
+        journal
+            .record_table_step_done(None, 2, cursor)
+            .map_err(|e| RunOutcome::partial(e.record_failure("the already-committed table step")))?;
+    }
+
     // ---- 阶段 0：缩容 FS 先缩（只做一次）----
     // 缩容不落不可回滚标记：缩小之后再回滚表项只会得到"FS 小于分区"这一自洽状态，
     // undo 仍然安全可用。判据是可逆性，不是"有没有调外部工具"
@@ -1186,7 +1198,6 @@ fn execute_resize_part(
             part,
             new_start,
             new_end,
-            fs_phase: fs_shrunk as u8,
             log,
         };
         // 执行器按计划内的写盘进度分类；本进程此前写过的目标字节（修复表头、缩容 FS）
@@ -1195,10 +1206,13 @@ fn execute_resize_part(
         crate::execution::execute_plan_complete(src, &plan, Some(p.chunk_len), &mut sink)?;
     }
 
-    // 起始 LBA 变了才需要修 NTFS HiddenSectors（扩缩不动 start 时跳过；已提交态续跑时
-    // 盘上几何已是新值，搬移与否改由记录里的搬移前起点判定）
-    if committed_old.is_some()
+    // 续跑：是否搬过以记录里的搬移前起点为准（盘上几何已是新值）。起点未变时位置与
+    // 数据都没动过，盘上的 HiddenSectors 本应已是期望值——读出来相等才跳过修正；
+    // 不等说明字段没跟上分区，仍照修
+    if let Some((pre_start, _)) = committed_old
         && fstype == crate::fsid::ContentKind::Filesystem(crate::fsid::FsKind::Ntfs)
+        && (pre_start != new_start
+            || !crate::execution::ntfs_hidden_sectors_match(src, new_start, ss).map_err(RunOutcome::from)?)
     {
         crate::execution::fix_ntfs_hidden_sectors(src, new_start, ss, part, log).map_err(RunOutcome::from)?;
     }
@@ -1263,7 +1277,6 @@ struct ResizePartSink<'a> {
     part: u32,
     new_start: u64,
     new_end: u64,
-    fs_phase: u8,
     log: &'a mut dyn FnMut(&str),
 }
 
@@ -1289,6 +1302,19 @@ impl crate::execution::StepSink for ResizePartSink<'_> {
         (self.log)(msg)
     }
 
+    fn table_step_started(&mut self, src: &mut WriteSource) -> Result<(), RunOutcome> {
+        // 表步之前先落"表可能已写"；落不下去就不写表。没有记录时没有可写的现场
+        if let Some(journal) = src.record_journal_mut() {
+            journal.mark_table_step_started().map_err(|e| {
+                RunOutcome::partial(format!(
+                    "{} — the table step must not start",
+                    e.record_failure("the table step start")
+                ))
+            })?;
+        }
+        Ok(())
+    }
+
     fn table_step_done(
         &mut self,
         src: &mut WriteSource,
@@ -1297,10 +1323,10 @@ impl crate::execution::StepSink for ResizePartSink<'_> {
     ) -> Result<(), RunOutcome> {
         if let Some(journal) = src.record_journal_mut() {
             // 游标取记录现值：搬移步骤可能刚把它推到 total，回写旧值会触发
-            // 「进度回退」拒绝
+            // 「进度回退」拒绝。缩容状态已在缩容完成时落盘，这里沿用记录里的值
             let cursor = journal.progress().transfer_cursor;
             journal
-                .record_progress(2, cursor, self.fs_phase)
+                .record_table_step_done(None, 2, cursor)
                 .map_err(|e| {
                     RunOutcome::partial(format!(
                         "the partition table is written — {}",
@@ -1459,7 +1485,7 @@ pub(crate) fn cmd_move(a: &MoveRequest) -> crate::outcome::RunOutcome {
             // 回填与记录收尾。请求身份先核——早退不绕过 bind_plan 的管辖，换了目标的请求
             // 不能收尾别人的作业
             Ok(crate::recovery::Stage::Undecidable | crate::recovery::Stage::Relocated)
-                if at_recorded_destination =>
+                if at_recorded_destination && !swap_rebuild_pending =>
             {
                 src.record_journal_mut()
                     .expect("journal checked above")
@@ -1477,6 +1503,23 @@ pub(crate) fn cmd_move(a: &MoveRequest) -> crate::outcome::RunOutcome {
                     crate::execution::fix_ntfs_hidden_sectors(&mut src, start, ss, part, &mut |m| println!("{m}"))
                         .unwrap_or_else(|e| bail_fail(RunOutcome::partial_with(e.to_string(), Vec::new())));
                 }
+                // 盘上条目已在记录目的位：表步的结果由此定案。按执行器 Table 分支的同一
+                // 形态把结果写回记录（条目游标前移、在飞位清空、完成步数加一），
+                // 收尾才按记录事实放行。换区条目的重建还没做，不在此定案
+                let table_step = src
+                    .record_journal()
+                    .and_then(|j| j.settle_point_after_table_step(part));
+                if let Some((reloc, completed_steps, transfer_cursor)) = table_step {
+                    src.record_journal_mut()
+                        .expect("journal checked above")
+                        .record_table_step_done(Some(reloc), completed_steps, transfer_cursor)
+                        .unwrap_or_else(|e| {
+                            bail_fail(RunOutcome::partial_with(
+                                e.record_failure("the table step"),
+                                Vec::new(),
+                            ))
+                        });
+                }
                 let o = table_record_done_if_complete(&mut src, RunOutcome::applied_with(Vec::new()));
                 if o.is_complete() {
                     println!(
@@ -1486,6 +1529,12 @@ pub(crate) fn cmd_move(a: &MoveRequest) -> crate::outcome::RunOutcome {
                 }
                 return o;
             }
+            // 换区条目：表步已落位、重建未做。重建是表步的后置条件，早退分支不执行它，
+            // 记录不能在这里定案（写回会把「重建未做」记成「已落定」）。继续走下面的
+            // 装配与执行路径：执行器重写同内容的表、跑这一条的 RebuildSwap，再由它自己的
+            // `table_step_done` 把表步结果写回记录
+            Ok(crate::recovery::Stage::Undecidable | crate::recovery::Stage::Relocated)
+                if swap_rebuild_pending => {}
             // 数据搬移或收尾没走完。盘上条目仍在搬移前区间时，续跑只能用原命令（本请求的
             // 起点与原请求的起点不同），这里既不能收尾也不能替用户续跑。换区条目是例外：
             // 重建在表提交之后，中断时条目已在目的位而游标还指着它（见 `swap_rebuild_pending`），

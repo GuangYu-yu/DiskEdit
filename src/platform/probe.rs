@@ -43,7 +43,8 @@ pub(crate) enum ReadOnlyOpen {
     /// `--sector-size` 落在块设备上：请求与目标形态不符
     SectorOverrideOnBlock(String),
     /// 扇区大小不在允许集合，几何无法构造。
-    /// 判据来自 `dev::source` 的单点校验（`check_sector_size`，`InvalidInput`）
+    /// `open_read_only` 把这类失败统一报成 `InvalidInput`，本处据此归类——`open`/`stat`
+    /// 产生的其他 `InvalidInput` 也会落进来
     SectorSizeNotConstructible,
 }
 

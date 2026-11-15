@@ -5,9 +5,10 @@ use super::*;
 use crate::cli::SizeSpec;
 
 /// PV / --grow-lv 的事前判据：与表类型无关，故 GPT 与 MBR 两条 resize 路径共用一份。
-/// 两条判据都必须落在任何写盘之前——PV 缩容链恰好与扩容反向：先 lvreduce -r 缩 LV
-/// 与 FS，再 pvresize --setphysicalvolumesize 缩 PV 元数据，最后才改分区表。本工具
-/// 只管最后一步，前两步留给用户，否则先改表会留下"分区已缩、PV 元数据未动"的不一致
+/// 两条判据都必须落在任何写盘之前——PV 缩容链与扩容反向：先 lvreduce -r 缩 LV
+/// 与 FS，再 pvresize --setphysicalvolumesize 缩 PV 元数据，最后才改分区表。这条链
+/// 本工具不代为执行，PV 缩容在此直接拒绝，三步都留给用户；代为先改表会留下
+/// "分区已缩、PV 元数据未动"的不一致
 pub(crate) fn check_pv_intent(
     part: u32,
     fstype: Option<fsid::ContentKind>,

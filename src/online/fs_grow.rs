@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::dev::FileSource;
-use crate::fsops::run;
+use crate::fsops::run_write;
 
 /// FS 在线 grow 到整分区（ext: resize2fs 对挂载设备无 size = 扩满分区，man resize2fs；
 /// xfs: xfs_growfs 挂载点；btrfs: resize max 挂载点）。
@@ -29,7 +29,7 @@ pub(crate) fn fs_grow_cmd(t: &OnlineTarget, fstype: Option<ContentKind>) -> Opti
 pub(crate) enum FsGrowError {
     /// 该 FS 无在线 grow 工具（`fs_grow_cmd` 映射缺失）
     NoTool(String),
-    /// 工具没跑起来：`fsops::run` 的失败侧（工具缺失 / 执行失败）
+    /// 工具没跑起来：`fsops::run_write` 的失败侧（工具缺失 / 执行失败）
     Spawn(crate::fsops::FsError),
     Exit(String),
 }
@@ -42,8 +42,9 @@ pub(crate) fn fs_grow(t: &OnlineTarget, fstype: Option<ContentKind>) -> Result<(
         )));
     };
     let argv: Vec<&str> = args.iter().map(String::as_str).collect();
-    // spawn 失败 = 工具没跑起来；启动后拿不到退出状态 = 可能已改 FS，归 Exit（部分完成）
-    let out = match run(&prog, &argv) {
+    // spawn 失败 = 工具没跑起来；启动后拿不到退出状态 = 可能已改 FS，归 Exit（部分完成）。
+    // 走 run_write：进程一旦起来就置写事实，后续步骤的归责不再把这次 grow 当成没写过
+    let out = match run_write(&prog, &argv) {
         Ok(o) => o,
         Err(crate::fsops::FsError::CommandFailed(m)) => return Err(FsGrowError::Exit(m)),
         Err(e) => return Err(FsGrowError::Spawn(e)),

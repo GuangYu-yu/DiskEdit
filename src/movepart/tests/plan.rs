@@ -540,11 +540,11 @@ pub(crate) fn resume_after_bind_replays_the_pending_repair() {
     drop(src);
 }
 
-/// 表本来就合法（无需修复）时，事前拒绝同样是 10 且一字未写：边界是否推进只取决于
+/// 表本来就合法（无需修复）时，事前拒绝仍是拒绝（3）且一字未写：边界是否推进只取决于
 /// "本次调用有没有碰过目标盘"，与"有没有修复可做"无关。与上一条互补——那条用需要修复
-/// 的表，拦的是"修复写盘被提前执行"；这条稳住"无修复可做"时不得把拒绝误升成 30
+/// 的表，拦的是"修复写盘被提前执行"；这条稳住"无修复可做"时不得把拒绝误升成带待办的 5
 #[test]
-pub(crate) fn refusal_on_an_already_valid_table_is_still_ten() {
+pub(crate) fn refusal_on_an_already_valid_table_is_still_refused() {
     let (src, p) = plan_fixture(&[(1, [0x11; 16], 2048, 6143), (2, [0x22; 16], 8192, 12287)]);
     let _keep = src.release();
     let mut src = plan_open(&p);

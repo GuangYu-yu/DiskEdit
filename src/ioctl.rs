@@ -69,6 +69,9 @@ pub(crate) fn blkrrpart(f: &File) -> io::Result<()> {
 /// 内核把 0/1 写回 int 参数。libc 未导出该常量，取 UAPI 定义自持；读类调用，可安全重发
 pub(crate) fn blkroget(f: &File) -> io::Result<bool> {
     const BLKROGET: u64 = 0x125E;
+    if crate::movepart::fail_blkroget() {
+        return Err(io::Error::from_raw_os_error(libc::EIO));
+    }
     let mut ro: libc::c_int = 0;
     // SAFETY: f 有效打开的 fd；内核仅写入 &mut ro，调用期间指针有效
     ioctl_retry_eintr(|| unsafe { libc::ioctl(f.as_raw_fd() as libc::c_int, BLKROGET as libc::Ioctl, &mut ro) })?;

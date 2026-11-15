@@ -34,25 +34,10 @@ on:
         default: true
 
 jobs:
+  # 测试只有一份实现：复用「全量测试」workflow，发布构建前跑同一套
   test:
-    name: 测试
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: 安装 Rust 工具链
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: 文档生成物与 schema 一致
-        run: |
-          DISKEDIT_WRITE_DOCS=1 cargo test --bin DiskEdit docs_are_generated_in_sync
-          git diff --exit-code docs/
-
-      - name: cargo test
-        run: cargo test --all-targets --no-fail-fast
-
-      - name: cargo test (test-faults)
-        run: cargo test --all-targets --features test-faults --no-fail-fast
+    name: 全量测试
+    uses: ./.github/workflows/tests.yml
 
   # 动态生成矩阵配置，只包含用户勾选的平台
   matrix:

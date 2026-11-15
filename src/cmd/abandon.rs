@@ -23,8 +23,6 @@
 //! 本次操作的权限范围。首选名被别的文件占用时顺延到 `.N`——既不覆盖，也不因为
 //! "名字被占了"而把目标锁死；同一个 inode 的残局则直接收敛（判据是 inode，不是文件名）
 
-use std::path::Path;
-
 use crate::dev::{FileSource, TargetIdentity};
 use crate::support::{
     active_recovery_records, bail_fail, refuse_partition_node_target,
@@ -53,7 +51,7 @@ pub(crate) const DETAILS: &str = r#"  Give up on recovering an unfinished operat
   needs no flag."#;
 
 pub(crate) fn cmd_abandon(a: &AbandonRequest) -> u8 {
-    // abandon 释放的是整盘的恢复现场：`:N` 指定了也会被静默忽略（与 info 同判据）
+    // abandon 释放的是整盘的恢复现场：与 info 同判据，`:` 后给了编号即拒绝，不静默忽略
     if let Some(n) = a.part {
         bail_fail(RunOutcome::refused(format!("`abandon` releases the whole target's recovery scene — drop :{n}")));
     }
@@ -98,11 +96,19 @@ pub(crate) fn cmd_abandon(a: &AbandonRequest) -> u8 {
 
     // 记录头的身份来自写句柄本身：块设备取节点的 rdev/序列号，镜像取文件身份。
     // loop 设备的记录落在 backing 旁，但写入时打开的是设备节点，身份也按节点取；
-    // 比对必须按同一对象打开，否则记录会被判成"另一个目标"
-    let disk = if target_is_block_node(path) {
-        FileSource::open_read_only(path).ok()
-    } else {
-        FileSource::open_read_only_image(path, a.sector_size.map(|s| s.get())).ok()
+    // 比对必须按同一对象打开，否则记录会被判成"另一个目标"。节点形态判不出时不按
+    // 镜像去开：镜像侧的落点不在这个目标的记录目录里，枚举会空跑成"没有记录"
+    let disk = match crate::dev::target_node_is_block(path) {
+        crate::domain::Fact::Known(true) => FileSource::open_read_only(path).ok(),
+        crate::domain::Fact::Known(false) | crate::domain::Fact::Absent => {
+            FileSource::open_read_only_image(path, a.sector_size.map(|s| s.get())).ok()
+        }
+        crate::domain::Fact::Undecidable(why) => bail_fail(RunOutcome::no_mutation(format!(
+            "whether '{}' is a block device or an image cannot be determined ({why}), so its recovery \
+             scene cannot be enumerated — nothing was renamed; make the path readable, then re-run \
+             `diskedit abandon '{}'`",
+            a.target, a.target
+        ))),
     };
     abandon_records(&a.target, &identity, disk.as_ref(), a.discard_replay)
 }
@@ -127,18 +133,6 @@ fn replay_ranges(records: &[RecoveryRecord]) -> Option<usize> {
         }
     }
     Some(total)
-}
-
-#[cfg(not(target_os = "linux"))]
-fn target_is_block_node(_path: &Path) -> bool {
-    false
-}
-
-#[cfg(target_os = "linux")]
-fn target_is_block_node(path: &Path) -> bool {
-    use std::os::unix::fs::FileTypeExt;
-
-    std::fs::metadata(path).map(|m| m.file_type().is_block_device()).unwrap_or(false)
 }
 
 fn abandon_records(target: &str, identity: &TargetIdentity, disk: Option<&FileSource>, discard_replay: bool) -> u8 {

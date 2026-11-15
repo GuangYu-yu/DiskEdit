@@ -15,6 +15,8 @@ pub fn check_fs(src: &FileSource, part: u32, fstype: Option<ContentKind>) -> Res
         // 「Do not write anything, just show what would have been done」
         Some(ContentKind::Filesystem(FsKind::Ext)) => ("e2fsck", vec!["-n"]),
         Some(ContentKind::Filesystem(FsKind::Ntfs)) => ("ntfsfix", vec!["-n"]),
+        // 无参：默认不修复，但 SIT 段类型不一致时 fsck.f2fs 的 force 分支会写回全局元数据
+        //（--dry-run 挡不住，见 DETAILS_CHECK）
         Some(ContentKind::Filesystem(FsKind::F2fs)) => ("fsck.f2fs", vec![]),
         Some(ContentKind::Filesystem(FsKind::Xfs)) => ("xfs_repair", vec!["-n"]),
         Some(ContentKind::Filesystem(FsKind::Btrfs)) => ("btrfs", vec!["check"]),
@@ -31,7 +33,7 @@ pub fn check_fs(src: &FileSource, part: u32, fstype: Option<ContentKind>) -> Res
         args.push(dev);
         let out = run(cmd.0, &args)?;
         if cmd.0 == "e2fsck" {
-            // check 是只读命令，e2fsck 退出非零即检查失败。
+            // check 不修复：e2fsck 以 -n 跑，退出非零即检查失败。
             // 被信号杀死时没有退出码：那是基础设施故障，不能拿 -1 冒充一个退出码
             return match out.status.code() {
                 Some(code) => check_e2fsck_for_check(code),
@@ -69,12 +71,24 @@ pub(crate) fn vfat_label_check(label: &str) -> Result<(), FsError> {
 /// 卷标落在定长字段里的类型按字段容量前置校验，超出即拒绝——截断与拒绝是两种结局，
 /// 本层不把它们合并成一次"设置成功"。`set label` 与 `mkfs --label` 共用这一份判据：
 /// 建 FS 时才写卷标的话，判据必须同样发生在盘上第一个字节被擦除之前。
-/// 来源：tune2fs -L（man tune2fs）、xfs_admin -L ≤12 字节（man xfs_admin）、
+/// 来源：tune2fs -L（man tune2fs，ext 超级块 `s_volume_name[16]`）、
+/// xfs_admin -L ≤12 字节（man xfs_admin）、
 /// btrfs 超级块 label（含结尾 NUL 共 256 字节）、ntfslabel 的 128 个 UTF-16 码元字段、
 /// fatlabel 的 11 字节字段（man fatlabel）、exfatlabel 的 11 个 UTF-16 码元字段、
 /// swaplabel -L 的 volume_name[16]（xstrncpy 至多 15 字节）
 pub fn check_label_limits(fstype: Option<ContentKind>, label: &str) -> Result<(), FsError> {
     match fstype {
+        // ext 超级块卷标字段 s_volume_name[16] 按字节存放，不要求结尾 NUL：16 字节填满
+        // 字段是合法值，超出即在本层拒绝，不把判决留给 tune2fs 的参数错误
+        Some(ContentKind::Filesystem(FsKind::Ext)) => {
+            if label.len() > 16 {
+                return Err(FsError::invalid(format!(
+                    "ext label exceeds the 16-byte s_volume_name field (got {} bytes); \
+                     the kernel and e2fsprogs read at most 16",
+                    label.len()
+                )));
+            }
+        }
         // XFS 标签上限 12 字节（superblock s_fname[12]，man xfs_admin "twelve
         // characters"）：超长时 xfs_admin 静默截断，故提前拒绝
         Some(ContentKind::Filesystem(FsKind::Xfs)) => {
@@ -192,7 +206,12 @@ pub fn uuid_support(fstype: Option<ContentKind>) -> UuidSupport {
 /// （man ntfslabel）、btrfstune -f -U uuid / -u（-f：change fsid 属 dangerous changes，
 /// man btrfstune）、swaplabel -U uuid（man swaplabel，无生成形式）。
 /// 请求形式与 FS 能力的匹配由调用方先按 [`uuid_support`] 判定；此处只做工具映射，
-/// 落不到工具的组合同样拒绝，不静默降级
+/// 落不到工具的组合同样拒绝，不静默降级。
+///
+/// 工具退 0 不等于写了盘：成功后按同一族工具回读一次（ext `tune2fs -l`、
+/// xfs `xfs_admin -u`、btrfs `btrfs filesystem show`、swap `swaplabel`），
+/// 显式值要求相等、随机值要求与写前不同。ntfs 的 serial 没有回读出口——
+/// `ntfsinfo -m` 不打印卷序列号——那条路径不做核对
 pub fn set_uuid(src: &FileSource, part: u32, fstype: Option<ContentKind>, req: &UuidRequest) -> Result<(), FsError> {
     with_partition_device(src, part, |dev| {
         let no_tool = |what: &str| {
@@ -219,11 +238,99 @@ pub fn set_uuid(src: &FileSource, part: u32, fstype: Option<ContentKind>, req: &
                 _ => return Err(no_tool(" that generates a new value")),
             },
         };
+        // 写前基线只服务"生成新值"：没有它就无法区分"换了"与"工具退 0 但没写"
+        let before = match req {
+            UuidRequest::NewRandom => read_uuid(fstype, dev)?,
+            UuidRequest::Explicit(_) => None,
+        };
         let argrefs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
         let out = run_write(tool, &argrefs)?;
         if !out.status.success() {
             return Err(FsError::command(tool, &out));
         }
-        Ok(())
+        let after = read_uuid(fstype, dev)?;
+        uuid_readback_verdict(req, before.as_deref(), after.as_deref()).map_err(|why| {
+            FsError::CommandFailed(format!(
+                "{tool} reported success but the uuid read-back does not confirm it: {why}"
+            ))
+        })
     })
+}
+
+/// 回读一次 UUID。`Ok(None)` 只表示这种类型没有可用的回读工具（ntfs 的 serial 不在
+/// `ntfsinfo -m` 的输出里）；有工具但读不出或解析不出时返回错误，不拿 `None` 冒充
+/// "无需核对"
+fn read_uuid(fstype: Option<ContentKind>, dev: &str) -> Result<Option<String>, FsError> {
+    let (tool, args): (&str, Vec<&str>) = match fstype {
+        Some(ContentKind::Filesystem(FsKind::Ext)) => ("tune2fs", vec!["-l", dev]),
+        Some(ContentKind::Filesystem(FsKind::Xfs)) => ("xfs_admin", vec!["-u", dev]),
+        Some(ContentKind::Filesystem(FsKind::Btrfs)) => ("btrfs", vec!["filesystem", "show", dev]),
+        Some(ContentKind::Swap) => ("swaplabel", vec![dev]),
+        _ => return Ok(None),
+    };
+    let out = run(tool, &args)?;
+    if !out.status.success() {
+        return Err(FsError::CommandFailed(format!(
+            "{tool} {} failed while reading the uuid back ({})",
+            args.join(" "),
+            describe_exit(&out.status)
+        )));
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    uuid_from_output(fstype, &text).map(Some).ok_or_else(|| {
+        FsError::CommandFailed(format!(
+            "{tool} {} printed no uuid in its output",
+            args.join(" ")
+        ))
+    })
+}
+
+/// 各工具在 `LC_ALL=C` 下的固定输出：tune2fs -l 的 `Filesystem UUID:`、
+/// xfs_admin -u 的 `UUID =`、swaplabel 的 `UUID:`、btrfs filesystem show 的 `uuid:`
+pub(crate) fn uuid_from_output(fstype: Option<ContentKind>, text: &str) -> Option<String> {
+    let raw = match fstype {
+        Some(ContentKind::Filesystem(FsKind::Ext)) => labelled_line(text, "Filesystem UUID:")?,
+        Some(ContentKind::Filesystem(FsKind::Xfs)) => labelled_line(text, "UUID =")?,
+        Some(ContentKind::Swap) => labelled_line(text, "UUID:")?,
+        Some(ContentKind::Filesystem(FsKind::Btrfs)) => {
+            let at = text.find("uuid:")?;
+            text[at + "uuid:".len()..].split_whitespace().next()?.to_string()
+        }
+        _ => return None,
+    };
+    let value = raw.trim();
+    (!value.is_empty()).then(|| value.to_ascii_lowercase())
+}
+
+fn labelled_line(text: &str, prefix: &str) -> Option<String> {
+    text.lines()
+        .find_map(|line| line.trim().strip_prefix(prefix))
+        .map(|value| value.trim().to_string())
+}
+
+/// 回读判定。`before` 是写前值（显式值不需要），`after` 是写后值；`None` 表示该类型
+/// 没有回读工具、无从核对（ntfs）。显式值按不区分大小写相等，随机值必须与写前不同——
+/// "工具退 0 但没写"恰好会在这两种判定上失败
+pub(crate) fn uuid_readback_verdict(
+    req: &UuidRequest,
+    before: Option<&str>,
+    after: Option<&str>,
+) -> Result<(), String> {
+    let Some(after) = after else { return Ok(()) };
+    match req {
+        UuidRequest::Explicit(want) => {
+            if after.eq_ignore_ascii_case(want) {
+                Ok(())
+            } else {
+                Err(format!("expected {want}, read back {after}"))
+            }
+        }
+        UuidRequest::NewRandom => {
+            if before.is_some_and(|old| old.eq_ignore_ascii_case(after)) {
+                Err(format!("it is still {after}, the value did not change"))
+            } else {
+                Ok(())
+            }
+        }
+    }
 }

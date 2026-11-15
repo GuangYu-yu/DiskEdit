@@ -241,38 +241,68 @@ pub(crate) fn probe_occupancy(dev: &str, shape: crate::dev::OpShape) -> io::Resu
 
 /// mountinfo 里是否有指向该设备的记录。双判据取并集：dev_no（st_rdev）之外比对
 /// source 路径——btrfs 成员挂载在 mountinfo 字段 3 报匿名设备号（anon bdev，与成员
-/// 分区 st_rdev 必不相同），但 source 仍是成员设备路径，单靠 dev_no 会漏检
+/// 分区 st_rdev 必不相同），但 source 仍是成员设备路径，单靠 dev_no 会漏检。
+///
+/// 匿名设备号记录的 source stat 失败时先记下、遍历完再决定：任一记录命中即已证明
+/// 目标被挂载，与它无关的 source 解析不了不影响结论；只有整份表都没命中、又存在
+/// 解析不了的 source 时才上抛——那时"确认不了"仍不能读成"未挂载"
 #[cfg(target_os = "linux")]
-fn mounted_in(entries: &[MountEntry], dev: &str, dev_no: (u64, u64)) -> bool {
-    entries.iter().any(|e| {
-        e.dev_no == dev_no || e.source == dev || (e.dev_no.0 == 0 && source_is_device(&e.source, dev_no))
-    })
+fn mounted_in(entries: &[MountEntry], dev: &str, dev_no: (u64, u64)) -> io::Result<bool> {
+    let mut unresolved: Option<io::Error> = None;
+    for e in entries {
+        if e.dev_no == dev_no || e.source == dev {
+            return Ok(true);
+        }
+        if e.dev_no.0 == 0 {
+            match source_is_device(&e.source, dev_no) {
+                Ok(true) => return Ok(true),
+                Ok(false) => {}
+                Err(e) => {
+                    unresolved.get_or_insert(e);
+                }
+            }
+        }
+    }
+    match unresolved {
+        Some(e) => Err(e),
+        None => Ok(false),
+    }
 }
 
 /// source 节点的真实设备号是否即 `dev_no`。用于字段 3 报匿名设备号的挂载（btrfs 等）：
 /// 那种记录与 st_rdev 必然不等，而 `/dev/disk/by-uuid/…` 这类别名与目标路径串也不等，
 /// 只有 stat 跟随链接后得到的 st_rdev 才可比。source 不是块设备节点（tmpfs 等伪文件系统）
-/// 或已不可访问时返回 false——这类记录本就不以块设备为底
+/// 判否；stat 失败上抛——确认不了不能读成"不是这个设备"
 ///
 /// 非绝对路径的 source（`none`、`tmpfs`、`drvfs` 等）直接判否，不去 stat：这类名字不是
 /// 路径，stat 会按进程工作目录解析成一次真实查找——工作目录在慢速文件系统（如 WSL 的
-/// 9p/drvfs）上时，十几次这样的查找就是毫秒级开销，落进 loop 拆除的瞬态窗口里会把
-/// "节点已删、sysfs 未收"读成确认失败
+/// 9p/drvfs）上时，十几次这样的查找是纯开销
 #[cfg(target_os = "linux")]
-pub(crate) fn source_is_device(source: &str, dev_no: (u64, u64)) -> bool {
+pub(crate) fn source_is_device(source: &str, dev_no: (u64, u64)) -> io::Result<bool> {
     use std::os::unix::fs::{FileTypeExt, MetadataExt};
     if !source.starts_with('/') {
-        return false;
+        return Ok(false);
     }
-    std::fs::metadata(source).is_ok_and(|m| {
-        m.file_type().is_block_device()
-            && (libc::major(m.rdev()) as u64, libc::minor(m.rdev()) as u64) == dev_no
-    })
+    let meta = std::fs::metadata(source).map_err(|e| {
+        io::Error::new(
+            e.kind(),
+            format!(
+                "the mount source {source} cannot be resolved ({e}) — whether it is the device \
+                 {}:{} cannot be confirmed",
+                dev_no.0, dev_no.1
+            ),
+        )
+    })?;
+    Ok(meta.file_type().is_block_device()
+        && (libc::major(meta.rdev()) as u64, libc::minor(meta.rdev()) as u64) == dev_no)
 }
 
 /// /proc/swaps 里是否有该设备。同一设备的两种判据取并集：路径相同，或 st_rdev 相同。
-/// stat 失败时两项都无法确认，按本模块的 fail-closed 口径报错——当成"这一项不是目标"
-/// 就是把"确认不了"读成"空闲"
+///
+/// 第二条判据 stat 的是 swap 条目的 source 路径（`/proc/swaps` 的 Filename 列），
+/// 不是 swap 设备本身：同一台设备可以经别名路径登记进这张表，只比路径串会漏。
+/// 该路径解析不了就无法排除这条 swap 是目标经另一条路径挂上的，按本模块的
+/// fail-closed 口径报错——当成"这一项不是目标"就是把"确认不了"读成"空闲"
 #[cfg(target_os = "linux")]
 fn active_swap_in(swaps: &str, dev: &str, rdev: u64) -> io::Result<bool> {
     use std::os::unix::fs::MetadataExt;
@@ -694,7 +724,7 @@ pub(crate) fn loop_occupancy_for(
             })?;
             let rdev = m.rdev();
             let dev_no = (libc::major(rdev) as u64, libc::minor(rdev) as u64);
-            if mounted_in(mounts, &path, dev_no) || active_swap_in(swaps, &path, rdev)? {
+            if mounted_in(mounts, &path, dev_no)? || active_swap_in(swaps, &path, rdev)? {
                 return Ok(Some(LoopOccupancy::Live(path)));
             }
             holders.extend(holders_at(&sysdir)?);
@@ -791,6 +821,43 @@ mod tests {
         assert!(skippable_mountinfo_error(&io::Error::from_raw_os_error(libc::EINVAL)));
         assert!(!skippable_mountinfo_error(&io::Error::from_raw_os_error(libc::EACCES)));
         assert!(!skippable_mountinfo_error(&io::Error::from_raw_os_error(libc::EIO)));
+    }
+
+    /// 一条 source 悬空的匿名设备号记录不否掉整份表：后面有记录命中就是挂载
+    #[test]
+    fn an_unresolvable_sibling_does_not_mask_a_mount_hit() {
+        let entries = [
+            mount_entry((0, 42), "/dev/diskedit-nonexistent-source"),
+            mount_entry((7, 9), "/dev/loop9"),
+        ];
+        assert!(mounted_in(&entries, "/dev/loop9", (7, 9)).unwrap());
+    }
+
+    /// source 只在匿名设备号记录上 stat。带真实设备号的记录按 dev_no 判，source 指向
+    /// 不存在的节点不影响"未挂载"
+    #[test]
+    fn an_unrelated_mount_source_is_not_resolved() {
+        let entries = [mount_entry((7, 200), "/dev/diskedit-nonexistent-source")];
+        assert!(!mounted_in(&entries, "/dev/loop9", (7, 9)).unwrap());
+    }
+
+    /// 整份表都没有命中、又有匿名设备号记录的 source 解析不了：确认不了就不能答"未挂载"
+    #[test]
+    fn an_unresolvable_source_without_a_hit_refuses_to_answer() {
+        let entries = [mount_entry((0, 42), "/dev/diskedit-nonexistent-source")];
+        let err = mounted_in(&entries, "/dev/loop9", (7, 9))
+            .expect_err("no hit, one unresolved source");
+        assert!(err.to_string().contains("/dev/diskedit-nonexistent-source"), "{err}");
+    }
+
+    fn mount_entry(dev_no: (u64, u64), source: &str) -> MountEntry {
+        MountEntry {
+            dev_no,
+            mount_point: "/mnt/other".to_string(),
+            source: source.to_string(),
+            fstype: "btrfs".to_string(),
+            pid: None,
+        }
     }
 
     /// backing 的认法按对象类型分开：文件走 (dev, ino)，块设备走设备号——

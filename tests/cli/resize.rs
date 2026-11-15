@@ -343,7 +343,7 @@ fn resize_grow_swap_recreate() {
         assert_eq!(gpt[2].starting_lba, 30687, "swap entry already relocated");
         assert_eq!(gpt[2].ending_lba, 32734);
     } else {
-        // 写盘前停下（30=环境不满足）：表与条目都不得变化
+        // 写盘前停下（6=环境不满足）：表与条目都不得变化
         assert_eq!(gpt[1].ending_lba, 6143, "a refusal must not grow the target");
         assert_eq!(gpt[2].starting_lba, 6144, "a refusal must not relocate swap");
         assert_eq!(gpt[2].ending_lba, 8191);

@@ -360,7 +360,8 @@ pub(crate) fn align_end(align: crate::domain::Align, start: u64, end: u64, table
     e1 - 1
 }
 
-/// 起点上取整（copy 的 --start 只有起点语义，长度继承源分区）。checked 同 align_range
+/// 起点上取整（copy 的 --start 只有起点语义，长度继承源分区）。上溢由 `ceil_align`
+/// 的 `Option` 折成拒绝
 pub(crate) fn align_start(align: crate::domain::Align, start: u64, table_ss: u64) -> u64 {
     let Some(unit) = align_unit(align, table_ss) else { return start };
     let s = ceil_align(start, unit)

@@ -695,7 +695,8 @@ impl RunOutcome {
     }
 
     /// 5 的报告必须同时给出三件事：持久状态变了什么、证据路径、下一步命令。
-    /// 证据路径取本进程真正建出的 journal 落点——没有建过就直说没有，不编路径。
+    /// 证据路径不由本进程的 journal 落点给出（这里拿不到）：统一指向
+    /// `diskedit inspect <target>`，由那条命令列出留在盘上的文件。
     /// 只有恢复记录被动过时不能说目标字节可能已改变，那一档改用记录侧的事实
     pub(crate) fn report_partial_guidance(origin: PartialOrigin) {
         for line in Self::partial_guidance_lines(origin) {

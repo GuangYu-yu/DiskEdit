@@ -53,8 +53,9 @@ pub(crate) fn loop_mapping_at(node: &Path) -> io::Result<Option<(u64, u64)>> {
 /// 同一段存储可以经两个 loop 节点可见（LVM 报作 duplicate PV），此时两条 `/dev`
 /// 路径的设备号不同，但 backing 对象与起点相同；整盘复制出的另一份存储共用 PV
 /// UUID，backing 对象却不同。故认存储只认这两项，不认 UUID 也不认设备号。
-/// 非 loop、或内核记录读不出来 ⇒ `Ok(None)`：没有证据按"不同存储"处理，
-/// 调用方据此保持原有判定（拒绝），不把读失败升级成别的出口
+/// 非 loop（没有 loop 映射）⇒ `Ok(None)`：没有证据按"不同存储"处理，调用方据此保持
+/// 原有判定；sysfs 记录存在却读不出来 ⇒ `Err`，由调用方决定出口，不把读失败当成
+/// "不是 loop"
 #[cfg(target_os = "linux")]
 pub(crate) fn loop_storage_key(dev: &Path) -> io::Result<Option<(u64, u64, u64, u64)>> {
     let node = sysfs_node(dev)?;
@@ -103,7 +104,13 @@ pub(crate) fn read_sysfs_attr(path: &Path) -> io::Result<Option<String>> {
 /// 全部不存在则 `Ok(None)`；读失败原样上抛（见 [`read_sysfs_attr`]）
 #[cfg(target_os = "linux")]
 pub(crate) fn node_device_id(node: &Path) -> io::Result<Option<String>> {
-    for attr in DEVICE_ID_ATTRS {
+    device_id_from(node, DEVICE_ID_ATTRS)
+}
+
+/// 按给定属性表探测设备 ID；两者共用同一套"不存在或为空就试下一个"的语义
+#[cfg(target_os = "linux")]
+fn device_id_from(node: &Path, attrs: &[&str]) -> io::Result<Option<String>> {
+    for attr in attrs {
         if let Some(v) = read_sysfs_attr(&node.join(attr))?
             && !v.is_empty()
         {
@@ -186,8 +193,8 @@ pub(crate) fn sysfs_node_from_rdev(rdev: u64) -> io::Result<PathBuf> {
 }
 
 /// 设备层身份：**所在整设备**的键。分区节点抹掉分区号后取父设备的键——journal /
-/// checkpoint / lock 全部按这个键派生，独占权针对的是**盘**（分区表属于盘），
-/// 只有盘粒度才能让"离线以分区节点为目标"与"在线对同一分区"落进同一把锁
+/// checkpoint 按这个键派生。独占权针对的是**盘**（分区表属于盘），锁键因此同样取整设备，
+/// 但走另一套属性表（[`block_lock_key`]）：`dm/name` 不参与锁键，改名不能把一把锁拆成两把
 ///
 /// 分区节点自身不携带设备身份（内核只给它 `partition` / `start` / `size`），故取父设备的
 /// 键。父设备与分区号都来自 sysfs 拓扑——`/sys/dev/block/<maj>:<min>`
@@ -232,6 +239,25 @@ pub(crate) fn block_keys(node: &Path, path: &Path) -> io::Result<String> {
         return Err(topology_denied(path, "partition node without a parent device".into()));
     };
     key_of(parent)
+}
+
+/// 锁键：整设备的身份口径，与指纹同源（[`DEVICE_IDENTITY_ATTRS`]）。`dm/name` 不参与——
+/// 映射名由用户指定、改名即变，用它派生锁会让同一台设备在改名前后各落一把锁，
+/// 两个进程因此互不相见。有 `dm/uuid` / `md/uuid` / wwid / serial 取其一；
+/// 都没有时退到 sysfs 节点名 + 容量（节点名由内核分配，`dm-0` 不随 `dmsetup rename` 变）
+///
+/// journal / checkpoint 仍按 [`node_device_id`] 的序列派生：`dm/name` 只影响这两类旧现场
+/// 的落点，不参与锁
+#[cfg(target_os = "linux")]
+pub(crate) fn block_lock_key(node: &Path) -> io::Result<String> {
+    let disk = block_device_at(node)?;
+    match device_id_from(&disk, DEVICE_IDENTITY_ATTRS)? {
+        Some(id) => Ok(id),
+        // 退到 sysfs 节点名 + 容量（DM 上即 `dm-N` + 容量）：锁键与 journal / checkpoint
+        // 的盘键不同源是有意的——锁只管「同一台设备」，改名不能把一把锁拆成两把；
+        // 那两类现场要标出落点，沿用带 `dm/name` 的序列。两处不是同一条，不是漏改
+        None => Ok(format!("{}-{}", file_name_lossy(&disk), sysfs_capacity(&disk)?)),
+    }
 }
 
 pub(crate) fn file_name_lossy(path: &Path) -> String {

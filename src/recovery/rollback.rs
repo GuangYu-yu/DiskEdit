@@ -480,8 +480,8 @@ pub(crate) fn execute_rollback(
 }
 
 /// 补充凭据的核对。记录侧没有可比的值（不可得 / 本次生成）时不参与比较——它不提供额外
-/// 判据，也绝不表述成"相符"；记录侧有 GUID 而当前读不出时是"读不出"而非"不符"（4），
-/// 不能落成可重试的账
+/// 判据，也绝不表述成"相符"；记录侧有 GUID 而当前读不出时是"读不出"而非"不符"，
+/// 出口与"不符"同为拒绝（3），区别只在文案
 pub(crate) fn verify_disk_identity(
     recorded: crate::dev::DiskGuidState,
     src: &FileSource,
@@ -531,12 +531,15 @@ fn verify_copy_source(src: &FileSource, record: &Record, path: &std::path::Path)
     if record.op != OpKind::Copy || record.restore.is_empty() {
         return;
     }
-    let Some(source) = record.source else {
-        bail_fail(RunOutcome::refused(format!(
-            "the recovery record at {} carries no source range, so the bytes its `copy` wrote cannot be checked \
-             against the source partition — they are not written back; release it with `diskedit abandon`",
-            path.display()
-        )));
+    let source = match &record.source {
+        crate::domain::Fact::Known(source) => source,
+        crate::domain::Fact::Absent | crate::domain::Fact::Undecidable(_) => {
+            bail_fail(RunOutcome::refused(format!(
+                "the recovery record at {} carries no source range, so the bytes its `copy` wrote cannot be checked \
+                 against the source partition — they are not written back; release it with `diskedit abandon`",
+                path.display()
+            )))
+        }
     };
     let (Some(offset), Some(len)) = (source.byte_offset(), source.byte_len()) else {
         bail_fail(RunOutcome::refused(format!(
@@ -617,7 +620,7 @@ pub(crate) fn validate_record_ranges(
 /// 写盘前的盘面核对。逐条逆序，用虚拟盘面叠加已核对过的后写区间，判定每条当前字节是
 /// 记录写后的样子、还是已经回到原文（上一轮回放的进度）。
 /// 返回 `Ok(true)` 表示整份记录覆盖的区间都已是原文（没有需要写回的字节）。
-/// 对不上盘面时返回拒绝（3），读不出时返回 4：两者都不写目标一个字节
+/// 对不上盘面时返回拒绝（3），读不出时同样返回 3（读不到继续所需的事实）：两者都不写目标一个字节
 pub(crate) fn verify_record_plan(
     src: &FileSource,
     restore: &[RestoreEntry],

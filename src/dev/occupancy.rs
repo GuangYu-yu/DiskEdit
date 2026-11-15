@@ -91,19 +91,33 @@ impl OccupancyFact {
     }
 }
 
-/// 写命令准入前的可写性核验：只读块设备按 I/O 故障（4）拒绝，一个字节都没动。
+/// 写命令准入前的可写性核验：只读块设备按 I/O 故障（4）拒绝，一个字节都没动；
+/// 只读位读不出同样按 I/O 故障（4）拒绝——"查不到"不是"可写"。
 /// 与占用探测同一时刻执行——两者都要求"在记录与写盘之前给出明确结论"
 pub(crate) fn refuse_read_only_block(src: &FileSource) -> Result<(), crate::outcome::RunOutcome> {
     #[cfg(target_os = "linux")]
-    if src.read_only_block() {
-        return Err(crate::outcome::RunOutcome::no_mutation(
+    let fact = src.read_only_block();
+    #[cfg(not(target_os = "linux"))]
+    let fact = {
+        let _ = src;
+        crate::domain::Fact::Absent
+    };
+    read_only_verdict(fact)
+}
+
+/// 只读位的准入判断：只有读到 `Known(false)` 与非块设备的 `Absent` 放行
+pub(crate) fn read_only_verdict(fact: crate::domain::Fact<bool>) -> Result<(), crate::outcome::RunOutcome> {
+    match fact {
+        crate::domain::Fact::Known(true) => Err(crate::outcome::RunOutcome::no_mutation(
             "the target is a read-only block device (BLKROGET) — every write would be refused \
              by the kernel",
-        ));
+        )),
+        crate::domain::Fact::Undecidable(why) => Err(crate::outcome::RunOutcome::no_mutation(format!(
+            "the read-only state of the target could not be read ({why}) — whether the kernel \
+             would refuse a write is unknown, so the write is not attempted"
+        ))),
+        crate::domain::Fact::Known(false) | crate::domain::Fact::Absent => Ok(()),
     }
-    #[cfg(not(target_os = "linux"))]
-    let _ = src;
-    Ok(())
 }
 
 /// 记录准入的占用闸。`shape` 决定 dm 持有是否放行：`Extend` 只增不动已映射扇区，
@@ -408,7 +422,7 @@ fn gather(tables: &Tables, subject: &Subject, src: &FileSource) -> Result<Occupa
         Subject::Image { .. } => &[],
     };
     Ok(OccupancyFacts {
-        mounts: mounts_of(tables, subject),
+        mounts: mounts_of(tables, subject)?,
         swaps: swaps_of(tables, subject)?,
         holders: holders_of(scope)?,
         loops: loops_of(tables, subject)?,
@@ -522,18 +536,27 @@ fn partitions_of(disk_dir: &Path) -> Result<Vec<PathBuf>, String> {
     Ok(out)
 }
 
-/// 证据 1：mountinfo 的 major:minor、source 路径，或匿名设备号的 stat 补偿
+/// 证据 1：mountinfo 的 major:minor、source 路径，或匿名设备号的 stat 补偿。
+/// 命中即证明；整份表走完都没有命中且存在解析失败的 source 才上抛——兄弟挂载的
+/// source 读不出，不能把已证明的挂载改写成"确认不了"
 #[cfg(target_os = "linux")]
-fn mounts_of(tables: &Tables, subject: &Subject) -> Vec<MountRef> {
-    let Subject::Block { path, scope, .. } = subject else { return Vec::new() };
+fn mounts_of(tables: &Tables, subject: &Subject) -> Result<Vec<MountRef>, String> {
+    let Subject::Block { path, scope, .. } = subject else { return Ok(Vec::new()) };
     let given = path.to_string_lossy().into_owned();
     let mut out = Vec::new();
+    let mut unresolved: Option<String> = None;
     for device in scope {
         for entry in &tables.mounts {
             let hit = entry.dev_no == device.dev_no
                 || entry.source.as_str() == given
                 || (entry.dev_no.0 == 0
-                    && crate::fsops::mount::source_is_device(&entry.source, device.dev_no));
+                    && match crate::fsops::mount::source_is_device(&entry.source, device.dev_no) {
+                        Ok(hit) => hit,
+                        Err(e) => {
+                            unresolved.get_or_insert_with(|| e.to_string());
+                            false
+                        }
+                    });
             if hit {
                 out.push(MountRef {
                     device: device.name.clone(),
@@ -542,7 +565,12 @@ fn mounts_of(tables: &Tables, subject: &Subject) -> Vec<MountRef> {
             }
         }
     }
-    out
+    if out.is_empty()
+        && let Some(e) = unresolved
+    {
+        return Err(e);
+    }
+    Ok(out)
 }
 
 /// 证据 2：`/proc/swaps` 的 Filename。块设备比 `rdev`，交换文件比 `(dev, ino)`
@@ -882,5 +910,75 @@ mod holder_decisions {
         let f = facts(Vec::new(), vec!["member of a multi-device filesystem"]);
         assert!(matches!(verdict(OpShape::Extend, &f), Occupancy::Idle));
         assert!(matches!(verdict(OpShape::Overwrite, &f), Occupancy::Member { .. }));
+    }
+}
+
+/// mountinfo 证据的读法：命中即证明；整份表都没有命中且存在解析失败的 source 才报错
+#[cfg(all(test, target_os = "linux"))]
+mod mount_evidence {
+    use super::{mounts_of, ScopedDevice, Subject, Tables};
+    use crate::fsops::mount::MountEntry;
+    use std::path::{Path, PathBuf};
+
+    fn entry(dev_no: (u64, u64), mount_point: &str, source: &str) -> MountEntry {
+        MountEntry {
+            dev_no,
+            mount_point: mount_point.to_string(),
+            source: source.to_string(),
+            fstype: "ext4".to_string(),
+            pid: None,
+        }
+    }
+
+    fn device(dev_no: (u64, u64)) -> ScopedDevice {
+        ScopedDevice {
+            name: "sda".to_string(),
+            sysdir: PathBuf::from("/sys/dev/block/8:0"),
+            dev_no,
+        }
+    }
+
+    fn subject(rdev: u64, dev_no: (u64, u64)) -> Subject<'static> {
+        // mounts_of 只读 path 与 scope：rdev 与文件身份判据无关
+        Subject::Block {
+            path: Path::new("/dev/sda"),
+            rdev,
+            scope: vec![device(dev_no)],
+        }
+    }
+
+    fn tables(mounts: Vec<MountEntry>) -> Tables {
+        Tables { mounts, swaps: String::new() }
+    }
+
+    /// 兄弟匿名挂载的 source 读不出，不影响已经由 major:minor 证明的条目
+    #[test]
+    fn an_unresolvable_sibling_does_not_mask_a_mount_hit() {
+        let t = tables(vec![
+            entry((0, 0), "/mnt/anon", "/definitely/not/a/mount/source"),
+            entry((8, 1), "/mnt/data", "/dev/sda1"),
+        ]);
+        let got = mounts_of(&t, &subject(0, (8, 1))).expect("a proven hit answers");
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].mount_point, "/mnt/data");
+    }
+
+    /// 记录带真实设备号的条目本就不解析 source：解到不存在的路径也不报错、不命中
+    #[test]
+    fn an_unrelated_mount_source_is_not_resolved() {
+        let t = tables(vec![entry((8, 9), "/mnt/other", "/definitely/not/a/mount/source")]);
+        let got = mounts_of(&t, &subject(0, (8, 1))).expect("an unrelated entry is not evidence");
+        assert!(got.is_empty());
+    }
+
+    /// 整份表都没有命中、又有解析失败的 source：不能读成"没有挂载"
+    #[test]
+    fn an_unresolvable_source_without_a_hit_refuses_to_answer() {
+        let t = tables(vec![entry((0, 0), "/mnt/anon", "/definitely/not/a/mount/source")]);
+        let err = match mounts_of(&t, &subject(0, (8, 1))) {
+            Err(e) => e,
+            Ok(got) => panic!("an unresolved source without a hit must refuse: {} mount(s)", got.len()),
+        };
+        assert!(err.contains("/definitely/not/a/mount/source"), "{err}");
     }
 }

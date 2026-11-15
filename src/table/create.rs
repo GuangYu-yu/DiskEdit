@@ -153,9 +153,10 @@ pub fn gpt_metadata_conflict(src: &FileSource, ss: u64) -> io::Result<Option<Str
     Ok(None)
 }
 
-/// `new --table mbr` 会清零的 GPT 签名位置（字节偏移）。判据与写入路径同源：候选扇区大小
-/// 各自的 LBA1 与盘尾备份头；容器装不下该候选时该位置不存在。只在签名匹配的位置返回
-/// ——`new --table mbr` 也只在这些位置写零
+/// 当前带 GPT 头签名的位置（字节偏移）：候选扇区大小各自的 LBA1 与盘尾备份头；容器
+/// 装不下该候选时该位置不存在。写入路径不按本函数取位置——`new --table mbr` 无条件把
+/// 表区内候选扇区大小的 LBA1 与末 LBA 清零（`table/step.rs`）。本函数只回答"哪些位置
+/// 现在还是 GPT 签名"
 pub(crate) fn gpt_signature_sites(src: &FileSource) -> io::Result<Vec<u64>> {
     let ss = src.sector_size;
     let mut sites = Vec::new();
@@ -515,8 +516,9 @@ pub fn create_mbr(src: &mut WriteSource, overwrite_partition_data: bool) -> Resu
     Ok(())
 }
 
-/// 盘型。**与"表的形状是否完好"分开表达**：`GptDamaged` 是"LBA1 带 GPT 头签名、
-/// 但保护布局不满足"——盘型仍是 GPT，只是形状受损，故与 `Gpt` 分开（处置不同）。
+/// 盘型。**与"表的形状是否完好"分开表达**：`GptDamaged` 覆盖两种"盘是 GPT 但读不出表"
+/// 的形态——保护 MBR 形状成立而两份头签名尽失，或 LBA1 的主头仍可解析而保护布局不满足。
+/// 盘型仍是 GPT，只是形状受损，故与 `Gpt` 分开（处置不同）。
 /// 展示层各自格式化，内部判定只认变体
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TableLabel {

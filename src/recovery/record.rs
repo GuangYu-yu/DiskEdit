@@ -15,6 +15,7 @@
 //! 落地的状态下重写第二遍。
 
 use crate::dev::DiskGuidState;
+use crate::domain::Fact;
 use crate::outcome::RunOutcome;
 use crate::platform::{IdentityMaterial, TargetId};
 use crate::planner::chunk::move_chunk_layout;
@@ -30,6 +31,8 @@ pub(crate) const HEADER_LEN: usize = 16;
 
 const HEADER_CRC_RANGE: std::ops::Range<usize> = 0..12;
 pub(crate) const MAX_RECORD_BYTES: u64 = 16 * 1024 * 1024;
+/// 只解到前缀的记录对尾段四项事实的说明：不是「没有」，而是没有读到
+const TAIL_UNREAD: &str = "the payload's tail was not decoded (prefix only)";
 
 /// 认出旧格式家族的名字，供各入口把拒读原因说清楚；别的值都不是识别过的布局
 pub(crate) fn legacy_layout(magic: [u8; 4]) -> Option<&'static str> {
@@ -642,7 +645,8 @@ fn entry_chunks(reloc: &Relocation, entry: u32) -> Result<u64, RunOutcome> {
 }
 
 /// 一份恢复记录的全部字段
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
+#[cfg_attr(test, derive(PartialEq, Eq))]
 pub(crate) struct Record {
     /// 最近一次解码得到的头；新记录在首次 [`Record::encode`] 之前为零值
     pub(crate) header: RecoveryHeader,
@@ -654,8 +658,8 @@ pub(crate) struct Record {
     pub(crate) plan_digest: PlanDigest,
     pub(crate) progress: Progress,
     /// 分区层提交前的原区间 `(old_start, old_end)`。表提交之后盘上条目只剩新区间，
-    /// FS 步要靠它判断该不该扩；只有 [`OpKind::Resize`] / [`OpKind::ResizePart`]
-    /// 可能非 `None`
+    /// FS 步要靠它判断该不该扩；[`OpKind::Resize`] / [`OpKind::ResizePart`] /
+    /// [`OpKind::Move`] 可能非 `None`（搬移前的区间同样记在这里）
     pub(crate) old_range: Option<(u64, u64)>,
     /// 分区层提交后的 LVM 收尾基线；只有 [`OpKind::Resize`] 可能非 `None`
     pub(crate) lvm_post: Option<LvmPost>,
@@ -663,12 +667,14 @@ pub(crate) struct Record {
     /// [`OpKind::Move`] 可能非 `None`；没有搬移步的记录保持为空
     pub(crate) relocation: Option<Relocation>,
     /// 表步正在进行的条目下标：该条目的表可能已经写过、结果尚未记入记录。
-    /// 只在搬移作业里有值，且恒等于 `relocation.entry_index`；游标一推进即清空
-    pub(crate) entry_table_in_flight: Option<u32>,
-    /// 本作业执行过的表区修复；没有修复动作时为空
-    pub(crate) repair: Option<RepairFact>,
-    /// 表步围栏：没有搬移计划的记录用它表达表步走到哪一步
-    pub(crate) table_fence: TableFence,
+    /// 只在搬移作业里有值，且恒等于 `relocation.entry_index`；游标一推进即清空。
+    /// 只解到前缀的记录给不出这一段（`Undecidable`）
+    pub(crate) entry_table_in_flight: Fact<u32>,
+    /// 本作业执行过的表区修复；没有修复动作时为空。只解到前缀的记录给不出这一段
+    pub(crate) repair: Fact<RepairFact>,
+    /// 表步围栏：没有搬移计划的记录用它表达表步走到哪一步。只解到前缀的记录给不出
+    /// 这一段（`Undecidable`）
+    pub(crate) table_fence: Fact<TableFence>,
     /// 盘上 `stages[]` 段的原始字节（含两字节条数）。解码只校验定长头与取值，
     /// 不解释语义；重写时逐字节回写，条数不属于本类型的字段
     pub(crate) stages: Vec<u8>,
@@ -677,12 +683,14 @@ pub(crate) struct Record {
     pub(crate) retention: Retention,
     /// 写记录时盘上的 GPT Disk GUID。回放前与当前盘面比对的第二道凭据
     pub(crate) disk_guid: DiskGuidState,
-    /// 只要发生不可逆写入（数据区搬运或工具落盘），回滚就不可执行
+    /// 发生不可逆写入（数据区搬运或工具落盘）后数据区不再回放；表区仍按 `TableReplay`
+    /// （`rollback.rs`）回放：`Copy` 走 `CopyTableOnly`，`Move` 走 `MoveClear` / `MoveForced`，
+    /// [`Self::writes_back`] 据此为真
     pub(crate) restore_blocked: bool,
     /// 按写入顺序记录的被覆盖区间
     pub(crate) restore: Vec<RestoreEntry>,
-    /// `copy` 的源区间与规划期摘要；其余操作保持为空
-    pub(crate) source: Option<CopySource>,
+    /// `copy` 的源区间与规划期摘要；其余操作保持为空。只解到前缀的记录给不出这一段
+    pub(crate) source: Fact<CopySource>,
 }
 
 impl Record {
@@ -707,9 +715,9 @@ impl Record {
             old_range: None,
             lvm_post: None,
             relocation: None,
-            entry_table_in_flight: None,
-            repair: None,
-            table_fence: TableFence::Pending,
+            entry_table_in_flight: Fact::Absent,
+            repair: Fact::Absent,
+            table_fence: Fact::Known(TableFence::Pending),
             stages: vec![0, 0],
             action: RecoveryAction::InspectOnly,
             commit: CommitState::Prepared,
@@ -717,7 +725,7 @@ impl Record {
             disk_guid,
             restore_blocked: false,
             restore: Vec::new(),
-            source: None,
+            source: Fact::Absent,
         }
     }
 
@@ -750,6 +758,23 @@ impl Record {
         })
     }
 
+    /// 记录是否已把「该条目的表步开始」写成确切事实。`Absent` 与 `Undecidable` 都答否：
+    /// 本方法只回答「记录确知它开始了」，不承担把读不出说成没开始的语义
+    pub(crate) fn table_step_in_flight(&self, entry: u32) -> bool {
+        matches!(self.entry_table_in_flight, Fact::Known(in_flight) if in_flight == entry)
+    }
+
+    /// 回滚已把记录登记的表区原文写回并核对：记录不再有未落定的表写。
+    /// 非搬移记录把围栏退回 `Pending`，搬移记录清空条目在飞位；不改编码
+    #[cfg(target_os = "linux")]
+    pub(crate) fn settle_table_step_after_rollback(&mut self) {
+        if self.relocation.is_some() {
+            self.entry_table_in_flight = Fact::Absent;
+        } else if matches!(self.table_fence, Fact::Known(TableFence::InFlight)) {
+            self.table_fence = Fact::Known(TableFence::Pending);
+        }
+    }
+
     /// 报告面的作业阶段：作业到哪一步，据实说。
     ///
     /// 只在 `inspect` 的展示里使用；决策路径走 [`Record::stage`]（收尾窗口折成
@@ -772,11 +797,13 @@ impl Record {
         let dirty = self.dirty();
         let clean = progress.completed_steps == 0 && progress.transfer_cursor == 0 && !dirty;
         let Some(reloc) = self.relocation.as_ref() else {
-            // 表步围栏先于 op 规则：没有搬移计划的记录靠它说明表步走到哪
+            // 表步围栏先于 op 规则：没有搬移计划的记录靠它说明表步走到哪。
+            // 围栏没读出来时不猜表步在哪一步
             match self.table_fence {
-                TableFence::InFlight => return Ok(Stage::Undecidable),
-                TableFence::Landed => return Ok(Stage::TableWritten),
-                TableFence::Pending => {}
+                Fact::Known(TableFence::InFlight) => return Ok(Stage::Undecidable),
+                Fact::Known(TableFence::Landed) => return Ok(Stage::TableWritten),
+                Fact::Known(TableFence::Pending) => {}
+                Fact::Absent | Fact::Undecidable(_) => return Ok(Stage::Undecidable),
             }
             // 落盘窗口按 op 分家：move 先落旧区间再落搬移表，resize-part 的纯扩缩路径
             // 不落 relocation，resize 的 MBR 表项路径同样只落旧区间。进度全零且没有
@@ -791,15 +818,6 @@ impl Record {
                 _ => Stage::Undecidable,
             });
         };
-        if reloc.entries.is_empty() {
-            // 只有 resize 的纯扩缩会绑一张空搬移表；move 至少搬自身条目，
-            // resize-part 的纯扩缩路径不绑 relocation
-            return Ok(match self.op {
-                OpKind::Resize if progress.completed_steps == 0 => Stage::Planned,
-                OpKind::Resize if progress.completed_steps >= 1 => Stage::Finishing,
-                _ => Stage::Undecidable,
-            });
-        }
         let len = reloc.entries.len();
         if (reloc.entry_index as usize) < len {
             let chunks = entry_chunks(reloc, reloc.entry_index)?;
@@ -810,7 +828,7 @@ impl Record {
                 )));
             }
             // 表步已开始、结果未记入记录：盘面可能已经改过，记录给不出确定答案
-            if self.entry_table_in_flight == Some(reloc.entry_index) {
+            if self.table_step_in_flight(reloc.entry_index) {
                 return Ok(Stage::Undecidable);
             }
             if reloc.chunks_in_entry > 0 && reloc.chunks_in_entry < chunks {
@@ -818,7 +836,8 @@ impl Record {
             }
             // 块已搬完、条目游标未推进：数据这一半是确定的事实，表那一半不在记录里。
             // 报告面据此说「已搬移」，决策面（`stage`）折成不可判定，盘面侧的问题由
-            // 调用方按表项位置回答（move 的换区条目见 `committed_swap`）
+            // 调用方按表项位置回答（move 的换区条目见 `movepart::plan::move_entry_swap`
+            // 对 `committed_entry` 的核对）
             if reloc.chunks_in_entry > 0 && reloc.chunks_in_entry == chunks {
                 return Ok(Stage::Relocated);
             }
@@ -935,11 +954,12 @@ impl Record {
         for entry in &self.restore {
             write_entry(entry, &mut out);
         }
-        // 源区间段的存在由操作类型决定：`copy` 必带，其余操作没有
+        // 源区间段的存在由操作类型决定：`copy` 必带，其余操作没有。
+        // 尾段没解出来的记录写不出这一段，也就不允许写回盘上
         if self.op == OpKind::Copy {
-            let s = self.source.ok_or_else(|| {
-                std::io::Error::other("a `copy` record carries its source range")
-            })?;
+            let Fact::Known(s) = &self.source else {
+                return Err(std::io::Error::other("a `copy` record carries its source range"));
+            };
             out.extend(s.partition.to_le_bytes());
             out.extend(s.first_lba.to_le_bytes());
             out.extend(s.sectors.to_le_bytes());
@@ -948,27 +968,38 @@ impl Record {
         }
         // 尾段：在飞位。0 = 没有条目的表步在飞；1 = 存在，后随条目下标
         match self.entry_table_in_flight {
-            None => out.push(0),
-            Some(entry) => {
+            Fact::Absent => out.push(0),
+            Fact::Known(entry) => {
                 out.push(1);
                 out.extend(entry.to_le_bytes());
             }
+            Fact::Undecidable(_) => return Err(tail_not_decoded()),
         }
         // 尾段：表区修复。无动作写一个零 tag，动作的取值按固定宽度写出
-        match self.repair {
-            None => out.push(0),
-            Some(fact) => {
+        match &self.repair {
+            Fact::Absent => out.push(0),
+            Fact::Known(fact) => {
                 out.push(1);
                 out.push(fact.kind.tag());
                 out.extend(fact.new_backup_lba.to_le_bytes());
                 out.extend(fact.new_last_usable.to_le_bytes());
                 out.push(fact.state.tag());
             }
+            Fact::Undecidable(_) => return Err(tail_not_decoded()),
         }
         // 尾段：表步围栏，固定一字节
-        out.push(self.table_fence.tag());
+        match &self.table_fence {
+            Fact::Known(fence) => out.push(fence.tag()),
+            Fact::Absent | Fact::Undecidable(_) => return Err(tail_not_decoded()),
+        }
         Ok(out)
     }
+}
+
+/// 记录尾段没解出来时的编码错误：只解到前缀的记录不能写回盘上，
+/// 否则「没读到」会被固化成一个取值
+fn tail_not_decoded() -> std::io::Error {
+    std::io::Error::other("a record whose payload tail was not decoded cannot be encoded")
 }
 
 /// 单条恢复区间：字段 + 原文 + 写入后字节 + 该条自身的 CRC。
@@ -1039,12 +1070,21 @@ fn decode_payload(bytes: &[u8]) -> Option<Record> {
     // 源区间段只属于 `copy`，且是它必带的段。段按 `op` 直接解析：`copy` 缺段与
     // 其余操作多出字节都说明载荷与操作类型不符
     if record.op == OpKind::Copy {
-        record.source = Some(read_source(&mut c)?);
+        record.source = Fact::Known(read_source(&mut c)?);
+    } else {
+        // 非 `copy` 记录没有源区间段：这是段缺失，不是读不到
+        record.source = Fact::Absent;
     }
     // 尾段必须齐全：每段在载荷结束处缺字节都按 `Format` 拒读，段后不得有多余字节
-    record.entry_table_in_flight = read_entry_table_in_flight(&mut c, &record)?;
-    record.repair = read_repair(&mut c)?;
-    record.table_fence = read_table_fence(&mut c, &record)?;
+    record.entry_table_in_flight = match read_entry_table_in_flight(&mut c, &record)? {
+        Some(entry) => Fact::Known(entry),
+        None => Fact::Absent,
+    };
+    record.repair = match read_repair(&mut c)? {
+        Some(fact) => Fact::Known(fact),
+        None => Fact::Absent,
+    };
+    record.table_fence = Fact::Known(read_table_fence(&mut c, &record)?);
     if !c.is_empty() {
         return None;
     }
@@ -1200,9 +1240,9 @@ fn read_payload_prefix(c: &mut Cursor<'_>) -> Option<(Record, usize)> {
         old_range,
         lvm_post,
         relocation,
-        entry_table_in_flight: None,
-        repair: None,
-        table_fence: TableFence::Pending,
+        entry_table_in_flight: Fact::Undecidable(TAIL_UNREAD.into()),
+        repair: Fact::Undecidable(TAIL_UNREAD.into()),
+        table_fence: Fact::Undecidable(TAIL_UNREAD.into()),
         stages,
         action,
         commit,
@@ -1210,7 +1250,7 @@ fn read_payload_prefix(c: &mut Cursor<'_>) -> Option<(Record, usize)> {
         disk_guid,
         restore_blocked,
         restore: Vec::new(),
-        source: None,
+        source: Fact::Undecidable(TAIL_UNREAD.into()),
     };
     Some((record, restore_count))
 }
@@ -1219,6 +1259,10 @@ fn read_payload_prefix(c: &mut Cursor<'_>) -> Option<(Record, usize)> {
 /// 不做巨型预分配。区间算术全程 checked——这些值直接进入拷贝地址换算
 fn read_relocation(c: &mut Cursor<'_>) -> Option<Relocation> {
     let count = c.u32()? as usize;
+    // 写入口（`bind_relocation`）禁止空计划：没有条目就没有可续跑的作业
+    if count == 0 {
+        return None;
+    }
     let mut entries: Vec<RelocEntry> = Vec::new();
     for _ in 0..count {
         let partition = c.u32()?;
@@ -1295,8 +1339,11 @@ fn read_entry(c: &mut Cursor<'_>) -> Option<RestoreEntry> {
 
 /// 载荷完整前缀：头与固定前缀都可信，且前 `kept` 条区间通过了各自的 CRC。
 /// `record.restore` 只含这 `kept` 条；`total` 是载荷声明的条数
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
+#[cfg_attr(test, derive(PartialEq, Eq))]
 pub(crate) struct Prefix {
+    /// 前缀里可验证的字段；尾段（在飞位、修复、表步围栏、`copy` 源区间）是
+    /// `Undecidable`，消费方不得把它们当成「没有」
     pub(crate) record: Record,
     pub(crate) kept: usize,
     pub(crate) total: usize,
@@ -1772,7 +1819,7 @@ mod record_tails {
         )
     }
 
-    fn with_in_flight(record: Record, entry: Option<u32>) -> Record {
+    fn with_in_flight(record: Record, entry: Fact<u32>) -> Record {
         Record { entry_table_in_flight: entry, ..record }
     }
 
@@ -1790,18 +1837,18 @@ mod record_tails {
     #[test]
     fn all_three_tail_segments_round_trip() {
         let mut record = moving_record(2, 1);
-        record.entry_table_in_flight = Some(1);
-        record.repair = Some(RepairFact {
+        record.entry_table_in_flight = Fact::Known(1);
+        record.repair = Fact::Known(RepairFact {
             kind: RepairKind::RelocateAndRepair,
             new_backup_lba: 97_728,
             new_last_usable: 97_727,
             state: RepairState::Landed,
         });
-        record.table_fence = TableFence::Pending;
+        record.table_fence = Fact::Known(TableFence::Pending);
         let bytes = record.encode().unwrap();
 
         let mut decoded = decode(&bytes).expect("the tail segments are part of the current layout");
-        assert_eq!(decoded.entry_table_in_flight, Some(1));
+        assert_eq!(decoded.entry_table_in_flight, Fact::Known(1));
         assert_eq!(decoded.repair, record.repair);
         assert_eq!(decoded.encode().unwrap(), bytes);
     }
@@ -1810,12 +1857,12 @@ mod record_tails {
     #[test]
     fn a_fence_lands_on_a_record_without_a_relocation_plan() {
         let mut record = table_only_record();
-        record.table_fence = TableFence::Landed;
+        record.table_fence = Fact::Known(TableFence::Landed);
         record.progress.completed_steps = 1;
         let bytes = record.encode().unwrap();
 
         let decoded = decode(&bytes).expect("a fence is part of the current layout");
-        assert_eq!(decoded.table_fence, TableFence::Landed);
+        assert_eq!(decoded.table_fence, Fact::Known(TableFence::Landed));
         assert_eq!(decoded.derive_stage().unwrap(), Stage::TableWritten);
     }
 
@@ -1823,7 +1870,7 @@ mod record_tails {
     #[test]
     fn a_landed_fence_without_a_completed_step_is_refused() {
         let mut record = table_only_record();
-        record.table_fence = TableFence::Landed;
+        record.table_fence = Fact::Known(TableFence::Landed);
         record.progress.completed_steps = 0;
         let bytes = record.encode().unwrap();
 
@@ -1834,7 +1881,7 @@ mod record_tails {
     #[test]
     fn a_moved_fence_on_a_relocation_record_is_refused() {
         let mut record = moving_record(1, 0);
-        record.table_fence = TableFence::Landed;
+        record.table_fence = Fact::Known(TableFence::Landed);
         let bytes = record.encode().unwrap();
 
         assert!(matches!(decode(&bytes), Err(DecodeFailure::Format { .. })));
@@ -1844,10 +1891,10 @@ mod record_tails {
     #[test]
     fn an_in_flight_fence_makes_the_stage_undecidable() {
         let mut record = table_only_record();
-        record.table_fence = TableFence::InFlight;
+        record.table_fence = Fact::Known(TableFence::InFlight);
         assert_eq!(record.derive_stage().unwrap(), Stage::Undecidable);
 
-        record.table_fence = TableFence::Pending;
+        record.table_fence = Fact::Known(TableFence::Pending);
         assert_eq!(record.derive_stage().unwrap(), Stage::Planned);
     }
 
@@ -1882,7 +1929,7 @@ mod record_tails {
     #[test]
     fn an_unknown_repair_tag_is_refused() {
         let mut record = moving_record(1, 0);
-        record.repair = Some(RepairFact {
+        record.repair = Fact::Known(RepairFact {
             kind: RepairKind::RelocateBackup,
             new_backup_lba: 97_728,
             new_last_usable: 97_727,
@@ -1912,10 +1959,10 @@ mod record_tails {
     #[test]
     fn an_in_flight_entry_that_contradicts_the_plan_is_refused() {
         for (label, mut record) in [
-            ("an in-flight entry before the cursor", with_in_flight(moving_record(2, 1), Some(0))),
-            ("an in-flight entry after the cursor", with_in_flight(moving_record(2, 0), Some(1))),
-            ("an in-flight entry past the plan", with_in_flight(moving_record(1, 1), Some(1))),
-            ("an in-flight entry without a plan", with_in_flight(table_only_record(), Some(0))),
+            ("an in-flight entry before the cursor", with_in_flight(moving_record(2, 1), Fact::Known(0))),
+            ("an in-flight entry after the cursor", with_in_flight(moving_record(2, 0), Fact::Known(1))),
+            ("an in-flight entry past the plan", with_in_flight(moving_record(1, 1), Fact::Known(1))),
+            ("an in-flight entry without a plan", with_in_flight(table_only_record(), Fact::Known(0))),
         ] {
             let bytes = record.encode().unwrap();
             assert!(matches!(decode(&bytes), Err(DecodeFailure::Format { .. })), "{label}");
@@ -1925,7 +1972,7 @@ mod record_tails {
     #[test]
     fn an_in_flight_entry_makes_the_stage_undecidable() {
         let mut record = moving_record(1, 0);
-        record.entry_table_in_flight = Some(0);
+        record.entry_table_in_flight = Fact::Known(0);
         assert_eq!(record.derive_stage().unwrap(), Stage::Undecidable);
 
         // 同一条记录去掉在飞位就是一个干净的起点
@@ -1948,7 +1995,7 @@ mod record_tails {
     #[test]
     fn a_payload_missing_the_fence_segment_is_refused() {
         let mut record = moving_record(1, 0);
-        record.repair = Some(RepairFact {
+        record.repair = Fact::Known(RepairFact {
             kind: RepairKind::RepairProtectiveMbr,
             new_backup_lba: 0,
             new_last_usable: 0,
@@ -1969,5 +2016,33 @@ mod record_tails {
         rehash(&mut bytes);
 
         assert!(matches!(decode(&bytes), Err(DecodeFailure::Format { .. })));
+    }
+
+    /// 只解到前缀的记录：尾段四项事实是 `Undecidable` 而不是「没有」，
+    /// 也不能被写回盘上
+    #[test]
+    fn a_prefix_record_keeps_its_tail_undecidable() {
+        let mut record = moving_record(1, 0);
+        record.restore.push(RestoreEntry {
+            sector_size: 512,
+            first_lba: 10,
+            sectors: 1,
+            original: vec![0x11; 512],
+            after: vec![0x22; 512],
+        });
+        let mut bytes = record.encode().unwrap();
+        // 翻掉载荷最后一个字节（围栏）：整份载荷验不过，固定前缀与区间仍可验证
+        let last = bytes.len() - 1;
+        bytes[last] ^= 0xff;
+
+        let prefix = decode_prefix(&bytes).expect("the head stays valid up to the tear");
+        assert_eq!(prefix.kept, 1);
+        assert!(matches!(prefix.record.entry_table_in_flight, Fact::Undecidable(_)));
+        assert!(matches!(prefix.record.repair, Fact::Undecidable(_)));
+        assert!(matches!(prefix.record.table_fence, Fact::Undecidable(_)));
+        assert!(matches!(prefix.record.source, Fact::Undecidable(_)));
+
+        let mut prefix_record = prefix.record.clone();
+        assert!(prefix_record.encode().is_err(), "an undecided tail cannot be written back");
     }
 }
