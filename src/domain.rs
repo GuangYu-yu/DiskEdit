@@ -2,6 +2,19 @@
 
 use std::fmt;
 
+/// 一次读取的结论。`Known` 是读到的值；`Absent` 是「这项事实对目标不适用，且
+/// 不适用本身已证明」；`Undecidable` 是读不出或判不出，附带原因。
+///
+/// `Undecidable` 不是 `Absent`：它表示没有读到，不是读到「没有」。准入点必须把它
+/// 落到拒绝或「不可判定」侧，不得与 `Known(false)` / `Absent` 同路放行
+#[derive(Clone, Debug)]
+#[cfg_attr(test, derive(PartialEq, Eq))]
+pub(crate) enum Fact<T> {
+    Known(T),
+    Absent,
+    Undecidable(String),
+}
+
 /// 目标载体的种类：能力矩阵按它与平台共同裁定
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum MediaKind {

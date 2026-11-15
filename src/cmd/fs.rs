@@ -24,10 +24,12 @@ pub(crate) const DETAILS_RESIZEFS: &str = r#"  Resize a filesystem. The form pic
   The target size is absolute (units k/m/g/t, 1024 base; plain bytes when no
   unit; fractions allowed); omitted means grow to fill the partition."#;
 
-pub(crate) const DETAILS_CHECK: &str = r#"  Check filesystem consistency without writing. The tool depends on the type
-  and always runs in its read-only form: ext e2fsck -n, ntfs ntfsfix -n,
-  xfs xfs_repair -n, btrfs check, vfat/exfat fsck -n. A non-zero tool exit
-  is a failed check (exit 3)."#;
+pub(crate) const DETAILS_CHECK: &str = r#"  Check filesystem consistency without repairing. The tool depends on the
+  type: ext e2fsck -n, ntfs ntfsfix -n, xfs xfs_repair -n, btrfs check,
+  vfat/exfat fsck -n, f2fs fsck.f2fs. A non-zero tool exit is a failed check
+  (exit 3). f2fs is not strictly read-only: when a SIT segment type disagrees
+  with its recorded type, fsck.f2fs rewrites global metadata even without -f,
+  and --dry-run does not stop it."#;
 
 pub(crate) const DETAILS_SET: &str = r#"  Set a partition property.
     name          GPT partition name
@@ -326,8 +328,14 @@ pub(crate) fn cmd_check(a: &CheckRequest) -> u8 {
     // 分区节点上的 :N 不是盘级表项，键按伪 MBR 解析会落到该分区自己的引导扇区。
     // 判据与 mkfs/resize/set 同源
     refuse_partition_node_target("check", &a.target);
-    // 只读打开，不建状态根、不打开证据路径
+    // 只读打开；不建状态根，但读记录根判断是否有未收尾的事务。`check` 不建记录，
+    // 而 fsck.f2fs 在 SIT 段类型不一致时会写全局元数据，故不能与写路径并行
     let src = crate::cmd::open_read_only_target(&a.target, a.sector_size).unwrap_or_else(|f| bail_fail(f));
+    crate::recovery::TransactionManager::refuse_if_active_reader(
+        &src,
+        "check runs the filesystem checker without a recovery record, and fsck.f2fs can write global metadata",
+    )
+    .unwrap_or_else(|f| bail_fail(f));
     let part = crate::gpt_policy::resolve_part(&src, pref).unwrap_or_else(|f| bail_fail(f));
     let (start, len) = crate::gpt_policy::partition_bytes(&src, part).unwrap_or_else(|f| bail_fail(f));
     let fstype = fsid::identify(&src, start, len).unwrap_or_else(|e| bail_fail(RunOutcome::refused(format!("identify failed: {e}"))));

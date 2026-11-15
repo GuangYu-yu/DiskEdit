@@ -67,6 +67,9 @@ const MAX_FILE_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_TOTAL_BYTES: u64 = 512 * 1024 * 1024;
 /// 一次枚举的时间上限
 const MAX_ELAPSED: Duration = Duration::from_secs(30);
+/// 目录层级上限：ROOT 是第 0 层，直接子目录（记录目录）是第 1 层。
+/// 更深的目录递归读取到第 3 层为止；再深即报「结果不完整」，不静默跳过
+const MAX_DEPTH: usize = 3;
 
 /// 七态。`LocationUnavailable` 需要索引才能产生，本版没有索引
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -242,25 +245,21 @@ fn probe_at(path: &Path, current: Option<&crate::recovery::SceneIdentity>) -> Ev
     }
 }
 
-/// 目标当前的现场身份；目标打不开时没有可比的证据，返回 None 让调用方标
-/// `identity_check: unavailable`
+/// 目标当前的现场身份；目标打不开或节点形态判不出时没有可比的证据，返回 None 让
+/// 调用方标 `identity_check: unavailable`
 #[cfg(target_os = "linux")]
 fn current_scene(path: &Path) -> Option<crate::recovery::SceneIdentity> {
     use crate::dev::FileSource;
-    let src = if is_block_node(path) {
-        FileSource::open_read_only(path).ok()?
-    } else {
-        FileSource::open_read_only_image(path, None).ok()?
+    use crate::domain::Fact;
+
+    let src = match crate::dev::target_node_is_block(path) {
+        Fact::Known(true) => FileSource::open_read_only(path).ok()?,
+        Fact::Known(false) | Fact::Absent => FileSource::open_read_only_image(path, None).ok()?,
+        Fact::Undecidable(_) => return None,
     };
     // 与 inspect 同一套事实：容量、载体文件与 loop 映射都从已打开的句柄取
     let probe = crate::platform::probe::probe_of(&src).ok()?;
     Some(crate::recovery::SceneIdentity::of_source(&probe, &src))
-}
-
-#[cfg(target_os = "linux")]
-fn is_block_node(path: &Path) -> bool {
-    use std::os::unix::fs::FileTypeExt;
-    std::fs::metadata(path).map(|m| m.file_type().is_block_device()).unwrap_or(false)
 }
 
 /// 枚举预算：超限即整体失败，不打印半份结果
@@ -294,8 +293,11 @@ impl Budget {
     }
 }
 
-/// 读取一个记录目录的全部条目：跳过锁与残留临时文件，其他条目都解码并保留。
-/// `only` 用于 `records verify` 按编号筛选
+/// 读取一个记录目录的全部条目：跳过锁、残留临时文件、非普通文件与非 UTF-8 文件名。
+/// 其余条目逐个探测并保留证据——解码失败也保留供报告，不因读不出而略过。
+/// 子目录继续往下读，直到 [`MAX_DEPTH`]；更深的目录不是跳过而是整体失败，
+/// 否则一条藏深一层的记录会看起来像不存在。
+/// `only` 用于 `records verify` 按编号（tx_id）筛选，不命中的条目不进 `out`
 #[cfg(target_os = "linux")]
 fn collect_dir(
     dir: &Path,
@@ -303,6 +305,7 @@ fn collect_dir(
     current: Option<&crate::recovery::SceneIdentity>,
     budget: &mut Budget,
     only: Option<&str>,
+    depth: usize,
     out: &mut Vec<Row>,
 ) -> Result<(), String> {
     let entries = match std::fs::read_dir(dir) {
@@ -318,7 +321,19 @@ fn collect_dir(
             continue;
         }
         let path = entry.path();
-        if !entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
+        let file_type = entry.file_type().map_err(|e| format!("cannot stat {}: {e}", path.display()))?;
+        if file_type.is_dir() {
+            if depth + 1 > MAX_DEPTH {
+                return Err(format!(
+                    "{} is at depth {} — the scan is bounded to depth {MAX_DEPTH}; no partial result is returned",
+                    path.display(),
+                    depth + 1
+                ));
+            }
+            collect_dir(&path, backend, current, budget, only, depth + 1, out)?;
+            continue;
+        }
+        if !file_type.is_file() {
             continue;
         }
         budget.admit(&path)?;
@@ -410,7 +425,7 @@ pub(crate) fn cmd_records_list(a: &RecordsListRequest) -> CmdResult {
             let dir = record.parent().unwrap_or(Path::new("."));
             let backend = crate::dev::record_backend(dir).unwrap_or(RecordBackend::Sidecar);
             let current = current_scene(path);
-            if let Err(reason) = collect_dir(dir, backend, current.as_ref(), &mut budget, None, &mut rows) {
+            if let Err(reason) = collect_dir(dir, backend, current.as_ref(), &mut budget, None, 1, &mut rows) {
                 bail_fail(RunOutcome::refused(format!("cannot list records: {reason}")));
             }
             Some(
@@ -429,7 +444,7 @@ pub(crate) fn cmd_records_list(a: &RecordsListRequest) -> CmdResult {
             for dir in dirs {
                 // 没有目标可比：身份检查不可用，按结构解码
                 if let Err(reason) =
-                    collect_dir(&dir, RecordBackend::HostRepo, None, &mut budget, None, &mut rows)
+                    collect_dir(&dir, RecordBackend::HostRepo, None, &mut budget, None, 1, &mut rows)
                 {
                     bail_fail(RunOutcome::refused(format!("cannot list records: {reason}")));
                 }
@@ -469,7 +484,7 @@ pub(crate) fn cmd_records_verify(a: &RecordsVerifyRequest) -> CmdResult {
         if let Some(backend) = crate::dev::record_backend(&dir) {
             searched.push(dir.clone());
             if let Err(reason) =
-                collect_dir(&dir, backend, Some(&current), &mut budget, Some(&a.id), &mut rows)
+                collect_dir(&dir, backend, Some(&current), &mut budget, Some(&a.id), 1, &mut rows)
             {
                 bail_fail(RunOutcome::refused(format!("cannot verify the record: {reason}")));
             }
@@ -508,6 +523,7 @@ pub(crate) fn cmd_records_verify(a: &RecordsVerifyRequest) -> CmdResult {
             None,
             &mut budget,
             Some(&a.id),
+            1,
             &mut rows,
         ) {
             bail_fail(RunOutcome::refused(format!("cannot verify the record: {reason}")));
@@ -604,7 +620,7 @@ pub(crate) fn cmd_records_scan(a: &RecordsScanRequest) -> CmdResult {
     let mut rows = Vec::new();
     for dir in dirs {
         // 扫描没有单个目标可比：身份检查不可用，按结构解码
-        if let Err(reason) = collect_dir(&dir, backend, None, &mut budget, None, &mut rows) {
+        if let Err(reason) = collect_dir(&dir, backend, None, &mut budget, None, 1, &mut rows) {
             println!(
                 "{{\"root\":\"{}\",\"complete\":false,\"index\":\"unavailable\",\"records\":[],\
                  \"reason\":\"{}\"}}",
@@ -661,5 +677,49 @@ fn print_rows(rows: &[Row], note: Option<&str>) {
     }
     out.push('}');
     println!("{out}");
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+
+    /// 记录目录下面还有一层时，里面的条目必须被读出来；跳过会让它看起来像不存在
+    #[test]
+    fn a_record_one_level_deeper_is_still_found() {
+        let dir = crate::testdir::test_dir("records_nested");
+        let record_dir = dir.join("disk.img.diskedit");
+        std::fs::create_dir_all(record_dir.join("nested")).unwrap();
+        std::fs::write(record_dir.join("nested").join("entry"), b"not a record").unwrap();
+
+        let mut budget = Budget::new();
+        let mut rows = Vec::new();
+        collect_dir(&record_dir, RecordBackend::Sidecar, None, &mut budget, None, 1, &mut rows)
+            .expect("一层子目录在深度上限内");
+
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].path.ends_with("nested/entry"), "got {}", rows[0].path.display());
+    }
+
+    /// 超过深度上限时整体失败并说明越界事实，不返回半份结果
+    #[test]
+    fn a_directory_beyond_the_depth_bound_fails_the_scan() {
+        let dir = crate::testdir::test_dir("records_too_deep");
+        let record_dir = dir.join("disk.img.diskedit");
+        let mut deep = record_dir.clone();
+        for level in 1..=MAX_DEPTH {
+            deep = deep.join(format!("d{level}"));
+        }
+        std::fs::create_dir_all(&deep).unwrap();
+        std::fs::write(deep.join("entry"), b"x").unwrap();
+
+        let mut budget = Budget::new();
+        let mut rows = Vec::new();
+        let err = collect_dir(&record_dir, RecordBackend::Sidecar, None, &mut budget, None, 1, &mut rows)
+            .expect_err("第 4 层目录必须报不完整");
+
+        assert!(err.contains("bounded to depth 3"), "got {err}");
+        assert!(err.contains("depth 4"), "got {err}");
+        assert!(rows.is_empty(), "越界时不返回部分结果");
+    }
 }
 

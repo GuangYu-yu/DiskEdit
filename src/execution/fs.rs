@@ -13,8 +13,8 @@ use super::StepSink;
 
 /// 一个 FsResize 步骤：字段与 [`crate::planner::PlanStep::FsResize`] 一一对应。
 ///
-/// `fstype` 是计划期钉住的类型；装配层不做探测，产出的计划恒为 `None`，预扫描按
-/// 区间识别的结论执行。带值时只用于核对盘上类型与计划是否一致。
+/// `fstype` 是计划期钉住的类型：装配点按请求填写，`None` 表示未指定、执行期按区间
+/// 识别的结论跑。带值时只用于核对盘上类型与计划是否一致。
 pub(crate) struct FsResize {
     pub part: u32,
     pub first_lba: u64,

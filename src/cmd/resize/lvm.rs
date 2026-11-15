@@ -21,9 +21,9 @@ pub(crate) fn preflight_lvm_tools(grow_lv: bool, needs_loop: bool) -> Result<(),
     tools.iter().try_for_each(|t| crate::fsops::require_tool(t))
 }
 
-/// 只读定位 `part_dev` 上的目标顶层 LV：`--lv` 精确匹配裸名或 `/dev/<vg>/<name>`，
-/// 缺省要求该 PV 上只有一个顶层 LV。返回选择时的路径、VG extent 字节数与
-/// LV 当前字节数——后者是 `lvextend -l +N` 的基线，随恢复记录落盘。
+/// 只读定位 `part_dev` 上的目标顶层 LV：`--lv` 精确匹配裸名或 `vg/lv`（判据是裸名相等，
+/// 或 `/dev/<选择串>` 等于报告里的全路径）；缺省要求该 PV 上只有一个顶层 LV。返回选择时的
+/// 路径、VG extent 字节数与 LV 当前字节数——后者是 `lvextend -l +N` 的基线，随恢复记录落盘。
 /// 全部是只读查询、与 pvresize 的结果无关，因此由调用方在写盘前先做。
 /// "PV 不在任何 VG / 没有 LV / LV 不唯一 / 名字对不上"都是请求与卷现状不匹配
 /// （`LvmError::Refused`），写盘之前拒绝即可让人改参数重跑
@@ -105,7 +105,8 @@ pub(crate) fn lvm_preflight_fail(e: LvmError) -> RunOutcome {
     }
 }
 
-/// 分区扩容成功后的 LVM 链（仅块设备）：pvresize 吸收全部新增空间；`--grow-lv` 把本次新增
+/// 分区扩容成功后的 LVM 链（块设备与镜像都走：镜像经 `with_partition_device_for_lvm`
+/// 建 loop 后进同一链）：pvresize 吸收全部新增空间；`--grow-lv` 把本次新增
 /// 容量折算成 extent 扩目标 LV（`--lv` 指定或该 PV 上唯一顶层 LV）。
 /// lvextend 按容量扩，分配源由 LVM 决定，不限于本 PV。
 /// 后置条件：pvresize 后 `pvs` 的 dev_size 必须覆盖整段分区。`pv_size` 是 PV 可用

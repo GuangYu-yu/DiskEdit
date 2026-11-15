@@ -103,9 +103,9 @@ pub fn classify_repair(g: &RawGpt, file_last_lba: u64) -> io::Result<RepairActio
     if !relocates {
         return Ok(if pmbr_needs_repair { RepairAction::RepairProtectiveMbr } else { RepairAction::None });
     }
-    // 备份副本可读而主头丢失时，可用区上界已由备份头给出：修复只补主头，不改写
-    // 这条事实轴。重定位臂的 new_last_usable 是"容器末端减跨度"，直接用它会静默
-    // 抬高可用区上界，让随后 add 能分配进原表刻意留白的尾部
+    // 备份副本可读而主头丢失时，可用区上界已由备份头给出：min 保证不抬高它。动作仍是
+    // 重定位（备份头搬到容器末端），不是只补主头。重定位臂的 new_last_usable 是"容器
+    // 末端减跨度"，直接取它会静默抬高可用区上界，让随后 add 能分配进原表刻意留白的尾部
     let new_last_usable = match g.state {
         GptState::NeedsRepair { cause: HeaderIssue::PrimaryUnreadable } => {
             g.header.last_usable_lba.min(repaired_last_usable(g, file_last_lba)?)
@@ -136,9 +136,9 @@ pub(crate) fn resume_boundary_unavailable(
 
 /// 执行修复（写入路径唯一出口）：按动作装配一条表步骤，交给执行器，再重读校验收敛。
 ///
-/// 修复先于命令自己的目标写入：装配期的读表失败落 4（一个字节都没写），表在装配与执行
-/// 之间被外部改动由执行器的首表复核落 3，写入开始后的失败落 5。这三档分类只由执行器给出，
-/// 本函数不自行判断相位。
+/// 修复先于命令自己的目标写入：装配期的读表失败落 4（一个字节都没写），记录里已有修复
+/// 事实时落 3，写入开始后的失败落 5。这三档由本函数按所处阶段给出；执行器的首表复核
+/// 另把"表在装配与执行之间被改"落 3。
 ///
 /// 修复动作进记录：装配成功后先落 `InFlight`，收敛并复读确认后再落 `Landed`。记录里已有
 /// 修复事实时不执行——`InFlight` 说明可能写过一半、结果没记下，`Landed` 说明盘面在作业
@@ -213,7 +213,7 @@ pub(crate) fn apply_repair(
 /// 否则那些 `Refused`（承诺"本次未写盘"，退出码 3）就成了假话。
 ///
 /// 表自身的几何自洽性（主头位置、可用区、数组位置、备份头是否越界）由 table 在解析层强制；
-/// plan 不走这里（plan 不写盘，修复动作由 `apply_repair` 在写命令经执行器落盘时执行）。
+/// `plan` 也调本函数取几何与动作，但不执行 [`apply_repair`]（plan 不写盘）。
 ///
 /// "修复后必须两份头都有效"这一条有规范依据：UEFI 2.10 §5.3.2 规定
 /// "_Both the primary and backup GPTs must be valid before an attempt is made to grow the size
@@ -413,7 +413,7 @@ pub(crate) fn live_entry_in(entries: &[GPTPartitionEntry], part: u32) -> Result<
 /// ss 计。换算在此处完成一次，下游（`fsid::identify` 按字节区间工作）不必知道单位是谁的
 ///
 /// 返回 `RunOutcome` 而不是 `(码, 文案)`：前缀与码必须同源——否则调用点会各自拼 "refused: "
-/// 前缀，碰上 30 就自相矛盾（打出 "refused: parse failed: ..." 却退出 30）
+/// 前缀，碰上 io 失败折成的 4 就自相矛盾（打出 "refused: ..." 却退出 4）
 pub(crate) fn partition_bytes(src: &FileSource, part: u32) -> Result<(u64, u64), RunOutcome> {
     partition_bytes_in(&read_table(src)?, part, src.sector_size)
 }
@@ -785,7 +785,7 @@ pub fn set_gpt_flag(src: &mut WriteSource, part: u32, flag: GptFlag, on: bool) -
 /// `esp off` 的类型回退落点：只在当前类型是 ESP 时按盘上 FS 识别给出新 GUID，其余
 /// 情况 `None`（这次 flag 不动类型 GUID）。FAT/NTFS → Microsoft basic data，其余
 /// （含识别不出的区域）→ Linux filesystem data——这是类型回退而非"恢复原类型"，
-/// 原 GUID 未被保存，无从恢复。写盘前读盘，失败必须是 NoMutation
+/// 原 GUID 未被保存，无从恢复。写盘前读盘，读失败按"读不到继续所需的事实"拒绝（3）
 pub(crate) fn esp_off_fallback(
     src: &FileSource,
     entry: &GPTPartitionEntry,
@@ -1119,7 +1119,7 @@ mod tests {
         assert!(matches!(&e, RunOutcome::Refused(m) if m.contains("overlap")), "{e:?}");
     }
 
-    /// 无表、空槽、越界编号各自只可能落一种出口语义：前者 10，后两者同判据同文案
+    /// 无表、空槽、越界编号各自只可能落一种出口语义：三者都是拒绝（3），后两者同判据同文案
     #[test]
     fn partition_bytes_error_kinds() {
         let bare = crate::support::src_from("pb_none", &vec![0u8; 1024 * 1024]);

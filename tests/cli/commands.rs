@@ -96,7 +96,7 @@ fn auto_commands_add_move_resize_set_delete() {
     assert!(stderr.contains("--yes"), "{stderr}");
     assert_eq!(std::fs::read(&img).unwrap(), img_before, "a refusal must leave the image byte-identical");
     assert_eq!(dir_entries(&dir), entries_before, "a refusal must not add sidecars");
-    // 带 --allow-move --yes：自动搬移 #2 到尾部并把 #1 扩到 last_usable=32734。
+    // 带 --allow-move --yes：#2 搬到尾部（终点 32734），#1 扩到 28638。
     // #1 里没有 FS，扩分区表这件事本身要显式声明——--no-fs 正是"只改表"的入口
     let (c, _, e) = run(&["resize", &format!("{img_s}:1"), "grow", "--allow-move", "--chunk", "4", "--yes", "--no-fs"]);
     assert_eq!(c, 0, "auto-relocate grow must succeed: {e}");

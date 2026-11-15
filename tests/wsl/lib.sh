@@ -88,7 +88,7 @@ require_fake_bin() {
     require_bin
     if [ ! -x "$BFK" ]; then
         echo "工具表变体二进制不存在: $BFK" >&2
-        echo "它由 wsl-tests.yml 以 DISKEDIT_TOOL_PATH=\"$FAKE_TOOL_DIR:<系统目录>\" 构建" >&2
+        echo "它由 tests.yml 以 DISKEDIT_TOOL_PATH=\"$FAKE_TOOL_DIR:<系统目录>\" 构建" >&2
         exit 1
     fi
 }
@@ -97,7 +97,7 @@ require_fakeonly_bin() {
     require_fake_bin
     if [ ! -x "$BFKO" ]; then
         echo "工具表变体二进制不存在: $BFKO" >&2
-        echo "它由 wsl-tests.yml 以 DISKEDIT_TOOL_PATH=\"$FAKE_TOOL_DIR\" 构建" >&2
+        echo "它由 tests.yml 以 DISKEDIT_TOOL_PATH=\"$FAKE_TOOL_DIR\" 构建" >&2
         exit 1
     fi
 }

@@ -4,9 +4,10 @@
 //! 只是把"谁在独占目标、这次事务算不算开着、开着时谁能动手"这三件事收到一处：
 //!
 //! ```text
-//! begin  = 打开目标 + 取独占所有权 + 在首次写盘前建记录
-//! commit = 事务完成 ⇒ 记录被清理（由收尾路径负责）
-//! active = 记录落点在、且可解码 ⇒ 只有 undo / abandon / 续跑原命令能继续碰这个目标
+//! begin_* = 打开目标 + 取独占所有权 + 在首次写盘前建记录
+//! commit  = 事务完成 ⇒ 记录被清理（由收尾路径负责）
+//! active  = 记录落点还在（无论能否解码）：能续跑的只有原命令，未越点的可 undo，
+//!           读不懂的落点只能 abandon；外来文件 abandon 也拒绝，须手工移除
 //! ```
 //!
 //! **不保存 completion_state**：能不能算"完成"由记录与盘上状态共同决定；
@@ -29,9 +30,13 @@ pub(crate) struct RecoveryRecord {
     pub(crate) path: std::path::PathBuf,
     /// `probe` 只回答"落点上是什么"；身份由 `undo` / `abandon` 在打开目标后按当前场景再比
     pub(crate) probe: Box<crate::recovery::CompanionProbe>,
-    /// 载荷身份与当前目标不符的原因。`None` 才是本目标可认领的记录；`Some` 只用于展示：
-    /// 不阻塞写命令、不回放、不隔离
+    /// 载荷身份与当前目标不符的原因。`None` 才是本目标可认领的记录；`Some` 不参与回放
+    /// 与隔离，身份派生的落点被它占住时写命令拒绝
     pub(crate) foreign: Option<String>,
+    /// 记录落在记录根下的兄弟目录里，而不是本目标当前键派生的那个落点。旧拼接键算出的
+    /// 目录名不是任何目标的当前落点：那里的记录靠载荷认领，但续跑只从派生落点进入，
+    /// 故对它只能回放或释放，重新执行命令不改用它
+    pub(crate) sibling_slot: bool,
 }
 
 impl RecoveryRecord {
@@ -127,6 +132,7 @@ pub(crate) fn active_recovery_records(
                 path: path.to_path_buf(),
                 probe: Box::new(probe),
                 foreign: mismatch_reason(path, current.as_ref())?,
+                sibling_slot: false,
             });
         }
     }
@@ -174,6 +180,45 @@ fn mismatch_reason(
         )),
         Ok(_) => Ok(None),
         Err(e) => Err(format!("cannot read the record at {}: {e}", path.display())),
+    }
+}
+
+/// 身份派生的落点被另一个身份的载荷占住：撞键，写下去会覆盖那份记录
+fn foreign_slot_refusal(path: &Path, why: &str) -> RunOutcome {
+    RunOutcome::refused(format!(
+        "the recovery directory {} holds a record written for another target ({why}); \
+         the record directory and the target identity do not match. \
+         Move that record out of the way by hand, then retry",
+        path.display()
+    ))
+}
+
+/// 只认本目标身份派生的落点：兄弟落点按目标分目录，那里出现别的身份是常态
+fn own_slot_foreign<'a>(
+    own: Option<&Path>,
+    records: &'a [RecoveryRecord],
+) -> Option<&'a RecoveryRecord> {
+    let own = own?;
+    records.iter().find(|r| r.path == own && r.foreign.is_some())
+}
+
+/// 取锁前核对身份派生的落点：被别的身份占住时连锁文件都不落进那个目录。
+/// 读不出或不可解码不在这里判——锁下的枚举按记录的形态给出结论
+pub(crate) fn refuse_foreign_record_slot(src: &FileSource) -> Result<(), RunOutcome> {
+    let Some(path) = src.identity.record_path() else {
+        return Ok(());
+    };
+    let Ok(scene) = ownership_scene(src) else {
+        return Ok(());
+    };
+    match crate::recovery::read_companion(path, &scene) {
+        Ok(crate::recovery::Evidence::ForeignTarget { recorded, current }) => {
+            let why = recorded
+                .mismatch_reason(&current)
+                .unwrap_or_else(|| "the recorded identity differs from the target".to_string());
+            Err(foreign_slot_refusal(path, &why))
+        }
+        _ => Ok(()),
     }
 }
 
@@ -243,7 +288,7 @@ fn scan_record_root(
                     .to_string(),
             ),
         };
-        out.push(RecoveryRecord { path: candidate, probe: Box::new(probe), foreign });
+        out.push(RecoveryRecord { path: candidate, probe: Box::new(probe), foreign, sibling_slot: true });
     }
     Ok(())
 }
@@ -253,7 +298,10 @@ fn scan_record_root(
 ///
 /// 兄弟落点由**记录载荷**归并：只有身份与当前场景相符的才进入候选集。别的主体的落点
 /// 不列出，也不参与释放——`abandon` 是显式放弃本目标的场景，不是清空整个目录。
-/// 身份不可得时无从归并，兄弟落点全部略过（身份派生的落点照旧列出）
+/// 身份不可得时无从归并，兄弟落点全部略过（身份派生的落点照旧列出）。
+///
+/// 落点存在却读不成记录、或判不出身份时整次枚举失败：这种情况下"没有现场"的结论
+/// 是假的，与块设备侧的记录根同一条出路
 fn scan_image_directory(
     identity: &TargetIdentity,
     current: Option<&crate::recovery::SceneIdentity>,
@@ -277,7 +325,10 @@ fn scan_image_directory(
     };
     for entry in entries {
         let entry = entry.map_err(|e| format!("cannot enumerate {}: {e}", dir.display()))?;
-        if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+        let file_type = entry
+            .file_type()
+            .map_err(|e| format!("cannot inspect an entry in {}: {e}", dir.display()))?;
+        if !file_type.is_dir() {
             continue;
         }
         let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
@@ -293,20 +344,61 @@ fn scan_image_directory(
         if derived == Some(candidate.as_path()) || out.iter().any(|r| r.path == candidate) {
             continue;
         }
-        // 身份不符或读不出来：这是别的主体的落点（或无从归并的条目），不进本目标的候选集
-        if !matches!(
-            crate::recovery::read_companion(&candidate, current),
-            Ok(crate::recovery::Evidence::Recognized(_))
-        ) {
-            continue;
+        // 兄弟落点按载荷归并：同一个主体的收进候选集；别的主体的落点不列出，也不参与释放。
+        // 读不出、判不出的与块设备的记录根同一结论——上抛，不折成"没有现场"
+        match crate::recovery::read_companion(&candidate, current) {
+            Ok(crate::recovery::Evidence::Recognized(_)) => {}
+            Ok(crate::recovery::Evidence::ForeignTarget { .. })
+            | Ok(crate::recovery::Evidence::Absent) => continue,
+            Ok(other) => {
+                return Err(format!(
+                    "{} is next to the image but cannot be read as a recovery record ({other:?})",
+                    candidate.display()
+                ))
+            }
+            Err(e) => return Err(format!("cannot read the record at {}: {e}", candidate.display())),
         }
         let probe = crate::recovery::probe_companion(&candidate);
         if matches!(probe, crate::recovery::CompanionProbe::Absent) {
             continue;
         }
-        out.push(RecoveryRecord { path: candidate, probe: Box::new(probe), foreign: None });
+        out.push(RecoveryRecord {
+            path: candidate,
+            probe: Box::new(probe),
+            foreign: None,
+            sibling_slot: false,
+        });
     }
     Ok(())
+}
+
+/// 能否回滚的三态。`Proven` 表示记录可解码且回放判据允许；`Disproven` 表示记录
+/// 可解码但判据拒绝，或那份条目根本不是本工具写下的；`Unproven` 表示记录损坏、
+/// 读不出——既不能证明能回滚，也不能断言不能
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RollbackProof {
+    Proven,
+    Disproven,
+    Unproven,
+}
+
+fn rollback_proof(record: &RecoveryRecord) -> RollbackProof {
+    match record.probe.as_ref() {
+        // 能否撤销按同一份回放判据算：相交的 move 没有显式许可时 undo 会拒绝
+        crate::recovery::CompanionProbe::Decoded(record) => {
+            if crate::recovery::TableReplay::of(record, false).writes_back() {
+                RollbackProof::Proven
+            } else {
+                RollbackProof::Disproven
+            }
+        }
+        // 不是本工具写下的条目，本工具没有回滚它的路径
+        crate::recovery::CompanionProbe::Foreign { .. }
+        | crate::recovery::CompanionProbe::NotOurs(_) => RollbackProof::Disproven,
+        crate::recovery::CompanionProbe::Damaged(_)
+        | crate::recovery::CompanionProbe::Unreadable(_)
+        | crate::recovery::CompanionProbe::Absent => RollbackProof::Unproven,
+    }
 }
 
 /// 事务的控制层。它不持状态——"这次事务开到哪了"的唯一事实就是盘上那份记录
@@ -366,7 +458,8 @@ impl TransactionManager {
     /// - 记录可续跑 ⇒ 重跑原命令
     /// - 记录未越过不可回滚点 ⇒ 可以回滚（`undo`）
     /// - 数据写越过回滚点、表区仍可显式回放 ⇒ `undo --replay-table-only`
-    /// - 其余（损坏、布局不认识、外来文件）⇒ 只有 `abandon` 能释放
+    /// - 其余（损坏、布局不认识）⇒ `abandon` 移入隔离区，不动目标字节
+    /// - 外来落点（`ForeignTarget` / 非本工具创建）⇒ `abandon` 也拒绝，只能手工移除
     ///
     /// 退出码按证据类别分：`Recognized + Provisional` ⇒ 5（先于"目标忙"）；
     /// 其余类别 ⇒ 3。`Provisional` 表示记录尚未标为提交，盘上字节可能已部分写入
@@ -374,19 +467,27 @@ impl TransactionManager {
     /// 现场里只剩记录一类：旧 journal 与旧 checkpoint 不参与枚举，也不阻塞命令
     fn busy(active: &[RecoveryRecord]) -> RunOutcome {
         let listed: Vec<String> = active.iter().map(RecoveryRecord::describe).collect();
-        let rollbackable = active
-            .iter()
-            .find_map(|r| match r.probe.as_ref() {
-                // 能否撤销按同一份回放判据算：相交的 move 没有显式许可时 undo 会拒绝
-                crate::recovery::CompanionProbe::Decoded(record) => Some(
-                    crate::recovery::TableReplay::of(record, false).writes_back(),
-                ),
-                _ => None,
-            })
-            .unwrap_or(false);
-        // 只有一份记录时才谈得上"重跑哪个命令"；多份记录没有可唯一指认的请求
+        // 能否回滚是三态：判不出不能被折成"不能回滚"，否则读不出的记录与被本工具
+        // 明确排除的条目会得到同一句指引。这个结论只决定拒绝时的指引文案与退出码，
+        // 从不放行写入，所以任一记录能证明回滚即可给出 undo 出路
+        let proof = if active.iter().any(|r| rollback_proof(r) == RollbackProof::Proven) {
+            RollbackProof::Proven
+        } else if active.iter().any(|r| rollback_proof(r) == RollbackProof::Unproven) {
+            RollbackProof::Unproven
+        } else {
+            RollbackProof::Disproven
+        };
+        let rollbackable = proof == RollbackProof::Proven;
+        let rollback_unproven = proof == RollbackProof::Unproven;
+        // 只有一份记录时才谈得上"重跑哪个命令"；多份记录没有可唯一指认的请求。
+        // 兄弟目录里的记录不参与续跑——续跑只从本目标当前键派生的落点进入，
+        // 把"重跑"当出路会让用户连试几次都落回同一句拒绝
         let recorded = active.iter().find_map(|r| match r.probe.as_ref() {
-            crate::recovery::CompanionProbe::Decoded(record) if active.len() == 1 => Some(record),
+            crate::recovery::CompanionProbe::Decoded(record)
+                if active.len() == 1 && !r.sibling_slot =>
+            {
+                Some(record)
+            }
             _ => None,
         });
         let resumable = recorded.is_some_and(|r| r.op.resumable());
@@ -461,12 +562,37 @@ impl TransactionManager {
         } else if let Some(what) = foreign_format {
             // 布局读不懂不是"越过回滚点"：说成越过回滚点会让用户以为 undo 有能力处理它
             format!("{what}; it is left in place, and `diskedit abandon` is the only way to release it")
+        } else if rollback_unproven {
+            // 记录读不出：既没有可回放的证据，也不能因此断言"已过回滚点"
+            "the record cannot be read, so no rollback can be proven for it, and `diskedit abandon` is the \
+             only way to release it"
+                .to_string()
         } else {
             // 没有可解码的记录就无从判定阶段：只说"证明不了能回滚"，不说"已过回滚点"
             "no rollback can be proven for it, so `diskedit abandon` is the only way to release it".to_string()
         };
+        // 兄弟目录里的记录在拒绝文案里单独点明位置与出路：用户看到的是"目标忙"，
+        // 但路径落在另一个目录，不说明白就无法把这条记录与本目标的落点联系起来
+        let sibling: Vec<String> = active
+            .iter()
+            .filter(|r| r.sibling_slot)
+            .map(|r| r.path().display().to_string())
+            .collect();
+        let stray = if sibling.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "; {} is in a sibling record directory, not the slot this target's current identity key \
+                 derives — the directory is left from an earlier key derivation, and its payload still declares \
+                 this target, so it counts as this target's unfinished operation. A command re-run does not \
+                 pick it up from there; `diskedit abandon` moves it into quarantine (the target's bytes are \
+                 not touched, and rollback is given up) — when it still holds replayable ranges, abandon \
+                 refuses until `--discard-replay` confirms giving them up",
+                sibling.join("; ")
+            )
+        };
         let report = format!(
-            "an unfinished operation still owns this target ({}); {way_out}",
+            "an unfinished operation still owns this target ({}); {way_out}{stray}",
             listed.join(", ")
         );
         if provisional {
@@ -477,9 +603,10 @@ impl TransactionManager {
         }
     }
 
-    /// 开一次**只持有所有权、不建记录**的写事务。两类调用方：
-    /// - `undo`：它要回放的是**已经存在**的那份记录，不能自己去建一份
-    /// - `check`：它动手前先过闸口，动手时才由自己落记录
+    /// 开一次**只持有所有权、不建记录**的写事务。调用方是 `undo` 与 superfloppy 的
+    /// `resize`：前者要回放的是**已经存在**的那份记录，后者唯一的写盘是外部 FS 工具、
+    /// 不经过写句柄。两者都由 `support::open_target_owned` 进来；`check` 只读打开
+    /// （`cmd::open_read_only_target`），不取所有权，也不经过这里
     pub(crate) fn begin_without_history(a: &impl TargetRequest) -> Result<WriteSource, RunOutcome> {
         Self::open_rw(a)
     }
@@ -585,7 +712,8 @@ impl TransactionManager {
         let active = Self::claimed_records(&src)?;
         let resumable = match active.as_slice() {
             [one] => match one.probe.as_ref() {
-                crate::recovery::CompanionProbe::Decoded(record) => record.op == op,
+                // 续跑从本目标当前键派生的落点打开；兄弟目录里的记录不在这里续跑
+                crate::recovery::CompanionProbe::Decoded(record) => !one.sibling_slot && record.op == op,
                 _ => false,
             },
             _ => false,
@@ -635,11 +763,12 @@ impl TransactionManager {
         let resumable = matches!(
             active.as_slice(),
             [one]
-                if matches!(
-                    one.probe.as_ref(),
-                    crate::recovery::CompanionProbe::Decoded(record)
-                        if record.op == crate::recovery::OpKind::Resize
-                )
+                if !one.sibling_slot
+                    && matches!(
+                        one.probe.as_ref(),
+                        crate::recovery::CompanionProbe::Decoded(record)
+                            if record.op == crate::recovery::OpKind::Resize
+                    )
         );
         if !active.is_empty() && !resumable {
             return Err(Self::busy(&active));
@@ -703,7 +832,7 @@ impl TransactionManager {
 
     /// 读写打开 + 取目标的独占所有权（见 `targetlock`），返回**写句柄**。
     ///
-    /// 三种写事务的入口都在本模块（`begin`、`begin_table_record*`、`begin_resize`），
+    /// 三种写事务的入口都在本模块（`begin_without_history`、`begin_table_record*`、`begin_resize`），
     /// 它们都经这里取所有权；写方法只挂在 [`WriteSource`] 上（见 `dev::source`），而本函数
     /// 是 crate 内生产代码构造它的唯一途径——"写命令持锁"因此是类型保证，不是调用约定
     fn open_rw(a: &impl TargetRequest) -> Result<WriteSource, RunOutcome> {
@@ -728,19 +857,25 @@ impl TransactionManager {
         })
     }
 
-    /// 本目标可认领的恢复现场：闸口只看这一份。身份不符/不可比的候选不阻塞目标，
-    /// 也不参与续跑判定
+    /// 本目标可认领的恢复现场：闸口只看这一份。兄弟落点里别的目标的记录不参与续跑判定；
+    /// 本目标自己的落点被另一身份占住时拒绝——写下去会覆盖那份记录
     pub(crate) fn claimed_records(src: &FileSource) -> Result<Vec<RecoveryRecord>, RunOutcome> {
-        Ok(Self::active_records(src)?.into_iter().filter(RecoveryRecord::claimable).collect())
+        let active = Self::active_records(src)?;
+        if let Some(record) = own_slot_foreign(src.identity.record_path(), &active) {
+            let why = record.foreign.as_deref().unwrap_or_default();
+            return Err(foreign_slot_refusal(record.path(), why));
+        }
+        Ok(active.into_iter().filter(RecoveryRecord::claimable).collect())
     }
 
-    /// 绕过事务入口的写盘命令（`resizefs` 与 `check` 的修复）动手前的唯一闸口：目标上若还
+    /// 不建记录的写路径（superfloppy 的 `resize`、在线 PV 扩容）动手前的唯一闸口：目标上若还
     /// 留着上一次操作的恢复现场，说明那件事没做完——此时扩 FS 或按修复结果写表会让那份
     /// journal 所指的旧布局彻底作废，而用户随后 undo 仍会把旧表字节回放上去，形成"表与盘上
     /// 内容自相矛盾"的状态（例如 FS 自述尺寸 > 分区尺寸）。
     ///
-    /// 经过 `begin_without_history` 的写命令（add/delete/resize/mkfs…）不靠它：它们在目标被占用时
-    /// 就已拒绝。本闸口覆盖的是只取所有权、不开事务的那些命令
+    /// 直接调用方是 `support::refuse_if_pending_recovery`（superfloppy 的 `resize`）与在线 PV
+    /// 路径；建记录的写命令（add/delete/resize/mkfs/resizefs…）不靠它：它们在目标被占用时
+    /// 由事务入口拒绝。`undo` 借 `begin_without_history` 只取所有权，也不经过这个闸口
     ///
     /// 现场落点由**整盘**键派生（见 `dev::TargetIdentity::from_block_keys`）：
     /// `/dev/sdb:2` 与 `/dev/sdb2` 因此共享同一处现场，只读分区节点即可枚举完
@@ -750,8 +885,22 @@ impl TransactionManager {
         if active.is_empty() {
             return Ok(());
         }
-        // 与 `begin` 同一句话（`busy`），只多一句本文命令为什么绕不开它
+        // 与 `begin_without_history` / `begin_table_record*` 同一句话（`busy`），只多一句本文命令为什么绕不开它
         Err(Self::busy(&active).context(&format!("{what} writes outside the recovery record")))
+    }
+
+    /// 读侧闸口：`check` 不建记录，也不要求稳定身份（dm / md 这类拿不到记录键的目标
+    /// 同样要能查），但检查工具可能写盘（fsck.f2fs 的 SIT 段类型不一致分支）——目标上
+    /// 还有未收尾的现场时拒绝，理由由调用方给出。
+    ///
+    /// 与 [`Self::refuse_if_active`] 的差别只有"不要求身份"这一条：枚举失败仍按拒绝处理，
+    /// 不把"读不到"当成"没有"
+    pub(crate) fn refuse_if_active_reader(src: &FileSource, what: &str) -> Result<(), RunOutcome> {
+        let active = Self::claimed_records(src)?;
+        if active.is_empty() {
+            return Ok(());
+        }
+        Err(Self::busy(&active).context(what))
     }
 }
 
@@ -760,7 +909,7 @@ mod tests {
     use super::*;
 
     fn record(probe: crate::recovery::CompanionProbe) -> RecoveryRecord {
-        RecoveryRecord { path: "r".into(), probe: Box::new(probe), foreign: None }
+        RecoveryRecord { path: "r".into(), probe: Box::new(probe), foreign: None, sibling_slot: false }
     }
 
     fn way_out(active: &[RecoveryRecord]) -> String {
@@ -790,6 +939,34 @@ mod tests {
         let text = way_out(&[record(crate::recovery::CompanionProbe::NotOurs("a directory".into()))]);
         assert!(text.contains("by hand"), "a foreign entry is left for manual handling: {text}");
         assert!(!text.contains("abandon"), "this tool will not release a file it did not write: {text}");
+    }
+
+    /// 可解码记录排在读不出的记录之前：后者不能被"第一条"吞掉，结论必须仍是判不出
+    #[test]
+    fn an_unreadable_record_is_not_folded_away_by_a_decodable_one() {
+        let text = way_out(&[
+            record(crate::recovery::CompanionProbe::Decoded(blocked_move_record())),
+            record(crate::recovery::CompanionProbe::Damaged("bad payload".into())),
+        ]);
+        assert!(text.contains("cannot be read"), "an unreadable record must not vanish: {text}");
+        assert!(!text.contains("roll it back"), "no undo path may be promised: {text}");
+    }
+
+    /// 撞键只在本目标自己的落点上判：兄弟落点里别的目标的记录不阻塞写入
+    #[test]
+    fn a_foreign_record_blocks_only_its_own_slot() {
+        let mut sibling = record(crate::recovery::CompanionProbe::Absent);
+        sibling.path = "s".into();
+        sibling.foreign = Some("another target".into());
+        assert!(own_slot_foreign(Some(Path::new("r")), std::slice::from_ref(&sibling)).is_none());
+
+        let mut occupant = record(crate::recovery::CompanionProbe::Absent);
+        occupant.path = "r".into();
+        occupant.foreign = Some("another target".into());
+        let occupant = [occupant];
+        let found = own_slot_foreign(Some(Path::new("r")), &occupant).expect("the own slot is occupied");
+        assert_eq!(found.foreign.as_deref(), Some("another target"));
+        assert!(own_slot_foreign(None, &[]).is_none());
     }
 
     /// 一条越过回滚点、目的区压在旧表区间上的搬移记录：普通 `undo` 拒绝，显式许可下表区可回放
@@ -840,6 +1017,19 @@ mod tests {
         record
     }
 
+    /// 旧拼接键目录里的记录：拒绝文案要点明它不在本目标的当前落点、重新执行命令不会
+    /// 从那里续跑，并把 `abandon` 作为出路（隔离记录，不动目标字节）
+    #[test]
+    fn a_record_in_a_sibling_slot_is_reported_with_its_own_way_out() {
+        let mut stray = record(crate::recovery::CompanionProbe::Decoded(blocked_move_record()));
+        stray.sibling_slot = true;
+        let text = way_out(&[stray]);
+        assert!(!text.contains("re-run `diskedit"), "a sibling slot is not resumed in place: {text}");
+        assert!(text.contains("sibling record directory"), "{text}");
+        assert!(text.contains("abandon"), "{text}");
+        assert!(text.contains("--discard-replay"), "abandon needs the flag when ranges are replayable: {text}");
+    }
+
     /// 数据已越过回滚点不等于"没有回滚办法"：表区仍能用显式许可回放，出路必须说出这条
     #[test]
     fn busy_offers_the_table_only_replay_when_it_exists() {
@@ -862,6 +1052,7 @@ mod tests {
             canonical: record.to_path_buf(),
             journal: record.with_file_name("undo.journal"),
             record: Some(record.to_path_buf()),
+            record_key: None,
             lock: record.with_file_name("record.lock"),
             backing_fp: None,
         }
@@ -914,5 +1105,56 @@ mod tests {
         let err = scan_record_root(&identity, Some(&current), &mut out).unwrap_err();
         assert!(err.contains("cannot be read as a recovery record"), "{err}");
         assert!(out.is_empty());
+    }
+
+    /// 兄弟落点按载荷身份认领，不按目录名：拼接式旧键目录里的记录只要载荷声明本目标，
+    /// 仍会被当成本目标的现场；载荷声明别的目标时列出原因、不可认领
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_sibling_slot_is_claimed_by_its_payload_not_by_its_directory_key() {
+        let dir = crate::testdir::test_dir("record_root_payload_claim");
+        let root = dir.join("recovery");
+        let mine = root.join("f244755a6aac2f9a88fd04c61930c017");
+        let legacy = root.join("9aa2c12926b1417f1830d1c77d09cb23");
+        let other = root.join("another");
+        for slot in [&mine, &legacy, &other] {
+            std::fs::create_dir_all(slot).unwrap();
+        }
+        let encoded = |seed: u8| {
+            crate::recovery::Record::new(
+                crate::recovery::TxId::from_bytes([9; 16]),
+                crate::recovery::SceneIdentity::from_target(crate::platform::TargetId::from_material(
+                    crate::platform::IdentityMaterial::image(None, Some([seed; 16]))
+                        .expect("an image identity needs a file ID"),
+                )),
+                crate::recovery::PlanId::from_bytes([8; 16]),
+                crate::recovery::PlanVersion::new(1),
+                crate::recovery::OpKind::ResizePart,
+                crate::recovery::PlanDigest::from_bytes([7; 32]),
+                crate::dev::DiskGuidState::Unavailable,
+            )
+            .encode()
+            .unwrap()
+        };
+        std::fs::write(legacy.join(crate::dev::RECORD_NAME), encoded(1)).unwrap();
+        std::fs::write(other.join(crate::dev::RECORD_NAME), encoded(2)).unwrap();
+        let identity = block_at(&mine.join(crate::dev::RECORD_NAME));
+        let mut out = Vec::new();
+        scan_record_root(&identity, Some(&current_scene_for_test()), &mut out).unwrap();
+
+        let claimed = out
+            .iter()
+            .find(|r| r.path == legacy.join(crate::dev::RECORD_NAME))
+            .expect("a payload that declares this target is listed from a legacy slot");
+        assert!(
+            claimed.foreign.is_none(),
+            "the legacy slot is claimed by its payload: {:?}",
+            claimed.foreign
+        );
+        let not_claimed = out
+            .iter()
+            .find(|r| r.path == other.join(crate::dev::RECORD_NAME))
+            .expect("a payload that declares another target is listed with the mismatch");
+        assert!(not_claimed.foreign.is_some(), "a payload for another target is not claimable");
     }
 }

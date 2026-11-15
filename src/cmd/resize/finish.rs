@@ -47,7 +47,8 @@ pub(crate) fn finish_resize(a: &ResizeRequest, o: crate::outcome::RunOutcome, ws
                     && let Some(journal) = w.take_record_journal()
                     && let Err(e) = journal.commit_and_discard()
                 {
-                    // 目录项已移除、持久化未确认：只陈述这一事实，不承诺记录还在
+                    // 记录移除失败：按 `record_still_on_disk()` 分流——盘上仍在时说清还需
+                    // `abandon`，已不在时只报原始错误
                     let detail = if e.record_still_on_disk() {
                         format!(
                             "the job finished but its recovery record could not be removed ({e}) — release it with `diskedit abandon`"

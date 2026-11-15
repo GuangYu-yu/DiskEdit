@@ -72,7 +72,7 @@ pub(crate) fn cmd_info_with(a: &InfoRequest, tail: Option<&str>) -> u8 {
         );
     }
     // identify 的读失败逐条如实上报：JSON 照常输出（fs 字段记 "error"），原因逐条
-    // 打到 stderr，退出码与本文件其他读失败路径一致（4）
+    // 打到 stderr，整条命令按拒绝（3）退出（`:304` 的 `refused`）
     let mut identify_errors: Vec<String> = Vec::new();
     let mut out = String::from("{\"label\":");
     let mut stale_notes: Vec<String> = Vec::new();

@@ -1,5 +1,9 @@
 //! 确认门：`Confirmation::Required` 的命令缺 `--yes` 在解析期落 2。
-//! 每条命令两条路径：缺 --yes 拒绝且一处不改盘；带 --yes 越过门继续执行。
+//! 12 条 Required 命令各自一条用例：缺 --yes 拒绝且一处不改盘；
+//! 能安全放行的（move / copy / resize / resize-part）另测带 --yes 越过门继续执行。
+//!
+//! Required 名单（与 `src/cli.rs` 的命令表一致）：resize、move、copy、delete、set、
+//! mkfs、resizefs、undo、abandon、new、add、resize-part。
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -56,6 +60,16 @@ fn fresh(tag: &str, bytes: usize) -> (PathBuf, PathBuf) {
     std::fs::write(&img, vec![0u8; bytes]).unwrap();
     let (c, _, e) = run(&["new", img.to_str().unwrap(), "--yes"]);
     assert_eq!(c, 0, "fixture needs a GPT target: {e}");
+    (dir, img)
+}
+
+/// 只建一个零文件，不经 `new`：给 `new` 自己的确认门用例留一个没有表的目标。
+fn raw(tag: &str, bytes: usize) -> (PathBuf, PathBuf) {
+    let dir = std::env::temp_dir().join(format!("diskedit_cfg_{tag}_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let img = dir.join("c.img");
+    std::fs::write(&img, vec![0u8; bytes]).unwrap();
     (dir, img)
 }
 
@@ -154,6 +168,114 @@ fn resize_requires_yes() {
 
     let (c, _, e) = run(&["resize", &format!("{img_s}:1"), "+1M", "--no-fs", "--yes"]);
     assert_eq!(c, 0, "{e}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn new_requires_yes() {
+    let (dir, img) = raw("new", 1024 * 1024);
+    let img_s = img.to_str().unwrap();
+
+    let before = scene(&img);
+    let (c, _, e) = run(&["new", img_s]);
+    assert_refusal(c, &e);
+    assert_untouched(&before, &scene(&img), "new");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn add_requires_yes() {
+    let (dir, img) = fresh("add", 8 * 1024 * 1024);
+    let img_s = img.to_str().unwrap();
+
+    let before = scene(&img);
+    let (c, _, e) = run(&["add", img_s, "1M", "--align", "mib", "--type-guid", LINUX_DATA]);
+    assert_refusal(c, &e);
+    assert_untouched(&before, &scene(&img), "add");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn delete_requires_yes() {
+    let (dir, img) = fresh("delete", 8 * 1024 * 1024);
+    let img_s = img.to_str().unwrap();
+    add_one(img_s);
+
+    let before = scene(&img);
+    let (c, _, e) = run(&["delete", &format!("{img_s}:1")]);
+    assert_refusal(c, &e);
+    assert_untouched(&before, &scene(&img), "delete");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn set_requires_yes() {
+    let (dir, img) = fresh("set", 8 * 1024 * 1024);
+    let img_s = img.to_str().unwrap();
+    add_one(img_s);
+
+    let before = scene(&img);
+    let (c, _, e) = run(&["set", &format!("{img_s}:1"), "name", "data"]);
+    assert_refusal(c, &e);
+    assert_untouched(&before, &scene(&img), "set");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn mkfs_requires_yes() {
+    let (dir, img) = fresh("mkfs", 8 * 1024 * 1024);
+    let img_s = img.to_str().unwrap();
+    add_one(img_s);
+
+    let before = scene(&img);
+    let (c, _, e) = run(&["mkfs", &format!("{img_s}:1"), "ext4"]);
+    assert_refusal(c, &e);
+    assert_untouched(&before, &scene(&img), "mkfs");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn resizefs_requires_yes() {
+    let (dir, img) = fresh("resizefs", 8 * 1024 * 1024);
+    let img_s = img.to_str().unwrap();
+    add_one(img_s);
+
+    let before = scene(&img);
+    let (c, _, e) = run(&["resizefs", &format!("{img_s}:1")]);
+    assert_refusal(c, &e);
+    assert_untouched(&before, &scene(&img), "resizefs");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn undo_requires_yes() {
+    let (dir, img) = fresh("undo", 8 * 1024 * 1024);
+    let img_s = img.to_str().unwrap();
+
+    let before = scene(&img);
+    let (c, _, e) = run(&["undo", img_s]);
+    assert_refusal(c, &e);
+    assert_untouched(&before, &scene(&img), "undo");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn abandon_requires_yes() {
+    let (dir, img) = fresh("abandon", 8 * 1024 * 1024);
+    let img_s = img.to_str().unwrap();
+
+    let before = scene(&img);
+    let (c, _, e) = run(&["abandon", img_s]);
+    assert_refusal(c, &e);
+    assert_untouched(&before, &scene(&img), "abandon");
 
     let _ = std::fs::remove_dir_all(&dir);
 }

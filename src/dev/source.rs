@@ -220,6 +220,8 @@ impl WriteSource {
         crate::outcome::reset_run_facts();
         // 锁文件落在记录目录内，目录必须先于取锁就位
         crate::dev::prepare_record_dir(&src.identity, src.owner).map_err(|e| prepare_dir_fail(&src, e))?;
+        // 落点里坐着别的身份的记录时，锁文件与本次写入都不该落进那个目录
+        crate::recovery::refuse_foreign_record_slot(&src)?;
         let lock = crate::targetlock::TargetLock::acquire(&src.identity, Some(&src.fingerprint))?;
         // 锁已到手，先按路径重探身份再继续；锁前解析的身份不能直接沿用
         src.reprobe_under_lock()?;
@@ -434,6 +436,27 @@ fn check_sector_size(sector_size: u64) -> io::Result<()> {
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e.to_string()))
 }
 
+/// 一条路径上的目标节点是不是块设备。只读命令按它选打开入口；`stat` 失败时区分
+/// 「路径不存在」（`Absent`，按镜像入口打开会照实报错）与其余失败（`Undecidable`，
+/// 调用方不得把判不出的形态当成镜像）
+#[cfg(target_os = "linux")]
+pub(crate) fn target_node_is_block(path: &Path) -> crate::domain::Fact<bool> {
+    use crate::domain::Fact;
+    use std::os::unix::fs::FileTypeExt;
+
+    match std::fs::metadata(path) {
+        Ok(meta) => Fact::Known(meta.file_type().is_block_device()),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Fact::Absent,
+        Err(e) => Fact::Undecidable(format!("cannot stat {}: {e}", path.display())),
+    }
+}
+
+/// 非 Linux 没有块设备打开路径，节点一律按镜像处理
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn target_node_is_block(_path: &Path) -> crate::domain::Fact<bool> {
+    crate::domain::Fact::Known(false)
+}
+
 /// 块设备打开的附加事实：指纹、loop 映射（仅 loop 设备有）、整盘设备 ID 原文
 #[cfg(target_os = "linux")]
 type BlockOpenExtras = (TargetFingerprint, Option<(u64, u64)>, Option<String>);
@@ -441,10 +464,19 @@ type BlockOpenExtras = (TargetFingerprint, Option<(u64, u64)>, Option<String>);
 impl FileSource {
     /// 目标是否是内核标记为只读的块设备（BLKROGET）。只读设备上的任何写都会在
     /// 内核处被拒，而那个拒绝以 pwrite 的错误出现在计划步上——记录已落盘，退出码
-    /// 落进"盘可能已改变"的一档。写命令准入前在这里判掉，只读目标保持未写盘
+    /// 落进"盘可能已改变"的一档。写命令准入前在这里判掉，只读目标保持未写盘。
+    ///
+    /// 非块设备没有这一位（`Absent`）；`BLKROGET` 失败不是"可写"（`Undecidable`）
     #[cfg(target_os = "linux")]
-    pub(crate) fn read_only_block(&self) -> bool {
-        self.is_block && crate::ioctl::blkroget(&self.file).unwrap_or(false)
+    pub(crate) fn read_only_block(&self) -> crate::domain::Fact<bool> {
+        use crate::domain::Fact;
+        if !self.is_block {
+            return Fact::Absent;
+        }
+        match crate::ioctl::blkroget(&self.file) {
+            Ok(bit) => Fact::Known(bit),
+            Err(e) => Fact::Undecidable(format!("BLKROGET failed: {e}")),
+        }
     }
 
     /// 底层文件元数据。**只给这一点能力，不交出句柄**：`&File` 也实现 `Write`，
@@ -679,7 +711,7 @@ impl FileSource {
     }
 
     /// 锁内重探身份：取锁后重新从命令行路径解析目标，与打开时解析的
-    /// 身份比对。块设备比设备身份派生的 journal / checkpoint / record 落点；镜像
+    /// 身份比对。块设备比记录目录的身份键与盘键派生的 journal / lock 落点；镜像
     /// 比 canonical 路径与已打开句柄的 (dev, ino)
     pub(crate) fn reprobe_under_lock(&self) -> Result<(), crate::outcome::RunOutcome> {
         use crate::outcome::RunOutcome;
@@ -691,7 +723,7 @@ impl FileSource {
                         "the target cannot be re-read after taking the lock: {e}"
                     ))
                 })?;
-                if now.record_path() != self.identity.record_path()
+                if now.record_key != self.identity.record_key
                     || now.journal_path() != self.identity.journal_path()
                     || now.lock_path() != self.identity.lock_path()
                 {
@@ -760,8 +792,12 @@ impl FileSource {
         })
     }
 
-    /// pread 语义（不移动文件游标，&self 可调用）；不足 buf 长度报错
+    /// pread 语义（不移动文件游标，&self 可调用）；不足 buf 长度报错。
+    /// `test-faults` 构建下 `DISKEDIT_FAULT=read-at` 让读取返回 `EIO`
     pub fn read_at(&self, off: u64, buf: &mut [u8]) -> io::Result<()> {
+        if crate::movepart::fail_read_at() {
+            return Err(io::Error::other("EIO"));
+        }
         #[cfg(test)]
         if READ_FAULT.with(|f| f.get()) == Some(off) {
             return Err(io::Error::other("injected read fault"));

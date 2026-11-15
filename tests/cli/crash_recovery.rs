@@ -376,11 +376,10 @@ fn self_overlap_delta_above_chunk_crash_resume_is_byte_exact() {
     assert_eq!(&raw[6144 * 512..(6144 + 8192) * 512], &pattern[..], "relocated bytes must match the original pattern");
 }
 
-/// plan/apply 路径（批量提交）的自重叠回归：挡路分区被搬移的位移（1MiB）小于其
-/// 长度（24MiB），chunk 1MiB 共 24 块。批量提交下 durable 边界每 16 块推进一次，
-/// 中断在 chunk 17 时重做 chunk 16——其源区间恰被 chunk 17 的写覆盖（位移 = 1 chunk
-/// 的自重叠污染窗口）。停用批量后 durable 逐 chunk 推进，重做自 chunk 18 起，必须
-/// 逐字节完好
+/// plan/apply 路径的自重叠回归：挡路分区被搬移的位移（1MiB）小于其长度（24MiB），
+/// chunk 1MiB 共 24 块。中断落在块边界时，重做从最近的 durable 边界开始，其源区间
+/// 可能已被前一块的写覆盖（位移 = 1 chunk 的自重叠污染窗口）。中断后重跑必须让
+/// 搬移后的字节逐字节完好
 #[test]
 fn plan_path_self_overlap_disables_batch_commit() {
     let dir = std::env::temp_dir().join(format!("diskedit_sovb_{}", std::process::id()));

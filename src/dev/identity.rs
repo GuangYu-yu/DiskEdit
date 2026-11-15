@@ -203,9 +203,13 @@ pub struct TargetIdentity {
     pub(crate) canonical: PathBuf,
     pub(crate) journal: PathBuf,
     /// 恢复记录的落点：镜像为 `<image>.diskedit/record`；块设备为
-    /// `<state_root>/recovery/<identity-hash>/record`，身份为
-    /// `Unusable` 时为 `None`，写命令退 6
+    /// `<state_root>/recovery/<identity-hash>/record`，取不到 WWN / EUI / 可重复
+    /// serial 时为 `None`，写命令退 6
     pub(crate) record: Option<PathBuf>,
+    /// 块设备记录落点的身份键（目标 + 分区）。`record` 是它派生出的路径；
+    /// 锁后复核按键比对，两份派生结果不会各自漂移。镜像与测试构造的身份没有键
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub(crate) record_key: Option<IdentityKey>,
     /// 独占锁的落点（见 `targetlock`）。**恒有值**：块设备落在 `state_dir()` 下的盘键
     /// （整盘载体，分区号不进锁键）；镜像落在记录目录内的 `record.lock`。类型上没有
     /// "没有锁落点"这一状态——取不到锁就是拒绝，不存在无锁继续跑的路径
@@ -236,7 +240,9 @@ pub(crate) enum TargetKind {
 /// `dm/name` 是 DM 自己的退路（映射名，改名即变），不是全局物理身份，故只排在
 /// `dm/uuid` 之后；`wwid` 及其后的条目才是跨设备类型通用的那几层。
 /// `loop/backing_file` 不在列：loop 设备在进入本链之前就走专用的 backing 身份解析
-/// （见 [`TargetIdentity::resolve_block`]），不以属性值充当设备 ID
+/// （见 [`TargetIdentity::resolve_block`]），不以属性值充当设备 ID。
+/// 本序列只服务 journal / checkpoint 的落点；锁键另走 [`crate::dev::block_lock_key`]——
+/// 改名会让以 `dm/name` 派生的锁一分为二
 #[cfg(target_os = "linux")]
 pub(crate) const DEVICE_ID_ATTRS: &[&str] = &["dm/uuid", "dm/name", "md/uuid", "wwid", "device/wwid", "device/serial"];
 
@@ -463,6 +469,7 @@ impl TargetIdentity {
             canonical: canonical.to_path_buf(),
             journal: suffix_path(canonical, JOURNAL_SUFFIX),
             record: Some(record_dir.join(RECORD_NAME)),
+            record_key: None,
             lock: record_dir.join(RECORD_LOCK_NAME),
             backing_fp: None,
         }
@@ -579,10 +586,12 @@ impl TargetIdentity {
             return Self::loop_backed(path, raw);
         }
         let disk_key = block_keys(node, path).map_err(|e| e.to_string())?;
-        // 记录目录由 WWN / EUI / serial 派生的 identity-hash 决定；
-        // dm / md / 只有 major:minor 的目标没有目录，记录落点为 None，写命令退 6
-        let stable = block_stable_identity(node);
-        Ok(Self::from_block_parts(path, disk_key, stable.record_path()))
+        // 锁键单独派生：`dm/name` 不在其中，改名不会把同一台设备的锁拆成两把
+        let lock_key = block_lock_key(node).map_err(|e| e.to_string())?;
+        // 记录目录由 WWN / EUI / serial 派生的身份键决定；dm / md / 只有 major:minor
+        // 的目标没有键，记录落点为 None，写命令退 6
+        let record_key = block_stable_identity(node).ok();
+        Ok(Self::from_block_parts(path, disk_key, lock_key, record_key))
     }
 
     /// 非 Linux 平台没有 sysfs，块设备判定恒 false，本入口不会到达。非 Linux 上没有块
@@ -596,28 +605,37 @@ impl TargetIdentity {
     /// 非 loop 块设备的身份构造。**盘级**：journal / checkpoint / lock 全部按所在整设备
     /// 派生——分区号属于操作，不进落盘键，`/dev/sdb:2`（整盘节点 + 后缀）与
     /// `/dev/sdb2`（分区节点）由此共享同一现场。
-    /// 生产路径统一从 `resolve` 进入，这里只供测试构造固定身份
+    /// 生产路径统一从 `resolve_block_at`（非 Linux 测试里是 `resolve_block`）进入，
+    /// 这里只供测试构造固定身份
     #[cfg(test)]
     pub(crate) fn from_block_keys(path: &Path, disk_key: String) -> Self {
-        Self::from_block_parts(path, disk_key, None)
+        let lock_key = disk_key.clone();
+        Self::from_block_parts(path, disk_key, lock_key, None)
     }
 
-    /// 块设备身份构造：`record` 为 None 表示身份为 `Unusable`（dm / md / 无可读
-    /// 的 WWN / EUI / serial）。journal / checkpoint / 锁都按盘键派生——分区号属于
-    /// 记录归属，不进锁键；`/dev/sdb` 与 `/dev/sdb1` 由此共用一把锁，而记录目录
-    /// 仍按各自的目标身份分开
+    /// 块设备身份构造：`record_key` 为 None 表示取不到 WWN / EUI / 可重复 serial
+    /// （dm / md / 只有 major:minor）。journal / checkpoint 按盘键派生；锁按 `lock_key`
+    /// 派生——两者都是盘级，分区号不进落点，`/dev/sdb` 与 `/dev/sdb1` 由此共用一把锁，
+    /// 而记录目录仍按各自的身份键分开。锁键另走一套属性表（见 [`crate::dev::block_lock_key`]）
     #[cfg(any(target_os = "linux", test))]
-    pub(crate) fn from_block_parts(path: &Path, disk_key: String, record: Option<PathBuf>) -> Self {
+    pub(crate) fn from_block_parts(
+        path: &Path,
+        disk_key: String,
+        lock_key: String,
+        record_key: Option<IdentityKey>,
+    ) -> Self {
         let stable = key_token(&disk_key);
         let dir = state_dir();
         let journal = dir.join(format!("{stable}{JOURNAL_SUFFIX}"));
-        let lock = dir.join(format!("{stable}{LOCK_SUFFIX}"));
+        let lock = dir.join(format!("{}{LOCK_SUFFIX}", key_token(&lock_key)));
+        let record = record_key.as_ref().map(IdentityKey::record_path);
         Self {
             kind: TargetKind::Block,
             base: path.to_path_buf(),
             canonical: path.to_path_buf(),
             journal,
             record,
+            record_key,
             // 锁文件是纯运行时 artifact（重启自清也无妨），残留不构成阻挡——
             // 判据是"锁取不取得到"，不是"文件在不在"（见 targetlock）
             lock,

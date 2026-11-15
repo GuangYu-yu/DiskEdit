@@ -182,7 +182,7 @@ pub(crate) fn verify_regions_after(
 ///
 /// 比对区间就是该步骤的 compare regions，因此盘上整张表都被核过。不等说明表在
 /// 计划期读出之后被外部改动，属于"请求与现状不符"，按 3 拒绝；此时本次运行尚未写下
-/// 任何字节。重读本身失败属于环境故障，按"未发出写"上报 4。
+/// 任何字节。重读本身失败按"读不到继续所需的事实"拒绝（3）。
 pub(crate) fn verify_regions_before(src: &FileSource, expected: &[RegionStamp]) -> Result<(), RunOutcome> {
     for stamp in expected {
         let len = usize::try_from(stamp.len())

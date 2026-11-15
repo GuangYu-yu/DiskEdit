@@ -383,8 +383,9 @@ pub fn pv_size_report(part_dev: &str) -> Result<PvSizeReport, LvmError> {
     parse_pv_size_with(&out, part_dev, &|reported| device_match(part_dev, reported))
 }
 
-/// 该分区所属 VG 名；Ok(None) = 有 PV 标签但不属任何 VG（或工具返回空），
-/// Err = 基础设施失败（lvm2 缺失、命令失败、JSON 不可解析）
+/// 该分区所属 VG 名；Ok(None) = 有 PV 标签但 `vg_name` 为空（不属任何 VG），
+/// Err = 报告读不出 / 报告里没有本设备的行 / 身份不可判定（lvm2 缺失、命令失败、
+/// JSON 不可解析）
 pub fn vg_of(part_dev: &str) -> Result<Option<String>, LvmError> {
     // -o 字段名取自 man pvs
     let out = run_tool("pvs", &["--reportformat", "json", "-o", "pv_name,vg_name", part_dev])?;

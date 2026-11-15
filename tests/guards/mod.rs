@@ -56,6 +56,35 @@ pub fn rust_sources() -> Vec<(String, String)> {
     out
 }
 
+/// 去掉尾部 `#[cfg(test)] mod ...` 块之后的行。`#[cfg(test)]` 访问器不算测试模块，
+/// 仍留在生产行里；返回 (1-based 行号, 行文本)
+pub fn production_lines(text: &str) -> Vec<(usize, &str)> {
+    let lines: Vec<&str> = text.lines().collect();
+    let mut out = Vec::new();
+    let mut skipping: Option<i32> = None;
+    for (i, line) in lines.iter().enumerate() {
+        if let Some(depth) = skipping.as_mut() {
+            *depth += line.matches('{').count() as i32 - line.matches('}').count() as i32;
+            if *depth <= 0 {
+                skipping = None;
+            }
+            continue;
+        }
+        if line.trim() == "#[cfg(test)]" {
+            let opens_tests = lines[i + 1..]
+                .iter()
+                .take(2)
+                .any(|l| l.trim_start().starts_with("mod "));
+            if opens_tests {
+                skipping = Some(0);
+                continue;
+            }
+        }
+        out.push((i + 1, *line));
+    }
+    out
+}
+
 pub fn pos(text: &str, needle: &str, what: &str) -> usize {
     text.find(needle)
         .unwrap_or_else(|| panic!("{what}: expected marker {needle:?} is gone"))

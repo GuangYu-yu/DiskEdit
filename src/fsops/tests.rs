@@ -1,5 +1,7 @@
 #![allow(clippy::let_underscore_must_use)] // 清理临时文件有意忽略失败
-use super::{check_e2fsck_for_check, check_e2fsck_for_resize, check_grow_step, classify_shrink, erase_ranges, grow_target_at, leak_from, mkfs_tool, parse_fstype, parse_num_lead, partition_byte_range, settle_release, swap_rebuild_support, uuid_support, vfat_label_check, DeviceScope, Growable, MkfsFs, MountLeak, NumError, ReleaseRunOutcome, ShrinkVerify, ToolSupport, Unusable, UuidSupport};
+use super::{check_e2fsck_for_check, check_e2fsck_for_resize, check_grow_step, check_label_limits, classify_shrink, erase_ranges, grow_target_at, leak_from, mkfs_tool, parse_fstype, parse_num_lead, partition_byte_range, settle_release, swap_rebuild_support, uuid_from_output, uuid_readback_verdict, uuid_support, vfat_label_check, DeviceScope, Growable, MkfsFs, MountLeak, NumError, ReleaseRunOutcome, ShrinkVerify, ToolSupport, Unusable, UuidRequest, UuidSupport};
+#[cfg(target_os = "linux")]
+use super::{run, run_write};
 use super::FsError;
 use crate::dev::FileSource;
 use crate::fsid::{self, ContentKind, FsKind};
@@ -55,6 +57,17 @@ pub(crate) fn vfat_label_rejects_non_ascii_without_calling_it_too_long() {
     let err = vfat_label_check("ÄÖÜßé").unwrap_err().to_string();
     assert!(err.contains("DOS code page"), "{err}");
     assert!(!err.contains("11-byte"), "{err}");
+}
+
+/// ext 超级块的卷标字段是 `s_volume_name[16]`，按字节存放且不要求结尾 NUL：
+/// 16 字节通过，17 字节在本层拒绝，不把判决留给 tune2fs 的参数错误
+#[test]
+pub(crate) fn ext_label_admits_sixteen_bytes_and_rejects_seventeen() {
+    let ext = Some(ContentKind::Filesystem(FsKind::Ext));
+    assert!(check_label_limits(ext, "ABCDEFGHIJKLMNOP").is_ok());
+    let err = check_label_limits(ext, "ABCDEFGHIJKLMNOPQ").unwrap_err().to_string();
+    assert!(err.contains("16-byte"), "{err}");
+    assert!(err.contains("17 bytes"), "{err}");
 }
 
 /// swap 的 label/uuid 走 swaplabel（util-linux）：能力判定归 ExplicitOnly（只收显式值，
@@ -287,7 +300,7 @@ pub(crate) fn unidentified_region_is_refused_with_a_route_forward() {
             assert!(m.contains("not identified"), "{m}");
             assert!(m.contains("its own tool"), "{m}");
         }
-        Err(e) => panic!("the refusal must stay in the unsupported domain (refused/10), got {e}"),
+        Err(e) => panic!("the refusal must stay in the unsupported domain (refused/3), got {e}"),
         Ok(()) => panic!("an unidentified region must not pass the preflight"),
     }
 }
@@ -552,6 +565,68 @@ pub(crate) fn shrink_read_back_rejects_unusable_values() {
     assert_eq!(parse_num_lead("total_bytes             314572800\n", "total_bytes").unwrap(), 314_572_800);
 }
 
+/// 四个回读工具在 `LC_ALL=C` 下的输出样本（tune2fs 1.47.2 / xfsprogs / btrfs-progs v6.17.1 /
+/// util-linux）：标签行各不相同，取值一律归一成小写
+#[test]
+pub(crate) fn parse_uuid_read_back_output_formats() {
+    let ext = "Filesystem volume name:   <none>\nFilesystem UUID:          4d3c2b1a-0f1e-4d5c-9b8a-776655443322\n";
+    assert_eq!(
+        uuid_from_output(Some(ContentKind::Filesystem(FsKind::Ext)), ext).unwrap(),
+        "4d3c2b1a-0f1e-4d5c-9b8a-776655443322"
+    );
+    let xfs = "UUID = 4d3c2b1a-0f1e-4d5c-9b8a-776655443322\n";
+    assert_eq!(
+        uuid_from_output(Some(ContentKind::Filesystem(FsKind::Xfs)), xfs).unwrap(),
+        "4d3c2b1a-0f1e-4d5c-9b8a-776655443322"
+    );
+    let swap = "LABEL:   swap\nUUID:    4d3c2b1a-0f1e-4d5c-9b8a-776655443322\n";
+    assert_eq!(
+        uuid_from_output(Some(ContentKind::Swap), swap).unwrap(),
+        "4d3c2b1a-0f1e-4d5c-9b8a-776655443322"
+    );
+    // btrfs 的 uuid 与 Label 同在一行，取 `uuid:` 之后的第一个词
+    let btrfs = "Label: none  uuid: 4d3c2b1a-0f1e-4d5c-9b8a-776655443322\n\tTotal devices 1 FS bytes used 1.00MiB\n";
+    assert_eq!(
+        uuid_from_output(Some(ContentKind::Filesystem(FsKind::Btrfs)), btrfs).unwrap(),
+        "4d3c2b1a-0f1e-4d5c-9b8a-776655443322"
+    );
+    // 没有标签行不是"空值"：调用点据此报工具没打印 uuid，而不是让它冒充核对通过
+    assert_eq!(uuid_from_output(Some(ContentKind::Filesystem(FsKind::Ext)), "no uuid here\n"), None);
+    // ntfs 没有回读工具
+    assert_eq!(uuid_from_output(Some(ContentKind::Filesystem(FsKind::Ntfs)), ext), None);
+}
+
+/// "工具退 0 但没写"在两类请求上各有一个失败面：显式值回读到旧值、随机值回读到旧值。
+/// 只有确认新值就位才算设置成功——工具的成功退出码本身不是证据
+#[test]
+pub(crate) fn uuid_read_back_rejects_an_unchanged_value() {
+    let old = "00000000-0000-0000-0000-000000000001";
+    let want = "11111111-1111-1111-1111-111111111111";
+    let explicit = UuidRequest::Explicit(want.to_string());
+
+    uuid_readback_verdict(&explicit, None, Some(want)).expect("显式值回读到同一值即成功");
+    // 大小写不敏感：小写化只发生在解析侧，调用方给的值可能是大写
+    uuid_readback_verdict(
+        &UuidRequest::Explicit(want.to_ascii_uppercase()),
+        None,
+        Some(want),
+    )
+    .expect("UUID 文本按不区分大小写比较");
+    uuid_readback_verdict(&explicit, None, Some(old))
+        .expect_err("显式值回读仍旧值，说明工具退 0 却没写");
+
+    // 随机值：与写前不同才算换过
+    uuid_readback_verdict(&UuidRequest::NewRandom, Some(old), Some(want)).expect("随机值已变");
+    uuid_readback_verdict(&UuidRequest::NewRandom, Some(old), Some(old))
+        .expect_err("随机值回读未变，说明工具退 0 却没写");
+    // 没有基线（该类型读不出写前值）时只能接受回读值，不能反过来说它没变
+    uuid_readback_verdict(&UuidRequest::NewRandom, None, Some(want)).expect("无基线不构成失败");
+
+    // 没有回读工具（ntfs serial）：无从核对，不做判定
+    uuid_readback_verdict(&explicit, None, None).expect("无回读出口的路径不做核对");
+    uuid_readback_verdict(&UuidRequest::NewRandom, Some(old), None).expect("无回读出口的路径不做核对");
+}
+
 /// 缩容工具成功返回后的回读判定：正常（含向下取整）、超出请求值、读不出来三种结局
 /// 各有各的出路，不能塌缩成"成功/失败"
 #[test]
@@ -589,4 +664,21 @@ pub(crate) fn shrink_read_back_decides_between_within_over_and_unverifiable() {
     assert_eq!(p.part, 3);
     assert_eq!(p.hint, hint);
     assert!(p.detail.contains("could not be read back"), "{:?}", p.detail);
+}
+
+/// 写事实的置位点在 spawn 成功之后：只读调用不置位，`run_write` 才置位。
+/// 这是"工具退 0 不等于写了盘"在归责侧的对照点——置位描述的是"可能写过"，
+/// 不区分工具最终是否成功
+#[cfg(target_os = "linux")]
+#[test]
+pub(crate) fn run_write_marks_the_target_once_the_process_starts() {
+    crate::outcome::reset_run_facts();
+    run("true", &[] as &[&str]).expect("true exits 0");
+    assert!(!crate::outcome::target_may_have_been_written(), "只读调用不该置写事实");
+
+    crate::outcome::reset_run_facts();
+    run_write("true", &[] as &[&str]).expect("true exits 0");
+    assert!(crate::outcome::target_may_have_been_written(), "run_write 在进程起来后即置位");
+
+    crate::outcome::reset_run_facts();
 }

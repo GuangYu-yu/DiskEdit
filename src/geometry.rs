@@ -18,9 +18,9 @@ fn invalid(msg: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, msg.into())
 }
 
-/// 复核失败的两类事实：盘上表已被外部改写（改参数或重跑能解决 → 拒绝 10），
-/// 或表读不出来（环境故障 → 基础设施 30）。两者都不放行；类型上分开，
-/// 使 30 不会被折叠成 10
+/// 复核失败的两类事实：盘上表已被外部改写（改参数或重跑能解决），或表读不出来
+/// （读不到继续所需的事实）。两者都不放行，出口都是拒绝（3）；类型上分开只为让
+/// 原因说得清是哪一类，不改变退出码
 enum TableCheck {
     Changed(String),
     Unreadable(String),
@@ -259,7 +259,8 @@ impl ValidatedGeometry {
 
     /// 首写前的复核，出口保留 [`TableCheck`] 的两类分类。与
     /// [`Self::ensure_entries_unchanged`] 共用同一份比对实现，只是错误表示不同：
-    /// 写盘前的调用点要能落到"拒绝 10 / 基础设施 30"，已越界的 io 调用点只要一个原因
+    /// 调用点能区分"表被改"与"表读不出"（出口同为拒绝 3，区别在原因文案），
+    /// 已越界的 io 调用点只要一个原因
     pub(crate) fn ensure_entries_unchanged_fail(&self, src: &crate::dev::FileSource) -> Result<(), RunOutcome> {
         self.check_entries(src).map_err(TableCheck::into_fail)
     }
