@@ -290,7 +290,7 @@ pub(crate) fn size_read_back_hint(kind: FsKind) -> String {
 /// 跑一个只读查询工具并取回 stdout+stderr 的全文本：查询的成败由调用方按各自的输出格式
 /// 判定（它们要解析的字段不同），此处只保证"工具跑起来了且成功退出"
 pub(crate) fn run_text(tool: &str, args: &[&str]) -> io::Result<String> {
-    let out = run(tool, args).map_err(io::Error::from)?;
+    let out = run_read(tool, args).map_err(io::Error::from)?;
     if !out.status.success() {
         return Err(io::Error::from(FsError::command(tool, &out)));
     }

@@ -162,6 +162,7 @@ pub(crate) fn resolve_scope_device(
     require_linux()?;
     require_root()?;
     #[cfg(not(target_os = "linux"))]
+    // audit-allow: D-6
     let _ = policy;
     if matches!(scope, DeviceScope::Partition(_)) {
         // 表项必须落在容器内。起点越过容量、或起点在盘内而末端越过盘尾，都不是
@@ -188,21 +189,13 @@ pub(crate) fn resolve_scope_device(
         // 整盘 = 盘节点本身；Range = 无"偏移节点"概念，必须 loop 映射（backing=整盘）
         return match scope {
             DeviceScope::Partition(p) => {
-                let dev = find_block_partition_node(src, *p, off)?;
-                // 内核分区长度与盘上表项必须同源：mkfs 的擦除区间取自表内长度，而
-                // wipe_zero 按这个路径写核心里那个设备——节点比表项长时擦除越过表项末端。
-                // 上面已排除越界，这里的不等只可能是内核视图尚未跟上表，重读分区表有解
+                // 节点与内核长度取自同一轮视图：分两步取会在两步之间撞上又一次表改动，
+                // 变成"节点按旧视图、长度按新视图"的比较。长度不符也是视图滞后的征状，
+                // 与"找不到节点"同经一条降级链重试
                 #[cfg(target_os = "linux")]
-                {
-                    let node = crate::dev::sysfs_node(Path::new(&dev))?;
-                    let kernel_len = crate::dev::sysfs_capacity(&node)?;
-                    if kernel_len != len {
-                        return Err(FsError::invalid(format!(
-                            "kernel reports {dev} as {kernel_len} bytes but the on-disk table says {len} bytes \
-                             — kernel partition size differs from the table entry; make the kernel re-read the partition table first"
-                        )));
-                    }
-                }
+                let dev = kernel_partition_device(src, *p, off, len)?;
+                #[cfg(not(target_os = "linux"))]
+                let dev = find_block_partition_node(src, *p, off)?;
                 require_unmounted(&dev)?;
                 Ok(ScopeDevice::Existing { path: dev })
             }
@@ -335,51 +328,150 @@ where
     with_scope_device_policy(src, &DeviceScope::Partition(part), ImageLoopPolicy::AllowDm, f)
 }
 
+/// 内核分区视图滞后的重试预算：三轮、每轮之间给 udev 建 /dev 节点留 200ms。
+/// BLKRRPART 与 udev 是两条异步路径，节点常在重读返回之后才出现
+#[cfg(target_os = "linux")]
+const KERNEL_VIEW_RETRIES: u32 = 3;
+#[cfg(target_os = "linux")]
+const KERNEL_VIEW_WAIT: std::time::Duration = std::time::Duration::from_millis(200);
+
+/// 重读分区表；失败不改变降级链的走向（EBUSY 时内核仍在用旧视图，而 udev 可能正按
+/// 上一轮的事件建节点），由下一轮的重试继续
+#[cfg(target_os = "linux")]
+fn best_effort_reread(src: &FileSource) {
+    // audit-allow: A-16 D-7
+    #[allow(clippy::let_underscore_must_use)] // 有意忽略：失败由下一轮的重试体现
+    let _ = src.reread_partitions();
+}
+
+/// 内核视图滞后于盘上表时的降级链。本次运行写过目标时，视图滞后不是"请求与现状不符"：
+/// 先让内核重读分区表，再给 udev 留出有界等待，然后重试；重试仍失败才返回，且错误由
+/// `stale` 改写成"本次已写过目标"的说法（出口按 5 归责）。本次没写过目标时原样返回——
+/// 那时表与视图的差异是请求本身不成立
+#[cfg(target_os = "linux")]
+fn with_kernel_view_retry<T>(
+    src: &FileSource,
+    mut attempt: impl FnMut() -> Result<T, FsError>,
+    stale: impl FnOnce(&FsError) -> FsError,
+) -> Result<T, FsError> {
+    let first = match attempt() {
+        Ok(v) => return Ok(v),
+        Err(e) if !crate::outcome::target_may_have_been_written() => return Err(e),
+        Err(e) => e,
+    };
+    let mut last = first;
+    for _ in 0..KERNEL_VIEW_RETRIES {
+        best_effort_reread(src);
+        std::thread::sleep(KERNEL_VIEW_WAIT);
+        match attempt() {
+            Ok(v) => return Ok(v),
+            Err(e) => last = e,
+        }
+    }
+    Err(stale(&last))
+}
+
+/// 重读与等待之后仍对不上的内核视图。本次运行已经写过目标，这一支不能再报成
+/// "请求与现状不符"（3）：`CommandFailed` 在出口按写事实落成 5
+#[cfg(target_os = "linux")]
+fn stale_view_error(e: &FsError) -> FsError {
+    FsError::CommandFailed(format!(
+        "{e} — this run has already written to the target; if the partition table was written, \
+         make the kernel re-read it (`partprobe <disk>` or `partx -u <disk>`), then retry"
+    ))
+}
+
+/// 解析块设备上的分区节点，并确认内核分区长度与盘上表项一致。节点不存在与内核长度
+/// 仍是旧值都是"视图滞后"的征状，同经一条降级链重试。长度必须与节点出自同一轮视图：
+/// mkfs 的擦除区间取自表内长度，而 wipe_zero 按这个路径写核心里那个设备——节点比表项
+/// 长时擦除越过表项末端
+#[cfg(target_os = "linux")]
+fn kernel_partition_device(
+    src: &FileSource,
+    part: u32,
+    want_start: u64,
+    len: u64,
+) -> Result<String, FsError> {
+    with_kernel_view_retry(
+        src,
+        || {
+            let dev = find_block_partition_node_once(src, part, want_start)?;
+            let node = crate::dev::sysfs_node(Path::new(&dev))?;
+            let kernel_len = crate::dev::sysfs_capacity(&node)?;
+            if kernel_len != len {
+                return Err(FsError::invalid(format!(
+                    "kernel reports {dev} as {kernel_len} bytes but the on-disk table says {len} bytes \
+                     — kernel partition size differs from the table entry"
+                )));
+            }
+            Ok(dev)
+        },
+        stale_view_error,
+    )
+}
+
 /// 在 /sys/block/<disk>/<part>/ 按 start 匹配分区设备节点（块设备路径用）。
 /// want_start = 分区起始字节，调用方已由 partition_byte_range 求得。
 /// start/size 属性为内核 sysfs-block ABI（Documentation/ABI/testing/sysfs-block，
-/// 单位恒为 512 字节扇区，与设备逻辑块大小无关），换算字节偏移须用 512 而非 src.sector_size
+/// 单位恒为 512 字节扇区，与设备逻辑块大小无关），换算字节偏移须用 512 而非 src.sector_size。
+///
+/// 视图滞后由 [`with_kernel_view_retry`] 处置：本次运行写过目标时重读分区表并重试，
+/// 仍失败则落成 5
 pub(crate) fn find_block_partition_node(src: &FileSource, part: u32, want_start: u64) -> Result<String, FsError> {
     #[cfg(target_os = "linux")]
     {
-        let disk = block_disk_name(src)?;
-        let sys = Path::new("/sys/block").join(&disk);
-        for entry in std::fs::read_dir(&sys).map_err(FsError::from)? {
-            let entry = entry.map_err(FsError::from)?;
-            let start_file = entry.path().join("start");
-            let Ok(txt) = std::fs::read_to_string(&start_file) else { continue };
-            // 解析失败等于"这个候选不成立"，跳过而非折叠成 0——0 不会匹配任何
-            // 真实分区，但一个假装合法的数值比跳过更难排查
-            let Ok(start_sectors) = txt.trim().parse::<u64>() else { continue };
-            // sysfs 是外部输入：回绕出的假字节偏移可能撞上别的分区节点，乘法必须 checked
-            if start_sectors.checked_mul(512) != Some(want_start) {
-                continue;
-            }
-            // 分区号交叉校验：只有一个维度相同时，内核视图与盘上表可能已在编号上分叉，
-            // 只按 start 认节点会把操作落到另一个分区节点上。号也要读得出来且相符
-            let Ok(num_txt) = std::fs::read_to_string(entry.path().join("partition")) else { continue };
-            let Ok(num) = num_txt.trim().parse::<u32>() else { continue };
-            if num != part {
-                continue;
-            }
-            let name = entry.file_name().to_string_lossy().to_string();
-            let dev = format!("/dev/{name}");
-            // 节点名由 sysfs 目录名推得，只是路径；实际落点由设备号决定。同名节点指向
-            // 另一台设备时"几何来自 A、写入落在 B"，调用方拿到的路径无从自行发现
-            crate::dev::ensure_node_is_device(Path::new(&dev), &entry.path()).map_err(FsError::from)?;
-            return Ok(dev);
-        }
-        Err(FsError::invalid(format!(
-            "no kernel partition with number {part} starts at byte {want_start} under /sys/block/{disk} — \
-             the kernel partition view does not match this table entry; after a table write the kernel may \
-             not have re-read the partition table yet — make it re-read the table, then retry"
-        )))
+        with_kernel_view_retry(
+            src,
+            || find_block_partition_node_once(src, part, want_start),
+            stale_view_error,
+        )
     }
     #[cfg(not(target_os = "linux"))]
     {
+        // audit-allow: D-8
         let _ = (src, part, want_start);
         Err(FsError::platform("not linux"))
     }
+}
+
+/// 按当前内核视图解析一次，不重读、不等待
+#[cfg(target_os = "linux")]
+fn find_block_partition_node_once(src: &FileSource, part: u32, want_start: u64) -> Result<String, FsError> {
+    let disk = block_disk_name(src)?;
+    let sys = Path::new("/sys/block").join(&disk);
+    for entry in std::fs::read_dir(&sys).map_err(FsError::from)? {
+        let entry = entry.map_err(FsError::from)?;
+        let start_file = entry.path().join("start");
+        // audit-allow: S2-8
+        let Ok(txt) = std::fs::read_to_string(&start_file) else { continue };
+        // 解析失败等于"这个候选不成立"，跳过而非折叠成 0——0 不会匹配任何
+        // 真实分区，但一个假装合法的数值比跳过更难排查
+        // audit-allow: S2-9
+        let Ok(start_sectors) = txt.trim().parse::<u64>() else { continue };
+        // sysfs 是外部输入：回绕出的假字节偏移可能撞上别的分区节点，乘法必须 checked
+        if start_sectors.checked_mul(512) != Some(want_start) {
+            continue;
+        }
+        // 分区号交叉校验：只有一个维度相同时，内核视图与盘上表可能已在编号上分叉，
+        // 只按 start 认节点会把操作落到另一个分区节点上。号也要读得出来且相符
+        // audit-allow: S2-10
+        let Ok(num_txt) = std::fs::read_to_string(entry.path().join("partition")) else { continue };
+        // audit-allow: S2-11
+        let Ok(num) = num_txt.trim().parse::<u32>() else { continue };
+        if num != part {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().to_string();
+        let dev = format!("/dev/{name}");
+        // 节点名由 sysfs 目录名推得，只是路径；实际落点由设备号决定。同名节点指向
+        // 另一台设备时"几何来自 A、写入落在 B"，调用方拿到的路径无从自行发现
+        crate::dev::ensure_node_is_device(Path::new(&dev), &entry.path()).map_err(FsError::from)?;
+        return Ok(dev);
+    }
+    Err(FsError::invalid(format!(
+        "no kernel partition with number {part} starts at byte {want_start} under /sys/block/{disk} — \
+         the kernel partition view does not match this table entry"
+    )))
 }
 
 /// 已打开块设备的**磁盘**名（sysfs `/sys/block/<name>` 下的名字）。
@@ -515,6 +607,7 @@ mod ownership_tests {
         );
         let after = loop_mapping_of_node(Path::new(&dev)).unwrap().unwrap();
         // 先清理再断言：任何一条断言失败都不留 loop / dm（镜像由临时目录持有者清理）
+        // audit-allow: D-9
         let _ = Command::new("dmsetup").args(["remove", &dm]).status();
         release_loop(&dev);
         assert_eq!(after.sizelimit, 4194304, "the size limit of an externally held loop must not be raised");

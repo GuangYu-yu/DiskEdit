@@ -74,7 +74,7 @@ Identification (`info`): ext, xfs, btrfs, f2fs, ntfs, vfat, exfat, swap, squashf
 | swap | ✓ | ✓ | — | — | ✓ | ✓ |
 | lvm2_pv | — | ✓ | — | — | — | — |
 
-- `check` is read-only in every case (`e2fsck -n`, `ntfsfix -n`, `xfs_repair -n`, `btrfs check`, `fsck.vfat -n`, `fsck.exfat -n`, `fsck.f2fs`); a non-zero tool exit is a failed check (exit code 3).
+- `check` runs a read-only consistency check for every type except f2fs (`e2fsck -n`, `ntfsfix -n`, `xfs_repair -n`, `btrfs check`, `fsck.vfat -n`, `fsck.exfat -n`, `fsck.f2fs`); a non-zero tool exit is a failed check, exit 3 — or exit 5 for f2fs, which can rewrite global metadata even without `-f`.
 - `resize` only grows. Shrinking is `resize-part --end`: it shrinks the filesystem offline first, then moves the boundary. `resizefs` only grows, except the online btrfs form, which can also shrink. If the filesystem cannot shrink, the table is left alone.
 - `mkfs` refuses an LVM PV; use `pvcreate(8)` / `wipefs(8)`.
 - `ntfs` UUID can only be regenerated (`ntfslabel --new-serial`), not set; that serial is not the Windows volume UUID.

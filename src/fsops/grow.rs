@@ -196,7 +196,7 @@ fn resize_fs_step(src: &mut WriteSource, scope: &DeviceScope, fstype: Option<Con
             let (off, len) = scope_byte_range(src, scope)?;
             with_write_scope(src, scope, off, len, |dev| {
                 // 先 --no-action 演练，成功才真改，失败零副作用
-                let out = run("ntfsresize", &["-f", "-f", "--no-action", dev])?;
+                let out = run_read("ntfsresize", &["-f", "-f", "--no-action", dev])?;
                 if !out.status.success() {
                     return Err(FsError::CommandFailed(format!(
                         "ntfsresize simulation failed: {}",
@@ -217,8 +217,9 @@ fn resize_fs_step(src: &mut WriteSource, scope: &DeviceScope, fstype: Option<Con
                 // 预检：fsck.f2fs 默认不修复（-f/-p 才修；-a 只在内核报告 bug 时才检查，
                 // 默认禁用，man v1.16.0）。例外：SIT 段类型不一致时 force 置位，无参也把
                 // 全局元数据写回（fsck/fsck.c 的 force 分支，--dry-run 挡不住）。退出码
-                // 负数表示失败（-1 表现为 255），非 0 即拒绝 resize
-                let out = run("fsck.f2fs", &[dev])?;
+                // 负数表示失败（-1 表现为 255），非 0 即拒绝 resize。例外路径使这一步
+                // 可能写盘，故按"可能写"启动，失败不能被报成"未改动"
+                let out = run_write("fsck.f2fs", &[dev])?;
                 if !out.status.success() {
                     return Err(FsError::CommandFailed(format!(
                         "fsck.f2fs failed ({}), refuse resize",
@@ -345,6 +346,7 @@ pub(crate) fn mount_point() -> PathBuf {
 /// 挂载点名字里的不可预测部分
 fn mount_token() -> u64 {
     #[cfg(unix)]
+    // audit-allow: S2-14
     if let Ok(mut f) = std::fs::File::open("/dev/urandom") {
         let mut b = [0u8; 8];
         if std::io::Read::read_exact(&mut f, &mut b).is_ok() {
@@ -503,6 +505,7 @@ impl MountGuard {
     /// 删掉本次创建的挂载点目录：路径必须仍解析到创建时那个 inode，且此刻为空
     #[cfg(unix)]
     fn remove_own_point(&self) {
+        // audit-allow: S2-21
         let Ok(own) = self.dir.metadata().map(|m| {
             use std::os::unix::fs::MetadataExt;
             (m.dev(), m.ino())

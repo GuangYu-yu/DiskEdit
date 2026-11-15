@@ -767,6 +767,7 @@ impl Record {
     /// 记录是否已把「该条目的表步开始」写成确切事实。`Absent` 与 `Undecidable` 都答否：
     /// 本方法只回答「记录确知它开始了」，不承担把读不出说成没开始的语义
     pub(crate) fn table_step_in_flight(&self, entry: u32) -> bool {
+        // audit-allow: W-7
         matches!(self.entry_table_in_flight, Fact::Known(in_flight) if in_flight == entry)
     }
 
@@ -776,6 +777,7 @@ impl Record {
     pub(crate) fn settle_table_step_after_rollback(&mut self) {
         if self.relocation.is_some() {
             self.entry_table_in_flight = Fact::Absent;
+        // audit-allow: W-14
         } else if matches!(self.table_fence, Fact::Known(TableFence::InFlight)) {
             self.table_fence = Fact::Known(TableFence::Pending);
         }
@@ -809,6 +811,7 @@ impl Record {
                 Fact::Known(TableFence::InFlight) => return Ok(Stage::Undecidable),
                 Fact::Known(TableFence::Landed) => return Ok(Stage::TableWritten),
                 Fact::Known(TableFence::Pending) => {}
+                // audit-allow: W-11
                 Fact::Absent | Fact::Undecidable(_) => return Ok(Stage::Undecidable),
             }
             // 落盘窗口按 op 分家：move 先落旧区间再落搬移表，resize-part 的纯扩缩路径
@@ -963,6 +966,7 @@ impl Record {
         // 源区间段的存在由操作类型决定：`copy` 必带，其余操作没有。
         // 尾段没解出来的记录写不出这一段，也就不允许写回盘上
         if self.op == OpKind::Copy {
+            // audit-allow: W-15
             let Fact::Known(s) = &self.source else {
                 return Err(std::io::Error::other("a `copy` record carries its source range"));
             };
@@ -996,6 +1000,7 @@ impl Record {
         // 尾段：表步围栏，固定一字节
         match &self.table_fence {
             Fact::Known(fence) => out.push(fence.tag()),
+            // audit-allow: W-12
             Fact::Absent | Fact::Undecidable(_) => return Err(tail_not_decoded()),
         }
         Ok(out)

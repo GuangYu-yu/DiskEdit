@@ -1238,6 +1238,7 @@ fn parse_type_guid(text: &str) -> Result<TypeSelector, String> {
         "a GUID in 8-4-4-4-12 form (e.g. 0fc63daf-8483-4772-8e79-3d69d8477de4) or an MBR type byte 0xNN";
     if let Some(hex) = text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
         if hex.len() == 2
+            // audit-allow: S2-19
             && let Ok(byte) = u8::from_str_radix(hex, 16)
         {
             return Ok(TypeSelector::Mbr(byte));

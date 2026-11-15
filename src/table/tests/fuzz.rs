@@ -136,6 +136,7 @@ fn gpt_fixture() -> Vec<u8> {
     let path = src.path.clone();
     let data = std::fs::read(&path).unwrap();
     drop(src);
+    // audit-allow: D-24
     let _ = std::fs::remove_file(&path);
     data
 }
@@ -255,6 +256,7 @@ fn gpt_header_fuzz_fixed_seed() {
 
         let path = src.path.clone();
         drop(src);
+        // audit-allow: D-25
         let _ = std::fs::remove_file(&path);
     }
 }

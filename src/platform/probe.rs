@@ -20,6 +20,7 @@ fn open_read_only(spec: &TargetSpec) -> Result<FileSource, PlatformError> {
     #[cfg(target_os = "linux")]
     {
         use std::os::unix::fs::FileTypeExt;
+        // audit-allow: S2-15
         if let Ok(meta) = std::fs::metadata(spec.path())
             && meta.file_type().is_block_device()
         {

@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # `check` 退出码的运行时测试用例。
 #
-# 四码：工具退出 0 → 0；工具非零 → 3；工具不在 PATH 或路径不存在 → 6；
-# 已找到但启动失败 → 4。工具表的搜索目录在编译期钉死（src/fsops/env.rs 的 TOOL_PATH），
+# 五种结果：工具退出 0 → 0；只读检查工具非零 → 3；`fsck.f2fs` 非零 → 5（它启动过
+# 就可能已改全局元数据）；工具不在 PATH 或路径不存在 → 6；已找到但启动失败 → 4。
+# 脚本只用 e2fsck，5 这一支要靠 f2fs 卷，不在此覆盖。
+# 工具表的搜索目录在编译期钉死（src/fsops/env.rs 的 TOOL_PATH），
 # 调用环境的 PATH 不参与解析，所以后两条只能换表来造：
 #   BFKO 的表只有假工具目录 → 把 losetup 等真工具 symlink 进去，e2fsck 真的缺失 → 6
 #   BFK  的表是假目录 + 系统目录 → 假目录里放带 x 位的非可执行文件 → 启动失败 → 4
@@ -37,7 +39,7 @@ sidecar_list() {
     return 0
 }
 
-# 镜像上残留的 loop：四码的每条路径都必须在返回前释放自己建的 loop
+# 镜像上残留的 loop：每条退出路径都必须在返回前释放自己建的 loop
 loops_on_target() {
     losetup -j "$T" -n -O NAME 2>/dev/null | wc -l
 }

@@ -9,30 +9,32 @@ pub fn check_fs(src: &FileSource, part: u32, fstype: Option<ContentKind>) -> Res
             "target is an LVM2 PV, not a filesystem — PV metadata is checked with pvck(8), not fsck",
         ));
     }
-    let cmd: (&str, Vec<&str>) = match fstype {
+    // 访问方式与工具同表：`fsck.f2fs` 无参也可能写回全局元数据（见上一条），这一臂
+    // 按"可能写"声明；其余各臂都带明确的只读开关
+    let (tool, args, access): (&str, Vec<&str>, ToolAccess) = match fstype {
         // e2fsck -n：man e2fsck(8)「Open the file system read-only, and assume an
         // answer of `no' to all questions」；ntfsfix -n：man ntfsfix(8)
         // 「Do not write anything, just show what would have been done」
-        Some(ContentKind::Filesystem(FsKind::Ext)) => ("e2fsck", vec!["-n"]),
-        Some(ContentKind::Filesystem(FsKind::Ntfs)) => ("ntfsfix", vec!["-n"]),
+        Some(ContentKind::Filesystem(FsKind::Ext)) => ("e2fsck", vec!["-n"], ToolAccess::ReadsOnly),
+        Some(ContentKind::Filesystem(FsKind::Ntfs)) => ("ntfsfix", vec!["-n"], ToolAccess::ReadsOnly),
         // 无参：默认不修复，但 SIT 段类型不一致时 fsck.f2fs 的 force 分支会写回全局元数据
         //（--dry-run 挡不住，见 DETAILS_CHECK）
-        Some(ContentKind::Filesystem(FsKind::F2fs)) => ("fsck.f2fs", vec![]),
-        Some(ContentKind::Filesystem(FsKind::Xfs)) => ("xfs_repair", vec!["-n"]),
-        Some(ContentKind::Filesystem(FsKind::Btrfs)) => ("btrfs", vec!["check"]),
-        Some(ContentKind::Filesystem(FsKind::Vfat)) => ("fsck.vfat", vec!["-n"]),
+        Some(ContentKind::Filesystem(FsKind::F2fs)) => ("fsck.f2fs", vec![], ToolAccess::WritesTarget),
+        Some(ContentKind::Filesystem(FsKind::Xfs)) => ("xfs_repair", vec!["-n"], ToolAccess::ReadsOnly),
+        Some(ContentKind::Filesystem(FsKind::Btrfs)) => ("btrfs", vec!["check"], ToolAccess::ReadsOnly),
+        Some(ContentKind::Filesystem(FsKind::Vfat)) => ("fsck.vfat", vec!["-n"], ToolAccess::ReadsOnly),
         // fsck.exfat man 未定义无参默认行为（存在 -r 交互修复），显式 -n = 仅检查不修复
-        Some(ContentKind::Filesystem(FsKind::Exfat)) => ("fsck.exfat", vec!["-n"]),
+        Some(ContentKind::Filesystem(FsKind::Exfat)) => ("fsck.exfat", vec!["-n"], ToolAccess::ReadsOnly),
         other => return Err(FsError::unsupported(format!(
             "no check tool wired for {}",
             content_name(other.unwrap_or(ContentKind::Unknown))
         ))),
     };
     with_partition_device(src, part, |dev| {
-        let mut args = cmd.1;
+        let mut args = args;
         args.push(dev);
-        let out = run(cmd.0, &args)?;
-        if cmd.0 == "e2fsck" {
+        let out = run_with(tool, &args, access)?;
+        if tool == "e2fsck" {
             // check 不修复：e2fsck 以 -n 跑，退出非零即检查失败。
             // 被信号杀死时没有退出码：那是基础设施故障，不能拿 -1 冒充一个退出码
             return match out.status.code() {
@@ -41,7 +43,7 @@ pub fn check_fs(src: &FileSource, part: u32, fstype: Option<ContentKind>) -> Res
             };
         }
         if !out.status.success() {
-            return Err(FsError::command(cmd.0, &out));
+            return Err(FsError::command(tool, &out));
         }
         Ok(())
     })
@@ -301,7 +303,7 @@ fn read_uuid(fstype: Option<ContentKind>, dev: &str) -> Result<Option<String>, F
         Some(ContentKind::Swap) => ("swaplabel", vec![dev]),
         _ => return Ok(None),
     };
-    let out = run(tool, &args)?;
+    let out = run_read(tool, &args)?;
     if !out.status.success() {
         return Err(FsError::CommandFailed(format!(
             "{tool} {} failed while reading the uuid back ({})",
@@ -332,7 +334,16 @@ pub(crate) fn uuid_from_output(fstype: Option<ContentKind>, text: &str) -> Optio
         _ => return None,
     };
     let value = raw.trim();
-    (!value.is_empty()).then(|| value.to_ascii_lowercase())
+    (!value.is_empty()).then(|| normalize_uuid(value))
+}
+
+/// UUID 的比较口径：去掉分隔符与大括号、转小写。写入期望值与工具回读值都经它，
+/// 同一卷在连字符、`{}`、大小写上的差异不会被读成"写后值不对"
+pub(crate) fn normalize_uuid(s: &str) -> String {
+    s.chars()
+        .filter(|c| !matches!(c, '-' | '{' | '}'))
+        .flat_map(char::to_lowercase)
+        .collect()
 }
 
 fn labelled_line(text: &str, prefix: &str) -> Option<String> {
@@ -342,8 +353,8 @@ fn labelled_line(text: &str, prefix: &str) -> Option<String> {
 }
 
 /// 回读判定。`before` 是写前值（显式值不需要），`after` 是写后值；`None` 表示该类型
-/// 没有回读工具、无从核对（ntfs）。显式值按不区分大小写相等，随机值必须与写前不同——
-/// "工具退 0 但没写"恰好会在这两种判定上失败
+/// 没有回读工具、无从核对（ntfs）。显式值按 [`normalize_uuid`] 的口径相等，随机值必须
+/// 与写前不同——"工具退 0 但没写"恰好会在这两种判定上失败
 pub(crate) fn uuid_readback_verdict(
     req: &UuidRequest,
     before: Option<&str>,
@@ -352,14 +363,14 @@ pub(crate) fn uuid_readback_verdict(
     let Some(after) = after else { return Ok(()) };
     match req {
         UuidRequest::Explicit(want) => {
-            if after.eq_ignore_ascii_case(want) {
+            if normalize_uuid(after) == normalize_uuid(want) {
                 Ok(())
             } else {
                 Err(format!("expected {want}, read back {after}"))
             }
         }
         UuidRequest::NewRandom => {
-            if before.is_some_and(|old| old.eq_ignore_ascii_case(after)) {
+            if before.is_some_and(|old| normalize_uuid(old) == normalize_uuid(after)) {
                 Err(format!("it is still {after}, the value did not change"))
             } else {
                 Ok(())

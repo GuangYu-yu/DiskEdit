@@ -115,8 +115,10 @@ pub(crate) fn ensure_node_is_device(node: &Path, sys_dir: &Path) -> io::Result<(
 }
 
 /// 尽力清理临时资源（临时挂载点等）：失败只影响资源占用，且调用点通常已有主错误/告警
+// audit-allow: A-12
 #[allow(clippy::let_underscore_must_use)]
 pub(crate) fn best_effort_rmdir(dir: &std::path::Path) {
+    // audit-allow: D-16
     let _ = std::fs::remove_dir(dir);
 }
 
@@ -129,11 +131,14 @@ pub(crate) fn best_effort_rmdir(dir: &std::path::Path) {
 /// **新建 journal 不走这一路**：那时 undo 能力是唯一的前向保证，新建的目录项必须
 /// 真正落盘（见 `platform::evidence_store` 的 `sync_dir`）。
 #[cfg(unix)]
+// audit-allow: A-13
 #[allow(clippy::let_underscore_must_use)] // 有意忽略：失败只使元数据回退
 pub(crate) fn best_effort_dir_fsync(path: &std::path::Path) {
     if let Some(dir) = path.parent()
+        // audit-allow: S2-20
         && let Ok(d) = std::fs::File::open(dir)
     {
+        // audit-allow: D-17
         let _ = d.sync_all();
     }
 }

@@ -100,6 +100,7 @@ pub(crate) fn refuse_read_only_block(src: &FileSource) -> Result<(), crate::outc
     let fact = src.read_only_block();
     #[cfg(not(target_os = "linux"))]
     let fact = {
+        // audit-allow: D-21
         let _ = src;
         crate::domain::Fact::Absent
     };

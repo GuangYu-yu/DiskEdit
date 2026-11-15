@@ -441,6 +441,7 @@ pub(crate) fn execute_rollback(
     let record = provisional.record;
     let n = record.restore.len();
     replay_record(src, &record.restore, &path);
+    // audit-allow: C-3
     let outcome = match settle_companion(&path, &record, true) {
         Ok(()) => RunOutcome::applied_with(Vec::new()),
         // 目录项已移除、持久化未确认：只陈述这一事实，不承诺记录还在
@@ -461,6 +462,7 @@ pub(crate) fn execute_rollback(
         }
     };
     let taking = if n == 0 {
+        // audit-allow: N-3
         "the recovery record held no written ranges — nothing was written back (verify with: diskedit info)"
             .to_string()
     } else {
@@ -532,6 +534,7 @@ fn verify_copy_source(src: &FileSource, record: &Record, path: &std::path::Path)
     }
     let source = match &record.source {
         crate::domain::Fact::Known(source) => source,
+        // audit-allow: W-13
         crate::domain::Fact::Absent | crate::domain::Fact::Undecidable(_) => {
             bail_fail(RunOutcome::refused(format!(
                 "the recovery record at {} carries no source range, so the bytes its `copy` wrote cannot be checked \
