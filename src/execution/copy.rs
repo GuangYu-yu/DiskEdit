@@ -122,12 +122,12 @@ pub(crate) fn execute(
             )))
         }
     };
-    // 屏障必须早于首个目标写入：数据字节不入记录，undo 见到它即永久拒绝回滚
-    src.mark_non_reversible()
-        .map_err(|e| RunOutcome::partial(e.record_failure("the recovery barrier")))?;
     let total_n = total.div_ceil(chunk_bytes) as usize;
     let mut hasher = Sha256::new();
     let mut pos = 0u64;
+    // 屏障必须早于首个目标写入（数据字节不入记录，undo 见到它即永久拒绝回滚），
+    // 但首次读源在它之前：源读不出时目标一个字节都没写，那类失败不该被判成不可回滚
+    let mut barrier_set = false;
     while pos < total {
         let len = chunk_bytes.min(total - pos);
         let mut buf = vec![0u8; len as usize];
@@ -146,6 +146,11 @@ pub(crate) fn execute(
             )
         })?;
         hasher.update(&buf);
+        if !barrier_set {
+            src.mark_non_reversible()
+                .map_err(|e| RunOutcome::no_mutation(e.record_failure("the recovery barrier")))?;
+            barrier_set = true;
+        }
         // 目的区间没有可比的期望内容：写入只受写后回读约束
         let dst = dst_off + pos;
         src.write_guarded(dst, &buf, RegionStamp::unconstrained(dst, len), WriteStep::Relocate { part: step.part })

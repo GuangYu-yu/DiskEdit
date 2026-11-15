@@ -162,7 +162,7 @@ fn check_copy(copy: ParsedCopy, ctx: &str) {
         "{ctx}: accepted a table whose entry count disagrees with its header"
     );
     for (i, e) in g.entries.iter().enumerate() {
-        if e.starting_lba == 0 && e.ending_lba == 0 {
+        if crate::table::is_unused(e) {
             continue;
         }
         assert!(e.starting_lba <= e.ending_lba, "{ctx}: accepted entry {} with start > end", i + 1);

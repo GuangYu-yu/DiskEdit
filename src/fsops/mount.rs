@@ -545,7 +545,7 @@ pub(crate) enum LoopOccupancy {
     Live(String),
     /// loop（或 `losetup -P` 展开出的分区）被上层块设备栈持有
     Held { loopdev: String, holders: Vec<String> },
-    /// 内核拒绝独占打开（EBUSY）：挂载、swap 或他人的独占 claim 占着它
+    /// 内核拒绝独占打开（EBUSY）：有使用者以独占 claim 持有该设备或它的分区
     KernelBusy { loopdev: String },
     /// 拿不到独占权（节点缺失、权限不足、I/O 错误等）：不是"空闲"的证据
     Unclaimable { loopdev: String, why: String },
@@ -656,12 +656,12 @@ fn consume_registered_claim(claims: &mut Vec<LoopClaim>, loopdev: &str) -> io::R
 #[cfg(target_os = "linux")]
 static LOOP_CLAIMS: std::sync::Mutex<Vec<LoopClaim>> = std::sync::Mutex::new(Vec::new());
 
-/// 对 loop 设备取内核独占权：`O_RDWR | O_EXCL`、不带 `O_CREAT`。man open(2)：Linux 2.6
-/// 起，块设备正在被使用（挂载、swap、他人的独占打开）时同一组合以 EBUSY 失败；
-/// 只读挂载同样算使用。探测对象取 loop **父设备**：分区被 claim 时整盘的 claim 状态
-/// 一并变化，故对父设备 claim 能撞上挂在分区上的使用——这条冲突关系可读于 Linux 3.19 的
-/// `fs/block_dev.c`（`bd_start_claiming` / `bd_prepare_to_claim`）与当前主线
-/// `block/bdev.c`（`bd_may_claim`）。它只覆盖守块设备约定的使用者，是额外的一层防线，
+/// 对 loop 设备取内核独占权：`O_RDWR | O_EXCL`、不带 `O_CREAT`。EBUSY 说明内核已把该
+/// 设备判给了别的使用者（挂载、swap、他人的独占打开），其余错误按确认失败处理。
+/// 探测对象取 loop **父设备**：分区上的使用者是否会让父设备的独占打开失败，取决于
+/// 内核里分区 claim 与整盘 claim 的关联方式（`fs/block_dev.c` 与 `block/bdev.c` 各版本
+/// 的 `bd_may_claim` 并不一致），故这次打开只是额外一试，不能当作"父设备能打开即没有
+/// 分区在用"的证据——分区级的判据是逐分区探测。它只覆盖守块设备约定的使用者，
 /// 不构成"已覆盖全部使用者"的结论
 #[cfg(target_os = "linux")]
 fn claim_loop_exclusive(loopdev: &str) -> io::Result<std::fs::File> {
@@ -1039,9 +1039,10 @@ pub(crate) fn dm_only(holders: &[String]) -> bool {
 /// 写入路径的占用前置闸（表写入与 mkfs）：目标在首次落盘前须空闲。表写入的调用点在
 /// prepare 层（movepart 的 prepare_resize / prepare_apply）与 MBR resize 命令层——那是
 /// 任何写盘的唯一必经关口：占用在这里被判成 Refused（请求与现状不匹配）而不是 Partial，
-/// 不会留下"表已写、FS 步被占"的一半状态。块设备另有整盘 O_EXCL 独占打开这道内核级防线，
-/// 但其保护面要说准：它挡的是挂载 / swap / 他人的 O_EXCL 打开（open 即 EBUSY），
-/// **不挡**不守约定的普通并发写——本闸对其是纵深防御。被 losetup 当作 backing 的
+/// 不会留下"表已写、FS 步被占"的一半状态。块设备另有整盘 O_EXCL 打开这一次准入尝试，
+/// 但其保护面要说准：它只在有使用者以独占 claim 持有该设备或它的分区时才以 EBUSY 失败
+/// （claim 的跨级关系随内核版本不同，不能当作"分区被挂载即整盘打不开"的保证），
+/// **不挡**不守约定的普通并发写，也看不见没有 claim 的使用者——本闸是主判据，它是纵深。被 losetup 当作 backing 的
 /// 块设备这两道都看不见（loop 不登记 holder，losetup 也不以 O_EXCL 打开 backing），
 /// 由 [`Occupancy::LoopBacked`] 补：反向枚举 loop，按设备号认 backing。镜像没有分区
 /// 节点可查，却仍有一道内核级防线可用：对绑定到同一文件的每个 loop 取 `O_RDWR|O_EXCL`
@@ -1126,8 +1127,8 @@ fn image_target_unused(src: &FileSource, kind: WriteKind) -> Result<(), crate::o
 /// 它只在经重叠校验的空闲区新增条目，不改既有分区的起止，也不搬移目标分区的 extent
 /// （见 `movepart::prepare_copy`）。
 ///
-/// 块设备的整盘 O_EXCL 已在打开时挡住挂载 / swap / 他人的独占打开，这里的逐分区探测
-/// 是纵深防御，覆盖不守约定的并发写者留下的内核视图
+/// 本闸逐分区探测并拒绝，是唯一的完整判据（`/proc` 视图缺项时按确认失败拒绝，不放行）。
+/// 整盘 O_EXCL 打开只是额外的准入尝试：它挡不住所有使用者，也不能替代本闸
 #[cfg(target_os = "linux")]
 pub fn ensure_table_write_idle(src: &FileSource) -> Result<(), crate::outcome::RunOutcome> {
     if src.is_block {

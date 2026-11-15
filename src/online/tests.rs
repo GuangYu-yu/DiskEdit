@@ -138,6 +138,8 @@ pub(crate) fn grown_partition_with_skipped_fs_step_stays_partial() {
 pub(crate) fn part_resize_error_classification() {
     let cls = |e: &PartResizeError| classify_part_resize_error(e);
     assert!(matches!(cls(&PartResizeError::NoWrite(io::Error::other("spawn"))), ResizeFailClass::NoMutation(_)));
+    // 长度写不进表：请求与设备几何不匹配，且表未写
+    assert!(matches!(cls(&PartResizeError::Unrepresentable(io::Error::other("odd length"))), ResizeFailClass::Refused(_)));
     assert!(matches!(cls(&PartResizeError::Unknown(io::Error::other("x"))), ResizeFailClass::Partial(_)));
     assert!(matches!(cls(&PartResizeError::Unverified(io::Error::other("x"))), ResizeFailClass::WrittenUnverified(_)));
     assert!(matches!(cls(&PartResizeError::Partial(io::Error::other("x"))), ResizeFailClass::AppliedStaleKernel(_)));

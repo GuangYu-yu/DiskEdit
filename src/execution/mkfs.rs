@@ -78,8 +78,10 @@ pub(crate) fn execute(
     sector_size: u64,
 ) -> Result<(), RunOutcome> {
     // 预扫描已经判过同一份载荷，这里的失败只是兜底：计划不合法
-    step.byte_range(sector_size).map_err(RunOutcome::internal)?;
-    fsops::mkfs(src, step.part, step.fstype, step.label.as_deref()).map_err(|e| {
+    let (base, len) = step.byte_range(sector_size).map_err(RunOutcome::internal)?;
+    // 计划里的字节区间随步骤一起下传：`fsops::mkfs` 解析出的实际区间必须与它一致，
+    // 表在装配之后被改动时在那里拒绝，而不是在新区间上建 FS
+    fsops::mkfs(src, step.part, (base, len), step.fstype, step.label.as_deref()).map_err(|e| {
         RunOutcome::from(e)
             .context(&format!("partition {}: creating the filesystem failed", step.part))
     })

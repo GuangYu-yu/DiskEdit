@@ -15,27 +15,37 @@ rm -rf /var/lib/diskedit/* 2>/dev/null
 
 refresh() { sync; blockdev --rereadpt "$LD" 2>/dev/null; partx -u "$LD" 2>/dev/null; sleep 1; }
 
+# 失败时打印完整输出与退出码：截断到末行会让真正的拒绝原因从日志里消失
+fail_report() { # $1=标签 $2=退出码 $3=完整输出
+  echo "  BAD  $1 FAILED (exit $2)"
+  [ -n "$3" ] && printf '%s\n' "$3" | sed 's/^/    /'
+  rc=1
+}
+
+# 表已提交、后置条件未满足时的退出码（Partial，见 src/outcome.rs）。
+# 脚本只按这个契约判断"要不要刷新内核视图后重试"，不解析人类可读文案
+RC_PARTIAL=5
+
 # 表写命令的稳定执行：DiskEdit 在表提交后校验内核分区视图，偶发 reread 竞态会以
-# "kernel partition view is stale" 失败并保留记录（表已写、可 undo）——错误消息
-# 本身指引 partprobe/刷新内核视图，这里照做后重试一次，消除测试自身的时序赌运气
+# Partial 收场并保留记录（表已写、可 undo）——此时刷新内核视图、释放现场后重试一次，
+# 消除测试自身的时序赌运气
 set4kn() { # $1=label  其余=传给 set 的参数
   local label=$1 out e; shift
   out=$($B set --yes "$LD":2 "$@" 2>&1); e=$?
-  if [ "$e" -ne 0 ] && echo "$out" | grep -q 'stale'; then
+  if [ "$e" -eq "$RC_PARTIAL" ]; then
     partx -u "$LD" 2>/dev/null; sleep 1
-    # set 首次尝试撞 stale 时 DiskEdit 保留记录，裸重试会被 unfinished-op 闸拒绝——
-    # 先 abandon 释放现场（set 幂等，表项重写无副作用）。undo/abandon 的目标必须是
+    # set 幂等，表项重写无副作用；abandon 只释放现场。undo/abandon 的目标必须是
     # 启动场景时的 $LD：镜像路径侧身份匹配不到现场（产品未实现跨目标回退）
     $B abandon "$LD" --yes >/dev/null 2>&1
     out=$($B set --yes "$LD":2 "$@" 2>&1); e=$?
   fi
-  [ "$e" -eq 0 ] && echo "  OK   set $label" || { echo "  BAD  set $label FAILED: $(echo "$out" | tail -1)"; rc=1; }
+  [ "$e" -eq 0 ] && echo "  OK   set $label" || fail_report "set $label" "$e" "$out"
 }
 
 addk() { # $1=label $2=期望生成的分区节点  其余=传给 add 的参数
   local label=$1 node=$2 out e; shift 2
   out=$($B add --yes "$LD" "$@" 2>&1); e=$?
-  if [ "$e" -ne 0 ] && echo "$out" | grep -q 'stale'; then
+  if [ "$e" -eq "$RC_PARTIAL" ]; then
     partx -u "$LD" 2>/dev/null; sleep 1
     if [ -b "$node" ]; then
       # 表已写、内核视图滞后，DiskEdit 保留了记录——不清掉会以 "unfinished
@@ -46,13 +56,13 @@ addk() { # $1=label $2=期望生成的分区节点  其余=传给 add 的参数
     record_present "$LD" && $B undo "$LD" --yes >/dev/null 2>&1
     out=$($B add --yes "$LD" "$@" 2>&1); e=$?
   fi
-  [ "$e" -eq 0 ] && echo "  OK   add $label" || { echo "  BAD  add $label FAILED: $(echo "$out" | tail -1)"; rc=1; return 1; }
+  [ "$e" -eq 0 ] && echo "  OK   add $label" || { fail_report "add $label" "$e" "$out"; return 1; }
 }
 
 movek() { # $1=目标 start（LBA）
   local start=$1 out e fl
   out=$($B move "$LD":2 --start "$start" --chunk 4 --yes 2>&1); e=$?
-  if [ "$e" -ne 0 ] && echo "$out" | grep -q 'stale'; then
+  if [ "$e" -eq "$RC_PARTIAL" ]; then
     partx -u "$LD" 2>/dev/null; sleep 1
     fl=$($B info "$LD" | grep -o '"num":2,"first_lba":[0-9]*' | grep -o '[0-9]*$')
     if [ "$fl" = "$start" ]; then
@@ -92,12 +102,13 @@ mount_at "${LD}p2" "$TEST_MNT" && { dd if=/dev/urandom of="$TEST_MNT/blob" bs=1M
 
 echo
 echo "########## B: 4Kn 自重叠左移（delta < 分区长度）##########"
-MOVE_OUT=$(movek 66048); echo "move exit=$? : $(echo "$MOVE_OUT" | tail -1)"
+MOVE_OUT=$(movek 66048); MOVE_E=$?
+if [ "$MOVE_E" -eq 0 ]; then echo "move exit=0"; else fail_report "move 66048" "$MOVE_E" "$MOVE_OUT"; fi
 $B info "$LD" | grep -o '"num":2,[^}]*}'
 refresh
 e2fsck -fn "${LD}p2" >/dev/null 2>&1; echo "e2fsck -fn exit=$? (0=clean)"
 [ "$M2" = "$(mdsum "${LD}p2")" ] && echo "4KN DEV OK" || { echo "4KN DEV CORRUPT"; rc=1; }
-sgdisk -v "$T" >/dev/null 2>&1 && echo "sgdisk clean" || { echo "sgdisk ISSUES"; rc=1; sgdisk -v "$T" 2>&1 | tail -2; }
+sgdisk -v "$T" >/dev/null 2>&1 && echo "sgdisk clean" || { echo "sgdisk ISSUES"; rc=1; sgdisk -v "$T" 2>&1 | sed 's/^/    /'; }
 
 echo
 echo "########## C: 4Kn 中断恢复（fault 注入）##########"
@@ -107,7 +118,7 @@ DISKEDIT_FAULT=chunk:20 $BF move "$LD":2 --start 66048 --chunk 4 --yes >/dev/nul
 echo "现场：$(ls /var/lib/diskedit/ 2>/dev/null | wc -l) 项"
 OUT=$($B move "$LD":2 --start 66048 --chunk 4 --yes 2>&1)
 R=$(echo "$OUT" | grep -o 'resuming at chunk [0-9]*')
-[ "$R" = "resuming at chunk 20" ] && echo "resume: $R" || { echo "resume: WRONG ($R，输出尾: $(echo "$OUT" | tail -1))"; rc=1; }
+[ "$R" = "resuming at chunk 20" ] && echo "resume: $R" || { echo "resume: WRONG ($R)"; printf '%s\n' "$OUT" | sed 's/^/    /'; rc=1; }
 refresh
 [ "$M2" = "$(mdsum "${LD}p2")" ] && echo "4KN RESUME DEV OK" || { echo "4KN RESUME DEV CORRUPT"; rc=1; }
 e2fsck -fn "${LD}p2" >/dev/null 2>&1 && echo "4KN RESUME e2fsck clean" || { echo "4KN RESUME e2fsck ISSUES"; rc=1; }
@@ -120,7 +131,8 @@ set4kn "flag esp on" flag esp on
 echo "move 前现场：$(ls /var/lib/diskedit/ 2>/dev/null | wc -l) 项"
 PU_BEFORE=$(sgdisk -i 2 "$LD" 2>/dev/null | grep -i "unique GUID" | awk '{print $NF}')
 TY_BEFORE=$($B info "$LD" | grep -o '"num":2,[^}]*}' | grep -o '"type":"[^"]*"')
-MOVE_OUT=$(movek 66048); echo "move exit=$? : $(echo "$MOVE_OUT" | tail -1)"
+MOVE_OUT=$(movek 66048); MOVE_E=$?
+if [ "$MOVE_E" -eq 0 ]; then echo "move exit=0"; else fail_report "move 66048" "$MOVE_E" "$MOVE_OUT"; fi
 PU_AFTER=$(sgdisk -i 2 "$LD" 2>/dev/null | grep -i "unique GUID" | awk '{print $NF}')
 TY_AFTER=$($B info "$LD" | grep -o '"num":2,[^}]*}' | grep -o '"type":"[^"]*"')
 NAME_AFTER=$($B info "$LD" | grep -o '"num":2,[^}]*}' | grep -o '"name":"[^"]*"')

@@ -585,8 +585,10 @@ impl FileSource {
         {
             let meta = std::fs::metadata(path)?;
             if meta.file_type().is_block_device() {
-                // 读写 + O_EXCL（man open(2)）：设备被 claim 时内核拒绝打开，
-                // 分区被挂载或占用会连同整盘一起被 claim
+                // 读写 + O_EXCL：有使用者以独占 claim 持有该设备时内核拒绝打开。它是一次
+                // 准入尝试而非占用判据——分区被挂载是否会让整盘的这次打开失败，取决于内核
+                // 里分区 claim 与整盘 claim 的关联方式，各版本并不一致；占用由
+                // `fsops::ensure_idle_before_write` / `ensure_table_write_idle` 逐分区判定
                 let file = OpenOptions::new()
                     .read(true)
                     .write(true)

@@ -9,7 +9,7 @@ fn a_quarantine_directory_that_cannot_be_listed_is_an_error() {
     let blocker = root.join("not-a-directory");
     std::fs::write(&blocker, b"x").unwrap();
     let from = blocker.join(RECORD_NAME);
-    let e = quarantine_move(&from, QUARANTINE_ABANDONED)
+    let e = quarantine_move(&from)
         .expect_err("listing the quarantine directory must not be taken as empty");
     assert!(e.to_string().contains("cannot enumerate the quarantine directory"), "{e}");
 }

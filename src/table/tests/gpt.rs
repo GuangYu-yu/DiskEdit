@@ -300,7 +300,7 @@ pub(crate) fn gpt_roundtrip_512() {
     let g = load_gpt(&src).unwrap().expect("gpt should parse");
     assert_eq!(g.header.number_of_partition_entries, 128);
     assert_eq!(g.header.size_of_partition_entry, 128);
-    let used: Vec<_> = g.entries.iter().filter(|e| e.starting_lba != 0 || e.ending_lba != 0).collect();
+    let used: Vec<_> = g.entries.iter().filter(|e| !crate::table::is_unused(e)).collect();
     assert_eq!(used.len(), 1);
     assert_eq!(used[0].starting_lba, 34);
     assert_eq!(used[0].partition_name.as_str(), "test");
@@ -487,7 +487,7 @@ pub(crate) fn slot_is_derived_from_entry_count() {
 
 /// 条目级结构校验（UEFI 2.10 §5.3.1）：倒挂 / 越出 usable range 在提交前即拒绝——
 /// 写入侧与解析侧同一判据，盘上不会出现"字节写对了但自己读不回来"的表；
-/// 两个 LBA 字段同时为零按未使用放行（本工具的规范化分类）
+/// 未使用条目的判据只看类型 GUID（见 [`crate::table::is_unused`]）
 #[test]
 pub(crate) fn entry_geometry_validation() {
     let mut src = src_from_gpt("eval", 512);
@@ -520,13 +520,22 @@ pub(crate) fn entry_geometry_validation() {
     // 低于 usable 下界
     set(&mut g, first - 1, first + 5);
     assert!(commit_gpt(&mut src, &g, last).is_err());
-    // 两字段同时为零 → 未使用（类型 GUID 残留也宽容）
+    // 类型 GUID 非零、区间 0..0：畸形条目，不按未使用跳过
     set(&mut g, 0, 0);
+    let why = commit_gpt(&mut src, &g, last).unwrap_err().to_string();
+    assert!(why.contains("partition 1") && why.contains("outside usable range"), "{why}");
+    // 类型 GUID 为零、LBA 残留非零：未使用（判据只看类型 GUID）
+    g.entries[0] = GPTPartitionEntry {
+        partition_type_guid: [0u8; 16],
+        unique_partition_guid: [0x77; 16],
+        starting_lba: first,
+        ending_lba: first + 5,
+        attribute_bits: 0,
+        partition_name: "stale".into(),
+    };
     commit_gpt(&mut src, &g, last).unwrap();
     let g2 = load_gpt(&src).unwrap().unwrap();
-    assert_eq!(g2.entries[0].starting_lba, 0);
-    // 规范化分类的直接推论：存活条目里 end == 0 ⟺ start == 0
-    assert!(g2.entries.iter().all(|e| (e.ending_lba == 0) == (e.starting_lba == 0)));
+    assert!(crate::table::is_unused(&g2.entries[0]));
 }
 
 #[test]

@@ -78,12 +78,14 @@ pub(crate) fn swap_rebuild_support(is_block: bool) -> ToolSupport {
 /// 并自动安装后重试，而不必靠人读日志
 pub(crate) fn tool_package(tool: &str) -> &'static str {
     match tool {
-        "e2fsck" | "resize2fs" | "dumpe2fs" | "mke2fs" => "e2fsprogs",
-        "ntfsresize" => "ntfs-3g",
+        "e2fsck" | "resize2fs" | "dumpe2fs" | "mke2fs" | "tune2fs" => "e2fsprogs",
+        "ntfsresize" | "ntfslabel" => "ntfs-3g",
         "fsck.f2fs" | "resize.f2fs" => "f2fs-tools",
-        "xfs_growfs" => "xfsprogs",
-        "btrfs" => "btrfs-progs",
+        "xfs_growfs" | "xfs_admin" => "xfsprogs",
+        "btrfs" | "btrfstune" => "btrfs-progs",
         "fatresize" => "fatresize",
+        "fatlabel" => "dosfstools",
+        "exfatlabel" => "exfatprogs",
         "mkswap" | "swaplabel" => "util-linux",
         "mount" | "umount" | "losetup" => "util-linux",
         // mkfs 的各工具（mkfs_tool 的 program）：由 mkfs_capability 的缺工具提示引用

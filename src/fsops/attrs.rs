@@ -142,29 +142,45 @@ pub fn check_label_limits(fstype: Option<ContentKind>, label: &str) -> Result<()
 }
 
 /// 设置 FS label。值原样传给各 FS 官方工具；字段容量判据见 [`check_label_limits`]
-pub fn set_label(src: &FileSource, part: u32, fstype: Option<ContentKind>, label: &str) -> Result<(), FsError> {
+pub fn set_label(
+    src: &mut crate::dev::WriteSource,
+    part: u32,
+    fstype: Option<ContentKind>,
+    label: &str,
+) -> Result<(), FsError> {
     check_label_limits(fstype, label)?;
-    with_partition_device(src, part, |dev| {
-        let (tool, args): (&str, Vec<String>) = match fstype {
-            Some(ContentKind::Filesystem(FsKind::Ext)) => ("tune2fs", vec!["-L".into(), label.into(), dev.into()]),
-            Some(ContentKind::Filesystem(FsKind::Xfs)) => ("xfs_admin", vec!["-L".into(), label.into(), dev.into()]),
-            Some(ContentKind::Filesystem(FsKind::Btrfs)) => ("btrfs", vec!["filesystem".into(), "label".into(), dev.into(), label.into()]),
-            Some(ContentKind::Filesystem(FsKind::Ntfs)) => ("ntfslabel", vec![dev.into(), label.into()]),
-            Some(ContentKind::Filesystem(FsKind::Vfat)) => ("fatlabel", vec![dev.into(), label.into()]),
-            Some(ContentKind::Filesystem(FsKind::Exfat)) => ("exfatlabel", vec![dev.into(), label.into()]),
-            Some(ContentKind::Swap) => ("swaplabel", vec!["-L".into(), label.into(), dev.into()]),
-            other => return Err(FsError::unsupported(format!(
-                "no label tool wired for {}",
-                content_name(other.unwrap_or(ContentKind::Unknown))
-            ))),
-        };
-        let argrefs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-        let out = run_write(tool, &argrefs)?;
-        if !out.status.success() {
-            return Err(FsError::command(tool, &out));
-        }
-        Ok(())
-    })
+    let (device, _) = partition_device(src, part)?;
+    let dev = device.path();
+    let (tool, args): (&str, Vec<String>) = match fstype {
+        Some(ContentKind::Filesystem(FsKind::Ext)) => ("tune2fs", vec!["-L".into(), label.into(), dev.into()]),
+        Some(ContentKind::Filesystem(FsKind::Xfs)) => ("xfs_admin", vec!["-L".into(), label.into(), dev.into()]),
+        Some(ContentKind::Filesystem(FsKind::Btrfs)) => ("btrfs", vec!["filesystem".into(), "label".into(), dev.into(), label.into()]),
+        Some(ContentKind::Filesystem(FsKind::Ntfs)) => ("ntfslabel", vec![dev.into(), label.into()]),
+        Some(ContentKind::Filesystem(FsKind::Vfat)) => ("fatlabel", vec![dev.into(), label.into()]),
+        Some(ContentKind::Filesystem(FsKind::Exfat)) => ("exfatlabel", vec![dev.into(), label.into()]),
+        Some(ContentKind::Swap) => ("swaplabel", vec!["-L".into(), label.into(), dev.into()]),
+        other => return Err(FsError::unsupported(format!(
+            "no label tool wired for {}",
+            content_name(other.unwrap_or(ContentKind::Unknown))
+        ))),
+    };
+    // 工具缺失时一个字节都不写：存在性确认也在屏障之前
+    find_tool(tool).map_err(|e| match e {
+        FsError::ToolMissing(_) => FsError::missing(format!(
+            "cannot set the label: requires `{tool}` (package: {}) — not found in PATH",
+            tool_package(tool)
+        )),
+        e => e,
+    })?;
+    // 屏障紧贴工具启动：设备已建立、工具已确认，之后的成败都可能改过目标
+    src.mark_non_reversible()
+        .map_err(|e| FsError::from(io::Error::other(e.record_failure("the transaction barrier"))))?;
+    let argrefs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+    let out = run_write(tool, &argrefs)?;
+    if !out.status.success() {
+        return Err(FsError::command(tool, &out));
+    }
+    Ok(())
 }
 
 /// 一次 UUID 设置请求的两种形式。**不含"目标能不能接受"**——那是 [`uuid_support`] 回答的，
@@ -212,48 +228,65 @@ pub fn uuid_support(fstype: Option<ContentKind>) -> UuidSupport {
 /// xfs `xfs_admin -u`、btrfs `btrfs filesystem show`、swap `swaplabel`），
 /// 显式值要求相等、随机值要求与写前不同。ntfs 的 serial 没有回读出口——
 /// `ntfsinfo -m` 不打印卷序列号——那条路径不做核对
-pub fn set_uuid(src: &FileSource, part: u32, fstype: Option<ContentKind>, req: &UuidRequest) -> Result<(), FsError> {
-    with_partition_device(src, part, |dev| {
-        let no_tool = |what: &str| {
-            FsError::unsupported(format!(
-                "no uuid tool wired for {}{what}",
-                content_name(fstype.unwrap_or(ContentKind::Unknown))
-            ))
-        };
-        let (tool, args): (&str, Vec<String>) = match req {
-            UuidRequest::Explicit(u) => match fstype {
-                Some(ContentKind::Filesystem(FsKind::Ext)) => ("tune2fs", vec!["-U".into(), u.clone(), dev.into()]),
-                Some(ContentKind::Filesystem(FsKind::Xfs)) => ("xfs_admin", vec!["-U".into(), u.clone(), dev.into()]),
-                Some(ContentKind::Filesystem(FsKind::Btrfs)) => ("btrfstune", vec!["-f".into(), "-U".into(), u.clone(), dev.into()]),
-                Some(ContentKind::Swap) => ("swaplabel", vec!["-U".into(), u.clone(), dev.into()]),
-                _ => return Err(no_tool("")),
-            },
-            // "生成新值"在各工具里的写法不同：tune2fs -U random、xfs_admin -U generate、
-            // btrfstune -u、ntfslabel --new-serial；swaplabel 没有生成形式
-            UuidRequest::NewRandom => match fstype {
-                Some(ContentKind::Filesystem(FsKind::Ext)) => ("tune2fs", vec!["-U".into(), "random".into(), dev.into()]),
-                Some(ContentKind::Filesystem(FsKind::Xfs)) => ("xfs_admin", vec!["-U".into(), "generate".into(), dev.into()]),
-                Some(ContentKind::Filesystem(FsKind::Btrfs)) => ("btrfstune", vec!["-f".into(), "-u".into(), dev.into()]),
-                Some(ContentKind::Filesystem(FsKind::Ntfs)) => ("ntfslabel", vec!["--new-serial".into(), dev.into()]),
-                _ => return Err(no_tool(" that generates a new value")),
-            },
-        };
-        // 写前基线只服务"生成新值"：没有它就无法区分"换了"与"工具退 0 但没写"
-        let before = match req {
-            UuidRequest::NewRandom => read_uuid(fstype, dev)?,
-            UuidRequest::Explicit(_) => None,
-        };
-        let argrefs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-        let out = run_write(tool, &argrefs)?;
-        if !out.status.success() {
-            return Err(FsError::command(tool, &out));
-        }
-        let after = read_uuid(fstype, dev)?;
-        uuid_readback_verdict(req, before.as_deref(), after.as_deref()).map_err(|why| {
-            FsError::CommandFailed(format!(
-                "{tool} reported success but the uuid read-back does not confirm it: {why}"
-            ))
-        })
+pub fn set_uuid(
+    src: &mut crate::dev::WriteSource,
+    part: u32,
+    fstype: Option<ContentKind>,
+    req: &UuidRequest,
+) -> Result<(), FsError> {
+    let (device, _) = partition_device(src, part)?;
+    let dev = device.path();
+    let no_tool = |what: &str| {
+        FsError::unsupported(format!(
+            "no uuid tool wired for {}{what}",
+            content_name(fstype.unwrap_or(ContentKind::Unknown))
+        ))
+    };
+    let (tool, args): (&str, Vec<String>) = match req {
+        UuidRequest::Explicit(u) => match fstype {
+            Some(ContentKind::Filesystem(FsKind::Ext)) => ("tune2fs", vec!["-U".into(), u.clone(), dev.into()]),
+            Some(ContentKind::Filesystem(FsKind::Xfs)) => ("xfs_admin", vec!["-U".into(), u.clone(), dev.into()]),
+            Some(ContentKind::Filesystem(FsKind::Btrfs)) => ("btrfstune", vec!["-f".into(), "-U".into(), u.clone(), dev.into()]),
+            Some(ContentKind::Swap) => ("swaplabel", vec!["-U".into(), u.clone(), dev.into()]),
+            _ => return Err(no_tool("")),
+        },
+        // "生成新值"在各工具里的写法不同：tune2fs -U random、xfs_admin -U generate、
+        // btrfstune -u、ntfslabel --new-serial；swaplabel 没有生成形式
+        UuidRequest::NewRandom => match fstype {
+            Some(ContentKind::Filesystem(FsKind::Ext)) => ("tune2fs", vec!["-U".into(), "random".into(), dev.into()]),
+            Some(ContentKind::Filesystem(FsKind::Xfs)) => ("xfs_admin", vec!["-U".into(), "generate".into(), dev.into()]),
+            Some(ContentKind::Filesystem(FsKind::Btrfs)) => ("btrfstune", vec!["-f".into(), "-u".into(), dev.into()]),
+            Some(ContentKind::Filesystem(FsKind::Ntfs)) => ("ntfslabel", vec!["--new-serial".into(), dev.into()]),
+            _ => return Err(no_tool(" that generates a new value")),
+        },
+    };
+    // 工具缺失时一个字节都不写：存在性确认也在屏障之前
+    find_tool(tool).map_err(|e| match e {
+        FsError::ToolMissing(_) => FsError::missing(format!(
+            "cannot set the uuid: requires `{tool}` (package: {}) — not found in PATH",
+            tool_package(tool)
+        )),
+        e => e,
+    })?;
+    // 写前基线只服务"生成新值"：没有它就无法区分"换了"与"工具退 0 但没写"。
+    // 这一次目标读取同样在屏障之前——读不出就该停在"确定未写盘"
+    let before = match req {
+        UuidRequest::NewRandom => read_uuid(fstype, dev)?,
+        UuidRequest::Explicit(_) => None,
+    };
+    // 屏障紧贴工具启动：设备已建立、工具已确认、基线已读取
+    src.mark_non_reversible()
+        .map_err(|e| FsError::from(io::Error::other(e.record_failure("the transaction barrier"))))?;
+    let argrefs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+    let out = run_write(tool, &argrefs)?;
+    if !out.status.success() {
+        return Err(FsError::command(tool, &out));
+    }
+    let after = read_uuid(fstype, dev)?;
+    uuid_readback_verdict(req, before.as_deref(), after.as_deref()).map_err(|why| {
+        FsError::CommandFailed(format!(
+            "{tool} reported success but the uuid read-back does not confirm it: {why}"
+        ))
     })
 }
 

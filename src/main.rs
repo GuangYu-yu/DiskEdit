@@ -45,11 +45,23 @@ use std::process::ExitCode;
 use crate::outcome::{EXIT_INTERNAL, EXIT_OK, EXIT_PARTIAL};
 
 /// panic 走默认钩子（原样打印消息与 backtrace），结论交给同一个归责点：本次已写则
-/// 落部分完成（5）并给出恢复指引；从未写过则是内部错误（1）
+/// 落部分完成（5）并给出恢复指引；从未写过则是内部错误（1）。
+///
+/// 库层的退出请求（[`crate::support::ExitRequest`]）与被展开到这里的 panic 分开处理：
+/// 请求方已经打印过自己的报告，钩子不重复打印，退出码取请求携带的值
 fn main() -> ExitCode {
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        if info.payload().downcast_ref::<crate::support::ExitRequest>().is_none() {
+            default_hook(info);
+        }
+    }));
     match std::panic::catch_unwind(run) {
         Ok(code) => ExitCode::from(code),
-        Err(_) => {
+        Err(payload) => {
+            if let Some(exit) = payload.downcast_ref::<crate::support::ExitRequest>() {
+                return ExitCode::from(exit.0);
+            }
             let outcome = crate::outcome::RunOutcome::internal("the process panicked").settled();
             if matches!(outcome, crate::outcome::RunOutcome::Partial { .. }) {
                 outcome.report();

@@ -116,6 +116,11 @@ pub(crate) fn cmd_info_with(a: &InfoRequest, tail: Option<&str>) -> u8 {
                  copy left; any partition-table write command rebuilds it"
                     .to_string(),
             ),
+            table::GptState::NeedsRepair { cause: table::HeaderIssue::CopiesDiverge } => stale_notes.push(
+                "note: the primary and backup GPT copies do not describe the same table — any partition-table \
+                 write command rewrites the backup from the primary one (the primary is left as it is)"
+                    .to_string(),
+            ),
             table::GptState::Valid => {}
         }
         match g.pmbr {
@@ -159,7 +164,7 @@ pub(crate) fn cmd_info_with(a: &InfoRequest, tail: Option<&str>) -> u8 {
         out.push_str(",\"partitions\":[");
         let mut first = true;
         for (i, e) in g.entries.iter().enumerate() {
-            if e.ending_lba == 0 && e.starting_lba == 0 {
+            if crate::table::is_unused(e) {
                 continue;
             }
             if !first {

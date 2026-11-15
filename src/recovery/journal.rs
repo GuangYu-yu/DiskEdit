@@ -238,6 +238,17 @@ pub(crate) enum CompanionProbe {
     Unreadable(String),
 }
 
+/// 打开记录落点的父目录。记录只存在于这个目录里，目录不存在即「落点没有记录」；
+/// 目录存在却打不开是读不出。探测与读取两处共用这一判据
+#[cfg(target_os = "linux")]
+fn open_record_anchor(dir: &Path) -> Result<Option<DirFd>, RecordJournalError> {
+    match DirFd::open_anchor(dir) {
+        Ok(anchor) => Ok(Some(anchor)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(RecordJournalError::Unsupported(format!("cannot open {}: {e}", dir.display()))),
+    }
+}
+
 /// 探测记录落点
 #[cfg(target_os = "linux")]
 pub(crate) fn probe_companion(record: &Path) -> CompanionProbe {
@@ -249,9 +260,11 @@ pub(crate) fn probe_companion(record: &Path) -> CompanionProbe {
         Ok(relative) => relative,
         Err(e) => return CompanionProbe::Unreadable(format!("the record path is refused: {e:?}")),
     };
-    let anchor = match DirFd::open_anchor(&dir) {
-        Ok(anchor) => anchor,
-        Err(e) => return CompanionProbe::Unreadable(format!("cannot open {}: {e}", dir.display())),
+    let anchor = match open_record_anchor(&dir) {
+        Ok(Some(anchor)) => anchor,
+        Ok(None) => return CompanionProbe::Absent,
+        Err(RecordJournalError::Unsupported(message)) => return CompanionProbe::Unreadable(message),
+        Err(e) => return CompanionProbe::Unreadable(e.to_string()),
     };
     let store = HostEvidenceStore;
     let file = match store.open_at(&anchor, &relative) {
@@ -305,7 +318,9 @@ fn classify_bytes(bytes: &[u8]) -> CompanionProbe {
 pub(crate) fn read_companion(record: &Path, current: &SceneIdentity) -> Result<Evidence, RecordJournalError> {
     let (dir, name) = companion_parts(record)?;
     let relative = RelativePath::try_new(name).map_err(path_error)?;
-    let anchor = DirFd::open_anchor(&dir)?;
+    let Some(anchor) = open_record_anchor(&dir)? else {
+        return Ok(Evidence::Absent);
+    };
     let store = HostEvidenceStore;
     match store.open_at(&anchor, &relative) {
         Ok(file) => match store.read(&file) {
@@ -322,35 +337,6 @@ pub(crate) fn read_companion(_record: &Path, _current: &SceneIdentity) -> Result
     Err(RecordJournalError::Unsupported(
         "this platform has no directory-relative read primitive; recovery records are refuse-only".to_string(),
     ))
-}
-
-/// 整份载荷已无法验证时，取回仍可逐条验证的完整前缀（见 [`super::record::decode_prefix`]）。
-/// 读不到文件本身按 I/O 错误上抛：那不是"没有前缀"，不能当成可拒绝的请求
-#[cfg(target_os = "linux")]
-pub(crate) fn read_companion_prefix(
-    record: &Path,
-) -> Result<Option<super::record::Prefix>, RecordJournalError> {
-    let (dir, name) = companion_parts(record)?;
-    let relative = RelativePath::try_new(name).map_err(path_error)?;
-    let anchor = DirFd::open_anchor(&dir)?;
-    let store = HostEvidenceStore;
-    let file = match store.open_at(&anchor, &relative) {
-        Ok(file) => file,
-        Err(PathError::NotFound) => return Ok(None),
-        Err(e) => {
-            return Err(RecordJournalError::Unsupported(format!(
-                "cannot open the recovery record at {}: {e:?}",
-                record.display()
-            )))
-        }
-    };
-    match store.read(&file) {
-        Ok(bytes) => Ok(super::record::decode_prefix(&bytes)),
-        Err(EvidenceIo::Io(e) | EvidenceIo::RenamedNotDurable(e)) => Err(RecordJournalError::Io(e)),
-        Err(EvidenceIo::Unsupported(message)) => {
-            Err(RecordJournalError::Unsupported(message))
-        }
-    }
 }
 
 /// 把已回滚的记录标记为已提交并删除。
@@ -1154,9 +1140,9 @@ impl RecordJournal {
         Ok(())
     }
 
-    /// 记下一段被覆盖的扇区原文并持久化。调用方随后才写目标字节。同一区间已登记时
-    /// 不重复登记：`original` 保留首次见到的那份（undo 要还原的就是这些字节），
-    /// `after` 取最后一次写入的写后内容（undo 用它核对盘面是否仍停在记录写后的样子）
+    /// 记下一段被覆盖的扇区原文并持久化。调用方随后才写目标字节。同一区间被再写一次时
+    /// 按写入顺序登记为下一条：每次写入都有自己的原文与写后内容，回滚按逆序逐条还原，
+    /// 崩在中间任何一步的盘面都落在某一条的状态上
     pub(crate) fn record_span(
         &mut self,
         first_lba: u64,
@@ -1167,7 +1153,8 @@ impl RecordJournal {
     }
 
     /// 批量登记若干段并单次落盘：全部成功之后调用方才允许第一次目标写入。
-    /// 区间判据与 [`Self::record_span`] 相同，只比 `(first_lba, sectors)`
+    /// 与 [`Self::record_span`] 同一模型：同一区间的每次写入各成一条，顺序即写入顺序。
+    /// 内容完全相同的重复登记（装配期预登记与执行期回写同一段）只留一条
     pub(crate) fn record_spans(
         &mut self,
         spans: Vec<(u64, Vec<u8>, Vec<u8>)>,
@@ -1179,7 +1166,6 @@ impl RecordJournal {
             ))
         })?;
         let base = self.record.restore.len();
-        let mut replaced: Vec<(usize, Vec<u8>)> = Vec::new();
         let mut added = false;
         for (first_lba, original, after) in spans {
             if original.is_empty() {
@@ -1198,16 +1184,9 @@ impl RecordJournal {
                     "the recorded pre-image and post-image spans differ in length",
                 )));
             }
-            if let Some(i) = self
-                .record
-                .restore
-                .iter()
-                .position(|e| e.first_lba == first_lba && e.sectors == sectors)
-            {
-                if self.record.restore[i].after != after {
-                    let old = std::mem::replace(&mut self.record.restore[i].after, after);
-                    replaced.push((i, old));
-                }
+            if self.record.restore.iter().any(|e| {
+                e.first_lba == first_lba && e.sectors == sectors && e.original == original && e.after == after
+            }) {
                 continue;
             }
             let entry = RestoreEntry { sector_size, first_lba, sectors, original, after };
@@ -1215,7 +1194,7 @@ impl RecordJournal {
             self.record.restore.push(entry);
             added = true;
         }
-        if !added && replaced.is_empty() {
+        if !added {
             return Ok(());
         }
         match self.persist() {
@@ -1223,9 +1202,6 @@ impl RecordJournal {
             Err(e) => {
                 if !e.record_bytes_persisted() {
                     self.record.restore.truncate(base);
-                    for (i, old) in replaced {
-                        self.record.restore[i].after = old;
-                    }
                 }
                 Err(e)
             }

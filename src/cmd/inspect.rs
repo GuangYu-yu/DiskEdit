@@ -32,8 +32,8 @@ path:
   PATH is dispatched by structure: a direct entry inside a recovery-record
   directory (`<image>.diskedit/...` or `<state_root>/recovery/<identity-hash>/...`,
   excluding `record.lock`) is itself decoded as evidence. Entries in the
-  quarantine area (`.abandoned[.N]`, `.torn[.N]`) are marked as such and do not
-  count as active records. Any other path is treated as a TARGET.
+  quarantine area (`.abandoned[.N]`, and `.torn[.N]` left by older builds) are
+  marked as such and do not count as active records. Any other path is treated as a TARGET.
 
 output:
   the evidence path, the record fields (transaction, plan, operation, progress,
@@ -176,31 +176,26 @@ fn inspect_record_entry(spot: &crate::dev::RecordSpot, a: &InspectRequest) -> Cm
     if let Some(why) = unavailable {
         println!("identity check: unavailable — {why}");
     }
-    let (code, note) = match (&evidence, spot.quarantine) {
-        (Evidence::Recognized(_), Some(mark)) => (
-            EXIT_OK,
-            Some(format!(
-                "quarantined: this {} entry is kept as evidence and is not part of the active record set",
-                mark.as_str()
-            )),
-        ),
-        (_, Some(mark)) => {
-            let note = format!(
-                "quarantined: this {} entry is kept as evidence and is not part of the active record set",
-                mark.as_str()
-            );
-            let (code, _) = verdict_with(&evidence, &a.target);
-            (code, Some(note))
+    // 可解码的隔离项直接退 0；其余保留各自的判定码，只补一条"这是隔离项"的注记
+    let quarantined_note = spot.quarantine.map(|mark| {
+        format!(
+            "quarantined: this {} entry is kept as evidence and is not part of the active record set",
+            mark.as_str()
+        )
+    });
+    let code = if spot.quarantine.is_some() {
+        match &evidence {
+            Evidence::Recognized(_) => EXIT_OK,
+            _ => verdict_with(&evidence, &a.target).0,
         }
-        _ => {
-            let hint = target
-                .as_deref()
-                .map(|p| p.to_string_lossy().into_owned())
-                .unwrap_or_else(|| "<target>".to_string());
-            verdict_with(&evidence, &hint)
-        }
+    } else {
+        let hint = target
+            .as_deref()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "<target>".to_string());
+        verdict_with(&evidence, &hint).0
     };
-    if let Some(note) = note {
+    if let Some(note) = quarantined_note {
         eprintln!("{note}");
     }
     CmdResult::Code(code)

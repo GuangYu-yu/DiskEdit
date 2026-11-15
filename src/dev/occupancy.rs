@@ -5,12 +5,13 @@
 //! dm/md 没有分区子目录，退化为设备自身。对域内每台设备收集六类事实，任一命中即为
 //! 占用：
 //!
-//! 1. `mounts`：mountinfo 的 major:minor、source 路径，以及匿名设备号挂载的 stat
-//!    补偿（btrfs 成员挂载时字段 3 报 anon bdev，与成员分区的 `st_rdev` 必不相同）；
+//! 1. `mounts`：mountinfo 的 major:minor，以及匿名设备号挂载的 stat 补偿（btrfs
+//!    成员挂载时字段 3 报 anon bdev，与成员分区的 `st_rdev` 必不相同）；归属按设备
+//!    身份，不按挂载时用的 source 路径字面量；
 //! 2. `swaps`：`/proc/swaps` 的 Filename（块设备比 `rdev`，交换文件比 `(dev, ino)`）；
 //! 3. `holders`：sysfs `holders/` 非空（首层非空即命中；下钻是为了收集整棵子树里的
 //!    全部持有者——`Extend` 的放行要求集合全是 `dm-*`，漏掉兄弟分支会把在用的栈判成
-//!    空闲；至多 8 层）；
+//!    空闲；遍历按已访问集合终止，链多深都走完）；
 //! 4. `loops`：本目标作为 loop backing 且该 loop 在用（挂载 / swap / 持有 / 被独占
 //!    claim）。身份取 `LOOP_GET_STATUS64` 的 `(lo_device, lo_inode)`，打不开节点才
 //!    回退 sysfs 路径的 stat——backing 的路径表示会在同路径重建后指向别的文件，
@@ -536,19 +537,22 @@ fn partitions_of(disk_dir: &Path) -> Result<Vec<PathBuf>, String> {
     Ok(out)
 }
 
-/// 证据 1：mountinfo 的 major:minor、source 路径，或匿名设备号的 stat 补偿。
+/// 证据 1：mountinfo 的 major:minor，或匿名设备号的 stat 补偿。
 /// 命中即证明；整份表走完都没有命中且存在解析失败的 source 才上抛——兄弟挂载的
-/// source 读不出，不能把已证明的挂载改写成"确认不了"
+/// source 读不出，不能把已证明的挂载改写成"确认不了"。
+///
+/// 归属只按设备身份：`scope` 里每台设备各自比对自身的 major:minor。目标路径的字面量
+/// **不能**当判据——mountinfo 的 source 是挂载时用的那个路径，与"本次比的这台设备"
+/// 没有绑定关系；按它匹配会把同一底层盘上别的设备的挂载记到这一台上，占用证据的
+/// 设备名与事实不符
 #[cfg(target_os = "linux")]
 fn mounts_of(tables: &Tables, subject: &Subject) -> Result<Vec<MountRef>, String> {
-    let Subject::Block { path, scope, .. } = subject else { return Ok(Vec::new()) };
-    let given = path.to_string_lossy().into_owned();
+    let Subject::Block { scope, .. } = subject else { return Ok(Vec::new()) };
     let mut out = Vec::new();
     let mut unresolved: Option<String> = None;
     for device in scope {
         for entry in &tables.mounts {
             let hit = entry.dev_no == device.dev_no
-                || entry.source.as_str() == given
                 || (entry.dev_no.0 == 0
                     && match crate::fsops::mount::source_is_device(&entry.source, device.dev_no) {
                         Ok(hit) => hit,
@@ -791,13 +795,14 @@ fn md_members_of(scope: &[ScopedDevice]) -> Result<Vec<MemberRef>, String> {
 
 /// 证据 3 的辅助：从一台设备出发，收集 `holders/` 子树里能到达的全部持有者。
 /// 按层展开所有分支，不只沿第一个持有者下钻——`holders/` 是树，只走首条会让
-/// 兄弟分支的子树落在判定之外。层数上限 8，按已访问目录防环
+/// 兄弟分支的子树落在判定之外。终止由已访问集合保证：每台块设备至多入队一次，
+/// 链条多深都完整走完，不存在把后代持有者静默截断在判定之外的层数上限
 #[cfg(target_os = "linux")]
 fn holder_chain(sysdir: &Path) -> Result<Option<Vec<String>>, String> {
     let mut holders = Vec::new();
     let mut visited = vec![sysdir.to_path_buf()];
     let mut frontier = vec![sysdir.to_path_buf()];
-    for _ in 0..8 {
+    loop {
         let mut next = Vec::new();
         for dir in &frontier {
             for name in read_holders(dir)? {
