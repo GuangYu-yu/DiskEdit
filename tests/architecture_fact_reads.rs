@@ -333,7 +333,7 @@ fn fact_types_derive_equality_only_under_test() {
         let mut attrs: Vec<&str> = Vec::new();
         for line in lines[..idx].iter().rev() {
             let t = line.trim();
-            if t.is_empty() || t.starts_with("///") {
+            if t.is_empty() || t.starts_with("//") {
                 continue;
             }
             if t.starts_with("#[") {
