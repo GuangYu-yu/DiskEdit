@@ -18,6 +18,30 @@ pub(crate) fn scope_byte_range(src: &FileSource, scope: &DeviceScope) -> Result<
     }
 }
 
+/// 分区设备及其字节区间。区间与设备取自同一次读表：分两次读表时，两次之间的表改动
+/// 会让"检查过的区间"与"打开的设备"对不上。建 loop、定位分区节点、开设备都发生在任何
+/// 写盘之前，这些失败停在"确定未写盘"一侧，写前屏障（`mark_non_reversible`）因此只能
+/// 在这之后落。`RefuseAny`：FS 步要求目标完全空闲
+pub(crate) fn partition_device(
+    src: &FileSource,
+    part: u32,
+) -> Result<(ScopeDevice, (u64, u64)), FsError> {
+    let range = scope_byte_range(src, &DeviceScope::Partition(part))?;
+    let dev = attach_partition_device(src, part, range)?;
+    Ok((dev, range))
+}
+
+/// 在已解析的分区区间上建立设备，策略与 [`partition_device`] 相同（`RefuseAny`）。
+/// 区间由调用方给出：mkfs 要在建立 loop 之前比对计划区间与长度上界，拒绝一个
+/// "表已被改动"的请求时不应先产生 loop 设备，也不应让 loop 失败盖掉那条更可诊断的拒绝
+pub(crate) fn attach_partition_device(
+    src: &FileSource,
+    part: u32,
+    range: (u64, u64),
+) -> Result<ScopeDevice, FsError> {
+    resolve_scope_device(src, &DeviceScope::Partition(part), range.0, range.1, ImageLoopPolicy::RefuseAny)
+}
+
 /// 镜像上已有 loop 的放行口径。FS 步要求目标完全空闲；LVM PV 收尾（pvresize）
 /// 允许 DM 持有者——它写的是 PV 元数据，持有该分区的 dm 栈不解析这部分字节
 #[derive(Clone, Copy, PartialEq, Eq)]

@@ -74,6 +74,9 @@ pub enum HeaderIssue {
     /// 主副本可用，但盘尾备份副本缺失或读不出来（头损伤、数组 CRC 不符、几何越界）：
     /// 表本身可用，已没有任何冗余副本
     BackupUnreadable,
+    /// 两份副本各自自洽，但陈述的不是同一张表（条目数组、磁盘 GUID 或可用区边界不同）：
+    /// 表步骤的写序是备份先行，中断会留下这种分叉
+    CopiesDiverge,
 }
 
 /// 保护 MBR 的 SizeInLBA 与当前容器的关系。
@@ -253,14 +256,25 @@ pub(crate) fn validate_geometry(
     })
 }
 
+/// 槽位是否未使用。判据取 UEFI 2.10 §5.3.1：分区类型 GUID 全零。
+///
+/// 只看类型 GUID 这一件事：`type GUID 为零、LBA 残留非零`是未使用条目（规范只要求
+/// 槽位未被引用，残留 LBA 不构成分区）；反过来 `type GUID 非零、LBA 全零`是畸形条目，
+/// 由 [`validate_entries`] 挡在解析层，不在每个消费点各判一次。全仓的"未使用"判断
+/// 都走这里，几何、搬移与记录回滚不得再各自比较 LBA 字段
+pub(crate) fn is_unused(e: &GPTPartitionEntry) -> bool {
+    e.partition_type_guid == [0u8; 16]
+}
+
 /// 条目级校验（UEFI 2.10 §5.3.1）：已定义条目须 start ≤ end，且整段落在
 /// [FirstUsableLBA, LastUsableLBA] 之内。
-/// 未使用条目的判据是本工具的规范化分类：两个 LBA 字段同时为零（规范字面为"全字段为零"，
-/// 差异只影响"类型 GUID 在、LBA 全零"这一中断态，此处按未使用宽容处理）。
+///
+/// 未使用条目的判据见 [`is_unused`]：仅有类型 GUID 参与判定，残留 LBA 不使槽位变成分区；
+/// 类型 GUID 在而区间为 0..0 的畸形条目在这里以 `BeyondUsable` 拒绝，而不是被跳过。
 /// 重叠不在此拒绝——那是布局关系 invariant，由各写入路径在生成布局时校验。
 pub(crate) fn validate_entries(entries: &[GPTPartitionEntry], header: &RawHeader) -> Result<(), GptError> {
     for (i, e) in entries.iter().enumerate() {
-        if e.starting_lba == 0 && e.ending_lba == 0 {
+        if is_unused(e) {
             continue;
         }
         let index = i + 1; // 1-based，与 CLI 的分区序号一致
@@ -599,8 +613,22 @@ pub(crate) fn disk_guid_of(src: &FileSource) -> io::Result<Option<[u8; 16]>> {
 ///   两份副本的头与数组是各自独立写入的，换一份读的是别处字节，故继续试其余候选
 /// - 两份都不可用 → 报出首个损伤，绝不因"试过备份"就静默接受损坏的主副本
 /// - 两份都没有 GPT 签名 → Ok(None)
+///
+/// 两份副本各自自洽但陈述不同表 → 返回主副本，state 标记 `CopiesDiverge`；写入路径
+/// 按主副本重写两份（备份先行），分叉由此收敛。判据见 [`same_table`]
 pub fn load_gpt(src: &FileSource) -> Result<Option<RawGpt>, GptError> {
     load_gpt_impl(src, true)
+}
+
+/// 两份副本是否陈述同一张表。`primary_lba` / `backup_lba` / `partition_entry_lba`
+/// 指向各自副本，天然不同，不参与比较；其余字段与条目数组必须一致
+fn same_table(a: &RawGpt, b: &RawGpt) -> bool {
+    a.entries == b.entries
+        && a.header.first_usable_lba == b.header.first_usable_lba
+        && a.header.last_usable_lba == b.header.last_usable_lba
+        && a.header.disk_guid == b.header.disk_guid
+        && a.header.number_of_partition_entries == b.header.number_of_partition_entries
+        && a.header.size_of_partition_entry == b.header.size_of_partition_entry
 }
 
 /// 旧表探测：跳过"保护 MBR 形状成立"前置，其余解析（主备回退、CRC、几何、条目校验）
@@ -631,8 +659,18 @@ fn load_gpt_impl(src: &FileSource, require_pmbr_shape: bool) -> Result<Option<Ra
                 // 备份是两件事，前者成立不代表后者还在。写入路径按 state 决定修不修，
                 // info 按 state 出 damaged——不在这里确认，损坏的备份会一直报 Valid，
                 // 直到主副本也坏掉才发现无处可回退
-                if g.state == GptState::Valid && !matches!(parse_backup(src, ss, pmbr), ParsedCopy::Usable(_)) {
-                    g.state = GptState::NeedsRepair { cause: HeaderIssue::BackupUnreadable };
+                if g.state == GptState::Valid {
+                    match parse_backup(src, ss, pmbr) {
+                        ParsedCopy::Usable(b) => {
+                            // 两份副本都必须陈述同一张表。只认主副本会把"备份已是新表、
+                            // 主表还是旧表"的分叉报成 Valid：备份坏掉后这张未提交的表
+                            // 会被当成提交过的事实救回来
+                            if !same_table(&g, &b) {
+                                g.state = GptState::NeedsRepair { cause: HeaderIssue::CopiesDiverge };
+                            }
+                        }
+                        _ => g.state = GptState::NeedsRepair { cause: HeaderIssue::BackupUnreadable },
+                    }
                 }
                 return Ok(Some(*g));
             }

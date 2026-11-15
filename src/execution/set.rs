@@ -54,20 +54,12 @@ pub(crate) fn preflight(step: &FsSet) -> Result<(), RunOutcome> {
     step.check()
 }
 
-/// 屏障落在调用外部工具的同一函数里、紧贴首次写盘之前：记录随屏障落盘，之后工具无论
-/// 成败，目标都处于不可回滚状态。本步之前的失败按各自的原变体返回；越过首写之后
-/// 的失败由退出点的归责统一改判，调用点不自行降级
+/// 屏障在 FS 层、紧贴工具启动（[`fsops::set_label`] / [`fsops::set_uuid`]）：设备解析、
+/// 工具存在性与写前基线读取都排在屏障之前，零写入的失败不会被判成不可回滚。越过首写
+/// 之后的失败由退出点的归责统一改判，调用点不自行降级
 pub(crate) fn execute(src: &mut WriteSource, step: &FsSet) -> Result<(), RunOutcome> {
     // 预扫描已经判过同一份载荷，这里的失败只是兜底
     step.check()?;
-    if let Err(e) = src.mark_non_reversible() {
-        let msg = e.record_failure("the recovery barrier");
-        return Err(if e.record_bytes_persisted() {
-            RunOutcome::partial(msg)
-        } else {
-            RunOutcome::no_mutation(msg)
-        });
-    }
     let result = match &step.attr {
         FsSetAttr::Label(label) => fsops::set_label(src, step.part, step.fstype, label),
         FsSetAttr::Uuid(uuid) => {

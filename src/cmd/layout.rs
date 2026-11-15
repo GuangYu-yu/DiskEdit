@@ -207,7 +207,8 @@ pub(crate) fn cmd_new(a: &NewRequest) -> crate::outcome::RunOutcome {
 }
 
 /// 装配后、首次目标写入前的 pre-image 采集：一次登记全部写区间并单次落盘。执行期的
-/// `write_at` 会再遇到同一批区间，记录层按区间跳过、保留这里登记的原文
+/// `write_at` 会再遇到同一批区间；内容相同的登记被跳过，同一区间若有后续不同内容的
+/// 写入，按写入顺序各成一条
 fn record_table_preimages(
     src: &mut crate::dev::WriteSource,
     plan: &crate::planner::ConfirmedPlan,
@@ -278,6 +279,10 @@ pub(crate) fn cmd_add(a: &AddRequest) -> crate::outcome::RunOutcome {
             other.text()
         ))),
     };
+    // 长度在这里就拒绝 0：下面的落位算术以「长度减一」为末端，零长度不是可落位的分区
+    if len_bytes == 0 {
+        bail_fail(RunOutcome::usage("`add` needs a SIZE above zero".to_string()));
+    }
     let mut src = open_table_record(a, crate::recovery::OpKind::Add).unwrap_or_else(|f| bail_fail(f));
     // 写表前的占用闸（见 fsops::ensure_table_write_idle）。放在几何判定之前：
     // 占用是"目标现在能不能写"的事实，与本条命令的参数是否合法无关
@@ -295,12 +300,9 @@ pub(crate) fn cmd_add(a: &AddRequest) -> crate::outcome::RunOutcome {
                 .to_string(),
         )),
         Ok(table::TableLabel::Gpt) => {
-            // 判型刚由 load_gpt 成功得出；这里再取一次几何只有读盘，没有第二个判据
-            let g = match table::load_gpt(&src) {
-                Ok(Some(g)) => g,
-                Ok(None) => bail_fail(RunOutcome::refused("the GPT disappeared between reads — retry".to_string())),
-                Err(e) => bail_fail(RunOutcome::refused(format!("label probe failed: {e}"))),
-            };
+            // 放置与校验共用同一份可操作几何：修复动作收敛后的 `last_usable_lba` 才是
+            // 可用区上界，直接读原始头会把放置算到修复前的上界上
+            let (g, _) = crate::gpt_policy::require_gpt_geometry(&src, "add").unwrap_or_else(|f| bail_fail(f));
             // 省略 --type-guid 取 Linux filesystem data 类型 GUID
             let type_guid = match a.type_guid {
                 None => table::LINUX_FS_TYPE_GUID,
@@ -317,21 +319,21 @@ pub(crate) fn cmd_add(a: &AddRequest) -> crate::outcome::RunOutcome {
             }
             // 名字守卫在消费点：GPT 分支是 --name 的唯一落盘处（MBR 分支已拒绝 --name）
             if let Some(n) = &a.name { crate::support::check_gpt_name_len(n); }
-            let len = partition_len(len_bytes, g.ss);
+            let len = partition_len(len_bytes, g.sector_size());
             let used: Vec<(u64, u64)> = g
-                .entries
+                .entries()
                 .iter()
-                .filter(|e| e.ending_lba != 0)
+                .filter(|e| !crate::table::is_unused(e))
                 .map(|e| (e.starting_lba, e.ending_lba))
                 .collect();
-            let unit = placement_unit(a.align, a.align_given, g.ss);
+            let unit = placement_unit(a.align, a.align_given, g.sector_size());
             let (start, end) = match a.start {
                 Some(StartSelector::Lba(lba)) => fixed_start(
                     &used,
-                    g.header.first_usable_lba,
-                    g.header.last_usable_lba,
+                    g.first_usable_lba(),
+                    g.last_usable_lba(),
                     a.align,
-                    g.ss,
+                    g.sector_size(),
                     len,
                     lba,
                 ),
@@ -340,8 +342,8 @@ pub(crate) fn cmd_add(a: &AddRequest) -> crate::outcome::RunOutcome {
                 )),
                 None => first_fit(
                     &used,
-                    g.header.first_usable_lba,
-                    g.header.last_usable_lba,
+                    g.first_usable_lba(),
+                    g.last_usable_lba(),
                     unit,
                     len,
                 ),
@@ -870,7 +872,7 @@ pub(crate) fn prepare_resize_part(
     let old_start = e.starting_lba;
     let old_end = e.ending_lba;
     for (i, other) in g.entries().iter().enumerate() {
-        if i + 1 == part as usize || other.ending_lba == 0 {
+        if i + 1 == part as usize || crate::table::is_unused(other) {
             continue;
         }
         if !(new_end < other.starting_lba || new_start > other.ending_lba) {
@@ -1002,17 +1004,19 @@ pub(crate) fn prepare_resize_part(
         // base 与长度必须同源——都取盘上条目：已提交续跑时盘上已是新区间（数据与
         // swap 签名都随搬移落位），拿记录里的搬移前长度去配新起点会探到一块谁也不
         // 认识的混合区间，FS 步被误判为 cannot grow unknown
-        movepart::FsAction::Grow => crate::fsops::check_grow_step(
-            crate::fsops::grow_target_at(
+        movepart::FsAction::Grow => {
+            let growable = crate::fsops::grow_target_at(
                 src,
                 part,
                 old_start.checked_mul(ss).ok_or_else(byte_overflow)?,
                 (old_end - old_start + 1)
                     .checked_mul(ss)
                     .ok_or_else(byte_overflow)?,
-            )?,
-            src.is_block,
-        )?,
+            )?;
+            // 声明侧与证据侧的冲突在此拒绝：此刻本命令尚未写任何目标字节
+            movepart::preflight_growth_swap(part, movepart::is_swap_guid(&e.partition_type_guid), &growable)?;
+            crate::fsops::check_grow_step(growable, src.is_block)?;
+        }
         movepart::FsAction::Leave => {}
     }
     // ext 预查 FS 最小尺寸（resize2fs -P × dumpe2fs -h 块大小），缩太小在写盘前拒绝

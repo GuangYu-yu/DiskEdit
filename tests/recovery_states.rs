@@ -48,8 +48,11 @@ fn record_path(image: &Path) -> PathBuf {
 }
 
 fn write_record(image: &Path, bytes: &[u8]) {
+    use std::os::unix::fs::PermissionsExt;
+    // 产品把落点建成 0700 并拒绝更松的目录；夹具按同一形态造
     let dir = sidecar(image);
     fs::create_dir_all(&dir).unwrap();
+    fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).unwrap();
     fs::write(dir.join("record"), bytes).unwrap();
 }
 

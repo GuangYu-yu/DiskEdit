@@ -7,6 +7,7 @@ use crate::fsops::{run, run_write_input};
 /// - `Stale`：写前重读判定"当前盘上现状与请求不符"——目标条目被改、新尺寸压到现存分区，
 ///   或重读本身给出拒绝（无表、LBA0 保护布局受损）。表未写 → 拒绝（3）
 /// - `NoWrite`：sfdisk 进程未启动，表确定未写
+/// - `Unrepresentable`：请求长度不是逻辑扇区的整数倍，表里写不出这个长度。表未写
 /// - `Unknown`：sfdisk 执行了但报错。脚本被拒是未写、写入中途失败则可能已写，
 ///   两者在 stdout/stderr 上不可区分 → 不得断言未写
 /// - `Unverified`：sfdisk 报成功，但盘上条目重读失败或与请求不符。写入已发出而结果
@@ -15,6 +16,7 @@ use crate::fsops::{run, run_write_input};
 /// - `Partial`：表已写且盘上核验通过，仅内核同步失败
 pub(crate) enum PartResizeError {
     Stale(io::Error),
+    Unrepresentable(io::Error),
     NoWrite(io::Error),
     Unknown(io::Error),
     Unverified(io::Error),
@@ -24,7 +26,8 @@ pub(crate) enum PartResizeError {
 impl PartResizeError {
     pub(crate) fn detail(&self) -> &io::Error {
         match self {
-            Self::Stale(e) | Self::NoWrite(e) | Self::Unknown(e) | Self::Unverified(e) | Self::Partial(e) => e,
+            Self::Stale(e) | Self::Unrepresentable(e) | Self::NoWrite(e) | Self::Unknown(e)
+            | Self::Unverified(e) | Self::Partial(e) => e,
         }
     }
     /// 现状与请求不符 → 拒绝；表未写 → NoMutation（确定未写盘，不带"盘可能已改变"的提示）；
@@ -72,6 +75,8 @@ pub(crate) enum ResizeFailClass {
 pub(crate) fn classify_part_resize_error(e: &PartResizeError) -> ResizeFailClass {
     match e {
         PartResizeError::Stale(err) => ResizeFailClass::Refused(err.to_string()),
+        // 请求长度写不进表：请求与设备几何不匹配，表确定未写
+        PartResizeError::Unrepresentable(err) => ResizeFailClass::Refused(err.to_string()),
         PartResizeError::NoWrite(err) => ResizeFailClass::NoMutation(err.to_string()),
         PartResizeError::Unknown(err) => ResizeFailClass::Partial(err.to_string()),
         PartResizeError::Unverified(err) => ResizeFailClass::WrittenUnverified(err.to_string()),
@@ -82,11 +87,25 @@ pub(crate) fn classify_part_resize_error(e: &PartResizeError) -> ResizeFailClass
 /// 读当前盘上表并对照决策快照：目标条目与邻居集都必须仍是取快照时的那一份。
 /// 写前复核的唯实现——`part_resize` 在 sfdisk 之前调用，在线缩容在 FS 步（首个
 /// 写盘步骤）之前调用。读不出来（`NoWrite`）与不一致（`Stale`）都不放行，
-/// 分类原样交给调用点的出口
+/// 分类原样交给调用点的出口。
+///
+/// 请求长度能否写成整扇区也在这里判：表项按逻辑扇区记长度，取整会静默缩短，
+/// 而两处调用点都落在任何写盘之前，此时拒绝仍是"一个字节都没写"
 pub(crate) fn ensure_disk_snapshot_unchanged(
     t: &OnlineTarget,
     new_len_bytes: u64,
 ) -> Result<crate::dev::FileSource, PartResizeError> {
+    if !new_len_bytes.is_multiple_of(t.logical_block) {
+        return Err(PartResizeError::Unrepresentable(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "{new_len_bytes} bytes is not a whole number of {}-byte logical sectors — the partition table \
+                 records lengths in whole sectors, so this size cannot be written as requested; \
+                 round it to a multiple of {}",
+                t.logical_block, t.logical_block
+            ),
+        )));
+    }
     // 写前锁下重验（最小 TOCTOU 防线，**只覆盖目标分区自身与邻居集**）：sysfs 快照
     // 取自内核视图，取锁到 sfdisk 之间第三方（不守本工具的锁）可能已改写盘上表；
     // sfdisk 的 --force 关闭全部一致性检查，不会替本工具拒绝由此造成的异常。这里
@@ -171,6 +190,7 @@ pub(crate) fn part_resize(t: &OnlineTarget, new_len_bytes: u64) -> Result<(), Pa
     // sfdisk 脚本里的裸数字按"设备扇区"解释（libfdisk/src/script.c：脚本不带
     // `sector-size:` 头时 `recount_script2device_sectors` 直接返回，已解析的数值就是
     // 设备逻辑扇区数），即 4Kn = 4096B 而非恒 512B，故按 t.logical_block 换算。
+    // 除法是精确的：上面 `ensure_disk_snapshot_unchanged` 已拒绝非整扇区的长度
     // -N：只改指定分区、未指定字段保持原值（空 start/size 继承现值，sfdisk(8)）
     let script = format!(",{}", new_len_bytes / t.logical_block);
     // 在线路径的 durable boundary 就在这一次 sfdisk：之前 abort 表确定未写、

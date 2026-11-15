@@ -72,7 +72,7 @@ fn gpt_facts(gpt: &RawGpt) -> TableFacts {
         .enumerate()
         // 空槽是 starting_lba 与 ending_lba 同为 0 的条目；装配层只应看见已定义的分区，
         // 否则容量与 :last 选择都会被整张空数组左右
-        .filter(|(_, e)| e.ending_lba != 0)
+        .filter(|(_, e)| !crate::table::is_unused(e))
         .map(|(i, e)| PartitionFact {
             number: (i + 1) as u32,
             first_lba: e.starting_lba,
@@ -736,10 +736,12 @@ fn assemble_move_steps(
         let end = dst_first
             .checked_add(sectors - 1)
             .ok_or_else(|| RunOutcome::refused(format!("partition #{part} would end beyond the LBA range")))?;
-        // 目的区上界与 update_entry 共用同一份几何：表内 LBA 的右界是 last_usable_lba
+        // 目的区上下界与 update_entry 共用同一份几何。下界必须单独判：单扇区分区落到
+        // LBA 0 时端点与"未用条目"(0,0) 同形，只查上界会把它当成合法落点写进表
+        let usable_start = geometry.first_usable_lba();
         let usable_end = geometry.last_usable_lba();
-        if end > usable_end {
-            return Err(destination_past_usable_end(src, part, dst_first, end, usable_end));
+        if dst_first < usable_start || end > usable_end {
+            return Err(destination_outside_usable(src, part, dst_first, end, usable_start, usable_end));
         }
         let index = geometry.entry_index(part).ok_or_else(|| {
             RunOutcome::refused(format!("partition #{part} is outside the entry array"))
@@ -780,17 +782,19 @@ fn assemble_move_steps(
     })
 }
 
-/// 目的区间末端越过 `last_usable_lba`。没有恢复记录即规划期拒绝；有记录时由写事实
-/// 分流（[`crate::outcome::attribute`]）：已越过不可逆写入点即 5，否则 4
-fn destination_past_usable_end(
+/// 目的区间落在 `first_usable_lba..=last_usable_lba` 之外。没有恢复记录即规划期拒绝；
+/// 有记录时由写事实分流（[`crate::outcome::attribute`]）：已越过不可逆写入点即 5，否则 4
+fn destination_outside_usable(
     src: &FileSource,
     part: u32,
     dst_first: u64,
     end: u64,
+    first_usable: u64,
     last_usable: u64,
 ) -> RunOutcome {
     let detail = format!(
-        "partition #{part}'s destination (LBA {dst_first}..{end}) ends past the table's last usable LBA {last_usable}"
+        "partition #{part}'s destination (LBA {dst_first}..{end}) falls outside the table's usable area \
+         {first_usable}..{last_usable}"
     );
     if src.record_journal.is_none() {
         return RunOutcome::refused(format!("{detail} — refusing"));

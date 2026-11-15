@@ -129,7 +129,7 @@ pub(crate) fn prepare_apply(
     // 一旦开始写盘才发现，就会留下"分区已改、FS 未扩"的中间态。
     // 不依赖命令层是否检查过：续传路径不经过 plan，本处才是唯一必经关口
     let grow_entry = g0.entry_index(plan.grow_part).and_then(|i| g0.entries().get(i));
-    let Some(ge) = grow_entry.filter(|ge| ge.ending_lba != 0) else {
+    let Some(ge) = grow_entry.filter(|ge| !crate::table::is_unused(ge)) else {
         // 新跑路径 live_entry 已保证条目非空；空槽只出现在续跑——盘上布局在中断窗口
         // 被外部改动。不拒绝的话，下游会把 starting_lba=0 的空条目扩成横跨表头的大条目
         return Err(crate::outcome::RunOutcome::refused(format!(
@@ -149,7 +149,11 @@ pub(crate) fn prepare_apply(
             .ok_or_else(|| RunOutcome::no_mutation("grow target start overflows byte offset"))?;
         let len = (ge.ending_lba - ge.starting_lba + 1).checked_mul(plan.ss)
             .ok_or_else(|| RunOutcome::no_mutation("grow target length overflows byte size"))?;
-        crate::fsops::check_grow_step(crate::fsops::grow_target_at(src, plan.grow_part, base, len)?, src.is_block)?;
+        let growable = crate::fsops::grow_target_at(src, plan.grow_part, base, len)?;
+        // 声明侧与证据侧的冲突在此拒绝：此刻本函数尚未写任何目标字节，冲突一旦拖到
+        // 提交之后，那段区域已经按其中一种解释改写过
+        preflight_growth_swap(plan.grow_part, is_swap_guid(&ge.partition_type_guid), &growable)?;
+        crate::fsops::check_grow_step(growable, src.is_block)?;
     }
     // 恢复三态：有效 → 续传 / 槽位被另一族作业占用 → 拒绝 / 空 → 新建
     // 落点取命中路径：续传写同一份现场；空槽返回本次命名落点
@@ -477,7 +481,9 @@ pub(crate) fn finalize_growth(
     // 对账只约束会改写的分支（`Target`）：证据侧由 `grow_target_at` 的结论给出，声明侧
     // 由调用方从表条目取。只有一方给出答案时用那一方并把依据写进日志；两方冲突则拒绝——
     // 判据本身与理由见 [`crate::movepart::reconcile_swap`]。`SwapUnactivatable` 不写盘，
-    // 按内容判据记待办，不与声明侧对账
+    // 按内容判据记待办，不与声明侧对账。
+    // 写盘前的 [`preflight_growth_swap`] 已按旧区间拒绝过冲突；这里按提交后的区间再核
+    // 一次：两次之间只有本次搬移写过盘，内容与声明理应仍一致，不一致说明盘被改动
     match growable {
         // swap：内容可弃，表项已扩 → mkswap 重建使新空间生效（UUID/卷标保持）。
         // grow_support 对 swap 承诺的就是 mkswap——漏掉它即违背承诺。外部工具写盘，先落屏障

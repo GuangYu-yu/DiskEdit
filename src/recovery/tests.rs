@@ -728,6 +728,52 @@ fn a_table_step_outside_the_recorded_plan_is_refused() {
     );
 }
 
+/// 落点目录缺席答「没有记录」：判定的另一侧见下一条，目录在而打不开仍是读不出
+#[cfg(target_os = "linux")]
+#[test]
+fn a_missing_record_directory_is_absent() {
+    let dir = crate::testdir::test_dir("journal_probe_missing_dir");
+    let record = dir.join("disk.img.diskedit").join("record");
+
+    assert!(matches!(probe_companion(&record), CompanionProbe::Absent));
+}
+
+/// 「目录不存在」与「目录打不开」必须分开：前者是没有记录，后者是读不出。
+/// root 无视目录权限位，这一侧构造不出来时运行期返回
+#[cfg(target_os = "linux")]
+#[test]
+fn a_record_directory_that_cannot_be_opened_is_unreadable() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = crate::testdir::test_dir("journal_probe_unopenable_dir");
+    let sidecar = dir.join("disk.img.diskedit");
+    std::fs::create_dir_all(&sidecar).unwrap();
+    let record = sidecar.join("record");
+    std::fs::write(&record, b"record").unwrap();
+    std::fs::set_permissions(&sidecar, std::fs::Permissions::from_mode(0o000)).unwrap();
+    if std::fs::read_dir(&sidecar).is_ok() {
+        std::fs::set_permissions(&sidecar, std::fs::Permissions::from_mode(0o700)).unwrap();
+        return;
+    }
+
+    let probe = probe_companion(&record);
+    std::fs::set_permissions(&sidecar, std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(
+        matches!(probe, CompanionProbe::Unreadable(_)),
+        "an unopenable directory is not the same fact as no record"
+    );
+}
+
+/// 探测与读取共用同一判据：目录缺席时读取答「没有记录」，不把「目录不在」当成读失败
+#[cfg(target_os = "linux")]
+#[test]
+fn reading_from_a_missing_record_directory_reports_nothing() {
+    let dir = crate::testdir::test_dir("journal_read_missing_dir");
+    let record = dir.join("disk.img.diskedit").join("record");
+
+    assert!(matches!(read_companion(&record, &scene(1)).unwrap(), Evidence::Absent));
+}
+
 /// 临时文件清扫只认 `.<正式名>.<pid>.<32 位 hex>.tmp` 的常规文件：正式记录、目录、
 /// 符号链接、hex 少一位、pid 非数字都不动
 #[cfg(target_os = "linux")]

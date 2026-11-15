@@ -98,7 +98,7 @@ fn existing_partition_ranges(src: &FileSource, ss: u64) -> io::Result<Vec<(Strin
     match load_gpt_ignoring_pmbr_shape(src) {
         Ok(Some(g)) => {
             for (i, e) in g.entries.iter().enumerate() {
-                if e.ending_lba == 0 {
+                if crate::table::is_unused(e) {
                     continue;
                 }
                 out.push((

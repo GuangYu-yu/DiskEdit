@@ -62,7 +62,7 @@ impl RepairAction {
 /// 条目里的最大 ending_lba（0 视为空条目）。两处作用于不同时刻的 `g`
 /// （判定期 vs 锁下重读），不可跨调用缓存
 fn last_used_end(g: &RawGpt) -> u64 {
-    g.entries.iter().filter(|e| e.ending_lba != 0).map(|e| e.ending_lba).max().unwrap_or(0)
+    g.entries.iter().filter(|e| !crate::table::is_unused(e)).map(|e| e.ending_lba).max().unwrap_or(0)
 }
 
 /// 修复后的 last_usable_lba = 新末端 − 数组跨度 − 1（备份数组位于备份头之前）。
@@ -110,8 +110,10 @@ pub fn classify_repair(g: &RawGpt, file_last_lba: u64) -> io::Result<RepairActio
         GptState::NeedsRepair { cause: HeaderIssue::PrimaryUnreadable } => {
             g.header.last_usable_lba.min(repaired_last_usable(g, file_last_lba)?)
         }
-        // 主副本是权威事实：备份缺失不改写可用区上界，只把它按主头重建出来
-        GptState::NeedsRepair { cause: HeaderIssue::BackupUnreadable } => g.header.last_usable_lba,
+        // 主副本是权威事实：备份缺失，或备份与主表分歧（写序中断留下的未提交副本）
+        // 都不改写可用区上界，只把备份按主头重建出来
+        GptState::NeedsRepair { cause: HeaderIssue::BackupUnreadable }
+        | GptState::NeedsRepair { cause: HeaderIssue::CopiesDiverge } => g.header.last_usable_lba,
         _ => repaired_last_usable(g, file_last_lba)?,
     };
     Ok(if pmbr_needs_repair {
@@ -334,7 +336,7 @@ pub(crate) fn last_used_gpt(entries: &[GPTPartitionEntry]) -> Option<u32> {
         entries
             .iter()
             .enumerate()
-            .filter(|(_, e)| e.ending_lba != 0)
+            .filter(|(_, e)| !crate::table::is_unused(e))
             .map(|(i, e)| ((i + 1) as u32, e.ending_lba)),
     )
 }
@@ -393,7 +395,7 @@ pub(crate) fn live_index(entries: &[GPTPartitionEntry], part: u32) -> Result<usi
     // 而不是先在 usize 上回绕成 usize::MAX
     let idx = part.checked_sub(1).map(|i| i as usize);
     match idx.and_then(|i| entries.get(i).map(|e| (i, e))) {
-        Some((i, e)) if e.ending_lba != 0 => Ok(i),
+        Some((i, e)) if !crate::table::is_unused(e) => Ok(i),
         Some(_) => Err(RunOutcome::refused(format!("partition {part} is empty"))),
         None => Err(RunOutcome::refused(format!("partition {part} not found"))),
     }
@@ -620,7 +622,7 @@ fn add_slot(g: &ValidatedGeometry, slot: Option<u32>, start: u64, end: u64) -> R
         )));
     }
     for e in g.entries() {
-        if e.ending_lba == 0 {
+        if crate::table::is_unused(e) {
             continue;
         }
         if !(end < e.starting_lba || start > e.ending_lba) {
@@ -639,7 +641,7 @@ fn add_slot(g: &ValidatedGeometry, slot: Option<u32>, start: u64, end: u64) -> R
                         g.entries().len()
                     ))
                 })?;
-            if g.entries()[i].ending_lba != 0 {
+            if !crate::table::is_unused(&g.entries()[i]) {
                 return Err(RunOutcome::refused(format!(
                     "partition {n} is already in use — pick an empty slot"
                 )));
@@ -649,7 +651,7 @@ fn add_slot(g: &ValidatedGeometry, slot: Option<u32>, start: u64, end: u64) -> R
         None => g
             .entries()
             .iter()
-            .position(|e| e.ending_lba == 0)
+            .position(crate::table::is_unused)
             .ok_or_else(|| RunOutcome::refused("partition table full")),
     }
 }
@@ -1235,7 +1237,7 @@ mod tests {
             attribute_bits: 0,
             partition_name: "".into(),
         };
-        // 空槽（ending_lba == 0）不计入：取末端最大的已用条目，而不是下标最大的槽
+        // 空槽（类型 GUID 为零）不计入：取末端最大的已用条目，而不是下标最大的槽
         assert_eq!(last_used_gpt(&[ent(34, 100), ent(0, 0), ent(200, 300), ent(500, 600)]), Some(4));
         assert_eq!(last_used_gpt(&[ent(34, 100), ent(200, 300), ent(0, 0)]), Some(2));
         assert_eq!(last_used_gpt(&[ent(0, 0), ent(0, 0)]), None);

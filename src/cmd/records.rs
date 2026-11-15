@@ -30,8 +30,8 @@ use crate::support::{bail_fail, json_escape};
 
 pub(crate) const DETAILS_LIST: &str = r#"  List recovery records as JSON. Only decodable records are listed; an entry in
   an unknown format is left out (use `records scan` to see it). Quarantine
-  entries (`.abandoned[.N]`, `.torn[.N]`) are listed and marked, but they are not
-  part of the active record set.
+  entries (`.abandoned[.N]`, and `.torn[.N]` left by older builds) are listed and
+  marked, but they are not part of the active record set.
 
   There is no index yet: every row carries "registered": false, and records are
   enumerated in memory. Sidecars that are not addressed by TARGET are not

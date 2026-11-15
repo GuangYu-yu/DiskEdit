@@ -9,9 +9,7 @@
 
 use std::path::{Path, PathBuf};
 
-use super::{
-    host_state_root, QuarantineMark, QUARANTINE_ABANDONED, QUARANTINE_TORN, RECORD_LOCK_NAME, RECORD_SUFFIX,
-};
+use super::{host_state_root, QuarantineMark, QUARANTINE_ABANDONED, QUARANTINE_TORN, RECORD_LOCK_NAME, RECORD_SUFFIX};
 
 /// 记录目录属于哪一侧
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -37,7 +35,7 @@ pub(crate) struct RecordSpot {
     pub(crate) dir: PathBuf,
     pub(crate) name: std::ffi::OsString,
     pub(crate) backend: RecordBackend,
-    /// 隔离区条目：`.abandoned[.N]` 或 `.torn[.N]`
+    /// 隔离区条目：`.abandoned[.N]`，或旧构建留下的 `.torn[.N]`
     pub(crate) quarantine: Option<QuarantineMark>,
 }
 
@@ -106,8 +104,9 @@ pub(crate) fn record_spot(path: &Path) -> Option<RecordSpot> {
     Some(RecordSpot { dir: dir.to_path_buf(), name, backend, quarantine })
 }
 
-/// 文件名是不是隔离区条目。编号只认十进制数字，`0` 也接受：本工具不产生它，
-/// 但按名字识别出来比把它当活跃记录更接近事实
+/// 文件名属于哪个隔离类别。编号只认十进制数字，`0` 也接受：本工具只产生不带编号的名字，
+/// 但按名字识别出来比把它当活跃记录更接近事实。`.torn` 没有产生者，识别它是为了把旧构建
+/// 留在盘上的归档仍归到隔离区，而不是当成一条待解码的证据
 pub(crate) fn quarantine_mark(name: &std::ffi::OsStr) -> Option<QuarantineMark> {
     let text = name.to_str()?;
     for (stem, mark) in [
@@ -162,7 +161,7 @@ mod tests {
     fn quarantine_names_are_marked() {
         for (name, mark) in [
             (".abandoned", QuarantineMark::Abandoned),
-            (".abandoned.1", QuarantineMark::Abandoned),
+            (".abandoned.0", QuarantineMark::Abandoned),
             (".abandoned.27", QuarantineMark::Abandoned),
             (".torn", QuarantineMark::Torn),
             (".torn.3", QuarantineMark::Torn),

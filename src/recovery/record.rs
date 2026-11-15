@@ -5,8 +5,9 @@
 //! [`DecodeFailure`] 分开表达。记录只有一种形状：载荷变化必须体现为长度变化，
 //! 只改字段语义而不改长度不会通过内容解析。
 //!
-//! 每条恢复区间自带 CRC（覆盖该条的全部字段），载荷尾段被截断时完整的前缀仍可逐条
-//! 验证并回放（见 [`decode_prefix`]）。
+//! 每条恢复区间自带 CRC（覆盖该条的全部字段）。载荷固定前缀没有单独的校验覆盖，
+//! 因此整份载荷必须通过头部与载荷两段 CRC 才算可读：长度不全或 CRC 不符的记录一律
+//! 不解析、不回放。
 //!
 //! 兼容约定：同一 `MAGIC` 下只有一种布局，载荷必须包含全部尾段（在飞位、`repair`、
 //! `table_fence`）。缺少任一段或段后出现无法识别的字节都按 `Format` 拒读，不跳过、
@@ -480,7 +481,12 @@ impl CommitState {
     }
 }
 
-/// 留存状态：清理判据的唯一来源
+/// 留存状态：清理判据的唯一来源。
+///
+/// 本构建只写 `Active`（`Record::new`）与 `CommittedPending`。`Unverified` /
+/// `Quarantined` 是**读出侧**的状态：记录由外部标注为这两种时仍按结构识别、由
+/// `inspect` 原样报出，并且不签发清理许可——它们是盘上输入的一部分，不是本构建
+/// 会产生的决策，故这里没有对应的写入点
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Retention {
     Active,
@@ -630,7 +636,7 @@ fn entry_chunks(reloc: &Relocation, entry: u32) -> Result<u64, RunOutcome> {
     let e = reloc.entries.get(entry as usize).ok_or_else(|| {
         RunOutcome::internal(format!("relocation entry {entry} is outside the recorded plan — the record contradicts itself"))
     })?;
-    if e.is_swap {
+    if !crate::planner::chunk::relocation_copies(e.is_swap, e.delta, e.len) {
         return Ok(0);
     }
     move_chunk_layout(e.len, reloc.ss, e.delta.unsigned_abs(), e.len, reloc.chunk_bytes)
@@ -1337,58 +1343,6 @@ fn read_entry(c: &mut Cursor<'_>) -> Option<RestoreEntry> {
     Some(entry)
 }
 
-/// 载荷完整前缀：头与固定前缀都可信，且前 `kept` 条区间通过了各自的 CRC。
-/// `record.restore` 只含这 `kept` 条；`total` 是载荷声明的条数
-#[derive(Clone, Debug)]
-#[cfg_attr(test, derive(PartialEq, Eq))]
-pub(crate) struct Prefix {
-    /// 前缀里可验证的字段；尾段（在飞位、修复、表步围栏、`copy` 源区间）是
-    /// `Undecidable`，消费方不得把它们当成「没有」
-    pub(crate) record: Record,
-    pub(crate) kept: usize,
-    pub(crate) total: usize,
-}
-
-/// 撕裂 / 截断载荷里仍可验证的前缀。头必须完整且 CRC 相符（否则连"记录声明了什么"
-/// 都不可信）；随后逐条解析区间，遇到第一条不完整或 CRC 不符即停止——它后面的字节
-/// 没有可验证的边界，不能猜。
-pub(crate) fn decode_prefix(bytes: &[u8]) -> Option<Prefix> {
-    let mut magic = [0u8; 4];
-    for (slot, byte) in magic.iter_mut().zip(bytes.iter()) {
-        *slot = *byte;
-    }
-    if bytes.len() < HEADER_LEN || magic != MAGIC {
-        return None;
-    }
-    let payload_len = u32::from_le_bytes(bytes[4..8].try_into().expect("fixed header slice"));
-    let payload_crc = u32::from_le_bytes(bytes[8..12].try_into().expect("fixed header slice"));
-    let header_crc = u32::from_le_bytes(bytes[12..16].try_into().expect("fixed header slice"));
-    let total_len = HEADER_LEN as u64 + u64::from(payload_len);
-    if crc32(&bytes[HEADER_CRC_RANGE]) != header_crc || total_len > MAX_RECORD_BYTES {
-        return None;
-    }
-    // 完整载荷由 [`decode`] 处理；这里只接手尾段已经无法整份验证的形态
-    let payload = bytes.get(HEADER_LEN..)?;
-    if bytes.len() as u64 == total_len && crc32(payload) == payload_crc {
-        return None;
-    }
-    let mut c = Cursor::new(payload);
-    let (mut record, restore_count) = read_payload_prefix(&mut c)?;
-    let mut kept = 0usize;
-    while kept < restore_count {
-        let Some(entry) = read_entry(&mut c) else { break };
-        record.restore.push(entry);
-        kept += 1;
-    }
-    if kept == 0 {
-        return None;
-    }
-    if let Some(record) = record.restore.get(kept - 1) {
-        debug_assert!(record.is_well_formed(), "read_entry validates each entry");
-    }
-    Some(Prefix { record, kept, total: restore_count })
-}
-
 fn write_scene(scene: &SceneIdentity, out: &mut Vec<u8>) {
     out.push(match scene.proof() {
         SceneProof::DeviceId => 1,
@@ -1898,7 +1852,7 @@ mod record_tails {
         assert_eq!(record.derive_stage().unwrap(), Stage::Planned);
     }
 
-    /// 旧格式的记录被拒读：同样的载荷只换头部的格式标识即被拒读，前缀回放也不接手
+    /// 旧格式的记录被拒读：同样的载荷只换头部的格式标识即被拒读
     #[test]
     fn the_previous_layout_is_refused_by_magic() {
         let mut bytes = moving_record(1, 0).encode().unwrap();
@@ -1909,7 +1863,6 @@ mod record_tails {
             decode(&bytes),
             Err(DecodeFailure::Format { magic: LEGACY_MAGIC, recorded: None })
         );
-        assert!(decode_prefix(&bytes).is_none());
         assert_eq!(legacy_layout(LEGACY_MAGIC), Some("DSK3"));
         assert_eq!(legacy_layout(MAGIC), None);
     }
@@ -2018,10 +1971,9 @@ mod record_tails {
         assert!(matches!(decode(&bytes), Err(DecodeFailure::Format { .. })));
     }
 
-    /// 只解到前缀的记录：尾段四项事实是 `Undecidable` 而不是「没有」，
-    /// 也不能被写回盘上
+    /// 载荷被截断或 CRC 不符的记录不解析：长度不全与内容损坏都不进回放路径
     #[test]
-    fn a_prefix_record_keeps_its_tail_undecidable() {
+    fn a_torn_or_crc_broken_payload_is_refused() {
         let mut record = moving_record(1, 0);
         record.restore.push(RestoreEntry {
             sector_size: 512,
@@ -2030,19 +1982,21 @@ mod record_tails {
             original: vec![0x11; 512],
             after: vec![0x22; 512],
         });
-        let mut bytes = record.encode().unwrap();
-        // 翻掉载荷最后一个字节（围栏）：整份载荷验不过，固定前缀与区间仍可验证
-        let last = bytes.len() - 1;
-        bytes[last] ^= 0xff;
+        let full = record.encode().unwrap();
 
-        let prefix = decode_prefix(&bytes).expect("the head stays valid up to the tear");
-        assert_eq!(prefix.kept, 1);
-        assert!(matches!(prefix.record.entry_table_in_flight, Fact::Undecidable(_)));
-        assert!(matches!(prefix.record.repair, Fact::Undecidable(_)));
-        assert!(matches!(prefix.record.table_fence, Fact::Undecidable(_)));
-        assert!(matches!(prefix.record.source, Fact::Undecidable(_)));
+        let mut truncated = full.clone();
+        truncated.truncate(full.len() - 64);
+        assert!(
+            matches!(decode(&truncated), Err(DecodeFailure::Incomplete { .. })),
+            "a truncated payload declares a length it does not carry"
+        );
 
-        let mut prefix_record = prefix.record.clone();
-        assert!(prefix_record.encode().is_err(), "an undecided tail cannot be written back");
+        let mut corrupted = full;
+        let last = corrupted.len() - 1;
+        corrupted[last] ^= 0xff;
+        assert!(
+            matches!(decode(&corrupted), Err(DecodeFailure::Crc { region: CrcRegion::Payload })),
+            "a length-complete payload that fails its CRC is not readable"
+        );
     }
 }

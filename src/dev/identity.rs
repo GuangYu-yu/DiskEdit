@@ -260,21 +260,13 @@ pub(crate) fn suffix_path(base: &Path, suffix: &str) -> PathBuf {
     PathBuf::from(p)
 }
 
-/// 活跃条目的隔离区落点：记录目录里的 `record` 以隐藏名 `<stem>[.N]` 留在同一目录；
-/// 旧 journal / checkpoint 在各自目录里用 `<原名><stem>[.N]`
-fn quarantine_layout(from: &Path, stem: &str) -> (PathBuf, std::ffi::OsString) {
+/// 活跃记录移进隔离区后的落点：同一目录里的隐藏名 `.abandoned[.N]`
+fn quarantine_layout(from: &Path) -> (PathBuf, std::ffi::OsString) {
     let dir = match from.parent() {
         Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
         _ => PathBuf::from("."),
     };
-    let name = if from.file_name().is_some_and(|n| n == std::ffi::OsStr::new(RECORD_NAME)) {
-        std::ffi::OsString::from(stem)
-    } else {
-        let mut name = from.file_name().map(|n| n.to_os_string()).unwrap_or_default();
-        name.push(stem);
-        name
-    };
-    (dir, name)
+    (dir, std::ffi::OsString::from(QUARANTINE_ABANDONED))
 }
 
 /// 隔离条目的第 `index` 个候选名；0 是不带编号的首选名
@@ -328,8 +320,8 @@ fn max_quarantine_index(dir: &Path, name: &std::ffi::OsStr) -> std::io::Result<O
 /// 硬链接不可用（FAT/exFAT、部分网络盘）时退到 `rename_over_placeholder`：先用
 /// `create_new` 原子占住名字，再覆盖本进程刚建的占位。本命令持目标锁，窗口内不会有
 /// 第二个 diskedit 来抢名字
-pub(crate) fn quarantine_move(from: &Path, stem: &str) -> std::io::Result<PathBuf> {
-    let (dir, name) = quarantine_layout(from, stem);
+pub(crate) fn quarantine_move(from: &Path) -> std::io::Result<PathBuf> {
+    let (dir, name) = quarantine_layout(from);
     let max = max_quarantine_index(&dir, &name)?;
     // 残局判据先于编号分配：副本可能是任意一个已存在编号，逐个比 inode
     if let Some(max) = max {
@@ -413,13 +405,15 @@ pub(crate) const RECORD_NAME: &str = "record";
 /// 记录目录内的记录级锁文件名
 pub(crate) const RECORD_LOCK_NAME: &str = "record.lock";
 
-/// 隔离区条目名：记录目录内的隐藏名，`abandon` 产生 `.abandoned`，`undo` 产生 `.torn`
+/// 隔离区条目名：`abandon` 把记录目录里的 `record` 换成这个隐藏名，重名时取 `.abandoned.N`
 pub(crate) const QUARANTINE_ABANDONED: &str = ".abandoned";
 
+/// 旧构建把撕裂尾回放后归档用的名字。本构建只识别、不产生：记录必须通过两段 CRC 才解析，
+/// 撕裂的记录一律拒绝回放并保留原名，`undo` 不再归档
 pub(crate) const QUARANTINE_TORN: &str = ".torn";
 
-/// 隔离条目的产生者：两者都表示"记录已不在正式名上"，但一个是被放弃回滚能力，
-/// 一个是撕裂尾被回放后归档
+/// 隔离条目的类别。两者都表示"记录已不在正式名上"：`abandoned` 是被放弃回滚能力，
+/// `torn` 是旧构建留下的归档。只参与识别与报告，不参与活跃记录判定
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum QuarantineMark {
