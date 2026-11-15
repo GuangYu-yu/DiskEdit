@@ -32,8 +32,10 @@ path:
   PATH is dispatched by structure: a direct entry inside a recovery-record
   directory (`<image>.diskedit/...` or `<state_root>/recovery/<identity-hash>/...`,
   excluding `record.lock`) is itself decoded as evidence. Entries in the
-  quarantine area (`.abandoned[.N]`, and `.torn[.N]` left by older builds) are
-  marked as such and do not count as active records. Any other path is treated as a TARGET.
+  quarantine area (`.abandoned[.N]`, `.torn[.N]`) are marked as such and do
+  not count as active records. This build never writes `.torn[.N]`; the name
+  is recognized so such an entry is treated as quarantine instead of an active
+  record. Any other path is treated as a TARGET.
 
 output:
   the evidence path, the record fields (transaction, plan, operation, progress,

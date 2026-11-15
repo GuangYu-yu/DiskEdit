@@ -187,6 +187,35 @@ fn quarantined_entry_is_listed_and_marked() {
 }
 
 #[test]
+fn torn_entry_is_listed_and_marked() {
+    let dir = temp_dir("torn");
+    let img = image_with(&dir);
+    let bytes = record(file_id(&img), 1, 0);
+    // `.torn[.N]` 本构建不产生，但盘上可能有：识别的是名字，不是内容，解码结果不受影响
+    std::fs::write(record_dir(&img).join(".torn.3"), &bytes).unwrap();
+    let (code, out, err) = run(&["records", "list", img.to_str().unwrap()]);
+    assert_eq!(code, 0, "{out}\n{err}");
+    assert!(out.contains("\"quarantine\":\"torn\""), "{out}");
+    assert!(out.contains("\"state\":\"valid\""), "the mark does not change how the bytes decode: {out}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn a_non_utf8_entry_name_is_still_listed() {
+    use std::os::unix::ffi::OsStringExt;
+    let dir = temp_dir("nonutf8");
+    let img = image_with(&dir);
+    let name = std::ffi::OsString::from_vec(b"record\xff".to_vec());
+    std::fs::write(record_dir(&img).join(&name), record(file_id(&img), 1, 0)).unwrap();
+    let (code, out, err) = run(&["records", "list", img.to_str().unwrap()]);
+    assert_eq!(code, 0, "{out}\n{err}");
+    // 名字转不成文本不等于记录不存在：探测与解码照常，这一条必须出现在列表里
+    assert!(out.contains(&format!("\"id\":\"{TX_HEX}\"")), "{out}");
+    assert!(out.contains("\"state\":\"valid\""), "{out}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
 fn unknown_format_is_not_listed() {
     let dir = temp_dir("unknown");
     let img = image_with(&dir);

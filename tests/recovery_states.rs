@@ -467,3 +467,39 @@ fn prepared_goes_to_quarantine_and_committed_goes_to_cleanup() {
     assert_eq!(code, 0);
     assert!(out.contains("record: absent"), "{out}");
 }
+
+#[test]
+fn check_refuses_while_a_record_still_owns_the_target() {
+    // `check` 只读打开、不建记录、不取目标锁，但 fsck.f2fs 在 SIT 段类型不一致时会写全局
+    // 元数据：目标上还有未收尾记录时必须拒绝，且目标字节不变
+    let dir = temp_dir("check_gate");
+    let image = image_with(&dir, 4096);
+    let target = format!("{}:1", image.to_str().unwrap());
+    let before = fs::read(&image).unwrap();
+
+    // Prepared：目标可能已改过，落 5 而不是 3
+    let prepared = Fixture::image(4096, file_id(&image));
+    write_record(&image, &prepared.bytes());
+    let (code, out, err) = run(&["check", &target]);
+    assert_eq!(code, 5, "{out}{err}");
+    assert!(
+        out.contains("unfinished operation") || err.contains("unfinished operation"),
+        "{out}{err}"
+    );
+    assert!(
+        out.contains("may already have changed") || err.contains("may already have changed"),
+        "{out}{err}"
+    );
+    assert_eq!(fs::read(&image).unwrap(), before, "the gate runs before any target write");
+
+    // 读不出的记录：证明不了回滚，同一条闸口落 3。魔数不认识的字节按"布局读不懂"
+    // 报告，不冒充本工具的记录
+    fs::write(record_path(&image), b"not a record").unwrap();
+    let (code, out, err) = run(&["check", &target]);
+    assert_eq!(code, 3, "{out}{err}");
+    assert!(
+        out.contains("uses a layout this build does not recognize") || err.contains("uses a layout this build does not recognize"),
+        "{out}{err}"
+    );
+    assert_eq!(fs::read(&image).unwrap(), before);
+}

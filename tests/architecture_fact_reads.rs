@@ -1,7 +1,7 @@
 //! 「缺失不得折叠为放行」的结构守卫。
 //!
 //! `Fact` 的三态（`Known` / `Absent` / `Undecidable`）由类型本身堵住 `==`：`Fact`
-//! 与内嵌它的 `Record` / `Evidence` / `Prefix` 只在 `cfg(test)` 下实现
+//! 与内嵌它的 `Record` / `Evidence` 只在 `cfg(test)` 下实现
 //! `PartialEq` / `Eq`，生产代码里写相等比较编译不过。这条约束由本文件的
 //! `fact_types_derive_equality_only_under_test` 钉住，不靠文本规则。
 //!
@@ -270,7 +270,6 @@ fn fact_types_derive_equality_only_under_test() {
     const TYPES: &[(&str, &str)] = &[
         ("domain.rs", "pub(crate) enum Fact<T> {"),
         ("recovery/record.rs", "pub(crate) struct Record {"),
-        ("recovery/record.rs", "pub(crate) struct Prefix {"),
         ("recovery/evidence.rs", "pub(crate) enum Evidence {"),
     ];
     const TEST_ONLY_EQ: &str = "#[cfg_attr(test, derive(PartialEq, Eq))]";

@@ -494,14 +494,13 @@ pub(crate) fn unactivatable_swap_growth_is_pending_not_silent_success() {
     drop(src);
 }
 
-/// 表项声明普通分区、内容是 4K 页可激活的 swap：这一支会改写（mkswap 重建），两侧
-/// 对账因此在使用写原语之前执行，冲突即拒绝。表已提交，拒绝由本次写事实改判为
-/// Partial（5），且不附带待办——冲突不是"未完成的后置条件"。
-/// 非 root：swap 重建的能力门（`require_root`）在首次目标写入之前拒绝，走不到
-/// "表已提交、对账才发现冲突"这一现场
+/// 表项声明普通分区、内容是 4K 页可激活的 swap：这一支会改写（扩 FS / mkswap），
+/// 两侧对账因此在任何目标写入之前执行，冲突即拒绝（3）。判据与提交后的收尾同一处，
+/// 只是区间取写盘前的那份：此刻尚未提交，表项仍命名旧终点，冲突不落成"已提交、
+/// 待办未完成"。拒绝也早于能力门——非 root 同样先得到这条诊断，而不是"root required"
 #[cfg(target_os = "linux")]
 #[test]
-pub(crate) fn target_swap_conflict_is_refused_after_the_table_commit() {
+pub(crate) fn target_swap_conflict_is_refused_before_any_write() {
     let (src, p) = plan_fixture(&[(1, [0x11; 16], 2048, 6143)]);
     let _keep = src.release();
     // 4K 页签名 + 头内自洽（version=1，last_page < 分区页数）：identify 给 Swap，
@@ -515,38 +514,26 @@ pub(crate) fn target_swap_conflict_is_refused_after_the_table_commit() {
     let mut src = plan_open(&p);
     assert_eq!(crate::fsid::identify(&src, base as u64, 4096 * 512).unwrap(), crate::fsid::ContentKind::Swap);
     let o = rsize(&mut src, 1, 2048, 8191, 1024 * 1024, false, &mut |_| {});
-    // 非 root：能力门在首个目标写入前把这次 resize 拒成 NoMutation(4)，表项仍是旧值
-    if unsafe { libc::geteuid() } != 0 {
-        match &o {
-            crate::outcome::RunOutcome::NoMutation { cause } => {
-                assert!(cause.contains("root required"), "{cause}");
-            }
-            other => panic!("non-root must stop at the privilege gate before writing, got {other:?}"),
-        }
-        assert_eq!(o.exit_code(), 4);
-        let g = table::load_gpt(&src).unwrap().unwrap();
-        assert_eq!(
-            (g.entries[0].starting_lba, g.entries[0].ending_lba),
-            (2048, 6143),
-            "the refusal precedes the table write: the entry still names the old end"
-        );
-        drop(src);
-        return;
-    }
     match &o {
-        crate::outcome::RunOutcome::Partial { cause, pending, .. } => {
+        crate::outcome::RunOutcome::Refused(cause) => {
             assert!(cause.contains("the two readings disagree"), "{cause}");
-            assert!(pending.is_empty(), "冲突不是未完成的后置条件，不带待办：{pending:?}");
         }
-        other => panic!("expected Partial, got {other:?}"),
+        other => panic!(
+            "a declared-ordinary partition whose content says swap must be refused before any write, got {other:?}"
+        ),
     }
-    assert_eq!(o.exit_code(), 5);
+    assert_eq!(o.exit_code(), 3);
+    // 拒绝早于表提交：表项仍命名旧终点
     let g = table::load_gpt(&src).unwrap().unwrap();
     assert_eq!(
         (g.entries[0].starting_lba, g.entries[0].ending_lba),
-        (2048, 8191),
-        "冲突在表提交之后才发现：表项终点已是新值"
+        (2048, 6143),
+        "the refusal precedes the table write: the entry still names the old end"
     );
+    // 拒绝也早于任何目标写入：签名与判定所依据的那段字节原样还在
+    let mut after = [0u8; 4096];
+    src.read_at(base as u64, &mut after).unwrap();
+    assert_eq!(&after[4096 - 10..], b"SWAPSPACE2", "no byte of the range may be rewritten before the refusal");
 
     drop(src);
 }
