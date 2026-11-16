@@ -159,6 +159,16 @@ fn abandon_records(target: &str, identity: &TargetIdentity, disk: Option<&FileSo
         }
         return EXIT_OK;
     }
+    // 设备声明不唯一时，记录可能属于另一块同身份的盘。改名它等于替那块盘销毁回滚凭据，
+    // 而且这一步无法靠"记录写的是谁"分辨：两块的声明一模一样
+    if let Some(why) = records.iter().find_map(|r| r.unclaimable.as_deref()) {
+        bail_fail(RunOutcome::refused(format!(
+            "the device identity of '{target}' is not unique among the visible whole disks ({why}) — a record \
+             at this target's slot cannot be proven to belong to this disk, so nothing was renamed; resolve the \
+             identity conflict (only one disk with that identity may be attached), then re-run `diskedit \
+             abandon '{target}'`"
+        )));
+    }
     // 归属判定：目标身份读不出时，记录归属无法证明，一份也不释放。
     // 只认同一载体（`same_carrier`，不是含 loop 映射的 `matches` 或完整身份比对）：容量变化
     // 或 loop 映射变化说明记录不可回放，但仍属于这个目标，abandon 存在的意义正是让这种记录
@@ -330,5 +340,169 @@ fn abandon_records(target: &str, identity: &TargetIdentity, disk: Option<&FileSo
             failed.join("; ")
         );
         bail_fail(crate::outcome::PersistedChange::of(false, done > 0).failure(cause))
+    }
+}
+
+/// 调用链：`abandon_records` 在设备声明判定的四种结论下是否动记录。枚举、判定与
+/// 隔离转换都是生产代码；被替换的只有块设备打开（`test_block_source`）与 sysfs 根
+/// （`dev::with_sysfs_root`），即"这台设备是谁"的事实来源
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+    use crate::dev::fixtures::{attr, bind_rdev, disk};
+    use std::path::PathBuf;
+
+    struct Case {
+        _dir: crate::testdir::TestDir,
+        sys: PathBuf,
+        state: PathBuf,
+        image: PathBuf,
+    }
+
+    impl Case {
+        fn new(name: &str) -> Self {
+            let dir = crate::testdir::test_dir(name);
+            let sys = dir.join("sys");
+            let state = dir.join("state");
+            let image = dir.join("target.bin");
+            std::fs::write(&image, vec![0u8; 4096]).unwrap();
+            Self { _dir: dir, sys, state, image }
+        }
+
+        fn disk(&self, name: &str) -> PathBuf {
+            disk(&self.sys, name)
+        }
+
+        fn record_of(&self, device_id: &str) -> PathBuf {
+            let key = crate::dev::key_for_test(device_id, None);
+            crate::dev::record_dir_under(&self.state, &key.hash_hex()).join(crate::dev::RECORD_NAME)
+        }
+
+        fn source(&self, device_id: &str) -> FileSource {
+            crate::dev::test_block_source(&self.image, &self.state, 8, 0, device_id)
+                .expect("the fixture handle must open")
+        }
+    }
+
+    /// 落点里放一条字节序列，只要求"存在"，不要求它能解码——abandon 面对的正是这类现场
+    fn plant_unreadable(case: &Case, device_id: &str) -> PathBuf {
+        let record = case.record_of(device_id);
+        std::fs::create_dir_all(record.parent().unwrap()).unwrap();
+        std::fs::write(&record, b"not a recovery record").unwrap();
+        record
+    }
+
+    /// 落点里放一条**能解码**的记录：它是否被释放因此成为可断言的事实
+    fn plant(case: &Case, device_id: &str, scene: crate::recovery::SceneIdentity) -> PathBuf {
+        let record = case.record_of(device_id);
+        std::fs::create_dir_all(record.parent().unwrap()).unwrap();
+        let mut journal = crate::recovery::RecordJournal::create_image(
+            &record,
+            scene,
+            crate::recovery::OpKind::Add,
+            512,
+            crate::dev::DiskGuidState::Unavailable,
+            None,
+        )
+        .expect("the record must be writable in the fixture slot");
+        journal.barrier().expect("the record must persist");
+        record
+    }
+
+    fn own_scene(case: &Case, device_id: &str) -> crate::recovery::SceneIdentity {
+        let src = case.source(device_id);
+        let probe = crate::platform::probe::probe_of(&src).expect("the fixture has an identity");
+        crate::recovery::SceneIdentity::of_source(&probe, &src)
+    }
+
+    fn quarantined(dir: &std::path::Path) -> Vec<String> {
+        std::fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|n| n.starts_with(".abandoned"))
+            .collect()
+    }
+
+    /// 拒绝走 `bail_fail` → `panic_any(ExitRequest)`；测试按 `main` 的方式把载荷解回来，
+    /// 真正的 panic 继续上抛
+    fn run(case: &Case, device_id: &str, src: &FileSource) -> u8 {
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            crate::dev::with_sysfs_root(&case.sys, || {
+                abandon_records(device_id, &src.identity, Some(src), true)
+            })
+        }));
+        match outcome {
+            Ok(code) => code,
+            Err(payload) => match payload.downcast_ref::<crate::support::ExitRequest>() {
+                Some(crate::support::ExitRequest(code)) => *code,
+                None => std::panic::resume_unwind(payload),
+            },
+        }
+    }
+
+    /// 声明唯一：隔离确实发生——其余三条的"没动"由此才有对照
+    #[test]
+    fn a_unique_declaration_quarantines_the_record() {
+        let case = Case::new("abandon-match");
+        let node = case.disk("sda");
+        attr(&node, "device/serial", "SN-1\n");
+        bind_rdev(&case.sys, 8, 0, &node);
+        let record = plant(&case, "SN-1", own_scene(&case, "SN-1"));
+        let src = case.source("SN-1");
+
+        assert_eq!(run(&case, "SN-1", &src), EXIT_OK);
+        assert!(!record.exists(), "an accepted scene must be released");
+        assert_eq!(quarantined(record.parent().unwrap()).len(), 1, "the record must be quarantined");
+    }
+
+    /// 另有设备携带同一声明：记录原样留下，不进隔离区
+    #[test]
+    fn an_ambiguous_declaration_leaves_the_record_in_place() {
+        let case = Case::new("abandon-ambiguous");
+        let node = case.disk("sda");
+        attr(&node, "device/serial", "SN-1\n");
+        bind_rdev(&case.sys, 8, 0, &node);
+        let clone = case.disk("sdb");
+        attr(&clone, "device/serial", "SN-1\n");
+        let record = plant_unreadable(&case, "SN-1");
+        let before = std::fs::read(&record).unwrap();
+        let src = case.source("SN-1");
+
+        assert_ne!(run(&case, "SN-1", &src), EXIT_OK);
+        assert_eq!(std::fs::read(&record).unwrap(), before, "an ambiguous scene must not be moved");
+        assert!(quarantined(record.parent().unwrap()).is_empty());
+    }
+
+    /// 记录由另一身份写下：拒绝释放，字节不变
+    #[test]
+    fn a_record_for_another_target_is_not_released() {
+        let case = Case::new("abandon-mismatch");
+        let node = case.disk("sda");
+        attr(&node, "device/serial", "SN-1\n");
+        bind_rdev(&case.sys, 8, 0, &node);
+        let other = crate::recovery::SceneIdentity::from_target(crate::platform::TargetId::from_material(
+            crate::platform::IdentityMaterial::image(None, Some([9; 16])).expect("a file ID"),
+        ));
+        let record = plant(&case, "SN-1", other);
+        let before = std::fs::read(&record).unwrap();
+        let src = case.source("SN-1");
+
+        assert_ne!(run(&case, "SN-1", &src), EXIT_OK);
+        assert_eq!(std::fs::read(&record).unwrap(), before, "a foreign record must not be moved");
+        assert!(quarantined(record.parent().unwrap()).is_empty());
+    }
+
+    /// 设备读不出声明：无法证明记录归属，拒绝释放
+    #[test]
+    fn an_undeclared_device_releases_nothing() {
+        let case = Case::new("abandon-insufficient");
+        let node = case.disk("sda");
+        bind_rdev(&case.sys, 8, 0, &node);
+        let record = plant_unreadable(&case, "SN-1");
+        let src = case.source("SN-1");
+
+        assert_ne!(run(&case, "SN-1", &src), EXIT_OK);
+        assert!(record.exists(), "a scene that cannot be proven ours must stay");
+        assert!(quarantined(record.parent().unwrap()).is_empty());
     }
 }

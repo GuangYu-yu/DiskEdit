@@ -254,7 +254,7 @@ fn shrink_recheck_refuses_table_moved_before_first_write() {
             return;
         }
     }
-    if !std::path::Path::new("/sys/fs/btrfs").exists() {
+    if !crate::dev::sysfs_root().join("fs/btrfs").exists() {
         eprintln!("skip: online shrink recheck regression needs btrfs in the running kernel");
         return;
     }

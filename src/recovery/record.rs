@@ -908,16 +908,11 @@ impl Record {
         if let Some(relocation) = &self.relocation {
             relocation_is_valid(relocation)?;
         }
-        // 回放条目与 copy 源也由读出侧逐条校验：写不出一份读不回来的记录
+        // 回放条目也由读出侧逐条校验：写不出一份读不回来的记录
         for (i, entry) in self.restore.iter().enumerate() {
             if !entry.is_well_formed() || entry.byte_offset().is_none() {
                 return Err(format!("restore entry {i} does not describe a readable range"));
             }
-        }
-        if let Fact::Known(source) = &self.source
-            && !source.is_well_formed()
-        {
-            return Err("the copy source does not describe a readable range".to_string());
         }
         Ok(())
     }
@@ -992,6 +987,13 @@ impl Record {
             let Fact::Known(s) = &self.source else {
                 return Err(std::io::Error::other("a `copy` record carries its source range"));
             };
+            // 读出侧的源区间段按形状判不合格即整条记录解不出，写入口在这里拦住同一形状
+            if !s.is_well_formed() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "the copy source does not describe a readable range",
+                ));
+            }
             out.extend(s.partition.to_le_bytes());
             out.extend(s.first_lba.to_le_bytes());
             out.extend(s.sectors.to_le_bytes());

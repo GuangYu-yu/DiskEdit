@@ -53,6 +53,9 @@ pub(crate) struct RecoveryRecord {
     /// 载荷身份与当前目标不符的原因。`None` 才是本目标可认领的记录；`Some` 不参与回放
     /// 与隔离，身份派生的落点被它占住时写命令拒绝
     pub(crate) foreign: Option<String>,
+    /// 本目标当前的设备声明不唯一、或无法核对，记录因此不能被证明属于这块盘。
+    /// 与 `foreign` 分开：这不是"记录写了别的身份"，而是"这块盘的身份不是独有的"
+    pub(crate) unclaimable: Option<String>,
     /// 记录落在记录根下的兄弟目录里，而不是本目标当前键派生的那个落点
     pub(crate) slot: RecordSlot,
 }
@@ -62,9 +65,10 @@ impl RecoveryRecord {
         &self.path
     }
 
-    /// 本目标能否认领这条记录：身份必须严格相等（或身份读不出时按落点认领）
+    /// 本目标能否认领这条记录：身份必须严格相等（或身份读不出时按落点认领），且
+    /// 设备的声明必须可证明是独有的
     pub(crate) fn claimable(&self) -> bool {
-        self.foreign.is_none()
+        self.foreign.is_none() && self.unclaimable.is_none()
     }
 
     /// 报告用的单条描述
@@ -102,7 +106,10 @@ impl RecoveryRecord {
         };
         match &self.foreign {
             Some(why) => format!("{line} — identity does not match the current target ({why})"),
-            None => line,
+            None => match &self.unclaimable {
+                Some(why) => format!("{line} — cannot be proven to belong to this device ({why})"),
+                None => line,
+            },
         }
     }
 
@@ -150,13 +157,50 @@ pub(crate) fn active_recovery_records(
                 path: path.to_path_buf(),
                 probe: Box::new(probe),
                 foreign: mismatch_reason(path, current.as_ref())?,
+                unclaimable: None,
                 slot: RecordSlot::Derived,
             });
         }
     }
     scan_record_root(identity, current.as_ref(), &mut out)?;
     scan_image_directory(identity, current.as_ref(), &mut out)?;
+    // 设备声明不唯一（或核对不了）时，落点不再唯一指向这块盘：记录仍如实列出，
+    // 但不能被认领。只有记录键由设备声明派生的目标需要这一问，判据见 [`block_claim_gate`]
+    if let Some(why) = block_claim_gate(identity, src) {
+        for record in &mut out {
+            // 已判成外来身份的记录保留它自己的原因：那一条更具体
+            if record.foreign.is_none() {
+                record.unclaimable = Some(why.clone());
+            }
+        }
+    }
     Ok(out)
+}
+
+/// 本目标当前的设备声明能否用来认领记录。`Some` 是拒绝原因，`None` 表示可以。
+///
+/// 记录落点由设备声明派生（[`crate::dev::TargetIdentity::record_path`]），所以只有这类
+/// 目标需要这一问：dm / md 没有记录目录，镜像没有 sysfs 兄弟盘。判定本身在
+/// [`crate::dev::check_device`]——与写命令准入用的是同一个判据。
+/// `src` 为 `None`（目标打不开，判定所需的设备号拿不到）时这里不加 `unclaimable`；
+/// 会因此释放记录的调用方必须自己拒绝打不开的目标（`abandon` 在改名前的
+/// `ownership_scene` 处拒绝），只读的 `inspect` 不认领任何记录
+#[cfg_attr(not(target_os = "linux"), allow(unused_variables))]
+fn block_claim_gate(identity: &crate::dev::TargetIdentity, src: Option<&FileSource>) -> Option<String> {
+    #[cfg(target_os = "linux")]
+    {
+        if identity.kind != crate::dev::TargetKind::Block || identity.record_path().is_none() {
+            return None;
+        }
+        let src = src?;
+        match crate::dev::check_device(src) {
+            Ok(check) if check.is_match() => None,
+            Ok(check) => Some(check.detail),
+            Err(why) => Some(format!("the device identity could not be checked: {why}")),
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    None
 }
 
 /// 归属判定的共同入口：只认目标当前能给出的身份证据。
@@ -211,13 +255,26 @@ fn foreign_slot_refusal(path: &Path, why: &str) -> RunOutcome {
     ))
 }
 
+/// 身份派生的落点被一条**无法证明属于本设备**的记录占住：记录可能属于另一块同身份的盘，
+/// 写下去会覆盖它的回滚凭据。与 `foreign_slot_refusal` 分开：这里没有"把记录挪开"的出路，
+/// 要解决的是身份冲突本身
+fn unclaimable_slot_refusal(path: &Path, why: &str) -> RunOutcome {
+    RunOutcome::refused(format!(
+        "the recovery directory {} holds a record that cannot be proven to belong to this device \
+         ({why}); the record slot derives from a device identity that is not unique, so this record \
+         may belong to another disk wearing the same identity — nothing is written until that \
+         conflict is resolved",
+        path.display()
+    ))
+}
+
 /// 只认本目标身份派生的落点：兄弟落点按目标分目录，那里出现别的身份是常态
-fn own_slot_foreign<'a>(
+fn own_slot_unclaimable<'a>(
     own: Option<&Path>,
     records: &'a [RecoveryRecord],
 ) -> Option<&'a RecoveryRecord> {
     let own = own?;
-    records.iter().find(|r| r.path == own && r.foreign.is_some())
+    records.iter().find(|r| r.path == own && !r.claimable())
 }
 
 /// 取锁前核对身份派生的落点：被别的身份占住时连锁文件都不落进那个目录。
@@ -307,7 +364,13 @@ fn scan_record_root(
                     .to_string(),
             ),
         };
-        out.push(RecoveryRecord { path: candidate, probe: Box::new(probe), foreign, slot: RecordSlot::Sibling });
+        out.push(RecoveryRecord {
+            path: candidate,
+            probe: Box::new(probe),
+            foreign,
+            unclaimable: None,
+            slot: RecordSlot::Sibling,
+        });
     }
     Ok(())
 }
@@ -385,6 +448,7 @@ fn scan_image_directory(
             path: candidate,
             probe: Box::new(probe),
             foreign: None,
+            unclaimable: None,
             slot: RecordSlot::Derived,
         });
     }
@@ -486,6 +550,16 @@ impl TransactionManager {
     /// 现场里只剩记录一类：旧 journal 与旧 checkpoint 不参与枚举，也不阻塞命令
     fn busy(active: &[RecoveryRecord]) -> RunOutcome {
         let listed: Vec<String> = active.iter().map(RecoveryRecord::describe).collect();
+        // 记录在，但设备的声明无法证明是独有的：续跑、undo、abandon 都会被同一条判据挡住，
+        // 这里不指路，只说明要先解决的是什么。单说"目标忙"会把用户送进三条都失败的路
+        if let Some(why) = active.iter().find_map(|r| r.unclaimable.as_ref()) {
+            return RunOutcome::refused(format!(
+                "an unfinished operation is recorded for this target, but its records cannot be proven to \
+                 belong to this device ({why}); the conflict is in the device identity, not in the record — \
+                 resolve it first, then retry ({})",
+                listed.join(", ")
+            ));
+        }
         // 能否回滚是三态：判不出不能被折成"不能回滚"，否则读不出的记录与被本工具
         // 明确排除的条目会得到同一句指引。这个结论只决定拒绝时的指引文案与退出码，
         // 从不放行写入，所以任一记录能证明回滚即可给出 undo 出路
@@ -665,6 +739,26 @@ impl TransactionManager {
         // 锁已在本事务手上，先清掉本目标目录里的残留临时文件，
         // 它们不参与记录枚举与判定
         crate::recovery::sweep_record_temps(&record_path);
+        // 落点由设备声明派生：另有整盘携带同一声明时，这个落点不再唯一指向本设备，
+        // 写下的记录在恢复时无法被证明属于谁。只有记录键来自设备声明的目标需要这一问
+        // （镜像与 loop 目标的键来自载体文件，没有 sysfs 兄弟盘）
+        #[cfg(target_os = "linux")]
+        if src.identity.kind == crate::dev::TargetKind::Block {
+            let check = crate::dev::check_device(&src).map_err(|why| {
+                RunOutcome::refused(format!(
+                    "the device identity of this target could not be checked against the other whole disks \
+                     ({why}) — a recovery record written now could not be proven to belong to this device, \
+                     so no byte is written"
+                ))
+            })?;
+            if !check.is_match() {
+                return Err(RunOutcome::refused(format!(
+                    "the device identity of this target cannot serve as a record key ({}); a record \
+                     written here could not be proven to belong to this device, so no byte is written",
+                    check.detail
+                )));
+            }
+        }
         Ok((src, record_path))
     }
 
@@ -856,6 +950,14 @@ impl TransactionManager {
     /// 它们都经这里取所有权；写方法只挂在 [`WriteSource`] 上（见 `dev::source`），而本函数
     /// 是 crate 内生产代码构造它的唯一途径——"写命令持锁"因此是类型保证，不是调用约定
     fn open_rw(a: &impl TargetRequest) -> Result<WriteSource, RunOutcome> {
+        // 单元测试把块设备的打开换成夹具（见 [`with_open_rw`]）：真实打开要求节点与
+        // root 权限，而调用链测试要问的是判定为拒绝之后链路怎么走。取锁在这一层，
+        // 夹具因此直接给出不取锁的写句柄
+        #[cfg(all(test, target_os = "linux"))]
+        if let Some(opened) = OPEN_RW_OVERRIDE.with(|c| c.borrow().as_ref().map(|f| f())) {
+            let src = opened.map_err(|e| RunOutcome::refused(format!("open failed: {e}")))?;
+            return Ok(WriteSource::unowned(src));
+        }
         // 块设备的恢复状态落在 HostRepository，根与文件属 uid 0；
         // 非 root 的写命令在取锁前就退 6，而不是落成取锁失败的 I/O 错误
         #[cfg(target_os = "linux")]
@@ -881,9 +983,13 @@ impl TransactionManager {
     /// 本目标自己的落点被另一身份占住时拒绝——写下去会覆盖那份记录
     pub(crate) fn claimed_records(src: &FileSource) -> Result<Vec<RecoveryRecord>, RunOutcome> {
         let active = Self::active_records(src)?;
-        if let Some(record) = own_slot_foreign(src.identity.record_path(), &active) {
-            let why = record.foreign.as_deref().unwrap_or_default();
-            return Err(foreign_slot_refusal(record.path(), why));
+        if let Some(record) = own_slot_unclaimable(src.identity.record_path(), &active) {
+            if let Some(why) = record.foreign.as_deref() {
+                return Err(foreign_slot_refusal(record.path(), why));
+            }
+            if let Some(why) = record.unclaimable.as_deref() {
+                return Err(unclaimable_slot_refusal(record.path(), why));
+            }
         }
         Ok(active.into_iter().filter(RecoveryRecord::claimable).collect())
     }
@@ -924,12 +1030,41 @@ impl TransactionManager {
     }
 }
 
+// 单元测试替换 [`TransactionManager::open_rw`] 的目标来源。生产构建里编译不进来：
+// 块设备打开要真实节点、ioctl 与 root 权限，而调用链测试的题目是"判定拒绝之后，
+// 记录有没有被创建、覆盖或释放"
+#[cfg(all(test, target_os = "linux"))]
+type OpenOverride = Box<dyn Fn() -> std::io::Result<crate::dev::FileSource>>;
+
+#[cfg(all(test, target_os = "linux"))]
+thread_local! {
+    static OPEN_RW_OVERRIDE: std::cell::RefCell<Option<OpenOverride>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// 在给定的打开夹具下执行 `body`，返回后恢复原值
+#[cfg(all(test, target_os = "linux"))]
+pub(crate) fn with_open_rw<R>(
+    open: impl Fn() -> std::io::Result<crate::dev::FileSource> + 'static,
+    body: impl FnOnce() -> R,
+) -> R {
+    struct Restore(Option<OpenOverride>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            OPEN_RW_OVERRIDE.with(|c| *c.borrow_mut() = self.0.take());
+        }
+    }
+    let prev = OPEN_RW_OVERRIDE.with(|c| c.replace(Some(Box::new(open))));
+    let _restore = Restore(prev);
+    body()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn record(probe: crate::recovery::CompanionProbe) -> RecoveryRecord {
-        RecoveryRecord { path: "r".into(), probe: Box::new(probe), foreign: None, slot: RecordSlot::Derived }
+        RecoveryRecord { path: "r".into(), probe: Box::new(probe), foreign: None, unclaimable: None, slot: RecordSlot::Derived }
     }
 
     fn way_out(active: &[RecoveryRecord]) -> String {
@@ -978,15 +1113,15 @@ mod tests {
         let mut sibling = record(crate::recovery::CompanionProbe::Absent);
         sibling.path = "s".into();
         sibling.foreign = Some("another target".into());
-        assert!(own_slot_foreign(Some(Path::new("r")), std::slice::from_ref(&sibling)).is_none());
+        assert!(own_slot_unclaimable(Some(Path::new("r")), std::slice::from_ref(&sibling)).is_none());
 
         let mut occupant = record(crate::recovery::CompanionProbe::Absent);
         occupant.path = "r".into();
         occupant.foreign = Some("another target".into());
         let occupant = [occupant];
-        let found = own_slot_foreign(Some(Path::new("r")), &occupant).expect("the own slot is occupied");
+        let found = own_slot_unclaimable(Some(Path::new("r")), &occupant).expect("the own slot is occupied");
         assert_eq!(found.foreign.as_deref(), Some("another target"));
-        assert!(own_slot_foreign(None, &[]).is_none());
+        assert!(own_slot_unclaimable(None, &[]).is_none());
     }
 
     /// 一条越过回滚点、目的区压在旧表区间上的搬移记录：普通 `undo` 拒绝，显式许可下表区可回放
@@ -1176,5 +1311,177 @@ mod tests {
             .find(|r| r.path == other.join(crate::dev::RECORD_NAME))
             .expect("a payload that declares another target is listed with the mismatch");
         assert!(not_claimed.foreign.is_some(), "a payload for another target is not claimable");
+    }
+
+    /// 调用链：`record_target` 在设备声明判定的四种结论下各走哪条路。
+    /// 块设备打开被换成夹具（`with_open_rw`），假 sysfs 树由 `with_sysfs_root` 挂上；
+    /// `begin_table_record` 及其下游（记录落点、记录头）都是生产代码
+    #[cfg(target_os = "linux")]
+    mod claim_chain {
+        use super::*;
+        use crate::dev::fixtures::{attr, bind_rdev, disk};
+        use std::path::PathBuf;
+
+        struct Target(String);
+
+        impl crate::cli::TargetRequest for Target {
+            fn target(&self) -> &str {
+                &self.0
+            }
+            fn sector_size(&self) -> Option<crate::domain::SectorSize> {
+                None
+            }
+        }
+
+        /// 一次用例的目录布局：`sys/` 是假 sysfs，`state/` 放记录与锁，`image` 是夹具句柄
+        /// 指向的文件（4096 字节零，没有分区表）
+        struct Case {
+            _dir: crate::testdir::TestDir,
+            sys: PathBuf,
+            state: PathBuf,
+            image: PathBuf,
+        }
+
+        impl Case {
+            fn new(name: &str) -> Self {
+                let dir = crate::testdir::test_dir(name);
+                let sys = dir.join("sys");
+                let state = dir.join("state");
+                let image = dir.join("target.bin");
+                std::fs::write(&image, vec![0u8; 4096]).unwrap();
+                Self { _dir: dir, sys, state, image }
+            }
+
+            fn disk(&self, name: &str) -> PathBuf {
+                disk(&self.sys, name)
+            }
+
+            fn record_of(&self, device_id: &str) -> PathBuf {
+                let key = crate::dev::key_for_test(device_id, None);
+                crate::dev::record_dir_under(&self.state, &key.hash_hex()).join(crate::dev::RECORD_NAME)
+            }
+
+            fn source(&self, device_id: &str) -> crate::dev::FileSource {
+                crate::dev::test_block_source(&self.image, &self.state, 8, 0, device_id)
+                    .expect("the fixture handle must open")
+            }
+
+            fn target(&self) -> Target {
+                Target(self.image.display().to_string())
+            }
+        }
+
+        /// 记录落点的目录由生产代码的 `create_image` 自己建不出来，先按夹具给的键建好，
+        /// 使"记录有没有被创建"成为可断言的事实
+        fn prepare_slot(case: &Case, device_id: &str) {
+            let record = case.record_of(device_id);
+            std::fs::create_dir_all(record.parent().unwrap()).unwrap();
+        }
+
+        fn begin(case: &Case, device_id: &'static str) -> Result<WriteSource, RunOutcome> {
+            // 夹具闭包必须活过本次调用：设备号与路径先取成自有值
+            let image = case.image.clone();
+            let state = case.state.clone();
+            let target = case.target();
+            crate::dev::with_sysfs_root(&case.sys, || {
+                with_open_rw(
+                    move || crate::dev::test_block_source(&image, &state, 8, 0, device_id),
+                    || TransactionManager::begin_table_record(&target, crate::recovery::OpKind::Add),
+                )
+            })
+        }
+
+        /// `Ok` 一侧是写句柄（没有 `Debug`），拒绝一侧才是用例要看的东西
+        fn refusal(result: Result<WriteSource, RunOutcome>, what: &str) -> RunOutcome {
+            match result {
+                Ok(_) => panic!("{what}"),
+                Err(e) => e,
+            }
+        }
+
+        /// 落点上先放一条**能解码**的记录：拒绝运行是否动过它，因此成为可断言的事实
+        fn plant(case: &Case, device_id: &str, scene: crate::recovery::SceneIdentity) -> PathBuf {
+            let record = case.record_of(device_id);
+            std::fs::create_dir_all(record.parent().unwrap()).unwrap();
+            let mut journal = crate::recovery::RecordJournal::create_image(
+                &record,
+                scene,
+                crate::recovery::OpKind::Add,
+                512,
+                crate::dev::DiskGuidState::Unavailable,
+                None,
+            )
+            .expect("the record must be writable in the fixture slot");
+            journal.barrier().expect("the record must persist");
+            record
+        }
+
+        fn own_scene(case: &Case, device_id: &str) -> crate::recovery::SceneIdentity {
+            let src = case.source(device_id);
+            let probe = crate::platform::probe::probe_of(&src).expect("the fixture has an identity");
+            crate::recovery::SceneIdentity::of_source(&probe, &src)
+        }
+
+        /// 声明唯一：判定放行，写句柄能把记录落盘——这条是其余三条的对照，
+        /// 证明链路确实走到了创建记录那一步
+        #[test]
+        fn a_unique_declaration_reaches_the_record() {
+            let case = Case::new("claim-chain-match");
+            let node = case.disk("sda");
+            attr(&node, "device/serial", "SN-1\n");
+            bind_rdev(&case.sys, 8, 0, &node);
+            prepare_slot(&case, "SN-1");
+
+            let mut src = begin(&case, "SN-1").expect("a unique declaration must be accepted");
+            src.record_journal_mut().expect("an accepted run holds a record journal").barrier()
+                .expect("the accepted record must reach the disk");
+            assert!(case.record_of("SN-1").exists(), "the record must be created on the accepted path");
+        }
+
+        /// 另有设备携带同一声明：拒绝，且落点上已有的记录逐字节不变
+        #[test]
+        fn an_ambiguous_declaration_leaves_the_record_alone() {
+            let case = Case::new("claim-chain-ambiguous");
+            let node = case.disk("sda");
+            attr(&node, "device/serial", "SN-1\n");
+            bind_rdev(&case.sys, 8, 0, &node);
+            let clone = case.disk("sdb");
+            attr(&clone, "device/serial", "SN-1\n");
+            let record = plant(&case, "SN-1", own_scene(&case, "SN-1"));
+            let before = std::fs::read(&record).unwrap();
+
+            let err = refusal(begin(&case, "SN-1"), "a cloned declaration must be refused");
+            assert_eq!(std::fs::read(&record).unwrap(), before, "a refused run changed the record: {err:?}");
+        }
+
+        /// 记录落点被另一身份的载荷占住：拒绝，且那份记录逐字节不变
+        #[test]
+        fn a_foreign_record_is_neither_overwritten_nor_released() {
+            let case = Case::new("claim-chain-mismatch");
+            let node = case.disk("sda");
+            attr(&node, "device/serial", "SN-1\n");
+            bind_rdev(&case.sys, 8, 0, &node);
+            let other = crate::recovery::SceneIdentity::from_target(crate::platform::TargetId::from_material(
+                crate::platform::IdentityMaterial::image(None, Some([9; 16])).expect("a file ID"),
+            ));
+            let record = plant(&case, "SN-1", other);
+            let before = std::fs::read(&record).unwrap();
+
+            let err = refusal(begin(&case, "SN-1"), "a record for another target must be refused");
+            assert_eq!(std::fs::read(&record).unwrap(), before, "the foreign record changed: {err:?}");
+        }
+
+        /// 设备读不出任何声明：无法证明落点唯一，拒绝且不碰已有记录
+        #[test]
+        fn an_undeclared_device_leaves_the_record_alone() {
+            let case = Case::new("claim-chain-insufficient");
+            let node = case.disk("sda");
+            bind_rdev(&case.sys, 8, 0, &node);
+            let record = plant(&case, "SN-1", own_scene(&case, "SN-1"));
+            let before = std::fs::read(&record).unwrap();
+
+            let err = refusal(begin(&case, "SN-1"), "a device without a declaration must be refused");
+            assert_eq!(std::fs::read(&record).unwrap(), before, "a refused run changed the record: {err:?}");
+        }
     }
 }

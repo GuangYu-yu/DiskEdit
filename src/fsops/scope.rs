@@ -438,7 +438,7 @@ pub(crate) fn find_block_partition_node(src: &FileSource, part: u32, want_start:
 #[cfg(target_os = "linux")]
 fn find_block_partition_node_once(src: &FileSource, part: u32, want_start: u64) -> Result<String, FsError> {
     let disk = block_disk_name(src)?;
-    let sys = Path::new("/sys/block").join(&disk);
+    let sys = crate::dev::sysfs_block_dir().join(&disk);
     for entry in std::fs::read_dir(&sys).map_err(FsError::from)? {
         let entry = entry.map_err(FsError::from)?;
         let start_file = entry.path().join("start");
@@ -469,8 +469,9 @@ fn find_block_partition_node_once(src: &FileSource, part: u32, want_start: u64) 
         return Ok(dev);
     }
     Err(FsError::invalid(format!(
-        "no kernel partition with number {part} starts at byte {want_start} under /sys/block/{disk} — \
-         the kernel partition view does not match this table entry"
+        "no kernel partition with number {part} starts at byte {want_start} under {} — \
+         the kernel partition view does not match this table entry",
+        sys.display()
     )))
 }
 
@@ -485,7 +486,8 @@ pub(crate) fn block_disk_name(src: &FileSource) -> Result<String, FsError> {
     if rdev == 0 {
         return Err(FsError::Io(io::Error::other("open target reports no device number")));
     }
-    let sysdev = Path::new("/sys/dev/block").join(format!("{}:{}", libc::major(rdev), libc::minor(rdev)));
+    let sysdev = crate::dev::sysfs_dev_block_dir()
+        .join(format!("{}:{}", libc::major(rdev), libc::minor(rdev)));
     let mut node = std::fs::canonicalize(&sysdev)
         .map_err(|e| FsError::Io(io::Error::other(format!("no sysfs node for {sysdev:?}: {e}"))))?;
     // 分区目录带 `partition` 属性；整盘目录没有。目标是分区节点时也要落到它的父盘

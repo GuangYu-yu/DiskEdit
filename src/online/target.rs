@@ -78,7 +78,7 @@ fn verify_btrfs_device(mnt: &Path, dev_no: (u64, u64)) -> io::Result<()> {
             info.num_devices
         )));
     }
-    let dir = Path::new("/sys/fs/btrfs").join(fsid_uuid(&info.fsid)).join("devices");
+    let dir = crate::dev::sysfs_root().join("fs/btrfs").join(fsid_uuid(&info.fsid)).join("devices");
     let rd = fs::read_dir(&dir).map_err(|e| {
         io::Error::other(format!(
             "cannot list {} (the btrfs sysfs device mapping exists since Linux 5.6): {e}",
@@ -193,7 +193,7 @@ pub(crate) fn resolve_target(mountpoint: &Path) -> io::Result<OnlineTarget> {
     let rdev = meta.st_rdev();
     let (maj, min) = (libc::major(rdev), libc::minor(rdev));
 
-    let sysdir = PathBuf::from(format!("/sys/dev/block/{maj}:{min}"));
+    let sysdir = crate::dev::sysfs_dev_block_dir().join(format!("{maj}:{min}"));
     // 内核 sysfs-block ABI：存在 partition 属性即说明该设备是分区，内容为分区号。
     // 属性不存在 = 不是分区（设备形态）；属性在但读不出来 = 环境故障，不能也报成"不是分区"
     let pno = match sysfs_u64(&sysdir.join("partition")) {
@@ -222,17 +222,17 @@ pub(crate) fn resolve_target(mountpoint: &Path) -> io::Result<OnlineTarget> {
         .ok_or_else(|| io::Error::other("sysfs link without basename"))?
         .to_string_lossy()
         .into_owned();
-    let disk_exists = |n: &str| Path::new("/sys/block").join(n).exists();
+    let disk_exists = |n: &str| crate::dev::sysfs_block_dir().join(n).exists();
     let disk_name = disk_name_from_partition(&part_name, disk_exists).ok_or_else(|| {
         io::Error::other(format!("cannot derive disk name from partition {part_name}"))
     })?;
-    let disk_cap_bytes = sysfs_u64(&Path::new("/sys/block").join(&disk_name).join("size"))?
+    let disk_cap_bytes = sysfs_u64(&crate::dev::sysfs_block_dir().join(&disk_name).join("size"))?
         .checked_mul(512)
         .ok_or_else(|| io::Error::other("disk capacity overflows u64 bytes"))?;
     // queue/logical_block_size：内核 sysfs 只读属性，单位 = 字节；
     // 0 是异常输入，后续尺寸换算（字节 ÷ 逻辑块）会除零，在此拦截
     let logical_block =
-        sysfs_u64(&Path::new("/sys/block").join(&disk_name).join("queue/logical_block_size"))?;
+        sysfs_u64(&crate::dev::sysfs_block_dir().join(&disk_name).join("queue/logical_block_size"))?;
     if logical_block == 0 {
         return Err(io::Error::other("logical_block_size reported as 0 — sysfs value invalid"));
     }
@@ -240,11 +240,11 @@ pub(crate) fn resolve_target(mountpoint: &Path) -> io::Result<OnlineTarget> {
     // 盘名由分区 sysfs 目录名推得，/dev 下的同名节点必须真是这台设备：容量、
     // logical_block_size、邻居区间全部取自 sysfs，而 sfdisk / partx / BLKPG / pvresize
     // 只拿到这个路径——名字指向另一台设备时"几何来自 A、写入落在 B"
-    ensure_node_is_device(&disk_dev, &Path::new("/sys/block").join(&disk_name))?;
+    ensure_node_is_device(&disk_dev, &crate::dev::sysfs_block_dir().join(&disk_name))?;
 
     // 相邻分区区间（本分区除外），fail-fast 前置自查；内核 -EBUSY 兜底
     let this_dev = (maj as u64, min as u64);
-    let others = collect_neighbours(&Path::new("/sys/block").join(&disk_name), |p| is_same_device(p, this_dev))?;
+    let others = collect_neighbours(&crate::dev::sysfs_block_dir().join(&disk_name), |p| is_same_device(p, this_dev))?;
 
     Ok(OnlineTarget {
         disk_dev,
@@ -267,7 +267,7 @@ pub(crate) fn blkpg_resize(t: &OnlineTarget, new_len_bytes: u64) -> io::Result<(
     let disk_name = t.disk_dev.file_name().ok_or_else(|| {
         io::Error::other(format!("{} has no file name to cross-check against sysfs", t.disk_dev.display()))
     })?;
-    crate::dev::ensure_node_is_device(&t.disk_dev, &Path::new("/sys/block").join(disk_name))?;
+    crate::dev::ensure_node_is_device(&t.disk_dev, &crate::dev::sysfs_block_dir().join(disk_name))?;
     let disk = fs::OpenOptions::new().read(true).write(true).open(&t.disk_dev)?;
     crate::ioctl::blkpg_resize_partition(&disk, t.start_bytes, new_len_bytes, t.pno)
 }
