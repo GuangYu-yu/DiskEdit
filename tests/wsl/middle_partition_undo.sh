@@ -5,7 +5,7 @@ require_bin
 
 img T middle12.img
 
-rm -rf "$T" "$T"$SIDECAR_GLOB
+rm_img "$T"
 truncate -s 128M "$T"
 $B new "$T" --yes || exit 1
 $B add "$T" 16M --align mib --name p1 --yes

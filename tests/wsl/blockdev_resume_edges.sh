@@ -9,7 +9,7 @@ img T t19.img
 
 
 mk1() { # 1G: p1 100M p2 100M p3 200M
-  rm -rf "$T" "$T"$SIDECAR_GLOB
+  rm_img "$T"
   truncate -s 1G "$T"
   $B new "$T" --yes >/dev/null
   $B add "$T" 100M --align mib --name p1 --yes >/dev/null
@@ -77,7 +77,7 @@ echo "mib : $($B info "$T" | grep -o '"num":2,"first_lba":[0-9]*')  (期望 9011
 echo
 echo "########## E: 边界（128 分区上限） ##########"
 img T2 t19b.img; T=$T2
-rm -rf "$T" "$T"$SIDECAR_GLOB
+rm_img "$T"
 truncate -s 1G "$T"
 $B new "$T" --yes >/dev/null
 OK=0

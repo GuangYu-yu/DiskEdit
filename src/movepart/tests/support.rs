@@ -15,6 +15,23 @@ pub(crate) fn geom_of(src: &FileSource) -> ValidatedGeometry {
 /// 记录是此类作业唯一的持久进度点，故续跑/崩溃用例必须先有它。
 /// `request` 是这条记录要执行的请求（分区、新起点、新末端）：摘要必须在首次落盘前
 /// 绑定，取法与生产入口一致——操作取记录自己的，扇区大小与盘大小取目标现场
+/// 命令层拒绝走 `bail_fail` → `panic_any(ExitRequest::Report)`；测试按 `main` 的取法
+/// 把载荷解回退出码与结论文字，其它 panic 原样抛回。闭包正常返回时取 0 与空文字：
+/// 命令没有以拒绝收场
+#[cfg(target_os = "linux")]
+pub(crate) fn refusal_of<T>(f: impl FnOnce() -> T) -> (u8, String) {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+        Ok(_) => (0, String::new()),
+        Err(payload) => match payload.downcast_ref::<crate::support::ExitRequest>() {
+            Some(crate::support::ExitRequest::Report(outcome)) => {
+                (outcome.exit_code(), outcome.to_string())
+            }
+            Some(crate::support::ExitRequest::Silent(code)) => (*code, String::new()),
+            None => std::panic::resume_unwind(payload),
+        },
+    }
+}
+
 #[cfg(target_os = "linux")]
 pub(crate) fn attach_record(
     src: &mut WriteSource,
@@ -23,14 +40,9 @@ pub(crate) fn attach_record(
     request: (u32, u64, u64),
 ) -> std::path::PathBuf {
     let record_path = src.identity.record_path().expect("image targets have a record path").to_path_buf();
-    // 记录目录的形状由生产侧复核（镜像旁 0700，group/other 无权限）；夹具自己建目录，
+    // 记录目录的形状由生产侧复核（0700，group/other 无权限）；夹具自己建目录，
     // 就必须按同一形状建，否则写句柄在 `prepare_record_dir` 处被拒
-    std::fs::create_dir_all(record_path.parent().unwrap()).unwrap();
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(record_path.parent().unwrap(), std::fs::Permissions::from_mode(0o700))
-            .unwrap();
-    }
+    crate::testdir::private_record_dir(record_path.parent().unwrap());
     let probe = crate::platform::probe::probe_of(src).unwrap();
     let scene = crate::recovery::SceneIdentity::of_source(&probe, src);
     let mut journal = crate::recovery::RecordJournal::create_image(

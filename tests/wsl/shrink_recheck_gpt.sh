@@ -30,7 +30,7 @@ echo "Block size:               4096"
 EOF
 chmod +x "$FAKE/dumpe2fs"
 
-rm -rf "$T" "$T"$SIDECAR_GLOB
+rm_img "$T"
 truncate -s 512M "$T"
 $B new "$T" --yes >/dev/null || { echo "  BAD  fixture: new failed"; rc=1; exit 1; }
 $B add "$T" 400M --align mib --name p1 --yes >/dev/null || { echo "  BAD  fixture: add failed"; rc=1; exit 1; }

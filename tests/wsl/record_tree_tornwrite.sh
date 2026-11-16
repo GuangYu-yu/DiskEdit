@@ -9,7 +9,7 @@ img T t22a.img
 SNAP=$WSL_ROOT/t22snap
 
 mk() { # 100M/100M/200M
-  rm -rf "$T" "$T"$SIDECAR_GLOB
+  rm_img "$T"
   truncate -s 1G "$T"
   $B new "$T" --yes >/dev/null
   $B add --yes "$T" 104857600 --start 2048 --name p1 >/dev/null && $B mkfs "$T":1 ext4 --yes >/dev/null

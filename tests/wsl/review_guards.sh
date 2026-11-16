@@ -16,7 +16,7 @@ fi
 img T1 rev_g1.img
 img T2 rev_g2.img
 img T5 rev_g5.img
-track_file "$T1"; track_file "$T2"; rm -rf "$T1" "$T1"$SIDECAR_GLOB "$T2" "$T2"$SIDECAR_GLOB "$T5" "$T5"$SIDECAR_GLOB 2>/dev/null
+track_file "$T1"; track_file "$T2"; rm_img "$T1"; rm_img "$T2"; rm_img "$T5" 2>/dev/null
 
 echo "########## E1: GPT 表项重叠 ⇒ FS 写命令拒绝且不写盘 ##########"
 truncate -s 256M "$T1"
@@ -139,7 +139,7 @@ echo "########## E3: 块设备搬移中断续跑（条目已提交、表步未�
 # 契约：resume 完成表步后分区已在 400000——退 3 的语义是"未写盘且请求与现状不匹配"，
 # 而续跑时盘上真相与请求一致——3 是码与理由双错配
 img T3 rev_g3.img
-rm -rf "$T3" "$T3"$SIDECAR_GLOB 2>/dev/null
+rm_img "$T3" 2>/dev/null
 truncate -s 512M "$T3"
 $BF new "$T3" --yes >/dev/null
 $BF add --yes "$T3" 49283072 --start 2048 --name p1 >/dev/null
@@ -174,7 +174,7 @@ echo "########## E6: abandon 后重跑多挡路者 Shift 作业（不得二次�
 img T6 rev_g6.img
 img T6X rev_g6x.img
 track_file "$T6"; mk6() { # $1=img
-    rm -rf "$1" "$1"$SIDECAR_GLOB 2>/dev/null
+    rm_img "$1" 2>/dev/null
     truncate -s 4G "$1"
     $BF new "$1" --yes >/dev/null
     $BF add "$1" 300M --align mib --name p1 --yes >/dev/null
@@ -211,7 +211,7 @@ echo "########## E4: 在线写表期间第三方创建分区（邻居集陈旧�
 img T4 rev_g4.img
 overlap_hits=0
 for i in 1 2 3 4 5 6 7 8; do
-    rm -rf "$T4" "$T4"$SIDECAR_GLOB 2>/dev/null
+    rm_img "$T4" 2>/dev/null
     truncate -s 2G "$T4"
     $B new "$T4" --yes >/dev/null
     $B add "$T4" 500M --align mib --name p1 --yes >/dev/null

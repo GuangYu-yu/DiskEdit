@@ -109,6 +109,8 @@ pub(crate) fn execute(
             hasher.update(&buf);
         }
         let seen: [u8; 32] = hasher.clone().finalize().into();
+        // 摘要必须是这一段目的内容本身：零摘要（记录没给依据）与任何一份真实摘要都不等，
+        // 同样落进拒绝——按无法验证的块数跳过拷贝不可逆
         if seen != state.prefix_digest() {
             let message = format!(
                 "partition {part}: the target's copied prefix does not match the recovery record \

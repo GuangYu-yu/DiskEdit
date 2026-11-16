@@ -22,7 +22,7 @@ fake() { # $1=名  $2=脚本体
 }
 
 setup_gpt() {
-    rm -rf "$T" "$T"$SIDECAR_GLOB
+    rm_img "$T"
     truncate -s 512M "$T"
     $B new "$T" --yes >/dev/null
     $B add "$T" 400M --align mib --name p1 --yes >/dev/null 2>&1
@@ -103,7 +103,7 @@ assert_eq "$(pt1)" '"size_bytes":419430400' "D 落点未证实不写表（分区
 
 echo
 echo "===== E: MBR 路径的缩容同样被命令层拒绝（resize 只扩），盘不动 ====="
-rm -rf "$T" "$T"$SIDECAR_GLOB
+rm_img "$T"
 truncate -s 512M "$T"
 $B new "$T" --table mbr --yes >/dev/null
 $B add "$T" 400M --align mib --yes >/dev/null 2>&1

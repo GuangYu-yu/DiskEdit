@@ -654,7 +654,7 @@ fn prepare_steps<'a>(
         if reloc.entries.len() != planned || !chunk_matches {
             return Err(RunOutcome::refused(format!(
                 "the recovery record holds {} relocation entries of {}-byte chunks, this plan holds {planned} — \
-                 the record and the requested transfer describe different jobs; nothing was written",
+                 the record and the requested transfer describe different jobs",
                 reloc.entries.len(),
                 reloc.chunk_bytes
             )));
@@ -663,7 +663,7 @@ fn prepare_steps<'a>(
         if reloc.ss != sector_size {
             return Err(RunOutcome::refused(format!(
                 "the recovery record was written with a {}-byte sector, this target has {sector_size} — \
-                 the record and the requested transfer describe different jobs; nothing was written",
+                 the record and the requested transfer describe different jobs",
                 reloc.ss
             )));
         }
@@ -848,6 +848,10 @@ fn journal_state(src: &WriteSource, steps: &[PreparedStep]) -> Result<TransferSt
     state.entry_index = reloc.entry_index;
     state.chunks_in_entry = reloc.chunks_in_entry;
     state.prefix_digest = reloc.prefix_digest;
+    let transfers = steps
+        .iter()
+        .filter(|s| matches!(s, PreparedStep::Transfer { .. }))
+        .count();
     let mut recomputed = 0u64;
     let counts = steps.iter().filter_map(|s| match s {
         PreparedStep::Transfer { reloc, .. } => Some(reloc.chunks),
@@ -866,11 +870,12 @@ fn journal_state(src: &WriteSource, steps: &[PreparedStep]) -> Result<TransferSt
         )
     })?;
     // 全局块游标只是"已落盘进度"的滞后表示：块写入与游标推进是两次落盘，游标可以
-    // 落后，但不可能领先于条目游标能解释的块数。领先的记录与两处落盘的顺序不符
-    if state.transfer_cursor > recomputed {
+    // 落后，但不可能领先于条目游标能解释的块数。本计划没有搬移步骤（表已提交后的
+    // FS 收尾）时这条分解不成立；有搬移步骤则条目表必然非空（条目就是一串 Transfer）
+    if transfers > 0 && state.transfer_cursor > recomputed {
         return Err(RunOutcome::refused(format!(
             "the recovery record's transfer cursor ({}) exceeds the progress its entry cursors account for \
-             ({recomputed}) — the record contradicts itself; nothing was written",
+             ({recomputed}) — the record contradicts itself",
             state.transfer_cursor
         )));
     }

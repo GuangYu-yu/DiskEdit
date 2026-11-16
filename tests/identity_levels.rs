@@ -212,7 +212,9 @@ fn a_dm_device_is_unusable_for_writes() {
     let (write_code, write_out, write_err) =
         run_with_env(&["add", &dm, "1M", "--yes"], &[("DISKEDIT_STATE_DIR", &state)]);
 
-    let _ = Command::new("dmsetup").args(["remove", &name]).status();
+    // 写命令的探测会让 dm 节点短暂处于打开状态，普通 remove 会报 EBUSY；这是本测试
+    // 自己建的一次性设备，按强制移除收尾，残留会占住 loop 并影响后续用例
+    let _ = Command::new("dmsetup").args(["remove", "--force", &name]).status();
     detach_loop(&device);
 
     assert_eq!(read_code, 0, "reads must not be gated by identity: {read_out}\n{read_err}");

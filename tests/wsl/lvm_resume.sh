@@ -82,7 +82,8 @@ build_fixture() {
     LOOP=
   fi
   vgremove -ff "$VG" >/dev/null 2>&1
-  rm -rf "$IMG" "$IMG"$SIDECAR_GLOB "$MARK" 2>/dev/null
+  rm_img "$IMG" 2>/dev/null
+  rm -rf "$MARK"
   truncate -s 64M "$IMG" || fail "truncate $IMG"
   $B new "$IMG" --table "$table" --yes >/dev/null || fail "new $IMG --table $table"
   $B add "$IMG" 48M --align mib --yes >/dev/null || fail "add $IMG"

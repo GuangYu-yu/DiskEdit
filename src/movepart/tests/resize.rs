@@ -6,6 +6,8 @@ use crate::execution::{fix_ntfs_hidden_sectors, ntfs_hidden_value};
 use gptman::{GPT, GPTPartitionEntry};
 #[cfg(target_os = "linux")]
 use std::io::Cursor;
+#[cfg(target_os = "linux")]
+use sha2::{Digest, Sha256};
 
 /// HiddenSectors 修正：0x1C 处写入 LE32 起始 LBA；≥2^32 值取 0（纯函数分支 + 落盘各验一次）
 #[test]
@@ -76,7 +78,7 @@ pub(crate) fn resize_part_resume_skips_done_chunks() {
     // 摘要按生产的取法绑定（操作取记录自己的，扇区与盘大小取目标现场）
     let (new_start, new_end) = (12288u64, 20479u64);
     let record_path = src.identity.record_path().expect("image targets have a record path").to_path_buf();
-    std::fs::create_dir_all(record_path.parent().unwrap()).unwrap();
+    crate::testdir::private_record_dir(record_path.parent().unwrap());
     let probe = crate::platform::probe::probe_of(&src).unwrap();
     let scene = crate::recovery::SceneIdentity::of_source(&probe, &src);
     let mut journal = crate::recovery::RecordJournal::create_image(
@@ -98,12 +100,43 @@ pub(crate) fn resize_part_resume_skips_done_chunks() {
     );
     journal.bind_plan(digest).expect("a fresh record binds the request");
     journal.bind_old_range((2048, 10239)).unwrap();
-    journal.record_progress(1, 1, 0).unwrap();
+    // 记录的条目表与生产同形：一条目、已完成执行序的第一块（正位移从尾块起），
+    // 摘要就是那一块的目的内容。续跑据此跳过尾块、从第二块接着搬
+    let prefix: [u8; 32] = {
+        let mut hasher = Sha256::new();
+        hasher.update(vec![0x13u8; chunk as usize]);
+        hasher.finalize().into()
+    };
+    journal
+        .bind_relocation(
+            crate::recovery::Relocation {
+                entries: vec![crate::recovery::RelocEntry {
+                    partition: 1,
+                    src_first: 2048,
+                    len: 8192,
+                    delta: 10240,
+                    is_swap: false,
+                }],
+                entry_index: 0,
+                chunks_in_entry: 1,
+                prefix_digest: prefix,
+                chunk_bytes: chunk,
+                kind: crate::recovery::RelocKind::Shift,
+                grow_part: 0,
+                disk_size: src.size,
+                ss,
+            },
+            None,
+        )
+        .expect("a legal relocation must bind");
+    journal
+        .record_transfer_checkpoint(Some((0, 1)), 1, 1, prefix)
+        .expect("the checkpoint advances to the first done chunk");
     src.adopt_record_journal(journal);
 
     // 续传：跳过 chunk 0，补齐 chunk 1..3，提交表项
     let o = rsize(&mut src, 1, new_start, new_end, chunk, false, &mut |_| {});
-    assert!(o.is_layout_applied(), "resize must apply (exit {})", o.exit_code());
+    assert!(o.is_layout_applied(), "resize must apply: {o:?}");
 
     // 终验：目标 4 块 = 指纹 0x10..0x13（chunk 0 未被重搬污染）
     for i in 0..4u8 {
@@ -134,7 +167,7 @@ pub(crate) fn resize_crash_records_durable_progress() {
     // 本请求的新区间与下面的 rsize 入参同值；摘要按生产的取法在首次落盘前绑定
     let (new_start, new_end) = (4096u64, 12287u64);
     let record_path = src.identity.record_path().expect("image targets have a record path").to_path_buf();
-    std::fs::create_dir_all(record_path.parent().unwrap()).unwrap();
+    crate::testdir::private_record_dir(record_path.parent().unwrap());
     let probe = crate::platform::probe::probe_of(&src).unwrap();
     let scene = crate::recovery::SceneIdentity::of_source(&probe, &src);
     let mut journal = crate::recovery::RecordJournal::create_image(
@@ -201,7 +234,7 @@ fn committed_record_fixture(part: u32, op: crate::recovery::OpKind, old: (u64, u
     src.write_fixture(new.0 * ss + 512, &label).unwrap();
 
     let record_path = src.identity.record_path().expect("image targets have a record path").to_path_buf();
-    std::fs::create_dir_all(record_path.parent().unwrap()).unwrap();
+    crate::testdir::private_record_dir(record_path.parent().unwrap());
     let probe = crate::platform::probe::probe_of(&src).unwrap();
     let scene = crate::recovery::SceneIdentity::of_source(&probe, &src);
     let mut journal = crate::recovery::RecordJournal::create_image(
@@ -448,15 +481,10 @@ pub(crate) fn a_committed_record_is_not_resumed_by_the_original_command() {
         allow_move: false,
         chunk_mib: Some(1),
     };
-    let o = crate::cmd::resize::cmd_resize(&req);
-    match &o {
-        RunOutcome::Refused(m) => {
-            assert!(m.contains("marked committed"), "the refusal must name the committed record: {m}")
-        }
-        other => panic!("expected Refused, got {other:?}"),
-    }
+    let (code, why) = crate::movepart::tests::support::refusal_of(|| crate::cmd::resize::cmd_resize(&req));
     // 本次运行没有打开记录、也没有写目标：归责投影后仍是 3（记录只是被读到）
-    assert_eq!(o.settled().exit_code(), 3, "the refusal writes nothing, so it stays at 3");
+    assert_eq!(code, 3, "a committed record is refused at admission");
+    assert!(why.contains("marked committed"), "the refusal must name the committed record: {why}");
     assert!(record_path.exists(), "the refusal must leave the record for undo/abandon");
 }
 
@@ -484,13 +512,8 @@ pub(crate) fn a_committed_mkfs_record_is_not_reformatted() {
         label: None,
         yes: true,
     };
-    let o = crate::cmd::fs::cmd_mkfs(&req);
-    match &o {
-        RunOutcome::Refused(m) => {
-            assert!(m.contains("marked committed"), "the refusal must name the committed record: {m}")
-        }
-        other => panic!("expected Refused, got {other:?}"),
-    }
-    assert_eq!(o.settled().exit_code(), 3, "the refusal writes nothing, so it stays at 3");
+    let (code, why) = crate::movepart::tests::support::refusal_of(|| crate::cmd::fs::cmd_mkfs(&req));
+    assert_eq!(code, 3, "a committed mkfs record is refused at admission");
+    assert!(why.contains("marked committed"), "the refusal must name the committed record: {why}");
     assert!(record_path.exists(), "the refusal must leave the record for undo/abandon");
 }

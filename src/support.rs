@@ -12,19 +12,25 @@ use crate::{movepart, table};
 #[cfg(test)]
 use crate::dev; // 只有测试夹具 src_from 用得到
 
-/// 库层的退出请求：携带进程应当采用的退出码。`main` 把这类载荷与真正的 panic 分开，
-/// 按码退出且不打印 panic 报告
+/// 库层的退出请求：`main` 把这类载荷与真正的 panic 分开，不打印 panic 报告。
+/// 两种形态把"报告谁来打"说清楚：`Silent` 由调用点自己呈现结论，`Report` 把尚未
+/// 打印的结论一路带到进程入口——码与文字同源，测试也能把同一份结论解回来
 #[derive(Debug)]
-pub(crate) struct ExitRequest(pub(crate) u8);
+pub(crate) enum ExitRequest {
+    /// 调用点已经把该说的话说完，`main` 只按码退出
+    Silent(u8),
+    /// 结论尚未打印：`main` 打印它并按结论自己的码退出
+    Report(RunOutcome),
+}
 
 /// 库层唯一的退出出口。库代码（解析、命令、收尾）不得调用 `process::exit`：那会连
 /// 调用者一起终止——测试目标里一条用例退出就丢掉整份结果，上层也拦不住。请求沿展开栈
-/// 回到入口，由 `main` 收敛成进程退出码；`code` 的呈现由调用点负责。
+/// 回到入口，由 `main` 收敛成进程退出码；`Silent` 的报告由调用点自己打出
 ///
 /// 这条通道依赖展开：panic 策略保持 unwind（`.cargo/config.toml` 的 release 段）。
 /// 改成 abort 后载荷到不了 `main`，退出码与 panic 归责一起丢失
 pub(crate) fn exit_with(code: u8) -> ! {
-    std::panic::panic_any(ExitRequest(code))
+    std::panic::panic_any(ExitRequest::Silent(code))
 }
 
 /// 规划/执行失败的出口：先按本次写事实归责，报告文字与退出码都取自 outcome
@@ -32,9 +38,7 @@ pub(crate) fn exit_with(code: u8) -> ! {
 /// 那会绕开 RunOutcome::report 的措辞与 exit_code 的映射
 pub(crate) fn bail_fail(f: crate::outcome::RunOutcome) -> ! {
     // 报告文字与退出码都取自 outcome；这里没有要收尾的 pending
-    let f = f.settled();
-    f.report();
-    exit_with(f.exit_code())
+    std::panic::panic_any(ExitRequest::Report(f.settled()))
 }
 
 /// 持久日志的单文件上限：打开时已有日志达到这个长度就轮转一代

@@ -9,10 +9,10 @@ require_bin
 
 img T t29.img
 
-rm -rf "$T" "$T"$SIDECAR_GLOB 2>/dev/null
+rm_img "$T" 2>/dev/null
 
 echo "===== A: MBR 建表 / add --type-guid / flag ====="
-rm -rf "$T" "$T"$SIDECAR_GLOB
+rm_img "$T"
 truncate -s 256M "$T"
 $B new "$T" --table mbr --yes; echo "new exit=$?"
 $B add --yes "$T" 50151424 --start 2048 >/dev/null; echo "add p1 exit=$?"
@@ -75,7 +75,7 @@ lo_detach "$LD"
 
 echo
 echo "===== E: GPT 侧 delete ====="
-rm -rf "$T" "$T"$SIDECAR_GLOB
+rm_img "$T"
 truncate -s 64M "$T"
 $B new "$T" --yes >/dev/null
 $B add --yes "$T" 50151424 --start 2048 --name g1 >/dev/null

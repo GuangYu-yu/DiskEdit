@@ -8,10 +8,10 @@ cleanup_hook() { umount "$TEST_MNT" 2>/dev/null; }
 
 img T t20.img
 
-rm -rf "$T" "$T"$SIDECAR_GLOB 2>/dev/null
+rm_img "$T" 2>/dev/null
 
 echo "########## A: xfs 扩容 400M → 1500M ##########"
-rm -rf "$T" "$T"$SIDECAR_GLOB; truncate -s 2G "$T"
+rm_img "$T"; truncate -s 2G "$T"
 $B new "$T" --yes >/dev/null
 $B add "$T" 400M --align mib --name x --yes >/dev/null; echo "add exit=$?"
 $B mkfs "$T":1 xfs --yes; echo "mkfs exit=$?"
@@ -28,7 +28,7 @@ lo_detach "$LD"; sgdisk -v "$T" >/dev/null 2>&1 && echo "sgdisk clean" || { echo
 
 echo
 echo "########## B: btrfs 扩容 400M → 1500M ##########"
-rm -rf "$T" "$T"$SIDECAR_GLOB; truncate -s 2G "$T"
+rm_img "$T"; truncate -s 2G "$T"
 $B new "$T" --yes >/dev/null
 $B add "$T" 400M --align mib --name b --yes >/dev/null; echo "add exit=$?"
 $B mkfs "$T":1 btrfs --yes; echo "mkfs exit=$?"
@@ -45,7 +45,7 @@ lo_detach "$LD"; sgdisk -v "$T" >/dev/null 2>&1 && echo "sgdisk clean" || { echo
 
 echo
 echo "########## C: ntfs 搬移（HiddenSectors 修复） ##########"
-rm -rf "$T" "$T"$SIDECAR_GLOB; truncate -s 1G "$T"
+rm_img "$T"; truncate -s 1G "$T"
 $B new "$T" --yes >/dev/null
 $B add "$T" 200M --align mib --name n --yes >/dev/null; echo "add exit=$?"
 $B mkfs "$T":1 ntfs --yes; echo "mkfs exit=$?"
@@ -81,7 +81,7 @@ echo "########## D: btrfs 多设备拒绝（num_devices > 1 不可按单成员�
 # UnsupportedFs → unsupported（6，未写盘）。
 img IMGD t20d.img
 img D2 t20d2.img
-rm -rf "$IMGD" "$IMGD"$SIDECAR_GLOB "$D2" "$D2"$SIDECAR_GLOB 2>/dev/null
+rm_img "$IMGD"; rm_img "$D2" 2>/dev/null
 truncate -s 1G "$IMGD"
 $B new "$IMGD" --yes >/dev/null
 $B add --yes "$IMGD" 533725184 --start 2048 --name btrmd >/dev/null

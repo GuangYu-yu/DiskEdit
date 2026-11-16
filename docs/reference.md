@@ -62,7 +62,8 @@ target:
 
 path:
   PATH is dispatched by structure: a direct entry inside a recovery-record
-  directory (`<image>.diskedit/...` or `<state_root>/recovery/<identity-hash>/...`,
+  directory (`<image_state_root>/images/<key-hash>/...`,
+  `<image>.diskedit/...` or `<state_root>/recovery/<identity-hash>/...`,
   excluding `record.lock`) is itself decoded as evidence. Entries in the
   quarantine area (`.abandoned[.N]`, `.torn[.N]`) are marked as such and do
   not count as active records. This build never writes `.torn[.N]`; the name
@@ -110,9 +111,9 @@ diskedit records list [TARGET]
   active record.
 
   There is no index yet: every row carries "registered": false, and records are
-  enumerated in memory. Sidecars that are not addressed by TARGET are not
-  searched — pass TARGET to see one, or use `records scan` with the directory
-  that holds the images.
+  enumerated in memory. Record directories that are not addressed by TARGET are
+  not searched — pass TARGET to see one, or use `records scan` with the
+  directory that holds the images or with the image state root.
 ```
 
 ### `records verify`
@@ -163,8 +164,10 @@ diskedit records scan <ROOT>
   Enumerate records under a container root and print them as JSON.
 
   ROOT is one of:
-    <state_root>/recovery   every direct child is an identity-hash record directory
-    <image directory>       every direct child named <name>.diskedit is a record directory
+    <state_root>/recovery      every direct child is an identity-hash record directory
+    <image_state_root>         its `images` child holds one record directory per image key
+    <image_state_root>/images  every direct child is an image record directory
+    <image directory>          every direct child named <name>.diskedit is a record directory
 
   A subdirectory of <state_root> other than `recovery` is refused: a record
   directory is not a container. Scanning is bounded to depth 3, 64 MiB per file,

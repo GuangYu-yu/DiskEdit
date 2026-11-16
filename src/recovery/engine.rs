@@ -590,8 +590,8 @@ impl TransactionManager {
                      `diskedit abandon`"
                         .to_string()
                 } else if replay_only {
-                    "the operation recorded there is marked committed and its data writes are past the \
-                     point of no return; its partition-table regions can still be replayed with \
+                    "the operation recorded there is marked committed and its data writes cannot be rolled \
+                     back; its partition-table regions can still be replayed with \
                      `diskedit undo --replay-table-only`, or release it with `diskedit abandon`"
                         .to_string()
                 } else {
@@ -620,7 +620,7 @@ impl TransactionManager {
                     .to_string()
             } else if replay_only {
                 // 数据已越过回滚点，但表区仍能显式回放：说成"只剩 abandon"会漏掉真实出路
-                "this operation has no resume path and its data writes are past the point of no return; its \
+                "this operation has no resume path and its data writes cannot be rolled back; its \
                  partition-table regions can still be replayed with `diskedit undo --replay-table-only`, or \
                  release it with `diskedit abandon`"
                     .to_string()
@@ -1373,7 +1373,7 @@ mod tests {
         /// 使"记录有没有被创建"成为可断言的事实
         fn prepare_slot(case: &Case, device_id: &str) {
             let record = case.record_of(device_id);
-            std::fs::create_dir_all(record.parent().unwrap()).unwrap();
+            crate::testdir::private_record_dir(record.parent().unwrap());
         }
 
         fn begin(case: &Case, device_id: &'static str) -> Result<WriteSource, RunOutcome> {
@@ -1400,7 +1400,7 @@ mod tests {
         /// 落点上先放一条**能解码**的记录：拒绝运行是否动过它，因此成为可断言的事实
         fn plant(case: &Case, device_id: &str, scene: crate::recovery::SceneIdentity) -> PathBuf {
             let record = case.record_of(device_id);
-            std::fs::create_dir_all(record.parent().unwrap()).unwrap();
+            crate::testdir::private_record_dir(record.parent().unwrap());
             let mut journal = crate::recovery::RecordJournal::create_image(
                 &record,
                 scene,

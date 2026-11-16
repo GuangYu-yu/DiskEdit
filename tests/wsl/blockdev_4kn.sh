@@ -95,7 +95,7 @@ movek() { # $1=目标 start（LBA）
 
 setup4k() {
   local out e
-  rm -rf "$T" "$T"$SIDECAR_GLOB; rm -rf /var/lib/diskedit/* 2>/dev/null
+  rm_img "$T"; rm -rf /var/lib/diskedit/* 2>/dev/null
   [ -n "$LD" ] && lo_detach "$LD" 2>/dev/null
   truncate -s 2G "$T"
   LD=$(lo_attach "$T" --sector-size 4096)
