@@ -15,8 +15,28 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+/// 本测试进程的镜像状态根：临时目录，进程退出即消失。
+///
+/// 不隔离时 `inspect` 读的是真实的用户状态根；`/tmp` 里临时文件的 inode 会复用，
+/// 别的测试进程留下的记录会按同一个键命中，被当成这个目标的记录认领出来
+fn state_root() -> &'static Path {
+    static ROOT: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
+    ROOT.get_or_init(|| {
+        let dir = tempfile::tempdir().expect("a state root for this test binary");
+        // 产品复核状态根须为 0700；TempDir 的权限受 umask 影响
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700)).expect("set state root permissions");
+        dir
+    })
+    .path()
+}
+
 fn run(args: &[&str]) -> (i32, String, String) {
-    let out = Command::new(env!("CARGO_BIN_EXE_DiskEdit")).args(args).output().expect("spawn DiskEdit");
+    let out = Command::new(env!("CARGO_BIN_EXE_DiskEdit"))
+        .args(args)
+        .env("DISKEDIT_STATE_DIR", state_root())
+        .output()
+        .expect("spawn DiskEdit");
     (
         out.status.code().unwrap_or(-1),
         String::from_utf8_lossy(&out.stdout).into_owned(),
@@ -28,6 +48,7 @@ fn run(args: &[&str]) -> (i32, String, String) {
 fn run_bounded(args: &[&str], limit: Duration) -> Option<(i32, String, String)> {
     let mut child = Command::new(env!("CARGO_BIN_EXE_DiskEdit"))
         .args(args)
+        .env("DISKEDIT_STATE_DIR", state_root())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
