@@ -24,7 +24,7 @@ fn dir_entries(dir: &std::path::Path) -> Vec<std::ffi::OsString> {
 }
 
 fn run(args: &[&str]) -> (i32, String, String) {
-    let out = Command::new(env!("CARGO_BIN_EXE_DiskEdit")).args(args).output().unwrap();
+    let out = diskedit().args(args).output().unwrap();
     (
         out.status.code().unwrap_or(-1),
         String::from_utf8_lossy(&out.stdout).into_owned(),

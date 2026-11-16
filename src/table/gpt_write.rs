@@ -294,11 +294,11 @@ pub(crate) fn protective_mbr_content(
     // 说成一次 I/O 意外：先于任何读盘把几何前提判掉
     let total_sectors = src.size / ss;
     if total_sectors == 0 {
-        return Err(RunOutcome::from(io::Error::new(io::ErrorKind::InvalidData, "disk has zero sectors")));
+        return Err(RunOutcome::refused("disk has zero sectors"));
     }
     let want_size = size_in_lba(total_sectors);
     let mut lba0 = vec![0u8; ss as usize];
-    src.read_at(0, &mut lba0).map_err(RunOutcome::from)?;
+    src.read_at(0, &mut lba0).map_err(|e| RunOutcome::no_mutation(e.to_string()))?;
     let reserved_zero = lba0[512..].iter().all(|&b| b == 0);
     if lba0[510] == 0x55 && lba0[511] == 0xAA && reserved_zero {
         let rec = &lba0[446..462]; // 槽位 1（与下方写入位置一致）

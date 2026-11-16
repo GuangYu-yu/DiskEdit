@@ -44,12 +44,49 @@ fn with_protective_mbr(mut data: Vec<u8>) -> Vec<u8> {
 }
 
 fn run(args: &[&str]) -> (i32, String, String) {
-    let out = Command::new(env!("CARGO_BIN_EXE_DiskEdit")).args(args).output().unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_DiskEdit"))
+        .args(args)
+        .env("DISKEDIT_STATE_DIR", state_root())
+        .output()
+        .unwrap();
     (
         out.status.code().unwrap_or(-1),
         String::from_utf8_lossy(&out.stdout).into_owned(),
         String::from_utf8_lossy(&out.stderr).into_owned(),
     )
+}
+
+/// 本次测试进程的镜像状态根：子进程与测试算出的落点必须一致
+fn state_root() -> &'static Path {
+    static ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    ROOT.get_or_init(|| {
+        let dir = std::env::temp_dir().join(format!("diskedit_matrix_state_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            std::fs::DirBuilder::new().recursive(true).mode(0o700).create(&dir).unwrap();
+        }
+        #[cfg(not(unix))]
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    })
+}
+
+/// 镜像键目录：`<image_state_root>/images/<键摘要>`，键由文件对象身份派生。
+/// 记录仓库的每一级都按 0700 建立：写命令会复核状态根、`images` 与键目录
+#[cfg(target_os = "linux")]
+fn record_dir(image: &Path) -> PathBuf {
+    use sha2::{Digest, Sha256};
+    use std::os::unix::fs::MetadataExt;
+    let meta = std::fs::metadata(image).unwrap();
+    let key = format!("inode:{}:{}", meta.dev(), meta.ino());
+    let digest = Sha256::digest(key.as_bytes());
+    let hex: String = digest[..16].iter().map(|b| format!("{b:02x}")).collect();
+    let dir = state_root().join("images").join(hex);
+    use std::os::unix::fs::DirBuilderExt;
+    std::fs::DirBuilder::new().recursive(true).mode(0o700).create(&dir).unwrap();
+    dir
 }
 
 /// 每条用例独立目录：前一条被写坏的表不会污染后一条的判据
@@ -80,9 +117,9 @@ fn read_only_commands_are_available_on_linux() {
 #[test]
 fn inspect_of_an_image_without_a_record_succeeds() {
     let (dir, img) = case("inspect");
-    // `record: absent` 的前提是记录落点存在：`inspect` 先打开 `<img>.diskedit`，落点
-    // 缺席按前置条件不满足拒绝（3），文案是「anchor directory cannot be read」
-    std::fs::create_dir_all(format!("{img}.diskedit")).unwrap();
+    // `record: absent` 的前提是键目录存在：`inspect` 先打开它，缺席按前置条件不满足
+    // 拒绝（3），文案是「anchor directory cannot be read」
+    record_dir(Path::new(&img));
     let (code, out, err) = run(&["inspect", &img]);
     assert_eq!(code, 0, "an absent record is not a failure: {err}");
     assert!(out.contains("record: absent"), "{out}");

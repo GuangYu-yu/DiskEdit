@@ -325,10 +325,7 @@ else
     "$B" new "$T8" --yes >/dev/null 2>&1 || { echo "BAD  new 失败"; exit 1; }
     # 降权进程要能读写目标；mountinfo 的可见性由 hidepid 决定，与目标权限无关
     chmod 666 "$T8"
-    # 伴随文件由 root 的 `new` 建出；降权进程要能拿到写锁，否则测的就不是 mountinfo
-    for f in "$T8"$SIDECAR_GLOB; do
-        [ -e "$f" ] && chmod 666 "$f"
-    done
+    # 记录落点前的准入（占用探测）先于记录目录与锁：这里不调整记录目录的权限
     out=$(unshare -m bash -c '
         mount --make-rprivate /
         mount -t proc -o hidepid=1 proc /proc || exit 99

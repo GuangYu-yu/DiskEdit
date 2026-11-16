@@ -153,7 +153,15 @@ pub(crate) fn prepare_apply(
         let growable = crate::fsops::grow_target_at(src, plan.grow_part, base, len)?;
         // 声明侧与证据侧的冲突在此拒绝：此刻本函数尚未写任何目标字节，冲突一旦拖到
         // 提交之后，那段区域已经按其中一种解释改写过
-        preflight_growth_swap(plan.grow_part, is_swap_guid(&ge.partition_type_guid), &growable)?;
+        preflight_growth_swap(
+            src,
+            plan.grow_part,
+            is_swap_guid(&ge.partition_type_guid),
+            ge.starting_lba,
+            ge.ending_lba - ge.starting_lba + 1,
+            plan.ss,
+            &growable,
+        )?;
         crate::fsops::check_grow_step(growable, src.is_block)?;
     }
     // 恢复三态：有效 → 续传 / 槽位被另一族作业占用 → 拒绝 / 空 → 新建
@@ -187,6 +195,15 @@ pub(crate) fn prepare_apply(
             // 记录与盘面的全部一致性判据只在 `verify_relocation_resume` 一处：
             // `move` 走同一条
             crate::movepart::verify_relocation_resume(c, g0, src.size, chunk_len)?;
+            // swap 条目不搬数据，旧首部可能已被先前中断的搬移覆盖。重建按「旧起点优先、
+            // 新起点回退」取身份，这里按同一取法在继续写盘之前预检：此刻读不全身份，
+            // 再写下去只会在提交之后留下一条保不住卷标的待办
+            for m in plan.moves.iter().filter(|m| m.is_swap) {
+                let new_first = m.first_lba.checked_add_signed(m.delta_lba).ok_or_else(|| {
+                    crate::outcome::RunOutcome::no_mutation("relocation shift overflows the LBA range")
+                })?;
+                ensure_swap_resume_identity(src, m.part_num, m.first_lba, new_first, m.len_lba, plan.ss)?;
+            }
             let done = c.entry_index;
             // Y = durable 恢复点（记录里的值），不是本进程内存进度
             log(&format!("resuming at entry {} chunk {} (durable record)", c.entry_index, c.chunks_in_entry));
@@ -194,6 +211,7 @@ pub(crate) fn prepare_apply(
                 entries: plan.moves.iter().map(crate::recovery::RelocEntry::from).collect(),
                 entry_index: done,
                 chunks_in_entry: c.chunks_in_entry,
+                prefix_digest: c.prefix_digest,
                 chunk_bytes: chunk_len,
                 kind: plan.kind.into(),
                 grow_part: plan.grow_part,
@@ -233,11 +251,16 @@ pub(crate) fn prepare_apply(
             // 文件不等于它一定能成功操作目标（权限、设备策略），那些失败仍落在执行期
             if plan.moves.iter().any(|m| m.is_swap) {
                 ensure_swap_rebuild_tools(src.is_block)?;
+                // 重建要保住旧卷标；读不出来时预检在首次目标写入之前拒绝
+                for m in plan.moves.iter().filter(|m| m.is_swap) {
+                    ensure_swap_rebuild_identity(src, m.part_num, m.first_lba, m.len_lba, plan.ss)?;
+                }
             }
             crate::recovery::Relocation {
                 entries: plan.moves.iter().map(crate::recovery::RelocEntry::from).collect(),
                 entry_index: 0,
                 chunks_in_entry: 0,
+                prefix_digest: [0u8; 32],
                 chunk_bytes: chunk_len,
                 kind: plan.kind.into(),
                 grow_part: plan.grow_part,

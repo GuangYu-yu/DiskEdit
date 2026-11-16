@@ -33,9 +33,12 @@ stage() {
     "$B" mkfs "$T:1" ext4 --yes >/dev/null 2>&1
 }
 
-# 恢复记录目录里的条目名：check 不得在证据路径上留下任何东西
+# 证据落点目录里的条目名：check 不得在证据路径上留下任何东西。
+# 落点从 inspect 的输出里取，脚本不复刻路径规则
 sidecar_list() {
-    [ -d "$T.diskedit" ] && find "$T.diskedit" -mindepth 1 -printf '%P\n' | sort
+    local dir
+    dir=$(dirname "$(record_file "$T")")
+    [ -d "$dir" ] && find "$dir" -mindepth 1 -printf '%P\n' | sort
     return 0
 }
 

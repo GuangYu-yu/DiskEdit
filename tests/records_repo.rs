@@ -1,10 +1,10 @@
 //! 记录仓库的落点、权限位与扫描上限。
 //!
-//! 镜像的记录落在 `<img>.diskedit/`，块设备落在 `recovery/<32 位小写十六进制>/`。
-//! 本文件钉住目录约束、扫描预算与重复执行的同一性。
+//! 镜像的记录落在 `<image_state_root>/images/<键摘要>/`，块设备落在
+//! `<state_root>/recovery/<identity 摘要>/`。本文件钉住目录约束、扫描预算与重复执行的同一性。
 //!
 //! 需要 Linux：记录后端只在 Linux 编译。涉及宿主仓库根的用例需要 root
-//! （`DISKEDIT_STATE_DIR` 仅在 euid=0 时生效），运行期探测不满足时提前返回。
+//! （`DISKEDIT_STATE_DIR` 对块设备仓库仅在 euid=0 时生效），运行期探测不满足时提前返回。
 
 #![cfg(target_os = "linux")]
 
@@ -13,13 +13,32 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use sha2::{Digest, Sha256};
+
+/// 本次测试进程的镜像状态根：子进程与测试算出的落点必须一致
+fn state_root() -> &'static Path {
+    static ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    ROOT.get_or_init(|| {
+        let dir = std::env::temp_dir().join(format!("diskedit_records_repo_state_{}", std::process::id()));
+        fs::remove_dir_all(&dir).ok();
+        private_dir(&dir);
+        dir
+    })
+}
+
+/// 记录仓库的每一级都按 0700 建立：写命令会复核状态根、`images` 与键目录
+fn private_dir(dir: &Path) {
+    use std::os::unix::fs::DirBuilderExt;
+    fs::DirBuilder::new().recursive(true).mode(0o700).create(dir).expect("create private dir");
+}
+
 fn run(args: &[&str]) -> (i32, String, String) {
     run_with_env(args, &[])
 }
 
 fn run_with_env(args: &[&str], envs: &[(&str, &Path)]) -> (i32, String, String) {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_DiskEdit"));
-    cmd.args(args);
+    cmd.args(args).env("DISKEDIT_STATE_DIR", state_root());
     for (key, value) in envs {
         cmd.env(key, value);
     }
@@ -44,6 +63,20 @@ fn image_with(dir: &Path, name: &str, size: u64) -> PathBuf {
     image
 }
 
+/// 镜像键目录的路径：键取文件对象身份，目录名是键的 sha256 前 16 字节
+fn record_dir_in(root: &Path, image: &Path) -> PathBuf {
+    let meta = fs::metadata(image).expect("stat image");
+    let key = format!("inode:{}:{}", meta.dev(), meta.ino());
+    let digest = Sha256::digest(key.as_bytes());
+    let hex: String = digest[..16].iter().map(|b| format!("{b:02x}")).collect();
+    root.join("images").join(hex)
+}
+
+fn record_dir(image: &Path) -> PathBuf {
+    record_dir_in(state_root(), image)
+}
+
+/// 镜像旁边不再产生的落点；它不应再出现在目标之外的任何位置
 fn sidecar(image: &Path) -> PathBuf {
     let mut name = image.as_os_str().to_owned();
     name.push(".diskedit");
@@ -95,7 +128,7 @@ fn record_bytes() -> Vec<u8> {
     p.push(0); // table fence: pending
 
     let mut out = vec![0u8; 16];
-    out[0..4].copy_from_slice(b"DSK4");
+    out[0..4].copy_from_slice(b"DSK5");
     out[4..8].copy_from_slice(&(p.len() as u32).to_le_bytes());
     out[8..12].copy_from_slice(&crc32(&p).to_le_bytes());
     let header_crc = crc32(&out[0..12]);
@@ -113,7 +146,7 @@ fn identity_hash() -> String {
 }
 
 #[test]
-fn an_image_keeps_its_records_beside_the_image() {
+fn an_image_keeps_its_records_in_the_state_root() {
     let dir = temp_dir("image-layout");
     let image = image_with(&dir, "disk.img", 8 * 1024 * 1024);
     let path = image.to_str().expect("utf-8 path");
@@ -121,11 +154,12 @@ fn an_image_keeps_its_records_beside_the_image() {
     let (code, _, err) = run(&["new", path, "--yes"]);
     assert_eq!(code, 0, "{err}");
 
-    let spot = sidecar(&image);
-    assert!(spot.is_dir(), "the record directory must sit beside the image");
+    let spot = record_dir(&image);
+    assert!(spot.is_dir(), "the record directory must be the image's key directory");
     assert_eq!(mode(&spot), 0o700, "record directory mode");
     assert_eq!(mode(&spot.join("record.lock")), 0o600, "lock file mode");
     assert!(!spot.join("record").exists(), "a committed record is cleaned up");
+    assert!(!sidecar(&image).exists(), "the image keeps no companion directory");
 
     let (code, out, err) = run(&["records", "list", path]);
     assert_eq!(code, 0, "{err}");
@@ -137,15 +171,18 @@ fn an_image_keeps_its_records_beside_the_image() {
 fn an_entry_over_sixty_four_mib_stops_the_scan() {
     let dir = temp_dir("scan-limit");
     let image = image_with(&dir, "disk.img", 4096);
-    let spot = sidecar(&image);
-    fs::create_dir_all(&spot).expect("create record dir");
+    let state = dir.join("state");
+    private_dir(&state);
+    let spot = record_dir_in(&state, &image);
+    private_dir(&spot);
     let record = spot.join("record");
     fs::File::create(&record)
         .expect("create oversized record")
         .set_len(64 * 1024 * 1024 + 1)
         .expect("size oversized record");
 
-    let (code, out, err) = run(&["records", "scan", dir.to_str().expect("utf-8 path")]);
+    let envs = [("DISKEDIT_STATE_DIR", state.as_path())];
+    let (code, out, err) = run_with_env(&["records", "scan", state.to_str().expect("utf-8 path")], &envs);
     assert_eq!(code, 3, "{out}\n{err}");
     let json: serde_json::Value = serde_json::from_str(&out).expect("scan JSON");
     assert_eq!(json["complete"], false, "{out}");
@@ -159,9 +196,11 @@ fn an_entry_over_sixty_four_mib_stops_the_scan() {
 }
 
 #[test]
-fn a_root_inside_the_host_repository_is_refused() {
+fn the_state_root_is_an_image_container_and_a_record_directory_is_not() {
+    // 非 root 时 `DISKEDIT_STATE_DIR` 不改变块设备仓库根，`<state>/recovery/<hash>` 不会被
+    // 认成宿主仓库记录目录；这条拒绝口径只在 euid 0 下可观察
     if !is_root() {
-        eprintln!("skipping a_root_inside_the_host_repository_is_refused: needs euid 0 for a block-device target");
+        eprintln!("skipping the_state_root_is_an_image_container_and_a_record_directory_is_not: needs euid 0");
         return;
     }
     let dir = temp_dir("scan-root");
@@ -170,14 +209,12 @@ fn a_root_inside_the_host_repository_is_refused() {
     fs::create_dir_all(&hash).expect("create identity hash directory");
     let envs = [("DISKEDIT_STATE_DIR", state.as_path())];
 
-    let (code, _out, err) = run_with_env(&["records", "scan", state.to_str().unwrap()], &envs);
-    assert_eq!(code, 3, "{err}");
-    assert!(err.contains("inside the host recovery repository"), "{err}");
-
-    let dotdot = format!("{}/recovery/..", state.display());
-    let (code, _out, err) = run_with_env(&["records", "scan", &dotdot], &envs);
-    assert_eq!(code, 3, "{err}");
-    assert!(err.contains("inside the host recovery repository"), "{err}");
+    // 镜像状态根本身是记录容器：`images` 还没有时枚举为空
+    let (code, out, err) = run_with_env(&["records", "scan", state.to_str().unwrap()], &envs);
+    assert_eq!(code, 0, "{out}\n{err}");
+    let json: serde_json::Value = serde_json::from_str(&out).expect("scan JSON");
+    assert_eq!(json["complete"], true, "{out}");
+    assert_eq!(json["records"].as_array().expect("records array").len(), 0, "{out}");
 
     let (code, _out, err) = run_with_env(&["records", "scan", hash.to_str().unwrap()], &envs);
     assert_eq!(code, 3, "{err}");
@@ -228,7 +265,7 @@ fn a_refused_repeat_leaves_the_image_and_the_records_untouched() {
     assert_eq!(run(&["add", path, "1M", "--part-number", "1", "--yes"]).0, 0);
 
     let before = fs::read(&image).expect("read image");
-    let spot = sidecar(&image);
+    let spot = record_dir(&image);
     let mut entries: Vec<String> = fs::read_dir(&spot)
         .expect("read record dir")
         .map(|entry| entry.expect("dir entry").file_name().to_string_lossy().into_owned())
@@ -260,12 +297,13 @@ fn a_persisted_record_is_private() {
 
     let out = Command::new(env!("CARGO_BIN_EXE_DiskEdit"))
         .args(["new", path, "--yes"])
+        .env("DISKEDIT_STATE_DIR", state_root())
         .env("DISKEDIT_FAULT", "record-persisted")
         .output()
         .expect("spawn DiskEdit");
     assert!(out.status.code().is_none(), "the fault point must abort the process");
 
-    let spot = sidecar(&image);
+    let spot = record_dir(&image);
     let record = spot.join("record");
     assert!(record.is_file(), "the record must be persisted before the fault point");
     assert_eq!(mode(&record), 0o600, "record mode");

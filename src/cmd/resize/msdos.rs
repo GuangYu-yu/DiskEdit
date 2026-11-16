@@ -96,6 +96,8 @@ pub(crate) fn mbr_grow_finish(
     p: &table::MbrPartition,
     is_pv: bool,
     is_block: bool,
+    // `--grow-lv` 在写表前选出的 LV；收尾链按它执行 lvextend（记录只存基线，不存路径）
+    lv_sel: Option<&movepart::LvmSelection>,
 ) -> crate::outcome::RunOutcome {
     let part = p.num;
     let ss = src.sector_size;
@@ -206,7 +208,7 @@ pub(crate) fn mbr_grow_finish(
         // 表已写 → 统一收尾（内核重读 + 报告）
         let record = src.record_journal().map(|j| j.record());
         let o = settle_layout(crate::outcome::RunOutcome::applied_with(Vec::new()), src, record);
-        return finish_resize(a, o, Some(src), part, is_pv, is_block, None, cur_bytes);
+        return finish_resize(a, o, Some(src), part, is_pv, is_block, lv_sel.map(|s| s.path.as_str()), cur_bytes);
     }
     let mut o = crate::outcome::RunOutcome::applied_with(pending);
     if !kernel_resync(src) {
@@ -217,7 +219,7 @@ pub(crate) fn mbr_grow_finish(
     // finish_resize 只在非 PV 的未完成结果上早退，PV 则照常进链，并以两者中更严重的
     // 退出码收口。链自身的失败在 resize_done 内另报，与上面的待办清单不是同一条
     if is_pv {
-        return finish_resize(a, o, Some(src), part, is_pv, is_block, None, cur_bytes);
+        return finish_resize(a, o, Some(src), part, is_pv, is_block, lv_sel.map(|s| s.path.as_str()), cur_bytes);
     }
     o
 }
@@ -282,8 +284,9 @@ pub(crate) fn cmd_resize_msdos(a: &ResizeRequest, pref: PartSelector, src_ro: &F
     let (mut src, entry) = open_target_resize(a, a.grow_lv).unwrap_or_else(|f| bail_fail(f));
     let resumed = entry.resumed;
     // 锁下重取权威几何（与 GPT 分支同一原则）：只读阶段与取得独占权之间盘可以被别人
-    // 改写（sfdisk/fdisk 不守本工具的锁），用锁前的 mbr/p/free 驱动写分支就是把过期
-    // 决定写进盘——resize_mdos_entry 不复核邻接，过期的 free 没有第二道防线
+    // 改写（sfdisk/fdisk 不守本工具的锁）。纯计算层会拒绝越出邻区的长度，但它只保证
+    // 不写坏盘，不保证"扩多少"仍是此刻盘面允许的量——用锁前的 free 驱动请求长度，
+    // 锁后盘面变小时会得到一次无谓的越界拒绝，变大时则静默少扩
     let mbr = table::parse_mbr(&src)
         .unwrap_or_else(|e| {
             bail_fail(RunOutcome::refused(format!("parse failed: {e}")))
@@ -333,20 +336,29 @@ pub(crate) fn cmd_resize_msdos(a: &ResizeRequest, pref: PartSelector, src_ro: &F
             );
         }
     }
-    // 记录里带着 LVM 收尾基线（上次请求过 --grow-lv），本次却没给：记录不存 LV 路径，
-    // 收尾只能按本次请求重选。静默退成只跑 pvresize 等于把承诺过的 LV 扩容丢掉
-    // 判据与 GPT 分支同一处
-    if !a.grow_lv && src.record_journal().is_some_and(|j| j.lvm_post().is_some()) {
+    // 记录里带着 LV 扩容基线，本次却没给路径：记录不存 LV 路径，收尾只能按本次请求
+    // 重选。静默退成只跑 pvresize 等于把承诺过的 LV 扩容丢掉。判据与 GPT 分支同一处：
+    // 只有扩 LV 的基线才需要路径，只做 pvresize 的基线可以按原命令重跑
+    if !a.grow_lv
+        && src
+            .record_journal()
+            .is_some_and(|j| j.lvm_post().is_some_and(|p| p.lv_target > p.lv_size_before))
+    {
         bail_fail(RunOutcome::refused(
             "an unfinished resize recorded an LV growth — re-run with --grow-lv (the record does not \
              store the LV path)"
                 .to_string(),
         ));
     }
-    // 盘上记录没有 LV 收尾基线，本次却给了 --grow-lv：记录是那次作业的完整意图，
-    // 在已提交作业上追加一步没有记录承载的动作，失败后没有载体能解释它从哪来。
-    // 首次运行（`resumed` 为假）的记录是本次新建的，不在此列
-    if resumed && a.grow_lv && src.record_journal().is_some_and(|j| j.lvm_post().is_none()) {
+    // 盘上记录没有 LV 扩容步骤（没有基线，或基线只是 pvresize），本次却给了 --grow-lv：
+    // 记录是那次作业的完整意图，在已提交作业上追加一步没有记录承载的动作，失败后没有
+    // 载体能解释它从哪来。首次运行（`resumed` 为假）的记录是本次新建的，不在此列
+    if resumed
+        && a.grow_lv
+        && src
+            .record_journal()
+            .is_some_and(|j| j.lvm_post().is_none_or(|p| p.lv_target <= p.lv_size_before))
+    {
         bail_fail(RunOutcome::refused(
             "an unfinished resize record carries no LV growth step — adding one to a job already recorded \
              leaves nothing behind to explain it if it fails; re-run without `--grow-lv`"
@@ -367,9 +379,14 @@ pub(crate) fn cmd_resize_msdos(a: &ResizeRequest, pref: PartSelector, src_ro: &F
     // 同一处。缩容在入口即拒绝，no-op 两不动，故都不在此列
     let extends = grow_to_end || target.is_some_and(|b| b / ss > p.size_lba as u64);
     if extends && !a.no_fs {
-        fsops::grow_target_at(&src, part, lba_bytes(p.start_lba as u64, ss), lba_bytes(p.size_lba as u64, ss))
-            .and_then(|g| fsops::check_grow_step(g, is_block))
+        let growable = fsops::grow_target_at(&src, part, lba_bytes(p.start_lba as u64, ss), lba_bytes(p.size_lba as u64, ss))
             .unwrap_or_else(|e| bail_fail(RunOutcome::from(e)));
+        // swap 重建要保住旧卷标；此时尚未写表，读不出来就在这里拒绝
+        if matches!(&growable, fsops::Growable::Target(t) if t.fstype == fsid::ContentKind::Swap) {
+            movepart::ensure_swap_rebuild_identity(&src, part, p.start_lba as u64, p.size_lba as u64, ss)
+                .unwrap_or_else(|f| bail_fail(f));
+        }
+        fsops::check_grow_step(growable, is_block).unwrap_or_else(|e| bail_fail(RunOutcome::from(e)));
     }
     // 记录型续跑：记录里有提交前区间、且盘上区间已不是它 ⇒ 分区层提交过，当前表项
     // 就是本次作业的目标。MBR 没有搬移，但表写之后的 FS/PV 收尾同样是本次作业的一部分；
@@ -383,7 +400,7 @@ pub(crate) fn cmd_resize_msdos(a: &ResizeRequest, pref: PartSelector, src_ro: &F
     // 记录里的旧区间随下一次写表保持有效
     let grow_again = !grow_to_end && target.is_some_and(|b| b / ss > u64::from(p.size_lba));
     if record_committed && !grow_again {
-        return mbr_grow_finish(a, &mut src, p, is_pv, is_block);
+        return mbr_grow_finish(a, &mut src, p, is_pv, is_block, lv_sel.as_ref());
     }
     if grow_to_end {
         let free = free_right_msdos(&mbr, p, total_sectors);
@@ -394,7 +411,7 @@ pub(crate) fn cmd_resize_msdos(a: &ResizeRequest, pref: PartSelector, src_ro: &F
             // 条件（上一次运行可能正停在提交之后），交给收尾链续做
             if is_pv {
                 eprintln!("partition {part} cannot grow in the table — no free space to its right; verifying the PV chain");
-                return mbr_grow_finish(a, &mut src, p, is_pv, is_block);
+                return mbr_grow_finish(a, &mut src, p, is_pv, is_block, lv_sel.as_ref());
             }
             bail_fail(RunOutcome::refused(
                 "grow would not extend the partition — no free space to its right (MBR cannot relocate blocking partitions); \
@@ -411,7 +428,7 @@ pub(crate) fn cmd_resize_msdos(a: &ResizeRequest, pref: PartSelector, src_ro: &F
         resize_mbr_entry(&mut src, part, new_size_lba as u32)
             .unwrap_or_else(|f| bail_fail(f));
         crate::movepart::fault_mbr_after_table_write();
-        mbr_grow_finish(a, &mut src, p, is_pv, is_block)
+        mbr_grow_finish(a, &mut src, p, is_pv, is_block, lv_sel.as_ref())
     } else {
         let Some(bytes) = target else {
             bail_fail(RunOutcome::refused("`resize` needs a size: diskedit resize <TARGET>[:N] <SIZE> (see diskedit help resize)".to_string()));
@@ -433,7 +450,7 @@ pub(crate) fn cmd_resize_msdos(a: &ResizeRequest, pref: PartSelector, src_ro: &F
             // !resuming 才短路的口径对齐）
             crate::support::note_sector_truncation("resizing to", bytes, ss);
             if is_pv || resumed {
-                return mbr_grow_finish(a, &mut src, p, is_pv, is_block);
+                return mbr_grow_finish(a, &mut src, p, is_pv, is_block, lv_sel.as_ref());
             }
             println!("partition {part} is already {cur_bytes} bytes — nothing to do");
             // 表与 FS 都没动：事务已完成且没有待办
@@ -453,7 +470,7 @@ pub(crate) fn cmd_resize_msdos(a: &ResizeRequest, pref: PartSelector, src_ro: &F
             resize_mbr_entry(&mut src, part, new_size_lba as u32)
                 .unwrap_or_else(|f| bail_fail(f));
             // 分区层做完 → 与 grow-to-end 同一条收尾
-            mbr_grow_finish(a, &mut src, p, is_pv, is_block)
+            mbr_grow_finish(a, &mut src, p, is_pv, is_block, lv_sel.as_ref())
         } else {
             // 相等已在上面短路；到这里只剩缩小，锁前与锁下两处 `refuse_shrink` 本应先拦住
             bail_fail(super::refuse_shrink())

@@ -1,7 +1,11 @@
 use std::path::Path;
 
 fn run(args: &[&str]) -> (i32, String) {
-    let out = std::process::Command::new(env!("CARGO_BIN_EXE_DiskEdit")).args(args).output().unwrap();
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_DiskEdit"))
+        .args(args)
+        .env("DISKEDIT_STATE_DIR", super::state_root())
+        .output()
+        .unwrap();
     (out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stderr).into_owned())
 }
 
@@ -10,6 +14,7 @@ fn run(args: &[&str]) -> (i32, String) {
 fn inspect_out(img: &Path) -> String {
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_DiskEdit"))
         .args(["inspect", img.to_str().unwrap()])
+        .env("DISKEDIT_STATE_DIR", super::state_root())
         .output()
         .unwrap();
     String::from_utf8_lossy(&out.stdout).into_owned()
@@ -34,6 +39,7 @@ fn record_cursor(img: &Path) -> Option<u64> {
 fn run_fault(fault: &str, args: &[&str]) -> (i32, String) {
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_DiskEdit"))
         .env("DISKEDIT_FAULT", fault)
+        .env("DISKEDIT_STATE_DIR", super::state_root())
         .args(args)
         .output()
         .unwrap();
@@ -42,7 +48,11 @@ fn run_fault(fault: &str, args: &[&str]) -> (i32, String) {
 
 /// 与 `run` 同一命令，连同 stdout 一起返回：续跑日志（游标位置）只走 stdout
 fn run_out(args: &[&str]) -> (i32, String, String) {
-    let out = std::process::Command::new(env!("CARGO_BIN_EXE_DiskEdit")).args(args).output().unwrap();
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_DiskEdit"))
+        .args(args)
+        .env("DISKEDIT_STATE_DIR", super::state_root())
+        .output()
+        .unwrap();
     (
         out.status.code().unwrap_or(-1),
         String::from_utf8_lossy(&out.stdout).into_owned(),
@@ -632,6 +642,7 @@ fn grow_table_write_crash_converges_to_the_uninterrupted_layout() {
 fn info_out(img: &Path) -> String {
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_DiskEdit"))
         .args(["info", img.to_str().unwrap()])
+        .env("DISKEDIT_STATE_DIR", super::state_root())
         .output()
         .unwrap();
     String::from_utf8_lossy(&out.stdout).into_owned()

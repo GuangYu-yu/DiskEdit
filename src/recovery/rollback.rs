@@ -507,9 +507,10 @@ pub(crate) fn verify_disk_identity(
 }
 
 /// 盘上字节是否与本条记录相容：等于写后内容（未回滚）、等于原文（已回滚，重放幂等），
-/// 或是一条**前缀已落地**的写入——`write_all` 在中途失败或掉电时，落盘的只能是写后
-/// 内容的一段前缀加上其后的原文。第三种形态既不是 after 也不是 pre-image，只按前两者
-/// 判定会把本工具自己没写完的区间报成"外来改动"，让整卷回滚失去出路
+/// 或是一条**前缀已落地**的写入。写入有两个方向，各自都可能在中途停下：
+/// 正向写入落盘的是写后内容的一段前缀加上其后的原文，回滚写入落盘的是原文的一段前缀
+/// 加上其后的写后内容。只按"等于 after 或 pre"判定会把两个方向的撕裂都报成外来改动，
+/// 正向的让首次回滚失去出路，反向的让中断后的重试永久被拒
 pub(crate) fn matches_recorded_write(now: &[u8], after: &[u8], pre: &[u8]) -> bool {
     if now == after || now == pre {
         return true;
@@ -517,11 +518,15 @@ pub(crate) fn matches_recorded_write(now: &[u8], after: &[u8], pre: &[u8]) -> bo
     if now.len() != after.len() || now.len() != pre.len() {
         return false;
     }
-    // 存在 k 使 now[..k] == after[..k] 且 now[k..] == pre[k..]：前缀相符长度 p 与
-    // 后缀相符长度 s 能覆盖整个区间（p + s ≥ len）即存在这样的 k
-    let p = now.iter().zip(after).take_while(|(a, b)| a == b).count();
-    let s = now.iter().zip(pre).rev().take_while(|(a, b)| a == b).count();
-    p + s >= now.len()
+    // 存在切点 k 使 now 由 front 的前缀与 back 的后缀拼成：前缀相符长度 p 与后缀
+    // 相符长度 s 能覆盖整个区间（p + s ≥ len）即存在这样的 k
+    let torn_between = |front: &[u8], back: &[u8]| {
+        let p = now.iter().zip(front).take_while(|(a, b)| a == b).count();
+        let s = now.iter().zip(back).rev().take_while(|(a, b)| a == b).count();
+        p + s >= now.len()
+    };
+    // 正向写入的撕裂（after 前缀 + pre 后缀）与回滚写入的撕裂（pre 前缀 + after 后缀）
+    torn_between(after, pre) || torn_between(pre, after)
 }
 
 /// `copy` 记录回滚前的源复核。源与副本同属一个目标，源身份由记录目标的身份承担——
@@ -822,6 +827,13 @@ mod tests {
             matches_recorded_write(&torn, &after, &pre),
             "the landed prefix of this tool's own write must stay replayable"
         );
+        // 回滚写入（pre 覆盖 after）中途停下：落盘的是 pre 前缀 + after 后缀
+        let mut torn_back = after;
+        torn_back[..5].copy_from_slice(&pre[..5]);
+        assert!(
+            matches_recorded_write(&torn_back, &after, &pre),
+            "the landed prefix of this tool's own rollback must stay replayable"
+        );
         assert!(!matches_recorded_write(&[0x22u8; 8], &after, &pre), "a foreign edit is not a torn write");
     }
 
@@ -961,6 +973,7 @@ mod tests {
             entries,
             entry_index,
             chunks_in_entry: 0,
+            prefix_digest: [0u8; 32],
             chunk_bytes: 1 << 20,
             kind: RelocKind::Shift,
             grow_part: 0,

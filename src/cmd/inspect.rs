@@ -30,7 +30,8 @@ pub(crate) const DETAILS: &str = r#"target:
 
 path:
   PATH is dispatched by structure: a direct entry inside a recovery-record
-  directory (`<image>.diskedit/...` or `<state_root>/recovery/<identity-hash>/...`,
+  directory (`<image_state_root>/images/<key-hash>/...`,
+  `<image>.diskedit/...` or `<state_root>/recovery/<identity-hash>/...`,
   excluding `record.lock`) is itself decoded as evidence. Entries in the
   quarantine area (`.abandoned[.N]`, `.torn[.N]`) are marked as such and do
   not count as active records. This build never writes `.torn[.N]`; the name
@@ -79,10 +80,22 @@ pub(crate) fn cmd_inspect(a: &InspectRequest) -> CmdResult {
     // 记录落点由目标身份给出：镜像是其伴随文件，loop 设备是 backing 旁的文件；
     // 非 loop 块设备没有决定过的落点
     let identity = crate::dev::TargetIdentity::resolve_for_cleanup(path);
-    let Some(record) = identity
+    // 旧落点：升级前留在 `<img>.diskedit/record` 的现场。本构建不认领它，但派生落点
+    // 为空时它才是这个目标真正的现场，`inspect` 必须指向它而不是报「无记录」
+    let legacy = identity
+        .as_ref()
+        .and_then(crate::dev::TargetIdentity::legacy_image_record_path)
+        .filter(|legacy| {
+            !matches!(
+                crate::recovery::probe_companion(legacy),
+                crate::recovery::CompanionProbe::Absent
+            )
+        });
+    let Some(mut record) = identity
         .as_ref()
         .and_then(crate::dev::TargetIdentity::record_path)
         .map(Path::to_path_buf)
+        .or_else(|| legacy.clone())
     else {
         println!("target: {}", a.target);
         println!("recovery state root: no record path is resolved for this target");
@@ -91,8 +104,15 @@ pub(crate) fn cmd_inspect(a: &InspectRequest) -> CmdResult {
         report_occupancy(path);
         return CmdResult::Code(EXIT_OK);
     };
+    let mut evidence = read_evidence(&record, Some(&current));
+    // 派生落点为空而旧落点有现场：结论由旧布局的拒读口径给出（退 3）
+    if matches!(evidence, Evidence::Absent)
+        && let Some(legacy) = legacy
+    {
+        record = legacy;
+        evidence = read_evidence(&record, Some(&current));
+    }
     println!("evidence: {}", record.display());
-    let evidence = read_evidence(&record, Some(&current));
     report(&evidence);
     report_header(&record, &evidence);
     report_occupancy(path);
@@ -651,6 +671,7 @@ mod tests {
             ],
             entry_index: 1,
             chunks_in_entry: 0,
+            prefix_digest: [0u8; 32],
             chunk_bytes: 1 << 20,
             kind: RelocKind::Shift,
             grow_part: 0,
@@ -770,15 +791,17 @@ mod tests {
     }
 
     #[test]
-    fn companion_path_sits_beside_the_image() {
+    fn companion_path_sits_in_the_per_user_image_repository() {
         let record = |p: &str| {
             crate::dev::TargetIdentity::resolve_for_cleanup(Path::new(p))
                 .and_then(|i| i.record_path().map(Path::to_path_buf))
         };
-        assert_eq!(record("disk.img"), Some(Path::new("disk.img.diskedit").join("record")));
-        assert_eq!(
-            record("/tmp/disk.img"),
-            Some(Path::new("/tmp").join("disk.img.diskedit").join("record"))
-        );
+        let expected = |p: &str| {
+            crate::dev::image_record_dir(Path::new(p))
+                .expect("the per-user state root is available in tests")
+                .join("record")
+        };
+        assert_eq!(record("disk.img"), Some(expected("disk.img")));
+        assert_eq!(record("/tmp/disk.img"), Some(expected("/tmp/disk.img")));
     }
 }

@@ -41,7 +41,7 @@ use crate::dev::DiskGuidState;
 #[cfg(target_os = "linux")]
 use super::evidence::Cause;
 
-/// 记录落点由目标身份给出（`<image>.diskedit/record` 或
+/// 记录落点由目标身份给出（`<image_state_root>/images/<键摘要>/record` 或
 /// `<state_root>/recovery/<identity-hash>/record`）；这里只把它拆成锚点目录与文件名
 fn companion_parts(record: &Path) -> Result<(PathBuf, PathBuf), RecordJournalError> {
     let name = record
@@ -897,8 +897,9 @@ impl RecordJournal {
         reloc: Option<(u32, u64)>,
         completed_steps: u32,
         transfer_cursor: u64,
+        prefix_digest: [u8; 32],
     ) -> Result<(), PersistFailure> {
-        self.record_checkpoint(reloc, completed_steps, transfer_cursor, false)
+        self.record_checkpoint(reloc, completed_steps, transfer_cursor, Some(prefix_digest), false)
     }
 
     /// 早退收尾要写回的表步：条目游标只前移一条、完成步数只加一、传输游标不动。
@@ -932,7 +933,7 @@ impl RecordJournal {
         completed_steps: u32,
         transfer_cursor: u64,
     ) -> Result<(), PersistFailure> {
-        self.record_checkpoint(reloc, completed_steps, transfer_cursor, true)
+        self.record_checkpoint(reloc, completed_steps, transfer_cursor, None, true)
     }
 
     fn record_checkpoint(
@@ -940,6 +941,7 @@ impl RecordJournal {
         reloc: Option<(u32, u64)>,
         completed_steps: u32,
         transfer_cursor: u64,
+        prefix_digest: Option<[u8; 32]>,
         land_table: bool,
     ) -> Result<(), PersistFailure> {
         let was_progress = self.record.progress;
@@ -947,7 +949,7 @@ impl RecordJournal {
             .record
             .relocation
             .as_ref()
-            .map(|r| (r.entry_index, r.chunks_in_entry));
+            .map(|r| (r.entry_index, r.chunks_in_entry, r.prefix_digest));
         let was_in_flight = self.record.entry_table_in_flight.clone();
         let was_fence = self.record.table_fence.clone();
         if let Some((entry_index, chunks_in_entry)) = reloc {
@@ -965,6 +967,12 @@ impl RecordJournal {
             let current = self.record.relocation.as_mut().expect("checked above");
             current.entry_index = entry_index;
             current.chunks_in_entry = chunks_in_entry;
+            // 零块没有已落盘前缀，摘要随之归零；有块时只接受执行器给出的那一份
+            current.prefix_digest = if chunks_in_entry == 0 {
+                [0u8; 32]
+            } else {
+                prefix_digest.unwrap_or(current.prefix_digest)
+            };
             // 游标推进意味着该条目的表步结果已记入，在飞位与游标同一笔落盘清空：
             // 中间崩溃不会留下"游标已过、条目仍在飞"的组合
             self.record.entry_table_in_flight = Fact::Absent;
@@ -975,10 +983,11 @@ impl RecordJournal {
         }
         if let Err(e) = self.persist() {
             if !e.record_bytes_persisted() {
-                if let Some((entry_index, chunks_in_entry)) = was_reloc {
+                if let Some((entry_index, chunks_in_entry, prefix_digest)) = was_reloc {
                     let current = self.record.relocation.as_mut().expect("checked above");
                     current.entry_index = entry_index;
                     current.chunks_in_entry = chunks_in_entry;
+                    current.prefix_digest = prefix_digest;
                 }
                 self.record.entry_table_in_flight = was_in_flight;
                 self.record.progress = was_progress;
@@ -1583,6 +1592,7 @@ impl RecordJournal {
         _reloc: Option<(u32, u64)>,
         _completed_steps: u32,
         _transfer_cursor: u64,
+        _prefix_digest: [u8; 32],
     ) -> Result<(), PersistFailure> {
         Err(PersistFailure::NotWritten(std::io::Error::other(
             "recovery records are not written on this platform",

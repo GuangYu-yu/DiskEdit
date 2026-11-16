@@ -13,7 +13,7 @@
 //!   - 目标不存在 → 3（打开失败，属前置条件不满足；3/4 的边界见
 //!     `docs/reference.md` 的退出状态表：3 = 策略拒绝或前置条件不满足，
 //!     4 = 本次未改变任何持久状态）
-//!   - 只读零写：目标字节、所在目录条目、证据目录都不因 `check` 改变
+//!   - 只读零写：目标字节、所在目录条目、镜像键目录都不因 `check` 改变
 //!   - 真 ext4 → 0 且零写；需要 root、`/dev/loop-control` 与 e2fsprogs，
 //!     运行期探测，缺任一项时提前返回（`check` 要走 loop 才能把分区交给 e2fsck）
 
@@ -24,11 +24,26 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use sha2::{Digest, Sha256};
+
 const TYPE_GUID_LINUX_DATA: &str = "0fc63daf-8483-4772-8e79-3d69d8477de4";
+
+/// 本次测试进程的镜像状态根：子进程与测试算出的落点必须一致
+fn state_root() -> &'static Path {
+    static ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    ROOT.get_or_init(|| {
+        let dir = std::env::temp_dir().join(format!("diskedit_check_state_{}", std::process::id()));
+        fs::remove_dir_all(&dir).ok();
+        use std::os::unix::fs::DirBuilderExt;
+        fs::DirBuilder::new().recursive(true).mode(0o700).create(&dir).unwrap();
+        dir
+    })
+}
 
 fn run(args: &[&str]) -> (i32, String, String) {
     let out = Command::new(env!("CARGO_BIN_EXE_DiskEdit"))
         .args(args)
+        .env("DISKEDIT_STATE_DIR", state_root())
         .output()
         .expect("spawn DiskEdit");
     (
@@ -64,11 +79,14 @@ fn fixture(tag: &str, size_mib: usize, part_size: &str) -> (tempfile::TempDir, P
     (dir, img)
 }
 
-/// 记录目录落点：`<img>.diskedit`（镜像侧 sidecar）
+/// 镜像键目录落点：`<image_state_root>/images/<键摘要>`，键由文件对象身份派生
 fn record_dir(img: &Path) -> PathBuf {
-    let mut name = img.as_os_str().to_owned();
-    name.push(".diskedit");
-    PathBuf::from(name)
+    use std::os::unix::fs::MetadataExt;
+    let meta = fs::metadata(img).expect("stat image");
+    let key = format!("inode:{}:{}", meta.dev(), meta.ino());
+    let digest = Sha256::digest(key.as_bytes());
+    let hex: String = digest[..16].iter().map(|b| format!("{b:02x}")).collect();
+    state_root().join("images").join(hex)
 }
 
 /// 目录直接子项名（排序）：用来断言"没有新建任何伴随物"
@@ -220,7 +238,7 @@ fn a_successful_check_writes_nothing() {
     assert!(out.contains("check done on partition #1 (ext)"), "{out}");
 
     assert_eq!(fs::read(&img).unwrap(), bytes, "a successful check must not write the target");
-    assert_eq!(listing(dir.path()), entries, "a successful check must not touch the sidecars");
+    assert_eq!(listing(dir.path()), entries, "a successful check must not create companion files");
 }
 
 /// `TOOL_PATH` 的默认目录表（`src/fsops/env.rs`）。可执行位判据与 `find_tool` 相同：

@@ -4,8 +4,8 @@
 //! 只读命令的 `requires` 不含写原语；不建临时文件、不 rename、不 fsync、
 //! 不删除。`plan` 不打开证据路径、不触发写目录探测。
 //!
-//! 判定方式是黑盒的：对目标所在目录做递归快照（路径、类型、长度、内容 sha256），
-//! 命令前后逐项相同才算通过。这样临时文件、改名、删除、删除后重建都能被抓到。
+//! 判定方式是黑盒的：对目标所在目录与镜像键目录分别做递归快照（路径、类型、长度、
+//! 内容 sha256），命令前后逐项相同才算通过。这样临时文件、改名、删除、删除后重建都能被抓到。
 //!
 //! 只用镜像文件，不需要 root 或外部工具；块设备侧的证据目录另由 Linux 平台用例覆盖。
 
@@ -18,6 +18,7 @@ use std::process::Command;
 fn run(args: &[&str]) -> (i32, String, String) {
     let out = Command::new(env!("CARGO_BIN_EXE_DiskEdit"))
         .args(args)
+        .env("DISKEDIT_STATE_DIR", state_root())
         .output()
         .expect("spawn DiskEdit");
     (
@@ -25,6 +26,29 @@ fn run(args: &[&str]) -> (i32, String, String) {
         String::from_utf8_lossy(&out.stdout).into_owned(),
         String::from_utf8_lossy(&out.stderr).into_owned(),
     )
+}
+
+/// 本次测试进程的镜像状态根：子进程与测试算出的落点必须一致
+fn state_root() -> &'static Path {
+    static ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    ROOT.get_or_init(|| {
+        let dir = std::env::temp_dir().join(format!("diskedit_nowrite_state_{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        use std::os::unix::fs::DirBuilderExt;
+        std::fs::DirBuilder::new().recursive(true).mode(0o700).create(&dir).unwrap();
+        dir
+    })
+}
+
+/// 镜像键目录：`<image_state_root>/images/<键摘要>`，键由文件对象身份派生
+fn record_dir(image: &Path) -> PathBuf {
+    use sha2::{Digest, Sha256};
+    use std::os::unix::fs::MetadataExt;
+    let meta = std::fs::metadata(image).expect("stat image");
+    let key = format!("inode:{}:{}", meta.dev(), meta.ino());
+    let digest = Sha256::digest(key.as_bytes());
+    let hex: String = digest[..16].iter().map(|b| format!("{b:02x}")).collect();
+    state_root().join("images").join(hex)
 }
 
 fn temp_dir(tag: &str) -> PathBuf {
@@ -85,7 +109,7 @@ fn sha256_hex(bytes: &[u8]) -> String {
 }
 
 #[test]
-fn info_and_plan_never_create_the_sidecar() {
+fn info_and_plan_never_create_the_record_directory() {
     let dir = temp_dir("bare");
     let img = image_with(&dir, "disk.img", 8 * 1024 * 1024);
     let p = img.to_str().unwrap();
@@ -95,7 +119,7 @@ fn info_and_plan_never_create_the_sidecar() {
         let (code, _, err) = run(&args);
         assert_eq!(code, 0, "`{}` must be read-only success: {err}", args.join(" "));
         assert!(
-            !dir.join("disk.img.diskedit").exists(),
+            !record_dir(&img).exists(),
             "`{}` probed the write directory",
             args.join(" ")
         );
@@ -119,6 +143,7 @@ fn read_only_commands_leave_an_existing_record_area_untouched() {
     assert_eq!(code, 0, "setup `add` failed: {err}");
 
     let before = snapshot(&dir);
+    let record_before = snapshot(&record_dir(&img));
     let scan_root = dir.to_str().unwrap();
     let grown = format!("{p}:1");
     for args in [
@@ -135,6 +160,12 @@ fn read_only_commands_leave_an_existing_record_area_untouched() {
             snapshot(&dir),
             before,
             "`{}` changed the target's directory",
+            args.join(" ")
+        );
+        assert_eq!(
+            snapshot(&record_dir(&img)),
+            record_before,
+            "`{}` changed the record directory",
             args.join(" ")
         );
     }

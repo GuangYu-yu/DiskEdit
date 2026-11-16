@@ -1,16 +1,20 @@
-//! 单条恢复记录（`<image>.diskedit/record`）的崩溃注入测试：记录落盘、数据改写、提交三档。
+//! 单条恢复记录（`<image_state_root>/images/<键摘要>/record`）的崩溃注入测试：
+//! 记录落盘、数据改写、提交三档。
 //!
 //! 三条表类写命令（`new` / `add` / `delete`）不写旧 journal。这里同时钉住"禁双写"：
-//! 任一条崩溃档位都不得出现 `.diskedit.journal`，记录的落点只有记录目录内的 `record`。
+//! 任一条崩溃档位都不得出现 `.diskedit.journal`，记录的落点只有键目录内的 `record`。
 
-use super::{sidecar, JOURNAL_SUFFIX};
+use super::{JOURNAL_SUFFIX, record_dir, sidecar};
 use std::path::{Path, PathBuf};
 
-const RECORD_DIR_SUFFIX: &str = ".diskedit";
 const RECORD_FILE_NAME: &str = "record";
 
 fn run(args: &[&str]) -> (i32, String) {
-    let out = std::process::Command::new(env!("CARGO_BIN_EXE_DiskEdit")).args(args).output().unwrap();
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_DiskEdit"))
+        .args(args)
+        .env("DISKEDIT_STATE_DIR", super::state_root())
+        .output()
+        .unwrap();
     (
         out.status.code().unwrap_or(-1),
         format!(
@@ -24,6 +28,7 @@ fn run(args: &[&str]) -> (i32, String) {
 fn run_fault(fault: &str, args: &[&str]) -> (i32, String) {
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_DiskEdit"))
         .env("DISKEDIT_FAULT", fault)
+        .env("DISKEDIT_STATE_DIR", super::state_root())
         .args(args)
         .output()
         .unwrap();
@@ -38,9 +43,7 @@ fn run_fault(fault: &str, args: &[&str]) -> (i32, String) {
 }
 
 fn record_path(img: &Path) -> PathBuf {
-    let mut name = img.file_name().unwrap().to_os_string();
-    name.push(RECORD_DIR_SUFFIX);
-    img.parent().unwrap().join(name).join(RECORD_FILE_NAME)
+    record_dir(img).join(RECORD_FILE_NAME)
 }
 
 /// 32MiB 镜像 + 一张 GPT（`new` 成功后目标上没有记录）
@@ -63,6 +66,7 @@ fn stage(tag: &str) -> (PathBuf, PathBuf, PathBuf) {
 fn partition_count(img: &Path) -> usize {
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_DiskEdit"))
         .args(["info", img.to_str().unwrap()])
+        .env("DISKEDIT_STATE_DIR", super::state_root())
         .output()
         .unwrap();
     let v: serde_json::Value = serde_json::from_str(String::from_utf8_lossy(&out.stdout).trim()).unwrap();
@@ -90,6 +94,7 @@ fn add_4m(img: &str) -> [&str; 8] {
 fn partition_start(img: &Path) -> u64 {
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_DiskEdit"))
         .args(["info", img.to_str().unwrap()])
+        .env("DISKEDIT_STATE_DIR", super::state_root())
         .output()
         .unwrap();
     let v: serde_json::Value = serde_json::from_str(String::from_utf8_lossy(&out.stdout).trim()).unwrap();
@@ -110,7 +115,7 @@ fn a_record_slot_holding_another_identity_is_refused_before_the_lock() {
     assert_ne!(c, 0, "the injected abort must not look like success: {e}");
     assert!(b_record.exists(), "the fixture record must land: {e}");
 
-    // 落点相同（都是 <image>.diskedit/record），载荷身份不同（另一份文件）
+    // 落点各在自己的键目录里（文件对象身份不同），载荷身份也不同：把 A 的记录搬进 B 的键目录
     std::fs::copy(&a_record, &b_record).unwrap();
     let foreign = std::fs::read(&b_record).unwrap();
     let baseline = std::fs::read(&b).unwrap();

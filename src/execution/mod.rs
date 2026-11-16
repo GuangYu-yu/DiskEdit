@@ -51,6 +51,8 @@ pub(crate) struct TransferState {
     completed_steps: u32,
     /// 全局累计块数，跨条目只增不减
     transfer_cursor: u64,
+    /// 本条目已落盘目的前缀的执行顺序摘要；条目内块数归零时同步归零
+    prefix_digest: [u8; 32],
 }
 
 impl TransferState {
@@ -74,7 +76,17 @@ impl TransferState {
     fn advance_entry(&mut self) {
         self.entry_index += 1;
         self.chunks_in_entry = 0;
+        self.prefix_digest = [0u8; 32];
         self.completed_steps += 1;
+    }
+
+    /// 已落盘前缀的执行顺序摘要；记录落盘与续跑比对共用这一份
+    pub(crate) fn prefix_digest(&self) -> [u8; 32] {
+        self.prefix_digest
+    }
+
+    fn set_prefix_digest(&mut self, digest: [u8; 32]) {
+        self.prefix_digest = digest;
     }
 
     /// 一个不搬数据的步骤完成
@@ -640,16 +652,18 @@ fn prepare_steps<'a>(
             None => true,
         };
         if reloc.entries.len() != planned || !chunk_matches {
-            return Err(RunOutcome::partial(format!(
-                "the recovery record holds {} relocation entries of {}-byte chunks, this plan holds {planned} — the transfer may be incomplete",
+            return Err(RunOutcome::refused(format!(
+                "the recovery record holds {} relocation entries of {}-byte chunks, this plan holds {planned} — \
+                 the record and the requested transfer describe different jobs; nothing was written",
                 reloc.entries.len(),
                 reloc.chunk_bytes
             )));
         }
         // 布局等式的块数比较要求两处扇区大小相同：同一 LBA 长度在不同扇区下换算出不同的块数
         if reloc.ss != sector_size {
-            return Err(RunOutcome::partial(format!(
-                "the recovery record was written with a {}-byte sector, this target has {sector_size} — the transfer may be incomplete",
+            return Err(RunOutcome::refused(format!(
+                "the recovery record was written with a {}-byte sector, this target has {sector_size} — \
+                 the record and the requested transfer describe different jobs; nothing was written",
                 reloc.ss
             )));
         }
@@ -813,8 +827,9 @@ fn prepare_steps<'a>(
 /// 执行状态从记录纳入：游标跨运行累计，续跑必须从已落盘的值继续。
 ///
 /// 记录里存在搬移计划时，全局块游标由步骤上的块布局累计：已提交条目的块数之和加
-/// 当前条目已完成的块数，与 `progress.transfer_cursor` 取较大者。块数取自
-/// [`prepare_steps`] 的布局结果，不按记录重新计算
+/// 当前条目已完成的块数。块数取自 [`prepare_steps`] 的布局结果，不按记录重新计算。
+/// 记录里的游标只能落后于这个累计值——块写入与游标推进是两次落盘——领先即视为
+/// 记录自相矛盾并拒绝
 fn journal_state(src: &WriteSource, steps: &[PreparedStep]) -> Result<TransferState, RunOutcome> {
     let Some(journal) = src.record_journal() else {
         return Ok(TransferState::default());
@@ -825,12 +840,14 @@ fn journal_state(src: &WriteSource, steps: &[PreparedStep]) -> Result<TransferSt
         chunks_in_entry: 0,
         completed_steps: progress.completed_steps,
         transfer_cursor: progress.transfer_cursor,
+        prefix_digest: [0u8; 32],
     };
     let Some(reloc) = journal.relocation() else {
         return Ok(state);
     };
     state.entry_index = reloc.entry_index;
     state.chunks_in_entry = reloc.chunks_in_entry;
+    state.prefix_digest = reloc.prefix_digest;
     let mut recomputed = 0u64;
     let counts = steps.iter().filter_map(|s| match s {
         PreparedStep::Transfer { reloc, .. } => Some(reloc.chunks),
@@ -848,6 +865,15 @@ fn journal_state(src: &WriteSource, steps: &[PreparedStep]) -> Result<TransferSt
             "the recorded move cursor overflows the address space",
         )
     })?;
+    // 全局块游标只是"已落盘进度"的滞后表示：块写入与游标推进是两次落盘，游标可以
+    // 落后，但不可能领先于条目游标能解释的块数。领先的记录与两处落盘的顺序不符
+    if state.transfer_cursor > recomputed {
+        return Err(RunOutcome::refused(format!(
+            "the recovery record's transfer cursor ({}) exceeds the progress its entry cursors account for \
+             ({recomputed}) — the record contradicts itself; nothing was written",
+            state.transfer_cursor
+        )));
+    }
     state.transfer_cursor = state.transfer_cursor.max(recomputed);
     Ok(state)
 }

@@ -6,8 +6,34 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+/// 本次测试进程的镜像状态根：子进程与测试算出的落点必须一致
+fn state_root() -> &'static Path {
+    static ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    ROOT.get_or_init(|| {
+        let dir = std::env::temp_dir().join(format!("diskedit_cmd_inspect_state_{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        private_dir(&dir);
+        dir
+    })
+}
+
+/// 记录仓库的每一级都按 0700 建立：写命令会复核状态根、`images` 与键目录
+fn private_dir(dir: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        std::fs::DirBuilder::new().recursive(true).mode(0o700).create(dir).unwrap();
+    }
+    #[cfg(not(unix))]
+    std::fs::create_dir_all(dir).unwrap();
+}
+
 fn run(args: &[&str]) -> (i32, String, String) {
-    let out = Command::new(env!("CARGO_BIN_EXE_DiskEdit")).args(args).output().unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_DiskEdit"))
+        .args(args)
+        .env("DISKEDIT_STATE_DIR", state_root())
+        .output()
+        .unwrap();
     (
         out.status.code().unwrap_or(-1),
         String::from_utf8_lossy(&out.stdout).into_owned(),
@@ -78,7 +104,7 @@ fn payload(file_id: [u8; 16], commit: u8, retention: u8) -> Vec<u8> {
 fn record(file_id: [u8; 16], commit: u8, retention: u8) -> Vec<u8> {
     let payload = payload(file_id, commit, retention);
     let mut out = vec![0u8; HEADER_LEN];
-    out[0..4].copy_from_slice(b"DSK4");
+    out[0..4].copy_from_slice(b"DSK5");
     out[4..8].copy_from_slice(&(payload.len() as u32).to_le_bytes());
     out[8..12].copy_from_slice(&crc32(&payload).to_le_bytes());
     let header_crc = crc32(&out[0..12]);
@@ -87,13 +113,23 @@ fn record(file_id: [u8; 16], commit: u8, retention: u8) -> Vec<u8> {
     out
 }
 
+/// 镜像键目录：`<image_state_root>/images/<键摘要>`，键由文件对象身份派生
+#[cfg(target_os = "linux")]
+fn record_dir(img: &Path) -> PathBuf {
+    use sha2::{Digest, Sha256};
+    use std::os::unix::fs::MetadataExt;
+    let meta = std::fs::metadata(img).unwrap();
+    let key = format!("inode:{}:{}", meta.dev(), meta.ino());
+    let digest = Sha256::digest(key.as_bytes());
+    let hex: String = digest[..16].iter().map(|b| format!("{b:02x}")).collect();
+    let dir = state_root().join("images").join(hex);
+    private_dir(&dir);
+    dir
+}
+
 #[cfg(target_os = "linux")]
 fn write_companion(img: &Path, bytes: &[u8]) {
-    let mut dir = img.as_os_str().to_os_string();
-    dir.push(".diskedit");
-    let dir = PathBuf::from(dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("record"), bytes).unwrap();
+    std::fs::write(record_dir(img).join("record"), bytes).unwrap();
 }
 
 #[test]
@@ -138,7 +174,7 @@ mod linux {
         id
     }
 
-    /// 目标没有 `<img>.diskedit` 落点：锚点目录打不开，目标/记录读不出 → 3
+    /// 目标没有键目录：锚点目录打不开，目标/记录读不出 → 3
     #[test]
     fn no_companion_is_three() {
         let dir = temp_dir("absent");
@@ -150,14 +186,12 @@ mod linux {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    /// 锚点目录可读、其中没有记录文件：`Evidence::Absent`，无记录是正常状态
+    /// 键目录可读、其中没有记录文件：`Evidence::Absent`，无记录是正常状态
     #[test]
     fn record_missing_from_a_readable_anchor_is_zero() {
         let dir = temp_dir("no-record");
         let img = image_with(&dir, 4096);
-        let mut anchor = img.as_os_str().to_os_string();
-        anchor.push(".diskedit");
-        std::fs::create_dir(PathBuf::from(anchor)).unwrap();
+        record_dir(&img);
         let (code, out, err) = run(&["inspect", img.to_str().unwrap()]);
         assert_eq!(code, 0, "{err}");
         assert!(out.contains("record: absent"), "{out}");
@@ -239,10 +273,7 @@ mod linux {
     fn directory_at_the_evidence_path_is_three() {
         let dir = temp_dir("dir");
         let img = image_with(&dir, 4096);
-        let mut path = img.as_os_str().to_os_string();
-        path.push(".diskedit");
-        let anchor = PathBuf::from(path);
-        std::fs::create_dir(&anchor).unwrap();
+        let anchor = record_dir(&img);
         std::fs::create_dir(anchor.join("record")).unwrap();
         let (code, _out, err) = run(&["inspect", img.to_str().unwrap()]);
         assert_eq!(code, 3, "{err}");

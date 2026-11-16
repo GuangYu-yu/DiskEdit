@@ -45,7 +45,7 @@ impl StepSink for RecordSink<'_> {
         // 单次 persist 同时落条目游标与 progress；缩容状态沿用记录里的值
         let (entry, chunks, steps, cursor) = state.durable();
         journal
-            .record_transfer_checkpoint(Some((entry, chunks)), steps, cursor)
+            .record_transfer_checkpoint(Some((entry, chunks)), steps, cursor, state.prefix_digest())
             .map_err(|e| {
                 RunOutcome::partial(format!(
                     "{} — the transfer may be incomplete",
@@ -128,10 +128,10 @@ impl StepSink for RecordSink<'_> {
                 "the target carries no recovery record — the filesystem step may not be durably recorded",
             )
         })?;
-        // 文件系统步骤不动搬移游标（reloc 传 None），只落已完成的步数
+        // 文件系统步骤不动搬移游标（reloc 传 None），只落已完成的步数；没有条目就没有前缀摘要
         let (_, _, steps, cursor) = state.durable();
         journal
-            .record_transfer_checkpoint(None, steps, cursor)
+            .record_transfer_checkpoint(None, steps, cursor, [0u8; 32])
             .map_err(|e| {
                 RunOutcome::partial(format!(
                     "{} — the on-disk state may have changed",

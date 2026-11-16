@@ -3,7 +3,7 @@
 use super::*;
 
 fn run(args: &[&str]) -> (i32, String, String) {
-    let out = Command::new(env!("CARGO_BIN_EXE_DiskEdit"))
+    let out = diskedit()
         .args(args)
         .output()
         .expect("spawn DiskEdit");

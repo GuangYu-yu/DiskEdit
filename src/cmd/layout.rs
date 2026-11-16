@@ -738,7 +738,10 @@ fn resize_part_via_plan_unreconciled(
                     is_swap: false,
                 }],
                 entry_index: 0,
-                chunks_in_entry: p.resume_chunks,
+                // 新绑的条目表还没有任何进度：块游标只能来自记录里已有的同一张表
+                //（下方 `recorded` 分支整体沿用），从全局游标播种会把未拷的块记成已拷
+                chunks_in_entry: 0,
+                prefix_digest: [0u8; 32],
                 chunk_bytes: p.chunk_len,
                 kind: crate::recovery::RelocKind::Shift,
                 grow_part: 0,
@@ -890,7 +893,7 @@ pub(crate) fn prepare_resize_part(
         .map(|(_, count)| count)
         .ok_or_else(|| RunOutcome::no_mutation("resize LBA arithmetic overflows byte offset"))?;
     // 恢复判定取三个维度：本次请求 / 记录里的持久状态 / 盘上几何
-    let (fs_shrunk, resume_chunks, committed_old, recorded_lvm) =
+    let (mut fs_shrunk, resume_chunks, committed_old, recorded_lvm) =
         if let Some(journal) = src.record_journal.as_ref()
     {
         let progress = journal.progress();
@@ -959,7 +962,7 @@ pub(crate) fn prepare_resize_part(
     let new_bytes = (new_end - new_start + 1).checked_mul(ss).ok_or_else(byte_overflow)?;
     // LVM 收尾事实：记录里的基线优先，新跑时由本次请求与新增字节导出
     let lvm_post = match recorded_lvm {
-        Some(f) => Some(f),
+        Some(f) => Some(movepart::LvmPostFacts::resumed(f, lvm.as_ref())?),
         None => movepart::lvm_post_for(defer_lvm, lvm.as_ref(), old_bytes, new_bytes)?,
     };
     // 表项 LBA 的单位是表自身的 ss。identify 只读目标内容，仍属事前判定
@@ -969,6 +972,14 @@ pub(crate) fn prepare_resize_part(
         (old_end - old_start + 1).checked_mul(ss).ok_or_else(byte_overflow)?,
     )
     .map_err(RunOutcome::unreadable_io)?;
+    // 记录里"已缩到位"不单独作为跳过缩容的依据：分区末端切进未缩的元数据不可逆。
+    // 缩小之前按盘面复核 FS 实际大小；读不出或对不上按"未缩"重做（缩容本身幂等）
+    if new_bytes < old_bytes && fs_shrunk == movepart::FsShrink::Verified {
+        match crate::fsops::shrink_already_at(src, part, Some(fstype), new_bytes) {
+            Some(true) => {}
+            Some(false) | None => fs_shrunk = movepart::FsShrink::NotShrunk,
+        }
+    }
     // 缩容的 FS 步就是首次写盘：工具缺失或类型不可缩必须在它之前拒绝
     let needs_shrink = new_bytes < old_bytes && fs_shrunk != movepart::FsShrink::Verified;
     // --no-fs 与缩容不可共存：分区末端越过未缩的 FS 元数据即数据损坏
@@ -1011,7 +1022,15 @@ pub(crate) fn prepare_resize_part(
                     .ok_or_else(byte_overflow)?,
             )?;
             // 声明侧与证据侧的冲突在此拒绝：此刻本命令尚未写任何目标字节
-            movepart::preflight_growth_swap(part, movepart::is_swap_guid(&e.partition_type_guid), &growable)?;
+            movepart::preflight_growth_swap(
+                src,
+                part,
+                movepart::is_swap_guid(&e.partition_type_guid),
+                old_start,
+                old_end - old_start + 1,
+                ss,
+                &growable,
+            )?;
             crate::fsops::check_grow_step(growable, src.is_block)?;
         }
         movepart::FsAction::Leave => {}
@@ -1291,7 +1310,7 @@ impl crate::execution::StepSink for ResizePartSink<'_> {
         if let Some(journal) = src.record_journal_mut() {
             let (entry, chunks, steps, cursor) = state.durable();
             journal
-                .record_transfer_checkpoint(Some((entry, chunks)), steps, cursor)
+                .record_transfer_checkpoint(Some((entry, chunks)), steps, cursor, state.prefix_digest())
                 .map_err(|e| {
                     RunOutcome::partial(e.record_failure("the transfer progress"))
                 })?;
@@ -1661,6 +1680,7 @@ pub(crate) fn cmd_move(a: &MoveRequest) -> crate::outcome::RunOutcome {
         entries,
         entry_index: 0,
         chunks_in_entry: 0,
+        prefix_digest: [0u8; 32],
         chunk_bytes: chunk,
         kind: crate::recovery::RelocKind::Shift,
         grow_part: 0,

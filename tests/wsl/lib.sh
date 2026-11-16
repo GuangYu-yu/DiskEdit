@@ -43,7 +43,7 @@ BFKO=$_bin_dir/DiskEdit-fakeonly
 WSL_ROOT=${DISKEDIT_WSL_ROOT:-/var/tmp/diskedit-wsl.$$}
 mkdir -p "$WSL_ROOT" 2>/dev/null || { echo "cannot create WSL_ROOT=$WSL_ROOT" >&2; exit 1; }
 TEST_MNT=$WSL_ROOT/mnt/testmnt
-# 块设备侧的记录与锁收进根（src/dev/identity.rs 的 state_dir() 读这个变量）。
+# 块设备与镜像的记录、锁都在这个根下（src/dev/identity.rs 的 image_state_root() 读它）。
 use_default_state_dir() { export DISKEDIT_STATE_DIR=/var/lib/diskedit; }
 export DISKEDIT_STATE_DIR=$WSL_ROOT/state
 
@@ -57,12 +57,10 @@ img() {
     printf -v "$__var" '%s' "$p"
 }
 
-# 落盘伴随文件后缀：与 src/dev/identity.rs 的词表同名同值，改一处要一起改。
-# 命名空间只写一次，各后缀由它拼出。
-# SIDECAR_GLOB 是"整族伴随文件"的清理通配（故意不含引号，靠 shell 路径展开）：
-# `*` 而不是 `.*`，因为记录本身落在目录 <img>.diskedit/ 里，清理要用 rm -rf。
+# 镜像记录与锁落在 $DISKEDIT_STATE_DIR（src/dev/identity.rs 的 image_state_root()），
+# 落点是 images/<键摘要>/ 目录。下面这个名字前缀只用于清理复用路径上的旧布局产物：
+# `*` 而不是 `.*`，因为旧记录落在目录 <img>.diskedit/ 里，删除要用 rm -rf
 NS=.diskedit
-LOCK_SUFFIX=${NS}.lock
 SIDECAR_GLOB=${NS}*
 
 rc=0

@@ -2,15 +2,39 @@
 //! `records list/verify/scan` 的进程级测试：JSON 字段、八态映射与退出码。
 //!
 //! 记录字节按 `src/recovery/record.rs` 的落盘布局构造，与 `cmd_inspect.rs` 同源；
-//! 目标身份取镜像的 `(dev, ino)`，这样 sidecar 的目录名还原出的目标与记录头一致。
+//! 记录落在 `<image_state_root>/images/<键摘要>/record`，键摘要由镜像的 `(dev, ino)`
+//! 派生（与 `src/dev/identity.rs` 同一算法），记录头里的载体身份也取自这个文件。
 
 #![cfg(target_os = "linux")]
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use sha2::{Digest, Sha256};
+
+/// 本次测试进程的镜像状态根：子进程与测试算出的落点必须一致
+fn state_root() -> &'static Path {
+    static ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    ROOT.get_or_init(|| {
+        let dir = std::env::temp_dir().join(format!("diskedit_cmd_records_state_{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        private_dir(&dir);
+        dir
+    })
+}
+
+/// 记录仓库的每一级都按 0700 建立：写命令会复核状态根、`images` 与键目录
+fn private_dir(dir: &Path) {
+    use std::os::unix::fs::DirBuilderExt;
+    std::fs::DirBuilder::new().recursive(true).mode(0o700).create(dir).unwrap();
+}
+
 fn run(args: &[&str]) -> (i32, String, String) {
-    let out = Command::new(env!("CARGO_BIN_EXE_DiskEdit")).args(args).output().unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_DiskEdit"))
+        .args(args)
+        .env("DISKEDIT_STATE_DIR", state_root())
+        .output()
+        .unwrap();
     (
         out.status.code().unwrap_or(-1),
         String::from_utf8_lossy(&out.stdout).into_owned(),
@@ -83,7 +107,7 @@ fn payload(file_id: [u8; 16], commit: u8, retention: u8) -> Vec<u8> {
 fn record(file_id: [u8; 16], commit: u8, retention: u8) -> Vec<u8> {
     let payload = payload(file_id, commit, retention);
     let mut out = vec![0u8; HEADER_LEN];
-    out[0..4].copy_from_slice(b"DSK4");
+    out[0..4].copy_from_slice(b"DSK5");
     out[4..8].copy_from_slice(&(payload.len() as u32).to_le_bytes());
     out[8..12].copy_from_slice(&crc32(&payload).to_le_bytes());
     let header_crc = crc32(&out[0..12]);
@@ -98,11 +122,15 @@ fn image_with(dir: &Path) -> PathBuf {
     img
 }
 
+/// 镜像键目录：`<image_state_root>/images/<键摘要>`，键由文件对象身份派生
 fn record_dir(img: &Path) -> PathBuf {
-    let mut dir = img.as_os_str().to_os_string();
-    dir.push(".diskedit");
-    let dir = PathBuf::from(dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    use std::os::unix::fs::MetadataExt;
+    let meta = std::fs::metadata(img).unwrap();
+    let key = format!("inode:{}:{}", meta.dev(), meta.ino());
+    let digest = Sha256::digest(key.as_bytes());
+    let hex: String = digest[..16].iter().map(|b| format!("{b:02x}")).collect();
+    let dir = state_root().join("images").join(hex);
+    private_dir(&dir);
     dir
 }
 
@@ -310,11 +338,11 @@ fn verify_does_not_claim_complete_when_the_host_repository_cannot_be_read() {
 }
 
 #[test]
-fn scan_of_the_image_directory_reports_the_sidecar() {
+fn scan_of_the_image_state_root_reports_the_sidecar() {
     let dir = temp_dir("scan");
     let img = image_with(&dir);
     write_record(&img, &record(file_id(&img), 1, 0));
-    let (code, out, err) = run(&["records", "scan", dir.to_str().unwrap()]);
+    let (code, out, err) = run(&["records", "scan", state_root().to_str().unwrap()]);
     assert_eq!(code, 0, "{out}\n{err}");
     assert!(out.contains("\"complete\":true"), "{out}");
     assert!(out.contains("\"backend\":\"sidecar\""), "{out}");

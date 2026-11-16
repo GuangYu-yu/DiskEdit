@@ -446,6 +446,57 @@ pub(crate) fn swap_identity_label_read_failure_is_not_an_absent_label() {
     drop(src);
 }
 
+/// 重建 swap 的闸口：卷标读不出时整条搬移/扩容必须在首次写盘前停下。重建只能省掉
+/// `-L`，而卷标是 fstab / resume 依赖的内容，丢了不可逆
+#[test]
+pub(crate) fn swap_label_read_failure_refuses_the_rebuild_gate() {
+    let ss = 512u64;
+    let ps = 4096usize;
+    let mut data = vec![0u8; 4 * ps];
+    data[ps - 10..ps].copy_from_slice(b"SWAPSPACE2");
+    data[1036..1052].copy_from_slice(&[0x5A; 16]);
+    data[1052..1068].copy_from_slice(&[b'A', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+    let src = crate::support::src_from("swapgate", &data);
+    let len = data.len() as u64 / ss;
+    assert!(
+        crate::movepart::ensure_swap_rebuild_identity(&src, 1, 0, len, ss).is_ok(),
+        "a readable label must pass the gate"
+    );
+    {
+        let _fault = crate::dev::ReadFaultGuard::at(1052);
+        let o = crate::movepart::ensure_swap_rebuild_identity(&src, 1, 0, len, ss)
+            .expect_err("an unreadable label must refuse before any write");
+        assert_eq!(o.exit_code(), 3, "the refusal must be a definite no-mutation outcome: {o:?}");
+    }
+    drop(src);
+}
+
+/// 续跑的预检与重建按同一取法：旧起点已被覆盖时回退到新起点；两处都读不出时拒绝。
+/// 此刻本次尚未写盘，拒绝停在可重试的状态
+#[test]
+pub(crate) fn swap_resume_preflight_uses_the_same_identity_fallback() {
+    let ss = 512u64;
+    let ps = 4096usize;
+    let mut data = vec![0u8; 4 * ps];
+    data[ps + ps - 10..ps + ps].copy_from_slice(b"SWAPSPACE2");
+    data[ps + 1036..ps + 1052].copy_from_slice(&[0x5A; 16]);
+    data[ps + 1052..ps + 1068].copy_from_slice(&[b'B', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+    let src = crate::support::src_from("swapresume", &data);
+    let new_first = ps as u64 / ss;
+    let len = ps as u64 / ss;
+    assert!(
+        crate::movepart::ensure_swap_resume_identity(&src, 1, 0, new_first, len, ss).is_ok(),
+        "an identity at the new start must stand in for the overwritten old one"
+    );
+    {
+        let _fault = crate::dev::ReadFaultGuard::at((ps + 1052) as u64);
+        let o = crate::movepart::ensure_swap_resume_identity(&src, 1, 0, new_first, len, ss)
+            .expect_err("an identity unreadable at both starts must refuse before any write");
+        assert_eq!(o.exit_code(), 3, "the refusal must be a definite no-mutation outcome: {o:?}");
+    }
+    drop(src);
+}
+
 /// 32K 页格式的 swap 在 4K 页内核上认不出类型：identify 走 swapon 口径给出 "unknown"，
 /// 但 swap 探测认得出它。该支不写盘，不与表项的普通分区声明对账，按内容判据产出 Swap
 /// 待办；此刻表已提交，待办以退出码 5 浮出，不能报完全成功
@@ -609,6 +660,7 @@ pub(crate) fn leftward_move_finishes_from_the_committed_table() {
         entry_index: 0,
         // 2 MiB / 1 MiB：数据已搬完，游标还停在这一条
         chunks_in_entry: 2,
+        prefix_digest: [0u8; 32],
         chunk_bytes: chunk,
         kind: crate::recovery::RelocKind::Shift,
         grow_part: 0,
@@ -656,6 +708,130 @@ pub(crate) fn leftward_move_finishes_from_the_committed_table() {
         "收尾只释放记录：表项必须仍在记录的目的位"
     );
     drop(reopened);
+}
+
+/// 表项已在目的位而块游标未满：表项提交必然发生在该条目全部块拷完之后，这种组合
+/// 只可能来自被改写的记录。照游标补拷会从已被目的写覆盖的源读数据，自重叠搬移下
+/// 不可逆——必须在任何写盘之前拒绝
+#[cfg(target_os = "linux")]
+#[test]
+pub(crate) fn move_resume_refuses_a_committed_entry_with_an_unfinished_cursor() {
+    let (mut src, p) = plan_fixture(&[
+        (1, [0x11; 16], 1024, 2047),
+        (2, [0x22; 16], 4096, 8191),
+    ]);
+    let chunk: u64 = 1024 * 1024;
+    let reloc = crate::recovery::Relocation {
+        entries: vec![crate::recovery::RelocEntry {
+            partition: 2,
+            src_first: 4096,
+            len: 4096,
+            delta: -2048,
+            is_swap: false,
+        }],
+        entry_index: 0,
+        // 2 MiB / 1 MiB 共两块，记录只声称搬了一块
+        chunks_in_entry: 1,
+        prefix_digest: [0u8; 32],
+        chunk_bytes: chunk,
+        kind: crate::recovery::RelocKind::Shift,
+        grow_part: 0,
+        disk_size: src.size,
+        ss: 512,
+    };
+    let record_path = attach_record(&mut src, crate::recovery::OpKind::Move, (4096, 8191), (2, 2048, 6143));
+    src.record_journal_mut()
+        .expect("attach_record adopts a record journal")
+        .bind_relocation(reloc, None)
+        .expect("a legal relocation must bind");
+    let _keep = src.release();
+
+    // 表已提交：p2 已在记录的目的位 2048..6143
+    {
+        use gptman::GPT;
+        let mut raw = std::fs::read(&p).unwrap();
+        let mut cur = std::io::Cursor::new(&mut raw);
+        let mut gpt = GPT::read_from(&mut cur, 512).unwrap();
+        gpt[2].starting_lba = 2048;
+        gpt[2].ending_lba = 6143;
+        gpt.write_into(&mut cur).unwrap();
+        std::fs::write(&p, raw).unwrap();
+    }
+
+    let req = crate::cli::MoveRequest {
+        target: p.display().to_string(),
+        part: Some(crate::dev::PartSelector::Number(2)),
+        sector_size: None,
+        start: Some(crate::cli::StartSelector::Lba(2048)),
+        align: crate::domain::Align::none(),
+        align_given: false,
+        chunk_mib: Some(1),
+    };
+    let o = crate::cmd::layout::cmd_move(&req);
+    assert_eq!(o.exit_code(), 3, "a record that contradicts itself must be refused: {o:?}");
+    match &o {
+        crate::outcome::RunOutcome::Refused(m) => {
+            assert!(m.contains("contradicts itself"), "the refusal must name the contradiction: {m}")
+        }
+        other => panic!("expected Refused, got {other:?}"),
+    }
+    assert!(record_path.exists(), "a refusal must leave the record in place");
+}
+
+/// 记录声称已搬的块数与目的区内容对不上：续跑按记录跳过块拷贝会把"目的区还没写"
+/// 当成"已经搬完"，自重叠搬移下这部分源区随后会被覆盖，无法重来。恢复记录里的
+/// 块数只是声明，回读目的前缀与记录的摘要不一致时必须在任何写盘之前拒绝
+#[cfg(target_os = "linux")]
+#[test]
+pub(crate) fn move_resume_refuses_a_prefix_that_does_not_match_the_record() {
+    let (mut src, p) = plan_fixture(&[
+        (1, [0x11; 16], 1024, 2047),
+        (2, [0x22; 16], 4096, 8191),
+    ]);
+    let chunk: u64 = 1024 * 1024;
+    let reloc = crate::recovery::Relocation {
+        entries: vec![crate::recovery::RelocEntry {
+            partition: 2,
+            src_first: 4096,
+            len: 4096,
+            delta: -2048,
+            is_swap: false,
+        }],
+        entry_index: 0,
+        chunks_in_entry: 1,
+        // 目的区在夹具里没有内容，任何非零摘要都对不上
+        prefix_digest: [1u8; 32],
+        chunk_bytes: chunk,
+        kind: crate::recovery::RelocKind::Shift,
+        grow_part: 0,
+        disk_size: src.size,
+        ss: 512,
+    };
+    let record_path = attach_record(&mut src, crate::recovery::OpKind::Move, (4096, 8191), (2, 2048, 6143));
+    src.record_journal_mut()
+        .expect("attach_record adopts a record journal")
+        .bind_relocation(reloc, None)
+        .expect("a legal relocation must bind");
+    let _keep = src.release();
+
+    let req = crate::cli::MoveRequest {
+        target: p.display().to_string(),
+        part: Some(crate::dev::PartSelector::Number(2)),
+        sector_size: None,
+        start: Some(crate::cli::StartSelector::Lba(2048)),
+        align: crate::domain::Align::none(),
+        align_given: false,
+        chunk_mib: Some(1),
+    };
+    let o = crate::cmd::layout::cmd_move(&req);
+    assert_eq!(o.exit_code(), 3, "a prefix that contradicts the record must be refused: {o:?}");
+    match &o {
+        crate::outcome::RunOutcome::Refused(m) => {
+            assert!(m.contains("copied prefix"), "the refusal must name the prefix check: {m}")
+        }
+        other => panic!("expected Refused, got {other:?}"),
+    }
+    assert!(record_path.exists(), "a refusal must leave the record in place");
 }
 
 /// 纯扩容（不搬移）FS 步留下待办时记录同样保留、重跑补试 FS 步：

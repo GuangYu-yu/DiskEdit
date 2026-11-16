@@ -2,7 +2,8 @@
 //!
 //! 两类目标的凭据来源不同，对外是同一个概念：
 //!
-//! - **镜像**：记录目录内的锁文件 `<image>.diskedit/record.lock`，非阻塞独占锁
+//! - **镜像**：记录目录内的锁文件 `<image_state_root>/images/<键摘要>/record.lock`，
+//!   非阻塞独占锁
 //!   （`std::fs::File::try_lock`：Unix 上是 flock，Windows 上是 LockFileEx）。锁文件
 //!   **不随释放删除**——删它有竞态：另一个进程可能刚取到同一把锁，而删掉的正是它正持有的
 //!   那个名字。判据是"锁取不取得到"，不是"文件在不在"，因此残留的空锁文件不构成任何阻挡
@@ -263,7 +264,7 @@ mod tests {
         acquire_prepared(&identity_for(&alias), None).expect("a released lock must be re-acquirable through the alias");
     }
 
-    /// 每个身份都有锁落点，且两侧落在各自的命名空间：镜像在目标旁的记录目录内，
+    /// 每个身份都有锁落点，且两侧落在各自的命名空间：镜像在每用户状态根下的键目录内，
     /// 块设备在记录目录内，没有记录目录时退回 `state_dir()`。
     /// 这条不变量是"不存在无锁路径"的基础——落点恒有，取不到就拒绝
     #[test]
@@ -271,7 +272,9 @@ mod tests {
         let img = std::path::Path::new("/tmp/diskedit_lk_path.img");
         assert_eq!(
             identity_for(img).lock_path(),
-            crate::dev::suffix_path(img, crate::dev::RECORD_SUFFIX).join(crate::dev::RECORD_LOCK_NAME)
+            crate::dev::image_record_dir(img)
+                .expect("the per-user state root is available in tests")
+                .join(crate::dev::RECORD_LOCK_NAME)
         );
 
         // 块设备侧命名断言只在非 Linux 跑：Linux 上伪造设备名的拓扑解析不出（fail-closed），

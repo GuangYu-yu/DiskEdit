@@ -11,9 +11,9 @@
 //!
 //! 兼容约定：同一 `MAGIC` 下只有一种布局，载荷必须包含全部尾段（在飞位、`repair`、
 //! `table_fence`）。缺少任一段或段后出现无法识别的字节都按 `Format` 拒读，不跳过、
-//! 不当缺省；更早的 `DSK3`、`DSK2` 标识一律不识别，也不做迁移。不做前向兼容是因为
-//! 记录决定"要不要再写一遍"：看不懂的尾段被跳过，等于让旧构建在不知道修复或表步已经
-//! 落地的状态下重写第二遍。
+//! 不当缺省；更早的 `DSK4`、`DSK3`、`DSK2` 标识一律不识别，也不做迁移。不做前向
+//! 兼容是因为记录决定"要不要再写一遍"：看不懂的尾段被跳过，等于让旧构建在不知道
+//! 修复或表步已经落地的状态下重写第二遍。
 
 use crate::dev::DiskGuidState;
 use crate::domain::Fact;
@@ -24,10 +24,11 @@ use sha2::{Digest, Sha256};
 
 use super::scene::{Mapping, SceneIdentity, SceneProof};
 
-/// 格式家族的标识字节：此标识下的搬移位移是有符号值，别的标识一律解码失败
-pub(crate) const MAGIC: [u8; 4] = *b"DSK4";
+/// 格式家族的标识字节：此标识下的搬移位移是有符号值、搬移段带已拷前缀摘要，
+/// 别的标识一律解码失败
+pub(crate) const MAGIC: [u8; 4] = *b"DSK5";
 /// 上一代格式家族的标识：只用于把拒读的原因说成「旧布局」，解码器不认识它
-pub(crate) const LEGACY_MAGIC: [u8; 4] = *b"DSK3";
+pub(crate) const LEGACY_MAGIC: [u8; 4] = *b"DSK4";
 pub(crate) const HEADER_LEN: usize = 16;
 
 const HEADER_CRC_RANGE: std::ops::Range<usize> = 0..12;
@@ -38,9 +39,13 @@ const TAIL_UNREAD: &str = "the payload's tail was not decoded (prefix only)";
 /// 认出旧格式家族的名字，供各入口把拒读原因说清楚；别的值都不是识别过的布局
 pub(crate) fn legacy_layout(magic: [u8; 4]) -> Option<&'static str> {
     if magic == LEGACY_MAGIC {
-        return Some("DSK3");
+        return Some("DSK4");
     }
-    (magic == *b"DSK2").then_some("DSK2")
+    match &magic {
+        b"DSK3" => Some("DSK3"),
+        b"DSK2" => Some("DSK2"),
+        _ => None,
+    }
 }
 
 /// 旧布局的统一说法；各命令共用这一句，避免同一事实在不同出口里漂移
@@ -422,6 +427,9 @@ pub(crate) struct Relocation {
     pub(crate) entry_index: u32,
     /// 当前条目已完成的 chunk 数
     pub(crate) chunks_in_entry: u64,
+    /// 上述已落盘前缀按执行顺序滚动的 SHA-256；`chunks_in_entry == 0` 时全零。
+    /// 续跑先回读目的前缀与它比对，不一致即拒绝——块数本身只是记录方的声明
+    pub(crate) prefix_digest: [u8; 32],
     pub(crate) chunk_bytes: u64,
     pub(crate) kind: RelocKind,
     pub(crate) grow_part: u32,
@@ -958,6 +966,7 @@ impl Record {
                 }
                 out.extend(r.entry_index.to_le_bytes());
                 out.extend(r.chunks_in_entry.to_le_bytes());
+                out.extend_from_slice(&r.prefix_digest);
                 out.extend(r.chunk_bytes.to_le_bytes());
                 out.push(r.kind.tag());
                 out.extend(r.grow_part.to_le_bytes());
@@ -1309,6 +1318,7 @@ fn read_relocation(c: &mut Cursor<'_>) -> Option<Relocation> {
     }
     let entry_index = c.u32()?;
     let chunks_in_entry = c.u64()?;
+    let prefix_digest: [u8; 32] = c.array::<32>()?;
     let chunk_bytes = c.u64()?;
     let kind = RelocKind::from_tag(c.u8()?)?;
     let grow_part = c.u32()?;
@@ -1318,6 +1328,7 @@ fn read_relocation(c: &mut Cursor<'_>) -> Option<Relocation> {
         entries,
         entry_index,
         chunks_in_entry,
+        prefix_digest,
         chunk_bytes,
         kind,
         grow_part,
@@ -1371,6 +1382,10 @@ fn relocation_is_valid(r: &Relocation) -> Result<(), String> {
     // 全部条目已提交时进度归零
     if r.entry_index as usize == r.entries.len() && r.chunks_in_entry != 0 {
         return Err("the relocation plan is complete but still carries a chunk count".to_string());
+    }
+    // 零块必须零摘要：任何已拷前缀都有一条（可能全零概率）摘要，没有块就没有
+    if r.chunks_in_entry == 0 && r.prefix_digest != [0u8; 32] {
+        return Err("the relocation plan has no copied chunks but carries a prefix digest".to_string());
     }
     // grow_part 为 0 表示本次作业没有扩容步（纯搬移）；有扩容步时它不得是被搬走的分区
     if r.entries.iter().any(|e| e.partition == r.grow_part) {
@@ -1634,6 +1649,7 @@ mod relocation_round_trip {
             }],
             entry_index: 1,
             chunks_in_entry: 0,
+            prefix_digest: [0u8; 32],
             chunk_bytes: 96,
             kind: RelocKind::Shift,
             grow_part: 0,
@@ -1671,6 +1687,7 @@ mod relocation_round_trip {
             }],
             entry_index: 0,
             chunks_in_entry: 2,
+            prefix_digest: [0u8; 32],
             chunk_bytes: 96,
             kind: RelocKind::Shift,
             grow_part: 0,
@@ -1808,6 +1825,7 @@ mod record_tails {
                 .collect(),
             entry_index: cursor,
             chunks_in_entry: 0,
+            prefix_digest: [0u8; 32],
             chunk_bytes: 96,
             kind: RelocKind::Shift,
             grow_part: 0,
@@ -1920,7 +1938,9 @@ mod record_tails {
             decode(&bytes),
             Err(DecodeFailure::Format { magic: LEGACY_MAGIC, recorded: None })
         );
-        assert_eq!(legacy_layout(LEGACY_MAGIC), Some("DSK3"));
+        assert_eq!(legacy_layout(LEGACY_MAGIC), Some("DSK4"));
+        assert_eq!(legacy_layout(*b"DSK3"), Some("DSK3"));
+        assert_eq!(legacy_layout(*b"DSK2"), Some("DSK2"));
         assert_eq!(legacy_layout(MAGIC), None);
     }
 

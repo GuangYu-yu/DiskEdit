@@ -338,19 +338,29 @@ pub(crate) fn cmd_resize(a: &ResizeRequest) -> crate::outcome::RunOutcome {
         // 锁下已不是 PV：锁前那份选择对本次写盘没有意义（mkfs 换掉了分区内容）
         lv_sel = None;
     }
-    // 记录里带着 LVM 收尾基线（上次请求过 --grow-lv），本次却没给：记录不存 LV 路径，
-    // 收尾只能按本次请求重选。静默退成只跑 pvresize 等于把承诺过的 LV 扩容丢掉
-    if lv_sel.is_none() && src.record_journal().is_some_and(|j| j.lvm_post().is_some()) {
+    // 记录里带着 LV 扩容基线，本次却没给路径：记录不存 LV 路径，收尾只能按本次请求
+    // 重选。静默退成只跑 pvresize 等于把承诺过的 LV 扩容丢掉。只有扩 LV 的基线才需要
+    // 路径；只做 pvresize 的基线（两个尺寸相等）可以按原命令重跑
+    if lv_sel.is_none()
+        && src
+            .record_journal()
+            .is_some_and(|j| j.lvm_post().is_some_and(|p| p.lv_target > p.lv_size_before))
+    {
         bail_fail(RunOutcome::refused(
             "an unfinished resize recorded an LV growth — re-run with --grow-lv (the record does not \
              store the LV path)"
                 .to_string(),
         ));
     }
-    // 盘上记录没有 LV 收尾基线，本次却给了 --grow-lv：记录是那次作业的完整意图，
-    // 在已提交作业上追加一步没有记录承载的动作，失败后没有载体能解释它从哪来。
-    // 首次运行（`entry.resumed` 为假）的记录是本次新建的，不在此列
-    if entry.resumed && a.grow_lv && src.record_journal().is_some_and(|j| j.lvm_post().is_none()) {
+    // 盘上记录没有 LV 扩容步骤（没有基线，或基线只是 pvresize），本次却给了 --grow-lv：
+    // 记录是那次作业的完整意图，在已提交作业上追加一步没有记录承载的动作，失败后没有
+    // 载体能解释它从哪来。首次运行（`entry.resumed` 为假）的记录是本次新建的，不在此列
+    if entry.resumed
+        && a.grow_lv
+        && src
+            .record_journal()
+            .is_some_and(|j| j.lvm_post().is_none_or(|p| p.lv_target <= p.lv_size_before))
+    {
         bail_fail(RunOutcome::refused(
             "an unfinished resize record carries no LV growth step — adding one to a job already recorded \
              leaves nothing behind to explain it if it fails; re-run without `--grow-lv`"
