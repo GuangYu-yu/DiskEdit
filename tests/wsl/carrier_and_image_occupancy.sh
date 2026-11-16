@@ -40,8 +40,13 @@ exp "$?" 3 "挂载中拒绝写同一镜像"
 unmount_now "$TEST_MNT"
 "$B" resize-part --yes "$T:1" --grow-to-end >/dev/null 2>&1
 exp "$?" 0 "卸载后放行（阳性对照）"
-e2fsck -fn "${L1}p1" >/dev/null 2>&1
-exp "$?" 0 "文件系统无损伤"
+# 表已改到盘尾，L1 的内核分区尺寸仍是扩前值（写表不触发重扫）；先让这只 loop
+# 重读一次并等节点就位，e2fsck 查的才是文件系统本身，而不是被过期几何挡在门外
+partx -u "$L1" >/dev/null 2>&1
+lo_waitpart "${L1}p1" || { echo "  BAD  ${L1}p1 未就位，无法检查文件系统"; rc=1; }
+fsck_out=$(e2fsck -fn "${L1}p1" 2>&1); fsck_rc=$?
+[ "$fsck_rc" -eq 0 ] || printf '%s\n' "$fsck_out"
+exp "$fsck_rc" 0 "文件系统无损伤"
 
 echo "=== C: 挂载镜像上的直接改表命令"
 # 直接改表的每条命令都要在首个字节落盘之前拒绝：分区表与内核仍在使用的
