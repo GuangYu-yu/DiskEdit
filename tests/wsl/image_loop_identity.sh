@@ -400,11 +400,17 @@ else
     # 目录属主不符拒绝，轮不到占用判定
     mkdir -p "$WSL_ROOT/nobody-pub"
     chmod 777 "$WSL_ROOT/nobody-pub"
+    # 被测二进制拷进这个目录再降权执行：降权用户能否执行它取决于整条路径的目录
+    # 权限，而二进制落点（如 CI 的 $GITHUB_WORKSPACE）不保证对其他用户可穿越，
+    # 那里 exec 会以 EACCES 返回 126，与本用例要验证的占用判定无关
+    NBIN=$WSL_ROOT/nobody-pub/DiskEdit
+    cp "$B" "$NBIN"
+    chmod 755 "$NBIN"
     T10=$(setpriv --reuid=65534 --regid=65534 --clear-groups mktemp "$WSL_ROOT/nobody-pub/loopid-nobody-XXXXXX.img")
     track_file "$T10"
     setpriv --reuid=65534 --regid=65534 --clear-groups truncate -s 8M "$T10"
     out=$(setpriv --reuid=65534 --regid=65534 --clear-groups \
-        env DISKEDIT_STATE_DIR="$WSL_ROOT/nobody-pub/state" "$B" new "$T10" --yes 2>&1)
+        env DISKEDIT_STATE_DIR="$WSL_ROOT/nobody-pub/state" "$NBIN" new "$T10" --yes 2>&1)
     exp "$?" 0 "无 disk 组的用户不被 loop 节点权限误伤"
 fi
 
