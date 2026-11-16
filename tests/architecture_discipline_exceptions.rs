@@ -99,6 +99,11 @@ const ALLOW_RULES: &[Rule] = &[
         id: "A-16",
         why: "重读失败由下一轮重试体现，不在这一处上报",
     },
+    Rule {
+        file: "testdir.rs",
+        id: "A-17",
+        why: "夹具清理旧镜像的记录目录，失败没有后续动作",
+    },
 ];
 
 const DISCARD_RULES: &[Rule] = &[
@@ -231,6 +236,11 @@ const DISCARD_RULES: &[Rule] = &[
         file: "movepart/faults.rs",
         id: "D-26",
         why: "故障注入宏里逐个吞掉未使用的入参",
+    },
+    Rule {
+        file: "testdir.rs",
+        id: "D-27",
+        why: "同上：清理旧镜像的记录目录失败没有后续动作",
     },
 ];
 

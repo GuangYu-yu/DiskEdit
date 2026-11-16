@@ -6,26 +6,31 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// 本次测试进程的镜像状态根：子进程与测试算出的落点必须一致
-fn state_root() -> &'static Path {
-    static ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
-    ROOT.get_or_init(|| {
-        let dir = std::env::temp_dir().join(format!("diskedit_cmd_inspect_state_{}", std::process::id()));
-        std::fs::remove_dir_all(&dir).ok();
-        private_dir(&dir);
-        dir
-    })
+/// 本次测试线程的镜像状态根：同一用例内的多次调用（含子进程）落点一致，用例之间互不相干。
+///
+/// 进程内所有用例共用一个根时，临时镜像会复用内核回收的 inode，后来建出的镜像
+/// 因此命中前一个用例留下的记录目录（记录、`.torn.N`、残留文件名）
+fn state_root() -> PathBuf {
+    thread_local! {
+        static ROOT: tempfile::TempDir = {
+            let dir = tempfile::tempdir().expect("a state root for this test");
+            #[cfg(unix)]
+            {
+                // 写命令复核状态根本身：记录里有写前分区表，别的本地账户不能读
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+            }
+            dir
+        };
+    }
+    ROOT.with(|d| d.path().to_path_buf())
 }
 
 /// 记录仓库的每一级都按 0700 建立：写命令会复核状态根、`images` 与键目录
+#[cfg(target_os = "linux")]
 fn private_dir(dir: &Path) {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::DirBuilderExt;
-        std::fs::DirBuilder::new().recursive(true).mode(0o700).create(dir).unwrap();
-    }
-    #[cfg(not(unix))]
-    std::fs::create_dir_all(dir).unwrap();
+    use std::os::unix::fs::DirBuilderExt;
+    std::fs::DirBuilder::new().recursive(true).mode(0o700).create(dir).unwrap();
 }
 
 fn run(args: &[&str]) -> (i32, String, String) {
