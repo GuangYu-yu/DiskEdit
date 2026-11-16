@@ -153,6 +153,47 @@ pub(crate) fn table_snapshot(src: &FileSource, regions: &[TableRegion]) -> Resul
     TableStamp::over_snapshot(src, regions).map_err(RunOutcome::unreadable_io)
 }
 
+/// 计划期写前快照，其中由**决定读**取得的区间原文直接采用：同一区间不再二次读盘，
+/// 决策依据与写基线是同一份字节。
+///
+/// 采用规则按偏移对齐：`regions` 里某段的偏移在 `preloaded` 里出现时，必须恰好一段且
+/// 长度全等，否则按内部错误拒绝（长度不符说明决定读与本次写的区间口径不一致，不能拿
+/// 一段近似字节当基线）；偏移在 `regions` 里不存在的决定读段不参与本次比对，直接忽略
+/// ——它不在本次写的比对与覆盖范围内，例如条目数组声明在非规范 LBA 时，规范位置那段
+/// 从未被决定读看过，只能按盘面读。对不上的段不会被"再读一次"顶替
+pub(crate) fn table_snapshot_with(
+    src: &FileSource,
+    regions: &[TableRegion],
+    preloaded: &[(TableRegion, Vec<u8>)],
+) -> Result<TableSnapshot, RunOutcome> {
+    let mut hasher = Sha256::new();
+    let mut bytes = Vec::with_capacity(regions.len());
+    for r in regions {
+        // 同一偏移只允许一段：决定读提供的段按偏移对上比对区间，长度不同即口径不一致
+        let mut at_offset = preloaded.iter().filter(|(p, _)| p.offset == r.offset);
+        let buf = match (at_offset.next(), at_offset.next()) {
+            (Some((p, b)), None) if p.len == r.len && b.len() as u64 == r.len => b.clone(),
+            (Some(_), None) | (Some(_), Some(_)) => {
+                return Err(RunOutcome::internal(
+                    "a decision-time table region does not match the region this write compares",
+                ))
+            }
+            (None, _) => {
+                let len = usize::try_from(r.len)
+                    .map_err(|_| RunOutcome::refused("a table region is too large to compare on this host"))?;
+                let mut buf = vec![0u8; len];
+                src.read_at(r.offset, &mut buf).map_err(RunOutcome::unreadable_io)?;
+                buf
+            }
+        };
+        hasher.update(&buf);
+        bytes.push(buf);
+    }
+    let mut stamp = [0u8; 32];
+    stamp.copy_from_slice(&hasher.finalize());
+    Ok(TableSnapshot { stamp: TableStamp(stamp), regions: regions.to_vec(), bytes })
+}
+
 /// 计划期算出的写入字节的摘要：与 [`TableStamp::over`] 同一拼接规则，执行期不重算。
 pub(crate) fn table_stamp_of(parts: &[&[u8]]) -> TableStamp {
     TableStamp::of_parts(parts)

@@ -364,7 +364,7 @@ pub fn create_gpt(
         size_of_partition_entry: geom.entry_size,
         header_size: 92,
     };
-    let g = RawGpt { ss, header, entries: vec![empty_entry(); geom.entry_count as usize], state: GptState::Valid, pmbr: PmbrSize::Normal };
+    let g = RawGpt { ss, header, entries: vec![empty_entry(); geom.entry_count as usize], state: GptState::Valid, pmbr: PmbrSize::Normal, decided: None };
     verify_table_stamp(src, stamp, ss)?;
     commit_gpt(src, &g, last_lba)?;
     ensure_protective_mbr(src, ss)?;

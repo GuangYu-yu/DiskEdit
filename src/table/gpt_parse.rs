@@ -52,6 +52,29 @@ pub struct RawGpt {
     pub state: GptState,
     /// 保护 MBR 的覆盖范围状态（shape 已满足；UEFI 2.10 §5.2.3）
     pub pmbr: PmbrSize,
+    /// 解析这一份副本时读到的表区原文：头扇区与它指向的条目数组。装配写前快照时
+    /// 直接采用，同一区间不再二次读盘——决策依据与写基线是同一份字节
+    pub decided: Option<DecidedBytes>,
+}
+
+/// 解析时读定的表区原文。`header` 是解析所用的那一份头所在的整扇区
+/// （主头在 LBA1、备份头在盘尾），`array` 是该头 `partition_entry_lba` 指向的字节
+#[derive(Clone)]
+pub struct DecidedBytes {
+    pub header_lba: u64,
+    pub header: Vec<u8>,
+    pub array_lba: u64,
+    pub array: Vec<u8>,
+}
+
+impl DecidedBytes {
+    /// 这两段在写前比对区间里的形态（偏移 + 原文）：头整扇区与条目数组
+    pub(crate) fn regions(&self, ss: u64) -> Vec<(TableRegion, Vec<u8>)> {
+        let region = |lba: u64, bytes: &Vec<u8>| {
+            (TableRegion { offset: lba.saturating_mul(ss), len: bytes.len() as u64 }, bytes.clone())
+        };
+        vec![region(self.header_lba, &self.header), region(self.array_lba, &self.array)]
+    }
 }
 
 /// 主头几何状态（UEFI 2.10 §5.3.2：backup header 位于设备最后一个 LBA）。
@@ -381,7 +404,16 @@ pub(crate) fn parse_primary(src: &FileSource, ss: u64, pmbr: PmbrSize) -> Parsed
     if let Err(e) = validate_entries(&entries, &header) {
         return ParsedCopy::CopyDamaged(e);
     }
-    ParsedCopy::Usable(Box::new(RawGpt { ss, header, entries, state, pmbr }))
+    let array_lba = header.partition_entry_lba;
+    ParsedCopy::Usable(Box::new(RawGpt {
+        ss, header, entries, state, pmbr,
+        decided: Some(DecidedBytes {
+            header_lba: 1,
+            header: sec,
+            array_lba,
+            array: raw,
+        }),
+    }))
 }
 
 /// 解析备份 GPT（盘尾）。主头不可用（头撕裂/数组损伤/该处读不出来）时的回退路径——
@@ -417,7 +449,9 @@ pub(crate) fn parse_backup(src: &FileSource, ss: u64, pmbr: PmbrSize) -> ParsedC
         Ok(r) => r,
         Err(e) => return ParsedCopy::CopyDamaged(e),
     };
-    // 转成主头视角后再做几何自洽校验（validate_geometry 按主头语义检查 MyLBA==1）
+    // 转成主头视角后再做几何自洽校验（validate_geometry 按主头语义检查 MyLBA==1）。
+    // 数组位置取自盘上原值：规范化只改视角，不改这份副本指向的数组
+    let array_lba = header.partition_entry_lba;
     header.primary_lba = 1;
     header.backup_lba = file_last_lba;
     if let Err(e) = validate_geometry(&header, &geom, file_last_lba, GptCopyKind::Backup) {
@@ -434,6 +468,7 @@ pub(crate) fn parse_backup(src: &FileSource, ss: u64, pmbr: PmbrSize) -> ParsedC
         ss, header, entries,
         state: GptState::NeedsRepair { cause: HeaderIssue::PrimaryUnreadable },
         pmbr,
+        decided: Some(DecidedBytes { header_lba: file_last_lba, header: sec, array_lba, array: raw }),
     }))
 }
 

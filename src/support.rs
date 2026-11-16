@@ -475,20 +475,28 @@ pub(crate) fn free_right_gpt(g: &ValidatedGeometry, part: u32) -> u64 {
     e.ending_lba.checked_add(1).map_or(0, |next| bound.saturating_sub(next))
 }
 
-/// MBR 表项实际占用的区间 [起点, 终点]（含端点）。容器项（扩展分区）的 EBR 链不被解析，
-/// 链的实际跨度可能越过容器自述尺寸（外部工具追加到容器末端之后），故容器起点之后
-/// 整体按占用计到盘尾——宁可少给空闲，也不把逻辑分区所在的扇区判成可分配
+/// MBR 表项实际占用的区间 [起点, 终点]（含端点）。解析层只产出非空槽
+/// （`parse_mbr_raw` 跳过 type 或 size 为 0 的记录），因此这里逐项对应，不再过滤。
+/// 容器项（扩展分区）的 EBR 链不被解析，链的实际跨度可能越过容器自述尺寸（外部工具追加到
+/// 容器末端之后），故容器起点之后整体按占用计到盘尾——宁可少给空闲，也不把逻辑分区所在的
+/// 扇区判成可分配。放置（`add`）与右侧空闲（`free_right_msdos`）共用这一份算术
 pub(crate) fn mbr_occupied(mbr: &[table::MbrPartition], total_sectors: u64) -> Vec<(u64, u64)> {
-    mbr.iter()
-        .map(|p| {
-            let last = if p.is_container {
-                total_sectors.saturating_sub(1)
-            } else {
-                (p.start_lba as u64 + p.size_lba as u64).saturating_sub(1)
-            };
-            (p.start_lba as u64, last)
-        })
-        .collect()
+    mbr_occupied_pairs(mbr, total_sectors).map(|(_, range)| range).collect()
+}
+
+/// 与 [`mbr_occupied`] 同一份算术，但保留表项本身，供需要按条目跳过的调用方使用
+fn mbr_occupied_pairs(
+    mbr: &[table::MbrPartition],
+    total_sectors: u64,
+) -> impl Iterator<Item = (&table::MbrPartition, (u64, u64))> {
+    mbr.iter().map(move |p| {
+        let last = if p.is_container {
+            total_sectors.saturating_sub(1)
+        } else {
+            (p.start_lba as u64 + p.size_lba as u64).saturating_sub(1)
+        };
+        (p, (p.start_lba as u64, last))
+    })
 }
 
 /// MBR 分区右侧连续空闲扇区数（到下一表项起点或盘尾为止）。扩展容器项构成边界：
@@ -497,7 +505,7 @@ pub(crate) fn mbr_occupied(mbr: &[table::MbrPartition], total_sectors: u64) -> V
 pub(crate) fn free_right_msdos(mbr: &[table::MbrPartition], p: &table::MbrPartition, total_sectors: u64) -> u64 {
     let end = p.start_lba as u64 + p.size_lba as u64; // 排他
     let mut bound = total_sectors;
-    for (o, (o_start, o_end)) in mbr.iter().zip(mbr_occupied(mbr, total_sectors)) {
+    for (o, (o_start, o_end)) in mbr_occupied_pairs(mbr, total_sectors) {
         if o.num == p.num {
             continue;
         }
@@ -601,6 +609,39 @@ mod tests {
     use super::*;
     use crate::table;
 
+    /// 容器的 EBR 链实际跨度可能长过容器自述长度：占用区间必须按到盘尾计，
+    /// 右侧空闲不得把逻辑分区所在扇区算成可分配
+    #[test]
+    fn a_container_occupies_from_its_start_to_the_disk_end() {
+        let part = |num, start, size, is_container| table::MbrPartition {
+            num,
+            os_type: if is_container { 0x05 } else { 0x83 },
+            start_lba: start,
+            size_lba: size,
+            is_container,
+        };
+        let mbr = vec![part(1, 2048, 4096, true), part(2, 8192, 2048, false)];
+        let occupied = mbr_occupied(&mbr, 100_000);
+        assert_eq!(occupied[0], (2048, 99_999), "the container reaches the disk end");
+        assert_eq!(occupied[1], (8192, 10_239));
+        assert_eq!(
+            free_right_msdos(&mbr, &mbr[1], 100_000),
+            0,
+            "nothing right of a partition that sits inside the container's chain can be handed out"
+        );
+    }
+
+    /// MBR 占用算术只有 [`mbr_occupied`] 一份：`add` 的放置必须经过它，容器到盘尾的
+    /// 规则才不会被绕开。守卫按"调用是否存在"判定，将来在同一文件里合法读取表项字段
+    /// 不会误红
+    #[test]
+    fn mbr_placement_uses_the_single_occupancy_helper() {
+        assert!(
+            include_str!("cmd/layout.rs").contains("mbr_occupied("),
+            "MBR placement must go through support::mbr_occupied"
+        );
+    }
+
     /// 打开时轮转超限日志：旧内容整份进 `.1`，新文件从 0 开始；再次超限时覆盖已有的
     /// `.1`（不是接在它后面），新日志同样从 0 开始
     #[test]
@@ -677,6 +718,7 @@ mod tests {
                 header_size: 92,
             },
             entries,
+            decided: None,
         }
     }
 

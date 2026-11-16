@@ -139,13 +139,29 @@ pub(crate) fn take_table_snapshot(
     src: &FileSource,
     content: &TableContent<'_>,
 ) -> Result<TableSnapshot, RunOutcome> {
-    let regions = match content {
-        TableContent::Gpt { content, .. } => crate::table::gpt_compare_regions(src, content)?,
-        TableContent::Mbr { .. } => crate::table::mbr_compare_regions(src)?,
-        TableContent::ProtectiveMbr { content, .. } => crate::table::gpt_compare_regions(src, content)?,
-        TableContent::NewMbr => crate::table::new_mbr_regions(src)?,
-    };
+    let regions = compare_regions(src, content)?;
     crate::table::table_snapshot(src, &regions)
+}
+
+/// 写前快照，其中**决定读**已经取得的区间原文直接采用，同一区间不再二次读盘：
+/// 决定所用的字节就是写基线所用的字节（见 [`crate::table::table_snapshot_with`]）
+pub(crate) fn take_table_snapshot_decided(
+    src: &FileSource,
+    content: &TableContent<'_>,
+    preloaded: &[(crate::table::TableRegion, Vec<u8>)],
+) -> Result<TableSnapshot, RunOutcome> {
+    let regions = compare_regions(src, content)?;
+    crate::table::table_snapshot_with(src, &regions, preloaded)
+}
+
+/// 该表内容的比对区间：仅由表内容自身（ss / 条目几何 / 末 LBA）决定
+fn compare_regions(src: &FileSource, content: &TableContent<'_>) -> Result<Vec<crate::table::TableRegion>, RunOutcome> {
+    match content {
+        TableContent::Gpt { content, .. } => crate::table::gpt_compare_regions(src, content),
+        TableContent::Mbr { .. } => crate::table::mbr_compare_regions(src),
+        TableContent::ProtectiveMbr { content, .. } => crate::table::gpt_compare_regions(src, content),
+        TableContent::NewMbr => crate::table::new_mbr_regions(src),
+    }
 }
 
 /// 在计划期把表步骤装配完整：写前摘要取自调用方刚读定的 `snapshot`，`expect_after` 与
@@ -236,7 +252,7 @@ pub(crate) fn assemble_repair_plan(
                 content: &content,
                 protective_mbr: protective_mbr.as_deref(),
             };
-            let snapshot = take_table_snapshot(src, &probe)?;
+            let snapshot = take_table_snapshot_decided(src, &probe, &vg.decided_regions())?;
             confirmed_table_step(src, probe, snapshot)
         }
         // 仅保护 MBR：四段保持原样，写入段只有 LBA0
@@ -253,7 +269,8 @@ pub(crate) fn assemble_repair_plan(
                 last_lba: file_last_lba,
             };
             let probe = TableContent::ProtectiveMbr { content: &content, lba0: &lba0 };
-            let snapshot = take_table_snapshot(src, &probe)?;
+            let preloaded = g.decided.as_ref().map(|d| d.regions(g.ss)).unwrap_or_default();
+            let snapshot = take_table_snapshot_decided(src, &probe, &preloaded)?;
             confirmed_table_step(src, probe, snapshot)
         }
     }
@@ -434,7 +451,7 @@ fn gpt_add_step(src: &FileSource, geometry: &ValidatedGeometry) -> Result<TableS
         content: &content,
         protective_mbr: None,
     };
-    let snapshot = take_table_snapshot(src, &probe)?;
+    let snapshot = take_table_snapshot_decided(src, &probe, &geometry.decided_regions())?;
     let protective_mbr = crate::table::protective_mbr_content(src, geometry.sector_size())?;
     let view = TableContent::Gpt {
         kind: TableWriteKind::Add,
@@ -492,7 +509,7 @@ pub(crate) fn assemble_resize_part(
         content: &content,
         protective_mbr: None,
     };
-    let snapshot = take_table_snapshot(src, &probe)?;
+    let snapshot = take_table_snapshot_decided(src, &probe, &geometry.decided_regions())?;
     // 保护 MBR 的读取排在快照之后：它若在快照之后被第三方改动，写前按 regions 比对会落 5
     let protective_mbr = crate::table::protective_mbr_content(src, geometry.sector_size())?;
     let view = TableContent::Gpt {
@@ -548,7 +565,7 @@ fn gpt_attribute_plan(
         content: &content,
         protective_mbr: None,
     };
-    let snapshot = take_table_snapshot(src, &probe)?;
+    let snapshot = take_table_snapshot_decided(src, &probe, &geometry.decided_regions())?;
     // 无修复动作时 LBA0 一字不动：保护 MBR 的规范化归属于修复相位，只有本次步骤
     // 同时承担修复时才取它的内容。读取排在快照之后：它若在快照之后被第三方改动，
     // 写前按 regions 比对会落 5
@@ -608,11 +625,20 @@ pub(crate) fn assemble_set_gpt_flag(
     })
 }
 
-/// msdos 表属性：LBA0 原文经纯函数算出新内容之后，紧接内容读定写前快照，装配为单步
-/// `WriteTable`。校验、槽位与条目判据由命令层与 [`crate::table`] 的纯函数在此之前给出
-fn mbr_attribute_plan(src: &FileSource, lba0: &[u8]) -> Result<ConfirmedPlan, RunOutcome> {
+/// msdos 表属性：LBA0 原文经纯函数算出新内容之后，装配为单步 `WriteTable`。
+/// 写前快照的 LBA0 直接采用决定读的那一份原文，不再二次读盘。校验、槽位与条目判据
+/// 由命令层与 [`crate::table`] 的纯函数在此之前给出
+fn mbr_attribute_plan(
+    src: &FileSource,
+    decided_lba0: &[u8],
+    lba0: &[u8],
+) -> Result<ConfirmedPlan, RunOutcome> {
     let kind = TableWriteKind::Replace;
-    let snapshot = take_table_snapshot(src, &TableContent::Mbr { kind, lba0 })?;
+    let preloaded = [(
+        crate::table::TableRegion { offset: 0, len: decided_lba0.len() as u64 },
+        decided_lba0.to_vec(),
+    )];
+    let snapshot = take_table_snapshot_decided(src, &TableContent::Mbr { kind, lba0 }, &preloaded)?;
     confirmed_table_step(src, TableContent::Mbr { kind, lba0 }, snapshot)
 }
 
@@ -625,7 +651,7 @@ pub(crate) fn assemble_set_mbr_type(
     crate::table::check_mdos_type(part, t)?;
     let lba0 = crate::table::read_mbr_lba0(src)?;
     let out = crate::table::set_mdos_type_image(&lba0, part, t)?;
-    mbr_attribute_plan(src, &out)
+    mbr_attribute_plan(src, &lba0, &out)
 }
 
 /// `set flag boot` 的 msdos 表步骤
@@ -637,7 +663,7 @@ pub(crate) fn assemble_set_mbr_boot(
     crate::table::primary_slot(part)?;
     let lba0 = crate::table::read_mbr_lba0(src)?;
     let out = crate::table::set_mdos_boot_image(&lba0, part, on)?;
-    mbr_attribute_plan(src, &out)
+    mbr_attribute_plan(src, &lba0, &out)
 }
 
 /// `set flag hidden` 的 msdos 表步骤：条目已在目标态时没有写盘内容，返回 `None`
@@ -651,7 +677,7 @@ pub(crate) fn assemble_set_mbr_hidden(
     let Some(out) = crate::table::set_mdos_hidden_image(&lba0, part, on)? else {
         return Ok(None);
     };
-    Ok(Some(mbr_attribute_plan(src, &out)?))
+    Ok(Some(mbr_attribute_plan(src, &lba0, &out)?))
 }
 
 /// 多步搬移计划的装配：按 `moves` 的顺序逐条目推进 `geometry`，每个条目得到
@@ -713,13 +739,14 @@ fn assemble_move_steps(
         ));
     }
     let initial = geometry.content();
-    let mut state = take_table_snapshot(
+    let mut state = take_table_snapshot_decided(
         src,
         &TableContent::Gpt {
             kind: TableWriteKind::Repartition,
             content: &initial,
             protective_mbr: None,
         },
+        &geometry.decided_regions(),
     )?;
     // 快照先读定、保护 MBR 后读：若 LBA0 在两者之间被改动，写前按 regions 比对会落 5，
     // 不会把旧 LBA0 的引导代码写回去
