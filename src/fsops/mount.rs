@@ -453,7 +453,7 @@ impl BackingMatch {
 #[cfg(target_os = "linux")]
 fn backing_identity_from_sysfs(name: &str) -> io::Result<Option<LoopBacking>> {
     use std::os::unix::fs::MetadataExt;
-    let attr = format!("/sys/block/{name}/loop/backing_file");
+    let attr = crate::dev::sysfs_block_dir().join(name).join("loop/backing_file");
     let raw = match std::fs::read_to_string(&attr) {
         Ok(s) => s,
         // 未绑定：该属性组由 loop_configure 建立、在 __loop_clr_fd 里移除
@@ -465,7 +465,7 @@ fn backing_identity_from_sysfs(name: &str) -> io::Result<Option<LoopBacking>> {
         Err(e) => {
             return Err(io::Error::new(
                 e.kind(),
-                format!("cannot read {attr}: {e} — refusing (fail-closed)"),
+                format!("cannot read {}: {e} — refusing (fail-closed)", attr.display()),
             ));
         }
     };
@@ -701,9 +701,8 @@ pub(crate) fn loop_occupancy_for(
     // 每个 loop 独立成形：持有者记在真正拥有它的那个 loop 名下。跨 loop 汇总会把
     // "B 上的占用"说成"A 被持有"，而拒绝消息是用户解除占用的唯一线索
     let mut held: Vec<(String, Vec<String>)> = Vec::new();
-    for entry in std::fs::read_dir("/sys/block")? {
-        let entry = entry?;
-        let name = entry.file_name().to_string_lossy().into_owned();
+    let block_dir = crate::dev::sysfs_block_dir();
+    for name in crate::dev::block_names(&crate::dev::sysfs_root())? {
         if !is_loop_name(&name) {
             continue;
         }
@@ -715,7 +714,7 @@ pub(crate) fn loop_occupancy_for(
         }
         let loopdev = format!("/dev/{name}");
         let mut holders: Vec<String> = Vec::new();
-        for (node, sysdir) in loop_and_partitions(&entry.path(), &name)? {
+        for (node, sysdir) in loop_and_partitions(&block_dir.join(&name), &name)? {
             let path = format!("/dev/{node}");
             let m = std::fs::metadata(&path).map_err(|e| {
                 io::Error::new(
@@ -1145,7 +1144,7 @@ fn ensure_whole_device_idle(src: &FileSource) -> Result<(), crate::outcome::RunO
     use crate::dev::OccupancyFact;
     use crate::outcome::RunOutcome;
     let disk = block_disk_name(src).map_err(RunOutcome::from)?;
-    let sysdir = Path::new("/sys/block").join(&disk);
+    let sysdir = crate::dev::sysfs_block_dir().join(&disk);
     // 盘节点用用户给出的路径：by-id / mapper 之类的别名在 /dev/<sysfs 名> 下不一定存在。
     // 它必须仍指 fd 打开的那台设备——探测按路径 stat，指错了设备就是用另一台的空闲
     // 状态给本次写入放行（判据与 fsops 其余节点解析同一份）

@@ -6,7 +6,7 @@ use crate::dev::FileSource;
 /// 从（盘名, 分区号）解析 OnlineTarget（PV 路径不来自挂载点，mnt 为 None）
 pub(crate) fn resolve_pv_target(disk_name: &str, pno: u32) -> io::Result<OnlineTarget> {
     let disk_dev = PathBuf::from("/dev").join(disk_name);
-    let sysroot = Path::new("/sys/block").join(disk_name);
+    let sysroot = crate::dev::sysfs_block_dir().join(disk_name);
     // 盘名与分区名都由 sysfs 目录名推得：节点必须与 sysfs 的设备号同源，
     // 否则后续 pvresize 的落点与这里读到的几何分属两台设备
     ensure_node_is_device(&disk_dev, &sysroot)?;

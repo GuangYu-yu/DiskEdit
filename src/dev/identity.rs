@@ -131,7 +131,7 @@ impl TargetFingerprint {
 /// 当前目标能给出的"凭什么认它"
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LiveProof {
-    /// 整盘节点的稳定设备 ID（[`DEVICE_IDENTITY_ATTRS`] 之一的哈希）
+    /// 整盘节点的稳定设备 ID（[`DEVICE_ID_ATTRS`] 里 [`AttrRole::Identity`] 之一的哈希）
     DeviceId,
     /// inode 身份：镜像文件的 (dev, ino)；loop 设备取 backing 文件的 (dev, ino)，
     /// 即指纹里的 dev / ino
@@ -233,24 +233,34 @@ pub(crate) enum TargetKind {
     Block,
 }
 
-/// 设备层持久 ID 的探测顺序：设备自己声明的身份优先，读不到就退到下一层。
-/// 内核并不保证这些属性在所有块设备类型上都存在（ram、无 serial 的 virtio-blk 等），
-/// 故本层只回答"最强的可用身份"，链尾恒有 devname + 容量兜底。
+/// 设备 ID 属性表：顺序即优先级，读不到就退到下一层。内核并不保证这些属性在所有
+/// 块设备类型上都存在（ram、无 serial 的 virtio-blk 等），故本层只回答"最强的可用身份"，
+/// 链尾恒有 devname + 容量兜底。
 ///
-/// `dm/name` 是 DM 自己的退路（映射名，改名即变），不是全局物理身份，故只排在
-/// `dm/uuid` 之后；`wwid` 及其后的条目才是跨设备类型通用的那几层。
-/// `loop/backing_file` 不在列：loop 设备在进入本链之前就走专用的 backing 身份解析
-/// （见 [`TargetIdentity::resolve_block`]），不以属性值充当设备 ID。
-/// 本序列只服务 journal / checkpoint 的落点；锁键另走 [`crate::dev::block_lock_key`]——
-/// 改名会让以 `dm/name` 派生的锁一分为二
-#[cfg(target_os = "linux")]
-pub(crate) const DEVICE_ID_ATTRS: &[&str] = &["dm/uuid", "dm/name", "md/uuid", "wwid", "device/wwid", "device/serial"];
-
-/// 进指纹的设备身份：只收**设备自己声明的事实**。`dm/name` 不在列——映射名是名字而非身份，
-/// 同名重建的另一个 DM 设备会得到同一个值，用它当"这还是不是当时那块盘"的证据等于没有证据。
+/// `dm/name` 是用户指定的映射名、改名即变，只回答"现场落在哪"（journal / checkpoint
+/// 的键），不构成身份（指纹、锁键）；其余条目同时是设备声明的事实。两个消费视图由
+/// 这一张表过滤出来，不各抄一份。`loop/backing_file` 不在列：loop 设备在进入本链之前
+/// 就走专用的 backing 身份解析（见 [`TargetIdentity::resolve_block`]）。
 /// 属性名与值一起入哈希：不同属性下的同值字符串不构成同一个事实
 #[cfg(target_os = "linux")]
-pub(crate) const DEVICE_IDENTITY_ATTRS: &[&str] = &["dm/uuid", "md/uuid", "wwid", "device/wwid", "device/serial"];
+pub(crate) const DEVICE_ID_ATTRS: &[(&str, AttrRole)] = &[
+    ("dm/uuid", AttrRole::Identity),
+    ("dm/name", AttrRole::Locator),
+    ("md/uuid", AttrRole::Identity),
+    ("wwid", AttrRole::Identity),
+    ("device/wwid", AttrRole::Identity),
+    ("device/serial", AttrRole::Identity),
+];
+
+/// 属性在身份问题里的角色
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AttrRole {
+    /// 值本身是设备声明的事实，进指纹与锁键
+    Identity,
+    /// 只用于定位落点：改名即变，不能当证据
+    Locator,
+}
 
 /// 在目标路径后追加后缀（不适配扩展名，只做串接）：`/a/b.img` + `.bak` ⇒ `/a/b.img.bak`，
 /// 与用户可见的目标名保持一一对应

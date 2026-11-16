@@ -274,7 +274,8 @@ pub(crate) fn record_at_target_finishes_even_with_an_unfinished_relocation_stage
         .bind_relocation(
             crate::recovery::Relocation {
                 entries: vec![crate::recovery::RelocEntry {
-                    partition: 1,
+                    // 搬移对象是挡路分区：记录判据不允许被扩容的分区同时出现在条目里
+                    partition: 2,
                     src_first: old.0,
                     len: 4096,
                     delta: (new.0 - old.0) as i64,

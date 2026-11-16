@@ -212,6 +212,51 @@ fn prepare_dir_fail(src: &FileSource, e: crate::dev::HostRepoError) -> crate::ou
     }
 }
 
+/// 测试夹具：一台"块设备"的 [`FileSource`]。句柄是 `path` 上的真实文件，设备号与身份
+/// 材料由调用方给——生产路径上这两项只能从真实节点与 ioctl 取，调用链测试因此在这一层
+/// 替换。记录与锁的落点放在 `write_root` 下，不碰主机仓库。
+///
+/// `is_block` 为 `false`：被替换的是句柄本身，而句柄是普通文件，BLKROGET 之类块设备
+/// ioctl 对它无从谈起。调用链读到的 `block_identity` 与 `identity.kind` 仍是块设备的
+#[cfg(all(test, target_os = "linux"))]
+pub(crate) fn test_block_source(
+    path: &Path,
+    write_root: &Path,
+    major: u32,
+    minor: u32,
+    device_id: &str,
+) -> io::Result<FileSource> {
+    let file = std::fs::OpenOptions::new().read(true).write(true).open(path)?;
+    let meta = file.metadata()?;
+    let mut fingerprint = TargetFingerprint::from_file(&file)?;
+    fingerprint.id = fnv1a64(device_id.as_bytes());
+    let key = crate::dev::host_repo::key_for_test(device_id, None);
+    let record = crate::dev::host_repo::record_dir_under(write_root, &key.hash_hex()).join(crate::dev::RECORD_NAME);
+    let identity = TargetIdentity {
+        kind: TargetKind::Block,
+        base: path.to_path_buf(),
+        canonical: path.to_path_buf(),
+        journal: write_root.join("legacy.journal"),
+        record: Some(record),
+        record_key: Some(key),
+        lock: write_root.join("target.lock"),
+        backing_fp: None,
+    };
+    Ok(FileSource {
+        identity,
+        block_identity: Some((major, minor, Some(device_id.to_string()))),
+        file,
+        path: path.to_path_buf(),
+        sector_size: 512,
+        size: meta.len(),
+        is_block: false,
+        record_journal: None,
+        fingerprint,
+        loop_mapping: None,
+        owner: None,
+    })
+}
+
 impl WriteSource {
     /// 取目标的独占所有权，把已打开的句柄升格为写句柄。锁落点由身份恒给出
     /// （见 [`TargetIdentity::lock_path`]），取不到即拒绝——没有"无锁继续写"这条路径
@@ -721,7 +766,16 @@ impl FileSource {
         if self.is_block {
             #[cfg(target_os = "linux")]
             {
-                let now = TargetIdentity::resolve_block(&self.path).map_err(|e| {
+                // 设备号取自**这个句柄**：路径在 open 之后被 udev 重建时，按路径重解析会得到
+                // 另一个设备的身份，而写入仍落在这个句柄上
+                use std::os::unix::fs::MetadataExt;
+                let rdev = self.file.metadata().map_err(|e| {
+                    RunOutcome::refused(format!("cannot re-read the opened target after taking the lock: {e}"))
+                })?.rdev();
+                let node = sysfs_node_from_rdev(rdev).map_err(|e| {
+                    RunOutcome::refused(format!("the opened device has no sysfs node after taking the lock: {e}"))
+                })?;
+                let now = TargetIdentity::resolve_block_at(&node, &self.path).map_err(|e| {
                     RunOutcome::refused(format!(
                         "the target cannot be re-read after taking the lock: {e}"
                     ))
@@ -734,6 +788,21 @@ impl FileSource {
                         "the device node now resolves to a different target than the one opened \
                          before the lock",
                     ));
+                }
+                // 写入前再问一次"这个声明在可见的整盘里是否只有它一份、相关设备读得出"。
+                // 锁只排除并发写者，管不住另一块挂着同一声明的盘；判据与新建记录的准入
+                // 是同一个（`check_device`），条件也相同——有记录落点的整盘目标才问，
+                // dm / md 没有记录目录，镜像没有 sysfs 兄弟盘
+                if self.identity.kind == TargetKind::Block && self.identity.record_path().is_some() {
+                    match check_device(self) {
+                        Ok(check) if check.is_match() => {}
+                        Ok(check) => return Err(RunOutcome::refused(check.detail)),
+                        Err(why) => {
+                            return Err(RunOutcome::refused(format!(
+                                "the device identity could not be checked before writing: {why}"
+                            )));
+                        }
+                    }
                 }
             }
             return Ok(());

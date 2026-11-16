@@ -264,7 +264,7 @@ pub(crate) fn part_resize(t: &OnlineTarget, new_len_bytes: u64) -> Result<(), Pa
 pub(crate) fn verify_part_size(t: &OnlineTarget, new_len_bytes: u64) -> io::Result<()> {
     let meta = fs::metadata(&t.part_dev)?;
     let (maj, min) = (libc::major(meta.st_rdev()), libc::minor(meta.st_rdev()));
-    let got = sysfs_u64(&Path::new("/sys/dev/block").join(format!("{maj}:{min}")).join("size"))?;
+    let got = sysfs_u64(&crate::dev::sysfs_dev_block_dir().join(format!("{maj}:{min}")).join("size"))?;
     let want = new_len_bytes / 512;
     if got != want {
         return Err(io::Error::other(format!(

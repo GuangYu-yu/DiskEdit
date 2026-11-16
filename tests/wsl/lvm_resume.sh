@@ -48,10 +48,11 @@ bad() { echo "  BAD  $*"; rc=1; }
 
 lv_sz() { lvs --noheadings --units b --nosuffix -o lv_size "/dev/$VG/lv1" 2>/dev/null | tr -d ' '; }
 fs_sz() { dumpe2fs -h "/dev/$VG/lv1" 2>/dev/null | awk '/^Block count:/ {print $3 * 4096}'; }
-# 分区长度取自镜像里的表：映射的 sizelimit 要与表里的分区长度精确相等，不能用映射容量代替
+# 分区长度取自镜像里的表：映射的 sizelimit 要与表里的分区长度精确相等，不能用映射容量代替。
+# 分区对象里 num 之后、size_bytes 之前有多少字段按表族不同（mbr 多一个 type），故不逐个匹配
 part_sz() {
   $B info "$IMG" 2>/dev/null |
-    sed -n 's/.*"num":1,"first_lba":[0-9]*,"last_lba":[0-9]*,"size_bytes":\([0-9]*\).*/\1/p'
+    sed -n 's/.*"partitions":\[{"num":1[^}]*"size_bytes":\([0-9]*\).*/\1/p'
 }
 
 # 假工具：$1=名字，$2=脚本正文（正文里可用 $MARK / $REAL_LVEXTEND）
@@ -71,8 +72,10 @@ wait_no_loop() {
 }
 
 # 现场：64M 镜像、48M 分区上的 PV/VG/LV(16M,ext4)。分区起点由内核分区节点读出，
-# PV 建在该起点、长度精确等于表里分区长度的那只映射上，LV 保持活动——dm 持有这只映射
+# PV 建在该起点、长度精确等于表里分区长度的那只映射上，LV 保持活动——dm 持有这只映射。
+# $1=表种类（缺省 gpt）：msdos 与 gpt 共用同一条 LVM 收尾链，分表族各自验一遍
 build_fixture() {
+  local table=${1:-gpt}
   if [ -n "$LOOP" ]; then
     vgchange -an "$VG" >/dev/null 2>&1
     lo_detach "$LOOP"
@@ -81,7 +84,7 @@ build_fixture() {
   vgremove -ff "$VG" >/dev/null 2>&1
   rm -rf "$IMG" "$IMG"$SIDECAR_GLOB "$MARK" 2>/dev/null
   truncate -s 64M "$IMG" || fail "truncate $IMG"
-  $B new "$IMG" --yes >/dev/null || fail "new $IMG"
+  $B new "$IMG" --table "$table" --yes >/dev/null || fail "new $IMG --table $table"
   $B add "$IMG" 48M --align mib --yes >/dev/null || fail "add $IMG"
   local probe pn start len
   probe=$(lo_attach "$IMG") || fail "losetup $IMG"
@@ -215,6 +218,21 @@ echo "$OUT" | sed 's/^/    /'
 exp "$E" 0 "grow 重跑按记录的目标续做 LVM 收尾"
 report_state "$((LV0 + 8388608))" "现场三/重跑"
 expect_no_record "现场三/重跑"
+
+echo "-- 现场四：msdos 作业记录带 LVM 基线，重跑未给 --grow-lv 必须被拒 --"
+# 记录不存 LV 路径，收尾只能按本次请求重选；静默退成只跑 pvresize 等于丢掉已承诺的
+# LV 扩容。先释放 dm 持有的映射，让占用闸不先于这条判据拒绝
+build_fixture mbr
+first_run_pending "现场四/首次"
+vgchange -an "$VG" >/dev/null 2>&1
+OUT=$($B resize --yes "$IMG:1" 56M 2>&1); E=$?
+echo "$OUT" | sed 's/^/    /'
+# 判据是拒绝，但记录来自上一次已写盘的作业：拒绝按「目标可能已被改动」出口落 5，
+# 不按「首跑前拒绝」的 3——3 会否认上一次写入已经发生
+exp "$E" 5 "续跑不带 --grow-lv → 拒绝（5：上次写入已落盘）"
+case "$OUT" in *"--grow-lv"*) echo "  OK   拒绝措辞点出 --grow-lv";; *) bad "拒绝措辞未点出 --grow-lv";; esac
+expect_record "现场四/拒绝后"
+assert_eq "$(part_sz)" "$((PART0 + 8388608))" "现场四/拒绝后: 分区不再变化"
 
 vgchange -an "$VG" >/dev/null 2>&1
 if [ -n "$LOOP" ]; then lo_detach "$LOOP"; LOOP=; fi
