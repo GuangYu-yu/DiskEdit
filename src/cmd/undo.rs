@@ -34,7 +34,8 @@ fn undo_record(src: &mut WriteSource, permit_move: bool) -> Option<u8> {
         [] => {
             if !mismatched.is_empty() {
                 println!(
-                    "none of the {} candidate record(s) above belongs to this target — they are left in place",
+                    "none of the {} candidate record(s) above can be claimed for this target — they are left \
+                     in place",
                     mismatched.len()
                 );
             }

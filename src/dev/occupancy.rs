@@ -437,7 +437,7 @@ fn gather(tables: &Tables, subject: &Subject, src: &FileSource) -> Result<Occupa
 /// 退化为自身，不展开分区
 #[cfg(target_os = "linux")]
 fn device_scope(rdev: u64) -> Result<Vec<ScopedDevice>, String> {
-    let link = Path::new("/sys/dev/block")
+    let link = sysfs_dev_block_dir()
         .join(format!("{}:{}", libc::major(rdev), libc::minor(rdev)));
     let sysdir = std::fs::canonicalize(&link).map_err(|e| {
         format!("cannot resolve {} to the device's sysfs directory: {e}", link.display())
@@ -482,7 +482,7 @@ fn scoped_device(dir: &Path) -> Result<ScopedDevice, String> {
 /// 兄弟分区在用不代表这台在用
 #[cfg(target_os = "linux")]
 fn scoped_self(rdev: u64) -> Result<ScopedDevice, String> {
-    let link = Path::new("/sys/dev/block")
+    let link = sysfs_dev_block_dir()
         .join(format!("{}:{}", libc::major(rdev), libc::minor(rdev)));
     let sysdir = std::fs::canonicalize(&link).map_err(|e| {
         format!("cannot resolve {} to the device's sysfs directory: {e}", link.display())
@@ -754,22 +754,21 @@ fn btrfs_members(src: &FileSource) -> Result<Vec<MemberRef>, String> {
 #[cfg(target_os = "linux")]
 fn md_members_of(scope: &[ScopedDevice]) -> Result<Vec<MemberRef>, String> {
     let names: Vec<&str> = scope.iter().map(|d| d.name.as_str()).collect();
-    let entries = std::fs::read_dir("/sys/block")
-        .map_err(|e| format!("cannot read /sys/block: {e}"))?;
+    let block_dir = sysfs_block_dir();
+    let devices = block_names(&sysfs_root()).map_err(|e| e.to_string())?;
     let mut out = Vec::new();
-    for entry in entries {
-        let entry = entry.map_err(|e| format!("cannot read /sys/block: {e}"))?;
-        let name = entry.file_name().to_string_lossy().into_owned();
+    for name in devices {
         if !name.starts_with("md") {
             continue;
         }
-        let is_dir = std::fs::metadata(entry.path())
-            .map_err(|e| format!("cannot stat {}: {e}", entry.path().display()))?
+        let node = block_dir.join(&name);
+        let is_dir = std::fs::metadata(&node)
+            .map_err(|e| format!("cannot stat {}: {e}", node.display()))?
             .is_dir();
         if !is_dir {
             continue;
         }
-        let md_dir = entry.path().join("md");
+        let md_dir = node.join("md");
         let members = match std::fs::read_dir(&md_dir) {
             Ok(members) => members,
             // 目录不在：这台 md 设备没有阵列侧成员表，不构成命中
@@ -807,7 +806,7 @@ fn holder_chain(sysdir: &Path) -> Result<Option<Vec<String>>, String> {
         let mut next = Vec::new();
         for dir in &frontier {
             for name in read_holders(dir)? {
-                let holder_dir = Path::new("/sys/block").join(&name);
+                let holder_dir = sysfs_block_dir().join(&name);
                 // 持有者本身是块设备，目录必然存在；解析不了说明它已在采集窗口内消失，
                 // 其子树是否含非 dm 栈无从确认，不能按「已看到的名字都无害」处理
                 let real = std::fs::canonicalize(&holder_dir).map_err(|e| {
@@ -922,9 +921,9 @@ mod holder_decisions {
 /// mountinfo 证据的读法：命中即证明；整份表都没有命中且存在解析失败的 source 才报错
 #[cfg(all(test, target_os = "linux"))]
 mod mount_evidence {
-    use super::{mounts_of, ScopedDevice, Subject, Tables};
+    use super::{mounts_of, sysfs_dev_block_dir, ScopedDevice, Subject, Tables};
     use crate::fsops::mount::MountEntry;
-    use std::path::{Path, PathBuf};
+    use std::path::Path;
 
     fn entry(dev_no: (u64, u64), mount_point: &str, source: &str) -> MountEntry {
         MountEntry {
@@ -939,7 +938,7 @@ mod mount_evidence {
     fn device(dev_no: (u64, u64)) -> ScopedDevice {
         ScopedDevice {
             name: "sda".to_string(),
-            sysdir: PathBuf::from("/sys/dev/block/8:0"),
+            sysdir: sysfs_dev_block_dir().join("8:0"),
             dev_no,
         }
     }

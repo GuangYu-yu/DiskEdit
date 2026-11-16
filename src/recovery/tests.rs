@@ -730,7 +730,8 @@ fn relocation_of(entries: Vec<RelocEntry>, entry_index: u32) -> Relocation {
         chunks_in_entry: 0,
         chunk_bytes: 1024 * 1024,
         kind: RelocKind::Shift,
-        grow_part: 1,
+        // `move` 记录没有扩容步，grow_part 为 0；带上扩容步时它不得同时出现在搬移条目里
+        grow_part: 0,
         disk_size: 16 * 1024 * 1024,
         ss: 512,
     }

@@ -243,3 +243,20 @@ pub(crate) fn create_mbr_refuses_when_a_cleared_signature_lands_inside_a_partiti
     assert_eq!(e.exit_code(), crate::outcome::EXIT_REFUSED);
     assert_eq!(std::fs::read(&src.path).unwrap(), before, "the refusal must not write a single byte");
 }
+
+/// 决定读（`table_stamp`）之后盘面被外部改写：写前复核必须拒绝，且只读不写。
+/// 摘要覆盖首 LBA、LBA1 与容器末 LBA，改盘尾备份头同样会被发现
+#[test]
+pub(crate) fn a_table_rewritten_after_the_stamp_is_refused() {
+    let mut src = src_from_gpt("stamp_external", 512);
+    let ss = src.sector_size;
+    let stamp = table_stamp(&src, ss).unwrap();
+    let last = src.size - ss;
+    src.write_fixture(last, &[0xEE; 512]).unwrap();
+    let before = std::fs::read(&src.path).unwrap();
+
+    let e = verify_table_stamp(&src, stamp, ss).expect_err("a stamp taken before an external rewrite must not match");
+    assert!(matches!(&e, crate::outcome::RunOutcome::Refused(_)), "{e}");
+    assert_eq!(e.exit_code(), crate::outcome::EXIT_REFUSED);
+    assert_eq!(std::fs::read(&src.path).unwrap(), before, "the re-check only reads");
+}

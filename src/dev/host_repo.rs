@@ -127,76 +127,14 @@ fn push_string(out: &mut Vec<u8>, value: &str) {
 }
 
 /// 块设备记录目录的身份键。读取失败、dm / md、以及没有任何 WWN / EUI / 可重复
-/// serial 都没有键；写命令据此退 6，不退回 major:minor
+/// serial 都没有键；写命令据此退 6，不退回 major:minor。
+/// 载体与分区号的读取在 `dev::topology::record_carrier`——那里是 sysfs 拓扑事实的唯一
+/// 出口，本模块只负责把它变成记录目录的键
 #[cfg(target_os = "linux")]
 pub(crate) fn block_stable_identity(node: &Path) -> Result<IdentityKey, String> {
-    probe_strong_identity(node)?.ok_or_else(|| {
-        "no WWN, EUI or repeatable serial is readable on this device".to_string()
-    })
-}
-
-#[cfg(target_os = "linux")]
-fn probe_strong_identity(node: &Path) -> Result<Option<IdentityKey>, String> {
-    let disk = super::block_device_at(node)
-        .map_err(|e| format!("cannot resolve the whole-disk node of {}: {e}", node.display()))?;
-    if has_sysfs_dir(&disk, "dm", "dm/uuid")? {
-        return Err(
-            "device-mapper targets are not a strong identity (dm / DM_UUID is not accepted)"
-                .to_string(),
-        );
-    }
-    if has_sysfs_dir(&disk, "md", "md/uuid")? {
-        return Err("md targets are not a strong identity (md/uuid is not accepted)".to_string());
-    }
-    let partition = super::read_sysfs_attr(&node.join("partition"))
-        .map_err(|e| format!("cannot read the partition attribute of {}: {e}", node.display()))?
-        .map(|raw| {
-            raw.parse::<u32>()
-                .map_err(|e| format!("partition attribute is {raw:?}, not a number ({e})"))
-        })
-        .transpose()?;
-    let Some(carrier) = strong_carrier(&disk)? else {
-        return Ok(None);
-    };
-    Ok(Some(IdentityKey::new(carrier, partition)))
-}
-
-/// dm / md 的判据：对应的属性可读，或 sysfs 目录本身存在。两者任一成立都算
-/// ——`dm/uuid` 读不出来不能等同于"不是 dm"
-#[cfg(target_os = "linux")]
-fn has_sysfs_dir(disk: &Path, dir: &str, attr: &str) -> Result<bool, String> {
-    match super::read_sysfs_attr(&disk.join(attr)) {
-        Ok(Some(_)) => Ok(true),
-        Ok(None) => Ok(disk.join(dir).is_dir()),
-        Err(e) => Err(format!("cannot read sysfs {attr} of {}: {e}", disk.display())),
-    }
-}
-
-/// WWN → EUI → serial：`wwid`、`device/wwid` 取第一个非空原文，再由
-/// `device/serial` 兜底。serial 要求连续两次读数一致才当身份
-#[cfg(target_os = "linux")]
-fn strong_carrier(disk: &Path) -> Result<Option<String>, String> {
-    for attr in ["wwid", "device/wwid"] {
-        match super::read_sysfs_attr(&disk.join(attr)) {
-            Ok(Some(v)) if !v.is_empty() => return Ok(Some(v)),
-            Ok(_) => {}
-            Err(e) => return Err(format!("cannot read sysfs {attr} of {}: {e}", disk.display())),
-        }
-    }
-    let read_serial = || {
-        super::read_sysfs_attr(&disk.join("device/serial"))
-            .map_err(|e| format!("cannot read sysfs device/serial of {}: {e}", disk.display()))
-    };
-    let first = read_serial()?;
-    let second = read_serial()?;
-    match (first, second) {
-        (Some(a), Some(b)) if a == b && a.is_empty() => Ok(None),
-        (Some(a), Some(b)) if a == b => Ok(Some(a)),
-        (Some(_), Some(_)) | (Some(_), None) | (None, Some(_)) => Err(
-            "the device serial reads differently on repeated reads; it is not a stable identity"
-                .to_string(),
-        ),
-        (None, None) => Ok(None),
+    match super::record_carrier(node)? {
+        Some((carrier, partition)) => Ok(IdentityKey::new(carrier, partition)),
+        None => Err("no WWN, EUI or repeatable serial is readable on this device".to_string()),
     }
 }
 

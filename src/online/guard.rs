@@ -93,7 +93,7 @@ pub fn find_mountpoint(disk_name: &str, pno: u32) -> std::io::Result<Option<Moun
 /// 非目录条目与没有 `partition` 属性的子目录都不是分区（内核 sysfs-block ABI）；
 /// 属性存在却读不出来按环境故障上抛，不报成"没有该分区"
 fn partition_dev_no(disk_name: &str, pno: u32) -> io::Result<(u64, u64)> {
-    let sysroot = Path::new("/sys/block").join(disk_name);
+    let sysroot = crate::dev::sysfs_block_dir().join(disk_name);
     for entry in fs::read_dir(&sysroot)? {
         let p = entry?.path();
         if !p.is_dir() {
@@ -193,7 +193,8 @@ pub(crate) fn part_in_use(dev: &str, disk_name: &str, pno: u32, allow_missing: b
         return Ok(false);
     }
     let rdev = meta.st_rdev();
-    let sysdir = PathBuf::from(format!("/sys/dev/block/{}:{}", libc::major(rdev), libc::minor(rdev)));
+    let sysdir = crate::dev::sysfs_dev_block_dir()
+        .join(format!("{}:{}", libc::major(rdev), libc::minor(rdev)));
     // <part>/partition：内核 sysfs-block ABI 属性，内容 = 分区号；整盘目录无此属性（据此区分二者）
     let part = match sysfs_u64(&sysdir.join("partition")) {
         Ok(p) => p,
@@ -209,7 +210,7 @@ pub(crate) fn part_in_use(dev: &str, disk_name: &str, pno: u32, allow_missing: b
     let name = link.file_name().and_then(|s| s.to_str()).ok_or_else(|| {
         std::io::Error::other(format!("unusable sysfs link name at {}", sysdir.display()))
     })?;
-    let candidate = disk_name_from_partition(name, |n| Path::new("/sys/block").join(n).exists())
+    let candidate = disk_name_from_partition(name, |n| crate::dev::sysfs_block_dir().join(n).exists())
         .ok_or_else(|| std::io::Error::other(format!("cannot derive disk name from partition {name}")))?;
     Ok(candidate == disk_name)
 }

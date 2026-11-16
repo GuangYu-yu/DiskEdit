@@ -67,13 +67,130 @@ pub(crate) enum IdentityMaterial {
     Image { volume_serial: Option<u32>, file_id: [u8; 16] },
 }
 
+/// 设备身份值的命名空间。身份是（命名空间, 值）：值自带前缀时前缀就是命名空间，
+/// 属性名只是它的读取位置，同名同值经 `wwid` 与 `device/wwid` 读到仍是同一身份。
+/// 值没有前缀时命名空间只能由属性名给出——裸值本身不自述身份
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Namespace {
+    /// `naa.`：SCSI VPD 页 0x83 的 NAA 设计符
+    Naa,
+    /// `eui.`：EUI-64 设计符
+    Eui,
+    /// `t10.`：T10 vendor-ID 设计符
+    T10,
+    /// `uuid.`：UUID 设计符
+    Uuid,
+    /// `mpath-`：DM multipath 的 `dm/uuid`
+    Mpath,
+    /// 裸值，来自 serial 属性
+    Serial,
+    /// 裸值，来自 wwid 属性
+    Wwid,
+    /// 裸值，属性名未给出命名空间
+    BareValue,
+}
+
+/// multipath-tools 写进 `dm/uuid` 的前缀：`libmultipath/devmapper.h` 的 `UUID_PREFIX`，
+/// 创建映射时按 `UUID_PREFIX "%s"` + `mpp->wwid` 写入。该工具自身按这 6 个字节**区分
+/// 大小写**比较；本仓库对它的判定同样区分大小写——`mpath-` 归并是放宽（会压掉
+/// Ambiguous），未知大小写形态按"不是 mpath"处理。识别与命名空间分类共用这一处
+pub(crate) const MPATH_UUID_PREFIX: &str = "mpath-";
+
+impl Namespace {
+    /// 值自带前缀即按值定命名空间；否则按属性名。前缀比较不区分大小写（`mpath-` 除外，
+    /// 见 [`MPATH_UUID_PREFIX`]），值本身原样参与比较（大小写归一需要设备侧约定，
+    /// 本层不做假设）
+    fn of(attr: &str, value: &str) -> Self {
+        if value.starts_with(MPATH_UUID_PREFIX) {
+            return Namespace::Mpath;
+        }
+        for (prefix, ns) in [
+            ("naa.", Namespace::Naa),
+            ("eui.", Namespace::Eui),
+            ("t10.", Namespace::T10),
+            ("uuid.", Namespace::Uuid),
+        ] {
+            if value.len() >= prefix.len() && value.as_bytes()[..prefix.len()].eq_ignore_ascii_case(prefix.as_bytes()) {
+                return ns;
+            }
+        }
+        let attr_tail = attr.rsplit('/').next().unwrap_or(attr);
+        if attr_tail.eq_ignore_ascii_case("serial") {
+            Namespace::Serial
+        } else if attr_tail.eq_ignore_ascii_case("wwid") {
+            Namespace::Wwid
+        } else {
+            Namespace::BareValue
+        }
+    }
+}
+
+/// 一条设备身份声明：`属性名=值` 原串拆出的（命名空间, 值）。
+/// 值复制出来：判定要在记录载荷与 `/sys/block` 枚举结果之间做，后者的原串活不过这次比较
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Claim {
+    ns: Namespace,
+    value: String,
+}
+
+impl Claim {
+    fn namespace_label(&self) -> &'static str {
+        match self.ns {
+            Namespace::Naa => "naa-designator",
+            Namespace::Eui => "eui-64",
+            Namespace::T10 => "t10-designator",
+            Namespace::Uuid => "uuid",
+            Namespace::Mpath => "multipath-wwid",
+            Namespace::Serial => "serial",
+            Namespace::Wwid => "wwid",
+            Namespace::BareValue => "value",
+        }
+    }
+}
+
+/// 拒绝信息里的写法：命名空间在前，值原样
+impl std::fmt::Display for Claim {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} {}", self.namespace_label(), self.value)
+    }
+}
+
+/// 全零设计符：`0x` 前缀与 `naa.` / `eui.` / `uuid.` 命名空间前缀、UUID 的分隔连字符
+/// 都不改变"值是全零"。`t10.` 是 ASCII 供应商串，不按十六进制处理
+pub(crate) fn is_zero_designator(value: &str) -> bool {
+    let mut v = value;
+    if let Some(rest) = v.strip_prefix("0x").or_else(|| v.strip_prefix("0X")) {
+        v = rest;
+    }
+    for prefix in ["naa.", "eui.", "uuid."] {
+        if v.len() > prefix.len() && v.as_bytes()[..prefix.len()].eq_ignore_ascii_case(prefix.as_bytes()) {
+            v = &v[prefix.len()..];
+            break;
+        }
+    }
+    !v.is_empty() && v.bytes().all(|b| b == b'0' || b == b'-')
+}
+
+/// 把 `属性名=值` 原串拆成一条声明。空白、空串、全零设计符（见 [`is_zero_designator`]）
+/// 都表示"设备没有给出身份"，不构成声明。没有 `=` 的原串按裸值处理，属性名为空
+pub(crate) fn claim_of(raw: &str) -> Option<Claim> {
+    let (attr, value) = match raw.split_once('=') {
+        Some((attr, value)) => (attr.trim(), value.trim()),
+        None => ("", raw.trim()),
+    };
+    if value.is_empty() || is_zero_designator(value) {
+        return None;
+    }
+    Some(Claim { ns: Namespace::of(attr, value), value: value.to_string() })
+}
+
 impl PartialEq for IdentityMaterial {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (
                 Self::Block { major: amaj, minor: amin, device_id: aid },
                 Self::Block { major: bmaj, minor: bmin, device_id: bid },
-            ) => match (aid, bid) {
+            ) => match (aid.as_deref().and_then(claim_of), bid.as_deref().and_then(claim_of)) {
                 (Some(a), Some(b)) => a == b,
                 (None, None) => (amaj, amin) == (bmaj, bmin),
                 _ => false,
@@ -86,18 +203,10 @@ impl PartialEq for IdentityMaterial {
 
 impl Eq for IdentityMaterial {}
 
-/// 设备 ID 字符串是否构成事实：空白、空串、全零（含 `0x` 前缀的十六进制全零）
-/// 都表示"设备没有给出身份"，不能当成一个可比较的值
+/// 设备 ID 字符串是否构成事实：解析不出声明的原串（空白、空串、全零）不算，
+/// 原串去空白后保留——记录里存的是 `属性名=值` 的原样文本
 fn device_id_is_fact(raw: &str) -> Option<String> {
-    let value = raw.split_once('=').map_or(raw, |(_, v)| v).trim();
-    if value.is_empty() {
-        return None;
-    }
-    let digits = value.strip_prefix("0x").or_else(|| value.strip_prefix("0X")).unwrap_or(value);
-    if digits.chars().all(|c| c == '0') {
-        return None;
-    }
-    Some(raw.trim().to_string())
+    claim_of(raw).map(|_| raw.trim().to_string())
 }
 
 impl IdentityMaterial {
@@ -368,10 +477,19 @@ mod tests {
     }
 
     /// serial 为空 / 空白 / 全零，wwn 又不存在时，设备号之外没有身份材料：
-    /// 这样的材料与不带设备 ID 的材料相等；设备自己声明的任一稳定 ID 则不同
+    /// 这样的材料与不带设备 ID 的材料相等；设备自己声明的任一稳定 ID 则不同。
+    /// 命名空间前缀与 UUID 连字符不改变全零的判定
     #[test]
     fn a_falsy_device_id_is_no_identity_evidence() {
-        for raw in [None, Some(""), Some("   "), Some("device/serial=0000000000000000"), Some("wwid=0x0000000000000000")] {
+        for raw in [
+            None,
+            Some(""),
+            Some("   "),
+            Some("device/serial=0000000000000000"),
+            Some("wwid=0x0000000000000000"),
+            Some("wwid=naa.0000000000000000"),
+            Some("dm/uuid=uuid.00000000-0000-0000-0000-000000000000"),
+        ] {
             assert_eq!(
                 IdentityMaterial::block(8, 16, raw),
                 IdentityMaterial::block(8, 16, None),
@@ -384,6 +502,14 @@ mod tests {
         );
         assert_ne!(
             IdentityMaterial::block(8, 16, Some("wwid=0x5000c500a1b2c3d4")),
+            IdentityMaterial::block(8, 16, None)
+        );
+        assert_ne!(
+            IdentityMaterial::block(
+                8,
+                16,
+                Some("dm/uuid=uuid.12345678-1234-1234-1234-123456789abc")
+            ),
             IdentityMaterial::block(8, 16, None)
         );
     }
@@ -410,6 +536,21 @@ mod tests {
             with_id(8, 16, "serial=S1"),
             IdentityMaterial::block(8, 16, None)
         );
+    }
+
+    /// 身份是（命名空间, 值）：同一个值从不同属性读到仍是同一身份。
+    /// 值自带前缀时前缀就是命名空间；裸值没有自述，只能靠属性名区分
+    #[test]
+    fn an_identity_is_its_namespace_and_value_not_the_attribute_that_carried_it() {
+        let block = |raw| IdentityMaterial::block(8, 16, Some(raw));
+        assert_eq!(block("wwid=naa.5000c500aabbccdd"), block("device/wwid=naa.5000c500aabbccdd"));
+        assert_eq!(block("wwid=eui.0025385812345678"), block("device/wwid=eui.0025385812345678"));
+        // 裸值不自述命名空间：serial 与 wwid 下的同值字符串不是同一条声明
+        assert_ne!(block("device/serial=SN123456"), block("device/wwid=SN123456"));
+        assert_eq!(block("device/serial=SN123456"), block("serial=SN123456"));
+        // 命名空间不同即不同身份，即便值看起来一样
+        assert_ne!(block("wwid=naa.5000c500aabbccdd"), block("dm/uuid=mpath-5000c500aabbccdd"));
+        assert_ne!(block("wwid=eui.0025385812345678"), block("wwid=naa.0025385812345678"));
     }
 
     /// 镜像拿不到文件 ID 时拒绝识别：卷序列号不参与比较，单独它不足以构成身份
