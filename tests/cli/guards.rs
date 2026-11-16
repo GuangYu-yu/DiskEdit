@@ -5,9 +5,8 @@ use super::*;
 /// 包装脚本可以无条件追加）。`--help` 让流程止于参数层，不需要真实目标
 #[test]
 fn duplicate_flags_value_rejected_boolean_idempotent() {
-    let exe = env!("CARGO_BIN_EXE_DiskEdit");
     let run = |args: &[&str]| -> (i32, String) {
-        let out = Command::new(exe).args(args).output().unwrap();
+        let out = diskedit().args(args).output().unwrap();
         (out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stderr).into_owned())
     };
 
@@ -28,9 +27,8 @@ fn duplicate_flags_value_rejected_boolean_idempotent() {
 /// 已知旗标（`--yes`、`--sector-size 4096`）也不例外
 #[test]
 fn version_rejects_extra_arguments() {
-    let exe = env!("CARGO_BIN_EXE_DiskEdit");
     let run = |args: &[&str]| -> (i32, String, String) {
-        let out = Command::new(exe).args(args).output().unwrap();
+        let out = diskedit().args(args).output().unwrap();
         (out.status.code().unwrap_or(-1),
          String::from_utf8_lossy(&out.stdout).into_owned(),
          String::from_utf8_lossy(&out.stderr).into_owned())
@@ -53,9 +51,8 @@ fn version_rejects_extra_arguments() {
 /// SYNOPSIS；反向旗标对账只扫首行，该命令自己的旗标因此不被核对
 #[test]
 fn each_help_names_its_own_command_first() {
-    let exe = env!("CARGO_BIN_EXE_DiskEdit");
     let run = |args: &[&str]| -> (i32, String) {
-        let out = Command::new(exe).args(args).output().unwrap();
+        let out = diskedit().args(args).output().unwrap();
         (out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stdout).into_owned())
     };
     for cmd in ["plan", "info", "resize", "move", "copy"] {
@@ -72,9 +69,8 @@ fn each_help_names_its_own_command_first() {
 fn cli_negative_paths() {
     let dir = std::env::temp_dir().join(format!("diskedit_neg_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let exe = env!("CARGO_BIN_EXE_DiskEdit");
     let run = |args: &[&str]| -> (i32, String, String) {
-        let out = Command::new(exe).args(args).output().unwrap();
+        let out = diskedit().args(args).output().unwrap();
         (out.status.code().unwrap_or(-1),
          String::from_utf8_lossy(&out.stdout).into_owned(),
          String::from_utf8_lossy(&out.stderr).into_owned())
@@ -236,10 +232,9 @@ fn fs_command_branch_level_flag_guards() {
     std::fs::create_dir_all(&dir).unwrap();
     let img = dir.join("t.img");
     std::fs::write(&img, vec![0u8; 8 * 1024 * 1024]).unwrap();
-    let exe = env!("CARGO_BIN_EXE_DiskEdit");
     let img_s = img.to_str().unwrap();
     let run = |args: &[&str]| -> (i32, String, String) {
-        let out = Command::new(exe).args(args).output().unwrap();
+        let out = diskedit().args(args).output().unwrap();
         (out.status.code().unwrap_or(-1),
          String::from_utf8_lossy(&out.stdout).into_owned(),
          String::from_utf8_lossy(&out.stderr).into_owned())
@@ -265,9 +260,8 @@ fn fs_command_branch_level_flag_guards() {
 #[test]
 fn flag_contract_fail_closed() {
     let dir = FixtureDir::new();
-    let exe = env!("CARGO_BIN_EXE_DiskEdit");
     let run = |args: &[&str]| -> (i32, String, String) {
-        let out = Command::new(exe).args(args).output().unwrap();
+        let out = diskedit().args(args).output().unwrap();
         (out.status.code().unwrap_or(-1),
          String::from_utf8_lossy(&out.stdout).into_owned(),
          String::from_utf8_lossy(&out.stderr).into_owned())
@@ -289,12 +283,11 @@ fn flag_contract_fail_closed() {
 fn a_flag_typo_in_a_value_slot_is_refused() {
     let dir = std::env::temp_dir().join(format!("diskedit_fc3_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let exe = env!("CARGO_BIN_EXE_DiskEdit");
     let img = dir.join("a.img");
     std::fs::write(&img, vec![0u8; 8 * 1024 * 1024]).unwrap();
     let img_s = img.to_str().unwrap();
     let run = |args: &[&str]| -> (i32, String, String) {
-        let out = Command::new(exe).args(args).output().unwrap();
+        let out = diskedit().args(args).output().unwrap();
         (out.status.code().unwrap_or(-1),
          String::from_utf8_lossy(&out.stdout).into_owned(),
          String::from_utf8_lossy(&out.stderr).into_owned())
@@ -328,12 +321,11 @@ fn a_flag_typo_in_a_value_slot_is_refused() {
 fn option_syntax_equals_terminator_and_version() {
     let dir = std::env::temp_dir().join(format!("diskedit_fc4_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let exe = env!("CARGO_BIN_EXE_DiskEdit");
     let img = dir.join("a.img");
     std::fs::write(&img, vec![0u8; 8 * 1024 * 1024]).unwrap();
     let img_s = img.to_str().unwrap();
     let run = |args: &[&str]| -> (i32, String, String) {
-        let out = Command::new(exe).args(args).output().unwrap();
+        let out = diskedit().args(args).output().unwrap();
         (out.status.code().unwrap_or(-1),
          String::from_utf8_lossy(&out.stdout).into_owned(),
          String::from_utf8_lossy(&out.stderr).into_owned())
@@ -367,12 +359,11 @@ fn option_syntax_equals_terminator_and_version() {
 fn flag_contract_mbr_resizefs_and_type() {
     let dir = std::env::temp_dir().join(format!("diskedit_fc2_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let exe = env!("CARGO_BIN_EXE_DiskEdit");
     let img = dir.join("a.img");
     std::fs::write(&img, vec![0u8; 8 * 1024 * 1024]).unwrap();
     let img_s = img.to_str().unwrap();
     let run = |args: &[&str]| -> (i32, String, String) {
-        let out = Command::new(exe).args(args).output().unwrap();
+        let out = diskedit().args(args).output().unwrap();
         (out.status.code().unwrap_or(-1),
          String::from_utf8_lossy(&out.stdout).into_owned(),
          String::from_utf8_lossy(&out.stderr).into_owned())
@@ -435,9 +426,8 @@ fn flag_contract_mbr_resizefs_and_type() {
 fn help_topic_zero_partition_and_mbr_end_overflow() {
     let dir = std::env::temp_dir().join(format!("diskedit_parse_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let exe = env!("CARGO_BIN_EXE_DiskEdit");
     let run = |args: &[&str]| -> (i32, String, String) {
-        let out = Command::new(exe).args(args).output().unwrap();
+        let out = diskedit().args(args).output().unwrap();
         (out.status.code().unwrap_or(-1),
          String::from_utf8_lossy(&out.stdout).into_owned(),
          String::from_utf8_lossy(&out.stderr).into_owned())
@@ -506,9 +496,8 @@ fn help_topic_zero_partition_and_mbr_end_overflow() {
 fn targeted_refusals_carry_their_own_codes() {
     let dir = std::env::temp_dir().join(format!("diskedit_refuse_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let exe = env!("CARGO_BIN_EXE_DiskEdit");
     let run = |args: &[&str]| -> (i32, String, String) {
-        let out = Command::new(exe).args(args).output().unwrap();
+        let out = diskedit().args(args).output().unwrap();
         (out.status.code().unwrap_or(-1),
          String::from_utf8_lossy(&out.stdout).into_owned(),
          String::from_utf8_lossy(&out.stderr).into_owned())
@@ -545,9 +534,8 @@ fn targeted_refusals_carry_their_own_codes() {
 fn a_value_flag_does_not_swallow_the_next_option() {
     let dir = std::env::temp_dir().join(format!("diskedit_swallow_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let exe = env!("CARGO_BIN_EXE_DiskEdit");
     let run = |args: &[&str]| -> (i32, String) {
-        let out = Command::new(exe).args(args).output().unwrap();
+        let out = diskedit().args(args).output().unwrap();
         (out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stderr).into_owned())
     };
 
@@ -615,9 +603,8 @@ mod flag_probes;
 fn every_registered_flag_parses_as_documented() {
     use flag_probes::{Kind, PROBES};
 
-    let exe = env!("CARGO_BIN_EXE_DiskEdit");
     let run = |args: &[&str]| -> (i32, String) {
-        let out = Command::new(exe).args(args).output().unwrap();
+        let out = diskedit().args(args).output().unwrap();
         (out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stderr).into_owned())
     };
 
@@ -679,9 +666,8 @@ fn missing_arguments_are_named() {
     let img = dir.join("ok.img");
     fixture_gpt_image(&img);
     let img_s = img.to_str().unwrap();
-    let exe = env!("CARGO_BIN_EXE_DiskEdit");
     let run = |args: &[&str]| -> (i32, String) {
-        let out = Command::new(exe).args(args).output().unwrap();
+        let out = diskedit().args(args).output().unwrap();
         (out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stderr).into_owned())
     };
 
@@ -711,9 +697,8 @@ fn relative_size_only_in_the_size_slot() {
     let img = dir.join("ok.img");
     fixture_gpt_image(&img);
     let img_s = img.to_str().unwrap();
-    let exe = env!("CARGO_BIN_EXE_DiskEdit");
     let run = |args: &[&str]| -> (i32, String) {
-        let out = Command::new(exe).args(args).output().unwrap();
+        let out = diskedit().args(args).output().unwrap();
         (out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stderr).into_owned())
     };
 

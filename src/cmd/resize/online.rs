@@ -180,7 +180,10 @@ pub(crate) fn online_size<'a>(
             // 仍会被隐式下取整。不取整会让下方上界比较（同样按扇区下取整）放过不足一个
             // 扇区的超出
             let want = match target {
-                Some(t) => t / ss * ss,
+                Some(t) => {
+                    crate::support::note_sector_truncation("resizing to", t, ss);
+                    t / ss * ss
+                }
                 None => cur,
             };
             // 下界与两条离线路径同判据：不足一个扇区的分区在写表时会被隐式下取整成 0，

@@ -1,6 +1,7 @@
 //! TargetIdentity：盘级身份，以及 journal/checkpoint/lock/log 的落点派生。
 
 use super::*;
+use sha2::Digest;
 
 /// 目标载体的稳定指纹：镜像用 (st_dev, st_ino, size)；真块设备用 (整盘容量, 设备 ID 哈希)。
 /// 恢复现场用它确认"还是当时那个目标"。字段的证据强度按载体分级，比对时**逐字段**判断
@@ -180,6 +181,43 @@ pub(crate) fn state_dir() -> PathBuf {
     }
 }
 
+/// 镜像记录的每用户状态根。镜像记录按**文件身份**落在 `<root>/images/<键摘要>/`，
+/// 与块设备的 `<state_root>/recovery/` 分属两个命名空间，互不扫到。
+///
+/// 镜像的写路径不要求 root：Linux 非 root 与 Windows 都要能写，因此不落在 `/var/lib`
+/// 下。取值顺序：`DISKEDIT_STATE_DIR`（打包 / 测试用它同时覆盖两套根）→ Windows
+/// `%LOCALAPPDATA%\diskedit` → unix `$XDG_STATE_HOME/diskedit` 或
+/// `$HOME/.local/state/diskedit`。都取不到时没有落点：镜像的写命令拒绝，读命令也无从
+/// 定位它写下的记录。
+///
+/// 这是每用户根：同一未收尾作业必须由同一用户、同一 `DISKEDIT_STATE_DIR` / XDG 环境
+/// 继续。换用户（如 `sudo`）或换根后旧记录不在新进程的寻址域内，需用
+/// `records scan <image_state_root>` 在原根下枚举
+pub(crate) fn image_state_root() -> Option<PathBuf> {
+    if let Some(v) = std::env::var_os("DISKEDIT_STATE_DIR")
+        && !v.is_empty()
+    {
+        return Some(PathBuf::from(v));
+    }
+    #[cfg(windows)]
+    {
+        let base = std::env::var_os("LOCALAPPDATA").filter(|v| !v.is_empty())?;
+        Some(PathBuf::from(base).join("diskedit"))
+    }
+    #[cfg(unix)]
+    {
+        if let Some(base) = std::env::var_os("XDG_STATE_HOME").filter(|v| !v.is_empty()) {
+            return Some(PathBuf::from(base).join("diskedit"));
+        }
+        let home = std::env::var_os("HOME").filter(|v| !v.is_empty())?;
+        Some(PathBuf::from(home).join(".local").join("state").join("diskedit"))
+    }
+    #[cfg(not(any(windows, unix)))]
+    {
+        None
+    }
+}
+
 /// 目标身份：撤销窗口与续传现场共用的命名空间。**盘级**：分区号属于操作与校验，
 /// 不进落盘键，`img:2` 与对应分区节点由此共享同一现场。
 /// 镜像以 canonicalize 后的 realpath 为身份（Linux；loop 设备的 backing 侧用同一规则，
@@ -202,16 +240,17 @@ pub struct TargetIdentity {
     /// 被改名或替换的另一个文件上
     pub(crate) canonical: PathBuf,
     pub(crate) journal: PathBuf,
-    /// 恢复记录的落点：镜像为 `<image>.diskedit/record`；块设备为
-    /// `<state_root>/recovery/<identity-hash>/record`，取不到 WWN / EUI / 可重复
-    /// serial 时为 `None`，写命令退 6
+    /// 恢复记录的落点：镜像为 `<image_state_root>/images/<键摘要>/record`（取不到
+    /// 每用户状态根时为 `None`）；块设备为 `<state_root>/recovery/<identity-hash>/record`，
+    /// 取不到 WWN / EUI / 可重复 serial 时为 `None`，写命令退 6
     pub(crate) record: Option<PathBuf>,
     /// 块设备记录落点的身份键（目标 + 分区）。`record` 是它派生出的路径；
     /// 锁后复核按键比对，两份派生结果不会各自漂移。镜像与测试构造的身份没有键
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub(crate) record_key: Option<IdentityKey>,
     /// 独占锁的落点（见 `targetlock`）。**恒有值**：块设备落在 `state_dir()` 下的盘键
-    /// （整盘载体，分区号不进锁键）；镜像落在记录目录内的 `record.lock`。类型上没有
+    /// （整盘载体，分区号不进锁键）；镜像落在记录目录内的 `record.lock`，没有每用户
+    /// 状态根时退回镜像旁的 `<image>.diskedit/record.lock`。类型上没有
     /// "没有锁落点"这一状态——取不到锁就是拒绝，不存在无锁继续跑的路径
     pub(crate) lock: PathBuf,
     /// loop 目标的指纹：由 [`Self::loop_backed`] 在核对"backing 对象仍是句柄打开的那一个"
@@ -268,6 +307,40 @@ pub(crate) fn suffix_path(base: &Path, suffix: &str) -> PathBuf {
     let mut p = base.to_path_buf().into_os_string();
     p.push(suffix);
     PathBuf::from(p)
+}
+
+/// 镜像的记录键：文件**对象**身份。Unix 取 `(st_dev, st_ino)`，Windows 取
+/// `(卷序列号, 文件索引)`——两者由文件系统在对象上维护，改名、移动都不变。
+/// 读不到时退回规范化路径：路径键在改名后失效，但比"没有落点"更接近调用方的预期
+fn image_file_key(canonical: &Path) -> String {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if let Ok(meta) = std::fs::metadata(canonical) {
+            return format!("inode:{}:{}", meta.dev(), meta.ino());
+        }
+    }
+    #[cfg(windows)]
+    {
+        if let Ok(file) = std::fs::File::open(canonical)
+            && let Ok((volume, index)) = win::identity(&file)
+        {
+            return format!("file:{volume}:{index}");
+        }
+    }
+    format!("path:{}", canonical.display())
+}
+
+/// 镜像记录目录：`<image_state_root>/images/<键的 sha256 前 16 字节>/`。
+/// 键的原文不落盘：路径形态的键可能带分隔符或超长，摘要同时让目录名等长。
+///
+/// 键取自文件对象：镜像被删除后取不到键，按路径的 `records list/verify` 无从定位它，
+/// 记录只能由 `records scan <image_state_root>` 枚举
+pub(crate) fn image_record_dir(canonical: &Path) -> Option<PathBuf> {
+    let root = image_state_root()?;
+    let digest = sha2::Sha256::digest(image_file_key(canonical).as_bytes());
+    let key = crate::support::hex_lower(&digest[..16]);
+    Some(root.join("images").join(key))
 }
 
 /// 活跃记录移进隔离区后的落点：同一目录里的隐藏名 `.abandoned[.N]`
@@ -462,19 +535,26 @@ pub(crate) fn key_token(value: &str) -> String {
 }
 
 impl TargetIdentity {
-    /// 镜像身份。canonical = 身份主体（journal / checkpoint / lock 落它旁边）；
+    /// 镜像身份。canonical = 身份主体（journal / 记录 / lock 都由它派生）；
     /// literal = 用户给的路径，只用于日志命名（base）。两者不同（路径含符号链接或非规范
-    /// 化成分）不影响落点：身份只认 realpath 指向的那个文件
+    /// 化成分）不影响落点：身份只认 realpath 指向的那个文件。
+    ///
+    /// 记录按文件对象身份落在每用户状态根里，因此改名、移动到别的目录后仍能定位到同一份
+    /// 记录；取不到状态根时没有记录落点，锁退回镜像旁的 sidecar 目录
     pub(crate) fn image_at(canonical: &Path, literal: &Path) -> Self {
-        let record_dir = suffix_path(canonical, RECORD_SUFFIX);
+        let record_dir = image_record_dir(canonical);
+        let lock = match &record_dir {
+            Some(dir) => dir.join(RECORD_LOCK_NAME),
+            None => suffix_path(canonical, RECORD_SUFFIX).join(RECORD_LOCK_NAME),
+        };
         Self {
             kind: TargetKind::Image,
             base: literal.to_path_buf(),
             canonical: canonical.to_path_buf(),
             journal: suffix_path(canonical, JOURNAL_SUFFIX),
-            record: Some(record_dir.join(RECORD_NAME)),
+            record: record_dir.map(|dir| dir.join(RECORD_NAME)),
             record_key: None,
-            lock: record_dir.join(RECORD_LOCK_NAME),
+            lock,
             backing_fp: None,
         }
     }
@@ -676,6 +756,15 @@ impl TargetIdentity {
     /// 单文件恢复记录的落点；块设备在身份为 `Unusable` 时为 `None`
     pub(crate) fn record_path(&self) -> Option<&Path> {
         self.record.as_deref()
+    }
+
+    /// 旧版镜像记录的落点 `<image>.diskedit/record`。本构建不在这里读写：它是升级前
+    /// 留下的寻址域，只用于如实报告与挡住写命令。块设备没有这个落点
+    pub(crate) fn legacy_image_record_path(&self) -> Option<PathBuf> {
+        match self.kind {
+            TargetKind::Image => Some(suffix_path(&self.canonical, RECORD_SUFFIX).join(RECORD_NAME)),
+            TargetKind::Block => None,
+        }
     }
 
     /// 独占锁的落点。恒有值：取锁失败即拒绝，不提供"没有锁落点"这种状态

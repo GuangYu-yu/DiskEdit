@@ -2,7 +2,8 @@
 
 use super::*;
 
-/// 旧 swap 首部的卷标。"读不出来"与"确实没有"分开：只有后者才允许省略 -L
+/// 旧 swap 首部的卷标。三态分开：`Absent` 是字段全零（本来就没有），`Unreadable`
+/// 是字段读不出来——此时无法保住卷标，重建在没有 `-L` 的情况下会把它丢掉，故拒绝
 #[derive(Debug)]
 pub enum SwapLabel {
     /// 16 字节字段全零：这块 swap 本来就没有卷标
@@ -47,23 +48,24 @@ pub fn recreate_swap(
             ))))
         }
         SwapIdentity::NotSwap => (None, None, "old signature had no UUID — mkswap wrote a fresh one".to_string()),
+        SwapIdentity::Known { label: SwapLabel::Unreadable(why), .. } => {
+            return Err(FsError::Io(io::Error::other(format!(
+                "cannot rebuild swap: the old volume label could not be read ({why}) — \
+                 mkswap without -L would drop it"
+            ))))
+        }
         SwapIdentity::Known { uuid, label } => {
             let note = match (uuid.is_some(), label) {
                 (true, SwapLabel::Present(_)) => "UUID and volume label preserved".to_string(),
                 (true, SwapLabel::Absent) => "UUID preserved (the old signature had no volume label)".to_string(),
-                (true, SwapLabel::Unreadable(why)) => format!(
-                    "UUID preserved; the old volume label could not be read ({why}), so none was written"
-                ),
                 (false, SwapLabel::Present(_)) => {
                     "old signature had no UUID — mkswap wrote a fresh one (volume label preserved)".to_string()
                 }
                 (false, SwapLabel::Absent) => {
                     "old signature had no UUID or volume label — mkswap wrote a fresh UUID and no label".to_string()
                 }
-                (false, SwapLabel::Unreadable(why)) => format!(
-                    "old signature had no UUID — mkswap wrote a fresh one; the old volume label \
-                     could not be read ({why}), so none was written"
-                ),
+                // 上面已单独拦下：盘上读不出卷标就没有可保住的卷标
+                (_, SwapLabel::Unreadable(_)) => unreachable!("the unreadable label is rejected above"),
             };
             (uuid.as_ref(), Some(label), note)
         }

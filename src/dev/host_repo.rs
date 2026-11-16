@@ -166,6 +166,73 @@ pub(crate) fn ensure_record_dir(record: &Path) -> Result<(), HostRepoError> {
     }
 }
 
+/// 镜像记录目录 `<image_state_root>/images/<键摘要>/`：`0700`、属主为当前用户。
+/// 逐级核对状态根、`images`、键目录：任何一级是符号链接 / 非目录 / 对其他用户可读都拒绝
+/// （记录里存着写前的分区表）。状态根之上的中间层不属于本工具的命名空间，只建不核
+pub(crate) fn ensure_image_record_dir(dir: &Path) -> Result<(), HostRepoError> {
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
+
+        let images = dir.parent().ok_or_else(|| {
+            HostRepoError::Io(std::io::Error::other("the image record directory has no parent"))
+        })?;
+        let root = images.parent().ok_or_else(|| {
+            HostRepoError::Io(std::io::Error::other("the image directory has no parent"))
+        })?;
+        // 状态根之上的中间层只建不核；`root` 本身必须按 0700 由下面的循环建立，
+        // 预建一次会让它带上 umask 的 0755，随后被同一轮复核拒绝
+        let parent = root.parent().ok_or_else(|| {
+            HostRepoError::Io(std::io::Error::other("the image state root has no parent"))
+        })?;
+        std::fs::create_dir_all(parent).map_err(HostRepoError::Io)?;
+        let (uid, gid) = current_euid_gid();
+        for d in [root, images, dir] {
+            match std::fs::DirBuilder::new().mode(0o700).create(d) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(e) => return Err(HostRepoError::Io(e)),
+            }
+            let meta = std::fs::symlink_metadata(d).map_err(HostRepoError::Io)?;
+            if !meta.is_dir() {
+                return Err(HostRepoError::Insecure(format!("{} is not a directory", d.display())));
+            }
+            if meta.uid() != uid || meta.gid() != gid {
+                return Err(HostRepoError::Insecure(format!(
+                    "{} is owned by {}:{}, not by the current user {}:{}",
+                    d.display(),
+                    meta.uid(),
+                    meta.gid(),
+                    uid,
+                    gid
+                )));
+            }
+            let mode = meta.permissions().mode();
+            if mode & 0o077 != 0 {
+                return Err(HostRepoError::Insecure(format!(
+                    "{} is accessible to group or other (mode {:04o}); the recovery record holds the pre-write \
+                     partition table, which other local accounts must not read — run: chmod 700 {}",
+                    d.display(),
+                    mode & 0o7777,
+                    d.display()
+                )));
+            }
+        }
+        Ok(())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        std::fs::create_dir_all(dir).map_err(HostRepoError::Io)
+    }
+}
+
+/// 当前进程的 euid / egid：镜像记录目录归写下它的用户，不归 root
+#[cfg(target_os = "linux")]
+fn current_euid_gid() -> (u32, u32) {
+    // SAFETY: geteuid / getegid 无参数、无副作用
+    unsafe { (libc::geteuid(), libc::getegid()) }
+}
+
 /// 镜像旁的记录目录 `<image>.diskedit/`：`0700`、与目标文件同主。
 /// 已存在时按同一形状复核：group/other 的任何权限都拒绝（记录里存着写前的分区表，
 /// 同机其他账户不该读到）；符号链接或非目录一律拒绝
@@ -220,24 +287,33 @@ pub(crate) fn ensure_sidecar_dir(dir: &Path, owner: Option<(u32, u32)>) -> Resul
     }
 }
 
-/// 取锁前准备记录目录：镜像的 `record.lock` 落在 sidecar 目录内，目录必须先于锁就位；
-/// 块设备的锁落在 `state_root` 根下，逐级建出记录目录时同时建出该根。
-/// 身份没有记录落点（dm / md / 无稳定身份的块设备）时不动，由调用方决定退 6
+/// 取锁前准备记录目录：镜像的记录目录落在每用户状态根里（无状态根时锁退回 sidecar
+/// 目录，写入本身会因没有记录落点被拒）；块设备的锁落在 `state_root` 根下，逐级建出
+/// 记录目录时同时建出该根。身份没有记录落点（dm / md / 无稳定身份的块设备）时不动，
+/// 由调用方决定退 6
 pub(crate) fn prepare_record_dir(
     identity: &super::TargetIdentity,
     owner: Option<(u32, u32)>,
 ) -> Result<(), HostRepoError> {
-    let Some(record) = identity.record_path() else {
-        return Ok(());
-    };
     match identity.kind {
-        super::TargetKind::Block => ensure_record_dir(record),
-        super::TargetKind::Image => {
-            let dir = record.parent().ok_or_else(|| {
-                HostRepoError::Io(std::io::Error::other("the record path has no parent"))
-            })?;
-            ensure_sidecar_dir(dir, owner)
+        super::TargetKind::Block => {
+            let Some(record) = identity.record_path() else {
+                return Ok(());
+            };
+            ensure_record_dir(record)
         }
+        super::TargetKind::Image => match identity.record_path() {
+            Some(record) => {
+                let dir = record.parent().ok_or_else(|| {
+                    HostRepoError::Io(std::io::Error::other("the record path has no parent"))
+                })?;
+                ensure_image_record_dir(dir)
+            }
+            None => {
+                let dir = super::suffix_path(identity.data_path(), super::RECORD_SUFFIX);
+                ensure_sidecar_dir(&dir, owner)
+            }
+        },
     }
 }
 

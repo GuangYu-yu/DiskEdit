@@ -3,6 +3,39 @@ use super::*;
 use super::support::*;
 use crate::planner::chunk::{move_chunk_layout, relocation_overlaps};
 
+/// 续跑时记录里的基线带着扩 LV 的意图却没有任何选定路径：收尾会退化成只跑
+/// pvresize，扩容请求被静默丢弃，必须在计划期拒绝。选定路径来自本次请求，
+/// 数值基线仍取记录
+#[test]
+fn lvm_resume_refuses_a_grow_baseline_without_a_selected_lv() {
+    let grow = crate::movepart::LvmPostFacts {
+        lv_path: None,
+        lv_size_before: 1024,
+        lv_target: 4096,
+        extent_bytes: 1024,
+    };
+    let e = crate::movepart::LvmPostFacts::resumed(grow.clone(), None).unwrap_err();
+    assert!(matches!(&e, RunOutcome::Refused(m) if m.contains("--grow-lv")), "{e:?}");
+
+    let selected = crate::movepart::LvmSelection {
+        path: "/dev/vg/lv".to_string(),
+        extent_bytes: 1024,
+        size: 1024,
+    };
+    let ok = crate::movepart::LvmPostFacts::resumed(grow, Some(&selected)).unwrap();
+    assert_eq!(ok.lv_path.as_deref(), Some("/dev/vg/lv"));
+    assert_eq!((ok.lv_size_before, ok.lv_target), (1024, 4096));
+
+    // 只有 pvresize 的基线（目标不高于基线）不需要选定 LV
+    let pv_only = crate::movepart::LvmPostFacts {
+        lv_path: None,
+        lv_size_before: 0,
+        lv_target: 0,
+        extent_bytes: 0,
+    };
+    assert!(crate::movepart::LvmPostFacts::resumed(pv_only, None).unwrap().lv_path.is_none());
+}
+
 /// `shift = None`（缩容请求）既不现算也不执行任何搬移计划：无记录必须拒绝；
 /// 有记录同样拒绝——记录里的 plan 属于当初那条扩容请求，缩容请求执行它就是把
 /// 请求静默放大成旧扩容（plan 的"执行方即请求方"归属判据），续跑只认原样重跑
@@ -78,6 +111,7 @@ pub(crate) fn shrink_does_not_resume_a_committed_growth_job() {
         }],
         entry_index: 0,
         chunks_in_entry: 0,
+        prefix_digest: [0u8; 32],
         chunk_bytes: chunk,
         kind: crate::recovery::RelocKind::Shift,
         grow_part: 1,
@@ -154,6 +188,7 @@ pub(crate) fn an_empty_relocation_plan_is_not_a_resumable_job() {
         entries: Vec::new(),
         entry_index: 0,
         chunks_in_entry: 0,
+        prefix_digest: [0u8; 32],
         chunk_bytes: 1024 * 1024,
         kind: crate::recovery::RelocKind::Shift,
         grow_part: 1,

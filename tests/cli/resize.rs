@@ -55,10 +55,9 @@ fn resize_part_move_copy_flag_name() {
     // 16 MiB 镜像（32768 扇区），坐标全部取 1MiB 对齐值
     let data = vec![0u8; 16 * 1024 * 1024];
     std::fs::write(&img, &data).unwrap();
-    let exe = env!("CARGO_BIN_EXE_DiskEdit");
     let img_s = img.to_str().unwrap();
     let run = |args: &[&str]| -> (i32, String, String) {
-        let out = Command::new(exe).args(args).output().unwrap();
+        let out = diskedit().args(args).output().unwrap();
         (out.status.code().unwrap_or(-1),
          String::from_utf8_lossy(&out.stdout).into_owned(),
          String::from_utf8_lossy(&out.stderr).into_owned())
@@ -192,10 +191,9 @@ fn grow_to_end() {
     let img = dir.join("g.img");
     // 8 MiB（16384 扇区）：last_usable = 16350
     std::fs::write(&img, vec![0u8; 8 * 1024 * 1024]).unwrap();
-    let exe = env!("CARGO_BIN_EXE_DiskEdit");
     let img_s = img.to_str().unwrap();
     let run = |args: &[&str]| -> (i32, String) {
-        let out = Command::new(exe).args(args).output().unwrap();
+        let out = diskedit().args(args).output().unwrap();
         (out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stderr).into_owned())
     };
 
@@ -274,12 +272,11 @@ fn resize_grow_swap_recreate() {
     std::fs::create_dir_all(&dir).unwrap();
     let img = dir.join("s.img");
     write_swap_fixture(&img);
-    let exe = env!("CARGO_BIN_EXE_DiskEdit");
     let img_s = img.to_str().unwrap();
 
     // --no-fs：#1 是 grow 目标且里面没有 FS，只改表由用户显式担下（否则事前拒绝）；
     // #2 的 swap 重建是**搬移**的一环（swap 头随位置走），与本开关无关，重建照旧
-    let out = Command::new(exe)
+    let out = diskedit()
         .args(["resize", &format!("{img_s}:1"), "grow", "--no-fs", "--allow-move", "--chunk", "1", "--yes"])
         .output()
         .unwrap();
@@ -362,10 +359,9 @@ fn new_swap_relocation_outcome_follows_platform_and_privilege() {
     std::fs::create_dir_all(&dir).unwrap();
     let img = dir.join("s.img");
     write_swap_fixture(&img);
-    let exe = env!("CARGO_BIN_EXE_DiskEdit");
     let img_s = img.to_str().unwrap();
 
-    let out = Command::new(exe)
+    let out = diskedit()
         .args(["resize", &format!("{img_s}:1"), "grow", "--no-fs", "--allow-move", "--chunk", "1", "--yes"])
         .output()
         .unwrap();
@@ -421,10 +417,9 @@ fn resize_shift_relocates_blockers() {
     let img = dir.join("sh.img");
     // 16 MiB（32768 扇区，last_usable 32734），坐标全部 1MiB 对齐
     std::fs::write(&img, vec![0u8; 16 * 1024 * 1024]).unwrap();
-    let exe = env!("CARGO_BIN_EXE_DiskEdit");
     let img_s = img.to_str().unwrap();
     let run = |args: &[&str]| -> (i32, String, String) {
-        let out = Command::new(exe).args(args).output().unwrap();
+        let out = diskedit().args(args).output().unwrap();
         (out.status.code().unwrap_or(-1),
          String::from_utf8_lossy(&out.stdout).into_owned(),
          String::from_utf8_lossy(&out.stderr).into_owned())
@@ -507,10 +502,9 @@ fn resize_non_aligned_size_emits_note() {
     std::fs::create_dir_all(&dir).unwrap();
     let img = dir.join("blank.img");
     std::fs::write(&img, vec![0u8; 8 * 1024 * 1024]).unwrap();
-    let exe = env!("CARGO_BIN_EXE_DiskEdit");
     let img_s = img.to_str().unwrap();
     let run = |args: &[&str]| -> (i32, String, String) {
-        let out = Command::new(exe).args(args).output().unwrap();
+        let out = diskedit().args(args).output().unwrap();
         (out.status.code().unwrap_or(-1),
          String::from_utf8_lossy(&out.stdout).into_owned(),
          String::from_utf8_lossy(&out.stderr).into_owned())

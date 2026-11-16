@@ -129,7 +129,7 @@ chk "$($B info "$T")" "$BEFORE" "E1 分区表一字未改"
 chk "$(record_present "$T" && echo yes || echo no)" "no" "E1 未留下记录"
 
 echo
-echo "===== F: 镜像改名 + 兄弟落点里的截断记录 ⇒ 枚举拒绝 ====="
+echo "===== F: 镜像改名 + 落点读不出 ⇒ 枚举拒绝 ====="
 mk
 DISKEDIT_FAULT=chunk:40 $BF resize "$T":1 +100M --allow-move --yes >/dev/null 2>&1
 chk "$(record_present "$T" && echo yes || echo no)" "yes" "F1 中断后留下可读记录"
@@ -137,13 +137,12 @@ REC=$(record_file "$T")
 RENAMED="$T.renamed"
 mv "$T" "$RENAMED"
 BEFORE=$($B info "$RENAMED")
-# 同目录另放一份只写了开头的记录：它不是本目标的现场，也读不成任何结论
-mkdir -p "$T.trunc.diskedit"
-cp "$REC" "$T.trunc.diskedit/record"
-truncate -s 64 "$T.trunc.diskedit/record"
+# 键目录的位置被普通文件占住：打开目录即失败，不能当成"没有现场"。
+# 缓存键取自文件身份，改名不改身份，落点仍是这一处
+rm -rf "$(dirname "$REC")" && : > "$(dirname "$REC")"
 OUT=$($B add "$RENAMED" 50M --align mib --name p4 --yes 2>&1); F2RC=$?
-chk "$F2RC" "3" "F2 兄弟落点读不出 ⇒ 3（枚举失败，不当作没有现场）"
-chk "$(echo "$OUT" | grep -c 'cannot be enumerated')" "1" "F2 拒绝指向枚举失败"
+chk "$F2RC" "3" "F2 落点读不出 ⇒ 3（不当作没有现场）"
+chk "$(echo "$OUT" | grep -c 'the recovery directory is refused')" "1" "F2 拒绝指向记录落点"
 chk "$(echo "$OUT" | grep -c 'may already have changed')" "0" "F2 不声明目标可能已写"
 chk "$($B info "$RENAMED")" "$BEFORE" "F2 分区表一字未改"
 

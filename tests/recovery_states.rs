@@ -6,15 +6,36 @@
 //! root 会绕过它，所以该用例先做运行期探测，root 下直接返回，不在 root 上伪造。
 //!
 //! 记录字节按当前头布局构造；字段序只是夹具，被测对象是 CLI 的分类与状态。
+//! 记录落在 `<image_state_root>/images/<键摘要>/record`。
 #![cfg(target_os = "linux")]
 
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use sha2::{Digest, Sha256};
+
+/// 本次测试进程的镜像状态根：子进程与测试算出的落点必须一致
+fn state_root() -> &'static Path {
+    static ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    ROOT.get_or_init(|| {
+        let dir = std::env::temp_dir().join(format!("diskedit_states_state_{}", std::process::id()));
+        fs::remove_dir_all(&dir).ok();
+        private_dir(&dir);
+        dir
+    })
+}
+
+/// 记录仓库的每一级都按 0700 建立：写命令会复核状态根、`images` 与键目录
+fn private_dir(dir: &Path) {
+    use std::os::unix::fs::DirBuilderExt;
+    fs::DirBuilder::new().recursive(true).mode(0o700).create(dir).unwrap();
+}
+
 fn run(args: &[&str]) -> (i32, String, String) {
     let out = Command::new(env!("CARGO_BIN_EXE_DiskEdit"))
         .args(args)
+        .env("DISKEDIT_STATE_DIR", state_root())
         .output()
         .expect("spawn Diskedit");
     (
@@ -37,22 +58,24 @@ fn image_with(dir: &Path, size: usize) -> PathBuf {
     image
 }
 
-fn sidecar(image: &Path) -> PathBuf {
-    let mut name = image.as_os_str().to_owned();
-    name.push(".diskedit");
-    PathBuf::from(name)
+/// 镜像键目录：`<image_state_root>/images/<键摘要>`，键由文件对象身份派生
+fn record_dir(image: &Path) -> PathBuf {
+    use std::os::unix::fs::MetadataExt;
+    let meta = fs::metadata(image).unwrap();
+    let key = format!("inode:{}:{}", meta.dev(), meta.ino());
+    let digest = Sha256::digest(key.as_bytes());
+    let hex: String = digest[..16].iter().map(|b| format!("{b:02x}")).collect();
+    state_root().join("images").join(hex)
 }
 
 fn record_path(image: &Path) -> PathBuf {
-    sidecar(image).join("record")
+    record_dir(image).join("record")
 }
 
 fn write_record(image: &Path, bytes: &[u8]) {
-    use std::os::unix::fs::PermissionsExt;
     // 产品把落点建成 0700 并拒绝更松的目录；夹具按同一形态造
-    let dir = sidecar(image);
-    fs::create_dir_all(&dir).unwrap();
-    fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).unwrap();
+    let dir = record_dir(image);
+    private_dir(&dir);
     fs::write(dir.join("record"), bytes).unwrap();
 }
 
@@ -144,7 +167,7 @@ impl Fixture {
     fn bytes(&self) -> Vec<u8> {
         let payload = self.payload();
         let mut out = vec![0u8; 16];
-        out[0..4].copy_from_slice(b"DSK4");
+        out[0..4].copy_from_slice(b"DSK5");
         out[4..8].copy_from_slice(&(payload.len() as u32).to_le_bytes());
         out[8..12].copy_from_slice(&crc32(&payload).to_le_bytes());
         let header_crc = crc32(&out[0..12]);
@@ -167,7 +190,7 @@ fn reseal_header(bytes: &mut [u8]) {
 fn evidence_absent_is_success() {
     let dir = temp_dir("absent");
     let image = image_with(&dir, 4096);
-    fs::create_dir_all(sidecar(&image)).unwrap();
+    private_dir(&record_dir(&image));
 
     let (code, out, err) = run(&["inspect", image.to_str().unwrap()]);
     assert_eq!(code, 0, "{err}");
@@ -317,7 +340,7 @@ fn evidence_truncated_and_crc_mismatch_are_distinguished() {
 fn evidence_not_ours_covers_symlink_and_directory() {
     let dir = temp_dir("not_ours");
     let image = image_with(&dir, 4096);
-    fs::create_dir_all(sidecar(&image)).unwrap();
+    private_dir(&record_dir(&image));
 
     std::os::unix::fs::symlink(dir.join("elsewhere"), record_path(&image)).unwrap();
     let (code, out, _) = run(&["inspect", image.to_str().unwrap()]);
@@ -434,7 +457,7 @@ fn prepared_goes_to_quarantine_and_committed_goes_to_cleanup() {
     assert_eq!(code, 0, "{out}{err}");
     assert!(out.contains("abandoned 1 recovery record(s)"), "{out}");
     assert!(!record_path(&image).exists());
-    let quarantined = sidecar(&image).join(".abandoned");
+    let quarantined = record_dir(&image).join(".abandoned");
     assert_eq!(fs::read(&quarantined).unwrap(), prepared.bytes());
 
     let (code, out, _) = run(&["inspect", image.to_str().unwrap()]);

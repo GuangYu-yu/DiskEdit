@@ -462,7 +462,7 @@ pub(crate) fn add_mdos_entry_image(
 ) -> Result<(Vec<u8>, u32), RunOutcome> {
     check_mdos_add_type(os_type)?;
     if total == 0 {
-        return Err(RunOutcome::no_mutation("image has zero sectors"));
+        return Err(RunOutcome::refused("image has zero sectors"));
     }
     // 单扇区容器没有可用区间，单独说明以免提示里出现空区间 (1..0)
     if total == 1 {

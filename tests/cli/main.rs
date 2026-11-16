@@ -47,9 +47,6 @@ macro_rules! sidecar_suffix {
 /// 旧 undo journal 的落点名。
 #[cfg(unix)]
 const JOURNAL_SUFFIX: &str = sidecar_suffix!("journal");
-/// 恢复记录目录（记录与目标锁都在里面）
-#[cfg(unix)]
-const RECORD_DIR_SUFFIX: &str = ".diskedit";
 #[cfg(unix)]
 const RECORD_LOCK_NAME: &str = "record.lock";
 
@@ -59,13 +56,47 @@ fn sidecar(dir: &std::path::Path, name: &str, suffix: &str) -> std::path::PathBu
     dir.join(format!("{name}{suffix}"))
 }
 
-/// 恢复记录目录的落点（`<image>.diskedit`）：记录与目标锁都在里面。
-/// 只用于"拒绝后不得留下恢复状态"与"占住锁"这两类夹具动作，状态判据一律读 `inspect`
+/// 本次测试进程的镜像状态根：子进程与测试算出的落点必须一致
+fn state_root() -> &'static std::path::Path {
+    static ROOT: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+    ROOT.get_or_init(|| {
+        let dir = std::env::temp_dir().join(format!("diskedit_cli_state_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        private_dir(&dir);
+        dir
+    })
+}
+
+/// 记录仓库的每一级都按 0700 建立：写命令会复核状态根、`images` 与键目录
+fn private_dir(dir: &std::path::Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        std::fs::DirBuilder::new().recursive(true).mode(0o700).create(dir).unwrap();
+    }
+    #[cfg(not(unix))]
+    std::fs::create_dir_all(dir).unwrap();
+}
+
+/// 驱动真实二进制的命令：状态根固定到本测试进程的临时根，
+/// 写命令的记录与锁落在那里，不碰运行测试的用户目录
+fn diskedit() -> Command {
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_DiskEdit"));
+    cmd.env("DISKEDIT_STATE_DIR", state_root());
+    cmd
+}
+
+/// 镜像键目录的落点（`<image_state_root>/images/<键摘要>`）：记录与目标锁都在里面。
+/// 只做路径计算，不建目录；夹具用它占住锁、读锁或断言目录为空，状态判据一律读 `inspect`
 #[cfg(unix)]
 fn record_dir(img: &std::path::Path) -> std::path::PathBuf {
-    let mut os = img.as_os_str().to_owned();
-    os.push(RECORD_DIR_SUFFIX);
-    std::path::PathBuf::from(os)
+    use sha2::{Digest, Sha256};
+    use std::os::unix::fs::MetadataExt;
+    let meta = std::fs::metadata(img).unwrap();
+    let key = format!("inode:{}:{}", meta.dev(), meta.ino());
+    let digest = Sha256::digest(key.as_bytes());
+    let hex: String = digest[..16].iter().map(|b| format!("{b:02x}")).collect();
+    state_root().join("images").join(hex)
 }
 
 /// 目录条目名（排序后），不含只增、不参与恢复的审计日志：
@@ -75,8 +106,8 @@ fn dir_entries(dir: &std::path::Path) -> Vec<String> {
     let mut names: Vec<String> = std::fs::read_dir(dir)
         .unwrap()
         .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
-        // 日志与记录目录是常驻现场（释放锁不删文件），不计入"拒绝后新增的伴随文件"
-        .filter(|n| !n.ends_with(".log") && !n.ends_with(".diskedit"))
+        // 记录落在每用户状态根，目标旁边只剩审计日志这类常驻现场
+        .filter(|n| !n.ends_with(".log"))
         .collect();
     names.sort();
     names

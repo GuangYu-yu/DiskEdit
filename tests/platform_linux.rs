@@ -13,9 +13,27 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+/// 本次测试进程的镜像状态根：子进程与测试算出的落点必须一致
+fn state_root() -> &'static Path {
+    static ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    ROOT.get_or_init(|| {
+        let dir = std::env::temp_dir().join(format!("diskedit_platform_state_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        private_dir(&dir);
+        dir
+    })
+}
+
+/// 记录仓库的每一级都按 0700 建立：写命令会复核状态根、`images` 与键目录
+fn private_dir(dir: &Path) {
+    use std::os::unix::fs::DirBuilderExt;
+    std::fs::DirBuilder::new().recursive(true).mode(0o700).create(dir).expect("create the state root");
+}
+
 fn run(args: &[&str]) -> (i32, String, String) {
     let out = Command::new(env!("CARGO_BIN_EXE_DiskEdit"))
         .args(args)
+        .env("DISKEDIT_STATE_DIR", state_root())
         .output()
         .expect("spawn DiskEdit");
     (

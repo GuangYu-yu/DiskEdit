@@ -3,6 +3,8 @@
 //! 每块经写入口落盘并带步骤归属；回读按 durable 批次做：同步之后、推进游标之前
 //! 回读整批并比对，不逐块回读。
 
+use sha2::{Digest, Sha256};
+
 use crate::dev::{RegionStamp, WriteSource};
 use crate::outcome::{RunOutcome, WriteStep};
 use crate::planner::chunk::{relocation_overlaps, spans, ChunkSpan};
@@ -40,8 +42,9 @@ pub(crate) fn execute(
             state.chunks_done()
         )));
     }
-    // 位移 0 没有拷贝要做；块进度已满说明数据搬完、只差表步
-    if shift == 0 || state.chunks_done() == count {
+    // 位移 0 没有拷贝要做；块进度已满说明数据搬完、只差表步。两种提前返回都在
+    // 目的前缀比对之后（见下），否则伪造的"已满"记录会直接跳到表步
+    if shift == 0 {
         return Ok(());
     }
 
@@ -82,6 +85,46 @@ pub(crate) fn execute(
         )));
     }
     let overlap = relocation_overlaps(shift, sectors);
+    // 记录里的块数只是声明：续跑先按同一执行顺序回读目的前缀、与记录里的摘要比对。
+    // 不一致说明记录陈旧或伪造，按它跳过块拷贝不可逆，故一律停在这里
+    let done = state.chunks_done();
+    let mut hasher = Sha256::new();
+    if done > 0 {
+        for span in ordered.iter().take(done as usize) {
+            let within = (span.first_lba - src_first) * sector_size;
+            let len = span.len_lba * sector_size;
+            let mut buf = vec![0u8; len as usize];
+            let dst = dst_base + within;
+            if let Err(e) = src.read_at(dst, &mut buf) {
+                let message = format!(
+                    "partition {part}: cannot read the target at byte {dst} to verify the recorded \
+                     progress: {e} — the transfer may be incomplete"
+                );
+                return Err(if crate::outcome::target_may_have_been_written() {
+                    RunOutcome::partial(message)
+                } else {
+                    RunOutcome::no_mutation(message)
+                });
+            }
+            hasher.update(&buf);
+        }
+        let seen: [u8; 32] = hasher.clone().finalize().into();
+        if seen != state.prefix_digest() {
+            let message = format!(
+                "partition {part}: the target's copied prefix does not match the recovery record \
+                 (recorded {done} chunk(s)) — the recorded progress cannot be trusted, so no further \
+                 data was moved"
+            );
+            return Err(if crate::outcome::target_may_have_been_written() {
+                RunOutcome::partial(message)
+            } else {
+                RunOutcome::refused(message)
+            });
+        }
+    }
+    if done == count {
+        return Ok(());
+    }
     if overlap && chunk < chunk_bytes {
         sink.note(&format!(
             "partition {part}: self-overlapping move, chunk size reduced to {chunk} bytes to keep redo reads intact"
@@ -114,6 +157,9 @@ pub(crate) fn execute(
         }
         append_batch(&mut batch, &mut batch_start, dst, &buf);
         state.advance_chunk();
+        // 摘要跟着 durable 前缀滚动：块的写入已返回成功，目的区间的内容就是 `buf`
+        hasher.update(&buf);
+        state.set_prefix_digest(hasher.clone().finalize().into());
         if overlap {
             if let Err(e) = src.sync_data() {
                 return Err(RunOutcome::partial(format!(

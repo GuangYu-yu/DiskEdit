@@ -1,16 +1,37 @@
 //! 隔离区行为。
 //!
 //! 需要 Linux：记录后端与隔离区的硬链接/目录原语只在 Linux 编译；用例只用普通
-//! 镜像文件，不需要 root。记录按当前头布局构造，字节只作为夹具。
+//! 镜像文件，不需要 root。记录落在 `<image_state_root>/images/<键摘要>/record`，
+//! 隔离条目是同目录的隐藏名；字节只作为夹具。
 #![cfg(target_os = "linux")]
 
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use sha2::{Digest, Sha256};
+
+/// 本次测试进程的镜像状态根：子进程与测试算出的落点必须一致
+fn state_root() -> &'static Path {
+    static ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    ROOT.get_or_init(|| {
+        let dir = std::env::temp_dir().join(format!("diskedit_quarantine_state_{}", std::process::id()));
+        fs::remove_dir_all(&dir).ok();
+        private_dir(&dir);
+        dir
+    })
+}
+
+/// 记录仓库的每一级都按 0700 建立：写命令会复核状态根、`images` 与键目录
+fn private_dir(dir: &Path) {
+    use std::os::unix::fs::DirBuilderExt;
+    fs::DirBuilder::new().recursive(true).mode(0o700).create(dir).unwrap();
+}
+
 fn run(args: &[&str]) -> (i32, String, String) {
     let out = Command::new(env!("CARGO_BIN_EXE_DiskEdit"))
         .args(args)
+        .env("DISKEDIT_STATE_DIR", state_root())
         .output()
         .expect("spawn Diskedit");
     (
@@ -33,22 +54,24 @@ fn image_with(dir: &Path, size: usize) -> PathBuf {
     image
 }
 
-fn sidecar(image: &Path) -> PathBuf {
-    let mut name = image.as_os_str().to_owned();
-    name.push(".diskedit");
-    PathBuf::from(name)
+/// 镜像键目录：`<image_state_root>/images/<键摘要>`，键由文件对象身份派生
+fn record_dir(image: &Path) -> PathBuf {
+    use std::os::unix::fs::MetadataExt;
+    let meta = fs::metadata(image).unwrap();
+    let key = format!("inode:{}:{}", meta.dev(), meta.ino());
+    let digest = Sha256::digest(key.as_bytes());
+    let hex: String = digest[..16].iter().map(|b| format!("{b:02x}")).collect();
+    state_root().join("images").join(hex)
 }
 
 fn record_path(image: &Path) -> PathBuf {
-    sidecar(image).join("record")
+    record_dir(image).join("record")
 }
 
 fn write_record(image: &Path, bytes: &[u8]) {
-    use std::os::unix::fs::PermissionsExt;
     // 产品把落点建成 0700 并拒绝更松的目录；夹具按同一形态造
-    let dir = sidecar(image);
-    fs::create_dir_all(&dir).unwrap();
-    fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).unwrap();
+    let dir = record_dir(image);
+    private_dir(&dir);
     fs::write(dir.join("record"), bytes).unwrap();
 }
 
@@ -101,7 +124,7 @@ fn payload(size: u64, file_id: [u8; 16]) -> Vec<u8> {
 fn record_bytes(size: u64, file_id: [u8; 16]) -> Vec<u8> {
     let payload = payload(size, file_id);
     let mut out = vec![0u8; 16];
-    out[0..4].copy_from_slice(b"DSK4");
+    out[0..4].copy_from_slice(b"DSK5");
     out[4..8].copy_from_slice(&(payload.len() as u32).to_le_bytes());
     out[8..12].copy_from_slice(&crc32(&payload).to_le_bytes());
     let header_crc = crc32(&out[0..12]);
@@ -132,7 +155,7 @@ fn abandon_moves_the_record_into_the_quarantine_area() {
     assert_eq!(fs::read(&image).unwrap(), before, "abandon must not touch the target");
 
     assert!(!record_path(&image).exists());
-    let quarantined = sidecar(&image).join(".abandoned");
+    let quarantined = record_dir(&image).join(".abandoned");
     assert_eq!(fs::read(&quarantined).unwrap(), bytes);
 
     let (code, out, _) = run(&["records", "list", image.to_str().unwrap()]);
@@ -151,13 +174,8 @@ fn a_torn_entry_is_reported_as_quarantine() {
     // 本构建不产生 `.torn[.N]`，但盘上可能有：按名字归入隔离区，而不是当成待解码的证据
     let dir = temp_dir("torn-mark");
     let image = image_with(&dir, 4096);
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let d = sidecar(&image);
-        fs::create_dir_all(&d).unwrap();
-        fs::set_permissions(&d, fs::Permissions::from_mode(0o700)).unwrap();
-    }
-    let torn = sidecar(&image).join(".torn.3");
+    private_dir(&record_dir(&image));
+    let torn = record_dir(&image).join(".torn.3");
     fs::write(&torn, record_bytes(4096, file_id(&image))).unwrap();
 
     let (code, out, err) = run(&["inspect", torn.to_str().unwrap()]);
@@ -181,14 +199,14 @@ fn a_second_abandon_is_idempotent() {
     write_record(&image, &record_bytes(4096, file_id(&image)));
 
     assert_eq!(run(&["abandon", image.to_str().unwrap(), "--yes"]).0, 0);
-    let quarantined = sidecar(&image).join(".abandoned");
+    let quarantined = record_dir(&image).join(".abandoned");
     let kept = fs::read(&quarantined).unwrap();
 
     let (code, out, err) = run(&["abandon", image.to_str().unwrap(), "--yes"]);
     assert_eq!(code, 0, "{out}{err}");
     assert!(out.contains("this enumeration found no unfinished operation"), "{out}");
     assert_eq!(fs::read(&quarantined).unwrap(), kept);
-    assert!(!sidecar(&image).join(".abandoned.1").exists());
+    assert!(!record_dir(&image).join(".abandoned.1").exists());
 }
 
 #[test]
@@ -198,13 +216,13 @@ fn quarantine_never_overwrites_an_existing_entry() {
     let bytes = record_bytes(4096, file_id(&image));
     write_record(&image, &bytes);
 
-    let old = sidecar(&image).join(".abandoned");
+    let old = record_dir(&image).join(".abandoned");
     fs::write(&old, b"earlier evidence").unwrap();
 
     let (code, out, err) = run(&["abandon", image.to_str().unwrap(), "--yes"]);
     assert_eq!(code, 0, "{out}{err}");
     assert_eq!(fs::read(&old).unwrap(), b"earlier evidence");
-    assert_eq!(fs::read(sidecar(&image).join(".abandoned.1")).unwrap(), bytes);
+    assert_eq!(fs::read(record_dir(&image).join(".abandoned.1")).unwrap(), bytes);
 }
 
 #[test]
@@ -220,7 +238,7 @@ fn abandon_refuses_a_record_from_another_target() {
     assert_eq!(code, 3, "{out}{err}");
     assert!(err.contains("not the target's own recovery scene"), "{err}");
     assert_eq!(fs::read(record_path(&image)).unwrap(), bytes);
-    assert!(!sidecar(&image).join(".abandoned").exists());
+    assert!(!record_dir(&image).join(".abandoned").exists());
 }
 
 #[test]
@@ -233,20 +251,20 @@ fn abandon_refuses_a_record_in_an_unknown_layout_without_renaming_anything() {
     bytes[12..16].copy_from_slice(&header_crc.to_le_bytes());
     write_record(&image, &bytes);
     // abandon 取锁会在记录目录里留下 record.lock：先建出来，前后目录条目才可比
-    fs::write(sidecar(&image).join("record.lock"), b"").unwrap();
+    fs::write(record_dir(&image).join("record.lock"), b"").unwrap();
     let entries = |dir: &Path| {
         let mut names: Vec<_> = fs::read_dir(dir).unwrap().map(|e| e.unwrap().file_name()).collect();
         names.sort();
         names
     };
-    let before = entries(&sidecar(&image));
+    let before = entries(&record_dir(&image));
 
     let (code, out, err) = run(&["abandon", image.to_str().unwrap(), "--yes"]);
     assert_eq!(code, 3, "{out}{err}");
     assert!(err.contains("a layout this build does not recognize"), "{err}");
     assert!(err.contains("will not quarantine it automatically"), "{err}");
     assert!(err.contains("nothing was renamed"), "{err}");
-    assert_eq!(entries(&sidecar(&image)), before);
+    assert_eq!(entries(&record_dir(&image)), before);
     assert_eq!(fs::read(record_path(&image)).unwrap(), bytes);
 }
 
@@ -254,14 +272,8 @@ fn abandon_refuses_a_record_in_an_unknown_layout_without_renaming_anything() {
 fn abandon_refuses_a_non_regular_entry() {
     let dir = temp_dir("not_ours");
     let image = image_with(&dir, 4096);
-    {
-        use std::os::unix::fs::PermissionsExt;
-        // 记录目录按产品形状（0700）建：本用例要考的是记录落点本身非普通文件，
-        // 目录权限若不先达标，拒绝会停在目录那一关，走不到这一条判据
-        let d = sidecar(&image);
-        fs::create_dir_all(&d).unwrap();
-        fs::set_permissions(&d, fs::Permissions::from_mode(0o700)).unwrap();
-    }
+    // 键目录按产品形状（0700）建：本用例要考的是记录落点本身非普通文件
+    private_dir(&record_dir(&image));
     let elsewhere = dir.join("elsewhere");
     fs::write(&elsewhere, b"user data").unwrap();
     std::os::unix::fs::symlink(&elsewhere, record_path(&image)).unwrap();
@@ -289,13 +301,13 @@ fn abandoning_a_damaged_record_needs_discard_replay() {
 
     let (code, out, err) = run(&["abandon", image.to_str().unwrap(), "--yes", "--discard-replay"]);
     assert_eq!(code, 0, "{out}{err}");
-    assert_eq!(fs::read(sidecar(&image).join(".abandoned")).unwrap(), bytes);
+    assert_eq!(fs::read(record_dir(&image).join(".abandoned")).unwrap(), bytes);
 }
 
 #[test]
 fn a_renamed_image_still_lists_and_releases_its_old_scene() {
-    // 落点目录名跟着旧镜像名：改名后按新路径拼出的落点不存在。枚举扫镜像所在目录，
-    // 兄弟落点按载荷身份归并回本目标，旧现场因此仍被列出并可被放弃。
+    // 键取文件对象身份：改名/移动不改变键，按新路径拼出的目录就是原名下那个目录，
+    // 旧现场因此仍被列出并可被放弃。
     let dir = temp_dir("renamed");
     let image = image_with(&dir, 4096);
     write_record(&image, &record_bytes(4096, file_id(&image)));
@@ -305,7 +317,7 @@ fn a_renamed_image_still_lists_and_releases_its_old_scene() {
     let (code, out, err) = run(&["abandon", renamed.to_str().unwrap(), "--yes"]);
     assert_eq!(code, 0, "{out}{err}");
     assert!(out.contains("abandoned 1 recovery record"), "{out}");
-    assert!(dir.join("disk.img.diskedit").join(".abandoned").exists());
+    assert!(record_dir(&renamed).join(".abandoned").exists());
 }
 
 #[test]

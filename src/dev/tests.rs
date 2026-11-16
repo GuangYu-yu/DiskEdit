@@ -97,8 +97,9 @@ pub(crate) fn non_canonical_literal_yields_the_canonical_slot() {
     assert_eq!(id.journal_path(), suffix_path(&canonical, JOURNAL_SUFFIX));
 }
 
-/// 相对写法不移动记录的落点：记录目录由 canonical 派生，`..` / 相对名不会在当前
-/// 工作目录下多出一个 `<literal>.diskedit/`——那会让同一目标在不同目录下出现两份现场
+/// 相对写法不移动记录的落点：记录目录由 canonical 的文件身份派生，`..` / 相对名
+/// 不会在当前工作目录下多出一个 `<literal>.diskedit/`——那会让同一目标在不同目录下
+/// 出现两份现场
 #[test]
 pub(crate) fn a_relative_literal_does_not_move_the_record() {
     let dir = test_dir("relrec");
@@ -110,7 +111,9 @@ pub(crate) fn a_relative_literal_does_not_move_the_record() {
     let literal = Path::new("..").join(canonical.file_name().unwrap());
 
     let id = TargetIdentity::image_at(&canonical, &literal);
-    let expected = suffix_path(&canonical, RECORD_SUFFIX).join(RECORD_NAME);
+    let expected = image_record_dir(&canonical)
+        .expect("the per-user state root is available in tests")
+        .join(RECORD_NAME);
     assert_eq!(id.record_path(), Some(expected.as_path()));
     assert!(!suffix_path(&literal, RECORD_SUFFIX).exists(), "no record may be derived from the relative spelling");
 }
@@ -176,12 +179,12 @@ pub(crate) fn artifact_names_are_pinned_as_documented() {
     assert_eq!(LOCK_SUFFIX, format!("{ns}lock"));
     assert_eq!(LOG_SUFFIX, format!("{ns}log"));
 
-    // 镜像：journal 是目标路径的同目录兄弟；锁与记录同落在
-    // `<image>.diskedit` 目录内
+    // 镜像：journal 仍是目标路径的同目录兄弟；锁与记录落在每用户状态根下的键目录内
     let img = PathBuf::from("/tmp/x.img");
     let id = TargetIdentity::resolve_image(&img);
+    let record_dir = image_record_dir(&img).expect("the per-user state root is available in tests");
     assert_eq!(id.journal_path(), suffix_path(&img, JOURNAL_SUFFIX));
-    assert_eq!(id.lock_path(), suffix_path(&img, RECORD_SUFFIX).join(RECORD_LOCK_NAME));
+    assert_eq!(id.lock_path(), record_dir.join(RECORD_LOCK_NAME));
     assert_eq!(id.log_path(None), suffix_path(&img, LOG_SUFFIX));
 }
 
@@ -309,7 +312,12 @@ pub(crate) fn loop_identity_converges_to_the_backing_file() {
 
     let id = TargetIdentity::loop_backed(&dev, backing.clone()).expect("a bound backing file resolves");
     assert_eq!(id.journal_path(), suffix_path(&backing, JOURNAL_SUFFIX));
-    assert_eq!(id.lock_path(), suffix_path(&backing, RECORD_SUFFIX).join(RECORD_LOCK_NAME));
+    assert_eq!(
+        id.lock_path(),
+        image_record_dir(&backing)
+            .expect("the per-user state root is available in tests")
+            .join(RECORD_LOCK_NAME)
+    );
 
     // backing 已删：身份不再可解析，不退到 sysfs 字符串
     std::fs::remove_file(&backing).unwrap();

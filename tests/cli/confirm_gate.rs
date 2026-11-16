@@ -8,24 +8,22 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const RECORD_DIR_SUFFIX: &str = ".diskedit";
-const RECORD_LOCK_NAME: &str = "record.lock";
+use super::{RECORD_LOCK_NAME, record_dir};
+
 const LINUX_DATA: &str = "0fc63daf-8483-4772-8e79-3d69d8477de4";
 
 fn run(args: &[&str]) -> (i32, String, String) {
     let exe = env!("CARGO_BIN_EXE_DiskEdit");
-    let out = Command::new(exe).args(args).output().unwrap();
+    let out = Command::new(exe)
+        .args(args)
+        .env("DISKEDIT_STATE_DIR", super::state_root())
+        .output()
+        .unwrap();
     (
         out.status.code().unwrap_or(-1),
         String::from_utf8_lossy(&out.stdout).into_owned(),
         String::from_utf8_lossy(&out.stderr).into_owned(),
     )
-}
-
-fn suffix(img: &Path, tail: &str) -> PathBuf {
-    let mut os = img.as_os_str().to_owned();
-    os.push(tail);
-    PathBuf::from(os)
 }
 
 fn read_optional(p: &Path) -> Option<Vec<u8>> {
@@ -48,7 +46,7 @@ fn scene(img: &Path) -> Scene {
     Scene {
         image: std::fs::read(img).unwrap(),
         record: (c, format!("{o}{e}")),
-        lock: read_optional(&suffix(img, RECORD_DIR_SUFFIX).join(RECORD_LOCK_NAME)),
+        lock: read_optional(&record_dir(img).join(RECORD_LOCK_NAME)),
     }
 }
 

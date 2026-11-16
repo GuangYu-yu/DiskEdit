@@ -36,10 +36,9 @@ fn auto_commands_add_move_resize_set_delete() {
     let img = dir.join("auto.img");
     // 16 MiB（32768 扇区，可用 34..32734），坐标全部 1MiB 对齐
     std::fs::write(&img, vec![0u8; 16 * 1024 * 1024]).unwrap();
-    let exe = env!("CARGO_BIN_EXE_DiskEdit");
     let img_s = img.to_str().unwrap();
     let run = |args: &[&str]| -> (i32, String, String) {
-        let out = Command::new(exe).args(args).output().unwrap();
+        let out = diskedit().args(args).output().unwrap();
         (out.status.code().unwrap_or(-1),
          String::from_utf8_lossy(&out.stdout).into_owned(),
          String::from_utf8_lossy(&out.stderr).into_owned())
