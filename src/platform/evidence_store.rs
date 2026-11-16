@@ -297,14 +297,18 @@ fn rename_sibling(parent: &OwnedFd, from: &OsStr, to: &OsStr) -> Result<(), Evid
 fn rename_sibling_noreplace(parent: &OwnedFd, from: &OsStr, to: &OsStr) -> Result<(), EvidenceIo> {
     let from = c_name(from).map_err(EvidenceIo::Io)?;
     let to = c_name(to).map_err(EvidenceIo::Io)?;
+    // 直接发系统调用而不是调 `libc::renameat2`：musl 到 1.2.6 才提供这个包装器，
+    // 更早的 musl 静态 sysroot（cargo-zigbuild 用的就是这种）只会在链接期报符号缺失。
+    // 系统调用号在所有 Linux libc 上都由内核 ABI 固定，与 glibc 包装器同一条路径
     let raw = unsafe {
-        libc::renameat2(
+        libc::syscall(
+            libc::SYS_renameat2,
             parent.as_raw_fd(),
             from.as_ptr(),
             parent.as_raw_fd(),
             to.as_ptr(),
             libc::RENAME_NOREPLACE,
-        )
+        ) as libc::c_int
     };
     if raw != 0 {
         return Err(EvidenceIo::Io(io::Error::last_os_error()));
