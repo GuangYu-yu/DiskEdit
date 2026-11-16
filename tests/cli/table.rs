@@ -47,10 +47,9 @@ fn new_add_del_roundtrip() {
     // 8 MiB 镜像（16384 扇区，可用区 34..16350），坐标全部取 1MiB 对齐值
     let data = vec![0u8; 8 * 1024 * 1024];
     std::fs::write(&img, &data).unwrap();
-    let exe = env!("CARGO_BIN_EXE_DiskEdit");
     let img_s = img.to_str().unwrap();
     let run = |args: &[&str]| -> (i32, String, String) {
-        let out = Command::new(exe).args(args).output().unwrap();
+        let out = diskedit().args(args).output().unwrap();
         (out.status.code().unwrap_or(-1),
          String::from_utf8_lossy(&out.stdout).into_owned(),
          String::from_utf8_lossy(&out.stderr).into_owned())
@@ -105,10 +104,9 @@ fn oversized_add_is_refused() {
     std::fs::create_dir_all(&dir).unwrap();
     let img = dir.join("t.img");
     std::fs::write(&img, vec![0u8; 4 * 1024 * 1024]).unwrap();
-    let exe = env!("CARGO_BIN_EXE_DiskEdit");
     let img_s = img.to_str().unwrap();
     let run = |args: &[&str]| -> (i32, String, String) {
-        let out = Command::new(exe).args(args).output().unwrap();
+        let out = diskedit().args(args).output().unwrap();
         (out.status.code().unwrap_or(-1),
          String::from_utf8_lossy(&out.stdout).into_owned(),
          String::from_utf8_lossy(&out.stderr).into_owned())
@@ -129,10 +127,9 @@ fn backup_header_fallback_and_repair() {
     std::fs::create_dir_all(&dir).unwrap();
     let img = dir.join("b.img");
     std::fs::write(&img, vec![0u8; 16 * 1024 * 1024]).unwrap();
-    let exe = env!("CARGO_BIN_EXE_DiskEdit");
     let img_s = img.to_str().unwrap();
     let run = |args: &[&str]| -> (i32, String, String) {
-        let out = Command::new(exe).args(args).output().unwrap();
+        let out = diskedit().args(args).output().unwrap();
         (out.status.code().unwrap_or(-1),
          String::from_utf8_lossy(&out.stdout).into_owned(),
          String::from_utf8_lossy(&out.stderr).into_owned())
@@ -145,7 +142,7 @@ fn backup_header_fallback_and_repair() {
         f.write_all(&[0u8; 512]).unwrap();
     };
     let part_count = || -> usize {
-        let out = Command::new(exe).args(["info", img_s]).output().unwrap();
+        let out = diskedit().args(["info", img_s]).output().unwrap();
         let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
         v["partitions"].as_array().map(|a| a.len()).unwrap_or(0)
     };
@@ -192,10 +189,9 @@ fn new_gpt_refuses_to_clear_bytes_inside_an_existing_partition() {
     std::fs::create_dir_all(&dir).unwrap();
     let img = dir.join("c.img");
     std::fs::write(&img, vec![0u8; 8 * 1024 * 1024]).unwrap();
-    let exe = env!("CARGO_BIN_EXE_DiskEdit");
     let img_s = img.to_str().unwrap();
     let run = |args: &[&str]| -> (i32, String, String) {
-        let out = Command::new(exe).args(args).output().unwrap();
+        let out = diskedit().args(args).output().unwrap();
         (out.status.code().unwrap_or(-1),
          String::from_utf8_lossy(&out.stdout).into_owned(),
          String::from_utf8_lossy(&out.stderr).into_owned())
@@ -266,10 +262,9 @@ fn new_refuses_a_superblock_outside_the_stamped_sectors() {
     let mut bytes = vec![0u8; 8 * 1024 * 1024];
     bytes[1024 + 0x38..1024 + 0x3A].copy_from_slice(&[0x53, 0xEF]);
     std::fs::write(&img, &bytes).unwrap();
-    let exe = env!("CARGO_BIN_EXE_DiskEdit");
     let img_s = img.to_str().unwrap();
 
-    let out = Command::new(exe).args(["new", img_s, "--yes"]).output().unwrap();
+    let out = diskedit().args(["new", img_s, "--yes"]).output().unwrap();
     assert_eq!(out.status.code(), Some(3), "a superblock in the written regions must need consent");
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(out.stdout.is_empty(), "a refusal must not print layout output");
@@ -277,7 +272,7 @@ fn new_refuses_a_superblock_outside_the_stamped_sectors() {
     assert!(stderr.contains("--overwrite-data"), "{stderr}");
     assert_eq!(std::fs::read(&img).unwrap(), bytes, "the refusal must not write");
 
-    let out = Command::new(exe).args(["new", img_s, "--yes", "--overwrite-data"]).output().unwrap();
+    let out = diskedit().args(["new", img_s, "--yes", "--overwrite-data"]).output().unwrap();
     assert_eq!(out.status.code(), Some(0), "explicit consent must go through");
 
     let _ = std::fs::remove_dir_all(&dir);
@@ -289,10 +284,9 @@ fn msdos_table_flow() {
     std::fs::create_dir_all(&dir).unwrap();
     let img = dir.join("m.img");
     std::fs::write(&img, vec![0u8; 16 * 1024 * 1024]).unwrap();
-    let exe = env!("CARGO_BIN_EXE_DiskEdit");
     let img_s = img.to_str().unwrap();
     let run = |args: &[&str]| -> (i32, String) {
-        let out = Command::new(exe).args(args).output().unwrap();
+        let out = diskedit().args(args).output().unwrap();
         (out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stdout).into_owned())
     };
 
@@ -349,9 +343,8 @@ fn msdos_table_flow() {
 fn set_type_cli() {
     let dir = std::env::temp_dir().join(format!("diskedit_stype_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let exe = env!("CARGO_BIN_EXE_DiskEdit");
     let run = |args: &[&str]| -> (i32, String) {
-        let out = Command::new(exe).args(args).output().unwrap();
+        let out = diskedit().args(args).output().unwrap();
         (out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stdout).into_owned())
     };
     let gpt_type = |img: &std::path::Path| -> String {
@@ -412,10 +405,9 @@ fn msdos_user_resize() {
     std::fs::create_dir_all(&dir).unwrap();
     let img = dir.join("r.img");
     std::fs::write(&img, vec![0u8; 16 * 1024 * 1024]).unwrap();
-    let exe = env!("CARGO_BIN_EXE_DiskEdit");
     let img_s = img.to_str().unwrap();
     let run = |args: &[&str]| -> (i32, String) {
-        let out = Command::new(exe).args(args).output().unwrap();
+        let out = diskedit().args(args).output().unwrap();
         (out.status.code().unwrap_or(-1), format!("{}\n{}",
             String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr)))
     };
@@ -502,10 +494,9 @@ fn new_msdos_over_gpt_is_recognized_as_msdos() {
     std::fs::create_dir_all(&dir).unwrap();
     let img = dir.join("g.img");
     std::fs::write(&img, vec![0u8; 16 * 1024 * 1024]).unwrap();
-    let exe = env!("CARGO_BIN_EXE_DiskEdit");
     let img_s = img.to_str().unwrap();
     let run = |args: &[&str]| -> (i32, String) {
-        let out = Command::new(exe).args(args).output().unwrap();
+        let out = diskedit().args(args).output().unwrap();
         (out.status.code().unwrap_or(-1), format!("{}\n{}",
             String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr)))
     };
@@ -532,10 +523,9 @@ fn align_placement_and_gpt_hidden_required() {
     let img = dir.join("c.img");
     // 16 MiB（32768 扇区）
     std::fs::write(&img, vec![0u8; 16 * 1024 * 1024]).unwrap();
-    let exe = env!("CARGO_BIN_EXE_DiskEdit");
     let img_s = img.to_str().unwrap();
     let run = |args: &[&str]| -> (i32, String) {
-        let out = Command::new(exe).args(args).output().unwrap();
+        let out = diskedit().args(args).output().unwrap();
         (out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stderr).into_owned())
     };
 
@@ -598,10 +588,9 @@ fn layout_uses_table_sector_size_not_container() {
     let img = dir.join("mixed.img");
     // 8 MiB 镜像：4Kn 表视角共 2048 个 LBA，可用区 34..2014
     std::fs::write(&img, vec![0u8; 8 * 1024 * 1024]).unwrap();
-    let exe = env!("CARGO_BIN_EXE_DiskEdit");
     let img_s = img.to_str().unwrap();
     let run = |args: &[&str]| -> (i32, String, String) {
-        let out = Command::new(exe).args(args).output().unwrap();
+        let out = diskedit().args(args).output().unwrap();
         (out.status.code().unwrap_or(-1),
          String::from_utf8_lossy(&out.stdout).into_owned(),
          String::from_utf8_lossy(&out.stderr).into_owned())
@@ -635,10 +624,9 @@ fn set_name_over_36_code_units_is_refused() {
     std::fs::create_dir_all(&dir).unwrap();
     let img = dir.join("blank.img");
     std::fs::write(&img, vec![0u8; 8 * 1024 * 1024]).unwrap();
-    let exe = env!("CARGO_BIN_EXE_DiskEdit");
     let img_s = img.to_str().unwrap();
     let run = |args: &[&str]| -> (i32, String, String) {
-        let out = Command::new(exe).args(args).output().unwrap();
+        let out = diskedit().args(args).output().unwrap();
         (out.status.code().unwrap_or(-1),
          String::from_utf8_lossy(&out.stdout).into_owned(),
          String::from_utf8_lossy(&out.stderr).into_owned())

@@ -32,6 +32,15 @@ fn undo_record(src: &mut WriteSource, permit_move: bool) -> Option<u8> {
     }
     let path = match claimed.as_slice() {
         [] => {
+            // 旧落点上的记录不在本构建的寻址域里：不认领是既定立场，但要说清这条路径
+            // 为什么不参与回滚，而不是只留最后一句"no recovery record"收尾
+            if let Some(legacy) = mismatched.iter().find(|r| r.is_previous_location()) {
+                println!(
+                    "{} is the previous record location — this build does not read that record, so it is \
+                     neither replayed nor deleted; settle it or delete it by hand",
+                    legacy.path().display()
+                );
+            }
             if !mismatched.is_empty() {
                 println!(
                     "none of the {} candidate record(s) above can be claimed for this target — they are left \

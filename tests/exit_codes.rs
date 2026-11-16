@@ -1,3 +1,4 @@
+#![allow(clippy::let_underscore_must_use)] // 测试的清理步骤有意忽略失败（临时目录 / 进程）
 //! 退出码 0–6 的进程级行为快照。
 //!
 //! | 码 | 含义 | 钉在哪 |
@@ -21,8 +22,34 @@
 use std::io::Cursor;
 use std::process::Command;
 
+/// 本次测试进程的镜像状态根：子进程与测试算出的落点必须一致
+fn state_root() -> &'static std::path::Path {
+    static ROOT: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+    ROOT.get_or_init(|| {
+        let dir = std::env::temp_dir().join(format!("diskedit_exit_codes_state_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        private_dir(&dir);
+        dir
+    })
+}
+
+/// 记录仓库的每一级都按 0700 建立：写命令会复核状态根、`images` 与键目录
+fn private_dir(dir: &std::path::Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        std::fs::DirBuilder::new().recursive(true).mode(0o700).create(dir).unwrap();
+    }
+    #[cfg(not(unix))]
+    std::fs::create_dir_all(dir).unwrap();
+}
+
 fn run(args: &[&str]) -> (i32, String, String) {
-    let out = Command::new(env!("CARGO_BIN_EXE_DiskEdit")).args(args).output().unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_DiskEdit"))
+        .args(args)
+        .env("DISKEDIT_STATE_DIR", state_root())
+        .output()
+        .unwrap();
     (
         out.status.code().unwrap_or(-1),
         String::from_utf8_lossy(&out.stdout).into_owned(),
@@ -156,6 +183,7 @@ fn read_failure_is_four() {
     let target = format!("{}:1", img.display());
     let out = Command::new(env!("CARGO_BIN_EXE_DiskEdit"))
         .env("DISKEDIT_FAULT", "read-at")
+        .env("DISKEDIT_STATE_DIR", state_root())
         .args(["plan", &target, "--grow"])
         .output()
         .unwrap();

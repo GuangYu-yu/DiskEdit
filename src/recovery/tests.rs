@@ -117,6 +117,7 @@ fn relocation(entries: Vec<RelocEntry>) -> Relocation {
         entries,
         entry_index: 0,
         chunks_in_entry: 0,
+        prefix_digest: [0u8; 32],
         chunk_bytes: 1 << 20,
         kind: RelocKind::TailPacked,
         grow_part: 1,
@@ -136,6 +137,7 @@ fn relocation_roundtrip_preserves_entry_order() {
         ],
         entry_index: 1,
         chunks_in_entry: 7,
+        prefix_digest: [0u8; 32],
         chunk_bytes: 1 << 20,
         kind: RelocKind::Shift,
         grow_part: 1,
@@ -225,6 +227,8 @@ fn relocation_rejects_impossible_jobs() {
         Relocation { entry_index: 1, chunks_in_entry: 3, ..legal() },
         Relocation { chunk_bytes: 0, ..legal() },
         Relocation { ss: 0, ..legal() },
+        // 零块必须零摘要：没有已落盘前缀却带着摘要，读入侧与写入侧都不接受
+        Relocation { prefix_digest: [1u8; 32], ..legal() },
     ];
     for case in cases {
         let mut record = record_for(scene(7));
@@ -571,7 +575,7 @@ fn the_settle_point_advances_one_entry_and_one_step() {
         reloc_entry(3, 10240, 4096, 2048, false),
     ];
     journal.bind_relocation(relocation(entries), None).expect("a two-entry plan binds");
-    journal.record_transfer_checkpoint(None, 3, 2048).expect("progress moves forward");
+    journal.record_transfer_checkpoint(None, 3, 2048, [0u8; 32]).expect("progress moves forward");
     journal.mark_entry_table_in_flight(0).expect("the current entry records its table step");
 
     let (reloc, steps, cursor) = journal
@@ -728,6 +732,7 @@ fn relocation_of(entries: Vec<RelocEntry>, entry_index: u32) -> Relocation {
         entries,
         entry_index,
         chunks_in_entry: 0,
+        prefix_digest: [0u8; 32],
         chunk_bytes: 1024 * 1024,
         kind: RelocKind::Shift,
         // `move` 记录没有扩容步，grow_part 为 0；带上扩容步时它不得同时出现在搬移条目里

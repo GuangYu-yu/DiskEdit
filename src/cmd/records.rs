@@ -36,9 +36,9 @@ pub(crate) const DETAILS_LIST: &str = r#"  List recovery records as JSON. Only d
   active record.
 
   There is no index yet: every row carries "registered": false, and records are
-  enumerated in memory. Sidecars that are not addressed by TARGET are not
-  searched — pass TARGET to see one, or use `records scan` with the directory
-  that holds the images."#;
+  enumerated in memory. Record directories that are not addressed by TARGET are
+  not searched — pass TARGET to see one, or use `records scan` with the
+  directory that holds the images or with the image state root."#;
 
 pub(crate) const DETAILS_VERIFY: &str = r#"  Locate the record whose id is ID (32 lowercase hex digits, as printed by
   `records list`) on TARGET, re-probe the identity of TARGET, and print the
@@ -53,8 +53,10 @@ pub(crate) const DETAILS_VERIFY: &str = r#"  Locate the record whose id is ID (3
 pub(crate) const DETAILS_SCAN: &str = r#"  Enumerate records under a container root and print them as JSON.
 
   ROOT is one of:
-    <state_root>/recovery   every direct child is an identity-hash record directory
-    <image directory>       every direct child named <name>.diskedit is a record directory
+    <state_root>/recovery      every direct child is an identity-hash record directory
+    <image_state_root>         its `images` child holds one record directory per image key
+    <image_state_root>/images  every direct child is an image record directory
+    <image directory>          every direct child named <name>.diskedit is a record directory
 
   A subdirectory of <state_root> other than `recovery` is refused: a record
   directory is not a container. Scanning is bounded to depth 3, 64 MiB per file,
@@ -71,7 +73,8 @@ const MAX_TOTAL_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_ELAPSED: Duration = Duration::from_secs(30);
 /// 布局本身生产的最深目录层数。ROOT 是第 0 层；块设备侧的布局
 /// `<state_root>/recovery/<identity-hash>/record` 到第 2 层是记录目录，镜像侧的
-/// `<image>.diskedit/record` 只到第 1 层。这个数跟着布局走，不单独维护一个魔数
+/// `<image_state_root>/images/<键摘要>/record` 与旧落点 `<image>.diskedit/record`
+/// 同样只到第 2 层。这个数跟着布局走，不单独维护一个魔数
 const LAYOUT_DEPTH: usize = 2;
 /// 目录层级上限：布局层数 + 1。比布局深一层的目录仍读得到（隔离区、残留的中间目录），
 /// 再深即报「结果不完整」，不静默跳过
@@ -396,8 +399,8 @@ fn host_record_dirs(root: &Path) -> Result<Vec<PathBuf>, String> {
     Ok(dirs)
 }
 
-/// sidecar 记录目录：`<root>/<name>.diskedit`
-fn sidecar_record_dirs(root: &Path) -> Result<Vec<PathBuf>, String> {
+/// 镜像的记录目录：每用户状态根下的 `<images>/<键摘要>`，以及旧落点 `<name>.diskedit`
+fn image_record_dirs(root: &Path) -> Result<Vec<PathBuf>, String> {
     let entries = std::fs::read_dir(root).map_err(|e| format!("cannot read {}: {e}", root.display()))?;
     let mut dirs = Vec::new();
     for entry in entries {
@@ -427,20 +430,35 @@ pub(crate) fn cmd_records_list(a: &RecordsListRequest) -> CmdResult {
             });
             let Some(record) = identity.record_path() else {
                 bail_fail(RunOutcome::refused(format!(
-                    "{} has no record directory — records are kept beside images and in the host \
-                     recovery repository for block devices",
+                    "{} has no record directory — image records live under the per-user state \
+                     directory (DISKEDIT_STATE_DIR, LOCALAPPDATA, XDG_STATE_HOME or HOME), block \
+                     devices in the host recovery repository",
                     path.display()
                 )));
             };
             let dir = record.parent().unwrap_or(Path::new("."));
             let backend = crate::dev::record_backend(dir).unwrap_or(RecordBackend::Sidecar);
             let current = current_scene(path);
-            if let Err(reason) = collect_dir(dir, backend, current.as_ref(), &mut budget, None, 1, &mut rows) {
-                bail_fail(RunOutcome::refused(format!("cannot list records: {reason}")));
+            let mut dirs = vec![dir.to_path_buf()];
+            // 旧落点：升级前留在镜像旁的 `<img>.diskedit/`。本构建不读它，但列出来并
+            // 说明它不被读取，比当作不存在更接近事实
+            if let Some(legacy) = identity.legacy_image_record_path()
+                && legacy.is_file()
+                && let Some(legacy_dir) = legacy.parent()
+                && legacy_dir != dir
+            {
+                dirs.push(legacy_dir.to_path_buf());
+            }
+            for dir in &dirs {
+                if let Err(reason) = collect_dir(dir, backend, current.as_ref(), &mut budget, None, 1, &mut rows) {
+                    bail_fail(RunOutcome::refused(format!("cannot list records: {reason}")));
+                }
             }
             Some(
                 "only TARGET's own record directory is listed; sidecars beside other targets are not \
-                 included — pass each target, or use `records scan` with the directory that holds the images",
+                 included — pass each target, or use `records scan` with the directory that holds the images. \
+                 An old-layout sidecar at TARGET's previous record location is reported on stderr with \
+                 the reason it is not read",
             )
         }
         None => {
@@ -465,8 +483,9 @@ pub(crate) fn cmd_records_list(a: &RecordsListRequest) -> CmdResult {
             )
         }
     };
-    rows.retain(|row| row.state().is_some_and(State::listed));
+    // 先提示旧布局再过滤：未知格式不进列表，但"它是旧布局、本构建不读"必须说出来
     warn_legacy_layout(&rows);
+    rows.retain(|row| row.state().is_some_and(State::listed));
     print_rows(&rows, note);
     CmdResult::Code(EXIT_OK)
 }
@@ -595,6 +614,14 @@ pub(crate) fn cmd_records_verify(a: &RecordsVerifyRequest) -> CmdResult {
     }
 }
 
+/// 扫描根是镜像记录容器时返回它的 `images` 目录：用户可以直接指向
+/// `<image_state_root>/images`，也可以指向状态根本身
+fn image_container(root: &Path, image_root: Option<&Path>) -> Option<PathBuf> {
+    let image_root = image_root?;
+    let images = image_root.join("images");
+    (root == images || root == image_root).then_some(images)
+}
+
 #[cfg(target_os = "linux")]
 pub(crate) fn cmd_records_scan(a: &RecordsScanRequest) -> CmdResult {
     let root = Path::new(&a.root);
@@ -612,6 +639,13 @@ pub(crate) fn cmd_records_scan(a: &RecordsScanRequest) -> CmdResult {
     let (dirs, backend) = if root == host_recovery {
         let dirs = host_record_dirs(root).unwrap_or_else(|e| bail_fail(RunOutcome::refused(e)));
         (dirs, RecordBackend::HostRepo)
+    } else if let Some(images) = image_container(root, crate::dev::image_state_root().as_deref()) {
+        let dirs = if images.is_dir() {
+            image_record_dirs(&images).unwrap_or_else(|e| bail_fail(RunOutcome::refused(e)))
+        } else {
+            Vec::new()
+        };
+        (dirs, RecordBackend::Sidecar)
     } else if root.starts_with(&state_root) {
         bail_fail(RunOutcome::refused(format!(
             "{} is inside the host recovery repository — its container root is {}; a record \
@@ -620,7 +654,7 @@ pub(crate) fn cmd_records_scan(a: &RecordsScanRequest) -> CmdResult {
             host_recovery.display()
         )));
     } else if root.is_dir() {
-        let dirs = sidecar_record_dirs(root).unwrap_or_else(|e| bail_fail(RunOutcome::refused(e)));
+        let dirs = image_record_dirs(root).unwrap_or_else(|e| bail_fail(RunOutcome::refused(e)));
         (dirs, RecordBackend::Sidecar)
     } else {
         bail_fail(RunOutcome::refused(format!("{} is not a directory", root.display())));

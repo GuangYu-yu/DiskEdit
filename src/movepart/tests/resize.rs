@@ -283,6 +283,7 @@ pub(crate) fn record_at_target_finishes_even_with_an_unfinished_relocation_stage
                 }],
                 entry_index: 0,
                 chunks_in_entry: 1,
+                prefix_digest: [0u8; 32],
                 chunk_bytes: chunk,
                 kind: crate::recovery::RelocKind::Shift,
                 grow_part: 1,
@@ -417,4 +418,79 @@ pub(crate) fn pending_fs_step_is_reported() {
     assert_eq!(after, sentinel, "纯扩容不得改写分区内已有的字节");
 
     drop(src);
+}
+
+/// 记录已落 `Committed`：作业步骤在提交那一刻已经做完，原命令重跑不得再执行一遍
+/// （`mkfs` 会重新格式化）。入口必须以拒绝收场、保留记录，并把出路指向 undo/abandon
+#[cfg(target_os = "linux")]
+#[test]
+pub(crate) fn a_committed_record_is_not_resumed_by_the_original_command() {
+    let ss = 512u64;
+    let old = (2048u64, 6143u64);
+    let new = (2048u64, 8191u64);
+    let (mut src, path) = plan_fixture(&[(1, [0x11; 16], old.0, old.1)]);
+    let record_path = attach_record(&mut src, crate::recovery::OpKind::Resize, old, (1, new.0, new.1));
+    {
+        let journal = src.record_journal_mut().expect("attach_record adopts a record journal");
+        // `bind_old_range` 已把记录落盘；提交只在落盘之后的记录上生效
+        journal.commit().expect("commit persists the committed state");
+    }
+    let _keep = src.release();
+
+    let req = crate::cli::ResizeRequest {
+        target: path.display().to_string(),
+        part: Some(crate::dev::PartSelector::Number(1)),
+        sector_size: None,
+        size: crate::cli::SizeSpec::Absolute((new.1 - new.0 + 1) * ss),
+        no_fs: false,
+        grow_lv: false,
+        lv: None,
+        allow_move: false,
+        chunk_mib: Some(1),
+    };
+    let o = crate::cmd::resize::cmd_resize(&req);
+    match &o {
+        RunOutcome::Refused(m) => {
+            assert!(m.contains("marked committed"), "the refusal must name the committed record: {m}")
+        }
+        other => panic!("expected Refused, got {other:?}"),
+    }
+    // 本次运行没有打开记录、也没有写目标：归责投影后仍是 3（记录只是被读到）
+    assert_eq!(o.settled().exit_code(), 3, "the refusal writes nothing, so it stays at 3");
+    assert!(record_path.exists(), "the refusal must leave the record for undo/abandon");
+}
+
+/// `mkfs` 的续跑入口与 resize 共用同一道闸：已提交的 mkfs 记录被重跑，会在这块
+/// 分区上再格式化一次。入口必须以拒绝收场并保留记录
+#[cfg(target_os = "linux")]
+#[test]
+pub(crate) fn a_committed_mkfs_record_is_not_reformatted() {
+    let range = (2048u64, 4095u64);
+    let (mut src, path) = plan_fixture(&[(1, [0x11; 16], range.0, range.1)]);
+    let record_path = attach_record(&mut src, crate::recovery::OpKind::Mkfs, range, (1, range.0, range.1));
+    {
+        let journal = src.record_journal_mut().expect("attach_record adopts a record journal");
+        // mkfs 不写搬移前区间，记录在屏障处才第一次落盘
+        journal.barrier().expect("the mkfs record persists at the barrier");
+        journal.commit().expect("commit persists the committed state");
+    }
+    let _keep = src.release();
+
+    let req = crate::cli::MkfsRequest {
+        target: path.display().to_string(),
+        part: Some(crate::dev::PartSelector::Number(1)),
+        sector_size: None,
+        fstype: "ext4".to_string(),
+        label: None,
+        yes: true,
+    };
+    let o = crate::cmd::fs::cmd_mkfs(&req);
+    match &o {
+        RunOutcome::Refused(m) => {
+            assert!(m.contains("marked committed"), "the refusal must name the committed record: {m}")
+        }
+        other => panic!("expected Refused, got {other:?}"),
+    }
+    assert_eq!(o.settled().exit_code(), 3, "the refusal writes nothing, so it stays at 3");
+    assert!(record_path.exists(), "the refusal must leave the record for undo/abandon");
 }

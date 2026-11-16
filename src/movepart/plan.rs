@@ -186,14 +186,72 @@ pub(crate) fn reconcile_swap(
 ///
 /// [`grow_target_at`]: crate::fsops::grow_target_at
 pub(crate) fn preflight_growth_swap(
+    src: &FileSource,
     part: u32,
     declared: bool,
+    first_lba: u64,
+    len_lba: u64,
+    ss: u64,
     growable: &Growable,
 ) -> Result<(), RunOutcome> {
     if let Growable::Target(t) = growable {
         reconcile_swap(part, Some(declared), Some(t.fstype == ContentKind::Swap))?;
+        if t.fstype == ContentKind::Swap {
+            ensure_swap_rebuild_identity(src, part, first_lba, len_lba, ss)?;
+        }
     }
     Ok(())
+}
+
+/// 重建 swap 之前必须读得出旧首部：卷标读不出来时 `mkswap` 只能省掉 `-L`，而卷标
+/// 是 fstab/resume 依赖的内容，丢掉不可逆。预检放在首次目标写入之前，使这种读失败
+/// 得到一个「确定未写盘」的 refused，而不是提交之后的一条待办。
+///
+/// `NotSwap` 放行：该区间本来就没有签名，随机 UUID 是既有语义
+pub(crate) fn ensure_swap_rebuild_identity(
+    src: &FileSource,
+    part: u32,
+    first_lba: u64,
+    len_lba: u64,
+    ss: u64,
+) -> Result<(), RunOutcome> {
+    refuse_unpreservable_swap_identity(part, read_swap_identity(src, first_lba, len_lba, ss))
+}
+
+/// 续跑：swap 条目不搬数据，旧首部可能已被上一次中断的搬移覆盖；重建按
+/// [`swap_identity_preferring`] 的「旧起点优先、新起点回退」取身份。这里按同一取法
+/// 在继续写盘之前预检：取到的身份读不出 UUID 或卷标时，再写下去只会在提交之后留下
+/// 一条保不住卷标的待办
+pub(crate) fn ensure_swap_resume_identity(
+    src: &FileSource,
+    part: u32,
+    old_first: u64,
+    new_first: u64,
+    len_lba: u64,
+    ss: u64,
+) -> Result<(), RunOutcome> {
+    refuse_unpreservable_swap_identity(
+        part,
+        swap_identity_preferring(src, old_first, new_first, len_lba, ss),
+    )
+}
+
+fn refuse_unpreservable_swap_identity(
+    part: u32,
+    ident: crate::fsops::SwapIdentity,
+) -> Result<(), RunOutcome> {
+    use crate::fsops::{SwapIdentity, SwapLabel};
+    match ident {
+        SwapIdentity::Unreadable(why) => Err(RunOutcome::refused(format!(
+            "partition #{part}: the swap signature could not be read ({why}) — rebuilding it would \
+             write a fresh signature over an area whose old identity is unknown; fix the read first"
+        ))),
+        SwapIdentity::Known { label: SwapLabel::Unreadable(why), .. } => Err(RunOutcome::refused(format!(
+            "partition #{part}: the swap volume label could not be read ({why}) — rebuilding the swap \
+             area would drop it; fix the read first"
+        ))),
+        _ => Ok(()),
+    }
 }
 
 /// 一条被搬移条目的当前几何：盘上起点、长度与它在表里的 swap 声明。四种拒绝在这里
@@ -533,6 +591,24 @@ impl LvmPostFacts {
             extent_bytes: self.extent_bytes,
         }
     }
+
+    /// 续跑：数值基线取记录，LV 路径只能取本次请求（记录里不保存路径）。带着扩 LV 的
+    /// 基线却没有任何选定路径时，收尾会退化成只跑 pvresize——扩容请求被静默丢弃，
+    /// 所以在这里拒绝
+    pub(crate) fn resumed(
+        recorded: Self,
+        selected: Option<&LvmSelection>,
+    ) -> Result<Self, RunOutcome> {
+        let lv_path = selected.map(|s| s.path.clone());
+        if recorded.lv_target > recorded.lv_size_before && lv_path.is_none() {
+            return Err(RunOutcome::refused(
+                "the recovery record carries an LVM grow baseline but this run selected no LV — \
+                 re-run with --grow-lv <lv> to finish it, or `diskedit abandon` to release the record \
+                 and leave the partition as it is",
+            ));
+        }
+        Ok(Self { lv_path, ..recorded })
+    }
 }
 
 /// 由"分区已提交、LVM 收尾未做"这一时点的三个量推出 LVM 基线。`defer` 表示本次作业
@@ -869,6 +945,7 @@ pub(crate) fn verify_relocation_resume(
         )));
     }
     let done = r.entry_index;
+    let mut current_at_dst = false;
     for (mi, e) in r.entries.iter().enumerate() {
         // 已完成的停在 first + delta（表项绝对赋值，重放幂等），未开始的仍在 first；
         // 正在搬的那一条可能已提交表项而 ckpt 尚未推进，故两个位置都接受
@@ -895,6 +972,9 @@ pub(crate) fn verify_relocation_resume(
             .ok_or_else(|| RunOutcome::no_mutation("relocation target range overflows"))?;
         let at_src = cur.starting_lba == e.src_first && cur.ending_lba == src_end;
         let at_dst = cur.starting_lba == target && cur.ending_lba == dst_end;
+        if mi as u32 == done {
+            current_at_dst = at_dst;
+        }
         let ok = match (mi as u32).cmp(&done) {
             std::cmp::Ordering::Less => at_dst,
             std::cmp::Ordering::Equal => at_src || at_dst,
@@ -1007,6 +1087,16 @@ pub(crate) fn verify_relocation_resume(
     if r.chunks_in_entry > chunk_bound {
         return Err(RunOutcome::refused(format!(
             "recovery record chunk progress {} exceeds the bound {} fixed in the plan — the record changed between reads; refusing",
+            r.chunks_in_entry, chunk_bound
+        )));
+    }
+    // 表项提交发生在这条全部块拷完之后：同一条记录既说"表项已在目的位"又说
+    // "块游标未满"是自相矛盾。照游标补拷会从已被目的写覆盖的源读数据，
+    // 自重叠搬移下这一步不可逆
+    if current_at_dst && r.chunks_in_entry != chunk_bound {
+        return Err(RunOutcome::refused(format!(
+            "recovery record says the entry is already at its destination but only {} of {} chunks are \
+             recorded as copied — the record contradicts itself; refusing",
             r.chunks_in_entry, chunk_bound
         )));
     }

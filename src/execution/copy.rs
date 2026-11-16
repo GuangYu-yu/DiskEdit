@@ -132,18 +132,23 @@ pub(crate) fn execute(
         let len = chunk_bytes.min(total - pos);
         let mut buf = vec![0u8; len as usize];
         src.read_at(src_off + pos, &mut buf).map_err(|e| {
-            RunOutcome::partial(
-                chunk_io_error(
-                    e,
-                    "reading source",
-                    (src_off + pos) / sector_size,
-                    len / sector_size,
-                    (pos / chunk_bytes + 1) as usize,
-                    total_n,
-                    COPY_HINT,
-                )
-                .to_string(),
+            let msg = chunk_io_error(
+                e,
+                "reading source",
+                (src_off + pos) / sector_size,
+                len / sector_size,
+                (pos / chunk_bytes + 1) as usize,
+                total_n,
+                COPY_HINT,
             )
+            .to_string();
+            // pos == 0 是屏障落地之前的那一次读：目标与记录都还没动过；
+            // 此后的读失败意味着前面的块已写入，盘可能已经不是原样
+            if pos == 0 {
+                RunOutcome::no_mutation(msg)
+            } else {
+                RunOutcome::partial(msg)
+            }
         })?;
         hasher.update(&buf);
         if !barrier_set {

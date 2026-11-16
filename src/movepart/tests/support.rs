@@ -96,6 +96,7 @@ pub(crate) fn reloc_for(plan: &Plan, chunk: u64, disk_size: u64) -> crate::recov
         entries: plan.moves.iter().map(crate::recovery::RelocEntry::from).collect(),
         entry_index: 0,
         chunks_in_entry: 0,
+        prefix_digest: [0u8; 32],
         chunk_bytes: chunk,
         kind: crate::recovery::RelocKind::from(plan.kind),
         grow_part: plan.grow_part,
