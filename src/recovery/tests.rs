@@ -208,8 +208,9 @@ fn relocation_belongs_to_move_resize_and_resize_part_records() {
     assert!(decode(&rejected.encode().unwrap()).is_err(), "Add must not carry a relocation");
 }
 
-/// 计划字段的非法组合在解码时拒绝：分区号 0 / 重复、零长度、grow_part 参与搬移、
-/// 游标越过条目数、全体提交仍带 chunk 进度、块大小或扇区为 0、负位移越过 LBA 0
+/// 计划字段的非法组合在写入前拒绝：分区号 0 / 重复、零长度、grow_part 参与搬移、
+/// 游标越过条目数、全体提交仍带 chunk 进度、块大小或扇区为 0、负位移越过 LBA 0。
+/// 读入侧与写入侧共用同一份判据，所以这些形状既写不出也读不回
 #[test]
 fn relocation_rejects_impossible_jobs() {
     let legal = || relocation(vec![reloc_entry(2, 6144, 4096, 2048, false)]);
@@ -229,18 +230,19 @@ fn relocation_rejects_impossible_jobs() {
         let mut record = record_for(scene(7));
         record.op = OpKind::Resize;
         record.relocation = Some(case.clone());
-        assert!(decode(&record.encode().unwrap()).is_err(), "must reject {case:?}");
+        let err = record.encode().expect_err(&format!("must reject {case:?}"));
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput, "must reject {case:?}");
     }
 }
 
 /// 空搬移计划写不进来，也读不出去：没有条目就没有可续跑的作业
 #[test]
-fn an_empty_relocation_plan_refuses_to_decode() {
+fn an_empty_relocation_plan_refuses_to_encode() {
     let mut record = record_for(scene(9));
     record.op = OpKind::Resize;
     record.relocation = Some(Relocation { entries: Vec::new(), ..relocation(Vec::new()) });
-    let bytes = record.encode().expect("the encoder writes the shape it is given");
-    assert!(decode(&bytes).is_err(), "an empty plan must not decode");
+    let err = record.encode().expect_err("an empty plan must not be written");
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
 }
 
 /// 载荷长度是形状的唯一声明：尾部多一个字节即整份拒绝
@@ -373,6 +375,42 @@ fn evidence_rows_stay_in_their_own_state() {
 
     // 路径式 inspect 没有当前目标可比，按结构仍判识别成功
     assert!(matches!(Evidence::classify_structure(&good), Evidence::Recognized(_)));
+}
+
+/// 现场判等只认稳定证据：带稳定设备 ID 的块设备在重新分配设备号后仍是同一目标；
+/// 同一目标换了 loop 映射仍不是同一现场（认领不得放行）
+#[test]
+fn a_recorded_device_id_scene_survives_renumbering_but_not_a_mapping_change() {
+    let recorded = SceneIdentity::from_target(TargetId::from_material(IdentityMaterial::block(
+        8,
+        16,
+        Some("device/serial=S1"),
+    )));
+    assert_eq!(recorded.proof(), SceneProof::DeviceId);
+    let renumbered = SceneIdentity::from_target(TargetId::from_material(IdentityMaterial::block(
+        8,
+        48,
+        Some("device/serial=S1"),
+    )));
+    assert!(recorded.matches(&renumbered));
+    assert_eq!(recorded, renumbered);
+
+    let remapped = SceneIdentity::with_details(
+        renumbered.id().clone(),
+        Some(Mapping::new(0, 4096)),
+        SceneProof::DeviceId,
+        None,
+        None,
+    );
+    assert!(!recorded.matches(&remapped));
+
+    // 没有稳定 ID 的块设备拿不到能跨现场的凭据：材料相等只说明"同一个临时设备号"，
+    // 认领入口按 `Unavailable` 拒绝，不靠这个比较放行
+    let no_id = |major, minor| {
+        SceneIdentity::from_target(TargetId::from_material(IdentityMaterial::block(major, minor, None)))
+    };
+    assert_eq!(no_id(8, 16).proof(), SceneProof::Unavailable);
+    assert_ne!(no_id(8, 16), no_id(8, 48));
 }
 
 /// 路径解析失败映射到各自的证据形态

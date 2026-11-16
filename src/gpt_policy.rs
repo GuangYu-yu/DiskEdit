@@ -940,7 +940,8 @@ pub fn delete_entry(src: &mut WriteSource, part: u32) -> Result<(), RunOutcome> 
         content: &content,
         protective_mbr: None,
     };
-    let snapshot = crate::assembly::take_table_snapshot(src, &probe)?;
+    let snapshot =
+        crate::assembly::take_table_snapshot_decided(src, &probe, &fresh.decided_regions())?;
     let protective_mbr = table::protective_mbr_content(src, ss)?;
     let content_view = crate::assembly::TableContent::Gpt {
         kind: table::TableWriteKind::Remove,
@@ -1169,6 +1170,7 @@ mod tests {
                 attribute_bits: 0,
                 partition_name: "".into(),
             }).collect(),
+            decided: None,
         }
     }
 

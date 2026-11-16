@@ -57,8 +57,9 @@ impl TargetSpec {
 #[derive(Clone, Debug)]
 pub(crate) enum IdentityMaterial {
     /// 块设备：整盘设备号 + 平台给出的稳定设备 ID（序列号 / WWN / DM uuid 等）。
-    /// 设备号由内核分配，重启或热插拔后可被复用，因此**只有** `device_id` 存在时
-    /// 才够格跨恢复现场
+    /// 设备号由内核分配，重启或热插拔后可被复用：双方都有 `device_id` 时只比它，
+    /// 设备号不参与；双方都没有稳定 ID 时才退回设备号（这样的材料不可跨恢复现场，
+    /// 由 [`crate::recovery::SceneProof::Unavailable`] 拦住）；一方有一方没有即不同目标
     Block { major: u32, minor: u32, device_id: Option<String> },
     /// 镜像：不透明文件 ID（Unix 的 (st_dev, st_ino)、Windows 的卷序列号 + 文件索引）。
     /// 复制或移动会得到新的文件 ID ⇒ 新目标；卷序列号是可被工具重写的画像字段，
@@ -72,7 +73,11 @@ impl PartialEq for IdentityMaterial {
             (
                 Self::Block { major: amaj, minor: amin, device_id: aid },
                 Self::Block { major: bmaj, minor: bmin, device_id: bid },
-            ) => (amaj, amin, aid) == (bmaj, bmin, bid),
+            ) => match (aid, bid) {
+                (Some(a), Some(b)) => a == b,
+                (None, None) => (amaj, amin) == (bmaj, bmin),
+                _ => false,
+            },
             (Self::Image { file_id: a, .. }, Self::Image { file_id: b, .. }) => a == b,
             _ => false,
         }
@@ -379,6 +384,30 @@ mod tests {
         );
         assert_ne!(
             IdentityMaterial::block(8, 16, Some("wwid=0x5000c500a1b2c3d4")),
+            IdentityMaterial::block(8, 16, None)
+        );
+    }
+
+    /// 稳定设备 ID 是块设备唯一的跨现场身份：设备号变了（重启/热插拔后重新分配）
+    /// 仍是同一目标；双方都没有稳定 ID 时才退回设备号比较；一方有一方没有即不同目标
+    #[test]
+    fn a_stable_device_id_outranks_the_kernel_device_numbers() {
+        let with_id = |maj, min, raw| IdentityMaterial::block(maj, min, Some(raw));
+        assert_eq!(with_id(8, 16, "serial=S1"), with_id(8, 32, "serial=S1"));
+        assert_ne!(with_id(8, 16, "serial=S1"), with_id(8, 16, "serial=S2"));
+
+        assert_eq!(
+            IdentityMaterial::block(8, 16, None),
+            IdentityMaterial::block(8, 16, None)
+        );
+        assert_ne!(
+            IdentityMaterial::block(8, 16, None),
+            IdentityMaterial::block(8, 32, None)
+        );
+
+        // 一侧有稳定 ID、一侧只有设备号：无法证明是同一目标
+        assert_ne!(
+            with_id(8, 16, "serial=S1"),
             IdentityMaterial::block(8, 16, None)
         );
     }

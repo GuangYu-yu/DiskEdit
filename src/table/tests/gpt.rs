@@ -611,3 +611,32 @@ pub(crate) fn commit_roundtrip_via_gptman() {
     ensure_protective_mbr(&mut src, ss).unwrap();
     ensure_protective_mbr(&mut src, ss).unwrap();
 }
+
+/// 决定读提供的区间原文就是写基线：解析之后盘面被外部改写，快照仍保留决定时读到
+/// 的那段字节（写前比对因此会拒绝，而不是把改写后的内容当原文登记），且决定读段
+/// 与本次写所比对的区间长度不一致时按内部错误拒绝、不得悄悄改成再读一次
+#[test]
+pub(crate) fn decided_regions_are_the_write_baseline() {
+    let mut src = src_from_gpt("decided-bytes", 512);
+    let g = load_gpt(&src).unwrap().expect("gpt should parse");
+    let decided_bytes = g.decided.clone().expect("parsing keeps the bytes it read");
+    let regions = vec![TableRegion { offset: 512, len: 512 }];
+    let decided = table_snapshot_with(&src, &regions, &decided_bytes.regions(512)).unwrap();
+    assert_eq!(decided.bytes[0], decided_bytes.header);
+
+    // 决定读之后，LBA1 被第三方改写
+    let mut changed = decided_bytes.header.clone();
+    changed[0] ^= 0x01;
+    src.write_fixture(512, &changed).unwrap();
+    let fresh = table_snapshot(&src, &regions).unwrap();
+    assert_ne!(
+        fresh.stamp, decided.stamp,
+        "the external change must show up as a different write-precondition stamp"
+    );
+
+    let wrong_len = vec![(TableRegion { offset: 512, len: 511 }, decided_bytes.header.clone())];
+    assert!(
+        matches!(table_snapshot_with(&src, &regions, &wrong_len), Err(crate::outcome::RunOutcome::Internal(_))),
+        "a decision-time region that does not match the compared region is an internal error, not a re-read"
+    );
+}

@@ -882,8 +882,11 @@ impl Record {
         }
     }
 
-    /// 整份编码：头 + 载荷一次生成，头 CRC 与载荷 CRC 都在这里写入
+    /// 整份编码：头 + 载荷一次生成，头 CRC 与载荷 CRC 都在这里写入。
+    /// 先按读出侧的同一份约束验一遍：写得出、读得回的记录才是同一个集合
     pub(crate) fn encode(&mut self) -> std::io::Result<Vec<u8>> {
+        self.validate()
+            .map_err(|m| std::io::Error::new(std::io::ErrorKind::InvalidInput, m))?;
         let payload = self.encode_payload()?;
         let payload_crc = crc32(&payload);
         let payload_len = u32::try_from(payload.len()).expect("a recovery payload fits in 32 bits");
@@ -898,6 +901,25 @@ impl Record {
 
         self.header = RecoveryHeader { payload_len, header_crc, payload_crc };
         Ok(out)
+    }
+
+    /// 与本模块读出侧同一份字段约束。编码前调用，失败即拒绝写出（`InvalidInput`）
+    fn validate(&self) -> Result<(), String> {
+        if let Some(relocation) = &self.relocation {
+            relocation_is_valid(relocation)?;
+        }
+        // 回放条目与 copy 源也由读出侧逐条校验：写不出一份读不回来的记录
+        for (i, entry) in self.restore.iter().enumerate() {
+            if !entry.is_well_formed() || entry.byte_offset().is_none() {
+                return Err(format!("restore entry {i} does not describe a readable range"));
+            }
+        }
+        if let Fact::Known(source) = &self.source
+            && !source.is_well_formed()
+        {
+            return Err("the copy source does not describe a readable range".to_string());
+        }
+        Ok(())
     }
 
     fn encode_payload(&self) -> std::io::Result<Vec<u8>> {
@@ -1270,10 +1292,6 @@ fn read_payload_prefix(c: &mut Cursor<'_>) -> Option<(Record, usize)> {
 /// 不做巨型预分配。区间算术全程 checked——这些值直接进入拷贝地址换算
 fn read_relocation(c: &mut Cursor<'_>) -> Option<Relocation> {
     let count = c.u32()? as usize;
-    // 写入口（`bind_relocation`）禁止空计划：没有条目就没有可续跑的作业
-    if count == 0 {
-        return None;
-    }
     let mut entries: Vec<RelocEntry> = Vec::new();
     for _ in 0..count {
         let partition = c.u32()?;
@@ -1285,16 +1303,6 @@ fn read_relocation(c: &mut Cursor<'_>) -> Option<Relocation> {
             1 => true,
             _ => return None,
         };
-        if partition == 0 || len == 0 {
-            return None;
-        }
-        // 源区间与目标区间都要能算出端点，位移可正可负
-        src_first.checked_add(len)?;
-        let dst_first = src_first.checked_add_signed(delta)?;
-        dst_first.checked_add(len)?;
-        if entries.iter().any(|e| e.partition == partition) {
-            return None;
-        }
         entries.push(RelocEntry { partition, src_first, len, delta, is_swap });
     }
     let entry_index = c.u32()?;
@@ -1304,18 +1312,7 @@ fn read_relocation(c: &mut Cursor<'_>) -> Option<Relocation> {
     let grow_part = c.u32()?;
     let disk_size = c.u64()?;
     let ss = c.u64()?;
-    if chunk_bytes == 0 || ss == 0 || entry_index as usize > entries.len() {
-        return None;
-    }
-    // 全部条目已提交时进度归零；被扩容的分区不参与搬移（同一分区被搬走即与扩容矛盾）
-    if entry_index as usize == entries.len() && chunks_in_entry != 0 {
-        return None;
-    }
-    // grow_part 为 0 表示本次作业没有扩容步（纯搬移）；有扩容步时它不得是被搬走的分区
-    if entries.iter().any(|e| e.partition == grow_part) {
-        return None;
-    }
-    Some(Relocation {
+    let relocation = Relocation {
         entries,
         entry_index,
         chunks_in_entry,
@@ -1324,7 +1321,60 @@ fn read_relocation(c: &mut Cursor<'_>) -> Option<Relocation> {
         grow_part,
         disk_size,
         ss,
-    })
+    };
+    // 与写入口共用同一份判据：读得出的记录与写得出的记录是同一个集合
+    relocation_is_valid(&relocation).ok()?;
+    Some(relocation)
+}
+
+/// 搬移段的字段约束。写入（[`Record::encode`]）与读出（[`read_relocation`]）共用这一份：
+/// 一份记录能不能存在，不由产生它的那次运行决定
+fn relocation_is_valid(r: &Relocation) -> Result<(), String> {
+    // 写入口（`bind_relocation`）禁止空计划：没有条目就没有可续跑的作业
+    if r.entries.is_empty() {
+        return Err("a relocation plan carries no entries".to_string());
+    }
+    for (i, e) in r.entries.iter().enumerate() {
+        if e.partition == 0 || e.len == 0 {
+            return Err(format!("relocation entry {i} has no partition or no length"));
+        }
+        // 源区间与目标区间都要能算出端点，位移可正可负
+        e.src_first
+            .checked_add(e.len)
+            .ok_or_else(|| format!("relocation entry {i}: the source range overflows"))?;
+        let dst_first = e
+            .src_first
+            .checked_add_signed(e.delta)
+            .ok_or_else(|| format!("relocation entry {i}: the destination start overflows"))?;
+        dst_first
+            .checked_add(e.len)
+            .ok_or_else(|| format!("relocation entry {i}: the destination range overflows"))?;
+        if r.entries[..i].iter().any(|o| o.partition == e.partition) {
+            return Err(format!("relocation entry {i} repeats partition {}", e.partition));
+        }
+    }
+    if r.chunk_bytes == 0 {
+        return Err("the relocation plan has a zero chunk size".to_string());
+    }
+    if r.ss == 0 {
+        return Err("the relocation plan has a zero sector size".to_string());
+    }
+    if r.entry_index as usize > r.entries.len() {
+        return Err(format!(
+            "the relocation plan points at entry {} of {}",
+            r.entry_index,
+            r.entries.len()
+        ));
+    }
+    // 全部条目已提交时进度归零
+    if r.entry_index as usize == r.entries.len() && r.chunks_in_entry != 0 {
+        return Err("the relocation plan is complete but still carries a chunk count".to_string());
+    }
+    // grow_part 为 0 表示本次作业没有扩容步（纯搬移）；有扩容步时它不得是被搬走的分区
+    if r.entries.iter().any(|e| e.partition == r.grow_part) {
+        return Err(format!("the grown partition {} is also relocated", r.grow_part));
+    }
+    Ok(())
 }
 
 /// 解析一条恢复区间；`None` = 该条不完整或自身 CRC 不符

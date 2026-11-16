@@ -12,6 +12,25 @@ fn after_irreversible(f: RunOutcome) -> RunOutcome {
     }
 }
 
+/// 分区层提交前的 LVM 收尾基线：与 GPT 路径同一判据、同一位置（首次目标写入之前）。
+/// 记录是"表已提交、LV 链未做"这一现场唯一的载体；没有它，续跑只能按本次请求重选，
+/// 不带 `--grow-lv` 时收尾链会静默退化成只跑 pvresize
+fn record_lvm_baseline(
+    src: &mut WriteSource,
+    sel: Option<&movepart::LvmSelection>,
+    old_bytes: u64,
+    new_bytes: u64,
+) -> Result<(), RunOutcome> {
+    let Some(sel) = sel else { return Ok(()) };
+    let Some(facts) = crate::movepart::lvm_post_for(true, Some(sel), old_bytes, new_bytes)? else {
+        return Ok(());
+    };
+    let Some(journal) = src.record_journal_mut() else { return Ok(()) };
+    journal
+        .record_lvm_post(facts.to_record())
+        .map_err(|e| RunOutcome::no_mutation(e.record_failure("the LVM finish baseline")))
+}
+
 /// 分区层提交前的区间：表写入之后盘上只剩新区间，续跑靠它判定"分区层是否已提交"。
 /// 与 GPT 计划/应用路径（movepart::shift 的 bind_old_range）同一语义，写表之前落盘；
 /// 已有值不因续跑时的盘上几何改写（见 RecordJournal::bind_old_range）
@@ -294,18 +313,24 @@ pub(crate) fn cmd_resize_msdos(a: &ResizeRequest, pref: PartSelector, src_ro: &F
         bail_fail(super::refuse_shrink());
     }
     check_pv_intent(part, Some(fstype), is_pv, shrinking, a.grow_lv, a.no_fs).unwrap_or_else(|f| bail_fail(f));
-    // PV 链的工具必须在写表之前齐备（与 GPT 分支同一处、同一判据）：pvresize/pvs 及
-    // grow-lv 的 lvs/vgs/lvextend 只在表提交之后启动，缺工具那时才发现就只剩 PARTIAL
+    // 要扩哪个 LV 必须在此定下来（与 GPT 分支同一处判据）：--lv 写错 / 无 LV /
+    // LV 不唯一都在写表之前发现，提交之后只剩"表已改、PV 链未做"的现场。
+    // 选择结果随行到写表之前，由它导出记录里的 LVM 收尾基线
+    #[cfg(target_os = "linux")]
+    let mut lv_sel: Option<movepart::LvmSelection> = None;
+    #[cfg(not(target_os = "linux"))]
+    let lv_sel: Option<movepart::LvmSelection> = None;
     #[cfg(target_os = "linux")]
     if is_pv {
+        // PV 链的工具必须在写表之前齐备（与 GPT 分支同一处、同一判据）：pvresize/pvs 及
+        // grow-lv 的 lvs/vgs/lvextend 只在表提交之后启动，缺工具那时才发现就只剩 PARTIAL
         preflight_lvm_tools(a.grow_lv, !is_block).unwrap_or_else(|e| bail_fail(RunOutcome::from(e)));
-        // 要扩哪个 LV 必须在此定下来（与 GPT 分支同一处判据）：--lv 写错 / 无 LV /
-        // LV 不唯一都在写表之前发现，提交之后只剩"表已改、PV 链未做"的现场
         if a.grow_lv {
             let start_bytes = lba_bytes(p.start_lba as u64, ss);
-            preflight_lv_selection(&src, part, is_block, start_bytes, a.lv.as_deref())
-                .map(|_| ())
-                .unwrap_or_else(|e| bail_fail(lvm_preflight_fail(e)));
+            lv_sel = Some(
+                preflight_lv_selection(&src, part, is_block, start_bytes, a.lv.as_deref())
+                    .unwrap_or_else(|e| bail_fail(lvm_preflight_fail(e))),
+            );
         }
     }
     // 记录里带着 LVM 收尾基线（上次请求过 --grow-lv），本次却没给：记录不存 LV 路径，
@@ -315,6 +340,16 @@ pub(crate) fn cmd_resize_msdos(a: &ResizeRequest, pref: PartSelector, src_ro: &F
         bail_fail(RunOutcome::refused(
             "an unfinished resize recorded an LV growth — re-run with --grow-lv (the record does not \
              store the LV path)"
+                .to_string(),
+        ));
+    }
+    // 盘上记录没有 LV 收尾基线，本次却给了 --grow-lv：记录是那次作业的完整意图，
+    // 在已提交作业上追加一步没有记录承载的动作，失败后没有载体能解释它从哪来。
+    // 首次运行（`resumed` 为假）的记录是本次新建的，不在此列
+    if resumed && a.grow_lv && src.record_journal().is_some_and(|j| j.lvm_post().is_none()) {
+        bail_fail(RunOutcome::refused(
+            "an unfinished resize record carries no LV growth step — adding one to a job already recorded \
+             leaves nothing behind to explain it if it fails; re-run without `--grow-lv`"
                 .to_string(),
         ));
     }
@@ -371,6 +406,8 @@ pub(crate) fn cmd_resize_msdos(a: &ResizeRequest, pref: PartSelector, src_ro: &F
             bail_fail(RunOutcome::refused(format!("new size {new_size_lba} sectors exceeds MBR 32-bit LBA limit")));
         }
         record_old_range(&mut src, p).unwrap_or_else(|f| bail_fail(f));
+        record_lvm_baseline(&mut src, lv_sel.as_ref(), cur_bytes, new_size_lba * ss)
+            .unwrap_or_else(|f| bail_fail(f));
         resize_mbr_entry(&mut src, part, new_size_lba as u32)
             .unwrap_or_else(|f| bail_fail(f));
         crate::movepart::fault_mbr_after_table_write();
@@ -411,6 +448,8 @@ pub(crate) fn cmd_resize_msdos(a: &ResizeRequest, pref: PartSelector, src_ro: &F
             // 写 LBA0 之前的所有读与校验都已完成（见 resize_mdos_entry）：这里的失败
             // 一律是"表确定未写"，不该套 after_irreversible 的"盘可能已改变"
             record_old_range(&mut src, p).unwrap_or_else(|f| bail_fail(f));
+            record_lvm_baseline(&mut src, lv_sel.as_ref(), cur_bytes, bytes)
+                .unwrap_or_else(|f| bail_fail(f));
             resize_mbr_entry(&mut src, part, new_size_lba as u32)
                 .unwrap_or_else(|f| bail_fail(f));
             // 分区层做完 → 与 grow-to-end 同一条收尾

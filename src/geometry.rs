@@ -68,6 +68,9 @@ pub struct ValidatedGeometry {
     entry_geometry: EntryArrayGeometry,
     /// 容器最后一个 LBA（本表 ss 口径）：几何自洽性的上界，也是 checkpoint 的 LBA 上界
     file_last_lba: u64,
+    /// 解析这份表时读定的表区原文（头扇区与它指向的数组）：写前快照中与之偏移相同的
+    /// 区间直接采用这份字节，决策依据与写基线不再来自两次读盘
+    decided: Option<crate::table::DecidedBytes>,
 }
 
 impl ValidatedGeometry {
@@ -165,7 +168,15 @@ impl ValidatedGeometry {
             dirty: Vec::new(),
             entry_geometry,
             file_last_lba,
+            decided: g.decided.clone(),
         })
+    }
+
+    /// 决定读提供的表区段（偏移 + 原文）：头所在整扇区与它指向的条目数组。
+    /// 装配写前快照时用它们填对应区间；其余区间按盘面读取——那些字节不参与任何决定，
+    /// 也就不存在"决定和写基线各读一次"的分叉
+    pub(crate) fn decided_regions(&self) -> Vec<(crate::table::TableRegion, Vec<u8>)> {
+        self.decided.as_ref().map(|d| d.regions(self.ss)).unwrap_or_default()
     }
 
     pub fn first_usable_lba(&self) -> u64 {

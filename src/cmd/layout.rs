@@ -387,14 +387,7 @@ pub(crate) fn cmd_add(a: &AddRequest) -> crate::outcome::RunOutcome {
                 let ss = src.sector_size;
                 let total = src.size / ss;
                 let len = partition_len(len_bytes, ss);
-                let used: Vec<(u64, u64)> = parts
-                    .iter()
-                    .filter(|p| p.size_lba != 0)
-                    .map(|p| {
-                        let s = u64::from(p.start_lba);
-                        (s, s + u64::from(p.size_lba) - 1)
-                    })
-                    .collect();
+                let used = mbr_occupied(&parts, total);
                 let unit = placement_unit(a.align, a.align_given, ss);
                 let (start, end) = match a.start {
                     Some(StartSelector::Lba(lba)) => {
