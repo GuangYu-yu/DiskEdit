@@ -155,6 +155,18 @@ record_cursor() {
     "$B" inspect "$1" 2>/dev/null | sed -n 's/^  progress: .*cursor=\([0-9]*\).*/\1/p' | head -1
 }
 
+# 删镜像连同它的恢复记录。记录落在 DISKEDIT_STATE_DIR/images/<键>/ 下，按文件身份
+# 分目录：`rm` 镜像不会带走记录，而同一路径上重建的文件可能复用 inode，命中上一轮
+# 留下的记录。落点仍从 inspect 取——镜像还在时先问，再连目录一起删
+rm_img() {
+    local rec
+    if [ -e "$1" ]; then
+        rec=$(record_file "$1")
+        [ -n "$rec" ] && rm -rf "$(dirname "$rec")"
+    fi
+    rm -rf "$1" "$1"$SIDECAR_GLOB
+}
+
 # 断言机制自测（meta）：验证 exp/assert_eq 的通过与失败两条路径。
 # 失败路径必须"返回非零且不打印 OK"——否则断言悄悄通过、测试全绿而实则没测。
 # 由 selftest.sh 调用；全部正确时返回 0（不触碰 rc 与任何文件）

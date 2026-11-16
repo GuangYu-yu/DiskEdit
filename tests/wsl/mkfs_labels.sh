@@ -23,12 +23,12 @@ for tool in blkid e2label xfs_admin btrfs fatlabel exfatlabel ntfslabel swaplabe
 done
 
 img T mkfs-label.img
-rm -rf "$T" "$T"$SIDECAR_GLOB
+rm_img "$T"
 
 # 1 GiB 载体 + 400 MiB 单分区。--align mib 让起止可预期（mke2fs 的预备扇区与
 # 各家的最小尺寸都远低于 400 MiB）
 setup() {
-    rm -rf "$T" "$T"$SIDECAR_GLOB
+    rm_img "$T"
     truncate -s 1G "$T" || { echo "  BAD  truncate 失败"; rc=1; return 1; }
     $B new "$T" --yes >/dev/null || { echo "  BAD  夹具: new 失败"; rc=1; return 1; }
     $B add "$T" 400M --align mib --name t --yes >/dev/null || { echo "  BAD  夹具: add 失败"; rc=1; return 1; }

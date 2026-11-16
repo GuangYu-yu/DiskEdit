@@ -11,10 +11,10 @@ require_bin
 img T t27.img
 img SF t27sf.img
 
-rm -rf "$T" "$T"$SIDECAR_GLOB "$SF" "$SF"$SIDECAR_GLOB 2>/dev/null
+rm_img "$T"; rm_img "$SF" 2>/dev/null
 
 mk() { # $1=fs  $2=size
-  rm -rf "$T" "$T"$SIDECAR_GLOB
+  rm_img "$T"
   truncate -s 1G "$T"
   $B new "$T" --yes >/dev/null
   $B add "$T" "$2" --align mib --name p1 --yes >/dev/null 2>&1
@@ -34,7 +34,7 @@ echo "broken fs -> exit=$E : $(echo "$OUT" | tail -1)"
 
 echo
 echo "########## B: superfloppy（无分区表，整盘 FS 扩容）##########"
-rm -rf "$SF" "$SF"$SIDECAR_GLOB
+rm_img "$SF"
 truncate -s 200M "$SF"
 mkfs.ext4 -q -F "$SF"
 truncate -s 300M "$SF"      # 设备变大，FS 仍 200M
@@ -77,7 +77,7 @@ lo_detach "$LD"
 
 echo
 echo "########## E: 边界（128 分区上限 / 紧贴 last_usable）##########"
-rm -rf "$T" "$T"$SIDECAR_GLOB
+rm_img "$T"
 truncate -s 1G "$T"
 $B new "$T" --yes >/dev/null
 ok=0
@@ -118,7 +118,7 @@ echo
 echo "########## F: mkfs 各 FS（add + mkfs）##########"
 for fs in f2fs vfat exfat ntfs xfs btrfs; do
   sz=200M; [ "$fs" = "vfat" ] && sz=600M; [ "$fs" = "xfs" ] && sz=400M
-  rm -rf "$T" "$T"$SIDECAR_GLOB
+  rm_img "$T"
   truncate -s 1G "$T"
   $B new "$T" --yes >/dev/null
   $B add "$T" "$sz" --align mib --name t --yes >/dev/null 2>&1
@@ -129,7 +129,7 @@ done
 
 echo
 echo "########## G: --sector-size 显式传参（镜像文件按 4096 布局）##########"
-rm -rf "$T" "$T"$SIDECAR_GLOB
+rm_img "$T"
 truncate -s 1G "$T"
 $B new "$T" --yes --sector-size 4096 >/dev/null 2>&1; echo "new exit=$?"
 $B info "$T" | grep -o '"sector_size":[0-9]*'

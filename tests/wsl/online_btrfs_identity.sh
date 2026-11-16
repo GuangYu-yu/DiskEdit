@@ -10,7 +10,7 @@ require_bin
 
 echo "########## A: 单设备 btrfs 在线 +16M / -16M ##########"
 img T t21.img
-rm -rf "$T" "$T"$SIDECAR_GLOB 2>/dev/null
+rm_img "$T" 2>/dev/null
 truncate -s 1G "$T"
 $B new "$T" --yes >/dev/null
 # 400M 而非 200M：btrfs 的 resize 下限是 256MiB，更小的文件系统无论扩缩都被内核
@@ -74,7 +74,7 @@ echo
 echo "########## C: 多设备 btrfs 在线拒绝 ##########"
 img T2 t21m.img
 img T3 t21m2.img
-track_file "$T2"; rm -rf "$T2" "$T2"$SIDECAR_GLOB "$T3" "$T3"$SIDECAR_GLOB 2>/dev/null
+track_file "$T2"; rm_img "$T2"; rm_img "$T3" 2>/dev/null
 truncate -s 1G "$T2"
 $B new "$T2" --yes >/dev/null
 $B add --yes "$T2" 533725184 --start 2048 --name btm >/dev/null

@@ -8,7 +8,7 @@ img T chain5.img
 MNT="$TEST_MNT"
 
 
-rm -rf "$T" "$T"$SIDECAR_GLOB 2>/dev/null
+rm_img "$T" 2>/dev/null
 mkdir -p "$MNT"
 
 # 表变更后内核分区视图必须刷新：每次重新 attach loop

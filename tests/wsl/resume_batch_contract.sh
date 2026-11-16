@@ -17,7 +17,7 @@ img T batch15.img
 
 run_case() {
   local fault="$1" expect="$2" forbid="$3" label="$4"
-  rm -rf "$T" "$T"$SIDECAR_GLOB
+  rm_img "$T"
   truncate -s 2G "$T"
   $BF new "$T" --yes >/dev/null
   $BF add "$T" 500M --align mib --name a --yes >/dev/null

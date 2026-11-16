@@ -738,8 +738,7 @@ fn resize_part_via_plan_unreconciled(
                     is_swap: false,
                 }],
                 entry_index: 0,
-                // 新绑的条目表还没有任何进度：块游标只能来自记录里已有的同一张表
-                //（下方 `recorded` 分支整体沿用），从全局游标播种会把未拷的块记成已拷
+                // 新绑的条目表还没有条目游标，块进度由下方按记录里的同一张表沿用
                 chunks_in_entry: 0,
                 prefix_digest: [0u8; 32],
                 chunk_bytes: p.chunk_len,
@@ -962,7 +961,7 @@ pub(crate) fn prepare_resize_part(
     let new_bytes = (new_end - new_start + 1).checked_mul(ss).ok_or_else(byte_overflow)?;
     // LVM 收尾事实：记录里的基线优先，新跑时由本次请求与新增字节导出
     let lvm_post = match recorded_lvm {
-        Some(f) => Some(movepart::LvmPostFacts::resumed(f, lvm.as_ref())?),
+        Some(f) => Some(movepart::LvmPostFacts::resumed(f, lvm.as_ref(), defer_lvm)?),
         None => movepart::lvm_post_for(defer_lvm, lvm.as_ref(), old_bytes, new_bytes)?,
     };
     // 表项 LBA 的单位是表自身的 ss。identify 只读目标内容，仍属事前判定
@@ -1556,11 +1555,24 @@ pub(crate) fn cmd_move(a: &MoveRequest) -> crate::outcome::RunOutcome {
             Ok(crate::recovery::Stage::Undecidable | crate::recovery::Stage::Relocated)
                 if swap_rebuild_pending => {}
             // 数据搬移或收尾没走完。盘上条目仍在搬移前区间时，续跑只能用原命令（本请求的
-            // 起点与原请求的起点不同），这里既不能收尾也不能替用户续跑。换区条目是例外：
-            // 重建在表提交之后，中断时条目已在目的位而游标还指着它（见 `swap_rebuild_pending`），
+            // 起点与原请求的起点不同），这里既不能收尾也不能替用户续跑；条目已在目的位
+            // 则说明记录与表互相矛盾（内层分支）。换区条目是例外：重建在表提交之后，
+            // 中断时条目已在目的位而游标还指着它（见 `swap_rebuild_pending`），
             // 剩下的重建继续走下面同一条装配与执行路径
             Ok(crate::recovery::Stage::Planned | crate::recovery::Stage::Relocating { .. }) => {
                 if !swap_rebuild_pending {
+                    // 表步必然发生在该条目全部块拷完之后：条目已在目的位而游标未满，
+                    // 只可能来自被改写的记录。照游标补拷会从已被目的写覆盖的源读数据，
+                    // 自重叠搬移下不可逆，故既不能收尾也不能续跑
+                    if at_recorded_destination {
+                        bail_fail(RunOutcome::refused(format!(
+                            "partition {part} already sits at the recorded destination while the record's \
+                             cursor still says the move is unfinished — the record contradicts the table, \
+                             so neither finishing nor resuming it is safe; inspect it with `diskedit inspect {}` \
+                             and release it with `diskedit abandon`",
+                            a.target
+                        )));
+                    }
                     bail_fail(RunOutcome::refused(format!(
                         "the recorded move for partition {part} is unfinished — resume it by re-running \
                          the original `diskedit move` with its original --start"
@@ -1652,6 +1664,9 @@ pub(crate) fn cmd_move(a: &MoveRequest) -> crate::outcome::RunOutcome {
             )),
         };
     }
+    // 一致性判据看盘上几何：`assemble` 会把计划写进 `g`，用改过的表会把"计划中的目的位"
+    // 误当成盘上事实，续跑就会被判成"表已提交而游标未满"
+    let on_disk_g = g.clone();
     let plan = crate::assembly::assemble_relocation_plan(
         &src,
         &mut g,
@@ -1687,31 +1702,25 @@ pub(crate) fn cmd_move(a: &MoveRequest) -> crate::outcome::RunOutcome {
         disk_size: src.size,
         ss: plan.plan().sector_size().get(),
     };
-    if let Some(journal) = src.record_journal() {
-        match journal.relocation() {
-            // 续跑沿用记录里的双游标：计划相关字段必须与本次装配一致
-            Some(recorded) => {
-                if recorded.entries != reloc.entries
-                    || recorded.chunk_bytes != reloc.chunk_bytes
-                    || recorded.kind != reloc.kind
-                    || recorded.grow_part != reloc.grow_part
-                    || recorded.disk_size != reloc.disk_size
-                    || recorded.ss != reloc.ss
-                {
-                    bail_fail(RunOutcome::refused(
-                        "the recovery record's relocation plan does not match this request"
-                            .to_string(),
-                    ));
-                }
-                // 记录与盘面的位置/目的区/块数判据与 `resize --allow-move` 共用一处
-                crate::movepart::verify_relocation_resume(recorded, &g, src.size, chunk)
-                    .unwrap_or_else(|f| bail_fail(f));
-                reloc = recorded.clone();
-            }
-            // 只写了全局游标的记录：单条目作业里它就是本条目已完成的块数
-            None if resumed => reloc.chunks_in_entry = journal.progress().transfer_cursor,
-            None => {}
+    // 记录里没有条目表的搬移作业无从续跑：块游标必须由条目游标解释，认不出这份记录
+    // 便不能按它跳过任何拷贝，于是只按本次装配的计划从零开始
+    if let Some(recorded) = src.record_journal().and_then(|j| j.relocation()) {
+        // 续跑沿用记录里的双游标：计划相关字段必须与本次装配一致
+        if recorded.entries != reloc.entries
+            || recorded.chunk_bytes != reloc.chunk_bytes
+            || recorded.kind != reloc.kind
+            || recorded.grow_part != reloc.grow_part
+            || recorded.disk_size != reloc.disk_size
+            || recorded.ss != reloc.ss
+        {
+            bail_fail(RunOutcome::refused(
+                "the recovery record's relocation plan does not match this request".to_string(),
+            ));
         }
+        // 记录与盘面的位置/目的区/块数判据与 `resize --allow-move` 共用一处
+        crate::movepart::verify_relocation_resume(recorded, &on_disk_g, src.size, chunk)
+            .unwrap_or_else(|f| bail_fail(f));
+        reloc = recorded.clone();
     }
     if let Some(journal) = src.record_journal_mut() {
         journal.bind_old_range((old_start, old_end)).unwrap_or_else(|e| {

@@ -21,7 +21,7 @@ cleanup_hook() {
 
 img T t32.img
 
-rm -rf "$T" "$T"$SIDECAR_GLOB 2>/dev/null
+rm_img "$T" 2>/dev/null
 truncate -s 1G "$T"
 $B new "$T" --yes >/dev/null
 # LVM 分区类型 GUID

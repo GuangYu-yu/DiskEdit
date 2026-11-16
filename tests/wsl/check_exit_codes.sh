@@ -26,7 +26,7 @@ SUPER_OFF=$((1024 + 24))
 cleanup_hook() { rm -rf "$FAKE_TOOL_DIR"; }
 
 stage() {
-    rm -rf "$T" "$T"$SIDECAR_GLOB
+    rm_img "$T"
     truncate -s 64M "$T" || return 1
     "$B" new "$T" --yes >/dev/null || return 1
     "$B" add "$T" 48M --align mib --yes >/dev/null || return 1

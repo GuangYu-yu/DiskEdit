@@ -13,7 +13,7 @@ fs_bytes() { # 设备：Block count × Block size
 }
 lba1() { $B info "$T" 2>/dev/null | grep -o '"last_lba":[0-9]*' | head -1; }
 
-rm -rf "$T" "$T"$SIDECAR_GLOB
+rm_img "$T"
 truncate -s 64M "$T"
 $B new "$T" --yes >/dev/null 2>&1; exp $? 0 "new（64MiB GPT）"
 $B add "$T" 16M --align mib --name p1 --yes >/dev/null 2>&1; exp $? 0 "add 16MiB p1"

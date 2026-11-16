@@ -6,7 +6,7 @@ require_bin
 img T baseline14.img
 
 
-rm -rf "$T" "$T"$SIDECAR_GLOB
+rm_img "$T"
 truncate -s 1G "$T"
 $B new "$T" --yes
 $B add "$T" 500M --align mib --name a --yes

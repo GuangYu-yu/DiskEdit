@@ -767,14 +767,9 @@ pub(crate) fn move_resume_refuses_a_committed_entry_with_an_unfinished_cursor() 
         align_given: false,
         chunk_mib: Some(1),
     };
-    let o = crate::cmd::layout::cmd_move(&req);
-    assert_eq!(o.exit_code(), 3, "a record that contradicts itself must be refused: {o:?}");
-    match &o {
-        crate::outcome::RunOutcome::Refused(m) => {
-            assert!(m.contains("contradicts itself"), "the refusal must name the contradiction: {m}")
-        }
-        other => panic!("expected Refused, got {other:?}"),
-    }
+    let (code, why) = crate::movepart::tests::support::refusal_of(|| crate::cmd::layout::cmd_move(&req));
+    assert_eq!(code, 3, "a record that contradicts itself must be refused");
+    assert!(why.contains("contradicts the table"), "the refusal must name the contradiction: {why}");
     assert!(record_path.exists(), "a refusal must leave the record in place");
 }
 
@@ -823,14 +818,9 @@ pub(crate) fn move_resume_refuses_a_prefix_that_does_not_match_the_record() {
         align_given: false,
         chunk_mib: Some(1),
     };
-    let o = crate::cmd::layout::cmd_move(&req);
-    assert_eq!(o.exit_code(), 3, "a prefix that contradicts the record must be refused: {o:?}");
-    match &o {
-        crate::outcome::RunOutcome::Refused(m) => {
-            assert!(m.contains("copied prefix"), "the refusal must name the prefix check: {m}")
-        }
-        other => panic!("expected Refused, got {other:?}"),
-    }
+    let (code, why) = crate::movepart::tests::support::refusal_of(|| crate::cmd::layout::cmd_move(&req));
+    assert_eq!(code, 3, "a prefix that contradicts the record must be refused");
+    assert!(why.contains("does not match the recovery record"), "the refusal must name the prefix: {why}");
     assert!(record_path.exists(), "a refusal must leave the record in place");
 }
 

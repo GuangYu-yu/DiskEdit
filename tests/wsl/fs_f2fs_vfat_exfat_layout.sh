@@ -6,10 +6,10 @@ require_bin
 
 img T t25.img
 
-rm -rf "$T" "$T"$SIDECAR_GLOB 2>/dev/null
+rm_img "$T" 2>/dev/null
 
 mk1() { # $1 = fs, $2 = size (默认 400M；FAT32 需 ≥512MB)
-  rm -rf "$T" "$T"$SIDECAR_GLOB
+  rm_img "$T"
   truncate -s 1G "$T"
   $B new "$T" --yes >/dev/null
   $B add "$T" "${2:-400M}" --align mib --name p1 --yes >/dev/null 2>&1
@@ -75,7 +75,7 @@ lo_detach "$LD"
 
 echo
 echo "########## D: 4+ 分区复杂布局（ESP + MSR + Linux + recovery）搬移 ##########"
-rm -rf "$T" "$T"$SIDECAR_GLOB
+rm_img "$T"
 truncate -s 2G "$T"
 $B new "$T" --yes >/dev/null
 # ESP 200M / MSR 16M / Linux 300M / recovery(NTFS) 500M
@@ -124,7 +124,7 @@ mksquashfs "$SQSRC" "$SQIMG" -noappend >/dev/null 2>&1; echo "mksquashfs exit=$?
 BU=$(od -An -tu8 -j 40 -N8 "$SQIMG" | tr -d ' ')
 OFF=$(( (BU + 65535) / 65536 * 65536 ))
 echo "squashfs bytes_used=$BU overlay_off=$OFF"
-rm -rf "$T" "$T"$SIDECAR_GLOB
+rm_img "$T"
 truncate -s 512M "$T"
 $B new "$T" --yes >/dev/null
 $B add --yes "$T" 267386880 --start 2048 --name rootfs >/dev/null
@@ -163,7 +163,7 @@ echo "########## G: 首启现场（尾部 RW 层尚未格式化）扩容 #######
 # 挂载的 fstools 建满）与类型识别不出的区域（check_grow_step 视后者为"没有信息"，写表前
 # 拒绝，须 --no-fs 才只改表）。分区层命令对首启现场算部分完成：分区扩到末尾（5），
 # 待办写明该层由目标系统启动时初始化
-rm -rf "$T" "$T"$SIDECAR_GLOB
+rm_img "$T"
 truncate -s 512M "$T"
 $B new "$T" --yes >/dev/null
 $B add --yes "$T" 267386880 --start 2048 --name rootfs >/dev/null
@@ -190,7 +190,7 @@ if [ "$ER" = "0" ]; then
 else
   echo "G2 WRONG EXIT ($ER): $(echo "$OUT" | tail -1)"; rc=1
 fi
-rm -rf "$T" "$T"$SIDECAR_GLOB
+rm_img "$T"
 truncate -s 512M "$T"
 $B new "$T" --yes >/dev/null
 $B add --yes "$T" 267386880 --start 2048 --name empty >/dev/null
@@ -221,7 +221,7 @@ BLKSZ=$(od -An -tu1 -j 1036 -N1 "$ERIMG" | tr -d ' ')
 NBLK=$(od -An -tu4 -j 1060 -N4 "$ERIMG" | tr -d ' ')
 OFF=$(( ((NBLK << BLKSZ) + 65535) / 65536 * 65536 ))
 echo "erofs blkszbits=$BLKSZ blocks=$NBLK overlay_off=$OFF"
-rm -rf "$T" "$T"$SIDECAR_GLOB
+rm_img "$T"
 truncate -s 512M "$T"
 $B new "$T" --yes >/dev/null
 $B add --yes "$T" 267386880 --start 2048 --name rootfs >/dev/null

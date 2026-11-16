@@ -6,7 +6,7 @@ require_bin
 img T usage21.img
 
 mk() {
-  rm -rf "$T" "$T"$SIDECAR_GLOB; truncate -s 1G "$T"
+  rm_img "$T"; truncate -s 1G "$T"
   $B new "$T" --yes >/dev/null
   $B add "$T" 100M --align mib --name p1 --yes >/dev/null
   $B mkfs "$T":1 ext4 --yes >/dev/null

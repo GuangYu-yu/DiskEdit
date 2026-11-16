@@ -316,13 +316,16 @@ fn image_file_key(canonical: &Path) -> String {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
+        // audit-allow: S2-23 读不出元数据时退回路径键：键只定位落点，记录归属仍按载荷身份核对
         if let Ok(meta) = std::fs::metadata(canonical) {
             return format!("inode:{}:{}", meta.dev(), meta.ino());
         }
     }
     #[cfg(windows)]
     {
+        // audit-allow: S2-24 打不开镜像时退回路径键，同上
         if let Ok(file) = std::fs::File::open(canonical)
+            // audit-allow: S2-25 取不到卷序列号与文件索引时退回路径键，同上
             && let Ok((volume, index)) = win::identity(&file)
         {
             return format!("file:{volume}:{index}");

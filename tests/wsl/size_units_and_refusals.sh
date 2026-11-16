@@ -5,7 +5,7 @@ require_bin
 
 img T units11.img
 
-rm -rf "$T" "$T"$SIDECAR_GLOB
+rm_img "$T"
 truncate -s 64M "$T"
 $B new "$T" --yes
 echo "== add 32M + mkfs ext4 (units) =="

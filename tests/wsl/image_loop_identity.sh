@@ -394,15 +394,17 @@ echo "=== G3: 打不开 loop 节点不等于占用"
 if ! command -v setpriv >/dev/null 2>&1; then
     echo "SKIP: setpriv 缺失"
 else
-    # 记录目录建在镜像旁边：WSL_ROOT 对降权用户不可写，暂存目录单独放开。
-    # 镜像也由降权用户建：sidecar 目录的属主按镜像的 uid/gid 对账，两个身份
-    # 不一致时检查会以目录属主不符拒绝，轮不到占用判定
+    # 记录落在 DISKEDIT_STATE_DIR/images 下按文件身份分目录：降权用户必须有一个
+    # 自己能建的根，否则准入在占用判定之前就因目录不可写而拒绝。镜像也由降权
+    # 用户建——记录目录的属主按镜像的 uid/gid 对账，两个身份不一致时检查会以
+    # 目录属主不符拒绝，轮不到占用判定
     mkdir -p "$WSL_ROOT/nobody-pub"
     chmod 777 "$WSL_ROOT/nobody-pub"
     T10=$(setpriv --reuid=65534 --regid=65534 --clear-groups mktemp "$WSL_ROOT/nobody-pub/loopid-nobody-XXXXXX.img")
     track_file "$T10"
     setpriv --reuid=65534 --regid=65534 --clear-groups truncate -s 8M "$T10"
-    out=$(setpriv --reuid=65534 --regid=65534 --clear-groups "$B" new "$T10" --yes 2>&1)
+    out=$(setpriv --reuid=65534 --regid=65534 --clear-groups \
+        env DISKEDIT_STATE_DIR="$WSL_ROOT/nobody-pub/state" "$B" new "$T10" --yes 2>&1)
     exp "$?" 0 "无 disk 组的用户不被 loop 节点权限误伤"
 fi
 

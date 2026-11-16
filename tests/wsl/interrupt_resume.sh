@@ -8,7 +8,7 @@ img T2 resume13b.img
 
 run_shift_break() {
   local n=$1 fault=${2:-chunk} expect=${3:-$1} md_before md_after OUT LD R
-  rm -rf "$T2" "$T2"$SIDECAR_GLOB
+  rm_img "$T2"
   truncate -s 1G "$T2"
   $BF new "$T2" --yes >/dev/null || { echo "new failed"; rc=1; return; }
   $BF add "$T2" 500M --align mib --name a --yes >/dev/null || { echo "add a failed"; rc=1; return; }

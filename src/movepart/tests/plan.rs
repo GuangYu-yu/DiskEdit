@@ -3,9 +3,9 @@ use super::*;
 use super::support::*;
 use crate::planner::chunk::{move_chunk_layout, relocation_overlaps};
 
-/// 续跑时记录里的基线带着扩 LV 的意图却没有任何选定路径：收尾会退化成只跑
-/// pvresize，扩容请求被静默丢弃，必须在计划期拒绝。选定路径来自本次请求，
-/// 数值基线仍取记录
+/// 本次入口接着跑 LVM 链（`defer`）时，记录里的基线带着扩 LV 的意图却没有任何选定
+/// 路径：收尾会退化成只跑 pvresize，扩容请求被静默丢弃，必须在计划期拒绝。选定路径
+/// 来自本次请求，数值基线仍取记录。不跑链的入口不拒绝：未做的链由调用方按 Pending 报出
 #[test]
 fn lvm_resume_refuses_a_grow_baseline_without_a_selected_lv() {
     let grow = crate::movepart::LvmPostFacts {
@@ -14,7 +14,7 @@ fn lvm_resume_refuses_a_grow_baseline_without_a_selected_lv() {
         lv_target: 4096,
         extent_bytes: 1024,
     };
-    let e = crate::movepart::LvmPostFacts::resumed(grow.clone(), None).unwrap_err();
+    let e = crate::movepart::LvmPostFacts::resumed(grow.clone(), None, true).unwrap_err();
     assert!(matches!(&e, RunOutcome::Refused(m) if m.contains("--grow-lv")), "{e:?}");
 
     let selected = crate::movepart::LvmSelection {
@@ -22,9 +22,13 @@ fn lvm_resume_refuses_a_grow_baseline_without_a_selected_lv() {
         extent_bytes: 1024,
         size: 1024,
     };
-    let ok = crate::movepart::LvmPostFacts::resumed(grow, Some(&selected)).unwrap();
+    let ok = crate::movepart::LvmPostFacts::resumed(grow.clone(), Some(&selected), true).unwrap();
     assert_eq!(ok.lv_path.as_deref(), Some("/dev/vg/lv"));
     assert_eq!((ok.lv_size_before, ok.lv_target), (1024, 4096));
+
+    // 收尾本次不跑（defer 为假）：未做的链由调用方按 Pending 报出，不按"静默丢弃"拒绝
+    let deferred = crate::movepart::LvmPostFacts::resumed(grow, None, false).unwrap();
+    assert!(deferred.lv_path.is_none());
 
     // 只有 pvresize 的基线（目标不高于基线）不需要选定 LV
     let pv_only = crate::movepart::LvmPostFacts {
@@ -33,7 +37,7 @@ fn lvm_resume_refuses_a_grow_baseline_without_a_selected_lv() {
         lv_target: 0,
         extent_bytes: 0,
     };
-    assert!(crate::movepart::LvmPostFacts::resumed(pv_only, None).unwrap().lv_path.is_none());
+    assert!(crate::movepart::LvmPostFacts::resumed(pv_only, None, true).unwrap().lv_path.is_none());
 }
 
 /// `shift = None`（缩容请求）既不现算也不执行任何搬移计划：无记录必须拒绝；

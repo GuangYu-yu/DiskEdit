@@ -6,7 +6,7 @@ require_fault_bin
 img T t18a.img
 
 mk() {
-  rm -rf "$T" "$T"$SIDECAR_GLOB
+  rm_img "$T"
   truncate -s 1G "$T"
   $BF new "$T" --yes >/dev/null
   $BF add "$T" 100M --align mib --name p1 --yes >/dev/null
@@ -162,7 +162,7 @@ echo "===== 9: Δ<0 自重叠（64M 分区左移 16M，--chunk 64 收敛到 16M�
 # 搬完按区间 sha256 与挂载读回双重校验；中断点取第 2 块，记录游标与续跑点都可观测
 ranged_sha() { dd if="$1" bs=512 skip="$2" count="$3" status=none | sha256sum | cut -d' ' -f1; }
 img T t18d.img
-rm -rf "$T" "$T"$SIDECAR_GLOB
+rm_img "$T"
 truncate -s 256M "$T"
 $BF new "$T" --yes >/dev/null
 $BF add "$T" 64M --start 67584 --align none --name left --yes >/dev/null
@@ -201,7 +201,7 @@ echo "===== 10: 块收敛（--chunk 64 > |Δ|16M ⇒ 单块 16M，共 4 块）==
 # 共 4 块：第 4 块的注入必须命中、第 5 块必须不存在。若命令行给的 64M 被直接采用
 # 就只有 1 块，两处断言都会失败
 mk_left() {
-  rm -rf "$1" "$1"$SIDECAR_GLOB
+  rm_img "$1"
   truncate -s 256M "$1"
   $BF new "$1" --yes >/dev/null
   $BF add "$1" 64M --start 67584 --align none --name left --yes >/dev/null
@@ -228,7 +228,7 @@ echo "===== 11: 换区条目的早退收尾（after-swap-commit 后同请求重�
 # 盘上条目已在目的位而记录游标仍指着它。重跑必须完成重建并把表步写回记录——只写回
 # 表步会清在飞位、放过清理许可、删掉记录，重建就再也没人做了。
 img T t18f.img
-rm -rf "$T" "$T"$SIDECAR_GLOB
+rm_img "$T"
 truncate -s 1G "$T"
 $BF new "$T" --yes >/dev/null
 $BF add "$T" 100M --align mib --name p1 --yes >/dev/null

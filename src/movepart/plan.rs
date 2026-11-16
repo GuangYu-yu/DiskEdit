@@ -592,15 +592,17 @@ impl LvmPostFacts {
         }
     }
 
-    /// 续跑：数值基线取记录，LV 路径只能取本次请求（记录里不保存路径）。带着扩 LV 的
-    /// 基线却没有任何选定路径时，收尾会退化成只跑 pvresize——扩容请求被静默丢弃，
-    /// 所以在这里拒绝
+    /// 续跑：数值基线取记录，LV 路径只能取本次请求（记录里不保存路径）。`defer` 为真表示
+    /// 本次入口接着跑 LVM 链：带着扩 LV 的基线却没有任何选定路径时，收尾会退化成只跑
+    /// pvresize——扩容请求被静默丢弃，所以在这里拒绝。不跑链的入口（`resize-part` / `move`）
+    /// 不拒绝：未做的链由调用方按 Pending 报出，记录留给后续的 `resize`
     pub(crate) fn resumed(
         recorded: Self,
         selected: Option<&LvmSelection>,
+        defer: bool,
     ) -> Result<Self, RunOutcome> {
         let lv_path = selected.map(|s| s.path.clone());
-        if recorded.lv_target > recorded.lv_size_before && lv_path.is_none() {
+        if defer && recorded.lv_target > recorded.lv_size_before && lv_path.is_none() {
             return Err(RunOutcome::refused(
                 "the recovery record carries an LVM grow baseline but this run selected no LV — \
                  re-run with --grow-lv <lv> to finish it, or `diskedit abandon` to release the record \
@@ -912,6 +914,9 @@ fn grow_end_of(
 /// 只读记录与几何，不按当前盘面重算 plan：盘上几何已被部分改写时，现算的 delta
 /// 与记录不一致，续跑必须以记录为准。`grow_part == 0` 表示本记录不属于扩容作业
 /// （`move`），扩容相关的两条守卫随之不适用。
+///
+/// `g` 必须是本次装配计划之前的盘上几何：装配会改写计划里的分区表与几何，拿装配后
+/// 的对象来比等于拿本次请求的预期去比记录，续跑校验就失去意义。
 ///
 /// 本函数是 `move` 与 `resize --allow-move` 的共享层，不依赖 `cmd::*`。
 pub(crate) fn verify_relocation_resume(

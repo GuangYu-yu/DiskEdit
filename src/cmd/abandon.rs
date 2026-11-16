@@ -387,7 +387,7 @@ mod tests {
     /// 落点里放一条字节序列，只要求"存在"，不要求它能解码——abandon 面对的正是这类现场
     fn plant_unreadable(case: &Case, device_id: &str) -> PathBuf {
         let record = case.record_of(device_id);
-        std::fs::create_dir_all(record.parent().unwrap()).unwrap();
+        crate::testdir::private_record_dir(record.parent().unwrap());
         std::fs::write(&record, b"not a recovery record").unwrap();
         record
     }
@@ -395,7 +395,7 @@ mod tests {
     /// 落点里放一条**能解码**的记录：它是否被释放因此成为可断言的事实
     fn plant(case: &Case, device_id: &str, scene: crate::recovery::SceneIdentity) -> PathBuf {
         let record = case.record_of(device_id);
-        std::fs::create_dir_all(record.parent().unwrap()).unwrap();
+        crate::testdir::private_record_dir(record.parent().unwrap());
         let mut journal = crate::recovery::RecordJournal::create_image(
             &record,
             scene,
@@ -423,8 +423,8 @@ mod tests {
             .collect()
     }
 
-    /// 拒绝走 `bail_fail` → `panic_any(ExitRequest)`；测试按 `main` 的方式把载荷解回来，
-    /// 真正的 panic 继续上抛
+    /// 拒绝走 `bail_fail` → `panic_any(ExitRequest::Report)`；测试按 `main` 的方式把
+    /// 载荷解回退出码，真正的 panic 继续上抛
     fn run(case: &Case, device_id: &str, src: &FileSource) -> u8 {
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             crate::dev::with_sysfs_root(&case.sys, || {
@@ -434,7 +434,8 @@ mod tests {
         match outcome {
             Ok(code) => code,
             Err(payload) => match payload.downcast_ref::<crate::support::ExitRequest>() {
-                Some(crate::support::ExitRequest(code)) => *code,
+                Some(crate::support::ExitRequest::Silent(code)) => *code,
+                Some(crate::support::ExitRequest::Report(report)) => report.exit_code(),
                 None => std::panic::resume_unwind(payload),
             },
         }

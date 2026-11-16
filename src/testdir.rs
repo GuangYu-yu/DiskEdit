@@ -103,6 +103,21 @@ pub(crate) fn test_dir(name: &str) -> TestDir {
     TestDir::new(name)
 }
 
+/// 夹具自己建记录目录时按生产侧复核的形状建：目录、中间那一层（`images` /
+/// `recovery`）与状态根都设为 0700。生产用 `create_dir_all` 建的上级是 0755，
+/// 照抄会在写命令准入处被拒。调用方都在 Linux 下的测试代码里
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub(crate) fn private_record_dir(dir: &Path) {
+    std::fs::create_dir_all(dir).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        for level in dir.ancestors().take(3) {
+            std::fs::set_permissions(level, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+    }
+}
+
 /// 把"文件放在这个目录里"的所有者与"对文件的句柄"绑成一个值。
 ///
 /// 字段顺序是删除能否成功的前提：`value`（可能的文件句柄 / 映射）先声明，析构时先释放，
