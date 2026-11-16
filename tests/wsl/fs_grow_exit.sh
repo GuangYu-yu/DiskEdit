@@ -35,7 +35,7 @@ fs_sz() { dumpe2fs -h "${LOOP}p1" 2>/dev/null | awk '/^Block count:/ {print $3 *
 build_fixture() {
   [ -n "$LOOP" ] && lo_detach "$LOOP"
   LOOP=
-  rm -rf "$IMG" "$IMG"$SIDECAR_GLOB 2>/dev/null
+  rm_img "$IMG" 2>/dev/null
   truncate -s 64M "$IMG" || fail "truncate $IMG"
   $B new "$IMG" --yes >/dev/null || fail "new $IMG"
   $B add "$IMG" 48M --align mib --yes >/dev/null || fail "add $IMG"

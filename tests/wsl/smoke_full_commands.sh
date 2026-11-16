@@ -7,7 +7,7 @@ require_bin
 
 
 img T smoke4.img
-rm -rf "$T" "$T"$SIDECAR_GLOB 2>/dev/null
+rm_img "$T" 2>/dev/null
 
 truncate -s 64M "$T"
 

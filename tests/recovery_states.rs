@@ -33,9 +33,15 @@ fn private_dir(dir: &Path) {
 }
 
 fn run(args: &[&str]) -> (i32, String, String) {
+    run_in(state_root(), args)
+}
+
+/// 以指定的状态根运行：扫描类用例要一个只含自己记录的容器根，因此连
+/// `DISKEDIT_STATE_DIR` 一起换成那个根
+fn run_in(state: &Path, args: &[&str]) -> (i32, String, String) {
     let out = Command::new(env!("CARGO_BIN_EXE_DiskEdit"))
         .args(args)
-        .env("DISKEDIT_STATE_DIR", state_root())
+        .env("DISKEDIT_STATE_DIR", state)
         .output()
         .expect("spawn Diskedit");
     (
@@ -77,6 +83,16 @@ fn write_record(image: &Path, bytes: &[u8]) {
     let dir = record_dir(image);
     private_dir(&dir);
     fs::write(dir.join("record"), bytes).unwrap();
+}
+
+/// `records scan` 的独立容器根：只放这一个键目录的副本，扫描看不到同进程
+/// 其他用例的记录，也不受它们清理记录的影响
+fn scan_root(tag: &str, image: &Path) -> PathBuf {
+    let root = temp_dir(tag);
+    let dir = root.join("images").join(record_dir(image).file_name().unwrap());
+    private_dir(&dir);
+    fs::copy(record_path(image), dir.join("record")).unwrap();
+    root
 }
 
 fn file_id(path: &Path) -> [u8; 16] {
@@ -422,7 +438,8 @@ fn records_list_maps_every_observable_state() {
     let (code, out, _) = run(&["records", "list", image.to_str().unwrap()]);
     assert_eq!(code, 0);
     assert!(out.contains("\"records\":[]"), "UnknownFormat must not be listed: {out}");
-    let (code, out, _) = run(&["records", "scan", unknown.to_str().unwrap()]);
+    let root = scan_root("state_unknown_scan", &image);
+    let (code, out, _) = run_in(&root, &["records", "scan", root.to_str().unwrap()]);
     assert_eq!(code, 0);
     assert!(out.contains("\"state\":\"unknown_format\""), "{out}");
 
@@ -436,7 +453,8 @@ fn records_list_maps_every_observable_state() {
         digest: [0u8; 32],
     };
     write_record(&image, &fixture.bytes());
-    let (code, out, _) = run(&["records", "scan", backend.to_str().unwrap()]);
+    let root = scan_root("state_backend_scan", &image);
+    let (code, out, _) = run_in(&root, &["records", "scan", root.to_str().unwrap()]);
     assert_eq!(code, 0);
     assert!(out.contains("\"state\":\"backend_mismatch\""), "{out}");
 }

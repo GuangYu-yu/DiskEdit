@@ -6,10 +6,10 @@ require_fault_bin
 
 img T t30.img
 
-rm -rf "$T" "$T"$SIDECAR_GLOB 2>/dev/null
+rm_img "$T" 2>/dev/null
 
 echo "===== A: 3TiB GPT（稀疏镜像，秒级） ====="
-rm -rf "$T" "$T"$SIDECAR_GLOB
+rm_img "$T"
 truncate -s 3T "$T"; ls -lh "$T" | awk '{print "sparse 占用:", $5}'
 $B new "$T" --yes >/dev/null; echo "new exit=$?"
 # 3TiB = 6442450944 扇区；last_usable = 6442450944 - 34 = 6442450910
@@ -25,7 +25,7 @@ echo " <- 期望 EFI PART"
 
 echo
 echo "===== B: 只读 loop → 写操作拒绝且不改盘 ====="
-rm -rf "$T" "$T"$SIDECAR_GLOB
+rm_img "$T"
 truncate -s 64M "$T"
 $B new "$T" --yes >/dev/null
 $B add --yes "$T" 50151424 --start 2048 --name p1 >/dev/null
@@ -58,7 +58,7 @@ lo_detach "$LD"
 
 echo
 echo "===== C: 同镜像并发 move ====="
-rm -rf "$T" "$T"$SIDECAR_GLOB
+rm_img "$T"
 truncate -s 512M "$T"
 $B new "$T" --yes >/dev/null
 $B add --yes "$T" 104857600 --start 2048 --name p1 >/dev/null && $B mkfs "$T":1 ext4 --yes >/dev/null

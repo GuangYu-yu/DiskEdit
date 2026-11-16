@@ -104,6 +104,13 @@ pub(crate) fn cmd_inspect(a: &InspectRequest) -> CmdResult {
         report_occupancy(path);
         return CmdResult::Code(EXIT_OK);
     };
+    // 键目录不存在时派生落点连锚点都打不开（这不是"没有记录"）。旧落点有现场时先看它，
+    // 否则保持"锚点目录打不开 → 3"的原有口径
+    if let Some(legacy) = legacy.as_ref()
+        && record.parent().is_some_and(|dir| !dir.is_dir())
+    {
+        record = legacy.clone();
+    }
     let mut evidence = read_evidence(&record, Some(&current));
     // 派生落点为空而旧落点有现场：结论由旧布局的拒读口径给出（退 3）
     if matches!(evidence, Evidence::Absent)

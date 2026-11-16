@@ -5,7 +5,7 @@ require_fault_bin
 
 mk_layout() { # $1=img
   local T=$1
-  rm -rf "$T" "$T"$SIDECAR_GLOB
+  rm_img "$T"
   truncate -s 2G "$T"
   $BF new "$T" --yes >/dev/null
   $BF add "$T" 500M --align mib --name p1 --yes >/dev/null
@@ -89,7 +89,7 @@ $B info "$T"
 img T t16c.img
 track_file "$T"
 echo "===== C: swap 挡路分支 + after-swap-entry ====="
-rm -rf "$T" "$T"$SIDECAR_GLOB
+rm_img "$T"
 truncate -s 1G "$T"
 $BF new "$T" --yes >/dev/null
 $BF add "$T" 300M --align mib --name p1 --yes >/dev/null
@@ -122,7 +122,7 @@ img T t16d.img
 track_file "$T"
 echo
 echo "===== D: 自重叠搬移（delta 100M < len 300M）+ chunk 注入 ====="
-rm -rf "$T" "$T"$SIDECAR_GLOB
+rm_img "$T"
 truncate -s 1G "$T"
 $BF new "$T" --yes >/dev/null
 $BF add "$T" 400M --align mib --name p1 --yes >/dev/null

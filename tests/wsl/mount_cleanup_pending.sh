@@ -29,7 +29,7 @@ cleanup_hook() {
 }
 
 setup_case() {
-    rm -rf "$T" "$T"$SIDECAR_GLOB
+    rm_img "$T"
     truncate -s 2G "$T"
     $B new "$T" --yes >/dev/null
     $B add "$T" 400M --align mib --name b --yes >/dev/null 2>&1
@@ -131,7 +131,7 @@ case "$OUT" in *"mount cleanup"*) echo "E cleanup pending OK";; *) echo "E clean
 
 echo
 echo "===== F: superfloppy(btrfs 整盘) 扩容 + umount 失败 → PARTIAL(5) + mount cleanup ====="
-rm -rf "$T" "$T"$SIDECAR_GLOB
+rm_img "$T"
 truncate -s 400M "$T"
 mkfs.btrfs -q -f "$T" >/dev/null 2>&1
 truncate -s 800M "$T"

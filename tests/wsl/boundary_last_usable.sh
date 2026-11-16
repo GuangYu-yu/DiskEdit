@@ -15,7 +15,7 @@ fs_bytes() { # $1=设备：Block count × Block size
   dumpe2fs -h "$1" 2>/dev/null | awk '/^Block count:/ {c=$3} /^Block size:/ {s=$3} END {print c*s}'
 }
 
-rm -rf "$T" "$T"$SIDECAR_GLOB 2>/dev/null
+rm_img "$T" 2>/dev/null
 truncate -s 1G "$T"
 
 echo "== new（1GiB）=="
@@ -55,7 +55,7 @@ echo "== 拒绝不得改动表 =="
 # 兜底（它的一致性检查被本工具主动关掉了）
 img T2 t28online.img
 MP=$TEST_MNT
-rm -rf "$T2" "$T2"$SIDECAR_GLOB 2>/dev/null
+rm_img "$T2" 2>/dev/null
 
 echo "== 造 1GiB GPT + ext4 p1（2048..$LU，吃满可用区）=="
 truncate -s 1G "$T2"

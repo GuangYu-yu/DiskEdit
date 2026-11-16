@@ -34,7 +34,7 @@ fs_bytes() { dumpe2fs -h "/dev/$1/$2" 2>/dev/null | awk '/^Block count:/ {print 
 
 # ---- 场景一：块设备 PV，VG 内两个 LV ----
 img IMG t31a.img
-rm -rf "$IMG" "$IMG"$SIDECAR_GLOB 2>/dev/null
+rm_img "$IMG" 2>/dev/null
 # 128M：p1 80M +16M 的扩容终点（起始间隙 1MiB + 97MiB）必须装得下，
 # 否则多 LV 拒绝用例会被"尺寸溢出"歪打正着地拒绝、--lv 链路在 grow 时超盘被拒
 truncate -s 128M "$IMG"
@@ -85,11 +85,11 @@ vgchange -an "$VG" >/dev/null 2>&1
 vgremove -ff "$VG" >/dev/null || fail "vgremove $VG failed"
 lo_detach "$LOOP" || fail "lo_detach $LOOP failed"; LOOP=
 VG=
-rm -rf "$IMG" "$IMG"$SIDECAR_GLOB; IMG=
+rm_img "$IMG"; IMG=
 
 # ---- 场景二：镜像内 PV（losetup 临时映射路径）----
 img IMG2 t31b.img
-rm -rf "$IMG2" "$IMG2"$SIDECAR_GLOB 2>/dev/null
+rm_img "$IMG2" 2>/dev/null
 truncate -s 64M "$IMG2"
 $B new "$IMG2" --yes >/dev/null || fail "new $IMG2 failed"
 $B add "$IMG2" 48M --align mib --yes >/dev/null || fail "add $IMG2 failed"
@@ -111,7 +111,7 @@ pv_after=$(pvs --noheadings --units b --nosuffix -o pv_size "${LOOP2}p1" | tr -d
 vgremove -ff "$VG" >/dev/null || fail "vgremove $VG failed"
 lo_detach "$LOOP2"; LOOP2=
 VG=
-rm -rf "$IMG2" "$IMG2"$SIDECAR_GLOB; IMG2=
+rm_img "$IMG2"; IMG2=
 
 # ---- 场景三：镜像内 PV + 活动 LV（loop 分区被 dm 持有）----
 # 这一场景检验 ImageLoopPolicy::AllowDm / with_partition_device_for_lvm 的两个边界：
@@ -121,7 +121,7 @@ rm -rf "$IMG2" "$IMG2"$SIDECAR_GLOB; IMG2=
 # 对临时映射的 pvresize 是 no-op 且退出码为 0。工具的后置条件检查因此把它报成 PARTIAL(5)
 # （LVM 链待办），不宣称成功；表项只向右扩展，PV/LV/FS 均不变。
 img IMG3 t31c.img
-rm -rf "$IMG3" "$IMG3"$SIDECAR_GLOB 2>/dev/null
+rm_img "$IMG3" 2>/dev/null
 truncate -s 96M "$IMG3"
 $B new "$IMG3" --yes >/dev/null || fail "new $IMG3 failed"
 $B add "$IMG3" 48M --align mib --yes >/dev/null || fail "add $IMG3 failed"
@@ -166,13 +166,13 @@ vgchange -an "$VG" >/dev/null 2>&1
 vgremove -ff "$VG" >/dev/null || fail "vgremove $VG failed"
 lo_detach "$LOOP3"; LOOP3=
 VG=
-rm -rf "$IMG3" "$IMG3"$SIDECAR_GLOB; IMG3=
+rm_img "$IMG3"; IMG3=
 
 # ---- 场景四：镜像内 PV + 非活动 LV → --grow-lv 明确拒绝 ----
 # `lvextend -r` 要有活动 LV 才能同步扩文件系统；激活与事后恢复都属系统运行态，
 # 本工具不代为激活，因此在写表之前拒绝：分区表、PV、LV 一律不动。
 img IMG4 t31d.img
-rm -rf "$IMG4" "$IMG4"$SIDECAR_GLOB 2>/dev/null
+rm_img "$IMG4" 2>/dev/null
 truncate -s 64M "$IMG4"
 $B new "$IMG4" --yes >/dev/null || fail "new $IMG4 failed"
 $B add "$IMG4" 48M --align mib --yes >/dev/null || fail "add $IMG4 failed"
@@ -216,6 +216,6 @@ vgchange -an "$VG" >/dev/null 2>&1
 vgremove -ff "$VG" >/dev/null || fail "vgremove $VG failed"
 lo_detach "$LOOP4"; LOOP4=
 VG=
-rm -rf "$IMG4" "$IMG4"$SIDECAR_GLOB; IMG4=
+rm_img "$IMG4"; IMG4=
 
 echo "GATE PASS: all LVM chain cases verified"

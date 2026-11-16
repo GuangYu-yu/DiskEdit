@@ -16,11 +16,11 @@ chk() { # got want what
   if [ "$1" = "$2" ]; then echo "  OK   $3"; ok=$((ok+1)); else echo "  BAD  $3 (got [$1] want [$2])"; bad=$((bad+1)); fi
 }
 
-rm -rf "$T" "$T"$SIDECAR_GLOB 2>/dev/null
+rm_img "$T" 2>/dev/null
 mkdir -p "$MNT"
 
 mk() { # p1 扩容需要把 p2/p3 往后搬
-  rm -rf "$T" "$T"$SIDECAR_GLOB
+  rm_img "$T"
   truncate -s 1G "$T"
   $BF new "$T" --yes >/dev/null
   $BF add "$T" 100M --align mib --name p1 --yes >/dev/null
@@ -88,7 +88,7 @@ sgdisk -v "$T" >/dev/null 2>&1 && echo "  OK   B2 sgdisk clean" || { echo "  BAD
 
 echo
 echo "===== C: resize（在线，sfdisk 分界）====="
-rm -rf "$T" "$T"$SIDECAR_GLOB
+rm_img "$T"
 truncate -s 64M "$T"
 $BF new "$T" --yes >/dev/null
 $BF add "$T" 16777216 --align mib --name p1 --yes >/dev/null

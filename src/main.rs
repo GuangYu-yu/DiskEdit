@@ -48,7 +48,8 @@ use crate::outcome::{EXIT_INTERNAL, EXIT_OK, EXIT_PARTIAL};
 /// 落部分完成（5）并给出恢复指引；从未写过则是内部错误（1）。
 ///
 /// 库层的退出请求（[`crate::support::ExitRequest`]）与被展开到这里的 panic 分开处理：
-/// 请求方已经打印过自己的报告，钩子不重复打印，退出码取请求携带的值
+/// 钩子不对请求打印 panic 报告；`Silent` 的报告已由调用点打出，`Report` 的报告在这里
+/// 打出——退出码始终取请求里那份结论的映射
 fn main() -> ExitCode {
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -60,7 +61,13 @@ fn main() -> ExitCode {
         Ok(code) => ExitCode::from(code),
         Err(payload) => {
             if let Some(exit) = payload.downcast_ref::<crate::support::ExitRequest>() {
-                return ExitCode::from(exit.0);
+                return match exit {
+                    crate::support::ExitRequest::Silent(code) => ExitCode::from(*code),
+                    crate::support::ExitRequest::Report(outcome) => {
+                        outcome.report();
+                        ExitCode::from(outcome.exit_code())
+                    }
+                };
             }
             let outcome = crate::outcome::RunOutcome::internal("the process panicked").settled();
             if matches!(outcome, crate::outcome::RunOutcome::Partial { .. }) {

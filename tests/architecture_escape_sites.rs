@@ -134,6 +134,21 @@ const SKIP_SITES: &[SkipSite] = &[
         why: "锁前预检读不出所有者时跳过，锁下枚举仍按记录形态判定",
     },
     SkipSite {
+        id: "S2-23",
+        file: "dev/identity.rs",
+        why: "读不出文件元数据时退回路径键：键只定位落点，记录归属仍按载荷身份核对",
+    },
+    SkipSite {
+        id: "S2-24",
+        file: "dev/identity.rs",
+        why: "打不开镜像时退回路径键，用于定位落点，不作身份证据",
+    },
+    SkipSite {
+        id: "S2-25",
+        file: "dev/identity.rs",
+        why: "取不到文件对象身份时退回路径键，用于定位落点，不作身份证据",
+    },
+    SkipSite {
         id: "S2-17",
         file: "recovery/engine.rs",
         why: "取不到元数据时按镜像打开，随后打开失败即拒绝",

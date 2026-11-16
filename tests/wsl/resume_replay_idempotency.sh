@@ -6,7 +6,7 @@ require_fault_bin
 
 echo "===== E: after-repair（修复完成、初始进度写入前） ====="
 img T t17e.img
-rm -rf "$T" "$T"$SIDECAR_GLOB
+rm_img "$T"
 truncate -s 1G "$T"
 $BF new "$T" --yes >/dev/null
 $BF add "$T" 300M --align mib --name p1 --yes >/dev/null
@@ -41,7 +41,7 @@ sgdisk -v "$T" >/dev/null 2>&1 && echo "sgdisk clean" || { echo "sgdisk ISSUES";
 echo
 echo "===== F: after-swap-commit（GPT commit 后、记录推进前，重放幂等） ====="
 img T t17f.img
-rm -rf "$T" "$T"$SIDECAR_GLOB
+rm_img "$T"
 track_file "$T"
 truncate -s 1G "$T"
 $BF new "$T" --yes >/dev/null
@@ -90,7 +90,7 @@ echo "===== G: 记录不可读（头部损坏）→ 重跑硬拒 3 → abandon �
 # 搬移目的地与源区不相交（右移越过源末尾）：中断后源数据完好，abandon 后全新重跑
 # 才能得到正确结果。若用自重叠右移，中断已覆盖源尾部，abandon 后重跑只会读到坏源
 img T t17g.img
-rm -rf "$T" "$T"$SIDECAR_GLOB
+rm_img "$T"
 track_file "$T"
 truncate -s 2G "$T"
 $BF new "$T" --yes >/dev/null
