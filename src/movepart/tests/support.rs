@@ -208,6 +208,7 @@ pub(crate) fn plan_fixture(entries: &[(u32, [u8; 16], u64, u64)]) -> (crate::tes
     raw[..lba0.len()].copy_from_slice(&lba0);
     std::fs::write(&tmp, raw).unwrap();
     let src = plan_open(&tmp);
+    crate::testdir::forget_record_of(&src.identity);
     (crate::testdir::TestSource::new(dir, src), tmp)
 }
 

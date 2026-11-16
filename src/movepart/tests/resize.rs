@@ -51,6 +51,7 @@ pub(crate) fn resize_part_resume_skips_done_chunks() {
     let tmp = dir.join("resume.img");
     std::fs::write(&tmp, cur.into_inner()).unwrap();
     let mut src = plan_open(&tmp);
+    crate::testdir::forget_record_of(&src.identity);
     // gptman 只写 GPT 结构，保护 MBR 需自行补——load_gpt 以前者为前置
     crate::table::ensure_protective_mbr(&mut src, ss).unwrap();
 

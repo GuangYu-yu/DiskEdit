@@ -118,6 +118,21 @@ pub(crate) fn private_record_dir(dir: &Path) {
     }
 }
 
+/// 夹具刚建出的镜像：删掉按它身份派生的记录目录。
+///
+/// 同一进程里的临时镜像会复用内核回收的 inode，键摘要（`inode:{dev}:{ino}`）因此
+/// 可能与先前的镜像相同；先前的记录目录（记录、`.torn.N`、残留文件名）会被当成
+/// 这个镜像的现场。夹具在镜像写出之后、被测逻辑读取记录之前调用本函数。
+pub(crate) fn forget_record_of(identity: &crate::dev::TargetIdentity) {
+    let Some(dir) = identity.record_path().and_then(|p| p.parent().map(Path::to_path_buf)) else {
+        return;
+    };
+    // 镜像刚建出，这个键下的记录只可能来自复用同一 inode 的旧镜像
+    // audit-allow: A-17 D-27
+    #[allow(clippy::let_underscore_must_use)] // 删不掉只会留下一份旧镜像的现场
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 /// 把"文件放在这个目录里"的所有者与"对文件的句柄"绑成一个值。
 ///
 /// 字段顺序是删除能否成功的前提：`value`（可能的文件句柄 / 映射）先声明，析构时先释放，
