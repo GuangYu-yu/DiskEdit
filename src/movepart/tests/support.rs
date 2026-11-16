@@ -40,6 +40,9 @@ pub(crate) fn attach_record(
     request: (u32, u64, u64),
 ) -> std::path::PathBuf {
     let record_path = src.identity.record_path().expect("image targets have a record path").to_path_buf();
+    // 镜像刚建出：这个键下的记录只可能来自复用同一 inode 的旧镜像。本进程里各用例
+    // 共用真实状态根，不清掉就会撞上先前用例留下的记录
+    crate::testdir::forget_record_of(&src.identity);
     // 记录目录的形状由生产侧复核（0700，group/other 无权限）；夹具自己建目录，
     // 就必须按同一形状建，否则写句柄在 `prepare_record_dir` 处被拒
     crate::testdir::private_record_dir(record_path.parent().unwrap());
