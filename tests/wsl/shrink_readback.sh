@@ -67,7 +67,8 @@ rm -rf "$FAKE"; mkdir -p "$FAKE"
 # 回读取的 Block count 故意报一个大数
 fake dumpe2fs '#!/bin/sh
 echo "Block count:              999999999"
-echo "Block size:               4096"'
+echo "Block size:               4096"
+echo "Blocks per group:         32768"'
 OUT=$($BFK resize "$T":1 --end 616447 --yes 2>&1); E=$?
 echo "exit=$E"
 echo "$OUT" | sed 's/^/    /'
