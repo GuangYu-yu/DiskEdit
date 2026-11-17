@@ -24,7 +24,9 @@ pub(crate) const DETAILS_RESIZEFS: &str = r#"  Resize a filesystem. The form pic
   The target size is absolute (units k/m/g/t, 1024 base; plain bytes when no
   unit; fractions allowed); omitted means grow to fill the partition.
 
-  A grow is read back for ext2/3/4, ntfs and btrfs; f2fs, xfs and vfat have
+  A grow is read back for ext2/3/4, ntfs and btrfs, and must reach the end of
+  the partition within one placement unit (one block group for ext2/3/4, whose
+  tail resize2fs may leave unused). f2fs, xfs and vfat have
   no read-back — the tool's success stays unverified, the run prints a pending
   item naming a size check, and the exit status is 5."#;
 
