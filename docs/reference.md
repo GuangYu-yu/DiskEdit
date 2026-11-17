@@ -252,9 +252,13 @@ diskedit resize <TARGET>:N --grow-to-end [--align A] [--no-fs] --yes
 
   Read-back:
     after a successful grow the filesystem size is read back and must reach
-    the end of the new range within one allocation unit for ext2/3/4
-    (dumpe2fs), ntfs (ntfsresize) and btrfs (btrfs inspect-internal
-    dump-super). f2fs, xfs and vfat have no read-back in this build: the
+    the end of the new range within one placement unit for ext2/3/4
+    (dumpe2fs: one block group — resize2fs leaves a tail it cannot fit the
+    group's metadata into), ntfs (ntfsresize: one cluster) and btrfs (btrfs
+    inspect-internal dump-super: one sector size). An ext grow may stop up to
+    one block group short: resize2fs drops the tail it cannot fit the group's
+    metadata into, and the read-back counts that as reaching the end. f2fs,
+    xfs and vfat have no read-back in this build: the
     tool's success is recorded as an unverified result, the run prints a
     pending item naming a size check, and the exit status is 5. The
     partition step is committed either way; compare `df -B1` on the
@@ -468,7 +472,9 @@ diskedit resizefs <MOUNTPOINT> [BYTES] --yes
   The target size is absolute (units k/m/g/t, 1024 base; plain bytes when no
   unit; fractions allowed); omitted means grow to fill the partition.
 
-  A grow is read back for ext2/3/4, ntfs and btrfs; f2fs, xfs and vfat have
+  A grow is read back for ext2/3/4, ntfs and btrfs, and must reach the end of
+  the partition within one placement unit (one block group for ext2/3/4, whose
+  tail resize2fs may leave unused). f2fs, xfs and vfat have
   no read-back — the tool's success stays unverified, the run prints a pending
   item naming a size check, and the exit status is 5.
 ```

@@ -231,14 +231,16 @@ where
     f(dev.path())
 }
 
-/// 扩容工具成功返回后的核对：回读实际尺寸，判据是"覆盖到区间末端"。工具按自己的分配
-/// 单元向下取整，故实际尺寸 ≤ 区间末端、且与末端之差小于一个单元即算到位；超出末端
+/// 扩容工具成功返回后的核对：回读实际尺寸，判据是"覆盖到区间末端"。工具按自己的放置
+/// 单元取整，故实际尺寸 ≤ 区间末端、且与末端之差小于一个单元即算到位；超出末端
 /// 说明工具把文件系统写到了区间之外，差一个单元以上说明工具报成功却没扩
 fn verify_grow(kind: FsKind, dev: &str, limit: u64, tool: &str) -> Result<SizeVerify, FsError> {
     classify_grow(read_fs_geometry(kind, dev), limit, tool, &size_read_back_hint(kind))
 }
 
-/// 回读结果 → 核对结论。与外部调用分开，判定本身才能单测
+/// 覆盖判据在 ext 上留有一个块组宽的空当：那一段是 resize2fs 放置不下的元数据尾部。
+/// 生长不足一个块组时，工具停在原值也是它的正常行为，故不另设"必须增长"的判据——
+/// 同样的判据会把"没有整组可放"误报成没扩
 pub(crate) fn classify_grow(
     read: io::Result<FsGeometry>,
     limit: u64,
