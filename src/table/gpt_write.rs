@@ -59,8 +59,7 @@ pub(crate) fn serialize_header(h: &RawHeader, array_crc: u32, ss: u64) -> io::Re
 /// 几何由 [`EntryArrayGeometry`] 单点判定（es > 128 时条目尾部保留区保持零；
 /// 不合规的几何在构造点即报错，此处不再自证）
 pub fn serialize_array(entries: &[GPTPartitionEntry], geom: &EntryArrayGeometry) -> (Vec<u8>, u32) {
-    let span = geom.lba_span();
-    let mut b = vec![0u8; (span * geom.sector_size) as usize];
+    let mut b = vec![0u8; geom.span_bytes() as usize];
     for (i, e) in entries.iter().enumerate().take(geom.entry_count as usize) {
         let off = i * geom.entry_size as usize;
         b[off..off + 128].copy_from_slice(&serialize_entry(e));
@@ -253,10 +252,11 @@ fn write_table(src: &mut WriteSource, p: &PreparedTable) -> io::Result<()> {
 /// "写入什么值"（[`ensure_protective_mbr`]）与"读到的值算不算规范"
 /// （[`pmbr_size_state`]）共用这一处，两侧不各写一遍同一个算式
 pub(crate) fn size_in_lba(total_sectors: u64) -> u32 {
-    if total_sectors > u32::MAX as u64 {
+    let last = last_sector_of(total_sectors);
+    if last > u32::MAX as u64 {
         u32::MAX
     } else {
-        total_sectors.saturating_sub(1) as u32
+        last as u32
     }
 }
 
@@ -296,9 +296,15 @@ pub(crate) fn protective_mbr_content(
     if total_sectors == 0 {
         return Err(RunOutcome::refused("disk has zero sectors"));
     }
-    let want_size = size_in_lba(total_sectors);
     let mut lba0 = vec![0u8; ss as usize];
     src.read_at(0, &mut lba0).map_err(|e| RunOutcome::no_mutation(e.to_string()))?;
+    Ok(protective_mbr_content_from(&mut lba0, total_sectors))
+}
+
+/// [`protective_mbr_content`] 的纯计算部分：判定与重写只看传入的 LBA0 原文，不读盘。
+/// 装配期传入写前快照里的那一扇区，决策依据与写基线因此同源
+pub(crate) fn protective_mbr_content_from(lba0: &mut [u8], total_sectors: u64) -> Option<Vec<u8>> {
+    let want_size = size_in_lba(total_sectors);
     let reserved_zero = lba0[512..].iter().all(|&b| b == 0);
     if lba0[510] == 0x55 && lba0[511] == 0xAA && reserved_zero {
         let rec = &lba0[446..462]; // 槽位 1（与下方写入位置一致）
@@ -311,13 +317,13 @@ pub(crate) fn protective_mbr_content(
             // 比较基准是**逻辑块**口径的 total，故 512 口径值
             // （PmbrSize::NeedsRepair{Compat512}）在此落空，会走到下面重写为规范值
             if canonical && start == 1 && size == want_size {
-                return Ok(None);
+                return None;
             }
         }
     }
     // 保留引导代码，重写 446..510、块内保留区与签名
-    protective_mbr_image(&mut lba0, total_sectors);
-    Ok(Some(lba0))
+    protective_mbr_image(lba0, total_sectors);
+    Some(lba0.to_vec())
 }
 
 /// 保护 MBR（LBA0）：内容由 [`protective_mbr_content`] 算定；已合规即一字不写。

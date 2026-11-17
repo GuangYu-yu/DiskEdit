@@ -4,9 +4,9 @@
 //! 搬移、复制、表提交、换区重建、文件系统扩缩与属性改写都从这里走，命令层不自己
 //! 调工具或写表。计划之外另有几类补写：
 //! - `cmd/layout.rs` 两处在**已提交态续跑**时直接调 [`fix_ntfs_hidden_sectors`]
-//!   改引导扇区（`resize-part` 起点变化、`move` 已提交条目的收尾）。同名函数在本模块的
+//!   改引导扇区（`resize` 起点变化形态、`move` 已提交条目的收尾）。同名函数在本模块的
 //!   `fix_hidden_sectors`（表提交之后）属于计划步骤，不是链外写入。
-//! - `cmd/undo` 的回退方向回放。
+//! - `cmd/recover` 的回退方向回放。
 //! - `fsops::wipe_zero` 在 mkfs 前擦除旧签名。
 //! - `cmd/resize/finish.rs` 的 pvresize / lvextend 收尾链。
 //! - `movepart/shift.rs` 的 `recreate_swap`：换区之后按旧头重建 swap 签名。
@@ -340,10 +340,10 @@ pub(crate) fn execute_plan(
                     .map_err(|e| e.context(&format!("plan step {}", index + 1)))?;
                 state.note_step();
                 sink.fs_step_done(src, index, &state)?;
-                // 文件系统侧没有做成：表已扩、空间尚未可用。后续步骤（若有）不再执行，
-                // 记录保留，重跑从这一处继续
-                if let Some(item) = unmet {
-                    pending.push(item);
+                // 文件系统侧没有做成或落点未证实：表已扩、空间尚未可用（或可用与否待查）。
+                // 后续步骤（若有）不再执行，记录保留，重跑从这一处继续
+                if !unmet.is_empty() {
+                    pending.extend(unmet);
                     return Ok(StepFlow::Stopped);
                 }
             }
@@ -537,9 +537,14 @@ fn prepare_steps<'a>(
                     )));
                 }
             }
-            PlanStep::Relocate { sectors, is_swap, .. } => {
-                // 换区条目不搬数据（内容可弃），块参数与块布局都只对数据搬移有意义
-                has_data |= !*is_swap;
+            PlanStep::Relocate { src_first, dst_first, sectors, is_swap, .. } => {
+                // 与记录侧同一判据（`relocation_copies`）：换区、零位移都不搬数据，
+                // 那两类条目在记录里也没有块进度
+                has_data |= crate::planner::chunk::relocation_copies(
+                    *is_swap,
+                    i64::from(*dst_first != *src_first),
+                    *sectors,
+                );
                 if *sectors == 0 {
                     return Err(RunOutcome::internal(format!(
                         "plan step {} relocates zero sectors",
@@ -677,12 +682,18 @@ fn prepare_steps<'a>(
             PlanStep::Relocate { part, src_first, dst_first, sectors, is_swap } => {
                 // 块布局在此算一次并随步骤交出：执行循环与记录游标都读这份结果，
                 // 不按同一条几何各自重算
-                let (chunk_bytes, chunk, chunks) = if *is_swap {
-                    // 换区不搬数据：没有块布局，块进度恒为 0（记录里也是 0）
+                let shift = dst_first.abs_diff(*src_first);
+                // 与记录侧同一判据（`relocation_copies`，delta 只用于判零）
+                let copies = crate::planner::chunk::relocation_copies(
+                    *is_swap,
+                    i64::from(shift != 0),
+                    *sectors,
+                );
+                let (chunk_bytes, chunk, chunks) = if !copies {
+                    // 不拷数据的条目（换区、零位移）没有块布局，块进度恒为 0（记录里也是 0）
                     (chunk.unwrap_or(0), 0, 0)
                 } else {
                     let requested = chunk.expect("a moving entry needs a chunk size");
-                    let shift = dst_first.abs_diff(*src_first);
                     let Some((chunk, count)) =
                         move_chunk_layout(*sectors, sector_size, shift, *sectors, requested)
                     else {
@@ -886,7 +897,7 @@ fn journal_state(src: &WriteSource, steps: &[PreparedStep]) -> Result<TransferSt
 /// 恢复记录的默认块字节数：8 MiB。
 ///
 /// 依据：`Transfer` 每前进 `max(ChunkSize, 8 MiB)` 替换一次记录并只
-/// 更新 `cursor`，而 `resize-part` 不登记 `--chunk`，恢复粒度取该下限
+/// 更新 `cursor`，而 `resize` 不登记 `--chunk`，恢复粒度取该下限
 pub(crate) const DEFAULT_CHUNK_BYTES: u64 = 8 * 1024 * 1024;
 
 #[cfg(test)]

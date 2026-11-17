@@ -136,7 +136,7 @@ pub struct FileSource {
     pub sector_size: u64,
     pub size: u64,
     pub is_block: bool,
-    /// 目标身份：打开时解析一次，record / undo 只消费它
+    /// 目标身份：打开时解析一次，记录与 `recover` 只消费它
     pub identity: TargetIdentity,
     /// 块设备身份材料 `(设备号主, 设备号次, sysfs 设备 ID 原串)`：打开时按 fd 的 rdev
     /// 与同一 sysfs 节点采一次，记录头只消费。镜像为 `None`（身份由 `fingerprint` 编码）
@@ -236,7 +236,6 @@ pub(crate) fn test_block_source(
         kind: TargetKind::Block,
         base: path.to_path_buf(),
         canonical: path.to_path_buf(),
-        journal: write_root.join("legacy.journal"),
         record: Some(record),
         record_key: Some(key),
         lock: write_root.join("target.lock"),
@@ -371,7 +370,7 @@ impl WriteSource {
                 .min(self.size);
             let mut orig = vec![0u8; (end - first) as usize];
             self.read_at(first, &mut orig)?;
-            // 写入后的整扇区样子：原文叠上本次写入的字节。undo 用它核对"盘面仍是记录
+            // 写入后的整扇区样子：原文叠上本次写入的字节。`recover` 用它核对"盘面仍是记录
             // 写后的样子"，只存原文无法把外部改动与本次写入区分开
             let mut after = orig.clone();
             let at = (off - first) as usize;
@@ -389,14 +388,14 @@ impl WriteSource {
         Ok(())
     }
 
-    /// 数据块写入（搬移的 chunk 拷贝）：不入 undo journal。
-    /// 搬移的设计是"前向恢复、无回滚"（见 movepart 模块注释），undo 不消费数据字节，
-    /// 记录它们只会产生与搬移量等大的 journal。数据一致性由 ckpt + 幂等重做保证
+    /// 数据块写入（搬移的 chunk 拷贝）：不入恢复记录。
+    /// 搬移的设计是"前向恢复、无回滚"（见 movepart 模块注释），`recover` 不消费数据字节，
+    /// 记下它们只会产生与搬移量等大的恢复记录。数据一致性由 ckpt + 幂等重做保证
     ///
     /// 屏障由这里自己落，不靠调用点先记得 mark_non_reversible：数据一旦写下去，
     /// 回滚表项就会与盘上内容自相矛盾。同一 mutation 下屏障只落一条
     fn write_data_at(&mut self, _guard: &Guarded, off: u64, buf: &[u8]) -> io::Result<()> {
-        // 越界判定先于屏障：屏障一旦落地 undo 即永久失效，而越界写一个字节也不会落盘
+        // 越界判定先于屏障：屏障一旦落地回滚能力即永久失效，而越界写一个字节也不会落盘
         self.refuse_past_end(off, buf.len())?;
         self.mark_non_reversible().map_err(|e| e.into_io())?;
         self.write_raw(off, buf)
@@ -421,7 +420,7 @@ impl WriteSource {
         self.write_at(&guard, off, buf)
     }
 
-    /// 记下"本次操作含有不可回滚的写入"，undo 见到它即拒绝回滚。
+    /// 记下"本次操作含有不可回滚的写入"，`recover` 见到它即拒绝回滚。
     ///
     /// 判据是**可逆性**，不是"是不是外部进程"：数据搬移的字节（`write_data_at`）是本进程
     /// 写的，但按设计不入记录；外部 FS 工具的写入（resize2fs/mkswap/mkfs…）
@@ -432,7 +431,7 @@ impl WriteSource {
                 Ok(()) => crate::outcome::note_record_past_irreversible_point(),
                 Err(e) => {
                     // 目录项已换到新记录（含目录 fsync 未确认）：`restore_blocked` 已在盘上，
-                    // undo 此后拒绝回滚，与成功同样按越过不可逆点计；`NotWritten` 才是真没写
+                    // `recover` 此后拒绝回滚，与成功同样按越过不可逆点计；`NotWritten` 才是真没写
                     if e.record_bytes_persisted() {
                         crate::outcome::note_record_past_irreversible_point();
                     }
@@ -625,27 +624,31 @@ impl FileSource {
 
     /// `sector_size_override`：镜像默认 512（镜像不携带扇区信息），块设备经 BLKSSZGET 查询并忽略覆盖值。
     pub fn open(path: &Path, sector_size_override: Option<u64>) -> io::Result<Self> {
-        // 块设备判定：块设备文件（其 metadata().len() 恒 0，容量需 ioctl 取）
+        // 块设备判定取自已打开的句柄：先按路径 stat 再 open，两步之间路径被换掉时，
+        // 「是不是块设备」的结论与写入对象会指向两个不同的东西。O_EXCL 只在有 O_CREAT
+        // 时生效，对常规文件是无操作，因此一次打开可以同时覆盖两种形态
         #[cfg(target_os = "linux")]
         {
-            let meta = std::fs::metadata(path)?;
-            if meta.file_type().is_block_device() {
-                // 读写 + O_EXCL：有使用者以独占 claim 持有该设备时内核拒绝打开。它是一次
-                // 准入尝试而非占用判据——分区被挂载是否会让整盘的这次打开失败，取决于内核
-                // 里分区 claim 与整盘 claim 的关联方式，各版本并不一致；占用由
-                // `fsops::ensure_idle_before_write` / `ensure_table_write_idle` 逐分区判定
-                let file = OpenOptions::new()
-                    .read(true)
-                    .write(true)
-                    .custom_flags(libc::O_EXCL)
-                    .open(path)?;
+            // 读写 + O_EXCL：有使用者以独占 claim 持有该设备时内核拒绝打开。它是一次
+            // 准入尝试而非占用判据——分区被挂载是否会让整盘的这次打开失败，取决于内核
+            // 里分区 claim 与整盘 claim 的关联方式，各版本并不一致；占用由
+            // `fsops::ensure_idle_before_write` / `ensure_table_write_idle` 逐分区判定
+            let file = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .custom_flags(libc::O_EXCL)
+                .open(path)?;
+            if file.metadata()?.file_type().is_block_device() {
                 return Self::block_source(file, path);
             }
+            Self::image_source(file, path, sector_size_override)
         }
+        #[cfg(not(target_os = "linux"))]
         Self::open_image(path, sector_size_override, true)
     }
 
-    /// 镜像的只读打开：info/plan/resize 的只读阶段经此打开——调用面已核清
+    /// 镜像的只读打开：调用面是 `info`/`info --grow`/`check` 的只读打开、`inspect`、
+    /// `records`、占位探测、`resize` 取锁前的只读阶段与收尾读表、只读的 `recover --release`——
     /// 无一处经该 FileSource 写盘，真只读让只读文件、只读介质或被他进程独占的镜像
     /// 同样可用，且"只读命令不申请写权限"与块设备侧同一口径
     pub(crate) fn open_read_only_image(path: &Path, sector_size_override: Option<u64>) -> io::Result<Self> {
@@ -699,7 +702,7 @@ impl FileSource {
             if (literal.dev(), literal.ino()) != (meta.dev(), meta.ino()) {
                 return Err(io::Error::other(format!(
                     "{} no longer names the file that was opened (path dev:{} ino:{}, opened dev:{} ino:{}) \
-                     — refusing to place the undo journal next to another file",
+                     — refusing to treat another file as this target",
                     path.display(),
                     literal.dev(),
                     literal.ino(),
@@ -725,9 +728,26 @@ impl FileSource {
             opts.write(true);
         }
         let file = opts.open(path)?;
-        // 元数据取自已打开的句柄：先 stat 路径再 open 会在两步之间留下替换窗口——
-        // 写句柄指向 B 而越界上界与 journal 身份来自 A
+        Self::image_source(file, path, sector_size_override)
+    }
+
+    /// 已打开镜像的事实收集。类型与身份一律取自**这个句柄**：先 stat 路径再 open 会在
+    /// 两步之间留下替换窗口——写句柄指向 B 而越界上界与 journal 身份来自 A
+    fn image_source(file: File, path: &Path, sector_size_override: Option<u64>) -> io::Result<Self> {
         let meta = file.metadata()?;
+        #[cfg(target_os = "linux")]
+        {
+            use std::os::unix::fs::FileTypeExt;
+            if meta.file_type().is_block_device() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!(
+                        "{} is a block device, not an image — it cannot be opened through the image path",
+                        path.display()
+                    ),
+                ));
+            }
+        }
         let size = meta.len();
         let sector_size = sector_size_override.unwrap_or(512);
         check_sector_size(sector_size)?;
@@ -781,7 +801,6 @@ impl FileSource {
                     ))
                 })?;
                 if now.record_key != self.identity.record_key
-                    || now.journal_path() != self.identity.journal_path()
                     || now.lock_path() != self.identity.lock_path()
                 {
                     return Err(RunOutcome::refused(

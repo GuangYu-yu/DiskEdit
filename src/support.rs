@@ -223,7 +223,7 @@ pub(crate) fn open_record_resumable(
     TransactionManager::begin_table_record_resume(a, op)
 }
 
-/// 只持有所有权、不建记录的写事务（undo / check）
+/// 只持有所有权、不建记录的写事务（`recover`、superfloppy 的 `resize`）
 pub(crate) fn open_target_owned(a: &impl TargetRequest) -> Result<WriteSource, crate::outcome::RunOutcome> {
     TransactionManager::begin_without_history(a)
 }
@@ -292,7 +292,7 @@ pub(crate) fn table_record_done_if_complete(
                 Ok(()) => o,
                 // 目录项已移除、持久化未确认：只陈述这一事实，不承诺记录还在
                 Err(e) => o.degrade_partial(if e.record_still_on_disk() {
-                    format!("the recovery record was not cleaned up ({e}) — release it with `diskedit abandon`")
+                    format!("the recovery record was not cleaned up ({e}) — release it with `diskedit recover --release`")
                 } else {
                     format!("{e}")
                 }),
@@ -316,7 +316,7 @@ pub(crate) fn table_record_done(src: &mut WriteSource, ok_msg: &str) -> crate::o
         && let Err(e) = journal.commit_and_discard()
     {
         o = o.degrade_partial(if e.record_still_on_disk() {
-            format!("the recovery record was not cleaned up ({e}) — release it with `diskedit abandon`")
+            format!("the recovery record was not cleaned up ({e}) — release it with `diskedit recover --release`")
         } else {
             format!("{e}")
         });
@@ -369,7 +369,7 @@ fn floor_align(v: u64, unit: u64) -> u64 {
     v.saturating_add(1) / unit * unit
 }
 
-/// 只对末端下取整（resize-part 不改起点）：起点按下取整后的末端校验区间非空
+/// 只对末端下取整（`resize` 的终点形态不改起点）：起点按下取整后的末端校验区间非空
 pub(crate) fn align_end(align: crate::domain::Align, start: u64, end: u64, table_ss: u64) -> u64 {
     let Some(unit) = align_unit(align, table_ss) else { return end };
     let e1 = floor_align(end, unit);
@@ -394,14 +394,14 @@ pub(crate) fn align_start(align: crate::domain::Align, start: u64, table_ss: u64
     s
 }
 
-/// 只读命令的打开（info / plan / resize 的只读阶段）：不取所有权
+/// `resize` 只读阶段的打开（含收尾重开）：不取所有权
 pub(crate) fn open_target_ro(a: &impl TargetRequest) -> Result<FileSource, crate::outcome::RunOutcome> {
     TransactionManager::read_only(a)
 }
 
 /// 建表 / 回放类命令的载体必须是整盘：目标是分区节点时拒绝（判据见
-/// `dev::target_is_partition_node`，镜像恒通过）。`new`/`add`/`create` 写分区表，
-/// `undo`/`abandon` 回放 / 释放的是整盘的恢复现场——落到分区节点上要么覆盖该分区
+/// `dev::target_is_partition_node`，镜像恒通过）。`new`/`add` 写分区表，
+/// `recover`/`recover --release` 回放 / 释放的是整盘的恢复现场——落到分区节点上要么覆盖该分区
 /// 数据、要么把整盘偏移的字节写进分区
 pub(crate) fn refuse_partition_node_target(cmd: &str, target: &str) {
     if crate::dev::target_is_partition_node(std::path::Path::new(target)) {
@@ -440,14 +440,14 @@ pub(crate) fn note_sector_truncation(action: &str, bytes: u64, ss: u64) {
 pub(crate) use crate::recovery::{active_recovery_records, RecoveryRecord};
 
 /// 在线写盘前声明它的代价：写经系统工具（sfdisk / 各 FS 官方工具），不经过本工具的
-/// 恢复记录。中断后既不能 `undo` 回滚，也不能重跑续跑。
+/// 恢复记录。中断后既不能 `recover` 回滚，也不能重跑续跑。
 /// 打印点放在首次写盘之前而非命令帮助末尾：用户此刻能否改道（先卸载走离线路径）
 /// 取决于是否知道这条事实
 #[cfg(target_os = "linux")]
 pub(crate) fn note_online_no_undo() {
     eprintln!(
         "note: online write goes through the system tools, not this tool's recovery record — nothing to resume \
-         from, and `undo` cannot roll it back (unmount the partition to take the offline path)"
+         from, and `recover` cannot roll it back (unmount the partition to take the offline path)"
     );
 }
 
@@ -495,9 +495,9 @@ fn mbr_occupied_pairs(
 ) -> impl Iterator<Item = (&table::MbrPartition, (u64, u64))> {
     mbr.iter().map(move |p| {
         let last = if p.is_container {
-            total_sectors.saturating_sub(1)
+            table::last_sector_of(total_sectors)
         } else {
-            (p.start_lba as u64 + p.size_lba as u64).saturating_sub(1)
+            table::last_sector_of(p.start_lba as u64 + p.size_lba as u64)
         };
         (p, (p.start_lba as u64, last))
     })

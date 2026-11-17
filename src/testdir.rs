@@ -121,7 +121,7 @@ pub(crate) fn private_record_dir(dir: &Path) {
 /// 夹具刚建出的镜像：删掉按它身份派生的记录目录。
 ///
 /// 同一进程里的临时镜像会复用内核回收的 inode，键摘要（`inode:{dev}:{ino}`）因此
-/// 可能与先前的镜像相同；先前的记录目录（记录、`.torn.N`、残留文件名）会被当成
+/// 可能与先前的镜像相同；先前的记录目录（记录、`.abandoned.N`、残留文件名）会被当成
 /// 这个镜像的现场。夹具在镜像写出之后、被测逻辑读取记录之前调用本函数。
 pub(crate) fn forget_record_of(identity: &crate::dev::TargetIdentity) {
     let Some(dir) = identity.record_path().and_then(|p| p.parent().map(Path::to_path_buf)) else {

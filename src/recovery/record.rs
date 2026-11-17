@@ -9,11 +9,10 @@
 //! 因此整份载荷必须通过头部与载荷两段 CRC 才算可读：长度不全或 CRC 不符的记录一律
 //! 不解析、不回放。
 //!
-//! 兼容约定：同一 `MAGIC` 下只有一种布局，载荷必须包含全部尾段（在飞位、`repair`、
+//! 同一 `MAGIC` 下只有一种布局，载荷必须包含全部尾段（在飞位、`repair`、
 //! `table_fence`）。缺少任一段或段后出现无法识别的字节都按 `Format` 拒读，不跳过、
-//! 不当缺省；更早的 `DSK4`、`DSK3`、`DSK2` 标识一律不识别，也不做迁移。不做前向
-//! 兼容是因为记录决定"要不要再写一遍"：看不懂的尾段被跳过，等于让旧构建在不知道
-//! 修复或表步已经落地的状态下重写第二遍。
+//! 不当缺省。不做前向兼容是因为记录决定"要不要再写一遍"：看不懂的尾段被跳过，等于
+//! 让本构建在不知道修复或表步已经落地的状态下重写第二遍。
 
 use crate::dev::DiskGuidState;
 use crate::domain::Fact;
@@ -27,36 +26,12 @@ use super::scene::{Mapping, SceneIdentity, SceneProof};
 /// 格式家族的标识字节：此标识下的搬移位移是有符号值、搬移段带已拷前缀摘要，
 /// 别的标识一律解码失败
 pub(crate) const MAGIC: [u8; 4] = *b"DSK5";
-/// 上一代格式家族的标识：只用于把拒读的原因说成「旧布局」，解码器不认识它
-pub(crate) const LEGACY_MAGIC: [u8; 4] = *b"DSK4";
 pub(crate) const HEADER_LEN: usize = 16;
 
 const HEADER_CRC_RANGE: std::ops::Range<usize> = 0..12;
 pub(crate) const MAX_RECORD_BYTES: u64 = 16 * 1024 * 1024;
 /// 只解到前缀的记录对尾段四项事实的说明：不是「没有」，而是没有读到
 const TAIL_UNREAD: &str = "the payload's tail was not decoded (prefix only)";
-
-/// 认出旧格式家族的名字，供各入口把拒读原因说清楚；别的值都不是识别过的布局
-pub(crate) fn legacy_layout(magic: [u8; 4]) -> Option<&'static str> {
-    if magic == LEGACY_MAGIC {
-        return Some("DSK4");
-    }
-    match &magic {
-        b"DSK3" => Some("DSK3"),
-        b"DSK2" => Some("DSK2"),
-        _ => None,
-    }
-}
-
-/// 旧布局的统一说法；各命令共用这一句，避免同一事实在不同出口里漂移
-pub(crate) fn legacy_layout_sentence(name: &str) -> String {
-    format!("written in the previous record layout ({name}); this build reads the current layout only")
-}
-
-/// 旧布局记录在只读出口的结论：不认、不续跑，文件只能由人删除
-pub(crate) fn legacy_layout_refusal(name: &str) -> String {
-    format!("{} — an old-layout record is not resumed and must be deleted by hand", legacy_layout_sentence(name))
-}
 
 fn crc32(bytes: &[u8]) -> u32 {
     crc::Crc::<u32>::new(&crc::CRC_32_ISO_HDLC).checksum(bytes)
@@ -175,13 +150,13 @@ impl PlanDigest {
 /// 记录对应的布局操作。
 ///
 /// 码值固定：`New`=1、`Add`=2、`Delete`=3、
-/// `ResizePart`=4、`Move`=5、`Copy`=6、`Mkfs`=7、`ResizeFs`=8、`Set`=9、`Resize`=10。
+/// `ResizeEnd`=4、`Move`=5、`Copy`=6、`Mkfs`=7、`ResizeFs`=8、`Set`=9、`Resize`=10。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum OpKind {
     New,
     Add,
     Delete,
-    ResizePart,
+    ResizeEnd,
     Move,
     Copy,
     Mkfs,
@@ -199,7 +174,7 @@ impl OpKind {
             Self::New => 1,
             Self::Add => 2,
             Self::Delete => 3,
-            Self::ResizePart => 4,
+            Self::ResizeEnd => 4,
             Self::Move => 5,
             Self::Copy => 6,
             Self::Mkfs => 7,
@@ -214,7 +189,7 @@ impl OpKind {
             1 => Some(Self::New),
             2 => Some(Self::Add),
             3 => Some(Self::Delete),
-            4 => Some(Self::ResizePart),
+            4 => Some(Self::ResizeEnd),
             5 => Some(Self::Move),
             6 => Some(Self::Copy),
             7 => Some(Self::Mkfs),
@@ -230,7 +205,7 @@ impl OpKind {
             Self::New => "new",
             Self::Add => "add",
             Self::Delete => "delete",
-            Self::ResizePart => "resize-part",
+            Self::ResizeEnd => "resize",
             Self::Move => "move",
             Self::Copy => "copy",
             Self::Mkfs => "mkfs",
@@ -246,7 +221,7 @@ impl OpKind {
     pub(crate) fn resumable(self) -> bool {
         match self {
             Self::Add | Self::Delete | Self::Copy => false,
-            Self::New | Self::ResizePart | Self::Move | Self::Mkfs | Self::ResizeFs | Self::Set | Self::Resize => true,
+            Self::New | Self::ResizeEnd | Self::Move | Self::Mkfs | Self::ResizeFs | Self::Set | Self::Resize => true,
         }
     }
 }
@@ -273,7 +248,7 @@ pub(crate) struct LvmPost {
 /// 静默放大或缩水
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RelocKind {
-    /// 吃满右侧空闲的尾部打包（`resize grow`）
+    /// 吃满右侧空闲的尾部打包（`resize` 扩容形态）
     TailPacked,
     /// 精确落在请求新末端的最小位移（`resize SIZE --allow-move`）
     Shift,
@@ -491,10 +466,10 @@ impl CommitState {
 
 /// 留存状态：清理判据的唯一来源。
 ///
-/// 本构建只写 `Active`（`Record::new`）与 `CommittedPending`。`Unverified` /
-/// `Quarantined` 是**读出侧**的状态：记录由外部标注为这两种时仍按结构识别、由
-/// `inspect` 原样报出，并且不签发清理许可——它们是盘上输入的一部分，不是本构建
-/// 会产生的决策，故这里没有对应的写入点
+/// 本构建只写 `Active`（`Record::new`）。`CommittedPending` / `Unverified` /
+/// `Quarantined` 只从盘上读出：记录带着它们时仍按结构识别、由 `inspect` 原样报出；
+/// `Unverified` / `Quarantined` 不签发清理许可。这三种在本构建没有写入点，见
+/// [`crate::recovery::cleanup`] 的许可判据
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Retention {
     Active,
@@ -672,12 +647,12 @@ pub(crate) struct Record {
     pub(crate) plan_digest: PlanDigest,
     pub(crate) progress: Progress,
     /// 分区层提交前的原区间 `(old_start, old_end)`。表提交之后盘上条目只剩新区间，
-    /// FS 步要靠它判断该不该扩；[`OpKind::Resize`] / [`OpKind::ResizePart`] /
+    /// FS 步要靠它判断该不该扩；[`OpKind::Resize`] / [`OpKind::ResizeEnd`] /
     /// [`OpKind::Move`] 可能非 `None`（搬移前的区间同样记在这里）
     pub(crate) old_range: Option<(u64, u64)>,
     /// 分区层提交后的 LVM 收尾基线；只有 [`OpKind::Resize`] 可能非 `None`
     pub(crate) lvm_post: Option<LvmPost>,
-    /// 搬移作业的可恢复状态。只有 [`OpKind::Resize`] / [`OpKind::ResizePart`] /
+    /// 搬移作业的可恢复状态。只有 [`OpKind::Resize`] / [`OpKind::ResizeEnd`] /
     /// [`OpKind::Move`] 可能非 `None`；没有搬移步的记录保持为空
     pub(crate) relocation: Option<Relocation>,
     /// 表步正在进行的条目下标：该条目的表可能已经写过、结果尚未记入记录。
@@ -822,13 +797,13 @@ impl Record {
                 // audit-allow: W-11
                 Fact::Absent | Fact::Undecidable(_) => return Ok(Stage::Undecidable),
             }
-            // 落盘窗口按 op 分家：move 先落旧区间再落搬移表，resize-part 的纯扩缩路径
+            // 落盘窗口按 op 分家：move 先落旧区间再落搬移表，起点变更形态的 resize 纯扩缩路径
             // 不落 relocation，resize 的 MBR 表项路径同样只落旧区间。进度全零且没有
             // 写事实时，记录自身就证明还没动手
             return Ok(match self.op {
                 OpKind::Resize if clean => Stage::Planned,
                 OpKind::Resize => Stage::Undecidable,
-                OpKind::ResizePart if progress.completed_steps == 2 => Stage::Finishing,
+                OpKind::ResizeEnd if progress.completed_steps == 2 => Stage::Finishing,
                 // 不含搬移步的操作派生不出搬移进度：进度全零且没有写事实时，
                 // 记录自身就证明还没动手
                 _ if clean => Stage::Planned,
@@ -866,7 +841,7 @@ impl Record {
             {
                 return Ok(Stage::Planned);
             }
-            return Ok(if self.op == OpKind::ResizePart {
+            return Ok(if self.op == OpKind::ResizeEnd {
                 Stage::Undecidable
             } else {
                 Stage::Relocating { entry: reloc.entry_index, cursor: progress.transfer_cursor }
@@ -896,6 +871,17 @@ impl Record {
         self.validate()
             .map_err(|m| std::io::Error::new(std::io::ErrorKind::InvalidInput, m))?;
         let payload = self.encode_payload()?;
+        let total_len = HEADER_LEN as u64 + payload.len() as u64;
+        // 整份编码的上界与读出侧同一条：读不回来的记录不写
+        if total_len > MAX_RECORD_BYTES {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "the encoded record is {total_len} bytes, past the {MAX_RECORD_BYTES}-byte \
+                     ceiling the reader accepts"
+                ),
+            ));
+        }
         let payload_crc = crc32(&payload);
         let payload_len = u32::try_from(payload.len()).expect("a recovery payload fits in 32 bits");
 
@@ -920,6 +906,24 @@ impl Record {
         for (i, entry) in self.restore.iter().enumerate() {
             if !entry.is_well_formed() || entry.byte_offset().is_none() {
                 return Err(format!("restore entry {i} does not describe a readable range"));
+            }
+        }
+        // 尾段四项与读出侧同一份一致性约束：有搬移计划时围栏必须停在 `Pending`
+        // （表步由在飞位承载），`Landed` 必须伴随步数前进
+        // audit-allow: W-18
+        if let Fact::Known(fence) = &self.table_fence {
+            if self.relocation.is_some() && *fence != TableFence::Pending {
+                return Err(format!(
+                    "the record carries a relocation plan but its table fence is `{fence:?}` — the \
+                     reader keeps a plan-bearing record at `Pending`"
+                ));
+            }
+            if *fence == TableFence::Landed && self.progress.completed_steps == 0 {
+                return Err(
+                    "the table fence is `Landed` while no plan step is recorded as done — the \
+                     reader refuses that pair"
+                        .to_string(),
+                );
             }
         }
         Ok(())
@@ -1096,8 +1100,15 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<Record, DecodeFailure> {
     if crc32(payload) != payload_crc {
         return Err(DecodeFailure::Crc { region: CrcRegion::Payload });
     }
-    let mut record =
-        decode_payload(payload).ok_or(DecodeFailure::Format { magic, recorded: None })?;
+    let mut record = match decode_payload(payload) {
+        Some(record) => record,
+        None => {
+            // 前缀解得出来就带上它的目标身份：这份载荷自称属于某个目标，
+            // 只是后半段读不通
+            let recorded = read_payload_prefix(&mut Cursor::new(payload)).map(|(r, _)| r.target);
+            return Err(DecodeFailure::Format { magic, recorded });
+        }
+    };
     record.header = RecoveryHeader { payload_len, header_crc, payload_crc };
     Ok(record)
 }
@@ -1209,8 +1220,8 @@ fn read_payload_prefix(c: &mut Cursor<'_>) -> Option<(Record, usize)> {
         1 => Some((c.u64()?, c.u64()?)),
         _ => return None,
     };
-    // `resize`、`resize-part` 与 `move` 会改动分区落位，需要搬移前区间；其余操作带它即与操作类型矛盾
-    if old_range.is_some() && !matches!(op, OpKind::Resize | OpKind::ResizePart | OpKind::Move) {
+    // `OpKind::Resize`、`OpKind::ResizeEnd` 与 `OpKind::Move` 会改动分区落位，需要搬移前区间；其余操作带它即与操作类型矛盾
+    if old_range.is_some() && !matches!(op, OpKind::Resize | OpKind::ResizeEnd | OpKind::Move) {
         return None;
     }
     let lvm_post = match c.u8()? {
@@ -1231,8 +1242,8 @@ fn read_payload_prefix(c: &mut Cursor<'_>) -> Option<(Record, usize)> {
         1 => Some(read_relocation(c)?),
         _ => return None,
     };
-    // 搬移计划只属于 `move` / `resize` / `resize-part`；别的操作带它即与操作类型矛盾
-    if relocation.is_some() && !matches!(op, OpKind::Resize | OpKind::ResizePart | OpKind::Move) {
+    // 搬移计划只属于 `OpKind::Move`、`OpKind::Resize`、`OpKind::ResizeEnd`；别的操作带它即与操作类型矛盾
+    if relocation.is_some() && !matches!(op, OpKind::Resize | OpKind::ResizeEnd | OpKind::Move) {
         return None;
     }
     let action = match c.u8()? {
@@ -1664,7 +1675,7 @@ mod relocation_round_trip {
         assert_eq!(decoded.encode().unwrap(), bytes);
     }
 
-    /// 起点变更缩容的 resize-part 记录同样携带搬移计划，回读不得因操作类型被拒
+    /// 起点变更缩容的 `resize` 记录同样携带搬移计划，回读不得因操作类型被拒
     #[test]
     fn a_resize_part_record_round_trips_with_a_relocation_plan() {
         let mut record = Record::new(
@@ -1672,7 +1683,7 @@ mod relocation_round_trip {
             image_target(),
             PlanId::from_bytes([8; 16]),
             PlanVersion::new(1),
-            OpKind::ResizePart,
+            OpKind::ResizeEnd,
             PlanDigest::from_bytes([9; 32]),
             DiskGuidState::Present([10; 16]),
         );
@@ -1697,7 +1708,7 @@ mod relocation_round_trip {
 
         let bytes = record.encode().unwrap();
         let mut decoded = decode(&bytes).unwrap();
-        assert_eq!(decoded.op, OpKind::ResizePart);
+        assert_eq!(decoded.op, OpKind::ResizeEnd);
         assert_eq!(decoded.encode().unwrap(), bytes);
     }
 }
@@ -1723,7 +1734,7 @@ mod stages_segment {
             image_target(),
             PlanId::from_bytes([2; 16]),
             PlanVersion::new(1),
-            OpKind::ResizePart,
+            OpKind::ResizeEnd,
             PlanDigest::from_bytes([4; 32]),
             DiskGuidState::Unavailable,
         );
@@ -1899,9 +1910,11 @@ mod record_tails {
     #[test]
     fn a_landed_fence_without_a_completed_step_is_refused() {
         let mut record = table_only_record();
-        record.table_fence = Fact::Known(TableFence::Landed);
-        record.progress.completed_steps = 0;
-        let bytes = record.encode().unwrap();
+        // `InFlight` 与零步数在编码侧是合法的一对；把围栏 tag 改成 `Landed` 得到被拒的组合
+        record.table_fence = Fact::Known(TableFence::InFlight);
+        let mut bytes = record.encode().unwrap();
+        *bytes.last_mut().expect("a record has a fence byte") = TableFence::Landed.tag();
+        rehash(&mut bytes);
 
         assert!(matches!(decode(&bytes), Err(DecodeFailure::Format { .. })));
     }
@@ -1910,8 +1923,9 @@ mod record_tails {
     #[test]
     fn a_moved_fence_on_a_relocation_record_is_refused() {
         let mut record = moving_record(1, 0);
-        record.table_fence = Fact::Known(TableFence::Landed);
-        let bytes = record.encode().unwrap();
+        let mut bytes = record.encode().unwrap();
+        *bytes.last_mut().expect("a record has a fence byte") = TableFence::Landed.tag();
+        rehash(&mut bytes);
 
         assert!(matches!(decode(&bytes), Err(DecodeFailure::Format { .. })));
     }
@@ -1927,21 +1941,16 @@ mod record_tails {
         assert_eq!(record.derive_stage().unwrap(), Stage::Planned);
     }
 
-    /// 旧格式的记录被拒读：同样的载荷只换头部的格式标识即被拒读
+    /// 不是 `MAGIC` 的格式标识一律拒读：同样的载荷只换头部的标识即被拒
     #[test]
-    fn the_previous_layout_is_refused_by_magic() {
-        let mut bytes = moving_record(1, 0).encode().unwrap();
-        bytes[0..4].copy_from_slice(&LEGACY_MAGIC);
-        rehash(&mut bytes);
+    fn an_unknown_magic_is_refused() {
+        for magic in [*b"DSKX", *b"MD01", *b"ZZZZ"] {
+            let mut bytes = moving_record(1, 0).encode().unwrap();
+            bytes[0..4].copy_from_slice(&magic);
+            rehash(&mut bytes);
 
-        assert_eq!(
-            decode(&bytes),
-            Err(DecodeFailure::Format { magic: LEGACY_MAGIC, recorded: None })
-        );
-        assert_eq!(legacy_layout(LEGACY_MAGIC), Some("DSK4"));
-        assert_eq!(legacy_layout(*b"DSK3"), Some("DSK3"));
-        assert_eq!(legacy_layout(*b"DSK2"), Some("DSK2"));
-        assert_eq!(legacy_layout(MAGIC), None);
+            assert_eq!(decode(&bytes), Err(DecodeFailure::Format { magic, recorded: None }));
+        }
     }
 
     /// 在飞位的取值只有"没有"与"某条目"两种
@@ -2050,7 +2059,7 @@ mod record_tails {
 
     /// 载荷被截断或 CRC 不符的记录不解析：长度不全与内容损坏都不进回放路径
     #[test]
-    fn a_torn_or_crc_broken_payload_is_refused() {
+    fn a_truncated_or_crc_broken_payload_is_refused() {
         let mut record = moving_record(1, 0);
         record.restore.push(RestoreEntry {
             sector_size: 512,

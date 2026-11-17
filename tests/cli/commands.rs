@@ -135,7 +135,7 @@ fn auto_commands_add_move_resize_set_delete() {
     assert_eq!(v["partitions"][0]["name"], "auto");
     assert_eq!(v["partitions"][0]["type"], "C12A7328-F81F-11D2-BA4B-00A0C93EC93B");
 
-    // resize 位置 SIZE 收缩：resize 只扩；缩容拆成 resizefs + resize-part
+    // resize 位置 SIZE 只扩；缩容用 `resize --end`
     let (c, _, stderr) = run(&["resize", &format!("{img_s}:1"), "8388608", "--yes"]);
     assert_eq!(c, 3, "shrink through resize must be refused: {stderr}");
     assert!(stderr.contains("shrink"), "{stderr}");

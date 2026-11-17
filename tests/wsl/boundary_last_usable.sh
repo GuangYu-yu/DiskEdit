@@ -23,23 +23,23 @@ $B new "$T" --yes >/dev/null; exp $? 0 "new"
 
 echo "== add p1（2048..4095）=="
 $B add --yes "$T" 1048576 --start 2048 --name p1 >/dev/null; exp $? 0 "add p1（2048..4095）"
-# resize-part 的扩容自带 FS 步：未识别内容的 grow 在写盘前被拒（6）。本段验的是
+# resize --end/--grow-to-end 的扩容自带 FS 步：未识别内容的 grow 在写盘前被拒（6）。本段验的是
 # 边界几何，给 p1 建一个 ext4 让 FS 步成立，几何断言不受影响
 $B mkfs --yes "$T":1 ext4 >/dev/null 2>&1 || { echo "  BAD  mkfs p1 失败"; rc=1; }
 
 echo "== 扩到 last_usable =="
-$B resize-part --yes "$T":1 --grow-to-end >/dev/null; exp $? 0 "at last_usable"
+$B resize --yes "$T":1 --grow-to-end >/dev/null; exp $? 0 "at last_usable"
 [ "$(p1_last)" = "$LU" ] && echo "  OK   p1 已到 2048..$LU" \
   || { echo "  BAD  p1 未到 last_usable（last_lba=$(p1_last)）"; rc=1; }
 
 echo "== 越过 last_usable 必须拒绝 =="
 # 三条都必须显式 --align none：--align mib 会把起点向上对齐（src/support.rs 的
 # align_start），越界判断拿到的就不是原始 LBA，断言可能"因错因通过"。
-# 加 --align none 后原始起点与长度直达校验：resize-part 命中 src/movepart/resize.rs 的
+# 加 --align none 后原始起点与长度直达校验：resize --end 命中 src/movepart/resize.rs 的
 # `new_end > last_usable_lba`，add 命中 src/cmd/layout.rs 的 fixed_start 可用区判定，
 # 拒绝才是因越界。
 # 反例佐证：uncovered_branches.sh 的紧贴边界用例同样使用 --align none。
-$B resize-part --yes "$T":1 --align none --end $((LU + 1)) >/dev/null 2>&1; exp $? 3 "last_usable+1 拒绝"
+$B resize --yes "$T":1 --align none --end $((LU + 1)) >/dev/null 2>&1; exp $? 3 "last_usable+1 拒绝"
 # 2048..2097150 共 2095103 扇区 × 512 = 1072692736 字节；终点越过 last_usable
 $B add --yes "$T" 1072692736 --start 2048 --align none >/dev/null 2>&1; exp $? 3 "beyond last_usable 拒绝"
 # 起点取 LU+1，终点仍按 2097150 收：长度 = (2097150 - (LU+1) + 1) 扇区
@@ -50,7 +50,7 @@ echo "== 拒绝不得改动表 =="
   || { echo "  BAD  拒绝路径改动了表"; rc=1; }
 
 # ---- 在线路径（块设备 + 挂载中分区）----
-# 上面几段验的是几何入口（resize-part / add）的越界；`resize <disk>:N` 走的是**另一条**
+# 上面几段验的是几何入口（resize --end / add）的越界；`resize <disk>:N` 走的是**另一条**
 # 入口：在线分支在锁下按盘上几何重算目标，边界必须由本工具拒绝，不能交给 sfdisk --force
 # 兜底（它的一致性检查被本工具主动关掉了）
 img T2 t28online.img

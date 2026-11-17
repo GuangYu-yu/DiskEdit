@@ -55,7 +55,7 @@ fn each_help_names_its_own_command_first() {
         let out = diskedit().args(args).output().unwrap();
         (out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stdout).into_owned())
     };
-    for cmd in ["plan", "info", "resize", "move", "copy"] {
+    for cmd in ["recover", "info", "resize", "move", "copy"] {
         let (c, out) = run(&["help", cmd]);
         assert_eq!(c, 0, "help {cmd} must succeed");
         let first = out.lines().next().unwrap_or("");
@@ -131,7 +131,7 @@ fn cli_negative_paths() {
     assert!(out.contains("smoke"), "partition must be read from the backup array: {out}");
     assert!(e.contains("recovered from the backup"), "the recovery must be reported: {e}");
     // 可恢复的表在只读入口上也应可读，而不是报"表非法"
-    let (c, _, e) = run(&["plan", bad_arr.to_str().unwrap()]);
+    let (c, _, e) = run(&["info", bad_arr.to_str().unwrap()]);
     assert_ne!(c, 4, "a recoverable table must not be reported as unreadable: {e}");
 
     // 两份副本的条目数组都坏 → 无可救回：表结构非法 = 前置条件不满足 = 3，
@@ -153,9 +153,9 @@ fn cli_negative_paths() {
     assert!(v["error"].as_str().unwrap_or_default().contains("parse failed"), "{out}");
     let (c, _, e) = run(&["resize", &format!("{}:1", bad2.display()), "10M", "--yes"]);
     assert_eq!(c, 3, "{e}");
-    // 同一判据延伸到 plan/check：表结构非法在任何入口都是 3
-    let (c, _, e) = run(&["plan", bad2.to_str().unwrap()]);
-    assert_eq!(c, 3, "plan on a corrupt table must refuse: {e}");
+    // 同一判据延伸到 info/check：表结构非法在任何入口都是 3
+    let (c, _, e) = run(&["info", bad2.to_str().unwrap()]);
+    assert_eq!(c, 3, "info on a corrupt table must refuse: {e}");
     assert!(e.contains("GPT entry array"), "{e}");
     assert!(!e.contains("may have changed"), "a pre-write failure must not claim the disk may have changed: {e}");
     let (c, _, e) = run(&["check", &format!("{}:1", bad2.display())]);
@@ -164,8 +164,8 @@ fn cli_negative_paths() {
     // 只读入口对无表目标给出报告；写命令仍按请求与现状不匹配落 3
     let blank = dir.join("blank.img");
     std::fs::write(&blank, vec![0u8; 100 * 512]).unwrap();
-    let (c, out, e) = run(&["plan", blank.to_str().unwrap()]);
-    assert_eq!(c, 0, "plan reports a table-less target like info: {e}");
+    let (c, out, e) = run(&["info", blank.to_str().unwrap()]);
+    assert_eq!(c, 0, "info reports a table-less target: {e}");
     assert!(out.contains("\"label\":\"none\""), "{out}");
     // 顺序：先确认表、再解释选择器 —— 无表目标上写 `:last` 不该换一种错误
     let (c, _, e) = run(&["move", &format!("{}:last", blank.display()), "--start", "2048", "--chunk", "4", "--yes"]);
@@ -273,7 +273,10 @@ fn flag_contract_fail_closed() {
     let img_s = img.to_str().unwrap();
     let (c, _, e) = run(&["info", img_s, "--yes"]); // cli-surface: refused
     assert_eq!(c, 2, "unconsumed flag must be refused: {e}");
-    assert!(e.contains("not a valid option for `info`"), "{e}");
+    assert!(
+        e.contains("--yes is not valid for `diskedit info <TARGET>"),
+        "the refusal must name the flag and the form it is invalid for: {e}"
+    );
 }
 
 /// 值槽里的旗标笔误必须拒绝：`set img:1 name --bogs` 里的 `--bogs` 若被当成位置参数，
@@ -490,7 +493,7 @@ fn help_topic_zero_partition_and_mbr_end_overflow() {
 }
 
 /// 三条拒绝各自的出口与提示：未知 FS 名落 6（不支持的类型，列出支持的类型）、
-/// `resize --start` 与 `resize-part --start` 未登记落 2（用法错误）
+/// `resize --start` 未登记落 2（用法错误）
 #[cfg(unix)]
 #[test]
 fn targeted_refusals_carry_their_own_codes() {
@@ -517,12 +520,12 @@ fn targeted_refusals_carry_their_own_codes() {
     // resize 只改大小、不搬移：`--start` 未登记，收到即 2
     let (c, _, e) = run(&["resize", &part, "1G", "--start", "5", "--yes"]); // cli-surface: refused
     assert_eq!(c, 2, "{e}");
-    assert!(e.contains("--start is not a valid option for `resize`"), "{e}");
+    assert!(e.contains("--start is not valid for `diskedit resize"), "{e}");
 
-    // resize-part 的起点由当前表决定：`--start` 未登记，收到即 2
-    let (c, _, e) = run(&["resize-part", &part, "--start", "end", "--yes"]); // cli-surface: refused
+    // resize 的起点由当前表决定：`--start` 未登记，收到即 2
+    let (c, _, e) = run(&["resize", &part, "--start", "end", "--yes"]); // cli-surface: refused
     assert_eq!(c, 2, "{e}");
-    assert!(e.contains("--start is not a valid option for `resize-part`"), "{e}");
+    assert!(e.contains("--start is not valid for `diskedit resize"), "{e}");
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -572,7 +575,7 @@ fn a_value_flag_does_not_swallow_the_next_option() {
     assert_eq!(c, 2, "the repro must be refused: {e}");
     assert!(e.contains("--name S requires a value"), "{e}");
     assert_eq!(std::fs::read(&img).unwrap(), before, "the refusal must not write the image");
-    assert_eq!(dir_entries(&dir), entries_before, "the refusal must leave no journal/lock/checkpoint");
+    assert_eq!(dir_entries(&dir), entries_before, "the refusal must leave no record/lock");
 
     // 下一个 token 是布尔旗标时同样是缺值：以 `-` 开头的裸 token 也是选项
     let (c, e) = run(&["add", img_s, "--name", "--yes"]);
@@ -641,13 +644,25 @@ fn every_registered_flag_parses_as_documented() {
                         assert!(e.contains("requires a value"), "the rejection must say why: {e}");
                     }
                     Kind::Bool => {
-                        let (c, e) = run(&[cmd, p.name, "--help"]);
+                        // `--discard-replay` 只在 `--release` 形态里成立：探针带上这条前置
+                        let support: &[&str] =
+                            if p.name == "--discard-replay" { &["--release"] } else { &[] };
+                        let mut once: Vec<&str> = vec![cmd, p.name];
+                        once.extend_from_slice(support);
+                        once.push("--help");
+                        let (c, e) = run(&once);
                         assert_eq!(c, 0, "`{cmd} {}` must parse: {e}", p.name);
-                        let (c, e) = run(&[cmd, p.name, p.name, "--help"]);
+                        let mut twice: Vec<&str> = vec![cmd, p.name, p.name];
+                        twice.extend_from_slice(support);
+                        twice.push("--help");
+                        let (c, e) = run(&twice);
                         assert_eq!(c, 0, "`{}` is idempotent: {e}", p.name);
 
                         let with_value = format!("{}=1", p.name);
-                        let (c, e) = run(&[cmd, with_value.as_str(), "--help"]);
+                        let mut valued: Vec<&str> = vec![cmd, with_value.as_str()];
+                        valued.extend_from_slice(support);
+                        valued.push("--help");
+                        let (c, e) = run(&valued);
                         assert_eq!(c, 2, "`{with_value}` must be refused: {e}");
                         assert!(e.contains("takes no value"), "the rejection must say why: {e}");
                     }

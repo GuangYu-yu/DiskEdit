@@ -30,12 +30,12 @@ S1=$(blockdev --getsize64 "$P")
 D1=$(df -B1 --output=size "$TEST_MNT" | tail -1 | tr -d ' ')
 assert_eq "$S1" "$((S0 + 16777216))" "A/分区 +16M"
 if [ "$D1" -gt "$D0" ]; then echo "  OK   A/fs 同步变大 ($D0 → $D1)"; else echo "  BAD  A/fs 未变大 ($D0 → $D1)"; rc=1; fi
-# 缩容的唯一入口是 resize-part（离线：临时挂载缩 FS、再收表，同一份记录）；
+# 缩容的唯一入口是 resize --end（离线：临时挂载缩 FS、再收表，同一份记录）；
 # resizefs 挂载点形态不改表、一律拒绝缩容
 unmount_now "$TEST_MNT"
-OUT=$($B resize-part --yes "$T":1 --end 821247 2>&1); E=$?
+OUT=$($B resize --yes "$T":1 --end 821247 2>&1); E=$?
 echo "shrink exit=$E : $(echo "$OUT" | tail -1)"
-exp "$E" 0 "A/resize-part 缩回原尺寸"
+exp "$E" 0 "A/resize 缩回原尺寸"
 assert_eq "$(blockdev --getsize64 "$P")" "$S0" "A/回到原尺寸"
 
 echo

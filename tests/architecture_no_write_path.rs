@@ -1,6 +1,6 @@
 //! 「计划步骤只有一个执行器」的结构守卫。
 //!
-//! 计划之外有三类写入：`undo` 的回退方向回放（原语在 `recovery/rollback.rs`）、
+//! 计划之外有三类写入：`recover` 的回退方向回放（原语在 `recovery/rollback.rs`）、
 //! 已提交态续跑时的 NTFS HiddenSectors 回填、mkfs 前的 `wipe_zero`；另有证据文件
 //! 自身的原子替换与外部工具的 stdin。本文件把「出现字节写原语的源码文件集合」
 //! 钉成一张封闭清单。
@@ -91,12 +91,12 @@ fn no_write_claims_live_only_in_the_result_presenter() {
     ];
     const CLAIM_EXCEPTIONS: &[(&str, &str, &str)] = &[
         (
-            "cmd/undo.rs",
+            "cmd/recover.rs",
             "N-1",
             "回放结论：说的是没有回写记录里的字节，不是本次运行没写",
         ),
         (
-            "cmd/undo.rs",
+            "cmd/recover.rs",
             "N-2",
             "回放结论：盘面已是记录里的原文，同样只针对记录区间",
         ),
@@ -183,7 +183,7 @@ fn off_plan_writes_are_registered_in_the_executor_header() {
     let header = source("execution/mod.rs");
     for marker in [
         "fix_ntfs_hidden_sectors",
-        "cmd/undo",
+        "cmd/recover",
         "wipe_zero",
         "计划步骤",
     ] {

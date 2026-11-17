@@ -22,7 +22,7 @@ pub const EXIT_OK: u8 = 0;
 pub const EXIT_INTERNAL: u8 = 1;
 /// 参数或命令语法错误：argv 结构不成立、值域不符、未知命令/选项
 pub const EXIT_USAGE: u8 = 2;
-/// 策略拒绝或前置条件不满足：无表、无此分区、缺 --yes、表结构非法
+/// 策略拒绝或前置条件不满足：无表、无此分区、表结构非法
 pub const EXIT_REFUSED: u8 = 3;
 /// 本次运行没有改变任何持久状态：目标字节未写，恢复记录条目也没有被本次运行创建、
 /// 改名、移走或删除（记录目录与 `record.lock` 不计）。判据见 [`PersistedChange`]。
@@ -227,13 +227,13 @@ pub(crate) fn record_persisted() -> bool {
 
 /// 外部 FS 工具改的是文件系统内容，journal 只记分区表写入。一次命令可能走多个外部
 /// 工具步骤（先缩后扩、或在同一命令里既有表写入又有 FS 写入），故每进程只提示一次。
-/// 这条提示补的是"undo 成功"与实际回滚范围之间的差：表回去了，文件系统没有
+/// 这条提示补的是"`recover` 回放成功"与实际回滚范围之间的差：表回去了，文件系统没有
 pub(crate) fn note_fs_writes_not_journaled() {
     use std::sync::atomic::{AtomicBool, Ordering};
     static NOTED: AtomicBool = AtomicBool::new(false);
     if !NOTED.swap(true, Ordering::Relaxed) {
         eprintln!(
-            "note: filesystem writes are made by external tools and are not journaled — `undo` reverts \
+            "note: filesystem writes are made by external tools and are not journaled — `recover` reverts \
              partition-table writes only; verify the filesystem's actual size before further operations"
         );
     }
@@ -662,13 +662,13 @@ impl RunOutcome {
             if record_is_finalized() {
                 eprintln!(
                     "the recovery record on disk belongs to a job already applied — only its release \
-                     remains: `diskedit undo` releases it (the recorded bytes are past their rollback \
-                     point), `diskedit abandon` releases it as is; re-running the command does not \
+                     remains: `diskedit recover` releases it (the recorded bytes are past their rollback \
+                     point), `diskedit recover --release` releases it as is; re-running the command does not \
                      continue it"
                 );
             } else {
                 eprintln!(
-                    "the unfinished recovery record is still on disk — `diskedit undo` or re-running the \
+                    "the unfinished recovery record is still on disk — `diskedit recover` or re-running the \
                      command continues from it"
                 );
             }
@@ -712,7 +712,7 @@ impl RunOutcome {
                     .to_string(),
                 "evidence: `diskedit inspect <target>` names any recovery file left for the target"
                     .to_string(),
-                "next: `diskedit inspect <target>` lists any recovery file left; `diskedit abandon` releases \
+                "next: `diskedit inspect <target>` lists any recovery file left; `diskedit recover --release` releases \
                  one that remains"
                     .to_string(),
             ];
@@ -721,10 +721,10 @@ impl RunOutcome {
             "— the target may already have been changed; check with `diskedit info` before retrying"
                 .to_string(),
             "evidence: `diskedit inspect <target>` names any recovery file left for the target".to_string(),
-            // 无条件推荐 undo 会在"已越过回滚点"的形态上指向一条必然退 3 的路：
+            // 无条件推荐 `recover` 会在"已越过回滚点"的形态上指向一条必然退 3 的路：
             // 能否回写由记录自身决定，这里只陈述两条命令各自做什么
-            "next: `diskedit undo` restores the bytes recorded for this target when the record \
-             still allows it; `diskedit abandon` releases the record and leaves those bytes in place"
+            "next: `diskedit recover` restores the bytes recorded for this target when the record \
+             still allows it; `diskedit recover --release` releases the record and leaves those bytes in place"
                 .to_string(),
         ]
     }
@@ -767,10 +767,11 @@ impl std::fmt::Display for RunOutcome {
 
 impl RunOutcome {
     /// 读目标（或读它承载的记录、文件系统元数据）失败。存在的意义是让调用点**显式表态**：
-    /// 这个 `?` 只读不写，失败说明读不到继续所需的事实，属于前置条件不满足（3）。
-    /// 默认的 `From<io::Error>` 归 `Partial`，不适用于读路径
+    /// 这个 `?` 只读不写，失败是环境故障且本次未改变持久状态（4），与
+    /// [`crate::table::GptError::Io`] 同一归责。默认的 `From<io::Error>` 归 `Partial`，
+    /// 不适用于读路径
     pub fn unreadable_io(e: std::io::Error) -> Self {
-        Self::refused(e.to_string())
+        Self::no_mutation(e.to_string())
     }
 
     /// 给原因加上本层上下文（变体与退出码不变）。存在的意义是让调用点补一句"当时在做什么"
@@ -980,12 +981,12 @@ mod tests {
         let lines = RunOutcome::partial_guidance_lines(PartialOrigin::ObservedWriteFailure);
         assert!(lines[0].contains("may already have been changed"), "{}", lines[0]);
         assert!(lines[1].contains("evidence:"), "{}", lines[1]);
-        assert!(lines[2].contains("`diskedit undo`") && lines[2].contains("`diskedit abandon`"), "{}", lines[2]);
+        assert!(lines[2].contains("`diskedit recover`") && lines[2].contains("`diskedit recover --release`"), "{}", lines[2]);
 
         let records = RunOutcome::partial_guidance_lines(PartialOrigin::RecordsChanged);
         assert!(records[0].contains("target bytes were not written"), "{}", records[0]);
         assert!(!records[0].contains("may already have been changed"), "{}", records[0]);
-        assert!(records[2].contains("`diskedit abandon`"), "{}", records[2]);
+        assert!(records[2].contains("`diskedit recover --release`"), "{}", records[2]);
     }
 
     /// 4 与 5 的分界只看持久状态：记录文件被本次运行动过就不是 4

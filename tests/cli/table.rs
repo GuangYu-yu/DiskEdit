@@ -120,7 +120,7 @@ fn oversized_add_is_refused() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// 主头撕裂（torn write）时回退盘尾备份头，并在写入时重建主头
+/// 主头被写坏（中断的写）时回退盘尾备份头，并在写入时重建主头
 #[test]
 fn backup_header_fallback_and_repair() {
     let dir = std::env::temp_dir().join(format!("diskedit_bk_{}", std::process::id()));
@@ -424,7 +424,7 @@ fn msdos_user_resize() {
 
     // 分区里没有 FS：只改表必须显式声明（--no-fs），否则写表之前就拒绝——"类型识别不出"
     // 不等于"里面没东西"，不能让工具替用户下这个结论。拒绝文案指向用该 FS 自己的工具扩容，
-    // 并点名能只改分区表的命令（resize --no-fs）：同一条判据也服务于不接受该选项的 resize-part
+    // 并点名能只改分区表的命令（resize --no-fs）
     let raw_before = std::fs::read(&img).unwrap();
     let (c, o) = run(&["resize", &format!("{img_s}:1"), "+1M", "--yes"]);
     assert_eq!(c, 6, "growing an unidentifiable region must refuse without --no-fs: {o}");
@@ -457,7 +457,7 @@ fn msdos_user_resize() {
     assert_eq!(c, 3, "grow beyond blocking partition must refuse: {o}");
     assert_eq!(std::fs::read(&img).unwrap(), raw_before, "refused resize must not write");
 
-    // 收缩：`resize` 只扩——缩容拆成 resizefs + resize-part，
+    // 收缩：位置 SIZE 只扩，缩容走 `resize --end`；
     // 收缩请求在准入期就拒绝，不进入 FS 守卫链，也不写盘
     let (c, o) = run(&["resize", &format!("{img_s}:1"), "-1M", "--yes"]);
     assert_eq!(c, 3, "shrinking must be refused: {o}");

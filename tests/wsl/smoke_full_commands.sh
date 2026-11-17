@@ -50,8 +50,8 @@ $B check "$T":2; exp "$?" 0 "check p2"
 echo "== set label =="
 $B set --yes "$T":2 label mydata; exp "$?" 0 "set label"
 
-echo "== resize shrink -4M（resize-part 先离线缩 FS，再收表）=="
-$B resize-part --yes "$T":2 --end 108543; exp "$?" 0 "resize-part 缩到 20M"
+echo "== resize shrink -4M（resize --end 先离线缩 FS，再收表）=="
+$B resize --yes "$T":2 --end 108543; exp "$?" 0 "resize 缩到 20M"
 
 echo "== move p2 =="
 $B move "$T":2 --start end --yes; exp "$?" 0 "move p2"
@@ -60,17 +60,17 @@ echo "== info final =="
 FINAL=$($B info "$T"); E=$?
 echo "$FINAL"; exp "$E" 0 "info"
 
-echo "== undo（上一步已成功 ⇒ 记录已释放，无凭据可回滚）=="
-OUT=$($B undo "$T" --yes 2>&1); E=$?
+echo "== recover（上一步已成功 ⇒ 记录已释放，无凭据可回滚）=="
+OUT=$($B recover "$T" --yes 2>&1); E=$?
 echo "$OUT" | sed 's/^/    /'
-exp "$E" 3 "undo 拒绝：无记录（3 = 未写盘）"
-echo "$OUT" | grep -q "no recovery record on" || { echo "  BAD  undo 的拒绝理由不是\"无记录\""; rc=1; }
+exp "$E" 3 "recover 拒绝：无记录（3 = 未写盘）"
+echo "$OUT" | grep -q "no recovery record on" || { echo "  BAD  recover 的拒绝理由不是\"无记录\""; rc=1; }
 
-echo "== info after undo（拒绝 ⇒ 布局一字未改）=="
+echo "== info after recover（拒绝 ⇒ 布局一字未改）=="
 AFTER=$($B info "$T"); E=$?
-echo "$AFTER"; exp "$E" 0 "info after undo"
-[ "$AFTER" = "$FINAL" ] && echo "  OK   undo 被拒后布局未变" \
-  || { echo "  BAD  undo 被拒却改了布局"; rc=1; }
+echo "$AFTER"; exp "$E" 0 "info after recover"
+[ "$AFTER" = "$FINAL" ] && echo "  OK   recover 被拒后布局未变" \
+  || { echo "  BAD  recover 被拒却改了布局"; rc=1; }
 
 echo
 echo "==== 汇总：$( [ "$rc" = 0 ] && echo 全部符合契约 || echo 有断言失败 ) ===="

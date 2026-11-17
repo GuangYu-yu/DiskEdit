@@ -13,8 +13,10 @@ pub(crate) struct GrowPost {
     pub(crate) pending: Option<Pending>,
 }
 
-/// `Target` 由调用方接走（它要执行扩容），本函数只处理另外四态
-pub(crate) fn grow_post(part: u32, g: &Growable) -> GrowPost {
+/// `Target` 由调用方接走（它要执行扩容），本函数只处理另外四态。
+/// `defer` 表示 LVM 链由命令层在表提交之后单独收口；为假时 PV 的新空间没有任何
+/// 后续动作会用到它，必须作为待办浮出
+pub(crate) fn grow_post(part: u32, g: &Growable, defer: bool) -> GrowPost {
     match g {
         // 这段空间由目标系统启动时建成 overlay；本命令看不到那一步的成败
         Growable::OverlayPending => GrowPost {
@@ -39,11 +41,29 @@ pub(crate) fn grow_post(part: u32, g: &Growable) -> GrowPost {
                 "identify the filesystem inside and grow it with its own tool, or re-run with --no-fs to change only the partition",
             )),
         },
-        // PV 的空间在 pvresize 链里生效，本命令没有可写的后置条件
-        Growable::NoFilesystem(Some(crate::fsid::ContentKind::Lvm2Pv)) => GrowPost {
-            log: "partition extended (the PV space takes effect through the pvresize chain)".to_string(),
-            pending: None,
-        },
+        // PV：本次入口跑 LVM 链时，空间在 pvresize 链里生效，本命令没有可写的后置条件；
+        // 不跑链时，新空间没有任何一步会用到它——"表扩了、PV 没扩"是一条真实的待办
+        Growable::NoFilesystem(Some(crate::fsid::ContentKind::Lvm2Pv)) => {
+            if defer {
+                GrowPost {
+                    log: "partition extended (the PV space takes effect through the pvresize chain)"
+                        .to_string(),
+                    pending: None,
+                }
+            } else {
+                GrowPost {
+                    log: "partition extended (the PV covers the old size until pvresize runs)".to_string(),
+                    pending: Some(Pending::new(
+                        part,
+                        PendingKind::Other("lvm chain (pvresize/lvextend)"),
+                        "the partition was extended but it holds an LVM PV whose size still covers the old \
+                         space — pvresize has not run",
+                        "run pvresize on the partition (and lvextend for the intended LV), or re-run \
+                         `diskedit resize <TARGET>:N <SIZE> --grow-lv`",
+                    )),
+                }
+            }
+        }
         // 元数据是 swap、页格式在本机激活不了：扩容后"swap 未重建"是一条真实的待办
         Growable::SwapUnactivatable => GrowPost {
             log: "partition extended (the swap signature was found but this host cannot activate it)"

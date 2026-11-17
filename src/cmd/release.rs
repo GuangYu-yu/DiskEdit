@@ -1,4 +1,4 @@
-//! abandon：放弃一次未收尾的操作——把它的恢复记录移进隔离区，让目标重新可用。
+//! `recover --release`：放弃一次未收尾的操作——把它的恢复记录移进隔离区，让目标重新可用。
 //!
 //! 终态只有两种：目标不再被未完成作业占用（后续写命令可以正常开始），或明确拒绝并说明
 //! 现场仍被哪一条占着。放弃的是**回滚能力**，不是数据：目标字节一个不改，记录字节以
@@ -11,8 +11,8 @@
 //! 一处也不改名。记录字节自身读不出来不妨碍释放——否则恢复路径上会出现"目标永久锁死"，
 //! 而那恰恰是恢复路径最不该有的性质。
 //!
-//! 与 undo 的分工：undo 把记录里的字节回放回盘，因此要求记录可解析、且没记过不可回滚
-//! 标记；abandon 不回放任何字节，只放弃"还能回滚"这个能力。
+//! 与 `recover` 默认形态的分工：默认形态把记录里的字节回放回盘，因此要求记录可解析、
+//! 且没记过不可回滚标记；`--release` 形态不回放任何字节，只放弃"还能回滚"这个能力。
 //!
 //! 转换**不是**一个事务：多个独立 pathname 的文件操作没有跨文件的原子性。因此这里
 //! 不追求"全部成功"，而是**单文件原子创建 + 重跑幂等 + 最终收敛**：每个现场先 hard_link
@@ -28,43 +28,24 @@ use crate::support::{
     active_recovery_records, bail_fail, refuse_partition_node_target,
     RecoveryRecord, EXIT_OK, RunOutcome,
 };
-use crate::cli::AbandonRequest;
+use crate::cli::RecoverRequest;
 use crate::targetlock::TargetLock;
 
-/// 详助正文：用法行与选项块由 `cli` 的 schema 生成，这里只写命令语义
-pub(crate) const DETAILS: &str = r#"  Give up on recovering an unfinished operation: move its recovery record into
-  the record directory's quarantine area (.abandoned[.N]) so the target can be
-  written again. No byte of the target itself is touched.
-
-  Unlike `undo` this does not need the record to be readable — a damaged or
-  unreadable file can still be released. A record that is readable but was
-  recorded for another target is refused: renaming it would destroy that
-  target's rollback evidence. The ability to roll back is lost.
-
-  A legacy undo journal or an old relocation checkpoint is not a recovery
-  record; this command leaves such files in place.
-
-  When the scene still holds at least one range `undo` could replay — or the
-  payload is damaged, so the count is unknown — the command refuses until
-  --discard-replay is given. That flag confirms giving up a replayable range;
-  it is not another spelling of --yes. A scene with nothing left to replay
-  needs no flag."#;
-
-pub(crate) fn cmd_abandon(a: &AbandonRequest) -> u8 {
-    // abandon 释放的是整盘的恢复现场：与 info 同判据，`:` 后给了编号即拒绝，不静默忽略
+pub(crate) fn cmd_release(a: &RecoverRequest) -> u8 {
+    // `recover --release` 释放的是整盘的恢复现场：与 info 同判据，`:` 后给了编号即拒绝，不静默忽略
     if let Some(n) = a.part {
-        bail_fail(RunOutcome::refused(format!("`abandon` releases the whole target's recovery scene — drop :{n}")));
+        bail_fail(RunOutcome::refused(format!("`recover --release` releases the whole target's recovery scene — drop :{n}")));
     }
     // 回放类命令的载体必须是整盘：现场按整盘身份落点，在分区节点上释放的会是
     // 另一个（或残缺的）现场集合
-    refuse_partition_node_target("abandon", &a.target);
+    refuse_partition_node_target("recover --release", &a.target);
     let path = std::path::Path::new(&a.target);
-    // 身份要先解析出来才能谈锁：块设备的锁文件落点由设备层身份决定。abandon 用
+    // 身份要先解析出来才能谈锁：块设备的锁文件落点由设备层身份决定。`recover --release` 用
     // cleanup 语义的解析——目标可能已不存在，而现场文件可能比目标活得更久
     let identity = TargetIdentity::resolve_for_cleanup(path).unwrap_or_else(|| {
         bail_fail(RunOutcome::refused(format!(
             "cannot determine the identity of '{}' — nothing was renamed; the path must resolve to the target \
-             this scene was recorded for, then re-run `diskedit abandon '{}'`",
+             this scene was recorded for, then re-run `diskedit recover --release '{}'`",
             path.display(),
             path.display()
         )))
@@ -78,7 +59,7 @@ pub(crate) fn cmd_abandon(a: &AbandonRequest) -> u8 {
     crate::dev::prepare_record_dir(&identity, None).unwrap_or_else(|e| {
         bail_fail(match e {
             crate::dev::HostRepoError::NotRoot => RunOutcome::unsupported(
-                "the host recovery repository must be owned by uid 0; `abandon` on a block device is \
+                "the host recovery repository must be owned by uid 0; `recover --release` on a block device is \
                  refused when this process is not root",
             ),
             crate::dev::HostRepoError::Insecure(detail) if identity.kind == crate::dev::TargetKind::Block => {
@@ -106,11 +87,11 @@ pub(crate) fn cmd_abandon(a: &AbandonRequest) -> u8 {
         crate::domain::Fact::Undecidable(why) => bail_fail(RunOutcome::no_mutation(format!(
             "whether '{}' is a block device or an image cannot be determined ({why}), so its recovery \
              scene cannot be enumerated — nothing was renamed; make the path readable, then re-run \
-             `diskedit abandon '{}'`",
+             `diskedit recover --release '{}'`",
             a.target, a.target
         ))),
     };
-    abandon_records(&a.target, &identity, disk.as_ref(), a.discard_replay)
+    release_records(&a.target, &identity, disk.as_ref(), a.discard_replay)
 }
 
 /// 可按逆序回放的区间条数；`None` 表示载荷损坏、条数未知。
@@ -119,15 +100,15 @@ fn replay_ranges(records: &[RecoveryRecord]) -> Option<usize> {
     for r in records {
         match r.probe.as_ref() {
             crate::recovery::CompanionProbe::Decoded(record) => {
-                // 与 undo 同一判据：表区 preimage 仍能回写的记录才计入被放弃的回滚能力。
-                // `move` 相交时 undo 需要显式许可，但许可存在，仍算可回写
+                // 与 `recover` 同一判据：表区 preimage 仍能回写的记录才计入被放弃的回滚能力。
+                // `move` 相交时 `recover` 需要显式许可，但许可存在，仍算可回写
                 if crate::recovery::TableReplay::of(record, true).writes_back() {
                     total += record.restore.len();
                 }
             }
             crate::recovery::CompanionProbe::Absent => {}
             crate::recovery::CompanionProbe::Damaged(_)
-            | crate::recovery::CompanionProbe::Foreign { .. }
+            | crate::recovery::CompanionProbe::Foreign
             | crate::recovery::CompanionProbe::Unreadable(_)
             | crate::recovery::CompanionProbe::NotOurs(_) => return None,
         }
@@ -135,8 +116,8 @@ fn replay_ranges(records: &[RecoveryRecord]) -> Option<usize> {
     Some(total)
 }
 
-fn abandon_records(target: &str, identity: &TargetIdentity, disk: Option<&FileSource>, discard_replay: bool) -> u8 {
-    // 身份不符的候选照样参与释放：abandon 是显式放弃，不是认领——它不清空目标、
+fn release_records(target: &str, identity: &TargetIdentity, disk: Option<&FileSource>, discard_replay: bool) -> u8 {
+    // 身份不符的候选照样参与释放：`recover --release` 是显式放弃，不是认领——它不清空目标、
     // 不回放、不阻塞，只把记录挪出活跃集。真正属于别的载体时由下面的 `same_carrier`
     // 整体拒绝，释放前逐条打印会让用户看见自己在放弃什么
     let records = match active_recovery_records(identity, disk) {
@@ -149,14 +130,6 @@ fn abandon_records(target: &str, identity: &TargetIdentity, disk: Option<&FileSo
     if records.is_empty() {
         // 幂等：目标已经是"没有 active transaction"，空跑即成功。只说这次枚举看到了什么
         println!("this enumeration found no unfinished operation on this target");
-        // 旧 journal 不是恢复记录：它不阻塞命令，也不由本命令释放
-        if std::fs::symlink_metadata(identity.journal_path()).is_ok() {
-            println!(
-                "note: a legacy undo journal exists at {}; it is not a recovery record, so `abandon` leaves it \
-                 in place — handle it by hand",
-                identity.journal_path().display()
-            );
-        }
         return EXIT_OK;
     }
     // 设备声明不唯一时，记录可能属于另一块同身份的盘。改名它等于替那块盘销毁回滚凭据，
@@ -166,12 +139,12 @@ fn abandon_records(target: &str, identity: &TargetIdentity, disk: Option<&FileSo
             "the device identity of '{target}' is not unique among the visible whole disks ({why}) — a record \
              at this target's slot cannot be proven to belong to this disk, so nothing was renamed; resolve the \
              identity conflict (only one disk with that identity may be attached), then re-run `diskedit \
-             abandon '{target}'`"
+             recover --release '{target}'`"
         )));
     }
     // 归属判定：目标身份读不出时，记录归属无法证明，一份也不释放。
     // 只认同一载体（`same_carrier`，不是含 loop 映射的 `matches` 或完整身份比对）：容量变化
-    // 或 loop 映射变化说明记录不可回放，但仍属于这个目标，abandon 存在的意义正是让这种记录
+    // 或 loop 映射变化说明记录不可回放，但仍属于这个目标，`recover --release` 存在的意义正是让这种记录
     // 能被释放。逐条打印用的也是这一个口径
     let live = match disk {
         Some(d) => match crate::recovery::ownership_scene(d) {
@@ -179,12 +152,12 @@ fn abandon_records(target: &str, identity: &TargetIdentity, disk: Option<&FileSo
             Err(e) => bail_fail(RunOutcome::refused(format!(
                 "the target's identity could not be read ({e:?}), so no recovery record can be proven to \
                  belong to it — nothing was renamed; make '{target}' readable as the target this scene was \
-                 recorded for, then re-run `diskedit abandon '{target}'`"
+                 recorded for, then re-run `diskedit recover --release '{target}'`"
             ))),
         },
         None => bail_fail(RunOutcome::refused(format!(
             "the target could not be opened, so no recovery record can be proven to belong to it — nothing was \
-             renamed; attach or reopen '{target}', then re-run `diskedit abandon '{target}'`"
+             renamed; attach or reopen '{target}', then re-run `diskedit recover --release '{target}'`"
         ))),
     };
     // 先把要放弃的东西如实报出来。放弃的是一种能力而非数据，所以解析不出来的那些
@@ -220,22 +193,15 @@ fn abandon_records(target: &str, identity: &TargetIdentity, disk: Option<&FileSo
             }
             crate::recovery::CompanionProbe::Damaged(why) => eprintln!(
                 "warning: {} is not readable as a recovery record ({why}) — what it could roll back is unknown, \
-                 and abandoning it gives that up for good",
+                 and releasing it gives that up for good",
                 path.display()
             ),
-            crate::recovery::CompanionProbe::Foreign { magic } => eprintln!(
-                "{}: {}",
-                path.display(),
-                match crate::recovery::legacy_layout(*magic) {
-                    Some(name) => format!(
-                        "recovery record {}",
-                        crate::recovery::legacy_layout_sentence(name)
-                    ),
-                    None => "recovery record in a layout this build does not recognize".to_string(),
-                }
+            crate::recovery::CompanionProbe::Foreign => eprintln!(
+                "{}: recovery record in a layout this build does not recognize",
+                path.display()
             ),
             crate::recovery::CompanionProbe::Unreadable(why) => eprintln!(
-                "warning: {} is a recovery record that cannot be read here ({why}); abandoning it gives up \
+                "warning: {} is a recovery record that cannot be read here ({why}); releasing it gives up \
                  that rollback evidence for good",
                 path.display()
             ),
@@ -245,30 +211,30 @@ fn abandon_records(target: &str, identity: &TargetIdentity, disk: Option<&FileSo
             crate::recovery::CompanionProbe::Absent => {}
         }
     }
-    // 自动隔离要求头、身份段 CRC、身份链全部通过。头读不懂就不算
-    // "归属已确认"，拒绝自动隔离，一处也不改名
+    // 自动隔离要求探针解出完整记录（魔数、头 CRC、载荷 CRC、全部尾段）且记录的目标身份属于当前载体；
+    // 任一项不通过就不算"归属已确认"，拒绝自动隔离，一处也不改名
     if let Some(path) = records.iter().find_map(|r| match r.probe.as_ref() {
-        crate::recovery::CompanionProbe::Foreign { .. } => Some(r.path()),
+        crate::recovery::CompanionProbe::Foreign => Some(r.path()),
         _ => None,
     }) {
         let dir = path.parent().unwrap_or(path);
         bail_fail(RunOutcome::refused(format!(
             "{} is a recovery record in a layout this build does not recognize — the header check is \
-             part of ownership, so `abandon` will not quarantine it automatically; nothing was renamed. \
+             part of ownership, so `recover --release` will not quarantine it automatically; nothing was renamed. \
              The record directory is {}; remove that file by hand",
             path.display(),
             dir.display()
         )));
     }
     // 外来条目不是本工具的恢复文件：改名它等于把用户别的东西挪走，删除更是碰不到它指向的
-    // 目标。abandon 只转换恢复文件，遇到这类条目就整体拒绝，一处也不改名
+    // 目标。本命令只转换恢复文件，遇到这类条目就整体拒绝，一处也不改名
     if let Some((message, path)) = records
         .iter()
         .find_map(|r| r.foreign_message().map(|m| (m, r.path())))
     {
         let dir = path.parent().unwrap_or(path);
         bail_fail(RunOutcome::refused(format!(
-            "{message} — abandon only renames recovery files, so nothing was renamed; the record directory is \
+            "{message} — `recover --release` only renames recovery files, so nothing was renamed; the record directory is \
              {}; remove that file by hand",
             dir.display()
         )));
@@ -287,7 +253,7 @@ fn abandon_records(target: &str, identity: &TargetIdentity, disk: Option<&FileSo
     // 并说清目标仍被挡住与下一步——"看起来释放了、下次仍 busy"正是这里要消除的状态
     if !foreign.is_empty() {
         bail_fail(RunOutcome::refused(format!(
-            "{} — this is not the target's own recovery scene; abandoning it here would destroy another \
+            "{} — this is not the target's own recovery scene; releasing it here would destroy another \
              target's rollback evidence, so nothing was renamed and this target stays blocked; move the \
              foreign record out of the recovery path by hand, then retry",
             foreign.join("; ")
@@ -299,12 +265,12 @@ fn abandon_records(target: &str, identity: &TargetIdentity, disk: Option<&FileSo
         match replay_ranges(&records) {
             Some(0) => {}
             Some(n) => bail_fail(RunOutcome::refused(format!(
-                "abandoning this scene gives up {n} recorded change(s) that `undo` could still replay — \
-                 nothing was renamed; re-run `diskedit abandon '{target}' --yes --discard-replay` to confirm"
+                "releasing this scene gives up {n} recorded change(s) that `recover` could still replay — \
+                 nothing was renamed; re-run `diskedit recover --release '{target}' --yes --discard-replay` to confirm"
             ))),
             None => bail_fail(RunOutcome::refused(format!(
-                "part of this scene is not readable, so the number of changes `undo` could still replay is \
-                 unknown — nothing was renamed; re-run `diskedit abandon '{target}' --yes --discard-replay` to \
+                "part of this scene is not readable, so the number of changes `recover` could still replay is \
+                 unknown — nothing was renamed; re-run `diskedit recover --release '{target}' --yes --discard-replay` to \
                  confirm giving that up"
             ))),
         }
@@ -320,7 +286,7 @@ fn abandon_records(target: &str, identity: &TargetIdentity, disk: Option<&FileSo
     }
     if failed.is_empty() {
         println!(
-            "abandoned {} recovery record(s) on this target — rollback is no longer possible, the target's \
+            "released {} recovery record(s) on this target — rollback is no longer possible, the target's \
              bytes were not changed, and the target can be written again (the records are kept in the \
              quarantine area as .abandoned[.N])",
             records.len()
@@ -334,8 +300,8 @@ fn abandon_records(target: &str, identity: &TargetIdentity, disk: Option<&FileSo
         // 本次运行就改变了持久状态——不是 NoMutation（4）；全部失败才是 4
         let done = records.len() - failed.len();
         let cause = format!(
-            "abandoned {done} of {} recovery record(s) on this target; the rest failed ({}) — the target stays \
-             blocked until they are released, so re-run `diskedit abandon '{target}' --yes` to release them",
+            "released {done} of {} recovery record(s) on this target; the rest failed ({}) — the target stays \
+             blocked until they are released, so re-run `diskedit recover --release '{target}' --yes` to release them",
             records.len(),
             failed.join("; ")
         );
@@ -343,7 +309,7 @@ fn abandon_records(target: &str, identity: &TargetIdentity, disk: Option<&FileSo
     }
 }
 
-/// 调用链：`abandon_records` 在设备声明判定的四种结论下是否动记录。枚举、判定与
+/// 调用链：`release_records` 在设备声明判定的四种结论下是否动记录。枚举、判定与
 /// 隔离转换都是生产代码；被替换的只有块设备打开（`test_block_source`）与 sysfs 根
 /// （`dev::with_sysfs_root`），即"这台设备是谁"的事实来源
 #[cfg(all(test, target_os = "linux"))]
@@ -384,7 +350,7 @@ mod tests {
         }
     }
 
-    /// 落点里放一条字节序列，只要求"存在"，不要求它能解码——abandon 面对的正是这类现场
+    /// 落点里放一条字节序列，只要求"存在"，不要求它能解码——`recover --release` 面对的正是这类现场
     fn plant_unreadable(case: &Case, device_id: &str) -> PathBuf {
         let record = case.record_of(device_id);
         crate::testdir::private_record_dir(record.parent().unwrap());
@@ -428,7 +394,7 @@ mod tests {
     fn run(case: &Case, device_id: &str, src: &FileSource) -> u8 {
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             crate::dev::with_sysfs_root(&case.sys, || {
-                abandon_records(device_id, &src.identity, Some(src), true)
+                release_records(device_id, &src.identity, Some(src), true)
             })
         }));
         match outcome {
@@ -444,7 +410,7 @@ mod tests {
     /// 声明唯一：隔离确实发生——其余三条的"没动"由此才有对照
     #[test]
     fn a_unique_declaration_quarantines_the_record() {
-        let case = Case::new("abandon-match");
+        let case = Case::new("release-match");
         let node = case.disk("sda");
         attr(&node, "device/serial", "SN-1\n");
         bind_rdev(&case.sys, 8, 0, &node);
@@ -459,7 +425,7 @@ mod tests {
     /// 另有设备携带同一声明：记录原样留下，不进隔离区
     #[test]
     fn an_ambiguous_declaration_leaves_the_record_in_place() {
-        let case = Case::new("abandon-ambiguous");
+        let case = Case::new("release-ambiguous");
         let node = case.disk("sda");
         attr(&node, "device/serial", "SN-1\n");
         bind_rdev(&case.sys, 8, 0, &node);
@@ -477,7 +443,7 @@ mod tests {
     /// 记录由另一身份写下：拒绝释放，字节不变
     #[test]
     fn a_record_for_another_target_is_not_released() {
-        let case = Case::new("abandon-mismatch");
+        let case = Case::new("release-mismatch");
         let node = case.disk("sda");
         attr(&node, "device/serial", "SN-1\n");
         bind_rdev(&case.sys, 8, 0, &node);
@@ -496,7 +462,7 @@ mod tests {
     /// 设备读不出声明：无法证明记录归属，拒绝释放
     #[test]
     fn an_undeclared_device_releases_nothing() {
-        let case = Case::new("abandon-insufficient");
+        let case = Case::new("release-insufficient");
         let node = case.disk("sda");
         bind_rdev(&case.sys, 8, 0, &node);
         let record = plant_unreadable(&case, "SN-1");

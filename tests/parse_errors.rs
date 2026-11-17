@@ -23,13 +23,13 @@ fn rejected(args: &[&str], needle: &str) {
 fn unknown_command_and_undeclared_options_are_refused() {
     rejected(&["frobnicate"], "usage");
     rejected(&["info", "img.bin", "--bogus"], "unknown flag");
-    rejected(&["info", "img.bin", "--yes"], "is not a valid option");
-    rejected(&["resize", "img.bin:1", "+2G", "--align", "mib"], "is not a valid option");
+    rejected(&["info", "img.bin", "--yes"], "is not valid for `diskedit info");
+    rejected(&["resize", "img.bin:1", "+2G", "--align", "mib"], "is not valid for `diskedit resize");
     rejected(&["help", "frobnicate"], "usage");
 }
 
-/// `--chunk-size` 不在完整注册表内；`resize --start/--end`、`resize-part --start`、
-/// `resize-part --no-fs`、`add --end` 明确列入「未登记（收到即 2）」。未声明选项 → 2。
+/// `--chunk-size` 不在完整注册表内；`resize --start`、`resize` 位置参数与 `--end` 互斥、
+/// `add --end` 明确列入「未登记（收到即 2）」。未声明选项 → 2。
 #[test]
 fn unregistered_flags_are_refused() {
     rejected(
@@ -38,23 +38,23 @@ fn unregistered_flags_are_refused() {
     );
     rejected(
         &["resize", "img.bin:1", "1G", "--start", "5"],
-        "not a valid option for `resize`",
+        "is not valid for `diskedit resize",
     );
     rejected(
         &["resize", "img.bin:1", "1G", "--end", "9"],
-        "not a valid option for `resize`",
+        "unexpected extra argument",
     );
     rejected(
-        &["resize-part", "img.bin:1", "--start", "5", "--end", "9"],
-        "not a valid option for `resize-part`",
+        &["resize", "img.bin:1", "--start", "5", "--end", "9"],
+        "is not valid for `diskedit resize",
     );
     rejected(
-        &["resize-part", "img.bin:1", "--end", "9", "--no-fs"],
-        "not a valid option for `resize-part`",
+        &["resize", "img.bin:1", "--end", "9", "--discard-replay"],
+        "is not valid for `diskedit resize",
     );
     rejected(
         &["add", "img.bin", "1M", "--end", "9"],
-        "not a valid option for `add`",
+        "is not valid for `diskedit add",
     );
 }
 
@@ -65,7 +65,7 @@ fn missing_values_are_refused() {
         ("move", "--align"),
         ("move", "--chunk"),
         ("move", "--start"),
-        ("resize-part", "--end"),
+        ("resize", "--end"),
         ("add", "--type-guid"),
         ("add", "--name"),
         ("mkfs", "--label"),
@@ -86,7 +86,7 @@ fn invalid_value_domains_are_refused() {
         (&["move", "img.bin:1", "--chunk", "0"][..], "1..=64"),
         (&["move", "img.bin:1", "--chunk", "65"][..], "1..=64"),
         (&["move", "img.bin:1", "--start", "abc"][..], "an LBA or `end`"),
-        (&["resize-part", "img.bin:1", "--end", "abc"][..], "an LBA"),
+        (&["resize", "img.bin:1", "--end", "abc"][..], "an LBA"),
         (&["add", "img.bin", "1M", "--type-guid", "nope"][..], "GUID"),
         (&["add", "img.bin", "1M", "--part-number", "x"][..], "partition number"),
         (&["new", "img.bin", "--table", "bsd"][..], "gpt|mbr"),

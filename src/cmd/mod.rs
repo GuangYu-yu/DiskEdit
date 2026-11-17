@@ -1,12 +1,12 @@
-pub(crate) mod abandon;
 pub(crate) mod fs;
 pub(crate) mod info;
+pub(crate) mod info_grow;
 pub(crate) mod inspect;
 pub(crate) mod layout;
-pub(crate) mod plan;
 pub(crate) mod records;
+pub(crate) mod recover;
+pub(crate) mod release;
 pub(crate) mod resize;
-pub(crate) mod undo;
 
 use crate::cli::{CommandDef, Confirmation, Request, TargetMode};
 use crate::domain::MediaKind;
@@ -194,12 +194,17 @@ pub(crate) fn dispatch(def: &CommandDef, req: &Request) -> CmdResult {
         Request::Check(a) => fs::cmd_check(a).into(),
         Request::Mkfs(a) => fs::cmd_mkfs(a).into(),
         Request::Resizefs(a) => fs::cmd_resizefs(a).into(),
-        Request::Undo(a) => undo::cmd_undo(a).into(),
-        Request::Abandon(a) => abandon::cmd_abandon(a).into(),
+        Request::Recover(a) => {
+            if a.release {
+                release::cmd_release(a).into()
+            } else {
+                recover::cmd_recover(a).into()
+            }
+        }
         Request::New(a) => layout::cmd_new(a).into(),
         Request::Add(a) => layout::cmd_add(a).into(),
-        Request::ResizePart(a) => layout::cmd_resize_part(a).into(),
-        Request::Plan(a) => plan::cmd_plan(a).into(),
+        Request::ResizeEnd(a) => layout::cmd_resize_end(a).into(),
+        Request::InfoGrow(a) => info_grow::cmd_info_grow(a).into(),
     };
     // 开了撤销窗口的命令必须带回后置状态：只给退出码时退回"码是 0 即完成"，
     // 5 的待办非空与仅内核视图过期分不出来
@@ -236,12 +241,9 @@ mod tests {
             ("check", ReadOnly),
             ("mkfs", WriteJournal),
             ("resizefs", WriteJournal),
-            ("undo", WriteNoJournal),
-            ("abandon", WriteNoJournal),
+            ("recover", WriteNoJournal),
             ("new", WriteJournal),
             ("add", WriteJournal),
-            ("resize-part", WriteJournal),
-            ("plan", ReadOnly),
         ];
         for (name, mode) in expected {
             let c = find(name).unwrap_or_else(|| panic!("{name}: not a command"));
@@ -275,12 +277,9 @@ mod tests {
             ("check", &[ReadOnly, ExternalTool]),
             ("mkfs", &[CompanionFile, ExternalTool, DeviceState]),
             ("resizefs", &[CompanionFile, ExternalTool, DeviceState]),
-            ("undo", &[TargetData, CompanionFile, ExternalTool, DeviceState]),
-            ("abandon", &[CompanionFile]),
+            ("recover", &[TargetData, CompanionFile, ExternalTool, DeviceState]),
             ("new", &[TargetData, CompanionFile, DeviceState]),
             ("add", &[TargetData, CompanionFile, DeviceState]),
-            ("resize-part", &[TargetData, CompanionFile, ExternalTool, DeviceState]),
-            ("plan", &[ReadOnly]),
         ];
         for (name, caps) in expected {
             let c = find(name).unwrap_or_else(|| panic!("{name}: not a command"));
@@ -296,7 +295,7 @@ mod tests {
     }
 
     /// 能力门只查本平台能打开的载体形态：Linux 两种全放行；非 Linux 只有镜像可打开，
-    /// 纯只读命令（info/plan）放行，任何写侧/证据侧需求都命中缺口。
+    /// 纯只读命令（info）放行，任何写侧/证据侧需求都命中缺口。
     /// 空声明由 dispatch 单独拒绝——needs_for 空集不会自己产生缺口，不能默认放行
     #[test]
     fn capability_gate_admits_only_what_the_platform_can_open() {
@@ -378,11 +377,11 @@ mod tests {
         line.split_whitespace().map(strip).collect()
     }
 
-    /// 用法行上的旗标名：按声明顺序扫全部用法行。
-    /// 反向对账只扫用法行——正文会合法地引用别的命令的旗标（copy 提到
-    /// resize 的 --allow-move，resize 点名拒绝 --start/--end）
+    /// 用法行上的旗标名：按声明顺序扫全部形态的语法行。
+    /// 反向对账只扫语法行——正文会合法地引用别的命令的旗标（copy 提到
+    /// resize 的 --allow-move，resize 的正文点名拒绝 --start）
     fn synopsis_tokens(c: &CommandDef) -> Vec<&'static str> {
-        c.syntax.iter().flat_map(|line| line_tokens(line)).collect()
+        c.variants.iter().flat_map(|v| line_tokens(v.syntax)).collect()
     }
 
     fn synopsis_flags(c: &CommandDef) -> Vec<&'static str> {
@@ -406,7 +405,12 @@ mod tests {
                     c.name
                 );
             }
-            for f in c.options.iter().map(|o| o.name) {
+            for f in c
+                .common_options
+                .iter()
+                .chain(c.variants.iter().flat_map(|v| v.options.iter()))
+                .map(|o| o.name)
+            {
                 assert!(help.contains(f), "{}: accepts {f} but its help never mentions it", c.name);
             }
         }
@@ -418,7 +422,7 @@ mod tests {
     #[test]
     fn synopsis_flag_shape_matches_the_registry() {
         for c in COMMANDS {
-            for line in c.syntax {
+            for line in c.syntax_lines() {
                 let raw: Vec<&'static str> = line.split_whitespace().collect();
                 let tokens: Vec<&'static str> = raw.iter().copied().map(strip).collect();
                 for (i, t) in tokens.iter().enumerate() {

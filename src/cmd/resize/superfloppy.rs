@@ -69,11 +69,15 @@ pub(crate) fn cmd_resize_superfloppy(a: &ResizeRequest) -> crate::outcome::RunOu
     // 挂载点没卸掉是一条未完成的后置条件：它随成功结果浮出，退出码因此是 5。
     // 目标没有分区表，待办里的分区号记 0
     let pending = match fsops::resize_fs_whole(&mut src, Some(fstype)) {
-        Ok(Some(leak)) => {
-            eprintln!("warning: {leak}");
-            vec![leak.into_pending(0)]
+        Ok(outcome) => {
+            if let Some(leak) = outcome.leak() {
+                eprintln!("warning: {leak}");
+            }
+            if let Some(line) = outcome.ok_line() {
+                println!("{line}");
+            }
+            outcome.pending(0)
         }
-        Ok(None) => Vec::new(),
         Err(e) => bail_fail(RunOutcome::from(e).context("FS grow failed")),
     };
     // 无分区表可写：FS 已扩，事务完成；清理待办随结果浮出

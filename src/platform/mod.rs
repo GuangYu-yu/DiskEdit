@@ -171,14 +171,23 @@ pub(crate) fn is_zero_designator(value: &str) -> bool {
     !v.is_empty() && v.bytes().all(|b| b == b'0' || b == b'-')
 }
 
+/// 只有设计符前缀、没有载荷（`t10.`、`naa.`）：与全零同义，设备没有给出身份
+pub(crate) fn is_bare_designator(value: &str) -> bool {
+    ["t10.", "naa.", "eui.", "uuid."].iter().any(|prefix| value.eq_ignore_ascii_case(prefix))
+}
+
 /// 把 `属性名=值` 原串拆成一条声明。空白、空串、全零设计符（见 [`is_zero_designator`]）
-/// 都表示"设备没有给出身份"，不构成声明。没有 `=` 的原串按裸值处理，属性名为空
+/// 都表示"设备没有给出身份"，不构成声明。没有 `=` 的原串按裸值处理，属性名为空。
+///
+/// `t10.` 设计符是定长 ASCII 字段，尾部以空格填满；比较前去掉这些填充空格，去掉后
+/// 没有内容即"没有给出身份"
 pub(crate) fn claim_of(raw: &str) -> Option<Claim> {
     let (attr, value) = match raw.split_once('=') {
         Some((attr, value)) => (attr.trim(), value.trim()),
         None => ("", raw.trim()),
     };
-    if value.is_empty() || is_zero_designator(value) {
+    let value = value.trim_end_matches(' ');
+    if value.is_empty() || is_zero_designator(value) || is_bare_designator(value) {
         return None;
     }
     Some(Claim { ns: Namespace::of(attr, value), value: value.to_string() })
@@ -293,10 +302,14 @@ impl DirFd {
     /// 锚点的独立句柄：解析父目录链时每一级都要有自己的所有权
     pub(crate) fn try_clone(&self) -> std::io::Result<std::os::fd::OwnedFd> {
         use std::os::fd::{FromRawFd, OwnedFd};
+        // SAFETY: `self.0` 在整个调用期间持有打开的描述符，`as_raw()` 取到的 fd 因此有效；
+        // `F_DUPFD_CLOEXEC` 只读描述符编号并分配一个新 fd，不读写调用方内存
         let raw = unsafe { libc::fcntl(self.as_raw(), libc::F_DUPFD_CLOEXEC, 0) };
         if raw < 0 {
             return Err(std::io::Error::last_os_error());
         }
+        // SAFETY: `raw` 是上面刚由 `fcntl` 返回的非负 fd，此前没有别的所有者，交给
+        // `OwnedFd` 独占
         Ok(unsafe { OwnedFd::from_raw_fd(raw) })
     }
 
@@ -306,6 +319,9 @@ impl DirFd {
         use std::os::unix::ffi::OsStrExt;
         let name = std::ffi::CString::new(path.as_os_str().as_bytes())
             .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidInput, "the anchor path contains NUL"))?;
+        // SAFETY: `name.as_ptr()` 指向的 `CString` 在整个调用期间存活、以 NUL 结尾；
+        // 标志是 O_RDONLY | O_DIRECTORY | O_CLOEXEC，不含 O_CREAT / O_TMPFILE，因此
+        // `open` 的可变参数（mode）不会被读取
         let raw = unsafe {
             libc::open(
                 name.as_ptr(),
@@ -315,6 +331,8 @@ impl DirFd {
         if raw < 0 {
             return Err(std::io::Error::last_os_error());
         }
+        // SAFETY: `raw` 是上面刚由 `open` 返回的非负 fd，此前没有别的所有者，交给
+        // `OwnedFd` 独占
         Ok(Self(unsafe { OwnedFd::from_raw_fd(raw) }))
     }
 }

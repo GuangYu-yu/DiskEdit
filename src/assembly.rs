@@ -176,13 +176,13 @@ pub(crate) fn assemble_table_step(
         TableContent::Gpt { kind, content, protective_mbr } => {
             // 主数组声明位置 ≠ 规范位置（LBA2）时，提交会把数组归位并覆盖该区间的
             // 现有字节。归位本身是有意决策（位置字段由提交规范化），但覆盖非数组
-            // 字节不能静默：写前比对已把原文登记进恢复记录，undo 可回放，这里只
+            // 字节不能静默：写前比对已把原文登记进恢复记录，`recover` 可回放，这里只
             // 补足知情
             if content.header.partition_entry_lba != 2 {
                 eprintln!(
                     "note: the on-disk GPT declares its primary entry array at LBA {}; committing \
                      normalizes it to LBA 2 and overwrites the bytes there (the pre-image is captured \
-                     in the recovery record and can be rolled back with `diskedit undo`)",
+                     in the recovery record and can be rolled back with `diskedit recover`)",
                     content.header.partition_entry_lba
                 );
             }
@@ -246,13 +246,29 @@ pub(crate) fn assemble_repair_plan(
             let vg = ValidatedGeometry::new(&g, file_last_lba, Some(*new_last_usable))
                 .map_err(|e| RunOutcome::refused(e.to_string()))?;
             let content = vg.content();
-            let protective_mbr = crate::table::protective_mbr_content(src, g.ss)?;
+            // 顺序：先读定快照，再由快照里的 LBA0 决定保护 MBR 是否重写，最后装配。
+            // 反过来会在"算保护 MBR"与"取快照"之间再读一次盘，两段字节来自不同时刻，
+            // 写前比对基线与实际写入段就可能不是同一份事实
+            let probe_without_mbr = TableContent::Gpt {
+                kind: TableWriteKind::Repair,
+                content: &content,
+                protective_mbr: None,
+            };
+            let snapshot = take_table_snapshot_decided(src, &probe_without_mbr, &vg.decided_regions())?;
+            let lba0 = snapshot
+                .regions
+                .iter()
+                .position(|r| r.offset == 0)
+                .and_then(|i| snapshot.bytes.get(i))
+                .ok_or_else(|| RunOutcome::internal("the table snapshot does not contain LBA0"))?;
+            let mut lba0 = lba0.clone();
+            let protective_mbr =
+                crate::table::protective_mbr_content_from(&mut lba0, src.size / g.ss);
             let probe = TableContent::Gpt {
                 kind: TableWriteKind::Repair,
                 content: &content,
                 protective_mbr: protective_mbr.as_deref(),
             };
-            let snapshot = take_table_snapshot_decided(src, &probe, &vg.decided_regions())?;
             confirmed_table_step(src, probe, snapshot)
         }
         // 仅保护 MBR：四段保持原样，写入段只有 LBA0
@@ -493,7 +509,7 @@ pub(crate) fn assemble_copy(
     })
 }
 
-/// `resize-part` 的表步骤：`geometry` 已经带着请求的新末端，本函数按几何算新表内容，
+/// `resize --end` 的表步骤：`geometry` 已经带着请求的新末端，本函数按几何算新表内容，
 /// 紧接内容读定写前快照，再取保护性 MBR 的规范化内容，装配为单步 `WriteTable`。
 /// 区间、重叠与确认门由命令层在此之前判定；`FsResize` 收尾另由 [`assemble_fs_resize`]
 /// 在表落盘之后装配。计划的扇区口径取表自身的 ss。
@@ -537,7 +553,7 @@ pub(crate) fn assemble_resize_part(
     }
     steps.push(crate::planner::PlanStep::WriteTable(step));
     crate::planner::ConfirmedPlan::assembled_move_plan(steps, sector_size).ok_or_else(|| {
-        RunOutcome::internal("the resize-part plan assembled to an invalid step shape — refusing".to_string())
+        RunOutcome::internal("the resize plan assembled to an invalid step shape — refusing".to_string())
     })
 }
 
@@ -829,12 +845,12 @@ fn destination_outside_usable(
     crate::outcome::attribute(
         || {
             RunOutcome::partial(format!(
-                "{detail} — the job may already have written the target; inspect it and use `diskedit undo` before retrying"
+                "{detail} — the job may already have written the target; inspect it and use `diskedit recover` before retrying"
             ))
         },
         || {
             RunOutcome::no_mutation(format!(
-                "{detail} — this run has not written the target; the recovery record can be abandoned"
+                "{detail} — this run has not written the target; the recovery record can be released"
             ))
         },
     )

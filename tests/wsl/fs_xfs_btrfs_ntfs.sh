@@ -20,7 +20,11 @@ mount_at "${LD}p1" "$TEST_MNT" && dd if=/dev/urandom of="$TEST_MNT/blob" bs=1M c
 MX=$(mdsum "$TEST_MNT"/blob)
 echo "before: $(df -h --output=size "$TEST_MNT" | tail -1) md5=$MX"
 umount "$TEST_MNT" 2>/dev/null; lo_detach "$LD"
-OUT=$($B resize --yes "$T":1 1500M 2>&1); echo "resize exit=$? out: $(echo "$OUT" | tail -1)"
+OUT=$($B resize --yes "$T":1 1500M 2>&1); E=$?
+echo "resize exit=$E : $(echo "$OUT" | tail -1)"
+# xfs 没有设备级回读：工具成功但尺寸未证实 → 5，待办给出挂载后的尺寸核对
+[ "$E" = "5" ] && echo "A XFS-GROW-UNVERIFIED OK" || { echo "A WRONG EXIT ($E, want 5)"; rc=1; }
+echo "$OUT" | grep -q "df -B1" && echo "A XFS SIZE-CHECK HINT OK" || { echo "A NO SIZE-CHECK HINT"; rc=1; }
 LD=$(lo_attach "$T")
 mount_at "${LD}p1" "$TEST_MNT" && { echo "after: $(df -h --output=size "$TEST_MNT" | tail -1)"; G=$(mdsum "$TEST_MNT"/blob); [ "$MX" = "$G" ] && echo "XFS DATA OK" || { echo "XFS DATA CORRUPT"; rc=1; }; umount "$TEST_MNT" 2>/dev/null; }
 xfs_repair -n "${LD}p1" >/dev/null 2>&1; echo "xfs_repair -n exit=$? (0=clean)"

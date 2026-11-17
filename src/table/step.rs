@@ -80,6 +80,7 @@ pub(crate) fn gpt_compare_regions(src: &FileSource, gpt: &GptContent) -> Result<
     )
     .map_err(|e| RunOutcome::refused(e.to_string()))?;
     let span = geom.lba_span();
+    let array_bytes = geom.span_bytes();
     let backup_array_lba = gpt
         .last_lba
         .checked_sub(span)
@@ -96,9 +97,16 @@ pub(crate) fn gpt_compare_regions(src: &FileSource, gpt: &GptContent) -> Result<
         )));
     }
     let mut regions = vec![TableRegion { offset: 0, len: ss }];
-    for (lba, sectors) in [(1, 1), (2, span), (backup_array_lba, span), (last_lba, 1)] {
-        let region = TableRegion::lba(lba, sectors, ss).map_err(|e| RunOutcome::refused(e.to_string()))?;
-        regions.push(region);
+    for (lba, len) in [
+        (1, ss),
+        (2, array_bytes),
+        (backup_array_lba, array_bytes),
+        (last_lba, ss),
+    ] {
+        let offset = lba
+            .checked_mul(ss)
+            .ok_or_else(|| RunOutcome::refused("table region offset overflows"))?;
+        regions.push(TableRegion { offset, len });
     }
     Ok(regions)
 }

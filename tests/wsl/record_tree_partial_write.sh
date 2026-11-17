@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 单文件记录流式 / FS 深度校验 / 复杂目录树 / torn write 模拟
+# 单文件记录流式 / FS 深度校验 / 复杂目录树 / partial write 模拟
 source "$(dirname "$0")/lib.sh"
 require_fault_bin
 
@@ -35,14 +35,14 @@ OUT=$(DISKEDIT_FAULT=chunk:60 $BF move "$T":2 --start 250000 --chunk 1 --yes 2>&
 JSZ=$(stat -c%s "$(record_file "$T")" 2>/dev/null || echo 0)
 echo "record = $JSZ bytes (搬移量约 100M)"
 if [ "$JSZ" -gt 5 ] && [ "$JSZ" -lt 1048576 ]; then echo "A1 RECORD-STREAMING OK (<1MiB, 只记进度不记数据)"; else { echo "A1 JOURNAL SIZE ODD ($JSZ)"; rc=1; }; fi
-echo "-- A2: 中断搬移的 undo——记录里没有表快照，undo 拒绝 --"
+echo "-- A2: 中断搬移的 recover——记录里没有表快照，recover 拒绝 --"
 # 表步骤未提交，preimage 为空。判定只看拒绝类别：退 3、记录保留、拒绝指向记录本身；
 # 不绑具体原因文案
-OUT=$($B undo "$T" --yes 2>&1); E=$?
+OUT=$($B recover "$T" --yes 2>&1); E=$?
 echo "exit=$E msg: $(echo "$OUT" | head -1 | cut -c1-70)"
 [ "$E" = "3" ] && [ -e "$(record_file "$T")" ] && echo "$OUT" | grep -q "the recovery record at" \
-  && echo "A2 UNDO-REFUSES-PROGRESS OK" \
-  || { echo "A2 UNDO WRONG (want 3 + refusal naming the record + record kept)"; rc=1; }
+  && echo "A2 RECOVER-REFUSES-PROGRESS OK" \
+  || { echo "A2 RECOVER WRONG (want 3 + refusal naming the record + record kept)"; rc=1; }
 echo "-- A3: 完成后记录应被删除 --"
 $B move "$T":2 --start 250000 --chunk 1 --yes >/dev/null 2>&1; E=$?
 record_absent "$T" && echo "A3 RECORD DROPPED OK (exit=$E)" || { echo "A3 RECORD LEFT (bad)"; rc=1; }
@@ -87,7 +87,7 @@ diff -q "$SNAP.t1" "$SNAP.t2" >/dev/null && echo "B TREE OK" || { echo "B TREE D
 umnt
 
 echo
-echo "########## C: torn write 模拟（GPT 头损坏 / 备份头损坏） ##########"
+echo "########## C: partial write 模拟（GPT 头损坏 / 备份头损坏） ##########"
 mk
 echo "-- C1: 擦除主头（LBA1）后读表 --"
 dd if=/dev/zero of="$T" bs=512 seek=1 count=1 conv=notrunc 2>/dev/null
@@ -98,7 +98,7 @@ else
   echo "C1 OK: 从备份头读到表"
 fi
 echo "-- C2: 主头损坏时写操作（工具已从备份头恢复表 → 写后应自洽）--"
-$B resize-part --yes "$T":3 --grow-to-end >/dev/null 2>&1; E=$?
+$B resize --yes "$T":3 --grow-to-end >/dev/null 2>&1; E=$?
 echo "write exit=$E"
 sgdisk -v "$T" >/dev/null 2>&1 && echo "C2 RECOVERED-CLEAN OK" || { echo "C2 INCONSISTENT AFTER WRITE"; rc=1; }
 echo "-- C3: 主头损坏 + new → 备份头被覆盖？（数据丢失风险） --"
@@ -111,7 +111,7 @@ mk
 SZ=$(stat -c%s "$T"); LAST=$((SZ / 512 - 1))
 dd if=/dev/zero of="$T" bs=512 seek=$LAST count=1 conv=notrunc 2>/dev/null
 echo "info: $($B info "$T" | head -c 50)"
-$B resize-part --yes "$T":3 --grow-to-end >/dev/null 2>&1; echo "repair exit=$?"
+$B resize --yes "$T":3 --grow-to-end >/dev/null 2>&1; echo "repair exit=$?"
 $B info "$T" | grep -o '"num":3,[^}]*}'
 sgdisk -v "$T" 2>&1 | tail -1
 

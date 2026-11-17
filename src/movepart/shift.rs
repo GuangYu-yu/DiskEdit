@@ -106,7 +106,7 @@ pub(crate) fn prepare_apply(
                 "the recovery record's relocation ends at LBA {request_end}, past the primary header's last \
                  usable LBA {}, and the backup header cannot be read — the boundary facts needed to resume are \
                  unavailable; this run wrote no bytes and the disk is where the previous job stopped. Check the \
-                 record with `diskedit inspect`, then release it with `diskedit abandon`; a fresh run records \
+                 record with `diskedit inspect`, then release it with `diskedit recover --release`; a fresh run records \
                  the job again",
                 g0.decided_last_usable_lba()
             )));
@@ -118,11 +118,8 @@ pub(crate) fn prepare_apply(
     for m in &plan.moves {
         // 续跑时按盘上**当前**起点探测：已搬完的条目内核视图停在新位置，
         // 探旧起点找不到节点，且新位置上的占用也看不见；新跑两者重合，行为不变
-        let probe_lba = g0.entry_index(m.part_num).and_then(|i| g0.entries().get(i))
-            .map(|e| e.starting_lba)
-            .unwrap_or(m.first_lba);
-        crate::fsops::ensure_idle_before_write(src, m.part_num, probe_lba.checked_mul(plan.ss)
-            .ok_or_else(|| RunOutcome::no_mutation("move source start overflows byte offset"))?, crate::fsops::WriteKind::Overwrite)?;
+        let probe_lba = move_probe_start(g0, m);
+        ensure_idle_at(src, m.part_num, probe_lba, plan.ss, crate::fsops::WriteKind::Overwrite)?;
     }
     // 几何由调用方解析并下传（构造点即拒绝条目重叠）；几何里的上界是"修复生效后"的值，
     // ckpt 的边界校验依赖它。盘在 plan 生成之后变了的话，由下面的恢复校验拒绝
@@ -139,8 +136,7 @@ pub(crate) fn prepare_apply(
         )));
     };
     // 目标分区只向右扩、起点不变：DM 栈已映射的扇区不受影响，按 Extend 放行其持有
-    crate::fsops::ensure_idle_before_write(src, plan.grow_part, ge.starting_lba.checked_mul(plan.ss)
-        .ok_or_else(|| RunOutcome::no_mutation("grow target start overflows byte offset"))?, crate::fsops::WriteKind::Extend)?;
+    ensure_idle_at(src, plan.grow_part, ge.starting_lba, plan.ss, crate::fsops::WriteKind::Extend)?;
     if !no_fs {
         // 要动的是哪一段、里面是什么 FS 由 grow_target_at 判定——与写盘后的收尾同一判据，
         // 两处只是区间不同。区间的 LBA 单位是**表自身**的 ss（plan.ss）。此处位于
@@ -222,7 +218,7 @@ pub(crate) fn prepare_apply(
         None => {
             // 走到这里有两种来源：新跑（plan 由当前盘上几何生成，成员自然停在 first_lba），
             // 或 plan 生成时还读到过搬移现场、而它在本次读取之前消失/损坏（例如并发的
-            // `abandon`）。后者本进程一个 chunk 都没搬过，成员必须
+            // `recover --release`）。后者本进程一个 chunk 都没搬过，成员必须
             // 仍停在 first_lba：已推进到目标位的成员，其源区可能已被右邻的拷贝覆盖，按旧
             // plan 从旧起点重读会把垃圾写回目标位，而后续表项提交照常成功
             for m in &plan.moves {
@@ -300,7 +296,7 @@ pub(crate) fn chunk_io_error(
 }
 
 /// `copy` 的块 I/O 失败提示：副本没有续跑，目标字节可能已被覆盖
-pub(crate) const COPY_HINT: &str = "copy has no resume — the target bytes may already be overwritten; release the scene with `diskedit abandon`, then re-run; a permanently unreadable block must be imaged with ddrescue first";
+pub(crate) const COPY_HINT: &str = "copy has no resume — the target bytes may already be overwritten; release the scene with `diskedit recover --release`, then re-run; a permanently unreadable block must be imaged with ddrescue first";
 
 /// 搬移进度的唯一持久载体是恢复记录；写会话里没有它就是事务装配错误
 fn record_journal(src: &mut WriteSource) -> io::Result<&mut crate::recovery::RecordJournal> {
@@ -318,6 +314,30 @@ pub(crate) fn bind_relocation(
     record_journal(src)
         .map_err(crate::recovery::PersistFailure::NotWritten)?
         .bind_relocation(reloc.clone(), lvm.map(LvmPostFacts::to_record))
+}
+
+/// 搬移源在盘上当前的起点。续跑时按盘上**当前**起点探测：已搬完的条目内核视图停在
+/// 新位置，探旧起点找不到节点，且新位置上的占用也看不见；新跑两者重合
+fn move_probe_start(g: &ValidatedGeometry, m: &PlanEntry) -> u64 {
+    g.entry_index(m.part_num)
+        .and_then(|i| g.entries().get(i))
+        .map(|e| e.starting_lba)
+        .unwrap_or(m.first_lba)
+}
+
+/// 占用闸的唯一判据。prepare 与 apply 各调用一次：判定与首写之间隔着等待确认，期间
+/// 目标可能被挂载或启用为 swap
+fn ensure_idle_at(
+    src: &FileSource,
+    part: u32,
+    start_lba: u64,
+    ss: u64,
+    kind: crate::fsops::WriteKind,
+) -> Result<(), RunOutcome> {
+    let offset = start_lba
+        .checked_mul(ss)
+        .ok_or_else(|| RunOutcome::no_mutation("partition start overflows byte offset"))?;
+    crate::fsops::ensure_idle_before_write(src, part, offset, kind)
 }
 
 /// 执行（写盘）：装配 → 绑定现场 → 执行器 → 扩容收尾。
@@ -369,6 +389,13 @@ pub(crate) fn execute_apply(
     // 判定与写盘之间的外部改动：条目必须还是锁下读到的那一份。装配会把随行几何写成
     // 表内容，少了这一步，等待用户确认期间别人改的表会被旧几何静默覆盖
     g.ensure_entries_unchanged_fail(src)?;
+    // 等待确认期间可能有人挂载或启用 swap：首写之前按与 prepare 同一判据重探。
+    // 放在绑定现场之前——绑定会改记录条目，拒绝必须发生在任何持久变化之前
+    for m in &plan.moves {
+        let probe_lba = move_probe_start(&g, m);
+        ensure_idle_at(src, m.part_num, probe_lba, plan.ss, crate::fsops::WriteKind::Overwrite)?;
+    }
+    ensure_idle_at(src, plan.grow_part, grow_start, plan.ss, crate::fsops::WriteKind::Extend)?;
     // 搬移与扩容装配成一份计划：每一步的写前快照是前一步的写后表戳，盘在装配之后被
     // 外部改动时由执行器的首写前比对拒绝
     let moves: Vec<(u32, u64)> = plan
@@ -435,6 +462,7 @@ pub(crate) fn execute_apply(
             // 条目在写表前已由 prepare_apply 验过，查不到就是内部矛盾，不能降级成
             // "这一侧没有答案"
             Some(is_swap_guid(&crate::gpt_policy::live_entry(&g, plan.grow_part)?.partition_type_guid)),
+            d.defer_ckpt,
             log,
             post,
         )?;
@@ -464,7 +492,7 @@ pub(crate) fn execute_apply(
 /// 扩容收尾的区间对（LBA，表自身 ss）：swap 重建读旧头的区间与探测新空间生效的区间
 /// 是两个不同的事实，调用点各给一次
 pub(crate) struct GrowthRegions {
-    pub(crate) old: (u64, u64), // 搬移前 (start, len)：swap 旧头仍在此处（两族都拒绝搬 swap，start 不变）
+    pub(crate) old: (u64, u64), // 搬移前 (start, len)：swap 不搬数据、落位后重建，旧头只在这里读出
     pub(crate) new: (u64, u64), // 提交后 (start, len)：探测按它进行
 }
 
@@ -476,12 +504,16 @@ pub(crate) struct GrowthRegions {
 /// 判据与写盘前的 preflight 是同一处，只是区间取扩容后的那份——两步之间盘被改动时
 /// 结论会变，那种情形归后置条件未完成（pending），不算拒绝
 /// 两侧对账（[`crate::movepart::reconcile_swap`]）只约束会改写的那一支
+// 参数是一次作业的独立事实（区间 / 扇区 / 声明 / 开关 / 日志 / 待办），合成结构体只是把它们换个位置
+// audit-allow: A-18
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn finalize_growth(
     src: &mut WriteSource,
     part: u32,
     r: GrowthRegions,
     ss: u64,
     declared: Option<bool>,
+    defer_lvm: bool,
     log: &mut dyn FnMut(&str),
     post: &mut Vec<Pending>,
 ) -> Result<(), RunOutcome> {
@@ -556,13 +588,13 @@ pub(crate) fn finalize_growth(
         // 故先探测一遍。
         // 此支不落 ExternalFsTool 屏障：PV 的外部写入（pvresize/lvextend）在收尾
         // resize_done 里发生，屏障由它携带 journal 写句柄在 spawn 前落——"表被回滚、
-        // PV 已扩"的自相矛盾同样被排除，且 undo 不再被"屏障已落、pvresize 未跑"的
+        // PV 已扩"的自相矛盾同样被排除，且 `recover` 不再被"屏障已落、pvresize 未跑"的
         // 死亡窗口无谓锁死。本支只探测、不写盘
         g @ (Growable::OverlayPending | Growable::SwapUnactivatable | Growable::NoFilesystem(_)) => {
             match swap_rebuild_pending(src, part, base, len).map_err(RunOutcome::from)? {
                 Some(missed) => post.push(missed),
                 None => {
-                    let p = grow_post(part, &g);
+                    let p = grow_post(part, &g, defer_lvm);
                     log(&p.log);
                     if let Some(item) = p.pending {
                         post.push(item);

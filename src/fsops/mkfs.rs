@@ -138,7 +138,7 @@ pub(crate) fn mkfs_tool(fstype: MkfsFs) -> Result<MkfsTool, FsError> {
 /// 对应的外部工具在不在 PATH 且可执行。两问都必须在这里答完
 ///
 /// 必须先问再开事务：拒绝的语义是"什么都没写"，而 mkfs 一旦开了事务就先落一条不可回滚
-/// 屏障——一个拼错的类型名、或一个没装的工具包，都不该把目标锁在"未收尾"状态里等 `abandon`
+/// 屏障——一个拼错的类型名、或一个没装的工具包，都不该把目标锁在"未收尾"状态里等 `recover --release`
 pub fn mkfs_capability(fstype: MkfsFs) -> Result<(), FsError> {
     let tool = mkfs_tool(fstype)?;
     find_tool(&tool.program).map(|_| ()).map_err(|e| match e {
@@ -197,7 +197,7 @@ pub fn mkfs(
     // 建 loop、定位分区节点、开设备都在写盘之前：这些失败必须停在"确定未写盘"这一侧，
     // 所以屏障不能由调用方在更早的位置落——它要在这条路径内部、紧贴 wipe_zero
     let dev = attach_partition_device(src, part, (part_off, part_len))?;
-    // 擦除一旦开始，前镜像就不再完整，undo 必须被拒；屏障写不下去时一个字节都还没动，
+    // 擦除一旦开始，前镜像就不再完整，回滚必须被拒；屏障写不下去时一个字节都还没动，
     // 故报 Io（→ NoMutation），不报 CommandFailed
     src.mark_non_reversible().map_err(|e| {
         FsError::from(io::Error::other(e.record_failure("the transaction barrier")))

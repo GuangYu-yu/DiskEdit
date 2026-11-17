@@ -331,12 +331,12 @@ pub(crate) fn move_entry_swap(
     Ok((src_first, sectors, verdict))
 }
 
-/// plan 的进入语义。`grow` 与 `SIZE` 两条命令共用同一个续跑槽位，续跑时必须
-/// 对上号：按自己的语义执行对方的 plan，就是把用户的请求静默放大或缩水
+/// `PlanKind` 的语义。`--grow-to-end` 与 `SIZE` 两种请求形态共用同一个续跑槽位，续跑时必须
+/// 对上号：按自己的语义执行对方的计划，就是把用户的请求静默放大或缩水
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum PlanKind {
-    /// 吃满右侧空闲的尾部打包（`resize grow --allow-move` / `plan --grow` 的预览）
+    /// 吃满右侧空闲的尾部打包（`resize --allow-move` / `info --grow` 的预览）
     TailPacked,
     /// 精确落在请求新末端的最小位移（`resize SIZE + --allow-move`）
     Shift,
@@ -348,7 +348,7 @@ pub struct Plan {
     pub grow_part: u32,
     pub moves: Vec<PlanEntry>,
     pub kind: PlanKind,
-    /// 待执行的修复动作：`plan --grow` 只预览，写命令把它装配成表步骤经执行器落盘
+    /// 待执行的修复动作：`info --grow` 只预览，写命令把它装配成表步骤经执行器落盘
     pub repair: RepairAction,
 }
 
@@ -544,7 +544,7 @@ pub(crate) fn plan_tail_packed(
 /// 目标原末端 + shift + 1，执行链的扩容终点（`min(new_first) − 1`）因此精确落在
 /// 请求的新末端——既不多吞目标与挡路者之间的间隙，也不少给。后续挡路者取
 /// 「紧随前一落点」与「当前位置」的较大者：已在目标位的挡路者得到 delta 0、执行器跳过。
-/// 计划生成因此对部分位移后的盘面幂等——中断后 `abandon` 重跑生成与一次做成相同的
+/// 计划生成因此对部分位移后的盘面幂等——中断后 `recover --release` 重跑生成与一次做成相同的
 /// 落点，不会对已搬段二次位移。输出按起始 LBA 降序，各分区的目的区要么落在尾部
 /// 空闲，要么落在其右侧已被搬空分区的旧位置，拷贝永不踩源
 pub(crate) fn shift_plan_from(
@@ -594,7 +594,7 @@ impl LvmPostFacts {
 
     /// 续跑：数值基线取记录，LV 路径只能取本次请求（记录里不保存路径）。`defer` 为真表示
     /// 本次入口接着跑 LVM 链：带着扩 LV 的基线却没有任何选定路径时，收尾会退化成只跑
-    /// pvresize——扩容请求被静默丢弃，所以在这里拒绝。不跑链的入口（`resize-part` / `move`）
+    /// pvresize——扩容请求被静默丢弃，所以在这里拒绝。不跑链的入口（`resize` / `move`）
     /// 不拒绝：未做的链由调用方按 Pending 报出，记录留给后续的 `resize`
     pub(crate) fn resumed(
         recorded: Self,
@@ -605,7 +605,7 @@ impl LvmPostFacts {
         if defer && recorded.lv_target > recorded.lv_size_before && lv_path.is_none() {
             return Err(RunOutcome::refused(
                 "the recovery record carries an LVM grow baseline but this run selected no LV — \
-                 re-run with --grow-lv <lv> to finish it, or `diskedit abandon` to release the record \
+                 re-run with --grow-lv <lv> to finish it, or `diskedit recover --release` to release the record \
                  and leave the partition as it is",
             ));
         }
@@ -763,7 +763,7 @@ pub fn has_pending_relocation(
 pub(crate) fn foreign_checkpoint_refusal() -> RunOutcome {
     RunOutcome::refused(
         "an unfinished relocation job for a different partition is recorded on this target — it belongs \
-         to the request that created it: finish it with that request, or release it with `diskedit abandon`",
+         to the request that created it: finish it with that request, or release it with `diskedit recover --release`",
     )
 }
 
@@ -771,16 +771,16 @@ pub(crate) fn foreign_checkpoint_refusal() -> RunOutcome {
 pub(crate) fn plan_job_owns_target(kind: PlanKind, different_size: bool) -> RunOutcome {
     match kind {
         PlanKind::TailPacked => RunOutcome::refused(
-            "an unfinished `resize grow` job owns this target — re-run that command to continue it, or \
-             release it with `diskedit abandon`",
+            "an unfinished `resize SIZE --allow-move` (tail packing) job owns this target — re-run that \
+             release it with `diskedit recover --release`",
         ),
         PlanKind::Shift if different_size => RunOutcome::refused(
             "an unfinished `resize SIZE --allow-move` job owns this target for a different size — re-run \
-             that command with its original size to continue it, or `diskedit abandon` to release it",
+             that command with its original size to continue it, or `diskedit recover --release` to release it",
         ),
         PlanKind::Shift => RunOutcome::refused(
             "an unfinished `resize SIZE --allow-move` job owns this target — re-run that command with the \
-             original size to continue it, or `diskedit abandon` to release it",
+             original size to continue it, or `diskedit recover --release` to release it",
         ),
     }
 }
@@ -815,14 +815,16 @@ pub(crate) fn resume_outcome(
         // 空计划重建出的 `moves` 是空集，续跑的几何与相交判据都会在空集上通过
         return Err(RunOutcome::refused(
             "the recorded relocation job has no entries — nothing can be resumed from it; release it with \
-             `diskedit abandon`",
+             `diskedit recover --release`",
         ));
     }
     if r.grow_part != grow_part {
         return Ok(ResumeRunOutcome::Occupied);
     }
     Ok(ResumeRunOutcome::Belongs(Plan {
-        ss: r.ss,
+        // 记录里的是作业当时的扇区大小；与本次几何的 ss 已在归属判定里核对过相等，
+        // 这里取几何的那一份，plan 的字节换算与预览只认本次的盘
+        ss: g.sector_size(),
         last_usable_lba: g.last_usable_lba(),
         grow_part: r.grow_part,
         moves: r.entries.iter().map(PlanEntry::from).collect(),

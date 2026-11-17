@@ -36,16 +36,6 @@ use guards::{production_lines, rust_sources, source};
 /// 也是折叠点上一行 `// audit-allow:` 标记里的那个词
 const ALLOWED: &[(&str, &str, &str)] = &[
     (
-        "cmd/records.rs",
-        "W-2",
-        "主机仓库目录枚举跳过类型读不出的项；不签发写许可（站点 S1-6，待修）",
-    ),
-    (
-        "cmd/records.rs",
-        "W-3",
-        "sidecar 目录枚举同上（站点 S1-7，待修）",
-    ),
-    (
         "online/part.rs",
         "W-4",
         "partx 状态读不出时走 BLKPG 回退，回退失败即报错（站点 S1-10，待复核）",
@@ -127,6 +117,12 @@ const ALLOWED: &[(&str, &str, &str)] = &[
         "W-17",
         "落盘失败后的内存补偿：只有重读到 `Known` 才把 `repair.state` 退回 `InFlight`；\
          `Absent` / `Undecidable` 没有可补偿的状态，且无论哪条都照常返回 `persist` 的错误",
+    ),
+    (
+        "recovery/record.rs",
+        "W-18",
+        "写出前的尾段对账只在围栏给定时进行：`Absent` / `Undecidable` 没有声明的围栏，\
+         不参与该对账，也不据此签发任何许可",
     ),
 ];
 

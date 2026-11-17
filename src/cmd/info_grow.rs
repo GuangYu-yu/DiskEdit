@@ -1,43 +1,16 @@
-//! plan 的只读报告与搬移计划的打印。`plan` 与 `info` 共用同一份报告；
+//! `info --grow` 的只读报告与搬移预览。报告与 `info` 共用同一份生成器；
 //! `print_plan`/`print_moves` 供 resize 在写表之前展示将要搬动的分区。
 
-use crate::cli::{InfoRequest, PlanRequest};
+use crate::cli::InfoRequest;
 use crate::gpt_policy;
 use crate::movepart;
 use crate::support::{bail_fail, RunOutcome};
 
-/// plan 的详助：只读报告，字段与 `info` 同源
-pub(crate) const DETAILS_PLAN: &str = r#"  Read-only report on a target: geometry, partition table, filesystems and
-  space-usage conclusions. The fields are the ones `info` prints; `plan` opens
-  no recovery path and probes no write directory.
-  With --grow the same document gains a `preview` key for growing partition :N
-  to the last usable LBA:
-    grow_part     the partition being grown
-    new_end_lba   its end LBA after the growth
-    sector_size   logical block size the LBAs are counted in
-    moves         array of {num, first_lba, last_lba, delta_lba, bytes, swap};
-                  swap marks an area recreated in place instead of copied
-  The preview only reads: nothing is written and no reusable plan is produced."#;
-
-/// 默认只读几何报告；`--grow` 在同一份文档里多给一个 `preview` 键，不落盘、不产出 `Plan`
-pub(crate) fn cmd_plan(a: &PlanRequest) -> u8 {
-    if !a.grow {
-        // 无 --grow 的 plan 就是全目标 info；:N 不是它的输入——拒绝主语用 plan 说，
-        // 不能借 info 之手报 "info reports ..."（用户跑的是 plan）
-        if a.part.is_some() {
-            bail_fail(RunOutcome::refused(
-                "`plan` without --grow reports the whole target — drop :N, or add --grow to preview one partition",
-            ));
-        }
-        return crate::cmd::info::cmd_info(&InfoRequest {
-            target: a.target.clone(),
-            part: None,
-            sector_size: a.sector_size,
-        });
-    }
+/// 只读几何报告，`--grow` 在同一份文档里多给一个 `preview` 键，不落盘、不产出 `Plan`
+pub(crate) fn cmd_info_grow(a: &InfoRequest) -> u8 {
     let Some(selector) = a.part else {
         bail_fail(RunOutcome::refused(
-            "`plan --grow` previews one partition — write the target as <TARGET>:N",
+            "`info --grow` previews one partition — write the target as <TARGET>:N",
         ));
     };
     let src = match crate::cmd::open_read_only_target(&a.target, a.sector_size) {
@@ -48,7 +21,7 @@ pub(crate) fn cmd_plan(a: &PlanRequest) -> u8 {
         Ok(v) => v,
         Err(f) => bail_fail(f),
     }) else {
-        bail_fail(RunOutcome::refused("`plan --grow` needs a GPT partition table"));
+        bail_fail(RunOutcome::refused("`info --grow` needs a GPT partition table"));
     };
     let part = match gpt_policy::resolve_part(&src, selector) {
         Ok(p) => p,

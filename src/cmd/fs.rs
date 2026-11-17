@@ -22,7 +22,11 @@ pub(crate) const DETAILS_RESIZEFS: &str = r#"  Resize a filesystem. The form pic
   inside the current partition (btrfs also shrinks). A size beyond the current
   partition is refused — run `diskedit resize` to enlarge the partition first.
   The target size is absolute (units k/m/g/t, 1024 base; plain bytes when no
-  unit; fractions allowed); omitted means grow to fill the partition."#;
+  unit; fractions allowed); omitted means grow to fill the partition.
+
+  A grow is read back for ext2/3/4, ntfs and btrfs; f2fs, xfs and vfat have
+  no read-back — the tool's success stays unverified, the run prints a pending
+  item naming a size check, and the exit status is 5."#;
 
 pub(crate) const DETAILS_CHECK: &str = r#"  Check filesystem consistency without repairing. The tool depends on the
   type: ext e2fsck -n, ntfs ntfsfix -n, xfs xfs_repair -n, btrfs check,
@@ -75,13 +79,10 @@ pub(crate) fn cmd_mkfs(a: &MkfsRequest) -> RunOutcome {
     };
     let fstype_name = a.fstype.clone();
     // 分区节点不是整盘：`:N` 的解析会把节点首扇区当分区表读，随后的擦写落在
-    // 一个由伪表算出的区间上。判据与 new/add/undo 等命令同一处
+    // 一个由伪表算出的区间上。判据与 `new`、`add` 等命令同一处
     crate::support::refuse_partition_node_target("mkfs", &a.target);
-    if !a.yes {
-        bail_fail(RunOutcome::refused("mkfs destroys all data on the target partition; pass --yes to confirm"));
-    }
     // 先问类型认不认得、工具在不在，再落不可回滚屏障：一个拼错的类型名、一个没装的
-    // 工具包，都不该把目标锁进"未收尾"状态、要用户再跑一次 abandon。检查放在开事务
+    // 工具包，都不该把目标锁进"未收尾"状态、要用户再跑一次 `recover --release`。检查放在开事务
     // **之后**：目标被别人的未收尾现场占着时，busy 的闸口文案（含出路指引）比
     // "工具缺失"更该先到达。记录在第一次目标写入之前不落盘，因此这些拒绝不会留下
     // 空记录占住落点
@@ -108,7 +109,7 @@ pub(crate) fn cmd_mkfs(a: &MkfsRequest) -> RunOutcome {
         bail_fail(RunOutcome::from(e));
     }
     // linux/root 是纯只读判定，失败必然"一个字节都没写"——必须落在屏障之前：屏障一旦
-    // 落地，零写入的失败也会留下一个只能靠 abandon 收拾的现场。镜像的 losetup
+    // 落地，零写入的失败也会留下一个只能靠 `recover --release` 收拾的现场。镜像的 losetup
     // 属于设备建立，在屏障之后，其失败不在"确定未写盘"的范围内
     if let Err(e) = fsops::require_linux().and_then(|()| fsops::require_root()) {
         bail_fail(RunOutcome::from(e));
@@ -131,7 +132,7 @@ pub(crate) fn cmd_mkfs(a: &MkfsRequest) -> RunOutcome {
         bail_fail(RunOutcome::refused(why));
     }
     // 屏障不在这里：建 loop、定位分区节点、开设备都会在真正擦除之前失败，把屏障放在
-    // 命令层会让这些"确定未写盘"的失败也留下一个只能 abandon 的现场。它落在
+    // 命令层会让这些"确定未写盘"的失败也留下一个只能靠 `recover --release` 收拾的现场。它落在
     // fsops::mkfs 内、紧贴第一次擦除，执行器只负责把计划里的几何与类型交给它
     // label=None 不传卷标参数，工具写的就是空标签，不造默认值
     let plan = crate::assembly::assemble_fs_create(&src, part, fstype, a.label.clone())
@@ -224,7 +225,7 @@ fn resizefs_offline(a: &ResizefsRequest, pref: PartSelector) -> RunOutcome {
                         // 目录项已移除、持久化未确认：只陈述这一事实，不承诺记录还在
                         let cause = if e.record_still_on_disk() {
                             format!(
-                                "the recovery record was not cleaned up ({e}) — release it with `diskedit abandon`"
+                                "the recovery record was not cleaned up ({e}) — release it with `diskedit recover --release`"
                             )
                         } else {
                             format!("{e}")
@@ -240,7 +241,7 @@ fn resizefs_offline(a: &ResizefsRequest, pref: PartSelector) -> RunOutcome {
                         "belongs to a different `resizefs` request (the partition, range, size, or options changed)"
                     };
                     bail_fail(RunOutcome::refused(format!(
-                        "the recovery record at {} {why} — run `diskedit inspect {}` or `diskedit undo {} --yes` first",
+                        "the recovery record at {} {why} — run `diskedit inspect {}` or `diskedit recover {} --yes` first",
                         path.display(),
                         a.target,
                         a.target
@@ -299,7 +300,7 @@ fn resizefs_offline(a: &ResizefsRequest, pref: PartSelector) -> RunOutcome {
             {
                 // 目录项已移除、持久化未确认：只陈述这一事实，不承诺记录还在
                 let cause = if e.record_still_on_disk() {
-                    format!("the recovery record was not cleaned up ({e}) — release it with `diskedit abandon`")
+                    format!("the recovery record was not cleaned up ({e}) — release it with `diskedit recover --release`")
                 } else {
                     format!("{e}")
                 };

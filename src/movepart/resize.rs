@@ -1,6 +1,6 @@
 //! 分区几何里与搬移共用的判定：缩容相位、FS 动作与 NTFS 隐藏扇区。
 //!
-//! 执行不属于这里：`resize-part` 的表与 FS 步骤都经 `assembly` 装配、`execution` 执行，
+//! 执行不属于这里：`resize` 的表与 FS 步骤都经 `assembly` 装配、`execution` 执行，
 //! 本模块只保留四面共用的判定与那两个纯函数。
 
 use super::*;

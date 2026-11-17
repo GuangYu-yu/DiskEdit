@@ -55,7 +55,7 @@ fn assert_refused(cmd: &[&str], dir: &std::path::Path) {
         "the refusal must name the command it refused: {err}"
     );
     assert_eq!(std::fs::read(&img).unwrap(), before, "`{cmd:?}` must not change target bytes");
-    assert_eq!(dir_entries(dir), entries_before, "`{cmd:?}` must leave no lock/journal/checkpoint/log");
+    assert_eq!(dir_entries(dir), entries_before, "`{cmd:?}` must leave no record/lock/log");
 }
 
 #[test]
@@ -70,7 +70,7 @@ fn table_and_data_writers_are_refused_on_this_platform() {
         ("resize", &["resize"]),
         ("move", &["move"]),
         ("copy", &["copy"]),
-        ("resize-part", &["resize-part"]),
+        ("resize-end", &["resize"]),
     ];
     for (name, args) in cases {
         let dir = base.join(name.replace('-', "_"));
@@ -86,7 +86,7 @@ fn table_and_data_writers_are_refused_on_this_platform() {
             "resize" => full.extend([p.as_str(), "+1M", "--no-fs", "--yes"]),
             "move" => full.extend([p.as_str(), "--start", "4096", "--chunk", "4", "--yes"]),
             "copy" => full.extend([p.as_str(), "--start", "8192", "--chunk", "4", "--yes"]),
-            "resize-part" => full.extend([p.as_str(), "--end", "8191", "--yes"]),
+            "resize-end" => full.extend([p.as_str(), "--end", "8191", "--yes"]),
             _ => unreachable!(),
         }
         assert_refused(&full, &dir);
@@ -102,7 +102,7 @@ fn external_tool_and_recovery_writers_are_refused_on_this_platform() {
         ("mkfs", &["mkfs"]),
         ("check", &["check"]),
         ("resizefs", &["resizefs"]),
-        ("undo", &["undo"]),
+        ("recover", &["recover"]),
     ];
     for (name, args) in cases {
         let dir = base.join(name);
@@ -114,7 +114,7 @@ fn external_tool_and_recovery_writers_are_refused_on_this_platform() {
             "mkfs" => full.extend([p.as_str(), "ext4", "--yes"]),
             "check" => full.extend([p.as_str()]),
             "resizefs" => full.extend([p.as_str(), "--yes"]),
-            "undo" => full.extend([img_s.as_str(), "--yes"]),
+            "recover" => full.extend([img_s.as_str(), "--yes"]),
             _ => unreachable!(),
         }
         assert_refused(&full, &dir);
@@ -122,34 +122,35 @@ fn external_tool_and_recovery_writers_are_refused_on_this_platform() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
-/// `abandon` 只改名伴随文件、盘面一个字节不写，但它需要 `CompanionFile`
+/// `recover --release` 只改名伴随文件、盘面一个字节不写，但它需要 `CompanionFile`
 /// （`AtomicReplace` 非 Linux 不支持），故退 6。记录与目标都必须原样保留
 #[test]
-fn abandon_is_refused_like_every_other_command_on_this_platform() {
+fn release_is_refused_like_every_other_command_on_this_platform() {
     let dir = std::env::temp_dir().join(format!("diskedit_gate_ab_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let img = dir.join("disk.img");
     writable_gpt(&img);
     let img_s = img.to_string_lossy().into_owned();
-    let journal = dir.join("disk.img.diskedit.journal");
-    let record = b"an unreadable journal left behind";
-    std::fs::write(&journal, record).unwrap();
+    let record = dir.join("disk.img.diskedit").join("record.lock");
+    std::fs::create_dir_all(record.parent().unwrap()).unwrap();
+    let bytes = b"an unreadable lock left behind";
+    std::fs::write(&record, bytes).unwrap();
     let before = std::fs::read(&img).unwrap();
 
-    let (code, _out, err) = run(&["abandon", &img_s, "--yes"]);
-    assert_eq!(code, 6, "abandon must stop at the same gate: {err}");
+    let (code, _out, err) = run(&["recover", &img_s, "--release", "--yes"]);
+    assert_eq!(code, 6, "recover --release must stop at the same gate: {err}");
     assert!(err.contains(CAPABILITY_GAP), "{err}");
-    assert_eq!(std::fs::read(&journal).unwrap(), record, "the active record must keep its name");
-    assert_eq!(std::fs::read(&img).unwrap(), before, "abandon must not touch target bytes");
+    assert_eq!(std::fs::read(&record).unwrap(), bytes, "the companion file must keep its bytes");
+    assert_eq!(std::fs::read(&img).unwrap(), before, "recover --release must not touch target bytes");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// `info` / `plan` 只声明 `ReadOnly`，
-/// 矩阵在「非 Linux × 镜像」这一格放行它们。它们不写目标、不建任何伴随文件，
+/// `info` 只声明 `ReadOnly`，
+/// 矩阵在「非 Linux × 镜像」这一格放行它。它不写目标、不建任何伴随文件，
 /// 也不承诺恢复——所谓「看似可恢复的假象」只适用于写/证据命令，那些仍被门拒
 #[test]
-fn info_and_plan_run_on_images_and_write_nothing() {
+fn info_runs_on_images_and_writes_nothing() {
     let dir = std::env::temp_dir().join(format!("diskedit_gate_ro_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
@@ -159,14 +160,13 @@ fn info_and_plan_run_on_images_and_write_nothing() {
     let entries_before = dir_entries(&dir);
     let img_s = img.to_str().unwrap();
 
-    for cmd in [vec!["info", img_s], vec!["plan", img_s]] {
-        let (code, out, err) = run(&cmd);
-        assert_eq!(code, 0, "`{cmd:?}` is read-only and must be admitted: {err}");
-        assert!(!out.is_empty(), "`{cmd:?}` must report the layout: {err}");
-    }
+    let cmd = vec!["info", img_s];
+    let (code, out, err) = run(&cmd);
+    assert_eq!(code, 0, "`{cmd:?}` is read-only and must be admitted: {err}");
+    assert!(!out.is_empty(), "`{cmd:?}` must report the layout: {err}");
 
-    assert_eq!(std::fs::read(&img).unwrap(), before, "info/plan must not modify the image");
-    assert_eq!(dir_entries(&dir), entries_before, "info/plan must leave no lock/journal/checkpoint");
+    assert_eq!(std::fs::read(&img).unwrap(), before, "info must not modify the image");
+    assert_eq!(dir_entries(&dir), entries_before, "info must leave no lock/record");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

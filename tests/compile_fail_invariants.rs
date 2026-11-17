@@ -12,4 +12,4 @@
 //! - `RelativePath` 只有经过父链校验的构造入口：父链逐级
 //!   `O_NOFOLLOW|O_DIRECTORY`，任一级符号链接/非目录 → `NotOurs`。
 //! - 未实现 `ChunkRequest` 的请求类型不能调用 `chunk_logger`
-//!   （`src/cmd/layout.rs` 的 `ResizePartRequest` 会因此编译失败）。
+//!   （`src/cmd/layout.rs` 的 `ResizeEndRequest` 会因此编译失败）。

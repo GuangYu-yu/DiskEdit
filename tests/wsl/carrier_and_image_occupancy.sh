@@ -28,17 +28,17 @@ exp "$?" 3 "delete 打分区节点被拒"
 # 拒绝必须是"什么都没写"：判据只认 0x55AA 时这里会清零分区 LBA0 的 [446,462)
 e2fsck -fn "${L1}p1" >/dev/null 2>&1
 exp "$?" 0 "分区内容未被清零"
-"$B" resize-part --yes "${L1}p1:1" --end 4095 >/dev/null 2>&1
-exp "$?" 3 "resize-part 打分区节点被拒"
+"$B" resize --yes "${L1}p1:1" --end 4095 >/dev/null 2>&1
+exp "$?" 3 "resize 打分区节点被拒"
 
 echo "=== B: 同一镜像的另一个 loop 已挂载"
 L2=$(lo_attach "$T")
 lo_waitpart "${L2}p1"
 mount_at "${L1}p1" "$TEST_MNT" || { echo "SKIP: mount failed"; exit 0; }
-"$B" resize-part --yes "$T:1" --grow-to-end >/dev/null 2>&1
+"$B" resize --yes "$T:1" --grow-to-end >/dev/null 2>&1
 exp "$?" 3 "挂载中拒绝写同一镜像"
 unmount_now "$TEST_MNT"
-"$B" resize-part --yes "$T:1" --grow-to-end >/dev/null 2>&1
+"$B" resize --yes "$T:1" --grow-to-end >/dev/null 2>&1
 exp "$?" 0 "卸载后放行（阳性对照）"
 # 表已改到盘尾，L1 的内核分区尺寸仍是扩前值（写表不触发重扫）；先让这只 loop
 # 重读一次并等节点就位，e2fsck 查的才是文件系统本身，而不是被过期几何挡在门外
@@ -76,7 +76,7 @@ check_refused "mkfs"      "$B" mkfs "$T":1 ext4 --yes
 check_refused "set name"  "$B" set --yes "$T:1" name foo
 check_refused "set type"  "$B" set --yes "$T:1" type C12A7328-F81F-11D2-BA4B-00A0C93EC93B
 check_refused "set flag"  "$B" set --yes "$T:1" flag hidden on
-check_refused "undo"      "$B" undo "$T" --yes
+check_refused "recover"   "$B" recover "$T" --yes
 after=$(sha256sum "$T" | awk '{print $1}')
 assert_eq "$after" "$before" "拒绝期间镜像字节未改变"
 unmount_now "$TEST_MNT"

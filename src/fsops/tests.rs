@@ -1,5 +1,5 @@
 #![allow(clippy::let_underscore_must_use)] // 清理临时文件有意忽略失败
-use super::{check_e2fsck_for_check, check_e2fsck_for_resize, check_grow_step, check_label_limits, classify_shrink, erase_ranges, grow_target_at, leak_from, mkfs_tool, parse_fstype, parse_num_lead, partition_byte_range, settle_release, swap_rebuild_support, uuid_from_output, uuid_readback_verdict, uuid_support, vfat_label_check, DeviceScope, Growable, MkfsFs, MountLeak, NumError, ReleaseRunOutcome, ShrinkVerify, ToolSupport, Unusable, UuidRequest, UuidSupport};
+use super::{check_e2fsck_for_check, check_e2fsck_for_resize, check_grow_step, check_label_limits, classify_grow, classify_shrink, erase_ranges, grow_outcome, grow_target_at, leak_from, mkfs_tool, parse_fstype, parse_num_lead, partition_byte_range, settle_release, shrink_outcome, swap_rebuild_support, uuid_from_output, uuid_readback_verdict, uuid_support, vfat_label_check, DeviceScope, FsGeometry, Growable, MkfsFs, MountLeak, NumError, ReleaseRunOutcome, SizeVerify, ToolSupport, Unusable, UuidRequest, UuidSupport};
 #[cfg(target_os = "linux")]
 use super::{run_read, run_write};
 use super::FsError;
@@ -642,17 +642,19 @@ pub(crate) fn shrink_read_back_decides_between_within_over_and_unverifiable() {
     let hint = "dumpe2fs -h <partition device>";
     // 回读值等于请求值（ntfs 实测如此）：正常成功，成功行同时给两个数
     let v = classify_shrink(Ok(33_554_944), 33_554_944, "ntfsresize", hint).unwrap();
-    assert!(matches!(v, ShrinkVerify::Within(33_554_944)));
+    assert!(matches!(v, SizeVerify::Confirmed(33_554_944)));
+    let out = shrink_outcome(v, None);
     assert_eq!(
-        v.ok_line(33_554_944).as_deref(),
+        out.ok_line(33_554_944).as_deref(),
         Some("fs shrunk to 33554944 bytes (requested 33554944)")
     );
-    assert!(v.pending(3).is_none(), "落点在请求范围内没有待办");
+    assert!(out.pending(3).is_empty(), "落点在请求范围内没有待办");
     // 工具按自身粒度向下取整（ext 实测：请求 33,554,944 → 8192×4096 = 33,554,432）
     let v = classify_shrink(Ok(33_554_432), 33_554_944, "resize2fs", hint).unwrap();
-    assert!(matches!(v, ShrinkVerify::Within(33_554_432)));
+    assert!(matches!(v, SizeVerify::Confirmed(33_554_432)));
+    let out = shrink_outcome(v, None);
     assert_eq!(
-        v.ok_line(33_554_944).as_deref(),
+        out.ok_line(33_554_944).as_deref(),
         Some("fs shrunk to 33554432 bytes (requested 33554944)")
     );
     // 落点超出请求值：工具行为不符合预期，分区不能按请求尺寸缩进去
@@ -667,11 +669,68 @@ pub(crate) fn shrink_read_back_decides_between_within_over_and_unverifiable() {
     // 读不出来：不是缩容失败，而是一条"结果无法验证"的待办
     let v = classify_shrink(Err(std::io::Error::other("dumpe2fs: command not found")), 33_554_944, "resize2fs", hint)
         .unwrap();
-    assert!(v.ok_line(33_554_944).is_none(), "回读不出来时没有成功行");
-    let p = v.pending(3).expect("回读不出来要给出一条待办");
+    let out = shrink_outcome(v, None);
+    assert!(out.ok_line(33_554_944).is_none(), "回读不出来时没有成功行");
+    let p = out.pending(3).pop().expect("回读不出来要给出一条待办");
     assert_eq!(p.part, 3);
     assert_eq!(p.hint, hint);
     assert!(p.detail.contains("could not be read back"), "{:?}", p.detail);
+}
+
+/// 扩容工具成功返回后的回读判定：覆盖到区间末端（允许按分配单元下取整）算成功；
+/// 差一个单元以上或越过末端都是工具行为不符合预期；读不出来是一条待办
+#[test]
+pub(crate) fn grow_read_back_requires_coverage_of_the_range_end() {
+    let hint = "dumpe2fs -h <partition device>";
+    let limit = 33_554_944;
+    // 区间末端正好落在单元边界上：必须严丝合缝
+    let v = classify_grow(Ok(FsGeometry { bytes: limit, unit: 4096 }), limit, "resize2fs", hint).unwrap();
+    assert!(matches!(v, SizeVerify::Confirmed(33_554_944)));
+    // 区间末端不在单元边界上：下取整留下的不足一个单元算到位
+    let odd = limit + 1;
+    let v = classify_grow(
+        Ok(FsGeometry { bytes: limit - 512, unit: 4096 }),
+        odd,
+        "resize2fs",
+        hint,
+    )
+    .unwrap();
+    assert!(matches!(v, SizeVerify::Confirmed(actual) if actual == limit - 512));
+    // 差一个单元以上：工具报成功却没扩到末端
+    let e = match classify_grow(Ok(FsGeometry { bytes: limit - 8192, unit: 4096 }), limit, "resize2fs", hint) {
+        Err(e) => e,
+        Ok(_) => panic!("落点短于区间末端必须报成失败"),
+    };
+    assert!(
+        matches!(e, FsError::CommandFailed(ref m) if m.contains("short of") && m.contains("33554944")),
+        "落点短于区间末端要报成工具行为不符合预期: {e}"
+    );
+    // 越过末端：工具把文件系统写到了区间之外
+    let e = match classify_grow(Ok(FsGeometry { bytes: limit + 4096, unit: 4096 }), limit, "resize2fs", hint) {
+        Err(e) => e,
+        Ok(_) => panic!("落点越过区间末端必须报成失败"),
+    };
+    assert!(
+        matches!(e, FsError::CommandFailed(ref m) if m.contains("past the end")),
+        "越过区间末端要报成工具行为不符合预期: {e}"
+    );
+    // 读不出来：不是扩容失败，而是一条"结果无法验证"的待办
+    let v = classify_grow(Err(std::io::Error::other("dumpe2fs: command not found")), limit, "resize2fs", hint)
+        .unwrap();
+    let out = grow_outcome(v, None);
+    let p = out.pending(3).pop().expect("回读不出来要给出一条待办");
+    assert_eq!(p.hint, hint);
+    assert!(p.detail.contains("could not be read back"), "{:?}", p.detail);
+}
+
+/// 待办里的补救信息不能是空串：每个可扩容的文件系统都要给出核对路线，
+/// 没有设备级回读的类型（f2fs / xfs / vfat）走挂载后的尺寸报告
+#[test]
+pub(crate) fn every_growable_filesystem_names_a_size_check() {
+    for kind in [FsKind::Ext, FsKind::Ntfs, FsKind::Btrfs, FsKind::F2fs, FsKind::Xfs, FsKind::Vfat] {
+        let hint = crate::fsops::size_read_back_hint(kind);
+        assert!(!hint.trim().is_empty(), "{kind:?} 的待办没有核对路线");
+    }
 }
 
 /// 写事实的置位点在 spawn 成功之后：只读调用不置位，`run_write` 才置位。
