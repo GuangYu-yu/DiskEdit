@@ -723,6 +723,26 @@ pub(crate) fn grow_read_back_requires_coverage_of_the_range_end() {
     assert!(p.detail.contains("could not be read back"), "{:?}", p.detail);
 }
 
+/// ext 的容差是一个块组，不是一块：resize2fs 1.47.2 把 400 MiB 卷扩到 900 MiB 时
+/// 止于 229376 块（896 MiB，7 个块组）——末段 4 MiB 是它放不下的组元数据。
+/// 按块大小的容差会把这次合法生长判成 short of；按块组则到位，而真实的短差仍报失败
+#[test]
+pub(crate) fn ext_grow_tolerates_one_unused_block_group() {
+    let limit = 943_718_400; // 900 MiB 的区间末端
+    let group = 4096 * 32768; // Block size × Blocks per group
+    assert_eq!(group, 134_217_728);
+    let v = classify_grow(Ok(FsGeometry { bytes: 939_524_096, unit: group }), limit, "resize2fs", "h").unwrap();
+    assert!(matches!(v, SizeVerify::Confirmed(939_524_096)), "一个块组的尾部空缺算到位");
+    // 同一个落点，按一个块做容差：末段 4 MiB 被判成工具没扩——容差取一个块组的原因
+    assert!(classify_grow(Ok(FsGeometry { bytes: 939_524_096, unit: 4096 }), limit, "resize2fs", "h").is_err());
+    // 差一个块组以上：仍是工具报成功却没扩
+    let e = match classify_grow(Ok(FsGeometry { bytes: 419_430_400, unit: group }), limit, "resize2fs", "h") {
+        Err(e) => e,
+        Ok(_) => panic!("差一个块组以上必须报成失败"),
+    };
+    assert!(matches!(e, FsError::CommandFailed(ref m) if m.contains("short of")), "{e}");
+}
+
 /// 待办里的补救信息不能是空串：每个可扩容的文件系统都要给出核对路线，
 /// 没有设备级回读的类型（f2fs / xfs / vfat）走挂载后的尺寸报告
 #[test]

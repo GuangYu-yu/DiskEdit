@@ -134,8 +134,8 @@ pub enum SizeVerify {
 
 /// 回读到的文件系统几何：总字节 + 分配单元。
 ///
-/// 分配单元是"扩到区间末端"判据的组成部分：工具按自己的单元向下取整，实际尺寸与区间
-/// 末端之间允许差一个单元（ext 按块、ntfs 按簇、btrfs 按 sectorsize）
+/// 分配单元是"扩到区间末端"判据的组成部分：工具按自己的单元放置，实际尺寸与区间
+/// 末端之间允许差一个单元（ext 按块组、ntfs 按簇、btrfs 按 sectorsize）
 pub(crate) struct FsGeometry {
     pub bytes: u64,
     pub unit: u64,
@@ -143,7 +143,9 @@ pub(crate) struct FsGeometry {
 
 /// 回读文件系统几何。三者都是只读查询：
 /// - ext：`dumpe2fs -h`（man dumpe2fs：-h 只打印超级块）的 `Block count:` × `Block size:`，
-///   分配单元 = `Block size:`
+///   分配单元 = `Block size:` × `Blocks per group:`。resize2fs 按块组放置：末段装不下该组
+///   元数据时整段留空（实测 1.47.2 在 400 MiB 卷扩到 900 MiB 时止于 896 MiB），
+///   故容差取一个块组而非一个块
 /// - ntfs：`ntfsresize --info` 的 `Current volume size:` 与 `Cluster size`。`--info` 是查询，
 ///   不调整大小，故只读。`-f` 是必需的：真实调整大小会把卷标成"待检查"，不带 `-f` 的
 ///   `--info` 会以该理由拒答
@@ -159,12 +161,18 @@ pub(crate) fn read_fs_geometry(kind: FsKind, dev: &str) -> io::Result<FsGeometry
             let text = run_text("dumpe2fs", &["-h", dev])?;
             let blocks = parse_num_lead(&text, "Block count:")?;
             let block_size = parse_num_lead(&text, "Block size:")?;
+            let per_group = parse_num_lead(&text, "Blocks per group:")?;
             let bytes = blocks.checked_mul(block_size).ok_or_else(|| {
                 io::Error::other(format!(
                     "dumpe2fs block count × block size overflows ({blocks} × {block_size})"
                 ))
             })?;
-            Ok(FsGeometry { bytes, unit: block_size })
+            let unit = block_size.checked_mul(per_group).ok_or_else(|| {
+                io::Error::other(format!(
+                    "dumpe2fs block size × blocks per group overflows ({block_size} × {per_group})"
+                ))
+            })?;
+            Ok(FsGeometry { bytes, unit })
         }
         FsKind::Ntfs => {
             let text = run_text("ntfsresize", &["-f", "--info", dev])?;
