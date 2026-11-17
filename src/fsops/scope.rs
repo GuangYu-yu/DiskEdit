@@ -196,7 +196,7 @@ pub(crate) fn resolve_scope_device(
                 let dev = kernel_partition_device(src, *p, off, len)?;
                 #[cfg(not(target_os = "linux"))]
                 let dev = find_block_partition_node(src, *p, off)?;
-                require_unmounted(&dev)?;
+                require_unmounted(&dev, policy)?;
                 Ok(ScopeDevice::Existing { path: dev })
             }
             DeviceScope::Whole => {
@@ -208,15 +208,16 @@ pub(crate) fn resolve_scope_device(
                     use std::os::unix::fs::MetadataExt;
                     let rdev = src.metadata().map_err(FsError::from)?.rdev();
                     let sysdir = crate::dev::sysfs_node_from_rdev(rdev).map_err(FsError::from)?;
-                    crate::dev::ensure_node_is_device(Path::new(&dev), &sysdir).map_err(FsError::from)?;
+                    let _node_guard =
+                        crate::dev::ensure_node_is_device(Path::new(&dev), &sysdir).map_err(FsError::from)?;
                 }
-                require_unmounted(&dev)?;
+                require_unmounted(&dev, policy)?;
                 Ok(ScopeDevice::Existing { path: dev })
             }
             DeviceScope::Range(..) => {
                 let loopdev = attach_loop(src, off, len)?;
                 // require 失败也要先 detach 再返回错误，? 短路会漏掉 detach
-                if let Err(e) = require_unmounted(&loopdev) {
+                if let Err(e) = require_unmounted(&loopdev, policy) {
                     release_loop(&loopdev);
                     return Err(e);
                 }
@@ -290,12 +291,15 @@ pub(crate) fn resolve_scope_device(
                 )));
             }
             verify_loop_mapping(src, &dev, off, len)?;
+            // 复用外部栈持有的映射同样过占用闸：dm 持有者按 `policy` 的口径放行，
+            // 挂载、活动 swap 与其他持有者仍然拦下——复用不改变"这段字节正被谁用着"
+            require_unmounted(&dev, policy)?;
             return Ok(ScopeDevice::Existing { path: dev });
         }
     }
     let loopdev = attach_loop(src, off, len)?;
     // require 失败也要先 detach 再返回错误，? 短路会漏掉 detach
-    if let Err(e) = require_unmounted(&loopdev) {
+    if let Err(e) = require_unmounted(&loopdev, policy) {
         release_loop(&loopdev);
         return Err(e);
     }
@@ -454,10 +458,12 @@ fn find_block_partition_node_once(src: &FileSource, part: u32, want_start: u64) 
         }
         // 分区号交叉校验：只有一个维度相同时，内核视图与盘上表可能已在编号上分叉，
         // 只按 start 认节点会把操作落到另一个分区节点上。号也要读得出来且相符
-        // audit-allow: S2-10
-        let Ok(num_txt) = std::fs::read_to_string(entry.path().join("partition")) else { continue };
-        // audit-allow: S2-11
-        let Ok(num) = num_txt.trim().parse::<u32>() else { continue };
+        let num = match crate::dev::sysfs_partition_no(&entry.path()) {
+            Ok(n) => n,
+            // 属性不存在 = 这一项不是分区；读不出按环境故障上抛，不报成"没有该分区"
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(FsError::from(e)),
+        };
         if num != part {
             continue;
         }
@@ -465,7 +471,7 @@ fn find_block_partition_node_once(src: &FileSource, part: u32, want_start: u64) 
         let dev = format!("/dev/{name}");
         // 节点名由 sysfs 目录名推得，只是路径；实际落点由设备号决定。同名节点指向
         // 另一台设备时"几何来自 A、写入落在 B"，调用方拿到的路径无从自行发现
-        crate::dev::ensure_node_is_device(Path::new(&dev), &entry.path()).map_err(FsError::from)?;
+        let _node_guard = crate::dev::ensure_node_is_device(Path::new(&dev), &entry.path()).map_err(FsError::from)?;
         return Ok(dev);
     }
     Err(FsError::invalid(format!(

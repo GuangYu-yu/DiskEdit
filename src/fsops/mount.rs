@@ -255,7 +255,7 @@ fn mounted_in(entries: &[MountEntry], dev: &str, dev_no: (u64, u64)) -> io::Resu
             return Ok(true);
         }
         if e.dev_no.0 == 0 {
-            match source_is_device(&e.source, dev_no) {
+            match source_is_device(&e.source, &e.fstype, dev_no) {
                 Ok(true) => return Ok(true),
                 Ok(false) => {}
                 Err(e) => {
@@ -270,19 +270,43 @@ fn mounted_in(entries: &[MountEntry], dev: &str, dev_no: (u64, u64)) -> io::Resu
     }
 }
 
+/// source 只描述数据来源、永远不是设备节点的 fstype：内存/伪文件系统、叠加层、
+/// 网络文件系统与 FUSE。名单之外的 fstype 其 source 可能是块设备节点的相对路径
+#[cfg(target_os = "linux")]
+pub(crate) fn source_never_names_a_block_device(fstype: &str) -> bool {
+    const NAMED: &[&str] = &[
+        "tmpfs", "devtmpfs", "ramfs", "rootfs", "proc", "sysfs", "devpts", "cgroup", "cgroup2", "mqueue",
+        "debugfs", "tracefs", "securityfs", "pstore", "bpf", "configfs", "fusectl", "hugetlbfs",
+        "autofs", "rpc_pipefs", "nsfs", "binfmt_misc", "efivarfs", "selinuxfs", "overlay", "aufs",
+        "nfs", "nfs4", "cifs", "smb3", "9p", "virtiofs", "afs", "ceph", "glusterfs", "drvfs",
+    ];
+    NAMED.contains(&fstype) || fstype.starts_with("fuse")
+}
+
 /// source 节点的真实设备号是否即 `dev_no`。用于字段 3 报匿名设备号的挂载（btrfs 等）：
 /// 那种记录与 st_rdev 必然不等，而 `/dev/disk/by-uuid/…` 这类别名与目标路径串也不等，
 /// 只有 stat 跟随链接后得到的 st_rdev 才可比。source 不是块设备节点（tmpfs 等伪文件系统）
 /// 判否；stat 失败上抛——确认不了不能读成"不是这个设备"
 ///
-/// 非绝对路径的 source（`none`、`tmpfs`、`drvfs` 等）直接判否，不去 stat：这类名字不是
-/// 路径，stat 会按进程工作目录解析成一次真实查找——工作目录在慢速文件系统（如 WSL 的
-/// 9p/drvfs）上时，十几次这样的查找是纯开销
+/// mountinfo 的 source 是挂载时传给 mount(2) 的那个串（proc_pid_mountinfo(5) 只说
+/// "filesystem-specific information or 'none'"，不保证是绝对路径）。伪文件系统与网络文件
+/// 系统的 source 天然不是设备节点，直接判否；其余 fstype 的非绝对 source 无法按本进程的
+/// 工作目录解析成设备，按"确认不了"上抛——宁可拒绝，也不把一次漏检读成"未挂载"
 #[cfg(target_os = "linux")]
-pub(crate) fn source_is_device(source: &str, dev_no: (u64, u64)) -> io::Result<bool> {
+pub(crate) fn source_is_device(source: &str, fstype: &str, dev_no: (u64, u64)) -> io::Result<bool> {
     use std::os::unix::fs::{FileTypeExt, MetadataExt};
     if !source.starts_with('/') {
-        return Ok(false);
+        if source_never_names_a_block_device(fstype) {
+            return Ok(false);
+        }
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "the mount source {source} ({fstype}) is not an absolute path — whether it is the \
+                 device {}:{} cannot be confirmed",
+                dev_no.0, dev_no.1
+            ),
+        ));
     }
     let meta = std::fs::metadata(source).map_err(|e| {
         io::Error::new(
@@ -330,10 +354,21 @@ fn active_swap_in(swaps: &str, dev: &str, rdev: u64) -> io::Result<bool> {
 /// 分类只回答"成因在请求还是在环境"：确定被占用 ⇒ 请求与现状不符（`InvalidArgument`，3）；
 /// 探测失败 ⇒ 环境故障（`Io`，4）。"本次是否写过盘"由命令层的归责点
 /// `settled` 统一处理——写过的调用点会被抬成 5，这一层不替它混码
+///
+/// `policy` 决定 dm 持有者的去留，与镜像上 loop 的复用口径同一份：`RefuseAny` 按整段
+/// 重写判，任何持有者都拦；`AllowDm` 按只增末端判，持有者全是 dm 时放行（判据本身在
+/// [`crate::dev::verdict`]，这里只把口径映射成判定形状）
 #[cfg(target_os = "linux")]
-pub(crate) fn require_unmounted(dev: &str) -> Result<(), FsError> {
+pub(crate) fn require_unmounted(
+    dev: &str,
+    policy: crate::fsops::scope::ImageLoopPolicy,
+) -> Result<(), FsError> {
     use crate::dev::OccupancyFact;
-    match probe_occupancy(dev, crate::dev::OpShape::Overwrite) {
+    let shape = match policy {
+        crate::fsops::scope::ImageLoopPolicy::RefuseAny => crate::dev::OpShape::Overwrite,
+        crate::fsops::scope::ImageLoopPolicy::AllowDm => crate::dev::OpShape::Extend,
+    };
+    match probe_occupancy(dev, shape) {
         Ok(Occupancy::Idle) => Ok(()),
         Ok(Occupancy::Held(holders)) => Err(OccupancyFact::Occupied.fs_error(format!(
             "{dev} is held by {} — deactivate that stack first (FS operations require an unmounted partition)",
@@ -359,7 +394,10 @@ pub(crate) fn require_unmounted(dev: &str) -> Result<(), FsError> {
 }
 
 #[cfg(not(target_os = "linux"))]
-pub(crate) fn require_unmounted(_dev: &str) -> Result<(), FsError> {
+pub(crate) fn require_unmounted(
+    _dev: &str,
+    _policy: crate::fsops::scope::ImageLoopPolicy,
+) -> Result<(), FsError> {
     Ok(())
 }
 
@@ -1121,9 +1159,9 @@ fn image_target_unused(src: &FileSource, kind: WriteKind) -> Result<(), crate::o
 /// 与 [`ensure_idle_before_write`] 的分区级判定不同，本闸不区分本次改哪个分区，
 /// 因此不适用于"扩容放行 DM 持有"的形状判定。
 ///
-/// 调用点是所有**直接改表**的命令：`new` / `add` / `delete` / `create` /
-/// `set name|type|flag` / `undo`。搬移类命令（`resize-part` / `move` / `resize` /
-/// `apply`）在 prepare 层按操作形状做分区级判定，不走这里。`copy` 是显式例外：
+/// 调用点是所有**直接改表**的命令：`new` / `add` / `delete` /
+/// `set` / `recover`。搬移类命令（`resize` / `move`）在 prepare 层按操作形状做分区级判定，
+/// 不走这里。`copy` 是显式例外：
 /// 它只在经重叠校验的空闲区新增条目，不改既有分区的起止，也不搬移目标分区的 extent
 /// （见 `movepart::prepare_copy`）。
 ///
@@ -1148,13 +1186,16 @@ fn ensure_whole_device_idle(src: &FileSource) -> Result<(), crate::outcome::RunO
     // 盘节点用用户给出的路径：by-id / mapper 之类的别名在 /dev/<sysfs 名> 下不一定存在。
     // 它必须仍指 fd 打开的那台设备——探测按路径 stat，指错了设备就是用另一台的空闲
     // 状态给本次写入放行（判据与 fsops 其余节点解析同一份）
-    crate::dev::ensure_node_is_device(Path::new(&src.path), &sysdir).map_err(|e| {
+    let _disk_guard = crate::dev::ensure_node_is_device(Path::new(&src.path), &sysdir).map_err(|e| {
         RunOutcome::no_mutation(format!(
             "{} does not denote the device sysfs lists as {disk}: {e} — refusing (fail-closed)",
             src.path.display()
         ))
     })?;
     let mut nodes = vec![src.path.to_string_lossy().into_owned()];
+    // 分区节点的句柄随 `nodes` 一起持有到探测结束：`ensure_node_is_device` 承诺
+    // 句柄存续期间设备对象不会被回收
+    let mut part_guards = Vec::new();
     let rd = std::fs::read_dir(&sysdir).map_err(|e| {
         RunOutcome::no_mutation(format!("cannot list {} to confirm no partition is in use: {e} — refusing (fail-closed)", sysdir.display()))
     })?;
@@ -1181,12 +1222,12 @@ fn ensure_whole_device_idle(src: &FileSource) -> Result<(), crate::outcome::RunO
                 let dev = format!("/dev/{}", entry.file_name().to_string_lossy());
                 // 节点名从 sysfs 目录名推得，实际落点由设备号决定：同层存在另一台设备
                 // 的同名节点时，探测会查错设备。按该条目自己的 sysfs 设备号核对
-                crate::dev::ensure_node_is_device(Path::new(&dev), &path).map_err(|e| {
+                part_guards.push(crate::dev::ensure_node_is_device(Path::new(&dev), &path).map_err(|e| {
                     RunOutcome::no_mutation(format!(
                         "{dev} does not denote the partition sysfs lists under {}: {e} — refusing (fail-closed)",
                         sysdir.display()
                     ))
-                })?;
+                })?);
                 nodes.push(dev);
             }
             Err(e) if e.kind() == io::ErrorKind::NotFound => {}
@@ -1204,6 +1245,7 @@ fn ensure_whole_device_idle(src: &FileSource) -> Result<(), crate::outcome::RunO
             "cannot confirm {disk} is unused: {why} — refusing (fail-closed)"
         ))
     })?;
+    drop(part_guards);
     for (node, facts) in nodes.into_iter().zip(facts) {
         match crate::dev::verdict(crate::dev::OpShape::Overwrite, &facts) {
             Occupancy::Idle => {}

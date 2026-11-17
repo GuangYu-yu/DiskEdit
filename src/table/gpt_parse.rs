@@ -348,13 +348,14 @@ pub(crate) fn load_entry_array(
         .map_err(|e| bad_geometry(&e.to_string()))?;
     // 损坏表的 lba/size 字段不受信任，乘加全部 checked，防溢出回绕
     let array_off = header.partition_entry_lba.checked_mul(ss).ok_or_else(|| bad_geometry("GPT entry array offset overflow"))?;
-    let array_len = geom.byte_len();
+    let array_len = geom.span_bytes();
     if array_off.checked_add(array_len).ok_or_else(|| bad_geometry("GPT entry array range overflow"))? > src.size {
         return Err(bad_geometry("GPT entry array out of range"));
     }
     let mut raw = vec![0u8; array_len as usize];
     src.read_at(array_off, &mut raw)?;
-    if crc32(&raw) != rd_u32(sec, 88) {
+    // CRC 只覆盖逻辑载荷：末扇区里超出 byte_len 的补零不属于数组
+    if crc32(&raw[..geom.byte_len() as usize]) != rd_u32(sec, 88) {
         return Err(GptError::EntryArrayCorrupt { copy });
     }
     Ok((raw, geom))

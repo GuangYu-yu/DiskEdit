@@ -12,14 +12,19 @@ pub(crate) const PROT_MBR_TYPE: u8 = 0xEE;
 /// 扩展容器分区类型（OSIndicator）：解析、尺寸改写与类型改写三处共用同一份集合
 pub(crate) const MDOS_CONTAINER_TYPES: [u8; 3] = [0x05, 0x0F, 0x85];
 
-/// 容器末 LBA（按给定表的扇区大小计）。全仓唯一的算式落点：
-/// 不允许在任何调用点重写第二遍——同一事实两个来源迟早分叉。
-/// 调用点大多先读过扇区，但 `create.rs` 以候选扇区大小调本函数时容器可能小于该候选，
-/// `size < ss` 可达；故用 saturating 收口而不是裸 `- 1`：release 未开 overflow-checks，
-/// 下溢会静默回绕成 u64::MAX
-///（一个"无限大的容器"），debug 下才 panic——单点算式不该把正确性押在编译模式上
+/// 一组逻辑块（`total_sectors` 块）的末 LBA。全仓唯一的“末 LBA”算式落点：分区表、
+/// MBR 占用区间、放置上界、保护 MBR 的 SizeInLBA 都从这里取，不允许在调用点重写。
+/// 下溢按 0 收口而不是裸 `- 1`：release 未开 overflow-checks，下溢会静默回绕成
+/// u64::MAX（一个"无限大的容器"），debug 下才 panic——单点算式不该把正确性押在编译模式上
+pub(crate) fn last_sector_of(total_sectors: u64) -> u64 {
+    total_sectors.saturating_sub(1)
+}
+
+/// 容器末 LBA（按给定扇区大小）。调用点大多先读过扇区，但 `create.rs` 以候选扇区大小
+/// 调本函数时容器可能小于该候选，`size < ss` 可达，故除法的商可能为 0，由
+/// [`last_sector_of`] 的饱和收口
 pub(crate) fn container_last_lba(src: &FileSource, ss: u64) -> u64 {
-    (src.size / ss).saturating_sub(1)
+    last_sector_of(src.size / ss)
 }
 
 /// MBR（真 MBR 盘）解析：LBA0 @446 起 4×16B，OSIndicator ∈ {0x05,0x0F,0x85} 为容器

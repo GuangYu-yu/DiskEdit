@@ -68,6 +68,22 @@ pub(crate) fn execute(
             "partition {part}: the relocation byte range overflows the address space — the transfer may be incomplete"
         )));
     }
+    // 上界：步的两段字节区间都必须落在目标自身之内。越界的步是计划与盘上几何不符，
+    // 不裁到盘尾（裁剪会写下与记录声明不同的字节数，游标随之前进）
+    if src_base + total > src.size || dst_base + total > src.size {
+        let detail = format!(
+            "partition {part}: the relocation range ends at byte {} (target) / {} (source), past the \
+             {}-byte target",
+            dst_base + total,
+            src_base + total,
+            src.size
+        );
+        return Err(if crate::outcome::target_may_have_been_written() {
+            RunOutcome::partial(format!("{detail} — the transfer may be incomplete"))
+        } else {
+            RunOutcome::refused(detail)
+        });
+    }
 
     // 序列方向由位移符号决定：目的区间在源之后（正位移）时从尾往头逐块搬，否则从头往尾。
     // 块边界由 [`spans`] 唯一给出；`chunks_in_entry` 是这条序列的前缀长度
@@ -199,6 +215,7 @@ pub(crate) fn execute(
             )));
         }
         verify_batch(src, batch_start, &batch, part)?;
+        crate::movepart::fault_after_data_sync(state.cursor());
         sink.transfer_checkpoint(src, state)
             .map_err(|e| checkpoint_failed(part, e))?;
     }

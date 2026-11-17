@@ -1,4 +1,4 @@
-//! 崩溃/中断后的两条出路：同一请求续跑，或只能 `abandon`。
+//! 崩溃/中断后的两条出路：同一请求续跑，或只能 `recover --release`。
 //!
 //! 需要 Linux：记录后端只在 Linux 编译；用例只用普通镜像文件，不需要 root。
 //! 记录落在 `<image_state_root>/images/<键摘要>/record`；续跑用的计划摘要按“同一请求”
@@ -242,7 +242,7 @@ fn a_different_request_does_not_continue_the_record() {
     assert!(err.contains("different `new` request"), "{err}");
     assert_eq!(fs::read(record_path(&image)).unwrap(), bytes);
 
-    let (code, out, err) = run(&["abandon", image.to_str().unwrap(), "--yes"]);
+    let (code, out, err) = run(&["recover", image.to_str().unwrap(), "--release", "--yes"]);
     assert_eq!(code, 0, "{out}{err}");
     let (code, out, err) = run(&["new", image.to_str().unwrap(), "--yes"]);
     assert_eq!(code, 0, "{out}{err}");
@@ -278,20 +278,20 @@ fn non_resumable_provisional_is_recovery_pending() {
 }
 
 #[test]
-fn a_blocked_record_leaves_abandon_as_the_only_exit() {
-    let dir = temp_dir("only_abandon");
+fn a_blocked_record_leaves_recover_release_as_the_only_exit() {
+    let dir = temp_dir("only_release");
     let image = image_with(&dir, 4096);
     let mut fixture = Fixture::image(4096, file_id(&image), 2);
     fixture.restore_blocked = true;
     let bytes = fixture.bytes();
     write_record(&image, &bytes);
 
-    let (code, out, err) = run(&["undo", image.to_str().unwrap(), "--yes"]);
+    let (code, out, err) = run(&["recover", image.to_str().unwrap(), "--yes"]);
     assert_eq!(code, 3, "{out}{err}");
-    assert!(err.contains("release the transaction with `diskedit abandon`"), "{err}");
+    assert!(err.contains("release the transaction with `diskedit recover --release`"), "{err}");
     assert_eq!(fs::read(record_path(&image)).unwrap(), bytes);
 
-    let (code, out, err) = run(&["abandon", image.to_str().unwrap(), "--yes"]);
+    let (code, out, err) = run(&["recover", image.to_str().unwrap(), "--release", "--yes"]);
     assert_eq!(code, 0, "{out}{err}");
     assert!(!record_path(&image).exists());
     assert!(record_dir(&image).join(".abandoned").exists());
@@ -310,7 +310,7 @@ fn an_unfinished_relocation_is_not_settled_as_already_reverted() {
     let bytes = fixture.bytes();
     write_record(&image, &bytes);
 
-    let (code, out, err) = run(&["undo", image.to_str().unwrap(), "--yes"]);
+    let (code, out, err) = run(&["recover", image.to_str().unwrap(), "--yes"]);
     assert_eq!(code, 3, "{out}{err}");
     assert!(err.contains("re-run `diskedit move`"), "{err}");
     assert_eq!(
@@ -333,7 +333,7 @@ fn a_written_table_without_a_preimage_is_not_settled_as_already_reverted() {
     let bytes = fixture.bytes();
     write_record(&image, &bytes);
 
-    let (code, out, err) = run(&["undo", image.to_str().unwrap(), "--yes"]);
+    let (code, out, err) = run(&["recover", image.to_str().unwrap(), "--yes"]);
     assert_eq!(code, 3, "{out}{err}");
     // 没有表区 preimage 就无从证明已写目的区与旧区间不相交：判据 fail-closed，
     // 走的是与阶段无关的同一拒绝口径
@@ -373,9 +373,9 @@ fn gpt_preimage(partitions: [(u64, u64); 2]) -> Vec<(u64, Vec<u8>)> {
 }
 
 /// 块已写、游标未落盘：当前条目的整段目的区都按已写计。目的区压到旧表所指的区间时
-/// `undo` 必须拒绝，否则旧布局会被写回并被指向已覆盖的字节
+/// `recover` 必须拒绝，否则旧布局会被写回并被指向已覆盖的字节
 #[test]
-fn a_lagging_cursor_over_an_overlapping_move_is_refused_by_undo() {
+fn a_lagging_cursor_over_an_overlapping_move_is_refused_by_recover() {
     let dir = temp_dir("lagging_cursor_blocked");
     let image = image_with(&dir, 8 * 1024 * 1024);
     let mut fixture = Fixture::image(8 * 1024 * 1024, file_id(&image), 5);
@@ -391,16 +391,16 @@ fn a_lagging_cursor_over_an_overlapping_move_is_refused_by_undo() {
     let bytes = fixture.bytes();
     write_record(&image, &bytes);
 
-    let (code, out, err) = run(&["undo", image.to_str().unwrap(), "--yes"]);
+    let (code, out, err) = run(&["recover", image.to_str().unwrap(), "--yes"]);
     assert_eq!(code, 3, "{out}{err}");
     assert!(err.contains("cannot be shown to be clear"), "{err}");
     assert_eq!(fs::read(record_path(&image)).unwrap(), bytes, "the record must survive the refusal");
 }
 
 /// swap 条目不拷数据，但表项提交后按新落点 mkswap 重写整段目的区。目的区压在旧区间上时
-/// `undo` 只能拒绝：写回旧表会让数据区间指向刚被 swap 头覆盖的字节
+/// `recover` 只能拒绝：写回旧表会让数据区间指向刚被 swap 头覆盖的字节
 #[test]
-fn a_swap_destination_over_the_old_ranges_is_refused_by_undo() {
+fn a_swap_destination_over_the_old_ranges_is_refused_by_recover() {
     let dir = temp_dir("swap_destination_blocked");
     let image = image_with(&dir, 8 * 1024 * 1024);
     let mut fixture = Fixture::image(8 * 1024 * 1024, file_id(&image), 5);
@@ -416,7 +416,7 @@ fn a_swap_destination_over_the_old_ranges_is_refused_by_undo() {
     let bytes = fixture.bytes();
     write_record(&image, &bytes);
 
-    let (code, out, err) = run(&["undo", image.to_str().unwrap(), "--yes"]);
+    let (code, out, err) = run(&["recover", image.to_str().unwrap(), "--yes"]);
     assert_eq!(code, 3, "{out}{err}");
     assert!(err.contains("cannot be shown to be clear"), "{err}");
     assert_eq!(fs::read(record_path(&image)).unwrap(), bytes, "the record must survive the refusal");
@@ -440,7 +440,7 @@ fn a_lagging_cursor_clear_of_the_old_ranges_is_still_replayable() {
     let bytes = fixture.bytes();
     write_record(&image, &bytes);
 
-    let (code, out, err) = run(&["undo", image.to_str().unwrap(), "--yes"]);
+    let (code, out, err) = run(&["recover", image.to_str().unwrap(), "--yes"]);
     assert_eq!(code, 0, "{out}{err}");
     assert!(out.contains("no destination range the move has written"), "{out}");
     assert!(!record_path(&image).exists(), "a completed rollback clears its record");

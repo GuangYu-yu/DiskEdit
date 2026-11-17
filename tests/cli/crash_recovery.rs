@@ -216,7 +216,7 @@ fn foreign_resize_slot_refuses_resize_and_copy() {
     let (c, e) = run(&["resize", target.as_str(), "grow", "--allow-move", "--chunk", "4", "--yes"]);
     assert_eq!(c, 5, "resize must refuse a foreign single-partition job: {e}");
     assert!(
-        e.contains("re-run `diskedit move` with the same request") && e.contains("abandon"),
+        e.contains("re-run `diskedit move` with the same request") && e.contains("recover --release"),
         "the way out must name a resuming command and the release: {e}"
     );
     // copy：同样拒绝，不得接管
@@ -232,9 +232,9 @@ fn foreign_resize_slot_refuses_resize_and_copy() {
 }
 
 /// `copy`：数据已复制、表项未提交时崩溃。它**没有续跑路径**（`help copy` 的 "No resume"），
-/// 表未被触碰 ⇒ undo 不做释放，需要显式 `abandon`；文案绝不能建议"重跑 copy"
+/// 表未被触碰 ⇒ recover 不做释放，需要显式 `recover --release`；文案绝不能建议"重跑 copy"
 #[test]
-fn copy_crash_has_no_resume_path_and_undo_refuses() {
+fn copy_crash_has_no_resume_path_and_recover_refuses() {
     let img = stage("cpc");
     let img_s = img.to_str().unwrap();
     let target = format!("{img_s}:1");
@@ -252,13 +252,13 @@ fn copy_crash_has_no_resume_path_and_undo_refuses() {
         "copy must never be advertised as resumable: {e}"
     );
 
-    // 表未被触碰、copy 无续跑路径：undo 不把这份现场当"无事可做"释放——`restore_blocked`
-    // 就是"写过目标字节"这条事实，静默等价于 `abandon` 会抹掉它的存在。释放需要显式 `abandon`
-    let (c, e) = run(&["undo", img_s, "--yes"]);
-    assert_eq!(c, 3, "undo must not release a copy record in place of `abandon`: {e}");
+    // 表未被触碰、copy 无续跑路径：recover 不把这份现场当"无事可做"释放——`restore_blocked`
+    // 就是"写过目标字节"这条事实，静默等价于 `recover --release` 会抹掉它的存在。释放需要显式 `recover --release`
+    let (c, e) = run(&["recover", img_s, "--yes"]);
+    assert_eq!(c, 3, "recover must not release a copy record in place of `recover --release`: {e}");
     assert!(record_present(&img), "the record must stay until it is explicitly released: {e}");
-    let (c, e) = run(&["abandon", img_s, "--yes"]);
-    assert_eq!(c, 0, "an explicit `abandon` must release the record: {e}");
+    let (c, e) = run(&["recover", img_s, "--release", "--yes"]);
+    assert_eq!(c, 0, "an explicit `recover --release` must release the record: {e}");
     assert!(!record_present(&img), "{e}");
     let (c, e) = run(&["add", img_s, "1M", "--align", "mib", "--type-guid", "0fc63daf-8483-4772-8e79-3d69d8477de4", "--yes"]);
     assert_eq!(c, 0, "the target must be usable again: {e}");
@@ -671,7 +671,7 @@ fn e2fsck_clean(img: &Path, start: u64, sectors: u64) -> bool {
     check.status.success()
 }
 
-/// 目标分区右侧紧邻挡路者：`resize grow`（尾部打包）与 `resize SIZE`（最小位移）
+/// 目标分区右侧紧邻挡路者：尾部打包的 `resize`（`grow` 尺寸）与 `resize SIZE`（最小位移）
 /// 各自只有走搬移才能完成，而两条命令共用同一个续跑槽位。按对方的语义执行槽上
 /// 那份现场，就是把请求静默放大或缩水——故必须拒绝，且现场原样留给原命令续跑。
 ///
@@ -716,7 +716,7 @@ fn pending_relocation_job_refuses_the_other_resize_semantic() {
     assert!(record_present(&img), "{e}");
     let (c, e) = run(&size_argv);
     assert_eq!(c, 5, "SIZE must refuse a pending grow job: {e}");
-    assert!(e.contains("`resize grow`"), "the refusal must name the job it belongs to: {e}");
+    assert!(e.contains("`resize SIZE --allow-move` (tail packing)"), "the refusal must name the job it belongs to: {e}");
     assert!(record_present(&img), "a refusal must not touch the scene");
 
     // 原命令重跑 ⇒ 接着槽上的进度收尾
@@ -789,7 +789,7 @@ fn table_bytes(img: &Path) -> Vec<u8> {
 }
 
 /// `delete` 的首次落盘就是修复事实：修复的第一个目标字节写出之前，记录已在盘上；
-/// 该记录只有修复事实、没有恢复区间，`undo` 仍必须能结算它
+/// 该记录只有修复事实、没有恢复区间，`recover` 仍必须能结算它
 #[test]
 fn delete_records_the_table_repair_before_its_first_write() {
     let img = stage("drep");
@@ -816,8 +816,8 @@ fn delete_records_the_table_repair_before_its_first_write() {
     assert_eq!(table_bytes(&img), before, "no table byte may be written before the repair record");
 
     // 记录里只有修复事实、没有可回写的区间：结算不写盘，但记录必须被释放
-    let (c, e) = run(&["undo", img_s.as_str(), "--yes"]);
-    assert_eq!(c, 0, "undo must settle a record that holds only a repair fact: {e}");
+    let (c, e) = run(&["recover", img_s.as_str(), "--yes"]);
+    assert_eq!(c, 0, "recover must settle a record that holds only a repair fact: {e}");
     assert!(!record_present(&img), "{e}");
 
     let (c, e) = run(&argv);
@@ -861,8 +861,8 @@ fn copy_records_the_table_repair_before_its_first_write() {
     assert!(shown.contains("in flight"), "the repair must still be in flight: {shown}");
     assert_eq!(table_bytes(&img), before, "no table byte may be written before the repair record");
 
-    let (c, e) = run(&["undo", img_s.as_str(), "--yes"]);
-    assert_eq!(c, 0, "undo must settle a record that holds only a repair fact: {e}");
+    let (c, e) = run(&["recover", img_s.as_str(), "--yes"]);
+    assert_eq!(c, 0, "recover must settle a record that holds only a repair fact: {e}");
     assert!(!record_present(&img), "{e}");
 
     let (c, e) = run(&argv);
@@ -873,7 +873,7 @@ fn copy_records_the_table_repair_before_its_first_write() {
 }
 
 /// `delete` 的表步围栏先于表写入：围栏在途时表字节未动，阶段判不可判定，
-/// 记录没有可回写的区间，只能用 `abandon` 释放
+/// 记录没有可回写的区间，只能用 `recover --release` 释放
 #[test]
 fn delete_records_the_table_step_before_its_first_write() {
     let img = stage("dfence");
@@ -899,7 +899,7 @@ fn delete_records_the_table_step_before_its_first_write() {
     );
     assert_eq!(table_bytes(&img), before, "no table byte may be written before the fence");
 
-    assert_eq!(run(&["abandon", img_s.as_str(), "--yes"]).0, 0);
+    assert_eq!(run(&["recover", img_s.as_str(), "--release", "--yes"]).0, 0);
     assert!(!record_present(&img));
 
     let (c, e) = run(&argv);
@@ -909,7 +909,7 @@ fn delete_records_the_table_step_before_its_first_write() {
     std::fs::remove_dir_all(img.parent().unwrap()).ok();
 }
 
-/// 表步写完、记录尚未提交：围栏已经 `Landed`，阶段说明表已写，`undo` 按恢复区间回放
+/// 表步写完、记录尚未提交：围栏已经 `Landed`，阶段说明表已写，`recover` 按恢复区间回放
 #[test]
 fn delete_records_the_landed_table_step() {
     let img = stage("dfence2");
@@ -931,10 +931,10 @@ fn delete_records_the_landed_table_step() {
         "a landed fence must report the table as written: {shown}"
     );
 
-    let (c, e) = run(&["undo", img_s.as_str(), "--yes"]);
-    assert_eq!(c, 0, "undo must replay the recorded table preimages: {e}");
+    let (c, e) = run(&["recover", img_s.as_str(), "--yes"]);
+    assert_eq!(c, 0, "recover must replay the recorded table preimages: {e}");
     assert!(!record_present(&img), "{e}");
-    assert_eq!(table_bytes(&img), before, "undo must restore the table bytes");
+    assert_eq!(table_bytes(&img), before, "recover must restore the table bytes");
 
     std::fs::remove_dir_all(img.parent().unwrap()).ok();
 }

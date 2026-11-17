@@ -15,7 +15,7 @@ $B new "$T" --yes >/dev/null; echo "new exit=$?"
 # 3TiB = 6442450944 扇区；last_usable = 6442450944 - 34 = 6442450910
 $B add --yes "$T" 1609564160 --start 2048 --name p1 >/dev/null; echo "add p1 exit=$?"
 $B add --yes "$T" 230866432 --start 6442000000 --name p2 >/dev/null; echo "add p2 @高LBA exit=$?"
-$B resize-part --yes "$T":2 --grow-to-end >/dev/null 2>&1; echo "p2 grow-to-end exit=$?"
+$B resize --yes "$T":2 --grow-to-end >/dev/null 2>&1; echo "p2 grow-to-end exit=$?"
 $B info "$T" | grep -o '"num":2,"first_lba":[0-9]*,"last_lba":[0-9]*'
 echo "  (期望 last_lba=6442450910)"
 sgdisk -v "$T" >/dev/null 2>&1 && echo "sgdisk clean" || { echo "sgdisk ISSUES"; rc=1; }
@@ -37,7 +37,7 @@ $B info "$LD" >/dev/null 2>&1; echo "ro info exit=$? (期望 0)"
 # 三个写探针都必须"在可写设备上合法、只因只读而被拒"，否则拒绝理由会来自别处：
 #  - resize 用 56M（落在 last_usable 131038 之内）：若写 100M，拒绝理由会是"尺寸越界"(3)，
 #    只读这件事根本没被测到
-#  - 只读设备上写操作会先在 state 目录落下记录再 EPERM，两次探针之间须 abandon，
+#  - 只读设备上写操作会先在 state 目录落下记录再 EPERM，两次探针之间须 recover --release，
 #    否则后一次会被"事务未释放"挡下，同样测不到只读
 ro_probe() { # label cmd args...
   local label=$1 out e
@@ -47,7 +47,7 @@ ro_probe() { # label cmd args...
   if [ "$e" != "4" ]; then
     echo "  RO WRONG EXIT (BAD): $(echo "$out" | head -1)"; rc=1
   fi
-  $B abandon "$LD" --yes >/dev/null 2>&1
+  $B recover --release "$LD" --yes >/dev/null 2>&1
 }
 ro_probe resize "$B" resize --yes "$LD":1 56M
 ro_probe set    "$B" set --yes    "$LD":1 name ro-try

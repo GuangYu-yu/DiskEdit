@@ -36,25 +36,9 @@ impl Drop for FixtureDir {
     }
 }
 
-/// 落盘伴随文件名的词表与生成宏。跨 crate 无法共享，故在这里维护一份。
-#[cfg(unix)]
-macro_rules! sidecar_suffix {
-    ($stem:literal) => {
-        concat!(".diskedit.", $stem)
-    };
-}
-
-/// 旧 undo journal 的落点名。
-#[cfg(unix)]
-const JOURNAL_SUFFIX: &str = sidecar_suffix!("journal");
+/// 记录目录里的锁文件名。跨 crate 无法共享，故在这里维护一份。
 #[cfg(unix)]
 const RECORD_LOCK_NAME: &str = "record.lock";
-
-/// 目标旁边的伴随文件：`dir` 下的 `<name><suffix>`
-#[cfg(unix)]
-fn sidecar(dir: &std::path::Path, name: &str, suffix: &str) -> std::path::PathBuf {
-    dir.join(format!("{name}{suffix}"))
-}
 
 /// 本次测试线程的镜像状态根：同一用例内的多次调用（含子进程）落点一致，用例之间互不相干。
 ///
@@ -62,7 +46,7 @@ fn sidecar(dir: &std::path::Path, name: &str, suffix: &str) -> std::path::PathBu
 /// 分根对它们没有影响。
 ///
 /// 进程内所有用例共用一个根时，临时镜像会复用内核回收的 inode，后来建出的镜像
-/// 因此命中前一个用例留下的记录目录（记录、`.torn.N`、残留文件名）
+/// 因此命中前一个用例留下的记录目录（记录、`.abandoned.N`、残留文件名）
 fn state_root() -> std::path::PathBuf {
     thread_local! {
         static ROOT: tempfile::TempDir = {
@@ -101,7 +85,7 @@ fn record_dir(img: &std::path::Path) -> std::path::PathBuf {
 }
 
 /// 目录条目名（排序后），不含只增、不参与恢复的审计日志：
-/// 拒绝路径不得新增 journal/ckpt 等恢复伴随物
+/// 拒绝路径不得新增记录、锁等恢复伴随物
 #[cfg(unix)]
 fn dir_entries(dir: &std::path::Path) -> Vec<String> {
     let mut names: Vec<String> = std::fs::read_dir(dir)
@@ -152,7 +136,7 @@ fn with_protective_mbr(mut data: Vec<u8>) -> Vec<u8> {
 /// 崩溃恢复。注入点只在 `test-faults` 构建下存在，故整块按 feature 隔离：
 /// **默认 `cargo test` 不会跑这里**，要跑得显式 `cargo test --features test-faults`。
 ///
-/// `resize-part` / `copy` 各有自己的收尾形状——一个留下可续跑的 ckpt，
+/// `resize --end` / `copy` 各有自己的收尾形状——一个留下可续跑的 ckpt，
 /// 一个什么都不留、且已越过不可回滚点。断言必须落在它们**各自的**后效上
 #[cfg(all(unix, feature = "test-faults"))]
 mod crash_recovery;

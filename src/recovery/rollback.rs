@@ -11,11 +11,11 @@ use crate::outcome::RunOutcome;
 use crate::support::bail_fail;
 
 /// 逐条核对失败后共用的出路：两种成因（盘上字节被外部改动、目标被缩短到记录之外）下
-/// "重跑 undo"都要等目标回到那条写入时的状态之后才可能成功。确实不再需要回滚时，
-/// `abandon` 释放现场——它不写目标一个字节，放弃的是"还能回滚"这个能力
+/// "重跑 `diskedit recover`"都要等目标回到那条写入时的状态之后才可能成功。确实不再需要回滚时，
+/// `diskedit recover --release` 释放现场——它不写目标一个字节，放弃的是"还能回滚"这个能力
 const ROLLBACK_STUCK_REMEDY: &str =
-    "restore the target to the state it was in, then re-run `undo`; if the rollback is no longer \
-     wanted, release it with `diskedit abandon`";
+    "restore the target to the state it was in, then run `diskedit recover`; if the rollback is \
+     no longer wanted, release it with `diskedit recover --release`";
 
 /// 外部改动之后的另一半事实：记录只记盘上字节，内核分区视图是否跟上是另一回事，
 /// 而后续写命令与 FS 工具都按内核视图动手
@@ -39,7 +39,7 @@ pub(crate) struct RollbackPermit {
 /// 签发点的封印：字段私有，其它模块构造不了带它的值
 struct Seal;
 
-/// 记录越过不可逆点后，`undo` 能写回哪些区间。判据是"恢复后表所指的旧区间是否已被
+/// 记录越过不可逆点后，`diskedit recover` 能写回哪些区间。判据是"恢复后表所指的旧区间是否已被
 /// 已写的目的区间压过"：`copy` 不写源区，旧表指向的数据仍完整；`move` 把数据搬到新位置，
 /// 只有已写目的区与旧区间不相交时，旧表才仍然指向完整数据。
 ///
@@ -50,8 +50,8 @@ struct Seal;
 /// 逐条目比较位移会把尾打包看漏：后一条的目的区可以复写前一条的旧位。所以判据取
 /// 全部已写目的区间与旧表全部分区区间的交集，而不是"位移 ≥ 长度"。
 ///
-/// `undo` 的准入、`inspect` 的下一步提示、`abandon` 的放弃计数与"目标忙"的出路文案
-/// 共用这一份判据：各处各写一遍匹配式，就会出现"提示说能撤、`undo` 说不能"的漂移
+/// `diskedit recover` 的准入、`inspect` 的下一步提示、`diskedit recover --release` 的放弃计数与"目标忙"的出路文案
+/// 共用这一份判据：各处各写一遍匹配式，就会出现"提示说能撤、`diskedit recover` 说不能"的漂移
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TableReplay {
     /// 记录未越过不可逆点：记录里的区间按原样回放
@@ -112,13 +112,13 @@ impl std::fmt::Display for TableReplay {
                 "the ranges the old layout names cannot be shown to be clear of the ranges the move has \
                  already written, so its bytes are not written back; re-run `diskedit move` with the same \
                  request to finish the relocation, replay the recorded table regions with \
-                 `diskedit undo --replay-table-only`, or release the record with `diskedit abandon`",
+                 `diskedit recover --replay-table-only`, or release the record with `diskedit recover --release`",
             ),
             Self::MoveNoPreimage => f.write_str(
                 "the record holds no replayable copy of the old partition table — the table step never ran, \
                  or the recorded bytes do not parse — so no table bytes are written back; re-run \
                  `diskedit move` with the same request to finish the relocation, or release the record \
-                 with `diskedit abandon`",
+                 with `diskedit recover --release`",
             ),
             Self::MoveForced => f.write_str(
                 "the partition table is back to the old layout, but the recorded ranges were not rolled back; \
@@ -127,7 +127,7 @@ impl std::fmt::Display for TableReplay {
             ),
             Self::Refused => f.write_str(
                 "the record marks a non-reversible mutation, so the recorded bytes are not written back; \
-                 release the transaction with `diskedit abandon`",
+                 release the transaction with `diskedit recover --release`",
             ),
         }
     }
@@ -397,21 +397,21 @@ fn unfinished_stage_remedy(record: &Record, stage: Stage) -> String {
     match stage {
         Stage::Relocating { entry, .. } => format!(
             "the recorded relocation stopped at entry {entry}; re-run `diskedit {command}` with the same \
-             request to continue it, or release the record with `diskedit abandon` only if it is stale"
+             request to continue it, or release the record with `diskedit recover --release` only if it is stale"
         ),
         Stage::Relocated => format!(
             "the data for the current relocation entry is already copied and its cursor was not advanced, so \
              the recorded progress cannot be discarded; re-run `diskedit {command}` with the same request to \
-             continue it, or release the record with `diskedit abandon` only if it is stale"
+             continue it, or release the record with `diskedit recover --release` only if it is stale"
         ),
         Stage::TableWritten => format!(
             "the partition table write is already on the target and the steps after it are still pending; \
              re-run `diskedit {command}` with the same request to finish them (`diskedit inspect` shows what \
-             is left), or release the record with `diskedit abandon` only if it is stale"
+             is left), or release the record with `diskedit recover --release` only if it is stale"
         ),
         Stage::Finishing => format!(
             "the partition step is done and the finishing steps are still pending; re-run `diskedit {command}` \
-             with the same request to finish them, or release the record with `diskedit abandon` only if it is \
+             with the same request to finish them, or release the record with `diskedit recover --release` only if it is \
              stale"
         ),
         // 字段不足以判定阶段：不代做动作，只指路。有续跑路径的用原命令完成；
@@ -419,11 +419,11 @@ fn unfinished_stage_remedy(record: &Record, stage: Stage) -> String {
         _ if record.op.resumable() => format!(
             "the record's fields do not decide how far the operation got; inspect it with `diskedit inspect`, \
              then re-run `diskedit {command}` with the same request to finish it, or release the record with \
-             `diskedit abandon` only if it is stale"
+             `diskedit recover --release` only if it is stale"
         ),
         _ => format!(
-            "`{command}` has no resume path and `undo` cannot remove the bytes it already wrote; release the \
-             record with `diskedit abandon`, then run `diskedit {command}` again"
+            "`{command}` has no resume path and the bytes it already wrote cannot be rolled back; \
+             release the record with `diskedit recover --release`, then run `diskedit {command}` again"
         ),
     }
 }
@@ -450,7 +450,7 @@ pub(crate) fn execute_rollback(
         }
         Err(e) => {
             let cause = format!(
-                "the recovery record could not be released ({e}); the record is left in place — release it with `diskedit abandon`"
+                "the recovery record could not be released ({e}); the record is left in place — release it with `diskedit recover --release`"
             );
             // 判据：记录仍在盘上而释放失败。已越过不可逆写入点的运行盘面可能已改，
             // 降级为 5 并保留记录；未越过的仍是拒绝
@@ -520,13 +520,13 @@ pub(crate) fn matches_recorded_write(now: &[u8], after: &[u8], pre: &[u8]) -> bo
     }
     // 存在切点 k 使 now 由 front 的前缀与 back 的后缀拼成：前缀相符长度 p 与后缀
     // 相符长度 s 能覆盖整个区间（p + s ≥ len）即存在这样的 k
-    let torn_between = |front: &[u8], back: &[u8]| {
+    let partially_written_between = |front: &[u8], back: &[u8]| {
         let p = now.iter().zip(front).take_while(|(a, b)| a == b).count();
         let s = now.iter().zip(back).rev().take_while(|(a, b)| a == b).count();
         p + s >= now.len()
     };
     // 正向写入的撕裂（after 前缀 + pre 后缀）与回滚写入的撕裂（pre 前缀 + after 后缀）
-    torn_between(after, pre) || torn_between(pre, after)
+    partially_written_between(after, pre) || partially_written_between(pre, after)
 }
 
 /// `copy` 记录回滚前的源复核。源与副本同属一个目标，源身份由记录目标的身份承担——
@@ -543,7 +543,7 @@ fn verify_copy_source(src: &FileSource, record: &Record, path: &std::path::Path)
         crate::domain::Fact::Absent | crate::domain::Fact::Undecidable(_) => {
             bail_fail(RunOutcome::refused(format!(
                 "the recovery record at {} carries no source range, so the bytes its `copy` wrote cannot be checked \
-                 against the source partition — they are not written back; release it with `diskedit abandon`",
+                 against the source partition — they are not written back; release it with `diskedit recover --release`",
                 path.display()
             )))
         }
@@ -551,7 +551,7 @@ fn verify_copy_source(src: &FileSource, record: &Record, path: &std::path::Path)
     let (Some(offset), Some(len)) = (source.byte_offset(), source.byte_len()) else {
         bail_fail(RunOutcome::refused(format!(
             "the source range in the recovery record at {} overflows the byte space — its bytes are not written \
-             back; release it with `diskedit abandon`",
+             back; release it with `diskedit recover --release`",
             path.display()
         )));
     };
@@ -588,7 +588,7 @@ pub(crate) fn validate_record_capacity(src: &WriteSource, record: &Record, path:
         bail_fail(RunOutcome::refused(format!(
             "the target size changed since the recovery record was written (recorded {recorded} byte(s), \
              current {} byte(s)) — the recorded bytes are not written back; release the record at {} with \
-             `diskedit abandon`",
+             `diskedit recover --release`",
             src.size,
             path.display()
         )));
@@ -606,7 +606,7 @@ pub(crate) fn validate_record_ranges(
         let Some(offset) = entry.byte_offset() else {
             bail_fail(RunOutcome::refused(format!(
                 "the recovery record at {} has an unrepresentable range (LBA {} × {} byte sector(s)); \
-                 it is left in place — release it with `diskedit abandon`",
+                 it is left in place — release it with `diskedit recover --release`",
                 path.display(),
                 entry.first_lba,
                 entry.sector_size
@@ -616,7 +616,7 @@ pub(crate) fn validate_record_ranges(
         if !entry.is_well_formed() || end > src.size {
             bail_fail(RunOutcome::refused(format!(
                 "the recovery record at {} has a range {offset}..{end} that does not fit this target \
-                 ({} byte(s)); it is left in place — release it with `diskedit abandon`",
+                 ({} byte(s)); it is left in place — release it with `diskedit recover --release`",
                 path.display(),
                 src.size
             )));
@@ -648,7 +648,8 @@ pub(crate) fn verify_record_plan(
             if !matches_recorded_write(&now, &entry.after, &entry.original) {
                 return Err(RunOutcome::refused(format!(
                     "the target no longer holds the recorded bytes at offset {offset} — the disk changed outside \
-                     this tool after that write, or an interrupted write by this tool left a torn value; \
+                     this tool after that write, or an interrupted write by this tool left a partially \
+                     written value; \
                      replaying would overwrite the foreign edit; {FOREIGN_EDIT_HINT}; {ROLLBACK_STUCK_REMEDY}"
                 )));
             }
@@ -766,16 +767,36 @@ pub(crate) fn replay_record(
     restore: &[RestoreEntry],
     path: &std::path::Path,
 ) {
-    // 逆序：同一区间被后续写入覆盖时，先回放后写的那段，链首原文才落得回去
+    // 逆序：同一区间被后续写入覆盖时，先回放后写的那段，链首原文才落得回去。
+    // 每条写入之前按 [`verify_record_plan`] 同一判据复核当前字节：判定与写之间
+    // 不再夹着一次可能被外部改动穿过的等待
+    let mut patches: Vec<(u64, Vec<u8>)> = Vec::new();
     for entry in restore.iter().rev() {
+        let offset = entry.byte_offset().expect("ranges were validated before the replay");
+        let now = match read_virtual(&*src, offset, entry.original.len(), &patches) {
+            Ok(now) => now,
+            Err(e) => bail_fail(RunOutcome::refused(format!(
+                "cannot re-read the recorded range at offset {offset} before writing it back: {e} — \
+                 the replay stopped before this range was written; the recovery record at {} is kept",
+                path.display()
+            ))),
+        };
+        if now != entry.original && !matches_recorded_write(&now, &entry.after, &entry.original) {
+            bail_fail(RunOutcome::refused(format!(
+                "the target no longer holds the recorded bytes at offset {offset} — the disk changed outside \
+                 this tool after that write; replaying would overwrite the foreign edit; {FOREIGN_EDIT_HINT}; \
+                 {ROLLBACK_STUCK_REMEDY}"
+            )));
+        }
         let pre_image = RecordedPreImage::of(entry);
         if let Err(e) = src.write_recorded(&pre_image) {
             bail_fail(RunOutcome::partial(format!(
-                "undo write failed at offset {}: {e} — the recovery record at {} is kept; retry `diskedit undo`",
+                "the rollback write failed at offset {}: {e} — the recovery record at {} is kept; retry `diskedit recover`",
                 pre_image.offset(),
                 path.display()
             )));
         }
+        patches.push((offset, entry.original.clone()));
     }
     // 写后读回：缓存丢写与镜像层短写只有重读才可见。回放是唯一的回退路径，
     // 这一段丢了就没有第二处能发现。比对的是并集图像：区间可以重叠，逐条比对会把
@@ -785,21 +806,21 @@ pub(crate) fn replay_record(
         match src.read_at(offset, &mut got) {
             Ok(()) if got == expected => {}
             Ok(()) => bail_fail(RunOutcome::partial(format!(
-                "undo wrote the pre-image at offset {offset} but the target holds different bytes; \
-                 the recovery record at {} is kept — retry `diskedit undo`",
+                "the rollback wrote the pre-image at offset {offset} but the target holds different bytes; \
+                 the recovery record at {} is kept — retry `diskedit recover`",
                 path.display()
             ))),
             Err(e) => bail_fail(RunOutcome::partial(format!(
                 "cannot read back the pre-image just written at offset {offset}: {e}; \
-                 the recovery record at {} is kept — retry `diskedit undo`",
+                 the recovery record at {} is kept — retry `diskedit recover`",
                 path.display()
             ))),
         }
     }
     src.sync_all().unwrap_or_else(|e| {
         bail_fail(RunOutcome::partial(format!(
-            "undo wrote the record's bytes back but sync failed: {e} — the rollback may not be durable, \
-             the recovery record at {} is kept; retry `diskedit undo`",
+            "the rollback wrote the record's bytes back but sync failed: {e} — the rollback may not be durable, \
+             the recovery record at {} is kept; retry `diskedit recover`",
             path.display()
         )))
     });
@@ -815,26 +836,29 @@ mod tests {
     /// 相容形态有三种：写后内容、原文（上一次回滚的进度），以及一次没写完的写留下的
     /// "after 前缀 + pre 后缀"。外来改动不属于任何一种，必须继续拒绝
     #[test]
-    fn recorded_write_accepts_a_torn_prefix_but_not_a_foreign_mix() {
+    fn recorded_write_accepts_a_partially_written_prefix_but_not_a_foreign_mix() {
         use super::matches_recorded_write;
         let after = [0xAAu8; 8];
         let pre = [0x11u8; 8];
         assert!(matches_recorded_write(&after, &after, &pre));
         assert!(matches_recorded_write(&pre, &after, &pre), "a replayed region is idempotent");
-        let mut torn = pre;
-        torn[..5].copy_from_slice(&after[..5]);
+        let mut partial = pre;
+        partial[..5].copy_from_slice(&after[..5]);
         assert!(
-            matches_recorded_write(&torn, &after, &pre),
+            matches_recorded_write(&partial, &after, &pre),
             "the landed prefix of this tool's own write must stay replayable"
         );
         // 回滚写入（pre 覆盖 after）中途停下：落盘的是 pre 前缀 + after 后缀
-        let mut torn_back = after;
-        torn_back[..5].copy_from_slice(&pre[..5]);
+        let mut partial_back = after;
+        partial_back[..5].copy_from_slice(&pre[..5]);
         assert!(
-            matches_recorded_write(&torn_back, &after, &pre),
+            matches_recorded_write(&partial_back, &after, &pre),
             "the landed prefix of this tool's own rollback must stay replayable"
         );
-        assert!(!matches_recorded_write(&[0x22u8; 8], &after, &pre), "a foreign edit is not a torn write");
+        assert!(
+            !matches_recorded_write(&[0x22u8; 8], &after, &pre),
+            "a foreign edit is not a partially written value"
+        );
     }
 
     fn preimage_with_sector(first_lba: u64, sector_size: u64, bytes: Vec<u8>) -> RestoreEntry {

@@ -1,7 +1,10 @@
 //! LVM PV 链式扩容（仅 Linux 运行时有效）：pvresize → 定位目标 LV → lvextend。
-//! 全部经外部 lvm2 工具，报表解析用 --reportformat json（lvmreport(7) 定义的
-//! JSON 报表结构，按程序解析设计，不依赖列序与名称字符集）；执行与解析分离，
-//! 解析为纯函数可单测。pvresize(8)：扩容方向无前置条件（缩容才要求新末端之后
+//! 全部经外部 lvm2 工具。报表解析以 `--reportformat json`（lvmreport(7) 定义的
+//! JSON 报表结构，按程序解析设计，不依赖列序与名称字符集）为主；只有两处走
+//! `--noheadings --nosuffix --units b --separator '|'` 的文本行解析：
+//! [`pv_size_report`]（`pvs` 的六字段，核对 PV 尺寸）与 [`lv_state`]（`lvs` 的
+//! 五字段，取目标 LV 的字节尺寸与激活位）。执行与解析分离，解析为纯函数可单测。
+//! pvresize(8)：扩容方向无前置条件（缩容才要求新末端之后
 //! 无已分配 extent）；lvextend(8)：`-l +N` 按 extent 数增量扩，`-r/--resizefs`
 //! 同步扩文件系统。
 //!
@@ -237,12 +240,26 @@ fn parse_lvs_on_pv_with(
     let mut seen = std::collections::HashSet::new();
     let mut out = Vec::new();
     for row in report_rows(json, "lv")? {
-        let Some(name) = row.get("lv_name").and_then(|v| v.as_str()).map(str::to_string) else { continue };
+        // 三个字段都在 `lvs -o` 的请求里：行里缺任何一个都说明报表没回答被问的问题。
+        // 缺字段不是"这个 LV 不在目标上"，跳过它会让一条真实占用消失，故按不可信上抛
+        let Some(name) = row.get("lv_name").and_then(|v| v.as_str()).map(str::to_string) else {
+            return Err(LvmError::Failed(
+                "lvs report row has no lv_name although the report asked for it — refusing to trust it".to_string(),
+            ));
+        };
         if name.starts_with('[') {
             continue;
         }
-        let Some(path) = row.get("lv_path").and_then(|v| v.as_str()).map(str::to_string) else { continue };
-        let Some(devices) = row.get("devices").and_then(|v| v.as_str()) else { continue };
+        let Some(path) = row.get("lv_path").and_then(|v| v.as_str()).map(str::to_string) else {
+            return Err(LvmError::Failed(format!(
+                "lvs report row for {name} has no lv_path although the report asked for it — refusing to trust it"
+            )));
+        };
+        let Some(devices) = row.get("devices").and_then(|v| v.as_str()) else {
+            return Err(LvmError::Failed(format!(
+                "lvs report row for {name} has no devices although the report asked for it — refusing to trust it"
+            )));
+        };
         let mut on_target = false;
         for entry in devices.split(',') {
             let dev = strip_pe_offset(entry);

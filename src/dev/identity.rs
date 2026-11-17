@@ -1,4 +1,4 @@
-//! TargetIdentity：盘级身份，以及 journal/checkpoint/lock/log 的落点派生。
+//! TargetIdentity：盘级身份，以及恢复记录、锁与日志的落点派生。
 
 use super::*;
 use sha2::Digest;
@@ -165,14 +165,14 @@ pub(crate) fn fnv1a64(bytes: &[u8]) -> u64 {
 /// 持久状态的默认落点
 pub(crate) const DEFAULT_STATE_DIR: &str = "/var/lib/diskedit";
 
-/// 持久状态的落点目录（journal / checkpoint / log）。
+/// 持久状态的落点目录（恢复记录 / 锁 / 日志）。
 ///
 /// 默认取 `/var/lib/diskedit`：FHS §5.8 把 `/var/lib/<name>` 规定为应用/系统级、跨重启
 /// 保留、且不得暴露给普通用户的状态；`$XDG_STATE_HOME` 面向的是用户级 state。本工具的
 /// 块设备路径要独占打开整盘并改写分区表，属主机级操作，与后者不是一回事
 ///
 /// `DISKEDIT_STATE_DIR` 只为测试 / 容器 / 打包提供显式 override，不接 `$XDG_STATE_HOME`
-/// / `$HOME` 回退链：落点随运行用户与调用环境变化，journal 与 checkpoint 的命名空间就会
+/// / `$HOME` 回退链：落点随运行用户与调用环境变化，记录与锁的命名空间就会
 /// 漂移，撤销窗口和续传现场随之找不到。同一次未收尾作业的所有调用必须给同一个值
 pub(crate) fn state_dir() -> PathBuf {
     match std::env::var_os("DISKEDIT_STATE_DIR") {
@@ -226,7 +226,7 @@ pub(crate) fn image_state_root() -> Option<PathBuf> {
 /// 路径）。块设备以设备层拓扑键为身份；loop 设备例外——身份是
 /// backing 文件本身，现场落镜像兄弟文件。
 ///
-/// 现场落点由身份派生：journal 与 checkpoint 各一个（写入位置，也是唯一查找位置）。
+/// 现场落点由身份派生：记录与锁各有一个落点（写入位置，也是唯一查找位置）。
 /// 身份只对应一个落点，因此不会出现"同一目标有两份现场"这种需要靠歧义判定处理的局面
 #[derive(Clone, Debug)]
 pub struct TargetIdentity {
@@ -239,7 +239,6 @@ pub struct TargetIdentity {
     /// （loop attach、第二道 inode 锁）也用它——按 `base` 重新打开会落到命令返回后
     /// 被改名或替换的另一个文件上
     pub(crate) canonical: PathBuf,
-    pub(crate) journal: PathBuf,
     /// 恢复记录的落点：镜像为 `<image_state_root>/images/<键摘要>/record`（取不到
     /// 每用户状态根时为 `None`）；块设备为 `<state_root>/recovery/<identity-hash>/record`，
     /// 取不到 WWN / EUI / 可重复 serial 时为 `None`，写命令退 6
@@ -276,8 +275,7 @@ pub(crate) enum TargetKind {
 /// 块设备类型上都存在（ram、无 serial 的 virtio-blk 等），故本层只回答"最强的可用身份"，
 /// 链尾恒有 devname + 容量兜底。
 ///
-/// `dm/name` 是用户指定的映射名、改名即变，只回答"现场落在哪"（journal / checkpoint
-/// 的键），不构成身份（指纹、锁键）；其余条目同时是设备声明的事实。两个消费视图由
+/// `dm/name` 是用户指定的映射名、改名即变，只回答"现场落在哪"（记录键），不构成身份（指纹、锁键）；其余条目同时是设备声明的事实。两个消费视图由
 /// 这一张表过滤出来，不各抄一份。`loop/backing_file` 不在列：loop 设备在进入本链之前
 /// 就走专用的 backing 身份解析（见 [`TargetIdentity::resolve_block`]）。
 /// 属性名与值一起入哈希：不同属性下的同值字符串不构成同一个事实
@@ -447,10 +445,12 @@ pub(crate) fn quarantine_move(from: &Path) -> std::io::Result<PathBuf> {
     Err(std::io::Error::other("no free quarantine name available"))
 }
 
-/// 两个路径是否指向同一个 inode。两侧都必须是普通文件（`symlink_metadata`，不跟随
-/// 链接）：跟随链接的话，指向原件的隔离条目会与原件同 inode，随后删掉原件的最后一个
-/// 名字，只留下一条 dangling 链接。非 unix 平台没有可靠的判定手段，一律按"不同文件"
-/// 处理——保守方向是不动别人的文件（顺延一个名字），而不是猜测后覆盖
+/// 两个路径是否指向同一个文件。两侧都必须是普通文件（`symlink_metadata`，不跟随
+/// 链接）：跟随链接的话，指向原件的隔离条目会与原件同身份，随后删掉原件的最后一个
+/// 名字，只留下一条 dangling 链接。判据取自各自打开后的句柄身份——unix 是
+/// `(st_dev, st_ino)`，Windows 是 `(卷序列号, 文件索引)`；路径本身不参与比较。
+/// 打不开、读不出身份或任一侧不是普通文件时一律按"不同文件"处理——保守方向是不动
+/// 别人的文件（顺延一个名字），而不是猜测后覆盖
 #[cfg(unix)]
 fn same_file(a: &Path, b: &Path) -> bool {
     use std::os::unix::fs::MetadataExt;
@@ -461,20 +461,37 @@ fn same_file(a: &Path, b: &Path) -> bool {
     }
 }
 
-#[cfg(not(unix))]
+/// [`same_file`] 的 Windows 实现：`symlink_metadata` 只决定"是不是普通文件"，
+/// 身份取打开后的句柄——`(卷序列号, 文件索引)` 只能从句柄问到
+#[cfg(windows)]
+fn same_file(a: &Path, b: &Path) -> bool {
+    let identity = |p: &Path| {
+        std::fs::symlink_metadata(p)
+            .ok()
+            .filter(|m| m.file_type().is_file())
+            .and_then(|_| std::fs::File::open(p).ok())
+            .and_then(|f| TargetFingerprint::from_file(&f).ok())
+            .filter(|fp| fp.has_inode_evidence())
+    };
+    match (identity(a), identity(b)) {
+        (Some(x), Some(y)) => (x.dev, x.ino) == (y.dev, y.ino),
+        _ => false,
+    }
+}
+
+/// 其余平台没有可读的句柄身份，一律按"不同文件"处理
+#[cfg(not(any(unix, windows)))]
 fn same_file(_a: &Path, _b: &Path) -> bool {
     false
 }
 
-// 落盘文件名的词表：journal / log / lock 三类伴随文件只在这里定义一次，派生点（身份构造、
+// 落盘文件名的词表：log / lock 两类伴随文件只在这里定义一次，派生点（身份构造、
 // 日志落点）都取自这里。命名空间只在宏体里出现一次，各常量只提供自己的 stem
 macro_rules! sidecar_suffix {
     ($stem:literal) => {
         concat!(".diskedit.", $stem)
     };
 }
-
-pub(crate) const JOURNAL_SUFFIX: &str = sidecar_suffix!("journal");
 
 /// 块设备没有记录目录（身份 `Unusable`）时的锁文件名后缀
 #[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
@@ -491,20 +508,15 @@ pub(crate) const RECORD_NAME: &str = "record";
 /// 记录目录内的记录级锁文件名
 pub(crate) const RECORD_LOCK_NAME: &str = "record.lock";
 
-/// 隔离区条目名：`abandon` 把记录目录里的 `record` 换成这个隐藏名，重名时取 `.abandoned.N`
+/// 隔离区条目名：`recover --release` 把记录目录里的 `record` 换成这个隐藏名，重名时取 `.abandoned.N`
 pub(crate) const QUARANTINE_ABANDONED: &str = ".abandoned";
 
-/// 隔离区的第二个识别名 `.torn[.N]`。本构建不产生它：记录必须通过两段 CRC 才解析，
-/// 撕裂的记录一律拒绝回放并保留原名
-pub(crate) const QUARANTINE_TORN: &str = ".torn";
-
-/// 隔离条目的类别。两者都表示"记录已不在正式名上"：`abandoned` 是被放弃回滚能力，
-/// `torn` 是同一隔离区的另一个识别名。只参与识别与报告，不参与活跃记录判定
+/// 隔离条目的类别：`abandoned` 表示记录已不在正式名上（被放弃回滚能力）。
+/// 只参与识别与报告，不参与活跃记录判定
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum QuarantineMark {
     Abandoned,
-    Torn,
 }
 
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
@@ -512,7 +524,6 @@ impl QuarantineMark {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Abandoned => "abandoned",
-            Self::Torn => "torn",
         }
     }
 }
@@ -538,7 +549,7 @@ pub(crate) fn key_token(value: &str) -> String {
 }
 
 impl TargetIdentity {
-    /// 镜像身份。canonical = 身份主体（journal / 记录 / lock 都由它派生）；
+    /// 镜像身份。canonical = 身份主体（记录 / lock / 日志都由它派生）；
     /// literal = 用户给的路径，只用于日志命名（base）。两者不同（路径含符号链接或非规范
     /// 化成分）不影响落点：身份只认 realpath 指向的那个文件。
     ///
@@ -554,7 +565,6 @@ impl TargetIdentity {
             kind: TargetKind::Image,
             base: literal.to_path_buf(),
             canonical: canonical.to_path_buf(),
-            journal: suffix_path(canonical, JOURNAL_SUFFIX),
             record: record_dir.map(|dir| dir.join(RECORD_NAME)),
             record_key: None,
             lock,
@@ -565,7 +575,7 @@ impl TargetIdentity {
     /// 镜像身份：Linux 上取 realpath（文件不存在——cleanup 路径的常态之一——退字面
     /// 路径），其余平台字面路径。realpath 只收敛符号链接与路径写法：**硬链接不收敛**
     /// （两个名字指向同一 inode，realpath 各给各的），因此同一镜像的两条硬链接路径各
-    /// 派生一份 journal / checkpoint——在一处写下的现场，另一处看不见。别名路径上的
+    /// 派生一份记录——在一处写下的现场，另一处看不见。别名路径上的
     /// 并发写入在 unix 上由数据文件自身的 inode 级第二道锁收敛（见 `targetlock`），
     /// 其余平台只剩锁文件这一道
     pub(crate) fn resolve_image(path: &Path) -> Self {
@@ -587,7 +597,7 @@ impl TargetIdentity {
     /// 名字只是诊断信息，不是身份：同一对象在不同 mount namespace 下可以有不同名字，
     /// 名字也可能已被另一个文件复用。故这里重新打开它，用**已打开的句柄**解析名字
     /// （`/proc/self/fd`），并要求该名字此刻仍指向同一个 inode；backing 不是普通文件、
-    /// 打不开或名字已不指向它，一律 `Err`——退到字符串会把 journal / checkpoint / lock
+    /// 打不开或名字已不指向它，一律 `Err`——退到字符串会把记录与锁
     /// 挂到一个与 loop 无关的文件旁
     ///
     #[cfg(target_os = "linux")]
@@ -617,7 +627,7 @@ impl TargetIdentity {
         // sysfs 串只说明"内核认为这个名字是 backing"，而名字可能已被另一个文件复用。
         // 内核里那条事实是 loop 记下的 backing **对象**（`LOOP_GET_STATUS64` 的
         // dev / ino / rdev，由 loop_get_status 对 backing 的 f_path 做 vfs_getattr 得到）：
-        // 与刚打开的文件逐个比对，比不上一律拒绝——否则 journal / checkpoint 会落在
+        // 与刚打开的文件逐个比对，比不上一律拒绝——否则记录会落在
         // 一个与这个 loop 无关的文件旁边
         {
             use std::os::unix::fs::MetadataExt;
@@ -649,7 +659,7 @@ impl TargetIdentity {
 
     /// 块设备身份：打开目标时解析一次，设备层拓扑取自 sysfs。
     /// **fail-closed**：拓扑解析不出来即 `Err`（错误信息带设备名），调用方拒绝——
-    /// 绝不退到"devname-容量"的调用方身份，journal / checkpoint / lock 三者的落点
+    /// 绝不退到"devname-容量"的调用方身份，记录与锁的落点
     /// 必须落在同一个序列化域。
     ///
     /// loop 设备走专用解析：`loop/backing_file` 属性在 ⇒ 身份是 backing 文件（见
@@ -689,7 +699,7 @@ impl TargetIdentity {
         Ok(Self::from_block_keys(path, k))
     }
 
-    /// 非 loop 块设备的身份构造。**盘级**：journal / checkpoint / lock 全部按所在整设备
+    /// 块设备身份构造。**盘级**：记录与锁全部按所在整设备
     /// 派生——分区号属于操作，不进落盘键，`/dev/sdb:2`（整盘节点 + 后缀）与
     /// `/dev/sdb2`（分区节点）由此共享同一现场。
     /// 生产路径统一从 `resolve_block_at`（非 Linux 测试里是 `resolve_block`）进入，
@@ -701,26 +711,23 @@ impl TargetIdentity {
     }
 
     /// 块设备身份构造：`record_key` 为 None 表示取不到 WWN / EUI / 可重复 serial
-    /// （dm / md / 只有 major:minor）。journal / checkpoint 按盘键派生；锁按 `lock_key`
+    /// （dm / md / 只有 major:minor）。记录按身份键派生；锁按 `lock_key`
     /// 派生——两者都是盘级，分区号不进落点，`/dev/sdb` 与 `/dev/sdb1` 由此共用一把锁，
     /// 而记录目录仍按各自的身份键分开。锁键另走一套属性表（见 [`crate::dev::block_lock_key`]）
     #[cfg(any(target_os = "linux", test))]
     pub(crate) fn from_block_parts(
         path: &Path,
-        disk_key: String,
+        _disk_key: String,
         lock_key: crate::dev::LockKey,
         record_key: Option<IdentityKey>,
     ) -> Self {
-        let stable = key_token(&disk_key);
-        let dir = state_dir();
-        let journal = dir.join(format!("{stable}{JOURNAL_SUFFIX}"));
+        let dir = host_state_root();
         let lock = dir.join(format!("{}{LOCK_SUFFIX}", key_token(lock_key.as_str())));
         let record = record_key.as_ref().map(IdentityKey::record_path);
         Self {
             kind: TargetKind::Block,
             base: path.to_path_buf(),
             canonical: path.to_path_buf(),
-            journal,
             record,
             record_key,
             // 锁文件是纯运行时 artifact（重启自清也无妨），残留不构成阻挡——
@@ -730,11 +737,11 @@ impl TargetIdentity {
         }
     }
 
-    /// 清理类命令（abandon）的身份解析：目标可能已不存在，而现场文件可能比目标活得
-    /// 久（用户删了镜像，journal 还在旁边）。路径 stat 不了时按镜像身份回退——镜像
+    /// 清理类命令（`recover --release`）的身份解析：目标可能已不存在，而现场文件可能比目标活得
+    /// 久（用户删了镜像，记录目录与锁还在）。路径 stat 不了时按镜像身份回退——镜像
     /// 身份就是给定的路径本身，落点由它派生，不需要目标存在。节点消失的块设备身份
     /// 不可恢复（拓扑派生），其 state_dir 下的现场随之不可达：此处无从区分两者，按
-    /// 镜像回退时前者得救、后者空跑——报"nothing to abandon"而不是按错身份删现场。
+    /// 镜像回退时前者得救、后者空跑——报"no recovery record … nothing to recover"而不是按错身份删现场。
     /// 拓扑解析得出但解析失败的块设备仍返回 None（保守方向：宁可漏清，也不按错身份删现场）。
     /// loop 设备的身份绑定 backing 对象：backing 打不开或已不是普通文件时
     /// [`Self::loop_backed`] 返回 Err，这里随之返回 None——它留在原落点上的现场无从定位，
@@ -751,23 +758,9 @@ impl TargetIdentity {
         Some(Self::resolve_image(path))
     }
 
-    /// journal 的唯一落点：镜像 = 目标旁的兄弟文件；块设备 = `<state_dir>/<盘键>` 加后缀
-    pub(crate) fn journal_path(&self) -> &Path {
-        &self.journal
-    }
-
     /// 单文件恢复记录的落点；块设备在身份为 `Unusable` 时为 `None`
     pub(crate) fn record_path(&self) -> Option<&Path> {
         self.record.as_deref()
-    }
-
-    /// 旧版镜像记录的落点 `<image>.diskedit/record`。本构建不在这里读写：它是升级前
-    /// 留下的寻址域，只用于如实报告与挡住写命令。块设备没有这个落点
-    pub(crate) fn legacy_image_record_path(&self) -> Option<PathBuf> {
-        match self.kind {
-            TargetKind::Image => Some(suffix_path(&self.canonical, RECORD_SUFFIX).join(RECORD_NAME)),
-            TargetKind::Block => None,
-        }
     }
 
     /// 独占锁的落点。恒有值：取锁失败即拒绝，不提供"没有锁落点"这种状态
@@ -789,7 +782,7 @@ impl TargetIdentity {
     /// 日志落点：镜像 = 目标路径旁的兄弟文件；块设备 = `<state_dir>/<名>` 加同一后缀，
     /// 名取可读的 GPT Disk GUID，读不到表时退到 devname。
     ///
-    /// 与 journal 的差别只有一处：日志在单个文件内只追加、不参与恢复（打开时按上限
+    /// 日志在单个文件内只追加、不参与恢复（打开时按上限
     /// 轮转一代，见 `support.rs` 的 `Logger`），名字也保持既有约定
     /// 不变——改名会打断已写下日志的连续性。落点只在此处拼装，调用方不得自行拼 `state_dir()`
     pub(crate) fn log_path(&self, disk_guid: Option<[u8; 16]>) -> PathBuf {

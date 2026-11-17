@@ -172,7 +172,7 @@ fn unreadable_target_is_three() {
 /// 目标读不出是环境故障（4），且本次未改变任何持久状态。
 ///
 /// 注入点只在 `test-faults` 构建里：`DISKEDIT_FAULT=read-at` 让 `FileSource::read_at`
-/// 返回 `EIO`，读取发生在任何写入之前。命令取 `plan --grow`：只读命令在所有平台都放行，
+/// 返回 `EIO`，读取发生在任何写入之前。命令取 `info --grow`：只读命令在所有平台都放行，
 /// 写命令在非 Linux 由能力门拒成 6，读不到这条路径
 #[cfg(feature = "test-faults")]
 #[test]
@@ -184,7 +184,7 @@ fn read_failure_is_four() {
     let out = Command::new(env!("CARGO_BIN_EXE_DiskEdit"))
         .env("DISKEDIT_FAULT", "read-at")
         .env("DISKEDIT_STATE_DIR", state_root())
-        .args(["plan", &target, "--grow"])
+        .args(["info", &target, "--grow"])
         .output()
         .unwrap();
     let code = out.status.code().unwrap_or(-1);
@@ -237,10 +237,9 @@ fn unsupported_platform_is_six() {
     let img = dir.join("disk.img");
     fixture_gpt_image(&img);
     let img_s = img.to_str().unwrap();
-    for args in [vec!["info", img_s], vec!["plan", img_s]] {
-        let (code, _out, err) = run(&args);
-        assert_eq!(code, 0, "`{args:?}` is read-only and must be admitted: {err}");
-    }
+    let read_only = vec!["info", img_s];
+    let (code, _out, err) = run(&read_only);
+    assert_eq!(code, 0, "`{read_only:?}` is read-only and must be admitted: {err}");
     let owned = format!("{img_s}:1");
     let args = vec!["delete", owned.as_str(), "--yes"];
     let (code, _out, err) = run(&args);

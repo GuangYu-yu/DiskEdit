@@ -497,7 +497,7 @@ pub(crate) fn resize_refusal_does_not_write_the_disk() {
     );
     let img_before = std::fs::read(&p).unwrap();
 
-    // 新范围与分区 2 重叠 ⇒ resize-part 须事前拒绝
+    // 新范围与分区 2 重叠 ⇒ `resize` 起点变更须事前拒绝
     let o = rsize(&mut src, 1, 2048, 9000, 1024 * 1024, true, &mut |_| {});
     assert_eq!(o.exit_code(), 3);
     // 拒绝承诺本次未写盘：整镜像逐字节等于调用前（含需要修复的 stale 头）

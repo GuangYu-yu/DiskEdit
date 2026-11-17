@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 分区扩容 + 挂载态在线扩 FS：resize-part 改表后由 resizefs <mountpoint> 把 FS 填满
+# 分区扩容 + 挂载态在线扩 FS：resize --end 改表后由 resizefs <mountpoint> 把 FS 填满
 source "$(dirname "$0")/lib.sh"
 require_bin
 
@@ -18,8 +18,8 @@ $B new "$T" --yes >/dev/null; exp $? 0 "new"
 $B add "$T" 16M --align mib --name p1 --yes >/dev/null; exp $? 0 "add p1（16MiB）"
 $B mkfs "$T":1 ext4 --yes >/dev/null; exp $? 0 "mkfs p1（ext4）"
 
-echo "== resize-part 扩到 67583（=32MiB）=="
-$B resize-part --yes "$T":1 --end 67583 >/dev/null; exp $? 0 "resize-part 扩到 67583"
+echo "== resize --end 扩到 67583（=32MiB）=="
+$B resize --yes "$T":1 --end 67583 >/dev/null; exp $? 0 "resize 扩到 67583"
 $B info "$T" | grep -q '"num":1,[^}]*"last_lba":67583' \
   && echo "  OK   分区已到 2048..67583" || { echo "  BAD  分区未到 67583"; rc=1; }
 

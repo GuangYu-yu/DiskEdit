@@ -37,8 +37,6 @@ struct SkipSite {
 }
 
 const FOLD_SITES: &[FoldSite] = &[
-    FoldSite { id: "S1-6", file: "cmd/records.rs" },
-    FoldSite { id: "S1-7", file: "cmd/records.rs" },
     FoldSite { id: "S1-10", file: "online/part.rs" },
 ];
 
@@ -100,16 +98,6 @@ const SKIP_SITES: &[SkipSite] = &[
     },
     SkipSite {
         id: "S2-9",
-        file: "fsops/scope.rs",
-        why: "候选内容不可解析时跳过该候选，全部跳过则整体报错",
-    },
-    SkipSite {
-        id: "S2-10",
-        file: "fsops/scope.rs",
-        why: "候选读不出时跳过该候选，全部跳过则整体报错",
-    },
-    SkipSite {
-        id: "S2-11",
         file: "fsops/scope.rs",
         why: "候选内容不可解析时跳过该候选，全部跳过则整体报错",
     },
@@ -201,12 +189,12 @@ fn production_sources() -> Vec<(String, String)> {
 /// `settle_companion` 的第三参数是提交事实的开关，每个调用点都要有人复核过
 const SETTLE_SITES: &[(&str, &str, &str)] = &[
     (
-        "cmd/undo.rs",
+        "cmd/recover.rs",
         "C-1",
         "提交后未清理的释放路径：提交位已由记录自身给出，调用方不追加提交",
     ),
     (
-        "cmd/undo.rs",
+        "cmd/recover.rs",
         "C-2",
         "盘面已是原文的零写入收尾：释放记录时落提交位，不重新判定区间",
     ),

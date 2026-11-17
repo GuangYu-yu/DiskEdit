@@ -1,9 +1,10 @@
 //! 确认门：`Confirmation::Required` 的命令缺 `--yes` 在解析期落 2。
-//! 12 条 Required 命令各自一条用例：缺 --yes 拒绝且一处不改盘；
-//! 能安全放行的（move / copy / resize / resize-part）另测带 --yes 越过门继续执行。
+//! 10 条 Required 命令：缺 --yes 拒绝且一处不改盘（resize 的 SIZE / --end 与
+//! recover 的回放 / --release 各一条用例）；
+//! 能安全放行的（move / copy / resize 的两种形态）另测带 --yes 越过门继续执行。
 //!
 //! Required 名单（与 `src/cli.rs` 的命令表一致）：resize、move、copy、delete、set、
-//! mkfs、resizefs、undo、abandon、new、add、resize-part。
+//! mkfs、resizefs、recover、new、add。
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -123,14 +124,14 @@ fn copy_requires_yes_at_parse_time() {
 }
 
 #[test]
-fn resize_part_requires_yes() {
+fn resize_end_requires_yes() {
     // 夹具经 losetup 真建 ext4，需要 root；无权限的环境跳过
     // SAFETY: geteuid 无参数、不访问内存，恒成功
     if unsafe { libc::geteuid() } != 0 {
         eprintln!("skip: root required to build a real filesystem fixture");
         return;
     }
-    let (dir, img) = fresh("resizepart", 16 * 1024 * 1024);
+    let (dir, img) = fresh("resizeend", 16 * 1024 * 1024);
     let img_s = img.to_str().unwrap();
     let (c, _, e) = run(&["add", img_s, "8M", "--align", "mib", "--type-guid", LINUX_DATA, "--yes"]);
     assert_eq!(c, 0, "fixture needs one partition: {e}");
@@ -140,12 +141,12 @@ fn resize_part_requires_yes() {
     assert_eq!(c, 0, "fixture needs a recognizable filesystem: {e}");
 
     let before = scene(&img);
-    let (c, _, e) = run(&["resize-part", &p1, "--end", "16383"]);
+    let (c, _, e) = run(&["resize", &p1, "--end", "16383"]);
     assert_refusal(c, &e);
-    assert_untouched(&before, &scene(&img), "resize-part");
+    assert_untouched(&before, &scene(&img), "resize --end");
 
     // --yes 放行：证明该请求本身可执行，2 来自解析期而非别的守卫
-    let (c, _, e) = run(&["resize-part", &p1, "--end", "16383", "--yes"]);
+    let (c, _, e) = run(&["resize", &p1, "--end", "16383", "--yes"]);
     assert_eq!(c, 0, "a shrink with --yes must proceed: {e}");
     let gpt = gptman::GPT::find_from(&mut std::fs::File::open(&img).unwrap()).unwrap();
     assert_eq!(gpt[1].ending_lba, 16383, "the shrink must land on the requested end");
@@ -253,27 +254,27 @@ fn resizefs_requires_yes() {
 }
 
 #[test]
-fn undo_requires_yes() {
-    let (dir, img) = fresh("undo", 8 * 1024 * 1024);
+fn recover_requires_yes() {
+    let (dir, img) = fresh("recover", 8 * 1024 * 1024);
     let img_s = img.to_str().unwrap();
 
     let before = scene(&img);
-    let (c, _, e) = run(&["undo", img_s]);
+    let (c, _, e) = run(&["recover", img_s]);
     assert_refusal(c, &e);
-    assert_untouched(&before, &scene(&img), "undo");
+    assert_untouched(&before, &scene(&img), "recover");
 
     let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
-fn abandon_requires_yes() {
-    let (dir, img) = fresh("abandon", 8 * 1024 * 1024);
+fn recover_release_requires_yes() {
+    let (dir, img) = fresh("release", 8 * 1024 * 1024);
     let img_s = img.to_str().unwrap();
 
     let before = scene(&img);
-    let (c, _, e) = run(&["abandon", img_s]);
+    let (c, _, e) = run(&["recover", img_s, "--release"]);
     assert_refusal(c, &e);
-    assert_untouched(&before, &scene(&img), "abandon");
+    assert_untouched(&before, &scene(&img), "recover --release");
 
     let _ = std::fs::remove_dir_all(&dir);
 }

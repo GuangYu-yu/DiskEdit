@@ -8,6 +8,13 @@ use crate::{fsid, table};
 pub(crate) const DETAILS: &str = r#"  Show partition table and per-partition filesystem identification
   (an LVM PV shows up in the fs field as lvm2_pv; PV space takes effect
   through `resize --grow-lv`). Read-only.
+  With --grow the same document gains a `preview` key for growing partition :N
+  to the last usable LBA; it only reads — nothing is written:
+    grow_part     the partition being grown
+    new_end_lba   its end LBA after the growth
+    sector_size   logical block size the LBAs are counted in
+    moves         array of {num, first_lba, last_lba, delta_lba, bytes, swap};
+                  swap marks an area recreated in place instead of copied
   stdout is JSON in both outcomes; a failure adds `error` (a string) and keeps
   the layout fields it could not determine at null. Keys:
     label         "gpt" | "mbr" | "none"
@@ -48,7 +55,7 @@ pub(crate) fn cmd_info(a: &InfoRequest) -> u8 {
     cmd_info_with(a, None)
 }
 
-/// `tail` 是拼在信封末尾的顶层键片段（以逗号开头、不带收尾括号），供 `plan --grow`
+/// `tail` 是拼在信封末尾的顶层键片段（以逗号开头、不带收尾括号），供 `info --grow`
 /// 把预览并进同一份文档。识别失败的信封不带它：那条路径连布局结论都不完整，
 /// 在其中追加派生产物只会让读者以为布局本身是可信的
 pub(crate) fn cmd_info_with(a: &InfoRequest, tail: Option<&str>) -> u8 {

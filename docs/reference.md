@@ -8,16 +8,17 @@ CI regenerates it and fails when the working tree differs. Do not edit by hand.
 
 ### `info`
 
-show partition table and per-partition filesystem identification
+show partition table and per-partition filesystem identification; --grow appends a relocation preview for :N
 
 ```text
 diskedit info <TARGET> [--sector-size N]
+diskedit info <TARGET>:N --grow [--sector-size N]
 ```
 
 | property | value |
 |---|---|
-| positionals | `TARGET` |
-| options | `--sector-size` |
+| positionals | `TARGET` / `TARGET` |
+| options | `--sector-size`, `--grow` |
 | confirmation | none |
 | journal | read-only |
 | capabilities | readonly |
@@ -26,6 +27,13 @@ diskedit info <TARGET> [--sector-size N]
   Show partition table and per-partition filesystem identification
   (an LVM PV shows up in the fs field as lvm2_pv; PV space takes effect
   through `resize --grow-lv`). Read-only.
+  With --grow the same document gains a `preview` key for growing partition :N
+  to the last usable LBA; it only reads — nothing is written:
+    grow_part     the partition being grown
+    new_end_lba   its end LBA after the growth
+    sector_size   logical block size the LBAs are counted in
+    moves         array of {num, first_lba, last_lba, delta_lba, bytes, swap};
+                  swap marks an area recreated in place instead of copied
   stdout is JSON in both outcomes; a failure adds `error` (a string) and keeps
   the layout fields it could not determine at null. Keys:
     label         "gpt" | "mbr" | "none"
@@ -65,10 +73,8 @@ path:
   directory (`<image_state_root>/images/<key-hash>/...`,
   `<image>.diskedit/...` or `<state_root>/recovery/<identity-hash>/...`,
   excluding `record.lock`) is itself decoded as evidence. Entries in the
-  quarantine area (`.abandoned[.N]`, `.torn[.N]`) are marked as such and do
-  not count as active records. This build never writes `.torn[.N]`; the name
-  is recognized so such an entry is treated as quarantine instead of an active
-  record. Any other path is treated as a TARGET.
+  quarantine area (`.abandoned[.N]`) are marked as such and do not count as
+  active records. Any other path is treated as a TARGET.
 
 output:
   the evidence path, the record fields (transaction, plan, operation, progress,
@@ -80,7 +86,7 @@ exit status:
   0  a readable result: no record, a complete record, an unfinished record (the
      output names the rollback / set-aside commands), or an identity check that
      cannot be made
-  3  torn/truncated bytes, CRC or magic mismatch, identity mismatch, a non-regular
+  3  truncated bytes, CRC or magic mismatch, identity mismatch, a non-regular
      entry, or the anchor directory, the record, or the target cannot be read
   6  this platform does not provide the command set
   `Unverified` records are annotated and keep their verdict's exit status
@@ -96,7 +102,7 @@ diskedit records list [TARGET]
 
 | property | value |
 |---|---|
-| positionals | `TARGET` |
+| positionals | `TARGET` (optional) |
 | options | none |
 | confirmation | none |
 | journal | read-only |
@@ -105,10 +111,8 @@ diskedit records list [TARGET]
 ```text
   List recovery records as JSON. Only decodable records are listed; an entry in
   an unknown format is left out (use `records scan` to see it). Quarantine
-  entries (`.abandoned[.N]`, `.torn[.N]`) are listed and marked, but they are
-  not part of the active record set. This build never writes `.torn[.N]`; the
-  name is recognized so such an entry is treated as quarantine, not as an
-  active record.
+  entries (`.abandoned[.N]`) are listed and marked, but they are not part of
+  the active record set.
 
   There is no index yet: every row carries "registered": false, and records are
   enumerated in memory. Record directories that are not addressed by TARGET are
@@ -142,6 +146,10 @@ diskedit records verify <TARGET> <ID>
     3  the id was not found (A4), or it exists in two or more places, or the
        single record fails its identity / backend / structure check, or the
        record, its directory, or the target could not be read
+
+  A failed lookup prints a summary line with "hits" (exact matches) and
+  "unverified" (entries whose id could not be decoded) as counts. "records"
+  appears only in row documents, where it is always an array.
 ```
 
 ### `records scan`
@@ -179,18 +187,20 @@ diskedit records scan <ROOT>
 
 ### `resize`
 
-resize partition + FS (auto online/offline)
+resize a partition and its filesystem; --end / --grow-to-end repartition without moving data
 
 ```text
-diskedit resize <TARGET>[:N] <SIZE> [OPTIONS]
+diskedit resize <TARGET>[:N] <SIZE> [--allow-move] [--chunk N] [--grow-lv] [--lv NAME] [--no-fs] --yes
+diskedit resize <TARGET>:N --end LBA [--align A] [--no-fs] --yes
+diskedit resize <TARGET>:N --grow-to-end [--align A] [--no-fs] --yes
 ```
 
 | property | value |
 |---|---|
-| positionals | `TARGET`, `SIZE` |
-| options | `--allow-move`, `--chunk`, `--grow-lv`, `--lv`, `--no-fs`, `--sector-size`, `--yes` |
+| positionals | `TARGET`, `SIZE` / `TARGET` / `TARGET` |
+| options | `--no-fs`, `--sector-size`, `--yes`, `--allow-move`, `--chunk`, `--grow-lv`, `--lv`, `--end`, `--align`, `--grow-to-end` |
 | confirmation | required (`--yes`) |
-| journal | writes, undo journal |
+| journal | writes, recovery record |
 | capabilities | target data, companion file, external tool, device state |
 
 ```text
@@ -213,30 +223,48 @@ diskedit resize <TARGET>[:N] <SIZE> [OPTIONS]
     size that does not land on a sector boundary is truncated, and the
     truncation is reported
 
+  IN PLACE (--end LBA | --grow-to-end):
+    repartition the end without moving the partition; the start stays at the
+    current starting LBA (relocating it is `diskedit move`). --grow-to-end
+    pins end at last_usable_lba (fill semantics). An end below the current
+    end shrinks the partition together with its filesystem (offline); a
+    shrink that gets interrupted cannot be rolled back with `recover`.
+
   Constraints:
-    shrink    refused: this command only grows. Shrink with `resize-part`
-              --end: it shrinks the filesystem first (offline), then the
-              partition, and an interrupted shrink resumes from its record
+    shrink    with SIZE refused: this form only grows. Shrink with
+              `resize <TARGET>:N --end LBA`: it shrinks the filesystem first
+              (offline), then the partition, and an interrupted shrink
+              resumes from its record
     --no-fs   refused on an LVM PV (the PV chain has no filesystem step of
               its own). A swap partition relocated as a blocker is rebuilt
               regardless: that step belongs to the relocation, not to the
               filesystem
     MBR       uses the same recovery record as GPT: an interrupted grow is
-              resumed by re-running the same command; `undo` rolls the
+              resumed by re-running the same command; `recover` rolls the
               recorded table write back instead
     record    a relocation record written before requests were bound to
               their digest carries none: it cannot be tied to this request,
               so re-running `resize --allow-move` is refused. Inspect it with
-              `inspect`, then release it with `undo`
+              `inspect`, then release it with `recover --release`
     online    writes go through the tools (sfdisk / the FS's own resize),
-              not this tool's record: nothing to resume, and `undo`
+              not this tool's record: nothing to resume, and `recover`
               cannot roll it back
 
-  Related commands: this is the single entry point — it plans and applies in
-  one run. To inspect the plan first, use `plan`; `resize-part` and `move` are
-  the low-level single-partition commands, and they resume an interrupted job
-  of their own. A resize interrupted after its partition step (the LVM finish
-  chain still pending) is resumed by re-running `resize`.
+  Read-back:
+    after a successful grow the filesystem size is read back and must reach
+    the end of the new range within one allocation unit for ext2/3/4
+    (dumpe2fs), ntfs (ntfsresize) and btrfs (btrfs inspect-internal
+    dump-super). f2fs, xfs and vfat have no read-back in this build: the
+    tool's success is recorded as an unverified result, the run prints a
+    pending item naming a size check, and the exit status is 5. The
+    partition step is committed either way; compare `df -B1` on the
+    mountpoint with the range end to settle it.
+
+  Related commands: this is the single entry point for a partition — it plans
+  and applies in one run. `info --grow` previews a growth without writing;
+  `move` relocates a partition and resumes an interrupted job of its own. A
+  resize interrupted after its partition step (the LVM finish chain still
+  pending) is resumed by re-running `resize`.
 ```
 
 ### `move`
@@ -250,9 +278,9 @@ diskedit move <TARGET>:N --start <LBA|end> [--chunk N] --yes [--align A]
 | property | value |
 |---|---|
 | positionals | `TARGET` |
-| options | `--align`, `--chunk`, `--sector-size`, `--start`, `--yes` |
+| options | `--sector-size`, `--yes`, `--align`, `--chunk`, `--start` |
 | confirmation | required (`--yes`) |
-| journal | writes, undo journal |
+| journal | writes, recovery record |
 | capabilities | target data, companion file, external tool, device state |
 
 ```text
@@ -266,7 +294,7 @@ diskedit move <TARGET>:N --start <LBA|end> [--chunk N] --yes [--align A]
   at the new position (mkswap); its contents are not copied.
 
   CONFIRMATION: required. The destination range is overwritten as-is and an
-  interrupted relocation cannot be rolled back with `undo`; pass --yes.
+  interrupted relocation cannot be rolled back with `recover`; pass --yes.
 ```
 
 ### `copy`
@@ -280,9 +308,9 @@ diskedit copy <TARGET>:N --start <LBA|end> [--chunk N] --yes [--align A] [--name
 | property | value |
 |---|---|
 | positionals | `TARGET` |
-| options | `--align`, `--chunk`, `--keep-partuuid`, `--name`, `--sector-size`, `--start`, `--yes` |
+| options | `--sector-size`, `--yes`, `--align`, `--chunk`, `--keep-partuuid`, `--name`, `--start` |
 | confirmation | required (`--yes`) |
-| journal | writes, undo journal |
+| journal | writes, recovery record |
 | capabilities | target data, companion file, device state |
 
 ```text
@@ -290,7 +318,7 @@ diskedit copy <TARGET>:N --start <LBA|end> [--chunk N] --yes [--align A] [--name
   --start end packs the copy against the end of the usable range.
   No resume: an interrupted copy cannot pick up where it left off. It leaves
   a non-rollbackable journal on the target, so write commands refuse until
-  that is released with `diskedit abandon` — re-run then to rewrite the
+  that is released with `diskedit recover --release` — re-run then to rewrite the
   destination from the beginning.
 
   PARTUUID: the copy gets a freshly generated v4 GUID, so the two
@@ -299,7 +327,7 @@ diskedit copy <TARGET>:N --start <LBA|end> [--chunk N] --yes [--align A] [--name
 
   CONFIRMATION: required. The destination range is overwritten with the
   source bytes and the journal records the write as non-rollbackable —
-  `undo` cannot restore what was there before; pass --yes.
+  `recover` cannot restore what was there before; pass --yes.
 ```
 
 ### `delete`
@@ -315,7 +343,7 @@ diskedit delete <TARGET>:N --yes
 | positionals | `TARGET` |
 | options | `--sector-size`, `--yes` |
 | confirmation | required (`--yes`) |
-| journal | writes, undo journal |
+| journal | writes, recovery record |
 | capabilities | target data, companion file, device state |
 
 ```text
@@ -327,16 +355,19 @@ diskedit delete <TARGET>:N --yes
 set a partition property (name / label / uuid / flag / type)
 
 ```text
-diskedit set <TARGET>:N name S | label S | uuid U | flag F on|off --yes
-diskedit set <TARGET>:N type GUID | type 0xXX --yes
+diskedit set <TARGET>:N name S --yes
+diskedit set <TARGET>:N label S --yes
+diskedit set <TARGET>:N uuid [U] --yes [--random]
+diskedit set <TARGET>:N flag F on|off --yes
+diskedit set <TARGET>:N type GUID|0xXX --yes
 ```
 
 | property | value |
 |---|---|
-| positionals | `TARGET`, `PROPERTY`, `VALUE`, `STATE` |
+| positionals | `TARGET`, `PROPERTY`, `VALUE` / `TARGET`, `PROPERTY`, `VALUE` / `TARGET`, `PROPERTY`, `VALUE` (optional) / `TARGET`, `PROPERTY`, `VALUE`, `STATE` / `TARGET`, `PROPERTY`, `VALUE` |
 | options | `--random`, `--sector-size`, `--yes` |
 | confirmation | required (`--yes`) |
-| journal | writes, undo journal |
+| journal | writes, recovery record |
 | capabilities | target data, companion file, external tool, device state |
 
 ```text
@@ -395,9 +426,9 @@ diskedit mkfs <TARGET>:N <FS> --yes [--label S]
 | property | value |
 |---|---|
 | positionals | `TARGET`, `FS` |
-| options | `--label`, `--sector-size`, `--yes` |
+| options | `--sector-size`, `--yes`, `--label` |
 | confirmation | required (`--yes`) |
-| journal | writes, undo journal |
+| journal | writes, recovery record |
 | capabilities | companion file, external tool, device state |
 
 ```text
@@ -411,16 +442,16 @@ diskedit mkfs <TARGET>:N <FS> --yes [--label S]
 resize a filesystem only — the partition entry stays put
 
 ```text
-diskedit resizefs <TARGET>:N --yes
-diskedit resizefs <MOUNTPOINT> --yes [BYTES]
+diskedit resizefs <TARGET>:N [BYTES] --yes
+diskedit resizefs <MOUNTPOINT> [BYTES] --yes
 ```
 
 | property | value |
 |---|---|
-| positionals | `TARGET`, `BYTES` |
+| positionals | `TARGET`, `BYTES` (optional) / `TARGET`, `BYTES` (optional) |
 | options | `--sector-size`, `--yes` |
 | confirmation | required (`--yes`) |
-| journal | writes, undo journal |
+| journal | writes, recovery record |
 | capabilities | companion file, external tool, device state |
 
 ```text
@@ -436,70 +467,50 @@ diskedit resizefs <MOUNTPOINT> --yes [BYTES]
   partition is refused — run `diskedit resize` to enlarge the partition first.
   The target size is absolute (units k/m/g/t, 1024 base; plain bytes when no
   unit; fractions allowed); omitted means grow to fill the partition.
+
+  A grow is read back for ext2/3/4, ntfs and btrfs; f2fs, xfs and vfat have
+  no read-back — the tool's success stays unverified, the run prints a pending
+  item naming a size check, and the exit status is 5.
 ```
 
-### `undo`
+### `recover`
 
-roll back the writes this tool completed (replays its record)
+finish with a recovery record: replay it, or release it without rollback
 
 ```text
-diskedit undo <TARGET> --yes
+diskedit recover <TARGET> --yes
+diskedit recover <TARGET> --replay-table-only --yes
+diskedit recover <TARGET> --release [--discard-replay] --yes
 ```
 
 | property | value |
 |---|---|
-| positionals | `TARGET` |
-| options | `--replay-table-only`, `--sector-size`, `--yes` |
+| positionals | `TARGET` / `TARGET` / `TARGET` |
+| options | `--sector-size`, `--yes`, `--replay-table-only`, `--release`, `--discard-replay` |
 | confirmation | required (`--yes`) |
-| journal | writes, no undo journal |
+| journal | writes, no recovery record |
 | capabilities | target data, companion file, external tool, device state |
 
 ```text
-  Roll back this target's recovery record: put back the bytes the recorded
-  operation overwrote — partition-table entries and the in-place filesystem
-  metadata it changed (NTFS backup sector pointer). Relocated data cannot be
-  rolled back, and writes made by external FS tools are not undone.
+  Finish with this target's recovery record. Two outcomes share one command:
 
-  A legacy undo journal is not a recovery record; this build does not replay,
-  migrate, or delete it.
+  replay    (default) put back the bytes the recorded operation overwrote —
+            partition-table entries and the in-place filesystem metadata it
+            changed (NTFS backup sector pointer). Relocated data cannot be
+            rolled back, and writes made by external FS tools are not undone.
+            --replay-table-only replays only the recorded table regions of a
+            move whose data has already moved.
+  --release drop the recovery files, keeping the writes they describe. This
+            does not need the record to be readable, and it does not replay
+            anything. When the scene still holds at least one range a replay
+            could restore — or the payload is damaged, so the count is
+            unknown — the release is refused until --discard-replay is given;
+            that flag confirms giving up a replayable range, it is not
+            another spelling of --yes.
 
-  Example: diskedit undo /dev/sdb --yes
-```
-
-### `abandon`
-
-drop an unfinished operation's recovery files; no rollback
-
-```text
-diskedit abandon <TARGET> --yes [--discard-replay]
-```
-
-| property | value |
-|---|---|
-| positionals | `TARGET` |
-| options | `--discard-replay`, `--sector-size`, `--yes` |
-| confirmation | required (`--yes`) |
-| journal | writes, no undo journal |
-| capabilities | companion file |
-
-```text
-  Give up on recovering an unfinished operation: move its recovery record into
-  the record directory's quarantine area (.abandoned[.N]) so the target can be
-  written again. No byte of the target itself is touched.
-
-  Unlike `undo` this does not need the record to be readable — a damaged or
-  unreadable file can still be released. A record that is readable but was
-  recorded for another target is refused: renaming it would destroy that
-  target's rollback evidence. The ability to roll back is lost.
-
-  A legacy undo journal or an old relocation checkpoint is not a recovery
-  record; this command leaves such files in place.
-
-  When the scene still holds at least one range `undo` could replay — or the
-  payload is damaged, so the count is unknown — the command refuses until
-  --discard-replay is given. That flag confirms giving up a replayable range;
-  it is not another spelling of --yes. A scene with nothing left to replay
-  needs no flag.
+  Examples:
+    diskedit recover /dev/sdb --yes
+    diskedit recover /dev/sdb --release --yes
 ```
 
 ### `new`
@@ -513,9 +524,9 @@ diskedit new <TARGET> [--table gpt|mbr] --yes [--overwrite-data]
 | property | value |
 |---|---|
 | positionals | `TARGET` |
-| options | `--overwrite-data`, `--sector-size`, `--table`, `--yes` |
+| options | `--sector-size`, `--yes`, `--table`, `--overwrite-data` |
 | confirmation | required (`--yes`) |
-| journal | writes, undo journal |
+| journal | writes, recovery record |
 | capabilities | target data, companion file, device state |
 
 ```text
@@ -538,9 +549,9 @@ diskedit add <TARGET> SIZE [--start LBA] [--align A] [--part-number N] [--name S
 | property | value |
 |---|---|
 | positionals | `TARGET`, `SIZE` |
-| options | `--align`, `--name`, `--part-number`, `--sector-size`, `--start`, `--type-guid`, `--yes` |
+| options | `--sector-size`, `--yes`, `--align`, `--name`, `--part-number`, `--start`, `--type-guid` |
 | confirmation | required (`--yes`) |
-| journal | writes, undo journal |
+| journal | writes, recovery record |
 | capabilities | target data, companion file, device state |
 
 ```text
@@ -554,73 +565,15 @@ diskedit add <TARGET> SIZE [--start LBA] [--align A] [--part-number N] [--name S
   filesystem data; on MBR --type-guid takes 0xNN and defaults to 0x83 (Linux).
 ```
 
-### `resize-part`
-
-repartition one partition in place
-
-```text
-diskedit resize-part <TARGET>:N (--end LBA | --grow-to-end) [--align A] --yes
-```
-
-| property | value |
-|---|---|
-| positionals | `TARGET` |
-| options | `--align`, `--end`, `--grow-to-end`, `--sector-size`, `--yes` |
-| confirmation | required (`--yes`) |
-| journal | writes, undo journal |
-| capabilities | target data, companion file, external tool, device state |
-
-```text
-  Low-level grow/shrink in place: repartition the end without moving the
-  partition. The start stays at the partition's current starting LBA;
-  relocating it is `diskedit move`. --grow-to-end pins end at
-  last_usable_lba (fill semantics).
-  A grow also resizes the filesystem inside.
-
-  CONFIRMATION: --yes is required. An end below the current end shrinks the
-  partition together with its filesystem; a shrink that gets interrupted
-  cannot be rolled back with `undo`.
-```
-
-### `plan`
-
-read-only report: geometry, table, FS and usage — the same fields as `info`; --grow appends a relocation preview
-
-```text
-diskedit plan <TARGET>[:N] [--grow] [--sector-size N]
-```
-
-| property | value |
-|---|---|
-| positionals | `TARGET` |
-| options | `--grow`, `--sector-size` |
-| confirmation | none |
-| journal | read-only |
-| capabilities | readonly |
-
-```text
-  Read-only report on a target: geometry, partition table, filesystems and
-  space-usage conclusions. The fields are the ones `info` prints; `plan` opens
-  no recovery path and probes no write directory.
-  With --grow the same document gains a `preview` key for growing partition :N
-  to the last usable LBA:
-    grow_part     the partition being grown
-    new_end_lba   its end LBA after the growth
-    sector_size   logical block size the LBAs are counted in
-    moves         array of {num, first_lba, last_lba, delta_lba, bytes, swap};
-                  swap marks an area recreated in place instead of copied
-  The preview only reads: nothing is written and no reusable plan is produced.
-```
-
 ## Global options
 
 | flag | value | description |
 |---|---|---|
-| `--align` | `A` | placement alignment: mib\|none. add's automatic placement defaults to 1 MiB; an explicit --start and move/copy/resize-part align only when --align is given |
+| `--align` | `A` | placement alignment: mib\|none. add's automatic placement defaults to 1 MiB; an explicit --start (add/move/copy) and the end computed by resize align only when --align is given |
 | `--allow-move` | — | permit relocating the partitions in the way: the plan is printed, then the write proceeds |
 | `--chunk` | `MiB` | recovery granularity in MiB, 1..=64; a resumed job keeps the record's value, a new job uses 4 |
-| `--discard-replay` | — | confirm giving up the ranges `undo` could still replay |
-| `--end` | `LBA` | new end LBA for resize-part (grow or shrink in place) |
+| `--discard-replay` | — | confirm giving up the ranges `recover` could still replay |
+| `--end` | `LBA` | new end LBA for `resize` (grow or shrink in place) |
 | `--grow-lv` | — | also grow the LV: the one named by --lv, else the only LV |
 | `--grow-to-end` | — | pin the end at the last usable LBA (fill semantics) |
 | `--grow` | — | append the relocation preview for partition :N |
@@ -632,7 +585,8 @@ diskedit plan <TARGET>[:N] [--grow] [--sector-size N]
 | `--overwrite-data` | — | accept overwriting bytes an existing partition holds |
 | `--part-number` | `N` | 1-based entry slot; it must be empty |
 | `--random` | — | ask the target to generate a new value |
-| `--replay-table-only` | — | allow `undo` to replay only the recorded table regions of a move whose data has already moved; the data those ranges name is not restored |
+| `--release` | — | drop the recovery files, keeping the writes they describe |
+| `--replay-table-only` | — | allow `recover` to replay only the recorded table regions of a move whose data has already moved; the data those ranges name is not restored |
 | `--sector-size` | `N` | logical sector size override for raw images (power of two, max 65536 bytes — an implementation limit, not a format requirement) |
 | `--start` | `LBA\|end` | new start: an LBA, or `end` for pack-to-end |
 | `--table` | `gpt\|mbr` | table kind: gpt (default) or mbr |

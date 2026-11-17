@@ -73,6 +73,12 @@ impl EntryArrayGeometry {
         self.byte_len().div_ceil(self.sector_size)
     }
 
+    /// 数组在盘上占用的字节数（整扇区）。读取长度、写前比对区间与写入段长度共用这一个值：
+    /// 逻辑载荷是 [`Self::byte_len`]（CRC 与条目解析的范围），盘上足迹是它向上取整
+    pub fn span_bytes(&self) -> u64 {
+        self.lba_span() * self.sector_size
+    }
+
     /// 1-based 分区号 → 数组下标。越界返回 None：**禁止**用字面量上限直接索引
     pub fn slot(&self, part: u32) -> Option<usize> {
         let idx = part.checked_sub(1)? as usize;

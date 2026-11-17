@@ -199,7 +199,7 @@ pub(crate) fn online_size<'a>(
                     "size {want} exceeds the usable range — the partition would end past the last usable block"
                 )));
             }
-            // 缩容会截短分区与文件系统，`undo` 找不回被截掉的字节：锁下重读的 `cur`
+            // 缩容会截短分区与文件系统，`diskedit recover` 找不回被截掉的字节：锁下重读的 `cur`
             // 是唯一权威，与离线路径同一出口。该判据在任何 sfdisk/FS 工具启动之前
             online_size_gate(want, cur)
         }

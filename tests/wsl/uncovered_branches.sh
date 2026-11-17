@@ -61,15 +61,15 @@ LD=$(lo_attach "$T"); mount_at "${LD}p1" "$TEST_MNT" && { dd if=/dev/urandom of=
 lo_detach "$LD"
 OUT=$($B resize "$T":1 350M --allow-move --yes 2>&1); E=$?
 echo "exit=$E : $(echo "$OUT" | tail -1)"
-[ "$E" = "3" ] && echo "$OUT" | grep -q "resize-part" && echo "D SHRINK-REFUSAL OK" || { echo "D unexpected ($E)"; rc=1; }
-# 缩容的正道：resize-part 一条命令先缩 FS（离线）再收表，记录可续跑
+[ "$E" = "3" ] && echo "$OUT" | grep -q "resize <TARGET>:N --end" && echo "D SHRINK-REFUSAL OK" || { echo "D unexpected ($E)"; rc=1; }
+# 缩容的正道：resize --end 一条命令先缩 FS（离线）再收表，记录可续跑
 LD=$(lo_attach "$T"); lo_waitpart "${LD}p1" || { echo "p1 未就绪"; rc=1; lo_detach "$LD"; }
 BLOCKS=$(dumpe2fs -h "${LD}p1" 2>/dev/null | grep -i '^Block count' | tr -dc '0-9')
 BS=$(dumpe2fs -h "${LD}p1" 2>/dev/null | grep -i '^Block size' | tr -dc '0-9')
 END=$((2048 + BLOCKS * BS / 512 - 200))
 lo_detach "$LD"
-OUT=$($B resize-part --yes --align none "$T":1 --end $END 2>&1); E=$?
-exp "$E" 0 "D resize-part 收窄 200 扇区（FS 先离线缩，再收表）"
+OUT=$($B resize --yes --align none "$T":1 --end $END 2>&1); E=$?
+exp "$E" 0 "D resize 收窄 200 扇区（FS 先离线缩，再收表）"
 LD=$(lo_attach "$T")
 e2fsck -fn "${LD}p1" >/dev/null 2>&1 && echo "D e2fsck clean" || { echo "D e2fsck ISSUES"; rc=1; }
 mount_at "${LD}p1" "$TEST_MNT" 2>/dev/null && { echo "size: $(df -h --output=size "$TEST_MNT" | tail -1)"; umount "$TEST_MNT" 2>/dev/null; }
@@ -100,7 +100,7 @@ echo "last_usable=$LU (2097151 - 32 - 1)"
 # 未识别的分区内容在 FS 步写表前被拒（6）：给 p128 一个可识别的签名，FS 步才放行；
 # fatresize 在 CI 工具清单内。越界请求的边界校验在 FS 步之前，beyond 段不受影响
 $B mkfs --yes "$T":128 vfat >/dev/null 2>&1
-OUT=$($B resize-part --yes "$T":128 --align none --end "$LU" 2>&1); E=$?
+OUT=$($B resize --yes "$T":128 --align none --end "$LU" 2>&1); E=$?
 echo "$OUT" | tail -2 | sed 's/^/    /'
 # 几何贴边是本段的断言核心；FS 步（fatresize）的结局决定收场码——完成 0、
 # 遗留待办 5，两种收场下分区都必须已到达 last_usable
@@ -111,7 +111,7 @@ else
 fi
 P=$($B info "$T" | grep -o '"num":128,[^}]*}' | grep -o '"last_lba":[0-9]*' | cut -d: -f2)
 [ "$P" = "$LU" ] && echo "p128 at last_usable ($P)" || { echo "p128 not at last_usable (got $P, want $LU)"; rc=1; }
-$B resize-part --yes "$T":128 --align none --end "$((LU+1))" >/dev/null 2>&1; E=$?
+$B resize --yes "$T":128 --align none --end "$((LU+1))" >/dev/null 2>&1; E=$?
 [ "$E" != "0" ] && echo "beyond-usable refused OK (exit=$E)" || { echo "beyond-usable NOT refused (exit=$E)"; rc=1; }
 
 echo

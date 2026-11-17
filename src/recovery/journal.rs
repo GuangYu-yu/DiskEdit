@@ -188,7 +188,7 @@ impl std::fmt::Display for RecordJournalError {
             Self::Unsupported(message) | Self::ReadbackMismatch(message) => f.write_str(message),
             Self::RemovedDurabilityUnconfirmed => f.write_str(
                 "the record was removed from its directory, but the directory fsync failed, so the removal is \
-                 not durable; if it reappears after an unclean shutdown, release it with `diskedit abandon`",
+                 not durable; if it reappears after an unclean shutdown, release it with `diskedit recover --release`",
             ),
         }
     }
@@ -196,7 +196,7 @@ impl std::fmt::Display for RecordJournalError {
 
 impl RecordJournalError {
     /// 记录是否仍在落点上：删除未发生、被拒绝，或清理未获许可。这几个变体可以按
-    /// "记录还在"陈述并指路 `abandon`；`RemovedDurabilityUnconfirmed` 为假——
+    /// "记录还在"陈述并指路 `diskedit recover --release`；`RemovedDurabilityUnconfirmed` 为假——
     /// 名字空间里已经移除，只有掉电后是否重新出现未确认
     pub(crate) fn record_still_on_disk(&self) -> bool {
         !matches!(self, Self::RemovedDurabilityUnconfirmed)
@@ -234,8 +234,8 @@ pub(crate) enum CompanionProbe {
     Decoded(Record),
     /// 本工具的记录，但撕裂 / CRC 不符
     Damaged(String),
-    /// 布局不属于本构建；`magic` 用于把已知的旧布局说清楚
-    Foreign { magic: [u8; 4] },
+    /// 布局不属于本构建（头部标识不是 `record::MAGIC`）
+    Foreign,
     /// 落点存在但不是普通文件（符号链接 / 目录 / 其他条目）
     NotOurs(String),
     /// 读不出来：权限、I/O 或平台没有读取原语
@@ -307,7 +307,7 @@ pub(crate) fn probe_companion(record: &Path) -> CompanionProbe {
 fn classify_bytes(bytes: &[u8]) -> CompanionProbe {
     match super::record::decode(bytes) {
         Ok(record) => CompanionProbe::Decoded(record),
-        Err(super::record::DecodeFailure::Format { magic, .. }) => CompanionProbe::Foreign { magic },
+        Err(super::record::DecodeFailure::Format { .. }) => CompanionProbe::Foreign,
         Err(super::record::DecodeFailure::Incomplete { observed, expected }) => CompanionProbe::Damaged(format!(
             "the record is incomplete ({observed} of {expected} byte(s))"
         )),
@@ -347,7 +347,7 @@ pub(crate) fn read_companion(_record: &Path, _current: &SceneIdentity) -> Result
 ///
 /// 回滚字节先写回目标，再走这里：先把 `Committed` 与"表步不再有未落定内容"同一笔
 /// 落盘，再经 [`RecoveryEngine`] 的提交与清理许可删除。两次之间中断只会留下
-/// "已提交、待清理"的记录，再跑一次 `undo` 即收尾
+/// "已提交、待清理"的记录，再跑一次 `diskedit recover` 即收尾
 #[cfg(target_os = "linux")]
 pub(crate) fn settle_companion(record_path: &Path, record: &Record, persist_commit: bool) -> Result<(), RecordJournalError> {
     let (dir, name) = companion_parts(record_path)?;
@@ -656,17 +656,11 @@ impl RecordJournal {
         };
         let record = match Evidence::classify(&bytes, &current) {
             Evidence::Recognized(record) => record,
-            Evidence::UnrecognizedFormat { magic, .. } => {
-                if let Some(name) = super::record::legacy_layout(magic) {
-                    return Err(RecordJournalError::Unsupported(format!(
-                        "the record at {} was {} — it cannot be resumed or undone. Keep it and release it with \
-                         `diskedit abandon`, after the unfinished operation is settled by hand",
-                        record_path.display(),
-                        super::record::legacy_layout_sentence(name)
-                    )));
-                }
+            Evidence::UnrecognizedFormat { .. } => {
                 return Err(RecordJournalError::Unsupported(format!(
-                    "the record at {} is not a complete record of this target, so it cannot be resumed",
+                    "the record at {} uses a layout this build does not recognize, so it cannot be resumed. \
+                     Keep it and release it with `diskedit recover --release`, after the unfinished operation \
+                     is settled by hand",
                     record_path.display()
                 )));
             }
@@ -721,13 +715,13 @@ impl RecordJournal {
                 ));
             }
             // 已落盘却仍无摘要：无法证明它属于本次请求，
-            // 它留下的中间态（搬了一半、表已提交）只能由 inspect/undo 处理——放行等于
+            // 它留下的中间态（搬了一半、表已提交）只能由 inspect / `recover` 处理——放行等于
             // 替它做结论
             RequestMatch::Unbound if self.is_persisted() => {
                 return Err(format!(
                     "the recovery record at {} carries no request identity — it was written before \
                      requests bound one, so this run cannot prove it belongs here; run `diskedit inspect` \
-                     then `diskedit undo` on this target first",
+                     then `diskedit recover` on this target first",
                     self.record_path.display()
                 ));
             }
@@ -782,7 +776,7 @@ impl RecordJournal {
     }
 
     /// 记录里登记的 `copy` 源区间与摘要；非 `copy` 记录为 `None`。搬移中用它核对所读
-    /// 字节，续跑与 `undo` 用它核对盘上现状。`None` 同时覆盖「没有源区间」与「源区间
+    /// 字节，续跑与 `diskedit recover` 用它核对盘上现状。`None` 同时覆盖「没有源区间」与「源区间
     /// 读不出」：唯一调用点是 `execution/copy.rs`，两种 `None` 都在首写前拒绝
     pub(crate) fn source(&self) -> Option<CopySource> {
         match &self.record.source {
@@ -801,11 +795,11 @@ impl RecordJournal {
     }
 
     /// 写下分区层提交前的原区间并落盘。新记录只写一次；已有值不因续跑时的
-    /// 盘上几何（表可能已提交）而改写。`resize`、`resize-part` 与 `move` 会改动分区落位，
+    /// 盘上几何（表可能已提交）而改写。`resize`（含起点变更形态）与 `move` 会改动分区落位，
     /// 需要这份原区间；其余操作保持为空
     pub(crate) fn bind_old_range(&mut self, range: (u64, u64)) -> Result<(), PersistFailure> {
         if self.record.old_range.is_some()
-            || !matches!(self.record.op, OpKind::Resize | OpKind::ResizePart | OpKind::Move)
+            || !matches!(self.record.op, OpKind::Resize | OpKind::ResizeEnd | OpKind::Move)
         {
             return Ok(());
         }
@@ -833,16 +827,16 @@ impl RecordJournal {
     /// 计划同一次写入：分开写时中间崩溃会让续跑看到"有计划、无基线"，按当前盘面重算
     /// 增量必为 0，LV 收尾会被静默跳过。已有计划再次绑定时只处理基线：计划相等不蕴含
     /// 基线相等，合并结果与记录相等才允许完全不写，否则基线单独落盘。
-    /// `ResizePart` 的起点变更搬移与 move 同构，也携带条目表（进度恢复、续跑校验共用
+    /// `ResizeEnd` 的起点变更搬移与 move 同构，也携带条目表（进度恢复、续跑校验共用
     /// 同一套机制）
     pub(crate) fn bind_relocation(
         &mut self,
         reloc: Relocation,
         lvm_post: Option<LvmPost>,
     ) -> Result<(), PersistFailure> {
-        if !matches!(self.record.op, OpKind::Resize | OpKind::ResizePart | OpKind::Move) {
+        if !matches!(self.record.op, OpKind::Resize | OpKind::ResizeEnd | OpKind::Move) {
             return Err(PersistFailure::NotWritten(std::io::Error::other(
-                "only a `move`, `resize` or `resize-part` record carries a relocation plan",
+                "only a `move` or `resize` record carries a relocation plan",
             )));
         }
         if reloc.entries.is_empty() {
@@ -1231,7 +1225,7 @@ impl RecordJournal {
         self.file.is_some()
     }
 
-    /// 不可逆写入的屏障：记录一旦越过这一点，`undo` 只报告不回写。
+    /// 不可逆写入的屏障：记录一旦越过这一点，`diskedit recover` 只报告不回写。
     ///
     /// 记录尚未落盘时这里把它创建出来：第一次目标写入之前记录必须已经持久化，
     /// 而数据搬移类命令的第一次写入正是 `write_data_at`（它先调本函数再写字节）。

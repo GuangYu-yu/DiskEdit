@@ -555,7 +555,7 @@ fn mounts_of(tables: &Tables, subject: &Subject) -> Result<Vec<MountRef>, String
         for entry in &tables.mounts {
             let hit = entry.dev_no == device.dev_no
                 || (entry.dev_no.0 == 0
-                    && match crate::fsops::mount::source_is_device(&entry.source, device.dev_no) {
+                    && match crate::fsops::mount::source_is_device(&entry.source, &entry.fstype, device.dev_no) {
                         Ok(hit) => hit,
                         Err(e) => {
                             unresolved.get_or_insert_with(|| e.to_string());
@@ -608,7 +608,7 @@ fn swaps_of(tables: &Tables, subject: &Subject) -> Result<Vec<SwapRef>, String> 
 }
 
 /// 证据 3：`holders/` 非空。每台设备各自成一个集合，首层非空即命中；
-/// 下钻是为了把整棵子树里的持有者都收进来（层数上限 8，按已访问目录防环）
+/// 下钻是为了把整棵子树里的持有者都收进来（按已访问的设备目录防环）
 #[cfg(target_os = "linux")]
 fn holders_of(scope: &[ScopedDevice]) -> Result<Vec<HolderRef>, String> {
     let mut out = Vec::new();
@@ -692,12 +692,13 @@ fn spans_devices(kind: crate::domain::FsKind) -> bool {
 /// 单独重写会毁掉整个文件系统。
 ///
 /// 「是不是 btrfs」的判据在 [`crate::fsid::probe_fs`]：调用方 [`member_facts`] 只在它
-/// 已由 magic 认出 Btrfs 之后才进来，所以本函数的 magic 比对是防线、不是判据——两次读
-/// 之间内容可能变化，比对不符按「不是 btrfs」返回空事实，与识别侧的结论不冲突。
+/// 已由 magic 认出 Btrfs 之后才进来，所以本函数的 magic 比对是防线、不是判据。两次读
+/// 之间内容可能变化：magic 不再相符说明识别侧的依据已经不成立，而「现在读不到 magic」
+/// 既不能证明它是单设备 btrfs、也不能证明它不是，按未知返回 `Err`。
 ///
-/// 取不到时分两种：magic 不符是「已证明不是 btrfs」，返回空事实；magic 相符而
-/// `num_devices` 落在目标之外（目标过小）或读失败是「无法证明」，返回 `Err`，
-/// 由调用方按未知拒绝——多设备 btrfs 的成员不能被当成单设备放行。
+/// 取不到一律是「无法证明」，返回 `Err`，由调用方按未知拒绝——多设备 btrfs 的成员
+/// 不能被当成单设备放行：magic 不符、`num_devices` 落在目标之外（目标过小）、读失败
+/// 都属此类。
 #[cfg(target_os = "linux")]
 fn btrfs_members(src: &FileSource) -> Result<Vec<MemberRef>, String> {
     const SUPER_OFFSET: u64 = 0x10000;
@@ -721,7 +722,11 @@ fn btrfs_members(src: &FileSource) -> Result<Vec<MemberRef>, String> {
         .map_err(|e| format!("cannot read the btrfs superblock: {e}"))?;
     let magic = &sb[MAGIC_OFFSET..MAGIC_OFFSET + 8];
     if *magic != crate::fsid::BTRFS_MAGIC {
-        return Ok(Vec::new());
+        return Err(format!(
+            "cannot read the btrfs superblock magic at byte {SUPER_OFFSET:#x} any more, although \
+             the filesystem was identified as Btrfs before this read — a multi-device btrfs \
+             member cannot be ruled out when the magic does not match"
+        ));
     }
     // magic 命中而超级块头在 num_devices 之前结束：成员数无法读出，按未知返回
     if covered < sb.len() {
@@ -769,12 +774,10 @@ fn md_members_of(scope: &[ScopedDevice]) -> Result<Vec<MemberRef>, String> {
             continue;
         }
         let md_dir = node.join("md");
-        let members = match std::fs::read_dir(&md_dir) {
-            Ok(members) => members,
-            // 目录不在：这台 md 设备没有阵列侧成员表，不构成命中
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(e) => return Err(format!("cannot read {}: {e}", md_dir.display())),
-        };
+        // 内核文档（Documentation/admin-guide/md.rst）：每个 md 设备都带一个 `md` 子目录，
+        // 成员以 `dev-XXX` 目录列在其中。目录读不到是环境故障，不能读成"没有成员"
+        let members = std::fs::read_dir(&md_dir)
+            .map_err(|e| format!("cannot read {}: {e}", md_dir.display()))?;
         for member in members {
             let member = member.map_err(|e| format!("cannot read {}: {e}", md_dir.display()))?;
             let member = member.file_name().to_string_lossy().into_owned();

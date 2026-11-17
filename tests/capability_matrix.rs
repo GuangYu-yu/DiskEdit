@@ -2,7 +2,7 @@
 //!
 //! 块设备形态由 `tests/wsl/` 下的回归用例以 loop 设备取证；
 //! 这里钉住能力门：Linux 放行全部命令；非 Linux 只有镜像可打开，纯只读命令
-//! （info/plan）放行，其余按缺失原语退 6。帮助是元命令，由参数层直接退出，
+//! （info）放行，其余按缺失原语退 6。帮助是元命令，由参数层直接退出，
 //! 不经过这道门（见 `tests/cli/platform_gate.rs`）。
 
 #![allow(clippy::let_underscore_must_use)] // 临时目录清理有意忽略失败
@@ -106,10 +106,8 @@ fn read_only_commands_are_available_on_linux() {
     let (dir, img) = case("ro");
     let (code, _out, err) = run(&["info", &img]);
     assert_eq!(code, 0, "`info` is read-only and stays available: {err}");
-    let (code, _out, err) = run(&["plan", &img]);
-    assert_eq!(code, 0, "`plan` is read-only and stays available: {err}");
-    let (code, _out, err) = run(&["abandon", &img, "--yes"]);
-    assert_eq!(code, 0, "`abandon` only touches companion files: {err}");
+    let (code, _out, err) = run(&["recover", &img, "--release", "--yes"]);
+    assert_eq!(code, 0, "`recover --release` only touches companion files: {err}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -126,20 +124,19 @@ fn inspect_of_an_image_without_a_record_succeeds() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// 非 Linux × 镜像：纯只读的 `info` / `plan` 可用，
-/// 它们不打开证据后端、不写盘，也不承诺恢复
+/// 非 Linux × 镜像：纯只读的 `info` 可用，
+/// 它不打开证据后端、不写盘，也不承诺恢复
 #[cfg(not(target_os = "linux"))]
 #[test]
 fn read_only_commands_run_on_images() {
-    for name in ["info", "plan"] {
-        let (dir, img) = case(name);
-        let before = std::fs::read(&img).unwrap();
-        let (code, out, err) = run(&[name, &img]);
-        assert_eq!(code, 0, "`{name}` is read-only and must be admitted: {err}");
-        assert!(!out.is_empty(), "`{name}` must report the layout: {err}");
-        assert_eq!(std::fs::read(&img).unwrap(), before, "`{name}` must not modify the image");
-        let _ = std::fs::remove_dir_all(&dir);
-    }
+    let name = "info";
+    let (dir, img) = case(name);
+    let before = std::fs::read(&img).unwrap();
+    let (code, out, err) = run(&[name, &img]);
+    assert_eq!(code, 0, "`{name}` is read-only and must be admitted: {err}");
+    assert!(!out.is_empty(), "`{name}` must report the layout: {err}");
+    assert_eq!(std::fs::read(&img).unwrap(), before, "`{name}` must not modify the image");
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// 非 Linux：任何需要写侧或证据侧原语的命令都停在能力门，文案点名缺失原语
@@ -148,7 +145,7 @@ fn read_only_commands_run_on_images() {
 fn write_and_evidence_commands_stop_at_the_capability_gate() {
     let cases: &[&str] = &[
         "inspect", "resize", "move", "copy", "delete", "set", "check", "mkfs",
-        "resizefs", "undo", "abandon", "new", "add", "resize-part",
+        "resizefs", "recover", "new", "add",
     ];
     for name in cases {
         let (dir, img) = case(name);
@@ -163,11 +160,9 @@ fn write_and_evidence_commands_stop_at_the_capability_gate() {
             "check" => vec![name, &p],
             "resizefs" => vec![name, &p, "--yes"],
             "mkfs" => vec![name, &p, "ext4", "--yes"],
-            "undo" => vec![name, &img, "--yes"],
-            "abandon" => vec![name, &img, "--yes"],
+            "recover" => vec![name, &img, "--yes"],
             "new" => vec![name, &img, "--yes"],
             "add" => vec![name, &img, "1M", "--yes"],
-            "resize-part" => vec![name, &p, "--end", "8191", "--yes"],
             _ => unreachable!(),
         };
         let (code, _out, err) = run(&full);
@@ -230,10 +225,10 @@ fn write_commands_run_on_linux() {
     assert_eq!(code, 0, "`delete` is admitted here: {err}");
     let _ = std::fs::remove_dir_all(&dir);
 
-    // 没有历史可撤销时 `undo` 退 3：它先过了能力门，缺的是凭据而不是平台保证
-    let (dir, img) = case("undo");
-    let (code, _out, err) = run(&["undo", &img, "--yes"]);
-    assert_eq!(code, 3, "`undo` without history is a refusal, not a gate stop: {err}");
-    assert!(err.contains("nothing to undo"), "{err}");
+    // 没有历史可恢复时 `recover` 退 3：它先过了能力门，缺的是凭据而不是平台保证
+    let (dir, img) = case("recover");
+    let (code, _out, err) = run(&["recover", &img, "--yes"]);
+    assert_eq!(code, 3, "`recover` without history is a refusal, not a gate stop: {err}");
+    assert!(err.contains("nothing to recover"), "{err}");
     let _ = std::fs::remove_dir_all(&dir);
 }

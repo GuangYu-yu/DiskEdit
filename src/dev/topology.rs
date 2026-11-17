@@ -831,6 +831,12 @@ mod identity_tests {
         assert!(crate::platform::claim_of("wwid=naa.5000c500a1b2c3d4").is_some());
         // `t10.` 是 ASCII 供应商串：值里的 0 是字符而不是十六进制零，前缀不剥
         assert!(crate::platform::claim_of("wwid=t10.0000000000000000").is_some());
+        // 定长 ASCII 字段的尾部空格是填充：只剩填充不算身份，填充也不参与比较
+        assert!(crate::platform::claim_of("wwid=t10.        ").is_none());
+        assert_eq!(
+            crate::platform::claim_of("wwid=t10.LINUX   "),
+            crate::platform::claim_of("wwid=t10.LINUX")
+        );
     }
 
     /// 裸值按属性名分命名空间：serial 读到的 `S1` 与 wwid 读到的 `S1` 不是同一条声明。

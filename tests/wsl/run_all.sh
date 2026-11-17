@@ -44,23 +44,23 @@ for f in \
   selftest.sh \
   smoke_full_commands.sh \
   resize_move_resizefs_chain.sh \
-  resize_part_and_online_fs.sh \
+  resize_end_and_online_fs.sh \
   online_guards.sh \
   online_btrfs_identity.sh \
   size_units_and_refusals.sh \
   arg_guards.sh \
-  middle_partition_undo.sh \
+  middle_partition_recover.sh \
   interrupt_resume.sh \
   shift_no_kill_baseline.sh \
   resume_batch_contract.sh \
   resume_crash_windows.sh \
   resume_replay_idempotency.sh \
-  resize_part_fault_paths.sh \
+  resize_end_fault_paths.sh \
   command_boundary_pairs.sh \
   blockdev_resume_edges.sh \
   fs_xfs_btrfs_ntfs.sh \
   usage_misc.sh \
-  record_tree_tornwrite.sh \
+  record_tree_partial_write.sh \
   blockdev_4kn.sh \
   fs_f2fs_vfat_exfat_layout.sh \
   mkfs_labels.sh \

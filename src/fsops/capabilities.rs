@@ -17,7 +17,7 @@ pub(crate) enum ToolSupport {
 }
 
 /// 扩容做不了时唯一可行的替代：只改分区表。措辞指向 `resize --no-fs` 而不是裸
-/// `--no-fs`——同一条拒绝也会从 `resize-part` / `resizefs` 这类不声明该选项的命令面
+/// `--no-fs`——同一条拒绝也会从 `resize` / `resizefs` 这类不声明该选项的命令面
 /// 报出，指向它们不认识的开关就是错误指引。所有扩容拒绝文案引用这一句
 pub(crate) const CHANGE_PARTITION_ONLY: &str = "change the partition only with `resize --no-fs`";
 

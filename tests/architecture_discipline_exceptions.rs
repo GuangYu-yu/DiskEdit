@@ -21,11 +21,6 @@ struct Rule {
 const ALLOW_RULES: &[Rule] = &[
     Rule {
         file: "cmd/layout.rs",
-        id: "A-1",
-        why: "布局写入口与执行器共用同一组参数，拆参数对象只是搬运",
-    },
-    Rule {
-        file: "cmd/layout.rs",
         id: "A-2",
         why: "布局写入口与执行器共用同一组参数，拆参数对象只是搬运",
     },
@@ -103,6 +98,11 @@ const ALLOW_RULES: &[Rule] = &[
         file: "testdir.rs",
         id: "A-17",
         why: "夹具清理旧镜像的记录目录，失败没有后续动作",
+    },
+    Rule {
+        file: "movepart/shift.rs",
+        id: "A-18",
+        why: "扩容收尾的参数是一次作业的独立事实，拆参数对象只是搬运",
     },
 ];
 
@@ -307,4 +307,51 @@ fn every_registered_exception_states_why() {
             rule.id
         );
     }
+}
+
+/// 条件放行只用于平台差异：`cfg_attr` 的谓词必须落在目标平台上才放行，这样警告在
+/// 该代码真正被编译的平台上仍然生效。`cfg_attr(all(), allow(...))` 之类的无条件
+/// 伪装会在这里被拦住
+#[test]
+fn a_conditional_allow_is_platform_scoped() {
+    let mut bad = Vec::new();
+    for (path, text) in all_sources() {
+        for (n, line) in text.lines().enumerate() {
+            let trimmed = line.trim_start();
+            if (trimmed.starts_with("#[cfg_attr(") || trimmed.starts_with("#![cfg_attr("))
+                && trimmed.contains("allow(")
+                && !trimmed.contains("target_os")
+            {
+                bad.push(format!("{path}:{}: {}", n + 1, line.trim()));
+            }
+        }
+    }
+    assert!(
+        bad.is_empty(),
+        "`cfg_attr` 里的放行只用于平台差异，谓词必须含 `target_os`：\n{}",
+        bad.join("\n")
+    );
+}
+
+/// 模块级放行（`#![allow(...)]`）写在文件首部，标记没有位置可放，因此不进登记表；
+/// 改用形态约束：只允许测试清理用的 `clippy::let_underscore_must_use`，平台条件放行
+/// 走 `#![cfg_attr(...)]`（在用到该代码的平台上 lint 仍然生效）。无条件放行 rustc 的
+/// `dead_code` / `unused_*` / `warnings` 会在这里被拦住
+#[test]
+fn a_module_level_allow_is_test_cleanup_only() {
+    const ALLOWED: &str = "#![allow(clippy::let_underscore_must_use)]";
+    let mut bad = Vec::new();
+    for (path, text) in all_sources() {
+        for (n, line) in text.lines().enumerate() {
+            if line.trim_start().starts_with("#![allow(") && !line.trim_start().starts_with(ALLOWED) {
+                bad.push(format!("{path}:{}: {}", n + 1, line.trim()));
+            }
+        }
+    }
+    assert!(
+        bad.is_empty(),
+        "模块级 `#![allow(...)]` 只用于测试清理的 `clippy::let_underscore_must_use`；\
+         平台差异用 `#![cfg_attr(...)]`：\n{}",
+        bad.join("\n")
+    );
 }

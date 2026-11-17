@@ -62,7 +62,7 @@ echo
 echo "===== B: resize grow --allow-move ====="
 mk
 BEFORE=$($B info "$T")
-$B plan "$T":1 --grow | head -3 | sed 's/^/  plan | /'
+$B info "$T":1 --grow | head -3 | sed 's/^/  info | /'
 # resize grow 与搬移联动走同一条几何路径（resize --allow-move 一次生成多条目计划）：本布局的 p2/p3 需要搬移，故必须显式 --yes
 DISKEDIT_FAULT=before-any-write $BF resize "$T":1 grow --allow-move --yes >/dev/null 2>&1; B1=$?
 chk "$B1" "134" "B1 边界前 abort"
@@ -114,7 +114,7 @@ mk
 BEFORE=$($B info "$T")
 $B resize "$T":1 -50M --no-fs --yes >/dev/null 2>&1; chk "$?" "3" "D1 --no-fs + 缩容 ⇒ 3"
 $B resize --yes "$T":1 500M --start 4096 >/dev/null 2>&1; chk "$?" "2" "D2 --start 非本命令选项（解析期即拒，未写盘）" # cli-surface: refused
-$B resize-part --yes "$T":1 --start end >/dev/null 2>&1; chk "$?" "2" "D3 resize-part --start end ⇒ 2" # cli-surface: refused
+$B resize --yes "$T":1 --start end >/dev/null 2>&1; chk "$?" "2" "D3 resize --start end ⇒ 2" # cli-surface: refused
 chk "$($B info "$T")" "$BEFORE" "D 三次拒绝均未写盘"
 
 echo

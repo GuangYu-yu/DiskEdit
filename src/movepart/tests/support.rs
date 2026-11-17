@@ -164,7 +164,7 @@ pub(crate) fn rsize(src: &mut WriteSource, part: u32, start: u64, end: u64, chun
 }
 
 /// `defer = true` 对应 PV 的收尾形态：记录留给调用方的后续步骤撤除
-/// 走生产入口：`resize-part` 的表与 FS 步骤都由装配层与执行器落地。测试因此验的是
+/// 走生产入口：`resize` 起点变更形态的表与 FS 步骤都由装配层与执行器落地。测试因此验的是
 /// 实际发布的那条链，而不是一份平行的实现
 // audit-allow: A-8
 #[allow(clippy::too_many_arguments)] // 与生产入口同一组入参，测试辅助不另造参数对象

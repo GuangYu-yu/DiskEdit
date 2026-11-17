@@ -1,6 +1,6 @@
 //! 「会否决写盘或决定回退走向」的判据只在一处计算的守卫。
 //!
-//! 三组判据各自只允许一个计算点：`undo` 的表区回放（相交与否）、一次运行改变
+//! 三组判据各自只允许一个计算点：`recover` 的表区回放（相交与否）、一次运行改变
 //! 了哪类持久状态、以及没有改变持久状态时的那句结论。调用点只许读枚举，不许
 //! 自己再算一遍区间或再写一句结论；文案随枚举的 `Display` 走。
 //!
@@ -13,10 +13,10 @@ mod guards;
 use guards::{rust_sources, source};
 
 /// `TableReplay::of(` 的调用者：定义与执行器在 `rollback.rs`，其余三处是准入与
-/// 报告侧。多一个文件就说明有调用点在自己决定回放走向。`cmd/undo.rs` 不在此列：
+/// 报告侧。多一个文件就说明有调用点在自己决定回放走向。`cmd/recover.rs` 不在此列：
 /// 它拿到的是 `recovery::engine` 给出的准入结果，回放由该处构造
 const TABLE_REPLAY_CALLERS: &[&str] = &[
-    "cmd/abandon.rs",
+    "cmd/release.rs",
     "cmd/inspect.rs",
     "recovery/engine.rs",
     "recovery/rollback.rs",
@@ -109,8 +109,8 @@ fn persisted_change_is_decided_at_one_point() {
     callers.dedup();
     assert_eq!(
         callers,
-        vec!["cmd/abandon.rs".to_string(), "outcome.rs".to_string()],
-        "PersistedChange is built outside its type or the abandon failure path"
+        vec!["cmd/release.rs".to_string(), "outcome.rs".to_string()],
+        "PersistedChange is built outside its type or the release failure path"
     );
 
     // 已提交记录的释放结论只有一个出口
@@ -123,8 +123,8 @@ fn persisted_change_is_decided_at_one_point() {
     releases.dedup();
     assert_eq!(
         releases,
-        vec!["cmd/undo.rs".to_string(), "outcome.rs".to_string()],
-        "the committed-record release conclusion is built outside outcome.rs and undo"
+        vec!["cmd/recover.rs".to_string(), "outcome.rs".to_string()],
+        "the committed-record release conclusion is built outside outcome.rs and recover"
     );
 
     // 「没有改变持久状态」这句话只在结果呈现层写一次

@@ -109,7 +109,7 @@ fn resize_part_move_copy_flag_name() {
     // --yes 让请求越过确认门，命中这里要测的 FS 缩容守卫；不带它先被门拒成 3
     let img_before = std::fs::read(&img).unwrap();
     let entries_before = dir_entries(&dir);
-    let (c, _, stderr) = run(&["resize-part", &format!("{img_s}:1"), "--end", "11000", "--yes"]);
+    let (c, _, stderr) = run(&["resize", &format!("{img_s}:1"), "--end", "11000", "--yes"]);
     assert_eq!(c, 6, "shrink of unknown-FS partition must refuse: {stderr}");
     assert!(stderr.contains("shrink"), "{stderr}");
     // 拒绝发生在任何写入前：表项保持 move 后的 8192..12287，盘面亦逐字节不变
@@ -203,19 +203,38 @@ fn grow_to_end() {
     assert_eq!(c, 0, "{e}");
 
     // --end 与 --grow-to-end 互斥
-    let (c, _) = run(&["resize-part", &format!("{img_s}:1"), "--end", "6000", "--grow-to-end", "--yes"]);
+    let (c, _) = run(&["resize", &format!("{img_s}:1"), "--end", "6000", "--grow-to-end", "--yes"]);
     assert_eq!(c, 2, "--end + --grow-to-end must refuse as a usage error");
 
     // grow-to-end：分区里没有 FS，缺少 FS 步骤时在写表之前就拒绝；出路必须点名
-    // 真正能只改分区表的命令，而不是让用户给 resize-part 加一个它不接受的开关
-    let (c, e) = run(&["resize-part", &format!("{img_s}:1"), "--grow-to-end", "--yes"]);
+    // 真正能只改分区表的形态（resize --no-fs）
+    let (c, e) = run(&["resize", &format!("{img_s}:1"), "--grow-to-end", "--yes"]);
     assert_eq!(c, 6, "an unidentifiable region must be refused: {e}");
     assert!(e.contains("resize --no-fs"), "the hint must name the command that can change the partition alone: {e}");
     assert!(!e.contains("pass --no-fs"), "the hint must not tell the user to pass --no-fs to this command: {e}");
 
-    // resize-part 不登记 --no-fs：收到即用法错误，不进入任何写入
-    let (c, e) = run(&["resize-part", &format!("{img_s}:1"), "--grow-to-end", "--no-fs", "--yes"]); // cli-surface: refused
-    assert_eq!(c, 2, "--no-fs is outside the resize-part surface: {e}");
+    // --no-fs 跳过 FS 步骤：只改分区表，分区扩到 last_usable
+    let (c, e) = run(&["resize", &format!("{img_s}:1"), "--grow-to-end", "--no-fs", "--yes"]);
+    assert_eq!(c, 0, "--no-fs must let the partition grow to the end: {e}");
+    let gpt = gptman::GPT::find_from(&mut std::fs::File::open(&img).unwrap()).unwrap();
+    assert_eq!(gpt[1].starting_lba, 2048);
+    assert_eq!(gpt[1].ending_lba, 16350, "--grow-to-end must stop at last_usable");
+    drop(gpt);
+
+    // --align 作用于 --grow-to-end 算出的末端：16350 下取整到 7 MiB（14336 扇区），
+    // 而不是静默按 last_usable 落盘
+    let aligned = dir.join("gte-aligned.img");
+    std::fs::write(&aligned, vec![0u8; 8 * 1024 * 1024]).unwrap();
+    let aligned_s = aligned.to_str().unwrap();
+    let (c, e) = run(&["new", aligned_s, "--yes"]);
+    assert_eq!(c, 0, "{e}");
+    let (c, e) = run(&["add", aligned_s, "1M", "--align", "mib", "--type-guid", "0fc63daf-8483-4772-8e79-3d69d8477de4", "--name", "a", "--yes"]);
+    assert_eq!(c, 0, "{e}");
+    let (c, e) = run(&["resize", &format!("{aligned_s}:1"), "--grow-to-end", "--align", "mib", "--no-fs", "--yes"]);
+    assert_eq!(c, 0, "--align with --grow-to-end must be applied, not swallowed: {e}");
+    let gpt = gptman::GPT::find_from(&mut std::fs::File::open(&aligned).unwrap()).unwrap();
+    assert_eq!(gpt[1].starting_lba, 2048);
+    assert_eq!(gpt[1].ending_lba, 14335, "--align mib must stop at the last sector below the 7 MiB boundary");
 
     let _ = std::fs::remove_dir_all(&dir);
 }

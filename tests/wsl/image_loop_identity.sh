@@ -99,7 +99,7 @@ lo_waitpart "${L2}p1" || { echo "BAD  ${L2}p1 未就绪"; exit 1; }
 mount_at "${L2}p1" "$TEST_MNT" || { echo "BAD  挂载 ${L2}p1 失败"; exit 1; }
 rm -rf "$LNK"
 [ ! -e "$LNK" ] || { echo "BAD  硬链接未删除"; exit 1; }
-"$B" resize-part --yes "$T:1" --grow-to-end >/dev/null 2>&1
+"$B" resize --yes "$T:1" --grow-to-end >/dev/null 2>&1
 exp "$?" 3 "硬链接删除后仍按身份命中"
 unmount_now "$TEST_MNT"
 lo_detach "$L2"
@@ -120,7 +120,7 @@ if command -v dmsetup >/dev/null 2>&1 && dmsetup version >/dev/null 2>&1; then
         DMNAME="diskedit-hold-$$"
         if dmsetup create "$DMNAME" --table "0 2048 linear ${L3}p1 0" >/dev/null 2>&1; then
             sleep 0.3
-            out=$("$B" resize-part "$T2:1" --end 4095 --yes 2>&1)
+            out=$("$B" resize "$T2:1" --end 4095 --yes 2>&1)
             exp "$?" 3 "分区被 dm 持有：改表被拒"
             case "$out" in
                 *"is in use"*) echo "  OK   拒绝原因落在在用分支" ;;
@@ -133,7 +133,7 @@ if command -v dmsetup >/dev/null 2>&1 && dmsetup version >/dev/null 2>&1; then
             DMNAME="diskedit-hold-$$"
             if dmsetup create "$DMNAME" --table "0 2048 linear ${L3} 0" >/dev/null 2>&1; then
                 sleep 0.3
-                out=$("$B" resize-part "$T2:1" --end 4095 --yes 2>&1)
+                out=$("$B" resize "$T2:1" --end 4095 --yes 2>&1)
                 exp "$?" 3 "loop 本身被 dm 持有：改表被拒"
                 case "$out" in
                     *"is in use"*) echo "  OK   拒绝原因落在在用分支" ;;
@@ -146,7 +146,7 @@ if command -v dmsetup >/dev/null 2>&1 && dmsetup version >/dev/null 2>&1; then
                 echo "SKIP: dmsetup create（整盘 loop）不可用"
             fi
             # 解除持有后改走扩容：p1 是裸分区，未识别的 FS 步在写表前拒绝（6），
-            # resize 的 --no-fs 是只改表的登记入口；占用闸与 resize-part 共用同一份
+            # resize --no-fs 是只改表、跳过 FS 步骤的入口
             "$B" resize --yes "$T2:1" grow --no-fs >/dev/null 2>&1
             exp "$?" 0 "解除持有后放行（阳性对照）"
         else
@@ -170,12 +170,12 @@ if ! lo_waitpart "${L4}p1"; then
     echo "SKIP: ${L4}p1 未就绪"
 elif mkswap "${L4}p1" >/dev/null 2>&1 && swapon "${L4}p1" 2>/dev/null; then
     SWAPDEV="${L4}p1"
-    "$B" resize-part --yes "$T3:1" --grow-to-end >/dev/null 2>&1
+    "$B" resize --yes "$T3:1" --grow-to-end >/dev/null 2>&1
     exp "$?" 3 "分区是活动 swap：改表被拒"
     swapoff "$SWAPDEV" >/dev/null 2>&1
     SWAPDEV=
     # 释放后要验证的是"占用闸放行"。`resize --no-fs` 只改表，不要求识别 FS，
-    # 分区里残留的 swap 签名不参与这次判定；占用闸与 resize-part 共用同一份
+    # 分区里残留的 swap 签名不参与这次判定
     "$B" resize --yes "$T3:1" grow --no-fs >/dev/null 2>&1
     exp "$?" 0 "swapoff 后放行（阳性对照）"
 else
@@ -194,7 +194,7 @@ run_without_dev() {
         mount --make-rprivate /
         mount -t tmpfs none /dev
         mount --bind "$3" /proc/swaps
-        exec "$1" resize-part "$2:1" --grow-to-end --yes
+        exec "$1" resize "$2:1" --grow-to-end --yes
     ' _ "$B" "$1" "$EMPTY_SWAPS" 2>&1
 }
 
@@ -239,13 +239,13 @@ if [ ! -s "$READY" ]; then
     exit 1
 fi
 NLOOP=$(cat "$READY")
-"$B" resize-part --yes "$T:1" --grow-to-end >/dev/null 2>&1
+"$B" resize --yes "$T:1" --grow-to-end >/dev/null 2>&1
 exp "$?" 3 "另一 namespace 的挂载被检出"
 exec 9>&-
 wait "$NSPID" 2>/dev/null
 NSPID=
 sleep 0.3
-"$B" resize-part --yes "$T:1" --grow-to-end >/dev/null 2>&1
+"$B" resize --yes "$T:1" --grow-to-end >/dev/null 2>&1
 exp "$?" 0 "namespace 结束后放行（阳性对照）"
 lo_detach "$NLOOP"
 NLOOP=

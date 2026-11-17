@@ -18,9 +18,9 @@ fn invalid(msg: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, msg.into())
 }
 
-/// 复核失败的两类事实：盘上表已被外部改写（改参数或重跑能解决），或表读不出来
-/// （读不到继续所需的事实）。两者都不放行，出口都是拒绝（3）；类型上分开只为让
-/// 原因说得清是哪一类，不改变退出码
+/// 复核失败的两类事实：盘上表已被外部改写（改参数或重跑能解决，3），或表读不出来
+/// （环境故障且本次未写盘，4）。类型上分开让原因说得清是哪一类，并各自落到
+/// [`crate::outcome`] 的对应构造点
 enum TableCheck {
     Changed(String),
     Unreadable(String),
@@ -36,7 +36,7 @@ impl TableCheck {
     fn into_fail(self) -> RunOutcome {
         match self {
             Self::Changed(m) => RunOutcome::refused(m),
-            Self::Unreadable(m) => RunOutcome::refused(m),
+            Self::Unreadable(m) => RunOutcome::no_mutation(m),
         }
     }
 }
@@ -290,8 +290,7 @@ impl ValidatedGeometry {
 
     /// 首写前的复核，出口保留 [`TableCheck`] 的两类分类。与
     /// [`Self::ensure_entries_unchanged`] 共用同一份比对实现，只是错误表示不同：
-    /// 调用点能区分"表被改"与"表读不出"（出口同为拒绝 3，区别在原因文案），
-    /// 已越界的 io 调用点只要一个原因
+    /// 调用点能区分"表被改"（3）与"表读不出"（4），已越界的 io 调用点只要一个原因
     pub(crate) fn ensure_entries_unchanged_fail(&self, src: &crate::dev::FileSource) -> Result<(), RunOutcome> {
         self.check_entries(src).map_err(TableCheck::into_fail)
     }
@@ -309,7 +308,7 @@ impl ValidatedGeometry {
         }
         // 位置字段（MyLBA / PartitionEntryLBA）由提交规范化，不作为"内容被改"的判据；
         // 规范化意味着提交按规范位置写主数组，LBA2..2+span 的现有字节随之被覆盖——
-        // 其原文在写前进恢复记录、undo 可回放，声明位置非规范时装配层再显式提示一次。
+        // 其原文在写前进恢复记录、`recover` 可回放，声明位置非规范时装配层再显式提示一次。
         // 其余头字段一旦既不是原值也不是目标值，就是第三方在这个窗口里改过表头
         let (d, now, target) = (&self.decided_header, &g.header, &self.header);
         let hex = |g: &[u8; 16]| format!("{g:02x?}");

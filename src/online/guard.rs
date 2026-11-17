@@ -99,12 +99,14 @@ fn partition_dev_no(disk_name: &str, pno: u32) -> io::Result<(u64, u64)> {
         if !p.is_dir() {
             continue;
         }
-        match fs::metadata(p.join("partition")) {
-            Ok(_) => {}
+        // 属性不存在 = 这一项不是分区；属性存在却读不出来按环境故障上抛，
+        // 不报成"没有该分区"
+        let part = match crate::dev::sysfs_partition_no(&p) {
+            Ok(n) => n,
             Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
             Err(e) => return Err(e),
-        }
-        if sysfs_u64(&p.join("partition"))? as u32 != pno {
+        };
+        if part != pno {
             continue;
         }
         let s = fs::read_to_string(p.join("dev"))?;
@@ -131,8 +133,23 @@ fn mounts_target(
     if e.dev_no == target {
         return Ok(true);
     }
-    if e.dev_no.0 != 0 || !e.source.starts_with('/') {
+    if e.dev_no.0 != 0 {
         return Ok(false);
+    }
+    if !e.source.starts_with('/') {
+        // 与 `fsops::mount::source_is_device` 同一条判据：伪/网络文件系统的 source 不是设备，
+        // 其余 fstype 的非绝对 source 无法解析成设备，按"确认不了"上抛
+        if crate::fsops::mount::source_never_names_a_block_device(&e.fstype) {
+            return Ok(false);
+        }
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "the mount source {} ({}) is not an absolute path — whether partition {pno} of \
+                 {disk_name} is mounted cannot be confirmed",
+                e.source, e.fstype
+            ),
+        ));
     }
     match fs::metadata(&e.source) {
         Ok(_) => part_in_use(&e.source, disk_name, pno, false),
@@ -196,14 +213,14 @@ pub(crate) fn part_in_use(dev: &str, disk_name: &str, pno: u32, allow_missing: b
     let sysdir = crate::dev::sysfs_dev_block_dir()
         .join(format!("{}:{}", libc::major(rdev), libc::minor(rdev)));
     // <part>/partition：内核 sysfs-block ABI 属性，内容 = 分区号；整盘目录无此属性（据此区分二者）
-    let part = match sysfs_u64(&sysdir.join("partition")) {
+    let part = match crate::dev::sysfs_partition_no(&sysdir) {
         Ok(p) => p,
         // 整盘设备的 sysfs 目录没有 `partition` 属性：这说明该记录指向的是整盘而不是分区，
         // 按分区号匹配的目标不可能命中它——读不到等于已证明不存在，不是证据缺失
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
         Err(e) => return Err(e),
     };
-    if part as u32 != pno {
+    if part != pno {
         return Ok(false);
     }
     let link = sysdir.read_link()?;

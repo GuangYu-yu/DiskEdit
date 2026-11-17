@@ -145,14 +145,13 @@ fn between<'a>(text: &'a str, open: &str, close: &str) -> Option<&'a str> {
     Some(&text[start..start + end])
 }
 
-/// `options: &[opt("--a"), opt_desc("--b", "…")]`；多行数组同样适用
+/// 一段 `CommandDef` 里声明的长选项：`opt("--a")` 与 `opt_desc("--b", "…")`。
+/// 选项写在形态（`variant(...)`）与 `common_options` 里，两处都是同一张表的一部分；
+/// 多行数组同样适用
 fn declared_options(block: &str) -> Vec<String> {
-    let Some(start) = block.find("options: &[") else { return Vec::new() };
-    let start = start + "options: &[".len();
-    let Some(len) = block[start..].find(']') else { return Vec::new() };
     let mut out = Vec::new();
     for prefix in ["opt(\"", "opt_desc(\""] {
-        let mut rest = &block[start..start + len];
+        let mut rest = block;
         while let Some(pos) = rest.find(prefix) {
             rest = &rest[pos + prefix.len()..];
             let Some(close) = rest.find('"') else { break };

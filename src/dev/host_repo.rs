@@ -416,28 +416,4 @@ mod tests {
         );
         assert!(block.record_path().ends_with(crate::dev::RECORD_NAME));
     }
-
-    /// 拼接式旧键算出的目录名既不是 `("ABC1", 2)` 的落点，也不是 `("ABC", 12)` 的落点。
-    /// 目录名只决定派生落点：记录根按载荷身份认领，旧键目录里的记录只要载荷声明本目标，
-    /// 仍会进入本目标的候选集（见 `recovery::engine::scan_record_root`）
-    #[test]
-    fn a_legacy_concatenated_slot_is_not_the_key_of_either_target() {
-        assert_eq!(legacy_hash_hex("partition", "ABC12"), "9aa2c12926b1417f1830d1c77d09cb23");
-        let legacy = legacy_hash_hex("partition", "ABC12");
-        assert_ne!(legacy, IdentityKey::new("ABC1".to_string(), Some(2)).hash_hex());
-        assert_ne!(legacy, IdentityKey::new("ABC".to_string(), Some(12)).hash_hex());
-        assert_ne!(
-            legacy_hash_hex("block", "naa.5000c500aabbccdd"),
-            IdentityKey::new("naa.5000c500aabbccdd".to_string(), None).hash_hex()
-        );
-    }
-
-    /// 旧版 identity-hash：`device_class` + 拼成一串的载体与分区号 + 空的 file_id 标志
-    fn legacy_hash_hex(device_class: &str, stable_key: &str) -> String {
-        let mut input = Vec::new();
-        push_string(&mut input, device_class);
-        push_string(&mut input, stable_key);
-        input.push(0);
-        crate::support::hex_lower(&Sha256::digest(&input)[..16])
-    }
 }

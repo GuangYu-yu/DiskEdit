@@ -9,7 +9,7 @@ use std::process::Command;
 /// 本次测试线程的镜像状态根：同一用例内的多次调用（含子进程）落点一致，用例之间互不相干。
 ///
 /// 进程内所有用例共用一个根时，临时镜像会复用内核回收的 inode，后来建出的镜像
-/// 因此命中前一个用例留下的记录目录（记录、`.torn.N`、残留文件名）
+/// 因此命中前一个用例留下的记录目录（记录、`.abandoned.N`、残留文件名）
 fn state_root() -> PathBuf {
     thread_local! {
         static ROOT: tempfile::TempDir = {
@@ -234,7 +234,10 @@ mod linux {
         write_companion(&img, &record(file_id(&img), 0, 0));
         let (code, out, err) = run(&["inspect", img.to_str().unwrap()]);
         assert_eq!(code, 0, "{out}\n{err}");
-        assert!(err.contains("diskedit undo") && err.contains("diskedit abandon"), "{err}");
+        assert!(
+            err.contains("diskedit recover") && err.contains("diskedit recover --release"),
+            "{err}"
+        );
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

@@ -46,8 +46,8 @@ echo "== 中间分区 move 到尾部空隙 =="
 $B move "$T":2 --start end --yes; echo "exit=$?"
 $B info "$T"
 
-echo "== 成功后记录已删，undo 应拒绝（与搬移 undo 拒绝契约一致）=="
-$B undo "$T" --yes; echo "undo exit=$? (期望 3)"
+echo "== 成功后记录已删，recover 应拒绝（与搬移 recover 拒绝契约一致）=="
+$B recover "$T" --yes; echo "recover exit=$? (期望 3)"
 LD=$(lo_attach "$T")
 # 终态即 move 后布局：p3 纯位移字节一致，p2 内容可读、fsck 干净
 MD3_UNDO=$(mdsum "${LD}p3")

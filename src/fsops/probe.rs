@@ -95,6 +95,9 @@ pub(crate) fn parse_num_lead(text: &str, prefix: &str) -> Result<u64, NumError> 
     for line in text.lines() {
         let Some(rest) = line.trim().strip_prefix(prefix) else { continue };
         let raw = rest.trim_start();
+        // ntfsresize --info 的字段写成 `Cluster size       : 4096 bytes`：冒号前的空格数
+        // 随标签长度对齐，把冒号也算进前缀会让解析跟着对齐变化；标签作为前缀，冒号在这里跳过
+        let raw = raw.strip_prefix(':').map_or(raw, |r| r.trim_start());
         let digits: String = raw.chars().take_while(char::is_ascii_digit).collect();
         let tail = &raw[digits.len()..];
         let parsed = if digits.is_empty() {
@@ -116,6 +119,77 @@ pub(crate) fn parse_num_lead(text: &str, prefix: &str) -> Result<u64, NumError> 
         });
     }
     Err(NumError::MissingField(prefix.to_string()))
+}
+
+/// 文件系统尺寸核对结论。缩容与扩容共用：两处都只回答"工具成功返回后，文件系统实际
+/// 落在哪儿"，差别在各自的判据——缩容要求落点 ≤ 请求值，扩容要求落点覆盖到区间末端。
+/// "回读不出来"在两种方向上都只有一种含义：操作**可能已经完成**，只是落点无法证实。
+/// 它不是失败，由各自的运行结果携带成一条待办
+pub enum SizeVerify {
+    /// 回读到的实际尺寸（字节）
+    Confirmed(u64),
+    /// 回读不出来（工具缺失、输出解析不了、卷被工具标成待检查而拒答）
+    Unverifiable { why: String, hint: String },
+}
+
+/// 回读到的文件系统几何：总字节 + 分配单元。
+///
+/// 分配单元是"扩到区间末端"判据的组成部分：工具按自己的单元向下取整，实际尺寸与区间
+/// 末端之间允许差一个单元（ext 按块、ntfs 按簇、btrfs 按 sectorsize）
+pub(crate) struct FsGeometry {
+    pub bytes: u64,
+    pub unit: u64,
+}
+
+/// 回读文件系统几何。三者都是只读查询：
+/// - ext：`dumpe2fs -h`（man dumpe2fs：-h 只打印超级块）的 `Block count:` × `Block size:`，
+///   分配单元 = `Block size:`
+/// - ntfs：`ntfsresize --info` 的 `Current volume size:` 与 `Cluster size`。`--info` 是查询，
+///   不调整大小，故只读。`-f` 是必需的：真实调整大小会把卷标成"待检查"，不带 `-f` 的
+///   `--info` 会以该理由拒答
+/// - btrfs：`btrfs inspect-internal dump-super -f`（-f = --full）的 `total_bytes` 与
+///   `sectorsize`；后者在磁盘格式里是超级块偏移 0x20 的 "minimal I/O size (sector size)"
+///   （btrfs 文档 On-disk-format）。该命令除签名验证外不做全面合理性检查，故只用来报尺寸、
+///   不用来判断卷是否健康
+///
+/// 输出格式非稳定机器接口（随工具版本可能变化），解析失败即报错、不猜默认值
+pub(crate) fn read_fs_geometry(kind: FsKind, dev: &str) -> io::Result<FsGeometry> {
+    match kind {
+        FsKind::Ext => {
+            let text = run_text("dumpe2fs", &["-h", dev])?;
+            let blocks = parse_num_lead(&text, "Block count:")?;
+            let block_size = parse_num_lead(&text, "Block size:")?;
+            let bytes = blocks.checked_mul(block_size).ok_or_else(|| {
+                io::Error::other(format!(
+                    "dumpe2fs block count × block size overflows ({blocks} × {block_size})"
+                ))
+            })?;
+            Ok(FsGeometry { bytes, unit: block_size })
+        }
+        FsKind::Ntfs => {
+            let text = run_text("ntfsresize", &["-f", "--info", dev])?;
+            Ok(FsGeometry {
+                bytes: parse_num_lead(&text, "Current volume size:")?,
+                unit: parse_num_lead(&text, "Cluster size")?,
+            })
+        }
+        FsKind::Btrfs => {
+            let text = run_text("btrfs", &["inspect-internal", "dump-super", "-f", dev])?;
+            Ok(FsGeometry {
+                bytes: parse_num_lead(&text, "total_bytes")?,
+                unit: parse_num_lead(&text, "sectorsize")?,
+            })
+        }
+        other => Err(io::Error::other(format!(
+            "no size read-back wired for {}",
+            content_name(ContentKind::Filesystem(other))
+        ))),
+    }
+}
+
+/// 只取总字节：缩容核对只需要尺寸，分配单元在那一侧不参与判据
+pub(crate) fn read_fs_bytes(kind: FsKind, dev: &str) -> io::Result<u64> {
+    Ok(read_fs_geometry(kind, dev)?.bytes)
 }
 
 /// ext 最小尺寸（字节）= -P 估计块数 × 块大小。
