@@ -15,7 +15,7 @@ use sha2::{Digest, Sha256};
 /// 本次测试线程的镜像状态根：同一用例内的多次调用（含子进程）落点一致，用例之间互不相干。
 ///
 /// 进程内所有用例共用一个根时，临时镜像会复用内核回收的 inode，后来建出的镜像
-/// 因此命中前一个用例留下的记录目录（记录、`.torn.N`、残留文件名）
+/// 因此命中前一个用例留下的记录目录（记录、`.abandoned.N`、残留文件名）
 fn state_root() -> PathBuf {
     thread_local! {
         static ROOT: tempfile::TempDir = {
@@ -221,20 +221,6 @@ fn quarantined_entry_is_listed_and_marked() {
 }
 
 #[test]
-fn torn_entry_is_listed_and_marked() {
-    let dir = temp_dir("torn");
-    let img = image_with(&dir);
-    let bytes = record(file_id(&img), 1, 0);
-    // `.torn[.N]` 本构建不产生，但盘上可能有：识别的是名字，不是内容，解码结果不受影响
-    std::fs::write(record_dir(&img).join(".torn.3"), &bytes).unwrap();
-    let (code, out, err) = run(&["records", "list", img.to_str().unwrap()]);
-    assert_eq!(code, 0, "{out}\n{err}");
-    assert!(out.contains("\"quarantine\":\"torn\""), "{out}");
-    assert!(out.contains("\"state\":\"valid\""), "the mark does not change how the bytes decode: {out}");
-    std::fs::remove_dir_all(&dir).unwrap();
-}
-
-#[test]
 fn a_non_utf8_entry_name_is_still_listed() {
     use std::os::unix::ffi::OsStringExt;
     let dir = temp_dir("nonutf8");
@@ -300,6 +286,36 @@ fn verify_of_an_unknown_id_is_three() {
     ]);
     assert_eq!(code, 3, "{out}\n{err}");
     assert!(err.contains("no record with id"), "{err}");
+    // 汇总行只有计数键：`records` 不在这一行出现，脚本按 `.records[]` 读时不会遇到空数组以外的形状
+    assert!(out.contains("\"unverified\":0"), "{out}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// 解不出编号的条目走 unverified 汇总行：计数键是 `unverified`，`records` 只属于
+/// 行文档且始终是数组——`jq '.records[]'` 不会落到一个数字上
+#[test]
+fn verify_of_an_unreadable_id_reports_unverified_entries_as_an_array() {
+    let dir = temp_dir("verify-unverified");
+    let img = image_with(&dir);
+    let mut bytes = record(file_id(&img), 1, 0);
+    bytes[0..4].copy_from_slice(b"XXXX");
+    write_record(&img, &bytes);
+    let (code, out, err) = run(&[
+        "records",
+        "verify",
+        img.to_str().unwrap(),
+        "00000000000000000000000000000000",
+    ]);
+    assert_eq!(code, 3, "{out}\n{err}");
+    assert!(out.contains("\"verdict\":\"unverified\""), "{out}");
+    assert!(out.contains("\"hits\":0"), "{out}");
+    assert!(out.contains("\"unverified\":1"), "{out}");
+    for (at, _) in out.match_indices("\"records\":") {
+        assert!(
+            out[at + "\"records\":".len()..].starts_with('['),
+            "`records` must always be an array: {out}"
+        );
+    }
     std::fs::remove_dir_all(&dir).unwrap();
 }
 

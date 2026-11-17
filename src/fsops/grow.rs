@@ -14,7 +14,7 @@ pub struct GrowTarget {
 
 impl GrowTarget {
     /// 按判断期的同一份结论执行扩容
-    pub fn resize_fs(&self, src: &mut WriteSource) -> Result<Option<MountLeak>, FsError> {
+    pub fn resize_fs(&self, src: &mut WriteSource) -> Result<GrowRunOutcome, FsError> {
         resize_fs_in(src, &self.scope, Some(self.fstype))
     }
 }
@@ -91,7 +91,7 @@ pub fn grow_target_at(src: &FileSource, part: u32, base: u64, len: u64) -> Resul
             // 挂载态在此显式守卫。这是判定期的时点检查：本函数每次被调用（preflight
             // 与收尾各一次）各守一次，判定之后的执行窗口不复核
             let node = find_block_partition_node(src, part, base)?;
-            require_unmounted(&node)?;
+            require_unmounted(&node, crate::fsops::scope::ImageLoopPolicy::RefuseAny)?;
         }
         return Ok(Growable::Target(GrowTarget {
             scope: DeviceScope::Range(base + rel, len - rel),
@@ -137,8 +137,64 @@ pub fn check_grow_step(g: Growable, is_block: bool) -> Result<(), FsError> {
     }
 }
 
+/// 扩容这一动的结果。两个变体是两条互斥的通道：落点已回读证实覆盖到区间末端，或回读
+/// 不出、结果未证实。"未证实"只出现在 [`Self::Unverified`] 上，与已证实的结果互斥
+pub enum GrowRunOutcome {
+    /// 回读证实的实际尺寸；`leak` 是没卸掉的临时挂载点（只有 xfs/btrfs 路径会产生）
+    Verified { actual: u64, leak: Option<MountLeak> },
+    /// 工具成功返回但落点回读不出：扩容可能已应用，尺寸未知
+    Unverified { why: String, hint: String, leak: Option<MountLeak> },
+}
+
+impl GrowRunOutcome {
+    /// 扩容成功那一行；未证实时没有落点可报
+    pub fn ok_line(&self) -> Option<String> {
+        match self {
+            Self::Verified { actual, .. } => Some(format!("fs grown to {actual} bytes")),
+            Self::Unverified { .. } => None,
+        }
+    }
+
+    /// 没卸掉的临时挂载点
+    pub fn leak(&self) -> Option<&MountLeak> {
+        match self {
+            Self::Verified { leak, .. } | Self::Unverified { leak, .. } => leak.as_ref(),
+        }
+    }
+
+    /// 随结果浮出的待办：未证实的原因与补救、以及没卸掉的挂载点。两者都不改写
+    /// "扩容已经执行"这一事实，只作为后置条件呈现
+    pub fn pending(self, part: u32) -> Vec<crate::outcome::Pending> {
+        let mut pending = Vec::new();
+        let leak = match self {
+            Self::Verified { leak, .. } => leak,
+            Self::Unverified { why, hint, leak } => {
+                pending.push(crate::outcome::Pending::new(
+                    part,
+                    crate::outcome::PendingKind::Other("fs grow"),
+                    why,
+                    hint,
+                ));
+                leak
+            }
+        };
+        if let Some(leak) = leak {
+            pending.push(leak.into_pending(part));
+        }
+        pending
+    }
+}
+
+/// 核对结论 → 结果的两种变体。转换只在此一处，调用方不自行解读 [`SizeVerify`]
+pub(crate) fn grow_outcome(verify: SizeVerify, leak: Option<MountLeak>) -> GrowRunOutcome {
+    match verify {
+        SizeVerify::Confirmed(actual) => GrowRunOutcome::Verified { actual, leak },
+        SizeVerify::Unverifiable { why, hint } => GrowRunOutcome::Unverified { why, hint, leak },
+    }
+}
+
 /// superfloppy（无分区表，FS 即整盘）扩容：无表可写，纯 FS grow
-pub fn resize_fs_whole(src: &mut WriteSource, fstype: Option<ContentKind>) -> Result<Option<MountLeak>, FsError> {
+pub fn resize_fs_whole(src: &mut WriteSource, fstype: Option<ContentKind>) -> Result<GrowRunOutcome, FsError> {
     resize_fs_in(src, &DeviceScope::Whole, fstype)
 }
 
@@ -152,7 +208,7 @@ pub fn resize_fs_whole(src: &mut WriteSource, fstype: Option<ContentKind>) -> Re
 /// - btrfs：临时 mount → `btrfs filesystem resize max <mnt>`（max = 占满、须挂载态，man btrfs-filesystem）→ umount
 /// - vfat：`fatresize -s max <dev>`（扩满设备，man fatresize）
 /// - 其余（exfat/swap…）：无已接线的扩容工具，显式拒绝
-pub(crate) fn resize_fs_in(src: &mut WriteSource, scope: &DeviceScope, fstype: Option<ContentKind>) -> Result<Option<MountLeak>, FsError> {
+pub(crate) fn resize_fs_in(src: &mut WriteSource, scope: &DeviceScope, fstype: Option<ContentKind>) -> Result<GrowRunOutcome, FsError> {
     let r = resize_fs_step(src, scope, fstype);
     // 成功才提示：失败路径已有的"盘可能已改变"警示不额外承担回滚范围的说明
     if r.is_ok() {
@@ -175,12 +231,50 @@ where
     f(dev.path())
 }
 
-fn resize_fs_step(src: &mut WriteSource, scope: &DeviceScope, fstype: Option<ContentKind>) -> Result<Option<MountLeak>, FsError> {
+/// 扩容工具成功返回后的核对：回读实际尺寸，判据是"覆盖到区间末端"。工具按自己的分配
+/// 单元向下取整，故实际尺寸 ≤ 区间末端、且与末端之差小于一个单元即算到位；超出末端
+/// 说明工具把文件系统写到了区间之外，差一个单元以上说明工具报成功却没扩
+fn verify_grow(kind: FsKind, dev: &str, limit: u64, tool: &str) -> Result<SizeVerify, FsError> {
+    classify_grow(read_fs_geometry(kind, dev), limit, tool, &size_read_back_hint(kind))
+}
+
+/// 回读结果 → 核对结论。与外部调用分开，判定本身才能单测
+pub(crate) fn classify_grow(
+    read: io::Result<FsGeometry>,
+    limit: u64,
+    tool: &str,
+    hint: &str,
+) -> Result<SizeVerify, FsError> {
+    match read {
+        Ok(g) if covers(g.bytes, g.unit, limit) => Ok(SizeVerify::Confirmed(g.bytes)),
+        Ok(g) => Err(FsError::CommandFailed(format!(
+            "{tool} reported success but the filesystem ends at {} bytes, {}, the {limit}-byte range end \
+             (allocation unit {} bytes)",
+            g.bytes,
+            if g.bytes > limit { "past the end" } else { "short of" },
+            g.unit
+        ))),
+        Err(e) => Ok(SizeVerify::Unverifiable {
+            why: format!(
+                "{tool} reported success but the filesystem size could not be read back: {e} — \
+                 the grow may have been applied; verify the new size before relying on it"
+            ),
+            hint: hint.to_string(),
+        }),
+    }
+}
+
+/// 回读到的落点是否覆盖到区间末端：`bytes ≤ limit < bytes + unit`
+fn covers(bytes: u64, unit: u64, limit: u64) -> bool {
+    bytes <= limit && bytes.checked_add(unit).is_none_or(|end| limit < end)
+}
+
+fn resize_fs_step(src: &mut WriteSource, scope: &DeviceScope, fstype: Option<ContentKind>) -> Result<GrowRunOutcome, FsError> {
     match fstype {
         // fsid 识别只给 0xEF53，区分不出 2/3/4；resize2fs 对三者通用（man resize2fs）
         Some(ContentKind::Filesystem(FsKind::Ext)) => {
             let (off, len) = scope_byte_range(src, scope)?;
-            with_write_scope(src, scope, off, len, |dev| {
+            let verify = with_write_scope(src, scope, off, len, |dev| {
                 let out = run_write("e2fsck", &["-fp", dev])?;
                 check_e2fsck_status_for_resize(&out.status)?;
                 let out = run_write("resize2fs", &[dev])
@@ -188,13 +282,13 @@ fn resize_fs_step(src: &mut WriteSource, scope: &DeviceScope, fstype: Option<Con
                 if !out.status.success() {
                     return Err(FsError::command("resize2fs", &out));
                 }
-                Ok(())
-            })
-            .map(|()| None)
+                verify_grow(FsKind::Ext, dev, len, "resize2fs")
+            })?;
+            Ok(grow_outcome(verify, None))
         }
         Some(ContentKind::Filesystem(FsKind::Ntfs)) => {
             let (off, len) = scope_byte_range(src, scope)?;
-            with_write_scope(src, scope, off, len, |dev| {
+            let verify = with_write_scope(src, scope, off, len, |dev| {
                 // 先 --no-action 演练，成功才真改，失败零副作用
                 let out = run_read("ntfsresize", &["-f", "-f", "--no-action", dev])?;
                 if !out.status.success() {
@@ -207,13 +301,13 @@ fn resize_fs_step(src: &mut WriteSource, scope: &DeviceScope, fstype: Option<Con
                 if !out.status.success() {
                     return Err(FsError::command("ntfsresize", &out));
                 }
-                Ok(())
-            })
-            .map(|()| None)
+                verify_grow(FsKind::Ntfs, dev, len, "ntfsresize")
+            })?;
+            Ok(grow_outcome(verify, None))
         }
         Some(ContentKind::Filesystem(FsKind::F2fs)) => {
             let (off, len) = scope_byte_range(src, scope)?;
-            with_write_scope(src, scope, off, len, |dev| {
+            let verify = with_write_scope(src, scope, off, len, |dev| {
                 // 预检：fsck.f2fs 默认不修复（-f/-p 才修；-a 只在内核报告 bug 时才检查，
                 // 默认禁用，man v1.16.0）。例外：SIT 段类型不一致时 force 置位，无参也把
                 // 全局元数据写回（fsck/fsck.c 的 force 分支，--dry-run 挡不住）。退出码
@@ -231,38 +325,42 @@ fn resize_fs_step(src: &mut WriteSource, scope: &DeviceScope, fstype: Option<Con
                 if !out.status.success() {
                     return Err(FsError::command("resize.f2fs", &out));
                 }
-                Ok(())
-            })
-            .map(|()| None)
+                verify_grow(FsKind::F2fs, dev, len, "resize.f2fs")
+            })?;
+            Ok(grow_outcome(verify, None))
         }
         Some(ContentKind::Filesystem(FsKind::Xfs)) => {
             let (off, len) = scope_byte_range(src, scope)?;
-            with_write_scope(src, scope, off, len, |dev| {
-                with_mount(dev, |mnt| {
+            let (verify, leak) = with_write_scope(src, scope, off, len, |dev| {
+                let leak = with_mount(dev, |mnt| {
                     let out = run_write("xfs_growfs", &[mnt])
                         .map_err(|e| tool_write_maybe_started("xfs_growfs", mnt, e))?;
                     if !out.status.success() {
                         return Err(FsError::command("xfs_growfs", &out));
                     }
                     Ok(())
-                })
-            })
+                })?;
+                Ok((verify_grow(FsKind::Xfs, dev, len, "xfs_growfs")?, leak))
+            })?;
+            Ok(grow_outcome(verify, leak))
         }
         Some(ContentKind::Filesystem(FsKind::Btrfs)) => {
             // 区间只解析一次：多设备闸与设备建立消费同一份 (off, len)，两次读表之间
             // 第三方改表不会让闸和实际映射看见不同的区间
             let (off, len) = scope_byte_range(src, scope)?;
             refuse_btrfs_multi_device_at(src, off, len)?;
-            with_write_scope(src, scope, off, len, |dev| {
-                with_mount(dev, |mnt| {
+            let (verify, leak) = with_write_scope(src, scope, off, len, |dev| {
+                let leak = with_mount(dev, |mnt| {
                     let out = run_write("btrfs", &["filesystem", "resize", "max", mnt])
                         .map_err(|e| tool_write_maybe_started("btrfs resize", mnt, e))?;
                     if !out.status.success() {
                         return Err(FsError::command("btrfs resize", &out));
                     }
                     Ok(())
-                })
-            })
+                })?;
+                Ok((verify_grow(FsKind::Btrfs, dev, len, "btrfs resize")?, leak))
+            })?;
+            Ok(grow_outcome(verify, leak))
         }
         // fatresize -s max = 扩满设备（man fatresize EXAMPLES；-s max 自 1.0.4 起支持）。
         // max 可能报 "Can't have overlapping partitions"，此时降级为显式字节（分区大小-1）；
@@ -278,7 +376,7 @@ fn resize_fs_step(src: &mut WriteSource, scope: &DeviceScope, fstype: Option<Con
             let want = dev_len.checked_sub(1).ok_or_else(|| {
                 FsError::invalid(format!("vfat device length {dev_len} — cannot derive fallback size"))
             })?;
-            with_write_scope(src, scope, off, dev_len, |dev| {
+            let verify = with_write_scope(src, scope, off, dev_len, |dev| {
                 let mut out = run_write("fatresize", &["-s", "max", dev])
                     .map_err(|e| tool_write_maybe_started("fatresize", dev, e))?;
                 if !out.status.success() {
@@ -301,9 +399,9 @@ fn resize_fs_step(src: &mut WriteSource, scope: &DeviceScope, fstype: Option<Con
                 if !out.status.success() {
                     return Err(FsError::command("fatresize", &out));
                 }
-                Ok(())
-            })
-            .map(|()| None)
+                verify_grow(FsKind::Vfat, dev, dev_len, "fatresize")
+            })?;
+            Ok(grow_outcome(verify, None))
         }
         // swap 不是被"resize"的对象：新尺寸通过 mkswap 重建那一整块区域才生效。
         // 本命令只改 FS，不重建，故在此拒绝并指向真正会重建的入口
@@ -375,11 +473,22 @@ where
     // PID 复用会撞上崩溃残留的同名目录：先试着清掉——remove_dir 只对空目录成功，
     // 非空说明残留目录上可能还挂着上次留下的文件系统，叠挂会把两个 FS 混在同一目录。
     // 同名符号链接在这一步必然 remove_dir 失败（ENOTDIR），不会被当作可复用的挂载点
-    if mnt.exists() {
-        std::fs::remove_dir(&mnt).map_err(|e| FsError::from(io::Error::other(format!(
-            "stale mountpoint {} from a previous run is not removable (check for a residual mount there): {e}",
-            mnt.display()
-        ))))?;
+    // 只有 NotFound 才是"没有残留"；lstat 的其他失败（权限、IO）不能折成"不存在"，
+    // 否则后续 create_dir 会在一个读不清的路径上继续
+    match std::fs::symlink_metadata(&mnt) {
+        Ok(_) => {
+            std::fs::remove_dir(&mnt).map_err(|e| FsError::from(io::Error::other(format!(
+                "stale mountpoint {} from a previous run is not removable (check for a residual mount there): {e}",
+                mnt.display()
+            ))))?;
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => {
+            return Err(FsError::from(io::Error::other(format!(
+                "cannot inspect the mountpoint {}: {e}",
+                mnt.display()
+            ))))
+        }
     }
     // 目录权限 0700：xfs/btrfs 的扩容期间目标分区挂在这里数秒到数十秒，0777 & ~umask
     // 的目录会让本机其他用户能遍历并读取其中的文件。`create_dir` 而非 `create_dir_all`：

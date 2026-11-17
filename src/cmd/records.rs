@@ -30,10 +30,8 @@ use crate::support::{bail_fail, json_escape};
 
 pub(crate) const DETAILS_LIST: &str = r#"  List recovery records as JSON. Only decodable records are listed; an entry in
   an unknown format is left out (use `records scan` to see it). Quarantine
-  entries (`.abandoned[.N]`, `.torn[.N]`) are listed and marked, but they are
-  not part of the active record set. This build never writes `.torn[.N]`; the
-  name is recognized so such an entry is treated as quarantine, not as an
-  active record.
+  entries (`.abandoned[.N]`) are listed and marked, but they are not part of
+  the active record set.
 
   There is no index yet: every row carries "registered": false, and records are
   enumerated in memory. Record directories that are not addressed by TARGET are
@@ -48,7 +46,11 @@ pub(crate) const DETAILS_VERIFY: &str = r#"  Locate the record whose id is ID (3
     0  exactly one record, and the identity check did not fail
     3  the id was not found (A4), or it exists in two or more places, or the
        single record fails its identity / backend / structure check, or the
-       record, its directory, or the target could not be read"#;
+       record, its directory, or the target could not be read
+
+  A failed lookup prints a summary line with "hits" (exact matches) and
+  "unverified" (entries whose id could not be decoded) as counts. "records"
+  appears only in row documents, where it is always an array."#;
 
 pub(crate) const DETAILS_SCAN: &str = r#"  Enumerate records under a container root and print them as JSON.
 
@@ -73,8 +75,7 @@ const MAX_TOTAL_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_ELAPSED: Duration = Duration::from_secs(30);
 /// 布局本身生产的最深目录层数。ROOT 是第 0 层；块设备侧的布局
 /// `<state_root>/recovery/<identity-hash>/record` 到第 2 层是记录目录，镜像侧的
-/// `<image_state_root>/images/<键摘要>/record` 与旧落点 `<image>.diskedit/record`
-/// 同样只到第 2 层。这个数跟着布局走，不单独维护一个魔数
+/// `<image_state_root>/images/<键摘要>/record` 同样只到第 2 层
 const LAYOUT_DEPTH: usize = 2;
 /// 目录层级上限：布局层数 + 1。比布局深一层的目录仍读得到（隔离区、残留的中间目录），
 /// 再深即报「结果不完整」，不静默跳过
@@ -158,7 +159,7 @@ impl Row {
             self.backend.as_str(),
             opt_str(state.map(|s| s.as_str().to_string())),
             opt_str(self.quarantine.map(str::to_string)),
-            opt_str(record.map(|r| op_name(r.op).to_string())),
+            opt_str(record.map(|r| r.op.command_name().to_string())),
             record.map(|r| r.restore.len().to_string()).unwrap_or_else(|| "null".into()),
             opt_str(record.map(|r| match r.commit {
                 crate::recovery::CommitState::Prepared => "prepared".to_string(),
@@ -174,22 +175,6 @@ fn opt_str(value: Option<String>) -> String {
     match value {
         Some(v) => format!("\"{}\"", json_escape(&v)),
         None => "null".to_string(),
-    }
-}
-
-fn op_name(op: crate::recovery::OpKind) -> &'static str {
-    use crate::recovery::OpKind;
-    match op {
-        OpKind::New => "new",
-        OpKind::Add => "add",
-        OpKind::Delete => "delete",
-        OpKind::ResizePart => "resize-part",
-        OpKind::Move => "move",
-        OpKind::Copy => "copy",
-        OpKind::Mkfs => "mkfs",
-        OpKind::ResizeFs => "resizefs",
-        OpKind::Set => "set",
-        OpKind::Resize => "resize",
     }
 }
 
@@ -306,14 +291,12 @@ impl Budget {
 /// 其余条目逐个探测并保留证据——解码失败也保留供报告，不因读不出而略过。
 /// 子目录继续往下读，直到 [`MAX_DEPTH`]；更深的目录不是跳过而是整体失败，
 /// 否则一条藏深一层的记录会看起来像不存在。
-/// `only` 用于 `records verify` 按编号（tx_id）筛选，不命中的条目不进 `out`
 #[cfg(target_os = "linux")]
 fn collect_dir(
     dir: &Path,
     backend: RecordBackend,
     current: Option<&crate::recovery::SceneIdentity>,
     budget: &mut Budget,
-    only: Option<&str>,
     depth: usize,
     out: &mut Vec<Row>,
 ) -> Result<(), String> {
@@ -341,7 +324,7 @@ fn collect_dir(
                     depth + 1
                 ));
             }
-            collect_dir(&path, backend, current, budget, only, depth + 1, out)?;
+            collect_dir(&path, backend, current, budget, depth + 1, out)?;
             continue;
         }
         if !file_type.is_file() {
@@ -349,12 +332,6 @@ fn collect_dir(
         }
         budget.admit(&path)?;
         let evidence = probe_at(&path, current);
-        if let Some(wanted) = only {
-            let hit = matches!(&evidence, Evidence::Recognized(r) if crate::support::hex_lower(&r.tx_id.bytes()) == wanted);
-            if !hit {
-                continue;
-            }
-        }
         out.push(Row {
             path,
             backend,
@@ -386,12 +363,16 @@ fn host_record_dirs(root: &Path) -> Result<Vec<PathBuf>, String> {
     let mut dirs = Vec::new();
     for entry in entries {
         let entry = entry.map_err(|e| format!("cannot read {}: {e}", root.display()))?;
-        // audit-allow: W-2 S1-6
-        if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+        let path = entry.path();
+        // 类型读不出是环境故障：折成"不是目录"会让一条记录目录从结果里消失
+        let file_type = entry.file_type().map_err(|e| format!("cannot stat {}: {e}", path.display()))?;
+        if !file_type.is_dir() {
             continue;
         }
-        let path = entry.path();
-        if crate::dev::record_backend(&path) == Some(RecordBackend::HostRepo) {
+        if crate::dev::record_backend(&path)
+            .map_err(|e| format!("cannot inspect {}: {e}", path.display()))?
+            == Some(RecordBackend::HostRepo)
+        {
             dirs.push(path);
         }
     }
@@ -399,18 +380,22 @@ fn host_record_dirs(root: &Path) -> Result<Vec<PathBuf>, String> {
     Ok(dirs)
 }
 
-/// 镜像的记录目录：每用户状态根下的 `<images>/<键摘要>`，以及旧落点 `<name>.diskedit`
+/// 镜像的记录目录：每用户状态根下的 `<images>/<键摘要>`，以及 `<name>.diskedit` 形式的 sidecar 目录
 fn image_record_dirs(root: &Path) -> Result<Vec<PathBuf>, String> {
     let entries = std::fs::read_dir(root).map_err(|e| format!("cannot read {}: {e}", root.display()))?;
     let mut dirs = Vec::new();
     for entry in entries {
         let entry = entry.map_err(|e| format!("cannot read {}: {e}", root.display()))?;
-        // audit-allow: W-3 S1-7
-        if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+        let path = entry.path();
+        // 同 [`host_record_dirs`]：类型读不出按环境故障上抛
+        let file_type = entry.file_type().map_err(|e| format!("cannot stat {}: {e}", path.display()))?;
+        if !file_type.is_dir() {
             continue;
         }
-        let path = entry.path();
-        if crate::dev::record_backend(&path) == Some(RecordBackend::Sidecar) {
+        if crate::dev::record_backend(&path)
+            .map_err(|e| format!("cannot inspect {}: {e}", path.display()))?
+            == Some(RecordBackend::Sidecar)
+        {
             dirs.push(path);
         }
     }
@@ -437,42 +422,39 @@ pub(crate) fn cmd_records_list(a: &RecordsListRequest) -> CmdResult {
                 )));
             };
             let dir = record.parent().unwrap_or(Path::new("."));
-            let backend = crate::dev::record_backend(dir).unwrap_or(RecordBackend::Sidecar);
+            let backend = match crate::dev::record_backend(dir) {
+                Ok(Some(backend)) => backend,
+                Ok(None) => RecordBackend::Sidecar,
+                Err(e) => bail_fail(RunOutcome::refused(format!("cannot inspect {}: {e}", dir.display()))),
+            };
             let current = current_scene(path);
-            let mut dirs = vec![dir.to_path_buf()];
-            // 旧落点：升级前留在镜像旁的 `<img>.diskedit/`。本构建不读它，但列出来并
-            // 说明它不被读取，比当作不存在更接近事实
-            if let Some(legacy) = identity.legacy_image_record_path()
-                && legacy.is_file()
-                && let Some(legacy_dir) = legacy.parent()
-                && legacy_dir != dir
-            {
-                dirs.push(legacy_dir.to_path_buf());
-            }
-            for dir in &dirs {
-                if let Err(reason) = collect_dir(dir, backend, current.as_ref(), &mut budget, None, 1, &mut rows) {
-                    bail_fail(RunOutcome::refused(format!("cannot list records: {reason}")));
-                }
+            if let Err(reason) = collect_dir(dir, backend, current.as_ref(), &mut budget, 1, &mut rows) {
+                bail_fail(RunOutcome::refused(format!("cannot list records: {reason}")));
             }
             Some(
                 "only TARGET's own record directory is listed; sidecars beside other targets are not \
-                 included — pass each target, or use `records scan` with the directory that holds the images. \
-                 An old-layout sidecar at TARGET's previous record location is reported on stderr with \
-                 the reason it is not read",
+                 included — pass each target, or use `records scan` with the directory that holds the images",
             )
         }
         None => {
             let root = crate::dev::host_state_root().join("recovery");
-            // 仓库还没建起来时没有记录可列，不是读失败（缺失按「不存在」处理）
-            let dirs = if root.is_dir() {
-                host_record_dirs(&root).unwrap_or_else(|e| bail_fail(RunOutcome::refused(e)))
-            } else {
-                Vec::new()
+            // 只有 NotFound 才是"仓库还没建起来，没有记录可列"；stat 失败或该路径不是目录
+            // 是另一回事，报成空列表会让读侧以为仓库里确实没有记录
+            let dirs = match std::fs::metadata(&root) {
+                Ok(meta) if meta.is_dir() => {
+                    host_record_dirs(&root).unwrap_or_else(|e| bail_fail(RunOutcome::refused(e)))
+                }
+                Ok(_) => bail_fail(RunOutcome::refused(format!(
+                    "{} is not a directory — the record repository cannot be listed",
+                    root.display()
+                ))),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+                Err(e) => bail_fail(RunOutcome::refused(format!("cannot inspect {}: {e}", root.display()))),
             };
             for dir in dirs {
                 // 没有目标可比：身份检查不可用，按结构解码
                 if let Err(reason) =
-                    collect_dir(&dir, RecordBackend::HostRepo, None, &mut budget, None, 1, &mut rows)
+                    collect_dir(&dir, RecordBackend::HostRepo, None, &mut budget, 1, &mut rows)
                 {
                     bail_fail(RunOutcome::refused(format!("cannot list records: {reason}")));
                 }
@@ -483,8 +465,6 @@ pub(crate) fn cmd_records_list(a: &RecordsListRequest) -> CmdResult {
             )
         }
     };
-    // 先提示旧布局再过滤：未知格式不进列表，但"它是旧布局、本构建不读"必须说出来
-    warn_legacy_layout(&rows);
     rows.retain(|row| row.state().is_some_and(State::listed));
     print_rows(&rows, note);
     CmdResult::Code(EXIT_OK)
@@ -510,13 +490,17 @@ pub(crate) fn cmd_records_verify(a: &RecordsVerifyRequest) -> CmdResult {
         && let Some(record) = identity.record_path()
     {
         let dir = record.parent().unwrap_or(Path::new(".")).to_path_buf();
-        if let Some(backend) = crate::dev::record_backend(&dir) {
-            searched.push(dir.clone());
-            if let Err(reason) =
-                collect_dir(&dir, backend, Some(&current), &mut budget, Some(&a.id), 1, &mut rows)
-            {
-                bail_fail(RunOutcome::refused(format!("cannot verify the record: {reason}")));
+        match crate::dev::record_backend(&dir) {
+            Ok(Some(backend)) => {
+                searched.push(dir.clone());
+                if let Err(reason) =
+                    collect_dir(&dir, backend, Some(&current), &mut budget, 1, &mut rows)
+                {
+                    bail_fail(RunOutcome::refused(format!("cannot verify the record: {reason}")));
+                }
             }
+            Ok(None) => {}
+            Err(e) => bail_fail(RunOutcome::refused(format!("cannot inspect {}: {e}", dir.display()))),
         }
     }
     // 主机仓库里的其余记录目录：同一编号出现在两处是"命中两处及以上"的唯一来源
@@ -551,16 +535,50 @@ pub(crate) fn cmd_records_verify(a: &RecordsVerifyRequest) -> CmdResult {
             RecordBackend::HostRepo,
             None,
             &mut budget,
-            Some(&a.id),
             1,
             &mut rows,
         ) {
             bail_fail(RunOutcome::refused(format!("cannot verify the record: {reason}")));
         }
     }
-    if rows.is_empty() {
+    // 按编号筛选在枚举之后做：编号只能从成功的解码里得到，而"在场但核对失败"的条目
+    // 恰恰是解不出编号的那些——先过滤会把它们当成"没有这个编号"
+    let (hits, rest): (Vec<Row>, Vec<Row>) = rows.into_iter().partition(|row| {
+        matches!(&row.evidence, Evidence::Recognized(r)
+            if crate::support::hex_lower(&r.tx_id.bytes()) == a.id)
+    });
+    // 编号解不出的条目才可能是"同一个编号的第二份"；编号已解出且不同的条目属于别的编号，
+    // 既不是命中也不是"核对失败"
+    let unverified: Vec<Row> = rest
+        .into_iter()
+        .filter(|row| !matches!(&row.evidence, Evidence::Recognized(_)))
+        .collect();
+    if hits.is_empty() {
+        if !unverified.is_empty() {
+            print_rows(&unverified, None);
+            println!(
+                "{{\"id\":\"{}\",\"verdict\":\"unverified\",\"hits\":0,\"unverified\":{},\"complete\":{}{}}}",
+                json_escape(&a.id),
+                unverified.len(),
+                host_failure.is_none(),
+                host_failure
+                    .as_ref()
+                    .map(|reason| format!(",\"reason\":\"{}\"", json_escape(reason)))
+                    .unwrap_or_default()
+            );
+            eprintln!(
+                "{} record(s) are present but could not be verified (the structure or identity check failed) — \
+                 id {} may be among them; this is not \"not found\"",
+                unverified.len(),
+                a.id
+            );
+            if let Some(reason) = &host_failure {
+                eprintln!("the verification is also incomplete: {reason}");
+            }
+            return CmdResult::Code(EXIT_REFUSED);
+        }
         println!(
-            "{{\"id\":\"{}\",\"hits\":0,\"records\":[],\"complete\":{}{}}}",
+            "{{\"id\":\"{}\",\"verdict\":\"not_found\",\"hits\":0,\"unverified\":0,\"complete\":{}{}}}",
             json_escape(&a.id),
             host_failure.is_none(),
             host_failure
@@ -588,21 +606,29 @@ pub(crate) fn cmd_records_verify(a: &RecordsVerifyRequest) -> CmdResult {
         );
         return CmdResult::Code(EXIT_REFUSED);
     }
-    if rows.len() > 1 {
-        print_rows(&rows, None);
+    if hits.len() > 1 {
+        print_rows(&hits, None);
         eprintln!(
             "the same id exists in {} places — remove the copies by hand; a record must have one home",
-            rows.len()
+            hits.len()
         );
         return CmdResult::Code(EXIT_REFUSED);
     }
-    let row = &rows[0];
-    warn_legacy_layout(std::slice::from_ref(row));
+    let row = &hits[0];
     print_rows(std::slice::from_ref(row), None);
     if let Some(reason) = &host_failure {
         eprintln!(
             "the verification is incomplete: {reason} — the host recovery repository was not searched, so this \
              hit may not be the only copy"
+        );
+        return CmdResult::Code(EXIT_REFUSED);
+    }
+    if !unverified.is_empty() {
+        // 解不出编号的条目可能是同一个编号的第二份：命中一条不足以支撑"只有一条"
+        eprintln!(
+            "{} other record(s) could not be verified — one of them may be a second copy of id {}",
+            unverified.len(),
+            a.id
         );
         return CmdResult::Code(EXIT_REFUSED);
     }
@@ -628,7 +654,11 @@ pub(crate) fn cmd_records_scan(a: &RecordsScanRequest) -> CmdResult {
     let state_root = crate::dev::host_state_root();
     let host_recovery = state_root.join("recovery");
     // 记录目录本身不是容器：把单条记录目录当根没有语义
-    if crate::dev::record_backend(root).is_some() {
+    let is_record_dir = match crate::dev::record_backend(root) {
+        Ok(found) => found.is_some(),
+        Err(e) => bail_fail(RunOutcome::refused(format!("cannot inspect {}: {e}", root.display()))),
+    };
+    if is_record_dir {
         bail_fail(RunOutcome::refused(format!(
             "{} is a record directory, not a container root — pass {} or the directory that holds \
              the images",
@@ -640,10 +670,19 @@ pub(crate) fn cmd_records_scan(a: &RecordsScanRequest) -> CmdResult {
         let dirs = host_record_dirs(root).unwrap_or_else(|e| bail_fail(RunOutcome::refused(e)));
         (dirs, RecordBackend::HostRepo)
     } else if let Some(images) = image_container(root, crate::dev::image_state_root().as_deref()) {
-        let dirs = if images.is_dir() {
-            image_record_dirs(&images).unwrap_or_else(|e| bail_fail(RunOutcome::refused(e)))
-        } else {
-            Vec::new()
+        // 容器缺失 = 还没有镜像记录；读不出或不是目录时扫不出结果，不能宣告 complete
+        let dirs = match std::fs::metadata(&images) {
+            Ok(meta) if meta.is_dir() => {
+                image_record_dirs(&images).unwrap_or_else(|e| bail_fail(RunOutcome::refused(e)))
+            }
+            Ok(_) => bail_fail(RunOutcome::refused(format!(
+                "{} is not a directory — the image record container cannot be scanned",
+                images.display()
+            ))),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+            Err(e) => {
+                bail_fail(RunOutcome::refused(format!("cannot inspect {}: {e}", images.display())))
+            }
         };
         (dirs, RecordBackend::Sidecar)
     } else if root.starts_with(&state_root) {
@@ -653,18 +692,29 @@ pub(crate) fn cmd_records_scan(a: &RecordsScanRequest) -> CmdResult {
             root.display(),
             host_recovery.display()
         )));
-    } else if root.is_dir() {
-        let dirs = image_record_dirs(root).unwrap_or_else(|e| bail_fail(RunOutcome::refused(e)));
-        (dirs, RecordBackend::Sidecar)
     } else {
-        bail_fail(RunOutcome::refused(format!("{} is not a directory", root.display())));
+        let dirs = match std::fs::metadata(root) {
+            Ok(meta) if meta.is_dir() => {
+                image_record_dirs(root).unwrap_or_else(|e| bail_fail(RunOutcome::refused(e)))
+            }
+            Ok(_) => bail_fail(RunOutcome::refused(format!(
+                "{} is not a directory",
+                root.display()
+            ))),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => bail_fail(RunOutcome::refused(format!(
+                "{} does not exist",
+                root.display()
+            ))),
+            Err(e) => bail_fail(RunOutcome::refused(format!("cannot inspect {}: {e}", root.display()))),
+        };
+        (dirs, RecordBackend::Sidecar)
     };
 
     let mut budget = Budget::new();
     let mut rows = Vec::new();
     for dir in dirs {
         // 扫描没有单个目标可比：身份检查不可用，按结构解码
-        if let Err(reason) = collect_dir(&dir, backend, None, &mut budget, None, 1, &mut rows) {
+        if let Err(reason) = collect_dir(&dir, backend, None, &mut budget, 1, &mut rows) {
             println!(
                 "{{\"root\":\"{}\",\"complete\":false,\"index\":\"unavailable\",\"records\":[],\
                  \"reason\":\"{}\"}}",
@@ -675,7 +725,6 @@ pub(crate) fn cmd_records_scan(a: &RecordsScanRequest) -> CmdResult {
             return CmdResult::Code(EXIT_REFUSED);
         }
     }
-    warn_legacy_layout(&rows);
     println!(
         "{{\"root\":\"{}\",\"complete\":true,\"index\":\"unavailable\",\"records\":[{}],\
          \"note\":\"records are not indexed; every entry is enumerated in memory and marked unregistered\"}}",
@@ -695,22 +744,6 @@ fn rows_json(rows: &[Row]) -> String {
         out.push_str(&row.json());
     }
     out
-}
-
-/// 旧布局记录的统一说明：只对人说（stderr），JSON 形态不变
-#[cfg(target_os = "linux")]
-fn warn_legacy_layout(rows: &[Row]) {
-    for row in rows {
-        if let Evidence::UnrecognizedFormat { magic, .. } = &row.evidence
-            && let Some(name) = crate::recovery::legacy_layout(*magic)
-        {
-            eprintln!(
-                "{}: the record was {}",
-                row.path.display(),
-                crate::recovery::legacy_layout_refusal(name)
-            );
-        }
-    }
 }
 
 #[cfg(target_os = "linux")]
@@ -737,7 +770,7 @@ mod tests {
 
         let mut budget = Budget::new();
         let mut rows = Vec::new();
-        collect_dir(&record_dir, RecordBackend::Sidecar, None, &mut budget, None, 1, &mut rows)
+        collect_dir(&record_dir, RecordBackend::Sidecar, None, &mut budget, 1, &mut rows)
             .expect("一层子目录在深度上限内");
 
         assert_eq!(rows.len(), 1);
@@ -758,7 +791,7 @@ mod tests {
 
         let mut budget = Budget::new();
         let mut rows = Vec::new();
-        let err = collect_dir(&record_dir, RecordBackend::Sidecar, None, &mut budget, None, 1, &mut rows)
+        let err = collect_dir(&record_dir, RecordBackend::Sidecar, None, &mut budget, 1, &mut rows)
             .expect_err("第 4 层目录必须报不完整");
 
         assert!(err.contains("bounded to depth 3"), "got {err}");

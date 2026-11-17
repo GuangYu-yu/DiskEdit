@@ -85,7 +85,7 @@ pub(crate) fn resize_part_resume_skips_done_chunks() {
     let mut journal = crate::recovery::RecordJournal::create_image(
         &record_path,
         scene,
-        crate::recovery::OpKind::ResizePart,
+        crate::recovery::OpKind::ResizeEnd,
         ss,
         crate::dev::DiskGuidState::Unavailable,
         None,
@@ -258,7 +258,7 @@ fn committed_record_fixture(part: u32, op: crate::recovery::OpKind, old: (u64, u
 ///
 /// 已提交的现场盘上只剩新区间，记录里的搬移前几何是判断该不该扩的唯一依据。
 /// 若拿盘上现状当"原尺寸"，`old_bytes == new_bytes`，FS 步被判成 Leave——分区扩了、
-/// 文件系统没扩，命令却报成功。`resize` 与 `resize-part` 各一条
+/// 文件系统没扩，命令却报成功。`resize` 的两个形态各一条
 #[cfg(target_os = "linux")]
 #[test]
 pub(crate) fn record_resume_after_commit_keeps_the_filesystem_step() {
@@ -266,7 +266,7 @@ pub(crate) fn record_resume_after_commit_keeps_the_filesystem_step() {
     let new = (2048u64, 8191u64);
     for (op, name) in [
         (crate::recovery::OpKind::Resize, "resize"),
-        (crate::recovery::OpKind::ResizePart, "resize-part"),
+        (crate::recovery::OpKind::ResizeEnd, "resize/start-change"),
     ] {
         let src = committed_record_fixture(1, op, old, new);
         let (g, repair) = gpt_policy::resolve_geometry(&src).unwrap().unwrap();
@@ -378,7 +378,7 @@ pub(crate) fn shrink_state_readback_reports_unknown_instead_of_guessing() {
     assert_eq!(crate::fsops::shrink_already_at(&src, 1, None, 1024 * 1024), None);
 }
 
-/// 记录里带着 LVM 收尾事实，而本次入口不跑链（`resize-part` / `move` 传 defer = false）：
+/// 记录里带着 LVM 收尾事实，而本次入口不跑链（`resize` 起点变更形态 / `move` 传 defer = false）：
 /// 盘上表已提交到新几何，重跑判定已提交，LVM 那一步仍没人做。未做的链以 Pending 浮出、
 /// 退出码 5；记录留给调用方——基线只有它能给
 #[cfg(target_os = "linux")]
@@ -455,7 +455,7 @@ pub(crate) fn pending_fs_step_is_reported() {
 }
 
 /// 记录已落 `Committed`：作业步骤在提交那一刻已经做完，原命令重跑不得再执行一遍
-/// （`mkfs` 会重新格式化）。入口必须以拒绝收场、保留记录，并把出路指向 undo/abandon
+/// （`mkfs` 会重新格式化）。入口必须以拒绝收场、保留记录，并把出路指向 `recover` / `recover --release`
 #[cfg(target_os = "linux")]
 #[test]
 pub(crate) fn a_committed_record_is_not_resumed_by_the_original_command() {
@@ -486,7 +486,7 @@ pub(crate) fn a_committed_record_is_not_resumed_by_the_original_command() {
     // 本次运行没有打开记录、也没有写目标：归责投影后仍是 3（记录只是被读到）
     assert_eq!(code, 3, "a committed record is refused at admission");
     assert!(why.contains("marked committed"), "the refusal must name the committed record: {why}");
-    assert!(record_path.exists(), "the refusal must leave the record for undo/abandon");
+    assert!(record_path.exists(), "the refusal must leave the record for recovery or release");
 }
 
 /// `mkfs` 的续跑入口与 resize 共用同一道闸：已提交的 mkfs 记录被重跑，会在这块
@@ -511,10 +511,9 @@ pub(crate) fn a_committed_mkfs_record_is_not_reformatted() {
         sector_size: None,
         fstype: "ext4".to_string(),
         label: None,
-        yes: true,
     };
     let (code, why) = crate::movepart::tests::support::refusal_of(|| crate::cmd::fs::cmd_mkfs(&req));
     assert_eq!(code, 3, "a committed mkfs record is refused at admission");
     assert!(why.contains("marked committed"), "the refusal must name the committed record: {why}");
-    assert!(record_path.exists(), "the refusal must leave the record for undo/abandon");
+    assert!(record_path.exists(), "the refusal must leave the record for recovery or release");
 }

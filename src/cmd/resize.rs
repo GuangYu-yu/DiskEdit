@@ -150,44 +150,63 @@ pub(crate) const DETAILS: &str = r#"  Resize partition and its filesystem, parti
     size that does not land on a sector boundary is truncated, and the
     truncation is reported
 
+  IN PLACE (--end LBA | --grow-to-end):
+    repartition the end without moving the partition; the start stays at the
+    current starting LBA (relocating it is `diskedit move`). --grow-to-end
+    pins end at last_usable_lba (fill semantics). An end below the current
+    end shrinks the partition together with its filesystem (offline); a
+    shrink that gets interrupted cannot be rolled back with `recover`.
+
   Constraints:
-    shrink    refused: this command only grows. Shrink with `resize-part`
-              --end: it shrinks the filesystem first (offline), then the
-              partition, and an interrupted shrink resumes from its record
+    shrink    with SIZE refused: this form only grows. Shrink with
+              `resize <TARGET>:N --end LBA`: it shrinks the filesystem first
+              (offline), then the partition, and an interrupted shrink
+              resumes from its record
     --no-fs   refused on an LVM PV (the PV chain has no filesystem step of
               its own). A swap partition relocated as a blocker is rebuilt
               regardless: that step belongs to the relocation, not to the
               filesystem
     MBR       uses the same recovery record as GPT: an interrupted grow is
-              resumed by re-running the same command; `undo` rolls the
+              resumed by re-running the same command; `recover` rolls the
               recorded table write back instead
     record    a relocation record written before requests were bound to
               their digest carries none: it cannot be tied to this request,
               so re-running `resize --allow-move` is refused. Inspect it with
-              `inspect`, then release it with `undo`
+              `inspect`, then release it with `recover --release`
     online    writes go through the tools (sfdisk / the FS's own resize),
-              not this tool's record: nothing to resume, and `undo`
+              not this tool's record: nothing to resume, and `recover`
               cannot roll it back
 
-  Related commands: this is the single entry point — it plans and applies in
-  one run. To inspect the plan first, use `plan`; `resize-part` and `move` are
-  the low-level single-partition commands, and they resume an interrupted job
-  of their own. A resize interrupted after its partition step (the LVM finish
-  chain still pending) is resumed by re-running `resize`."#;
+  Read-back:
+    after a successful grow the filesystem size is read back and must reach
+    the end of the new range within one allocation unit for ext2/3/4
+    (dumpe2fs), ntfs (ntfsresize) and btrfs (btrfs inspect-internal
+    dump-super). f2fs, xfs and vfat have no read-back in this build: the
+    tool's success is recorded as an unverified result, the run prints a
+    pending item naming a size check, and the exit status is 5. The
+    partition step is committed either way; compare `df -B1` on the
+    mountpoint with the range end to settle it.
 
-/// `resize` 只扩。缩容由 `resize-part` 承担——先离线缩文件系统再收表，进度落在
+  Related commands: this is the single entry point for a partition — it plans
+  and applies in one run. `info --grow` previews a growth without writing;
+  `move` relocates a partition and resumes an interrupted job of its own. A
+  resize interrupted after its partition step (the LVM finish chain still
+  pending) is resumed by re-running `resize`."#;
+
+/// `resize` 的 SIZE 形态只扩。缩容由 `--end` 承担——先离线缩文件系统再收表，进度落在
 /// 同一份记录里，中断后同请求重跑续做
 fn refuse_shrink() -> RunOutcome {
     RunOutcome::refused(
-        "`resize` only grows — shrink with `resize-part` (--end): it shrinks the filesystem \
-         first (offline), then the partition, and an interrupted shrink resumes from its record"
+        "`resize` with SIZE only grows — shrink with `resize <TARGET>:N --end LBA`: it shrinks \
+         the filesystem first (offline), then the partition, and an interrupted shrink resumes \
+         from its record"
             .to_string(),
     )
 }
 
 /// resize 的一键入口。SIZE：`10G`=绝对值、`+2G`=增量、`grow`=吃满右侧可用区
-/// （挡路分区须 --allow-move，搬移计划须 --yes 确认）。只扩不缩：缩容走
-/// `resize-part`（离线 `resizefs` 不接受尺寸）。LVM PV 扩容自动 pvresize，
+/// （挡路分区须 --allow-move，搬移计划须 --yes 确认）。SIZE 形态只扩不缩：缩容走
+/// `--end`（离线 `resizefs` 不接受尺寸）。LVM PV 扩容自动 pvresize，
 /// --grow-lv 再把新增传给目标 LV 并扩 FS
 pub(crate) fn cmd_resize(a: &ResizeRequest) -> crate::outcome::RunOutcome {
     // SIZE 已由命令行层解析成形状 + 数值，锁前/锁下两次锚定共用同一份（请求里的 a.size）
@@ -236,8 +255,8 @@ pub(crate) fn cmd_resize(a: &ResizeRequest) -> crate::outcome::RunOutcome {
 
     // PV 链要扩哪个 LV 是只读判定：--lv 写错、PV 上没有 LV、LV 不唯一都必须在此之前
     // 定下来，写表之后再发现就只剩"分区已扩、PV 链尚未做"的现场。在线与离线两条路径
-    // 共用这一次预检（收尾链在提交之后用锁下的分区节点再查一次）
-    // 选定结果随行到执行半程，由它导出记录里的 LVM 收尾事实
+    // 共用这一次预检；各自取得写权后按锁下的分区节点再确认一次（见下方离线段的第二次
+    // 预检与在线段自己的锁下判定）。选定结果随行到执行半程，由它导出记录里的 LVM 收尾事实
     #[cfg(target_os = "linux")]
     let mut lv_sel: Option<movepart::LvmSelection> = None;
     #[cfg(not(target_os = "linux"))]
@@ -290,12 +309,12 @@ pub(crate) fn cmd_resize(a: &ResizeRequest) -> crate::outcome::RunOutcome {
     let shrinking = target.is_some_and(|t| t < cur_bytes);
     // 锁下的方向可能因窗口内的外部改写而与锁前相反（缩容一律不走这里）
     if shrinking {
-        // 缩容撞上未收尾的搬移作业：按"目标被占用"拒绝并指向 abandon。只说"只扩"
-        // 会把用户推向 resize-part，在那里再撞一次占用拒绝，两次都不提那份作业
+        // 缩容撞上未收尾的搬移作业：按"目标被占用"拒绝并指向 recover --release。只说"只扩"
+        // 会把用户推向 resize --end，在那里再撞一次占用拒绝，两次都不提那份作业
         if reloc {
             bail_fail(RunOutcome::refused(
-                "an unfinished operation still owns this target — release it with `diskedit abandon` \
-                 (or re-run the original grow request to finish it first)"
+                "an unfinished operation still owns this target — release it with `diskedit recover \
+                 --release` (or re-run the original grow request to finish it first)"
                     .to_string(),
             ));
         }
@@ -426,7 +445,7 @@ pub(crate) fn cmd_resize(a: &ResizeRequest) -> crate::outcome::RunOutcome {
         };
         // 续跑的收尾仍须 --yes：盘上状态已与上次请求时不同，写盘前再确认一次；
         // --yes 一并覆盖"未确认的续跑"与"新的搬移"两种进入方式
-        crate::cmd::plan::print_plan(&plan, start).unwrap_or_else(|e| bail_fail(RunOutcome::no_mutation(format!("plan failed: {e}"))));
+        crate::cmd::info_grow::print_plan(&plan, start).unwrap_or_else(|e| bail_fail(RunOutcome::no_mutation(format!("plan failed: {e}"))));
         let (chunk, mut logger) = chunk_logger(a, &src, g.disk_guid());
         // 槽位在进入搬移前绑定本请求：记录属于另一份 resize 时在这里拒绝，不让搬移
         // 按别人的游标继续。终点取本作业落定的新末端（`grow_end_for`，与执行半程同一
@@ -494,7 +513,7 @@ pub(crate) fn cmd_resize(a: &ResizeRequest) -> crate::outcome::RunOutcome {
         if reloc || matches!(intent, movepart::ShiftIntent::Grow(s) if s > free_right_gpt(&g, part)) {
             // --allow-move 只对**新**搬移授权，续跑放行——两态判据与 grow 分支
             // 同一份理由，真空间不足才拒绝；确认流也同一份：
-            // plan 打印 → --yes 确认
+            // 计划打印 → --yes 确认
             if !a.allow_move && !reloc {
                 bail_fail(RunOutcome::refused("not enough contiguous free space to the right — pass --allow-move to relocate the blocking partitions (plan will be printed; --yes confirms)".to_string()));
             }
@@ -503,7 +522,7 @@ pub(crate) fn cmd_resize(a: &ResizeRequest) -> crate::outcome::RunOutcome {
                 Ok(p) => p,
                 Err(f) => bail_fail(f),
             };
-            crate::cmd::plan::print_plan(&plan, start).unwrap_or_else(|e| bail_fail(RunOutcome::no_mutation(format!("plan failed: {e}"))));
+            crate::cmd::info_grow::print_plan(&plan, start).unwrap_or_else(|e| bail_fail(RunOutcome::no_mutation(format!("plan failed: {e}"))));
             let (chunk, mut logger) = chunk_logger(a, &src, g.disk_guid());
             // 与 `grow` 分支同一处绑定：请求终点是 SIZE 换算出的新末端，改名/改大小
             // 重跑都会在进入搬移前被拒；`--chunk` 不在摘要里，由搬移校验单独核对

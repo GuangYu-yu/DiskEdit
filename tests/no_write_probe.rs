@@ -2,7 +2,7 @@
 //! 只读命令零写。
 //!
 //! 只读命令的 `requires` 不含写原语；不建临时文件、不 rename、不 fsync、
-//! 不删除。`plan` 不打开证据路径、不触发写目录探测。
+//! 不删除。`info` 不打开证据路径、不触发写目录探测。
 //!
 //! 判定方式是黑盒的：对目标所在目录与镜像键目录分别做递归快照（路径、类型、长度、
 //! 内容 sha256），命令前后逐项相同才算通过。这样临时文件、改名、删除、删除后重建都能被抓到。
@@ -109,27 +109,17 @@ fn sha256_hex(bytes: &[u8]) -> String {
 }
 
 #[test]
-fn info_and_plan_never_create_the_record_directory() {
+fn info_never_creates_the_record_directory() {
     let dir = temp_dir("bare");
     let img = image_with(&dir, "disk.img", 8 * 1024 * 1024);
     let p = img.to_str().unwrap();
     let before = snapshot(&dir);
 
-    for args in [vec!["info", p], vec!["plan", p]] {
-        let (code, _, err) = run(&args);
-        assert_eq!(code, 0, "`{}` must be read-only success: {err}", args.join(" "));
-        assert!(
-            !record_dir(&img).exists(),
-            "`{}` probed the write directory",
-            args.join(" ")
-        );
-        assert_eq!(
-            snapshot(&dir),
-            before,
-            "`{}` changed the target's directory",
-            args.join(" ")
-        );
-    }
+    let args = ["info", p];
+    let (code, _, err) = run(&args);
+    assert_eq!(code, 0, "`info` must be read-only success: {err}");
+    assert!(!record_dir(&img).exists(), "`info` probed the write directory");
+    assert_eq!(snapshot(&dir), before, "`info` changed the target's directory");
 }
 
 #[test]
@@ -148,8 +138,7 @@ fn read_only_commands_leave_an_existing_record_area_untouched() {
     let grown = format!("{p}:1");
     for args in [
         vec!["info", p],
-        vec!["plan", p],
-        vec!["plan", &grown, "--grow"],
+        vec!["info", &grown, "--grow"],
         vec!["inspect", p],
         vec!["records", "list", p],
         vec!["records", "scan", scan_root],

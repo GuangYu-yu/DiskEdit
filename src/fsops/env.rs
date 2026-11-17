@@ -220,13 +220,17 @@ pub(crate) fn best_effort_reap_child(child: &mut std::process::Child) {
     let _ = child.wait();
 }
 
-/// e2fsck 退出码判定——resize 语境（man e2fsck EXIT CODE：各项按位或求和）。bit1（REBOOT）
-/// 置位条件（e2fsprogs e2fsck/unix.c）：FS 被修改且 ctx->mount_flags & EXT2_MF_ISROOT——改了
-/// root fs 需重启才能继续 resize，2/3 一律中断（未挂载镜像上通常不出现）。
-/// 0/1 通过，4 = 有未修正错误即拒绝。
-/// 2/3/4 归 `CommandFailed`：三者都说明工具**运行过**——2/3 自述改过文件系统、
-/// 4 在 -p 下仍会自动修复过——"不能证明已写"不等于"已证明未写"，不足以支撑
-/// `Io → NoMutation` 的"确定未写盘"承诺。`CommandFailed` 的语义正是不对是否落盘作断言
+/// e2fsck 退出码判定——resize 语境（man e2fsck EXIT CODE：各项按位或求和）。
+/// 位表：1 = 文件系统错误已修正，2 = 系统需重启，4 = 仍有未修正错误，8 = 运行错误，
+/// 16 = 用法或语法错误，32 = 用户取消，128 = 共享库错误；组合码是这些位的和
+/// （5 = 1|4，6 = 2|4，12 = 4|8）。bit1（REBOOT）置位条件（e2fsprogs
+/// e2fsck/unix.c）：FS 被修改且 ctx->mount_flags & EXT2_MF_ISROOT——改了 root fs
+/// 需重启才能继续 resize，2/3 一律中断（未挂载镜像上通常不出现）。
+/// 0/1 通过，4 = 有未修正错误即拒绝；其余组合码逐位报出，不并成一句"基础设施故障"。
+/// 2/3/4 与其余非零码归 `CommandFailed`：它们都说明工具**运行过**——2/3 自述改过
+/// 文件系统、4 在 -p 下仍会自动修复过——"不能证明已写"不等于"已证明未写"，不足以
+/// 支撑 `Io → NoMutation` 的"确定未写盘"承诺。`CommandFailed` 的语义正是不对
+/// 是否落盘作断言
 pub(crate) fn check_e2fsck_for_resize(code: i32) -> Result<(), FsError> {
     match code {
         0 | 1 => Ok(()),
@@ -236,7 +240,34 @@ pub(crate) fn check_e2fsck_for_resize(code: i32) -> Result<(), FsError> {
         4 => Err(FsError::CommandFailed(
             "e2fsck: uncorrected errors (exit 4), refuse resize".into(),
         )),
-        c => Err(FsError::CommandFailed(format!("e2fsck infrastructure failure (exit {c})"))),
+        c => Err(FsError::CommandFailed(format!(
+            "e2fsck exit {c} ({}) — refuse resize",
+            describe_e2fsck_bits(c)
+        ))),
+    }
+}
+
+/// 把组合退出码展开成它置位的每一项（位表见 [`check_e2fsck_for_resize`]）；
+/// 表外的码没有可报的位，如实说明
+fn describe_e2fsck_bits(code: i32) -> String {
+    const BITS: [(i32, &str); 7] = [
+        (1, "filesystem errors corrected"),
+        (2, "system should be rebooted"),
+        (4, "uncorrected errors remain"),
+        (8, "operational error"),
+        (16, "usage or syntax error"),
+        (32, "cancelled by user"),
+        (128, "shared-library error"),
+    ];
+    let named: Vec<&str> = BITS
+        .iter()
+        .filter(|(bit, _)| code & bit != 0)
+        .map(|(_, name)| *name)
+        .collect();
+    if named.is_empty() {
+        "no bit of the e2fsck exit-code table is set".to_string()
+    } else {
+        named.join(", ")
     }
 }
 

@@ -174,6 +174,7 @@ enum Effect {
     Grow,
     DiscardReplay,
     ReplayTableOnly,
+    Release,
     AlignValue,
     ChunkSize,
     SectorSize,
@@ -195,142 +196,160 @@ pub(crate) struct FlagSpec {
     pub(crate) domain: ValueDomain,
     pub(crate) desc: &'static str,
     effect: Effect,
+    /// 必须同时出现的其它旗标。解析期按用法错误拒绝缺项，命令层不再重判
+    requires: &'static [&'static str],
+}
+
+const fn flag(
+    name: &'static str,
+    domain: ValueDomain,
+    desc: &'static str,
+    effect: Effect,
+) -> FlagSpec {
+    FlagSpec { name, domain, desc, effect, requires: &[] }
 }
 
 /// 旗标注册表：解析器判重、缺值文案、命令白名单与帮助/参考文档都读这一份。
 pub(crate) const FLAGS: &[FlagSpec] = &[
-    FlagSpec {
-        name: "--align",
-        domain: ValueDomain::Align,
-        desc: "placement alignment: mib|none. add's automatic placement defaults to 1 MiB; an explicit --start and move/copy/resize-part align only when --align is given",
-        effect: Effect::AlignValue,
-    },
-    FlagSpec {
-        name: "--allow-move",
-        domain: ValueDomain::Bool,
-        desc: "permit relocating the partitions in the way: the plan is printed, then the write proceeds",
-        effect: Effect::AllowMove,
-    },
-    FlagSpec {
-        name: "--chunk",
-        domain: ValueDomain::Chunk,
-        desc: "recovery granularity in MiB, 1..=64; a resumed job keeps the record's value, a new job uses 4",
-        effect: Effect::ChunkSize,
-    },
+    flag(
+        "--align",
+        ValueDomain::Align,
+        "placement alignment: mib|none. add's automatic placement defaults to 1 MiB; an explicit --start (add/move/copy) and the end computed by resize align only when --align is given",
+        Effect::AlignValue,
+    ),
+    flag(
+        "--allow-move",
+        ValueDomain::Bool,
+        "permit relocating the partitions in the way: the plan is printed, then the write proceeds",
+        Effect::AllowMove,
+    ),
+    flag(
+        "--chunk",
+        ValueDomain::Chunk,
+        "recovery granularity in MiB, 1..=64; a resumed job keeps the record's value, a new job uses 4",
+        Effect::ChunkSize,
+    ),
     FlagSpec {
         name: "--discard-replay",
         domain: ValueDomain::Bool,
-        desc: "confirm giving up the ranges `undo` could still replay",
+        desc: "confirm giving up the ranges `recover` could still replay",
         effect: Effect::DiscardReplay,
+        requires: &["--release"],
     },
-    FlagSpec {
-        name: "--end",
-        domain: ValueDomain::Lba,
-        desc: "new end LBA for resize-part (grow or shrink in place)",
-        effect: Effect::End,
-    },
-    FlagSpec {
-        name: "--grow-lv",
-        domain: ValueDomain::Bool,
-        desc: "also grow the LV: the one named by --lv, else the only LV",
-        effect: Effect::GrowLv,
-    },
-    FlagSpec {
-        name: "--grow-to-end",
-        domain: ValueDomain::Bool,
-        desc: "pin the end at the last usable LBA (fill semantics)",
-        effect: Effect::GrowToEnd,
-    },
-    FlagSpec {
-        name: "--grow",
-        domain: ValueDomain::Bool,
-        desc: "append the relocation preview for partition :N",
-        effect: Effect::Grow,
-    },
-    FlagSpec {
-        name: "--keep-partuuid",
-        domain: ValueDomain::Bool,
-        desc: "reuse the source PARTUUID instead of generating a new one",
-        effect: Effect::KeepPartuuid,
-    },
-    FlagSpec {
-        name: "--label",
-        domain: ValueDomain::Text("S"),
-        desc: "filesystem label (omitted = an empty label, not a default)",
-        effect: Effect::Label,
-    },
-    FlagSpec {
-        name: "--lv",
-        domain: ValueDomain::Text("NAME"),
-        desc: "which LV to grow (implies --grow-lv)",
-        effect: Effect::Lv,
-    },
-    FlagSpec {
-        name: "--name",
-        domain: ValueDomain::Text("S"),
-        desc: "name for the entry this command creates",
-        effect: Effect::Name,
-    },
-    FlagSpec {
-        name: "--no-fs",
-        domain: ValueDomain::Bool,
-        desc: "skip the filesystem step of the grown partition",
-        effect: Effect::NoFs,
-    },
-    FlagSpec {
-        name: "--overwrite-data",
-        domain: ValueDomain::Bool,
-        desc: "accept overwriting bytes an existing partition holds",
-        effect: Effect::OverwriteData,
-    },
-    FlagSpec {
-        name: "--part-number",
-        domain: ValueDomain::PartNumber,
-        desc: "1-based entry slot; it must be empty",
-        effect: Effect::PartNumber,
-    },
-    FlagSpec {
-        name: "--random",
-        domain: ValueDomain::Bool,
-        desc: "ask the target to generate a new value",
-        effect: Effect::Random,
-    },
-    FlagSpec {
-        name: "--replay-table-only",
-        domain: ValueDomain::Bool,
-        desc: "allow `undo` to replay only the recorded table regions of a move whose data has already moved; the data those ranges name is not restored",
-        effect: Effect::ReplayTableOnly,
-    },
-    FlagSpec {
-        name: "--sector-size",
-        domain: ValueDomain::SectorSize,
-        desc: "logical sector size override for raw images (power of two, max 65536 bytes — an implementation limit, not a format requirement)",
-        effect: Effect::SectorSize,
-    },
-    FlagSpec {
-        name: "--start",
-        domain: ValueDomain::StartOffset,
-        desc: "new start: an LBA, or `end` for pack-to-end",
-        effect: Effect::Start,
-    },
-    FlagSpec {
-        name: "--table",
-        domain: ValueDomain::TableKind,
-        desc: "table kind: gpt (default) or mbr",
-        effect: Effect::Table,
-    },
-    FlagSpec {
-        name: "--type-guid",
-        domain: ValueDomain::TypeGuid,
-        desc: "GPT: type GUID text, e.g. 0fc63daf-8483-4772-8e79-3d69d8477de4; MBR: type byte 0xNN",
-        effect: Effect::TypeGuid,
-    },
-    FlagSpec {
-        name: "--yes",
-        domain: ValueDomain::Bool,
-        desc: "acknowledge a write before it starts",
-        effect: Effect::Yes,
-    },
+    flag(
+        "--end",
+        ValueDomain::Lba,
+        "new end LBA for `resize` (grow or shrink in place)",
+        Effect::End,
+    ),
+    flag(
+        "--grow-lv",
+        ValueDomain::Bool,
+        "also grow the LV: the one named by --lv, else the only LV",
+        Effect::GrowLv,
+    ),
+    flag(
+        "--grow-to-end",
+        ValueDomain::Bool,
+        "pin the end at the last usable LBA (fill semantics)",
+        Effect::GrowToEnd,
+    ),
+    flag(
+        "--grow",
+        ValueDomain::Bool,
+        "append the relocation preview for partition :N",
+        Effect::Grow,
+    ),
+    flag(
+        "--keep-partuuid",
+        ValueDomain::Bool,
+        "reuse the source PARTUUID instead of generating a new one",
+        Effect::KeepPartuuid,
+    ),
+    flag(
+        "--label",
+        ValueDomain::Text("S"),
+        "filesystem label (omitted = an empty label, not a default)",
+        Effect::Label,
+    ),
+    flag(
+        "--lv",
+        ValueDomain::Text("NAME"),
+        "which LV to grow (implies --grow-lv)",
+        Effect::Lv,
+    ),
+    flag(
+        "--name",
+        ValueDomain::Text("S"),
+        "name for the entry this command creates",
+        Effect::Name,
+    ),
+    flag(
+        "--no-fs",
+        ValueDomain::Bool,
+        "skip the filesystem step of the grown partition",
+        Effect::NoFs,
+    ),
+    flag(
+        "--overwrite-data",
+        ValueDomain::Bool,
+        "accept overwriting bytes an existing partition holds",
+        Effect::OverwriteData,
+    ),
+    flag(
+        "--part-number",
+        ValueDomain::PartNumber,
+        "1-based entry slot; it must be empty",
+        Effect::PartNumber,
+    ),
+    flag(
+        "--random",
+        ValueDomain::Bool,
+        "ask the target to generate a new value",
+        Effect::Random,
+    ),
+    flag(
+        "--release",
+        ValueDomain::Bool,
+        "drop the recovery files, keeping the writes they describe",
+        Effect::Release,
+    ),
+    flag(
+        "--replay-table-only",
+        ValueDomain::Bool,
+        "allow `recover` to replay only the recorded table regions of a move whose data has already moved; the data those ranges name is not restored",
+        Effect::ReplayTableOnly,
+    ),
+    flag(
+        "--sector-size",
+        ValueDomain::SectorSize,
+        "logical sector size override for raw images (power of two, max 65536 bytes — an implementation limit, not a format requirement)",
+        Effect::SectorSize,
+    ),
+    flag(
+        "--start",
+        ValueDomain::StartOffset,
+        "new start: an LBA, or `end` for pack-to-end",
+        Effect::Start,
+    ),
+    flag(
+        "--table",
+        ValueDomain::TableKind,
+        "table kind: gpt (default) or mbr",
+        Effect::Table,
+    ),
+    flag(
+        "--type-guid",
+        ValueDomain::TypeGuid,
+        "GPT: type GUID text, e.g. 0fc63daf-8483-4772-8e79-3d69d8477de4; MBR: type byte 0xNN",
+        Effect::TypeGuid,
+    ),
+    flag(
+        "--yes",
+        ValueDomain::Bool,
+        "acknowledge a write before it starts",
+        Effect::Yes,
+    ),
 ];
 
 pub(crate) fn flag_spec(name: &str) -> Option<&'static FlagSpec> {
@@ -416,34 +435,42 @@ pub(crate) enum Slot {
     FsType,
 }
 
-/// 一个位置参数：槽位、帮助与错误消息里的名字、值域。
+/// 一个位置参数：槽位、帮助与错误消息里的名字、值域，以及在形态内是否可省。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct PositionalDef {
     pub(crate) slot: Slot,
     pub(crate) name: &'static str,
     pub(crate) domain: ValueDomain,
+    /// 可省只允许出现在尾部：缺省由 `build` 按 `None` 收口
+    pub(crate) optional: bool,
+}
+
+const fn positional(slot: Slot, name: &'static str, domain: ValueDomain, optional: bool) -> PositionalDef {
+    PositionalDef { slot, name, domain, optional }
 }
 
 const TARGET_ARG: PositionalDef =
-    PositionalDef { slot: Slot::Target, name: "TARGET", domain: ValueDomain::Target };
+    positional(Slot::Target, "TARGET", ValueDomain::Target, false);
 const OPTIONAL_TARGET_ARG: PositionalDef =
-    PositionalDef { slot: Slot::OptionalTarget, name: "TARGET", domain: ValueDomain::Target };
+    positional(Slot::OptionalTarget, "TARGET", ValueDomain::Target, true);
 const RECORD_ID_ARG: PositionalDef =
-    PositionalDef { slot: Slot::RecordId, name: "ID", domain: ValueDomain::RecordId };
+    positional(Slot::RecordId, "ID", ValueDomain::RecordId, false);
 const ROOT_ARG: PositionalDef =
-    PositionalDef { slot: Slot::RootDir, name: "ROOT", domain: ValueDomain::Text("ROOT") };
+    positional(Slot::RootDir, "ROOT", ValueDomain::Text("ROOT"), false);
 const SIZE_ARG: PositionalDef =
-    PositionalDef { slot: Slot::Size, name: "SIZE", domain: ValueDomain::ResizeSize };
-const BYTES_ARG: PositionalDef =
-    PositionalDef { slot: Slot::Size, name: "BYTES", domain: ValueDomain::AbsoluteSize };
+    positional(Slot::Size, "SIZE", ValueDomain::ResizeSize, false);
+const OPTIONAL_BYTES_ARG: PositionalDef =
+    positional(Slot::Size, "BYTES", ValueDomain::AbsoluteSize, true);
 const PROPERTY_ARG: PositionalDef =
-    PositionalDef { slot: Slot::Property, name: "PROPERTY", domain: ValueDomain::Text("PROPERTY") };
+    positional(Slot::Property, "PROPERTY", ValueDomain::Text("PROPERTY"), false);
 const VALUE_ARG: PositionalDef =
-    PositionalDef { slot: Slot::Value, name: "VALUE", domain: ValueDomain::Text("VALUE") };
+    positional(Slot::Value, "VALUE", ValueDomain::Text("VALUE"), false);
+const OPTIONAL_VALUE_ARG: PositionalDef =
+    positional(Slot::Value, "VALUE", ValueDomain::Text("VALUE"), true);
 const STATE_ARG: PositionalDef =
-    PositionalDef { slot: Slot::State, name: "STATE", domain: ValueDomain::Text("on|off") };
+    positional(Slot::State, "STATE", ValueDomain::Text("on|off"), false);
 const FS_TYPE_ARG: PositionalDef =
-    PositionalDef { slot: Slot::FsType, name: "FS", domain: ValueDomain::Text("FS") };
+    positional(Slot::FsType, "FS", ValueDomain::Text("FS"), false);
 
 /// 命令与撤销窗口的关系。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -497,8 +524,51 @@ const fn opt_desc(name: &'static str, desc: &'static str) -> OptionDef {
     OptionDef { name, desc: Some(desc) }
 }
 
-/// 一条命令的全部声明：名字、分组、用法、摘要、位置参数（含值域）、选项、
-/// 详助正文、确认规则、能力需求与撤销窗口。
+/// 形态判定项：某个旗标出现，或某个位置参数等于字面量（`set ... name`）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Selector {
+    Flag(&'static str),
+    Positional { index: usize, literal: &'static str },
+}
+
+/// 一个形态对目标后缀的要求。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TargetSuffix {
+    /// 带不带 `:N` 都可以
+    Any,
+    /// 必须不带 `:N`
+    Whole,
+    /// 必须带 `:N`（或 `:last`）
+    Partition,
+}
+
+/// 一个命令的一种调用形态。语法、位置参数、选项与判定条件只在这里声明一次：
+/// 解析器按它选形态并校验，帮助与参考文档也由它生成。
+pub(crate) struct Variant {
+    /// `diskedit {name} ` 之后的部分
+    pub(crate) syntax: &'static str,
+    pub(crate) positionals: &'static [PositionalDef],
+    pub(crate) options: &'static [OptionDef],
+    /// 全部成立才命中；空表示"没有判别项"
+    pub(crate) selects: &'static [Selector],
+    pub(crate) target: TargetSuffix,
+    /// 无判别项命中时采用这一形态；每个命令至多一个
+    pub(crate) default: bool,
+}
+
+const fn variant(
+    syntax: &'static str,
+    positionals: &'static [PositionalDef],
+    options: &'static [OptionDef],
+    selects: &'static [Selector],
+    target: TargetSuffix,
+    default: bool,
+) -> Variant {
+    Variant { syntax, positionals, options, selects, target, default }
+}
+
+/// 一条命令的全部声明：名字、分组、形态表、命令级公共选项、详助正文、
+/// 确认规则、能力需求与撤销窗口。
 ///
 /// 帮助、参考文档与能力矩阵都从这一份声明生成；解析器读的也是同一份。
 pub(crate) struct CommandDef {
@@ -506,10 +576,10 @@ pub(crate) struct CommandDef {
     pub(crate) group: CommandGroup,
     /// 顶层帮助里紧跟用法之后的一行
     pub(crate) summary: &'static str,
-    /// 用法行：`diskedit {name} ` 之后的部分，一种形态一行
-    pub(crate) syntax: &'static [&'static str],
-    pub(crate) positionals: &'static [PositionalDef],
-    pub(crate) options: &'static [OptionDef],
+    /// 形态表：一种调用方式一条
+    pub(crate) variants: &'static [Variant],
+    /// 每个形态都接受的选项
+    pub(crate) common_options: &'static [OptionDef],
     /// 详助正文：用法行与选项块之外的全部内容，原样渲染
     pub(crate) details: &'static str,
     pub(crate) mode: TargetMode,
@@ -519,15 +589,27 @@ pub(crate) struct CommandDef {
 }
 
 impl CommandDef {
-    /// 该命令是否声明了这个选项；拒绝路径与帮助对账读同一份白名单
+    /// 该命令是否声明了这个选项（任一形态或公共选项）；拒绝路径与帮助对账读同一份白名单
     pub(crate) fn accepts(&self, flag: &str) -> bool {
-        self.options.iter().any(|o| o.name == flag)
+        self.common_options.iter().any(|o| o.name == flag)
+            || self.variants.iter().any(|v| v.options.iter().any(|o| o.name == flag))
+    }
+
+    /// 单个形态的白名单：形态自己的选项加命令级公共选项
+    pub(crate) fn accepts_in(&self, v: &Variant, flag: &str) -> bool {
+        self.common_options.iter().any(|o| o.name == flag)
+            || v.options.iter().any(|o| o.name == flag)
     }
 
     /// 该命令是否声明了这个槽位
     #[cfg(test)]
     pub(crate) fn has_slot(&self, slot: Slot) -> bool {
-        self.positionals.iter().any(|p| p.slot == slot)
+        self.variants.iter().any(|v| v.positionals.iter().any(|p| p.slot == slot))
+    }
+
+    /// 全部用法行，按声明顺序
+    pub(crate) fn syntax_lines(&self) -> impl Iterator<Item = &'static str> {
+        self.variants.iter().map(|v| v.syntax)
     }
 }
 
@@ -535,10 +617,19 @@ pub(crate) const COMMANDS: &[CommandDef] = &[
     CommandDef {
         name: "info",
         group: CommandGroup::Everyday,
-        summary: "show partition table and per-partition filesystem identification",
-        syntax: &["<TARGET> [--sector-size N]"],
-        positionals: &[TARGET_ARG],
-        options: &[opt("--sector-size")],
+        summary: "show partition table and per-partition filesystem identification; --grow appends a relocation preview for :N",
+        variants: &[
+            variant("<TARGET> [--sector-size N]", &[TARGET_ARG], &[], &[], TargetSuffix::Whole, true),
+            variant(
+                "<TARGET>:N --grow [--sector-size N]",
+                &[TARGET_ARG],
+                &[opt("--grow")],
+                &[Selector::Flag("--grow")],
+                TargetSuffix::Partition,
+                false,
+            ),
+        ],
+        common_options: &[opt("--sector-size")],
         details: crate::cmd::info::DETAILS,
         mode: TargetMode::ReadOnly,
         capabilities: &[Capability::ReadOnly],
@@ -549,9 +640,8 @@ pub(crate) const COMMANDS: &[CommandDef] = &[
         name: "inspect",
         group: CommandGroup::Everyday,
         summary: "show the recovery record beside a target (read-only)",
-        syntax: &["<TARGET|PATH>"],
-        positionals: &[TARGET_ARG],
-        options: &[],
+        variants: &[variant("<TARGET|PATH>", &[TARGET_ARG], &[], &[], TargetSuffix::Whole, true)],
+        common_options: &[],
         details: crate::cmd::inspect::DETAILS,
         mode: TargetMode::ReadOnly,
         capabilities: &[Capability::ReadOnly, Capability::CompanionFile],
@@ -562,9 +652,8 @@ pub(crate) const COMMANDS: &[CommandDef] = &[
         name: "records list",
         group: CommandGroup::Everyday,
         summary: "list recovery records as JSON (omit TARGET: everything under <state_root>)",
-        syntax: &["[TARGET]"],
-        positionals: &[OPTIONAL_TARGET_ARG],
-        options: &[],
+        variants: &[variant("[TARGET]", &[OPTIONAL_TARGET_ARG], &[], &[], TargetSuffix::Whole, true)],
+        common_options: &[],
         details: crate::cmd::records::DETAILS_LIST,
         mode: TargetMode::ReadOnly,
         capabilities: &[Capability::ReadOnly, Capability::CompanionFile],
@@ -575,9 +664,15 @@ pub(crate) const COMMANDS: &[CommandDef] = &[
         name: "records verify",
         group: CommandGroup::Everyday,
         summary: "re-check one record by its 32-hex id",
-        syntax: &["<TARGET> <ID>"],
-        positionals: &[TARGET_ARG, RECORD_ID_ARG],
-        options: &[],
+        variants: &[variant(
+            "<TARGET> <ID>",
+            &[TARGET_ARG, RECORD_ID_ARG],
+            &[],
+            &[],
+            TargetSuffix::Whole,
+            true,
+        )],
+        common_options: &[],
         details: crate::cmd::records::DETAILS_VERIFY,
         mode: TargetMode::ReadOnly,
         capabilities: &[Capability::ReadOnly, Capability::CompanionFile],
@@ -588,9 +683,8 @@ pub(crate) const COMMANDS: &[CommandDef] = &[
         name: "records scan",
         group: CommandGroup::Everyday,
         summary: "enumerate records under a container root (<state_root>/recovery, or an image directory)",
-        syntax: &["<ROOT>"],
-        positionals: &[ROOT_ARG],
-        options: &[],
+        variants: &[variant("<ROOT>", &[ROOT_ARG], &[], &[], TargetSuffix::Any, true)],
+        common_options: &[],
         details: crate::cmd::records::DETAILS_SCAN,
         mode: TargetMode::ReadOnly,
         capabilities: &[Capability::ReadOnly, Capability::CompanionFile],
@@ -600,14 +694,34 @@ pub(crate) const COMMANDS: &[CommandDef] = &[
     CommandDef {
         name: "resize",
         group: CommandGroup::Everyday,
-        summary: "resize partition + FS (auto online/offline)",
-        syntax: &["<TARGET>[:N] <SIZE> [OPTIONS]"],
-        positionals: &[TARGET_ARG, SIZE_ARG],
-        options: &[
-            opt("--allow-move"),
-            opt("--chunk"),
-            opt("--grow-lv"),
-            opt("--lv"),
+        summary: "resize a partition and its filesystem; --end / --grow-to-end repartition without moving data",
+        variants: &[
+            variant(
+                "<TARGET>[:N] <SIZE> [--allow-move] [--chunk N] [--grow-lv] [--lv NAME] [--no-fs] --yes",
+                &[TARGET_ARG, SIZE_ARG],
+                &[opt("--allow-move"), opt("--chunk"), opt("--grow-lv"), opt("--lv")],
+                &[],
+                TargetSuffix::Any,
+                true,
+            ),
+            variant(
+                "<TARGET>:N --end LBA [--align A] [--no-fs] --yes",
+                &[TARGET_ARG],
+                &[opt("--end"), opt("--align")],
+                &[Selector::Flag("--end")],
+                TargetSuffix::Partition,
+                false,
+            ),
+            variant(
+                "<TARGET>:N --grow-to-end [--align A] [--no-fs] --yes",
+                &[TARGET_ARG],
+                &[opt("--grow-to-end"), opt("--align")],
+                &[Selector::Flag("--grow-to-end")],
+                TargetSuffix::Partition,
+                false,
+            ),
+        ],
+        common_options: &[
             opt_desc(
                 "--no-fs",
                 "skip the filesystem step of the grown partition; required when the filesystem inside cannot be grown here (limits are under Constraints)",
@@ -630,15 +744,19 @@ pub(crate) const COMMANDS: &[CommandDef] = &[
         name: "move",
         group: CommandGroup::Everyday,
         summary: "move a partition, data follows (chunked copy, resumable)",
-        syntax: &["<TARGET>:N --start <LBA|end> [--chunk N] --yes [--align A]"],
-        positionals: &[TARGET_ARG],
-        options: &[
-            opt("--align"),
-            opt_desc("--chunk", "default 4 MiB; a resumed job keeps the record's value"),
-            opt("--sector-size"),
-            opt("--start"),
-            opt("--yes"),
-        ],
+        variants: &[variant(
+            "<TARGET>:N --start <LBA|end> [--chunk N] --yes [--align A]",
+            &[TARGET_ARG],
+            &[
+                opt("--align"),
+                opt_desc("--chunk", "default 4 MiB; a resumed job keeps the record's value"),
+                opt("--start"),
+            ],
+            &[],
+            TargetSuffix::Partition,
+            true,
+        )],
+        common_options: &[opt("--sector-size"), opt("--yes")],
         details: crate::cmd::layout::DETAILS_MOVE,
         mode: TargetMode::WriteJournal,
         capabilities: &[
@@ -654,17 +772,21 @@ pub(crate) const COMMANDS: &[CommandDef] = &[
         name: "copy",
         group: CommandGroup::Everyday,
         summary: "copy a partition to a new location; the source is untouched",
-        syntax: &["<TARGET>:N --start <LBA|end> [--chunk N] --yes [--align A] [--name S] [--keep-partuuid]"],
-        positionals: &[TARGET_ARG],
-        options: &[
-            opt("--align"),
-            opt_desc("--chunk", "default 4 MiB; a resumed job keeps the record's value"),
-            opt("--keep-partuuid"),
-            opt("--name"),
-            opt("--sector-size"),
-            opt("--start"),
-            opt("--yes"),
-        ],
+        variants: &[variant(
+            "<TARGET>:N --start <LBA|end> [--chunk N] --yes [--align A] [--name S] [--keep-partuuid]",
+            &[TARGET_ARG],
+            &[
+                opt("--align"),
+                opt_desc("--chunk", "default 4 MiB; a resumed job keeps the record's value"),
+                opt("--keep-partuuid"),
+                opt("--name"),
+                opt("--start"),
+            ],
+            &[],
+            TargetSuffix::Partition,
+            true,
+        )],
+        common_options: &[opt("--sector-size"), opt("--yes")],
         details: crate::cmd::layout::DETAILS_COPY,
         mode: TargetMode::WriteJournal,
         capabilities: &[Capability::TargetData, Capability::CompanionFile, Capability::DeviceState],
@@ -675,9 +797,15 @@ pub(crate) const COMMANDS: &[CommandDef] = &[
         name: "delete",
         group: CommandGroup::Everyday,
         summary: "delete a partition entry (the data area is not wiped)",
-        syntax: &["<TARGET>:N --yes"],
-        positionals: &[TARGET_ARG],
-        options: &[opt("--sector-size"), opt("--yes")],
+        variants: &[variant(
+            "<TARGET>:N --yes",
+            &[TARGET_ARG],
+            &[],
+            &[],
+            TargetSuffix::Partition,
+            true,
+        )],
+        common_options: &[opt("--sector-size"), opt("--yes")],
         details: crate::cmd::layout::DETAILS_DELETE,
         mode: TargetMode::WriteJournal,
         capabilities: &[Capability::TargetData, Capability::CompanionFile, Capability::DeviceState],
@@ -688,12 +816,49 @@ pub(crate) const COMMANDS: &[CommandDef] = &[
         name: "set",
         group: CommandGroup::Everyday,
         summary: "set a partition property (name / label / uuid / flag / type)",
-        syntax: &[
-            "<TARGET>:N name S | label S | uuid U | flag F on|off --yes",
-            "<TARGET>:N type GUID | type 0xXX --yes",
+        variants: &[
+            variant(
+                "<TARGET>:N name S --yes",
+                &[TARGET_ARG, PROPERTY_ARG, VALUE_ARG],
+                &[],
+                &[Selector::Positional { index: 1, literal: "name" }],
+                TargetSuffix::Partition,
+                false,
+            ),
+            variant(
+                "<TARGET>:N label S --yes",
+                &[TARGET_ARG, PROPERTY_ARG, VALUE_ARG],
+                &[],
+                &[Selector::Positional { index: 1, literal: "label" }],
+                TargetSuffix::Partition,
+                false,
+            ),
+            variant(
+                "<TARGET>:N uuid [U] --yes [--random]",
+                &[TARGET_ARG, PROPERTY_ARG, OPTIONAL_VALUE_ARG],
+                &[],
+                &[Selector::Positional { index: 1, literal: "uuid" }],
+                TargetSuffix::Partition,
+                false,
+            ),
+            variant(
+                "<TARGET>:N flag F on|off --yes",
+                &[TARGET_ARG, PROPERTY_ARG, VALUE_ARG, STATE_ARG],
+                &[],
+                &[Selector::Positional { index: 1, literal: "flag" }],
+                TargetSuffix::Partition,
+                false,
+            ),
+            variant(
+                "<TARGET>:N type GUID|0xXX --yes",
+                &[TARGET_ARG, PROPERTY_ARG, VALUE_ARG],
+                &[],
+                &[Selector::Positional { index: 1, literal: "type" }],
+                TargetSuffix::Partition,
+                false,
+            ),
         ],
-        positionals: &[TARGET_ARG, PROPERTY_ARG, VALUE_ARG, STATE_ARG],
-        options: &[opt("--random"), opt("--sector-size"), opt("--yes")],
+        common_options: &[opt("--random"), opt("--sector-size"), opt("--yes")],
         details: crate::cmd::fs::DETAILS_SET,
         mode: TargetMode::WriteJournal,
         capabilities: &[
@@ -709,9 +874,15 @@ pub(crate) const COMMANDS: &[CommandDef] = &[
         name: "check",
         group: CommandGroup::Everyday,
         summary: "check filesystem consistency (no repair; f2fs writes metadata on a SIT mismatch)",
-        syntax: &["<TARGET>:N"],
-        positionals: &[TARGET_ARG],
-        options: &[opt("--sector-size")],
+        variants: &[variant(
+            "<TARGET>:N",
+            &[TARGET_ARG],
+            &[],
+            &[],
+            TargetSuffix::Partition,
+            true,
+        )],
+        common_options: &[opt("--sector-size")],
         details: crate::cmd::fs::DETAILS_CHECK,
         mode: TargetMode::ReadOnly,
         capabilities: &[Capability::ReadOnly, Capability::ExternalTool],
@@ -722,9 +893,15 @@ pub(crate) const COMMANDS: &[CommandDef] = &[
         name: "mkfs",
         group: CommandGroup::Everyday,
         summary: "create a filesystem (destroys all data on the partition)",
-        syntax: &["<TARGET>:N <FS> --yes [--label S]"],
-        positionals: &[TARGET_ARG, FS_TYPE_ARG],
-        options: &[opt("--label"), opt("--sector-size"), opt("--yes")],
+        variants: &[variant(
+            "<TARGET>:N <FS> --yes [--label S]",
+            &[TARGET_ARG, FS_TYPE_ARG],
+            &[opt("--label")],
+            &[],
+            TargetSuffix::Partition,
+            true,
+        )],
+        common_options: &[opt("--sector-size"), opt("--yes")],
         details: crate::cmd::fs::DETAILS_MKFS,
         mode: TargetMode::WriteJournal,
         capabilities: &[Capability::CompanionFile, Capability::ExternalTool, Capability::DeviceState],
@@ -735,9 +912,25 @@ pub(crate) const COMMANDS: &[CommandDef] = &[
         name: "resizefs",
         group: CommandGroup::Everyday,
         summary: "resize a filesystem only — the partition entry stays put",
-        syntax: &["<TARGET>:N --yes", "<MOUNTPOINT> --yes [BYTES]"],
-        positionals: &[TARGET_ARG, BYTES_ARG],
-        options: &[opt("--sector-size"), opt("--yes")],
+        variants: &[
+            variant(
+                "<TARGET>:N [BYTES] --yes",
+                &[TARGET_ARG, OPTIONAL_BYTES_ARG],
+                &[],
+                &[],
+                TargetSuffix::Partition,
+                false,
+            ),
+            variant(
+                "<MOUNTPOINT> [BYTES] --yes",
+                &[TARGET_ARG, OPTIONAL_BYTES_ARG],
+                &[],
+                &[],
+                TargetSuffix::Whole,
+                false,
+            ),
+        ],
+        common_options: &[opt("--sector-size"), opt("--yes")],
         details: crate::cmd::fs::DETAILS_RESIZEFS,
         mode: TargetMode::WriteJournal,
         capabilities: &[Capability::CompanionFile, Capability::ExternalTool, Capability::DeviceState],
@@ -745,13 +938,30 @@ pub(crate) const COMMANDS: &[CommandDef] = &[
         build: build_resizefs,
     },
     CommandDef {
-        name: "undo",
+        name: "recover",
         group: CommandGroup::Everyday,
-        summary: "roll back the writes this tool completed (replays its record)",
-        syntax: &["<TARGET> --yes"],
-        positionals: &[TARGET_ARG],
-        options: &[opt("--replay-table-only"), opt("--sector-size"), opt("--yes")],
-        details: crate::cmd::undo::DETAILS,
+        summary: "finish with a recovery record: replay it, or release it without rollback",
+        variants: &[
+            variant("<TARGET> --yes", &[TARGET_ARG], &[], &[], TargetSuffix::Whole, true),
+            variant(
+                "<TARGET> --replay-table-only --yes",
+                &[TARGET_ARG],
+                &[opt("--replay-table-only")],
+                &[Selector::Flag("--replay-table-only")],
+                TargetSuffix::Whole,
+                false,
+            ),
+            variant(
+                "<TARGET> --release [--discard-replay] --yes",
+                &[TARGET_ARG],
+                &[opt("--release"), opt("--discard-replay")],
+                &[Selector::Flag("--release")],
+                TargetSuffix::Whole,
+                false,
+            ),
+        ],
+        common_options: &[opt("--sector-size"), opt("--yes")],
+        details: crate::cmd::recover::DETAILS,
         mode: TargetMode::WriteNoJournal,
         capabilities: &[
             Capability::TargetData,
@@ -760,28 +970,21 @@ pub(crate) const COMMANDS: &[CommandDef] = &[
             Capability::DeviceState,
         ],
         confirmation: Confirmation::Required,
-        build: build_undo,
-    },
-    CommandDef {
-        name: "abandon",
-        group: CommandGroup::Everyday,
-        summary: "drop an unfinished operation's recovery files; no rollback",
-        syntax: &["<TARGET> --yes [--discard-replay]"],
-        positionals: &[TARGET_ARG],
-        options: &[opt("--discard-replay"), opt("--sector-size"), opt("--yes")],
-        details: crate::cmd::abandon::DETAILS,
-        mode: TargetMode::WriteNoJournal,
-        capabilities: &[Capability::CompanionFile],
-        confirmation: Confirmation::Required,
-        build: build_abandon,
+        build: build_recover,
     },
     CommandDef {
         name: "new",
         group: CommandGroup::LowLevel,
         summary: "create a fresh partition table",
-        syntax: &["<TARGET> [--table gpt|mbr] --yes [--overwrite-data]"],
-        positionals: &[TARGET_ARG],
-        options: &[opt("--overwrite-data"), opt("--sector-size"), opt("--table"), opt("--yes")],
+        variants: &[variant(
+            "<TARGET> [--table gpt|mbr] --yes [--overwrite-data]",
+            &[TARGET_ARG],
+            &[opt("--table"), opt("--overwrite-data")],
+            &[],
+            TargetSuffix::Whole,
+            true,
+        )],
+        common_options: &[opt("--sector-size"), opt("--yes")],
         details: crate::cmd::layout::DETAILS_NEW,
         mode: TargetMode::WriteJournal,
         capabilities: &[Capability::TargetData, Capability::CompanionFile, Capability::DeviceState],
@@ -792,59 +995,26 @@ pub(crate) const COMMANDS: &[CommandDef] = &[
         name: "add",
         group: CommandGroup::LowLevel,
         summary: "add a partition; --start fixes where it begins",
-        syntax: &["<TARGET> SIZE [--start LBA] [--align A] [--part-number N] [--name S] [--type-guid G] --yes"],
-        positionals: &[TARGET_ARG, SIZE_ARG],
-        options: &[
-            opt("--align"),
-            opt("--name"),
-            opt("--part-number"),
-            opt("--sector-size"),
-            opt_desc("--start", "starting LBA; SIZE fixes the end"),
-            opt("--type-guid"),
-            opt("--yes"),
-        ],
+        variants: &[variant(
+            "<TARGET> SIZE [--start LBA] [--align A] [--part-number N] [--name S] [--type-guid G] --yes",
+            &[TARGET_ARG, SIZE_ARG],
+            &[
+                opt("--align"),
+                opt("--name"),
+                opt("--part-number"),
+                opt_desc("--start", "starting LBA; SIZE fixes the end"),
+                opt("--type-guid"),
+            ],
+            &[],
+            TargetSuffix::Whole,
+            true,
+        )],
+        common_options: &[opt("--sector-size"), opt("--yes")],
         details: crate::cmd::layout::DETAILS_ADD,
         mode: TargetMode::WriteJournal,
         capabilities: &[Capability::TargetData, Capability::CompanionFile, Capability::DeviceState],
         confirmation: Confirmation::Required,
         build: build_add,
-    },
-    CommandDef {
-        name: "resize-part",
-        group: CommandGroup::LowLevel,
-        summary: "repartition one partition in place",
-        syntax: &["<TARGET>:N (--end LBA | --grow-to-end) [--align A] --yes"],
-        positionals: &[TARGET_ARG],
-        options: &[
-            opt_desc("--align", "mib|none (default none: the end LBA is used as given)"),
-            opt("--end"),
-            opt("--grow-to-end"),
-            opt("--sector-size"),
-            opt("--yes"),
-        ],
-        details: crate::cmd::layout::DETAILS_RESIZE_PART,
-        mode: TargetMode::WriteJournal,
-        capabilities: &[
-            Capability::TargetData,
-            Capability::CompanionFile,
-            Capability::ExternalTool,
-            Capability::DeviceState,
-        ],
-        confirmation: Confirmation::Required,
-        build: build_resize_part,
-    },
-    CommandDef {
-        name: "plan",
-        group: CommandGroup::Everyday,
-        summary: "read-only report: geometry, table, FS and usage — the same fields as `info`; --grow appends a relocation preview",
-        syntax: &["<TARGET>[:N] [--grow] [--sector-size N]"],
-        positionals: &[TARGET_ARG],
-        options: &[opt("--grow"), opt("--sector-size")],
-        details: crate::cmd::plan::DETAILS_PLAN,
-        mode: TargetMode::ReadOnly,
-        capabilities: &[Capability::ReadOnly],
-        confirmation: Confirmation::None,
-        build: build_plan,
     },
 ];
 
@@ -883,15 +1053,6 @@ pub(crate) struct InfoRequest {
     pub(crate) target: String,
     pub(crate) part: Option<PartSelector>,
     pub(crate) sector_size: Option<SectorSize>,
-}
-
-/// `plan`：默认与 `info` 同源；`--grow` 追加只读搬迁预览。
-/// `part` 只服务预览，指定了哪个分区就预览哪个。
-pub(crate) struct PlanRequest {
-    pub(crate) target: String,
-    pub(crate) part: Option<PartSelector>,
-    pub(crate) sector_size: Option<SectorSize>,
-    pub(crate) grow: bool,
 }
 
 /// `inspect` 只接受整盘目标，且不提供扇区大小覆盖
@@ -959,7 +1120,6 @@ pub(crate) struct DeleteRequest {
     pub(crate) target: String,
     pub(crate) part: Option<PartSelector>,
     pub(crate) sector_size: Option<SectorSize>,
-    pub(crate) yes: bool,
 }
 
 pub(crate) struct SetRequest {
@@ -984,7 +1144,6 @@ pub(crate) struct MkfsRequest {
     pub(crate) sector_size: Option<SectorSize>,
     pub(crate) fstype: String,
     pub(crate) label: Option<String>,
-    pub(crate) yes: bool,
 }
 
 pub(crate) struct ResizefsRequest {
@@ -995,23 +1154,6 @@ pub(crate) struct ResizefsRequest {
     pub(crate) bytes: Option<u64>,
     /// 位置参数原样保留，供离线形式拒绝时报出用户写下的值
     pub(crate) bytes_text: Option<String>,
-}
-
-pub(crate) struct UndoRequest {
-    pub(crate) target: String,
-    pub(crate) part: Option<PartSelector>,
-    pub(crate) sector_size: Option<SectorSize>,
-    pub(crate) yes: bool,
-    /// 显式允许只回放 `move` 的表区：数据已搬走，旧布局指名的区间不再可信
-    pub(crate) replay_table_only: bool,
-}
-
-pub(crate) struct AbandonRequest {
-    pub(crate) target: String,
-    pub(crate) part: Option<PartSelector>,
-    pub(crate) sector_size: Option<SectorSize>,
-    /// 放弃可逆序回放的区间前必须显式确认
-    pub(crate) discard_replay: bool,
 }
 
 pub(crate) struct NewRequest {
@@ -1038,13 +1180,25 @@ pub(crate) struct AddRequest {
     pub(crate) type_guid: Option<TypeSelector>,
 }
 
-pub(crate) struct ResizePartRequest {
+pub(crate) struct ResizeEndRequest {
     pub(crate) target: String,
     pub(crate) part: Option<PartSelector>,
     pub(crate) sector_size: Option<SectorSize>,
     pub(crate) end: Option<u64>,
     pub(crate) grow_to_end: bool,
     pub(crate) align: Align,
+    pub(crate) no_fs: bool,
+}
+
+/// `recover`：一个命令、两种归宿。`release` 为真时不回放任何字节，只释放记录文件；
+/// 否则回放记录，`replay_table_only` 允许跳过已搬走的区间
+pub(crate) struct RecoverRequest {
+    pub(crate) target: String,
+    pub(crate) part: Option<PartSelector>,
+    pub(crate) sector_size: Option<SectorSize>,
+    pub(crate) release: bool,
+    pub(crate) discard_replay: bool,
+    pub(crate) replay_table_only: bool,
 }
 
 pub(crate) enum Request {
@@ -1065,13 +1219,12 @@ pub(crate) enum Request {
     Check(CheckRequest),
     Mkfs(MkfsRequest),
     Resizefs(ResizefsRequest),
-    Undo(UndoRequest),
-    Abandon(AbandonRequest),
+    Recover(RecoverRequest),
     New(NewRequest),
     Add(AddRequest),
-    ResizePart(ResizePartRequest),
+    ResizeEnd(ResizeEndRequest),
     /// 只读报告，与 `info` 同一份请求
-    Plan(PlanRequest),
+    InfoGrow(InfoRequest),
 }
 
 impl Request {
@@ -1090,19 +1243,17 @@ impl Request {
             Self::Check(_) => "check",
             Self::Mkfs(_) => "mkfs",
             Self::Resizefs(_) => "resizefs",
-            Self::Undo(_) => "undo",
-            Self::Abandon(_) => "abandon",
+            Self::Recover(_) => "recover",
             Self::New(_) => "new",
             Self::Add(_) => "add",
-            Self::ResizePart(_) => "resize-part",
-            Self::Plan(_) => "plan",
+            Self::ResizeEnd(_) => "resize",
+            Self::InfoGrow(_) => "info",
         };
         find(name).expect("request variant has a command definition")
     }
 }
 
 impl_target_request!(InfoRequest);
-impl_target_request!(PlanRequest);
 impl_target_request!(ResizeRequest);
 impl_target_request!(MoveRequest);
 impl_target_request!(CopyRequest);
@@ -1111,25 +1262,25 @@ impl_target_request!(SetRequest);
 impl_target_request!(CheckRequest);
 impl_target_request!(MkfsRequest);
 impl_target_request!(ResizefsRequest);
-impl_target_request!(UndoRequest);
-impl_target_request!(AbandonRequest);
+impl_target_request!(RecoverRequest);
 impl_target_request!(NewRequest);
 impl_target_request!(AddRequest);
-impl_target_request!(ResizePartRequest);
+impl_target_request!(ResizeEndRequest);
 
 impl_chunk_request!(ResizeRequest);
 impl_chunk_request!(MoveRequest);
 impl_chunk_request!(CopyRequest);
 
-/// 位置参数按槽位读取
+/// 位置参数按已选形态的槽位读取
 struct Positionals<'a> {
     def: &'static CommandDef,
+    variant: &'static Variant,
     tokens: &'a [String],
 }
 
 impl Positionals<'_> {
     fn index(&self, slot: Slot) -> Option<usize> {
-        self.def.positionals.iter().position(|p| p.slot == slot)
+        self.variant.positionals.iter().position(|p| p.slot == slot)
     }
 
     fn get(&self, slot: Slot) -> Option<&str> {
@@ -1140,7 +1291,7 @@ impl Positionals<'_> {
     fn parsed(&self, slot: Slot) -> Option<Parsed> {
         let i = self.index(slot)?;
         let text = self.tokens.get(i)?;
-        let def = &self.def.positionals[i];
+        let def = &self.variant.positionals[i];
         Some(def.domain.parse(text).unwrap_or_else(|reason| {
             bail_fail(RunOutcome::usage(format!(
                 "bad {} {text:?} ({reason}; see `diskedit help {}`)",
@@ -1164,6 +1315,7 @@ struct Options {
     grow: bool,
     discard_replay: bool,
     replay_table_only: bool,
+    release: bool,
     allow_move: bool,
     no_fs: bool,
     grow_lv: bool,
@@ -1192,6 +1344,7 @@ impl Default for Options {
             grow: false,
             discard_replay: false,
             replay_table_only: false,
+            release: false,
             allow_move: false,
             no_fs: false,
             grow_lv: false,
@@ -1212,7 +1365,10 @@ fn target_of(p: &Positionals) -> (String, Option<PartSelector>) {
     match p.parsed(Slot::Target) {
         Some(Parsed::Target { target, part }) => (target, part),
         Some(other) => bail_fail(RunOutcome::internal(format!("TARGET slot produced {other:?}"))),
-        None => bail_fail(RunOutcome::usage("a target is required".to_string())),
+        None => bail_fail(RunOutcome::usage(format!(
+            "`{}` needs a target (see diskedit help {})",
+            p.def.name, p.def.name
+        ))),
     }
 }
 
@@ -1253,6 +1409,9 @@ fn parse_type_guid(text: &str) -> Result<TypeSelector, String> {
 
 fn build_info(p: &Positionals, o: Options) -> Request {
     let (target, part) = target_of(p);
+    if o.grow {
+        return Request::InfoGrow(InfoRequest { target, part, sector_size: o.sector_size });
+    }
     Request::Info(InfoRequest { target, part, sector_size: o.sector_size })
 }
 
@@ -1308,6 +1467,18 @@ fn build_records_scan(p: &Positionals, _o: Options) -> Request {
 
 fn build_resize(p: &Positionals, o: Options) -> Request {
     let (target, part) = target_of(p);
+    // `--end` / `--grow-to-end` 是原地重划形态：没有 SIZE，走分区层重划
+    if o.end.is_some() || o.grow_to_end {
+        return Request::ResizeEnd(ResizeEndRequest {
+            target,
+            part,
+            sector_size: o.sector_size,
+            end: o.end,
+            grow_to_end: o.grow_to_end,
+            align: o.align,
+            no_fs: o.no_fs,
+        });
+    }
     let size = match p.parsed(Slot::Size) {
         Some(Parsed::ResizeSize(size)) => size,
         Some(other) => bail_fail(RunOutcome::internal(format!("SIZE slot produced {other:?}"))),
@@ -1371,16 +1542,15 @@ fn build_copy(p: &Positionals, o: Options) -> Request {
 fn build_delete(p: &Positionals, o: Options) -> Request {
     let (target, part) = target_of(p);
     let part = require_part(part, "`delete` needs a partition: write <TARGET>:N (see diskedit help delete)");
-    Request::Delete(DeleteRequest { target, part, sector_size: o.sector_size, yes: o.yes })
+    Request::Delete(DeleteRequest { target, part, sector_size: o.sector_size })
 }
 
 fn build_set(p: &Positionals, o: Options) -> Request {
     let (target, part) = target_of(p);
     let part = require_part(part, "`set` needs a partition: write <TARGET>:N (see diskedit help set)");
     let key = text_of(p, Slot::Property).unwrap_or_else(|| {
-        bail_fail(RunOutcome::usage(
-            "`set` needs a property: name, label, uuid, flag or type (see diskedit help set)"
-                .to_string(),
+        bail_fail(RunOutcome::internal(
+            "`set` reached the builder without a property slot".to_string(),
         ))
     });
     let value = text_of(p, Slot::Value).unwrap_or_default();
@@ -1421,7 +1591,6 @@ fn build_mkfs(p: &Positionals, o: Options) -> Request {
         sector_size: o.sector_size,
         fstype,
         label: o.label,
-        yes: o.yes,
     })
 }
 
@@ -1446,24 +1615,15 @@ fn build_resizefs(p: &Positionals, o: Options) -> Request {
     })
 }
 
-fn build_undo(p: &Positionals, o: Options) -> Request {
+fn build_recover(p: &Positionals, o: Options) -> Request {
     let (target, part) = target_of(p);
-    Request::Undo(UndoRequest {
+    Request::Recover(RecoverRequest {
         target,
         part,
         sector_size: o.sector_size,
-        yes: o.yes,
-        replay_table_only: o.replay_table_only,
-    })
-}
-
-fn build_abandon(p: &Positionals, o: Options) -> Request {
-    let (target, part) = target_of(p);
-    Request::Abandon(AbandonRequest {
-        target,
-        part,
-        sector_size: o.sector_size,
+        release: o.release,
         discard_replay: o.discard_replay,
+        replay_table_only: o.replay_table_only,
     })
 }
 
@@ -1502,29 +1662,6 @@ fn build_add(p: &Positionals, o: Options) -> Request {
         name: o.name,
         type_guid: o.type_guid,
     })
-}
-
-fn build_resize_part(p: &Positionals, o: Options) -> Request {
-    let (target, part) = target_of(p);
-    if o.end.is_some() && o.grow_to_end {
-        bail_fail(RunOutcome::usage(
-            "--end and --grow-to-end are mutually exclusive (see diskedit help resize-part)"
-                .to_string(),
-        ));
-    }
-    Request::ResizePart(ResizePartRequest {
-        target,
-        part,
-        sector_size: o.sector_size,
-        end: o.end,
-        grow_to_end: o.grow_to_end,
-        align: o.align,
-    })
-}
-
-fn build_plan(p: &Positionals, o: Options) -> Request {
-    let (target, part) = target_of(p);
-    Request::Plan(PlanRequest { target, part, sector_size: o.sector_size, grow: o.grow })
 }
 
 /// SIZE 槽位：`grow` 或 [`parse_size_delta`] 的结果
@@ -1621,7 +1758,7 @@ fn parse_from(argv: impl Iterator<Item = std::ffi::OsString>) -> (&'static Comma
         } else if flag == "--help" || flag == "-h" {
             if help.is_none() {
                 help = Some(if matches!(cmd.as_str(), "help" | "--help" | "-h") {
-                    positional.first().cloned()
+                    help_topic(&positional)
                 } else {
                     Some(cmd.clone())
                 });
@@ -1630,7 +1767,9 @@ fn parse_from(argv: impl Iterator<Item = std::ffi::OsString>) -> (&'static Comma
         } else if flag.starts_with('-') {
             // 相对尺寸只在声明的 SIZE 槽位放行
             let size_slot = def.is_some_and(|d| {
-                d.positionals.get(positional.len()).is_some_and(|p| p.slot == Slot::Size)
+                d.variants.iter().any(|v| {
+                    v.positionals.get(positional.len()).is_some_and(|p| p.slot == Slot::Size)
+                })
             });
             if !(size_slot && parse_size_delta(flag).is_some()) {
                 bail_fail(RunOutcome::usage(format!(
@@ -1652,6 +1791,11 @@ fn parse_from(argv: impl Iterator<Item = std::ffi::OsString>) -> (&'static Comma
                 "{flag} takes no value — write it as a bare flag (got {v:?})"
             )));
         }
+    }
+    if version && help.is_some() {
+        bail_fail(RunOutcome::usage(
+            "`--version` and `--help` name two different outputs — ask for one at a time".to_string(),
+        ));
     }
     if let Some(topic) = help {
         match topic {
@@ -1675,14 +1819,8 @@ fn parse_from(argv: impl Iterator<Item = std::ffi::OsString>) -> (&'static Comma
         version_help();
     }
     if matches!(cmd.as_str(), "help" | "?" | "--help" | "-h") {
-        match positional.first() {
+        match help_topic(&positional) {
             Some(topic) => {
-                // `diskedit help records list`：双词命令的主题由前两个位置参数拼成
-                let topic = if topic == "records" && positional.len() > 1 {
-                    format!("{topic} {}", positional[1])
-                } else {
-                    topic.clone()
-                };
                 refuse_unconsumed(&topic, &seen);
                 help_cmd(&topic);
             }
@@ -1693,24 +1831,37 @@ fn parse_from(argv: impl Iterator<Item = std::ffi::OsString>) -> (&'static Comma
         }
     }
     let Some(def) = def else { usage() };
-    // 多余位置参数是用法错误
-    if let Some(extra) = positional.get(def.positionals.len()) {
+    let chosen = choose_variant(def, &positional, &seen);
+    // 多余的位置参数在形态选定后判：可选槽位之后的任何值都没有归属
+    if let Some(extra) = positional.get(chosen.positionals.len()) {
         bail_fail(RunOutcome::usage(format!(
             "unexpected extra argument for `{}`: {extra} (see `diskedit help {}`)",
             def.name, def.name
         )));
     }
-    refuse_unconsumed(def.name, &seen);
-    // 位置参数是否可省由第一条位置的槽位声明：目前只有 `records list` 的目标可选
-    let target_optional = def.positionals.first().is_some_and(|p| p.slot == Slot::OptionalTarget);
-    if positional.is_empty() && !target_optional {
-        bail_fail(RunOutcome::usage(format!(
-            "`{}` needs a target (an image path or block device) — see diskedit help {}",
-            def.name, def.name
-        )));
+    for f in &seen {
+        if !def.accepts_in(chosen, f) {
+            bail_fail(RunOutcome::usage(format!(
+                "{f} is not valid for `diskedit {} {}` (see diskedit help {})",
+                def.name, chosen.syntax, def.name
+            )));
+        }
+        if let Some(spec) = flag_spec(f) {
+            for req in spec.requires {
+                if !seen.contains(req) {
+                    bail_fail(RunOutcome::usage(format!(
+                        "{f} requires {req} (see diskedit help {})",
+                        def.name
+                    )));
+                }
+            }
+        }
     }
     let confirmed = opts.yes;
-    let built = (def.build)(&Positionals { def, tokens: &positional }, opts);
+    let built = (def.build)(
+        &Positionals { def, variant: chosen, tokens: &positional },
+        opts,
+    );
     // `Confirmation::Required` 的命令缺 `--yes` 在解析期落 2。
     // 放在 build 之后：取值域与槽位的错误更靠近出错的那一处，先报它们
     if def.confirmation == Confirmation::Required && !confirmed {
@@ -1720,6 +1871,165 @@ fn parse_from(argv: impl Iterator<Item = std::ffi::OsString>) -> (&'static Comma
         )));
     }
     (def, built)
+}
+
+/// `--help` / `help` 的主题：`records` 后紧跟的子命令并入主题，其余取首词。
+/// 主题按完整词序列取，`diskedit help records list` 与 `diskedit -h records list` 等价
+fn help_topic(tokens: &[String]) -> Option<String> {
+    let first = tokens.first()?;
+    Some(if first == "records" {
+        match tokens.get(1) {
+            Some(sub) if !sub.starts_with('-') => format!("records {sub}"),
+            _ => "records".to_string(),
+        }
+    } else {
+        first.clone()
+    })
+}
+
+/// 目标 token 是否带分区号；目标槽位缺失或缺值为 `None`（后缀判据不成立，
+/// 缺参留给形态的位置参数检查报）
+fn target_suffix(def: &CommandDef, positional: &[String]) -> Option<bool> {
+    let index = def.variants.first()?.positionals.iter()
+        .position(|p| matches!(p.slot, Slot::Target | Slot::OptionalTarget))?;
+    let text = positional.get(index)?;
+    match ValueDomain::Target.parse(text) {
+        Ok(Parsed::Target { part, .. }) => Some(part.is_some()),
+        _ => None,
+    }
+}
+
+fn suffix_ok(v: &Variant, suffix: Option<bool>) -> bool {
+    match (v.target, suffix) {
+        (TargetSuffix::Any, _) | (_, None) => true,
+        (TargetSuffix::Whole, Some(part)) => !part,
+        (TargetSuffix::Partition, Some(part)) => part,
+    }
+}
+
+fn check_suffix(def: &CommandDef, v: &Variant, suffix: Option<bool>) {
+    if suffix_ok(v, suffix) {
+        return;
+    }
+    match v.target {
+        TargetSuffix::Partition => bail_fail(RunOutcome::usage(format!(
+            "`{}` needs a partition: write <TARGET>:N (see `diskedit help {}`)",
+            def.name, def.name
+        ))),
+        TargetSuffix::Whole => bail_fail(RunOutcome::usage(format!(
+            "`{} {}` takes a whole target, not a partition — drop the :N suffix (see `diskedit help {}`)",
+            def.name, v.syntax, def.name
+        ))),
+        TargetSuffix::Any => {}
+    }
+}
+
+/// 位置参数判别项（`set ... name`）：返回 (下标, 该槽位的声明) 与全部候选字面量。
+/// 用于"一个判别项都没命中"时的缺参/取值文案
+fn positional_selectors(def: &CommandDef) -> Option<(usize, &'static PositionalDef, Vec<&'static str>)> {
+    let mut found: Option<(usize, &'static PositionalDef)> = None;
+    let mut literals = Vec::new();
+    for v in def.variants {
+        for s in v.selects {
+            if let Selector::Positional { index, literal } = s {
+                literals.push(*literal);
+                if found.is_none() {
+                    found = v.positionals.get(*index).map(|p| (*index, p));
+                }
+            }
+        }
+    }
+    found.map(|(index, p)| (index, p, literals))
+}
+
+/// 按声明选形态：先看判别项（旗标/位置参数字面量），再用目标后缀过滤；
+/// 无判别项命中时用标了 `default` 的形态。≥2 命中按用法错误拒绝
+fn choose_variant(
+    def: &'static CommandDef,
+    positional: &[String],
+    seen: &[&'static str],
+) -> &'static Variant {
+    let suffix = target_suffix(def, positional);
+    let holds = |v: &Variant| {
+        v.selects.iter().all(|s| match s {
+            Selector::Flag(f) => seen.contains(f),
+            Selector::Positional { index, literal } => {
+                positional.get(*index).map(String::as_str) == Some(*literal)
+            }
+        })
+    };
+    let selected: Vec<&'static Variant> = def
+        .variants
+        .iter()
+        .filter(|v| !v.selects.is_empty() && holds(v))
+        .collect();
+    match selected.len() {
+        1 => {
+            check_suffix(def, selected[0], suffix);
+            selected[0]
+        }
+        n if n > 1 => bail_fail(RunOutcome::usage(format!(
+            "`{}` matches more than one form ({}); pick one",
+            def.name,
+            selected.iter().map(|v| v.syntax).collect::<Vec<_>>().join(" | ")
+        ))),
+        _ => {
+            let fits: Vec<&'static Variant> = def
+                .variants
+                .iter()
+                .filter(|v| v.selects.is_empty() && suffix_ok(v, suffix))
+                .collect();
+            if fits.len() == 1 {
+                return fits[0];
+            }
+            // 多个空判别项形态同时成立时，采用声明为 default 的那一个
+            if let Some(v) = fits.iter().find(|v| v.default) {
+                return v;
+            }
+            if let Some((index, p, literals)) = positional_selectors(def) {
+                if positional.len() <= index {
+                    bail_fail(RunOutcome::usage(format!(
+                        "`{}` needs a {}: {} — see `diskedit help {}`",
+                        def.name,
+                        p.name.to_ascii_lowercase(),
+                        literals.join(", "),
+                        def.name
+                    )));
+                }
+                bail_fail(RunOutcome::usage(format!(
+                    "`{}` does not accept {} as a {} (expected {}) — see `diskedit help {}`",
+                    def.name,
+                    positional[index],
+                    p.name.to_ascii_lowercase(),
+                    literals.join(", "),
+                    def.name
+                )));
+            }
+            // 无判别项且后缀把全部形态都排除：用默认形态（或首个空判别项形态）报后缀要求
+            if let Some(v) = def
+                .variants
+                .iter()
+                .find(|v| v.default)
+                .or_else(|| def.variants.iter().find(|v| v.selects.is_empty()))
+            {
+                check_suffix(def, v, suffix);
+            }
+            if positional.is_empty() {
+                for v in def.variants {
+                    if let Some(p) = v.positionals.first() {
+                        bail_fail(RunOutcome::usage(format!(
+                            "`{}` needs {} — see `diskedit help {}`",
+                            def.name, p.name, def.name
+                        )));
+                    }
+                }
+            }
+            bail_fail(RunOutcome::usage(format!(
+                "`{}` does not match any accepted form — see `diskedit help {}`",
+                def.name, def.name
+            )))
+        }
+    }
 }
 
 fn refuse_unconsumed(cmd: &str, seen: &[&'static str]) {
@@ -1769,6 +2079,7 @@ fn store_flag(opts: &mut Options, spec: &FlagSpec, value: Option<Parsed>) {
         (Effect::GrowToEnd, None) => opts.grow_to_end = true,
         (Effect::Grow, None) => opts.grow = true,
         (Effect::DiscardReplay, None) => opts.discard_replay = true,
+        (Effect::Release, None) => opts.release = true,
         (Effect::ReplayTableOnly, None) => opts.replay_table_only = true,
         (Effect::AllowMove, None) => opts.allow_move = true,
         (Effect::NoFs, None) => opts.no_fs = true,
@@ -1947,11 +2258,11 @@ mod tests {
     }
 
     /// 把分区选择器写在目标后缀上的命令，块设备目标必须带 `:N` 或 `:last`。
-    /// `resize-part` 的 `:N` 是硬要求（缺了退 3）；`resizefs` 只允许挂载点形式省略，
-    /// 块设备目标仍要 `:N` 才走离线形式
+    /// `resize` 的表步骤形态（`--end` / `--grow-to-end`）要求 `:N`（缺了退 2）；
+    /// `resizefs` 只允许挂载点形式省略，块设备目标仍要 `:N` 才走离线形式
     fn assert_part_suffix_on_block_target(cmd: &str, target: &str, line: &str) {
         const PART_SUFFIX_REQUIRED: &[&str] = &[
-            "resize", "resize-part", "resizefs", "move", "copy", "delete", "set", "check", "mkfs",
+            "resize", "resizefs", "move", "copy", "delete", "set", "check", "mkfs",
         ];
         if !PART_SUFFIX_REQUIRED.contains(&cmd) || !target.starts_with("/dev/") {
             return;
@@ -2086,24 +2397,40 @@ mod tests {
         for c in COMMANDS {
             assert!(seen.insert(c.name), "duplicate command name {}", c.name);
             assert!(!c.summary.is_empty(), "{}: missing summary", c.name);
-            assert!(!c.syntax.is_empty(), "{}: missing syntax", c.name);
             assert!(!c.details.is_empty(), "{}: missing details", c.name);
+            assert!(!c.variants.is_empty(), "{}: missing forms", c.name);
             assert!(
-                matches!(
-                    c.positionals.first().map(|p| p.slot),
-                    Some(Slot::Target | Slot::OptionalTarget | Slot::RecordId | Slot::RootDir)
-                ),
-                "{}: first positional must name the thing the command acts on",
+                c.variants.iter().filter(|v| v.default).count() <= 1,
+                "{}: more than one default form",
                 c.name
             );
-            let mut slots = std::collections::HashSet::new();
-            for p in c.positionals {
-                assert!(slots.insert(p.slot), "{}: duplicate slot {:?}", c.name, p.slot);
-                assert!(!p.name.is_empty(), "{}: positional needs a name", c.name);
-                assert!(p.domain.takes_value(), "{}: {} has no value domain", c.name, p.name);
-            }
-            for f in c.options {
-                assert!(f.name.starts_with("--"), "{}: {} is not a long option", c.name, f.name);
+            for v in c.variants {
+                assert!(!v.syntax.is_empty(), "{}: form without syntax", c.name);
+                // 槽位在单个形态内唯一：同一命令的多个形态共用作用对象槽位是正常的
+                // （`info <TARGET>` 与 `info <TARGET>:N --grow`）
+                let mut slots = std::collections::HashSet::new();
+                assert!(
+                    matches!(
+                        v.positionals.first().map(|p| p.slot),
+                        Some(Slot::Target | Slot::OptionalTarget | Slot::RecordId | Slot::RootDir)
+                    ),
+                    "{}: first positional must name the thing the command acts on",
+                    c.name
+                );
+                assert!(
+                    v.positionals.iter().all(|p| !p.optional)
+                        || v.positionals.last().is_some_and(|p| p.optional),
+                    "{}: only the trailing positional may be optional",
+                    c.name
+                );
+                for p in v.positionals {
+                    assert!(slots.insert(p.slot), "{}: duplicate slot {:?}", c.name, p.slot);
+                    assert!(!p.name.is_empty(), "{}: positional needs a name", c.name);
+                    assert!(p.domain.takes_value(), "{}: {} has no value domain", c.name, p.name);
+                }
+                for f in v.options {
+                    assert!(f.name.starts_with("--"), "{}: {} is not a long option", c.name, f.name);
+                }
             }
             let help = crate::docs::help_text(c.name)
                 .unwrap_or_else(|| panic!("{}: help is not generated", c.name));
@@ -2121,7 +2448,12 @@ mod tests {
         use super::FLAGS;
         let registry: Vec<&str> = FLAGS.iter().map(|f| f.name).collect();
         for c in COMMANDS {
-            for f in c.options {
+            for v in c.variants {
+                for f in v.options {
+                    assert!(registry.contains(&f.name), "{}: {} is not in the flag registry", c.name, f.name);
+                }
+            }
+            for f in c.common_options {
                 assert!(registry.contains(&f.name), "{}: {} is not in the flag registry", c.name, f.name);
             }
         }
@@ -2138,11 +2470,10 @@ mod tests {
     #[test]
     fn flag_whitelists() {
         assert!(!find("resize").unwrap().accepts("--start"));
-        assert!(!find("resize").unwrap().accepts("--end"));
-        assert!(!find("resize").unwrap().accepts("--align"));
-        assert!(!find("resize-part").unwrap().accepts("--start"));
-        assert!(!find("resize-part").unwrap().accepts("--no-fs"));
-        assert!(!find("resize-part").unwrap().accepts("--chunk-size"));
+        assert!(find("resize").unwrap().accepts("--end"));
+        assert!(find("resize").unwrap().accepts("--align"));
+        assert!(find("resize").unwrap().accepts("--no-fs"));
+        assert!(!find("resize").unwrap().accepts("--chunk-size"));
         assert!(find("move").unwrap().accepts("--start"));
         assert!(find("nosuchcmd").is_none());
     }
@@ -2176,12 +2507,9 @@ mod tests {
             ("check", Confirmation::None),
             ("mkfs", Confirmation::Required),
             ("resizefs", Confirmation::Required),
-            ("undo", Confirmation::Required),
-            ("abandon", Confirmation::Required),
+            ("recover", Confirmation::Required),
             ("new", Confirmation::Required),
             ("add", Confirmation::Required),
-            ("resize-part", Confirmation::Required),
-            ("plan", Confirmation::None),
         ];
         for (name, rule) in expected {
             let c = find(name).unwrap_or_else(|| panic!("{name}: not a command"));
@@ -2202,7 +2530,7 @@ mod tests {
     fn write_commands_take_sector_size() {
         for c in COMMANDS.iter().filter(|c| c.mode != TargetMode::ReadOnly) {
             assert!(
-                c.options.iter().any(|o| o.name == "--sector-size"),
+                c.accepts("--sector-size"),
                 "{}: writes to the target but does not take --sector-size",
                 c.name
             );

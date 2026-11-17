@@ -15,12 +15,9 @@ const COMMANDS: &[&[&str]] = &[
     &["check"],
     &["mkfs"],
     &["resizefs"],
-    &["undo"],
-    &["abandon"],
+    &["recover"],
     &["new"],
     &["add"],
-    &["resize-part"],
-    &["plan"],
 ];
 
 fn run(args: &[&str]) -> (i32, String, String) {

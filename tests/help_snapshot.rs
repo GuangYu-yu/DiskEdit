@@ -27,7 +27,6 @@ fn run(args: &[&str]) -> (i32, String, String) {
 
 const USAGE_COMMANDS: &[&str] = &[
     "  info <TARGET>",
-    "  plan <TARGET>",
     "  inspect <TARGET|PATH>",
     "  records list [TARGET]",
     "  records verify <TARGET> <ID>",
@@ -40,11 +39,9 @@ const USAGE_COMMANDS: &[&str] = &[
     "  check <TARGET>:N",
     "  mkfs <TARGET>:N",
     "  resizefs <TARGET>:N",
-    "  undo <TARGET>",
-    "  abandon <TARGET>",
+    "  recover <TARGET>",
     "  new <TARGET>",
     "  add <TARGET>",
-    "  resize-part <TARGET>:N",
 ];
 
 const EXIT_LINES: &[&str] = &[
@@ -66,7 +63,6 @@ const USAGE_SNAPSHOT: &str = include_str!("snapshots/usage.txt");
 
 const SINGLE_WORD: &[&str] = &[
     "info",
-    "plan",
     "inspect",
     "resize",
     "move",
@@ -76,11 +72,9 @@ const SINGLE_WORD: &[&str] = &[
     "check",
     "mkfs",
     "resizefs",
-    "undo",
-    "abandon",
+    "recover",
     "new",
     "add",
-    "resize-part",
 ];
 
 const RECORD_SUBCOMMANDS: &[&[&str]] = &[&["records", "list"], &["records", "verify"], &["records", "scan"]];
@@ -186,7 +180,7 @@ fn help_never_mentions_cylinder_or_chs_geometry() {
         for forbidden in ["cyl", "chs"] {
             assert!(
                 !lower.contains(forbidden),
-                "help mentions legacy {forbidden:?} geometry:\n{text}"
+                "help mentions {forbidden:?} geometry:\n{text}"
             );
         }
     }
@@ -209,13 +203,12 @@ fn unknown_help_topics_and_unknown_commands_are_usage_errors() {
 fn help_documents_the_registered_flags_of_the_contract() {
     // 只断言明确登记、且帮助正文承载的旗标；不反推“帮助里没写的旗标不合法”。
     let cases: &[(&str, &[&str])] = &[
-        ("info", &["--sector-size"]),
-        ("plan", &["--grow"]),
+        ("info", &["--sector-size", "--grow"]),
         ("new", &["--table", "--overwrite-data", "--sector-size"]),
         ("add", &["--start", "--align", "--part-number", "--name", "--type-guid"]),
         ("set", &["--random"]),
         ("mkfs", &["--label"]),
-        ("abandon", &["--discard-replay", "--yes"]),
+        ("recover", &["--release", "--discard-replay", "--yes"]),
     ];
     for (name, flags) in cases {
         let (code, out, err) = run(&["help", name]);

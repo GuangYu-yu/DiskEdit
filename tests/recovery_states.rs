@@ -257,7 +257,7 @@ fn evidence_unrecognized_format_is_a_structure_failure() {
 }
 
 #[test]
-fn a_record_in_the_previous_layout_is_never_resumed_by_a_write_command() {
+fn a_record_in_an_unrecognized_layout_is_never_resumed_by_a_write_command() {
     let prepare = |tag: &str, op: u8, size: usize| {
         let dir = temp_dir(tag);
         let image = image_with(&dir, size);
@@ -275,25 +275,25 @@ fn a_record_in_the_previous_layout_is_never_resumed_by_a_write_command() {
             "{tag}: {err}"
         );
         assert!(
-            err.contains("`diskedit abandon` is the only way to release it"),
+            err.contains("`diskedit recover --release` is the only way to release it"),
             "{tag}: {err}"
         );
         assert_eq!(fs::read(image).unwrap(), before, "{tag}: the target must not change");
         assert_eq!(fs::read(record_path(image)).unwrap(), bytes, "{tag}: the record is left in place");
     };
 
-    // move：记录在打开写事务时就被判成外来布局，不需要先有分区表
-    let (image, bytes) = prepare("old_magic_move", 5, 4096);
+    // move：记录在打开写事务时就被判成不可识别的布局，不需要先有分区表
+    let (image, bytes) = prepare("unknown_magic_move", 5, 4096);
     write_record(&image, &bytes);
     let before = fs::read(&image).unwrap();
     let target = format!("{}:1", image.display());
     let (code, out, err) = run(&["move", &target, "--start", "2048", "--yes"]);
-    check("old_magic_move", &image, &bytes, before, code, &out, &err);
+    check("unknown_magic_move", &image, &bytes, before, code, &out, &err);
 
     // resize --allow-move：锁前的只读阶段要先认出表与分区，故先建一张 GPT 与一个分区；
-    // 记录仍是外来布局，写事务打开时同样退出 3。旧 magic 的记录连身份字段都读不出来，
+    // 记录仍是不认识的布局，写事务打开时同样退出 3。不认识的 magic 连身份字段都读不出来，
     // 建表后镜像尺寸与记录里的不一致不影响这条路径
-    let (image, bytes) = prepare("old_magic_resize", 10, 8 * 1024 * 1024);
+    let (image, bytes) = prepare("unknown_magic_resize", 10, 8 * 1024 * 1024);
     let img = image.display().to_string();
     assert_eq!(run(&["new", &img, "--yes"]).0, 0);
     assert_eq!(run(&["add", &img, "1M", "--yes"]).0, 0);
@@ -301,7 +301,7 @@ fn a_record_in_the_previous_layout_is_never_resumed_by_a_write_command() {
     let before = fs::read(&image).unwrap();
     let target = format!("{img}:1");
     let (code, out, err) = run(&["resize", &target, "grow", "--allow-move", "--yes"]);
-    check("old_magic_resize", &image, &bytes, before, code, &out, &err);
+    check("unknown_magic_resize", &image, &bytes, before, code, &out, &err);
 }
 
 #[test]
@@ -471,9 +471,9 @@ fn prepared_goes_to_quarantine_and_committed_goes_to_cleanup() {
     assert!(out.contains("commit: Prepared"), "{out}");
     assert!(err.contains("unfinished:"), "{err}");
 
-    let (code, out, err) = run(&["abandon", image.to_str().unwrap(), "--yes"]);
+    let (code, out, err) = run(&["recover", image.to_str().unwrap(), "--release", "--yes"]);
     assert_eq!(code, 0, "{out}{err}");
-    assert!(out.contains("abandoned 1 recovery record(s)"), "{out}");
+    assert!(out.contains("released 1 recovery record(s)"), "{out}");
     assert!(!record_path(&image).exists());
     let quarantined = record_dir(&image).join(".abandoned");
     assert_eq!(fs::read(&quarantined).unwrap(), prepared.bytes());
@@ -498,7 +498,7 @@ fn prepared_goes_to_quarantine_and_committed_goes_to_cleanup() {
 
     // 已提交记录：本次只释放记录、不回滚任何区间。记录文件被移走是持久状态变化，
     // 因此不是 NoMutation（4）而是 Partial（5），文案必须写清这一点
-    let (code, out, err) = run(&["undo", committed_image.to_str().unwrap(), "--yes"]);
+    let (code, out, err) = run(&["recover", committed_image.to_str().unwrap(), "--yes"]);
     assert_eq!(code, 5, "{out}{err}");
     assert!(err.contains("already committed"), "{err}");
     assert!(err.contains("no recorded range was rolled back"), "{err}");

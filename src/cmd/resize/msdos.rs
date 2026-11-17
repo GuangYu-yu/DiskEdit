@@ -126,7 +126,7 @@ pub(crate) fn mbr_grow_finish(
                     Ok(Some(missed)) => pending.push(missed),
                     // 没有可扩 FS 的几态共用一份分类：日志行与待办都从那里来
                     Ok(None) => {
-                        let p = movepart::grow_post(part, &g0);
+                        let p = movepart::grow_post(part, &g0, is_pv);
                         println!("{}", p.log);
                         if let Some(item) = p.pending {
                             pending.push(item);
@@ -164,10 +164,14 @@ pub(crate) fn mbr_grow_finish(
                 // 旧分区尺寸，此后回滚表项即"表与内容自相矛盾"，先落屏障
                 src.mark_non_reversible().unwrap_or_else(|e| bail_fail(RunOutcome::from(e.into_io())));
                 match t.resize_fs(src) {
-                    // 扩容已成功，卸载的成败是另一条后置条件：它不改写成功这一事实，
-                    // 只作为一条待办随结果浮出
-                    Ok(Some(leak)) => pending.push(leak.into_pending(part)),
-                    Ok(None) => {}
+                    // 扩容已执行；未证实的落点与没卸掉的挂载点都是未达成的后置条件：
+                    // 它们不改写"扩容已执行"这一事实，只作为待办随结果浮出
+                    Ok(outcome) => {
+                        if let Some(line) = outcome.ok_line() {
+                            println!("{line}");
+                        }
+                        pending.extend(outcome.pending(part));
+                    }
                     Err(e) => pending.push(crate::outcome::Pending::new(
                         part,
                         crate::outcome::PendingKind::Fs,
@@ -225,7 +229,7 @@ pub(crate) fn mbr_grow_finish(
 }
 
 /// resize 的 MBR 分支（仅主分区 1..4；逻辑分区与扩展容器不支持）。原位扩容：扩须右侧
-/// 空闲足够（MBR 无搬移能力），缩容由 `resize-part` 承担（本命令直接拒绝）。块设备复用在线
+/// 空闲足够（MBR 无搬移能力），缩容由 `resize` 承担（本命令直接拒绝）。块设备复用在线
 /// 路径（基于 sysfs + sfdisk，与表类型无关）
 pub(crate) fn cmd_resize_msdos(a: &ResizeRequest, pref: PartSelector, src_ro: &FileSource) -> crate::outcome::RunOutcome {
     // MBR resize 没有搬移能力：--allow-move 承诺的"搬开挡路分区"不存在，
@@ -404,7 +408,7 @@ pub(crate) fn cmd_resize_msdos(a: &ResizeRequest, pref: PartSelector, src_ro: &F
     }
     if grow_to_end {
         let free = free_right_msdos(&mbr, p, total_sectors);
-        // 请求的分区增长无法实现：与 GPT 的 `resize grow` 及在线路径同语义拒绝，而不是
+        // 请求的分区增长无法实现：与 GPT 的扩容形态及在线路径同语义拒绝，而不是
         // 只把 FS 扩满现分区再以 0 退出——那会让调用方以为分区表也已更新
         if free == 0 {
             // PV 例外：分区层没有可扩的扇区，但 pvresize/lvextend 仍是本次操作的后置

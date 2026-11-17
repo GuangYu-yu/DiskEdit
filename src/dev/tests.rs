@@ -94,7 +94,10 @@ pub(crate) fn non_canonical_literal_yields_the_canonical_slot() {
     let literal = sub.join("..").join(canonical.file_name().unwrap());
     assert_ne!(literal, canonical, "the fixture must be textually different");
     let id = TargetIdentity::image_at(&canonical, &literal);
-    assert_eq!(id.journal_path(), suffix_path(&canonical, JOURNAL_SUFFIX));
+    assert_eq!(
+        id.lock_path(),
+        image_record_dir(&canonical).expect("the per-user state root is available in tests").join(RECORD_LOCK_NAME)
+    );
 }
 
 /// 相对写法不移动记录的落点：记录目录由 canonical 的文件身份派生，`..` / 相对名
@@ -135,8 +138,8 @@ pub(crate) fn image_identity_follows_the_opened_handle_not_the_path() {
     let id = FileSource::sample_image(&link, Some((&f, &meta))).unwrap();
     let canonical = std::fs::canonicalize(&a).unwrap();
     assert_eq!(
-        id.journal_path(),
-        suffix_path(&canonical, JOURNAL_SUFFIX),
+        id.lock_path(),
+        image_record_dir(&canonical).expect("the per-user state root is available in tests").join(RECORD_LOCK_NAME),
         "the identity subject must be the opened file, not the spelling used to open it"
     );
     drop(f);
@@ -171,19 +174,17 @@ pub(crate) fn log_path_comes_from_the_identity() {
     }
 }
 
-/// 落盘命名：命名空间的字面量只在这一处出现，三类伴随文件各自的后缀由它派生校验
+/// 落盘命名：命名空间的字面量只在这一处出现，两类伴随文件各自的后缀由它派生校验
 #[test]
 pub(crate) fn artifact_names_are_pinned_as_documented() {
-    let ns = JOURNAL_SUFFIX.strip_suffix("journal").expect("journal suffix ends with its stem");
+    let ns = LOCK_SUFFIX.strip_suffix("lock").expect("lock suffix ends with its stem");
     assert_eq!(ns, ".diskedit.");
-    assert_eq!(LOCK_SUFFIX, format!("{ns}lock"));
     assert_eq!(LOG_SUFFIX, format!("{ns}log"));
 
-    // 镜像：journal 仍是目标路径的同目录兄弟；锁与记录落在每用户状态根下的键目录内
+    // 镜像：锁与记录落在每用户状态根下的键目录内，日志是目标路径的同目录兄弟
     let img = PathBuf::from("/tmp/x.img");
     let id = TargetIdentity::resolve_image(&img);
     let record_dir = image_record_dir(&img).expect("the per-user state root is available in tests");
-    assert_eq!(id.journal_path(), suffix_path(&img, JOURNAL_SUFFIX));
     assert_eq!(id.lock_path(), record_dir.join(RECORD_LOCK_NAME));
     assert_eq!(id.log_path(None), suffix_path(&img, LOG_SUFFIX));
 }
@@ -199,13 +200,12 @@ pub(crate) fn fnv1a64_matches_the_reference_vectors() {
 }
 
 /// 非 loop 块设备的身份是**盘级**的：恢复现场与锁按 disk_key 落点。
-/// 断言用 state_dir() 自身拼期望值——测试不改环境变量，进程内并行测试共享环境
+/// 断言用 host_state_root() 自身拼期望值——测试不改环境变量，进程内并行测试共享环境
 #[test]
 pub(crate) fn block_identity_keys_on_the_whole_disk() {
     let id = TargetIdentity::from_block_keys(Path::new("/dev/sdb1"), "sdb-1234".to_string());
     let disk_tok = key_token("sdb-1234");
-    assert_eq!(id.journal_path(), state_dir().join(format!("{disk_tok}{JOURNAL_SUFFIX}")));
-    assert_eq!(id.lock_path(), state_dir().join(format!("{disk_tok}{LOCK_SUFFIX}")));
+    assert_eq!(id.lock_path(), host_state_root().join(format!("{disk_tok}{LOCK_SUFFIX}")));
 }
 
 /// 锁键按**载体**收敛，记录键按目标分开：同一盘的两个分区各有自己的记录目录，
@@ -224,7 +224,7 @@ pub(crate) fn block_lock_converges_to_the_carrier_while_records_stay_per_target(
     let part1 = with_record("/dev/sdb1", Some(1), "sdb-1234");
     let part2 = with_record("/dev/sdb2", Some(2), "sdb-1234");
     let whole = with_record("/dev/sdb", None, "sdb-1234");
-    let expected = state_dir().join(format!("{}{LOCK_SUFFIX}", key_token("sdb-1234")));
+    let expected = host_state_root().join(format!("{}{LOCK_SUFFIX}", key_token("sdb-1234")));
     assert_eq!(part1.lock_path(), expected.as_path());
     assert_eq!(part2.lock_path(), expected.as_path());
     assert_eq!(whole.lock_path(), expected.as_path());
@@ -311,7 +311,6 @@ pub(crate) fn loop_identity_converges_to_the_backing_file() {
     let _cleanup = Bound { dev: dev.clone() };
 
     let id = TargetIdentity::loop_backed(&dev, backing.clone()).expect("a bound backing file resolves");
-    assert_eq!(id.journal_path(), suffix_path(&backing, JOURNAL_SUFFIX));
     assert_eq!(
         id.lock_path(),
         image_record_dir(&backing)
@@ -372,7 +371,11 @@ pub(crate) fn image_identity_prefers_the_realpath() {
 
     let via_link = TargetIdentity::resolve_image(&link);
     let direct = TargetIdentity::resolve_image(&real);
-    assert_eq!(via_link.journal, direct.journal, "both spellings must share one journal");
+    assert_eq!(
+        via_link.record_path(),
+        direct.record_path(),
+        "both spellings must share one record slot"
+    );
     assert_eq!(via_link.lock_path(), direct.lock_path());
     assert_eq!(via_link.log_path(None), suffix_path(&link, LOG_SUFFIX));
 }
@@ -416,16 +419,15 @@ pub(crate) fn sysfs_attr_distinguishes_missing_from_read_failure() {
     assert_ne!(e.kind(), io::ErrorKind::NotFound, "{e}");
 }
 
-/// 锁按**盘**派生、现场按**目标**派生：两者在块设备上是同一个函数算出来的两个投影，
-/// 因此锁落点必然落在 state_dir 下、与 journal 同目录（不引入第二套路径规则）。
+/// 锁按**盘**派生、记录按**目标**派生：两者在块设备上是同一个函数算出来的两个投影，
+/// 因此锁落点必然落在 state_dir 下（不引入第二套路径规则）。
 /// 非 Linux 跑退化身份（无 sysfs 判据）；Linux 上身份只能来自真实拓扑
 /// （见 `block_identity_refuses_unresolvable_topology`）
 #[cfg(not(target_os = "linux"))]
 #[test]
-pub(crate) fn block_lock_and_journal_share_one_directory() {
+pub(crate) fn block_lock_lives_in_the_state_dir() {
     let id = TargetIdentity::resolve_block(Path::new("/dev/diskedit-nonexistent")).unwrap();
     assert_eq!(id.lock_path().parent(), Some(state_dir().as_path()));
-    assert_eq!(id.journal_path().parent(), Some(state_dir().as_path()));
     assert!(id.lock_path().to_string_lossy().ends_with(LOCK_SUFFIX));
 }
 

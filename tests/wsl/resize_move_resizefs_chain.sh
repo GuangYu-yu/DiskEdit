@@ -65,9 +65,9 @@ $B info "$T" | grep -q '"num":1,"first_lba":2048,"last_lba":131038,' \
   && echo "  OK   分区已到 last_usable(131038)" || { echo "  BAD  尾打包未到位"; rc=1; }
 verify_marker "resize grow --no-fs"
 
-echo "== resize-part --grow-to-end（此刻分区终点已是 last_usable，故无实际变更）=="
-# resize-part 只改分区表、不动 FS；此刻终点已在 last_usable，故无实际变更
-$B resize-part --yes "$T":1 --grow-to-end >/dev/null; exp "$?" 0 "resize-part --grow-to-end"
+echo "== resize --grow-to-end（此刻分区终点已是 last_usable，故无实际变更）=="
+# 此刻终点已在 last_usable，表项不变，FS 步骤也就不产生改动
+$B resize --yes "$T":1 --grow-to-end >/dev/null; exp "$?" 0 "resize --grow-to-end"
 
 echo "== resizefs <mountpoint> <BYTES>（BYTES = 分区目标大小）=="
 # 上一步 --no-fs 把 FS 留在了 42MiB（分区终点 100351，48MiB），而分区现在已是

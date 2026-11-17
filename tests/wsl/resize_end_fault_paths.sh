@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# resize_part 路径（move / 收缩 / 扩容收尾 / grow）+ 注入；copy 中断
+# resize --end 路径（move / 收缩 / 扩容收尾 / grow）+ 注入；copy 中断
 source "$(dirname "$0")/lib.sh"
 require_fault_bin
 
@@ -66,9 +66,9 @@ chkp 2 "$M2"
 echo
 echo "===== 3: rs-after-commit（扩容收尾未做）→ rerun 续做收尾 ====="
 mk; M3=$(fillp 3 190)
-DISKEDIT_FAULT=rs-after-commit $BF resize-part --yes "$T":3 --end 1026047 >/dev/null 2>&1
+DISKEDIT_FAULT=rs-after-commit $BF resize --yes "$T":3 --end 1026047 >/dev/null 2>&1
 echo "record: $(record_present "$T" && echo present || echo absent)"
-OUT=$($BF resize-part --yes "$T":3 --end 1026047 2>&1); E=$?
+OUT=$($BF resize --yes "$T":3 --end 1026047 2>&1); E=$?
 echo "$OUT" | grep -o "resize already committed.*" | head -1
 exp "$E" 0 "表已提交后 rerun 续做 FS 收尾（exit 0）"
 LD=$(lo_attach "$T")
@@ -82,9 +82,9 @@ chkp 3 -
 echo
 echo "===== 4: 缩容 + rs-after-fs-shrink → FS 已缩、表未改 → 同请求重跑续做 ====="
 mk; M1=$(fillp 1 20)
-DISKEDIT_FAULT=rs-after-fs-shrink $BF resize-part --yes "$T":1 --end 145407 >/dev/null 2>&1
+DISKEDIT_FAULT=rs-after-fs-shrink $BF resize --yes "$T":1 --end 145407 >/dev/null 2>&1
 echo "record: $(record_present "$T" && echo present || echo absent)"
-OUT=$($BF resize-part --yes "$T":1 --end 145407 2>&1); exp "$?" 0 "同请求重跑续做缩容"
+OUT=$($BF resize --yes "$T":1 --end 145407 2>&1); exp "$?" 0 "同请求重跑续做缩容"
 $B info "$T" | grep -o '"num":1,"first_lba":[0-9]*,"last_lba":[0-9]*' | grep -q '"last_lba":145407' \
   && echo "  OK   p1 收缩到 70M（last_lba=145407）" || { echo "  BAD  p1 未收缩到预期终点"; rc=1; }
 chkp 1 -
@@ -95,7 +95,7 @@ echo "===== 5: after-table-write（表已写、table_step_done 前崩）→ 围�
 # 崩溃点取在 table::execute 之后：盘上的表已指向新几何，记录还没推进到表步完成
 img T t18f.img
 mk; M3=$(fillp 3 190)
-DISKEDIT_FAULT=after-table-write $BF resize-part --yes "$T":3 --end 1026047 >/dev/null 2>&1
+DISKEDIT_FAULT=after-table-write $BF resize --yes "$T":3 --end 1026047 >/dev/null 2>&1
 exp "$(record_present "$T" && echo yes || echo no)" yes "表写完后中断留下记录现场"
 $B info "$T" | grep -q '"num":3,"first_lba":[0-9]*,"last_lba":1026047' \
   && echo "  OK   崩溃前表已写到新几何（last_lba=1026047）" || { echo "  BAD  表未写到新几何"; rc=1; }
@@ -103,7 +103,7 @@ INS=$($B inspect "$T" 2>/dev/null || true)
 echo "$INS" | grep -q 'table fence: table step in flight' \
   && echo "  OK   记录写明表步可能已写（table fence: table step in flight）" \
   || { echo "  BAD  记录没有表步围栏现场"; echo "$INS" | grep -i 'table fence'; rc=1; }
-OUT=$($BF resize-part --yes "$T":3 --end 1026047 2>&1); exp "$?" 0 "同请求重跑收尾"
+OUT=$($BF resize --yes "$T":3 --end 1026047 2>&1); exp "$?" 0 "同请求重跑收尾"
 exp "$(record_absent "$T" && echo yes || echo no)" yes "收尾后记录释放（围栏已落定）"
 chkp 3 -
 
@@ -123,7 +123,7 @@ fi
 chkp 2 "$M2"; chkp 3 "$M3"
 
 echo
-echo "===== 7: copy 确定性中断（copy-before-commit）→ 重跑拒 → abandon → 重跑 → 数据一致 ====="
+echo "===== 7: copy 确定性中断（copy-before-commit）→ 重跑拒 → recover --release → 重跑 → 数据一致 ====="
 img T2 t18b.img; T=$T2
 mk; M3=$(fillp 3 190)
 DISKEDIT_FAULT=copy-before-commit $BF copy "$T":3 --start 1500000 --chunk 1 --yes >/dev/null 2>&1
@@ -131,8 +131,8 @@ exp "$(record_present "$T" && echo yes || echo no)" yes "copy 中断留下记录
 $B info "$T" | grep -q '"num":4' && { echo "  BAD  p4 已进表（应在提交前中断）"; rc=1; } || echo "  OK   p4 尚未进表"
 OUT=$($BF copy "$T":3 --start 1500000 --chunk 1 --yes 2>&1); exp "$?" 5 "未释放现场时重跑被拒（past-boundary 口径）"
 echo "$OUT" | grep -o "unfinished operation still owns this target" | head -1
-exp "$($B abandon "$T" --yes >/dev/null 2>&1; echo $?)" 0 "abandon 释放 copy 现场"
-OUT=$($B copy "$T":3 --start 1500000 --chunk 1 --yes 2>&1); exp "$?" 0 "abandon 后重跑 copy"
+exp "$($B recover --release "$T" --yes >/dev/null 2>&1; echo $?)" 0 "recover --release 释放 copy 现场"
+OUT=$($B copy "$T":3 --start 1500000 --chunk 1 --yes 2>&1); exp "$?" 0 "recover --release 后重跑 copy"
 $B info "$T" | grep -q '"num":4' && echo "  OK   p4 已落表" || { echo "  BAD  p4 未进表"; rc=1; }
 chkp 3 "$M3"
 LD=$(lo_attach "$T")

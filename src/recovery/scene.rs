@@ -141,6 +141,8 @@ impl SceneIdentity {
                 crate::support::hex_lower(&current)
             ));
         }
+        // loop 映射只要有任一侧给出就参与比对：记录是经 loop 写的，同一份文件直接打开时
+        // 写起点不同，不能因此把记录当成本次目标
         if self.mapping != other.mapping {
             return Some(format!(
                 "recorded loop mapping {}, current {}",
@@ -158,7 +160,7 @@ impl SceneIdentity {
         self.mismatch_reason(other).is_none()
     }
 
-    /// 同一个载体：只比身份材料与载体 `file_id`。**只用于释放**：`abandon` 据此决定
+    /// 同一个载体：只比身份材料与载体 `file_id`。**只用于释放**：`diskedit recover --release` 据此决定
     /// 这份记录能不能释放；容量变化或 loop 映射变化说明记录不可回放，但仍属于这个目标。
     /// 认领不得用它——少了 loop 映射就会把已指向别处的映射当成本次目标
     pub(crate) fn same_carrier(&self, other: &Self) -> bool {

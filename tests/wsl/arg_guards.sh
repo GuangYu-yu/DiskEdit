@@ -37,10 +37,10 @@ echo "== 语义 / 互斥拒绝 =="
 # src/cmd/mod.rs + src/args.rs：SIZE 只有位置参数一种给法，--size 不在 resize 的
 # 白名单里，给了即 usage（2）
 $B resize "$T":1 --size 8M 16M >/dev/null 2>&1; exp $? 2 "resize --size 非本命令选项（2）" # cli-surface: refused
-# resize-part 不接受 --start（未登记），起点取当前表项；
+# resize 的 --end/--grow-to-end 形态不接受 --start，起点取当前表项；
 # 该夹具里 p1 起点 2048、末端 4095
 # --end 等于当前末端即空操作，按成功报 0
-$B resize-part --yes "$T":1 --end 4095 >/dev/null 2>&1; exp $? 0 "resize-part --end 当前末端（空操作，0）"
+$B resize --yes "$T":1 --end 4095 >/dev/null 2>&1; exp $? 0 "resize --end 当前末端（空操作，0）"
 
 echo
 echo "==== 参数守卫结束（rc=$rc）===="

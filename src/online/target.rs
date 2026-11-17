@@ -196,10 +196,8 @@ pub(crate) fn resolve_target(mountpoint: &Path) -> io::Result<OnlineTarget> {
     let sysdir = crate::dev::sysfs_dev_block_dir().join(format!("{maj}:{min}"));
     // 内核 sysfs-block ABI：存在 partition 属性即说明该设备是分区，内容为分区号。
     // 属性不存在 = 不是分区（设备形态）；属性在但读不出来 = 环境故障，不能也报成"不是分区"
-    let pno = match sysfs_u64(&sysdir.join("partition")) {
-        Ok(n) => u32::try_from(n).map_err(|_| {
-            io::Error::new(io::ErrorKind::InvalidData, format!("sysfs partition number {n} overflows u32"))
-        })?,
+    let pno = match crate::dev::sysfs_partition_no(&sysdir) {
+        Ok(n) => n,
         Err(e) if e.kind() == io::ErrorKind::NotFound => {
             return Err(io::Error::new(io::ErrorKind::InvalidInput, format!(
                 "{} is not a partition (no sysfs partition attribute)",
@@ -240,7 +238,7 @@ pub(crate) fn resolve_target(mountpoint: &Path) -> io::Result<OnlineTarget> {
     // 盘名由分区 sysfs 目录名推得，/dev 下的同名节点必须真是这台设备：容量、
     // logical_block_size、邻居区间全部取自 sysfs，而 sfdisk / partx / BLKPG / pvresize
     // 只拿到这个路径——名字指向另一台设备时"几何来自 A、写入落在 B"
-    ensure_node_is_device(&disk_dev, &crate::dev::sysfs_block_dir().join(&disk_name))?;
+    let _disk_guard = ensure_node_is_device(&disk_dev, &crate::dev::sysfs_block_dir().join(&disk_name))?;
 
     // 相邻分区区间（本分区除外），fail-fast 前置自查；内核 -EBUSY 兜底
     let this_dev = (maj as u64, min as u64);
@@ -267,8 +265,9 @@ pub(crate) fn blkpg_resize(t: &OnlineTarget, new_len_bytes: u64) -> io::Result<(
     let disk_name = t.disk_dev.file_name().ok_or_else(|| {
         io::Error::other(format!("{} has no file name to cross-check against sysfs", t.disk_dev.display()))
     })?;
-    crate::dev::ensure_node_is_device(&t.disk_dev, &crate::dev::sysfs_block_dir().join(disk_name))?;
-    let disk = fs::OpenOptions::new().read(true).write(true).open(&t.disk_dev)?;
+    // 同一句柄核身份与发 ioctl：核对之后按路径重开，中间 udev 可能把 /dev/<盘名>
+    // 重绑到另一台设备——BLKPG 只挡 start 不符，对同几何换盘不设防
+    let disk = crate::dev::ensure_node_is_device(&t.disk_dev, &crate::dev::sysfs_block_dir().join(disk_name))?;
     crate::ioctl::blkpg_resize_partition(&disk, t.start_bytes, new_len_bytes, t.pno)
 }
 

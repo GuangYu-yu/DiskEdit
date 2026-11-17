@@ -1,8 +1,8 @@
-//! 低阶布局命令：new / add / delete / resize-part / move / copy。
+//! 低阶布局命令：new / add / delete / move / copy。
 
 use crate::cli::{
     AddRequest, CopyRequest, DeleteRequest, MoveRequest, NewRequest,
-    ResizePartRequest, StartSelector,
+    ResizeEndRequest, StartSelector,
 };
 use crate::dev::WriteSource;
 use crate::support::*;
@@ -26,16 +26,6 @@ pub(crate) const DETAILS_ADD: &str = r#"  Add a partition that holds SIZE. Witho
 
 pub(crate) const DETAILS_DELETE: &str = r#"  Delete a partition entry (the data area is not wiped)."#;
 
-pub(crate) const DETAILS_RESIZE_PART: &str = r#"  Low-level grow/shrink in place: repartition the end without moving the
-  partition. The start stays at the partition's current starting LBA;
-  relocating it is `diskedit move`. --grow-to-end pins end at
-  last_usable_lba (fill semantics).
-  A grow also resizes the filesystem inside.
-
-  CONFIRMATION: --yes is required. An end below the current end shrinks the
-  partition together with its filesystem; a shrink that gets interrupted
-  cannot be rolled back with `undo`."#;
-
 pub(crate) const DETAILS_MOVE: &str = r#"  Move a partition, data follows (chunked copy, resumable from its recovery record).
 
   LOCATION:
@@ -46,13 +36,13 @@ pub(crate) const DETAILS_MOVE: &str = r#"  Move a partition, data follows (chunk
   at the new position (mkswap); its contents are not copied.
 
   CONFIRMATION: required. The destination range is overwritten as-is and an
-  interrupted relocation cannot be rolled back with `undo`; pass --yes."#;
+  interrupted relocation cannot be rolled back with `recover`; pass --yes."#;
 
 pub(crate) const DETAILS_COPY: &str = r#"  Byte-wise copy a partition to a new location; the source is untouched.
   --start end packs the copy against the end of the usable range.
   No resume: an interrupted copy cannot pick up where it left off. It leaves
   a non-rollbackable journal on the target, so write commands refuse until
-  that is released with `diskedit abandon` — re-run then to rewrite the
+  that is released with `diskedit recover --release` — re-run then to rewrite the
   destination from the beginning.
 
   PARTUUID: the copy gets a freshly generated v4 GUID, so the two
@@ -61,7 +51,7 @@ pub(crate) const DETAILS_COPY: &str = r#"  Byte-wise copy a partition to a new l
 
   CONFIRMATION: required. The destination range is overwritten with the
   source bytes and the journal records the write as non-rollbackable —
-  `undo` cannot restore what was there before; pass --yes."#;
+  `recover` cannot restore what was there before; pass --yes."#;
 
 pub(crate) fn cmd_new(a: &NewRequest) -> crate::outcome::RunOutcome {
     // new 作用于整盘：`:N` 若被静默忽略，用户会误以为只动了某个分区
@@ -389,14 +379,15 @@ pub(crate) fn cmd_add(a: &AddRequest) -> crate::outcome::RunOutcome {
                 let len = partition_len(len_bytes, ss);
                 let used = mbr_occupied(&parts, total);
                 let unit = placement_unit(a.align, a.align_given, ss);
+                let last = table::last_sector_of(total);
                 let (start, end) = match a.start {
                     Some(StartSelector::Lba(lba)) => {
-                        fixed_start(&used, 1, total.saturating_sub(1), a.align, ss, len, lba)
+                        fixed_start(&used, 1, last, a.align, ss, len, lba)
                     }
                     Some(StartSelector::PinnedToEnd) => bail_fail(RunOutcome::refused(
                         "`add --start end` has no end point to pin to — give the starting LBA or omit --start",
                     )),
-                    None => first_fit(&used, 1, total.saturating_sub(1), unit, len),
+                    None => first_fit(&used, 1, last, unit, len),
                 };
                 match add_mbr_entry(&mut src, a.part_number, start, end, os_type) {
                     Ok(num) => table_record_done(&mut src, &format!("added partition #{num} (verify with: diskedit info {})", a.target)),
@@ -518,76 +509,84 @@ pub(crate) fn cmd_delete(a: &DeleteRequest) -> crate::outcome::RunOutcome {
     // 可能只是文件系统引导扇区——FAT/NTFS 的引导扇区末尾同为 0x55AA，MBR 判据只认
     // 这个签名。判据见 `refuse_partition_node_target`
     refuse_partition_node_target("delete", &a.target);
-    if !a.yes {
-        bail_fail(RunOutcome::refused("`delete` removes the target partition entry; pass --yes to confirm"));
-    } else {
-        let mut src = open_table_record(a, crate::recovery::OpKind::Delete).unwrap_or_else(|f| bail_fail(f));
-        // 写表前的占用闸：删掉一个仍被内核使用的分区，会让盘上表与挂载视图分叉
-        if let Err(f) = crate::fsops::ensure_table_write_idle(&src) {
-            bail_fail(f);
-        }
-        // 锁下快照
-        let part = crate::gpt_policy::resolve_part(&src, pref).unwrap_or_else(|f| bail_fail(f));
-        let r = match table::table_label(&src) {
-            Ok(table::TableLabel::Gpt) => crate::gpt_policy::delete_entry(&mut src, part),
-            Ok(table::TableLabel::Mbr) => delete_mbr_entry(&mut src, part),
-            Ok(other) => bail_fail(RunOutcome::refused(format!("`delete` needs a GPT or MBR target (label: {other})"))),
-            Err(e) => bail_fail(RunOutcome::refused(format!("label probe failed: {e}"))),
-        };
-        match r {
-            Ok(()) => table_record_done(&mut src, &format!("deleted partition #{part} (verify with: diskedit info {})", a.target)),
-            Err(f) => bail_fail(f),
-        }
+    let mut src = open_table_record(a, crate::recovery::OpKind::Delete).unwrap_or_else(|f| bail_fail(f));
+    // 写表前的占用闸：删掉一个仍被内核使用的分区，会让盘上表与挂载视图分叉
+    if let Err(f) = crate::fsops::ensure_table_write_idle(&src) {
+        bail_fail(f);
+    }
+    // 锁下快照
+    let part = crate::gpt_policy::resolve_part(&src, pref).unwrap_or_else(|f| bail_fail(f));
+    let r = match table::table_label(&src) {
+        Ok(table::TableLabel::Gpt) => crate::gpt_policy::delete_entry(&mut src, part),
+        Ok(table::TableLabel::Mbr) => delete_mbr_entry(&mut src, part),
+        Ok(other) => bail_fail(RunOutcome::refused(format!("`delete` needs a GPT or MBR target (label: {other})"))),
+        Err(e) => bail_fail(RunOutcome::refused(format!("label probe failed: {e}"))),
+    };
+    match r {
+        Ok(()) => table_record_done(&mut src, &format!("deleted partition #{part} (verify with: diskedit info {})", a.target)),
+        Err(f) => bail_fail(f),
     }
 }
 
-pub(crate) fn cmd_resize_part(a: &ResizePartRequest) -> crate::outcome::RunOutcome {
+pub(crate) fn cmd_resize_end(a: &ResizeEndRequest) -> crate::outcome::RunOutcome {
     let Some(pref) = a.part else {
-        bail_fail(RunOutcome::refused("`resize-part` needs :N (see diskedit help resize-part)".to_string()));
+        bail_fail(RunOutcome::refused("`resize` needs :N (see diskedit help resize)".to_string()));
     };
     if a.grow_to_end && a.end.is_some() {
         bail_fail(RunOutcome::refused("--end and --grow-to-end are mutually exclusive".to_string()));
     }
     // 载体必须是整盘：条目按节点 LBA0 的偏移读写（判据见 `refuse_partition_node_target`）
-    refuse_partition_node_target("resize-part", &a.target);
+    refuse_partition_node_target("resize", &a.target);
     let (mut src, _resumed) =
-        open_record_resumable(a, crate::recovery::OpKind::ResizePart).unwrap_or_else(|f| bail_fail(f));
-    // 坐标系在几何计算前确定：resize-part 仅支持 GPT，条目按表头 ss 对齐（可与容器 ss 不同）。
+        open_record_resumable(a, crate::recovery::OpKind::ResizeEnd).unwrap_or_else(|f| bail_fail(f));
+    // 坐标系在几何计算前确定：原地重划仅支持 GPT，条目按表头 ss 对齐（可与容器 ss 不同）。
     // 几何走唯一构造点（条目重叠在此被拒），修复后的 last_usable 也由它给出
-    let (g, repair) = crate::gpt_policy::require_gpt_geometry(&src, "resize-part").unwrap_or_else(|f| bail_fail(f));
+    let (g, repair) = crate::gpt_policy::require_gpt_geometry(&src, "resize").unwrap_or_else(|f| bail_fail(f));
     // 锁下快照
     let part = crate::gpt_policy::resolve_part_in(crate::gpt_policy::TableEntries::Gpt(g.entries()), pref)
         .unwrap_or_else(|f| bail_fail(f));
     let e = crate::gpt_policy::live_entry(&g, part).unwrap_or_else(|f| bail_fail(f));
-    // resize-part 只改末端：起点就是盘上的现有起点，挪位归 move
+    // 原地重划只改末端：起点就是盘上的现有起点，挪位归 move
     let start = e.starting_lba;
     let end = if a.grow_to_end {
-        // 吃满后方可用区（本工具语义）：扩到 last_usable_lba；
+        // 吃满后方可用区（本工具语义）：扩到 last_usable_lba，再按 --align 下取整；
         // 后方有分区时由 resize_part 的重叠校验拒绝
-        g.last_usable_lba()
+        align_end(a.align, start, g.last_usable_lba(), g.sector_size())
     } else {
         let Some(e) = a.end else {
-            bail_fail(RunOutcome::refused("`resize-part` needs --end (or --grow-to-end)".to_string()));
+            bail_fail(RunOutcome::refused("`resize` needs --end (or --grow-to-end)".to_string()));
         };
-        // --grow-to-end 钉死 last_usable 不做下取整；常规路径只对末端下取整
+        // 常规路径只对末端下取整
         align_end(a.align, start, e, g.sector_size())
     };
-    // resize-part 不登记 --chunk：恢复粒度取记录层的默认块字节
+    // 原地重划不登记 --chunk：恢复粒度取记录层的默认块字节
     let chunk = crate::execution::DEFAULT_CHUNK_BYTES;
     let mut logger = Logger::open(&src, Some(g.disk_guid()));
-    let o = resize_part_via_plan(&mut src, &g, repair, part, start, end, chunk, &mut |m| logger.log(m));
+    let o = resize_part_via_plan_with(
+        &mut src,
+        &g,
+        repair,
+        part,
+        start,
+        end,
+        chunk,
+        a.no_fs,
+        None,
+        false,
+        &mut |m| logger.log(m),
+    );
     let o = table_record_done_if_complete(&mut src, o);
     if o.is_complete() {
-        println!("resize-part complete (verify with: diskedit info {})", a.target);
+        println!("resize complete (verify with: diskedit info {})", a.target);
     }
     o
 }
 
-/// `resize-part` 的只读判定结果：prepare 算一次，execute 只按它落盘。
+/// `resize` 起点变更形态的只读判定结果：prepare 算一次，execute 只按它落盘。
 ///
 /// `committed_old` 与 `fs_action` 对外开放：`movepart::tests` 用它们断言"已提交的现场
 /// 重跑时仍会做 FS 步"，其余字段只在本模块内消费
-pub(crate) struct PlannedResizePart {
+pub(crate) struct PlannedResizeEnd {
     ss: u64,
     part: u32,
     old_start: u64,
@@ -610,27 +609,7 @@ pub(crate) struct PlannedResizePart {
     g: crate::geometry::ValidatedGeometry,
 }
 
-/// 事务入口：绑定计划身份与搬移前区间，跑完只读判定后把表与扩容交给装配与执行器。
-// 参数是一次作业的独立事实（几何 / 区间 / 开关 / 日志），合成结构体只是把它们换个位置
-// audit-allow: A-1
-#[allow(clippy::too_many_arguments)]
-fn resize_part_via_plan(
-    src: &mut WriteSource,
-    g: &crate::geometry::ValidatedGeometry,
-    repair: crate::gpt_policy::RepairAction,
-    part: u32,
-    new_start: u64,
-    new_end: u64,
-    chunk_len: u64,
-    log: &mut dyn FnMut(&str),
-) -> RunOutcome {
-    resize_part_via_plan_with(
-        src, g, repair, part, new_start, new_end, chunk_len, false, None, false, log,
-    )
-}
-
-/// `resize` 的原地入口：与 `resize-part` 共用装配-执行链，额外带上 `--no-fs` 与
-/// LVM 收尾基线。`defer_lvm` 表示 LVM 链由命令层在表提交之后单独收口。
+/// `resize` 的原地入口：`--no-fs` 跳过文件系统步骤，`defer_lvm` 表示 LVM 链由命令层在表提交之后单独收口。
 // 参数是一次作业的独立事实（几何 / 区间 / 开关 / 日志），合成结构体只是把它们换个位置
 // audit-allow: A-2
 #[allow(clippy::too_many_arguments)]
@@ -820,7 +799,7 @@ pub(crate) fn prepare_resize_part(
     lvm: Option<movepart::LvmSelection>,
     defer_lvm: bool,
     log: &mut dyn FnMut(&str),
-) -> Result<PlannedResizePart, RunOutcome> {
+) -> Result<PlannedResizeEnd, RunOutcome> {
     // 记录已绑搬移计划、本次读到的备份头不可读、请求终点越过主头
     // `last_usable_lba`。三条同时成立才拒绝——备份头坏而主头上界够用时续跑合法。
     // 本函数只读，且位于 bind 与 repair 之前，故此刻确实一个目标字节都没写
@@ -830,7 +809,7 @@ pub(crate) fn prepare_resize_part(
             "the recovery record carries a relocation plan, the requested end LBA {new_end} is past the \
              primary header's last usable LBA {}, and the backup header cannot be read — the boundary facts \
              needed to resume are unavailable; this run wrote no bytes and the disk is where the previous job \
-             stopped. Check the record with `diskedit inspect`, then release it with `diskedit abandon`; a \
+             stopped. Check the record with `diskedit inspect`, then release it with `diskedit recover --release`; a \
              fresh run records the job again",
             g.decided_last_usable_lba()
         )));
@@ -921,10 +900,10 @@ pub(crate) fn prepare_resize_part(
             log("resize already committed — finishing filesystem step");
             // 表提交之后盘上只剩新区间；FS 步按记录里的搬移前几何判 Grow
             let pre_commit = match (journal.op(), recorded_old) {
-                (crate::recovery::OpKind::Resize | crate::recovery::OpKind::ResizePart, None) => {
+                (crate::recovery::OpKind::Resize | crate::recovery::OpKind::ResizeEnd, None) => {
                     return Err(RunOutcome::refused(format!(
                         "the record for partition {part} has no pre-commit range — the filesystem step \
-                         cannot be judged; refusing: release it with `diskedit abandon`, then run the \
+                         cannot be judged; refusing: release it with `diskedit recover --release`, then run the \
                          whole command again"
                     )));
                 }
@@ -1051,7 +1030,7 @@ pub(crate) fn prepare_resize_part(
     } else {
         None
     };
-    Ok(PlannedResizePart {
+    Ok(PlannedResizeEnd {
         ss,
         part,
         old_start,
@@ -1093,7 +1072,7 @@ fn save_resize_part_progress(
 /// 失败按原变体上抛：越过首写之后的改判由退出点的归责按写事实完成。
 fn execute_resize_part(
     src: &mut WriteSource,
-    p: PlannedResizePart,
+    p: PlannedResizeEnd,
     log: &mut dyn FnMut(&str),
     post: &mut Vec<crate::outcome::Pending>,
 ) -> Result<(), RunOutcome> {
@@ -1119,7 +1098,7 @@ fn execute_resize_part(
 
     // ---- 阶段 0：缩容 FS 先缩（只做一次）----
     // 缩容不落不可回滚标记：缩小之后再回滚表项只会得到"FS 小于分区"这一自洽状态，
-    // undo 仍然安全可用。判据是可逆性，不是"有没有调外部工具"
+    // 回滚仍然安全可用。判据是可逆性，不是"有没有调外部工具"
     if p.fs_action == movepart::FsAction::Shrink {
         let mut shrink_done = false;
         if p.fs_shrunk == movepart::FsShrink::Unverified {
@@ -1213,7 +1192,7 @@ fn execute_resize_part(
         };
         let plan = crate::assembly::assemble_resize_part(src, &g2, kind, p.relocate)
             .map_err(|e| RunOutcome::partial(e.to_string()))?;
-        let mut sink = ResizePartSink {
+        let mut sink = ResizeEndSink {
             part,
             new_start,
             new_end,
@@ -1259,6 +1238,7 @@ fn execute_resize_part(
                 },
                 ss,
                 declared,
+                p.defer_lvm,
                 log,
                 post,
             )?;
@@ -1292,14 +1272,14 @@ fn execute_resize_part(
 }
 
 /// 表步骤完成后的记录落点：表提交后把进度推到阶段 2，再输出提交行。
-struct ResizePartSink<'a> {
+struct ResizeEndSink<'a> {
     part: u32,
     new_start: u64,
     new_end: u64,
     log: &'a mut dyn FnMut(&str),
 }
 
-impl crate::execution::StepSink for ResizePartSink<'_> {
+impl crate::execution::StepSink for ResizeEndSink<'_> {
     fn transfer_checkpoint(
         &mut self,
         src: &mut WriteSource,
@@ -1486,7 +1466,7 @@ pub(crate) fn cmd_move(a: &MoveRequest) -> crate::outcome::RunOutcome {
         }
         // 记录在场。收尾只对"表已提交、数据已搬完"的记录合法：表是 move 计划的最后
         // 一步，阶段由记录字段派生；记录判不出阶段时，以盘上表项这一独立事实补足。
-        // 补足失败只指路：不 undo、不清理、不续跑。
+        // 补足失败只指路：不回滚、不清理、不续跑。
         let Some(journal) = src.record_journal() else {
             bail_fail(RunOutcome::refused(
                 "the target was opened as resumable but its recovery record is gone; refusing".to_string(),
@@ -1495,7 +1475,7 @@ pub(crate) fn cmd_move(a: &MoveRequest) -> crate::outcome::RunOutcome {
         if journal.op() != crate::recovery::OpKind::Move {
             bail_fail(RunOutcome::refused(format!(
                 "this target carries an unfinished `{}` record — finish or release it first \
-                 (re-run the original command, or `diskedit abandon`)",
+                 (re-run the original command, or `diskedit recover --release`)",
                 journal.op().command_name()
             )));
         }
@@ -1569,7 +1549,7 @@ pub(crate) fn cmd_move(a: &MoveRequest) -> crate::outcome::RunOutcome {
                             "partition {part} already sits at the recorded destination while the record's \
                              cursor still says the move is unfinished — the record contradicts the table, \
                              so neither finishing nor resuming it is safe; inspect it with `diskedit inspect {}` \
-                             and release it with `diskedit abandon`",
+                             and release it with `diskedit recover --release`",
                             a.target
                         )));
                     }
@@ -1579,7 +1559,7 @@ pub(crate) fn cmd_move(a: &MoveRequest) -> crate::outcome::RunOutcome {
                     )));
                 }
             }
-            // 字段不足以判定阶段：不自动 undo、不清理、不续跑，只指路。阶段本身不定码值：
+            // 字段不足以判定阶段：不自动回滚、不清理、不续跑，只指路。阶段本身不定码值：
             // 本次没写落 3、本次写过落 5，由 `bail_fail` 后的归责点按本次的写事实改判
             Ok(
                 crate::recovery::Stage::Undecidable
@@ -1589,16 +1569,16 @@ pub(crate) fn cmd_move(a: &MoveRequest) -> crate::outcome::RunOutcome {
             ) => {
                 bail_fail(RunOutcome::refused(format!(
                     "the recovery record for partition {part} cannot be decided from its fields — \
-                     inspect it with `diskedit inspect {}`; release it with `diskedit abandon` only if it is stale",
+                     inspect it with `diskedit inspect {}`; release it with `diskedit recover --release` only if it is stale",
                     a.target
                 )));
             }
-            // `Complete`：已定型、只差释放——不代做动作，指 `undo` / `abandon`
+            // `Complete`：已定型、只差释放——不代做动作，指 `recover` / `recover --release`
             Ok(crate::recovery::Stage::Complete) => {
                 bail_fail(RunOutcome::refused(format!(
                     "the recovery record for partition {part} is complete and only waits to be released — \
-                     roll the recorded bytes back with `diskedit undo {} --yes`, or release the record with \
-                     `diskedit abandon {} --yes --discard-replay`",
+                     roll the recorded bytes back with `diskedit recover {} --yes`, or release the record with \
+                     `diskedit recover --release {} --yes --discard-replay`",
                     a.target, a.target
                 )));
             }
@@ -1738,7 +1718,7 @@ pub(crate) fn cmd_move(a: &MoveRequest) -> crate::outcome::RunOutcome {
     }
     // 起点变了的 NTFS 回填由执行器在表提交之后做（`execution::fix_hidden_sectors`）：
     // 那里的文件系统识别取落点上的现状，比搬移前的旧区间更可靠。已提交态续跑的两处
-    // 回填在 resize-part 与 move 的收尾分支直接调 movepart，不经计划步骤
+    // 回填在 `resize` 起点变更形态与 `move` 的收尾分支直接调 movepart，不经计划步骤
     let o = table_record_done_if_complete(&mut src, RunOutcome::applied_with(Vec::new()));
     if o.is_complete() {
         println!("moved (verify with: diskedit info {})", a.target);
@@ -1773,7 +1753,7 @@ pub(crate) fn cmd_copy(a: &CopyRequest) -> crate::outcome::RunOutcome {
     let (chunk, mut logger) = chunk_logger(a, &src, g.disk_guid());
     // 名字守卫在消费点：copy 的落盘名字与 add 同一个 36 码元字段
     if let Some(n) = &a.name { crate::support::check_gpt_name_len(n); }
-    // 源区间与摘要随记录落盘，供 undo 复核。源与副本同属本目标，源身份就是记录里的
+    // 源区间与摘要随记录落盘，供 `recover` 复核。源与副本同属本目标，源身份就是记录里的
     // target 身份（严格打开时已比对），不另存一份；摘要取一次完整读，copy 自身还要再读
     let entry = crate::gpt_policy::live_entry(&g, part).unwrap_or_else(|f| bail_fail(f));
     let source = crate::recovery::CopySource {

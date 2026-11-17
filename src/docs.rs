@@ -36,10 +36,10 @@ const WIDTH: usize = 78;
 /// `usage_examples_follow_the_command_syntax` 逐行核对命令名与分区选择器。
 pub(crate) const EXAMPLES: &[&str] = &[
     "diskedit info /dev/sdb",
-    "diskedit plan /dev/sdb:2 --grow",
+    "diskedit info /dev/sdb:2 --grow",
     "diskedit resize /dev/sdb:1 +2G",
     "diskedit resize disk.img grow --allow-move --chunk 4 --yes",
-    "diskedit undo /dev/sdb --yes",
+    "diskedit recover /dev/sdb --yes",
 ];
 
 /// 顶层帮助里不归属任何一条命令的分派说明
@@ -97,7 +97,7 @@ pub(crate) fn usage_text() -> String {
         emit!(out);
         emit!(out, "{heading}");
         for c in cli::COMMANDS.iter().filter(|c| c.group == group) {
-            for line in c.syntax {
+            for line in c.syntax_lines() {
                 emit!(out, "  {} {}", c.name, line);
             }
             push_wrapped(&mut out, c.summary, 6, 6, WIDTH);
@@ -151,7 +151,7 @@ pub(crate) fn usage_text() -> String {
 pub(crate) fn help_text(name: &str) -> Option<String> {
     let c = cli::find(name)?;
     let mut out = String::new();
-    for line in c.syntax {
+    for line in c.syntax_lines() {
         emit!(out, "diskedit {} {}", c.name, line);
     }
     emit!(out);
@@ -163,10 +163,37 @@ pub(crate) fn help_text(name: &str) -> Option<String> {
     Some(trim_trailing_newlines(out))
 }
 
-/// 命令页里列出的选项：命令自己声明的那些。全局旗标只在顶层帮助的选项表里列一次，
-/// 无差别地印在每条命令下面只会盖住命令真正的差异
+/// 命令页里列出的选项：按形态分组，命令级公共选项并入每组。全局旗标只在顶层帮助的
+/// 选项表里列一次，无差别地印在每条命令下面只会盖住命令真正的差异
+fn option_groups(c: &CommandDef) -> Vec<(Vec<&'static str>, Vec<&'static str>)> {
+    let mut groups: Vec<(Vec<&'static str>, Vec<&'static str>)> = Vec::new();
+    for v in c.variants {
+        let mut names: Vec<&'static str> = c.common_options.iter().map(|o| o.name).collect();
+        for o in v.options {
+            if !names.contains(&o.name) {
+                names.push(o.name);
+            }
+        }
+        names.sort_unstable();
+        match groups.iter_mut().find(|(n, _)| *n == names) {
+            Some((_, syntaxes)) => syntaxes.push(v.syntax),
+            None => groups.push((names, vec![v.syntax])),
+        }
+    }
+    groups
+}
+
+/// 命令声明的全部选项（任一形态或公共选项），按注册顺序去重。只供参考文档的
+/// 汇总表使用；帮助按形态分组（见 [`option_groups`]）
+#[cfg(test)]
 fn option_names(c: &CommandDef) -> Vec<&'static str> {
-    c.options.iter().map(|o| o.name).collect()
+    let mut names = Vec::new();
+    for o in c.common_options.iter().chain(c.variants.iter().flat_map(|v| v.options.iter())) {
+        if !names.contains(&o.name) {
+            names.push(o.name);
+        }
+    }
+    names
 }
 
 /// 旗标在帮助里的写法：带值的补占位符，布尔旗标只有名字
@@ -179,9 +206,15 @@ fn flag_synopsis(name: &str) -> String {
     }
 }
 
-/// 选项说明：命令声明的补充优先，否则用旗标注册表的同一条
+/// 选项说明：形态声明的补充优先，其次命令级公共选项，最后用旗标注册表的同一条
 fn option_desc(c: &CommandDef, name: &str) -> String {
-    let declared = c.options.iter().find(|o| o.name == name).and_then(|o| o.desc);
+    let declared = c
+        .variants
+        .iter()
+        .flat_map(|v| v.options.iter())
+        .chain(c.common_options.iter())
+        .find(|o| o.name == name)
+        .and_then(|o| o.desc);
     let base = match declared {
         Some(desc) => desc.to_string(),
         None => cli::flag_spec(name).map(|f| f.desc.to_string()).unwrap_or_default(),
@@ -194,23 +227,34 @@ fn option_desc(c: &CommandDef, name: &str) -> String {
 }
 
 fn push_options(out: &mut String, c: &CommandDef) {
-    let names = option_names(c);
-    if names.is_empty() {
-        emit!(out, "options: none");
-        return;
-    }
-    let synopses: Vec<String> = names.iter().map(|n| flag_synopsis(n)).collect();
-    let column = synopses.iter().map(|s| s.chars().count()).max().unwrap_or(0) + 2;
-    emit!(out, "options:");
-    for (name, synopsis) in names.iter().zip(synopses) {
-        let desc = option_desc(c, name);
-        let pad = " ".repeat(column.saturating_sub(synopsis.chars().count()));
-        let lines = wrap(&desc, WIDTH.saturating_sub(4 + column).max(20));
-        for (i, line) in lines.into_iter().enumerate() {
-            if i == 0 {
-                emit!(out, "    {synopsis}{pad}{line}");
-            } else {
-                emit!(out, "{}{line}", " ".repeat(4 + column));
+    let groups = option_groups(c);
+    let multi = c.variants.len() > 1;
+    for (names, syntaxes) in groups {
+        if multi {
+            let forms: Vec<String> = syntaxes
+                .iter()
+                .map(|s| format!("diskedit {} {s}", c.name))
+                .collect();
+            emit!(out, "options for `{}`:", forms.join("` / `"));
+        } else {
+            emit!(out, "options:");
+        }
+        if names.is_empty() {
+            emit!(out, "    none");
+            continue;
+        }
+        let synopses: Vec<String> = names.iter().map(|n| flag_synopsis(n)).collect();
+        let column = synopses.iter().map(|s| s.chars().count()).max().unwrap_or(0) + 2;
+        for (name, synopsis) in names.iter().zip(synopses) {
+            let desc = option_desc(c, name);
+            let pad = " ".repeat(column.saturating_sub(synopsis.chars().count()));
+            let lines = wrap(&desc, WIDTH.saturating_sub(4 + column).max(20));
+            for (i, line) in lines.into_iter().enumerate() {
+                if i == 0 {
+                    emit!(out, "    {synopsis}{pad}{line}");
+                } else {
+                    emit!(out, "{}{line}", " ".repeat(4 + column));
+                }
             }
         }
     }
@@ -288,8 +332,8 @@ mod published {
     fn mode_name(mode: cli::TargetMode) -> &'static str {
         match mode {
             cli::TargetMode::ReadOnly => "read-only",
-            cli::TargetMode::WriteNoJournal => "writes, no undo journal",
-            cli::TargetMode::WriteJournal => "writes, undo journal",
+            cli::TargetMode::WriteNoJournal => "writes, no recovery record",
+            cli::TargetMode::WriteJournal => "writes, recovery record",
         }
     }
 
@@ -316,17 +360,26 @@ mod published {
             emit!(out, "\n### `{}`\n", c.name);
             emit!(out, "{}\n", c.summary);
             emit!(out, "```text");
-            for line in c.syntax {
+            for line in c.syntax_lines() {
                 emit!(out, "diskedit {} {}", c.name, line);
             }
             emit!(out, "```\n");
             emit!(out, "| property | value |");
             emit!(out, "|---|---|");
-            emit!(
-                out,
-                "| positionals | {} |",
-                join_or_none(c.positionals.iter().map(|p| format!("`{}`", p.name)))
-            );
+            let forms: Vec<String> = c
+                .variants
+                .iter()
+                .map(|v| {
+                    join_or_none(v.positionals.iter().map(|p| {
+                        if p.optional {
+                            format!("`{}` (optional)", p.name)
+                        } else {
+                            format!("`{}`", p.name)
+                        }
+                    }))
+                })
+                .collect();
+            emit!(out, "| positionals | {} |", forms.join(" / "));
             emit!(
                 out,
                 "| options | {} |",

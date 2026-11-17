@@ -48,11 +48,11 @@ pub(crate) fn finish_resize(a: &ResizeRequest, o: crate::outcome::RunOutcome, ws
                     && let Some(journal) = w.take_record_journal()
                     && let Err(e) = journal.commit_and_discard()
                 {
-                    // 记录移除失败：按 `record_still_on_disk()` 分流——盘上仍在时说清还需
-                    // `abandon`，已不在时只报原始错误
+                    // 记录移除失败：按 `record_still_on_disk()` 分流——盘上仍在时说清释放方式，
+                    // 已不在时只报原始错误
                     let detail = if e.record_still_on_disk() {
                         format!(
-                            "the job finished but its recovery record could not be removed ({e}) — release it with `diskedit abandon`"
+                            "the job finished but its recovery record could not be removed ({e}) — release it with `diskedit recover --release`"
                         )
                     } else {
                         format!("{e}")
@@ -152,8 +152,8 @@ pub(crate) fn resize_done(
         };
         // pvresize/lvextend 的写入不可回滚：此后回滚表项即"表与内容自相矛盾"，屏障必须
         // 先于该写入落。落点是它存在的唯一位置——GPT/MBR、镜像/块设备的 PV 收尾在此
-        // 汇合，且只有 wsrc 带 journal；屏障紧贴外部工具调用，死亡窗口不会无谓锁死 undo
-        // 在线路径不经 journal（sfdisk 用自己的 fd 写盘，事后也无 undo 可谈），无需屏障
+        // 汇合，且只有 wsrc 带 journal；屏障紧贴外部工具调用，死亡窗口不会无谓锁死 `recover`
+        // 在线路径不经 journal（sfdisk 用自己的 fd 写盘，事后也无回滚可谈），无需屏障
         if let Some(ref mut w) = wsrc {
             w.mark_non_reversible()
                 .map_err(|e| format!("post-resize: {} — the on-disk table is already committed", e.record_failure("the LVM barrier")))?;

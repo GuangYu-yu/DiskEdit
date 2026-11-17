@@ -2,6 +2,7 @@ name: 全量测试
 
 # 一次手动运行覆盖全部测试；build.yml 也调用本 workflow，发布构建前跑同一套。
 #   docs       —— 生成文档与 schema 一致性（写模式 + git diff 兜底）
+#   lint       —— clippy：Linux / Windows，全 target、全特性，警告即失败
 #   cargo-test —— 全部 Rust target 逐条运行：Linux 默认特性 / Linux test-faults / Windows 默认特性
 #   wsl-suite  —— tests/wsl 全量回归：root、loop 设备、文件系统工具、qemu 引导
 on:
@@ -23,6 +24,31 @@ jobs:
         run: |
           DISKEDIT_WRITE_DOCS=1 cargo test --bin DiskEdit docs_are_generated_in_sync
           git diff --exit-code docs/
+
+  lint:
+    name: clippy（${{ matrix.label }}，-D warnings）
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            label: Linux
+          - os: windows-latest
+            label: Windows
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: 安装 Rust 工具链
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      # 警告在 CI 里是失败。`#[allow(...)]` 例外必须留在登记表内（见
+      # tests/architecture_discipline_exceptions.rs），其余警告当场修，不靠放行绕过
+      - name: cargo clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
 
   cargo-test:
     name: cargo test（${{ matrix.label }}）

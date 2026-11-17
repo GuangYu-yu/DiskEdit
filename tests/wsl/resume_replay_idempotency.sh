@@ -26,7 +26,7 @@ else
 fi
 record_present "$T" && echo "  OK   中断留下未收尾记录" || { echo "  BAD  中断后没有记录（无现场可续）"; rc=1; }
 # 记录先于 repair 写盘落盘（movepart 绑定顺序）：中断留下未收尾作业，同请求 rerun
-# 续跑收敛——"表已提交后 rerun 被拒"属于 resize-part 的 rs-after-commit 语义，
+# 续跑收敛——"表已提交后 rerun 被拒"属于 resize --end 的 rs-after-commit 语义，
 # 这里的中断点在表步之前
 OUT=$($BF resize "$T":1 +100M --allow-move --yes --no-fs 2>&1); E=$?
 echo "rerun exit=$E : $(echo "$OUT" | head -1)"
@@ -86,9 +86,9 @@ fi
 sgdisk -v "$T" >/dev/null 2>&1 && echo "sgdisk clean" || { echo "sgdisk ISSUES"; rc=1; }
 
 echo
-echo "===== G: 记录不可读（头部损坏）→ 重跑硬拒 3 → abandon 释放 → 重跑 ====="
-# 搬移目的地与源区不相交（右移越过源末尾）：中断后源数据完好，abandon 后全新重跑
-# 才能得到正确结果。若用自重叠右移，中断已覆盖源尾部，abandon 后重跑只会读到坏源
+echo "===== G: 记录不可读（头部损坏）→ 重跑硬拒 3 → recover --release 释放 → 重跑 ====="
+# 搬移目的地与源区不相交（右移越过源末尾）：中断后源数据完好，recover --release 后全新重跑
+# 才能得到正确结果。若用自重叠右移，中断已覆盖源尾部，recover --release 后重跑只会读到坏源
 img T t17g.img
 rm_img "$T"
 track_file "$T"
@@ -112,15 +112,15 @@ fi
 REC=$(record_file "$T")
 echo "record: $REC"
 [ -f "$REC" ] && echo "  OK   中断留下未收尾记录" || { echo "  BAD  中断后没有记录（无现场可破坏）"; rc=1; }
-# 打坏头 CRC（保留 MAGIC）：记录成为"读不出来"而非"布局不识别"——前者 abandon 可释放，
-# 后者所有权验证不过关、abandon 一律拒绝，须手工处理
+# 打坏头 CRC（保留 MAGIC）：记录成为"读不出来"而非"布局不识别"——前者 recover --release 可释放，
+# 后者所有权验证不过关、recover --release 一律拒绝，须手工处理
 dd if=/dev/zero of="$REC" bs=1 seek=12 count=4 conv=notrunc 2>/dev/null
 OUT=$($BF move "$T":1 --start 2000896 --chunk 1 --yes 2>&1); E=$?
 echo "rerun exit=$E : $(echo "$OUT" | head -1)"
 exp "$E" 3 "不可读记录时重跑被拒（不得静默重跑）"
-echo "$OUT" | grep -q "recovery record, unreadable" && echo "$OUT" | grep -q "diskedit abandon" && echo "G UNREADABLE-RECORD REPORT OK" || { echo "G report missing (BAD)"; rc=1; }
-exp "$($B abandon "$T" --yes --discard-replay >/dev/null 2>&1; echo $?)" 0 "abandon 释放不可读现场"
-OUT=$($BF move "$T":1 --start 104448 --chunk 1 --yes 2>&1); exp "$?" 0 "abandon 后重跑完成"
+echo "$OUT" | grep -q "recovery record, unreadable" && echo "$OUT" | grep -q "diskedit recover --release" && echo "G UNREADABLE-RECORD REPORT OK" || { echo "G report missing (BAD)"; rc=1; }
+exp "$($B recover --release "$T" --yes --discard-replay >/dev/null 2>&1; echo $?)" 0 "recover --release 释放不可读现场"
+OUT=$($BF move "$T":1 --start 104448 --chunk 1 --yes 2>&1); exp "$?" 0 "recover --release 后重跑完成"
 record_absent "$T" && echo "  OK   完成后无记录残留" || { echo "  BAD  完成后记录仍在"; rc=1; }
 LD=$(lo_attach "$T")
 lo_waitpart "${LD}p1" || { echo "p1 part node not ready"; rc=1; }

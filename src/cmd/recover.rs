@@ -1,21 +1,31 @@
-//! undo：回滚恢复记录里记下的原始字节（分区表等直接写入）。
+//! recover：回滚恢复记录里记下的原始字节（分区表等直接写入）。
 
-use crate::cli::UndoRequest;
-use crate::dev::{FileSource, WriteSource};
+use crate::cli::RecoverRequest;
+use crate::dev::WriteSource;
 use crate::support::*;
 
-pub(crate) const DETAILS: &str = r#"  Roll back this target's recovery record: put back the bytes the recorded
-  operation overwrote — partition-table entries and the in-place filesystem
-  metadata it changed (NTFS backup sector pointer). Relocated data cannot be
-  rolled back, and writes made by external FS tools are not undone.
+pub(crate) const DETAILS: &str = r#"  Finish with this target's recovery record. Two outcomes share one command:
 
-  A legacy undo journal is not a recovery record; this build does not replay,
-  migrate, or delete it.
+  replay    (default) put back the bytes the recorded operation overwrote —
+            partition-table entries and the in-place filesystem metadata it
+            changed (NTFS backup sector pointer). Relocated data cannot be
+            rolled back, and writes made by external FS tools are not undone.
+            --replay-table-only replays only the recorded table regions of a
+            move whose data has already moved.
+  --release drop the recovery files, keeping the writes they describe. This
+            does not need the record to be readable, and it does not replay
+            anything. When the scene still holds at least one range a replay
+            could restore — or the payload is damaged, so the count is
+            unknown — the release is refused until --discard-replay is given;
+            that flag confirms giving up a replayable range, it is not
+            another spelling of --yes.
 
-  Example: diskedit undo /dev/sdb --yes"#;
+  Examples:
+    diskedit recover /dev/sdb --yes
+    diskedit recover /dev/sdb --release --yes"#;
 
 
-fn undo_record(src: &mut WriteSource, permit_move: bool) -> Option<u8> {
+fn replay_record(src: &mut WriteSource, permit_move: bool) -> Option<u8> {
     // 记录不按单一派生落点认：身份漂移或目录被改名后，派生路径找不到它。枚举把
     // 身份不符/无法比对的候选一并列出，但只认领身份严格相符的那些
     let records = match crate::support::active_recovery_records(&src.identity, Some(&*src)) {
@@ -32,15 +42,6 @@ fn undo_record(src: &mut WriteSource, permit_move: bool) -> Option<u8> {
     }
     let path = match claimed.as_slice() {
         [] => {
-            // 旧落点上的记录不在本构建的寻址域里：不认领是既定立场，但要说清这条路径
-            // 为什么不参与回滚，而不是只留最后一句"no recovery record"收尾
-            if let Some(legacy) = mismatched.iter().find(|r| r.is_previous_location()) {
-                println!(
-                    "{} is the previous record location — this build does not read that record, so it is \
-                     neither replayed nor deleted; settle it or delete it by hand",
-                    legacy.path().display()
-                );
-            }
             if !mismatched.is_empty() {
                 println!(
                     "none of the {} candidate record(s) above can be claimed for this target — they are left \
@@ -53,8 +54,8 @@ fn undo_record(src: &mut WriteSource, permit_move: bool) -> Option<u8> {
         // 身份与落点都唯一：按原路径回放
         [one] => one.path().to_path_buf(),
         many => bail_fail(RunOutcome::refused(format!(
-            "this target has {} recovery records that would be replayed — `undo` rolls back exactly one and \
-             does not pick one for you; release the extra records with `diskedit abandon`, or move one out of \
+            "this target has {} recovery records that would be replayed — `recover` rolls back exactly one and \
+             does not pick one for you; release the extra records with `diskedit recover --release`, or move one out of \
              the record set by hand: {}",
             many.len(),
             many.iter().map(|r| r.path().display().to_string()).collect::<Vec<_>>().join("; ")
@@ -70,7 +71,7 @@ fn undo_record(src: &mut WriteSource, permit_move: bool) -> Option<u8> {
     let evidence = match crate::recovery::read_companion(&path, &current) {
         Ok(evidence) => evidence,
         Err(e) => bail_fail(RunOutcome::refused(format!(
-            "the recovery record cannot be read ({e}) — nothing was read or written; release it with `diskedit abandon`"
+            "the recovery record cannot be read ({e}) — nothing was read or written; release it with `diskedit recover --release`"
         ))),
     };
     let record = match evidence {
@@ -82,29 +83,16 @@ fn undo_record(src: &mut WriteSource, permit_move: bool) -> Option<u8> {
                 .unwrap_or_else(|| "the recorded identity differs from the target".to_string());
             bail_fail(RunOutcome::refused(format!(
                 "the recovery record at {} was written for a different target ({why}) — it is not replayed here; \
-                 release it with `diskedit abandon`",
+                 release it with `diskedit recover --release`",
                 path.display()
             )))
         }
         other => {
-            let legacy = match &other {
-                crate::recovery::Evidence::UnrecognizedFormat { magic, .. } => {
-                    crate::recovery::legacy_layout(*magic)
-                }
-                _ => None,
-            };
-            if let Some(name) = legacy {
-                bail_fail(RunOutcome::refused(format!(
-                    "the recovery record at {} was {}; it is left in place",
-                    path.display(),
-                    crate::recovery::legacy_layout_refusal(name)
-                )));
-            }
             // 载荷未通过完整校验：记录里的字节无法逐项验证，任何区间都不写回，
-            // 记录留在原地等人工处理或显式 `abandon`
+            // 记录留在原地等人工处理或显式 `recover --release`
             bail_fail(RunOutcome::refused(format!(
                 "the recovery record at {} is not replayable ({other:?}) — nothing was read or written; \
-                 it is left in place, release it with `diskedit abandon`",
+                 it is left in place, release it with `diskedit recover --release`",
                 path.display()
             )))
         }
@@ -125,12 +113,12 @@ fn undo_record(src: &mut WriteSource, permit_move: bool) -> Option<u8> {
                         "the recorded operation had already committed, but its recovery record could not be \
                          released ({e}); the record is left in place"
                     );
-                    let o = RunOutcome::refused(format!("{msg} — release it with `diskedit abandon`"));
+                    let o = RunOutcome::refused(format!("{msg} — release it with `diskedit recover --release`"));
                     // 本分支返回裸退出码，不经过调用方的 report：拒绝理由在这里自己打印，
                     // 否则命令退 3 而 stdout/stderr 全空，用户无从知道为什么
                     return Some(o.report_final().exit_code());
                 }
-                // 删除已发生、目录 fsync 未确认：不陈述"记录还在"，也不指向必然的 `abandon`
+                // 删除已发生、目录 fsync 未确认：不陈述"记录还在"，也不指向必然的 `recover --release`
                 let msg = if e.record_still_on_disk() {
                     format!(
                         "the recorded operation had already committed, but its recovery record could not be \
@@ -157,12 +145,12 @@ fn undo_record(src: &mut WriteSource, permit_move: bool) -> Option<u8> {
                 if matches!(e, crate::recovery::RecordJournalError::ReadbackMismatch(_)) {
                     bail_fail(RunOutcome::refused(format!(
                         "the recovery record read back before deletion is not the one verified ({e}); \
-                         the record is left in place — release it with `diskedit abandon`"
+                         the record is left in place — release it with `diskedit recover --release`"
                     )));
                 }
                 // 目录项已移除、持久化未确认：只说这一事实，不承诺记录还在
                 let msg = if e.record_still_on_disk() {
-                    format!("the recovery record could not be released ({e}); release it with `diskedit abandon`")
+                    format!("the recovery record could not be released ({e}); release it with `diskedit recover --release`")
                 } else {
                     format!("{e}")
                 };
@@ -188,49 +176,27 @@ fn undo_record(src: &mut WriteSource, permit_move: bool) -> Option<u8> {
         }
     }
 }
-/// 旧 journal 不是恢复记录：它早于记录格式，本构建不回放、不迁移、不删除。
-/// 落点上只要存在条目（含符号链接与 dangling 链接）就按未识别证据拒绝（3）。
-fn refuse_legacy_journal(src: &FileSource) {
-    let path = src.identity.journal_path();
-    match std::fs::symlink_metadata(path) {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => bail_fail(RunOutcome::refused(format!(
-            "cannot determine whether a legacy undo journal exists at {}: {e}",
-            path.display()
-        ))),
-        Ok(_) => bail_fail(RunOutcome::refused(format!(
-            "a legacy undo journal exists at {}; it predates the recovery record format, so this build cannot \
-             replay, migrate, or delete it — a legacy journal is not undoable. It is left in place for manual handling",
-            path.display()
-        ))),
-    }
-}
 
-/// `undo` 认领的是载荷声明为本目标的记录：不按单一派生落点找，兄弟目录里的落点同样
-/// 参与枚举（见 `undo_record`）。记录缺席是常态，按拒绝（3）上报
-pub(crate) fn cmd_undo(a: &UndoRequest) -> u8 {
-    // undo 回滚的是整盘记录：与 info 同判据，`:` 后给了编号即拒绝，不静默忽略
+/// `recover` 认领的是载荷声明为本目标的记录：不按单一派生落点找，兄弟目录里的落点同样
+/// 参与枚举（见 `replay_record`）。记录缺席是常态，按拒绝（3）上报
+pub(crate) fn cmd_recover(a: &RecoverRequest) -> u8 {
+    // `recover` 回滚的是整盘记录：与 info 同判据，`:` 后给了编号即拒绝，不静默忽略
     if let Some(n) = a.part {
-        bail_fail(RunOutcome::refused(format!("`undo` rolls back the whole target's recovery record — drop :{n}")));
+        bail_fail(RunOutcome::refused(format!("`recover` rolls back the whole target's recovery record — drop :{n}")));
     }
     // 回放类命令的载体必须是整盘：记录记的是整盘偏移，落到分区节点上会把
     // 别处的字节写进该分区
-    refuse_partition_node_target("undo", &a.target);
-    if !a.yes {
-        bail_fail(RunOutcome::refused("`undo` overwrites current bytes from the recovery record; pass --yes to confirm"));
-    } else {
-        let mut src = open_target_owned(a).unwrap_or_else(|f| bail_fail(f));
-        // 回放写回的是整盘表字节：目标仍在被使用时回放，会让内核分区视图与盘面
-        // 从"分叉"变成"按记录里的旧布局分叉"。闸门在任何写回与记录处理之前
-        if let Err(f) = crate::fsops::ensure_table_write_idle(&src) {
-            bail_fail(f);
-        }
-        if let Some(code) = undo_record(&mut src, a.replay_table_only) {
-            return code;
-        }
-        refuse_legacy_journal(&src);
-        bail_fail(RunOutcome::refused(format!("no recovery record on {} — nothing to undo", a.target)))
+    refuse_partition_node_target("recover", &a.target);
+    let mut src = open_target_owned(a).unwrap_or_else(|f| bail_fail(f));
+    // 回放写回的是整盘表字节：目标仍在被使用时回放，会让内核分区视图与盘面
+    // 从"分叉"变成"按记录里的旧布局分叉"。闸门在任何写回与记录处理之前
+    if let Err(f) = crate::fsops::ensure_table_write_idle(&src) {
+        bail_fail(f);
     }
+    if let Some(code) = replay_record(&mut src, a.replay_table_only) {
+        return code;
+    }
+    bail_fail(RunOutcome::refused(format!("no recovery record on {} — nothing to recover", a.target)))
 }
 
 #[cfg(test)]
@@ -259,7 +225,7 @@ mod tests {
 
     fn tmp_image(tag: &str) -> (crate::testdir::TestDir, PathBuf) {
         let dir = crate::testdir::test_dir(tag);
-        let p = dir.join("undo.img");
+        let p = dir.join("disk.img");
         (dir, p)
     }
 

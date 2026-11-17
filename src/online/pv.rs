@@ -3,13 +3,35 @@
 use super::*;
 use crate::dev::FileSource;
 
+/// 解析失败的两类成因。归责只看类别：环境读不出=4（本次什么都没写），
+/// 请求与现状不符=3。调用点不再各自挑退出码
+pub(crate) enum PvResolveError {
+    Env(std::io::Error),
+    Policy(String),
+}
+
+impl PvResolveError {
+    fn outcome(self) -> RunOutcome {
+        match self {
+            Self::Env(e) => RunOutcome::no_mutation(format!("cannot resolve the PV target: {e}")),
+            Self::Policy(why) => RunOutcome::refused(why),
+        }
+    }
+}
+
+impl From<std::io::Error> for PvResolveError {
+    fn from(e: std::io::Error) -> Self {
+        Self::Env(e)
+    }
+}
+
 /// 从（盘名, 分区号）解析 OnlineTarget（PV 路径不来自挂载点，mnt 为 None）
-pub(crate) fn resolve_pv_target(disk_name: &str, pno: u32) -> io::Result<OnlineTarget> {
+pub(crate) fn resolve_pv_target(disk_name: &str, pno: u32) -> Result<OnlineTarget, PvResolveError> {
     let disk_dev = PathBuf::from("/dev").join(disk_name);
     let sysroot = crate::dev::sysfs_block_dir().join(disk_name);
     // 盘名与分区名都由 sysfs 目录名推得：节点必须与 sysfs 的设备号同源，
     // 否则后续 pvresize 的落点与这里读到的几何分属两台设备
-    ensure_node_is_device(&disk_dev, &sysroot)?;
+    let _disk_guard = ensure_node_is_device(&disk_dev, &sysroot)?;
     let mut sysdir = None;
     for entry in fs::read_dir(&sysroot)? {
         let p = entry?.path();
@@ -19,35 +41,41 @@ pub(crate) fn resolve_pv_target(disk_name: &str, pno: u32) -> io::Result<OnlineT
         if !p.is_dir() {
             continue;
         }
-        // `exists()` 把任意 stat 错误折成 false，一次 EIO 会被报成"这块盘上没有该分区"，
-        // 把人引去改分区号。只有 NotFound 才能当作"这一项不是分区"
-        match fs::metadata(p.join("partition")) {
-            Ok(_) => {}
+        // `partition` 属性不存在 = 这一项不是分区；读得出但读不出来按环境故障上抛，
+        // 不报成"这块盘上没有该分区"
+        let part = match crate::dev::sysfs_partition_no(&p) {
+            Ok(n) => n,
             Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
-            Err(e) => return Err(e),
-        }
-        if sysfs_u64(&p.join("partition"))? as u32 == pno {
+            Err(e) => return Err(PvResolveError::Env(e)),
+        };
+        if part == pno {
             sysdir = Some(p);
             break;
         }
     }
-    let sysdir = sysdir
-        .ok_or_else(|| io::Error::other(format!("partition {pno} not found under {}", sysroot.display())))?;
+    let sysdir = sysdir.ok_or_else(|| {
+        PvResolveError::Policy(format!("partition {pno} not found under {}", sysroot.display()))
+    })?;
     let name = sysdir
         .file_name()
-        .ok_or_else(|| io::Error::other("sysfs entry without basename"))?
+        .ok_or_else(|| PvResolveError::Policy("sysfs entry without basename".to_string()))?
         .to_string_lossy()
         .into_owned();
     let part_dev = PathBuf::from("/dev").join(&name);
-    ensure_node_is_device(&part_dev, &sysdir)?;
+    let _part_guard = ensure_node_is_device(&part_dev, &sysdir)?;
     // 与 resolve_target 同一防线：sysfs 字节换算全部 checked
-    let byte_of = |v: u64| v.checked_mul(512).ok_or_else(|| io::Error::other("sysfs sector value overflows u64 bytes"));
+    let byte_of = |v: u64| {
+        v.checked_mul(512)
+            .ok_or_else(|| PvResolveError::Env(io::Error::other("sysfs sector value overflows u64 bytes")))
+    };
     let start_bytes = byte_of(sysfs_u64(&sysdir.join("start"))?)?;
     let part_len_bytes = byte_of(sysfs_u64(&sysdir.join("size"))?)?;
     let disk_cap_bytes = byte_of(sysfs_u64(&sysroot.join("size"))?)?;
     let logical_block = sysfs_u64(&sysroot.join("queue/logical_block_size"))?;
     if logical_block == 0 {
-        return Err(io::Error::other("logical_block_size reported as 0 — sysfs value invalid"));
+        return Err(PvResolveError::Env(io::Error::other(
+            "logical_block_size reported as 0 — sysfs value invalid",
+        )));
     }
     let this_dev = std::fs::read_to_string(sysdir.join("dev")).ok().and_then(|s| parse_dev_attr(&s));
     // 与 resolve_target 用同一判据排除目标自身；本函数的 sysdir 由上面同一目录遍历得出，
@@ -126,7 +154,7 @@ pub(crate) fn verify_lock_identity(
 /// 不经过 `WriteSource::write_at`，挂 journal 只会得到空壳），因此**首次写盘之前**
 /// 必须确认目标上没有任何未收尾的现场：有 ⇒ 拒绝（busy 文案与离线闸口同源）。
 /// 代价也在此声明：本路径中断后没有 journal / checkpoint 可查，若 sfdisk 自身
-/// 在写主/备 GPT 结构之间被撕裂，undo 与续传都覆盖不到，只能由外部工具修复。
+/// 在写主/备 GPT 结构之间被撕裂，`recover` 与续传都覆盖不到，只能由外部工具修复。
 /// 判定发生在锁下、与首次写盘之间无窗口；有了这道闸，命令成功后 main 的
 /// drop_journal 只会碰到"不存在"的落点——绝无"删掉别人可回滚凭据"的可能
 pub(crate) fn refuse_if_scene_active(t: &OnlineTarget) -> Result<(), RunOutcome> {
@@ -134,7 +162,7 @@ pub(crate) fn refuse_if_scene_active(t: &OnlineTarget) -> Result<(), RunOutcome>
     // 现场落点由所在整盘的键派生，故分区节点与整盘节点解析到同一对落点
     let part = crate::dev::FileSource::open_read_only(&t.part_dev)
         .map_err(|e| RunOutcome::refused(format!("open failed: {e}")))?;
-    // 只传主语：后半句 "writes outside the undo journal" 由 refuse_if_active 统一拼
+    // 只传主语：后半句 "writes outside the recovery record" 由 refuse_if_active 统一拼
     //（与之并列的调用点传的是命令名，如 "resizefs" / "check"）。
     // 在线路径的两种入口共用本闸口：挂载中的块设备，与被 device-mapper 持有的
     // LVM PV——两者的续跑出路都是先退出在线形态（卸载 / 停用卷组）再走离线分支，
@@ -221,10 +249,10 @@ pub fn resize_pv(
     decide: impl FnOnce(&FileSource) -> Result<Option<u64>, RunOutcome>,
     before_write: impl FnOnce(&FileSource, u64, u64, u64) -> Result<(), RunOutcome>,
 ) -> (RunOutcome, u64, Option<LockedPv>) {
-    // 解析只读 sysfs / 路径，尚未写盘 → NoMutation。尚未取得独占权，旧尺寸不可信
+    // 解析只读 sysfs / 路径，尚未写盘 → 环境读不出按 NoMutation；分区不在是策略拒绝
     let t = match resolve_pv_target(disk_name, pno) {
         Ok(t) => t,
-        Err(e) => return (RunOutcome::refused(e.to_string()), 0, None),
+        Err(e) => return (e.outcome(), 0, None),
     };
     // 此后每一步都是写盘（写表 / 内核重读），独占权从解析出目标起就取得
     let (owned, locked_ident) = match lock_disk(&t) {
@@ -236,7 +264,7 @@ pub fn resize_pv(
     // 下面的 shrink 判定与 check_new_range 的邻接、容量判据必须来自锁下的新鲜事实
     let t = match resolve_pv_target(disk_name, pno) {
         Ok(t) => t,
-        Err(e) => return (RunOutcome::refused(e.to_string()), 0, None),
+        Err(e) => return (e.outcome(), 0, None),
     };
     // 身份复核：锁按取锁时刻的拓扑派生，窗口内同一路径被重绑到别的设备时，
     // 路径串比对看不出来，锁保护的已不是本次要动的这块盘

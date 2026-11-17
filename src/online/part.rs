@@ -181,7 +181,7 @@ pub(crate) fn part_resize(t: &OnlineTarget, new_len_bytes: u64) -> Result<(), Pa
             t.disk_dev.display()
         )))
     })?;
-    crate::dev::ensure_node_is_device(&t.disk_dev, &sysdir).map_err(|e| {
+    let _disk_guard = crate::dev::ensure_node_is_device(&t.disk_dev, &sysdir).map_err(|e| {
         PartResizeError::Stale(io::Error::other(format!(
             "{} no longer denotes the device this command re-read: {e}",
             t.disk_dev.display()

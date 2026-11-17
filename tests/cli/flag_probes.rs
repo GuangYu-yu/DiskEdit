@@ -17,8 +17,9 @@ pub(crate) struct FlagProbe {
     pub(crate) kind: Kind,
     /// 值型旗标的合法取值（参数层必须接受它）；布尔旗标为 None
     pub(crate) sample: Option<&'static str>,
-    /// 确实接受该旗标的命令。集成测试跑 `<CMD> <flag> --help`：退出 0 同时证明
-    /// 命令名真实存在，且该旗标在这个命令的白名单里
+    /// 确实接受该旗标的命令。集成测试跑 `<CMD> <flag> --help`（`--discard-replay`
+    /// 还需同时给 `--release`）：退出 0 同时证明命令名真实存在，且该旗标在这个
+    /// 命令的白名单里
     pub(crate) command: &'static str,
 }
 
@@ -26,11 +27,11 @@ pub(crate) const PROBES: &[FlagProbe] = &[
     FlagProbe { name: "--align", kind: Kind::Value, sample: Some("mib"), command: "move" },
     FlagProbe { name: "--allow-move", kind: Kind::Bool, sample: None, command: "resize" },
     FlagProbe { name: "--chunk", kind: Kind::Value, sample: Some("4"), command: "move" },
-    FlagProbe { name: "--discard-replay", kind: Kind::Bool, sample: None, command: "abandon" },
-    FlagProbe { name: "--end", kind: Kind::Value, sample: Some("4096"), command: "resize-part" },
+    FlagProbe { name: "--discard-replay", kind: Kind::Bool, sample: None, command: "recover" },
+    FlagProbe { name: "--end", kind: Kind::Value, sample: Some("4096"), command: "resize" },
     FlagProbe { name: "--grow-lv", kind: Kind::Bool, sample: None, command: "resize" },
-    FlagProbe { name: "--grow", kind: Kind::Bool, sample: None, command: "plan" },
-    FlagProbe { name: "--grow-to-end", kind: Kind::Bool, sample: None, command: "resize-part" },
+    FlagProbe { name: "--grow", kind: Kind::Bool, sample: None, command: "info" },
+    FlagProbe { name: "--grow-to-end", kind: Kind::Bool, sample: None, command: "resize" },
     FlagProbe { name: "--keep-partuuid", kind: Kind::Bool, sample: None, command: "copy" },
     FlagProbe { name: "--label", kind: Kind::Value, sample: Some("data"), command: "mkfs" },
     FlagProbe { name: "--lv", kind: Kind::Value, sample: Some("vg/lv"), command: "resize" },
@@ -39,7 +40,8 @@ pub(crate) const PROBES: &[FlagProbe] = &[
     FlagProbe { name: "--overwrite-data", kind: Kind::Bool, sample: None, command: "new" },
     FlagProbe { name: "--part-number", kind: Kind::Value, sample: Some("2"), command: "add" },
     FlagProbe { name: "--random", kind: Kind::Bool, sample: None, command: "set" },
-    FlagProbe { name: "--replay-table-only", kind: Kind::Bool, sample: None, command: "undo" },
+    FlagProbe { name: "--release", kind: Kind::Bool, sample: None, command: "recover" },
+    FlagProbe { name: "--replay-table-only", kind: Kind::Bool, sample: None, command: "recover" },
     FlagProbe { name: "--sector-size", kind: Kind::Value, sample: Some("4096"), command: "info" },
     FlagProbe { name: "--start", kind: Kind::Value, sample: Some("2048"), command: "move" },
     FlagProbe { name: "--table", kind: Kind::Value, sample: Some("gpt"), command: "new" },

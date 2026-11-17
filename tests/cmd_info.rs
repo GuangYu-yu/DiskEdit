@@ -1,8 +1,9 @@
 //! `info` 的字段契约。
 //!
 //! 按字段解析断言，不比较整段输出字节：允许新增键，但基线键集与类型不得漂移。
-//! 失败路径也走同一份信封——`label`/`damaged`/`sector_size`/`size_bytes`/
-//! `disk_guid`/`partitions` 恒在，`error` 只在失败时出现。
+//! 运行期失败也走同一份信封——`label`/`damaged`/`sector_size`/`size_bytes`/
+//! `disk_guid`/`partitions` 恒在，`error` 只在失败时出现；参数形状错误在解析期
+//! 退出 2，不进入这条通路。
 //! 目标目录由 `TempDir` 在作用域结束时清理。
 
 mod guards;
@@ -57,19 +58,16 @@ fn info_reports_the_stable_field_set() {
 }
 
 #[test]
-fn info_refuses_a_partition_selector_and_keeps_the_envelope() {
+fn info_refuses_a_partition_selector_as_a_usage_error() {
     let dir = image(2 * 1024 * 1024);
     let img = dir.path().join("disk.img");
     let arg = format!("{}:1", img.display());
-    let (code, out, err) = run(&["info", &arg]);
-    assert_eq!(code, 3, "`info` reports the whole target — :N is refused: {err}");
-    let v = json(&out);
+    let (code, _out, err) = run(&["info", &arg]);
+    assert_eq!(code, 2, "`info` reports the whole target — :N is a usage error: {err}");
     assert!(
-        v["error"].is_string(),
-        "the failure envelope must still carry `error`: {out}"
+        err.contains("takes a whole target"),
+        "the refusal must name the whole-target rule: {err}"
     );
-    assert!(v["label"].is_null());
-    assert!(v["partitions"].is_null());
 }
 
 #[test]

@@ -51,6 +51,22 @@ pub fn parse_target(s: &str) -> Result<(String, Option<PartSelector>), &'static 
     }
 }
 
+/// `<part dir>/partition` → 分区号（内核 sysfs-block ABI：属性内容即分区号，整盘目录
+/// 没有该属性）。属性读不出时 `NotFound` 由调用方按自己的语义解释（遍历时=不是分区，
+/// 直接定位时=不是分区目标）；读得出但解析不了、或值超出 u32，都是环境故障，不截断
+#[cfg(target_os = "linux")]
+pub(crate) fn sysfs_partition_no(sys_dir: &Path) -> io::Result<u32> {
+    let path = sys_dir.join("partition");
+    let text = std::fs::read_to_string(&path)?;
+    let n: u64 = text
+        .trim()
+        .parse()
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, format!("unparsable sysfs value in {}", path.display())))?;
+    u32::try_from(n).map_err(|_| {
+        io::Error::new(io::ErrorKind::InvalidData, format!("sysfs partition number {n} overflows u32"))
+    })
+}
+
 /// 块设备分区节点命名，两种真实惯例并存：
 /// - 盘名以数字结尾时分区号加 "p"（/dev/sda→/dev/sda1、/dev/nvme0n1→/dev/nvme0n1p1）；
 /// - udev 的 by-id / by-path 链接用 "-part" 后缀（ata-XXX→ata-XXX-part1；
@@ -84,9 +100,13 @@ pub(crate) fn part_dev_hint(src: &FileSource, part: u32, offset_bytes: u64) -> S
 
 /// `/dev` 下的节点必须与 sysfs 记录的设备号同源：名字只是路径，实际写入落点由设备号
 /// 决定。盘名/分区名都由 sysfs 目录名推得，同名节点若指向另一台设备，"几何来自 A、
-/// 写入落在 B"——sfdisk / partx / BLKPG / pvresize 只拿到这个路径，无从自行发现
+/// 写入落在 B"——sfdisk / partx / BLKPG / pvresize 只拿到这个路径，无从自行发现。
+///
+/// 判定走**已打开的句柄**的 rdev 而不是再次 stat 路径：核对与结论之间不再有一步
+/// "按名字重新解析"。返回的句柄由调用方持有到外部工具返回，期间设备对象不会被回收；
+/// 外部工具自己按路径打开时仍可能落在被替换的同名节点上，这段窗口不在本函数可及范围
 #[cfg(target_os = "linux")]
-pub(crate) fn ensure_node_is_device(node: &Path, sys_dir: &Path) -> io::Result<()> {
+pub(crate) fn ensure_node_is_device(node: &Path, sys_dir: &Path) -> io::Result<std::fs::File> {
     use std::os::linux::fs::MetadataExt;
     use std::os::unix::fs::FileTypeExt;
     let want = std::fs::read_to_string(sys_dir.join("dev"))
@@ -98,8 +118,17 @@ pub(crate) fn ensure_node_is_device(node: &Path, sys_dir: &Path) -> io::Result<(
     else {
         return Err(io::Error::other(format!("unparsable sysfs device number {want:?} in {}", sys_dir.display())));
     };
-    let md = std::fs::metadata(node)
+    // O_NONBLOCK：可移动介质在无盘时会阻塞普通 open。句柄只用于身份核对，
+    // 按读写打开以便调用方直接拿它做块设备 ioctl（BLKPG 需要可写句柄）
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(node)
         .map_err(|e| io::Error::other(format!("device node {} is unusable: {e}", node.display())))?;
+    let md = file
+        .metadata()
+        .map_err(|e| io::Error::other(format!("cannot read the metadata of {}: {e}", node.display())))?;
     if !md.file_type().is_block_device() {
         return Err(io::Error::other(format!("{} is not a block device node", node.display())));
     }
@@ -111,7 +140,7 @@ pub(crate) fn ensure_node_is_device(node: &Path, sys_dir: &Path) -> io::Result<(
             sys_dir.display()
         )));
     }
-    Ok(())
+    Ok(file)
 }
 
 /// 尽力清理临时资源（临时挂载点等）：失败只影响资源占用，且调用点通常已有主错误/告警
@@ -125,10 +154,10 @@ pub(crate) fn best_effort_rmdir(dir: &std::path::Path) {
 /// 尽力而为的目录 fsync：把新建/重命名后的目录项推入持久存储。
 /// 失败**不**影响安全性——只影响"崩溃后还能看到多新的元数据"：
 /// - ckpt 目录项丢失 → 恢复点回退到上一个 checkpoint（重做已完成部分，安全，不会超前）
-/// - journal 目录项丢失 → 该 journal 可能整份消失（undo 能力丢失，前向恢复不受影响）
+/// - journal 目录项丢失 → 该 journal 可能整份消失（回滚能力丢失，前向恢复不受影响）
 ///
 /// 两者都不会产生"超前于数据"的持久化状态，故此处有意忽略失败。
-/// **新建 journal 不走这一路**：那时 undo 能力是唯一的前向保证，新建的目录项必须
+/// **新建 journal 不走这一路**：那时回滚能力是唯一的前向保证，新建的目录项必须
 /// 真正落盘（见 `platform::evidence_store` 的 `sync_dir`）。
 #[cfg(unix)]
 // audit-allow: A-13

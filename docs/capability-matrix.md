@@ -35,12 +35,9 @@ CI regenerates it and fails when the working tree differs. Do not edit by hand.
 | `check` | admitted | admitted | blocked: ReadTarget (unsupported) | blocked: ExternalTool (unsupported) | blocked: ReadTarget (unsupported) | blocked: ExternalTool (unsupported) |
 | `mkfs` | admitted | admitted | blocked: AtomicReplace (unsupported) | blocked: AtomicReplace (unsupported) | blocked: AtomicReplace (unsupported) | blocked: AtomicReplace (unsupported) |
 | `resizefs` | admitted | admitted | blocked: AtomicReplace (unsupported) | blocked: AtomicReplace (unsupported) | blocked: AtomicReplace (unsupported) | blocked: AtomicReplace (unsupported) |
-| `undo` | admitted | admitted | blocked: WriteTable (unsupported) | blocked: WriteTable (unsupported) | blocked: WriteTable (unsupported) | blocked: WriteTable (unsupported) |
-| `abandon` | admitted | admitted | blocked: AtomicReplace (unsupported) | blocked: AtomicReplace (unsupported) | blocked: AtomicReplace (unsupported) | blocked: AtomicReplace (unsupported) |
+| `recover` | admitted | admitted | blocked: WriteTable (unsupported) | blocked: WriteTable (unsupported) | blocked: WriteTable (unsupported) | blocked: WriteTable (unsupported) |
 | `new` | admitted | admitted | blocked: WriteTable (unsupported) | blocked: WriteTable (unsupported) | blocked: WriteTable (unsupported) | blocked: WriteTable (unsupported) |
 | `add` | admitted | admitted | blocked: WriteTable (unsupported) | blocked: WriteTable (unsupported) | blocked: WriteTable (unsupported) | blocked: WriteTable (unsupported) |
-| `resize-part` | admitted | admitted | blocked: WriteTable (unsupported) | blocked: WriteTable (unsupported) | blocked: WriteTable (unsupported) | blocked: WriteTable (unsupported) |
-| `plan` | admitted | admitted | blocked: ReadTarget (unsupported) | admitted | blocked: ReadTarget (unsupported) | admitted |
 
 ## Runtime gate
 
@@ -62,11 +59,8 @@ The table is generated from the Linux capability set; a non-Linux build's openab
 | `check` | admitted | admitted |
 | `mkfs` | admitted | admitted |
 | `resizefs` | admitted | admitted |
-| `undo` | admitted | admitted |
-| `abandon` | admitted | admitted |
+| `recover` | admitted | admitted |
 | `new` | admitted | admitted |
 | `add` | admitted | admitted |
-| `resize-part` | admitted | admitted |
-| `plan` | admitted | admitted |
 
 The process-level exit prints the cause sentence of a failure. Exit 3 and exit 4 are followed by a second line, `— this run changed no persistent state`; exit 6 prints `unsupported: <cause>` and appends no such line.

@@ -503,7 +503,7 @@ mod tests {
             current.clone(),
             PlanId::from_bytes([2; 16]),
             PlanVersion::new(1),
-            OpKind::ResizePart,
+            OpKind::ResizeEnd,
             PlanDigest::from_bytes([3; 32]),
             crate::dev::DiskGuidState::Unavailable,
         );
@@ -537,7 +537,7 @@ mod tests {
             current.clone(),
             PlanId::from_bytes([2; 16]),
             PlanVersion::new(1),
-            OpKind::ResizePart,
+            OpKind::ResizeEnd,
             PlanDigest::from_bytes([3; 32]),
             crate::dev::DiskGuidState::Unavailable,
         );
@@ -548,7 +548,7 @@ mod tests {
             current,
             PlanId::from_bytes([2; 16]),
             PlanVersion::new(1),
-            OpKind::ResizePart,
+            OpKind::ResizeEnd,
             PlanDigest::from_bytes([3; 32]),
             crate::dev::DiskGuidState::Unavailable,
         );
@@ -562,7 +562,7 @@ mod tests {
         assert!(root.join("evidence.bin").exists());
 
         // 字节已不可识别：同样不删。remove 消费句柄，拒绝后需重新打开
-        std::fs::write(root.join("evidence.bin"), b"torn").unwrap();
+        std::fs::write(root.join("evidence.bin"), b"junk").unwrap();
         let file = store.open_at(&anchor, &relative).unwrap();
         let outcome = RecoveryEngine::commit(Evidence::Recognized(on_disk)).unwrap();
         let (committed, permit, _) = outcome.into_parts();

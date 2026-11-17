@@ -29,10 +29,10 @@ chk() {
   losetup -d "$LD"
 }
 
-echo "=== 1: resize-part --grow-to-end（末分区扩到尾） ==="
+echo "=== 1: resize --grow-to-end（末分区扩到尾） ==="
 mk; M3=$(fill 3 190)
-# resize-part 只用当前表里的起点（--start 未登记），末分区扩到可用区尾
-$B resize-part --yes "$T":3 --grow-to-end >/dev/null 2>&1; exp $? 0 "resize-part --grow-to-end"
+# resize --end/--grow-to-end 只用当前表里的起点（--start 不在该形态的选项里），末分区扩到可用区尾
+$B resize --yes "$T":3 --grow-to-end >/dev/null 2>&1; exp $? 0 "resize --grow-to-end"
 $B info "$T" | grep -o '"num":3,"first_lba":[0-9]*,"last_lba":[0-9]*'
 chk 3 -
 

@@ -1,11 +1,7 @@
-//! 旧 journal 的拒绝口径与目标锁。
+//! 目标锁的序列化与陈旧锁无害。
 //!
 //! 恢复现场统一落在每用户状态根的键目录内（`<image_state_root>/images/<键摘要>/record`），
-//! 旧 journal 与旧 checkpoint 不由任何命令写出，也不参与现场枚举——它们只是"落点上存在的
-//! 未识别条目"。本文件只保留两条：旧 journal 的拒绝口径（不迁移、不回放、不删除），
-//! 以及目标锁的序列化与陈旧锁无害。
-
-use super::{sidecar, JOURNAL_SUFFIX};
+//! 本文件只验证一个目标一把锁。
 
 /// `add` 取绝对 SIZE 与显式类型 GUID，落进第一个可容纳空洞
 fn add_1m(img: &str) -> [&str; 8] {
@@ -16,106 +12,6 @@ fn add_1m(img: &str) -> [&str; 8] {
 /// 判据仍是"锁取不取得到"，不是"文件在不在"
 fn record_lock(img: &std::path::Path) -> std::path::PathBuf {
     super::record_dir(img).join(super::RECORD_LOCK_NAME)
-}
-
-/// 旧 journal 早于记录格式：undo 不回放、不迁移、不删除；abandon 不认领它，
-/// 也不拿"空跑即成功"掩盖它存在这件事
-#[test]
-fn a_legacy_journal_is_refused_and_left_in_place() {
-    let dir = std::env::temp_dir().join(format!("diskedit_lj_{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    let img = dir.join("l.img");
-    std::fs::write(&img, vec![0u8; 8 * 1024 * 1024]).unwrap();
-    let exe = env!("CARGO_BIN_EXE_DiskEdit");
-    let img_s = img.to_str().unwrap();
-    let journal = sidecar(&dir, "l.img", JOURNAL_SUFFIX);
-    let run = |args: &[&str]| -> (i32, String, String) {
-        let out = std::process::Command::new(exe)
-            .args(args)
-            .env("DISKEDIT_STATE_DIR", super::state_root())
-            .output()
-            .unwrap();
-        (
-            out.status.code().unwrap_or(-1),
-            String::from_utf8_lossy(&out.stdout).into_owned(),
-            String::from_utf8_lossy(&out.stderr).into_owned(),
-        )
-    };
-
-    let (c, _, e) = run(&["new", img_s, "--yes"]);
-    assert_eq!(c, 0, "{e}");
-    // 旧 journal 的形态：落点上有条目，但它不是记录
-    std::fs::write(&journal, b"DEJL\x07 not a recovery record").unwrap();
-    let before = std::fs::read(&img).unwrap();
-
-    let (c, _, e) = run(&["undo", img_s, "--yes"]);
-    assert_eq!(c, 3, "a legacy journal is not undoable: {e}");
-    assert!(e.contains("legacy undo journal"), "the refusal must name the artifact: {e}");
-    assert!(e.contains("manual handling"), "and say that this build leaves it alone: {e}");
-    assert_eq!(std::fs::read(&img).unwrap(), before, "a refused undo must not write");
-    assert!(journal.exists(), "the legacy journal must be left in place");
-
-    let (c, o, e) = run(&["abandon", img_s, "--yes"]);
-    assert_eq!(c, 0, "abandoning a clean target must be a no-op: {e}");
-    assert!(o.contains("this enumeration found no unfinished operation"), "{o}");
-    assert!(
-        o.contains("legacy undo journal") && o.contains("handle it by hand"),
-        "the no-op must disclose the artifact it will not release: {o}"
-    );
-    assert!(journal.exists(), "abandon must not delete a legacy journal");
-    assert_eq!(std::fs::read(&img).unwrap(), before, "abandon must not touch a byte of the target");
-
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-/// 升级前留在 `<img>.diskedit/record` 的旧布局现场：`inspect` 指向它并给出拒读结论，
-/// 写命令拒绝且不写目标字节，旧文件既不迁移也不删除
-#[test]
-fn a_record_at_the_previous_location_is_reported_and_blocks_writes() {
-    let dir = std::env::temp_dir().join(format!("diskedit_lr_{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    let img = dir.join("l.img");
-    std::fs::write(&img, vec![0u8; 8 * 1024 * 1024]).unwrap();
-    let img_s = img.to_str().unwrap();
-    let legacy = dir.join("l.img.diskedit").join("record");
-    std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
-    let mut bytes = vec![0u8; 64];
-    bytes[..4].copy_from_slice(b"DSK4");
-    std::fs::write(&legacy, &bytes).unwrap();
-    let run = |args: &[&str]| -> (i32, String, String) {
-        let out = std::process::Command::new(env!("CARGO_BIN_EXE_DiskEdit"))
-            .args(args)
-            .env("DISKEDIT_STATE_DIR", super::state_root())
-            .output()
-            .unwrap();
-        (
-            out.status.code().unwrap_or(-1),
-            String::from_utf8_lossy(&out.stdout).into_owned(),
-            String::from_utf8_lossy(&out.stderr).into_owned(),
-        )
-    };
-
-    let (c, o, e) = run(&["inspect", img_s]);
-    assert_eq!(c, 3, "a previous-layout record is not readable here: {e}");
-    assert!(
-        o.contains(legacy.to_str().unwrap()),
-        "inspect must point at the previous record location, not report it absent:\n{o}"
-    );
-    assert!(e.contains("DSK4"), "the conclusion must name the old layout: {e}");
-
-    let (c, _, e) = run(&["new", img_s, "--yes"]);
-    assert_eq!(c, 3, "writes must be refused while the old record is there: {e}");
-    assert!(e.contains("previous record location"), "the refusal must name the location: {e}");
-    assert_eq!(std::fs::read(&img).unwrap(), vec![0u8; 8 * 1024 * 1024], "a refused write must not touch the target");
-    assert!(legacy.exists(), "the old record must be left in place");
-
-    let (c, _, e) = run(&["records", "list", img_s]);
-    assert_eq!(c, 0, "{e}");
-    assert!(e.contains("DSK4"), "records list must explain the old layout: {e}");
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// 一个目标一把锁。正面：别的持有者还在时写命令必须拒绝，而不是与它并行改同一块盘。
@@ -160,7 +56,7 @@ fn target_lock_serializes_writers_and_a_stale_lock_file_is_harmless() {
     assert_eq!(c, 4, "a held target lock must stop another writer: {e}");
     assert!(e.contains("another diskedit"), "the refusal must name the cause: {e}");
 
-    // 反面：只读命令**不取所有权**，因此不被别人持有的锁挡住——`info` / `plan` 恰恰
+    // 反面：只读命令**不取所有权**，因此不被别人持有的锁挡住——`info` 恰恰
     // 可能被用来查看一块正被写入的盘。（写命令里"先只读看一眼再取锁"的阶段同理）
     let (c, _, e) = run(&["info", img_s]);
     assert_eq!(c, 0, "a read-only command must not be blocked by a held lock: {e}");

@@ -2,44 +2,6 @@
 
 use super::*;
 
-/// 缩容后的**实际落点**核对结论。请求值只说明请求了多大——工具的取整粒度各不相同
-/// （ext 按块、ntfs 按簇、btrfs 按 sectorsize），真正决定"分区能不能缩到请求尺寸"的是
-/// 文件系统实际落在哪儿，故工具成功返回后必须回读一次
-pub enum ShrinkVerify {
-    /// 回读到的实际尺寸（实测三种工具的取整方向都向下，故它 ≤ 请求值）
-    Within(u64),
-    /// 回读不出来（工具缺失、输出解析不了、缩容把卷标成待检查而工具拒答）：缩容**可能已经
-    /// 完成**，只是落点无法证实。这是"结果无法验证"，不是"缩容失败"——由
-    /// [`ShrinkRunOutcome::Unverified`] 携带成一条待办，不上抛成错误
-    Unverifiable { why: String, hint: String },
-}
-
-impl ShrinkVerify {
-    /// 缩容成功那一行：请求值与实际落点都给（工具的取整差异因此可见）。
-    /// 回读不出来时没有落点可报
-    #[cfg(test)]
-    pub fn ok_line(&self, requested: u64) -> Option<String> {
-        match self {
-            Self::Within(actual) => Some(format!("fs shrunk to {actual} bytes (requested {requested})")),
-            Self::Unverifiable { .. } => None,
-        }
-    }
-
-    /// 回读不出来 → 一条后置条件待办
-    #[cfg(test)]
-    pub fn pending(self, part: u32) -> Option<crate::outcome::Pending> {
-        match self {
-            Self::Within(_) => None,
-            Self::Unverifiable { why, hint } => Some(crate::outcome::Pending::new(
-                part,
-                crate::outcome::PendingKind::Other("fs shrink"),
-                why,
-                hint,
-            )),
-        }
-    }
-}
-
 /// 缩容这一动的结果。两个变体是两条互斥的通道：落点已回读证实，或回读不出、结果未证实。
 /// "未证实"只出现在 [`Self::Unverified`] 上，与已证实的尺寸互斥，不藏在成功变体里
 pub enum ShrinkRunOutcome {
@@ -90,11 +52,11 @@ impl ShrinkRunOutcome {
     }
 }
 
-/// 核对结论 → 结果的两种变体。转换只在此一处，调用方不自行解读 [`ShrinkVerify`]
-fn shrink_outcome(verify: ShrinkVerify, leak: Option<MountLeak>) -> ShrinkRunOutcome {
+/// 核对结论 → 结果的两种变体。转换只在此一处，调用方不自行解读 [`SizeVerify`]
+pub(crate) fn shrink_outcome(verify: SizeVerify, leak: Option<MountLeak>) -> ShrinkRunOutcome {
     match verify {
-        ShrinkVerify::Within(actual) => ShrinkRunOutcome::Verified { actual, leak },
-        ShrinkVerify::Unverifiable { why, hint } => ShrinkRunOutcome::Unverified { why, hint, leak },
+        SizeVerify::Confirmed(actual) => ShrinkRunOutcome::Verified { actual, leak },
+        SizeVerify::Unverifiable { why, hint } => ShrinkRunOutcome::Unverified { why, hint, leak },
     }
 }
 
@@ -189,7 +151,7 @@ fn shrink_fs_step(src: &FileSource, part: u32, fstype: Option<ContentKind>, new_
 
 /// 缩容**之前**看 FS 现在落在哪儿：中断续跑用它区分"已缩到位"与"从未缩过"，
 /// 避免按盲判把同一次缩容再做一遍。
-/// `None` 与 [`ShrinkVerify::Unverifiable`] 同义——回读不出来，无从判断。
+/// `None` 与 [`SizeVerify::Unverifiable`] 同义——回读不出来，无从判断。
 pub fn shrink_already_at(src: &FileSource, part: u32, fstype: Option<ContentKind>, requested: u64) -> Option<bool> {
     // 不是文件系统的内容（swap / LVM PV）缩不了，也谈不上"已缩到位"：与其余不能缩的
     // 类型同判，由 shrink_fs 给出拒绝
@@ -221,19 +183,19 @@ pub fn shrink_already_at(src: &FileSource, part: u32, fstype: Option<ContentKind
 /// 缩容工具成功返回后的核对：回读实际落点，与请求值比对。三种结局对应三条出路——
 /// 落点在请求范围内 = 正常成功；落点超出请求 = 工具行为不符合预期（分区不能按请求缩进去）；
 /// 回读不出来 = 结果无法验证（工具可能已经缩好了，故不上抛成失败）
-pub(crate) fn verify_shrink(kind: FsKind, dev: &str, requested: u64, tool: &str) -> Result<ShrinkVerify, FsError> {
+pub(crate) fn verify_shrink(kind: FsKind, dev: &str, requested: u64, tool: &str) -> Result<SizeVerify, FsError> {
     classify_shrink(read_fs_bytes(kind, dev), requested, tool, &size_read_back_hint(kind))
 }
 
 /// 回读结果 → 核对结论。与外部调用分开，判定本身才能单测
-pub(crate) fn classify_shrink(read: io::Result<u64>, requested: u64, tool: &str, hint: &str) -> Result<ShrinkVerify, FsError> {
+pub(crate) fn classify_shrink(read: io::Result<u64>, requested: u64, tool: &str, hint: &str) -> Result<SizeVerify, FsError> {
     match read {
-        Ok(actual) if actual <= requested => Ok(ShrinkVerify::Within(actual)),
+        Ok(actual) if actual <= requested => Ok(SizeVerify::Confirmed(actual)),
         Ok(actual) => Err(FsError::CommandFailed(format!(
             "{tool} reported success but left the filesystem at {actual} bytes, more than the requested \
              {requested} — the partition is not shrunk to a size the filesystem does not fit in"
         ))),
-        Err(e) => Ok(ShrinkVerify::Unverifiable {
+        Err(e) => Ok(SizeVerify::Unverifiable {
             why: format!(
                 "{tool} reported success but the filesystem size could not be read back: {e} — \
                  the shrink may have been applied; verify the new size before relying on it"
@@ -243,46 +205,21 @@ pub(crate) fn classify_shrink(read: io::Result<u64>, requested: u64, tool: &str,
     }
 }
 
-/// 回读缩容后**实际**文件系统尺寸。三者都是只读查询：
-/// - ext：`dumpe2fs -h`（man dumpe2fs：-h 只打印超级块）的 `Block count:` × `Block size:`
-/// - ntfs：`ntfsresize --info` 的 `Current volume size:`（--info 是查询，不调整大小，故只读）。
-///   `-f` 是必需的：真实调整大小会把卷标成"待检查"，不带 `-f` 的 `--info` 会以该理由拒答
-/// - btrfs：`btrfs inspect-internal dump-super -f`（-f = --full）的 `total_bytes`。它读的是
-///   超级块；该命令除签名验证外不做全面合理性检查，故只用来报尺寸、不用来判断卷是否健康
-///
-/// 输出格式非稳定机器接口（随工具版本可能变化），解析失败即报错、不猜默认值
-pub(crate) fn read_fs_bytes(kind: FsKind, dev: &str) -> io::Result<u64> {
-    match kind {
-        FsKind::Ext => {
-            let text = run_text("dumpe2fs", &["-h", dev])?;
-            let blocks = parse_num_lead(&text, "Block count:")?;
-            let block_size = parse_num_lead(&text, "Block size:")?;
-            blocks.checked_mul(block_size).ok_or_else(|| {
-                io::Error::other(format!("dumpe2fs block count × block size overflows ({blocks} × {block_size})"))
-            })
-        }
-        FsKind::Ntfs => Ok(parse_num_lead(
-            &run_text("ntfsresize", &["-f", "--info", dev])?,
-            "Current volume size:",
-        )?),
-        FsKind::Btrfs => Ok(parse_num_lead(
-            &run_text("btrfs", &["inspect-internal", "dump-super", "-f", dev])?,
-            "total_bytes",
-        )?),
-        other => Err(io::Error::other(format!(
-            "no size read-back wired for {}",
-            content_name(ContentKind::Filesystem(other))
-        ))),
-    }
-}
-
 /// 回读命令的写法（待办里给用户的补救信息）。设备路径留给用户填：镜像目标上的
-/// 分区节点是临时 loop，写进待办会指向一个随命令结束即消失的路径
+/// 分区节点是临时 loop，写进待办会指向一个随命令结束即消失的路径。
+///
+/// 只有 ext / ntfs / btrfs 有设备级回读；f2fs / xfs / vfat 没有已接线的回读，核对
+/// 只能落到挂载后的尺寸报告：三者查询工具的字段随版本变化，不写进提示
 pub(crate) fn size_read_back_hint(kind: FsKind) -> String {
     match kind {
         FsKind::Ext => "dumpe2fs -h <partition device>  (Block count × Block size)".into(),
         FsKind::Ntfs => "ntfsresize -f --info <partition device>".into(),
         FsKind::Btrfs => "btrfs inspect-internal dump-super -f <partition device>".into(),
+        FsKind::F2fs | FsKind::Xfs | FsKind::Vfat => {
+            "mount <partition device> <mountpoint>, then compare the 1-byte total of \
+             `df -B1 <mountpoint>` with the size the range was grown to"
+                .into()
+        }
         _ => String::new(),
     }
 }

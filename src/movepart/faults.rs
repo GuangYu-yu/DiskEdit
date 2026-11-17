@@ -113,7 +113,8 @@ fault_points! {
     /// 第 N 个 chunk 拷贝完成后 abort（非自重叠搬移按批提交，该块此时可能尚未同步；
     /// 自重叠搬移逐块落盘，故此刻已同步）
     fault_chunk(n: u64) = "chunk", n;
-    /// 第 N 个 chunk 的数据已同步、checkpoint 尚未写入时 abort（同步与 durable 边界的交界面）
+    /// 第 N 个 chunk 的数据已同步、checkpoint 尚未写入时 abort（同步与 durable 边界的交界面；
+    /// 按批推进的检查点与搬移末尾剩下的那一批都落在这个窗口）
     fault_after_data_sync(n: u64) = "after-data-sync", n;
     /// chunk 拷贝全部完成、表项 commit 前 abort
     fault_before_entry_commit() = "before-entry-commit";

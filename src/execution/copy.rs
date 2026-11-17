@@ -99,7 +99,7 @@ pub(crate) fn preflight(
 /// 执行（写盘）：屏障 → 逐块读源、喂摘要、写目标并同步 → 核对源摘要 → NTFS HiddenSectors 修正。
 ///
 /// 表提交不在这里：新条目由计划里的表步骤承担。两半之间中断时盘上是"数据已复制、
-/// 条目未提交"，undo 因屏障拒绝回滚，重跑 copy 可以把这个副本补齐。
+/// 条目未提交"，`recover` 因屏障拒绝回滚，重跑 copy 可以把这个副本补齐。
 pub(crate) fn execute(
     src: &mut WriteSource,
     step: &CopyPartition,
@@ -125,7 +125,7 @@ pub(crate) fn execute(
     let total_n = total.div_ceil(chunk_bytes) as usize;
     let mut hasher = Sha256::new();
     let mut pos = 0u64;
-    // 屏障必须早于首个目标写入（数据字节不入记录，undo 见到它即永久拒绝回滚），
+    // 屏障必须早于首个目标写入（数据字节不入记录，`recover` 见到它即永久拒绝回滚），
     // 但首次读源在它之前：源读不出时目标一个字节都没写，那类失败不该被判成不可回滚
     let mut barrier_set = false;
     while pos < total {
@@ -195,7 +195,7 @@ pub(crate) fn execute(
     if copied != expected {
         return Err(RunOutcome::partial(format!(
             "partition {}: the bytes read from the source do not match the digest recorded for it — \
-             the copy is not faithful to the recorded source; the destination was written and `undo` \
+             the copy is not faithful to the recorded source; the destination was written and `recover` \
              does not roll it back",
             step.part
         )));

@@ -131,7 +131,7 @@ pub(crate) fn lvm_grow_chain(
     let sysdir = crate::dev::sysfs_node(node).map_err(|e| {
         LvmError::Failed(format!("cannot resolve the sysfs node of {part_dev} for the LVM chain: {e}"))
     })?;
-    crate::dev::ensure_node_is_device(node, &sysdir)
+    let _node_guard = crate::dev::ensure_node_is_device(node, &sysdir)
         .map_err(|e| LvmError::Failed(format!("refusing the LVM chain on {part_dev}: {e}")))?;
     // 没有现场事实时的 LV 选择是只读判定，先于 pvresize：名字写错、该 PV 上没有 LV 或
     // LV 不唯一都在 pvresize 生效之前拒绝。有事实的续跑不重选——记录里的 LV 才是作业目标

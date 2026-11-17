@@ -23,7 +23,11 @@ LD=$(lo_attach "$T")
 lo_waitpart "${LD}p1" || { echo "p1 part node not ready"; rc=1; lo_detach "$LD"; }
 mount_at "${LD}p1" "$TEST_MNT" 2>/dev/null && { dd if=/dev/urandom of="$TEST_MNT/f.bin" bs=1M count=100 2>/dev/null; MF=$(mdsum "$TEST_MNT"/f.bin); SZ1=$(df -h --output=size "$TEST_MNT" | tail -1); echo "before: $SZ1"; umount "$TEST_MNT" 2>/dev/null; }
 lo_detach "$LD"
-OUT=$($B resize --yes "$T":1 900M 2>&1); echo "resize exit=$? : $(echo "$OUT" | tail -1)"
+OUT=$($B resize --yes "$T":1 900M 2>&1); E=$?
+echo "resize exit=$E : $(echo "$OUT" | tail -1)"
+# f2fs 没有设备级回读：工具成功但尺寸未证实 → 5，待办给出挂载后的尺寸核对
+[ "$E" = "5" ] && echo "A F2FS-GROW-UNVERIFIED OK" || { echo "A WRONG EXIT ($E, want 5)"; rc=1; }
+echo "$OUT" | grep -q "df -B1" && echo "A F2FS SIZE-CHECK HINT OK" || { echo "A NO SIZE-CHECK HINT"; rc=1; }
 LD=$(lo_attach "$T")
 lo_waitpart "${LD}p1" || { echo "p1 part node not ready"; rc=1; lo_detach "$LD"; }
 mount_at "${LD}p1" "$TEST_MNT" 2>/dev/null && {
@@ -178,8 +182,8 @@ else
   echo "G WRONG EXIT ($EG, last_lba=$NEWLAST): $(echo "$OUT" | tail -1)"; rc=1
 fi
 # G 的 5 保留了撤销窗口，现场未释放；G2 要验的是另一条命令的后置条件，先释放。
-# 分区扩容已落盘且 undo 仍可回放，abandon 须 --discard-replay 显式放弃这段回滚能力
-AB=$($B abandon "$T" --yes --discard-replay 2>&1); [ $? = 0 ] || { echo "G abandon failed: $(echo "$AB" | head -1)"; rc=1; }
+# 分区扩容已落盘且 recover 仍可回放，recover --release 须 --discard-replay 显式放弃这段回滚能力
+AB=$($B recover --release "$T" --yes --discard-replay 2>&1); [ $? = 0 ] || { echo "G recover --release failed: $(echo "$AB" | head -1)"; rc=1; }
 # G2/G3：同一个判据，两条命令的后置条件不同——resizefs 只动 FS，首启现场它没有可写的
 # 后置条件（退 0，并说明该层由首次挂载创建）；而类型识别不出（空区域同此）时它什么都没做，
 # 必须拒绝（退 3）并把识别结果带进文案——报成功会让脚本以为空间已可用

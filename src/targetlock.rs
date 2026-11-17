@@ -14,7 +14,7 @@
 //!   锁文件与记录不在同一层：记录在 `<state_root>/recovery/<identity-hash>/` 下。
 //!   在锁之外，块设备的写打开仍是 `O_EXCL`（见 [`crate::dev::FileSource::open`] 的
 //!   块设备分支）——两道凭据互为补充：O_EXCL 使同一目标上的其他独占打开失败，锁文件
-//!   覆盖不经过 O_EXCL 的写入路径（如 `abandon`）与在线路径，普通非独占写入两道都挡不住。同一进程二次以 `O_EXCL` 打开同一
+//!   覆盖不经过 O_EXCL 的写入路径（如 `recover --release`）与在线路径，普通非独占写入两道都挡不住。同一进程二次以 `O_EXCL` 打开同一
 //!   设备是否 EBUSY 取决于内核的 holder 语义（holder 是每次 open 的 `struct file`），
 //!   不值得把正确性押在那上面
 //!
@@ -42,7 +42,7 @@ pub(crate) struct TargetLock {
     /// 数据文件上，块设备落在设备节点上。锁文件按 canonical path 派生，硬链接等
     /// "同一 inode 的另一条路径"由此各拿一把锁文件锁、互相看不见；对句柄上锁才把
     /// 同一份数据收敛到一把锁。
-    /// 调用方未给出 inode 证据（`abandon` 的常态）且目标不在时，退回只靠锁文件；
+    /// 调用方未给出 inode 证据（`recover --release` 的常态）且目标不在时，退回只靠锁文件；
     /// 给出预期的写路径若目标不在则取锁失败。
     /// Windows 侧不取这道凭据：那里的 LockFileEx 是**强制**的且 `File::lock` 锁整个文件，
     /// 本进程随后经另一个句柄读写同一文件会直接 ERROR_LOCK_VIOLATION（见
@@ -57,7 +57,7 @@ impl TargetLock {
     /// `expected` 是调用方**已打开**句柄的指纹：第二道凭据按身份里的数据路径重新打开，
     /// 若那条路径在打开之后被改名或替换，重新打开的是另一个文件——锁会落在别人身上，
     /// 而写入仍走原句柄。有 inode 证据时按已打开句柄核对，不符即拒绝（fail-closed）；
-    /// 拿不到指纹的调用点（`abandon`、在线路径）传 `None`，只保留锁文件这一道凭据
+    /// 拿不到指纹的调用点（`recover --release`、在线路径）传 `None`，只保留锁文件这一道凭据
     ///
     /// 只有两种结局：拿到锁，或返回错误。**没有"降级为不持锁"这条路径**——锁落点由
     /// 身份恒给出（见 [`crate::dev::TargetIdentity::lock_path`]），建立失败即拒绝
@@ -93,11 +93,17 @@ impl TargetLock {
         }
         // 第二道凭据：已打开的目标句柄（仅 unix）。镜像落在数据文件的 inode 上，
         // 块设备落在设备节点的 inode 上；同一 inode 的别名路径由此收敛到一把锁。
-        // 只有"目标不在"才放弃这道凭据——`abandon` 的常态就是目标已消失，那时能
+        // 只有"目标不在"才放弃这道凭据——`recover --release` 的常态就是目标已消失，那时能
         // 依赖的只有锁文件。其余打开失败（EACCES / EMFILE / EIO）不是"目标不在"：
         // 静默降级会丢掉 inode 级凭据
+        // 调用方没给指纹（目标已消失），或指纹里没有 inode 证据（拿不到 dev/ino）时，
+        // 能依赖的只有锁文件本身；两种情形都落到 `None`
         #[cfg(unix)]
-        let want = expected.filter(|f| f.has_inode_evidence());
+        let want = match expected {
+            None => None,
+            Some(f) if !f.has_inode_evidence() => None,
+            Some(f) => Some(f),
+        };
         #[cfg(unix)]
         let handle = {
             let data = identity.data_path();
@@ -218,7 +224,7 @@ mod tests {
 
     /// 正常写路径带着预期身份取锁时，目标路径若已不指向打开时的文件（这里直接消失），
     /// 不能降级成"只靠锁文件"继续：锁文件按路径派生，别名路径各拿一把。
-    /// 没有预期身份的清理路径（`abandon`）仍允许目标不在
+    /// 没有预期身份的清理路径（`recover --release`）仍允许目标不在
     #[cfg(unix)]
     #[test]
     fn a_missing_target_with_expected_identity_is_refused() {

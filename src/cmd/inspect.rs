@@ -14,7 +14,7 @@ use crate::cli::InspectRequest;
 #[cfg(target_os = "linux")]
 use crate::cmd::CmdResult;
 #[cfg(target_os = "linux")]
-use crate::outcome::{RunOutcome, EXIT_OK};
+use crate::outcome::{RunOutcome, EXIT_OK, EXIT_REFUSED};
 #[cfg(target_os = "linux")]
 use crate::platform::probe::HostPlatform;
 #[cfg(target_os = "linux")]
@@ -33,10 +33,8 @@ path:
   directory (`<image_state_root>/images/<key-hash>/...`,
   `<image>.diskedit/...` or `<state_root>/recovery/<identity-hash>/...`,
   excluding `record.lock`) is itself decoded as evidence. Entries in the
-  quarantine area (`.abandoned[.N]`, `.torn[.N]`) are marked as such and do
-  not count as active records. This build never writes `.torn[.N]`; the name
-  is recognized so such an entry is treated as quarantine instead of an active
-  record. Any other path is treated as a TARGET.
+  quarantine area (`.abandoned[.N]`) are marked as such and do not count as
+  active records. Any other path is treated as a TARGET.
 
 output:
   the evidence path, the record fields (transaction, plan, operation, progress,
@@ -48,7 +46,7 @@ exit status:
   0  a readable result: no record, a complete record, an unfinished record (the
      output names the rollback / set-aside commands), or an identity check that
      cannot be made
-  3  torn/truncated bytes, CRC or magic mismatch, identity mismatch, a non-regular
+  3  truncated bytes, CRC or magic mismatch, identity mismatch, a non-regular
      entry, or the anchor directory, the record, or the target cannot be read
   6  this platform does not provide the command set
   `Unverified` records are annotated and keep their verdict's exit status"#;
@@ -70,55 +68,36 @@ pub(crate) fn cmd_inspect(a: &InspectRequest) -> CmdResult {
             println!("target: {}", a.target);
             println!("identity check: ForeignCheckUnavailable");
             println!("verdict: identity unavailable — the record cannot be compared");
-            report_candidates(crate::dev::TargetIdentity::resolve_for_cleanup(path).as_ref());
+            let failed =
+                report_candidates(crate::dev::TargetIdentity::resolve_for_cleanup(path).as_ref());
             report_occupancy(path);
+            if failed.is_some() {
+                return CmdResult::Code(EXIT_REFUSED);
+            }
             return CmdResult::Code(EXIT_OK);
         }
         Err(e) => bail_fail(platform_failure(&a.target, e)),
     };
     let current = scene_of_target(&probe, path);
-    // 记录落点由目标身份给出：镜像是其伴随文件，loop 设备是 backing 旁的文件；
+    // 记录落点由目标身份给出：镜像是其状态根下的键目录，loop 设备按 backing 派生；
     // 非 loop 块设备没有决定过的落点
     let identity = crate::dev::TargetIdentity::resolve_for_cleanup(path);
-    // 旧落点：升级前留在 `<img>.diskedit/record` 的现场。本构建不认领它，但派生落点
-    // 为空时它才是这个目标真正的现场，`inspect` 必须指向它而不是报「无记录」
-    let legacy = identity
-        .as_ref()
-        .and_then(crate::dev::TargetIdentity::legacy_image_record_path)
-        .filter(|legacy| {
-            !matches!(
-                crate::recovery::probe_companion(legacy),
-                crate::recovery::CompanionProbe::Absent
-            )
-        });
-    let Some(mut record) = identity
+    let Some(record) = identity
         .as_ref()
         .and_then(crate::dev::TargetIdentity::record_path)
         .map(Path::to_path_buf)
-        .or_else(|| legacy.clone())
     else {
         println!("target: {}", a.target);
         println!("recovery state root: no record path is resolved for this target");
         println!("verdict: nothing inspected");
-        report_candidates(identity.as_ref());
+        let failed = report_candidates(identity.as_ref());
         report_occupancy(path);
+        if failed.is_some() {
+            return CmdResult::Code(EXIT_REFUSED);
+        }
         return CmdResult::Code(EXIT_OK);
     };
-    // 键目录不存在时派生落点连锚点都打不开（这不是"没有记录"）。旧落点有现场时先看它，
-    // 否则保持"锚点目录打不开 → 3"的原有口径
-    if let Some(legacy) = legacy.as_ref()
-        && record.parent().is_some_and(|dir| !dir.is_dir())
-    {
-        record = legacy.clone();
-    }
-    let mut evidence = read_evidence(&record, Some(&current));
-    // 派生落点为空而旧落点有现场：结论由旧布局的拒读口径给出（退 3）
-    if matches!(evidence, Evidence::Absent)
-        && let Some(legacy) = legacy
-    {
-        record = legacy;
-        evidence = read_evidence(&record, Some(&current));
-    }
+    let evidence = read_evidence(&record, Some(&current));
     println!("evidence: {}", record.display());
     report(&evidence);
     report_header(&record, &evidence);
@@ -135,17 +114,18 @@ pub(crate) fn cmd_inspect(a: &InspectRequest) -> CmdResult {
 /// 身份读不出时既拼不出块设备的记录目录名，也无法做身份比对；此时若直接返回，
 /// 这些记录就对 `inspect` 消失了。候选一律按结构展示，并说明它们不能与本目标匹配
 /// （列出，不认领）。候选集来自 [`crate::recovery::active_recovery_records`]：
-/// `abandon` 的候选列表与这里取自同一处枚举，不各自拼落点
+/// `recover --release` 的候选列表与这里取自同一处枚举，不各自拼落点
+///
+/// 返回候选枚举失败的原因：读不出候选集时调用方要按 3 退出，不能把"什么都没列出来"
+/// 当作"没有候选"
 #[cfg(target_os = "linux")]
-fn report_candidates(identity: Option<&crate::dev::TargetIdentity>) {
-    let Some(identity) = identity else {
-        return;
-    };
+fn report_candidates(identity: Option<&crate::dev::TargetIdentity>) -> Option<String> {
+    let identity = identity?;
     let candidates = match crate::recovery::active_recovery_records(identity, None) {
         Ok(candidates) => candidates,
         Err(why) => {
             eprintln!("cannot enumerate the candidate records: {why}");
-            return;
+            return Some(why);
         }
     };
     let mut shown = 0usize;
@@ -162,6 +142,7 @@ fn report_candidates(identity: Option<&crate::dev::TargetIdentity>) {
              can be matched to it — they are listed, not claimed"
         );
     }
+    None
 }
 
 /// 记录条目指向的目标场景。条目本身不指向路径、名字不是 UTF-8、目标认不出是三种
@@ -185,7 +166,7 @@ fn sidecar_scene(spot: &crate::dev::RecordSpot) -> Result<SceneIdentity, String>
 /// 身份核对只有 sidecar 做得到——目录名去掉 `.diskedit` 就是目标路径。主机仓库目录名是
 /// `identity-hash`，不可逆，所以给 `ForeignCheckUnavailable`，不判
 /// `ForeignTarget`。隔离项不参与活跃判定：它可读、可报告，但不计入未收尾现场，
-/// 也不要求 `undo`
+/// 也不要求 `recover`
 #[cfg(target_os = "linux")]
 fn inspect_record_entry(spot: &crate::dev::RecordSpot, a: &InspectRequest) -> CmdResult {
     let path = spot.path();
@@ -393,9 +374,6 @@ fn report(evidence: &Evidence) {
         Evidence::UnrecognizedFormat { magic, recorded } => {
             println!("record: unrecognized format");
             println!("  magic: {}", crate::support::hex_lower(magic));
-            if let Some(name) = crate::recovery::legacy_layout(*magic) {
-                println!("  layout: previous record layout ({name})");
-            }
             if let Some(scene) = recorded {
                 println!("  recorded identity: {}", describe_identity(scene));
             } else {
@@ -439,13 +417,7 @@ fn verdict_with(evidence: &Evidence, target: &str) -> (u8, Option<String>) {
     match evidence {
         Evidence::Absent => (EXIT_OK, None),
         Evidence::Recognized(record) => map_recognized(record, target),
-        Evidence::UnrecognizedFormat { magic, .. } => match crate::recovery::legacy_layout(*magic) {
-            Some(name) => (3, Some(format!(
-                "structure: the record was {}",
-                crate::recovery::legacy_layout_refusal(name)
-            ))),
-            None => (3, Some("structure: the record's magic is not recognized or its payload does not match the layout this build reads — keep the file; `diskedit abandon` is the only command that will move it aside, and nothing may write to this target until then".to_string())),
-        },
+        Evidence::UnrecognizedFormat { .. } => (3, Some("structure: the record's magic is not recognized or its payload does not match the layout this build reads — keep the file; `diskedit recover --release` will not quarantine it automatically, so remove it by hand once you are sure it is stale, and nothing may write to this target until then".to_string())),
         Evidence::ForeignTarget { .. } => {
             (3, Some("identity: the record belongs to a different target — it must not be cleaned up or replayed for this target".to_string()))
         }
@@ -477,36 +449,36 @@ fn map_recognized(record: &Record, target: &str) -> (u8, Option<String>) {
     if record.committed() {
         return (EXIT_OK, retention_note);
     }
-    // 回放资格与 `undo` 共用同一份 `TableReplay`：提示不会许诺 `undo` 不接受的事。
-    // 相交的 move 在无许可时被 `undo` 拒绝（3），带 `--replay-table-only` 则按
-    // `MoveForced` 回放表区；这里的出路是续跑、表区回放或 abandon
+    // 回放资格与 `recover` 共用同一份 `TableReplay`：提示不会许诺 `recover` 不接受的事。
+    // 相交的 move 在无许可时被 `recover` 拒绝（3），带 `--replay-table-only` 则按
+    // `MoveForced` 回放表区；这里的出路是续跑、表区回放或 `recover --release`
     let replay = crate::recovery::TableReplay::of(record, false);
     let mut note = match replay {
         crate::recovery::TableReplay::MoveBlocked => format!(
             "unfinished: the record is not committed and restoring its table could point the old layout \
-             at overwritten data — `diskedit undo {target} --yes` refuses; re-run the recorded move with \
+             at overwritten data — `diskedit recover {target} --yes` refuses; re-run the recorded move with \
              the same request to finish the relocation, replay its partition-table regions with \
-             `diskedit undo {target} --yes --replay-table-only`, or `diskedit abandon {target} --yes \
+             `diskedit recover {target} --yes --replay-table-only`, or `diskedit recover --release {target} --yes \
              --discard-replay` sets it aside"
         ),
         crate::recovery::TableReplay::MoveNoPreimage => format!(
             "unfinished: the record is not committed and holds no replayable copy of the old partition \
-             table — `diskedit undo {target} --yes` refuses; re-run the recorded move with the same \
-             request to finish the relocation, or `diskedit abandon {target} --yes --discard-replay` \
+             table — `diskedit recover {target} --yes` refuses; re-run the recorded move with the same \
+             request to finish the relocation, or `diskedit recover --release {target} --yes --discard-replay` \
              sets it aside"
         ),
         crate::recovery::TableReplay::CopyTableOnly | crate::recovery::TableReplay::MoveClear => format!(
             "unfinished: the record is not committed and its data writes are past the point of rolling \
-             back — `diskedit undo {target} --yes` replays only the recorded table regions ({replay}), or \
-             `diskedit abandon {target} --yes --discard-replay` sets it aside"
+             back — `diskedit recover {target} --yes` replays only the recorded table regions ({replay}), or \
+             `diskedit recover --release {target} --yes --discard-replay` sets it aside"
         ),
         crate::recovery::TableReplay::Refused => format!(
             "unfinished: the record is not committed and past the point of rolling back — run \
-             `diskedit abandon {target} --yes` to set it aside, then run the whole command again"
+             `diskedit recover --release {target} --yes` to set it aside, then run the whole command again"
         ),
         crate::recovery::TableReplay::Full | crate::recovery::TableReplay::MoveForced => format!(
-            "unfinished: the record is not committed — run `diskedit undo {target} --yes` to roll back, \
-             or `diskedit abandon {target} --yes --discard-replay` to set it aside"
+            "unfinished: the record is not committed — run `diskedit recover {target} --yes` to roll back, \
+             or `diskedit recover --release {target} --yes --discard-replay` to set it aside"
         ),
     };
     if let Some(extra) = retention_note {
@@ -742,8 +714,8 @@ mod tests {
             verdict(&Evidence::Recognized(record(CommitState::Prepared, Retention::Active)), &request("disk.img"));
         assert_eq!(code, EXIT_OK);
         let note = note.unwrap();
-        assert!(note.contains("diskedit undo disk.img --yes"), "{note}");
-        assert!(note.contains("diskedit abandon disk.img"), "{note}");
+        assert!(note.contains("diskedit recover disk.img --yes"), "{note}");
+        assert!(note.contains("diskedit recover --release disk.img"), "{note}");
     }
 
     #[test]
@@ -754,8 +726,8 @@ mod tests {
         let (code, note) = verdict(&Evidence::Recognized(r), &request("disk.img"));
         assert_eq!(code, EXIT_OK);
         let note = note.unwrap();
-        assert!(note.contains("diskedit abandon disk.img"), "{note}");
-        assert!(!note.contains("diskedit undo"), "a blocked record cannot be rolled back: {note}");
+        assert!(note.contains("diskedit recover --release disk.img"), "{note}");
+        assert!(!note.contains("diskedit recover disk.img"), "a blocked record cannot be rolled back: {note}");
     }
 
     #[test]

@@ -33,7 +33,7 @@ fn info_on_gpt_image() {
     assert_eq!(v["partitions"][0]["name"], "smoke");
     assert_eq!(v["partitions"][0]["type"], "0657FD6D-A4AB-43C4-84E5-0933C84B4F4F");
 
-    // 联动搬移预览里 swap 条目只重建、不搬数据：`plan --grow` 仍是只读报告
+    // 联动搬移预览里 swap 条目只重建、不搬数据：`info --grow` 仍是只读报告
     let ss = 512u64;
     let data = vec![0u8; 200 * ss as usize];
     let mut cur = Cursor::new(data);
@@ -61,10 +61,10 @@ fn info_on_gpt_image() {
     std::fs::write(&img2, with_protective_mbr(cur.into_inner())).unwrap();
 
     let arg = format!("{}:1", img2.display());
-    let (code, out, err) = run(&["plan", &arg, "--grow"]);
-    assert_eq!(code, 0, "plan --grow must stay read-only and succeed: {err}");
+    let (code, out, err) = run(&["info", &arg, "--grow"]);
+    assert_eq!(code, 0, "info --grow must stay read-only and succeed: {err}");
     // 报告与预览同在一份文档里：stdout 必须是单个可解析的 JSON 对象
-    let v: serde_json::Value = serde_json::from_str(out.trim()).expect("plan --grow must emit one JSON document");
+    let v: serde_json::Value = serde_json::from_str(out.trim()).expect("info --grow must emit one JSON document");
     let moves = v["preview"]["moves"].as_array().expect("preview.moves must be an array");
     assert_eq!(moves[0]["swap"], true, "a swap area is recreated, not copied: {out}");
     assert_eq!(v["preview"]["grow_part"], 1);
@@ -171,7 +171,8 @@ fn last_partref_resolves_like_the_explicit_number() {
     assert!(out.contains("\"last_part\":2"), "info must report the ending-last entry: {out}");
 
     let (code, _, err) = run(&["info", &format!("{p}:last")]);
-    assert_eq!(code, 3, "info must refuse :last: {err}");
+    assert_eq!(code, 2, "info without --grow must refuse a partition selector: {err}");
+    assert!(err.contains("takes a whole target"), "{err}");
 
     let (code, _, err) = run(&["delete", &format!("{p}:last"), "--yes"]);
     assert_eq!(code, 0, "delete :last must succeed: {err}");
@@ -189,9 +190,9 @@ fn last_partref_resolves_like_the_explicit_number() {
 }
 
 /// 真实扩容路径：truncate 预扩使 backup GPT 与保护 MBR 同时过期 —— `info`
-/// 只报告、`plan --grow` 只预览（都不写盘），前置修复由表写入命令经执行器完成
+/// 只报告、`info --grow` 只预览（都不写盘），前置修复由表写入命令经执行器完成
 #[test]
-fn stale_after_enlarge_info_plan_write() {
+fn stale_after_enlarge_info_grow_write() {
     use std::io::Write as _;
 
     let dir = FixtureDir::new();
@@ -213,12 +214,12 @@ fn stale_after_enlarge_info_plan_write() {
     assert_eq!(std::fs::read(&img).unwrap(), before, "info must not modify the image");
 
     let arg = format!("{p}:1");
-    let (code, out, err) = run(&["plan", &arg, "--grow"]);
-    assert_eq!(code, 0, "plan --grow must stay read-only and succeed: {err}");
-    let v: serde_json::Value = serde_json::from_str(out.trim()).expect("plan --grow must emit one JSON document");
+    let (code, out, err) = run(&["info", &arg, "--grow"]);
+    assert_eq!(code, 0, "info --grow must stay read-only and succeed: {err}");
+    let v: serde_json::Value = serde_json::from_str(out.trim()).expect("info --grow must emit one JSON document");
     assert_eq!(v["preview"]["grow_part"], 1, "{out}");
     assert!(v["preview"]["new_end_lba"].is_u64(), "{out}");
-    assert_eq!(std::fs::read(&img).unwrap(), before, "plan must not modify the image");
+    assert_eq!(std::fs::read(&img).unwrap(), before, "info --grow must not modify the image");
 
     let (code, _, err) = run(&["set", &format!("{p}:1"), "name", "renamed", "--yes"]);
     assert_eq!(code, 0, "the table write must carry the upfront repair: {err}");

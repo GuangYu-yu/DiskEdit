@@ -160,7 +160,7 @@ pub(crate) fn apply_repair(
             crate::recovery::RepairState::InFlight => format!(
                 "the recovery record says a table repair ({}) was started but its outcome was never \
                  recorded — the table may be half-repaired; inspect the target, then settle the table \
-                 by hand and release the record with `diskedit abandon`",
+                 by hand and release the record with `diskedit recover --release`",
                 fact.kind.name()
             ),
             crate::recovery::RepairState::Landed => format!(
@@ -199,7 +199,7 @@ pub(crate) fn apply_repair(
     Ok(())
 }
 
-/// 所有需要做空间算术的命令（add/new/delete/rename/flag/resize-part/copy）都先经过这里：
+/// 所有需要做空间算术的命令（add/new/delete/set/resize/copy）都先经过这里：
 /// 读取 → 判定（classify_repair）→ 产出**可操作几何**（[`ValidatedGeometry`]，其
 /// `last_usable_lba` 已是修复后将生效的值）。
 ///
@@ -215,7 +215,7 @@ pub(crate) fn apply_repair(
 /// 否则那些 `Refused`（承诺"本次未写盘"，退出码 3）就成了假话。
 ///
 /// 表自身的几何自洽性（主头位置、可用区、数组位置、备份头是否越界）由 table 在解析层强制；
-/// `plan` 也调本函数取几何与动作，但不执行 [`apply_repair`]（plan 不写盘）。
+/// `info --grow` 的预览也调本函数取几何与动作，但不执行 [`apply_repair`]（预览不写盘）。
 ///
 /// "修复后必须两份头都有效"这一条有规范依据：UEFI 2.10 §5.3.2 规定
 /// "_Both the primary and backup GPTs must be valid before an attempt is made to grow the size
@@ -787,7 +787,7 @@ pub fn set_gpt_flag(src: &mut WriteSource, part: u32, flag: GptFlag, on: bool) -
 /// `esp off` 的类型回退落点：只在当前类型是 ESP 时按盘上 FS 识别给出新 GUID，其余
 /// 情况 `None`（这次 flag 不动类型 GUID）。FAT/NTFS → Microsoft basic data，其余
 /// （含识别不出的区域）→ Linux filesystem data——这是类型回退而非"恢复原类型"，
-/// 原 GUID 未被保存，无从恢复。写盘前读盘，读失败按"读不到继续所需的事实"拒绝（3）
+/// 原 GUID 未被保存，无从恢复。写盘前读盘，读失败按环境故障且本次未写盘归 4
 pub(crate) fn esp_off_fallback(
     src: &FileSource,
     entry: &GPTPartitionEntry,

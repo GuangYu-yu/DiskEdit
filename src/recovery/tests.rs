@@ -16,7 +16,7 @@ fn record_for(target: SceneIdentity) -> Record {
         target,
         PlanId::from_bytes([8; 16]),
         PlanVersion::new(1),
-        OpKind::ResizePart,
+        OpKind::ResizeEnd,
         PlanDigest::from_bytes([7; 32]),
         crate::dev::DiskGuidState::Unavailable,
     )
@@ -80,7 +80,7 @@ fn pre_commit_range_belongs_to_placement_operations() {
 
     let mut record = record_for(scene(3));
     record.old_range = Some(old);
-    let decoded = decode(&record.encode().unwrap()).expect("a resize-part record with a pre-commit range decodes");
+    let decoded = decode(&record.encode().unwrap()).expect("a start-change resize record with a pre-commit range decodes");
     assert_eq!(decoded.old_range, Some(old));
 
     let mut resize = record_for(scene(3));
@@ -188,7 +188,7 @@ fn swap_pending_is_encoded_by_the_cursor() {
     assert!(got.entries[0].is_swap);
 }
 
-/// 只有 `move` / `resize` / `resize-part` 记录允许带搬移计划
+/// 只有 `OpKind::Move` / `OpKind::Resize` / `OpKind::ResizeEnd` 记录允许带搬移计划
 #[test]
 fn relocation_belongs_to_move_resize_and_resize_part_records() {
     let mut allowed = record_for(scene(6));
@@ -197,11 +197,11 @@ fn relocation_belongs_to_move_resize_and_resize_part_records() {
     assert!(decode(&allowed.encode().unwrap()).is_ok(), "a move record carries a relocation");
 
     let mut resize_part = record_for(scene(6));
-    resize_part.op = OpKind::ResizePart;
+    resize_part.op = OpKind::ResizeEnd;
     resize_part.relocation = Some(relocation(vec![reloc_entry(2, 6144, 4096, 2048, false)]));
     assert!(
         decode(&resize_part.encode().unwrap()).is_ok(),
-        "a resize-part record carries the relocation of its start-change move"
+        "a start-change resize record carries the relocation of its start-change move"
     );
 
     let mut rejected = record_for(scene(6));
@@ -295,7 +295,8 @@ fn evidence_rows_stay_in_their_own_state() {
     match Evidence::classify(&unknown_shape, &current) {
         Evidence::UnrecognizedFormat { magic, recorded } => {
             assert_eq!(magic, MAGIC);
-            assert_eq!(recorded, None);
+            // 前缀解得出来：载荷自称属于哪个目标要带上，后半段读不通不影响这一事实
+            assert_eq!(recorded, Some(current.clone()));
         }
         other => panic!("unknown shape became {other:?}"),
     }
@@ -407,6 +408,17 @@ fn a_recorded_device_id_scene_survives_renumbering_but_not_a_mapping_change() {
         None,
     );
     assert!(!recorded.matches(&remapped));
+
+    // 反方向同样不得放行：记录里的偏移以 loop 设备为原点，同一后备文件直接打开时
+    // 缺失的那一侧说明不了坐标系相同，按「缺失不参与」放行就会把字节写到错位置
+    let recorded_mapped = SceneIdentity::with_details(
+        recorded.id().clone(),
+        Some(Mapping::new(0, 4096)),
+        SceneProof::DeviceId,
+        None,
+        None,
+    );
+    assert!(!recorded_mapped.matches(&recorded));
 
     // 没有稳定 ID 的块设备拿不到能跨现场的凭据：材料相等只说明"同一个临时设备号"，
     // 认领入口按 `Unavailable` 拒绝，不靠这个比较放行
