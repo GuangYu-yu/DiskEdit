@@ -1,6 +1,7 @@
 //! 状态转移表：每一行对应 [`Evidence`] 或清理许可的一次判定。
 
 use super::*;
+use super::record::{RepairFact, RepairKind, RepairState};
 use crate::domain::Fact;
 use crate::platform::{IdentityMaterial, PathError, TargetId};
 
@@ -542,6 +543,18 @@ fn an_unsettled_table_step_withholds_the_cleanup_permit() {
         .expect("a recognized record commits");
     assert_eq!(outcome.withheld(), Some(NoPermitReason::PendingTableChange));
     assert!(outcome.permit().is_none());
+
+    let mut repair_in_flight = record_for(scene(1));
+    repair_in_flight.repair = Fact::Known(RepairFact {
+        kind: RepairKind::RelocateBackup,
+        new_backup_lba: 0,
+        new_last_usable: 0,
+        state: RepairState::InFlight,
+    });
+    let outcome = RecoveryEngine::commit(Evidence::Recognized(repair_in_flight))
+        .expect("a recognized record commits");
+    assert_eq!(outcome.withheld(), Some(NoPermitReason::PendingTableChange));
+    assert!(outcome.permit().is_none(), "a started repair is not settled");
 }
 
 /// 回滚收尾把「表步已落定」写回记录，同一条判据前后作答相反：
@@ -566,6 +579,20 @@ fn settling_the_table_step_after_rollback_turns_the_cleanup_permit_around() {
     entry.settle_table_step_after_rollback();
     assert_eq!(entry.entry_table_in_flight, Fact::Absent, "the entry is no longer in flight");
     assert_eq!(withheld_reason(&entry), None);
+
+    // 修复已开始、结果未记入：回滚把它的写入也写回后，修复事实随收尾一并清空
+    let mut repair = record_for(scene(1));
+    repair.repair = Fact::Known(RepairFact {
+        kind: RepairKind::RelocateBackup,
+        new_backup_lba: 0,
+        new_last_usable: 0,
+        state: RepairState::InFlight,
+    });
+    assert_eq!(withheld_reason(&repair), Some(NoPermitReason::PendingTableChange));
+
+    repair.settle_table_step_after_rollback();
+    assert_eq!(repair.repair, Fact::Absent, "the rolled-back repair leaves no fact behind");
+    assert_eq!(withheld_reason(&repair), None);
 }
 
 /// 提交一次，只取清理许可被扣留的原因
