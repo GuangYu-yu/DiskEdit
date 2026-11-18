@@ -86,6 +86,11 @@ pub(crate) fn is_executable(_p: &std::path::Path) -> bool {
 /// 代码注入子进程，而它们全由调用环境决定。PATH 必须保留——工具常再调自己的助手程序；
 /// 但它必须是**上面那张固定的表**，不是调用者的 PATH，否则子进程的助手程序同样由调用者
 /// 挑。LC_ALL 固定为 C，各工具的输出格式才可解析。调用点只负责 args 与 stdio
+///
+/// argv 里的设备路径由工具自己 `open`：本进程持有的句柄钉住自己的 ioctl，不覆盖
+/// 子进程的路径解析。改传 `/proc/<pid>/fd/N` 也不行——lvm2 的 `pvcreate` / `pvresize`
+/// 按名字在 sysfs 里找设备，对该路径报 `No device found`，因此不按工具分流，所有
+/// 调用点用同一份真实设备路径
 pub(crate) fn tool_command(tool: Tool) -> Result<Command, FsError> {
     let mut cmd = Command::new(find_tool(tool)?);
     cmd.env_clear().env("LC_ALL", "C").env("PATH", TOOL_PATH);
