@@ -468,7 +468,7 @@ fn msdos_user_resize() {
     let (c, _) = run(&["resize", &format!("{img_s}:3"), "+1M", "--yes"]);
     assert_eq!(c, 3);
 
-    // 收缩与 --no-fs 的组合先落在「只扩」这道闸上：--no-fs 的提示不再是首个答案
+    // 收缩与 --no-fs 同时出现时，先命中的是「只扩」闸
     let raw_before = std::fs::read(&img).unwrap();
     let (c, o) = run(&["resize", &format!("{img_s}:1"), "-1M", "--no-fs", "--yes"]);
     assert_eq!(c, 3, "shrink must be refused: {o}");
