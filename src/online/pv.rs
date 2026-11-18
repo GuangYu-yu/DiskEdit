@@ -159,7 +159,8 @@ pub(crate) fn verify_lock_identity(
 /// drop_journal 只会碰到"不存在"的落点——绝无"删掉别人可回滚凭据"的可能
 pub(crate) fn refuse_if_scene_active(t: &OnlineTarget) -> Result<(), RunOutcome> {
     // 只读打开**分区**节点：闸口只读现场（journal / checkpoint 落点），不申请写权限。
-    // 现场落点由所在整盘的键派生，故分区节点与整盘节点解析到同一对落点
+    // 分区节点写下的记录落在它自己的键目录里，整盘节点写下的现场落在另一个键目录；
+    // 记录根的枚举加上载荷里的盘级身份比对，使只读分区节点同样能看到后者
     let part = crate::dev::FileSource::open_read_only(&t.part_dev)
         .map_err(|e| RunOutcome::refused(format!("open failed: {e}")))?;
     // 只传主语：后半句 "writes outside the recovery record" 由 refuse_if_active 统一拼

@@ -43,7 +43,46 @@ fn sh_files() -> Vec<PathBuf> {
     out
 }
 
+/// `tests/` 下全部 `.sh`，含 `sh_files()` 不扫描的子目录
+fn all_sh_files() -> Vec<PathBuf> {
+    fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
+        let mut entries: Vec<PathBuf> = std::fs::read_dir(dir)
+            .unwrap_or_else(|e| panic!("cannot list {}: {e}", dir.display()))
+            .map(|e| e.expect("read a directory entry").path())
+            .collect();
+        entries.sort();
+        for path in entries {
+            if path.is_dir() {
+                walk(&path, out);
+            } else if path.extension().is_some_and(|e| e == "sh") {
+                out.push(path);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(&tests_root(), &mut out);
+    out
+}
+
+fn relative_to_tests(path: &Path) -> String {
+    path.strip_prefix(tests_root())
+        .expect("test files live under tests/")
+        .to_string_lossy()
+        .replace('\\', "/")
+}
+
 const MARKER: &str = "cli-surface: refused";
+
+/// 带 `MARKER` 的 Rust 测试文件（相对 `tests/`）：拒绝用例增删时同步登记
+const RUST_MARKER_FILES: &[&str] = &["align_spec.rs", "cli/guards.rs", "exit_codes.rs", "help_snapshot.rs"];
+
+/// 带 `MARKER` 的 WSL 脚本（相对 `tests/`）：拒绝用例增删时同步登记
+const SHELL_MARKER_FILES: &[&str] = &[
+    "wsl/arg_guards.sh",
+    "wsl/command_boundary_pairs.sh",
+    "wsl/online_guards.sh",
+    "wsl/uncovered_branches.sh",
+];
 
 /// 标记必须在代码行的行尾注释里；文档、注释整行、以及字符串字面量里提到这个词都不算
 fn is_marker(line: &str, sigil: &str) -> bool {
@@ -59,7 +98,7 @@ fn is_marker(line: &str, sigil: &str) -> bool {
 
 #[test]
 fn rust_markers_assert_exit_two() {
-    let mut markers = 0;
+    let mut files: Vec<String> = Vec::new();
     for file in rs_files() {
         if file.ends_with("cli_surface_markers.rs") {
             continue;
@@ -70,7 +109,10 @@ fn rust_markers_assert_exit_two() {
             if !is_marker(line, "//") {
                 continue;
             }
-            markers += 1;
+            let rel = relative_to_tests(&file);
+            if !files.contains(&rel) {
+                files.push(rel.clone());
+            }
             let window = &lines[i + 1..lines.len().min(i + 7)];
             let asserted = window
                 .iter()
@@ -83,12 +125,18 @@ fn rust_markers_assert_exit_two() {
             );
         }
     }
-    assert!(markers > 0, "找不到任何 `{MARKER}` 标记，绑定失去对象");
+    files.sort();
+    let mut registered: Vec<String> = RUST_MARKER_FILES.iter().map(|f| f.to_string()).collect();
+    registered.sort();
+    assert_eq!(
+        files, registered,
+        "带 `{MARKER}` 的文件集合与登记不一致：新增或移除拒绝用例时更新 RUST_MARKER_FILES"
+    );
 }
 
 #[test]
 fn shell_markers_assert_exit_two() {
-    let mut markers = 0;
+    let mut files: Vec<String> = Vec::new();
     for file in sh_files() {
         let text = std::fs::read_to_string(&file).expect("read a shell test");
         let lines: Vec<&str> = text.lines().collect();
@@ -96,7 +144,10 @@ fn shell_markers_assert_exit_two() {
             if !is_marker(line, "#") {
                 continue;
             }
-            markers += 1;
+            let rel = relative_to_tests(&file);
+            if !files.contains(&rel) {
+                files.push(rel.clone());
+            }
             let mut asserted = false;
             for next in &lines[i..lines.len().min(i + 5)] {
                 if next.contains("$B") && !next.contains(MARKER) {
@@ -118,7 +169,31 @@ fn shell_markers_assert_exit_two() {
             );
         }
     }
-    assert!(markers > 0, "找不到任何 `{MARKER}` 标记，绑定失去对象");
+    files.sort();
+    let mut registered: Vec<String> = SHELL_MARKER_FILES.iter().map(|f| f.to_string()).collect();
+    registered.sort();
+    assert_eq!(
+        files, registered,
+        "带 `{MARKER}` 的脚本集合与登记不一致：新增或移除拒绝用例时更新 SHELL_MARKER_FILES"
+    );
+    // 标记只对 `tests/wsl/*.sh` 生效：放在 `sh_files()` 覆盖不到的脚本里，上面的
+    // 断言读不到它，登记集合也不会要求覆盖
+    let covered = sh_files();
+    let strays: Vec<String> = all_sh_files()
+        .into_iter()
+        .filter(|p| !covered.contains(p))
+        .filter(|p| {
+            std::fs::read_to_string(p)
+                .map(|text| text.lines().any(|line| is_marker(line, "#")))
+                .unwrap_or(false)
+        })
+        .map(|p| relative_to_tests(&p))
+        .collect();
+    assert!(
+        strays.is_empty(),
+        "这些脚本不在 `sh_files()` 扫描的 `tests/wsl/` 内，`{MARKER}` 在那里不会被任何断言读到：{}",
+        strays.join(", ")
+    );
 }
 
 /// 命令面：命令名 → 该命令声明的长选项。读 `src/cli.rs` 的 `CommandDef` 表，

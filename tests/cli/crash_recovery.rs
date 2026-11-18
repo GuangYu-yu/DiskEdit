@@ -502,6 +502,11 @@ fn fs_tooling_ready() -> bool {
     #[cfg(unix)]
     {
         if unsafe { libc::geteuid() } != 0 {
+            // 声明要 root 的 CI 作业里不允许静默跳过：跳过会让整套用例"全绿"而实则没测
+            assert!(
+                std::env::var_os("DISKEDIT_REQUIRE_ROOT").is_none(),
+                "this test needs root, but DISKEDIT_REQUIRE_ROOT is set (the CI job must run it as root)"
+            );
             return false;
         }
         if !Path::new("/dev/loop-control").exists() {

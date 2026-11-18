@@ -28,18 +28,18 @@ pub(crate) fn create_gpt_min_capacity_boundaries() {
     assert!(create_gpt(&mut bad4, 4096, Some([0x11; 16]), false).is_err());
 }
 
-/// 在 GPT 镜像上建 msdos 表：LBA1 的旧主头签名必须被清掉（否则 `table_label` 判
-/// `GptDamaged`，后续写命令全部拒绝），而同一扇区的其余字节原样保留
+/// 在 GPT 镜像上建 msdos 表：LBA1 整扇区零（旧 GPT 主头签名因此消失，否则
+/// `table_label` 判 `GptDamaged`，后续写命令全部拒绝）
 #[test]
-pub(crate) fn create_mbr_clears_a_stale_gpt_primary_signature() {
+pub(crate) fn new_mbr_step_clears_the_whole_lba1_sector() {
     let mut src = src_from_gpt("mbr_over_gpt", 512);
-    let mut before = vec![0u8; 512];
-    src.read_at(512, &mut before).unwrap();
-    create_mbr(&mut src, false).unwrap();
+    let regions = new_mbr_regions(&src).unwrap();
+    let snap = table_snapshot(&src, &regions).unwrap();
+    let step = TableStep::new_mbr(&src, snap).unwrap();
+    crate::execution::table::execute(&mut src, &step).unwrap();
     let mut after = vec![0u8; 512];
     src.read_at(512, &mut after).unwrap();
-    assert_eq!(&after[..8], &[0u8; 8], "GPT primary signature must be cleared");
-    assert_eq!(&after[8..], &before[8..], "the rest of LBA1 must be preserved");
+    assert_eq!(after, vec![0u8; 512], "the step writes a zeroed LBA1 sector");
     assert_eq!(table_label(&src).unwrap(), TableLabel::Mbr);
     // 残留的头/数组字节不再构成一张可读的 GPT 表
     assert!(load_gpt(&src).unwrap().is_none());
@@ -48,14 +48,15 @@ pub(crate) fn create_mbr_clears_a_stale_gpt_primary_signature() {
 /// 容器扇区大于 512 时，候选签名位置 512 落在 LBA0 的写回缓冲里：清零必须先施加到
 /// 最终缓冲，否则整块回写会把刚清掉的签名重新覆盖成 `EFI PART`
 #[test]
-pub(crate) fn create_mbr_clears_signature_inside_lba0_on_4kn_container() {
+pub(crate) fn new_mbr_step_clears_signature_inside_lba0_on_4kn_container() {
     let ss = 4096u64;
     let mut data = vec![0u8; 100 * ss as usize];
     data[512..520].copy_from_slice(GPT_SIGNATURE);
     let mut src = src_from_ss("mbr_4kn_sig512", data, ss);
-    // 512 处的签名不是容器 ss 下的 LBA1：旧表读不出来，写入口按未授权覆盖拒绝，
-    // 显式授权才走"清零签名"这条路径（本用例测的正是清零落点）
-    create_mbr(&mut src, true).unwrap();
+    let regions = new_mbr_regions(&src).unwrap();
+    let snap = table_snapshot(&src, &regions).unwrap();
+    let step = TableStep::new_mbr(&src, snap).unwrap();
+    crate::execution::table::execute(&mut src, &step).unwrap();
     let mut got = vec![0u8; GPT_SIGNATURE.len()];
     src.read_at(512, &mut got).unwrap();
     assert_eq!(got, vec![0u8; GPT_SIGNATURE.len()], "signature at byte 512 must end up zero");
@@ -202,45 +203,22 @@ pub(crate) fn create_gpt_refuses_a_table_that_changed_after_the_command_check() 
     assert_eq!(std::fs::read(&src.path).unwrap(), before, "the refusal must not write a single byte");
 }
 
-/// 同一条窗口的 msdos 侧：`create_mbr` 要清零的盘尾 GPT 签名落进了新出现的 MBR 分区，
-/// 写入口拒绝且不落盘；若只在命令层判一次，这里会先清签名、再写 LBA0
+/// 快照之后盘面被外部改写：步骤的写前比对拒绝，且不写任何字节。
+/// 这是写入口那一层的事实，不依赖命令层是否已经判过一次
 #[test]
-pub(crate) fn create_mbr_refuses_when_a_cleared_signature_lands_inside_a_partition() {
+pub(crate) fn new_mbr_step_refuses_when_the_disk_changed_after_the_snapshot() {
     let ss = 512u64;
     let mut src = src_from("gate_mbr", vec![0u8; 100 * ss as usize]);
-    assert!(new_table_conflict(&src, ss, TableKind::Mbr).unwrap().is_none(), "the command-layer check sees a clean disk");
-
-    // 首次写盘之前表已变：MBR 分区从 LBA1 铺到盘尾，盘尾带一份自洽的 GPT 备份头
-    let mut lba0 = vec![0u8; ss as usize];
-    lba0[446 + 4] = 0x83;
-    lba0[446 + 8..446 + 12].copy_from_slice(&1u32.to_le_bytes());
-    lba0[446 + 12..446 + 16].copy_from_slice(&99u32.to_le_bytes());
-    lba0[510] = 0x55;
-    lba0[511] = 0xAA;
-    src.write_fixture(0, &lba0).unwrap();
-    let geom = EntryArrayGeometry::new(ss, 128, 4, MAX_ARRAY_BYTES).unwrap();
-    let (bytes, crc) = serialize_array(&[], &geom);
-    src.write_fixture(98 * ss, &bytes).unwrap();
-    let h = RawHeader {
-        revision: 0x0001_0000,
-        primary_lba: 99,
-        backup_lba: 1,
-        first_usable_lba: 3,
-        last_usable_lba: 97,
-        disk_guid: [0; 16],
-        partition_entry_lba: 98,
-        number_of_partition_entries: 4,
-        size_of_partition_entry: 128,
-        header_size: 92,
-    };
-    let sec = serialize_header(&h, crc, ss).unwrap();
-    src.write_fixture(99 * ss, &sec).unwrap();
+    let regions = new_mbr_regions(&src).unwrap();
+    let snap = table_snapshot(&src, &regions).unwrap();
+    let step = TableStep::new_mbr(&src, snap).unwrap();
+    // 快照之后外部改写 LBA1：它是本步骤的第一段写入
+    src.write_fixture(ss, &[0xA5; 512]).unwrap();
     let before = std::fs::read(&src.path).unwrap();
 
-    let e = create_mbr(&mut src, false)
-        .expect_err("a conflict that appeared after the command-layer check must still be refused");
-    assert!(matches!(&e, crate::outcome::RunOutcome::Refused(_)), "{e}");
-    assert_eq!(e.exit_code(), crate::outcome::EXIT_REFUSED);
+    let e = crate::execution::table::execute(&mut src, &step)
+        .expect_err("a disk changed after the snapshot must be refused before any write");
+    assert_eq!(e.exit_code(), crate::outcome::EXIT_NO_MUTATION, "{e}");
     assert_eq!(std::fs::read(&src.path).unwrap(), before, "the refusal must not write a single byte");
 }
 

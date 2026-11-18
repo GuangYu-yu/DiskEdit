@@ -39,53 +39,21 @@ run() {
   fi
 }
 
-for f in \
-  check_cli_surface.sh \
-  selftest.sh \
-  smoke_full_commands.sh \
-  resize_move_resizefs_chain.sh \
-  resize_end_and_online_fs.sh \
-  online_guards.sh \
-  online_btrfs_identity.sh \
-  size_units_and_refusals.sh \
-  arg_guards.sh \
-  middle_partition_recover.sh \
-  interrupt_resume.sh \
-  shift_no_kill_baseline.sh \
-  resume_batch_contract.sh \
-  resume_crash_windows.sh \
-  resume_replay_idempotency.sh \
-  resize_end_fault_paths.sh \
-  command_boundary_pairs.sh \
-  blockdev_resume_edges.sh \
-  fs_xfs_btrfs_ntfs.sh \
-  usage_misc.sh \
-  record_tree_partial_write.sh \
-  blockdev_4kn.sh \
-  fs_f2fs_vfat_exfat_layout.sh \
-  mkfs_labels.sh \
-  postcondition_contract.sh \
-  mount_cleanup_pending.sh \
-  shrink_readback.sh \
-  shrink_recheck_gpt.sh \
-  shrink_recheck_mbr.sh \
-  uncovered_branches.sh \
-  boundary_last_usable.sh \
-  mbr_delete_chain.sh \
-  capacity_concurrency_readonly.sh \
-  carrier_and_image_occupancy.sh \
-  image_loop_identity.sh \
-  blockdev_probe_identity.sh \
-  lvm_pv_online.sh \
-  lvm_resume.sh \
-  fs_grow_exit.sh \
-  check_exit_codes.sh \
-  lvm_gate.sh \
-  review_guards.sh \
-  qemu_boot_verification.sh
-do
+# 脚本集合由目录派生：新增脚本自动纳入，不维护第二份名单。
+# 只有「不是用例」的文件才在 SKIP_FILES 里排除，且必须在此处说明原因
+SKIP_FILES=(lib.sh run_all.sh)
+skip_file() {
+  local f
+  for f in "${SKIP_FILES[@]}"; do [ "$f" = "$1" ] && return 0; done
+  return 1
+}
+
+shopt -s nullglob
+for f in *.sh; do
+  skip_file "$f" && continue
   run "$f"
 done
+shopt -u nullglob
 
 echo
 echo "==== 汇总：$pass 通过，$skip 跳过，$fail 失败 ===="

@@ -6,6 +6,27 @@ use super::*;
 /// 本常量是它的 little-endian u16 读法，故写作 0xAA55
 pub(crate) const MBR_SIGNATURE: u16 = 0xAA55;
 
+/// MBR 布局所占的 LBA0 字节数：分区表区与签名都落在前 512 字节内（UEFI §5.2.1
+/// Table 5.1），与设备逻辑块大小无关
+pub(crate) const MBR_SECTOR_BYTES: usize = 512;
+
+/// 签名在 LBA0 内的起点：其后 2 字节即 [`MBR_SIGNATURE`]
+pub(crate) const MBR_SIGNATURE_OFFSET: usize = 510;
+
+/// LBA0 的分区表区：446 起 4 条各 16 字节（UEFI §5.2.1 Table 5.1）
+pub(crate) const MBR_ENTRY_AREA: std::ops::Range<usize> = 446..510;
+
+/// LBA0 的 `55 AA` 签名是否在位
+pub(crate) fn has_mbr_signature(lba0: &[u8]) -> bool {
+    lba0.get(MBR_SIGNATURE_OFFSET..MBR_SIGNATURE_OFFSET + 2)
+        .is_some_and(|b| u16::from_le_bytes([b[0], b[1]]) == MBR_SIGNATURE)
+}
+
+/// 把 `55 AA` 签名落进 LBA0
+pub(crate) fn write_mbr_signature(lba0: &mut [u8]) {
+    lba0[MBR_SIGNATURE_OFFSET..MBR_SIGNATURE_OFFSET + 2].copy_from_slice(&MBR_SIGNATURE.to_le_bytes());
+}
+
 /// 保护 MBR 分区类型：OS Type 0xEE = GPT Protective（UEFI §5.2.2–§5.2.3 Tables 5.2–5.4）
 pub(crate) const PROT_MBR_TYPE: u8 = 0xEE;
 
@@ -79,11 +100,11 @@ pub struct RawMbr {
 
 /// LBA0 末两字节是否为 MBR 签名。判型用：签名缺席时不存在与 GPT 竞争的 msdos 表
 pub(crate) fn mbr_signature_present(src: &FileSource) -> io::Result<bool> {
-    if src.size < 512 {
+    if src.size < MBR_SECTOR_BYTES as u64 {
         return Ok(false);
     }
     let mut tail = [0u8; 2];
-    src.read_at(510, &mut tail)?;
+    src.read_at(MBR_SIGNATURE_OFFSET as u64, &mut tail)?;
     Ok(u16::from_le_bytes(tail) == MBR_SIGNATURE)
 }
 
@@ -95,7 +116,7 @@ pub fn parse_mbr_raw(src: &FileSource) -> io::Result<Option<RawMbr>> {
     }
     let mut lba0 = vec![0u8; ss];
     src.read_at(0, &mut lba0)?;
-    if u16::from_le_bytes([lba0[510], lba0[511]]) != MBR_SIGNATURE {
+    if !has_mbr_signature(&lba0) {
         return Ok(None);
     }
     // 本工具策略：保护 MBR 布局成立 → 盘交由 GPT 判定（内核探测同口径），不按 msdos 解析。
@@ -243,7 +264,7 @@ pub(crate) fn read_mbr_lba0(src: &FileSource) -> Result<Vec<u8>, RunOutcome> {
     require_writable_mbr(src)?;
     let mut lba0 = vec![0u8; src.sector_size as usize];
     src.read_at(0, &mut lba0).map_err(RunOutcome::unreadable_io)?;
-    if u16::from_le_bytes([lba0[510], lba0[511]]) != MBR_SIGNATURE {
+    if !has_mbr_signature(&lba0) {
         return Err(RunOutcome::no_mutation("no MBR signature on target"));
     }
     Ok(lba0)
@@ -309,7 +330,7 @@ pub(crate) fn resize_mdos_entry_image(
             lba0.len()
         )));
     }
-    if u16::from_le_bytes([lba0[510], lba0[511]]) != MBR_SIGNATURE {
+    if !has_mbr_signature(lba0) {
         return Err(RunOutcome::no_mutation("no MBR signature on target"));
     }
     let off = 446 + (part as usize - 1) * 16;
@@ -391,12 +412,12 @@ pub(crate) fn resize_mdos_entry_image(
 /// 只判形状、不看 SizeInLBA（见 pmbr_size_state）：设备扩容后 SizeInLBA 会过期而形状仍成立。
 /// 作为 GPT 判定的前置（内核 GPT 探测同样先要求保护 MBR 形状），用于挡住残留 GPT 头。
 pub(crate) fn pmbr_shape_valid(src: &FileSource) -> io::Result<bool> {
-    if src.size < 512 {
+    if src.size < MBR_SECTOR_BYTES as u64 {
         return Ok(false);
     }
-    let mut lba0 = [0u8; 512];
+    let mut lba0 = [0u8; MBR_SECTOR_BYTES];
     src.read_at(0, &mut lba0)?;
-    if u16::from_le_bytes([lba0[510], lba0[511]]) != MBR_SIGNATURE {
+    if !has_mbr_signature(&lba0) {
         return Ok(false);
     }
     for i in 1..4 {

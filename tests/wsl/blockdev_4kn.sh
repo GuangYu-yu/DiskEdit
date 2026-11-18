@@ -130,7 +130,7 @@ MOVE_OUT=$(movek 66048); MOVE_E=$?
 if [ "$MOVE_E" -eq 0 ]; then echo "move exit=0"; else fail_report "move 66048" "$MOVE_E" "$MOVE_OUT"; fi
 $B info "$LD" | grep -o '"num":2,[^}]*}'
 refresh
-e2fsck -fn "${LD}p2" >/dev/null 2>&1; echo "e2fsck -fn exit=$? (0=clean)"
+e2fsck -fn "${LD}p2" >/dev/null 2>&1; exp $? 0 "e2fsck -fn（0=clean）"
 [ "$M2" = "$(mdsum "${LD}p2")" ] && echo "4KN DEV OK" || { echo "4KN DEV CORRUPT"; rc=1; }
 sgdisk -v "$T" >/dev/null 2>&1 && echo "sgdisk clean" || { echo "sgdisk ISSUES"; rc=1; sgdisk -v "$T" 2>&1 | sed 's/^/    /'; }
 

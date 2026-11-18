@@ -200,7 +200,7 @@ impl TableStep {
         // 的不变量破坏，发生在写目标字节之前，落 1；请求层面的几何/长度/
         // 序列化拒绝仍由上面各处落 3
         let file_last_lba = container_last_lba(src, ss);
-        let backup_view = RawHeader { primary_lba: 1, backup_lba: last_lba, ..backup.clone() };
+        let backup_view = RawHeader { primary_lba: PRIMARY_HEADER_LBA, backup_lba: last_lba, ..backup.clone() };
         for (h, view, what) in
             [(&primary, GptCopyKind::Primary, "primary"), (&backup_view, GptCopyKind::Backup, "backup")]
         {
@@ -313,9 +313,8 @@ impl TableStep {
             )));
         }
         let mut lba0 = snapshot.bytes[pos].clone();
-        lba0[446..510].fill(0);
-        lba0[510] = 0x55;
-        lba0[511] = 0xAA;
+        lba0[MBR_ENTRY_AREA].fill(0);
+        write_mbr_signature(&mut lba0);
         // 候选扇区大小的 GPT 主头签名若落在 LBA0 内，随这次整块回写一并清零：留着它这块
         // 新 msdos 盘会被本工具判成 GptDamaged，而工具内没有修复入口
         let sig_len = GPT_SIGNATURE.len();

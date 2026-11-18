@@ -29,7 +29,7 @@ pub(crate) fn resolve_size_request(size: SizeSpec, cur_bytes: u64) -> Result<(Op
                 .filter(|x| *x <= u64::MAX as u128)
                 .ok_or_else(|| RunOutcome::refused("SIZE overflows the partition size"))?
                 as u64;
-            let delta = raw / (1024 * 1024) * (1024 * 1024);
+            let delta = raw / crate::support::MIB_BYTES * crate::support::MIB_BYTES;
             let target = if grow {
                 cur_bytes
                     .checked_add(delta)

@@ -186,26 +186,30 @@ fn inspect_record_entry(spot: &crate::dev::RecordSpot, a: &InspectRequest) -> Cm
     if let Some(why) = unavailable {
         println!("identity check: unavailable — {why}");
     }
-    // 可解码的隔离项直接退 0；其余保留各自的判定码，只补一条"这是隔离项"的注记
+    // 可解码的隔离项直接退 0；其余保留各自的判定码，只补一条"这是隔离项"的注记。
+    // 判定附带的"下一步该运行哪条命令"与目标式 inspect 同一出口输出
     let quarantined_note = spot.quarantine.map(|mark| {
         format!(
             "quarantined: this {} entry is kept as evidence and is not part of the active record set",
             mark.as_str()
         )
     });
-    let code = if spot.quarantine.is_some() {
+    let (code, verdict_note) = if spot.quarantine.is_some() {
         match &evidence {
-            Evidence::Recognized(_) => EXIT_OK,
-            _ => verdict_with(&evidence, &a.target).0,
+            Evidence::Recognized(_) => (EXIT_OK, None),
+            _ => verdict_with(&evidence, &a.target),
         }
     } else {
         let hint = target
             .as_deref()
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_else(|| "<target>".to_string());
-        verdict_with(&evidence, &hint).0
+        verdict_with(&evidence, &hint)
     };
     if let Some(note) = quarantined_note {
+        eprintln!("{note}");
+    }
+    if let Some(note) = verdict_note {
         eprintln!("{note}");
     }
     CmdResult::Code(code)

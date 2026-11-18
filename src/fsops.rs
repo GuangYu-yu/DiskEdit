@@ -4,6 +4,7 @@
 
 mod error;
 mod env;
+mod ext;
 pub(crate) mod mount;
 mod scope;
 mod probe;
@@ -19,6 +20,7 @@ mod tests;
 
 pub(crate) use error::*;
 pub(crate) use env::*;
+pub(crate) use ext::*;
 pub(crate) use mount::*;
 pub(crate) use scope::*;
 pub(crate) use probe::*;

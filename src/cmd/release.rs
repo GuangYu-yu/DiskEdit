@@ -277,10 +277,22 @@ fn release_records(target: &str, identity: &TargetIdentity, disk: Option<&FileSo
     }
 
     let mut failed: Vec<String> = Vec::new();
+    let mut released = 0usize;
+    // 副本已建、原件未删的条目：目标仍被挡住，但持久状态已经改了
+    let mut copied_only = 0usize;
     for r in &records {
         let from = r.path();
         match crate::dev::quarantine_move(from) {
-            Ok(_) => {}
+            Ok(crate::dev::Quarantine::Moved) => released += 1,
+            Ok(crate::dev::Quarantine::CopiedOnly { to, cause }) => {
+                copied_only += 1;
+                failed.push(format!(
+                    "{}: a quarantine copy was created at {} but the original could not be removed ({cause}) — \
+                     re-run to converge",
+                    from.display(),
+                    to.display()
+                ));
+            }
             Err(e) => failed.push(format!("{}: {e}", from.display())),
         }
     }
@@ -298,14 +310,15 @@ fn release_records(target: &str, identity: &TargetIdentity, disk: Option<&FileSo
         // "放弃到哪一步了"是用户决定下一步的唯一依据。
         // 出口与其它命令同一判据：目标字节没写，但有记录文件被移进隔离区，
         // 本次运行就改变了持久状态——不是 NoMutation（4）；全部失败才是 4
-        let done = records.len() - failed.len();
         let cause = format!(
-            "released {done} of {} recovery record(s) on this target; the rest failed ({}) — the target stays \
-             blocked until they are released, so re-run `diskedit recover --release '{target}' --yes` to release them",
+            "released {released} of {} recovery record(s) on this target; the rest failed ({}) — the target stays \
+             blocked until they are released, so re-run `diskedit recover --release '{target}' --yes{}` to release them",
             records.len(),
-            failed.join("; ")
+            failed.join("; "),
+            if discard_replay { " --discard-replay" } else { "" }
         );
-        bail_fail(crate::outcome::PersistedChange::of(false, done > 0).failure(cause))
+        // 只建出副本、没删掉原件的条目同样是持久状态变化：记录目录里多了一条隔离条目
+        bail_fail(crate::outcome::PersistedChange::of(false, released + copied_only > 0).failure(cause))
     }
 }
 

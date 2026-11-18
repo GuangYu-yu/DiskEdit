@@ -431,6 +431,11 @@ mod tests {
         }
     }
 
+    /// 未使用条目：类型 GUID 全零，区间可以残留任意值
+    fn unused_entry(start: u64, end: u64) -> GPTPartitionEntry {
+        GPTPartitionEntry { partition_type_guid: [0; 16], ..entry(start, end) }
+    }
+
     // 条目数组几何的构造判据与跨度/槽位换算在 codec 层（`table::tests`），
     // 此处只保留本模块自己的不变量
 
@@ -438,8 +443,8 @@ mod tests {
     #[test]
     fn overlap_detection() {
         assert_eq!(find_overlap(&[]), None);
-        // 空槽位（两个 LBA 同时为零）不参与
-        assert_eq!(find_overlap(&[entry(0, 0), entry(100, 200)]), None);
+        // 未使用条目（类型 GUID 全零）即使残留区间与已定义条目重叠也不参与
+        assert_eq!(find_overlap(&[unused_entry(100, 200), entry(150, 250)]), None);
         // 紧邻（200 与 201）不重叠
         assert_eq!(find_overlap(&[entry(100, 200), entry(201, 300)]), None);
         // 相邻接触（200 与 200）即重叠

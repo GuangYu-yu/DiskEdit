@@ -6,7 +6,7 @@ use super::*;
 /// 前者是本工具的边界（不该因此报错），后者是认得却做不了（必须事前拒绝）
 pub(crate) enum ToolSupport {
     /// 需要这些工具；任一缺失即事前拒绝
-    Tools(&'static [&'static str]),
+    Tools(&'static [Tool]),
     /// 不负责：没有可扩的 FS 可谈（空区域 / 类型未识别 / LVM PV）。它不是失败，
     /// 也不等于"做完了"——两种后果由下游按自己的契约分开处置，见 [`Growable`]
     NotApplicable,
@@ -21,18 +21,28 @@ pub(crate) enum ToolSupport {
 /// 报出，指向它们不认识的开关就是错误指引。所有扩容拒绝文案引用这一句
 pub(crate) const CHANGE_PARTITION_ONLY: &str = "change the partition only with `resize --no-fs`";
 
+/// 扩容与缩容共用的一组工具：resize2fs 执行、e2fsck 前置修复、dumpe2fs 回读尺寸。
+/// 两个方向都把这组工具当成"写盘前必须确认存在"的清单，故只有一份
+const EXT_TOOLS: &[Tool] = &[Tool::E2fsck, Tool::Resize2fs, Tool::Dumpe2fs];
+/// ntfsresize 兼做执行与回读（--info），两个方向同组
+const NTFS_TOOLS: &[Tool] = &[Tool::Ntfsresize];
+/// btrfs 的扩容与缩容都在挂载态经 `btrfs filesystem` 子树完成，回读走同一命令的 dump-super
+const BTRFS_TOOLS: &[Tool] = &[Tool::Btrfs];
+
 pub(crate) fn grow_support(fstype: ContentKind) -> ToolSupport {
     use ToolSupport::*;
     match fstype {
-        ContentKind::Filesystem(FsKind::Ext) => Tools(&["e2fsck", "resize2fs"]),
-        ContentKind::Filesystem(FsKind::Ntfs) => Tools(&["ntfsresize"]),
-        ContentKind::Filesystem(FsKind::F2fs) => Tools(&["fsck.f2fs", "resize.f2fs"]),
-        ContentKind::Filesystem(FsKind::Xfs) => Tools(&["xfs_growfs"]),
-        ContentKind::Filesystem(FsKind::Btrfs) => Tools(&["btrfs"]),
-        ContentKind::Filesystem(FsKind::Vfat) => Tools(&["fatresize"]),
+        // 扩容后的核对要回读尺寸（`read_fs_geometry(Ext)` 经 dumpe2fs），
+        // 与缩容侧同理：工具必须在写盘前确认存在，否则表提交后才发现缺工具
+        ContentKind::Filesystem(FsKind::Ext) => Tools(EXT_TOOLS),
+        ContentKind::Filesystem(FsKind::Ntfs) => Tools(NTFS_TOOLS),
+        ContentKind::Filesystem(FsKind::F2fs) => Tools(&[Tool::FsckF2fs, Tool::ResizeF2fs]),
+        ContentKind::Filesystem(FsKind::Xfs) => Tools(&[Tool::XfsGrowfs]),
+        ContentKind::Filesystem(FsKind::Btrfs) => Tools(BTRFS_TOOLS),
+        ContentKind::Filesystem(FsKind::Vfat) => Tools(&[Tool::Fatresize]),
         // swap 没有"原地 resize"：空间靠 mkswap 重建吸收（resize 的收尾负责），
         // 但这里仍探测 mkswap——那条收尾路径要在写表之前知道工具在不在
-        ContentKind::Swap => Tools(&["mkswap"]),
+        ContentKind::Swap => Tools(&[Tool::Mkswap]),
         ContentKind::Lvm2Pv => NotApplicable,
         ContentKind::Filesystem(_) | ContentKind::Unknown => {
             // 出路在渲染点追加（[`CHANGE_PARTITION_ONLY`]）：本层不知道调用它的
@@ -47,9 +57,9 @@ pub(crate) fn shrink_support(fstype: Option<ContentKind>) -> ToolSupport {
     match fstype {
         // 缩容前要先算 FS 最小尺寸（`fs_min_bytes`：resize2fs -P × dumpe2fs 的块大小），
         // 两个工具都必须"在写盘之前确认存在"，否则表提交后才发现缺 dumpe2fs
-        Some(ContentKind::Filesystem(FsKind::Ext)) => Tools(&["e2fsck", "resize2fs", "dumpe2fs"]),
-        Some(ContentKind::Filesystem(FsKind::Ntfs)) => Tools(&["ntfsresize"]),
-        Some(ContentKind::Filesystem(FsKind::Btrfs)) => Tools(&["btrfs"]),
+        Some(ContentKind::Filesystem(FsKind::Ext)) => Tools(EXT_TOOLS),
+        Some(ContentKind::Filesystem(FsKind::Ntfs)) => Tools(NTFS_TOOLS),
+        Some(ContentKind::Filesystem(FsKind::Btrfs)) => Tools(BTRFS_TOOLS),
         // LVM PV 缩容要求新末端之后没有已分配的 extent，需经 lvreduce/pvresize 链，本工具不做；
         // 对用户的拒绝在 `check_shrink` 入口按「选项与目标形态不符」落 3
         Some(ContentKind::Lvm2Pv) => Unsupported(
@@ -70,33 +80,8 @@ pub(crate) fn shrink_support(fstype: Option<ContentKind>) -> ToolSupport {
 /// 搬移 swap 的重建前置：`mkswap` 重建 swap 区；镜像目标的重建对象是 loop 分区
 /// 设备，还要 `losetup`。块设备用 /sys 定位到的现成分区节点，不经 loop
 pub(crate) fn swap_rebuild_support(is_block: bool) -> ToolSupport {
-    let tools: &'static [&'static str] = if is_block { &["mkswap"] } else { &["mkswap", "losetup"] };
+    let tools: &'static [Tool] = if is_block { &[Tool::Mkswap] } else { &[Tool::Mkswap, Tool::Losetup] };
     ToolSupport::Tools(tools)
-}
-
-/// 工具所属包名（Debian 系）。写进错误信息是为了让自动化脚本能识别缺失项
-/// 并自动安装后重试，而不必靠人读日志
-pub(crate) fn tool_package(tool: &str) -> &'static str {
-    match tool {
-        "e2fsck" | "resize2fs" | "dumpe2fs" | "mke2fs" | "tune2fs" => "e2fsprogs",
-        "ntfsresize" | "ntfslabel" => "ntfs-3g",
-        "fsck.f2fs" | "resize.f2fs" => "f2fs-tools",
-        "xfs_growfs" | "xfs_admin" => "xfsprogs",
-        "btrfs" | "btrfstune" => "btrfs-progs",
-        "fatresize" => "fatresize",
-        "fatlabel" => "dosfstools",
-        "exfatlabel" => "exfatprogs",
-        "mkswap" | "swaplabel" => "util-linux",
-        "mount" | "umount" | "losetup" => "util-linux",
-        // mkfs 的各工具（mkfs_tool 的 program）：由 mkfs_capability 的缺工具提示引用
-        "mkfs.vfat" => "dosfstools",
-        "mkfs.exfat" => "exfatprogs",
-        "mkfs.ntfs" => "ntfs-3g",
-        "mkfs.xfs" => "xfsprogs",
-        "mkfs.btrfs" => "btrfs-progs",
-        "mkfs.f2fs" => "f2fs-tools",
-        _ => "unknown",
-    }
 }
 
 pub(crate) fn check_support(verb: &str, name: &str, support: ToolSupport) -> Result<(), FsError> {
@@ -105,12 +90,7 @@ pub(crate) fn check_support(verb: &str, name: &str, support: ToolSupport) -> Res
         ToolSupport::Unsupported(reason) => Err(FsError::unsupported(format!("cannot {verb} {name}: {reason}"))),
         ToolSupport::Tools(tools) => {
             for &t in tools {
-                if find_tool(t).is_err() {
-                    return Err(FsError::missing(format!(
-                        "cannot {verb} {name}: requires `{t}` (package: {}) — not found in PATH",
-                        tool_package(t)
-                    )));
-                }
+                t.require_named(&format!("{verb} {name}"))?;
             }
             Ok(())
         }
@@ -163,18 +143,19 @@ pub(crate) fn check_mount_layer_tools(fstype: Option<ContentKind>, _is_block: bo
     let mount_fs = matches!(fstype, Some(ContentKind::Filesystem(FsKind::Xfs | FsKind::Btrfs)));
     // 基础项随 FS 类型取，losetup 随"这一步是否经 attach_loop 建立设备"取：两个维度分开，
     // 镜像目标与块设备的 Range 目标都需要映射。两者都不需要时清单为空，执行侧不碰这两层
-    let mut tools: Vec<&str> = Vec::new();
+    let mut tools: Vec<Tool> = Vec::new();
     if mount_fs {
-        tools.extend(["mount", "umount"]);
+        tools.extend([Tool::Mount, Tool::Umount]);
     }
     if needs_loop {
-        tools.push("losetup");
+        tools.push(Tool::Losetup);
     }
     for t in tools {
-        if find_tool(t).is_err() {
+        if t.find().is_err() {
             return Err(FsError::missing(format!(
-                "requires `{t}` (package: {}) — not found in PATH",
-                tool_package(t)
+                "requires `{}` (package: {}) — not found in PATH",
+                t.name(),
+                t.package()
             )));
         }
     }

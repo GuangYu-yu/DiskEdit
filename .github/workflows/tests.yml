@@ -128,6 +128,36 @@ jobs:
             exit 1
           fi
 
+  cargo-test-root:
+    name: cargo test（Linux, root 特权用例）
+    # 需要 losetup/mount 建真实文件系统的用例以 euid 0 为前置。ubuntu-latest 默认
+    # 跑 runner 用户，若只有 cargo-test 那条作业，这些用例会静默跳过而 CI 仍然是绿的：
+    # 这一条以 root 重跑它们，并用 DISKEDIT_REQUIRE_ROOT=1 把"该跑却没跑"变成失败
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: 安装 Rust 工具链
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: 安装外部工具依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends e2fsprogs
+
+      - name: 以 root 运行需要特权的集成测试
+        run: |
+          export CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}"
+          export RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}"
+          cargo test --all-targets --no-run
+          for target in cli cmd_check cmd_records; do
+            echo "::group::cargo test --test $target (as root)"
+            sudo env "PATH=$PATH" "CARGO_HOME=$CARGO_HOME" "RUSTUP_HOME=$RUSTUP_HOME" \
+              "DISKEDIT_REQUIRE_ROOT=1" cargo test --test "$target" -- --test-threads=1
+            echo "::endgroup::"
+          done
+
   wsl-suite:
     name: tests/wsl 全量回归（root）
     # apt 包清单按 24.04 的工具集写；ubuntu-latest 将于 2026-11 切到 26.04，

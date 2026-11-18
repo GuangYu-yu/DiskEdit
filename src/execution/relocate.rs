@@ -42,8 +42,8 @@ pub(crate) fn execute(
             state.chunks_done()
         )));
     }
-    // 位移 0 没有拷贝要做；块进度已满说明数据搬完、只差表步。两种提前返回都在
-    // 目的前缀比对之后（见下），否则伪造的"已满"记录会直接跳到表步
+    // 位移 0：源与目的重合，数据已在位，没有拷贝要做，故不比对目的前缀。
+    // 块进度已满则必须先过目的前缀比对（见下），否则伪造的"已满"记录会直接跳到表步
     if shift == 0 {
         return Ok(());
     }
@@ -78,11 +78,7 @@ pub(crate) fn execute(
             src_base + total,
             src.size
         );
-        return Err(if crate::outcome::target_may_have_been_written() {
-            RunOutcome::partial(format!("{detail} — the transfer may be incomplete"))
-        } else {
-            RunOutcome::refused(detail)
-        });
+        return Err(RunOutcome::refused(detail));
     }
 
     // 序列方向由位移符号决定：目的区间在源之后（正位移）时从尾往头逐块搬，否则从头往尾。
@@ -116,11 +112,7 @@ pub(crate) fn execute(
                     "partition {part}: cannot read the target at byte {dst} to verify the recorded \
                      progress: {e} — the transfer may be incomplete"
                 );
-                return Err(if crate::outcome::target_may_have_been_written() {
-                    RunOutcome::partial(message)
-                } else {
-                    RunOutcome::no_mutation(message)
-                });
+                return Err(RunOutcome::no_mutation(message));
             }
             hasher.update(&buf);
         }
@@ -133,11 +125,7 @@ pub(crate) fn execute(
                  (recorded {done} chunk(s)) — the recorded progress cannot be trusted, so no further \
                  data was moved"
             );
-            return Err(if crate::outcome::target_may_have_been_written() {
-                RunOutcome::partial(message)
-            } else {
-                RunOutcome::refused(message)
-            });
+            return Err(RunOutcome::refused(message));
         }
     }
     if done == count {

@@ -47,7 +47,8 @@ const TOOL_PATH: &str = match option_env!("DISKEDIT_TOOL_PATH") {
 };
 
 /// 工具存在性守卫：执行前 fail-fast 确认工具存在且可执行
-pub(crate) fn find_tool(name: &str) -> Result<PathBuf, FsError> {
+pub(crate) fn find_tool(tool: Tool) -> Result<PathBuf, FsError> {
+    let name = tool.name();
     for dir in std::env::split_paths(std::ffi::OsStr::new(TOOL_PATH)) {
         let p = dir.join(name);
         // 需可执行：存在但无 x 位时继续向后找，避免错误推迟到 spawn 才以裸 EACCES 冒出
@@ -61,8 +62,8 @@ pub(crate) fn find_tool(name: &str) -> Result<PathBuf, FsError> {
 /// 工具存在性预检：调用点在**首次写盘之前**确认后置条件所需的工具齐备时用它，
 /// 避免"表已提交、FS 步才发现缺工具"。消费者是 Linux 在线路径与 PV 收尾链的写表前预检
 #[cfg(target_os = "linux")]
-pub(crate) fn require_tool(name: &str) -> Result<(), FsError> {
-    find_tool(name).map(|_| ())
+pub(crate) fn require_tool(tool: Tool) -> Result<(), FsError> {
+    find_tool(tool).map(|_| ())
 }
 
 /// 执行位判定：stat(2) 得到的 st_mode 中 S_IXUSR|S_IXGRP|S_IXOTH（0o111）任一置位即视为
@@ -85,7 +86,7 @@ pub(crate) fn is_executable(_p: &std::path::Path) -> bool {
 /// 代码注入子进程，而它们全由调用环境决定。PATH 必须保留——工具常再调自己的助手程序；
 /// 但它必须是**上面那张固定的表**，不是调用者的 PATH，否则子进程的助手程序同样由调用者
 /// 挑。LC_ALL 固定为 C，各工具的输出格式才可解析。调用点只负责 args 与 stdio
-pub(crate) fn tool_command(tool: &str) -> Result<Command, FsError> {
+pub(crate) fn tool_command(tool: Tool) -> Result<Command, FsError> {
     let mut cmd = Command::new(find_tool(tool)?);
     cmd.env_clear().env("LC_ALL", "C").env("PATH", TOOL_PATH);
     Ok(cmd)
@@ -112,28 +113,28 @@ pub(crate) enum ToolAccess {
 /// 先 `spawn` 再 `wait_with_output`：两者的失败不是一回事。spawn 失败 = 工具没跑起来
 /// （`Io`）；等待/读取输出失败 = 工具已经启动，写没写目标无法断言，故记
 /// `CommandFailed`（调用点的映射把它落成"可能已改变"）
-pub(crate) fn run_read<S: AsRef<OsStr>>(tool: &str, args: &[S]) -> Result<std::process::Output, FsError> {
+pub(crate) fn run_read<S: AsRef<OsStr>>(tool: Tool, args: &[S]) -> Result<std::process::Output, FsError> {
     run_with(tool, args, ToolAccess::ReadsOnly)
 }
 
 /// 会改动目标的工具：进程一旦启动，盘上状态就不再可断言，故在 spawn 成功后置位
 /// （见 `outcome::note_target_write`）。参数决定读写时（如 `fsck.f2fs` 的修复分支）
 /// 用 [`run_with`] 按实际取值声明
-pub(crate) fn run_write<S: AsRef<OsStr>>(tool: &str, args: &[S]) -> Result<std::process::Output, FsError> {
+pub(crate) fn run_write<S: AsRef<OsStr>>(tool: Tool, args: &[S]) -> Result<std::process::Output, FsError> {
     run_with(tool, args, ToolAccess::WritesTarget)
 }
 
 /// 启动外部工具的唯一入口。两个包装函数与它的差别只有访问方式：写事实的置位点
 /// 因此只有这一处
 pub(crate) fn run_with<S: AsRef<OsStr>>(
-    tool: &str,
+    tool: Tool,
     args: &[S],
     access: ToolAccess,
 ) -> Result<std::process::Output, FsError> {
     run_impl(tool, args, access == ToolAccess::WritesTarget)
 }
 
-fn run_impl<S: AsRef<OsStr>>(tool: &str, args: &[S], writes: bool) -> Result<std::process::Output, FsError> {
+fn run_impl<S: AsRef<OsStr>>(tool: Tool, args: &[S], writes: bool) -> Result<std::process::Output, FsError> {
     let child = tool_command(tool)?
         .args(args)
         .stdin(Stdio::null())
@@ -146,7 +147,8 @@ fn run_impl<S: AsRef<OsStr>>(tool: &str, args: &[S], writes: bool) -> Result<std
     }
     child.wait_with_output().map_err(|e| {
         FsError::CommandFailed(format!(
-            "{tool} was started but its exit status could not be read ({e}) — it may have changed the target"
+            "{} was started but its exit status could not be read ({e}) — it may have changed the target",
+            tool.name()
         ))
     })
 }
@@ -168,13 +170,13 @@ pub(crate) fn os_bytes(b: &[u8]) -> OsString {
 /// stdout/stderr 也必须接管道：调用方按 `Output` 消费它们，未接时 `wait_with_output`
 /// 只会返回空 Vec，子进程的失败原因就再也拿不到
 #[cfg(target_os = "linux")]
-pub(crate) fn run_write_input(tool: &str, args: &[&str], input: &str) -> Result<std::process::Output, FsError> {
+pub(crate) fn run_write_input(tool: Tool, args: &[&str], input: &str) -> Result<std::process::Output, FsError> {
     run_input_impl(tool, args, input, true)
 }
 
 #[cfg(target_os = "linux")]
 fn run_input_impl(
-    tool: &str,
+    tool: Tool,
     args: &[&str],
     input: &str,
     writes: bool,
@@ -196,13 +198,15 @@ fn run_input_impl(
         // 它可能读到一部分输入后动过盘，也可能什么都没做，无法断言——按"可能已改变"记
         best_effort_reap_child(&mut child);
         return Err(FsError::CommandFailed(format!(
-            "{tool} was started but its input could not be delivered ({e}) — it may have changed the target"
+            "{} was started but its input could not be delivered ({e}) — it may have changed the target",
+            tool.name()
         )));
     }
     drop(stdin); // 关闭 stdin 让 sfdisk 看到输入结束
     child.wait_with_output().map_err(|e| {
         FsError::CommandFailed(format!(
-            "{tool} was started but its exit status could not be read ({e}) — it may have changed the target"
+            "{} was started but its exit status could not be read ({e}) — it may have changed the target",
+            tool.name()
         ))
     })
 }
@@ -285,11 +289,12 @@ pub(crate) fn check_e2fsck_status_for_resize(st: &std::process::ExitStatus) -> R
 /// （见 `outcome::From<FsError>`）。启动不起来只说明这一次 spawn 没跑成，反推不出盘
 /// 没被前序步骤改过。已启动过的失败（`CommandFailed`）原样返回——它本来就意味着
 /// "可能已改变"
-pub(crate) fn tool_write_maybe_started(tool: &str, dev: &str, e: FsError) -> FsError {
+pub(crate) fn tool_write_maybe_started(tool: Tool, dev: &str, e: FsError) -> FsError {
     match e {
         FsError::CommandFailed(_) => e,
         e => FsError::CommandFailed(format!(
-            "{tool} could not be started on {dev}: {e} — an earlier step may already have written to it"
+            "{} could not be started on {dev}: {e} — an earlier step may already have written to it",
+            tool.name()
         )),
     }
 }

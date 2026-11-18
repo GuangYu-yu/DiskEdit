@@ -413,11 +413,14 @@ impl WriteSource {
     }
 
     /// 测试夹具直写：夹具铺的是"写前盘面"，写前比对的前提在这里不成立；
-    /// 令牌在本模块铸造
+    /// 令牌在本模块铸造。夹具写入不属于本次运行对目标的写入，写事实不置位——
+    /// 否则后续一步的失败会被归成"本次运行已写过"
     #[cfg(test)]
     pub(crate) fn write_fixture(&mut self, off: u64, buf: &[u8]) -> io::Result<()> {
-        let guard = Guarded { _seal: () };
-        self.write_at(&guard, off, buf)
+        use std::io::{Seek, SeekFrom, Write};
+        self.refuse_past_end(off, buf.len())?;
+        self.src.file.seek(SeekFrom::Start(off))?;
+        self.src.file.write_all(buf)
     }
 
     /// 记下"本次操作含有不可回滚的写入"，`recover` 见到它即拒绝回滚。

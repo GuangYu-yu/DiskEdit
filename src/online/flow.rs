@@ -2,7 +2,6 @@
 
 use super::*;
 use crate::dev::FileSource;
-use crate::fsops::run_write;
 
 /// FS 步之前的挂载点复核。`xfs_growfs` / `btrfs filesystem resize` 只拿得到挂载点字符串，
 /// 对它的解析最后一次发生在 `resolve_target`；跨过 part_resize（sfdisk 写表 + partx + 回读）
@@ -241,8 +240,8 @@ pub fn resize_online(
                     None => return fs_grow_outcome(fs_grow(&t, fstype)),
                     // 映射里有工具不等于 PATH 里有：缺二进制同样必须在写表前拒绝，
                     // 否则表已扩才发现，只剩 PARTIAL 加手工补救
-                    Some((prog, _)) => {
-                        if let Err(e) = crate::fsops::require_tool(&prog) {
+                    Some(op) => {
+                        if let Err(e) = op.tool().require() {
                             return fs_grow_outcome(Err(FsGrowError::Spawn(e)));
                         }
                     }
@@ -316,7 +315,7 @@ pub fn resize_online(
                 if let Err(e) = ensure_disk_snapshot_unchanged(&t, bytes) {
                     return e.into_run_outcome();
                 }
-                match run_write("btrfs", &["filesystem", "resize", &bytes.to_string(), &mnt]) {
+                match crate::fsops::btrfs_resize_to(&mnt, &bytes.to_string()) {
                     // ToolMissing / spawn 失败发生在本次首次写盘之前 → NoMutation；
                     // 启动后拿不到退出状态则可能已改 FS → Partial（映射见 RunOutcome::from）
                     Err(e) => return RunOutcome::from(e),

@@ -36,6 +36,7 @@ for kind in trunc junk magic; do
   esac
   OUT=$($B move "$T":2 --start 900000 --chunk 1 --yes 2>&1); E=$?
   RS=$(echo "$OUT" | grep -oc "resuming at chunk")
+  # 观测行：损坏形态决定结局——不可读时按记录拒绝，垃圾尾仍可续传；退出码不作为本段判据
   echo "[$kind] exit=$E resume_used=$RS"
   LD=$(lo_attach "$T")
   [ "$M2" = "$(mdsum "${LD}p2")" ] && echo "  p2 DEV OK" || { echo "  p2 DEV CORRUPT"; rc=1; }
@@ -50,7 +51,11 @@ echo "########## B: --chunk 变更 → 拒绝 ##########"
 mk1
 DISKEDIT_FAULT=chunk:30 $BF move "$T":2 --start 900000 --chunk 1 --yes >/dev/null 2>&1
 OUT=$($B move "$T":2 --start 900000 --chunk 2 --yes 2>&1); E=$?
+# 依据：记录里的搬移计划（含 chunk_bytes）与本次请求不一致 → refused（src/cmd/layout.rs:1697）；
+# 本次运行已先落恢复记录，记录的落盘由 src/outcome.rs 的 PersistedChange::Records 计为持久
+# 变化，Refused 在写事实非空时升为 partial（src/outcome.rs:509-517），故结论是 5
 echo "exit=$E  msg: $(echo "$OUT" | grep -o 'does not match.*' | head -1)"
+exp "$E" 5 "chunk 变更被拒（记录计划与本次请求不一致，记录已落盘）"
 OUT=$($B move "$T":2 --start 900000 --chunk 1 --yes 2>&1)
 echo "同参数重跑: $(echo "$OUT" | grep -o 'resuming at chunk [0-9]*')"
 

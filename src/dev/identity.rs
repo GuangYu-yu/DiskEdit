@@ -341,7 +341,7 @@ pub(crate) fn image_record_dir(canonical: &Path) -> Option<PathBuf> {
     let root = image_state_root()?;
     let digest = sha2::Sha256::digest(image_file_key(canonical).as_bytes());
     let key = crate::support::hex_lower(&digest[..16]);
-    Some(root.join("images").join(key))
+    Some(root.join(IMAGE_DIR).join(key))
 }
 
 /// 活跃记录移进隔离区后的落点：同一目录里的隐藏名 `.abandoned[.N]`
@@ -392,6 +392,50 @@ fn max_quarantine_index(dir: &Path, name: &std::ffi::OsStr) -> std::io::Result<O
     Ok(max)
 }
 
+/// [`quarantine_move`] 的结局。三态区分"什么都没发生"（`Err`）、"副本已建但原件还在"
+/// （`CopiedOnly`）与"转换完成"（`Moved`）：前者不改变持久状态，中者已经创建了一条隔离
+/// 条目，只是原件没删掉，重跑按 inode 收敛
+#[derive(Debug)]
+pub(crate) enum Quarantine {
+    Moved,
+    CopiedOnly { to: PathBuf, cause: std::io::Error },
+}
+
+// 测试期的定点删除失败注入：模拟"副本已建、原名删不掉"的形态。常规文件系统上
+// 该形态只在文件被占用或目录只读时出现，测试里按线程设置、守卫析构即复位
+#[cfg(test)]
+thread_local! {
+    static REMOVE_FAULT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// 注入守卫：`remove_original` 报错，守卫析构即复位
+#[cfg(test)]
+pub(crate) struct RemoveFaultGuard;
+
+#[cfg(test)]
+impl RemoveFaultGuard {
+    pub(crate) fn armed() -> Self {
+        REMOVE_FAULT.with(|f| f.set(true));
+        Self
+    }
+}
+
+#[cfg(test)]
+impl Drop for RemoveFaultGuard {
+    fn drop(&mut self) {
+        REMOVE_FAULT.with(|f| f.set(false));
+    }
+}
+
+/// 删掉隔离条目的原名。测试构建可注入失败，用来走通"副本已建、原件未删"的结局
+fn remove_original(path: &Path) -> std::io::Result<()> {
+    #[cfg(test)]
+    if REMOVE_FAULT.with(|f| f.get()) {
+        return Err(std::io::Error::other("injected remove fault"));
+    }
+    std::fs::remove_file(path)
+}
+
 /// 把活跃条目移进隔离区：`hard_link` 建副本再删原名，绝不覆盖已有条目。
 ///
 /// 三种结局与 `link(2)` 的返回值一一对应：
@@ -404,7 +448,7 @@ fn max_quarantine_index(dir: &Path, name: &std::ffi::OsStr) -> std::io::Result<O
 /// 硬链接不可用（FAT/exFAT、部分网络盘）时退到 `rename_over_placeholder`：先用
 /// `create_new` 原子占住名字，再覆盖本进程刚建的占位。本命令持目标锁，窗口内不会有
 /// 第二个 diskedit 来抢名字
-pub(crate) fn quarantine_move(from: &Path) -> std::io::Result<PathBuf> {
+pub(crate) fn quarantine_move(from: &Path) -> std::io::Result<Quarantine> {
     let (dir, name) = quarantine_layout(from);
     let max = max_quarantine_index(&dir, &name)?;
     // 残局判据先于编号分配：副本可能是任意一个已存在编号，逐个比 inode
@@ -412,11 +456,11 @@ pub(crate) fn quarantine_move(from: &Path) -> std::io::Result<PathBuf> {
         for index in 0..=max {
             let to = quarantine_path(&dir, &name, index);
             if same_file(from, &to) {
-                std::fs::remove_file(from)?;
+                remove_original(from)?;
                 // 改名转换要落盘目录项：否则掉电后原件可能复活，目标重新被判成 busy
                 best_effort_dir_fsync(from);
                 note_rename_unverified(from, &to);
-                return Ok(to);
+                return Ok(Quarantine::Moved);
             }
         }
     }
@@ -425,17 +469,22 @@ pub(crate) fn quarantine_move(from: &Path) -> std::io::Result<PathBuf> {
         let to = quarantine_path(&dir, &name, index);
         match std::fs::hard_link(from, &to) {
             Ok(()) => {
-                std::fs::remove_file(from)?;
+                // 副本已经落成：原件删不掉时，本次运行仍改变了持久状态
+                if let Err(cause) = remove_original(from) {
+                    best_effort_dir_fsync(from);
+                    note_rename_unverified(from, &to);
+                    return Ok(Quarantine::CopiedOnly { to, cause });
+                }
                 best_effort_dir_fsync(from);
                 note_rename_unverified(from, &to);
-                return Ok(to);
+                return Ok(Quarantine::Moved);
             }
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(_) => match rename_over_placeholder(from, &to) {
                 Ok(()) => {
                     best_effort_dir_fsync(from);
                     note_rename_unverified(from, &to);
-                    return Ok(to);
+                    return Ok(Quarantine::Moved);
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
                 Err(e) => return Err(e),
@@ -501,6 +550,12 @@ pub(crate) const LOG_SUFFIX: &str = sidecar_suffix!("log");
 
 /// 镜像旁记录目录的后缀：镜像 `/a/b.img` ⇒ 目录 `/a/b.img.diskedit/`
 pub(crate) const RECORD_SUFFIX: &str = ".diskedit";
+
+/// 块设备记录仓库的父目录名：`<state_root>/recovery/<identity-hash>`
+pub(crate) const RECOVERY_DIR: &str = "recovery";
+
+/// 镜像记录仓库的父目录名：`<image_state_root>/images/<identity-hash>`
+pub(crate) const IMAGE_DIR: &str = "images";
 
 /// 记录目录内的记录文件名
 pub(crate) const RECORD_NAME: &str = "record";
@@ -699,9 +754,9 @@ impl TargetIdentity {
         Ok(Self::from_block_keys(path, k))
     }
 
-    /// 块设备身份构造。**盘级**：记录与锁全部按所在整设备
-    /// 派生——分区号属于操作，不进落盘键，`/dev/sdb:2`（整盘节点 + 后缀）与
-    /// `/dev/sdb2`（分区节点）由此共享同一现场。
+    /// 块设备身份构造（测试用固定身份）：锁按整盘 `disk_key` 派生，不带记录键；
+    /// 分区号属于操作，不进锁的落点。需要记录目录的身份经 [`Self::from_block_parts`]
+    /// 构造，记录目录按（身份键, 分区号）各自分开
     /// 生产路径统一从 `resolve_block_at`（非 Linux 测试里是 `resolve_block`）进入，
     /// 这里只供测试构造固定身份
     #[cfg(test)]

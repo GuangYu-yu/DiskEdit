@@ -312,7 +312,7 @@ fn scan_record_root(
     let root = derived
         .and_then(|p| p.parent().and_then(Path::parent))
         .map(Path::to_path_buf)
-        .unwrap_or_else(|| crate::dev::host_state_root().join("recovery"));
+        .unwrap_or_else(|| crate::dev::host_state_root().join(crate::dev::RECOVERY_DIR));
     let entries = match std::fs::read_dir(&root) {
         Ok(entries) => entries,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
@@ -391,9 +391,10 @@ enum RollbackProof {
 
 fn rollback_proof(record: &RecoveryRecord) -> RollbackProof {
     match record.probe.as_ref() {
-        // 能否撤销按同一份回放判据算：相交的 move 没有显式许可时 `recover` 会拒绝
+        // 能否撤销按同一份准入判据算：相交的 move 没有显式许可时 `recover` 会拒绝；
+        // 表区原文为空且阶段越过 `Planned` 的记录同样不在回滚之列
         crate::recovery::CompanionProbe::Decoded(record) => {
-            if crate::recovery::TableReplay::of(record, false).writes_back() {
+            if crate::recovery::rollback_qualifies(record, false) {
                 RollbackProof::Proven
             } else {
                 RollbackProof::Disproven
@@ -963,8 +964,10 @@ impl TransactionManager {
     /// 路径；建记录的写命令（add/delete/resize/mkfs/resizefs…）不靠它：它们在目标被占用时
     /// 由事务入口拒绝。`recover` 借 `begin_without_history` 只取所有权，也不经过这个闸口
     ///
-    /// 现场落点由**整盘**键派生（见 `dev::TargetIdentity::from_block_keys`）：
-    /// `/dev/sdb:2` 与 `/dev/sdb2` 因此共享同一处现场，只读分区节点即可枚举完
+    /// 记录目录按（目标身份键, 分区号）分开，`/dev/sdb:2` 与 `/dev/sdb2` 落到不同
+    /// 目录；枚举覆盖记录根下的全部兄弟目录，条目归属由记录载荷里的盘级身份判定
+    /// （见 `SceneIdentity::mismatch_reason`），因此只读分区节点也能看到整盘节点
+    /// 写下的现场
     pub(crate) fn refuse_if_active(src: &FileSource, what: &str) -> Result<(), RunOutcome> {
         Self::refuse_unidentifiable(src)?;
         let active = Self::claimed_records(src)?;

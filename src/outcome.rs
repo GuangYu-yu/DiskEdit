@@ -480,55 +480,38 @@ impl RunOutcome {
         }
     }
 
-    /// 归责投影：按作业是否已越过不可逆写入点（[`crossed_irreversible_point`]）对齐
-    /// 结论。越过时，"没写"的四种结论（拒绝、无修改、内部错误、能力缺口）改判为 5
-    /// 并保留原结论的正文；`Partial`/`Applied` 原样返回，来源不被改写，
-    /// 因此重复调用不会重复改写正文。
+    /// 归责投影：把本次运行改过的持久状态折进结论。
     ///
-    /// 4 的定义是「本次运行没有改变任何持久状态」，因此"目标字节没写、但本次已把恢复
-    /// 记录落过盘"不是 4：记录文件本身就是持久状态变化，按 `RecordsChanged` 升到 5
+    /// 持久状态只有两处：目标字节与恢复记录条目。两者都由 [`PersistedChange`] 一次判定。
+    /// 判定为 `Nothing` 时结论原样返回；否则凡是"本次没写"的结论（`Refused`、`NoMutation`、
+    /// `Internal`、`Unsupported`）都改判为 5 并保留原正文，`Partial`/`Applied` 原样返回，
+    /// 来源不被改写，因此重复调用不会重复改写正文。
+    ///
+    /// 3 与 4 的定义都含"本次未写盘"（见模块头），所以"目标字节没写、但本次已把恢复记录
+    /// 落过盘"不能报 3 或 4：记录文件本身就是持久状态变化，按 `RecordsChanged` 升到 5
     ///
     /// 私有：外部只能经 [`Self::settled`]（对齐、不打印）或 [`Self::report_final`]
     /// （对齐 + 打印）取得归责后的结论。调用点因此只有一个，归责语义也只有这一处产生
     fn reconcile_with_writes(self) -> Self {
-        if !crossed_irreversible_point() {
-            return match self {
-                Self::NoMutation { cause } if record_persisted() => Self::Partial {
-                    cause: format!(
-                        "{cause} — this run created or changed a recovery record, so this is not a \
-                         no-mutation failure"
-                    ),
-                    pending: Vec::new(),
-                    origin: PartialOrigin::RecordsChanged,
-                },
-                other => other,
-            };
-        }
+        let persisted = PersistedChange::of(crossed_irreversible_point(), record_persisted());
+        let (why, origin) = match persisted {
+            PersistedChange::Nothing => return self,
+            PersistedChange::TargetBytes => (
+                "the job has already written the target, so this does not describe the on-disk state",
+                PartialOrigin::DerivedFromPriorWrite,
+            ),
+            PersistedChange::Records => (
+                "this run created or changed a recovery record, so this is not a no-mutation failure",
+                PartialOrigin::RecordsChanged,
+            ),
+        };
+        let partial = |cause: String| Self::Partial { cause, pending: Vec::new(), origin };
         match self {
-            Self::Refused(msg) => Self::Partial {
-                cause: format!("{msg} — the job has already written the target, so the refusal does not describe the on-disk state"),
-                pending: Vec::new(),
-                origin: PartialOrigin::DerivedFromPriorWrite,
-            },
-            Self::NoMutation { cause } => Self::Partial {
-                cause: format!("{cause} — the job has already written the target, so this is not a no-mutation failure"),
-                pending: Vec::new(),
-                origin: PartialOrigin::DerivedFromPriorWrite,
-            },
-            Self::Internal(msg) => Self::Partial {
-                cause: format!(
-                    "internal error (bug): {msg} — the job has already written the target; keep the recovery record and report it"
-                ),
-                pending: Vec::new(),
-                origin: PartialOrigin::DerivedFromPriorWrite,
-            },
-            Self::Unsupported { cause } => Self::Partial {
-                cause: format!(
-                    "{cause} — the job has already written the target, so this is a partial completion, not an unsupported operation"
-                ),
-                pending: Vec::new(),
-                origin: PartialOrigin::DerivedFromPriorWrite,
-            },
+            Self::Refused(msg) => partial(format!("{msg} — {why}")),
+            Self::NoMutation { cause } => partial(format!("{cause} — {why}")),
+            Self::Internal(msg) => partial(format!("internal error (bug): {msg} — {why}")),
+            Self::Unsupported { cause } => partial(format!("{cause} — {why}")),
+            // Usage 在解析期产生，早于任何写入通道；其余两态本身已陈述持久状态
             other => other,
         }
     }
@@ -998,18 +981,26 @@ mod tests {
         assert!(PersistedChange::of(false, true).failure("EIO").to_string().contains("no data was rolled back"));
     }
 
-    /// 本次已把记录落过盘：即使目标字节一个也没写，也不能报 4
+    /// 本次已把记录落过盘：即使目标字节一个也没写，也不能报 3 或 4——
+    /// 记录条目本身就是持久状态变化
     #[cfg(target_os = "linux")]
     #[test]
-    fn a_persisted_record_turns_no_mutation_into_partial() {
-        reset_run_facts();
-        note_record_persisted();
-        let o = RunOutcome::no_mutation("cannot read the source").settled();
-        assert_eq!(o.exit_code(), EXIT_PARTIAL, "{o:?}");
-        assert!(matches!(
-            o,
-            RunOutcome::Partial { origin: PartialOrigin::RecordsChanged, .. }
-        ));
+    fn a_persisted_record_turns_unwritten_failures_into_partial() {
+        for outcome in [
+            RunOutcome::no_mutation("cannot read the source"),
+            RunOutcome::refused("the table changed while probing"),
+            RunOutcome::unsupported("no tool for this filesystem"),
+            RunOutcome::internal("invariant broken"),
+        ] {
+            reset_run_facts();
+            note_record_persisted();
+            let o = outcome.settled();
+            assert_eq!(o.exit_code(), EXIT_PARTIAL, "{o:?}");
+            assert!(matches!(
+                o,
+                RunOutcome::Partial { origin: PartialOrigin::RecordsChanged, .. }
+            ));
+        }
         reset_run_facts();
     }
 

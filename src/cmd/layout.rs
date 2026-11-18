@@ -559,8 +559,8 @@ pub(crate) fn cmd_resize_end(a: &ResizeEndRequest) -> crate::outcome::RunOutcome
         // 常规路径只对末端下取整
         align_end(a.align, start, e, g.sector_size())
     };
-    // 原地重划不登记 --chunk：恢复粒度取记录层的默认块字节
-    let chunk = crate::execution::DEFAULT_CHUNK_BYTES;
+    // 原地重划不登记 --chunk：恢复粒度取记录层的步长下限
+    let chunk = crate::execution::RESIZE_CHUNK_BYTES;
     let mut logger = Logger::open(&src, Some(g.disk_guid()));
     let o = resize_part_via_plan_with(
         &mut src,

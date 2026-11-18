@@ -81,12 +81,12 @@ fn shrink_fs_step(src: &FileSource, part: u32, fstype: Option<ContentKind>, new_
                 return Err(FsError::invalid("shrink size must be a multiple of 512"));
             }
             let verify = with_partition_device(src, part, |dev| {
-                let out = run_write("e2fsck", &["-fp", dev])?;
+                let out = e2fsck_repair(dev)?;
                 check_e2fsck_status_for_resize(&out.status)?;
                 // resize2fs 裸数字单位是"文件系统块数"而非字节（man resize2fs）；
                 // 's' 后缀 = 512 字节扇区。分区尺寸必为 sector_size(≥512) 整数倍
                 let sectors = format!("{}s", new_bytes / 512);
-                let out = run_write("resize2fs", &[dev, &sectors]).map_err(|e| tool_write_maybe_started("resize2fs", dev, e))?;
+                let out = resize2fs_to(dev, &sectors).map_err(|e| tool_write_maybe_started(Tool::Resize2fs, dev, e))?;
                 if !out.status.success() {
                     return Err(FsError::CommandFailed(format!(
                         "resize2fs shrink failed: {}",
@@ -100,7 +100,7 @@ fn shrink_fs_step(src: &FileSource, part: u32, fstype: Option<ContentKind>, new_
         Some(ContentKind::Filesystem(FsKind::Ntfs)) => {
             let verify = with_partition_device(src, part, |dev| {
                 // -s 无后缀 = 字节，k/M/G = 10³/10⁶/10⁹（man ntfsresize OPTIONS）；本工具只传裸字节
-                let out = run_write("ntfsresize", &["-f", "-f", "-s", &new_bytes.to_string(), dev])?;
+                let out = ntfsresize_shrink_to(dev, &new_bytes.to_string())?;
                 if !out.status.success() {
                     return Err(FsError::CommandFailed(format!(
                         "ntfsresize shrink failed: {}",
@@ -122,8 +122,8 @@ fn shrink_fs_step(src: &FileSource, part: u32, fstype: Option<ContentKind>, new_
             let leak = with_scope_device_ranged(src, &DeviceScope::Partition(part), off, len, |dev| {
                 with_mount(dev, |mnt| {
                     // 裸数字 = 绝对字节数、必须挂载态（man btrfs-filesystem resize）
-                    let out = run_write("btrfs", &["filesystem", "resize", &new_bytes.to_string(), mnt])
-                        .map_err(|e| tool_write_maybe_started("btrfs resize", mnt, e))?;
+                    let out = btrfs_resize_to(mnt, &new_bytes.to_string())
+                        .map_err(|e| tool_write_maybe_started(Tool::Btrfs, mnt, e))?;
                     if !out.status.success() {
                         return Err(FsError::CommandFailed(format!(
                             "btrfs shrink failed: {} (minimum size via `btrfs inspect-internal min-dev-size` on a mount)",
@@ -224,12 +224,3 @@ pub(crate) fn size_read_back_hint(kind: FsKind) -> String {
     }
 }
 
-/// 跑一个只读查询工具并取回 stdout+stderr 的全文本：查询的成败由调用方按各自的输出格式
-/// 判定（它们要解析的字段不同），此处只保证"工具跑起来了且成功退出"
-pub(crate) fn run_text(tool: &str, args: &[&str]) -> io::Result<String> {
-    let out = run_read(tool, args).map_err(io::Error::from)?;
-    if !out.status.success() {
-        return Err(io::Error::from(FsError::command(tool, &out)));
-    }
-    Ok(format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr)))
-}

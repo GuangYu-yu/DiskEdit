@@ -104,8 +104,10 @@ pub(crate) fn record_backend_under(
         return Ok(None);
     };
     Ok(match container.file_name().and_then(|n| n.to_str()) {
-        Some("recovery") if root == state_root => Some(RecordBackend::HostRepo),
-        Some("images") if image_root.is_some_and(|r| r == root) => Some(RecordBackend::Sidecar),
+        Some(name) if name == super::RECOVERY_DIR && root == state_root => Some(RecordBackend::HostRepo),
+        Some(name) if name == super::IMAGE_DIR && image_root.is_some_and(|r| r == root) => {
+            Some(RecordBackend::Sidecar)
+        }
         _ => None,
     })
 }

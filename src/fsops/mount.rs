@@ -1363,14 +1363,6 @@ pub(crate) fn attach_loop(src: &FileSource, off: u64, len: u64) -> Result<String
             src.size
         )));
     }
-    let base_args: Vec<String> = if src.sector_size != 512 {
-        vec![
-            "-o".into(), off.to_string(), "--sizelimit".into(), len.to_string(),
-            "--sector-size".into(), src.sector_size.to_string(),
-        ]
-    } else {
-        vec!["-o".into(), off.to_string(), "--sizelimit".into(), len.to_string()]
-    };
     // 镜像用的是打开时刻由 fd 解析出的名字：命令返回后命令行路径可能已被改名或替换，
     // 按它 attach 得到的是另一个文件的映射，而写入仍走已打开的句柄
     // 块设备给节点本身：`off`/`len` 以该设备为坐标原点。loop 设备的数据路径是它的
@@ -1398,25 +1390,9 @@ pub(crate) fn attach_loop(src: &FileSource, off: u64, len: u64) -> Result<String
             Err(e) => return Err(FsError::invalid(format!("cannot re-check {} before mapping it: {e}", img.display()))),
         }
     }
-    let mut show = tool_command("losetup")?
-        .args(&base_args)
-        .arg("-f")
-        .arg("--show")
-        .arg(&img)
-        .stdin(Stdio::null())
-        .output()
-        .map_err(FsError::from)?;
-    if !show.status.success() && src.sector_size == 512 {
-        // offset 对齐异常等少数情况需要 --sector-size，512 路径再带该选项重试一次
-        show = tool_command("losetup")?
-            .args(["-o", &off.to_string(), "--sizelimit", &len.to_string(), "--sector-size", &src.sector_size.to_string(), "-f", "--show"])
-            .arg(&img)
-            .stdin(Stdio::null())
-            .output()
-            .map_err(FsError::from)?;
-    }
+    let show = losetup_attach(img.as_os_str(), off, len, src.sector_size)?;
     if !show.status.success() {
-        return Err(FsError::command("losetup", &show));
+        return Err(FsError::command(Tool::Losetup.name(), &show));
     }
     // 返回的名字会被直接拼成 /dev 路径并交给格式化/搬运工具：只接受 losetup 的
     // 标准设备名。异常输出（空串、带附加说明、别的路径）说明本次映射不可定位，
@@ -1449,22 +1425,18 @@ pub(crate) fn attach_loop(src: &FileSource, off: u64, len: u64) -> Result<String
 /// 返回值只描述 `losetup -d` 的结局：调用点据此把"映射可能仍占着"记成进程级待办，
 /// 而不是让它止步于一行 warning——那会让"FS 步成功 + loop 未解绑"以 0 退出
 pub(crate) fn detach_loop(loopdev: &str) -> ReleaseRunOutcome {
-    let release = match tool_command("losetup") {
+    let release = match losetup_detach(loopdev) {
         Err(e) => ReleaseRunOutcome::Unavailable(e.to_string()),
-        Ok(mut cmd) => match cmd.arg("-d").arg(loopdev).status() {
-            Ok(st) if st.success() => ReleaseRunOutcome::Released,
-            Ok(st) => ReleaseRunOutcome::Failed(crate::fsops::describe_exit(&st)),
-            Err(e) => ReleaseRunOutcome::Unavailable(e.to_string()),
-        },
+        Ok(st) if st.success() => ReleaseRunOutcome::Released,
+        Ok(st) => ReleaseRunOutcome::Failed(crate::fsops::describe_exit(&st)),
     };
     // audit-allow: S2-13
-    if let Ok(mut udevadm) = tool_command("udevadm") {
-        match udevadm.args(["settle", "--timeout=5"]).status() {
-            Ok(st) if !st.success() => eprintln!(
-                "warning: udevadm settle timed out after 5s — {loopdev} is detached, but the udev event queue may not be empty"
-            ),
-            _ => {}
-        }
+    if let Ok(st) = udev_settle()
+        && !st.success()
+    {
+        eprintln!(
+            "warning: udevadm settle timed out after 5s — {loopdev} is detached, but the udev event queue may not be empty"
+        );
     }
     release
 }
