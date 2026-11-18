@@ -175,7 +175,10 @@ pub(crate) fn rsize_deferred(src: &mut WriteSource, part: u32, start: u64, end: 
     )
 }
 
+/// 单测里的“一次命令运行”。写事实与命令入口（`cmd::dispatch`）同一条边界：
+/// 从本次调用起算，夹具为建记录而落盘不计入本次运行
 pub(crate) fn ap(src: &mut WriteSource, plan: &mut Plan, chunk: u64, no_fs: bool, log: &mut dyn FnMut(&str)) -> RunOutcome {
+    crate::outcome::reset_run_facts();
     let (g, _repair) = gpt_policy::resolve_geometry(src).unwrap().unwrap();
     crate::cmd::resize::apply_move(src, &g, plan, chunk, no_fs, false, None, log)
 }

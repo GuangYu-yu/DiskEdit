@@ -85,7 +85,6 @@ fn payload(file_id: [u8; 16], commit: u8, retention: u8) -> Vec<u8> {
     out.extend_from_slice(&0u64.to_le_bytes());
     out.push(commit);
     out.push(retention);
-    out.extend_from_slice(&0u16.to_le_bytes());
     out.push(2); // SceneProof::FileId
     out.push(0); // no mapping
     out.push(2); // IdentityMaterial::Image

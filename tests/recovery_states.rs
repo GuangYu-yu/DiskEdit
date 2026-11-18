@@ -146,7 +146,6 @@ impl Fixture {
         out.extend_from_slice(&0u64.to_le_bytes());
         out.push(self.commit);
         out.push(self.retention);
-        out.extend_from_slice(&0u16.to_le_bytes()); // stage count
         match self.scene {
             Scene::Image { size, file_id } => {
                 out.push(2); // proof: FileId

@@ -1685,6 +1685,11 @@ pub(crate) fn cmd_move(a: &MoveRequest) -> crate::outcome::RunOutcome {
     // 记录里没有条目表的搬移作业无从续跑：块游标必须由条目游标解释，认不出这份记录
     // 便不能按它跳过任何拷贝，于是只按本次装配的计划从零开始
     if let Some(recorded) = src.record_journal().and_then(|j| j.relocation()) {
+        // 记录与盘面的位置/目的区/块数判据与 `resize --allow-move` 共用一处。它只比对
+        // 记录与盘上几何，不依赖本次请求，故先于“是否同一条请求”报出：记录自身的
+        // 目的区越界或位置漂移比请求不符更接近根因
+        crate::movepart::verify_relocation_resume(recorded, &on_disk_g, src.size, chunk)
+            .unwrap_or_else(|f| bail_fail(f));
         // 续跑沿用记录里的双游标：计划相关字段必须与本次装配一致
         if recorded.entries != reloc.entries
             || recorded.chunk_bytes != reloc.chunk_bytes
@@ -1697,9 +1702,6 @@ pub(crate) fn cmd_move(a: &MoveRequest) -> crate::outcome::RunOutcome {
                 "the recovery record's relocation plan does not match this request".to_string(),
             ));
         }
-        // 记录与盘面的位置/目的区/块数判据与 `resize --allow-move` 共用一处
-        crate::movepart::verify_relocation_resume(recorded, &on_disk_g, src.size, chunk)
-            .unwrap_or_else(|f| bail_fail(f));
         reloc = recorded.clone();
     }
     if let Some(journal) = src.record_journal_mut() {
