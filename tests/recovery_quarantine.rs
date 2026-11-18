@@ -101,7 +101,6 @@ fn payload(size: u64, file_id: [u8; 16]) -> Vec<u8> {
     out.extend_from_slice(&0u64.to_le_bytes());
     out.push(0); // committed: no
     out.push(0); // retention: active
-    out.extend_from_slice(&0u16.to_le_bytes()); // stage count
     out.push(2); // proof: FileId
     out.push(0); // no mapping
     out.push(2); // material: Image

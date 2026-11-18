@@ -167,7 +167,6 @@ impl Fixture {
         out.extend_from_slice(&0u64.to_le_bytes());
         out.push(self.commit);
         out.push(0); // retention: active
-        out.extend_from_slice(&0u16.to_le_bytes()); // stage count
         out.push(2); // proof: FileId
         out.push(0); // no mapping
         out.push(2); // material: Image
