@@ -41,16 +41,6 @@ const ALLOWED: &[(&str, &str, &str)] = &[
         "partx 状态读不出时走 BLKPG 回退，回退失败即报错（站点 S1-10，待复核）",
     ),
     (
-        "recovery/cleanup.rs",
-        "W-5",
-        "表步围栏只有 Pending/Landed 算已定；Absent/Undecidable 落扣留许可一侧",
-    ),
-    (
-        "recovery/cleanup.rs",
-        "W-6",
-        "条目在飞位只有「确实没有」才放行；Known/Undecidable 落扣留许可一侧",
-    ),
-    (
         "recovery/record.rs",
         "W-7",
         "受控访问器 `table_step_in_flight`：只有 Known 且等于该条目才答「在飞」，Absent/Undecidable \
@@ -71,10 +61,11 @@ const ALLOWED: &[(&str, &str, &str)] = &[
         "recovery/journal.rs",
         "W-10",
         "`repair()` 的 `None` 有两条来源：`Absent` 是确实没有修复动作，`apply_repair` 据此\
-         继续是正常路径；`Undecidable` 只由前缀解码产生，而写入路径的日志只来自新建记录\
-         或完整解码的 `Recognized`（`open_image` 走 `Evidence::classify`），该臂当前不可达。\
-         若将来前缀记录也能进入写路径，`Undecidable` 会与 `Absent` 合流成「无需修复」，\
-         `apply_repair` 随即写修复——那时必须拆臂",
+         继续是正常路径；`Undecidable` 只由前缀解码产生。本例外以「前缀记录不进入写路径」\
+         为前提：写路径的日志只来自新建记录或完整解码的 `Recognized`（`open_image` 走\
+         `Evidence::classify`），两者尾段都可解，所以该臂不可达。前提一旦改变，\
+         `Undecidable` 会与 `Absent` 合流成「无需修复」，`apply_repair` 随即写修复，\
+         必须拆臂",
     ),
     (
         "recovery/record.rs",
@@ -96,9 +87,10 @@ const ALLOWED: &[(&str, &str, &str)] = &[
     (
         "recovery/record.rs",
         "W-14",
-        "`settle_table_step_after_rollback`：只在回滚把记录登记的表区原文写回并核对之后调用，\
-         围栏明确记着 `InFlight` 才退回 `Pending`。`Absent` / `Undecidable` / `Pending` / \
-         `Landed` 都不动，清理许可仍按记录原值判——读不出的围栏不会被当成「已落定」",
+        "`settle_table_step_after_rollback`：只在回滚把记录登记的表区原文（含修复写入）\
+         写回并核对之后调用，围栏明确记着 `InFlight` 才退回 `Pending`，修复事实无条件清空。\
+         `Absent` / `Undecidable` / `Pending` / `Landed` 的围栏都不动，清理许可仍按记录原值判——\
+         读不出的围栏不会被当成「已落定」",
     ),
     (
         "recovery/record.rs",

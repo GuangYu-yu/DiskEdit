@@ -152,6 +152,20 @@ pub(crate) fn apply_repair(
     action: &RepairAction,
 ) -> Result<(), RunOutcome> {
     if matches!(action, RepairAction::None) {
+        // 决策期按当前盘面判定无需修复：记录里仍停在 `InFlight`，说明表已收敛、
+        // 结果没记入。把事实落成 `Landed`，清理许可才不会一直扣在修复这一项上
+        if let Some(journal) = src.record_journal_mut().filter(|journal| {
+            journal
+                .repair()
+                .is_some_and(|fact| fact.state == crate::recovery::RepairState::InFlight)
+        }) {
+            journal.mark_repair_landed().map_err(|e| {
+                RunOutcome::no_mutation(format!(
+                    "{} — the converged table repair is not recorded",
+                    e.record_failure("the table repair's result")
+                ))
+            })?;
+        }
         return Ok(());
     }
     // 记录里已有修复事实：已经开始而结果未记入，或已经收敛却又需要修复，都不能再写一遍

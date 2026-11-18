@@ -4,6 +4,9 @@ use super::*;
 
 pub(crate) struct OnlineTarget {
     pub(crate) disk_dev: PathBuf,
+    /// 已按 sysfs 设备号核对过的整盘句柄。解析目标时取得并由本目标持有到收尾：
+    /// 需要内核改分区表时直接用这个句柄，不再按名字重开——名字可以在两步之间指向另一台设备
+    pub(crate) disk: std::fs::File,
     pub(crate) part_dev: PathBuf,
     /// 挂载点。`None` 表示本目标不来自挂载点（PV 路径）：xfs / btrfs 的在线工具与 btrfs
     /// 缩容都以挂载点为参数，这类目标上没有可用值
@@ -238,7 +241,7 @@ pub(crate) fn resolve_target(mountpoint: &Path) -> io::Result<OnlineTarget> {
     // 盘名由分区 sysfs 目录名推得，/dev 下的同名节点必须真是这台设备：容量、
     // logical_block_size、邻居区间全部取自 sysfs，而 sfdisk / partx / BLKPG / pvresize
     // 只拿到这个路径——名字指向另一台设备时"几何来自 A、写入落在 B"
-    let _disk_guard = ensure_node_is_device(&disk_dev, &crate::dev::sysfs_block_dir().join(&disk_name))?;
+    let disk = ensure_node_is_device(&disk_dev, &crate::dev::sysfs_block_dir().join(&disk_name))?;
 
     // 相邻分区区间（本分区除外），fail-fast 前置自查；内核 -EBUSY 兜底
     let this_dev = (maj as u64, min as u64);
@@ -246,6 +249,7 @@ pub(crate) fn resolve_target(mountpoint: &Path) -> io::Result<OnlineTarget> {
 
     Ok(OnlineTarget {
         disk_dev,
+        disk,
         part_dev,
         mnt: Some(mnt),
         pno,
@@ -257,18 +261,10 @@ pub(crate) fn resolve_target(mountpoint: &Path) -> io::Result<OnlineTarget> {
     })
 }
 
-/// BLKPG_RESIZE_PARTITION：对整盘 fd 调用，pno 定位分区，start 固定为现值
+/// BLKPG_RESIZE_PARTITION：对整套目标持有的整盘句柄调用，`pno` 定位分区，`start` 固定为
+/// 解析时的现值。句柄在解析目标时已按 sysfs 设备号核对，ioctl 与核对落在同一设备对象上
 pub(crate) fn blkpg_resize(t: &OnlineTarget, new_len_bytes: u64) -> io::Result<()> {
-    // 兜底重开前再核一次节点身份：sfdisk 前的那次核对与这里的打开之间，udev 可能把
-    // /dev/<盘名> 重绑到另一台设备——BLKPG 只挡 start 不符，对同几何换盘不设防
-    // （判据与主路径同一份，见 dev::ensure_node_is_device）
-    let disk_name = t.disk_dev.file_name().ok_or_else(|| {
-        io::Error::other(format!("{} has no file name to cross-check against sysfs", t.disk_dev.display()))
-    })?;
-    // 同一句柄核身份与发 ioctl：核对之后按路径重开，中间 udev 可能把 /dev/<盘名>
-    // 重绑到另一台设备——BLKPG 只挡 start 不符，对同几何换盘不设防
-    let disk = crate::dev::ensure_node_is_device(&t.disk_dev, &crate::dev::sysfs_block_dir().join(disk_name))?;
-    crate::ioctl::blkpg_resize_partition(&disk, t.start_bytes, new_len_bytes, t.pno)
+    crate::ioctl::blkpg_resize_partition(&t.disk, t.start_bytes, new_len_bytes, t.pno)
 }
 
 #[cfg(test)]

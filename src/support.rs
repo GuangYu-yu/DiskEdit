@@ -647,8 +647,8 @@ mod tests {
     }
 
     /// MBR 占用算术只有 [`mbr_occupied`] 一份：`add` 的放置必须经过它，容器到盘尾的
-    /// 规则才不会被绕开。守卫按"调用是否存在"判定，将来在同一文件里合法读取表项字段
-    /// 不会误红
+    /// 规则才不会被绕开。判据只看 `mbr_occupied(` 是否被调用，不扫描表项字段的读取；
+    /// 同一文件里的其它读取不会触发这条断言
     #[test]
     fn mbr_placement_uses_the_single_occupancy_helper() {
         assert!(
