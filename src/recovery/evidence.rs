@@ -62,6 +62,9 @@ impl Evidence {
         match super::record::decode(bytes) {
             Ok(record) if record.target.matches(current) => Self::Recognized(record),
             Ok(record) => Self::ForeignTarget { recorded: record.target, current: current.clone() },
+            Err(DecodeFailure::NotOurs { magic }) => {
+                Self::UnrecognizedFormat { magic, recorded: None }
+            }
             Err(DecodeFailure::Format { magic, recorded }) => {
                 Self::UnrecognizedFormat { magic, recorded }
             }
@@ -78,6 +81,9 @@ impl Evidence {
     pub(crate) fn classify_structure(bytes: &[u8]) -> Self {
         match super::record::decode(bytes) {
             Ok(record) => Self::Recognized(record),
+            Err(DecodeFailure::NotOurs { magic }) => {
+                Self::UnrecognizedFormat { magic, recorded: None }
+            }
             Err(DecodeFailure::Format { magic, recorded }) => {
                 Self::UnrecognizedFormat { magic, recorded }
             }

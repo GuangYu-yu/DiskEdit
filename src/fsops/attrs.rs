@@ -11,42 +11,13 @@ pub fn check_fs(src: &FileSource, part: u32, fstype: Option<ContentKind>) -> Res
     }
     // 访问方式与工具同表：`fsck.f2fs` 无参也可能写回全局元数据（见上一条），这一臂
     // 按"可能写"声明；其余各臂都带明确的只读开关
-    let (tool, args, access): (&str, Vec<&str>, ToolAccess) = match fstype {
-        // e2fsck -n：man e2fsck(8)「Open the file system read-only, and assume an
-        // answer of `no' to all questions」；ntfsfix -n：man ntfsfix(8)
-        // 「Do not write anything, just show what would have been done」
-        Some(ContentKind::Filesystem(FsKind::Ext)) => ("e2fsck", vec!["-n"], ToolAccess::ReadsOnly),
-        Some(ContentKind::Filesystem(FsKind::Ntfs)) => ("ntfsfix", vec!["-n"], ToolAccess::ReadsOnly),
-        // 无参：默认不修复，但 SIT 段类型不一致时 fsck.f2fs 的 force 分支会写回全局元数据
-        //（--dry-run 挡不住，见 DETAILS_CHECK）
-        Some(ContentKind::Filesystem(FsKind::F2fs)) => ("fsck.f2fs", vec![], ToolAccess::WritesTarget),
-        Some(ContentKind::Filesystem(FsKind::Xfs)) => ("xfs_repair", vec!["-n"], ToolAccess::ReadsOnly),
-        Some(ContentKind::Filesystem(FsKind::Btrfs)) => ("btrfs", vec!["check"], ToolAccess::ReadsOnly),
-        Some(ContentKind::Filesystem(FsKind::Vfat)) => ("fsck.vfat", vec!["-n"], ToolAccess::ReadsOnly),
-        // fsck.exfat man 未定义无参默认行为（存在 -r 交互修复），显式 -n = 仅检查不修复
-        Some(ContentKind::Filesystem(FsKind::Exfat)) => ("fsck.exfat", vec!["-n"], ToolAccess::ReadsOnly),
-        other => return Err(FsError::unsupported(format!(
+    let Some(check) = Check::for_fstype(fstype) else {
+        return Err(FsError::unsupported(format!(
             "no check tool wired for {}",
-            content_name(other.unwrap_or(ContentKind::Unknown))
-        ))),
+            content_name(fstype.unwrap_or(ContentKind::Unknown))
+        )));
     };
-    with_partition_device(src, part, |dev| {
-        let mut args = args;
-        args.push(dev);
-        let out = run_with(tool, &args, access)?;
-        if tool == "e2fsck" {
-            // check 不修复：e2fsck 以 -n 跑，退出非零即检查失败。
-            // 被信号杀死时没有退出码：那是基础设施故障，不能拿 -1 冒充一个退出码
-            return match out.status.code() {
-                Some(code) => check_e2fsck_for_check(code),
-                None => Err(FsError::CommandFailed(format!("e2fsck {}", describe_exit(&out.status)))),
-            };
-        }
-        if !out.status.success() {
-            return Err(FsError::command(tool, &out));
-        }
-        Ok(())
-    })
+    with_partition_device(src, part, |dev| check.run(dev))
 }
 
 /// VFAT 卷标的准入判据。字段容量是 11 **字节**（man fatlabel），而 VFAT 按 DOS/OEM
@@ -153,34 +124,20 @@ pub fn set_label(
     check_label_limits(fstype, label)?;
     let (device, _) = partition_device(src, part)?;
     let dev = device.path();
-    let (tool, args): (&str, Vec<String>) = match fstype {
-        Some(ContentKind::Filesystem(FsKind::Ext)) => ("tune2fs", vec!["-L".into(), label.into(), dev.into()]),
-        Some(ContentKind::Filesystem(FsKind::Xfs)) => ("xfs_admin", vec!["-L".into(), label.into(), dev.into()]),
-        Some(ContentKind::Filesystem(FsKind::Btrfs)) => ("btrfs", vec!["filesystem".into(), "label".into(), dev.into(), label.into()]),
-        Some(ContentKind::Filesystem(FsKind::Ntfs)) => ("ntfslabel", vec![dev.into(), label.into()]),
-        Some(ContentKind::Filesystem(FsKind::Vfat)) => ("fatlabel", vec![dev.into(), label.into()]),
-        Some(ContentKind::Filesystem(FsKind::Exfat)) => ("exfatlabel", vec![dev.into(), label.into()]),
-        Some(ContentKind::Swap) => ("swaplabel", vec!["-L".into(), label.into(), dev.into()]),
-        other => return Err(FsError::unsupported(format!(
+    let Some(label_op) = Label::for_fstype(fstype) else {
+        return Err(FsError::unsupported(format!(
             "no label tool wired for {}",
-            content_name(other.unwrap_or(ContentKind::Unknown))
-        ))),
+            content_name(fstype.unwrap_or(ContentKind::Unknown))
+        )));
     };
     // 工具缺失时一个字节都不写：存在性确认也在屏障之前
-    find_tool(tool).map_err(|e| match e {
-        FsError::ToolMissing(_) => FsError::missing(format!(
-            "cannot set the label: requires `{tool}` (package: {}) — not found in PATH",
-            tool_package(tool)
-        )),
-        e => e,
-    })?;
+    label_op.tool().require_named("set the label")?;
     // 屏障紧贴工具启动：设备已建立、工具已确认，之后的成败都可能改过目标
     src.mark_non_reversible()
         .map_err(|e| FsError::from(io::Error::other(e.record_failure("the transaction barrier"))))?;
-    let argrefs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-    let out = run_write(tool, &argrefs)?;
+    let out = label_op.write(dev, label)?;
     if !out.status.success() {
-        return Err(FsError::command(tool, &out));
+        return Err(FsError::command(label_op.tool().name(), &out));
     }
     Ok(())
 }
@@ -238,38 +195,16 @@ pub fn set_uuid(
 ) -> Result<(), FsError> {
     let (device, _) = partition_device(src, part)?;
     let dev = device.path();
-    let no_tool = |what: &str| {
-        FsError::unsupported(format!(
-            "no uuid tool wired for {}{what}",
-            content_name(fstype.unwrap_or(ContentKind::Unknown))
-        ))
-    };
-    let (tool, args): (&str, Vec<String>) = match req {
-        UuidRequest::Explicit(u) => match fstype {
-            Some(ContentKind::Filesystem(FsKind::Ext)) => ("tune2fs", vec!["-U".into(), u.clone(), dev.into()]),
-            Some(ContentKind::Filesystem(FsKind::Xfs)) => ("xfs_admin", vec!["-U".into(), u.clone(), dev.into()]),
-            Some(ContentKind::Filesystem(FsKind::Btrfs)) => ("btrfstune", vec!["-f".into(), "-U".into(), u.clone(), dev.into()]),
-            Some(ContentKind::Swap) => ("swaplabel", vec!["-U".into(), u.clone(), dev.into()]),
-            _ => return Err(no_tool("")),
-        },
-        // "生成新值"在各工具里的写法不同：tune2fs -U random、xfs_admin -U generate、
-        // btrfstune -u、ntfslabel --new-serial；swaplabel 没有生成形式
-        UuidRequest::NewRandom => match fstype {
-            Some(ContentKind::Filesystem(FsKind::Ext)) => ("tune2fs", vec!["-U".into(), "random".into(), dev.into()]),
-            Some(ContentKind::Filesystem(FsKind::Xfs)) => ("xfs_admin", vec!["-U".into(), "generate".into(), dev.into()]),
-            Some(ContentKind::Filesystem(FsKind::Btrfs)) => ("btrfstune", vec!["-f".into(), "-u".into(), dev.into()]),
-            Some(ContentKind::Filesystem(FsKind::Ntfs)) => ("ntfslabel", vec!["--new-serial".into(), dev.into()]),
-            _ => return Err(no_tool(" that generates a new value")),
-        },
+    let random = matches!(req, UuidRequest::NewRandom);
+    let Some(uuid_op) = UuidSet::for_request(fstype, random) else {
+        return Err(FsError::unsupported(format!(
+            "no uuid tool wired for {}{}",
+            content_name(fstype.unwrap_or(ContentKind::Unknown)),
+            if random { " that generates a new value" } else { "" }
+        )));
     };
     // 工具缺失时一个字节都不写：存在性确认也在屏障之前
-    find_tool(tool).map_err(|e| match e {
-        FsError::ToolMissing(_) => FsError::missing(format!(
-            "cannot set the uuid: requires `{tool}` (package: {}) — not found in PATH",
-            tool_package(tool)
-        )),
-        e => e,
-    })?;
+    uuid_op.tool().require_named("set the uuid")?;
     // 写前基线只服务"生成新值"：没有它就无法区分"换了"与"工具退 0 但没写"。
     // 这一次目标读取同样在屏障之前——读不出就该停在"确定未写盘"
     let before = match req {
@@ -279,15 +214,19 @@ pub fn set_uuid(
     // 屏障紧贴工具启动：设备已建立、工具已确认、基线已读取
     src.mark_non_reversible()
         .map_err(|e| FsError::from(io::Error::other(e.record_failure("the transaction barrier"))))?;
-    let argrefs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-    let out = run_write(tool, &argrefs)?;
+    let uuid = match req {
+        UuidRequest::Explicit(u) => u.as_str(),
+        UuidRequest::NewRandom => "",
+    };
+    let out = uuid_op.write(dev, uuid)?;
     if !out.status.success() {
-        return Err(FsError::command(tool, &out));
+        return Err(FsError::command(uuid_op.tool().name(), &out));
     }
     let after = read_uuid(fstype, dev)?;
     uuid_readback_verdict(req, before.as_deref(), after.as_deref()).map_err(|why| {
         FsError::CommandFailed(format!(
-            "{tool} reported success but the uuid read-back does not confirm it: {why}"
+            "{} reported success but the uuid read-back does not confirm it: {why}",
+            uuid_op.tool().name()
         ))
     })
 }
@@ -296,28 +235,10 @@ pub fn set_uuid(
 /// `ntfsinfo -m` 的输出里）；有工具但读不出或解析不出时返回错误，不拿 `None` 冒充
 /// "无需核对"
 fn read_uuid(fstype: Option<ContentKind>, dev: &str) -> Result<Option<String>, FsError> {
-    let (tool, args): (&str, Vec<&str>) = match fstype {
-        Some(ContentKind::Filesystem(FsKind::Ext)) => ("tune2fs", vec!["-l", dev]),
-        Some(ContentKind::Filesystem(FsKind::Xfs)) => ("xfs_admin", vec!["-u", dev]),
-        Some(ContentKind::Filesystem(FsKind::Btrfs)) => ("btrfs", vec!["filesystem", "show", dev]),
-        Some(ContentKind::Swap) => ("swaplabel", vec![dev]),
-        _ => return Ok(None),
-    };
-    let out = run_read(tool, &args)?;
-    if !out.status.success() {
-        return Err(FsError::CommandFailed(format!(
-            "{tool} {} failed while reading the uuid back ({})",
-            args.join(" "),
-            describe_exit(&out.status)
-        )));
+    match UuidRead::for_fstype(fstype) {
+        Some(op) => op.read(dev, fstype),
+        None => Ok(None),
     }
-    let text = String::from_utf8_lossy(&out.stdout);
-    uuid_from_output(fstype, &text).map(Some).ok_or_else(|| {
-        FsError::CommandFailed(format!(
-            "{tool} {} printed no uuid in its output",
-            args.join(" ")
-        ))
-    })
 }
 
 /// 各工具在 `LC_ALL=C` 下的固定输出：tune2fs -l 的 `Filesystem UUID:`、

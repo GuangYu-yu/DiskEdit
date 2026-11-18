@@ -121,11 +121,15 @@ fn cleanup_error_variants_are_reachable() {
     check("recovery/cleanup.rs", "pub(crate) enum CleanupError {", CLEANUP_ERROR);
 }
 
+/// 生产代码里出现 `RecoveryEngine::commit(` 的文件。新增提交点时先复核它传入的证据，
+/// 再把文件登记到这里
+const COMMIT_SITE_FILES: &[&str] = &["recovery/journal.rs"];
+
 /// 欠账变体的前提：生产提交点只传已识别记录。任何一处开始传别的证据，
 /// `CommitRefusal::NotRecognized` 就从欠账变成可达，必须更新台账。
 #[test]
 fn commit_callers_pass_recognized() {
-    let mut callers = 0;
+    let mut files: Vec<String> = Vec::new();
     for (path, text) in guards::rust_sources() {
         if path.ends_with("tests.rs") || path.contains("/tests/") {
             continue;
@@ -134,12 +138,20 @@ fn commit_callers_pass_recognized() {
             if !line.contains("RecoveryEngine::commit(") {
                 continue;
             }
-            callers += 1;
+            if !files.contains(&path) {
+                files.push(path.clone());
+            }
             assert!(
                 line.contains("Evidence::Recognized"),
                 "{path}:{line_no} 提交点只接受已识别记录：{line}"
             );
         }
     }
-    assert!(callers > 0, "找不到生产提交点，守卫失去意义");
+    files.sort();
+    let mut registered: Vec<String> = COMMIT_SITE_FILES.iter().map(|f| f.to_string()).collect();
+    registered.sort();
+    assert_eq!(
+        files, registered,
+        "生产提交点的文件集合与登记不一致：新增提交点时必须复核它传入的证据，并登记到 COMMIT_SITE_FILES"
+    );
 }

@@ -437,7 +437,7 @@ pub(crate) fn cmd_records_list(a: &RecordsListRequest) -> CmdResult {
             )
         }
         None => {
-            let root = crate::dev::host_state_root().join("recovery");
+            let root = crate::dev::host_state_root().join(crate::dev::RECOVERY_DIR);
             // 只有 NotFound 才是"仓库还没建起来，没有记录可列"；stat 失败或该路径不是目录
             // 是另一回事，报成空列表会让读侧以为仓库里确实没有记录
             let dirs = match std::fs::metadata(&root) {
@@ -504,7 +504,7 @@ pub(crate) fn cmd_records_verify(a: &RecordsVerifyRequest) -> CmdResult {
         }
     }
     // 主机仓库里的其余记录目录：同一编号出现在两处是"命中两处及以上"的唯一来源
-    let root = crate::dev::host_state_root().join("recovery");
+    let root = crate::dev::host_state_root().join(crate::dev::RECOVERY_DIR);
     // 枚举失败不等于"主机仓库里没有"：与 `scan` 同口径，不报完整
     let mut host_failure = None;
     let host_dirs = match std::fs::metadata(&root) {
@@ -644,7 +644,7 @@ pub(crate) fn cmd_records_verify(a: &RecordsVerifyRequest) -> CmdResult {
 /// `<image_state_root>/images`，也可以指向状态根本身
 fn image_container(root: &Path, image_root: Option<&Path>) -> Option<PathBuf> {
     let image_root = image_root?;
-    let images = image_root.join("images");
+    let images = image_root.join(crate::dev::IMAGE_DIR);
     (root == images || root == image_root).then_some(images)
 }
 
@@ -652,7 +652,7 @@ fn image_container(root: &Path, image_root: Option<&Path>) -> Option<PathBuf> {
 pub(crate) fn cmd_records_scan(a: &RecordsScanRequest) -> CmdResult {
     let root = Path::new(&a.root);
     let state_root = crate::dev::host_state_root();
-    let host_recovery = state_root.join("recovery");
+    let host_recovery = state_root.join(crate::dev::RECOVERY_DIR);
     // 记录目录本身不是容器：把单条记录目录当根没有语义
     let is_record_dir = match crate::dev::record_backend(root) {
         Ok(found) => found.is_some(),

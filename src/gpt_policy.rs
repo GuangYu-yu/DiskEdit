@@ -59,8 +59,8 @@ impl RepairAction {
     }
 }
 
-/// 条目里的最大 ending_lba（0 视为空条目）。两处作用于不同时刻的 `g`
-/// （判定期 vs 锁下重读），不可跨调用缓存
+/// 条目里的最大 ending_lba（未使用条目按类型 GUID 全零判定，见 `table::is_unused`）。
+/// 两处作用于不同时刻的 `g`（判定期 vs 锁下重读），不可跨调用缓存
 fn last_used_end(g: &RawGpt) -> u64 {
     g.entries.iter().filter(|e| !crate::table::is_unused(e)).map(|e| e.ending_lba).max().unwrap_or(0)
 }
@@ -1132,7 +1132,7 @@ mod tests {
         assert!(matches!(partition_bytes(&src, 0), Err(RunOutcome::Refused(m)) if m.contains("not found")));
         // MBR：容器分区不可当 FS 载体
         let mut src = crate::support::src_from("pb_mbr", &vec![0u8; 2 * 1024 * 1024]);
-        table::create_mbr(&mut src, false).unwrap();
+        crate::support::create_mbr(&mut src);
         table::add_mdos_entry(&mut src, 63, 200, 0x83).unwrap();
         table::add_mdos_entry(&mut src, 201, 300, 0x83).unwrap();
         // 被测对象是"容器类型条目的区间判读"，类型字节直接写盘面：追加路径拒绝容器类型

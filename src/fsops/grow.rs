@@ -147,10 +147,12 @@ pub enum GrowRunOutcome {
 }
 
 impl GrowRunOutcome {
-    /// 扩容成功那一行；未证实时没有落点可报
+    /// 扩容成功那一行；未证实时没有落点可报。
+    /// 只陈述回读到的尺寸，不说"已扩到"——判据允许落点比区间末端短一个放置单元，
+    /// 生长不足一个单元时工具停在原值也判 `Verified`，此时"grown"会是一句假话
     pub fn ok_line(&self) -> Option<String> {
         match self {
-            Self::Verified { actual, .. } => Some(format!("fs grown to {actual} bytes")),
+            Self::Verified { actual, .. } => Some(format!("fs size is {actual} bytes")),
             Self::Unverified { .. } => None,
         }
     }
@@ -234,8 +236,8 @@ where
 /// 扩容工具成功返回后的核对：回读实际尺寸，判据是"覆盖到区间末端"。工具按自己的放置
 /// 单元取整，故实际尺寸 ≤ 区间末端、且与末端之差小于一个单元即算到位；超出末端
 /// 说明工具把文件系统写到了区间之外，差一个单元以上说明工具报成功却没扩
-fn verify_grow(kind: FsKind, dev: &str, limit: u64, tool: &str) -> Result<SizeVerify, FsError> {
-    classify_grow(read_fs_geometry(kind, dev), limit, tool, &size_read_back_hint(kind))
+fn verify_grow(kind: FsKind, dev: &str, limit: u64, tool: Tool) -> Result<SizeVerify, FsError> {
+    classify_grow(read_fs_geometry(kind, dev), limit, tool.name(), &size_read_back_hint(kind))
 }
 
 /// 覆盖判据在 ext 上留有一个块组宽的空当：那一段是 resize2fs 放置不下的元数据尾部。
@@ -266,9 +268,10 @@ pub(crate) fn classify_grow(
     }
 }
 
-/// 回读到的落点是否覆盖到区间末端：`bytes ≤ limit < bytes + unit`
+/// 回读到的落点是否覆盖到区间末端：`bytes ≤ limit < bytes + unit`。
+/// 溢出按"未覆盖"处理——判据是"末端落在最后一个单元内"，算不出来的上界不能当达标
 fn covers(bytes: u64, unit: u64, limit: u64) -> bool {
-    bytes <= limit && bytes.checked_add(unit).is_none_or(|end| limit < end)
+    bytes <= limit && bytes.checked_add(unit).is_some_and(|end| limit < end)
 }
 
 fn resize_fs_step(src: &mut WriteSource, scope: &DeviceScope, fstype: Option<ContentKind>) -> Result<GrowRunOutcome, FsError> {
@@ -277,14 +280,14 @@ fn resize_fs_step(src: &mut WriteSource, scope: &DeviceScope, fstype: Option<Con
         Some(ContentKind::Filesystem(FsKind::Ext)) => {
             let (off, len) = scope_byte_range(src, scope)?;
             let verify = with_write_scope(src, scope, off, len, |dev| {
-                let out = run_write("e2fsck", &["-fp", dev])?;
+                let out = e2fsck_repair(dev)?;
                 check_e2fsck_status_for_resize(&out.status)?;
-                let out = run_write("resize2fs", &[dev])
-                    .map_err(|e| tool_write_maybe_started("resize2fs", dev, e))?;
+                let out = resize2fs_max(dev)
+                    .map_err(|e| tool_write_maybe_started(Tool::Resize2fs, dev, e))?;
                 if !out.status.success() {
-                    return Err(FsError::command("resize2fs", &out));
+                    return Err(FsError::command(Tool::Resize2fs.name(), &out));
                 }
-                verify_grow(FsKind::Ext, dev, len, "resize2fs")
+                verify_grow(FsKind::Ext, dev, len, Tool::Resize2fs)
             })?;
             Ok(grow_outcome(verify, None))
         }
@@ -292,18 +295,18 @@ fn resize_fs_step(src: &mut WriteSource, scope: &DeviceScope, fstype: Option<Con
             let (off, len) = scope_byte_range(src, scope)?;
             let verify = with_write_scope(src, scope, off, len, |dev| {
                 // 先 --no-action 演练，成功才真改，失败零副作用
-                let out = run_read("ntfsresize", &["-f", "-f", "--no-action", dev])?;
+                let out = ntfsresize_simulate(dev)?;
                 if !out.status.success() {
                     return Err(FsError::CommandFailed(format!(
                         "ntfsresize simulation failed: {}",
                         String::from_utf8_lossy(&out.stderr).trim()
                     )));
                 }
-                let out = run_write("ntfsresize", &["-f", "-f", dev])?;
+                let out = ntfsresize_grow(dev)?;
                 if !out.status.success() {
-                    return Err(FsError::command("ntfsresize", &out));
+                    return Err(FsError::command(Tool::Ntfsresize.name(), &out));
                 }
-                verify_grow(FsKind::Ntfs, dev, len, "ntfsresize")
+                verify_grow(FsKind::Ntfs, dev, len, Tool::Ntfsresize)
             })?;
             Ok(grow_outcome(verify, None))
         }
@@ -315,19 +318,19 @@ fn resize_fs_step(src: &mut WriteSource, scope: &DeviceScope, fstype: Option<Con
                 // 全局元数据写回（fsck/fsck.c 的 force 分支，--dry-run 挡不住）。退出码
                 // 负数表示失败（-1 表现为 255），非 0 即拒绝 resize。例外路径使这一步
                 // 可能写盘，故按"可能写"启动，失败不能被报成"未改动"
-                let out = run_write("fsck.f2fs", &[dev])?;
+                let out = fsck_f2fs(dev)?;
                 if !out.status.success() {
                     return Err(FsError::CommandFailed(format!(
                         "fsck.f2fs failed ({}), refuse resize",
                         describe_exit(&out.status)
                     )));
                 }
-                let out = run_write("resize.f2fs", &[dev])
-                    .map_err(|e| tool_write_maybe_started("resize.f2fs", dev, e))?;
+                let out = resize_f2fs(dev)
+                    .map_err(|e| tool_write_maybe_started(Tool::ResizeF2fs, dev, e))?;
                 if !out.status.success() {
-                    return Err(FsError::command("resize.f2fs", &out));
+                    return Err(FsError::command(Tool::ResizeF2fs.name(), &out));
                 }
-                verify_grow(FsKind::F2fs, dev, len, "resize.f2fs")
+                verify_grow(FsKind::F2fs, dev, len, Tool::ResizeF2fs)
             })?;
             Ok(grow_outcome(verify, None))
         }
@@ -335,14 +338,14 @@ fn resize_fs_step(src: &mut WriteSource, scope: &DeviceScope, fstype: Option<Con
             let (off, len) = scope_byte_range(src, scope)?;
             let (verify, leak) = with_write_scope(src, scope, off, len, |dev| {
                 let leak = with_mount(dev, |mnt| {
-                    let out = run_write("xfs_growfs", &[mnt])
-                        .map_err(|e| tool_write_maybe_started("xfs_growfs", mnt, e))?;
+                    let out = xfs_growfs(mnt)
+                        .map_err(|e| tool_write_maybe_started(Tool::XfsGrowfs, mnt, e))?;
                     if !out.status.success() {
-                        return Err(FsError::command("xfs_growfs", &out));
+                        return Err(FsError::command(Tool::XfsGrowfs.name(), &out));
                     }
                     Ok(())
                 })?;
-                Ok((verify_grow(FsKind::Xfs, dev, len, "xfs_growfs")?, leak))
+                Ok((verify_grow(FsKind::Xfs, dev, len, Tool::XfsGrowfs)?, leak))
             })?;
             Ok(grow_outcome(verify, leak))
         }
@@ -353,14 +356,14 @@ fn resize_fs_step(src: &mut WriteSource, scope: &DeviceScope, fstype: Option<Con
             refuse_btrfs_multi_device_at(src, off, len)?;
             let (verify, leak) = with_write_scope(src, scope, off, len, |dev| {
                 let leak = with_mount(dev, |mnt| {
-                    let out = run_write("btrfs", &["filesystem", "resize", "max", mnt])
-                        .map_err(|e| tool_write_maybe_started("btrfs resize", mnt, e))?;
+                    let out = btrfs_resize_max(mnt)
+                        .map_err(|e| tool_write_maybe_started(Tool::Btrfs, mnt, e))?;
                     if !out.status.success() {
-                        return Err(FsError::command("btrfs resize", &out));
+                        return Err(FsError::command(Tool::Btrfs.name(), &out));
                     }
                     Ok(())
                 })?;
-                Ok((verify_grow(FsKind::Btrfs, dev, len, "btrfs resize")?, leak))
+                Ok((verify_grow(FsKind::Btrfs, dev, len, Tool::Btrfs)?, leak))
             })?;
             Ok(grow_outcome(verify, leak))
         }
@@ -379,8 +382,8 @@ fn resize_fs_step(src: &mut WriteSource, scope: &DeviceScope, fstype: Option<Con
                 FsError::invalid(format!("vfat device length {dev_len} — cannot derive fallback size"))
             })?;
             let verify = with_write_scope(src, scope, off, dev_len, |dev| {
-                let mut out = run_write("fatresize", &["-s", "max", dev])
-                    .map_err(|e| tool_write_maybe_started("fatresize", dev, e))?;
+                let mut out = fatresize_max(dev)
+                    .map_err(|e| tool_write_maybe_started(Tool::Fatresize, dev, e))?;
                 if !out.status.success() {
                     // 降级重试只对「确认未写盘」的已知拒绝类：fatresize 对重叠分区的
                     // 拒绝发生在任何写之前（man fatresize）。其余失败可能
@@ -392,16 +395,16 @@ fn resize_fs_step(src: &mut WriteSource, scope: &DeviceScope, fstype: Option<Con
                         String::from_utf8_lossy(&out.stderr)
                     );
                     if text.contains("overlapping partitions") {
-                        out = run_write("fatresize", &["-s", &want.to_string(), dev])
-                            .map_err(|e| tool_write_maybe_started("fatresize", dev, e))?;
+                        out = fatresize_to(dev, &want.to_string())
+                            .map_err(|e| tool_write_maybe_started(Tool::Fatresize, dev, e))?;
                     } else {
-                        return Err(FsError::command("fatresize", &out));
+                        return Err(FsError::command(Tool::Fatresize.name(), &out));
                     }
                 }
                 if !out.status.success() {
-                    return Err(FsError::command("fatresize", &out));
+                    return Err(FsError::command(Tool::Fatresize.name(), &out));
                 }
-                verify_grow(FsKind::Vfat, dev, dev_len, "fatresize")
+                verify_grow(FsKind::Vfat, dev, dev_len, Tool::Fatresize)
             })?;
             Ok(grow_outcome(verify, None))
         }
@@ -528,12 +531,11 @@ where
     // 执行走 `fsops::run_write`：spawn 失败 = 工具没跑起来（Io），等待失败 = 工具已启动、
     // 写没写目标无法断言（CommandFailed）。mount 自己会重放日志（对目标的一次写），
     // 把后者折成 Io 会让命令以"确定未写盘"退出
-    let args = [std::ffi::OsString::from(dev), target];
-    let out = run_write("mount", &args)?;
+    let out = mount(&std::ffi::OsString::from(dev), &target)?;
     if !out.status.success() {
         // mount 没成功就谈不上 umount：对从未挂载的目录卸载必然失败，
         // 那条"may remain"的告警只会把用户引向一个不存在的残留挂载点
-        return Err(FsError::command("mount", &out));
+        return Err(FsError::command(Tool::Mount.name(), &out));
     }
     // 挂载成功后该路径指向的挂载根身份：卸载与删目录之前都按它重新核对
     #[cfg(unix)]
@@ -720,14 +722,14 @@ pub(crate) fn settle_release(
 
 /// 跑一次 umount，把结果归一到 [`ReleaseRunOutcome`]
 pub(crate) fn release_mount(mnt: &std::path::Path) -> ReleaseRunOutcome {
-    let mut cmd = match tool_command("umount") {
-        Ok(c) => c,
+    let out = match umount(mnt) {
+        Ok(o) => o,
         Err(e) => return ReleaseRunOutcome::Unavailable(format!("umount not available ({e})")),
     };
-    match cmd.arg(mnt).stdin(Stdio::null()).output() {
-        Ok(o) if o.status.success() => ReleaseRunOutcome::Released,
-        Ok(o) => ReleaseRunOutcome::Failed(String::from_utf8_lossy(&o.stderr).trim().to_string()),
-        Err(e) => ReleaseRunOutcome::Unavailable(format!("umount did not start: {e}")),
+    if out.status.success() {
+        ReleaseRunOutcome::Released
+    } else {
+        ReleaseRunOutcome::Failed(String::from_utf8_lossy(&out.stderr).trim().to_string())
     }
 }
 

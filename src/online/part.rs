@@ -1,7 +1,6 @@
 //! 在线分区表缩放：sfdisk 写入与内核视图同步。
 
 use super::*;
-use crate::fsops::{run_read, run_write_input};
 
 /// part_resize 的失败按"是否知道表已落盘"与"成因在哪一侧"分类——这不是措辞差异：
 /// - `Stale`：写前重读判定"当前盘上现状与请求不符"——目标条目被改、新尺寸压到现存分区，
@@ -196,12 +195,8 @@ pub(crate) fn part_resize(t: &OnlineTarget, new_len_bytes: u64) -> Result<(), Pa
     // 在线路径的 durable boundary 就在这一次 sfdisk：之前 abort 表确定未写、
     // 之后 abort 表可能已写。成对注入才能把这条分界变成可断言的事实
     fault_online_before_write();
-    let out = run_write_input(
-        "sfdisk",
-        &["--no-reread", "--force", "-N", &pno_str, &disk_str],
-        &script,
-    )
-    .map_err(|e| match e {
+    let out = crate::fsops::sfdisk_resize(&disk_str, &pno_str, &script)
+        .map_err(|e| match e {
         // 进程已启动、输入没能送达：可能读过一部分脚本并动过盘，不得断言未写
         crate::fsops::FsError::CommandFailed(m) => PartResizeError::Unknown(io::Error::other(m)),
         other => PartResizeError::NoWrite(other.into()),
@@ -236,7 +231,7 @@ pub(crate) fn part_resize(t: &OnlineTarget, new_len_bytes: u64) -> Result<(), Pa
             ))));
         }
     }
-    let partx = run_read("partx", &["-u", "--nr", &pno_str, &disk_str]);
+    let partx = crate::fsops::partx_update(&disk_str, &pno_str);
     // audit-allow: W-4 S1-10
     let partx_ok = partx.as_ref().map(|o| o.status.success()).unwrap_or(false);
     if partx_ok {

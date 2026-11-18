@@ -23,7 +23,7 @@ mod mkfs;
 mod relocate;
 mod set;
 mod swap;
-mod table;
+pub(crate) mod table;
 
 use self::copy::CopyPartition;
 use self::fs::FsResize;
@@ -231,7 +231,7 @@ fn verify_tables_before_write(src: &WriteSource, steps: &[PreparedStep<'_>]) -> 
 /// 写前比对。
 ///
 /// `chunk_bytes` 只对含 `Relocate` / `CopyPartition` 的计划有意义：数据块的字节数必须由
-/// 调用方给出并在 1 MiB..=64 MiB 的扇区整数倍内，本函数不读 [`DEFAULT_CHUNK_BYTES`]。
+/// 调用方给出并在 1 MiB..=64 MiB 的扇区整数倍内，本函数不读 [`RESIZE_CHUNK_BYTES`]。
 pub(crate) fn execute_plan(
     src: &mut WriteSource,
     plan: &ConfirmedPlan,
@@ -894,11 +894,11 @@ fn journal_state(src: &WriteSource, steps: &[PreparedStep]) -> Result<TransferSt
     Ok(state)
 }
 
-/// 恢复记录的默认块字节数：8 MiB。
-///
-/// 依据：`Transfer` 每前进 `max(ChunkSize, 8 MiB)` 替换一次记录并只
-/// 更新 `cursor`，而 `resize` 不登记 `--chunk`，恢复粒度取该下限
-pub(crate) const DEFAULT_CHUNK_BYTES: u64 = 8 * 1024 * 1024;
+/// `resize` 内部使用的块字节数：8 MiB。与用户可见的 `--chunk` 默认值
+/// （[`crate::support::DEFAULT_CHUNK_BYTES`]，4 MiB）是两件事，故不共用一个名字：
+/// 这个值同时是恢复记录的步长下限——`Transfer` 每前进 `max(ChunkSize, 8 MiB)`
+/// 替换一次记录并只更新 `cursor`，而 `resize` 不登记 `--chunk`，恢复粒度取该下限
+pub(crate) const RESIZE_CHUNK_BYTES: u64 = 8 * 1024 * 1024;
 
 #[cfg(test)]
 mod tests {

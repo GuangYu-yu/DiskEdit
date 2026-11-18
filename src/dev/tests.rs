@@ -14,6 +14,24 @@ fn a_quarantine_directory_that_cannot_be_listed_is_an_error() {
     assert!(e.to_string().contains("cannot enumerate the quarantine directory"), "{e}");
 }
 
+/// 副本已建、原名删不掉时报告 `CopiedOnly`：本次运行确实新增了一个隔离条目，
+/// 不能按"什么都没发生"处理；原件与副本都要留在原地供重跑按 inode 收敛
+#[test]
+fn a_copy_whose_original_cannot_be_removed_is_reported_as_copied_only() {
+    let root = test_dir("quarantine_copied_only");
+    let from = root.join(RECORD_NAME);
+    std::fs::write(&from, b"record").unwrap();
+    let _fault = RemoveFaultGuard::armed();
+    let outcome = quarantine_move(&from).expect("building the copy succeeds; only the removal is refused");
+    let Quarantine::CopiedOnly { to, cause } = outcome else {
+        panic!("a refused removal must not be reported as Moved");
+    };
+    assert!(from.exists(), "the original stays while the copy exists");
+    assert!(to.exists(), "the copy must be in place");
+    assert_eq!(to.parent(), Some(root.path()), "the copy lands in the original's directory");
+    assert!(cause.to_string().contains("injected remove fault"), "{cause}");
+}
+
 /// `:N` 后缀的判定：分区号 1-based，`:0` 必须拒绝而不是折叠成"整盘"——
 /// 折叠会把一次针对具体分区的操作放大成对整盘的表操作。
 /// `:last` 与数字号并列，大小写不敏感

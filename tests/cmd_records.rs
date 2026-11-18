@@ -113,7 +113,7 @@ fn payload(file_id: [u8; 16], commit: u8, retention: u8) -> Vec<u8> {
 fn record(file_id: [u8; 16], commit: u8, retention: u8) -> Vec<u8> {
     let payload = payload(file_id, commit, retention);
     let mut out = vec![0u8; HEADER_LEN];
-    out[0..4].copy_from_slice(b"DSK5");
+    out[0..4].copy_from_slice(b"DSK6");
     out[4..8].copy_from_slice(&(payload.len() as u32).to_le_bytes());
     out[8..12].copy_from_slice(&crc32(&payload).to_le_bytes());
     let header_crc = crc32(&out[0..12]);
@@ -334,6 +334,11 @@ fn verify_of_a_target_that_cannot_be_probed_is_three() {
 fn verify_does_not_claim_complete_when_the_host_repository_cannot_be_read() {
     // DISKEDIT_STATE_DIR 只在 uid 0 下生效
     if unsafe { libc::geteuid() } != 0 {
+        // 声明要 root 的 CI 作业里不允许静默跳过：跳过会让整套用例"全绿"而实则没测
+        assert!(
+            std::env::var_os("DISKEDIT_REQUIRE_ROOT").is_none(),
+            "this test needs root, but DISKEDIT_REQUIRE_ROOT is set (the CI job must run it as root)"
+        );
         eprintln!("skipped: the host state root is fixed for non-root users");
         return;
     }

@@ -158,31 +158,18 @@ pub(crate) struct FsGeometry {
 pub(crate) fn read_fs_geometry(kind: FsKind, dev: &str) -> io::Result<FsGeometry> {
     match kind {
         FsKind::Ext => {
-            let text = run_text("dumpe2fs", &["-h", dev])?;
-            let blocks = parse_num_lead(&text, "Block count:")?;
-            let block_size = parse_num_lead(&text, "Block size:")?;
-            let per_group = parse_num_lead(&text, "Blocks per group:")?;
-            let bytes = blocks.checked_mul(block_size).ok_or_else(|| {
-                io::Error::other(format!(
-                    "dumpe2fs block count × block size overflows ({blocks} × {block_size})"
-                ))
-            })?;
-            let unit = block_size.checked_mul(per_group).ok_or_else(|| {
-                io::Error::other(format!(
-                    "dumpe2fs block size × blocks per group overflows ({block_size} × {per_group})"
-                ))
-            })?;
-            Ok(FsGeometry { bytes, unit })
+            let text = dumpe2fs_text(dev)?;
+            Ok(FsGeometry { bytes: ext_bytes(&text)?, unit: ext_unit(&text)? })
         }
         FsKind::Ntfs => {
-            let text = run_text("ntfsresize", &["-f", "--info", dev])?;
+            let text = ntfsresize_info_text(dev)?;
             Ok(FsGeometry {
                 bytes: parse_num_lead(&text, "Current volume size:")?,
                 unit: parse_num_lead(&text, "Cluster size")?,
             })
         }
         FsKind::Btrfs => {
-            let text = run_text("btrfs", &["inspect-internal", "dump-super", "-f", dev])?;
+            let text = btrfs_superblock_text(dev)?;
             Ok(FsGeometry {
                 bytes: parse_num_lead(&text, "total_bytes")?,
                 unit: parse_num_lead(&text, "sectorsize")?,
@@ -195,9 +182,39 @@ pub(crate) fn read_fs_geometry(kind: FsKind, dev: &str) -> io::Result<FsGeometry
     }
 }
 
-/// 只取总字节：缩容核对只需要尺寸，分配单元在那一侧不参与判据
+/// ext 的总字节数：`Block count:` × `Block size:`。
+/// 与 [`ext_unit`] 分开：只判字节数的调用点不因 `Blocks per group:` 的形态变化而失效
+fn ext_bytes(text: &str) -> io::Result<u64> {
+    let blocks = parse_num_lead(text, "Block count:")?;
+    let block_size = parse_num_lead(text, "Block size:")?;
+    blocks.checked_mul(block_size).ok_or_else(|| {
+        io::Error::other(format!("dumpe2fs block count × block size overflows ({blocks} × {block_size})"))
+    })
+}
+
+/// ext 的放置单元：`Block size:` × `Blocks per group:`
+fn ext_unit(text: &str) -> io::Result<u64> {
+    let block_size = parse_num_lead(text, "Block size:")?;
+    let per_group = parse_num_lead(text, "Blocks per group:")?;
+    block_size.checked_mul(per_group).ok_or_else(|| {
+        io::Error::other(format!(
+            "dumpe2fs block size × blocks per group overflows ({block_size} × {per_group})"
+        ))
+    })
+}
+
+/// 只取总字节：缩容核对只需要尺寸，分配单元在那一侧不参与判据。
+/// 每种 FS 只解析自己的尺寸字段，不经过 [`read_fs_geometry`] 的分配单元
 pub(crate) fn read_fs_bytes(kind: FsKind, dev: &str) -> io::Result<u64> {
-    Ok(read_fs_geometry(kind, dev)?.bytes)
+    match kind {
+        FsKind::Ext => ext_bytes(&dumpe2fs_text(dev)?),
+        FsKind::Ntfs => Ok(parse_num_lead(&ntfsresize_info_text(dev)?, "Current volume size:")?),
+        FsKind::Btrfs => Ok(parse_num_lead(&btrfs_superblock_text(dev)?, "total_bytes")?),
+        other => Err(io::Error::other(format!(
+            "no size read-back wired for {}",
+            content_name(ContentKind::Filesystem(other))
+        ))),
+    }
 }
 
 /// ext 最小尺寸（字节）= -P 估计块数 × 块大小。
@@ -206,7 +223,7 @@ pub(crate) fn read_fs_bytes(kind: FsKind, dev: &str) -> io::Result<u64> {
 /// 该 man 的 KNOWN BUGS 指出 1K/2K 块文件系统上估计值可能不准），
 /// 块大小取自 dumpe2fs -h 的 "Block size:" 行（man dumpe2fs：-h 只读超级块）
 pub(crate) fn min_bytes_ext(dev: &str) -> Result<u64, FsError> {
-    let out = run_read("resize2fs", &["-P", dev])?;
+    let out = resize2fs_min_blocks(dev)?;
     let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
     if !out.status.success() {
         // 工具跑起来了但退非零。`-P` 是只读查询，实际未写盘；这里按 `CommandFailed`
@@ -214,7 +231,7 @@ pub(crate) fn min_bytes_ext(dev: &str) -> Result<u64, FsError> {
         return Err(FsError::CommandFailed(format!("resize2fs -P failed ({}): {}", describe_exit(&out.status), text.trim())));
     }
     let blocks = parse_num_lead(&text, "Estimated minimum size of the filesystem:")?;
-    let out2 = run_read("dumpe2fs", &["-h", dev])?;
+    let out2 = dumpe2fs_superblock(dev)?;
     let text2 = format!("{}{}", String::from_utf8_lossy(&out2.stdout), String::from_utf8_lossy(&out2.stderr));
     if !out2.status.success() {
         return Err(FsError::CommandFailed(format!("dumpe2fs -h failed ({}): {}", describe_exit(&out2.status), text2.trim())));

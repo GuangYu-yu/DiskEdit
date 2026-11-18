@@ -23,7 +23,9 @@ mk() { # $1=fs  $2=size
 
 echo "########## A: check 命令（从未运行过的分支）##########"
 mk ext4 300M
-OUT=$($B check "$T":1 2>&1); echo "clean fs  -> exit=$? : $(echo "$OUT" | tail -1)"
+OUT=$($B check "$T":1 2>&1); E=$?
+echo "clean fs  -> exit=$E : $(echo "$OUT" | tail -1)"
+exp "$E" 0 "check（干净 ext4）"
 # 破坏 ext4 超级块 → check 应报问题（非 0 或明确提示）
 LD=$(lo_attach "$T"); mount_at "${LD}p1" "$TEST_MNT" && { umount "$TEST_MNT" 2>/dev/null; }
 lo_detach "$LD"
@@ -39,7 +41,9 @@ truncate -s 200M "$SF"
 mkfs.ext4 -q -F "$SF"
 truncate -s 300M "$SF"      # 设备变大，FS 仍 200M
 OUT=$($B resize --yes "$SF" grow 2>&1); E=$?
+# 依据：superfloppy 走 applied_with(无待办)（src/cmd/resize/superfloppy.rs:84）→ 完整成功 0（src/outcome.rs:598）
 echo "exit=$E : $(echo "$OUT" | tail -1)"
+exp "$E" 0 "superfloppy 扩容（ext4）完整成功"
 LD=$(lo_attach "$SF"); mount_at "$LD" "$TEST_MNT" 2>/dev/null && { echo "after: $(df -h --output=size "$TEST_MNT" | tail -1)（期望 ~293M）"; umount "$TEST_MNT" 2>/dev/null; }; lo_detach "$LD"
 # 拒绝路径：unknown（全零盘）
 rm -rf "$SF"; truncate -s 100M "$SF"
@@ -131,9 +135,9 @@ echo
 echo "########## G: --sector-size 显式传参（镜像文件按 4096 布局）##########"
 rm_img "$T"
 truncate -s 1G "$T"
-$B new "$T" --yes --sector-size 4096 >/dev/null 2>&1; echo "new exit=$?"
+$B new "$T" --yes --sector-size 4096 >/dev/null 2>&1; exp $? 0 "new（--sector-size 4096）"
 $B info "$T" | grep -o '"sector_size":[0-9]*'
-$B add --yes "$T" 268435456 --start 256 --name p1 >/dev/null 2>&1; echo "add(256..65791) exit=$?"
+$B add --yes "$T" 268435456 --start 256 --name p1 >/dev/null 2>&1; exp $? 0 "add（256..65791，4K 扇区）"
 $B info "$T" | grep -o '"num":1,[^}]*}'
 
 echo

@@ -21,13 +21,13 @@ echo "md5 before: $MD"
 lo_detach "$LD"
 
 # a 是 grow 目标且没有 FS：扩分区表要显式 --no-fs（本段只验最小位移搬移不动 b 的数据）
-$B resize "$T":1 +100M --allow-move --yes --chunk 1 --no-fs; echo "exit=$?"
+$B resize "$T":1 +100M --allow-move --yes --chunk 1 --no-fs; exp $? 0 "resize --allow-move（最小位移）"
 
 LD=$(lo_attach "$T")
 MD2=$(mdsum "${LD}p2")
 echo "md5 after:  $MD2"
 [ "$MD" = "$MD2" ] && echo "NO-KILL SHIFT DATA OK" || { echo "NO-KILL SHIFT DATA CORRUPT"; rc=1; }
 umount "$TEST_MNT" 2>/dev/null
-e2fsck -f -y "${LD}p2" >/dev/null 2>&1; echo "e2fsck exit=$?"
+e2fsck -f -y "${LD}p2" >/dev/null 2>&1; exp $? 0 "e2fsck -f -y（0=clean）"
 lo_detach "$LD"
 exit $rc

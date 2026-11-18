@@ -25,7 +25,7 @@ use super::scene::{Mapping, SceneIdentity, SceneProof};
 
 /// 格式家族的标识字节：此标识下的搬移位移是有符号值、搬移段带已拷前缀摘要，
 /// 别的标识一律解码失败
-pub(crate) const MAGIC: [u8; 4] = *b"DSK5";
+pub(crate) const MAGIC: [u8; 4] = *b"DSK6";
 pub(crate) const HEADER_LEN: usize = 16;
 
 const HEADER_CRC_RANGE: std::ops::Range<usize> = 0..12;
@@ -35,6 +35,16 @@ const TAIL_UNREAD: &str = "the payload's tail was not decoded (prefix only)";
 
 fn crc32(bytes: &[u8]) -> u32 {
     crc::Crc::<u32>::new(&crc::CRC_32_ISO_HDLC).checksum(bytes)
+}
+
+/// 把一段 16 字节头部的 `header_crc` 补成自洽值。测试用：让"头部 CRC 通过、载荷
+/// 声明/内容不成立"的形态可达，从而单独验证解码失败的分类
+#[cfg(test)]
+pub(crate) fn with_valid_header_crc(mut bytes: Vec<u8>) -> Vec<u8> {
+    assert!(bytes.len() >= HEADER_LEN, "a header needs at least {HEADER_LEN} bytes");
+    let crc = crc32(&bytes[HEADER_CRC_RANGE]);
+    bytes[12..16].copy_from_slice(&crc.to_le_bytes());
+    bytes
 }
 
 /// 记录头。`header_crc` 覆盖 `0..12`，`payload_crc` 覆盖载荷全部字节
@@ -514,10 +524,14 @@ pub(crate) enum CrcRegion {
     Payload,
 }
 
-/// 解码失败的三类形态
+/// 解码失败的形态。**"不是本构建的记录"与"是，但读不通"必须分开**：
+/// 前者只凭头部标识就能断言，后者说明落点上的字节是本工具的，只是形状/长度/CRC 不对，
+/// 两者的删除资格与回滚结论不同
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum DecodeFailure {
-    /// magic 或载荷形状不属于本构建；`recorded` 只在能解析到身份段时有值
+    /// 头部标识不是本构建的 `MAGIC`（或不足 4 字节，无从识别）
+    NotOurs { magic: [u8; 4] },
+    /// `MAGIC` 对得上，但载荷形状/长度不属于本构建；`recorded` 只在能解析到身份段时有值
     Format { magic: [u8; 4], recorded: Option<SceneIdentity> },
     /// 观察到的字节数与记录声明的长度不符
     Incomplete { observed: u64, expected: u64 },
@@ -664,9 +678,6 @@ pub(crate) struct Record {
     /// 表步围栏：没有搬移计划的记录用它表达表步走到哪一步。只解到前缀的记录给不出
     /// 这一段（`Undecidable`）
     pub(crate) table_fence: Fact<TableFence>,
-    /// 盘上 `stages[]` 段的原始字节（含两字节条数）。解码只校验定长头与取值，
-    /// 不解释语义；重写时逐字节回写，条数不属于本类型的字段
-    pub(crate) stages: Vec<u8>,
     pub(crate) action: RecoveryAction,
     pub(crate) commit: CommitState,
     pub(crate) retention: Retention,
@@ -707,7 +718,6 @@ impl Record {
             entry_table_in_flight: Fact::Absent,
             repair: Fact::Absent,
             table_fence: Fact::Known(TableFence::Pending),
-            stages: vec![0, 0],
             action: RecoveryAction::InspectOnly,
             commit: CommitState::Prepared,
             retention: Retention::Active,
@@ -926,6 +936,30 @@ impl Record {
                 );
             }
         }
+        // 提交前区间与 LVM 基线只属于会移动分区落位的操作，读出侧对同样的组合报错
+        if self.old_range.is_some() && !matches!(self.op, OpKind::Resize | OpKind::ResizeEnd | OpKind::Move) {
+            return Err(format!(
+                "the record carries a pre-commit range for `{:?}`, which does not move the partition",
+                self.op
+            ));
+        }
+        if self.lvm_post.is_some() && self.op != OpKind::Resize {
+            return Err(format!(
+                "the record carries an LVM baseline for `{:?}`, which does not resize the PV",
+                self.op
+            ));
+        }
+        // 在飞位：落在搬移计划之内且等于当前条目游标；没有搬移计划时不能出现
+        // audit-allow: W-19
+        if let Fact::Known(in_flight) = &self.entry_table_in_flight {
+            let matches_cursor = self
+                .relocation
+                .as_ref()
+                .is_some_and(|reloc| (*in_flight as usize) < reloc.entries.len() && *in_flight == reloc.entry_index);
+            if !matches_cursor {
+                return Err(format!("in-flight entry {in_flight} contradicts the relocation cursor"));
+            }
+        }
         Ok(())
     }
 
@@ -981,8 +1015,6 @@ impl Record {
         self.action.write(&mut out);
         out.push(self.commit.tag());
         out.push(self.retention.tag());
-        // `stages` 段原字节回写：条数、各条定长头与正文都不重新生成
-        out.extend_from_slice(&self.stages);
         write_scene(&self.target, &mut out);
         out.extend(self.disk_guid.encode());
         out.push(u8::from(self.restore_blocked));
@@ -1065,15 +1097,15 @@ fn write_entry(entry: &RestoreEntry, out: &mut Vec<u8>) {
     out.extend(crc.to_le_bytes());
 }
 
-/// 解码一份完整记录。magic 不符或内容与格式定义不符都返回 [`DecodeFailure::Format`]，
-/// CRC 失败单独成类
+/// 解码一份完整记录。头部标识不符返回 [`DecodeFailure::NotOurs`]，标识相符而内容与
+/// 格式定义不符返回 [`DecodeFailure::Format`]，CRC 失败单独成类
 pub(crate) fn decode(bytes: &[u8]) -> Result<Record, DecodeFailure> {
     let mut magic = [0u8; 4];
     for (slot, byte) in magic.iter_mut().zip(bytes.iter()) {
         *slot = *byte;
     }
     if bytes.len() < 4 || magic != MAGIC {
-        return Err(DecodeFailure::Format { magic, recorded: None });
+        return Err(DecodeFailure::NotOurs { magic });
     }
     if bytes.len() < HEADER_LEN {
         return Err(DecodeFailure::Incomplete {
@@ -1257,24 +1289,6 @@ fn read_payload_prefix(c: &mut Cursor<'_>) -> Option<(Record, usize)> {
     };
     let commit = CommitState::from_tag(c.u8()?)?;
     let retention = Retention::from_tag(c.u8()?)?;
-    // `stages` 段：条数之后逐条是 1 字节 tag、1 字节 ok、4 字节正文长度与正文。
-    // 只校验结构（tag 属于已知集合、ok 为 0/1、正文是 UTF-8、长度不越界），
-    // 不做语义映射；整段原始字节留给重写回放
-    let stages_start = c.pos;
-    let stage_count = c.u16()? as usize;
-    for _ in 0..stage_count {
-        match c.u8()? {
-            1..=4 => {}
-            _ => return None,
-        }
-        match c.u8()? {
-            0 | 1 => {}
-            _ => return None,
-        }
-        let len = c.u32()? as usize;
-        std::str::from_utf8(c.take(len)?).ok()?;
-    }
-    let stages = c.bytes_between(stages_start, c.pos).to_vec();
     let target = read_scene(c)?;
     let disk_guid = DiskGuidState::decode(c.take(crate::dev::CREDENTIAL_LEN)?).ok()?;
     let restore_blocked = match c.u8()? {
@@ -1298,7 +1312,6 @@ fn read_payload_prefix(c: &mut Cursor<'_>) -> Option<(Record, usize)> {
         entry_table_in_flight: Fact::Undecidable(TAIL_UNREAD.into()),
         repair: Fact::Undecidable(TAIL_UNREAD.into()),
         table_fence: Fact::Undecidable(TAIL_UNREAD.into()),
-        stages,
         action,
         commit,
         retention,
@@ -1573,10 +1586,6 @@ impl<'a> Cursor<'a> {
         Some(self.take(1)?[0])
     }
 
-    fn u16(&mut self) -> Option<u16> {
-        Some(u16::from_le_bytes(self.array::<2>()?))
-    }
-
     fn u32(&mut self) -> Option<u32> {
         Some(u32::from_le_bytes(self.array::<4>()?))
     }
@@ -1713,93 +1722,6 @@ mod relocation_round_trip {
     }
 }
 
-/// `stages` 段：解码保留原始字节，重写时逐字节回写；非法 tag / ok / UTF-8 仍被拒
-#[cfg(test)]
-mod stages_segment {
-    use super::*;
-
-    /// `stages` 段在载荷内的起点：条数之前的定长字段
-    /// （tx_id、plan_id、版本、操作、摘要、进度、三个可选段标记、动作、提交、保留）
-    const STAGES_AT: usize = 100;
-
-    fn image_target() -> SceneIdentity {
-        SceneIdentity::from_target(
-            TargetId::from_material(IdentityMaterial::image(None, Some([3; 16])).unwrap()),
-        )
-    }
-
-    fn fresh() -> Vec<u8> {
-        let mut record = Record::new(
-            TxId::from_bytes([1; 16]),
-            image_target(),
-            PlanId::from_bytes([2; 16]),
-            PlanVersion::new(1),
-            OpKind::ResizeEnd,
-            PlanDigest::from_bytes([4; 32]),
-            DiskGuidState::Unavailable,
-        );
-        record.encode().unwrap()
-    }
-
-    fn stages(entries: &[(u8, u8, &[u8])]) -> Vec<u8> {
-        let mut out = u16::try_from(entries.len()).unwrap().to_le_bytes().to_vec();
-        for (tag, ok, detail) in entries {
-            out.push(*tag);
-            out.push(*ok);
-            out.extend(u32::try_from(detail.len()).unwrap().to_le_bytes());
-            out.extend_from_slice(detail);
-        }
-        out
-    }
-
-    /// 把构造好的段替进一份新记录，并重算载荷长度、载荷 CRC 与头 CRC
-    fn with_stages(segment: &[u8]) -> Vec<u8> {
-        let bytes = fresh();
-        let mut payload = bytes[HEADER_LEN..].to_vec();
-        payload.splice(STAGES_AT..STAGES_AT + 2, segment.iter().copied());
-        let mut out = bytes[..HEADER_LEN].to_vec();
-        out[4..8].copy_from_slice(&u32::try_from(payload.len()).unwrap().to_le_bytes());
-        out[8..12].copy_from_slice(&crc32(&payload).to_le_bytes());
-        let header_crc = crc32(&out[HEADER_CRC_RANGE]);
-        out[12..16].copy_from_slice(&header_crc.to_le_bytes());
-        out.extend_from_slice(&payload);
-        out
-    }
-
-    #[test]
-    fn a_non_empty_stages_segment_is_written_back_byte_for_byte() {
-        let segment = stages(&[(1, 1, b"ok"), (4, 0, b"cursor short")]);
-        let bytes = with_stages(&segment);
-        let mut decoded = decode(&bytes).expect("a non-empty stages segment still decodes");
-        let reencoded = decoded.encode().unwrap();
-        assert_eq!(reencoded, bytes);
-        let at = HEADER_LEN + STAGES_AT;
-        assert_eq!(&reencoded[at..at + segment.len()], segment.as_slice());
-    }
-
-    #[test]
-    fn unknown_tag_bad_ok_and_non_utf8_detail_are_rejected() {
-        for (label, segment) in [
-            ("unknown tag", stages(&[(5, 1, b"x")])),
-            ("zero tag", stages(&[(0, 1, b"x")])),
-            ("ok is not a bit", stages(&[(1, 2, b"x")])),
-            ("detail is not utf-8", stages(&[(1, 1, &[0x80])])),
-        ] {
-            assert!(decode(&with_stages(&segment)).is_err(), "{label} must be rejected");
-        }
-    }
-
-    #[test]
-    fn a_zero_count_segment_keeps_the_scene_at_its_offset() {
-        let bytes = fresh();
-        let payload = &bytes[HEADER_LEN..];
-        let mut scene = Vec::new();
-        write_scene(&image_target(), &mut scene);
-        assert_eq!(&payload[STAGES_AT..STAGES_AT + 2], &0u16.to_le_bytes());
-        let scene_at = STAGES_AT + 2;
-        assert_eq!(&payload[scene_at..scene_at + scene.len()], scene.as_slice());
-    }
-}
 
 /// 尾段：在飞位、表区修复与表步围栏。三段都必须出现，段后不得有多余字节
 #[cfg(test)]
@@ -1949,7 +1871,7 @@ mod record_tails {
             bytes[0..4].copy_from_slice(&magic);
             rehash(&mut bytes);
 
-            assert_eq!(decode(&bytes), Err(DecodeFailure::Format { magic, recorded: None }));
+            assert_eq!(decode(&bytes), Err(DecodeFailure::NotOurs { magic }));
         }
     }
 
@@ -1994,17 +1916,17 @@ mod record_tails {
         assert!(matches!(decode(&bytes), Err(DecodeFailure::Format { .. })));
     }
 
-    /// 在飞位必须落在搬移计划之内且等于当前游标；没有搬移计划不能出现在飞位
+    /// 在飞位必须落在搬移计划之内且等于当前游标；没有搬移计划不能出现在飞位。
+    /// 编码前按同一判据拒绝，读侧另有同样的校验挡住被改写的字节
     #[test]
-    fn an_in_flight_entry_that_contradicts_the_plan_is_refused() {
+    fn an_in_flight_entry_that_contradicts_the_plan_cannot_be_encoded() {
         for (label, mut record) in [
             ("an in-flight entry before the cursor", with_in_flight(moving_record(2, 1), Fact::Known(0))),
             ("an in-flight entry after the cursor", with_in_flight(moving_record(2, 0), Fact::Known(1))),
             ("an in-flight entry past the plan", with_in_flight(moving_record(1, 1), Fact::Known(1))),
             ("an in-flight entry without a plan", with_in_flight(table_only_record(), Fact::Known(0))),
         ] {
-            let bytes = record.encode().unwrap();
-            assert!(matches!(decode(&bytes), Err(DecodeFailure::Format { .. })), "{label}");
+            assert!(record.encode().is_err(), "{label}");
         }
     }
 

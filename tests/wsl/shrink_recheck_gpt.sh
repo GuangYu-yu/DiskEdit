@@ -39,7 +39,9 @@ $B mkfs "$T":1 ext4 --yes >/dev/null || { echo "  BAD  fixture: mkfs failed"; rc
 OUT=$($BFK resize "$T":1 --end 616447 --yes 2>&1); E=$?
 echo "exit=$E"
 echo "$OUT" | sed 's/^/    /'
-exp "$E" 3 "首写之前读当前表、不一致即拒绝"
+# 拒绝发生在目标字节写入之前（下面整镜像摘要不变），但本次运行已先落恢复记录：
+# 记录的落盘由 src/outcome.rs 的 PersistedChange::Records 计为持久变化，故结论是 5
+exp "$E" 5 "首写之前读当前表、不一致即拒绝（记录已落盘）"
 if [ ! -s "$HASH" ]; then
     echo "  BAD  注入未触发：fs_min_bytes 探测期间的表改动没有发生"
     rc=1

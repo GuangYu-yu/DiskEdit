@@ -211,6 +211,11 @@ fn a_refused_check_writes_nothing() {
 #[test]
 fn a_successful_check_writes_nothing() {
     if unsafe { libc::geteuid() } != 0 {
+        // 声明要 root 的 CI 作业里不允许静默跳过：跳过会让整套用例"全绿"而实则没测
+        assert!(
+            std::env::var_os("DISKEDIT_REQUIRE_ROOT").is_none(),
+            "this test needs root, but DISKEDIT_REQUIRE_ROOT is set (the CI job must run it as root)"
+        );
         eprintln!("skipping a_successful_check_writes_nothing: needs euid 0 for loop + e2fsck");
         return;
     }

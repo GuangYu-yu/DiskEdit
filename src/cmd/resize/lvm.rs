@@ -12,13 +12,14 @@ use crate::movepart::{LvmPostFacts, LvmSelection};
 #[cfg(target_os = "linux")]
 pub(crate) fn preflight_lvm_tools(grow_lv: bool, needs_loop: bool) -> Result<(), crate::fsops::FsError> {
     // pvs 供 pvresize 后的 dev_size 核对；grow-lv 另需 lvs/vgs 定位 LV 与 extent、lvextend 扩 LV
-    let tools: &[&str] = match (grow_lv, needs_loop) {
-        (true, true) => &["pvresize", "pvs", "lvs", "vgs", "lvextend", "losetup"],
-        (true, false) => &["pvresize", "pvs", "lvs", "vgs", "lvextend"],
-        (false, true) => &["pvresize", "pvs", "losetup"],
-        (false, false) => &["pvresize", "pvs"],
+    use crate::fsops::Tool;
+    let tools: &[Tool] = match (grow_lv, needs_loop) {
+        (true, true) => &[Tool::Pvresize, Tool::Pvs, Tool::Lvs, Tool::Vgs, Tool::Lvextend, Tool::Losetup],
+        (true, false) => &[Tool::Pvresize, Tool::Pvs, Tool::Lvs, Tool::Vgs, Tool::Lvextend],
+        (false, true) => &[Tool::Pvresize, Tool::Pvs, Tool::Losetup],
+        (false, false) => &[Tool::Pvresize, Tool::Pvs],
     };
-    tools.iter().try_for_each(|t| crate::fsops::require_tool(t))
+    tools.iter().try_for_each(|t| t.require())
 }
 
 /// 只读定位 `part_dev` 上的目标顶层 LV：`--lv` 精确匹配裸名或 `vg/lv`（判据是裸名相等，

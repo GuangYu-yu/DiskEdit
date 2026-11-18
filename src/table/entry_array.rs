@@ -20,10 +20,18 @@ pub const DEFAULT_ENTRY_COUNT: u32 = 128;
 
 pub const DEFAULT_ENTRY_SIZE: u32 = 128;
 
+/// 单条目内规范定义字段的字节数（UEFI 2.10 §5.3.3 Table 5.6）：条目序列化与解析
+/// 都按这个长度切片，其余为保留区
+pub(crate) const ENTRY_FIXED_BYTES: usize = 128;
+
+/// 分区名字段在条目内的起点与长度（UTF-16LE，UEFI 2.10 §5.3.3 Table 5.6）
+pub(crate) const ENTRY_NAME_OFFSET: usize = 56;
+pub(crate) const ENTRY_NAME_LEN: usize = 72;
+
 /// 单条目字节数合规判据：UEFI 2.10 §5.3.3 Table 5.6 规定 SizeOfPartitionEntry = 128 × 2^n，
-/// 前 128 字节为规范定义字段，其余为保留区（必须为零）
+/// 前 [`ENTRY_FIXED_BYTES`] 字节为规范定义字段，其余为保留区（必须为零）
 pub fn entry_size_ok(entry_size: u32) -> bool {
-    entry_size >= 128 && entry_size.is_power_of_two()
+    entry_size as usize >= ENTRY_FIXED_BYTES && entry_size.is_power_of_two()
 }
 
 pub(crate) fn invalid_geom(msg: impl Into<String>) -> io::Error {
@@ -46,9 +54,9 @@ impl EntryArrayGeometry {
     pub fn new(sector_size: u64, entry_size: u32, entry_count: u32, max_array_bytes: u64) -> io::Result<Self> {
         // 512 是保护 MBR 记录（446..512）能被索引的下界，也是 UEFI 逻辑块的下界：
         // 更小的几何会让 ensure_protective_mbr 在写缓冲时越界
-        if sector_size < 512 {
+        if sector_size < MBR_SECTOR_BYTES as u64 {
             return Err(invalid_geom(format!(
-                "GPT entry geometry: sector size {sector_size} is below the 512-byte minimum"
+                "GPT entry geometry: sector size {sector_size} is below the {MBR_SECTOR_BYTES}-byte minimum"
             )));
         }
         if entry_count == 0 || !entry_size_ok(entry_size) {

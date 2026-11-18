@@ -35,7 +35,7 @@ mount_at "${LD}p1" "$TEST_MNT" 2>/dev/null && {
   [ "$MF" = "$(mdsum "$TEST_MNT"/f.bin)" ] && echo "F2FS DATA OK" || { echo "F2FS DATA CORRUPT"; rc=1; }
   umount "$TEST_MNT" 2>/dev/null
 }
-fsck.f2fs -f "${LD}p1" >/dev/null 2>&1; echo "fsck.f2fs exit=$? (0=clean)"
+fsck.f2fs -f "${LD}p1" >/dev/null 2>&1; exp $? 0 "fsck.f2fs（0=clean）"
 lo_detach "$LD"
 sgdisk -v "$T" >/dev/null 2>&1 && echo "sgdisk clean" || { echo "sgdisk ISSUES"; rc=1; }
 
@@ -57,7 +57,7 @@ mount_at "${LD}p1" "$TEST_MNT" 2>/dev/null && {
   [ "$MV" = "$(mdsum "$TEST_MNT"/v.bin)" ] && echo "VFAT DATA OK" || { echo "VFAT DATA CORRUPT"; rc=1; }
   umount "$TEST_MNT" 2>/dev/null
 }
-fsck.vfat -n "${LD}p1" >/dev/null 2>&1; echo "fsck.vfat exit=$? (0=clean)"
+fsck.vfat -n "${LD}p1" >/dev/null 2>&1; exp $? 0 "fsck.vfat（0=clean）"
 lo_detach "$LD"
 
 echo
@@ -74,7 +74,7 @@ echo "C 分区表: $($B info "$T" | grep -o '"num":1,[^}]*}' | grep -o '"size_by
 LD=$(lo_attach "$T")
 lo_waitpart "${LD}p1" || { echo "p1 part node not ready"; rc=1; lo_detach "$LD"; }
 mount_at "${LD}p1" "$TEST_MNT" 2>/dev/null && { [ "$ME" = "$(mdsum "$TEST_MNT"/e.bin)" ] && echo "EXFAT DATA OK" || { echo "EXFAT DATA CORRUPT"; rc=1; }; umount "$TEST_MNT" 2>/dev/null; }
-fsck.exfat -n "${LD}p1" >/dev/null 2>&1; echo "fsck.exfat exit=$? (0=clean)"
+fsck.exfat -n "${LD}p1" >/dev/null 2>&1; exp $? 0 "fsck.exfat（0=clean）"
 lo_detach "$LD"
 
 echo
@@ -97,7 +97,7 @@ mount_at "${LD}p3" "$TEST_MNT" && { dd if=/dev/urandom of="$TEST_MNT/lin.bin" bs
 lo_detach "$LD"
 echo "-- 搬移中间的 Linux 分区到尾部空闲区 --"
 $B info "$T" | grep -o '"num":[0-9]*,"first_lba":[0-9]*,"last_lba":[0-9]*'
-$B move "$T":3 --start 2300000 --chunk 4 --yes >/dev/null 2>&1; echo "move exit=$?"
+$B move "$T":3 --start 2300000 --chunk 4 --yes >/dev/null 2>&1; exp $? 0 "move（中间 Linux 分区搬移到尾部空闲区）"
 $B info "$T" | grep -o '"num":[0-9]*,"first_lba":[0-9]*,"last_lba":[0-9]*'
 echo "-- 未搬移分区的类型 GUID 应原样（ESP/MSR/recovery）--"
 for n in 1 2 4; do
@@ -124,7 +124,7 @@ SQSRC=$WSL_ROOT/t25sqsrc
 SQIMG=$WSL_ROOT/t25sq.sqfs
 rm -rf "$SQSRC" "$SQIMG"; mkdir -p "$SQSRC"
 head -c 2000000 /dev/urandom > "$SQSRC/blob.bin" 2>/dev/null
-mksquashfs "$SQSRC" "$SQIMG" -noappend >/dev/null 2>&1; echo "mksquashfs exit=$?"
+mksquashfs "$SQSRC" "$SQIMG" -noappend >/dev/null 2>&1; exp $? 0 "mksquashfs（造 squashfs 根）"
 BU=$(od -An -tu8 -j 40 -N8 "$SQIMG" | tr -d ' ')
 OFF=$(( (BU + 65535) / 65536 * 65536 ))
 echo "squashfs bytes_used=$BU overlay_off=$OFF"
@@ -136,7 +136,7 @@ PS=$((2048 * 512)); PLEN=$(( (524287 - 2048 + 1) * 512 ))
 dd if="$SQIMG" of="$T" bs=512 seek=2048 conv=notrunc 2>/dev/null
 INNER=$(( (PLEN - OFF) / 2 ))
 LO1=$(losetup -f --show -o $((PS + OFF)) --sizelimit "$INNER" "$T")
-mkfs.ext4 -q -F "$LO1" >/dev/null 2>&1; echo "mkfs inner ext4 exit=$?"
+mkfs.ext4 -q -F "$LO1" >/dev/null 2>&1; exp $? 0 "mkfs 内层 ext4（overlay）"
 B0=$(dumpe2fs -h "$LO1" 2>/dev/null | awk '/^Block count:/ {print $3}')
 losetup -d "$LO1"
 OUT=$($B resizefs --yes "$T":1 2>&1); E=$?
@@ -219,7 +219,7 @@ ERSRC=$WSL_ROOT/t25ersrc
 img ERIMG t25er.img
 rm -rf "$ERSRC" "$ERIMG"; mkdir -p "$ERSRC"
 head -c 2000000 /dev/urandom > "$ERSRC/blob.bin" 2>/dev/null
-mkfs.erofs "$ERIMG" "$ERSRC" >/dev/null 2>&1; echo "mkfs.erofs exit=$?"
+mkfs.erofs "$ERIMG" "$ERSRC" >/dev/null 2>&1; exp $? 0 "mkfs.erofs（造 erofs 根）"
 BLKSZ=$(od -An -tu1 -j 1036 -N1 "$ERIMG" | tr -d ' ')
 # blocks 为超级块内偏移 0x24 的 u32：文件内偏移 = 1024+36 = 1060（0x10 处是 inos，勿混）
 NBLK=$(od -An -tu4 -j 1060 -N4 "$ERIMG" | tr -d ' ')
@@ -233,7 +233,7 @@ PS=$((2048 * 512)); PLEN=$(( (524287 - 2048 + 1) * 512 ))
 dd if="$ERIMG" of="$T" bs=512 seek=2048 conv=notrunc 2>/dev/null
 INNER=$(( (PLEN - OFF) / 2 ))
 LO1=$(losetup -f --show -o $((PS + OFF)) --sizelimit "$INNER" "$T")
-mkfs.ext4 -q -F "$LO1" >/dev/null 2>&1; echo "mkfs inner ext4 exit=$?"
+mkfs.ext4 -q -F "$LO1" >/dev/null 2>&1; exp $? 0 "mkfs 内层 ext4（overlay）"
 B0=$(dumpe2fs -h "$LO1" 2>/dev/null | awk '/^Block count:/ {print $3}')
 losetup -d "$LO1"
 OUT=$($B resizefs --yes "$T":1 2>&1); E=$?

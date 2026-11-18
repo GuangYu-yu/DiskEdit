@@ -307,7 +307,12 @@ pub(crate) fn probe_companion(record: &Path) -> CompanionProbe {
 fn classify_bytes(bytes: &[u8]) -> CompanionProbe {
     match super::record::decode(bytes) {
         Ok(record) => CompanionProbe::Decoded(record),
-        Err(super::record::DecodeFailure::Format { .. }) => CompanionProbe::Foreign,
+        // 头部标识不符：落点上的东西不是本构建的记录
+        Err(super::record::DecodeFailure::NotOurs { .. }) => CompanionProbe::Foreign,
+        // 标识对得上而载荷读不通：是本工具的记录，只是损坏了，不能当外来条目
+        Err(super::record::DecodeFailure::Format { .. }) => CompanionProbe::Damaged(
+            "the record carries this build's magic, but its payload does not decode".to_string(),
+        ),
         Err(super::record::DecodeFailure::Incomplete { observed, expected }) => CompanionProbe::Damaged(format!(
             "the record is incomplete ({observed} of {expected} byte(s))"
         )),
@@ -341,6 +346,31 @@ pub(crate) fn read_companion(_record: &Path, _current: &SceneIdentity) -> Result
     Err(RecordJournalError::Unsupported(
         "this platform has no directory-relative read primitive; recovery records are refuse-only".to_string(),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::recovery::record;
+
+    /// 头部标识不符才是"外来条目"；本构建的标识 + 读不通的载荷是**损坏**。
+    /// 把后者归成外来条目会把"可能还能回滚"说成"一定不能"（`rollback_proof` 的
+    /// `Disproven`），也会让 `inspect` 把它当成别的工具留下的文件
+    #[test]
+    fn our_magic_with_an_undecodable_payload_is_damaged_not_foreign() {
+        let mut bytes = Vec::from(record::MAGIC);
+        bytes.extend_from_slice(&u32::MAX.to_le_bytes());
+        bytes.extend_from_slice(&[0u8; 8]);
+        let bytes = record::with_valid_header_crc(bytes);
+        assert!(
+            matches!(classify_bytes(&bytes), CompanionProbe::Damaged(_)),
+            "{:?}",
+            classify_bytes(&bytes)
+        );
+
+        let foreign = b"XXXX\0\0\0\0\0\0\0\0\0\0\0\0";
+        assert!(matches!(classify_bytes(foreign), CompanionProbe::Foreign), "a different magic is foreign");
+    }
 }
 
 /// 把已回滚的记录标记为已提交并删除。

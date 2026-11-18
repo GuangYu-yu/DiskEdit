@@ -103,7 +103,7 @@ pub fn parse_fstype(name: &str) -> Result<MkfsFs, FsError> {
 /// - `-f` 语义各工具不类推：mkntfs 的 -f 是 fast 格式化而非 force（force 为 -F），
 ///   故 ntfs 不传 -f，让工具自身拒绝已有文件系统（man mkntfs）
 pub(crate) struct MkfsTool {
-    pub(crate) program: String,
+    pub(crate) program: Tool,
     pub(crate) force: bool,
     /// `mke2fs -t <ext_type>`；只有 ext2/3/4 携带
     pub(crate) ext_type: Option<MkfsFs>,
@@ -116,10 +116,14 @@ pub(crate) struct MkfsTool {
 pub(crate) fn mkfs_tool(fstype: MkfsFs) -> Result<MkfsTool, FsError> {
     let (program, force, ext_type) = match fstype {
         // mkfs.extN 只是 mke2fs 等价 -t extN 的符号链接（man mke2fs），直调 mke2fs 免依赖链接布局
-        MkfsFs::Ext2 | MkfsFs::Ext3 | MkfsFs::Ext4 => ("mke2fs".to_string(), false, Some(fstype)),
-        MkfsFs::Vfat | MkfsFs::Exfat | MkfsFs::Ntfs => (format!("mkfs.{}", fstype.as_str()), false, None),
-        MkfsFs::Xfs | MkfsFs::Btrfs | MkfsFs::F2fs => (format!("mkfs.{}", fstype.as_str()), true, None),
-        MkfsFs::Swap => ("mkswap".to_string(), false, None),
+        MkfsFs::Ext2 | MkfsFs::Ext3 | MkfsFs::Ext4 => (Tool::Mke2fs, false, Some(fstype)),
+        MkfsFs::Vfat => (Tool::MkfsVfat, false, None),
+        MkfsFs::Exfat => (Tool::MkfsExfat, false, None),
+        MkfsFs::Ntfs => (Tool::MkfsNtfs, false, None),
+        MkfsFs::Xfs => (Tool::MkfsXfs, true, None),
+        MkfsFs::Btrfs => (Tool::MkfsBtrfs, true, None),
+        MkfsFs::F2fs => (Tool::MkfsF2fs, true, None),
+        MkfsFs::Swap => (Tool::Mkswap, false, None),
         MkfsFs::Lvm2Pv => {
             return Err(FsError::unsupported(
                 "cannot mkfs an LVM2 PV — to (re)create the PV use pvcreate(8), to wipe it use wipefs(8)",
@@ -141,14 +145,7 @@ pub(crate) fn mkfs_tool(fstype: MkfsFs) -> Result<MkfsTool, FsError> {
 /// 屏障——一个拼错的类型名、或一个没装的工具包，都不该把目标锁在"未收尾"状态里等 `recover --release`
 pub fn mkfs_capability(fstype: MkfsFs) -> Result<(), FsError> {
     let tool = mkfs_tool(fstype)?;
-    find_tool(&tool.program).map(|_| ()).map_err(|e| match e {
-        FsError::ToolMissing(_) => FsError::missing(format!(
-            "cannot mkfs {fstype}: requires `{}` (package: {}) — not found in PATH",
-            tool.program,
-            tool_package(&tool.program)
-        )),
-        e => e,
-    })
+    tool.program.require_named(&format!("mkfs {fstype}"))
 }
 
 /// mkfs：破坏分区数据，调用方须先取确认；执行前先擦残留签名（见 erase_ranges），
@@ -221,11 +218,11 @@ pub fn mkfs(
     }
     args.push(dev.path());
     // 工具已拿到设备：启动失败与非零退出同样无法断言写没写、写了多少
-    let out = run_write(&tool.program, &args).map_err(|e| {
-        FsError::CommandFailed(format!("mkfs: {} was about to run but failed to execute, the target may already be partially erased: {e}", tool.program))
+    let out = tool.program.write(&args).map_err(|e| {
+        FsError::CommandFailed(format!("mkfs: {} was about to run but failed to execute, the target may already be partially erased: {e}", tool.program.name()))
     })?;
     if !out.status.success() {
-        return Err(FsError::command(&tool.program, &out));
+        return Err(FsError::command(tool.program.name(), &out));
     }
     crate::outcome::note_fs_writes_not_journaled();
     Ok(())

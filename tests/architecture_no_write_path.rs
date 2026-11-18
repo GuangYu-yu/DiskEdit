@@ -9,42 +9,76 @@ mod guards;
 
 use guards::{rust_sources, source};
 
-/// 允许出现目标/证据写原语的文件。清单与 `rust_sources` 的扫描范围一致：
-/// `tests/` 目录被跳过，其中的夹具直写只存在于 `#[cfg(test)]`，不在生产调用链上；
-/// `fsops/tests.rs` 是文件而非目录，仍在扫描范围内。`write_guarded`/`write_converged`
-/// 是派发到写入原语的守卫入口，`write_recorded`（回放写）与 `write_fixture`（测试夹具写）
-/// 同样是写入入口，调用它们的文件一并计入清单。
+/// 生产代码里会改持久状态的形态。比"字节写方法"宽：创建、改名、删除、截断同样改
+/// 持久状态，只盯 `write_all` 会漏掉 `create_new` + `rename` 这类通道。
+/// 局限：`std::io::Write::write`（非 `write_all`）与 `write_vectored` 不在其中，
+/// 新增写通道仍须按本文件的目的复核，不能把它当成完整枚举
+const WRITE_PRIMITIVES: &[&str] = &[
+    ".write_at(",
+    ".write_all(",
+    ".write_guarded(",
+    ".write_converged(",
+    ".write_recorded(",
+    ".write_fixture(",
+    ".write_data_at(",
+    ".write_raw(",
+    "pwrite(",
+    "renameat(",
+    "unlinkat(",
+    "fs::write(",
+    "fs::rename(",
+    "fs::remove_file(",
+    "fs::remove_dir(",
+    "fs::remove_dir_all(",
+    "fs::copy(",
+    "fs::hard_link(",
+    "fs::create_dir(",
+    "fs::create_dir_all(",
+    "Command::new(",
+    ".create(true)",
+    ".create_new(true)",
+    ".set_len(",
+];
+
+/// 允许出现写原语的文件。清单按**文件**而不是按调用点：守卫的承诺是"没有未登记的
+/// 模块能写"，不是"每个调用点都被审过"。`#[cfg(test)]` 的函数体与生产代码同文件时
+/// （如 `table/mbr.rs` 的夹具直写），该文件仍须登记
 const WRITE_SITES: &[&str] = &[
+    "dev/host_repo.rs",
+    "dev/identity.rs",
     "dev/source.rs",
+    "dev/target.rs",
     "execution/copy.rs",
     "execution/mod.rs",
     "execution/relocate.rs",
     "execution/table.rs",
     "fsops/env.rs",
+    "fsops/grow.rs",
     "fsops/swap.rs",
-    "fsops/tests.rs",
-    "gpt_policy.rs",
     "platform/evidence_store.rs",
     "recovery/journal.rs",
     "recovery/rollback.rs",
-    "table/create.rs",
+    "support.rs",
     "table/gpt_write.rs",
     "table/mbr.rs",
+    "targetlock.rs",
 ];
+
+/// 只在 `#[cfg(test)]` 下编译的独立模块文件（声明在 `main.rs`），与 `src/**/tests.rs`
+/// 一样不属于生产写点
+const TEST_ONLY_FILES: &[&str] = &["testdir.rs", "testrng.rs"];
 
 #[test]
 fn no_production_module_opens_a_new_write_path() {
     let mut found = Vec::new();
     for (rel, text) in rust_sources() {
-        let writes = text.contains(".write_at(")
-            || text.contains(".write_all(")
-            || text.contains(".write_guarded(")
-            || text.contains(".write_converged(")
-            || text.contains(".write_recorded(")
-            || text.contains(".write_fixture(")
-            || text.contains("pwrite(")
-            || text.contains("renameat(")
-            || text.contains("unlinkat(");
+        if rel.ends_with("/tests.rs") || TEST_ONLY_FILES.contains(&rel.as_str()) {
+            continue;
+        }
+        let production = guards::production_lines(&text);
+        let writes = production
+            .iter()
+            .any(|(_, line)| WRITE_PRIMITIVES.iter().any(|primitive| line.contains(primitive)));
         if writes {
             found.push(rel);
         }
@@ -55,7 +89,7 @@ fn no_production_module_opens_a_new_write_path() {
     expected.sort();
     assert_eq!(
         found, expected,
-        "the set of files that can write bytes changed — either a second write path appeared, or this guard and the documented write points must be updated together"
+        "the set of files that can change persistent state changed — either a second write path appeared, or this guard and the documented write points must be updated together"
     );
 
     let executor = source("execution/mod.rs");

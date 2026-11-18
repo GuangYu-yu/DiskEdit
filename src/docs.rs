@@ -37,7 +37,7 @@ const WIDTH: usize = 78;
 pub(crate) const EXAMPLES: &[&str] = &[
     "diskedit info /dev/sdb",
     "diskedit info /dev/sdb:2 --grow",
-    "diskedit resize /dev/sdb:1 +2G",
+    "diskedit resize /dev/sdb:1 +2G --yes",
     "diskedit resize disk.img grow --allow-move --chunk 4 --yes",
     "diskedit recover /dev/sdb --yes",
 ];

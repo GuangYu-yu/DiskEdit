@@ -42,3 +42,12 @@ use crate::dev::WriteSource;
 use crate::outcome::RunOutcome;
 use gptman::GPTPartitionEntry;
 use std::io;
+
+/// UEFI 2.10 §5.3.2 Table 5.5 头部固定字段的字节数：HeaderSize 的下界，也是 CRC
+/// 计算范围与新建表写出的长度。解析、写出与建表三处都从这一个值取
+pub(crate) const GPT_MIN_HEADER_SIZE: u32 = 92;
+
+/// 主 GPT 头的 LBA 与主条目数组的起始 LBA（UEFI 2.10 §5.3.2：主头在 LBA1，
+/// 数组紧随其后从 LBA2 起）。解析、建表与回放共用这两个值
+pub(crate) const PRIMARY_HEADER_LBA: u64 = 1;
+pub(crate) const PRIMARY_ARRAY_LBA: u64 = 2;

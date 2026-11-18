@@ -13,8 +13,8 @@ rm_img "$T" 2>/dev/null
 echo "########## A: xfs 扩容 400M → 1500M ##########"
 rm_img "$T"; truncate -s 2G "$T"
 $B new "$T" --yes >/dev/null
-$B add "$T" 400M --align mib --name x --yes >/dev/null; echo "add exit=$?"
-$B mkfs "$T":1 xfs --yes; echo "mkfs exit=$?"
+$B add "$T" 400M --align mib --name x --yes >/dev/null; exp $? 0 "add x（400M）"
+$B mkfs "$T":1 xfs --yes; exp $? 0 "mkfs xfs"
 LD=$(lo_attach "$T")
 mount_at "${LD}p1" "$TEST_MNT" && dd if=/dev/urandom of="$TEST_MNT/blob" bs=1M count=300 2>/dev/null
 MX=$(mdsum "$TEST_MNT"/blob)
@@ -27,32 +27,35 @@ echo "resize exit=$E : $(echo "$OUT" | tail -1)"
 echo "$OUT" | grep -q "df -B1" && echo "A XFS SIZE-CHECK HINT OK" || { echo "A NO SIZE-CHECK HINT"; rc=1; }
 LD=$(lo_attach "$T")
 mount_at "${LD}p1" "$TEST_MNT" && { echo "after: $(df -h --output=size "$TEST_MNT" | tail -1)"; G=$(mdsum "$TEST_MNT"/blob); [ "$MX" = "$G" ] && echo "XFS DATA OK" || { echo "XFS DATA CORRUPT"; rc=1; }; umount "$TEST_MNT" 2>/dev/null; }
-xfs_repair -n "${LD}p1" >/dev/null 2>&1; echo "xfs_repair -n exit=$? (0=clean)"
+xfs_repair -n "${LD}p1" >/dev/null 2>&1; exp $? 0 "xfs_repair -n（0=clean）"
 lo_detach "$LD"; sgdisk -v "$T" >/dev/null 2>&1 && echo "sgdisk clean" || { echo "sgdisk ISSUES"; rc=1; }
 
 echo
 echo "########## B: btrfs 扩容 400M → 1500M ##########"
 rm_img "$T"; truncate -s 2G "$T"
 $B new "$T" --yes >/dev/null
-$B add "$T" 400M --align mib --name b --yes >/dev/null; echo "add exit=$?"
-$B mkfs "$T":1 btrfs --yes; echo "mkfs exit=$?"
+$B add "$T" 400M --align mib --name b --yes >/dev/null; exp $? 0 "add b（400M）"
+$B mkfs "$T":1 btrfs --yes; exp $? 0 "mkfs btrfs"
 LD=$(lo_attach "$T")
 mount_at "${LD}p1" "$TEST_MNT" && dd if=/dev/urandom of="$TEST_MNT/blob" bs=1M count=300 2>/dev/null
 MB=$(mdsum "$TEST_MNT"/blob)
 echo "before: $(df -h --output=size "$TEST_MNT" | tail -1)"
 umount "$TEST_MNT" 2>/dev/null; lo_detach "$LD"
-OUT=$($B resize --yes "$T":1 1500M 2>&1); echo "resize exit=$? out: $(echo "$OUT" | tail -1)"
+OUT=$($B resize --yes "$T":1 1500M 2>&1); E=$?
+echo "resize exit=$E out: $(echo "$OUT" | tail -1)"
+# btrfs 的尺寸可由超级块回读（src/fsops/probe.rs 的 dump-super total_bytes），故走证实路径
+exp "$E" 0 "btrfs 扩容 400M → 1500M"
 LD=$(lo_attach "$T")
 mount_at "${LD}p1" "$TEST_MNT" && { echo "after: $(df -h --output=size "$TEST_MNT" | tail -1)"; G=$(mdsum "$TEST_MNT"/blob); [ "$MB" = "$G" ] && echo "BTRFS DATA OK" || { echo "BTRFS DATA CORRUPT"; rc=1; }; umount "$TEST_MNT" 2>/dev/null; }
-btrfs check "${LD}p1" >/dev/null 2>&1; echo "btrfs check exit=$? (0=clean)"
+btrfs check "${LD}p1" >/dev/null 2>&1; exp $? 0 "btrfs check（0=clean）"
 lo_detach "$LD"; sgdisk -v "$T" >/dev/null 2>&1 && echo "sgdisk clean" || { echo "sgdisk ISSUES"; rc=1; }
 
 echo
 echo "########## C: ntfs 搬移（HiddenSectors 修复） ##########"
 rm_img "$T"; truncate -s 1G "$T"
 $B new "$T" --yes >/dev/null
-$B add "$T" 200M --align mib --name n --yes >/dev/null; echo "add exit=$?"
-$B mkfs "$T":1 ntfs --yes; echo "mkfs exit=$?"
+$B add "$T" 200M --align mib --name n --yes >/dev/null; exp $? 0 "add n（200M）"
+$B mkfs "$T":1 ntfs --yes; exp $? 0 "mkfs ntfs"
 $B add "$T" 200M --align mib --name filler --yes >/dev/null
 $B mkfs "$T":2 ext4 --yes >/dev/null
 LD=$(lo_attach "$T")
@@ -93,7 +96,7 @@ truncate -s 512M "$D2"
 LDM=$(lo_attach "$IMGD")
 LDS=$(lo_attach "$D2")
 lo_waitpart "${LDM}p1" || { echo "SKIP: ${LDM}p1 未就绪"; exit 0; }
-mkfs.btrfs -f -d single -m single "${LDM}p1" "$LDS" >/dev/null 2>&1; echo "mkfs.btrfs(2 dev) exit=$?"
+mkfs.btrfs -f -d single -m single "${LDM}p1" "$LDS" >/dev/null 2>&1; exp $? 0 "mkfs.btrfs（2 个设备）"
 ND=$(od -An -tu8 -j $((2048 * 512 + 0x10000 + 0x88)) -N8 "$IMGD" | tr -d ' ')
 echo "num_devices=$ND (期望 2)"
 OUT=$($B resizefs --yes "$IMGD":1 2>&1); E=$?

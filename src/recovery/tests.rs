@@ -70,7 +70,7 @@ fn lvm_finish_baseline_belongs_to_resize_records() {
     let mut other = record_for(scene(2));
     other.op = OpKind::Move;
     other.lvm_post = Some(baseline);
-    assert!(decode(&other.encode().unwrap()).is_err());
+    assert!(other.encode().is_err(), "a move record must not carry an LVM baseline");
 }
 
 /// 搬移前几何随记录往返；只有会改动分区落位的操作允许带它
@@ -105,7 +105,7 @@ fn pre_commit_range_belongs_to_placement_operations() {
         digest: [0x11; 32],
     });
     other.old_range = Some(old);
-    assert!(decode(&other.encode().unwrap()).is_err());
+    assert!(other.encode().is_err(), "a copy record must not carry a pre-commit range");
 }
 
 fn reloc_entry(partition: u32, src_first: u64, len: u64, delta: i64, is_swap: bool) -> RelocEntry {

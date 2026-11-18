@@ -124,6 +124,12 @@ const ALLOWED: &[(&str, &str, &str)] = &[
         "写出前的尾段对账只在围栏给定时进行：`Absent` / `Undecidable` 没有声明的围栏，\
          不参与该对账，也不据此签发任何许可",
     ),
+    (
+        "recovery/record.rs",
+        "W-19",
+        "编码前的在飞位校验：只有 `Known` 且等于搬移游标才通过，`Absent` / `Undecidable` \
+         与不相符的 `Known` 都返回错误，不写出记录、不签发写许可",
+    ),
 ];
 
 /// 去掉 `mod tests` 之后的行。`#[cfg(test)]` 访问器不算测试模块，仍留在生产行里

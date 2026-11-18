@@ -128,6 +128,11 @@ fn resize_end_requires_yes() {
     // 夹具经 losetup 真建 ext4，需要 root；无权限的环境跳过
     // SAFETY: geteuid 无参数、不访问内存，恒成功
     if unsafe { libc::geteuid() } != 0 {
+        // 声明要 root 的 CI 作业里不允许静默跳过：跳过会让整套用例"全绿"而实则没测
+        assert!(
+            std::env::var_os("DISKEDIT_REQUIRE_ROOT").is_none(),
+            "this test needs root, but DISKEDIT_REQUIRE_ROOT is set (the CI job must run it as root)"
+        );
         eprintln!("skip: root required to build a real filesystem fixture");
         return;
     }

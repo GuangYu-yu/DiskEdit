@@ -95,6 +95,14 @@ impl TableReplay {
     }
 }
 
+/// 记录本身是否够一次回滚（只看记录，不看盘面）：回放判据允许写回，且表区原文为空时
+/// 阶段仍停在 `Planned`——阶段已越过 `Planned` 而原文为空，剩下的只是进度，回滚处理不了。
+/// 闸口的三态与回滚准入都按它判"能不能回滚"，两处不各写一份
+pub(crate) fn rollback_qualifies(record: &Record, permit_move: bool) -> bool {
+    TableReplay::of(record, permit_move).writes_back()
+        && (!record.restore.is_empty() || matches!(record.derive_stage(), Ok(Stage::Planned)))
+}
+
 impl std::fmt::Display for TableReplay {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -227,17 +235,19 @@ fn restore_preimage(restore: &[RestoreEntry], first_lba: u64) -> Option<&[u8]> {
 fn gpt_preimage_ranges(restore: &[RestoreEntry], primary: &[u8]) -> Option<Vec<(u64, u64)>> {
     // 规范固定头字段共 92 字节：偏移 12 的 header_size 与偏移 88 的条目数组 CRC 都在其中。
     // 短于此的段构不成可用的头，读这两处固定偏移会越界
-    if primary.len() < 92 {
+    if primary.len() < crate::table::GPT_MIN_HEADER_SIZE as usize {
         return None;
     }
     let header = match crate::table::probe_header(primary) {
-        crate::table::HeaderProbe::Present(h) if h.primary_lba == 1 => h,
+        crate::table::HeaderProbe::Present(h) if h.primary_lba == crate::table::PRIMARY_HEADER_LBA => h,
         _ => backup_preimage_header(restore)?.0,
     };
     let array_len = (header.number_of_partition_entries as usize)
         .checked_mul(header.size_of_partition_entry as usize)?;
-    // 条目结构是规范固定的 128 字节；短于此的步长不属于 GPT 条目数组
-    if header.size_of_partition_entry < 128 || header.number_of_partition_entries == 0 {
+    // 条目结构是规范固定的字段长度；短于此的步长不属于 GPT 条目数组
+    if (header.size_of_partition_entry as usize) < crate::table::ENTRY_FIXED_BYTES
+        || header.number_of_partition_entries == 0
+    {
         return None;
     }
     let array = restore_preimage(restore, header.partition_entry_lba)?;
@@ -274,12 +284,12 @@ fn gpt_preimage_ranges(restore: &[RestoreEntry], primary: &[u8]) -> Option<Vec<(
 fn backup_preimage_header(restore: &[RestoreEntry]) -> Option<(crate::table::RawHeader, u64)> {
     for entry in restore {
         // 短于规范最小头长的段（MBR 签名点）不可能是 GPT 头
-        if entry.original.len() < 92 {
+        if entry.original.len() < crate::table::GPT_MIN_HEADER_SIZE as usize {
             continue;
         }
         if let crate::table::HeaderProbe::Present(h) = crate::table::probe_header(&entry.original)
             && h.primary_lba == entry.first_lba
-            && h.backup_lba == 1
+            && h.backup_lba == crate::table::PRIMARY_HEADER_LBA
         {
             return Some((h, entry.first_lba));
         }
@@ -290,7 +300,7 @@ fn backup_preimage_header(restore: &[RestoreEntry]) -> Option<(crate::table::Raw
 /// MBR 旧布局：LBA0 预映像的四个主条目。保护性 MBR 与扩展分区链都列不出完整数据区间
 fn mbr_preimage_ranges(restore: &[RestoreEntry]) -> Option<Vec<(u64, u64)>> {
     let sector = restore_preimage(restore, 0)?;
-    if sector.len() < 512 || sector[510..512] != [0x55, 0xAA] {
+    if sector.len() < crate::table::MBR_SECTOR_BYTES || !crate::table::has_mbr_signature(sector) {
         return None;
     }
     let mut out = Vec::new();
@@ -373,7 +383,7 @@ impl crate::recovery::RecoveryEngine {
             // （`move` 数据区的唯一副本），签发 `AlreadyReverted` 会把它当终态删掉
             let stage = record.derive_stage().unwrap_or_else(|f| bail_fail(f));
             // 阶段由记录字段派生：`Planned` 就是"还没动手"，不再另判一次进度字段
-            if record.restore.is_empty() && stage != Stage::Planned {
+            if !rollback_qualifies(&record, permit_move) {
                 bail_fail(RunOutcome::refused(format!(
                     "the recovery record at {} holds no table pre-image, and an empty pre-image set only says \
                      the table was not recorded, not that the operation is already rolled back; {}",
@@ -761,7 +771,11 @@ impl<'a> RecordedPreImage<'a> {
     }
 }
 
-/// 逆序写回原文，然后逐条读回、sync。任一步失败都保留记录并退 5
+/// 逆序写回原文，然后逐条读回、sync。
+///
+/// 失败按"本次运行是否已写过目标字节"归责：写失败、或已写回若干条之后的复核失败，
+/// 保留记录并退 5；首条之前就失败（复核发现外来改动、读不出来）时本次还没写过任何
+/// 字节，退 3。两种情形的记录都留在盘上，补救指引同一份
 pub(crate) fn replay_record(
     src: &mut WriteSource,
     restore: &[RestoreEntry],
