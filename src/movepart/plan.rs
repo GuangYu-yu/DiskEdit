@@ -1011,6 +1011,21 @@ pub(crate) fn verify_relocation_resume(
             .ok_or_else(|| RunOutcome::no_mutation("relocation target range overflows"))?;
         dst_ranges.push((e.partition, dst, dst_end));
     }
+    // 目的区同样受可用区间约束：低于 `first_usable_lba` 会写进主头与条目区，高于
+    // `last_usable_lba` 会写进备份头与备份条目区——两者都不属于任何分区的数据区，
+    // 执行期只按盘容量兜底
+    for &(pn, dst, dst_end) in &dst_ranges {
+        if dst < g.first_usable_lba() || dst_end > g.last_usable_lba() {
+            return Err(RunOutcome::refused(format!(
+                "relocation target of partition {} (LBA {}..{}) lies outside the usable range {}..{} — inconsistent recovery record; refusing",
+                pn,
+                dst,
+                dst_end,
+                g.first_usable_lba(),
+                g.last_usable_lba()
+            )));
+        }
+    }
     for &(pn, dst, dst_end) in &dst_ranges {
         for (ei, e) in g.entries().iter().enumerate() {
             // 空条目（0,0）不可能命中：dst 下界 ≥ first_usable ≥ 2

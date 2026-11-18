@@ -199,17 +199,40 @@ fn retired_command_hit(path: &str, n: usize, line: &str) -> Option<String> {
     None
 }
 
-/// 现行顶层命令名（冻结的 CLI 契约）。斜杠清单的每一段都得落在它或退役名里，
-/// 否则 `plan/apply`、`ext2/3/4` 这类普通词组也会被当成命令清单
-const LIVE_COMMANDS: &[&str] = &[
-    "info", "inspect", "check", "records", "new", "add", "delete", "set", "resize", "resizefs", "move", "copy",
-    "mkfs", "recover", "help",
-];
+/// 现行顶层命令名：读 `src/cli.rs` 的 `COMMANDS` 表，取每条 `name` 的首词
+/// （`records list` 这类是同一顶层命令的子命令）。`help` 由解析器内建，不在表里
+fn live_commands() -> &'static [String] {
+    static LIVE: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+    LIVE.get_or_init(|| {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/cli.rs");
+        let text = std::fs::read_to_string(&path).expect("read src/cli.rs");
+        let start = text
+            .find("pub(crate) const COMMANDS: &[CommandDef]")
+            .expect("src/cli.rs 里没有 COMMANDS 表");
+        let table = &text[start..];
+        let table = &table[..table.find("\n];").map(|i| i + 1).unwrap_or(table.len())];
+        let mut names: Vec<String> = Vec::new();
+        for entry in table.split("CommandDef {").skip(1) {
+            let Some(declared) = entry.find("name: \"").map(|i| &entry[i + "name: \"".len()..]) else {
+                continue;
+            };
+            let Some(close) = declared.find('"') else { continue };
+            let Some(word) = declared[..close].split_whitespace().next() else { continue };
+            if !names.iter().any(|n| n == word) {
+                names.push(word.to_string());
+            }
+        }
+        names.push("help".to_string());
+        names
+    })
+}
 
 const RETIRED_COMMANDS: &[&str] = &["plan", "undo", "abandon", "resize-part"];
 
+/// 斜杠清单的每一段都得落在现行名或退役名里，否则 `plan/apply`、`ext2/3/4`
+/// 这类普通词组也会被当成命令清单
 fn is_command_name(token: &str) -> bool {
-    LIVE_COMMANDS.contains(&token) || RETIRED_COMMANDS.contains(&token)
+    live_commands().iter().any(|n| n == token) || RETIRED_COMMANDS.contains(&token)
 }
 
 /// 斜杠清单里出现的退役名，形如 "info / plan / resize"。判据是 `/` 两侧的记号全是
@@ -291,6 +314,18 @@ fn reader_facing_files() -> Vec<(String, String)> {
     ));
     out.sort();
     out
+}
+
+#[test]
+fn retired_names_are_absent_from_the_live_command_surface() {
+    let live = live_commands();
+    assert!(!live.is_empty(), "src/cli.rs 的 COMMANDS 表没解析出命令名");
+    for name in RETIRED_COMMANDS {
+        assert!(
+            !live.iter().any(|n| n.as_str() == *name),
+            "退役的命令名 {name:?} 仍登记为现行命令"
+        );
+    }
 }
 
 #[test]

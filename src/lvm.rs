@@ -12,7 +12,7 @@
 //! pvresize --setphysicalvolumesize 缩 PV 元数据，最后改分区表。pvresize 拒绝
 //! 时需先 pvmove 把 PE 前移，后者是 LVM 内部元数据重构，不在分区工具的范围内
 
-use crate::fsops::{run_read, run_write, FsError};
+use crate::fsops::{lvextend, lvs_json, lvs_state_row, pvresize, pvs_size_row, pvs_vg_json, vgs_extent_json, FsError, Tool};
 use serde_json::Value;
 
 /// LVM 链失败的三态：工具缺失是环境缺件（装 lvm2 后重试有意义），**请求与卷现状不
@@ -65,25 +65,16 @@ impl From<FsError> for LvmError {
 
 /// 执行 lvm2 工具并取 stdout；区分"工具未安装"与"命令失败"。
 /// `run` 已固定 `LC_ALL=C`，报表文本可直接按程序解析
-fn run_tool(tool: &str, args: &[&str]) -> Result<String, LvmError> {
-    tool_stdout(run_read(tool, args), tool)
-}
-
-/// 改 PV 元数据或 LV 内容的工具（pvresize / lvextend -r）：启动后盘上状态无法断言，
-/// 置位供 panic 出口使用（见 `outcome::note_target_write`）
-fn run_write_tool(tool: &str, args: &[&str]) -> Result<String, LvmError> {
-    tool_stdout(run_write(tool, args), tool)
-}
-
-fn tool_stdout(out: Result<std::process::Output, FsError>, tool: &str) -> Result<String, LvmError> {
+fn tool_stdout(tool: Tool, out: Result<std::process::Output, FsError>) -> Result<String, LvmError> {
+    let name = tool.name();
     match out {
         // 工具缺失要装包，与"命令跑失败"是两条不同的补救路径，分开报
         Err(FsError::ToolMissing(_)) => Err(LvmError::ToolMissing(format!(
-            "LVM tooling missing: {tool} not found in PATH (install lvm2)"
+            "LVM tooling missing: {name} not found in PATH (install lvm2)"
         ))),
-        Err(e) => Err(LvmError::Failed(format!("{tool} failed: {e}"))),
+        Err(e) => Err(LvmError::Failed(format!("{name} failed: {e}"))),
         Ok(out) if !out.status.success() => Err(LvmError::Failed(format!(
-            "{tool} failed: {}",
+            "{name} failed: {}",
             String::from_utf8_lossy(&out.stderr).trim()
         ))),
         Ok(out) => Ok(String::from_utf8_lossy(&out.stdout).into_owned()),
@@ -390,13 +381,7 @@ fn parse_pv_size_with(
 /// `pvs --noheadings --nosuffix --units b --separator '|' -o <五字段> <part_dev>`；
 /// 输出与这个形态有任何偏差都按"无法验证"返回 `Failed`，不降级为成功
 pub fn pv_size_report(part_dev: &str) -> Result<PvSizeReport, LvmError> {
-    let out = run_tool(
-        "pvs",
-        &[
-            "--noheadings", "--nosuffix", "--units", "b", "--separator", "|",
-            "-o", "pv_name,dev_size,pv_size,pe_start,pv_pe_count,pv_pe_alloc_count", part_dev,
-        ],
-    )?;
+    let out = tool_stdout(Tool::Pvs, pvs_size_row(part_dev))?;
     parse_pv_size_with(&out, part_dev, &|reported| device_match(part_dev, reported))
 }
 
@@ -405,7 +390,7 @@ pub fn pv_size_report(part_dev: &str) -> Result<PvSizeReport, LvmError> {
 /// JSON 不可解析）
 pub fn vg_of(part_dev: &str) -> Result<Option<String>, LvmError> {
     // -o 字段名取自 man pvs
-    let out = run_tool("pvs", &["--reportformat", "json", "-o", "pv_name,vg_name", part_dev])?;
+    let out = tool_stdout(Tool::Pvs, pvs_vg_json(part_dev))?;
     // 与 lvs_on_pv 同一判据：解析不出不等于"这块盘不是 PV"
     if !report_parsable(&out) {
         return Err(LvmError::Failed("pvs: unparsable report in output".to_string()));
@@ -415,7 +400,7 @@ pub fn vg_of(part_dev: &str) -> Result<Option<String>, LvmError> {
 
 /// 落在该 PV 上的顶层 LV（lv_name, lv_path）
 pub fn lvs_on_pv(vg: &str, part_dev: &str) -> Result<Vec<(String, String)>, LvmError> {
-    let out = run_tool("lvs", &["--reportformat", "json", "-o", "lv_name,lv_path,devices", vg])?;
+    let out = tool_stdout(Tool::Lvs, lvs_json(vg))?;
     // "确认无行"与"解析不出"必须分开：后者折叠成空表会被调用方当成
     // "no top-level LV"，把故障引向错误的出路（挑 --lv / 判定无从扩）
     if !report_parsable(&out) {
@@ -426,7 +411,7 @@ pub fn lvs_on_pv(vg: &str, part_dev: &str) -> Result<Vec<(String, String)>, LvmE
 
 /// VG extent 大小（字节）
 pub fn vg_extent_size(vg: &str) -> Result<u64, LvmError> {
-    let out = run_tool("vgs", &["--reportformat", "json", "--units", "b", "--nosuffix", "-o", "vg_extent_size", vg])?;
+    let out = tool_stdout(Tool::Vgs, vgs_extent_json(vg))?;
     parse_extent_size(&out)
 }
 
@@ -499,13 +484,7 @@ pub fn lv_state(part_dev: &str, lv_path: &str) -> Result<LvState, LvmError> {
             "LV {lv_path} is no longer one of the top-level LVs on {part_dev} (VG {vg}: {names})"
         )));
     }
-    let out = run_tool(
-        "lvs",
-        &[
-            "--noheadings", "--nosuffix", "--units", "b", "--separator", "|",
-            "-o", "lv_name,vg_name,lv_path,lv_size,lv_attr", &vg,
-        ],
-    )?;
+    let out = tool_stdout(Tool::Lvs, lvs_state_row(&vg))?;
     let rows = parse_lv_rows(&out)?;
     let mut hit: Vec<LvRow> = rows.into_iter().filter(|r| r.path == lv_path).collect();
     if hit.len() != 1 {
@@ -526,12 +505,12 @@ pub fn lv_state(part_dev: &str, lv_path: &str) -> Result<LvState, LvmError> {
 
 /// PV 吸收分区新增的全部空间（扩容方向无前置条件，pvresize(8)）
 pub fn pv_resize(part_dev: &str) -> Result<(), LvmError> {
-    run_write_tool("pvresize", &[part_dev]).map(|_| ())
+    tool_stdout(Tool::Pvresize, pvresize(part_dev)).map(|_| ())
 }
 
 /// LV 增量扩 n 个 extent 并同步扩文件系统（lvextend -l +N -r）
 pub fn lv_extend(lv_path: &str, extents: u64) -> Result<(), LvmError> {
-    run_write_tool("lvextend", &["-l", &format!("+{extents}"), "-r", lv_path]).map(|_| ())
+    tool_stdout(Tool::Lvextend, lvextend(lv_path, extents)).map(|_| ())
 }
 
 #[cfg(test)]

@@ -71,20 +71,18 @@ pub fn recreate_swap(
         }
     };
     with_partition_device(src, part, |dev| {
-        let mut args: Vec<OsString> = Vec::new();
-        if let Some(u) = uuid {
-            // swap UUID 按原字节序列化为标准 8-4-4-4-12（mkswap 存取同序，无混合端转换）
+        // swap UUID 按原字节序列化为标准 8-4-4-4-12（mkswap 存取同序，无混合端转换）
+        let hex: Option<String> = uuid.map(|u| {
             let hex: String = u.iter().map(|b| format!("{b:02x}")).collect();
-            let s = format!("{}-{}-{}-{}-{}", &hex[0..8], &hex[8..12], &hex[12..16], &hex[16..20], &hex[20..32]);
-            args.extend([OsString::from("-U"), OsString::from(s)]);
-        }
-        if let Some(SwapLabel::Present(l)) = label {
-            args.extend([OsString::from("-L"), os_bytes(l)]);
-        }
-        args.push(OsString::from(dev));
-        let out = run_write("mkswap", &args)?;
+            format!("{}-{}-{}-{}-{}", &hex[0..8], &hex[8..12], &hex[12..16], &hex[16..20], &hex[20..32])
+        });
+        let label = match label {
+            Some(SwapLabel::Present(l)) => Some(os_bytes(l)),
+            _ => None,
+        };
+        let out = mkswap(OsStr::new(dev), hex.as_deref(), label.as_deref())?;
         if !out.status.success() {
-            return Err(FsError::command("mkswap", &out));
+            return Err(FsError::command(Tool::Mkswap.name(), &out));
         }
         Ok(note)
     })

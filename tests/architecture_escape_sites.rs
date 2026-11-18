@@ -44,117 +44,117 @@ const SKIP_SITES: &[SkipSite] = &[
     SkipSite {
         id: "S2-19",
         file: "cli.rs",
-        why: "解析过滤，失败落到 `Err` 而不是跳过校验",
+        why: "解析过滤，失败落到 `Err` 而不是跳过校验（src/cli.rs:1402）",
     },
     SkipSite {
         id: "S2-1",
         file: "ioctl.rs",
-        why: "溢出按拒绝返回，不折成 0 或省略",
+        why: "溢出按拒绝返回，不折成 0 或省略（src/ioctl.rs:161）",
     },
     SkipSite {
         id: "S2-2",
         file: "ioctl.rs",
-        why: "溢出按拒绝返回，不折成 0 或省略",
+        why: "溢出按拒绝返回，不折成 0 或省略（src/ioctl.rs:165）",
     },
     SkipSite {
         id: "S2-3",
         file: "ioctl.rs",
-        why: "溢出按拒绝返回，不折成 0 或省略",
+        why: "溢出按拒绝返回，不折成 0 或省略（src/ioctl.rs:169）",
     },
     SkipSite {
         id: "S2-4",
         file: "dev/identity.rs",
-        why: "答案是「是否整盘设备」，读不出反而按是处理，进入更严的分支",
+        why: "答案是「是否整盘设备」，读不出反而按是处理，进入更严的分支（src/dev/identity.rs:862）",
     },
     SkipSite {
         id: "S2-20",
         file: "dev/target.rs",
-        why: "目录 fsync 只影响元数据新鲜度，失败时数据写入已完成且无前置状态",
+        why: "目录 fsync 只影响元数据新鲜度；调用点在副本落成之后执行（src/dev/identity.rs:478），失败不产生超前于数据的持久化状态（src/dev/target.rs:159）",
     },
     SkipSite {
         id: "S2-14",
         file: "fsops/grow.rs",
-        why: "随机源缺失退回进程熵源，不放弃擦除",
+        why: "随机源缺失退回进程熵源，不放弃擦除（src/fsops/grow.rs:461）",
     },
     SkipSite {
         id: "S2-21",
         file: "fsops/grow.rs",
-        why: "取不到目录项身份时放弃清理自己的记录，不签发许可",
+        why: "取不到目录项身份时放弃清理自己的记录（src/fsops/grow.rs:627），许可只由提交入口签发（src/recovery/cleanup.rs:113）",
     },
     SkipSite {
         id: "S2-12",
         file: "fsops/mount.rs",
-        why: "只跳过不是进程号的目录名，挂载归属由后续系统表核对",
+        why: "只跳过不是进程号的目录名，挂载归属由后续系统表核对（src/fsops/mount.rs:251）",
     },
     SkipSite {
         id: "S2-13",
         file: "fsops/mount.rs",
-        why: "只决定是否等待 udev 落定，不参与任何判定",
+        why: "只决定是否等待 udev 落定，不参与任何判定（src/fsops/mount.rs:1449）",
     },
     SkipSite {
         id: "S2-8",
         file: "fsops/scope.rs",
-        why: "候选读不出时跳过该候选，全部跳过则整体报错",
+        why: "候选读不出时跳过该候选，全部跳过则整体报错（src/fsops/scope.rs:477）",
     },
     SkipSite {
         id: "S2-9",
         file: "fsops/scope.rs",
-        why: "候选内容不可解析时跳过该候选，全部跳过则整体报错",
+        why: "候选内容不可解析时跳过该候选，全部跳过则整体报错（src/fsops/scope.rs:477）",
     },
     SkipSite {
         id: "S2-18",
         file: "movepart/faults.rs",
-        why: "仅 test-faults 特性下存在；未设置注入点时不做任何事",
+        why: "仅 test-faults 特性下存在；未设置注入点时不做任何事（src/movepart/faults.rs:15）",
     },
     SkipSite {
         id: "S2-16",
         file: "platform/evidence_store.rs",
-        why: "名字含 NUL 时直接出错，不折成另一个记录名",
+        why: "名字含 NUL 时直接出错，不折成另一个记录名（src/platform/evidence_store.rs:356）",
     },
     SkipSite {
         id: "S2-15",
         file: "platform/probe.rs",
-        why: "取不到元数据时按镜像打开，随后打开失败即拒绝",
+        why: "取不到元数据时按镜像打开，随后打开失败即拒绝（src/platform/probe.rs:36）",
     },
     SkipSite {
         id: "S2-22",
         file: "recovery/engine.rs",
-        why: "锁前预检读不出所有者时跳过，锁下枚举仍按记录形态判定",
+        why: "锁前预检读不出所有者时跳过，锁下枚举仍按记录形态判定（src/recovery/engine.rs:137）",
     },
     SkipSite {
         id: "S2-23",
         file: "dev/identity.rs",
-        why: "读不出文件元数据时退回路径键：键只定位落点，记录归属仍按载荷身份核对",
+        why: "读不出文件元数据时退回路径键：键只定位落点，记录归属仍按载荷身份核对（src/recovery/journal.rs:336）",
     },
     SkipSite {
         id: "S2-24",
         file: "dev/identity.rs",
-        why: "打不开镜像时退回路径键，用于定位落点，不作身份证据",
+        why: "打不开镜像时退回路径键，用于定位落点，不作身份证据（src/recovery/journal.rs:336）",
     },
     SkipSite {
         id: "S2-25",
         file: "dev/identity.rs",
-        why: "取不到文件对象身份时退回路径键，用于定位落点，不作身份证据",
+        why: "取不到文件对象身份时退回路径键，用于定位落点，不作身份证据（src/recovery/journal.rs:336）",
     },
     SkipSite {
         id: "S2-17",
         file: "recovery/engine.rs",
-        why: "取不到元数据时按镜像打开，随后打开失败即拒绝",
+        why: "取不到元数据时按镜像打开，随后打开失败即拒绝（src/recovery/engine.rs:884）",
     },
     SkipSite {
         id: "S2-5",
         file: "recovery/journal.rs",
-        why: "只清理目录里的临时项，读不出就放弃清理，不签发许可",
+        why: "只清理目录里的临时项（src/recovery/journal.rs:72），读不出就放弃清理，许可只由提交入口签发（src/recovery/cleanup.rs:113）",
     },
     SkipSite {
         id: "S2-6",
         file: "recovery/journal.rs",
-        why: "只清理目录里的临时项，读不出就放弃清理，不签发许可",
+        why: "只清理目录里的临时项（src/recovery/journal.rs:72），读不出就放弃清理，许可只由提交入口签发（src/recovery/cleanup.rs:113）",
     },
     SkipSite {
         id: "S2-7",
         file: "recovery/journal.rs",
-        why: "只跳过无法命名的目录项，不影响记录状态判定",
+        why: "只跳过无法命名的目录项（src/recovery/journal.rs:102），记录状态判定与许可签发不经过这里（src/recovery/cleanup.rs:113）",
     },
 ];
 
@@ -229,12 +229,49 @@ fn skip_on_read_failure_sites_are_registered() {
     );
 }
 
+/// `why` 里的 `文件.rs:行`（或 `.sh:行`）形式：定位到上游保证所在的代码
+fn cites_file_line(why: &str) -> bool {
+    let bytes = why.as_bytes();
+    let allowed = |c: u8| c.is_ascii_alphanumeric() || matches!(c, b'_' | b'/' | b'.');
+    let mut i = 0;
+    while i < bytes.len() {
+        if !allowed(bytes[i]) {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < bytes.len() && allowed(bytes[i]) {
+            i += 1;
+        }
+        let token = &why[start..i];
+        if token.ends_with(".rs") || token.ends_with(".sh") {
+            let digits = why[i..]
+                .strip_prefix(':')
+                .map(|rest| rest.bytes().take_while(u8::is_ascii_digit).count())
+                .unwrap_or(0);
+            if digits > 0 {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// `why` 里的 `类型::函数` 形式：定位到提供保证的函数
+fn cites_function_path(why: &str) -> bool {
+    why.as_bytes().windows(2).enumerate().any(|(i, pair)| {
+        pair == b"::"
+            && why[..i].chars().next_back().is_some_and(|c| c.is_alphanumeric() || c == '_')
+            && why[i + 2..].chars().next().is_some_and(|c| c.is_alphanumeric() || c == '_')
+    })
+}
+
 #[test]
 fn registered_skip_sites_carry_an_upstream_guarantee() {
     for site in SKIP_SITES {
         assert!(
-            site.why.len() >= 8,
-            "{} 没有写上游保证；登记的理由是给人复核的，不是占位",
+            cites_file_line(site.why) || cites_function_path(site.why),
+            "{} 的理由没有指出上游保证的出处（`文件:行` 或 `类型::函数`）；登记的理由是给人复核的，不是占位",
             site.id
         );
     }

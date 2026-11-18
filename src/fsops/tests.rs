@@ -1,10 +1,86 @@
 #![allow(clippy::let_underscore_must_use)] // 清理临时文件有意忽略失败
-use super::{check_e2fsck_for_check, check_e2fsck_for_resize, check_grow_step, check_label_limits, classify_grow, classify_shrink, erase_ranges, grow_outcome, grow_target_at, leak_from, mkfs_tool, parse_fstype, parse_num_lead, partition_byte_range, settle_release, shrink_outcome, swap_rebuild_support, uuid_from_output, uuid_readback_verdict, uuid_support, vfat_label_check, DeviceScope, FsGeometry, Growable, MkfsFs, MountLeak, NumError, ReleaseRunOutcome, SizeVerify, ToolSupport, Unusable, UuidRequest, UuidSupport};
+use super::{check_e2fsck_for_check, check_e2fsck_for_resize, check_grow_step, check_label_limits, classify_grow, classify_shrink, erase_ranges, grow_outcome, grow_support, grow_target_at, leak_from, mkfs_tool, parse_fstype, parse_num_lead, partition_byte_range, settle_release, shrink_outcome, swap_rebuild_support, uuid_from_output, uuid_readback_verdict, uuid_support, vfat_label_check, DeviceScope, FsGeometry, Growable, MkfsFs, MountLeak, NumError, ReleaseRunOutcome, SizeVerify, ToolSupport, Unusable, UuidRequest, UuidSupport};
 #[cfg(target_os = "linux")]
 use super::{run_read, run_write};
 use super::FsError;
+use super::Tool;
 use crate::dev::FileSource;
 use crate::fsid::{self, ContentKind, FsKind};
+
+/// 注册表自查：名字唯一、包名非空——工具名与包名的映射只有 ext 一份表
+#[test]
+pub(crate) fn tool_registry_names_and_packages_are_complete() {
+    for (i, a) in Tool::ALL.iter().enumerate() {
+        assert!(!a.name().is_empty());
+        assert!(!a.package().is_empty(), "{a:?} has no package");
+        for b in &Tool::ALL[i + 1..] {
+            assert_ne!(a.name(), b.name(), "duplicate tool name {}", a.name());
+        }
+    }
+}
+
+/// 能力清单里的工具必须都在注册表 `ALL` 里：`ALL` 是 test-only 的全集，按它遍历的
+/// 调用面（如 `check` 的工具报告）看不见表外的变体。清单是 `capabilities.rs` 里的
+/// `Tool::` 字面量，故对着该文件逐个比对——新增变体漏进 `ALL` 在这里显形
+#[test]
+pub(crate) fn every_capability_list_names_a_registered_tool() {
+    let known: Vec<String> = Tool::ALL.iter().map(|t| format!("{t:?}")).collect();
+    let mut seen = 0;
+    for tail in include_str!("capabilities.rs").split("Tool::").skip(1) {
+        let ident: String = tail.chars().take_while(char::is_ascii_alphanumeric).collect();
+        seen += 1;
+        assert!(
+            known.iter().any(|k| k == &ident),
+            "capabilities.rs names Tool::{ident}, which is absent from Tool::ALL"
+        );
+    }
+    assert!(seen > 0, "the scan found no Tool:: variant in capabilities.rs — its subject moved");
+}
+
+/// 文档里的工具表与注册表是同一份事实：新增或删除工具要两边同时改，这里对账
+#[test]
+pub(crate) fn the_docs_tool_table_matches_the_registry() {
+    let text = include_str!("../../docs/internals.md");
+    let section = text
+        .split("## External tools")
+        .nth(1)
+        .and_then(|s| s.split("\n## ").next())
+        .expect("internals.md has an External tools section");
+    let mut listed: Vec<&str> = section
+        .lines()
+        .filter(|l| l.starts_with('|'))
+        .flat_map(|l| l.split('`').skip(1).step_by(2))
+        .collect();
+    listed.sort_unstable();
+    let mut registered: Vec<&str> = Tool::ALL.iter().map(|t| t.name()).collect();
+    registered.sort_unstable();
+    assert_eq!(listed, registered, "the tool table in docs/internals.md and Tool::ALL disagree");
+}
+
+/// 注册表声明的安装包必须由 CI 装上：新工具带着新包却漏了安装，本地全绿、CI 上
+/// 才以"工具缺失"失败。清单取 apt-get install 的续行，到空行为止
+#[test]
+pub(crate) fn every_registered_package_is_installed_by_ci() {
+    // 基础镜像自带，不在 apt 清单里
+    const BASE_IMAGE: &[&str] = &["util-linux"];
+    let text = include_str!("../../.github/workflows/tests.yml");
+    // 各作业各装各的：取所有安装清单的并集，任一作业装上即算
+    let packages: Vec<&str> = text
+        .split("apt-get install -y --no-install-recommends")
+        .skip(1)
+        .flat_map(|block| block.split("\n\n").next())
+        .flat_map(|block| block.split_whitespace())
+        .collect();
+    assert!(!packages.is_empty(), "tests.yml no longer installs external tools");
+    for tool in Tool::ALL {
+        let package = tool.package();
+        assert!(
+            packages.contains(&package) || BASE_IMAGE.contains(&package),
+            "{} belongs to package {package}, which no CI job installs",
+            tool.name()
+        );
+    }
+}
 
 /// e2fsck 2/3/4 归 `CommandFailed`：三者都说明工具运行过——"确定未写盘"
 /// 的 NoMutation 承诺不成立。判定是纯函数，逐码断言变体即可
@@ -84,8 +160,8 @@ pub(crate) fn swap_label_and_uuid_are_wired_to_swaplabel() {
 pub(crate) fn swap_rebuild_tools_follow_the_target_kind() {
     match (swap_rebuild_support(false), swap_rebuild_support(true)) {
         (ToolSupport::Tools(image), ToolSupport::Tools(block)) => {
-            assert_eq!(image, &["mkswap", "losetup"]);
-            assert_eq!(block, &["mkswap"]);
+            assert_eq!(image, &[Tool::Mkswap, Tool::Losetup]);
+            assert_eq!(block, &[Tool::Mkswap]);
         }
         _ => panic!("swap rebuild must stay a tool-list requirement"),
     }
@@ -341,7 +417,7 @@ pub(crate) fn partition_byte_range_gpt_and_mbr() {
 
     // MBR：容器分区（0x05/0x0F/0x85）无法做 FS 操作
     let mut src = fs_fixture("pbr_mbr", vec![0u8; 2 * 1024 * 1024]);
-    crate::table::create_mbr(&mut src, false).unwrap();
+    crate::support::create_mbr(&mut src);
     crate::table::add_mdos_entry(&mut src, 63, 200, 0x83).unwrap();
     crate::table::add_mdos_entry(&mut src, 201, 300, 0x83).unwrap();
     // 被测对象是"容器类型条目的区间判读"，类型字节直接写盘面：追加路径拒绝容器类型
@@ -743,6 +819,25 @@ pub(crate) fn ext_grow_tolerates_one_unused_block_group() {
     assert!(matches!(e, FsError::CommandFailed(ref m) if m.contains("short of")), "{e}");
 }
 
+/// 落点加一个放置单元的上界算不出来时不能当"覆盖到末端"：溢出方向必须拒绝。
+/// 上界不存在与"上界超过末端"是两件事，前者冒充达标会把真实的短差放过去
+#[test]
+pub(crate) fn grow_rejects_a_landing_point_whose_last_unit_overflows() {
+    let limit = u64::MAX;
+    let v = classify_grow(Ok(FsGeometry { bytes: u64::MAX - 1, unit: 2 }), limit, "resize2fs", "h");
+    assert!(v.is_err(), "an unrepresentable upper bound must not be reported as reaching the range end");
+}
+
+/// 扩容后的尺寸回读经 dumpe2fs：它必须与缩容侧一样列进写盘前的工具清单，
+/// 否则表已提交才发现缺工具（那时只能以 5 收场）
+#[test]
+pub(crate) fn ext_grow_requires_the_read_back_tool() {
+    match grow_support(ContentKind::Filesystem(FsKind::Ext)) {
+        ToolSupport::Tools(tools) => assert!(tools.contains(&Tool::Dumpe2fs), "{tools:?}"),
+        _ => panic!("ext grow must be wired to tools"),
+    }
+}
+
 /// 待办里的补救信息不能是空串：每个可扩容的文件系统都要给出核对路线，
 /// 没有设备级回读的类型（f2fs / xfs / vfat）走挂载后的尺寸报告
 #[test]
@@ -760,11 +855,12 @@ pub(crate) fn every_growable_filesystem_names_a_size_check() {
 #[test]
 pub(crate) fn run_write_marks_the_target_once_the_process_starts() {
     crate::outcome::reset_run_facts();
-    run_read("true", &[] as &[&str]).expect("true exits 0");
+    // util-linux 随基础镜像提供；无参调用只打印用法，不碰任何设备
+    run_read(Tool::Mkswap, &[] as &[&str]).expect("true exits 0");
     assert!(!crate::outcome::target_may_have_been_written(), "只读调用不该置写事实");
 
     crate::outcome::reset_run_facts();
-    run_write("true", &[] as &[&str]).expect("true exits 0");
+    run_write(Tool::Mkswap, &[] as &[&str]).expect("true exits 0");
     assert!(crate::outcome::target_may_have_been_written(), "run_write 在进程起来后即置位");
 
     crate::outcome::reset_run_facts();

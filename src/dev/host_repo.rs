@@ -13,9 +13,6 @@ use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
-/// 默认状态根：FHS §5.8 的 `/var/lib/<name>`，主机级、跨重启保留
-pub(crate) const DEFAULT_STATE_ROOT: &str = "/var/lib/diskedit";
-
 /// 状态根。Linux 上 euid 非 0 时忽略 `DISKEDIT_STATE_DIR`；其余平台返回
 /// [`super::state_dir`]（这些平台没有块设备目标）
 pub(crate) fn host_state_root() -> PathBuf {
@@ -27,7 +24,7 @@ pub(crate) fn host_state_root() -> PathBuf {
         {
             return PathBuf::from(v);
         }
-        PathBuf::from(DEFAULT_STATE_ROOT)
+        PathBuf::from(super::identity::DEFAULT_STATE_DIR)
     }
     #[cfg(not(target_os = "linux"))]
     {
@@ -104,7 +101,7 @@ pub(crate) fn key_for_test(target: &str, partition: Option<u32>) -> IdentityKey 
 
 /// 纯路径拼装：测试给显式根，生产走 [`host_state_root`]
 pub(crate) fn record_dir_under(root: &Path, hash_hex: &str) -> PathBuf {
-    root.join("recovery").join(hash_hex)
+    root.join(super::RECOVERY_DIR).join(hash_hex)
 }
 
 /// identity-hash：键的分量按 [`IdentityKey::encode`] 编码后取 sha256 前 16 字节
@@ -172,7 +169,7 @@ pub(crate) fn ensure_record_dir(record: &Path) -> Result<(), HostRepoError> {
 pub(crate) fn ensure_image_record_dir(dir: &Path) -> Result<(), HostRepoError> {
     #[cfg(target_os = "linux")]
     {
-        use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
+        use std::os::unix::fs::{DirBuilderExt, MetadataExt};
 
         let images = dir.parent().ok_or_else(|| {
             HostRepoError::Io(std::io::Error::other("the image record directory has no parent"))
@@ -207,16 +204,7 @@ pub(crate) fn ensure_image_record_dir(dir: &Path) -> Result<(), HostRepoError> {
                     gid
                 )));
             }
-            let mode = meta.permissions().mode();
-            if mode & 0o077 != 0 {
-                return Err(HostRepoError::Insecure(format!(
-                    "{} is accessible to group or other (mode {:04o}); the recovery record holds the pre-write \
-                     partition table, which other local accounts must not read — run: chmod 700 {}",
-                    d.display(),
-                    mode & 0o7777,
-                    d.display()
-                )));
-            }
+            reject_group_or_other(d)?;
         }
         Ok(())
     }
@@ -239,7 +227,7 @@ fn current_euid_gid() -> (u32, u32) {
 pub(crate) fn ensure_sidecar_dir(dir: &Path, owner: Option<(u32, u32)>) -> Result<(), HostRepoError> {
     #[cfg(target_os = "linux")]
     {
-        use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
+        use std::os::unix::fs::{DirBuilderExt, MetadataExt};
 
         let created = match std::fs::DirBuilder::new().mode(0o700).create(dir) {
             Ok(()) => true,
@@ -267,16 +255,7 @@ pub(crate) fn ensure_sidecar_dir(dir: &Path, owner: Option<(u32, u32)>) -> Resul
                 gid
             )));
         }
-        let mode = meta.permissions().mode();
-        if mode & 0o077 != 0 {
-            return Err(HostRepoError::Insecure(format!(
-                "{} is accessible to group or other (mode {:04o}); the recovery record holds the pre-write \
-                 partition table, which other local accounts must not read — run: chmod 700 {}",
-                dir.display(),
-                mode & 0o7777,
-                dir.display()
-            )));
-        }
+        reject_group_or_other(dir)?;
         Ok(())
     }
     #[cfg(not(target_os = "linux"))]
@@ -319,7 +298,7 @@ pub(crate) fn prepare_record_dir(
 
 #[cfg(target_os = "linux")]
 fn create_dir_uid0(dir: &Path) -> Result<(), HostRepoError> {
-    use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt};
 
     match std::fs::DirBuilder::new().mode(0o700).create(dir) {
         Ok(()) => {}
@@ -337,14 +316,24 @@ fn create_dir_uid0(dir: &Path) -> Result<(), HostRepoError> {
             meta.uid()
         )));
     }
-    let mode = meta.permissions().mode();
+    reject_group_or_other(dir)?;
+    Ok(())
+}
+
+/// 记录目录对 group/other 的权限必须为零：记录里存着写前的分区表。镜像仓库、
+/// 旁目录与宿主仓库三条建目录路径共用这一条判据
+#[cfg(target_os = "linux")]
+fn reject_group_or_other(path: &Path) -> Result<(), HostRepoError> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mode = std::fs::symlink_metadata(path).map_err(HostRepoError::Io)?.permissions().mode();
     if mode & 0o077 != 0 {
         return Err(HostRepoError::Insecure(format!(
             "{} is accessible to group or other (mode {:04o}); the recovery record holds the pre-write \
              partition table, which other local accounts must not read — run: chmod 700 {}",
-            dir.display(),
+            path.display(),
             mode & 0o7777,
-            dir.display()
+            path.display()
         )));
     }
     Ok(())

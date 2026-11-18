@@ -314,15 +314,15 @@ pub(crate) fn new_gpt_content(src: &FileSource, disk_guid: Option<[u8; 16]>) -> 
     let last_lba = container_last_lba(src, ss);
     let header = RawHeader {
         revision: 0x0001_0000,
-        primary_lba: 1,
+        primary_lba: PRIMARY_HEADER_LBA,
         backup_lba: last_lba,
-        first_usable_lba: 2 + span,
+        first_usable_lba: PRIMARY_ARRAY_LBA + span,
         last_usable_lba: last_lba - span - 1,
         disk_guid: disk_guid.unwrap_or_else(|| derive_guid(&src.path)),
-        partition_entry_lba: 2,
+        partition_entry_lba: PRIMARY_ARRAY_LBA,
         number_of_partition_entries: geom.entry_count,
         size_of_partition_entry: geom.entry_size,
-        header_size: 92,
+        header_size: GPT_MIN_HEADER_SIZE,
     };
     Ok(GptContent { ss, header, entries: vec![empty_entry(); geom.entry_count as usize], last_lba })
 }
@@ -354,15 +354,15 @@ pub fn create_gpt(
     let last_lba = container_last_lba(src, ss);
     let header = RawHeader {
         revision: 0x0001_0000,
-        primary_lba: 1,
+        primary_lba: PRIMARY_HEADER_LBA,
         backup_lba: last_lba,
-        first_usable_lba: 2 + span,
+        first_usable_lba: PRIMARY_ARRAY_LBA + span,
         last_usable_lba: last_lba - span - 1,
         disk_guid: disk_guid.unwrap_or_else(|| derive_guid(&src.path)),
-        partition_entry_lba: 2,
+        partition_entry_lba: PRIMARY_ARRAY_LBA,
         number_of_partition_entries: geom.entry_count,
         size_of_partition_entry: geom.entry_size,
-        header_size: 92,
+        header_size: GPT_MIN_HEADER_SIZE,
     };
     let g = RawGpt { ss, header, entries: vec![empty_entry(); geom.entry_count as usize], state: GptState::Valid, pmbr: PmbrSize::Normal, decided: None };
     verify_table_stamp(src, stamp, ss)?;
@@ -440,81 +440,6 @@ pub(crate) fn guid_in_field_order(g: &[u8; 16]) -> [u8; 16] {
 
 // ---------- msdos（真 MBR）表创建与主分区条目编辑 ----------
 // 限制：仅主分区槽位 1..=4，不支持扩展/逻辑分区链。
-
-/// `new --table msdos`：写空 MBR（保留 BootCode，置签名，清空 4 条记录），并清掉
-/// LBA1 与盘尾备份头上可能残留的 GPT 签名——新表是 msdos，盘上不该再留下任何能独立
-/// 给出 GPT 表的表层。只清签名那 8 字节，同一扇区的其余字节与条目数原样保留。
-/// 主头签名留着会让这块新 msdos 盘被判成 `GptDamaged`；
-/// 盘尾那个留着会让"4 条记录全空"的判据把刚建的盘判成 GPT 残骸。
-/// 会清零的签名若落在旧分区数据里，由 [`ensure_new_table_write_clear`] 在首次写盘前判掉。
-/// 仅在测试构建中可见：生产路径由命令层装配后执行。
-#[cfg(test)]
-pub fn create_mbr(src: &mut WriteSource, overwrite_partition_data: bool) -> Result<(), RunOutcome> {
-    let stamp = table_stamp(src, src.sector_size)?;
-    ensure_new_table_write_clear(src, src.sector_size, TableKind::Mbr, overwrite_partition_data)?;
-    let ss = src.sector_size;
-    let mut lba0 = vec![0u8; ss as usize];
-    src.read_at(0, &mut lba0)?;
-    lba0[446..510].fill(0);
-    lba0[510] = 0x55;
-    lba0[511] = 0xAA;
-    // 与解析侧同一套候选扇区大小：容器 ss 之外的候选说明旧 GPT 可能按另一种扇区
-    // 落盘，签名会落在那个候选的 LBA1 上。清除位置与写回缓冲是同一个事实的两半：
-    // 落在 LBA0/LBA1 缓冲内的位置直接施加到缓冲，其余位置先写出去，最后整块回写。
-    // 先写 LBA0 再清 ss 会在 `at == ss` 的位置造出"新 msdos 表 + 可解析的 GPT 主头"
-    // ——`GptDamaged`，工具内没有修复入口。
-    // 待清位置与冲突检查共用 `gpt_signature_sites`，两者不会各自漂移
-    let lba1_whole = src.size >= 2 * ss;
-    // LBA0 与 LBA1 上"不再有 GPT 主头"是同一个事实的两半：分两次写出去，中断正好停在
-    // GptDamaged 上。拼进一个缓冲、一次 write，中断只可能停在"旧表"或"新表"
-    let mut head = lba0.clone();
-    if lba1_whole {
-        let mut lba1 = vec![0u8; ss as usize];
-        src.read_at(ss, &mut lba1)?;
-        if lba1[..GPT_SIGNATURE.len()] == *GPT_SIGNATURE {
-            lba1[..GPT_SIGNATURE.len()].fill(0);
-            head.extend_from_slice(&lba1);
-        }
-    }
-    let mut cleared = Vec::new();
-    verify_table_stamp(src, stamp, src.sector_size)?;
-    for off in gpt_signature_sites(src)? {
-        cleared.push(off);
-        if off.saturating_add(GPT_SIGNATURE.len() as u64) <= head.len() as u64 {
-            let at = off as usize;
-            head[at..at + GPT_SIGNATURE.len()].fill(0);
-        } else {
-            src.write_fixture(off, &[0u8; GPT_SIGNATURE.len()])?;
-        }
-    }
-    src.write_fixture(0, &head)?;
-    src.sync_all()?;
-    // 读回复核：比的是**意图**（新 LBA0，以及被清掉签名的那些位置），不是刚写下去的
-    // 缓冲——写被缓存/镜像层丢掉时，盘会在返回 Ok 之后被判成 GptDamaged
-    let mut got = vec![0u8; lba0.len()];
-    src.read_at(0, &mut got).map_err(|e| {
-        io::Error::new(e.kind(), format!("MBR read-back failed: {e} — the write may not have landed"))
-    })?;
-    if got != head[..lba0.len()] {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "MBR differs from what was written — the device or image layer dropped the write",
-        )
-        .into());
-    }
-    for at in cleared {
-        let mut sig = [0u8; GPT_SIGNATURE.len()];
-        src.read_at(at, &mut sig)?;
-        if sig != [0u8; GPT_SIGNATURE.len()] {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("GPT signature at byte {at} was not cleared — the device or image layer dropped the write"),
-            )
-            .into());
-        }
-    }
-    Ok(())
-}
 
 /// 盘型。**与"表的形状是否完好"分开表达**：`GptDamaged` 覆盖两种"盘是 GPT 但读不出表"
 /// 的形态——保护 MBR 形状成立而两份头签名尽失，或 LBA1 的主头仍可解析而保护布局不满足。

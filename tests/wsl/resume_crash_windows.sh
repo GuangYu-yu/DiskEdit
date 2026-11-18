@@ -81,7 +81,7 @@ mk_layout "$T"; fill_p23 "$T"
 DISKEDIT_FAULT=before-grow $BF resize "$T":1 +200M --allow-move --yes --no-fs >/dev/null 2>&1
 echo "aborted (expected)"
 # p2/p3 已搬完、p1 未扩：free_right 恰好 = shift → 普通扩容路径直接收敛（合法）
-$BF resize "$T":1 +200M --allow-move --yes --no-fs >/dev/null 2>&1; echo "round2 exit=$?"
+$BF resize "$T":1 +200M --allow-move --yes --no-fs >/dev/null 2>&1; exp $? 0 "round2（before-grow 后续跑收敛）"
 check_data "$T" || rc=1
 echo "p1 终态几何（应为 700M = 500M+200M）："
 $B info "$T"
@@ -109,7 +109,7 @@ DISKEDIT_FAULT=after-swap-entry:1 $BF resize "$T":1 +100M --allow-move --yes --n
 echo "aborted (expected)"
 # swap 已落位重建、p3 已搬完：free_right = shift → 普通路径收敛
 # （swap 重建属搬移的一环，与 --no-fs 无关；该开关只免掉 grow 目标的 FS 步骤）
-$BF resize "$T":1 +100M --allow-move --yes --no-fs >/dev/null 2>&1; echo "round2 exit=$?"
+$BF resize "$T":1 +100M --allow-move --yes --no-fs >/dev/null 2>&1; exp $? 0 "round2（swap 落位后续跑收敛）"
 LD=$(lo_attach "$T")
 lo_waitpart "${LD}p3" && lo_waitpart "${LD}p2" || { echo "分区节点未就绪"; rc=1; losetup -d "$LD"; exit $rc; }
 UUID_AFTER=$(blkid -s UUID -o value "${LD}p2")

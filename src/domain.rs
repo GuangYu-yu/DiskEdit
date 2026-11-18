@@ -62,7 +62,9 @@ pub(crate) enum SectorSizeError {
 impl fmt::Display for SectorSizeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
-            Self::BelowMinimum(n) => write!(f, "logical sector size {n} is below the 512-byte minimum"),
+            Self::BelowMinimum(n) => {
+                write!(f, "logical sector size {n} is below the {}-byte minimum", SectorSize::MIN_BYTES)
+            }
             Self::NotPowerOfTwo(n) => write!(f, "logical sector size {n} must be a power of two"),
             Self::AboveImplementationLimit(n) => write!(
                 f,

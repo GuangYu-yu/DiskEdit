@@ -15,8 +15,8 @@ truncate -s 1G "$T"
 $B new "$T" --yes >/dev/null
 # 400M 而非 200M：btrfs 的 resize 下限是 256MiB，更小的文件系统无论扩缩都被内核
 # 以 EINVAL 拒绝（实测 btrfs filesystem resize 报 "unable to resize: Invalid argument"）
-$B add "$T" 400M --align mib --name bt --yes >/dev/null; echo "add exit=$?"
-$B mkfs "$T":1 btrfs --yes; echo "mkfs exit=$?"
+$B add "$T" 400M --align mib --name bt --yes >/dev/null; exp $? 0 "add bt（400M）"
+$B mkfs "$T":1 btrfs --yes; exp $? 0 "mkfs btrfs"
 LD=$(lo_attach "$T")
 lo_waitpart "${LD}p1" || { echo "SKIP: ${LD}p1 未就绪"; exit 0; }
 P=${LD}p1
@@ -81,7 +81,7 @@ $B add --yes "$T2" 533725184 --start 2048 --name btm >/dev/null
 truncate -s 512M "$T3"
 L2=$(lo_attach "$T2")
 L3=$(lo_attach "$T3")
-mkfs.btrfs -f -d single -m single "${L2}p1" "$L3" >/dev/null 2>&1; echo "mkfs.btrfs(2 dev) exit=$?"
+mkfs.btrfs -f -d single -m single "${L2}p1" "$L3" >/dev/null 2>&1; exp $? 0 "mkfs.btrfs（2 个设备）"
 lo_waitpart "${L2}p1" || { echo "SKIP: ${L2}p1 未就绪"; exit 0; }
 mount_at "${L2}p1" "$TEST_MNT"
 S0=$(blockdev --getsize64 "${L2}p1")

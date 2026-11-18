@@ -44,8 +44,10 @@ echo "exit=$E msg: $(echo "$OUT" | head -1 | cut -c1-70)"
   && echo "A2 RECOVER-REFUSES-PROGRESS OK" \
   || { echo "A2 RECOVER WRONG (want 3 + refusal naming the record + record kept)"; rc=1; }
 echo "-- A3: 完成后记录应被删除 --"
+# 依据：move 收尾走 applied_with(空待办)（src/cmd/layout.rs:1722）→ 完整成功 0（src/outcome.rs:598）
 $B move "$T":2 --start 250000 --chunk 1 --yes >/dev/null 2>&1; E=$?
 record_absent "$T" && echo "A3 RECORD DROPPED OK (exit=$E)" || { echo "A3 RECORD LEFT (bad)"; rc=1; }
+exp "$E" 0 "A3 续跑完成"
 LD=$(lo_attach "$T")
 [ "$MD2" = "$(mdsum "${LD}p2")" ] && echo "A3 p2 DEV OK" || { echo "A3 p2 DEV CORRUPT"; rc=1; }
 e2fsck -fn "${LD}p2" >/dev/null 2>&1 && echo "A3 e2fsck clean" || { echo "A3 e2fsck ISSUES"; rc=1; }
@@ -66,10 +68,10 @@ dd if=/dev/urandom of="$TEST_MNT/a/rand.bin" bs=1M count=30 2>/dev/null
 NF1=$(wc -l < "$SNAP.1")
 echo "files: $NF1, symlink: $(readlink "$TEST_MNT"/link1), hardlink count: $(stat -c%h "$TEST_MNT"/a/f2.txt)"
 umnt
-$B move "$T":2 --start 250000 --chunk 1 --yes >/dev/null 2>&1; echo "move exit=$?"
+$B move "$T":2 --start 250000 --chunk 1 --yes >/dev/null 2>&1; exp $? 0 "move（复杂目录树分区）"
 LD=$(lo_attach "$T")
 e2fsck -fn "${LD}p2" > "$WSL_ROOT/t22e2out" 2>&1; EC=$?
-echo "e2fsck -fn exit=$EC (0=clean)"
+echo "e2fsck -fn exit=$EC (0=clean)"  # 观测行：e2fsck 的退出码由检查结果决定，本段只留档，不作断言
 tail -2 "$WSL_ROOT/t22e2out"
 mount_at "${LD}p2" "$TEST_MNT"
 (cd "$TEST_MNT" && find . -type f -exec md5sum {} \; | sort) > "$SNAP.2"
@@ -99,10 +101,15 @@ else
 fi
 echo "-- C2: 主头损坏时写操作（工具已从备份头恢复表 → 写后应自洽）--"
 $B resize --yes "$T":3 --grow-to-end >/dev/null 2>&1; E=$?
-echo "write exit=$E"
+echo "write exit=$E"  # 观测行：主头损坏时能否从备份头读回表由 C1 分支决定，本段只判写后表自洽（sgdisk）
 sgdisk -v "$T" >/dev/null 2>&1 && echo "C2 RECOVERED-CLEAN OK" || { echo "C2 INCONSISTENT AFTER WRITE"; rc=1; }
 echo "-- C3: 主头损坏 + new → 备份头被覆盖？（数据丢失风险） --"
-$B new "$T" --yes >/dev/null 2>&1; echo "new exit=$?"
+# 备份头自洽时 load_gpt 从备份救回整张表（C1 的 label/damaged 已表明这一点），new 的
+# 覆盖门据此判「表区非空」并拒绝（src/cmd/layout.rs 的探测与拒绝分支），不会覆盖仅存的那份备份
+OUT=$($B new "$T" --yes 2>&1); E=$?
+echo "new exit=$E : $(echo "$OUT" | head -1 | cut -c1-90)"
+exp "$E" 3 "new（主头损坏、备份仍在 → 覆盖门拒绝）"
+echo "$OUT" | grep -q "already hold data" || { echo "  BAD  refusal must name the non-empty table sectors"; rc=1; }
 N=$($B info "$T" | grep -o '"num":' | wc -l)
 echo "new 后可见分区数: $N"
 sgdisk -v "$T" 2>&1 | tail -1
@@ -111,7 +118,7 @@ mk
 SZ=$(stat -c%s "$T"); LAST=$((SZ / 512 - 1))
 dd if=/dev/zero of="$T" bs=512 seek=$LAST count=1 conv=notrunc 2>/dev/null
 echo "info: $($B info "$T" | head -c 50)"
-$B resize --yes "$T":3 --grow-to-end >/dev/null 2>&1; echo "repair exit=$?"
+$B resize --yes "$T":3 --grow-to-end >/dev/null 2>&1; exp $? 0 "resize（备份头缺失，主头可用）"
 $B info "$T" | grep -o '"num":3,[^}]*}'
 sgdisk -v "$T" 2>&1 | tail -1
 

@@ -57,33 +57,95 @@ pub fn rust_sources() -> Vec<(String, String)> {
     out
 }
 
-/// 去掉尾部 `#[cfg(test)] mod ...` 块之后的行。`#[cfg(test)]` 访问器不算测试模块，
-/// 仍留在生产行里；返回 (1-based 行号, 行文本)
+/// 去掉尾部测试模块之后的行。`#[cfg(test)]` 访问器不算测试模块，仍留在生产行里；
+/// 返回 (1-based 行号, 行文本)。
+///
+/// 测试模块的判据是"`#[cfg(...)` 里含 `test`，随后（跳过属性与注释）声明的是模块"：
+/// `#[cfg(test)]` 与 `#[cfg(all(test, target_os = "linux"))]` 都成立。只看字面量
+/// `#[cfg(test)]` 会把带平台的测试模块当生产代码，让只针对生产写的断言在测试夹具上误报
 pub fn production_lines(text: &str) -> Vec<(usize, &str)> {
     let lines: Vec<&str> = text.lines().collect();
     let mut out = Vec::new();
-    let mut skipping: Option<i32> = None;
+    // 已见到 `#[cfg(...test...)]`，等它修饰的那条声明（属性与注释行不算）
+    let mut pending = false;
+    // 正在跳过的测试模块体：该模块声明行的缩进。模块体在更深一级，故只有回到这一级
+    // 的 `}` 才收尾——按花括号计数会被测试里的格式串（`"{{{}}}"` 之类）带偏
+    let mut skipping: Option<usize> = None;
     for (i, line) in lines.iter().enumerate() {
-        if let Some(depth) = skipping.as_mut() {
-            *depth += line.matches('{').count() as i32 - line.matches('}').count() as i32;
-            if *depth <= 0 {
+        if let Some(indent) = skipping {
+            if indent_of(line) == indent && line.trim_start().starts_with('}') {
                 skipping = None;
             }
             continue;
         }
-        if line.trim() == "#[cfg(test)]" {
-            let opens_tests = lines[i + 1..]
-                .iter()
-                .take(2)
-                .any(|l| l.trim_start().starts_with("mod "));
-            if opens_tests {
-                skipping = Some(0);
+        if pending {
+            let t = line.trim_start();
+            if t.starts_with("#[") || t.starts_with("//") {
                 continue;
             }
+            pending = false;
+            if declares_module(t) {
+                if opens_body(line) {
+                    skipping = Some(indent_of(line));
+                }
+                continue;
+            }
+            // 这条 `cfg(test)` 修饰的不是模块：该行按生产行计
+            out.push((i + 1, *line));
+            continue;
+        }
+        if is_test_module_attr(line) {
+            if declares_module(line) {
+                if opens_body(line) {
+                    skipping = Some(indent_of(line));
+                }
+            } else {
+                pending = true;
+            }
+            continue;
         }
         out.push((i + 1, *line));
     }
     out
+}
+
+fn indent_of(line: &str) -> usize {
+    line.len() - line.trim_start().len()
+}
+
+/// 声明行是否带一个跨行的模块体：`mod x;` 与整行写完的模块都不进入跳过状态
+fn opens_body(line: &str) -> bool {
+    line.matches('{').count() > line.matches('}').count()
+}
+
+/// `#[cfg(...)]` 且其中出现 `test`：`#[cfg(test)]`、`#[cfg(all(test, target_os = "linux"))]`
+fn is_test_module_attr(line: &str) -> bool {
+    let attr = line.trim();
+    attr.starts_with("#[cfg(") && attr.contains("test")
+}
+
+/// 这一行声明的是模块吗：先剥掉属性与可见性修饰，再看首词是否为 `mod`。
+/// 按子串找 `mod ` 认不出 `pub(crate) mod fixtures`，属性里的空格也会干扰判断
+fn declares_module(line: &str) -> bool {
+    let mut rest = line.trim_start();
+    loop {
+        if let Some(after) = rest.strip_prefix("#[") {
+            let Some(at) = after.find(']') else { return false };
+            rest = after[at + 1..].trim_start();
+        } else if let Some(after) = rest.strip_prefix("pub(") {
+            let Some(at) = after.find(')') else { return false };
+            rest = after[at + 1..].trim_start();
+        } else if let Some(after) = rest.strip_prefix("pub") {
+            // `public_thing` 这类标识符不是可见性修饰
+            if !after.chars().next().is_some_and(char::is_whitespace) {
+                return false;
+            }
+            rest = after.trim_start();
+        } else {
+            break;
+        }
+    }
+    rest.split_whitespace().next() == Some("mod")
 }
 
 /// 豁免标记的行首。标记写在被豁免语句的上一行，形如 `// audit-allow: W-2 S1-6`：

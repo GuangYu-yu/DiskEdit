@@ -27,8 +27,8 @@ pub(crate) fn swap_rebuild_failure_skips_growth_finalization() {
     assert!(plan.moves.iter().any(|m| m.is_swap), "fixture must carry a movable swap");
     // 平台闸先于工具探测：非 Linux 上即使两个工具名都在 PATH，也按环境不满足断言
     let tools_ready = cfg!(target_os = "linux")
-        && crate::fsops::find_tool("mkswap").is_ok()
-        && crate::fsops::find_tool("losetup").is_ok();
+        && crate::fsops::Tool::Mkswap.find().is_ok()
+        && crate::fsops::Tool::Losetup.find().is_ok();
     if !tools_ready {
         let fresh = ap(&mut src, &mut plan, chunk, true, &mut |_| {});
         assert_eq!(
@@ -821,6 +821,58 @@ pub(crate) fn move_resume_refuses_a_prefix_that_does_not_match_the_record() {
     let (code, why) = crate::movepart::tests::support::refusal_of(|| crate::cmd::layout::cmd_move(&req));
     assert_eq!(code, 3, "a prefix that contradicts the record must be refused");
     assert!(why.contains("does not match the recovery record"), "the refusal must name the prefix: {why}");
+    assert!(record_path.exists(), "a refusal must leave the record in place");
+}
+
+/// 记录被改写出 CRC 自洽、却不落在可用区间内的目的区：位置比对只看源位置
+/// （条目尚未开始，源区原样），执行期只按盘容量兜底，照此续跑会把数据写进
+/// 备份头与备份条目区。必须在任何写盘之前拒绝
+#[cfg(target_os = "linux")]
+#[test]
+pub(crate) fn move_resume_refuses_a_destination_outside_the_usable_range() {
+    let (mut src, p) = plan_fixture(&[
+        (1, [0x11; 16], 1024, 2047),
+        (2, [0x22; 16], 4096, 8191),
+    ]);
+    let chunk: u64 = 1024 * 1024;
+    let last_usable = table::load_gpt(&src).unwrap().unwrap().header.last_usable_lba;
+    let reloc = crate::recovery::Relocation {
+        entries: vec![crate::recovery::RelocEntry {
+            partition: 2,
+            src_first: 4096,
+            len: 4096,
+            // 目的区整体推到可用区间上界之外
+            delta: last_usable as i64 + 1 - 4096,
+            is_swap: false,
+        }],
+        entry_index: 0,
+        chunks_in_entry: 0,
+        prefix_digest: [0u8; 32],
+        chunk_bytes: chunk,
+        kind: crate::recovery::RelocKind::Shift,
+        grow_part: 0,
+        disk_size: src.size,
+        ss: 512,
+    };
+    let record_path = attach_record(&mut src, crate::recovery::OpKind::Move, (4096, 8191), (2, 2048, 6143));
+    src.record_journal_mut()
+        .expect("attach_record adopts a record journal")
+        .bind_relocation(reloc, None)
+        .expect("the record binds before the resume guard runs");
+    let _keep = src.release();
+
+    let req = crate::cli::MoveRequest {
+        target: p.display().to_string(),
+        part: Some(crate::dev::PartSelector::Number(2)),
+        sector_size: None,
+        start: Some(crate::cli::StartSelector::Lba(2048)),
+        align: crate::domain::Align::none(),
+        align_given: false,
+        chunk_mib: Some(1),
+    };
+    let (code, why) = crate::movepart::tests::support::refusal_of(|| crate::cmd::layout::cmd_move(&req));
+    assert_eq!(code, 3, "a destination past last_usable must be refused: {why}");
+    assert!(why.contains("outside the usable range"), "the refusal must name the range: {why}");
     assert!(record_path.exists(), "a refusal must leave the record in place");
 }
 

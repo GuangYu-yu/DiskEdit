@@ -70,8 +70,8 @@ fn gpt_facts(gpt: &RawGpt) -> TableFacts {
         .entries
         .iter()
         .enumerate()
-        // 空槽是 starting_lba 与 ending_lba 同为 0 的条目；装配层只应看见已定义的分区，
-        // 否则容量与 :last 选择都会被整张空数组左右
+        // 未使用条目按类型 GUID 全零判定（见 `table::is_unused`）；装配层只应看见已定义
+        // 的分区，否则容量与 :last 选择都会被残留区间左右
         .filter(|(_, e)| !crate::table::is_unused(e))
         .map(|(i, e)| PartitionFact {
             number: (i + 1) as u32,
@@ -178,12 +178,13 @@ pub(crate) fn assemble_table_step(
             // 现有字节。归位本身是有意决策（位置字段由提交规范化），但覆盖非数组
             // 字节不能静默：写前比对已把原文登记进恢复记录，`recover` 可回放，这里只
             // 补足知情
-            if content.header.partition_entry_lba != 2 {
+            if content.header.partition_entry_lba != crate::table::PRIMARY_ARRAY_LBA {
                 eprintln!(
                     "note: the on-disk GPT declares its primary entry array at LBA {}; committing \
-                     normalizes it to LBA 2 and overwrites the bytes there (the pre-image is captured \
+                     normalizes it to LBA {} and overwrites the bytes there (the pre-image is captured \
                      in the recovery record and can be rolled back with `diskedit recover`)",
-                    content.header.partition_entry_lba
+                    content.header.partition_entry_lba,
+                    crate::table::PRIMARY_ARRAY_LBA
                 );
             }
             TableStep::gpt(src, kind, content, protective_mbr, snapshot)?

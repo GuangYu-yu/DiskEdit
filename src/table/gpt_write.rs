@@ -2,8 +2,8 @@
 
 use super::*;
 
-pub(crate) fn encode_name(entry: &GPTPartitionEntry) -> [u8; 72] {
-    let mut out = [0u8; 72];
+pub(crate) fn encode_name(entry: &GPTPartitionEntry) -> [u8; ENTRY_NAME_LEN] {
+    let mut out = [0u8; ENTRY_NAME_LEN];
     let s = entry.partition_name.as_str();
     let units: Vec<u16> = s.encode_utf16().take(36).collect();
     // 第 36 码元为高代理时其低代理落在截断界外，回退 35 个码元保住完整代理对
@@ -15,14 +15,14 @@ pub(crate) fn encode_name(entry: &GPTPartitionEntry) -> [u8; 72] {
 }
 
 /// 条目序列化：128 字节规范布局（UEFI 2.10 §5.3.3 GPT Partition Entry Array，Table 5.6）
-pub(crate) fn serialize_entry(e: &GPTPartitionEntry) -> [u8; 128] {
-    let mut b = [0u8; 128];
+pub(crate) fn serialize_entry(e: &GPTPartitionEntry) -> [u8; ENTRY_FIXED_BYTES] {
+    let mut b = [0u8; ENTRY_FIXED_BYTES];
     b[0..16].copy_from_slice(&e.partition_type_guid);
     b[16..32].copy_from_slice(&e.unique_partition_guid);
     b[32..40].copy_from_slice(&e.starting_lba.to_le_bytes());
     b[40..48].copy_from_slice(&e.ending_lba.to_le_bytes());
     b[48..56].copy_from_slice(&e.attribute_bits.to_le_bytes());
-    b[56..128].copy_from_slice(&encode_name(e));
+    b[ENTRY_NAME_OFFSET..ENTRY_NAME_OFFSET + ENTRY_NAME_LEN].copy_from_slice(&encode_name(e));
     b
 }
 
@@ -30,10 +30,10 @@ pub(crate) fn serialize_entry(e: &GPTPartitionEntry) -> [u8; 128] {
 /// （CRC 字段置 0）计算（UEFI 2.10 §5.3.2 Table 5.5：HeaderCRC32 覆盖 HeaderSize 字节，
 /// HeaderSize ≥ 92 且 ≤ 逻辑块大小）。HeaderSize 之后到扇区末尾为保留区，恒写零
 pub(crate) fn serialize_header(h: &RawHeader, array_crc: u32, ss: u64) -> io::Result<Vec<u8>> {
-    if h.header_size < 92 || h.header_size as u64 > ss {
+    if h.header_size < GPT_MIN_HEADER_SIZE || h.header_size as u64 > ss {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            format!("GPT HeaderSize {} out of range 92..={ss}", h.header_size),
+            format!("GPT HeaderSize {} out of range {GPT_MIN_HEADER_SIZE}..={ss}", h.header_size),
         ));
     }
     let mut b = vec![0u8; ss as usize];
@@ -49,7 +49,7 @@ pub(crate) fn serialize_header(h: &RawHeader, array_crc: u32, ss: u64) -> io::Re
     b[72..80].copy_from_slice(&h.partition_entry_lba.to_le_bytes());
     b[80..84].copy_from_slice(&h.number_of_partition_entries.to_le_bytes());
     b[84..88].copy_from_slice(&h.size_of_partition_entry.to_le_bytes());
-    b[88..92].copy_from_slice(&array_crc.to_le_bytes());
+    b[88..GPT_MIN_HEADER_SIZE as usize].copy_from_slice(&array_crc.to_le_bytes());
     let crc = crc32(&b[..h.header_size as usize]);
     b[16..20].copy_from_slice(&crc.to_le_bytes());
     Ok(b)
@@ -62,7 +62,7 @@ pub fn serialize_array(entries: &[GPTPartitionEntry], geom: &EntryArrayGeometry)
     let mut b = vec![0u8; geom.span_bytes() as usize];
     for (i, e) in entries.iter().enumerate().take(geom.entry_count as usize) {
         let off = i * geom.entry_size as usize;
-        b[off..off + 128].copy_from_slice(&serialize_entry(e));
+        b[off..off + ENTRY_FIXED_BYTES].copy_from_slice(&serialize_entry(e));
     }
     let crc = crc32(&b[..geom.byte_len() as usize]);
     (b, crc)
@@ -74,19 +74,19 @@ pub fn serialize_array(entries: &[GPTPartitionEntry], geom: &EntryArrayGeometry)
 pub(crate) fn canonical_headers(h: &RawHeader, last_lba: u64, backup_array_lba: u64) -> (RawHeader, RawHeader) {
     let primary = RawHeader {
         revision: h.revision,
-        primary_lba: 1,
+        primary_lba: PRIMARY_HEADER_LBA,
         backup_lba: last_lba,
         first_usable_lba: h.first_usable_lba,
         last_usable_lba: h.last_usable_lba,
         disk_guid: h.disk_guid,
-        partition_entry_lba: 2,
+        partition_entry_lba: PRIMARY_ARRAY_LBA,
         number_of_partition_entries: h.number_of_partition_entries,
         size_of_partition_entry: h.size_of_partition_entry,
         header_size: h.header_size,
     };
     let backup = RawHeader {
         primary_lba: last_lba,
-        backup_lba: 1,
+        backup_lba: PRIMARY_HEADER_LBA,
         first_usable_lba: h.first_usable_lba,
         last_usable_lba: h.last_usable_lba,
         disk_guid: h.disk_guid,
@@ -264,8 +264,8 @@ pub(crate) fn size_in_lba(total_sectors: u64) -> u32 {
 /// 块内保留区与 `0x55AA` 签名。
 pub(crate) fn protective_mbr_image(lba0: &mut [u8], total_sectors: u64) {
     let want_size = size_in_lba(total_sectors);
-    lba0[446..510].fill(0);
-    lba0[512..].fill(0);
+    lba0[MBR_ENTRY_AREA].fill(0);
+    lba0[MBR_SECTOR_BYTES..].fill(0);
     let rec = &mut lba0[446..462];
     rec[0] = 0x00; // BootIndicator
     rec[1..4].copy_from_slice(&[0x00, 0x02, 0x00]); // StartCHS 惯例值
@@ -273,8 +273,7 @@ pub(crate) fn protective_mbr_image(lba0: &mut [u8], total_sectors: u64) {
     rec[5..8].copy_from_slice(&[0xFF, 0xFF, 0xFF]); // EndCHS
     rec[8..12].copy_from_slice(&1u32.to_le_bytes());
     rec[12..16].copy_from_slice(&want_size.to_le_bytes());
-    lba0[510] = 0x55;
-    lba0[511] = 0xAA;
+    write_mbr_signature(lba0);
 }
 
 /// 保护 MBR 需要规范化时给出整扇区的新内容，已合规时返回 `None`（一字不写）。
@@ -305,8 +304,8 @@ pub(crate) fn protective_mbr_content(
 /// 装配期传入写前快照里的那一扇区，决策依据与写基线因此同源
 pub(crate) fn protective_mbr_content_from(lba0: &mut [u8], total_sectors: u64) -> Option<Vec<u8>> {
     let want_size = size_in_lba(total_sectors);
-    let reserved_zero = lba0[512..].iter().all(|&b| b == 0);
-    if lba0[510] == 0x55 && lba0[511] == 0xAA && reserved_zero {
+    let reserved_zero = lba0[MBR_SECTOR_BYTES..].iter().all(|&b| b == 0);
+    if has_mbr_signature(lba0) && reserved_zero {
         let rec = &lba0[446..462]; // 槽位 1（与下方写入位置一致）
         // 与 pmbr_shape_valid 同口径：槽位 2-4 必须全零，否则 hybrid MBR 残留
         // 会使 load_gpt 拒读 GPT（形状前置不满足），盘型判定就此失真

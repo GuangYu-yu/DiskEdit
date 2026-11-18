@@ -344,11 +344,14 @@ where
     }
 }
 
+/// 1 MiB 的字节数：`--align mib` 的取整单位与百分比增量的粒度都从这里取
+pub(crate) const MIB_BYTES: u64 = 1024 * 1024;
+
 /// 1 MiB 折算成表内扇区的唯一落点：不足一扇区时取 1，调用点共用，
-/// 不各自写 `(1024 * 1024 / ss).max(1)` 第二遍。`ss` 为 0 时没有有意义的折算，
+/// 不各自写 `(MIB_BYTES / ss).max(1)` 第二遍。`ss` 为 0 时没有有意义的折算，
 /// 直接取 1——本函数是折算助手而非校验点，不该成为除零的崩溃点
 pub(crate) fn mib_in_sectors(ss: u64) -> u64 {
-    (1024u64 * 1024).checked_div(ss).unwrap_or(0).max(1)
+    MIB_BYTES.checked_div(ss).unwrap_or(0).max(1)
 }
 
 /// 对齐单位（LBA 所属表的扇区数）。mib = 1MiB 折算成表内扇区；none = 不对齐。
@@ -606,6 +609,14 @@ pub(crate) fn src_from(tag: &str, data: &[u8]) -> crate::testdir::TestSource<Wri
         owner: None,
     });
     crate::testdir::TestSource::new(dir, src)
+}
+
+#[cfg(test)]
+pub(crate) fn create_mbr(src: &mut WriteSource) {
+    let regions = table::new_mbr_regions(src).unwrap();
+    let snapshot = table::table_snapshot(src, &regions).unwrap();
+    let step = table::TableStep::new_mbr(src, snapshot).unwrap();
+    crate::execution::table::execute(src, &step).unwrap();
 }
 
 #[cfg(test)]

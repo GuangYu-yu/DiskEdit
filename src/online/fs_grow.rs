@@ -2,24 +2,19 @@
 
 use super::*;
 use crate::dev::FileSource;
-use crate::fsops::run_write;
+use crate::fsops::OnlineGrow;
 
 /// FS 在线 grow 到整分区（ext: resize2fs 对挂载设备无 size = 扩满分区，man resize2fs；
 /// xfs: xfs_growfs 挂载点；btrfs: resize max 挂载点）。
 /// 程序与参数只写这一处：补救提示复用同一份映射（fs_grow_hint），避免两处漂移
-pub(crate) fn fs_grow_cmd(t: &OnlineTarget, fstype: Option<ContentKind>) -> Option<(String, Vec<String>)> {
+pub(crate) fn fs_grow_cmd(t: &OnlineTarget, fstype: Option<ContentKind>) -> Option<OnlineGrow> {
     // xfs_growfs 与 btrfs resize 都以挂载点为参数：目标不是从挂载点解析来时没有这个参数，
     // 与"该 FS 没有在线工具"同归 None（调用方统一报"换离线路径"）
-    let mnt = || t.mnt.as_deref().map(|p| p.to_string_lossy().into_owned());
-    let dev = t.part_dev.to_string_lossy().into_owned();
-    match fstype {
-        Some(ContentKind::Filesystem(FsKind::Ext)) => Some(("resize2fs".to_string(), vec![dev])),
-        Some(ContentKind::Filesystem(FsKind::Xfs)) => Some(("xfs_growfs".to_string(), vec![mnt()?])),
-        Some(ContentKind::Filesystem(FsKind::Btrfs)) => {
-            Some(("btrfs".to_string(), vec!["filesystem".into(), "resize".into(), "max".into(), mnt()?]))
-        }
-        _ => None,
+    let op = OnlineGrow::for_fstype(fstype)?;
+    if op.needs_mount() && t.mnt.is_none() {
+        return None;
     }
+    Some(op)
 }
 
 /// fs_grow 的三态失败：**该 FS 没有在线工具**意味着本次一个进程都没起，
@@ -35,16 +30,17 @@ pub(crate) enum FsGrowError {
 }
 
 pub(crate) fn fs_grow(t: &OnlineTarget, fstype: Option<ContentKind>) -> Result<(), FsGrowError> {
-    let Some((prog, args)) = fs_grow_cmd(t, fstype) else {
+    let Some(op) = fs_grow_cmd(t, fstype) else {
         return Err(FsGrowError::NoTool(format!(
             "{} has no online grow tool; unmount the partition and use the offline path where the FS is supported",
             crate::fsid::content_name(fstype.unwrap_or(ContentKind::Unknown))
         )));
     };
-    let argv: Vec<&str> = args.iter().map(String::as_str).collect();
+    let dev = t.part_dev.to_string_lossy();
+    let mnt = t.mnt.as_deref().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
     // spawn 失败 = 工具没跑起来；启动后拿不到退出状态 = 可能已改 FS，归 Exit（部分完成）。
     // 走 run_write：进程一旦起来就置写事实，后续步骤的归责不再把这次 grow 当成没写过
-    let out = match run_write(&prog, &argv) {
+    let out = match op.run(&dev, &mnt) {
         Ok(o) => o,
         Err(crate::fsops::FsError::CommandFailed(m)) => return Err(FsGrowError::Exit(m)),
         Err(e) => return Err(FsGrowError::Spawn(e)),
@@ -61,7 +57,11 @@ pub(crate) fn fs_grow(t: &OnlineTarget, fstype: Option<ContentKind>) -> Result<(
 /// 在线 FS 步的补救命令（与 fs_grow 共用命令映射；无在线工具时回落到离线提示）
 pub(crate) fn fs_grow_hint(t: &OnlineTarget, fstype: Option<ContentKind>) -> String {
     match fs_grow_cmd(t, fstype) {
-        Some((prog, args)) => format!("{prog} {}", args.join(" ")),
+        Some(op) => {
+            let dev = t.part_dev.to_string_lossy();
+            let mnt = t.mnt.as_deref().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
+            op.command_line(&dev, &mnt)
+        }
         None => crate::fsops::rescue_hint(fstype, &t.part_dev.to_string_lossy(), None),
     }
 }

@@ -36,7 +36,7 @@ chkp() { # part want-md5（传 "-" 则跳过哈希对比，仅 fsck；FS 扩缩�
   if fsck_out=$(e2fsck -fn "${LD}p$1" 2>&1); then
     echo "p$1 e2fsck clean"
   else
-    echo "p$1 e2fsck ISSUES (exit=$?)"; echo "$fsck_out" | tail -5; rc=1
+    echo "p$1 e2fsck ISSUES (exit=$?)"; echo "$fsck_out" | tail -5; rc=1  # 观测行：失败分支的诊断输出，退出码不固定，不作断言
   fi
   lo_detach "$LD"
 }

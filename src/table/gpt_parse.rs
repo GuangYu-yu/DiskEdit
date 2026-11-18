@@ -161,7 +161,7 @@ pub(crate) fn probe_header(sector: &[u8]) -> HeaderProbe {
         return HeaderProbe::Absent;
     }
     let hdr_size = rd_u32(sector, 12) as usize; // signature[8] revision[4] 之后才是 header_size
-    if hdr_size < 92 || hdr_size as u64 > sector.len() as u64 {
+    if hdr_size < GPT_MIN_HEADER_SIZE as usize || hdr_size as u64 > sector.len() as u64 {
         return HeaderProbe::Damaged("invalid GPT header size");
     }
     let stored_crc = rd_u32(sector, 16);
@@ -205,8 +205,10 @@ pub(crate) fn validate_geometry(
     view: GptCopyKind,
 ) -> Result<GptState, GptError> {
     let invalid = |m: &str| GptError::InvalidHeader(m.into());
-    if header.primary_lba != 1 {
-        return Err(invalid("GPT primary_lba != 1 — invalid GPT"));
+    if header.primary_lba != PRIMARY_HEADER_LBA {
+        return Err(invalid(&format!(
+            "GPT primary_lba != {PRIMARY_HEADER_LBA} — invalid GPT"
+        )));
     }
     if header.first_usable_lba > header.last_usable_lba {
         return Err(invalid("first_usable_lba > last_usable_lba — invalid GPT"));
@@ -222,8 +224,10 @@ pub(crate) fn validate_geometry(
         return Err(GptError::BeyondContainer { field: "backup_lba", value: header.backup_lba, file_last_lba });
     }
     // 数组起点恒须在 LBA0（保护 MBR）与 LBA1（主头）之后——主备两视角同判
-    if header.partition_entry_lba < 2 {
-        return Err(invalid("partition_entry_lba < 2 — GPT entry array would cover the protective MBR or the header"));
+    if header.partition_entry_lba < PRIMARY_ARRAY_LBA {
+        return Err(invalid(&format!(
+            "partition_entry_lba < {PRIMARY_ARRAY_LBA} — GPT entry array would cover the protective MBR or the header"
+        )));
     }
     let span = geom.lba_span();
     let array_end = header
@@ -363,7 +367,7 @@ pub(crate) fn load_entry_array(
 
 /// 每条目取前 128 字节解析（头部自述的 es 可大于 128，余下为保留区）
 pub(crate) fn parse_entry_array(raw: &[u8], n: usize, es: usize) -> Vec<GPTPartitionEntry> {
-    (0..n).map(|i| parse_entry(&raw[i * es..i * es + 128])).collect()
+    (0..n).map(|i| parse_entry(&raw[i * es..i * es + ENTRY_FIXED_BYTES])).collect()
 }
 
 /// 解析主头 + 条目数组（全部自研，写入路径用；保证主头有效）。
@@ -443,7 +447,7 @@ pub(crate) fn parse_backup(src: &FileSource, ss: u64, pmbr: PmbrSize) -> ParsedC
         }
     };
     // 备份头自述：MyLBA = 盘尾、AltLBA = 1（否则不是本盘的备份头）
-    if header.primary_lba != file_last_lba || header.backup_lba != 1 {
+    if header.primary_lba != file_last_lba || header.backup_lba != PRIMARY_HEADER_LBA {
         return ParsedCopy::Absent;
     }
     let (raw, geom) = match load_entry_array(src, &sec, &header, ss, GptCopyKind::Backup) {
@@ -453,7 +457,7 @@ pub(crate) fn parse_backup(src: &FileSource, ss: u64, pmbr: PmbrSize) -> ParsedC
     // 转成主头视角后再做几何自洽校验（validate_geometry 按主头语义检查 MyLBA==1）。
     // 数组位置取自盘上原值：规范化只改视角，不改这份副本指向的数组
     let array_lba = header.partition_entry_lba;
-    header.primary_lba = 1;
+    header.primary_lba = PRIMARY_HEADER_LBA;
     header.backup_lba = file_last_lba;
     if let Err(e) = validate_geometry(&header, &geom, file_last_lba, GptCopyKind::Backup) {
         return ParsedCopy::CopyDamaged(e);
@@ -474,8 +478,8 @@ pub(crate) fn parse_backup(src: &FileSource, ss: u64, pmbr: PmbrSize) -> ParsedC
 }
 
 pub(crate) fn parse_entry(b: &[u8]) -> GPTPartitionEntry {
-    let mut name_bytes = [0u8; 72];
-    name_bytes.copy_from_slice(&b[56..128]);
+    let mut name_bytes = [0u8; ENTRY_NAME_LEN];
+    name_bytes.copy_from_slice(&b[ENTRY_NAME_OFFSET..ENTRY_NAME_OFFSET + ENTRY_NAME_LEN]);
     GPTPartitionEntry {
         partition_type_guid: b[0..16].try_into().unwrap(),
         unique_partition_guid: b[16..32].try_into().unwrap(),
@@ -490,7 +494,7 @@ pub(crate) fn parse_entry(b: &[u8]) -> GPTPartitionEntry {
 /// `commit_table` 每次重写整个条目数组——任何写表命令都会把这类名字**永久**规范化。
 /// 这是已接受的边界：合法 UTF-16 名字逐字节往返，只有盘上本来就是非法 UTF-16 的
 /// 名字才会被改写（UEFI 2.10 §5.3.3 规定该字段是 UTF-16 字符串）
-pub(crate) fn decode_name(raw: &[u8; 72]) -> gptman::PartitionName {
+pub(crate) fn decode_name(raw: &[u8; ENTRY_NAME_LEN]) -> gptman::PartitionName {
     let units: Vec<u16> = raw.as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).collect();
     let s: String = String::from_utf16_lossy(&units);
     s.trim_end_matches('\0').into()
@@ -560,11 +564,11 @@ pub(crate) fn gpt_header_parseable(src: &FileSource) -> io::Result<bool> {
 /// 读取恒取前 512 字节：MBR 记录布局在 LBA0 的前 512 字节内（UEFI 2.10 §5.2.3），
 /// 与逻辑块大小无关，4Kn 设备上同样成立
 pub(crate) fn pmbr_size_state(src: &FileSource, table_ss: u64) -> io::Result<PmbrSize> {
-    let mut lba0 = [0u8; 512];
+    let mut lba0 = [0u8; MBR_SECTOR_BYTES];
     src.read_at(0, &mut lba0)?;
     let size = rd_u32(&lba0, 446 + 12);
     let e = size_in_lba(src.size / table_ss);
-    let e512 = size_in_lba(src.size / 512);
+    let e512 = size_in_lba(src.size / crate::domain::SectorSize::MIN_BYTES);
     if size == e {
         return Ok(PmbrSize::Normal);
     }
@@ -621,7 +625,7 @@ pub(crate) fn disk_guid_of(src: &FileSource) -> io::Result<Option<[u8; 16]>> {
         src.read_at(last * ss, &mut sector)?;
         match probe_header(&sector) {
             // 备份头的 MyLBA 是盘尾、对端是 LBA1；不满足这个形状的签名不是本盘的备份头
-            HeaderProbe::Present(h) if h.primary_lba == last && h.backup_lba == 1 => {
+            HeaderProbe::Present(h) if h.primary_lba == last && h.backup_lba == PRIMARY_HEADER_LBA => {
                 return Ok(Some(h.disk_guid));
             }
             HeaderProbe::Present(_) | HeaderProbe::Absent => {}
