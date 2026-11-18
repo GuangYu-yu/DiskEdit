@@ -764,8 +764,28 @@ impl Record {
         matches!(self.entry_table_in_flight, Fact::Known(in_flight) if in_flight == entry)
     }
 
-    /// 回滚已把记录登记的表区原文写回并核对：记录不再有未落定的表写。
-    /// 非搬移记录把围栏退回 `Pending`，搬移记录清空条目在飞位；不改编码
+    /// 表步是否已定：围栏落定、没有条目的表步在飞、修复事实（若有）已落成。
+    /// 任何一项缺失、在飞或读不出都答否——清理许可只在这三项都为已落定形态时签发
+    pub(crate) fn table_step_settled(&self) -> bool {
+        let fence_settled = match &self.table_fence {
+            Fact::Known(TableFence::Pending | TableFence::Landed) => true,
+            Fact::Known(TableFence::InFlight) | Fact::Absent | Fact::Undecidable(_) => false,
+        };
+        let no_entry_in_flight = match &self.entry_table_in_flight {
+            Fact::Absent => true,
+            Fact::Known(_) | Fact::Undecidable(_) => false,
+        };
+        let repair_settled = match &self.repair {
+            Fact::Absent => true,
+            Fact::Known(fact) => fact.state == RepairState::Landed,
+            Fact::Undecidable(_) => false,
+        };
+        fence_settled && no_entry_in_flight && repair_settled
+    }
+
+    /// 回滚已把记录登记的表区原文写回并核对（修复动作的写入同样在其中）：记录不再有
+    /// 未落定的表写。非搬移记录把围栏退回 `Pending`，搬移记录清空条目在飞位；
+    /// 修复事实一并清空。不改编码
     #[cfg(target_os = "linux")]
     pub(crate) fn settle_table_step_after_rollback(&mut self) {
         if self.relocation.is_some() {
@@ -774,6 +794,7 @@ impl Record {
         } else if matches!(self.table_fence, Fact::Known(TableFence::InFlight)) {
             self.table_fence = Fact::Known(TableFence::Pending);
         }
+        self.repair = Fact::Absent;
     }
 
     /// 报告面的作业阶段：作业到哪一步，据实说。

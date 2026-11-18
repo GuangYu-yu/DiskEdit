@@ -31,7 +31,7 @@ pub(crate) fn resolve_pv_target(disk_name: &str, pno: u32) -> Result<OnlineTarge
     let sysroot = crate::dev::sysfs_block_dir().join(disk_name);
     // 盘名与分区名都由 sysfs 目录名推得：节点必须与 sysfs 的设备号同源，
     // 否则后续 pvresize 的落点与这里读到的几何分属两台设备
-    let _disk_guard = ensure_node_is_device(&disk_dev, &sysroot)?;
+    let disk = ensure_node_is_device(&disk_dev, &sysroot)?;
     let mut sysdir = None;
     for entry in fs::read_dir(&sysroot)? {
         let p = entry?.path();
@@ -86,6 +86,7 @@ pub(crate) fn resolve_pv_target(disk_name: &str, pno: u32) -> Result<OnlineTarge
     })?;
     Ok(OnlineTarget {
         disk_dev,
+        disk,
         part_dev,
         mnt: None,
         pno,
