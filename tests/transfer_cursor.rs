@@ -36,7 +36,7 @@ fn the_cursor_is_global_across_entries_and_steps() {
     ] {
         assert!(
             executor.contains(marker),
-            "the executor no longer reconstructs a global cursor: {marker}"
+            "the executor does not reconstruct a global cursor: {marker}"
         );
     }
 }

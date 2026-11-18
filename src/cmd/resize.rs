@@ -455,8 +455,8 @@ pub(crate) fn cmd_resize(a: &ResizeRequest) -> crate::outcome::RunOutcome {
         // 按别人的游标继续。终点取本作业落定的新末端（`grow_end_for`，与执行半程同一
         // 算式）：提交后的重跑走 `record_committed` 分支，那里按盘上末端绑摘要，两者
         // 必须同值，否则"表已提交、FS 未收尾"的合法续跑会被自己拒掉。
-        // 这条稳定性依赖**续跑时 plan 由记录重建**（`resume_outcome`）：改成"从盘上
-        // 现算 plan 再比对"后，逐条位置检查会先拒，摘要随盘面漂移。`grow` 的摘要因此
+        // 这条稳定性依赖**续跑时 plan 由记录重建**（`resume_outcome`）：从盘上现算
+        // plan 再比对时，逐条位置检查会先拒，摘要随盘面漂移。`grow` 的摘要因此
         // 不对"磁盘变大导致 grow 终点变化"敏感——那由 `verify_relocation_resume` 的
         // `disk_size` 与条目位置检查兜住
         let grow_end = movepart::grow_end_for(&plan, start)

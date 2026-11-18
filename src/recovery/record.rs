@@ -23,9 +23,9 @@ use sha2::{Digest, Sha256};
 
 use super::scene::{Mapping, SceneIdentity, SceneProof};
 
-/// 格式家族的标识字节：此标识下的搬移位移是有符号值、搬移段带已拷前缀摘要，
-/// 别的标识一律解码失败
-pub(crate) const MAGIC: [u8; 4] = *b"DSK6";
+/// 恢复记录文件的标识字节（`D`isk `REC`ord）。布局或字段语义变化时换成新标识；
+/// 不匹配的标识一律解码失败。此标识下的搬移位移是有符号值、搬移段带已拷前缀摘要
+pub(crate) const MAGIC: [u8; 4] = *b"DREC";
 pub(crate) const HEADER_LEN: usize = 16;
 
 const HEADER_CRC_RANGE: std::ops::Range<usize> = 0..12;

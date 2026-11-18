@@ -301,7 +301,7 @@ fn mbr_grow_crash_is_resumed_by_re_running() {
     let committed = mbr_first_end(&img);
     assert!(committed > before, "the interrupted run must have committed the grown entry: {e}");
 
-    // 续跑：不再按现算的右侧空闲拒绝，只收尾并清掉记录
+    // 续跑按记录收尾，不走现算右侧空闲的拒绝
     let (c, _out, e) = run_out(&argv);
     assert_eq!(c, 0, "re-running must resume the recorded job: {e}");
     assert!(

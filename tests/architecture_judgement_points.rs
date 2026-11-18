@@ -51,7 +51,7 @@ fn the_move_replay_overlap_is_computed_only_in_rollback() {
     let text = source("recovery/rollback.rs");
     assert!(
         text.contains("move_writes_overlap_old_ranges(record)"),
-        "TableReplay no longer reads the overlap judgement"
+        "TableReplay does not read the overlap judgement"
     );
 }
 
@@ -83,7 +83,7 @@ fn table_replay_is_built_from_one_judgement() {
     for needle in needles {
         assert!(
             rollback.contains(needle),
-            "the judgement's wording left recovery/rollback.rs: {needle}"
+            "the judgement's wording must live in recovery/rollback.rs: {needle}"
         );
         for (rel, text) in rust_sources() {
             if rel == "recovery/rollback.rs" {
@@ -146,6 +146,6 @@ fn persisted_change_is_decided_at_one_point() {
     );
     assert!(
         source("outcome.rs").contains("this run changed no persistent state"),
-        "the presenter sentence is gone — the single-source wording moved"
+        "the presenter sentence is missing from outcome.rs — the single-source wording must live there"
     );
 }

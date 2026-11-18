@@ -76,7 +76,7 @@ fn record_dir(image: &Path) -> PathBuf {
     record_dir_in(state_root(), image)
 }
 
-/// 镜像旁边不再产生的落点；它不应再出现在目标之外的任何位置
+/// 镜像旁的 `.diskedit` 落点：记录不应落在那里，也不应出现在目标之外的任何位置
 fn sidecar(image: &Path) -> PathBuf {
     let mut name = image.as_os_str().to_owned();
     name.push(".diskedit");
@@ -127,7 +127,7 @@ fn record_bytes() -> Vec<u8> {
     p.push(0); // table fence: pending
 
     let mut out = vec![0u8; 16];
-    out[0..4].copy_from_slice(b"DSK6");
+    out[0..4].copy_from_slice(b"DREC");
     out[4..8].copy_from_slice(&(p.len() as u32).to_le_bytes());
     out[8..12].copy_from_slice(&crc32(&p).to_le_bytes());
     let header_crc = crc32(&out[0..12]);
