@@ -196,7 +196,7 @@ impl Fixture {
         out.push(0); // table fence: pending
 
         let mut file = vec![0u8; 16];
-        file[0..4].copy_from_slice(b"DSK6");
+        file[0..4].copy_from_slice(b"DREC");
         file[4..8].copy_from_slice(&(out.len() as u32).to_le_bytes());
         file[8..12].copy_from_slice(&crc32(&out).to_le_bytes());
         let header_crc = crc32(&file[0..12]);

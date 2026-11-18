@@ -172,7 +172,7 @@ fn no_write_claims_live_only_in_the_result_presenter() {
     // 断言会在别处失败而不是静默放行
     assert!(
         source("outcome.rs").contains(PRESENTER),
-        "the presenter sentence this guard exempts is gone — the exemption covers nothing"
+        "the presenter sentence this guard exempts is missing — the exemption covers nothing"
     );
 }
 
@@ -204,11 +204,11 @@ fn table_writes_go_through_the_guarded_entry() {
     // 调登记函数，否则这条豁免覆盖的就不是一条真实路径
     assert!(
         source("execution/table.rs").contains("src.write_converged("),
-        "the table step no longer writes through the guarded entry"
+        "the table step does not write through the guarded entry"
     );
     assert!(
         source("dev/source.rs").contains("crate::outcome::note_target_write("),
-        "the write primitive no longer records the run write fact"
+        "the write primitive does not record the run write fact"
     );
 }
 
@@ -223,7 +223,7 @@ fn off_plan_writes_are_registered_in_the_executor_header() {
     ] {
         assert!(
             header.contains(marker),
-            "an off-plan write is no longer registered beside the executor: {marker}"
+            "an off-plan write is not registered beside the executor: {marker}"
         );
     }
 }

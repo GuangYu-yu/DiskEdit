@@ -182,7 +182,7 @@ impl Fixture {
     fn bytes(&self) -> Vec<u8> {
         let payload = self.payload();
         let mut out = vec![0u8; 16];
-        out[0..4].copy_from_slice(b"DSK6");
+        out[0..4].copy_from_slice(b"DREC");
         out[4..8].copy_from_slice(&(payload.len() as u32).to_le_bytes());
         out[8..12].copy_from_slice(&crc32(&payload).to_le_bytes());
         let header_crc = crc32(&out[0..12]);
