@@ -19,9 +19,11 @@ pub(crate) fn tool_registry_names_and_packages_are_complete() {
     }
 }
 
-/// 能力清单里的工具必须都在注册表 `ALL` 里：`ALL` 是 test-only 的全集，按它遍历的
-/// 调用面（如 `check` 的工具报告）看不见表外的变体。清单是 `capabilities.rs` 里的
-/// `Tool::` 字面量，故对着该文件逐个比对——新增变体漏进 `ALL` 在这里显形
+/// 能力清单里的工具必须都在注册表 `ALL` 里：清单是 `capabilities.rs` 里的
+/// `Tool::` 字面量，故对着该文件逐个比对——新增变体漏进 `ALL` 在这里显形。
+///
+/// `ALL` 是各条对账检查的唯一全集：漏掉某个变体时，名字唯一、包名、文档工具表与
+/// CI 安装清单会静默跳过它
 #[test]
 pub(crate) fn every_capability_list_names_a_registered_tool() {
     let known: Vec<String> = Tool::ALL.iter().map(|t| format!("{t:?}")).collect();

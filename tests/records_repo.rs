@@ -109,7 +109,6 @@ fn record_bytes() -> Vec<u8> {
     p.extend_from_slice(&0u64.to_le_bytes());
     p.push(1); // Committed
     p.push(0);
-    p.extend_from_slice(&0u16.to_le_bytes());
     p.push(2); // SceneProof::FileId
     p.push(0);
     p.push(2); // IdentityMaterial::Image

@@ -54,7 +54,8 @@ pub(crate) enum Tool {
 }
 
 impl Tool {
-    /// 注册表全集：单测据此校验名字唯一与包名完备
+    /// 注册表全集：单测据此校验名字唯一与包名完备，并对账 `capabilities.rs` 的
+    /// 能力清单、`docs/internals.md` 的工具表与 CI 的安装清单
     #[cfg(test)]
     pub(crate) const ALL: &'static [Tool] = &[
         Tool::E2fsck,
