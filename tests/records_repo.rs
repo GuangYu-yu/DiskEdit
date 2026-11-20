@@ -101,10 +101,11 @@ fn record_bytes() -> Vec<u8> {
     p.extend_from_slice(&[0u8; 32]);
     p.extend_from_slice(&0u32.to_le_bytes());
     p.extend_from_slice(&0u64.to_le_bytes());
-    p.push(0);
-    p.push(0);
-    p.push(0);
-    p.push(0);
+    p.push(0); // fs phase
+    p.push(0); // old range absent
+    p.push(0); // target range absent
+    p.push(0); // lvm post absent
+    p.push(0); // relocation absent
     p.push(3); // RecoveryAction::InspectOnly
     p.extend_from_slice(&0u64.to_le_bytes());
     p.push(1); // Committed

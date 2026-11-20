@@ -150,6 +150,14 @@ pub(crate) fn resize_done(
             Some(_) => None,
             None => online_facts,
         };
+        // 缩容方向的 PV 链只有两步：pvresize 缩元数据（在表提交之前完成）→ 提交表项；
+        // 提交之后没有收尾步骤，此处按增量重新 pvresize 既无意义，也会在镜像的临时 loop
+        // 仍被持有栈占用时把一条本已完成的缩容报成待办。但"尺寸未变"不等于"链已跑过"：
+        // 扩容已提交而链未完成时重跑，new_bytes 与 old_bytes 相等，收尾基线仍在记录里，
+        // 此时必须继续跑链，否则 LV 停在旧尺寸却报成功
+        if new_bytes < old_bytes || (new_bytes == old_bytes && facts.is_none()) {
+            return Ok(crate::outcome::RunOutcome::applied_with(Vec::new()));
+        }
         // pvresize/lvextend 的写入不可回滚：此后回滚表项即"表与内容自相矛盾"，屏障必须
         // 先于该写入落。落点是它存在的唯一位置——GPT/MBR、镜像/块设备的 PV 收尾在此
         // 汇合，且只有 wsrc 带 journal；屏障紧贴外部工具调用，死亡窗口不会无谓锁死 `recover`

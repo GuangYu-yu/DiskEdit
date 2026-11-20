@@ -63,10 +63,15 @@ echo "########## D: 缩容 + --allow-move（缩容不需要让位）##########"
 mk ext4 500M
 LD=$(lo_attach "$T"); mount_at "${LD}p1" "$TEST_MNT" && { dd if=/dev/urandom of="$TEST_MNT/d.bin" bs=1M count=50 2>/dev/null; umount "$TEST_MNT" 2>/dev/null; }
 lo_detach "$LD"
+# 缩容不搬移任何分区，--allow-move 没有可放行的搬移；SIZE 与 --end 走同一段离线收缩
 OUT=$($B resize "$T":1 350M --allow-move --yes 2>&1); E=$?
 echo "exit=$E : $(echo "$OUT" | tail -1)"
-[ "$E" = "3" ] && echo "$OUT" | grep -q "resize <TARGET>:N --end" && echo "D SHRINK-REFUSAL OK" || { echo "D unexpected ($E)"; rc=1; }
-# 缩容的正道：resize --end 一条命令先缩 FS（离线）再收表，记录可续跑
+exp "$E" 0 "D SIZE 收缩（--allow-move 不触发搬移）"
+echo "$OUT" | grep -q 'fs shrunk' && echo "D shrink line OK" || { echo "D missing shrink line"; rc=1; }
+LD=$(lo_attach "$T")
+e2fsck -fn "${LD}p1" >/dev/null 2>&1 && echo "D shrink e2fsck clean" || { echo "D shrink e2fsck ISSUES"; rc=1; }
+lo_detach "$LD"
+# 缩容的另一种形态：resize --end 一条命令先缩 FS（离线）再收表，记录可续跑
 LD=$(lo_attach "$T"); lo_waitpart "${LD}p1" || { echo "p1 未就绪"; rc=1; lo_detach "$LD"; }
 BLOCKS=$(dumpe2fs -h "${LD}p1" 2>/dev/null | grep -i '^Block count' | tr -dc '0-9')
 BS=$(dumpe2fs -h "${LD}p1" 2>/dev/null | grep -i '^Block size' | tr -dc '0-9')

@@ -43,14 +43,14 @@ $B info "$T" | grep -o '"num":1,"first_lba":[0-9]*,"last_lba":[0-9]*'
 LD=$(lo_attach "$T")
 mount_at "${LD}p1" "$TEST_MNT" && { cat "$TEST_MNT"/m.txt; e2fsck -fn "${LD}p1" >/dev/null 2>&1 && echo "grow e2fsck clean" || { echo "grow e2fsck ISSUES"; rc=1; }; umount "$TEST_MNT" 2>/dev/null; }
 lo_detach "$LD"
-# MBR 只有原位扩容：SIZE 形态的缩容在写表之前被拒（src/cmd/resize/msdos.rs 的 shrinking 分支），
-# --end 形态也只要 GPT（src/gpt_policy.rs 的 require_gpt_geometry），故 MBR 分区没有缩容路径
+# MBR 主分区与 GPT 走同一条收缩路径（先离线缩 FS，再收条目）；--end 形态仍只对 GPT
+# （src/gpt_policy.rs 的 require_gpt_geometry）
 OUT=$($B resize "$T":1 30M --yes 2>&1); E=$?
-echo "$OUT" | head -1
-exp "$E" 3 "shrink refused（MBR 无缩容路径）"
+echo "$OUT" | grep -E 'fs shrunk|refused|error' | sed 's/^/    /'
+exp "$E" 0 "shrink"
+$B info "$T" | grep -o '"num":1,"first_lba":[0-9]*,"last_lba":[0-9]*'
 LD=$(lo_attach "$T")
-mount_at "${LD}p1" "$TEST_MNT" && { cat "$TEST_MNT"/m.txt; umount "$TEST_MNT" 2>/dev/null; }
-e2fsck -fn "${LD}p1" >/dev/null 2>&1 && echo "e2fsck clean（拒绝缩容未动盘）" || { echo "e2fsck ISSUES"; rc=1; }
+mount_at "${LD}p1" "$TEST_MNT" && { cat "$TEST_MNT"/m.txt; e2fsck -fn "${LD}p1" >/dev/null 2>&1 && echo "shrink e2fsck clean" || { echo "shrink e2fsck ISSUES"; rc=1; }; umount "$TEST_MNT" 2>/dev/null; }
 lo_detach "$LD"
 
 echo

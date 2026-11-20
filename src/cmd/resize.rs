@@ -7,6 +7,8 @@ mod lvm;
 mod superfloppy;
 mod msdos;
 mod finish;
+mod dry_run;
+mod shrink_offline;
 
 #[cfg(test)]
 mod tests;
@@ -20,6 +22,8 @@ pub(crate) use lvm::*;
 pub(crate) use superfloppy::*;
 pub(crate) use msdos::*;
 pub(crate) use finish::*;
+pub(crate) use dry_run::*;
+pub(crate) use shrink_offline::*;
 
 use crate::cli::ResizeRequest;
 use crate::support::*;
@@ -144,11 +148,20 @@ pub(crate) const DETAILS: &str = r#"  Resize partition and its filesystem, parti
     10G       set size to 10 GiB (units k/m/g/t, 1024 base; plain bytes
               when no unit)
     +2G       grow by 2 GiB
+    -500M     shrink by 500 MiB (GPT and MBR primary partitions; the
+              filesystem shrinks first, offline)
     +10%      grow by 10% of current size (rounded down to 1MiB)
+    -10%      shrink by 10% of current size
     grow      grow into the contiguous free space to the right
     Sizes may carry a fraction: 1.5G = 1610612736 bytes, +1.5% likewise. A
     size that does not land on a sector boundary is truncated, and the
     truncation is reported
+
+  DRY RUN:
+    --dry-run prints the computed ranges, the filesystem step and any
+    relocation plan, then stops before the first write; no record is
+    created and --yes is not required. The numbers come from the same
+    resolution and planning code the write path uses.
 
   IN PLACE (--end LBA | --grow-to-end):
     repartition the end without moving the partition; the start stays at the
@@ -158,17 +171,18 @@ pub(crate) const DETAILS: &str = r#"  Resize partition and its filesystem, parti
     shrink that gets interrupted cannot be rolled back with `recover`.
 
   Constraints:
-    shrink    with SIZE refused: this form only grows. Shrink with
-              `resize <TARGET>:N --end LBA`: it shrinks the filesystem first
-              (offline), then the partition, and an interrupted shrink
-              resumes from its record
+    shrink    a SIZE below the current size shrinks on GPT and on MBR
+              primary partitions (1..4; extended containers and logical
+              partitions are out of scope); an interrupted shrink resumes when
+              re-run with the same absolute size. A shrink on a mounted
+              filesystem is refused — unmount first
     --no-fs   refused on an LVM PV (the PV chain has no filesystem step of
-              its own). A swap partition relocated as a blocker is rebuilt
-              regardless: that step belongs to the relocation, not to the
-              filesystem
-    MBR       uses the same recovery record as GPT: an interrupted grow is
-              resumed by re-running the same command; `recover` rolls the
-              recorded table write back instead
+              its own) and on a shrink. A swap partition relocated as a
+              blocker is rebuilt regardless: that step belongs to the
+              relocation, not to the filesystem
+    MBR       uses the same recovery record as GPT: an interrupted grow or
+              shrink resumes when re-run with the same absolute size; `recover`
+              rolls the recorded table write back instead
     record    a relocation record written before requests were bound to
               their digest carries none: it cannot be tied to this request,
               so re-running `resize --allow-move` is refused. Inspect it with
@@ -197,21 +211,20 @@ pub(crate) const DETAILS: &str = r#"  Resize partition and its filesystem, parti
   resize interrupted after its partition step (the LVM finish chain still
   pending) is resumed by re-running `resize`."#;
 
-/// `resize` 的 SIZE 形态只扩。缩容由 `--end` 承担——先离线缩文件系统再收表，进度落在
-/// 同一份记录里，中断后同请求重跑续做
-fn refuse_shrink() -> RunOutcome {
+/// 在线路径不能缩：挂载中的文件系统没有离线收缩那一步
+#[cfg(any(target_os = "linux", test))]
+fn refuse_shrink_online() -> RunOutcome {
     RunOutcome::refused(
-        "`resize` with SIZE only grows — shrink with `resize <TARGET>:N --end LBA`: it shrinks \
-         the filesystem first (offline), then the partition, and an interrupted shrink resumes \
-         from its record"
+        "`resize` cannot shrink a mounted filesystem — the online path only grows; unmount the \
+         partition and re-run, the offline path shrinks the filesystem first and then the partition"
             .to_string(),
     )
 }
 
-/// resize 的一键入口。SIZE：`10G`=绝对值、`+2G`=增量、`grow`=吃满右侧可用区
-/// （挡路分区须 --allow-move，搬移计划须 --yes 确认）。SIZE 形态只扩不缩：缩容走
-/// `--end`（离线 `resizefs` 不接受尺寸）。LVM PV 扩容自动 pvresize，
-/// --grow-lv 再把新增传给目标 LV 并扩 FS
+/// resize 的一键入口。SIZE：`10G`=绝对值、`+2G`=增量、`-2G`=收缩、`grow`=吃满右侧可用区
+/// （挡路分区须 --allow-move，搬移计划须 --yes 确认）。GPT 与 MBR 主分区都支持收缩，先离线
+/// 缩文件系统再收分区（与 `--end` 同一段机制；MBR 覆盖 1..4，扩展容器与逻辑分区不在此列）。
+/// LVM PV 扩容自动 pvresize，--grow-lv 再把新增传给目标 LV 并扩 FS
 pub(crate) fn cmd_resize(a: &ResizeRequest) -> crate::outcome::RunOutcome {
     // SIZE 已由命令行层解析成形状 + 数值，锁前/锁下两次锚定共用同一份（请求里的 a.size）
     // 载体必须是整盘：分区节点首扇区里的 FAT/NTFS 引导字节带 0x55AA 时会被 parse_mbr_raw
@@ -224,10 +237,20 @@ pub(crate) fn cmd_resize(a: &ResizeRequest) -> crate::outcome::RunOutcome {
             let Some(pref) = a.part else {
                 bail_fail(RunOutcome::refused("`resize` needs :N (the partition to resize)".to_string()));
             };
+            if a.dry_run {
+                return preview_mbr(a, &src, pref);
+            }
             return cmd_resize_msdos(a, pref, &src);
         }
         // superfloppy：无分区表，FS 即整盘，无表可写——纯 FS grow
-        Ok(table::TableLabel::None) => return cmd_resize_superfloppy(a),
+        Ok(table::TableLabel::None) => {
+            if a.dry_run {
+                bail_fail(RunOutcome::refused(
+                    "--dry-run previews table targets — a superfloppy has no partition entry to resize".to_string(),
+                ));
+            }
+            return cmd_resize_superfloppy(a);
+        }
         Ok(other) => bail_fail(RunOutcome::refused(format!("resize requires a GPT or MBR target (label: {other})"))),
         Err(e) => bail_fail(RunOutcome::refused(format!("parse failed: {e}"))),
     }
@@ -236,7 +259,7 @@ pub(crate) fn cmd_resize(a: &ResizeRequest) -> crate::outcome::RunOutcome {
     };
     // 可操作几何（构造点即拒绝条目重叠）：entries / ss / 修复后的 last_usable 全部取自它，
     // 命令层不自己算一次有效上界
-    let (g, _repair) = crate::gpt_policy::require_gpt_geometry(&src, "resize").unwrap_or_else(|f| bail_fail(f));
+    let (g, repair) = crate::gpt_policy::require_gpt_geometry(&src, "resize").unwrap_or_else(|f| bail_fail(f));
     // 只读快照
     let part = crate::gpt_policy::resolve_part_in(crate::gpt_policy::TableEntries::Gpt(g.entries()), pref)
         .unwrap_or_else(|f| bail_fail(f));
@@ -248,14 +271,15 @@ pub(crate) fn cmd_resize(a: &ResizeRequest) -> crate::outcome::RunOutcome {
     let is_pv = fstype == fsid::ContentKind::Lvm2Pv;
 
     // SIZE → 绝对目标字节数 / grow 标记（锁前快照，仅服务参数早失败与在线路径的选择）
-    let (target, grow_to_end) = resolve_size_request(a.size, cur_bytes).unwrap_or_else(|f| bail_fail(f));
+    let (target, grow_to_end) = resolve_size_request(a.size, cur_bytes, ss).unwrap_or_else(|f| bail_fail(f));
     let shrinking = target.is_some_and(|t| t < cur_bytes);
-    // 缩容不走 `resize`。判据落在在线/离线分岔之前，两条路径同一答案
-    if shrinking {
-        bail_fail(refuse_shrink());
-    }
 
     check_pv_intent(part, Some(fstype), is_pv, shrinking, a.grow_lv, a.no_fs).unwrap_or_else(|f| bail_fail(f));
+
+    // 只读盘点：与下面的执行路径共用解析、判定与计划实现，但没有写句柄
+    if a.dry_run {
+        return preview_gpt(a, &src, &g, repair, part);
+    }
 
     // PV 链要扩哪个 LV 是只读判定：--lv 写错、PV 上没有 LV、LV 不唯一都必须在此之前
     // 定下来，写表之后再发现就只剩"分区已扩、PV 链尚未做"的现场。在线与离线两条路径
@@ -309,20 +333,16 @@ pub(crate) fn cmd_resize(a: &ResizeRequest) -> crate::outcome::RunOutcome {
     // 改写过，锁前锚点就已作废——拿旧锚点的绝对值对照新几何会把"扩"判成"缩"
     // （先缩 FS！），方向与请求相反。grow 标记是请求的形状（与盘无关），锁前锁后同值
     let cur_bytes = lba_range_bytes(start, end, ss);
-    let (target, _) = resolve_size_request(a.size, cur_bytes).unwrap_or_else(|f| bail_fail(f));
+    let (target, _) = resolve_size_request(a.size, cur_bytes, ss).unwrap_or_else(|f| bail_fail(f));
     let shrinking = target.is_some_and(|t| t < cur_bytes);
-    // 锁下的方向可能因窗口内的外部改写而与锁前相反（缩容一律不走这里）
-    if shrinking {
-        // 缩容撞上未收尾的搬移作业：按"目标被占用"拒绝并指向 recover --release。只说"只扩"
-        // 会把用户推向 resize --end，在那里再撞一次占用拒绝，两次都不提那份作业
-        if reloc {
-            bail_fail(RunOutcome::refused(
-                "an unfinished operation still owns this target — release it with `diskedit recover \
-                 --release` (or re-run the original grow request to finish it first)"
-                    .to_string(),
-            ));
-        }
-        bail_fail(refuse_shrink());
+    // 方向就是 SIZE 在锁下几何上的解析结果，写分支按它分流（扩 / 不变 / 收缩）。
+    // 唯一例外是收缩撞上未收尾的搬移作业：按"目标被占用"拒绝并指向 recover --release
+    if shrinking && reloc {
+        bail_fail(RunOutcome::refused(
+            "an unfinished operation still owns this target — release it with `diskedit recover \
+             --release` (or re-run the original grow request to finish it first)"
+                .to_string(),
+        ));
     }
     // FS 类型与 PV 判据同样按锁下现状重取（与几何同理）：识别与取锁之间分区可被
     // 重新格式化（mkfs 不守本工具的锁），过期的 is_pv 会让 check_pv_intent 对着
@@ -331,15 +351,29 @@ pub(crate) fn cmd_resize(a: &ResizeRequest) -> crate::outcome::RunOutcome {
         .unwrap_or_else(|e| bail_fail(RunOutcome::refused(format!("identify failed: {e}"))));
     let is_pv = fstype == fsid::ContentKind::Lvm2Pv;
     check_pv_intent(part, Some(fstype), is_pv, shrinking, a.grow_lv, a.no_fs).unwrap_or_else(|f| bail_fail(f));
-    // 记录型续跑：记录里有提交前区间、且盘上区间已不是它 ⇒ 分区层提交过，当前区间
-    // 就是本次作业的目标（`resize` 不改起点）。已提交的现场上现算右侧空闲会得到 0，
-    // 照它分流会把"只差 FS/PV 收尾"拒成 nothing to grow / 右侧被挡。
-    // 没有这段区间的记录（首次写盘之前中断，或不含提交前区间的记录）不适用：盘上没有任何
-    // 提交，按未提交续做
-    let record_committed = entry.resumed
-        && src.record_journal()
-            .and_then(|j| j.old_range())
-            .is_some_and(|old| old != (start, end));
+    // 记录型续跑：盘上区间停在记录写下的目标区间 ⇒ 分区层提交过，当前区间就是本次
+    // 作业的目标（`resize` 不改起点）。已提交的现场上现算右侧空闲会得到 0，照它分流会
+    // 把"只差 FS/PV 收尾"拒成 nothing to grow / 右侧被挡。
+    // 第三个位置说明盘被外部改过：两个收尾方向都会把作业落在错误的位置，直接拒绝。
+    // 记录里还没有区间（首次写盘之后、区间绑定之前中断）没有可比对的事实，按未提交续做
+    let recorded_place = if entry.resumed {
+        src.record_journal().and_then(|j| j.record().place_on_disk((start, end)))
+    } else {
+        None
+    };
+    if entry.resumed
+        && let Some(journal) = src.record_journal()
+        && let (Some(old), Some(target_range)) = (journal.old_range(), journal.target_range())
+        && recorded_place.is_none()
+    {
+        bail_fail(RunOutcome::refused(format!(
+            "partition {part} sits at {start}..{end}, neither the record's pre-commit range {}..{} nor its \
+             target {}..{} — the layout moved under the job; inspect it with `diskedit inspect` and release \
+             the record with `diskedit recover --release` if it is stale",
+            old.0, old.1, target_range.0, target_range.1
+        )));
+    }
+    let record_committed = recorded_place == Some(crate::recovery::RecordedPlace::Committed);
     // PV 链的工具必须在写表之前齐备（pvresize/pvs 及 grow-lv 的 lvs/vgs/lvextend；
     // 镜像目标另加 losetup——它的分区链要临时映射）：它们在表提交之后才启动，
     // 缺工具那时才发现就只剩 PARTIAL 加手工
@@ -479,13 +513,10 @@ pub(crate) fn cmd_resize(a: &ResizeRequest) -> crate::outcome::RunOutcome {
         let o = settle_layout(o, &src, record);
         finish_resize(a, o, Some(&mut src), part, is_pv, is_block, lv_sel.as_ref().map(|s| s.path.as_str()), cur_bytes)
     } else {
-        // SIZE：字节 → 扇区（下取整）；缩容已在入口拒绝，这里只剩扩与不变两种
+        // SIZE：字节 → 扇区（下取整）；收缩是缩短末端，起点不变
         let Some(bytes) = target else {
             bail_fail(RunOutcome::refused("`resize` needs a size: diskedit resize <TARGET>[:N] <SIZE> (see diskedit help resize)".to_string()));
         };
-        if bytes < ss {
-            bail_fail(RunOutcome::refused(format!("size {bytes} < one sector ({ss})")));
-        }
         // SIZE 是外部输入：换算与相加全程 checked，回绕会把越过 last_usable 的荒谬值送进比较
         let Some(new_end) = start.checked_add(bytes / ss).and_then(|e| e.checked_sub(1)) else {
             bail_fail(RunOutcome::refused(format!("size {bytes} overflows the LBA range")));
@@ -495,8 +526,8 @@ pub(crate) fn cmd_resize(a: &ResizeRequest) -> crate::outcome::RunOutcome {
         }
         // 请求已通过越界判定，note 不会再跟在一条拒绝后面
         crate::support::note_sector_truncation("resizing to", bytes, ss);
-        // 请求的形状三选一：尺寸未变算不出正位移，它可能是原样重跑同一条扩容命令；
-        // 缩容已在入口拒绝，这里只剩扩与不变两种。搬移量只在扩时有定义
+        // 请求的形状三选一：尺寸未变算不出正位移，它可能是原样重跑同一条扩容命令。
+        // 搬移量只在扩时有定义；收缩走直连路径，由文件系统步先缩内容再收表
         let intent = if new_end > end {
             movepart::ShiftIntent::Grow(new_end - end)
         } else if new_end == end {

@@ -417,12 +417,13 @@ pub(crate) fn execute_apply(
         log,
     )?;
 
-    // 现场先绑：执行器从记录里的条目游标决定从哪继续，记录里没有搬移计划时它拒绝推进游标
+    // 现场先绑：执行器从记录里的条目游标决定从哪继续，记录里没有搬移计划时它拒绝推进游标。
+    // 提交前区间与目标区间先写，记录从第一次落盘起就带着"表步是否已发生"的两段事实
+    record_journal(src)?
+        .bind_ranges(d.old_range, (grow_start, grow_end))
+        .map_err(|e| RunOutcome::no_mutation(e.record_failure("the pre-commit and target ranges")))?;
     bind_relocation(src, &d.relocation, d.lvm.as_ref())
         .map_err(|e| RunOutcome::no_mutation(e.bind_failure()))?;
-    record_journal(src)?.bind_old_range(d.old_range).map_err(|e| {
-        RunOutcome::no_mutation(e.record_failure("the pre-commit range"))
-    })?;
 
     let mut sink = crate::recovery::sink::RecordSink::with_log(log);
     match crate::execution::execute_plan(src, &confirmed, Some(d.chunk_len), &mut sink, post)? {

@@ -104,6 +104,11 @@ const ALLOW_RULES: &[Rule] = &[
         id: "A-18",
         why: "扩容收尾的参数是一次作业的独立事实，拆参数对象只是搬运",
     },
+    Rule {
+        file: "cmd/resize/shrink_offline.rs",
+        id: "A-19",
+        why: "缩容第一步由 GPT 与 MBR 共用，参数直接来自执行现场，拆参数对象只是搬运",
+    },
 ];
 
 const DISCARD_RULES: &[Rule] = &[

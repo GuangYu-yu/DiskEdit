@@ -4,15 +4,17 @@
 //! `--noheadings --nosuffix --units b --separator '|'` 的文本行解析：
 //! [`pv_size_report`]（`pvs` 的六字段，核对 PV 尺寸）与 [`lv_state`]（`lvs` 的
 //! 五字段，取目标 LV 的字节尺寸与激活位）。执行与解析分离，解析为纯函数可单测。
-//! pvresize(8)：扩容方向无前置条件（缩容才要求新末端之后
-//! 无已分配 extent）；lvextend(8)：`-l +N` 按 extent 数增量扩，`-r/--resizefs`
-//! 同步扩文件系统。
+//! pvresize(8)：扩容方向无前置条件；缩容要求新末端之后没有已分配 extent。
+//! lvextend(8)：`-l +N` 按 extent 数增量扩，`-r/--resizefs` 同步扩文件系统。
 //!
-//! PV 缩容本工具不做——链恰好与扩容反向：先 lvreduce -r 缩 LV + FS，再
-//! pvresize --setphysicalvolumesize 缩 PV 元数据，最后改分区表。pvresize 拒绝
-//! 时需先 pvmove 把 PE 前移，后者是 LVM 内部元数据重构，不在分区工具的范围内
+//! PV 缩容按反向链的最末一步执行：先由调用方证明新末端之后没有已分配的 extent，
+//! 再 pvresize --setphysicalvolumesize 缩 PV 元数据，最后由分区表提交新末端。
+//! 不做 pvmove/lvreduce：把 PE 前移是 LVM 内部元数据重构，不在分区工具的范围内
 
-use crate::fsops::{lvextend, lvs_json, lvs_state_row, pvresize, pvs_size_row, pvs_vg_json, vgs_extent_json, FsError, Tool};
+use crate::fsops::{
+    lvextend, lvs_json, lvs_state_row, pvresize, pvresize_to, pvs_segments_row, pvs_size_row, pvs_vg_json,
+    vgs_extent_json, FsError, Tool,
+};
 use serde_json::Value;
 
 /// LVM 链失败的三态：工具缺失是环境缺件（装 lvm2 后重试有意义），**请求与卷现状不
@@ -368,13 +370,21 @@ fn parse_pv_size_with(
         parse_num_field(fields[i].trim())
             .ok_or_else(|| LvmError::Failed(format!("pvs: unparsable {field} {:?} in {row:?}", fields[i])))
     };
-    Ok(PvSizeReport {
+    let report = PvSizeReport {
         dev_size: num(1, "dev_size")?,
         pv_size: num(2, "pv_size")?,
         pe_start: num(3, "pe_start")?,
         pv_pe_count: num(4, "pv_pe_count")?,
         pv_pe_alloc_count: num(5, "pv_pe_alloc_count")?,
-    })
+    };
+    // 全零行是 pvs 对读不出或重复映射的副本给出的占位输出：当成真实尺寸会让
+    // "缩到 / 扩到某尺寸"的后置条件恒成立
+    if report.dev_size == 0 || report.pv_pe_count == 0 {
+        return Err(LvmError::Failed(format!(
+            "pvs: report describes a zero-size PV ({row:?}) — the device is unreadable or mapped twice; cannot trust the report"
+        )));
+    }
+    Ok(report)
 }
 
 /// 采集 PV 的尺寸字段。命令形态固定为
@@ -383,6 +393,102 @@ fn parse_pv_size_with(
 pub fn pv_size_report(part_dev: &str) -> Result<PvSizeReport, LvmError> {
     let out = tool_stdout(Tool::Pvs, pvs_size_row(part_dev))?;
     parse_pv_size_with(&out, part_dev, &|reported| device_match(part_dev, reported))
+}
+
+/// `pvs --segments` 输出里已分配段的统计：分配的 extent 总数与最大末端（extent 计数）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct AllocSegments {
+    allocated_extents: u64,
+    max_end: u64,
+}
+
+/// 解析 `pvs --segments` 的四字段文本行。`lv_name` 为空的是空闲段，不计入分配；
+/// 名字按三态身份比对。字段数、数值格式、身份任一不可判定都整体拒绝——
+/// 这里的结论要用来证明"缩到新末端不碰任何已分配 extent"
+fn parse_alloc_end_with(
+    stdout: &str,
+    part_dev: &str,
+    matches: &dyn Fn(&str) -> DeviceMatch,
+) -> Result<AllocSegments, LvmError> {
+    let mut allocated_extents = 0u64;
+    let mut max_end = 0u64;
+    let mut rows = 0usize;
+    for line in stdout.lines().filter(|l| !l.trim().is_empty()) {
+        rows += 1;
+        let fields: Vec<&str> = line.split('|').collect();
+        if fields.len() != 4 {
+            return Err(LvmError::Failed(format!(
+                "pvs --segments: expected 4 fields (pv_name,pvseg_start,pvseg_size,lv_name), got {} in {line:?}",
+                fields.len()
+            )));
+        }
+        let name = fields[0].trim();
+        match matches(name) {
+            DeviceMatch::Same => {}
+            DeviceMatch::Different => {
+                return Err(LvmError::Failed(format!(
+                    "pvs --segments: report row is for {name}, not {part_dev} — cannot bound the allocated area"
+                )))
+            }
+            DeviceMatch::Unknown(why) => {
+                return Err(LvmError::Failed(format!(
+                    "pvs --segments: cannot prove whether {name} is {part_dev} ({why}) — refusing to trust the report"
+                )))
+            }
+        }
+        let num = |i: usize, field: &str| {
+            parse_num_field(fields[i].trim()).ok_or_else(|| {
+                LvmError::Failed(format!(
+                    "pvs --segments: unparsable {field} {:?} in {line:?}",
+                    fields[i]
+                ))
+            })
+        };
+        let start = num(1, "pvseg_start")?;
+        let size = num(2, "pvseg_size")?;
+        if fields[3].trim().is_empty() {
+            continue;
+        }
+        let end = start
+            .checked_add(size)
+            .ok_or_else(|| LvmError::Failed(format!("pvs --segments: extent end overflows in {line:?}")))?;
+        allocated_extents = allocated_extents
+            .checked_add(size)
+            .ok_or_else(|| LvmError::Failed(format!("pvs --segments: extent count overflows in {line:?}")))?;
+        max_end = max_end.max(end);
+    }
+    if rows == 0 {
+        return Err(LvmError::Failed("pvs --segments: empty report — cannot bound the allocated area".to_string()));
+    }
+    Ok(AllocSegments { allocated_extents, max_end })
+}
+
+/// 新末端的最小合法字节数：`pe_start + 最大已分配 extent 末端 × extent 大小`。
+/// 新尺寸小于它时 pvresize 会拒绝；该结论在写盘之前就能得到
+pub fn pv_allocated_end_bytes(part_dev: &str) -> Result<u64, LvmError> {
+    let report = pv_size_report(part_dev)?;
+    if report.pv_pe_alloc_count == 0 {
+        return Ok(report.pe_start);
+    }
+    let vg = vg_of(part_dev)?.ok_or_else(|| {
+        LvmError::Refused(format!(
+            "{part_dev} reports {} allocated extents but belongs to no VG — cannot bound the allocated area",
+            report.pv_pe_alloc_count
+        ))
+    })?;
+    let extent = vg_extent_size(&vg)?;
+    let out = tool_stdout(Tool::Pvs, pvs_segments_row(part_dev))?;
+    let segs = parse_alloc_end_with(&out, part_dev, &|reported| device_match(part_dev, reported))?;
+    if segs.allocated_extents != report.pv_pe_alloc_count {
+        return Err(LvmError::Failed(format!(
+            "pvs --segments accounts for {} allocated extents but pvs reports {} — cannot bound the allocated area",
+            segs.allocated_extents, report.pv_pe_alloc_count
+        )));
+    }
+    segs.max_end
+        .checked_mul(extent)
+        .and_then(|bytes| bytes.checked_add(report.pe_start))
+        .ok_or_else(|| LvmError::Failed("pvs --segments: allocated end overflows".to_string()))
 }
 
 /// 该分区所属 VG 名；Ok(None) = 有 PV 标签但 `vg_name` 为空（不属任何 VG），
@@ -508,6 +614,12 @@ pub fn pv_resize(part_dev: &str) -> Result<(), LvmError> {
     tool_stdout(Tool::Pvresize, pvresize(part_dev)).map(|_| ())
 }
 
+/// 把 PV 元数据缩到 `bytes` 字节。调用方先用 [`pv_allocated_end_bytes`] 证明
+/// 新末端之后没有已分配的 extent；`--yes` 用于跳过 pvresize 的缩容确认
+pub fn pv_resize_to(part_dev: &str, bytes: u64) -> Result<(), LvmError> {
+    tool_stdout(Tool::Pvresize, pvresize_to(part_dev, bytes)).map(|_| ())
+}
+
 /// LV 增量扩 n 个 extent 并同步扩文件系统（lvextend -l +N -r）
 pub fn lv_extend(lv_path: &str, extents: u64) -> Result<(), LvmError> {
     tool_stdout(Tool::Lvextend, lvextend(lv_path, extents)).map(|_| ())
@@ -579,6 +691,26 @@ mod tests {
         assert_eq!(strip_pe_offset("/dev/weird(name)"), "/dev/weird(name)");
     }
 
+    /// `pvs --segments` 的 `pvseg_start/pvseg_size` 按 extent 计：累计的是 size 之和，
+    /// 空闲行（lv_name 为空）不计入；最大末端按 start+size 取，而不是按段数
+    #[test]
+    fn allocated_segments_skip_free_rows() {
+        let rows = "/dev/sda3|0|128|root\n/dev/sda3|128|64|data\n/dev/sda3|192|64|\n";
+        let segs = parse_alloc_end_with(rows, "/dev/sda3", &exact("/dev/sda3")).unwrap();
+        assert_eq!(segs, AllocSegments { allocated_extents: 192, max_end: 192 });
+    }
+
+    #[test]
+    fn allocated_segments_reject_unexpected_shape() {
+        let bad_fields = "/dev/sda3|0|128\n";
+        assert!(parse_alloc_end_with(bad_fields, "/dev/sda3", &exact("/dev/sda3")).is_err());
+        let bad_value = "/dev/sda3|0|x|root\n";
+        assert!(parse_alloc_end_with(bad_value, "/dev/sda3", &exact("/dev/sda3")).is_err());
+        assert!(parse_alloc_end_with("", "/dev/sda3", &exact("/dev/sda3")).is_err());
+        // 别的设备行不能被当成目标设备的结论
+        assert!(parse_alloc_end_with("/dev/sdb1|0|128|root\n", "/dev/sda3", &exact("/dev/sda3")).is_err());
+    }
+
     #[test]
     fn extent_size_strips_decimal() {
         let json = r#"{"report":[{"vg":[{"vg_extent_size":"4194304.00"}]}]}"#;
@@ -622,6 +754,8 @@ mod tests {
             "/dev/sda3|1|2|3|4x\n",
             "/dev/sda3|1.5|2|3|4\n",
             "/dev/sdb1|1|2|3|4\n",
+            // 全零行是 pvs 对读不出或重复映射的副本给出的占位输出
+            "/dev/sda3|0|0|0|0|0\n",
         ] {
             assert!(parse_pv_size_with(bad, "/dev/sda3", &m).is_err(), "{bad:?} must be refused");
         }

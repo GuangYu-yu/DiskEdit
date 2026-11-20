@@ -445,8 +445,25 @@ impl WriteSource {
         Ok(())
     }
 
-    pub(crate) fn adopt_record_journal(&mut self, journal: RecordJournal) {
+    /// 挂上恢复记录。记录里的提交前区间与目标区间都是 LBA 落位，必须落在这块目标之内：
+    /// 越界的区间不可能由本工具在这块目标上写出，只说明落点上的记录属于另一块盘，
+    /// 不能当续跑现场
+    pub(crate) fn adopt_record_journal(
+        &mut self,
+        journal: RecordJournal,
+    ) -> Result<(), crate::outcome::RunOutcome> {
         let record = journal.record();
+        let sectors = self.src.size / self.src.sector_size;
+        for (what, range) in [("pre-commit", record.old_range), ("target", record.target_range)] {
+            if let Some((start, end)) = range
+                && end >= sectors
+            {
+                return Err(crate::outcome::RunOutcome::refused(format!(
+                    "the record's {what} range {start}..{end} does not fit the {sectors}-sector target \
+                     — the record belongs to a different target"
+                )));
+            }
+        }
         // 只有从盘上读到的记录才算"盘上已有记录"；内存里新建的记录要等第一次
         // persist 成功后由 `note_record_persisted` 置位
         if journal.is_persisted() {
@@ -456,6 +473,7 @@ impl WriteSource {
             crate::outcome::note_record_past_irreversible_point();
         }
         self.src.record_journal = Some(journal);
+        Ok(())
     }
 
     /// 把单文件恢复记录取回来（成功收尾后提交/清理）

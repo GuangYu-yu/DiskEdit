@@ -122,6 +122,12 @@ const ALLOWED: &[(&str, &str, &str)] = &[
         "编码前的在飞位校验：只有 `Known` 且等于搬移游标才通过，`Absent` / `Undecidable` \
          与不相符的 `Known` 都返回错误，不写出记录、不签发写许可",
     ),
+    (
+        "recovery/record.rs",
+        "W-20",
+        "源区间段的形状与所属操作只在 `Known` 时对账：`copy` 缺段在编码侧由 W-15 拒绝、\
+         在解码侧由段缺失拒读；`Undecidable` 只出现在前缀记录上，写路径不接纳前缀记录",
+    ),
 ];
 
 /// 去掉 `mod tests` 之后的行。`#[cfg(test)]` 访问器不算测试模块，仍留在生产行里

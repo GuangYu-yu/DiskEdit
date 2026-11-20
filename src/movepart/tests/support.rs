@@ -66,8 +66,13 @@ pub(crate) fn attach_record(
         src.size,
     );
     journal.bind_plan(digest).expect("a fresh record binds the request");
-    journal.bind_old_range(old).unwrap();
-    src.adopt_record_journal(journal);
+    if matches!(op, crate::recovery::OpKind::Resize | crate::recovery::OpKind::ResizeEnd) {
+        // 请求区间 (request.1, request.2) 就是这次 resize 的提交目标
+        journal.bind_ranges(old, (request.1, request.2)).unwrap();
+    } else {
+        journal.bind_move_range(old).unwrap();
+    }
+    src.adopt_record_journal(journal).expect("the fixture's pre-commit range fits its image");
     record_path
 }
 

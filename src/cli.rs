@@ -46,7 +46,7 @@ pub(crate) enum ValueDomain {
     Target,
     /// 记录编号：32 位小写十六进制
     RecordId,
-    /// `LBA` 或 `end`
+    /// `LBA`、`end` 或 `align`
     StartOffset,
     /// 十进制 LBA
     Lba,
@@ -77,7 +77,7 @@ impl ValueDomain {
             Self::Text(placeholder) => placeholder,
             Self::Target => "TARGET",
             Self::RecordId => "ID",
-            Self::StartOffset => "LBA|end",
+            Self::StartOffset => "LBA|end|align",
             Self::Lba => "LBA",
             Self::Align => "A",
             Self::SectorSize => "N",
@@ -106,8 +106,10 @@ impl ValueDomain {
             }
             Self::StartOffset => Ok(Parsed::Start(if text.eq_ignore_ascii_case("end") {
                 StartSelector::PinnedToEnd
+            } else if text.eq_ignore_ascii_case("align") {
+                StartSelector::Aligned
             } else {
-                StartSelector::Lba(text.parse().map_err(|_| "an LBA or `end`, e.g. 2048".to_string())?)
+                StartSelector::Lba(text.parse().map_err(|_| "an LBA, `end` or `align`, e.g. 2048".to_string())?)
             })),
             Self::Lba => Ok(Parsed::Lba(
                 text.parse().map_err(|_| "an LBA, e.g. 2048".to_string())?,
@@ -172,6 +174,7 @@ enum Effect {
     OverwriteData,
     GrowToEnd,
     Grow,
+    DryRun,
     DiscardReplay,
     ReplayTableOnly,
     Release,
@@ -214,7 +217,7 @@ pub(crate) const FLAGS: &[FlagSpec] = &[
     flag(
         "--align",
         ValueDomain::Align,
-        "placement alignment: mib|none. add's automatic placement defaults to 1 MiB; an explicit --start (add/move/copy) and the end computed by resize align only when --align is given",
+        "placement alignment: mib|none. add's automatic placement defaults to 1 MiB; an explicit --start (add/move/copy) and the end computed by resize align only when --align is given; move's `--start align` is always 1 MiB",
         Effect::AlignValue,
     ),
     flag(
@@ -236,6 +239,12 @@ pub(crate) const FLAGS: &[FlagSpec] = &[
         effect: Effect::DiscardReplay,
         requires: &["--release"],
     },
+    flag(
+        "--dry-run",
+        ValueDomain::Bool,
+        "print the plan and stop before the first write; --yes is not required",
+        Effect::DryRun,
+    ),
     flag(
         "--end",
         ValueDomain::Lba,
@@ -329,7 +338,7 @@ pub(crate) const FLAGS: &[FlagSpec] = &[
     flag(
         "--start",
         ValueDomain::StartOffset,
-        "new start: an LBA, or `end` for pack-to-end",
+        "new start: an LBA, `end` for pack-to-end, or `align` for the next 1 MiB boundary (move only)",
         Effect::Start,
     ),
     flag(
@@ -356,12 +365,14 @@ pub(crate) fn flag_spec(name: &str) -> Option<&'static FlagSpec> {
     FLAGS.iter().find(|f| f.name == name)
 }
 
-/// `--start` 的两种给法。
+/// `--start` 的三种给法。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum StartSelector {
     Lba(u64),
     /// `--start end`：贴着可用区尾部打包
     PinnedToEnd,
+    /// `--start align`：从该分区现有起点上取整到下一个 1 MiB 边界（仅 move）
+    Aligned,
 }
 
 /// `--type-guid` 的两种形态：GPT 的类型 GUID，MBR 的类型字节。
@@ -699,7 +710,13 @@ pub(crate) const COMMANDS: &[CommandDef] = &[
             variant(
                 "<TARGET>[:N] <SIZE> [--allow-move] [--chunk N] [--grow-lv] [--lv NAME] [--no-fs] --yes",
                 &[TARGET_ARG, SIZE_ARG],
-                &[opt("--allow-move"), opt("--chunk"), opt("--grow-lv"), opt("--lv")],
+                &[
+                    opt("--allow-move"),
+                    opt("--chunk"),
+                    opt("--dry-run"),
+                    opt("--grow-lv"),
+                    opt("--lv"),
+                ],
                 &[],
                 TargetSuffix::Any,
                 true,
@@ -707,7 +724,7 @@ pub(crate) const COMMANDS: &[CommandDef] = &[
             variant(
                 "<TARGET>:N --end LBA [--align A] [--no-fs] --yes",
                 &[TARGET_ARG],
-                &[opt("--end"), opt("--align")],
+                &[opt("--dry-run"), opt("--end"), opt("--align")],
                 &[Selector::Flag("--end")],
                 TargetSuffix::Partition,
                 false,
@@ -715,7 +732,7 @@ pub(crate) const COMMANDS: &[CommandDef] = &[
             variant(
                 "<TARGET>:N --grow-to-end [--align A] [--no-fs] --yes",
                 &[TARGET_ARG],
-                &[opt("--grow-to-end"), opt("--align")],
+                &[opt("--dry-run"), opt("--grow-to-end"), opt("--align")],
                 &[Selector::Flag("--grow-to-end")],
                 TargetSuffix::Partition,
                 false,
@@ -745,7 +762,7 @@ pub(crate) const COMMANDS: &[CommandDef] = &[
         group: CommandGroup::Everyday,
         summary: "move a partition, data follows (chunked copy, resumable)",
         variants: &[variant(
-            "<TARGET>:N --start <LBA|end> [--chunk N] --yes [--align A]",
+            "<TARGET>:N --start <LBA|end|align> [--chunk N] --yes [--align A]",
             &[TARGET_ARG],
             &[
                 opt("--align"),
@@ -1092,6 +1109,7 @@ pub(crate) struct ResizeRequest {
     pub(crate) allow_move: bool,
     /// `--chunk` 的显式值；`None` 表示未给出（续跑取记录值，新作业取默认值）
     pub(crate) chunk_mib: Option<u64>,
+    pub(crate) dry_run: bool,
 }
 
 pub(crate) struct MoveRequest {
@@ -1188,6 +1206,7 @@ pub(crate) struct ResizeEndRequest {
     pub(crate) grow_to_end: bool,
     pub(crate) align: Align,
     pub(crate) no_fs: bool,
+    pub(crate) dry_run: bool,
 }
 
 /// `recover`：一个命令、两种归宿。`release` 为真时不回放任何字节，只释放记录文件；
@@ -1313,6 +1332,7 @@ struct Options {
     chunk_mib: Option<u64>,
     grow_to_end: bool,
     grow: bool,
+    dry_run: bool,
     discard_replay: bool,
     replay_table_only: bool,
     release: bool,
@@ -1342,6 +1362,7 @@ impl Default for Options {
             chunk_mib: None,
             grow_to_end: false,
             grow: false,
+            dry_run: false,
             discard_replay: false,
             replay_table_only: false,
             release: false,
@@ -1477,6 +1498,7 @@ fn build_resize(p: &Positionals, o: Options) -> Request {
             grow_to_end: o.grow_to_end,
             align: o.align,
             no_fs: o.no_fs,
+            dry_run: o.dry_run,
         });
     }
     let size = match p.parsed(Slot::Size) {
@@ -1496,6 +1518,7 @@ fn build_resize(p: &Positionals, o: Options) -> Request {
         lv: o.lv,
         allow_move: o.allow_move,
         chunk_mib: o.chunk_mib,
+        dry_run: o.dry_run,
     })
 }
 
@@ -1858,13 +1881,15 @@ fn parse_from(argv: impl Iterator<Item = std::ffi::OsString>) -> (&'static Comma
         }
     }
     let confirmed = opts.yes;
+    // `--dry-run` 只读盘点：它不写盘，因此不需要确认
+    let dry_run = opts.dry_run;
     let built = (def.build)(
         &Positionals { def, variant: chosen, tokens: &positional },
         opts,
     );
     // `Confirmation::Required` 的命令缺 `--yes` 在解析期落 2。
     // 放在 build 之后：取值域与槽位的错误更靠近出错的那一处，先报它们
-    if def.confirmation == Confirmation::Required && !confirmed {
+    if def.confirmation == Confirmation::Required && !confirmed && !dry_run {
         bail_fail(RunOutcome::usage(format!(
             "`{}` needs --yes (see diskedit help {})",
             def.name, def.name
@@ -2078,6 +2103,7 @@ fn store_flag(opts: &mut Options, spec: &FlagSpec, value: Option<Parsed>) {
         (Effect::KeepPartuuid, None) => opts.keep_partuuid = true,
         (Effect::GrowToEnd, None) => opts.grow_to_end = true,
         (Effect::Grow, None) => opts.grow = true,
+        (Effect::DryRun, None) => opts.dry_run = true,
         (Effect::DiscardReplay, None) => opts.discard_replay = true,
         (Effect::Release, None) => opts.release = true,
         (Effect::ReplayTableOnly, None) => opts.replay_table_only = true,
@@ -2301,49 +2327,68 @@ mod tests {
         }
     }
 
-    /// 选项总表与注册表双向对账
+    /// 选项总表与注册表双向对账。两个语种各有一份表，逐份比对
     #[test]
     fn internals_options_match_the_registry() {
-        use super::{flag_spec, FLAGS};
-
-        const DOC: &str = include_str!("../docs/internals.md");
-        let rows: Vec<&str> = DOC
-            .lines()
-            .skip_while(|l| l.trim() != "## Options")
-            .skip(1)
-            .take_while(|l| !l.starts_with("## "))
-            .collect();
-        assert!(!rows.is_empty(), "docs/internals.md must carry an `## Options` section");
-
-        const PIPE: char = '\u{00A6}';
-        let mut documented: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-        for line in rows {
-            let row = line.replace("\\|", &PIPE.to_string());
-            let Some(rest) = row.strip_prefix('|') else { continue };
-            let cells: Vec<&str> = rest.split('|').collect();
-            let cell = cells[0].trim();
-            if !cell.starts_with("`--") {
-                continue;
-            }
-            let name = cell.trim_matches('`');
-            assert!(documented.insert(name.to_string()), "the options table lists {name} twice");
-            let spec = flag_spec(name)
-                .unwrap_or_else(|| panic!("the options table lists an unregistered flag: {name}"));
-            let value = cells[1].trim().replace(PIPE, "|");
-            if spec.domain.takes_value() {
-                let placeholder = spec.domain.placeholder();
-                assert_ne!(value, "—", "{name} takes a value but the table calls it a boolean");
-                assert_eq!(value, placeholder, "{name}: table placeholder must match the registry");
-            } else {
-                assert_eq!(
-                    value, "—",
-                    "{name} is a boolean in the registry, so the table must give it no value"
-                );
-            }
+        const DOCS: &[(&str, &str, &str)] = &[
+            ("docs/en/internals.md", "## Options", include_str!("../docs/en/internals.md")),
+            ("docs/zh/internals.md", "## 选项", include_str!("../docs/zh/internals.md")),
+        ];
+        for (doc, heading, text) in DOCS {
+            check_options_table(doc, heading, text);
         }
-        let registered: std::collections::BTreeSet<String> =
-            FLAGS.iter().map(|f| f.name.to_string()).collect();
-        assert_eq!(documented, registered, "the options table and the registry must match exactly");
+
+        fn check_options_table(doc: &str, heading: &str, text: &str) {
+            use super::{flag_spec, FLAGS};
+
+            let rows: Vec<&str> = text
+                .lines()
+                .skip_while(|l| l.trim() != heading)
+                .skip(1)
+                .take_while(|l| !l.starts_with("## "))
+                .collect();
+            assert!(!rows.is_empty(), "{doc} must carry a `{heading}` section");
+
+            const PIPE: char = '\u{00A6}';
+            let mut documented: std::collections::BTreeSet<String> =
+                std::collections::BTreeSet::new();
+            for line in rows {
+                let row = line.replace("\\|", &PIPE.to_string());
+                let Some(rest) = row.strip_prefix('|') else { continue };
+                let cells: Vec<&str> = rest.split('|').collect();
+                let cell = cells[0].trim();
+                if !cell.starts_with("`--") {
+                    continue;
+                }
+                let name = cell.trim_matches('`');
+                assert!(
+                    documented.insert(name.to_string()),
+                    "{doc} lists {name} twice"
+                );
+                let spec = flag_spec(name)
+                    .unwrap_or_else(|| panic!("{doc} lists an unregistered flag: {name}"));
+                let value = cells[1].trim().replace(PIPE, "|");
+                if spec.domain.takes_value() {
+                    let placeholder = spec.domain.placeholder();
+                    assert_ne!(value, "—", "{name} takes a value but the table calls it a boolean");
+                    assert_eq!(
+                        value, placeholder,
+                        "{doc}: {name} placeholder must match the registry"
+                    );
+                } else {
+                    assert_eq!(
+                        value, "—",
+                        "{name} is a boolean in the registry, so the table must give it no value"
+                    );
+                }
+            }
+            let registered: std::collections::BTreeSet<String> =
+                FLAGS.iter().map(|f| f.name.to_string()).collect();
+            assert_eq!(
+                documented, registered,
+                "the options table in {doc} and the registry must match exactly"
+            );
+        }
     }
 
     /// 文档里的示例要能直接跑通：`Required` 的命令，示例行必须带 `--yes`。
@@ -2353,8 +2398,11 @@ mod tests {
         const DOCS: &[(&str, &str)] = &[
             ("README.md", include_str!("../README.md")),
             ("README.zh-CN.md", include_str!("../README.zh-CN.md")),
-            ("docs/interop.md", include_str!("../docs/interop.md")),
-            ("docs/reference.md", include_str!("../docs/reference.md")),
+            ("docs/en/interop.md", include_str!("../docs/en/interop.md")),
+            ("docs/en/reference.md", include_str!("../docs/en/reference.md")),
+            ("docs/zh/interop.md", include_str!("../docs/zh/interop.md")),
+            ("docs/zh/internals.md", include_str!("../docs/zh/internals.md")),
+            ("docs/zh/reference.md", include_str!("../docs/zh/reference.md")),
         ];
         let mut checked = 0;
         for (file, text) in DOCS {
@@ -2612,6 +2660,11 @@ mod tests {
         assert!(r.align_given, "explicit --align mib must be distinguishable from the default");
         assert_eq!(r.align, crate::domain::Align::mib(1).unwrap());
         assert_eq!(r.chunk_mib, Some(8));
+
+        let super::Request::Move(r) = parse(&["move", "img:1", "--start", "align", "--yes"]) else {
+            panic!("expected a move request");
+        };
+        assert_eq!(r.start, Some(super::StartSelector::Aligned), "`align` is a selector, not an LBA");
 
         let super::Request::Resize(r) =
             parse(&["resize", "img:1", "grow", "--chunk", "8", "--yes"])

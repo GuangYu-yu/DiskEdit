@@ -5,10 +5,9 @@ use super::*;
 use crate::cli::SizeSpec;
 
 /// PV / --grow-lv 的事前判据：与表类型无关，故 GPT 与 MBR 两条 resize 路径共用一份。
-/// 两条判据都必须落在任何写盘之前——PV 缩容链与扩容反向：先 lvreduce -r 缩 LV
-/// 与 FS，再 pvresize --setphysicalvolumesize 缩 PV 元数据，最后才改分区表。这条链
-/// 本工具不代为执行，PV 缩容在此直接拒绝，三步都留给用户；代为先改表会留下
-/// "分区已缩、PV 元数据未动"的不一致
+/// 各条判据都必须落在任何写盘之前。PV 缩容按反向链执行：先 pvresize 把 PV 元数据缩到
+/// 新末端（要求新末端之后没有已分配 extent，见 `pv_shrink_precheck`），再提交分区表；
+/// 不做 pvmove/lvreduce。`--grow-lv` 只属于扩容方向，与缩容同时出现即请求自相矛盾
 pub(crate) fn check_pv_intent(
     part: u32,
     fstype: Option<fsid::ContentKind>,
@@ -25,9 +24,9 @@ pub(crate) fn check_pv_intent(
         ));
     }
     if is_pv {
-        if shrinking {
+        if shrinking && grow_lv {
             return Err(crate::outcome::RunOutcome::refused(
-                "shrinking an LVM PV needs the lvreduce/pvresize chain — do it manually (see pvresize(8))",
+                "--grow-lv extends an LV by the space a partition gains — it cannot combine with shrinking this PV; drop --grow-lv".to_string(),
             ));
         }
     } else if grow_lv {

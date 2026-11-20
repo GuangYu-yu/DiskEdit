@@ -28,6 +28,7 @@ pub(crate) const PROBES: &[FlagProbe] = &[
     FlagProbe { name: "--allow-move", kind: Kind::Bool, sample: None, command: "resize" },
     FlagProbe { name: "--chunk", kind: Kind::Value, sample: Some("4"), command: "move" },
     FlagProbe { name: "--discard-replay", kind: Kind::Bool, sample: None, command: "recover" },
+    FlagProbe { name: "--dry-run", kind: Kind::Bool, sample: None, command: "resize" },
     FlagProbe { name: "--end", kind: Kind::Value, sample: Some("4096"), command: "resize" },
     FlagProbe { name: "--grow-lv", kind: Kind::Bool, sample: None, command: "resize" },
     FlagProbe { name: "--grow", kind: Kind::Bool, sample: None, command: "info" },

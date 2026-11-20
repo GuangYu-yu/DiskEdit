@@ -100,7 +100,7 @@ pub(crate) fn resize_part_resume_skips_done_chunks() {
         src.size,
     );
     journal.bind_plan(digest).expect("a fresh record binds the request");
-    journal.bind_old_range((2048, 10239)).unwrap();
+    journal.bind_ranges((2048, 10239), (new_start, new_end)).unwrap();
     // 记录的条目表与生产同形：一条目、已完成执行序的第一块（正位移从尾块起），
     // 摘要就是那一块的目的内容。续跑据此跳过尾块、从第二块接着搬
     let prefix: [u8; 32] = {
@@ -133,7 +133,7 @@ pub(crate) fn resize_part_resume_skips_done_chunks() {
     journal
         .record_transfer_checkpoint(Some((0, 1)), 1, 1, prefix)
         .expect("the checkpoint advances to the first done chunk");
-    src.adopt_record_journal(journal);
+    src.adopt_record_journal(journal).expect("the fixture's pre-commit range fits its image");
 
     // 续传：跳过 chunk 0，补齐 chunk 1..3，提交表项
     let o = rsize(&mut src, 1, new_start, new_end, chunk, false, &mut |_| {});
@@ -189,8 +189,8 @@ pub(crate) fn resize_crash_records_durable_progress() {
         src.size,
     );
     journal.bind_plan(digest).expect("a fresh record binds the request");
-    journal.bind_old_range((2048, 10239)).unwrap();
-    src.adopt_record_journal(journal);
+    journal.bind_ranges((2048, 10239), (new_start, new_end)).unwrap();
+    src.adopt_record_journal(journal).expect("the fixture's pre-commit range fits its image");
 
     // 右移 1 MiB（自重叠，块收敛到 1 MiB）：尾→头推进，第 2 轮读失败时首块已同步落盘
     let fault = crate::dev::ReadFaultGuard::at(src_off + 2 * chunk);
@@ -249,8 +249,8 @@ fn committed_record_fixture(part: u32, op: crate::recovery::OpKind, old: (u64, u
     .unwrap();
     let digest = crate::recovery::PlanDigest::of_request(journal.op(), part, new.0, new.1, ss, src.size);
     journal.bind_plan(digest).expect("a fresh record binds the request");
-    journal.bind_old_range(old).unwrap();
-    src.adopt_record_journal(journal);
+    journal.bind_ranges(old, new).unwrap();
+    src.adopt_record_journal(journal).expect("the fixture's pre-commit range fits its image");
     src
 }
 
@@ -466,7 +466,7 @@ pub(crate) fn a_committed_record_is_not_resumed_by_the_original_command() {
     let record_path = attach_record(&mut src, crate::recovery::OpKind::Resize, old, (1, new.0, new.1));
     {
         let journal = src.record_journal_mut().expect("attach_record adopts a record journal");
-        // `bind_old_range` 已把记录落盘；提交只在落盘之后的记录上生效
+        // `bind_ranges` 已把记录落盘；提交只在落盘之后的记录上生效
         journal.commit().expect("commit persists the committed state");
     }
     let _keep = src.release();
@@ -481,6 +481,7 @@ pub(crate) fn a_committed_record_is_not_resumed_by_the_original_command() {
         lv: None,
         allow_move: false,
         chunk_mib: Some(1),
+        dry_run: false,
     };
     let (code, why) = crate::movepart::tests::support::refusal_of(|| crate::cmd::resize::cmd_resize(&req));
     // 本次运行没有打开记录、也没有写目标：归责投影后仍是 3（记录只是被读到）

@@ -756,7 +756,7 @@ impl TransactionManager {
             src.owner,
         )
         .map_err(|e| RunOutcome::refused(format!("cannot write the recovery record beside the image: {e}")))?;
-        src.adopt_record_journal(journal);
+        src.adopt_record_journal(journal)?;
         Ok(src)
     }
 
@@ -808,7 +808,7 @@ impl TransactionManager {
             )
             .map_err(|e| RunOutcome::refused(format!("cannot write the recovery record beside the image: {e}")))?
         };
-        src.adopt_record_journal(journal);
+        src.adopt_record_journal(journal)?;
         Ok((src, resumable))
     }
 
@@ -860,7 +860,7 @@ impl TransactionManager {
             )
             .map_err(|e| RunOutcome::refused(format!("cannot write the recovery record beside the image: {e}")))?
         };
-        src.adopt_record_journal(journal);
+        src.adopt_record_journal(journal)?;
         Ok((src, ResizeEntry { resumed: resumable }))
     }
 
