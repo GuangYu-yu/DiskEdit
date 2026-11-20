@@ -82,7 +82,7 @@ run_case() {
   fi
   e2fsck -fn "${LD}p2" >/dev/null 2>&1; exp $? 0 "e2fsck（0=clean）"
   lo_detach "$LD"
-  sgdisk -v "$T" >/dev/null 2>&1 && echo "sgdisk clean" || { echo "sgdisk ISSUES"; rc=1; }
+  sgdisk_check "$T"
   echo
 }
 

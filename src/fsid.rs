@@ -58,7 +58,8 @@ pub fn content_name(content: ContentKind) -> &'static str {
     content.as_str()
 }
 
-/// swap 探测命中：签名所在的候选页大小，以及该页是否属于本机 swapon 的页集合
+/// swap 探测命中：签名所在的候选页大小，以及该页在宿主 util-linux swapon 口径下
+/// 是否能被激活（判定集合为 [`SWAPON_PAGES`]）
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SwapHit {
     pub page: u64,
@@ -118,10 +119,10 @@ pub fn probe_fs(src: &FileSource, base: u64, len_bytes: u64) -> io::Result<FsPro
     {
         return Ok(FsProbe { content: ContentKind::Filesystem(FsKind::Erofs), swap: None });
     }
-    // ext2/3/4: 0xEF53 (LE) @0x438（sb @1024，s_magic @sb+0x38）。magic 区分不出 2/3/4，
+    // ext2/3/4: EXT_MAGIC (LE) @0x438（sb @1024，s_magic @sb+0x38）。magic 区分不出 2/3/4，
     // 而 e2fsck/resize2fs/tune2fs 对三者通用，故统一收敛到 Ext（具体 extN 只存在于 --fs 请求）
     if let Some(b) = rd(0x438, 2)?
-        && u16::from_le_bytes([b[0], b[1]]) == 0xEF53
+        && u16::from_le_bytes([b[0], b[1]]) == EXT_MAGIC
     {
         return Ok(FsProbe { content: ContentKind::Filesystem(FsKind::Ext), swap: None });
     }
@@ -188,8 +189,9 @@ pub fn probe_fs(src: &FileSource, base: u64, len_bytes: u64) -> io::Result<FsPro
         return Ok(FsProbe { content: ContentKind::Filesystem(FsKind::Apfs), swap: None });
     }
     // LVM2 PV：标签头 "LABELONE" 位于前 4 个 512B 扇区之一（pvcreate 默认第 2 扇区），
-    // 标签头内偏移 24 处为类型串 "LVM2 001"（LVM2 lib/label/label.h 的 label_header：
-    // packed 的 id[8]+sector_xl[8]+crc_xl[4]+offset_xl[4]+type[8]）
+    // 标签头内偏移 24 处为类型串 "LVM2 001"（LVM2 主干 lib/label/label.h 的 label_header：
+    // packed 的 id[8]+sector_xl[8]+crc_xl[4]+offset_xl[4]+type[8]；扫描范围量
+    // LABEL_SCAN_SECTORS = 4）
     for off in [0u64, 512, 1024, 1536] {
         if let Some(b) = rd(off, 32)?
             && &b[0..8] == b"LABELONE"
@@ -243,7 +245,7 @@ pub fn probe_fs(src: &FileSource, base: u64, len_bytes: u64) -> io::Result<FsPro
     // swap: 签名位于"创建机页大小"末尾 10 字节（内核 include/linux/swap.h
     // union swap_header：reserved[PAGE_SIZE-10] + magic[10]），盘上不记录该页大小，
     // 故由 probe_swap_header 按候选集探测。候选集是 swapon 口径在前、仅 libblkid 认得的
-    // 页大小（32K）在后：第一次命中同时给出"这台宿主能不能把它当 swap 处理"
+    // 页大小（32K）在后：第一次命中同时给出"宿主 swapon 能不能把它当 swap 处理"
     // （activatable 由 SWAPON_PAGES 判定）。`content` 仍要求命中页可激活且头内自洽
     // （版本与页数，见 swap_header_consistent）：签名可能只是某段普通数据末尾的巧合，
     // 而误判 swap 会让扩容路径据此 mkswap，用新头覆盖该分区首个页
@@ -262,15 +264,25 @@ pub fn probe_fs(src: &FileSource, base: u64, len_bytes: u64) -> io::Result<FsPro
     Ok(FsProbe { content, swap })
 }
 
+/// ext2/3/4 超级块 magic（s_magic，盘上偏移见 [`probe_fs`]；
+/// 内核 include/uapi/linux/magic.h 的 EXT2_SUPER_MAGIC = 0xEF53）
+const EXT_MAGIC: u16 = 0xEF53;
+
 /// swap v1 签名（内核 include/linux/swap.h union swap_header）
 const SWAP_MAGIC: &[u8; 10] = b"SWAPSPACE2";
 
-/// util-linux swapon 的页大小范围：sys-utils/swapon.c 循环 `0x1000..=64K` 步进翻倍，
-/// 并显式 `if (page == 0x8000) continue;`（注释称 32K 页似不受支持）
+/// 宿主 swapon 能处理的页大小：util-linux v2.42.4 `sys-utils/swapon.c` 的探测循环
+/// `for (page = 0x1000; page <= MAX_PAGESIZE; page <<= 1)`（`MAX_PAGESIZE` = 64K），
+/// 其中 `if (page == 0x8000) continue;`。跳过 32K 是 util-linux 用户态探测策略
+/// （源码注释称该页大小似不受支持），不代表内核不接受 32K 页的 swap 头
 const SWAPON_PAGES: [u64; 4] = [4096, 8192, 16384, 65536];
 
-/// util-linux libblkid 的 swap 签名偏移表：libblkid/src/superblocks/swap.c 的
-/// sboff = 0xff6 / 0x1ff6 / 0x3ff6 / 0x7ff6 / 0xfff6（含 32K）
+/// 能认出 swap 元数据的页大小：util-linux v2.42.4 `libblkid/src/superblocks/swap.c`
+/// 的 `swap_idinfo.magics`，sboff = 0xff6 / 0x1ff6 / 0x3ff6 / 0x7ff6 / 0xfff6（含 32K），
+/// `minsz` = 10 × 4096。
+///
+/// 两表均以上述版本为基准；上游调整 swapon 的跳过项或 blkid 的偏移表时，
+/// 这两张表与 swap 相关测试须一并复查
 const BLKID_PAGES: [u64; 5] = [4096, 8192, 16384, 32768, 65536];
 
 /// 本机页大小（man sysconf(3) 的 _SC_PAGESIZE）
@@ -513,7 +525,8 @@ mod tests {
 
     #[test]
     fn swap_signature_at_32k_offset_not_detected() {
-        // 候选集不含 32K（swapon 的 swap_get_header 跳过 0x8000），64K 处也没有 magic
+        // 32K 页只在 libblkid 口径内，不在可激活集合；identify 要求可激活，
+        // 64K 处也没有 magic，故判未识别
         let mut data = vec![0u8; 65536];
         let ps = 32768u64;
         data[(ps - 10) as usize..ps as usize].copy_from_slice(b"SWAPSPACE2");
@@ -571,12 +584,18 @@ mod tests {
         let p = probe_fs(&src_from("pf4k", data), 0, 65536).unwrap();
         assert_eq!(p.content, ContentKind::Swap);
         assert_eq!(p.swap, Some(SwapHit { page: 4096, activatable: true }));
-        // 32K swap：只有 libblkid 口径命中 ⇒ 不可激活，identify 仍是 None
-        let mut data = vec![0u8; 65536];
+        // 32K swap（12 页完整 v1 头）：只有 libblkid 口径命中 ⇒ 不可激活，identify 仍是 None
+        let mut data = vec![0u8; 12 * 32768];
         data[32768 - 10..32768].copy_from_slice(b"SWAPSPACE2");
         data[1024..1028].copy_from_slice(&1u32.to_le_bytes());
         data[1028..1032].copy_from_slice(&1u32.to_le_bytes());
-        let p = probe_fs(&src_from("pf32k", data), 0, 65536).unwrap();
+        let p = probe_fs(&src_from("pf32k", data.clone()), 0, 12 * 32768).unwrap();
+        assert_eq!(p.content, ContentKind::Unknown);
+        assert_eq!(p.swap, Some(SwapHit { page: 32768, activatable: false }));
+        // 同一镜像抹掉头内字段：签名仍被认出，内容判定不变（不可激活这条独立于头内自洽）
+        let mut magic_only = data;
+        magic_only[1024..1032].fill(0);
+        let p = probe_fs(&src_from("pf32k_nohdr", magic_only), 0, 12 * 32768).unwrap();
         assert_eq!(p.content, ContentKind::Unknown);
         assert_eq!(p.swap, Some(SwapHit { page: 32768, activatable: false }));
         // 空区域：两个事实都落空

@@ -1,5 +1,7 @@
 //! GPT 的崩溃安全写入：序列化、双头规范化与提交。
 
+use std::mem::offset_of;
+
 use super::*;
 
 pub(crate) fn encode_name(entry: &GPTPartitionEntry) -> [u8; ENTRY_NAME_LEN] {
@@ -17,11 +19,13 @@ pub(crate) fn encode_name(entry: &GPTPartitionEntry) -> [u8; ENTRY_NAME_LEN] {
 /// 条目序列化：128 字节规范布局（UEFI 2.10 §5.3.3 GPT Partition Entry Array，Table 5.6）
 pub(crate) fn serialize_entry(e: &GPTPartitionEntry) -> [u8; ENTRY_FIXED_BYTES] {
     let mut b = [0u8; ENTRY_FIXED_BYTES];
-    b[0..16].copy_from_slice(&e.partition_type_guid);
-    b[16..32].copy_from_slice(&e.unique_partition_guid);
-    b[32..40].copy_from_slice(&e.starting_lba.to_le_bytes());
-    b[40..48].copy_from_slice(&e.ending_lba.to_le_bytes());
-    b[48..56].copy_from_slice(&e.attribute_bits.to_le_bytes());
+    let ty = std::mem::offset_of!(GptEntryLayout, partition_type_guid);
+    let uniq = std::mem::offset_of!(GptEntryLayout, unique_partition_guid);
+    b[ty..uniq].copy_from_slice(&e.partition_type_guid);
+    b[uniq..offset_of!(GptEntryLayout, starting_lba)].copy_from_slice(&e.unique_partition_guid);
+    wr_u64(&mut b, offset_of!(GptEntryLayout, starting_lba), e.starting_lba);
+    wr_u64(&mut b, offset_of!(GptEntryLayout, ending_lba), e.ending_lba);
+    wr_u64(&mut b, offset_of!(GptEntryLayout, attributes), e.attribute_bits);
     b[ENTRY_NAME_OFFSET..ENTRY_NAME_OFFSET + ENTRY_NAME_LEN].copy_from_slice(&encode_name(e));
     b
 }
@@ -37,21 +41,23 @@ pub(crate) fn serialize_header(h: &RawHeader, array_crc: u32, ss: u64) -> io::Re
         ));
     }
     let mut b = vec![0u8; ss as usize];
-    b[0..8].copy_from_slice(GPT_SIGNATURE);
-    b[8..12].copy_from_slice(&h.revision.to_le_bytes());
-    b[12..16].copy_from_slice(&h.header_size.to_le_bytes());
-    b[16..20].copy_from_slice(&0u32.to_le_bytes()); // CRC 占位
-    b[24..32].copy_from_slice(&h.primary_lba.to_le_bytes());
-    b[32..40].copy_from_slice(&h.backup_lba.to_le_bytes());
-    b[40..48].copy_from_slice(&h.first_usable_lba.to_le_bytes());
-    b[48..56].copy_from_slice(&h.last_usable_lba.to_le_bytes());
-    b[56..72].copy_from_slice(&h.disk_guid);
-    b[72..80].copy_from_slice(&h.partition_entry_lba.to_le_bytes());
-    b[80..84].copy_from_slice(&h.number_of_partition_entries.to_le_bytes());
-    b[84..88].copy_from_slice(&h.size_of_partition_entry.to_le_bytes());
-    b[88..GPT_MIN_HEADER_SIZE as usize].copy_from_slice(&array_crc.to_le_bytes());
+    b[..GPT_SIGNATURE.len()].copy_from_slice(GPT_SIGNATURE);
+    wr_u32(&mut b, offset_of!(GptHeaderLayout, revision), h.revision);
+    wr_u32(&mut b, offset_of!(GptHeaderLayout, header_size), h.header_size);
+    wr_u32(&mut b, offset_of!(GptHeaderLayout, header_crc32), 0); // CRC 占位
+    wr_u64(&mut b, offset_of!(GptHeaderLayout, my_lba), h.primary_lba);
+    wr_u64(&mut b, offset_of!(GptHeaderLayout, alternate_lba), h.backup_lba);
+    wr_u64(&mut b, offset_of!(GptHeaderLayout, first_usable_lba), h.first_usable_lba);
+    wr_u64(&mut b, offset_of!(GptHeaderLayout, last_usable_lba), h.last_usable_lba);
+    let guid = offset_of!(GptHeaderLayout, disk_guid);
+    let entry_lba = offset_of!(GptHeaderLayout, partition_entry_lba);
+    b[guid..entry_lba].copy_from_slice(&h.disk_guid);
+    wr_u64(&mut b, entry_lba, h.partition_entry_lba);
+    wr_u32(&mut b, offset_of!(GptHeaderLayout, number_of_partition_entries), h.number_of_partition_entries);
+    wr_u32(&mut b, offset_of!(GptHeaderLayout, size_of_partition_entry), h.size_of_partition_entry);
+    wr_u32(&mut b, offset_of!(GptHeaderLayout, partition_entry_array_crc32), array_crc);
     let crc = crc32(&b[..h.header_size as usize]);
-    b[16..20].copy_from_slice(&crc.to_le_bytes());
+    wr_u32(&mut b, offset_of!(GptHeaderLayout, header_crc32), crc);
     Ok(b)
 }
 
@@ -266,13 +272,18 @@ pub(crate) fn protective_mbr_image(lba0: &mut [u8], total_sectors: u64) {
     let want_size = size_in_lba(total_sectors);
     lba0[MBR_ENTRY_AREA].fill(0);
     lba0[MBR_SECTOR_BYTES..].fill(0);
-    let rec = &mut lba0[446..462];
-    rec[0] = 0x00; // BootIndicator
-    rec[1..4].copy_from_slice(&[0x00, 0x02, 0x00]); // StartCHS 惯例值
-    rec[4] = PROT_MBR_TYPE;
-    rec[5..8].copy_from_slice(&[0xFF, 0xFF, 0xFF]); // EndCHS
-    rec[8..12].copy_from_slice(&1u32.to_le_bytes());
-    rec[12..16].copy_from_slice(&want_size.to_le_bytes());
+    let rec = &mut lba0[mbr_entry_range(0)];
+    let start_at = offset_of!(MbrEntryLayout, starting_lba);
+    let boot = offset_of!(MbrEntryLayout, boot_indicator);
+    let first_chs = offset_of!(MbrEntryLayout, start_chs);
+    let os_at = offset_of!(MbrEntryLayout, os_type);
+    let last_chs = offset_of!(MbrEntryLayout, end_chs);
+    rec[boot] = 0x00; // BootIndicator
+    rec[first_chs..os_at].copy_from_slice(&[0x00, 0x02, 0x00]); // StartCHS 惯例值
+    rec[os_at] = PROT_MBR_TYPE;
+    rec[last_chs..start_at].copy_from_slice(&[0xFF, 0xFF, 0xFF]); // EndCHS
+    wr_u32(rec, start_at, 1);
+    wr_u32(rec, offset_of!(MbrEntryLayout, size_in_lba), want_size);
     write_mbr_signature(lba0);
 }
 
@@ -306,13 +317,17 @@ pub(crate) fn protective_mbr_content_from(lba0: &mut [u8], total_sectors: u64) -
     let want_size = size_in_lba(total_sectors);
     let reserved_zero = lba0[MBR_SECTOR_BYTES..].iter().all(|&b| b == 0);
     if has_mbr_signature(lba0) && reserved_zero {
-        let rec = &lba0[446..462]; // 槽位 1（与下方写入位置一致）
+        let rec = &lba0[mbr_entry_range(0)]; // 槽位 1（与下方写入位置一致）
         // 与 pmbr_shape_valid 同口径：槽位 2-4 必须全零，否则 hybrid MBR 残留
         // 会使 load_gpt 拒读 GPT（形状前置不满足），盘型判定就此失真
-        if lba0[462..510].iter().all(|&b| b == 0) && rec[4] == PROT_MBR_TYPE {
-            let start = rd_u32(rec, 8);
-            let size = rd_u32(rec, 12);
-            let canonical = rec[0] == 0x00 && rec[1..4] == [0x00, 0x02, 0x00] && rec[5..8] == [0xFF, 0xFF, 0xFF];
+        if lba0[mbr_entry_range(1).start..MBR_SIGNATURE_AT].iter().all(|&b| b == 0)
+            && rec[offset_of!(MbrEntryLayout, os_type)] == PROT_MBR_TYPE
+        {
+            let start = rd_u32(rec, offset_of!(MbrEntryLayout, starting_lba));
+            let size = rd_u32(rec, offset_of!(MbrEntryLayout, size_in_lba));
+            let canonical = rec[offset_of!(MbrEntryLayout, boot_indicator)] == 0x00
+                && rec[offset_of!(MbrEntryLayout, start_chs)..offset_of!(MbrEntryLayout, os_type)] == [0x00, 0x02, 0x00]
+                && rec[offset_of!(MbrEntryLayout, end_chs)..offset_of!(MbrEntryLayout, starting_lba)] == [0xFF, 0xFF, 0xFF];
             // 比较基准是**逻辑块**口径的 total，故 512 口径值
             // （PmbrSize::NeedsRepair{Compat512}）在此落空，会走到下面重写为规范值
             if canonical && start == 1 && size == want_size {

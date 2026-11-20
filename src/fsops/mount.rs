@@ -124,7 +124,7 @@ pub(crate) fn read_mounts() -> io::Result<Vec<MountEntry>> {
         let s = match std::fs::read_to_string(&path) {
             Ok(s) => s,
             Err(e) if skippable_mountinfo_error(&e) => continue,
-            Err(e) => return Err(io::Error::other(format!("cannot read {}: {e}", path.display()))),
+            Err(e) => return Err(io::Error::other(crate::support::cannot_read(path.display(), e))),
         };
         append_mountinfo(&mut out, &s, &path, Some(pid))?;
         // 读到一份视图之后才登记该命名空间：读失败的进程不能替同一命名空间里仍在运行的
@@ -183,10 +183,10 @@ pub(crate) fn is_loop_name(s: &str) -> bool {
 fn holders_at(sysdir: &Path) -> io::Result<Vec<String>> {
     let dir = sysdir.join("holders");
     let rd = std::fs::read_dir(&dir)
-        .map_err(|e| io::Error::other(format!("cannot read {}: {e}", dir.display())))?;
+        .map_err(|e| io::Error::other(crate::support::cannot_read(dir.display(), e)))?;
     let mut out = Vec::new();
     for entry in rd {
-        let entry = entry.map_err(|e| io::Error::other(format!("cannot read {}: {e}", dir.display())))?;
+        let entry = entry.map_err(|e| io::Error::other(crate::support::cannot_read(dir.display(), e)))?;
         out.push(entry.file_name().to_string_lossy().into_owned());
     }
     Ok(out)
@@ -601,7 +601,7 @@ fn loop_and_partitions(sysdir: &Path, name: &str) -> io::Result<Vec<(String, Pat
         let child = child?;
         let is_dir = child
             .file_type()
-            .map_err(|e| io::Error::other(format!("cannot stat {}: {e}", child.path().display())))?
+            .map_err(|e| io::Error::other(crate::support::cannot_stat(child.path().display(), e)))?
             .is_dir();
         if !is_dir {
             continue;
@@ -610,7 +610,7 @@ fn loop_and_partitions(sysdir: &Path, name: &str) -> io::Result<Vec<(String, Pat
         match std::fs::metadata(&part) {
             Ok(_) => out.push((child.file_name().to_string_lossy().into_owned(), child.path())),
             Err(e) if e.kind() == io::ErrorKind::NotFound => {}
-            Err(e) => return Err(io::Error::other(format!("cannot stat {}: {e}", part.display()))),
+            Err(e) => return Err(io::Error::other(crate::support::cannot_stat(part.display(), e))),
         }
     }
     Ok(out)

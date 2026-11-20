@@ -167,23 +167,11 @@ impl GrowRunOutcome {
     /// 随结果浮出的待办：未证实的原因与补救、以及没卸掉的挂载点。两者都不改写
     /// "扩容已经执行"这一事实，只作为后置条件呈现
     pub fn pending(self, part: u32) -> Vec<crate::outcome::Pending> {
-        let mut pending = Vec::new();
-        let leak = match self {
-            Self::Verified { leak, .. } => leak,
-            Self::Unverified { why, hint, leak } => {
-                pending.push(crate::outcome::Pending::new(
-                    part,
-                    crate::outcome::PendingKind::Other("fs grow"),
-                    why,
-                    hint,
-                ));
-                leak
-            }
+        let (unverified, leak) = match self {
+            Self::Verified { leak, .. } => (None, leak),
+            Self::Unverified { why, hint, leak } => (Some((why, hint)), leak),
         };
-        if let Some(leak) = leak {
-            pending.push(leak.into_pending(part));
-        }
-        pending
+        super::run_pending(part, "fs grow", unverified, leak)
     }
 }
 
@@ -276,7 +264,7 @@ fn covers(bytes: u64, unit: u64, limit: u64) -> bool {
 
 fn resize_fs_step(src: &mut WriteSource, scope: &DeviceScope, fstype: Option<ContentKind>) -> Result<GrowRunOutcome, FsError> {
     match fstype {
-        // fsid 识别只给 0xEF53，区分不出 2/3/4；resize2fs 对三者通用（man resize2fs）
+        // fsid 识别只给 ext 家族（`EXT_MAGIC`），区分不出 2/3/4；resize2fs 对三者通用（man resize2fs）
         Some(ContentKind::Filesystem(FsKind::Ext)) => {
             let (off, len) = scope_byte_range(src, scope)?;
             let verify = with_write_scope(src, scope, off, len, |dev| {

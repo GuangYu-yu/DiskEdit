@@ -11,15 +11,17 @@ SHOW_RE='OK|WRONG|CORRUPT|ISSUES|clean|weak|RESUME|BOUND|resuming|committed|exit
 pass=0; fail=0; skip=0; failed=(); skipped=()
 
 run() {
-  local f=$1 out rc t=900
-  case "$f" in
-    blockdev_probe_identity.sh) t=1800 ;;
-  esac
+  local f=$1 out rc t=900 full=0 declared
+  # 单个脚本的运行属性由脚本自己声明，本文件不维护第二份名单：
+  #   TIMEOUT=<秒>          覆盖默认的 900 秒
+  #   RUNNER_FULL_OUTPUT=1  不过滤输出（每行都是独立失效点）
+  declared=$(sed -n 's/^TIMEOUT=\([0-9][0-9]*\)$/\1/p' "$f" | head -n 1)
+  [ -n "$declared" ] && t=$declared
+  grep -qx 'RUNNER_FULL_OUTPUT=1' "$f" && full=1
   echo "=== $f"
   # -k 30：TERM 后 30 秒仍未退出就 KILL（EXIT trap 不执行，loop 留在现场）
   out=$(timeout -k 30 "$t" bash "$f" 2>&1); rc=$?
-  # 命令面校验的每一行都是一处失效点：全量展示，不按关键字过滤
-  if [ "$f" = check_cli_surface.sh ]; then
+  if [ "$full" = 1 ]; then
     printf '%s\n' "$out"
   else
     grep -E "$SHOW_RE" <<<"$out" | head -60

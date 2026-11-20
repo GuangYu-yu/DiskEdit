@@ -69,7 +69,7 @@ echo "exit=$E : $(echo "$OUT" | tail -1)"
 exp "$E" 0 "D SIZE 收缩（--allow-move 不触发搬移）"
 echo "$OUT" | grep -q 'fs shrunk' && echo "D shrink line OK" || { echo "D missing shrink line"; rc=1; }
 LD=$(lo_attach "$T")
-e2fsck -fn "${LD}p1" >/dev/null 2>&1 && echo "D shrink e2fsck clean" || { echo "D shrink e2fsck ISSUES"; rc=1; }
+fsck_check "${LD}p1" "D shrink"
 lo_detach "$LD"
 # 缩容的另一种形态：resize --end 一条命令先缩 FS（离线）再收表，记录可续跑
 LD=$(lo_attach "$T"); lo_waitpart "${LD}p1" || { echo "p1 未就绪"; rc=1; lo_detach "$LD"; }
@@ -80,7 +80,7 @@ lo_detach "$LD"
 OUT=$($B resize --yes --align none "$T":1 --end $END 2>&1); E=$?
 exp "$E" 0 "D resize 收窄 200 扇区（FS 先离线缩，再收表）"
 LD=$(lo_attach "$T")
-e2fsck -fn "${LD}p1" >/dev/null 2>&1 && echo "D e2fsck clean" || { echo "D e2fsck ISSUES"; rc=1; }
+fsck_check "${LD}p1" "D"
 mount_at "${LD}p1" "$TEST_MNT" 2>/dev/null && { echo "size: $(df -h --output=size "$TEST_MNT" | tail -1)"; umount "$TEST_MNT" 2>/dev/null; }
 lo_detach "$LD"
 

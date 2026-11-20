@@ -342,7 +342,7 @@ pub(crate) fn cmd_check(a: &CheckRequest) -> u8 {
     .unwrap_or_else(|f| bail_fail(f));
     let part = crate::gpt_policy::resolve_part(&src, pref).unwrap_or_else(|f| bail_fail(f));
     let (start, len) = crate::gpt_policy::partition_bytes(&src, part).unwrap_or_else(|f| bail_fail(f));
-    let fstype = fsid::identify(&src, start, len).unwrap_or_else(|e| bail_fail(RunOutcome::refused(format!("identify failed: {e}"))));
+    let fstype = fsid::identify(&src, start, len).unwrap_or_else(|e| bail_fail(RunOutcome::refused(crate::support::identify_failed(&e))));
     match fsops::check_fs(&src, part, Some(fstype)) {
         Ok(()) => {
             println!("check done on partition #{part} ({})", fsid::content_name(fstype));
@@ -479,7 +479,7 @@ pub(crate) fn cmd_set(a: &SetRequest) -> RunOutcome {
     }
     // label/uuid 需要 FS 识别
     let (start, len) = crate::gpt_policy::partition_bytes(&src, part).unwrap_or_else(|f| bail_fail(f));
-    let fstype = fsid::identify(&src, start, len).unwrap_or_else(|e| bail_fail(RunOutcome::refused(format!("identify failed: {e}"))));
+    let fstype = fsid::identify(&src, start, len).unwrap_or_else(|e| bail_fail(RunOutcome::refused(crate::support::identify_failed(&e))));
     // 请求先变成可执行形式：参数错误必须在屏障之前拒绝，否则会为一次零写入留下记录
     let request = match key {
         "uuid" => {

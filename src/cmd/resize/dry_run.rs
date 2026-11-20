@@ -32,7 +32,7 @@ pub(crate) fn preview_gpt(
     let cur_bytes = lba_range_bytes(start, end, ss);
     let (target, grow_to_end) = resolve_size_request(a.size, cur_bytes, ss).unwrap_or_else(|f| bail_fail(f));
     let fstype = fsid::identify(src, lba_bytes(start, ss), cur_bytes)
-        .unwrap_or_else(|e| bail_fail(RunOutcome::refused(format!("identify failed: {e}"))));
+        .unwrap_or_else(|e| bail_fail(RunOutcome::refused(crate::support::identify_failed(&e))));
     if fstype == fsid::ContentKind::Lvm2Pv {
         let shrinking = target.is_some_and(|t| t < cur_bytes);
         println!(
@@ -135,10 +135,10 @@ fn prepare(
 /// `--end` / `--grow-to-end` 预览：原地重划只改末端，判据与执行路径同一份
 pub(crate) fn preview_end(a: &crate::cli::ResizeEndRequest) -> RunOutcome {
     let Some(pref) = a.part else {
-        bail_fail(RunOutcome::refused("`resize` needs :N (see diskedit help resize)".to_string()));
+        bail_fail(RunOutcome::refused(super::NEEDS_PARTITION.to_string()));
     };
     if a.grow_to_end && a.end.is_some() {
-        bail_fail(RunOutcome::refused("--end and --grow-to-end are mutually exclusive".to_string()));
+        bail_fail(RunOutcome::refused(super::END_AND_GROW_TO_END_EXCLUSIVE.to_string()));
     }
     let src = open_target_ro(a).unwrap_or_else(|f| bail_fail(f));
     let (g, repair) = crate::gpt_policy::require_gpt_geometry(&src, "resize").unwrap_or_else(|f| bail_fail(f));
@@ -193,7 +193,7 @@ pub(crate) fn preview_mbr(a: &ResizeRequest, src: &FileSource, pref: PartSelecto
         ));
     }
     let mbr = table::parse_mbr(src)
-        .unwrap_or_else(|e| bail_fail(RunOutcome::refused(format!("parse failed: {e}"))))
+        .unwrap_or_else(|e| bail_fail(RunOutcome::refused(crate::support::parse_failed(&e))))
         .unwrap_or_else(|| bail_fail(RunOutcome::refused("no MBR on target".to_string())));
     let part = crate::gpt_policy::resolve_part_in(crate::gpt_policy::TableEntries::Mbr(&mbr), pref)
         .unwrap_or_else(|f| bail_fail(f));
@@ -213,10 +213,7 @@ pub(crate) fn preview_mbr(a: &ResizeRequest, src: &FileSource, pref: PartSelecto
     let free = free_right_msdos(&mbr, p, total_sectors);
     if grow_to_end {
         if free == 0 {
-            bail_fail(RunOutcome::refused(
-                "grow would not extend the partition — no free space to its right (MBR cannot relocate blocking partitions); \
-                 use `resizefs` to fill the filesystem inside the current partition".to_string(),
-            ));
+            bail_fail(RunOutcome::refused(super::GROW_NO_FREE_SPACE_MSDOS.to_string()));
         }
         println!(
             "plan: grow partition {part} : LBA {}..{} → {}..{}",
@@ -241,14 +238,10 @@ pub(crate) fn preview_mbr(a: &ResizeRequest, src: &FileSource, pref: PartSelecto
     if new_lba < u64::from(p.size_lba) {
         // 收缩：判据与执行路径同一处（--no-fs、工具可缩、ext 最小尺寸），只盘点不跑工具
         if a.no_fs {
-            bail_fail(RunOutcome::refused(
-                "--no-fs cannot shrink: the filesystem has to shrink before the entry, otherwise the \
-                 new end cuts into its metadata"
-                    .to_string(),
-            ));
+            bail_fail(RunOutcome::refused(super::NO_FS_CANNOT_SHRINK_MSDOS.to_string()));
         }
         let fstype = fsid::identify(src, lba_bytes(p.start_lba as u64, ss), cur_bytes)
-            .unwrap_or_else(|e| bail_fail(RunOutcome::refused(format!("identify failed: {e}"))));
+            .unwrap_or_else(|e| bail_fail(RunOutcome::refused(crate::support::identify_failed(&e))));
         crate::fsops::check_shrink(
             Some(fstype),
             src.is_block,

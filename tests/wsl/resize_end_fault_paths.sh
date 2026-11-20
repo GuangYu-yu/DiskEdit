@@ -139,7 +139,7 @@ LD=$(lo_attach "$T")
 lo_waitpart "${LD}p4" || { echo "p4 part node not ready"; rc=1; }
 [ "$M3" = "$(mdsum "${LD}p4")" ] && echo "p4 COPY OK (device-identical)" || { echo "p4 COPY MISMATCH"; rc=1; }
 lo_detach "$LD"
-sgdisk -v "$T" >/dev/null 2>&1 && echo "sgdisk clean" || { echo "sgdisk ISSUES"; rc=1; }
+sgdisk_check "$T"
 
 echo
 echo "===== 8: after-data-sync（自重叠搬移，同步后、落进度前中断）====="
@@ -154,7 +154,7 @@ OUT=$($BF move "$T":3 --start 700000 --chunk 1 --yes 2>&1); exp "$?" 0 "同请�
 R=$(echo "$OUT" | grep -o "resuming at chunk [0-9]*" | head -1)
 [ "$R" = "resuming at chunk 0" ] && echo "  AFTER-SYNC OK ($R)" || { echo "  AFTER-SYNC WRONG ($R)"; rc=1; }
 chkp 3 "$M3"
-sgdisk -v "$T" >/dev/null 2>&1 && echo "sgdisk clean" || { echo "sgdisk ISSUES"; rc=1; }
+sgdisk_check "$T"
 
 echo
 echo "===== 9: Δ<0 自重叠（64M 分区左移 16M，--chunk 64 收敛到 16M）====="
@@ -194,7 +194,7 @@ assert_eq "$(sha256sum "$TEST_MNT"/blob | cut -d' ' -f1)" "$BLOB" "移动后挂�
 unmount_now "$TEST_MNT"
 e2fsck -fn "${LD}p1" >/dev/null 2>&1 && echo "  OK   p1 e2fsck clean" || { echo "  BAD  p1 e2fsck 报错"; rc=1; }
 lo_detach "$LD"
-sgdisk -v "$T" >/dev/null 2>&1 && echo "sgdisk clean" || { echo "sgdisk ISSUES"; rc=1; }
+sgdisk_check "$T"
 
 echo
 echo "===== 10: 块收敛（--chunk 64 > |Δ|16M ⇒ 单块 16M，共 4 块）====="
@@ -220,7 +220,7 @@ DISKEDIT_FAULT=chunk:5 $BF move "$T":1 --start 34816 --chunk 64 --yes >/dev/null
 exp "$?" 0 "第 5 块不存在（命令行 chunk 64M 未被采用）"
 exp "$(record_absent "$T" && echo yes || echo no)" yes "正常跑完，无残留记录"
 $B info "$T" | grep -q '"num":1,"first_lba":34816' && echo "  OK   p1 到达 34816" || { echo "  BAD  p1 未到达目标起点"; rc=1; }
-sgdisk -v "$T" >/dev/null 2>&1 && echo "sgdisk clean" || { echo "sgdisk ISSUES"; rc=1; }
+sgdisk_check "$T"
 
 echo
 echo "===== 11: 换区条目的早退收尾（after-swap-commit 后同请求重跑）====="
@@ -256,5 +256,5 @@ TYPE_AFTER=$(blkid -o value -s TYPE "${LD}p3" 2>/dev/null)
 lo_detach "$LD"
 assert_eq "$TYPE_AFTER" "swap" "目的位的 swap 签名已重建"
 assert_eq "$UUID_AFTER" "$UUID_BEFORE" "旧位 UUID 在重建中保持"
-sgdisk -v "$T" >/dev/null 2>&1 && echo "sgdisk clean" || { echo "sgdisk ISSUES"; rc=1; }
+sgdisk_check "$T"
 exit $rc

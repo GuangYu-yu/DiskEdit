@@ -37,7 +37,7 @@ mount_at "${LD}p1" "$TEST_MNT" 2>/dev/null && {
 }
 fsck.f2fs -f "${LD}p1" >/dev/null 2>&1; exp $? 0 "fsck.f2fs（0=clean）"
 lo_detach "$LD"
-sgdisk -v "$T" >/dev/null 2>&1 && echo "sgdisk clean" || { echo "sgdisk ISSUES"; rc=1; }
+sgdisk_check "$T"
 
 echo
 echo "########## B: vfat 扩容（fatresize 在本环境自身崩溃 → 表扩/FS 未扩/有提示）##########"
@@ -108,10 +108,10 @@ LD=$(lo_attach "$T")
 lo_waitpart "${LD}p1" || { echo "p1 part node not ready"; rc=1; lo_detach "$LD"; }
 lo_waitpart "${LD}p3" || { echo "p3 part node not ready"; rc=1; lo_detach "$LD"; }
 [ "$ML" = "$(mdsum "${LD}p3")" ] && echo "D LINUX DEV OK" || { echo "D LINUX DEV CORRUPT"; rc=1; }
-e2fsck -fn "${LD}p3" >/dev/null 2>&1 && echo "D p3 e2fsck clean" || { echo "D p3 e2fsck ISSUES"; rc=1; }
+fsck_check "${LD}p3" "D p3"
 mount_at "${LD}p1" "$TEST_MNT" && { cat "$TEST_MNT"/efi.txt; umount "$TEST_MNT" 2>/dev/null; }
 lo_detach "$LD"
-sgdisk -v "$T" >/dev/null 2>&1 && echo "sgdisk clean" || { echo "sgdisk ISSUES"; rc=1; }
+sgdisk_check "$T"
 
 echo
 echo "########## E: squashfs + 尾部 overlay（OpenWrt combined）扩容 ##########"

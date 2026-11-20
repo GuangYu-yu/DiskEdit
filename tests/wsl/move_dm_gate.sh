@@ -44,5 +44,5 @@ $B move --yes "$T":1 --start 4096 >/dev/null 2>&1; exp $? 0 "释放后搬移"
 assert_eq "$(dd if="$T" bs=1 skip=$((4096 * 512)) count=6 status=none)" "MAGIC0" "  数据随条目搬到新起点"
 assert_eq "$($B info "$T" | grep -o '"num":1,"first_lba":[0-9]*,"last_lba":[0-9]*')" \
   '"num":1,"first_lba":4096,"last_lba":135167' "  表项起点为 4096"
-sgdisk -v "$T" >/dev/null 2>&1 && echo "sgdisk clean" || { echo "sgdisk ISSUES"; rc=1; }
+sgdisk_check "$T"
 exit $rc

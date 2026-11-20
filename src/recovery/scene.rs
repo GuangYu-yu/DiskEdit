@@ -12,16 +12,18 @@
 
 use crate::dev::{FileSource, LiveProof, TargetFingerprint};
 use crate::platform::{IdentityMaterial, TargetId, TargetProbe};
+use crate::tagged::tagged_enum;
 
-/// 身份证据的种类。记录里是单字节 tag（`record::write_scene` 写 1/2/3）
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum SceneProof {
-    /// 整盘节点的稳定设备 ID（序列号 / WWN / dm uuid 等）
-    DeviceId,
-    /// inode 身份：镜像文件的 `(dev, ino)`，或 loop 后备文件的 `(dev, ino)`
-    FileId,
-    /// 没有可跨现场比较的身份证据
-    Unavailable,
+tagged_enum! {
+    /// 身份证据的种类。记录里是单字节 tag
+    pub(crate) enum SceneProof {
+        /// 整盘节点的稳定设备 ID（序列号 / WWN / dm uuid 等）
+        DeviceId = 1,
+        /// inode 身份：镜像文件的 `(dev, ino)`，或 loop 后备文件的 `(dev, ino)`
+        FileId = 2,
+        /// 没有可跨现场比较的身份证据
+        Unavailable = 3,
+    }
 }
 
 /// loop 载体的映射事实。两个槽位承载 sysfs 的 `loop/offset` 与 `loop/sizelimit`

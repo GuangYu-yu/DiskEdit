@@ -19,34 +19,23 @@ pub(crate) struct CopyPartition {
 }
 
 impl CopyPartition {
-    /// 载荷换算成字节区间：源偏移、目标偏移与总长度。
+    /// 载荷换算成字节区间：源偏移、目标偏移与总长度。两段共用同一份长度换算。
     fn byte_range(&self, sector_size: u64) -> Result<(u64, u64, u64), String> {
-        let total = self.sectors.checked_mul(sector_size).ok_or_else(|| {
-            format!(
-                "partition {}: {} sectors of {sector_size} bytes overflow the address space",
-                self.part, self.sectors
-            )
-        })?;
-        let src_off = self.src_first.checked_mul(sector_size).ok_or_else(|| {
-            format!(
-                "partition {}: source start LBA {} overflows the address space",
-                self.part, self.src_first
-            )
-        })?;
-        let dst_off = self.dst_first.checked_mul(sector_size).ok_or_else(|| {
-            format!(
-                "partition {}: target start LBA {} overflows the address space",
-                self.part, self.dst_first
-            )
-        })?;
-        for (label, base) in [("source", src_off), ("target", dst_off)] {
-            if base.checked_add(total).is_none() {
-                return Err(format!(
-                    "partition {}: the {label} byte range {base}+{total} overflows the address space",
-                    self.part
-                ));
-            }
-        }
+        let total = super::region_bytes(self.part, self.sectors, sector_size)?;
+        let src_off = super::region_at(
+            self.part,
+            super::RangeRole::Source,
+            self.src_first,
+            sector_size,
+            total,
+        )?;
+        let dst_off = super::region_at(
+            self.part,
+            super::RangeRole::Target,
+            self.dst_first,
+            sector_size,
+            total,
+        )?;
         Ok((src_off, dst_off, total))
     }
 

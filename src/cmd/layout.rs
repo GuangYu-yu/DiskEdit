@@ -301,8 +301,10 @@ pub(crate) fn cmd_add(a: &AddRequest) -> crate::outcome::RunOutcome {
                 None => table::LINUX_FS_TYPE_GUID,
                 Some(crate::cli::TypeSelector::Guid(g)) => g,
                 Some(crate::cli::TypeSelector::Mbr(_)) => bail_fail(RunOutcome::refused(
-                    "`--type-guid 0xNN` is an MBR type byte — a GPT entry takes a GUID, e.g. \
-                     0fc63daf-8483-4772-8e79-3d69d8477de4",
+                    format!(
+                        "`--type-guid 0xNN` is an MBR type byte — a GPT entry takes a GUID, e.g. {}",
+                        table::LINUX_DATA_GUID
+                    ),
                 )),
             };
             // 全零类型 GUID 是"未用条目"的形状：LBA 非零而类型为零的条目在本工具与 UEFI/内核
@@ -539,10 +541,12 @@ pub(crate) fn cmd_delete(a: &DeleteRequest) -> crate::outcome::RunOutcome {
 
 pub(crate) fn cmd_resize_end(a: &ResizeEndRequest) -> crate::outcome::RunOutcome {
     let Some(pref) = a.part else {
-        bail_fail(RunOutcome::refused("`resize` needs :N (see diskedit help resize)".to_string()));
+        bail_fail(RunOutcome::refused(crate::cmd::resize::NEEDS_PARTITION.to_string()));
     };
     if a.grow_to_end && a.end.is_some() {
-        bail_fail(RunOutcome::refused("--end and --grow-to-end are mutually exclusive".to_string()));
+        bail_fail(RunOutcome::refused(
+            crate::cmd::resize::END_AND_GROW_TO_END_EXCLUSIVE.to_string(),
+        ));
     }
     // 载体必须是整盘：条目按节点 LBA0 的偏移读写（判据见 `refuse_partition_node_target`）
     refuse_partition_node_target("resize", &a.target);

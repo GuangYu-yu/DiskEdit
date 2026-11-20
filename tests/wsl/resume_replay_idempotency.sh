@@ -34,9 +34,9 @@ exp "$E" 0 "续跑收敛（中断留下的现场被同请求重跑接住）"
 echo "$OUT" | grep -q "resuming at entry" && echo "  OK   续跑走记录（resuming at entry）" || { echo "  BAD  续跑未走记录（输出里没有 resuming at entry）"; rc=1; }
 LD=$(lo_attach "$T")
 [ "$MD2" = "$(mdsum "${LD}p2")" ] && echo "p2 DATA OK" || { echo "p2 DATA CORRUPT"; rc=1; }
-e2fsck -fn "${LD}p2" >/dev/null 2>&1 && echo "p2 e2fsck clean" || { echo "p2 e2fsck ISSUES"; rc=1; }
+fsck_check "${LD}p2" "p2"
 lo_detach "$LD"
-sgdisk -v "$T" >/dev/null 2>&1 && echo "sgdisk clean" || { echo "sgdisk ISSUES"; rc=1; }
+sgdisk_check "$T"
 
 echo
 echo "===== F: after-swap-commit（GPT commit 后、记录推进前，重放幂等） ====="
@@ -69,7 +69,7 @@ exp "$E" 0 "重放幂等（同请求重跑完成）"
 LD=$(lo_attach "$T")
 UUID_AFTER=$(blkid -s UUID -o value "${LD}p2")
 [ "$MD3" = "$(mdsum "${LD}p3")" ] && echo "p3 DATA OK" || { echo "p3 DATA CORRUPT"; rc=1; }
-e2fsck -fn "${LD}p3" >/dev/null 2>&1 && echo "p3 e2fsck clean" || { echo "p3 e2fsck ISSUES"; rc=1; }
+fsck_check "${LD}p3" "p3"
 lo_detach "$LD"
 # 幂等重建的主链：新落点必须有可激活的 swap 签名
 [ -n "$UUID_AFTER" ] && echo "SWAP SIGNATURE REBUILT ($UUID_AFTER)" || { echo "SWAP SIGNATURE MISSING"; rc=1; }
@@ -83,7 +83,7 @@ else
     echo "  BAD  swap uuid 变化但输出没有说明原因（$UUID_BEFORE -> $UUID_AFTER）"
     rc=1
 fi
-sgdisk -v "$T" >/dev/null 2>&1 && echo "sgdisk clean" || { echo "sgdisk ISSUES"; rc=1; }
+sgdisk_check "$T"
 
 echo
 echo "===== G: 记录不可读（头部损坏）→ 重跑硬拒 3 → recover --release 释放 → 重跑 ====="
@@ -125,7 +125,7 @@ record_absent "$T" && echo "  OK   完成后无记录残留" || { echo "  BAD  �
 LD=$(lo_attach "$T")
 lo_waitpart "${LD}p1" || { echo "p1 part node not ready"; rc=1; }
 assert_eq "$(mdsum "${LD}p1")" "$MD" "G 重跑后数据逐字节一致"
-e2fsck -fn "${LD}p1" >/dev/null 2>&1 && echo "p1 e2fsck clean" || { echo "p1 e2fsck ISSUES"; rc=1; }
+fsck_check "${LD}p1" "p1"
 lo_detach "$LD"
-sgdisk -v "$T" >/dev/null 2>&1 && echo "sgdisk clean" || { echo "sgdisk ISSUES"; rc=1; }
+sgdisk_check "$T"
 exit $rc

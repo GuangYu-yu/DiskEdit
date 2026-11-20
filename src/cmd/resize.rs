@@ -29,6 +29,26 @@ use crate::cli::ResizeRequest;
 use crate::support::*;
 use crate::dev::{FileSource, PartSelector, WriteSource};
 use crate::{dev, fsid, fsops, movepart, table};
+
+/// MBR 尾部没有空闲区间时的拒绝措辞：dry-run 与执行入口共用同一句
+const GROW_NO_FREE_SPACE_MSDOS: &str =
+    "grow would not extend the partition — no free space to its right (MBR cannot relocate blocking partitions); \
+     use `resizefs` to fill the filesystem inside the current partition";
+
+/// MBR 收缩遇到 `--no-fs` 时的拒绝措辞：dry-run 与执行入口共用同一句
+const NO_FS_CANNOT_SHRINK_MSDOS: &str =
+    "--no-fs cannot shrink: the filesystem has to shrink before the entry, otherwise the \
+     new end cuts into its metadata";
+
+/// `--end` 缺少分区选择符时的拒绝措辞：预览入口与 `cmd::layout` 共用同一句
+pub(super) const NEEDS_PARTITION: &str = "`resize` needs :N (see diskedit help resize)";
+
+/// `resize` 缺少分区选择符时的拒绝措辞：MBR 分支与 GPT 主路径共用同一句
+const NEEDS_PARTITION_TARGET: &str = "`resize` needs :N (the partition to resize)";
+
+/// `--end` 与 `--grow-to-end` 同时出现时的拒绝措辞：预览入口与 `cmd::layout` 共用同一句
+pub(super) const END_AND_GROW_TO_END_EXCLUSIVE: &str =
+    "--end and --grow-to-end are mutually exclusive";
 #[cfg(target_os = "linux")]
 use crate::lvm::LvmError;
 
@@ -235,7 +255,7 @@ pub(crate) fn cmd_resize(a: &ResizeRequest) -> crate::outcome::RunOutcome {
         Ok(table::TableLabel::Gpt) => {}
         Ok(table::TableLabel::Mbr) => {
             let Some(pref) = a.part else {
-                bail_fail(RunOutcome::refused("`resize` needs :N (the partition to resize)".to_string()));
+                bail_fail(RunOutcome::refused(NEEDS_PARTITION_TARGET.to_string()));
             };
             if a.dry_run {
                 return preview_mbr(a, &src, pref);
@@ -252,10 +272,10 @@ pub(crate) fn cmd_resize(a: &ResizeRequest) -> crate::outcome::RunOutcome {
             return cmd_resize_superfloppy(a);
         }
         Ok(other) => bail_fail(RunOutcome::refused(format!("resize requires a GPT or MBR target (label: {other})"))),
-        Err(e) => bail_fail(RunOutcome::refused(format!("parse failed: {e}"))),
+        Err(e) => bail_fail(RunOutcome::refused(crate::support::parse_failed(&e))),
     }
     let Some(pref) = a.part else {
-        bail_fail(RunOutcome::refused("`resize` needs :N (the partition to resize)".to_string()));
+        bail_fail(RunOutcome::refused(NEEDS_PARTITION_TARGET.to_string()));
     };
     // 可操作几何（构造点即拒绝条目重叠）：entries / ss / 修复后的 last_usable 全部取自它，
     // 命令层不自己算一次有效上界
@@ -267,7 +287,7 @@ pub(crate) fn cmd_resize(a: &ResizeRequest) -> crate::outcome::RunOutcome {
     let (start, end, ss) = (e.starting_lba, e.ending_lba, g.sector_size());
     let cur_bytes = lba_range_bytes(start, end, ss);
     let fstype = fsid::identify(&src, lba_bytes(start, ss), cur_bytes)
-        .unwrap_or_else(|e| bail_fail(RunOutcome::refused(format!("identify failed: {e}"))));
+        .unwrap_or_else(|e| bail_fail(RunOutcome::refused(crate::support::identify_failed(&e))));
     let is_pv = fstype == fsid::ContentKind::Lvm2Pv;
 
     // SIZE → 绝对目标字节数 / grow 标记（锁前快照，仅服务参数早失败与在线路径的选择）
@@ -348,7 +368,7 @@ pub(crate) fn cmd_resize(a: &ResizeRequest) -> crate::outcome::RunOutcome {
     // 重新格式化（mkfs 不守本工具的锁），过期的 is_pv 会让 check_pv_intent 对着
     // 已不是 PV 的分区说 PV 的话
     let fstype = fsid::identify(&src, lba_bytes(start, ss), cur_bytes)
-        .unwrap_or_else(|e| bail_fail(RunOutcome::refused(format!("identify failed: {e}"))));
+        .unwrap_or_else(|e| bail_fail(RunOutcome::refused(crate::support::identify_failed(&e))));
     let is_pv = fstype == fsid::ContentKind::Lvm2Pv;
     check_pv_intent(part, Some(fstype), is_pv, shrinking, a.grow_lv, a.no_fs).unwrap_or_else(|f| bail_fail(f));
     // 记录型续跑：盘上区间停在记录写下的目标区间 ⇒ 分区层提交过，当前区间就是本次

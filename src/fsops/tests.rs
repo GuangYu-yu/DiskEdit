@@ -43,33 +43,24 @@ pub(crate) fn every_capability_list_names_a_registered_tool() {
 /// 两个语种各有一份表，逐份比对
 #[test]
 pub(crate) fn the_docs_tool_table_matches_the_registry() {
-    const DOCS: &[(&str, &str, &str)] = &[
-        (
-            "docs/en/internals.md",
-            "## External tools",
-            include_str!("../../docs/en/internals.md"),
-        ),
-        (
-            "docs/zh/internals.md",
-            "## 外部工具",
-            include_str!("../../docs/zh/internals.md"),
-        ),
-    ];
+    use crate::docs::published::{DocRole, DOCS};
     let mut registered: Vec<&str> = Tool::ALL.iter().map(|t| t.name()).collect();
     registered.sort_unstable();
-    for (doc, heading, text) in DOCS {
+    for doc in DOCS.iter().filter(|d| d.role == DocRole::Internals) {
+        let heading = if doc.is_zh() { "## 外部工具" } else { "## External tools" };
+        let text = doc.text();
         let section = text
             .split(heading)
             .nth(1)
             .and_then(|s| s.split("\n## ").next())
-            .unwrap_or_else(|| panic!("{doc} has no `{heading}` section"));
+            .unwrap_or_else(|| panic!("{} has no `{heading}` section", doc.path));
         let mut listed: Vec<&str> = section
             .lines()
             .filter(|l| l.starts_with('|'))
             .flat_map(|l| l.split('`').skip(1).step_by(2))
             .collect();
         listed.sort_unstable();
-        assert_eq!(listed, registered, "the tool table in {doc} and Tool::ALL disagree");
+        assert_eq!(listed, registered, "the tool table in {} and Tool::ALL disagree", doc.path);
     }
 }
 
