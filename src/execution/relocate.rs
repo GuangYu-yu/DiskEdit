@@ -25,7 +25,7 @@ pub(crate) struct Relocate {
 }
 
 /// 非自重叠搬移攒批落盘的检查点阈值下限
-const CHECKPOINT_FLOOR: u64 = 8 * 1024 * 1024;
+const CHECKPOINT_FLOOR: u64 = 8 * crate::support::MIB_BYTES;
 
 pub(crate) fn execute(
     src: &mut WriteSource,

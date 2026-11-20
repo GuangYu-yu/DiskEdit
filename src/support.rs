@@ -42,7 +42,7 @@ pub(crate) fn bail_fail(f: crate::outcome::RunOutcome) -> ! {
 }
 
 /// 持久日志的单文件上限：打开时已有日志达到这个长度就轮转一代
-const LOG_MAX_BYTES: u64 = 8 * 1024 * 1024;
+const LOG_MAX_BYTES: u64 = 8 * MIB_BYTES;
 
 /// 轮转一代：已有日志达到上限时整份改名为同名加 `.1`，原有的 `.1` 被覆盖。
 /// 打开点都在取得目标锁之后，同一目标不存在第二个进程同时轮转
@@ -126,7 +126,35 @@ pub(crate) fn resolve_chunk(mib: Option<u64>, src: &FileSource) -> u64 {
         .map_or(DEFAULT_CHUNK_BYTES, |r| r.chunk_bytes)
 }
 
-pub(crate) const DEFAULT_CHUNK_BYTES: u64 = 4 * 1024 * 1024;
+pub(crate) const DEFAULT_CHUNK_BYTES: u64 = 4 * MIB_BYTES;
+
+/// 读路径失败时的统一措辞：`cannot read {path}: {e}`。各调用点不再各自拼这一句
+pub(crate) fn cannot_read(path: impl std::fmt::Display, e: impl std::fmt::Display) -> String {
+    format!("cannot read {path}: {e}")
+}
+
+/// 取路径元数据失败时的统一措辞：`cannot stat {path}: {e}`
+pub(crate) fn cannot_stat(path: impl std::fmt::Display, e: impl std::fmt::Display) -> String {
+    format!("cannot stat {path}: {e}")
+}
+
+/// 内容识别失败时的统一措辞：`identify failed: {e}`
+pub(crate) fn identify_failed(e: impl std::fmt::Display) -> String {
+    format!("identify failed: {e}")
+}
+
+/// 表解析失败时的统一措辞：`parse failed: {e}`
+pub(crate) fn parse_failed(e: impl std::fmt::Display) -> String {
+    format!("parse failed: {e}")
+}
+
+/// 表解析失败并点名盘型：`parse failed ({kind}): {e}`
+pub(crate) fn parse_failed_kind(
+    kind: impl std::fmt::Display,
+    e: impl std::fmt::Display,
+) -> String {
+    format!("parse failed ({kind}): {e}")
+}
 
 /// 磁盘字节序 16 字节 → 标准文本 GUID（前 3 字段小端重排；内核 efi.h EFI_GUID 宏的逆变换）
 pub(crate) fn hex_guid(b: &[u8; 16]) -> String {
@@ -344,8 +372,12 @@ where
     }
 }
 
-/// 1 MiB 的字节数：`--align mib` 的取整单位与百分比增量的粒度都从这里取
-pub(crate) const MIB_BYTES: u64 = 1024 * 1024;
+/// 二进制单位：`--size` 的后缀、`--align mib` 的取整单位与各处缓冲上限都从这里取，
+/// 调用点不再各自展开 `1024 * 1024`
+pub(crate) const KIB_BYTES: u64 = 1 << 10;
+pub(crate) const MIB_BYTES: u64 = 1 << 20;
+pub(crate) const GIB_BYTES: u64 = 1 << 30;
+pub(crate) const TIB_BYTES: u64 = 1 << 40;
 
 /// 1 MiB 折算成表内扇区的唯一落点：不足一扇区时取 1，调用点共用，
 /// 不各自写 `(MIB_BYTES / ss).max(1)` 第二遍。`ss` 为 0 时没有有意义的折算，
@@ -570,7 +602,7 @@ pub(crate) fn lba_range_bytes(start: u64, end: u64, ss: u64) -> u64 {
 /// 不拼分区号、长度或扇区大小。读取失败原样上抛，由调用点按"有没有写过目标"落码
 pub(crate) fn range_sha256(src: &FileSource, offset: u64, len: u64) -> std::io::Result<[u8; 32]> {
     use sha2::{Digest, Sha256};
-    const CHUNK: u64 = 1 << 20;
+    const CHUNK: u64 = MIB_BYTES;
     let mut hasher = Sha256::new();
     let mut buf = vec![0u8; CHUNK as usize];
     let mut done = 0u64;

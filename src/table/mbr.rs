@@ -8,13 +8,22 @@ pub(crate) const MBR_SIGNATURE: u16 = 0xAA55;
 
 /// MBR 布局所占的 LBA0 字节数：分区表区与签名都落在前 512 字节内（UEFI §5.2.1
 /// Table 5.1），与设备逻辑块大小无关
-pub(crate) const MBR_SECTOR_BYTES: usize = 512;
+pub(crate) const MBR_SECTOR_BYTES: usize = MBR_SIGNED_BYTES;
+
+/// 分区条目 StartLBA/SizeInLBA 两个字段能表示的最大 LBA：各占 u32（UEFI §5.2.1
+/// Table 5.1 的 LBA 字段宽 32 位），末端 LBA = 起点 + 尺寸 − 1 同样受此限
+pub(crate) const MBR_LBA_MAX: u64 = u32::MAX as u64;
 
 /// 签名在 LBA0 内的起点：其后 2 字节即 [`MBR_SIGNATURE`]
-pub(crate) const MBR_SIGNATURE_OFFSET: usize = 510;
+pub(crate) const MBR_SIGNATURE_OFFSET: usize = MBR_SIGNATURE_AT;
 
-/// LBA0 的分区表区：446 起 4 条各 16 字节（UEFI §5.2.1 Table 5.1）
-pub(crate) const MBR_ENTRY_AREA: std::ops::Range<usize> = 446..510;
+/// LBA0 的分区表区：4 条记录，每条 16 字节（UEFI §5.2.1 Table 5.1）
+pub(crate) const MBR_ENTRY_AREA: std::ops::Range<usize> = MBR_ENTRY_BASE..MBR_SIGNATURE_AT;
+
+/// 第 `part` 条主分区（1 起）在 LBA0 内的起点
+fn mbr_entry_start(part: u32) -> usize {
+    mbr_entry_range(part as usize - 1).start
+}
 
 /// LBA0 的 `55 AA` 签名是否在位
 pub(crate) fn has_mbr_signature(lba0: &[u8]) -> bool {
@@ -135,7 +144,7 @@ pub fn parse_mbr_raw(src: &FileSource) -> io::Result<Option<RawMbr>> {
     let mut saw_protective = false;
     let total_sectors = src.size / ss as u64;
     for i in 0..4u32 {
-        let rec = &lba0[446 + (i as usize) * 16..446 + (i as usize) * 16 + 16];
+        let rec = &lba0[mbr_entry_range(i as usize)];
         let os_type = rec[4];
         let start = rd_u32(rec, 8);
         let size = rd_u32(rec, 12);
@@ -333,7 +342,7 @@ pub(crate) fn resize_mdos_entry_image(
     if !has_mbr_signature(lba0) {
         return Err(RunOutcome::no_mutation("no MBR signature on target"));
     }
-    let off = 446 + (part as usize - 1) * 16;
+    let off = mbr_entry_start(part);
     if lba0[off + 4] == 0 {
         return Err(RunOutcome::refused(format!("MBR partition {part} is empty")));
     }
@@ -375,11 +384,11 @@ pub(crate) fn resize_mdos_entry_image(
     // StartLBA 与 SizeInLBA 各占 u32；末端 LBA = start + size − 1 也必须落在 u32 内，
     // 与 add_mdos_entry 同一不变量。只查 size 会放行"起点已很大"的条目：尺寸字段本身
     // 装得下，末端却越出 32 位，读回时末端按 u32 计算即回绕，分区落点与写下的尺寸对不上
-    if start + new_size_lba as u64 - 1 > u32::MAX as u64 {
+    if start + new_size_lba as u64 - 1 > MBR_LBA_MAX {
         return Err(RunOutcome::refused(format!(
             "new range {start}..{} exceeds the MBR 32-bit LBA limit (last expressible LBA {})",
             start + new_size_lba as u64 - 1,
-            u32::MAX
+            MBR_LBA_MAX
         )));
     }
     // 邻接自守（与 add_mdos_entry 同判据）：其余槽位任一与新区间重叠即拒绝，
@@ -389,7 +398,7 @@ pub(crate) fn resize_mdos_entry_image(
         if i + 1 == part {
             continue;
         }
-        let o = &lba0[446 + (i as usize) * 16..446 + (i as usize) * 16 + 16];
+        let o = &lba0[mbr_entry_range(i as usize)];
         if o[4] == 0 || rd_u32(o, 12) == 0 {
             continue;
         }
@@ -421,11 +430,11 @@ pub(crate) fn pmbr_shape_valid(src: &FileSource) -> io::Result<bool> {
         return Ok(false);
     }
     for i in 1..4 {
-        if lba0[446 + i * 16..446 + i * 16 + 16].iter().any(|&b| b != 0) {
+        if lba0[mbr_entry_range(i)].iter().any(|&b| b != 0) {
             return Ok(false); // 其余三条记录必须为零
         }
     }
-    let rec = &lba0[446..462];
+    let rec = &lba0[mbr_entry_range(0)];
     Ok(rec[4] == PROT_MBR_TYPE && rd_u32(rec, 8) == 1)
 }
 
@@ -500,16 +509,16 @@ pub(crate) fn add_mdos_entry_image(
     // MBR 的 StartLBA/SizeInLBA 都是 u32 字段：超出即无法表示，必须在此拒绝。
     // 少了这一条，下面 `start as u32` / `(end - start + 1) as u32` 会静默截断——
     // 例如 start = 2^32+2048 会写出一个指向 LBA 2048 的条目，落盘即损坏且无任何报错
-    if end > u32::MAX as u64 {
+    if end > MBR_LBA_MAX {
         return Err(RunOutcome::refused(format!(
             "range {start}..{end} exceeds the MBR 32-bit LBA limit (last expressible LBA {})",
-            u32::MAX
+            MBR_LBA_MAX
         )));
     }
     let mut lba0 = lba0.to_vec();
     let mut first_empty: Option<usize> = None;
     for i in 0..4usize {
-        let rec = &lba0[446 + i * 16..446 + i * 16 + 16];
+        let rec = &lba0[mbr_entry_range(i)];
         // 隐形条目（类型字节非零但长度为 0）：与 set_mdos_hidden / set_mdos_type /
         // resize_mdos_entry 同判据，拒绝写入
         if rec[4] != 0 && rd_u32(rec, 12) == 0 {
@@ -540,7 +549,7 @@ pub(crate) fn add_mdos_entry_image(
                 .ok_or_else(|| {
                     RunOutcome::refused(format!("partition number {n} is outside 1..=4 for an MBR table"))
                 })?;
-            if lba0[446 + i * 16 + 4] != 0 {
+            if lba0[mbr_entry_range(i).start + 4] != 0 {
                 return Err(RunOutcome::refused(format!(
                     "partition {n} is already in use — pick an empty primary slot"
                 )));
@@ -550,7 +559,7 @@ pub(crate) fn add_mdos_entry_image(
         None => first_empty
             .ok_or_else(|| RunOutcome::refused("all 4 primary slots used (extended/logical unsupported)"))?,
     };
-    let rec = &mut lba0[446 + i * 16..446 + i * 16 + 16];
+    let rec = &mut lba0[mbr_entry_range(i)];
     rec[0] = 0x00;
     // CHS 占位写 FE FF FF：工具惯例（LBA-only），非现代 MBR 的必须规则
     rec[1..4].copy_from_slice(&[0xFE, 0xFF, 0xFF]);
@@ -565,7 +574,7 @@ pub(crate) fn add_mdos_entry_image(
 /// 不写盘。槽位范围与条目状态判据与解析侧一致——空槽、0xEE 保护记录、扩展容器都拒绝
 pub(crate) fn cleared_mbr_image(lba0: &[u8], part: u32) -> Result<Vec<u8>, RunOutcome> {
     primary_slot(part)?;
-    let off = 446 + (part as usize - 1) * 16;
+    let off = mbr_entry_start(part);
     let mut out = lba0.to_vec();
     let rec = &mut out[off..off + 16];
     let cur = rec[4];
@@ -600,12 +609,12 @@ pub fn delete_mdos_entry(lba0: &[u8], part: u32) -> Result<Vec<u8>, RunOutcome> 
 /// 清掉其他三条槽位的同一字节——MBR 规范未规定 boot 标志唯一性，"至多一个"是本工具策略
 pub(crate) fn set_mdos_boot_image(lba0: &[u8], part: u32, on: bool) -> Result<Vec<u8>, RunOutcome> {
     primary_slot(part)?;
-    let off = 446 + (part as usize - 1) * 16;
+    let off = mbr_entry_start(part);
     require_live_entry(part, lba0, off)?;
     let mut out = lba0.to_vec();
     if on {
-        for i in 0..4usize {
-            out[446 + i * 16] = 0x00;
+        for i in 0..MBR_ENTRY_SLOTS {
+            out[mbr_entry_range(i).start] = 0x00;
         }
     }
     out[off] = if on { 0x80 } else { 0x00 };
@@ -643,7 +652,7 @@ pub(crate) fn set_mdos_hidden_image(
     on: bool,
 ) -> Result<Option<Vec<u8>>, RunOutcome> {
     primary_slot(part)?;
-    let off = 446 + (part as usize - 1) * 16;
+    let off = mbr_entry_start(part);
     let cur = require_live_entry(part, lba0, off)?;
     if MDOS_HIDDEN_PAIRS
         .iter()
@@ -709,7 +718,7 @@ pub(crate) fn check_mdos_type(part: u32, t: u8) -> Result<(), RunOutcome> {
 /// 扩展容器两类条目的类型字节承担结构语义，改掉后解析侧不再认得出它们的结构，故拒绝
 pub(crate) fn set_mdos_type_image(lba0: &[u8], part: u32, t: u8) -> Result<Vec<u8>, RunOutcome> {
     check_mdos_type(part, t)?;
-    let off = 446 + (part as usize - 1) * 16;
+    let off = mbr_entry_start(part);
     let cur = require_live_entry(part, lba0, off)?;
     if MDOS_CONTAINER_TYPES.contains(&cur) {
         return Err(RunOutcome::refused(format!("partition {part} is an extended container (0x{cur:02X}) — its type is structural, not descriptive")));

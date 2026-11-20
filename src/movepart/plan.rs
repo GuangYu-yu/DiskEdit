@@ -7,13 +7,20 @@
 use super::*;
 use crate::recovery::{RelocEntry, RelocKind, Relocation};
 
+/// `--chunk` 的 MiB 取值范围；帮助文本与校验共用这一对上下限
+pub(crate) const CHUNK_MIB_MIN: u64 = 1;
+pub(crate) const CHUNK_MIB_MAX: u64 = 64;
+
 /// chunk 字节数：命令行 --chunk（MiB）传入；checkpoint 记录该值，
 /// 续传时不一致即拒绝（chunks_done 是按 chunk 计数的，换大小会错位）
 pub fn chunk_bytes(mib: u64) -> io::Result<u64> {
-    if !(1..=64).contains(&mib) {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, "--chunk out of range (1..=64 MiB)"));
+    if !(CHUNK_MIB_MIN..=CHUNK_MIB_MAX).contains(&mib) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("--chunk out of range ({CHUNK_MIB_MIN}..={CHUNK_MIB_MAX} MiB)"),
+        ));
     }
-    Ok(mib * 1024 * 1024)
+    Ok(mib * crate::support::MIB_BYTES)
 }
 
 #[derive(Clone)]
@@ -917,8 +924,8 @@ pub(crate) fn verify_relocation_resume(
     if r.chunk_bytes != chunk_len {
         return Err(RunOutcome::refused(format!(
             "the recovery record was written with --chunk {} MiB, this run uses {} — re-run with the original value",
-            r.chunk_bytes / (1024 * 1024),
-            chunk_len / (1024 * 1024),
+            r.chunk_bytes / crate::support::MIB_BYTES,
+            chunk_len / crate::support::MIB_BYTES,
         )));
     }
     // 记录与盘同源的两维：换了目标尺寸或表扇区大小，游标到字节的映射不再成立

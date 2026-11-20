@@ -19,7 +19,7 @@ pub(crate) fn host_state_root() -> PathBuf {
     #[cfg(target_os = "linux")]
     {
         if euid_is_root()
-            && let Some(v) = std::env::var_os("DISKEDIT_STATE_DIR")
+            && let Some(v) = std::env::var_os(super::identity::STATE_DIR_ENV)
             && !v.is_empty()
         {
             return PathBuf::from(v);

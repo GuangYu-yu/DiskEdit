@@ -32,23 +32,11 @@ impl ShrinkRunOutcome {
     /// 随结果浮出的待办：未证实的原因与补救、以及没卸掉的挂载点。两者都不改写
     /// "缩容已经执行"这一事实，只作为后置条件呈现
     pub fn pending(self, part: u32) -> Vec<crate::outcome::Pending> {
-        let mut pending = Vec::new();
-        let leak = match self {
-            Self::Verified { leak, .. } => leak,
-            Self::Unverified { why, hint, leak } => {
-                pending.push(crate::outcome::Pending::new(
-                    part,
-                    crate::outcome::PendingKind::Other("fs shrink"),
-                    why,
-                    hint,
-                ));
-                leak
-            }
+        let (unverified, leak) = match self {
+            Self::Verified { leak, .. } => (None, leak),
+            Self::Unverified { why, hint, leak } => (Some((why, hint)), leak),
         };
-        if let Some(leak) = leak {
-            pending.push(leak.into_pending(part));
-        }
-        pending
+        super::run_pending(part, "fs shrink", unverified, leak)
     }
 }
 

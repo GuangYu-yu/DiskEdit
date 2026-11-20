@@ -34,6 +34,7 @@ mod planner;
 mod recovery;
 mod support;
 mod table;
+mod tagged;
 mod targetlock;
 #[cfg(test)]
 mod testdir;

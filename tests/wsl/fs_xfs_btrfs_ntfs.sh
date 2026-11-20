@@ -107,5 +107,5 @@ else
   echo "D WRONG (exit=$E, want 6 + 'spans multiple devices')"; rc=1
 fi
 lo_detach "$LDM"; lo_detach "$LDS"
-sgdisk -v "$IMGD" >/dev/null 2>&1 && echo "sgdisk clean" || { echo "sgdisk ISSUES"; rc=1; }
+sgdisk_check "$IMGD"
 exit $rc

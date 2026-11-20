@@ -99,7 +99,7 @@ pub(crate) fn cmd_info_with(a: &InfoRequest, tail: Option<&str>) -> u8 {
                 table::GptError::InvalidHeader(_) => "invalid GPT header",
                 table::GptError::Io(_) => "I/O error",
             };
-            let msg = format!("parse failed ({kind}): {e}");
+            let msg = crate::support::parse_failed_kind(kind, &e);
             emit_failure(&msg, Some(&src));
             bail_fail(RunOutcome::refused(msg));
         }
@@ -181,7 +181,11 @@ pub(crate) fn cmd_info_with(a: &InfoRequest, tail: Option<&str>) -> u8 {
             let fs = match fsid::identify(&src, lba_bytes(e.starting_lba, g.ss), lba_range_bytes(e.starting_lba, e.ending_lba, g.ss)) {
                 Ok(f) => fsid::content_name(f).to_string(),
                 Err(e) => {
-                    identify_errors.push(format!("partition {}: identify failed: {e}", i + 1));
+                    identify_errors.push(format!(
+                        "partition {}: {}",
+                        i + 1,
+                        crate::support::identify_failed(&e)
+                    ));
                     "error".to_string()
                 }
             };
@@ -205,7 +209,7 @@ pub(crate) fn cmd_info_with(a: &InfoRequest, tail: Option<&str>) -> u8 {
         let raw = match table::parse_mbr_raw(&src) {
             Ok(m) => m,
             Err(e) => {
-                let msg = format!("parse failed: {e}");
+                let msg = crate::support::parse_failed(&e);
                 emit_failure(&msg, Some(&src));
                 bail_fail(RunOutcome::refused(msg));
             }
@@ -235,7 +239,11 @@ pub(crate) fn cmd_info_with(a: &InfoRequest, tail: Option<&str>) -> u8 {
                         match fsid::identify(&src, lba_bytes(p.start_lba as u64, src.sector_size), lba_bytes(p.size_lba as u64, src.sector_size)) {
                             Ok(f) => fsid::content_name(f).to_string(),
                             Err(e) => {
-                                identify_errors.push(format!("partition {}: identify failed: {e}", p.num));
+                                identify_errors.push(format!(
+                                    "partition {}: {}",
+                                    p.num,
+                                    crate::support::identify_failed(&e)
+                                ));
                                 "error".to_string()
                             }
                         }

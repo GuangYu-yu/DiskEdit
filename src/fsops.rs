@@ -38,4 +38,27 @@ use std::io;
 #[cfg(target_os = "linux")]
 use std::path::Path;
 use std::path::PathBuf;
+
+/// 扩容 / 缩容结果共用的后置条件装配：未证实的原因与补救、没卸掉的挂载点。
+/// 顺序即报告顺序——先未证实（带补救），后清理待办
+pub(crate) fn run_pending(
+    part: u32,
+    step: &'static str,
+    unverified: Option<(String, String)>,
+    leak: Option<MountLeak>,
+) -> Vec<crate::outcome::Pending> {
+    let mut pending = Vec::new();
+    if let Some((why, hint)) = unverified {
+        pending.push(crate::outcome::Pending::new(
+            part,
+            crate::outcome::PendingKind::Other(step),
+            why,
+            hint,
+        ));
+    }
+    if let Some(leak) = leak {
+        pending.push(leak.into_pending(part));
+    }
+    pending
+}
 use std::process::{Command, Stdio};

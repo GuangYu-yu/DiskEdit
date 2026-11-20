@@ -495,7 +495,7 @@ fn scoped_self(rdev: u64) -> Result<ScopedDevice, String> {
 fn dev_no_of(dir: &Path) -> Result<(u64, u64), String> {
     let file = dir.join("dev");
     let text = std::fs::read_to_string(&file)
-        .map_err(|e| format!("cannot read {}: {e}", file.display()))?;
+        .map_err(|e| crate::support::cannot_read(file.display(), e))?;
     let (maj, min) = text
         .trim()
         .split_once(':')
@@ -515,7 +515,7 @@ fn has_partition_attr(dir: &Path) -> Result<bool, String> {
     match std::fs::metadata(&attr) {
         Ok(_) => Ok(true),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(e) => Err(format!("cannot stat {}: {e}", attr.display())),
+        Err(e) => Err(crate::support::cannot_stat(attr.display(), e)),
     }
 }
 
@@ -523,13 +523,13 @@ fn has_partition_attr(dir: &Path) -> Result<bool, String> {
 #[cfg(target_os = "linux")]
 fn partitions_of(disk_dir: &Path) -> Result<Vec<PathBuf>, String> {
     let entries = std::fs::read_dir(disk_dir)
-        .map_err(|e| format!("cannot read {}: {e}", disk_dir.display()))?;
+        .map_err(|e| crate::support::cannot_read(disk_dir.display(), e))?;
     let mut out = Vec::new();
     for entry in entries {
-        let entry = entry.map_err(|e| format!("cannot read {}: {e}", disk_dir.display()))?;
+        let entry = entry.map_err(|e| crate::support::cannot_read(disk_dir.display(), e))?;
         let is_dir = entry
             .file_type()
-            .map_err(|e| format!("cannot stat {}: {e}", entry.path().display()))?
+            .map_err(|e| crate::support::cannot_stat(entry.path().display(), e))?
             .is_dir();
         if is_dir && has_partition_attr(&entry.path())? {
             out.push(entry.path());
@@ -779,7 +779,7 @@ fn md_members_of(scope: &[ScopedDevice]) -> Result<Vec<MemberRef>, String> {
         }
         let node = block_dir.join(&name);
         let is_dir = std::fs::metadata(&node)
-            .map_err(|e| format!("cannot stat {}: {e}", node.display()))?
+            .map_err(|e| crate::support::cannot_stat(node.display(), e))?
             .is_dir();
         if !is_dir {
             continue;
@@ -788,9 +788,9 @@ fn md_members_of(scope: &[ScopedDevice]) -> Result<Vec<MemberRef>, String> {
         // 内核文档（Documentation/admin-guide/md.rst）：每个 md 设备都带一个 `md` 子目录，
         // 成员以 `dev-XXX` 目录列在其中。目录读不到是环境故障，不能读成"没有成员"
         let members = std::fs::read_dir(&md_dir)
-            .map_err(|e| format!("cannot read {}: {e}", md_dir.display()))?;
+            .map_err(|e| crate::support::cannot_read(md_dir.display(), e))?;
         for member in members {
-            let member = member.map_err(|e| format!("cannot read {}: {e}", md_dir.display()))?;
+            let member = member.map_err(|e| crate::support::cannot_read(md_dir.display(), e))?;
             let member = member.file_name().to_string_lossy().into_owned();
             let Some(member) = member.strip_prefix("dev-") else { continue };
             if names.contains(&member) {
@@ -849,10 +849,10 @@ fn holder_chain(sysdir: &Path) -> Result<Option<Vec<String>>, String> {
 fn read_holders(sysdir: &Path) -> Result<Vec<String>, String> {
     let dir = sysdir.join("holders");
     let entries = std::fs::read_dir(&dir)
-        .map_err(|e| format!("cannot read {}: {e}", dir.display()))?;
+        .map_err(|e| crate::support::cannot_read(dir.display(), e))?;
     let mut out = Vec::new();
     for entry in entries {
-        let entry = entry.map_err(|e| format!("cannot read {}: {e}", dir.display()))?;
+        let entry = entry.map_err(|e| crate::support::cannot_read(dir.display(), e))?;
         out.push(entry.file_name().to_string_lossy().into_owned());
     }
     Ok(out)

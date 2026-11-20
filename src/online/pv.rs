@@ -203,7 +203,7 @@ pub(crate) fn check_new_range(t: &OnlineTarget, new_len_bytes: u64, disk: &FileS
     // MBR 的起点/长度字段各是 u32 LBA：离线路径在写表前按**长度**（size_lba）拒绝，
     // 在线把同一长度交给 sfdisk 的 size 字段，越过 u32 会在落盘时被截断成另一个区间
     let new_len_sectors = new_len_bytes / t.logical_block;
-    if new_len_sectors > u32::MAX as u64
+    if new_len_sectors > crate::table::MBR_LBA_MAX
         && crate::table::parse_mbr(disk).map_err(RunOutcome::from)?.is_some()
     {
         return Err(RunOutcome::refused(format!(
@@ -301,7 +301,7 @@ pub fn resize_pv(
             "partition {pno} is no longer an LVM PV (identified as {}) — re-run `diskedit resize` to re-classify the target",
             crate::fsid::content_name(ft)
         )), old_len_bytes, None),
-        Err(e) => return (RunOutcome::refused(format!("identify failed: {e}")), old_len_bytes, None),
+        Err(e) => return (RunOutcome::refused(crate::support::identify_failed(&e)), old_len_bytes, None),
     }
     // 目标长度在锁下解析（见 `resize_online_planned` 的说明）；PV 路径无"仅扩 FS"一说，
     // `Ok(None)` 视作无绝对目标 = 分区层无变化

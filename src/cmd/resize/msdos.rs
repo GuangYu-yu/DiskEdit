@@ -82,8 +82,11 @@ fn mbr_entry_size(lba0: &[u8], part: u32) -> Option<u32> {
     if index >= 4 {
         return None;
     }
-    let off = 446 + index as usize * 16;
-    let bytes: [u8; 4] = lba0.get(off + 12..off + 16)?.try_into().ok()?;
+    let off = crate::table::mbr_entry_range(index as usize).start;
+    let bytes: [u8; 4] = lba0
+        .get(off + crate::table::MBR_ENTRY_BYTES - 4..off + crate::table::MBR_ENTRY_BYTES)?
+        .try_into()
+        .ok()?;
     Some(u32::from_le_bytes(bytes))
 }
 
@@ -251,7 +254,7 @@ pub(crate) fn cmd_resize_msdos(a: &ResizeRequest, pref: PartSelector, src_ro: &F
     }
     let mbr = table::parse_mbr(src_ro)
         .unwrap_or_else(|e| {
-            bail_fail(RunOutcome::refused(format!("parse failed: {e}")))
+            bail_fail(RunOutcome::refused(crate::support::parse_failed(&e)))
         })
         .unwrap_or_else(|| bail_fail(RunOutcome::refused("no MBR on target".to_string())));
     // 只读快照
@@ -267,7 +270,7 @@ pub(crate) fn cmd_resize_msdos(a: &ResizeRequest, pref: PartSelector, src_ro: &F
     let ss = src_ro.sector_size;
     let cur_bytes = lba_bytes(p.size_lba as u64, ss);
     let fstype = fsid::identify(src_ro, lba_bytes(p.start_lba as u64, ss), lba_bytes(p.size_lba as u64, ss))
-        .unwrap_or_else(|e| bail_fail(RunOutcome::no_mutation(format!("identify failed: {e}"))));
+        .unwrap_or_else(|e| bail_fail(RunOutcome::no_mutation(crate::support::identify_failed(&e))));
     let is_pv = fstype == fsid::ContentKind::Lvm2Pv;
 
     let (target, grow_to_end) = resolve_size_request(a.size, cur_bytes, ss).unwrap_or_else(|f| bail_fail(f));
@@ -294,7 +297,7 @@ pub(crate) fn cmd_resize_msdos(a: &ResizeRequest, pref: PartSelector, src_ro: &F
     // 锁后盘面变小时会得到一次无谓的越界拒绝，变大时则静默少扩
     let mbr = table::parse_mbr(&src)
         .unwrap_or_else(|e| {
-            bail_fail(RunOutcome::refused(format!("parse failed: {e}")))
+            bail_fail(RunOutcome::refused(crate::support::parse_failed(&e)))
         })
         .unwrap_or_else(|| bail_fail(RunOutcome::refused("no MBR on target".to_string())));
     // 锁下快照
@@ -310,7 +313,7 @@ pub(crate) fn cmd_resize_msdos(a: &ResizeRequest, pref: PartSelector, src_ro: &F
     // FS 类型按锁下现状重取：识别与取锁之间分区可被重新格式化（mkfs 不守本工具的锁），
     // 拿旧类型选工具就是把 ext4 的工具链砸到 xfs 上；PV 判据随之重算
     let fstype = fsid::identify(&src, lba_bytes(p.start_lba as u64, ss), lba_bytes(p.size_lba as u64, ss))
-        .unwrap_or_else(|e| bail_fail(RunOutcome::no_mutation(format!("identify failed: {e}"))));
+        .unwrap_or_else(|e| bail_fail(RunOutcome::no_mutation(crate::support::identify_failed(&e))));
     let is_pv = fstype == fsid::ContentKind::Lvm2Pv;
     // SIZE 锚点按锁下的新分区尺寸重算；grow 标记是请求的形状，锁前锁后同值（见 GPT 分支）
     let cur_bytes = lba_bytes(p.size_lba as u64, ss);
@@ -445,13 +448,10 @@ pub(crate) fn cmd_resize_msdos(a: &ResizeRequest, pref: PartSelector, src_ro: &F
                 eprintln!("partition {part} cannot grow in the table — no free space to its right; verifying the PV chain");
                 return mbr_grow_finish(a, &mut src, p, is_pv, is_block, lv_sel.as_ref());
             }
-            bail_fail(RunOutcome::refused(
-                "grow would not extend the partition — no free space to its right (MBR cannot relocate blocking partitions); \
-                 use `resizefs` to fill the filesystem inside the current partition".to_string(),
-            ));
+            bail_fail(RunOutcome::refused(super::GROW_NO_FREE_SPACE_MSDOS.to_string()));
         }
         let new_size_lba = p.size_lba as u64 + free;
-        if new_size_lba > u32::MAX as u64 {
+        if new_size_lba > crate::table::MBR_LBA_MAX {
             bail_fail(RunOutcome::refused(format!("new size {new_size_lba} sectors exceeds MBR 32-bit LBA limit")));
         }
         record_ranges(&mut src, p, new_size_lba).unwrap_or_else(|f| bail_fail(f));
@@ -466,7 +466,7 @@ pub(crate) fn cmd_resize_msdos(a: &ResizeRequest, pref: PartSelector, src_ro: &F
             bail_fail(RunOutcome::refused("`resize` needs a size: diskedit resize <TARGET>[:N] <SIZE> (see diskedit help resize)".to_string()));
         };
         let new_size_lba = bytes / ss;
-        if new_size_lba > u32::MAX as u64 {
+        if new_size_lba > crate::table::MBR_LBA_MAX {
             bail_fail(RunOutcome::refused(format!("size {new_size_lba} sectors exceeds MBR 32-bit LBA limit")));
         }
         // 越界与右侧空闲均已判定，取整提示不会跟在一条拒绝后面
@@ -505,11 +505,7 @@ pub(crate) fn cmd_resize_msdos(a: &ResizeRequest, pref: PartSelector, src_ro: &F
             // 相等已在上面短路；到这里只剩收缩：先缩 FS、再收条目（与 GPT 同一顺序）。
             // 前置判据与 GPT 的 prepare 同源：--no-fs 不可收缩、工具可缩、ext 最小尺寸可容
             if a.no_fs {
-                bail_fail(RunOutcome::refused(
-                    "--no-fs cannot shrink: the filesystem has to shrink before the entry, otherwise the \
-                     new end cuts into its metadata"
-                        .to_string(),
-                ));
+                bail_fail(RunOutcome::refused(super::NO_FS_CANNOT_SHRINK_MSDOS.to_string()));
             }
             crate::fsops::check_shrink(
                 Some(fstype),
@@ -581,7 +577,7 @@ fn ensure_mbr_entry_unchanged(
     p: &table::MbrPartition,
 ) -> Result<(), RunOutcome> {
     let mbr = table::parse_mbr(src)
-        .map_err(|e| RunOutcome::refused(format!("parse failed: {e}")))?
+        .map_err(|e| RunOutcome::refused(crate::support::parse_failed(&e)))?
         .ok_or_else(|| RunOutcome::refused("no MBR on target".to_string()))?;
     let now = mbr.iter().find(|e| e.num == p.num).ok_or_else(|| {
         RunOutcome::refused(format!(

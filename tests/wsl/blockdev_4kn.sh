@@ -145,7 +145,7 @@ R=$(echo "$OUT" | grep -o 'resuming at chunk [0-9]*')
 [ "$R" = "resuming at chunk 20" ] && echo "resume: $R" || { echo "resume: WRONG ($R)"; printf '%s\n' "$OUT" | sed 's/^/    /'; rc=1; }
 refresh
 [ "$M2" = "$(mdsum "${LD}p2")" ] && echo "4KN RESUME DEV OK" || { echo "4KN RESUME DEV CORRUPT"; rc=1; }
-e2fsck -fn "${LD}p2" >/dev/null 2>&1 && echo "4KN RESUME e2fsck clean" || { echo "4KN RESUME e2fsck ISSUES"; rc=1; }
+fsck_check "${LD}p2" "4KN RESUME"
 
 echo
 echo "########## D: 分区身份/属性搬移后保持（4Kn 块设备）##########"

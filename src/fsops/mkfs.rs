@@ -4,7 +4,8 @@ use super::*;
 use crate::dev::WriteSource;
 
 /// `--fs`/`mkfs` 请求要创建的具体类型。与识别域 [`FsKind`] 分属两件事：识别器只到 ext
-/// 家族（0xEF53 区分不出 2/3/4），而 mkfs 请求必须点名 ext2/3/4（`mke2fs -t extN`）。
+/// 家族（超级块 magic 见 [`crate::fsid`] 的 `EXT_MAGIC`，区分不出 2/3/4），而 mkfs 请求
+/// 必须点名 ext2/3/4（`mke2fs -t extN`）。
 /// 两者不互相包含：本枚举独有 ext2/3/4，[`FsKind`] 独有 squashfs/erofs/hfsplus/apfs。
 /// 交集按转调共享 [`FsKind::as_str`] 维持，字符串只维护一处
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

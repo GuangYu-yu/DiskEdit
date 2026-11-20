@@ -31,6 +31,8 @@
 #
 # 二进制可执行、但 help 的命令清单与 src/cli.rs 对不上时，以退出码 2 报"不是当前源码
 # 的构建产物"：陈旧的 tmp/DiskEdit 会把每条调用都判成失效点，掩盖真实回归。
+# 每条校准输出都是一处失效点，run_all.sh 对本脚本不过滤输出
+RUNNER_FULL_OUTPUT=1
 source "$(dirname "$0")/lib.sh"
 
 EXTERNAL="dmsetup sgdisk losetup blockdev partx sfdisk mount umount unshare setpriv"

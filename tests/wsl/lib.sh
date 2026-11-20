@@ -192,6 +192,32 @@ selftest_assertions() {
     return "$bad"
 }
 
+# ---- 外部工具探测 ----
+# sgdisk_check <镜像|设备>：GPT 表自洽校验（sgdisk -v）。通过打 "sgdisk clean"，
+# 失败打 "sgdisk ISSUES" 并把本脚本的 rc 置 1（run_all.sh 按退出码判失败）
+sgdisk_check() {
+    if sgdisk -v "$1" >/dev/null 2>&1; then
+        echo "sgdisk clean"
+    else
+        echo "sgdisk ISSUES"
+        rc=1
+        return 1
+    fi
+}
+
+# fsck_check <设备> [标签]：ext 家族只读检查（e2fsck -fn，不改盘）。输出
+# "<标签> e2fsck clean/ISSUES"，失败置 rc=1；标签省略时输出 "e2fsck clean/ISSUES"
+fsck_check() {
+    local dev=$1 label=${2:+$2 }
+    if e2fsck -fn "$dev" >/dev/null 2>&1; then
+        echo "${label}e2fsck clean"
+    else
+        echo "${label}e2fsck ISSUES"
+        rc=1
+        return 1
+    fi
+}
+
 # ---- 资源生命周期 ----
 _TRACK_LOOPS=()
 _TRACK_MOUNTS=()

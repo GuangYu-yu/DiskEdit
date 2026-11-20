@@ -270,7 +270,7 @@ fn platform_failure(target: &str, err: PlatformError) -> RunOutcome {
         PlatformError::Io(e) if e.kind() == std::io::ErrorKind::NotFound => {
             RunOutcome::refused(format!("target {target} does not exist — nothing to inspect"))
         }
-        PlatformError::Io(e) => RunOutcome::refused(format!("cannot read {target}: {e}")),
+        PlatformError::Io(e) => RunOutcome::refused(crate::support::cannot_read(target, e)),
         PlatformError::Unidentifiable(reason) => RunOutcome::refused(reason),
         PlatformError::Unsupported(reason) => RunOutcome::unsupported(reason),
     }

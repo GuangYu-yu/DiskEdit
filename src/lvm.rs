@@ -138,11 +138,11 @@ fn device_match(target: &str, reported: &str) -> DeviceMatch {
     use std::os::unix::fs::{FileTypeExt, MetadataExt};
     let a = match std::fs::metadata(target) {
         Ok(m) => m,
-        Err(e) => return DeviceMatch::Unknown(format!("cannot stat {target}: {e}")),
+        Err(e) => return DeviceMatch::Unknown(crate::support::cannot_stat(target, e)),
     };
     let b = match std::fs::metadata(reported) {
         Ok(m) => m,
-        Err(e) => return DeviceMatch::Unknown(format!("cannot stat {reported}: {e}")),
+        Err(e) => return DeviceMatch::Unknown(crate::support::cannot_stat(reported, e)),
     };
     let same = if a.file_type().is_block_device() && b.file_type().is_block_device() {
         a.rdev() == b.rdev()

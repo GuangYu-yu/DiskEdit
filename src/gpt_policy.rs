@@ -314,7 +314,7 @@ pub(crate) fn read_table(src: &FileSource) -> Result<Table, RunOutcome> {
         // 无 GPT → 按 MBR 解析。不这么做的话真 MBR 盘在这里被一律当成"无表"，
         // mkfs / set label|uuid 在 MBR 上完全不可用
         Ok(None) => match table::parse_mbr(src) {
-            Err(e) => Err(RunOutcome::refused(format!("parse failed: {e}"))),
+            Err(e) => Err(RunOutcome::refused(crate::support::parse_failed(&e))),
             Ok(Some(parts)) => Ok(Table::Mbr(parts)),
             Ok(None) => {
                 // 报"无表"会让 mkfs / set 按空白盘处理：而 LBA1 的主头仍 CRC 自洽时，

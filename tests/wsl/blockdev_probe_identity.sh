@@ -2,6 +2,8 @@
 # 真实块设备的平台读数：HostPlatform::identify 对块设备节点给出 Block 介质与设备号身份；
 # `info` 报出的扇区大小与容量必须等于内核读数；块设备拒绝 `--sector-size` 覆盖（退 3）。
 # 缺 root / losetup / cargo 时明确失败，不跳过。
+# 真实块设备的探测要跑几轮 losetup/udev，给足时间
+TIMEOUT=1800
 source "$(dirname "$0")/lib.sh"
 
 missing() { echo "BAD: $*"; exit 1; }
