@@ -74,21 +74,26 @@ fn lvm_finish_baseline_belongs_to_resize_records() {
     assert!(other.encode().is_err(), "a move record must not carry an LVM baseline");
 }
 
-/// 搬移前几何随记录往返；只有会改动分区落位的操作允许带它
+/// 搬移前几何随记录往返；`resize` 成对携带目标区间，`move` 只带来源区间
 #[test]
 fn pre_commit_range_belongs_to_placement_operations() {
     let old = (2048u64, 10239u64);
+    let target = (2048u64, 14335u64);
 
     let mut record = record_for(scene(3));
     record.old_range = Some(old);
-    let decoded = decode(&record.encode().unwrap()).expect("a start-change resize record with a pre-commit range decodes");
+    record.target_range = Some(target);
+    let decoded = decode(&record.encode().unwrap()).expect("a start-change resize record with both ranges decodes");
     assert_eq!(decoded.old_range, Some(old));
+    assert_eq!(decoded.target_range, Some(target));
 
     let mut resize = record_for(scene(3));
     resize.op = OpKind::Resize;
     resize.old_range = Some(old);
-    let decoded = decode(&resize.encode().unwrap()).expect("a resize record with a pre-commit range decodes");
+    resize.target_range = Some(target);
+    let decoded = decode(&resize.encode().unwrap()).expect("a resize record with both ranges decodes");
     assert_eq!(decoded.old_range, Some(old));
+    assert_eq!(decoded.target_range, Some(target));
 
     let mut moves = record_for(scene(3));
     moves.op = OpKind::Move;
@@ -208,7 +213,7 @@ fn relocation_belongs_to_move_resize_and_resize_part_records() {
     let mut rejected = record_for(scene(6));
     rejected.op = OpKind::Add;
     rejected.relocation = Some(relocation(vec![reloc_entry(2, 6144, 4096, 2048, false)]));
-    assert!(decode(&rejected.encode().unwrap()).is_err(), "Add must not carry a relocation");
+    assert!(rejected.encode().is_err(), "Add must not carry a relocation");
 }
 
 /// 计划字段的非法组合在写入前拒绝：分区号 0 / 重复、零长度、grow_part 参与搬移、

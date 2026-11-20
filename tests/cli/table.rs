@@ -457,22 +457,21 @@ fn msdos_user_resize() {
     assert_eq!(c, 3, "grow beyond blocking partition must refuse: {o}");
     assert_eq!(std::fs::read(&img).unwrap(), raw_before, "refused resize must not write");
 
-    // 收缩：位置 SIZE 只扩，缩容走 `resize --end`；
-    // 收缩请求在准入期就拒绝，不进入 FS 守卫链，也不写盘
+    // 收缩：分区的文件系统认不出来，缩容会让内容越界——能力层面拒绝，且不写盘
     let (c, o) = run(&["resize", &format!("{img_s}:1"), "-1M", "--yes"]);
-    assert_eq!(c, 3, "shrinking must be refused: {o}");
-    assert!(o.contains("only grows"), "{o}");
+    assert_eq!(c, 6, "shrink of an unidentified filesystem must be refused: {o}");
+    assert!(o.contains("filesystem type unrecognized"), "{o}");
     assert_eq!(std::fs::read(&img).unwrap(), raw_before);
 
     // 不存在的分区 / 扩展容器场景的入口拒绝
     let (c, _) = run(&["resize", &format!("{img_s}:3"), "+1M", "--yes"]);
     assert_eq!(c, 3);
 
-    // 收缩与 --no-fs 同时出现时，先命中的是「只扩」闸
+    // 收缩与 --no-fs 同时出现：--no-fs 不能替代先缩文件系统
     let raw_before = std::fs::read(&img).unwrap();
     let (c, o) = run(&["resize", &format!("{img_s}:1"), "-1M", "--no-fs", "--yes"]);
-    assert_eq!(c, 3, "shrink must be refused: {o}");
-    assert!(o.contains("only grows"), "{o}");
+    assert_eq!(c, 3, "shrink with --no-fs must be refused: {o}");
+    assert!(o.contains("--no-fs cannot shrink"), "{o}");
     assert_eq!(std::fs::read(&img).unwrap(), raw_before, "refused resize must not write");
 
     // :N 命中核验按表类型分派：MBR 分区也要能解析出来，不得按"无 GPT"拒绝。

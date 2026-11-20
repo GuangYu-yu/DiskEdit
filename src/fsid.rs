@@ -11,6 +11,36 @@ pub(crate) use crate::domain::{ContentKind, FsKind};
 const SQUASHFS_MAGIC: &[u8; 4] = b"hsqs";
 const EROFS_MAGIC: [u8; 4] = [0xE2, 0xE1, 0xF5, 0xE0];
 
+/// LUKS1/LUKS2 头 magic，偏移 0（cryptsetup 头规范；util-linux
+/// libblkid/src/superblocks/crypt.c 的 LUKS_MAGIC 同值）
+const LUKS_MAGIC: &[u8; 6] = b"LUKS\xba\xbe";
+
+/// BitLocker 引导扇区 OEM ID，偏移 3（util-linux libblkid/src/superblocks/bitlocker.c
+/// 的 BDE_MAGIC_VISTA/WIN7 以 `\xeb\x52\x90`/`\xeb\x58\x90` 开头，其后即这段）
+const BITLOCKER_MAGIC: &[u8; 8] = b"-FVE-FS-";
+
+/// bcachefs 超级块内的 magic 偏移：bch_sb 起于字节 4096（BCH_SB_SECTOR = 8），
+/// bch_csum 16 字节 + version/version_min/padding 8 字节后为 magic，即 sb+24
+/// （kernel fs/bcachefs/bcachefs_format.h 的 struct bch_sb）
+const BCACHEFS_MAGIC_OFFSET: u64 = 4096 + 24;
+/// BCHFS_MAGIC 的盘上字节序：UUID_INIT 把 128 位值按网络字节序写入 `__uuid_t`，
+/// 故 c68573f6-66ce-90a9-d96a-60cf803df7ef 落盘为下列 16 字节
+const BCACHEFS_MAGIC: [u8; 16] =
+    [0xc6, 0x85, 0x73, 0xf6, 0x66, 0xce, 0x90, 0xa9, 0xd9, 0x6a, 0x60, 0xcf, 0x80, 0x3d, 0xf7, 0xef];
+
+/// JFS 超级块偏移与 magic（util-linux libblkid/src/superblocks/jfs.c：kboff 32）
+const JFS_SB_OFFSET: u64 = 32768;
+const JFS_MAGIC: &[u8; 4] = b"JFS1";
+
+/// UDF 卷识别序列首描述符偏移与签名（util-linux libblkid/src/superblocks/udf.c：@0x8000）
+const UDF_VRS_OFFSET: u64 = 32768;
+const UDF_VRS_MAGIC: &[u8; 5] = b"BEA01";
+
+/// ReiserFS 超级块 @64KiB，s_magic（char[10]）在 sb+52；三个版本串见
+/// kernel include/uapi/linux/magic.h
+const REISERFS_MAGIC_OFFSET: u64 = 65536 + 52;
+const REISERFS_MAGICS: [&[u8]; 3] = [b"ReIsErFs", b"ReIsEr2Fs", b"ReIsEr3Fs"];
+
 /// btrfs magic：磁盘上是 `__le64` 的 `BTRFS_MAGIC = 0x4D5F_5366_5248_425F`，小端落地即
 /// `_BHRfS_M`（内核 `include/uapi/linux/btrfs_tree.h`、btrfs-progs
 /// `kernel-shared/uapi/btrfs_tree.h`）。识别（[`probe_fs`]）与成员数判据
@@ -167,6 +197,48 @@ pub fn probe_fs(src: &FileSource, base: u64, len_bytes: u64) -> io::Result<FsPro
         {
             return Ok(FsProbe { content: ContentKind::Lvm2Pv, swap: None });
         }
+    }
+    // LUKS1/LUKS2：magic @0（cryptsetup 头规范；util-linux
+    // libblkid/src/superblocks/crypt.c 的 LUKS_MAGIC）
+    if let Some(b) = rd(0, 6)?
+        && b == LUKS_MAGIC
+    {
+        return Ok(FsProbe { content: ContentKind::Luks, swap: None });
+    }
+    // BitLocker：OEM ID @3（util-linux libblkid/src/superblocks/bitlocker.c 的
+    // BDE_MAGIC_VISTA/WIN7：`\xeb\x52\x90-FVE-FS-` / `\xeb\x58\x90-FVE-FS-`）
+    if let Some(b) = rd(3, 8)?
+        && b == BITLOCKER_MAGIC
+    {
+        return Ok(FsProbe { content: ContentKind::BitLocker, swap: None });
+    }
+    // bcachefs：bch_sb @4096（BCH_SB_SECTOR 8），magic 为 __uuid_t @sb+24；
+    // BCHFS_MAGIC c68573f6-66ce-90a9-d96a-60cf803df7ef（kernel
+    // fs/bcachefs/bcachefs_format.h）
+    if let Some(b) = rd(BCACHEFS_MAGIC_OFFSET, 16)?
+        && b[..] == BCACHEFS_MAGIC[..]
+    {
+        return Ok(FsProbe { content: ContentKind::Filesystem(FsKind::Bcachefs), swap: None });
+    }
+    // JFS：超级块 @32768，magic "JFS1"（util-linux libblkid/src/superblocks/jfs.c，kboff 32）
+    if let Some(b) = rd(JFS_SB_OFFSET, 4)?
+        && b == JFS_MAGIC
+    {
+        return Ok(FsProbe { content: ContentKind::Filesystem(FsKind::Jfs), swap: None });
+    }
+    // UDF：卷识别序列首描述符 @32768，"BEA01"（util-linux
+    // libblkid/src/superblocks/udf.c 的 VRS @0x8000）
+    if let Some(b) = rd(UDF_VRS_OFFSET, 5)?
+        && b == UDF_VRS_MAGIC
+    {
+        return Ok(FsProbe { content: ContentKind::Filesystem(FsKind::Udf), swap: None });
+    }
+    // ReiserFS：超级块 @64KiB，s_magic @sb+52；三个版本串见
+    // kernel include/uapi/linux/magic.h，s_magic 为 char[10]，按 C 字符串前缀比较
+    if let Some(b) = rd(REISERFS_MAGIC_OFFSET, 10)?
+        && REISERFS_MAGICS.iter().any(|m| b.starts_with(m))
+    {
+        return Ok(FsProbe { content: ContentKind::Filesystem(FsKind::Reiserfs), swap: None });
     }
     // swap: 签名位于"创建机页大小"末尾 10 字节（内核 include/linux/swap.h
     // union swap_header：reserved[PAGE_SIZE-10] + magic[10]），盘上不记录该页大小，
@@ -534,6 +606,50 @@ mod tests {
         data[0x20..0x24].copy_from_slice(b"NXSB");
         let s = src_from("apfs", data);
         assert_eq!(identify(&s, 0, 4096).unwrap(), ContentKind::Filesystem(FsKind::Apfs));
+    }
+
+    #[test]
+    fn luks_and_bitlocker_magic() {
+        let mut data = vec![0u8; 4096];
+        data[0..6].copy_from_slice(LUKS_MAGIC);
+        assert_eq!(identify(&src_from("luks", data), 0, 4096).unwrap(), ContentKind::Luks);
+
+        let mut data = vec![0u8; 4096];
+        data[3..11].copy_from_slice(BITLOCKER_MAGIC);
+        assert_eq!(identify(&src_from("bitlocker", data), 0, 4096).unwrap(), ContentKind::BitLocker);
+    }
+
+    #[test]
+    fn bcachefs_magic_at_superblock_plus_24() {
+        let mut data = vec![0u8; 8192];
+        data[BCACHEFS_MAGIC_OFFSET as usize..BCACHEFS_MAGIC_OFFSET as usize + 16]
+            .copy_from_slice(&BCACHEFS_MAGIC);
+        assert_eq!(identify(&src_from("bcachefs", data), 0, 8192).unwrap(), ContentKind::Filesystem(FsKind::Bcachefs));
+        // 区间不到 magic 处：读不出那些字节 → 不命中，不越界
+        let mut short = vec![0u8; 4096];
+        short[0..4].copy_from_slice(b"XFSB");
+        assert_eq!(identify(&src_from("bcachefs_short", short), 0, 4096).unwrap(), ContentKind::Filesystem(FsKind::Xfs));
+    }
+
+    #[test]
+    fn jfs_udf_and_reiserfs_magic() {
+        let mut data = vec![0u8; 32768 + 4];
+        data[JFS_SB_OFFSET as usize..JFS_SB_OFFSET as usize + 4].copy_from_slice(JFS_MAGIC);
+        assert_eq!(identify(&src_from("jfs", data), 0, 32772).unwrap(), ContentKind::Filesystem(FsKind::Jfs));
+
+        let mut data = vec![0u8; 32768 + 5];
+        data[UDF_VRS_OFFSET as usize..UDF_VRS_OFFSET as usize + 5].copy_from_slice(UDF_VRS_MAGIC);
+        assert_eq!(identify(&src_from("udf", data), 0, 32773).unwrap(), ContentKind::Filesystem(FsKind::Udf));
+
+        for (tag, magic) in [("rfs1", &b"ReIsErFs"[..]), ("rfs2", &b"ReIsEr2Fs"[..]), ("rfs3", &b"ReIsEr3Fs"[..])] {
+            let mut data = vec![0u8; REISERFS_MAGIC_OFFSET as usize + 10];
+            data[REISERFS_MAGIC_OFFSET as usize..REISERFS_MAGIC_OFFSET as usize + magic.len()]
+                .copy_from_slice(magic);
+            assert_eq!(
+                identify(&src_from(tag, data), 0, REISERFS_MAGIC_OFFSET + 10).unwrap(),
+                ContentKind::Filesystem(FsKind::Reiserfs)
+            );
+        }
     }
 
     #[test]

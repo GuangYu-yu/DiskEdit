@@ -39,24 +39,38 @@ pub(crate) fn every_capability_list_names_a_registered_tool() {
     assert!(seen > 0, "the scan found no Tool:: variant in capabilities.rs — its subject moved");
 }
 
-/// 文档里的工具表与注册表是同一份事实：新增或删除工具要两边同时改，这里对账
+/// 文档里的工具表与注册表是同一份事实：新增或删除工具要两边同时改，这里对账。
+/// 两个语种各有一份表，逐份比对
 #[test]
 pub(crate) fn the_docs_tool_table_matches_the_registry() {
-    let text = include_str!("../../docs/internals.md");
-    let section = text
-        .split("## External tools")
-        .nth(1)
-        .and_then(|s| s.split("\n## ").next())
-        .expect("internals.md has an External tools section");
-    let mut listed: Vec<&str> = section
-        .lines()
-        .filter(|l| l.starts_with('|'))
-        .flat_map(|l| l.split('`').skip(1).step_by(2))
-        .collect();
-    listed.sort_unstable();
+    const DOCS: &[(&str, &str, &str)] = &[
+        (
+            "docs/en/internals.md",
+            "## External tools",
+            include_str!("../../docs/en/internals.md"),
+        ),
+        (
+            "docs/zh/internals.md",
+            "## 外部工具",
+            include_str!("../../docs/zh/internals.md"),
+        ),
+    ];
     let mut registered: Vec<&str> = Tool::ALL.iter().map(|t| t.name()).collect();
     registered.sort_unstable();
-    assert_eq!(listed, registered, "the tool table in docs/internals.md and Tool::ALL disagree");
+    for (doc, heading, text) in DOCS {
+        let section = text
+            .split(heading)
+            .nth(1)
+            .and_then(|s| s.split("\n## ").next())
+            .unwrap_or_else(|| panic!("{doc} has no `{heading}` section"));
+        let mut listed: Vec<&str> = section
+            .lines()
+            .filter(|l| l.starts_with('|'))
+            .flat_map(|l| l.split('`').skip(1).step_by(2))
+            .collect();
+        listed.sort_unstable();
+        assert_eq!(listed, registered, "the tool table in {doc} and Tool::ALL disagree");
+    }
 }
 
 /// 注册表声明的安装包必须由 CI 装上：新工具带着新包却漏了安装，本地全绿、CI 上

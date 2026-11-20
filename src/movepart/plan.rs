@@ -16,12 +16,6 @@ pub fn chunk_bytes(mib: u64) -> io::Result<u64> {
     Ok(mib * 1024 * 1024)
 }
 
-/// 拒绝搬移的 GPT 类型 GUID（搬移改变起始 LBA）。
-/// 类型 GUID 按 UEFI 规范磁盘序比较（前三字段小端、Data4 原序），不做反向编码容错。
-pub(crate) fn is_forbidden_type_guid(g: &[u8; 16]) -> bool {
-    [table::LUKS_TYPE_GUID, table::LVM_TYPE_GUID].contains(g)
-}
-
 #[derive(Clone)]
 pub struct PlanEntry {
     pub part_num: u32,
@@ -254,8 +248,8 @@ fn refuse_unpreservable_swap_identity(
     }
 }
 
-/// 一条被搬移条目的当前几何：盘上起点、长度与它在表里的 swap 声明。四种拒绝在这里
-/// 给出——不在条目数组里、未定义、端点倒挂、LUKS / LVM PV 不可搬移
+/// 一条被搬移条目的当前几何：盘上起点、长度与它在表里的 swap 声明。三种拒绝在这里
+/// 给出——不在条目数组里、未定义、端点倒挂；是否被 dm/loop 栈占用由写盘前的占用闸判定
 fn move_entry(geometry: &ValidatedGeometry, part: u32) -> Result<(u64, u64, bool), RunOutcome> {
     let index = geometry
         .entry_index(part)
@@ -270,12 +264,6 @@ fn move_entry(geometry: &ValidatedGeometry, part: u32) -> Result<(u64, u64, bool
         return Err(RunOutcome::internal(format!(
             "partition #{part} has an inverted range {}..{}",
             entry.starting_lba, entry.ending_lba
-        )));
-    }
-    if is_forbidden_type_guid(&entry.partition_type_guid) {
-        return Err(RunOutcome::refused(format!(
-            "partition #{part} is a LUKS / LVM PV partition — this tool does not relocate it, only size \
-             changes are allowed"
         )));
     }
     Ok((
@@ -372,8 +360,8 @@ fn entry_spans(
     }
 }
 
-/// movable 集合与两条硬拒绝的唯一构造处：目标之后所有已定义条目（按起点升序）。
-/// 端点倒挂（盘内容故障）与 LUKS/LVM PV（不可搬移）在此一并给出——
+/// movable 集合的唯一构造处：目标之后所有已定义条目（按起点升序）。
+/// 端点倒挂（盘内容故障）在此给出；占用判定留给写盘前的占用闸，
 /// 两条规划路径共用，拒绝理由不会漂移
 pub(crate) fn blockers_after(
     g: &ValidatedGeometry,
@@ -391,9 +379,6 @@ pub(crate) fn blockers_after(
         // 条目端点倒挂属盘内容故障（解析层已拦，这里是纵深防守）
         if e.ending_lba < e.starting_lba {
             return Err(RunOutcome::refused(format!("partition {num} has ending LBA below starting LBA (corrupted table)")));
-        }
-        if is_forbidden_type_guid(&e.partition_type_guid) {
-            return Err(RunOutcome::refused(format!("partition {num} is LUKS/LVM PV — relocation refused")));
         }
     }
     Ok(movable)

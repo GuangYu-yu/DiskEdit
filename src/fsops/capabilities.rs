@@ -44,6 +44,13 @@ pub(crate) fn grow_support(fstype: ContentKind) -> ToolSupport {
         // 但这里仍探测 mkswap——那条收尾路径要在写表之前知道工具在不在
         ContentKind::Swap => Tools(&[Tool::Mkswap]),
         ContentKind::Lvm2Pv => NotApplicable,
+        // 加密层不是可挂载文件系统：扩容要先在映射设备上扩内层，本工具不碰加密头
+        ContentKind::Luks => Unsupported(
+            "LUKS container — open it, resize the inner filesystem on the mapped device, then grow the partition (cryptsetup); this tool does not resize LUKS containers",
+        ),
+        ContentKind::BitLocker => Unsupported(
+            "BitLocker volume — resize it with Windows tools (manage-bde) or dislocker; this tool does not resize BitLocker volumes",
+        ),
         ContentKind::Filesystem(_) | ContentKind::Unknown => {
             // 出路在渲染点追加（[`CHANGE_PARTITION_ONLY`]）：本层不知道调用它的
             // 命令面是否真的声明了 --no-fs
@@ -60,10 +67,15 @@ pub(crate) fn shrink_support(fstype: Option<ContentKind>) -> ToolSupport {
         Some(ContentKind::Filesystem(FsKind::Ext)) => Tools(EXT_TOOLS),
         Some(ContentKind::Filesystem(FsKind::Ntfs)) => Tools(NTFS_TOOLS),
         Some(ContentKind::Filesystem(FsKind::Btrfs)) => Tools(BTRFS_TOOLS),
-        // LVM PV 缩容要求新末端之后没有已分配的 extent，需经 lvreduce/pvresize 链，本工具不做；
-        // 对用户的拒绝在 `check_shrink` 入口按「选项与目标形态不符」落 3
-        Some(ContentKind::Lvm2Pv) => Unsupported(
-            "requires the lvreduce/pvresize chain (not implemented here; see pvresize(8))",
+        // LVM PV 缩容只缩 PV 元数据：先用 pvs 证明新末端之后没有已分配 extent，
+        // 再 pvresize --setphysicalvolumesize。三个工具都必须在写盘前确认存在
+        Some(ContentKind::Lvm2Pv) => Tools(&[Tool::Pvs, Tool::Vgs, Tool::Pvresize]),
+        // 加密层没有可缩的文件系统：必须先在映射设备上缩内层，再缩加密头/分区
+        Some(ContentKind::Luks) => Unsupported(
+            "LUKS container — shrink the inner filesystem on the mapped device and resize the LUKS header first (cryptsetup); this tool does not resize LUKS containers",
+        ),
+        Some(ContentKind::BitLocker) => Unsupported(
+            "BitLocker volume — resize it with Windows tools (manage-bde) or dislocker; this tool does not resize BitLocker volumes",
         ),
         // 类型认不出来就无法先缩 FS：缩分区后 FS 越界写坏数据
         None | Some(ContentKind::Unknown) => Unsupported(
@@ -111,14 +123,6 @@ pub fn check_grow(fstype: ContentKind, is_block: bool, needs_loop: bool) -> Resu
 /// 缩容前置检查，与 `check_grow` 同一形态。`None`（未识别）在 shrink_support 里对应"类型认不出来"，
 /// 故不必在这里另开一臂
 pub fn check_shrink(fstype: Option<ContentKind>, is_block: bool, needs_loop: bool) -> Result<(), FsError> {
-    // LVM PV 不是文件系统：缩它要先 lvreduce 缩 LV、再 pvresize 缩 PV 元数据，本命令
-    // 没有可缩的 FS 可谈。这不是能力缺口（6），而是请求与目标形态不符——
-    // 「选项与目标形态不符」落 3
-    if fstype == Some(ContentKind::Lvm2Pv) {
-        return Err(FsError::invalid(
-            "target is an LVM2 PV, not a filesystem — shrinking it needs the lvreduce/pvresize chain (see pvresize(8))",
-        ));
-    }
     check_support("shrink", content_name(fstype.unwrap_or(ContentKind::Unknown)), shrink_support(fstype))?;
     check_mount_layer_tools(fstype, is_block, needs_loop)
 }

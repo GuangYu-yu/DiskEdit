@@ -198,7 +198,7 @@ diskedit resize <TARGET>:N --grow-to-end [--align A] [--no-fs] --yes
 | property | value |
 |---|---|
 | positionals | `TARGET`, `SIZE` / `TARGET` / `TARGET` |
-| options | `--no-fs`, `--sector-size`, `--yes`, `--allow-move`, `--chunk`, `--grow-lv`, `--lv`, `--end`, `--align`, `--grow-to-end` |
+| options | `--no-fs`, `--sector-size`, `--yes`, `--allow-move`, `--chunk`, `--dry-run`, `--grow-lv`, `--lv`, `--end`, `--align`, `--grow-to-end` |
 | confirmation | required (`--yes`) |
 | journal | writes, recovery record |
 | capabilities | target data, companion file, external tool, device state |
@@ -217,11 +217,20 @@ diskedit resize <TARGET>:N --grow-to-end [--align A] [--no-fs] --yes
     10G       set size to 10 GiB (units k/m/g/t, 1024 base; plain bytes
               when no unit)
     +2G       grow by 2 GiB
+    -500M     shrink by 500 MiB (GPT and MBR primary partitions; the
+              filesystem shrinks first, offline)
     +10%      grow by 10% of current size (rounded down to 1MiB)
+    -10%      shrink by 10% of current size
     grow      grow into the contiguous free space to the right
     Sizes may carry a fraction: 1.5G = 1610612736 bytes, +1.5% likewise. A
     size that does not land on a sector boundary is truncated, and the
     truncation is reported
+
+  DRY RUN:
+    --dry-run prints the computed ranges, the filesystem step and any
+    relocation plan, then stops before the first write; no record is
+    created and --yes is not required. The numbers come from the same
+    resolution and planning code the write path uses.
 
   IN PLACE (--end LBA | --grow-to-end):
     repartition the end without moving the partition; the start stays at the
@@ -231,17 +240,18 @@ diskedit resize <TARGET>:N --grow-to-end [--align A] [--no-fs] --yes
     shrink that gets interrupted cannot be rolled back with `recover`.
 
   Constraints:
-    shrink    with SIZE refused: this form only grows. Shrink with
-              `resize <TARGET>:N --end LBA`: it shrinks the filesystem first
-              (offline), then the partition, and an interrupted shrink
-              resumes from its record
+    shrink    a SIZE below the current size shrinks on GPT and on MBR
+              primary partitions (1..4; extended containers and logical
+              partitions are out of scope); an interrupted shrink resumes when
+              re-run with the same absolute size. A shrink on a mounted
+              filesystem is refused — unmount first
     --no-fs   refused on an LVM PV (the PV chain has no filesystem step of
-              its own). A swap partition relocated as a blocker is rebuilt
-              regardless: that step belongs to the relocation, not to the
-              filesystem
-    MBR       uses the same recovery record as GPT: an interrupted grow is
-              resumed by re-running the same command; `recover` rolls the
-              recorded table write back instead
+              its own) and on a shrink. A swap partition relocated as a
+              blocker is rebuilt regardless: that step belongs to the
+              relocation, not to the filesystem
+    MBR       uses the same recovery record as GPT: an interrupted grow or
+              shrink resumes when re-run with the same absolute size; `recover`
+              rolls the recorded table write back instead
     record    a relocation record written before requests were bound to
               their digest carries none: it cannot be tied to this request,
               so re-running `resize --allow-move` is refused. Inspect it with
@@ -276,7 +286,7 @@ diskedit resize <TARGET>:N --grow-to-end [--align A] [--no-fs] --yes
 move a partition, data follows (chunked copy, resumable)
 
 ```text
-diskedit move <TARGET>:N --start <LBA|end> [--chunk N] --yes [--align A]
+diskedit move <TARGET>:N --start <LBA|end|align> [--chunk N] --yes [--align A]
 ```
 
 | property | value |
@@ -293,6 +303,9 @@ diskedit move <TARGET>:N --start <LBA|end> [--chunk N] --yes [--align A]
   LOCATION:
     <LBA>     new start LBA (aligned per --align; default none = the LBA as given)
     end       tail-pack to the last possible position
+    align     the next 1 MiB boundary at or after the current start (GPT only;
+              --align does not apply). Adjacent partitions are not moved, so a
+              start that would land on one is refused as a range overlap.
 
   A swap partition is relocated by committing its entry and rebuilding the area
   at the new position (mkswap); its contents are not copied.
@@ -575,10 +588,11 @@ diskedit add <TARGET> SIZE [--start LBA] [--align A] [--part-number N] [--name S
 
 | flag | value | description |
 |---|---|---|
-| `--align` | `A` | placement alignment: mib\|none. add's automatic placement defaults to 1 MiB; an explicit --start (add/move/copy) and the end computed by resize align only when --align is given |
+| `--align` | `A` | placement alignment: mib\|none. add's automatic placement defaults to 1 MiB; an explicit --start (add/move/copy) and the end computed by resize align only when --align is given; move's `--start align` is always 1 MiB |
 | `--allow-move` | — | permit relocating the partitions in the way: the plan is printed, then the write proceeds |
 | `--chunk` | `MiB` | recovery granularity in MiB, 1..=64; a resumed job keeps the record's value, a new job uses 4 |
 | `--discard-replay` | — | confirm giving up the ranges `recover` could still replay |
+| `--dry-run` | — | print the plan and stop before the first write; --yes is not required |
 | `--end` | `LBA` | new end LBA for `resize` (grow or shrink in place) |
 | `--grow-lv` | — | also grow the LV: the one named by --lv, else the only LV |
 | `--grow-to-end` | — | pin the end at the last usable LBA (fill semantics) |
@@ -594,7 +608,7 @@ diskedit add <TARGET> SIZE [--start LBA] [--align A] [--part-number N] [--name S
 | `--release` | — | drop the recovery files, keeping the writes they describe |
 | `--replay-table-only` | — | allow `recover` to replay only the recorded table regions of a move whose data has already moved; the data those ranges name is not restored |
 | `--sector-size` | `N` | logical sector size override for raw images (power of two, max 65536 bytes — an implementation limit, not a format requirement) |
-| `--start` | `LBA\|end` | new start: an LBA, or `end` for pack-to-end |
+| `--start` | `LBA\|end\|align` | new start: an LBA, `end` for pack-to-end, or `align` for the next 1 MiB boundary (move only) |
 | `--table` | `gpt\|mbr` | table kind: gpt (default) or mbr |
 | `--type-guid` | `GUID\|0xNN` | GPT: type GUID text, e.g. 0fc63daf-8483-4772-8e79-3d69d8477de4; MBR: type byte 0xNN |
 | `--yes` | — | acknowledge a write before it starts |

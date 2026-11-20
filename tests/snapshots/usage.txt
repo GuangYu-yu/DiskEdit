@@ -31,7 +31,7 @@ everyday:
   resize <TARGET>:N --grow-to-end [--align A] [--no-fs] --yes
       resize a partition and its filesystem; --end / --grow-to-end repartition
       without moving data
-  move <TARGET>:N --start <LBA|end> [--chunk N] --yes [--align A]
+  move <TARGET>:N --start <LBA|end|align> [--chunk N] --yes [--align A]
       move a partition, data follows (chunked copy, resumable)
   copy <TARGET>:N --start <LBA|end> [--chunk N] --yes [--align A] [--name S] [--keep-partuuid]
       copy a partition to a new location; the source is untouched
@@ -70,13 +70,16 @@ options (availability: help <CMD>):
   --align A              placement alignment: mib|none. add's automatic
                          placement defaults to 1 MiB; an explicit --start
                          (add/move/copy) and the end computed by resize align
-                         only when --align is given
+                         only when --align is given; move's `--start align` is
+                         always 1 MiB
   --allow-move           permit relocating the partitions in the way: the plan
                          is printed, then the write proceeds
   --chunk MiB            recovery granularity in MiB, 1..=64; a resumed job
                          keeps the record's value, a new job uses 4
   --discard-replay       confirm giving up the ranges `recover` could still
                          replay
+  --dry-run              print the plan and stop before the first write; --yes
+                         is not required
   --end LBA              new end LBA for `resize` (grow or shrink in place)
   --grow-lv              also grow the LV: the one named by --lv, else the
                          only LV
@@ -100,7 +103,8 @@ options (availability: help <CMD>):
   --sector-size N        logical sector size override for raw images (power of
                          two, max 65536 bytes — an implementation limit, not a
                          format requirement)
-  --start LBA|end        new start: an LBA, or `end` for pack-to-end
+  --start LBA|end|align  new start: an LBA, `end` for pack-to-end, or `align`
+                         for the next 1 MiB boundary (move only)
   --table gpt|mbr        table kind: gpt (default) or mbr
   --type-guid GUID|0xNN  GPT: type GUID text, e.g.
                          0fc63daf-8483-4772-8e79-3d69d8477de4; MBR: type byte

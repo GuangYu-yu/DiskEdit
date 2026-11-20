@@ -31,6 +31,9 @@ pub(crate) const DETAILS_MOVE: &str = r#"  Move a partition, data follows (chunk
   LOCATION:
     <LBA>     new start LBA (aligned per --align; default none = the LBA as given)
     end       tail-pack to the last possible position
+    align     the next 1 MiB boundary at or after the current start (GPT only;
+              --align does not apply). Adjacent partitions are not moved, so a
+              start that would land on one is refused as a range overlap.
 
   A swap partition is relocated by committing its entry and rebuilding the area
   at the new position (mkswap); its contents are not copied.
@@ -330,6 +333,9 @@ pub(crate) fn cmd_add(a: &AddRequest) -> crate::outcome::RunOutcome {
                 Some(StartSelector::PinnedToEnd) => bail_fail(RunOutcome::refused(
                     "`add --start end` has no end point to pin to — give the starting LBA or omit --start",
                 )),
+                Some(StartSelector::Aligned) => bail_fail(RunOutcome::refused(
+                    "`add --start align` has no existing start to align — omit --start to let the first-fit placement use 1 MiB",
+                )),
                 None => first_fit(
                     &used,
                     g.first_usable_lba(),
@@ -386,6 +392,9 @@ pub(crate) fn cmd_add(a: &AddRequest) -> crate::outcome::RunOutcome {
                     }
                     Some(StartSelector::PinnedToEnd) => bail_fail(RunOutcome::refused(
                         "`add --start end` has no end point to pin to — give the starting LBA or omit --start",
+                    )),
+                    Some(StartSelector::Aligned) => bail_fail(RunOutcome::refused(
+                        "`add --start align` has no existing start to align — omit --start to let the first-fit placement use 1 MiB",
                     )),
                     None => first_fit(&used, 1, last, unit, len),
                 };
@@ -537,6 +546,9 @@ pub(crate) fn cmd_resize_end(a: &ResizeEndRequest) -> crate::outcome::RunOutcome
     }
     // 载体必须是整盘：条目按节点 LBA0 的偏移读写（判据见 `refuse_partition_node_target`）
     refuse_partition_node_target("resize", &a.target);
+    if a.dry_run {
+        return crate::cmd::resize::preview_end(a);
+    }
     let (mut src, _resumed) =
         open_record_resumable(a, crate::recovery::OpKind::ResizeEnd).unwrap_or_else(|f| bail_fail(f));
     // 坐标系在几何计算前确定：原地重划仅支持 GPT，条目按表头 ss 对齐（可与容器 ss 不同）。
@@ -695,11 +707,11 @@ fn resize_part_via_plan_unreconciled(
         Ok(p) => p,
         Err(f) => return f,
     };
-    // 记录型现场：把搬移前区间写进记录。它必须在首次目标写入之前落盘——表提交之后
-    // 盘上只剩新区间，再想记搬移前形状就已经没有了
+    // 记录型现场：把提交前区间与目标区间成对写进记录。它必须在首次目标写入之前落盘
+    // ——表提交之后盘上只剩新区间，再想记搬移前形状就已经没有了
     if let Some(journal) = src.record_journal_mut() {
-        if let Err(e) = journal.bind_old_range((p.old_start, p.old_end)) {
-            return RunOutcome::no_mutation(e.record_failure("the pre-commit range"));
+        if let Err(e) = journal.bind_ranges((p.old_start, p.old_end), (new_start, new_end)) {
+            return RunOutcome::no_mutation(e.record_failure("the pre-commit and target ranges"));
         }
         // 起点变更的搬移与 move 同构：条目表绑进记录——执行器的游标恢复、续跑一致性
         // 校验与「已提交条目整组跳过」共用同一套机制。已提交态与纯扩缩不绑
@@ -831,13 +843,11 @@ pub(crate) fn prepare_resize_part(
             .ok_or_else(|| RunOutcome::no_mutation("partition start overflows byte offset"))?,
         edit,
     )?;
-    // 只拦搬移（起点变化）：LUKS/LVM PV/swap 的纯扩缩不搬数据，允许
-    if (movepart::is_forbidden_type_guid(&e.partition_type_guid)
-        || movepart::is_swap_guid(&e.partition_type_guid))
-        && new_start != e.starting_lba
-    {
+    // 只拦搬移（起点变化）：swap 的纯扩缩不搬数据，允许。LUKS/LVM PV 交给
+    // 上面的占用闸判定——dm 栈压着时起点变化会被拒绝
+    if movepart::is_swap_guid(&e.partition_type_guid) && new_start != e.starting_lba {
         return Err(RunOutcome::refused(
-            "swap/LUKS/LVM PV relocation refused (size-only changes are allowed)",
+            "swap relocation refused (size-only changes are allowed)",
         ));
     }
     if new_start < g.first_usable_lba() || new_end > g.last_usable_lba() || new_start > new_end {
@@ -875,7 +885,6 @@ pub(crate) fn prepare_resize_part(
         if let Some(journal) = src.record_journal.as_ref()
     {
         let progress = journal.progress();
-        let recorded_old = journal.old_range();
         // 收尾基线只在第一次运行算一次并落进记录：续跑时 LV 已经涨过一截，
         // 按现状重算只会得出"增量 0"或重复扩容
         let recorded_lvm = journal.lvm_post().map(|post| movepart::LvmPostFacts {
@@ -884,50 +893,55 @@ pub(crate) fn prepare_resize_part(
             lv_target: post.lv_target,
             extent_bytes: post.extent_bytes,
         });
-        // 盘上条目必须是搬移前区间（未提交）或请求区间（已提交）
-        if let Some((rs, re)) = recorded_old
-            && (old_start, old_end) != (rs, re)
-            && (old_start, old_end) != (new_start, new_end)
-        {
-            return Err(RunOutcome::refused(format!(
-                "partition {part} sits at {old_start}..{old_end}, neither the record's pre-commit range {rs}..{re} nor the requested {new_start}..{new_end} — the layout moved under the job; refusing"
-            )));
-        }
-        let at_target = (old_start, old_end) == (new_start, new_end);
-        if !journal.is_persisted() {
-            (movepart::FsShrink::NotShrunk, 0, None, None)
-        } else if at_target {
-            log("resize already committed — finishing filesystem step");
-            // 表提交之后盘上只剩新区间；FS 步按记录里的搬移前几何判 Grow
-            let pre_commit = match (journal.op(), recorded_old) {
-                (crate::recovery::OpKind::Resize | crate::recovery::OpKind::ResizeEnd, None) => {
-                    return Err(RunOutcome::refused(format!(
-                        "the record for partition {part} has no pre-commit range — the filesystem step \
-                         cannot be judged; refusing: release it with `diskedit recover --release`, then run the \
-                         whole command again"
-                    )));
+        // 盘上条目只能是记录写下的两段事实之一：停在提交前区间 ⇒ 表步未发生；
+        // 停在目标区间 ⇒ 表步已提交，只剩 FS/PV 收尾。第三种位置说明盘被外部改过，
+        // 按哪一边收尾都会把作业落在错误的位置
+        match (journal.old_range(), journal.target_range()) {
+            (Some(record_old), Some(record_target)) => {
+                match journal.record().place_on_disk((old_start, old_end)) {
+                    Some(crate::recovery::RecordedPlace::Committed) => {
+                        // 已提交的作业只收尾：本次请求的终点必须仍是记录里的目标，
+                        // 另一个请求不能借着一条旧记录收尾（改主意请先释放记录）
+                        if (new_start, new_end) != record_target {
+                            return Err(RunOutcome::refused(format!(
+                                "partition {part} is already committed to {}..{} by an unfinished resize; \
+                                 re-run with that absolute size, or release it with `diskedit recover --release`",
+                                record_target.0, record_target.1
+                            )));
+                        }
+                        log("resize already committed — finishing filesystem step");
+                        (
+                            movepart::fs_shrunk_from_phase(progress.fs_phase),
+                            // 已提交态没有块要继续搬：起点未变时本就没有块，否则记录里的游标已到终点
+                            if moved == 0 { 0 } else { total_chunks },
+                            Some(record_old),
+                            recorded_lvm,
+                        )
+                    }
+                    Some(crate::recovery::RecordedPlace::Pending) => {
+                        log(&format!(
+                            "resuming at chunk {} (recovery record)",
+                            progress.transfer_cursor
+                        ));
+                        (
+                            movepart::fs_shrunk_from_phase(progress.fs_phase),
+                            progress.transfer_cursor,
+                            None,
+                            recorded_lvm,
+                        )
+                    }
+                    None => {
+                        return Err(RunOutcome::refused(format!(
+                            "partition {part} sits at {old_start}..{old_end}, neither the record's pre-commit range \
+                             {}..{} nor its target {}..{} — the layout moved under the job; inspect it with \
+                             `diskedit inspect` and release it with `diskedit recover --release` if it is stale",
+                            record_old.0, record_old.1, record_target.0, record_target.1
+                        )));
+                    }
                 }
-                (_, Some(range)) => range,
-                (_, None) => (new_start, new_end),
-            };
-            (
-                movepart::fs_shrunk_from_phase(progress.fs_phase),
-                // 已提交态没有块要继续搬：起点未变时本就没有块，否则记录里的游标已到终点
-                if moved == 0 { 0 } else { total_chunks },
-                Some(pre_commit),
-                recorded_lvm,
-            )
-        } else {
-            log(&format!(
-                "resuming at chunk {} (recovery record)",
-                progress.transfer_cursor
-            ));
-            (
-                movepart::fs_shrunk_from_phase(progress.fs_phase),
-                progress.transfer_cursor,
-                None,
-                recorded_lvm,
-            )
+            }
+            // 记录还没有区间（本次首次落盘的作业，或只做 FS 的旧现场）：按未提交续做
+            _ => (movepart::FsShrink::NotShrunk, 0, None, None),
         }
     } else {
         // 没有记录的时间点只出现在测试夹具；生产入口都先挂上记录再走到这里
@@ -1013,6 +1027,11 @@ pub(crate) fn prepare_resize_part(
         }
         movepart::FsAction::Leave => {}
     }
+    // LVM PV 缩容：先证明新末端之后没有已分配 extent。pvresize 自己也会拒绝切进
+    // 已分配 extent，但到那时分区表已经开始收缩；此处位于任何写盘之前
+    if fs_action == movepart::FsAction::Shrink && fstype == crate::fsid::ContentKind::Lvm2Pv {
+        crate::fsops::pv_shrink_precheck(src, part, new_bytes)?;
+    }
     // ext 预查 FS 最小尺寸（resize2fs -P × dumpe2fs -h 块大小），缩太小在写盘前拒绝
     if fs_action == movepart::FsAction::Shrink
         && let Some(min) = crate::fsops::fs_min_bytes(src, part, Some(fstype))?
@@ -1053,21 +1072,6 @@ pub(crate) fn prepare_resize_part(
     })
 }
 
-/// 推进记录里的阶段号 / 游标 / FS 相位
-fn save_resize_part_progress(
-    src: &mut WriteSource,
-    chunks: u64,
-    fs_shrunk: movepart::FsShrink,
-    step: u32,
-) -> std::io::Result<()> {
-    match src.record_journal_mut() {
-        Some(journal) => journal
-            .record_progress(step, chunks, fs_shrunk as u8)
-            .map_err(|e| e.into_io()),
-        None => Ok(()),
-    }
-}
-
 /// 执行（写盘）：缩容 FS → 表步骤（装配 + 执行器）→ 扩容 FS（执行器）。
 /// 失败按原变体上抛：越过首写之后的改判由退出点的归责按写事实完成。
 fn execute_resize_part(
@@ -1081,7 +1085,7 @@ fn execute_resize_part(
     let new_bytes = p.new_bytes;
     let fstype = p.fstype;
     let committed_old = p.committed_old;
-    let mut fs_shrunk = p.fs_shrunk;
+    let fs_shrunk = p.fs_shrunk;
     let chunks_done = p.resume_chunks;
 
     // 盘上已是请求区间：表步的事实由盘面证明。记录里没有逐条目围栏时把围栏落定，
@@ -1096,69 +1100,14 @@ fn execute_resize_part(
             .map_err(|e| RunOutcome::partial(e.record_failure("the already-committed table step")))?;
     }
 
-    // ---- 阶段 0：缩容 FS 先缩（只做一次）----
-    // 缩容不落不可回滚标记：缩小之后再回滚表项只会得到"FS 小于分区"这一自洽状态，
-    // 回滚仍然安全可用。判据是可逆性，不是"有没有调外部工具"
+    // ---- 阶段 0：缩容 FS 先缩（只做一次；MBR 侧共用同一段实现）----
     if p.fs_action == movepart::FsAction::Shrink {
-        let mut shrink_done = false;
-        if p.fs_shrunk == movepart::FsShrink::Unverified {
-            match crate::fsops::shrink_already_at(src, part, Some(fstype), new_bytes) {
-                Some(true) => {
-                    fs_shrunk = movepart::FsShrink::Verified;
-                    save_resize_part_progress(src, chunks_done, fs_shrunk, 1)
-                        .map_err(RunOutcome::from)?;
-                    log(&format!(
-                        "filesystem already at {new_bytes} bytes (re-read) — shrink step skipped"
-                    ));
-                    movepart::fault_rs_after_fs_shrink();
-                    shrink_done = true;
-                }
-                Some(false) => {}
-                None => {
-                    // 回读仍不可用：缩容是否到位无从判断，接着改表会切进未缩的元数据
-                    post.push(crate::outcome::Pending::new(
-                        part,
-                        crate::outcome::PendingKind::Other("fs shrink"),
-                        "the filesystem size still cannot be read back, so the earlier shrink cannot be confirmed".to_string(),
-                        "inspect the filesystem size by hand, then re-run the same command".to_string(),
-                    ));
-                    return Err(RunOutcome::partial_unverified(
-                        "the earlier filesystem shrink cannot be confirmed",
-                        std::mem::take(post),
-                    ));
-                }
-            }
-        }
-        if !shrink_done {
-            let o = crate::fsops::shrink_fs(src, part, Some(fstype), new_bytes)
-                .map_err(|e| RunOutcome::partial(e.to_string()))?;
-            // 卸挂结论要在消费结果之前取出：`pending` 拿走 leak 之后无从再判
-            let release_failed = o.release_failed();
-            let unverified = match &o {
-                crate::fsops::ShrinkRunOutcome::Unverified { why, .. } => Some(why.clone()),
-                crate::fsops::ShrinkRunOutcome::Verified { .. } => None,
-            };
-            let line = o.ok_line(new_bytes);
-            for p in o.pending(part) {
-                post.push(p);
-            }
-            if let Some(why) = unverified {
-                fs_shrunk = movepart::FsShrink::Unverified;
-                save_resize_part_progress(src, chunks_done, fs_shrunk, 1)
-                    .map_err(RunOutcome::from)?;
-                return Err(RunOutcome::partial_unverified(why, std::mem::take(post)));
-            }
-            fs_shrunk = movepart::FsShrink::Verified;
-            save_resize_part_progress(src, chunks_done, fs_shrunk, 1)
-                .map_err(RunOutcome::from)?;
-            if let Some(l) = line {
-                log(&l);
-            }
-            // 临时挂载点没卸掉 = 分区仍挂载中，改表等于在挂载中挪动分区
-            if release_failed {
-                return Ok(());
-            }
-            movepart::fault_rs_after_fs_shrink();
+        match crate::cmd::resize::shrink_fs_before_table(
+            src, part, fstype, new_bytes, p.fs_shrunk, chunks_done, post, log,
+        )? {
+            crate::cmd::resize::ShrinkFirst::Done => {}
+            // 分区仍挂载：表不动，结果按已写与待办如实上报
+            crate::cmd::resize::ShrinkFirst::TargetStillMounted => return Ok(()),
         }
     }
 
@@ -1171,7 +1120,8 @@ fn execute_resize_part(
         && new_start == p.old_start
         && committed_old.is_none()
     {
-        save_resize_part_progress(src, chunks_done, fs_shrunk, 1).map_err(RunOutcome::from)?;
+        crate::cmd::resize::save_resize_part_progress(src, chunks_done, fs_shrunk, 1)
+            .map_err(RunOutcome::from)?;
     }
 
     // ---- 阶段 2：提交表项（已提交态跳过）----
@@ -1352,16 +1302,22 @@ impl crate::execution::StepSink for ResizeEndSink<'_> {
     }
 }
 
-/// `--start end` 把起点钉在 `last_usable_lba - len + 1`，是"贴尾打包"而非"挑一个对齐
-/// 位置"；此时再给 `--align` 没有被消费的余地，静默忽略会让用户以为对齐生效。旗标白名单
-/// 是命令级的，这个分支级的消费差异只能在分支里拒绝。旗标字段缺省是 `none`
-/// （`add` 自动放置另有 1 MiB 缺省），所以只有 `align_given` 分得出"没给"与"显式给了"；
-/// 分不出就无法在 `--start end` 上把被静默忽略的旗标拒绝掉
-fn refuse_align_on_start_end(start: Option<StartSelector>, align_given: bool) {
-    if matches!(start, Some(StartSelector::PinnedToEnd)) && align_given {
-        bail_fail(RunOutcome::refused(
+/// 固定落位（`end` / `align`）不给 `--align` 留下被消费的余地：前者钉在
+/// `last_usable_lba - len + 1`，后者本身就是 1 MiB 边界；静默忽略会让用户以为对齐生效。
+/// 旗标白名单是命令级的，这个分支级的消费差异只能在分支里拒绝。旗标字段缺省是 `none`
+/// （`add` 自动放置另有 1 MiB 缺省），所以只有 `align_given` 分得出"没给"与"显式给了"
+fn refuse_align_on_fixed_selector(start: Option<StartSelector>, align_given: bool) {
+    if !align_given {
+        return;
+    }
+    match start {
+        Some(StartSelector::PinnedToEnd) => bail_fail(RunOutcome::refused(
             "`--align` does not apply to `--start end` — the start is pinned to the last usable position; drop --align or pass an explicit start LBA",
-        ));
+        )),
+        Some(StartSelector::Aligned) => bail_fail(RunOutcome::refused(
+            "`--align` does not apply to `--start align` — that start is always the next 1 MiB boundary; drop --align",
+        )),
+        _ => {}
     }
 }
 
@@ -1388,7 +1344,7 @@ fn require_start(
 
 pub(crate) fn cmd_move(a: &MoveRequest) -> crate::outcome::RunOutcome {
     let (pref, selector) = require_start(a.part, a.start, "move");
-    refuse_align_on_start_end(a.start, a.align_given);
+    refuse_align_on_fixed_selector(a.start, a.align_given);
     // 载体必须是整盘：条目按节点 LBA0 的偏移读写（判据见 `refuse_partition_node_target`）
     refuse_partition_node_target("move", &a.target);
     let (mut src, resumed) =
@@ -1406,6 +1362,7 @@ pub(crate) fn cmd_move(a: &MoveRequest) -> crate::outcome::RunOutcome {
             .checked_sub(len - 1)
             .unwrap_or_else(|| bail_fail(RunOutcome::refused("partition longer than usable range".to_string()))),
         StartSelector::Lba(lba) => align_start(a.align, lba, g.sector_size()),
+        StartSelector::Aligned => align_start(crate::domain::Align::one_mib(), e.starting_lba, g.sector_size()),
     };
     // checked：start 来自 CLI 原始输入（--align none 时无上界），回绕会让目标区间越过可用范围
     let end = start.checked_add(len - 1)
@@ -1705,7 +1662,7 @@ pub(crate) fn cmd_move(a: &MoveRequest) -> crate::outcome::RunOutcome {
         reloc = recorded.clone();
     }
     if let Some(journal) = src.record_journal_mut() {
-        journal.bind_old_range((old_start, old_end)).unwrap_or_else(|e| {
+        journal.bind_move_range((old_start, old_end)).unwrap_or_else(|e| {
             bail_fail(RunOutcome::refused(format!(
                 "cannot record the pre-move range: {e}"
             )))
@@ -1730,7 +1687,7 @@ pub(crate) fn cmd_move(a: &MoveRequest) -> crate::outcome::RunOutcome {
 
 pub(crate) fn cmd_copy(a: &CopyRequest) -> crate::outcome::RunOutcome {
     let (pref, selector) = require_start(a.part, a.start, "copy");
-    refuse_align_on_start_end(a.start, a.align_given);
+    refuse_align_on_fixed_selector(a.start, a.align_given);
     // copy 不读不写 checkpoint（见 copy 的详助 "No resume"）：它没有可续跑的东西，
     // 也就没有资格接管任何未收尾的现场。走严格打开——目标上有任何 active 现场即拒绝，
     // 绝不出现"copy 成功后把别人的记录当自己的清掉、而那份记录原样留在槽里"
@@ -1751,6 +1708,9 @@ pub(crate) fn cmd_copy(a: &CopyRequest) -> crate::outcome::RunOutcome {
                 .unwrap_or_else(|| bail_fail(RunOutcome::refused("partition longer than usable range".to_string())))
         }
         StartSelector::Lba(lba) => align_start(a.align, lba, g.sector_size()),
+        StartSelector::Aligned => bail_fail(RunOutcome::refused(
+            "`copy --start align` has no existing start to align — give the destination LBA or `end`",
+        )),
     };
     let (chunk, mut logger) = chunk_logger(a, &src, g.disk_guid());
     // 名字守卫在消费点：copy 的落盘名字与 add 同一个 36 码元字段

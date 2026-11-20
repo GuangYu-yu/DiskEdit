@@ -24,7 +24,8 @@ use sha2::{Digest, Sha256};
 use super::scene::{Mapping, SceneIdentity, SceneProof};
 
 /// 恢复记录文件的标识字节（`D`isk `REC`ord）。布局或字段语义变化时换成新标识；
-/// 不匹配的标识一律解码失败。此标识下的搬移位移是有符号值、搬移段带已拷前缀摘要
+/// 不匹配的标识一律解码失败。此标识下的搬移位移是有符号值、搬移段带已拷前缀摘要；
+/// `resize` 的提交前区间与提交目标区间成对写出，续跑从记录判定方向与是否已提交
 pub(crate) const MAGIC: [u8; 4] = *b"DREC";
 pub(crate) const HEADER_LEN: usize = 16;
 
@@ -647,6 +648,15 @@ fn entry_chunks(reloc: &Relocation, entry: u32) -> Result<u64, RunOutcome> {
         })
 }
 
+/// 盘上分区区间相对记录写下的两段事实的位置
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RecordedPlace {
+    /// 表步尚未发生：盘上仍是提交前区间
+    Pending,
+    /// 表步已落：盘上是记录的目标区间
+    Committed,
+}
+
 /// 一份恢复记录的全部字段
 #[derive(Clone, Debug)]
 #[cfg_attr(test, derive(PartialEq, Eq))]
@@ -664,6 +674,10 @@ pub(crate) struct Record {
     /// FS 步要靠它判断该不该扩；[`OpKind::Resize`] / [`OpKind::ResizeEnd`] /
     /// [`OpKind::Move`] 可能非 `None`（搬移前的区间同样记在这里）
     pub(crate) old_range: Option<(u64, u64)>,
+    /// 本次作业要落到的分区区间 `(new_start, new_end)`。与 `old_range` 在
+    /// [`OpKind::Resize`] / [`OpKind::ResizeEnd`] 上成对出现：方向、是否已提交都从这里
+    /// 读出，续跑不再按本次请求重新推算。[`OpKind::Move`] 不搬移自身区间，保持为空
+    pub(crate) target_range: Option<(u64, u64)>,
     /// 分区层提交后的 LVM 收尾基线；只有 [`OpKind::Resize`] 可能非 `None`
     pub(crate) lvm_post: Option<LvmPost>,
     /// 搬移作业的可恢复状态。只有 [`OpKind::Resize`] / [`OpKind::ResizeEnd`] /
@@ -713,6 +727,7 @@ impl Record {
             plan_digest,
             progress: Progress::default(),
             old_range: None,
+            target_range: None,
             lvm_post: None,
             relocation: None,
             entry_table_in_flight: Fact::Absent,
@@ -735,6 +750,19 @@ impl Record {
             CommitState::Prepared => false,
             CommitState::Committed => true,
         }
+    }
+
+    /// 盘上分区区间相对本记录的位置。续跑只承认两种现场：表步尚未发生（盘上仍是提交前
+    /// 区间）或表步已落（盘上是记录的目标区间）。第三种区间说明盘被外部改过，按哪一边
+    /// 收尾都会把作业落在错误的地方。[`OpKind::Move`] 没有目标区间，只对提交前区间成立
+    pub(crate) fn place_on_disk(&self, table: (u64, u64)) -> Option<RecordedPlace> {
+        let old = self.old_range?;
+        if table == old {
+            return Some(RecordedPlace::Pending);
+        }
+        self.target_range
+            .filter(|target| table == *target)
+            .map(|_| RecordedPlace::Committed)
     }
 
     /// 记录里是否留着"目标可能已经被写过"的证据：表区的原文已登记，或已越过不可回滚点。
@@ -928,19 +956,34 @@ impl Record {
         Ok(out)
     }
 
-    /// 与本模块读出侧同一份字段约束。编码前调用，失败即拒绝写出（`InvalidInput`）
+    /// 记录内容的唯一一份字段约束：写入前（[`Self::encode`]）与读出后（[`decode`]）
+    /// 都过这里。一份记录能不能存在，不由产生它的那次运行决定
     fn validate(&self) -> Result<(), String> {
         if let Some(relocation) = &self.relocation {
             relocation_is_valid(relocation)?;
+            // 搬移计划只属于会改动分区落位的操作
+            if !matches!(self.op, OpKind::Resize | OpKind::ResizeEnd | OpKind::Move) {
+                return Err(format!("the record carries a relocation plan for `{:?}`", self.op));
+            }
         }
-        // 回放条目也由读出侧逐条校验：写不出一份读不回来的记录
+        // 回放条目同样只在这里判定形状：读出侧不再自带一套
         for (i, entry) in self.restore.iter().enumerate() {
             if !entry.is_well_formed() || entry.byte_offset().is_none() {
                 return Err(format!("restore entry {i} does not describe a readable range"));
             }
         }
-        // 尾段四项与读出侧同一份一致性约束：有搬移计划时围栏必须停在 `Pending`
-        // （表步由在飞位承载），`Landed` 必须伴随步数前进
+        // `copy` 的源区间段：形状与它所属的操作一起在这里判定
+        // audit-allow: W-20
+        if let Fact::Known(source) = &self.source {
+            if !source.is_well_formed() {
+                return Err("the record's copy source does not describe a readable range".to_string());
+            }
+            if self.op != OpKind::Copy {
+                return Err(format!("the record carries a copy source for `{:?}`", self.op));
+            }
+        }
+        // 尾段四项的一致性：有搬移计划时围栏必须停在 `Pending`（表步由在飞位承载），
+        // `Landed` 必须伴随步数前进
         // audit-allow: W-18
         if let Fact::Known(fence) = &self.table_fence {
             if self.relocation.is_some() && *fence != TableFence::Pending {
@@ -957,12 +1000,48 @@ impl Record {
                 );
             }
         }
-        // 提交前区间与 LVM 基线只属于会移动分区落位的操作，读出侧对同样的组合报错
-        if self.old_range.is_some() && !matches!(self.op, OpKind::Resize | OpKind::ResizeEnd | OpKind::Move) {
-            return Err(format!(
-                "the record carries a pre-commit range for `{:?}`, which does not move the partition",
-                self.op
-            ));
+        // 提交前区间与提交目标区间成对承载一次作业的全部落位事实：`Resize` /
+        // `ResizeEnd` 两段都必须在，`Move` 只搬移自己的数据、记录搬移前的来源区间。
+        // 其余操作带任一段都与操作类型矛盾
+        match (self.old_range, self.target_range) {
+            (None, None) => {}
+            (Some((old_start, old_end)), Some((new_start, new_end))) => {
+                if !matches!(self.op, OpKind::Resize | OpKind::ResizeEnd) {
+                    return Err(format!(
+                        "the record carries commit ranges for `{:?}`, which does not retarget the partition",
+                        self.op
+                    ));
+                }
+                if old_start > old_end {
+                    return Err(format!(
+                        "the record's pre-commit range {old_start}..{old_end} ends before it starts"
+                    ));
+                }
+                if new_start > new_end {
+                    return Err(format!(
+                        "the record's target range {new_start}..{new_end} ends before it starts"
+                    ));
+                }
+            }
+            (Some((old_start, old_end)), None) if self.op == OpKind::Move => {
+                if old_start > old_end {
+                    return Err(format!(
+                        "the record's pre-move range {old_start}..{old_end} ends before it starts"
+                    ));
+                }
+            }
+            (Some(_), None) => {
+                return Err(format!(
+                    "the record carries a pre-commit range without its target for `{:?}`",
+                    self.op
+                ));
+            }
+            (None, Some(_)) => {
+                return Err(format!(
+                    "the record carries a target range without its pre-commit range for `{:?}`",
+                    self.op
+                ));
+            }
         }
         if self.lvm_post.is_some() && self.op != OpKind::Resize {
             return Err(format!(
@@ -995,6 +1074,14 @@ impl Record {
         out.extend(self.progress.transfer_cursor.to_le_bytes());
         out.push(self.progress.fs_phase);
         match self.old_range {
+            None => out.push(0),
+            Some((start, end)) => {
+                out.push(1);
+                out.extend(start.to_le_bytes());
+                out.extend(end.to_le_bytes());
+            }
+        }
+        match self.target_range {
             None => out.push(0),
             Some((start, end)) => {
                 out.push(1);
@@ -1163,6 +1250,11 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<Record, DecodeFailure> {
         }
     };
     record.header = RecoveryHeader { payload_len, header_crc, payload_crc };
+    // 写入与读出过同一份约束：解得出形状不等于记录成立，字段之间的组合由
+    // `validate` 一处判定
+    if record.validate().is_err() {
+        return Err(DecodeFailure::Format { magic, recorded: Some(record.target) });
+    }
     Ok(record)
 }
 
@@ -1184,7 +1276,7 @@ fn decode_payload(bytes: &[u8]) -> Option<Record> {
         record.source = Fact::Absent;
     }
     // 尾段必须齐全：每段在载荷结束处缺字节都按 `Format` 拒读，段后不得有多余字节
-    record.entry_table_in_flight = match read_entry_table_in_flight(&mut c, &record)? {
+    record.entry_table_in_flight = match read_entry_table_in_flight(&mut c)? {
         Some(entry) => Fact::Known(entry),
         None => Fact::Absent,
     };
@@ -1192,7 +1284,7 @@ fn decode_payload(bytes: &[u8]) -> Option<Record> {
         Some(fact) => Fact::Known(fact),
         None => Fact::Absent,
     };
-    record.table_fence = Fact::Known(read_table_fence(&mut c, &record)?);
+    record.table_fence = Fact::Known(read_table_fence(&mut c)?);
     if !c.is_empty() {
         return None;
     }
@@ -1213,47 +1305,30 @@ fn read_repair(c: &mut Cursor<'_>) -> Option<Option<RepairFact>> {
     }
 }
 
-/// 尾段：表步围栏。出现字节必须是已知取值。
-/// 有搬移计划的记录由在飞位承载表步，围栏必须停在 `Pending`；
-/// 表步确认必然伴随步数前进，`Landed` 与零步数不能同时成立
-fn read_table_fence(c: &mut Cursor<'_>, record: &Record) -> Option<TableFence> {
-    let fence = TableFence::from_tag(c.u8()?)?;
-    if record.relocation.is_some() && fence != TableFence::Pending {
-        return None;
-    }
-    if fence == TableFence::Landed && record.progress.completed_steps == 0 {
-        return None;
-    }
-    Some(fence)
+/// 尾段：表步围栏。出现字节必须是已知取值；与搬移计划的组合由 `validate` 判定
+fn read_table_fence(c: &mut Cursor<'_>) -> Option<TableFence> {
+    TableFence::from_tag(c.u8()?)
 }
 
-/// 尾段：表步在飞的条目下标。`None` = 段不完整、取值不认识或与搬移进度矛盾。
-/// 有值时必须落在搬移计划之内且等于当前游标；没有搬移计划的记录不能有在飞位
-fn read_entry_table_in_flight(c: &mut Cursor<'_>, record: &Record) -> Option<Option<u32>> {
+/// 尾段：表步在飞的条目下标。`None` = 段不完整或取值不认识；
+/// 与搬移游标的对应关系由 `validate` 判定
+fn read_entry_table_in_flight(c: &mut Cursor<'_>) -> Option<Option<u32>> {
     match c.u8()? {
         0 => Some(None),
-        1 => {
-            let entry = c.u32()?;
-            let reloc = record.relocation.as_ref()?;
-            if entry as usize >= reloc.entries.len() || entry != reloc.entry_index {
-                return None;
-            }
-            Some(Some(entry))
-        }
+        1 => Some(Some(c.u32()?)),
         _ => None,
     }
 }
 
-/// `copy` 载荷末段的源区间：字段固定，没有标签字节。`None` = 段不完整或形状不成立
+/// `copy` 载荷末段的源区间：字段固定，没有标签字节；形状由 `validate` 判定
 fn read_source(c: &mut Cursor<'_>) -> Option<CopySource> {
-    let source = CopySource {
+    Some(CopySource {
         partition: c.u32()?,
         first_lba: c.u64()?,
         sectors: c.u64()?,
         sector_size: c.u64()?,
         digest: c.array::<32>()?,
-    };
-    source.is_well_formed().then_some(source)
+    })
 }
 
 /// 载荷的固定前缀（到 `restore_count` 为止）。前缀里的每条区间由 [`read_entry`] 单独解析
@@ -1273,10 +1348,11 @@ fn read_payload_prefix(c: &mut Cursor<'_>) -> Option<(Record, usize)> {
         1 => Some((c.u64()?, c.u64()?)),
         _ => return None,
     };
-    // `OpKind::Resize`、`OpKind::ResizeEnd` 与 `OpKind::Move` 会改动分区落位，需要搬移前区间；其余操作带它即与操作类型矛盾
-    if old_range.is_some() && !matches!(op, OpKind::Resize | OpKind::ResizeEnd | OpKind::Move) {
-        return None;
-    }
+    let target_range = match c.u8()? {
+        0 => None,
+        1 => Some((c.u64()?, c.u64()?)),
+        _ => return None,
+    };
     let lvm_post = match c.u8()? {
         0 => None,
         1 => Some(LvmPost {
@@ -1286,19 +1362,11 @@ fn read_payload_prefix(c: &mut Cursor<'_>) -> Option<(Record, usize)> {
         }),
         _ => return None,
     };
-    // 其余操作没有 LVM 收尾步骤；带基线即与操作类型矛盾
-    if lvm_post.is_some() && op != OpKind::Resize {
-        return None;
-    }
     let relocation = match c.u8()? {
         0 => None,
         1 => Some(read_relocation(c)?),
         _ => return None,
     };
-    // 搬移计划只属于 `OpKind::Move`、`OpKind::Resize`、`OpKind::ResizeEnd`；别的操作带它即与操作类型矛盾
-    if relocation.is_some() && !matches!(op, OpKind::Resize | OpKind::ResizeEnd | OpKind::Move) {
-        return None;
-    }
     let action = match c.u8()? {
         1 => RecoveryAction::Continue(c.u64()?),
         2 => RecoveryAction::Rollback(c.u64()?),
@@ -1328,6 +1396,7 @@ fn read_payload_prefix(c: &mut Cursor<'_>) -> Option<(Record, usize)> {
         plan_digest,
         progress,
         old_range,
+        target_range,
         lvm_post,
         relocation,
         entry_table_in_flight: Fact::Undecidable(TAIL_UNREAD.into()),
@@ -1345,7 +1414,7 @@ fn read_payload_prefix(c: &mut Cursor<'_>) -> Option<(Record, usize)> {
 }
 
 /// 解析搬移状态。条数按载荷剩余字节自然收敛：每条 29 字节，读不满即返回 `None`，
-/// 不做巨型预分配。区间算术全程 checked——这些值直接进入拷贝地址换算
+/// 不做巨型预分配。字段约束（含区间端点算术）由 `validate` 统一判定
 fn read_relocation(c: &mut Cursor<'_>) -> Option<Relocation> {
     let count = c.u32()? as usize;
     let mut entries: Vec<RelocEntry> = Vec::new();
@@ -1380,12 +1449,10 @@ fn read_relocation(c: &mut Cursor<'_>) -> Option<Relocation> {
         disk_size,
         ss,
     };
-    // 与写入口共用同一份判据：读得出的记录与写得出的记录是同一个集合
-    relocation_is_valid(&relocation).ok()?;
     Some(relocation)
 }
 
-/// 搬移段的字段约束。写入（[`Record::encode`]）与读出（[`read_relocation`]）共用这一份：
+/// 搬移段的字段约束。只有 [`Record::validate`] 调用这一份，写入与读出因此共用：
 /// 一份记录能不能存在，不由产生它的那次运行决定
 fn relocation_is_valid(r: &Relocation) -> Result<(), String> {
     // 写入口（`bind_relocation`）禁止空计划：没有条目就没有可续跑的作业
@@ -1454,9 +1521,6 @@ fn read_entry(c: &mut Cursor<'_>) -> Option<RestoreEntry> {
         return None;
     }
     let entry = RestoreEntry { sector_size, first_lba, sectors, original, after };
-    if !entry.is_well_formed() || entry.byte_offset().is_none() {
-        return None;
-    }
     Some(entry)
 }
 
@@ -1718,6 +1782,7 @@ mod relocation_round_trip {
             DiskGuidState::Present([10; 16]),
         );
         record.old_range = Some((2048, 16384));
+        record.target_range = Some((2560, 15872));
         record.relocation = Some(Relocation {
             entries: vec![RelocEntry {
                 partition: 1,
@@ -1740,6 +1805,77 @@ mod relocation_round_trip {
         let mut decoded = decode(&bytes).unwrap();
         assert_eq!(decoded.op, OpKind::ResizeEnd);
         assert_eq!(decoded.encode().unwrap(), bytes);
+    }
+
+    /// 盘上区间只按记录里的两段事实归类：提交前 ⇒ 未提交，目标 ⇒ 已提交，其余不认
+    #[test]
+    fn place_on_disk_reads_the_recorded_ranges() {
+        let mut record = Record::new(
+            TxId::from_bytes([1; 16]),
+            image_target(),
+            PlanId::from_bytes([2; 16]),
+            PlanVersion::new(1),
+            OpKind::Resize,
+            PlanDigest::from_bytes([3; 32]),
+            DiskGuidState::Unavailable,
+        );
+        assert_eq!(record.place_on_disk((2048, 4096)), None, "没有区间时任何位置都不可判");
+
+        record.old_range = Some((2048, 4096));
+        record.target_range = Some((2048, 8192));
+        assert_eq!(record.place_on_disk((2048, 4096)), Some(RecordedPlace::Pending));
+        assert_eq!(record.place_on_disk((2048, 8192)), Some(RecordedPlace::Committed));
+        assert_eq!(record.place_on_disk((2048, 6144)), None, "第三种位置不被认领");
+    }
+
+    /// `Resize` / `ResizeEnd` 只带提交前区间：续跑无从判断方向与是否已提交，整份拒收
+    #[test]
+    fn a_resize_record_without_a_target_range_is_refused() {
+        let mut record = Record::new(
+            TxId::from_bytes([1; 16]),
+            image_target(),
+            PlanId::from_bytes([2; 16]),
+            PlanVersion::new(1),
+            OpKind::Resize,
+            PlanDigest::from_bytes([3; 32]),
+            DiskGuidState::Unavailable,
+        );
+        record.old_range = Some((2048, 4096));
+        assert!(record.encode().is_err());
+    }
+
+    /// `Move` 不改变自身区间：带目标区间与操作类型矛盾
+    #[test]
+    fn a_move_record_with_a_target_range_is_refused() {
+        let mut record = Record::new(
+            TxId::from_bytes([1; 16]),
+            image_target(),
+            PlanId::from_bytes([2; 16]),
+            PlanVersion::new(1),
+            OpKind::Move,
+            PlanDigest::from_bytes([3; 32]),
+            DiskGuidState::Unavailable,
+        );
+        record.old_range = Some((2048, 4096));
+        record.target_range = Some((2048, 8192));
+        assert!(record.encode().is_err());
+    }
+
+    /// 目标区间倒序：同样在写出与读回两侧都被拒
+    #[test]
+    fn a_reversed_target_range_is_refused() {
+        let mut record = Record::new(
+            TxId::from_bytes([1; 16]),
+            image_target(),
+            PlanId::from_bytes([2; 16]),
+            PlanVersion::new(1),
+            OpKind::Resize,
+            PlanDigest::from_bytes([3; 32]),
+            DiskGuidState::Unavailable,
+        );
+        record.old_range = Some((2048, 4096));
+        record.target_range = Some((8192, 2048));
+        assert!(record.encode().is_err());
     }
 }
 
@@ -1868,6 +2004,25 @@ mod record_tails {
         let mut record = moving_record(1, 0);
         let mut bytes = record.encode().unwrap();
         *bytes.last_mut().expect("a record has a fence byte") = TableFence::Landed.tag();
+        rehash(&mut bytes);
+
+        assert!(matches!(decode(&bytes), Err(DecodeFailure::Format { .. })));
+    }
+
+    /// 提交前区间倒序：落在写盘记录里的一段实际区间，写出与读回都必须拒收。
+    /// 读回一路走的是 `decode` → `validate`，载荷里的末 LBA 被改到起点之前
+    #[test]
+    fn a_reversed_pre_commit_range_is_refused_on_both_sides() {
+        let mut record = moving_record(1, 0);
+        record.old_range = Some((4096, 2048));
+        assert!(record.encode().is_err());
+
+        // 载荷固定前缀：tx(16)+plan(16)+version(8)+op(1)+digest(32)+steps(4)+cursor(8)
+        // +fs_phase(1)+old_range tag(1)+start(8) 之后是末 LBA 的八个字节
+        const OLD_RANGE_END: usize =
+            HEADER_LEN + 16 + 16 + 8 + 1 + 32 + 4 + 8 + 1 + 1 + 8;
+        let mut bytes = moving_record(1, 0).encode().unwrap();
+        bytes[OLD_RANGE_END..OLD_RANGE_END + 8].copy_from_slice(&1024u64.to_le_bytes());
         rehash(&mut bytes);
 
         assert!(matches!(decode(&bytes), Err(DecodeFailure::Format { .. })));
