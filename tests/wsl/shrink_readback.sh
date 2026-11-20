@@ -3,12 +3,15 @@
 # 覆盖四条：正常回读（请求值 = 实际落点）、工具向下取整（实际 < 请求值）、
 # 回读到的落点大于请求值（工具行为不符合预期，分区不缩）、回读拿不到落点
 # （缩容可能已完成但落点无法证实：表不写、分区保持原尺寸，落一条待办而不是报失败）。
-# 入口是 resize --end（resize 的 SIZE 形态只扩）；MBR 段钉的是命令层的只扩拒绝。
+# 入口是 resize --end；SIZE 的收缩形式（`-100M`）共用同一段机制。MBR 段钉的是
+# 主分区走同一条“先缩 FS、再收条目”的路径，并在表写之后中断，核对已提交记录的续跑：
+# 同一请求按记录收尾、盘上区间被外部改过则拒绝。
 #
 # 假 dumpe2fs 靠工具表变体生效：工具解析在编译期钉死（src/fsops/env.rs 的 TOOL_PATH），
 # PATH 影子不参与。BFK 的表把假目录排在系统目录之前，其余工具仍落到真身。
 source "$(dirname "$0")/lib.sh"
 require_fake_bin
+require_fault_bin
 
 img T t42.img
 
@@ -103,22 +106,21 @@ esac
 assert_eq "$(pt1)" '"size_bytes":419430400' "D 落点未证实不写表（分区保持原尺寸）"
 
 echo
-echo "===== E: MBR 路径的缩容同样被命令层拒绝（resize 只扩），盘不动 ====="
+echo "===== E: MBR 主分区同样可缩（先离线缩 FS，再收条目） ====="
 rm_img "$T"
 truncate -s 512M "$T"
 $B new "$T" --table mbr --yes >/dev/null
 $B add "$T" 400M --align mib --yes >/dev/null 2>&1
 $B mkfs "$T":1 ext4 --yes >/dev/null 2>&1
-BEFORE=$(pt1)
-OUT=$($B resize "$T":1 300M --yes 2>&1); E=$?
+OUT=$($B resize "$T":1 -100M --yes 2>&1); E=$?
 echo "exit=$E"
-echo "$OUT" | head -2 | sed 's/^/    /'
-exp "$E" 3 "MBR 缩容在命令层被拒（resize 只扩）"
+echo "$OUT" | grep -E 'fs shrunk|refused|error' | sed 's/^/    /'
+exp "$E" 0 "MBR 主分区走同一条离线收缩路径"
 case "$OUT" in
-    *"only grows"*) echo "E only-grows reason OK";;
-    *) echo "E reason missing (BAD)"; rc=1;;
+    *"fs shrunk to 314572800 bytes"*) echo "E shrink landing OK";;
+    *) echo "E shrink landing missing (BAD)"; rc=1;;
 esac
-assert_eq "$(pt1)" "$BEFORE" "E 拒绝发生在写盘之前（分区尺寸未变）"
+assert_eq "$(pt1)" '"size_bytes":314572800' "E 400M - 100M = 300M"
 
 echo
 echo "===== F: 预查命令把块大小报成 0 → 写盘前拒绝，表不变 → 4 ====="
@@ -142,6 +144,97 @@ case "$OUT" in
     *) echo "F no shrink claim OK";;
 esac
 assert_eq "$(pt1)" "$BEFORE" "F 拒绝必须发生在写表之前（分区尺寸未变）"
+
+echo
+echo "===== G: SIZE 的收缩形式（-100M）：与 --end 共用解析后的末端 ====="
+setup_gpt
+OUT=$($B resize "$T":1 -100M --yes 2>&1); E=$?
+echo "exit=$E"
+echo "$OUT" | grep -E 'fs shrunk|refused|error' | sed 's/^/    /'
+exp "$E" 0 "相对收缩走同一条离线路径"
+case "$OUT" in
+    *"fs shrunk to 314572800 bytes"*) echo "G shrink landing OK";;
+    *) echo "G shrink landing missing (BAD)"; rc=1;;
+esac
+assert_eq "$(pt1)" '"size_bytes":314572800' "G 400M - 100M = 300M"
+
+echo
+echo "===== H: --dry-run 打印计划、不写盘、不要求 --yes ====="
+setup_gpt
+BEFORE=$(pt1)
+OUT=$($B resize "$T":1 -100M --dry-run 2>&1); E=$?
+echo "exit=$E"
+echo "$OUT" | sed 's/^/    /'
+exp "$E" 0 "预览成功"
+case "$OUT" in
+    *"plan: shrink partition 1"*) echo "H plan line OK";;
+    *) echo "H plan line missing (BAD)"; rc=1;;
+esac
+case "$OUT" in
+    *"dry run: nothing written"*) echo "H stop line OK";;
+    *) echo "H stop line missing (BAD)"; rc=1;;
+esac
+assert_eq "$(pt1)" "$BEFORE" "H 预览不动表"
+
+echo
+echo "===== I: MBR 已提交的记录：同一请求可收尾，盘上区间被外部改过则拒绝 ====="
+# 现场：FS 与条目都已缩到 300M，记录停在“表已改、收尾未做”
+mbr_committed() {
+    rm_img "$T"
+    truncate -s 512M "$T"
+    $B new "$T" --table mbr --yes >/dev/null
+    $B add "$T" 400M --align mib --yes >/dev/null 2>&1
+    $B mkfs "$T":1 ext4 --yes >/dev/null 2>&1
+    DISKEDIT_FAULT=mbr-after-table-write $BF resize "$T":1 300M --yes >/dev/null 2>&1
+    exp "$?" 134 "表写之后中断（FS 与条目均已缩到 300M）"
+    assert_eq "$(pt1)" '"size_bytes":314572800' "I 条目已缩到 300M"
+    assert_eq "$(record_present "$T" && echo yes || echo no)" "yes" "I 记录留在盘上"
+}
+
+mbr_committed
+OUT=$($B resize "$T":1 300M --yes 2>&1); E=$?
+echo "exit=$E"
+echo "$OUT" | grep -E 'resize|refused|error' | sed 's/^/    /'
+exp "$E" 0 "同一请求的续跑按记录收尾"
+assert_eq "$(pt1)" '"size_bytes":314572800' "I 收尾不改条目"
+assert_eq "$(record_present "$T" && echo yes || echo no)" "no" "I 收尾后记录已撤"
+
+mbr_committed
+# 外部工具把第 1 条目改成 350M（size 字段在 446+12=458，4 字节小端）
+printf '\x00\xf0\x0a\x00' | dd of="$T" bs=1 seek=458 conv=notrunc 2>/dev/null
+OUT=$($B resize "$T":1 300M --yes 2>&1); E=$?
+echo "exit=$E"
+echo "$OUT" | sed 's/^/    /'
+exp "$E" 3 "盘上区间不是请求目标 ⇒ 拒绝按现状收尾"
+case "$OUT" in
+    *"layout moved under the job"*) echo "I refusal wording OK";;
+    *) echo "I refusal wording missing (BAD)"; rc=1;;
+esac
+assert_eq "$(pt1)" '"size_bytes":367001600' "拒绝不写表（外部改动保留）"
+assert_eq "$(record_present "$T" && echo yes || echo no)" "yes" "拒绝不撤记录"
+
+mbr_committed
+# 相对尺寸在提交后按新长度重新锚定：拒绝，而不是按现状收尾
+OUT=$($B resize "$T":1 -100M --yes 2>&1); E=$?
+echo "exit=$E"
+echo "$OUT" | tail -2 | sed 's/^/    /'
+exp "$E" 3 "相对尺寸的续跑被拒绝"
+assert_eq "$(pt1)" '"size_bytes":314572800' "I 分区停在记录写下的 300M"
+assert_eq "$(record_present "$T" && echo yes || echo no)" "yes" "拒绝不撤记录"
+
+mbr_committed
+# 外部工具把第 1 条目的起点后移一个扇区（start 字段在 446+8=454，4 字节小端）
+printf '\x01\x08\x00\x00' | dd of="$T" bs=1 seek=454 conv=notrunc 2>/dev/null
+OUT=$($B resize "$T":1 300M --yes 2>&1); E=$?
+echo "exit=$E"
+echo "$OUT" | tail -2 | sed 's/^/    /'
+exp "$E" 3 "起点被外部移动 ⇒ 拒绝按现状收尾"
+case "$OUT" in
+    *"layout moved under the job"*) echo "I start refusal wording OK";;
+    *) echo "I start refusal wording missing (BAD)"; rc=1;;
+esac
+assert_eq "$(pt1)" '"size_bytes":314572800' "拒绝不写表（起点改动保留）"
+assert_eq "$(record_present "$T" && echo yes || echo no)" "yes" "拒绝不撤记录"
 
 echo
 echo "===== 收尾与残留核对 ====="

@@ -824,13 +824,46 @@ impl RecordJournal {
         self.record.old_range
     }
 
-    /// 写下分区层提交前的原区间并落盘。新记录只写一次；已有值不因续跑时的
-    /// 盘上几何（表可能已提交）而改写。`resize`（含起点变更形态）与 `move` 会改动分区落位，
-    /// 需要这份原区间；其余操作保持为空
-    pub(crate) fn bind_old_range(&mut self, range: (u64, u64)) -> Result<(), PersistFailure> {
-        if self.record.old_range.is_some()
-            || !matches!(self.record.op, OpKind::Resize | OpKind::ResizeEnd | OpKind::Move)
-        {
+    pub(crate) fn target_range(&self) -> Option<(u64, u64)> {
+        self.record.target_range
+    }
+
+    /// 写下这次作业的提交前区间与提交目标区间并落盘。两者成对承载一次 `resize`：
+    /// 表步是否已落、收尾该扩还是缩都从这里读，续跑不再按本次请求重新推算。
+    /// 每次真正写表之前调用，用当前盘上区间覆盖上一次的值——它描述的就是"这次写表前"。
+    /// `Move` 不改变自身区间，只写来源区间（[`Self::bind_move_range`]）
+    pub(crate) fn bind_ranges(
+        &mut self,
+        old: (u64, u64),
+        target: (u64, u64),
+    ) -> Result<(), PersistFailure> {
+        // 只有 resize 类的记录携带这两段；其它操作误用是装配错误。静默忽略会让区间
+        // 在 persist 的 validate 里才暴露，错误点离调用处太远
+        if !matches!(self.record.op, OpKind::Resize | OpKind::ResizeEnd) {
+            return Err(PersistFailure::NotWritten(std::io::Error::other(format!(
+                "the record's op {:?} does not carry a resize target range",
+                self.record.op
+            ))));
+        }
+        if self.record.old_range == Some(old) && self.record.target_range == Some(target) {
+            return Ok(());
+        }
+        let previous = (self.record.old_range, self.record.target_range);
+        self.record.old_range = Some(old);
+        self.record.target_range = Some(target);
+        if let Err(e) = self.persist() {
+            if !e.record_bytes_persisted() {
+                (self.record.old_range, self.record.target_range) = previous;
+            }
+            return Err(e);
+        }
+        Ok(())
+    }
+
+    /// `move` 的搬移前来源区间并落盘。搬移作业整段移动同一份数据，来源区间在作业
+    /// 生命周期内不变，新记录只写一次；其余操作（含 `resize` 的搬移阶段）保持原值
+    pub(crate) fn bind_move_range(&mut self, range: (u64, u64)) -> Result<(), PersistFailure> {
+        if self.record.old_range.is_some() || self.record.op != OpKind::Move {
             return Ok(());
         }
         self.record.old_range = Some(range);
@@ -1580,7 +1613,21 @@ impl RecordJournal {
         match self._never {}
     }
 
-    pub(crate) fn bind_old_range(&mut self, _range: (u64, u64)) -> Result<(), PersistFailure> {
+    pub(crate) fn target_range(&self) -> Option<(u64, u64)> {
+        match self._never {}
+    }
+
+    pub(crate) fn bind_ranges(
+        &mut self,
+        _old: (u64, u64),
+        _target: (u64, u64),
+    ) -> Result<(), PersistFailure> {
+        Err(PersistFailure::NotWritten(std::io::Error::other(
+            "recovery records are not written on this platform",
+        )))
+    }
+
+    pub(crate) fn bind_move_range(&mut self, _range: (u64, u64)) -> Result<(), PersistFailure> {
         Err(PersistFailure::NotWritten(std::io::Error::other(
             "recovery records are not written on this platform",
         )))

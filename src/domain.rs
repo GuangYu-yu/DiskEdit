@@ -98,6 +98,11 @@ impl Align {
         Self(AlignKind::None)
     }
 
+    /// `--start align` 的目标单位：1 MiB，与 add 的自动放置同一口径
+    pub(crate) const fn one_mib() -> Self {
+        Self(AlignKind::Mib(1))
+    }
+
     pub(crate) fn parse(text: &str) -> Result<Self, AlignError> {
         match text {
             "mib" => Ok(Self(AlignKind::Mib(1))),
@@ -156,6 +161,10 @@ pub(crate) enum FsKind {
     Ntfs,
     HfsPlus,
     Apfs,
+    Bcachefs,
+    Jfs,
+    Reiserfs,
+    Udf,
 }
 
 impl FsKind {
@@ -173,6 +182,10 @@ impl FsKind {
             Self::Ntfs => "ntfs",
             Self::HfsPlus => "hfsplus",
             Self::Apfs => "apfs",
+            Self::Bcachefs => "bcachefs",
+            Self::Jfs => "jfs",
+            Self::Reiserfs => "reiserfs",
+            Self::Udf => "udf",
         }
     }
 }
@@ -195,6 +208,10 @@ pub(crate) enum ContentKind {
     Swap,
     /// LVM2 物理卷标签（`LABELONE` + `LVM2 001`）：不是可挂载文件系统
     Lvm2Pv,
+    /// LUKS 容器头（dm-crypt）：加密层，不是可挂载文件系统
+    Luks,
+    /// BitLocker 卷头：本工具不挂载也不改写的加密卷
+    BitLocker,
     Unknown,
 }
 
@@ -203,7 +220,7 @@ impl ContentKind {
     pub(crate) fn filesystem(self) -> Option<FsKind> {
         match self {
             Self::Filesystem(kind) => Some(kind),
-            Self::Swap | Self::Lvm2Pv | Self::Unknown => None,
+            Self::Swap | Self::Lvm2Pv | Self::Luks | Self::BitLocker | Self::Unknown => None,
         }
     }
 
@@ -213,6 +230,8 @@ impl ContentKind {
             Self::Filesystem(kind) => kind.as_str(),
             Self::Swap => "swap",
             Self::Lvm2Pv => "lvm2_pv",
+            Self::Luks => "luks",
+            Self::BitLocker => "bitlocker",
             Self::Unknown => "unknown",
         }
     }

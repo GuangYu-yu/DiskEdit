@@ -88,6 +88,7 @@ Which options a command accepts is defined by `diskedit help <CMD>`; the table b
 | `--allow-move` | — | `resize` may relocate blocking partitions on GPT |
 | `--chunk` | MiB | recovery granularity for `move`, `copy` and `resize` (MiB, 1..=64). A resumed job that omits it keeps the record's value, a new job uses 4; an explicit value that differs from the record is refused. Refused where the path cannot relocate: MBR `resize`, online `resize`, and superfloppy `resize` |
 | `--discard-replay` | — | `recover --release` must be given it while the record still has a replayable range (or a damaged payload, or an unknown entry count); accepted by `recover --release` only |
+| `--dry-run` | — | `resize` prints the computed ranges, the filesystem step and any relocation plan, then stops before the first write; no record is created and `--yes` is not required |
 | `--end` | LBA | ending LBA for `resize --end` |
 | `--grow-lv` | — | `resize` continues into the LV and its filesystem on an LVM PV |
 | `--grow` | — | `info --grow` adds a `preview` key to the same JSON report: the relocation preview for `:N` (nothing is written and no reusable plan is produced) |
@@ -103,7 +104,7 @@ Which options a command accepts is defined by `diskedit help <CMD>`; the table b
 | `--release` | — | `recover --release` drops the recovery files and keeps the writes they describe; without it `recover` continues or replays a record |
 | `--replay-table-only` | — | `recover` replays the recorded table regions of a `move` whose destinations overlap the ranges the old table names; the data those ranges hold is not restored |
 | `--sector-size` | N | image logical sector size (power of two, at least 512 bytes; the 65536-byte ceiling is an implementation limit, not a format requirement); for `copy` it applies to one target |
-| `--start` | LBA\|end | starting LBA; accepted by `add`, `move` and `copy` only. For `add` it may be omitted (the first hole that fits SIZE); `move` and `copy` require it and also accept `end`. `resize` changes only the end — relocating is `move` |
+| `--start` | LBA\|end\|align | starting LBA; accepted by `add`, `move` and `copy` only. For `add` it may be omitted (the first hole that fits SIZE); `move` and `copy` require it and also accept `end`; `move` alone accepts `align` (the next 1 MiB boundary at or after the current start). `resize` changes only the end — relocating is `move` |
 | `--table` | gpt\|mbr | partition table type created by `new` |
 | `--type-guid` | GUID\|0xNN | partition type for `add`: GPT takes standard GUID text (omitted: Linux filesystem data); MBR takes a two-digit hex type byte (omitted: 0x83) |
 | `--yes` | — | confirmation gate before writing: required by `new`, `add`, `delete`, `move`, `copy`, `resize`, `mkfs`, `resizefs`, `set` and `recover`, and a missing one exits 2 at parse time; the other commands (`info`, `inspect`, `records list/verify/scan`, `check`) do not accept it |

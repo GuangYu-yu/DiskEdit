@@ -85,7 +85,7 @@ fn invalid_value_domains_are_refused() {
         (&["move", "img.bin:1", "--align", "cyl"][..], "invalid alignment"),
         (&["move", "img.bin:1", "--chunk", "0"][..], "1..=64"),
         (&["move", "img.bin:1", "--chunk", "65"][..], "1..=64"),
-        (&["move", "img.bin:1", "--start", "abc"][..], "an LBA or `end`"),
+        (&["move", "img.bin:1", "--start", "abc"][..], "an LBA, `end` or `align`"),
         (&["resize", "img.bin:1", "--end", "abc"][..], "an LBA"),
         (&["add", "img.bin", "1M", "--type-guid", "nope"][..], "GUID"),
         (&["add", "img.bin", "1M", "--part-number", "x"][..], "partition number"),

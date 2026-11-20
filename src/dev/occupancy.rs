@@ -655,6 +655,14 @@ fn member_facts(src: &FileSource) -> Result<Vec<MemberRef>, String> {
     if kind == crate::domain::FsKind::Btrfs {
         return btrfs_members(src);
     }
+    // bcachefs 是多设备文件系统，成员表在超级块的 members 字段里；没有 bcachefs
+    // 工具就无法证明本设备是单设备 fs，按「不可判定」拒绝，而不是当成无成员放行
+    if kind == crate::domain::FsKind::Bcachefs {
+        return Err(
+            "bcachefs may span multiple devices; its member list cannot be read without bcachefs tooling"
+                .to_string(),
+        );
+    }
     Ok(Vec::new())
 }
 
@@ -663,7 +671,7 @@ fn member_facts(src: &FileSource) -> Result<Vec<MemberRef>, String> {
 fn spans_devices(kind: crate::domain::FsKind) -> bool {
     use crate::domain::FsKind;
     match kind {
-        FsKind::Btrfs => true,
+        FsKind::Btrfs | FsKind::Bcachefs => true,
         FsKind::Squashfs
         | FsKind::Erofs
         | FsKind::Ext
@@ -673,7 +681,10 @@ fn spans_devices(kind: crate::domain::FsKind) -> bool {
         | FsKind::Vfat
         | FsKind::Ntfs
         | FsKind::HfsPlus
-        | FsKind::Apfs => false,
+        | FsKind::Apfs
+        | FsKind::Jfs
+        | FsKind::Reiserfs
+        | FsKind::Udf => false,
     }
 }
 

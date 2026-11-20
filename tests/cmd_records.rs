@@ -84,6 +84,7 @@ fn payload(file_id: [u8; 16], commit: u8, retention: u8) -> Vec<u8> {
     out.extend_from_slice(&0u64.to_le_bytes());
     out.push(0); // Progress::fs_phase
     out.push(0); // old_range: none
+    out.push(0); // target_range: none
     out.push(0); // lvm_post: none
     out.push(0); // relocation: none
     out.push(3); // RecoveryAction::InspectOnly

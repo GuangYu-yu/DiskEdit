@@ -11,7 +11,7 @@
 //!   - `:99` 不存在 → 3
 //!   - 分区没有已知文件系统 → 6（`no check tool wired`）
 //!   - 目标不存在 → 3（打开失败，属前置条件不满足；3/4 的边界见
-//!     `docs/reference.md` 的退出状态表：3 = 策略拒绝或前置条件不满足，
+//!     `docs/en/reference.md` 的退出状态表：3 = 策略拒绝或前置条件不满足，
 //!     4 = 本次未改变任何持久状态）
 //!   - 只读零写：目标字节、所在目录条目、镜像键目录都不因 `check` 改变
 //!   - 真 ext4 → 0 且零写；需要 root、`/dev/loop-control` 与 e2fsprogs，
@@ -152,7 +152,7 @@ fn a_partition_without_a_filesystem_has_no_check_tool() {
     assert_eq!(listing(dir.path()), entries, "a capability gap must not create sidecars");
 }
 
-/// 目标不存在 → 3：打开失败属前置条件不满足（`docs/reference.md` 的退出状态表：
+/// 目标不存在 → 3：打开失败属前置条件不满足（`docs/en/reference.md` 的退出状态表：
 /// 3 = 策略拒绝或前置条件不满足）
 #[test]
 fn an_absent_target_is_an_unmet_precondition() {

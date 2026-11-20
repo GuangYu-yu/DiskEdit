@@ -14,7 +14,7 @@
 //! ⇒ 5（直接用 `?` 摊平的 `io::Error` 走安全缺省 5，见 `outcome::From<io::Error>`）。
 //! 码 4 与码 3 一样以 `— this run changed no persistent state` 收尾：`FsError::Io` 在
 //! 映射里落 `NoMutation`，与 `Refused` 共用同一句尾注。码 3 不设例外（常量文档
-//! `src/outcome.rs`、实现 `report`、`docs/capability-matrix.md:72` 三方一致）。
+//! `src/outcome.rs`、实现 `report`、`docs/en/capability-matrix.md:72` 三方一致）。
 //!
 //! 资源释放待办与结果形态的四组合由 `src/main.rs` 的单元测试 `release_leak_matrix`
 //! 钉住：成功降 5 并给提示，失败保持自己的码且不给提示。
@@ -145,7 +145,7 @@ fn unreadable_target_is_three() {
     ] {
         let (code, _out, err) = run(&args);
         assert_eq!(code, 3, "`{args:?}` must report an unmet precondition: {err}");
-        // 3 与 4 都以这句收尾：本次运行没有改变持久状态（docs/capability-matrix.md 的声明）
+        // 3 与 4 都以这句收尾：本次运行没有改变持久状态（docs/en/capability-matrix.md 的声明）
         assert!(
             err.contains("this run changed no persistent state"),
             "a refusal must state that this run changed no persistent state: {err}"

@@ -135,10 +135,10 @@ fn auto_commands_add_move_resize_set_delete() {
     assert_eq!(v["partitions"][0]["name"], "auto");
     assert_eq!(v["partitions"][0]["type"], "C12A7328-F81F-11D2-BA4B-00A0C93EC93B");
 
-    // resize 位置 SIZE 只扩；缩容用 `resize --end`
+    // 分区的文件系统认不出来：缩容会让内容越界，能力层面拒绝
     let (c, _, stderr) = run(&["resize", &format!("{img_s}:1"), "8388608", "--yes"]);
-    assert_eq!(c, 3, "shrink through resize must be refused: {stderr}");
-    assert!(stderr.contains("shrink"), "{stderr}");
+    assert_eq!(c, 6, "shrink of an unidentified filesystem must be refused: {stderr}");
+    assert!(stderr.contains("filesystem type unrecognized"), "{stderr}");
 
     // delete + 位置 SIZE 扩容：删 #2 后 #1 扩到 12MiB（4096..28671）；#1 无 FS，同样走 --no-fs
     let (c, _, e) = run(&["delete", &format!("{img_s}:2"), "--yes"]);

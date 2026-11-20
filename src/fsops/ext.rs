@@ -55,7 +55,7 @@ pub(crate) enum Tool {
 
 impl Tool {
     /// 注册表全集：单测据此校验名字唯一与包名完备，并对账 `capabilities.rs` 的
-    /// 能力清单、`docs/internals.md` 的工具表与 CI 的安装清单
+    /// 能力清单、`docs/en/internals.md` 的工具表与 CI 的安装清单
     #[cfg(test)]
     pub(crate) const ALL: &'static [Tool] = &[
         Tool::E2fsck,
@@ -430,6 +430,28 @@ pub(crate) fn vgs_extent_json(vg: &str) -> Result<std::process::Output, FsError>
 #[cfg(target_os = "linux")]
 pub(crate) fn pvresize(dev: &str) -> Result<std::process::Output, FsError> {
     Tool::Pvresize.write(&[dev])
+}
+
+/// `pvresize --yes --setphysicalvolumesize <bytes>b <dev>`：把 PV 元数据缩到指定字节
+#[cfg(target_os = "linux")]
+pub(crate) fn pvresize_to(dev: &str, bytes: u64) -> Result<std::process::Output, FsError> {
+    Tool::Pvresize.write(&["--yes", "--setphysicalvolumesize", &format!("{bytes}b"), dev])
+}
+
+/// `pvs --segments --noheadings --nosuffix --separator '|' -o <四字段> <dev>`；
+/// `pvseg_start`/`pvseg_size` 的单位是 extent（pvs(8) DESCRIPTION）
+#[cfg(target_os = "linux")]
+pub(crate) fn pvs_segments_row(dev: &str) -> Result<std::process::Output, FsError> {
+    Tool::Pvs.read(&[
+        "--segments",
+        "--noheadings",
+        "--nosuffix",
+        "--separator",
+        "|",
+        "-o",
+        "pv_name,pvseg_start,pvseg_size,lv_name",
+        dev,
+    ])
 }
 
 /// `lvextend -l +<n> -r <lv>`

@@ -32,7 +32,7 @@ pub(crate) fn cmd_resize_superfloppy(a: &ResizeRequest) -> crate::outcome::RunOu
     // 锁下取权威容器尺寸并解析 SIZE：+N/+% 锚定"当前尺寸"，而容器大小不受本工具锁约束
     //（镜像可被 truncate、盘可被第三方改写）——锁前锚点会算错方向，与分区路径同理
     let cur_bytes = src.size;
-    let (target, _) = resolve_size_request(a.size, cur_bytes).unwrap_or_else(|f| bail_fail(f));
+    let (target, _) = resolve_size_request(a.size, cur_bytes, src.sector_size).unwrap_or_else(|f| bail_fail(f));
     if let Some(t) = target {
         if t < cur_bytes {
             bail_fail(RunOutcome::refused("superfloppy cannot shrink — the FS occupies the whole device, there is no partition boundary to shrink to".to_string()));

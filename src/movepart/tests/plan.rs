@@ -239,9 +239,6 @@ pub(crate) fn lvm_post_for_records_only_a_usable_amount() {
 #[test]
 pub(crate) fn type_guids_recognized_only_in_canonical_byte_order() {
     assert!(is_swap_guid(&table::SWAP_TYPE_GUID));
-    for known in [table::LUKS_TYPE_GUID, table::LVM_TYPE_GUID] {
-        assert!(is_forbidden_type_guid(&known));
-    }
     // 前三字段倒置的同一文本 GUID 不是规范编码，不得被识别
     let mut reversed = table::SWAP_TYPE_GUID;
     reversed[0..4].reverse();
@@ -250,13 +247,11 @@ pub(crate) fn type_guids_recognized_only_in_canonical_byte_order() {
     assert!(!is_swap_guid(&reversed));
     let other = table::LINUX_FS_TYPE_GUID;
     assert!(!is_swap_guid(&other));
-    assert!(!is_forbidden_type_guid(&other));
 }
 
 #[test]
 pub(crate) fn make_plan_pack_and_boundaries() {
     const SWAP: [u8; 16] = [0x6D, 0xFD, 0x57, 0x06, 0xAB, 0xA4, 0xC4, 0x43, 0x84, 0xE5, 0x09, 0x33, 0xC8, 0x4B, 0x4F, 0x4F];
-    const LUKS: [u8; 16] = table::LUKS_TYPE_GUID;
     // root 2048..6143 | home 6144..10239 | swap 10240..12287
     let (mut src, _p1) = plan_fixture(&[
         (1, [0x11; 16], 2048, 6143),
@@ -271,16 +266,6 @@ pub(crate) fn make_plan_pack_and_boundaries() {
     assert!(!plan.moves[1].is_swap && plan.moves[1].part_num == 2);
     assert_eq!(plan.moves[1].first_lba.checked_add_signed(plan.moves[1].delta_lba).unwrap(), 26591, "home new first_lba");
     drop(src);
-
-    // LUKS 在目标之后 → 拒绝，且规划不得写盘
-    let (mut src2, p2) = plan_fixture(&[
-        (1, [0x11; 16], 2048, 6143),
-        (2, LUKS, 6144, 10239),
-    ]);
-    let img_before = std::fs::read(&p2).unwrap();
-    assert!(make_plan(&mut src2, 1).is_err());
-    assert_eq!(std::fs::read(&p2).unwrap(), img_before, "a refused plan must not write the image");
-    drop(src2);
 
     // 尾部容量不足：条目越过 last_usable（损坏表）→ 不得进入规划。
     // gptman 会拒绝写入越界条目，故先写合法表再手工修补原始字节 + 重算**该副本**的双 CRC

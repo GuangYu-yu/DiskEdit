@@ -124,8 +124,7 @@ $BF add --yes "$T5" 104858112 --start 307200 --name p2 >/dev/null
 DISKEDIT_FAULT=chunk:8 $BF resize "$T5":1 209715200 --allow-move --yes >/dev/null 2>&1
 exp "$?" 134 "E5 grow interrupted mid-move"
 record_present "$T5" && echo "  OK   relocation record present after the interruption" || { echo "  BAD  no record after the interruption"; rc=1; }
-# 缩容请求走 resize --end：resize 的 SIZE 形态只扩不缩，那条指引轮不到 busy 闸；
-# --end 形态的闸在记录准入，未收尾的搬移作业按 busy 拒
+# 缩容请求走 --end 形态：闸在记录准入，未收尾的搬移作业按 busy 拒
 OUT=$($BF resize "$T5":1 --end 104447 --yes 2>&1); E=$?
 echo "shrink against the pending job -> exit=$E : $(echo "$OUT" | tail -1)"
 # 未收尾作业的记录已写盘（provisional）：挡路拒绝按 past-boundary 口径报 5

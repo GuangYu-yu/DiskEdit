@@ -97,6 +97,7 @@ fn record_bytes() -> Vec<u8> {
     p.extend_from_slice(&0u64.to_le_bytes()); // transfer cursor
     p.push(0); // fs phase
     p.push(0); // old range
+    p.push(0); // target range
     p.push(0); // lvm post
     p.push(0); // relocation
     p.push(3); // RecoveryAction::InspectOnly

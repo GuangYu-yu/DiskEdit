@@ -305,8 +305,14 @@ mod published {
     use crate::outcome::NOTHING_WRITTEN;
     use crate::platform::capabilities::{CapabilityId, CapabilitySnapshot, HostPlatform};
 
-    const REFERENCE: &str = "docs/reference.md";
-    const MATRIX: &str = "docs/capability-matrix.md";
+    const REFERENCE_EN: &str = "docs/en/reference.md";
+    const MATRIX_EN: &str = "docs/en/capability-matrix.md";
+    const REFERENCE_ZH: &str = "docs/zh/reference.md";
+    const MATRIX_ZH: &str = "docs/zh/capability-matrix.md";
+
+    /// 中文文案目录：键是渲染时用的英文原文（标题、表格行与带 `{n}` 占位符的模板），
+    /// 值是中文。只由测试构建读取，不进入二进制
+    const CATALOGUE: &str = include_str!("../docs/zh/catalogue.json");
 
     /// 六个平台 × 载体形态组合；矩阵对每一列都给出显式结论
     const SHAPES: [(HostPlatform, MediaKind); 6] = [
@@ -318,15 +324,96 @@ mod published {
         (HostPlatform::Other, MediaKind::Image),
     ];
 
-    fn shape_name(platform: HostPlatform, media: MediaKind) -> &'static str {
-        match (platform, media) {
-            (HostPlatform::Linux, MediaKind::Block) => "linux / block",
-            (HostPlatform::Linux, MediaKind::Image) => "linux / image",
-            (HostPlatform::Windows, MediaKind::Block) => "windows / block",
-            (HostPlatform::Windows, MediaKind::Image) => "windows / image",
-            (HostPlatform::Other, MediaKind::Block) => "other / block",
-            (HostPlatform::Other, MediaKind::Image) => "other / image",
+    /// 中文目录：渲染时按英文原文查表，缺项与多余项都由 `docs_are_generated_in_sync`
+    /// 报出，因此中文文档与 schema 不存在各自漂移的余地
+    struct Catalogue {
+        entries: serde_json::Map<String, serde_json::Value>,
+        used: std::cell::RefCell<std::collections::BTreeSet<String>>,
+        missing: std::cell::RefCell<std::collections::BTreeSet<String>>,
+    }
+
+    impl Catalogue {
+        fn load() -> Self {
+            let entries = match serde_json::from_str(CATALOGUE) {
+                Ok(serde_json::Value::Object(map)) => map,
+                Ok(_) => panic!("docs/zh/catalogue.json: the top level must be an object"),
+                Err(e) => panic!("docs/zh/catalogue.json: {e}"),
+            };
+            for (key, value) in &entries {
+                let text = value.as_str().unwrap_or_else(|| {
+                    panic!("docs/zh/catalogue.json: the value of `{key}` is not a string")
+                });
+                assert!(
+                    !text.trim().is_empty(),
+                    "docs/zh/catalogue.json: `{key}` has no translation"
+                );
+            }
+            Self { entries, used: Default::default(), missing: Default::default() }
         }
+
+        /// 缺译文时回退英文并记下键，测试据此一次列出全部缺口
+        fn t<'a>(&'a self, key: &'a str) -> &'a str {
+            match self.entries.get(key).and_then(|v| v.as_str()) {
+                Some(text) => {
+                    self.used.borrow_mut().insert(key.to_string());
+                    text
+                }
+                None => {
+                    self.missing.borrow_mut().insert(key.to_string());
+                    key
+                }
+            }
+        }
+
+        fn fill(&self, key: &str, parts: &[&str]) -> String {
+            fill_template(self.t(key), parts)
+        }
+
+        fn unused(&self) -> Vec<String> {
+            let used = self.used.borrow();
+            self.entries.keys().filter(|k| !used.contains(*k)).cloned().collect()
+        }
+    }
+
+    fn fill_template(template: &str, parts: &[&str]) -> String {
+        let mut text = template.to_string();
+        for (index, part) in parts.iter().enumerate() {
+            text = text.replace(&format!("{{{index}}}"), part);
+        }
+        text
+    }
+
+    fn tr<'a>(cat: Option<&'a Catalogue>, en: &'a str) -> &'a str {
+        match cat {
+            Some(cat) => cat.t(en),
+            None => en,
+        }
+    }
+
+    fn fill(cat: Option<&Catalogue>, template: &str, parts: &[&str]) -> String {
+        match cat {
+            Some(cat) => cat.fill(template, parts),
+            None => fill_template(template, parts),
+        }
+    }
+
+    fn platform_name(platform: HostPlatform) -> &'static str {
+        match platform {
+            HostPlatform::Linux => "linux",
+            HostPlatform::Windows => "windows",
+            HostPlatform::Other => "other",
+        }
+    }
+
+    fn media_name(media: MediaKind) -> &'static str {
+        match media {
+            MediaKind::Block => "block",
+            MediaKind::Image => "image",
+        }
+    }
+
+    fn shape_name(cat: Option<&Catalogue>, platform: HostPlatform, media: MediaKind) -> String {
+        fill(cat, "{0} / {1}", &[tr(cat, platform_name(platform)), tr(cat, media_name(media))])
     }
 
     fn mode_name(mode: cli::TargetMode) -> &'static str {
@@ -337,74 +424,111 @@ mod published {
         }
     }
 
-    fn join_or_none(items: impl Iterator<Item = String>) -> String {
+    fn join_or_none(cat: Option<&Catalogue>, items: impl Iterator<Item = String>) -> String {
         let joined = items.collect::<Vec<_>>().join(", ");
         if joined.is_empty() {
-            "none".to_string()
+            tr(cat, "none").to_string()
         } else {
             joined
         }
     }
 
-    fn render_reference() -> String {
+    fn render_reference(cat: Option<&Catalogue>) -> String {
         let mut out = String::new();
-        out.push_str("# diskedit command reference\n\n");
-        out.push_str("Generated from the command schema in `src/cli.rs` by `src/docs.rs`.\n");
-        out.push_str(
+        out.push_str(tr(cat, "# diskedit command reference\n\n"));
+        out.push_str(tr(
+            cat,
+            "Generated from the command schema in `src/cli.rs` by `src/docs.rs`.\n",
+        ));
+        out.push_str(tr(
+            cat,
             "Regenerate with `DISKEDIT_WRITE_DOCS=1 cargo test --bin DiskEdit \
              docs_are_generated_in_sync`;\n",
-        );
-        out.push_str("CI regenerates it and fails when the working tree differs. Do not edit by hand.\n\n");
-        out.push_str("## Commands\n");
+        ));
+        out.push_str(tr(
+            cat,
+            "CI regenerates it and fails when the working tree differs. Do not edit by hand.\n\n",
+        ));
+        out.push_str(tr(cat, "## Commands\n"));
         for c in cli::COMMANDS {
             emit!(out, "\n### `{}`\n", c.name);
-            emit!(out, "{}\n", c.summary);
+            emit!(out, "{}\n", tr(cat, c.summary));
             emit!(out, "```text");
             for line in c.syntax_lines() {
                 emit!(out, "diskedit {} {}", c.name, line);
             }
             emit!(out, "```\n");
-            emit!(out, "| property | value |");
+            emit!(out, "{}", tr(cat, "| property | value |"));
             emit!(out, "|---|---|");
             let forms: Vec<String> = c
                 .variants
                 .iter()
                 .map(|v| {
-                    join_or_none(v.positionals.iter().map(|p| {
-                        if p.optional {
-                            format!("`{}` (optional)", p.name)
-                        } else {
-                            format!("`{}`", p.name)
-                        }
-                    }))
+                    join_or_none(
+                        cat,
+                        v.positionals.iter().map(|p| {
+                            if p.optional {
+                                fill(cat, "`{0}` (optional)", &[p.name])
+                            } else {
+                                format!("`{}`", p.name)
+                            }
+                        }),
+                    )
                 })
                 .collect();
-            emit!(out, "| positionals | {} |", forms.join(" / "));
+            emit!(out, "{}", fill(cat, "| positionals | {0} |", &[&forms.join(" / ")]));
             emit!(
                 out,
-                "| options | {} |",
-                join_or_none(option_names(c).into_iter().map(|n| format!("`{n}`")))
+                "{}",
+                fill(
+                    cat,
+                    "| options | {0} |",
+                    &[&join_or_none(
+                        cat,
+                        option_names(c).into_iter().map(|n| format!("`{n}`"))
+                    )]
+                )
             );
             emit!(
                 out,
-                "| confirmation | {} |",
-                match c.confirmation {
-                    Confirmation::Required => "required (`--yes`)",
-                    Confirmation::None => "none",
-                }
+                "{}",
+                fill(
+                    cat,
+                    "| confirmation | {0} |",
+                    &[tr(
+                        cat,
+                        match c.confirmation {
+                            Confirmation::Required => "required (`--yes`)",
+                            Confirmation::None => "none",
+                        }
+                    )]
+                )
             );
-            emit!(out, "| journal | {} |", mode_name(c.mode));
             emit!(
                 out,
-                "| capabilities | {} |",
-                join_or_none(c.capabilities.iter().map(|cap| capability_category(*cap).to_string()))
+                "{}",
+                fill(cat, "| journal | {0} |", &[tr(cat, mode_name(c.mode))])
+            );
+            emit!(
+                out,
+                "{}",
+                fill(
+                    cat,
+                    "| capabilities | {0} |",
+                    &[&join_or_none(
+                        cat,
+                        c.capabilities
+                            .iter()
+                            .map(|cap| tr(cat, capability_category(*cap)).to_string())
+                    )]
+                )
             );
             emit!(out, "\n```text");
-            emit!(out, "{}", c.details);
+            emit!(out, "{}", tr(cat, c.details));
             emit!(out, "```");
         }
-        out.push_str("\n## Global options\n\n");
-        out.push_str("| flag | value | description |\n|---|---|---|\n");
+        out.push_str(tr(cat, "\n## Global options\n\n"));
+        out.push_str(tr(cat, "| flag | value | description |\n|---|---|---|\n"));
         for f in cli::FLAGS {
             let value = if f.domain.takes_value() {
                 format!("`{}`", f.domain.placeholder())
@@ -416,12 +540,13 @@ mod published {
                 "| `{}` | {} | {} |",
                 f.name,
                 table_cell(&value),
-                table_cell(f.desc)
+                table_cell(tr(cat, f.desc))
             );
         }
-        out.push_str("\n## Exit status\n\n| code | meaning |\n|---|---|\n");
+        out.push_str(tr(cat, "\n## Exit status\n\n"));
+        out.push_str(tr(cat, "| code | meaning |\n|---|---|\n"));
         for (code, desc) in EXIT_LEGEND {
-            emit!(out, "| {code} | {desc} |");
+            emit!(out, "| {code} | {} |", tr(cat, desc));
         }
         trim_trailing_newlines(out)
     }
@@ -442,36 +567,43 @@ mod published {
         }
     }
 
-    fn render_matrix() -> String {
+    fn render_matrix(cat: Option<&Catalogue>) -> String {
         let mut out = String::new();
-        out.push_str("# diskedit capability matrix\n\n");
-        out.push_str(
+        out.push_str(tr(cat, "# diskedit capability matrix\n\n"));
+        out.push_str(tr(
+            cat,
             "Generated from `CommandDef.capabilities` and `CapabilitySnapshot::design(platform, \
              media)` by `src/docs.rs`.\n",
-        );
-        out.push_str(
+        ));
+        out.push_str(tr(
+            cat,
             "Regenerate with `DISKEDIT_WRITE_DOCS=1 cargo test --bin DiskEdit \
              docs_are_generated_in_sync`;\n",
-        );
-        out.push_str("CI regenerates it and fails when the working tree differs. Do not edit by hand.\n\n");
+        ));
+        out.push_str(tr(
+            cat,
+            "CI regenerates it and fails when the working tree differs. Do not edit by hand.\n\n",
+        ));
 
-        out.push_str("## Capability states\n\n| capability |");
+        out.push_str(tr(cat, "## Capability states\n\n"));
+        emit_raw!(out, "| {} |", tr(cat, "capability"));
         for (platform, media) in SHAPES {
-            emit_raw!(out, " {} |", shape_name(platform, media));
+            emit_raw!(out, " {} |", shape_name(cat, platform, media));
         }
         emit!(out, "\n|---|{}", "---|".repeat(SHAPES.len()));
         for id in CapabilityId::ALL {
             emit_raw!(out, "| {} |", id.as_str());
             for (platform, media) in SHAPES {
                 let snapshot = CapabilitySnapshot::design(platform, media);
-                emit_raw!(out, " {} |", snapshot.state(id).as_str());
+                emit_raw!(out, " {} |", tr(cat, snapshot.state(id).as_str()));
             }
             emit!(out);
         }
 
-        out.push_str("\n## Commands\n\n| command |");
+        out.push_str(tr(cat, "\n## Commands\n\n"));
+        emit_raw!(out, "| {} |", tr(cat, "command"));
         for (platform, media) in SHAPES {
-            emit_raw!(out, " {} |", shape_name(platform, media));
+            emit_raw!(out, " {} |", shape_name(cat, platform, media));
         }
         emit!(out, "\n|---|{}", "---|".repeat(SHAPES.len()));
         for c in cli::COMMANDS {
@@ -480,41 +612,48 @@ mod published {
             for (platform, media) in SHAPES {
                 let snapshot = CapabilitySnapshot::design(platform, media);
                 let cell = match snapshot.first_gap(&needs) {
-                    None => "admitted".to_string(),
-                    Some((id, state)) => {
-                        format!("blocked: {} ({})", id.as_str(), state.as_str())
-                    }
+                    None => tr(cat, "admitted").to_string(),
+                    Some((id, state)) => fill(
+                        cat,
+                        "blocked: {0} ({1})",
+                        &[id.as_str(), tr(cat, state.as_str())],
+                    ),
                 };
                 emit_raw!(out, " {cell} |");
             }
             emit!(out);
         }
 
-        out.push_str("\n## Runtime gate\n\n");
+        out.push_str(tr(cat, "\n## Runtime gate\n\n"));
         // 只列本平台真正能打开的形态，且平台固定在 Linux：生成物在两个构建目标上
         // 必须逐字一致，`HostPlatform::current()` 会让同一份文档随宿主变化
         let gate_shapes = HostPlatform::Linux.openable_media();
         let listed = gate_shapes
             .iter()
-            .map(|media| shape_name(HostPlatform::Linux, *media))
+            .map(|media| shape_name(cat, HostPlatform::Linux, *media))
             .collect::<Vec<_>>()
             .join(", ");
         emit!(
             out,
-            "The gate evaluates only the target shapes the build can open. This table lists the {} \
-             target shapes it evaluates on Linux (`HostPlatform::openable_media`): {}. Other shapes \
-             do not enter the gate's decision — `cmd::capability_gap` iterates only the openable set.",
-            gate_shapes.len(),
-            listed
+            "{}",
+            fill(
+                cat,
+                "The gate evaluates only the target shapes the build can open. This table lists the \
+                 {0} target shapes it evaluates on Linux (`HostPlatform::openable_media`): {1}. \
+                 Other shapes do not enter the gate's decision — `cmd::capability_gap` iterates only \
+                 the openable set.",
+                &[&gate_shapes.len().to_string(), &listed]
+            )
         );
-        out.push_str(
+        out.push_str(tr(
+            cat,
             "The table is generated from the Linux capability set; a non-Linux build's openable set \
              is decided at run time by `HostPlatform::openable_media`, and this document does not \
              copy it.\n\n",
-        );
-        out.push_str("| command |");
+        ));
+        emit_raw!(out, "| {} |", tr(cat, "command"));
         for media in gate_shapes {
-            emit_raw!(out, " {} |", shape_name(HostPlatform::Linux, *media));
+            emit_raw!(out, " {} |", shape_name(cat, HostPlatform::Linux, *media));
         }
         emit!(out, "\n|---|{}", "---|".repeat(gate_shapes.len()));
         for c in cli::COMMANDS {
@@ -523,10 +662,12 @@ mod published {
             for media in gate_shapes {
                 let snapshot = CapabilitySnapshot::design(HostPlatform::Linux, *media);
                 let cell = match snapshot.first_gap(&needs) {
-                    None => "admitted".to_string(),
-                    Some((id, state)) => {
-                        format!("blocked: {} ({})", id.as_str(), state.as_str())
-                    }
+                    None => tr(cat, "admitted").to_string(),
+                    Some((id, state)) => fill(
+                        cat,
+                        "blocked: {0} ({1})",
+                        &[id.as_str(), tr(cat, state.as_str())],
+                    ),
                 };
                 emit_raw!(out, " {cell} |");
             }
@@ -534,45 +675,80 @@ mod published {
         }
         emit!(
             out,
-            "\nThe process-level exit prints the cause sentence of a failure. Exit {} and exit {} are \
-             followed by a second line, `{}`; exit {} prints `unsupported: <cause>` and appends no \
-             such line.",
-            EXIT_REFUSED,
-            EXIT_NO_MUTATION,
-            NOTHING_WRITTEN,
-            EXIT_UNSUPPORTED
+            "\n{}",
+            fill(
+                cat,
+                "The process-level exit prints the cause sentence of a failure. Exit {0} and exit \
+                 {1} are followed by a second line, `{2}`; exit {3} prints `unsupported: <cause>` \
+                 and appends no such line.",
+                &[
+                    &EXIT_REFUSED.to_string(),
+                    &EXIT_NO_MUTATION.to_string(),
+                    NOTHING_WRITTEN,
+                    &EXIT_UNSUPPORTED.to_string(),
+                ]
+            )
         );
         trim_trailing_newlines(out)
     }
 
-    /// `internals.md` 只留顺序陈述：一句话里同时出现 `exit code 6` 与命令名，等于把
-    /// 矩阵的逐命令结论又抄了一份。命令名取自命令表，不另写清单
+    /// `internals.md` 只留顺序陈述：一句话里同时出现该退出码与命令名，等于把矩阵的
+    /// 逐命令结论又抄了一份。命令名取自命令表，不另写清单；两个语种各查一遍
     fn assert_no_per_command_gate_claims(root: &std::path::Path) {
-        const INTERNALS: &str = "docs/internals.md";
-        let path = root.join(INTERNALS);
-        let text = std::fs::read_to_string(&path)
-            .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-        for sentence in text.split(['.', '。', '\n']) {
-            if !sentence.contains("exit code 6") {
-                continue;
-            }
-            if let Some(command) = cli::COMMANDS.iter().find(|c| sentence.contains(c.name)) {
-                panic!(
-                    "{}: one sentence names both `exit code 6` and the command `{}` — the \
-                     per-command answer belongs to {MATRIX}",
-                    path.display(),
-                    command.name
-                );
+        const DOCS: &[(&str, &str)] = &[
+            ("docs/en/internals.md", "exit code 6"),
+            ("docs/zh/internals.md", "退出码 6"),
+        ];
+        for (doc, claim) in DOCS {
+            let path = root.join(doc);
+            let text = std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+            for sentence in text.split(['.', '。', '\n']) {
+                if !sentence.contains(claim) {
+                    continue;
+                }
+                if let Some(command) = cli::COMMANDS.iter().find(|c| sentence.contains(c.name)) {
+                    panic!(
+                        "{}: one sentence names both `{claim}` and the command `{}` — the \
+                         per-command answer belongs to docs/en/capability-matrix.md",
+                        path.display(),
+                        command.name
+                    );
+                }
             }
         }
     }
 
-    /// 生成物与工作树逐字一致。设置 `DISKEDIT_WRITE_DOCS` 时先写盘，再比对
+    /// 生成物与工作树逐字一致；中文版还要对账翻译目录——缺译与多余项都算失败。
+    /// 设置 `DISKEDIT_WRITE_DOCS` 时先写盘，再比对
     #[test]
     fn docs_are_generated_in_sync() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         assert_no_per_command_gate_claims(root);
-        for (rel, text) in [(REFERENCE, render_reference()), (MATRIX, render_matrix())] {
+
+        let cat = Catalogue::load();
+        let zh_reference = render_reference(Some(&cat));
+        let zh_matrix = render_matrix(Some(&cat));
+        let missing = cat.missing.borrow();
+        assert!(
+            missing.is_empty(),
+            "docs/zh/catalogue.json lacks translations for:\n{}",
+            missing.iter().cloned().collect::<Vec<_>>().join("\n")
+        );
+        drop(missing);
+        let unused = cat.unused();
+        assert!(
+            unused.is_empty(),
+            "docs/zh/catalogue.json has entries the render no longer uses:\n{}",
+            unused.join("\n")
+        );
+
+        for (rel, text) in [
+            (REFERENCE_EN, render_reference(None)),
+            (MATRIX_EN, render_matrix(None)),
+            (REFERENCE_ZH, zh_reference),
+            (MATRIX_ZH, zh_matrix),
+        ] {
             let lower = text.to_ascii_lowercase();
             assert!(!lower.contains("cyl"), "{rel}: cylinder alignment leaked into the generated text");
             assert!(!lower.contains("chs"), "{rel}: CHS geometry leaked into the generated text");

@@ -44,7 +44,7 @@ echo
 echo "===== C: 缩容不支持的 FS → UNSUPPORTED(6) 且不得改盘 ====="
 mk exfat 800M
 BEFORE=$(pt)
-# 缩容入口是 resize --end（resize 的 SIZE 形态只扩）：exfat 不可缩，FS 前置检查在写表之前拒绝
+# exfat 不可缩：FS 前置检查在写表之前拒绝
 OUT=$($B resize --yes "$T":1 --end 821247 2>&1); E=$?
 echo "exit=$E  before=$BEFORE  after=$(pt)"
 echo "$OUT" | head -2

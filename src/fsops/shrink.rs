@@ -142,6 +142,47 @@ fn shrink_fs_step(src: &FileSource, part: u32, fstype: Option<ContentKind>, new_
             })?;
             Ok(shrink_outcome(verify, leak))
         }
+        #[cfg(target_os = "linux")]
+        Some(ContentKind::Lvm2Pv) => {
+            // PV 缩容只缩 LVM 元数据的物理范围：新末端之后没有已分配 extent 由
+            // 调用方在写盘前证明（[`pv_shrink_precheck`]），分区表随后提交
+            let verify = with_partition_device(src, part, |dev| {
+                crate::lvm::pv_resize_to(dev, new_bytes).map_err(pv_tool_error)?;
+                // pvresize 改元数据会触发 udev 的 LVM 规则；PV 重新出现时该规则执行
+                // vgchange -aay，把 dm 栈压回这块临时 loop。表项若缩到栈之外，栈就映射到
+                // 分区之外，因此提交之前复核持有者，出现即停在这一步（表项未动）
+                drop(crate::fsops::udev_settle());
+                match crate::dev::collect_node(dev) {
+                    Ok(facts) if facts.holders.is_empty() => {}
+                    Ok(facts) => {
+                        let holders = facts
+                            .holders
+                            .iter()
+                            .map(|h| h.holders.join(" -> "))
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        return Err(FsError::CommandFailed(format!(
+                            "the VG was activated on {dev} after pvresize (holders: {holders}); the partition table \
+                             was left unchanged — deactivate it and stop the re-activation (vgchange -an <vg>; \
+                             lvchange -ky <vg/lv>), then retry"
+                        )));
+                    }
+                    // 读不出的持有者不能当成"没有"：表项在这之后就提交，宁可停在这里
+                    Err(e) => {
+                        return Err(FsError::CommandFailed(format!(
+                            "cannot re-check the holders of {dev} after pvresize: {e} — the partition table was \
+                             left unchanged; inspect the device and retry"
+                        )));
+                    }
+                }
+                verify_pv_shrink(dev, new_bytes)
+            })?;
+            Ok(shrink_outcome(verify, None))
+        }
+        #[cfg(not(target_os = "linux"))]
+        Some(ContentKind::Lvm2Pv) => Err(FsError::platform(
+            "shrinking an LVM PV runs pvresize and is only available on Linux",
+        )),
         other => Err(FsError::unsupported(format!(
             "fs {} cannot shrink",
             content_name(other.unwrap_or(ContentKind::Unknown))
@@ -149,12 +190,81 @@ fn shrink_fs_step(src: &FileSource, part: u32, fstype: Option<ContentKind>, new_
     }
 }
 
+/// pvresize 的执行错误 → FsError：缺工具与命令失败分开，前者装包即可
+#[cfg(target_os = "linux")]
+fn pv_tool_error(e: crate::lvm::LvmError) -> FsError {
+    match e {
+        crate::lvm::LvmError::ToolMissing(m) => FsError::missing(m),
+        e => FsError::CommandFailed(format!("pvresize --setphysicalvolumesize failed: {e}")),
+    }
+}
+
+/// pvresize 之后的核对：回读 `pv_size`（PV 可用尺寸，extent 对齐使其可略小于新末端），
+/// 不大于请求值即缩到位。超出请求值是工具行为不符预期——分区不能缩到 PV 之外；
+/// 回读不出来是未证实，不上抛成失败
+#[cfg(target_os = "linux")]
+fn verify_pv_shrink(dev: &str, requested: u64) -> Result<SizeVerify, FsError> {
+    match crate::lvm::pv_size_report(dev) {
+        Ok(r) if r.pv_size <= requested => Ok(SizeVerify::Confirmed(r.pv_size)),
+        Ok(r) => Err(FsError::CommandFailed(format!(
+            "pvresize reported success but left the PV at {} bytes, more than the requested {requested} — \
+             the partition is not shrunk to a size the PV does not fit in",
+            r.pv_size
+        ))),
+        Err(e) => Ok(SizeVerify::Unverifiable {
+            why: format!(
+                "pvresize reported success but the PV size could not be read back: {e} — \
+                 the shrink may have been applied; verify the new size before relying on it"
+            ),
+            hint: "pvs --noheadings --nosuffix --units b -o pv_size <partition device>".to_string(),
+        }),
+    }
+}
+
+/// PV 缩容的写盘前预检：已分配 extent 的末端不得越过新末端。pvresize 自己也会
+/// 拒绝切进已分配 extent，但到那时分区表已经开始收缩；这里在任何写盘之前拒绝。
+/// 结论只读，工具缺失归外部能力，其余读不出归"请求与现状对不上"
+#[cfg(target_os = "linux")]
+pub fn pv_shrink_precheck(src: &FileSource, part: u32, new_bytes: u64) -> Result<(), FsError> {
+    with_partition_device(src, part, |dev| {
+        let end = crate::lvm::pv_allocated_end_bytes(dev).map_err(|e| match e {
+            crate::lvm::LvmError::ToolMissing(m) => FsError::missing(m),
+            e => FsError::invalid(format!(
+                "cannot bound the allocated extents on {dev} before shrinking the PV: {e}"
+            )),
+        })?;
+        if end > new_bytes {
+            return Err(FsError::invalid(format!(
+                "allocated extents on {dev} end at {end} bytes, beyond the requested new end {new_bytes} — \
+                 move that data off the tail first (pvmove) or pick a larger size"
+            )));
+        }
+        Ok(())
+    })
+}
+
+/// 非 Linux 没有 lvm2 的 pvresize 链：缩 PV 不可执行，按平台不支持拒绝
+#[cfg(not(target_os = "linux"))]
+pub fn pv_shrink_precheck(_src: &FileSource, _part: u32, _new_bytes: u64) -> Result<(), FsError> {
+    Err(FsError::platform(
+        "shrinking an LVM PV runs pvresize and is only available on Linux",
+    ))
+}
+
 /// 缩容**之前**看 FS 现在落在哪儿：中断续跑用它区分"已缩到位"与"从未缩过"，
 /// 避免按盲判把同一次缩容再做一遍。
 /// `None` 与 [`SizeVerify::Unverifiable`] 同义——回读不出来，无从判断。
 pub fn shrink_already_at(src: &FileSource, part: u32, fstype: Option<ContentKind>, requested: u64) -> Option<bool> {
-    // 不是文件系统的内容（swap / LVM PV）缩不了，也谈不上"已缩到位"：与其余不能缩的
-    // 类型同判，由 shrink_fs 给出拒绝
+    // PV 的"尺寸"是 pvs 报告的 pv_size：已不大于目标即无需再缩（缩容幂等）
+    #[cfg(target_os = "linux")]
+    if fstype == Some(ContentKind::Lvm2Pv) {
+        return with_partition_device(src, part, |dev| {
+            Ok::<Option<bool>, FsError>(crate::lvm::pv_size_report(dev).ok().map(|r| r.pv_size <= requested))
+        })
+        .ok()?;
+    }
+    // 不是文件系统的其余内容（swap / LUKS / BitLocker）缩不了，也谈不上"已缩到位"：
+    // 与其余不能缩的类型同判，由 shrink_fs 给出拒绝
     let Some(kind) = fstype?.filesystem() else {
         return Some(false);
     };

@@ -35,7 +35,7 @@ pub(crate) fn lvm_preflight_errors_land_on_the_right_exit_channel() {
 pub(crate) fn size_request_resolution() {
     const MIB: u64 = 1024 * 1024;
     const G: u64 = 1024 * MIB;
-    let r = |s: crate::cli::SizeSpec, cur: u64| resolve_size_request(s, cur).unwrap();
+    let r = |s: crate::cli::SizeSpec, cur: u64| resolve_size_request(s, cur, 512).unwrap();
     assert_eq!(r(crate::cli::SizeSpec::Absolute(10 * G), 1), (Some(10 * G), false));
     assert_eq!(
         r(crate::cli::SizeSpec::Delta { grow: true, bytes: 2 * G }, G),
@@ -61,4 +61,7 @@ pub(crate) fn size_request_resolution() {
     );
     // "grow" 是唯一表示"吃满右侧空闲"的写法
     assert_eq!(r(crate::cli::SizeSpec::Grow, 1), (None, true));
+    // 不足一个扇区的目标在解析处拒绝，锁前快照与锁下重算同判
+    assert!(resolve_size_request(crate::cli::SizeSpec::Absolute(511), G, 512).is_err());
+    assert!(resolve_size_request(crate::cli::SizeSpec::Delta { grow: false, bytes: G }, G, 512).is_err());
 }

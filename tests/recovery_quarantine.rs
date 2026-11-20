@@ -95,6 +95,7 @@ fn payload(size: u64, file_id: [u8; 16]) -> Vec<u8> {
     out.extend_from_slice(&0u64.to_le_bytes()); // transfer cursor
     out.push(0); // fs phase
     out.push(0); // old range absent
+    out.push(0); // target range absent
     out.push(0); // lvm post absent
     out.push(0); // relocation absent
     out.push(3); // RecoveryAction::InspectOnly

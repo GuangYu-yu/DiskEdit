@@ -6,9 +6,16 @@ use crate::outcome::RunOutcome;
 /// SIZE 请求 →（绝对目标字节数, grow 标记），GPT/MBR resize 共用。调用点都在各自锁下
 /// 用同一份请求重算——`Delta`/`Percent` 锚定"当前尺寸"、`Grow` 锚定右侧空闲，锁前算出的
 /// 绝对值在窗口内可能已作废。`Absolute`/`Delta`/`Percent` 都以 `cur_bytes` 为锚
-/// （调用方保证它是锁下的当前分区字节数）；`Grow` 是唯一表示"吃满右侧空闲"的写法
-pub(crate) fn resolve_size_request(size: SizeSpec, cur_bytes: u64) -> Result<(Option<u64>, bool), RunOutcome> {
-    match size {
+/// （调用方保证它是锁下的当前分区字节数）；`Grow` 是唯一表示"吃满右侧空闲"的写法。
+///
+/// 目标不足一个扇区的请求在这里拒绝：写表会把长度隐式下取整成 0，而"至少一个扇区"
+/// 只取决于扇区大小，不取决于判据取的是锁前快照还是锁下重算
+pub(crate) fn resolve_size_request(
+    size: SizeSpec,
+    cur_bytes: u64,
+    sector_size: u64,
+) -> Result<(Option<u64>, bool), RunOutcome> {
+    let (target, grow) = match size {
         SizeSpec::Grow => Ok((None, true)),
         SizeSpec::Absolute(bytes) => Ok((Some(bytes), false)),
         SizeSpec::Delta { grow: true, bytes } => cur_bytes
@@ -41,5 +48,13 @@ pub(crate) fn resolve_size_request(size: SizeSpec, cur_bytes: u64) -> Result<(Op
             };
             Ok((Some(target), false))
         }
+    }?;
+    if let Some(bytes) = target
+        && bytes < sector_size
+    {
+        return Err(RunOutcome::refused(format!(
+            "size {bytes} < one sector ({sector_size})"
+        )));
     }
+    Ok((target, grow))
 }
