@@ -57,5 +57,5 @@ echo "-- LV 数据不受影响，分区层已扩、pvresize 留给调用方 --"
 mount_at /dev/vgtest/lv1 "$TEST_MNT" && { cat "$TEST_MNT"/m.txt; umount "$TEST_MNT" 2>/dev/null; }
 e2fsck -fn /dev/vgtest/lv1 >/dev/null 2>&1 && echo "LV e2fsck clean" || { echo "LV e2fsck ISSUES"; rc=1; }
 echo "PV after: $(pvs --noheadings -o pv_size "${LD}p1" 2>/dev/null | tr -d ' ')（应仍为旧值，pvresize 归调用方）"
-sgdisk -v "$T" >/dev/null 2>&1 && echo "sgdisk clean" || { echo "sgdisk ISSUES"; rc=1; }
+sgdisk_check "$T"
 exit $rc

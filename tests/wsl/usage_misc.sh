@@ -25,7 +25,7 @@ chk() {
   if [ "$2" != "-" ]; then
     [ "$2" = "$(mdsum "${LD}p$1")" ] && echo "p$1 DEV OK" || { echo "p$1 DEV CORRUPT"; rc=1; }
   fi
-  e2fsck -fn "${LD}p$1" >/dev/null 2>&1 && echo "p$1 e2fsck clean" || { echo "p$1 e2fsck ISSUES"; rc=1; }
+  fsck_check "${LD}p$1" "p$1"
   losetup -d "$LD"
 }
 
@@ -63,5 +63,5 @@ $B set --yes "$T":1 flag esp off 2>&1 | head -1
 $B set --yes "$T":1 uuid 12345678-1234-1234-1234-123456789abc 2>&1 | head -1
 blkid -s LABEL -o value /dev/null 2>/dev/null
 LD=$(lo_attach "$T"); blkid -s LABEL -o value "${LD}p1"; losetup -d "$LD"
-sgdisk -v "$T" >/dev/null 2>&1 && echo "sgdisk clean" || { echo "sgdisk ISSUES"; rc=1; }
+sgdisk_check "$T"
 exit $rc

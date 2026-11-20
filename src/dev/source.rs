@@ -512,7 +512,7 @@ pub(crate) fn target_node_is_block(path: &Path) -> crate::domain::Fact<bool> {
     match std::fs::metadata(path) {
         Ok(meta) => Fact::Known(meta.file_type().is_block_device()),
         Err(e) if e.kind() == io::ErrorKind::NotFound => Fact::Absent,
-        Err(e) => Fact::Undecidable(format!("cannot stat {}: {e}", path.display())),
+        Err(e) => Fact::Undecidable(crate::support::cannot_stat(path.display(), e)),
     }
 }
 

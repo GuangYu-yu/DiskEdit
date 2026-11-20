@@ -36,7 +36,7 @@ lo_detach "$LD"
 OUT=$($B resize --yes "$T":1 900M 2>&1); E=$?
 echo "exit=$E"
 LD=$(lo_attach "$T"); mount_at "${LD}p1" "$TEST_MNT" && { echo "after fs: $(df -h --output=size "$TEST_MNT" | tail -1)"; [ "$MC" = "$(mdsum "$TEST_MNT"/f.bin)" ] && echo "B DATA OK" || { echo "B DATA CORRUPT"; rc=1; }; umount "$TEST_MNT" 2>/dev/null; }
-e2fsck -fn "${LD}p1" >/dev/null 2>&1 && echo "B e2fsck clean" || { echo "B e2fsck ISSUES"; rc=1; }
+fsck_check "${LD}p1" "B"
 lo_detach "$LD"
 [ "$E" = "0" ] && echo "B OK" || { echo "B WRONG EXIT ($E)"; rc=1; }
 

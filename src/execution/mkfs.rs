@@ -22,29 +22,11 @@ impl FsCreate {
     /// 载荷换算成字节区间。零长度、长度溢出、起点溢出都说明计划没有经过装配
     fn byte_range(&self, sector_size: u64) -> Result<(u64, u64), String> {
         if self.sectors == 0 {
-            return Err(format!(
-                "partition {}: the create step covers zero sectors",
-                self.part
-            ));
+            return Err(format!("partition {}: the create step covers zero sectors", self.part));
         }
-        let len = self.sectors.checked_mul(sector_size).ok_or_else(|| {
-            format!(
-                "partition {}: {} sectors of {sector_size} bytes overflow the address space",
-                self.part, self.sectors
-            )
-        })?;
-        let base = self.first_lba.checked_mul(sector_size).ok_or_else(|| {
-            format!(
-                "partition {}: start LBA {} overflows the address space",
-                self.part, self.first_lba
-            )
-        })?;
-        if base.checked_add(len).is_none() {
-            return Err(format!(
-                "partition {}: byte range {base}+{len} overflows the address space",
-                self.part
-            ));
-        }
+        let len = super::region_bytes(self.part, self.sectors, sector_size)?;
+        let base =
+            super::region_at(self.part, super::RangeRole::Sole, self.first_lba, sector_size, len)?;
         Ok((base, len))
     }
 }

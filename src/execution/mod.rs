@@ -39,6 +39,58 @@ use crate::recovery::Relocation;
 use crate::table::TableStep;
 use std::io;
 
+/// 计划步骤里一段字节区间的归属：拒绝措辞的前缀。`Sole` 是计划中只有一段区间的
+/// 步骤（`FsResize`、`FsCreate`）；复制步骤有源、目标两段。
+#[derive(Clone, Copy)]
+enum RangeRole {
+    Sole,
+    Source,
+    Target,
+}
+
+impl RangeRole {
+    fn prefix(self) -> &'static str {
+        match self {
+            Self::Sole => "",
+            Self::Source => "source ",
+            Self::Target => "target ",
+        }
+    }
+}
+
+/// 一段扇区数的字节长度。溢出说明计划没有经过装配：`FsResize`、`FsCreate` 与
+/// `CopyPartition` 的几何字段相同的部分都从这里换算，措辞只在这里有一份。
+fn region_bytes(part: u32, sectors: u64, sector_size: u64) -> Result<u64, String> {
+    sectors.checked_mul(sector_size).ok_or_else(|| {
+        format!("partition {part}: {sectors} sectors of {sector_size} bytes overflow the address space")
+    })
+}
+
+/// 一段区间的起始字节：起点乘法与「起点 + 长度」都不允许溢出。`len` 由
+/// [`region_bytes`] 算出，调用方在同一份长度上补自己的额外判据（目标字节数一致、
+/// 盘内边界与重叠）。
+fn region_at(
+    part: u32,
+    role: RangeRole,
+    first_lba: u64,
+    sector_size: u64,
+    len: u64,
+) -> Result<u64, String> {
+    let base = first_lba.checked_mul(sector_size).ok_or_else(|| {
+        format!(
+            "partition {part}: {}start LBA {first_lba} overflows the address space",
+            role.prefix()
+        )
+    })?;
+    if base.checked_add(len).is_none() {
+        return Err(format!(
+            "partition {part}: {}byte range {base}+{len} overflows the address space",
+            role.prefix()
+        ));
+    }
+    Ok(base)
+}
+
 /// 搬移进度的内存载体：条目内块位置、全局块游标与已完成步骤数都从这里读写。
 ///
 /// 续跑时由恢复记录注入（见 [`journal_state`]），执行过程中只前进。字段私有：读取只有
@@ -632,7 +684,7 @@ fn prepare_steps<'a>(
                 "this plan relocates data but no chunk size was given",
             ));
         };
-        const MIN_CHUNK: u64 = 1024 * 1024;
+        const MIN_CHUNK: u64 = crate::support::MIB_BYTES;
         const MAX_CHUNK: u64 = 64 * 1024 * 1024;
         if !(MIN_CHUNK..=MAX_CHUNK).contains(&chunk) || chunk % sector_size != 0 {
             return Err(RunOutcome::refused(format!(
@@ -898,7 +950,7 @@ fn journal_state(src: &WriteSource, steps: &[PreparedStep]) -> Result<TransferSt
 /// （[`crate::support::DEFAULT_CHUNK_BYTES`]，4 MiB）是两件事，故不共用一个名字：
 /// 这个值同时是恢复记录的步长下限——`Transfer` 每前进 `max(ChunkSize, 8 MiB)`
 /// 替换一次记录并只更新 `cursor`，而 `resize` 不登记 `--chunk`，恢复粒度取该下限
-pub(crate) const RESIZE_CHUNK_BYTES: u64 = 8 * 1024 * 1024;
+pub(crate) const RESIZE_CHUNK_BYTES: u64 = 8 * crate::support::MIB_BYTES;
 
 #[cfg(test)]
 mod tests {

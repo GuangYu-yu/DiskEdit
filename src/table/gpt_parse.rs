@@ -1,5 +1,7 @@
 //! GPT 头与条目数组的解析、校验和状态判定（只读）。
 
+use std::mem::offset_of;
+
 use super::*;
 
 /// GPT 头签名（UEFI Specification §5.3.2 Table 5.5：Header offset 0、长 8 字节 ASCII）
@@ -157,33 +159,36 @@ pub(crate) enum HeaderProbe {
 /// 探测 LBA1 的原始头（前 92 字节为规范固定字段，其后至 HeaderSize 为保留区；
 /// UEFI 2.10 §5.3.2 Table 5.5 布局），校验签名 + 头 CRC
 pub(crate) fn probe_header(sector: &[u8]) -> HeaderProbe {
-    if &sector[0..8] != GPT_SIGNATURE {
+    if &sector[..GPT_SIGNATURE.len()] != GPT_SIGNATURE {
         return HeaderProbe::Absent;
     }
-    let hdr_size = rd_u32(sector, 12) as usize; // signature[8] revision[4] 之后才是 header_size
+    let hdr_size = rd_u32(sector, offset_of!(GptHeaderLayout, header_size)) as usize;
     if hdr_size < GPT_MIN_HEADER_SIZE as usize || hdr_size as u64 > sector.len() as u64 {
         return HeaderProbe::Damaged("invalid GPT header size");
     }
-    let stored_crc = rd_u32(sector, 16);
+    let crc_at = offset_of!(GptHeaderLayout, header_crc32);
+    let stored_crc = rd_u32(sector, crc_at);
     // UEFI 2.10 §5.3.2 Table 5.5：HeaderCRC32 是"把本字段置 0 后对 HeaderSize 字节算的 CRC"，
     // 不是固定 92 字节——同节还写明 HeaderSize ≥ 92、≤ 逻辑块大小，"may increase in the future"。
     // 按固定 92 字节切片对任何合法的更大 HeaderSize 会误判 CRC
     // （上面的 hdr_size 校验已保证 92 ≤ hdr_size ≤ 扇区长度，按它切片不会越界）
     let mut tmp = sector[..hdr_size].to_vec();
-    tmp[16..20].fill(0); // CRC 字段置 0 后计算（规范要求）
+    tmp[crc_at..crc_at + GPT_CRC_BYTES].fill(0); // CRC 字段置 0 后计算（规范要求）
     if crc32(&tmp) != stored_crc {
         return HeaderProbe::Damaged("GPT header CRC mismatch");
     }
+    let guid = offset_of!(GptHeaderLayout, disk_guid);
+    let entry_lba = offset_of!(GptHeaderLayout, partition_entry_lba);
     HeaderProbe::Present(RawHeader {
-        revision: rd_u32(sector, 8),
-        primary_lba: rd_u64(sector, 24),
-        backup_lba: rd_u64(sector, 32),
-        first_usable_lba: rd_u64(sector, 40),
-        last_usable_lba: rd_u64(sector, 48),
-        disk_guid: sector[56..72].try_into().unwrap(),
-        partition_entry_lba: rd_u64(sector, 72),
-        number_of_partition_entries: rd_u32(sector, 80),
-        size_of_partition_entry: rd_u32(sector, 84),
+        revision: rd_u32(sector, offset_of!(GptHeaderLayout, revision)),
+        primary_lba: rd_u64(sector, offset_of!(GptHeaderLayout, my_lba)),
+        backup_lba: rd_u64(sector, offset_of!(GptHeaderLayout, alternate_lba)),
+        first_usable_lba: rd_u64(sector, offset_of!(GptHeaderLayout, first_usable_lba)),
+        last_usable_lba: rd_u64(sector, offset_of!(GptHeaderLayout, last_usable_lba)),
+        disk_guid: sector[guid..entry_lba].try_into().unwrap(),
+        partition_entry_lba: rd_u64(sector, entry_lba),
+        number_of_partition_entries: rd_u32(sector, offset_of!(GptHeaderLayout, number_of_partition_entries)),
+        size_of_partition_entry: rd_u32(sector, offset_of!(GptHeaderLayout, size_of_partition_entry)),
         header_size: hdr_size as u32,
     })
 }
@@ -480,12 +485,17 @@ pub(crate) fn parse_backup(src: &FileSource, ss: u64, pmbr: PmbrSize) -> ParsedC
 pub(crate) fn parse_entry(b: &[u8]) -> GPTPartitionEntry {
     let mut name_bytes = [0u8; ENTRY_NAME_LEN];
     name_bytes.copy_from_slice(&b[ENTRY_NAME_OFFSET..ENTRY_NAME_OFFSET + ENTRY_NAME_LEN]);
+    let ty = offset_of!(GptEntryLayout, partition_type_guid);
+    let uniq = offset_of!(GptEntryLayout, unique_partition_guid);
+    let start = offset_of!(GptEntryLayout, starting_lba);
+    let end = offset_of!(GptEntryLayout, ending_lba);
+    let attr = offset_of!(GptEntryLayout, attributes);
     GPTPartitionEntry {
-        partition_type_guid: b[0..16].try_into().unwrap(),
-        unique_partition_guid: b[16..32].try_into().unwrap(),
-        starting_lba: rd_u64(b, 32),
-        ending_lba: rd_u64(b, 40),
-        attribute_bits: rd_u64(b, 48),
+        partition_type_guid: b[ty..uniq].try_into().unwrap(),
+        unique_partition_guid: b[uniq..start].try_into().unwrap(),
+        starting_lba: rd_u64(b, start),
+        ending_lba: rd_u64(b, end),
+        attribute_bits: rd_u64(b, attr),
         partition_name: decode_name(&name_bytes),
     }
 }
@@ -566,7 +576,7 @@ pub(crate) fn gpt_header_parseable(src: &FileSource) -> io::Result<bool> {
 pub(crate) fn pmbr_size_state(src: &FileSource, table_ss: u64) -> io::Result<PmbrSize> {
     let mut lba0 = [0u8; MBR_SECTOR_BYTES];
     src.read_at(0, &mut lba0)?;
-    let size = rd_u32(&lba0, 446 + 12);
+    let size = rd_u32(&lba0, mbr_entry_range(0).start + offset_of!(MbrEntryLayout, size_in_lba));
     let e = size_in_lba(src.size / table_ss);
     let e512 = size_in_lba(src.size / crate::domain::SectorSize::MIN_BYTES);
     if size == e {

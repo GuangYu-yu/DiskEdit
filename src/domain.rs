@@ -116,7 +116,9 @@ impl Align {
         match self.0 {
             AlignKind::None => None,
             AlignKind::Mib(mib) => {
-                let unit = (u64::from(mib) << 20).checked_div(table_sector_size).unwrap_or(0);
+                let unit = (u64::from(mib) * crate::support::MIB_BYTES)
+                    .checked_div(table_sector_size)
+                    .unwrap_or(0);
                 (unit > 0).then_some(unit)
             }
         }
@@ -146,8 +148,8 @@ impl std::error::Error for AlignError {}
 /// 可识别的文件系统种类。只列可挂载文件系统；swap 区与 LVM2 物理卷不是文件系统，
 /// 由 [`ContentKind`] 的独立变体表达。
 ///
-/// ext2/3/4 收敛为一个 `Ext`：0xEF53 区分不出 2/3/4，而 e2fsck/resize2fs/tune2fs 对
-/// 三者通用；`--fs` 请求的具体 extN 由 `MkfsFs` 承载
+/// ext2/3/4 收敛为一个 `Ext`：超级块 magic（[`crate::fsid`] 的 `EXT_MAGIC`）区分不出
+/// 2/3/4，而 e2fsck/resize2fs/tune2fs 对三者通用；`--fs` 请求的具体 extN 由 `MkfsFs` 承载
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum FsKind {
     Squashfs,

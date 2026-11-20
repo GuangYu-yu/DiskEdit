@@ -50,7 +50,7 @@ record_absent "$T" && echo "A3 RECORD DROPPED OK (exit=$E)" || { echo "A3 RECORD
 exp "$E" 0 "A3 续跑完成"
 LD=$(lo_attach "$T")
 [ "$MD2" = "$(mdsum "${LD}p2")" ] && echo "A3 p2 DEV OK" || { echo "A3 p2 DEV CORRUPT"; rc=1; }
-e2fsck -fn "${LD}p2" >/dev/null 2>&1 && echo "A3 e2fsck clean" || { echo "A3 e2fsck ISSUES"; rc=1; }
+fsck_check "${LD}p2" "A3"
 lo_detach "$LD"
 
 echo

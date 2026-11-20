@@ -235,7 +235,7 @@ pub(crate) fn block_names(root: &Path) -> io::Result<Vec<String>> {
         // 这一层只有整盘
         let kind = entry
             .file_type()
-            .map_err(|e| io::Error::other(format!("cannot stat {}: {e}", entry.path().display())))?;
+            .map_err(|e| io::Error::other(crate::support::cannot_stat(entry.path().display(), e)))?;
         if !kind.is_dir() && !kind.is_symlink() {
             continue;
         }

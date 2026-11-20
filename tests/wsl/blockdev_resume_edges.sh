@@ -40,7 +40,7 @@ for kind in trunc junk magic; do
   echo "[$kind] exit=$E resume_used=$RS"
   LD=$(lo_attach "$T")
   [ "$M2" = "$(mdsum "${LD}p2")" ] && echo "  p2 DEV OK" || { echo "  p2 DEV CORRUPT"; rc=1; }
-  e2fsck -fn "${LD}p2" >/dev/null 2>&1 && echo "  p2 e2fsck clean" || { echo "  p2 e2fsck ISSUES"; rc=1; }
+  fsck_check "${LD}p2" "  p2"
   lo_detach "$LD"
   sgdisk -v "$T" >/dev/null 2>&1 && echo "  sgdisk clean" || { echo "  sgdisk ISSUES"; rc=1; }
 done
@@ -68,7 +68,7 @@ echo "resume: $(echo "$OUT" | grep -o 'resuming at chunk [0-9]*')  (分区 100M 
 LD=$(lo_attach "$T")
 mount_at "${LD}p2" "$TEST_MNT" && dd if=/dev/urandom of="$TEST_MNT/b2" bs=1M count=20 2>/dev/null && umount "$TEST_MNT"
 lo_detach "$LD"
-sgdisk -v "$T" >/dev/null 2>&1 && echo "sgdisk clean" || { echo "sgdisk ISSUES"; rc=1; }
+sgdisk_check "$T"
 
 echo
 echo "########## D: --align ##########"

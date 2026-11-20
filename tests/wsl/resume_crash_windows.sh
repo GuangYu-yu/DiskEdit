@@ -39,7 +39,7 @@ check_data() { # $1=img
   e2fsck -fn "${LD}p2" >/dev/null 2>&1 || { echo "p2 e2fsck FAILED"; rc=1; }
   e2fsck -fn "${LD}p3" >/dev/null 2>&1 || { echo "p3 e2fsck FAILED"; rc=1; }
   losetup -d "$LD"
-  sgdisk -v "$T" >/dev/null 2>&1 && echo "sgdisk clean" || { echo "sgdisk ISSUES"; rc=1; }
+  sgdisk_check "$T"
   return $rc
 }
 
@@ -147,5 +147,5 @@ MD2G=$(mdsum "${LD}p2")
 [ "$MD2" = "$MD2G" ] && echo "p2 DATA OK" || { echo "p2 DATA CORRUPT (got $MD2G)"; rc=1; }
 e2fsck -fn "${LD}p2" >/dev/null 2>&1 && echo "e2fsck clean" || { echo "e2fsck FAILED"; rc=1; }
 losetup -d "$LD"
-sgdisk -v "$T" >/dev/null 2>&1 && echo "sgdisk clean" || { echo "sgdisk ISSUES"; rc=1; }
+sgdisk_check "$T"
 exit $rc

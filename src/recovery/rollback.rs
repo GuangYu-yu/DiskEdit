@@ -305,7 +305,7 @@ fn mbr_preimage_ranges(restore: &[RestoreEntry]) -> Option<Vec<(u64, u64)>> {
     }
     let mut out = Vec::new();
     for slot in 0..4 {
-        let entry = &sector[446 + slot * 16..446 + (slot + 1) * 16];
+        let entry = &sector[crate::table::mbr_entry_range(slot)];
         let kind = entry[4];
         if kind == 0 {
             continue;

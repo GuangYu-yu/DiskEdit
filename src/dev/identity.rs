@@ -165,6 +165,9 @@ pub(crate) fn fnv1a64(bytes: &[u8]) -> u64 {
 /// 持久状态的默认落点
 pub(crate) const DEFAULT_STATE_DIR: &str = "/var/lib/diskedit";
 
+/// 覆盖状态根的环变量名（测试 / 容器 / 打包用），两套根共用同一个名字
+pub(crate) const STATE_DIR_ENV: &str = "DISKEDIT_STATE_DIR";
+
 /// 持久状态的落点目录（恢复记录 / 锁 / 日志）。
 ///
 /// 默认取 `/var/lib/diskedit`：FHS §5.8 把 `/var/lib/<name>` 规定为应用/系统级、跨重启
@@ -175,7 +178,7 @@ pub(crate) const DEFAULT_STATE_DIR: &str = "/var/lib/diskedit";
 /// / `$HOME` 回退链：落点随运行用户与调用环境变化，记录与锁的命名空间就会
 /// 漂移，撤销窗口和续传现场随之找不到。同一次未收尾作业的所有调用必须给同一个值
 pub(crate) fn state_dir() -> PathBuf {
-    match std::env::var_os("DISKEDIT_STATE_DIR") {
+    match std::env::var_os(STATE_DIR_ENV) {
         Some(v) if !v.is_empty() => PathBuf::from(v),
         _ => PathBuf::from(DEFAULT_STATE_DIR),
     }
@@ -194,7 +197,7 @@ pub(crate) fn state_dir() -> PathBuf {
 /// 继续。换用户（如 `sudo`）或换根后旧记录不在新进程的寻址域内，需用
 /// `records scan <image_state_root>` 在原根下枚举
 pub(crate) fn image_state_root() -> Option<PathBuf> {
-    if let Some(v) = std::env::var_os("DISKEDIT_STATE_DIR")
+    if let Some(v) = std::env::var_os(STATE_DIR_ENV)
         && !v.is_empty()
     {
         return Some(PathBuf::from(v));
@@ -534,8 +537,8 @@ fn same_file(_a: &Path, _b: &Path) -> bool {
     false
 }
 
-// 落盘文件名的词表：log / lock 两类伴随文件只在这里定义一次，派生点（身份构造、
-// 日志落点）都取自这里。命名空间只在宏体里出现一次，各常量只提供自己的 stem
+// 落盘文件名的词表：记录目录后缀与 log / lock 两类伴随文件都在这里，派生点
+// （身份构造、日志落点）都取自这些常量，不另写字形
 macro_rules! sidecar_suffix {
     ($stem:literal) => {
         concat!(".diskedit.", $stem)

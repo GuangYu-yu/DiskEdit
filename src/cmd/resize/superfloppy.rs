@@ -44,7 +44,7 @@ pub(crate) fn cmd_resize_superfloppy(a: &ResizeRequest) -> crate::outcome::RunOu
     }
     // FS 类型在锁下识别：整盘可在取锁前被重新格式化，类型判据必须锚定独占权之后的内容
     let fstype = fsid::identify(&src, 0, cur_bytes)
-        .unwrap_or_else(|e| bail_fail(RunOutcome::no_mutation(format!("identify failed: {e}"))));
+        .unwrap_or_else(|e| bail_fail(RunOutcome::no_mutation(crate::support::identify_failed(&e))));
     if matches!(
         fstype,
         fsid::ContentKind::Lvm2Pv | fsid::ContentKind::Swap | fsid::ContentKind::Unknown

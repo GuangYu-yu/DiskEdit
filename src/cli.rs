@@ -1411,8 +1411,12 @@ fn require_part(part: Option<PartSelector>, message: &str) -> Option<PartSelecto
 /// `--type-guid` 的值域：GPT 用标准文本形 8-4-4-4-12（输入接受
 /// 大写），MBR 用 `0xNN` 两位十六进制；其余写法不在值域内
 fn parse_type_guid(text: &str) -> Result<TypeSelector, String> {
-    const SHAPE: &str =
-        "a GUID in 8-4-4-4-12 form (e.g. 0fc63daf-8483-4772-8e79-3d69d8477de4) or an MBR type byte 0xNN";
+    let shape = || {
+        format!(
+            "a GUID in 8-4-4-4-12 form (e.g. {}) or an MBR type byte 0xNN",
+            crate::table::LINUX_DATA_GUID
+        )
+    };
     if let Some(hex) = text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
         if hex.len() == 2
             // audit-allow: S2-19
@@ -1420,12 +1424,12 @@ fn parse_type_guid(text: &str) -> Result<TypeSelector, String> {
         {
             return Ok(TypeSelector::Mbr(byte));
         }
-        return Err(SHAPE.to_string());
+        return Err(shape());
     }
     if text.len() != 36 {
-        return Err(SHAPE.to_string());
+        return Err(shape());
     }
-    parse_guid(text).map(TypeSelector::Guid).ok_or_else(|| SHAPE.to_string())
+    parse_guid(text).map(TypeSelector::Guid).ok_or_else(shape)
 }
 
 fn build_info(p: &Positionals, o: Options) -> Request {
@@ -2164,10 +2168,10 @@ pub(crate) fn parse_size_delta(s: &str) -> Option<SizeArg> {
         return Some(SizeArg::Percent { kind, num, denom });
     }
     let (mult, text) = match rest.as_bytes().last()? {
-        b'k' | b'K' => (1024u64, &rest[..rest.len() - 1]),
-        b'm' | b'M' => (1024 * 1024, &rest[..rest.len() - 1]),
-        b'g' | b'G' => (1024 * 1024 * 1024, &rest[..rest.len() - 1]),
-        b't' | b'T' => (1024u64 * 1024 * 1024 * 1024, &rest[..rest.len() - 1]),
+        b'k' | b'K' => (crate::support::KIB_BYTES, &rest[..rest.len() - 1]),
+        b'm' | b'M' => (crate::support::MIB_BYTES, &rest[..rest.len() - 1]),
+        b'g' | b'G' => (crate::support::GIB_BYTES, &rest[..rest.len() - 1]),
+        b't' | b'T' => (crate::support::TIB_BYTES, &rest[..rest.len() - 1]),
         b'0'..=b'9' | b'.' => (1u64, rest),
         _ => return None,
     };
@@ -2330,12 +2334,10 @@ mod tests {
     /// 选项总表与注册表双向对账。两个语种各有一份表，逐份比对
     #[test]
     fn internals_options_match_the_registry() {
-        const DOCS: &[(&str, &str, &str)] = &[
-            ("docs/en/internals.md", "## Options", include_str!("../docs/en/internals.md")),
-            ("docs/zh/internals.md", "## 选项", include_str!("../docs/zh/internals.md")),
-        ];
-        for (doc, heading, text) in DOCS {
-            check_options_table(doc, heading, text);
+        use crate::docs::published::{DocRole, DOCS};
+        for doc in DOCS.iter().filter(|d| d.role == DocRole::Internals) {
+            let heading = if doc.is_zh() { "## 选项" } else { "## Options" };
+            check_options_table(doc.path, heading, &doc.text());
         }
 
         fn check_options_table(doc: &str, heading: &str, text: &str) {
@@ -2395,17 +2397,10 @@ mod tests {
     /// 用法行（含 `<...>` 占位符）不在此列——那里用 `[OPTIONS]` 概括，不逐旗标展开。
     #[test]
     fn documented_examples_pass_the_confirmation_gate() {
-        const DOCS: &[(&str, &str)] = &[
-            ("README.md", include_str!("../README.md")),
-            ("README.zh-CN.md", include_str!("../README.zh-CN.md")),
-            ("docs/en/interop.md", include_str!("../docs/en/interop.md")),
-            ("docs/en/reference.md", include_str!("../docs/en/reference.md")),
-            ("docs/zh/interop.md", include_str!("../docs/zh/interop.md")),
-            ("docs/zh/internals.md", include_str!("../docs/zh/internals.md")),
-            ("docs/zh/reference.md", include_str!("../docs/zh/reference.md")),
-        ];
+        use crate::docs::published::DOCS;
         let mut checked = 0;
-        for (file, text) in DOCS {
+        for doc in DOCS {
+            let text = doc.text();
             for (index, line) in text.lines().enumerate() {
                 let line = line.trim();
                 let Some(rest) = line.strip_prefix("diskedit ") else { continue };
@@ -2427,7 +2422,8 @@ mod tests {
                 if def.confirmation == Confirmation::Required {
                     assert!(
                         line.contains("--yes"),
-                        "{file}:{}: an example for `{}` must pass --yes, or it exits 2: {line}",
+                        "{}:{}: an example for `{}` must pass --yes, or it exits 2: {line}",
+                        doc.path,
                         index + 1,
                         def.name
                     );
@@ -2490,10 +2486,21 @@ mod tests {
         }
     }
 
+    /// 帮助里的 GUID 示例取自表侧常量，不是第三次手写
+    #[test]
+    fn type_guid_flag_example_is_the_linux_data_guid() {
+        let spec = super::flag_spec("--type-guid").expect("--type-guid is registered");
+        assert!(
+            spec.desc.contains(crate::table::LINUX_DATA_GUID),
+            "--type-guid help must show {}: {}",
+            crate::table::LINUX_DATA_GUID,
+            spec.desc
+        );
+    }
+
     /// 白名单与旗标注册表的对账
     #[test]
-    fn flag_whitelists_match_the_registry() {
-        use super::FLAGS;
+    fn flag_whitelists_match_the_registry() {        use super::FLAGS;
         let registry: Vec<&str> = FLAGS.iter().map(|f| f.name).collect();
         for c in COMMANDS {
             for v in c.variants {

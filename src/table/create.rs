@@ -393,6 +393,10 @@ pub const ESP_TYPE_GUID: [u8; 16] = [
     0x28, 0x73, 0x2A, 0xC1, 0x1F, 0xF8, 0xD2, 0x11, 0xBA, 0x4B, 0x00, 0xA0, 0xC9, 0x3E, 0xC9, 0x3B,
 ];
 
+/// Linux filesystem data 类型 GUID 的文本形（小写 8-4-4-4-12）：帮助示例与拒绝提示引用它，
+/// 不再各写一遍。它是 [`LINUX_FS_TYPE_GUID`] 的可读投影，一致性由同目录测试断言
+pub const LINUX_DATA_GUID: &str = "0fc63daf-8483-4772-8e79-3d69d8477de4";
+
 /// Linux filesystem data 类型 GUID（util-linux libfdisk/src/gpt.c GPT_DEFAULT_ENTRY_TYPE，
 /// 标准文本 0FC63DAF-8483-4772-8E79-3D69D8477DE4 的磁盘字节序）
 pub const LINUX_FS_TYPE_GUID: [u8; 16] = [

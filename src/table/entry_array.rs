@@ -22,11 +22,11 @@ pub const DEFAULT_ENTRY_SIZE: u32 = 128;
 
 /// 单条目内规范定义字段的字节数（UEFI 2.10 §5.3.3 Table 5.6）：条目序列化与解析
 /// 都按这个长度切片，其余为保留区
-pub(crate) const ENTRY_FIXED_BYTES: usize = 128;
+pub(crate) const ENTRY_FIXED_BYTES: usize = GPT_ENTRY_FIXED_BYTES;
 
 /// 分区名字段在条目内的起点与长度（UTF-16LE，UEFI 2.10 §5.3.3 Table 5.6）
-pub(crate) const ENTRY_NAME_OFFSET: usize = 56;
-pub(crate) const ENTRY_NAME_LEN: usize = 72;
+pub(crate) const ENTRY_NAME_OFFSET: usize = GPT_ENTRY_NAME_OFFSET;
+pub(crate) const ENTRY_NAME_LEN: usize = GPT_NAME_BYTES;
 
 /// 单条目字节数合规判据：UEFI 2.10 §5.3.3 Table 5.6 规定 SizeOfPartitionEntry = 128 × 2^n，
 /// 前 [`ENTRY_FIXED_BYTES`] 字节为规范定义字段，其余为保留区（必须为零）

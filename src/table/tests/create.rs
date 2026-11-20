@@ -235,3 +235,12 @@ pub(crate) fn a_table_rewritten_after_the_stamp_is_refused() {
     assert_eq!(e.exit_code(), crate::outcome::EXIT_REFUSED);
     assert_eq!(std::fs::read(&src.path).unwrap(), before, "the re-check only reads");
 }
+
+/// 文本形与字节常量是同一份事实的两个投影：帮助与提示引用文本，落盘用字节
+#[test]
+pub(crate) fn linux_data_guid_text_matches_the_byte_constant() {
+    assert_eq!(
+        crate::support::hex_guid(&LINUX_FS_TYPE_GUID).to_lowercase(),
+        LINUX_DATA_GUID
+    );
+}

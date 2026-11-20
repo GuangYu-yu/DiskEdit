@@ -68,9 +68,9 @@ pub(crate) const DETAILS_SCAN: &str = r#"  Enumerate records under a container r
   There is no index yet: every row carries "registered": false."#;
 
 /// 单个文件的读取上限
-const MAX_FILE_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_FILE_BYTES: u64 = 64 * crate::support::MIB_BYTES;
 /// 一次枚举的读取总量上限
-const MAX_TOTAL_BYTES: u64 = 512 * 1024 * 1024;
+const MAX_TOTAL_BYTES: u64 = 512 * crate::support::MIB_BYTES;
 /// 一次枚举的时间上限
 const MAX_ELAPSED: Duration = Duration::from_secs(30);
 /// 布局本身生产的最深目录层数。ROOT 是第 0 层；块设备侧的布局
@@ -272,7 +272,7 @@ impl Budget {
             return Err("the 30 second scan budget was exceeded".to_string());
         }
         let meta = std::fs::symlink_metadata(path)
-            .map_err(|e| format!("cannot stat {}: {e}", path.display()))?;
+            .map_err(|e| crate::support::cannot_stat(path.display(), e))?;
         if !meta.file_type().is_file() {
             return Err(format!("{} is not a regular file", path.display()));
         }
@@ -303,10 +303,10 @@ fn collect_dir(
     let entries = match std::fs::read_dir(dir) {
         Ok(entries) => entries,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(e) => return Err(format!("cannot read {}: {e}", dir.display())),
+        Err(e) => return Err(crate::support::cannot_read(dir.display(), e)),
     };
     for entry in entries {
-        let entry = entry.map_err(|e| format!("cannot read {}: {e}", dir.display()))?;
+        let entry = entry.map_err(|e| crate::support::cannot_read(dir.display(), e))?;
         let name = entry.file_name();
         let text = name.to_str();
         // 锁与残留临时文件按名字排除。非 UTF-8 的名字不可能是这两类，照常探测：名字转
@@ -315,7 +315,7 @@ fn collect_dir(
             continue;
         }
         let path = entry.path();
-        let file_type = entry.file_type().map_err(|e| format!("cannot stat {}: {e}", path.display()))?;
+        let file_type = entry.file_type().map_err(|e| crate::support::cannot_stat(path.display(), e))?;
         if file_type.is_dir() {
             if depth + 1 > MAX_DEPTH {
                 return Err(format!(
@@ -359,13 +359,13 @@ fn is_temp_name(text: &str) -> bool {
 
 /// 主机仓库里的记录目录：`<recovery>/<hash>`。按结构判定，不要求目标存在
 fn host_record_dirs(root: &Path) -> Result<Vec<PathBuf>, String> {
-    let entries = std::fs::read_dir(root).map_err(|e| format!("cannot read {}: {e}", root.display()))?;
+    let entries = std::fs::read_dir(root).map_err(|e| crate::support::cannot_read(root.display(), e))?;
     let mut dirs = Vec::new();
     for entry in entries {
-        let entry = entry.map_err(|e| format!("cannot read {}: {e}", root.display()))?;
+        let entry = entry.map_err(|e| crate::support::cannot_read(root.display(), e))?;
         let path = entry.path();
         // 类型读不出是环境故障：折成"不是目录"会让一条记录目录从结果里消失
-        let file_type = entry.file_type().map_err(|e| format!("cannot stat {}: {e}", path.display()))?;
+        let file_type = entry.file_type().map_err(|e| crate::support::cannot_stat(path.display(), e))?;
         if !file_type.is_dir() {
             continue;
         }
@@ -382,13 +382,13 @@ fn host_record_dirs(root: &Path) -> Result<Vec<PathBuf>, String> {
 
 /// 镜像的记录目录：每用户状态根下的 `<images>/<键摘要>`，以及 `<name>.diskedit` 形式的 sidecar 目录
 fn image_record_dirs(root: &Path) -> Result<Vec<PathBuf>, String> {
-    let entries = std::fs::read_dir(root).map_err(|e| format!("cannot read {}: {e}", root.display()))?;
+    let entries = std::fs::read_dir(root).map_err(|e| crate::support::cannot_read(root.display(), e))?;
     let mut dirs = Vec::new();
     for entry in entries {
-        let entry = entry.map_err(|e| format!("cannot read {}: {e}", root.display()))?;
+        let entry = entry.map_err(|e| crate::support::cannot_read(root.display(), e))?;
         let path = entry.path();
         // 同 [`host_record_dirs`]：类型读不出按环境故障上抛
-        let file_type = entry.file_type().map_err(|e| format!("cannot stat {}: {e}", path.display()))?;
+        let file_type = entry.file_type().map_err(|e| crate::support::cannot_stat(path.display(), e))?;
         if !file_type.is_dir() {
             continue;
         }

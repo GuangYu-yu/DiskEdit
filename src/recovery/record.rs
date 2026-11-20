@@ -22,6 +22,7 @@ use crate::planner::chunk::move_chunk_layout;
 use sha2::{Digest, Sha256};
 
 use super::scene::{Mapping, SceneIdentity, SceneProof};
+use crate::tagged::tagged_enum;
 
 /// 恢复记录文件的标识字节（`D`isk `REC`ord）。布局或字段语义变化时换成新标识；
 /// 不匹配的标识一律解码失败。此标识下的搬移位移是有符号值、搬移段带已拷前缀摘要；
@@ -158,59 +159,26 @@ impl PlanDigest {
     }
 }
 
-/// 记录对应的布局操作。
-///
-/// 码值固定：`New`=1、`Add`=2、`Delete`=3、
-/// `ResizeEnd`=4、`Move`=5、`Copy`=6、`Mkfs`=7、`ResizeFs`=8、`Set`=9、`Resize`=10。
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum OpKind {
-    New,
-    Add,
-    Delete,
-    ResizeEnd,
-    Move,
-    Copy,
-    Mkfs,
-    /// `resizefs`：只动文件系统的扩缩（不写分区表）
-    ResizeFs,
-    /// `set`：分区属性写入（表区的 name/type/flag，或文件系统的 label/uuid）
-    Set,
-    /// `resize` 的一键作业：分区层、文件系统与 LVM 收尾同属一份记录
-    Resize,
+tagged_enum! {
+    /// 记录对应的布局操作。每个变体的码值即下表的值，改码值就是改磁盘格式。
+    pub(crate) enum OpKind {
+        New = 1,
+        Add = 2,
+        Delete = 3,
+        ResizeEnd = 4,
+        Move = 5,
+        Copy = 6,
+        Mkfs = 7,
+        /// `resizefs`：只动文件系统的扩缩（不写分区表）
+        ResizeFs = 8,
+        /// `set`：分区属性写入（表区的 name/type/flag，或文件系统的 label/uuid）
+        Set = 9,
+        /// `resize` 的一键作业：分区层、文件系统与 LVM 收尾同属一份记录
+        Resize = 10,
+    }
 }
 
 impl OpKind {
-    fn tag(self) -> u8 {
-        match self {
-            Self::New => 1,
-            Self::Add => 2,
-            Self::Delete => 3,
-            Self::ResizeEnd => 4,
-            Self::Move => 5,
-            Self::Copy => 6,
-            Self::Mkfs => 7,
-            Self::ResizeFs => 8,
-            Self::Set => 9,
-            Self::Resize => 10,
-        }
-    }
-
-    fn from_tag(tag: u8) -> Option<Self> {
-        match tag {
-            1 => Some(Self::New),
-            2 => Some(Self::Add),
-            3 => Some(Self::Delete),
-            4 => Some(Self::ResizeEnd),
-            5 => Some(Self::Move),
-            6 => Some(Self::Copy),
-            7 => Some(Self::Mkfs),
-            8 => Some(Self::ResizeFs),
-            9 => Some(Self::Set),
-            10 => Some(Self::Resize),
-            _ => None,
-        }
-    }
-
     pub(crate) fn command_name(self) -> &'static str {
         match self {
             Self::New => "new",
@@ -255,63 +223,30 @@ pub(crate) struct LvmPost {
     pub(crate) extent_bytes: u64,
 }
 
-/// 搬移作业的进入语义。续跑据此对号：按另一种语义执行同一份计划，就是把用户的请求
-/// 静默放大或缩水
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum RelocKind {
-    /// 吃满右侧空闲的尾部打包（`resize` 扩容形态）
-    TailPacked,
-    /// 精确落在请求新末端的最小位移（`resize SIZE --allow-move`）
-    Shift,
-}
-
-impl RelocKind {
-    fn tag(self) -> u8 {
-        match self {
-            Self::TailPacked => 0,
-            Self::Shift => 1,
-        }
-    }
-
-    fn from_tag(tag: u8) -> Option<Self> {
-        match tag {
-            0 => Some(Self::TailPacked),
-            1 => Some(Self::Shift),
-            _ => None,
-        }
+tagged_enum! {
+    /// 搬移作业的进入语义。续跑据此对号：按另一种语义执行同一份计划，就是把用户的请求
+    /// 静默放大或缩水
+    pub(crate) enum RelocKind {
+        /// 吃满右侧空闲的尾部打包（`resize` 扩容形态）
+        TailPacked = 0,
+        /// 精确落在请求新末端的最小位移（`resize SIZE --allow-move`）
+        Shift = 1,
     }
 }
 
-/// 表区修复的种类。码值固定：`RelocateBackup`=0、`RepairProtectiveMbr`=1、
-/// `RelocateAndRepair`=2
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum RepairKind {
-    /// 只把备份头搬到容器末端
-    RelocateBackup,
-    /// 只重建保护 MBR 的 SizeInLBA
-    RepairProtectiveMbr,
-    /// 两者一起
-    RelocateAndRepair,
+tagged_enum! {
+    /// 表区修复的种类
+    pub(crate) enum RepairKind {
+        /// 只把备份头搬到容器末端
+        RelocateBackup = 0,
+        /// 只重建保护 MBR 的 SizeInLBA
+        RepairProtectiveMbr = 1,
+        /// 两者一起
+        RelocateAndRepair = 2,
+    }
 }
 
 impl RepairKind {
-    fn tag(self) -> u8 {
-        match self {
-            Self::RelocateBackup => 0,
-            Self::RepairProtectiveMbr => 1,
-            Self::RelocateAndRepair => 2,
-        }
-    }
-
-    fn from_tag(tag: u8) -> Option<Self> {
-        match tag {
-            0 => Some(Self::RelocateBackup),
-            1 => Some(Self::RepairProtectiveMbr),
-            2 => Some(Self::RelocateAndRepair),
-            _ => None,
-        }
-    }
-
     pub(crate) fn name(self) -> &'static str {
         match self {
             Self::RelocateBackup => "relocate the backup GPT",
@@ -321,27 +256,11 @@ impl RepairKind {
     }
 }
 
-/// 修复动作在记录里的状态：`InFlight` = 已开始、结果未记入；`Landed` = 收敛并已记入
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum RepairState {
-    InFlight,
-    Landed,
-}
-
-impl RepairState {
-    fn tag(self) -> u8 {
-        match self {
-            Self::InFlight => 0,
-            Self::Landed => 1,
-        }
-    }
-
-    fn from_tag(tag: u8) -> Option<Self> {
-        match tag {
-            0 => Some(Self::InFlight),
-            1 => Some(Self::Landed),
-            _ => None,
-        }
+tagged_enum! {
+    /// 修复动作在记录里的状态：`InFlight` = 已开始、结果未记入；`Landed` = 收敛并已记入
+    pub(crate) enum RepairState {
+        InFlight = 0,
+        Landed = 1,
     }
 }
 
@@ -355,32 +274,15 @@ pub(crate) struct RepairFact {
     pub(crate) state: RepairState,
 }
 
-/// 表步围栏：没有搬移计划的记录（表类命令）用它表达"表可能已写"。
-/// `Pending` = 表步未开始，`InFlight` = 已开始、结果未记入，`Landed` = 已写并记入
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) enum TableFence {
-    #[default]
-    Pending,
-    InFlight,
-    Landed,
-}
-
-impl TableFence {
-    fn tag(self) -> u8 {
-        match self {
-            Self::Pending => 0,
-            Self::InFlight => 1,
-            Self::Landed => 2,
-        }
-    }
-
-    fn from_tag(tag: u8) -> Option<Self> {
-        match tag {
-            0 => Some(Self::Pending),
-            1 => Some(Self::InFlight),
-            2 => Some(Self::Landed),
-            _ => None,
-        }
+tagged_enum! {
+    /// 表步围栏：没有搬移计划的记录（表类命令）用它表达"表可能已写"。
+    /// `Pending` = 表步未开始，`InFlight` = 已开始、结果未记入，`Landed` = 已写并记入
+    #[derive(Default)]
+    pub(crate) enum TableFence {
+        #[default]
+        Pending = 0,
+        InFlight = 1,
+        Landed = 2,
     }
 }
 
@@ -424,6 +326,15 @@ pub(crate) struct Relocation {
     pub(crate) ss: u64,
 }
 
+/// 恢复动作的码值。三个动作之后都跟一个 u64，`InspectOnly` 的载荷为零
+const ACTION_CONTINUE: u8 = 1;
+const ACTION_ROLLBACK: u8 = 2;
+const ACTION_INSPECT_ONLY: u8 = 3;
+
+/// 目标身份材料的码值。两类之后各跟自己的字段
+const MATERIAL_BLOCK: u8 = 1;
+const MATERIAL_IMAGE: u8 = 2;
+
 /// 恢复动作
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RecoveryAction {
@@ -434,81 +345,40 @@ pub(crate) enum RecoveryAction {
 
 impl RecoveryAction {
     fn write(self, out: &mut Vec<u8>) {
-        match self {
-            Self::Continue(cursor) => {
-                out.push(1);
-                out.extend(cursor.to_le_bytes());
-            }
-            Self::Rollback(point) => {
-                out.push(2);
-                out.extend(point.to_le_bytes());
-            }
-            Self::InspectOnly => {
-                out.push(3);
-                out.extend(0u64.to_le_bytes());
-            }
-        }
+        let (code, value) = match self {
+            Self::Continue(cursor) => (ACTION_CONTINUE, cursor),
+            Self::Rollback(point) => (ACTION_ROLLBACK, point),
+            Self::InspectOnly => (ACTION_INSPECT_ONLY, 0),
+        };
+        out.push(code);
+        out.extend(value.to_le_bytes());
     }
 }
 
-/// 提交状态：越过 durable boundary 后固定为 `Committed`
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum CommitState {
-    Prepared,
-    Committed,
-}
-
-impl CommitState {
-    fn tag(self) -> u8 {
-        match self {
-            Self::Prepared => 0,
-            Self::Committed => 1,
-        }
-    }
-
-    fn from_tag(tag: u8) -> Option<Self> {
-        match tag {
-            0 => Some(Self::Prepared),
-            1 => Some(Self::Committed),
-            _ => None,
-        }
+tagged_enum! {
+    /// 提交状态：越过 durable boundary 后固定为 `Committed`
+    pub(crate) enum CommitState {
+        Prepared = 0,
+        Committed = 1,
     }
 }
 
-/// 留存状态：清理判据的唯一来源。
-///
-/// 本构建只写 `Active`（`Record::new`）。`CommittedPending` / `Unverified` /
-/// `Quarantined` 只从盘上读出：记录带着它们时仍按结构识别、由 `inspect` 原样报出；
-/// `Unverified` / `Quarantined` 不签发清理许可。这三种在本构建没有写入点，见
-/// [`crate::recovery::cleanup`] 的许可判据
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Retention {
-    Active,
-    CommittedPending,
-    Unverified,
-    Quarantined,
+tagged_enum! {
+    /// 留存状态：清理判据的唯一来源。
+    ///
+    /// 本构建只写 `Active`（`Record::new`）。`CommittedPending` / `Unverified` /
+    /// `Quarantined` 只从盘上读出：记录带着它们时仍按结构识别、由 `inspect` 原样报出；
+    /// `Unverified` / `Quarantined` 不签发清理许可。这三种在本构建没有写入点，见
+    /// [`crate::recovery::cleanup`] 的许可判据
+    pub(crate) enum Retention {
+        Active = 0,
+        CommittedPending = 1,
+        Unverified = 2,
+        Quarantined = 3,
+    }
 }
 
 impl Retention {
-    fn tag(self) -> u8 {
-        match self {
-            Self::Active => 0,
-            Self::CommittedPending => 1,
-            Self::Unverified => 2,
-            Self::Quarantined => 3,
-        }
-    }
-
-    fn from_tag(tag: u8) -> Option<Self> {
-        match tag {
-            0 => Some(Self::Active),
-            1 => Some(Self::CommittedPending),
-            2 => Some(Self::Unverified),
-            3 => Some(Self::Quarantined),
-            _ => None,
-        }
-    }
-
     /// `Unverified` 与 `Quarantined` 不允许清理
     pub(crate) fn allows_cleanup(self) -> bool {
         match self {
@@ -1073,53 +943,40 @@ impl Record {
         out.extend(self.progress.completed_steps.to_le_bytes());
         out.extend(self.progress.transfer_cursor.to_le_bytes());
         out.push(self.progress.fs_phase);
-        match self.old_range {
-            None => out.push(0),
-            Some((start, end)) => {
-                out.push(1);
-                out.extend(start.to_le_bytes());
-                out.extend(end.to_le_bytes());
+        write_opt(&mut out, self.old_range, |out, (start, end)| {
+            out.extend(start.to_le_bytes());
+            out.extend(end.to_le_bytes());
+        });
+        write_opt(&mut out, self.target_range, |out, (start, end)| {
+            out.extend(start.to_le_bytes());
+            out.extend(end.to_le_bytes());
+        });
+        write_opt(&mut out, self.lvm_post, |out, post| {
+            out.extend(post.lv_size_before.to_le_bytes());
+            out.extend(post.lv_target.to_le_bytes());
+            out.extend(post.extent_bytes.to_le_bytes());
+        });
+        write_opt(&mut out, self.relocation.as_ref(), |out, r| {
+            out.extend(
+                (u32::try_from(r.entries.len()).expect("relocation entry count fits in 32 bits"))
+                    .to_le_bytes(),
+            );
+            for e in &r.entries {
+                out.extend(e.partition.to_le_bytes());
+                out.extend(e.src_first.to_le_bytes());
+                out.extend(e.len.to_le_bytes());
+                out.extend(e.delta.to_le_bytes());
+                out.push(u8::from(e.is_swap));
             }
-        }
-        match self.target_range {
-            None => out.push(0),
-            Some((start, end)) => {
-                out.push(1);
-                out.extend(start.to_le_bytes());
-                out.extend(end.to_le_bytes());
-            }
-        }
-        match self.lvm_post {
-            None => out.push(0),
-            Some(post) => {
-                out.push(1);
-                out.extend(post.lv_size_before.to_le_bytes());
-                out.extend(post.lv_target.to_le_bytes());
-                out.extend(post.extent_bytes.to_le_bytes());
-            }
-        }
-        match &self.relocation {
-            None => out.push(0),
-            Some(r) => {
-                out.push(1);
-                out.extend((u32::try_from(r.entries.len()).expect("relocation entry count fits in 32 bits")).to_le_bytes());
-                for e in &r.entries {
-                    out.extend(e.partition.to_le_bytes());
-                    out.extend(e.src_first.to_le_bytes());
-                    out.extend(e.len.to_le_bytes());
-                    out.extend(e.delta.to_le_bytes());
-                    out.push(u8::from(e.is_swap));
-                }
-                out.extend(r.entry_index.to_le_bytes());
-                out.extend(r.chunks_in_entry.to_le_bytes());
-                out.extend_from_slice(&r.prefix_digest);
-                out.extend(r.chunk_bytes.to_le_bytes());
-                out.push(r.kind.tag());
-                out.extend(r.grow_part.to_le_bytes());
-                out.extend(r.disk_size.to_le_bytes());
-                out.extend(r.ss.to_le_bytes());
-            }
-        }
+            out.extend(r.entry_index.to_le_bytes());
+            out.extend(r.chunks_in_entry.to_le_bytes());
+            out.extend_from_slice(&r.prefix_digest);
+            out.extend(r.chunk_bytes.to_le_bytes());
+            out.push(r.kind.tag());
+            out.extend(r.grow_part.to_le_bytes());
+            out.extend(r.disk_size.to_le_bytes());
+            out.extend(r.ss.to_le_bytes());
+        });
         self.action.write(&mut out);
         out.push(self.commit.tag());
         out.push(self.retention.tag());
@@ -1343,34 +1200,20 @@ fn read_payload_prefix(c: &mut Cursor<'_>) -> Option<(Record, usize)> {
         transfer_cursor: c.u64()?,
         fs_phase: c.u8()?,
     };
-    let old_range = match c.u8()? {
-        0 => None,
-        1 => Some((c.u64()?, c.u64()?)),
-        _ => return None,
-    };
-    let target_range = match c.u8()? {
-        0 => None,
-        1 => Some((c.u64()?, c.u64()?)),
-        _ => return None,
-    };
-    let lvm_post = match c.u8()? {
-        0 => None,
-        1 => Some(LvmPost {
+    let old_range = read_opt(c, |c| Some((c.u64()?, c.u64()?)))?;
+    let target_range = read_opt(c, |c| Some((c.u64()?, c.u64()?)))?;
+    let lvm_post = read_opt(c, |c| {
+        Some(LvmPost {
             lv_size_before: c.u64()?,
             lv_target: c.u64()?,
             extent_bytes: c.u64()?,
-        }),
-        _ => return None,
-    };
-    let relocation = match c.u8()? {
-        0 => None,
-        1 => Some(read_relocation(c)?),
-        _ => return None,
-    };
+        })
+    })?;
+    let relocation = read_opt(c, read_relocation)?;
     let action = match c.u8()? {
-        1 => RecoveryAction::Continue(c.u64()?),
-        2 => RecoveryAction::Rollback(c.u64()?),
-        3 => {
+        ACTION_CONTINUE => RecoveryAction::Continue(c.u64()?),
+        ACTION_ROLLBACK => RecoveryAction::Rollback(c.u64()?),
+        ACTION_INSPECT_ONLY => {
             c.u64()?;
             RecoveryAction::InspectOnly
         }
@@ -1524,112 +1367,86 @@ fn read_entry(c: &mut Cursor<'_>) -> Option<RestoreEntry> {
     Some(entry)
 }
 
-fn write_scene(scene: &SceneIdentity, out: &mut Vec<u8>) {
-    out.push(match scene.proof() {
-        SceneProof::DeviceId => 1,
-        SceneProof::FileId => 2,
-        SceneProof::Unavailable => 3,
-    });
-    match scene.mapping() {
-        Some(m) => {
-            out.push(1);
-            out.extend(m.major().to_le_bytes());
-            out.extend(m.minor().to_le_bytes());
-        }
+/// 可选段：`None` 写一个零前缀，`Some` 写 1 再写载荷。读写两侧共用同一个前缀语义
+fn write_opt<T>(out: &mut Vec<u8>, value: Option<T>, body: impl FnOnce(&mut Vec<u8>, T)) {
+    match value {
         None => out.push(0),
-    }
-    match scene.id().material() {
-        IdentityMaterial::Block { major, minor, device_id } => {
+        Some(value) => {
             out.push(1);
-            out.extend(major.to_le_bytes());
-            out.extend(minor.to_le_bytes());
-            match device_id {
-                Some(value) => {
-                    out.push(1);
-                    let bytes = value.as_bytes();
-                    out.extend(
-                        u32::try_from(bytes.len()).expect("device ID fits in 32 bits").to_le_bytes(),
-                    );
-                    out.extend_from_slice(bytes);
-                }
-                None => out.push(0),
-            }
+            body(out, value);
         }
-        IdentityMaterial::Image { volume_serial, file_id } => {
-            out.push(2);
-            match volume_serial {
-                Some(value) => {
-                    out.push(1);
-                    out.extend(value.to_le_bytes());
-                }
-                None => out.push(0),
-            }
-            out.extend_from_slice(file_id);
-        }
-    }
-    match scene.size() {
-        Some(size) => {
-            out.push(1);
-            out.extend(size.to_le_bytes());
-        }
-        None => out.push(0),
-    }
-    match scene.file_id() {
-        Some(file_id) => {
-            out.push(1);
-            out.extend_from_slice(&file_id);
-        }
-        None => out.push(0),
     }
 }
 
+/// 读可选段：前缀只有 0/1，其余字节整条拒读
+fn read_opt<T>(
+    c: &mut Cursor<'_>,
+    body: impl FnOnce(&mut Cursor<'_>) -> Option<T>,
+) -> Option<Option<T>> {
+    match c.u8()? {
+        0 => Some(None),
+        1 => Some(Some(body(c)?)),
+        _ => None,
+    }
+}
+
+fn write_scene(scene: &SceneIdentity, out: &mut Vec<u8>) {
+    out.push(scene.proof().tag());
+    write_opt(out, scene.mapping(), |out, m| {
+        out.extend(m.major().to_le_bytes());
+        out.extend(m.minor().to_le_bytes());
+    });
+    match scene.id().material() {
+        IdentityMaterial::Block { major, minor, device_id } => {
+            out.push(MATERIAL_BLOCK);
+            out.extend(major.to_le_bytes());
+            out.extend(minor.to_le_bytes());
+            write_opt(out, device_id.as_deref(), |out, value| {
+                let bytes = value.as_bytes();
+                out.extend(
+                    u32::try_from(bytes.len()).expect("device ID fits in 32 bits").to_le_bytes(),
+                );
+                out.extend_from_slice(bytes);
+            });
+        }
+        IdentityMaterial::Image { volume_serial, file_id } => {
+            out.push(MATERIAL_IMAGE);
+            write_opt(out, *volume_serial, |out, value| {
+                out.extend(value.to_le_bytes());
+            });
+            out.extend_from_slice(file_id);
+        }
+    }
+    write_opt(out, scene.size(), |out, size| {
+        out.extend(size.to_le_bytes());
+    });
+    write_opt(out, scene.file_id(), |out, file_id| {
+        out.extend_from_slice(&file_id);
+    });
+}
+
 fn read_scene(c: &mut Cursor<'_>) -> Option<SceneIdentity> {
-    let proof = match c.u8()? {
-        1 => SceneProof::DeviceId,
-        2 => SceneProof::FileId,
-        3 => SceneProof::Unavailable,
-        _ => return None,
-    };
-    let mapping = match c.u8()? {
-        1 => Some(Mapping::new(c.u64()?, c.u64()?)),
-        0 => None,
-        _ => return None,
-    };
+    let proof = SceneProof::from_tag(c.u8()?)?;
+    let mapping = read_opt(c, |c| Some(Mapping::new(c.u64()?, c.u64()?)))?;
     let id = match c.u8()? {
-        1 => {
+        MATERIAL_BLOCK => {
             let major = c.u32()?;
             let minor = c.u32()?;
-            let device_id = match c.u8()? {
-                1 => {
-                    let len = c.u32()? as usize;
-                    Some(String::from_utf8(c.take(len)?.to_vec()).ok()?)
-                }
-                0 => None,
-                _ => return None,
-            };
+            let device_id = read_opt(c, |c| {
+                let len = c.u32()? as usize;
+                String::from_utf8(c.take(len)?.to_vec()).ok()
+            })?;
             TargetId::from_material(IdentityMaterial::block(major, minor, device_id.as_deref()))
         }
-        2 => {
-            let volume_serial = match c.u8()? {
-                1 => Some(c.u32()?),
-                0 => None,
-                _ => return None,
-            };
+        MATERIAL_IMAGE => {
+            let volume_serial = read_opt(c, |c| c.u32())?;
             let file_id = c.array::<16>()?;
             TargetId::from_material(IdentityMaterial::image(volume_serial, Some(file_id)).ok()?)
         }
         _ => return None,
     };
-    let size = match c.u8()? {
-        1 => Some(c.u64()?),
-        0 => None,
-        _ => return None,
-    };
-    let file_id = match c.u8()? {
-        1 => Some(c.array::<16>()?),
-        0 => None,
-        _ => return None,
-    };
+    let size = read_opt(c, |c| c.u64())?;
+    let file_id = read_opt(c, |c| c.array::<16>())?;
     Some(SceneIdentity::with_details(id, mapping, proof, size, file_id))
 }
 
@@ -2182,5 +1999,184 @@ mod record_tails {
             matches!(decode(&corrupted), Err(DecodeFailure::Crc { region: CrcRegion::Payload })),
             "a length-complete payload that fails its CRC is not readable"
         );
+    }
+
+    /// 三种动作的字节形态：码值之后固定跟 8 字节载荷，`InspectOnly` 的载荷为零
+    #[test]
+    fn recovery_action_bytes_are_pinned() {
+        let encoded = |action: RecoveryAction| {
+            let mut out = Vec::new();
+            action.write(&mut out);
+            out
+        };
+        assert_eq!(encoded(RecoveryAction::Continue(0x0102)), [1, 2, 1, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(encoded(RecoveryAction::Rollback(0x0102)), [2, 2, 1, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(encoded(RecoveryAction::InspectOnly), [3, 0, 0, 0, 0, 0, 0, 0, 0]);
+    }
+
+    /// `Continue` 在本构建没有写入点，读侧按它的码值从字节解码：把
+    /// `InspectOnly` 记录的 9 字节动作段换成 `Continue` 样本，解码必须还原同一动作
+    #[test]
+    fn a_continue_action_is_decoded_from_its_bytes() {
+        let mut record = table_only_record();
+        record.action = RecoveryAction::InspectOnly;
+        let inspect = record.encode().unwrap();
+        record.action = RecoveryAction::Continue(0x0102);
+        let continued = record.encode().unwrap();
+        let at = HEADER_LEN
+            + inspect[HEADER_LEN..]
+                .iter()
+                .zip(&continued[HEADER_LEN..])
+                .position(|(a, b)| a != b)
+                .expect("the action differs between the two records");
+
+        const ACTION_WIDTH: usize = 9;
+        let mut bytes = inspect;
+        bytes[at..at + ACTION_WIDTH].copy_from_slice(&continued[at..at + ACTION_WIDTH]);
+        rehash(&mut bytes);
+
+        let decoded = decode(&bytes).expect("a Continue action is part of the layout");
+        assert_eq!(decoded.action, RecoveryAction::Continue(0x0102));
+    }
+
+    /// 可选段的两种形态都按原值回读
+    #[test]
+    fn optional_segments_round_trip_both_forms() {
+        let decoded = decode(&table_only_record().encode().unwrap()).unwrap();
+        assert_eq!(decoded.old_range, None);
+        assert_eq!(decoded.target_range, None);
+        assert_eq!(decoded.lvm_post, None);
+        assert!(decoded.relocation.is_none());
+
+        let post = LvmPost { lv_size_before: 1, lv_target: 2, extent_bytes: 3 };
+        let mut present = moving_record(1, 0);
+        present.op = OpKind::Resize;
+        present.target_range = Some((4096, 8192));
+        present.lvm_post = Some(post);
+        let decoded = decode(&present.encode().unwrap()).unwrap();
+        assert_eq!(decoded.old_range, Some((2048, 4096)));
+        assert_eq!(decoded.target_range, Some((4096, 8192)));
+        assert_eq!(decoded.lvm_post, Some(post));
+        assert!(decoded.relocation.is_some());
+    }
+
+    /// 可选段的前缀只有 0/1：改成 2 的记录整条拒读
+    #[test]
+    fn an_unknown_optional_prefix_is_refused() {
+        let mut record = moving_record(1, 0);
+        let present = record.encode().unwrap();
+        record.old_range = None;
+        let absent = record.encode().unwrap();
+        let at = HEADER_LEN
+            + present[HEADER_LEN..]
+                .iter()
+                .zip(&absent[HEADER_LEN..])
+                .position(|(a, b)| a != b)
+                .expect("the optional segment differs");
+        assert_eq!((absent[at], present[at]), (0, 1));
+
+        let mut bytes = present;
+        bytes[at] = 2;
+        rehash(&mut bytes);
+        assert!(matches!(decode(&bytes), Err(DecodeFailure::Format { .. })));
+    }
+}
+
+/// 磁盘码值的金表：判别值是格式的一部分，改它就是改格式。每个变体的码值在这里
+/// 逐字钉住；表外的取值必须解码失败
+#[cfg(test)]
+mod tag_bytes {
+    use super::*;
+
+    /// 双向都对上：写出的码值与读回同一个变体，且表外取值不收敛
+    fn pinned<T: Copy + PartialEq + std::fmt::Debug>(
+        table: &[(T, u8)],
+        tag: impl Fn(T) -> u8,
+        from_tag: impl Fn(u8) -> Option<T>,
+        outside: &[u8],
+    ) {
+        for &(variant, code) in table {
+            assert_eq!(tag(variant), code, "{variant:?} must keep its disk code");
+            assert_eq!(from_tag(code), Some(variant), "code {code} must decode to {variant:?}");
+        }
+        for &code in outside {
+            assert_eq!(from_tag(code), None, "code {code} is outside the table");
+        }
+    }
+
+    #[test]
+    fn op_kind_codes_are_pinned() {
+        let table = [
+            (OpKind::New, 1),
+            (OpKind::Add, 2),
+            (OpKind::Delete, 3),
+            (OpKind::ResizeEnd, 4),
+            (OpKind::Move, 5),
+            (OpKind::Copy, 6),
+            (OpKind::Mkfs, 7),
+            (OpKind::ResizeFs, 8),
+            (OpKind::Set, 9),
+            (OpKind::Resize, 10),
+        ];
+        pinned(&table, OpKind::tag, OpKind::from_tag, &[0, 11, 255]);
+    }
+
+    #[test]
+    fn reloc_kind_codes_are_pinned() {
+        let table = [(RelocKind::TailPacked, 0), (RelocKind::Shift, 1)];
+        pinned(&table, RelocKind::tag, RelocKind::from_tag, &[2, 255]);
+    }
+
+    #[test]
+    fn repair_kind_codes_are_pinned() {
+        let table = [
+            (RepairKind::RelocateBackup, 0),
+            (RepairKind::RepairProtectiveMbr, 1),
+            (RepairKind::RelocateAndRepair, 2),
+        ];
+        pinned(&table, RepairKind::tag, RepairKind::from_tag, &[3, 255]);
+    }
+
+    #[test]
+    fn repair_state_codes_are_pinned() {
+        let table = [(RepairState::InFlight, 0), (RepairState::Landed, 1)];
+        pinned(&table, RepairState::tag, RepairState::from_tag, &[2, 255]);
+    }
+
+    #[test]
+    fn table_fence_codes_are_pinned() {
+        let table = [
+            (TableFence::Pending, 0),
+            (TableFence::InFlight, 1),
+            (TableFence::Landed, 2),
+        ];
+        pinned(&table, TableFence::tag, TableFence::from_tag, &[3, 255]);
+    }
+
+    #[test]
+    fn commit_state_codes_are_pinned() {
+        let table = [(CommitState::Prepared, 0), (CommitState::Committed, 1)];
+        pinned(&table, CommitState::tag, CommitState::from_tag, &[2, 255]);
+    }
+
+    #[test]
+    fn retention_codes_are_pinned() {
+        let table = [
+            (Retention::Active, 0),
+            (Retention::CommittedPending, 1),
+            (Retention::Unverified, 2),
+            (Retention::Quarantined, 3),
+        ];
+        pinned(&table, Retention::tag, Retention::from_tag, &[4, 255]);
+    }
+
+    #[test]
+    fn scene_proof_codes_are_pinned() {
+        let table = [
+            (SceneProof::DeviceId, 1),
+            (SceneProof::FileId, 2),
+            (SceneProof::Unavailable, 3),
+        ];
+        pinned(&table, SceneProof::tag, SceneProof::from_tag, &[0, 4, 255]);
     }
 }

@@ -18,7 +18,7 @@ $B add --yes "$T" 230866432 --start 6442000000 --name p2 >/dev/null; exp $? 0 "a
 $B resize --yes "$T":2 --grow-to-end >/dev/null 2>&1; exp $? 0 "p2 grow-to-end"
 $B info "$T" | grep -o '"num":2,"first_lba":[0-9]*,"last_lba":[0-9]*'
 echo "  (期望 last_lba=6442450910)"
-sgdisk -v "$T" >/dev/null 2>&1 && echo "sgdisk clean" || { echo "sgdisk ISSUES"; rc=1; }
+sgdisk_check "$T"
 # 尾部备份头落位验证：末扇区应为 GPT 头签名 "EFI PART"
 tail -c 512 "$T" | head -c 8
 echo " <- 期望 EFI PART"
@@ -89,7 +89,7 @@ elif [ "$MD" = "$(mdsum "${LD}p2")" ]; then
 else
   echo "CONCURRENCY DEV CORRUPT"; rc=1
 fi
-e2fsck -fn "${LD}p2" >/dev/null 2>&1 && echo "CONCURRENCY e2fsck clean" || { echo "CONCURRENCY e2fsck ISSUES"; rc=1; }
+fsck_check "${LD}p2" "CONCURRENCY"
 lo_detach "$LD"
-sgdisk -v "$T" >/dev/null 2>&1 && echo "sgdisk clean" || { echo "sgdisk ISSUES"; rc=1; }
+sgdisk_check "$T"
 exit $rc

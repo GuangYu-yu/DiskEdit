@@ -36,6 +36,9 @@ unmount_now "$TEST_MNT"
 OUT=$($B resize --yes "$T":1 --end 821247 2>&1); E=$?
 echo "shrink exit=$E : $(echo "$OUT" | tail -1)"
 exp "$E" 0 "A/resize 缩回原尺寸"
+# 离线路径只改镜像里的表，不碰内核视图（目标不是块设备时无法 BLKRRPART）；
+# 这里补一次显式重读，等价于真人对镜像离线改表后执行的 partprobe
+partx -u "$LD"
 assert_eq "$(blockdev --getsize64 "$P")" "$S0" "A/回到原尺寸"
 
 echo

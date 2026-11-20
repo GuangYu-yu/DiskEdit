@@ -299,16 +299,101 @@ fn trim_trailing_newlines(mut text: String) -> String {
 
 /// 仓库内的生成物：只在测试构建里产出，CI 生成后与工作树比对
 #[cfg(test)]
-mod published {
+pub(crate) mod published {
     use super::*;
     use crate::domain::MediaKind;
     use crate::outcome::NOTHING_WRITTEN;
     use crate::platform::capabilities::{CapabilityId, CapabilitySnapshot, HostPlatform};
+    use std::borrow::Cow;
 
-    const REFERENCE_EN: &str = "docs/en/reference.md";
-    const MATRIX_EN: &str = "docs/en/capability-matrix.md";
-    const REFERENCE_ZH: &str = "docs/zh/reference.md";
-    const MATRIX_ZH: &str = "docs/zh/capability-matrix.md";
+    /// 文档的身份：生成物由渲染函数产出，入库文档随二进制一起编译
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    pub(crate) enum DocRole {
+        Reference,
+        CapabilityMatrix,
+        Internals,
+        Interop,
+        Readme,
+    }
+
+    pub(crate) struct DocFile {
+        pub(crate) path: &'static str,
+        pub(crate) role: DocRole,
+        /// 入库正文；生成物为 `None`
+        pub(crate) body: Option<&'static str>,
+    }
+
+    /// 仓库内文档清单：生成器的写盘路径、选项表与工具表的对账、示例闸都从这里取，
+    /// 路径与正文只登记一次。语种由路径推出，不另立字段
+    pub(crate) const DOCS: &[DocFile] = &[
+        DocFile { path: "docs/en/reference.md", role: DocRole::Reference, body: None },
+        DocFile {
+            path: "docs/en/capability-matrix.md",
+            role: DocRole::CapabilityMatrix,
+            body: None,
+        },
+        DocFile { path: "docs/zh/reference.md", role: DocRole::Reference, body: None },
+        DocFile {
+            path: "docs/zh/capability-matrix.md",
+            role: DocRole::CapabilityMatrix,
+            body: None,
+        },
+        DocFile {
+            path: "docs/en/internals.md",
+            role: DocRole::Internals,
+            body: Some(include_str!("../docs/en/internals.md")),
+        },
+        DocFile {
+            path: "docs/en/interop.md",
+            role: DocRole::Interop,
+            body: Some(include_str!("../docs/en/interop.md")),
+        },
+        DocFile {
+            path: "docs/zh/internals.md",
+            role: DocRole::Internals,
+            body: Some(include_str!("../docs/zh/internals.md")),
+        },
+        DocFile {
+            path: "docs/zh/interop.md",
+            role: DocRole::Interop,
+            body: Some(include_str!("../docs/zh/interop.md")),
+        },
+        DocFile {
+            path: "README.md",
+            role: DocRole::Readme,
+            body: Some(include_str!("../README.md")),
+        },
+        DocFile {
+            path: "README.zh-CN.md",
+            role: DocRole::Readme,
+            body: Some(include_str!("../README.zh-CN.md")),
+        },
+    ];
+
+    impl DocFile {
+        /// 中文页：`docs/zh/` 下的文件与 `README.zh-CN.md`
+        pub(crate) fn is_zh(&self) -> bool {
+            self.path.starts_with("docs/zh/") || self.path.ends_with(".zh-CN.md")
+        }
+
+        /// 正文：入库文档编译进二进制；生成物从工作树读，缺失时给出重生成命令
+        pub(crate) fn text(&self) -> Cow<'static, str> {
+            match self.body {
+                Some(body) => Cow::Borrowed(body),
+                None => {
+                    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+                    let path = root.join(self.path);
+                    Cow::Owned(std::fs::read_to_string(&path).unwrap_or_else(|e| {
+                        panic!(
+                            "{}: {e}\nregenerate with DISKEDIT_WRITE_DOCS=1 cargo test --bin \
+                             DiskEdit docs_are_generated_in_sync",
+                            path.display()
+                        )
+                    }))
+                }
+            }
+        }
+    }
 
     /// 中文文案目录：键是渲染时用的英文原文（标题、表格行与带 `{n}` 占位符的模板），
     /// 值是中文。只由测试构建读取，不进入二进制
@@ -692,17 +777,53 @@ mod published {
         trim_trailing_newlines(out)
     }
 
+    /// 帮助文本里写死的数值阈值与代码判据同源：判据上下限改了而帮助没跟上时先在这里红
+    #[test]
+    fn usage_thresholds_match_the_code_that_enforces_them() {
+        let text = usage_text();
+        let sector_max = crate::domain::SectorSize::MAX_BYTES;
+        assert!(
+            text.contains(&format!("max {sector_max} bytes")),
+            "usage must state the sector-size implementation limit as `max {sector_max} bytes`"
+        );
+        let (lo, hi) = (crate::movepart::CHUNK_MIB_MIN, crate::movepart::CHUNK_MIB_MAX);
+        assert!(
+            text.contains(&format!("{lo}..={hi};")),
+            "usage must state the --chunk range as `{lo}..={hi}`"
+        );
+    }
+
+    /// 录制的帮助快照与退出码常量逐行对账：常量改了而 `tests/snapshots/usage.txt`
+    /// 没重录时，这里指出具体哪一行不符，不必等整串快照 diff 才看出
+    #[test]
+    fn usage_snapshot_exit_legend_matches_the_outcome_constants() {
+        let snapshot = include_str!("../tests/snapshots/usage.txt");
+        let expected: Vec<String> = EXIT_LEGEND
+            .iter()
+            .map(|(code, desc)| format!("  {code}  {desc}"))
+            .collect();
+        let mut block: Vec<&str> = snapshot
+            .lines()
+            .skip_while(|line| *line != "exit status:")
+            .skip(1)
+            .collect();
+        while block.last().is_some_and(|line| line.trim().is_empty()) {
+            block.pop();
+        }
+        assert_eq!(
+            block,
+            expected.iter().map(String::as_str).collect::<Vec<_>>(),
+            "tests/snapshots/usage.txt no longer matches EXIT_LEGEND"
+        );
+    }
+
     /// `internals.md` 只留顺序陈述：一句话里同时出现该退出码与命令名，等于把矩阵的
     /// 逐命令结论又抄了一份。命令名取自命令表，不另写清单；两个语种各查一遍
-    fn assert_no_per_command_gate_claims(root: &std::path::Path) {
-        const DOCS: &[(&str, &str)] = &[
-            ("docs/en/internals.md", "exit code 6"),
-            ("docs/zh/internals.md", "退出码 6"),
-        ];
-        for (doc, claim) in DOCS {
-            let path = root.join(doc);
-            let text = std::fs::read_to_string(&path)
-                .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    fn assert_no_per_command_gate_claims() {
+        for doc in DOCS.iter().filter(|d| d.role == DocRole::Internals) {
+            let claim = if doc.is_zh() { "退出码 6" } else { "exit code 6" };
+            let text = doc.text();
+            // 分号、冒号不结束句子：切得越碎，同一句里的"码值 + 命令名"越容易被漏掉
             for sentence in text.split(['.', '。', '\n']) {
                 if !sentence.contains(claim) {
                     continue;
@@ -711,8 +832,7 @@ mod published {
                     panic!(
                         "{}: one sentence names both `{claim}` and the command `{}` — the \
                          per-command answer belongs to docs/en/capability-matrix.md",
-                        path.display(),
-                        command.name
+                        doc.path, command.name
                     );
                 }
             }
@@ -724,11 +844,24 @@ mod published {
     #[test]
     fn docs_are_generated_in_sync() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        assert_no_per_command_gate_claims(root);
+        assert_no_per_command_gate_claims();
 
         let cat = Catalogue::load();
-        let zh_reference = render_reference(Some(&cat));
-        let zh_matrix = render_matrix(Some(&cat));
+        // 先渲染再对账：翻译目录的缺译与多余项都由渲染过程记账
+        let rendered: Vec<(&'static str, String)> = DOCS
+            .iter()
+            .filter(|d| d.body.is_none())
+            .map(|doc| {
+                let text = match doc.role {
+                    DocRole::Reference => render_reference(doc.is_zh().then_some(&cat)),
+                    DocRole::CapabilityMatrix => render_matrix(doc.is_zh().then_some(&cat)),
+                    DocRole::Internals | DocRole::Interop | DocRole::Readme => {
+                        panic!("{}: a checked-in document carries its own body", doc.path)
+                    }
+                };
+                (doc.path, text)
+            })
+            .collect();
         let missing = cat.missing.borrow();
         assert!(
             missing.is_empty(),
@@ -743,12 +876,7 @@ mod published {
             unused.join("\n")
         );
 
-        for (rel, text) in [
-            (REFERENCE_EN, render_reference(None)),
-            (MATRIX_EN, render_matrix(None)),
-            (REFERENCE_ZH, zh_reference),
-            (MATRIX_ZH, zh_matrix),
-        ] {
+        for (rel, text) in rendered {
             let lower = text.to_ascii_lowercase();
             assert!(!lower.contains("cyl"), "{rel}: cylinder alignment leaked into the generated text");
             assert!(!lower.contains("chs"), "{rel}: CHS geometry leaked into the generated text");

@@ -27,28 +27,18 @@ impl FsResize {
     /// 载荷换算成字节区间。任一不一致都说明计划没有经过装配：长度溢出、
     /// 记录的字节数与扇区长度不符、起点越界
     fn byte_range(&self, sector_size: u64) -> Result<(u64, u64), String> {
-        let len = self.sectors.checked_mul(sector_size).ok_or_else(|| {
-            format!(
-                "partition {}: {} sectors of {sector_size} bytes overflow the address space",
-                self.part, self.sectors
-            )
-        })?;
+        let len = super::region_bytes(self.part, self.sectors, sector_size)?;
+        let base = super::region_at(
+            self.part,
+            super::RangeRole::Sole,
+            self.first_lba,
+            sector_size,
+            len,
+        )?;
         if len != self.target_bytes {
             return Err(format!(
                 "partition {}: the step's {len}-byte range does not match its recorded {} target bytes",
                 self.part, self.target_bytes
-            ));
-        }
-        let base = self.first_lba.checked_mul(sector_size).ok_or_else(|| {
-            format!(
-                "partition {}: start LBA {} overflows the address space",
-                self.part, self.first_lba
-            )
-        })?;
-        if base.checked_add(len).is_none() {
-            return Err(format!(
-                "partition {}: byte range {base}+{len} overflows the address space",
-                self.part
             ));
         }
         Ok((base, len))

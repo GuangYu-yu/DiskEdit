@@ -50,7 +50,12 @@ pub(crate) fn collect_neighbours(sysroot: &Path, skip: impl Fn(&Path) -> bool) -
         match fs::metadata(p.join("partition")) {
             Ok(_) => {}
             Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
-            Err(e) => return Err(io::Error::other(format!("cannot stat {}: {e}", p.join("partition").display()))),
+            Err(e) => {
+                return Err(io::Error::other(crate::support::cannot_stat(
+                    p.join("partition").display(),
+                    e,
+                )));
+            }
         }
         let s = sysfs_u64(&p.join("start"))?;
         let l = sysfs_u64(&p.join("size"))?;
@@ -103,7 +108,7 @@ fn verify_btrfs_device(mnt: &Path, dev_no: (u64, u64)) -> io::Result<()> {
         )));
     }
     let attr = dir.join(&names[0]).join("dev");
-    let s = fs::read_to_string(&attr).map_err(|e| io::Error::other(format!("cannot read {}: {e}", attr.display())))?;
+    let s = fs::read_to_string(&attr).map_err(|e| io::Error::other(crate::support::cannot_read(attr.display(), e)))?;
     let got = parse_dev_attr(&s)
         .ok_or_else(|| io::Error::other(format!("unparsable device number in {}: {s:?}", attr.display())))?;
     if got != dev_no {

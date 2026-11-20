@@ -91,5 +91,5 @@ $B new "$T" --yes >/dev/null
 $B add --yes "$T" 50151424 --start 2048 --name g1 >/dev/null
 $B delete "$T":1 --yes >/dev/null 2>&1; exp "$?" 0 "gpt delete"
 if $B info "$T" | grep -q '"num":1'; then echo "g1 STILL PRESENT (BAD)"; rc=1; else echo "g1 GONE OK"; fi
-sgdisk -v "$T" >/dev/null 2>&1 && echo "sgdisk clean" || { echo "sgdisk ISSUES"; rc=1; }
+sgdisk_check "$T"
 exit $rc
