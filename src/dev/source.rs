@@ -239,6 +239,9 @@ pub(crate) fn test_block_source(
         record: Some(record),
         record_key: Some(key),
         lock: write_root.join("target.lock"),
+        partition: None,
+        declared: None,
+        claim: None,
         backing_fp: None,
     };
     Ok(FileSource {
@@ -266,9 +269,17 @@ impl WriteSource {
         crate::dev::prepare_record_dir(&src.identity, src.owner).map_err(|e| prepare_dir_fail(&src, e))?;
         // 落点里坐着别的身份的记录时，锁文件与本次写入都不该落进那个目录
         crate::recovery::refuse_foreign_record_slot(&src)?;
-        let lock = crate::targetlock::TargetLock::acquire(&src.identity, Some(&src.fingerprint))?;
+        let mut lock = crate::targetlock::TargetLock::acquire(&src.identity, Some(&src.fingerprint))?;
         // 锁已到手，先按路径重探身份再继续；锁前解析的身份不能直接沿用
         src.reprobe_under_lock()?;
+        // 载体占据声明：同一个目标只能沿同一个名字续跑。名字不同而旧现场还在，
+        // 在写入任何字节之前拒绝（见 `claims`）
+        if let Some(claim) = lock.claim_mut() {
+            let declared = src.identity.declared().map(|name| name.as_str());
+            crate::dev::admit(claim, declared, |held| {
+                src.identity.record_path_for_declared(held).exists()
+            })?;
+        }
         Ok(Self { src, _lock: Some(lock), pending_step: None })
     }
 
@@ -559,9 +570,12 @@ impl FileSource {
     }
 
     /// 现在这个目标能给出的身份证据种类。与指纹的构造一一对应：镜像恒取文件 inode；
-    /// 块设备上整盘属性可读 ⇒ `DeviceId`，loop（指纹取自 backing 文件）⇒ `Inode`，
-    /// 两者都没有 ⇒ `Unavailable`
+    /// 块设备上用户声明的名字 ⇒ `Declared`，整盘属性可读 ⇒ `DeviceId`，loop（指纹取自
+    /// backing 文件）⇒ `Inode`，两者都没有 ⇒ `Unavailable`
     pub(crate) fn proof(&self) -> LiveProof {
+        if self.identity.declared.is_some() {
+            return LiveProof::Declared;
+        }
         if !self.is_block {
             return LiveProof::Inode;
         }
@@ -816,11 +830,22 @@ impl FileSource {
                 let node = sysfs_node_from_rdev(rdev).map_err(|e| {
                     RunOutcome::refused(format!("the opened device has no sysfs node after taking the lock: {e}"))
                 })?;
-                let now = TargetIdentity::resolve_block_at(&node, &self.path).map_err(|e| {
+                let mut now = TargetIdentity::resolve_block_at(&node, &self.path).map_err(|e| {
                     RunOutcome::refused(format!(
                         "the target cannot be re-read after taking the lock: {e}"
                     ))
                 })?;
+                // 声明的名字不是设备事实：重探只能核对原生部分，声明部分按打开时的名字
+                // 重新套用。载体占据声明落点必须仍是同一个，否则节点已被换到别的设备上
+                if let Some(declared) = self.identity.declared() {
+                    if now.claim_path() != self.identity.claim_path() {
+                        return Err(RunOutcome::refused(
+                            "the device node now resolves to a different carrier than the one opened \
+                             before the lock",
+                        ));
+                    }
+                    now = now.with_declared(declared).map_err(RunOutcome::refused)?;
+                }
                 if now.record_key != self.identity.record_key
                     || now.lock_path() != self.identity.lock_path()
                 {
@@ -831,9 +856,13 @@ impl FileSource {
                 }
                 // 写入前再问一次"这个声明在可见的整盘里是否只有它一份、相关设备读得出"。
                 // 锁只排除并发写者，管不住另一块挂着同一声明的盘；判据与新建记录的准入
-                // 是同一个（`check_device`），条件也相同——有记录落点的整盘目标才问，
-                // dm / md 没有记录目录，镜像没有 sysfs 兄弟盘
-                if self.identity.kind == TargetKind::Block && self.identity.record_path().is_some() {
+                // 是同一个（`check_device`），条件也相同——有记录落点、且身份来自设备本身
+                // 的整盘目标才问；声明的名字没有可核对的设备声明，dm / md 没有记录目录，
+                // 镜像没有 sysfs 兄弟盘
+                if self.identity.kind == TargetKind::Block
+                    && self.identity.record_path().is_some()
+                    && self.identity.declared().is_none()
+                {
                     match check_device(self) {
                         Ok(check) if check.is_match() => {}
                         Ok(check) => return Err(RunOutcome::refused(check.detail)),

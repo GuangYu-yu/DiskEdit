@@ -93,6 +93,7 @@ Which options a command accepts is defined by `diskedit help <CMD>`; the table b
 | `--grow-lv` | — | `resize` continues into the LV and its filesystem on an LVM PV |
 | `--grow` | — | `info --grow` adds a `preview` key to the same JSON report: the relocation preview for `:N` (nothing is written and no reusable plan is produced) |
 | `--grow-to-end` | — | `resize --grow-to-end` pins the end at the end of the usable space |
+| `--identity` | NAME | names a target that exposes no WWN, EUI or repeatable serial (`nbd`, `rbd`, `dm`, `md`); accepted by every write command and by `recover --release`. The same name is needed to resume the record and to release it; images and devices with an identity of their own reject it (exit 2) |
 | `--keep-partuuid` | — | `copy` reuses the source PARTUUID |
 | `--label` | S | filesystem label written by `mkfs` (omitted: an empty label; no default value is invented) |
 | `--lv` | NAME | LV to grow with `--grow-lv` (omitted: the only LV on that PV) |

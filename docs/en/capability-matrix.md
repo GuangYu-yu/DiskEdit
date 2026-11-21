@@ -39,6 +39,11 @@ CI regenerates it and fails when the working tree differs. Do not edit by hand.
 | `new` | admitted | admitted | blocked: WriteTable (unsupported) | blocked: WriteTable (unsupported) | blocked: WriteTable (unsupported) | blocked: WriteTable (unsupported) |
 | `add` | admitted | admitted | blocked: WriteTable (unsupported) | blocked: WriteTable (unsupported) | blocked: WriteTable (unsupported) | blocked: WriteTable (unsupported) |
 
+`admitted` means the capability gate reports no gap for that shape. A block device
+that exposes no WWN, EUI or repeatable serial (nbd, rbd, dm, md) is still admitted
+here, but its write commands need `--identity NAME`, and the same name is needed to
+resume or release the record.
+
 ## Runtime gate
 
 The gate evaluates only the target shapes the build can open. This table lists the 2 target shapes it evaluates on Linux (`HostPlatform::openable_media`): linux / block, linux / image. Other shapes do not enter the gate's decision — `cmd::capability_gap` iterates only the openable set.

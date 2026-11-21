@@ -193,7 +193,7 @@ fn retention_name(retention: crate::recovery::Retention) -> &'static str {
 fn backend_mismatch(record: &Record, backend: RecordBackend) -> bool {
     let recorded_is_block = matches!(
         record.target.id().material(),
-        crate::platform::IdentityMaterial::Block { .. }
+        crate::platform::IdentityMaterial::Block { .. } | crate::platform::IdentityMaterial::Declared { .. }
     );
     match backend {
         RecordBackend::Sidecar => recorded_is_block,

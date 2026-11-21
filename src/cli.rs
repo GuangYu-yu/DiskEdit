@@ -175,6 +175,7 @@ enum Effect {
     GrowToEnd,
     Grow,
     DryRun,
+    Identity,
     DiscardReplay,
     ReplayTableOnly,
     Release,
@@ -268,6 +269,12 @@ pub(crate) const FLAGS: &[FlagSpec] = &[
         ValueDomain::Bool,
         "append the relocation preview for partition :N",
         Effect::Grow,
+    ),
+    flag(
+        "--identity",
+        ValueDomain::Text("NAME"),
+        "name a target that exposes no WWN, EUI or repeatable serial (nbd, rbd, dm, md); resume and release need the same name",
+        Effect::Identity,
     ),
     flag(
         "--keep-partuuid",
@@ -743,6 +750,7 @@ pub(crate) const COMMANDS: &[CommandDef] = &[
                 "--no-fs",
                 "skip the filesystem step of the grown partition; required when the filesystem inside cannot be grown here (limits are under Constraints)",
             ),
+            opt("--identity"),
             opt("--sector-size"),
             opt("--yes"),
         ],
@@ -773,7 +781,7 @@ pub(crate) const COMMANDS: &[CommandDef] = &[
             TargetSuffix::Partition,
             true,
         )],
-        common_options: &[opt("--sector-size"), opt("--yes")],
+        common_options: &[opt("--identity"), opt("--sector-size"), opt("--yes")],
         details: crate::cmd::layout::DETAILS_MOVE,
         mode: TargetMode::WriteJournal,
         capabilities: &[
@@ -803,7 +811,7 @@ pub(crate) const COMMANDS: &[CommandDef] = &[
             TargetSuffix::Partition,
             true,
         )],
-        common_options: &[opt("--sector-size"), opt("--yes")],
+        common_options: &[opt("--identity"), opt("--sector-size"), opt("--yes")],
         details: crate::cmd::layout::DETAILS_COPY,
         mode: TargetMode::WriteJournal,
         capabilities: &[Capability::TargetData, Capability::CompanionFile, Capability::DeviceState],
@@ -822,7 +830,7 @@ pub(crate) const COMMANDS: &[CommandDef] = &[
             TargetSuffix::Partition,
             true,
         )],
-        common_options: &[opt("--sector-size"), opt("--yes")],
+        common_options: &[opt("--identity"), opt("--sector-size"), opt("--yes")],
         details: crate::cmd::layout::DETAILS_DELETE,
         mode: TargetMode::WriteJournal,
         capabilities: &[Capability::TargetData, Capability::CompanionFile, Capability::DeviceState],
@@ -875,7 +883,7 @@ pub(crate) const COMMANDS: &[CommandDef] = &[
                 false,
             ),
         ],
-        common_options: &[opt("--random"), opt("--sector-size"), opt("--yes")],
+        common_options: &[opt("--identity"), opt("--random"), opt("--sector-size"), opt("--yes")],
         details: crate::cmd::fs::DETAILS_SET,
         mode: TargetMode::WriteJournal,
         capabilities: &[
@@ -918,7 +926,7 @@ pub(crate) const COMMANDS: &[CommandDef] = &[
             TargetSuffix::Partition,
             true,
         )],
-        common_options: &[opt("--sector-size"), opt("--yes")],
+        common_options: &[opt("--identity"), opt("--sector-size"), opt("--yes")],
         details: crate::cmd::fs::DETAILS_MKFS,
         mode: TargetMode::WriteJournal,
         capabilities: &[Capability::CompanionFile, Capability::ExternalTool, Capability::DeviceState],
@@ -947,7 +955,7 @@ pub(crate) const COMMANDS: &[CommandDef] = &[
                 false,
             ),
         ],
-        common_options: &[opt("--sector-size"), opt("--yes")],
+        common_options: &[opt("--identity"), opt("--sector-size"), opt("--yes")],
         details: crate::cmd::fs::DETAILS_RESIZEFS,
         mode: TargetMode::WriteJournal,
         capabilities: &[Capability::CompanionFile, Capability::ExternalTool, Capability::DeviceState],
@@ -977,7 +985,7 @@ pub(crate) const COMMANDS: &[CommandDef] = &[
                 false,
             ),
         ],
-        common_options: &[opt("--sector-size"), opt("--yes")],
+        common_options: &[opt("--identity"), opt("--sector-size"), opt("--yes")],
         details: crate::cmd::recover::DETAILS,
         mode: TargetMode::WriteNoJournal,
         capabilities: &[
@@ -1001,7 +1009,7 @@ pub(crate) const COMMANDS: &[CommandDef] = &[
             TargetSuffix::Whole,
             true,
         )],
-        common_options: &[opt("--sector-size"), opt("--yes")],
+        common_options: &[opt("--identity"), opt("--sector-size"), opt("--yes")],
         details: crate::cmd::layout::DETAILS_NEW,
         mode: TargetMode::WriteJournal,
         capabilities: &[Capability::TargetData, Capability::CompanionFile, Capability::DeviceState],
@@ -1026,7 +1034,7 @@ pub(crate) const COMMANDS: &[CommandDef] = &[
             TargetSuffix::Whole,
             true,
         )],
-        common_options: &[opt("--sector-size"), opt("--yes")],
+        common_options: &[opt("--identity"), opt("--sector-size"), opt("--yes")],
         details: crate::cmd::layout::DETAILS_ADD,
         mode: TargetMode::WriteJournal,
         capabilities: &[Capability::TargetData, Capability::CompanionFile, Capability::DeviceState],
@@ -1039,10 +1047,14 @@ pub(crate) fn find(name: &str) -> Option<&'static CommandDef> {
     COMMANDS.iter().find(|c| c.name == name)
 }
 
-/// 目标路径、分区选择器与扇区大小覆盖。事务层只消费这三项。
+/// 目标路径、分区选择器与扇区大小覆盖。事务层只消费这三项（写命令另有 `--identity`）
 pub(crate) trait TargetRequest {
     fn target(&self) -> &str;
     fn sector_size(&self) -> Option<SectorSize>;
+    /// 用户为身份不可得的目标声明的名字。只读命令不看它
+    fn identity(&self) -> Option<&str> {
+        None
+    }
 }
 
 pub(crate) trait ChunkRequest {
@@ -1054,6 +1066,16 @@ macro_rules! impl_target_request {
         impl TargetRequest for $t {
             fn target(&self) -> &str { &self.target }
             fn sector_size(&self) -> Option<SectorSize> { self.sector_size }
+        }
+    };
+}
+
+macro_rules! impl_identity_request {
+    ($t:ty) => {
+        impl TargetRequest for $t {
+            fn target(&self) -> &str { &self.target }
+            fn sector_size(&self) -> Option<SectorSize> { self.sector_size }
+            fn identity(&self) -> Option<&str> { self.identity.as_deref() }
         }
     };
 }
@@ -1110,6 +1132,7 @@ pub(crate) struct ResizeRequest {
     /// `--chunk` 的显式值；`None` 表示未给出（续跑取记录值，新作业取默认值）
     pub(crate) chunk_mib: Option<u64>,
     pub(crate) dry_run: bool,
+    pub(crate) identity: Option<String>,
 }
 
 pub(crate) struct MoveRequest {
@@ -1120,6 +1143,7 @@ pub(crate) struct MoveRequest {
     pub(crate) align: Align,
     pub(crate) align_given: bool,
     pub(crate) chunk_mib: Option<u64>,
+    pub(crate) identity: Option<String>,
 }
 
 pub(crate) struct CopyRequest {
@@ -1132,12 +1156,14 @@ pub(crate) struct CopyRequest {
     pub(crate) chunk_mib: Option<u64>,
     pub(crate) name: Option<String>,
     pub(crate) keep_partuuid: bool,
+    pub(crate) identity: Option<String>,
 }
 
 pub(crate) struct DeleteRequest {
     pub(crate) target: String,
     pub(crate) part: Option<PartSelector>,
     pub(crate) sector_size: Option<SectorSize>,
+    pub(crate) identity: Option<String>,
 }
 
 pub(crate) struct SetRequest {
@@ -1148,6 +1174,7 @@ pub(crate) struct SetRequest {
     pub(crate) value: String,
     pub(crate) state: String,
     pub(crate) random: bool,
+    pub(crate) identity: Option<String>,
 }
 
 pub(crate) struct CheckRequest {
@@ -1162,6 +1189,7 @@ pub(crate) struct MkfsRequest {
     pub(crate) sector_size: Option<SectorSize>,
     pub(crate) fstype: String,
     pub(crate) label: Option<String>,
+    pub(crate) identity: Option<String>,
 }
 
 pub(crate) struct ResizefsRequest {
@@ -1172,6 +1200,7 @@ pub(crate) struct ResizefsRequest {
     pub(crate) bytes: Option<u64>,
     /// 位置参数原样保留，供离线形式拒绝时报出用户写下的值
     pub(crate) bytes_text: Option<String>,
+    pub(crate) identity: Option<String>,
 }
 
 pub(crate) struct NewRequest {
@@ -1180,6 +1209,7 @@ pub(crate) struct NewRequest {
     pub(crate) sector_size: Option<SectorSize>,
     pub(crate) table: Option<crate::table::TableKind>,
     pub(crate) overwrite_data: bool,
+    pub(crate) identity: Option<String>,
 }
 
 pub(crate) struct AddRequest {
@@ -1196,6 +1226,7 @@ pub(crate) struct AddRequest {
     pub(crate) part_number: Option<u32>,
     pub(crate) name: Option<String>,
     pub(crate) type_guid: Option<TypeSelector>,
+    pub(crate) identity: Option<String>,
 }
 
 pub(crate) struct ResizeEndRequest {
@@ -1207,6 +1238,7 @@ pub(crate) struct ResizeEndRequest {
     pub(crate) align: Align,
     pub(crate) no_fs: bool,
     pub(crate) dry_run: bool,
+    pub(crate) identity: Option<String>,
 }
 
 /// `recover`：一个命令、两种归宿。`release` 为真时不回放任何字节，只释放记录文件；
@@ -1218,6 +1250,7 @@ pub(crate) struct RecoverRequest {
     pub(crate) release: bool,
     pub(crate) discard_replay: bool,
     pub(crate) replay_table_only: bool,
+    pub(crate) identity: Option<String>,
 }
 
 pub(crate) enum Request {
@@ -1273,18 +1306,18 @@ impl Request {
 }
 
 impl_target_request!(InfoRequest);
-impl_target_request!(ResizeRequest);
-impl_target_request!(MoveRequest);
-impl_target_request!(CopyRequest);
-impl_target_request!(DeleteRequest);
-impl_target_request!(SetRequest);
+impl_identity_request!(ResizeRequest);
+impl_identity_request!(MoveRequest);
+impl_identity_request!(CopyRequest);
+impl_identity_request!(DeleteRequest);
+impl_identity_request!(SetRequest);
 impl_target_request!(CheckRequest);
-impl_target_request!(MkfsRequest);
-impl_target_request!(ResizefsRequest);
-impl_target_request!(RecoverRequest);
-impl_target_request!(NewRequest);
-impl_target_request!(AddRequest);
-impl_target_request!(ResizeEndRequest);
+impl_identity_request!(MkfsRequest);
+impl_identity_request!(ResizefsRequest);
+impl_identity_request!(RecoverRequest);
+impl_identity_request!(NewRequest);
+impl_identity_request!(AddRequest);
+impl_identity_request!(ResizeEndRequest);
 
 impl_chunk_request!(ResizeRequest);
 impl_chunk_request!(MoveRequest);
@@ -1347,6 +1380,7 @@ struct Options {
     type_guid: Option<TypeSelector>,
     label: Option<String>,
     part_number: Option<u32>,
+    identity: Option<String>,
 }
 
 impl Default for Options {
@@ -1377,6 +1411,7 @@ impl Default for Options {
             type_guid: None,
             label: None,
             part_number: None,
+            identity: None,
         }
     }
 }
@@ -1503,6 +1538,7 @@ fn build_resize(p: &Positionals, o: Options) -> Request {
             align: o.align,
             no_fs: o.no_fs,
             dry_run: o.dry_run,
+            identity: o.identity,
         });
     }
     let size = match p.parsed(Slot::Size) {
@@ -1523,6 +1559,7 @@ fn build_resize(p: &Positionals, o: Options) -> Request {
         allow_move: o.allow_move,
         chunk_mib: o.chunk_mib,
         dry_run: o.dry_run,
+        identity: o.identity,
     })
 }
 
@@ -1542,6 +1579,7 @@ fn build_move(p: &Positionals, o: Options) -> Request {
         align: o.align,
         align_given: o.align_given,
         chunk_mib: o.chunk_mib,
+        identity: o.identity,
     })
 }
 
@@ -1563,13 +1601,14 @@ fn build_copy(p: &Positionals, o: Options) -> Request {
         chunk_mib: o.chunk_mib,
         name: o.name,
         keep_partuuid: o.keep_partuuid,
+        identity: o.identity,
     })
 }
 
 fn build_delete(p: &Positionals, o: Options) -> Request {
     let (target, part) = target_of(p);
     let part = require_part(part, "`delete` needs a partition: write <TARGET>:N (see diskedit help delete)");
-    Request::Delete(DeleteRequest { target, part, sector_size: o.sector_size })
+    Request::Delete(DeleteRequest { target, part, sector_size: o.sector_size, identity: o.identity })
 }
 
 fn build_set(p: &Positionals, o: Options) -> Request {
@@ -1594,6 +1633,7 @@ fn build_set(p: &Positionals, o: Options) -> Request {
         value,
         state: text_of(p, Slot::State).unwrap_or_default(),
         random: o.random,
+        identity: o.identity,
     })
 }
 
@@ -1618,6 +1658,7 @@ fn build_mkfs(p: &Positionals, o: Options) -> Request {
         sector_size: o.sector_size,
         fstype,
         label: o.label,
+        identity: o.identity,
     })
 }
 
@@ -1639,6 +1680,7 @@ fn build_resizefs(p: &Positionals, o: Options) -> Request {
         sector_size: o.sector_size,
         bytes,
         bytes_text: text.map(str::to_string),
+        identity: o.identity,
     })
 }
 
@@ -1651,6 +1693,7 @@ fn build_recover(p: &Positionals, o: Options) -> Request {
         release: o.release,
         discard_replay: o.discard_replay,
         replay_table_only: o.replay_table_only,
+        identity: o.identity,
     })
 }
 
@@ -1662,6 +1705,7 @@ fn build_new(p: &Positionals, o: Options) -> Request {
         sector_size: o.sector_size,
         table: o.table,
         overwrite_data: o.overwrite_data,
+        identity: o.identity,
     })
 }
 
@@ -1688,6 +1732,7 @@ fn build_add(p: &Positionals, o: Options) -> Request {
         part_number: o.part_number,
         name: o.name,
         type_guid: o.type_guid,
+        identity: o.identity,
     })
 }
 
@@ -2122,6 +2167,7 @@ fn store_flag(opts: &mut Options, spec: &FlagSpec, value: Option<Parsed>) {
             opts.grow_lv = true;
         }
         (Effect::Name, Some(Parsed::Text(v))) => opts.name = Some(v),
+        (Effect::Identity, Some(Parsed::Text(v))) => opts.identity = Some(v),
         (Effect::Label, Some(Parsed::Text(v))) => opts.label = Some(v),
         (Effect::TypeGuid, Some(Parsed::Type(v))) => opts.type_guid = Some(v),
         (Effect::PartNumber, Some(Parsed::PartNumber(v))) => opts.part_number = Some(v),

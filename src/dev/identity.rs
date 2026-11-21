@@ -137,8 +137,38 @@ pub enum LiveProof {
     /// inode 身份：镜像文件的 (dev, ino)；loop 设备取 backing 文件的 (dev, ino)，
     /// 即指纹里的 dev / ino
     Inode,
+    /// 用户用 `--identity` 给出的名字：目标自己没有任何可核对的声明，这个名字由
+    /// 携带者的两次调用之间保持一致
+    Declared,
     /// 录制时一个身份都取不到：块设备节点上没有可读的身份属性，也不是 loop
     Unavailable,
+}
+
+/// 用户为身份不可得的目标声明的名字。名字是一句断言，不是设备给出的事实：工具用它
+/// 派生记录与锁的落点，并把它原样写进记录，使"同一个名字才能续跑"成为可验证的约束
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct DeclaredIdentity(String);
+
+impl DeclaredIdentity {
+    /// 名字去掉首尾空白后必须非空、不含控制字符，且有长度上限（记录里的长度前缀是
+    /// `u32`，但一个可被命令行输入的区块设备名不该长到与路径混淆）
+    pub(crate) fn parse(raw: &str) -> Result<Self, String> {
+        let name = raw.trim();
+        if name.is_empty() {
+            return Err("--identity needs a non-empty name".to_string());
+        }
+        if name.chars().any(char::is_control) {
+            return Err("--identity cannot contain control characters".to_string());
+        }
+        if name.len() > 255 {
+            return Err("--identity is longer than 255 bytes".to_string());
+        }
+        Ok(Self(name.to_string()))
+    }
+
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 
 /// 当前目标的"创建时事实"
@@ -221,8 +251,8 @@ pub(crate) fn image_state_root() -> Option<PathBuf> {
     }
 }
 
-/// 目标身份：撤销窗口与续传现场共用的命名空间。**盘级**：分区号属于操作与校验，
-/// 不进落盘键，`img:2` 与对应分区节点由此共享同一现场。
+/// 目标身份：撤销窗口与续传现场共用的命名空间。锁与并发互斥是**盘级**的；恢复记录按
+/// （身份键, 分区号）各自分开，`img:2` 与对应分区节点由此共用同一把锁、各记各的现场。
 /// 镜像以 canonicalize 后的 realpath 为身份（Linux；loop 设备的 backing 侧用同一规则，
 /// 两种目标表示由此收敛），realpath 取不到（cleanup 路径上文件已删）退到字面路径；
 /// 非 Linux 无 loop、不 canonicalize（Windows 上 canonicalize 产生 `\\?\` verbatim
@@ -244,7 +274,7 @@ pub struct TargetIdentity {
     pub(crate) canonical: PathBuf,
     /// 恢复记录的落点：镜像为 `<image_state_root>/images/<键摘要>/record`（取不到
     /// 每用户状态根时为 `None`）；块设备为 `<state_root>/recovery/<identity-hash>/record`，
-    /// 取不到 WWN / EUI / 可重复 serial 时为 `None`，写命令退 6
+    /// 取不到 WWN / EUI / 可重复 serial 时为 `None`，写命令需 `--identity` 补键，否则退 6
     pub(crate) record: Option<PathBuf>,
     /// 块设备记录落点的身份键（目标 + 分区）。`record` 是它派生出的路径；
     /// 锁后复核按键比对，两份派生结果不会各自漂移。镜像与测试构造的身份没有键
@@ -255,6 +285,13 @@ pub struct TargetIdentity {
     /// 状态根时退回镜像旁的 `<image>.diskedit/record.lock`。类型上没有
     /// "没有锁落点"这一状态——取不到锁就是拒绝，不存在无锁继续跑的路径
     pub(crate) lock: PathBuf,
+    /// 目标的分区号（整盘为 `None`）。显式身份键按它把各分区的记录目录分开
+    pub(crate) partition: Option<u32>,
+    /// 用户用 `--identity` 声明的名字。只有身份不可得的块设备会有值
+    pub(crate) declared: Option<DeclaredIdentity>,
+    /// 载体占据声明的落点（见 `claims`）。身份不可得的块设备才有：它由整盘载体的
+    /// 锁键派生，写命令据此发现"这个载体上已有一份用别的名字开出的现场"
+    pub(crate) claim: Option<PathBuf>,
     /// loop 目标的指纹：由 [`Self::loop_backed`] 在核对"backing 对象仍是句柄打开的那一个"
     /// 之后**从已打开的 backing 句柄**取得。打开数据文件的路径上取指纹的调用点直接用它，
     /// 不按 backing 名字二次 stat——名字在两次取用之间可能已指向另一个文件。
@@ -557,6 +594,10 @@ pub(crate) const RECORD_SUFFIX: &str = ".diskedit";
 /// 块设备记录仓库的父目录名：`<state_root>/recovery/<identity-hash>`
 pub(crate) const RECOVERY_DIR: &str = "recovery";
 
+/// 载体占据声明的目录名：`<state_root>/claims/<盘键摘要>`。它记的是"这个载体上次
+/// 用哪个显式身份打开"，与记录仓库分属两个命名空间
+pub(crate) const CLAIM_DIR: &str = "claims";
+
 /// 镜像记录仓库的父目录名：`<image_state_root>/images/<identity-hash>`
 pub(crate) const IMAGE_DIR: &str = "images";
 
@@ -626,6 +667,9 @@ impl TargetIdentity {
             record: record_dir.map(|dir| dir.join(RECORD_NAME)),
             record_key: None,
             lock,
+            partition: None,
+            declared: None,
+            claim: None,
             backing_fp: None,
         }
     }
@@ -744,9 +788,9 @@ impl TargetIdentity {
         // 锁键单独派生：`dm/name` 不在其中，改名不会把同一台设备的锁拆成两把
         let lock_key = block_lock_key(node).map_err(|e| e.to_string())?;
         // 记录目录由 WWN / EUI / serial 派生的身份键决定；dm / md / 只有 major:minor
-        // 的目标没有键，记录落点为 None，写命令退 6
-        let record_key = block_stable_identity(node).ok();
-        Ok(Self::from_block_parts(path, disk_key, lock_key, record_key))
+        // 的目标没有键，记录落点为 None，写命令退 6（或由 `--identity` 补一个键）
+        let (record_key, partition) = block_record_context(node).map_err(|e| e.to_string())?;
+        Ok(Self::from_block_parts(path, disk_key, lock_key, record_key, partition))
     }
 
     /// 非 Linux 平台没有 sysfs，块设备判定恒 false，本入口不会到达。非 Linux 上没有块
@@ -765,22 +809,25 @@ impl TargetIdentity {
     #[cfg(test)]
     pub(crate) fn from_block_keys(path: &Path, disk_key: String) -> Self {
         let lock_key = crate::dev::LockKey::new(disk_key.clone());
-        Self::from_block_parts(path, disk_key, lock_key, None)
+        Self::from_block_parts(path, disk_key, lock_key, None, None)
     }
 
     /// 块设备身份构造：`record_key` 为 None 表示取不到 WWN / EUI / 可重复 serial
-    /// （dm / md / 只有 major:minor）。记录按身份键派生；锁按 `lock_key`
-    /// 派生——两者都是盘级，分区号不进落点，`/dev/sdb` 与 `/dev/sdb1` 由此共用一把锁，
-    /// 而记录目录仍按各自的身份键分开。锁键另走一套属性表（见 [`crate::dev::block_lock_key`]）
+    /// （dm / md / 只有 major:minor）。锁按 `lock_key` 派生，分区号不进锁的落点，
+    /// `/dev/sdb` 与 `/dev/sdb1` 由此共用一把锁；记录目录按（身份键, 分区号）各自分开。
+    /// 锁键另走一套属性表（见 [`crate::dev::block_lock_key`]）。
+    /// 身份不可得的目标另有一个载体占据声明落点（见 `claims`），由整盘锁键派生
     #[cfg(any(target_os = "linux", test))]
     pub(crate) fn from_block_parts(
         path: &Path,
         _disk_key: String,
         lock_key: crate::dev::LockKey,
         record_key: Option<IdentityKey>,
+        partition: Option<u32>,
     ) -> Self {
         let dir = host_state_root();
         let lock = dir.join(format!("{}{LOCK_SUFFIX}", key_token(lock_key.as_str())));
+        let claim = record_key.is_none().then(|| claim_path(lock_key.as_str(), partition));
         let record = record_key.as_ref().map(IdentityKey::record_path);
         Self {
             kind: TargetKind::Block,
@@ -791,8 +838,52 @@ impl TargetIdentity {
             // 锁文件是纯运行时 artifact（重启自清也无妨），残留不构成阻挡——
             // 判据是"锁取不取得到"，不是"文件在不在"（见 targetlock）
             lock,
+            partition,
+            declared: None,
+            claim,
             backing_fp: None,
         }
+    }
+
+    /// 用户用 `--identity` 给身份不可得的目标声明一个名字。
+    ///
+    /// 只接受块设备里既没有记录键也没有记录落点的目标（nbd / rbd / dm / md）：
+    /// 镜像按文件对象定位，带 WWN / serial 的设备有自己可核对的声明，两者都不该
+    /// 再被一个自由文本名字覆盖。记录键、锁键与记录里的现场都改由这个名字派生。
+    ///
+    /// 锁落在盘级：分区号不进锁键，所以 `/dev/nbd0` 与 `/dev/nbd0p1` 用同一个名字时
+    /// 共用一把锁
+    pub(crate) fn with_declared(mut self, declared: &DeclaredIdentity) -> Result<Self, String> {
+        if self.kind != TargetKind::Block || self.record.is_some() || self.record_key.is_some() {
+            return Err(
+                "--identity applies only to block devices with no readable WWN, EUI or repeatable \
+                 serial; images and identified devices are addressed by their own identity"
+                    .to_string(),
+            );
+        }
+        let key = declared_identity_key(declared.as_str(), self.partition);
+        let lock_token = key_token(&declared_lock_key(declared.as_str()));
+        self.lock = host_state_root().join(format!("{lock_token}{LOCK_SUFFIX}"));
+        self.record = Some(key.record_path());
+        self.record_key = Some(key);
+        self.declared = Some(declared.clone());
+        Ok(self)
+    }
+
+    /// 用户声明的身份（`--identity`）
+    pub(crate) fn declared(&self) -> Option<&DeclaredIdentity> {
+        self.declared.as_ref()
+    }
+
+    /// 载体占据声明的落点。只有身份不可得的块设备有
+    pub(crate) fn claim_path(&self) -> Option<&Path> {
+        self.claim.as_deref()
+    }
+
+    /// 用某个声明名派生的记录落点：占据声明据此判断"那个名字下的现场还在不在"。
+    /// 分区号沿用本目标的
+    pub(crate) fn record_path_for_declared(&self, declared: &str) -> PathBuf {
+        declared_identity_key(declared, self.partition).record_path()
     }
 
     /// 清理类命令（`recover --release`）的身份解析：目标可能已不存在，而现场文件可能比目标活得

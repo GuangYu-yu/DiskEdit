@@ -603,6 +603,7 @@ fn describe_identity(scene: &SceneIdentity) -> String {
             Some(serial) => format!("image file-id {} (volume serial {serial:#x})", crate::support::hex_lower(file_id)),
             None => format!("image file-id {}", crate::support::hex_lower(file_id)),
         },
+        IdentityMaterial::Declared { identity } => format!("block with declared identity {identity}"),
     }
 }
 

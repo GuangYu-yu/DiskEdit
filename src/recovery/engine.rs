@@ -447,16 +447,21 @@ fn target_is_block(_path: &str) -> bool {
 }
 
 impl TransactionManager {
-    /// 没有稳定身份证据的目标不能开事务：记录头会把 `Unavailable` 记成
-    /// "哪一类字段才是身份证据"，而恢复端无法据此证明"还是那个目标"——写下的现场既
-    /// 不能续跑也不能回滚。故在任何字节落盘之前拒绝，而不是等恢复时才发现已经无路可走。
-    /// "身份不可证明"归入 6：换参数或重试都不会让目标长出身份
+    /// 既没有稳定身份证据、也没有 `--identity` 名字的目标不能开事务：记录头会把
+    /// `Unavailable` 记成"哪一类字段才是身份证据"，而恢复端无法据此证明"还是那个目标"
+    /// ——写下的现场既不能续跑也不能回滚。故在任何字节落盘之前拒绝，而不是等恢复时才发现
+    /// 已经无路可走。"身份不可证明"归入 6：换参数或重试都不会让目标长出身份，补名字可以
     fn refuse_unidentifiable(src: &FileSource) -> Result<(), RunOutcome> {
         if matches!(src.scene().proof, dev::LiveProof::Unavailable) {
-            return Err(RunOutcome::unsupported(
+            let remedy = if src.is_block {
+                "; pass `--identity NAME` to name this target, then re-run"
+            } else {
+                ""
+            };
+            return Err(RunOutcome::unsupported(format!(
                 "this target exposes no stable identity (no device ID and no file identity): an interrupted write \
-                 here could neither be resumed nor undone, so it is refused before any byte is written",
-            ));
+                 here could neither be resumed nor undone, so it is refused before any byte is written{remedy}"
+            )));
         }
         Ok(())
     }
@@ -662,25 +667,22 @@ impl TransactionManager {
         let src = Self::open_rw(a)?;
         Self::refuse_unidentifiable(&src)?;
         // 块设备的记录目录由 WWN / EUI / serial 派生的 identity-hash
-        // 决定。dm、md、只有 major:minor、或 serial 读数不一致的目标没有目录，
-        // 写命令退 6。镜像的记录目录落在每用户状态根里，
+        // 决定。dm、md、只有 major:minor、或 serial 读数不一致的目标没有目录；
+        // `--identity` 可以补一个名字，否则写命令退 6。镜像的记录目录落在每用户状态根里，
         // 取不到状态根同样没有落点
         let Some(record_path) = src.identity.record_path().map(Path::to_path_buf) else {
-            let detail = match src.identity.kind {
-                crate::dev::TargetKind::Image => {
-                    "no per-user state directory for image recovery records could be determined \
+            let message = match src.identity.kind {
+                crate::dev::TargetKind::Image => "no per-user state directory for image recovery records could be determined \
                      (set DISKEDIT_STATE_DIR, or define LOCALAPPDATA / XDG_STATE_HOME / HOME), so \
-                     the recovery record has no directory to live under"
-                }
-                crate::dev::TargetKind::Block => {
-                    "this block device exposes no WWN, EUI, or repeatable serial (dm / md / \
-                     major:minor are not accepted as identity); the recovery record has no \
-                     directory to live under"
-                }
+                     the recovery record has no directory to live under, so table writes to this target stay refused"
+                    .to_string(),
+                crate::dev::TargetKind::Block => "this block device exposes no WWN, EUI, or repeatable serial (dm / md / \
+                     major:minor are not accepted as identity) and no --identity name was given, so the \
+                     recovery record has no directory to live under; pass `--identity NAME` to name this \
+                     target, then re-run"
+                    .to_string(),
             };
-            return Err(RunOutcome::unsupported(format!(
-                "{detail}, so table writes to this target stay refused"
-            )));
+            return Err(RunOutcome::unsupported(message));
         };
         // 记录目录（连同所有者与目录形状校验）已在
         // `WriteSource::acquire` 取锁前准备好，这里只使用它的落点
@@ -689,9 +691,10 @@ impl TransactionManager {
         crate::recovery::sweep_record_temps(&record_path);
         // 落点由设备声明派生：另有整盘携带同一声明时，这个落点不再唯一指向本设备，
         // 写下的记录在恢复时无法被证明属于谁。只有记录键来自设备声明的目标需要这一问
-        // （镜像与 loop 目标的键来自载体文件，没有 sysfs 兄弟盘）
+        // （镜像与 loop 目标的键来自载体文件，没有 sysfs 兄弟盘；`--identity` 给的名字
+        // 不是设备声明，没有可核对的兄弟盘）
         #[cfg(target_os = "linux")]
-        if src.identity.kind == crate::dev::TargetKind::Block {
+        if src.identity.kind == crate::dev::TargetKind::Block && src.identity.declared().is_none() {
             let check = crate::dev::check_device(&src).map_err(|why| {
                 RunOutcome::refused(format!(
                     "the device identity of this target could not be checked against the other whole disks \
@@ -890,8 +893,14 @@ impl TransactionManager {
         if target_is_block(a.target()) {
             reject_sector_size_on_block(a)?;
         }
-        let src = FileSource::open(Path::new(a.target()), a.sector_size().map(|s| s.get()))
+        let mut src = FileSource::open(Path::new(a.target()), a.sector_size().map(|s| s.get()))
             .map_err(|e| RunOutcome::refused(format!("open failed: {e}")))?;
+        // 身份不可得的目标可以借 `--identity` 的名字开记录与锁。名字的适用范围在
+        // `with_declared` 里定：镜像、带设备声明的盘、loop 都不接受
+        if let Some(raw) = a.identity() {
+            let name = crate::dev::DeclaredIdentity::parse(raw).map_err(RunOutcome::usage)?;
+            src.identity = src.identity.with_declared(&name).map_err(RunOutcome::usage)?;
+        }
         Ok(src)
     }
 
@@ -1170,6 +1179,9 @@ mod tests {
             record: Some(record.to_path_buf()),
             record_key: None,
             lock: record.with_file_name("record.lock"),
+            partition: None,
+            declared: None,
+            claim: None,
             backing_fp: None,
         }
     }

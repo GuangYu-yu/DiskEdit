@@ -4,6 +4,10 @@
 用 `DISKEDIT_WRITE_DOCS=1 cargo test --bin DiskEdit docs_are_generated_in_sync` 重新生成；
 CI 会重新生成，并在工作树不一致时失败。不要手工编辑。
 
+对不带 WWN、EUI 或可重复序列号的块设备（nbd、rbd、dm、md），写命令必须给出
+`--identity NAME`；续跑该记录与释放它都需要同一个名字。镜像与自带身份的设备
+拒绝该旗标。
+
 ## 命令
 
 ### `info`
@@ -188,7 +192,7 @@ diskedit resize <TARGET>:N --grow-to-end [--align A] [--no-fs] --yes
 | 属性 | 值 |
 |---|---|
 | 位置参数 | `TARGET`, `SIZE` / `TARGET` / `TARGET` |
-| 选项 | `--no-fs`, `--sector-size`, `--yes`, `--allow-move`, `--chunk`, `--dry-run`, `--grow-lv`, `--lv`, `--end`, `--align`, `--grow-to-end` |
+| 选项 | `--no-fs`, `--identity`, `--sector-size`, `--yes`, `--allow-move`, `--chunk`, `--dry-run`, `--grow-lv`, `--lv`, `--end`, `--align`, `--grow-to-end` |
 | 确认 | 必须（`--yes`） |
 | 恢复记录 | 写入，有恢复记录 |
 | 能力 | 目标数据, 伴生文件, 外部工具, 设备状态 |
@@ -266,7 +270,7 @@ diskedit move <TARGET>:N --start <LBA|end|align> [--chunk N] --yes [--align A]
 | 属性 | 值 |
 |---|---|
 | 位置参数 | `TARGET` |
-| 选项 | `--sector-size`, `--yes`, `--align`, `--chunk`, `--start` |
+| 选项 | `--identity`, `--sector-size`, `--yes`, `--align`, `--chunk`, `--start` |
 | 确认 | 必须（`--yes`） |
 | 恢复记录 | 写入，有恢复记录 |
 | 能力 | 目标数据, 伴生文件, 外部工具, 设备状态 |
@@ -298,7 +302,7 @@ diskedit copy <TARGET>:N --start <LBA|end> [--chunk N] --yes [--align A] [--name
 | 属性 | 值 |
 |---|---|
 | 位置参数 | `TARGET` |
-| 选项 | `--sector-size`, `--yes`, `--align`, `--chunk`, `--keep-partuuid`, `--name`, `--start` |
+| 选项 | `--identity`, `--sector-size`, `--yes`, `--align`, `--chunk`, `--keep-partuuid`, `--name`, `--start` |
 | 确认 | 必须（`--yes`） |
 | 恢复记录 | 写入，有恢复记录 |
 | 能力 | 目标数据, 伴生文件, 设备状态 |
@@ -329,7 +333,7 @@ diskedit delete <TARGET>:N --yes
 | 属性 | 值 |
 |---|---|
 | 位置参数 | `TARGET` |
-| 选项 | `--sector-size`, `--yes` |
+| 选项 | `--identity`, `--sector-size`, `--yes` |
 | 确认 | 必须（`--yes`） |
 | 恢复记录 | 写入，有恢复记录 |
 | 能力 | 目标数据, 伴生文件, 设备状态 |
@@ -353,7 +357,7 @@ diskedit set <TARGET>:N type GUID|0xXX --yes
 | 属性 | 值 |
 |---|---|
 | 位置参数 | `TARGET`, `PROPERTY`, `VALUE` / `TARGET`, `PROPERTY`, `VALUE` / `TARGET`, `PROPERTY`, `VALUE`（可选） / `TARGET`, `PROPERTY`, `VALUE`, `STATE` / `TARGET`, `PROPERTY`, `VALUE` |
-| 选项 | `--random`, `--sector-size`, `--yes` |
+| 选项 | `--identity`, `--random`, `--sector-size`, `--yes` |
 | 确认 | 必须（`--yes`） |
 | 恢复记录 | 写入，有恢复记录 |
 | 能力 | 目标数据, 伴生文件, 外部工具, 设备状态 |
@@ -411,7 +415,7 @@ diskedit mkfs <TARGET>:N <FS> --yes [--label S]
 | 属性 | 值 |
 |---|---|
 | 位置参数 | `TARGET`, `FS` |
-| 选项 | `--sector-size`, `--yes`, `--label` |
+| 选项 | `--identity`, `--sector-size`, `--yes`, `--label` |
 | 确认 | 必须（`--yes`） |
 | 恢复记录 | 写入，有恢复记录 |
 | 能力 | 伴生文件, 外部工具, 设备状态 |
@@ -433,7 +437,7 @@ diskedit resizefs <MOUNTPOINT> [BYTES] --yes
 | 属性 | 值 |
 |---|---|
 | 位置参数 | `TARGET`, `BYTES`（可选） / `TARGET`, `BYTES`（可选） |
-| 选项 | `--sector-size`, `--yes` |
+| 选项 | `--identity`, `--sector-size`, `--yes` |
 | 确认 | 必须（`--yes`） |
 | 恢复记录 | 写入，有恢复记录 |
 | 能力 | 伴生文件, 外部工具, 设备状态 |
@@ -469,7 +473,7 @@ diskedit recover <TARGET> --release [--discard-replay] --yes
 | 属性 | 值 |
 |---|---|
 | 位置参数 | `TARGET` / `TARGET` / `TARGET` |
-| 选项 | `--sector-size`, `--yes`, `--replay-table-only`, `--release`, `--discard-replay` |
+| 选项 | `--identity`, `--sector-size`, `--yes`, `--replay-table-only`, `--release`, `--discard-replay` |
 | 确认 | 必须（`--yes`） |
 | 恢复记录 | 写入，无恢复记录 |
 | 能力 | 目标数据, 伴生文件, 外部工具, 设备状态 |
@@ -503,7 +507,7 @@ diskedit new <TARGET> [--table gpt|mbr] --yes [--overwrite-data]
 | 属性 | 值 |
 |---|---|
 | 位置参数 | `TARGET` |
-| 选项 | `--sector-size`, `--yes`, `--table`, `--overwrite-data` |
+| 选项 | `--identity`, `--sector-size`, `--yes`, `--table`, `--overwrite-data` |
 | 确认 | 必须（`--yes`） |
 | 恢复记录 | 写入，有恢复记录 |
 | 能力 | 目标数据, 伴生文件, 设备状态 |
@@ -526,7 +530,7 @@ diskedit add <TARGET> SIZE [--start LBA] [--align A] [--part-number N] [--name S
 | 属性 | 值 |
 |---|---|
 | 位置参数 | `TARGET`, `SIZE` |
-| 选项 | `--sector-size`, `--yes`, `--align`, `--name`, `--part-number`, `--start`, `--type-guid` |
+| 选项 | `--identity`, `--sector-size`, `--yes`, `--align`, `--name`, `--part-number`, `--start`, `--type-guid` |
 | 确认 | 必须（`--yes`） |
 | 恢复记录 | 写入，有恢复记录 |
 | 能力 | 目标数据, 伴生文件, 设备状态 |
@@ -554,6 +558,7 @@ diskedit add <TARGET> SIZE [--start LBA] [--align A] [--part-number N] [--name S
 | `--grow-lv` | — | 同时扩容 LV：由 --lv 指定的一个，否则为唯一的 LV |
 | `--grow-to-end` | — | 把末端固定在最后一个可用 LBA（填充语义） |
 | `--grow` | — | 追加分区 :N 的搬移预览 |
+| `--identity` | `NAME` | 为不带 WWN、EUI 或可重复序列号的目标（nbd、rbd、dm、md）命名；续跑与释放需要同一个名字 |
 | `--keep-partuuid` | — | 复用源的 PARTUUID，而不是生成新的 |
 | `--label` | `S` | 文件系统标签（省略即空标签，不是默认值） |
 | `--lv` | `NAME` | 要扩容的 LV（隐含 --grow-lv） |

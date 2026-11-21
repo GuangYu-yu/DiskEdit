@@ -694,6 +694,7 @@ pub(crate) fn leftward_move_finishes_from_the_committed_table() {
         align: crate::domain::Align::none(),
         align_given: false,
         chunk_mib: Some(1),
+        identity: None,
     };
     let o = crate::cmd::layout::cmd_move(&req);
     assert_eq!(o.exit_code(), 0, "the rerun must finish the move: {o:?}");
@@ -766,6 +767,7 @@ pub(crate) fn move_resume_refuses_a_committed_entry_with_an_unfinished_cursor() 
         align: crate::domain::Align::none(),
         align_given: false,
         chunk_mib: Some(1),
+        identity: None,
     };
     let (code, why) = crate::movepart::tests::support::refusal_of(|| crate::cmd::layout::cmd_move(&req));
     assert_eq!(code, 3, "a record that contradicts itself must be refused");
@@ -817,6 +819,7 @@ pub(crate) fn move_resume_refuses_a_prefix_that_does_not_match_the_record() {
         align: crate::domain::Align::none(),
         align_given: false,
         chunk_mib: Some(1),
+        identity: None,
     };
     let (code, why) = crate::movepart::tests::support::refusal_of(|| crate::cmd::layout::cmd_move(&req));
     assert_eq!(code, 3, "a prefix that contradicts the record must be refused");
@@ -869,6 +872,7 @@ pub(crate) fn move_resume_refuses_a_destination_outside_the_usable_range() {
         align: crate::domain::Align::none(),
         align_given: false,
         chunk_mib: Some(1),
+        identity: None,
     };
     let (code, why) = crate::movepart::tests::support::refusal_of(|| crate::cmd::layout::cmd_move(&req));
     assert_eq!(code, 3, "a destination past last_usable must be refused: {why}");

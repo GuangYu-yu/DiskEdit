@@ -482,6 +482,7 @@ pub(crate) fn a_committed_record_is_not_resumed_by_the_original_command() {
         allow_move: false,
         chunk_mib: Some(1),
         dry_run: false,
+        identity: None,
     };
     let (code, why) = crate::movepart::tests::support::refusal_of(|| crate::cmd::resize::cmd_resize(&req));
     // 本次运行没有打开记录、也没有写目标：归责投影后仍是 3（记录只是被读到）
@@ -512,6 +513,7 @@ pub(crate) fn a_committed_mkfs_record_is_not_reformatted() {
         sector_size: None,
         fstype: "ext4".to_string(),
         label: None,
+        identity: None,
     };
     let (code, why) = crate::movepart::tests::support::refusal_of(|| crate::cmd::fs::cmd_mkfs(&req));
     assert_eq!(code, 3, "a committed mkfs record is refused at admission");

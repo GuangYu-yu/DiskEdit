@@ -2,8 +2,8 @@
 //!
 //! 计划之外有三类写入：`recover` 的回退方向回放（原语在 `recovery/rollback.rs`）、
 //! 已提交态续跑时的 NTFS HiddenSectors 回填、mkfs 前的 `wipe_zero`；另有证据文件
-//! 自身的原子替换与外部工具的 stdin。本文件把「出现字节写原语的源码文件集合」
-//! 钉成一张封闭清单。
+//! 自身的原子替换、载体占据声明（`dev/claims.rs`）与外部工具的 stdin。本文件把
+//! 「出现字节写原语的源码文件集合」钉成一张封闭清单。
 
 mod guards;
 
@@ -44,6 +44,7 @@ const WRITE_PRIMITIVES: &[&str] = &[
 /// 模块能写"，不是"每个调用点都被审过"。`#[cfg(test)]` 的函数体与生产代码同文件时
 /// （如 `table/mbr.rs` 的夹具直写），该文件仍须登记
 const WRITE_SITES: &[&str] = &[
+    "dev/claims.rs",
     "dev/host_repo.rs",
     "dev/identity.rs",
     "dev/source.rs",

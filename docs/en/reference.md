@@ -4,6 +4,11 @@ Generated from the command schema in `src/cli.rs` by `src/docs.rs`.
 Regenerate with `DISKEDIT_WRITE_DOCS=1 cargo test --bin DiskEdit docs_are_generated_in_sync`;
 CI regenerates it and fails when the working tree differs. Do not edit by hand.
 
+Write commands on a block device that exposes no WWN, EUI or repeatable serial
+(nbd, rbd, dm, md) require `--identity NAME`; the same name is needed to resume the
+record and to release it. Images and devices with an identity of their own reject
+the flag.
+
 ## Commands
 
 ### `info`
@@ -198,7 +203,7 @@ diskedit resize <TARGET>:N --grow-to-end [--align A] [--no-fs] --yes
 | property | value |
 |---|---|
 | positionals | `TARGET`, `SIZE` / `TARGET` / `TARGET` |
-| options | `--no-fs`, `--sector-size`, `--yes`, `--allow-move`, `--chunk`, `--dry-run`, `--grow-lv`, `--lv`, `--end`, `--align`, `--grow-to-end` |
+| options | `--no-fs`, `--identity`, `--sector-size`, `--yes`, `--allow-move`, `--chunk`, `--dry-run`, `--grow-lv`, `--lv`, `--end`, `--align`, `--grow-to-end` |
 | confirmation | required (`--yes`) |
 | journal | writes, recovery record |
 | capabilities | target data, companion file, external tool, device state |
@@ -292,7 +297,7 @@ diskedit move <TARGET>:N --start <LBA|end|align> [--chunk N] --yes [--align A]
 | property | value |
 |---|---|
 | positionals | `TARGET` |
-| options | `--sector-size`, `--yes`, `--align`, `--chunk`, `--start` |
+| options | `--identity`, `--sector-size`, `--yes`, `--align`, `--chunk`, `--start` |
 | confirmation | required (`--yes`) |
 | journal | writes, recovery record |
 | capabilities | target data, companion file, external tool, device state |
@@ -325,7 +330,7 @@ diskedit copy <TARGET>:N --start <LBA|end> [--chunk N] --yes [--align A] [--name
 | property | value |
 |---|---|
 | positionals | `TARGET` |
-| options | `--sector-size`, `--yes`, `--align`, `--chunk`, `--keep-partuuid`, `--name`, `--start` |
+| options | `--identity`, `--sector-size`, `--yes`, `--align`, `--chunk`, `--keep-partuuid`, `--name`, `--start` |
 | confirmation | required (`--yes`) |
 | journal | writes, recovery record |
 | capabilities | target data, companion file, device state |
@@ -358,7 +363,7 @@ diskedit delete <TARGET>:N --yes
 | property | value |
 |---|---|
 | positionals | `TARGET` |
-| options | `--sector-size`, `--yes` |
+| options | `--identity`, `--sector-size`, `--yes` |
 | confirmation | required (`--yes`) |
 | journal | writes, recovery record |
 | capabilities | target data, companion file, device state |
@@ -382,7 +387,7 @@ diskedit set <TARGET>:N type GUID|0xXX --yes
 | property | value |
 |---|---|
 | positionals | `TARGET`, `PROPERTY`, `VALUE` / `TARGET`, `PROPERTY`, `VALUE` / `TARGET`, `PROPERTY`, `VALUE` (optional) / `TARGET`, `PROPERTY`, `VALUE`, `STATE` / `TARGET`, `PROPERTY`, `VALUE` |
-| options | `--random`, `--sector-size`, `--yes` |
+| options | `--identity`, `--random`, `--sector-size`, `--yes` |
 | confirmation | required (`--yes`) |
 | journal | writes, recovery record |
 | capabilities | target data, companion file, external tool, device state |
@@ -443,7 +448,7 @@ diskedit mkfs <TARGET>:N <FS> --yes [--label S]
 | property | value |
 |---|---|
 | positionals | `TARGET`, `FS` |
-| options | `--sector-size`, `--yes`, `--label` |
+| options | `--identity`, `--sector-size`, `--yes`, `--label` |
 | confirmation | required (`--yes`) |
 | journal | writes, recovery record |
 | capabilities | companion file, external tool, device state |
@@ -466,7 +471,7 @@ diskedit resizefs <MOUNTPOINT> [BYTES] --yes
 | property | value |
 |---|---|
 | positionals | `TARGET`, `BYTES` (optional) / `TARGET`, `BYTES` (optional) |
-| options | `--sector-size`, `--yes` |
+| options | `--identity`, `--sector-size`, `--yes` |
 | confirmation | required (`--yes`) |
 | journal | writes, recovery record |
 | capabilities | companion file, external tool, device state |
@@ -505,7 +510,7 @@ diskedit recover <TARGET> --release [--discard-replay] --yes
 | property | value |
 |---|---|
 | positionals | `TARGET` / `TARGET` / `TARGET` |
-| options | `--sector-size`, `--yes`, `--replay-table-only`, `--release`, `--discard-replay` |
+| options | `--identity`, `--sector-size`, `--yes`, `--replay-table-only`, `--release`, `--discard-replay` |
 | confirmation | required (`--yes`) |
 | journal | writes, no recovery record |
 | capabilities | target data, companion file, external tool, device state |
@@ -543,7 +548,7 @@ diskedit new <TARGET> [--table gpt|mbr] --yes [--overwrite-data]
 | property | value |
 |---|---|
 | positionals | `TARGET` |
-| options | `--sector-size`, `--yes`, `--table`, `--overwrite-data` |
+| options | `--identity`, `--sector-size`, `--yes`, `--table`, `--overwrite-data` |
 | confirmation | required (`--yes`) |
 | journal | writes, recovery record |
 | capabilities | target data, companion file, device state |
@@ -568,7 +573,7 @@ diskedit add <TARGET> SIZE [--start LBA] [--align A] [--part-number N] [--name S
 | property | value |
 |---|---|
 | positionals | `TARGET`, `SIZE` |
-| options | `--sector-size`, `--yes`, `--align`, `--name`, `--part-number`, `--start`, `--type-guid` |
+| options | `--identity`, `--sector-size`, `--yes`, `--align`, `--name`, `--part-number`, `--start`, `--type-guid` |
 | confirmation | required (`--yes`) |
 | journal | writes, recovery record |
 | capabilities | target data, companion file, device state |
@@ -597,6 +602,7 @@ diskedit add <TARGET> SIZE [--start LBA] [--align A] [--part-number N] [--name S
 | `--grow-lv` | — | also grow the LV: the one named by --lv, else the only LV |
 | `--grow-to-end` | — | pin the end at the last usable LBA (fill semantics) |
 | `--grow` | — | append the relocation preview for partition :N |
+| `--identity` | `NAME` | name a target that exposes no WWN, EUI or repeatable serial (nbd, rbd, dm, md); resume and release need the same name |
 | `--keep-partuuid` | — | reuse the source PARTUUID instead of generating a new one |
 | `--label` | `S` | filesystem label (omitted = an empty label, not a default) |
 | `--lv` | `NAME` | which LV to grow (implies --grow-lv) |
