@@ -273,7 +273,7 @@ pub(crate) const FLAGS: &[FlagSpec] = &[
     flag(
         "--identity",
         ValueDomain::Text("NAME"),
-        "name a target that exposes no WWN, EUI or repeatable serial (nbd, rbd, dm, md); resume and release need the same name",
+        "name a target that exposes no WWN, EUI or repeatable serial (nbd, rbd, dm, md); resuming, releasing, inspecting or verifying its record needs the same name",
         Effect::Identity,
     ),
     flag(
@@ -659,7 +659,7 @@ pub(crate) const COMMANDS: &[CommandDef] = &[
         group: CommandGroup::Everyday,
         summary: "show the recovery record beside a target (read-only)",
         variants: &[variant("<TARGET|PATH>", &[TARGET_ARG], &[], &[], TargetSuffix::Whole, true)],
-        common_options: &[],
+        common_options: &[opt("--identity")],
         details: crate::cmd::inspect::DETAILS,
         mode: TargetMode::ReadOnly,
         capabilities: &[Capability::ReadOnly, Capability::CompanionFile],
@@ -671,7 +671,7 @@ pub(crate) const COMMANDS: &[CommandDef] = &[
         group: CommandGroup::Everyday,
         summary: "list recovery records as JSON (omit TARGET: everything under <state_root>)",
         variants: &[variant("[TARGET]", &[OPTIONAL_TARGET_ARG], &[], &[], TargetSuffix::Whole, true)],
-        common_options: &[],
+        common_options: &[opt("--identity")],
         details: crate::cmd::records::DETAILS_LIST,
         mode: TargetMode::ReadOnly,
         capabilities: &[Capability::ReadOnly, Capability::CompanionFile],
@@ -690,7 +690,7 @@ pub(crate) const COMMANDS: &[CommandDef] = &[
             TargetSuffix::Whole,
             true,
         )],
-        common_options: &[],
+        common_options: &[opt("--identity")],
         details: crate::cmd::records::DETAILS_VERIFY,
         mode: TargetMode::ReadOnly,
         capabilities: &[Capability::ReadOnly, Capability::CompanionFile],
@@ -1051,7 +1051,7 @@ pub(crate) fn find(name: &str) -> Option<&'static CommandDef> {
 pub(crate) trait TargetRequest {
     fn target(&self) -> &str;
     fn sector_size(&self) -> Option<SectorSize>;
-    /// 用户为身份不可得的目标声明的名字。只读命令不看它
+    /// 用户为身份不可得的目标声明的名字
     fn identity(&self) -> Option<&str> {
         None
     }
@@ -1099,12 +1099,14 @@ pub(crate) struct InfoRequest {
 pub(crate) struct InspectRequest {
     pub(crate) target: String,
     pub(crate) part: Option<PartSelector>,
+    pub(crate) identity: Option<String>,
 }
 
 /// `records list`：目标可选，省略时列主机仓库里的全部记录
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub(crate) struct RecordsListRequest {
     pub(crate) target: Option<String>,
+    pub(crate) identity: Option<String>,
 }
 
 /// `records verify`：按记录编号定位唯一一条，并对目标重新探测身份
@@ -1112,6 +1114,7 @@ pub(crate) struct RecordsListRequest {
 pub(crate) struct RecordsVerifyRequest {
     pub(crate) id: String,
     pub(crate) target: String,
+    pub(crate) identity: Option<String>,
 }
 
 /// `records scan`：容器根目录，块设备侧是 `<state_root>/recovery`，镜像侧是镜像所在目录
@@ -1475,17 +1478,17 @@ fn build_info(p: &Positionals, o: Options) -> Request {
     Request::Info(InfoRequest { target, part, sector_size: o.sector_size })
 }
 
-fn build_inspect(p: &Positionals, _o: Options) -> Request {
+fn build_inspect(p: &Positionals, o: Options) -> Request {
     let (target, part) = target_of(p);
     if part.is_some() {
         bail_fail(RunOutcome::usage(format!(
             "`inspect` takes a whole target, not a partition — drop the :N suffix (got {target})"
         )));
     }
-    Request::Inspect(InspectRequest { target, part })
+    Request::Inspect(InspectRequest { target, part, identity: o.identity })
 }
 
-fn build_records_list(p: &Positionals, _o: Options) -> Request {
+fn build_records_list(p: &Positionals, o: Options) -> Request {
     let target = match p.parsed(Slot::OptionalTarget) {
         None => None,
         Some(Parsed::Target { target, part }) => {
@@ -1498,10 +1501,15 @@ fn build_records_list(p: &Positionals, _o: Options) -> Request {
         }
         Some(other) => bail_fail(RunOutcome::internal(format!("optional TARGET slot produced {other:?}"))),
     };
-    Request::RecordsList(RecordsListRequest { target })
+    if target.is_none() && o.identity.is_some() {
+        bail_fail(RunOutcome::usage(
+            "`--identity` names a target; give TARGET or drop the option".to_string(),
+        ));
+    }
+    Request::RecordsList(RecordsListRequest { target, identity: o.identity })
 }
 
-fn build_records_verify(p: &Positionals, _o: Options) -> Request {
+fn build_records_verify(p: &Positionals, o: Options) -> Request {
     let id = match p.parsed(Slot::RecordId) {
         Some(Parsed::Text(id)) => id,
         Some(other) => bail_fail(RunOutcome::internal(format!("ID slot produced {other:?}"))),
@@ -1513,7 +1521,7 @@ fn build_records_verify(p: &Positionals, _o: Options) -> Request {
             "`records verify` takes a whole target, not a partition — drop the :N suffix (got {target})"
         )));
     }
-    Request::RecordsVerify(RecordsVerifyRequest { id, target })
+    Request::RecordsVerify(RecordsVerifyRequest { id, target, identity: o.identity })
 }
 
 fn build_records_scan(p: &Positionals, _o: Options) -> Request {

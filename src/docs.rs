@@ -538,8 +538,8 @@ pub(crate) mod published {
             cat,
             "Write commands on a block device that exposes no WWN, EUI or repeatable serial\n\
              (nbd, rbd, dm, md) require `--identity NAME`; the same name is needed to resume the\n\
-             record and to release it. Images and devices with an identity of their own reject\n\
-             the flag.\n\n",
+             record, release it, or verify it. Images and devices with an identity of their own\n\
+             reject the flag.\n\n",
         ));
         out.push_str(tr(cat, "## Commands\n"));
         for c in cli::COMMANDS {
@@ -720,8 +720,9 @@ pub(crate) mod published {
             cat,
             "\n`admitted` means the capability gate reports no gap for that shape. A block device\n\
              that exposes no WWN, EUI or repeatable serial (nbd, rbd, dm, md) is still admitted\n\
-             here, but its write commands need `--identity NAME`, and the same name is needed to\n\
-             resume or release the record.\n",
+             here, but its write commands need `--identity NAME`; the same name is needed to\n\
+             resume or release the record, and the read-only record commands (`inspect`,\n\
+             `records list`, `records verify`) accept it to locate and verify that record.\n",
         ));
 
         out.push_str(tr(cat, "\n## Runtime gate\n\n"));

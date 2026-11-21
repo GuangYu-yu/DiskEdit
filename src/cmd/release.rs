@@ -23,7 +23,7 @@
 //! 本次操作的权限范围。首选名被别的文件占用时顺延到 `.N`——既不覆盖，也不因为
 //! "名字被占了"而把目标锁死；同一个 inode 的残局则直接收敛（判据是 inode，不是文件名）
 
-use crate::dev::{DeclaredIdentity, FileSource, TargetIdentity};
+use crate::dev::{FileSource, TargetIdentity};
 use crate::support::{
     active_recovery_records, bail_fail, refuse_partition_node_target,
     RecoveryRecord, EXIT_OK, RunOutcome,
@@ -53,13 +53,9 @@ pub(crate) fn cmd_release(a: &RecoverRequest) -> u8 {
     // 身份不可得的块设备（nbd / rbd）由 `--identity` 声明，记录键随之由这个名字派生；
     // 释放的仍是整盘的现场，声明名只补上"哪块盘"这一层身份。镜像与自带 WWN/serial 的
     // 设备不接受声明：它们有可核对的身份，自由文本名字会盖住它
-    let identity = match a.identity.as_deref() {
-        Some(raw) => {
-            let declared = DeclaredIdentity::parse(raw).unwrap_or_else(|e| bail_fail(RunOutcome::usage(e)));
-            identity.with_declared(&declared).unwrap_or_else(|e| bail_fail(RunOutcome::usage(e)))
-        }
-        None => identity,
-    };
+    let identity = identity
+        .with_declared_name(a.identity.as_deref())
+        .unwrap_or_else(|e| bail_fail(RunOutcome::usage(e)));
 
     // 锁的独占权针对"对本目标的操作"，目标不存在也照取：隔离条目的编号分配与占位命名
     // 以"持锁 ⇒ 窗口内无并发 diskedit 抢名"为前提，跳锁会让该前提失效。
@@ -103,9 +99,14 @@ pub(crate) fn cmd_release(a: &RecoverRequest) -> u8 {
     };
     // 归属比对读的是句柄的身份：声明名与前面解析出的身份一样要套到句柄上，
     // 否则身份不可得的目标会被判成"身份读不出"，一份记录也释放不了
-    if let (Some(declared), Some(mut src)) = (identity.declared(), disk.take()) {
-        src.identity = src.identity.with_declared(declared).unwrap_or_else(|e| bail_fail(RunOutcome::usage(e)));
-        disk = Some(src);
+    if let Some(declared) = identity.declared() {
+        disk = disk.map(|mut src| {
+            src.identity = src
+                .identity
+                .with_declared(declared)
+                .unwrap_or_else(|e| bail_fail(RunOutcome::usage(e)));
+            src
+        });
     }
     release_records(&a.target, &identity, disk.as_ref(), a.discard_replay)
 }

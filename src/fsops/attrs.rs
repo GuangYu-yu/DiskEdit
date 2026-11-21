@@ -4,10 +4,26 @@ use super::*;
 
 /// FS 一致性检查（不修改分区边界）。各类型的工具与开关见下方匹配臂
 pub fn check_fs(src: &FileSource, part: u32, fstype: Option<ContentKind>) -> Result<(), FsError> {
-    if fstype == Some(ContentKind::Lvm2Pv) {
-        return Err(FsError::invalid(
-            "target is an LVM2 PV, not a filesystem — PV metadata is checked with pvck(8), not fsck",
-        ));
+    // 这几类内容不是文件系统：fsck 没有可作用的对象，拒绝同时给出该去哪查
+    match fstype {
+        Some(ContentKind::Lvm2Pv) => {
+            return Err(FsError::invalid(
+                "target is an LVM2 PV, not a filesystem — PV metadata is checked with pvck(8), not fsck",
+            ));
+        }
+        Some(ContentKind::Luks) => {
+            return Err(FsError::invalid(
+                "target is a LUKS container, not a filesystem — open it (cryptsetup open) and check the \
+                 inner filesystem on /dev/mapper/<name>",
+            ));
+        }
+        Some(ContentKind::BitLocker) => {
+            return Err(FsError::invalid(
+                "target is a BitLocker volume, not a filesystem — Windows manages it (manage-bde); \
+                 this tool only identifies it",
+            ));
+        }
+        _ => {}
     }
     // 访问方式与工具同表：`fsck.f2fs` 无参也可能写回全局元数据（见上一条），这一臂
     // 按"可能写"声明；其余各臂都带明确的只读开关
@@ -125,10 +141,20 @@ pub fn set_label(
     let (device, _) = partition_device(src, part)?;
     let dev = device.path();
     let Some(label_op) = Label::for_fstype(fstype) else {
-        return Err(FsError::unsupported(format!(
-            "no label tool wired for {}",
-            content_name(fstype.unwrap_or(ContentKind::Unknown))
-        )));
+        return Err(match fstype {
+            Some(ContentKind::Luks) => FsError::invalid(
+                "target is a LUKS container, not a filesystem — a LUKS2 label is set with \
+                 `cryptsetup config --label`; this tool sets filesystem labels only",
+            ),
+            Some(ContentKind::BitLocker) => FsError::invalid(
+                "target is a BitLocker volume, not a filesystem — Windows manages it (manage-bde); \
+                 this tool only identifies it",
+            ),
+            _ => FsError::unsupported(format!(
+                "no label tool wired for {}",
+                content_name(fstype.unwrap_or(ContentKind::Unknown))
+            )),
+        });
     };
     // 工具缺失时一个字节都不写：存在性确认也在屏障之前
     label_op.tool().require_named("set the label")?;
@@ -172,6 +198,14 @@ pub fn uuid_support(fstype: Option<ContentKind>) -> UuidSupport {
         Some(ContentKind::Filesystem(FsKind::Ext | FsKind::Xfs | FsKind::Btrfs)) => UuidSupport::ExplicitAndGenerated,
         Some(ContentKind::Swap) => UuidSupport::ExplicitOnly,
         Some(ContentKind::Filesystem(FsKind::Ntfs)) => UuidSupport::GeneratedOnly,
+        Some(ContentKind::Luks) => UuidSupport::No(
+            "target is a LUKS container, not a filesystem — the header UUID is changed with \
+             `cryptsetup luksUUID --uuid`; this tool sets filesystem UUIDs only",
+        ),
+        Some(ContentKind::BitLocker) => UuidSupport::No(
+            "target is a BitLocker volume, not a filesystem — Windows manages it (manage-bde); \
+             this tool only identifies it",
+        ),
         _ => UuidSupport::No("not wired to a tool — use the filesystem's own utility"),
     }
 }

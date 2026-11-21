@@ -41,8 +41,9 @@ CI regenerates it and fails when the working tree differs. Do not edit by hand.
 
 `admitted` means the capability gate reports no gap for that shape. A block device
 that exposes no WWN, EUI or repeatable serial (nbd, rbd, dm, md) is still admitted
-here, but its write commands need `--identity NAME`, and the same name is needed to
-resume or release the record.
+here, but its write commands need `--identity NAME`; the same name is needed to
+resume or release the record, and the read-only record commands (`inspect`,
+`records list`, `records verify`) accept it to locate and verify that record.
 
 ## Runtime gate
 

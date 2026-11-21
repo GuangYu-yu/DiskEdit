@@ -23,7 +23,7 @@ use std::time::{Duration, Instant};
 
 use crate::cli::{RecordsListRequest, RecordsScanRequest, RecordsVerifyRequest};
 use crate::cmd::CmdResult;
-use crate::dev::{RecordBackend, TargetIdentity};
+use crate::dev::{DeclaredIdentity, RecordBackend, TargetIdentity};
 use crate::outcome::{RunOutcome, EXIT_OK, EXIT_REFUSED};
 use crate::recovery::{Evidence, Record};
 use crate::support::{bail_fail, json_escape};
@@ -36,7 +36,12 @@ pub(crate) const DETAILS_LIST: &str = r#"  List recovery records as JSON. Only d
   There is no index yet: every row carries "registered": false, and records are
   enumerated in memory. Record directories that are not addressed by TARGET are
   not searched — pass TARGET to see one, or use `records scan` with the
-  directory that holds the images or with the image state root."#;
+  directory that holds the images or with the image state root.
+
+  A block device that exposes no WWN, EUI or repeatable serial (nbd, rbd, dm,
+  md) needs `--identity NAME`, the same name its record was written under.
+  `--identity` names a target, so it needs TARGET: `records list --identity
+  NAME` without a positional is refused as a usage error."#;
 
 pub(crate) const DETAILS_VERIFY: &str = r#"  Locate the record whose id is ID (32 lowercase hex digits, as printed by
   `records list`) on TARGET, re-probe the identity of TARGET, and print the
@@ -50,7 +55,11 @@ pub(crate) const DETAILS_VERIFY: &str = r#"  Locate the record whose id is ID (3
 
   A failed lookup prints a summary line with "hits" (exact matches) and
   "unverified" (entries whose id could not be decoded) as counts. "records"
-  appears only in row documents, where it is always an array."#;
+  appears only in row documents, where it is always an array.
+
+  A block device that exposes no WWN, EUI or repeatable serial (nbd, rbd, dm,
+  md) needs `--identity NAME`, the same name its record was written under; the
+  identity check is then made against that name."#;
 
 pub(crate) const DETAILS_SCAN: &str = r#"  Enumerate records under a container root and print them as JSON.
 
@@ -242,15 +251,21 @@ fn probe_at(path: &Path, current: Option<&crate::recovery::SceneIdentity>) -> Ev
 /// 目标当前的现场身份；目标打不开或节点形态判不出时没有可比的证据，返回 None 让
 /// 调用方标 `identity_check: unavailable`
 #[cfg(target_os = "linux")]
-fn current_scene(path: &Path) -> Option<crate::recovery::SceneIdentity> {
+fn current_scene(
+    path: &Path,
+    declared: Option<&DeclaredIdentity>,
+) -> Option<crate::recovery::SceneIdentity> {
     use crate::dev::FileSource;
     use crate::domain::Fact;
 
-    let src = match crate::dev::target_node_is_block(path) {
+    let mut src = match crate::dev::target_node_is_block(path) {
         Fact::Known(true) => FileSource::open_read_only(path).ok()?,
         Fact::Known(false) | Fact::Absent => FileSource::open_read_only_image(path, None).ok()?,
         Fact::Undecidable(_) => return None,
     };
+    if let Some(name) = declared {
+        src.identity = src.identity.with_declared(name).ok()?;
+    }
     // 与 inspect 同一套事实：容量、载体文件与 loop 映射都从已打开的句柄取
     let probe = crate::platform::probe::probe_of(&src).ok()?;
     Some(crate::recovery::SceneIdentity::of_source(&probe, &src))
@@ -405,14 +420,21 @@ fn image_record_dirs(root: &Path) -> Result<Vec<PathBuf>, String> {
 
 #[cfg(target_os = "linux")]
 pub(crate) fn cmd_records_list(a: &RecordsListRequest) -> CmdResult {
+    let declared = a
+        .identity
+        .as_deref()
+        .map(|raw| DeclaredIdentity::parse(raw).unwrap_or_else(|e| bail_fail(RunOutcome::usage(e))));
     let mut budget = Budget::new();
     let mut rows = Vec::new();
     let note = match &a.target {
         Some(target) => {
             let path = Path::new(target);
-            let identity = TargetIdentity::resolve_for_cleanup(path).unwrap_or_else(|| {
-                bail_fail(RunOutcome::refused(format!("cannot determine the identity of {}", path.display())))
-            });
+            let identity = TargetIdentity::resolve_for_cleanup(path)
+                .unwrap_or_else(|| {
+                    bail_fail(RunOutcome::refused(format!("cannot determine the identity of {}", path.display())))
+                })
+                .with_declared_name(a.identity.as_deref())
+                .unwrap_or_else(|e| bail_fail(RunOutcome::usage(e)));
             let Some(record) = identity.record_path() else {
                 bail_fail(RunOutcome::refused(format!(
                     "{} has no record directory — image records live under the per-user state \
@@ -427,7 +449,7 @@ pub(crate) fn cmd_records_list(a: &RecordsListRequest) -> CmdResult {
                 Ok(None) => RecordBackend::Sidecar,
                 Err(e) => bail_fail(RunOutcome::refused(format!("cannot inspect {}: {e}", dir.display()))),
             };
-            let current = current_scene(path);
+            let current = current_scene(path, declared.as_ref());
             if let Err(reason) = collect_dir(dir, backend, current.as_ref(), &mut budget, 1, &mut rows) {
                 bail_fail(RunOutcome::refused(format!("cannot list records: {reason}")));
             }
@@ -473,14 +495,24 @@ pub(crate) fn cmd_records_list(a: &RecordsListRequest) -> CmdResult {
 #[cfg(target_os = "linux")]
 pub(crate) fn cmd_records_verify(a: &RecordsVerifyRequest) -> CmdResult {
     let path = Path::new(&a.target);
+    let declared = a
+        .identity
+        .as_deref()
+        .map(|raw| DeclaredIdentity::parse(raw).unwrap_or_else(|e| bail_fail(RunOutcome::usage(e))));
+    // 声明名先套到目标身份上：记录目录与当前现场必须落在同一个声明材料上。
+    // 镜像与自带身份的设备不接受该选项，按用量错误拒绝
+    let identity = TargetIdentity::resolve_for_cleanup(path).map(|identity| {
+        identity
+            .with_declared_name(a.identity.as_deref())
+            .unwrap_or_else(|e| bail_fail(RunOutcome::usage(e)))
+    });
     // verify 的语义是拿盘面重新核对一遍身份；目标探测不出来就没有"核对过"这回事
-    let Some(current) = current_scene(path) else {
+    let Some(current) = current_scene(path, declared.as_ref()) else {
         bail_fail(RunOutcome::refused(format!(
             "cannot probe the identity of {} — the record was not verified",
             path.display()
         )));
     };
-    let identity = TargetIdentity::resolve_for_cleanup(path);
     let mut budget = Budget::new();
     let mut rows = Vec::new();
     let mut searched = Vec::new();

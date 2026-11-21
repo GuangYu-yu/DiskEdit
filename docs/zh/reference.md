@@ -5,8 +5,8 @@
 CI 会重新生成，并在工作树不一致时失败。不要手工编辑。
 
 对不带 WWN、EUI 或可重复序列号的块设备（nbd、rbd、dm、md），写命令必须给出
-`--identity NAME`；续跑该记录与释放它都需要同一个名字。镜像与自带身份的设备
-拒绝该旗标。
+`--identity NAME`；续跑该记录、释放它或核对它都需要同一个名字。镜像与自带身份
+的设备拒绝该旗标。
 
 ## 命令
 
@@ -61,7 +61,7 @@ diskedit inspect <TARGET|PATH>
 | 属性 | 值 |
 |---|---|
 | 位置参数 | `TARGET` |
-| 选项 | 无 |
+| 选项 | `--identity` |
 | 确认 | 无 |
 | 恢复记录 | 只读 |
 | 能力 | 只读, 伴生文件 |
@@ -70,6 +70,12 @@ diskedit inspect <TARGET|PATH>
 target：
   TARGET 是整块镜像或块设备；`:N` 分区后缀会被拒绝。
   `--sector-size` 不被接受：inspect 报告的是记录，不是磁盘几何。
+
+identity：
+  `--identity NAME` 为不带 WWN、EUI 或可重复序列号的块设备（nbd、rbd、
+  dm、md）命名。记录按这个名字查找，身份检查也按同一个名字进行。镜像与
+  自带稳定身份的设备拒绝该选项。PATH 本身是记录条目时，不接受
+  `--identity`。
 
 path：
   PATH 按结构分派：恢复记录目录内的直接条目
@@ -80,8 +86,9 @@ path：
 
 输出：
   证据路径、记录字段（事务、计划、操作、进度、提交与保留状态），或阻止
-  给出判定的结构性失败。`identity check: ForeignCheckUnavailable` 表示平台
-  没有给出稳定的目标身份；该记录不参与比较。
+  给出判定的结构性失败。`identity check: unavailable` 表示记录未与目标比对；
+  同一行余下部分给出原因（平台没有稳定目标身份，或声明名无法
+  套到已打开的目标上）。
 
 退出状态：
   0  可读的结果：没有记录、记录完整、记录未完成（输出会点名回滚 / 搁置
@@ -103,7 +110,7 @@ diskedit records list [TARGET]
 | 属性 | 值 |
 |---|---|
 | 位置参数 | `TARGET`（可选） |
-| 选项 | 无 |
+| 选项 | `--identity` |
 | 确认 | 无 |
 | 恢复记录 | 只读 |
 | 能力 | 只读, 伴生文件 |
@@ -116,6 +123,11 @@ diskedit records list [TARGET]
   目前还没有索引：每一行都带 "registered": false，记录在内存中枚举。
   未被 TARGET 指向的记录目录不会被搜索——传 TARGET 可查看其中一个，或用
   `records scan` 指向保存镜像的目录或镜像状态根。
+
+  不带 WWN、EUI 或可重复序列号的块设备（nbd、rbd、dm、md）需要
+  `--identity NAME`，即写记录时所用的同一个名字。`--identity` 命名的是目标，
+  因此必须给出 TARGET：不带位置参数的 `records list --identity NAME` 会按
+  用法错误拒绝。
 ```
 
 ### `records verify`
@@ -129,7 +141,7 @@ diskedit records verify <TARGET> <ID>
 | 属性 | 值 |
 |---|---|
 | 位置参数 | `TARGET`, `ID` |
-| 选项 | 无 |
+| 选项 | `--identity` |
 | 确认 | 无 |
 | 恢复记录 | 只读 |
 | 能力 | 只读, 伴生文件 |
@@ -145,6 +157,9 @@ diskedit records verify <TARGET> <ID>
 
   查找失败时打印一行摘要，以计数给出 "hits"（完全匹配）与 "unverified"
   （id 无法解码的条目）。"records" 只出现在行文档中，且总是数组。
+
+  不带 WWN、EUI 或可重复序列号的块设备（nbd、rbd、dm、md）需要
+  `--identity NAME`，即写记录时所用的同一个名字；身份检查据此进行。
 ```
 
 ### `records scan`
@@ -558,7 +573,7 @@ diskedit add <TARGET> SIZE [--start LBA] [--align A] [--part-number N] [--name S
 | `--grow-lv` | — | 同时扩容 LV：由 --lv 指定的一个，否则为唯一的 LV |
 | `--grow-to-end` | — | 把末端固定在最后一个可用 LBA（填充语义） |
 | `--grow` | — | 追加分区 :N 的搬移预览 |
-| `--identity` | `NAME` | 为不带 WWN、EUI 或可重复序列号的目标（nbd、rbd、dm、md）命名；续跑与释放需要同一个名字 |
+| `--identity` | `NAME` | 为不带 WWN、EUI 或可重复序列号的目标（nbd、rbd、dm、md）命名；续跑、释放、检查或核对它的记录都需要同一个名字 |
 | `--keep-partuuid` | — | 复用源的 PARTUUID，而不是生成新的 |
 | `--label` | `S` | 文件系统标签（省略即空标签，不是默认值） |
 | `--lv` | `NAME` | 要扩容的 LV（隐含 --grow-lv） |

@@ -6,8 +6,8 @@ CI regenerates it and fails when the working tree differs. Do not edit by hand.
 
 Write commands on a block device that exposes no WWN, EUI or repeatable serial
 (nbd, rbd, dm, md) require `--identity NAME`; the same name is needed to resume the
-record and to release it. Images and devices with an identity of their own reject
-the flag.
+record, release it, or verify it. Images and devices with an identity of their own
+reject the flag.
 
 ## Commands
 
@@ -63,7 +63,7 @@ diskedit inspect <TARGET|PATH>
 | property | value |
 |---|---|
 | positionals | `TARGET` |
-| options | none |
+| options | `--identity` |
 | confirmation | none |
 | journal | read-only |
 | capabilities | readonly, companion file |
@@ -72,6 +72,13 @@ diskedit inspect <TARGET|PATH>
 target:
   TARGET is a whole image or block device; a `:N` partition suffix is refused.
   `--sector-size` is not accepted: inspect reports the record, not the disk geometry.
+
+identity:
+  `--identity NAME` names a block device that exposes no WWN, EUI or repeatable
+  serial (nbd, rbd, dm, md). The record is looked up under that name, and the
+  identity check compares the same name. Images and devices with a stable
+  identity of their own reject the option. `--identity` is not accepted for a
+  PATH that is itself a record entry.
 
 path:
   PATH is dispatched by structure: a direct entry inside a recovery-record
@@ -84,8 +91,9 @@ path:
 output:
   the evidence path, the record fields (transaction, plan, operation, progress,
   commit and retention states), or the structural failure that prevents a verdict.
-  `identity check: ForeignCheckUnavailable` means the platform gave no stable
-  target identity; the record is not compared.
+  `identity check: unavailable` means the record was not compared with the
+  target; the rest of the line gives the reason (no stable target identity, or
+  a declared name that could not be bound to the opened target).
 
 exit status:
   0  a readable result: no record, a complete record, an unfinished record (the
@@ -108,7 +116,7 @@ diskedit records list [TARGET]
 | property | value |
 |---|---|
 | positionals | `TARGET` (optional) |
-| options | none |
+| options | `--identity` |
 | confirmation | none |
 | journal | read-only |
 | capabilities | readonly, companion file |
@@ -123,6 +131,11 @@ diskedit records list [TARGET]
   enumerated in memory. Record directories that are not addressed by TARGET are
   not searched — pass TARGET to see one, or use `records scan` with the
   directory that holds the images or with the image state root.
+
+  A block device that exposes no WWN, EUI or repeatable serial (nbd, rbd, dm,
+  md) needs `--identity NAME`, the same name its record was written under.
+  `--identity` names a target, so it needs TARGET: `records list --identity
+  NAME` without a positional is refused as a usage error.
 ```
 
 ### `records verify`
@@ -136,7 +149,7 @@ diskedit records verify <TARGET> <ID>
 | property | value |
 |---|---|
 | positionals | `TARGET`, `ID` |
-| options | none |
+| options | `--identity` |
 | confirmation | none |
 | journal | read-only |
 | capabilities | readonly, companion file |
@@ -155,6 +168,10 @@ diskedit records verify <TARGET> <ID>
   A failed lookup prints a summary line with "hits" (exact matches) and
   "unverified" (entries whose id could not be decoded) as counts. "records"
   appears only in row documents, where it is always an array.
+
+  A block device that exposes no WWN, EUI or repeatable serial (nbd, rbd, dm,
+  md) needs `--identity NAME`, the same name its record was written under; the
+  identity check is then made against that name.
 ```
 
 ### `records scan`
@@ -602,7 +619,7 @@ diskedit add <TARGET> SIZE [--start LBA] [--align A] [--part-number N] [--name S
 | `--grow-lv` | — | also grow the LV: the one named by --lv, else the only LV |
 | `--grow-to-end` | — | pin the end at the last usable LBA (fill semantics) |
 | `--grow` | — | append the relocation preview for partition :N |
-| `--identity` | `NAME` | name a target that exposes no WWN, EUI or repeatable serial (nbd, rbd, dm, md); resume and release need the same name |
+| `--identity` | `NAME` | name a target that exposes no WWN, EUI or repeatable serial (nbd, rbd, dm, md); resuming, releasing, inspecting or verifying its record needs the same name |
 | `--keep-partuuid` | — | reuse the source PARTUUID instead of generating a new one |
 | `--label` | `S` | filesystem label (omitted = an empty label, not a default) |
 | `--lv` | `NAME` | which LV to grow (implies --grow-lv) |

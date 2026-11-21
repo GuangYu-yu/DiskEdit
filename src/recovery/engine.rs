@@ -897,10 +897,7 @@ impl TransactionManager {
             .map_err(|e| RunOutcome::refused(format!("open failed: {e}")))?;
         // 身份不可得的目标可以借 `--identity` 的名字开记录与锁。名字的适用范围在
         // `with_declared` 里定：镜像、带设备声明的盘、loop 都不接受
-        if let Some(raw) = a.identity() {
-            let name = crate::dev::DeclaredIdentity::parse(raw).map_err(RunOutcome::usage)?;
-            src.identity = src.identity.with_declared(&name).map_err(RunOutcome::usage)?;
-        }
+        src.identity = src.identity.with_declared_name(a.identity()).map_err(RunOutcome::usage)?;
         Ok(src)
     }
 
