@@ -534,6 +534,13 @@ pub(crate) mod published {
             cat,
             "CI regenerates it and fails when the working tree differs. Do not edit by hand.\n\n",
         ));
+        out.push_str(tr(
+            cat,
+            "Write commands on a block device that exposes no WWN, EUI or repeatable serial\n\
+             (nbd, rbd, dm, md) require `--identity NAME`; the same name is needed to resume the\n\
+             record and to release it. Images and devices with an identity of their own reject\n\
+             the flag.\n\n",
+        ));
         out.push_str(tr(cat, "## Commands\n"));
         for c in cli::COMMANDS {
             emit!(out, "\n### `{}`\n", c.name);
@@ -708,6 +715,14 @@ pub(crate) mod published {
             }
             emit!(out);
         }
+
+        out.push_str(tr(
+            cat,
+            "\n`admitted` means the capability gate reports no gap for that shape. A block device\n\
+             that exposes no WWN, EUI or repeatable serial (nbd, rbd, dm, md) is still admitted\n\
+             here, but its write commands need `--identity NAME`, and the same name is needed to\n\
+             resume or release the record.\n",
+        ));
 
         out.push_str(tr(cat, "\n## Runtime gate\n\n"));
         // 只列本平台真正能打开的形态，且平台固定在 Linux：生成物在两个构建目标上

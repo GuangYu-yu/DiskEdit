@@ -10,7 +10,8 @@
 //! - **块设备**：锁文件是 `state_dir()` 下的盘键 `<state_root>/<盘键>.lock`。盘键按
 //!   整盘载体派生（有 device-id 用 device-id，否则 sysfs 父节点名 + 容量），分区号
 //!   不进锁键——`/dev/sdb` 与 `/dev/sdb1` 因此共用同一把锁，而记录目录仍按目标身份
-//!   各一份。dm / md / 只有 major:minor 的目标同样有盘键，其写命令在取锁前已退 6。
+//!   各一份。dm / md / 只有 major:minor 的目标同样有盘键；`--identity` 声明的名字另走
+//!   一套锁键（整盘一级，见 [`crate::dev::declared_lock_key`]）。
 //!   锁文件与记录不在同一层：记录在 `<state_root>/recovery/<identity-hash>/` 下。
 //!   在锁之外，块设备的写打开仍是 `O_EXCL`（见 [`crate::dev::FileSource::open`] 的
 //!   块设备分支）——两道凭据互为补充：O_EXCL 使同一目标上的其他独占打开失败，锁文件
@@ -48,6 +49,36 @@ pub(crate) struct TargetLock {
     /// 本进程随后经另一个句柄读写同一文件会直接 ERROR_LOCK_VIOLATION（见
     /// [`crate::dev::FileSource`] 的读写句柄）
     _handle: Option<File>,
+    /// 载体占据声明的锁：身份不可得的块设备才有（见 `dev::claims`）。它必须在整次
+    /// 写入期间持有，否则两个不同名字可以先后通过准入、各开一份现场
+    claim: Option<crate::dev::ClaimFile>,
+}
+
+/// 打开并锁住一个锁文件：非阻塞独占，`0600`、不跟随符号链接。
+/// 锁文件的内容无关紧要，有意义的只是它上面的锁；不截断既无必要，
+/// 也会在"别人正持锁"时多写一次盘
+pub(crate) fn open_lock_file(path: &std::path::Path) -> Result<File, RunOutcome> {
+    let mut opts = OpenOptions::new();
+    opts.read(true).write(true).create(true).truncate(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        // 记录目录内只有本工具写的锁文件：`0600` 只留所有者可读写；
+        // `O_NOFOLLOW` 让尾分量是符号链接时直接失败，不把锁下到别处
+        opts.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+    }
+    let file = opts
+        .open(path)
+        .map_err(|e| RunOutcome::no_mutation(format!("cannot open the target lock {}: {e}", path.display())))?;
+    match file.try_lock() {
+        Ok(()) => Ok(file),
+        // 另一个进程正持有 ⇒ 环境条件，不是请求与现状不匹配：换参数没用，等它做完即可。
+        // 与块设备那条 O_EXCL 打开失败的归类一致
+        Err(std::fs::TryLockError::WouldBlock) => Err(busy(path)),
+        Err(std::fs::TryLockError::Error(e)) => {
+            Err(RunOutcome::no_mutation(format!("cannot take the target lock {}: {e}", path.display())))
+        }
+    }
 }
 
 impl TargetLock {
@@ -62,35 +93,16 @@ impl TargetLock {
     /// 只有两种结局：拿到锁，或返回错误。**没有"降级为不持锁"这条路径**——锁落点由
     /// 身份恒给出（见 [`crate::dev::TargetIdentity::lock_path`]），建立失败即拒绝
     pub(crate) fn acquire(identity: &TargetIdentity, expected: Option<&TargetFingerprint>) -> Result<Self, RunOutcome> {
+        // 载体占据声明先上锁：它记着这个目标上次用的显式身份，读写都要在锁内完成。
+        // 身份不可得的块设备才有这份声明（见 `dev::claims`），镜像与有设备身份的目标没有
+        let claim = match identity.claim_path() {
+            Some(path) => Some(crate::dev::ClaimFile::open_locked(path)?),
+            None => None,
+        };
         let path = identity.lock_path();
         // 落点目录由调用方在取锁前准备好（`prepare_record_dir`）：锁落在记录目录内，
         // 目录的 0700 / 所有者形状不能在这里以"尽力创建"绕过复核
-        let mut opts = OpenOptions::new();
-        opts.read(true)
-            .write(true)
-            .create(true)
-            // 锁文件的内容自始至终无关紧要，有意义的只是它上面的锁；截断它既无必要，
-            // 也会在"别人正持锁"时多写一次盘
-            .truncate(false);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            // 记录目录内只有本工具写的锁文件：`0600` 只留所有者可读写；
-            // `O_NOFOLLOW` 让尾分量是符号链接时直接失败，不把锁下到别处
-            opts.mode(0o600).custom_flags(libc::O_NOFOLLOW);
-        }
-        let file = opts
-            .open(path)
-            .map_err(|e| RunOutcome::no_mutation(format!("cannot open the target lock {}: {e}", path.display())))?;
-        match file.try_lock() {
-            Ok(()) => {}
-            // 另一个进程正持有 ⇒ 环境条件，不是请求与现状不匹配：换参数没用，等它做完即可。
-            // 与块设备那条 O_EXCL 打开失败的归类一致
-            Err(std::fs::TryLockError::WouldBlock) => return Err(Self::busy(path)),
-            Err(std::fs::TryLockError::Error(e)) => {
-                return Err(RunOutcome::no_mutation(format!("cannot take the target lock {}: {e}", path.display())));
-            }
-        }
+        let file = open_lock_file(path)?;
         // 第二道凭据：已打开的目标句柄（仅 unix）。镜像落在数据文件的 inode 上，
         // 块设备落在设备节点的 inode 上；同一 inode 的别名路径由此收敛到一把锁。
         // 只有"目标不在"才放弃这道凭据——`recover --release` 的常态就是目标已消失，那时能
@@ -130,7 +142,7 @@ impl TargetLock {
                     }
                     match f.try_lock() {
                         Ok(()) => Some(f),
-                        Err(std::fs::TryLockError::WouldBlock) => return Err(Self::busy(data)),
+                        Err(std::fs::TryLockError::WouldBlock) => return Err(busy(data)),
                         Err(std::fs::TryLockError::Error(e)) => {
                             return Err(RunOutcome::no_mutation(format!("cannot lock the target {}: {e}", data.display())));
                         }
@@ -164,16 +176,21 @@ impl TargetLock {
             let _ = expected;
             None
         };
-        Ok(TargetLock { _file: file, _handle: handle })
+        Ok(TargetLock { _file: file, _handle: handle, claim })
     }
 
-    fn busy(what: &std::path::Path) -> RunOutcome {
-        RunOutcome::no_mutation(format!(
-            "another diskedit is working on this target (the lock {} is held); \
-             this tool serializes writers per target — wait for it to finish and retry",
-            what.display()
-        ))
+    /// 载体占据声明（身份不可得的块设备才有）。调用方在锁内读它、必要时写入
+    pub(crate) fn claim_mut(&mut self) -> Option<&mut crate::dev::ClaimFile> {
+        self.claim.as_mut()
     }
+}
+
+fn busy(what: &std::path::Path) -> RunOutcome {
+    RunOutcome::no_mutation(format!(
+        "another diskedit is working on this target (the lock {} is held); \
+         this tool serializes writers per target — wait for it to finish and retry",
+        what.display()
+    ))
 }
 
 #[cfg(test)]

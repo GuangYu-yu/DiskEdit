@@ -2,7 +2,7 @@
 //! 身份强度分级对命令的影响。
 //!
 //! 镜像的 `(dev, ino)`、loop 的后备文件身份、分区的载体身份列为 Strong，
-//! dm/md 等只给主次设备号的设备列为 Unusable：读命令照常，写命令必须被拒。
+//! dm/md 等只给主次设备号的设备列为 Unusable：读命令照常，不给 `--identity` 的写命令被拒。
 //!
 //! 需要 Linux：块设备探测与记录后端只在 Linux 编译。root、loop 设备、dm 控制节点
 //! 都在运行期探测，条件不满足时提前返回；对真实磁盘只做只读 `info`，绝不写盘。
@@ -218,8 +218,8 @@ fn a_dm_device_is_unusable_for_writes() {
     detach_loop(&device);
 
     assert_eq!(read_code, 0, "reads must not be gated by identity: {read_out}\n{read_err}");
-    // 6 包含"运行期探测失败"与"身份不可证明"；dm 只有主次设备号，身份
-    // 无法证明，重试或换参数都不会改变这一点，故必须是 6 而不是 3
+    // 6 包含"运行期探测失败"与"身份不可证明"；dm 只有主次设备号，又没给 --identity，
+    // 身份无法证明，重试或换参数都不会改变这一点，故必须是 6 而不是 3
     assert_eq!(
         write_code, 6,
         "a dm write must exit 6 (identity unprovable), got {write_code}: {write_out}\n{write_err}"

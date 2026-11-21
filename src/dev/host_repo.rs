@@ -123,16 +123,38 @@ fn push_string(out: &mut Vec<u8>, value: &str) {
     out.extend_from_slice(value.as_bytes());
 }
 
-/// 块设备记录目录的身份键。读取失败、dm / md、以及没有任何 WWN / EUI / 可重复
-/// serial 都没有键；写命令据此退 6，不退回 major:minor。
-/// 载体与分区号的读取在 `dev::topology::record_carrier`——那里是 sysfs 拓扑事实的唯一
+/// 块设备的记录落点原料：载体的稳定身份原文（没有即 `None`）与分区号。
+/// 读取失败或 serial 两读不一致 ⇒ `Err`：无法判定"没有身份"，打开即失败；
+/// dm / md、或确实没有任何 WWN / EUI / 可重复 serial ⇒ `None`，可由 `--identity`
+/// 补一个键，否则写命令退 6，不退回 major:minor。分区号在两种情况下都要：
+/// 显式身份键按它分开各分区的记录目录。
+/// 载体与分区号的读取在 `dev::topology::record_context`——那里是 sysfs 拓扑事实的唯一
 /// 出口，本模块只负责把它变成记录目录的键
 #[cfg(target_os = "linux")]
-pub(crate) fn block_stable_identity(node: &Path) -> Result<IdentityKey, String> {
-    match super::record_carrier(node)? {
-        Some((carrier, partition)) => Ok(IdentityKey::new(carrier, partition)),
-        None => Err("no WWN, EUI or repeatable serial is readable on this device".to_string()),
-    }
+pub(crate) fn block_record_context(node: &Path) -> Result<(Option<IdentityKey>, Option<u32>), String> {
+    let (carrier, partition) = super::record_context(node)?;
+    Ok((carrier.map(|carrier| IdentityKey::new(carrier, partition)), partition))
+}
+
+/// 显式身份键。目标分量带 `declared:` 前缀：它与设备声明的原文共用同一套编码，
+/// 前缀保证两套命名空间不互相冒充。分区号是独立分量，与原生键同一规则
+pub(crate) fn declared_identity_key(identity: &str, partition: Option<u32>) -> IdentityKey {
+    IdentityKey::new(format!("declared:{identity}"), partition)
+}
+
+/// 显式身份的锁键：整盘一级，分区号不进锁键（见 `targetlock`）
+pub(crate) fn declared_lock_key(identity: &str) -> String {
+    format!("declared:{identity}")
+}
+
+/// 载体占据声明的落点：`<state_root>/claims/<键摘要>`。键按（整盘盘键, 分区号）派生：
+/// 声明保护的是"这个目标"的现场，而记录目录本就按分区号分开
+pub(crate) fn claim_path(lock_key: &str, partition: Option<u32>) -> PathBuf {
+    let token = match partition {
+        Some(number) => format!("{lock_key}-p{number}"),
+        None => lock_key.to_string(),
+    };
+    host_state_root().join(super::CLAIM_DIR).join(super::identity::key_token(&token))
 }
 
 /// 准备本目标的记录目录。逐级创建 `<state_root>`、`<state_root>/recovery`、
@@ -268,18 +290,21 @@ pub(crate) fn ensure_sidecar_dir(dir: &Path, owner: Option<(u32, u32)>) -> Resul
 
 /// 取锁前准备记录目录：镜像的记录目录落在每用户状态根里（无状态根时锁退回 sidecar
 /// 目录，写入本身会因没有记录落点被拒）；块设备的锁落在 `state_root` 根下，逐级建出
-/// 记录目录时同时建出该根。身份没有记录落点（dm / md / 无稳定身份的块设备）时不动，
-/// 由调用方决定退 6
+/// 记录目录时同时建出该根。身份不可得的块设备还要建出占据声明目录，声明与记录目录
+/// 分属两个命名空间。没有记录落点的目标不建记录目录，由调用方决定退 6
 pub(crate) fn prepare_record_dir(
     identity: &super::TargetIdentity,
     owner: Option<(u32, u32)>,
 ) -> Result<(), HostRepoError> {
     match identity.kind {
         super::TargetKind::Block => {
-            let Some(record) = identity.record_path() else {
-                return Ok(());
-            };
-            ensure_record_dir(record)
+            if let Some(record) = identity.record_path() {
+                ensure_record_dir(record)?;
+            }
+            if identity.claim_path().is_some() {
+                ensure_claim_dir(&host_state_root())?;
+            }
+            Ok(())
         }
         super::TargetKind::Image => match identity.record_path() {
             Some(record) => {
@@ -294,6 +319,19 @@ pub(crate) fn prepare_record_dir(
             }
         },
     }
+}
+
+#[cfg(target_os = "linux")]
+fn ensure_claim_dir(root: &Path) -> Result<(), HostRepoError> {
+    for d in [root.to_path_buf(), root.join(super::CLAIM_DIR)] {
+        create_dir_uid0(&d)?;
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn ensure_claim_dir(_root: &Path) -> Result<(), HostRepoError> {
+    Ok(())
 }
 
 #[cfg(target_os = "linux")]

@@ -85,6 +85,9 @@ options (availability: help <CMD>):
                          only LV
   --grow-to-end          pin the end at the last usable LBA (fill semantics)
   --grow                 append the relocation preview for partition :N
+  --identity NAME        name a target that exposes no WWN, EUI or repeatable
+                         serial (nbd, rbd, dm, md); resume and release need
+                         the same name
   --keep-partuuid        reuse the source PARTUUID instead of generating a new
                          one
   --label S              filesystem label (omitted = an empty label, not a

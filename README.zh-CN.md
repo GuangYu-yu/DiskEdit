@@ -24,6 +24,8 @@
 
 `resize` 在含文件系统步骤时需要 root；`--no-fs` 表示不把文件系统增长算作后置条件，镜像上的扩容因此无需 root。目标文件系统无法识别（`unknown`）时，不带 `--no-fs` 一律拒绝——“认不出”不等于“里面没有东西”。
 
+块设备的写入可以在 QEMU microvm 中免 root 完成——见 [docs/zh/interop.md](docs/zh/interop.md#在-qemu-microvm-中免-root-运行)。
+
 外部工具按需查找，只在该步骤用到时经 `PATH` 调用：`sfdisk`、`partx`、`losetup`、`mount`，以及各文件系统自己的工具（`mke2fs`/`e2fsck`/`resize2fs`、`mkfs.xfs`/`xfs_growfs` 等）。完整清单见 [docs/zh/internals.md](docs/zh/internals.md#外部工具)。
 
 写命令直接修改目标本身，改错后原有内容可能无法恢复。原地修改的好处是不需要第二份镜像的空间，也不会留下需要清理的额外文件；数据重要时，请在执行写命令前先备份。

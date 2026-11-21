@@ -33,6 +33,7 @@ pub(crate) const PROBES: &[FlagProbe] = &[
     FlagProbe { name: "--grow-lv", kind: Kind::Bool, sample: None, command: "resize" },
     FlagProbe { name: "--grow", kind: Kind::Bool, sample: None, command: "info" },
     FlagProbe { name: "--grow-to-end", kind: Kind::Bool, sample: None, command: "resize" },
+    FlagProbe { name: "--identity", kind: Kind::Value, sample: Some("export-a"), command: "resize" },
     FlagProbe { name: "--keep-partuuid", kind: Kind::Bool, sample: None, command: "copy" },
     FlagProbe { name: "--label", kind: Kind::Value, sample: Some("data"), command: "mkfs" },
     FlagProbe { name: "--lv", kind: Kind::Value, sample: Some("vg/lv"), command: "resize" },
