@@ -870,6 +870,18 @@ impl TargetIdentity {
         Ok(self)
     }
 
+    /// `--identity` 给出的名字：未给出时原样返回；给出时按声明名派生记录、锁与占据声明的落点。
+    /// 适用范围由 [`Self::with_declared`] 决定
+    pub(crate) fn with_declared_name(self, raw: Option<&str>) -> Result<Self, String> {
+        match raw {
+            None => Ok(self),
+            Some(raw) => {
+                let name = DeclaredIdentity::parse(raw)?;
+                self.with_declared(&name)
+            }
+        }
+    }
+
     /// 用户声明的身份（`--identity`）
     pub(crate) fn declared(&self) -> Option<&DeclaredIdentity> {
         self.declared.as_ref()

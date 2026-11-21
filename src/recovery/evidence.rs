@@ -76,7 +76,7 @@ impl Evidence {
     }
 
     /// 按结构分类，不做身份比对：路径式 `inspect` 手上没有"当前目标"，
-    /// 此时给出 `ForeignCheckUnavailable` 而不是 `ForeignTarget`。解码成功即 `Recognized`，
+    /// 此时身份不可比对，而不是 `ForeignTarget`。解码成功即 `Recognized`，
     /// 身份结论由调用方另行呈现——本变体不参与清理资格判定
     pub(crate) fn classify_structure(bytes: &[u8]) -> Self {
         match super::record::decode(bytes) {
