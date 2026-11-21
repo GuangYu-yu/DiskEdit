@@ -173,7 +173,7 @@ fn a_dm_device_is_unusable_for_writes() {
     }
     let dir = temp_dir("dm");
     let state = dir.join("state");
-    fs::create_dir_all(&state).expect("create state dir");
+    private_dir(&state);
     let image = image_with(&dir, 32 * 1024 * 1024);
     let Some(device) = attach_loop(&image, false) else {
         eprintln!("skipping a_dm_device_is_unusable_for_writes: losetup could not attach the image");

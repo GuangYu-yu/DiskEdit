@@ -209,6 +209,73 @@ pub(crate) fn attribute<T>(written: impl FnOnce() -> T, unwritten: impl FnOnce()
     }
 }
 
+/// [`attribute`] 的取值形式：两支都已算出，由写事实挑一个。两支取同一份成因的
+/// 两个结论时用它，免得为"稍后再算"完整克隆两份
+pub(crate) fn choose<T>(written: T, unwritten: T) -> T {
+    if crossed_irreversible_point() {
+        written
+    } else {
+        unwritten
+    }
+}
+
+/// 一步没有做成时的**类别**：与出口码一一对应，但跨层时只带类别、不带数字。
+///
+/// 载体要把"这一步是拒绝、是环境故障还是能力缺失"送回宿主，而线格式里只能放
+/// 一个数；`code()` / [`FailureClass::from_code`] 就是这条往返的唯一转换。
+/// 宿主按类别重建结论，不再看 `RunOutcome` 的文案——按文案反推类别是"一份事实
+/// 两种表示"的典型症状（错一个词就落到错误的出口码）。未知码不折成任何一类，
+/// 由调用方按内部错误处理
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FailureClass {
+    /// 未预期的内部错误：不变量被破坏、协议字段缺失
+    Internal,
+    /// 请求与目标现状不符：改参数有意义
+    Refused,
+    /// 未改变任何持久状态
+    NoMutation,
+    /// 可能已改变（外部工具已启动、传输中断）
+    Partial,
+    /// 平台或目标能力不支持
+    Unsupported,
+}
+
+impl FailureClass {
+    pub(crate) fn code(self) -> u8 {
+        match self {
+            Self::Internal => EXIT_INTERNAL,
+            Self::Refused => EXIT_REFUSED,
+            Self::NoMutation => EXIT_NO_MUTATION,
+            Self::Partial => EXIT_PARTIAL,
+            Self::Unsupported => EXIT_UNSUPPORTED,
+        }
+    }
+
+    /// 线上的码 → 类别。只接受本枚举发出去的码；其余返回 `None`
+    pub(crate) fn from_code(code: u8) -> Option<Self> {
+        match code {
+            EXIT_INTERNAL => Some(Self::Internal),
+            EXIT_REFUSED => Some(Self::Refused),
+            EXIT_NO_MUTATION => Some(Self::NoMutation),
+            EXIT_PARTIAL => Some(Self::Partial),
+            EXIT_UNSUPPORTED => Some(Self::Unsupported),
+            _ => None,
+        }
+    }
+
+    /// 类别 + 原因 → 出口结论。`Usage` 不在其中：步骤参数由本程序装配，
+    /// 装配失败属内部错误，不是用户输错了命令
+    pub(crate) fn outcome(self, cause: impl Into<String>) -> RunOutcome {
+        match self {
+            Self::Internal => RunOutcome::internal(cause),
+            Self::Refused => RunOutcome::refused(cause),
+            Self::NoMutation => RunOutcome::no_mutation(cause),
+            Self::Unsupported => RunOutcome::unsupported(cause),
+            Self::Partial => RunOutcome::partial(cause),
+        }
+    }
+}
+
 /// 置位点在 `RecordJournal::persist` 的整份替换/创建成功之后（含目录项已改、
 /// 目录 fsync 未确认的分支）。barrier 只在记录尚未落盘时经它落盘，表区 preimage
 /// 等路径同样经它落盘；只读打开既有记录不置位。落盘成功同时说明盘上已有记录，
@@ -256,6 +323,8 @@ pub enum PendingKind {
 /// 出口只负责格式化，避免"该跑什么命令"的字符串在两层各写一遍而漂移
 #[derive(Debug, Clone)]
 pub struct Pending {
+    /// 归属的分区号；`0` 表示这条待办不归某个分区（整份计划层面的停步、
+    /// 表提交），报告里因此不带 `[part N]` 标记
     pub part: u32,
     pub kind: PendingKind,
     /// 失败原因（外部工具的原话）
@@ -384,6 +453,10 @@ pub enum RunOutcome {
         pending: Vec<Pending>,
         kernel_sync: KernelSync,
     },
+    /// 只读复核完成：结论已由命令自己打印，本次没有写入事务，也没有后置条件可判定。
+    /// 与 [`Self::Applied`] 分开——`Applied` 陈述"布局已写入"，只读命令借用它等于
+    /// 说谎。**不携带退出码**：码只从 [`Self::exit_code`] 这一处产生
+    Checked,
 }
 
 impl RunOutcome {
@@ -511,6 +584,8 @@ impl RunOutcome {
             Self::NoMutation { cause } => partial(format!("{cause} — {why}")),
             Self::Internal(msg) => partial(format!("internal error (bug): {msg} — {why}")),
             Self::Unsupported { cause } => partial(format!("{cause} — {why}")),
+            // 只读复核声称"什么都没写"，但写事实已经置位：这句结论不能站住
+            Self::Checked => partial(format!("a read-only command reported its verdict, but {why}")),
             // Usage 在解析期产生，早于任何写入通道；其余两态本身已陈述持久状态
             other => other,
         }
@@ -576,14 +651,17 @@ impl RunOutcome {
             || record.is_some_and(crate::recovery::Record::dirty)
     }
 
-    /// 后置条件全部满足：无待办且内核视图已同步。这是**唯一**对应退出码 0 的形态，
-    /// 调用点要问"是不是完全成功"时用它而不是比退出码——比数字会把"部分完成"误判成成功
+    /// 后置条件全部满足：无待办且内核视图已同步，或是一次已给出结论的只读复核。
+    /// 这是**唯一**对应退出码 0 的形态，调用点要问"是不是完全成功"时用它而不是比退出码
+    /// ——比数字会把"部分完成"误判成成功
     pub fn is_complete(&self) -> bool {
-        matches!(
-            self,
-            Self::Applied { pending, kernel_sync }
-                if pending.is_empty() && *kernel_sync == KernelSync::Synchronized
-        )
+        match self {
+            Self::Checked => true,
+            Self::Applied { pending, kernel_sync } => {
+                pending.is_empty() && *kernel_sync == KernelSync::Synchronized
+            }
+            _ => false,
+        }
     }
 
     /// 唯一的 RunOutcome → 退出码映射点
@@ -595,6 +673,7 @@ impl RunOutcome {
             Self::Unsupported { .. } => EXIT_UNSUPPORTED,
             Self::Internal(_) => EXIT_INTERNAL,
             Self::Partial { .. } => EXIT_PARTIAL,
+            Self::Checked => EXIT_OK,
             applied if applied.is_complete() => EXIT_OK,
             Self::Applied { .. } => EXIT_PARTIAL,
         }
@@ -605,6 +684,8 @@ impl RunOutcome {
     /// 调用方须在"内核重读"之后调用本函数，否则打不出内核视图过期这一项
     pub fn report(&self) {
         match self {
+            // 结论已由命令自己打印，这里不再重复一遍
+            Self::Checked => return,
             Self::Usage(msg) => eprintln!("usage error: {msg}"),
             Self::Refused(msg) => eprintln!("refused: {msg}\n{NOTHING_WRITTEN}"),
             // 与 Partial 不同话：本次没写盘，不能提示"盘可能已改变"
@@ -723,14 +804,16 @@ impl RunOutcome {
                 PendingKind::RuntimeInitialization => "overlay initialization",
                 PendingKind::Other(what) => what,
             };
-            eprintln!("  [part {}] {what}: {}", p.part, p.detail);
+            // 分区号 0 是"不归某个分区"，不是第 0 号分区：整份计划层面的停步在这里
+            let place = if p.part == 0 { String::new() } else { format!("[part {}] ", p.part) };
+            eprintln!("  {place}{what}: {}", p.detail);
             if !p.hint.is_empty() {
                 // 这一档的后续动作不在本机、也不由用户当场执行，提示的是核实方式
                 let follow_up = match p.kind {
                     PendingKind::RuntimeInitialization => "after startup",
                     _ => "run manually",
                 };
-                eprintln!("  [part {}] {follow_up}: {}", p.part, p.hint);
+                eprintln!("  {place}{follow_up}: {}", p.hint);
             }
         }
     }
@@ -744,6 +827,7 @@ impl std::fmt::Display for RunOutcome {
             Self::NoMutation { cause } | Self::Unsupported { cause } => f.write_str(cause),
             Self::Partial { cause, .. } => f.write_str(cause),
             Self::Applied { .. } => f.write_str("the requested change is applied"),
+            Self::Checked => f.write_str("the read-only check is complete"),
         }
     }
 }
@@ -771,6 +855,8 @@ impl RunOutcome {
                 Self::Partial { cause: format!("{what}: {cause}"), pending, origin }
             }
             Self::Applied { pending, kernel_sync } => Self::Applied { pending, kernel_sync },
+            // 只读复核没有可补上下文的成因，原样返回
+            Self::Checked => Self::Checked,
         }
     }
 }

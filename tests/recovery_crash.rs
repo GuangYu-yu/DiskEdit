@@ -195,9 +195,12 @@ impl Fixture {
         out.push(0); // no entry with its table step in flight
         out.push(0); // no table repair
         out.push(0); // table fence: pending
+        out.push(0); // audit placement: native
+        out.push(0); // no worker digest
+        out.extend_from_slice(&0u32.to_le_bytes()); // no tool versions
 
         let mut file = vec![0u8; 16];
-        file[0..4].copy_from_slice(b"DREC");
+        file[0..4].copy_from_slice(b"DRE2");
         file[4..8].copy_from_slice(&(out.len() as u32).to_le_bytes());
         file[8..12].copy_from_slice(&crc32(&out).to_le_bytes());
         let header_crc = crc32(&file[0..12]);

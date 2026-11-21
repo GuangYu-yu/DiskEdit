@@ -61,7 +61,7 @@ fn claim_io(e: std::io::Error) -> RunOutcome {
 pub(crate) fn admit(
     claim: &mut ClaimFile,
     declared: Option<&str>,
-    record_exists: impl Fn(&str) -> bool,
+    record_exists: impl Fn(&str) -> std::io::Result<bool>,
 ) -> Result<(), RunOutcome> {
     let Some(held) = claim.read()? else {
         if let Some(name) = declared {
@@ -69,7 +69,15 @@ pub(crate) fn admit(
         }
         return Ok(());
     };
-    if !record_exists(&held) {
+    // "现场还在"这个问题必须是三态：读不出目录不等于没有现场。把它折成 false 会
+    // 顺手改写声明并在别的名字下准入——正好放行本该被拒绝的那一次运行
+    let live = record_exists(&held).map_err(|e| {
+        RunOutcome::no_mutation(format!(
+            "cannot tell whether the record opened as --identity {held} is still present: {e} — \
+             refusing to admit another scene over it"
+        ))
+    })?;
+    if !live {
         if let Some(name) = declared {
             claim.write(name)?;
         }
@@ -126,7 +134,7 @@ mod tests {
     fn an_empty_claim_admits_a_named_run_and_remembers_it() {
         let path = scratch("empty");
         let mut claim = test_claim(&path);
-        admit(&mut claim, Some("export-a"), |_| false).expect("an empty claim admits");
+        admit(&mut claim, Some("export-a"), |_| Ok(false)).expect("an empty claim admits");
         let mut claim = test_claim(&path);
         assert_eq!(claim.read().unwrap().as_deref(), Some("export-a"));
     }
@@ -136,7 +144,7 @@ mod tests {
         let path = scratch("same");
         let mut claim = test_claim(&path);
         claim.write("export-a").unwrap();
-        admit(&mut claim, Some("export-a"), |name| name == "export-a").expect("the same name resumes");
+        admit(&mut claim, Some("export-a"), |name| Ok(name == "export-a")).expect("the same name resumes");
     }
 
     #[test]
@@ -144,7 +152,7 @@ mod tests {
         let path = scratch("different");
         let mut claim = test_claim(&path);
         claim.write("export-a").unwrap();
-        let err = refusal(admit(&mut claim, Some("export-b"), |_| true).expect_err("a different name is refused"));
+        let err = refusal(admit(&mut claim, Some("export-b"), |_| Ok(true)).expect_err("a different name is refused"));
         assert!(err.contains("export-a"), "{err}");
         assert!(err.contains("export-b"), "{err}");
     }
@@ -154,7 +162,7 @@ mod tests {
         let path = scratch("missing");
         let mut claim = test_claim(&path);
         claim.write("export-a").unwrap();
-        let err = refusal(admit(&mut claim, None, |_| true).expect_err("a missing name is refused"));
+        let err = refusal(admit(&mut claim, None, |_| Ok(true)).expect_err("a missing name is refused"));
         assert!(err.contains("--identity export-a"), "{err}");
     }
 
@@ -163,7 +171,7 @@ mod tests {
         let path = scratch("stale");
         let mut claim = test_claim(&path);
         claim.write("export-a").unwrap();
-        admit(&mut claim, Some("export-b"), |_| false).expect("a stale claim does not block");
+        admit(&mut claim, Some("export-b"), |_| Ok(false)).expect("a stale claim does not block");
         let mut claim = test_claim(&path);
         assert_eq!(claim.read().unwrap().as_deref(), Some("export-b"));
     }

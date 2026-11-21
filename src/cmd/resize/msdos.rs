@@ -9,6 +9,10 @@ fn after_irreversible(f: RunOutcome) -> RunOutcome {
         RunOutcome::Refused(m) | RunOutcome::Internal(m) | RunOutcome::Usage(m) => RunOutcome::partial(m),
         RunOutcome::NoMutation { cause } | RunOutcome::Unsupported { cause } => RunOutcome::partial(cause),
         other @ RunOutcome::Partial { .. } | other @ RunOutcome::Applied { .. } => other,
+        // 只读复核不会出现在写路径上；真出现就是调用方把两种结论混了，按内部错误报出
+        RunOutcome::Checked => {
+            RunOutcome::internal("a read-only verdict reached the write path, which cannot classify it")
+        }
     }
 }
 
@@ -73,7 +77,7 @@ fn resize_mbr_entry(
     let lba0 = table::resize_mdos_entry_image(lba0, part, new_size_lba, src.sector_size, total)?;
     let content = crate::assembly::TableContent::Mbr { kind, lba0: &lba0 };
     let plan = crate::assembly::confirmed_table_step(src, content, snapshot)?;
-    crate::execution::execute_plan_complete(src, &plan, None, &mut crate::execution::NoProgress)
+    crate::exec::run_plan_complete(src, &plan, None, &mut crate::execution::NoProgress)
 }
 
 /// 槽位里的长度字段；槽位越界或扇区快照不完整时返回 `None`（由纯判定给出拒绝原因）
@@ -391,7 +395,7 @@ pub(crate) fn cmd_resize_msdos(a: &ResizeRequest, pref: PartSelector, src_ro: &F
             movepart::ensure_swap_rebuild_identity(&src, part, p.start_lba as u64, p.size_lba as u64, ss)
                 .unwrap_or_else(|f| bail_fail(f));
         }
-        fsops::check_grow_step(growable, is_block).unwrap_or_else(|e| bail_fail(RunOutcome::from(e)));
+        crate::exec::placement::require_grow(&growable, is_block).unwrap_or_else(|e| bail_fail(e));
     }
     // 记录型续跑只认记录写下的两段事实：盘上仍是提交前区间 ⇒ 表步未发生；盘上是目标
     // 区间 ⇒ 表步已落，收尾该扩还是缩由这两段长度的差决定。第三种区间说明盘被外部改过，
@@ -525,7 +529,7 @@ pub(crate) fn cmd_resize_msdos(a: &ResizeRequest, pref: PartSelector, src_ro: &F
                 && bytes < min
             {
                 bail_fail(RunOutcome::refused(format!(
-                    "target size {bytes} < minimum size {min} bytes the filesystem can hold (resize2fs -P)"
+                    "target size {bytes} < estimated minimum size {min} bytes (resize2fs -P; the filesystem tool makes the final decision)"
                 )));
             }
             // 探测期间盘面可能被改写（工具不守本工具的锁）：首写之前按锁下解析复核

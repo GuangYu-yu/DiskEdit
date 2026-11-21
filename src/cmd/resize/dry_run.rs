@@ -255,7 +255,7 @@ pub(crate) fn preview_mbr(a: &ResizeRequest, src: &FileSource, pref: PartSelecto
             && bytes < min
         {
             bail_fail(RunOutcome::refused(format!(
-                "target size {bytes} < minimum size {min} bytes the filesystem can hold (resize2fs -P)"
+                "target size {bytes} < estimated minimum size {min} bytes (resize2fs -P; the filesystem tool makes the final decision)"
             )));
         }
         println!(

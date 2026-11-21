@@ -26,12 +26,12 @@
 use crate::dev::{FileSource, TargetIdentity};
 use crate::support::{
     active_recovery_records, bail_fail, refuse_partition_node_target,
-    RecoveryRecord, EXIT_OK, RunOutcome,
+    RecoveryRecord, RunOutcome,
 };
 use crate::cli::RecoverRequest;
 use crate::targetlock::TargetLock;
 
-pub(crate) fn cmd_release(a: &RecoverRequest) -> u8 {
+pub(crate) fn cmd_release(a: &RecoverRequest) -> RunOutcome {
     // `recover --release` 释放的是整盘的恢复现场：与 info 同判据，`:` 后给了编号即拒绝，不静默忽略
     if let Some(n) = a.part {
         bail_fail(RunOutcome::refused(format!("`recover --release` releases the whole target's recovery scene — drop :{n}")));
@@ -127,13 +127,13 @@ fn replay_ranges(records: &[RecoveryRecord]) -> Option<usize> {
             crate::recovery::CompanionProbe::Damaged(_)
             | crate::recovery::CompanionProbe::Foreign
             | crate::recovery::CompanionProbe::Unreadable(_)
-            | crate::recovery::CompanionProbe::NotOurs(_) => return None,
+            | crate::recovery::CompanionProbe::NotRegular(_) => return None,
         }
     }
     Some(total)
 }
 
-fn release_records(target: &str, identity: &TargetIdentity, disk: Option<&FileSource>, discard_replay: bool) -> u8 {
+fn release_records(target: &str, identity: &TargetIdentity, disk: Option<&FileSource>, discard_replay: bool) -> RunOutcome {
     // 身份不符的候选照样参与释放：`recover --release` 是显式放弃，不是认领——它不清空目标、
     // 不回放、不阻塞，只把记录挪出活跃集。真正属于别的载体时由下面的 `same_carrier`
     // 整体拒绝，释放前逐条打印会让用户看见自己在放弃什么
@@ -147,7 +147,7 @@ fn release_records(target: &str, identity: &TargetIdentity, disk: Option<&FileSo
     if records.is_empty() {
         // 幂等：目标已经是"没有 active transaction"，空跑即成功。只说这次枚举看到了什么
         println!("this enumeration found no unfinished operation on this target");
-        return EXIT_OK;
+        return RunOutcome::Checked;
     }
     // 设备声明不唯一时，记录可能属于另一块同身份的盘。改名它等于替那块盘销毁回滚凭据，
     // 而且这一步无法靠"记录写的是谁"分辨：两块的声明一模一样
@@ -222,7 +222,7 @@ fn release_records(target: &str, identity: &TargetIdentity, disk: Option<&FileSo
                  that rollback evidence for good",
                 path.display()
             ),
-            crate::recovery::CompanionProbe::NotOurs(shape) => {
+            crate::recovery::CompanionProbe::NotRegular(shape) => {
                 eprintln!("warning: {} is {shape}, which is not a recovery file", path.display())
             }
             crate::recovery::CompanionProbe::Absent => {}
@@ -320,7 +320,7 @@ fn release_records(target: &str, identity: &TargetIdentity, disk: Option<&FileSo
              quarantine area as .abandoned[.N])",
             records.len()
         );
-        EXIT_OK
+        RunOutcome::Checked
     } else {
         // 已经改成的那些不会退回，所以这不是"什么都没做"——但也不是盘上状态被改坏。
         // 收敛点只有一个：再跑一次，剩下的继续改。因此数量要如实报出来：
@@ -345,6 +345,7 @@ fn release_records(target: &str, identity: &TargetIdentity, disk: Option<&FileSo
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
+    use crate::outcome::EXIT_OK;
     use crate::dev::fixtures::{attr, bind_rdev, disk};
     use std::path::PathBuf;
 
@@ -428,7 +429,7 @@ mod tests {
             })
         }));
         match outcome {
-            Ok(code) => code,
+            Ok(outcome) => outcome.exit_code(),
             Err(payload) => match payload.downcast_ref::<crate::support::ExitRequest>() {
                 Some(crate::support::ExitRequest::Silent(code)) => *code,
                 Some(crate::support::ExitRequest::Report(report)) => report.exit_code(),

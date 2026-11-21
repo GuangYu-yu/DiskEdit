@@ -102,30 +102,22 @@ pub(crate) fn canonical_headers(h: &RawHeader, last_lba: u64, backup_array_lba: 
     (primary, backup)
 }
 
-/// 崩溃安全四结构序列：备数组 → 备头 → 主数组 → 主头，每步 sync。
-/// 每个中间落点都留有一份 CRC 自洽的表；主备两份各自自洽而内容分叉时 CRC 检不出
-/// （不一致只出现在跨副本比较），解析按主副本优先收敛——中断的代价是本次提交丢失，
-/// 不是表损坏。仅测试构建可见：生产路径由命令层装配后执行。
+/// 测试用提交入口：把已构造好的表交给**生产**同一条链路——装配成表步骤
+/// （[`crate::assembly::assemble_table_step`]），再由 [`crate::execution::table::execute`]
+/// 逐段做写前比对、逐段落盘、写后复核。
+///
+/// 这里刻意不再保留第二份四段写入序列：本文件曾经自己写四段并读回，而生产走
+/// `execution::table`，测试跑的是另一份实现，"测试全绿"证明不了生产那份的顺序与复核。
+/// 现在测试的可信度来自复用生产实现，而不是复制它。
 #[cfg(test)]
 pub(crate) fn commit_gpt(src: &mut WriteSource, g: &RawGpt, last_lba: u64) -> Result<(), RunOutcome> {
-    commit_table(src, g.ss, &g.header, &g.entries, last_lba)
+    commit_content(
+        src,
+        &GptContent { ss: g.ss, header: g.header.clone(), entries: g.entries.clone(), last_lba },
+    )
 }
 
-/// 已构造好的四段字节与落点：写前重读复核之后才交给 [`write_table`]。
-#[cfg(test)]
-struct PreparedTable {
-    ss: u64,
-    backup_array_lba: u64,
-    last_lba: u64,
-    array_bytes: Vec<u8>,
-    backup_header: Vec<u8>,
-    primary_header: Vec<u8>,
-}
-
-/// 崩溃安全四结构的参考序列（测试夹具用）：`commit_gpt` 与
-/// [`crate::geometry::ValidatedGeometry::commit`] 都走这里。
-/// 生产写入由命令层装配成 `TableStep` 经 `execution::table` 落盘。
-/// 首笔写盘前重读三扇区摘要并与入口记录的值比对（见 [`verify_table_stamp`]）。
+/// 同上，内容按各分量给出：拒绝条件与生产装配完全同一套，调用方只换入参形状。
 #[cfg(test)]
 pub(crate) fn commit_table(
     src: &mut WriteSource,
@@ -134,123 +126,23 @@ pub(crate) fn commit_table(
     entries: &[GPTPartitionEntry],
     last_lba: u64,
 ) -> Result<(), RunOutcome> {
-    let stamp = table_stamp(src, ss)?;
-    let prepared = prepare_table(src, ss, header, entries, last_lba).map_err(RunOutcome::from)?;
-    verify_table_stamp(src, stamp, ss)?;
-    write_table(src, &prepared).map_err(RunOutcome::from)
+    commit_content(
+        src,
+        &GptContent { ss, header: header.clone(), entries: entries.to_vec(), last_lba },
+    )
 }
 
-/// 写盘前的全部校验与字节构造。本函数不写盘。
+/// 装配 + 执行：测试与生产之间唯一的表提交实现，两处差异只剩 `kind` 的标签。
 #[cfg(test)]
-fn prepare_table(
-    src: &FileSource,
-    ss: u64,
-    header: &RawHeader,
-    entries: &[GPTPartitionEntry],
-    last_lba: u64,
-) -> io::Result<PreparedTable> {
-    // 几何只构造一次：数组字节数、扇区跨度、条目数与大小都取自它，不再各自乘一遍
-    let geom = EntryArrayGeometry::new(ss, header.size_of_partition_entry, header.number_of_partition_entries, MAX_ARRAY_BYTES)?;
-    // serialize_array 按 geom.entry_count 截断，多出的条目既不校验也不落盘——
-    // 长度一致性必须在这里挡住
-    let given = u32::try_from(entries.len()).unwrap_or(u32::MAX);
-    if given != geom.entry_count {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("{given} partition entries given for a header declaring {} — refusing to write the table", geom.entry_count),
-        ));
-    }
-    let (array_bytes, array_crc) = serialize_array(entries, &geom);
-    // 跨度只算一次（几何对象），下溢检查先于任何头部构造
-    let backup_array_lba = last_lba
-        .checked_sub(geom.lba_span())
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "disk too small to hold GPT entry array"))?;
-    // 备数组必须排在主数组 [2, 2+span) 之后，且两者之间留出一个可用扇区（与
-    // create.rs 的 gpt_min_sectors 同一判据）：只做上面的 checked_sub 时，last_lba 落在
-    // [span, 2·span+2] 的提交会让备数组压到 LBA0/LBA1/主数组上，四段写互相覆盖，
-    // 而写后读回比对的正是刚写进去的字节，损坏会以 Ok 返回
-    let min_sectors = 2 * geom.lba_span() + 4;
-    if last_lba.checked_add(1).is_none_or(|sectors| sectors < min_sectors) {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, gpt_too_small(min_sectors, ss)));
-    }
-    let (primary, backup) = canonical_headers(header, last_lba, backup_array_lba);
-    // 两份头的字节都在首次写盘之前构造完：构造会因 HeaderSize 越界而失败，
-    // 那时盘必须还没被碰过（放到写作序列中间会让拒绝留下半张表）
-    let bh = serialize_header(&backup, array_crc, ss)?;
-    let ph = serialize_header(&primary, array_crc, ss)?;
-    // 再用**将要写出的**两份头过一遍解析侧同一套几何与条目校验。字节级读回只能证明
-    // "写进去什么"，证明不了"写进去的表是这个工具读得回来的表"：校验端以容器真实末端
-    // 为准，而备份头落位由 last_lba 决定——两者不等的提交会被解析判成需要修复，写到盘上
-    // 就是"命令报成功、表却不可用"。非 Valid 的结论一律在写盘前拒绝。
-    // 校验器按主头视角定义，备份头先归一化再以 Backup 视角过同一组判据
-    let file_last_lba = container_last_lba(src, ss);
-    if last_lba > file_last_lba {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("GPT end LBA {last_lba} is beyond the container end {file_last_lba} — refusing to write the table"),
-        ));
-    }
-    let backup_view = RawHeader { primary_lba: 1, backup_lba: last_lba, ..backup.clone() };
-    for (h, view, what) in
-        [(&primary, GptCopyKind::Primary, "primary"), (&backup_view, GptCopyKind::Backup, "backup")]
-    {
-        let state = validate_geometry(h, &geom, file_last_lba, view).map_err(into_io_error).map_err(|e| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("the {what} GPT header this write would produce is not self-consistent: {e}"),
-            )
-        })?;
-        if state != GptState::Valid {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("the {what} GPT header this write would produce does not match the container end — refusing to write the table"),
-            ));
-        }
-    }
-    validate_entries(entries, &primary).map_err(into_io_error).map_err(|e| {
-        io::Error::new(io::ErrorKind::InvalidData, format!("the partition entries this write would produce are invalid: {e}"))
-    })?;
-
-    Ok(PreparedTable { ss, backup_array_lba, last_lba, array_bytes, backup_header: bh, primary_header: ph })
-}
-
-/// 四段字节按序落盘并读回复核。调用前必须已过 [`verify_table_stamp`]。
-#[cfg(test)]
-fn write_table(src: &mut WriteSource, p: &PreparedTable) -> io::Result<()> {
-    let ss = p.ss;
-    src.write_fixture(p.backup_array_lba * ss, &p.array_bytes)?;
-    src.sync_all()?;
-
-    src.write_fixture(p.last_lba * ss, &p.backup_header)?;
-    src.sync_all()?;
-
-    src.write_fixture(2 * ss, &p.array_bytes)?;
-    src.sync_all()?;
-
-    src.write_fixture(ss, &p.primary_header)?;
-    src.sync_all()?;
-    // 读回复核：`sync_all` 只是"设备声称已落盘"，缓存丢写与镜像层短写都不在其中。
-    // 这里比对的是刚写出的四段字节，证明的只是"这四次写调用没有被吞掉"——
-    // 它不证明写出的表是解析侧读得回来的表；后者由上方写前的 validate_geometry /
-    // validate_entries 与修复路径的写后重解析各自承担
-    for (want, off, what) in [
-        (&p.array_bytes, p.backup_array_lba * ss, "backup GPT entry array"),
-        (&p.backup_header, p.last_lba * ss, "backup GPT header"),
-        (&p.array_bytes, 2 * ss, "primary GPT entry array"),
-        (&p.primary_header, ss, "primary GPT header"),
-    ] {
-        let mut got = vec![0u8; want.len()];
-        src.read_at(off, &mut got).map_err(|e| {
-            io::Error::new(e.kind(), format!("{what} read-back failed: {e} — the table may not have been written"))
-        })?;
-        if got != *want {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("{what} differs from what was written — the device or image layer dropped the write"),
-            ));
-        }
-    }
-    Ok(())
+fn commit_content(src: &mut WriteSource, content: &GptContent) -> Result<(), RunOutcome> {
+    let table = crate::assembly::TableContent::Gpt {
+        kind: TableWriteKind::Replace,
+        content,
+        protective_mbr: None,
+    };
+    let snapshot = crate::assembly::take_table_snapshot(&*src, &table)?;
+    let step = crate::assembly::assemble_table_step(&*src, table, snapshot)?.into_step();
+    crate::execution::table::execute(src, &step)
 }
 
 /// 规范 SizeInLBA = 逻辑块数 − 1；逻辑块数超出 32 位表示范围时按规范饱和写 0xFFFFFFFF
@@ -300,6 +192,10 @@ pub(crate) fn protective_mbr_content(
     src: &FileSource,
     ss: u64,
 ) -> Result<Option<Vec<u8>>, RunOutcome> {
+    // 扇区大小由调用方以裸数传入：先过唯一校验，零值与非 2 的幂在这里就落成拒绝。
+    // 否则下面的除法与按扇区切片会分别变成除零与越界
+    let ss = crate::domain::SectorSize::try_new(ss).map_err(|e| RunOutcome::refused(e.to_string()))?;
+    let ss = ss.get();
     // 零扇区盘的 read_at(0) 只会撞出 UnexpectedEof，把"盘没有扇区"这件事
     // 说成一次 I/O 意外：先于任何读盘把几何前提判掉
     let total_sectors = src.size / ss;
@@ -314,6 +210,10 @@ pub(crate) fn protective_mbr_content(
 /// [`protective_mbr_content`] 的纯计算部分：判定与重写只看传入的 LBA0 原文，不读盘。
 /// 装配期传入写前快照里的那一扇区，决策依据与写基线因此同源
 pub(crate) fn protective_mbr_content_from(lba0: &mut [u8], total_sectors: u64) -> Option<Vec<u8>> {
+    // LBA0 比一个 MBR 扇区还短：这里没有可判定的保护 MBR，也没有可重写的字段
+    if lba0.len() < MBR_SECTOR_BYTES {
+        return None;
+    }
     let want_size = size_in_lba(total_sectors);
     let reserved_zero = lba0[MBR_SECTOR_BYTES..].iter().all(|&b| b == 0);
     if has_mbr_signature(lba0) && reserved_zero {

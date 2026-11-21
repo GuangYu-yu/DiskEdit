@@ -28,7 +28,7 @@ pub(crate) fn observe_table(src: &FileSource) -> Result<(TableObservation, u64),
     let label = match table_label(src) {
         Ok(label) => label,
         Err(GptError::Io(e)) => {
-            return Err(RunOutcome::refused(format!("cannot read the partition table: {e}")));
+            return Err(RunOutcome::no_mutation(format!("cannot read the partition table: {e}")));
         }
         Err(e) => return Ok((TableObservation::Unusable { reason: e.to_string() }, src.sector_size)),
     };
@@ -47,7 +47,7 @@ pub(crate) fn observe_table(src: &FileSource) -> Result<(TableObservation, u64),
                 reason: "the GPT disappeared between the label check and the table read".into(),
             },
             Err(GptError::Io(e)) => {
-                return Err(RunOutcome::refused(format!("cannot read the GPT: {e}")));
+                return Err(RunOutcome::no_mutation(format!("cannot read the GPT: {e}")));
             }
             Err(e) => TableObservation::Unusable { reason: e.to_string() },
         },
@@ -59,7 +59,7 @@ pub(crate) fn observe_table(src: &FileSource) -> Result<(TableObservation, u64),
             Err(e) if e.kind() == std::io::ErrorKind::InvalidData => {
                 TableObservation::Unusable { reason: e.to_string() }
             }
-            Err(e) => return Err(RunOutcome::refused(format!("cannot read the MBR: {e}"))),
+            Err(e) => return Err(RunOutcome::no_mutation(format!("cannot read the MBR: {e}"))),
         },
     };
     Ok((observation, table_ss))
@@ -198,7 +198,7 @@ pub(crate) fn assemble_table_step(
     Ok(AssembledTableStep(step))
 }
 
-/// 只有一条已装配表步骤的计划，交给 [`crate::execution::execute_plan`] 落盘。
+/// 只有一条已装配表步骤的计划，交给 [`crate::exec::run_plan`] 落盘。
 ///
 /// 步骤的确认门在解析期已由 `--yes` 判定（如 `delete`），占用闸由命令层在此之前判定；
 /// 本函数只把装配好的步骤装进计划骨架，不改动任何判据。
@@ -220,7 +220,7 @@ pub(crate) fn confirmed_table_step(
 ///
 /// 判定在这里按当前盘面重做一次：调用方的 [`RepairAction`] 来自更早的读取，装配与执行
 /// 之间的外部改动必须拒绝（3），不能拿旧动作覆盖新表。装配期只读；写入由
-/// `execution::execute_plan_complete` 完成，写前/写后比对与其他表步骤同一套。
+/// `exec::run_plan_complete` 完成，写前/写后比对与其他表步骤同一套。
 pub(crate) fn assemble_repair_plan(
     src: &FileSource,
     action: &crate::gpt_policy::RepairAction,

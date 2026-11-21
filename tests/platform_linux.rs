@@ -5,13 +5,26 @@
 //! `tests/capability_matrix.rs` 覆盖；本文件只在
 //! Linux 上编译与运行。
 //!
-//! 需要真机/root/外部工具（`losetup`）的用例在运行期探测，条件不满足时提前返回，
-//! 不使用 `#[ignore]`。
+//! 需要真机/root/外部工具（`losetup`）的用例在运行期探测，条件不满足时跳过，不使用
+//! `#[ignore]`。**跳过必须可闻**：走 [`capability_skip`]，它打一行说明，并在
+//! `DISKEDIT_REQUIRE_CAPABILITIES` 置位时直接失败——静默 `return` 会把"这条断言没跑"
+//! 伪装成"通过"
 
 #![cfg(target_os = "linux")]
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+/// 能力探测失败的唯一出口。没有这条通道时，跳过与通过在测试报告里长得一模一样；
+/// 而声明了"这台机器可测"的环境里再静默跳过，就是测试自己出了问题
+fn capability_skip(what: &str, why: &str) {
+    assert!(
+        std::env::var_os("DISKEDIT_REQUIRE_CAPABILITIES").is_none(),
+        "{what} could not be exercised: {why} — this environment declared the capability, \
+         so a silent skip is a bug in the test or the environment"
+    );
+    eprintln!("note: skipping {what}: {why}");
+}
 
 /// 本次测试进程的镜像状态根：子进程与测试算出的落点必须一致
 fn state_root() -> &'static Path {
@@ -106,6 +119,10 @@ fn a_block_device_refuses_the_sector_size_override() {
     let dir = temp_dir("loop");
     let img = image_with(&dir, "backing.img", 8 * 1024 * 1024);
     let Some(device) = attach_loop(&img) else {
+        capability_skip(
+            "a block-device target",
+            "losetup did not yield a loop device (needs root and a free loop slot)",
+        );
         return;
     };
     let (code, _, err) = run(&["info", &device, "--sector-size", "4096"]);

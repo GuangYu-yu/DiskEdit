@@ -149,7 +149,11 @@ pub(crate) fn cmd_new(a: &NewRequest) -> crate::outcome::RunOutcome {
              pass --overwrite-data to proceed without that check"
         ))),
         Err(e) => eprintln!(
-            "warning: cannot check the existing table against the bytes this new table writes ({e})"
+            "warning: the existing partition table could not be read ({e}), so the bytes this new table writes \
+             cannot be checked against the partitions on it — `--overwrite-data` accepted the write without that \
+             check; the write set is still exactly the table structure ({}), and any partition data inside those \
+             regions is overwritten without being named; run `diskedit info` afterwards to see the resulting layout",
+            region_list(&snapshot.regions)
         ),
     }
     // 写前复核：三段摘要与入口那份不等即不写。首跑 3、有活跃记录 5、
@@ -186,7 +190,7 @@ pub(crate) fn cmd_new(a: &NewRequest) -> crate::outcome::RunOutcome {
     // 全部写区间的原文先一次登记并落盘，这些步骤成功后才有第一次目标写入
     record_table_preimages(&mut src, &plan).unwrap_or_else(|f| bail_fail(f));
     // 整份替换由 `table_record_done` 完成：sink 只把进度与表步围栏写进记录
-    match crate::execution::execute_plan_complete(&mut src, &plan, None, &mut crate::recovery::sink::RecordSink::quiet()) {
+    match crate::exec::run_plan_complete(&mut src, &plan, None, &mut crate::recovery::sink::RecordSink::quiet()) {
         Ok(()) => table_record_done(
             &mut src,
             &format!("created {} table (verify with: diskedit info {})", kind.as_str(), a.target),
@@ -365,7 +369,7 @@ pub(crate) fn cmd_add(a: &AddRequest) -> crate::outcome::RunOutcome {
                 Ok(p) => p,
                 Err(f) => bail_fail(f),
             };
-            match crate::execution::execute_plan_complete(&mut src, &plan, None, &mut crate::recovery::sink::RecordSink::quiet()) {
+            match crate::exec::run_plan_complete(&mut src, &plan, None, &mut crate::recovery::sink::RecordSink::quiet()) {
                 Ok(()) => table_record_done(&mut src, &format!("added partition #{num} (verify with: diskedit info {})", a.target)),
                 Err(f) => bail_fail(f),
             }
@@ -431,7 +435,7 @@ fn add_mbr_entry(
     let (lba0, num) = table::add_mdos_entry_image(lba0, slot, start, end, os_type, total)?;
     let content = crate::assembly::TableContent::Mbr { kind: table::TableWriteKind::Add, lba0: &lba0 };
     let plan = crate::assembly::confirmed_table_step(src, content, snapshot)?;
-    crate::execution::execute_plan_complete(src, &plan, None, &mut crate::recovery::sink::RecordSink::quiet())?;
+    crate::exec::run_plan_complete(src, &plan, None, &mut crate::recovery::sink::RecordSink::quiet())?;
     Ok(num)
 }
 
@@ -509,7 +513,7 @@ fn delete_mbr_entry(src: &mut crate::dev::WriteSource, part: u32) -> Result<(), 
     let plan = crate::assembly::confirmed_table_step(src, content, snapshot)?;
     // 整份替换由 `cmd_delete` 的 `table_record_done` 完成：sink 只把进度与表步围栏
     // 写进记录
-    crate::execution::execute_plan_complete(src, &plan, None, &mut crate::recovery::sink::RecordSink::quiet())
+    crate::exec::run_plan_complete(src, &plan, None, &mut crate::recovery::sink::RecordSink::quiet())
 }
 
 pub(crate) fn cmd_delete(a: &DeleteRequest) -> crate::outcome::RunOutcome {
@@ -1027,7 +1031,7 @@ pub(crate) fn prepare_resize_part(
                 ss,
                 &growable,
             )?;
-            crate::fsops::check_grow_step(growable, src.is_block)?;
+            crate::exec::placement::require_grow(&growable, src.is_block)?;
         }
         movepart::FsAction::Leave => {}
     }
@@ -1042,7 +1046,7 @@ pub(crate) fn prepare_resize_part(
         && new_bytes < min
     {
         return Err(RunOutcome::refused(format!(
-            "target size {new_bytes} < minimum FS size {min} bytes (resize2fs -P)"
+            "target size {new_bytes} < estimated minimum FS size {min} bytes (resize2fs -P; the filesystem tool makes the final decision)"
         )));
     }
     // 起点变更的搬移段 `(part, src_first, dst_first, sectors)`：非空时由执行器的
@@ -1155,7 +1159,7 @@ fn execute_resize_part(
         // 执行器按计划内的写盘进度分类；本进程此前写过的目标字节（修复表头、缩容 FS）
         // 不在它的视野里，改判由退出点的归责按写事实完成。
         // chunk 与请求同源：Relocate 步骤的分块、durable 游标节奏都按它算
-        crate::execution::execute_plan_complete(src, &plan, Some(p.chunk_len), &mut sink)?;
+        crate::exec::run_plan_complete(src, &plan, Some(p.chunk_len), &mut sink)?;
     }
 
     // 续跑：是否搬过以记录里的搬移前起点为准（盘上几何已是新值）。起点未变时位置与
@@ -1166,7 +1170,7 @@ fn execute_resize_part(
         && (pre_start != new_start
             || !crate::execution::ntfs_hidden_sectors_match(src, new_start, ss).map_err(RunOutcome::from)?)
     {
-        crate::execution::fix_ntfs_hidden_sectors(src, new_start, ss, part, log).map_err(RunOutcome::from)?;
+        crate::exec::backfill_hidden_sectors(src, new_start, ss, part, log).map_err(RunOutcome::from)?;
     }
 
     // ---- 阶段 3：扩容 FS ----
@@ -1460,7 +1464,7 @@ pub(crate) fn cmd_move(a: &MoveRequest) -> crate::outcome::RunOutcome {
                 let kind = crate::fsid::identify(&src, base, bytes)
                     .unwrap_or_else(|e| bail_fail(RunOutcome::unreadable_io(e)));
                 if kind == crate::fsid::ContentKind::Filesystem(crate::fsid::FsKind::Ntfs) {
-                    crate::execution::fix_ntfs_hidden_sectors(&mut src, start, ss, part, &mut |m| println!("{m}"))
+                    crate::exec::backfill_hidden_sectors(&mut src, start, ss, part, &mut |m| println!("{m}"))
                         .unwrap_or_else(|e| bail_fail(RunOutcome::partial_with(e.to_string(), Vec::new())));
                 }
                 // 盘上条目已在记录目的位：表步的结果由此定案。按执行器 Table 分支的同一
@@ -1591,7 +1595,7 @@ pub(crate) fn cmd_move(a: &MoveRequest) -> crate::outcome::RunOutcome {
         movepart::move_entry_swap(&src, &g, part, src.record_journal().and_then(|j| j.relocation()))
             .unwrap_or_else(|f| bail_fail(f));
     if swap.is_swap {
-        movepart::ensure_swap_rebuild_tools(src.is_block).unwrap_or_else(|f| bail_fail(f));
+        crate::exec::placement::require_swap_rebuild(src.is_block).unwrap_or_else(|f| bail_fail(f));
     }
     if repair != crate::gpt_policy::RepairAction::None {
         crate::gpt_policy::apply_repair(&mut src, &repair).unwrap_or_else(|f| bail_fail(f));
@@ -1676,10 +1680,10 @@ pub(crate) fn cmd_move(a: &MoveRequest) -> crate::outcome::RunOutcome {
         });
     }
     let mut sink = crate::recovery::sink::RecordSink::quiet();
-    if let Err(f) = crate::execution::execute_plan_complete(&mut src, &plan, Some(chunk), &mut sink) {
+    if let Err(f) = crate::exec::run_plan_complete(&mut src, &plan, Some(chunk), &mut sink) {
         bail_fail(f);
     }
-    // 起点变了的 NTFS 回填由执行器在表提交之后做（`execution::fix_hidden_sectors`）：
+    // 起点变了的 NTFS 回填由执行器在表提交之后做（`execution::step_hidden_sectors`）：
     // 那里的文件系统识别取落点上的现状，比搬移前的旧区间更可靠。已提交态续跑的两处
     // 回填在 `resize` 起点变更形态与 `move` 的收尾分支直接调 movepart，不经计划步骤
     let o = table_record_done_if_complete(&mut src, RunOutcome::applied_with(Vec::new()));
@@ -1764,7 +1768,7 @@ pub(crate) fn cmd_copy(a: &CopyRequest) -> crate::outcome::RunOutcome {
     let plan = crate::assembly::assemble_copy(&src, &geometry, &p).unwrap_or_else(|f| bail_fail(f));
     // copy 没有续跑（见详助 "No resume"），步数只作为记录的围栏同伴：表步是否写出
     // 由记录里的围栏回答，复制与表提交仍成对完成或整体失败
-    match crate::execution::execute_plan_complete(&mut src, &plan, Some(chunk), &mut crate::recovery::sink::RecordSink::quiet()) {
+    match crate::exec::run_plan_complete(&mut src, &plan, Some(chunk), &mut crate::recovery::sink::RecordSink::quiet()) {
         Ok(()) => {
             logger.log(&format!("partition {part} copied to #{num} at {}..{}", p.new_start, p.new_end));
             table_record_done(&mut src, &format!("copied to partition #{num} (verify with: diskedit info {})", a.target))

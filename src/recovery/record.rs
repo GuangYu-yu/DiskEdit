@@ -10,9 +10,11 @@
 //! 不解析、不回放。
 //!
 //! 同一 `MAGIC` 下只有一种布局，载荷必须包含全部尾段（在飞位、`repair`、
-//! `table_fence`）。缺少任一段或段后出现无法识别的字节都按 `Format` 拒读，不跳过、
-//! 不当缺省。不做前向兼容是因为记录决定"要不要再写一遍"：看不懂的尾段被跳过，等于
-//! 让本构建在不知道修复或表步已经落地的状态下重写第二遍。
+//! `table_fence`、审计段）。缺少任一段或段后出现无法识别的字节都按 `Format` 拒读，
+//! 不跳过、不当缺省。不做前向兼容是因为记录决定"要不要再写一遍"：看不懂的尾段被跳过，
+//! 等于让本构建在不知道修复或表步已经落地的状态下重写第二遍。
+//!
+//! 审计段记录放置、worker 映像摘要与工具版本，只写出，不参与续跑判定与回滚规则。
 
 use crate::dev::DiskGuidState;
 use crate::domain::Fact;
@@ -24,10 +26,10 @@ use sha2::{Digest, Sha256};
 use super::scene::{Mapping, SceneIdentity, SceneProof};
 use crate::tagged::tagged_enum;
 
-/// 恢复记录文件的标识字节（`D`isk `REC`ord）。布局或字段语义变化时换成新标识；
-/// 不匹配的标识一律解码失败。此标识下的搬移位移是有符号值、搬移段带已拷前缀摘要；
-/// `resize` 的提交前区间与提交目标区间成对写出，续跑从记录判定方向与是否已提交
-pub(crate) const MAGIC: [u8; 4] = *b"DREC";
+/// 恢复记录文件的标识字节（`D`isk `RE`cord 第 2 版布局）。布局或字段语义变化时换成
+/// 新标识；不匹配的标识一律解码失败。此标识下的搬移位移是有符号值、搬移段带已拷前缀
+/// 摘要；`resize` 的提交前区间与提交目标区间成对写出，续跑从记录判定方向与是否已提交
+pub(crate) const MAGIC: [u8; 4] = *b"DRE2";
 pub(crate) const HEADER_LEN: usize = 16;
 
 const HEADER_CRC_RANGE: std::ops::Range<usize> = 0..12;
@@ -528,6 +530,32 @@ pub(crate) enum RecordedPlace {
     Committed,
 }
 
+tagged_enum! {
+    /// 作业放置：承载本次步骤的执行器。只作审计，不参与续跑与回滚判定
+    #[derive(Default)]
+    pub(crate) enum PlacementAudit {
+        #[default]
+        Native = 0,
+        Vm = 1,
+    }
+}
+
+/// 一份外部工具的版本：程序名与它自报的版本串
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ToolVersion {
+    pub(crate) tool: String,
+    pub(crate) version: String,
+}
+
+/// 记录尾段的审计信息。只写出，续跑判定与回滚规则不读这里
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Audit {
+    pub(crate) placement: PlacementAudit,
+    /// worker 映像的 SHA-256；宿主原生执行时为空
+    pub(crate) worker_digest: Option<[u8; 32]>,
+    pub(crate) tool_versions: Vec<ToolVersion>,
+}
+
 /// 一份恢复记录的全部字段
 #[derive(Clone, Debug)]
 #[cfg_attr(test, derive(PartialEq, Eq))]
@@ -576,6 +604,8 @@ pub(crate) struct Record {
     pub(crate) restore: Vec<RestoreEntry>,
     /// `copy` 的源区间与规划期摘要；其余操作保持为空。只解到前缀的记录给不出这一段
     pub(crate) source: Fact<CopySource>,
+    /// 放置、worker 摘要与工具版本；只写不读
+    pub(crate) audit: Audit,
 }
 
 impl Record {
@@ -611,6 +641,7 @@ impl Record {
             restore_blocked: false,
             restore: Vec::new(),
             source: Fact::Absent,
+            audit: Audit::default(),
         }
     }
 
@@ -871,6 +902,39 @@ impl Record {
                 );
             }
         }
+        // 修复事实的两个地址字段只有在动作会挪动备份区时才有意义：挪动类必须指认
+        // 新区间（备份头在最后、`last usable` 紧贴它之前），原地重写类则必须是零。
+        // 否则一条记录会替一次它并不执行的表改动指认一个地址
+        match &self.repair {
+            Fact::Known(fact) => match fact.kind {
+                RepairKind::RepairProtectiveMbr => {
+                    if fact.new_backup_lba != 0 || fact.new_last_usable != 0 {
+                        return Err(format!(
+                            "the record's repair action `{}` carries a backup location \
+                             ({}, {}) it does not move",
+                            fact.kind.name(),
+                            fact.new_backup_lba,
+                            fact.new_last_usable
+                        ));
+                    }
+                }
+                RepairKind::RelocateBackup | RepairKind::RelocateAndRepair => {
+                    if fact.new_backup_lba == 0
+                        || fact.new_last_usable >= fact.new_backup_lba
+                    {
+                        return Err(format!(
+                            "the record's repair action `{}` names backup LBA {} with last usable \
+                             LBA {} — the backup header must sit past the last usable one",
+                            fact.kind.name(),
+                            fact.new_backup_lba,
+                            fact.new_last_usable
+                        ));
+                    }
+                }
+            },
+            // audit-allow: W-21
+            Fact::Absent | Fact::Undecidable(_) => {}
+        }
         // 提交前区间与提交目标区间成对承载一次作业的全部落位事实：`Resize` /
         // `ResizeEnd` 两段都必须在，`Move` 只搬移自己的数据、记录搬移前的来源区间。
         // 其余操作带任一段都与操作类型矛盾
@@ -1038,8 +1102,39 @@ impl Record {
             // audit-allow: W-12
             Fact::Absent | Fact::Undecidable(_) => return Err(tail_not_decoded()),
         }
+        // 审计段：放置、worker 摘要与工具版本。读回时只校验形状
+        out.push(self.audit.placement.tag());
+        match &self.audit.worker_digest {
+            None => out.push(0),
+            Some(digest) => {
+                out.push(1);
+                out.extend_from_slice(digest);
+            }
+        }
+        out.extend(
+            (u32::try_from(self.audit.tool_versions.len())
+                .expect("tool version count fits in 32 bits"))
+            .to_le_bytes(),
+        );
+        for version in &self.audit.tool_versions {
+            write_audit_str(&version.tool, &mut out)?;
+            write_audit_str(&version.version, &mut out)?;
+        }
         Ok(out)
     }
+}
+
+/// 审计段里的带长度前缀字符串
+fn write_audit_str(value: &str, out: &mut Vec<u8>) -> std::io::Result<()> {
+    let len = u32::try_from(value.len()).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "an audit string is longer than the record format allows",
+        )
+    })?;
+    out.extend(len.to_le_bytes());
+    out.extend_from_slice(value.as_bytes());
+    Ok(())
 }
 
 /// 记录尾段没解出来时的编码错误：只解到前缀的记录不能写回盘上，
@@ -1143,10 +1238,37 @@ fn decode_payload(bytes: &[u8]) -> Option<Record> {
         None => Fact::Absent,
     };
     record.table_fence = Fact::Known(read_table_fence(&mut c)?);
+    record.audit = read_audit(&mut c)?;
     if !c.is_empty() {
         return None;
     }
     Some(record)
+}
+
+/// 审计段：放置、worker 摘要与工具版本。形状不符即整条记录解不出
+fn read_audit(c: &mut Cursor<'_>) -> Option<Audit> {
+    let placement = PlacementAudit::from_tag(c.u8()?)?;
+    let worker_digest = match c.u8()? {
+        0 => None,
+        1 => Some(c.array::<32>()?),
+        _ => return None,
+    };
+    let count = c.u32()?;
+    let mut tool_versions = Vec::new();
+    for _ in 0..count {
+        tool_versions.push(ToolVersion {
+            tool: read_audit_str(c)?,
+            version: read_audit_str(c)?,
+        });
+    }
+    Some(Audit { placement, worker_digest, tool_versions })
+}
+
+/// 审计段里的带长度前缀字符串；长度由剩余字节自然收敛，不做巨型预分配
+fn read_audit_str(c: &mut Cursor<'_>) -> Option<String> {
+    let len = c.u32()? as usize;
+    let bytes = c.take(len)?;
+    String::from_utf8(bytes.to_vec()).ok()
 }
 
 /// 尾段：表区修复。`None` = 段不完整或 tag 不认识
@@ -1253,6 +1375,7 @@ fn read_payload_prefix(c: &mut Cursor<'_>) -> Option<(Record, usize)> {
         restore_blocked,
         restore: Vec::new(),
         source: Fact::Undecidable(TAIL_UNREAD.into()),
+        audit: Audit::default(),
     };
     Some((record, restore_count))
 }
@@ -1768,9 +1891,11 @@ mod record_tails {
         Record { entry_table_in_flight: entry, ..record }
     }
 
+    /// 默认审计段的字节数：放置 tag + worker 摘要标记 + 工具版本条数
+    const AUDIT_TAIL: usize = 6;
+
     /// 改完字节后重算载荷长度、载荷 CRC 与头 CRC
-    fn rehash(bytes: &mut [u8]) {
-        let payload_len = u32::try_from(bytes.len() - HEADER_LEN).unwrap();
+    fn rehash(bytes: &mut [u8]) {        let payload_len = u32::try_from(bytes.len() - HEADER_LEN).unwrap();
         bytes[4..8].copy_from_slice(&payload_len.to_le_bytes());
         let payload_crc = crc32(&bytes[HEADER_LEN..]);
         bytes[8..12].copy_from_slice(&payload_crc.to_le_bytes());
@@ -1865,6 +1990,17 @@ mod record_tails {
         assert_eq!(record.derive_stage().unwrap(), Stage::Planned);
     }
 
+    /// 换 `MAGIC` 之前的记录按"不是本构建的文件"拒读，而不是"本工具的损坏记录"。
+    /// 这是本规格唯一不可回滚的对外契约：在飞作业必须用旧版本跑完，因此判据要钉在
+    /// 产生这个结论的那一层——`decode` 直接给出 `NotOurs`，不靠证据层的二次映射
+    #[test]
+    fn old_magic_is_not_ours() {
+        let mut bytes = moving_record(1, 0).encode().unwrap();
+        bytes[0..4].copy_from_slice(b"DREC");
+        rehash(&mut bytes);
+        assert_eq!(decode(&bytes), Err(DecodeFailure::NotOurs { magic: *b"DREC" }));
+    }
+
     /// 不是 `MAGIC` 的格式标识一律拒读：同样的载荷只换头部的标识即被拒
     #[test]
     fn an_unknown_magic_is_refused() {
@@ -1881,8 +2017,8 @@ mod record_tails {
     #[test]
     fn an_unknown_in_flight_tag_is_refused() {
         let mut bytes = moving_record(1, 0).encode().unwrap();
-        // 尾部依次是在飞位 tag、无修复 tag 与围栏各一字节
-        let in_flight_tag = bytes.len() - 3;
+        // 尾部依次是在飞位 tag、无修复 tag、围栏与审计段
+        let in_flight_tag = bytes.len() - AUDIT_TAIL - 3;
         bytes[in_flight_tag] = 2;
         rehash(&mut bytes);
 
@@ -1901,7 +2037,7 @@ mod record_tails {
         let mut bytes = record.encode().unwrap();
         // 修复段占 tag + kind + 两个 u64 + state 共 19 字节，其 tag 在围栏之前
         const REPAIR_WIDTH: usize = 19;
-        let repair_tag = bytes.len() - 1 - REPAIR_WIDTH;
+        let repair_tag = bytes.len() - AUDIT_TAIL - 1 - REPAIR_WIDTH;
         bytes[repair_tag] = 2;
         rehash(&mut bytes);
 
@@ -1911,8 +2047,8 @@ mod record_tails {
     #[test]
     fn an_unknown_fence_tag_is_refused() {
         let mut bytes = moving_record(1, 0).encode().unwrap();
-        let last = bytes.len() - 1;
-        bytes[last] = 3;
+        let fence = bytes.len() - AUDIT_TAIL - 1;
+        bytes[fence] = 3;
         rehash(&mut bytes);
 
         assert!(matches!(decode(&bytes), Err(DecodeFailure::Format { .. })));
@@ -1947,8 +2083,8 @@ mod record_tails {
     #[test]
     fn a_payload_missing_the_repair_segment_is_refused() {
         let mut bytes = moving_record(1, 0).encode().unwrap();
-        // 去掉"无修复"tag 与围栏各一字节，载荷停在在飞位之后
-        bytes.truncate(bytes.len() - 2);
+        // 去掉"无修复"tag、围栏与审计段，载荷停在在飞位之后
+        bytes.truncate(bytes.len() - AUDIT_TAIL - 2);
         rehash(&mut bytes);
 
         assert!(matches!(decode(&bytes), Err(DecodeFailure::Format { .. })));
@@ -1965,7 +2101,39 @@ mod record_tails {
             state: RepairState::Landed,
         });
         let mut bytes = record.encode().unwrap();
-        bytes.truncate(bytes.len() - 1);
+        bytes.truncate(bytes.len() - AUDIT_TAIL - 1);
+        rehash(&mut bytes);
+
+        assert!(matches!(decode(&bytes), Err(DecodeFailure::Format { .. })));
+    }
+
+    /// 审计段整份回读：放置、worker 摘要与工具版本原值保留
+    #[test]
+    fn the_audit_tail_round_trips() {
+        let mut record = table_only_record();
+        record.audit = Audit {
+            placement: PlacementAudit::Vm,
+            worker_digest: Some([0x5a; 32]),
+            tool_versions: vec![
+                ToolVersion { tool: "resize2fs".into(), version: "1.47.0".into() },
+                ToolVersion { tool: "e2fsck".into(), version: "1.47.0".into() },
+            ],
+        };
+        let bytes = record.encode().unwrap();
+
+        let decoded = decode(&bytes).expect("the audit tail is part of the current layout");
+        assert_eq!(decoded.audit, record.audit);
+        assert_eq!(decoded.derive_stage().unwrap(), record.derive_stage().unwrap());
+    }
+
+    /// 审计段的工具版本条数只在剩余字节里收敛：计数后被截断仍按 `Format` 拒读
+    #[test]
+    fn a_truncated_tool_version_is_refused() {
+        let mut record = table_only_record();
+        record.audit.tool_versions =
+            vec![ToolVersion { tool: "resize2fs".into(), version: "1.47.0".into() }];
+        let mut bytes = record.encode().unwrap();
+        bytes.truncate(bytes.len() - 3);
         rehash(&mut bytes);
 
         assert!(matches!(decode(&bytes), Err(DecodeFailure::Format { .. })));

@@ -22,11 +22,18 @@ const TOOL_ENTRY: &[&str] = &[
 
 const TOOL_LAYER: &[&str] = &["fsops/ext.rs", "fsops/env.rs"];
 
+/// 载体的进程不是文件系统工具：它由 `exec` 自己拉起，工具注册表在这里不适用。
+/// 清单按文件列入——载体里跑的 FS 工具仍要经 `fsops::ext`，那条路径在 guest 进程内
+const CARRIER_SPAWN: &[&str] = &["exec/qemu.rs", "exec/remote.rs"];
+
 #[test]
 fn external_tool_entries_live_only_in_the_registry_and_the_executor() {
     let mut found = Vec::new();
     for (rel, text) in rust_sources() {
-        if TOOL_LAYER.contains(&rel.as_str()) || rel.ends_with("/tests.rs") {
+        if TOOL_LAYER.contains(&rel.as_str())
+            || CARRIER_SPAWN.contains(&rel.as_str())
+            || rel.ends_with("/tests.rs")
+        {
             continue;
         }
         for (n, line) in production_lines(&text) {

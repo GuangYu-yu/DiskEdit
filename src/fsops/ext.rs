@@ -166,6 +166,22 @@ impl Tool {
         find_tool(self)
     }
 
+    /// 工具自报的版本行：`--version` 的 stdout，空时取 stderr，第一条非空行。
+    /// 只服务记录尾段的审计，不参与任何判定；工具缺失或输出为空时为 `None`
+    pub(crate) fn version(self) -> Option<String> {
+        let out = self.read(&["--version"]).ok()?;
+        let text = if out.stdout.iter().any(|b| !b.is_ascii_whitespace()) {
+            &out.stdout
+        } else {
+            &out.stderr
+        };
+        String::from_utf8_lossy(text)
+            .lines()
+            .map(str::trim)
+            .find(|line| !line.is_empty())
+            .map(str::to_string)
+    }
+
     /// 写盘之前确认工具齐备
     #[cfg(target_os = "linux")]
     pub(crate) fn require(self) -> Result<(), FsError> {
@@ -280,11 +296,6 @@ pub(crate) fn btrfs_resize_to(mnt: &str, bytes: &str) -> Result<std::process::Ou
 /// `fatresize -s max <dev>`
 pub(crate) fn fatresize_max(dev: &str) -> Result<std::process::Output, FsError> {
     Tool::Fatresize.write(&["-s", "max", dev])
-}
-
-/// `fatresize -s <bytes> <dev>`
-pub(crate) fn fatresize_to(dev: &str, bytes: &str) -> Result<std::process::Output, FsError> {
-    Tool::Fatresize.write(&["-s", bytes, dev])
 }
 
 // ── 挂载与 loop ──

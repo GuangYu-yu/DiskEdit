@@ -16,6 +16,7 @@ mod cmd;
 mod dev;
 mod docs;
 mod domain;
+mod exec;
 mod execution;
 mod fsid;
 mod fsops;
@@ -43,7 +44,7 @@ mod testrng;
 
 use std::process::ExitCode;
 
-use crate::outcome::{EXIT_INTERNAL, EXIT_OK, EXIT_PARTIAL};
+use crate::outcome::{RunOutcome, EXIT_INTERNAL, EXIT_OK, EXIT_PARTIAL};
 
 /// panic 走默认钩子（原样打印消息与 backtrace），结论交给同一个归责点：本次已写则
 /// 落部分完成（5）并给出恢复指引；从未写过则是内部错误（1）。
@@ -82,6 +83,10 @@ fn main() -> ExitCode {
 }
 
 fn run() -> u8 {
+    // 载体会话在命令解析之前接管：guest 不解析用户命令，也不消耗任何命令层状态
+    if crate::exec::worker::is_invoked() {
+        return crate::exec::worker::run();
+    }
     // 注入标签在命令解析之前校验：拼错或失效的标签若被静默放过，表现与"注入点没有被
     // 走到"完全相同。按内部错误直接结束，不做任何判定与写盘
     if let Some(msg) = crate::movepart::validate_fault_env() {
@@ -103,14 +108,28 @@ fn run() -> u8 {
     }
     // 返回结果同样要归责：命令内部的错误出口已在各自打印前归责（bail_fail /
     // report_final），这里兜住直接带着旧结论回到 main 的路径，改判时补一次呈现
-    let before = result.code();
+    let before = result.exit_code();
     result = result.settled();
-    if result.code() != before
-        && let cmd::CmdResult::RunOutcome(o) = &result
+    if result.exit_code() != before
+        && let partial @ RunOutcome::Partial { .. } = &result
     {
-        o.report();
+        partial.report();
     }
-    let code = result.code();
+    let code = result.exit_code();
+    // 终局拒绝类结论能回到这里，说明命令没有走 `bail_fail` 的自呈现通道——这里补上
+    // 唯一一次呈现，否则会退 3 而 stderr 全空，用户无从知道为什么。
+    // `Partial`/`Applied` 已由写路径的 `report_final` 呈现，`Checked` 由命令自己打印，
+    // 两者都不再重复
+    if matches!(
+        result,
+        RunOutcome::Usage(_)
+            | RunOutcome::Refused(_)
+            | RunOutcome::NoMutation { .. }
+            | RunOutcome::Unsupported { .. }
+            | RunOutcome::Internal(_)
+    ) {
+        result.report();
+    }
     // 收尾失败发生在命令自报成功之后，命令自己没有打印过 5 的指引，这里补上
     if code == EXIT_PARTIAL
         && let Some(cause) = cleanup_failure
@@ -130,8 +149,8 @@ fn release_leak_note(count: usize) -> String {
 
 /// 资源释放待办对最终结论的作用：成功（0）降为部分完成（5）并带回成因；
 /// 其余码已经陈述了更差的事实，原样返回
-fn apply_release_leaks(result: cmd::CmdResult, count: usize) -> (cmd::CmdResult, Option<String>) {
-    if count == 0 || result.code() != EXIT_OK {
+fn apply_release_leaks(result: RunOutcome, count: usize) -> (RunOutcome, Option<String>) {
+    if count == 0 || result.exit_code() != EXIT_OK {
         return (result, None);
     }
     let cause = format!("{count} cleanup step(s) did not complete");
@@ -141,22 +160,21 @@ fn apply_release_leaks(result: cmd::CmdResult, count: usize) -> (cmd::CmdResult,
 #[cfg(test)]
 mod tests {
     use super::{apply_release_leaks, release_leak_note};
-    use crate::cmd::CmdResult;
-    use crate::outcome::{EXIT_OK, EXIT_PARTIAL, EXIT_REFUSED, EXIT_USAGE, RunOutcome};
+    use crate::outcome::{EXIT_PARTIAL, EXIT_REFUSED, EXIT_USAGE, RunOutcome};
 
     /// 资源释放待办 × 结果形态：只有成功结论被降为 5 并给出提示；
     /// 失败结论保持自己的码，提示不出现
     #[test]
     fn release_leak_matrix() {
         let cases = [
-            (CmdResult::from(RunOutcome::applied_with(Vec::new())), EXIT_PARTIAL, true),
-            (CmdResult::from(RunOutcome::refused("no such partition")), EXIT_REFUSED, false),
-            (CmdResult::from(EXIT_OK), EXIT_PARTIAL, true),
-            (CmdResult::from(EXIT_USAGE), EXIT_USAGE, false),
+            (RunOutcome::applied_with(Vec::new()), EXIT_PARTIAL, true),
+            (RunOutcome::refused("no such partition"), EXIT_REFUSED, false),
+            (RunOutcome::Checked, EXIT_PARTIAL, true),
+            (RunOutcome::usage("bad flag"), EXIT_USAGE, false),
         ];
         for (result, expected, noted) in cases {
             let (settled, cause) = apply_release_leaks(result, 2);
-            assert_eq!(settled.code(), expected);
+            assert_eq!(settled.exit_code(), expected);
             assert_eq!(cause.as_deref(), noted.then_some("2 cleanup step(s) did not complete"));
         }
         assert_eq!(

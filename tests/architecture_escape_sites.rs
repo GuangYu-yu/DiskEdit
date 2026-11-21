@@ -137,6 +137,11 @@ const SKIP_SITES: &[SkipSite] = &[
         why: "取不到文件对象身份时退回路径键，用于定位落点，不作身份证据（src/recovery/journal.rs:336）",
     },
     SkipSite {
+        id: "S2-27",
+        file: "dev/identity.rs",
+        why: "句柄在手却问不出文件对象身份时退回路径键：句柄已证明打开的是谁，键只定位落点（src/recovery/journal.rs:336）",
+    },
+    SkipSite {
         id: "S2-17",
         file: "recovery/engine.rs",
         why: "取不到元数据时按镜像打开，随后打开失败即拒绝（src/recovery/engine.rs:884）",

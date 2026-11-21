@@ -171,6 +171,34 @@ pub(crate) fn image_identity_follows_the_opened_handle_not_the_path() {
     assert!(e.to_string().contains("no longer names the file that was opened"), "{e}");
 }
 
+/// 打开后路径被替换：后续写入仍落在已打开的那个 inode 上，原路径的新文件一个字节都不动。
+/// 这是 fd 交棒的宿主侧前提——QEMU 继承的正是这个句柄（`exec::qemu::command` 传
+/// `src.raw_fd()`），因此"路径换了人"与"写入落点"在类型上无关
+#[cfg(target_os = "linux")]
+#[test]
+pub(crate) fn a_swapped_path_does_not_redirect_writes() {
+    let dir = test_dir("swapwrite");
+    let path = dir.join("disk.img");
+    std::fs::write(&path, vec![0u8; 8192]).unwrap();
+
+    let mut src = WriteSource::unowned(FileSource::open_image(&path, None, true).unwrap());
+    src.write_fixture(0, &[1u8; 512]).unwrap();
+
+    std::fs::rename(&path, dir.join("moved.img")).unwrap();
+    std::fs::write(&path, vec![0u8; 8192]).unwrap();
+
+    src.write_fixture(512, &[2u8; 512]).unwrap();
+
+    let original = std::fs::read(dir.join("moved.img")).unwrap();
+    assert_eq!(&original[0..512], &[1u8; 512], "the first write must be in the opened file");
+    assert_eq!(&original[512..1024], &[2u8; 512], "the write after the swap must still land there");
+    assert_eq!(
+        std::fs::read(&path).unwrap(),
+        vec![0u8; 8192],
+        "the file now sitting at the old path must stay untouched"
+    );
+}
+
 /// 日志落点也由身份推导：镜像与目标同层级，块设备落在 state_dir 下且以 Disk GUID /
 /// devname 命名。模块自行拼 state_dir() 会让落点随调用方漂移。
 /// 块设备侧的推导断言只在非 Linux 跑：Linux 上 /dev/sdz 的拓扑解析不出（fail-closed），

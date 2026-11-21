@@ -1,6 +1,6 @@
 //! `resize --allow-move` 的判定半程与执行装配：事前判定（只读）、绑定现场、扩容后的 FS 收尾。
 //!
-//! 写盘不在本模块：搬移、表提交与换区重建都由 [`crate::execution::execute_plan`]
+//! 写盘不在本模块：搬移、表提交与换区重建都由 [`crate::exec::run_plan`]
 //! 执行，本模块把判定结论装配成一份计划并交给它。事务入口与归责在
 //! [`crate::cmd::resize::apply_move`]。持久状态是恢复记录里的
 //! [`crate::recovery::Relocation`]：有序计划、双游标、块字节、作业语义与几何守卫
@@ -38,17 +38,6 @@ pub(crate) fn swap_rebuild_pending(
 ///
 /// 新跑必须在任何目标写入之前调用：否则会先把修复与表改完、再以 pending 收场。
 /// 恢复分支不套用：已开始的作业缺工具只能在执行期以 pending 收场并保留现场
-pub(crate) fn ensure_swap_rebuild_tools(is_block: bool) -> Result<(), RunOutcome> {
-    crate::fsops::require_linux().map_err(RunOutcome::from)?;
-    crate::fsops::check_support(
-        "rebuild",
-        ContentKind::Swap.as_str(),
-        crate::fsops::swap_rebuild_support(is_block),
-    )
-    .map_err(RunOutcome::from)?;
-    Ok(())
-}
-
 /// 事前判定的产物，也是 execute 的**唯一输入源**：凡是执行阶段要用的都在这里带过去。
 /// `chunk_len` / `no_fs` 若同时留在 execute 的参数位上，同一个值就有两个来源、谁赢没有定义。
 /// `g` 随行：执行半程对表项的全部落位都基于它（不重读盘上的表）
@@ -158,7 +147,7 @@ pub(crate) fn prepare_apply(
             plan.ss,
             &growable,
         )?;
-        crate::fsops::check_grow_step(growable, src.is_block)?;
+        crate::exec::placement::require_grow(&growable, src.is_block)?;
     }
     // 恢复三态：有效 → 续传 / 槽位被另一族作业占用 → 拒绝 / 空 → 新建
     // 落点取命中路径：续传写同一份现场；空槽返回本次命名落点
@@ -246,7 +235,7 @@ pub(crate) fn prepare_apply(
             // 保留现场，不能反过来阻断恢复。预检只覆盖平台与工具存在性：PATH 里有可执行
             // 文件不等于它一定能成功操作目标（权限、设备策略），那些失败仍落在执行期
             if plan.moves.iter().any(|m| m.is_swap) {
-                ensure_swap_rebuild_tools(src.is_block)?;
+                crate::exec::placement::require_swap_rebuild(src.is_block)?;
                 // 重建要保住旧卷标；读不出来时预检在首次目标写入之前拒绝
                 for m in plan.moves.iter().filter(|m| m.is_swap) {
                     ensure_swap_rebuild_identity(src, m.part_num, m.first_lba, m.len_lba, plan.ss)?;
@@ -342,7 +331,7 @@ fn ensure_idle_at(
 
 /// 执行（写盘）：装配 → 绑定现场 → 执行器 → 扩容收尾。
 ///
-/// 搬移、表提交与换区重建都由 [`crate::execution::execute_plan`] 执行：它先做完整预扫描
+/// 搬移、表提交与换区重建都由 [`crate::exec::run_plan`] 执行：它先做完整预扫描
 /// （执行器缺席、未装配的表步骤、块布局与地址区间），首写之后只可能给出"盘可能已改变"，
 /// 由执行器统一承担。
 /// 本函数只剩三件事：把记录绑定到这次作业、把搬移与扩容装配成一份计划、在计划完整走完
@@ -426,7 +415,7 @@ pub(crate) fn execute_apply(
         .map_err(|e| RunOutcome::no_mutation(e.bind_failure()))?;
 
     let mut sink = crate::recovery::sink::RecordSink::with_log(log);
-    match crate::execution::execute_plan(src, &confirmed, Some(d.chunk_len), &mut sink, post)? {
+    match crate::exec::run_plan(src, &confirmed, Some(d.chunk_len), &mut sink, post)? {
         // 换区重建失败：条目循环停在那一处，扩容收尾不能做——grow_end 按全体 moves 取
         // min(new_first)−1，把尚未搬移成员的旧位也划进扩容区，提交即写出与未搬移分区
         // 重叠的表项。记录原样保留，重跑在同一记录上从本条目重试 mkswap
@@ -579,7 +568,7 @@ pub(crate) fn finalize_growth(
                     Box::new(crate::execution::NoProgress)
                 };
                 // FS 步的预扫描可能给出首写前的拒绝：保留原变体，由退出点的归责改判
-                crate::execution::execute_plan_complete(src, &plan, None, sink.as_mut())?;
+                crate::exec::run_plan_complete(src, &plan, None, sink.as_mut())?;
                 log("filesystem resized");
             }
         }

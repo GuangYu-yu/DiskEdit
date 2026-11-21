@@ -12,11 +12,9 @@ use std::path::Path;
 #[cfg(target_os = "linux")]
 use crate::cli::InspectRequest;
 #[cfg(target_os = "linux")]
-use crate::cmd::CmdResult;
-#[cfg(target_os = "linux")]
 use crate::dev::DeclaredIdentity;
 #[cfg(target_os = "linux")]
-use crate::outcome::{RunOutcome, EXIT_OK, EXIT_REFUSED};
+use crate::outcome::RunOutcome;
 #[cfg(target_os = "linux")]
 use crate::platform::probe::HostPlatform;
 #[cfg(target_os = "linux")]
@@ -62,8 +60,11 @@ exit status:
   `Unverified` records are annotated and keep their verdict's exit status"#;
 
 #[cfg(target_os = "linux")]
-pub(crate) fn cmd_inspect(a: &InspectRequest) -> CmdResult {
-    debug_assert!(a.part.is_none(), "the parser refuses a partition suffix for inspect");
+pub(crate) fn cmd_inspect(a: &InspectRequest) -> RunOutcome {
+    debug_assert!(
+        a.part.is_none(),
+        "the parser refuses a partition suffix for inspect"
+    );
     let path = Path::new(&a.target);
     // 先按路径结构分派：记录后端的直接子项本身就是证据，不必再当目标探测
     if let Some(spot) = crate::dev::record_spot(path) {
@@ -76,10 +77,9 @@ pub(crate) fn cmd_inspect(a: &InspectRequest) -> CmdResult {
         }
         return inspect_record_entry(&spot, a);
     }
-    let declared = a
-        .identity
-        .as_deref()
-        .map(|raw| DeclaredIdentity::parse(raw).unwrap_or_else(|e| bail_fail(RunOutcome::usage(e))));
+    let declared = a.identity.as_deref().map(|raw| {
+        DeclaredIdentity::parse(raw).unwrap_or_else(|e| bail_fail(RunOutcome::usage(e)))
+    });
     let spec = TargetSpec::new(a.target.as_str(), None);
     let probe = match HostPlatform.identify(&spec) {
         Ok(probe) => probe,
@@ -93,10 +93,10 @@ pub(crate) fn cmd_inspect(a: &InspectRequest) -> CmdResult {
             let failed =
                 report_candidates(crate::dev::TargetIdentity::resolve_for_cleanup(path).as_ref());
             report_occupancy(path);
-            if failed.is_some() {
-                return CmdResult::Code(EXIT_REFUSED);
+            if let Some(why) = failed {
+                return RunOutcome::refused(why);
             }
-            return CmdResult::Code(EXIT_OK);
+            return RunOutcome::Checked;
         }
         Err(e) => bail_fail(platform_failure(&a.target, e)),
     };
@@ -118,10 +118,10 @@ pub(crate) fn cmd_inspect(a: &InspectRequest) -> CmdResult {
         println!("verdict: nothing inspected");
         let failed = report_candidates(identity.as_ref());
         report_occupancy(path);
-        if failed.is_some() {
-            return CmdResult::Code(EXIT_REFUSED);
+        if let Some(why) = failed {
+            return RunOutcome::refused(why);
         }
-        return CmdResult::Code(EXIT_OK);
+        return RunOutcome::Checked;
     };
     let evidence = read_evidence(&record, current.as_ref());
     println!("evidence: {}", record.display());
@@ -133,11 +133,11 @@ pub(crate) fn cmd_inspect(a: &InspectRequest) -> CmdResult {
     }
     report_header(&record, &evidence);
     report_occupancy(path);
-    let (code, note) = verdict(&evidence, a);
+    let (outcome, note) = verdict(&evidence, a);
     if let Some(note) = note {
         eprintln!("{note}");
     }
-    CmdResult::Code(code)
+    outcome
 }
 
 /// 身份不可证明时的候选清单：按结构解码记录根下的条目并逐条报告。
@@ -147,16 +147,15 @@ pub(crate) fn cmd_inspect(a: &InspectRequest) -> CmdResult {
 /// （列出，不认领）。候选集来自 [`crate::recovery::active_recovery_records`]：
 /// `recover --release` 的候选列表与这里取自同一处枚举，不各自拼落点
 ///
-/// 返回候选枚举失败的原因：读不出候选集时调用方要按 3 退出，不能把"什么都没列出来"
-/// 当作"没有候选"
+/// 返回候选枚举失败的原因：读不出候选集时调用方要按拒绝退出，不能把"什么都没列出来"
+/// 当作"没有候选"。原因只交回调用方（由拒绝结论统一打印），不在这里另打一遍
 #[cfg(target_os = "linux")]
 fn report_candidates(identity: Option<&crate::dev::TargetIdentity>) -> Option<String> {
     let identity = identity?;
     let candidates = match crate::recovery::active_recovery_records(identity, None) {
         Ok(candidates) => candidates,
         Err(why) => {
-            eprintln!("cannot enumerate the candidate records: {why}");
-            return Some(why);
+            return Some(format!("cannot enumerate the candidate records: {why}"));
         }
     };
     let mut shown = 0usize;
@@ -199,7 +198,7 @@ fn sidecar_scene(spot: &crate::dev::RecordSpot) -> Result<SceneIdentity, String>
 /// `ForeignTarget`。隔离项不参与活跃判定：它可读、可报告，但不计入未收尾现场，
 /// 也不要求 `recover`
 #[cfg(target_os = "linux")]
-fn inspect_record_entry(spot: &crate::dev::RecordSpot, a: &InspectRequest) -> CmdResult {
+fn inspect_record_entry(spot: &crate::dev::RecordSpot, a: &InspectRequest) -> RunOutcome {
     let path = spot.path();
     println!("evidence: {}", path.display());
     println!("backend: {}", spot.backend.as_str());
@@ -225,9 +224,9 @@ fn inspect_record_entry(spot: &crate::dev::RecordSpot, a: &InspectRequest) -> Cm
             mark.as_str()
         )
     });
-    let (code, verdict_note) = if spot.quarantine.is_some() {
+    let (outcome, verdict_note) = if spot.quarantine.is_some() {
         match &evidence {
-            Evidence::Recognized(_) => (EXIT_OK, None),
+            Evidence::Recognized(_) => (RunOutcome::Checked, None),
             _ => verdict_with(&evidence, &a.target),
         }
     } else {
@@ -243,7 +242,7 @@ fn inspect_record_entry(spot: &crate::dev::RecordSpot, a: &InspectRequest) -> Cm
     if let Some(note) = verdict_note {
         eprintln!("{note}");
     }
-    CmdResult::Code(code)
+    outcome
 }
 
 /// 没有声明名时的场景：探测结果认得出目标，这里再开一次只读句柄把容量、载体文件与
@@ -288,7 +287,9 @@ fn open_target(path: &Path, sector_size: Option<u64>) -> Result<crate::dev::File
             crate::dev::FileSource::open_read_only_image(path, sector_size)
         }
         Fact::Undecidable(why) => {
-            return Err(format!("the target's node shape cannot be determined: {why}"))
+            return Err(format!(
+                "the target's node shape cannot be determined: {why}"
+            ))
         }
     };
     opened.map_err(|e| format!("the target cannot be opened read-only: {e}"))
@@ -313,9 +314,9 @@ fn report_occupancy(path: &Path) {
 #[cfg(target_os = "linux")]
 fn platform_failure(target: &str, err: PlatformError) -> RunOutcome {
     match err {
-        PlatformError::Io(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            RunOutcome::refused(format!("target {target} does not exist — nothing to inspect"))
-        }
+        PlatformError::Io(e) if e.kind() == std::io::ErrorKind::NotFound => RunOutcome::refused(
+            format!("target {target} does not exist — nothing to inspect"),
+        ),
         PlatformError::Io(e) => RunOutcome::refused(crate::support::cannot_read(target, e)),
         PlatformError::Unidentifiable(reason) => RunOutcome::refused(reason),
         PlatformError::Unsupported(reason) => RunOutcome::unsupported(reason),
@@ -332,8 +333,11 @@ fn read_evidence(record: &Path, current: Option<&SceneIdentity>) -> Evidence {
         .file_name()
         .expect("the identity always yields a named record file")
         .to_os_string();
-    let relative = RelativePath::try_new(name)
-        .unwrap_or_else(|e| bail_fail(RunOutcome::internal(format!("companion file name is not anchor-relative: {e:?}"))));
+    let relative = RelativePath::try_new(name).unwrap_or_else(|e| {
+        bail_fail(RunOutcome::internal(format!(
+            "companion file name is not anchor-relative: {e:?}"
+        )))
+    });
     let dir = match record.parent() {
         Some(parent) if !parent.as_os_str().is_empty() => parent,
         _ => Path::new("."),
@@ -354,7 +358,9 @@ fn read_evidence(record: &Path, current: Option<&SceneIdentity>) -> Evidence {
             Some(current) => Evidence::classify(&bytes, current),
             None => Evidence::classify_structure(&bytes),
         },
-        Err(EvidenceIo::Io(e) | EvidenceIo::RenamedNotDurable(e)) => Evidence::unreadable(Cause::Io(e.to_string())),
+        Err(EvidenceIo::Io(e) | EvidenceIo::RenamedNotDurable(e)) => {
+            Evidence::unreadable(Cause::Io(e.to_string()))
+        }
         Err(EvidenceIo::Unsupported(reason)) => Evidence::unreadable(Cause::Unsupported(reason)),
     }
 }
@@ -402,7 +408,7 @@ fn report_header(path: &Path, evidence: &Evidence) {
         Evidence::UnrecognizedFormat { .. } => {
             "not checked — magic is not recognized or the payload does not match this build's layout"
         }
-        Evidence::NotOurs { .. } => "not checked — the entry is not a regular record file",
+        Evidence::NotRegular { .. } => "not checked — the entry is not a regular record file",
         _ => "unavailable — the record file could not be read",
     };
     println!("  crc: {crc}");
@@ -444,7 +450,7 @@ fn report(evidence: &Evidence) {
             println!("record: crc mismatch");
             println!("  region: {region:?}");
         }
-        Evidence::NotOurs { kind } => {
+        Evidence::NotRegular { kind } => {
             println!("record: not ours");
             println!("  entry: {kind:?}");
         }
@@ -456,48 +462,74 @@ fn report(evidence: &Evidence) {
 }
 
 #[cfg(target_os = "linux")]
-fn verdict(evidence: &Evidence, a: &InspectRequest) -> (u8, Option<String>) {
+fn verdict(evidence: &Evidence, a: &InspectRequest) -> (RunOutcome, Option<String>) {
     verdict_with(evidence, &a.target)
 }
 
 /// `target` 只进"下一步该运行哪条命令"的措辞：目标式 inspect 用命令行参数，
 /// 路径式用 sidecar 还原出的目标路径
 #[cfg(target_os = "linux")]
-fn verdict_with(evidence: &Evidence, target: &str) -> (u8, Option<String>) {
+fn verdict_with(evidence: &Evidence, target: &str) -> (RunOutcome, Option<String>) {
     match evidence {
-        Evidence::Absent => (EXIT_OK, None),
+        Evidence::Absent => (RunOutcome::Checked, None),
         Evidence::Recognized(record) => map_recognized(record, target),
-        Evidence::UnrecognizedFormat { .. } => (3, Some("structure: the record's magic is not recognized or its payload does not match the layout this build reads — keep the file; `diskedit recover --release` will not quarantine it automatically, so remove it by hand once you are sure it is stale, and nothing may write to this target until then".to_string())),
-        Evidence::ForeignTarget { .. } => {
-            (3, Some("identity: the record belongs to a different target — it must not be cleaned up or replayed for this target".to_string()))
-        }
-        Evidence::Incomplete { .. } => {
-            (3, Some("structure: the record is shorter than its declared length — keep the file for manual inspection".to_string()))
-        }
-        Evidence::CrcMismatch { .. } => {
-            (3, Some("structure: the record's CRC does not match — keep the file for manual inspection".to_string()))
-        }
-        Evidence::NotOurs { .. } => {
-            (3, Some("path: the entry is not a regular record file — evidence paths never follow symlinks or directories".to_string()))
-        }
-        Evidence::Unreadable { .. } => {
-            (3, Some("io: the record could not be read; no structural conclusion was reached".to_string()))
-        }
+        Evidence::UnrecognizedFormat { .. } => (
+            RunOutcome::refused(
+                "structure: the record's magic is not recognized or its payload does not match the layout this build reads — keep the file; `diskedit recover --release` will not quarantine it automatically, so remove it by hand once you are sure it is stale, and nothing may write to this target until then",
+            ),
+            None,
+        ),
+        Evidence::ForeignTarget { .. } => (
+            RunOutcome::refused(
+                "identity: the record belongs to a different target — it must not be cleaned up or replayed for this target",
+            ),
+            None,
+        ),
+        Evidence::Incomplete { .. } => (
+            RunOutcome::refused(
+                "structure: the record is shorter than its declared length — keep the file for manual inspection",
+            ),
+            None,
+        ),
+        Evidence::CrcMismatch { .. } => (
+            RunOutcome::refused(
+                "structure: the record's CRC does not match — keep the file for manual inspection",
+            ),
+            None,
+        ),
+        Evidence::NotRegular { .. } => (
+            RunOutcome::refused(
+                "path: the entry is not a regular record file — evidence paths never follow symlinks or directories",
+            ),
+            None,
+        ),
+        Evidence::Unreadable { .. } => (
+            RunOutcome::refused(
+                "io: the record could not be read; no structural conclusion was reached",
+            ),
+            None,
+        ),
     }
 }
 
 #[cfg(target_os = "linux")]
-fn map_recognized(record: &Record, target: &str) -> (u8, Option<String>) {
+fn map_recognized(record: &Record, target: &str) -> (RunOutcome, Option<String>) {
     use crate::recovery::Retention;
 
     let retention_note = match record.retention {
-        Retention::Unverified => Some("retention: unverified — this record is annotated but keeps its verdict's exit status".to_string()),
-        Retention::Quarantined => Some("retention: quarantined — this record is annotated but keeps its verdict's exit status".to_string()),
+        Retention::Unverified => Some(
+            "retention: unverified — this record is annotated but keeps its verdict's exit status"
+                .to_string(),
+        ),
+        Retention::Quarantined => Some(
+            "retention: quarantined — this record is annotated but keeps its verdict's exit status"
+                .to_string(),
+        ),
         Retention::Active | Retention::CommittedPending => None,
     };
     // 完成与否只看提交点（`Record::committed`），未提交的其余阶段差异不影响这里的码值
     if record.committed() {
-        return (EXIT_OK, retention_note);
+        return (RunOutcome::Checked, retention_note);
     }
     // 回放资格与 `recover` 共用同一份 `TableReplay`：提示不会许诺 `recover` 不接受的事。
     // 相交的 move 在无许可时被 `recover` 拒绝（3），带 `--replay-table-only` 则按
@@ -535,22 +567,35 @@ fn map_recognized(record: &Record, target: &str) -> (u8, Option<String>) {
         note.push('\n');
         note.push_str(&extra);
     }
-    (EXIT_OK, Some(note))
+    (RunOutcome::Checked, Some(note))
 }
 
 #[cfg(target_os = "linux")]
 fn describe_record(record: &Record) -> Vec<String> {
     let lines = vec![
-        format!("transaction: {}", crate::support::hex_lower(&record.tx_id.bytes())),
-        format!("plan: {} version {}", crate::support::hex_lower(&record.plan_id.bytes()), record.plan_version.get()),
+        format!(
+            "transaction: {}",
+            crate::support::hex_lower(&record.tx_id.bytes())
+        ),
+        format!(
+            "plan: {} version {}",
+            crate::support::hex_lower(&record.plan_id.bytes()),
+            record.plan_version.get()
+        ),
         format!("operation: {:?}", record.op),
-        format!("plan digest: {}", crate::support::hex_lower(&record.plan_digest.bytes())),
+        format!(
+            "plan digest: {}",
+            crate::support::hex_lower(&record.plan_digest.bytes())
+        ),
         format!(
             "progress: steps={} cursor={} fs_phase={}",
-            record.progress.completed_steps, record.progress.transfer_cursor, record.progress.fs_phase
+            record.progress.completed_steps,
+            record.progress.transfer_cursor,
+            record.progress.fs_phase
         ),
         format!("entry table steps: {}", describe_entry_table_steps(record)),
         format!("repair: {}", describe_repair(record)),
+        describe_audit(&record.audit),
         format!("table fence: {}", describe_table_fence(record)),
         format!(
             "stage: {}",
@@ -585,12 +630,52 @@ fn describe_entry_table_steps(record: &Record) -> String {
                 "{committed}/{total} committed (entry {entry} table write in flight, counted as committed)"
             )
         }
-        crate::domain::Fact::Absent => format!("{}/{} committed", reloc.entry_index as usize, total),
+        crate::domain::Fact::Absent => {
+            format!("{}/{} committed", reloc.entry_index as usize, total)
+        }
         crate::domain::Fact::Undecidable(why) => format!(
             "{}/{} committed at least (the table step state was not decoded: {why})",
-            reloc.entry_index as usize,
-            total
+            reloc.entry_index as usize, total
         ),
+    }
+}
+
+/// 审计尾段的那一行：只呈现、不参与判定。续跑与回滚不读它，这里给出它的形状，
+/// 让"这条记录是谁、用哪次构建、按什么放置写的"在事后可查
+#[cfg(target_os = "linux")]
+fn describe_audit(audit: &crate::recovery::Audit) -> String {
+    format!(
+        "audit: placement={:?} worker={} tools={}",
+        audit.placement,
+        match audit.worker_digest {
+            Some(digest) => crate::support::hex_lower(&digest[..8]),
+            None => "none".to_string(),
+        },
+        audit.tool_versions.len()
+    )
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod audit_tail_tests {
+    use super::describe_audit;
+    use crate::recovery::Audit;
+
+    /// 审计尾段有读路径：默认值也给出完整形状，不靠"有内容才打印"
+    #[test]
+    fn inspect_shows_the_audit_tail() {
+        let line = describe_audit(&Audit::default());
+        assert!(
+            line.starts_with("audit: placement="),
+            "the line names its segment: {line}"
+        );
+        assert!(
+            line.contains("worker=none"),
+            "a record written without a carrier says so: {line}"
+        );
+        assert!(
+            line.ends_with("tools=0"),
+            "the tool count is always present: {line}"
+        );
     }
 }
 
@@ -641,30 +726,46 @@ fn describe_table_fence(record: &Record) -> String {
 #[cfg(target_os = "linux")]
 fn describe_identity(scene: &SceneIdentity) -> String {
     match scene.id().material() {
-        IdentityMaterial::Block { major, minor, device_id } => match device_id {
+        IdentityMaterial::Block {
+            major,
+            minor,
+            device_id,
+        } => match device_id {
             Some(id) => format!("block {major}:{minor} ({id})"),
             None => format!("block {major}:{minor} (no stable device ID)"),
         },
-        IdentityMaterial::Image { volume_serial, file_id } => match volume_serial {
-            Some(serial) => format!("image file-id {} (volume serial {serial:#x})", crate::support::hex_lower(file_id)),
+        IdentityMaterial::Image {
+            volume_serial,
+            file_id,
+        } => match volume_serial {
+            Some(serial) => format!(
+                "image file-id {} (volume serial {serial:#x})",
+                crate::support::hex_lower(file_id)
+            ),
             None => format!("image file-id {}", crate::support::hex_lower(file_id)),
         },
-        IdentityMaterial::Declared { identity } => format!("block with declared identity {identity}"),
+        IdentityMaterial::Declared { identity } => {
+            format!("block with declared identity {identity}")
+        }
     }
 }
-
 
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
+    use crate::outcome::{EXIT_OK, EXIT_REFUSED};
     use crate::platform::TargetId;
     use crate::recovery::{
-        CommitState, CrcRegion, EntryKind, OpKind, PlanDigest, PlanId, PlanVersion, Record, RelocEntry,
-        RelocKind, Relocation, Retention, TxId,
+        CommitState, CrcRegion, EntryKind, OpKind, PlanDigest, PlanId, PlanVersion, Record,
+        RelocEntry, RelocKind, Relocation, Retention, TxId,
     };
 
     fn request(target: &str) -> InspectRequest {
-        InspectRequest { target: target.to_string(), part: None, identity: None }
+        InspectRequest {
+            target: target.to_string(),
+            part: None,
+            identity: None,
+        }
     }
 
     fn current() -> SceneIdentity {
@@ -696,8 +797,20 @@ mod tests {
         record.op = OpKind::Move;
         record.relocation = Some(Relocation {
             entries: vec![
-                RelocEntry { partition: 1, src_first: 2048, len: 4096, delta: 2048, is_swap: false },
-                RelocEntry { partition: 2, src_first: 8192, len: 2048, delta: 0, is_swap: true },
+                RelocEntry {
+                    partition: 1,
+                    src_first: 2048,
+                    len: 4096,
+                    delta: 2048,
+                    is_swap: false,
+                },
+                RelocEntry {
+                    partition: 2,
+                    src_first: 8192,
+                    len: 2048,
+                    delta: 0,
+                    is_swap: true,
+                },
             ],
             entry_index: 1,
             chunks_in_entry: 0,
@@ -719,17 +832,27 @@ mod tests {
     #[test]
     fn a_record_entry_separates_no_target_from_an_unidentifiable_one() {
         let dir = crate::testdir::test_dir("inspect_scene_kinds");
-        let spot = |dir: std::path::PathBuf, backend: crate::dev::RecordBackend| crate::dev::RecordSpot {
-            dir,
-            name: crate::dev::RECORD_NAME.into(),
-            backend,
-            quarantine: None,
-        };
+        let spot =
+            |dir: std::path::PathBuf, backend: crate::dev::RecordBackend| crate::dev::RecordSpot {
+                dir,
+                name: crate::dev::RECORD_NAME.into(),
+                backend,
+                quarantine: None,
+            };
 
-        let host = spot(dir.join("0123456789abcdef0123456789abcdef"), crate::dev::RecordBackend::HostRepo);
-        assert_eq!(sidecar_scene(&host).unwrap_err(), "this record path does not name a target");
+        let host = spot(
+            dir.join("0123456789abcdef0123456789abcdef"),
+            crate::dev::RecordBackend::HostRepo,
+        );
+        assert_eq!(
+            sidecar_scene(&host).unwrap_err(),
+            "this record path does not name a target"
+        );
 
-        let missing = spot(dir.join("gone.diskedit"), crate::dev::RecordBackend::Sidecar);
+        let missing = spot(
+            dir.join("gone.diskedit"),
+            crate::dev::RecordBackend::Sidecar,
+        );
         let why = sidecar_scene(&missing).unwrap_err();
         assert!(
             why.starts_with("the target this record names could not be identified:"),
@@ -739,34 +862,45 @@ mod tests {
 
     #[test]
     fn absent_is_clean() {
-        assert_eq!(verdict(&Evidence::Absent, &request("disk.img")), (0, None));
+        let (outcome, note) = verdict(&Evidence::Absent, &request("disk.img"));
+        assert_eq!(outcome.exit_code(), EXIT_OK);
+        assert!(note.is_none());
     }
 
     #[test]
     fn committed_record_is_clean_and_unverified_only_annotates() {
-        let (code, note) = verdict(
+        let (outcome, note) = verdict(
             &Evidence::Recognized(record(CommitState::Committed, Retention::Active)),
             &request("disk.img"),
         );
-        assert_eq!(code, 0);
+        assert_eq!(outcome.exit_code(), EXIT_OK);
         assert!(note.is_none());
 
-        let (code, note) = verdict(
+        let (outcome, note) = verdict(
             &Evidence::Recognized(record(CommitState::Committed, Retention::Unverified)),
             &request("disk.img"),
         );
-        assert_eq!(code, 0, "Unverified must not change the verdict's exit status");
+        assert_eq!(
+            outcome.exit_code(),
+            EXIT_OK,
+            "Unverified must not change the verdict's exit status"
+        );
         assert!(note.unwrap().contains("unverified"));
     }
 
     #[test]
     fn prepared_record_is_zero_with_both_commands_named() {
-        let (code, note) =
-            verdict(&Evidence::Recognized(record(CommitState::Prepared, Retention::Active)), &request("disk.img"));
-        assert_eq!(code, EXIT_OK);
+        let (outcome, note) = verdict(
+            &Evidence::Recognized(record(CommitState::Prepared, Retention::Active)),
+            &request("disk.img"),
+        );
+        assert_eq!(outcome.exit_code(), EXIT_OK);
         let note = note.unwrap();
         assert!(note.contains("diskedit recover disk.img --yes"), "{note}");
-        assert!(note.contains("diskedit recover --release disk.img"), "{note}");
+        assert!(
+            note.contains("diskedit recover --release disk.img"),
+            "{note}"
+        );
     }
 
     #[test]
@@ -774,50 +908,77 @@ mod tests {
         let mut r = record(CommitState::Prepared, Retention::Active);
         r.restore_blocked = true;
         r.op = OpKind::Resize;
-        let (code, note) = verdict(&Evidence::Recognized(r), &request("disk.img"));
-        assert_eq!(code, EXIT_OK);
+        let (outcome, note) = verdict(&Evidence::Recognized(r), &request("disk.img"));
+        assert_eq!(outcome.exit_code(), EXIT_OK);
         let note = note.unwrap();
-        assert!(note.contains("diskedit recover --release disk.img"), "{note}");
-        assert!(!note.contains("diskedit recover disk.img"), "a blocked record cannot be rolled back: {note}");
+        assert!(
+            note.contains("diskedit recover --release disk.img"),
+            "{note}"
+        );
+        assert!(
+            !note.contains("diskedit recover disk.img"),
+            "a blocked record cannot be rolled back: {note}"
+        );
     }
 
     #[test]
     fn prepared_unverified_record_keeps_zero_and_annotates() {
-        let (code, note) = verdict(
+        let (outcome, note) = verdict(
             &Evidence::Recognized(record(CommitState::Prepared, Retention::Unverified)),
             &request("disk.img"),
         );
-        assert_eq!(code, EXIT_OK);
+        assert_eq!(outcome.exit_code(), EXIT_OK);
         assert!(note.unwrap().contains("unverified"));
     }
 
+    /// 结构失败必须是拒绝，且原因随结论交回（不是一条裸码）
     #[test]
-    fn structural_failures_are_three() {
+    fn structural_failures_are_refusals() {
         let structural = [
-            Evidence::UnrecognizedFormat { magic: *b"JRNL", recorded: None },
-            Evidence::ForeignTarget { recorded: current(), current: current() },
-            Evidence::Incomplete { observed: 3, expected: 64 },
-            Evidence::CrcMismatch { region: CrcRegion::Payload },
-            Evidence::NotOurs { kind: EntryKind::Symlink },
+            Evidence::UnrecognizedFormat {
+                magic: *b"JRNL",
+                recorded: None,
+            },
+            Evidence::ForeignTarget {
+                recorded: current(),
+                current: current(),
+            },
+            Evidence::Incomplete {
+                observed: 3,
+                expected: 64,
+            },
+            Evidence::CrcMismatch {
+                region: CrcRegion::Payload,
+            },
+            Evidence::NotRegular {
+                kind: EntryKind::Symlink,
+            },
         ];
         for evidence in structural {
-            assert_eq!(verdict(&evidence, &request("disk.img")).0, 3, "{evidence:?}");
+            let (outcome, note) = verdict(&evidence, &request("disk.img"));
+            assert_eq!(outcome.exit_code(), EXIT_REFUSED, "{evidence:?}");
+            assert!(matches!(outcome, RunOutcome::Refused(_)), "{evidence:?}");
+            assert!(note.is_none(), "{evidence:?}");
         }
     }
 
-    /// 读不出的记录退 3，且报告里点明"没有得出结论"——读失败本身不能被静默当成
-    /// 结构结论或"没有记录"
+    /// 读不出的记录按拒绝（3）上报，且正文点明"没有得出结论"——读失败本身不能被静默
+    /// 当成结构结论或"没有记录"
     #[test]
-    fn unreadable_evidence_is_three() {
+    fn unreadable_evidence_is_a_refusal_that_says_nothing_was_concluded() {
         let evidence = Evidence::Unreadable {
             cause: crate::recovery::Cause::Inaccessible("permission denied".to_string()),
         };
-        let (code, note) = verdict(&evidence, &request("disk.img"));
-        assert_eq!(code, 3, "{note:?}");
-        assert!(
-            note.as_deref().is_some_and(|n| n.starts_with("io: the record could not be read")),
-            "{note:?}"
-        );
+        let (outcome, note) = verdict(&evidence, &request("disk.img"));
+        assert_eq!(outcome.exit_code(), EXIT_REFUSED);
+        match &outcome {
+            RunOutcome::Refused(message) => assert!(
+                message.starts_with("io: the record could not be read"),
+                "{message}"
+            ),
+            other => panic!("a read failure must be a refusal, got {other:?}"),
+        }
+        assert!(note.is_none());
     }
 
     #[test]

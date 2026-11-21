@@ -55,7 +55,7 @@ use crate::lvm::LvmError;
 /// 一次搬移事务 = 事前判定（只读）+ 执行（写盘）。
 ///
 /// 判定的返回类型里只有 `Refused` / `NoMutation`（此刻确定未写盘）；执行半程交给
-/// [`crate::movepart::execute_apply`]（内部走 [`crate::execution::execute_plan`]），
+/// [`crate::movepart::execute_apply`]（内部走 [`crate::exec::run_plan`]），
 /// 它的错误分类按"首写之前 / 之后"给出；本函数的出口按本次写事实归责，把执行器
 /// 视野之外的目标写入（repair）算进结论。几何由调用方解析（一条命令解析一次，
 /// 往下传），本函数与执行半程都不读表
