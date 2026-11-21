@@ -37,7 +37,7 @@ The `tools` array is not edited by hand: `fsops::tests::manifest_derived_from_to
 
 ## Running the carrier tests
 
-Three test binaries cover the carrier, and none of them run by default: they print
+Four test binaries cover the carrier, and none of them run by default: they print
 `note: not executed <case>: <why>` and return. Set `DISKEDIT_REQUIRE_CAPABILITIES=1`
 on a deliberate run so a skip fails instead — otherwise "the guest never booted"
 looks exactly like "everything passed".
@@ -79,7 +79,25 @@ DISKEDIT_REQUIRE_CAPABILITIES=1 \
   cargo test --test vm_diff -- --test-threads=1
 ```
 
-Three things decide whether the job really lands on the carrier:
+The cross-executor hand-off — the carrier stops at "table written, record not advanced"
+and the host finishes it:
+
+```bash
+DISKEDIT_VM_TESTS=1 DISKEDIT_VM_BUNDLE="$PWD/dist/vm-bundle" \
+DISKEDIT_REQUIRE_CAPABILITIES=1 \
+  cargo test --test vm_interrupt --features test-faults -- --test-threads=1
+```
+
+The target there is an image file, whose partition the guest loop-maps. That is not
+incidental: the record is written by the host only, and both legs must resolve to the
+same record root. Image records live under a per-user root that honours
+`DISKEDIT_STATE_DIR` for any user, whereas block-device records live under
+`host_state_root`, which ignores that variable unless the process is root — so with a
+block device the carrier leg and the native leg would look in different roots. A block
+device target shares the same record and decision code but is not covered by this case:
+a non-root process cannot write one, and a root one never takes the carrier.
+
+Four things decide whether the job really lands on the carrier:
 
 - `vm_crash` and `vm_handoff` must run a binary compiled with
   `DISKEDIT_TOOL_PATH=/nonexistent`. That path is a compile-time constant, and a host
@@ -89,6 +107,10 @@ Three things decide whether the job really lands on the carrier:
 - `vm_diff` needs an account that can run `sudo`: one leg runs as that user (no
   privilege, so the carrier takes the job) and the other through `sudo` (root, so the
   host does it). As root, both legs would be native and there would be nothing to compare.
+- `vm_interrupt` wants the same account arrangement, plus a `--features test-faults`
+  build: it stops the carrier leg with `DISKEDIT_FAULT=after-table-write`, and without
+  that feature the variable is an empty stub, so the leg finishes instead of stopping
+  and the case fails looking like a product bug rather than a build choice.
 - `--test-threads=1` in both, because a case judges "is a QEMU left over on this
   machine" by process count, and each case kills its own carrier.
 

@@ -376,16 +376,12 @@ pub(crate) fn cmd_resize(a: &ResizeRequest) -> crate::outcome::RunOutcome {
     // 把"只差 FS/PV 收尾"拒成 nothing to grow / 右侧被挡。
     // 第三个位置说明盘被外部改过：两个收尾方向都会把作业落在错误的位置，直接拒绝。
     // 记录里还没有区间（首次写盘之后、区间绑定之前中断）没有可比对的事实，按未提交续做
-    let recorded_place = if entry.resumed {
-        src.record_journal().and_then(|j| j.record().place_on_disk((start, end)))
+    let record_place = if entry.resumed {
+        src.record_journal().map(|j| j.record().resume_place((start, end)))
     } else {
         None
     };
-    if entry.resumed
-        && let Some(journal) = src.record_journal()
-        && let (Some(old), Some(target_range)) = (journal.old_range(), journal.target_range())
-        && recorded_place.is_none()
-    {
+    if let Some(crate::recovery::ResumePlace::Moved { old, target: target_range }) = record_place {
         bail_fail(RunOutcome::refused(format!(
             "partition {part} sits at {start}..{end}, neither the record's pre-commit range {}..{} nor its \
              target {}..{} — the layout moved under the job; inspect it with `diskedit inspect` and release \
@@ -393,7 +389,8 @@ pub(crate) fn cmd_resize(a: &ResizeRequest) -> crate::outcome::RunOutcome {
             old.0, old.1, target_range.0, target_range.1
         )));
     }
-    let record_committed = recorded_place == Some(crate::recovery::RecordedPlace::Committed);
+    let record_committed =
+        matches!(record_place, Some(crate::recovery::ResumePlace::Committed { .. }));
     // PV 链的工具必须在写表之前齐备（pvresize/pvs 及 grow-lv 的 lvs/vgs/lvextend；
     // 镜像目标另加 losetup——它的分区链要临时映射）：它们在表提交之后才启动，
     // 缺工具那时才发现就只剩 PARTIAL 加手工

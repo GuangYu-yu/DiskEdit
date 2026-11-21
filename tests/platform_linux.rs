@@ -16,14 +16,18 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// 能力探测失败的唯一出口。没有这条通道时，跳过与通过在测试报告里长得一模一样；
-/// 而声明了"这台机器可测"的环境里再静默跳过，就是测试自己出了问题
+/// 而声明了"这台机器可测"的环境里再静默跳过，就是测试自己出了问题。
+///
+/// 直接写 `std::io::stderr`、不走 `eprintln!`：libtest 会把测试里的 `print` 宏收进捕获
+/// 缓冲、成功时丢弃，那行 `note:` 必须穿透捕获才真的可闻
 fn capability_skip(what: &str, why: &str) {
     assert!(
         std::env::var_os("DISKEDIT_REQUIRE_CAPABILITIES").is_none(),
         "{what} could not be exercised: {why} — this environment declared the capability, \
          so a silent skip is a bug in the test or the environment"
     );
-    eprintln!("note: skipping {what}: {why}");
+    use std::io::Write;
+    let _ = writeln!(std::io::stderr(), "note: skipping {what}: {why}");
 }
 
 /// 本次测试进程的镜像状态根：子进程与测试算出的落点必须一致

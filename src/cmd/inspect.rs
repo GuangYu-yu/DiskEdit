@@ -595,7 +595,7 @@ fn describe_record(record: &Record) -> Vec<String> {
         ),
         format!("entry table steps: {}", describe_entry_table_steps(record)),
         format!("repair: {}", describe_repair(record)),
-        describe_audit(&record.audit),
+        describe_audit(record.audit_tail()),
         format!("table fence: {}", describe_table_fence(record)),
         format!(
             "stage: {}",

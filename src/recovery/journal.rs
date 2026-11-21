@@ -824,10 +824,6 @@ impl RecordJournal {
         self.record.old_range
     }
 
-    pub(crate) fn target_range(&self) -> Option<(u64, u64)> {
-        self.record.target_range
-    }
-
     /// 写下这次作业的提交前区间与提交目标区间并落盘。两者成对承载一次 `resize`：
     /// 表步是否已落、收尾该扩还是缩都从这里读，续跑不再按本次请求重新推算。
     /// 每次真正写表之前调用，用当前盘上区间覆盖上一次的值——它描述的就是"这次写表前"。
@@ -1198,13 +1194,12 @@ impl RecordJournal {
     /// 写下令牌这次作业的放置与工具版本并落盘。字段只作审计：续跑与回滚不读它，
     /// 因此同一份记录换放置重跑时允许覆盖
     pub(crate) fn record_audit(&mut self, audit: Audit) -> Result<(), PersistFailure> {
-        if self.record.audit == audit {
+        let Some(was) = self.record.swap_audit_tail(audit) else {
             return Ok(());
-        }
-        let was = std::mem::replace(&mut self.record.audit, audit);
+        };
         if let Err(e) = self.persist() {
             if !e.record_bytes_persisted() {
-                self.record.audit = was;
+                self.record.swap_audit_tail(was);
             }
             return Err(e);
         }

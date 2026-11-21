@@ -904,52 +904,57 @@ pub(crate) fn prepare_resize_part(
         // 盘上条目只能是记录写下的两段事实之一：停在提交前区间 ⇒ 表步未发生；
         // 停在目标区间 ⇒ 表步已提交，只剩 FS/PV 收尾。第三种位置说明盘被外部改过，
         // 按哪一边收尾都会把作业落在错误的位置
-        match (journal.old_range(), journal.target_range()) {
-            (Some(record_old), Some(record_target)) => {
-                match journal.record().place_on_disk((old_start, old_end)) {
-                    Some(crate::recovery::RecordedPlace::Committed) => {
-                        // 已提交的作业只收尾：本次请求的终点必须仍是记录里的目标，
-                        // 另一个请求不能借着一条旧记录收尾（改主意请先释放记录）
-                        if (new_start, new_end) != record_target {
-                            return Err(RunOutcome::refused(format!(
-                                "partition {part} is already committed to {}..{} by an unfinished resize; \
-                                 re-run with that absolute size, or release it with `diskedit recover --release`",
-                                record_target.0, record_target.1
-                            )));
-                        }
-                        log("resize already committed — finishing filesystem step");
-                        (
-                            movepart::fs_shrunk_from_phase(progress.fs_phase),
-                            // 已提交态没有块要继续搬：起点未变时本就没有块，否则记录里的游标已到终点
-                            if moved == 0 { 0 } else { total_chunks },
-                            Some(record_old),
-                            recorded_lvm,
-                        )
-                    }
-                    Some(crate::recovery::RecordedPlace::Pending) => {
-                        log(&format!(
-                            "resuming at chunk {} (recovery record)",
-                            progress.transfer_cursor
-                        ));
-                        (
-                            movepart::fs_shrunk_from_phase(progress.fs_phase),
-                            progress.transfer_cursor,
-                            None,
-                            recorded_lvm,
-                        )
-                    }
-                    None => {
-                        return Err(RunOutcome::refused(format!(
-                            "partition {part} sits at {old_start}..{old_end}, neither the record's pre-commit range \
-                             {}..{} nor its target {}..{} — the layout moved under the job; inspect it with \
-                             `diskedit inspect` and release it with `diskedit recover --release` if it is stale",
-                            record_old.0, record_old.1, record_target.0, record_target.1
-                        )));
-                    }
+        match journal.record().resume_place((old_start, old_end)) {
+            crate::recovery::ResumePlace::Committed {
+                old: record_old,
+                target: record_target,
+            } => {
+                // 已提交的作业只收尾：本次请求的终点必须仍是记录里的目标，
+                // 另一个请求不能借着一条旧记录收尾（改主意请先释放记录）
+                if (new_start, new_end) != record_target {
+                    return Err(RunOutcome::refused(format!(
+                        "partition {part} is already committed to {}..{} by an unfinished resize; \
+                         re-run with that absolute size, or release it with `diskedit recover --release`",
+                        record_target.0, record_target.1
+                    )));
                 }
+                log("resize already committed — finishing filesystem step");
+                (
+                    movepart::fs_shrunk_from_phase(progress.fs_phase),
+                    // 已提交态没有块要继续搬：起点未变时本就没有块，否则记录里的游标已到终点
+                    if moved == 0 { 0 } else { total_chunks },
+                    Some(record_old),
+                    recorded_lvm,
+                )
             }
-            // 记录还没有区间（本次首次落盘的作业，或只做 FS 的旧现场）：按未提交续做
-            _ => (movepart::FsShrink::NotShrunk, 0, None, None),
+            crate::recovery::ResumePlace::Pending => {
+                log(&format!(
+                    "resuming at chunk {} (recovery record)",
+                    progress.transfer_cursor
+                ));
+                (
+                    movepart::fs_shrunk_from_phase(progress.fs_phase),
+                    progress.transfer_cursor,
+                    None,
+                    recorded_lvm,
+                )
+            }
+            crate::recovery::ResumePlace::Moved {
+                old: record_old,
+                target: record_target,
+            } => {
+                return Err(RunOutcome::refused(format!(
+                    "partition {part} sits at {old_start}..{old_end}, neither the record's pre-commit range \
+                     {}..{} nor its target {}..{} — the layout moved under the job; inspect it with \
+                     `diskedit inspect` and release it with `diskedit recover --release` if it is stale",
+                    record_old.0, record_old.1, record_target.0, record_target.1
+                )));
+            }
+            // 记录还没有可比对的两段事实（`Move` 按搬移游标续跑；或首次落盘后、区间绑定
+            // 之前中断）：按未提交续做
+            crate::recovery::ResumePlace::Unbound => {
+                (movepart::FsShrink::NotShrunk, 0, None, None)
+            }
         }
     } else {
         // 没有记录的时间点只出现在测试夹具；生产入口都先挂上记录再走到这里

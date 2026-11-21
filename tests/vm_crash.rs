@@ -20,8 +20,8 @@
 //! inode" 见 `src/dev/tests.rs::a_swapped_path_does_not_redirect_writes`；"交给 QEMU 的是
 //! 宿主核对过的那个描述符" 见 `src/exec/qemu.rs::tests::no_unsafe_cache_and_exit_device`。
 //!
-//! 两条放置路径的一致性由 `tests/vm_diff.rs` 负责；跨放置续跑不做端到端用例（记录里没有
-//! 放置字段），理由写在那里。
+//! 两条放置路径的一致性由 `tests/vm_diff.rs` 负责；"载体停在半途、原生接手"由
+//! `tests/vm_interrupt.rs` 负责。两者的分工写在各自文件头：本文件只做崩溃现场。
 
 #![cfg(target_os = "linux")]
 

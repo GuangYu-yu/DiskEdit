@@ -530,6 +530,25 @@ pub(crate) enum RecordedPlace {
     Committed,
 }
 
+/// 续跑时盘面相对记录写下的两段事实的位置。
+///
+/// [`Record::place_on_disk`] 只回答"盘上这一段是记录里的哪一段"；本枚举再把"记录有没有
+/// 写下可比对的两段事实"收进来——因为**没有可比对的事实**与**第三种位置**是两种结论：
+/// 前者按未提交续做，后者必须拒绝。三个续跑入口（GPT `resize`、MBR `resize`、`layout`
+/// 的换区）共用这一份判定，所以判断只有一处
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ResumePlace {
+    /// 记录没有同时写下提交前与目标区间：`Move` 按搬移游标续跑，不在此判定；只写了一段
+    /// （首次落盘之后、区间绑定之前中断）同样按未提交续做
+    Unbound,
+    /// 盘上仍是提交前区间：表步尚未发生
+    Pending,
+    /// 盘上是记录的目标区间：表步已提交，只剩 FS/PV 收尾
+    Committed { old: (u64, u64), target: (u64, u64) },
+    /// 第三种位置：盘在作业之后被外部改过，按哪一边收尾都会把作业落在错误的地方
+    Moved { old: (u64, u64), target: (u64, u64) },
+}
+
 tagged_enum! {
     /// 作业放置：承载本次步骤的执行器。只作审计，不参与续跑与回滚判定
     #[derive(Default)]
@@ -604,8 +623,10 @@ pub(crate) struct Record {
     pub(crate) restore: Vec<RestoreEntry>,
     /// `copy` 的源区间与规划期摘要；其余操作保持为空。只解到前缀的记录给不出这一段
     pub(crate) source: Fact<CopySource>,
-    /// 放置、worker 摘要与工具版本；只写不读
-    pub(crate) audit: Audit,
+    /// 放置、worker 摘要与工具版本。**只经 [`Self::audit_tail`] / [`Self::swap_audit_tail`]
+    /// 进出**：字段本身对本模块之外不可见，读取面因此只有一个名字——放置是审计事实，
+    /// 不是判定输入，多一个读者就会在 `tests/architecture_audit_tail.rs` 里显形
+    audit: Audit,
 }
 
 impl Record {
@@ -665,6 +686,35 @@ impl Record {
         self.target_range
             .filter(|target| table == *target)
             .map(|_| RecordedPlace::Committed)
+    }
+
+    /// 续跑时盘面相对记录的位置。分段事实是否齐备由本方法回答，具体落在哪一段由
+    /// [`Self::place_on_disk`] 回答，两种答案合成一个枚举——续跑入口不再各自拼这一步
+    pub(crate) fn resume_place(&self, table: (u64, u64)) -> ResumePlace {
+        let (Some(old), Some(target)) = (self.old_range, self.target_range) else {
+            return ResumePlace::Unbound;
+        };
+        match self.place_on_disk(table) {
+            Some(RecordedPlace::Pending) => ResumePlace::Pending,
+            Some(RecordedPlace::Committed) => ResumePlace::Committed { old, target },
+            None => ResumePlace::Moved { old, target },
+        }
+    }
+
+    /// 审计尾段的唯一读取入口。放置、worker 摘要与工具版本都在这一段里，它们只回答
+    /// "这条记录是谁、用哪次构建、按什么放置写的"，**任何判定都不许读**——所以读取面
+    /// 收成一个名字，`tests/architecture_audit_tail.rs` 按这个名字普查读者
+    pub(crate) fn audit_tail(&self) -> &Audit {
+        &self.audit
+    }
+
+    /// 换上审计尾段：与记录里那份相同时不动并回答 `None`，否则回答被换下的那份。
+    /// 落盘失败时交还旧值的责任在调用方，本方法不偷偷回滚
+    pub(crate) fn swap_audit_tail(&mut self, audit: Audit) -> Option<Audit> {
+        if self.audit == audit {
+            return None;
+        }
+        Some(std::mem::replace(&mut self.audit, audit))
     }
 
     /// 记录里是否留着"目标可能已经被写过"的证据：表区的原文已登记，或已越过不可回滚点。
@@ -1775,6 +1825,103 @@ mod relocation_round_trip {
         assert_eq!(record.place_on_disk((2048, 4096)), Some(RecordedPlace::Pending));
         assert_eq!(record.place_on_disk((2048, 8192)), Some(RecordedPlace::Committed));
         assert_eq!(record.place_on_disk((2048, 6144)), None, "第三种位置不被认领");
+    }
+
+    /// 一份带两段区间的 `resize` 记录：判定面与尾段的三条用例共用这个起点
+    fn resize_record() -> Record {
+        let mut record = Record::new(
+            TxId::from_bytes([1; 16]),
+            image_target(),
+            PlanId::from_bytes([2; 16]),
+            PlanVersion::new(1),
+            OpKind::Resize,
+            PlanDigest::from_bytes([3; 32]),
+            DiskGuidState::Unavailable,
+        );
+        record.old_range = Some((2048, 4096));
+        record.target_range = Some((2048, 8192));
+        record
+    }
+
+    /// 续跑判定把"没有可比对的事实"与"第三种位置"分成两种结论：前者续做，后者拒绝
+    #[test]
+    fn resume_place_separates_unbound_from_moved() {
+        let mut record = Record::new(
+            TxId::from_bytes([1; 16]),
+            image_target(),
+            PlanId::from_bytes([2; 16]),
+            PlanVersion::new(1),
+            OpKind::Resize,
+            PlanDigest::from_bytes([3; 32]),
+            DiskGuidState::Unavailable,
+        );
+        assert_eq!(record.resume_place((2048, 4096)), ResumePlace::Unbound);
+        record.old_range = Some((2048, 4096));
+        assert_eq!(
+            record.resume_place((2048, 4096)),
+            ResumePlace::Unbound,
+            "只有一段事实时不下结论：盘上这一段是不是『提交前』无从谈起"
+        );
+
+        let record = resize_record();
+        assert_eq!(record.resume_place((2048, 4096)), ResumePlace::Pending);
+        assert_eq!(
+            record.resume_place((2048, 8192)),
+            ResumePlace::Committed { old: (2048, 4096), target: (2048, 8192) }
+        );
+        assert_eq!(
+            record.resume_place((2048, 6144)),
+            ResumePlace::Moved { old: (2048, 4096), target: (2048, 8192) },
+            "第三种位置必须与『没有事实』分开，否则被外部改过的盘会被当成续跑点"
+        );
+    }
+
+    /// 审计尾段不参与任何判定：两条记录只差这一段，判定出口逐个相同
+    #[test]
+    fn the_audit_tail_does_not_move_a_judgement() {
+        let native = resize_record();
+        let mut swapped = native.audit_tail().clone();
+        swapped.placement = PlacementAudit::Vm;
+        assert_ne!(native.audit_tail(), &swapped, "夹具必须真的换掉尾段");
+
+        let mut carried = native.clone();
+        carried.audit = swapped;
+
+        assert_eq!(native.committed(), carried.committed());
+        assert_eq!(native.dirty(), carried.dirty());
+        assert_eq!(native.table_step_settled(), carried.table_step_settled());
+        for table in [(2048, 4096), (2048, 8192), (2048, 6144), (0, 0)] {
+            assert_eq!(native.place_on_disk(table), carried.place_on_disk(table), "{table:?}");
+            assert_eq!(native.resume_place(table), carried.resume_place(table), "{table:?}");
+        }
+        assert_eq!(
+            format!("{:?}", native.stage()),
+            format!("{:?}", carried.stage()),
+            "决策面的阶段不许跟着尾段变"
+        );
+
+        // 放置在载荷里只占一个码值：两份载荷同长、只差一个字节。尾段的长度由 worker
+        // 摘要与工具版本条数决定，与放置无关
+        let a = native.encode_payload().expect("a resize record with both ranges encodes");
+        let b = carried.encode_payload().expect("the same record with a carried tail encodes");
+        assert_eq!(a.len(), b.len(), "放置不改变载荷长度");
+        let differs: Vec<usize> =
+            a.iter().zip(&b).enumerate().filter(|(_, (x, y))| x != y).map(|(at, _)| at).collect();
+        assert_eq!(differs.len(), 1, "放置只占一个码值，其余字节必须相同：{differs:?}");
+    }
+
+    /// 记录加字段必须来这里点名：`..` 一旦出现，这条守卫就失去意义
+    #[test]
+    fn every_record_field_is_named_here() {
+        let record = resize_record();
+        let Record {
+            header: _, tx_id: _, target: _, plan_id: _, plan_version: _, op: _, plan_digest: _,
+            progress: _, old_range: _, target_range: _, lvm_post: _, relocation: _,
+            entry_table_in_flight: _, repair: _, table_fence: _, action: _, commit: _,
+            retention: _, disk_guid: _, restore_blocked: _, restore: _, source: _,
+            // 唯一与执行器有关的字段：审计尾段只写出，判定不许读它
+            audit: _,
+        } = &record;
     }
 
     /// `Resize` / `ResizeEnd` 只带提交前区间：续跑无从判断方向与是否已提交，整份拒收
