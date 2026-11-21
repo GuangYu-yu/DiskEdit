@@ -350,10 +350,16 @@ pub(crate) fn suffix_path(base: &Path, suffix: &str) -> PathBuf {
 /// 镜像的记录键：文件**对象**身份。Unix 取 `(st_dev, st_ino)`，Windows 取
 /// `(卷序列号, 文件索引)`——两者由文件系统在对象上维护，改名、移动都不变。
 /// 读不到时退回规范化路径：路径键在改名后失效，但比"没有落点"更接近调用方的预期
-fn image_file_key(canonical: &Path) -> String {
+///
+/// `opened` 是已经打开的句柄：写入路径一律传它，键只从这一次采样得出。再按路径 stat
+/// 一次是同一份事实的第二次采样——两步之间路径可以换对象，键就会指向别人的记录目录
+fn image_file_key(canonical: &Path, opened: Option<(&std::fs::File, &std::fs::Metadata)>) -> String {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
+        if let Some((_, meta)) = opened {
+            return format!("inode:{}:{}", meta.dev(), meta.ino());
+        }
         // audit-allow: S2-23 读不出元数据时退回路径键：键只定位落点，记录归属仍按载荷身份核对
         if let Ok(meta) = std::fs::metadata(canonical) {
             return format!("inode:{}:{}", meta.dev(), meta.ino());
@@ -361,6 +367,12 @@ fn image_file_key(canonical: &Path) -> String {
     }
     #[cfg(windows)]
     {
+        if let Some((file, _)) = opened
+            // audit-allow: S2-27 句柄在手却问不出对象身份时退回路径键，同上
+            && let Ok((volume, index)) = win::identity(file)
+        {
+            return format!("file:{volume}:{index}");
+        }
         // audit-allow: S2-24 打不开镜像时退回路径键，同上
         if let Ok(file) = std::fs::File::open(canonical)
             // audit-allow: S2-25 取不到卷序列号与文件索引时退回路径键，同上
@@ -369,6 +381,14 @@ fn image_file_key(canonical: &Path) -> String {
             return format!("file:{volume}:{index}");
         }
     }
+    #[cfg(not(any(unix, windows)))]
+    {
+        // 这个平台没有可询问的对象身份：键只能落在路径上，句柄此刻只用于确认"打开过"
+        let named_by_path = opened.map_or(true, |_| true);
+        debug_assert!(named_by_path);
+        format!("path:{}", canonical.display())
+    }
+    #[cfg(any(unix, windows))]
     format!("path:{}", canonical.display())
 }
 
@@ -377,9 +397,19 @@ fn image_file_key(canonical: &Path) -> String {
 ///
 /// 键取自文件对象：镜像被删除后取不到键，按路径的 `records list/verify` 无从定位它，
 /// 记录只能由 `records scan <image_state_root>` 枚举
+/// 按路径取记录目录：只给没有句柄的调用面（`records` 的子命令与测试）用。
+/// 写入路径走 [`TargetIdentity::image_at_opened`]，键取自已打开的句柄
+#[cfg(test)]
 pub(crate) fn image_record_dir(canonical: &Path) -> Option<PathBuf> {
+    image_record_dir_of(canonical, None)
+}
+
+fn image_record_dir_of(
+    canonical: &Path,
+    opened: Option<(&std::fs::File, &std::fs::Metadata)>,
+) -> Option<PathBuf> {
     let root = image_state_root()?;
-    let digest = sha2::Sha256::digest(image_file_key(canonical).as_bytes());
+    let digest = sha2::Sha256::digest(image_file_key(canonical, opened).as_bytes());
     let key = crate::support::hex_lower(&digest[..16]);
     Some(root.join(IMAGE_DIR).join(key))
 }
@@ -655,7 +685,17 @@ impl TargetIdentity {
     /// 记录按文件对象身份落在每用户状态根里，因此改名、移动到别的目录后仍能定位到同一份
     /// 记录；取不到状态根时没有记录落点，锁退回镜像旁的 sidecar 目录
     pub(crate) fn image_at(canonical: &Path, literal: &Path) -> Self {
-        let record_dir = image_record_dir(canonical);
+        Self::image_at_opened(canonical, literal, None)
+    }
+
+    /// 同上，但键取自已打开的句柄：写入路径的入口，句柄与元数据由 [`crate::dev::FileSource`]
+    /// 在打开时取到，这里不再按路径二次采样
+    pub(crate) fn image_at_opened(
+        canonical: &Path,
+        literal: &Path,
+        opened: Option<(&std::fs::File, &std::fs::Metadata)>,
+    ) -> Self {
+        let record_dir = image_record_dir_of(canonical, opened);
         let lock = match &record_dir {
             Some(dir) => dir.join(RECORD_LOCK_NAME),
             None => suffix_path(canonical, RECORD_SUFFIX).join(RECORD_LOCK_NAME),

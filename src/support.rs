@@ -1,7 +1,7 @@
 //! 命令层共用的支撑件：进程退出出口、目标打开/记录、几何与对齐助手、GUID/JSON 编解码。
 //! 退出码常量的唯一定义在 outcome 模块，此处重导出给命令层，避免两套常量各自漂移
 
-pub(crate) use crate::outcome::{RunOutcome, EXIT_OK};
+pub(crate) use crate::outcome::RunOutcome;
 
 use crate::cli::{ChunkRequest, TargetRequest};
 use crate::dev::{FileSource, WriteSource};

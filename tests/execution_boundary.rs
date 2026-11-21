@@ -2,7 +2,8 @@
 //!
 //! 三条断言分别钉住：入口只收已确认计划、写前比对先于第一笔落盘、记录必须自证
 //! 才被当作恢复凭据。它们是结构守卫——行为侧的注入测试在 crate 内单测与
-//! `tests/recovery_crash.rs`，本文件不重复造崩溃窗口。
+//! `tests/recovery_crash.rs`，本文件不重复造崩溃窗口。计划执行器在 `exec::run_plan`：
+//! 载体步骤的搬移从这里开始，`execution` 只保留单步实现
 
 mod guards;
 
@@ -10,9 +11,9 @@ use guards::{assert_order, rust_sources, source};
 
 #[test]
 fn the_execution_entry_takes_a_confirmed_plan_only() {
-    let module = source("execution/mod.rs");
+    let module = source("exec/mod.rs");
     assert!(
-        module.contains("pub(crate) fn execute_plan("),
+        module.contains("pub(crate) fn run_plan("),
         "there must be exactly one named plan executor"
     );
     assert!(
@@ -22,7 +23,7 @@ fn the_execution_entry_takes_a_confirmed_plan_only() {
     assert_order(
         &module,
         &[
-            "pub(crate) fn execute_plan(",
+            "pub(crate) fn run_plan(",
             "let steps = prepare_steps(",
             "verify_tables_before_write(src, &steps)?;",
         ],
@@ -31,9 +32,9 @@ fn the_execution_entry_takes_a_confirmed_plan_only() {
     let other_entrances = rust_sources()
         .into_iter()
         .filter(|(rel, text)| {
-            rel.starts_with("execution/")
+            rel.starts_with("exec/")
                 && !rel.ends_with("mod.rs")
-                && text.contains("pub(crate) fn execute_plan(")
+                && text.contains("pub(crate) fn run_plan(")
         })
         .map(|(rel, _)| rel)
         .collect::<Vec<_>>();

@@ -64,54 +64,34 @@ nbd-client <host> <port> /dev/nbd0
 - A local `flock` gives no distributed exclusion: two hosts, or two aliases of the same export, take independent locks. Remote targets need a lock whose scope matches the writers.
 - `flock` over sshfs or NFS must be checked in the actual deployment before relying on it.
 
-## Rootless use inside a QEMU microvm
+## Rootless use through the VM carrier
 
-Filesystem-layer commands reach the partition through `losetup`, which needs root. Where root is not available, run the same binary inside a guest and let the guest's root do the work; the binary itself is unchanged. QEMU's `microvm` machine is the smallest x86 option: no PCI, no ACPI, up to eight virtio-mmio devices, and it boots only with `-kernel`/`-initrd`.
+Filesystem-layer steps need a Linux kernel and root. Where the host lacks either, the whole plan can run in a VM instead of running the command by hand inside a guest. Placement is automatic and decided once per job, before the first write: steps the host can run stay native; otherwise a bundle named by `DISKEDIT_VM_BUNDLE` is used when it passes verification; with neither, the command exits 6 and states what is missing and both remedies. The verification rules are in [internals](internals.md#execution-placement).
 
-- No other x86 machine is smaller. `pc` and `q35` add PCI, ACPI and firmware; `isapc` has no virtio-mmio; `nitro-enclave`, `xenfv` and `xenpv` target specific hosts. On arm64 the machine is `-M virt`: it also provides PCIe, so virtio-pci is available as well, but the virtio-mmio devices below work there too.
-- The image is attached as a virtio-blk disk. Its serial is the only stable identity the guest can see, so pass a host-derived key. The serial is limited to 20 characters and longer values are silently truncated: derive it from the image rather than from its path, keep distinct images on distinct keys, read the attribute inside the guest instead of assuming a sysfs path, and reject keys that are too long or collide before starting QEMU rather than depending on truncation.
-- The state directory goes through virtio-9p. `-virtfs` on its own creates a PCI device that microvm cannot use, so name the device explicitly. The same explicit form works on both architectures. `security_model=none` maps no ownership: files are created with the QEMU process's credentials, so check the resulting ownership in the deployment.
-- Keep the ISA serial port: `-serial stdio` attaches the console to it. `isa-serial=off` is only for a guest whose console comes from a virtio console instead.
-- `x-option-roms=off` is safe to pass. `pit=off`, `pic=off` and `rtc=off` are not part of the base recipe: disabling PIT and PIC requires a guest CPU with `TSC_DEADLINE`, and `rtc=off` makes the guest rely on `kvmclock`, which the TCG mode does not provide.
+- Host ownership does not change. The recovery record, the target lock, the resume cursor, the protocol session and the process exit code stay in the host process. The guest receives steps and returns events; it writes only the target.
+- The target is passed as an already-open descriptor and attached as virtio-blk with the target's logical sector size. A target whose logical sector size is neither 512 nor 4096 is refused before QEMU starts.
+- The protocol runs over the serial console: `{`-prefixed lines are frames; every other line is diagnostic output and goes to stderr. The kernel console is quiet in the bundle's command line, so tool output and kernel messages do not interleave with frames.
+- The same-binary `__worker` session exists for protocol tests. It is not a user entry point and does not appear in help, the reference or the capability matrix.
 
-```bash
-qemu-system-x86_64 -M microvm,x-option-roms=off \
-  -nodefaults -no-user-config \
-  -display none -serial stdio -monitor none \
-  -accel kvm -cpu host -m 256M -smp 1 \
-  -kernel bzImage -initrd initramfs.cpio.gz \
-  -append "console=ttyS0,115200 quiet reboot=t" \
-  -drive id=target,file=disk.img,format=raw,if=none \
-  -device virtio-blk-device,drive=target,serial=0123456789abcdef0123 \
-  -fsdev local,id=state,path=/var/lib/diskedit,security_model=none \
-  -device virtio-9p-device,fsdev=state,mount_tag=state \
-  -no-reboot
+### Building a bundle
+
+A bundle is a directory holding `manifest.json`, `kernel` and `initramfs`:
+
+```json
+{
+  "schema": 1,
+  "arch": "x86_64",
+  "binary_version": "0.1.0",
+  "kernel":    { "path": "kernel",    "sha256": "…" },
+  "initramfs": { "path": "initramfs", "sha256": "…" },
+  "worker":    { "sha256": "…" }
+}
 ```
 
-- `-accel kvm` does not fall back. Where `/dev/kvm` is missing or not writable by the caller, replace `-accel kvm -cpu host` with `-accel tcg -cpu max`; the guest is several times slower and the rest of the command is unchanged. Decide by opening `/dev/kvm`, not by looking for the file.
-
-On arm64 the machine is `-M virt` and the console is PL011:
-
-```bash
-qemu-system-aarch64 -M virt \
-  -nodefaults -no-user-config \
-  -display none -serial stdio -monitor none \
-  -accel kvm -cpu host -m 256M -smp 1 \
-  -kernel Image -initrd initramfs.cpio.gz \
-  -append "console=ttyAMA0,115200 quiet" \
-  -drive id=target,file=disk.img,format=raw,if=none \
-  -device virtio-blk-device,drive=target,serial=0123456789abcdef0123 \
-  -fsdev local,id=state,path=/var/lib/diskedit,security_model=none \
-  -device virtio-9p-device,fsdev=state,mount_tag=state \
-  -no-reboot
-```
-
-- Guest kernel: `CONFIG_VIRTIO_MMIO`, `CONFIG_VIRTIO_BLK`, `CONFIG_NET_9P_VIRTIO` and `CONFIG_9P_FS` on both architectures. The console driver differs: 8250 on x86, `CONFIG_SERIAL_AMBA_PL011` on arm64. initramfs: the static binary, the filesystem tools the command needs, and an init that mounts `state` and executes the binary.
-- Shutdown and exit status: init syncs, writes the program's exit status to a file on the 9p share, then ends the guest. On x86, pass `reboot=t`: a forced reboot becomes a triple fault, and `-no-reboot` makes QEMU exit. On arm64 there is no `reboot=t` path; use PSCI `SYSTEM_OFF` for shutdown, and do not treat `SYSTEM_RESET` as a successful shutdown. Verify QEMU's exit behaviour for both paths separately. QEMU's own exit status says how the VM ended, not what the program returned; the wrapper reads the status file and returns that value.
-- Identity: the record directory is derived from the device identity the guest sees, which differs from the host's view of the same image. Records written inside the guest resume only through that path; `records` and `inspect` on the host do not list them. Treat the guest as its own namespace.
-- Locking: take the target lock on the host before starting QEMU and release it after the guest exits. The lock must cover the original image, not only a FUSE view in front of it, and a lock taken inside the guest does not exclude a host process.
-- Persistence: write the status to a temporary file, `fsync` it, rename it, `fsync` the directory, and only then end the guest. Verify that both calls reach host storage over 9p; a successful syscall and an atomic rename do not by themselves prove durability.
-- Signals and streams: killing QEMU terminates the VM; it does not deliver the same signal to the program inside. Forwarding signals, or separating stdout from stderr, needs another channel (a virtio-serial port, for example); the serial console is a single stream.
+- `arch` is `x86_64` or `aarch64`; `binary_version` is the version of this executable. The manifest is refused when either differs, or when any declared SHA-256 does not match the file, or when an artifact path is absolute or leaves the bundle directory.
+- The initramfs carries this executable, the filesystem tools the guest will need, and an init that reads `diskedit.token` from the kernel command line, exports it as `DISKEDIT_WORKER_TOKEN`, and executes the binary with `__worker`. The kernel needs virtio-blk, virtio-rng and the matching console driver (8250 on x86, PL011 on arm64). Rebuild the bundle whenever the binary version changes: the worker's version must equal the host's.
+- The guest reports step results and barriers; the host persists the record and acknowledges each checkpoint before the guest advances. QEMU's exit status says how the VM ended, not what the program returned.
+- Running the binary by hand over a 9p share is not a supported path. Records, locks and output belong to the host; a guest started that way would create a second namespace.
 
 ## Forced NTFS resize on a damaged volume
 

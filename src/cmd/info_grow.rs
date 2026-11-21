@@ -7,7 +7,7 @@ use crate::movepart;
 use crate::support::{bail_fail, RunOutcome};
 
 /// 只读几何报告，`--grow` 在同一份文档里多给一个 `preview` 键，不落盘、不产出 `Plan`
-pub(crate) fn cmd_info_grow(a: &InfoRequest) -> u8 {
+pub(crate) fn cmd_info_grow(a: &InfoRequest) -> crate::outcome::RunOutcome {
     let Some(selector) = a.part else {
         bail_fail(RunOutcome::refused(
             "`info --grow` previews one partition — write the target as <TARGET>:N",

@@ -441,15 +441,15 @@ fn path_errors_map_to_separate_evidence_states() {
     assert_eq!(Evidence::from_path_error(PathError::NotFound), Evidence::Absent);
     assert_eq!(
         Evidence::from_path_error(PathError::Symlink),
-        Evidence::not_ours(EntryKind::Symlink)
+        Evidence::not_regular(EntryKind::Symlink)
     );
     assert_eq!(
         Evidence::from_path_error(PathError::IsDirectory),
-        Evidence::not_ours(EntryKind::Directory)
+        Evidence::not_regular(EntryKind::Directory)
     );
     assert_eq!(
         Evidence::from_path_error(PathError::NotAFile),
-        Evidence::not_ours(EntryKind::OtherFile)
+        Evidence::not_regular(EntryKind::OtherFile)
     );
     assert!(matches!(
         Evidence::from_path_error(PathError::Inaccessible("permission denied".to_string())),
@@ -463,7 +463,7 @@ fn parse_failures_never_commit() {
     let current = scene(1);
     let failures = [
         Evidence::absent(),
-        Evidence::not_ours(EntryKind::Symlink),
+        Evidence::not_regular(EntryKind::Symlink),
         Evidence::unreadable(Cause::Io("read failed".to_string())),
         Evidence::Incomplete { observed: 0, expected: 1 },
         Evidence::CrcMismatch { region: CrcRegion::Header },

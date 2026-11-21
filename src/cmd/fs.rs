@@ -100,20 +100,15 @@ pub(crate) fn cmd_mkfs(a: &MkfsRequest) -> RunOutcome {
         Ok(k) => k,
         Err(e) => bail_fail(RunOutcome::from(e)),
     };
-    if let Err(e) = fsops::mkfs_capability(fstype) {
-        bail_fail(RunOutcome::from(e));
+    // 类型认不认得、工具在不在（或有没有载体接走）都在落不可回滚屏障之前问清
+    if let Err(e) = crate::exec::placement::require_mkfs(fstype) {
+        bail_fail(e);
     }
     // 卷标是建 FS 参数的一部分：容量判据与工具能力一样属于"动手前可判定的可执行性"，
     // 必须落在擦除第一个字节之前——否则会出现"FS 已建成、卷标被工具拒绝"的中间态
     if let Some(label) = a.label.as_deref()
         && let Err(e) = fsops::check_label_limits(Some(fstype.as_content_kind()), label)
     {
-        bail_fail(RunOutcome::from(e));
-    }
-    // linux/root 是纯只读判定，失败必然"一个字节都没写"——必须落在屏障之前：屏障一旦
-    // 落地，零写入的失败也会留下一个只能靠 `recover --release` 收拾的现场。镜像的 losetup
-    // 属于设备建立，在屏障之后，其失败不在"确定未写盘"的范围内
-    if let Err(e) = fsops::require_linux().and_then(|()| fsops::require_root()) {
         bail_fail(RunOutcome::from(e));
     }
     // 占用闸必须在屏障之前：镜像被 loop 占用（或块设备分区被挂载/活动 swap）是
@@ -140,7 +135,7 @@ pub(crate) fn cmd_mkfs(a: &MkfsRequest) -> RunOutcome {
     let plan = crate::assembly::assemble_fs_create(&src, part, fstype, a.label.clone())
         .unwrap_or_else(|f| bail_fail(f));
     // 计划里没有搬移步骤，块大小无人消费；FS 步骤也不写游标，sink 不落任何进度
-    match crate::execution::execute_plan_complete(&mut src, &plan, None, &mut crate::execution::NoProgress) {
+    match crate::exec::run_plan_complete(&mut src, &plan, None, &mut crate::execution::NoProgress) {
         // FS 内容已写完、表未动：记录在此提交并删除，收尾按 Applied 做一次内核重读
         Ok(()) => table_record_done_if_complete(&mut src, RunOutcome::applied_with(Vec::new())),
         Err(e) => bail_fail(e),
@@ -276,13 +271,13 @@ fn resizefs_offline(a: &ResizefsRequest, pref: PartSelector) -> RunOutcome {
         ))),
         Err(e) => bail_fail(RunOutcome::from(e)),
     };
-    // 事前能力探测：与 superfloppy 路径同一契约（见 cmd/resize 的同名判定——check_grow
-    // 必须在首次写盘之前）。扩 FS 的修复步骤（e2fsck -fp 等）本身写盘，缺工具若在那时
-    // 才暴露，本次运行只能按 Partial(5) 报，无法再声称"确定未写盘"。类型接线判断不在此拦：不接线的类型不会写盘，
-    // 由 resize_fs_in 按类型给出准确的拒绝文案
-    match fsops::check_grow(target.fstype, src.is_block, fsops::needs_loop(&target.scope, src.is_block)) {
-        Err(fsops::FsError::UnsupportedFs { .. }) => {}
-        other => other.unwrap_or_else(|e| bail_fail(RunOutcome::from(e))),
+    // 扩 FS 的修复步骤（e2fsck -fp 等）本身写盘：能力缺口必须在首次写盘之前暴露，
+    // 不能等到提交之后按 Partial 报
+    if let Err(e) = crate::exec::placement::require_grow_fs(
+        target.fstype,
+        fsops::needs_loop(&target.scope, src.is_block),
+    ) {
+        bail_fail(e);
     }
     // 屏障不在这里：执行器在启动外部工具之前落盘（`execution::fs::execute`）
     if let Some(journal) = src.record_journal_mut()
@@ -293,7 +288,7 @@ fn resizefs_offline(a: &ResizefsRequest, pref: PartSelector) -> RunOutcome {
     let plan = crate::assembly::assemble_fs_resize(&src, part, Some(target.fstype))
         .unwrap_or_else(|f| bail_fail(f));
     // 计划里没有搬移步骤，块大小无人消费；FS 步骤也不写游标，sink 不落任何进度
-    match crate::execution::execute_plan_complete(&mut src, &plan, None, &mut crate::execution::NoProgress) {
+    match crate::exec::run_plan_complete(&mut src, &plan, None, &mut crate::execution::NoProgress) {
         Ok(()) => {
             let mut out = RunOutcome::applied_with(Vec::new());
             // 完整结束才提交并删除记录；挂载点未卸下（执行器报 5）时记录留在落点，下一次运行接着用它
@@ -325,7 +320,7 @@ fn resizefs_offline(a: &ResizefsRequest, pref: PartSelector) -> RunOutcome {
     }
 }
 
-pub(crate) fn cmd_check(a: &CheckRequest) -> u8 {
+pub(crate) fn cmd_check(a: &CheckRequest) -> RunOutcome {
     let Some(pref) = a.part else {
         bail_fail(RunOutcome::refused("`check` needs a partition: diskedit check <TARGET>:N (see diskedit help check)".to_string()));
     };
@@ -346,7 +341,7 @@ pub(crate) fn cmd_check(a: &CheckRequest) -> u8 {
     match fsops::check_fs(&src, part, Some(fstype)) {
         Ok(()) => {
             println!("check done on partition #{part} ({})", fsid::content_name(fstype));
-            EXIT_OK
+            RunOutcome::Checked
         }
         // 外部工具退出非零：只读检查工具（e2fsck -n 等）没有写盘通道，失败即"拒绝"（3）；
         // fsck.f2fs 的 force 分支会写回全局元数据，一旦它启动过就不能再说"未改动"，
@@ -412,7 +407,7 @@ pub(crate) fn cmd_set(a: &SetRequest) -> RunOutcome {
         crate::support::check_gpt_name_len(&value);
         let plan = crate::assembly::assemble_set_name(&src, part, &value).unwrap_or_else(|f| bail_fail(f));
         // 计划里只有一条表步骤：块大小无人消费，sink 只把进度与表步围栏写进记录
-        return match crate::execution::execute_plan_complete(&mut src, &plan, None, &mut crate::recovery::sink::RecordSink::quiet()) {
+        return match crate::exec::run_plan_complete(&mut src, &plan, None, &mut crate::recovery::sink::RecordSink::quiet()) {
             Ok(()) => table_record_done(&mut src, &format!("renamed partition #{part} to {value:?}")),
             Err(f) => bail_fail(f),
         };
@@ -437,7 +432,7 @@ pub(crate) fn cmd_set(a: &SetRequest) -> RunOutcome {
         };
         let plan = plan.unwrap_or_else(|f| bail_fail(f));
         // 计划里只有一条表步骤：块大小无人消费，sink 只把进度与表步围栏写进记录
-        return match crate::execution::execute_plan_complete(&mut src, &plan, None, &mut crate::recovery::sink::RecordSink::quiet()) {
+        return match crate::exec::run_plan_complete(&mut src, &plan, None, &mut crate::recovery::sink::RecordSink::quiet()) {
             Ok(()) => table_record_done(&mut src, &format!("type set on partition #{part} (verify with: diskedit info {})", a.target)),
             Err(f) => bail_fail(f),
         };
@@ -471,7 +466,7 @@ pub(crate) fn cmd_set(a: &SetRequest) -> RunOutcome {
         let plan = plan.unwrap_or_else(|f| bail_fail(f));
         if let Some(plan) = plan {
             // 计划里只有一条表步骤：块大小无人消费，sink 只把进度与表步围栏写进记录
-            if let Err(f) = crate::execution::execute_plan_complete(&mut src, &plan, None, &mut crate::recovery::sink::RecordSink::quiet()) {
+            if let Err(f) = crate::exec::run_plan_complete(&mut src, &plan, None, &mut crate::recovery::sink::RecordSink::quiet()) {
                 bail_fail(f);
             }
         }
@@ -520,11 +515,26 @@ pub(crate) fn cmd_set(a: &SetRequest) -> RunOutcome {
             "set {key} on partition #{part} — target is an LVM2 PV, not a filesystem; PV metadata is changed with pvchange(8)"
         )));
     }
+    // 写 FS 内容的工具（或载体接走）与 UUID 请求能力一样必须在屏障之前问清
+    let capability = match &request {
+        crate::assembly::FsSetRequest::Label(_) => {
+            crate::exec::placement::require_label(Some(fstype))
+        }
+        crate::assembly::FsSetRequest::Uuid(fsops::UuidRequest::NewRandom) => {
+            crate::exec::placement::require_uuid(Some(fstype), true)
+        }
+        crate::assembly::FsSetRequest::Uuid(fsops::UuidRequest::Explicit(_)) => {
+            crate::exec::placement::require_uuid(Some(fstype), false)
+        }
+    };
+    if let Err(e) = capability {
+        bail_fail(e);
+    }
     // 屏障不在这里：执行器在启动外部工具之前落盘（`execution::set::execute`）
     let plan = crate::assembly::assemble_fs_set(&src, part, Some(fstype), request)
         .unwrap_or_else(|f| bail_fail(f));
     // 计划里没有搬移步骤，块大小无人消费；FS 步骤也不写游标，sink 不落任何进度
-    match crate::execution::execute_plan_complete(&mut src, &plan, None, &mut crate::execution::NoProgress) {
+    match crate::exec::run_plan_complete(&mut src, &plan, None, &mut crate::execution::NoProgress) {
         Ok(()) => {
             println!("set {key} on partition #{part} ({})", fsid::content_name(fstype));
             // label/uuid 由外部工具写 FS 内容，屏障已在写入前落盘；完整结束才提交并删除记录

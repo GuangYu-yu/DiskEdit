@@ -154,6 +154,7 @@ mod commands;
 #[cfg(target_os = "linux")]
 mod confirm_gate;
 mod guards;
+mod worker;
 // info 的可观察成功路径只在 Linux 上：非 Linux 由统一能力门拒绝
 #[cfg(target_os = "linux")]
 mod info;

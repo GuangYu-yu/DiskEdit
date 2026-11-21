@@ -49,6 +49,9 @@ const WRITE_SITES: &[&str] = &[
     "dev/identity.rs",
     "dev/source.rs",
     "dev/target.rs",
+    // 载体：帧写进另一个进程的通道、拉起 QEMU，两者都可能让目标字节从别处被写
+    "exec/protocol.rs",
+    "exec/qemu.rs",
     "execution/copy.rs",
     "execution/mod.rs",
     "execution/relocate.rs",

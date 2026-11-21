@@ -1,0 +1,57 @@
+{
+  "schema": 1,
+  "arch": "x86_64",
+  "binary_version": "0.1.0",
+  "kernel": {
+    "path": "kernel",
+    "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "initramfs": {
+    "path": "initramfs",
+    "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "worker": {
+    "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "tools": [
+    "e2fsck",
+    "resize2fs",
+    "dumpe2fs",
+    "mke2fs",
+    "tune2fs",
+    "ntfsresize",
+    "ntfsfix",
+    "ntfslabel",
+    "fsck.f2fs",
+    "resize.f2fs",
+    "xfs_growfs",
+    "xfs_repair",
+    "xfs_admin",
+    "btrfs",
+    "btrfstune",
+    "fatresize",
+    "fatlabel",
+    "fsck.vfat",
+    "exfatlabel",
+    "fsck.exfat",
+    "mkswap",
+    "swaplabel",
+    "mount",
+    "umount",
+    "losetup",
+    "udevadm",
+    "sfdisk",
+    "partx",
+    "pvs",
+    "lvs",
+    "vgs",
+    "pvresize",
+    "lvextend",
+    "mkfs.vfat",
+    "mkfs.exfat",
+    "mkfs.ntfs",
+    "mkfs.xfs",
+    "mkfs.btrfs",
+    "mkfs.f2fs"
+  ]
+}

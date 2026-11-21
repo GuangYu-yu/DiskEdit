@@ -126,9 +126,12 @@ fn record_bytes() -> Vec<u8> {
     p.push(0); // no entry with its table step in flight
     p.push(0); // no table repair
     p.push(0); // table fence: pending
+    p.push(0); // audit placement: native
+    p.push(0); // no worker digest
+    p.extend_from_slice(&0u32.to_le_bytes()); // no tool versions
 
     let mut out = vec![0u8; 16];
-    out[0..4].copy_from_slice(b"DREC");
+    out[0..4].copy_from_slice(b"DRE2");
     out[4..8].copy_from_slice(&(p.len() as u32).to_le_bytes());
     out[8..12].copy_from_slice(&crc32(&p).to_le_bytes());
     let header_crc = crc32(&out[0..12]);

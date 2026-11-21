@@ -38,6 +38,15 @@ impl TableRegion {
 }
 
 impl TableStamp {
+    /// 由已算定的 32 字节摘要还原。跨进程传递表步骤时使用，不重算
+    pub(crate) fn from_bytes(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
+
+    pub(crate) fn bytes(self) -> [u8; 32] {
+        self.0
+    }
+
     /// 首 LBA（0）、LBA1、容器末 LBA 三处按 LBA 升序拼接后算 sha256。同一 LBA
     /// 只计一次；容器在该位置不足一整扇区时按实际可读字节计入。输入是盘面字节，
     /// 不含扇区大小、表类型、路径与时间。

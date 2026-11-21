@@ -91,22 +91,69 @@ pub(crate) fn shrink_support(fstype: Option<ContentKind>) -> ToolSupport {
 
 /// 搬移 swap 的重建前置：`mkswap` 重建 swap 区；镜像目标的重建对象是 loop 分区
 /// 设备，还要 `losetup`。块设备用 /sys 定位到的现成分区节点，不经 loop
+#[cfg(test)]
 pub(crate) fn swap_rebuild_support(is_block: bool) -> ToolSupport {
-    let tools: &'static [Tool] = if is_block { &[Tool::Mkswap] } else { &[Tool::Mkswap, Tool::Losetup] };
-    ToolSupport::Tools(tools)
+    ToolSupport::Tools(swap_rebuild_tools(is_block))
+}
+
+fn swap_rebuild_tools(is_block: bool) -> &'static [Tool] {
+    if is_block { &[Tool::Mkswap] } else { &[Tool::Mkswap, Tool::Losetup] }
+}
+
+/// 宿主执行一组步骤所需的外部能力：平台、权限与固定工具表里的程序。
+/// 与"这些能力在不在宿主上"分开表达——放置决策按同一份清单问
+/// "宿主能不能做"，能做的走原生执行器，不能的交给 VM 载体
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Needs {
+    /// 需要 Linux 内核接口与 root 权限
+    pub(crate) privileged: bool,
+    /// 必须在固定工具表里解析到的程序
+    pub(crate) tools: Vec<Tool>,
+}
+
+impl Needs {
+    pub(crate) const fn none() -> Self {
+        Self { privileged: false, tools: Vec::new() }
+    }
+
+    fn privileged() -> Self {
+        Self { privileged: true, tools: Vec::new() }
+    }
+
+    pub(crate) fn merge(&mut self, other: Self) {
+        self.privileged |= other.privileged;
+        for t in other.tools {
+            if !self.tools.contains(&t) {
+                self.tools.push(t);
+            }
+        }
+    }
+
+    /// 宿主逐项满足：平台、权限、工具可执行性。`what` 描述要做的事，只进缺工具文案
+    pub(crate) fn require_host(&self, what: &str) -> Result<(), FsError> {
+        if self.privileged {
+            require_linux()?;
+            require_root()?;
+        }
+        for &t in &self.tools {
+            t.require_named(what)?;
+        }
+        Ok(())
+    }
+}
+
+/// 工具能力矩阵 → 能力清单。`NotApplicable` 不需要任何东西；
+/// `Unsupported` 是本工具不认识的类型，换宿主也做不了，按拒绝上抛
+pub(crate) fn support_needs(verb: &str, name: &str, support: ToolSupport) -> Result<Needs, FsError> {
+    match support {
+        ToolSupport::NotApplicable => Ok(Needs::none()),
+        ToolSupport::Unsupported(reason) => Err(FsError::unsupported(format!("cannot {verb} {name}: {reason}"))),
+        ToolSupport::Tools(tools) => Ok(Needs { privileged: true, tools: tools.to_vec() }),
+    }
 }
 
 pub(crate) fn check_support(verb: &str, name: &str, support: ToolSupport) -> Result<(), FsError> {
-    match support {
-        ToolSupport::NotApplicable => Ok(()),
-        ToolSupport::Unsupported(reason) => Err(FsError::unsupported(format!("cannot {verb} {name}: {reason}"))),
-        ToolSupport::Tools(tools) => {
-            for &t in tools {
-                t.require_named(&format!("{verb} {name}"))?;
-            }
-            Ok(())
-        }
-    }
+    support_needs(verb, name, support)?.require_host(&format!("{verb} {name}"))
 }
 
 /// 扩容前置检查（纯只读、不写盘）。返回 Err 即"事前拒绝"。
@@ -115,9 +162,65 @@ pub(crate) fn check_support(verb: &str, name: &str, support: ToolSupport) -> Res
 ///
 /// `needs_loop`：这个目标的 FS 步是否要先建 loop 映射（规则见 [`needs_loop`]）。
 /// `losetup` 只在需要映射时才是这一步的必需工具
-pub fn check_grow(fstype: ContentKind, is_block: bool, needs_loop: bool) -> Result<(), FsError> {
-    check_support("grow", content_name(fstype), grow_support(fstype))?;
-    check_mount_layer_tools(Some(fstype), is_block, needs_loop)
+pub fn check_grow(fstype: ContentKind, needs_loop: bool) -> Result<(), FsError> {
+    grow_needs(fstype, needs_loop)?.require_host(&format!("grow {}", content_name(fstype)))
+}
+
+/// 扩容一个 FS 所需的全部能力：FS 工具（[`grow_support`]）与挂载/映射层
+pub(crate) fn grow_needs(fstype: ContentKind, needs_loop: bool) -> Result<Needs, FsError> {
+    let mut needs = support_needs("grow", content_name(fstype), grow_support(fstype))?;
+    needs.merge(mount_layer_needs(Some(fstype), needs_loop));
+    Ok(needs)
+}
+
+/// 一个 `Growable` 结论对应的工作需要什么；与 [`check_grow_step`] 同源，
+/// 但把"能不能做"与"换到有工具的地方做"分开回答
+pub(crate) fn grow_step_needs(g: &Growable, is_block: bool) -> Result<Needs, FsError> {
+    match g {
+        Growable::Target(t) => grow_needs(t.fstype, needs_loop(&t.scope, is_block)),
+        Growable::OverlayPending | Growable::SwapUnactivatable | Growable::NoFilesystem(Some(ContentKind::Lvm2Pv)) => {
+            Ok(Needs::none())
+        }
+        Growable::NoFilesystem(f) => Err(FsError::unsupported(format!(
+            "cannot grow {}: the filesystem type was not identified — identify the filesystem and grow it with its own tool, or {}",
+            content_name(f.unwrap_or(ContentKind::Unknown)),
+            crate::fsops::CHANGE_PARTITION_ONLY
+        ))),
+    }
+}
+
+/// 建 FS 所需的能力；类型未接线由 [`mkfs_tool`] 拒绝（换宿主也做不了）
+pub(crate) fn mkfs_needs(fstype: MkfsFs) -> Result<Needs, FsError> {
+    let tool = mkfs_tool(fstype)?;
+    Ok(Needs { privileged: true, tools: vec![tool.program] })
+}
+
+/// 写卷标所需的能力；类型未接线同理按拒绝上抛
+pub(crate) fn label_needs(fstype: Option<ContentKind>) -> Result<Needs, FsError> {
+    let Some(op) = Label::for_fstype(fstype) else {
+        return Err(FsError::unsupported(format!(
+            "no label tool wired for {}",
+            content_name(fstype.unwrap_or(ContentKind::Unknown))
+        )));
+    };
+    Ok(Needs { privileged: true, tools: vec![op.tool()] })
+}
+
+/// 写 UUID 所需的能力；请求形式落不到工具时与 [`uuid_support`] 的拒绝同源
+pub(crate) fn uuid_needs(fstype: Option<ContentKind>, random: bool) -> Result<Needs, FsError> {
+    let Some(op) = UuidSet::for_request(fstype, random) else {
+        return Err(FsError::unsupported(format!(
+            "no uuid tool wired for {}{}",
+            content_name(fstype.unwrap_or(ContentKind::Unknown)),
+            if random { " that generates a new value" } else { "" }
+        )));
+    };
+    Ok(Needs { privileged: true, tools: vec![op.tool()] })
+}
+
+/// 重建 swap 所需的能力。块设备用现成分区节点，镜像目标还要 loop 映射
+pub(crate) fn swap_rebuild_needs(is_block: bool) -> Needs {
+    Needs { privileged: true, tools: swap_rebuild_tools(is_block).to_vec() }
 }
 
 /// 缩容前置检查，与 `check_grow` 同一形态。`None`（未识别）在 shrink_support 里对应"类型认不出来"，
@@ -139,31 +242,21 @@ pub(crate) fn needs_loop(scope: &DeviceScope, is_block: bool) -> bool {
 /// FS 工具已动盘之后才暴露缺工具 ⇒ `Io → NoMutation`，违背"确定未写盘"的承诺。
 /// 目标是不是块设备不参与判定：那一维度已由 `needs_loop` 收下
 pub(crate) fn check_mount_layer_tools(fstype: Option<ContentKind>, _is_block: bool, needs_loop: bool) -> Result<(), FsError> {
-    // 执行侧 `with_scope_device_ranged` 对每个目标都先过 require_linux/require_root；
-    // 需要映射的目标，设备建立这一步走 losetup。这些检查必须与 FS 工具一同落在写盘前，
-    // 否则表提交后才以 Io → NoMutation(4) 暴露，谎报"确定未写盘"
-    require_linux()?;
-    require_root()?;
+    mount_layer_needs(fstype, needs_loop).require_host("resize the filesystem")
+}
+
+/// mount 层的能力清单：执行侧 `with_scope_device_ranged` 对每个目标都先过
+/// require_linux/require_root；xfs/btrfs 只能挂载态扩缩；需要映射的目标还要 losetup
+pub(crate) fn mount_layer_needs(fstype: Option<ContentKind>, needs_loop: bool) -> Needs {
+    let mut needs = Needs::privileged();
     let mount_fs = matches!(fstype, Some(ContentKind::Filesystem(FsKind::Xfs | FsKind::Btrfs)));
-    // 基础项随 FS 类型取，losetup 随"这一步是否经 attach_loop 建立设备"取：两个维度分开，
-    // 镜像目标与块设备的 Range 目标都需要映射。两者都不需要时清单为空，执行侧不碰这两层
-    let mut tools: Vec<Tool> = Vec::new();
     if mount_fs {
-        tools.extend([Tool::Mount, Tool::Umount]);
+        needs.merge(Needs { privileged: false, tools: vec![Tool::Mount, Tool::Umount] });
     }
     if needs_loop {
-        tools.push(Tool::Losetup);
+        needs.merge(Needs { privileged: false, tools: vec![Tool::Losetup] });
     }
-    for t in tools {
-        if t.find().is_err() {
-            return Err(FsError::missing(format!(
-                "requires `{}` (package: {}) — not found in PATH",
-                t.name(),
-                t.package()
-            )));
-        }
-    }
-    Ok(())
+    needs
 }
 
 /// 该 FS 的扩容/缩容应交给用户的补救命令（用于 PARTIAL 时的提示）。
