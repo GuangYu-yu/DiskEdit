@@ -403,10 +403,9 @@ pub(crate) fn cmd_resize_msdos(a: &ResizeRequest, pref: PartSelector, src_ro: &F
     let table_range = (u64::from(p.start_lba), u64::from(p.start_lba) + u64::from(p.size_lba) - 1);
     if resumed
         && let Some(journal) = src.record_journal()
-        && let (Some(old), Some(target_range)) = (journal.old_range(), journal.target_range())
     {
-        match journal.record().place_on_disk(table_range) {
-            Some(crate::recovery::RecordedPlace::Committed) => {
+        match journal.record().resume_place(table_range) {
+            crate::recovery::ResumePlace::Committed { old, target: target_range } => {
                 // 已提交的作业只收尾，不再写表：本次请求若给出绝对目标，必须是记录里
                 // 那一次；另一个请求不能借着一条旧记录收尾（改主意请先释放记录）
                 if let Some(bytes) = target {
@@ -426,12 +425,12 @@ pub(crate) fn cmd_resize_msdos(a: &ResizeRequest, pref: PartSelector, src_ro: &F
                     mbr_grow_finish(a, &mut src, p, is_pv, is_block, lv_sel.as_ref())
                 };
             }
-            Some(crate::recovery::RecordedPlace::Pending) => {
+            crate::recovery::ResumePlace::Pending => {
                 // 表步未发生：盘上仍是提交前区间，记录里的目标只是上一次的打算。
                 // 按本次请求重做即可——写表之前 `record_ranges` 会用当前几何与本次目标
                 // 覆盖记录，缩容的 FS 复核（shrink_fs）也会按新目标重跑
             }
-            None => {
+            crate::recovery::ResumePlace::Moved { old, target: target_range } => {
                 bail_fail(RunOutcome::refused(format!(
                     "partition {part} sits at {}..{}, neither the record's pre-commit range \
                      {}..{} nor its target {}..{} — the layout moved under the job; inspect it with \
@@ -439,6 +438,8 @@ pub(crate) fn cmd_resize_msdos(a: &ResizeRequest, pref: PartSelector, src_ro: &F
                     table_range.0, table_range.1, old.0, old.1, target_range.0, target_range.1
                 )));
             }
+            // 记录没有可比对的两段事实：按未提交续做（与首次落盘的作业同一条路）
+            crate::recovery::ResumePlace::Unbound => {}
         }
     }
     if grow_to_end {
