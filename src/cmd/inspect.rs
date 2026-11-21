@@ -14,6 +14,8 @@ use crate::cli::InspectRequest;
 #[cfg(target_os = "linux")]
 use crate::cmd::CmdResult;
 #[cfg(target_os = "linux")]
+use crate::dev::DeclaredIdentity;
+#[cfg(target_os = "linux")]
 use crate::outcome::{RunOutcome, EXIT_OK, EXIT_REFUSED};
 #[cfg(target_os = "linux")]
 use crate::platform::probe::HostPlatform;
@@ -28,6 +30,13 @@ pub(crate) const DETAILS: &str = r#"target:
   TARGET is a whole image or block device; a `:N` partition suffix is refused.
   `--sector-size` is not accepted: inspect reports the record, not the disk geometry.
 
+identity:
+  `--identity NAME` names a block device that exposes no WWN, EUI or repeatable
+  serial (nbd, rbd, dm, md). The record is looked up under that name, and the
+  identity check compares the same name. Images and devices with a stable
+  identity of their own reject the option. `--identity` is not accepted for a
+  PATH that is itself a record entry.
+
 path:
   PATH is dispatched by structure: a direct entry inside a recovery-record
   directory (`<image_state_root>/images/<key-hash>/...`,
@@ -39,8 +48,9 @@ path:
 output:
   the evidence path, the record fields (transaction, plan, operation, progress,
   commit and retention states), or the structural failure that prevents a verdict.
-  `identity check: ForeignCheckUnavailable` means the platform gave no stable
-  target identity; the record is not compared.
+  `identity check: unavailable` means the record was not compared with the
+  target; the rest of the line gives the reason (no stable target identity, or
+  a declared name that could not be bound to the opened target).
 
 exit status:
   0  a readable result: no record, a complete record, an unfinished record (the
@@ -57,16 +67,28 @@ pub(crate) fn cmd_inspect(a: &InspectRequest) -> CmdResult {
     let path = Path::new(&a.target);
     // 先按路径结构分派：记录后端的直接子项本身就是证据，不必再当目标探测
     if let Some(spot) = crate::dev::record_spot(path) {
+        // 声明名命名的是目标；条目本身已经是证据，没有可命名的东西
+        if a.identity.is_some() {
+            bail_fail(RunOutcome::usage(format!(
+                "`--identity` names a target, but {} is a record entry — drop the option",
+                path.display()
+            )));
+        }
         return inspect_record_entry(&spot, a);
     }
+    let declared = a
+        .identity
+        .as_deref()
+        .map(|raw| DeclaredIdentity::parse(raw).unwrap_or_else(|e| bail_fail(RunOutcome::usage(e))));
     let spec = TargetSpec::new(a.target.as_str(), None);
     let probe = match HostPlatform.identify(&spec) {
         Ok(probe) => probe,
         // 身份是写命令的门槛（「写命令 → 6」）。只读命令取不到身份时
-        // 标 `ForeignCheckUnavailable`：不做比对，也不因身份缺失失败
-        Err(PlatformError::Unidentifiable(_)) => {
+        // 标 `identity check: unavailable`：不做比对，也不因身份缺失失败。
+        // 给了声明名时不再走这一支：名字已经指名了目标，身份仍解析不出来即拒绝
+        Err(PlatformError::Unidentifiable(_)) if declared.is_none() => {
             println!("target: {}", a.target);
-            println!("identity check: ForeignCheckUnavailable");
+            println!("identity check: unavailable — the platform gave no stable target identity");
             println!("verdict: identity unavailable — the record cannot be compared");
             let failed =
                 report_candidates(crate::dev::TargetIdentity::resolve_for_cleanup(path).as_ref());
@@ -78,10 +100,14 @@ pub(crate) fn cmd_inspect(a: &InspectRequest) -> CmdResult {
         }
         Err(e) => bail_fail(platform_failure(&a.target, e)),
     };
-    let current = scene_of_target(&probe, path);
+    let current = scene_of_target(&probe, path, declared.as_ref());
     // 记录落点由目标身份给出：镜像是其状态根下的键目录，loop 设备按 backing 派生；
-    // 非 loop 块设备没有决定过的落点
-    let identity = crate::dev::TargetIdentity::resolve_for_cleanup(path);
+    // 非 loop 块设备没有决定过的落点，身份不可得的目标由 `--identity` 补上名字
+    let identity = crate::dev::TargetIdentity::resolve_for_cleanup(path).map(|identity| {
+        identity
+            .with_declared_name(a.identity.as_deref())
+            .unwrap_or_else(|e| bail_fail(RunOutcome::usage(e)))
+    });
     let Some(record) = identity
         .as_ref()
         .and_then(crate::dev::TargetIdentity::record_path)
@@ -97,9 +123,14 @@ pub(crate) fn cmd_inspect(a: &InspectRequest) -> CmdResult {
         }
         return CmdResult::Code(EXIT_OK);
     };
-    let evidence = read_evidence(&record, Some(&current));
+    let evidence = read_evidence(&record, current.as_ref());
     println!("evidence: {}", record.display());
     report(&evidence);
+    if declared.is_some() && current.is_none() {
+        println!(
+            "identity check: unavailable — the declared identity could not be bound to the opened target"
+        );
+    }
     report_header(&record, &evidence);
     report_occupancy(path);
     let (code, note) = verdict(&evidence, a);
@@ -158,13 +189,13 @@ fn sidecar_scene(spot: &crate::dev::RecordSpot) -> Result<SceneIdentity, String>
     let probe = HostPlatform
         .identify(&TargetSpec::new(target, None))
         .map_err(|e| format!("the target this record names could not be identified: {e:?}"))?;
-    Ok(scene_of_target(&probe, Path::new(target)))
+    Ok(scene_without_name(&probe, Path::new(target)))
 }
 
 /// 记录目录里的一个条目：解码它本身，而不是去猜它服务的目标。
 ///
 /// 身份核对只有 sidecar 做得到——目录名去掉 `.diskedit` 就是目标路径。主机仓库目录名是
-/// `identity-hash`，不可逆，所以给 `ForeignCheckUnavailable`，不判
+/// `identity-hash`，不可逆，所以身份不可比对（`identity check: unavailable`），不判
 /// `ForeignTarget`。隔离项不参与活跃判定：它可读、可报告，但不计入未收尾现场，
 /// 也不要求 `recover`
 #[cfg(target_os = "linux")]
@@ -215,20 +246,34 @@ fn inspect_record_entry(spot: &crate::dev::RecordSpot, a: &InspectRequest) -> Cm
     CmdResult::Code(code)
 }
 
-/// 判定"同一条记录"要有与写法同一套事实：容量、载体文件与 loop 映射。探测结果只够
-/// 认镜像，这里再开一次只读句柄把其余事实补齐；开不出来时退回探测结果（判据更弱，
-/// 但不会把可读的记录误判成别人的）
+/// 没有声明名时的场景：探测结果认得出目标，这里再开一次只读句柄把容量、载体文件与
+/// loop 映射补齐；开不出来就用探测结果（判据更弱，但不会把可读的记录误判成别人的）
 #[cfg(target_os = "linux")]
-fn scene_of_target(probe: &crate::platform::TargetProbe, path: &Path) -> SceneIdentity {
-    let opened = open_target(path, None);
-    match opened.ok().and_then(|src| {
-        crate::platform::probe::probe_of(&src)
-            .ok()
-            .map(|probe| SceneIdentity::of_source(&probe, &src))
-    }) {
-        Some(scene) => scene,
-        None => SceneIdentity::from_probe(probe),
+fn scene_without_name(probe: &crate::platform::TargetProbe, path: &Path) -> SceneIdentity {
+    let Ok(src) = open_target(path, None) else {
+        return SceneIdentity::from_probe(probe);
+    };
+    match crate::platform::probe::probe_of(&src) {
+        Ok(probe) => SceneIdentity::of_source(&probe, &src),
+        Err(_) => SceneIdentity::from_probe(probe),
     }
+}
+
+/// 给了声明名时，句柄必须能套上同一个名字，否则返回 `None`：记录是 `Declared` 材料，
+/// 探测结果里的 `Block` 不可比
+#[cfg(target_os = "linux")]
+fn scene_of_target(
+    probe: &crate::platform::TargetProbe,
+    path: &Path,
+    declared: Option<&DeclaredIdentity>,
+) -> Option<SceneIdentity> {
+    let Some(name) = declared else {
+        return Some(scene_without_name(probe, path));
+    };
+    let mut src = open_target(path, None).ok()?;
+    src.identity = src.identity.with_declared(name).ok()?;
+    let probe = crate::platform::probe::probe_of(&src).ok()?;
+    Some(SceneIdentity::of_source(&probe, &src))
 }
 
 /// 按节点形态只读打开目标；`stat` 判不出形态时带原因失败，不按镜像去开
@@ -618,7 +663,7 @@ mod tests {
     };
 
     fn request(target: &str) -> InspectRequest {
-        InspectRequest { target: target.to_string(), part: None }
+        InspectRequest { target: target.to_string(), part: None, identity: None }
     }
 
     fn current() -> SceneIdentity {

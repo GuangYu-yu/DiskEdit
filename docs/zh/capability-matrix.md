@@ -40,8 +40,9 @@ CI 会重新生成，并在工作树不一致时失败。不要手工编辑。
 | `add` | 允许 | 允许 | 阻止：WriteTable（不支持） | 阻止：WriteTable（不支持） | 阻止：WriteTable（不支持） | 阻止：WriteTable（不支持） |
 
 `admitted` 表示能力闸门对该形态没有报告缺口。不带 WWN、EUI 或可重复序列号的
-块设备（nbd、rbd、dm、md）在此仍记为允许，但它的写命令需要 `--identity NAME`，
-续跑或释放该记录也需要同一个名字。
+块设备（nbd、rbd、dm、md）在此仍记为允许，但它的写命令需要 `--identity NAME`；
+续跑或释放该记录需要同一个名字，只读的记录命令（`inspect`、`records list`、
+`records verify`）也接受这个名字来定位与核对记录。
 
 ## 运行时闸门
 
