@@ -59,7 +59,13 @@ pub(crate) fn gpt_min_sectors(ss: u64) -> io::Result<u64> {
     // 新建表的条目数与单条目大小取建表策略（[`DEFAULT_ENTRY_COUNT`] /
     // [`DEFAULT_ENTRY_SIZE`]），与盘上任何既有几何无关
     let geom = EntryArrayGeometry::new(ss, DEFAULT_ENTRY_SIZE, DEFAULT_ENTRY_COUNT, MAX_ARRAY_BYTES)?;
-    Ok(2 * geom.lba_span() + 4)
+    Ok(min_sectors_for_span(geom.lba_span()))
+}
+
+/// 上面那条判据的算式本体：调用方手里已经有跨度时（提交路径的几何对象）用它，
+/// 不再自己写一遍 `2 * span + 4`——同一判据只有这一处算式
+pub(crate) fn min_sectors_for_span(span: u64) -> u64 {
+    span.saturating_mul(2).saturating_add(4)
 }
 
 /// "盘装不下 GPT"的唯一措辞：preflight（命令层写盘前拒绝，RunOutcome::refused）与

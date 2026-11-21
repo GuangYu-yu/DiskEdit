@@ -10,7 +10,7 @@ pub(crate) mod resize;
 
 use crate::cli::{CommandDef, Confirmation, Request, TargetMode};
 use crate::domain::MediaKind;
-use crate::outcome::{EXIT_OK, EXIT_PARTIAL, RunOutcome};
+use crate::outcome::RunOutcome;
 use crate::platform::capabilities::HostPlatform;
 use crate::platform::{CapabilityId, CapabilitySnapshot, CapabilityState};
 use crate::support::bail_fail;
@@ -22,54 +22,11 @@ pub(crate) use crate::cli::Capability;
 #[cfg(test)]
 pub(crate) use crate::cli::COMMANDS;
 
-/// 命令分派的结果。退出码之外还要保住"撤销窗口能不能关"这一事实：
-/// 5 既可能来自"布局已写、待办非空"，也可能来自"布局已写、仅内核视图过期"，
-/// 两者对 journal 的去留结论相反，压成 u8 之后再也分不出来
-pub(crate) enum CmdResult {
-    /// 命令持有可判定的后置条件契约（布局写入及其后续链）
-    RunOutcome(RunOutcome),
-    /// 没有布局事务可判定：按退出码处理
-    Code(u8),
-}
-
-impl CmdResult {
-    pub(crate) fn code(&self) -> u8 {
-        match self {
-            Self::RunOutcome(o) => o.exit_code(),
-            Self::Code(c) => *c,
-        }
-    }
-
-    /// 收尾步骤失败：已完整应用的结果降为 5；只带退出码的结果在成功（0）时同样
-    /// 降为 5，其余码已经陈述了更差的事实，保持原样
-    pub(crate) fn degrade_partial(self, cause: impl Into<String>) -> Self {
-        match self {
-            Self::RunOutcome(o) => Self::RunOutcome(o.degrade_partial(cause)),
-            Self::Code(EXIT_OK) => Self::Code(EXIT_PARTIAL),
-            Self::Code(code) => Self::Code(code),
-        }
-    }
-
-    /// 出口归责：返回结果同样要按本次写事实对齐；只带退出码的命令没有可改判的形态
-    pub(crate) fn settled(self) -> Self {
-        match self {
-            Self::RunOutcome(o) => Self::RunOutcome(o.settled()),
-            Self::Code(code) => Self::Code(code),
-        }
-    }
-}
-
-impl From<RunOutcome> for CmdResult {
-    fn from(o: RunOutcome) -> Self {
-        Self::RunOutcome(o)
-    }
-}
-
-impl From<u8> for CmdResult {
-    fn from(code: u8) -> Self {
-        Self::Code(code)
-    }
-}
+// 命令分派的结果就是 `RunOutcome`：退出码只从 `RunOutcome::exit_code` 一处产生。
+// 曾经有过"裸 u8 退出码"的第二条通道，它让命令可以自带一个绕开归责的码
+// （5 既可能来自"布局已写、待办非空"，也可能来自"布局已写、仅内核视图过期"，
+// 压成 u8 之后再也分不出来）；只读复核的结论现在是 `RunOutcome::Checked`，
+// 失败结论是 `RunOutcome::Refused`——形态没有丢，码也没有第二处产生点
 
 /// 没有证据后端时的兜底文案。非 Linux 上 `inspect` / `records *` 由能力门先拒
 /// （它们需要 `CompanionFile` → `AtomicReplace` 在非 Linux 不支持），下面的 cfg 分支
@@ -137,7 +94,7 @@ pub(crate) fn open_read_only_target(
 
 /// 命令分派：请求变体与处理函数一一对应。帮助与用法错误在 [`crate::cli::parse`] 里
 /// 已退出进程，走到这里的都是结构完整的请求
-pub(crate) fn dispatch(def: &CommandDef, req: &Request) -> CmdResult {
+pub(crate) fn dispatch(def: &CommandDef, req: &Request) -> RunOutcome {
     // 运行边界：一条命令一次运行，写事实从入口起算
     crate::outcome::reset_run_facts();
     // 请求变体与分派所用声明必须同一条命令；确认规则与 `--yes` 的声明也必须一致
@@ -169,7 +126,7 @@ pub(crate) fn dispatch(def: &CommandDef, req: &Request) -> CmdResult {
         )));
     }
     let result = match req {
-        Request::Info(a) => info::cmd_info(a).into(),
+        Request::Info(a) => info::cmd_info(a),
         #[cfg(target_os = "linux")]
         Request::Inspect(a) => inspect::cmd_inspect(a),
         #[cfg(not(target_os = "linux"))]
@@ -186,41 +143,46 @@ pub(crate) fn dispatch(def: &CommandDef, req: &Request) -> CmdResult {
         Request::RecordsScan(a) => records::cmd_records_scan(a),
         #[cfg(not(target_os = "linux"))]
         Request::RecordsScan(_) => bail_fail(crate::support::RunOutcome::unsupported(NO_EVIDENCE_BACKEND)),
-        Request::Resize(a) => resize::cmd_resize(a).into(),
-        Request::Move(a) => layout::cmd_move(a).into(),
-        Request::Copy(a) => layout::cmd_copy(a).into(),
-        Request::Delete(a) => layout::cmd_delete(a).into(),
-        Request::Set(a) => fs::cmd_set(a).into(),
-        Request::Check(a) => fs::cmd_check(a).into(),
-        Request::Mkfs(a) => fs::cmd_mkfs(a).into(),
-        Request::Resizefs(a) => fs::cmd_resizefs(a).into(),
+        Request::Resize(a) => resize::cmd_resize(a),
+        Request::Move(a) => layout::cmd_move(a),
+        Request::Copy(a) => layout::cmd_copy(a),
+        Request::Delete(a) => layout::cmd_delete(a),
+        Request::Set(a) => fs::cmd_set(a),
+        Request::Check(a) => fs::cmd_check(a),
+        Request::Mkfs(a) => fs::cmd_mkfs(a),
+        Request::Resizefs(a) => fs::cmd_resizefs(a),
         Request::Recover(a) => {
             if a.release {
-                release::cmd_release(a).into()
+                release::cmd_release(a)
             } else {
-                recover::cmd_recover(a).into()
+                recover::cmd_recover(a)
             }
         }
-        Request::New(a) => layout::cmd_new(a).into(),
-        Request::Add(a) => layout::cmd_add(a).into(),
-        Request::ResizeEnd(a) => layout::cmd_resize_end(a).into(),
-        Request::InfoGrow(a) => info_grow::cmd_info_grow(a).into(),
+        Request::New(a) => layout::cmd_new(a),
+        Request::Add(a) => layout::cmd_add(a),
+        Request::ResizeEnd(a) => layout::cmd_resize_end(a),
+        Request::InfoGrow(a) => info_grow::cmd_info_grow(a),
     };
-    // 开了撤销窗口的命令必须带回后置状态：只给退出码时退回"码是 0 即完成"，
-    // 5 的待办非空与仅内核视图过期分不出来
-    if def.mode == TargetMode::WriteJournal {
-        assert!(
-            !matches!(result, CmdResult::Code(_)),
-            "WriteJournal command `{}` returned CmdResult::Code",
-            def.name
-        );
-    }
+    // 撤销窗口的形态与其模式在此对上：开窗的命令必须带回后置状态，只读命令不能
+    // 声称布局已写入。两者都在类型层不可混淆（`Checked` 与 `Applied` 是不同变体），
+    // 这两条断言只是在发布构建里也留下一次机械核对
+    debug_assert!(
+        def.mode != TargetMode::WriteJournal || !matches!(result, RunOutcome::Checked),
+        "{}: holds a journal window but returned a read-only verdict",
+        def.name
+    );
+    debug_assert!(
+        def.mode != TargetMode::ReadOnly || !matches!(result, RunOutcome::Applied { .. }),
+        "{}: is read-only but claimed the layout was written",
+        def.name
+    );
     result
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::outcome::{EXIT_OK, EXIT_PARTIAL, EXIT_USAGE};
 
     /// 命令表与撤销窗口模式的关系在此固定：表中漏一条，或改了某条的模式，都会失败。
     /// 漏写的代价是静默留下一个撤销窗口，或静默抹掉别人的撤销窗口
@@ -454,23 +416,47 @@ mod tests {
         }
     }
 
-    /// 只带退出码的成功结果同样被收尾故障改判：0 → 5
+    /// 只读复核的结论同样被收尾故障改判：0 → 5（记录/资源没释放完，不能报成功）
     #[test]
-    fn degrade_partial_moves_a_successful_code() {
-        assert_eq!(CmdResult::from(EXIT_OK).degrade_partial("leak").code(), EXIT_PARTIAL);
+    fn degrade_partial_moves_a_checked_verdict() {
+        assert_eq!(RunOutcome::Checked.degrade_partial("leak").exit_code(), EXIT_PARTIAL);
     }
 
     /// 失败码不被收尾故障改写：它已经陈述了比 5 更具体的事实
     #[test]
     fn degrade_partial_keeps_a_failure_code() {
-        let usage = crate::outcome::EXIT_USAGE;
-        assert_eq!(CmdResult::from(usage).degrade_partial("leak").code(), usage);
+        let usage = RunOutcome::usage("bad flag");
+        assert_eq!(usage.degrade_partial("leak").exit_code(), EXIT_USAGE);
     }
 
     /// `RunOutcome` 的成功路径行为不变：完整应用降 5
     #[test]
     fn degrade_partial_moves_a_complete_run_outcome() {
-        let applied = CmdResult::from(RunOutcome::applied_with(Vec::new()));
-        assert_eq!(applied.degrade_partial("leak").code(), EXIT_PARTIAL);
+        let applied = RunOutcome::applied_with(Vec::new());
+        assert_eq!(applied.degrade_partial("leak").exit_code(), EXIT_PARTIAL);
+    }
+
+    /// 退 0 的形态只有两种，且都是"结论站得住"：布局完整应用，或只读复核已给出结论。
+    /// 这条冻结住"谁能报 0"，避免又出现一条自带成功码的旁路
+    #[test]
+    fn only_complete_outcomes_report_zero() {
+        assert_eq!(RunOutcome::Checked.exit_code(), EXIT_OK);
+        assert_eq!(RunOutcome::applied_with(Vec::new()).exit_code(), EXIT_OK);
+        for other in [
+            RunOutcome::refused("x"),
+            RunOutcome::no_mutation("x"),
+            RunOutcome::unsupported("x"),
+            RunOutcome::internal("x"),
+            RunOutcome::usage("x"),
+            RunOutcome::applied_with(vec![crate::outcome::Pending::new(
+                1,
+                crate::outcome::PendingKind::Fs,
+                "x",
+                "y",
+            )]),
+            RunOutcome::partial("x"),
+        ] {
+            assert_ne!(other.exit_code(), EXIT_OK, "{other:?} must not report success");
+        }
     }
 }

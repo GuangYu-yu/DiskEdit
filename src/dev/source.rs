@@ -34,6 +34,16 @@ impl RegionStamp {
         self.len
     }
 
+    /// 三要素：区间、长度与期望摘要。跨进程传递写前期望时使用
+    pub(crate) fn parts(&self) -> (u64, u64, Option<[u8; 32]>) {
+        (self.offset, self.len, self.digest)
+    }
+
+    /// 由三要素还原。摘要为 `None` 即"没有期望内容"，语义与 [`Self::unconstrained`] 相同
+    pub(crate) fn from_parts(offset: u64, len: u64, digest: Option<[u8; 32]>) -> Self {
+        Self { offset, len, digest }
+    }
+
     /// 区间字节是否就是这份期望；没有期望内容时恒为真
     pub(crate) fn accepts(&self, bytes: &[u8]) -> bool {
         match self.digest {
@@ -262,7 +272,7 @@ pub(crate) fn test_block_source(
 impl WriteSource {
     /// 取目标的独占所有权，把已打开的句柄升格为写句柄。锁落点由身份恒给出
     /// （见 [`TargetIdentity::lock_path`]），取不到即拒绝——没有"无锁继续写"这条路径
-    pub(crate) fn acquire(src: FileSource) -> Result<Self, crate::outcome::RunOutcome> {
+    pub(crate) fn acquire(mut src: FileSource) -> Result<Self, crate::outcome::RunOutcome> {
         // 运行边界：新的写句柄即新的运行，写事实从这里重新起算
         crate::outcome::reset_run_facts();
         // 锁文件落在记录目录内，目录必须先于取锁就位
@@ -277,10 +287,19 @@ impl WriteSource {
         if let Some(claim) = lock.claim_mut() {
             let declared = src.identity.declared().map(|name| name.as_str());
             crate::dev::admit(claim, declared, |held| {
-                src.identity.record_path_for_declared(held).exists()
+                // `try_exists` 而不是 `exists`：读不出目录与"没有现场"是两件事，
+                // 后者可以准入，前者必须拒绝
+                src.identity.record_path_for_declared(held).try_exists()
             })?;
         }
         Ok(Self { src, _lock: Some(lock), pending_step: None })
+    }
+
+    /// VM 载体的写句柄：锁、记录与退出码由宿主承担，guest 只按会话步骤写目标。
+    /// 句柄不挂记录，因此元数据写入不产生 guest 侧的恢复现场
+    pub(crate) fn borrowed(src: FileSource) -> Self {
+        crate::outcome::reset_run_facts();
+        Self { src, _lock: None, pending_step: None }
     }
 
     /// 测试专用：不取锁的写句柄。`#[cfg(test)]` 之外构造不出来，生产代码只能经
@@ -500,6 +519,13 @@ impl WriteSource {
     /// 借出可写的记录：搬移类命令在写盘之间推进游标/FS 相位，记录就在写句柄里
     pub(crate) fn record_journal_mut(&mut self) -> Option<&mut RecordJournal> {
         self.src.record_journal.as_mut()
+    }
+
+    /// 目标文件的原始句柄：VM 载体经现有 fd 接走目标，不重开路径
+    #[cfg(target_os = "linux")]
+    pub(crate) fn raw_fd(&self) -> std::os::unix::io::RawFd {
+        use std::os::unix::io::AsRawFd;
+        self.src.file.as_raw_fd()
     }
 }
 
@@ -745,13 +771,18 @@ impl FileSource {
                     meta.ino(),
                 )));
             }
-            Ok(TargetIdentity::image_at(&canonical, path))
+            Ok(TargetIdentity::image_at_opened(&canonical, path, Some((file, meta))))
         }
         #[cfg(not(target_os = "linux"))]
         {
-            // audit-allow: D-19
-            let _ = opened;
-            Ok(TargetIdentity::image_at(path, path))
+            // 句柄在手就按它取键（Windows 的文件身份只从字符设备端口问得到）；没有句柄
+            // 的调用面（只读的路径命令）退回按路径采样，与 Linux 无句柄分支同一口径
+            Ok(match opened {
+                Some((file, meta)) => {
+                    TargetIdentity::image_at_opened(path, path, Some((file, meta)))
+                }
+                None => TargetIdentity::image_at(path, path),
+            })
         }
     }
 
@@ -816,7 +847,7 @@ impl FileSource {
     /// 锁内重探身份：取锁后重新从命令行路径解析目标，与打开时解析的
     /// 身份比对。块设备比记录目录的身份键与盘键派生的 journal / lock 落点；镜像
     /// 比 canonical 路径与已打开句柄的 (dev, ino)
-    pub(crate) fn reprobe_under_lock(&self) -> Result<(), crate::outcome::RunOutcome> {
+    pub(crate) fn reprobe_under_lock(&mut self) -> Result<(), crate::outcome::RunOutcome> {
         use crate::outcome::RunOutcome;
         if self.is_block {
             #[cfg(target_os = "linux")]
@@ -873,6 +904,25 @@ impl FileSource {
                         }
                     }
                 }
+            }
+            #[cfg(target_os = "linux")]
+            {
+                // 容量取自同一个句柄：设备在打开与取锁之间被扩容或缩容时，越界判定与记录
+                // 里的尺寸都还是旧值。缩容之后写进去的字节落到了另一个位置——它无法对应
+                // 打开时那份几何，拒绝；扩容则采纳新值，与包含这次扩容的计划同源
+                let size_now = crate::ioctl::blkgetsize64(&self.file).map_err(|e| {
+                    RunOutcome::no_mutation(format!(
+                        "cannot re-read the capacity of the opened target after taking the lock: {e}"
+                    ))
+                })?;
+                if size_now < self.size {
+                    return Err(RunOutcome::refused(format!(
+                        "the target shrank from {} to {} bytes between opening and taking the lock — \
+                         writing against the opened geometry would land at the wrong offset",
+                        self.size, size_now
+                    )));
+                }
+                self.size = size_now;
             }
             return Ok(());
         }

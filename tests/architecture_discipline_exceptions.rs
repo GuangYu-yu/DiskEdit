@@ -204,11 +204,6 @@ const DISCARD_RULES: &[Rule] = &[
     },
     Rule {
         file: "dev/source.rs",
-        id: "D-19",
-        why: "平台条件编译下未用到的句柄",
-    },
-    Rule {
-        file: "dev/source.rs",
         id: "D-20",
         why: "同上：写入参数在某平台分支不可用",
     },

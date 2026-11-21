@@ -125,16 +125,9 @@ pub fn grow_target_at(src: &FileSource, part: u32, base: u64, len: u64) -> Resul
 /// 吸收，`SwapUnactivatable` 在收尾被探测成待办——都不是"当成功放过去"；而 `unknown`
 /// 什么信息都没给，没有谁能保证那块空间会生效，默认放行就是拿无知当许可，
 /// 只改分区表须由 `--no-fs` 显式担下
+#[cfg(test)]
 pub fn check_grow_step(g: Growable, is_block: bool) -> Result<(), FsError> {
-    match g {
-        Growable::Target(t) => check_grow(t.fstype, is_block, needs_loop(&t.scope, is_block)),
-        Growable::OverlayPending | Growable::SwapUnactivatable | Growable::NoFilesystem(Some(ContentKind::Lvm2Pv)) => Ok(()),
-        Growable::NoFilesystem(f) => Err(FsError::unsupported(format!(
-            "cannot grow {}: the filesystem type was not identified — identify the filesystem and grow it with its own tool, or {}",
-            content_name(f.unwrap_or(ContentKind::Unknown)),
-            crate::fsops::CHANGE_PARTITION_ONLY
-        ))),
-    }
+    grow_step_needs(&g, is_block)?.require_host("grow the filesystem")
 }
 
 /// 扩容这一动的结果。两个变体是两条互斥的通道：落点已回读证实覆盖到区间末端，或回读
@@ -356,39 +349,15 @@ fn resize_fs_step(src: &mut WriteSource, scope: &DeviceScope, fstype: Option<Con
             Ok(grow_outcome(verify, leak))
         }
         // fatresize -s max = 扩满设备（man fatresize EXAMPLES；-s max 自 1.0.4 起支持）。
-        // max 可能报 "Can't have overlapping partitions"，此时降级为显式字节（分区大小-1）；
-        // 属经验性 workaround，非工具规范保证。
+        // 只有这一条路：曾按工具的 stderr 子串（"overlapping partitions"）判断"它没写盘"
+        // 再换显式尺寸重试一次，但子串是工具的措辞而非契约，判错就是在已改盘的设备上再写
+        // 一次。拒绝就是拒绝，如实报给用户
         // FAT32 <512MB 由工具自身拒绝（man BUGS，Windows 限制）
         Some(ContentKind::Filesystem(FsKind::Vfat)) => {
-            // 区间与设备同源：fallback 尺寸用的 len 就是设备建立时的那一份，
-            // 不在闭包外另读一次表
             let (off, dev_len) = scope_byte_range(src, scope)?;
-            // 兜底的字节数 = 设备长 − 1。长度 0 时减一会回绕成 u64::MAX，把
-            // "无从格式化"伪装成扩到天文数字——它必须在任何工具启动之前判掉，
-            // 否则就成了"工具可能已改盘"之后的一次 Refused
-            let want = dev_len.checked_sub(1).ok_or_else(|| {
-                FsError::invalid(format!("vfat device length {dev_len} — cannot derive fallback size"))
-            })?;
             let verify = with_write_scope(src, scope, off, dev_len, |dev| {
-                let mut out = fatresize_max(dev)
+                let out = fatresize_max(dev)
                     .map_err(|e| tool_write_maybe_started(Tool::Fatresize, dev, e))?;
-                if !out.status.success() {
-                    // 降级重试只对「确认未写盘」的已知拒绝类：fatresize 对重叠分区的
-                    // 拒绝发生在任何写之前（man fatresize）。其余失败可能
-                    // 是半途写失败——在已改盘的设备上再写一次只会放大损害，
-                    // 边界取设备长−1 也未经工具规范保证
-                    let text = format!(
-                        "{}{}",
-                        String::from_utf8_lossy(&out.stdout),
-                        String::from_utf8_lossy(&out.stderr)
-                    );
-                    if text.contains("overlapping partitions") {
-                        out = fatresize_to(dev, &want.to_string())
-                            .map_err(|e| tool_write_maybe_started(Tool::Fatresize, dev, e))?;
-                    } else {
-                        return Err(FsError::command(Tool::Fatresize.name(), &out));
-                    }
-                }
                 if !out.status.success() {
                     return Err(FsError::command(Tool::Fatresize.name(), &out));
                 }

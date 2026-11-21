@@ -195,7 +195,7 @@ pub(crate) fn apply_repair(
         })?;
     }
     crate::movepart::fault_repair_recorded();
-    crate::execution::execute_plan_complete(src, &plan, None, &mut crate::execution::NoProgress)?;
+    crate::exec::run_plan_complete(src, &plan, None, &mut crate::execution::NoProgress)?;
     let g2 = table::load_gpt(src)
         .map_err(|e| RunOutcome::partial(table::into_io_error(e).to_string()))?
         .ok_or_else(|| RunOutcome::partial("re-read after repair failed"))?;
@@ -965,7 +965,7 @@ pub fn delete_entry(src: &mut WriteSource, part: u32) -> Result<(), RunOutcome> 
     let plan = crate::assembly::confirmed_table_step(src, content_view, snapshot)?;
     // 整份替换由 `cmd_delete` 的 `table_record_done` 完成：sink 只把进度与表步围栏
     // 写进记录
-    crate::execution::execute_plan_complete(src, &plan, None, &mut crate::recovery::sink::RecordSink::quiet())
+    crate::exec::run_plan_complete(src, &plan, None, &mut crate::recovery::sink::RecordSink::quiet())
 }
 
 #[cfg(test)]

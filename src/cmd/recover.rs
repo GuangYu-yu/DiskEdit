@@ -25,7 +25,7 @@ pub(crate) const DETAILS: &str = r#"  Finish with this target's recovery record.
     diskedit recover /dev/sdb --release --yes"#;
 
 
-fn replay_record(src: &mut WriteSource, permit_move: bool) -> Option<u8> {
+fn replay_record(src: &mut WriteSource, permit_move: bool) -> Option<RunOutcome> {
     // 记录不按单一派生落点认：身份漂移或目录被改名后，派生路径找不到它。枚举把
     // 身份不符/无法比对的候选一并列出，但只认领身份严格相符的那些
     let records = match crate::support::active_recovery_records(&src.identity, Some(&*src)) {
@@ -113,10 +113,10 @@ fn replay_record(src: &mut WriteSource, permit_move: bool) -> Option<u8> {
                         "the recorded operation had already committed, but its recovery record could not be \
                          released ({e}); the record is left in place"
                     );
-                    let o = RunOutcome::refused(format!("{msg} — release it with `diskedit recover --release`"));
-                    // 本分支返回裸退出码，不经过调用方的 report：拒绝理由在这里自己打印，
-                    // 否则命令退 3 而 stdout/stderr 全空，用户无从知道为什么
-                    return Some(o.report_final().exit_code());
+                    // 拒绝走 `bail_fail` 的自呈现通道：结论只打一次，码与文字同源
+                    bail_fail(RunOutcome::refused(format!(
+                        "{msg} — release it with `diskedit recover --release`"
+                    )));
                 }
                 // 删除已发生、目录 fsync 未确认：不陈述"记录还在"，也不指向必然的 `recover --release`
                 let msg = if e.record_still_on_disk() {
@@ -131,7 +131,7 @@ fn replay_record(src: &mut WriteSource, permit_move: bool) -> Option<u8> {
             }
         };
         let outcome = crate::support::settle_layout(outcome, &*src, None);
-        return Some(outcome.exit_code());
+        return Some(outcome);
     }
 
     // 准入与执行由恢复层承担：资格、身份、区间、源与盘面核对全部通过才签发许可；
@@ -169,7 +169,7 @@ fn replay_record(src: &mut WriteSource, permit_move: bool) -> Option<u8> {
                     println!("{msg}");
                 }
             }
-            Some(outcome.exit_code())
+            Some(outcome)
         }
         crate::recovery::Admission::Proceed(provisional, permit) => {
             Some(crate::recovery::execute_rollback(src, provisional, permit))
@@ -179,7 +179,7 @@ fn replay_record(src: &mut WriteSource, permit_move: bool) -> Option<u8> {
 
 /// `recover` 认领的是载荷声明为本目标的记录：不按单一派生落点找，兄弟目录里的落点同样
 /// 参与枚举（见 `replay_record`）。记录缺席是常态，按拒绝（3）上报
-pub(crate) fn cmd_recover(a: &RecoverRequest) -> u8 {
+pub(crate) fn cmd_recover(a: &RecoverRequest) -> RunOutcome {
     // `recover` 回滚的是整盘记录：与 info 同判据，`:` 后给了编号即拒绝，不静默忽略
     if let Some(n) = a.part {
         bail_fail(RunOutcome::refused(format!("`recover` rolls back the whole target's recovery record — drop :{n}")));
@@ -193,8 +193,8 @@ pub(crate) fn cmd_recover(a: &RecoverRequest) -> u8 {
     if let Err(f) = crate::fsops::ensure_table_write_idle(&src) {
         bail_fail(f);
     }
-    if let Some(code) = replay_record(&mut src, a.replay_table_only) {
-        return code;
+    if let Some(outcome) = replay_record(&mut src, a.replay_table_only) {
+        return outcome;
     }
     bail_fail(RunOutcome::refused(format!("no recovery record on {} — nothing to recover", a.target)))
 }

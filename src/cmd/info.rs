@@ -51,14 +51,14 @@ fn fail_after_envelope(f: RunOutcome, src: Option<&FileSource>) -> ! {
     bail_fail(f)
 }
 
-pub(crate) fn cmd_info(a: &InfoRequest) -> u8 {
+pub(crate) fn cmd_info(a: &InfoRequest) -> RunOutcome {
     cmd_info_with(a, None)
 }
 
 /// `tail` 是拼在信封末尾的顶层键片段（以逗号开头、不带收尾括号），供 `info --grow`
 /// 把预览并进同一份文档。识别失败的信封不带它：那条路径连布局结论都不完整，
 /// 在其中追加派生产物只会让读者以为布局本身是可信的
-pub(crate) fn cmd_info_with(a: &InfoRequest, tail: Option<&str>) -> u8 {
+pub(crate) fn cmd_info_with(a: &InfoRequest, tail: Option<&str>) -> RunOutcome {
     // info 只看整盘布局：`:N` 指定了也会被静默忽略，用户会误以为输出是单分区的
     if let Some(n) = a.part {
         // 命令级拒绝同样走信封；参数解析阶段的拒绝（未知旗标、非法 --sector-size）在进入
@@ -321,7 +321,7 @@ pub(crate) fn cmd_info_with(a: &InfoRequest, tail: Option<&str>) -> u8 {
         }
         let msg = "filesystem identification failed on one or more partitions";
         println!("{},\"error\":\"{}\"}}", &out[..out.len() - 1], json_escape(msg));
-        return RunOutcome::refused(msg).exit_code();
+        return RunOutcome::refused(msg);
     }
     match tail {
         // 信封的收尾括号在这里补：调用方只给键片段，不会与括号位置互相复制
@@ -336,7 +336,7 @@ pub(crate) fn cmd_info_with(a: &InfoRequest, tail: Option<&str>) -> u8 {
         ContainerProbe::NotContainer => {}
         ContainerProbe::Unreadable(why) => eprintln!("{}", unreadable_hint(&why, &a.target)),
     }
-    EXIT_OK
+    RunOutcome::Checked
 }
 
 /// 容器镜像的引导：guest 偏移经容器的分配表间接映射，分区字节不在文件里的 guest 偏移上。

@@ -20,13 +20,13 @@
 |---|---|---|
 | `info` / `inspect` / `records` | 不需要 root | 不需要 root |
 | 分区表写入（`new`/`add`/`delete`/`resize`/`copy`/`set`/`recover`/`move`） | 不需要 root | 需要 root |
-| 文件系统层（`mkfs`/`resizefs`/`check`/`set label\|uuid`） | 需要 root | 需要 root |
+| 文件系统层（`mkfs`/`resizefs`/`check`/`set label\|uuid`） | 需要 root，或由 VM 载体执行 | 需要 root |
 
 `resize` 在含文件系统步骤时需要 root；`--no-fs` 表示不把文件系统增长算作后置条件，镜像上的扩容因此无需 root。目标文件系统无法识别（`unknown`）时，不带 `--no-fs` 一律拒绝——“认不出”不等于“里面没有东西”。
 
-块设备的写入可以在 QEMU microvm 中免 root 完成——见 [docs/zh/interop.md](docs/zh/interop.md#在-qemu-microvm-中免-root-运行)。
+需要 root 的文件系统步骤可以改由 VM 执行：宿主能力不足时，`DISKEDIT_VM_BUNDLE` 指向一个通过校验的载体 bundle，整份计划移入 guest，记录、锁与退出码仍留在宿主。放置是自动的——见 [docs/zh/interop.md](docs/zh/interop.md#经-vm-载体免-root-运行)。
 
-外部工具按需查找，只在该步骤用到时经 `PATH` 调用：`sfdisk`、`partx`、`losetup`、`mount`，以及各文件系统自己的工具（`mke2fs`/`e2fsck`/`resize2fs`、`mkfs.xfs`/`xfs_growfs` 等）。完整清单见 [docs/zh/internals.md](docs/zh/internals.md#外部工具)。
+外部工具只在步骤需要时从固定的系统工具目录解析：`sfdisk`、`partx`、`losetup`、`mount`，以及各文件系统自己的工具（`mke2fs`/`e2fsck`/`resize2fs`、`mkfs.xfs`/`xfs_growfs` 等）。完整清单见 [docs/zh/internals.md](docs/zh/internals.md#外部工具)。
 
 写命令直接修改目标本身，改错后原有内容可能无法恢复。原地修改的好处是不需要第二份镜像的空间，也不会留下需要清理的额外文件；数据重要时，请在执行写命令前先备份。
 

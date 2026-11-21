@@ -6,6 +6,18 @@ README 只保留"它是什么、怎么用"。本文件记录行为约束：能�
 
 每条命令的结果、闸门评估的目标形态以及进程级退出时打印的文本都由[能力矩阵](capability-matrix.md#运行时闸门)生成；本节只说明检查的顺序。闸门在几何计算、锁获取与任何伴生文件创建之前运行，也在影响确认闸门之前运行（`src/cmd/mod.rs:158-168`、`src/cmd/confirm.rs:54-59`）。缺 `--yes` 的用法检查更早：它在 `cli::parse` 内、`dispatch` 之前运行，并以 `EXIT_USAGE` 退出（`src/cli.rs:1711-1720`、`src/outcome.rs`）。闸门只遍历 `HostPlatform::openable_media`（`src/cmd/mod.rs:81-96`）；不在该集合中的目标形态不由这个闸门评估。
 
+## 执行放置
+
+写入只有一条路径：一份作业是一串载体步骤（`TableCommit`、`Transfer`、`Fs`、`Probe`），宿主进程是恢复记录、锁与输出的唯一写者。步骤在哪里执行属于部署细节，每份作业在首次写盘之前决定一次，步骤之间不再改变。
+
+- **原生**：宿主满足本作业所需的全部能力——文件系统层要求的平台/root 权限，以及步骤表解析出的每个外部工具。这份清单与原生执行器读的是同一份工具矩阵。
+- **VM**：宿主能力不足，但 `DISKEDIT_VM_BUNDLE` 指向一个通过校验的载体 bundle。整份计划移入 guest；记录、锁、续跑游标与退出码仍由宿主掌握。
+- 两者都不满足：以退出码 6 退出，给出缺口与两条出路（安装工具，或提供 bundle）。
+
+bundle 目录包含 `manifest.json`、`kernel` 与 `initramfs`。清单声明 `schema`、`arch`、`binary_version`，并为每件制品给出相对 `path` 与 `sha256`；可选的 `worker.sha256` 记录 worker 映像摘要供审计尾段使用。只有以下全部成立才接受：schema 是当前版本、架构与本进程一致、`binary_version` 与本可执行文件版本一致、每件制品的路径都落在 bundle 目录内、每个 SHA-256 都对得上。任何一项不符都在启动 QEMU 之前拒绝——宿主不会把目标交给身份不明的 guest。
+
+启动器把已打开的目标经文件描述符交给 QEMU（`-add-fd` 加 `/dev/fdset/`），缓存固定为 `cache=none`，以 virtio-blk 按目标的逻辑扇区大小（512 或 4096）接盘，协议走串口控制台，熵由 virtio-rng 提供。QEMU 自身的退出状态只描述虚拟机如何结束；某一步是否落盘由协议的 `result` 与宿主的探测回答，不看该状态。
+
 ## 占用边界
 
 对块设备的写入依赖以 `O_EXCL` 打开整块磁盘：只要有分区处于挂载状态或用作 swap，内核就以 EBUSY 拒绝打开；写入前还有第二道占用闸门再检查一次（在块设备上逐个探测分区——纵深防御）。镜像文件没有这种内核语义，因此闸门反向枚举 loop 设备：把已打开的镜像句柄的 `(st_dev, st_ino)` 与 `LOOP_GET_STATUS64` 返回的 `(lo_device, lo_inode)` 比较；匹配时检查该 loop 及其分区是否已挂载（遍历每个可读的挂载命名空间）、是否为活动 swap、是否被块设备栈持有。判定不依赖 `loop/backing_file` 路径，因此硬链接别名、已删除的 backing 路径以及其他挂载命名空间中的挂载都能被发现。本进程登记的 loop 排他性是进程级名字表；每个条目被消费时都对照当前活动的映射重新检查（名字只用于定位登记项）。占用判定匹配每个 backing 具有该文件 `(st_dev, st_ino)` 的 loop，因此它回答的是"该文件已被映射或被持有"，而不是同一文件系统上多个叠加映射中哪一个是它。**直接写表的命令**（`new`/`add`/`delete`/`set name|type|flag`/`recover`）要求目标完全空闲：任何分区在使用都会使新表与内核视图分叉，因此该命令不关心它编辑的是哪个分区。`copy` 是例外——它只在重叠检查之后向空闲区域添加一个条目，不改动任何既有区间，也不移动任何分区的区间。移动类命令（`resize` 的每种形式——`--end`、`--grow-to-end` 或给定尺寸——以及 `move`）与 `mkfs` 按写入的形态区分：保持起点、只延长末端的写入在仅被 dm 持有的目标上允许（LVM PV 与 dm-crypt 的增长语义）；移动、收缩与整段重写一律拒绝。若任何被枚举的 loop 节点无法打开、ioctl 返回 ENXIO 以外的错误、sysfs 无法读取，或因权限原因无法读取 `/proc/<pid>/mountinfo`（例如 `hidepid`），工具拒绝写入（退出码 4），按"无法确认"处理——即使该 loop 与目标无关；这是安全优先的环境限制，不是目标正在被使用的证据。
@@ -30,11 +42,11 @@ README 只保留"它是什么、怎么用"。本文件记录行为约束：能�
 
 ## 记录中的磁盘 GUID 凭据
 
-除身份段之外，记录（magic `DREC`，16 字节头部由 magic、载荷长度、载荷 CRC 与头部 CRC 组成——没有单独的版本字段）以三种状态保存目标的 GPT 磁盘 GUID：`Present` / `Unavailable` / `GeneratedThisOperation`。`Present` 必须与磁盘一致；`Unavailable` 表示目标上没有可读的 GPT（MBR / 未分区），不构成证据；`GeneratedThisOperation` 只出现在记录侧（整张表由写入该记录的操作生成），不与磁盘 GUID 比较。两侧均为 `Present` 但值不同、记录为 `Present` 而目标没有可读 GPT、记录为 `Unavailable` 而目标现在带有 GPT，都是身份不匹配。**一种 magic 一种布局**：magic 不是 `DREC` 的记录按无法识别的格式报告（`UnrecognizedFormat`，携带 magic 字节）；本次构建不回放也不迁移它，会写盘的命令以退出码 3 拒绝。`recover --release` 的自动隔离要求探测能解码整条记录（magic、头部 CRC、载荷 CRC 以及每个尾部段），且记录的身份属于当前载体。
+除身份段之外，记录（magic `DRE2`，16 字节头部由 magic、载荷长度、载荷 CRC 与头部 CRC 组成——没有单独的版本字段）以三种状态保存目标的 GPT 磁盘 GUID：`Present` / `Unavailable` / `GeneratedThisOperation`。`Present` 必须与磁盘一致；`Unavailable` 表示目标上没有可读的 GPT（MBR / 未分区），不构成证据；`GeneratedThisOperation` 只出现在记录侧（整张表由写入该记录的操作生成），不与磁盘 GUID 比较。两侧均为 `Present` 但值不同、记录为 `Present` 而目标没有可读 GPT、记录为 `Unavailable` 而目标现在带有 GPT，都是身份不匹配。载荷末尾是审计尾段——放置（`native` 或 `vm`）、可选的载体 worker 摘要，以及本作业所需外部工具的版本行——在首次写盘之前写一次，续跑与回滚都不读它。**一种 magic 一种布局**：magic 不是 `DRE2` 的记录按无法识别的格式报告（`UnrecognizedFormat`，携带 magic 字节）；本次构建不回放也不迁移它，会写盘的命令以退出码 3 拒绝。因此旧版本写下的记录无法续跑：用写下它的那个版本完成，再用 `recover --release` 清除。`recover --release` 的自动隔离要求探测能解码整条记录（magic、头部 CRC、载荷 CRC 以及每个尾部段），且记录的身份属于当前载体。
 
 ## 恢复记录的位置
 
-恢复记录是其位置上的一类普通文件（镜像为 `<image_state_root>/images/<key-hash>/record`，块设备为 `<state_root>/recovery/<identity-hash>/record`；镜像侧的 `<image>.diskedit/record.lock` 在不存在按用户的状态根时只是锁，其中不含记录）。该位置上是什么由一次探测回答：不存在、可解码、已损坏（部分写入或 CRC 不匹配）、无法识别的格式（magic 不是 `DREC`）、不是恢复文件（符号链接 / 目录 / 非普通文件），或不可读。在 Linux 上，路径以父目录为锚点，用连续的 `openat(O_NOFOLLOW|O_DIRECTORY)` 解析，最后一级用 `O_NOFOLLOW`：任一级为符号链接、非目录，或最后一级为非普通文件，都算"不是恢复文件"。非 Linux 是保留的移植位：它只用 `symlink_metadata` 回答存在性，从不读取内容，因此那里的普通文件按"不可读"拒绝——在该平台上本次构建可以拒绝，但无法读取记录。删除与重命名作用于该路径条目本身（父目录 fd 加相对名字），不跟随链接、不改变链接目标；原子替换是同目录内的重命名。当条目不是恢复文件，或删除失败时，场景被视为仍然存在，工具不会报告其已清理。
+恢复记录是其位置上的一类普通文件（镜像为 `<image_state_root>/images/<key-hash>/record`，块设备为 `<state_root>/recovery/<identity-hash>/record`；镜像侧的 `<image>.diskedit/record.lock` 在不存在按用户的状态根时只是锁，其中不含记录）。该位置上是什么由一次探测回答：不存在、可解码、已损坏（部分写入或 CRC 不匹配）、无法识别的格式（magic 不是 `DRE2`）、不是恢复文件（符号链接 / 目录 / 非普通文件），或不可读。在 Linux 上，路径以父目录为锚点，用连续的 `openat(O_NOFOLLOW|O_DIRECTORY)` 解析，最后一级用 `O_NOFOLLOW`：任一级为符号链接、非目录，或最后一级为非普通文件，都算"不是恢复文件"。非 Linux 是保留的移植位：它只用 `symlink_metadata` 回答存在性，从不读取内容，因此那里的普通文件按"不可读"拒绝——在该平台上本次构建可以拒绝，但无法读取记录。删除与重命名作用于该路径条目本身（父目录 fd 加相对名字），不跟随链接、不改变链接目标；原子替换是同目录内的重命名。当条目不是恢复文件，或删除失败时，场景被视为仍然存在，工具不会报告其已清理。
 
 ## Windows 上的目录项持久性
 

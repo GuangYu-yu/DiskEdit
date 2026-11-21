@@ -10,24 +10,28 @@
 //! 读盘；`expect_after` 由写入字节与快照原文算出。
 
 use super::*;
+use crate::tagged::tagged_enum;
 
-/// 表步骤对表的改动类别；影响面只由它表达。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum TableWriteKind {
-    /// 新建整张表
-    Replace,
-    /// 增加一个条目
-    Add,
-    /// 删除一个条目
-    Remove,
-    /// 表长度增加
-    Grow,
-    /// 表长度减少
-    Shrink,
-    /// 条目位置改变，长度不变
-    Repartition,
-    /// 修复动作：重写双头或保护 MBR，不改分区布局
-    Repair,
+tagged_enum! {
+    /// 表步骤对表的改动类别；影响面只由它表达。
+    ///
+    /// 码值是记录与线上格式的一部分：写出的类别与读回的类别来自同一张表
+    pub(crate) enum TableWriteKind {
+        /// 新建整张表
+        Replace = 0,
+        /// 增加一个条目
+        Add = 1,
+        /// 删除一个条目
+        Remove = 2,
+        /// 表长度增加
+        Grow = 3,
+        /// 表长度减少
+        Shrink = 4,
+        /// 条目位置改变，长度不变
+        Repartition = 5,
+        /// 修复动作：重写双头或保护 MBR，不改分区布局
+        Repair = 6,
+    }
 }
 
 /// 计划期算好的新 GPT 表内容：新头、新条目数组、备份头落点与该表自身的逻辑块大小。
@@ -85,7 +89,7 @@ pub(crate) fn gpt_compare_regions(src: &FileSource, gpt: &GptContent) -> Result<
         .last_lba
         .checked_sub(span)
         .ok_or_else(|| RunOutcome::refused("disk too small to hold GPT entry array"))?;
-    let min_sectors = 2 * span + 4;
+    let min_sectors = min_sectors_for_span(span);
     if gpt.last_lba.checked_add(1).is_none_or(|sectors| sectors < min_sectors) {
         return Err(RunOutcome::refused(gpt_too_small(min_sectors, ss)));
     }

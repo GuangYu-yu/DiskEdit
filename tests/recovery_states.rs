@@ -104,7 +104,7 @@ fn file_id(path: &Path) -> [u8; 16] {
     out
 }
 
-/// 八态里，`NotOurs` 的两种常见载体由同一个分类器给出。
+/// 八态里，`NotRegular` 的两种常见载体由同一个分类器给出。
 enum Scene {
     Image { size: u64, file_id: [u8; 16] },
     Block,
@@ -177,13 +177,16 @@ impl Fixture {
         out.push(0); // no entry with its table step in flight
         out.push(0); // no table repair
         out.push(0); // table fence: pending
+        out.push(0); // audit placement: native
+        out.push(0); // no worker digest
+        out.extend_from_slice(&0u32.to_le_bytes()); // no tool versions
         out
     }
 
     fn bytes(&self) -> Vec<u8> {
         let payload = self.payload();
         let mut out = vec![0u8; 16];
-        out[0..4].copy_from_slice(b"DREC");
+        out[0..4].copy_from_slice(b"DRE2");
         out[4..8].copy_from_slice(&(payload.len() as u32).to_le_bytes());
         out[8..12].copy_from_slice(&crc32(&payload).to_le_bytes());
         let header_crc = crc32(&out[0..12]);
@@ -353,8 +356,8 @@ fn evidence_truncated_and_crc_mismatch_are_distinguished() {
 }
 
 #[test]
-fn evidence_not_ours_covers_symlink_and_directory() {
-    let dir = temp_dir("not_ours");
+fn evidence_not_regular_covers_symlink_and_directory() {
+    let dir = temp_dir("not_regular");
     let image = image_with(&dir, 4096);
     private_dir(&record_dir(&image));
 

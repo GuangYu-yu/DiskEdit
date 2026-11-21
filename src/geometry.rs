@@ -377,13 +377,12 @@ impl ValidatedGeometry {
         }
     }
 
-    /// 用本几何提交分区表。几何已过构造校验，提交前不重新推导 header/array 的几何
-    /// （崩溃安全四结构序列见 `table::commit_table`）。备份头位置（容器末 LBA）取自构造时
-    /// 传入的 `file_last_lba`——同一事实不接受第二个来源，调用点不得各自重算一遍
-    /// `src.size / ss - 1`
+    /// 用本几何提交分区表。几何已过构造校验，提交前不重新推导 header/array 的几何。
+    /// 备份头位置（容器末 LBA）取自构造时传入的 `file_last_lba`——同一事实不接受第二个
+    /// 来源，调用点不得各自重算一遍 `src.size / ss - 1`
     ///
-    /// 仅测试构建可见：生产路径把 [`Self::content`] 交给装配层生成表步骤，写入由
-    /// 执行器完成；本方法是测试里不经计划直接提交的参照物。
+    /// 写入走的是**生产那条链路**（装配成表步骤 → `execution::table::execute` 逐段写前
+    /// 比对、逐段落盘、写后复核），这里没有第二份提交序列可供测试与生产分叉。
     #[cfg(test)]
     pub fn commit(&self, src: &mut crate::dev::WriteSource) -> Result<(), RunOutcome> {
         // 全表写入之前先确认盘上的表仍是本几何的依据（见

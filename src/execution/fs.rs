@@ -15,6 +15,7 @@ use super::StepSink;
 ///
 /// `fstype` 是计划期钉住的类型：装配点按请求填写，`None` 表示未指定、执行期按区间
 /// 识别的结论跑。带值时只用于核对盘上类型与计划是否一致。
+#[derive(Clone)]
 pub(crate) struct FsResize {
     pub part: u32,
     pub first_lba: u64,
@@ -26,7 +27,7 @@ pub(crate) struct FsResize {
 impl FsResize {
     /// 载荷换算成字节区间。任一不一致都说明计划没有经过装配：长度溢出、
     /// 记录的字节数与扇区长度不符、起点越界
-    fn byte_range(&self, sector_size: u64) -> Result<(u64, u64), String> {
+    pub(crate) fn byte_range(&self, sector_size: u64) -> Result<(u64, u64), String> {
         let len = super::region_bytes(self.part, self.sectors, sector_size)?;
         let base = super::region_at(
             self.part,
@@ -64,7 +65,9 @@ pub(crate) fn preflight(
             step.part, target.fstype
         )));
     }
-    fsops::check_grow_step(growable, src.is_block).map_err(RunOutcome::from)
+    // 放置决策只看"这段区域有没有可扩的 FS"；宿主缺哪些工具由
+    // crate::exec::placement 按统一清单回答
+    fsops::grow_step_needs(&growable, src.is_block).map(|_| ()).map_err(RunOutcome::from)
 }
 
 /// 恢复屏障由 [`fsops::GrowTarget::resize_fs`] 在设备建立之后、第一个工具启动之前落下。

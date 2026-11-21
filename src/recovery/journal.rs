@@ -30,8 +30,8 @@ use super::cleanup::{CleanupError, RecoveryEngine};
 use super::record::{OpKind, Record};
 #[cfg(target_os = "linux")]
 use super::record::{
-    CommitState, CopySource, LvmPost, PlanDigest, PlanId, PlanVersion, Progress, RecoveryAction,
-    Relocation, RepairFact, RepairKind, RepairState, RestoreEntry, TableFence, TxId,
+    Audit, CommitState, CopySource, LvmPost, PlanDigest, PlanId, PlanVersion, Progress,
+    RecoveryAction, Relocation, RepairFact, RepairKind, RepairState, RestoreEntry, TableFence, TxId,
 };
 use super::scene::SceneIdentity;
 #[cfg(target_os = "linux")]
@@ -237,7 +237,7 @@ pub(crate) enum CompanionProbe {
     /// 布局不属于本构建（头部标识不是 `record::MAGIC`）
     Foreign,
     /// 落点存在但不是普通文件（符号链接 / 目录 / 其他条目）
-    NotOurs(String),
+    NotRegular(String),
     /// 读不出来：权限、I/O 或平台没有读取原语
     Unreadable(String),
 }
@@ -274,10 +274,10 @@ pub(crate) fn probe_companion(record: &Path) -> CompanionProbe {
     let file = match store.open_at(&anchor, &relative) {
         Ok(file) => file,
         Err(PathError::NotFound) => return CompanionProbe::Absent,
-        Err(PathError::Symlink) => return CompanionProbe::NotOurs("a symbolic link".to_string()),
-        Err(PathError::IsDirectory) => return CompanionProbe::NotOurs("a directory".to_string()),
+        Err(PathError::Symlink) => return CompanionProbe::NotRegular("a symbolic link".to_string()),
+        Err(PathError::IsDirectory) => return CompanionProbe::NotRegular("a directory".to_string()),
         Err(PathError::NotDirectory | PathError::NotAFile) => {
-            return CompanionProbe::NotOurs("not a regular file".to_string())
+            return CompanionProbe::NotRegular("not a regular file".to_string())
         }
         Err(e) => return CompanionProbe::Unreadable(format!("the record path is refused: {e:?}")),
     };
@@ -298,9 +298,9 @@ pub(crate) fn probe_companion(record: &Path) -> CompanionProbe {
             "this platform has no directory-relative read primitive; the record cannot be read here"
                 .to_string(),
         ),
-        Ok(meta) if meta.file_type().is_symlink() => CompanionProbe::NotOurs("a symbolic link".to_string()),
-        Ok(meta) if meta.is_dir() => CompanionProbe::NotOurs("a directory".to_string()),
-        Ok(_) => CompanionProbe::NotOurs("not a regular file".to_string()),
+        Ok(meta) if meta.file_type().is_symlink() => CompanionProbe::NotRegular("a symbolic link".to_string()),
+        Ok(meta) if meta.is_dir() => CompanionProbe::NotRegular("a directory".to_string()),
+        Ok(_) => CompanionProbe::NotRegular("not a regular file".to_string()),
     }
 }
 
@@ -1195,6 +1195,22 @@ impl RecordJournal {
         Ok(())
     }
 
+    /// 写下令牌这次作业的放置与工具版本并落盘。字段只作审计：续跑与回滚不读它，
+    /// 因此同一份记录换放置重跑时允许覆盖
+    pub(crate) fn record_audit(&mut self, audit: Audit) -> Result<(), PersistFailure> {
+        if self.record.audit == audit {
+            return Ok(());
+        }
+        let was = std::mem::replace(&mut self.record.audit, audit);
+        if let Err(e) = self.persist() {
+            if !e.record_bytes_persisted() {
+                self.record.audit = was;
+            }
+            return Err(e);
+        }
+        Ok(())
+    }
+
     /// 推进持久进度并落盘。只允许前进（stage 只前进或不变）
     pub(crate) fn record_progress(
         &mut self,
@@ -1719,6 +1735,11 @@ impl RecordJournal {
         &mut self,
         _post: crate::recovery::LvmPost,
     ) -> Result<(), PersistFailure> {
+        Err(PersistFailure::NotWritten(std::io::Error::other(
+            "recovery records are not written on this platform",
+        )))
+    }
+    pub(crate) fn record_audit(&mut self, _audit: crate::recovery::Audit) -> Result<(), PersistFailure> {
         Err(PersistFailure::NotWritten(std::io::Error::other(
             "recovery records are not written on this platform",
         )))

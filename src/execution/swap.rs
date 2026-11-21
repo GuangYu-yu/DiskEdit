@@ -11,6 +11,7 @@ use crate::outcome::{Pending, PendingKind, RunOutcome};
 use super::StepSink;
 
 /// 一个换区重建步骤：分区号、旧起点（旧签名仍在源位）、新起点与长度
+#[derive(Clone)]
 pub(crate) struct SwapRebuild {
     pub part: u32,
     pub src_first: u64,

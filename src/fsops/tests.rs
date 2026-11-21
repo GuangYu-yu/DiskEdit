@@ -19,6 +19,21 @@ pub(crate) fn tool_registry_names_and_packages_are_complete() {
     }
 }
 
+/// VM 载体的工具清单与注册表同源：内容与顺序都必须一致
+#[test]
+pub(crate) fn manifest_derived_from_tool_enum() {
+    let manifest: serde_json::Value =
+        serde_json::from_str(include_str!("../../tools/vm/manifest.json")).expect("manifest.json parses");
+    let listed: Vec<&str> = manifest["tools"]
+        .as_array()
+        .expect("manifest has a tools array")
+        .iter()
+        .map(|tool| tool.as_str().expect("tool names are strings"))
+        .collect();
+    let registered: Vec<&str> = Tool::ALL.iter().map(|t| t.name()).collect();
+    assert_eq!(listed, registered);
+}
+
 /// 能力清单里的工具必须都在注册表 `ALL` 里：清单是 `capabilities.rs` 里的
 /// `Tool::` 字面量，故对着该文件逐个比对——新增变体漏进 `ALL` 在这里显形。
 ///

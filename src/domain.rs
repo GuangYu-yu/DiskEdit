@@ -170,6 +170,29 @@ pub(crate) enum FsKind {
 }
 
 impl FsKind {
+    /// 由对外规范名还原。名称只在 [`Self::as_str`] 维护
+    pub(crate) fn from_name(name: &str) -> Option<Self> {
+        [
+            Self::Squashfs,
+            Self::Erofs,
+            Self::Ext,
+            Self::Xfs,
+            Self::Btrfs,
+            Self::F2fs,
+            Self::Exfat,
+            Self::Vfat,
+            Self::Ntfs,
+            Self::HfsPlus,
+            Self::Apfs,
+            Self::Bcachefs,
+            Self::Jfs,
+            Self::Reiserfs,
+            Self::Udf,
+        ]
+        .into_iter()
+        .find(|kind| kind.as_str() == name)
+    }
+
     /// 对外规范名（JSON、文案、支持清单都由它生成）
     pub(crate) fn as_str(self) -> &'static str {
         match self {
@@ -218,6 +241,18 @@ pub(crate) enum ContentKind {
 }
 
 impl ContentKind {
+    /// 由对外规范名还原，与 [`Self::as_str`] 同一份名称表
+    pub(crate) fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "swap" => Some(Self::Swap),
+            "lvm2_pv" => Some(Self::Lvm2Pv),
+            "luks" => Some(Self::Luks),
+            "bitlocker" => Some(Self::BitLocker),
+            "unknown" => Some(Self::Unknown),
+            _ => FsKind::from_name(name).map(Self::Filesystem),
+        }
+    }
+
     /// 文件系统类别；非文件系统内容返回 `None`
     pub(crate) fn filesystem(self) -> Option<FsKind> {
         match self {

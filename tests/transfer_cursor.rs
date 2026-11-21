@@ -30,7 +30,6 @@ fn the_cursor_is_global_across_entries_and_steps() {
         "let mut recomputed = 0u64",
         "recomputed.checked_add(count)",
         "state.transfer_cursor = state.transfer_cursor.max(recomputed)",
-        "state.advance_entry()",
         "self.entry_index += 1",
         "self.chunks_in_entry = 0",
     ] {
@@ -39,6 +38,18 @@ fn the_cursor_is_global_across_entries_and_steps() {
             "the executor does not reconstruct a global cursor: {marker}"
         );
     }
+    // 条目在表已落位、重建已做完之后才推进：推进点唯一在分派层的记录动作里，
+    // 且只有持有 `StepApplied` 才能调进去
+    let dispatch = source("exec/dispatch.rs");
+    assert!(
+        dispatch.contains("state.advance_entry(applied)"),
+        "the dispatch layer must be the one place that advances the entry cursor"
+    );
+    // 计划循环本身不得直接推进：它只能选"推进什么"，凭据由判定给出
+    assert!(
+        !source("exec/mod.rs").contains("state.advance_entry("),
+        "the plan loop must not advance the entry cursor on its own"
+    );
 }
 
 #[test]

@@ -48,7 +48,9 @@ pub(crate) enum Evidence {
     CrcMismatch {
         region: CrcRegion,
     },
-    NotOurs {
+    /// 落点存在但不是普通文件（符号链接 / 目录 / 其它条目）：本工具不接管，
+    /// 与"格式不属于本构建"（[`Self::UnrecognizedFormat`]）是两件事
+    NotRegular {
         kind: EntryKind,
     },
     Unreadable {
@@ -99,8 +101,8 @@ impl Evidence {
         Self::Absent
     }
 
-    pub(crate) fn not_ours(kind: EntryKind) -> Self {
-        Self::NotOurs { kind }
+    pub(crate) fn not_regular(kind: EntryKind) -> Self {
+        Self::NotRegular { kind }
     }
 
     pub(crate) fn unreadable(cause: Cause) -> Self {
@@ -108,13 +110,13 @@ impl Evidence {
     }
 
     /// 路径解析失败映射：不存在的路径是 `Absent`，符号链接/目录/非普通文件
-    /// 是 `NotOurs`，其余一律 `Unreadable`
+    /// 是 `NotRegular`，其余一律 `Unreadable`
     pub(crate) fn from_path_error(err: PathError) -> Self {
         match err {
             PathError::NotFound => Self::Absent,
-            PathError::Symlink => Self::not_ours(EntryKind::Symlink),
-            PathError::IsDirectory => Self::not_ours(EntryKind::Directory),
-            PathError::NotDirectory | PathError::NotAFile => Self::not_ours(EntryKind::OtherFile),
+            PathError::Symlink => Self::not_regular(EntryKind::Symlink),
+            PathError::IsDirectory => Self::not_regular(EntryKind::Directory),
+            PathError::NotDirectory | PathError::NotAFile => Self::not_regular(EntryKind::OtherFile),
             PathError::Inaccessible(reason) => Self::unreadable(Cause::Inaccessible(reason)),
             refused @ (PathError::Empty | PathError::Absolute | PathError::EscapesAnchor) => {
                 Self::unreadable(Cause::Inaccessible(format!("{refused:?}")))

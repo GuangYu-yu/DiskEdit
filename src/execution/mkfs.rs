@@ -10,6 +10,7 @@ use crate::outcome::RunOutcome;
 /// 一个 FsCreate 步骤：字段与 [`crate::planner::PlanStep::FsCreate`] 一一对应。
 ///
 /// `fstype` 是请求本身的类型，ext2/3/4 不折叠；`label` 原样作为工具参数，`None` 即不传。
+#[derive(Clone)]
 pub(crate) struct FsCreate {
     pub part: u32,
     pub first_lba: u64,

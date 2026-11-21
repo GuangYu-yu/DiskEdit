@@ -64,54 +64,34 @@ nbd-client <host> <port> /dev/nbd0
 - 本地 `flock` 不提供分布式互斥：两台主机，或同一导出的两个别名，各自拿到的是独立的锁。远程目标需要一把作用域与实际写者一致的锁。
 - sshfs 或 NFS 上的 `flock` 必须在实际部署中确认后才能依赖。
 
-## 在 QEMU microvm 中免 root 运行
+## 经 VM 载体免 root 运行
 
-文件系统层命令经 `losetup` 到达分区，因此需要 root。没有 root 时，把同一个二进制放进 guest，用 guest 里的 root 完成工作；二进制本身不变。QEMU 的 `microvm` 是 x86 上最小的机型：没有 PCI、没有 ACPI，最多八个 virtio-mmio 设备，且只能以 `-kernel`/`-initrd` 启动。
+文件系统层的步骤需要 Linux 内核与 root。宿主缺少其中之一时，整份计划可以放进 VM 执行，而不是由人手工在 guest 里敲命令。放置是自动的，每份作业在首次写盘之前决定一次：宿主能执行的步骤留在原生路径；否则，若 `DISKEDIT_VM_BUNDLE` 指向的 bundle 通过校验，就交给 VM；两者都没有时，命令以退出码 6 退出，说明缺什么以及两条出路。校验规则见[内部实现](internals.md#执行放置)。
 
-- x86 上没有更小的机型。`pc` 与 `q35` 带 PCI、ACPI 与固件；`isapc` 没有 virtio-mmio；`nitro-enclave`、`xenfv`、`xenpv` 面向特定宿主。arm64 上的机型是 `-M virt`：它同样提供 PCIe，所以 virtio-pci 也可用，但下面的 virtio-mmio 设备在那里同样成立。
-- 镜像以 virtio-blk 磁盘挂入。它的 serial 是 guest 能看到的唯一稳定身份，因此传入由宿主算出的键。serial 最长 20 个字符，更长的值会被静默截断：键要由镜像内容派生而不是由路径派生，不同镜像不能落到同一个键，在 guest 内读取该属性而不是假定 sysfs 路径，并在启动 QEMU 之前拒绝过长或碰撞的键，不要依赖截断。
-- 状态目录经 virtio-9p 挂入。只用 `-virtfs` 会创建一个 microvm 无法使用的 PCI 设备，所以要显式命名设备。这种显式写法在两种架构上都成立。`security_model=none` 不做属主映射：文件按 QEMU 进程的凭据创建，实际属主需要在部署环境里确认。
-- 保留 ISA 串口：`-serial stdio` 把控制台接到它上面。`isa-serial=off` 只适用于改用 virtio console 作为控制台的 guest。
-- `x-option-roms=off` 可以安全传入。`pit=off`、`pic=off`、`rtc=off` 不属于基础配方：关闭 PIT 与 PIC 要求 guest CPU 支持 `TSC_DEADLINE`，而 `rtc=off` 让 guest 只依赖 `kvmclock`，下面的 TCG 模式提供不了它。
+- 宿主的所有权不变。恢复记录、目标锁、续跑游标、协议会话与进程退出码都留在宿主进程。guest 只接收步骤、回报事件，并且只写目标。
+- 目标以已打开的句柄交出，按目标的逻辑扇区大小作为 virtio-blk 接入。逻辑扇区既不是 512 也不是 4096 的目标在启动 QEMU 之前就被拒绝。
+- 协议走串口控制台：以 `{` 开头的行是协议帧，其余行是诊断输出并转到 stderr。bundle 的内核命令行把控制台调成静默，因此工具输出与内核消息不会与协议帧交错。
+- 同一二进制的 `__worker` 会话只用于协议测试，不是用户入口，也不出现在帮助、参考与能力矩阵中。
 
-```bash
-qemu-system-x86_64 -M microvm,x-option-roms=off \
-  -nodefaults -no-user-config \
-  -display none -serial stdio -monitor none \
-  -accel kvm -cpu host -m 256M -smp 1 \
-  -kernel bzImage -initrd initramfs.cpio.gz \
-  -append "console=ttyS0,115200 quiet reboot=t" \
-  -drive id=target,file=disk.img,format=raw,if=none \
-  -device virtio-blk-device,drive=target,serial=0123456789abcdef0123 \
-  -fsdev local,id=state,path=/var/lib/diskedit,security_model=none \
-  -device virtio-9p-device,fsdev=state,mount_tag=state \
-  -no-reboot
+### 构建 bundle
+
+bundle 是一个目录，包含 `manifest.json`、`kernel` 与 `initramfs`：
+
+```json
+{
+  "schema": 1,
+  "arch": "x86_64",
+  "binary_version": "0.1.0",
+  "kernel":    { "path": "kernel",    "sha256": "…" },
+  "initramfs": { "path": "initramfs", "sha256": "…" },
+  "worker":    { "sha256": "…" }
+}
 ```
 
-- `-accel kvm` 不会自动回退。`/dev/kvm` 不存在或当前用户不可写时，把 `-accel kvm -cpu host` 换成 `-accel tcg -cpu max`；guest 会慢数倍，命令其余部分不变。判断方式应是实际打开 `/dev/kvm`，而不是只看文件是否存在。
-
-arm64 上的机型是 `-M virt`，控制台是 PL011：
-
-```bash
-qemu-system-aarch64 -M virt \
-  -nodefaults -no-user-config \
-  -display none -serial stdio -monitor none \
-  -accel kvm -cpu host -m 256M -smp 1 \
-  -kernel Image -initrd initramfs.cpio.gz \
-  -append "console=ttyAMA0,115200 quiet" \
-  -drive id=target,file=disk.img,format=raw,if=none \
-  -device virtio-blk-device,drive=target,serial=0123456789abcdef0123 \
-  -fsdev local,id=state,path=/var/lib/diskedit,security_model=none \
-  -device virtio-9p-device,fsdev=state,mount_tag=state \
-  -no-reboot
-```
-
-- guest 内核在两种架构上都需要：`CONFIG_VIRTIO_MMIO`、`CONFIG_VIRTIO_BLK`、`CONFIG_NET_9P_VIRTIO`、`CONFIG_9P_FS`。控制台驱动不同：x86 是 8250 系列，arm64 是 `CONFIG_SERIAL_AMBA_PL011`。initramfs 需要：静态二进制、命令所需的文件系统工具，以及一个挂载 `state` 并执行该二进制的 init。
-- 关机与退出状态：init 先同步、把程序的退出状态写到 9p 共享上的文件，再结束 guest。x86 上传 `reboot=t`：强制重启会变成 triple fault，`-no-reboot` 让 QEMU 随之退出。arm64 没有 `reboot=t` 这条路径；关机用 PSCI `SYSTEM_OFF`，不要把 `SYSTEM_RESET` 当作成功关机。两条路径下 QEMU 的退出行为要分别验证。QEMU 自己的退出状态说明的是 VM 如何结束，不是程序返回了什么；包装器读取状态文件并返回那个值。
-- 身份：记录目录由 guest 看到的设备身份派生，与宿主对同一镜像的视角不同。guest 里写下的记录只能沿那条路径续跑；宿主侧的 `records` 与 `inspect` 不会列出它们。把 guest 当作独立命名空间。
-- 锁：启动 QEMU 之前先在宿主拿到目标锁，guest 退出后释放。锁必须覆盖原始镜像，而不只是它前面的 FUSE 视图；guest 内部拿到的锁不能排斥宿主进程。
-- 持久性：把状态写入临时文件，`fsync` 该文件，rename，再 `fsync` 目录，然后才结束 guest。要确认这两次 `fsync` 经 9p 到达宿主存储；系统调用成功与原子 rename 本身都不能证明持久化。
-- 信号与输出流：终止 QEMU 只是结束 VM，并不会把同一个信号投递给 guest 里的程序。要转发信号，或要把 stderr 从 stdout 分离，需要另一条通道（例如 virtio-serial 端口）；串口控制台只有一条流。
+- `arch` 为 `x86_64` 或 `aarch64`；`binary_version` 是本可执行文件的版本。任一不符、任一 SHA-256 与文件不符，或制品路径为绝对路径、离开 bundle 目录，清单即被拒绝。
+- initramfs 携带本可执行文件、guest 需要的文件系统工具，以及一个 init：它从内核命令行读取 `diskedit.token`，导出为 `DISKEDIT_WORKER_TOKEN`，再以 `__worker` 执行该二进制。内核需要 virtio-blk、virtio-rng 与对应控制台驱动（x86 为 8250，arm64 为 PL011）。二进制版本变化后要重建 bundle：worker 的版本必须与宿主一致。
+- guest 回报步骤结果与屏障事件；宿主把记录落盘并在每个 checkpoint 之后回 ack，guest 才继续。QEMU 的退出状态说明 VM 如何结束，不是程序返回了什么。
+- 经 9p 共享手工运行该二进制不是受支持路径。记录、锁与输出属于宿主；这样启动的 guest 会形成第二个命名空间。
 
 ## 对损坏卷强制 NTFS resize
 

@@ -90,7 +90,7 @@ impl RecoveryRecord {
                     path.display()
                 )
             }
-            crate::recovery::CompanionProbe::NotOurs(shape) => {
+            crate::recovery::CompanionProbe::NotRegular(shape) => {
                 format!("{} ({shape}, not a recovery file)", path.display())
             }
             crate::recovery::CompanionProbe::Unreadable(why) => {
@@ -110,7 +110,7 @@ impl RecoveryRecord {
     /// 外来条目的拒绝文案；不是这一类时返回 None
     pub(crate) fn foreign_message(&self) -> Option<String> {
         match self.probe.as_ref() {
-            crate::recovery::CompanionProbe::NotOurs(shape) => Some(format!(
+            crate::recovery::CompanionProbe::NotRegular(shape) => Some(format!(
                 "{} is {shape}, not a recovery file written by this tool",
                 self.path.display()
             )),
@@ -402,7 +402,7 @@ fn rollback_proof(record: &RecoveryRecord) -> RollbackProof {
         }
         // 不是本工具写下的条目，本工具没有回滚它的路径
         crate::recovery::CompanionProbe::Foreign
-        | crate::recovery::CompanionProbe::NotOurs(_) => RollbackProof::Disproven,
+        | crate::recovery::CompanionProbe::NotRegular(_) => RollbackProof::Disproven,
         crate::recovery::CompanionProbe::Damaged(_)
         | crate::recovery::CompanionProbe::Unreadable(_)
         | crate::recovery::CompanionProbe::Absent => RollbackProof::Unproven,
@@ -526,7 +526,7 @@ impl TransactionManager {
             _ => None,
         });
         let foreign = active.iter().find_map(|r| match r.probe.as_ref() {
-            crate::recovery::CompanionProbe::NotOurs(shape) => Some(shape.as_str()),
+            crate::recovery::CompanionProbe::NotRegular(shape) => Some(shape.as_str()),
             _ => None,
         });
         // `Recognized + Provisional` 先于"目标忙"判定，落 5 而非 3
@@ -1058,7 +1058,7 @@ mod tests {
         assert!(text.contains("does not"), "an unknown layout must say it is unreadable: {text}");
         assert!(text.contains("recover --release"), "{text}");
 
-        let text = way_out(&[record(crate::recovery::CompanionProbe::NotOurs("a directory".into()))]);
+        let text = way_out(&[record(crate::recovery::CompanionProbe::NotRegular("a directory".into()))]);
         assert!(text.contains("by hand"), "a foreign entry is left for manual handling: {text}");
         assert!(!text.contains("recover --release"), "this tool will not release a file it did not write: {text}");
     }

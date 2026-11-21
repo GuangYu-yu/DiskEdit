@@ -1,28 +1,22 @@
-//! 执行编排：已确认计划的步骤分派。
+//! 计划步骤的单步实现：搬移、复制、表提交、换区重建、文件系统扩缩与属性改写。
 //!
-//! 入口 [`execute_plan`] 只收 [`ConfirmedPlan`]。**计划步骤**的写盘只有这一条路径：
-//! 搬移、复制、表提交、换区重建、文件系统扩缩与属性改写都从这里走，命令层不自己
-//! 调工具或写表。计划之外另有几类补写：
-//! - `cmd/layout.rs` 两处在**已提交态续跑**时直接调 [`fix_ntfs_hidden_sectors`]
-//!   改引导扇区（`resize` 起点变化形态、`move` 已提交条目的收尾）。同名函数在本模块的
-//!   `fix_hidden_sectors`（表提交之后）属于计划步骤，不是链外写入。
-//! - `cmd/recover` 的回退方向回放。
-//! - `fsops::wipe_zero` 在 mkfs 前擦除旧签名。
-//! - `cmd/resize/finish.rs` 的 pvresize / lvextend 收尾链。
-//! - `movepart/shift.rs` 的 `recreate_swap`：换区之后按旧头重建 swap 签名。
+//! 步骤的驱动、预扫描与放置分派在 [`crate::exec`]；本模块只提供每一步的写入实现。
+//! 计划步骤之外的补写落在各自调用点，不写分区表项：
+//! - `cmd/recover` 的回退方向回放；
+//! - 已提交态续跑时的 [`fix_ntfs_hidden_sectors`]（经 [`crate::exec`] 的入口调用）；
+//! - mkfs 之前的 `fsops::wipe_zero`；
+//! - LVM 收尾链与换区签名重建。
 //!
-//! 这些补写不写分区表项，也不经计划步骤。
-//!
-//! 每个步骤要么完成、要么给出"后置条件未达成"（返回 [`StepFlow::Stopped`] 并留下待办），
-//! 要么按"首写之前 / 之后"分类失败。预扫描在第一个目标字节写入之前跑完：执行器缺席、
+//! 每个步骤要么完成、要么给出"后置条件未达成"（由驱动层留下待办），要么按
+//! "首写之前 / 之后"分类失败。预扫描在第一个目标字节写入之前跑完：执行器缺席、
 //! 未装配的表步骤、不合法的搬移形状都在那里拒绝。
 
-mod copy;
-mod fs;
-mod mkfs;
-mod relocate;
-mod set;
-mod swap;
+pub(crate) mod copy;
+pub(crate) mod fs;
+pub(crate) mod mkfs;
+pub(crate) mod relocate;
+pub(crate) mod set;
+pub(crate) mod swap;
 pub(crate) mod table;
 
 use self::copy::CopyPartition;
@@ -32,7 +26,7 @@ use self::relocate::Relocate;
 use self::set::FsSet;
 use self::swap::SwapRebuild;
 use crate::dev::WriteSource;
-use crate::outcome::{Pending, RunOutcome};
+use crate::outcome::RunOutcome;
 use crate::planner::chunk::move_chunk_layout;
 use crate::planner::{ConfirmedPlan, PlanStep};
 use crate::recovery::Relocation;
@@ -108,6 +102,17 @@ pub(crate) struct TransferState {
 }
 
 impl TransferState {
+    /// 由记录里的 durable 快照还原：续跑的起点，或载体步骤从宿主收到的那一份
+    pub(crate) fn restore(
+        entry_index: u32,
+        chunks_in_entry: u64,
+        completed_steps: u32,
+        transfer_cursor: u64,
+        prefix_digest: [u8; 32],
+    ) -> Self {
+        Self { entry_index, chunks_in_entry, completed_steps, transfer_cursor, prefix_digest }
+    }
+
     /// 本条目已搬的块数：搬移序列从它之后继续
     fn chunks_done(&self) -> u64 {
         self.chunks_in_entry
@@ -124,8 +129,11 @@ impl TransferState {
         self.transfer_cursor += 1;
     }
 
-    /// 一条目完成：条目游标前进、条目内块数归零、步数加一
-    fn advance_entry(&mut self) {
+    /// 一条目完成：条目游标前进、条目内块数归零、步数加一。
+    ///
+    /// 入参是 [`crate::exec::StepApplied`]：没有"这一步算数"的凭据就没有推进入口，
+    /// 因此不存在"结论不是 `Applied` 却已经推进了游标"的次序
+    pub(crate) fn advance_entry(&mut self, _: crate::exec::StepApplied) {
         self.entry_index += 1;
         self.chunks_in_entry = 0;
         self.prefix_digest = [0u8; 32];
@@ -141,8 +149,9 @@ impl TransferState {
         self.prefix_digest = digest;
     }
 
-    /// 一个不搬数据的步骤完成
-    fn note_step(&mut self) {
+    /// 一个不搬数据的步骤完成。同样要求 [`crate::exec::StepApplied`]：推进的理由必须
+    /// 是"这一步算数"，不是一个布尔参数
+    pub(crate) fn note_step(&mut self, _: crate::exec::StepApplied) {
         self.completed_steps += 1;
     }
 
@@ -154,7 +163,7 @@ impl TransferState {
 
 /// 执行过程中的持久化回调。
 ///
-/// 进度落盘的整份替换由 sink 实现方完成：[`execute_plan`] 只在约定的时点调用
+/// 进度落盘的整份替换由 sink 实现方完成：[`crate::exec::run_plan`] 只在约定的时点调用
 /// [`Self::transfer_checkpoint`]、[`Self::table_step_done`] 与
 /// [`Self::fs_step_done`]，自身不写记录。
 ///
@@ -250,7 +259,7 @@ pub(crate) enum StepFlow {
 /// 「复制数据 + 提交副本条目」的一对，`TableOnly` 是不带搬移的表步骤，`FsResize` 是
 /// 写表之后的文件系统步骤，`FsCreate` 是在分区上建立文件系统，`FsSet` 是改写文件系统
 /// 内部属性。
-enum PreparedStep<'a> {
+pub(crate) enum PreparedStep<'a> {
     /// 一条搬移 + 提交它的表步骤；换区条目在表提交之后多一步重建（`swap`）
     Transfer { reloc: Relocate, commit: &'a TableStep, swap: Option<SwapRebuild> },
     Copy { copy: CopyPartition, commit: &'a TableStep },
@@ -265,7 +274,7 @@ enum PreparedStep<'a> {
 /// 多表步骤的计划按前后表戳串成一条链（装配期已核对），只有第一条的写前区间对应
 /// 盘上现状；核对它即核对了整张表。返回 3：表在计划读出之后被外部改动，
 /// 属于"请求与现状不符"，此时本次运行还没有写下任何字节。
-fn verify_tables_before_write(src: &WriteSource, steps: &[PreparedStep<'_>]) -> Result<(), RunOutcome> {
+pub(crate) fn verify_tables_before_write(src: &WriteSource, steps: &[PreparedStep<'_>]) -> Result<(), RunOutcome> {
     let first = steps.iter().find_map(|step| match step {
         PreparedStep::Transfer { commit, .. } | PreparedStep::Copy { commit, .. } => Some(*commit),
         PreparedStep::TableOnly(commit) => Some(*commit),
@@ -277,166 +286,6 @@ fn verify_tables_before_write(src: &WriteSource, steps: &[PreparedStep<'_>]) -> 
     }
 }
 
-/// 整份计划先扫描一遍再开始写：执行器缺席的步骤、未装配的表步骤、不合法的搬移形状与
-/// 参数都在首次目标写入之前拒绝。退出码 1 限定在写目标字节之前，若边执行边
-/// 发现缺席，前面已写下的步骤会让这个码失去依据；未装配的表步骤同理，无法完成
-/// 写前比对。
-///
-/// `chunk_bytes` 只对含 `Relocate` / `CopyPartition` 的计划有意义：数据块的字节数必须由
-/// 调用方给出并在 1 MiB..=64 MiB 的扇区整数倍内，本函数不读 [`RESIZE_CHUNK_BYTES`]。
-pub(crate) fn execute_plan(
-    src: &mut WriteSource,
-    plan: &ConfirmedPlan,
-    chunk_bytes: Option<u64>,
-    sink: &mut dyn StepSink,
-    pending: &mut Vec<Pending>,
-) -> Result<StepFlow, RunOutcome> {
-    let sector_size = plan.plan().sector_size().get();
-    let record = src.record_journal().and_then(|j| j.relocation());
-    let steps = prepare_steps(src, plan, chunk_bytes, sector_size, record)?;
-    // 数据搬移与表写入都在这个核对之后：外部在计划读出之后改了表，要在这里以 3 拒绝，
-    // 而不是搬完数据才在表步发现
-    verify_tables_before_write(src, &steps)?;
-    let mut state = journal_state(src, &steps)?;
-    // 只有搬移计划才带"搬完之后的那一次扩容"；delete/add/set 的单表步与它无关，
-    // 不能让测试注入点在那些命令上误触发
-    let has_transfer = steps
-        .iter()
-        .any(|s| matches!(s, PreparedStep::Transfer { .. }));
-    let mut entry = 0u32;
-    // 记录里已提交的搬移条目整组跳过：计数在进循环前取一次，循环里只递减，
-    // 不按条目回读进度字段
-    let mut committed_entries = state.durable().0;
-    let mut grow_faulted = false;
-    for (index, step) in steps.into_iter().enumerate() {
-        match step {
-            PreparedStep::Transfer { reloc, commit, swap } => {
-                // 记录里已提交的条目整组跳过：数据与表都不碰
-                if committed_entries > 0 {
-                    committed_entries -= 1;
-                    entry += 1;
-                    continue;
-                }
-                if swap.is_none() {
-                    relocate::execute(src, reloc, sector_size, &mut state, sink)
-                        .map_err(|e| e.context(&format!("plan step {}", index + 1)))?;
-                }
-                crate::movepart::fault_before_entry_commit();
-                sink.entry_table_started(src, entry)?;
-                table::execute(src, commit)
-                    .map_err(|e| e.context(&format!("plan step {}", index + 1)))?;
-                // 换区条目的表项刚落位、内容尚未重建：重放必须在同一个记录游标上重做重建
-                if swap.is_some() {
-                    crate::movepart::fault_after_swap_commit(entry as usize);
-                }
-                // 起点变了的 NTFS 分区要修 HiddenSectors：数据是字节拷贝，boot sector 还带着旧值。
-                // 排在表提交之后、推进游标之前——这一步没做成，重跑就该重试它
-                if swap.is_none() {
-                    fix_hidden_sectors(src, &reloc, sector_size, sink)?;
-                }
-                // 换区内容可弃：表项已落位，重建是这一步的后置条件。失败即停止计划——
-                // 后续条目要在"本条尚未可用"的布局上继续搬，扩容更不能做
-                if let Some(step) = swap {
-                    if let Some(item) = swap::rebuild(src, &step, sector_size, sink)? {
-                        pending.push(item);
-                        return Ok(StepFlow::Stopped);
-                    }
-                    crate::movepart::fault_after_swap_entry(entry as usize);
-                } else {
-                    sink.note(&format!(
-                        "partition {} relocated (delta {} sectors)",
-                        reloc.part,
-                        reloc.dst_first.abs_diff(reloc.src_first)
-                    ));
-                }
-                state.advance_entry();
-                sink.table_step_done(src, index, &state)?;
-                crate::movepart::fault_after_entry_commit(entry as usize);
-                entry += 1;
-            }
-            PreparedStep::Copy { copy, commit } => {
-                let chunk = chunk_bytes
-                    .expect("prepare_steps refuses a copy plan without a chunk size");
-                copy::execute(src, &copy, sector_size, chunk)
-                    .map_err(|e| e.context(&format!("plan step {}", index + 1)))?;
-                // 复制步骤只在写完数据之后返回 Ok；表步之前先落"表可能已写"
-                sink.table_step_started(src)?;
-                table::execute(src, commit)
-                    .map_err(|e| e.context(&format!("plan step {}", index + 1)))?;
-                state.note_step();
-                sink.table_step_done(src, index, &state)?;
-                crate::movepart::fault_after_table_step();
-            }
-            PreparedStep::TableOnly(commit) => {
-                // 全部条目搬完之后的那一个表步骤就是扩容：崩溃注入点在这个相位边界上
-                if has_transfer && !grow_faulted {
-                    crate::movepart::fault_before_grow();
-                    grow_faulted = true;
-                }
-                // 表步之前先落"表可能已写"；落不下去就不写表
-                sink.table_step_started(src)?;
-                table::execute(src, commit)
-                    .map_err(|e| e.context(&format!("plan step {}", index + 1)))?;
-                // 表已写完、围栏尚未落定：这是记录与盘面之间的交界面
-                crate::movepart::fault_after_table_write();
-                // 扩容表已落盘、进度尚未推进：重跑按盘上现状重放这一步
-                if has_transfer {
-                    crate::movepart::fault_after_grow_table_write();
-                }
-                state.note_step();
-                sink.table_step_done(src, index, &state)?;
-                crate::movepart::fault_after_table_step();
-            }
-            PreparedStep::FsResize(step) => {
-                let unmet = fs::execute(src, &step, sector_size, sink)
-                    .map_err(|e| e.context(&format!("plan step {}", index + 1)))?;
-                state.note_step();
-                sink.fs_step_done(src, index, &state)?;
-                // 文件系统侧没有做成或落点未证实：表已扩、空间尚未可用（或可用与否待查）。
-                // 后续步骤（若有）不再执行，记录保留，重跑从这一处继续
-                if !unmet.is_empty() {
-                    pending.extend(unmet);
-                    return Ok(StepFlow::Stopped);
-                }
-            }
-            PreparedStep::FsCreate(step) => {
-                // 建立步骤只出现在单步计划里，失败原因直接沿用 fsops 的措辞，不加步骤前缀
-                mkfs::execute(src, &step, sector_size)?;
-                state.note_step();
-                sink.fs_step_done(src, index, &state)?;
-            }
-            PreparedStep::FsSet(step) => {
-                // 属性步骤同样只出现在单步计划里，屏障在启动外部工具之前落盘
-                set::execute(src, &step)?;
-                state.note_step();
-                sink.fs_step_done(src, index, &state)?;
-            }
-        }
-    }
-    Ok(StepFlow::Complete)
-}
-
-/// 执行一份不含后置条件步骤的计划：表步骤、FS 建立与属性步骤都不留未达成的后置条件。
-///
-/// 待办非空说明装配出了本命令不该有的步骤（只有换区重建会产生待办）。按 5 带出明细
-/// 而不是丢弃——报成内部错误会把"盘已改变"洗成"未产生持久化修改"，正是本模块要消灭的那类报告。
-pub(crate) fn execute_plan_complete(
-    src: &mut WriteSource,
-    plan: &ConfirmedPlan,
-    chunk_bytes: Option<u64>,
-    sink: &mut dyn StepSink,
-) -> Result<(), RunOutcome> {
-    let mut pending = Vec::new();
-    match execute_plan(src, plan, chunk_bytes, sink, &mut pending)? {
-        StepFlow::Complete if pending.is_empty() => Ok(()),
-        // 待办是"已写盘、还差一步"，按 5 带出明细；报成内部错误会把"盘已改变"洗成
-        // "未产生持久化修改"
-        _ => Err(RunOutcome::partial_postcondition(
-            "a step of this plan left its postcondition unmet",
-            pending,
-        )),
-    }
-}
 
 pub(crate) fn ntfs_hidden_value(start_lba: u64) -> (u32, bool) {
     if start_lba >> 32 == 0 { (start_lba as u32, false) } else { (0u32, true) }
@@ -527,9 +376,12 @@ pub(crate) fn fix_ntfs_hidden_sectors(
     Ok(())
 }
 
-/// 搬移之后按新起点修正 NTFS 的 HiddenSectors。位移为 0 的条目没有可修的东西：
-/// 数据没动，位置也没动
-fn fix_hidden_sectors(
+/// 计划步骤的 HiddenSectors 修正：自己识别内容类型，位移为 0 的条目没有可修的东西
+/// （数据没动，位置也没动）。
+///
+/// 与命令层的 [`crate::exec::backfill_hidden_sectors`] 分工明确：这里走计划、自己做
+/// 判定；那一侧由调用方先判定"已提交、起点变了"，只补一次。写入实现两者共用
+pub(crate) fn step_hidden_sectors(
     src: &mut WriteSource,
     reloc: &Relocate,
     sector_size: u64,
@@ -559,7 +411,7 @@ fn fix_hidden_sectors(
 
 /// 首次写入前的全量扫描：类型、装配完整性、表写入范围、计划形状、swap、块参数、
 /// 块布局与地址区间，以及记录里的搬移计划与本次计划是否一致。
-fn prepare_steps<'a>(
+pub(crate) fn prepare_steps<'a>(
     src: &WriteSource,
     plan: &'a ConfirmedPlan,
     chunk_bytes: Option<u64>,
@@ -893,8 +745,7 @@ fn prepare_steps<'a>(
 /// 当前条目已完成的块数。块数取自 [`prepare_steps`] 的布局结果，不按记录重新计算。
 /// 记录里的游标只能落后于这个累计值——块写入与游标推进是两次落盘——领先即视为
 /// 记录自相矛盾并拒绝
-fn journal_state(src: &WriteSource, steps: &[PreparedStep]) -> Result<TransferState, RunOutcome> {
-    let Some(journal) = src.record_journal() else {
+pub(crate) fn journal_state(src: &WriteSource, steps: &[PreparedStep]) -> Result<TransferState, RunOutcome> {    let Some(journal) = src.record_journal() else {
         return Ok(TransferState::default());
     };
     let progress = journal.progress();

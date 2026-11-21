@@ -60,7 +60,7 @@ pub(crate) fn cmd_resize_superfloppy(a: &ResizeRequest) -> crate::outcome::RunOu
     // 类型接线判断不在此拦：不接线的类型不会写盘，由 resize_fs_in 按类型给出准确的
     // 拒绝文案；分区层扩容拒绝里的 `resize --no-fs` 出路对无分区的 superfloppy 不适用
     if fstype != fsid::ContentKind::Unknown {
-        match fsops::check_grow(fstype, src.is_block, fsops::needs_loop(&fsops::DeviceScope::Whole, src.is_block)) {
+        match fsops::check_grow(fstype, fsops::needs_loop(&fsops::DeviceScope::Whole, src.is_block)) {
             Err(fsops::FsError::UnsupportedFs { .. }) => {}
             other => other.unwrap_or_else(|e| bail_fail(RunOutcome::from(e))),
         }

@@ -22,9 +22,8 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use crate::cli::{RecordsListRequest, RecordsScanRequest, RecordsVerifyRequest};
-use crate::cmd::CmdResult;
 use crate::dev::{DeclaredIdentity, RecordBackend, TargetIdentity};
-use crate::outcome::{RunOutcome, EXIT_OK, EXIT_REFUSED};
+use crate::outcome::RunOutcome;
 use crate::recovery::{Evidence, Record};
 use crate::support::{bail_fail, json_escape};
 
@@ -145,7 +144,7 @@ impl Row {
             }
             Evidence::ForeignTarget { .. } => State::IdentityMismatch,
             Evidence::UnrecognizedFormat { .. } => State::UnknownFormat,
-            Evidence::Incomplete { .. } | Evidence::CrcMismatch { .. } | Evidence::NotOurs { .. } => {
+            Evidence::Incomplete { .. } | Evidence::CrcMismatch { .. } | Evidence::NotRegular { .. } => {
                 State::Damaged
             }
             Evidence::Unreadable { .. } => State::Unreadable,
@@ -419,7 +418,7 @@ fn image_record_dirs(root: &Path) -> Result<Vec<PathBuf>, String> {
 }
 
 #[cfg(target_os = "linux")]
-pub(crate) fn cmd_records_list(a: &RecordsListRequest) -> CmdResult {
+pub(crate) fn cmd_records_list(a: &RecordsListRequest) -> RunOutcome {
     let declared = a
         .identity
         .as_deref()
@@ -489,11 +488,11 @@ pub(crate) fn cmd_records_list(a: &RecordsListRequest) -> CmdResult {
     };
     rows.retain(|row| row.state().is_some_and(State::listed));
     print_rows(&rows, note);
-    CmdResult::Code(EXIT_OK)
+    RunOutcome::Checked
 }
 
 #[cfg(target_os = "linux")]
-pub(crate) fn cmd_records_verify(a: &RecordsVerifyRequest) -> CmdResult {
+pub(crate) fn cmd_records_verify(a: &RecordsVerifyRequest) -> RunOutcome {
     let path = Path::new(&a.target);
     let declared = a
         .identity
@@ -598,16 +597,16 @@ pub(crate) fn cmd_records_verify(a: &RecordsVerifyRequest) -> CmdResult {
                     .map(|reason| format!(",\"reason\":\"{}\"", json_escape(reason)))
                     .unwrap_or_default()
             );
-            eprintln!(
+            return RunOutcome::refused(format!(
                 "{} record(s) are present but could not be verified (the structure or identity check failed) — \
-                 id {} may be among them; this is not \"not found\"",
+                 id {} may be among them; this is not \"not found\"{}",
                 unverified.len(),
-                a.id
-            );
-            if let Some(reason) = &host_failure {
-                eprintln!("the verification is also incomplete: {reason}");
-            }
-            return CmdResult::Code(EXIT_REFUSED);
+                a.id,
+                host_failure
+                    .as_ref()
+                    .map(|reason| format!("; the verification is also incomplete: {reason}"))
+                    .unwrap_or_default()
+            ));
         }
         println!(
             "{{\"id\":\"{}\",\"verdict\":\"not_found\",\"hits\":0,\"unverified\":0,\"complete\":{}{}}}",
@@ -631,44 +630,41 @@ pub(crate) fn cmd_records_verify(a: &RecordsVerifyRequest) -> CmdResult {
         } else {
             searched.iter().map(|d| d.display().to_string()).collect::<Vec<_>>().join(", ")
         };
-        eprintln!(
+        return RunOutcome::refused(format!(
             "no record with id {} was found in the record directories searched ({searched}) — run `diskedit \
              records scan <root>` to search a whole repository",
             a.id
-        );
-        return CmdResult::Code(EXIT_REFUSED);
+        ));
     }
     if hits.len() > 1 {
         print_rows(&hits, None);
-        eprintln!(
+        return RunOutcome::refused(format!(
             "the same id exists in {} places — remove the copies by hand; a record must have one home",
             hits.len()
-        );
-        return CmdResult::Code(EXIT_REFUSED);
+        ));
     }
     let row = &hits[0];
     print_rows(std::slice::from_ref(row), None);
     if let Some(reason) = &host_failure {
-        eprintln!(
+        return RunOutcome::refused(format!(
             "the verification is incomplete: {reason} — the host recovery repository was not searched, so this \
              hit may not be the only copy"
-        );
-        return CmdResult::Code(EXIT_REFUSED);
+        ));
     }
     if !unverified.is_empty() {
         // 解不出编号的条目可能是同一个编号的第二份：命中一条不足以支撑"只有一条"
-        eprintln!(
+        return RunOutcome::refused(format!(
             "{} other record(s) could not be verified — one of them may be a second copy of id {}",
             unverified.len(),
             a.id
-        );
-        return CmdResult::Code(EXIT_REFUSED);
+        ));
     }
     match row.state() {
-        Some(State::Valid | State::Unfinished) => CmdResult::Code(EXIT_OK),
-        Some(State::Unreadable) => CmdResult::Code(EXIT_REFUSED),
-        Some(_) => CmdResult::Code(EXIT_REFUSED),
-        None => CmdResult::Code(EXIT_REFUSED),
+        Some(State::Valid | State::Unfinished) => RunOutcome::Checked,
+        other => RunOutcome::refused(format!(
+            "the record with id {} is not usable (state: {other:?})",
+            a.id
+        )),
     }
 }
 
@@ -681,7 +677,7 @@ fn image_container(root: &Path, image_root: Option<&Path>) -> Option<PathBuf> {
 }
 
 #[cfg(target_os = "linux")]
-pub(crate) fn cmd_records_scan(a: &RecordsScanRequest) -> CmdResult {
+pub(crate) fn cmd_records_scan(a: &RecordsScanRequest) -> RunOutcome {
     let root = Path::new(&a.root);
     let state_root = crate::dev::host_state_root();
     let host_recovery = state_root.join(crate::dev::RECOVERY_DIR);
@@ -753,8 +749,10 @@ pub(crate) fn cmd_records_scan(a: &RecordsScanRequest) -> CmdResult {
                 json_escape(&root.to_string_lossy()),
                 json_escape(&reason)
             );
-            eprintln!("the scan is incomplete: {reason} — no partial result was returned");
-            return CmdResult::Code(EXIT_REFUSED);
+            return RunOutcome::refused(format!(
+                "the scan of {} is incomplete: {reason} — no partial result was returned",
+                root.display()
+            ));
         }
     }
     println!(
@@ -763,7 +761,7 @@ pub(crate) fn cmd_records_scan(a: &RecordsScanRequest) -> CmdResult {
         json_escape(&root.to_string_lossy()),
         rows_json(&rows)
     );
-    CmdResult::Code(EXIT_OK)
+    RunOutcome::Checked
 }
 
 #[cfg(target_os = "linux")]

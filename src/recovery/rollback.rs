@@ -445,7 +445,7 @@ pub(crate) fn execute_rollback(
     src: &mut WriteSource,
     provisional: ProvisionalRecord,
     permit: RollbackPermit,
-) -> u8 {
+) -> RunOutcome {
     let RollbackPermit { scope, .. } = permit;
     let path = provisional.path;
     let record = provisional.record;
@@ -487,7 +487,7 @@ pub(crate) fn execute_rollback(
     if outcome.is_complete() {
         println!("{taking}");
     }
-    outcome.exit_code()
+    outcome
 }
 
 /// 补充凭据的核对。记录侧没有可比的值（不可得 / 本次生成）时不参与比较——它不提供额外
@@ -521,22 +521,59 @@ pub(crate) fn verify_disk_identity(
 /// 正向写入落盘的是写后内容的一段前缀加上其后的原文，回滚写入落盘的是原文的一段前缀
 /// 加上其后的写后内容。只按"等于 after 或 pre"判定会把两个方向的撕裂都报成外来改动，
 /// 正向的让首次回滚失去出路，反向的让中断后的重试永久被拒
+/// 一次写入在一个区间里停在哪儿。一次写入只会在**一个**位置停下，这条事实是准入判据：
+/// 两处以上的断点不可能由一次写产生，出现即说明有第三方在同一窗口里动过盘
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Tear {
+    /// 断点在本次读出的字节里的偏移：`[..cut]` 是已落盘的形态，`[cut..]` 仍是另一种形态
+    pub(crate) cut: usize,
+    /// `true` = 正向写（写后内容的前缀 + 原文的后缀）；`false` = 回滚写（原文的前缀 +
+    /// 写后内容的后缀）。方向本身都合法：两个方向的写都是本工具发出的
+    pub(crate) forward: bool,
+}
+
+/// 一条区间相对记录的可判形态。`None` 表示外来改动——它不是本工具任何一次写能留下的样子
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RecordedWrite {
+    /// 已是写后内容（未回滚）
+    After,
+    /// 已是原文（这条不用回放，重放幂等）
+    Original,
+    /// 本工具的写在区间内停下
+    Torn(Tear),
+}
+
+impl RecordedWrite {
+    /// 把一条当前字节归类。前缀与后缀**分别**计算：活前缀的后缀与活后缀的前缀在此不冲突，
+    /// 因为一次写只会留下一个切点（`p + s ≥ len` 即存在这个切点）
+    pub(crate) fn of(now: &[u8], after: &[u8], pre: &[u8]) -> Option<Self> {
+        if now == after {
+            return Some(Self::After);
+        }
+        if now == pre {
+            return Some(Self::Original);
+        }
+        if now.len() != after.len() || now.len() != pre.len() {
+            return None;
+        }
+        let prefix = |front: &[u8], of: &[u8]| of.iter().zip(front).take_while(|(a, b)| a == b).count();
+        let suffix = |back: &[u8], of: &[u8]| of.iter().zip(back).rev().take_while(|(a, b)| a == b).count();
+        let fits = |p: usize, s: usize, len: usize| p + s >= len;
+        let forward = (prefix(after, now), suffix(pre, now));
+        let backward = (prefix(pre, now), suffix(after, now));
+        // 两种拼法都可能成立（例如两边前缀都与读出字节相同）；取切点更靠后的那种，
+        // 它声明"已落盘的部分更长"，是更保守的读法
+        match (fits(forward.0, forward.1, now.len()), fits(backward.0, backward.1, now.len())) {
+            (true, true) if backward.0 > forward.0 => Some(Self::Torn(Tear { cut: backward.0, forward: false })),
+            (true, _) => Some(Self::Torn(Tear { cut: forward.0, forward: true })),
+            (false, true) => Some(Self::Torn(Tear { cut: backward.0, forward: false })),
+            (false, false) => None,
+        }
+    }
+}
+
 pub(crate) fn matches_recorded_write(now: &[u8], after: &[u8], pre: &[u8]) -> bool {
-    if now == after || now == pre {
-        return true;
-    }
-    if now.len() != after.len() || now.len() != pre.len() {
-        return false;
-    }
-    // 存在切点 k 使 now 由 front 的前缀与 back 的后缀拼成：前缀相符长度 p 与后缀
-    // 相符长度 s 能覆盖整个区间（p + s ≥ len）即存在这样的 k
-    let partially_written_between = |front: &[u8], back: &[u8]| {
-        let p = now.iter().zip(front).take_while(|(a, b)| a == b).count();
-        let s = now.iter().zip(back).rev().take_while(|(a, b)| a == b).count();
-        p + s >= now.len()
-    };
-    // 正向写入的撕裂（after 前缀 + pre 后缀）与回滚写入的撕裂（pre 前缀 + after 后缀）
-    partially_written_between(after, pre) || partially_written_between(pre, after)
+    RecordedWrite::of(now, after, pre).is_some()
 }
 
 /// `copy` 记录回滚前的源复核。源与副本同属一个目标，源身份由记录目标的身份承担——
@@ -634,6 +671,30 @@ pub(crate) fn validate_record_ranges(
     }
 }
 
+/// 断点登记：一次写在一个位置停下，两处断点即外来介入。
+/// 记的是**绝对偏移**，因为同一处断点会被重叠区间投影到多条条目上——那不是两次中断
+#[derive(Default)]
+struct TearLog {
+    first: Option<u64>,
+    /// 见过第二处断点之后一直是冲突态：已经不可能再回到"一次写"这个结论
+    conflict: bool,
+}
+
+impl TearLog {
+    /// `Err(第一处)` 表示本次登记的不是唯一断点
+    fn record(&mut self, at: u64) -> Result<(), u64> {
+        let Some(first) = self.first else {
+            self.first = Some(at);
+            return Ok(());
+        };
+        if self.conflict || first != at {
+            self.conflict = true;
+            return Err(first);
+        }
+        Ok(())
+    }
+}
+
 /// 写盘前的盘面核对。逐条逆序，用虚拟盘面叠加已核对过的后写区间，判定每条当前字节是
 /// 记录写后的样子、还是已经回到原文（上一轮回放的进度）。
 /// 返回 `Ok(true)` 表示整份记录覆盖的区间都已是原文（没有需要写回的字节）。
@@ -651,16 +712,34 @@ pub(crate) fn verify_record_plan(
     }
     let mut patches: Vec<(u64, Vec<u8>)> = Vec::new();
     let mut complete = true;
+    // 一次写只在一个位置停下（见 [`TearLog`]）
+    let mut tears = TearLog::default();
     for entry in restore.iter().rev() {
         let offset = entry.byte_offset().expect("ranges were validated before verification");
         let now = read_virtual(src, offset, entry.original.len(), &patches)?;
         if now != entry.original {
-            if !matches_recorded_write(&now, &entry.after, &entry.original) {
+            let torn = match RecordedWrite::of(&now, &entry.after, &entry.original) {
+                Some(RecordedWrite::After) => None,
+                Some(RecordedWrite::Torn(tear)) => Some(tear),
+                // now != original 已判过，这里只可能是 after 或撕裂
+                Some(RecordedWrite::Original) => unreachable!("now differs from the recorded original"),
+                None => {
+                    return Err(RunOutcome::refused(format!(
+                        "the target no longer holds the recorded bytes at offset {offset} — the disk changed outside \
+                         this tool after that write, or an interrupted write by this tool left a partially \
+                         written value; \
+                         replaying would overwrite the foreign edit; {FOREIGN_EDIT_HINT}; {ROLLBACK_STUCK_REMEDY}"
+                    )));
+                }
+            };
+            if let Some(tear) = torn
+                && let Err(first) = tears.record(offset + tear.cut as u64)
+            {
                 return Err(RunOutcome::refused(format!(
-                    "the target no longer holds the recorded bytes at offset {offset} — the disk changed outside \
-                     this tool after that write, or an interrupted write by this tool left a partially \
-                     written value; \
-                     replaying would overwrite the foreign edit; {FOREIGN_EDIT_HINT}; {ROLLBACK_STUCK_REMEDY}"
+                    "an interrupted write shows up at offset {first} and again at offset {} — one write \
+                     stops in one place, so two separate break points mean the disk changed outside this tool; \
+                     replaying would overwrite a foreign edit; {FOREIGN_EDIT_HINT}; {ROLLBACK_STUCK_REMEDY}",
+                    offset + tear.cut as u64
                 )));
             }
             complete = false;
@@ -873,6 +952,46 @@ mod tests {
             !matches_recorded_write(&[0x22u8; 8], &after, &pre),
             "a foreign edit is not a partially written value"
         );
+    }
+
+    /// 断点只有一处：同址重复登记是重叠区间的投影，异址就是外来介入
+    #[test]
+    fn one_write_stops_in_one_place() {
+        use super::TearLog;
+        let mut tears = TearLog::default();
+        assert!(tears.record(16).is_ok());
+        assert!(
+            tears.record(16).is_ok(),
+            "the same break point seen through overlapping ranges is still one cut"
+        );
+        assert_eq!(tears.record(24), Err(16), "a second break point cannot come from one write");
+        assert_eq!(
+            tears.record(16),
+            Err(16),
+            "once two break points are seen the log stays in conflict"
+        );
+    }
+
+    /// 撕裂要指出切点与方向：正向写与回滚写各自都可能在一个位置停下
+    #[test]
+    fn a_torn_range_names_its_cut_and_direction() {
+        use super::{RecordedWrite, Tear};
+        let after = [0xAAu8; 8];
+        let pre = [0x11u8; 8];
+        let mut forward = pre;
+        forward[..5].copy_from_slice(&after[..5]);
+        assert_eq!(
+            RecordedWrite::of(&forward, &after, &pre),
+            Some(RecordedWrite::Torn(Tear { cut: 5, forward: true }))
+        );
+        let mut backward = after;
+        backward[..5].copy_from_slice(&pre[..5]);
+        assert_eq!(
+            RecordedWrite::of(&backward, &after, &pre),
+            Some(RecordedWrite::Torn(Tear { cut: 5, forward: false }))
+        );
+        assert_eq!(RecordedWrite::of(&after, &after, &pre), Some(RecordedWrite::After));
+        assert_eq!(RecordedWrite::of(&pre, &after, &pre), Some(RecordedWrite::Original));
     }
 
     fn preimage_with_sector(first_lba: u64, sector_size: u64, bytes: Vec<u8>) -> RestoreEntry {

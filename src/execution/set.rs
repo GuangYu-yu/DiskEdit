@@ -11,6 +11,7 @@ use crate::outcome::RunOutcome;
 use crate::planner::{FsSetAttr, UuidValue};
 
 /// 一个 FsSet 步骤：字段与 [`crate::planner::PlanStep::FsSet`] 一一对应。
+#[derive(Clone)]
 pub(crate) struct FsSet {
     pub part: u32,
     pub attr: FsSetAttr,
