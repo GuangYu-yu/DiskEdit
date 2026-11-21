@@ -156,6 +156,11 @@ const SKIP_SITES: &[SkipSite] = &[
         file: "recovery/journal.rs",
         why: "只跳过无法命名的目录项（src/recovery/journal.rs:102），记录状态判定与许可签发不经过这里（src/recovery/cleanup.rs:113）",
     },
+    SkipSite {
+        id: "S2-26",
+        file: "cmd/inspect.rs",
+        why: "只读命令的场景重建：打不开目标时退回探测证据，身份核对降级为 unavailable（src/cmd/inspect.rs:129），不产生任何写",
+    },
 ];
 
 fn is_test_file(path: &str) -> bool {

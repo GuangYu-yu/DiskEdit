@@ -250,6 +250,7 @@ fn inspect_record_entry(spot: &crate::dev::RecordSpot, a: &InspectRequest) -> Cm
 /// loop 映射补齐；开不出来就用探测结果（判据更弱，但不会把可读的记录误判成别人的）
 #[cfg(target_os = "linux")]
 fn scene_without_name(probe: &crate::platform::TargetProbe, path: &Path) -> SceneIdentity {
+    // audit-allow: S2-26 只读命令：打不开目标时退回探测证据，身份核对降级为 unavailable（src/cmd/inspect.rs:129），不产生任何写
     let Ok(src) = open_target(path, None) else {
         return SceneIdentity::from_probe(probe);
     };
