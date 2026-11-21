@@ -12,7 +12,7 @@
 //! 不可失败路径入口。块设备走 `resolve_block(path)`，解析不出设备拓扑即失败——块设备
 //! 身份拒绝任何退化路径。
 //!
-//! 身份一律是**盘级**的：分区号属于操作与校验，不进落盘键。loop 设备的身份是
+//! 身份一律是**盘级**的：锁与并发互斥按整盘，分区号只把各分区的恢复记录分开。loop 设备的身份是
 //! backing 文件的 realpath（Linux；`/dev/loop0:2` 与直接以该镜像为目标的操作由此
 //! 收敛到同一序列化域），非 loop 块设备仍是 sysfs 拓扑键。镜像身份以**已打开句柄**
 //! 的路径为准（Linux：`/proc/self/fd`，块设备则按 fd 的 rdev 反查 sysfs），不从命令行
@@ -23,6 +23,7 @@ mod source;
 mod topology;
 mod identity;
 mod host_repo;
+mod claims;
 mod discovery;
 mod occupancy;
 mod target;
@@ -35,6 +36,7 @@ pub(crate) use source::*;
 pub(crate) use topology::*;
 pub(crate) use identity::*;
 pub(crate) use host_repo::*;
+pub(crate) use claims::*;
 pub(crate) use discovery::*;
 pub(crate) use occupancy::*;
 pub(crate) use target::*;

@@ -332,22 +332,35 @@ pub(crate) fn cmd_info_with(a: &InfoRequest, tail: Option<&str>) -> u8 {
     // 假设不成立（guest LBA 经容器内分配表间接映射），本工具无法处理，改用 qemu-nbd 映射为
     // 块设备（modprobe nbd max_part / qemu-nbd -c/-d，见 qemu 官方工具文档）
     match container_format(&src) {
-        ContainerProbe::Detected(fmt) => eprintln!(
-            "note: {} looks like a {fmt} container image (not raw); map it to a block device first:\n  \
-             modprobe nbd max_part=8\n  \
-             qemu-nbd -c /dev/nbd0 {}\n  \
-             diskedit info /dev/nbd0   # then operate on /dev/nbd0 as usual\n  \
-             qemu-nbd -d /dev/nbd0     # when done; writes go back to {} live",
-            a.target, a.target, a.target
-        ),
+        ContainerProbe::Detected(fmt) => eprintln!("{}", container_hint(fmt, &a.target)),
         ContainerProbe::NotContainer => {}
-        ContainerProbe::Unreadable(why) => eprintln!(
-            "note: could not check whether {} is a container image ({why}); if it is one, \
-             map it to a block device with qemu-nbd before operating on it",
-            a.target
-        ),
+        ContainerProbe::Unreadable(why) => eprintln!("{}", unreadable_hint(&why, &a.target)),
     }
     EXIT_OK
+}
+
+/// 容器镜像的引导：guest 偏移经容器的分配表间接映射，分区字节不在文件里的 guest 偏移上。
+/// 读走只读映射，改走先转 raw，两条路径都不把容器文件本身当成可写的原始盘
+fn container_hint(fmt: &str, target: &str) -> String {
+    format!(
+        "note: {target} looks like a {fmt} container image (not raw): guest offsets in it are mapped \
+         through an allocation table, so partition bytes are not at their guest offsets in the file. \
+         To read it, map it read-only:\n  \
+         modprobe nbd max_part=8\n  \
+         qemu-nbd --read-only -c /dev/nbd0 {target}\n  \
+         diskedit info /dev/nbd0\n  \
+         qemu-nbd -d /dev/nbd0\n  \
+         To change the layout, convert it to raw first (qemu-img convert -O raw {target} raw.img) and \
+         operate on raw.img"
+    )
+}
+
+fn unreadable_hint(why: &str, target: &str) -> String {
+    format!(
+        "note: could not check whether {target} is a container image ({why}); a container maps guest \
+         offsets through an allocation table, so if it is one, convert it to raw \
+         (qemu-img convert -O raw {target} raw.img) and operate on raw.img"
+    )
 }
 
 /// 容器探测的三种结局。"读不出来"不能并进"不是容器"：后者是检查过且没有命中，
@@ -473,5 +486,20 @@ mod tests {
             container_format(&src_from("vhd_both", &both)),
             ContainerProbe::Detected("VHD")
         ));
+    }
+
+    /// 提示不得把容器文件说成可直接写：读只走只读映射，改只按转出的 raw 进行
+    #[test]
+    fn container_hints_do_not_promise_in_place_writes() {
+        let detected = container_hint("qcow2", "/tmp/disk.qcow2");
+        let unreadable = unreadable_hint("boom", "/tmp/disk.qcow2");
+        for text in [&detected, &unreadable] {
+            for misleading in ["as usual", "writes go back", "before operating on it"] {
+                assert!(!text.contains(misleading), "{misleading:?} must not appear in {text}");
+            }
+        }
+        assert!(detected.contains("qemu-nbd --read-only"), "{detected}");
+        assert!(detected.contains("qemu-img convert -O raw"), "{detected}");
+        assert!(unreadable.contains("qemu-img convert -O raw"), "{unreadable}");
     }
 }

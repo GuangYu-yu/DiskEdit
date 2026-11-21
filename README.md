@@ -24,6 +24,8 @@ English | [简体中文](README.zh-CN.md)
 
 `resize` needs root when it has a filesystem step; `--no-fs` declares that growing the filesystem is not a postcondition, which keeps an image grow rootless. A target whose filesystem cannot be identified (`unknown`) is refused unless `--no-fs` is given — "not recognised" does not mean "nothing there".
 
+Block-device writes without root are possible through a QEMU microvm — see [docs/en/interop.md](docs/en/interop.md#rootless-use-inside-a-qemu-microvm).
+
 External tools are looked up on `PATH` only when a step needs them: `sfdisk`, `partx`, `losetup`, `mount`, and the per-filesystem tools (`mke2fs`/`e2fsck`/`resize2fs`, `mkfs.xfs`/`xfs_growfs`, …). The full table is in [docs/en/internals.md](docs/en/internals.md#external-tools).
 
 Write commands modify the target itself, so a wrong change can leave the original contents unrecoverable. Editing in place needs no room for a second image and leaves no extra file to clean up; back the target up first when its contents matter.

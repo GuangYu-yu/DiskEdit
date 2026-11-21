@@ -217,7 +217,7 @@ pub(crate) fn fnv1a64_matches_the_reference_vectors() {
     assert_eq!(fnv1a64(b"foobar"), 0x8594_4171_f739_67e8);
 }
 
-/// 非 loop 块设备的身份是**盘级**的：恢复现场与锁按 disk_key 落点。
+/// 非 loop 块设备的锁是**盘级**的：锁按 disk_key 落点，不带分区号。
 /// 断言用 host_state_root() 自身拼期望值——测试不改环境变量，进程内并行测试共享环境
 #[test]
 pub(crate) fn block_identity_keys_on_the_whole_disk() {
@@ -237,6 +237,7 @@ pub(crate) fn block_lock_converges_to_the_carrier_while_records_stay_per_target(
             disk_key.to_string(),
             crate::dev::LockKey::new(disk_key.to_string()),
             Some(key_for_test("sdb-carrier", partition)),
+            partition,
         )
     };
     let part1 = with_record("/dev/sdb1", Some(1), "sdb-1234");
@@ -285,6 +286,7 @@ pub(crate) fn the_same_identity_key_is_the_same_resume_slot() {
             "sdb-1234".to_string(),
             crate::dev::LockKey::new("sdb-1234".to_string()),
             Some(key_for_test(target, partition)),
+            partition,
         )
         .record_path()
         .map(Path::to_path_buf)
@@ -293,6 +295,62 @@ pub(crate) fn the_same_identity_key_is_the_same_resume_slot() {
     assert_ne!(slot("/dev/sdb1", "carrier", Some(1)), slot("/dev/sdb2", "carrier", Some(2)));
     assert_ne!(slot("/dev/sdb1", "carrier", Some(1)), slot("/dev/sdb", "carrier", None));
     assert_ne!(slot("/dev/sdb1", "carrier1", Some(2)), slot("/dev/sdb1", "carrier", Some(12)));
+}
+
+/// 声明身份派生的键：记录按（名字, 分区号）分开，锁与占据声明按整盘名字收敛。
+/// 声明名带 `declared:` 前缀，与设备声明的原文不共用命名空间
+#[test]
+pub(crate) fn a_declared_identity_derives_its_own_records_and_one_lock_per_name() {
+    let carrier = |node: &str, partition| {
+        TargetIdentity::from_block_parts(
+            Path::new(node),
+            "nbd-carrier".to_string(),
+            crate::dev::LockKey::new(node.to_string()),
+            None,
+            partition,
+        )
+    };
+    let declare = |id: TargetIdentity, name: &str| {
+        id.with_declared(&DeclaredIdentity::parse(name).unwrap()).expect("an unidentified block device accepts a name")
+    };
+    let whole = declare(carrier("/dev/nbd0", None), "export-a");
+    let part3 = declare(carrier("/dev/nbd0p3", Some(3)), "export-a");
+    assert_eq!(
+        whole.record_path().map(Path::to_path_buf),
+        Some(key_for_test("declared:export-a", None).record_path())
+    );
+    assert_eq!(
+        part3.record_path().map(Path::to_path_buf),
+        Some(key_for_test("declared:export-a", Some(3)).record_path())
+    );
+    // 锁落在整盘名字上：分区节点与整盘节点共用一把
+    let expected = host_state_root().join(format!("{}{LOCK_SUFFIX}", key_token("declared:export-a")));
+    assert_eq!(whole.lock_path(), expected.as_path());
+    assert_eq!(part3.lock_path(), expected.as_path());
+    // 占据声明按载体落点：与名字无关，两个名字看到的是同一份声明
+    let other_name = declare(carrier("/dev/nbd0", None), "export-b");
+    assert_eq!(whole.claim_path(), other_name.claim_path());
+    assert_ne!(whole.claim_path(), declare(carrier("/dev/nbd1", None), "export-a").claim_path());
+    // 自由文本名字不冒充同名设备声明
+    assert_ne!(
+        whole.record_path().map(Path::to_path_buf),
+        Some(key_for_test("naa.5000c500aabbccdd", None).record_path())
+    );
+}
+
+/// 声明只补身份不可得的块设备：镜像与自带 WWN/serial 的设备按自己的身份定位
+#[test]
+pub(crate) fn only_an_unidentified_block_device_accepts_a_name() {
+    let name = DeclaredIdentity::parse("export-a").unwrap();
+    assert!(TargetIdentity::resolve_image(Path::new("/tmp/x.img")).with_declared(&name).is_err());
+    let identified = TargetIdentity::from_block_parts(
+        Path::new("/dev/sdb"),
+        "naa.5000c500aabbccdd".to_string(),
+        crate::dev::LockKey::new("naa.5000c500aabbccdd".to_string()),
+        Some(key_for_test("naa.5000c500aabbccdd", None)),
+        None,
+    );
+    assert!(identified.with_declared(&name).is_err());
 }
 
 /// loop 设备的身份绑定 backing **对象**：重新打开 backing、用已打开句柄解析名字，现场落
@@ -491,7 +549,7 @@ pub(crate) fn disk_guid_roundtrip_and_unknown_kind() {
 /// dm / md / 没有身份属性都没有键
 #[cfg(target_os = "linux")]
 #[test]
-pub(crate) fn block_identity_is_wwn_eui_or_serial_and_rejects_dm_md() {
+pub(crate) fn block_identity_is_wwn_eui_or_serial_and_has_no_key_for_dm_md() {
     let dir = test_dir("hostrepo");
     let root = dir.path().to_path_buf();
     let make = |name: &str| {
@@ -506,38 +564,40 @@ pub(crate) fn block_identity_is_wwn_eui_or_serial_and_rejects_dm_md() {
     let sda1 = make("sda/sda1");
     std::fs::write(sda1.join("partition"), "1\n").unwrap();
     std::fs::write(sda1.join("size"), "1024\n").unwrap();
-    let whole = block_stable_identity(&sda).unwrap();
-    assert_eq!(whole, key_for_test("naa.5000c500aabbccdd", None));
-    let partition = block_stable_identity(&sda1).unwrap();
-    assert_eq!(partition, key_for_test("naa.5000c500aabbccdd", Some(1)));
+    let (whole, whole_partition) = block_record_context(&sda).unwrap();
+    assert_eq!(whole, Some(key_for_test("naa.5000c500aabbccdd", None)));
+    assert_eq!(whole_partition, None);
+    let (partition, partition_number) = block_record_context(&sda1).unwrap();
+    assert_eq!(partition, Some(key_for_test("naa.5000c500aabbccdd", Some(1))));
+    assert_eq!(partition_number, Some(1));
     assert_ne!(whole, partition);
 
     let nvme = make("nvme0n1");
     std::fs::write(nvme.join("wwid"), "eui.0025385812345678\n").unwrap();
     assert_eq!(
-        block_stable_identity(&nvme).unwrap(),
-        key_for_test("eui.0025385812345678", None)
+        block_record_context(&nvme).unwrap().0,
+        Some(key_for_test("eui.0025385812345678", None))
     );
 
     let serial_only = make("sdb");
     std::fs::create_dir_all(serial_only.join("device")).unwrap();
     std::fs::write(serial_only.join("device/serial"), "SN123456\n").unwrap();
     assert_eq!(
-        block_stable_identity(&serial_only).unwrap(),
-        key_for_test("SN123456", None)
+        block_record_context(&serial_only).unwrap().0,
+        Some(key_for_test("SN123456", None))
     );
 
     let dm = make("dm-0/dm");
     std::fs::write(dm.join("uuid"), "mpath-1234\n").unwrap();
-    assert!(block_stable_identity(&root.join("dm-0")).is_err());
+    assert!(block_record_context(&root.join("dm-0")).unwrap().0.is_none());
 
     let md = make("md0/md");
     std::fs::write(md.join("uuid"), "abc:def\n").unwrap();
-    assert!(block_stable_identity(&root.join("md0")).is_err());
+    assert!(block_record_context(&root.join("md0")).unwrap().0.is_none());
 
     let bare = make("sdc");
     std::fs::write(bare.join("size"), "2048\n").unwrap();
-    assert!(block_stable_identity(&bare).is_err());
+    assert!(block_record_context(&bare).unwrap().0.is_none());
 }
 
 /// 只读位读不出不是"可写"：准入必须在记录落盘之前按 I/O 故障（4）拒绝，

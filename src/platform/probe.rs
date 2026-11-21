@@ -73,6 +73,10 @@ pub(crate) fn probe_of(src: &FileSource) -> Result<TargetProbe, PlatformError> {
             src.sector_size
         ))
     })?;
+    if let Some(declared) = src.identity.declared() {
+        let id = TargetId::from_material(IdentityMaterial::declared(declared.as_str().to_string()));
+        return Ok(TargetProbe::new(id, src.size));
+    }
     if src.is_block {
         let (major, minor, device_id) = src.block_identity.as_ref().ok_or_else(|| {
             PlatformError::Unidentifiable(

@@ -331,9 +331,10 @@ const ACTION_CONTINUE: u8 = 1;
 const ACTION_ROLLBACK: u8 = 2;
 const ACTION_INSPECT_ONLY: u8 = 3;
 
-/// 目标身份材料的码值。两类之后各跟自己的字段
+/// 目标身份材料的码值。每类之后各跟自己的字段
 const MATERIAL_BLOCK: u8 = 1;
 const MATERIAL_IMAGE: u8 = 2;
+const MATERIAL_DECLARED: u8 = 3;
 
 /// 恢复动作
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1390,6 +1391,18 @@ fn read_opt<T>(
     }
 }
 
+/// 带长度前缀的 UTF-8 串：长度是 `u32` 小端。设备 ID 与声明身份共用这一种编码
+fn write_string(out: &mut Vec<u8>, value: &str) {
+    let bytes = value.as_bytes();
+    out.extend(u32::try_from(bytes.len()).expect("a recorded string fits in 32 bits").to_le_bytes());
+    out.extend_from_slice(bytes);
+}
+
+fn read_string(c: &mut Cursor<'_>) -> Option<String> {
+    let len = c.u32()? as usize;
+    String::from_utf8(c.take(len)?.to_vec()).ok()
+}
+
 fn write_scene(scene: &SceneIdentity, out: &mut Vec<u8>) {
     out.push(scene.proof().tag());
     write_opt(out, scene.mapping(), |out, m| {
@@ -1401,13 +1414,7 @@ fn write_scene(scene: &SceneIdentity, out: &mut Vec<u8>) {
             out.push(MATERIAL_BLOCK);
             out.extend(major.to_le_bytes());
             out.extend(minor.to_le_bytes());
-            write_opt(out, device_id.as_deref(), |out, value| {
-                let bytes = value.as_bytes();
-                out.extend(
-                    u32::try_from(bytes.len()).expect("device ID fits in 32 bits").to_le_bytes(),
-                );
-                out.extend_from_slice(bytes);
-            });
+            write_opt(out, device_id.as_deref(), write_string);
         }
         IdentityMaterial::Image { volume_serial, file_id } => {
             out.push(MATERIAL_IMAGE);
@@ -1415,6 +1422,10 @@ fn write_scene(scene: &SceneIdentity, out: &mut Vec<u8>) {
                 out.extend(value.to_le_bytes());
             });
             out.extend_from_slice(file_id);
+        }
+        IdentityMaterial::Declared { identity } => {
+            out.push(MATERIAL_DECLARED);
+            write_string(out, identity);
         }
     }
     write_opt(out, scene.size(), |out, size| {
@@ -1432,10 +1443,7 @@ fn read_scene(c: &mut Cursor<'_>) -> Option<SceneIdentity> {
         MATERIAL_BLOCK => {
             let major = c.u32()?;
             let minor = c.u32()?;
-            let device_id = read_opt(c, |c| {
-                let len = c.u32()? as usize;
-                String::from_utf8(c.take(len)?.to_vec()).ok()
-            })?;
+            let device_id = read_opt(c, read_string)?;
             TargetId::from_material(IdentityMaterial::block(major, minor, device_id.as_deref()))
         }
         MATERIAL_IMAGE => {
@@ -1443,6 +1451,7 @@ fn read_scene(c: &mut Cursor<'_>) -> Option<SceneIdentity> {
             let file_id = c.array::<16>()?;
             TargetId::from_material(IdentityMaterial::image(volume_serial, Some(file_id)).ok()?)
         }
+        MATERIAL_DECLARED => TargetId::from_material(IdentityMaterial::declared(read_string(c)?)),
         _ => return None,
     };
     let size = read_opt(c, |c| c.u64())?;
@@ -2176,7 +2185,8 @@ mod tag_bytes {
             (SceneProof::DeviceId, 1),
             (SceneProof::FileId, 2),
             (SceneProof::Unavailable, 3),
+            (SceneProof::Declared, 4),
         ];
-        pinned(&table, SceneProof::tag, SceneProof::from_tag, &[0, 4, 255]);
+        pinned(&table, SceneProof::tag, SceneProof::from_tag, &[0, 5, 255]);
     }
 }

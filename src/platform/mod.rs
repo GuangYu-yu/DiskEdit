@@ -65,6 +65,9 @@ pub(crate) enum IdentityMaterial {
     /// 复制或移动会得到新的文件 ID ⇒ 新目标；卷序列号是可被工具重写的画像字段，
     /// 不参与恒等比较
     Image { volume_serial: Option<u32>, file_id: [u8; 16] },
+    /// 目标自己给不出身份时由用户用 `--identity` 声明的名字。名字不是设备事实：
+    /// 它只保证"同一次续跑用的是同一个名字"，因此只用于身份不可得的块设备
+    Declared { identity: String },
 }
 
 /// 设备身份值的命名空间。身份是（命名空间, 值）：值自带前缀时前缀就是命名空间，
@@ -205,6 +208,7 @@ impl PartialEq for IdentityMaterial {
                 _ => false,
             },
             (Self::Image { file_id: a, .. }, Self::Image { file_id: b, .. }) => a == b,
+            (Self::Declared { identity: a }, Self::Declared { identity: b }) => a == b,
             _ => false,
         }
     }
@@ -227,6 +231,12 @@ impl IdentityMaterial {
             minor,
             device_id: raw_device_id.and_then(device_id_is_fact),
         }
+    }
+
+    /// 声明材料：用户给出的名字原样参与比较。不合并任何设备侧读数——这个名字
+    /// 存在的全部理由就是目标读不出可核对的设备声明
+    pub(crate) fn declared(identity: String) -> Self {
+        Self::Declared { identity }
     }
 
     /// 镜像材料：文件 ID 缺项时拒绝识别——卷序列号不参与比较，单独它不足以构成身份

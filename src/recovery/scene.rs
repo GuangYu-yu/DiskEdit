@@ -23,6 +23,8 @@ tagged_enum! {
         FileId = 2,
         /// 没有可跨现场比较的身份证据
         Unavailable = 3,
+        /// 用户用 `--identity` 声明的名字
+        Declared = 4,
     }
 }
 
@@ -79,6 +81,7 @@ impl SceneIdentity {
             IdentityMaterial::Image { file_id, .. } => (SceneProof::FileId, Some(*file_id)),
             IdentityMaterial::Block { device_id: Some(_), .. } => (SceneProof::DeviceId, None),
             IdentityMaterial::Block { device_id: None, .. } => (SceneProof::Unavailable, None),
+            IdentityMaterial::Declared { .. } => (SceneProof::Declared, None),
         };
         Self::with_details(id, None, proof, None, file_id)
     }
@@ -188,6 +191,7 @@ fn proof_of_source(proof: LiveProof) -> SceneProof {
     match proof {
         LiveProof::DeviceId => SceneProof::DeviceId,
         LiveProof::Inode => SceneProof::FileId,
+        LiveProof::Declared => SceneProof::Declared,
         LiveProof::Unavailable => SceneProof::Unavailable,
     }
 }
@@ -209,6 +213,7 @@ fn describe_material(material: &IdentityMaterial) -> String {
             None => format!("block {major}:{minor} (no stable device ID)"),
         },
         IdentityMaterial::Image { file_id, .. } => format!("image file-id {}", crate::support::hex_lower(file_id)),
+        IdentityMaterial::Declared { identity } => format!("declared identity {identity}"),
     }
 }
 

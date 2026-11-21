@@ -39,6 +39,10 @@ CI 会重新生成，并在工作树不一致时失败。不要手工编辑。
 | `new` | 允许 | 允许 | 阻止：WriteTable（不支持） | 阻止：WriteTable（不支持） | 阻止：WriteTable（不支持） | 阻止：WriteTable（不支持） |
 | `add` | 允许 | 允许 | 阻止：WriteTable（不支持） | 阻止：WriteTable（不支持） | 阻止：WriteTable（不支持） | 阻止：WriteTable（不支持） |
 
+`admitted` 表示能力闸门对该形态没有报告缺口。不带 WWN、EUI 或可重复序列号的
+块设备（nbd、rbd、dm、md）在此仍记为允许，但它的写命令需要 `--identity NAME`，
+续跑或释放该记录也需要同一个名字。
+
 ## 运行时闸门
 
 闸门只评估本次构建能打开的目标形态。本表列出它在 Linux 上评估的 2 种目标形态（`HostPlatform::openable_media`）：linux / 块设备, linux / 镜像。其他形态不进入闸门的决策——`cmd::capability_gap` 只遍历可打开集合。

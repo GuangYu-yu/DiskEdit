@@ -93,6 +93,7 @@ README 只保留"它是什么、怎么用"。本文件记录行为约束：能�
 | `--grow-lv` | — | `resize` 在 LVM PV 上继续进入 LV 及其文件系统 |
 | `--grow` | — | `info --grow` 在同一份 JSON 报告中增加 `preview` 键：`:N` 的搬移预览（不写入任何内容，也不产生可复用的计划） |
 | `--grow-to-end` | — | `resize --grow-to-end` 把末端固定在可用空间的末尾 |
+| `--identity` | NAME | 为不带 WWN、EUI 或可重复序列号的目标（`nbd`、`rbd`、`dm`、`md`）命名；所有写命令与 `recover --release` 接受。续跑该记录与释放它都需要同一个名字；镜像与自带身份的设备拒绝该选项（退出码 2） |
 | `--keep-partuuid` | — | `copy` 复用源 PARTUUID |
 | `--label` | S | `mkfs` 写入的文件系统标签（省略时为空标签；不虚构默认值） |
 | `--lv` | NAME | 配合 `--grow-lv` 要扩容的 LV（省略时为该 PV 上唯一的 LV） |
