@@ -22,18 +22,19 @@ pub(crate) const MBR_ENTRY_AREA: std::ops::Range<usize> = MBR_ENTRY_BASE..MBR_SI
 
 /// 第 `part` 条主分区（1 起）在 LBA0 内的起点
 fn mbr_entry_start(part: u32) -> usize {
+    // audit-allow: index-in-bounds
     mbr_entry_range(part as usize - 1).start
 }
 
 /// LBA0 的 `55 AA` 签名是否在位
 pub(crate) fn has_mbr_signature(lba0: &[u8]) -> bool {
-    lba0.get(MBR_SIGNATURE_OFFSET..MBR_SIGNATURE_OFFSET + 2)
+    lba0.get(MBR_SIGNATURE_OFFSET..MBR_SIGNATURE_OFFSET + 2) // audit-allow: index-in-bounds
         .is_some_and(|b| u16::from_le_bytes([b[0], b[1]]) == MBR_SIGNATURE)
 }
 
 /// 把 `55 AA` 签名落进 LBA0
 pub(crate) fn write_mbr_signature(lba0: &mut [u8]) {
-    lba0[MBR_SIGNATURE_OFFSET..MBR_SIGNATURE_OFFSET + 2].copy_from_slice(&MBR_SIGNATURE.to_le_bytes());
+    lba0[MBR_SIGNATURE_OFFSET..MBR_SIGNATURE_OFFSET + 2].copy_from_slice(&MBR_SIGNATURE.to_le_bytes()); // audit-allow: index-in-bounds
 }
 
 /// 保护 MBR 分区类型：OS Type 0xEE = GPT Protective（UEFI §5.2.2–§5.2.3 Tables 5.2–5.4）
@@ -119,7 +120,9 @@ pub(crate) fn mbr_signature_present(src: &FileSource) -> io::Result<bool> {
 
 /// 原样解析（不做可操作性判定）。`None` = 这不是一张 MBR 盘
 pub fn parse_mbr_raw(src: &FileSource) -> io::Result<Option<RawMbr>> {
-    let ss = src.sector_size as usize;
+    let ss = crate::support::host_usize(src.sector_size).map_err(|_| {
+        io::Error::new(io::ErrorKind::InvalidData, "the sector size exceeds the host address space")
+    })?;
     if src.size < ss as u64 {
         return Ok(None);
     }
@@ -165,16 +168,16 @@ pub fn parse_mbr_raw(src: &FileSource) -> io::Result<Option<RawMbr>> {
         // mkfs/check/set 随之从盘首擦写、毁掉 LBA0 的分区表。写入侧以 start ≥ 1 为前提，
         // 读取侧必须同判，否则这条非法条目会一路送进破坏性操作
         if start == 0 {
-            damage.push(MbrDamage::StartZero { num: i + 1 });
+            damage.push(MbrDamage::StartZero { num: i + 1 }); // audit-allow: index-in-bounds
         }
         // 越盘条目 = 表已损坏：写入侧有 end >= total 检查，读取侧若放行，info 会照实
         // 打印一个不存在的分区、resize 还会拿这个伪尺寸当基线算目标。这里记为损伤并
         // **保留条目**：可操作性由 `parse_mbr` 拒绝，可观察性由 raw 侧提供
-        if start as u64 + size as u64 > total_sectors {
-            damage.push(MbrDamage::PastEnd { num: i + 1, start, size, total_sectors });
+        if start as u64 + size as u64 > total_sectors { // audit-allow: len-bounded
+            damage.push(MbrDamage::PastEnd { num: i + 1, start, size, total_sectors }); // audit-allow: index-in-bounds
         }
         parts.push(MbrPartition {
-            num: i + 1,
+            num: i + 1, // audit-allow: index-in-bounds
             os_type,
             start_lba: start,
             size_lba: size,
@@ -185,10 +188,10 @@ pub fn parse_mbr_raw(src: &FileSource) -> io::Result<Option<RawMbr>> {
     // 右侧空闲的推导与单条目改写都以"条目互不重叠"为前提，损坏表上放行会把扩容砸到
     // 邻区之上。记为损伤并保留条目：info 照实观察，写路径由 parse_mbr 拒绝
     for i in 0..parts.len() {
-        for j in (i + 1)..parts.len() {
+        for j in (i + 1)..parts.len() { // audit-allow: index-in-bounds
             let (a, b) = (&parts[i], &parts[j]);
-            let ae = a.start_lba as u64 + a.size_lba as u64 - 1;
-            let be = b.start_lba as u64 + b.size_lba as u64 - 1;
+            let ae = a.start_lba as u64 + a.size_lba as u64 - 1; // audit-allow: len-bounded
+            let be = b.start_lba as u64 + b.size_lba as u64 - 1; // audit-allow: len-bounded
             if !(ae < b.start_lba as u64 || be < a.start_lba as u64) {
                 damage.push(MbrDamage::Overlap {
                     num_a: a.num,
@@ -271,7 +274,10 @@ pub(crate) fn primary_slot(part: u32) -> Result<(), RunOutcome> {
 /// MBR"为前提，签名不符即拒绝
 pub(crate) fn read_mbr_lba0(src: &FileSource) -> Result<Vec<u8>, RunOutcome> {
     require_writable_mbr(src)?;
-    let mut lba0 = vec![0u8; src.sector_size as usize];
+    let ss_len = crate::support::host_usize(src.sector_size).map_err(|_| {
+        RunOutcome::refused("the sector size exceeds the host address space")
+    })?;
+    let mut lba0 = vec![0u8; ss_len];
     src.read_at(0, &mut lba0).map_err(RunOutcome::unreadable_io)?;
     if !has_mbr_signature(&lba0) {
         return Err(RunOutcome::no_mutation("no MBR signature on target"));
@@ -283,11 +289,11 @@ pub(crate) fn read_mbr_lba0(src: &FileSource) -> Result<Vec<u8>, RunOutcome> {
 /// 类型字节非零而长度为 0 的条目解析侧看不见，写进去等于凭空替换一条操作者
 /// 无从核对的条目
 fn require_live_entry(part: u32, lba0: &[u8], off: usize) -> Result<u8, RunOutcome> {
-    let cur = lba0[off + 4];
+    let cur = lba0[off + 4]; // audit-allow: index-in-bounds
     if cur == 0 {
         return Err(RunOutcome::refused(format!("partition {part} is empty")));
     }
-    if rd_u32(&lba0[off..off + 16], 12) == 0 {
+    if rd_u32(&lba0[off..off + 16], 12) == 0 { // audit-allow: index-in-bounds
         return Err(RunOutcome::refused(format!(
             "partition {part} has a type byte but zero sectors — the entry is invisible to the parser; `delete` clears it"
         )));
@@ -310,7 +316,10 @@ pub fn resize_mdos_entry(src: &mut WriteSource, part: u32, new_size_lba: u32) ->
         return Err(RunOutcome::no_mutation("image too small for MBR"));
     }
     let stamp = table_stamp(src, ss)?;
-    let mut lba0 = vec![0u8; ss as usize];
+    let ss_len = crate::support::host_usize(ss).map_err(|_| {
+        RunOutcome::refused("the sector size exceeds the host address space")
+    })?;
+    let mut lba0 = vec![0u8; ss_len];
     // 写盘前的读取：失败即盘未被改动，归 Infra（不能带"盘可能已改变"的提示）
     src.read_at(0, &mut lba0).map_err(RunOutcome::unreadable_io)?;
     let new = resize_mdos_entry_image(&lba0, part, new_size_lba, ss, src.size / ss)?;
@@ -332,10 +341,9 @@ pub(crate) fn resize_mdos_entry_image(
     if !(1..=4).contains(&part) {
         return Err(RunOutcome::refused(format!("invalid MBR partition number {part} (1..4)")));
     }
-    let ss = sector_size as usize;
-    if lba0.len() != ss {
+    if lba0.len() as u64 != sector_size {
         return Err(RunOutcome::internal(format!(
-            "the MBR snapshot is {} byte(s) for a {ss}-byte sector",
+            "the MBR snapshot is {} byte(s) for a {sector_size}-byte sector",
             lba0.len()
         )));
     }
@@ -343,30 +351,30 @@ pub(crate) fn resize_mdos_entry_image(
         return Err(RunOutcome::no_mutation("no MBR signature on target"));
     }
     let off = mbr_entry_start(part);
-    if lba0[off + 4] == 0 {
+    if lba0[off + 4] == 0 { // audit-allow: index-in-bounds
         return Err(RunOutcome::refused(format!("MBR partition {part} is empty")));
     }
     // 0xEE 是 GPT 保护记录（UEFI 2.10 §5.2.3）：其 SizeInLBA 属保护布局的一部分，
     // 改写它和 delete_mdos_entry 清零该槽位一样，会毁掉识别与恢复 GPT 的依据
-    if lba0[off + 4] == PROT_MBR_TYPE {
+    if lba0[off + 4] == PROT_MBR_TYPE { // audit-allow: index-in-bounds
         return Err(RunOutcome::refused(format!(
             "partition {part} is the GPT protective record (0xEE) — rewriting its size destroys the record used to recognise and recover the GPT"
         )));
     }
-    if MDOS_CONTAINER_TYPES.contains(&lba0[off + 4]) {
+    if MDOS_CONTAINER_TYPES.contains(&lba0[off + 4]) { // audit-allow: index-in-bounds
         return Err(RunOutcome::refused("extended partition container cannot be resized"));
     }
     // 隐形条目（type 字节非零但 size 为零，解析侧按空槽处理）：与 set_mdos_hidden /
     // set_mdos_type 同判据同文案——写入等于凭空造出一条解析器看不见的分区，
     // 操作者无从核对结果
-    if rd_u32(&lba0[off..off + 16], 12) == 0 {
+    if rd_u32(&lba0[off..off + 16], 12) == 0 { // audit-allow: index-in-bounds
         return Err(RunOutcome::refused(format!(
             "partition {part} has a type byte but zero sectors — the entry is invisible to the parser; `delete` clears it"
         )));
     }
     // 条目自守（与 add_mdos_entry 同严格）：start + 新长度须落在盘内，
     // 越界尺寸挡在写 LBA0 之前
-    let start = u32::from_le_bytes(lba0[off + 8..off + 12].try_into().unwrap()) as u64;
+    let start = u32::from_le_bytes(lba0[off + 8..off + 12].try_into().unwrap()) as u64; // audit-allow: index-in-bounds
     if start == 0 {
         return Err(RunOutcome::refused(format!("MBR partition {part} has invalid start LBA 0")));
     }
@@ -376,7 +384,7 @@ pub(crate) fn resize_mdos_entry_image(
             "new size 0 would erase partition {part} — use `delete` to remove the entry"
         )));
     }
-    if start + new_size_lba as u64 > total_sectors {
+    if start + new_size_lba as u64 > total_sectors { // audit-allow: len-bounded
         return Err(RunOutcome::refused(format!(
             "new size {new_size_lba} sectors from LBA {start} exceeds the disk ({total_sectors} sectors)"
         )));
@@ -384,18 +392,18 @@ pub(crate) fn resize_mdos_entry_image(
     // StartLBA 与 SizeInLBA 各占 u32；末端 LBA = start + size − 1 也必须落在 u32 内，
     // 与 add_mdos_entry 同一不变量。只查 size 会放行"起点已很大"的条目：尺寸字段本身
     // 装得下，末端却越出 32 位，读回时末端按 u32 计算即回绕，分区落点与写下的尺寸对不上
-    if start + new_size_lba as u64 - 1 > MBR_LBA_MAX {
+    if start + new_size_lba as u64 - 1 > MBR_LBA_MAX { // audit-allow: len-bounded
         return Err(RunOutcome::refused(format!(
             "new range {start}..{} exceeds the MBR 32-bit LBA limit (last expressible LBA {})",
-            start + new_size_lba as u64 - 1,
+            start + new_size_lba as u64 - 1, // audit-allow: len-bounded
             MBR_LBA_MAX
         )));
     }
     // 邻接自守（与 add_mdos_entry 同判据）：其余槽位任一与新区间重叠即拒绝，
     // 重叠必须在此挡在写 LBA0 之前
-    let new_end = start + new_size_lba as u64 - 1;
+    let new_end = start + new_size_lba as u64 - 1; // audit-allow: len-bounded
     for i in 0..4u32 {
-        if i + 1 == part {
+        if i + 1 == part { // audit-allow: index-in-bounds
             continue;
         }
         let o = &lba0[mbr_entry_range(i as usize)];
@@ -403,16 +411,16 @@ pub(crate) fn resize_mdos_entry_image(
             continue;
         }
         let os = u32::from_le_bytes(o[8..12].try_into().unwrap()) as u64;
-        let oe = os + rd_u32(o, 12) as u64 - 1;
+        let oe = os + rd_u32(o, 12) as u64 - 1; // audit-allow: len-bounded
         if !(new_end < os || oe < start) {
             return Err(RunOutcome::refused(format!(
                 "new range [{start}, {new_end}] overlaps partition {} [{os}, {oe}]",
-                i + 1
+                i + 1 // audit-allow: index-in-bounds
             )));
         }
     }
     let mut out = lba0.to_vec();
-    out[off + 12..off + 16].copy_from_slice(&new_size_lba.to_le_bytes());
+    out[off + 12..off + 16].copy_from_slice(&new_size_lba.to_le_bytes()); // audit-allow: index-in-bounds
     Ok(out)
 }
 
@@ -460,7 +468,10 @@ pub fn add_mdos_entry_to(
     require_writable_mbr(src)?;
     let total = src.size / ss;
     let stamp = table_stamp(src, src.sector_size)?;
-    let mut lba0 = vec![0u8; ss as usize];
+    let ss_len = crate::support::host_usize(ss).map_err(|_| {
+        RunOutcome::refused("the sector size exceeds the host address space")
+    })?;
+    let mut lba0 = vec![0u8; ss_len];
     src.read_at(0, &mut lba0).map_err(RunOutcome::unreadable_io)?;
     let (lba0, num) = add_mdos_entry_image(&lba0, slot, start, end, os_type, total)?;
     write_lba0_verified(src, stamp, &lba0)?;
@@ -504,7 +515,7 @@ pub(crate) fn add_mdos_entry_image(
         return Err(RunOutcome::refused("image has a single sector — no usable range"));
     }
     if start < 1 || end >= total || start > end {
-        return Err(RunOutcome::refused(format!("range {start}..{end} outside disk (1..{})", total - 1)));
+        return Err(RunOutcome::refused(format!("range {start}..{end} outside disk (1..{})", total - 1))); // audit-allow: display-only
     }
     // MBR 的 StartLBA/SizeInLBA 都是 u32 字段：超出即无法表示，必须在此拒绝。
     // 少了这一条，下面 `start as u32` / `(end - start + 1) as u32` 会静默截断——
@@ -524,7 +535,7 @@ pub(crate) fn add_mdos_entry_image(
         if rec[4] != 0 && rd_u32(rec, 12) == 0 {
             return Err(RunOutcome::refused(format!(
                 "partition {} has a type byte but zero sectors — the entry is invisible to the parser; `delete` clears it",
-                i + 1
+                i + 1 // audit-allow: index-in-bounds
             )));
         }
         if rec[4] == 0 {
@@ -534,7 +545,7 @@ pub(crate) fn add_mdos_entry_image(
             continue; // 仍需检查后续已用槽位的重叠
         }
         let s = rd_u32(rec, 8) as u64;
-        let e = s + rd_u32(rec, 12) as u64 - 1;
+        let e = s + rd_u32(rec, 12) as u64 - 1; // audit-allow: len-bounded
         if !(end < s || start > e) {
             return Err(RunOutcome::refused("range overlaps an existing partition"));
         }
@@ -542,14 +553,14 @@ pub(crate) fn add_mdos_entry_image(
     let i = match slot {
         Some(n) => {
             // 显式槽位与 GPT 侧 add_entry_at_slot 同判据：越界、已占用都在写盘前拒绝
-            let i = usize::try_from(n)
+            let i = crate::support::host_usize(n)
                 .ok()
                 .and_then(|n| n.checked_sub(1))
                 .filter(|i| *i < 4)
                 .ok_or_else(|| {
                     RunOutcome::refused(format!("partition number {n} is outside 1..=4 for an MBR table"))
                 })?;
-            if lba0[mbr_entry_range(i).start + 4] != 0 {
+            if lba0[mbr_entry_range(i).start + 4] != 0 { // audit-allow: index-in-bounds
                 return Err(RunOutcome::refused(format!(
                     "partition {n} is already in use — pick an empty primary slot"
                 )));
@@ -566,8 +577,8 @@ pub(crate) fn add_mdos_entry_image(
     rec[4] = os_type;
     rec[5..8].copy_from_slice(&[0xFE, 0xFF, 0xFF]);
     rec[8..12].copy_from_slice(&(start as u32).to_le_bytes());
-    rec[12..16].copy_from_slice(&((end - start + 1) as u32).to_le_bytes());
-    Ok((lba0, (i + 1) as u32))
+    rec[12..16].copy_from_slice(&((end - start + 1) as u32).to_le_bytes()); // audit-allow: index-in-bounds
+    Ok((lba0, (i + 1) as u32)) // audit-allow: index-in-bounds
 }
 
 /// 在现有 LBA0 上清掉第 `part` 条主分区记录，返回整扇区的新内容。纯计算：不读盘、
@@ -576,7 +587,7 @@ pub(crate) fn cleared_mbr_image(lba0: &[u8], part: u32) -> Result<Vec<u8>, RunOu
     primary_slot(part)?;
     let off = mbr_entry_start(part);
     let mut out = lba0.to_vec();
-    let rec = &mut out[off..off + 16];
+    let rec = &mut out[off..off + 16]; // audit-allow: index-in-bounds
     let cur = rec[4];
     if cur == 0 {
         return Err(RunOutcome::refused(format!("partition {part} is already empty")));
@@ -667,7 +678,7 @@ pub(crate) fn set_mdos_hidden_image(
         )));
     }
     let mut out = lba0.to_vec();
-    out[off + 4] = next;
+    out[off + 4] = next; // audit-allow: index-in-bounds
     Ok(Some(out))
 }
 
@@ -731,6 +742,6 @@ pub(crate) fn set_mdos_type_image(lba0: &[u8], part: u32, t: u8) -> Result<Vec<u
         )));
     }
     let mut out = lba0.to_vec();
-    out[off + 4] = t;
+    out[off + 4] = t; // audit-allow: index-in-bounds
     Ok(out)
 }

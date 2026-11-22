@@ -3,7 +3,7 @@
 use std::io;
 
 /// 凭据段长度：1 字节种类 + 16 字节 GUID
-pub(crate) const CREDENTIAL_LEN: usize = 1 + 16;
+pub(crate) const CREDENTIAL_LEN: usize = 1 + 16; // audit-allow: const-expr
 
 /// 目标盘面自述的 Disk GUID（GPT 头 56..72，UEFI 2.10 §5.3.2 Table 5.5）的三态。
 ///

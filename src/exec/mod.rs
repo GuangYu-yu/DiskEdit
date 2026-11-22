@@ -1,8 +1,9 @@
 //! 载体步骤：计划步骤的唯一写入路径与放置分派。
 //!
-//! 四类步骤 [`CarrierStep`]（表提交、数据搬移、文件系统、探测）在 Native 放置下由
+//! 三类步骤 [`CarrierStep`]（表提交、数据搬移、文件系统）在 Native 放置下由
 //! [`native`] 映射到 [`crate::execution`] 的单步实现。计划驱动 [`run_plan`] 预扫描一次，
-//! 把每个写入点经 [`run_step`] 交出；命令层不直接调工具或写表。
+//! 把每个写入点经 [`run_step`] 交出；命令层不直接调工具或写表。探测不走步骤载体：
+//! 它是会话里独立的一帧，由 [`native::execute_probe`](native::execute_probe) 直接交出报告。
 //!
 //! 每类步骤的结果只有两值 [`StepOutcome`]：`Applied` 与 `Unknown`。**"没做成"不是
 //! 第三值**——它以 `Err(RunOutcome)` 走与宿主进程内失败完全相同的那条通道，于是
@@ -65,13 +66,12 @@ pub(crate) enum FsStep<'a> {
     HiddenSectors(&'a Relocate),
 }
 
-/// 四类载体步骤。`Probe` 只读，用于复核写入后的盘面事实
+/// 三类载体步骤。探测不在其中：它是独立会话帧，结论不经步骤结果包装
 #[derive(Clone, Copy)]
 pub(crate) enum CarrierStep<'a> {
     TableCommit(&'a TableStep),
     Transfer(TransferStep<'a>),
     Fs(FsStep<'a>),
-    Probe(ProbeRequest),
 }
 
 /// 探测请求：分区号与它当前的落点（LBA 与扇区数）
@@ -123,10 +123,6 @@ impl StepRun {
         let outcome =
             if pending.is_empty() { StepOutcome::Applied } else { StepOutcome::Unknown };
         Self { outcome, pending, probe: None, unfinished: None }
-    }
-
-    pub(crate) fn probed(report: ProbeReport) -> Self {
-        Self { probe: Some(report), ..Self::applied() }
     }
 
     /// 写没写不知道：传输中断、外部工具没有回答、落点未证实
@@ -297,8 +293,8 @@ pub(crate) fn run_plan(
             PreparedStep::Transfer { reloc, commit, swap } => {
                 // 记录里已提交的条目整组跳过：数据与表都不碰
                 if committed_entries > 0 {
-                    committed_entries -= 1;
-                    entry += 1;
+                    committed_entries -= 1; // audit-allow: counter
+                    entry += 1; // audit-allow: counter
                     continue;
                 }
                 if swap.is_none() {
@@ -395,7 +391,7 @@ pub(crate) fn run_plan(
                     ));
                 }
                 crate::movepart::fault_after_entry_commit(entry as usize);
-                entry += 1;
+                entry += 1; // audit-allow: counter
             }
             PreparedStep::Copy { copy, commit } => {
                 let chunk = chunk_bytes

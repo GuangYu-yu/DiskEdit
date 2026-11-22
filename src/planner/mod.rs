@@ -40,7 +40,7 @@ pub(crate) struct PartitionFact {
 
 impl PartitionFact {
     pub(crate) fn sectors(&self) -> u64 {
-        self.last_lba - self.first_lba + 1
+        self.last_lba - self.first_lba + 1 // audit-allow: len-bounded
     }
 }
 
@@ -232,14 +232,14 @@ fn move_plan_shape(steps: &[PlanStep]) -> bool {
         return false;
     }
     steps.iter().enumerate().all(|(i, step)| match step {
-        PlanStep::Relocate { .. } => matches!(steps.get(i + 1), Some(PlanStep::WriteTable(_))),
+        PlanStep::Relocate { .. } => matches!(steps.get(i + 1), Some(PlanStep::WriteTable(_))), // audit-allow: index-in-bounds
         // 换区重建紧跟"提交该条目的表步骤"，而那张表由同一条目的换区搬移带出来：
         // 前两步必须是本分区、is_swap 为真的 Relocate 与 WriteTable
         PlanStep::RebuildSwap { part, .. } => {
             i >= 2
-                && matches!(steps.get(i - 1), Some(PlanStep::WriteTable(_)))
+                && matches!(steps.get(i - 1), Some(PlanStep::WriteTable(_))) // audit-allow: index-in-bounds
                 && matches!(
-                    steps.get(i - 2),
+                    steps.get(i - 2), // audit-allow: index-in-bounds
                     Some(PlanStep::Relocate { part: p, is_swap: true, .. }) if p == part
                 )
         }

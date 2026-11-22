@@ -182,7 +182,7 @@ pub(crate) fn online_size<'a>(
             let want = match target {
                 Some(t) => {
                     crate::support::note_sector_truncation("resizing to", t, ss);
-                    t / ss * ss
+                    t / ss * ss // audit-allow: len-bounded
                 }
                 None => cur,
             };

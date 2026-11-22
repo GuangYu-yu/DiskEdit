@@ -3,8 +3,6 @@
 //! 执行不属于这里：`resize` 的表与 FS 步骤都经 `assembly` 装配、`execution` 执行，
 //! 本模块只保留四面共用的判定与那两个纯函数。
 
-use super::*;
-
 /// 缩容状态。三态而非 bool：`Unverified` 表示缩容命令已返回、落点却
 /// 回读不出来——搬数据按它继续就可能切进未缩的元数据，故不能与 `Verified` 等同
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -16,18 +14,21 @@ pub(crate) enum FsShrink {
 }
 
 impl FsShrink {
-    fn from_code(code: u8) -> io::Result<Self> {
+    /// 相位码与三态的唯一对照表：记录解码侧的值域闸与消费侧回落共用这一份；
+    /// 码值不在三态之内时返回 `None`，由调用方按各自语义归责
+    pub(crate) fn from_code(code: u8) -> Option<Self> {
         match code {
-            0 => Ok(Self::NotShrunk),
-            1 => Ok(Self::Verified),
-            2 => Ok(Self::Unverified),
-            _ => Err(io::Error::new(io::ErrorKind::InvalidData, "implausible resize record shrink state")),
+            0 => Some(Self::NotShrunk),
+            1 => Some(Self::Verified),
+            2 => Some(Self::Unverified),
+            _ => None,
         }
     }
 }
 
 /// `progress.fs_phase` 与 [`FsShrink`] 同序：记录里只放这一个字节。
-/// 认不出的码按"未缩"处理——重做一次缩容是幂等的，误当作已缩才会切进未缩的元数据
+/// 认不出的码按"未缩"处理——重做一次缩容是幂等的，误当作已缩才会切进未缩的元数据。
+/// 未知码在记录解码侧已被值域闸拦下，这里的回落只服务记录自产路径之外的保守兜底
 pub(crate) fn fs_shrunk_from_phase(code: u8) -> FsShrink {
     FsShrink::from_code(code).unwrap_or(FsShrink::NotShrunk)
 }

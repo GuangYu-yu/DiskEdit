@@ -219,19 +219,29 @@ fn record_table_preimages(
         for w in &table.writes {
             // 记录粒度是扇区，与 `write_at` 取法一致：写入区间按扇区边界扩展后记整段原文。
             // 签名段只有 8 字节且可能不在扇区起点上，按字节区间登记会丢掉段内偏移
-            let first = w.region.offset - w.region.offset % sector_size;
-            let end = (w.region.offset + w.region.len)
+            let first = w.region.offset - w.region.offset % sector_size; // audit-allow: len-bounded
+            // offset+len 走 checked：上游闸已保证区间落在盘内，这里只是不让逼近 u64 上限
+            // 的畸形区间把末端回绕成伪小值
+            let region_end = w.region.offset.checked_add(w.region.len).ok_or_else(|| {
+                RunOutcome::refused("the pre-image region end overflows the address space")
+            })?;
+            let end = region_end
                 .div_ceil(sector_size)
                 .saturating_mul(sector_size)
                 .min(src.size);
             if end <= first {
                 continue;
             }
-            let mut original = vec![0u8; (end - first) as usize];
+            let original_len = crate::support::host_usize(end - first).map_err(|_| {
+                RunOutcome::refused("the pre-image range exceeds the host address space")
+            })?;
+            let mut original = vec![0u8; original_len];
             src.read_at(first, &mut original).map_err(RunOutcome::unreadable_io)?;
             let mut after = original.clone();
-            let at = (w.region.offset - first) as usize;
-            after[at..at + w.bytes.len()].copy_from_slice(&w.bytes);
+            let at = crate::support::host_usize(w.region.offset - first).map_err(|_| {
+                RunOutcome::refused("the pre-image offset exceeds the host address space")
+            })?;
+            after[at..at + w.bytes.len()].copy_from_slice(&w.bytes); // audit-allow: index-in-bounds
             spans.push((first / sector_size, original, after));
         }
     }
@@ -489,13 +499,13 @@ fn fixed_start(
 fn first_fit(used: &[(u64, u64)], lo: u64, hi: u64, unit: u64, len: u64) -> (u64, u64) {
     let Some(start) = aligned_gaps(used, lo, hi, unit)
         .into_iter()
-        .find_map(|(s, e)| (e - s + 1 >= len).then_some(s))
+        .find_map(|(s, e)| (e - s + 1 >= len).then_some(s)) // audit-allow: len-bounded
     else {
         bail_fail(RunOutcome::refused(format!(
             "no aligned free gap fits {len} sectors — the target has no room for this partition"
         )));
     };
-    (start, start + len - 1)
+    (start, start + len - 1) // audit-allow: len-bounded
 }
 
 /// msdos 的 delete 编排：目标可写判定 → 一次读定快照（LBA0/LBA1/末 LBA）→ 用快照里的
@@ -868,21 +878,22 @@ pub(crate) fn prepare_resize_part(
     let old_start = e.starting_lba;
     let old_end = e.ending_lba;
     for (i, other) in g.entries().iter().enumerate() {
+        // audit-allow: index-in-bounds
         if i + 1 == part as usize || crate::table::is_unused(other) {
             continue;
         }
         if !(new_end < other.starting_lba || new_start > other.ending_lba) {
             return Err(RunOutcome::refused(format!(
                 "new range overlaps partition #{}",
-                i + 1
+                i + 1 // audit-allow: index-in-bounds
             )));
         }
     }
     // 搬移几何对所有路径同一份：起点变更时按 min(旧长, 新长) 拷贝，块布局与 move 的
     // 求解器同源
     let moved = old_start.abs_diff(new_start);
-    let old_len = old_end - old_start + 1;
-    let copy_len = old_len.min(new_end - new_start + 1);
+    let old_len = old_end - old_start + 1; // audit-allow: len-bounded
+    let copy_len = old_len.min(new_end - new_start + 1); // audit-allow: len-bounded
     // 自重叠判据取**本次实际读取的扇区数**（= copy_len）：缩容时旧区尾部不读，
     // 位移落在 copy_len..old_len 之间时目的区与读区并不相交，按旧长判会把块白白缩小
     let total_chunks = crate::planner::chunk::move_chunk_layout(copy_len, ss, moved, copy_len, chunk_len)
@@ -1022,7 +1033,7 @@ pub(crate) fn prepare_resize_part(
                 src,
                 part,
                 old_start.checked_mul(ss).ok_or_else(byte_overflow)?,
-                (old_end - old_start + 1)
+                (old_end - old_start + 1) // audit-allow: len-bounded
                     .checked_mul(ss)
                     .ok_or_else(byte_overflow)?,
             )?;
@@ -1032,7 +1043,7 @@ pub(crate) fn prepare_resize_part(
                 part,
                 movepart::is_swap_guid(&e.partition_type_guid),
                 old_start,
-                old_end - old_start + 1,
+                old_end - old_start + 1, // audit-allow: len-bounded
                 ss,
                 &growable,
             )?;
@@ -1141,6 +1152,7 @@ fn execute_resize_part(
     if committed_old.is_none() {
         movepart::fault_rs_before_commit();
         let mut g2 = p.g.clone();
+        // audit-allow: index-in-bounds
         g2.update_entry((part - 1) as usize, |te| {
             te.starting_lba = new_start;
             te.ending_lba = new_end;
@@ -1368,7 +1380,7 @@ pub(crate) fn cmd_move(a: &MoveRequest) -> crate::outcome::RunOutcome {
         .unwrap_or_else(|f| bail_fail(f));
     let e = crate::gpt_policy::live_entry(&g, part).unwrap_or_else(|f| bail_fail(f));
     // 平移保持长度（本工具语义）：new_end = new_start + 原长度 - 1
-    let len = e.ending_lba - e.starting_lba + 1;
+    let len = e.ending_lba - e.starting_lba + 1; // audit-allow: len-bounded
     let start = match selector {
         StartSelector::PinnedToEnd => g
             .last_usable_lba()
@@ -1715,7 +1727,7 @@ pub(crate) fn cmd_copy(a: &CopyRequest) -> crate::outcome::RunOutcome {
     let start = match selector {
         StartSelector::PinnedToEnd => {
             let e = crate::gpt_policy::live_entry(&g, part).unwrap_or_else(|f| bail_fail(f));
-            let len = e.ending_lba - e.starting_lba + 1;
+            let len = e.ending_lba - e.starting_lba + 1; // audit-allow: len-bounded
             g.last_usable_lba()
                 .checked_sub(len - 1)
                 .unwrap_or_else(|| bail_fail(RunOutcome::refused("partition longer than usable range".to_string())))
@@ -1734,7 +1746,7 @@ pub(crate) fn cmd_copy(a: &CopyRequest) -> crate::outcome::RunOutcome {
     let source = crate::recovery::CopySource {
         partition: part,
         first_lba: entry.starting_lba,
-        sectors: entry.ending_lba - entry.starting_lba + 1,
+        sectors: entry.ending_lba - entry.starting_lba + 1, // audit-allow: len-bounded
         sector_size: g.sector_size(),
         digest: range_sha256(
             &src,

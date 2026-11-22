@@ -7,6 +7,7 @@ pub(crate) mod records;
 pub(crate) mod recover;
 pub(crate) mod release;
 pub(crate) mod resize;
+pub(crate) mod scene;
 
 use crate::cli::{CommandDef, Confirmation, Request, TargetMode};
 use crate::domain::MediaKind;

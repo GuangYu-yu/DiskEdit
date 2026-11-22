@@ -71,7 +71,7 @@ pub fn grow_target_at(src: &FileSource, part: u32, base: u64, len: u64) -> Resul
             FsError::invalid(format!("overlay offset {rel} added to partition start {base} overflows"))
         })?;
         // 区间量本就是字节，直接传给按字节区间识别的 identify
-        let inner = crate::fsid::identify(src, inner_base, len - rel).map_err(FsError::from)?;
+        let inner = crate::fsid::identify(src, inner_base, len - rel).map_err(FsError::from)?; // audit-allow: len-bounded
         let ContentKind::Filesystem(inner_kind @ (FsKind::Ext | FsKind::F2fs)) = inner else {
             // 内层没认出签名有三种成因，`identify` 的 `Unknown` 区分不了：① 尾部区域不足一个魔数
             // （`overlay_offset_at` 对 `len - rel` 没有下界保证）；② 是格式化过的格式但本工具
@@ -94,7 +94,7 @@ pub fn grow_target_at(src: &FileSource, part: u32, base: u64, len: u64) -> Resul
             require_unmounted(&node, crate::fsops::scope::ImageLoopPolicy::RefuseAny)?;
         }
         return Ok(Growable::Target(GrowTarget {
-            scope: DeviceScope::Range(base + rel, len - rel),
+            scope: DeviceScope::Range(base + rel, len - rel), // audit-allow: len-bounded
             fstype: ContentKind::Filesystem(inner_kind),
         }));
     }

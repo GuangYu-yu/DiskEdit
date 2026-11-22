@@ -52,7 +52,7 @@ pub(crate) fn preview_gpt(
         if end == last_usable {
             println!("partition {part} already reaches last_usable_lba {last_usable} — nothing to grow");
         } else if free > 0 {
-            println!("plan: grow partition {part} : LBA {start}..{end} → {start}..{}", end + free);
+            println!("plan: grow partition {part} : LBA {start}..{end} → {start}..{}", end + free); // audit-allow: display-only
         } else {
             if !a.allow_move {
                 bail_fail(RunOutcome::refused("not enough contiguous free space to the right — pass --allow-move to relocate the blocking partitions (plan will be printed; --yes confirms)".to_string()));
@@ -94,13 +94,13 @@ pub(crate) fn preview_gpt(
         return stop();
     }
 
-    let need = new_end - end;
+    let need = new_end - end; // audit-allow: len-bounded
     if need <= free_right_gpt(g, part) {
         let planned = prepare(src, g, repair, part, start, new_end, a);
         println!(
             "plan: grow partition {part} : LBA {start}..{end} → {start}..{new_end} \
              ({} bytes; {})",
-            lba_bytes(new_end - start + 1, ss),
+            lba_bytes(new_end - start + 1, ss), // audit-allow: len-bounded
             fs_action_label(planned.fs_action)
         );
         return stop();
@@ -218,9 +218,9 @@ pub(crate) fn preview_mbr(a: &ResizeRequest, src: &FileSource, pref: PartSelecto
         println!(
             "plan: grow partition {part} : LBA {}..{} → {}..{}",
             p.start_lba,
-            p.start_lba as u64 + u64::from(p.size_lba) - 1,
+            p.start_lba as u64 + u64::from(p.size_lba) - 1, // audit-allow: len-bounded
             p.start_lba,
-            p.start_lba as u64 + u64::from(p.size_lba) + free - 1
+            p.start_lba as u64 + u64::from(p.size_lba) + free - 1 // audit-allow: len-bounded
         );
         return stop();
     }
@@ -261,15 +261,15 @@ pub(crate) fn preview_mbr(a: &ResizeRequest, src: &FileSource, pref: PartSelecto
         println!(
             "plan: shrink partition {part} : LBA {}..{} → {}..{} ({} bytes; {})",
             p.start_lba,
-            p.start_lba as u64 + u64::from(p.size_lba) - 1,
+            p.start_lba as u64 + u64::from(p.size_lba) - 1, // audit-allow: len-bounded
             p.start_lba,
-            p.start_lba as u64 + new_lba - 1,
+            p.start_lba as u64 + new_lba - 1, // audit-allow: len-bounded
             lba_bytes(new_lba, ss),
             fs_action_label(movepart::FsAction::Shrink)
         );
         return stop();
     }
-    if new_lba > p.size_lba as u64 + free {
+    if new_lba > p.size_lba as u64 + free { // audit-allow: len-bounded
         bail_fail(RunOutcome::refused(
             "not enough contiguous free space to the right (MBR resize cannot relocate blocking partitions)".to_string(),
         ));
@@ -277,9 +277,9 @@ pub(crate) fn preview_mbr(a: &ResizeRequest, src: &FileSource, pref: PartSelecto
     println!(
         "plan: grow partition {part} : LBA {}..{} → {}..{}",
         p.start_lba,
-        p.start_lba as u64 + u64::from(p.size_lba) - 1,
+        p.start_lba as u64 + u64::from(p.size_lba) - 1, // audit-allow: len-bounded
         p.start_lba,
-        p.start_lba as u64 + new_lba - 1
+        p.start_lba as u64 + new_lba - 1 // audit-allow: len-bounded
     );
     stop()
 }

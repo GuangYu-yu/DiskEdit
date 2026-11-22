@@ -43,7 +43,7 @@ pub(crate) fn preflight(
     sector_size: u64,
 ) -> Result<(), RunOutcome> {
     let (base, len) = step.byte_range(sector_size).map_err(RunOutcome::internal)?;
-    if base > src.size || len > src.size - base {
+    if base > src.size || len > src.size - base { // audit-allow: len-bounded
         return Err(RunOutcome::internal(format!(
             "partition {}: the {len}-byte range at byte {base} is outside the target's {} bytes",
             step.part, src.size

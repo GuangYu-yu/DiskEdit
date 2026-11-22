@@ -29,18 +29,18 @@ pub(crate) fn decode_octal(s: &str) -> String {
     let mut i = 0;
     while i < b.len() {
         if b[i] == b'\\'
-            && i + 3 < b.len()
-            && b[i + 1..i + 4].iter().all(|c| (b'0'..=b'7').contains(c))
+            && i + 3 < b.len() // audit-allow: len-bounded
+            && b[i + 1..i + 4].iter().all(|c| (b'0'..=b'7').contains(c)) // audit-allow: index-in-bounds
         {
             // 先在 u32 上合成再收进 u8：八进制位值最大 7*64+7*8+7=511，全程 u8 会在
             // \777 这类畸形序列上回绕（debug panic / release 511→255），畸形
             // mountinfo 行不该有让解析进程退出的能力
-            let v = (b[i + 1] - b'0') as u32 * 64 + (b[i + 2] - b'0') as u32 * 8 + (b[i + 3] - b'0') as u32;
+            let v = (b[i + 1] - b'0') as u32 * 64 + (b[i + 2] - b'0') as u32 * 8 + (b[i + 3] - b'0') as u32; // audit-allow: index-in-bounds
             out.push(v as u8);
-            i += 4;
+            i += 4; // audit-allow: counter
         } else {
             out.push(b[i]);
-            i += 1;
+            i += 1; // audit-allow: counter
         }
     }
     String::from_utf8_lossy(&out).into_owned()
@@ -59,8 +59,8 @@ pub(crate) fn parse_mountinfo(line: &str) -> Option<MountEntry> {
     // optional fields 数量可变，不能按固定下标取尾部字段：以单独的 "-" 为分界
     let rest: Vec<&str> = it.collect();
     let sep = rest.iter().position(|&f| f == "-")?;
-    let fstype = rest.get(sep + 1)?;
-    let source = rest.get(sep + 2)?;
+    let fstype = rest.get(sep + 1)?; // audit-allow: index-in-bounds
+    let source = rest.get(sep + 2)?; // audit-allow: index-in-bounds
     let (maj, min) = dev.split_once(':')?;
     Some(MountEntry {
         dev_no: (maj.parse().ok()?, min.parse().ok()?),
@@ -420,6 +420,17 @@ struct LoopInfo64 {
     lo_encrypt_key: [u8; 32],
     lo_init: [u64; 2],
 }
+
+// 内核按整个结构体拷贝：少一个字段、错一个宽度，读回来的状态就来自别的偏移。
+// 断言放生产编译，测试里的同一组数字只有跑测试的构建才检查
+#[cfg(target_os = "linux")]
+const _: () = {
+    use core::mem::{offset_of, size_of};
+    assert!(size_of::<LoopInfo64>() == 232);
+    assert!(offset_of!(LoopInfo64, lo_device) == 0);
+    assert!(offset_of!(LoopInfo64, lo_inode) == 8);
+    assert!(offset_of!(LoopInfo64, lo_file_name) == 56);
+};
 
 /// include/uapi/linux/loop.h：LOOP_GET_STATUS64
 #[cfg(target_os = "linux")]
@@ -826,16 +837,6 @@ pub(crate) fn loop_occupancy_for(
 mod tests {
     #![allow(clippy::let_underscore_must_use)] // 清理临时镜像与 loop 有意忽略失败
     use super::*;
-
-    #[test]
-    fn loop_info64_matches_the_uapi_layout() {
-        // include/uapi/linux/loop.h：5 个 __u64、4 个 __u32、LO_NAME_SIZE(64) 两个、
-        // LO_KEY_SIZE(32)、lo_init[2]；总长 232（8 字节对齐）
-        assert_eq!(std::mem::size_of::<LoopInfo64>(), 232);
-        assert_eq!(std::mem::offset_of!(LoopInfo64, lo_device), 0);
-        assert_eq!(std::mem::offset_of!(LoopInfo64, lo_inode), 8);
-        assert_eq!(std::mem::offset_of!(LoopInfo64, lo_file_name), 56);
-    }
 
     /// 打不开节点不等于"没有绑定"：节点不存在只说明本进程确认不了，
     /// 必须上抛给调用方按 fail-closed 拒绝；EACCES 走 sysfs 回退，回退也失败同样上抛

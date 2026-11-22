@@ -33,7 +33,7 @@ pub(crate) fn relocation_copies(is_swap: bool, delta_lba: i64, len_lba: u64) -> 
 pub(crate) fn spans(first_lba: u64, len_lba: u64, chunk_lba: u64) -> impl Iterator<Item = ChunkSpan> {
     let count = if chunk_lba == 0 { 0 } else { len_lba.div_ceil(chunk_lba) };
     (0..count).map(move |i| {
-        let offset = i * chunk_lba;
+        let offset = i * chunk_lba; // audit-allow: len-bounded
         ChunkSpan { first_lba: first_lba.saturating_add(offset), len_lba: chunk_lba.min(len_lba - offset) }
     })
 }

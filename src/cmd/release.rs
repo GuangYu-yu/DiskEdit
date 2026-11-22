@@ -85,10 +85,10 @@ pub(crate) fn cmd_release(a: &RecoverRequest) -> RunOutcome {
     // loop 设备的记录落在 backing 旁，但写入时打开的是设备节点，身份也按节点取；
     // 比对必须按同一对象打开，否则记录会被判成"另一个目标"。节点形态判不出时不按
     // 镜像去开：镜像侧的落点不在这个目标的记录目录里，枚举会空跑成"没有记录"
-    let mut disk = match crate::dev::target_node_is_block(path) {
-        crate::domain::Fact::Known(true) => FileSource::open_read_only(path).ok(),
+    let opened: std::io::Result<FileSource> = match crate::dev::target_node_is_block(path) {
+        crate::domain::Fact::Known(true) => FileSource::open_read_only(path),
         crate::domain::Fact::Known(false) | crate::domain::Fact::Absent => {
-            FileSource::open_read_only_image(path, a.sector_size.map(|s| s.get())).ok()
+            FileSource::open_read_only_image(path, a.sector_size.map(|s| s.get()))
         }
         crate::domain::Fact::Undecidable(why) => bail_fail(RunOutcome::no_mutation(format!(
             "whether '{}' is a block device or an image cannot be determined ({why}), so its recovery \
@@ -97,18 +97,39 @@ pub(crate) fn cmd_release(a: &RecoverRequest) -> RunOutcome {
             a.target, a.target
         ))),
     };
+    let mut disk = open_opened(opened, path);
     // 归属比对读的是句柄的身份：声明名与前面解析出的身份一样要套到句柄上，
     // 否则身份不可得的目标会被判成"身份读不出"，一份记录也释放不了
-    if let Some(declared) = identity.declared() {
-        disk = disk.map(|mut src| {
-            src.identity = src
-                .identity
-                .with_declared(declared)
-                .unwrap_or_else(|e| bail_fail(RunOutcome::usage(e)));
-            src
-        });
+    if let Some(declared) = identity.declared()
+        // audit-allow: W-24
+        && let crate::domain::Fact::Known(src) = &mut disk
+    {
+        src.identity = src
+            .identity
+            .clone()
+            .with_declared(declared)
+            .unwrap_or_else(|e| bail_fail(RunOutcome::usage(e)));
     }
-    release_records(&a.target, &identity, disk.as_ref(), a.discard_replay)
+    let opened_scene: crate::domain::Fact<&FileSource> = match &disk {
+        crate::domain::Fact::Known(src) => crate::domain::Fact::Known(src),
+        crate::domain::Fact::Absent => crate::domain::Fact::Absent,
+        crate::domain::Fact::Undecidable(why) => crate::domain::Fact::Undecidable(why.clone()),
+    };
+    release_records(&a.target, &identity, &opened_scene, a.discard_replay)
+}
+
+/// 打开结论三态：`Known` 是读到句柄；`Absent` 是目标确认不存在（NotFound，现场文件可能
+/// 比目标活得久，清理语义仍可继续）；`Undecidable` 是权限、I/O 等其余打开失败——读不出，
+/// 不是目标不在，枚举为空时也不能据此报"没有未收尾作业"
+fn open_opened(
+    opened: std::io::Result<FileSource>,
+    path: &std::path::Path,
+) -> crate::domain::Fact<FileSource> {
+    match opened {
+        Ok(src) => crate::domain::Fact::Known(src),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => crate::domain::Fact::Absent,
+        Err(e) => crate::domain::Fact::Undecidable(crate::support::cannot_read(path.display(), e)),
+    }
 }
 
 /// 可按逆序回放的区间条数；`None` 表示载荷损坏、条数未知。
@@ -120,7 +141,7 @@ fn replay_ranges(records: &[RecoveryRecord]) -> Option<usize> {
                 // 与 `recover` 同一判据：表区 preimage 仍能回写的记录才计入被放弃的回滚能力。
                 // `move` 相交时 `recover` 需要显式许可，但许可存在，仍算可回写
                 if crate::recovery::TableReplay::of(record, true).writes_back() {
-                    total += record.restore.len();
+                    total += record.restore.len(); // audit-allow: counter
                 }
             }
             crate::recovery::CompanionProbe::Absent => {}
@@ -133,11 +154,21 @@ fn replay_ranges(records: &[RecoveryRecord]) -> Option<usize> {
     Some(total)
 }
 
-fn release_records(target: &str, identity: &TargetIdentity, disk: Option<&FileSource>, discard_replay: bool) -> RunOutcome {
+fn release_records(
+    target: &str,
+    identity: &TargetIdentity,
+    disk: &crate::domain::Fact<&FileSource>,
+    discard_replay: bool,
+) -> RunOutcome {
     // 身份不符的候选照样参与释放：`recover --release` 是显式放弃，不是认领——它不清空目标、
     // 不回放、不阻塞，只把记录挪出活跃集。真正属于别的载体时由下面的 `same_carrier`
     // 整体拒绝，释放前逐条打印会让用户看见自己在放弃什么
-    let records = match active_recovery_records(identity, disk) {
+    let opened = match disk {
+        crate::domain::Fact::Known(src) => Some(*src),
+        // audit-allow: W-25
+        crate::domain::Fact::Absent | crate::domain::Fact::Undecidable(_) => None,
+    };
+    let records = match active_recovery_records(identity, opened) {
         Ok(records) => records,
         Err(why) => bail_fail(RunOutcome::refused(format!(
             "the recovery scene of '{target}' cannot be enumerated: {why} — nothing was renamed; this run \
@@ -145,9 +176,21 @@ fn release_records(target: &str, identity: &TargetIdentity, disk: Option<&FileSo
         ))),
     };
     if records.is_empty() {
-        // 幂等：目标已经是"没有 active transaction"，空跑即成功。只说这次枚举看到了什么
-        println!("this enumeration found no unfinished operation on this target");
-        return RunOutcome::Checked;
+        // 幂等：目标已经是"没有 active transaction"，空跑即成功。目标确认不存在时同样按
+        // 空跑处理；但目标读不出时枚举为空不能推出"没有未收尾作业"——没有打开的目标，
+        // 这份枚举证明不了缺席，必须按读失败拒绝
+        match disk {
+            crate::domain::Fact::Undecidable(why) => bail_fail(RunOutcome::refused(format!(
+                "the target could not be read ({why}); the record repository was enumerated, but without an \
+                 open target this run cannot state there is no unfinished operation — make '{target}' \
+                 readable as the target this scene was recorded for, then re-run `diskedit recover --release \
+                 '{target}'`"
+            ))),
+            crate::domain::Fact::Known(_) | crate::domain::Fact::Absent => {
+                println!("this enumeration found no unfinished operation on this target");
+                return RunOutcome::Checked;
+            }
+        }
     }
     // 设备声明不唯一时，记录可能属于另一块同身份的盘。改名它等于替那块盘销毁回滚凭据，
     // 而且这一步无法靠"记录写的是谁"分辨：两块的声明一模一样
@@ -164,7 +207,7 @@ fn release_records(target: &str, identity: &TargetIdentity, disk: Option<&FileSo
     // 或 loop 映射变化说明记录不可回放，但仍属于这个目标，`recover --release` 存在的意义正是让这种记录
     // 能被释放。逐条打印用的也是这一个口径
     let live = match disk {
-        Some(d) => match crate::recovery::ownership_scene(d) {
+        crate::domain::Fact::Known(d) => match crate::recovery::ownership_scene(d) {
             Ok(live) => live,
             Err(e) => bail_fail(RunOutcome::refused(format!(
                 "the target's identity could not be read ({e:?}), so no recovery record can be proven to \
@@ -172,9 +215,15 @@ fn release_records(target: &str, identity: &TargetIdentity, disk: Option<&FileSo
                  recorded for, then re-run `diskedit recover --release '{target}'`"
             ))),
         },
-        None => bail_fail(RunOutcome::refused(format!(
-            "the target could not be opened, so no recovery record can be proven to belong to it — nothing was \
-             renamed; attach or reopen '{target}', then re-run `diskedit recover --release '{target}'`"
+        crate::domain::Fact::Absent => bail_fail(RunOutcome::refused(
+            "the target no longer exists, so its record cannot be proven to belong to it — nothing was \
+             renamed; if the scene file is stale, remove it from the record directory by hand"
+                .to_string(),
+        )),
+        crate::domain::Fact::Undecidable(why) => bail_fail(RunOutcome::refused(format!(
+            "the target could not be read ({why}), so no recovery record can be proven to belong to it — \
+             nothing was renamed; make '{target}' readable as the target this scene was recorded for, then \
+             re-run `diskedit recover --release '{target}'`"
         ))),
     };
     // 先把要放弃的东西如实报出来。放弃的是一种能力而非数据，所以解析不出来的那些
@@ -300,9 +349,9 @@ fn release_records(target: &str, identity: &TargetIdentity, disk: Option<&FileSo
     for r in &records {
         let from = r.path();
         match crate::dev::quarantine_move(from) {
-            Ok(crate::dev::Quarantine::Moved) => released += 1,
+            Ok(crate::dev::Quarantine::Moved) => released += 1, // audit-allow: counter
             Ok(crate::dev::Quarantine::CopiedOnly { to, cause }) => {
-                copied_only += 1;
+                copied_only += 1; // audit-allow: counter
                 failed.push(format!(
                     "{}: a quarantine copy was created at {} but the original could not be removed ({cause}) — \
                      re-run to converge",
@@ -335,7 +384,7 @@ fn release_records(target: &str, identity: &TargetIdentity, disk: Option<&FileSo
             if discard_replay { " --discard-replay" } else { "" }
         );
         // 只建出副本、没删掉原件的条目同样是持久状态变化：记录目录里多了一条隔离条目
-        bail_fail(crate::outcome::PersistedChange::of(false, released + copied_only > 0).failure(cause))
+        bail_fail(crate::outcome::PersistedChange::of(false, released + copied_only > 0).failure(cause)) // audit-allow: counter
     }
 }
 
@@ -345,7 +394,7 @@ fn release_records(target: &str, identity: &TargetIdentity, disk: Option<&FileSo
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
-    use crate::outcome::EXIT_OK;
+    use crate::outcome::{EXIT_OK, EXIT_REFUSED};
     use crate::dev::fixtures::{attr, bind_rdev, disk};
     use std::path::PathBuf;
 
@@ -372,7 +421,11 @@ mod tests {
 
         fn record_of(&self, device_id: &str) -> PathBuf {
             let key = crate::dev::key_for_test(device_id, None);
-            crate::dev::record_dir_under(&self.state, &key.hash_hex()).join(crate::dev::RECORD_NAME)
+            crate::dev::record_dir_under(
+                &self.state,
+                &key.hash_hex().expect("a short test key encodes"),
+            )
+            .join(crate::dev::RECORD_NAME)
         }
 
         fn source(&self, device_id: &str) -> FileSource {
@@ -423,10 +476,17 @@ mod tests {
     /// 拒绝走 `bail_fail` → `panic_any(ExitRequest::Report)`；测试按 `main` 的方式把
     /// 载荷解回退出码，真正的 panic 继续上抛
     fn run(case: &Case, device_id: &str, src: &FileSource) -> u8 {
+        run_disk(case, device_id, &src.identity, &crate::domain::Fact::Known(src))
+    }
+
+    fn run_disk(
+        case: &Case,
+        target: &str,
+        identity: &crate::dev::TargetIdentity,
+        disk: &crate::domain::Fact<&FileSource>,
+    ) -> u8 {
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            crate::dev::with_sysfs_root(&case.sys, || {
-                release_records(device_id, &src.identity, Some(src), true)
-            })
+            crate::dev::with_sysfs_root(&case.sys, || release_records(target, identity, disk, true))
         }));
         match outcome {
             Ok(outcome) => outcome.exit_code(),
@@ -502,5 +562,23 @@ mod tests {
         assert_ne!(run(&case, "SN-1", &src), EXIT_OK);
         assert!(record.exists(), "a scene that cannot be proven ours must stay");
         assert!(quarantined(record.parent().unwrap()).is_empty());
+    }
+
+    /// 目标读不出而枚举为空时，不能按幂等空跑报成功：没有打开的目标证明不了"没有
+    /// 未收尾作业"，三态必须落在拒绝侧（3），与"目标确认不存在"的空跑分开
+    #[test]
+    fn an_unreadable_target_with_empty_enumeration_is_not_reported_clean() {
+        let case = Case::new("release-unreadable");
+        let node = case.disk("sda");
+        bind_rdev(&case.sys, 8, 0, &node);
+        let src = case.source("SN-1");
+        let disk = crate::domain::Fact::Undecidable("simulated read failure".to_string());
+
+        let code = run_disk(&case, "SN-1", &src.identity, &disk);
+        assert_eq!(
+            code,
+            EXIT_REFUSED,
+            "a read failure must not exit clean with an empty enumeration"
+        );
     }
 }

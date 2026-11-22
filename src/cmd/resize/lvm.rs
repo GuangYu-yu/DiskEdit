@@ -193,7 +193,7 @@ pub(crate) fn lvm_grow_chain(
     if want > free {
         return Err(LvmError::Failed(format!(
             "added {delta_bytes} bytes = {want} extents of {ext} bytes, but {part_dev} has only {free} unallocated extent(s) — {path} would stay {} extent(s) short, so it was left unchanged",
-            want - free
+            want - free // audit-allow: display-only
         )));
     }
     crate::lvm::lv_extend(&path, want)?;
@@ -201,7 +201,12 @@ pub(crate) fn lvm_grow_chain(
     // 目标按记录的增量算出，回读确认它真的到了那一尺寸：lvextend 的退出码 0 不等于
     // LV 尺寸变了（LVM 对空操作也可能成功返回）
     let after = crate::lvm::lv_state(part_dev, &path)?;
-    let target = current + want * ext;
+    let grown = want.checked_mul(ext).ok_or_else(|| {
+        LvmError::Failed("the requested LV growth overflows the address space".to_string())
+    })?;
+    let target = current.checked_add(grown).ok_or_else(|| {
+        LvmError::Failed("the recorded LV target size overflows the address space".to_string())
+    })?;
     if after.size < target {
         return Err(LvmError::Failed(format!(
             "lvextend -l +{want} reported success, but {path} is {} bytes (expected at least {target})",
@@ -235,7 +240,13 @@ fn finish_lv_growth(part_dev: &str, lv_path: &str, f: &LvmPostFacts, free: u64) 
             st.size, f.lv_size_before, f.lv_target
         )));
     }
-    let want = (f.lv_target - f.lv_size_before) / f.extent_bytes;
+    if f.lv_target < f.lv_size_before {
+        return Err(LvmError::Failed(format!(
+            "the recorded LV target {} is below the recorded baseline {} — the recovery record is inconsistent; refusing to extend {lv_path}",
+            f.lv_target, f.lv_size_before
+        )));
+    }
+    let want = (f.lv_target - f.lv_size_before) / f.extent_bytes; // audit-allow: len-bounded
     if want > free {
         return Err(LvmError::Failed(format!(
             "{want} extent(s) are needed to reach the recorded target, but {part_dev} has only {free} unallocated extent(s) — {lv_path} was left unchanged"

@@ -112,19 +112,19 @@ pub(crate) fn record_backend_under(
     })
 }
 
-/// 路径是记录后端的直接子项时返回它；`record.lock` 是锁不是记录，排除在外。
-/// 其余名字（含隔离项与残留临时文件）都交给调用方解码——不在这里预判"像不像记录"
-pub(crate) fn record_spot(path: &Path) -> Option<RecordSpot> {
-    let dir = path.parent()?;
-    let name = path.file_name()?.to_os_string();
+/// 路径是记录后端的直接子项时返回它。三态分开陈述：`Ok(Some)` 是读到的条目；
+/// `Ok(None)` 是结构确认的非条目（无父目录、无文件名、锁文件、目录不是记录后端）；
+/// `Err` 是后端目录读不出——判不了归属，不得折成"不是条目"，由调用方按环境故障上报
+pub(crate) fn record_spot(path: &Path) -> std::io::Result<Option<RecordSpot>> {
+    let Some(dir) = path.parent() else { return Ok(None) };
+    let Some(file_name) = path.file_name() else { return Ok(None) };
+    let name = file_name.to_os_string();
     if name.to_str() == Some(RECORD_LOCK_NAME) {
-        return None;
+        return Ok(None);
     }
-    // 目录读不出时按"这条路径不是记录条目"处理：`inspect` 会把它当目标继续探测并
-    // 报读不出，不会因此把目标说成"没有记录"
-    let backend = record_backend(dir).ok().flatten()?;
+    let Some(backend) = record_backend(dir)? else { return Ok(None) };
     let quarantine = quarantine_mark(&name);
-    Some(RecordSpot { dir: dir.to_path_buf(), name, backend, quarantine })
+    Ok(Some(RecordSpot { dir: dir.to_path_buf(), name, backend, quarantine }))
 }
 
 /// 文件名属于哪个隔离类别。编号只认十进制数字，`0` 也接受：本工具只产生不带编号的名字，
@@ -162,12 +162,14 @@ mod tests {
             record_backend_under(&dir, Path::new("/nowhere"), None).unwrap(),
             Some(RecordBackend::Sidecar)
         );
-        let spot = record_spot(&dir.join("record")).expect("a direct entry is a record spot");
+        let spot = record_spot(&dir.join("record"))
+            .expect("the backend directory is readable")
+            .expect("a direct entry is a record spot");
         assert_eq!(spot.backend, RecordBackend::Sidecar);
         assert!(spot.quarantine.is_none());
         assert_eq!(spot.sidecar_target(), Some(base.join("disk.img")));
         // 目录本身不是记录后端的直接子项
-        assert!(record_spot(&dir).is_none());
+        assert!(record_spot(&dir).unwrap().is_none());
     }
 
     #[test]
@@ -175,7 +177,17 @@ mod tests {
         let base = scratch("lock");
         let dir = base.join("disk.img.diskedit");
         std::fs::create_dir_all(&dir).unwrap();
-        assert!(record_spot(&dir.join("record.lock")).is_none());
+        assert!(record_spot(&dir.join("record.lock")).unwrap().is_none());
+    }
+
+    /// 后端目录元数据读不出是读失败，不是"没有记录条目"：错误必须浮出，不能折成
+    /// Ok(None) 让分派把路径当普通目标继续探测。内部 NUL 使元数据在 syscall 前就以
+    /// InvalidInput 失败（非 NotFound），两条平台上都可复现
+    #[test]
+    fn an_unreadable_backend_directory_is_an_error_not_a_missing_entry() {
+        let weird = std::path::Path::new("parent\0child");
+        let result = record_spot(&weird.join("record"));
+        assert!(result.is_err(), "a metadata failure must not fold into None: {result:?}");
     }
 
     #[test]

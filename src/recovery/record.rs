@@ -17,7 +17,7 @@
 //! 审计段记录放置、worker 映像摘要与工具版本，只写出，不参与续跑判定与回滚规则。
 
 use crate::dev::DiskGuidState;
-use crate::domain::Fact;
+use crate::domain::{Fact, SectorSize};
 use crate::outcome::RunOutcome;
 use crate::platform::{IdentityMaterial, TargetId};
 use crate::planner::chunk::move_chunk_layout;
@@ -33,7 +33,7 @@ pub(crate) const MAGIC: [u8; 4] = *b"DRE2";
 pub(crate) const HEADER_LEN: usize = 16;
 
 const HEADER_CRC_RANGE: std::ops::Range<usize> = 0..12;
-pub(crate) const MAX_RECORD_BYTES: u64 = 16 * 1024 * 1024;
+pub(crate) const MAX_RECORD_BYTES: u64 = 16 * 1024 * 1024; // audit-allow: const-expr
 /// 只解到前缀的记录对尾段四项事实的说明：不是「没有」，而是没有读到
 const TAIL_UNREAD: &str = "the payload's tail was not decoded (prefix only)";
 
@@ -132,7 +132,7 @@ impl PlanDigest {
         sector_size: u64,
         disk_size: u64,
     ) -> Self {
-        let mut input = Vec::with_capacity(1 + 4 + 8 * 4);
+        let mut input = Vec::with_capacity(1 + 4 + 8 * 4); // audit-allow: const-expr
         input.push(op.tag());
         input.extend_from_slice(&part.to_le_bytes());
         input.extend_from_slice(&new_start.to_le_bytes());
@@ -431,17 +431,21 @@ impl RestoreEntry {
     }
 
     /// 字节数落在声明的扇区区间内（最后一扇区可以只存到文件末尾），写入后字节与原文等长，
-    /// 且扇区大小是 2 的幂
+    /// 且扇区大小是域内的 2 的幂（512..=65536，与设备侧 [`SectorSize`] 同一口径）
     pub(crate) fn is_well_formed(&self) -> bool {
-        if !self.sector_size.is_power_of_two() || self.sectors == 0 {
+        let ss = u64::from(self.sector_size);
+        if !(SectorSize::MIN_BYTES..=SectorSize::MAX_BYTES).contains(&ss)
+            || !ss.is_power_of_two()
+            || self.sectors == 0
+        {
             return false;
         }
         if self.after.len() != self.original.len() {
             return false;
         }
         let len = self.original.len() as u64;
-        let covered = u64::from(self.sectors) * u64::from(self.sector_size);
-        let previous = covered - u64::from(self.sector_size);
+        let covered = u64::from(self.sectors) * ss; // audit-allow: len-bounded
+        let previous = covered - ss; // audit-allow: len-bounded
         len > previous && len <= covered
     }
 }
@@ -466,10 +470,11 @@ impl CopySource {
         self.sectors.checked_mul(self.sector_size)
     }
 
-    /// 分区号非零、有扇区、逻辑块是 2 的幂，且端点都能算出
+    /// 分区号非零、有扇区、逻辑块是域内的 2 的幂（512..=65536），且端点都能算出
     fn is_well_formed(&self) -> bool {
         self.partition != 0
             && self.sectors != 0
+            && (SectorSize::MIN_BYTES..=SectorSize::MAX_BYTES).contains(&self.sector_size)
             && self.sector_size.is_power_of_two()
             && self.first_lba.checked_add(self.sectors).is_some()
             && self.byte_offset().is_some()
@@ -501,10 +506,41 @@ pub(crate) enum Stage {
     Undecidable,
 }
 
+/// 崩溃后对一份记录的完成判定：三态纯状态机（R10 边界判据）。
+///
+/// 批次落盘与检查点落盘不是同一个原子步：一次操作按批次落盘、检查点在批次之间写入，
+/// 崩溃可能停在「数据已写、检查点/游标未记」的中间态。本判定只吃记录里已持久化的
+/// 批次、检查点与游标事实（提交状态、已完成步数、传输游标、搬移双游标、表步围栏/
+/// 在飞位、修复事实），不读盘、不读执行期状态；任何非完整记录都不允许落到
+/// [`Self::Complete`]——中间态要么由原命令续跑重放 [`Self::NeedsReplay`]，要么字段
+/// 不足或自相矛盾必须拒绝 [`Self::MustRefuse`]。续跑准入与收尾完成共用这道闸，半成品
+/// 既不能被当完成收尾，也不能从这道闸后面给出成功出口。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CompletionVerdict {
+    /// 提交检查点已落盘：作业走完，记录只等清理。唯一允许收尾/报完成的形态
+    Complete,
+    /// 中间态：批次可能已落而检查点/游标未记全，或表步/收尾尚待完成；必须续跑重放，
+    /// 不能当完成收尾
+    NeedsReplay,
+    /// 字段不足以判定阶段，或记录自相矛盾：必须拒绝，不续跑、不清理、不宣称完成
+    MustRefuse,
+}
+
+impl CompletionVerdict {
+    /// 这份判定是否允许把作业当成已完成来收尾。只有 [`Self::Complete`] 放行；
+    /// 中间态与必须拒绝都答否——成功出口只从这道闸后面发出
+    pub(crate) fn allows_finish(self) -> bool {
+        matches!(self, Self::Complete)
+    }
+}
+
 /// 第 `entry` 条搬移的块数：swap 恒 0；布局无解即记录自相矛盾。
 /// 与执行器共用 [`move_chunk_layout`]，不另算一遍
 fn entry_chunks(reloc: &Relocation, entry: u32) -> Result<u64, RunOutcome> {
-    let e = reloc.entries.get(entry as usize).ok_or_else(|| {
+    let entry_n = crate::support::host_usize(entry).map_err(|_| {
+        RunOutcome::internal("the entry index exceeds the host address space")
+    })?;
+    let e = reloc.entries.get(entry_n).ok_or_else(|| {
         RunOutcome::internal(format!("relocation entry {entry} is outside the recorded plan — the record contradicts itself"))
     })?;
     if !crate::planner::chunk::relocation_copies(e.is_swap, e.delta, e.len) {
@@ -666,12 +702,45 @@ impl Record {
         }
     }
 
-    /// 记录是否越过提交点。完成与否只由 `commit` 回答；
+    /// 记录是否越过提交点。模块内部专用：完成与否只由 [`Self::completion_verdict`]
+    /// 回答，recovery 之外问"有没有已提交记录"只走 [`Self::has_recorded_work`]。
     /// 穷尽匹配留在这里，新增 `CommitState` 变体时由编译器指出未处理的分支
-    pub(crate) fn committed(&self) -> bool {
+    fn committed(&self) -> bool {
         match self.commit {
             CommitState::Prepared => false,
             CommitState::Committed => true,
+        }
+    }
+
+    /// 记录里是否存在已落盘的提交点：只回答"有没有一条已经提交的工作痕迹"，**不回答
+    /// 作业能否收尾**。能否收尾只由 [`Self::completion_verdict`] 的
+    /// [`CompletionVerdict::allows_finish`] 回答；反过来，判定为
+    /// [`CompletionVerdict::NeedsReplay`] 或 [`CompletionVerdict::MustRefuse`] 的记录
+    /// 同样可能已经落过盘——这两态都不许被读成"没有记录"。recovery 模块之外问
+    /// "是否存在已提交记录"只走这个入口，不直接读提交位布尔
+    pub(crate) fn has_recorded_work(&self) -> bool {
+        self.committed()
+    }
+
+    /// 完成判定：提交检查点落盘才算 [`CompletionVerdict::Complete`]；阶段可派生且尚在
+    /// 中途的记录为 [`CompletionVerdict::NeedsReplay`]；阶段派不出（自相矛盾）或字段
+    /// 不足以判定为 [`CompletionVerdict::MustRefuse`]。判定只依赖记录字段，是续跑准入
+    /// 与收尾完成共用的同一道闸，不读盘、不读执行期状态。问"作业做完没"只走这里：
+    /// [`CompletionVerdict::NeedsReplay`] 与 [`CompletionVerdict::MustRefuse`] 都不是
+    /// "没有记录"，不得改读 [`Self::has_recorded_work`] 反推完成
+    pub(crate) fn completion_verdict(&self) -> CompletionVerdict {
+        if self.committed() {
+            return CompletionVerdict::Complete;
+        }
+        match self.derive_stage() {
+            Err(_) => CompletionVerdict::MustRefuse,
+            Ok(Stage::Undecidable) => CompletionVerdict::MustRefuse,
+            Ok(Stage::Complete) => CompletionVerdict::Complete,
+            Ok(Stage::Planned)
+            | Ok(Stage::Relocating { .. })
+            | Ok(Stage::Relocated)
+            | Ok(Stage::TableWritten)
+            | Ok(Stage::Finishing) => CompletionVerdict::NeedsReplay,
         }
     }
 
@@ -822,7 +891,10 @@ impl Record {
             });
         };
         let len = reloc.entries.len();
-        if (reloc.entry_index as usize) < len {
+        let entry_n = crate::support::host_usize(reloc.entry_index).map_err(|_| {
+            RunOutcome::internal("the entry index exceeds the host address space")
+        })?;
+        if entry_n < len {
             let chunks = entry_chunks(reloc, reloc.entry_index)?;
             if reloc.chunks_in_entry > chunks {
                 return Err(RunOutcome::internal(format!(
@@ -882,7 +954,7 @@ impl Record {
         self.validate()
             .map_err(|m| std::io::Error::new(std::io::ErrorKind::InvalidInput, m))?;
         let payload = self.encode_payload()?;
-        let total_len = HEADER_LEN as u64 + payload.len() as u64;
+        let total_len = HEADER_LEN as u64 + payload.len() as u64; // audit-allow: len-bounded
         // 整份编码的上界与读出侧同一条：读不回来的记录不写
         if total_len > MAX_RECORD_BYTES {
             return Err(std::io::Error::new(
@@ -911,6 +983,14 @@ impl Record {
     /// 记录内容的唯一一份字段约束：写入前（[`Self::encode`]）与读出后（[`decode`]）
     /// 都过这里。一份记录能不能存在，不由产生它的那次运行决定
     fn validate(&self) -> Result<(), String> {
+        // 缩容相位码只认三态对照表；未知码不是"未缩"，而是记录损坏，解码侧在此拦下，
+        // 不回落 [`crate::movepart::fs_shrunk_from_phase`] 的消费侧兜底
+        if crate::movepart::FsShrink::from_code(self.progress.fs_phase).is_none() {
+            return Err(format!(
+                "the record's shrink phase code {} is not a known resize state (0 = not shrunk, 1 = verified, 2 = unverified)",
+                self.progress.fs_phase
+            ));
+        }
         if let Some(relocation) = &self.relocation {
             relocation_is_valid(relocation)?;
             // 搬移计划只属于会改动分区落位的操作
@@ -1040,7 +1120,11 @@ impl Record {
             let matches_cursor = self
                 .relocation
                 .as_ref()
-                .is_some_and(|reloc| (*in_flight as usize) < reloc.entries.len() && *in_flight == reloc.entry_index);
+                .is_some_and(|reloc| {
+                    crate::support::host_usize(*in_flight)
+                        .is_ok_and(|i| i < reloc.entries.len())
+                        && *in_flight == reloc.entry_index
+                });
             if !matches_cursor {
                 return Err(format!("in-flight entry {in_flight} contradicts the relocation cursor"));
             }
@@ -1232,7 +1316,7 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<Record, DecodeFailure> {
     if crc32(&bytes[HEADER_CRC_RANGE]) != header_crc {
         return Err(DecodeFailure::Crc { region: CrcRegion::Header });
     }
-    let total_len = HEADER_LEN as u64 + u64::from(payload_len);
+    let total_len = HEADER_LEN as u64 + u64::from(payload_len); // audit-allow: len-bounded
     if total_len > MAX_RECORD_BYTES {
         return Err(DecodeFailure::Format { magic, recorded: None });
     }
@@ -1501,7 +1585,10 @@ fn relocation_is_valid(r: &Relocation) -> Result<(), String> {
     if r.ss == 0 {
         return Err("the relocation plan has a zero sector size".to_string());
     }
-    if r.entry_index as usize > r.entries.len() {
+    let entry_n = crate::support::host_usize(r.entry_index).map_err(|_| {
+        "the entry index exceeds the host address space".to_string()
+    })?;
+    if entry_n > r.entries.len() {
         return Err(format!(
             "the relocation plan points at entry {} of {}",
             r.entry_index,
@@ -1509,7 +1596,7 @@ fn relocation_is_valid(r: &Relocation) -> Result<(), String> {
         ));
     }
     // 全部条目已提交时进度归零
-    if r.entry_index as usize == r.entries.len() && r.chunks_in_entry != 0 {
+    if entry_n == r.entries.len() && r.chunks_in_entry != 0 {
         return Err("the relocation plan is complete but still carries a chunk count".to_string());
     }
     // 零块必须零摘要：任何已拷前缀都有一条（可能全零概率）摘要，没有块就没有
@@ -2124,6 +2211,83 @@ mod record_tails {
         rehash(&mut bytes);
 
         assert!(matches!(decode(&bytes), Err(DecodeFailure::Format { .. })));
+    }
+
+    /// 缩容相位码只认三态（0/1/2）：未知码是记录损坏，解码侧按 Format 拒读，
+    /// 不回落消费侧的"未缩"兜底
+    #[test]
+    fn an_unknown_shrink_phase_code_is_refused() {
+        // 载荷固定前缀：tx(16)+plan(16)+version(8)+op(1)+digest(32)+steps(4)+cursor(8)，
+        // 之后是 fs_phase 那一个字节
+        const FS_PHASE: usize = HEADER_LEN + 16 + 16 + 8 + 1 + 32 + 4 + 8;
+        for code in [3u8, 255] {
+            let mut bytes = table_only_record().encode().unwrap();
+            bytes[FS_PHASE] = code;
+            rehash(&mut bytes);
+
+            assert!(
+                matches!(decode(&bytes), Err(DecodeFailure::Format { .. })),
+                "phase code {code} must be refused as a corrupt record"
+            );
+        }
+    }
+
+    /// 一条带回放条目的记录：原文/写后各 512 字节，条目录在 512 扇区口径下
+    fn restore_record() -> Record {
+        let mut record = table_only_record();
+        record.op = OpKind::ResizeEnd;
+        record.restore = vec![RestoreEntry {
+            sector_size: 512,
+            first_lba: 1,
+            sectors: 1,
+            original: vec![0x11; 512],
+            after: vec![0x22; 512],
+        }];
+        record
+    }
+
+    /// 条目扇区大小必须落在 512..=65536 的 2 的幂域内：低于下限或高于上限的值，
+    /// 即使条目 CRC 与载荷 CRC 都自洽，解码侧的值域闸仍整份拒读
+    #[test]
+    fn a_sector_size_outside_the_legal_domain_is_refused() {
+        for ss in [1u32, 131_072] {
+            let mut bytes = restore_record().encode().unwrap();
+            // 条目前缀：ss(4)+first_lba(8)+sectors(4)+len(4)，原文紧随其后；
+            // 定位原文块即定位条目起点，改 ss 后必须重算该条目的逐条 CRC
+            let original = [0x11u8; 512];
+            let original_offset = bytes
+                .windows(512)
+                .position(|w| w == original)
+                .expect("the original block is part of the entry");
+            let entry_start = original_offset - 20;
+            bytes[entry_start..entry_start + 4].copy_from_slice(&ss.to_le_bytes());
+            let covered = entry_start + 20 + original.len() + 512;
+            let entry_crc = crc32(&bytes[entry_start..covered]);
+            bytes[covered..covered + 4].copy_from_slice(&entry_crc.to_le_bytes());
+            rehash(&mut bytes);
+
+            assert!(
+                matches!(decode(&bytes), Err(DecodeFailure::Format { .. })),
+                "sector size {ss} must be refused outside the 512..=65536 domain"
+            );
+        }
+    }
+
+    /// 复制源条目同样受扇区值域约束：低于下限的 2 的幂不构成合法逻辑块
+    #[test]
+    fn a_copy_source_sector_size_outside_the_domain_is_not_well_formed() {
+        let source = CopySource {
+            partition: 1,
+            first_lba: 1,
+            sectors: 1,
+            sector_size: 1,
+            digest: [0; 32],
+        };
+        assert!(!source.is_well_formed());
+        let too_large = CopySource { sector_size: 131_072, ..source };
+        assert!(!too_large.is_well_formed());
+        let legal = CopySource { sector_size: 512, ..source };
+        assert!(legal.is_well_formed());
     }
 
     /// 围栏已开始而表步结果未记入：盘面可能已经改过，阶段给不出确定答案

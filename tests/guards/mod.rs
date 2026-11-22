@@ -270,3 +270,325 @@ pub fn run(args: &[&str]) -> (i32, String, String) {
         String::from_utf8_lossy(&out.stderr).into_owned(),
     )
 }
+
+pub fn tests_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests")
+}
+
+/// 把整份源码里的注释与字符串/字符/原始字符串字面量内部置成空白，分隔符保留；
+/// 换行一并保留，行号不漂移。
+///
+/// 字符字面量与生命周期标记按「引号后是否有收盘单引号」区分：`'a'`/`'\n'` 整段抹掉，
+/// `'a`（生命周期）原样保留——否则 `<'a>` 会把该行余下内容一并当成字符字面量抹掉。
+/// 块注释按 Rust 规则可嵌套，`r#"... "#`、`br#"..."#` 的井号数按开盘值配对收盘。
+pub fn code_only(text: &str) -> String {
+    let b = text.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        match b[i] {
+            b'r' | b'b' => {
+                let Some((quote, hashes)) = raw_string_open(b, i) else {
+                    out.push(b[i]);
+                    i += 1;
+                    continue;
+                };
+                let mut j = quote + 1;
+                while j < b.len() {
+                    if b[j] == b'"' {
+                        let close = j + 1 + hashes;
+                        if close <= b.len() && b[j + 1..close].iter().all(|&c| c == b'#') {
+                            j = close;
+                            break;
+                        }
+                    }
+                    j += 1;
+                }
+                for &byte in &b[i..j] {
+                    out.push(if byte == b'\n' { b'\n' } else { b' ' });
+                }
+                i = j;
+            }
+            b'/' if b.get(i + 1) == Some(&b'/') => {
+                while i < b.len() && b[i] != b'\n' {
+                    out.push(b' ');
+                    i += 1;
+                }
+            }
+            b'/' if b.get(i + 1) == Some(&b'*') => {
+                let mut depth = 0usize;
+                while i < b.len() {
+                    if b[i] == b'/' && b.get(i + 1) == Some(&b'*') {
+                        depth += 1;
+                        out.extend_from_slice(b"  ");
+                        i += 2;
+                    } else if b[i] == b'*' && b.get(i + 1) == Some(&b'/') {
+                        depth -= 1;
+                        out.extend_from_slice(b"  ");
+                        i += 2;
+                        if depth == 0 {
+                            break;
+                        }
+                    } else {
+                        out.push(if b[i] == b'\n' { b'\n' } else { b' ' });
+                        i += 1;
+                    }
+                }
+            }
+            b'"' => {
+                out.push(b' ');
+                i += 1;
+                while i < b.len() {
+                    if b[i] == b'\\' {
+                        out.push(b' ');
+                        i += 1;
+                        if i < b.len() {
+                            out.push(if b[i] == b'\n' { b'\n' } else { b' ' });
+                            i += 1;
+                        }
+                    } else if b[i] == b'"' {
+                        out.push(b' ');
+                        i += 1;
+                        break;
+                    } else {
+                        out.push(if b[i] == b'\n' { b'\n' } else { b' ' });
+                        i += 1;
+                    }
+                }
+            }
+            b'\'' => {
+                let after_quote = b.get(i + 1).copied();
+                let width = match (after_quote, b.get(i + 2), b.get(i + 3)) {
+                    (Some(c), Some(&b'\''), _) if c != b'\\' => Some(3),
+                    (Some(b'\\'), _, Some(&b'\'')) => Some(4),
+                    _ => None,
+                };
+                match width {
+                    Some(n) => {
+                        out.resize(out.len() + n, b' ');
+                        i += n;
+                    }
+                    None if after_quote == Some(b'\\') => {
+                        let mut j = i + 1;
+                        while j < b.len() && b[j] != b'\'' {
+                            j += 1;
+                        }
+                        let end = (j + 1).min(b.len());
+                        out.resize(out.len() + (end - i), b' ');
+                        i = end;
+                    }
+                    None => {
+                        out.push(b[i]);
+                        i += 1;
+                    }
+                }
+            }
+            c => {
+                out.push(c);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8(out).expect("blanking keeps UTF-8 byte boundaries")
+}
+
+/// 原始字符串的起点：`r"…"`、`r#"…"#`、`br#"…"#`。返回开引号下标与井号个数
+fn raw_string_open(b: &[u8], i: usize) -> Option<(usize, usize)> {
+    let mut j = i;
+    if b[j] == b'b' {
+        j += 1;
+    }
+    if b.get(j) != Some(&b'r') {
+        return None;
+    }
+    j += 1;
+    let hashes = b[j..].iter().take_while(|&&c| c == b'#').count();
+    (b.get(j + hashes) == Some(&b'"')).then_some((j + hashes, hashes))
+}
+
+pub fn is_word_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_'
+}
+
+/// 把代码行切成 token：标识符/字面量/多字符运算符/单字符符号
+pub fn tokenize(code: &str) -> Vec<String> {
+    let mut toks = Vec::new();
+    let bytes = code.as_bytes();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b.is_ascii_whitespace() {
+            i += 1;
+            continue;
+        }
+        if is_word_byte(b) {
+            let mut j = i;
+            while j < bytes.len() && is_word_byte(bytes[j]) {
+                j += 1;
+            }
+            toks.push(code[i..j].to_string());
+            i = j;
+            continue;
+        }
+        if b.is_ascii_digit() {
+            let mut j = i;
+            while j < bytes.len() && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_' || bytes[j] == b'.') {
+                j += 1;
+            }
+            toks.push(code[i..j].to_string());
+            i = j;
+            continue;
+        }
+        let two = &code[i..i + 2.min(bytes.len() - i)];
+        if let Some(op) = ["->", "=>", "==", "!=", "<=", ">=", "&&", "||", "+=", "-=", "*="]
+            .iter()
+            .find(|o| two == **o)
+        {
+            toks.push((*op).to_string());
+            i += op.len();
+            continue;
+        }
+        toks.push((b as char).to_string());
+        i += 1;
+    }
+    toks
+}
+
+/// 测试夹具文件（`tests.rs` 模块文件与 `tests/` 目录）不参与生产普查
+pub fn is_fixture_file(path: &str) -> bool {
+    path.ends_with("tests.rs") || path.contains("/tests/")
+}
+
+/// 整行的锚点内容：去掉 `//` 起的注释后缀并去首尾空白（字符串字面量原样保留）
+pub fn anchor_of(raw: &str) -> String {
+    match raw.find("//") {
+        Some(idx) => raw[..idx].trim(),
+        None => raw.trim(),
+    }
+    .to_string()
+}
+
+/// 一条普查违规：文件、行号（0 表示挂在登记条目上、不对应现存源码行）、类别、内容
+#[derive(Debug, Clone, PartialEq)]
+pub struct Violation {
+    pub file: String,
+    pub line_no: usize,
+    pub category: &'static str,
+    pub content: String,
+}
+
+impl Violation {
+    pub fn render(&self) -> String {
+        if self.line_no == 0 {
+            format!("{}: [{}] {}", self.file, self.category, self.content)
+        } else {
+            format!("{}:{}: [{}] {}", self.file, self.line_no, self.category, self.content)
+        }
+    }
+}
+
+/// 一个命中站点：现场行号只用于报告，匹配走内容与出现次序
+#[derive(Debug, Clone)]
+pub struct Site {
+    pub line_no: usize,
+    pub content: String,
+    pub occurrence: usize,
+}
+
+/// 给一串 (行号, 内容) 按内容编号（同一内容第 k 次出现记 k）
+pub fn number_occurrences(items: impl Iterator<Item = (usize, String)>) -> Vec<Site> {
+    let mut seen: BTreeMap<String, usize> = BTreeMap::new();
+    items
+        .map(|(line_no, content)| {
+            let k = seen.entry(content.clone()).or_insert(0);
+            *k += 1;
+            Site { line_no, content, occurrence: *k }
+        })
+        .collect()
+}
+
+/// `|` 折行时把 or-pattern 接成一条逻辑行（行尾悬着单个 `|`，或下一个非注释行以单个 `|`
+/// 开头），夹在两者之间的整行注释是 trivia，不并入拼接文本。`||` 是逻辑或，不参与拼接。
+/// 返回 (首行在生产行数组中的下标, 拼接文本)
+pub fn join_or_patterns(text: &str) -> Vec<(usize, String)> {
+    let prod = production_lines(text);
+    let mut out = Vec::with_capacity(prod.len());
+    let mut i = 0;
+    while i < prod.len() {
+        let mut text = prod[i].1.trim().to_string();
+        let mut j = i + 1;
+        if !text.starts_with("//") {
+            loop {
+                let mut k = j;
+                while k < prod.len() && prod[k].1.trim_start().starts_with("//") {
+                    k += 1;
+                }
+                let dangling = text.ends_with('|') && !text.ends_with("||");
+                let next = prod.get(k).map(|(_, l)| l.trim_start()).unwrap_or_default();
+                let leading = next.starts_with('|') && !next.starts_with("||");
+                if !dangling && !leading {
+                    break;
+                }
+                text.push(' ');
+                text.push_str(next);
+                j = k + 1;
+            }
+        }
+        out.push((i, text));
+        i = j.max(i + 1);
+    }
+    out
+}
+
+/// 源码的逻辑行与起始行号（1 起）：行尾 `\` 让字符串续到下一行，下一行的行首空白
+/// 不进入字面量。注释行不参与拼接
+pub fn join_string_continuations(text: &str) -> Vec<(usize, String)> {
+    let mut out = Vec::new();
+    let mut buf = String::new();
+    let mut start = 1;
+    let mut continuing = false;
+    for (no, raw) in text.lines().enumerate() {
+        let line = if continuing { raw.trim_start() } else { raw };
+        if !continuing {
+            start = no + 1;
+        }
+        if let Some(head) = line.trim_end().strip_suffix('\\').filter(|_| is_string_continuation(line)) {
+            buf.push_str(head);
+            continuing = true;
+        } else {
+            buf.push_str(line);
+            out.push((start, std::mem::take(&mut buf)));
+            continuing = false;
+        }
+    }
+    if continuing || !buf.is_empty() {
+        out.push((start, buf));
+    }
+    out
+}
+
+/// 行尾 `\` 是不是字符串内的续行：该行在此之前有一个未闭合的字符串字面量。
+/// 注释行的行尾 `\` 与字符/转义无关
+fn is_string_continuation(line: &str) -> bool {
+    let body = match line.trim_end().strip_suffix('\\') {
+        Some(body) => body,
+        None => return false,
+    };
+    if body.trim_start().starts_with("//") {
+        return false;
+    }
+    let mut quotes = 0usize;
+    let mut escaped = false;
+    for c in body.chars() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match c {
+            '\\' => escaped = true,
+            '"' => quotes += 1,
+            _ => {}
+        }
+    }
+    quotes % 2 == 1
+}

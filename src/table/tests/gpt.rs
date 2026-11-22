@@ -286,7 +286,7 @@ pub(crate) fn entry_size_rules() {
         attribute_bits: 0,
         partition_name: "p".into(),
     };
-    let (b, crc) = serialize_array(&[e], &EntryArrayGeometry::new(512, 256, 1, MAX_ARRAY_BYTES).unwrap());
+    let (b, crc) = serialize_array(&[e], &EntryArrayGeometry::new(512, 256, 1, MAX_ARRAY_BYTES).unwrap()).unwrap();
     assert_eq!(b.len(), 512);
     assert_eq!(b[128..256], [0u8; 128], "reserved tail must stay zero");
     assert_eq!(crc, crate::table::crc32(&b[..256]));
@@ -553,7 +553,7 @@ pub(crate) fn divergent_copies_are_reported_and_repaired_from_the_primary() {
     let mut entries = g.entries.clone();
     entries[0].ending_lba = 61;
     let geom = geom128(ss);
-    let (bytes, crc) = serialize_array(&entries, &geom);
+    let (bytes, crc) = serialize_array(&entries, &geom).unwrap();
     src.write_fixture(2 * ss, &bytes).unwrap();
     let h = RawHeader {
         revision: g.header.revision,

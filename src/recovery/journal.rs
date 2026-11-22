@@ -565,7 +565,10 @@ fn ensure_reloc_forward(
             "the relocation cursor moved backwards ({was_index} / {was_chunks}) → ({entry_index} / {chunks_in_entry})"
         )));
     }
-    if entry_index as usize > reloc.entries.len() {
+    let entry_n = crate::support::host_usize(entry_index).map_err(|_| {
+        std::io::Error::other("the relocation cursor exceeds the host address space")
+    })?;
+    if entry_n > reloc.entries.len() {
         return Err(std::io::Error::other(
             "the relocation cursor points past the plan",
         ));
@@ -963,7 +966,9 @@ impl RecordJournal {
         part: u32,
     ) -> Option<((u32, u64), u32, u64)> {
         let reloc = self.relocation()?;
-        let current = reloc.entries.get(reloc.entry_index as usize)?;
+        let current = reloc
+            .entries
+            .get(crate::support::host_usize(reloc.entry_index).ok()?)?;
         if current.partition != part
             || current.is_swap
             || !self.record.table_step_in_flight(reloc.entry_index)
@@ -972,8 +977,8 @@ impl RecordJournal {
         }
         let progress = self.progress();
         Some((
-            (reloc.entry_index + 1, 0),
-            progress.completed_steps + 1,
+            (reloc.entry_index + 1, 0), // audit-allow: counter
+            progress.completed_steps + 1, // audit-allow: counter
             progress.transfer_cursor,
         ))
     }
@@ -1086,7 +1091,12 @@ impl RecordJournal {
         let Some(reloc) = self.record.relocation.as_ref() else {
             return Ok(());
         };
-        if entry as usize >= reloc.entries.len() {
+        let entry_n = crate::support::host_usize(entry).map_err(|_| {
+            PersistFailure::NotWritten(std::io::Error::other(
+                "the entry index exceeds the host address space",
+            ))
+        })?;
+        if entry_n >= reloc.entries.len() {
             // 条目越界说明调用点与记录里的计划对不上：静默成功等于少写一条事实
             return Err(PersistFailure::NotWritten(std::io::Error::other(format!(
                 "entry {entry} is outside the recorded relocation plan ({} entries) — refusing to skip its table step",
@@ -1276,6 +1286,13 @@ impl RecordJournal {
                 continue;
             }
             let entry = RestoreEntry { sector_size, first_lba, sectors, original, after };
+            // 开发期回查；四条形状条件在此之前都已有构造点封死：
+            // - 扇区大小是 2 的幂：句柄构造时经 `check_sector_size` → `SectorSize::try_new`
+            //   拒绝非 2 的幂，journal 的扇区大小取自同一个已校验句柄；
+            // - 扇区数非零：空原文已在上面 `continue`，`div_ceil` 对非空长度至少得 1；
+            // - 前后镜像等长：不等长已在上面按 `NotWritten` 交出；
+            // - 原文落在声明扇区区间内：扇区数由 `div_ceil(长度, 扇区大小)` 推出，区间恒覆盖。
+            // 发布构建不跑本断言；读回时解码侧再按 `is_well_formed` 复核一次。
             debug_assert!(entry.is_well_formed());
             self.record.restore.push(entry);
             added = true;

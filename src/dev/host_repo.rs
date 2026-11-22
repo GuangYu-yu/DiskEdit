@@ -62,27 +62,29 @@ impl IdentityKey {
         Self { target, partition }
     }
 
-    /// identity-hash 的文本形式（32 位小写 hex）
+    /// identity-hash 的文本形式（32 位小写 hex）。编码宽度溢出（身份串超过 u32 前缀值域）
+    /// 按编码错误返回；现有来源链路上身份串有 255 字节上界，该分支不可达
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-    pub(crate) fn hash_hex(&self) -> String {
+    pub(crate) fn hash_hex(&self) -> std::io::Result<String> {
         identity_hash_hex(self)
     }
 
     /// 本目标记录目录。`record` 落在它下面；锁不在这一层——块设备的锁按载体落在
     /// `state_root` 根下，镜像的锁在 sidecar 目录内（见 `targetlock`）
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-    pub(crate) fn record_dir(&self) -> PathBuf {
-        record_dir_under(&host_state_root(), &self.hash_hex())
+    pub(crate) fn record_dir(&self) -> std::io::Result<PathBuf> {
+        let hash = self.hash_hex()?;
+        Ok(record_dir_under(&host_state_root(), &hash))
     }
 
     /// 单文件恢复记录的落点：`<state_root>/recovery/<identity-hash>/record`
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-    pub(crate) fn record_path(&self) -> PathBuf {
-        self.record_dir().join(super::RECORD_NAME)
+    pub(crate) fn record_path(&self) -> std::io::Result<PathBuf> {
+        Ok(self.record_dir()?.join(super::RECORD_NAME))
     }
 
-    fn encode(&self, out: &mut Vec<u8>) {
-        push_string(out, &self.target);
+    fn encode(&self, out: &mut Vec<u8>) -> std::io::Result<()> {
+        push_string(out, &self.target)?;
         match self.partition {
             None => out.push(0),
             Some(number) => {
@@ -90,6 +92,7 @@ impl IdentityKey {
                 out.extend_from_slice(&number.to_le_bytes());
             }
         }
+        Ok(())
     }
 }
 
@@ -105,35 +108,51 @@ pub(crate) fn record_dir_under(root: &Path, hash_hex: &str) -> PathBuf {
 }
 
 /// identity-hash：键的分量按 [`IdentityKey::encode`] 编码后取 sha256 前 16 字节
-fn identity_hash(key: &IdentityKey) -> [u8; 16] {
-    let mut input = Vec::with_capacity(9 + key.target.len());
-    key.encode(&mut input);
+fn identity_hash(key: &IdentityKey) -> std::io::Result<[u8; 16]> {
+    let mut input = Vec::with_capacity(9 + key.target.len()); // audit-allow: len-bounded
+    key.encode(&mut input)?;
     let digest = Sha256::digest(&input);
     let mut out = [0u8; 16];
     out.copy_from_slice(&digest[..16]);
-    out
+    Ok(out)
 }
 
-fn identity_hash_hex(key: &IdentityKey) -> String {
-    crate::support::hex_lower(&identity_hash(key))
+fn identity_hash_hex(key: &IdentityKey) -> std::io::Result<String> {
+    Ok(crate::support::hex_lower(&identity_hash(key)?))
 }
 
-fn push_string(out: &mut Vec<u8>, value: &str) {
-    out.extend_from_slice(&(value.len() as u32).to_le_bytes());
+fn push_string(out: &mut Vec<u8>, value: &str) -> std::io::Result<()> {
+    let len = u32::try_from(value.len()).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "an identity key string is longer than the record format allows",
+        )
+    })?;
+    out.extend_from_slice(&len.to_le_bytes());
     out.extend_from_slice(value.as_bytes());
+    Ok(())
 }
 
 /// 块设备的记录落点原料：载体的稳定身份原文（没有即 `None`）与分区号。
-/// 读取失败或 serial 两读不一致 ⇒ `Err`：无法判定"没有身份"，打开即失败；
-/// dm / md、或确实没有任何 WWN / EUI / 可重复 serial ⇒ `None`，可由 `--identity`
-/// 补一个键，否则写命令退 6，不退回 major:minor。分区号在两种情况下都要：
-/// 显式身份键按它分开各分区的记录目录。
+/// `Known` 带落点原料；`Absent` 是平台确认给不出稳定身份证据，记录键为 `None`，
+/// 可由 `--identity` 补一个键，否则写命令退 6；`Undecidable` 是 sysfs 读不出，
+/// 打开即失败。分区号在两种情况下都要：显式身份键按它分开各分区的记录目录。
 /// 载体与分区号的读取在 `dev::topology::record_context`——那里是 sysfs 拓扑事实的唯一
-/// 出口，本模块只负责把它变成记录目录的键
+/// 出口与三态归类点，本模块只把三态接到记录目录的键，不重判错误
 #[cfg(target_os = "linux")]
 pub(crate) fn block_record_context(node: &Path) -> Result<(Option<IdentityKey>, Option<u32>), String> {
-    let (carrier, partition) = super::record_context(node)?;
-    Ok((carrier.map(|carrier| IdentityKey::new(carrier, partition)), partition))
+    match super::record_context(node) {
+        crate::domain::Fact::Known(placement) => Ok((
+            placement
+                .carrier()
+                .map(|carrier| IdentityKey::new(carrier.to_string(), placement.partition())),
+            placement.partition(),
+        )),
+        // 平台确认不适用：没有稳定身份证据，记录键为 None；分区号随该结论一同缺失，
+        // 与今天的 `Ok((None, partition))` 走同一条写准入（退 6）
+        crate::domain::Fact::Absent => Ok((None, None)),
+        crate::domain::Fact::Undecidable(why) => Err(why),
+    }
 }
 
 /// 显式身份键。目标分量带 `declared:` 前缀：它与设备声明的原文共用同一套编码，
@@ -409,7 +428,10 @@ mod tests {
         let carrier_twelve = IdentityKey::new("ABC".to_string(), Some(12));
         assert_eq!(format!("{}{}", "ABC1", 2), format!("{}{}", "ABC", 12));
         assert_ne!(carrier_one, carrier_twelve);
-        assert_ne!(carrier_one.hash_hex(), carrier_twelve.hash_hex());
+        assert_ne!(
+            carrier_one.hash_hex().expect("a short test key encodes"),
+            carrier_twelve.hash_hex().expect("a short test key encodes")
+        );
         assert_ne!(
             carrier_one,
             IdentityKey::new("ABC1".to_string(), Some(23)),
@@ -427,20 +449,30 @@ mod tests {
     #[test]
     fn the_identity_hash_pins_the_key_encoding() {
         let block = IdentityKey::new("naa.5000c500aabbccdd".to_string(), None);
-        assert_eq!(block.hash_hex(), "f244755a6aac2f9a88fd04c61930c017");
         assert_eq!(
-            IdentityKey::new("naa.5000c500aabbccdd".to_string(), Some(1)).hash_hex(),
+            block.hash_hex().expect("a short test key encodes"),
+            "f244755a6aac2f9a88fd04c61930c017"
+        );
+        assert_eq!(
+            IdentityKey::new("naa.5000c500aabbccdd".to_string(), Some(1))
+                .hash_hex()
+                .expect("a short test key encodes"),
             "6e81eae3518e9dfc1342d7011a62b13c"
         );
         assert_eq!(
-            IdentityKey::new("eui.0025385812345678".to_string(), None).hash_hex(),
+            IdentityKey::new("eui.0025385812345678".to_string(), None)
+                .hash_hex()
+                .expect("a short test key encodes"),
             "fd180a0e4410f80e4c17e2614502d84f"
         );
-        assert_eq!(block.hash_hex().len(), 32);
+        assert_eq!(block.hash_hex().expect("a short test key encodes").len(), 32);
         assert_eq!(
-            block.record_dir(),
+            block.record_dir().expect("a short test key encodes"),
             record_dir_under(&host_state_root(), "f244755a6aac2f9a88fd04c61930c017")
         );
-        assert!(block.record_path().ends_with(crate::dev::RECORD_NAME));
+        assert!(block
+            .record_path()
+            .expect("a short test key encodes")
+            .ends_with(crate::dev::RECORD_NAME));
     }
 }

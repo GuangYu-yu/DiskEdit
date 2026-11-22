@@ -5,7 +5,7 @@
 //! 交回，记录保留，重跑从同一步继续。
 
 use std::io::BufReader;
-use std::process::{Child, ChildStdin, Command, Stdio};
+use std::process::{Child, ChildStdin, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::thread;
@@ -15,6 +15,7 @@ use serde_json::{Value, json};
 
 use crate::dev::WriteSource;
 use crate::execution::{StepSink, TransferState};
+use crate::fsops::GateCommand;
 use crate::outcome::RunOutcome;
 
 use super::protocol::{self, Decoded, Lines, Read, WireStep};
@@ -49,6 +50,38 @@ impl SessionError {
             }
         }
     }
+}
+
+/// ready 帧几何复核：二进制版本、容量、扇区大小必须与宿主计划一致。
+///
+/// 三项都取自 worker 打开句柄后的实测回显（worker 侧先经 `reconcile_geometry`
+/// 对账，不符不会发 ready）；这里核的是 worker 实测值，不是握手声明的回显。
+/// 分歧返回带缘由的 Err；调用方 kill 会话后走既有 refused 通道。
+fn ready_geometry_matches(
+    binary_version: &str,
+    disk_size: u64,
+    sector_size: u64,
+    ready: &Value,
+) -> Result<(), String> {
+    let seen_version = ready.get("binary_version").and_then(Value::as_str);
+    if seen_version != Some(binary_version) {
+        return Err(format!(
+            "binary version {seen_version:?} differs from the host build {binary_version}"
+        ));
+    }
+    let seen_size = ready.get("disk_size").and_then(Value::as_u64);
+    if seen_size != Some(disk_size) {
+        return Err(format!(
+            "disk size {seen_size:?} differs from the planned {disk_size} bytes"
+        ));
+    }
+    let seen_ss = ready.get("sector_size").and_then(Value::as_u64);
+    if seen_ss != Some(sector_size) {
+        return Err(format!(
+            "sector size {seen_ss:?} differs from the planned {sector_size}"
+        ));
+    }
+    Ok(())
 }
 
 /// SIGINT 的处理函数：只置位。真正的收尾（终止 guest、按 Unknown 交回）在读取循环里
@@ -101,7 +134,7 @@ impl Session {
 
     /// 启动载体并完成握手。`target` 是 guest 里看到的设备路径
     fn attach(
-        mut command: Command,
+        mut command: GateCommand,
         token: String,
         target: String,
         src: &WriteSource,
@@ -169,14 +202,13 @@ impl Session {
                 "the carrier answered the handshake with an unexpected frame",
             ));
         }
-        if ready.get("binary_version").and_then(Value::as_str) != Some(protocol::BINARY_VERSION)
-            || ready.get("disk_size").and_then(Value::as_u64) != Some(src.size)
-            || ready.get("sector_size").and_then(Value::as_u64) != Some(sector_size)
+        if let Err(why) =
+            ready_geometry_matches(protocol::BINARY_VERSION, src.size, sector_size, &ready)
         {
             session.kill();
-            return Err(RunOutcome::refused(
-                "the carrier sees a different target geometry than the host plan",
-            ));
+            return Err(RunOutcome::refused(format!(
+                "the carrier sees a different target geometry than the host plan: {why}"
+            )));
         }
         // 会话号由载体签发：随后的每一帧都回带它，只验握手不验后续帧等于没有会话边界
         let Some(sid) = ready.get("sid").and_then(Value::as_str) else {
@@ -199,7 +231,7 @@ impl Session {
         sink: &mut dyn StepSink,
     ) -> Result<StepRun, RunOutcome> {
         let id = self.next_id;
-        self.next_id += 1;
+        self.next_id += 1; // audit-allow: counter
         let (entry, chunks_in_entry, completed_steps, cursor) = state.durable();
         let request = json!({
             "v": protocol::VERSION,
@@ -276,7 +308,7 @@ impl Session {
                     let index = frame
                         .get("index")
                         .and_then(Value::as_u64)
-                        .and_then(|index| usize::try_from(index).ok())
+                        .and_then(|index| crate::support::host_usize(index).ok())
                         .ok_or_else(|| {
                             SessionError::Protocol("a progress frame has no step index".into())
                         })?;
@@ -329,7 +361,7 @@ impl Session {
         step: &WireStep,
     ) -> Result<(), SessionError> {
         let id = self.next_id;
-        self.next_id += 1;
+        self.next_id += 1; // audit-allow: counter
         self.send(&json!({
             "v": protocol::VERSION,
             "type": "probe",
@@ -403,7 +435,7 @@ impl Session {
     /// 等待按 200ms 切片进行，每一片之前看一次中断标志：SIGINT 到达时宿主必须
     /// 终止 guest 并按 Unknown 交回，不能等满整个超时
     fn wait_frame(&mut self, timeout: Duration) -> Result<Value, SessionError> {
-        let deadline = Instant::now() + timeout;
+        let deadline = Instant::now() + timeout; // audit-allow: len-bounded
         loop {
             if INTERRUPTED.load(Ordering::SeqCst) {
                 self.kill();
@@ -536,5 +568,59 @@ fn token() -> Result<String, RunOutcome> {
 impl From<SessionError> for RunOutcome {
     fn from(error: SessionError) -> Self {
         RunOutcome::partial(format!("the carrier session failed: {}", error.text()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use super::protocol;
+
+    const DISK_SIZE: u64 = 1 << 20;
+    const SECTOR_SIZE: u64 = 512;
+
+    fn ready_frame(binary_version: &str, disk_size: u64, sector_size: u64) -> Value {
+        json!({
+            "type": "ready",
+            "binary_version": binary_version,
+            "disk_size": disk_size,
+            "sector_size": sector_size,
+            "sid": "session",
+        })
+    }
+
+    #[test]
+    fn matching_ready_passes_the_geometry_check() {
+        let frame = ready_frame(protocol::BINARY_VERSION, DISK_SIZE, SECTOR_SIZE);
+        assert!(
+            ready_geometry_matches(protocol::BINARY_VERSION, DISK_SIZE, SECTOR_SIZE, &frame).is_ok()
+        );
+    }
+
+    #[test]
+    fn a_different_binary_version_is_refused() {
+        let frame = ready_frame("other-build", DISK_SIZE, SECTOR_SIZE);
+        assert!(
+            ready_geometry_matches(protocol::BINARY_VERSION, DISK_SIZE, SECTOR_SIZE, &frame)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn a_different_disk_size_is_refused() {
+        let frame = ready_frame(protocol::BINARY_VERSION, DISK_SIZE * 2, SECTOR_SIZE);
+        assert!(
+            ready_geometry_matches(protocol::BINARY_VERSION, DISK_SIZE, SECTOR_SIZE, &frame)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn a_different_sector_size_is_refused() {
+        let frame = ready_frame(protocol::BINARY_VERSION, DISK_SIZE, 4096);
+        assert!(
+            ready_geometry_matches(protocol::BINARY_VERSION, DISK_SIZE, SECTOR_SIZE, &frame)
+                .is_err()
+        );
     }
 }

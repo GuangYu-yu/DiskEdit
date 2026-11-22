@@ -76,9 +76,9 @@ pub(crate) const DETAILS_SCAN: &str = r#"  Enumerate records under a container r
   There is no index yet: every row carries "registered": false."#;
 
 /// 单个文件的读取上限
-const MAX_FILE_BYTES: u64 = 64 * crate::support::MIB_BYTES;
+const MAX_FILE_BYTES: u64 = 64 * crate::support::MIB_BYTES; // audit-allow: const-expr
 /// 一次枚举的读取总量上限
-const MAX_TOTAL_BYTES: u64 = 512 * crate::support::MIB_BYTES;
+const MAX_TOTAL_BYTES: u64 = 512 * crate::support::MIB_BYTES; // audit-allow: const-expr
 /// 一次枚举的时间上限
 const MAX_ELAPSED: Duration = Duration::from_secs(30);
 /// 布局本身生产的最深目录层数。ROOT 是第 0 层；块设备侧的布局
@@ -87,7 +87,7 @@ const MAX_ELAPSED: Duration = Duration::from_secs(30);
 const LAYOUT_DEPTH: usize = 2;
 /// 目录层级上限：布局层数 + 1。比布局深一层的目录仍读得到（隔离区、残留的中间目录），
 /// 再深即报「结果不完整」，不静默跳过
-const MAX_DEPTH: usize = LAYOUT_DEPTH + 1;
+const MAX_DEPTH: usize = LAYOUT_DEPTH + 1; // audit-allow: const-expr
 
 /// 七态。`LocationUnavailable` 需要索引才能产生，本版没有索引
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -136,7 +136,7 @@ impl Row {
             Evidence::Recognized(record) => {
                 if backend_mismatch(record, self.backend) {
                     State::BackendMismatch
-                } else if record.committed() {
+                } else if record.completion_verdict().allows_finish() {
                     State::Valid
                 } else {
                     State::Unfinished
@@ -247,27 +247,15 @@ fn probe_at(path: &Path, current: Option<&crate::recovery::SceneIdentity>) -> Ev
     }
 }
 
-/// 目标当前的现场身份；目标打不开或节点形态判不出时没有可比的证据，返回 None 让
-/// 调用方标 `identity_check: unavailable`
+/// 目标当前的现场身份三态：读到 / 确认无稳定身份 / 读不出。打开失败与探测失败落
+/// `Undecidable`，平台确认给不出稳定身份证据落 `Absent`，不再折成同一个 `None` 让
+/// 出口把读不出说成"身份不可用"
 #[cfg(target_os = "linux")]
 fn current_scene(
     path: &Path,
     declared: Option<&DeclaredIdentity>,
-) -> Option<crate::recovery::SceneIdentity> {
-    use crate::dev::FileSource;
-    use crate::domain::Fact;
-
-    let mut src = match crate::dev::target_node_is_block(path) {
-        Fact::Known(true) => FileSource::open_read_only(path).ok()?,
-        Fact::Known(false) | Fact::Absent => FileSource::open_read_only_image(path, None).ok()?,
-        Fact::Undecidable(_) => return None,
-    };
-    if let Some(name) = declared {
-        src.identity = src.identity.with_declared(name).ok()?;
-    }
-    // 与 inspect 同一套事实：容量、载体文件与 loop 映射都从已打开的句柄取
-    let probe = crate::platform::probe::probe_of(&src).ok()?;
-    Some(crate::recovery::SceneIdentity::of_source(&probe, &src))
+) -> crate::domain::Fact<crate::recovery::SceneIdentity> {
+    crate::cmd::scene::scene_by_path(path, declared, None)
 }
 
 /// 枚举预算：超限即整体失败，不打印半份结果
@@ -331,14 +319,14 @@ fn collect_dir(
         let path = entry.path();
         let file_type = entry.file_type().map_err(|e| crate::support::cannot_stat(path.display(), e))?;
         if file_type.is_dir() {
-            if depth + 1 > MAX_DEPTH {
+            if depth + 1 > MAX_DEPTH { // audit-allow: counter
                 return Err(format!(
                     "{} is at depth {} — the scan is bounded to depth {MAX_DEPTH}; no partial result is returned",
                     path.display(),
-                    depth + 1
+                    depth + 1 // audit-allow: counter
                 ));
             }
-            collect_dir(&path, backend, current, budget, depth + 1, out)?;
+            collect_dir(&path, backend, current, budget, depth + 1, out)?; // audit-allow: counter
             continue;
         }
         if !file_type.is_file() {
@@ -442,15 +430,28 @@ pub(crate) fn cmd_records_list(a: &RecordsListRequest) -> RunOutcome {
                     path.display()
                 )));
             };
+            let current = current_scene(path, declared.as_ref());
+            // audit-allow: W-23
+            let current_ref = match &current {
+                crate::domain::Fact::Known(scene) => Some(scene),
+                _ => None,
+            };
             let dir = record.parent().unwrap_or(Path::new("."));
             let backend = match crate::dev::record_backend(dir) {
                 Ok(Some(backend)) => backend,
                 Ok(None) => RecordBackend::Sidecar,
                 Err(e) => bail_fail(RunOutcome::refused(format!("cannot inspect {}: {e}", dir.display()))),
             };
-            let current = current_scene(path, declared.as_ref());
-            if let Err(reason) = collect_dir(dir, backend, current.as_ref(), &mut budget, 1, &mut rows) {
+            if let Err(reason) = collect_dir(dir, backend, current_ref, &mut budget, 1, &mut rows) {
                 bail_fail(RunOutcome::refused(format!("cannot list records: {reason}")));
+            }
+            // 读不出目标不等于目标没有身份：列表仍按结构解码，但身份核对不可用的原因
+            // 必须浮出，不能与"平台给不出稳定身份"同一句 unavailable 混在一起
+            if let crate::domain::Fact::Undecidable(why) = &current {
+                eprintln!(
+                    "the target's identity could not be read ({why}); identity check is unavailable \
+                     for the records listed below"
+                );
             }
             Some(
                 "only TARGET's own record directory is listed; sidecars beside other targets are not \
@@ -505,12 +506,17 @@ pub(crate) fn cmd_records_verify(a: &RecordsVerifyRequest) -> RunOutcome {
             .with_declared_name(a.identity.as_deref())
             .unwrap_or_else(|e| bail_fail(RunOutcome::usage(e)))
     });
-    // verify 的语义是拿盘面重新核对一遍身份；目标探测不出来就没有"核对过"这回事
-    let Some(current) = current_scene(path, declared.as_ref()) else {
-        bail_fail(RunOutcome::refused(format!(
-            "cannot probe the identity of {} — the record was not verified",
-            path.display()
-        )));
+    // verify 的语义是拿盘面重新核对一遍身份；目标探测不出来就没有"核对过"这回事。
+    // 读不出与"目标形态上给不出稳定身份"是两条拒绝：前者是环境故障，后者是不适用
+    let current = match current_scene(path, declared.as_ref()) {
+        crate::domain::Fact::Known(scene) => scene,
+        crate::domain::Fact::Absent => bail_fail(RunOutcome::refused(
+            "this target exposes no stable identity to compare against — the record was not verified"
+                .to_string(),
+        )),
+        crate::domain::Fact::Undecidable(why) => bail_fail(RunOutcome::refused(format!(
+            "the target could not be read ({why}) — the record was not verified"
+        ))),
     };
     let mut budget = Budget::new();
     let mut rows = Vec::new();

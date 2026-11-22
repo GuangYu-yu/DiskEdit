@@ -86,7 +86,7 @@ pub(crate) fn write_primary_entries(src: &mut WriteSource, ss: u64, ents: &[(u64
             partition_name: "".into(),
         })
         .collect();
-    let (bytes, crc) = serialize_array(&parsed, &geom);
+    let (bytes, crc) = serialize_array(&parsed, &geom).unwrap();
     src.write_fixture(2 * ss, &bytes).unwrap();
     let file_last = src.size / ss - 1;
     let h = geo_header(34, file_last - geom.lba_span() - 1, 2);
@@ -138,7 +138,7 @@ pub(crate) fn geom128(ss: u64) -> EntryArrayGeometry {
 /// 直接把一份自定义几何的主副本写进镜像（绕过 commit_gpt 的规范化和写入序列）
 pub(crate) fn write_raw_primary(src: &mut WriteSource, mut h: RawHeader, ss: u64) {
     let geom = EntryArrayGeometry::new(ss, h.size_of_partition_entry, h.number_of_partition_entries, MAX_ARRAY_BYTES).unwrap();
-    let (bytes, crc) = serialize_array(&[], &geom);
+    let (bytes, crc) = serialize_array(&[], &geom).unwrap();
     src.write_fixture(h.partition_entry_lba * ss, &bytes).unwrap();
     h.header_size = 92;
     let sec = serialize_header(&h, crc, ss).unwrap();
@@ -149,7 +149,7 @@ pub(crate) fn write_raw_primary(src: &mut WriteSource, mut h: RawHeader, ss: u64
 /// 传入的 `h` 须为备份头语义：MyLBA = 盘尾、AltLBA = 1
 pub(crate) fn write_raw_backup(src: &mut WriteSource, mut h: RawHeader, ss: u64) {
     let geom = EntryArrayGeometry::new(ss, h.size_of_partition_entry, h.number_of_partition_entries, MAX_ARRAY_BYTES).unwrap();
-    let (bytes, crc) = serialize_array(&[], &geom);
+    let (bytes, crc) = serialize_array(&[], &geom).unwrap();
     src.write_fixture(h.partition_entry_lba * ss, &bytes).unwrap();
     h.header_size = 92;
     let file_last = src.size / ss - 1;

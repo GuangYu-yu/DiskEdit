@@ -146,7 +146,7 @@ pub(crate) fn prepare_apply(
             plan.grow_part,
             is_swap_guid(&ge.partition_type_guid),
             ge.starting_lba,
-            ge.ending_lba - ge.starting_lba + 1,
+            ge.ending_lba - ge.starting_lba + 1, // audit-allow: len-bounded
             plan.ss,
             &growable,
         )?;
@@ -348,6 +348,7 @@ pub(crate) fn execute_apply(
     post: &mut Vec<Pending>,
 ) -> Result<(), RunOutcome> {
     let mut g = d.g.clone();
+    // audit-allow: index-in-bounds
     let grow_idx = (plan.grow_part - 1) as usize;
     let grow_start = g.entries().get(grow_idx).map(|e| e.starting_lba).ok_or_else(|| {
         RunOutcome::no_mutation(format!("partition {} is outside the entry array", plan.grow_part))
@@ -557,7 +558,7 @@ pub(crate) fn finalize_growth(
                         e.to_string(),
                         crate::fsops::rescue_hint(
                             Some(ContentKind::Swap),
-                            &crate::dev::part_dev_hint(src, part, r.old.0 * ss),
+                            &crate::dev::part_dev_hint(src, part, r.old.0 * ss), // audit-allow: display-only
                             None,
                         ),
                     )),
@@ -649,12 +650,18 @@ pub(crate) fn read_swap_identity(
     }
     // UUID/卷标偏移与页大小无关：libblkid struct swap_header_v1_2 中 uuid @1036、volume @1052
     // （与内核 union swap_header 的 info 区同布局，均在第一页内、bootbits 之后）
+    let Some(uuid_at) = base.checked_add(1036) else {
+        return SwapIdentity::Unreadable("swap UUID offset overflows the u64 range".into());
+    };
     let mut uuid = [0u8; 16];
-    if let Err(e) = src.read_at(base + 1036, &mut uuid) {
+    if let Err(e) = src.read_at(uuid_at, &mut uuid) {
         return SwapIdentity::Unreadable(format!("cannot read the swap UUID: {e}"));
     }
+    let Some(vol_at) = base.checked_add(1052) else {
+        return SwapIdentity::Unreadable("swap volume offset overflows the u64 range".into());
+    };
     let mut vol = [0u8; 16];
-    let label = match src.read_at(base + 1052, &mut vol) {
+    let label = match src.read_at(vol_at, &mut vol) {
         Ok(()) => {
             let vol_bytes: Vec<u8> = vol.iter().take_while(|&&b| b != 0).copied().collect();
             if vol_bytes.is_empty() { SwapLabel::Absent } else { SwapLabel::Present(vol_bytes) }

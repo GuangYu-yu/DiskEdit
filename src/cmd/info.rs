@@ -183,7 +183,7 @@ pub(crate) fn cmd_info_with(a: &InfoRequest, tail: Option<&str>) -> RunOutcome {
                 Err(e) => {
                     identify_errors.push(format!(
                         "partition {}: {}",
-                        i + 1,
+                        i + 1, // audit-allow: display-only
                         crate::support::identify_failed(&e)
                     ));
                     "error".to_string()
@@ -191,7 +191,7 @@ pub(crate) fn cmd_info_with(a: &InfoRequest, tail: Option<&str>) -> RunOutcome {
             };
             out.push_str(&format!(
                 "{{\"num\":{},\"first_lba\":{},\"last_lba\":{},\"size_bytes\":{},\"type\":\"{}\",\"fs\":\"{}\",\"name\":\"{}\"}}",
-                i + 1,
+                i + 1, // audit-allow: display-only
                 e.starting_lba,
                 e.ending_lba,
                 lba_range_bytes(e.starting_lba, e.ending_lba, g.ss),
@@ -250,7 +250,7 @@ pub(crate) fn cmd_info_with(a: &InfoRequest, tail: Option<&str>) -> RunOutcome {
                     };
                     // 末端在 u64 域算：两个 u32 字段相加会溢出（debug panic / release 回绕），
                     // 报出一个小于起点的 last_lba。size_lba != 0 由 parse_mbr 保证，无下溢
-                    let last_lba = p.start_lba as u64 + p.size_lba as u64 - 1;
+                    let last_lba = p.start_lba as u64 + p.size_lba as u64 - 1; // audit-allow: display-only
                     // 条目键集与 GPT 分支一致：MBR 没有分区名概念，如实给 null（同
                     // disk_guid 的口径——缺字段会让按同一 schema 消费的调用方拿到不同键集）
                     format!(
@@ -320,12 +320,12 @@ pub(crate) fn cmd_info_with(a: &InfoRequest, tail: Option<&str>) -> RunOutcome {
             eprintln!("error: {e}");
         }
         let msg = "filesystem identification failed on one or more partitions";
-        println!("{},\"error\":\"{}\"}}", &out[..out.len() - 1], json_escape(msg));
+        println!("{},\"error\":\"{}\"}}", &out[..out.len() - 1], json_escape(msg)); // audit-allow: display-only
         return RunOutcome::refused(msg);
     }
     match tail {
         // 信封的收尾括号在这里补：调用方只给键片段，不会与括号位置互相复制
-        Some(t) => println!("{}{t}}}", &out[..out.len() - 1]),
+        Some(t) => println!("{}{t}}}", &out[..out.len() - 1]), // audit-allow: display-only
         None => println!("{out}"),
     }
     // 非 raw 容器格式识别（qcow2/VMDK/VDI/VHD/VHDX 魔数，qemu docs block-drivers）：字节直译
@@ -417,8 +417,8 @@ fn vhd_fixed_footer(src: &FileSource) -> Result<bool, String> {
         return Ok(false);
     }
     let mut f = [0u8; 512];
-    src.read_at(src.size - 512, &mut f)
-        .map_err(|e| format!("cannot read the VHD footer at offset {}: {e}", src.size - 512))?;
+    src.read_at(src.size - 512, &mut f) // audit-allow: len-bounded
+        .map_err(|e| format!("cannot read the VHD footer at offset {}: {e}", src.size - 512))?; // audit-allow: display-only
     Ok(&f[0..8] == b"conectix" && u32::from_be_bytes([f[60], f[61], f[62], f[63]]) == 2)
 }
 

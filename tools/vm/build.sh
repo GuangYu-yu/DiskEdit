@@ -41,6 +41,11 @@ for tool in python3 sha256sum; do
   command -v "$tool" >/dev/null || { echo "missing build dependency: $tool" >&2; exit 2; }
 done
 
+# worker 摘要在打包前先算一次：manifest 登记与入包比对共用这一份
+worker_sha256=$(sha256sum "$BIN" | cut -d' ' -f1)
+# guest 内 worker 的归档条目名（对应下面 install 到 "$guest/bin/diskedit"）
+worker_entry="bin/diskedit"
+
 version=$(sed -n 's/^version *= *"\([^"]*\)".*/\1/p' "$root/Cargo.toml" | head -1)
 [ -n "$version" ] || { echo "cannot read the package version from Cargo.toml" >&2; exit 2; }
 version=${BINARY_VERSION:-$version}
@@ -168,14 +173,21 @@ with open(out, "wb") as f:
     with gzip.GzipFile(fileobj=f, mode="wb", compresslevel=9, mtime=0) as gz:
         gz.write(archive)
 PY
+# ---- worker 入包判据 -------------------------------------------------------
+# initramfs 打出来后解开，按条目名取出 worker，与本次算出的 worker 摘要比对；
+# 不符即构建失败（非零退出）。只定位这一条目，其余条目按偏移跳过；不依赖外部 cpio。
+python3 "$here/verify_worker.py" \
+    --check "$work/initramfs" \
+    --entry "$worker_entry" \
+    --expect "$worker_sha256"
 # ---- manifest ------------------------------------------------------------
 mkdir -p "$OUT"
 cp "$work/kernel" "$OUT/kernel"
 cp "$work/initramfs" "$OUT/initramfs"
-python3 - "$here/manifest.json" "$OUT" "$ARCH" "$version" "$BIN" <<'PY'
+python3 - "$here/manifest.json" "$OUT" "$ARCH" "$version" "$worker_sha256" <<'PY'
 import hashlib, json, os, sys
 
-template, out, arch, version, worker = sys.argv[1:6]
+template, out, arch, version, worker_sha = sys.argv[1:6]
 
 def digest(path):
     h = hashlib.sha256()
@@ -189,7 +201,7 @@ manifest["arch"] = arch
 manifest["binary_version"] = version
 manifest["kernel"] = {"path": "kernel", "sha256": digest(os.path.join(out, "kernel"))}
 manifest["initramfs"] = {"path": "initramfs", "sha256": digest(os.path.join(out, "initramfs"))}
-manifest["worker"] = {"sha256": digest(worker)}
+manifest["worker"] = {"sha256": worker_sha}
 json.dump(manifest, open(os.path.join(out, "manifest.json"), "w"), indent=2)
 PY
 

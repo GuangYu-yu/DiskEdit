@@ -32,7 +32,7 @@ impl Decision {
                 Placement::Native => PlacementAudit::Native,
                 Placement::Vm => PlacementAudit::Vm,
             },
-            worker_digest: self.bundle.as_ref().and_then(|b| b.worker_digest),
+            worker_digest: self.bundle.as_ref().map(|b| b.worker_digest),
             tool_versions: self
                 .needs
                 .tools

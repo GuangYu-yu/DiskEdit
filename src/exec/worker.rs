@@ -14,7 +14,7 @@ use crate::outcome::RunOutcome;
 
 use super::native;
 use super::protocol::{self, Lines, Read};
-use super::{CarrierStep, ProbeRequest};
+use super::ProbeRequest;
 
 const TOKEN_VAR: &str = "DISKEDIT_WORKER_TOKEN";
 /// 载体 init 拉起 worker 时置位。串口控制台也是终端，不置位就会被下面的守卫拒掉
@@ -93,12 +93,8 @@ fn serve(io: &mut WorkerIo, token: &str) -> Result<(), Failure> {
         .ok_or_else(|| Failure::Handshake("the handshake has no disk size".into()))?;
     let source = FileSource::open_in_carrier(Path::new(target), Some(sector_size))
         .map_err(|e| Failure::Handshake(format!("cannot open {target}: {e}")))?;
-    if source.size != disk_size {
-        return Err(Failure::Handshake(format!(
-            "{target} is {} bytes but the plan was made for {disk_size}",
-            source.size
-        )));
-    }
+    reconcile_geometry(target, source.size, disk_size, source.sector_size, sector_size)?;
+    let measured_ss = source.sector_size;
     let mut src = WriteSource::borrowed(source);
     // 会话号：只在这次应答里交给宿主，随后每一帧都必须回带。只验一次握手等于把"拿到
     // stdin 写权限的第三方"当成宿主——它们不必知道 token 就能接在后面发帧
@@ -107,7 +103,7 @@ fn serve(io: &mut WorkerIo, token: &str) -> Result<(), Failure> {
         "v": protocol::VERSION,
         "type": "ready",
         "binary_version": protocol::BINARY_VERSION,
-        "sector_size": sector_size,
+        "sector_size": measured_ss,
         "disk_size": disk_size,
         "sid": sid.clone(),
     }))?;
@@ -148,23 +144,14 @@ fn serve(io: &mut WorkerIo, token: &str) -> Result<(), Failure> {
                     first_lba: u64_of(&frame, "first_lba")?,
                     sectors: u64_of(&frame, "sectors")?,
                 };
-                let mut state = TransferState::default();
-                let run = native::execute(
-                    &mut src,
-                    CarrierStep::Probe(request),
-                    sector_size,
-                    &mut state,
-                    &mut WorkerSink { io, id },
-                );
-                match run {
-                    Ok(run) => {
-                        let probe = run.probe.expect("a probe step reports its reading");
+                match native::execute_probe(&src, request, sector_size) {
+                    Ok(report) => {
                         io.emit(&json!({
                             "v": protocol::VERSION,
                             "type": "probe_result",
                             "id": id,
-                            "part": probe.part,
-                            "content": probe.content.as_str(),
+                            "part": report.part,
+                            "content": report.content.as_str(),
                         }))?;
                     }
                     Err(error) => {
@@ -186,6 +173,32 @@ fn serve(io: &mut WorkerIo, token: &str) -> Result<(), Failure> {
             }
         }
     }
+}
+
+/// 握手几何对账：实测容量与实测扇区大小都必须与计划声明一致。
+///
+/// 扇区大小一维不可省：块设备的逻辑扇区由内核经 `BLKSSZGET` 实测给出，握手声明的 ss 只是
+/// 宿主计划值。若只把握手值原样回显，宿主那道几何比对就是拿声明核对声明的自证循环，guest
+/// 报告了不同逻辑块大小时抓不到。任一一维不符都按握手失败拒绝——会话尚未开始，不存在
+/// "部分改动"。
+fn reconcile_geometry(
+    target: &str,
+    measured_size: u64,
+    declared_size: u64,
+    measured_ss: u64,
+    declared_ss: u64,
+) -> Result<(), Failure> {
+    if measured_size != declared_size {
+        return Err(Failure::Handshake(format!(
+            "{target} is {measured_size} bytes but the plan was made for {declared_size}"
+        )));
+    }
+    if measured_ss != declared_ss {
+        return Err(Failure::Handshake(format!(
+            "{target} reports a sector size of {measured_ss} bytes but the plan was made for {declared_ss}"
+        )));
+    }
+    Ok(())
 }
 
 /// 会话号：进程熵（`RandomState` 的密钥）上取 128 位，不额外依赖平台 API。
@@ -391,5 +404,32 @@ impl WorkerIo {
         {
             eprintln!("diskedit worker: {error}");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn matching_geometry_passes_the_handshake() {
+        assert!(reconcile_geometry("/dev/vda", 1 << 20, 1 << 20, 512, 512).is_ok());
+    }
+
+    #[test]
+    fn mismatched_sector_size_is_refused_as_a_handshake_failure() {
+        let error = reconcile_geometry("/dev/vda", 1 << 20, 1 << 20, 4096, 512)
+            .expect_err("a reported sector size different from the plan must be refused");
+        assert!(
+            matches!(error, Failure::Handshake(_)),
+            "a geometry mismatch on the trust boundary is a handshake failure, not a protocol error"
+        );
+    }
+
+    #[test]
+    fn mismatched_disk_size_is_refused_as_a_handshake_failure() {
+        let error = reconcile_geometry("/dev/vda", 1 << 20, 2 << 20, 512, 512)
+            .expect_err("a reported capacity different from the plan must be refused");
+        assert!(matches!(error, Failure::Handshake(_)));
     }
 }

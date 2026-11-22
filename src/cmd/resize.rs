@@ -323,7 +323,7 @@ pub(crate) fn cmd_resize(a: &ResizeRequest) -> crate::outcome::RunOutcome {
     // 目标长度不在锁前算：`+N` 锚定当前尺寸、`grow` 锚定右侧空闲，都由 gpt_decider 在
     // 在线自己的锁下、按重解析的盘上几何重新解析（见其注释）
     #[cfg(target_os = "linux")]
-    if let Some(o) = resize_online(a, &src, part, is_pv, gpt_decider(a.size, part, is_pv)) {
+    if let Some(o) = resize_online(a, &src, part, is_pv, gpt_decider(a.size, part, is_pv, e.clone())) {
         return o;
     }
 
@@ -552,7 +552,7 @@ pub(crate) fn cmd_resize(a: &ResizeRequest) -> crate::outcome::RunOutcome {
         // 请求的形状三选一：尺寸未变算不出正位移，它可能是原样重跑同一条扩容命令。
         // 搬移量只在扩时有定义；收缩走直连路径，由文件系统步先缩内容再收表
         let intent = if new_end > end {
-            movepart::ShiftIntent::Grow(new_end - end)
+            movepart::ShiftIntent::Grow(new_end - end) // audit-allow: len-bounded
         } else if new_end == end {
             movepart::ShiftIntent::NoOp
         } else {

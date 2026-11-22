@@ -65,3 +65,39 @@ pub(crate) fn size_request_resolution() {
     assert!(resolve_size_request(crate::cli::SizeSpec::Absolute(511), G, 512).is_err());
     assert!(resolve_size_request(crate::cli::SizeSpec::Delta { grow: false, bytes: G }, G, 512).is_err());
 }
+
+/// 身份闸接线：锁前快照 A、锁下同号条目 B（GUID/起点/容量至少一项不同）必须落 Refused
+/// （退出 3），全等才放行。助手只接收条目值、不持盘句柄，拒绝分支不可能伴随已发生的
+/// 写入；被拦的接线错误包括：比对字段集改漏、不符分支被翻转成放行、拒绝被折成别的出口。
+#[test]
+fn entry_identity_gate_refuses_reused_slot_before_any_write() {
+    use crate::outcome::{EXIT_REFUSED, RunOutcome};
+
+    let gpt_entry = |guid: [u8; 16], start: u64, end: u64| gptman::GPTPartitionEntry {
+        partition_type_guid: [1; 16],
+        unique_partition_guid: guid,
+        starting_lba: start,
+        ending_lba: end,
+        attribute_bits: 0,
+        partition_name: "".into(),
+    };
+    let snap_g = gpt_entry([2; 16], 2048, 4095);
+    let other_g = gpt_entry([9; 16], 10240, 12000);
+    let refused_g = super::gpt_identity_or_refused(&snap_g, &other_g, 1).unwrap_err();
+    assert!(matches!(refused_g, RunOutcome::Refused(_)), "a reused slot must be refused: {refused_g:?}");
+    assert_eq!(refused_g.exit_code(), EXIT_REFUSED);
+    assert!(super::gpt_identity_or_refused(&snap_g, &gpt_entry([2; 16], 2048, 4095), 1).is_ok());
+
+    let mbr_entry = |start: u32, size: u32| crate::table::MbrPartition {
+        num: 1,
+        os_type: 0x83,
+        start_lba: start,
+        size_lba: size,
+        is_container: false,
+    };
+    let snap_m = mbr_entry(63, 100);
+    let refused_m = super::mbr_identity_or_refused(&snap_m, &mbr_entry(200, 100), 1).unwrap_err();
+    assert!(matches!(refused_m, RunOutcome::Refused(_)), "a reused slot must be refused: {refused_m:?}");
+    assert_eq!(refused_m.exit_code(), EXIT_REFUSED);
+    assert!(super::mbr_identity_or_refused(&snap_m, &mbr_entry(63, 100), 1).is_ok());
+}

@@ -170,10 +170,21 @@ pub struct FileSource {
 /// 写句柄：在 [`FileSource`] 之外**持有**一份目标独占所有权（见 `targetlock`）。
 ///
 /// 写方法（`write_at` / `write_data_at` / `write_raw`，以及 journal 的屏障与语义标注）
-/// 只挂在本类型上：只读打开得到的 [`FileSource`] 在类型层面就没有写盘接口，生产写入口
-/// 因此绕不过"持锁"这一步。构造只有两条路——[`Self::acquire`] 取锁（生产唯一入口）与
-/// 测试专用的 [`Self::unowned`]（`#[cfg(test)]`，不取锁）。字段私有，crate 内没有第三种
-/// 拼装方式
+/// 只挂在本类型上：只读打开得到的 [`FileSource`] 在类型层面就没有写盘接口。
+///
+/// 构造器有三个，锁的归属各不相同：
+/// - [`Self::acquire`]：宿主侧写事务入口，取 [`TargetLock`](crate::targetlock::TargetLock)，
+///   `_lock: Some`。宿主的记录事务与无历史写事务都经它把已打开句柄升格为写句柄。
+/// - [`Self::borrowed`]：载体 guest 的写句柄，`_lock: None`。独占所有权仍由宿主进程
+///   持有——宿主在整次会话期间持锁，guest 只按会话信道转达的计划步骤写目标，因此不再
+///   独立取锁（[`Self::borrowed`] 配套的 `open_in_carrier` 也据此不带 `O_EXCL`）。
+///   它只被 `__worker` 会话入口调用。
+/// - [`Self::unowned`]：`#[cfg(test)]` 夹具，不取锁。
+///
+/// "写命令持锁"的封死点不落在"构造器只有几条"这句话上：宿主侧生产写事务全部经
+/// `acquire`（`open_rw` ← 记录/无历史事务入口 ← `open_target_owned`）；`borrowed`
+/// 是唯一不带锁的生产构造器，而它的唯一调用点是 guest worker 入口，所有权留在宿主
+/// 会话侧。字段私有，crate 内没有第四处字面量拼装。
 pub struct WriteSource {
     src: FileSource,
     /// 独占所有权的持有者。字段不被读取，存在的意义是被持有到写完为止；析构即释放锁
@@ -241,7 +252,7 @@ pub(crate) fn test_block_source(
     let mut fingerprint = TargetFingerprint::from_file(&file)?;
     fingerprint.id = fnv1a64(device_id.as_bytes());
     let key = crate::dev::host_repo::key_for_test(device_id, None);
-    let record = crate::dev::host_repo::record_dir_under(write_root, &key.hash_hex()).join(crate::dev::RECORD_NAME);
+    let record = crate::dev::host_repo::record_dir_under(write_root, &key.hash_hex()?).join(crate::dev::RECORD_NAME);
     let identity = TargetIdentity {
         kind: TargetKind::Block,
         base: path.to_path_buf(),
@@ -289,7 +300,11 @@ impl WriteSource {
             crate::dev::admit(claim, declared, |held| {
                 // `try_exists` 而不是 `exists`：读不出目录与"没有现场"是两件事，
                 // 后者可以准入，前者必须拒绝
-                src.identity.record_path_for_declared(held).try_exists()
+                let path = src
+                    .identity
+                    .record_path_for_declared(held)
+                    .map_err(std::io::Error::other)?;
+                path.try_exists()
             })?;
         }
         Ok(Self { src, _lock: Some(lock), pending_step: None })
@@ -302,8 +317,8 @@ impl WriteSource {
         Self { src, _lock: None, pending_step: None }
     }
 
-    /// 测试专用：不取锁的写句柄。`#[cfg(test)]` 之外构造不出来，生产代码只能经
-    /// [`Self::acquire`] 拿到写权限
+    /// 测试专用：不取锁的写句柄。`#[cfg(test)]` 之外构造不出来；宿主生产写权限经
+    /// [`Self::acquire`]，载体 guest 写句柄经 [`Self::borrowed`]
     #[cfg(test)]
     pub(crate) fn unowned(src: FileSource) -> Self {
         // 运行边界：每个用例自建写句柄，写事实从构造点重新起算
@@ -394,17 +409,22 @@ impl WriteSource {
             // 单文件记录的粒度是扇区：把写入区间按扇区边界扩到整扇区，
             // 记录这些扇区的完整原文（最后一扇区可以止于文件末尾）
             let sector_size = self.sector_size;
-            let first = off - off % sector_size;
-            let end = ((off + buf.len() as u64).div_ceil(sector_size))
+            let first = off - off % sector_size; // audit-allow: len-bounded
+            let end = ((off + buf.len() as u64).div_ceil(sector_size)) // audit-allow: len-bounded
                 .saturating_mul(sector_size)
                 .min(self.size);
-            let mut orig = vec![0u8; (end - first) as usize];
+            let orig_len = crate::support::host_usize(end - first).map_err(|_| {
+                io::Error::new(io::ErrorKind::InvalidData, "the pre-image range exceeds the host address space")
+            })?;
+            let mut orig = vec![0u8; orig_len];
             self.read_at(first, &mut orig)?;
             // 写入后的整扇区样子：原文叠上本次写入的字节。`recover` 用它核对"盘面仍是记录
             // 写后的样子"，只存原文无法把外部改动与本次写入区分开
             let mut after = orig.clone();
-            let at = (off - first) as usize;
-            after[at..at + buf.len()].copy_from_slice(buf);
+            let at = crate::support::host_usize(off - first).map_err(|_| {
+                io::Error::new(io::ErrorKind::InvalidData, "the write offset exceeds the host address space")
+            })?;
+            after[at..at + buf.len()].copy_from_slice(buf); // audit-allow: index-in-bounds
             if let Some(journal) = self.src.record_journal.as_mut() {
                 journal.record_span(first / sector_size, orig, after).map_err(|e| e.into_io())?;
             }
@@ -412,7 +432,7 @@ impl WriteSource {
         }
         self.write_raw(off, buf)?;
         if self.src.record_journal.is_some() {
-            let nth = RECORD_WRITES.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+            let nth = RECORD_WRITES.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1; // audit-allow: counter
             crate::movepart::fault_record_before_commit(nth);
         }
         Ok(())
@@ -495,11 +515,12 @@ impl WriteSource {
             }
         }
         // 只有从盘上读到的记录才算"盘上已有记录"；内存里新建的记录要等第一次
-        // persist 成功后由 `note_record_persisted` 置位
+        // persist 成功后由 `note_record_persisted` 置位。这里只问"有没有已落盘的提交点"，
+        // 不问作业能否收尾；收尾判定走 `completion_verdict`
         if journal.is_persisted() {
-            crate::outcome::note_record_present(record.committed());
+            crate::outcome::note_record_present(record.has_recorded_work());
         }
-        if record.restore_blocked || record.committed() {
+        if record.restore_blocked || record.has_recorded_work() {
             crate::outcome::note_record_past_irreversible_point();
         }
         self.src.record_journal = Some(journal);
@@ -1029,7 +1050,7 @@ impl FileSource {
                 if n == 0 {
                     return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "short read"));
                 }
-                done += n;
+                done += n; // audit-allow: counter
             }
             Ok(())
         }

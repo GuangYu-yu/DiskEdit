@@ -163,7 +163,7 @@ fn move_writes_overlap_old_ranges(record: &Record) -> Option<bool> {
 
 /// 记录已声明的已写目的区间（单位 LBA）。`None` 表示记录自相矛盾，调用方按相交处理
 fn written_destination_ranges(reloc: &Relocation) -> Option<Vec<(u64, u64)>> {
-    let cursor = reloc.entry_index as usize;
+    let cursor = crate::support::host_usize(reloc.entry_index).ok()?;
     if cursor > reloc.entries.len() {
         return None;
     }
@@ -272,7 +272,7 @@ fn gpt_preimage_ranges(restore: &[RestoreEntry], primary: &[u8]) -> Option<Vec<(
         if entry.starting_lba == 0 || entry.starting_lba > entry.ending_lba {
             return None;
         }
-        out.push((entry.starting_lba, entry.ending_lba - entry.starting_lba + 1));
+        out.push((entry.starting_lba, entry.ending_lba - entry.starting_lba + 1)); // audit-allow: len-bounded
     }
     if out.is_empty() {
         return None;
@@ -558,7 +558,7 @@ impl RecordedWrite {
         }
         let prefix = |front: &[u8], of: &[u8]| of.iter().zip(front).take_while(|(a, b)| a == b).count();
         let suffix = |back: &[u8], of: &[u8]| of.iter().zip(back).rev().take_while(|(a, b)| a == b).count();
-        let fits = |p: usize, s: usize, len: usize| p + s >= len;
+        let fits = |p: usize, s: usize, len: usize| p + s >= len; // audit-allow: len-bounded
         let forward = (prefix(after, now), suffix(pre, now));
         let backward = (prefix(pre, now), suffix(after, now));
         // 两种拼法都可能成立（例如两边前缀都与读出字节相同）；取切点更靠后的那种，
@@ -642,6 +642,12 @@ pub(crate) fn validate_record_capacity(src: &WriteSource, record: &Record, path:
     }
 }
 
+/// 条目记录的扇区口径与当前目标逻辑扇区大小的显式等式：回放偏移按记录 ss 投影，
+/// 口径不一致时同一 LBA 落在另一个坐标系上。纯事实比对，失败归 [`validate_record_ranges`] 拒读
+fn entry_sector_size_matches(entry: &RestoreEntry, target_sector_size: u64) -> bool {
+    u64::from(entry.sector_size) == target_sector_size
+}
+
 /// 区间先整体核对：越界或形状不成立意味着这份记录描述的不是这张盘，
 /// 拒绝发生在第一个字节写回之前
 pub(crate) fn validate_record_ranges(
@@ -650,6 +656,17 @@ pub(crate) fn validate_record_ranges(
     path: &std::path::Path,
 ) {
     for entry in restore {
+        // 条目记录的扇区口径必须等于当前目标的逻辑扇区大小：回放偏移按记录 ss 投影，
+        // 口径不一致时偏移落在另一个坐标系上；字节比对的隐式兜底替代不了这道显式等式
+        if !entry_sector_size_matches(entry, src.sector_size) {
+            bail_fail(RunOutcome::refused(format!(
+                "the recovery record at {} records {} byte sectors but this target uses {} byte sectors — \
+                 the recorded bytes are not written back; {ROLLBACK_STUCK_REMEDY}",
+                path.display(),
+                entry.sector_size,
+                src.sector_size
+            )));
+        }
         let Some(offset) = entry.byte_offset() else {
             bail_fail(RunOutcome::refused(format!(
                 "the recovery record at {} has an unrepresentable range (LBA {} × {} byte sector(s)); \
@@ -706,7 +723,7 @@ pub(crate) fn verify_record_plan(
     // 盘面已整体回到原文（上一轮回放写完、记录未释放）：无需再逐条判定。
     // 同一区间被写过多次时，中间态各自成条，只有按并集算出的最终原文能回答
     // "全部回滚完成了吗"
-    let image = rolled_back_image(restore);
+    let image = rolled_back_image(restore)?;
     if target_matches_image(src, &image)? {
         return Ok(true);
     }
@@ -733,13 +750,13 @@ pub(crate) fn verify_record_plan(
                 }
             };
             if let Some(tear) = torn
-                && let Err(first) = tears.record(offset + tear.cut as u64)
+                && let Err(first) = tears.record(offset + tear.cut as u64) // audit-allow: len-bounded
             {
                 return Err(RunOutcome::refused(format!(
                     "an interrupted write shows up at offset {first} and again at offset {} — one write \
                      stops in one place, so two separate break points mean the disk changed outside this tool; \
                      replaying would overwrite a foreign edit; {FOREIGN_EDIT_HINT}; {ROLLBACK_STUCK_REMEDY}",
-                    offset + tear.cut as u64
+                    offset + tear.cut as u64 // audit-allow: len-bounded
                 )));
             }
             complete = false;
@@ -751,19 +768,23 @@ pub(crate) fn verify_record_plan(
 
 /// 记录覆盖的区间"全部回滚完成后"应有的字节：每条区间的原文按回放顺序（逆序）叠加，
 /// 记录里更早的条目后写、覆盖更晚的条目。返回按偏移排序、互不重叠的段
-fn rolled_back_image(restore: &[RestoreEntry]) -> Vec<(u64, Vec<u8>)> {
+fn rolled_back_image(restore: &[RestoreEntry]) -> Result<Vec<(u64, Vec<u8>)>, RunOutcome> {
     let mut image: Vec<(u64, Vec<u8>)> = Vec::new();
     for entry in restore.iter().rev() {
         let offset = entry.byte_offset().expect("ranges were validated before the image is built");
-        overlay(&mut image, offset, &entry.original);
+        overlay(&mut image, offset, &entry.original)?;
     }
-    image
+    Ok(image)
 }
 
 /// 把一段字节叠加到按偏移排序、互不重叠的段集合上，覆盖其中的重叠部分
-fn overlay(image: &mut Vec<(u64, Vec<u8>)>, offset: u64, bytes: &[u8]) {
+fn overlay(
+    image: &mut Vec<(u64, Vec<u8>)>,
+    offset: u64,
+    bytes: &[u8],
+) -> Result<(), RunOutcome> {
     let end = offset.saturating_add(bytes.len() as u64);
-    let mut kept: Vec<(u64, Vec<u8>)> = Vec::with_capacity(image.len() + 2);
+    let mut kept: Vec<(u64, Vec<u8>)> = Vec::with_capacity(image.len() + 2); // audit-allow: len-bounded
     for (piece_offset, piece) in std::mem::take(image) {
         let piece_end = piece_offset.saturating_add(piece.len() as u64);
         if piece_end <= offset || piece_offset >= end {
@@ -771,15 +792,22 @@ fn overlay(image: &mut Vec<(u64, Vec<u8>)>, offset: u64, bytes: &[u8]) {
             continue;
         }
         if piece_offset < offset {
-            kept.push((piece_offset, piece[..(offset - piece_offset) as usize].to_vec()));
+            let prefix = crate::support::host_usize(offset - piece_offset).map_err(|_| {
+                RunOutcome::refused("the recorded pre-image range exceeds the host address space")
+            })?;
+            kept.push((piece_offset, piece[..prefix].to_vec()));
         }
         if piece_end > end {
-            kept.push((end, piece[(end - piece_offset) as usize..].to_vec()));
+            let suffix = crate::support::host_usize(end - piece_offset).map_err(|_| {
+                RunOutcome::refused("the recorded pre-image range exceeds the host address space")
+            })?;
+            kept.push((end, piece[suffix..].to_vec()));
         }
     }
     kept.push((offset, bytes.to_vec()));
     kept.sort_by_key(|(offset, _)| *offset);
     *image = kept;
+    Ok(())
 }
 
 /// 盘面是否逐字节等于并集图像
@@ -821,10 +849,16 @@ fn read_virtual(
         if start >= stop {
             continue;
         }
-        let from = (start - offset) as usize;
-        let to = (stop - offset) as usize;
-        let at = (start - *patch_off) as usize;
-        buf[from..to].copy_from_slice(&bytes[at..at + (to - from)]);
+        let from = crate::support::host_usize(start - offset).map_err(|_| {
+            RunOutcome::refused("the recorded read range exceeds the host address space")
+        })?;
+        let to = crate::support::host_usize(stop - offset).map_err(|_| {
+            RunOutcome::refused("the recorded read range exceeds the host address space")
+        })?;
+        let at = crate::support::host_usize(start - *patch_off).map_err(|_| {
+            RunOutcome::refused("the recorded read range exceeds the host address space")
+        })?;
+        buf[from..to].copy_from_slice(&bytes[at..at + (to - from)]); // audit-allow: index-in-bounds
     }
     Ok(buf)
 }
@@ -894,7 +928,11 @@ pub(crate) fn replay_record(
     // 写后读回：缓存丢写与镜像层短写只有重读才可见。回放是唯一的回退路径，
     // 这一段丢了就没有第二处能发现。比对的是并集图像：区间可以重叠，逐条比对会把
     // 重叠处的后写原文误报成不一致
-    for (offset, expected) in rolled_back_image(restore) {
+    let image = match rolled_back_image(restore) {
+        Ok(image) => image,
+        Err(e) => bail_fail(e),
+    };
+    for (offset, expected) in image {
         let mut got = vec![0u8; expected.len()];
         match src.read_at(offset, &mut got) {
             Ok(()) if got == expected => {}
@@ -1006,6 +1044,19 @@ mod tests {
 
     fn preimage(first_lba: u64, bytes: Vec<u8>) -> RestoreEntry {
         preimage_with_sector(first_lba, 512, bytes)
+    }
+
+    /// 回放条目记录的扇区口径必须与当前目标一致：同 LBA 在 512e 与 4Kn 坐标系下偏移不同，
+    /// 口径错配在区间复核第一道显式等式上拦下，不落到字节比对的隐式兜底
+    #[test]
+    fn restore_entry_sector_size_must_match_the_target_sector_size() {
+        let five12 = preimage_with_sector(1, 512, vec![0u8; 512]);
+        assert!(entry_sector_size_matches(&five12, 512));
+        assert!(!entry_sector_size_matches(&five12, 4096));
+
+        let four_k = preimage_with_sector(1, 4096, vec![0u8; 4096]);
+        assert!(entry_sector_size_matches(&four_k, 4096));
+        assert!(!entry_sector_size_matches(&four_k, 512));
     }
 
     /// 一张一分区 GPT 的预映像：LBA1 主头 + LBA2 条目数组

@@ -22,7 +22,7 @@ const BITLOCKER_MAGIC: &[u8; 8] = b"-FVE-FS-";
 /// bcachefs 超级块内的 magic 偏移：bch_sb 起于字节 4096（BCH_SB_SECTOR = 8），
 /// bch_csum 16 字节 + version/version_min/padding 8 字节后为 magic，即 sb+24
 /// （kernel fs/bcachefs/bcachefs_format.h 的 struct bch_sb）
-const BCACHEFS_MAGIC_OFFSET: u64 = 4096 + 24;
+const BCACHEFS_MAGIC_OFFSET: u64 = 4096 + 24; // audit-allow: const-expr
 /// BCHFS_MAGIC 的盘上字节序：UUID_INIT 把 128 位值按网络字节序写入 `__uuid_t`，
 /// 故 c68573f6-66ce-90a9-d96a-60cf803df7ef 落盘为下列 16 字节
 const BCACHEFS_MAGIC: [u8; 16] =
@@ -38,7 +38,7 @@ const UDF_VRS_MAGIC: &[u8; 5] = b"BEA01";
 
 /// ReiserFS 超级块 @64KiB，s_magic（char[10]）在 sb+52；三个版本串见
 /// kernel include/uapi/linux/magic.h
-const REISERFS_MAGIC_OFFSET: u64 = 65536 + 52;
+const REISERFS_MAGIC_OFFSET: u64 = 65536 + 52; // audit-allow: const-expr
 const REISERFS_MAGICS: [&[u8]; 3] = [b"ReIsErFs", b"ReIsEr2Fs", b"ReIsEr3Fs"];
 
 /// btrfs magic：磁盘上是 `__le64` 的 `BTRFS_MAGIC = 0x4D5F_5366_5248_425F`，小端落地即
@@ -393,7 +393,7 @@ fn swap_header_consistent(src: &FileSource, base: u64, len_bytes: u64, page: u64
 /// 把前者折叠成 None 会让调用方把盘上事实当成"没有 overlay"。分区不足以容纳
 /// 超级块读区同样按未命中——那不是读故障，是区间不存在的事实
 pub fn overlay_offset_at(src: &FileSource, part_offset: u64, part_len_bytes: u64) -> io::Result<Option<u64>> {
-    const ALIGN: u64 = 64 * 1024;
+    const ALIGN: u64 = 64 * 1024; // audit-allow: const-expr
     let mut sb = [0u8; 2048];
     // 读区越出分区尾按未命中：那不是读故障，是区间不存在的事实；且闸若缺位，
     // 越界读会吃到分区之后的邻分区字节（或 EOF 上的 UnexpectedEof，被调用方
@@ -411,12 +411,12 @@ pub fn overlay_offset_at(src: &FileSource, part_offset: u64, part_len_bytes: u64
         }
         u64::from_le_bytes(sb[0x28..0x30].try_into().unwrap())
     } else if sb[1024..1028] == EROFS_MAGIC {
-        let blkszbits = sb[1024 + 0x0C] as u32;
+        let blkszbits = sb[1024 + 0x0C] as u32; // audit-allow: index-in-bounds
         // blkszbits 是盘上可控值：内核按自身 LOG_BLOCK_SIZE 匹配，故只查下界
         if blkszbits < 9 {
             return Ok(None);
         }
-        let blocks = u32::from_le_bytes(sb[1024 + 0x24..1024 + 0x28].try_into().unwrap()) as u64;
+        let blocks = u32::from_le_bytes(sb[1024 + 0x24..1024 + 0x28].try_into().unwrap()) as u64; // audit-allow: index-in-bounds
         // 乘 2^blkszbits 走 checked_mul：checked_shl 只挡位移量越界，不挡高位丢弃——
         // 盘上可控的 blocks/blkszbits 组合会把溢出静默折成一个小值，算出伪 overlay 偏移
         let unit = match 1u64.checked_shl(blkszbits) {

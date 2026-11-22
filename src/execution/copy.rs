@@ -46,30 +46,38 @@ impl CopyPartition {
             return Err(format!("partition {}: the copy step moves zero sectors", self.part));
         }
         let (src_off, dst_off, total) = self.byte_range(sector_size)?;
-        if src_off + total > disk_bytes {
+        let src_byte_end = src_off.checked_add(total).ok_or_else(|| {
+            format!("partition {}: the source range byte offset overflows the u64 range", self.part)
+        })?;
+        if src_byte_end > disk_bytes {
             return Err(format!(
                 "partition {}: the source range ends at byte {} beyond the target's {disk_bytes} bytes",
-                self.part,
-                src_off + total
+                self.part, src_byte_end
             ));
         }
-        if dst_off + total > disk_bytes {
+        let dst_byte_end = dst_off.checked_add(total).ok_or_else(|| {
+            format!("partition {}: the target range byte offset overflows the u64 range", self.part)
+        })?;
+        if dst_byte_end > disk_bytes {
             return Err(format!(
                 "partition {}: the target range ends at byte {} beyond the target's {disk_bytes} bytes",
-                self.part,
-                dst_off + total
+                self.part, dst_byte_end
             ));
         }
-        let src_end = self.src_first + self.sectors;
-        let dst_end = self.dst_first + self.sectors;
-        if self.src_first < dst_end && self.dst_first < src_end {
+        let src_lba_end = self.src_first.checked_add(self.sectors).ok_or_else(|| {
+            format!("partition {}: the source LBA endpoint overflows the u64 range", self.part)
+        })?;
+        let dst_lba_end = self.dst_first.checked_add(self.sectors).ok_or_else(|| {
+            format!("partition {}: the target LBA endpoint overflows the u64 range", self.part)
+        })?;
+        if self.src_first < dst_lba_end && self.dst_first < src_lba_end {
             return Err(format!(
                 "partition {}: the copy source range {}..{} overlaps its target range {}..{}",
                 self.part,
                 self.src_first,
-                src_end - 1,
+                src_lba_end - 1, // audit-allow: len-bounded
                 self.dst_first,
-                dst_end - 1
+                dst_lba_end - 1 // audit-allow: len-bounded
             ));
         }
         Ok(())
@@ -119,14 +127,21 @@ pub(crate) fn execute(
     // 但首次读源在它之前：源读不出时目标一个字节都没写，那类失败不该被判成不可回滚
     let mut barrier_set = false;
     while pos < total {
-        let len = chunk_bytes.min(total - pos);
-        let mut buf = vec![0u8; len as usize];
-        src.read_at(src_off + pos, &mut buf).map_err(|e| {
+        let len = chunk_bytes.min(total - pos); // audit-allow: len-bounded
+        let buf_len = crate::support::host_usize(len).map_err(|_| {
+            RunOutcome::partial(format!(
+                "partition {}: the transfer chunk ({len} bytes) exceeds the host address space — the transfer may be incomplete",
+                step.part
+            ))
+        })?;
+        let mut buf = vec![0u8; buf_len];
+        src.read_at(src_off + pos, &mut buf).map_err(|e| { // audit-allow: len-bounded
             let msg = chunk_io_error(
                 e,
                 "reading source",
-                (src_off + pos) / sector_size,
+                (src_off + pos) / sector_size, // audit-allow: len-bounded
                 len / sector_size,
+                // audit-allow: len-bounded
                 (pos / chunk_bytes + 1) as usize,
                 total_n,
                 COPY_HINT,
@@ -147,7 +162,7 @@ pub(crate) fn execute(
             barrier_set = true;
         }
         // 目的区间没有可比的期望内容：写入只受写后回读约束
-        let dst = dst_off + pos;
+        let dst = dst_off + pos; // audit-allow: len-bounded
         src.write_guarded(dst, &buf, RegionStamp::unconstrained(dst, len), WriteStep::Relocate { part: step.part })
             .map_err(|e| {
                 RunOutcome::partial(
@@ -156,6 +171,7 @@ pub(crate) fn execute(
                         "writing target",
                         dst / sector_size,
                         len / sector_size,
+                        // audit-allow: len-bounded
                         (pos / chunk_bytes + 1) as usize,
                         total_n,
                         COPY_HINT,
@@ -172,6 +188,7 @@ pub(crate) fn execute(
                     "reading back the written target",
                     dst / sector_size,
                     len / sector_size,
+                    // audit-allow: len-bounded
                     (pos / chunk_bytes + 1) as usize,
                     total_n,
                     COPY_HINT,
@@ -179,7 +196,7 @@ pub(crate) fn execute(
                 .to_string(),
             )
         })?;
-        pos += len;
+        pos += len; // audit-allow: counter
     }
     let copied: [u8; 32] = hasher.finalize().into();
     if copied != expected {
