@@ -25,8 +25,11 @@ pub(crate) fn swap_rebuild_failure_skips_growth_finalization() {
     let record_path = src.identity.record_path().expect("image targets have a record path").to_path_buf();
     let mut plan = make_plan(&mut src, 1).unwrap();
     assert!(plan.moves.iter().any(|m| m.is_swap), "fixture must carry a movable swap");
-    // 平台闸先于工具探测：非 Linux 上即使两个工具名都在 PATH，也按环境不满足断言
+    // 平台闸先于工具探测：非 Linux 上即使两个工具名都在 PATH，也按环境不满足断言。
+    // 工具"存在"不等于"能跑"——mkswap/losetup 需要内核权限，非 root 下 find() 成功而
+    // 调用必失败，故这里按生产方式的能力闸判（`require_root` 与工具解析同源）
     let tools_ready = cfg!(target_os = "linux")
+        && crate::fsops::env::root_available()
         && crate::fsops::Tool::Mkswap.find().is_ok()
         && crate::fsops::Tool::Losetup.find().is_ok();
     if !tools_ready {
@@ -282,6 +285,19 @@ pub(crate) fn uncommitted_relocation_keeps_its_record() {
         reloc_for(&plan, chunk, size),
         None,
     );
+
+    // 非 root：续跑与首跑同一把能力闸——写盘前就拒绝，且不得把上一次留下的记录清掉。
+    // 引擎这一层不看载体：载体是放置决策的结果，走到引擎就说明已选原生腿，所以这里判
+    // "本机能不能以 root 直接跑"就够，不涉及 bundle
+    // 这条分支与下面的"swap 重建失败 → 5"互斥：后者要求 FS 步真的能跑起来
+    if !crate::fsops::env::root_available() {
+        let o = ap(&mut src, &mut plan, chunk, true, &mut |_| {});
+        assert_eq!(o.exit_code(), 6, "a non-root resume must refuse before writing: {o:?}");
+        assert!(o.to_string().contains("cannot run the filesystem steps"), "{o:?}");
+        assert!(record_path.exists(), "a refusal must keep the existing record");
+        drop(src);
+        return;
+    }
 
     let mut logs = Vec::new();
     let o = ap(&mut src, &mut plan, chunk, true, &mut |l: &str| logs.push(l.to_string()));

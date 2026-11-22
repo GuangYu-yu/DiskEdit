@@ -287,6 +287,12 @@ fn write_swap_fixture(img: &std::path::Path) {
 
 #[test]
 fn resize_grow_swap_recreate() {
+    // 本用例只描述"原生腿能不能跑"与"没有载体时的拒绝"；配了载体时生产选 Vm，
+    // 结局由载体决定（VM opt-in 套件覆盖那一路），这里的前提就不成立了
+    assert!(
+        std::env::var_os("DISKEDIT_VM_BUNDLE").is_none(),
+        "unset DISKEDIT_VM_BUNDLE: this case covers the native leg and the no-carrier refusal"
+    );
     let dir = std::env::temp_dir().join(format!("diskedit_swr_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let img = dir.join("s.img");
@@ -301,16 +307,13 @@ fn resize_grow_swap_recreate() {
         .unwrap();
     let code = out.status.code().unwrap_or(-1);
     let stderr = String::from_utf8_lossy(&out.stderr);
-    // swap 重建依赖 mkswap/losetup（仅 Linux）：工具可用 → 后置条件全满足（OK）；
-    // 不可用 → 分区表已更新但 swap 未重建，属部分完成（PARTIAL），且必须给出补救命令。
+    // swap 重建依赖 mkswap/losetup（仅 Linux）与内核权限：能跑 → 后置条件全满足（0）；
+    // 跑不了（非 root，且本用例已排除载体）→ 首次写盘前整单拒绝（6），表与条目都不动。
+    // "表已写入、swap 待重建"的 5 属于另一条现场：root 下工具可执行但重建本身失败，
+    // 由 movepart 的用例覆盖，不在这一格里
     #[cfg(target_os = "linux")]
     {
-        let is_root = std::fs::read_to_string("/proc/self/status")
-            .ok()
-            .and_then(|s| s.lines().find(|l| l.starts_with("Uid:")).map(str::to_string))
-            .and_then(|l| l.split_whitespace().nth(2).map(|f| f == "0"))
-            .unwrap_or(false);
-        if is_root {
+        if host_runs_fs_steps_natively() {
             assert_eq!(code, 0, "resize grow must fully succeed as root: {stderr}");
             // 重建后的 swap 落在新位置（LBA 30687）：-U/-L 传下去的值必须原样出现在新 swap 头里
             use std::io::{Read, Seek, SeekFrom};
@@ -325,9 +328,13 @@ fn resize_grow_swap_recreate() {
             assert_eq!(&label[..SWAP_LABEL.len()], &SWAP_LABEL[..], "mkswap -L must carry the label byte-for-byte");
             assert!(label[SWAP_LABEL.len()..].iter().all(|&b| b == 0), "the rest of the label field must be NUL padding");
         } else {
-            // CI runner 等非 root 环境：mkswap 无法执行 → 表已更新、swap 待重建
-            assert_eq!(code, 5, "non-root: swap step pending → PARTIAL: {stderr}");
-            assert!(stderr.contains("swap rebuild") && stderr.contains("mkswap"), "remedy must be printed: {stderr}");
+            // 非 root：作业在首次写盘前一次性判定宿主能否跑完 FS 步，判不了即整单退出 6
+            // 并给配方——表一个字节都不改，不是"表已更新、swap 待重建"的部分完成
+            assert_eq!(code, 6, "non-root: the job stops before writing anything: {stderr}");
+            assert!(
+                stderr.contains("cannot run the filesystem steps") && stderr.contains("DISKEDIT_VM_BUNDLE"),
+                "the recipe must name the gap and the way out: {stderr}"
+            );
         }
     }
     #[cfg(not(target_os = "linux"))]
@@ -368,11 +375,17 @@ fn resize_grow_swap_recreate() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// 新跑搬移 swap：非 Linux 在写盘前以能力缺口（6）停下且不留下恢复状态；
-/// Linux 上重建工具可执行则 swap 重建成功（0）并提交扩容收尾，不可执行
-/// （非 root、mkswap 无法操作用 loop 映射）则表已更新、swap 待重建（5）
+/// 新跑搬移 swap 的结局只随"这台机器能不能跑完 FS 步"变：非 Linux 与非 root
+/// 都在首次写盘前以能力缺口（6）停下，表与条目不动，也不留下恢复状态；能跑完
+/// （root + 工具在位）则 swap 重建成功（0）并提交扩容收尾。重建失败导致的 5 是
+/// 另一条现场，由 movepart 的用例覆盖
 #[test]
 fn new_swap_relocation_outcome_follows_platform_and_privilege() {
+    // 同上：这条用例量的是原生腿与"无载体时的拒绝"，不看载体腿
+    assert!(
+        std::env::var_os("DISKEDIT_VM_BUNDLE").is_none(),
+        "unset DISKEDIT_VM_BUNDLE: this case covers the native leg and the no-carrier refusal"
+    );
     let dir = std::env::temp_dir().join(format!("diskedit_swgate_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
@@ -406,21 +419,33 @@ fn new_swap_relocation_outcome_follows_platform_and_privilege() {
 
     #[cfg(target_os = "linux")]
     {
-        let is_root = std::fs::read_to_string("/proc/self/status")
-            .ok()
-            .and_then(|s| s.lines().find(|l| l.starts_with("Uid:")).map(str::to_string))
-            .and_then(|l| l.split_whitespace().nth(2).map(|f| f == "0"))
-            .unwrap_or(false);
         let mut f = std::fs::File::open(&img).unwrap();
         let gpt = gptman::GPT::find_from(&mut f).unwrap();
-        assert_eq!((gpt[2].starting_lba, gpt[2].ending_lba), (30687, 32734), "swap entry relocated to the tail");
-        if is_root {
+        if host_runs_fs_steps_natively() {
             assert_eq!(code, 0, "root: the swap rebuild must succeed: {stderr}");
+            assert_eq!(
+                (gpt[2].starting_lba, gpt[2].ending_lba),
+                (30687, 32734),
+                "swap entry relocated to the tail"
+            );
             assert_eq!(gpt[1].ending_lba, 30686, "root grows up to the relocated swap");
         } else {
-            assert_eq!(code, 5, "non-root: the swap step is pending → PARTIAL: {stderr}");
-            assert!(stderr.contains("swap rebuild") && stderr.contains("mkswap"), "remedy must be printed: {stderr}");
-            assert_eq!(gpt[1].ending_lba, 6143, "growth must not be committed while the swap rebuild is pending");
+            // 非 root 且没有可用 bundle：写盘前一次性判定 → 整单拒绝，表与条目都不动
+            assert_eq!(code, 6, "non-root: nothing is written when the FS steps cannot run: {stderr}");
+            assert!(
+                stderr.contains("cannot run the filesystem steps") && stderr.contains("DISKEDIT_VM_BUNDLE"),
+                "the recipe must name the gap and the way out: {stderr}"
+            );
+            assert_eq!(
+                (gpt[1].starting_lba, gpt[1].ending_lba),
+                (2048, 6143),
+                "a refusal must not grow the target"
+            );
+            assert_eq!(
+                (gpt[2].starting_lba, gpt[2].ending_lba),
+                (6144, 8191),
+                "a refusal must not relocate the swap entry"
+            );
         }
     }
 

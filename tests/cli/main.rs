@@ -71,6 +71,21 @@ fn diskedit() -> Command {
     cmd
 }
 
+/// 本机能否**以 root 直接跑**需要内核权限的步骤（losetup/mkfs/resize 那一类）。
+///
+/// 只看真实 UID，不看载体：配了 `DISKEDIT_VM_BUNDLE` 的机器上生产会选 Vm，结局由载体
+/// 决定，与这里判的"原生腿"不是同一件事。判据名要说明它量的是什么——用到它的用例必须
+/// 自己排除"有载体"的现场（见 `resize` 里那两条的前置断言），否则就成了"名字说无载体、
+/// 函数只管 UID"的判据名不副实
+#[cfg(target_os = "linux")]
+fn host_runs_fs_steps_natively() -> bool {
+    std::fs::read_to_string("/proc/self/status")
+        .ok()
+        .and_then(|s| s.lines().find(|l| l.starts_with("Uid:")).map(str::to_string))
+        .and_then(|l| l.split_whitespace().nth(2).map(|f| f == "0"))
+        .unwrap_or(false)
+}
+
 /// 镜像键目录的落点（`<image_state_root>/images/<键摘要>`）：记录与目标锁都在里面。
 /// 只做路径计算，不建目录；夹具用它占住锁、读锁或断言目录为空，状态判据一律读 `inspect`
 #[cfg(unix)]

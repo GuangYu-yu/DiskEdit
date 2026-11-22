@@ -474,7 +474,9 @@ mod tests {
         let RunOutcome::Unsupported { cause } = outcome else {
             panic!("{outcome:?} is not the unsupported classification");
         };
-        assert!(cause.contains("manifest.worker"), "{cause}");
+        // 缺段的文案走统一口径"manifest has no `<name>` entry"（与 kernel/initramfs 同一句），
+        // 字段类型错的文案才用 `manifest.<段>.<字段>`；断言按前者，不按后者
+        assert!(cause.contains("`worker`"), "the refusal must name the missing entry: {cause}");
     }
 
     /// worker 段在、摘要却不是 SHA-256 十六进制串：同样按不可用拒绝
