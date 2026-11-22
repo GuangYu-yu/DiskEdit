@@ -3,7 +3,9 @@
 //! 严格 Linux。非 Linux 平台编译为显式拒绝存根。
 
 mod error;
-mod env;
+// `env` 收 crate 内可见：能力判定（`root_available`）要被 movepart 的用例与执行器读到，
+// 但它是唯一来源，不另开一次转发层——转发的 import 在没有读者的构建上就是一条死代码
+pub(crate) mod env;
 mod ext;
 pub(crate) mod mount;
 mod scope;

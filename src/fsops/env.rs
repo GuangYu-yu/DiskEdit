@@ -12,18 +12,35 @@ pub fn require_linux() -> Result<(), FsError> {
     }
 }
 
-pub fn require_root() -> Result<(), FsError> {
+/// 本机能否真正执行需要内核权限的步骤（losetup/mkfs/resize 那一类）。
+///
+/// 与 [`require_root`] 同一口径：只看真实 UID，不看文件权限位。工具“存在”不等于“能跑”，
+/// 判定要问这里，别让调用方各自解析 `/proc` 再各写一份。非 Linux 恒为 `false`——
+/// 那里连这套工具链都没有，问题不在权限
+pub(crate) fn root_available() -> bool {
     #[cfg(target_os = "linux")]
     {
         // geteuid = POSIX.1（man geteuid）实际 UID 判定，非有效权限位
         // SAFETY: geteuid 无参数、不访问内存，恒成功
-        if unsafe { libc::geteuid() } != 0 {
-            return Err(FsError::Io(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                "root required (losetup/mkfs/resize need kernel privileges)",
-            )));
-        }
-        Ok(())
+        unsafe { libc::geteuid() == 0 }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        false
+    }
+}
+
+pub fn require_root() -> Result<(), FsError> {
+    // 判定只有一处：能跑就跑，跑不了再看是"权限不够"还是"平台不对"
+    if root_available() {
+        return Ok(());
+    }
+    #[cfg(target_os = "linux")]
+    {
+        Err(FsError::Io(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "root required (losetup/mkfs/resize need kernel privileges)",
+        )))
     }
     #[cfg(not(target_os = "linux"))]
     {

@@ -151,10 +151,13 @@ jobs:
           export CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}"
           export RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}"
           cargo test --all-targets --no-run
-          for target in cli cmd_check cmd_records; do
-            echo "::group::cargo test --test $target (as root)"
+          # 逐 target（未加引号，靠词分隔传两个参数）：`cli`/`cmd_check`/`cmd_records`
+          # 覆盖 CLI 级的 root 腿；`--bin DiskEdit` 覆盖单元级——"表已提交、FS 步失败"
+          # 的退出 5 只在 root 且工具在位时才走得到，非 root 矩阵永远走不到那一条
+          for sel in "--test cli" "--test cmd_check" "--test cmd_records" "--bin DiskEdit"; do
+            echo "::group::cargo test $sel (as root)"
             sudo env "PATH=$PATH" "CARGO_HOME=$CARGO_HOME" "RUSTUP_HOME=$RUSTUP_HOME" \
-              "DISKEDIT_REQUIRE_ROOT=1" cargo test --test "$target" -- --test-threads=1
+              "DISKEDIT_REQUIRE_ROOT=1" cargo test $sel -- --test-threads=1
             echo "::endgroup::"
           done
 
