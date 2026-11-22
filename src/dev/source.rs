@@ -708,6 +708,25 @@ impl FileSource {
         Self::open_image(path, sector_size_override, true)
     }
 
+    /// 载体（guest）内的打开。独占已由宿主的 claim 承担，这里不带 `O_EXCL`：worker 持着
+    /// 整盘 `/dev/vda` 时，`mke2fs` 要打开同一盘上的 `/dev/vda1`，整盘的独占会让内核拒绝
+    /// 这次打开，它报 "apparently in use by the system" 并拒绝建文件系统
+    pub(crate) fn open_in_carrier(
+        path: &Path,
+        sector_size_override: Option<u64>,
+    ) -> io::Result<Self> {
+        #[cfg(target_os = "linux")]
+        {
+            let file = OpenOptions::new().read(true).write(true).open(path)?;
+            if file.metadata()?.file_type().is_block_device() {
+                return Self::block_source(file, path);
+            }
+            Self::image_source(file, path, sector_size_override)
+        }
+        #[cfg(not(target_os = "linux"))]
+        Self::open_image(path, sector_size_override, true)
+    }
+
     /// 镜像的只读打开：调用面是 `info`/`info --grow`/`check` 的只读打开、`inspect`、
     /// `records`、占位探测、`resize` 取锁前的只读阶段与收尾读表、只读的 `recover --release`——
     /// 无一处经该 FileSource 写盘，真只读让只读文件、只读介质或被他进程独占的镜像

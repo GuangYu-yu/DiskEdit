@@ -6,9 +6,10 @@
 
 use std::io::BufReader;
 use std::process::{Child, ChildStdin, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
@@ -24,11 +25,16 @@ const STEP_TIMEOUT: Duration = Duration::from_secs(60);
 /// 文件系统工具运行时的上限：宿主收到 note/checkpoint 会重置计时
 const FS_TIMEOUT: Duration = Duration::from_secs(600);
 const READY_TIMEOUT: Duration = Duration::from_secs(30);
+/// 交互式中断（SIGINT）。处理函数只置位，判定发生在会话的读取循环里——信号处理
+/// 函数里不做任何会分配内存或加锁的事
+static INTERRUPTED: AtomicBool = AtomicBool::new(false);
+
 /// 会话建立或传输失败。宿主据此区分"还没写"与"可能已写"
 enum SessionError {
     Io(String),
     Timeout,
     Closed,
+    Interrupted,
     Protocol(String),
 }
 
@@ -38,9 +44,36 @@ impl SessionError {
             Self::Io(text) | Self::Protocol(text) => text.clone(),
             Self::Timeout => "the carrier session stopped responding".to_string(),
             Self::Closed => "the carrier session closed its channel".to_string(),
+            Self::Interrupted => {
+                "the run was interrupted before the carrier reported a result".to_string()
+            }
         }
     }
 }
+
+/// SIGINT 的处理函数：只置位。真正的收尾（终止 guest、按 Unknown 交回）在读取循环里
+#[cfg(target_os = "linux")]
+extern "C" fn on_sigint(_: libc::c_int) {
+    INTERRUPTED.store(true, Ordering::SeqCst);
+}
+
+/// 每个进程装一次。处理函数不带 `SA_RESTART`：阻塞的读要能被信号打断，读取线程
+/// 据此回到循环顶端检查标志
+#[cfg(target_os = "linux")]
+fn install_interrupt_handler() {
+    static INSTALLED: std::sync::Once = std::sync::Once::new();
+    INSTALLED.call_once(|| unsafe {
+        let mut action: libc::sigaction = std::mem::zeroed();
+        action.sa_sigaction = on_sigint as *const () as usize;
+        libc::sigemptyset(&mut action.sa_mask);
+        action.sa_flags = 0;
+        libc::sigaction(libc::SIGINT, &action, std::ptr::null_mut());
+    });
+}
+
+/// 非 Linux 宿主没有这条路径：会话只在 Linux 上启动
+#[cfg(not(target_os = "linux"))]
+fn install_interrupt_handler() {}
 
 /// 一次作业的载体会话
 pub(crate) struct Session {
@@ -75,6 +108,7 @@ impl Session {
         sector_size: u64,
         job: &str,
     ) -> Result<Self, RunOutcome> {
+        install_interrupt_handler();
         let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -87,7 +121,11 @@ impl Session {
         thread::spawn(move || {
             let mut lines = Lines::new(BufReader::new(stdout));
             loop {
-                let read = lines.read();
+                let read = match lines.read() {
+                    // SIGINT 会让阻塞的读以 EINTR 返回；会话还在，继续读
+                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                    other => other,
+                };
                 let done = matches!(read, Ok(Read::Closed) | Ok(Read::Oversize) | Err(_));
                 if sender.send(read).is_err() || done {
                     return;
@@ -95,6 +133,18 @@ impl Session {
             }
         });
         let mut session = Self { child, stdin, lines, next_id: 1, sid: None };
+        // 先等 guest 宣告串口就绪再发 hello：UART 接收 FIFO 只有 16 字节，guest 串口驱动
+        // 起来之前写进去的字节会被截断，宿主会把自己发出去的半截 hello 当成 guest 的应答
+        let boot = session.wait_frame(READY_TIMEOUT).map_err(|e| {
+            session.kill();
+            RunOutcome::unsupported(format!("the carrier handshake failed: {}", e.text()))
+        })?;
+        if boot.get("type").and_then(Value::as_str) != Some("boot") {
+            session.kill();
+            return Err(RunOutcome::unsupported(
+                "the carrier did not announce that its serial port is ready",
+            ));
+        }
         let hello = json!({
             "v": protocol::VERSION,
             "type": "hello",
@@ -145,7 +195,7 @@ impl Session {
         &mut self,
         src: &mut WriteSource,
         step: &WireStep,
-        state: &TransferState,
+        state: &mut TransferState,
         sink: &mut dyn StepSink,
     ) -> Result<StepRun, RunOutcome> {
         let id = self.next_id;
@@ -167,7 +217,7 @@ impl Session {
         if let Err(e) = self.send(&request) {
             return Ok(StepRun::unknown(e.text()));
         }
-        let mut run = match self.collect(src, id, sink) {
+        let mut run = match self.collect(src, id, state, sink) {
             Ok(Decoded::Run(run)) => run,
             // 载体判定过的失败按它的类别重建，与宿主进程内的失败同一条通道
             Ok(Decoded::Failed(error)) => return Err(error),
@@ -185,21 +235,27 @@ impl Session {
         Ok(run)
     }
 
-    /// 读事件直到本步骤的结果；检查点落地之后才回 ack
+    /// 读事件直到本步骤的结果；检查点落地之后才回 ack。
+    ///
+    /// 每一帧带上 guest 的进度状态，宿主必须把它接回来：下一步下发的 `state` 取自这里，
+    /// 不接回就会把 guest 的游标倒回本会话开始时的值（记录只许前进，下一步的表步会被
+    /// 判成"游标倒退"）
     fn collect(
         &mut self,
         src: &mut WriteSource,
         id: u64,
+        state: &mut TransferState,
         sink: &mut dyn StepSink,
     ) -> Result<Decoded, SessionError> {
         loop {
             let frame = self.wait_frame(STEP_TIMEOUT)?;
             match frame.get("type").and_then(Value::as_str) {
                 Some("checkpoint") => {
-                    let state = state_of(&frame)?;
-                    sink.transfer_checkpoint(src, &state)
+                    let next = state_of(&frame)?;
+                    sink.transfer_checkpoint(src, &next)
                         .map_err(|e| SessionError::Io(protocol::failure_text(&e)))?;
-                    self.ack(id, state.durable().3)?;
+                    self.ack(id, next.durable().3)?;
+                    *state = next;
                 }
                 Some("barrier") => {
                     match frame.get("kind").and_then(Value::as_str) {
@@ -211,7 +267,9 @@ impl Session {
                             .map_err(|e| SessionError::Io(protocol::failure_text(&e)))?,
                         _ => return Err(SessionError::Protocol("an unknown barrier".into())),
                     }
-                    self.ack(id, state_of(&frame)?.durable().3)?;
+                    let next = state_of(&frame)?;
+                    self.ack(id, next.durable().3)?;
+                    *state = next;
                 }
                 Some("progress") => {
                     // 步骤序号必填：缺省成 0 会把别的步骤的完成记到第 0 步上
@@ -222,13 +280,13 @@ impl Session {
                         .ok_or_else(|| {
                             SessionError::Protocol("a progress frame has no step index".into())
                         })?;
-                    let state = state_of(&frame)?;
+                    let next = state_of(&frame)?;
                     match frame.get("kind").and_then(Value::as_str) {
                         Some("table_done") => sink
-                            .table_step_done(src, index, &state)
+                            .table_step_done(src, index, &next)
                             .map_err(|e| SessionError::Io(protocol::failure_text(&e)))?,
                         Some("fs_done") => sink
-                            .fs_step_done(src, index, &state)
+                            .fs_step_done(src, index, &next)
                             .map_err(|e| SessionError::Io(protocol::failure_text(&e)))?,
                         _ => {
                             return Err(SessionError::Protocol(
@@ -236,6 +294,7 @@ impl Session {
                             ));
                         }
                     }
+                    *state = next;
                 }
                 Some("note") => {
                     if let Some(text) = frame.get("text").and_then(Value::as_str) {
@@ -339,10 +398,23 @@ impl Session {
         protocol::emit(&mut self.stdin, &value).map_err(|e| SessionError::Io(e.to_string()))
     }
 
-    /// 读下一帧。非 `{` 开头的行转交 stderr 之后继续等
+    /// 读下一帧。非 `{` 开头的行转交 stderr 之后继续等。
+    ///
+    /// 等待按 200ms 切片进行，每一片之前看一次中断标志：SIGINT 到达时宿主必须
+    /// 终止 guest 并按 Unknown 交回，不能等满整个超时
     fn wait_frame(&mut self, timeout: Duration) -> Result<Value, SessionError> {
+        let deadline = Instant::now() + timeout;
         loop {
-            match self.lines.recv_timeout(timeout) {
+            if INTERRUPTED.load(Ordering::SeqCst) {
+                self.kill();
+                return Err(SessionError::Interrupted);
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                self.kill();
+                return Err(SessionError::Timeout);
+            }
+            match self.lines.recv_timeout(remaining.min(Duration::from_millis(200))) {
                 Ok(Ok(Read::Frame(value))) => return Ok(value),
                 Ok(Ok(Read::Noise(text))) => eprintln!("{text}"),
                 Ok(Ok(Read::Oversize)) => {
@@ -353,11 +425,11 @@ impl Session {
                     self.kill();
                     return Err(SessionError::Closed);
                 }
-                Err(RecvTimeoutError::Timeout) => {
+                Err(RecvTimeoutError::Timeout) => continue,
+                Err(RecvTimeoutError::Disconnected) => {
                     self.kill();
-                    return Err(SessionError::Timeout);
+                    return Err(SessionError::Closed);
                 }
-                Err(RecvTimeoutError::Disconnected) => return Err(SessionError::Closed),
             }
         }
     }

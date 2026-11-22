@@ -258,13 +258,17 @@ pub(crate) fn backfill_hidden_sectors(
     crate::execution::fix_ntfs_hidden_sectors(src, first_lba, sector_size, part, log)
 }
 
-/// 执行一份计划并交出待办。放置在这里一次决定，之后整份计划只用一个执行器
+/// 执行一份计划并交出待办。放置在这里一次决定，之后整份计划只用一个执行器。
+///
+/// `extra` 是这条命令后续计划的能力需求：命令拆成多份计划时，放置按整条命令问一次，
+/// 步骤之间不再换执行器
 pub(crate) fn run_plan(
     src: &mut WriteSource,
     plan: &ConfirmedPlan,
     chunk_bytes: Option<u64>,
     sink: &mut dyn StepSink,
     pending: &mut Vec<Pending>,
+    extra: &[crate::fsops::Needs],
 ) -> Result<StepFlow, RunOutcome> {
     let sector_size = plan.plan().sector_size().get();
     let record = src.record_journal().and_then(|j| j.relocation());
@@ -272,7 +276,7 @@ pub(crate) fn run_plan(
     // 数据搬移与表写入都在这个核对之后：外部在计划读出之后改了表，要在这里以 3 拒绝，
     // 而不是搬完数据才在表步发现
     verify_tables_before_write(src, &steps)?;
-    let decision = placement::decide(src, &steps, sector_size)?;
+    let decision = placement::decide(src, &steps, sector_size, extra)?;
     if let Some(journal) = src.record_journal_mut() {
         journal
             .record_audit(decision.audit())
@@ -548,7 +552,7 @@ pub(crate) fn run_plan_complete(
     sink: &mut dyn StepSink,
 ) -> Result<(), RunOutcome> {
     let mut pending = Vec::new();
-    match run_plan(src, plan, chunk_bytes, sink, &mut pending)? {
+    match run_plan(src, plan, chunk_bytes, sink, &mut pending, &[])? {
         StepFlow::Complete if pending.is_empty() => Ok(()),
         _ => Err(RunOutcome::partial_postcondition(
             "a step of this plan left its postcondition unmet",

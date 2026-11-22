@@ -17,6 +17,8 @@ use super::protocol::{self, Lines, Read};
 use super::{CarrierStep, ProbeRequest};
 
 const TOKEN_VAR: &str = "DISKEDIT_WORKER_TOKEN";
+/// 载体 init 拉起 worker 时置位。串口控制台也是终端，不置位就会被下面的守卫拒掉
+const FROM_INIT_VAR: &str = "DISKEDIT_WORKER_FROM_INIT";
 
 /// 本进程是否是 worker 调用
 pub(crate) fn is_invoked() -> bool {
@@ -32,7 +34,10 @@ pub(crate) fn run() -> u8 {
             return 3;
         }
     };
-    if io::stdin().is_terminal() {
+    // 载体 init 拉起时 stdin 就是串口控制台（isatty 为真），这不是有人在宿主上误敲了
+    // `__worker`：init 显式置位放行。宿主上直接运行仍按终端拒绝
+    let from_init = std::env::var(FROM_INIT_VAR).is_ok_and(|v| v == "1");
+    if !from_init && io::stdin().is_terminal() {
         eprintln!("diskedit worker: refusing to read a one-time token from a terminal");
         return 3;
     }
@@ -86,7 +91,7 @@ fn serve(io: &mut WorkerIo, token: &str) -> Result<(), Failure> {
         .get("disk_size")
         .and_then(Value::as_u64)
         .ok_or_else(|| Failure::Handshake("the handshake has no disk size".into()))?;
-    let source = FileSource::open(Path::new(target), Some(sector_size))
+    let source = FileSource::open_in_carrier(Path::new(target), Some(sector_size))
         .map_err(|e| Failure::Handshake(format!("cannot open {target}: {e}")))?;
     if source.size != disk_size {
         return Err(Failure::Handshake(format!(

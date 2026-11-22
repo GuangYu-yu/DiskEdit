@@ -70,7 +70,7 @@ fn the_two_placements_agree_on_the_result() {
     let carrier = canvas.duplicate("carrier");
     let native = canvas.duplicate("native");
     let carrier_state = canvas.private_state("carrier");
-    let native_state = canvas.private_state("native");
+    let native_state = canvas.root_state("native");
 
     // 载体腿：非 root、有 bundle ⇒ 宿主能力不足，作业交给载体。QEMU 子进程是放置的正面证据
     let out_log = std::fs::File::create(canvas.dir.join("carrier.stdout")).expect("create the log");
@@ -140,9 +140,9 @@ fn the_two_placements_agree_on_the_result() {
     );
     assert_eq!(
         block_a * blocks_a,
-        canvas.part1_bytes(),
+        canvas.grown_part1_bytes(),
         "the filesystem did not grow to fill the partition: {blocks_a} blocks of {block_a} B \
          against a partition of {} B",
-        canvas.part1_bytes()
+        canvas.grown_part1_bytes()
     );
 }

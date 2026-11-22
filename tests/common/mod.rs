@@ -84,8 +84,16 @@ pub fn gate(target: &str, what: &str) -> bool {
 
 /// CLI 直接拉起 QEMU，所以载体就是 CLI 的子进程
 pub fn qemu_child_of(cli: u32) -> Option<u32> {
+    // `pgrep -P` 列的是**所有**子进程：原生腿跑到 `resize2fs` 时也有子进程，
+    // 不按名字过滤就会把它当成载体，于是"整轮不得出现载体"永远为假
     let out = Command::new("pgrep").args(["-P", &cli.to_string()]).output().ok()?;
-    String::from_utf8_lossy(&out.stdout).lines().next()?.trim().parse().ok()
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|line| line.trim().parse::<u32>().ok())
+        .find(|pid| {
+            std::fs::read_to_string(format!("/proc/{pid}/comm"))
+                .is_ok_and(|comm| comm.trim().starts_with("qemu-system"))
+        })
 }
 
 /// 全机的 QEMU 进程：用来判"会话结束后有没有留下孤儿"
@@ -127,13 +135,49 @@ pub fn run_root(state: &Path, args: &[&str]) -> (i32, String, String) {
     )
 }
 
+/// 以 root 身份跑一条与 DiskEdit 无关的命令。换记录目录属主这类前置动作用它：记录目录
+/// 归写下它的 euid，root 要接着写就得先接手
+pub fn sudo(args: &[&str]) -> (i32, String, String) {
+    let out = Command::new("sudo")
+        .args(["-n", "--"])
+        .args(args)
+        .stdin(Stdio::null())
+        .output()
+        .expect("run a root command");
+    (
+        out.status.code().unwrap_or(-1),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
+}
+
+/// [`run_root`] 的那一轮，但保留载体配置。建画布要用它而不是 `run_root`：工具路径被
+/// 编译期钉死的构建里 root 也找不到 `mke2fs`，只能借载体把文件系统建出来
+pub fn run_root_with_carrier(state: &Path, args: &[&str]) -> (i32, String, String) {
+    let mut command = Command::new("sudo");
+    command.args(["-n", "--", "env"]).arg(format!("DISKEDIT_STATE_DIR={}", state.display()));
+    if let Ok(bundle) = std::env::var("DISKEDIT_VM_BUNDLE") {
+        command.arg(format!("DISKEDIT_VM_BUNDLE={bundle}"));
+    }
+    let out = command
+        .arg(env!("CARGO_BIN_EXE_DiskEdit"))
+        .args(args)
+        .stdin(Stdio::null())
+        .output()
+        .expect("run DiskEdit as root");
+    (
+        out.status.code().unwrap_or(-1),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
+}
+
 /// 与 [`run_root`] 同一条命令，但留给孩子自己跑：调用方要一边等它一边观察进程
 pub fn root_command(state: &Path, args: &[&str]) -> Command {
     let mut command = Command::new("sudo");
     command
-        .args(["-n", "--", "env"])
+        .args(["-n", "--", "env", "-u", "DISKEDIT_VM_BUNDLE"])
         .arg(format!("DISKEDIT_STATE_DIR={}", state.display()))
-        .args(["-u", "DISKEDIT_VM_BUNDLE"])
         .arg(env!("CARGO_BIN_EXE_DiskEdit"))
         .args(args)
         .stdin(Stdio::null());
@@ -187,8 +231,11 @@ impl Canvas {
             let (code, out, err) = run(&state, &args);
             assert_eq!(code, 0, "{args:?} must succeed: {out}\n{err}");
         }
-        // 建 FS 由 root 做：这一步只是准备画布，不属于被判定的作业
-        let (code, out, err) = run_root(&state, &["mkfs", &format!("{p}:1"), "ext4", "--yes"]);
+        // 建 FS 由 root 做：只是准备画布，不属于被判定的作业。状态根也得由 root 自己
+        // 建——记录目录只认写下它的那个身份，root 用不了 tester 建的那一份
+        let root_state = dir.join("canvas-root-state");
+        let (code, out, err) =
+            run_root_with_carrier(&root_state, &["mkfs", &format!("{p}:1"), "ext4", "--yes"]);
         assert_eq!(code, 0, "the canvas needs an ext4 partition: {out}\n{err}");
 
         let (first_lba, last_lba) = Self::read_target_range(&state, &image);
@@ -207,6 +254,12 @@ impl Canvas {
         let state = self.dir.join(format!("{name}-state"));
         private_dir(&state);
         state
+    }
+
+    /// root 腿用的状态根：只给路径，不预先建。记录目录由写入它的那个身份按 0700 建，
+    /// 当前用户先建一次，root 就会因"拥有者不是自己"拒绝
+    pub fn root_state(&self, name: &str) -> PathBuf {
+        self.dir.join(format!("{name}-state"))
     }
 
     /// 分区 1 起点与长度的字节口径：分界线之内只比 FS 几何，之外逐字节比

@@ -55,6 +55,8 @@ pub(crate) struct ApplyDecision {
     /// LVM 基线。新跑由本次增量算出；续跑取记录里的值（LV 路径不在记录里，
     /// 由续跑请求重新选定）
     pub(crate) lvm: Option<LvmPostFacts>,
+    /// 扩容收尾要用的能力。搬移与扩容是同一条命令，放置按两者的并集判定一次
+    pub(crate) grow_needs: Option<crate::fsops::Needs>,
 }
 
 /// 事前判定（只读）：FS preflight → 槽位判定。
@@ -126,6 +128,7 @@ pub(crate) fn prepare_apply(
     };
     // 目标分区只向右扩、起点不变：DM 栈已映射的扇区不受影响，按 Extend 放行其持有
     ensure_idle_at(src, plan.grow_part, ge.starting_lba, plan.ss, crate::fsops::WriteKind::Extend)?;
+    let mut grow_needs = None;
     if !no_fs {
         // 要动的是哪一段、里面是什么 FS 由 grow_target_at 判定——与写盘后的收尾同一判据，
         // 两处只是区间不同。区间的 LBA 单位是**表自身**的 ss（plan.ss）。此处位于
@@ -147,7 +150,7 @@ pub(crate) fn prepare_apply(
             plan.ss,
             &growable,
         )?;
-        crate::exec::placement::require_grow(&growable, src.is_block)?;
+        grow_needs = Some(crate::exec::placement::require_grow(&growable, src.is_block)?);
     }
     // 恢复三态：有效 → 续传 / 槽位被另一族作业占用 → 拒绝 / 空 → 新建
     // 落点取命中路径：续传写同一份现场；空槽返回本次命名落点
@@ -262,6 +265,7 @@ pub(crate) fn prepare_apply(
         no_fs,
         defer_ckpt,
         lvm: resumed_lvm.or(derived_lvm),
+        grow_needs,
     })
 }
 
@@ -415,7 +419,10 @@ pub(crate) fn execute_apply(
         .map_err(|e| RunOutcome::no_mutation(e.bind_failure()))?;
 
     let mut sink = crate::recovery::sink::RecordSink::with_log(log);
-    match crate::exec::run_plan(src, &confirmed, Some(d.chunk_len), &mut sink, post)? {
+    // 扩容收尾是这条命令的后半段：它的能力需求交给搬移计划一起判定，
+    // 否则搬移腿按原生跑完、扩容腿才切进载体
+    let extra: Vec<crate::fsops::Needs> = d.grow_needs.iter().cloned().collect();
+    match crate::exec::run_plan(src, &confirmed, Some(d.chunk_len), &mut sink, post, &extra)? {
         // 换区重建失败：条目循环停在那一处，扩容收尾不能做——grow_end 按全体 moves 取
         // min(new_first)−1，把尚未搬移成员的旧位也划进扩容区，提交即写出与未搬移分区
         // 重叠的表项。记录原样保留，重跑在同一记录上从本条目重试 mkswap

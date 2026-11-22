@@ -349,28 +349,6 @@ pub(crate) fn cmd_resize(a: &ResizeRequest) -> crate::outcome::RunOutcome {
     let relocation = src.record_journal().and_then(|j| j.relocation().cloned());
     let reloc = relocation.as_ref().is_some_and(|r| r.grow_part == part);
     let resuming = entry.resumed;
-    // SIZE 锚点与 PV 判据按锁下的新几何重算：+N/+N% 锚定"当前尺寸"，窗口内分区被
-    // 改写过，锁前锚点就已作废——拿旧锚点的绝对值对照新几何会把"扩"判成"缩"
-    // （先缩 FS！），方向与请求相反。grow 标记是请求的形状（与盘无关），锁前锁后同值
-    let cur_bytes = lba_range_bytes(start, end, ss);
-    let (target, _) = resolve_size_request(a.size, cur_bytes, ss).unwrap_or_else(|f| bail_fail(f));
-    let shrinking = target.is_some_and(|t| t < cur_bytes);
-    // 方向就是 SIZE 在锁下几何上的解析结果，写分支按它分流（扩 / 不变 / 收缩）。
-    // 唯一例外是收缩撞上未收尾的搬移作业：按"目标被占用"拒绝并指向 recover --release
-    if shrinking && reloc {
-        bail_fail(RunOutcome::refused(
-            "an unfinished operation still owns this target — release it with `diskedit recover \
-             --release` (or re-run the original grow request to finish it first)"
-                .to_string(),
-        ));
-    }
-    // FS 类型与 PV 判据同样按锁下现状重取（与几何同理）：识别与取锁之间分区可被
-    // 重新格式化（mkfs 不守本工具的锁），过期的 is_pv 会让 check_pv_intent 对着
-    // 已不是 PV 的分区说 PV 的话
-    let fstype = fsid::identify(&src, lba_bytes(start, ss), cur_bytes)
-        .unwrap_or_else(|e| bail_fail(RunOutcome::refused(crate::support::identify_failed(&e))));
-    let is_pv = fstype == fsid::ContentKind::Lvm2Pv;
-    check_pv_intent(part, Some(fstype), is_pv, shrinking, a.grow_lv, a.no_fs).unwrap_or_else(|f| bail_fail(f));
     // 记录型续跑：盘上区间停在记录写下的目标区间 ⇒ 分区层提交过，当前区间就是本次
     // 作业的目标（`resize` 不改起点）。已提交的现场上现算右侧空闲会得到 0，照它分流会
     // 把"只差 FS/PV 收尾"拒成 nothing to grow / 右侧被挡。
@@ -391,6 +369,34 @@ pub(crate) fn cmd_resize(a: &ResizeRequest) -> crate::outcome::RunOutcome {
     }
     let record_committed =
         matches!(record_place, Some(crate::recovery::ResumePlace::Committed { .. }));
+    // SIZE 锚点与 PV 判据按锁下的新几何重算：+N/+N% 锚定"当前尺寸"，窗口内分区被
+    // 改写过，锁前锚点就已作废——拿旧锚点的绝对值对照新几何会把"扩"判成"缩"
+    // （先缩 FS！），方向与请求相反。grow 标记是请求的形状（与盘无关），锁前锁后同值。
+    // 已提交的续跑例外：盘上末端已是记录的目标，拿它当锚会把 +4M 算成"在目标上再加
+    // 4M"，所以锚定记录写下的提交前终点——原命令照原样重跑才回到同一次请求的终点
+    let cur_bytes = lba_range_bytes(start, end, ss);
+    let size_anchor = match record_place {
+        Some(crate::recovery::ResumePlace::Committed { old, .. }) => lba_range_bytes(old.0, old.1, ss),
+        _ => cur_bytes,
+    };
+    let (target, _) = resolve_size_request(a.size, size_anchor, ss).unwrap_or_else(|f| bail_fail(f));
+    let shrinking = target.is_some_and(|t| t < cur_bytes);
+    // 方向就是 SIZE 在锁下几何上的解析结果，写分支按它分流（扩 / 不变 / 收缩）。
+    // 唯一例外是收缩撞上未收尾的搬移作业：按"目标被占用"拒绝并指向 recover --release
+    if shrinking && reloc {
+        bail_fail(RunOutcome::refused(
+            "an unfinished operation still owns this target — release it with `diskedit recover \
+             --release` (or re-run the original grow request to finish it first)"
+                .to_string(),
+        ));
+    }
+    // FS 类型与 PV 判据同样按锁下现状重取（与几何同理）：识别与取锁之间分区可被
+    // 重新格式化（mkfs 不守本工具的锁），过期的 is_pv 会让 check_pv_intent 对着
+    // 已不是 PV 的分区说 PV 的话
+    let fstype = fsid::identify(&src, lba_bytes(start, ss), cur_bytes)
+        .unwrap_or_else(|e| bail_fail(RunOutcome::refused(crate::support::identify_failed(&e))));
+    let is_pv = fstype == fsid::ContentKind::Lvm2Pv;
+    check_pv_intent(part, Some(fstype), is_pv, shrinking, a.grow_lv, a.no_fs).unwrap_or_else(|f| bail_fail(f));
     // PV 链的工具必须在写表之前齐备（pvresize/pvs 及 grow-lv 的 lvs/vgs/lvextend；
     // 镜像目标另加 losetup——它的分区链要临时映射）：它们在表提交之后才启动，
     // 缺工具那时才发现就只剩 PARTIAL 加手工
@@ -559,6 +565,18 @@ pub(crate) fn cmd_resize(a: &ResizeRequest) -> crate::outcome::RunOutcome {
         if !resuming && !is_pv && matches!(intent, movepart::ShiftIntent::NoOp) {
             println!("partition {part} is already {cur_bytes} bytes — nothing to do");
             return crate::outcome::RunOutcome::applied_with(Vec::new());
+        }
+        // 记录型续跑且分区层已提交：盘上区间就是记录的目标，只差 FS/PV 收尾。走 plan 的
+        // committed 分支——它按记录里的搬移前区间判 FS 步；落到下面的 apply_move，那里按
+        // 盘上现状取旧区间，会把已扩的分区当成旧尺寸而跳过 FS 步，命令报成功但文件系统
+        // 没扩。请求终点与记录不同（改了尺寸）时，同一条入口给出"已提交到 …，用那个绝对
+        // 尺寸重跑"的拒绝
+        if record_committed {
+            let (chunk, mut logger) = chunk_logger(a, &src, g.disk_guid());
+            let o = crate::cmd::layout::resize_part_via_plan_with(&mut src, &g, repair, part, start, new_end, chunk, a.no_fs, lv_sel.clone(), is_pv, &mut |m| logger.log(m));
+            let record = src.record_journal().map(|j| j.record());
+            let o = settle_layout(o, &src, record);
+            return finish_resize(a, o, Some(&mut src), part, is_pv, is_block, lv_sel.as_ref().map(|s| s.path.as_str()), cur_bytes);
         }
         // 未收尾的搬移作业 ⇒ 必须走 resume 路径（即使几何上 free_right 已足够——swap 等
         // 收尾步骤可能尚未执行，普通扩容会跳过它们）
