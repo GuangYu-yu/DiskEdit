@@ -176,7 +176,7 @@ pub(crate) fn resolve_scope_device(
                 src.size
             )));
         }
-        if len > src.size - off {
+        if len > src.size - off { // audit-allow: len-bounded
             return Err(FsError::invalid(format!(
                 "partition table entry spans {len} bytes from byte {off} but the device is {} bytes \
                  — the entry lies outside the device and cannot be repaired by re-reading the partition table",

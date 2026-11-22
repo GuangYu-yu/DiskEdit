@@ -25,7 +25,7 @@ pub(crate) struct Relocate {
 }
 
 /// 非自重叠搬移攒批落盘的检查点阈值下限
-const CHECKPOINT_FLOOR: u64 = 8 * crate::support::MIB_BYTES;
+const CHECKPOINT_FLOOR: u64 = 8 * crate::support::MIB_BYTES; // audit-allow: const-expr
 
 pub(crate) fn execute(
     src: &mut WriteSource,
@@ -70,12 +70,12 @@ pub(crate) fn execute(
     }
     // 上界：步的两段字节区间都必须落在目标自身之内。越界的步是计划与盘上几何不符，
     // 不裁到盘尾（裁剪会写下与记录声明不同的字节数，游标随之前进）
-    if src_base + total > src.size || dst_base + total > src.size {
+    if src_base + total > src.size || dst_base + total > src.size { // audit-allow: len-bounded
         let detail = format!(
             "partition {part}: the relocation range ends at byte {} (target) / {} (source), past the \
              {}-byte target",
-            dst_base + total,
-            src_base + total,
+            dst_base + total, // audit-allow: len-bounded
+            src_base + total, // audit-allow: len-bounded
             src.size
         );
         return Err(RunOutcome::refused(detail));
@@ -100,13 +100,44 @@ pub(crate) fn execute(
     // 记录里的块数只是声明：续跑先按同一执行顺序回读目的前缀、与记录里的摘要比对。
     // 不一致说明记录陈旧或伪造，按它跳过块拷贝不可逆，故一律停在这里
     let done = state.chunks_done();
+    let done_n = crate::support::host_usize(done).map_err(|_| {
+        RunOutcome::partial(format!(
+            "partition {part}: the recorded chunk count exceeds the host address space — the transfer may be incomplete"
+        ))
+    })?;
     let mut hasher = Sha256::new();
     if done > 0 {
-        for span in ordered.iter().take(done as usize) {
-            let within = (span.first_lba - src_first) * sector_size;
-            let len = span.len_lba * sector_size;
-            let mut buf = vec![0u8; len as usize];
-            let dst = dst_base + within;
+        for span in ordered.iter().take(done_n) {
+            let within = span
+                .first_lba
+                .checked_sub(src_first)
+                .ok_or_else(|| {
+                    RunOutcome::partial(format!(
+                        "partition {part}: a chunk precedes the planned source start (LBA {}) — the transfer may be incomplete",
+                        span.first_lba
+                    ))
+                })?
+                .checked_mul(sector_size)
+                .ok_or_else(|| {
+                    RunOutcome::partial(format!(
+                        "partition {part}: chunk LBA offset × sector size overflows the u64 range — the transfer may be incomplete"
+                    ))
+                })?;
+            let len = span
+                .len_lba
+                .checked_mul(sector_size)
+                .ok_or_else(|| {
+                    RunOutcome::partial(format!(
+                        "partition {part}: chunk size × sector size overflows the u64 range — the transfer may be incomplete"
+                    ))
+                })?;
+            let buf_len = crate::support::host_usize(len).map_err(|_| {
+                RunOutcome::partial(format!(
+                    "partition {part}: the relocation chunk ({len} bytes) exceeds the host address space — the transfer may be incomplete"
+                ))
+            })?;
+            let mut buf = vec![0u8; buf_len];
+            let dst = dst_base + within; // audit-allow: len-bounded
             if let Err(e) = src.read_at(dst, &mut buf) {
                 let message = format!(
                     "partition {part}: cannot read the target at byte {dst} to verify the recorded \
@@ -142,17 +173,48 @@ pub(crate) fn execute(
     let mut batch_start = dst_base;
     let mut batch: Vec<u8> = Vec::new();
 
-    for span in ordered.iter().skip(state.chunks_done() as usize) {
-        let within = (span.first_lba - src_first) * sector_size;
-        let len = span.len_lba * sector_size;
-        let mut buf = vec![0u8; len as usize];
-        if let Err(e) = src.read_at(src_base + within, &mut buf) {
-            let off = src_base + within;
+    let skip_n = crate::support::host_usize(state.chunks_done()).map_err(|_| {
+        RunOutcome::partial(format!(
+            "partition {part}: the recorded chunk count exceeds the host address space — the transfer may be incomplete"
+        ))
+    })?;
+    for span in ordered.iter().skip(skip_n) {
+        let within = span
+            .first_lba
+            .checked_sub(src_first)
+            .ok_or_else(|| {
+                RunOutcome::partial(format!(
+                    "partition {part}: a chunk precedes the planned source start (LBA {}) — the transfer may be incomplete",
+                    span.first_lba
+                ))
+            })?
+            .checked_mul(sector_size)
+            .ok_or_else(|| {
+                RunOutcome::partial(format!(
+                    "partition {part}: chunk LBA offset × sector size overflows the u64 range — the transfer may be incomplete"
+                ))
+            })?;
+        let len = span
+            .len_lba
+            .checked_mul(sector_size)
+            .ok_or_else(|| {
+                RunOutcome::partial(format!(
+                    "partition {part}: chunk size × sector size overflows the u64 range — the transfer may be incomplete"
+                ))
+            })?;
+        let buf_len = crate::support::host_usize(len).map_err(|_| {
+            RunOutcome::partial(format!(
+                "partition {part}: the relocation chunk ({len} bytes) exceeds the host address space — the transfer may be incomplete"
+            ))
+        })?;
+        let mut buf = vec![0u8; buf_len];
+        if let Err(e) = src.read_at(src_base + within, &mut buf) { // audit-allow: len-bounded
+            let off = src_base + within; // audit-allow: len-bounded
             return Err(RunOutcome::no_mutation(format!(
                 "partition {part}: cannot read the source at byte {off}: {e} — the transfer may be incomplete"
             )));
         }
-        let dst = dst_base + within;
+        let dst = dst_base + within; // audit-allow: len-bounded
         // 目的区间没有可比的期望内容：只受写后回读约束
         if let Err(e) =
             src.write_guarded(dst, &buf, RegionStamp::unconstrained(dst, len), WriteStep::Relocate { part })
@@ -180,7 +242,7 @@ pub(crate) fn execute(
             crate::movepart::fault_chunk(state.cursor());
         } else {
             crate::movepart::fault_chunk(state.cursor());
-            pending += len;
+            pending += len; // audit-allow: counter
             if pending >= flush_at {
                 if let Err(e) = src.sync_data() {
                     return Err(RunOutcome::partial(format!(
@@ -226,7 +288,7 @@ fn append_batch(batch: &mut Vec<u8>, batch_start: &mut u64, dst: u64, buf: &[u8]
         *batch_start = dst;
         batch.extend_from_slice(buf);
     } else if dst < *batch_start {
-        let mut grown = Vec::with_capacity(batch.len() + buf.len());
+        let mut grown = Vec::with_capacity(batch.len() + buf.len()); // audit-allow: len-bounded
         grown.extend_from_slice(buf);
         grown.extend_from_slice(batch);
         *batch = grown;

@@ -88,7 +88,7 @@ impl TableStamp {
         let mut hasher = Sha256::new();
         let mut bytes = Vec::with_capacity(regions.len());
         for r in regions {
-            let len = usize::try_from(r.len)
+            let len = crate::support::host_usize(r.len)
                 .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "table region too large to hash"))?;
             let mut buf = vec![0u8; len];
             src.read_at(r.offset, &mut buf)?;
@@ -188,7 +188,7 @@ pub(crate) fn table_snapshot_with(
                 ))
             }
             (None, _) => {
-                let len = usize::try_from(r.len)
+                let len = crate::support::host_usize(r.len)
                     .map_err(|_| RunOutcome::refused("a table region is too large to compare on this host"))?;
                 let mut buf = vec![0u8; len];
                 src.read_at(r.offset, &mut buf).map_err(RunOutcome::unreadable_io)?;
@@ -235,7 +235,7 @@ pub(crate) fn verify_regions_after(
 /// 任何字节。重读本身失败按环境故障且本次未写盘归 4。
 pub(crate) fn verify_regions_before(src: &FileSource, expected: &[RegionStamp]) -> Result<(), RunOutcome> {
     for stamp in expected {
-        let len = usize::try_from(stamp.len())
+        let len = crate::support::host_usize(stamp.len())
             .map_err(|_| RunOutcome::refused("a table region is too large to compare on this host"))?;
         let mut now = vec![0u8; len];
         src.read_at(stamp.offset(), &mut now).map_err(RunOutcome::unreadable_io)?;

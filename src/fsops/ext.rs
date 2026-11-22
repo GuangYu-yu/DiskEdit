@@ -200,7 +200,7 @@ impl Tool {
         })
     }
 
-    fn command(self) -> Result<Command, FsError> {
+    fn command(self) -> Result<GateCommand, FsError> {
         tool_command(self)
     }
 

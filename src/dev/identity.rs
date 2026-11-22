@@ -56,6 +56,10 @@ mod win {
         ) -> i32;
     }
 
+    // 窗口按这个布局把整块内存写满：字段顺序或宽度错了，读到的就是栈上别的字节。
+    // 断言放生产编译，测试里的断言只有跑测试的构建才检查
+    const _: () = assert!(core::mem::size_of::<ByHandleFileInformation>() == 52);
+
     pub(super) fn identity(file: &std::fs::File) -> std::io::Result<(u64, u64)> {
         let mut info = ByHandleFileInformation::default();
         // SAFETY: 句柄由 `file` 在整个调用期间持有；结构体是 `#[repr(C)]` 且先置零，
@@ -830,7 +834,7 @@ impl TargetIdentity {
         // 记录目录由 WWN / EUI / serial 派生的身份键决定；dm / md / 只有 major:minor
         // 的目标没有键，记录落点为 None，写命令退 6（或由 `--identity` 补一个键）
         let (record_key, partition) = block_record_context(node).map_err(|e| e.to_string())?;
-        Ok(Self::from_block_parts(path, disk_key, lock_key, record_key, partition))
+        Self::from_block_parts(path, disk_key, lock_key, record_key, partition)
     }
 
     /// 非 Linux 平台没有 sysfs，块设备判定恒 false，本入口不会到达。非 Linux 上没有块
@@ -850,6 +854,7 @@ impl TargetIdentity {
     pub(crate) fn from_block_keys(path: &Path, disk_key: String) -> Self {
         let lock_key = crate::dev::LockKey::new(disk_key.clone());
         Self::from_block_parts(path, disk_key, lock_key, None, None)
+            .expect("a test identity with no record key has no encoding width to overflow")
     }
 
     /// 块设备身份构造：`record_key` 为 None 表示取不到 WWN / EUI / 可重复 serial
@@ -864,12 +869,16 @@ impl TargetIdentity {
         lock_key: crate::dev::LockKey,
         record_key: Option<IdentityKey>,
         partition: Option<u32>,
-    ) -> Self {
+    ) -> Result<Self, String> {
         let dir = host_state_root();
         let lock = dir.join(format!("{}{LOCK_SUFFIX}", key_token(lock_key.as_str())));
         let claim = record_key.is_none().then(|| claim_path(lock_key.as_str(), partition));
-        let record = record_key.as_ref().map(IdentityKey::record_path);
-        Self {
+        let record = record_key
+            .as_ref()
+            .map(IdentityKey::record_path)
+            .transpose()
+            .map_err(|e| e.to_string())?;
+        Ok(Self {
             kind: TargetKind::Block,
             base: path.to_path_buf(),
             canonical: path.to_path_buf(),
@@ -882,7 +891,7 @@ impl TargetIdentity {
             declared: None,
             claim,
             backing_fp: None,
-        }
+        })
     }
 
     /// 用户用 `--identity` 给身份不可得的目标声明一个名字。
@@ -904,7 +913,7 @@ impl TargetIdentity {
         let key = declared_identity_key(declared.as_str(), self.partition);
         let lock_token = key_token(&declared_lock_key(declared.as_str()));
         self.lock = host_state_root().join(format!("{lock_token}{LOCK_SUFFIX}"));
-        self.record = Some(key.record_path());
+        self.record = Some(key.record_path().map_err(|e| e.to_string())?);
         self.record_key = Some(key);
         self.declared = Some(declared.clone());
         Ok(self)
@@ -934,8 +943,10 @@ impl TargetIdentity {
 
     /// 用某个声明名派生的记录落点：占据声明据此判断"那个名字下的现场还在不在"。
     /// 分区号沿用本目标的
-    pub(crate) fn record_path_for_declared(&self, declared: &str) -> PathBuf {
-        declared_identity_key(declared, self.partition).record_path()
+    pub(crate) fn record_path_for_declared(&self, declared: &str) -> Result<PathBuf, String> {
+        declared_identity_key(declared, self.partition)
+            .record_path()
+            .map_err(|e| e.to_string())
     }
 
     /// 清理类命令（`recover --release`）的身份解析：目标可能已不存在，而现场文件可能比目标活得

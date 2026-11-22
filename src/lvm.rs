@@ -127,7 +127,7 @@ fn strip_pe_offset(entry: &str) -> &str {
     let t = entry.trim();
     if let Some(i) = t.rfind('(')
         && t.ends_with(')')
-        && t[i + 1..t.len() - 1].bytes().all(|b| b.is_ascii_digit())
+        && t[i + 1..t.len() - 1].bytes().all(|b| b.is_ascii_digit()) // audit-allow: index-in-bounds
     {
         return &t[..i];
     }
@@ -158,18 +158,31 @@ fn device_match(target: &str, reported: &str) -> DeviceMatch {
 /// `devices` 因此给的是另一个 loop 号，设备号比对必然不等。PV UUID 不能当身份：
 /// 整盘复制得到的两份存储共用同一个 UUID，而它们的 backing 对象不同。内核记录的
 /// backing 对象与数据起点（[`crate::dev::loop_storage_key`]）才说明是同一段字节。
-/// 任一侧不是 loop 或记录读不出来即维持 [`DeviceMatch::Different`]：只是失去这一
-/// 认出能力，判定方向不变，调用方照旧拒绝
+/// 三态与 [`device_match`] 同口径：`Ok(Some(_))` 是 loop 键；`Ok(None)` 不是 loop，
+/// 维持 [`DeviceMatch::Different`]；`Err`（sysfs / loop 映射读不出来）不折成"不是
+/// loop"，升成 [`DeviceMatch::Unknown`]——"无法证明相同"不等于"不同"，调用方据此拒绝
 fn same_storage(target: &str, reported: &str) -> DeviceMatch {
     match device_match(target, reported) {
         DeviceMatch::Different => {
-            let key = |dev: &str| {
-                crate::dev::loop_storage_key(std::path::Path::new(dev)).ok().flatten()
+            let key = |dev: &str| -> Result<Option<(u64, u64, u64, u64)>, DeviceMatch> {
+                match crate::dev::loop_storage_key(std::path::Path::new(dev)) {
+                    Ok(k) => Ok(k),
+                    Err(e) => Err(DeviceMatch::Unknown(format!(
+                        "cannot read loop storage key for {dev}: {e}"
+                    ))),
+                }
             };
-            match (key(target), key(reported)) {
-                (Some(a), Some(b)) if a == b => DeviceMatch::Same,
-                _ => DeviceMatch::Different,
-            }
+            let a = match key(target) {
+                Ok(Some(a)) => a,
+                Ok(None) => return DeviceMatch::Different,
+                Err(unknown) => return unknown,
+            };
+            let b = match key(reported) {
+                Ok(Some(b)) => b,
+                Ok(None) => return DeviceMatch::Different,
+                Err(unknown) => return unknown,
+            };
+            if a == b { DeviceMatch::Same } else { DeviceMatch::Different }
         }
         other => other,
     }
@@ -414,7 +427,7 @@ fn parse_alloc_end_with(
     let mut max_end = 0u64;
     let mut rows = 0usize;
     for line in stdout.lines().filter(|l| !l.trim().is_empty()) {
-        rows += 1;
+        rows += 1; // audit-allow: counter
         let fields: Vec<&str> = line.split('|').collect();
         if fields.len() != 4 {
             return Err(LvmError::Failed(format!(
@@ -599,7 +612,9 @@ pub fn lv_state(part_dev: &str, lv_path: &str) -> Result<LvState, LvmError> {
             hit.len()
         )));
     }
-    let row = hit.pop().expect("length checked above");
+    // 上面的长度闸已把非 1 的情形按错误交出；`hit` 是这行闭包产出的局部 Vec，过滤条件
+    // 只是路径相等、没有副作用，也没有别的别名持有它。长度为 1 时 `pop` 不可能取空
+    let row = hit.pop().expect("the length check above leaves exactly one row");
     if row.vg != vg {
         return Err(LvmError::Failed(format!(
             "lvs: {lv_path} is reported in VG {} rather than {vg} — refusing to extend it",

@@ -48,8 +48,18 @@ pub(crate) fn execute(
             execution::step_hidden_sectors(src, reloc, sector_size, sink)?;
             Ok(StepRun::applied())
         }
-        CarrierStep::Probe(request) => Ok(StepRun::probed(probe(src, request, sector_size)?)),
     }
+}
+
+/// 探测帧的独立入口：结论以 [`ProbeReport`] 直接交出，不经过步骤结果的可选字段。
+/// 计划步骤不含探测——[`WireStep`](super::protocol::WireStep) 没有探测变体，探测只由
+/// worker 的 probe 帧发起，因此探测结论在类型上就不是"可能缺失"
+pub(crate) fn execute_probe(
+    src: &WriteSource,
+    request: ProbeRequest,
+    sector_size: u64,
+) -> Result<ProbeReport, RunOutcome> {
+    probe(src, request, sector_size)
 }
 
 /// 只读探测：按请求的落点识别内容类别。地址溢出与读失败都按错误交出

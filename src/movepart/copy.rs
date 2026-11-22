@@ -24,7 +24,7 @@ pub(crate) fn prepare_copy(
     keep_guid: bool,
 ) -> Result<PreparedCopy, RunOutcome> {
     let e = gpt_policy::live_entry(g, part)?;
-    let len = e.ending_lba - e.starting_lba + 1;
+    let len = e.ending_lba - e.starting_lba + 1; // audit-allow: len-bounded
     let src_start = e.starting_lba;
     // checked：new_start 来自 CLI 原始输入（--align none 时无上界），回绕会骗过下方边界校验
     let new_end = new_start.checked_add(len - 1)
@@ -37,7 +37,7 @@ pub(crate) fn prepare_copy(
             continue;
         }
         if !(new_end < other.starting_lba || new_start > other.ending_lba) {
-            return Err(RunOutcome::refused(format!("copy target overlaps partition #{}", i + 1)));
+            return Err(RunOutcome::refused(format!("copy target overlaps partition #{}", i + 1))); // audit-allow: display-only
         }
     }
     Ok(PreparedCopy {

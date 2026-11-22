@@ -66,8 +66,17 @@ pub(crate) fn cmd_inspect(a: &InspectRequest) -> RunOutcome {
         "the parser refuses a partition suffix for inspect"
     );
     let path = Path::new(&a.target);
-    // 先按路径结构分派：记录后端的直接子项本身就是证据，不必再当目标探测
-    if let Some(spot) = crate::dev::record_spot(path) {
+    // 先按路径结构分派：记录后端的直接子项本身就是证据，不必再当目标探测。
+    // 后端目录读不出是环境故障：判不了它是不是条目，不能折成"不是条目"再当目标探测
+    let spot = match crate::dev::record_spot(path) {
+        Ok(Some(spot)) => Some(spot),
+        Ok(None) => None,
+        Err(e) => bail_fail(RunOutcome::refused(format!(
+            "the record entry's directory could not be read: {e} — nothing about this target's \
+             records can be stated here"
+        ))),
+    };
+    if let Some(spot) = spot {
         // 声明名命名的是目标；条目本身已经是证据，没有可命名的东西
         if a.identity.is_some() {
             bail_fail(RunOutcome::usage(format!(
@@ -101,6 +110,11 @@ pub(crate) fn cmd_inspect(a: &InspectRequest) -> RunOutcome {
         Err(e) => bail_fail(platform_failure(&a.target, e)),
     };
     let current = scene_of_target(&probe, path, declared.as_ref());
+    // audit-allow: W-22
+    let current_scene = match &current {
+        crate::domain::Fact::Known(scene) => Some(scene),
+        _ => None,
+    };
     // 记录落点由目标身份给出：镜像是其状态根下的键目录，loop 设备按 backing 派生；
     // 非 loop 块设备没有决定过的落点，身份不可得的目标由 `--identity` 补上名字
     let identity = crate::dev::TargetIdentity::resolve_for_cleanup(path).map(|identity| {
@@ -123,13 +137,19 @@ pub(crate) fn cmd_inspect(a: &InspectRequest) -> RunOutcome {
         }
         return RunOutcome::Checked;
     };
-    let evidence = read_evidence(&record, current.as_ref());
+    let evidence = read_evidence(&record, current_scene);
     println!("evidence: {}", record.display());
     report(&evidence);
-    if declared.is_some() && current.is_none() {
-        println!(
-            "identity check: unavailable — the declared identity could not be bound to the opened target"
-        );
+    if declared.is_some() {
+        match &current {
+            crate::domain::Fact::Undecidable(why) => {
+                println!("identity check: unavailable — the target could not be read: {why}");
+            }
+            crate::domain::Fact::Absent => {
+                println!("identity check: unavailable — the declared identity could not be bound to the opened target");
+            }
+            crate::domain::Fact::Known(_) => {}
+        }
     }
     report_header(&record, &evidence);
     report_occupancy(path);
@@ -164,7 +184,7 @@ fn report_candidates(identity: Option<&crate::dev::TargetIdentity>) -> Option<St
         println!("candidate: {}", path.display());
         let evidence = read_evidence(path, None);
         report(&evidence);
-        shown += 1;
+        shown += 1; // audit-allow: counter
     }
     if shown > 0 {
         eprintln!(
@@ -259,40 +279,25 @@ fn scene_without_name(probe: &crate::platform::TargetProbe, path: &Path) -> Scen
     }
 }
 
-/// 给了声明名时，句柄必须能套上同一个名字，否则返回 `None`：记录是 `Declared` 材料，
-/// 探测结果里的 `Block` 不可比
+/// 给了声明名时，句柄必须能套上同一个名字，否则返回不适用或读不出：记录是 `Declared`
+/// 材料，探测结果里的 `Block` 不可比。三态分开陈述，不把打开失败与名字套不上合成一个 `None`
 #[cfg(target_os = "linux")]
 fn scene_of_target(
     probe: &crate::platform::TargetProbe,
     path: &Path,
     declared: Option<&DeclaredIdentity>,
-) -> Option<SceneIdentity> {
+) -> crate::domain::Fact<SceneIdentity> {
     let Some(name) = declared else {
-        return Some(scene_without_name(probe, path));
+        return crate::domain::Fact::Known(scene_without_name(probe, path));
     };
-    let mut src = open_target(path, None).ok()?;
-    src.identity = src.identity.with_declared(name).ok()?;
-    let probe = crate::platform::probe::probe_of(&src).ok()?;
-    Some(SceneIdentity::of_source(&probe, &src))
+    crate::cmd::scene::scene_by_path(path, Some(name), None)
 }
 
-/// 按节点形态只读打开目标；`stat` 判不出形态时带原因失败，不按镜像去开
+/// 按节点形态只读打开目标；形态匹配与错误措辞由 [`crate::cmd::scene::open_read_only_target`]
+/// 统一给出，这里只保留命令层的调用名
 #[cfg(target_os = "linux")]
 fn open_target(path: &Path, sector_size: Option<u64>) -> Result<crate::dev::FileSource, String> {
-    use crate::domain::Fact;
-
-    let opened = match crate::dev::target_node_is_block(path) {
-        Fact::Known(true) => crate::dev::FileSource::open_read_only(path),
-        Fact::Known(false) | Fact::Absent => {
-            crate::dev::FileSource::open_read_only_image(path, sector_size)
-        }
-        Fact::Undecidable(why) => {
-            return Err(format!(
-                "the target's node shape cannot be determined: {why}"
-            ))
-        }
-    };
-    opened.map_err(|e| format!("the target cannot be opened read-only: {e}"))
+    crate::cmd::scene::open_read_only_target(path, sector_size)
 }
 
 /// 占用与挂载事实：复用 [`crate::dev::describe`] 的同一份探测，只读打开目标。
@@ -527,8 +532,9 @@ fn map_recognized(record: &Record, target: &str) -> (RunOutcome, Option<String>)
         ),
         Retention::Active | Retention::CommittedPending => None,
     };
-    // 完成与否只看提交点（`Record::committed`），未提交的其余阶段差异不影响这里的码值
-    if record.committed() {
+    // 问"作业做完没"：完成与否只认 [`Record::completion_verdict`] 的放行结论；
+    // 未提交的其余阶段差异不影响这里的码值
+    if record.completion_verdict().allows_finish() {
         return (RunOutcome::Checked, retention_note);
     }
     // 回放资格与 `recover` 共用同一份 `TableReplay`：提示不会许诺 `recover` 不接受的事。
@@ -625,6 +631,7 @@ fn describe_entry_table_steps(record: &Record) -> String {
     // 改写，而对未写完的条目多报的代价只是"按已改写对待"
     match &record.entry_table_in_flight {
         crate::domain::Fact::Known(entry) => {
+            // audit-allow: len-bounded
             let committed = reloc.entry_index as usize + usize::from(*entry == reloc.entry_index);
             format!(
                 "{committed}/{total} committed (entry {entry} table write in flight, counted as committed)"

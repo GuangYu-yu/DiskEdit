@@ -107,6 +107,12 @@ impl RecoveryRecord {
         }
     }
 
+    /// 这条记录是否因载体弱身份（给不出跨现场稳定身份）而不可认领。与外来条目分开：
+    /// 这里没有"记录写了别的身份"，而是"这块盘/分区自己的身份不是独有的、可核对的"
+    pub(crate) fn is_weak_identity(&self) -> bool {
+        self.unclaimable.as_deref() == Some(WEAK_IDENTITY_REFUSAL)
+    }
+
     /// 外来条目的拒绝文案；不是这一类时返回 None
     pub(crate) fn foreign_message(&self) -> Option<String> {
         match self.probe.as_ref() {
@@ -165,6 +171,16 @@ pub(crate) fn active_recovery_records(
         }
     }
     scan_record_root(identity, current.as_ref(), claim_gate.as_deref(), &mut out)?;
+    // 弱身份现场：载体给不出跨现场稳定身份（典型为 MBR 分区现场，只剩起点 LBA 与容量可
+    // 对齐）。记录仍如实列出，但认领闸用专门理由拒绝——起点 + 容量不构成身份，不沿用设备
+    // 唯一性核对的通用措辞；外来身份的原因更具体，保留它
+    if src.is_some_and(|s| s.scene().proof == dev::LiveProof::Unavailable) {
+        for record in &mut out {
+            if record.foreign.is_none() && record.unclaimable.is_some() {
+                record.unclaimable = Some(WEAK_IDENTITY_REFUSAL.to_string());
+            }
+        }
+    }
     Ok(out)
 }
 
@@ -257,6 +273,32 @@ fn unclaimable_slot_refusal(path: &Path, why: &str) -> RunOutcome {
          conflict is resolved",
         path.display()
     ))
+}
+
+/// 弱身份现场的认领拒绝理由（恒定文案，认领闸、记录标记与命令层提示共用同一措辞）。
+///
+/// MBR 分区这类载体给不出跨现场稳定身份：整盘没有可读的序列号 / WWN，分区层级只剩
+/// 起始 LBA 与容量可对齐。这对值不是身份——重装系统、或工具改写 MBR 盘签名之后，同一对
+/// 起点 / 容量可能已经是另一个分区；把"盘签名 + 起点 + 容量"拼成身份会引入新的误判，
+/// 故 fail-closed：不据此自动认领，出路只有用户显式声明的名字。
+pub(crate) const WEAK_IDENTITY_REFUSAL: &str = "this carrier exposes no cross-scene stable identity \
+    (no device ID and no backing-file identity); an MBR partition scene can be aligned only on its \
+    partition start LBA and capacity, and those are not an identity — after a reinstall, or after a \
+    tool rewrites the MBR disk signature, the same start and capacity may belong to a different \
+    partition, so the recovery record is not claimed on that basis. Resume this scene with an \
+    explicit `--identity <name>`, or finish it with `diskedit recover --release --identity <name>`";
+
+/// 自动认领闸：当前载体必须带一条跨现场可核对的身份链，记录才允许被自动认到它上面。
+///
+/// 放行的链：镜像文件身份 `(dev, ino)`（[`LiveProof::Inode`]）、整盘稳定设备 ID
+/// （[`LiveProof::DeviceId`]）、用户显式 `--identity` 声明的名字
+/// （[`LiveProof::Declared`]）。[`LiveProof::Unavailable`] fail-closed，理由见
+/// [`WEAK_IDENTITY_REFUSAL`]；分区起点与容量不构成身份，这里不接收，也永远不应退回用它对齐。
+pub(crate) fn auto_claim_gate(proof: dev::LiveProof) -> Result<(), RunOutcome> {
+    match proof {
+        dev::LiveProof::Unavailable => Err(RunOutcome::refused(WEAK_IDENTITY_REFUSAL)),
+        dev::LiveProof::DeviceId | dev::LiveProof::Inode | dev::LiveProof::Declared => Ok(()),
+    }
 }
 
 /// 只认本目标身份派生的落点：兄弟落点按目标分目录，那里出现别的身份是常态
@@ -478,6 +520,11 @@ impl TransactionManager {
     /// 其余类别 ⇒ 3。`Provisional` 表示记录尚未标为提交，盘上字节可能已部分写入
     fn busy(active: &[RecoveryRecord]) -> RunOutcome {
         let listed: Vec<String> = active.iter().map(RecoveryRecord::describe).collect();
+        // 弱身份现场：不是设备声明撞车，而是载体根本给不出跨现场身份；理由与显式出路见闸口
+        // 文案，不套"身份冲突"那套措辞
+        if active.iter().any(RecoveryRecord::is_weak_identity) {
+            return RunOutcome::refused(format!("{} ({})", WEAK_IDENTITY_REFUSAL, listed.join(", ")));
+        }
         // 记录在，但设备的声明无法证明是独有的：续跑、`recover`、`recover --release` 都会被同一条判据挡住，
         // 这里不指路，只说明要先解决的是什么。单说"目标忙"会把用户送进几条都失败的路
         if let Some(why) = active.iter().find_map(|r| r.unclaimable.as_ref()) {
@@ -511,9 +558,11 @@ impl TransactionManager {
             }
             _ => None,
         });
-        // 已提交的记录不参与续跑：它的步骤在落 commit 时已经做完，再执行一遍就有
-        // 第二次写（`mkfs` 会重新格式化）。这里与 `begin_*` 用同一判据
-        let resumable = recorded.is_some_and(|r| r.op.resumable() && !r.committed());
+        // 已完成的记录不参与续跑：它的步骤在落 commit 时已经做完，再执行一遍就有
+        // 第二次写（`mkfs` 会重新格式化）。完成与否只认 [`Record::completion_verdict`]
+        // 的放行结论，这里与 `begin_*` 用同一判据
+        let resumable =
+            recorded.is_some_and(|r| r.op.resumable() && !r.completion_verdict().allows_finish());
         // 数据写已越过回滚点、但表区仍能显式回放：`recover --replay-table-only` 是一条真实出路
         let replay_only = recorded.is_some_and(|r| {
             !crate::recovery::TableReplay::of(r, false).writes_back()
@@ -546,7 +595,7 @@ impl TransactionManager {
         } else if let Some(record) = recorded {
             // 文案必须与真实出路一致：能续跑的命令才说"重跑"，不能续跑的命令不许给这条指引
             let cmd = record.op.command_name();
-            if record.committed() {
+            if record.completion_verdict().allows_finish() {
                 if rollbackable {
                     "the operation recorded there is marked committed — its steps already finished before \
                      this run; roll it back with `diskedit recover`, or release the record with \
@@ -779,7 +828,9 @@ impl TransactionManager {
             [one] => match one.probe.as_ref() {
                 // 续跑从本目标当前键派生的落点打开；兄弟目录里的记录不在这里续跑
                 crate::recovery::CompanionProbe::Decoded(record) => {
-                    one.slot.resumes_in_place() && record.op == op && !record.committed()
+                    one.slot.resumes_in_place()
+                        && record.op == op
+                        && !record.completion_verdict().allows_finish()
                 }
                 _ => false,
             },
@@ -834,7 +885,8 @@ impl TransactionManager {
                     && matches!(
                         one.probe.as_ref(),
                         crate::recovery::CompanionProbe::Decoded(record)
-                            if record.op == crate::recovery::OpKind::Resize && !record.committed()
+                            if record.op == crate::recovery::OpKind::Resize
+                                && !record.completion_verdict().allows_finish()
                     )
         );
         if !active.is_empty() && !resumable {
@@ -940,6 +992,12 @@ impl TransactionManager {
     /// 本目标自己的落点被另一身份占住时拒绝——写下去会覆盖那份记录
     pub(crate) fn claimed_records(src: &FileSource) -> Result<Vec<RecoveryRecord>, RunOutcome> {
         let active = Self::active_records(src)?;
+        // 弱身份现场：载体没有跨现场稳定身份，在场的记录一条也不能自动认领。闸口先于落点
+        // 撞键判定 fail-closed；空现场不触发——闸口只挡"把记录认到本目标上"，不要求只读
+        // 目标自己长得出身份
+        if !active.is_empty() {
+            auto_claim_gate(src.scene().proof)?;
+        }
         if let Some(record) = own_slot_unclaimable(src.identity.record_path(), &active) {
             if let Some(why) = record.foreign.as_deref() {
                 return Err(foreign_slot_refusal(record.path(), why));
@@ -1091,6 +1149,56 @@ mod tests {
         assert!(own_slot_unclaimable(None, &[]).is_none());
     }
 
+    /// 弱身份 MBR 现场（整盘无稳定设备 ID，分区层级只剩起点 LBA 与容量）不自动认领：
+    /// 起点 + 容量不是身份。拒绝走 3，文案必须说明理由，并给出显式 `--identity` 续跑与
+    /// `recover --release --identity` 收尾两条出路
+    #[test]
+    fn a_weak_mbr_scene_is_refused_with_an_explicit_identity_remedy() {
+        let scene = crate::recovery::SceneIdentity::from_target(crate::platform::TargetId::from_material(
+            crate::platform::IdentityMaterial::block(8, 16, None),
+        ));
+        assert_eq!(scene.proof(), crate::recovery::SceneProof::Unavailable);
+
+        let err = auto_claim_gate(live_proof(&scene)).expect_err("a scene without a stable identity must not be claimed");
+        assert_eq!(err.exit_code(), 3, "weak-identity refusal stays on the refused exit: {err:?}");
+        let RunOutcome::Refused(msg) = err else {
+            panic!("weak-identity refusal must be Refused, got {err:?}");
+        };
+        assert!(msg.contains("start LBA and capacity"), "the reason must name start/capacity: {msg}");
+        assert!(msg.contains("--identity <name>"), "the resume remedy must name --identity: {msg}");
+        assert!(
+            msg.contains("recover --release --identity <name>"),
+            "the release remedy must be named: {msg}"
+        );
+
+        // 同一理由挂到记录上时，busy 闸口也按弱身份分支拒绝，不套设备声明冲突的措辞
+        let mut weak = record(crate::recovery::CompanionProbe::Absent);
+        weak.unclaimable = Some(WEAK_IDENTITY_REFUSAL.to_string());
+        let text = way_out(std::slice::from_ref(&weak));
+        assert!(text.contains("start LBA and capacity"), "{text}");
+        assert!(text.contains("--identity <name>"), "{text}");
+    }
+
+    /// 同一弱身份现场给了显式 `--identity` 名字：声明名构成认领链，闸口照常放行
+    #[test]
+    fn a_declared_scene_is_admitted_to_claim() {
+        let scene = crate::recovery::SceneIdentity::from_target(crate::platform::TargetId::from_material(
+            crate::platform::IdentityMaterial::declared("export-a".to_string()),
+        ));
+        assert_eq!(scene.proof(), crate::recovery::SceneProof::Declared);
+        auto_claim_gate(live_proof(&scene)).expect("a declared-name scene claims its own record");
+    }
+
+    /// 带稳定设备 ID 的整盘：自动认领照旧，弱身份闸口不得误伤有稳定身份链的载体
+    #[test]
+    fn a_scene_with_a_stable_device_id_is_auto_claimed() {
+        let scene = crate::recovery::SceneIdentity::from_target(crate::platform::TargetId::from_material(
+            crate::platform::IdentityMaterial::block(8, 16, Some("device/serial=S1")),
+        ));
+        assert_eq!(scene.proof(), crate::recovery::SceneProof::DeviceId);
+        auto_claim_gate(live_proof(&scene)).expect("a stable device ID keeps auto-claiming");
+    }
+
     /// 一条越过回滚点、目的区压在旧表区间上的搬移记录：普通 `recover` 拒绝，显式许可下表区可回放
     fn blocked_move_record() -> crate::recovery::Record {
         let mut sector = vec![0u8; 512];
@@ -1187,6 +1295,16 @@ mod tests {
         crate::recovery::SceneIdentity::from_target(crate::platform::TargetId::from_material(
             crate::platform::IdentityMaterial::image(None, Some([1; 16])).expect("an image identity needs a file ID"),
         ))
+    }
+
+    /// 记录侧 [`SceneProof`] 到句柄侧 [`dev::LiveProof`] 的一一对应：认领闸从句柄取证据种类
+    fn live_proof(scene: &crate::recovery::SceneIdentity) -> dev::LiveProof {
+        match scene.proof() {
+            crate::recovery::SceneProof::DeviceId => dev::LiveProof::DeviceId,
+            crate::recovery::SceneProof::FileId => dev::LiveProof::Inode,
+            crate::recovery::SceneProof::Declared => dev::LiveProof::Declared,
+            crate::recovery::SceneProof::Unavailable => dev::LiveProof::Unavailable,
+        }
     }
 
     /// 记录读不出来时不能当成"身份相符"：读失败不是"没有不符的证据"，那条记录
@@ -1328,7 +1446,11 @@ mod tests {
 
             fn record_of(&self, device_id: &str) -> PathBuf {
                 let key = crate::dev::key_for_test(device_id, None);
-                crate::dev::record_dir_under(&self.state, &key.hash_hex()).join(crate::dev::RECORD_NAME)
+                crate::dev::record_dir_under(
+                    &self.state,
+                    &key.hash_hex().expect("a short test key encodes"),
+                )
+                .join(crate::dev::RECORD_NAME)
             }
 
             fn source(&self, device_id: &str) -> crate::dev::FileSource {

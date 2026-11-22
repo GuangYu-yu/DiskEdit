@@ -193,7 +193,8 @@ impl TableStep {
         let backup_array_lba = last_lba.checked_sub(span).ok_or_else(|| {
             RunOutcome::refused("disk too small to hold GPT entry array")
         })?;
-        let (array_bytes, array_crc) = serialize_array(entries, &geom);
+        let (array_bytes, array_crc) = serialize_array(entries, &geom)
+            .map_err(|e| RunOutcome::refused(e.to_string()))?;
         let (primary, backup) = canonical_headers(header, last_lba, backup_array_lba);
         let primary_header =
             serialize_header(&primary, array_crc, ss).map_err(|e| RunOutcome::refused(e.to_string()))?;
@@ -301,7 +302,7 @@ impl TableStep {
     /// 装配期不读盘；落在 LBA0 内的候选签名位置只在缓冲里清零，不另开写段。
     pub(crate) fn new_mbr(src: &FileSource, snapshot: TableSnapshot) -> Result<Self, RunOutcome> {
         let ss = src.sector_size;
-        if src.size < 3 * ss {
+        if src.size < 3 * ss { // audit-allow: len-bounded
             return Err(RunOutcome::refused(format!(
                 "target too small for an MBR (needs ≥3 sectors at {ss}-byte sector size)"
             )));
@@ -324,11 +325,11 @@ impl TableStep {
         let sig_len = GPT_SIGNATURE.len();
         for at in candidate_sector_sizes(ss) {
             let at = at as usize;
-            if at + sig_len > lba0.len() {
+            if at + sig_len > lba0.len() { // audit-allow: len-bounded
                 continue;
             }
-            if lba0[at..at + sig_len] == *GPT_SIGNATURE {
-                lba0[at..at + sig_len].fill(0);
+            if lba0[at..at + sig_len] == *GPT_SIGNATURE { // audit-allow: index-in-bounds
+                lba0[at..at + sig_len].fill(0); // audit-allow: index-in-bounds
             }
         }
         let last_off = container_last_lba(src, ss)
@@ -340,13 +341,15 @@ impl TableStep {
             if r.offset == 0 || r.offset == ss || r.offset == last_off {
                 continue;
             }
-            writes.push(StepWrite { region: *r, bytes: vec![0u8; r.len as usize] });
+            let len = crate::support::host_usize(r.len)
+                .map_err(|_| RunOutcome::refused("sector size does not fit the host address space"))?;
+            writes.push(StepWrite { region: *r, bytes: vec![0u8; len] });
         }
         for off in [ss, last_off] {
             let Some(region) = regions.iter().find(|r| r.offset == off) else {
                 continue;
             };
-            let len = usize::try_from(region.len)
+            let len = crate::support::host_usize(region.len)
                 .map_err(|_| RunOutcome::refused("sector size does not fit the host address space"))?;
             writes.push(StepWrite { region: *region, bytes: vec![0u8; len] });
         }

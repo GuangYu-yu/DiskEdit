@@ -18,7 +18,7 @@ pub fn disk_name_from_partition(part_name: &str, disk_exists: impl Fn(&str) -> b
             return Some(base.to_string());
         }
     }
-    let digits_end = part_name.bytes().rposition(|b| !b.is_ascii_digit()).map(|i| i + 1);
+    let digits_end = part_name.bytes().rposition(|b| !b.is_ascii_digit()).map(|i| i + 1); // audit-allow: index-in-bounds
     // i + 1 ≥ 1：Some(0) 不可达，"全数字"（盘名无分区号）由 None 表达
     match digits_end {
         None => None,

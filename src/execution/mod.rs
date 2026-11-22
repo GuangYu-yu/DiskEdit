@@ -125,8 +125,8 @@ impl TransferState {
 
     /// 一块搬完：条目内计数与全局游标同时前进
     fn advance_chunk(&mut self) {
-        self.chunks_in_entry += 1;
-        self.transfer_cursor += 1;
+        self.chunks_in_entry += 1; // audit-allow: counter
+        self.transfer_cursor += 1; // audit-allow: counter
     }
 
     /// 一条目完成：条目游标前进、条目内块数归零、步数加一。
@@ -134,10 +134,10 @@ impl TransferState {
     /// 入参是 [`crate::exec::StepApplied`]：没有"这一步算数"的凭据就没有推进入口，
     /// 因此不存在"结论不是 `Applied` 却已经推进了游标"的次序
     pub(crate) fn advance_entry(&mut self, _: crate::exec::StepApplied) {
-        self.entry_index += 1;
+        self.entry_index += 1; // audit-allow: counter
         self.chunks_in_entry = 0;
         self.prefix_digest = [0u8; 32];
-        self.completed_steps += 1;
+        self.completed_steps += 1; // audit-allow: counter
     }
 
     /// 已落盘前缀的执行顺序摘要；记录落盘与续跑比对共用这一份
@@ -152,7 +152,7 @@ impl TransferState {
     /// 一个不搬数据的步骤完成。同样要求 [`crate::exec::StepApplied`]：推进的理由必须
     /// 是"这一步算数"，不是一个布尔参数
     pub(crate) fn note_step(&mut self, _: crate::exec::StepApplied) {
-        self.completed_steps += 1;
+        self.completed_steps += 1; // audit-allow: counter
     }
 
     /// 落盘用的 durable 快照：(条目游标, 条目内块数, 已完成步骤数, 全局块数)
@@ -426,7 +426,7 @@ pub(crate) fn prepare_steps<'a>(
                 if table.expect_before.is_none() || table.expect_after.is_none() {
                     return Err(RunOutcome::internal(format!(
                         "plan step {} writes the table but carries no expected stamp — the plan was not assembled",
-                        index + 1
+                        index + 1 // audit-allow: index-in-bounds
                     )));
                 }
                 // 写前比对要求写入段落在比对区间内且长度一致；放到执行期才判，
@@ -437,7 +437,7 @@ pub(crate) fn prepare_steps<'a>(
                 if !aligned {
                     return Err(RunOutcome::internal(format!(
                         "plan step {} writes table bytes outside its comparison regions",
-                        index + 1
+                        index + 1 // audit-allow: index-in-bounds
                     )));
                 }
             }
@@ -452,13 +452,13 @@ pub(crate) fn prepare_steps<'a>(
                 if *sectors == 0 {
                     return Err(RunOutcome::internal(format!(
                         "plan step {} relocates zero sectors",
-                        index + 1
+                        index + 1 // audit-allow: index-in-bounds
                     )));
                 }
-                if !matches!(raw.get(index + 1), Some(PlanStep::WriteTable(_))) {
+                if !matches!(raw.get(index + 1), Some(PlanStep::WriteTable(_))) { // audit-allow: index-in-bounds
                     return Err(RunOutcome::internal(format!(
                         "plan step {} relocates data but is not followed by the table step that commits it",
-                        index + 1
+                        index + 1 // audit-allow: index-in-bounds
                     )));
                 }
             }
@@ -466,10 +466,10 @@ pub(crate) fn prepare_steps<'a>(
             // 地址区间都在首写前判定，重复的防御判定在执行期只能按"盘可能已改变"上报
             PlanStep::CopyPartition { part, src_first, dst_first, sectors } => {
                 has_data = true;
-                if !matches!(raw.get(index + 1), Some(PlanStep::WriteTable(_))) {
+                if !matches!(raw.get(index + 1), Some(PlanStep::WriteTable(_))) { // audit-allow: index-in-bounds
                     return Err(RunOutcome::internal(format!(
                         "plan step {} copies data but is not followed by the table step that commits it",
-                        index + 1
+                        index + 1 // audit-allow: index-in-bounds
                     )));
                 }
                 copy::preflight(
@@ -482,7 +482,7 @@ pub(crate) fn prepare_steps<'a>(
                     },
                     sector_size,
                 )
-                .map_err(|e| e.context(&format!("plan step {}", index + 1)))?;
+                .map_err(|e| e.context(&format!("plan step {}", index + 1)))?; // audit-allow: display-only
             }
             // FS 步骤的能力与区间都在首写前判定：缺工具若等到写表之后才暴露，
             // 就只能按"盘可能已改变"上报
@@ -498,7 +498,7 @@ pub(crate) fn prepare_steps<'a>(
                     },
                     sector_size,
                 )
-                .map_err(|e| e.context(&format!("plan step {}", index + 1)))?;
+                .map_err(|e| e.context(&format!("plan step {}", index + 1)))?; // audit-allow: display-only
             }
             // 建立步骤同理：区间自洽与类型可得都在擦除第一个字节之前判定
             PlanStep::FsCreate { part, first_lba, sectors, fstype, label } => {
@@ -513,7 +513,7 @@ pub(crate) fn prepare_steps<'a>(
                     },
                     sector_size,
                 )
-                .map_err(|e| e.context(&format!("plan step {}", index + 1)))?;
+                .map_err(|e| e.context(&format!("plan step {}", index + 1)))?; // audit-allow: display-only
             }
             // 换区重建不在这里判定：它紧跟在自己的表提交之后，能力与区间都由那一步保证。
             // 形状（前后必须是搬移与表提交）由计划的构造点校验
@@ -525,7 +525,7 @@ pub(crate) fn prepare_steps<'a>(
                     attr: attr.clone(),
                     fstype: *fstype,
                 })
-                .map_err(|e| e.context(&format!("plan step {}", index + 1)))?;
+                .map_err(|e| e.context(&format!("plan step {}", index + 1)))?; // audit-allow: display-only
             }
         }
     }
@@ -537,7 +537,7 @@ pub(crate) fn prepare_steps<'a>(
             ));
         };
         const MIN_CHUNK: u64 = crate::support::MIB_BYTES;
-        const MAX_CHUNK: u64 = 64 * 1024 * 1024;
+        const MAX_CHUNK: u64 = 64 * 1024 * 1024; // audit-allow: const-expr
         if !(MIN_CHUNK..=MAX_CHUNK).contains(&chunk) || chunk % sector_size != 0 {
             return Err(RunOutcome::refused(format!(
                 "chunk size {chunk} bytes must be within 1 MiB..=64 MiB and a multiple of the {sector_size}-byte sector"
@@ -603,32 +603,32 @@ pub(crate) fn prepare_steps<'a>(
                     else {
                         return Err(RunOutcome::internal(format!(
                             "plan step {} has no usable relocation block layout",
-                            index + 1
+                            index + 1 // audit-allow: index-in-bounds
                         )));
                     };
                     // 地址区间的溢出判定与布局同源：执行期再遇到时前面的条目可能已写过
                     let src_base = src_first.checked_mul(sector_size).ok_or_else(|| {
                         RunOutcome::internal(format!(
                             "plan step {}: the source offset of partition {part} overflows the address space",
-                            index + 1
+                            index + 1 // audit-allow: index-in-bounds
                         ))
                     })?;
                     let dst_base = dst_first.checked_mul(sector_size).ok_or_else(|| {
                         RunOutcome::internal(format!(
                             "plan step {}: the target offset of partition {part} overflows the address space",
-                            index + 1
+                            index + 1 // audit-allow: index-in-bounds
                         ))
                     })?;
                     let total = sectors.checked_mul(sector_size).ok_or_else(|| {
                         RunOutcome::internal(format!(
                             "plan step {}: the relocation length of partition {part} overflows the address space",
-                            index + 1
+                            index + 1 // audit-allow: index-in-bounds
                         ))
                     })?;
                     if src_base.checked_add(total).is_none() || dst_base.checked_add(total).is_none() {
                         return Err(RunOutcome::internal(format!(
                             "plan step {}: the relocation byte range of partition {part} overflows the address space",
-                            index + 1
+                            index + 1 // audit-allow: index-in-bounds
                         )));
                     }
                     // 记录里当前条目已完成的块数不能超过该条目的块数
@@ -638,22 +638,22 @@ pub(crate) fn prepare_steps<'a>(
                     {
                         return Err(RunOutcome::internal(format!(
                             "plan step {}: {} chunks are recorded as done but the step only has {count}",
-                            index + 1,
+                            index + 1, // audit-allow: index-in-bounds
                             reloc.chunks_in_entry
                         )));
                     }
                     (requested, chunk, count)
                 };
-                reloc_index += 1;
+                reloc_index += 1; // audit-allow: counter
                 // 形状校验在装配层，但计划是外部输入：越界必须是错误而不是 panic
-                let Some(PlanStep::WriteTable(commit)) = raw.get(index + 1) else {
+                let Some(PlanStep::WriteTable(commit)) = raw.get(index + 1) else { // audit-allow: index-in-bounds
                     return Err(RunOutcome::internal(
                         "the relocation step is not followed by a table step",
                     ));
                 };
                 // 换区条目在表提交之后多一步重建；两处对"这是不是换区"必须同答，
                 // 否则表会落位而内容不重建（或反之）
-                let swap = match raw.get(index + 2) {
+                let swap = match raw.get(index + 2) { // audit-allow: index-in-bounds
                     Some(PlanStep::RebuildSwap { part: p, src_first: s0, dst_first: d0, sectors: n }) => {
                         Some(SwapRebuild { part: *p, src_first: *s0, dst_first: *d0, sectors: *n })
                     }
@@ -662,10 +662,10 @@ pub(crate) fn prepare_steps<'a>(
                 if swap.is_some() != *is_swap {
                     return Err(RunOutcome::internal(format!(
                         "plan step {}: the swap-rebuild step and the relocation entry disagree on the partition type",
-                        index + 1
+                        index + 1 // audit-allow: index-in-bounds
                     )));
                 }
-                index += 2 + usize::from(swap.is_some());
+                index += 2 + usize::from(swap.is_some()); // audit-allow: counter
                 steps.push(PreparedStep::Transfer {
                     reloc: Relocate {
                         part: *part,
@@ -686,7 +686,7 @@ pub(crate) fn prepare_steps<'a>(
                 ));
             }
             PlanStep::CopyPartition { part, src_first, dst_first, sectors } => {
-                let Some(PlanStep::WriteTable(commit)) = raw.get(index + 1) else {
+                let Some(PlanStep::WriteTable(commit)) = raw.get(index + 1) else { // audit-allow: index-in-bounds
                     return Err(RunOutcome::internal(
                         "the copy step is not followed by a table step",
                     ));
@@ -700,11 +700,11 @@ pub(crate) fn prepare_steps<'a>(
                     },
                     commit,
                 });
-                index += 2;
+                index += 2; // audit-allow: counter
             }
             PlanStep::WriteTable(commit) => {
                 steps.push(PreparedStep::TableOnly(commit));
-                index += 1;
+                index += 1; // audit-allow: counter
             }
             PlanStep::FsResize { part, first_lba, sectors, target_bytes, fstype } => {
                 steps.push(PreparedStep::FsResize(FsResize {
@@ -714,7 +714,7 @@ pub(crate) fn prepare_steps<'a>(
                     target_bytes: *target_bytes,
                     fstype: *fstype,
                 }));
-                index += 1;
+                index += 1; // audit-allow: counter
             }
             PlanStep::FsCreate { part, first_lba, sectors, fstype, label } => {
                 steps.push(PreparedStep::FsCreate(FsCreate {
@@ -724,7 +724,7 @@ pub(crate) fn prepare_steps<'a>(
                     fstype: *fstype,
                     label: label.clone(),
                 }));
-                index += 1;
+                index += 1; // audit-allow: counter
             }
             PlanStep::FsSet { part, attr, fstype } => {
                 steps.push(PreparedStep::FsSet(FsSet {
@@ -732,7 +732,7 @@ pub(crate) fn prepare_steps<'a>(
                     attr: attr.clone(),
                     fstype: *fstype,
                 }));
-                index += 1;
+                index += 1; // audit-allow: counter
             }
         }
     }
@@ -801,7 +801,7 @@ pub(crate) fn journal_state(src: &WriteSource, steps: &[PreparedStep]) -> Result
 /// （[`crate::support::DEFAULT_CHUNK_BYTES`]，4 MiB）是两件事，故不共用一个名字：
 /// 这个值同时是恢复记录的步长下限——`Transfer` 每前进 `max(ChunkSize, 8 MiB)`
 /// 替换一次记录并只更新 `cursor`，而 `resize` 不登记 `--chunk`，恢复粒度取该下限
-pub(crate) const RESIZE_CHUNK_BYTES: u64 = 8 * crate::support::MIB_BYTES;
+pub(crate) const RESIZE_CHUNK_BYTES: u64 = 8 * crate::support::MIB_BYTES; // audit-allow: const-expr
 
 #[cfg(test)]
 mod tests {

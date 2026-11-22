@@ -42,6 +42,9 @@
 //! - `bool` 字段（`is_swap`、`restore_blocked`）写 `u8::from`，读侧只接受 0/1
 //! - 可选段统一走 `recovery/record.rs` 的 `write_opt` / `read_opt`
 
+mod guards;
+
+use guards::{code_only, join_string_continuations};
 use std::path::{Path, PathBuf};
 
 fn manifest() -> &'static Path {
@@ -212,7 +215,7 @@ fn wording_offenders(rel: &str, text: &str) -> Vec<String> {
         "parse failed ({kind}): {e}",
     ];
     let mut offenders = Vec::new();
-    for (no, line) in logical_lines(&production_text(text)) {
+    for (no, line) in join_string_continuations(&production_text(text)) {
         let code = line.split("//").next().unwrap_or("");
         for literal in string_literals(code) {
             let literal = normalize_placeholders(&literal);
@@ -252,59 +255,6 @@ fn string_literals(code: &str) -> Vec<String> {
     out
 }
 
-/// 源码的逻辑行与起始行号（1 起）：行尾 `\` 让字符串续到下一行，下一行的行首空白
-/// 不进入字面量。注释行不参与拼接
-fn logical_lines(text: &str) -> Vec<(usize, String)> {
-    let mut out = Vec::new();
-    let mut buf = String::new();
-    let mut start = 1;
-    let mut continuing = false;
-    for (no, raw) in text.lines().enumerate() {
-        let line = if continuing { raw.trim_start() } else { raw };
-        if !continuing {
-            start = no + 1;
-        }
-        if let Some(head) = line.trim_end().strip_suffix('\\').filter(|_| is_string_continuation(line)) {
-            buf.push_str(head);
-            continuing = true;
-        } else {
-            buf.push_str(line);
-            out.push((start, std::mem::take(&mut buf)));
-            continuing = false;
-        }
-    }
-    if continuing || !buf.is_empty() {
-        out.push((start, buf));
-    }
-    out
-}
-
-/// 行尾 `\` 是不是字符串内的续行：该行在此之前有一个未闭合的字符串字面量。
-/// 注释行的行尾 `\` 与字符/转义无关
-fn is_string_continuation(line: &str) -> bool {
-    let body = match line.trim_end().strip_suffix('\\') {
-        Some(body) => body,
-        None => return false,
-    };
-    if body.trim_start().starts_with("//") {
-        return false;
-    }
-    let mut quotes = 0usize;
-    let mut escaped = false;
-    for c in body.chars() {
-        if escaped {
-            escaped = false;
-            continue;
-        }
-        match c {
-            '\\' => escaped = true,
-            '"' => quotes += 1,
-            _ => {}
-        }
-    }
-    quotes % 2 == 1
-}
-
 /// 字符串插值占位符归一成 `{}`：`{part}`、`{e:?}` 与位置参数 `{}` 是同一处
 fn normalize_placeholders(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
@@ -328,128 +278,6 @@ fn normalize_placeholders(s: &str) -> String {
         out.push_str("{}");
     }
     out
-}
-
-/// 把字符串、字符字面量（含 raw string）、注释替换成空格（换行保留）：结构判定与
-/// 数值扫描只看代码
-fn code_only(text: &str) -> String {
-    let b = text.as_bytes();
-    let mut out = Vec::with_capacity(b.len());
-    let mut i = 0;
-    while i < b.len() {
-        match b[i] {
-            b'r' | b'b' => {
-                let Some((quote, hashes)) = raw_string_open(b, i) else {
-                    out.push(b[i]);
-                    i += 1;
-                    continue;
-                };
-                let mut j = quote + 1;
-                while j < b.len() {
-                    if b[j] == b'"' {
-                        let close = j + 1 + hashes;
-                        if close <= b.len()
-                            && b[j + 1..close].iter().all(|&c| c == b'#')
-                        {
-                            j = close;
-                            break;
-                        }
-                    }
-                    j += 1;
-                }
-                for &byte in &b[i..j] {
-                    out.push(if byte == b'\n' { b'\n' } else { b' ' });
-                }
-                i = j;
-            }
-            b'/' if b.get(i + 1) == Some(&b'/') => {
-                while i < b.len() && b[i] != b'\n' {
-                    out.push(b' ');
-                    i += 1;
-                }
-            }
-            b'/' if b.get(i + 1) == Some(&b'*') => {
-                while i < b.len() {
-                    if b[i] == b'*' && b.get(i + 1) == Some(&b'/') {
-                        out.extend_from_slice(b"  ");
-                        i += 2;
-                        break;
-                    }
-                    out.push(if b[i] == b'\n' { b'\n' } else { b' ' });
-                    i += 1;
-                }
-            }
-            b'"' => {
-                out.push(b' ');
-                i += 1;
-                while i < b.len() {
-                    if b[i] == b'\\' {
-                        out.push(b' ');
-                        i += 1;
-                        if i < b.len() {
-                            out.push(if b[i] == b'\n' { b'\n' } else { b' ' });
-                            i += 1;
-                        }
-                    } else if b[i] == b'"' {
-                        out.push(b' ');
-                        i += 1;
-                        break;
-                    } else {
-                        out.push(if b[i] == b'\n' { b'\n' } else { b' ' });
-                        i += 1;
-                    }
-                }
-            }
-            b'\'' => {
-                // 字符字面量整段抹掉；生命周期标记 `'a` 原样保留
-                let after_quote = b.get(i + 1).copied();
-                let width = match (after_quote, b.get(i + 2), b.get(i + 3)) {
-                    (Some(c), Some(&b'\''), _) if c != b'\\' => Some(3),
-                    (Some(b'\\'), _, Some(&b'\'')) => Some(4),
-                    _ => None,
-                };
-                match width {
-                    Some(n) => {
-                        out.resize(out.len() + n, b' ');
-                        i += n;
-                    }
-                    None if after_quote == Some(b'\\') => {
-                        // '\u{...}' 等变长转义：扫到收盘单引号
-                        let mut j = i + 1;
-                        while j < b.len() && b[j] != b'\'' {
-                            j += 1;
-                        }
-                        let end = (j + 1).min(b.len());
-                        out.resize(out.len() + (end - i), b' ');
-                        i = end;
-                    }
-                    None => {
-                        out.push(b[i]);
-                        i += 1;
-                    }
-                }
-            }
-            c => {
-                out.push(c);
-                i += 1;
-            }
-        }
-    }
-    String::from_utf8(out).expect("blanking keeps UTF-8 byte boundaries")
-}
-
-/// raw string 的起始位置：`r"…"`、`r#"…"#`、`br#"…"#`。返回开引号下标与井号个数
-fn raw_string_open(b: &[u8], i: usize) -> Option<(usize, usize)> {
-    let mut j = i;
-    if b[j] == b'b' {
-        j += 1;
-    }
-    if b.get(j) != Some(&b'r') {
-        return None;
-    }
-    j += 1;
-    let hashes = b[j..].iter().take_while(|&&c| c == b'#').count();
-    (b.get(j + hashes) == Some(&b'"')).then_some((j + hashes, hashes))
 }
 
 /// raw string 里的花括号与引号不参与结构判定
@@ -829,7 +657,7 @@ fn diagnostic_sentence_guard_catches_a_second_copy() {
 /// `{}` 归一，跨行字符串接回成一行后比较
 fn single_copy_violation(text: &str, sentence: &str) -> usize {
     let needle = normalize_placeholders(sentence);
-    logical_lines(&production_text(text))
+    join_string_continuations(&production_text(text))
         .iter()
         .filter(|(_, line)| {
             let code = line.split("//").next().unwrap_or("");

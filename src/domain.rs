@@ -116,9 +116,9 @@ impl Align {
         match self.0 {
             AlignKind::None => None,
             AlignKind::Mib(mib) => {
-                let unit = (u64::from(mib) * crate::support::MIB_BYTES)
-                    .checked_div(table_sector_size)
-                    .unwrap_or(0);
+                // table_sector_size 来自已校验的几何（`SectorSize::try_new`），不为 0
+                let unit = (u64::from(mib) * crate::support::MIB_BYTES) // audit-allow: len-bounded
+                    / table_sector_size;
                 (unit > 0).then_some(unit)
             }
         }

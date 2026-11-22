@@ -1,9 +1,13 @@
-//! VM 载体：bundle 校验与 QEMU 启动参数。
+//! VM 载体：bundle 准入校验与 QEMU 启动参数。
 //!
-//! bundle 是一个目录：`manifest.json` 声明架构、可执行文件版本与每个制品的
-//! SHA-256，`kernel` / `initramfs` 是启动所需的两件制品。校验在这里一次做完，
-//! 任何不符都在启动之前拒绝——宿主的写入记录与目标几何不能被一个来路不明的
-//! guest 接走。
+//! bundle 是一个目录：`manifest.json` 声明架构、可执行文件版本与制品摘要。
+//! `kernel` / `initramfs` 两件制品读盘后与清单声明的 SHA-256 逐字节比对；
+//! `worker.sha256` 在准入处只解析登记，作为"这份 bundle 带的是哪一份 worker"
+//! 的审计事实，运行时不另与盘上文件比对。worker 与清单摘要是否一致由构建侧
+//! 回答：`tools/vm/verify_worker.py` 在 initramfs 打出后解包，按条目名取出
+//! `bin/diskedit`，解出字节流与 `worker.sha256` 比对，不符即构建失败；宿主
+//! 另在 `binary_version` 一处核对协议版本。任何不符都在启动之前拒绝——宿主的
+//! 写入记录与目标几何不能被一个来路不明的 guest 接走。
 //!
 //! 启动器把目标句柄按 fd 交给 QEMU（`-add-fd` 加 `/dev/fdset/`，经 `-blockdev` 接盘），
 //! 缓存固定为 `cache.direct=on`，串口走 stdio；guest 的协议帧因此直接落在宿主会话的
@@ -12,8 +16,6 @@
 
 #[cfg(target_os = "linux")]
 use std::io::Read as _;
-#[cfg(target_os = "linux")]
-use std::os::unix::process::CommandExt;
 #[cfg(target_os = "linux")]
 use std::path::{Component, Path, PathBuf};
 
@@ -60,14 +62,17 @@ pub(crate) struct Bundle {
     kernel: PathBuf,
     initramfs: PathBuf,
     arch: String,
-    /// 清单声明的 worker 映像摘要；构建方未声明时为 `None`
-    pub(crate) worker_digest: Option<[u8; 32]>,
+    /// 清单声明的 worker 映像摘要：运行时只登记 bundle 携带的 worker 是哪一份，
+    /// 不与盘上文件比对；worker 与清单摘要的一致性由构建侧
+    /// `tools/vm/verify_worker.py` 解包 `bin/diskedit` 条目后比对把关。载体必须
+    /// 声明这一项，缺失在准入时拒绝
+    pub(crate) worker_digest: [u8; 32],
 }
 
 /// 非 Linux 宿主的载体端口：VM 启动路径依赖 fd 交棒与 `/dev/fdset`，这里不提供
 #[cfg(not(target_os = "linux"))]
 pub(crate) struct Bundle {
-    pub(crate) worker_digest: Option<[u8; 32]>,
+    pub(crate) worker_digest: [u8; 32],
 }
 
 impl Bundle {
@@ -91,6 +96,14 @@ impl Bundle {
                 root.display()
             ))
         })?;
+        Ok(Some(Self::load(&root, value)?))
+    }
+
+    /// 准入逐项核对：架构与协议版本比对，kernel/initramfs 读盘后与声明摘要比对；
+    /// worker 摘要只解析登记为审计事实，不另做读盘比对。任何不符都在启动之前
+    /// 拒绝，不静默退回原生执行
+    #[cfg(target_os = "linux")]
+    fn load(root: &Path, value: Value) -> Result<Self, RunOutcome> {
         let schema = value.get("schema").and_then(Value::as_u64);
         if schema != Some(SCHEMA) {
             return Err(RunOutcome::unsupported(format!(
@@ -112,19 +125,16 @@ impl Bundle {
                 protocol::BINARY_VERSION
             )));
         }
-        let kernel = artifact(&root, &value, "kernel")?;
-        let initramfs = artifact(&root, &value, "initramfs")?;
-        let worker_digest = value
-            .get("worker")
-            .and_then(|w| w.get("sha256"))
-            .and_then(Value::as_str)
-            .map(|hex| {
-                parse_sha256(hex).ok_or_else(|| {
-                    RunOutcome::unsupported("manifest.worker.sha256 is not a SHA-256 hex string")
-                })
-            })
-            .transpose()?;
-        Ok(Some(Self { kernel, initramfs, arch: arch.to_string(), worker_digest }))
+        let kernel = artifact(root, &value, "kernel")?;
+        let initramfs = artifact(root, &value, "initramfs")?;
+        let worker_entry = value.get("worker").ok_or_else(|| {
+            RunOutcome::unsupported("manifest has no `worker` entry")
+        })?;
+        let worker_hex = text(worker_entry, "sha256", "manifest.worker.sha256")?;
+        let worker_digest = parse_sha256(worker_hex).ok_or_else(|| {
+            RunOutcome::unsupported("manifest.worker.sha256 is not a SHA-256 hex string")
+        })?;
+        Ok(Self { kernel, initramfs, arch: arch.to_string(), worker_digest })
     }
 
     /// 非 Linux 宿主不提供 VM 载体：启动路径依赖 fd 交棒与 `/dev/fdset`
@@ -196,7 +206,7 @@ fn parse_sha256(text: &str) -> Option<[u8; 32]> {
     for (index, chunk) in text.as_bytes().chunks(2).enumerate() {
         let hi = (chunk[0] as char).to_digit(16)?;
         let lo = (chunk[1] as char).to_digit(16)?;
-        out[index] = (hi * 16 + lo) as u8;
+        out[index] = (hi * 16 + lo) as u8; // audit-allow: index-in-bounds
     }
     Some(out)
 }
@@ -211,7 +221,13 @@ fn file_digest(path: &Path) -> std::io::Result<[u8; 32]> {
     let mut file = std::fs::File::open(path)?;
     let mut hasher = Sha256::new();
     // 分块读的搬运单元：1 MiB（与帧上限同一口径，取值来自 `support::MIB_BYTES`）
-    let mut buffer = vec![0u8; crate::support::MIB_BYTES as usize];
+    let buf_len = crate::support::host_usize(crate::support::MIB_BYTES).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "the read buffer exceeds the host address space",
+        )
+    })?;
+    let mut buffer = vec![0u8; buf_len];
     loop {
         let read = file.read(&mut buffer)?;
         if read == 0 {
@@ -282,7 +298,7 @@ pub(crate) fn command(
     bundle: &Bundle,
     src: &crate::dev::WriteSource,
     token: &str,
-) -> Result<std::process::Command, RunOutcome> {
+) -> Result<crate::fsops::GateCommand, RunOutcome> {
     let program = qemu_program(&bundle.arch).ok_or_else(|| {
         RunOutcome::unsupported(format!(
             "no QEMU machine is wired for architecture {}",
@@ -310,7 +326,9 @@ pub(crate) fn command(
              run the command as root so the job stays native"
         );
     }
-    let mut command = std::process::Command::new(qemu);
+    // 构造走 fsops 闸口：环境在那里显式净化（env_clear + 固定 PATH；QEMU 不保留
+    // LC_ALL，理由见 `carrier_command`）。这里只补 argv 与 exec 前的 fd 钩子
+    let mut command = crate::fsops::carrier_command(qemu);
     command.args(arguments(bundle, src.sector_size, fd, token, accel));
     // SAFETY: pre_exec 只做两个不分配内存的系统调用；失败以 errno 返回，
     // 子进程在 exec 之前退出，命令执行不会继续
@@ -416,8 +434,72 @@ mod tests {
             kernel: PathBuf::from("/tmp/bundle/kernel"),
             initramfs: PathBuf::from("/tmp/bundle/initramfs"),
             arch: "x86_64".into(),
-            worker_digest: None,
+            worker_digest: [0x5a; 32],
         }
+    }
+
+    /// 准入清单夹具：kernel/initramfs 是真实文件，摘要按文件内容算；
+    /// worker 段由调用方决定给成什么形状
+    fn fixture_bundle(worker: Option<serde_json::Value>) -> (tempfile::TempDir, Value) {
+        let dir = tempfile::Builder::new()
+            .prefix("diskedit_bundle_")
+            .tempdir()
+            .expect("a fixture bundle directory");
+        std::fs::write(dir.path().join("kernel"), b"fixture kernel").unwrap();
+        std::fs::write(dir.path().join("initramfs"), b"fixture initramfs").unwrap();
+        let kernel_digest = hex(&file_digest(&dir.path().join("kernel")).unwrap());
+        let initramfs_digest = hex(&file_digest(&dir.path().join("initramfs")).unwrap());
+        let mut manifest = serde_json::json!({
+            "schema": SCHEMA,
+            "arch": std::env::consts::ARCH,
+            "binary_version": protocol::BINARY_VERSION,
+            "kernel": { "path": "kernel", "sha256": kernel_digest },
+            "initramfs": { "path": "initramfs", "sha256": initramfs_digest },
+        });
+        if let Some(worker) = worker {
+            manifest["worker"] = worker;
+        }
+        (dir, manifest)
+    }
+
+    /// 清单缺 worker 段：准入直接拒绝，走"不可用"分类（退出 6），不放行一份没声明
+    /// worker 摘要的载体
+    #[test]
+    fn a_bundle_without_a_worker_digest_is_refused() {
+        let (dir, manifest) = fixture_bundle(None);
+        let Err(outcome) = Bundle::load(dir.path(), manifest) else {
+            panic!("the missing worker entry must refuse");
+        };
+        assert_eq!(outcome.exit_code(), crate::outcome::EXIT_UNSUPPORTED);
+        let RunOutcome::Unsupported { cause } = outcome else {
+            panic!("{outcome:?} is not the unsupported classification");
+        };
+        assert!(cause.contains("manifest.worker"), "{cause}");
+    }
+
+    /// worker 段在、摘要却不是 SHA-256 十六进制串：同样按不可用拒绝
+    #[test]
+    fn a_malformed_worker_digest_is_refused() {
+        let (dir, manifest) =
+            fixture_bundle(Some(serde_json::json!({ "sha256": "not-a-sha256" })));
+        let Err(outcome) = Bundle::load(dir.path(), manifest) else {
+            panic!("the malformed digest must refuse");
+        };
+        assert_eq!(outcome.exit_code(), crate::outcome::EXIT_UNSUPPORTED);
+        let RunOutcome::Unsupported { cause } = outcome else {
+            panic!("{outcome:?} is not the unsupported classification");
+        };
+        assert!(cause.contains("manifest.worker.sha256"), "{cause}");
+    }
+
+    /// build.sh 形状的清单：kernel/initramfs/worker 三项摘要齐全，准入通过
+    #[test]
+    fn a_bundle_with_all_three_digests_is_admitted() {
+        let worker_hex = "ab".repeat(32);
+        let (dir, manifest) =
+            fixture_bundle(Some(serde_json::json!({ "sha256": worker_hex })));
+        let bundle = Bundle::load(dir.path(), manifest).expect("a complete manifest must be admitted");
+        assert_eq!(bundle.worker_digest, parse_sha256(&worker_hex).unwrap());
     }
 
     /// bundle 的启动参数：缓存钉死、fd 交棒、退出装置齐备

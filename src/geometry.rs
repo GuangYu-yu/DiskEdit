@@ -105,7 +105,7 @@ impl ValidatedGeometry {
         {
             return Err(invalid(format!(
                 "GPT partition entry #{} ends before it starts (LBA {}..{}) — refusing to operate on an inverted entry",
-                i + 1,
+                i + 1, // audit-allow: index-in-bounds
                 e.starting_lba,
                 e.ending_lba
             )));
@@ -233,7 +233,7 @@ impl ValidatedGeometry {
             if draft.starting_lba > draft.ending_lba {
                 return Err(invalid(format!(
                     "entry #{} has an inverted range {}..{}",
-                    index + 1,
+                    index + 1, // audit-allow: index-in-bounds
                     draft.starting_lba,
                     draft.ending_lba
                 )));
@@ -243,7 +243,7 @@ impl ValidatedGeometry {
             {
                 return Err(invalid(format!(
                     "entry #{} range {}..{} falls outside the usable area {}..{}",
-                    index + 1,
+                    index + 1, // audit-allow: index-in-bounds
                     draft.starting_lba,
                     draft.ending_lba,
                     self.header.first_usable_lba,
@@ -257,8 +257,8 @@ impl ValidatedGeometry {
                 if draft.starting_lba <= other.ending_lba && other.starting_lba <= draft.ending_lba {
                     return Err(invalid(format!(
                         "entry #{} would overlap entry #{}",
-                        index + 1,
-                        i + 1
+                        index + 1, // audit-allow: index-in-bounds
+                        i + 1 // audit-allow: index-in-bounds
                     )));
                 }
             }
@@ -360,7 +360,7 @@ impl ValidatedGeometry {
             return Err(TableCheck::Changed(format!(
                 "partition entry #{} changed outside this tool since the table was validated — \
                  refusing to overwrite it; re-run the command",
-                i + 1
+                i + 1 // audit-allow: index-in-bounds
             )));
         }
         Ok(())
@@ -402,7 +402,7 @@ pub fn find_overlap(entries: &[GPTPartitionEntry]) -> Option<(usize, usize)> {
         .iter()
         .enumerate()
         .filter(|(_, e)| !crate::table::is_unused(e))
-        .map(|(i, e)| (e.starting_lba, e.ending_lba, i + 1))
+        .map(|(i, e)| (e.starting_lba, e.ending_lba, i + 1)) // audit-allow: index-in-bounds
         .collect();
     defined.sort_by_key(|&(start, end, num)| (start, end, num));
     for w in defined.windows(2) {

@@ -48,14 +48,14 @@ const _: () = {
     assert!(offset_of!(GptHeaderLayout, number_of_partition_entries) == 80);
     assert!(offset_of!(GptHeaderLayout, size_of_partition_entry) == 84);
     assert!(offset_of!(GptHeaderLayout, partition_entry_array_crc32) == 88);
-    assert!(offset_of!(GptHeaderLayout, partition_entry_array_crc32) + GPT_CRC_BYTES == GPT_HEADER_FIXED_BYTES);
+    assert!(offset_of!(GptHeaderLayout, partition_entry_array_crc32) + GPT_CRC_BYTES == GPT_HEADER_FIXED_BYTES); // audit-allow: const-expr
 };
 
 // ---------- GPT 分区条目（UEFI 2.10 §5.3.3 Table 5.6） ----------
 
 /// 分区名的码元数：36 个 UTF-16 码元 = 72 字节
 pub(crate) const GPT_NAME_UNITS: usize = 36;
-pub(crate) const GPT_NAME_BYTES: usize = GPT_NAME_UNITS * 2;
+pub(crate) const GPT_NAME_BYTES: usize = GPT_NAME_UNITS * 2; // audit-allow: const-expr
 
 #[repr(C)]
 pub(crate) struct GptEntryLayout {
@@ -79,7 +79,7 @@ const _: () = {
     assert!(offset_of!(GptEntryLayout, ending_lba) == 40);
     assert!(offset_of!(GptEntryLayout, attributes) == 48);
     assert!(offset_of!(GptEntryLayout, name) == 56);
-    assert!(offset_of!(GptEntryLayout, name) + GPT_NAME_BYTES == GPT_ENTRY_FIXED_BYTES);
+    assert!(offset_of!(GptEntryLayout, name) + GPT_NAME_BYTES == GPT_ENTRY_FIXED_BYTES); // audit-allow: const-expr
 };
 
 // ---------- MBR 的 LBA0（UEFI 2.10 §5.2.1 Table 5.1） ----------
@@ -123,24 +123,24 @@ const _: () = {
     assert!(offset_of!(MbrEntryLayout, size_in_lba) == 12);
     assert!(offset_of!(MbrLayout, entries) == MBR_ENTRY_BASE);
     assert!(offset_of!(MbrLayout, signature) == MBR_SIGNATURE_AT);
-    assert!(MBR_ENTRY_SLOTS * MBR_ENTRY_BYTES == MBR_SIGNATURE_AT - MBR_ENTRY_BASE);
-    assert!(MBR_SIGNATURE_AT + 2 == MBR_SIGNED_BYTES);
+    assert!(MBR_ENTRY_SLOTS * MBR_ENTRY_BYTES == MBR_SIGNATURE_AT - MBR_ENTRY_BASE); // audit-allow: const-expr
+    assert!(MBR_SIGNATURE_AT + 2 == MBR_SIGNED_BYTES); // audit-allow: const-expr
 };
 
 /// 第 `slot` 条 MBR 分区记录在 LBA0 内的字节区间（`slot` ∈ `0..MBR_ENTRY_SLOTS`）
 pub(crate) fn mbr_entry_range(slot: usize) -> std::ops::Range<usize> {
-    let start = MBR_ENTRY_BASE + slot * MBR_ENTRY_BYTES;
-    start..start + MBR_ENTRY_BYTES
+    let start = MBR_ENTRY_BASE + slot * MBR_ENTRY_BYTES; // audit-allow: index-in-bounds
+    start..start + MBR_ENTRY_BYTES // audit-allow: index-in-bounds
 }
 
 // ---------- 字节读写 ----------
 
 /// 把 little-endian u32 写进 `off` 起的 4 字节
 pub(crate) fn wr_u32(b: &mut [u8], off: usize, v: u32) {
-    b[off..off + 4].copy_from_slice(&v.to_le_bytes());
+    b[off..off + 4].copy_from_slice(&v.to_le_bytes()); // audit-allow: index-in-bounds
 }
 
 /// 把 little-endian u64 写进 `off` 起的 8 字节
 pub(crate) fn wr_u64(b: &mut [u8], off: usize, v: u64) {
-    b[off..off + 8].copy_from_slice(&v.to_le_bytes());
+    b[off..off + 8].copy_from_slice(&v.to_le_bytes()); // audit-allow: index-in-bounds
 }

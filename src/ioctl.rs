@@ -1,17 +1,39 @@
 //! Linux 块层 ioctl 的集中定义：常量、裸结构体与调用点都在本模块，
 //! 其余模块经包装函数使用。UAPI 编号凡 libc 未导出的自持（标注内核头出处）。
 //!
-//! 架构守卫：手写编号取 asm-generic 的 _IOC 位域编码（x86_64/aarch64/arm/riscv64
-//! 共用）；MIPS/PowerPC/sparc 的 _IOC 位域布局不同、同一编号含义不同，不受支持，
-//! 在编译期拒绝而非运行期静默发错请求
+//! 架构范围：手写编号按 asm-generic 的 _IOC 位域编码，x86_64 / aarch64 / arm /
+//! riscv64 共用同一套位域；这些是本工具支持的目标。
+//!
+//! 拒绝 MIPS / PowerPC / sparc：它们的 _IOC 位域布局与 asm-generic 不同，同一编号
+//! 含义不同，在编译期拒绝而非运行期静默发错请求。
+//!
+//! 拒绝 32 位 x86（i686）：本产品只支持 64 位 x86。i686 SysV ABI 下 u64 对齐 4，
+//! `BlkpgPartition` 会排成 148 字节，而所有受支持目标上是 152；同一个 `BLKPG`
+//! 编号会指向不同的内存布局，故在编译期拒绝，而不是运行期发出错误请求。
 
 #[cfg(all(
     target_os = "linux",
-    not(any(target_arch = "x86_64", target_arch = "aarch64", target_arch = "arm", target_arch = "riscv64"))
+    not(target_arch = "x86"),
+    not(any(
+        target_arch = "x86_64",
+        target_arch = "aarch64",
+        target_arch = "arm",
+        target_arch = "riscv64"
+    ))
 ))]
 compile_error!(
     "hand-coded ioctl numbers (BLKGETSIZE64/BLKRRPART/BLKPG) use the asm-generic \
-     _IOC encoding, which only matches x86_64/aarch64/arm/riscv64"
+     _IOC encoding, which only matches x86_64/aarch64/arm/riscv64; \
+     MIPS/PowerPC/sparc use a different _IOC bitfield layout"
+);
+
+#[cfg(all(target_os = "linux", target_arch = "x86"))]
+compile_error!(
+    "this product supports only 64-bit x86 (x86_64), not 32-bit x86 (i686): under \
+     the i686 SysV ABI u64 is 4-byte aligned, so BlkpgPartition lays out as 148 bytes \
+     while it is 152 bytes on every supported target; the same BLKPG number would then \
+     refer to a different in-memory layout, which this crate rejects at compile time \
+     instead of issuing a wrong request at runtime"
 );
 
 use std::fs::File;
@@ -36,7 +58,8 @@ fn ioctl_retry_eintr(mut call: impl FnMut() -> libc::c_int) -> io::Result<()> {
 
 /// 设备容量（字节）。BLKGETSIZE64 = _IOR(0x12, 114, size_t)（内核 include/uapi/linux/fs.h，
 /// 内容 u64）。libc 未导出该常量（0.2.139/0.2.186/0.2.189 实测），取 UAPI 定义自持；
-/// 编号含 size_t 宽度位，随指针宽度切换（64 位 0x8008_1272 / 32 位 0x8004_1272）
+/// _IOR 的 size 字段取 `sizeof(size_t)`，而 size_t 宽度随指针宽度变，故编号分写
+/// （64 位 0x8008_1272 / 32 位 0x8004_1272）
 pub(crate) fn blkgetsize64(f: &File) -> io::Result<u64> {
     #[cfg(target_pointer_width = "64")]
     const BLKGETSIZE64: u64 = 0x8008_1272;
@@ -69,6 +92,8 @@ pub(crate) fn blkrrpart(f: &File) -> io::Result<()> {
 /// 内核把 0/1 写回 int 参数。libc 未导出该常量，取 UAPI 定义自持；读类调用，可安全重发
 pub(crate) fn blkroget(f: &File) -> io::Result<bool> {
     const BLKROGET: u64 = 0x125E;
+    // 注入钩子只在 `test-faults` 构建下读环境变量；其余构建它的存根体就是常量 `false`，
+    // 这个 EIO 分支在发布构建下不可达
     if crate::movepart::fail_blkroget() {
         return Err(io::Error::from_raw_os_error(libc::EIO));
     }
@@ -102,7 +127,9 @@ pub(crate) struct BtrfsFsInfo {
 
 /// BTRFS_IOC_FS_INFO = _IOR(BTRFS_IOCTL_MAGIC=0x94, 31, btrfs_ioctl_fs_info_args)。
 /// 按 asm-generic 的 _IOC 位域手写：dir(_IOC_READ=2) << 30 | size << 16 | type << 8 | nr
-/// → 0x8400_941f。编号含结构体大小，与下面的布局断言绑定：任一改动都要两处同时改
+/// → 0x8400_941f。编号含结构体大小，与下面的布局断言绑定：任一改动都要两处同时改。
+/// 布局由下方断言钉死：所有受支持目标上 i64/u64 对齐 8，字段偏移 8/16/32/80 不变、
+/// 总长 1024；size 位由 `size_of` 动态算出，编号随编译出的布局走，不另硬编码尺寸
 const BTRFS_IOC_FS_INFO: u64 =
     (2u64 << 30) | ((size_of::<BtrfsFsInfo>() as u64) << 16) | (0x94u64 << 8) | 31u64;
 
@@ -147,6 +174,30 @@ struct BlkpgIoctlArg {
     datalen: i32,
     data: *mut BlkpgPartition,
 }
+
+// 布局是发进内核的那段内存本身：字段顺序或宽度写错，内核读到的是另一块内容，
+// 而调用看起来还是成功的。断言放生产编译——测试里的断言只有跑测试的构建才检查。
+// 不受支持架构（32 位 x86）已由上方 compile_error! 拒绝，不参与本布局断言：这里
+// 按受支持目标的布局钉死尺寸，拒绝原因保持唯一、可读，不是放宽断言
+#[cfg(not(target_arch = "x86"))]
+const _: () = {
+    use core::mem::{offset_of, size_of};
+    // 所有受支持目标上 i64/u64 对齐 8，字段偏移逐字段一致：
+    assert!(offset_of!(BlkpgPartition, start) == 0);
+    assert!(offset_of!(BlkpgPartition, length) == 8);
+    assert!(offset_of!(BlkpgPartition, pno) == 16);
+    assert!(offset_of!(BlkpgPartition, devname) == 20);
+    assert!(offset_of!(BlkpgPartition, volname) == 84);
+    // 148 字节内容后补 4 字节尾部对齐填充 → 152；所有受支持目标上总长相同
+    assert!(size_of::<BlkpgPartition>() == 152);
+};
+
+// BlkpgIoctlArg 含 `*mut BlkpgPartition` 指针成员，尺寸随指针宽度变（不是 u64 对齐
+// 差异）：64 位为 24（三个 i32 = 12 + 4 填充 + 指针 8），32 位为 16（三个 i32 = 12 + 指针 4）
+#[cfg(target_pointer_width = "64")]
+const _: () = assert!(core::mem::size_of::<BlkpgIoctlArg>() == 24);
+#[cfg(target_pointer_width = "32")]
+const _: () = assert!(core::mem::size_of::<BlkpgIoctlArg>() == 16);
 
 /// BLKPG_RESIZE_PARTITION：对整盘 fd 调用（对分区 fd 调用内核报 -EINVAL），
 /// pno 定位分区，start 固定为现值（改动 start 属于搬移，内核 bdev_resize_partition 拒绝）。

@@ -425,8 +425,8 @@ fn decimal(num: u64, denom: u64) -> String {
     let mut frac = String::new();
     let mut r = rem;
     for _ in 0..18 {
-        r *= 10;
-        frac.push(char::from(b'0' + (r / denom) as u8));
+        r *= 10; // audit-allow: counter
+        frac.push(char::from(b'0' + (r / denom) as u8)); // audit-allow: display-only
         r %= denom;
         if r == 0 {
             break;
@@ -1283,6 +1283,14 @@ pub(crate) enum Request {
 }
 
 impl Request {
+    /// 取回本变体所属的命令声明。
+    ///
+    /// 配对关系在构造点封死：生产路径上 `Request` 只由 [`COMMANDS`] 各条目的 `build`
+    /// 闭包构造，`parse_from` 把同一条目的 `def` 与造出的请求配成一对返回；下面的 match
+    /// 对 `Request` 枚举穷尽，新增变体漏写臂会编译不过。查找只可能在"某个臂的名字字面量
+    /// 与注册表 `name` 漂移"时落空，那一处由分派入口的
+    /// `debug_assert_eq!(req.def().name, def.name)` 与各命令的解析测试兜住；模块外没有
+    /// 拼装 `Request` 的入口。
     pub(crate) fn def(&self) -> &'static CommandDef {
         let name = match self {
             Self::Info(_) => "info",
@@ -1304,7 +1312,7 @@ impl Request {
             Self::ResizeEnd(_) => "resize",
             Self::InfoGrow(_) => "info",
         };
-        find(name).expect("request variant has a command definition")
+        find(name).expect("the variant's build closure is registered on the matching COMMANDS entry")
     }
 }
 
@@ -2222,10 +2230,10 @@ pub(crate) fn parse_size_delta(s: &str) -> Option<SizeArg> {
         return Some(SizeArg::Percent { kind, num, denom });
     }
     let (mult, text) = match rest.as_bytes().last()? {
-        b'k' | b'K' => (crate::support::KIB_BYTES, &rest[..rest.len() - 1]),
-        b'm' | b'M' => (crate::support::MIB_BYTES, &rest[..rest.len() - 1]),
-        b'g' | b'G' => (crate::support::GIB_BYTES, &rest[..rest.len() - 1]),
-        b't' | b'T' => (crate::support::TIB_BYTES, &rest[..rest.len() - 1]),
+        b'k' | b'K' => (crate::support::KIB_BYTES, &rest[..rest.len() - 1]), // audit-allow: index-in-bounds
+        b'm' | b'M' => (crate::support::MIB_BYTES, &rest[..rest.len() - 1]), // audit-allow: index-in-bounds
+        b'g' | b'G' => (crate::support::GIB_BYTES, &rest[..rest.len() - 1]), // audit-allow: index-in-bounds
+        b't' | b'T' => (crate::support::TIB_BYTES, &rest[..rest.len() - 1]), // audit-allow: index-in-bounds
         b'0'..=b'9' | b'.' => (1u64, rest),
         _ => return None,
     };

@@ -108,7 +108,7 @@ fn existing_partition_ranges(src: &FileSource, ss: u64) -> io::Result<Vec<(Strin
                     continue;
                 }
                 out.push((
-                    format!("GPT partition {}", i + 1),
+                    format!("GPT partition {}", i + 1), // audit-allow: display-only
                     e.starting_lba.saturating_mul(g.ss),
                     e.ending_lba.saturating_add(1).saturating_mul(g.ss),
                 ));
@@ -142,8 +142,8 @@ pub fn gpt_metadata_conflict(src: &FileSource, ss: u64) -> io::Result<Option<Str
     // 写入区间按字节表达：(名字, 起点, 终点)。主头在 LBA1，其后是主数组；备份数组起到
     // 容器尾，备份头在其后一并被这段覆盖
     let regions: [(&str, u64, u64); 3] = [
-        ("primary GPT header", ss, 2 * ss),
-        ("primary entry array", 2 * ss, (2 + span) * ss),
+        ("primary GPT header", ss, 2 * ss), // audit-allow: len-bounded
+        ("primary entry array", 2 * ss, (2 + span) * ss), // audit-allow: len-bounded
         ("backup entry array", first_lba.saturating_mul(ss), src.size),
     ];
     for (name, start, end) in existing_partition_ranges(src, ss)? {
@@ -322,8 +322,8 @@ pub(crate) fn new_gpt_content(src: &FileSource, disk_guid: Option<[u8; 16]>) -> 
         revision: 0x0001_0000,
         primary_lba: PRIMARY_HEADER_LBA,
         backup_lba: last_lba,
-        first_usable_lba: PRIMARY_ARRAY_LBA + span,
-        last_usable_lba: last_lba - span - 1,
+        first_usable_lba: PRIMARY_ARRAY_LBA + span, // audit-allow: len-bounded
+        last_usable_lba: last_lba - span - 1, // audit-allow: len-bounded
         disk_guid: disk_guid.unwrap_or_else(|| derive_guid(&src.path)),
         partition_entry_lba: PRIMARY_ARRAY_LBA,
         number_of_partition_entries: geom.entry_count,
@@ -362,8 +362,8 @@ pub fn create_gpt(
         revision: 0x0001_0000,
         primary_lba: PRIMARY_HEADER_LBA,
         backup_lba: last_lba,
-        first_usable_lba: PRIMARY_ARRAY_LBA + span,
-        last_usable_lba: last_lba - span - 1,
+        first_usable_lba: PRIMARY_ARRAY_LBA + span, // audit-allow: len-bounded
+        last_usable_lba: last_lba - span - 1, // audit-allow: len-bounded
         disk_guid: disk_guid.unwrap_or_else(|| derive_guid(&src.path)),
         partition_entry_lba: PRIMARY_ARRAY_LBA,
         number_of_partition_entries: geom.entry_count,

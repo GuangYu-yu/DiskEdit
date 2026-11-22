@@ -123,7 +123,7 @@ impl Driver {
         let StepCall { src, state, sink, index, pending } = call;
         let run = self
             .run(src, step, sector_size, state, sink)
-            .map_err(|e| e.context(&format!("plan step {}", index + 1)))?;
+            .map_err(|e| e.context(&format!("plan step {}", index + 1)))?; // audit-allow: display-only
         match run.verdict(pending) {
             Verdict::Applied(applied) => {
                 advance.record(applied, src, state, sink, index)?;

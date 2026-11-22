@@ -1,6 +1,8 @@
 //! 平台闸口与外部工具执行（Linux 实现；非 Linux 为拒绝存根）。
 
 use super::*;
+#[cfg(target_os = "linux")]
+use std::os::unix::process::CommandExt;
 
 pub fn require_linux() -> Result<(), FsError> {
     if cfg!(target_os = "linux") {
@@ -79,8 +81,98 @@ pub(crate) fn is_executable(_p: &std::path::Path) -> bool {
     true
 }
 
-/// 外部命令的唯一构造函数：可执行路径按固定工具表解析（[`TOOL_PATH`]），环境按
-/// "只保留 PATH 与 LC_ALL=C"净化。
+/// 子进程命令的闸口媒介类型。
+///
+/// 内部持有 [`std::process::Command`]，但 `Command` 本身不出本模块：字段私有，
+/// 没有 `Deref` / `as_command` / `AsRef<Command>`，也没有 `impl From<Command>`；
+/// 模块外既拿不到 `&Command`，也无法自行 `Command::new` 绕过环境净化。构造只由本
+/// 模块的两个闸口函数完成——[`tool_command`]（文件系统工具）与 [`carrier_command`]
+/// （VM 载体）。对外只暴露调用点真正用到的动作：argv、环境追加、stdio 配置、
+/// `spawn` / `output` / `status`，以及 Linux 上交棒 fd 所需的 `pre_exec`。
+pub(crate) struct GateCommand {
+    command: Command,
+}
+
+impl GateCommand {
+    /// 追加一个命令行参数
+    pub(crate) fn arg<S: AsRef<OsStr>>(&mut self, arg: S) -> &mut Self {
+        self.command.arg(arg);
+        self
+    }
+
+    /// 追加一串命令行参数
+    pub(crate) fn args<I, S>(&mut self, args: I) -> &mut Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        self.command.args(args);
+        self
+    }
+
+    /// 向子进程环境追加一项变量。基线环境由闸口构造函数钉死；这里只能追加，
+    /// 不能清空或改写已钉死的项
+    pub(crate) fn env<K, V>(&mut self, key: K, val: V) -> &mut Self
+    where
+        K: AsRef<OsStr>,
+        V: AsRef<OsStr>,
+    {
+        self.command.env(key, val);
+        self
+    }
+
+    pub(crate) fn stdin<T: Into<Stdio>>(&mut self, cfg: T) -> &mut Self {
+        self.command.stdin(cfg);
+        self
+    }
+
+    pub(crate) fn stdout<T: Into<Stdio>>(&mut self, cfg: T) -> &mut Self {
+        self.command.stdout(cfg);
+        self
+    }
+
+    pub(crate) fn stderr<T: Into<Stdio>>(&mut self, cfg: T) -> &mut Self {
+        self.command.stderr(cfg);
+        self
+    }
+
+    pub(crate) fn spawn(&mut self) -> io::Result<std::process::Child> {
+        self.command.spawn()
+    }
+
+    pub(crate) fn output(&mut self) -> io::Result<std::process::Output> {
+        self.command.output()
+    }
+
+    pub(crate) fn status(&mut self) -> io::Result<std::process::ExitStatus> {
+        self.command.status()
+    }
+}
+
+/// Linux 专属：fork 之后、exec 之前在子进程里跑钩子。载体用它清目标 fd 的
+/// CLOEXEC 并置 PDEATHSIG。unsafe 口径与 `CommandExt::pre_exec` 相同：闭包只能做
+/// async-signal-safe 的事，SAFETY 契约由调用点在自己的注释里承担
+#[cfg(target_os = "linux")]
+impl GateCommand {
+    pub(crate) unsafe fn pre_exec<F>(&mut self, f: F) -> &mut Self
+    where
+        F: FnMut() -> io::Result<()> + Send + Sync + 'static,
+    {
+        // SAFETY: 契约由本函数的调用方承担（与 `CommandExt::pre_exec` 同一口径）：
+        // 闭包只做 async-signal-safe 的事，失败以 errno 返回，子进程在 exec 前退出
+        unsafe {
+            self.command.pre_exec(f);
+        }
+        self
+    }
+}
+
+/// 文件系统工具的闸口构造函数：可执行路径按固定工具表解析（[`TOOL_PATH`]），
+/// 环境按"只保留 PATH 与 LC_ALL=C"净化。
+///
+/// 返回的 [`GateCommand`] 把内部 `Command` 封在闸口模块内：模块外在类型层就拿不到
+/// `Command`，也没有第二条自行构造的路径。环境净化因此不是"调用点应当遵守"的约定，
+/// 而是构造点只有这一处的编译期事实。
 ///
 /// 环境整体清空的原因：`LD_PRELOAD`、`IFS`、`MALLOC_*` 一类变量能改变工具行为乃至把
 /// 代码注入子进程，而它们全由调用环境决定。PATH 必须保留——工具常再调自己的助手程序；
@@ -91,10 +183,31 @@ pub(crate) fn is_executable(_p: &std::path::Path) -> bool {
 /// 子进程的路径解析。改传 `/proc/<pid>/fd/N` 也不行——lvm2 的 `pvcreate` / `pvresize`
 /// 按名字在 sysfs 里找设备，对该路径报 `No device found`，因此不按工具分流，所有
 /// 调用点用同一份真实设备路径
-pub(crate) fn tool_command(tool: Tool) -> Result<Command, FsError> {
-    let mut cmd = Command::new(find_tool(tool)?);
-    cmd.env_clear().env("LC_ALL", "C").env("PATH", TOOL_PATH);
-    Ok(cmd)
+pub(crate) fn tool_command(tool: Tool) -> Result<GateCommand, FsError> {
+    let mut command = Command::new(find_tool(tool)?);
+    command.env_clear();
+    let mut sealed = GateCommand { command };
+    sealed.env("LC_ALL", "C").env("PATH", TOOL_PATH);
+    Ok(sealed)
+}
+
+/// VM 载体（QEMU）的闸口构造函数。程序路径由调用点解析后传入；环境策略在此显式
+/// 钉死，与文件系统工具同一口径：
+///
+/// - `env_clear()`：`LD_PRELOAD`、`MALLOC_*` 一类调用者可控变量不进子进程；
+/// - `PATH` 固定为 [`TOOL_PATH`]，不用调用者的 PATH；
+/// - 不保留 `LC_ALL`：QEMU 自己的输出不参与协议解析——宿主帧解码器读的是 guest 经
+///   `-serial stdio` 送来的字节，QEMU 自身诊断只作噪声行转发，没有按 locale 解析的
+///   文本，不需要固定 locale；
+/// - 其余变量（`HOME`、`TMPDIR`、`QEMU_*` 等）本配置下载体都不读：`-no-user-config`
+///   关掉用户配置，随机源走绝对路径 `/dev/urandom`，不在临时目录落盘。
+#[cfg(target_os = "linux")]
+pub(crate) fn carrier_command(program: PathBuf) -> GateCommand {
+    let mut command = Command::new(program);
+    command.env_clear();
+    let mut sealed = GateCommand { command };
+    sealed.env("PATH", TOOL_PATH);
+    sealed
 }
 
 /// 工具与目标的写关系。工具是否改盘由工具与它收到的参数共同决定（同一支 `e2fsck`
@@ -197,7 +310,10 @@ fn run_input_impl(
         crate::outcome::note_target_write();
     }
     use std::io::Write as _;
-    let mut stdin = child.stdin.take().expect("stdin piped");
+    // 句柄在上游 builder 里以 `.stdin(Stdio::piped())` 接出：按 `Child` 的构造约定，
+    // piped 的 stdin 在返回的子进程句柄上必为 `Some`；spawn 成功到 take 之间没有别处
+    // 动过这个局部句柄，因此这里取空不在可达路径上
+    let mut stdin = child.stdin.take().expect("stdin was piped when the child was spawned");
     if let Err(e) = stdin.write_all(input.as_bytes()) {
         // 写 stdin 失败时子进程可能还在等输入，显式终止防僵留。子进程**已经启动**：
         // 它可能读到一部分输入后动过盘，也可能什么都没做，无法断言——按"可能已改变"记

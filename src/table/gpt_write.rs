@@ -11,7 +11,7 @@ pub(crate) fn encode_name(entry: &GPTPartitionEntry) -> [u8; ENTRY_NAME_LEN] {
     // 第 36 码元为高代理时其低代理落在截断界外，回退 35 个码元保住完整代理对
     let n = if units.len() == 36 && (0xD800..=0xDBFF).contains(&units[35]) { 35 } else { units.len() };
     for (i, u) in units[..n].iter().enumerate() {
-        out[i * 2..i * 2 + 2].copy_from_slice(&u.to_le_bytes());
+        out[i * 2..i * 2 + 2].copy_from_slice(&u.to_le_bytes()); // audit-allow: index-in-bounds
     }
     out
 }
@@ -26,7 +26,7 @@ pub(crate) fn serialize_entry(e: &GPTPartitionEntry) -> [u8; ENTRY_FIXED_BYTES] 
     wr_u64(&mut b, offset_of!(GptEntryLayout, starting_lba), e.starting_lba);
     wr_u64(&mut b, offset_of!(GptEntryLayout, ending_lba), e.ending_lba);
     wr_u64(&mut b, offset_of!(GptEntryLayout, attributes), e.attribute_bits);
-    b[ENTRY_NAME_OFFSET..ENTRY_NAME_OFFSET + ENTRY_NAME_LEN].copy_from_slice(&encode_name(e));
+    b[ENTRY_NAME_OFFSET..ENTRY_NAME_OFFSET + ENTRY_NAME_LEN].copy_from_slice(&encode_name(e)); // audit-allow: index-in-bounds
     b
 }
 
@@ -40,7 +40,10 @@ pub(crate) fn serialize_header(h: &RawHeader, array_crc: u32, ss: u64) -> io::Re
             format!("GPT HeaderSize {} out of range {GPT_MIN_HEADER_SIZE}..={ss}", h.header_size),
         ));
     }
-    let mut b = vec![0u8; ss as usize];
+    let ss_len = crate::support::host_usize(ss).map_err(|_| {
+        io::Error::new(io::ErrorKind::InvalidData, "the sector size exceeds the host address space")
+    })?;
+    let mut b = vec![0u8; ss_len];
     b[..GPT_SIGNATURE.len()].copy_from_slice(GPT_SIGNATURE);
     wr_u32(&mut b, offset_of!(GptHeaderLayout, revision), h.revision);
     wr_u32(&mut b, offset_of!(GptHeaderLayout, header_size), h.header_size);
@@ -56,7 +59,10 @@ pub(crate) fn serialize_header(h: &RawHeader, array_crc: u32, ss: u64) -> io::Re
     wr_u32(&mut b, offset_of!(GptHeaderLayout, number_of_partition_entries), h.number_of_partition_entries);
     wr_u32(&mut b, offset_of!(GptHeaderLayout, size_of_partition_entry), h.size_of_partition_entry);
     wr_u32(&mut b, offset_of!(GptHeaderLayout, partition_entry_array_crc32), array_crc);
-    let crc = crc32(&b[..h.header_size as usize]);
+    let header_len = crate::support::host_usize(h.header_size).map_err(|_| {
+        io::Error::new(io::ErrorKind::InvalidData, "the GPT header size exceeds the host address space")
+    })?;
+    let crc = crc32(&b[..header_len]);
     wr_u32(&mut b, offset_of!(GptHeaderLayout, header_crc32), crc);
     Ok(b)
 }
@@ -64,14 +70,25 @@ pub(crate) fn serialize_header(h: &RawHeader, array_crc: u32, ss: u64) -> io::Re
 /// 条目数组序列化（含补零到扇区边界），返回 (字节, 数组 CRC)。
 /// 几何由 [`EntryArrayGeometry`] 单点判定（es > 128 时条目尾部保留区保持零；
 /// 不合规的几何在构造点即报错，此处不再自证）
-pub fn serialize_array(entries: &[GPTPartitionEntry], geom: &EntryArrayGeometry) -> (Vec<u8>, u32) {
-    let mut b = vec![0u8; geom.span_bytes() as usize];
-    for (i, e) in entries.iter().enumerate().take(geom.entry_count as usize) {
-        let off = i * geom.entry_size as usize;
-        b[off..off + ENTRY_FIXED_BYTES].copy_from_slice(&serialize_entry(e));
+pub fn serialize_array(
+    entries: &[GPTPartitionEntry],
+    geom: &EntryArrayGeometry,
+) -> io::Result<(Vec<u8>, u32)> {
+    let span = crate::support::host_usize(geom.span_bytes())
+        .map_err(|_| invalid_geom("the GPT entry array span exceeds the host address space"))?;
+    let mut b = vec![0u8; span];
+    let count = crate::support::host_usize(geom.entry_count)
+        .map_err(|_| invalid_geom("the GPT entry count exceeds the host address space"))?;
+    let entry_size = crate::support::host_usize(geom.entry_size)
+        .map_err(|_| invalid_geom("the GPT entry size exceeds the host address space"))?;
+    for (i, e) in entries.iter().enumerate().take(count) {
+        let off = i * entry_size; // audit-allow: index-in-bounds
+        b[off..off + ENTRY_FIXED_BYTES].copy_from_slice(&serialize_entry(e)); // audit-allow: index-in-bounds
     }
-    let crc = crc32(&b[..geom.byte_len() as usize]);
-    (b, crc)
+    let byte_len = crate::support::host_usize(geom.byte_len())
+        .map_err(|_| invalid_geom("the GPT entry byte length exceeds the host address space"))?;
+    let crc = crc32(&b[..byte_len]);
+    Ok((b, crc))
 }
 
 /// 重建规范化主/备头（写入路径：无论读到的是哪份副本，输出总为规范位置）

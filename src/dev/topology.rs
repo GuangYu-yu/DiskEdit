@@ -372,30 +372,50 @@ pub(crate) fn file_name_lossy(path: &Path) -> String {
     path.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "dev".into())
 }
 
-/// 记录落点的原料：`(载体身份原文, 分区号)`。`dm/uuid` 与 `md/uuid` 不作身份
-/// ——`dm/uuid` 由用户态映射器指定、`md/uuid` 随阵列重组变化，都不承诺跨现场稳定；
-/// `wwid` / `device/wwid` 优先，`device/serial` 兜底且要求连续两次读数一致（廉价桥接器会
-/// 克隆序列号，单次读数不足以确认它稳定）。载体没有稳定身份时原文为 `None`：写命令需要
-/// `--identity` 补一个名字，否则拒绝；读取失败或两次读数不一致 ⇒ `Err`，因为那时判不出
-/// "没有身份"还是"没读到"。分区号与载体身份无关，照常读出
+/// 记录落点的三态生产者。与只读现场走同一份归类（[`crate::recovery::classify_probe`]）：
+/// `Known` 带载体身份原文与分区号；sysfs 读不出、serial 两读不一致 ⇒ `Undecidable`
+/// 并带原因；平台确认给不出稳定身份证据（dm / md / 只有 major:minor）落在 `Known`
+/// 的 `carrier=None` 上，不另立一态。
 ///
 /// 返回的原文不带 `属性名=` 前缀：记录目录的 identity-hash 按这个文本派生，
 /// 加前缀会让盘上已有的记录目录集体失去归属
 #[cfg(target_os = "linux")]
-pub(crate) fn record_context(node: &Path) -> Result<(Option<String>, Option<u32>), String> {
-    let disk = block_device_at(node)
-        .map_err(|e| format!("cannot resolve the whole-disk node of {}: {e}", node.display()))?;
+pub(crate) fn record_context(
+    node: &Path,
+) -> crate::domain::Fact<crate::recovery::RecordPlacement> {
+    crate::recovery::classify_probe(record_context_inner(node))
+}
+
+/// sysfs 拓扑事实的原始采集：读失败包成 [`PlatformError::Io`]，归类交给
+/// [`crate::recovery::classify_probe`]，本函数不回答"没有身份"还是"没读到"
+#[cfg(target_os = "linux")]
+fn record_context_inner(
+    node: &Path,
+) -> Result<crate::recovery::RecordPlacement, crate::platform::PlatformError> {
+    use crate::platform::PlatformError;
+
+    let io = |why: String| PlatformError::Io(io::Error::other(why));
+    let disk = block_device_at(node).map_err(|e| {
+        io(format!("cannot resolve the whole-disk node of {}: {e}", node.display()))
+    })?;
     let partition = read_sysfs_attr(&node.join("partition"))
-        .map_err(|e| format!("cannot read the partition attribute of {}: {e}", node.display()))?
+        .map_err(|e| {
+            io(format!("cannot read the partition attribute of {}: {e}", node.display()))
+        })?
         .map(|raw| {
             raw.parse::<u32>()
-                .map_err(|e| format!("partition attribute is {raw:?}, not a number ({e})"))
+                .map_err(|e| io(format!("partition attribute is {raw:?}, not a number ({e})")))
         })
         .transpose()?;
-    if has_sysfs_dir(&disk, "dm", "dm/uuid")? || has_sysfs_dir(&disk, "md", "md/uuid")? {
-        return Ok((None, partition));
+    if has_sysfs_dir(&disk, "dm", "dm/uuid").map_err(io)?
+        || has_sysfs_dir(&disk, "md", "md/uuid").map_err(io)?
+    {
+        return Ok(crate::recovery::RecordPlacement::new(None, partition));
     }
-    Ok((strong_carrier(&disk)?, partition))
+    Ok(crate::recovery::RecordPlacement::new(
+        strong_carrier(&disk).map_err(io)?,
+        partition,
+    ))
 }
 
 /// dm / md 的判据：对应的属性可读，或 sysfs 目录本身存在。两者任一成立都算

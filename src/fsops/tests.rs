@@ -7,6 +7,11 @@ use super::Tool;
 use crate::dev::FileSource;
 use crate::fsid::{self, ContentKind, FsKind};
 
+/// 测试用：所列长度都在 i64 坐标闸内，`erase_ranges` 在此不可能失败
+fn wipe_ranges(part_len: u64, ss: u64) -> Vec<(u64, u64)> {
+    erase_ranges(part_len, ss).unwrap()
+}
+
 /// 注册表自查：名字唯一、包名非空——工具名与包名的映射只有 ext 一份表
 #[test]
 pub(crate) fn tool_registry_names_and_packages_are_complete() {
@@ -493,7 +498,7 @@ pub(crate) fn temp_mount_points_are_unique() {
 pub(crate) fn erase_range_table_layout() {
     // 2 PiB 分区：新表 7 行全在界内，产出 7 个区间
     let big = 2 * 1024 * 1024 * 1024 * 1024 * 1024u64;
-    let rs = erase_ranges(big, 512);
+    let rs = wipe_ranges(big, 512);
     assert_eq!(rs.len(), 7);
     assert_eq!(rs[0], (0, 512 * 1024));
     assert_eq!(rs[1], (2 * 1024 * 1024, 4096));
@@ -506,7 +511,7 @@ pub(crate) fn erase_range_table_layout() {
     // 尾部 768KiB 区间不越界，末端裁剪到分区界
     assert_eq!(rs[6], (big - 512 * 1024, 512 * 1024));
     // 8MiB 分区：64MiB/256GiB 越界裁掉，头部+2MiB+FT+末尾+尾部 = 5 区间
-    let small = erase_ranges(8 * 1024 * 1024, 512);
+    let small = wipe_ranges(8 * 1024 * 1024, 512);
     assert_eq!(small.len(), 5);
     assert_eq!(small[0], (0, 512 * 1024));
     assert_eq!(small[1], (2 * 1024 * 1024, 4096));
@@ -517,12 +522,24 @@ pub(crate) fn erase_range_table_layout() {
     assert_eq!(tail.0 + tail.1, 8 * 1024 * 1024);
     // 256GiB 分区：256GiB 行起点落在分区界、裁剪为空；
     // 头部+2MiB+64MiB+FT+末尾+尾部 = 6 区间
-    let mid = erase_ranges(256 * 1024 * 1024 * 1024u64, 512);
+    let mid = wipe_ranges(256 * 1024 * 1024 * 1024u64, 512);
     assert_eq!(mid.len(), 6);
     assert_eq!(mid[2], (64 * 1024 * 1024, 4096));
     // 末尾行不随桶对齐移动：8288K 分区仍落在 L−1 MiB
-    let odd = erase_ranges(8288 * 1024, 512);
+    let odd = wipe_ranges(8288 * 1024, 512);
     assert_eq!(odd[3], (8288 * 1024 - 1024 * 1024, 4096));
+}
+
+#[test]
+fn erase_ranges_rejects_coordinates_beyond_i64() {
+    assert!(
+        erase_ranges(1u64 << 63, 512).is_err(),
+        "a partition length that does not fit i64 must be refused, not wrapped to a negative offset"
+    );
+    assert!(
+        erase_ranges(1024, 1u64 << 63).is_err(),
+        "a sector size that does not fit i64 must be refused"
+    );
 }
 
 /// 卸载侧的判定：只有"跑完且退出码 0"算没有待办。非零退出与工具缺失都不能
@@ -572,25 +589,25 @@ pub(crate) fn erase_ranges_boundaries() {
     const M: u64 = 1024 * K;
     // part_len−1 MiB 恰在 128 KiB 边界：末尾行固定 L−1 MiB，取整不改变位置
     // （FT 行起点为负被裁剪丢弃，末尾行是第 2 个产出区间）
-    let exact = erase_ranges(M + 128 * K, 512);
+    let exact = wipe_ranges(M + 128 * K, 512);
     assert_eq!(exact[1], (128 * K, 4 * K));
     // 多 1 字节：floor 后命中同一桶界
-    let plus1 = erase_ranges(M + 128 * K + 1, 512);
+    let plus1 = wipe_ranges(M + 128 * K + 1, 512);
     assert_eq!(plus1[1], (128 * K, 4 * K));
     // 1MiB 分区：头部 512K + 尾部 512K——尾部行（-512K, 768K）跨尾裁剪保留半段
     // （不整段跳过）；末尾行起点被 floor 到 0，产出的 (0,4K) 与头部不同址故保留
     // （重复写零幂等，只去重相邻的完全相同项，不做区间合并）
-    let tiny = erase_ranges(M, 512);
+    let tiny = wipe_ranges(M, 512);
     assert!(tiny.contains(&(0, 512 * K)));
     assert!(tiny.contains(&(512 * K, 512 * K)));
     assert!(tiny.iter().all(|&(s, l)| s + l <= M && s < M));
     // part_len = 1536K：尾部区间（from_end=512K）起点 = 1M（256K 取整后恰对齐），与头部不重叠
-    let tail_fit = erase_ranges(1536 * K, 512);
+    let tail_fit = wipe_ranges(1536 * K, 512);
     assert_eq!(tail_fit.last().unwrap(), &(M, 512 * K));
     // 所有区间：整扇区、落在分区界内（负偏移行不保证产出有序，
     // 未排序——wipe_zero 逐区间写零与顺序无关）
     for len in [M, 768 * K + 1, M + 128 * K + 1, 8 * M + 1, 8288 * K] {
-        for &(s, l) in erase_ranges(len, 512).iter() {
+        for &(s, l) in wipe_ranges(len, 512).iter() {
             assert!(s % 512 == 0 && l % 512 == 0 || s + l == len, "tail clip may end unaligned at part end");
             assert!(s + l <= len && s < len);
         }

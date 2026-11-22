@@ -42,6 +42,15 @@ fn replay_record(src: &mut WriteSource, permit_move: bool) -> Option<RunOutcome>
     }
     let path = match claimed.as_slice() {
         [] => {
+            // 弱身份现场：记录列得出，但载体没有跨现场稳定身份，一条也不能认。给出专门拒绝
+            // 与显式出路，而不是笼统的"没有记录"；外来身份的候选仍走下面的通用提示
+            if let Some(why) = mismatched.iter().find_map(|r| {
+                r.unclaimable
+                    .as_deref()
+                    .filter(|w| *w == crate::recovery::WEAK_IDENTITY_REFUSAL)
+            }) {
+                bail_fail(RunOutcome::refused(why.to_string()));
+            }
             if !mismatched.is_empty() {
                 println!(
                     "none of the {} candidate record(s) above can be claimed for this target — they are left \
@@ -97,8 +106,8 @@ fn replay_record(src: &mut WriteSource, permit_move: bool) -> Option<RunOutcome>
             )))
         }
     };
-    if record.committed() {
-        // 提交后未清理：目标字节已定型，本次运行只释放记录、不回滚任何区间。
+    if record.completion_verdict().allows_finish() {
+        // 判定已完成：目标字节已定型，本次运行只释放记录、不回滚任何区间。
         // 记录文件被移走本身是持久状态变化，故不是 NoMutation（4），而是 Partial（5）
         // audit-allow: C-1
         let outcome = match crate::recovery::settle_companion(&path, &record, false) {

@@ -11,7 +11,8 @@
 //! `matches` 同义（只比恒等字段，不比容量）。
 
 use crate::dev::{FileSource, LiveProof, TargetFingerprint};
-use crate::platform::{IdentityMaterial, TargetId, TargetProbe};
+use crate::domain::Fact;
+use crate::platform::{IdentityMaterial, PlatformError, TargetId, TargetProbe};
 use crate::tagged::tagged_enum;
 
 tagged_enum! {
@@ -221,5 +222,102 @@ fn describe_mapping(mapping: Option<Mapping>) -> String {
     match mapping {
         Some(m) => format!("offset {} with size limit {}", m.major(), m.minor()),
         None => "none".to_string(),
+    }
+}
+
+/// 记录落点原料：载体身份原文与分区号。载体原文为 `None` 表示平台确认给不出稳定身份
+/// 证据（dm / md / 只有 major:minor / serial 两次读数为空）——这是已证明的不适用，
+/// 与"读不出"（[`Fact::Undecidable`]）分开；分区号与载体身份无关，照常读出。
+#[derive(Clone, Debug)]
+#[cfg_attr(test, derive(PartialEq, Eq))]
+pub(crate) struct RecordPlacement {
+    carrier: Option<String>,
+    partition: Option<u32>,
+}
+
+impl RecordPlacement {
+    pub(crate) fn new(carrier: Option<String>, partition: Option<u32>) -> Self {
+        Self { carrier, partition }
+    }
+
+    /// 载体身份原文（不带属性名前缀）；`None` 即没有稳定身份证据
+    pub(crate) fn carrier(&self) -> Option<&str> {
+        self.carrier.as_deref()
+    }
+
+    pub(crate) fn partition(&self) -> Option<u32> {
+        self.partition
+    }
+}
+
+/// 平台错误到三态的唯一归类点。
+///
+/// [`PlatformError::Unidentifiable`] 是平台确认给不出稳定身份证据 ⇒ [`Fact::Absent`]
+/// （不适用已证明，不是读不出）；其余（Io / Unsupported）是读不出 ⇒
+/// [`Fact::Undecidable`] 并带原因。只读采集与写路径的记录落点都经这里归类，
+/// 不存在第二处把同一错误折成 `Err` / `Option` 后自行重判的 match。
+pub(crate) fn classify_platform_error(err: &PlatformError) -> Fact<()> {
+    match err {
+        PlatformError::Unidentifiable(_) => Fact::Absent,
+        other => Fact::Undecidable(format!("{other:?}")),
+    }
+}
+
+/// 探测 / 拓扑结果折叠成三态：归类只经 [`classify_platform_error`] 一处。
+pub(crate) fn classify_probe<T>(result: Result<T, PlatformError>) -> Fact<T> {
+    match result {
+        Ok(value) => Fact::Known(value),
+        Err(err) => match classify_platform_error(&err) {
+            Fact::Absent => Fact::Absent,
+            Fact::Undecidable(why) => Fact::Undecidable(why),
+            // 归类点不会从错误产出 Known；此臂只是穷尽三态，不构成放行
+            Fact::Known(()) => Fact::Absent,
+        },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn unidentifiable() -> PlatformError {
+        PlatformError::Unidentifiable(
+            "the block device identity was not sampled when the target was opened".to_string(),
+        )
+    }
+
+    /// 平台给不出稳定身份证据：只读采集与写路径的记录落点同落 [`Fact::Absent`]
+    /// （已证明不适用），不是读不出；两条路径共用同一个归类纯函数，不存在第二处判定
+    #[test]
+    fn unidentifiable_is_absent_on_both_paths() {
+        let read_side: Fact<()> = classify_probe(Err(unidentifiable()));
+        let write_side: Fact<RecordPlacement> = classify_probe(Err(unidentifiable()));
+        assert!(matches!(read_side, Fact::Absent));
+        assert!(matches!(write_side, Fact::Absent));
+        assert!(matches!(classify_platform_error(&unidentifiable()), Fact::Absent));
+    }
+
+    /// 读取失败：两条路径同为 [`Fact::Undecidable`]，原因文本由同一份 Debug 格式化产生，
+    /// 不同源的第二份措辞在这里无从写出
+    #[test]
+    fn read_failure_is_undecidable_with_one_reason() {
+        let io_failure = PlatformError::Io(std::io::Error::other("simulated EIO"));
+        let fact: Fact<()> = classify_probe(Err(io_failure));
+        let Fact::Undecidable(why) = &fact else {
+            panic!("an I/O failure must be Undecidable, got {fact:?}");
+        };
+        assert!(why.contains("simulated EIO"), "{why}");
+
+        let unsupported =
+            PlatformError::Unsupported("sector size override on a block device".to_string());
+        let fact: Fact<RecordPlacement> = classify_probe(Err(unsupported));
+        assert!(matches!(fact, Fact::Undecidable(_)));
+    }
+
+    /// 探测成功即 `Known`：归类点不把可读证据折成缺失
+    #[test]
+    fn successful_probe_is_known() {
+        let fact: Fact<u32> = classify_probe(Ok(7));
+        assert!(matches!(fact, Fact::Known(7)));
     }
 }

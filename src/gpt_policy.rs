@@ -351,7 +351,7 @@ pub(crate) fn last_used_gpt(entries: &[GPTPartitionEntry]) -> Option<u32> {
             .iter()
             .enumerate()
             .filter(|(_, e)| !crate::table::is_unused(e))
-            .map(|(i, e)| ((i + 1) as u32, e.ending_lba)),
+            .map(|(i, e)| ((i + 1) as u32, e.ending_lba)), // audit-allow: index-in-bounds
     )
 }
 
@@ -363,7 +363,7 @@ pub(crate) fn last_used_mbr(parts: &[MbrPartition]) -> Option<u32> {
         parts
             .iter()
             .filter(|p| !p.is_container)
-            .map(|p| (p.num, p.start_lba as u64 + p.size_lba as u64 - 1)),
+            .map(|p| (p.num, p.start_lba as u64 + p.size_lba as u64 - 1)), // audit-allow: len-bounded
     )
 }
 
@@ -417,6 +417,27 @@ pub(crate) fn live_index(entries: &[GPTPartitionEntry], part: u32) -> Result<usi
 
 pub(crate) fn live_entry_in(entries: &[GPTPartitionEntry], part: u32) -> Result<&GPTPartitionEntry, RunOutcome> {
     live_index(entries, part).map(|i| &entries[i])
+}
+
+/// 锁前快照条目与锁下重读条目的身份核对。分区号在快照到取锁之间可能被另一存活条目
+/// 占用，号码本身不是身份；在线 resize 不动起点、不改 GUID，故 GPT 的稳定事实取唯一
+/// GUID 与起止 LBA。分区名 / 类型 GUID / 属性位不参与比对，避免无关字段漂移被误判成
+/// 换条目。两侧任一事实不符即视为同号已是另一个分区，调用点必须 fail-closed。
+#[cfg(any(target_os = "linux", test))]
+pub(crate) fn gpt_identity_matches(
+    expected: &GPTPartitionEntry,
+    actual: &GPTPartitionEntry,
+) -> bool {
+    expected.unique_partition_guid == actual.unique_partition_guid
+        && expected.starting_lba == actual.starting_lba
+        && expected.ending_lba == actual.ending_lba
+}
+
+/// MBR 无 GUID：身份取起始 LBA 与容量（扇区数）。OS 类型与容器标记不参与比对，
+/// 判据与 [`gpt_identity_matches`] 同口径——只认能在窗口内标识"是不是同一条目"的事实。
+#[cfg(any(target_os = "linux", test))]
+pub(crate) fn mbr_identity_matches(expected: &MbrPartition, actual: &MbrPartition) -> bool {
+    expected.start_lba == actual.start_lba && expected.size_lba == actual.size_lba
 }
 
 /// 分区在容器字节空间的区间 `(起始字节, 长度字节)` —— **唯一实现**：诊断路径
@@ -622,7 +643,7 @@ pub fn add_entry_at_slot(
     apply_repair(src, &repair)?;
     g.commit(src)?;
     table::ensure_protective_mbr(src, g.sector_size())?;
-    Ok((index + 1) as u32)
+    Ok((index + 1) as u32) // audit-allow: index-in-bounds
 }
 
 /// 条目写入的范围与槽位判定（`add` 与 `copy` 共用）：区间须落在可用区内且与已定义条目
@@ -645,7 +666,7 @@ fn add_slot(g: &ValidatedGeometry, slot: Option<u32>, start: u64, end: u64) -> R
     }
     match slot {
         Some(n) => {
-            let i = usize::try_from(n)
+            let i = crate::support::host_usize(n)
                 .ok()
                 .and_then(|n| n.checked_sub(1))
                 .filter(|i| *i < g.entries().len())
@@ -712,7 +733,7 @@ pub(crate) fn add_entry_geometry(
     fresh
         .update_entry(index, |e| *e = added_entry(start, end, name, type_guid, unique_guid))
         .map_err(|e| RunOutcome::refused(format!("geometry edit rejected: {e}")))?;
-    Ok((fresh, (index + 1) as u32))
+    Ok((fresh, (index + 1) as u32)) // audit-allow: index-in-bounds
 }
 
 /// GPT 分区类型 GUID 直改（UEFI 2.10 §5.3.2 PartitionTypeGUID）。全零拒绝：
@@ -1312,5 +1333,37 @@ mod tests {
             resolve_part_in(TableEntries::Gpt(&[]), PartSelector::Last),
             Err(RunOutcome::Refused(m)) if m.contains("no defined entry")
         ));
+    }
+
+    /// 锁下身份核对：快照与锁下重读条目按 GUID/起止 LBA（MBR 按起点/容量）比对；
+    /// 号相同但已是另一条目（起点、容量或 GUID 变了）必须判不匹配，全等才放行
+    #[test]
+    fn entry_identity_matches_snapshot_but_not_reused_slot() {
+        let gpt = |unique: [u8; 16], start: u64, end: u64| GPTPartitionEntry {
+            partition_type_guid: [1; 16],
+            unique_partition_guid: unique,
+            starting_lba: start,
+            ending_lba: end,
+            attribute_bits: 0,
+            partition_name: "".into(),
+        };
+        let snap = gpt([2; 16], 2048, 4095);
+        assert!(gpt_identity_matches(&snap, &gpt([2; 16], 2048, 4095)));
+        // 同号槽被另一存活条目占用：起点 / GUID / 末端任一不同即判不匹配
+        assert!(!gpt_identity_matches(&snap, &gpt([2; 16], 10240, 12000)));
+        assert!(!gpt_identity_matches(&snap, &gpt([9; 16], 2048, 4095)));
+        assert!(!gpt_identity_matches(&snap, &gpt([2; 16], 2048, 5000)));
+
+        let part = |start: u32, size: u32| MbrPartition {
+            num: 1,
+            os_type: 0x83,
+            start_lba: start,
+            size_lba: size,
+            is_container: false,
+        };
+        let snap_m = part(63, 100);
+        assert!(mbr_identity_matches(&snap_m, &part(63, 100)));
+        assert!(!mbr_identity_matches(&snap_m, &part(200, 100)));
+        assert!(!mbr_identity_matches(&snap_m, &part(63, 200)));
     }
 }

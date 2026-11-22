@@ -980,6 +980,52 @@ mod tests {
         assert_eq!(RunOutcome::applied_with(Vec::new()).exit_code(), 0);
     }
 
+    /// 退出码 ↔ 变体映射钉成字面判据：正向变体 → 字面码，反向字面码 → 类别变体，
+    /// 四个失败码两两不等。断言写死数字与具体变体，不引用退出码常量名，避免同义反复。
+    #[test]
+    fn exit_code_variant_map_is_pinned() {
+        // 正向：RunOutcome 变体 → 字面退出码。3=请求与现状不符/打不开，4=本次未改动
+        // 持久状态，5=部分完成，6=能力缺口；其余参与映射的：1=内部错误，2=用法错误，0=成功。
+        assert_eq!(RunOutcome::refused("x").exit_code(), 3);
+        assert_eq!(RunOutcome::no_mutation("x").exit_code(), 4);
+        assert_eq!(RunOutcome::partial("x").exit_code(), 5);
+        assert_eq!(RunOutcome::unsupported("x").exit_code(), 6);
+        assert_eq!(RunOutcome::internal("x").exit_code(), 1);
+        assert_eq!(RunOutcome::usage("x").exit_code(), 2);
+        assert_eq!(RunOutcome::Checked.exit_code(), 0);
+        assert_eq!(RunOutcome::applied_with(Vec::new()).exit_code(), 0);
+
+        // 反向：字面码 → 类别变体。本文件唯一的码→类别转换是 FailureClass::from_code；
+        // 0（成功）与 2（用法）不进类别表，反向应得 None。
+        assert_eq!(FailureClass::from_code(3), Some(FailureClass::Refused));
+        assert_eq!(FailureClass::from_code(4), Some(FailureClass::NoMutation));
+        assert_eq!(FailureClass::from_code(5), Some(FailureClass::Partial));
+        assert_eq!(FailureClass::from_code(6), Some(FailureClass::Unsupported));
+        assert_eq!(FailureClass::from_code(1), Some(FailureClass::Internal));
+        assert_eq!(FailureClass::from_code(0), None);
+        assert_eq!(FailureClass::from_code(2), None);
+
+        // 类别重建出的结论落在对应的 RunOutcome 变体上（线格式解码的第二跳）。
+        assert!(matches!(FailureClass::Refused.outcome("x"), RunOutcome::Refused(_)));
+        assert!(matches!(FailureClass::NoMutation.outcome("x"), RunOutcome::NoMutation { .. }));
+        assert!(matches!(FailureClass::Partial.outcome("x"), RunOutcome::Partial { .. }));
+        assert!(matches!(FailureClass::Unsupported.outcome("x"), RunOutcome::Unsupported { .. }));
+        assert!(matches!(FailureClass::Internal.outcome("x"), RunOutcome::Internal(_)));
+
+        // 四个失败码两两不等：防止将来两个变体被映到同一个码。
+        let codes = [
+            RunOutcome::refused("x").exit_code(),
+            RunOutcome::no_mutation("x").exit_code(),
+            RunOutcome::partial("x").exit_code(),
+            RunOutcome::unsupported("x").exit_code(),
+        ];
+        for i in 0..codes.len() {
+            for j in i + 1..codes.len() {
+                assert_ne!(codes[i], codes[j], "exit codes {i} and {j} collide");
+            }
+        }
+    }
+
     /// 每种成因落到哪个退出码都在这里钉住。
     /// 同一码可由不同变体产生，但"哪种成因落哪个码"不能漂
     #[test]

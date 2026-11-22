@@ -20,7 +20,7 @@ pub fn chunk_bytes(mib: u64) -> io::Result<u64> {
             format!("--chunk out of range ({CHUNK_MIB_MIN}..={CHUNK_MIB_MAX} MiB)"),
         ));
     }
-    Ok(mib * crate::support::MIB_BYTES)
+    Ok(mib * crate::support::MIB_BYTES) // audit-allow: len-bounded
 }
 
 #[derive(Clone)]
@@ -275,7 +275,7 @@ fn move_entry(geometry: &ValidatedGeometry, part: u32) -> Result<(u64, u64, bool
     }
     Ok((
         entry.starting_lba,
-        entry.ending_lba - entry.starting_lba + 1,
+        entry.ending_lba - entry.starting_lba + 1, // audit-allow: len-bounded
         is_swap_guid(&entry.partition_type_guid),
     ))
 }
@@ -379,7 +379,7 @@ pub(crate) fn blockers_after(
         .iter()
         .enumerate()
         .filter(|(_, e)| !crate::table::is_unused(e) && e.starting_lba > target_end)
-        .map(|(i, e)| ((i + 1) as u32, e))
+        .map(|(i, e)| ((i + 1) as u32, e)) // audit-allow: index-in-bounds
         .collect();
     movable.sort_by_key(|(_, e)| e.starting_lba);
     for (num, e) in &movable {
@@ -420,7 +420,7 @@ fn relocate_entry(
     last_usable: u64,
     is_swap: bool,
 ) -> Result<PlanEntry, RunOutcome> {
-    let len = e.ending_lba - e.starting_lba + 1;
+    let len = e.ending_lba - e.starting_lba + 1; // audit-allow: len-bounded
     let delta = new_first
         .checked_sub(e.starting_lba)
         .ok_or_else(|| RunOutcome::refused("insufficient tail space for relocation"))?;
@@ -467,7 +467,7 @@ fn solve_layout(
             // 从右端向左排：末端对齐 cursor（含），不留缝隙
             let mut cursor = last_usable;
             for (num, e) in movable.iter().rev() {
-                let len = e.ending_lba - e.starting_lba + 1;
+                let len = e.ending_lba - e.starting_lba + 1; // audit-allow: len-bounded
                 let new_first = cursor
                     .checked_sub(len - 1)
                     .ok_or_else(|| RunOutcome::refused("insufficient tail space for relocation"))?;
@@ -486,7 +486,7 @@ fn solve_layout(
                     "no partition to relocate (right side is free — no --allow-move needed)",
                 ));
             }
-            if shift < movable[0].1.starting_lba - target_end {
+            if shift < movable[0].1.starting_lba - target_end { // audit-allow: len-bounded
                 return Err(RunOutcome::refused(
                     "shift does not exceed the free gap before the first blocker — relocation not needed",
                 ));
@@ -500,7 +500,7 @@ fn solve_layout(
                 let new_first = cursor.max(e.starting_lba);
                 let is_swap = move_entry_swap(src, g, *num, record)?.2.is_swap;
                 out.push(relocate_entry(*num, e, new_first, last_usable, is_swap)?);
-                let len = e.ending_lba - e.starting_lba + 1;
+                let len = e.ending_lba - e.starting_lba + 1; // audit-allow: len-bounded
                 cursor = new_first
                     .checked_add(len)
                     .ok_or_else(|| RunOutcome::refused("relocation target LBA overflows — refusing"))?;
@@ -616,7 +616,7 @@ pub(crate) fn lvm_post_for(
     if !defer || new_bytes <= old_bytes {
         return Ok(None);
     }
-    let delta = new_bytes - old_bytes;
+    let delta = new_bytes - old_bytes; // audit-allow: len-bounded
     let Some(s) = sel else {
         // 未请求 --grow-lv：partition 的新空间由 pvresize 吸收，没有 LV 级的量
         return Ok(Some(LvmPostFacts { lv_path: None, lv_size_before: 0, lv_target: 0, extent_bytes: 0 }));
@@ -936,7 +936,10 @@ pub(crate) fn verify_relocation_resume(
     }
     // 与下面块数上界同一口径：entry_index 超出条目数是记录被改写或两处进度字段
     // 口径分叉的信号，夹紧只会把异常放行成「全部完成」
-    if r.entry_index as usize > r.entries.len() {
+    let done_n = crate::support::host_usize(r.entry_index).map_err(|_| {
+        RunOutcome::refused("the entry index exceeds the host address space")
+    })?;
+    if done_n > r.entries.len() {
         return Err(RunOutcome::refused(format!(
             "recovery record entry progress {} exceeds the plan's {} entries — the record changed between reads; refusing",
             r.entry_index,
@@ -1021,7 +1024,7 @@ pub(crate) fn verify_relocation_resume(
     for &(pn, dst, dst_end) in &dst_ranges {
         for (ei, e) in g.entries().iter().enumerate() {
             // 空条目（0,0）不可能命中：dst 下界 ≥ first_usable ≥ 2
-            let n = ei as u32 + 1;
+            let n = ei as u32 + 1; // audit-allow: index-in-bounds
             if n == pn || r.entries.iter().any(|m| m.partition == n) {
                 continue;
             }
@@ -1035,7 +1038,7 @@ pub(crate) fn verify_relocation_resume(
     }
     // 目的区两两不相交：重叠的目的区无论执行顺序如何都互相覆写
     for (i, &(apn, ad, ae)) in dst_ranges.iter().enumerate() {
-        for &(bpn, bd, be) in dst_ranges.iter().skip(i + 1) {
+        for &(bpn, bd, be) in dst_ranges.iter().skip(i + 1) { // audit-allow: index-in-bounds
             if ad <= be && bd <= ae {
                 return Err(RunOutcome::refused(format!(
                     "relocation targets of partitions {} and {} overlap (LBA {}..{}) — inconsistent recovery record; refusing",
@@ -1048,7 +1051,7 @@ pub(crate) fn verify_relocation_resume(
     // 成员的旧位，但不得覆盖尚未处理成员的源区——那次拷贝会读到已被本目的区覆写
     // 的数据
     for (i, &(pn, dst, dst_end)) in dst_ranges.iter().enumerate() {
-        for m in r.entries.iter().skip(i + 1) {
+        for m in r.entries.iter().skip(i + 1) { // audit-allow: index-in-bounds
             let src_end = m
                 .src_first
                 .checked_add(m.len)
@@ -1080,7 +1083,7 @@ pub(crate) fn verify_relocation_resume(
         }
         if future_grow_end > ge.ending_lba {
             for (ei, e) in g.entries().iter().enumerate() {
-                let n = ei as u32 + 1;
+                let n = ei as u32 + 1; // audit-allow: index-in-bounds
                 if n == r.grow_part || r.entries.iter().any(|m| m.partition == n) {
                     continue;
                 }
@@ -1095,7 +1098,7 @@ pub(crate) fn verify_relocation_resume(
     }
     // 块数上界：越界不是合法运行能产出的进度，静默 min 会把"跳过未拷贝的 chunk"
     // 放行成提交。布局规则只来自 [`entry_spans`]
-    let chunk_bound = r.entries.get(done as usize).map_or(0, |e| {
+    let chunk_bound = r.entries.get(done_n).map_or(0, |e| {
         entry_spans(e.src_first, e.len, e.delta, e.is_swap, r.ss, r.chunk_bytes).len() as u64
     });
     if r.chunks_in_entry > chunk_bound {

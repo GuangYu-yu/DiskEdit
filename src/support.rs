@@ -42,7 +42,7 @@ pub(crate) fn bail_fail(f: crate::outcome::RunOutcome) -> ! {
 }
 
 /// 持久日志的单文件上限：打开时已有日志达到这个长度就轮转一代
-const LOG_MAX_BYTES: u64 = 8 * MIB_BYTES;
+const LOG_MAX_BYTES: u64 = 8 * MIB_BYTES; // audit-allow: const-expr
 
 /// 轮转一代：已有日志达到上限时整份改名为同名加 `.1`，原有的 `.1` 被覆盖。
 /// 打开点都在取得目标锁之后，同一目标不存在第二个进程同时轮转
@@ -126,7 +126,7 @@ pub(crate) fn resolve_chunk(mib: Option<u64>, src: &FileSource) -> u64 {
         .map_or(DEFAULT_CHUNK_BYTES, |r| r.chunk_bytes)
 }
 
-pub(crate) const DEFAULT_CHUNK_BYTES: u64 = 4 * MIB_BYTES;
+pub(crate) const DEFAULT_CHUNK_BYTES: u64 = 4 * MIB_BYTES; // audit-allow: const-expr
 
 /// 读路径失败时的统一措辞：`cannot read {path}: {e}`。各调用点不再各自拼这一句
 pub(crate) fn cannot_read(path: impl std::fmt::Display, e: impl std::fmt::Display) -> String {
@@ -170,7 +170,7 @@ pub(crate) fn hex_guid(b: &[u8; 16]) -> String {
 /// 小写十六进制（无分隔）：记录标识、场景标识与 magic 的文本形态。
 /// 用 nibble 直接拼，没有可丢弃的返回值（crate 的 `let_underscore_must_use = "deny"`）
 pub(crate) fn hex_lower(bytes: &[u8]) -> String {
-    let mut out = String::with_capacity(bytes.len() * 2);
+    let mut out = String::with_capacity(bytes.len() * 2); // audit-allow: len-bounded
     for byte in bytes {
         out.push(char::from_digit(u32::from(byte >> 4), 16).expect("a nibble is a hex digit"));
         out.push(char::from_digit(u32::from(byte & 0x0f), 16).expect("a nibble is a hex digit"));
@@ -203,7 +203,7 @@ pub(crate) fn parse_guid(s: &str) -> Option<[u8; 16]> {
     let hex: String = s.chars().filter(|&c| c != '-').collect();
     let mut text = [0u8; 16];
     for i in 0..16 {
-        text[i] = u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).ok()?;
+        text[i] = u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).ok()?; // audit-allow: index-in-bounds
     }
     // 文本序 → 磁盘序：前 3 字段小端（字段 1=u32、字段 2/3=u16），字段 4 原样
     let mut out = [0u8; 16];
@@ -379,11 +379,11 @@ pub(crate) const MIB_BYTES: u64 = 1 << 20;
 pub(crate) const GIB_BYTES: u64 = 1 << 30;
 pub(crate) const TIB_BYTES: u64 = 1 << 40;
 
-/// 1 MiB 折算成表内扇区的唯一落点：不足一扇区时取 1，调用点共用，
-/// 不各自写 `(MIB_BYTES / ss).max(1)` 第二遍。`ss` 为 0 时没有有意义的折算，
-/// 直接取 1——本函数是折算助手而非校验点，不该成为除零的崩溃点
+/// 1 MiB 折算成表内扇区的唯一落点，调用点共用，不各自写 `(MIB_BYTES / ss)` 第二遍。
+/// `ss` 是打开路径上经 `SectorSize::try_new` 校验过的逻辑扇区大小（512..=65536 且为
+/// 2 的幂），商恒 ≥ 16，除数不为 0
 pub(crate) fn mib_in_sectors(ss: u64) -> u64 {
-    MIB_BYTES.checked_div(ss).unwrap_or(0).max(1)
+    MIB_BYTES / ss
 }
 
 /// 对齐单位（LBA 所属表的扇区数）。mib = 1MiB 折算成表内扇区；none = 不对齐。
@@ -391,6 +391,19 @@ pub(crate) fn mib_in_sectors(ss: u64) -> u64 {
 /// 解释（可与容器 ss 不同，如 4Kn 表放在 512e 容器），按容器 ss 折算会把边界整体错位
 pub(crate) fn align_unit(align: crate::domain::Align, table_ss: u64) -> Option<u64> {
     align.unit_sectors(table_ss)
+}
+
+/// 外部宽度（u64/u32 等）收口成宿主 `usize`：分配长度、切片下标与条目比较只允许从这一处
+/// 取值。超出宿主地址空间值域时返回 [`std::num::TryFromIntError`]，由调用点按本路径既有
+/// 错误分类归责；这里不截断、不补默认值，也不 panic。
+///
+/// 64 位宿主上 u64 与 usize 同宽，失败分支只在 32 位目标可达；转换仍按宽度无关写法给出，
+/// 不为 32 位目标留第二道裸转。
+pub(crate) fn host_usize<T>(value: T) -> Result<usize, std::num::TryFromIntError>
+where
+    usize: std::convert::TryFrom<T, Error = std::num::TryFromIntError>,
+{
+    std::convert::TryFrom::try_from(value)
 }
 
 /// 对齐上取整（乘法全程 checked，s 逼近 u64::MAX 时回绕会伪造从 0 起的伪区间）。
@@ -408,13 +421,13 @@ fn floor_align(v: u64, unit: u64) -> u64 {
 pub(crate) fn align_end(align: crate::domain::Align, start: u64, end: u64, table_ss: u64) -> u64 {
     let Some(unit) = align_unit(align, table_ss) else { return end };
     let e1 = floor_align(end, unit);
-    if e1 == 0 || start > e1 - 1 {
+    if e1 == 0 || start > e1 - 1 { // audit-allow: len-bounded
         bail_fail(RunOutcome::refused(format!("range {start}..{end} is empty after {align} alignment")));
     }
-    if e1 - 1 != end {
-        eprintln!("aligned to {align}: end {end} -> {}", e1 - 1);
+    if e1 - 1 != end { // audit-allow: len-bounded
+        eprintln!("aligned to {align}: end {end} -> {}", e1 - 1); // audit-allow: display-only
     }
-    e1 - 1
+    e1 - 1 // audit-allow: len-bounded
 }
 
 /// 起点上取整（copy 的 --start 只有起点语义，长度继承源分区）。上溢由 `ceil_align`
@@ -466,7 +479,7 @@ pub(crate) fn note_sector_truncation(action: &str, bytes: u64, ss: u64) {
         return;
     }
     if !bytes.is_multiple_of(ss) {
-        eprintln!("note: size {bytes} is not a multiple of the {ss}-byte sector — {action} {} bytes", bytes / ss * ss);
+        eprintln!("note: size {bytes} is not a multiple of the {ss}-byte sector — {action} {} bytes", bytes / ss * ss); // audit-allow: display-only
     }
 }
 
@@ -502,16 +515,17 @@ pub(crate) fn free_right_gpt(g: &ValidatedGeometry, part: u32) -> u64 {
     };
     let mut bound = g.last_usable_lba().saturating_add(1); // 排他上界（饱和防损坏几何下 +1 回绕成 0）
     for (i, o) in g.entries().iter().enumerate() {
-        if (i + 1) as u32 == part || crate::table::is_unused(o) {
+        if (i + 1) as u32 == part || crate::table::is_unused(o) { // audit-allow: index-in-bounds
             continue;
         }
         if o.starting_lba > e.ending_lba {
             bound = bound.min(o.starting_lba);
         }
     }
-    // +1 走 checked：ending_lba 虽被几何构造校验拦在 usable 内，这里的回绕仍不可信——
-    // 回绕成 0 会把右侧空闲虚报成整段 bound
-    e.ending_lba.checked_add(1).map_or(0, |next| bound.saturating_sub(next))
+    // 右侧连续空闲扇区数，下界为 0：end 由几何校验落在可用区内，正常路径 next ≤ bound。
+    // 损坏几何把 end 顶到 u64::MAX 时 next 饱和在最大值，减完仍是 0——这里 0 是
+    // "没有空间"这一语义本身，不是拿一个算不出的中间值冒充结果
+    bound.saturating_sub(e.ending_lba.saturating_add(1))
 }
 
 /// MBR 表项实际占用的区间 [起点, 终点]（含端点）。解析层只产出非空槽
@@ -532,7 +546,7 @@ fn mbr_occupied_pairs(
         let last = if p.is_container {
             table::last_sector_of(total_sectors)
         } else {
-            table::last_sector_of(p.start_lba as u64 + p.size_lba as u64)
+            table::last_sector_of(p.start_lba as u64 + p.size_lba as u64) // audit-allow: len-bounded
         };
         (p, (p.start_lba as u64, last))
     })
@@ -542,7 +556,7 @@ fn mbr_occupied_pairs(
 /// 起点在本分区右侧时以容器起点为界；起点落本分区左侧时，链可能越出容器自述末端
 /// 进入右侧，右侧空闲整体按 0 处理。MBR 无 usable 区概念，上界=盘尾
 pub(crate) fn free_right_msdos(mbr: &[table::MbrPartition], p: &table::MbrPartition, total_sectors: u64) -> u64 {
-    let end = p.start_lba as u64 + p.size_lba as u64; // 排他
+    let end = p.start_lba as u64 + p.size_lba as u64; // 排他 // audit-allow: len-bounded
     let mut bound = total_sectors;
     for (o, (o_start, o_end)) in mbr_occupied_pairs(mbr, total_sectors) {
         if o.num == p.num {
@@ -566,7 +580,7 @@ pub(crate) fn aligned_gaps(used: &[(u64, u64)], lo: u64, hi: u64, unit: u64) -> 
     let mut cur = lo;
     for (s, e) in sorted {
         if s > cur {
-            free.push((cur, s - 1));
+            free.push((cur, s - 1)); // audit-allow: len-bounded
         }
         cur = cur.max(e.saturating_add(1));
     }
@@ -607,13 +621,14 @@ pub(crate) fn range_sha256(src: &FileSource, offset: u64, len: u64) -> std::io::
     let mut buf = vec![0u8; CHUNK as usize];
     let mut done = 0u64;
     while done < len {
+        // audit-allow: len-bounded
         let take = (len - done).min(CHUNK) as usize;
         let at = offset.checked_add(done).ok_or_else(|| {
             std::io::Error::new(std::io::ErrorKind::InvalidData, "range digest offset overflows")
         })?;
         src.read_at(at, &mut buf[..take])?;
         hasher.update(&buf[..take]);
-        done += take as u64;
+        done += take as u64; // audit-allow: counter
     }
     let mut out = [0u8; 32];
     out.copy_from_slice(&hasher.finalize());
@@ -718,13 +733,31 @@ mod tests {
         drop(logger);
     }
 
-    /// 扇区大小为 0 时两个助手都不得 panic：它们不是校验点，把"盘没有扇区"这件事
-    /// 说成一次崩溃（101）会让调用方拿不到任何可读的分类
+    /// 宽度收口：值域内的值原样落下；越过宿主地址空间的值返回 `Err` 而不是截断。
+    /// 64 位宿主上 u64 与 usize 同宽，越界分支用 128 位宽度构造（2^64 以上）覆盖；
+    /// 32 位目标上同一段代码拦住 >usize::MAX 的 u64/u32
     #[test]
-    fn sector_helpers_tolerate_zero_sector_size() {
-        assert_eq!(mib_in_sectors(0), 1);
+    fn host_usize_keeps_in_range_and_rejects_out_of_range() {
+        assert_eq!(host_usize(0u64), Ok(0));
+        assert_eq!(host_usize(u32::MAX), Ok(u32::MAX as usize));
+        assert_eq!(host_usize(usize::MAX as u64), Ok(usize::MAX));
+        assert_eq!(host_usize(usize::MAX as u128), Ok(usize::MAX));
+        assert!(host_usize(u128::from(u64::MAX) + 1).is_err());
+        assert!(host_usize(u128::MAX).is_err());
+    }
+
+    /// 1 MiB 折算到已校验的扇区大小：商随扇区大小递减，最大扇区仍有 16 个
+    #[test]
+    fn mib_in_sectors_divides_validated_sizes() {
         assert_eq!(mib_in_sectors(512), 2048);
-        note_sector_truncation("resizing to", 1000, 0); // 不得 panic
+        assert_eq!(mib_in_sectors(4096), 256);
+        assert_eq!(mib_in_sectors(65536), 16);
+    }
+
+    /// 纯提示助手在扇区大小缺失时不 panic：它只负责提示，不承担校验职责
+    #[test]
+    fn note_truncation_tolerates_zero_sector_size() {
+        note_sector_truncation("resizing to", 1000, 0);
     }
 
     fn raw_gpt(last_usable: u64, ents: &[(u64, u64)]) -> table::RawGpt {

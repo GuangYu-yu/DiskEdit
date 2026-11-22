@@ -31,12 +31,12 @@ pub fn parse_target(s: &str) -> Result<(String, Option<PartSelector>), &'static 
     match s.rfind(':') {
         // 尾冒号（`img:`）多半是分区号漏写的笔误：按整路径打开只会报"文件不存在"，
         // 不如当场说清缺的是什么
-        Some(pos) if pos + 1 == s.len() => Err("missing partition number after ':'"),
-        Some(pos) if s[pos + 1..].eq_ignore_ascii_case("last") => {
+        Some(pos) if pos + 1 == s.len() => Err("missing partition number after ':'"), // audit-allow: index-in-bounds
+        Some(pos) if s[pos + 1..].eq_ignore_ascii_case("last") => { // audit-allow: index-in-bounds
             Ok((s[..pos].to_string(), Some(PartSelector::Last)))
         }
-        Some(pos) if s[pos + 1..].chars().all(|c| c.is_ascii_digit()) => {
-            let n: u32 = s[pos + 1..].parse().map_err(|_| "partition number out of range")?;
+        Some(pos) if s[pos + 1..].chars().all(|c| c.is_ascii_digit()) => { // audit-allow: index-in-bounds
+            let n: u32 = s[pos + 1..].parse().map_err(|_| "partition number out of range")?; // audit-allow: index-in-bounds
             if n == 0 {
                 return Err("partition number is 1-based (:0 is not a partition)");
             }

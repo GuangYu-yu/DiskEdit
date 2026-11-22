@@ -267,6 +267,7 @@ pub(crate) fn block_lock_converges_to_the_carrier_while_records_stay_per_target(
             Some(key_for_test("sdb-carrier", partition)),
             partition,
         )
+        .expect("a test identity with a short key encodes")
     };
     let part1 = with_record("/dev/sdb1", Some(1), "sdb-1234");
     let part2 = with_record("/dev/sdb2", Some(2), "sdb-1234");
@@ -316,6 +317,7 @@ pub(crate) fn the_same_identity_key_is_the_same_resume_slot() {
             Some(key_for_test(target, partition)),
             partition,
         )
+        .expect("a test identity with a short key encodes")
         .record_path()
         .map(Path::to_path_buf)
     };
@@ -337,6 +339,7 @@ pub(crate) fn a_declared_identity_derives_its_own_records_and_one_lock_per_name(
             None,
             partition,
         )
+        .expect("a test identity with no record key has no encoding width to overflow")
     };
     let declare = |id: TargetIdentity, name: &str| {
         id.with_declared(&DeclaredIdentity::parse(name).unwrap()).expect("an unidentified block device accepts a name")
@@ -345,11 +348,19 @@ pub(crate) fn a_declared_identity_derives_its_own_records_and_one_lock_per_name(
     let part3 = declare(carrier("/dev/nbd0p3", Some(3)), "export-a");
     assert_eq!(
         whole.record_path().map(Path::to_path_buf),
-        Some(key_for_test("declared:export-a", None).record_path())
+        Some(
+            key_for_test("declared:export-a", None)
+                .record_path()
+                .expect("a short test key encodes")
+        )
     );
     assert_eq!(
         part3.record_path().map(Path::to_path_buf),
-        Some(key_for_test("declared:export-a", Some(3)).record_path())
+        Some(
+            key_for_test("declared:export-a", Some(3))
+                .record_path()
+                .expect("a short test key encodes")
+        )
     );
     // 锁落在整盘名字上：分区节点与整盘节点共用一把
     let expected = host_state_root().join(format!("{}{LOCK_SUFFIX}", key_token("declared:export-a")));
@@ -362,7 +373,11 @@ pub(crate) fn a_declared_identity_derives_its_own_records_and_one_lock_per_name(
     // 自由文本名字不冒充同名设备声明
     assert_ne!(
         whole.record_path().map(Path::to_path_buf),
-        Some(key_for_test("naa.5000c500aabbccdd", None).record_path())
+        Some(
+            key_for_test("naa.5000c500aabbccdd", None)
+                .record_path()
+                .expect("a short test key encodes")
+        )
     );
 }
 
@@ -377,7 +392,8 @@ pub(crate) fn only_an_unidentified_block_device_accepts_a_name() {
         crate::dev::LockKey::new("naa.5000c500aabbccdd".to_string()),
         Some(key_for_test("naa.5000c500aabbccdd", None)),
         None,
-    );
+    )
+    .expect("a test identity with a short key encodes");
     assert!(identified.with_declared(&name).is_err());
 }
 

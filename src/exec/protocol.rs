@@ -65,9 +65,9 @@ impl<R: BufRead> Lines<R> {
                     break;
                 }
                 let newline = buf.iter().position(|&b| b == b'\n');
-                let len = newline.map_or(buf.len(), |i| i + 1);
+                let len = newline.map_or(buf.len(), |i| i + 1); // audit-allow: len-bounded
                 if !oversize {
-                    if bytes.len() + len > MAX_FRAME {
+                    if bytes.len() + len > MAX_FRAME { // audit-allow: len-bounded
                         oversize = true;
                         bytes.clear();
                     } else {
@@ -176,11 +176,6 @@ impl TryFrom<CarrierStep<'_>> for WireStep {
             CarrierStep::Fs(FsStep::Set(step)) => Self::FsSet(step.clone()),
             CarrierStep::Fs(FsStep::RebuildSwap(step)) => Self::RebuildSwap(step.clone()),
             CarrierStep::Fs(FsStep::HiddenSectors(step)) => Self::HiddenSectors(*step),
-            CarrierStep::Probe(_) => {
-                return Err(RunOutcome::unsupported(
-                    "a probe is not a step of a plan; the session issues it after an applied step",
-                ));
-            }
         })
     }
 }
@@ -556,7 +551,7 @@ fn decode_vec<T>(value: &Value, mut item: impl FnMut(&Value) -> Option<T>) -> Op
 
 fn hex(bytes: &[u8]) -> String {
     const DIGITS: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(bytes.len() * 2);
+    let mut out = String::with_capacity(bytes.len() * 2); // audit-allow: len-bounded
     for &byte in bytes {
         out.push(DIGITS[(byte >> 4) as usize] as char);
         out.push(DIGITS[(byte & 0xf) as usize] as char);
@@ -580,7 +575,7 @@ fn unhex_len(text: &str) -> Option<Vec<u8>> {
     for pair in text.as_bytes().chunks(2) {
         let hi = (pair[0] as char).to_digit(16)?;
         let lo = (pair[1] as char).to_digit(16)?;
-        out.push((hi * 16 + lo) as u8);
+        out.push((hi * 16 + lo) as u8); // audit-allow: len-bounded
     }
     Some(out)
 }

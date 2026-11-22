@@ -712,6 +712,22 @@ fn malformed_restore_entries_are_refused() {
             original: vec![0; 100],
             after: vec![0; 100],
         },
+        // 2 的幂但低于合法下限 512
+        RestoreEntry {
+            sector_size: 1,
+            first_lba: 0,
+            sectors: 1,
+            original: vec![0; 1],
+            after: vec![0; 1],
+        },
+        // 2 的幂但高于合法上限 65536
+        RestoreEntry {
+            sector_size: 131_072,
+            first_lba: 0,
+            sectors: 1,
+            original: vec![0; 1],
+            after: vec![0; 1],
+        },
         RestoreEntry {
             sector_size: 512,
             first_lba: 0,
@@ -890,4 +906,88 @@ fn a_temp_sweep_removes_only_matching_regular_files() {
     assert!(std::fs::symlink_metadata(&linked).is_ok(), "a symlink with a temp-like name must stay");
     assert!(short_hex.exists(), "a 31-digit hex suffix must not match");
     assert!(bad_pid.exists(), "a non-numeric pid must not match");
+}
+
+/// 一条搬移进行中的记录：批次已同步、检查点/游标尚未推进到下一批（R10 崩溃窗口）。
+/// 几何取非自重叠：位移 ≥ 源长，两批拷完；这里只拷完第一批，块游标停在中间
+fn mid_batch_record(seed: u8) -> Record {
+    let mut record = record_for(scene(seed));
+    record.op = OpKind::Move;
+    record.relocation = Some(Relocation {
+        entries: vec![reloc_entry(1, 2048, 4096, 8192, false)],
+        entry_index: 0,
+        chunks_in_entry: 1,
+        prefix_digest: [0x33; 32],
+        chunk_bytes: 1 << 20,
+        kind: RelocKind::Shift,
+        grow_part: 0,
+        disk_size: 64 << 20,
+        ss: 512,
+    });
+    record.progress.transfer_cursor = 512 * 2048;
+    record
+}
+
+/// 提交检查点落盘是唯一的完整形态：只有它放行收尾，其余形态一律不许当完成
+#[test]
+fn a_committed_record_is_the_only_complete_verdict() {
+    let mut record = record_for(scene(11));
+    record.commit = CommitState::Committed;
+
+    assert_eq!(record.completion_verdict(), CompletionVerdict::Complete);
+    assert!(record.completion_verdict().allows_finish());
+}
+
+/// 钉「静默半成品」：崩溃停在「批次已同步、检查点/游标未记」的中间态时，完成判定不得
+/// 返回完成，收尾闸不得放行——续跑只能重放未确认的批次，或走拒绝路径，不能给成功出口
+#[test]
+fn a_partial_batch_record_must_not_allow_finish() {
+    let record = mid_batch_record(12);
+
+    // 夹具自证：阶段确实停在搬移中途，而不是被误判成已搬完或不可判定
+    assert!(
+        matches!(record.derive_stage().unwrap(), Stage::Relocating { .. }),
+        "the fixture must describe a mid-entry relocation"
+    );
+    let verdict = record.completion_verdict();
+    assert_eq!(verdict, CompletionVerdict::NeedsReplay);
+    assert!(!verdict.allows_finish(), "a half-synced batch must not be allowed to finish");
+}
+
+/// 每一种中间态与必须拒绝的形态都不允许收尾：缺检查点、游标未推进、表步未落定、
+/// 在飞位读不出事实、记录自相矛盾，判定结果都不是 `Complete`
+#[test]
+fn every_intermediate_or_rejected_verdict_refuses_finish() {
+    let mut relocated = mid_batch_record(13);
+    relocated.relocation.as_mut().expect("mid-batch plan").chunks_in_entry = 2;
+
+    let mut table_written = record_for(scene(14));
+    table_written.op = OpKind::ResizeEnd;
+    table_written.table_fence = Fact::Known(TableFence::Landed);
+    table_written.progress.completed_steps = 1;
+
+    let mut in_flight = mid_batch_record(15);
+    in_flight.relocation.as_mut().expect("mid-batch plan").chunks_in_entry = 0;
+    in_flight.entry_table_in_flight = Fact::Known(0);
+
+    let mut contradictory = mid_batch_record(16);
+    contradictory.relocation.as_mut().expect("mid-batch plan").chunks_in_entry = 99;
+
+    let cases: [(&str, Record, CompletionVerdict); 6] = [
+        ("planned, nothing written", record_for(scene(17)), CompletionVerdict::NeedsReplay),
+        ("mid-entry batch synced, checkpoint not recorded", mid_batch_record(18), CompletionVerdict::NeedsReplay),
+        ("entry copied, entry cursor not advanced", relocated, CompletionVerdict::NeedsReplay),
+        ("table written, later steps pending", table_written, CompletionVerdict::NeedsReplay),
+        ("table step in flight, facts undecidable", in_flight, CompletionVerdict::MustRefuse),
+        ("chunk count contradicts the plan", contradictory, CompletionVerdict::MustRefuse),
+    ];
+    for (label, record, expected) in cases {
+        let verdict = record.completion_verdict();
+        assert_eq!(verdict, expected, "{label}");
+        assert!(
+            !verdict.allows_finish(),
+            "{label}: an unfinished or refused record must not be allowed to finish"
+        );
+        assert_ne!(verdict, CompletionVerdict::Complete, "{label}");
+    }
 }

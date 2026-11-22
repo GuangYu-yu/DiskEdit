@@ -74,7 +74,7 @@ fn gpt_facts(gpt: &RawGpt) -> TableFacts {
         // 的分区，否则容量与 :last 选择都会被残留区间左右
         .filter(|(_, e)| !crate::table::is_unused(e))
         .map(|(i, e)| PartitionFact {
-            number: (i + 1) as u32,
+            number: (i + 1) as u32, // audit-allow: index-in-bounds
             first_lba: e.starting_lba,
             last_lba: e.ending_lba,
         })
@@ -92,7 +92,7 @@ fn mbr_facts(src: &FileSource, parts: &[MbrPartition]) -> TableFacts {
         .map(|p| PartitionFact {
             number: p.num,
             first_lba: p.start_lba as u64,
-            last_lba: p.start_lba as u64 + p.size_lba as u64 - 1,
+            last_lba: p.start_lba as u64 + p.size_lba as u64 - 1, // audit-allow: len-bounded
         })
         .collect();
     TableFacts {
@@ -769,7 +769,7 @@ fn assemble_move_steps(
     // 不会把旧 LBA0 的引导代码写回去
     let protective_mbr = crate::table::protective_mbr_content(src, initial.ss)?;
     let mut previous_after: Option<TableStamp> = None;
-    let mut steps: Vec<PlanStep> = Vec::with_capacity(moves.len() * 3 + 1);
+    let mut steps: Vec<PlanStep> = Vec::with_capacity(moves.len() * 3 + 1); // audit-allow: len-bounded
     for &(part, dst_first) in moves {
         // 内容证据取自搬移前的源区间：几何随后会被推进到目的位，那时这段字节已是
         // 右邻搬过来的新内容。已在目的位的条目由记录给出源起点与结论

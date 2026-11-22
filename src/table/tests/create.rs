@@ -97,7 +97,7 @@ fn write_small_span_gpt(src: &mut WriteSource, ss: u64) {
         attribute_bits: 0,
         partition_name: "".into(),
     }];
-    let (bytes, crc) = serialize_array(&entries, &geom);
+    let (bytes, crc) = serialize_array(&entries, &geom).unwrap();
     src.write_fixture(2 * ss, &bytes).unwrap();
     let last_lba = src.size / ss - 1;
     let h = RawHeader {
@@ -156,7 +156,7 @@ pub(crate) fn mbr_conflict_catches_gpt_signature_inside_partition() {
     // 分区 [1..=99] 覆盖整盘的可用区，盘尾那份 GPT 备份头就落在分区数据里
     let mut src = src_from_mbr("cfchk_mbr", &[(0x83, 1, 99)], 100);
     let geom = EntryArrayGeometry::new(ss, 128, 4, MAX_ARRAY_BYTES).unwrap();
-    let (bytes, crc) = serialize_array(&[], &geom);
+    let (bytes, crc) = serialize_array(&[], &geom).unwrap();
     src.write_fixture(98 * ss, &bytes).unwrap();
     let h = RawHeader {
         revision: 0x0001_0000,

@@ -716,8 +716,8 @@ fn btrfs_members(src: &FileSource) -> Result<Vec<MemberRef>, String> {
     const MAGIC_OFFSET: usize = 0x40;
     const NUM_DEVICES_OFFSET: usize = 0x88;
     // 两个字段末字节的绝对位置：magic @0x10040..0x10048，num_devices @0x10088..0x10090
-    const MAGIC_END: u64 = SUPER_OFFSET + MAGIC_OFFSET as u64 + 8;
-    const NUM_DEVICES_END: u64 = SUPER_OFFSET + NUM_DEVICES_OFFSET as u64 + 8;
+    const MAGIC_END: u64 = SUPER_OFFSET + MAGIC_OFFSET as u64 + 8; // audit-allow: const-expr
+    const NUM_DEVICES_END: u64 = SUPER_OFFSET + NUM_DEVICES_OFFSET as u64 + 8; // audit-allow: const-expr
     // 连 magic 都读不到时没有任何证据能排除 btrfs，按未知返回
     if src.size < MAGIC_END {
         return Err(format!(
@@ -726,12 +726,13 @@ fn btrfs_members(src: &FileSource) -> Result<Vec<MemberRef>, String> {
             src.size
         ));
     }
-    let mut sb = [0u8; NUM_DEVICES_OFFSET + 8];
+    let mut sb = [0u8; NUM_DEVICES_OFFSET + 8]; // audit-allow: index-in-bounds
     // 只读目标覆盖得到的那一段：magic 一定在内，num_devices 不一定
+    // audit-allow: len-bounded
     let covered = (src.size - SUPER_OFFSET).min(sb.len() as u64) as usize;
     src.read_at(SUPER_OFFSET, &mut sb[..covered])
         .map_err(|e| format!("cannot read the btrfs superblock: {e}"))?;
-    let magic = &sb[MAGIC_OFFSET..MAGIC_OFFSET + 8];
+    let magic = &sb[MAGIC_OFFSET..MAGIC_OFFSET + 8]; // audit-allow: index-in-bounds
     if *magic != crate::fsid::BTRFS_MAGIC {
         return Err(format!(
             "cannot read the btrfs superblock magic at byte {SUPER_OFFSET:#x} any more, although \
@@ -748,7 +749,7 @@ fn btrfs_members(src: &FileSource) -> Result<Vec<MemberRef>, String> {
         ));
     }
     let mut raw = [0u8; 8];
-    raw.copy_from_slice(&sb[NUM_DEVICES_OFFSET..NUM_DEVICES_OFFSET + 8]);
+    raw.copy_from_slice(&sb[NUM_DEVICES_OFFSET..NUM_DEVICES_OFFSET + 8]); // audit-allow: index-in-bounds
     let devices = u64::from_le_bytes(raw);
     if devices <= 1 {
         return Ok(Vec::new());

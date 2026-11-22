@@ -202,7 +202,10 @@ pub fn mkfs(
     })?;
     // wipe_zero 一旦开始就存在部分清零：之后的任何失败都不再是"确定未写盘"，
     // 统一压成 CommandFailed（→ Partial），报告带"盘上状态可能已改变"的警示
-    wipe_zero(dev.path(), &erase_ranges(part_len, ss)).map_err(|e| {
+    let ranges = erase_ranges(part_len, ss).map_err(|e| {
+        FsError::invalid(format!("mkfs: could not compute the signature wipe ranges: {e}"))
+    })?;
+    wipe_zero(dev.path(), &ranges).map_err(|e| {
         FsError::CommandFailed(format!("mkfs: signature wipe started but failed, the target may be partially erased: {e}"))
     })?;
     let mut args: Vec<&str> = Vec::new();
@@ -247,7 +250,11 @@ pub(crate) fn refuse_btrfs_multi_device_at(src: &FileSource, off: u64, part_len:
         ));
     }
     let mut raw = [0u8; 8];
-    src.read_at(off + 0x10000 + 0x88, &mut raw).map_err(FsError::from)?;
+    let at = off
+        .checked_add(0x10000)
+        .and_then(|v| v.checked_add(0x88))
+        .ok_or_else(|| FsError::invalid("btrfs superblock offset overflows the address space"))?;
+    src.read_at(at, &mut raw).map_err(FsError::from)?;
     if u64::from_le_bytes(raw) > 1 {
         return Err(FsError::unsupported_multi_device_btrfs(
             "btrfs filesystem spans multiple devices (num_devices > 1) — resize manually per btrfs-filesystem(8)",

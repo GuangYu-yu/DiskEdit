@@ -45,8 +45,8 @@ fn record_ranges(
 ) -> Result<(), crate::outcome::RunOutcome> {
     let Some(journal) = src.record_journal_mut() else { return Ok(()) };
     let start = u64::from(p.start_lba);
-    let end = start + u64::from(p.size_lba) - 1;
-    let target_end = start + target_size_lba - 1;
+    let end = start + u64::from(p.size_lba) - 1; // audit-allow: len-bounded
+    let target_end = start + target_size_lba - 1; // audit-allow: len-bounded
     journal
         .bind_ranges((start, end), (start, target_end))
         .map_err(|e| RunOutcome::no_mutation(e.record_failure("the pre-commit and target ranges")))
@@ -88,7 +88,7 @@ fn mbr_entry_size(lba0: &[u8], part: u32) -> Option<u32> {
     }
     let off = crate::table::mbr_entry_range(index as usize).start;
     let bytes: [u8; 4] = lba0
-        .get(off + crate::table::MBR_ENTRY_BYTES - 4..off + crate::table::MBR_ENTRY_BYTES)?
+        .get(off + crate::table::MBR_ENTRY_BYTES - 4..off + crate::table::MBR_ENTRY_BYTES)? // audit-allow: index-in-bounds
         .try_into()
         .ok()?;
     Some(u32::from_le_bytes(bytes))
@@ -286,7 +286,7 @@ pub(crate) fn cmd_resize_msdos(a: &ResizeRequest, pref: PartSelector, src_ro: &F
     // 块设备在线路径：与 GPT 同一份实现，随表类型变的只有右侧空闲数。目标长度同样
     // 交给 mbr_decider 在在线自己的锁下重解析（理由见 gpt_decider）
     #[cfg(target_os = "linux")]
-    if let Some(o) = resize_online(a, src_ro, part, is_pv, mbr_decider(a.size, part, is_pv)) {
+    if let Some(o) = resize_online(a, src_ro, part, is_pv, mbr_decider(a.size, part, is_pv, p.clone())) {
         return o;
     }
 
@@ -400,7 +400,7 @@ pub(crate) fn cmd_resize_msdos(a: &ResizeRequest, pref: PartSelector, src_ro: &F
     // 记录型续跑只认记录写下的两段事实：盘上仍是提交前区间 ⇒ 表步未发生；盘上是目标
     // 区间 ⇒ 表步已落，收尾该扩还是缩由这两段长度的差决定。第三种区间说明盘被外部改过，
     // 按哪一边收尾都会把作业落在错误的位置
-    let table_range = (u64::from(p.start_lba), u64::from(p.start_lba) + u64::from(p.size_lba) - 1);
+    let table_range = (u64::from(p.start_lba), u64::from(p.start_lba) + u64::from(p.size_lba) - 1); // audit-allow: len-bounded
     if resumed
         && let Some(journal) = src.record_journal()
     {
@@ -409,7 +409,7 @@ pub(crate) fn cmd_resize_msdos(a: &ResizeRequest, pref: PartSelector, src_ro: &F
                 // 已提交的作业只收尾，不再写表：本次请求若给出绝对目标，必须是记录里
                 // 那一次；另一个请求不能借着一条旧记录收尾（改主意请先释放记录）
                 if let Some(bytes) = target {
-                    let want_end = target_range.0 + bytes / ss - 1;
+                    let want_end = target_range.0 + bytes / ss - 1; // audit-allow: len-bounded
                     if (target_range.0, want_end) != target_range {
                         bail_fail(RunOutcome::refused(format!(
                             "the record belongs to a committed resize to {}..{}; re-run it with that \
@@ -455,12 +455,12 @@ pub(crate) fn cmd_resize_msdos(a: &ResizeRequest, pref: PartSelector, src_ro: &F
             }
             bail_fail(RunOutcome::refused(super::GROW_NO_FREE_SPACE_MSDOS.to_string()));
         }
-        let new_size_lba = p.size_lba as u64 + free;
+        let new_size_lba = p.size_lba as u64 + free; // audit-allow: len-bounded
         if new_size_lba > crate::table::MBR_LBA_MAX {
             bail_fail(RunOutcome::refused(format!("new size {new_size_lba} sectors exceeds MBR 32-bit LBA limit")));
         }
         record_ranges(&mut src, p, new_size_lba).unwrap_or_else(|f| bail_fail(f));
-        record_lvm_baseline(&mut src, lv_sel.as_ref(), cur_bytes, new_size_lba * ss)
+        record_lvm_baseline(&mut src, lv_sel.as_ref(), cur_bytes, new_size_lba * ss) // audit-allow: len-bounded
             .unwrap_or_else(|f| bail_fail(f));
         resize_mbr_entry(&mut src, part, new_size_lba as u32)
             .unwrap_or_else(|f| bail_fail(f));
@@ -492,7 +492,7 @@ pub(crate) fn cmd_resize_msdos(a: &ResizeRequest, pref: PartSelector, src_ro: &F
             return crate::outcome::RunOutcome::applied_with(Vec::new());
         }
         if new_size_lba > p.size_lba as u64 {
-            let want = new_size_lba - p.size_lba as u64;
+            let want = new_size_lba - p.size_lba as u64; // audit-allow: len-bounded
             if want > free_right_msdos(&mbr, p, total_sectors) {
                 bail_fail(RunOutcome::refused("not enough contiguous free space to the right (MBR resize cannot relocate blocking partitions)".to_string()));
             }
@@ -570,7 +570,7 @@ pub(crate) fn cmd_resize_msdos(a: &ResizeRequest, pref: PartSelector, src_ro: &F
                 .map_err(after_irreversible)
                 .unwrap_or_else(|f| bail_fail(f));
             movepart::fault_mbr_after_table_write();
-            mbr_shrink_finish(a, &mut src, part, new_size_lba * ss, is_block)
+            mbr_shrink_finish(a, &mut src, part, new_size_lba * ss, is_block) // audit-allow: len-bounded
         }
     }
 }

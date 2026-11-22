@@ -284,7 +284,7 @@ pub(crate) fn uuid_from_output(fstype: Option<ContentKind>, text: &str) -> Optio
         Some(ContentKind::Swap) => labelled_line(text, "UUID:")?,
         Some(ContentKind::Filesystem(FsKind::Btrfs)) => {
             let at = text.find("uuid:")?;
-            text[at + "uuid:".len()..].split_whitespace().next()?.to_string()
+            text[at + "uuid:".len()..].split_whitespace().next()?.to_string() // audit-allow: index-in-bounds
         }
         _ => return None,
     };

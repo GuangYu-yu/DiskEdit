@@ -57,7 +57,7 @@ impl EvidenceStore for HostEvidenceStore {
                 return Ok(out);
             }
             out.extend_from_slice(&buf[..n as usize]);
-            off += n as libc::off_t;
+            off += n as libc::off_t; // audit-allow: counter
         }
     }
 
@@ -262,7 +262,7 @@ fn file_owner_fd(fd: RawFd) -> io::Result<(u32, u32)> {
 fn write_all(fd: RawFd, bytes: &[u8]) -> io::Result<()> {
     let mut written = 0;
     while written < bytes.len() {
-        let n = unsafe { libc::write(fd, bytes[written..].as_ptr().cast(), bytes.len() - written) };
+        let n = unsafe { libc::write(fd, bytes[written..].as_ptr().cast(), bytes.len() - written) }; // audit-allow: len-bounded
         if n < 0 {
             let err = io::Error::last_os_error();
             if err.kind() == io::ErrorKind::Interrupted {
@@ -273,6 +273,7 @@ fn write_all(fd: RawFd, bytes: &[u8]) -> io::Result<()> {
         if n == 0 {
             return Err(io::Error::new(io::ErrorKind::WriteZero, "the evidence file accepted no bytes"));
         }
+        // audit-allow: counter
         written += n as usize;
     }
     Ok(())
