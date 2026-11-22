@@ -1,32 +1,20 @@
 //! 跨执行器接手：载体把记录停在"表已写、FS 未扩"，原生把它收完。
 //!
-//! 这是三层判据覆盖不到的唯一空档——那个中间态的盘面只有真实执行才产生：
-//!
-//! - 结构层（`src/recovery/record.rs::every_record_field_is_named_here`、
-//!   `the_audit_tail_does_not_move_a_judgement`、`tests/architecture_audit_tail.rs`）：
-//!   记录里没有随放置变动的判定输入；
-//! - 决策层（`place_on_disk_reads_the_recorded_ranges`、
-//!   `resume_place_separates_unbound_from_moved`）：盘面判定与"谁写的"无关；
-//! - 结果层（`tests/vm_diff.rs`）：两条腿最终结果一致。
-//!
-//! 三层加起来仍不回答"这份**由载体写下**的记录，换个执行器还能不能接着做"。所以本文件
-//! 只断言这一件事：原生重跑同一条命令，退出 0，并且只做了 FS 收尾。
+//! 上面那几层判据都覆盖不到这个中间态——那个盘面只有真实执行才产生。这里只断言一件事：
+//! 原生重跑同一条命令，退出 0，并且只把剩下的 FS 收尾做掉。
 //!
 //! 停点用既有注入点，不靠信号抢时间窗：`test-faults` 构建下
-//! `DISKEDIT_FAULT=after-table-write` 让宿主在"表步已写完、记录尚未推进"处 abort
-//! （`src/movepart/faults.rs` 声明，`exec::dispatch::FaultPoint` 的语义就是"记录尚未推进"）。
-//! 于是现场必然是：表已落、记录未推进、FS 未扩。
+//! `DISKEDIT_FAULT=after-table-write` 让宿主在表步写完、记录尚未推进处 abort
+//! （`src/movepart/faults.rs`）。于是现场必然是表已落、记录未推进、FS 未扩。
 //!
-//! 腿 1 为什么一定在载体上：`placement::needs_of` 取的是**整份作业**的能力并集，FS 步要求
-//! root，非 root 身份下整份作业（含表步）交给载体。这条前提不靠假设——腿 1 结束后读记录
-//! 的审计尾段，`audit: placement=Vm` 是它自证；若它说 `Native`，本用例测的就不是交接。
+//! 腿 1 落在载体上不是假设：整份作业的能力按并集取，FS 步要求 root，非 root 身份下连表步
+//! 也交给载体；腿 1 结束后记录里 `audit: placement=Vm` 自证这一点。
 //!
-//! **目标是镜像文件，不是块设备**，这一条是承载判据的：记录只由宿主写，两条腿必须共享
-//! 同一个记录根，而镜像记录的根是每用户根、无条件认 `DISKEDIT_STATE_DIR`
-//! （`dev::identity::image_state_root`）——非 root 的载体腿与 root 的原生腿因此指向同一处。
-//! 块设备记录的根是 `dev::host_repo::host_state_root`，它在 `euid != 0` 时忽略这个变量，
-//! 两条腿会各自落在一个根里，原生腿找不到载体写下的记录。块设备目标共用同一份记录与
-//! 判定代码，但本用例不覆盖它：非 root 写不了块设备，root 又不会进载体，那个现场造不出来。
+//! 目标是镜像文件：记录只由宿主写，两条腿要认出同一份记录，就得落在同一个记录根。镜像
+//! 记录的根认 `DISKEDIT_STATE_DIR`（`dev::identity::image_state_root`），非 root 与 root
+//! 都指向同一处；块设备记录的根（`dev::host_repo::host_state_root`）在非 root 时忽略
+//! 这个变量，两条腿会分家。块设备共用同一份记录与判定代码，但造不出这个现场：非 root
+//! 写不了块设备，root 又不会进载体。
 //!
 //! 前置：QEMU、真实 bundle、非 root 身份、免密 `sudo`，以及 `--features test-faults` 构建
 //! （否则 `DISKEDIT_FAULT` 是空存根，腿 1 会跑完而不是停住）。缺一即跳过；
@@ -174,7 +162,13 @@ fn a_carrier_interruption_is_finished_by_the_native_executor() {
         "the filesystem already grew, so the fault point landed past the FS step"
     );
 
-    // 腿 2：同一份镜像、同一条命令，root 身份 ⇒ 原生。整轮不得出现载体
+    // 腿 2：同一份镜像、同一条命令，root 身份 ⇒ 原生。整轮不得出现载体。
+    // 记录目录归写下它的 euid，root 要接着写就得先接手；记录文件仍是目标属主（镜像属主
+    // 是 tester），所以只换目录，别用 `chown -R`——文件易主会被归属检查拒掉
+    let state_path = state.to_str().expect("utf-8 state path");
+    let (chown_code, _, chown_err) =
+        common::sudo(&["find", state_path, "-type", "d", "-exec", "chown", "0:0", "{}", "+"]);
+    assert_eq!(chown_code, 0, "cannot hand the record directories over to root: {chown_err}");
     let (out, err) = logs(&canvas.dir, "leg2");
     let leg2 = common::root_command(&state, &arguments)
         .stdout(Stdio::from(out))
@@ -201,7 +195,14 @@ fn a_carrier_interruption_is_finished_by_the_native_executor() {
         canvas.grown_part1_bytes()
     );
 
-    // 成功收尾会删记录：还留着记录说明收尾没走完
+    // 成功收尾会删记录：还留着记录说明收尾没走完。目录刚交给了 root，非 root 的
+    // `inspect` 打不开，先交还
+    // SAFETY: geteuid / getegid 无参数、只读
+    let (uid, gid) = unsafe { (libc::geteuid(), libc::getegid()) };
+    let owner = format!("{uid}:{gid}");
+    let (code, _, chown_err) =
+        common::sudo(&["find", state_path, "-type", "d", "-exec", "chown", &owner, "{}", "+"]);
+    assert_eq!(code, 0, "cannot hand the record directories back: {chown_err}");
     let (code, out, inspect_err) = common::run(&state, &["inspect", path]);
     assert_eq!(code, 0, "inspect must succeed after a finished job: {inspect_err}");
     assert!(

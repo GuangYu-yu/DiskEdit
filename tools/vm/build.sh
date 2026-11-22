@@ -76,10 +76,10 @@ mkdir -p "$guest/bin" "$guest/dev" "$guest/proc" "$guest/sys" "$guest/tmp"
 install -m 0755 "$here/init" "$guest/init"
 install -m 0755 "$BIN" "$guest/bin/diskedit"
 
-# /init 是一个 shell 脚本，它用到的外部命令只有 `mount` 与 `cat`（`echo`/`exec` 是 shell 内建）。
-# `/bin/sh` 与 `/bin/cat` 因此是基础设施，不属于 `manifest.json` 的 `tools`（那张表只列
-# 文件系统工具，由工具注册表守卫），但仍要进 initramfs，否则 guest 起不来
-for infra in sh cat; do
+# /init 是一个 shell 脚本，它用到的外部命令只有 `mount`、`cat` 与 `stty`（`echo`/`exec`
+# 是 shell 内建），这三个因此是基础设施，不列进 `manifest.json` 的 `tools`（那张表只列
+# 文件系统工具，由工具注册表守卫）；但仍要进 initramfs，否则 guest 起不来
+for infra in sh cat stty; do
   path=$(command -v "$infra" || true)
   [ -n "$path" ] || { echo "missing initramfs infrastructure command: $infra" >&2; exit 2; }
   install -m 0755 "$path" "$guest/bin/$infra"

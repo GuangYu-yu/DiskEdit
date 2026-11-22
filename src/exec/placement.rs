@@ -46,13 +46,20 @@ impl Decision {
 }
 
 /// 决定放置。`Err` 只在两种情况下出现：计划本身要求做不到的事（换宿主也做不到），
-/// 或宿主能力不足且没有可用的载体 bundle
+/// 或宿主能力不足且没有可用的载体 bundle。
+///
+/// `extra` 是同一条命令里本次计划之后还要执行的需求（搬移之后的扩容收尾就是这种）。
+/// 只看当前这份计划，同一条命令会在步骤之间换执行器：搬移腿判成原生，扩容腿才交给载体
 pub(crate) fn decide(
     src: &WriteSource,
     steps: &[PreparedStep<'_>],
     sector_size: u64,
+    extra: &[Needs],
 ) -> Result<Decision, RunOutcome> {
-    let needs = needs_of(src, steps, sector_size)?;
+    let mut needs = needs_of(src, steps, sector_size)?;
+    for other in extra {
+        needs.merge(other.clone());
+    }
     match needs.require_host("run this job") {
         Ok(()) => Ok(Decision { placement: Placement::Native, bundle: None, needs }),
         Err(gap) => match Bundle::discover()? {
@@ -67,15 +74,20 @@ pub(crate) fn decide(
 fn admit(needs: &Needs, what: &str) -> Result<(), RunOutcome> {
     match needs.require_host(what) {
         Ok(()) => Ok(()),
-        Err(_) if super::qemu::configured() => Ok(()),
+        Err(_) if super::qemu::carrier_possible() => Ok(()),
         Err(gap) => Err(RunOutcome::unsupported(recipe(&gap))),
     }
 }
 
-/// 扩容预检。命令层在首次写盘前确认"宿主能做，或有载体接走"
-pub(crate) fn require_grow(g: &fsops::Growable, is_block: bool) -> Result<(), RunOutcome> {
+/// 扩容预检。命令层在首次写盘前确认"宿主能做，或有载体接走"。返回这份需求，供
+/// 同一条命令里更早的那份计划做整体放置判定（见 [`decide`] 的 `extra`）
+pub(crate) fn require_grow(
+    g: &fsops::Growable,
+    is_block: bool,
+) -> Result<Needs, RunOutcome> {
     let needs = fsops::grow_step_needs(g, is_block).map_err(RunOutcome::from)?;
-    admit(&needs, "grow the filesystem")
+    admit(&needs, "grow the filesystem")?;
+    Ok(needs)
 }
 
 /// 已知 FS 类型的扩容预检
@@ -152,8 +164,21 @@ fn needs_of(
     Ok(needs)
 }
 
-/// 宿主能力不足且没有 bundle 时的退出 6 文案：先如实说缺口，再给出两条出路
+/// 宿主能力不足且没有 bundle 时的退出 6 文案：先如实说缺口，再给出路。出路随本平台
+/// 能不能交棒而变——没有这条路径的平台不该被劝去配一个自己用不了的 bundle
 fn recipe(gap: &fsops::FsError) -> String {
+    recipe_text(gap, super::qemu::platform_can_carry())
+}
+
+fn recipe_text(gap: &fsops::FsError, can_carry: bool) -> String {
+    if !can_carry {
+        return format!(
+            "this host cannot run the filesystem steps of the job: {gap}\n\
+             this platform cannot hand a target to a VM carrier — there is no file-descriptor \
+             hand-off and no /dev/fdset here. Run the job on a Linux host: as root it stays native, \
+             and a non-root Linux host can use a carrier bundle"
+        );
+    }
     format!(
         "this host cannot run the filesystem steps of the job: {gap}\n\
          install the missing tools and re-run, or point {env} at a VM carrier bundle \
@@ -161,4 +186,21 @@ fn recipe(gap: &fsops::FsError) -> String {
          executable's version and architecture)",
         env = super::qemu::BUNDLE_ENV,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 没有交棒路径的平台，拒绝文案里不能出现 bundle 这个名字：它只会把人引向一件
+    /// 在这台机器上永远做不到的事
+    #[test]
+    fn a_platform_without_hand_off_is_not_pointed_at_a_bundle() {
+        let gap = fsops::FsError::platform("no filesystem tool runs here");
+        let text = recipe_text(&gap, false);
+        assert!(!text.contains(super::super::qemu::BUNDLE_ENV), "{text}");
+        assert!(text.contains("cannot hand a target"), "{text}");
+        let text = recipe_text(&gap, true);
+        assert!(text.contains(super::super::qemu::BUNDLE_ENV), "{text}");
+    }
 }

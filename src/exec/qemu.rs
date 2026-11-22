@@ -5,9 +5,9 @@
 //! 任何不符都在启动之前拒绝——宿主的写入记录与目标几何不能被一个来路不明的
 //! guest 接走。
 //!
-//! 启动器把目标句柄按 fd 交给 QEMU（`-add-fd` + `/dev/fdset/`），缓存固定为
-//! `cache=none`，串口走 stdio；guest 的协议帧因此直接落在宿主会话的管道上。
-//! QEMU 的退出码只说明虚拟机进程怎么结束的，步骤是否落盘由协议的 `result`
+//! 启动器把目标句柄按 fd 交给 QEMU（`-add-fd` 加 `/dev/fdset/`，经 `-blockdev` 接盘），
+//! 缓存固定为 `cache.direct=on`，串口走 stdio；guest 的协议帧因此直接落在宿主会话的
+//! 管道上。QEMU 的退出码只说明虚拟机进程怎么结束的，步骤是否落盘由协议的 `result`
 //! 与宿主探测回答。
 
 #[cfg(target_os = "linux")]
@@ -31,8 +31,19 @@ use crate::outcome::RunOutcome;
 pub(crate) const BUNDLE_ENV: &str = "DISKEDIT_VM_BUNDLE";
 
 /// 是否配了载体目录。只看变量是否设置；目录内容由 [`Bundle::discover`] 在写盘前校验
-pub(crate) fn configured() -> bool {
+fn configured() -> bool {
     std::env::var_os(BUNDLE_ENV).is_some()
+}
+
+/// 本平台能不能把目标交给载体。交棒走 fd 与 `/dev/fdset`，只有 Linux 有这条路径；
+/// 其余平台上 [`Bundle::discover`] 恒返回 `None`，配了 bundle 也接不走作业
+pub(crate) fn platform_can_carry() -> bool {
+    cfg!(target_os = "linux")
+}
+
+/// 这次运行有没有可能落到载体：本平台能交棒，且配了 bundle。准入据此决定"先别拒绝"
+pub(crate) fn carrier_possible() -> bool {
+    platform_can_carry() && configured()
 }
 
 /// 清单元数据格式的版本
@@ -228,6 +239,44 @@ fn qemu_program(arch: &str) -> Option<&'static str> {
 #[cfg(target_os = "linux")]
 const VIRTIO_SECTOR_SIZES: [u64; 2] = [crate::domain::SectorSize::MIN_BYTES, 4096];
 
+/// 载体能拿到的硬件加速。启动前问一次，机器类型、CPU 型号与提示都跟着它走：
+/// 不让 QEMU 自己回退，否则它会安静地落到 TCG，慢十倍也没有人知道
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Acceleration {
+    Kvm,
+    Tcg,
+}
+
+#[cfg(target_os = "linux")]
+impl Acceleration {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Kvm => "kvm",
+            Self::Tcg => "tcg",
+        }
+    }
+
+    /// guest 看到的 CPU 型号：有 KVM 就给宿主型号，否则退到 TCG 支持的上限型号。
+    /// 不给这一项时 guest 只看到 QEMU 的缺省型号
+    fn cpu_model(self) -> &'static str {
+        match self {
+            Self::Kvm => "host",
+            Self::Tcg => "max",
+        }
+    }
+}
+
+/// 能否用 KVM：`/dev/kvm` 存在且当前身份打得开才算。打得开与否就是同一件事的两种
+/// 结果，不靠 QEMU 事后回答
+#[cfg(target_os = "linux")]
+fn acceleration() -> Acceleration {
+    match std::fs::OpenOptions::new().read(true).write(true).open("/dev/kvm") {
+        Ok(_) => Acceleration::Kvm,
+        Err(_) => Acceleration::Tcg,
+    }
+}
+
 #[cfg(target_os = "linux")]
 pub(crate) fn command(
     bundle: &Bundle,
@@ -253,8 +302,16 @@ pub(crate) fn command(
         ))
     })?;
     let fd = src.raw_fd();
+    let accel = acceleration();
+    if accel == Acceleration::Tcg {
+        eprintln!(
+            "note: /dev/kvm is not usable here — the carrier runs under TCG emulation, which is many \
+             times slower than running the same job natively; give this process access to /dev/kvm, or \
+             run the command as root so the job stays native"
+        );
+    }
     let mut command = std::process::Command::new(qemu);
-    command.args(arguments(bundle, src.sector_size, fd, token));
+    command.args(arguments(bundle, src.sector_size, fd, token, accel));
     // SAFETY: pre_exec 只做两个不分配内存的系统调用；失败以 errno 返回，
     // 子进程在 exec 之前退出，命令执行不会继续
     unsafe {
@@ -274,9 +331,15 @@ pub(crate) fn command(
 }
 
 /// QEMU 的命令行。设备、总线与退出装置随架构取：x86 用 q35 与 isa-debug-exit，
-/// aarch64 用 virt 与 PSCI 关机
+/// aarch64 用 virt 与 PSCI 关机；加速器与 CPU 型号由调用方判定后传进来
 #[cfg(target_os = "linux")]
-fn arguments(bundle: &Bundle, sector_size: u64, fd: i32, token: &str) -> Vec<String> {
+fn arguments(
+    bundle: &Bundle,
+    sector_size: u64,
+    fd: i32,
+    token: &str,
+    accel: Acceleration,
+) -> Vec<String> {
     let mut args: Vec<String> = vec![
         "-nodefaults".into(),
         "-no-user-config".into(),
@@ -293,8 +356,13 @@ fn arguments(bundle: &Bundle, sector_size: u64, fd: i32, token: &str) -> Vec<Str
         "-no-reboot".into(),
         "-add-fd".into(),
         format!("fd={fd},set=1"),
-        "-drive".into(),
-        "file=/dev/fdset/1,format=raw,if=none,id=target,cache=none,aio=threads".into(),
+        // 不用 `-drive`：它交棒 fdset 时走 `monitor_fdset_dup_fd_add`，要求 fd 已带
+        // O_DIRECT，镜像目标上这一步 EPERM、guest 根本起不来。`-blockdev` 走块层自己的
+        // 打开路径，同一个 fd 可用；`cache.direct=on` 与 `-drive` 的 `cache=none` 等价
+        "-blockdev".into(),
+        "driver=file,filename=/dev/fdset/1,node-name=target-file,cache.direct=on,aio=threads".into(),
+        "-blockdev".into(),
+        "driver=raw,file=target-file,node-name=target".into(),
         "-device".into(),
         format!(
             "virtio-blk-pci,drive=target,logical_block_size={sector_size},physical_block_size={sector_size}"
@@ -316,16 +384,20 @@ fn arguments(bundle: &Bundle, sector_size: u64, fd: i32, token: &str) -> Vec<Str
         format!("console=ttyS0,115200 quiet loglevel=3 diskedit.token={token}"),
     ];
     match bundle.arch.as_str() {
-        "aarch64" => args.extend(["-machine".into(), "virt,accel=kvm:tcg".into()]),
+        "aarch64" => args.extend([
+            "-machine".into(),
+            format!("virt,accel={}", accel.as_str()),
+        ]),
         // isa-debug-exit 是 x86 上唯一能带出"guest 主动结束"退出码的装置；
         // guest 用它区分正常关机与启动失败
         _ => args.extend([
             "-machine".into(),
-            "q35,accel=kvm:tcg".into(),
+            format!("q35,accel={}", accel.as_str()),
             "-device".into(),
             "isa-debug-exit,iobase=0xf4,iosize=0x04".into(),
         ]),
     }
+    args.extend(["-cpu".into(), accel.cpu_model().into()]);
     args
 }
 
@@ -339,24 +411,42 @@ fn which(program: &str) -> Option<PathBuf> {
 mod tests {
     use super::*;
 
-    /// bundle 的启动参数：缓存钉死、fd 交棒、退出装置齐备
-    #[test]
-    fn no_unsafe_cache_and_exit_device() {
-        let bundle = Bundle {
+    fn bundle() -> Bundle {
+        Bundle {
             kernel: PathBuf::from("/tmp/bundle/kernel"),
             initramfs: PathBuf::from("/tmp/bundle/initramfs"),
             arch: "x86_64".into(),
             worker_digest: None,
-        };
-        let args = arguments(&bundle, 512, 3, "token");
+        }
+    }
+
+    /// bundle 的启动参数：缓存钉死、fd 交棒、退出装置齐备
+    #[test]
+    fn no_unsafe_cache_and_exit_device() {
+        let args = arguments(&bundle(), 512, 3, "token", Acceleration::Kvm);
         let joined = args.join(" ");
-        assert!(joined.contains("cache=none"));
+        assert!(joined.contains("cache.direct=on"));
         assert!(!joined.contains("cache=unsafe"));
         assert!(joined.contains("isa-debug-exit"));
-        assert!(joined.contains("file=/dev/fdset/1"));
+        assert!(joined.contains("filename=/dev/fdset/1"));
         assert!(joined.contains("fd=3,set=1"));
         assert!(joined.contains("virtio-rng-pci"));
         assert!(joined.contains("diskedit.token=token"));
+    }
+
+    /// 加速器与 CPU 型号成对出现，且不留 QEMU 自己的回退通道：
+    /// `-cpu host` 只在 KVM 下成立，TCG 下是 `max`
+    #[test]
+    fn the_cpu_model_follows_the_detected_acceleration() {
+        let kvm = arguments(&bundle(), 512, 3, "token", Acceleration::Kvm).join(" ");
+        assert!(kvm.contains("accel=kvm"));
+        assert!(kvm.contains("-cpu host"));
+        assert!(!kvm.contains("kvm:tcg"), "the fallback chain belongs to the launcher, not to QEMU");
+
+        let tcg = arguments(&bundle(), 512, 3, "token", Acceleration::Tcg).join(" ");
+        assert!(tcg.contains("accel=tcg"));
+        assert!(tcg.contains("-cpu max"));
+        assert!(!tcg.contains("host"));
     }
 
     /// 架构不认识的 bundle 不启动

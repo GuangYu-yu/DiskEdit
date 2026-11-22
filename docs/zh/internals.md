@@ -16,7 +16,7 @@ README 只保留"它是什么、怎么用"。本文件记录行为约束：能�
 
 bundle 目录包含 `manifest.json`、`kernel` 与 `initramfs`。清单声明 `schema`、`arch`、`binary_version`，并为每件制品给出相对 `path` 与 `sha256`；可选的 `worker.sha256` 记录 worker 映像摘要供审计尾段使用。只有以下全部成立才接受：schema 是当前版本、架构与本进程一致、`binary_version` 与本可执行文件版本一致、每件制品的路径都落在 bundle 目录内、每个 SHA-256 都对得上。任何一项不符都在启动 QEMU 之前拒绝——宿主不会把目标交给身份不明的 guest。
 
-启动器把已打开的目标经文件描述符交给 QEMU（`-add-fd` 加 `/dev/fdset/`），缓存固定为 `cache=none`，以 virtio-blk 按目标的逻辑扇区大小（512 或 4096）接盘，协议走串口控制台，熵由 virtio-rng 提供。QEMU 自身的退出状态只描述虚拟机如何结束；某一步是否落盘由协议的 `result` 与宿主的探测回答，不看该状态。
+启动器把已打开的目标经文件描述符交给 QEMU（`-add-fd` 加 `/dev/fdset/`），通过 `-blockdev` 交给块层、缓存固定为 `cache.direct=on`，以 virtio-blk 按目标的逻辑扇区大小（512 或 4096）呈现，协议走串口控制台，熵由 virtio-rng 提供。QEMU 自身的退出状态只描述虚拟机如何结束；某一步是否落盘由协议的 `result` 与宿主的探测回答，不看该状态。
 
 ## 占用边界
 

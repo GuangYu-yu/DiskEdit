@@ -425,6 +425,7 @@ pub(crate) enum Decoded {
 /// [`encode_failure`] 走失败帧，两边各只有一个方向
 pub(crate) fn encode_result(run: &super::StepRun) -> Value {
     json!({
+        "v": VERSION,
         "type": "result",
         "outcome": outcome_name(run.outcome),
         "pending": run.pending.iter().map(encode_pending).collect::<Vec<_>>(),
@@ -456,6 +457,7 @@ pub(crate) fn decode_result(value: &Value) -> Option<Decoded> {
 /// 失败结果：`RunOutcome` 的结论、类别与成因按线格式表达
 pub(crate) fn encode_failure(error: &RunOutcome) -> Value {
     json!({
+        "v": VERSION,
         "type": "result",
         "outcome": failure_outcome(error),
         "pending": [],
@@ -581,4 +583,24 @@ fn unhex_len(text: &str) -> Option<Vec<u8>> {
         out.push((hi * 16 + lo) as u8);
     }
     Some(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 结果帧与失败帧都必须自带版本。宿主只接受 `v` 相符的帧，缺字段的帧会被整体
+    /// 判成协议错误——guest 明明写成功了，宿主却只看到"会话断了"
+    #[test]
+    fn every_result_frame_declares_the_protocol_version() {
+        let run = super::super::StepRun::decoded(
+            super::super::StepOutcome::Applied,
+            Vec::new(),
+            None,
+            None,
+        );
+        assert_eq!(encode_result(&run).get("v").and_then(Value::as_u64), Some(VERSION));
+        let failure = RunOutcome::refused("no");
+        assert_eq!(encode_failure(&failure).get("v").and_then(Value::as_u64), Some(VERSION));
+    }
 }

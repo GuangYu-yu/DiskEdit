@@ -1,10 +1,9 @@
 #!/bin/sh
-# Carrier init.
+# 载体 init。
 #
-# The host passes the session token on the kernel command line; the worker
-# refuses to start without it on a terminal, so this script exports it and
-# replaces itself with the worker. stdout/stderr are the serial console, which
-# is also the protocol transport.
+# 宿主把会话令牌放在内核命令行上；worker 在终端上拒绝启动，所以这里读出令牌、置位
+# 放行标志，然后把自身替换成 worker。stdout/stderr 就是串口控制台，也是协议传输的
+# 那条通道。
 
 set -eu
 
@@ -24,5 +23,16 @@ if [ -z "$token" ]; then
     exit 3
 fi
 
+# 串口控制台默认带回显与行缓冲：宿主的协议帧会被内核原样回显，宿主把自己发出去的
+# hello 当成 guest 的应答。协议端点先调成 raw
+stty -F /dev/ttyS0 raw -echo
+
+# 宣告串口就绪。宿主等到这一帧才发 hello——UART 接收 FIFO 只有 16 字节，guest 串口
+# 驱动起来之前写进去的字节会被截断
+printf '{"type":"boot","v":3}\n'
+
 export DISKEDIT_WORKER_TOKEN="$token"
+# 标记本次 worker 由 init 拉起：它的 stdin 就是串口控制台（isatty 为真），而"不从终端
+# 读令牌"那条守卫针对的是在宿主上误敲 `__worker` 的人
+export DISKEDIT_WORKER_FROM_INIT=1
 exec /bin/diskedit __worker
