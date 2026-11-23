@@ -70,6 +70,11 @@ NEWS=$($B info "$T" | grep -o '"num":1,"first_lba":[0-9]*' | grep -o '[0-9]*$')
 HID=$(od -An -tu4 -j $((NEWS*512+28)) -N4 "$T" | tr -d ' ')
 echo "after: first_lba=$NEWS hidden=$HID"
 [ "$HID" = "$NEWS" ] && echo "NTFS HIDDENSECTORS OK" || { echo "NTFS HIDDENSECTORS WRONG"; rc=1; }
+# 备份引导扇区在卷尾（设备最后一个扇区）：其 HiddenSectors 必须同步修正，
+# 否则 ntfsfix 主备逐字节比对会判 BAD
+TOT=$(od -An -tu8 -j $((NEWS * 512 + 40)) -N8 "$T" | tr -d ' ')
+BKHID=$(od -An -tu4 -j $(((NEWS + TOT) * 512 + 28)) -N4 "$T" | tr -d ' ')
+[ "$BKHID" = "$NEWS" ] && echo "NTFS BACKUP-BOOT OK" || { echo "NTFS BACKUP-BOOT WRONG (backup=$BKHID, want $NEWS)"; rc=1; }
 LD=$(lo_attach "$T")
 mount -t ntfs-3g "${LD}p1" "$TEST_MNT" 2>/dev/null || mount_at "${LD}p1" "$TEST_MNT"
 if mountpoint -q "$TEST_MNT"; then

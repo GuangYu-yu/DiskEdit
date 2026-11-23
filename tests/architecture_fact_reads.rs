@@ -844,6 +844,7 @@ const RESULT_CLASSES: &[ResultClass] = &[
         reason: "接收者是 `Result`：默认值不参与放行判定——时间回退取 0 只作熵/时间戳种子；整数溢出回落 MAX 随后由相等比对拒绝。",
         sites: &[
             ("support.rs", ".unwrap_or(0)", 1, 1, DIRECTION_DIRECTION_SAFE),
+            ("cmd/layout.rs", ".unwrap_or(0);", 1, 1, DIRECTION_FAIL_CLOSED),
             ("table/create.rs", "let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);", 1, 1, DIRECTION_DIRECTION_SAFE),
             ("table/step.rs", "let given = u32::try_from(entries.len()).unwrap_or(u32::MAX);", 1, 1, DIRECTION_FAIL_CLOSED),
         ],

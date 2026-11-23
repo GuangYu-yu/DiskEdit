@@ -213,7 +213,7 @@ pub(crate) fn execute(
     if crate::fsid::identify(src, dst_off, total).map_err(|e| RunOutcome::partial(e.to_string()))?
         == ContentKind::Filesystem(FsKind::Ntfs)
     {
-        fix_ntfs_hidden_sectors(src, step.dst_first, sector_size, step.part, &mut |m| println!("{m}"))
+        fix_ntfs_hidden_sectors(src, step.dst_first, sector_size, step.sectors, step.part, &mut |m| println!("{m}"))
             .map_err(|e| RunOutcome::partial(e.to_string()))?;
     }
     Ok(())
