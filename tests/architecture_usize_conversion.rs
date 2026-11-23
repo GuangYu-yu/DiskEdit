@@ -91,7 +91,8 @@ const WHITELIST: &[Allow] = &[
     Allow { file: "execution/copy.rs", line: "(pos / chunk_bytes + 1) as usize,", occurrence: 3, count: 3, category: "display", reason: "当前块号只用于错误文案序号" },
 
     // NTFS 引导扇区探测缓冲；记录游标 take
-    Allow { file: "execution/mod.rs", line: "let mut probe = vec![0u8; ss as usize];", occurrence: 1, count: 1, category: "bounded-sector", reason: "ss 是命令层校验过的逻辑扇区大小，取值 512..=65536" },
+    Allow { file: "execution/mod.rs", line: "let mut probe = vec![0u8; ss as usize];", occurrence: 1, count: 2, category: "bounded-sector", reason: "ss 是命令层校验过的逻辑扇区大小，取值 512..=65536" },
+    Allow { file: "execution/mod.rs", line: "let mut probe = vec![0u8; ss as usize];", occurrence: 2, count: 2, category: "bounded-sector", reason: "ss 是命令层校验过的逻辑扇区大小，取值 512..=65536" },
     Allow { file: "execution/mod.rs", line: "for count in counts.take(reloc.entry_index as usize) {", occurrence: 1, count: 1, category: "slot-index", reason: "已提交条目计数 take 游标，entry_index 经计划校验 ≤ 条目数" },
 
     // 清零写入长度被固定零缓冲夹紧

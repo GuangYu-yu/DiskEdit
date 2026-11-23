@@ -321,6 +321,48 @@ fn ntfs_hidden_field(src: &WriteSource, new_first_lba: u64, ss: u64) -> io::Resu
     Ok((off, probe))
 }
 
+/// 定位备份引导扇区的 HiddenSectors 并读出它所在的扇区。NTFS 在卷的**最后一个
+/// 设备扇区**留一份引导扇区副本，HiddenSectors 与主扇区同义；只修主扇区会让
+/// `ntfsfix -n`（逐字节比对主备）判定备份损坏。位置由分区尾扇区决定，不读 BPB：
+/// 分区长度在搬移中不变，ntfsfix 与 Windows 都按分区/设备长度定位这一备份
+fn ntfs_backup_field(
+    src: &WriteSource,
+    new_first_lba: u64,
+    ss: u64,
+    part_sectors: u64,
+) -> io::Result<(u64, Vec<u8>)> {
+    let last_lba = new_first_lba
+        .checked_add(part_sectors)
+        .and_then(|n| n.checked_sub(1))
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("NTFS backup boot sector LBA overflows ({new_first_lba} + {part_sectors} - 1)"),
+            )
+        })?;
+    let sector_off = last_lba.checked_mul(ss).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("NTFS backup boot sector offset overflows ({last_lba} × {ss})"),
+        )
+    })?;
+    let off = sector_off.checked_add(0x1C).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("NTFS backup HiddenSectors offset overflows ({last_lba} × {ss} + 0x1C)"),
+        )
+    })?;
+    let mut probe = vec![0u8; ss as usize];
+    src.read_at(sector_off, &mut probe)?;
+    if probe.len() < 11 || probe[3..11] != *b"NTFS    " {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("the backup boot sector at LBA {last_lba} is not an NTFS boot sector; refusing to write HiddenSectors"),
+        ));
+    }
+    Ok((off, probe))
+}
+
 fn hidden_sectors_at(probe: &[u8], new_first_lba: u64) -> io::Result<&[u8]> {
     probe.get(0x1C..0x20).ok_or_else(|| {
         io::Error::new(
@@ -331,11 +373,18 @@ fn hidden_sectors_at(probe: &[u8], new_first_lba: u64) -> io::Result<&[u8]> {
 }
 
 /// 盘上的 HiddenSectors 是否已是 `new_first_lba` 对应的值。起点未变的续跑据此决定
-/// 跳过修正：只有读出来确实相等才可跳过，不等说明字段没跟上分区（例如分区被别的
-/// 工具搬过），仍要照修
-pub(crate) fn ntfs_hidden_sectors_match(src: &WriteSource, new_first_lba: u64, ss: u64) -> io::Result<bool> {
+/// 跳过修正：只有主、备两份引导扇区都读出来确实相等才可跳过，任一处不等说明字段
+/// 没跟上分区（例如分区被别的工具搬过，或只修了主扇区），仍要照修
+pub(crate) fn ntfs_hidden_sectors_match(
+    src: &WriteSource,
+    new_first_lba: u64,
+    ss: u64,
+    part_sectors: u64,
+) -> io::Result<bool> {
     let (_, probe) = ntfs_hidden_field(src, new_first_lba, ss)?;
-    hidden_sector_matches(&probe, new_first_lba)
+    let (_, backup) = ntfs_backup_field(src, new_first_lba, ss, part_sectors)?;
+    Ok(hidden_sector_matches(&probe, new_first_lba)?
+        && hidden_sector_matches(&backup, new_first_lba)?)
 }
 
 /// 纯判定：给定引导扇区内容，盘上的 HiddenSectors 是否已等于期望值
@@ -354,11 +403,14 @@ pub(crate) fn fix_ntfs_hidden_sectors(
     src: &mut WriteSource,
     new_first_lba: u64,
     ss: u64,
+    part_sectors: u64,
     part: u32,
     log: &mut dyn FnMut(&str),
 ) -> io::Result<()> {
     let (val, warn) = ntfs_hidden_value(new_first_lba);
     let (off, probe) = ntfs_hidden_field(src, new_first_lba, ss)?;
+    // 备份扇区先定位再写：任一份不是 NTFS 引导扇区都在落盘前拒绝，不留半修现场
+    let (backup_off, backup_probe) = ntfs_backup_field(src, new_first_lba, ss, part_sectors)?;
     // 写前比对与写入都在写入口内完成：比较区间就是这 4 个字节，与探测读到的原文一致
     // 才写；不一致说明扇区在这中间变了，拒绝覆盖
     let current = hidden_sectors_at(&probe, new_first_lba)?;
@@ -366,6 +418,15 @@ pub(crate) fn fix_ntfs_hidden_sectors(
         off,
         &val.to_le_bytes(),
         crate::dev::RegionStamp::of_bytes(off, current),
+        crate::outcome::WriteStep::Fs { part },
+    )
+    .map_err(crate::dev::WriteConflict::into_io_error)?;
+    // 备份引导扇区同步修正：ntfsfix 等工具逐字节比对主备，只改主扇区会被判损坏
+    let backup_current = hidden_sectors_at(&backup_probe, new_first_lba)?;
+    src.write_guarded(
+        backup_off,
+        &val.to_le_bytes(),
+        crate::dev::RegionStamp::of_bytes(backup_off, backup_current),
         crate::outcome::WriteStep::Fs { part },
     )
     .map_err(crate::dev::WriteConflict::into_io_error)?;
@@ -405,7 +466,7 @@ pub(crate) fn step_hidden_sectors(
     }
     crate::movepart::fault_before_hidden_fix();
     let mut emit = |m: &str| sink.note(m);
-    fix_ntfs_hidden_sectors(src, reloc.dst_first, sector_size, reloc.part, &mut emit)
+    fix_ntfs_hidden_sectors(src, reloc.dst_first, sector_size, reloc.sectors, reloc.part, &mut emit)
         .map_err(|e| RunOutcome::partial(e.to_string()))
 }
 
@@ -815,11 +876,33 @@ mod tests {
         sector
     }
 
-    /// 跳过与照修的分岔：只有盘上值确实等于期望值才跳过
+    /// 两扇区的 NTFS 卷：主引导扇区 + 卷尾的备份扇区。BPB 里写明
+    /// bytes_per_sector=512、number_of_sectors=1（卷扇区数减一，mkntfs 同此），
+    /// 备份位置由分区长度而非 BPB 决定，这里只求结构合法
+    fn boot_volume(hidden: u32) -> Vec<u8> {
+        let mut first = boot_sector(hidden);
+        first[0x0B..0x0D].copy_from_slice(&512u16.to_le_bytes());
+        first[0x28..0x30].copy_from_slice(&1u64.to_le_bytes());
+        let mut vol = first.clone();
+        vol.extend_from_slice(&first);
+        vol
+    }
+
+    /// 跳过与照修的分岔：只有主备两份都确实等于期望值才跳过
     #[test]
     fn hidden_sectors_match_decides_skip_and_fix() {
-        assert!(hidden_sector_matches(&boot_sector(2048), 2048).unwrap(), "值已正确时跳过");
-        assert!(!hidden_sector_matches(&boot_sector(0), 2048).unwrap(), "值不对时必须照修");
+        let ok = crate::support::src_from("ntfs_volume", &boot_volume(0));
+        assert!(ntfs_hidden_sectors_match(&ok, 0, 512, 2).unwrap(), "主备都已正确时跳过");
+
+        // 主扇区对、备份扇区不对：只修过主扇区的现场必须判不等，仍要照修
+        let mut half = boot_volume(0);
+        half[512 + 0x1C..512 + 0x20].copy_from_slice(&7u32.to_le_bytes());
+        let half = crate::support::src_from("ntfs_half_fixed", &half);
+        assert!(
+            !ntfs_hidden_sectors_match(&half, 0, 512, 2).unwrap(),
+            "备份扇区没跟上时必须判不等"
+        );
+
         // 期望值超过 32 位时字段按 0 记：此时盘上的 0 也算对
         assert!(hidden_sector_matches(&boot_sector(0), 1 << 32).unwrap());
     }
@@ -836,13 +919,15 @@ mod tests {
     fn a_non_ntfs_sector_is_refused_before_the_field_is_compared() {
         let mut sector = boot_sector(0);
         sector[3] = b'X';
-        let src = crate::support::src_from("ntfs_signature", &sector);
         assert!(hidden_sector_matches(&sector, 0).unwrap(), "纯判定只比四字节，签名不归它管");
-        let err = ntfs_hidden_sectors_match(&src, 0, 512).expect_err("签名不符必须拒绝");
+        let mut tampered = boot_volume(0);
+        tampered[3] = b'X';
+        let src = crate::support::src_from("ntfs_signature", &tampered);
+        let err = ntfs_hidden_sectors_match(&src, 0, 512, 2).expect_err("签名不符必须拒绝");
         assert!(err.to_string().contains("not an NTFS boot sector"), "got {err}");
 
         // 同一份现场换成正确签名：路径通，读到的是同一个字段（排除夹具写错的假通过）
-        let ok = crate::support::src_from("ntfs_signature_ok", &boot_sector(0));
-        assert!(ntfs_hidden_sectors_match(&ok, 0, 512).unwrap());
+        let ok = crate::support::src_from("ntfs_signature_ok", &boot_volume(0));
+        assert!(ntfs_hidden_sectors_match(&ok, 0, 512, 2).unwrap());
     }
 }

@@ -21,12 +21,18 @@ pub(crate) fn ntfs_hidden_sectors_fix() {
     // 写入前复核引导扇区签名：目标扇区先垫一个最小 NTFS 引导扇区
     let mut boot = vec![0u8; 512];
     boot[3..11].copy_from_slice(b"NTFS    ");
+    boot[0x0B..0x0D].copy_from_slice(&512u16.to_le_bytes());
+    boot[0x28..0x30].copy_from_slice(&1u64.to_le_bytes());
     src.write_fixture(30687 * 512, &boot).unwrap();
+    // 卷尾的备份引导扇区：搬移前与主扇区同值，HiddenSectors 仍是旧值 0
+    src.write_fixture(30688 * 512, &boot).unwrap();
     let mut log = |_: &str| {};
-    fix_ntfs_hidden_sectors(&mut src, 30687, 512, 1, &mut log).unwrap();
+    fix_ntfs_hidden_sectors(&mut src, 30687, 512, 2, 1, &mut log).unwrap();
     let mut b = [0u8; 4];
     src.read_at(30687 * 512 + 0x1C, &mut b).unwrap();
     assert_eq!(b, 30687u32.to_le_bytes());
+    src.read_at(30688 * 512 + 0x1C, &mut b).unwrap();
+    assert_eq!(b, 30687u32.to_le_bytes(), "the backup boot sector must be corrected too");
 }
 
 /// move 中断续传：模拟"chunk 0 已搬完即崩溃"——预置记录进度（transfer_cursor=1）

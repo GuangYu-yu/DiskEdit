@@ -1183,14 +1183,20 @@ fn execute_resize_part(
     }
 
     // 续跑：是否搬过以记录里的搬移前起点为准（盘上几何已是新值）。起点未变时位置与
-    // 数据都没动过，盘上的 HiddenSectors 本应已是期望值——读出来相等才跳过修正；
-    // 不等说明字段没跟上分区，仍照修
+    // 数据都没动过，盘上的 HiddenSectors 本应已是期望值——主备两份都读出来相等才跳过
+    // 修正；不等说明字段没跟上分区，仍照修
+    let part_sectors = new_end
+        .checked_sub(new_start)
+        .and_then(|n| n.checked_add(1))
+        .unwrap_or(0);
     if let Some((pre_start, _)) = committed_old
         && fstype == crate::fsid::ContentKind::Filesystem(crate::fsid::FsKind::Ntfs)
         && (pre_start != new_start
-            || !crate::execution::ntfs_hidden_sectors_match(src, new_start, ss).map_err(RunOutcome::from)?)
+            || !crate::execution::ntfs_hidden_sectors_match(src, new_start, ss, part_sectors)
+                .map_err(RunOutcome::from)?)
     {
-        crate::exec::backfill_hidden_sectors(src, new_start, ss, part, log).map_err(RunOutcome::from)?;
+        crate::exec::backfill_hidden_sectors(src, new_start, ss, part_sectors, part, log)
+            .map_err(RunOutcome::from)?;
     }
 
     // ---- 阶段 3：扩容 FS ----
@@ -1484,7 +1490,7 @@ pub(crate) fn cmd_move(a: &MoveRequest) -> crate::outcome::RunOutcome {
                 let kind = crate::fsid::identify(&src, base, bytes)
                     .unwrap_or_else(|e| bail_fail(RunOutcome::unreadable_io(e)));
                 if kind == crate::fsid::ContentKind::Filesystem(crate::fsid::FsKind::Ntfs) {
-                    crate::exec::backfill_hidden_sectors(&mut src, start, ss, part, &mut |m| println!("{m}"))
+                    crate::exec::backfill_hidden_sectors(&mut src, start, ss, len, part, &mut |m| println!("{m}"))
                         .unwrap_or_else(|e| bail_fail(RunOutcome::partial_with(e.to_string(), Vec::new())));
                 }
                 // 盘上条目已在记录目的位：表步的结果由此定案。按执行器 Table 分支的同一

@@ -156,15 +156,21 @@ fn ntfs_hidden_sectors_fixed_when_resuming_after_commit() {
     let target = format!("{img_s}:1");
     let argv = ["move", target.as_str(), "--start", "8192", "--chunk", "4", "--yes"];
 
-    // 手造 NTFS 引导扇区：OEM ID @3 供 identify 认类型，HiddenSectors(u32 LE) @0x1C 记旧起点
+    // 手造 NTFS 引导扇区：OEM ID @3 供 identify 认类型，HiddenSectors(u32 LE) @0x1C 记旧起点；
+    // BPB bytes_per_sector=512、number_of_sectors=2047（刷卡 2048 扇区，mkntfs 记卷扇区数减一）
     let boot = |hidden: u32| {
         let mut b = vec![0u8; 512];
         b[3..11].copy_from_slice(b"NTFS    ");
+        b[0x0B..0x0D].copy_from_slice(&512u16.to_le_bytes());
+        b[0x28..0x30].copy_from_slice(&2047u64.to_le_bytes());
         b[0x1C..0x20].copy_from_slice(&hidden.to_le_bytes());
         b
     };
     let mut f = std::fs::OpenOptions::new().write(true).open(&img).unwrap();
     f.seek(std::io::SeekFrom::Start(2048 * 512)).unwrap();
+    f.write_all(&boot(2048)).unwrap();
+    // 卷尾（分区最后一个扇区）的备份引导扇区，搬移前与主扇区同值
+    f.seek(std::io::SeekFrom::Start(4095 * 512)).unwrap();
     f.write_all(&boot(2048)).unwrap();
     drop(f);
 
@@ -183,6 +189,15 @@ fn ntfs_hidden_sectors_fixed_when_resuming_after_commit() {
         2048,
         "the crashed run must leave the old hidden value in place"
     );
+    // 备份引导扇区在分区尾（8192 + 2047 = 10239），也已随数据搬到新位置且仍是旧值
+    rd.seek(std::io::SeekFrom::Start(10239 * 512)).unwrap();
+    rd.read_exact(&mut buf).unwrap();
+    assert_eq!(&buf[3..11], b"NTFS    ", "the backup boot sector must have moved with the data");
+    assert_eq!(
+        u32::from_le_bytes(buf[0x1C..0x20].try_into().unwrap()),
+        2048,
+        "the backup boot sector must still carry the old hidden value before the fix"
+    );
 
     // 续跑：已提交态收尾，HiddenSectors 必须补修到新起点
     let (c, e) = run(&argv);
@@ -193,6 +208,14 @@ fn ntfs_hidden_sectors_fixed_when_resuming_after_commit() {
         u32::from_le_bytes(buf[0x1C..0x20].try_into().unwrap()),
         8192,
         "hidden sectors must be corrected to the new start on resume"
+    );
+    // 主备两份都要修：ntfsfix 逐字节比对主备，只修主扇区会被判损坏
+    rd.seek(std::io::SeekFrom::Start(10239 * 512)).unwrap();
+    rd.read_exact(&mut buf).unwrap();
+    assert_eq!(
+        u32::from_le_bytes(buf[0x1C..0x20].try_into().unwrap()),
+        8192,
+        "the backup boot sector must be corrected to the new start on resume"
     );
     assert!(!record_present(&img), "a finished transaction must be cleaned up");
 }

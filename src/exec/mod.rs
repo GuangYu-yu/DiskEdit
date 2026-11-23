@@ -248,10 +248,11 @@ pub(crate) fn backfill_hidden_sectors(
     src: &mut WriteSource,
     first_lba: u64,
     sector_size: u64,
+    part_sectors: u64,
     part: u32,
     log: &mut dyn FnMut(&str),
 ) -> std::io::Result<()> {
-    crate::execution::fix_ntfs_hidden_sectors(src, first_lba, sector_size, part, log)
+    crate::execution::fix_ntfs_hidden_sectors(src, first_lba, sector_size, part_sectors, part, log)
 }
 
 /// 执行一份计划并交出待办。放置在这里一次决定，之后整份计划只用一个执行器。
