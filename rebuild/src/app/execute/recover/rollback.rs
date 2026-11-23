@@ -11,10 +11,11 @@ use crate::app::execute::transaction;
 use crate::app::execute::{ExecError, WriteChannel};
 use crate::platform::TargetHandle;
 
-/// 成功回滚的区间数。
+/// 成功回滚的区间数与其中不可回滚的数据区步骤数。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Summary {
     pub regions: usize,
+    pub irreversible: usize,
 }
 
 /// 回滚失败；`written` 为已成功写入的区间数，用于区分"未写"与"写到一半"。
@@ -51,7 +52,10 @@ pub fn apply(target: &mut dyn TargetHandle, frames: &[Frame]) -> Result<Summary,
     channel
         .verify_written()
         .map_err(|error| Failure { written, error })?;
-    Ok(Summary { regions: written })
+    Ok(Summary {
+        regions: written,
+        irreversible: frames.iter().filter(|frame| frame.irreversible).count(),
+    })
 }
 
 /// 一条待回滚的表区原像：区间、原始字节与登记摘要。

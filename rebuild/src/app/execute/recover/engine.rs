@@ -32,8 +32,8 @@ pub enum Action {
     Nothing,
     /// 清理了已提交或已放弃的记录。
     Cleaned,
-    /// 回滚了给定数量的表区原像并清理记录。
-    RolledBack { regions: usize },
+    /// 回滚了给定数量的表区原像并清理记录；`irreversible` 为不回滚的数据区步骤数。
+    RolledBack { regions: usize, irreversible: usize },
     /// 把记录移入隔离区。
     Released { token: String },
     /// 列出了给定数量的条目。
@@ -59,9 +59,12 @@ impl Summary {
         }
     }
 
-    fn rolled_back(regions: usize) -> Self {
+    fn rolled_back(regions: usize, irreversible: usize) -> Self {
         Self {
-            action: Action::RolledBack { regions },
+            action: Action::RolledBack {
+                regions,
+                irreversible,
+            },
         }
     }
 }
@@ -143,7 +146,7 @@ fn rollback_record(
             cleanup::clear(store).map_err(|error| {
                 RecoveryFailure::Refused(format!("回滚已完成但清理记录失败：{error}"))
             })?;
-            Ok(Summary::rolled_back(rolled.regions))
+            Ok(Summary::rolled_back(rolled.regions, rolled.irreversible))
         }
     }
 }

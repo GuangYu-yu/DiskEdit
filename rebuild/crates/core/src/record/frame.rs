@@ -1,10 +1,11 @@
-//! 记录帧：序号、类型、完成标记、意图与区间原像摘要。
+//! 记录帧：序号、类型、完成标记、不可逆标记、意图与区间原像。
 //!
 //! 每帧自带 CRC，因此即使载荷尾部被截断，也能确定哪些帧已经完整落盘。
 //! 帧长度由字段自身推出：序号(4) | 类型(1) | 标记(1) | 区间数(2)
 //! | 区间(偏移 8、长度 8、摘要 16、原像长度 4、原像 × n) | 意图长度(2) | 意图 | CRC(4)。
 //!
-//! 原像只在表区步骤出现，用于回滚；数据区步骤的原像长度为零，回滚时不动数据区。
+//! 原像只在表区步骤出现，用于回滚；数据区步骤的原像长度为零、标记为不可逆，
+//! 回滚时不动数据区、也不回收旧位置。
 
 use crate::table::crc32;
 
@@ -16,6 +17,24 @@ pub const PREIMAGE_HEADER_BYTES: usize = 8 + 8 + PREIMAGE_DIGEST_BYTES + 4;
 const FRAME_PREFIX_BYTES: usize = 8;
 /// 帧 CRC 字节数。
 const FRAME_CRC_BYTES: usize = 4;
+/// 标记位：该步的写入已全部落盘。
+const FLAG_COMPLETED: u8 = 0b0000_0001;
+/// 标记位：该步写入了不可回滚的数据区。
+const FLAG_IRREVERSIBLE: u8 = 0b0000_0010;
+/// 已定义的标记位集合。
+const FLAG_MASK: u8 = FLAG_COMPLETED | FLAG_IRREVERSIBLE;
+
+/// 计算一帧的标记字节。
+fn flags_of(frame: &Frame) -> u8 {
+    let mut flags = 0;
+    if frame.completed {
+        flags |= FLAG_COMPLETED;
+    }
+    if frame.irreversible {
+        flags |= FLAG_IRREVERSIBLE;
+    }
+    flags
+}
 
 /// 帧类型。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -77,6 +96,8 @@ pub struct Frame {
     pub kind: FrameKind,
     /// 该步的写入已全部落盘。
     pub completed: bool,
+    /// 该步写入了不可回滚的数据区；回滚只覆盖表区。
+    pub irreversible: bool,
     pub intent: Vec<u8>,
     pub regions: Vec<Preimage>,
 }
@@ -90,7 +111,7 @@ impl Frame {
         let start = out.len();
         out.extend_from_slice(&self.seq.to_le_bytes());
         out.push(self.kind.as_byte());
-        out.push(u8::from(self.completed));
+        out.push(flags_of(self));
         out.extend_from_slice(&region_count.to_le_bytes());
         for region in &self.regions {
             if !region.data.is_empty() && region.data.len() as u64 != region.len {
@@ -119,7 +140,7 @@ impl Frame {
         let seq = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
         let kind = FrameKind::from_byte(bytes[4]).ok_or(FrameError::UnknownKind(bytes[4]))?;
         let flags = bytes[5];
-        if flags & !1 != 0 {
+        if flags & !FLAG_MASK != 0 {
             return Err(FrameError::ReservedFlags(flags));
         }
         let region_count = u16::from_le_bytes([bytes[6], bytes[7]]) as usize;
@@ -179,7 +200,8 @@ impl Frame {
             Self {
                 seq,
                 kind,
-                completed: flags & 1 == 1,
+                completed: flags & FLAG_COMPLETED != 0,
+                irreversible: flags & FLAG_IRREVERSIBLE != 0,
                 intent,
                 regions,
             },
@@ -224,6 +246,7 @@ mod tests {
             seq,
             kind,
             completed,
+            irreversible: false,
             intent: b"resize ext4".to_vec(),
             regions: vec![
                 Preimage {
@@ -308,8 +331,19 @@ mod tests {
         assert_eq!(Frame::parse(&kind), Err(FrameError::UnknownKind(9)));
 
         let mut flags = bytes;
-        flags[5] = 0b10;
-        assert_eq!(Frame::parse(&flags), Err(FrameError::ReservedFlags(2)));
+        flags[5] = 0b100;
+        assert_eq!(Frame::parse(&flags), Err(FrameError::ReservedFlags(4)));
+    }
+
+    #[test]
+    fn irreversible_flag_survives_the_round_trip() {
+        let mut original = frame(0, FrameKind::Preimage, false);
+        original.irreversible = true;
+        let mut bytes = Vec::new();
+        original.encode_into(&mut bytes).expect("编码应成立");
+        let (parsed, _) = Frame::parse(&bytes).expect("解析应成立");
+        assert!(parsed.irreversible);
+        assert!(!parsed.completed);
     }
 
     #[test]

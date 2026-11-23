@@ -209,6 +209,7 @@ mod tests {
                 FrameKind::Preimage
             },
             completed: seq < 2,
+            irreversible: false,
             intent: b"step".to_vec(),
             regions: vec![Preimage {
                 offset: 1024,

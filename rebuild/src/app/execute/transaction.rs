@@ -294,6 +294,7 @@ fn execute_target_step(
         seq: sequence,
         kind: FrameKind::Preimage,
         completed: false,
+        irreversible: !steps::writes_table(&step.kind),
         intent: intent_of(&step.kind).as_bytes().to_vec(),
         regions: preimages,
     });
@@ -335,6 +336,7 @@ fn execute_target_step(
         seq: frames.len() as u32,
         kind: FrameKind::Progress,
         completed: true,
+        irreversible: false,
         intent: intent_of(&step.kind).as_bytes().to_vec(),
         regions: Vec::new(),
     });
@@ -353,6 +355,7 @@ fn finish_terminal(
         seq: frames.len() as u32,
         kind: FrameKind::Committed,
         completed: true,
+        irreversible: false,
         intent: b"commit".to_vec(),
         regions: Vec::new(),
     });

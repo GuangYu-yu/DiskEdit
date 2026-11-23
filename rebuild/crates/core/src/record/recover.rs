@@ -142,6 +142,7 @@ mod tests {
             seq,
             kind,
             completed,
+            irreversible: false,
             intent: b"step".to_vec(),
             regions: vec![Preimage {
                 offset: 2048,
