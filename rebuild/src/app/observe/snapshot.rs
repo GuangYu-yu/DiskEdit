@@ -260,7 +260,7 @@ mod tests {
     }
 
     fn request() -> Request {
-        Request::new("/tmp/image")
+        Request::new("/tmp/image", super::super::Command::Inspect)
     }
 
     #[test]

@@ -14,29 +14,95 @@ pub mod tools;
 use std::path::{Path, PathBuf};
 
 use diskedit_core::evidence::Generation;
+use diskedit_core::fs::FsKind;
+use diskedit_core::table::Guid;
 
 use crate::platform::TargetHandle;
 
 pub use snapshot::{Snapshot, observe};
 
-/// 一次观察的输入：已解析的用户意图，不含任何事实。
+/// 分区表格式。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TableFormat {
+    Gpt,
+    Mbr,
+}
+
+/// 已解析的用户意图。
 ///
-/// 解析层只填充目标路径；打开、识别与判定都发生在后续层。
+/// 只承载命令与参数，不含任何目标事实；打开、识别与判定都发生在后续层。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Request {
     target: PathBuf,
+    command: Command,
 }
 
 impl Request {
-    pub fn new(target: impl Into<PathBuf>) -> Self {
+    pub fn new(target: impl Into<PathBuf>, command: Command) -> Self {
         Self {
             target: target.into(),
+            command,
         }
     }
 
     pub fn target(&self) -> &Path {
         &self.target
     }
+
+    pub fn command(&self) -> &Command {
+        &self.command
+    }
+}
+
+/// 16 个入口及各自的参数。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Command {
+    Info,
+    Inspect,
+    Check,
+    RecordsList,
+    RecordsVerify { token: String },
+    RecordsScan,
+    New {
+        table: TableFormat,
+        overwrite: bool,
+    },
+    Add {
+        start_lba: u64,
+        sectors: u64,
+        type_guid: Guid,
+        name: String,
+    },
+    Delete {
+        partition: u32,
+    },
+    Copy {
+        source: u32,
+        target: u32,
+    },
+    Set {
+        partition: u32,
+        label: Option<String>,
+        attributes: u64,
+    },
+    Mkfs {
+        partition: u32,
+        filesystem: FsKind,
+        label: Option<String>,
+    },
+    Resize {
+        partition: u32,
+        sectors: u64,
+    },
+    Resizefs {
+        partition: u32,
+        bytes: u64,
+    },
+    Move {
+        partition: u32,
+        offset_sectors: i64,
+    },
+    Recover,
 }
 
 /// 首次观察使用的代次。执行期重探所得代次不得早于此值。
