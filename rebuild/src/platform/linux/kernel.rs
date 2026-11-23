@@ -99,6 +99,19 @@ fn run_blkpg(path: &Path, arg: &mut BlkpgIoctlArg) -> PlatformResult<()> {
     }
 }
 
+/// 按字节区间批量补建分区；内核已持有同一分区视为成功。
+///
+/// 这是 `partx` 不可用时的兜底：只补建盘上已有分区，不删除、不重排。
+pub fn sync_partitions(path: &Path, partitions: &[(u32, u64, u64)]) -> PlatformResult<()> {
+    for &(number, start, length) in partitions {
+        match add_partition(path, number, start, length) {
+            Ok(()) | Err(PlatformError::Busy { .. }) => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
+}
+
 fn classify_ioctl(path: &Path, error: std::io::Error) -> PlatformError {
     match error.raw_os_error() {
         Some(libc::ENOTTY) | Some(libc::EINVAL) => {

@@ -68,15 +68,23 @@ impl Platform for Linux {
     }
 
     fn update_table(&self, path: &Path) -> PlatformResult<()> {
-        let output = self.run(Program::Partx, &["-u", &path.to_string_lossy()])?;
-        if output.succeeded() {
-            Ok(())
-        } else {
-            Err(PlatformError::tools(
-                "partx",
-                output.stderr_text().trim().to_string(),
-            ))
+        match self.run(Program::Partx, &["-u", &path.to_string_lossy()]) {
+            Ok(output) if output.succeeded() => return Ok(()),
+            _ => {}
         }
+        // 兜底：按盘上表逐分区 `BLKPG` 补建；读不到表时如实失败。
+        let partitions = self.partitions(path)?;
+        let ranges: Vec<(u32, u64, u64)> = partitions
+            .iter()
+            .map(|partition| {
+                (
+                    partition.number,
+                    partition.start_lba.saturating_mul(512),
+                    partition.sectors.saturating_mul(512),
+                )
+            })
+            .collect();
+        kernel::sync_partitions(path, &ranges)
     }
 
     fn btrfs_fsid(&self, path: &Path) -> PlatformResult<[u8; 16]> {
