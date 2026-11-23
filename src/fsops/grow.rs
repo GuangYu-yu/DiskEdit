@@ -107,6 +107,13 @@ pub fn grow_target_at(src: &FileSource, part: u32, base: u64, len: u64) -> Resul
             Growable::NoFilesystem(None)
         });
     }
+    // btrfs 多设备：分区扩满不等于 FS 扩满，而这一步又没有可续跑的中间态——判据只能
+    // 放在写盘前，命令因此以 unsupported 退出、落点上一个字节都不动。判定本身只有
+    // `refuse_btrfs_multi_device_at` 一处（执行侧的区间扩容、缩容与在线扩容都调它），
+    // 这里加的是"决策期也问一遍"，不是另写一条规则
+    if content == ContentKind::Filesystem(FsKind::Btrfs) {
+        refuse_btrfs_multi_device_at(src, base, len)?;
+    }
     // 其余按 FS 自身的可扩性分流：三态与工具清单都取自 grow_support，不在此另列一份
     match grow_support(content) {
         ToolSupport::Tools(_) => Ok(Growable::Target(GrowTarget { scope: DeviceScope::Partition(part), fstype: content })),

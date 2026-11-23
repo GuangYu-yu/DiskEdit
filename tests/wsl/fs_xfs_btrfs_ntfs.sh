@@ -27,8 +27,7 @@ echo "resize exit=$E : $(echo "$OUT" | tail -1)"
 echo "$OUT" | grep -q "df -B1" && echo "A XFS SIZE-CHECK HINT OK" || { echo "A NO SIZE-CHECK HINT"; rc=1; }
 LD=$(lo_attach "$T")
 mount_at "${LD}p1" "$TEST_MNT" && { echo "after: $(df -h --output=size "$TEST_MNT" | tail -1)"; G=$(mdsum "$TEST_MNT"/blob); [ "$MX" = "$G" ] && echo "XFS DATA OK" || { echo "XFS DATA CORRUPT"; rc=1; }; umount "$TEST_MNT" 2>/dev/null; }
-xfs_repair -n "${LD}p1" >/dev/null 2>&1; exp $? 0 "xfs_repair -n（0=clean）"
-lo_detach "$LD"; sgdisk -v "$T" >/dev/null 2>&1 && echo "sgdisk clean" || { echo "sgdisk ISSUES"; rc=1; }
+fs_meta_check xfs "${LD}p1" "A"; lo_detach "$LD"; sgdisk -v "$T" >/dev/null 2>&1 && echo "sgdisk clean" || { echo "sgdisk ISSUES"; rc=1; }
 
 echo
 echo "########## B: btrfs 扩容 400M → 1500M ##########"
@@ -47,8 +46,7 @@ echo "resize exit=$E out: $(echo "$OUT" | tail -1)"
 exp "$E" 0 "btrfs 扩容 400M → 1500M"
 LD=$(lo_attach "$T")
 mount_at "${LD}p1" "$TEST_MNT" && { echo "after: $(df -h --output=size "$TEST_MNT" | tail -1)"; G=$(mdsum "$TEST_MNT"/blob); [ "$MB" = "$G" ] && echo "BTRFS DATA OK" || { echo "BTRFS DATA CORRUPT"; rc=1; }; umount "$TEST_MNT" 2>/dev/null; }
-btrfs check "${LD}p1" >/dev/null 2>&1; exp $? 0 "btrfs check（0=clean）"
-lo_detach "$LD"; sgdisk -v "$T" >/dev/null 2>&1 && echo "sgdisk clean" || { echo "sgdisk ISSUES"; rc=1; }
+fs_meta_check btrfs "${LD}p1" "B"; lo_detach "$LD"; sgdisk -v "$T" >/dev/null 2>&1 && echo "sgdisk clean" || { echo "sgdisk ISSUES"; rc=1; }
 
 echo
 echo "########## C: ntfs 搬移（HiddenSectors 修复） ##########"
@@ -61,7 +59,8 @@ $B mkfs "$T":2 ext4 --yes >/dev/null
 LD=$(lo_attach "$T")
 mount -t ntfs-3g "${LD}p1" "$TEST_MNT" 2>/dev/null || mount_at "${LD}p1" "$TEST_MNT"
 dd if=/dev/urandom of="$TEST_MNT/blob" bs=1M count=150 2>/dev/null
-MN=$(mdsum "$TEST_MNT"/blob)
+mkdir "$TEST_MNT"/d && dd if=/dev/urandom of="$TEST_MNT"/d/sub bs=1M count=8 2>/dev/null
+MN=$(mdsum "$TEST_MNT"/blob); MS=$(mdsum "$TEST_MNT"/d/sub)
 OLDS=$($B info "$T" | grep -o '"num":1,"first_lba":[0-9]*' | grep -o '[0-9]*$')
 echo "before: hidden=$(od -An -tu4 -j $((OLDS*512+28)) -N4 "$T" | tr -d ' ')"
 umount "$TEST_MNT" 2>/dev/null; lo_detach "$LD"
@@ -76,8 +75,12 @@ mount -t ntfs-3g "${LD}p1" "$TEST_MNT" 2>/dev/null || mount_at "${LD}p1" "$TEST_
 if mountpoint -q "$TEST_MNT"; then
   G=$(mdsum "$TEST_MNT"/blob)
   [ "$MN" = "$G" ] && echo "NTFS DATA OK" || { echo "NTFS DATA CORRUPT"; rc=1; }
+  # 搬移把 inode 带到新偏移，子目录文件是树结构完好的最小正面证据
+  S=$(mdsum "$TEST_MNT"/d/sub)
+  [ "$MS" = "$S" ] && echo "NTFS SUBDIR DATA OK" || { echo "NTFS SUBDIR DATA CORRUPT"; rc=1; }
   umount "$TEST_MNT" 2>/dev/null
 fi
+fs_meta_check ntfs "${LD}p1" "C"
 lo_detach "$LD"; sgdisk -v "$T" >/dev/null 2>&1 && echo "sgdisk clean" || { echo "sgdisk ISSUES"; rc=1; }
 
 echo
