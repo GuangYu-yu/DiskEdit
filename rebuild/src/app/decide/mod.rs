@@ -43,36 +43,24 @@ pub fn decide(request: &Request, snapshot: &Snapshot) -> Decision {
     let outcome = match request.command() {
         Command::Info => info::plan(),
         Command::Inspect => inspect::plan(),
-        Command::Check => check::plan(snapshot),
+        Command::Check { partition } => check::plan(snapshot, *partition),
         Command::RecordsList => records::list(),
         Command::RecordsVerify { token } => records::verify(token.clone()),
         Command::RecordsScan => records::scan(),
         Command::New { table, overwrite } => new::plan(snapshot, *table, *overwrite),
-        Command::Add {
-            start_lba,
-            sectors,
-            type_guid,
-            name,
-        } => add::plan(snapshot, *start_lba, *sectors, *type_guid, name.clone()),
+        Command::Add(request) => add::plan(snapshot, request),
         Command::Delete { partition } => delete::plan(snapshot, *partition),
-        Command::Copy { source, target } => copy::plan(snapshot, *source, *target),
-        Command::Set {
-            partition,
-            property,
-            value,
-        } => set::plan(snapshot, *partition, *property, value.clone()),
+        Command::Copy(request) => copy::plan(snapshot, request),
+        Command::Set { partition, action } => set::plan(snapshot, *partition, action),
         Command::Mkfs {
             partition,
             filesystem,
-            ..
-        } => mkfs::plan(snapshot, *partition, *filesystem),
-        Command::Resize { partition, sectors } => resize::plan(snapshot, *partition, *sectors),
+            label,
+        } => mkfs::plan(snapshot, *partition, *filesystem, label.clone()),
+        Command::Resize(request) => resize::plan(snapshot, request),
         Command::Resizefs { partition, bytes } => resizefs::plan(snapshot, *partition, *bytes),
-        Command::Move {
-            partition,
-            offset_sectors,
-        } => move_partition::plan(snapshot, *partition, *offset_sectors),
-        Command::Recover => recover::plan(snapshot),
+        Command::Move(request) => move_partition::plan(snapshot, request),
+        Command::Recover(mode) => recover::plan(snapshot, *mode),
     };
     match outcome {
         Ok(plan) => Decision::Plan { plan },
@@ -85,7 +73,7 @@ mod tests {
     use super::*;
     use crate::app::observe::disk::DiskFacts;
     use crate::app::observe::snapshot::Topology;
-    use crate::app::observe::{Command, TableFormat};
+    use crate::app::observe::{Command, TableFormat, TargetSpec};
     use crate::platform::{Occupancy, TargetKind};
     use diskedit_core::evidence::{Evidence, Generation, Observation, Source};
     use diskedit_core::fingerprint::Fingerprint;
@@ -117,7 +105,7 @@ mod tests {
     }
 
     fn request(command: Command) -> Request {
-        Request::new("/tmp/image", command)
+        Request::new(TargetSpec::new("/tmp/image", None), command)
     }
 
     #[test]
@@ -144,11 +132,8 @@ mod tests {
         let mut snapshot = snapshot();
         snapshot.topology = Observation::unknown("拓扑读取失败");
         let decision = decide(
-            &request(Command::Add {
-                start_lba: 2048,
-                sectors: 2048,
-                type_guid: diskedit_core::table::Guid::ZERO,
-                name: "p1".to_owned(),
+            &request(Command::Delete {
+                partition: crate::app::observe::PartitionSelector::Number(1),
             }),
             &snapshot,
         );

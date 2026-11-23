@@ -52,11 +52,24 @@ pub fn add_gpt(
     type_guid: Guid,
     name: &str,
     unique: Guid,
+    part_number: Option<u32>,
 ) -> Result<u32, String> {
     if sectors == 0 {
         return Err("新分区长度为 0".to_owned());
     }
-    let index = free_slot(entries).ok_or_else(|| "没有空闲分区条目".to_owned())?;
+    let index = match part_number {
+        Some(number) => {
+            let index = index_of(number)?;
+            let slot = entries
+                .get(index)
+                .ok_or_else(|| format!("分区号 {number} 超出条目数组"))?;
+            if is_used(slot) {
+                return Err(format!("分区号 {number} 已被占用"));
+            }
+            index
+        }
+        None => free_slot(entries).ok_or_else(|| "没有空闲分区条目".to_owned())?,
+    };
     entries[index] = PartitionEntry {
         partition_type_guid: type_guid,
         unique_partition_guid: unique,
@@ -133,6 +146,32 @@ pub fn set_attributes(
     Ok(())
 }
 
+/// 置位或清除 GPT 属性字的第 `flag` 位。
+pub fn set_attribute_bit(
+    entries: &mut [PartitionEntry],
+    partition: u32,
+    flag: u32,
+    on: bool,
+) -> Result<(), String> {
+    if flag >= 64 {
+        return Err(format!("属性位 {flag} 超出 64 位属性字"));
+    }
+    let index = index_of(partition)?;
+    let entry = entries
+        .get_mut(index)
+        .ok_or_else(|| format!("分区 {partition} 超出条目数组"))?;
+    if !is_used(entry) {
+        return Err(format!("分区 {partition} 不存在"));
+    }
+    let mask = 1u64 << flag;
+    entry.attributes = if on {
+        entry.attributes | mask
+    } else {
+        entry.attributes & !mask
+    };
+    Ok(())
+}
+
 /// 修改分区类型 GUID。
 pub fn set_type(entries: &mut [PartitionEntry], partition: u32, guid: Guid) -> Result<(), String> {
     if guid.is_zero() {
@@ -150,17 +189,36 @@ pub fn set_type(entries: &mut [PartitionEntry], partition: u32, guid: Guid) -> R
 }
 
 /// 在 MBR 主表写一个条目。
-pub fn add_mbr(mbr: &mut Mbr, start_lba: u64, sectors: u64, part_type: u8) -> Result<u32, String> {
+pub fn add_mbr(
+    mbr: &mut Mbr,
+    start_lba: u64,
+    sectors: u64,
+    part_type: u8,
+    part_number: Option<u32>,
+) -> Result<u32, String> {
     if sectors == 0 {
         return Err("新分区长度为 0".to_owned());
     }
     let start = u32::try_from(start_lba).map_err(|_| "起始 LBA 超出 MBR 范围".to_owned())?;
     let size = u32::try_from(sectors).map_err(|_| "分区长度超出 MBR 范围".to_owned())?;
-    let index = mbr
-        .entries
-        .iter()
-        .position(|entry| entry.is_empty())
-        .ok_or_else(|| "没有空闲主分区槽".to_owned())?;
+    let index = match part_number {
+        Some(number) => {
+            let index = index_of(number)?;
+            let slot = mbr
+                .entries
+                .get(index)
+                .ok_or_else(|| format!("分区号 {number} 超出主分区槽"))?;
+            if !slot.is_empty() {
+                return Err(format!("分区号 {number} 已被占用"));
+            }
+            index
+        }
+        None => mbr
+            .entries
+            .iter()
+            .position(|entry| entry.is_empty())
+            .ok_or_else(|| "没有空闲主分区槽".to_owned())?,
+    };
     mbr.entries[index] = MbrEntry {
         boot: 0,
         part_type,
@@ -227,8 +285,16 @@ mod tests {
     #[test]
     fn add_uses_first_free_slot() {
         let mut table = entries();
-        let number = add_gpt(&mut table, 2048, 2048, Guid([1; 16]), "root", Guid([2; 16]))
-            .expect("新增应成立");
+        let number = add_gpt(
+            &mut table,
+            2048,
+            2048,
+            Guid([1; 16]),
+            "root",
+            Guid([2; 16]),
+            None,
+        )
+        .expect("新增应成立");
         assert_eq!(number, 1);
         assert_eq!(table[0].starting_lba, 2048);
         assert_eq!(table[0].ending_lba, 4095);
@@ -247,7 +313,7 @@ mod tests {
         let mut mbr = Mbr {
             entries: [MbrEntry::default(); 4],
         };
-        add_mbr(&mut mbr, 63, 100, 0x83).expect("新增应成立");
+        add_mbr(&mut mbr, 63, 100, 0x83, None).expect("新增应成立");
         assert_eq!(mbr.entries[0].start_lba, 63);
         delete_mbr(&mut mbr, 1).expect("删除应成立");
         assert!(mbr.entries[0].is_empty());

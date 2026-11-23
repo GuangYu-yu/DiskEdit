@@ -78,7 +78,7 @@ pub fn run(
     let recovers_records = confirmed
         .steps()
         .iter()
-        .any(|step| matches!(&step.kind, StepKind::RecoverRecords));
+        .any(|step| matches!(&step.kind, StepKind::RecoverRecords { .. }));
 
     if !writes_target {
         if recovers_records {
@@ -220,14 +220,17 @@ fn run_external(
                 return Outcome::unwritten(FailureKind::Refused, "外部状态计划包含写目标步骤");
             }
             Access::WritesExternalState => {
-                if matches!(&step.kind, StepKind::RecoverRecords) {
-                    if let Err(failure) = recovery::run(
-                        platform,
-                        path,
-                        confirmed.identity(),
-                        handle,
-                        recovery::Mode::RollBack,
-                    ) {
+                if let StepKind::RecoverRecords { mode } = &step.kind {
+                    let mode = match mode {
+                        crate::app::observe::RecoverMode::Default
+                        | crate::app::observe::RecoverMode::ReplayTableOnly => {
+                            recovery::Mode::RollBack
+                        }
+                        crate::app::observe::RecoverMode::Release { .. } => recovery::Mode::Release,
+                    };
+                    if let Err(failure) =
+                        recovery::run(platform, path, confirmed.identity(), handle, mode)
+                    {
                         return external_failure(failure);
                     }
                 } else if let Err(error) = platform.update_table(path) {
@@ -414,7 +417,7 @@ fn intent_of(kind: &StepKind) -> &'static str {
         StepKind::CopyPartition { .. } => "copy-partition",
         StepKind::MovePartition { .. } => "move-partition",
         StepKind::RefreshKernelView => "refresh-kernel-view",
-        StepKind::RecoverRecords => "recover-records",
+        StepKind::RecoverRecords { .. } => "recover-records",
         StepKind::Inspect => "inspect",
         StepKind::Check { .. } => "check",
         StepKind::ListRecords => "list-records",
@@ -649,7 +652,7 @@ mod tests {
 
     fn confirmed_new(host: &FakeHost) -> (ConfirmedPlan, Snapshot) {
         let request = Request::new(
-            "/tmp/image",
+            crate::app::observe::TargetSpec::new("/tmp/image", None),
             Command::New {
                 table: TableFormat::Gpt,
                 overwrite: true,
@@ -735,7 +738,10 @@ mod tests {
     }
 
     fn confirmed_recover(host: &FakeHost) -> ConfirmedPlan {
-        let request = Request::new("/tmp/image", Command::Recover);
+        let request = Request::new(
+            crate::app::observe::TargetSpec::new("/tmp/image", None),
+            Command::Recover(crate::app::observe::RecoverMode::Default),
+        );
         let snapshot = observe(&request, host);
         let decision = decide(&request, &snapshot);
         let Decision::Plan { plan } = decision else {

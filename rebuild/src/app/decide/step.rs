@@ -6,8 +6,7 @@ use diskedit_core::fs::FsKind;
 use diskedit_core::region::Region;
 use diskedit_core::table::Guid;
 
-use crate::app::observe::SetProperty;
-use crate::app::observe::TableFormat;
+use crate::app::observe::{RecoverMode, SetProperty, TableFormat};
 
 /// 步骤对目标的影响方式。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -42,6 +41,10 @@ pub enum StepKind {
         sectors: u64,
         type_guid: Guid,
         name: String,
+        /// 指定的条目槽位；`None` 表示第一个空槽。
+        part_number: Option<u32>,
+        /// 指定的分区唯一 GUID；`None` 由计划摘要派生。
+        unique: Option<Guid>,
     },
     /// 删除一个分区。
     DeletePartition { format: TableFormat, partition: u32 },
@@ -59,7 +62,11 @@ pub enum StepKind {
         value: String,
     },
     /// 在分区上建卷。
-    MakeFilesystem { partition: u32, filesystem: FsKind },
+    MakeFilesystem {
+        partition: u32,
+        filesystem: FsKind,
+        label: Option<String>,
+    },
     /// 扩展文件系统到指定字节数。
     GrowFilesystem {
         partition: u32,
@@ -72,14 +79,23 @@ pub enum StepKind {
         filesystem: FsKind,
         bytes: u64,
     },
-    /// 复制一个分区的内容到另一个分区。
-    CopyPartition { source: u32, target: u32 },
+    /// 把源分区内容复制到给定的目标区间。
+    CopyPartition {
+        source: u32,
+        start_lba: u64,
+        sectors: u64,
+        chunk: u64,
+    },
     /// 平移一个分区的内容。
-    MovePartition { partition: u32, offset_sectors: i64 },
+    MovePartition {
+        partition: u32,
+        offset_sectors: i64,
+        chunk: u64,
+    },
     /// 让内核重读分区表与块设备尺寸。
     RefreshKernelView,
     /// 处理记录：回滚、重放或归档。
-    RecoverRecords,
+    RecoverRecords { mode: RecoverMode },
 }
 
 impl StepKind {
@@ -91,7 +107,7 @@ impl StepKind {
             | Self::ListRecords
             | Self::VerifyRecord { .. }
             | Self::ScanRecords => Access::ReadOnly,
-            Self::RefreshKernelView | Self::RecoverRecords => Access::WritesExternalState,
+            Self::RefreshKernelView | Self::RecoverRecords { .. } => Access::WritesExternalState,
             Self::WriteTable { .. }
             | Self::AddPartition { .. }
             | Self::DeletePartition { .. }

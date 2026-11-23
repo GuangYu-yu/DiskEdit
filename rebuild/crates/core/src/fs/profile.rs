@@ -43,6 +43,15 @@ impl FsKind {
         FsKind::Udf,
     ];
 
+    /// 按规范名或常见别名解析；未知名字返回 `None`。
+    pub fn parse(name: &str) -> Option<Self> {
+        let lowered = name.to_ascii_lowercase();
+        if lowered == "ext2" || lowered == "ext3" || lowered == "ext4" {
+            return Some(Self::Ext);
+        }
+        Self::ALL.into_iter().find(|kind| kind.as_str() == lowered)
+    }
+
     /// 对外规范名。
     pub const fn as_str(self) -> &'static str {
         match self {

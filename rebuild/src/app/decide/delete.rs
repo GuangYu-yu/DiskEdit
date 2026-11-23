@@ -1,15 +1,14 @@
 //! `delete`：清除一个分区条目。
 
-use super::common::admission;
-use super::common::capacity;
+use super::common::{admission, capacity};
 use super::plan::Plan;
 use super::refusal::Refusal;
 use super::step::{Step, StepKind};
-use crate::app::observe::Snapshot;
-use crate::app::observe::TableFormat;
+use crate::app::observe::{PartitionSelector, Snapshot, TableFormat};
 
-pub fn plan(snapshot: &Snapshot, partition: u32) -> Result<Plan, Refusal> {
+pub fn plan(snapshot: &Snapshot, selector: PartitionSelector) -> Result<Plan, Refusal> {
     let admitted = admission::admit(snapshot)?;
+    let partition = admission::select(snapshot, selector)?;
     let table = admission::table(snapshot)?;
     let format = table.format();
     let exists = match table {

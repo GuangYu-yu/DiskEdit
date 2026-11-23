@@ -4,34 +4,29 @@
 
 use diskedit_core::fs::Verb;
 
-use super::common::admission;
-use super::common::capacity;
+use super::common::{admission, capacity};
 use super::plan::Plan;
 use super::refusal::Refusal;
 use super::step::{Step, StepKind};
-use crate::app::observe::Snapshot;
+use crate::app::observe::{PartitionSelector, Snapshot};
 
-pub fn plan(snapshot: &Snapshot) -> Result<Plan, Refusal> {
+pub fn plan(snapshot: &Snapshot, selector: PartitionSelector) -> Result<Plan, Refusal> {
     let sector = admission::sector(snapshot)?;
-    let partitions = snapshot.contents().ok_or_else(|| Refusal::FactUnknown {
-        what: "partition topology".to_owned(),
-    })?;
-    let mut steps = Vec::new();
-    for facts in partitions {
-        let content = admission::content(facts)?;
-        let programs = admission::programs(content, Verb::Check)?;
-        let Some(programs) = programs else {
-            continue;
-        };
-        admission::require_tools(snapshot, programs)?;
-        let region =
-            capacity::partition_region(facts.partition.start_lba, facts.partition.sectors, sector)?;
-        steps.push(Step::new(
-            StepKind::Check {
-                partition: facts.partition.number,
-            },
-            vec![region],
-        ));
-    }
-    Ok(Plan::read_only(steps))
+    let partition = admission::select(snapshot, selector)?;
+    let facts = admission::partition(snapshot, partition)?;
+    let content = admission::content(facts)?;
+    let programs = admission::programs(content, Verb::Check)?;
+    let Some(programs) = programs else {
+        return Err(Refusal::ContentUnsupported {
+            what: format!("{} 一致性检查", content.as_str()),
+            why: "该内容没有可用的检查器".to_owned(),
+        });
+    };
+    admission::require_tools(snapshot, programs)?;
+    let region =
+        capacity::partition_region(facts.partition.start_lba, facts.partition.sectors, sector)?;
+    Ok(Plan::read_only(vec![Step::new(
+        StepKind::Check { partition },
+        vec![region],
+    )]))
 }

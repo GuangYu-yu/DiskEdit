@@ -6,8 +6,7 @@
 use diskedit_core::fingerprint::{Fingerprint, Strength};
 
 use super::step::{Access, Step, StepKind};
-use crate::app::observe::SetProperty;
-use crate::app::observe::TableFormat;
+use crate::app::observe::{RecoverMode, SetProperty, TableFormat};
 
 /// 计算摘要。
 pub fn plan_digest(identity: Option<Fingerprint>, steps: &[Step]) -> [u8; 32] {
@@ -90,6 +89,8 @@ fn encode_kind(out: &mut Vec<u8>, kind: &StepKind) {
             sectors,
             type_guid,
             name,
+            part_number,
+            unique,
         } => {
             out.push(7);
             out.push(format_tag(*format));
@@ -97,6 +98,20 @@ fn encode_kind(out: &mut Vec<u8>, kind: &StepKind) {
             out.extend_from_slice(&sectors.to_le_bytes());
             out.extend_from_slice(&type_guid.0);
             out.extend_from_slice(name.as_bytes());
+            match part_number {
+                Some(number) => {
+                    out.push(1);
+                    out.extend_from_slice(&number.to_le_bytes());
+                }
+                None => out.push(0),
+            }
+            match unique {
+                Some(guid) => {
+                    out.push(1);
+                    out.extend_from_slice(&guid.0);
+                }
+                None => out.push(0),
+            }
         }
         StepKind::DeletePartition { format, partition } => {
             out.push(8);
@@ -128,10 +143,18 @@ fn encode_kind(out: &mut Vec<u8>, kind: &StepKind) {
         StepKind::MakeFilesystem {
             partition,
             filesystem,
+            label,
         } => {
             out.push(11);
             out.extend_from_slice(&partition.to_le_bytes());
             out.extend_from_slice(filesystem.as_str().as_bytes());
+            match label {
+                Some(text) => {
+                    out.push(1);
+                    out.extend_from_slice(text.as_bytes());
+                }
+                None => out.push(0),
+            }
         }
         StepKind::GrowFilesystem {
             partition,
@@ -153,21 +176,46 @@ fn encode_kind(out: &mut Vec<u8>, kind: &StepKind) {
             out.extend_from_slice(filesystem.as_str().as_bytes());
             out.extend_from_slice(&bytes.to_le_bytes());
         }
-        StepKind::CopyPartition { source, target } => {
+        StepKind::CopyPartition {
+            source,
+            start_lba,
+            sectors,
+            chunk,
+        } => {
             out.push(14);
             out.extend_from_slice(&source.to_le_bytes());
-            out.extend_from_slice(&target.to_le_bytes());
+            out.extend_from_slice(&start_lba.to_le_bytes());
+            out.extend_from_slice(&sectors.to_le_bytes());
+            out.extend_from_slice(&chunk.to_le_bytes());
         }
         StepKind::MovePartition {
             partition,
             offset_sectors,
+            chunk,
         } => {
             out.push(15);
             out.extend_from_slice(&partition.to_le_bytes());
             out.extend_from_slice(&offset_sectors.to_le_bytes());
+            out.extend_from_slice(&chunk.to_le_bytes());
         }
         StepKind::RefreshKernelView => out.push(16),
-        StepKind::RecoverRecords => out.push(17),
+        StepKind::RecoverRecords { mode } => {
+            out.push(17);
+            out.push(recover_tag(*mode));
+        }
+    }
+}
+
+const fn recover_tag(mode: RecoverMode) -> u8 {
+    match mode {
+        RecoverMode::Default => 1,
+        RecoverMode::ReplayTableOnly => 2,
+        RecoverMode::Release {
+            discard_replay: false,
+        } => 3,
+        RecoverMode::Release {
+            discard_replay: true,
+        } => 4,
     }
 }
 

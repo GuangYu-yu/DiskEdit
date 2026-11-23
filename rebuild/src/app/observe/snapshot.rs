@@ -66,11 +66,38 @@ impl Snapshot {
 }
 
 /// 观察一次：请求加宿主端口，产出快照。
+///
+/// 没有目标参数的请求（目前只有 `records list`）没有可观测的盘面事实，统一记
+/// `Unknown`，不去猜一个路径。
 pub fn observe(request: &Request, platform: &dyn Platform) -> Snapshot {
     let generation = FIRST_GENERATION;
-    let target = request.target();
+    let Some(target) = request.target() else {
+        return Snapshot {
+            generation,
+            identity: Observation::unknown("请求没有目标参数"),
+            disk: DiskFacts {
+                kind: Observation::unknown("请求没有目标参数"),
+                byte_len: Observation::unknown("请求没有目标参数"),
+                sector_size: Observation::unknown("请求没有目标参数"),
+            },
+            topology: Observation::unknown("请求没有目标参数"),
+            occupancy: Observation::unknown("请求没有目标参数"),
+            table: TableFacts {
+                gpt: Observation::unknown("请求没有目标参数"),
+                mbr: Observation::unknown("请求没有目标参数"),
+            },
+            tools: tools::observe(platform, generation),
+        };
+    };
     let identity = identity::observe(platform, target, generation);
-    let (disk, handle) = disk::observe(platform, target, generation);
+    let (mut disk, handle) = disk::observe(platform, target, generation);
+    if let Some(sector) = request.sector_size() {
+        disk.sector_size = Observation::known(
+            sector,
+            diskedit_core::evidence::Source::new("--sector-size"),
+            generation,
+        );
+    }
     let table = table::observe(handle.as_deref(), &disk, generation);
     let topology =
         filesystem::observe_topology(platform, target, &disk, handle.as_deref(), generation);
@@ -264,7 +291,11 @@ mod tests {
     }
 
     fn request() -> Request {
-        Request::new("/tmp/image", super::super::Command::Inspect)
+        use super::super::TargetSpec;
+        Request::new(
+            TargetSpec::new("/tmp/image", None),
+            super::super::Command::Inspect,
+        )
     }
 
     #[test]

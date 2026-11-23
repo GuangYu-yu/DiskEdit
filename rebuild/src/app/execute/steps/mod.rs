@@ -75,7 +75,7 @@ pub fn precheck(kind: &StepKind, ctx: &Context<'_>) -> Result<(), ExecError> {
         | StepKind::VerifyRecord { .. }
         | StepKind::ScanRecords
         | StepKind::RefreshKernelView
-        | StepKind::RecoverRecords => Err(ExecError::InvalidPlan(
+        | StepKind::RecoverRecords { .. } => Err(ExecError::InvalidPlan(
             "该步骤不属于写目标字节的步骤".to_owned(),
         )),
     }
@@ -98,10 +98,13 @@ pub fn apply(
             property: SetProperty::Name | SetProperty::Flag | SetProperty::Type,
             ..
         } => table::apply(kind, channel, token, ctx),
-        StepKind::CopyPartition { source, target } => {
-            copy::apply(*source, *target, channel, token, ctx)
-        }
-        StepKind::MovePartition { .. } => {
+        StepKind::CopyPartition {
+            source,
+            start_lba,
+            sectors,
+            chunk,
+        } => copy::apply(*source, *start_lba, *sectors, *chunk, channel, token, ctx),
+        StepKind::MovePartition { chunk, .. } => {
             let (source, destination) = match regions {
                 [source, destination] => (*source, *destination),
                 _ => {
@@ -110,7 +113,7 @@ pub fn apply(
                     ));
                 }
             };
-            let binding = relocate::Binding::new(source, destination, relocate::CHUNK_BYTES)?;
+            let binding = relocate::Binding::new(source, destination, *chunk)?;
             relocate::apply(binding, channel, token, relocate::RelocateFaults::default())?;
             relocate::verify(binding, channel)
         }
@@ -129,7 +132,7 @@ pub fn apply(
         | StepKind::VerifyRecord { .. }
         | StepKind::ScanRecords
         | StepKind::RefreshKernelView
-        | StepKind::RecoverRecords => Err(ExecError::InvalidPlan(
+        | StepKind::RecoverRecords { .. } => Err(ExecError::InvalidPlan(
             "该步骤没有写目标字节的实现".to_owned(),
         )),
     }

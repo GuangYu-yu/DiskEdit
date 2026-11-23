@@ -8,17 +8,17 @@ use super::common::{admission, capacity};
 use super::plan::Plan;
 use super::refusal::Refusal;
 use super::step::{Step, StepKind};
-use crate::app::observe::TableFormat;
-use crate::app::observe::{SetProperty, Snapshot};
+use crate::app::observe::{PartitionSelector, SetAction, SetProperty, Snapshot, TableFormat};
 
 pub fn plan(
     snapshot: &Snapshot,
-    partition: u32,
-    property: SetProperty,
-    value: String,
+    selector: PartitionSelector,
+    action: &SetAction,
 ) -> Result<Plan, Refusal> {
     let admitted = admission::admit(snapshot)?;
+    let partition = admission::select(snapshot, selector)?;
     let facts = admission::partition(snapshot, partition)?;
+    let (property, value) = encode(action);
     match property {
         SetProperty::Name | SetProperty::Flag | SetProperty::Type => {
             let table = admission::table(snapshot)?;
@@ -80,5 +80,30 @@ pub fn plan(
             )];
             Plan::write(steps, admitted.identity)
         }
+    }
+}
+
+/// 把带类型的属性动作折成属性与值。
+///
+/// 值在计划摘要里按字节参与比对，执行层再按属性种类解析。
+fn encode(action: &SetAction) -> (SetProperty, String) {
+    match action {
+        SetAction::Name(value) => (SetProperty::Name, value.clone()),
+        SetAction::Label(value) => (SetProperty::Label, value.clone()),
+        SetAction::Uuid { value, random } => {
+            let text = value.clone().unwrap_or_else(|| {
+                if *random {
+                    "random".to_owned()
+                } else {
+                    String::new()
+                }
+            });
+            (SetProperty::Uuid, text)
+        }
+        SetAction::Flag { flag, on } => (
+            SetProperty::Flag,
+            format!("{flag}:{}", if *on { "on" } else { "off" }),
+        ),
+        SetAction::Type(value) => (SetProperty::Type, value.clone()),
     }
 }

@@ -54,18 +54,23 @@ pub fn apply(
             sectors,
             type_guid,
             name,
+            part_number,
+            unique,
         } => with_table(channel, ctx, token, *format, |current| match current {
             Current::Gpt {
                 header,
                 mut entries,
             } => {
+                let unique =
+                    unique.unwrap_or_else(|| entries::guid_from_seed(ctx.plan_digest, *start_lba));
                 entries::add_gpt(
                     &mut entries,
                     *start_lba,
                     *sectors,
                     *type_guid,
                     name,
-                    entries::guid_from_seed(ctx.plan_digest, *start_lba),
+                    unique,
+                    *part_number,
                 )
                 .map_err(ExecError::InvalidPlan)?;
                 Ok(Current::Gpt { header, entries })
@@ -76,7 +81,7 @@ pub fn apply(
                     0 => 0x83,
                     byte => byte,
                 };
-                entries::add_mbr(&mut mbr, *start_lba, *sectors, part_type)
+                entries::add_mbr(&mut mbr, *start_lba, *sectors, part_type, *part_number)
                     .map_err(ExecError::InvalidPlan)?;
                 Ok(Current::Mbr { mbr, sector })
             }
@@ -157,7 +162,9 @@ pub fn apply(
         | StepKind::VerifyRecord { .. }
         | StepKind::ScanRecords
         | StepKind::RefreshKernelView
-        | StepKind::RecoverRecords => Err(ExecError::InvalidPlan("不是分区表步骤".to_owned())),
+        | StepKind::RecoverRecords { .. } => {
+            Err(ExecError::InvalidPlan("不是分区表步骤".to_owned()))
+        }
     }
 }
 
@@ -172,8 +179,8 @@ fn apply_gpt_property(
             entries::set_name(entries, partition, value).map_err(ExecError::InvalidPlan)
         }
         SetProperty::Flag => {
-            let attributes = parse_attributes(value)?;
-            entries::set_attributes(entries, partition, attributes).map_err(ExecError::InvalidPlan)
+            let (flag, on) = parse_flag(value)?;
+            entries::set_attribute_bit(entries, partition, flag, on).map_err(ExecError::InvalidPlan)
         }
         SetProperty::Type => {
             let guid = parse_guid(value)?;
@@ -185,16 +192,25 @@ fn apply_gpt_property(
     }
 }
 
-fn parse_attributes(value: &str) -> Result<u64, ExecError> {
-    let trimmed = value.trim();
-    let parsed = match trimmed
-        .strip_prefix("0x")
-        .or_else(|| trimmed.strip_prefix("0X"))
-    {
-        Some(hex) => u64::from_str_radix(hex, 16),
-        None => trimmed.parse::<u64>(),
+/// 解析 `F:on` / `F:off`，返回属性位与目标状态。
+fn parse_flag(value: &str) -> Result<(u32, bool), ExecError> {
+    let (flag, state) = value
+        .split_once(':')
+        .ok_or_else(|| ExecError::InvalidPlan(format!("属性 {value} 缺少开关状态")))?;
+    let flag = flag
+        .trim()
+        .parse::<u32>()
+        .map_err(|_| ExecError::InvalidPlan(format!("属性位 {flag} 不是整数")))?;
+    let on = match state.trim() {
+        "on" => true,
+        "off" => false,
+        other => {
+            return Err(ExecError::InvalidPlan(format!(
+                "属性状态 {other} 只能是 on 或 off"
+            )));
+        }
     };
-    parsed.map_err(|_| ExecError::InvalidPlan(format!("属性值 {value} 不是整数")))
+    Ok((flag, on))
 }
 
 fn parse_guid(value: &str) -> Result<Guid, ExecError> {

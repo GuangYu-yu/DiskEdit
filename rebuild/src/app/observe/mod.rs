@@ -28,25 +28,77 @@ pub enum TableFormat {
     Mbr,
 }
 
+/// 目标后缀 `:N` 与 `:last` 的解析结果。
+///
+/// `:last` 的选择发生在判定层：解析器只保留用户的选择，不猜目标上的分区数。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PartitionSelector {
+    /// 明确的分区号，1 起。
+    Number(u32),
+    /// 目标上的最后一个分区。
+    Last,
+}
+
+/// 一个目标参数：路径与可选的分区选择器。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TargetSpec {
+    pub path: PathBuf,
+    pub partition: Option<PartitionSelector>,
+}
+
+impl TargetSpec {
+    pub fn new(path: impl Into<PathBuf>, partition: Option<PartitionSelector>) -> Self {
+        Self {
+            path: path.into(),
+            partition,
+        }
+    }
+}
+
 /// 已解析的用户意图。
 ///
 /// 只承载命令与参数，不含任何目标事实；打开、识别与判定都发生在后续层。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Request {
-    target: PathBuf,
+    target: Option<TargetSpec>,
+    sector_size: Option<u64>,
     command: Command,
 }
 
 impl Request {
-    pub fn new(target: impl Into<PathBuf>, command: Command) -> Self {
+    pub fn new(target: TargetSpec, command: Command) -> Self {
         Self {
-            target: target.into(),
+            target: Some(target),
+            sector_size: None,
             command,
         }
     }
 
-    pub fn target(&self) -> &Path {
-        &self.target
+    /// 没有目标参数的请求，目前只有 `records list`。
+    pub fn without_target(command: Command) -> Self {
+        Self {
+            target: None,
+            sector_size: None,
+            command,
+        }
+    }
+
+    /// 指定逻辑扇区字节数；判定与执行都以它对齐。
+    pub fn with_sector_size(mut self, sector_size: Option<u64>) -> Self {
+        self.sector_size = sector_size;
+        self
+    }
+
+    pub fn sector_size(&self) -> Option<u64> {
+        self.sector_size
+    }
+
+    pub fn target_spec(&self) -> Option<&TargetSpec> {
+        self.target.as_ref()
+    }
+
+    pub fn target(&self) -> Option<&Path> {
+        self.target.as_ref().map(|spec| spec.path.as_path())
     }
 
     pub fn command(&self) -> &Command {
@@ -59,52 +111,121 @@ impl Request {
 pub enum Command {
     Info,
     Inspect,
-    Check,
     RecordsList,
     RecordsVerify {
         token: String,
     },
     RecordsScan,
+    Resize(ResizeRequest),
+    Move(MoveRequest),
+    Copy(CopyRequest),
+    Delete {
+        partition: PartitionSelector,
+    },
+    Set {
+        partition: PartitionSelector,
+        action: SetAction,
+    },
+    Check {
+        partition: PartitionSelector,
+    },
+    Mkfs {
+        partition: PartitionSelector,
+        filesystem: FsKind,
+        label: Option<String>,
+    },
+    Resizefs {
+        partition: Option<PartitionSelector>,
+        bytes: Option<u64>,
+    },
+    Recover(RecoverMode),
     New {
         table: TableFormat,
         overwrite: bool,
     },
-    Add {
-        start_lba: u64,
-        sectors: u64,
-        type_guid: Guid,
-        name: String,
-    },
-    Delete {
-        partition: u32,
-    },
-    Copy {
-        source: u32,
-        target: u32,
-    },
-    Set {
-        partition: u32,
-        property: SetProperty,
-        value: String,
-    },
-    Mkfs {
-        partition: u32,
-        filesystem: FsKind,
-        label: Option<String>,
-    },
-    Resize {
-        partition: u32,
-        sectors: u64,
-    },
-    Resizefs {
-        partition: u32,
-        bytes: u64,
-    },
-    Move {
-        partition: u32,
-        offset_sectors: i64,
-    },
-    Recover,
+    Add(AddRequest),
+}
+
+/// `resize` 的参数。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ResizeRequest {
+    pub partition: Option<PartitionSelector>,
+    /// 位置参数 SIZE，已换算成字节。
+    pub size: Option<u64>,
+    /// `--end` 指定的新终点 LBA。
+    pub end: Option<u64>,
+    pub grow_to_end: bool,
+    pub align: Option<u64>,
+    pub allow_move: bool,
+    pub chunk: Option<u64>,
+    pub grow_lv: bool,
+    pub lv: Option<String>,
+    pub no_fs: bool,
+    pub dry_run: bool,
+}
+
+/// `move` 的参数。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MoveRequest {
+    pub partition: PartitionSelector,
+    pub start: StartSpec,
+    pub align: Option<u64>,
+    pub chunk: Option<u64>,
+}
+
+/// `copy` 的参数。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CopyRequest {
+    pub partition: PartitionSelector,
+    pub start: StartSpec,
+    pub align: Option<u64>,
+    pub chunk: Option<u64>,
+    pub name: Option<String>,
+    pub keep_partuuid: bool,
+}
+
+/// `add` 的参数；起点、对齐与类型都留待判定层补默认。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AddRequest {
+    /// 要完整容纳的分区尺寸，字节。
+    pub size: u64,
+    pub start: Option<u64>,
+    pub align: Option<u64>,
+    pub part_number: Option<u32>,
+    pub name: Option<String>,
+    pub type_guid: Option<Guid>,
+}
+
+/// `--start` 的三种取值。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StartSpec {
+    /// 明确的起点 LBA。
+    Lba(u64),
+    /// 紧贴可用区间末尾。
+    End,
+    /// 从可用区间起点按对齐放置。
+    Align,
+}
+
+/// `set` 的六种属性形态。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SetAction {
+    Name(String),
+    Label(String),
+    Uuid { value: Option<String>, random: bool },
+    Flag { flag: String, on: bool },
+    Type(String),
+}
+
+/// `recover` 的三种形态。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RecoverMode {
+    /// 回滚未完成的记录。
+    Default,
+    /// 只回放表区原像。
+    ReplayTableOnly,
+    /// 放弃回滚；`discard_replay` 表示同时放弃可重放区间。
+    Release { discard_replay: bool },
 }
 
 /// `set` 可修改的分区属性。

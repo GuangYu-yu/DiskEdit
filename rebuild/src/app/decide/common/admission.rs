@@ -185,6 +185,38 @@ pub fn sector(snapshot: &Snapshot) -> Result<u64, Refusal> {
     known(&snapshot.disk.sector_size, "target logical block size")
 }
 
+/// 把分区选择器解析成具体分区号。
+///
+/// `:last` 取拓扑中的最大分区号；拓扑未知或没有分区时按未知拒绝，不猜一个数。
+pub fn select(
+    snapshot: &Snapshot,
+    selector: crate::app::observe::PartitionSelector,
+) -> Result<u32, Refusal> {
+    use crate::app::observe::PartitionSelector;
+    match selector {
+        PartitionSelector::Number(number) => {
+            if number == 0 {
+                Err(Refusal::ArgumentOutOfRange {
+                    what: "分区号不能为 0".to_owned(),
+                })
+            } else {
+                Ok(number)
+            }
+        }
+        PartitionSelector::Last => snapshot
+            .contents()
+            .ok_or_else(|| Refusal::FactUnknown {
+                what: "partition topology".to_owned(),
+            })?
+            .iter()
+            .map(|facts| facts.partition.number)
+            .max()
+            .ok_or_else(|| Refusal::FactUnknown {
+                what: "目标没有分区，无法解析 :last".to_owned(),
+            }),
+    }
+}
+
 /// 指定分区，缺失即拒绝。
 pub fn partition(snapshot: &Snapshot, number: u32) -> Result<&PartitionFacts, Refusal> {
     snapshot
