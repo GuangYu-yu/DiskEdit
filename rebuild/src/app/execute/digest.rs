@@ -91,6 +91,36 @@ pub fn hash_region(
     Ok(hasher.finish())
 }
 
+/// 读一段区域的原始字节；用于表区原像。
+///
+/// 表区远小于数据区，整段读入是安全的。读取不足时按 IO 失败处理，不返回残缺
+/// 原像。
+pub fn read_region(
+    target: &mut dyn TargetHandle,
+    region: Region,
+    chunk: usize,
+) -> Result<Vec<u8>, ExecError> {
+    let len = usize::try_from(region.len())
+        .map_err(|_| ExecError::Io("区域长度超出本机可表示范围".to_owned()))?;
+    let mut buffer = vec![0u8; len];
+    let mut offset = region.start();
+    let mut filled = 0;
+    while filled < len {
+        let take = (len - filled).min(chunk.max(1));
+        let read = target
+            .read_at(offset, &mut buffer[filled..filled + take])
+            .map_err(ExecError::from)?;
+        if read != take {
+            return Err(ExecError::Io(format!(
+                "读取区域时提前结束：期望 {take} 字节，实际 {read} 字节"
+            )));
+        }
+        filled += take;
+        offset += take as u64;
+    }
+    Ok(buffer)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

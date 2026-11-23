@@ -10,7 +10,7 @@ use diskedit_core::record::{
     Frame, FrameKind, Preimage, RecordBody, RecoveryPlan, encode, recover,
 };
 
-use super::digest::hash_region;
+use super::digest::{digest as digest_bytes, hash_region, read_region};
 use super::state::StateMachine;
 use super::steps::{self, Context};
 use super::token::Recorded;
@@ -212,11 +212,20 @@ fn execute_target_step(
 
     let mut preimages = Vec::with_capacity(step.regions.len());
     for region in &step.regions {
-        let digest = hash_region(handle, *region, PREIMAGE_CHUNK).map_err(classify_unwritten)?;
+        let (digest, data) = if steps::writes_table(&step.kind) {
+            let data = read_region(handle, *region, PREIMAGE_CHUNK).map_err(classify_unwritten)?;
+            (digest_bytes(&data), data)
+        } else {
+            (
+                hash_region(handle, *region, PREIMAGE_CHUNK).map_err(classify_unwritten)?,
+                Vec::new(),
+            )
+        };
         preimages.push(Preimage {
             offset: region.start(),
             len: region.len(),
             digest,
+            data,
         });
     }
     let sequence = frames.len() as u32;

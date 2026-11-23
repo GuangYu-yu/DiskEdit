@@ -49,6 +49,10 @@ pub enum RecordError {
     IntentTooLong,
     /// 区间数超出 `u16`。
     TooManyRegions,
+    /// 原像长度与区间长度不一致。
+    PreimageLengthMismatch,
+    /// 原像字节数超出 `u32`。
+    PreimageTooLarge,
 }
 
 impl From<HeaderError> for RecordError {
@@ -71,6 +75,8 @@ impl From<FrameError> for RecordError {
             FrameError::ReservedFlags(flags) => Self::ReservedFrameFlags(flags),
             FrameError::TooManyRegions => Self::TooManyRegions,
             FrameError::IntentTooLong => Self::IntentTooLong,
+            FrameError::PreimageLengthMismatch => Self::PreimageLengthMismatch,
+            FrameError::PreimageTooLarge => Self::PreimageTooLarge,
         }
     }
 }
@@ -208,6 +214,7 @@ mod tests {
                 offset: 1024,
                 len: 512,
                 digest: [0x33; 16],
+                data: Vec::new(),
             }],
         }
     }

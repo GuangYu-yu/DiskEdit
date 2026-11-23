@@ -107,7 +107,10 @@ fn parse_prefix(payload: &[u8]) -> Result<Vec<Frame>, String> {
             Err(FrameError::ReservedFlags(flags)) => {
                 return Err(format!("frame flags {flags:#04x} set reserved bits"));
             }
-            Err(FrameError::TooManyRegions) | Err(FrameError::IntentTooLong) => break,
+            Err(FrameError::TooManyRegions)
+            | Err(FrameError::IntentTooLong)
+            | Err(FrameError::PreimageLengthMismatch)
+            | Err(FrameError::PreimageTooLarge) => break,
         }
     }
     Ok(frames)
@@ -144,6 +147,7 @@ mod tests {
                 offset: 2048,
                 len: 1024,
                 digest: [0x55; 16],
+                data: Vec::new(),
             }],
         }
     }

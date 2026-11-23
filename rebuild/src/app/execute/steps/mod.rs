@@ -25,6 +25,23 @@ pub struct Context<'a> {
     pub sector: u64,
 }
 
+/// 该步骤的写入是否只落在分区表区。
+///
+/// 表区原像必须携带原始字节以便回滚；数据区步骤不带原像字节，回滚时不动数据区。
+pub fn writes_table(kind: &StepKind) -> bool {
+    matches!(
+        kind,
+        StepKind::WriteTable { .. }
+            | StepKind::AddPartition { .. }
+            | StepKind::DeletePartition { .. }
+            | StepKind::ResizePartition { .. }
+            | StepKind::SetProperty {
+                property: SetProperty::Name | SetProperty::Flag | SetProperty::Type,
+                ..
+            }
+    )
+}
+
 /// 写前闸口：判断该步骤能否在本机执行；失败时不登记原像、不写目标。
 pub fn precheck(kind: &StepKind, ctx: &Context<'_>) -> Result<(), ExecError> {
     if ctx.sector == 0 {

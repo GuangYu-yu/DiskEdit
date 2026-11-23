@@ -1,15 +1,17 @@
 //! 记录帧：序号、类型、完成标记、意图与区间原像摘要。
 //!
 //! 每帧自带 CRC，因此即使载荷尾部被截断，也能确定哪些帧已经完整落盘。
-//! 帧长度由字段自身推出，不额外存长度：序号(4) | 类型(1) | 标记(1) | 区间数(2)
-//! | 区间(32×n) | 意图长度(2) | 意图 | CRC(4)。
+//! 帧长度由字段自身推出：序号(4) | 类型(1) | 标记(1) | 区间数(2)
+//! | 区间(偏移 8、长度 8、摘要 16、原像长度 4、原像 × n) | 意图长度(2) | 意图 | CRC(4)。
+//!
+//! 原像只在表区步骤出现，用于回滚；数据区步骤的原像长度为零，回滚时不动数据区。
 
 use crate::table::crc32;
 
 /// 单条原像摘要的字节数。
 pub const PREIMAGE_DIGEST_BYTES: usize = 16;
-/// 单条区间记录的字节数：偏移、长度、原像摘要。
-pub const PREIMAGE_BYTES: usize = 8 + 8 + PREIMAGE_DIGEST_BYTES;
+/// 单条区间记录的固定前缀：偏移、长度、原像摘要、原像长度。
+pub const PREIMAGE_HEADER_BYTES: usize = 8 + 8 + PREIMAGE_DIGEST_BYTES + 4;
 /// 帧固定前缀字节数（序号、类型、标记、区间数）。
 const FRAME_PREFIX_BYTES: usize = 8;
 /// 帧 CRC 字节数。
@@ -58,12 +60,14 @@ impl FrameKind {
     }
 }
 
-/// 一条将被覆盖区间的原像摘要。
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// 一条将被覆盖区间的原像。
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Preimage {
     pub offset: u64,
     pub len: u64,
     pub digest: [u8; PREIMAGE_DIGEST_BYTES],
+    /// 表区的原始字节；数据区为空。
+    pub data: Vec<u8>,
 }
 
 /// 一帧记录。
@@ -89,9 +93,16 @@ impl Frame {
         out.push(u8::from(self.completed));
         out.extend_from_slice(&region_count.to_le_bytes());
         for region in &self.regions {
+            if !region.data.is_empty() && region.data.len() as u64 != region.len {
+                return Err(FrameError::PreimageLengthMismatch);
+            }
+            let data_len =
+                u32::try_from(region.data.len()).map_err(|_| FrameError::PreimageTooLarge)?;
             out.extend_from_slice(&region.offset.to_le_bytes());
             out.extend_from_slice(&region.len.to_le_bytes());
             out.extend_from_slice(&region.digest);
+            out.extend_from_slice(&data_len.to_le_bytes());
+            out.extend_from_slice(&region.data);
         }
         out.extend_from_slice(&intent_len.to_le_bytes());
         out.extend_from_slice(&self.intent);
@@ -112,18 +123,45 @@ impl Frame {
             return Err(FrameError::ReservedFlags(flags));
         }
         let region_count = u16::from_le_bytes([bytes[6], bytes[7]]) as usize;
-        let regions_end = FRAME_PREFIX_BYTES
-            .checked_add(
-                region_count
-                    .checked_mul(PREIMAGE_BYTES)
-                    .ok_or(FrameError::Incomplete)?,
-            )
-            .ok_or(FrameError::Incomplete)?;
-        if bytes.len() < regions_end + 2 + FRAME_CRC_BYTES {
+        let mut regions = Vec::with_capacity(region_count);
+        let mut cursor = FRAME_PREFIX_BYTES;
+        for _ in 0..region_count {
+            let header_end = cursor
+                .checked_add(PREIMAGE_HEADER_BYTES)
+                .ok_or(FrameError::Incomplete)?;
+            if bytes.len() < header_end {
+                return Err(FrameError::Incomplete);
+            }
+            let offset = read_u64(bytes, cursor);
+            let len = read_u64(bytes, cursor + 8);
+            let mut digest = [0u8; PREIMAGE_DIGEST_BYTES];
+            digest.copy_from_slice(&bytes[cursor + 16..cursor + 16 + PREIMAGE_DIGEST_BYTES]);
+            let data_len = u32::from_le_bytes([
+                bytes[cursor + 32],
+                bytes[cursor + 33],
+                bytes[cursor + 34],
+                bytes[cursor + 35],
+            ]) as usize;
+            let data_end = header_end
+                .checked_add(data_len)
+                .ok_or(FrameError::Incomplete)?;
+            if data_end > bytes.len() || bytes.len() - data_end < 2 + FRAME_CRC_BYTES {
+                return Err(FrameError::Incomplete);
+            }
+            regions.push(Preimage {
+                offset,
+                len,
+                digest,
+                data: bytes[header_end..data_end].to_vec(),
+            });
+            cursor = data_end;
+        }
+        let intent_at = cursor;
+        if bytes.len() - intent_at < 2 + FRAME_CRC_BYTES {
             return Err(FrameError::Incomplete);
         }
-        let intent_len = u16::from_le_bytes([bytes[regions_end], bytes[regions_end + 1]]) as usize;
-        let total = regions_end + 2 + intent_len + FRAME_CRC_BYTES;
+        let intent_len = u16::from_le_bytes([bytes[intent_at], bytes[intent_at + 1]]) as usize;
+        let total = intent_at + 2 + intent_len + FRAME_CRC_BYTES;
         if bytes.len() < total {
             return Err(FrameError::Incomplete);
         }
@@ -136,20 +174,7 @@ impl Frame {
         if crc32(&bytes[..total - FRAME_CRC_BYTES]) != stored {
             return Err(FrameError::CrcMismatch { seq });
         }
-        let mut regions = Vec::with_capacity(region_count);
-        for index in 0..region_count {
-            let base = FRAME_PREFIX_BYTES + index * PREIMAGE_BYTES;
-            regions.push(Preimage {
-                offset: read_u64(bytes, base),
-                len: read_u64(bytes, base + 8),
-                digest: {
-                    let mut digest = [0u8; PREIMAGE_DIGEST_BYTES];
-                    digest.copy_from_slice(&bytes[base + 16..base + PREIMAGE_BYTES]);
-                    digest
-                },
-            });
-        }
-        let intent = bytes[regions_end + 2..regions_end + 2 + intent_len].to_vec();
+        let intent = bytes[intent_at + 2..intent_at + 2 + intent_len].to_vec();
         Ok((
             Self {
                 seq,
@@ -178,6 +203,10 @@ pub enum FrameError {
     TooManyRegions,
     /// 意图长度超出 `u16`。
     IntentTooLong,
+    /// 原像长度与区间长度不一致。
+    PreimageLengthMismatch,
+    /// 原像字节数超出 `u32`。
+    PreimageTooLarge,
 }
 
 fn read_u64(bytes: &[u8], offset: usize) -> u64 {
@@ -201,11 +230,13 @@ mod tests {
                     offset: 512,
                     len: 4096,
                     digest: [0x11; PREIMAGE_DIGEST_BYTES],
+                    data: Vec::new(),
                 },
                 Preimage {
                     offset: 8192,
                     len: 512,
                     digest: [0x22; PREIMAGE_DIGEST_BYTES],
+                    data: Vec::new(),
                 },
             ],
         }
@@ -219,6 +250,28 @@ mod tests {
         let (parsed, consumed) = Frame::parse(&bytes).expect("解析应成立");
         assert_eq!(parsed, original);
         assert_eq!(consumed, bytes.len());
+    }
+
+    #[test]
+    fn table_preimage_bytes_survive_the_round_trip() {
+        let mut original = frame(0, FrameKind::Preimage, false);
+        original.regions[0].data = vec![0xab; 4096];
+        let mut bytes = Vec::new();
+        original.encode_into(&mut bytes).expect("编码应成立");
+        let (parsed, _) = Frame::parse(&bytes).expect("解析应成立");
+        assert_eq!(parsed.regions[0].data, vec![0xab; 4096]);
+        assert!(parsed.regions[1].data.is_empty());
+    }
+
+    #[test]
+    fn preimage_bytes_longer_than_the_region_are_rejected() {
+        let mut original = frame(0, FrameKind::Preimage, false);
+        original.regions[0].data = vec![0u8; 4097];
+        let mut bytes = Vec::new();
+        assert_eq!(
+            original.encode_into(&mut bytes),
+            Err(FrameError::PreimageLengthMismatch)
+        );
     }
 
     #[test]
