@@ -1,0 +1,13 @@
+/target/
+**/*.img
+**/*.raw
+**/*.qcow2
+*.log
+*.tmp
+tests/artifacts/
+plan/baseline/images/
+.idea/
+.vscode/
+*.swp
+.DS_Store
+.devin/
