@@ -36,7 +36,7 @@
 cargo build --release
 ```
 
-产物为 `target/release/DiskEdit`（帮助与消息里以 `diskedit` 称呼它）。
+产物为 `target/release/diskedit`。
 
 ## 快速上手
 
