@@ -3,12 +3,16 @@
 use diskedit_core::evidence::{Evidence, Observation};
 use diskedit_core::fingerprint::{Fingerprint, Strength};
 use diskedit_core::fs::Program;
+use diskedit_core::fs::catalog::{self, Support};
+use diskedit_core::fs::profile::ContentKind;
+use diskedit_core::table::gpt::entries::PartitionEntry;
 use diskedit_core::table::gpt::parse::GptCopy;
+use diskedit_core::table::mbr::primary::MbrEntry;
 use diskedit_core::table::{GptEvidence, Mbr};
 
-use super::super::TableFormat;
-use super::super::refusal::Refusal;
-use crate::app::observe::{PartitionFacts, Snapshot};
+use crate::app::decide::Refusal;
+use crate::app::observe::snapshot::PartitionFacts;
+use crate::app::observe::{Snapshot, TableFormat};
 
 /// 通过准入的事实视图。
 pub struct Admission<'a> {
@@ -38,11 +42,9 @@ pub fn admit(snapshot: &Snapshot) -> Result<Admission<'_>, Refusal> {
             return Err(Refusal::OccupancyUnknown { why: why.clone() });
         }
     }
-    let partitions = snapshot
-        .contents()
-        .ok_or_else(|| Refusal::FactUnknown {
-            what: "partition topology".to_owned(),
-        })?;
+    let partitions = snapshot.contents().ok_or_else(|| Refusal::FactUnknown {
+        what: "partition topology".to_owned(),
+    })?;
     Ok(Admission {
         identity,
         length,
@@ -59,9 +61,7 @@ pub fn strong_identity(snapshot: &Snapshot) -> Result<Fingerprint, Refusal> {
             why: "指纹等级不足以识别目标".to_owned(),
         }),
         Observation::Unknown { why } => Err(Refusal::IdentityUnprovable { why: why.clone() }),
-        Observation::NotApplicable { why } => {
-            Err(Refusal::IdentityUnprovable { why: why.clone() })
-        }
+        Observation::NotApplicable { why } => Err(Refusal::IdentityUnprovable { why: why.clone() }),
     }
 }
 
@@ -178,6 +178,87 @@ fn known<T: Copy>(fact: &Observation<T>, what: &str) -> Result<T, Refusal> {
             what: format!("{what}: {why}"),
         }),
     }
+}
+
+/// 目标的逻辑块大小。
+pub fn sector(snapshot: &Snapshot) -> Result<u64, Refusal> {
+    known(&snapshot.disk.sector_size, "target logical block size")
+}
+
+/// 指定分区，缺失即拒绝。
+pub fn partition(snapshot: &Snapshot, number: u32) -> Result<&PartitionFacts, Refusal> {
+    snapshot
+        .partition(number)
+        .ok_or(Refusal::PartitionMissing { number })
+}
+
+/// 分区的内容类别。
+pub fn content(facts: &PartitionFacts) -> Result<ContentKind, Refusal> {
+    match &facts.content {
+        Observation::Known { value, .. } => Ok(*value),
+        Observation::Unknown { why } => Err(Refusal::FactUnknown {
+            what: format!("content of partition {}: {why}", facts.partition.number),
+        }),
+        Observation::NotApplicable { why } => Err(Refusal::FactUnknown {
+            what: format!("content of partition {}: {why}", facts.partition.number),
+        }),
+    }
+}
+
+/// 取某项能力需要的程序；不支持时给出内容类别与原因。
+pub fn programs(
+    kind: ContentKind,
+    verb: catalog::Verb,
+) -> Result<Option<&'static [Program]>, Refusal> {
+    match catalog::profile(kind).support(verb) {
+        Support::Tools(tools) => Ok(Some(tools)),
+        Support::NotApplicable => Ok(None),
+        Support::Unsupported(why) => Err(Refusal::ContentUnsupported {
+            what: format!("{} {verb:?}", kind.as_str()),
+            why: why.to_owned(),
+        }),
+    }
+}
+
+/// GPT 中已使用的条目及其分区号。
+pub fn gpt_used(copy: &GptCopy) -> impl Iterator<Item = (u32, &PartitionEntry)> {
+    copy.entries
+        .iter()
+        .enumerate()
+        .filter(|(_, entry)| !entry.partition_type_guid.is_zero())
+        .map(|(index, entry)| (index as u32 + 1, entry))
+}
+
+/// GPT 条目数组里的第一个空槽。
+pub fn gpt_free_slot(copy: &GptCopy) -> Option<u32> {
+    copy.entries
+        .iter()
+        .position(|entry| entry.partition_type_guid.is_zero())
+        .map(|index| index as u32 + 1)
+}
+
+/// MBR 主分区中已使用的条目。
+pub fn mbr_used(mbr: &Mbr) -> impl Iterator<Item = (u32, MbrEntry)> + '_ {
+    mbr.entries
+        .iter()
+        .enumerate()
+        .filter(|(_, entry)| !entry.is_empty())
+        .map(|(index, entry)| (index as u32 + 1, *entry))
+}
+
+/// MBR 主分区里的第一个空槽。
+pub fn mbr_free_slot(mbr: &Mbr) -> Option<u32> {
+    mbr.entries
+        .iter()
+        .position(|entry| entry.is_empty())
+        .map(|index| index as u32 + 1)
+}
+
+/// 两个半开区间是否重叠。
+pub fn overlaps(a_start: u64, a_len: u64, b_start: u64, b_len: u64) -> bool {
+    let a_end = a_start.saturating_add(a_len);
+    let b_end = b_start.saturating_add(b_len);
+    a_start < b_end && b_start < a_end
 }
 
 fn summarize(occupancy: &crate::platform::Occupancy) -> String {

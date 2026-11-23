@@ -4,12 +4,9 @@
 //! 的区间集合。容量不足与几何越界都在这里拒绝。
 
 use diskedit_core::region::{Region, RegionError};
-use diskedit_core::table::gpt::entries::is_used;
-use diskedit_core::table::gpt::parse::GptCopy;
-use diskedit_core::table::Mbr;
 
-use super::super::TableFormat;
-use super::Refusal;
+use crate::app::decide::Refusal;
+use crate::app::observe::TableFormat;
 
 /// 一份 GPT 条目数组的字节数。
 pub const ENTRY_ARRAY_BYTES: u64 = 128 * 128;
@@ -102,10 +99,7 @@ pub fn table_regions(
                 region(0, MBR_BYTES)?,
                 region(sector, sector)?,
                 region(2 * sector, span_bytes)?,
-                region(
-                    layout.backup_array_lba() * sector,
-                    span_bytes,
-                )?,
+                region(layout.backup_array_lba() * sector, span_bytes)?,
                 region(layout.backup_header_lba() * sector, sector)?,
             ])
         }

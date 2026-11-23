@@ -61,7 +61,9 @@ pub enum Command {
     Inspect,
     Check,
     RecordsList,
-    RecordsVerify { token: String },
+    RecordsVerify {
+        token: String,
+    },
     RecordsScan,
     New {
         table: TableFormat,
@@ -82,8 +84,8 @@ pub enum Command {
     },
     Set {
         partition: u32,
-        label: Option<String>,
-        attributes: u64,
+        property: SetProperty,
+        value: String,
     },
     Mkfs {
         partition: u32,
@@ -103,6 +105,16 @@ pub enum Command {
         offset_sectors: i64,
     },
     Recover,
+}
+
+/// `set` 可修改的分区属性。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SetProperty {
+    Name,
+    Label,
+    Uuid,
+    Flag,
+    Type,
 }
 
 /// 首次观察使用的代次。执行期重探所得代次不得早于此值。

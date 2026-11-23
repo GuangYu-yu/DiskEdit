@@ -4,8 +4,10 @@
 
 use diskedit_core::fs::FsKind;
 use diskedit_core::region::Region;
+use diskedit_core::table::Guid;
 
-use super::TableFormat;
+use crate::app::observe::SetProperty;
+use crate::app::observe::TableFormat;
 
 /// 步骤对目标的影响方式。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -33,15 +35,31 @@ pub enum StepKind {
     ScanRecords,
     /// 写出完整分区表。
     WriteTable { format: TableFormat },
-    /// 更新条目数组与头部校验。
-    WriteEntries { format: TableFormat },
-    /// 修改文件系统属性。
-    SetAttributes { partition: u32 },
-    /// 在分区上建卷。
-    MakeFilesystem {
-        partition: u32,
-        filesystem: FsKind,
+    /// 新增一个分区。
+    AddPartition {
+        format: TableFormat,
+        start_lba: u64,
+        sectors: u64,
+        type_guid: Guid,
+        name: String,
     },
+    /// 删除一个分区。
+    DeletePartition { format: TableFormat, partition: u32 },
+    /// 改变一个分区的起止。
+    ResizePartition {
+        format: TableFormat,
+        partition: u32,
+        start_lba: u64,
+        sectors: u64,
+    },
+    /// 修改分区或文件系统属性。
+    SetProperty {
+        partition: u32,
+        property: SetProperty,
+        value: String,
+    },
+    /// 在分区上建卷。
+    MakeFilesystem { partition: u32, filesystem: FsKind },
     /// 扩展文件系统到指定字节数。
     GrowFilesystem {
         partition: u32,
@@ -54,7 +72,7 @@ pub enum StepKind {
         filesystem: FsKind,
         bytes: u64,
     },
-    /// 复制一个分区的内容到另一个区间。
+    /// 复制一个分区的内容到另一个分区。
     CopyPartition { source: u32, target: u32 },
     /// 平移一个分区的内容。
     MovePartition { partition: u32, offset_sectors: i64 },
@@ -75,8 +93,10 @@ impl StepKind {
             | Self::ScanRecords => Access::ReadOnly,
             Self::RefreshKernelView | Self::RecoverRecords => Access::WritesExternalState,
             Self::WriteTable { .. }
-            | Self::WriteEntries { .. }
-            | Self::SetAttributes { .. }
+            | Self::AddPartition { .. }
+            | Self::DeletePartition { .. }
+            | Self::ResizePartition { .. }
+            | Self::SetProperty { .. }
             | Self::MakeFilesystem { .. }
             | Self::GrowFilesystem { .. }
             | Self::ShrinkFilesystem { .. }

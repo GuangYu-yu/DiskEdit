@@ -10,6 +10,8 @@ use diskedit_core::fs::Program;
 pub enum Refusal {
     /// 写命令缺少确认旗标。
     ConfirmationRequired,
+    /// 目标已有可识别的分区表或内容，覆盖需要显式旗标。
+    OverwriteNotConfirmed,
     /// 目标身份读不到或等级不足。
     IdentityUnprovable { why: String },
     /// 目标与计划所指不是同一个对象。
@@ -53,6 +55,7 @@ impl Refusal {
     pub fn next_step(&self) -> &'static str {
         match self {
             Self::ConfirmationRequired => "确认后以 --yes 重新执行",
+            Self::OverwriteNotConfirmed => "目标不是空盘；确认覆盖后加覆盖旗标重新执行",
             Self::IdentityUnprovable { .. } => "确认目标是块设备整盘、分区或镜像文件后重试",
             Self::IdentityChanged => "目标在计划之后发生变化，重新运行以重新观察",
             Self::PlanDigestMismatch => "计划不一致，放弃本次执行并重新生成计划",

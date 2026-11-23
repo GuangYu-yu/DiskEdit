@@ -43,7 +43,7 @@ pub fn confirm(
     if !plan.digest_is_current() {
         return Err(Refusal::PlanDigestMismatch);
     }
-    let planned = plan.identity.ok_or_else(|| Refusal::IdentityUnprovable {
+    let planned = plan.identity().ok_or_else(|| Refusal::IdentityUnprovable {
         why: "只读计划不能作为写计划确认".to_owned(),
     })?;
     let observed = match current {
@@ -59,8 +59,8 @@ pub fn confirm(
         return Err(Refusal::IdentityChanged);
     }
     Ok(ConfirmedPlan {
-        steps: plan.steps,
-        digest: plan.digest,
+        steps: plan.steps().to_vec(),
+        digest: plan.digest(),
         identity: planned,
     })
 }
