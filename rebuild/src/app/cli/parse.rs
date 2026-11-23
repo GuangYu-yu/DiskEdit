@@ -77,14 +77,11 @@ fn collect(rest: &[String], spec: &Spec) -> Result<(Vec<String>, Flags), String>
                 Some((name, value)) => (name.to_owned(), Some(value.to_owned())),
                 None => (token.clone(), None),
             };
-            let value_needed = if name == "--identity" {
-                Some(true)
-            } else {
-                spec.options
-                    .iter()
-                    .find(|opt| opt.name == name)
-                    .map(|opt| opt.value)
-            };
+            let value_needed = spec
+                .options
+                .iter()
+                .find(|opt| opt.name == name)
+                .map(|opt| opt.value);
             let Some(value_needed) = value_needed else {
                 return Err(format!("未知选项 {name}"));
             };

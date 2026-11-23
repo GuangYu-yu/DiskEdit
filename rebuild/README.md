@@ -36,7 +36,7 @@ Write commands modify the target itself, so a wrong change can leave the origina
 cargo build --release
 ```
 
-The binary is `target/release/DiskEdit` (help text and messages print it as `diskedit`).
+The binary is `target/release/diskedit`.
 
 ## Quick start
 

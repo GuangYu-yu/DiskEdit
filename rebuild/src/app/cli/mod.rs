@@ -4,7 +4,7 @@
 //! 落退出码 [`report::exit::USAGE`]，且不打开目标。
 
 mod parse;
-mod spec;
+pub(crate) mod spec;
 
 use std::ffi::OsString;
 
@@ -15,6 +15,11 @@ use crate::app::report::{exit, json, text};
 use crate::platform::{self, Platform, PlatformError};
 
 use parse::Invocation;
+
+/// 声明过的全部入口名，按声明顺序。
+pub fn declared_entries() -> impl Iterator<Item = &'static str> {
+    spec::SPECS.iter().map(|entry| entry.name)
+}
 
 /// 解析参数并返回退出码。
 pub fn dispatch(args: impl IntoIterator<Item = OsString>) -> u8 {

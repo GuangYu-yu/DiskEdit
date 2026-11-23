@@ -36,6 +36,7 @@ pub struct Spec {
     pub name: &'static str,
     pub group: Group,
     pub summary: &'static str,
+    pub summary_en: &'static str,
     pub usage: &'static [&'static str],
     pub target: TargetMode,
     pub confirmation: bool,
@@ -50,6 +51,10 @@ const YES: Opt = Opt {
     name: "--yes",
     value: false,
 };
+const IDENTITY: Opt = Opt {
+    name: "--identity",
+    value: true,
+};
 
 const INFO: &[Opt] = &[
     SECTOR,
@@ -62,6 +67,7 @@ const NONE: &[Opt] = &[];
 const RESIZE: &[Opt] = &[
     SECTOR,
     YES,
+    IDENTITY,
     Opt {
         name: "--allow-move",
         value: false,
@@ -102,6 +108,7 @@ const RESIZE: &[Opt] = &[
 const MOVE: &[Opt] = &[
     SECTOR,
     YES,
+    IDENTITY,
     Opt {
         name: "--start",
         value: true,
@@ -118,6 +125,7 @@ const MOVE: &[Opt] = &[
 const COPY: &[Opt] = &[
     SECTOR,
     YES,
+    IDENTITY,
     Opt {
         name: "--start",
         value: true,
@@ -139,10 +147,11 @@ const COPY: &[Opt] = &[
         value: false,
     },
 ];
-const DELETE: &[Opt] = &[SECTOR, YES];
+const DELETE: &[Opt] = &[SECTOR, YES, IDENTITY];
 const SET: &[Opt] = &[
     SECTOR,
     YES,
+    IDENTITY,
     Opt {
         name: "--random",
         value: false,
@@ -152,15 +161,17 @@ const CHECK: &[Opt] = &[SECTOR];
 const MKFS: &[Opt] = &[
     SECTOR,
     YES,
+    IDENTITY,
     Opt {
         name: "--label",
         value: true,
     },
 ];
-const RESIZEFS: &[Opt] = &[SECTOR, YES];
+const RESIZEFS: &[Opt] = &[SECTOR, YES, IDENTITY];
 const RECOVER: &[Opt] = &[
     SECTOR,
     YES,
+    IDENTITY,
     Opt {
         name: "--replay-table-only",
         value: false,
@@ -177,6 +188,7 @@ const RECOVER: &[Opt] = &[
 const NEW: &[Opt] = &[
     SECTOR,
     YES,
+    IDENTITY,
     Opt {
         name: "--table",
         value: true,
@@ -189,6 +201,7 @@ const NEW: &[Opt] = &[
 const ADD: &[Opt] = &[
     SECTOR,
     YES,
+    IDENTITY,
     Opt {
         name: "--start",
         value: true,
@@ -217,6 +230,7 @@ pub const SPECS: &[Spec] = &[
         name: "info",
         group: Group::Everyday,
         summary: "显示目标与分区概况",
+        summary_en: "show the target and partition overview",
         usage: &[
             "diskedit info <TARGET> [--sector-size N]",
             "diskedit info <TARGET>:N --grow [--sector-size N]",
@@ -229,33 +243,37 @@ pub const SPECS: &[Spec] = &[
         name: "inspect",
         group: Group::Everyday,
         summary: "逐分区显示起止与内容",
+        summary_en: "show per-partition extents and content",
         usage: &["diskedit inspect <TARGET>"],
         target: TargetMode::Whole,
         confirmation: false,
-        options: NONE,
+        options: &[IDENTITY],
     },
     Spec {
         name: "records list",
         group: Group::Everyday,
         summary: "列出记录目录条目",
+        summary_en: "list recovery record directory entries",
         usage: &["diskedit records list [TARGET]"],
         target: TargetMode::None,
         confirmation: false,
-        options: NONE,
+        options: &[IDENTITY],
     },
     Spec {
         name: "records verify",
         group: Group::Everyday,
         summary: "校验一条记录",
+        summary_en: "verify one recovery record",
         usage: &["diskedit records verify <TARGET> <ID>"],
         target: TargetMode::Whole,
         confirmation: false,
-        options: NONE,
+        options: &[IDENTITY],
     },
     Spec {
         name: "records scan",
         group: Group::Everyday,
         summary: "扫描记录目录",
+        summary_en: "scan a recovery record container",
         usage: &["diskedit records scan <ROOT>"],
         target: TargetMode::Any,
         confirmation: false,
@@ -265,6 +283,7 @@ pub const SPECS: &[Spec] = &[
         name: "resize",
         group: Group::Everyday,
         summary: "改变分区大小",
+        summary_en: "resize a partition",
         usage: &[
             "diskedit resize <TARGET>[:N] <SIZE> [--allow-move] [--chunk N] [--grow-lv] [--lv NAME] [--no-fs] --yes",
             "diskedit resize <TARGET>:N --end LBA [--align A] [--no-fs] --yes",
@@ -278,6 +297,7 @@ pub const SPECS: &[Spec] = &[
         name: "move",
         group: Group::Everyday,
         summary: "平移一个分区",
+        summary_en: "relocate a partition",
         usage: &["diskedit move <TARGET>:N --start <LBA|end|align> [--chunk N] --yes [--align A]"],
         target: TargetMode::Partition,
         confirmation: true,
@@ -287,6 +307,7 @@ pub const SPECS: &[Spec] = &[
         name: "copy",
         group: Group::Everyday,
         summary: "复制分区到新位置并新增分区",
+        summary_en: "copy a partition to a new location and add its entry",
         usage: &[
             "diskedit copy <TARGET>:N --start <LBA|end> [--chunk N] --yes [--align A] [--name S] [--keep-partuuid]",
         ],
@@ -298,6 +319,7 @@ pub const SPECS: &[Spec] = &[
         name: "delete",
         group: Group::Everyday,
         summary: "删除一个分区",
+        summary_en: "delete a partition entry",
         usage: &["diskedit delete <TARGET>:N --yes"],
         target: TargetMode::Partition,
         confirmation: true,
@@ -307,6 +329,7 @@ pub const SPECS: &[Spec] = &[
         name: "set",
         group: Group::Everyday,
         summary: "修改分区或文件系统属性",
+        summary_en: "set a partition or filesystem attribute",
         usage: &[
             "diskedit set <TARGET>:N name S --yes",
             "diskedit set <TARGET>:N label S --yes",
@@ -322,6 +345,7 @@ pub const SPECS: &[Spec] = &[
         name: "check",
         group: Group::Everyday,
         summary: "检查一个分区的文件系统",
+        summary_en: "check the filesystem in a partition",
         usage: &["diskedit check <TARGET>:N"],
         target: TargetMode::Partition,
         confirmation: false,
@@ -331,6 +355,7 @@ pub const SPECS: &[Spec] = &[
         name: "mkfs",
         group: Group::Everyday,
         summary: "在分区上建卷",
+        summary_en: "create a filesystem in a partition",
         usage: &["diskedit mkfs <TARGET>:N <FS> --yes [--label S]"],
         target: TargetMode::Partition,
         confirmation: true,
@@ -340,6 +365,7 @@ pub const SPECS: &[Spec] = &[
         name: "resizefs",
         group: Group::Everyday,
         summary: "调整分区内文件系统大小",
+        summary_en: "resize the filesystem inside a partition",
         usage: &[
             "diskedit resizefs <TARGET>:N [BYTES] --yes",
             "diskedit resizefs <MOUNTPOINT> [BYTES] --yes",
@@ -352,6 +378,7 @@ pub const SPECS: &[Spec] = &[
         name: "recover",
         group: Group::Everyday,
         summary: "回滚、重放或放弃记录",
+        summary_en: "roll back, replay or release a recovery record",
         usage: &[
             "diskedit recover <TARGET> --yes",
             "diskedit recover <TARGET> --replay-table-only --yes",
@@ -365,6 +392,7 @@ pub const SPECS: &[Spec] = &[
         name: "new",
         group: Group::LowLevel,
         summary: "新建分区表",
+        summary_en: "create a fresh partition table",
         usage: &["diskedit new <TARGET> [--table gpt|mbr] --yes [--overwrite-data]"],
         target: TargetMode::Whole,
         confirmation: true,
@@ -374,6 +402,7 @@ pub const SPECS: &[Spec] = &[
         name: "add",
         group: Group::LowLevel,
         summary: "新增一个分区",
+        summary_en: "add a partition",
         usage: &[
             "diskedit add <TARGET> SIZE [--start LBA] [--align A] [--part-number N] [--name S] [--type-guid G] --yes",
         ],

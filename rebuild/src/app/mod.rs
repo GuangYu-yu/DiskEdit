@@ -7,6 +7,7 @@ use std::ffi::OsString;
 
 pub mod cli;
 pub mod decide;
+pub mod docsgen;
 pub mod execute;
 pub mod observe;
 pub mod report;
