@@ -9,6 +9,7 @@ pub mod loopdev;
 pub mod lvm;
 pub mod mount;
 pub mod occupancy;
+pub mod records;
 pub mod source;
 pub mod target;
 
@@ -156,6 +157,19 @@ impl Platform for Linux {
 
     fn require(&self, program: Program) -> PlatformResult<PathBuf> {
         resolve(program)
+    }
+
+    fn records(
+        &self,
+        target: &Path,
+        identity: Fingerprint,
+    ) -> PlatformResult<Box<dyn crate::platform::RecordStore>> {
+        let kind = target::Target::open_read_only(target)?.kind();
+        Ok(Box::new(records::LinuxRecords::new(
+            target,
+            kind,
+            &identity.bytes(),
+        )))
     }
 
     fn run(&self, program: Program, args: &[&str]) -> PlatformResult<Output> {

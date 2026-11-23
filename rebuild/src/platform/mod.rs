@@ -427,6 +427,29 @@ impl Output {
     }
 }
 
+/// 记录目录中的一项。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RecordEntry {
+    pub name: String,
+    pub bytes: u64,
+    pub active: bool,
+}
+
+/// 目标对应的记录目录。
+///
+/// 目录位置与目录权限由平台决定；上层只按 `load`/`store`/`clear`/`quarantine`
+/// 操作整份记录，不拼接文件路径。`store` 必须整份替换并提交，`load` 读出最后一次
+/// 成功提交的内容；不存在与读不出分属 `Ok(None)` 与 `Err`。
+pub trait RecordStore {
+    fn location(&self) -> &Path;
+    fn load(&self) -> PlatformResult<Option<Vec<u8>>>;
+    fn store(&mut self, bytes: &[u8]) -> PlatformResult<()>;
+    fn clear(&mut self) -> PlatformResult<()>;
+    fn entries(&self) -> PlatformResult<Vec<RecordEntry>>;
+    /// 把活跃记录改名归档，返回归档后的文件名。
+    fn quarantine(&mut self) -> PlatformResult<String>;
+}
+
 /// 已打开目标的读写句柄。
 pub trait TargetHandle {
     fn path(&self) -> &Path;
@@ -482,6 +505,15 @@ pub trait Platform {
     fn umount(&self, mount_point: &Path) -> PlatformResult<()>;
     fn require(&self, program: Program) -> PlatformResult<PathBuf>;
     fn run(&self, program: Program, args: &[&str]) -> PlatformResult<Output>;
+    /// 目标对应的记录目录；宿主没有该能力时返回 `NotSupported`。
+    fn records(
+        &self,
+        target: &Path,
+        identity: Fingerprint,
+    ) -> PlatformResult<Box<dyn RecordStore>> {
+        let _ = (target, identity);
+        Err(PlatformError::not_supported("该宿主不提供记录目录"))
+    }
 }
 
 /// 打开本平台的端口实现。平台选择只在此处发生。
