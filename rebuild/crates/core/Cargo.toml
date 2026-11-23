@@ -1,0 +1,15 @@
+[package]
+name = "diskedit_core"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Pure computational core of DiskEdit: regions, geometry, partition tables, filesystem profiles, evidence and persistent records"
+license = "MIT"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+
+[lints]
+workspace = true

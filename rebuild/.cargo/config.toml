@@ -1,18 +1,4 @@
-[build]
-rustflags = [
-    "-C", "codegen-units=1",
-    "--remap-path-prefix=/home/runner/.cargo/registry=registry",
-    "--remap-path-prefix=/home/runner/work/DiskEdit=.",
-    "--remap-path-prefix=/home/runner=/"
-]
+# 只保留与构建环境相关、且不绑定特定 CI 路径的项。
+# release 档的优化与 panic 策略写在 Cargo.toml 的 [profile.release]。
 
-[profile.release]
-opt-level = 3
-lto = "fat"
-codegen-units = 1
-# panic 策略必须是 unwind：库层不退出进程，退出请求与 panic 归责都靠 main 的
-# catch_unwind 展开到入口后统一处理。abort 会让 3/4/5 三个退出码与
-# "panic → 部分完成/内部错误"的报告一并失效
-strip = "symbols"
-debug = 0
-incremental = false
+[build]

@@ -1,6 +1,41 @@
+[workspace]
+members = ["crates/core"]
+resolver = "3"
+
+[workspace.lints.clippy]
+wildcard_enum_match_arm = "deny"
+let_underscore_must_use = "deny"
+
 [package]
 name = "DiskEdit"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.85"
 description = "Edit disk images / whole disks as byte-addressable files: partition tables (GPT/MBR), FS identification, mkfs/resize via external tools, partition relocation with resumable checkpoints"
 license = "MIT"
+default-run = "DiskEdit"
+
+[lib]
+name = "diskedit"
+path = "src/lib.rs"
+
+[[bin]]
+name = "DiskEdit"
+path = "src/main.rs"
+
+[dependencies]
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+serde_json = "1"
+trybuild = "1"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = "symbols"
+debug = 0
+incremental = false
