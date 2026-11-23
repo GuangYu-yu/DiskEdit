@@ -27,7 +27,11 @@ impl BlockSource {
             .open(path)
             .map_err(|error| PlatformError::io(path, error))?;
         let len = ioctl_get_u64(&file, path, BLKGETSIZE64)?;
-        let sector_size = u64::from(ioctl_get_u32(&file, path, libc::BLKSSZGET as libc::c_ulong)?);
+        let sector_size = u64::from(ioctl_get_u32(
+            &file,
+            path,
+            libc::BLKSSZGET as libc::c_ulong,
+        )?);
         if sector_size == 0 {
             return Err(PlatformError::parse(format!(
                 "{} 报告的逻辑扇区为 0",
@@ -206,9 +210,7 @@ mod fallback {
         }
 
         fn barrier(&mut self) -> PlatformResult<()> {
-            Err(PlatformError::not_applicable(
-                "当前平台没有块设备提交接口",
-            ))
+            Err(PlatformError::not_applicable("当前平台没有块设备提交接口"))
         }
     }
 }

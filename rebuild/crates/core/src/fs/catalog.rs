@@ -203,7 +203,7 @@ pub const fn profile(kind: ContentKind) -> Profile {
         },
         ContentKind::Swap => Profile {
             grow: Support::Tools(SWAP_REBUILD),
-            shrink: Support::Unsupported("swap has no in-place shrink; rebuild it with mkswap"),
+            shrink: Support::Unsupported("swap 区域没有原地收缩；按目标尺寸重建"),
             attrs: Support::Tools(&[Program::Swaplabel]),
             check: Support::Unsupported("swap has no filesystem check"),
             mkfs: Support::Tools(SWAP_REBUILD),

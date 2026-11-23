@@ -17,6 +17,27 @@ use diskedit_core::fs::Program;
 #[cfg(target_os = "linux")]
 pub mod linux;
 
+/// 平台层的字节区间视图：起点与长度都以字节计。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Region {
+    pub offset: u64,
+    pub len: u64,
+}
+
+impl Region {
+    pub const fn new(offset: u64, len: u64) -> Self {
+        Self { offset, len }
+    }
+
+    pub const fn end(self) -> u64 {
+        self.offset.saturating_add(self.len)
+    }
+
+    pub const fn is_empty(self) -> bool {
+        self.len == 0
+    }
+}
+
 /// 文件交互失败的语义分类。
 ///
 /// 上层按这些类别决定文案与退出码，不接触具体错误码。
@@ -37,10 +58,10 @@ pub enum PlatformError {
         path: PathBuf,
         source: std::io::Error,
     },
-    /// 当前平台或目标形态不具备该能力，调用方不应把它当作失败重试。
-    NotApplicable { why: String },
-    /// 目标存在，但本实现拒绝执行该动作。
-    Unsupported { why: String },
+    /// 目标存在，但本实现拒绝执行该动作；环境不适用也走这一出口。
+    NotSupported { why: String },
+    /// 目标上的文件系统不在支持矩阵内。
+    UnsupportedFs { why: String },
     /// 目标被占用或被锁住。
     Busy { why: String },
     /// 权限不足。
@@ -59,12 +80,22 @@ impl PlatformError {
         }
     }
 
-    pub fn not_applicable(why: impl Into<String>) -> Self {
-        Self::NotApplicable { why: why.into() }
+    pub fn not_supported(why: impl Into<String>) -> Self {
+        Self::NotSupported { why: why.into() }
     }
 
+    pub fn unsupported_fs(why: impl Into<String>) -> Self {
+        Self::UnsupportedFs { why: why.into() }
+    }
+
+    /// 当前环境不适用与该能力不支持走同一出口。
+    pub fn not_applicable(why: impl Into<String>) -> Self {
+        Self::NotSupported { why: why.into() }
+    }
+
+    /// 能力不支持的简写。
     pub fn unsupported(why: impl Into<String>) -> Self {
-        Self::Unsupported { why: why.into() }
+        Self::NotSupported { why: why.into() }
     }
 
     pub fn busy(why: impl Into<String>) -> Self {
@@ -90,8 +121,8 @@ impl PlatformError {
     pub fn io_kind(&self) -> Option<IoKind> {
         match self {
             Self::Io { source, .. } => Some(classify_io(source.kind())),
-            Self::NotApplicable { .. }
-            | Self::Unsupported { .. }
+            Self::NotSupported { .. }
+            | Self::UnsupportedFs { .. }
             | Self::Busy { .. }
             | Self::Denied { .. }
             | Self::Parse { .. }
@@ -114,8 +145,8 @@ impl fmt::Display for PlatformError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Io { path, source } => write!(f, "读写 {} 失败：{source}", path.display()),
-            Self::NotApplicable { why } => write!(f, "当前环境不适用：{why}"),
-            Self::Unsupported { why } => write!(f, "能力不支持：{why}"),
+            Self::NotSupported { why } => write!(f, "能力不支持：{why}"),
+            Self::UnsupportedFs { why } => write!(f, "文件系统不受支持：{why}"),
             Self::Busy { why } => write!(f, "目标被占用：{why}"),
             Self::Denied { why } => write!(f, "权限不足：{why}"),
             Self::Parse { what } => write!(f, "解析失败：{what}"),
@@ -128,8 +159,8 @@ impl std::error::Error for PlatformError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Io { source, .. } => Some(source),
-            Self::NotApplicable { .. }
-            | Self::Unsupported { .. }
+            Self::NotSupported { .. }
+            | Self::UnsupportedFs { .. }
             | Self::Busy { .. }
             | Self::Denied { .. }
             | Self::Parse { .. }

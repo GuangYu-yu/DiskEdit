@@ -8,7 +8,7 @@ pub mod swap;
 
 use crate::platform::{MountEntry, Occupancy, PlatformResult, SwapEntry};
 
-use super::target::{disk_name, Target};
+use super::target::{Target, disk_name};
 
 /// 汇总目标作用域内的占用证据。
 ///
@@ -18,7 +18,10 @@ pub fn probe(target: &Target) -> PlatformResult<Occupancy> {
     let ids = device_ids(target)?;
     let mounts: Vec<MountEntry> = mounts::read()?
         .into_iter()
-        .filter(|entry| ids.iter().any(|(major, minor)| entry.major == *major && entry.minor == *minor))
+        .filter(|entry| {
+            ids.iter()
+                .any(|(major, minor)| entry.major == *major && entry.minor == *minor)
+        })
         .collect();
     let swaps: Vec<SwapEntry> = swap::read()?
         .into_iter()
@@ -51,9 +54,9 @@ fn device_ids(target: &Target) -> PlatformResult<Vec<(u32, u32)>> {
         return Ok(Vec::new());
     }
     let kname = disk_name(target.path())?;
-    let base = super::super::sysfs_root().join("block").join(&kname);
+    let base = super::sysfs_root().join("block").join(&kname);
     let mut ids = Vec::new();
-    if let Some(text) = super::super::read_optional_attr(&base.join("dev"))? {
+    if let Some(text) = super::read_optional_attr(&base.join("dev"))? {
         ids.push(parse_dev(&text)?);
     }
     let entries = match std::fs::read_dir(&base) {
@@ -64,10 +67,10 @@ fn device_ids(target: &Target) -> PlatformResult<Vec<(u32, u32)>> {
     for entry in entries {
         let entry = entry.map_err(|error| crate::platform::PlatformError::io(&base, error))?;
         let path = entry.path();
-        if super::super::read_optional_attr(&path.join("partition"))?.is_none() {
+        if super::read_optional_attr(&path.join("partition"))?.is_none() {
             continue;
         }
-        if let Some(text) = super::super::read_optional_attr(&path.join("dev"))? {
+        if let Some(text) = super::read_optional_attr(&path.join("dev"))? {
             ids.push(parse_dev(&text)?);
         }
     }
@@ -75,10 +78,9 @@ fn device_ids(target: &Target) -> PlatformResult<Vec<(u32, u32)>> {
 }
 
 fn parse_dev(text: &str) -> PlatformResult<(u32, u32)> {
-    let (major, minor) = text
-        .trim()
-        .split_once(':')
-        .ok_or_else(|| crate::platform::PlatformError::parse(format!("设备号缺少冒号：{text:?}")))?;
+    let (major, minor) = text.trim().split_once(':').ok_or_else(|| {
+        crate::platform::PlatformError::parse(format!("设备号缺少冒号：{text:?}"))
+    })?;
     let major = major
         .parse::<u32>()
         .map_err(|_| crate::platform::PlatformError::parse(format!("设备号主号无效：{text:?}")))?;

@@ -64,10 +64,9 @@ pub fn decode_octal(text: &str) -> String {
         if bytes[index] == b'\\' && index + 3 < bytes.len() {
             let digits = &bytes[index + 1..index + 4];
             if digits.iter().all(u8::is_ascii_digit) {
-                if let Ok(value) = u8::from_str_radix(
-                    std::str::from_utf8(digits).unwrap_or("000"),
-                    8,
-                ) {
+                if let Ok(value) =
+                    u8::from_str_radix(std::str::from_utf8(digits).unwrap_or("000"), 8)
+                {
                     out.push(value);
                     index += 4;
                     continue;

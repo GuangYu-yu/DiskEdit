@@ -20,7 +20,6 @@ use crate::platform::{
     ExitKind, Occupancy, Output, Partition, Platform, PlatformError, PlatformResult, TargetHandle,
 };
 
-pub use crate::platform::{PlatformError, PlatformResult};
 pub use crate::platform::{PlatformError as Error, PlatformResult as Result};
 
 /// Linux 宿主端口。
@@ -84,9 +83,8 @@ impl Platform for Linux {
                 output.stderr_text().trim().to_string(),
             ));
         }
-        kernel::parse_fsid(&output.stdout_text()).ok_or_else(|| {
-            PlatformError::parse("btrfs filesystem show 输出中没有可解析的 fsid")
-        })
+        kernel::parse_fsid(&output.stdout_text())
+            .ok_or_else(|| PlatformError::parse("btrfs filesystem show 输出中没有可解析的 fsid"))
     }
 
     fn loop_attach(&self, backing: &Path, offset: u64, size: u64) -> PlatformResult<PathBuf> {

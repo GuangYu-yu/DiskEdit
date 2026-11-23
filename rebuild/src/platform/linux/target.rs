@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use diskedit_core::fingerprint::Fingerprint;
 
 use super::source::{BlockSource, FileSource, Lease, ReadAt, WriteAt};
-use super::{read_optional_attr, read_required_attr, sysfs_root, PlatformError, PlatformResult};
+use super::{PlatformError, PlatformResult, read_optional_attr, read_required_attr, sysfs_root};
 use crate::platform::{Partition, TargetHandle, TargetKind};
 
 /// 目标底层句柄。
@@ -24,13 +24,6 @@ enum TargetSource {
 }
 
 impl TargetSource {
-    fn len_bytes(&self) -> u64 {
-        match self {
-            Self::File(source) => source.len_bytes(),
-            Self::Block(source) => source.len_bytes(),
-        }
-    }
-
     fn read_at(&self, offset: u64, buf: &mut [u8]) -> PlatformResult<usize> {
         match self {
             Self::File(source) => ReadAt::read_at(source, offset, buf),
@@ -160,8 +153,7 @@ impl Target {
     }
 
     pub fn metadata(&self) -> PlatformResult<std::fs::Metadata> {
-        let result = self.source.metadata();
-        result.map_err(|error| PlatformError::io(&self.path, error))
+        self.source.metadata()
     }
 
     /// 取得整盘独占地。租约随目标句柄存活。

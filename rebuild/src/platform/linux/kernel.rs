@@ -48,10 +48,9 @@ pub fn reread(path: &Path) -> PlatformResult<()> {
 pub fn add_partition(path: &Path, number: u32, start: u64, length: u64) -> PlatformResult<()> {
     let number = i32::try_from(number)
         .map_err(|_| PlatformError::parse(format!("分区号 {number} 超出 i32 范围")))?;
-    let start = i64::try_from(start)
-        .map_err(|_| PlatformError::parse("分区起点超出 i64 范围"))?;
-    let length = i64::try_from(length)
-        .map_err(|_| PlatformError::parse("分区长度超出 i64 范围"))?;
+    let start = i64::try_from(start).map_err(|_| PlatformError::parse("分区起点超出 i64 范围"))?;
+    let length =
+        i64::try_from(length).map_err(|_| PlatformError::parse("分区长度超出 i64 范围"))?;
     let mut partition = BlkpgPartition {
         start,
         length,
@@ -108,9 +107,7 @@ fn classify_ioctl(path: &Path, error: std::io::Error) -> PlatformError {
         Some(libc::EACCES) | Some(libc::EPERM) => {
             PlatformError::denied(format!("{} 的内核请求被拒绝：{error}", path.display()))
         }
-        Some(libc::EBUSY) => {
-            PlatformError::busy(format!("{} 正被占用：{error}", path.display()))
-        }
+        Some(libc::EBUSY) => PlatformError::busy(format!("{} 正被占用：{error}", path.display())),
         _ => PlatformError::io(path, error),
     }
 }
@@ -124,7 +121,10 @@ pub fn parse_fsid(text: &str) -> Option<[u8; 16]> {
 }
 
 fn parse_uuid(text: &str) -> Option<[u8; 16]> {
-    let hex: String = text.chars().take_while(|ch| ch.is_ascii_hexdigit() || *ch == '-').collect();
+    let hex: String = text
+        .chars()
+        .take_while(|ch| ch.is_ascii_hexdigit() || *ch == '-')
+        .collect();
     let digits: String = hex.chars().filter(|ch| *ch != '-').collect();
     if digits.len() != 32 {
         return None;
@@ -143,7 +143,7 @@ mod tests {
 
     #[test]
     fn parses_fsid_line() {
-        let text = "Label: none  uuid: 1111\n\tTotal devices 1 FS bytes used 1.00MiB\n\tfsid    9f7c1e2a-3b4d-4e5f-8a9b-0c1d2e3f4a5b\n";
+        let text = "Label: none  uuid: 1111\n\tTotal devices 1 FS bytes used 1.00MiB\n\tfsid:    9f7c1e2a-3b4d-4e5f-8a9b-0c1d2e3f4a5b\n";
         let fsid = parse_fsid(text).expect("可解析");
         assert_eq!(fsid[0], 0x9f);
         assert_eq!(fsid[15], 0x5b);

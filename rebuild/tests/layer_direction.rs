@@ -37,3 +37,103 @@ fn core_does_not_depend_on_the_package_root() {
         assert_eq!(dep["path"].as_str(), None, "纯核不得依赖路径包: {dep:?}");
     }
 }
+
+/// 平台假设只许出现在 `src/platform/`。
+///
+/// `app` 与纯核一旦写下系统接口、虚拟文件系统路径或具体工具名，移植时每一处都要
+/// 重新判断语义，所以这里把它们当作结构不变量静态核对。
+#[test]
+fn app_and_core_do_not_leak_platform_assumptions() {
+    const FORBIDDEN: &[&str] = &[
+        "platform::linux",
+        "libc",
+        "nix",
+        "std::os::unix",
+        "errno",
+        "/sys/",
+        "/proc/",
+        "mkfs.",
+        "e2fsck",
+        "resize2fs",
+        "dumpe2fs",
+        "tune2fs",
+        "ntfsresize",
+        "ntfsfix",
+        "ntfslabel",
+        "fsck.",
+        "resize.f2fs",
+        "xfs_growfs",
+        "xfs_repair",
+        "xfs_admin",
+        "fatresize",
+        "fatlabel",
+        "exfatlabel",
+        "mkswap",
+        "swaplabel",
+        "pvresize",
+        "mkntfs",
+        "losetup",
+        "sfdisk",
+        "partx",
+    ];
+
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    for relative in ["src/app", "crates/core/src"] {
+        let dir = root.join(relative);
+        let mut files = Vec::new();
+        collect_rust_files(&dir, &mut files);
+        assert!(!files.is_empty(), "{} 下应存在源文件", dir.display());
+        for file in files {
+            let text = std::fs::read_to_string(&file)
+                .unwrap_or_else(|error| panic!("读 {} 失败: {error}", file.display()));
+            for needle in FORBIDDEN {
+                assert!(
+                    !mentions(&text, needle),
+                    "{} 出现了平台假设 `{needle}`；它只许留在 src/platform/",
+                    file.display()
+                );
+            }
+        }
+    }
+}
+
+/// 以标识符边界查找：`Exfatlabel` 不算出现 `fatlabel`。
+fn mentions(text: &str, needle: &str) -> bool {
+    let mut from = 0;
+    while let Some(offset) = text[from..].find(needle) {
+        let start = from + offset;
+        let end = start + needle.len();
+        let before_ok = text[..start]
+            .chars()
+            .next_back()
+            .is_none_or(|ch| !is_ident(ch));
+        let after_ok = if needle.ends_with(|ch: char| is_ident(ch)) {
+            text[end..].chars().next().is_none_or(|ch| !is_ident(ch))
+        } else {
+            true
+        };
+        if before_ok && after_ok {
+            return true;
+        }
+        from = start + needle.len();
+    }
+    false
+}
+
+fn is_ident(ch: char) -> bool {
+    ch.is_ascii_alphanumeric() || ch == '_'
+}
+
+fn collect_rust_files(dir: &std::path::Path, found: &mut Vec<std::path::PathBuf>) {
+    let entries = std::fs::read_dir(dir)
+        .unwrap_or_else(|error| panic!("读目录 {} 失败: {error}", dir.display()));
+    for entry in entries {
+        let entry = entry.expect("目录项可读");
+        let path = entry.path();
+        if path.is_dir() {
+            collect_rust_files(&path, found);
+        } else if path.extension().is_some_and(|ext| ext == "rs") {
+            found.push(path);
+        }
+    }
+}
