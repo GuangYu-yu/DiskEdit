@@ -81,6 +81,21 @@ pub fn parse(sector: &[u8]) -> Result<Mbr, TableError> {
     Ok(Mbr { entries })
 }
 
+/// 把四个条目写回扇区，保留引导代码与其余字节，并置 0x55AA 签名。
+pub fn write_into(mbr: &Mbr, sector: &mut [u8; 512]) {
+    for (index, entry) in mbr.entries.iter().enumerate() {
+        let offset = MBR_ENTRY_BASE + index * MBR_ENTRY_BYTES;
+        let raw = &mut sector[offset..offset + MBR_ENTRY_BYTES];
+        raw.fill(0);
+        raw[0] = entry.boot;
+        raw[4] = entry.part_type;
+        raw[8..12].copy_from_slice(&entry.start_lba.to_le_bytes());
+        raw[12..16].copy_from_slice(&entry.size_lba.to_le_bytes());
+    }
+    sector[MBR_SIGNATURE_OFFSET] = 0x55;
+    sector[MBR_SIGNATURE_OFFSET + 1] = 0xAA;
+}
+
 fn parse_entry(raw: &[u8]) -> MbrEntry {
     MbrEntry {
         boot: raw[0],
