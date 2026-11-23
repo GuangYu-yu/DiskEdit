@@ -25,6 +25,7 @@ path = "src/main.rs"
 
 [dependencies]
 diskedit_core = { path = "crates/core" }
+libc = "0.2"
 
 [lints]
 workspace = true
