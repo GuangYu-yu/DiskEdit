@@ -216,8 +216,12 @@ mod tests {
             Err(PlatformError::not_supported("测试宿主不更新表"))
         }
 
-        fn btrfs_fsid(&self, _path: &Path) -> PlatformResult<[u8; 16]> {
-            Err(PlatformError::not_supported("测试宿主不读 FSID"))
+        fn btrfs_show(&self, _path: &Path) -> PlatformResult<crate::platform::BtrfsShow> {
+            Err(PlatformError::not_supported("测试宿主不读 btrfs"))
+        }
+
+        fn pvs(&self, _path: &Path) -> PlatformResult<Vec<crate::platform::PvFacts>> {
+            Ok(Vec::new())
         }
 
         fn loop_attach(

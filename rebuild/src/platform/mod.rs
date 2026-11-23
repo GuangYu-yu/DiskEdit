@@ -98,13 +98,23 @@ macro_rules! unsupported_platform {
                 )))
             }
 
-            fn btrfs_fsid(
+            fn btrfs_show(
                 &self,
                 _path: &std::path::Path,
-            ) -> $crate::platform::PlatformResult<[u8; 16]> {
+            ) -> $crate::platform::PlatformResult<$crate::platform::BtrfsShow> {
                 Err($crate::platform::PlatformError::not_supported(concat!(
                     $os,
-                    " 不支持读取 btrfs FSID"
+                    " 不支持读取 btrfs 信息"
+                )))
+            }
+
+            fn pvs(
+                &self,
+                _path: &std::path::Path,
+            ) -> $crate::platform::PlatformResult<Vec<$crate::platform::PvFacts>> {
+                Err($crate::platform::PlatformError::not_supported(concat!(
+                    $os,
+                    " 不支持读取物理卷"
                 )))
             }
 
@@ -395,6 +405,23 @@ impl Occupancy {
     }
 }
 
+/// btrfs 文件系统的顶层信息。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BtrfsShow {
+    pub fsid: [u8; 16],
+    /// 该文件系统当前跨的设备数。
+    pub devices: u32,
+}
+
+/// 物理卷的关键字段。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PvFacts {
+    pub name: String,
+    pub size_bytes: u64,
+    pub pe_start_bytes: u64,
+    pub vg_name: String,
+}
+
 /// 外部程序的退出结果。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ExitKind {
@@ -492,7 +519,9 @@ pub trait Platform {
     fn occupancy(&self, path: &Path) -> PlatformResult<Occupancy>;
     fn reread(&self, path: &Path) -> PlatformResult<()>;
     fn update_table(&self, path: &Path) -> PlatformResult<()>;
-    fn btrfs_fsid(&self, path: &Path) -> PlatformResult<[u8; 16]>;
+    fn btrfs_show(&self, path: &Path) -> PlatformResult<BtrfsShow>;
+    /// 目标所在物理卷的关键字段；不是物理卷时返回空集。
+    fn pvs(&self, path: &Path) -> PlatformResult<Vec<PvFacts>>;
     fn loop_attach(&self, backing: &Path, offset: u64, size: u64) -> PlatformResult<PathBuf>;
     fn loop_detach(&self, device: &Path) -> PlatformResult<()>;
     fn mount(

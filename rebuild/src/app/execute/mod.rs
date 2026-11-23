@@ -7,6 +7,8 @@
 //! [`ConfirmedPlan`]: crate::app::decide::ConfirmedPlan
 
 pub mod digest;
+pub mod lvm;
+pub mod online;
 pub mod postcondition;
 pub mod recover;
 pub mod relocate;

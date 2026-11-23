@@ -20,7 +20,8 @@ use diskedit_core::fingerprint::Fingerprint;
 use diskedit_core::fs::Program;
 
 use crate::platform::{
-    ExitKind, Occupancy, Output, Partition, Platform, PlatformError, PlatformResult, TargetHandle,
+    BtrfsShow, ExitKind, Occupancy, Output, Partition, Platform, PlatformError, PlatformResult,
+    PvFacts, TargetHandle,
 };
 
 pub use crate::platform::{PlatformError as Error, PlatformResult as Result};
@@ -87,7 +88,7 @@ impl Platform for Linux {
         kernel::sync_partitions(path, &ranges)
     }
 
-    fn btrfs_fsid(&self, path: &Path) -> PlatformResult<[u8; 16]> {
+    fn btrfs_show(&self, path: &Path) -> PlatformResult<BtrfsShow> {
         let output = self.run(
             Program::Btrfs,
             &["filesystem", "show", "--raw", &path.to_string_lossy()],
@@ -98,8 +99,30 @@ impl Platform for Linux {
                 output.stderr_text().trim().to_string(),
             ));
         }
-        kernel::parse_fsid(&output.stdout_text())
-            .ok_or_else(|| PlatformError::parse("btrfs filesystem show 输出中没有可解析的 fsid"))
+        let (fsid, devices) = kernel::parse_show(&output.stdout_text()).ok_or_else(|| {
+            PlatformError::parse("btrfs filesystem show 输出中没有可解析的 fsid 或设备数")
+        })?;
+        Ok(BtrfsShow { fsid, devices })
+    }
+
+    fn pvs(&self, path: &Path) -> PlatformResult<Vec<PvFacts>> {
+        let args = lvm::pvs_args(path);
+        let borrowed: Vec<&str> = args.iter().map(String::as_str).collect();
+        let output = self.run(Program::Pvs, &borrowed)?;
+        if !output.succeeded() {
+            // 不是物理卷；pvs 以非零退出，这里按"没有 PV"处理。
+            return Ok(Vec::new());
+        }
+        let rows = lvm::parse_pvs(&output.stdout_text())?;
+        Ok(rows
+            .into_iter()
+            .map(|row| PvFacts {
+                name: row.name,
+                size_bytes: row.size_bytes,
+                pe_start_bytes: row.pe_start_bytes,
+                vg_name: row.vg_name,
+            })
+            .collect())
     }
 
     fn loop_attach(&self, backing: &Path, offset: u64, size: u64) -> PlatformResult<PathBuf> {

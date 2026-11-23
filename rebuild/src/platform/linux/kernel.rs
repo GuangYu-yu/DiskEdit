@@ -133,6 +133,16 @@ pub fn parse_fsid(text: &str) -> Option<[u8; 16]> {
     parse_uuid(raw)
 }
 
+/// 从 `btrfs filesystem show` 输出中取 FSID 与设备数。
+pub fn parse_show(text: &str) -> Option<([u8; 16], u32)> {
+    let fsid = parse_fsid(text)?;
+    let devices = text.lines().find_map(|line| {
+        let rest = line.trim().strip_prefix("Total devices")?;
+        rest.split_whitespace().next()?.parse::<u32>().ok()
+    })?;
+    Some((fsid, devices))
+}
+
 fn parse_uuid(text: &str) -> Option<[u8; 16]> {
     let hex: String = text
         .chars()
@@ -160,6 +170,14 @@ mod tests {
         let fsid = parse_fsid(text).expect("可解析");
         assert_eq!(fsid[0], 0x9f);
         assert_eq!(fsid[15], 0x5b);
+    }
+
+    #[test]
+    fn parses_show_with_device_count() {
+        let text = "Label: none\n\tTotal devices 2 FS bytes used 1.00MiB\n\tfsid:    9f7c1e2a-3b4d-4e5f-8a9b-0c1d2e3f4a5b\n";
+        let (fsid, devices) = parse_show(text).expect("可解析");
+        assert_eq!(fsid[0], 0x9f);
+        assert_eq!(devices, 2);
     }
 
     #[test]
