@@ -16,6 +16,157 @@ use diskedit_core::fs::Program;
 
 #[cfg(target_os = "linux")]
 pub mod linux;
+#[cfg(target_os = "macos")]
+pub mod macos;
+#[cfg(target_os = "windows")]
+pub mod windows;
+
+pub mod probe;
+
+/// 为尚未接入的宿主生成显式"不支持"实现。
+///
+/// 每个方法都返回 [`PlatformError::NotSupported`]，不返回空数据、不假装成功；
+/// 接入某个端口时在对应子树里替换该方法即可。
+macro_rules! unsupported_platform {
+    ($ty:ty, $os:literal) => {
+        impl $crate::platform::Platform for $ty {
+            fn open_target(
+                &self,
+                _path: &std::path::Path,
+            ) -> $crate::platform::PlatformResult<Box<dyn $crate::platform::TargetHandle>> {
+                Err($crate::platform::PlatformError::not_supported(concat!(
+                    $os,
+                    " 的块设备端口尚未接入"
+                )))
+            }
+
+            fn fingerprint(
+                &self,
+                _path: &std::path::Path,
+            ) -> $crate::platform::PlatformResult<diskedit_core::fingerprint::Fingerprint> {
+                Err($crate::platform::PlatformError::not_supported(concat!(
+                    $os,
+                    " 的身份端口尚未接入"
+                )))
+            }
+
+            fn partitions(
+                &self,
+                _path: &std::path::Path,
+            ) -> $crate::platform::PlatformResult<Vec<$crate::platform::Partition>> {
+                Err($crate::platform::PlatformError::not_supported(concat!(
+                    $os,
+                    " 的拓扑端口尚未接入"
+                )))
+            }
+
+            fn occupancy(
+                &self,
+                _path: &std::path::Path,
+            ) -> $crate::platform::PlatformResult<$crate::platform::Occupancy> {
+                Err($crate::platform::PlatformError::not_supported(concat!(
+                    $os,
+                    " 的占用端口尚未接入"
+                )))
+            }
+
+            fn reread(&self, _path: &std::path::Path) -> $crate::platform::PlatformResult<()> {
+                Err($crate::platform::PlatformError::not_supported(concat!(
+                    $os,
+                    " 不支持分区表重读"
+                )))
+            }
+
+            fn update_table(
+                &self,
+                _path: &std::path::Path,
+            ) -> $crate::platform::PlatformResult<()> {
+                Err($crate::platform::PlatformError::not_supported(concat!(
+                    $os,
+                    " 不支持在线更新分区表"
+                )))
+            }
+
+            fn btrfs_fsid(
+                &self,
+                _path: &std::path::Path,
+            ) -> $crate::platform::PlatformResult<[u8; 16]> {
+                Err($crate::platform::PlatformError::not_supported(concat!(
+                    $os,
+                    " 不支持读取 btrfs FSID"
+                )))
+            }
+
+            fn loop_attach(
+                &self,
+                _backing: &std::path::Path,
+                _offset: u64,
+                _size: u64,
+            ) -> $crate::platform::PlatformResult<std::path::PathBuf> {
+                Err($crate::platform::PlatformError::not_supported(concat!(
+                    $os,
+                    " 没有 loop 设备"
+                )))
+            }
+
+            fn loop_detach(
+                &self,
+                _device: &std::path::Path,
+            ) -> $crate::platform::PlatformResult<()> {
+                Err($crate::platform::PlatformError::not_supported(concat!(
+                    $os,
+                    " 没有 loop 设备"
+                )))
+            }
+
+            fn mount(
+                &self,
+                _source: &std::path::Path,
+                _mount_point: &std::path::Path,
+                _fstype: Option<&str>,
+                _options: &[&str],
+            ) -> $crate::platform::PlatformResult<()> {
+                Err($crate::platform::PlatformError::not_supported(concat!(
+                    $os,
+                    " 的挂载端口尚未接入"
+                )))
+            }
+
+            fn umount(
+                &self,
+                _mount_point: &std::path::Path,
+            ) -> $crate::platform::PlatformResult<()> {
+                Err($crate::platform::PlatformError::not_supported(concat!(
+                    $os,
+                    " 的挂载端口尚未接入"
+                )))
+            }
+
+            fn require(
+                &self,
+                program: diskedit_core::fs::Program,
+            ) -> $crate::platform::PlatformResult<std::path::PathBuf> {
+                Err($crate::platform::PlatformError::not_supported(format!(
+                    concat!($os, " 不提供外部程序：{:?}"),
+                    program
+                )))
+            }
+
+            fn run(
+                &self,
+                _program: diskedit_core::fs::Program,
+                _args: &[&str],
+            ) -> $crate::platform::PlatformResult<$crate::platform::Output> {
+                Err($crate::platform::PlatformError::not_supported(concat!(
+                    $os,
+                    " 不提供外部程序执行"
+                )))
+            }
+        }
+    };
+}
+
+pub(crate) use unsupported_platform;
 
 /// 平台层的字节区间视图：起点与长度都以字节计。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -315,14 +466,46 @@ pub trait Platform {
     fn run(&self, program: Program, args: &[&str]) -> PlatformResult<Output>;
 }
 
-/// 打开本平台的端口实现。
+/// 打开本平台的端口实现。平台选择只在此处发生。
 pub fn open() -> PlatformResult<Box<dyn Platform>> {
     #[cfg(target_os = "linux")]
     {
         Ok(Box::new(linux::Linux::new()))
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "windows")]
     {
-        Err(PlatformError::not_applicable("当前平台尚无端口实现"))
+        Ok(Box::new(windows::Windows::new()))
+    }
+    #[cfg(target_os = "macos")]
+    {
+        Ok(Box::new(macos::MacOs::new()))
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
+    {
+        Err(PlatformError::not_supported(
+            "当前操作系统没有对应的端口实现",
+        ))
+    }
+}
+
+#[cfg(test)]
+mod skeleton_tests {
+    use super::*;
+
+    struct PendingHost;
+
+    unsupported_platform!(PendingHost, "测试宿主");
+
+    #[test]
+    fn pending_host_reports_not_supported() {
+        let host = PendingHost;
+        assert!(matches!(
+            host.reread(Path::new("/x")),
+            Err(PlatformError::NotSupported { .. })
+        ));
+        assert!(matches!(
+            host.require(Program::E2fsck),
+            Err(PlatformError::NotSupported { .. })
+        ));
     }
 }

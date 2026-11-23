@@ -3,7 +3,9 @@
 //! 一切与内核接口、虚拟文件系统、外部程序路径有关的知识都收在本子树；
 //! 上层只看见 [`crate::platform`] 里的中立类型与端口 trait。
 
+pub mod dm;
 pub mod kernel;
+pub mod loopdev;
 pub mod lvm;
 pub mod mount;
 pub mod occupancy;
@@ -88,38 +90,22 @@ impl Platform for Linux {
     }
 
     fn loop_attach(&self, backing: &Path, offset: u64, size: u64) -> PlatformResult<PathBuf> {
-        let offset = offset.to_string();
-        let size = size.to_string();
-        let output = self.run(
-            Program::Losetup,
-            &[
-                "--find",
-                "--show",
-                "--offset",
-                &offset,
-                "--sizelimit",
-                &size,
-                &backing.to_string_lossy(),
-            ],
-        )?;
+        let args = loopdev::attach_args(backing, offset, size);
+        let borrowed: Vec<&str> = args.iter().map(String::as_str).collect();
+        let output = self.run(Program::Losetup, &borrowed)?;
         if !output.succeeded() {
             return Err(PlatformError::tools(
                 "losetup",
                 output.stderr_text().trim().to_string(),
             ));
         }
-        let device = output.stdout_text().trim().to_string();
-        if device.is_empty() {
-            return Err(PlatformError::tools(
-                "losetup",
-                "没有输出现成的 loop 设备路径",
-            ));
-        }
-        Ok(PathBuf::from(device))
+        loopdev::parse_device(&output.stdout_text())
     }
 
     fn loop_detach(&self, device: &Path) -> PlatformResult<()> {
-        let output = self.run(Program::Losetup, &["-d", &device.to_string_lossy()])?;
+        let args = loopdev::detach_args(device);
+        let borrowed: Vec<&str> = args.iter().map(String::as_str).collect();
+        let output = self.run(Program::Losetup, &borrowed)?;
         if output.succeeded() {
             Ok(())
         } else {
