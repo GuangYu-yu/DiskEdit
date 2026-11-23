@@ -13,14 +13,14 @@ edition = "2024"
 rust-version = "1.85"
 description = "Edit disk images / whole disks as byte-addressable files: partition tables (GPT/MBR), FS identification, mkfs/resize via external tools, partition relocation with resumable checkpoints"
 license = "MIT"
-default-run = "DiskEdit"
+default-run = "diskedit"
 
 [lib]
 name = "diskedit"
 path = "src/lib.rs"
 
 [[bin]]
-name = "DiskEdit"
+name = "diskedit"
 path = "src/main.rs"
 
 [dependencies]

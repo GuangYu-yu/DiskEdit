@@ -66,8 +66,13 @@ pub fn run(
     if !confirmed.identity().matches(observed) {
         return Outcome::unwritten(FailureKind::Refused, "持锁后的目标身份与确认时不一致");
     }
+    // 普通文件没有设备级扇区，分区表按 512 字节逻辑块布局；块设备必须以它报告的
+    // 逻辑扇区为准，读不到就停，不猜一个宽度。
     let sector = match handle.sector_size() {
         Some(size) if size > 0 => size,
+        _ if handle.kind() == crate::platform::TargetKind::File => {
+            crate::app::observe::disk::IMAGE_LOGICAL_BLOCK
+        }
         _ => return Outcome::unwritten(FailureKind::FailedBeforeWrite, "无法确定目标扇区尺寸"),
     };
 

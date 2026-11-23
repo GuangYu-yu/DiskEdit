@@ -99,8 +99,14 @@ pub fn observe(request: &Request, platform: &dyn Platform) -> Snapshot {
         );
     }
     let table = table::observe(handle.as_deref(), &disk, generation);
-    let topology =
-        filesystem::observe_topology(platform, target, &disk, handle.as_deref(), generation);
+    let topology = filesystem::observe_topology(
+        platform,
+        target,
+        &disk,
+        &table,
+        handle.as_deref(),
+        generation,
+    );
     let occupancy = disk::observe_occupancy(platform, target, generation);
     let tools = tools::observe(platform, generation);
     Snapshot {
@@ -134,6 +140,7 @@ mod tests {
     struct MemoryHandle {
         bytes: Vec<u8>,
         sector: Option<u64>,
+        kind: TargetKind,
     }
 
     impl TargetHandle for MemoryHandle {
@@ -142,7 +149,7 @@ mod tests {
         }
 
         fn kind(&self) -> TargetKind {
-            TargetKind::File
+            self.kind
         }
 
         fn len(&self) -> u64 {
@@ -180,6 +187,7 @@ mod tests {
     struct FakeHost {
         image: Vec<u8>,
         sector: Option<u64>,
+        kind: TargetKind,
         partitions: Vec<Partition>,
         partition_error: Option<&'static str>,
         open_error: Option<&'static str>,
@@ -191,6 +199,7 @@ mod tests {
             Self {
                 image,
                 sector: Some(SECTOR),
+                kind: TargetKind::File,
                 partitions: Vec::new(),
                 partition_error: None,
                 open_error: None,
@@ -211,6 +220,7 @@ mod tests {
             Ok(Box::new(MemoryHandle {
                 bytes: self.image.clone(),
                 sector: self.sector,
+                kind: self.kind,
             }))
         }
 
@@ -301,6 +311,7 @@ mod tests {
     #[test]
     fn unknown_topology_is_not_an_empty_partition_list() {
         let mut host = FakeHost::image(vec![0u8; 2 * 1024 * 1024]);
+        host.kind = TargetKind::Block;
         host.partition_error = Some("拓扑不可解析");
         let snapshot = observe(&request(), &host);
         assert!(snapshot.topology.is_unknown(), "{:?}", snapshot.topology);
@@ -328,6 +339,7 @@ mod tests {
         image[partition_start + 0x438..partition_start + 0x43A]
             .copy_from_slice(&0x53EFu16.to_le_bytes());
         let mut host = FakeHost::image(image);
+        host.kind = TargetKind::Block;
         host.partitions = vec![Partition {
             number: 1,
             start_lba: 2048,
