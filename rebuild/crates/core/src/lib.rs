@@ -5,6 +5,7 @@
 
 pub mod evidence;
 pub mod fingerprint;
+pub mod fs;
 pub mod geometry;
 pub mod policy;
 pub mod record;
