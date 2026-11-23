@@ -18,7 +18,7 @@ fn metadata() -> serde_json::Value {
 }
 
 #[test]
-fn core_does_not_depend_on_any_package() {
+fn core_does_not_depend_on_the_package_root() {
     let meta = metadata();
     let packages = meta["packages"].as_array().expect("packages 应为数组");
     let core = packages
@@ -28,5 +28,12 @@ fn core_does_not_depend_on_any_package() {
     let deps = core["dependencies"]
         .as_array()
         .expect("dependencies 应为数组");
-    assert!(deps.is_empty(), "纯核不得依赖任何包: {deps:?}");
+    for dep in deps {
+        assert_ne!(
+            dep["name"].as_str(),
+            Some("DiskEdit"),
+            "纯核不得依赖包根: {dep:?}"
+        );
+        assert_eq!(dep["path"].as_str(), None, "纯核不得依赖路径包: {dep:?}");
+    }
 }

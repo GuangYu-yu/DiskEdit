@@ -10,6 +10,7 @@ license = "MIT"
 path = "src/lib.rs"
 
 [dependencies]
+crc = "3"
 
 [lints]
 workspace = true
