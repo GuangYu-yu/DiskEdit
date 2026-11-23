@@ -63,7 +63,7 @@ impl GptEvidence {
     pub fn usable(&self) -> Option<&GptCopy> {
         match self {
             Self::Usable(copy) => Some(copy),
-            _ => None,
+            Self::Absent | Self::Damaged(_) => None,
         }
     }
 }
@@ -109,7 +109,7 @@ pub fn parse_backup(
             };
             ParsedCopy::Usable(copy)
         }
-        other => other,
+        other @ (ParsedCopy::Absent | ParsedCopy::Damaged(_)) => other,
     }
 }
 

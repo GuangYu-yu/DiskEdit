@@ -24,6 +24,7 @@ name = "DiskEdit"
 path = "src/main.rs"
 
 [dependencies]
+diskedit_core = { path = "crates/core" }
 
 [lints]
 workspace = true

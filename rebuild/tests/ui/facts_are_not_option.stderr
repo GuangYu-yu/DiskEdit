@@ -1,0 +1,10 @@
+error[E0308]: mismatched types
+ --> tests/ui/facts_are_not_option.rs:5:35
+  |
+5 |     let _fact: Observation<u64> = None;
+  |                ----------------   ^^^^ expected `Observation<u64>`, found `Option<_>`
+  |                |
+  |                expected due to this
+  |
+  = note: expected enum `Observation<u64>`
+             found enum `Option<_>`

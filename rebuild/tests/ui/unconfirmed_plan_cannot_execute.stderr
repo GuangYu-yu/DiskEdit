@@ -1,7 +1,0 @@
-error[E0308]: mismatched types
- --> tests/ui/unconfirmed_plan_cannot_execute.rs:3:22
-  |
-3 |     let _value: u8 = "unconfirmed";
-  |                 --   ^^^^^^^^^^^^^ expected `u8`, found `&str`
-  |                 |
-  |                 expected due to this
