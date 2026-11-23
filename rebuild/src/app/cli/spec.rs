@@ -408,3 +408,78 @@ pub fn print_help() {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn command_surface_is_exactly_the_baseline() {
+        let names: Vec<&str> = SPECS.iter().map(|spec| spec.name).collect();
+        assert_eq!(
+            names,
+            [
+                "info",
+                "inspect",
+                "records list",
+                "records verify",
+                "records scan",
+                "resize",
+                "move",
+                "copy",
+                "delete",
+                "set",
+                "check",
+                "mkfs",
+                "resizefs",
+                "recover",
+                "new",
+                "add",
+            ]
+        );
+    }
+
+    #[test]
+    fn every_spec_declares_usage_and_unique_options() {
+        for spec in SPECS {
+            assert!(!spec.usage.is_empty(), "{} 缺少用法", spec.name);
+            for usage in spec.usage {
+                assert!(
+                    usage.starts_with("diskedit "),
+                    "{} 的用法必须以 diskedit 开头",
+                    spec.name
+                );
+            }
+            let mut seen = Vec::new();
+            for option in spec.options {
+                assert!(
+                    !seen.contains(&option.name),
+                    "{} 重复声明选项 {}",
+                    spec.name,
+                    option.name
+                );
+                seen.push(option.name);
+            }
+        }
+    }
+
+    #[test]
+    fn confirmation_matches_read_and_write_commands() {
+        let read_only = [
+            "info",
+            "inspect",
+            "records list",
+            "records verify",
+            "records scan",
+            "check",
+        ];
+        for spec in SPECS {
+            let expected = !read_only.contains(&spec.name);
+            assert_eq!(
+                spec.confirmation, expected,
+                "{} 的确认要求与读写类别不符",
+                spec.name
+            );
+        }
+    }
+}
