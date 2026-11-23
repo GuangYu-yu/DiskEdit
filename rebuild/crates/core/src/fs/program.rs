@@ -1,7 +1,8 @@
-//! 外部程序标识。
+//! 外部程序身份。
 //!
-//! 这里只记录"要做这件事需要哪个程序"，不决定路径、参数拼装或调用方式；
-//! 程序表按执行顺序摆放，是档案表的一部分，不是第二份能力清单。
+//! 这里只记录"要做这件事需要哪个程序"，不记录可执行名、路径、参数拼装或调用
+//! 方式。程序表按执行顺序摆放，是档案表的一部分，不是第二份能力清单；平台实现
+//! 负责把身份映射到具体可执行文件。
 
 /// 档案表引用的外部程序。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -85,47 +86,8 @@ impl Program {
         Program::Partx,
     ];
 
-    /// 可执行文件名。
-    pub const fn executable(self) -> &'static str {
-        match self {
-            Self::E2fsck => "e2fsck",
-            Self::Resize2fs => "resize2fs",
-            Self::Dumpe2fs => "dumpe2fs",
-            Self::Mke2fs => "mke2fs",
-            Self::Tune2fs => "tune2fs",
-            Self::Ntfsresize => "ntfsresize",
-            Self::Ntfsfix => "ntfsfix",
-            Self::Ntfslabel => "ntfslabel",
-            Self::FsckF2fs => "fsck.f2fs",
-            Self::ResizeF2fs => "resize.f2fs",
-            Self::XfsGrowfs => "xfs_growfs",
-            Self::XfsRepair => "xfs_repair",
-            Self::XfsAdmin => "xfs_admin",
-            Self::Btrfs => "btrfs",
-            Self::Fatresize => "fatresize",
-            Self::Fatlabel => "fatlabel",
-            Self::FsckVfat => "fsck.fat",
-            Self::Exfatlabel => "exfatlabel",
-            Self::FsckExfat => "fsck.exfat",
-            Self::Mkswap => "mkswap",
-            Self::Swaplabel => "swaplabel",
-            Self::Pvs => "pvs",
-            Self::Lvs => "lvs",
-            Self::Vgs => "vgs",
-            Self::Pvresize => "pvresize",
-            Self::MkfsVfat => "mkfs.vfat",
-            Self::MkfsExfat => "mkfs.exfat",
-            Self::MkfsNtfs => "mkntfs",
-            Self::MkfsXfs => "mkfs.xfs",
-            Self::MkfsBtrfs => "mkfs.btrfs",
-            Self::MkfsF2fs => "mkfs.f2fs",
-            Self::Mount => "mount",
-            Self::Umount => "umount",
-            Self::Losetup => "losetup",
-            Self::Sfdisk => "sfdisk",
-            Self::Partx => "partx",
-        }
-    }
+    /// 程序身份已登记齐全。
+    pub const COUNT: usize = 36;
 }
 
 #[cfg(test)]
@@ -133,11 +95,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn executable_names_are_unique_and_non_empty() {
-        let mut names: Vec<&str> = Program::ALL.iter().map(|p| p.executable()).collect();
-        names.sort_unstable();
-        names.dedup();
-        assert_eq!(names.len(), Program::ALL.len());
-        assert!(Program::ALL.iter().all(|p| !p.executable().is_empty()));
+    fn every_program_identity_is_registered() {
+        assert_eq!(Program::ALL.len(), Program::COUNT);
     }
 }

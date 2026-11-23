@@ -5,15 +5,14 @@
 
 use std::path::{Path, PathBuf};
 
-use super::super::{PlatformError, PlatformResult};
-use super::mounts::same_path;
+use crate::platform::{PlatformError, PlatformResult};
+
+use super::same_path;
 
 /// 一个 loop 设备及其后备文件。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LoopUse {
-    /// loop 设备的内核名，例如 `loop0`。
     pub device: String,
-    /// 后备文件路径，取自 sysfs。
     pub backing: PathBuf,
 }
 

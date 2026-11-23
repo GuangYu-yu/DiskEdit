@@ -1,12 +1,11 @@
 //! 设备持有者：递归读取 `/sys/block/<kname>/holders/`。
 //!
-//! holders 目录里的每一项是一个正在使用该设备的上层设备（例如 dm 或 md 的成员）。
-//! 递归展开可以覆盖多层映射；深度上限 8，超过时报告错误而不是截断，避免把
-//! "看不全"说成"没有占用"。
+//! holders 目录里的每一项是一个正在使用该设备的上层设备。递归展开覆盖多层映射；
+//! 深度上限 8，超过时报告错误而不是截断，避免把"看不全"说成"没有占用"。
 
 use std::path::Path;
 
-use super::super::{PlatformError, PlatformResult};
+use crate::platform::{PlatformError, PlatformResult};
 
 const MAX_DEPTH: usize = 8;
 

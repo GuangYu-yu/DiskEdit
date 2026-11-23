@@ -19,25 +19,8 @@ pub use block::BlockSource;
 pub use file::FileSource;
 pub use lease::Lease;
 
-/// 按偏移读取。
-pub trait ReadAt {
-    /// 目标的总字节数。
-    fn len(&self) -> PlatformResult<u64>;
-
-    /// 从 `offset` 起读取至多 `buf.len()` 字节，返回实际读到的字节数。
-    ///
-    /// 区间越过末尾时返回错误，不返回凭空补零的短读。
-    fn read_at(&self, offset: u64, buf: &mut [u8]) -> PlatformResult<usize>;
-}
-
-/// 按偏移写入，并在需要时提交到设备。
-pub trait WriteAt: ReadAt {
-    /// 从 `offset` 起写入 `buf`，返回实际写出的字节数；写出不足时继续写直到完成。
-    fn write_at(&mut self, offset: u64, buf: &[u8]) -> PlatformResult<usize>;
-
-    /// 把已写出的字节提交到持久介质。
-    fn barrier(&mut self) -> PlatformResult<()>;
-}
+// 读写形状由中立端口定义；本模块只提供实现。
+pub use crate::platform::{ReadAt, WriteAt};
 
 /// 打开目标路径供读写。
 ///

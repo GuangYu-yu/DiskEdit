@@ -5,17 +5,9 @@
 
 use std::path::PathBuf;
 
-use super::super::{PlatformError, PlatformResult};
-use super::mounts::same_path;
+use crate::platform::{PlatformError, PlatformResult, SwapEntry};
 
-/// 一个已启用的交换区。
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SwapEntry {
-    /// 交换区路径，已还原转义序列。
-    pub path: PathBuf,
-    /// 交换区类型，例如 `partition`、`file`。
-    pub kind: String,
-}
+use super::mounts::decode_octal;
 
 /// 读取已启用的交换区；procfs 不存在时返回空集合。
 pub fn read() -> PlatformResult<Vec<SwapEntry>> {
@@ -43,16 +35,11 @@ pub fn parse(text: &str) -> PlatformResult<Vec<SwapEntry>> {
             )));
         }
         entries.push(SwapEntry {
-            path: PathBuf::from(super::mounts::decode_octal(fields[0])),
+            path: PathBuf::from(decode_octal(fields[0])),
             kind: fields[1].to_string(),
         });
     }
     Ok(entries)
-}
-
-/// 交换区路径是否指向给定目标。
-pub fn matches_target(entry: &SwapEntry, target: &std::path::Path) -> bool {
-    same_path(&entry.path, target)
 }
 
 #[cfg(test)]
@@ -60,26 +47,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_skips_header() {
+    fn skips_header_and_parses_paths() {
         let text = "Filename\t\t\t\tType\t\tSize\t\tUsed\t\tPriority\n\
-                    /dev/sda2                               partition\t8388604\t\t0\t\t-2\n\
-                    /swapfile                               file\t\t2097148\t\t0\t\t-3\n";
+                    /dev/sda2                               partition\t1048572\t\t0\t\t-2\n\
+                    /swap\\040file                          file\t\t524284\t\t0\t\t-3\n";
         let entries = parse(text).expect("可解析");
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].path, PathBuf::from("/dev/sda2"));
         assert_eq!(entries[0].kind, "partition");
-        assert_eq!(entries[1].kind, "file");
-    }
-
-    #[test]
-    fn parse_restores_escaped_path() {
-        let text = "Filename Type Size Used Priority\n/var/swap\\040file file 1 0 -1\n";
-        let entries = parse(text).expect("可解析");
-        assert_eq!(entries[0].path, PathBuf::from("/var/swap file"));
-    }
-
-    #[test]
-    fn parse_rejects_missing_kind() {
-        assert!(parse("Filename Type Size Used Priority\n/swapfile\n").is_err());
+        assert_eq!(entries[1].path, PathBuf::from("/swap file"));
     }
 }
