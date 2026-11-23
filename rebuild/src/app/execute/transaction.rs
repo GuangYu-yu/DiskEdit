@@ -241,7 +241,7 @@ fn execute_target_step(
 
     let fail_after = if faults.mid_write { Some(1) } else { None };
     let mut channel = WriteChannel::new(handle, &step.regions).with_fail_after(fail_after);
-    if let Err(error) = steps::apply(&step.kind, &mut channel, &token, ctx) {
+    if let Err(error) = steps::apply(&step.kind, &step.regions, &mut channel, &token, ctx) {
         let reason = match channel.barrier() {
             Ok(()) => format_error(&error),
             Err(barrier) => format!(

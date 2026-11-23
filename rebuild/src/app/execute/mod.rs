@@ -8,6 +8,7 @@
 
 pub mod digest;
 pub mod postcondition;
+pub mod relocate;
 pub mod state;
 pub mod steps;
 pub mod token;

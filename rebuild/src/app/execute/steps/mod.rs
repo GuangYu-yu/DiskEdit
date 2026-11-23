@@ -8,6 +8,9 @@ pub mod copy;
 pub mod entries;
 pub mod table;
 
+use diskedit_core::region::Region;
+
+use super::relocate;
 use super::token::Recorded;
 use super::{ExecError, WriteChannel};
 use crate::app::decide::step::StepKind;
@@ -32,7 +35,8 @@ pub fn precheck(kind: &StepKind, ctx: &Context<'_>) -> Result<(), ExecError> {
         | StepKind::AddPartition { .. }
         | StepKind::DeletePartition { .. }
         | StepKind::ResizePartition { .. }
-        | StepKind::CopyPartition { .. } => Ok(()),
+        | StepKind::CopyPartition { .. }
+        | StepKind::MovePartition { .. } => Ok(()),
         StepKind::SetProperty {
             property: SetProperty::Name | SetProperty::Flag | SetProperty::Type,
             ..
@@ -48,9 +52,6 @@ pub fn precheck(kind: &StepKind, ctx: &Context<'_>) -> Result<(), ExecError> {
         | StepKind::ShrinkFilesystem { .. } => Err(ExecError::Unsupported(
             "文件系统操作需要分区设备路径".to_owned(),
         )),
-        StepKind::MovePartition { .. } => {
-            Err(ExecError::Unsupported("分区搬移需要搬移执行器".to_owned()))
-        }
         StepKind::Inspect
         | StepKind::Check { .. }
         | StepKind::ListRecords
@@ -66,6 +67,7 @@ pub fn precheck(kind: &StepKind, ctx: &Context<'_>) -> Result<(), ExecError> {
 /// 执行一个已通过闸口的写目标步骤。
 pub fn apply(
     kind: &StepKind,
+    regions: &[Region],
     channel: &mut WriteChannel<'_>,
     token: &Recorded,
     ctx: &Context<'_>,
@@ -82,14 +84,26 @@ pub fn apply(
         StepKind::CopyPartition { source, target } => {
             copy::apply(*source, *target, channel, token, ctx)
         }
+        StepKind::MovePartition { .. } => {
+            let (source, destination) = match regions {
+                [source, destination] => (*source, *destination),
+                _ => {
+                    return Err(ExecError::InvalidPlan(
+                        "搬移步骤必须声明旧区间与新区间".to_owned(),
+                    ));
+                }
+            };
+            let binding = relocate::Binding::new(source, destination, relocate::CHUNK_BYTES)?;
+            relocate::apply(binding, channel, token, relocate::RelocateFaults::default())?;
+            relocate::verify(binding, channel)
+        }
         StepKind::SetProperty {
             property: SetProperty::Label | SetProperty::Uuid,
             ..
         }
         | StepKind::MakeFilesystem { .. }
         | StepKind::GrowFilesystem { .. }
-        | StepKind::ShrinkFilesystem { .. }
-        | StepKind::MovePartition { .. } => {
+        | StepKind::ShrinkFilesystem { .. } => {
             Err(ExecError::Unsupported("该步骤尚无可用的执行器".to_owned()))
         }
         StepKind::Inspect
