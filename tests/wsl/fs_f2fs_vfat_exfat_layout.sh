@@ -35,7 +35,7 @@ mount_at "${LD}p1" "$TEST_MNT" 2>/dev/null && {
   [ "$MF" = "$(mdsum "$TEST_MNT"/f.bin)" ] && echo "F2FS DATA OK" || { echo "F2FS DATA CORRUPT"; rc=1; }
   umount "$TEST_MNT" 2>/dev/null
 }
-fsck.f2fs -f "${LD}p1" >/dev/null 2>&1; exp $? 0 "fsck.f2fs（0=clean）"
+fs_meta_check f2fs "${LD}p1" "A"
 lo_detach "$LD"
 sgdisk_check "$T"
 
@@ -57,7 +57,7 @@ mount_at "${LD}p1" "$TEST_MNT" 2>/dev/null && {
   [ "$MV" = "$(mdsum "$TEST_MNT"/v.bin)" ] && echo "VFAT DATA OK" || { echo "VFAT DATA CORRUPT"; rc=1; }
   umount "$TEST_MNT" 2>/dev/null
 }
-fsck.vfat -n "${LD}p1" >/dev/null 2>&1; exp $? 0 "fsck.vfat（0=clean）"
+fs_meta_check vfat "${LD}p1" "B"
 lo_detach "$LD"
 
 echo
@@ -74,7 +74,7 @@ echo "C 分区表: $($B info "$T" | grep -o '"num":1,[^}]*}' | grep -o '"size_by
 LD=$(lo_attach "$T")
 lo_waitpart "${LD}p1" || { echo "p1 part node not ready"; rc=1; lo_detach "$LD"; }
 mount_at "${LD}p1" "$TEST_MNT" 2>/dev/null && { [ "$ME" = "$(mdsum "$TEST_MNT"/e.bin)" ] && echo "EXFAT DATA OK" || { echo "EXFAT DATA CORRUPT"; rc=1; }; umount "$TEST_MNT" 2>/dev/null; }
-fsck.exfat -n "${LD}p1" >/dev/null 2>&1; exp $? 0 "fsck.exfat（0=clean）"
+fs_meta_check exfat "${LD}p1" "C"
 lo_detach "$LD"
 
 echo

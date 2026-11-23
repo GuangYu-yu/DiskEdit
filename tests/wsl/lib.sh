@@ -218,6 +218,31 @@ fsck_check() {
     fi
 }
 
+# fs_meta_check <fs> <设备> [标签]：ext 之外各家族的只读元数据检查（一律不改盘）。
+# xfs→xfs_repair -n；btrfs→btrfs check；ntfs→ntfsfix -n；f2fs→fsck.f2fs -f；
+# vfat→fsck.vfat -n；exfat→fsck.exfat -n。输出 "<标签> <fs> meta clean/ISSUES"，
+# 失败置 rc=1。ext 家族走 fsck_check，其余走这里：每个家族一个入口，不在用例里各写一份
+fs_meta_check() {
+    local fs=$1 dev=$2 label=${3:+$3 }
+    local ok what
+    case "$fs" in
+        xfs)   what="xfs_repair -n"; xfs_repair -n "$dev" >/dev/null 2>&1; ok=$? ;;
+        btrfs) what="btrfs check";   btrfs check "$dev"    >/dev/null 2>&1; ok=$? ;;
+        ntfs)  what="ntfsfix -n";    ntfsfix  -n "$dev"    >/dev/null 2>&1; ok=$? ;;
+        f2fs)  what="fsck.f2fs -f";  fsck.f2fs -f "$dev"   >/dev/null 2>&1; ok=$? ;;
+        vfat)  what="fsck.vfat -n";  fsck.vfat -n "$dev"   >/dev/null 2>&1; ok=$? ;;
+        exfat) what="fsck.exfat -n"; fsck.exfat -n "$dev"  >/dev/null 2>&1; ok=$? ;;
+        *) echo "${label}${fs} meta no-deep-check"; return 0 ;;
+    esac
+    if [ "$ok" -eq 0 ]; then
+        echo "${label}${fs} meta clean ($what)"
+    else
+        echo "${label}${fs} meta ISSUES ($what)"
+        rc=1
+        return 1
+    fi
+}
+
 # ---- 资源生命周期 ----
 _TRACK_LOOPS=()
 _TRACK_MOUNTS=()

@@ -693,22 +693,10 @@ fn resize_part_via_plan_unreconciled(
     let (no_fs, defer_lvm) = switches;
     // 事务入口的注入点：此刻 abort 必须与"从未运行过"不可区分
     movepart::fault_before_any_write();
-    // 记录型现场：先把"这是哪一次请求"写进记录。新记录只写一次，已有记录必须与
-    // 本次请求一致；`--chunk` 是执行参数、不在摘要里，由搬移校验单独核对
     let disk_size = src.size;
-    if let Some(journal) = src.record_journal_mut() {
-        let digest = crate::recovery::PlanDigest::of_request(
-            journal.op(),
-            part,
-            new_start,
-            new_end,
-            g.sector_size(),
-            disk_size,
-        );
-        if let Err(why) = journal.bind_plan(digest) {
-            return RunOutcome::refused(format!("{why} — refusing to resume it"));
-        }
-    }
+    // 只读判定先于记录落盘：能力不足（如 btrfs 多设备）与占用冲突都要在写下"这是哪一次
+    // 请求"之前拒绝。反过来先落计划记录，命令会以 unsupported 退出、记录却留在落点上：
+    // 那是一次注定不可续跑的作业，目标被它占住，还要人工 `recover --release`
     let p = match prepare_resize_part(
         src,
         g,
@@ -725,6 +713,21 @@ fn resize_part_via_plan_unreconciled(
         Ok(p) => p,
         Err(f) => return f,
     };
+    // 记录型现场：把"这是哪一次请求"写进记录。新记录只写一次，已有记录必须与
+    // 本次请求一致；`--chunk` 是执行参数、不在摘要里，由搬移校验单独核对
+    if let Some(journal) = src.record_journal_mut() {
+        let digest = crate::recovery::PlanDigest::of_request(
+            journal.op(),
+            part,
+            new_start,
+            new_end,
+            g.sector_size(),
+            disk_size,
+        );
+        if let Err(why) = journal.bind_plan(digest) {
+            return RunOutcome::refused(format!("{why} — refusing to resume it"));
+        }
+    }
     // 记录型现场：把提交前区间与目标区间成对写进记录。它必须在首次目标写入之前落盘
     // ——表提交之后盘上只剩新区间，再想记搬移前形状就已经没有了
     if let Some(journal) = src.record_journal_mut() {
