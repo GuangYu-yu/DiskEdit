@@ -468,7 +468,7 @@ mod tests {
     #[test]
     fn classify_flags_diverging_copies() {
         let last = 2047;
-        let (primary, array, backup, _) = pair(last);
+        let (primary, array, _backup, _) = pair(last);
         let mut changed = entries();
         changed[0].ending_lba = 61;
         let changed_array = serialize_entries(&changed, 128, 128, SECTOR).expect("序列化应成功");

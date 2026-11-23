@@ -4,7 +4,9 @@
 //! 证据三态与持久记录。所有对外类型都可通过纯函数构造与断言。
 
 pub mod evidence;
+pub mod fingerprint;
 pub mod geometry;
 pub mod policy;
+pub mod record;
 pub mod region;
 pub mod table;
