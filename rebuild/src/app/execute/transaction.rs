@@ -7,10 +7,12 @@
 use std::path::Path;
 
 use diskedit_core::record::{
-    Frame, FrameKind, Preimage, RecordBody, RecoveryPlan, encode, recover,
+    Frame, FrameKind, Preimage, RecordBody, RecoveryPlan, encode, recover as recover_plan,
 };
 
 use super::digest::{digest as digest_bytes, hash_region, read_region};
+use super::recover as recovery;
+use super::recover::RecoveryFailure;
 use super::state::StateMachine;
 use super::steps::{self, Context};
 use super::token::Recorded;
@@ -31,6 +33,11 @@ impl Mint {
     const fn new() -> Self {
         Self(())
     }
+}
+
+/// 回滚从已有记录装载原像，因此记录已落盘；这是写通道令牌的恢复旁路。
+pub(crate) fn recovery_token(sequence: u64) -> Recorded {
+    Recorded::mint(&Mint::new(), sequence)
 }
 
 /// 执行一份已确认计划。
@@ -68,8 +75,15 @@ pub fn run(
         .steps()
         .iter()
         .any(|step| step.access() == Access::WritesTarget);
+    let recovers_records = confirmed
+        .steps()
+        .iter()
+        .any(|step| matches!(&step.kind, StepKind::RecoverRecords));
 
     if !writes_target {
+        if recovers_records {
+            return run_external(confirmed, platform, path, &mut *handle);
+        }
         return run_read_only(confirmed, platform, path);
     }
 
@@ -84,7 +98,7 @@ pub fn run(
         Ok(bytes) => bytes,
         Err(error) => return Outcome::unwritten(FailureKind::Refused, platform_text(&error)),
     } {
-        match recover(&existing, identity) {
+        match recover_plan(&existing, identity) {
             RecoveryPlan::Absent | RecoveryPlan::Committed => {
                 if let Err(error) = store.clear() {
                     return Outcome::unwritten(FailureKind::Refused, platform_text(&error));
@@ -145,7 +159,10 @@ pub fn run(
                         return Outcome::unwritten(FailureKind::FailedBeforeWrite, reason);
                     }
                 } else {
-                    return Outcome::unwritten(FailureKind::Unsupported, "记录恢复执行器尚未接入");
+                    return Outcome::unwritten(
+                        FailureKind::Refused,
+                        "记录恢复不能与其他写步骤混在同一份计划中",
+                    );
                 }
             }
             Access::WritesTarget => {
@@ -187,6 +204,50 @@ fn run_read_only(confirmed: &ConfirmedPlan, platform: &dyn Platform, path: &Path
         }
     }
     Outcome::completed()
+}
+
+/// 执行只改变目标之外状态的计划；当前只有记录恢复。
+fn run_external(
+    confirmed: &ConfirmedPlan,
+    platform: &dyn Platform,
+    path: &Path,
+    handle: &mut dyn TargetHandle,
+) -> Outcome {
+    for step in confirmed.steps() {
+        match step.access() {
+            Access::ReadOnly => continue,
+            Access::WritesTarget => {
+                return Outcome::unwritten(FailureKind::Refused, "外部状态计划包含写目标步骤");
+            }
+            Access::WritesExternalState => {
+                if matches!(&step.kind, StepKind::RecoverRecords) {
+                    if let Err(failure) = recovery::run(
+                        platform,
+                        path,
+                        confirmed.identity(),
+                        handle,
+                        recovery::Mode::RollBack,
+                    ) {
+                        return external_failure(failure);
+                    }
+                } else if let Err(error) = platform.update_table(path) {
+                    return Outcome::unwritten(
+                        FailureKind::FailedBeforeWrite,
+                        platform_text(&error),
+                    );
+                }
+            }
+        }
+    }
+    Outcome::completed()
+}
+
+fn external_failure(failure: RecoveryFailure) -> Outcome {
+    match failure {
+        RecoveryFailure::Refused(why) => Outcome::unwritten(FailureKind::Refused, why),
+        RecoveryFailure::Unsupported(why) => Outcome::unwritten(FailureKind::Unsupported, why),
+        RecoveryFailure::Interrupted(why) => Outcome::needs_recovery(why),
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -664,5 +725,54 @@ mod tests {
         let image = host.image.borrow();
         assert_eq!(&image[510..512], &[0x55, 0xAA]);
         assert_ne!(&image[512..516], &[0, 0, 0, 0]);
+    }
+
+    fn confirmed_recover(host: &FakeHost) -> ConfirmedPlan {
+        let request = Request::new("/tmp/image", Command::Recover);
+        let snapshot = observe(&request, host);
+        let decision = decide(&request, &snapshot);
+        let Decision::Plan { plan } = decision else {
+            panic!("恢复计划被拒绝");
+        };
+        confirm(plan, true, &snapshot.identity).expect("确认应成立")
+    }
+
+    #[test]
+    fn recovery_rolls_back_table_preimage_and_clears_record() {
+        let host = FakeHost::new(2 * 1024 * 1024);
+        let (confirmed, _snapshot) = confirmed_new(&host);
+        let before = host.image.borrow().clone();
+        let outcome = run(
+            &confirmed,
+            &host,
+            Path::new("/tmp/image"),
+            1,
+            Faults {
+                mid_write: true,
+                ..Faults::NONE
+            },
+        );
+        assert_eq!(outcome.state(), ExecutionState::NeedsRecovery);
+        assert!(*host.image.borrow() != before, "写中中断应留下部分写入");
+
+        let recovery = confirmed_recover(&host);
+        let outcome = run(&recovery, &host, Path::new("/tmp/image"), 1, Faults::NONE);
+        assert!(outcome.succeeded(), "{outcome:?}");
+        assert_eq!(*host.image.borrow(), before, "回滚应恢复表区原像");
+        assert!(host.records.borrow().is_none(), "回滚后应清理记录");
+    }
+
+    #[test]
+    fn foreign_record_is_refused_without_touching_the_target() {
+        let host = FakeHost::new(2 * 1024 * 1024);
+        *host.records.borrow_mut() = Some(b"ZRB1not-ours".to_vec());
+        let before = host.image.borrow().clone();
+
+        let recovery = confirmed_recover(&host);
+        let outcome = run(&recovery, &host, Path::new("/tmp/image"), 1, Faults::NONE);
+        assert_eq!(outcome.state(), ExecutionState::Unwritten);
+        assert_eq!(outcome.failure(), Some(FailureKind::Refused));
+        assert_eq!(*host.image.borrow(), before);
+        assert!(host.records.borrow().is_some(), "外来记录不得被清理");
     }
 }

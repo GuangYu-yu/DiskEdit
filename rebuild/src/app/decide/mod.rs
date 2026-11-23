@@ -72,7 +72,7 @@ pub fn decide(request: &Request, snapshot: &Snapshot) -> Decision {
             partition,
             offset_sectors,
         } => move_partition::plan(snapshot, *partition, *offset_sectors),
-        Command::Recover => recover::plan(),
+        Command::Recover => recover::plan(snapshot),
     };
     match outcome {
         Ok(plan) => Decision::Plan { plan },

@@ -42,9 +42,21 @@ impl Plan {
         }
     }
 
-    /// 构造不写目标字节、但会改变外部状态的计划。
-    pub fn external(steps: Vec<Step>) -> Self {
-        Self::read_only(steps)
+    /// 构造不写目标字节、但会改变外部状态（例如记录目录）的计划。
+    ///
+    /// 这类计划同样要求确认与强身份：恢复记录是写操作，只是不落到目标字节上。
+    pub fn external(steps: Vec<Step>, identity: Fingerprint) -> Result<Self, super::Refusal> {
+        if identity.strength() != Strength::Strong {
+            return Err(super::Refusal::IdentityUnprovable {
+                why: "外部状态计划所需的目标身份不足".to_owned(),
+            });
+        }
+        let digest = plan_digest(Some(identity), &steps);
+        Ok(Self {
+            steps,
+            digest,
+            identity: Some(identity),
+        })
     }
 
     pub fn steps(&self) -> &[Step] {

@@ -8,6 +8,7 @@
 
 pub mod digest;
 pub mod postcondition;
+pub mod recover;
 pub mod relocate;
 pub mod state;
 pub mod steps;
@@ -48,6 +49,21 @@ pub enum ExecError {
 impl From<PlatformError> for ExecError {
     fn from(error: PlatformError) -> Self {
         Self::Platform(error)
+    }
+}
+
+impl std::fmt::Display for ExecError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Platform(error) => write!(f, "{error}"),
+            Self::Record(why)
+            | Self::IdentityChanged(why)
+            | Self::Unsupported(why)
+            | Self::InvalidPlan(why)
+            | Self::Io(why)
+            | Self::Postcondition(why)
+            | Self::Injected(why) => f.write_str(why),
+        }
     }
 }
 
