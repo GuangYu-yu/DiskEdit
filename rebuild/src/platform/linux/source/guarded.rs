@@ -185,10 +185,7 @@ pub fn write_atomic(dir: &Path, _name: &str, _bytes: &[u8]) -> PlatformResult<()
 
 #[cfg(unix)]
 fn discard(path: &Path) {
-    match std::fs::remove_file(path) {
-        Ok(()) => {}
-        Err(_) => {}
-    }
+    drop(std::fs::remove_file(path));
 }
 
 #[cfg(unix)]

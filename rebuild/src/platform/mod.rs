@@ -27,6 +27,7 @@ pub mod probe;
 ///
 /// 每个方法都返回 [`PlatformError::NotSupported`]，不返回空数据、不假装成功；
 /// 接入某个端口时在对应子树里替换该方法即可。
+#[cfg(any(target_os = "windows", target_os = "macos", test))]
 macro_rules! unsupported_platform {
     ($ty:ty, $os:literal) => {
         impl $crate::platform::Platform for $ty {
@@ -37,6 +38,16 @@ macro_rules! unsupported_platform {
                 Err($crate::platform::PlatformError::not_supported(concat!(
                     $os,
                     " 的块设备端口尚未接入"
+                )))
+            }
+
+            fn open_target_read_only(
+                &self,
+                _path: &std::path::Path,
+            ) -> $crate::platform::PlatformResult<Box<dyn $crate::platform::TargetHandle>> {
+                Err($crate::platform::PlatformError::not_supported(concat!(
+                    $os,
+                    " 的只读目标端口尚未接入"
                 )))
             }
 
@@ -166,6 +177,7 @@ macro_rules! unsupported_platform {
     };
 }
 
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 pub(crate) use unsupported_platform;
 
 /// 平台层的字节区间视图：起点与长度都以字节计。
@@ -283,6 +295,8 @@ impl PlatformError {
 }
 
 fn classify_io(kind: std::io::ErrorKind) -> IoKind {
+    // 外部枚举：未单列的错误统一归为其他，避免逐个跟进标准库新增变体。
+    #[allow(clippy::wildcard_enum_match_arm)]
     match kind {
         std::io::ErrorKind::NotFound => IoKind::NotFound,
         std::io::ErrorKind::PermissionDenied => IoKind::Permission,
@@ -382,11 +396,12 @@ impl Occupancy {
 }
 
 /// 外部程序的退出结果。
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ExitKind {
     Succeeded,
     Failed(i32),
     Signaled(i32),
+    #[default]
     Unknown,
 }
 
@@ -396,12 +411,6 @@ pub struct Output {
     pub exit: ExitKind,
     pub stdout: Vec<u8>,
     pub stderr: Vec<u8>,
-}
-
-impl Default for ExitKind {
-    fn default() -> Self {
-        Self::Unknown
-    }
 }
 
 impl Output {
@@ -423,6 +432,9 @@ pub trait TargetHandle {
     fn path(&self) -> &Path;
     fn kind(&self) -> TargetKind;
     fn len(&self) -> u64;
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
     fn sector_size(&self) -> Option<u64>;
     fn read_at(&self, offset: u64, buf: &mut [u8]) -> PlatformResult<usize>;
     fn write_at(&mut self, offset: u64, buf: &[u8]) -> PlatformResult<usize>;
@@ -434,6 +446,9 @@ pub trait TargetHandle {
 /// 按偏移读取。
 pub trait ReadAt {
     fn len(&self) -> PlatformResult<u64>;
+    fn is_empty(&self) -> PlatformResult<bool> {
+        self.len().map(|len| len == 0)
+    }
     fn read_at(&self, offset: u64, buf: &mut [u8]) -> PlatformResult<usize>;
 }
 
@@ -445,7 +460,10 @@ pub trait WriteAt: ReadAt {
 
 /// 宿主能力端口。
 pub trait Platform {
+    /// 以读写方式打开目标；写通道只在执行期使用。
     fn open_target(&self, path: &Path) -> PlatformResult<Box<dyn TargetHandle>>;
+    /// 以只读方式打开目标；观察与判定只走这条路径。
+    fn open_target_read_only(&self, path: &Path) -> PlatformResult<Box<dyn TargetHandle>>;
     fn fingerprint(&self, path: &Path) -> PlatformResult<Fingerprint>;
     fn partitions(&self, path: &Path) -> PlatformResult<Vec<Partition>>;
     fn occupancy(&self, path: &Path) -> PlatformResult<Occupancy>;

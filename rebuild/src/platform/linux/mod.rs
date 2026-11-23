@@ -43,6 +43,10 @@ impl Platform for Linux {
         Ok(Box::new(target::Target::open(path)?))
     }
 
+    fn open_target_read_only(&self, path: &Path) -> PlatformResult<Box<dyn TargetHandle>> {
+        Ok(Box::new(Self::open_target_read_only(path)?))
+    }
+
     fn fingerprint(&self, path: &Path) -> PlatformResult<Fingerprint> {
         let target = Self::open_target_read_only(path)?;
         target::fingerprint(&target)

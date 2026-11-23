@@ -132,7 +132,12 @@ mod tests {
         for (bytes, expected) in cases {
             match identify(bytes) {
                 Evidence::Present(ContentKind::Filesystem(kind)) => assert_eq!(kind, *expected),
-                other => panic!("期望 {expected:?}，得到 {other:?}"),
+                other @ (Evidence::Present(_)
+                | Evidence::Absent
+                | Evidence::UnknownFormat { .. }
+                | Evidence::Unreadable { .. }) => {
+                    panic!("期望 {expected:?}，得到 {other:?}")
+                }
             }
         }
     }

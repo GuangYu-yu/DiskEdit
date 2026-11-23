@@ -6,6 +6,7 @@
 use std::ffi::OsString;
 
 pub mod cli;
+pub mod observe;
 
 /// 运行一次进程调用，返回退出码。
 pub fn run(args: impl IntoIterator<Item = OsString>) -> u8 {
