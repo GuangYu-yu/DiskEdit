@@ -6,7 +6,7 @@ use super::common::{admission, capacity};
 use super::plan::Plan;
 use super::refusal::Refusal;
 use super::step::{Step, StepKind};
-use crate::app::observe::Snapshot;
+use crate::app::observe::{Snapshot, TableFormat};
 
 pub fn plan(snapshot: &Snapshot, partition: u32, offset_sectors: i64) -> Result<Plan, Refusal> {
     let admitted = admission::admit(snapshot)?;
@@ -72,6 +72,8 @@ pub fn plan(snapshot: &Snapshot, partition: u32, offset_sectors: i64) -> Result<
         admitted.sector,
     )?;
     let new = capacity::partition_region(new_start, facts.partition.sectors, admitted.sector)?;
+    let layout = capacity::gpt_layout(admitted.length, admitted.sector)?;
+    let table = capacity::table_regions(TableFormat::Gpt, Some(layout), admitted.sector)?;
     let steps = vec![
         Step::new(
             StepKind::MovePartition {
@@ -79,6 +81,15 @@ pub fn plan(snapshot: &Snapshot, partition: u32, offset_sectors: i64) -> Result<
                 offset_sectors,
             },
             vec![old, new],
+        ),
+        Step::new(
+            StepKind::ResizePartition {
+                format: TableFormat::Gpt,
+                partition,
+                start_lba: new_start,
+                sectors: facts.partition.sectors,
+            },
+            table,
         ),
         Step::new(StepKind::RefreshKernelView, Vec::new()),
     ];
