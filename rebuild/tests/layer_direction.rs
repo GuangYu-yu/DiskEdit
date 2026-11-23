@@ -46,12 +46,23 @@ fn core_does_not_depend_on_the_package_root() {
 fn app_and_core_do_not_leak_platform_assumptions() {
     const FORBIDDEN: &[&str] = &[
         "platform::linux",
+        "platform::windows",
+        "platform::macos",
         "libc",
         "nix",
         "std::os::unix",
+        "std::os::linux",
+        "std::os::windows",
+        "std::process::Command",
+        "target_os",
+        "cfg(unix)",
         "errno",
         "/sys/",
         "/proc/",
+        "/dev/",
+        "ioctl",
+        "BLKPG",
+        "BTRFS_IOC",
         "mkfs.",
         "e2fsck",
         "resize2fs",
@@ -95,6 +106,43 @@ fn app_and_core_do_not_leak_platform_assumptions() {
             }
         }
     }
+}
+
+/// 平台选择只许出现在 `src/platform/mod.rs`。
+///
+/// 条件编译散落各处时，换目录不能降低移植成本；这里把「只在平台层选平台」变成
+/// 可静态核对的约束。
+#[test]
+fn platform_selection_lives_in_the_platform_module_only() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut files = Vec::new();
+    collect_rust_files(&root.join("src"), &mut files);
+    let platform_root = root.join("src/platform");
+    for file in files {
+        if file.starts_with(&platform_root) {
+            continue;
+        }
+        let text = std::fs::read_to_string(&file)
+            .unwrap_or_else(|error| panic!("读 {} 失败: {error}", file.display()));
+        for needle in ["target_os =", "target_family =", "windows_subsystem"] {
+            assert!(
+                !mentions(&text, needle),
+                "{} 出现了平台选择 `{needle}`；它只许留在 src/platform/",
+                file.display()
+            );
+        }
+    }
+}
+
+#[test]
+fn guard_detector_matches_identifiers_not_substrings() {
+    assert!(mentions("let fd = libc::open(path);", "libc"));
+    assert!(mentions("use std::os::unix::fs::FileExt;", "std::os::unix"));
+    assert!(mentions("std::fs::read(\"/sys/block\")", "/sys/"));
+    assert!(mentions("command: \"partx\"", "partx"));
+    assert!(!mentions("Exfatlabel::write", "fatlabel"));
+    assert!(!mentions("Repartx", "partx"));
+    assert!(!mentions("mkfs_xfs", "mkfs."));
 }
 
 /// 以标识符边界查找：`Exfatlabel` 不算出现 `fatlabel`。
