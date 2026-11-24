@@ -327,6 +327,61 @@ pub fn partitions(target: &Target) -> PlatformResult<Vec<Partition>> {
     Ok(found)
 }
 
+/// 定位块设备上某个分区的设备节点。
+///
+/// 先按 sysfs 中的 `partition` 属性找到分区目录，读 `dev` 得到 `major:minor`，
+/// 优先使用 `/dev/block/<major>:<minor>`；没有该符号链接时按内核命名规则拼出
+/// 分区节点（`sda1`、`nvme0n1p1`、`mmcblk0p1`）。两条路径都不存在时如实失败，
+/// 不用整盘节点冒充分区。
+pub fn partition_node(target: &Target, number: u32) -> PlatformResult<PathBuf> {
+    let kname = disk_name(target.path())?;
+    let device_dir = sysfs_root().join("block").join(&kname);
+    let entries =
+        std::fs::read_dir(&device_dir).map_err(|error| PlatformError::io(&device_dir, error))?;
+    for entry in entries {
+        let entry = entry.map_err(|error| PlatformError::io(&device_dir, error))?;
+        let part_dir = entry.path();
+        let number_text = match read_optional_attr(&part_dir.join("partition"))? {
+            Some(text) => text,
+            None => continue,
+        };
+        if parse_u64("分区号", &number_text)? != u64::from(number) {
+            continue;
+        }
+        if let Some(dev) = read_optional_attr(&part_dir.join("dev"))? {
+            let candidate = PathBuf::from("/dev/block").join(&dev);
+            if candidate.exists() {
+                return Ok(candidate);
+            }
+        }
+        let node = conventional_partition_path(&kname, number);
+        if node.exists() {
+            return Ok(node);
+        }
+        return Err(PlatformError::not_supported(format!(
+            "{} 的分区 {number} 在 /dev 下没有可用的设备节点",
+            target.path().display()
+        )));
+    }
+    Err(PlatformError::parse(format!(
+        "{} 上没有编号为 {number} 的分区",
+        target.path().display()
+    )))
+}
+
+fn conventional_partition_path(kname: &str, number: u32) -> PathBuf {
+    let ends_with_digit = kname
+        .chars()
+        .last()
+        .is_some_and(|character| character.is_ascii_digit());
+    let name = if ends_with_digit {
+        format!("{kname}p{number}")
+    } else {
+        format!("{kname}{number}")
+    };
+    PathBuf::from("/dev").join(name)
+}
+
 fn parse_u64(what: &str, text: &str) -> PlatformResult<u64> {
     text.trim()
         .parse::<u64>()

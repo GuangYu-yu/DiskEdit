@@ -179,6 +179,8 @@ pub fn run(
                     &mut frames,
                     &mut machine,
                     &ctx,
+                    platform,
+                    path,
                     &faults,
                 ) {
                     Ok(()) => wrote_any = true,
@@ -267,6 +269,8 @@ fn execute_target_step(
     frames: &mut Vec<Frame>,
     machine: &mut StateMachine,
     ctx: &Context<'_>,
+    platform: &dyn Platform,
+    path: &Path,
     faults: &Faults,
 ) -> Result<(), Outcome> {
     if let Err(error) = steps::precheck(&step.kind, ctx) {
@@ -320,7 +324,11 @@ fn execute_target_step(
 
     let fail_after = if faults.mid_write { Some(1) } else { None };
     let mut channel = WriteChannel::new(handle, &step.regions).with_fail_after(fail_after);
-    if let Err(error) = steps::apply(&step.kind, &step.regions, &mut channel, &token, ctx) {
+    let host = steps::Host {
+        platform,
+        target: path,
+    };
+    if let Err(error) = steps::apply(&step.kind, &step.regions, &mut channel, &token, ctx, &host) {
         let reason = match channel.barrier() {
             Ok(()) => format_error(&error),
             Err(barrier) => format!(

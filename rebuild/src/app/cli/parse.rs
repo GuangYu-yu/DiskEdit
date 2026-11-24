@@ -5,13 +5,13 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use diskedit_core::fs::FsKind;
+use diskedit_core::fs::MkfsKind;
 use diskedit_core::table::Guid;
 
 use super::spec::{self, Spec, TargetMode};
 use crate::app::observe::{
     AddRequest, Command, CopyRequest, MoveRequest, PartitionSelector, RecoverMode, Request,
-    ResizeRequest, SetAction, StartSpec, TableFormat, TargetSpec,
+    ResizeRequest, SetAction, SizeSpec, StartSpec, TableFormat, TargetSpec,
 };
 
 /// 已收齐的选项：名字到可选取值。
@@ -197,7 +197,7 @@ fn build(
             let partition = target_at(positionals, 0, spec.target)?.partition;
             let size = positionals
                 .get(1)
-                .map(|text| parse_size(text))
+                .map(|text| parse_size_spec(text))
                 .transpose()?;
             let end = value(flags, "--end")?
                 .map(|text| parse_lba(&text))
@@ -323,7 +323,7 @@ fn build(
             expect_count(positionals, 2, 2)?;
             let target = target_path(positionals, 0)?;
             let partition = require_partition(&target)?;
-            let filesystem = FsKind::parse(&positionals[1])
+            let filesystem = MkfsKind::parse(&positionals[1])
                 .ok_or_else(|| format!("未知文件系统 {}", positionals[1]))?;
             finish(
                 Request::new(
@@ -654,6 +654,65 @@ fn parse_size(text: &str) -> Result<u64, String> {
         .map_err(|_| format!("尺寸 {text} 不是合法数字"))?;
     base.checked_mul(multiplier)
         .ok_or_else(|| format!("尺寸 {text} 超出范围"))
+}
+
+/// 解析 `resize` 的 SIZE 写法：`grow`、绝对字节、`+N`/`-N`、`+N%`/`-N%`。
+fn parse_size_spec(text: &str) -> Result<SizeSpec, String> {
+    let trimmed = text.trim();
+    if trimmed == "grow" {
+        return Ok(SizeSpec::Grow);
+    }
+    if let Some(body) = trimmed.strip_prefix('+') {
+        return parse_relative_size(true, body);
+    }
+    if let Some(body) = trimmed.strip_prefix('-') {
+        return parse_relative_size(false, body);
+    }
+    if trimmed.ends_with('%') {
+        return Err("百分比必须是 +N% 或 -N% 形式".to_owned());
+    }
+    Ok(SizeSpec::Absolute(parse_size(trimmed)?))
+}
+
+fn parse_relative_size(grow: bool, body: &str) -> Result<SizeSpec, String> {
+    if let Some(percent) = body.strip_suffix('%') {
+        let (num, denom) = parse_percent(percent)?;
+        return Ok(SizeSpec::Percent { grow, num, denom });
+    }
+    Ok(SizeSpec::Delta {
+        grow,
+        bytes: parse_size(body)?,
+    })
+}
+
+/// 十进制百分比 →（分子, 分母）；`10` 为 `10/1`，`1.5` 为 `15/10`。
+fn parse_percent(text: &str) -> Result<(u64, u64), String> {
+    let (whole, fraction) = text.split_once('.').unwrap_or((text, ""));
+    if fraction.len() > 9 {
+        return Err(format!("百分比 {text}% 的小数位过多"));
+    }
+    let denom = 10u64
+        .checked_pow(u32::try_from(fraction.len()).map_err(|_| "百分比过长".to_owned())?)
+        .ok_or_else(|| format!("百分比 {text}% 超出范围"))?;
+    let whole = if whole.is_empty() {
+        0
+    } else {
+        whole
+            .parse::<u64>()
+            .map_err(|_| format!("百分比 {text}% 不是合法数字"))?
+    };
+    let fraction = if fraction.is_empty() {
+        0
+    } else {
+        fraction
+            .parse::<u64>()
+            .map_err(|_| format!("百分比 {text}% 不是合法数字"))?
+    };
+    let num = whole
+        .checked_mul(denom)
+        .and_then(|scaled| scaled.checked_add(fraction))
+        .ok_or_else(|| format!("百分比 {text}% 超出范围"))?;
+    Ok((num, denom))
 }
 
 fn parse_guid(text: &str) -> Result<Guid, String> {

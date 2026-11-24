@@ -34,7 +34,7 @@ CI 比对工作树与生成物；不要手工编辑。
 
 档案表引用到的外部程序（按身份）：
 
-`E2fsck`, `Resize2fs`, `Dumpe2fs`, `Mke2fs`, `Tune2fs`, `Ntfsresize`, `Ntfsfix`, `Ntfslabel`, `FsckF2fs`, `ResizeF2fs`, `XfsGrowfs`, `XfsRepair`, `XfsAdmin`, `Btrfs`, `Fatresize`, `Fatlabel`, `FsckVfat`, `Exfatlabel`, `FsckExfat`, `Mkswap`, `Swaplabel`, `Pvs`, `Lvs`, `Vgs`, `Pvresize`, `MkfsVfat`, `MkfsExfat`, `MkfsNtfs`, `MkfsXfs`, `MkfsBtrfs`, `MkfsF2fs`, `Mount`, `Umount`, `Losetup`, `Sfdisk`, `Partx`
+`E2fsck`, `Resize2fs`, `Dumpe2fs`, `Mke2fs`, `Tune2fs`, `Ntfsresize`, `Ntfsfix`, `Ntfslabel`, `FsckF2fs`, `ResizeF2fs`, `XfsGrowfs`, `XfsRepair`, `XfsAdmin`, `Btrfs`, `Btrfstune`, `Fatresize`, `Fatlabel`, `FsckVfat`, `Exfatlabel`, `FsckExfat`, `Mkswap`, `Swaplabel`, `Pvs`, `Lvs`, `Vgs`, `Pvresize`, `MkfsVfat`, `MkfsExfat`, `MkfsNtfs`, `MkfsXfs`, `MkfsBtrfs`, `MkfsF2fs`, `Mount`, `Umount`, `Losetup`, `Sfdisk`, `Partx`, `Blkid`
 
 ## Runtime gate
 

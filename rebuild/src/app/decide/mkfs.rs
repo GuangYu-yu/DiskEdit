@@ -3,8 +3,7 @@
 //! 建卷不依赖分区里现有内容；所需程序由内容档案给出。标签随步骤一起进入计划，
 //! 由执行侧的建卷动作使用。
 
-use diskedit_core::fs::profile::ContentKind;
-use diskedit_core::fs::{FsKind, Verb};
+use diskedit_core::fs::{MkfsKind, Verb};
 
 use super::common::{admission, capacity};
 use super::plan::Plan;
@@ -15,13 +14,13 @@ use crate::app::observe::{PartitionSelector, Snapshot};
 pub fn plan(
     snapshot: &Snapshot,
     selector: PartitionSelector,
-    filesystem: FsKind,
+    filesystem: MkfsKind,
     label: Option<String>,
 ) -> Result<Plan, Refusal> {
     let admitted = admission::admit(snapshot)?;
     let partition = admission::select(snapshot, selector)?;
     let facts = admission::partition(snapshot, partition)?;
-    let content = ContentKind::Filesystem(filesystem);
+    let content = filesystem.content();
     let programs = admission::programs(content, Verb::Mkfs)?;
     let Some(programs) = programs else {
         return Err(Refusal::ContentUnsupported {

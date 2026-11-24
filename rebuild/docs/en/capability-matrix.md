@@ -35,7 +35,7 @@ there as well.
 
 External programs the catalogue refers to, by identity:
 
-`E2fsck`, `Resize2fs`, `Dumpe2fs`, `Mke2fs`, `Tune2fs`, `Ntfsresize`, `Ntfsfix`, `Ntfslabel`, `FsckF2fs`, `ResizeF2fs`, `XfsGrowfs`, `XfsRepair`, `XfsAdmin`, `Btrfs`, `Fatresize`, `Fatlabel`, `FsckVfat`, `Exfatlabel`, `FsckExfat`, `Mkswap`, `Swaplabel`, `Pvs`, `Lvs`, `Vgs`, `Pvresize`, `MkfsVfat`, `MkfsExfat`, `MkfsNtfs`, `MkfsXfs`, `MkfsBtrfs`, `MkfsF2fs`, `Mount`, `Umount`, `Losetup`, `Sfdisk`, `Partx`
+`E2fsck`, `Resize2fs`, `Dumpe2fs`, `Mke2fs`, `Tune2fs`, `Ntfsresize`, `Ntfsfix`, `Ntfslabel`, `FsckF2fs`, `ResizeF2fs`, `XfsGrowfs`, `XfsRepair`, `XfsAdmin`, `Btrfs`, `Btrfstune`, `Fatresize`, `Fatlabel`, `FsckVfat`, `Exfatlabel`, `FsckExfat`, `Mkswap`, `Swaplabel`, `Pvs`, `Lvs`, `Vgs`, `Pvresize`, `MkfsVfat`, `MkfsExfat`, `MkfsNtfs`, `MkfsXfs`, `MkfsBtrfs`, `MkfsF2fs`, `Mount`, `Umount`, `Losetup`, `Sfdisk`, `Partx`, `Blkid`
 
 ## Runtime gate
 

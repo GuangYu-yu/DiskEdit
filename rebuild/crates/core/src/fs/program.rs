@@ -21,6 +21,7 @@ pub enum Program {
     XfsRepair,
     XfsAdmin,
     Btrfs,
+    Btrfstune,
     Fatresize,
     Fatlabel,
     FsckVfat,
@@ -43,11 +44,12 @@ pub enum Program {
     Losetup,
     Sfdisk,
     Partx,
+    Blkid,
 }
 
 impl Program {
     /// 全部程序，用于名称唯一性与可执行名对账。
-    pub const ALL: [Program; 36] = [
+    pub const ALL: [Program; 38] = [
         Program::E2fsck,
         Program::Resize2fs,
         Program::Dumpe2fs,
@@ -62,6 +64,7 @@ impl Program {
         Program::XfsRepair,
         Program::XfsAdmin,
         Program::Btrfs,
+        Program::Btrfstune,
         Program::Fatresize,
         Program::Fatlabel,
         Program::FsckVfat,
@@ -84,10 +87,11 @@ impl Program {
         Program::Losetup,
         Program::Sfdisk,
         Program::Partx,
+        Program::Blkid,
     ];
 
     /// 程序身份已登记齐全。
-    pub const COUNT: usize = 36;
+    pub const COUNT: usize = 38;
 }
 
 #[cfg(test)]

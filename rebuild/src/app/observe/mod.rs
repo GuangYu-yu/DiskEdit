@@ -1,8 +1,8 @@
 //! 观察层：把一次请求与宿主端口转成不可变的事实快照。
 //!
 //! 快照里每条事实都是 [`Observation`]，带来源与观测代次；读不到、判不出记
-//! `Unknown`，不折叠成默认值或空集合。本层只读目标，不写盘、不执行外部程序，
-//! 也不做判定。
+//! `Unknown`，不折叠成默认值或空集合。本层只读目标，不写盘、不做判定；文件
+//! 系统尺寸需要运行只读探测程序取得，探测本身不改动目标。
 
 pub mod disk;
 pub mod filesystem;
@@ -14,7 +14,7 @@ pub mod tools;
 use std::path::{Path, PathBuf};
 
 use diskedit_core::evidence::Generation;
-use diskedit_core::fs::FsKind;
+use diskedit_core::fs::MkfsKind;
 use diskedit_core::table::Guid;
 
 use crate::platform::TargetHandle;
@@ -131,7 +131,7 @@ pub enum Command {
     },
     Mkfs {
         partition: PartitionSelector,
-        filesystem: FsKind,
+        filesystem: MkfsKind,
         label: Option<String>,
     },
     Resizefs {
@@ -146,12 +146,28 @@ pub enum Command {
     Add(AddRequest),
 }
 
+/// `resize` 的 SIZE 写法。
+///
+/// 增量与百分比保留原始形态，判定层在锁下用当前分区字节数解析，锁前算出的绝对值
+/// 可能已经作废。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SizeSpec {
+    /// `grow`：吃满右侧空闲。
+    Grow,
+    /// 绝对字节数。
+    Absolute(u64),
+    /// `+N` / `-N`：相对当前分区大小。
+    Delta { grow: bool, bytes: u64 },
+    /// `+N%` / `-N%`：相对当前分区大小的百分比增量。
+    Percent { grow: bool, num: u64, denom: u64 },
+}
+
 /// `resize` 的参数。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResizeRequest {
     pub partition: Option<PartitionSelector>,
-    /// 位置参数 SIZE，已换算成字节。
-    pub size: Option<u64>,
+    /// 位置参数 SIZE 的原始形态。
+    pub size: Option<SizeSpec>,
     /// `--end` 指定的新终点 LBA。
     pub end: Option<u64>,
     pub grow_to_end: bool,

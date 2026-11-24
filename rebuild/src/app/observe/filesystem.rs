@@ -12,7 +12,9 @@ use diskedit_core::table::GptEvidence;
 use super::disk::DiskFacts;
 use super::snapshot::{PartitionFacts, Topology};
 use super::table::TableFacts;
-use crate::platform::{Partition, Platform, TargetHandle, TargetKind, probe};
+use crate::platform::{
+    Partition, Platform, Region as DeviceRegion, TargetHandle, TargetKind, probe,
+};
 
 /// 块设备分区拓扑的产生点。
 pub const SOURCE_TOPOLOGY: Source = Source::new("platform.partitions");
@@ -56,11 +58,62 @@ pub fn observe_topology(
         .into_iter()
         .map(|partition| {
             let content = observe_content(handle, &partition, disk, generation);
-            PartitionFacts { partition, content }
+            PartitionFacts {
+                partition,
+                content,
+                size: Observation::unknown("文件系统尺寸尚未探测"),
+            }
         })
         .collect();
     Observation::known(Topology { partitions: facts }, source, generation)
 }
+
+/// 为已识别的文件系统补上尺寸事实。
+///
+/// 只在需要尺寸的请求上调用，避免为列举类命令启动外部程序。探测失败的分区保持
+/// `Unknown`，由判定层拒绝，不折叠为分区容量。
+pub fn observe_sizes(
+    platform: &dyn Platform,
+    path: &Path,
+    topology: &Observation<Topology>,
+    disk: &DiskFacts,
+    generation: Generation,
+) -> Observation<Topology> {
+    let (
+        Observation::Known {
+            value: topology_value,
+            source,
+            generation: topology_generation,
+        },
+        Some(sector),
+    ) = (topology, disk.sector_size.value().copied())
+    else {
+        return topology.clone();
+    };
+    let mut partitions = topology_value.partitions.clone();
+    for facts in &mut partitions {
+        let Observation::Known { value, .. } = &facts.content else {
+            continue;
+        };
+        let Some(kind) = value.filesystem() else {
+            continue;
+        };
+        let offset = match facts.partition.start_lba.checked_mul(sector) {
+            Some(offset) => offset,
+            None => continue,
+        };
+        let len = facts.partition.sectors.saturating_mul(sector);
+        let region = DeviceRegion::new(offset, len);
+        facts.size = match platform.filesystem_size(path, facts.partition.number, region, kind) {
+            Ok(size) => Observation::known(size, SOURCE_SIZE, generation),
+            Err(error) => Observation::unknown(format!("读取文件系统尺寸失败：{error}")),
+        };
+    }
+    Observation::known(Topology { partitions }, *source, *topology_generation)
+}
+
+/// 文件系统尺寸的产生点。
+pub const SOURCE_SIZE: Source = Source::new("probe.filesystem_size");
 
 /// 从盘上分区表推出现有条目；表不可用时给出原因，不返回空列表。
 fn file_partitions(table: &TableFacts) -> Result<Vec<Partition>, String> {

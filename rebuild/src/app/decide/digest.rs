@@ -134,10 +134,18 @@ fn encode_kind(out: &mut Vec<u8>, kind: &StepKind) {
             partition,
             property,
             value,
+            content,
         } => {
             out.push(10);
             out.extend_from_slice(&partition.to_le_bytes());
             out.push(property_tag(*property));
+            match content {
+                Some(content) => {
+                    out.push(1);
+                    out.extend_from_slice(content.as_str().as_bytes());
+                }
+                None => out.push(0),
+            }
             out.extend_from_slice(value.as_bytes());
         }
         StepKind::MakeFilesystem {

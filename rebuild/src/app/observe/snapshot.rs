@@ -11,13 +11,15 @@ use super::disk::DiskFacts;
 use super::table::TableFacts;
 use super::tools::{ToolAvailability, ToolState};
 use super::{FIRST_GENERATION, Request, disk, filesystem, identity, table, tools};
-use crate::platform::{Occupancy, Partition, Platform};
+use crate::platform::{FsSize, Occupancy, Partition, Platform};
 
-/// 目标身上的一份分区：内核拓扑与可读内容类别。
+/// 目标身上的一份分区：内核拓扑、可读内容类别与内容尺寸。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PartitionFacts {
     pub partition: Partition,
     pub content: Observation<ContentKind>,
+    /// 文件系统当前大小与可收缩的最小大小；未探测或非文件系统时保持未知。
+    pub size: Observation<FsSize>,
 }
 
 /// 分区拓扑。
@@ -107,6 +109,25 @@ pub fn observe(request: &Request, platform: &dyn Platform) -> Snapshot {
         handle.as_deref(),
         generation,
     );
+    let topology = match request.command() {
+        super::Command::Resizefs { .. } | super::Command::Resize(_) => {
+            filesystem::observe_sizes(platform, target, &topology, &disk, generation)
+        }
+        super::Command::Info
+        | super::Command::Inspect
+        | super::Command::RecordsList
+        | super::Command::RecordsVerify { .. }
+        | super::Command::RecordsScan
+        | super::Command::Move(_)
+        | super::Command::Copy(_)
+        | super::Command::Delete { .. }
+        | super::Command::Set { .. }
+        | super::Command::Check { .. }
+        | super::Command::Mkfs { .. }
+        | super::Command::Recover(_)
+        | super::Command::New { .. }
+        | super::Command::Add(_) => topology,
+    };
     let occupancy = disk::observe_occupancy(platform, target, generation);
     let tools = tools::observe(platform, generation);
     Snapshot {

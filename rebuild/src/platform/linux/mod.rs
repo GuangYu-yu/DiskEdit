@@ -4,6 +4,7 @@
 //! 上层只看见 [`crate::platform`] 里的中立类型与端口 trait。
 
 pub mod dm;
+mod fs_size;
 pub mod kernel;
 pub mod loopdev;
 pub mod lvm;
@@ -20,8 +21,8 @@ use diskedit_core::fingerprint::Fingerprint;
 use diskedit_core::fs::Program;
 
 use crate::platform::{
-    BtrfsShow, ExitKind, Occupancy, Output, Partition, Platform, PlatformError, PlatformResult,
-    PvFacts, TargetHandle,
+    BtrfsShow, ExitKind, FsSize, Occupancy, Output, Partition, PartitionDevice, Platform,
+    PlatformError, PlatformResult, PvFacts, Region, TargetHandle,
 };
 
 pub use crate::platform::{PlatformError as Error, PlatformResult as Result};
@@ -123,6 +124,108 @@ impl Platform for Linux {
                 vg_name: row.vg_name,
             })
             .collect())
+    }
+
+    fn partition_device(
+        &self,
+        target: &Path,
+        partition: u32,
+        region: Region,
+    ) -> PlatformResult<PartitionDevice> {
+        let opened = Self::open_target_read_only(target)?;
+        match opened.kind() {
+            crate::platform::TargetKind::Block => Ok(PartitionDevice {
+                path: target::partition_node(&opened, partition)?,
+                loop_device: None,
+            }),
+            crate::platform::TargetKind::File => {
+                let device = self.loop_attach(target, region.offset, region.len)?;
+                Ok(PartitionDevice {
+                    path: device.clone(),
+                    loop_device: Some(device),
+                })
+            }
+        }
+    }
+
+    fn filesystem_size(
+        &self,
+        target: &Path,
+        partition: u32,
+        region: Region,
+        kind: diskedit_core::fs::FsKind,
+    ) -> PlatformResult<FsSize> {
+        let device = self.partition_device(target, partition, region)?;
+        let result = self.probe_size(&device.path, region.len, kind);
+        if let Some(loop_device) = &device.loop_device {
+            drop(self.loop_detach(loop_device));
+        }
+        result
+    }
+
+    fn filesystem_size_of(
+        &self,
+        device: &Path,
+        device_bytes: u64,
+        kind: diskedit_core::fs::FsKind,
+    ) -> PlatformResult<FsSize> {
+        self.probe_size(device, device_bytes, kind)
+    }
+
+    fn wipe(&self, device: &Path, ranges: &[Region]) -> PlatformResult<()> {
+        use std::io::{Seek, Write};
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(device)
+            .map_err(|error| PlatformError::io(device, error))?;
+        let length = file
+            .metadata()
+            .map_err(|error| PlatformError::io(device, error))?
+            .len();
+        let zeros = [0u8; 4096];
+        for range in ranges {
+            let end = range.end();
+            if end > length {
+                return Err(PlatformError::parse(format!(
+                    "清零区间 {range:?} 越过设备长度 {length}"
+                )));
+            }
+            let mut written = 0u64;
+            while written < range.len {
+                let chunk = usize::try_from((range.len - written).min(zeros.len() as u64))
+                    .unwrap_or(zeros.len());
+                file.seek(std::io::SeekFrom::Start(range.offset + written))
+                    .map_err(|error| PlatformError::io(device, error))?;
+                file.write_all(&zeros[..chunk])
+                    .map_err(|error| PlatformError::io(device, error))?;
+                written += chunk as u64;
+            }
+        }
+        file.sync_data()
+            .map_err(|error| PlatformError::io(device, error))
+    }
+
+    fn make_mount_point(&self) -> PlatformResult<PathBuf> {
+        let base = std::env::temp_dir();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.subsec_nanos())
+            .unwrap_or_default();
+        let point = base.join(format!("diskedit.mnt.{}.{nanos:08x}", std::process::id()));
+        let mut builder = std::fs::DirBuilder::new();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            builder.mode(0o700);
+        }
+        builder
+            .create(&point)
+            .map_err(|error| PlatformError::io(&point, error))?;
+        Ok(point)
+    }
+
+    fn remove_mount_point(&self, point: &Path) -> PlatformResult<()> {
+        std::fs::remove_dir(point).map_err(|error| PlatformError::io(point, error))
     }
 
     fn loop_attach(&self, backing: &Path, offset: u64, size: u64) -> PlatformResult<PathBuf> {
@@ -275,6 +378,7 @@ fn executable_name(program: Program) -> &'static str {
         Program::XfsRepair => "xfs_repair",
         Program::XfsAdmin => "xfs_admin",
         Program::Btrfs => "btrfs",
+        Program::Btrfstune => "btrfstune",
         Program::Fatresize => "fatresize",
         Program::Fatlabel => "fatlabel",
         Program::FsckVfat => "fsck.fat",
@@ -297,6 +401,7 @@ fn executable_name(program: Program) -> &'static str {
         Program::Losetup => "losetup",
         Program::Sfdisk => "sfdisk",
         Program::Partx => "partx",
+        Program::Blkid => "blkid",
     }
 }
 

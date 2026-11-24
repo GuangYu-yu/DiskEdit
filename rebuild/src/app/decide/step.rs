@@ -2,7 +2,7 @@
 //!
 //! 访问级别由步骤种类唯一决定，不单独传入，避免声明与实际作用不符。
 
-use diskedit_core::fs::FsKind;
+use diskedit_core::fs::{ContentKind, FsKind, MkfsKind};
 use diskedit_core::region::Region;
 use diskedit_core::table::Guid;
 
@@ -60,11 +60,13 @@ pub enum StepKind {
         partition: u32,
         property: SetProperty,
         value: String,
+        /// 内容属性的内容类型；表属性为 `None`。
+        content: Option<ContentKind>,
     },
     /// 在分区上建卷。
     MakeFilesystem {
         partition: u32,
-        filesystem: FsKind,
+        filesystem: MkfsKind,
         label: Option<String>,
     },
     /// 扩展文件系统到指定字节数。

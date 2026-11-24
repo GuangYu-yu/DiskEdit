@@ -79,6 +79,77 @@ impl FsKind {
     }
 }
 
+/// `mkfs` 请求点名的目标类型。
+///
+/// 识别域只到族（[`FsKind`]），建卷需要保留 ext2/3/4 的区别与 swap、
+/// LVM2 PV 这两种非文件系统目标，故单列一层。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum MkfsKind {
+    Ext2,
+    Ext3,
+    Ext4,
+    Xfs,
+    Btrfs,
+    F2fs,
+    Vfat,
+    Exfat,
+    Ntfs,
+    Swap,
+    Lvm2Pv,
+}
+
+impl MkfsKind {
+    pub const ALL: [MkfsKind; 11] = [
+        MkfsKind::Ext2,
+        MkfsKind::Ext3,
+        MkfsKind::Ext4,
+        MkfsKind::Xfs,
+        MkfsKind::Btrfs,
+        MkfsKind::F2fs,
+        MkfsKind::Vfat,
+        MkfsKind::Exfat,
+        MkfsKind::Ntfs,
+        MkfsKind::Swap,
+        MkfsKind::Lvm2Pv,
+    ];
+
+    pub fn parse(name: &str) -> Option<Self> {
+        let lowered = name.to_ascii_lowercase();
+        Self::ALL.into_iter().find(|kind| kind.as_str() == lowered)
+    }
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Ext2 => "ext2",
+            Self::Ext3 => "ext3",
+            Self::Ext4 => "ext4",
+            Self::Xfs => "xfs",
+            Self::Btrfs => "btrfs",
+            Self::F2fs => "f2fs",
+            Self::Vfat => "vfat",
+            Self::Exfat => "exfat",
+            Self::Ntfs => "ntfs",
+            Self::Swap => "swap",
+            Self::Lvm2Pv => "lvm2_pv",
+        }
+    }
+
+    /// 建卷请求对应的内容类别。
+    pub const fn content(self) -> ContentKind {
+        match self {
+            Self::Ext2 | Self::Ext3 | Self::Ext4 => ContentKind::Filesystem(FsKind::Ext),
+            Self::Xfs => ContentKind::Filesystem(FsKind::Xfs),
+            Self::Btrfs => ContentKind::Filesystem(FsKind::Btrfs),
+            Self::F2fs => ContentKind::Filesystem(FsKind::F2fs),
+            Self::Vfat => ContentKind::Filesystem(FsKind::Vfat),
+            Self::Exfat => ContentKind::Filesystem(FsKind::Exfat),
+            Self::Ntfs => ContentKind::Filesystem(FsKind::Ntfs),
+            Self::Swap => ContentKind::Swap,
+            Self::Lvm2Pv => ContentKind::Lvm2Pv,
+        }
+    }
+}
+
 /// 磁盘分区承载的内容类别。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ContentKind {

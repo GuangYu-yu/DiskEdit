@@ -50,6 +50,7 @@ pub fn plan(
                     partition,
                     property,
                     value,
+                    content: None,
                 },
                 regions,
             )];
@@ -75,6 +76,7 @@ pub fn plan(
                     partition,
                     property,
                     value,
+                    content: Some(content),
                 },
                 vec![region],
             )];

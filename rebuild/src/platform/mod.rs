@@ -12,7 +12,7 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 
 use diskedit_core::fingerprint::Fingerprint;
-use diskedit_core::fs::Program;
+use diskedit_core::fs::{FsKind, Program};
 
 #[cfg(target_os = "linux")]
 pub mod linux;
@@ -405,6 +405,26 @@ impl Occupancy {
     }
 }
 
+/// 一个可直接交给外部工具的分区设备视图。
+///
+/// 块设备目标对应的分区节点直接可用；普通文件目标对应的区间由 `loop_device`
+/// 承载，用后必须经 [`Platform::loop_detach`] 释放。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PartitionDevice {
+    pub path: PathBuf,
+    pub loop_device: Option<PathBuf>,
+}
+
+/// 文件系统的尺寸事实：当前大小与可收缩到的最小大小。
+///
+/// `min_bytes` 为 `None` 表示该族不能收缩或最小尺寸尚未探出；调用方不得据此
+/// 推断为 0 或"可任意收缩"。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FsSize {
+    pub bytes: u64,
+    pub min_bytes: Option<u64>,
+}
+
 /// btrfs 文件系统的顶层信息。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BtrfsShow {
@@ -534,6 +554,60 @@ pub trait Platform {
     fn umount(&self, mount_point: &Path) -> PlatformResult<()>;
     fn require(&self, program: Program) -> PlatformResult<PathBuf>;
     fn run(&self, program: Program, args: &[&str]) -> PlatformResult<Output>;
+    /// 取得分区对应的设备视图。
+    ///
+    /// 目标是块设备时按分区号定位分区节点；目标是普通文件时在 `region` 上挂接
+    /// loop。没有任何一种可得时返回 `NotSupported`，不以整盘冒充分区。
+    fn partition_device(
+        &self,
+        target: &Path,
+        partition: u32,
+        region: Region,
+    ) -> PlatformResult<PartitionDevice> {
+        let _ = (target, partition, region);
+        Err(PlatformError::not_supported("该宿主不提供分区设备视图"))
+    }
+    /// 读取文件系统的当前大小与最小尺寸。
+    ///
+    /// 只做只读探测；目标不是可识别文件系统时返回 `UnsupportedFs`。
+    fn filesystem_size(
+        &self,
+        target: &Path,
+        partition: u32,
+        region: Region,
+        kind: FsKind,
+    ) -> PlatformResult<FsSize> {
+        let _ = (target, partition, region, kind);
+        Err(PlatformError::not_supported("该宿主不提供文件系统尺寸探测"))
+    }
+    /// 读取已取得的分区设备上文件系统的尺寸事实。
+    ///
+    /// 与 [`Platform::filesystem_size`] 的区别是不再定位设备，供执行侧在已挂接
+    /// 的 loop 上回读使用。
+    fn filesystem_size_of(
+        &self,
+        device: &Path,
+        device_bytes: u64,
+        kind: FsKind,
+    ) -> PlatformResult<FsSize> {
+        let _ = (device, device_bytes, kind);
+        Err(PlatformError::not_supported("该宿主不提供文件系统尺寸探测"))
+    }
+    /// 把设备上若干字节区间清零并提交。
+    ///
+    /// 建卷前擦除旧签名副本时使用；区间越界由实现拒绝。
+    fn wipe(&self, device: &Path, ranges: &[Region]) -> PlatformResult<()> {
+        let _ = (device, ranges);
+        Err(PlatformError::not_supported("该宿主不提供设备清零"))
+    }
+    /// 建一个私有临时挂载点；用后经 [`Platform::remove_mount_point`] 释放。
+    fn make_mount_point(&self) -> PlatformResult<PathBuf> {
+        Err(PlatformError::not_supported("该宿主不提供临时挂载点"))
+    }
+    fn remove_mount_point(&self, point: &Path) -> PlatformResult<()> {
+        let _ = point;
+        Err(PlatformError::not_supported("该宿主不提供临时挂载点"))
+    }
     /// 目标对应的记录目录；宿主没有该能力时返回 `NotSupported`。
     fn records(
         &self,

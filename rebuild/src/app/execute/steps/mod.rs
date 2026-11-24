@@ -1,12 +1,14 @@
 //! 步骤执行：把一种步骤变成声明区间内的字节写入。
 //!
-//! 表格式与复制在本模块落地；需要分区设备路径的文件系统操作、在线扩缩与搬移
-//! 由执行侧的其余子模块承担，未接入时在写前闸口返回 `Unsupported`，不落任何
-//! 目标字节。
+//! 表格式、复制与搬移直接经写通道落盘；文件系统操作在写前闸口通过后，由
+//! [`filesystem`] 在分区设备视图上运行外部工具，并回读目标字节核对结果。
 
 pub mod copy;
 pub mod entries;
+pub mod filesystem;
 pub mod table;
+
+use std::path::Path;
 
 use diskedit_core::region::Region;
 
@@ -15,6 +17,14 @@ use super::token::Recorded;
 use super::{ExecError, WriteChannel};
 use crate::app::decide::step::StepKind;
 use crate::app::observe::SetProperty;
+use crate::platform::Platform;
+
+/// 执行一步所需的宿主资源。
+#[derive(Clone, Copy)]
+pub struct Host<'a> {
+    pub platform: &'a dyn Platform,
+    pub target: &'a Path,
+}
 
 /// 执行一步所需的几何事实。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -61,14 +71,10 @@ pub fn precheck(kind: &StepKind, ctx: &Context<'_>) -> Result<(), ExecError> {
         StepKind::SetProperty {
             property: SetProperty::Label | SetProperty::Uuid,
             ..
-        } => Err(ExecError::Unsupported(
-            "文件系统属性写入需要分区设备路径".to_owned(),
-        )),
-        StepKind::MakeFilesystem { .. }
+        }
+        | StepKind::MakeFilesystem { .. }
         | StepKind::GrowFilesystem { .. }
-        | StepKind::ShrinkFilesystem { .. } => Err(ExecError::Unsupported(
-            "文件系统操作需要分区设备路径".to_owned(),
-        )),
+        | StepKind::ShrinkFilesystem { .. } => Ok(()),
         StepKind::Inspect
         | StepKind::Check { .. }
         | StepKind::ListRecords
@@ -88,6 +94,7 @@ pub fn apply(
     channel: &mut WriteChannel<'_>,
     token: &Recorded,
     ctx: &Context<'_>,
+    host: &Host<'_>,
 ) -> Result<(), ExecError> {
     match kind {
         StepKind::WriteTable { .. }
@@ -124,7 +131,7 @@ pub fn apply(
         | StepKind::MakeFilesystem { .. }
         | StepKind::GrowFilesystem { .. }
         | StepKind::ShrinkFilesystem { .. } => {
-            Err(ExecError::Unsupported("该步骤尚无可用的执行器".to_owned()))
+            filesystem::apply(kind, regions, channel, token, ctx, host)
         }
         StepKind::Inspect
         | StepKind::Check { .. }

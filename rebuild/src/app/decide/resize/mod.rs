@@ -8,7 +8,7 @@ use super::common::{admission, capacity};
 use super::plan::Plan;
 use super::refusal::Refusal;
 use super::step::{Step, StepKind};
-use crate::app::observe::{ResizeRequest, Snapshot, TableFormat};
+use crate::app::observe::{ResizeRequest, SizeSpec, Snapshot, TableFormat};
 
 pub fn plan(snapshot: &Snapshot, request: &ResizeRequest) -> Result<Plan, Refusal> {
     let admitted = admission::admit(snapshot)?;
@@ -29,14 +29,24 @@ pub fn plan(snapshot: &Snapshot, request: &ResizeRequest) -> Result<Plan, Refusa
     let table = admission::table(snapshot)?;
     let format = table.format();
     let start = facts.partition.start_lba;
-    let sectors = match (request.size, request.end, request.grow_to_end) {
+    let grow_to_end = request.grow_to_end || matches!(request.size, Some(SizeSpec::Grow));
+    let size = request.size.filter(|spec| !matches!(spec, SizeSpec::Grow));
+    let current_bytes = facts
+        .partition
+        .sectors
+        .checked_mul(admitted.sector)
+        .ok_or_else(|| Refusal::ArgumentOutOfRange {
+            what: "分区容量越过可寻址上界".to_owned(),
+        })?;
+    let sectors = match (size, request.end, grow_to_end) {
         (Some(_), Some(_), _) | (Some(_), _, true) | (None, Some(_), true) => {
             return Err(Refusal::ArgumentOutOfRange {
                 what: "尺寸、--end 与 --grow-to-end 只能出现一个".to_owned(),
             });
         }
-        (Some(size), None, false) => {
-            let sectors = size.div_ceil(admitted.sector);
+        (Some(spec), None, false) => {
+            let target = resolve_size(spec, current_bytes)?;
+            let sectors = target.div_ceil(admitted.sector);
             if sectors == 0 {
                 return Err(Refusal::ArgumentOutOfRange {
                     what: "分区长度为零".to_owned(),
@@ -79,9 +89,27 @@ pub fn plan(snapshot: &Snapshot, request: &ResizeRequest) -> Result<Plan, Refusa
         });
     }
     if sectors < facts.partition.sectors {
-        return Err(Refusal::FactUnknown {
-            what: "filesystem used bytes".to_owned(),
-        });
+        let needed =
+            sectors
+                .checked_mul(admitted.sector)
+                .ok_or_else(|| Refusal::ArgumentOutOfRange {
+                    what: "新分区容量越过可寻址上界".to_owned(),
+                })?;
+        match &facts.size {
+            diskedit_core::evidence::Observation::Known { value, .. } if value.bytes <= needed => {}
+            diskedit_core::evidence::Observation::Known { value, .. } => {
+                return Err(Refusal::CapacityInsufficient {
+                    needed: value.bytes,
+                    available: needed,
+                });
+            }
+            diskedit_core::evidence::Observation::Unknown { .. }
+            | diskedit_core::evidence::Observation::NotApplicable { .. } => {
+                return Err(Refusal::FactUnknown {
+                    what: "filesystem used bytes".to_owned(),
+                });
+            }
+        }
     }
     let end_lba = start
         .checked_add(sectors - 1)
@@ -161,4 +189,52 @@ pub fn plan(snapshot: &Snapshot, request: &ResizeRequest) -> Result<Plan, Refusa
         Step::new(StepKind::RefreshKernelView, Vec::new()),
     ];
     Plan::write(steps, admitted.identity)
+}
+
+/// SIZE 写法 → 目标字节数；增量与百分比以当前分区字节数为锚。
+fn resolve_size(spec: SizeSpec, current: u64) -> Result<u64, Refusal> {
+    match spec {
+        SizeSpec::Absolute(bytes) => Ok(bytes),
+        SizeSpec::Grow => Err(Refusal::ArgumentOutOfRange {
+            what: "grow 不能作为绝对尺寸解析".to_owned(),
+        }),
+        SizeSpec::Delta { grow: true, bytes } => {
+            current
+                .checked_add(bytes)
+                .ok_or_else(|| Refusal::ArgumentOutOfRange {
+                    what: "SIZE 超过可寻址上界".to_owned(),
+                })
+        }
+        SizeSpec::Delta { grow: false, bytes } => {
+            current
+                .checked_sub(bytes)
+                .ok_or_else(|| Refusal::ArgumentOutOfRange {
+                    what: format!("SIZE 超过当前分区大小 {current}"),
+                })
+        }
+        SizeSpec::Percent { grow, num, denom } => {
+            const MIB: u64 = 1 << 20;
+            let raw = u128::from(current)
+                .checked_mul(u128::from(num))
+                .and_then(|scaled| scaled.checked_div(100u128 * u128::from(denom)))
+                .filter(|value| *value <= u128::from(u64::MAX))
+                .ok_or_else(|| Refusal::ArgumentOutOfRange {
+                    what: "SIZE 超过可寻址上界".to_owned(),
+                })? as u64;
+            let delta = raw / MIB * MIB;
+            if grow {
+                current
+                    .checked_add(delta)
+                    .ok_or_else(|| Refusal::ArgumentOutOfRange {
+                        what: "SIZE 超过可寻址上界".to_owned(),
+                    })
+            } else {
+                current
+                    .checked_sub(delta)
+                    .ok_or_else(|| Refusal::ArgumentOutOfRange {
+                        what: format!("SIZE 超过当前分区大小 {current}"),
+                    })
+            }
+        }
+    }
 }

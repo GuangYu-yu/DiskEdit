@@ -42,6 +42,12 @@ pub enum Refusal {
     ContentUnsupported { what: String, why: String },
     /// 所需的文件系统最小尺寸无法证明。
     MinimumSizeUnknown { number: u32, why: String },
+    /// 请求的大小小于文件系统可收缩到的最小尺寸。
+    BelowMinimumSize {
+        number: u32,
+        minimum: u64,
+        requested: u64,
+    },
     /// 所需外部程序不可用。
     ToolMissing { program: Program },
     /// 当前平台不提供外部程序。
@@ -71,6 +77,7 @@ impl Refusal {
             Self::FilesystemUnknown { .. } => "先识别分区内容类别，再选择对应操作",
             Self::ContentUnsupported { .. } => "改用该内容类别支持的操作或外部工具",
             Self::MinimumSizeUnknown { .. } => "先在不缩小的前提下确认文件系统最小尺寸",
+            Self::BelowMinimumSize { .. } => "把目标尺寸提高到文件系统最小尺寸以上",
             Self::ToolMissing { .. } => "安装所需外部程序后重试",
             Self::PlatformCannotRunTools { .. } => "在提供所需外部程序的平台上重试",
             Self::ArgumentOutOfRange { .. } => "按帮助中的取值范围修正参数",

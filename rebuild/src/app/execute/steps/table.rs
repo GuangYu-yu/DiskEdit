@@ -131,6 +131,7 @@ pub fn apply(
             partition,
             property: property @ (SetProperty::Name | SetProperty::Flag | SetProperty::Type),
             value,
+            ..
         } => {
             let format = table_format(channel, ctx)?;
             with_table(channel, ctx, token, format, |current| match current {
