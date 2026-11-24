@@ -21,6 +21,18 @@ pub fn render_verify(report: &VerifyReport) -> String {
     ])
 }
 
+/// 渲染没有目标时的列表：状态根不建索引，只能按目标或容器枚举。
+pub fn render_unavailable() -> String {
+    object(&[
+        ("index", quote("unavailable")),
+        ("records", array(Vec::new())),
+        (
+            "note",
+            quote("records are not indexed; pass TARGET or use `records scan`"),
+        ),
+    ])
+}
+
 /// 渲染一次容器扫描。
 pub fn render_scan(root: &str, rows: &[RecordRow]) -> String {
     object(&[

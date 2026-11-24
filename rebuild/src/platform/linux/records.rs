@@ -153,6 +153,10 @@ fn read_entries(dir: &Path) -> PlatformResult<Vec<RecordEntry>> {
 /// 目录中形如记录目录的那些）。指向状态根内部却不在容器上时拒绝，并给出容器
 /// 位置；指到记录目录本身也拒绝——记录目录不是容器。
 pub fn record_dirs(root: &Path) -> PlatformResult<Vec<RecordDir>> {
+    // 状态根尚未创建时按空容器处理：它由本工具按需创建，不是错误。
+    if !root.exists() && state_roots().iter().any(|state| state == root) {
+        return Ok(Vec::new());
+    }
     let meta = std::fs::metadata(root).map_err(|error| PlatformError::io(root, error))?;
     if !meta.is_dir() {
         return Err(PlatformError::not_supported(format!(

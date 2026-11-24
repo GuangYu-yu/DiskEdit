@@ -60,7 +60,8 @@ pub fn exit_of_refusal(refusal: &Refusal) -> u8 {
         | Refusal::CapacityInsufficient { .. }
         | Refusal::FilesystemUnknown { .. }
         | Refusal::MinimumSizeUnknown { .. }
-        | Refusal::BelowMinimumSize { .. } => REFUSED,
+        | Refusal::BelowMinimumSize { .. }
+        | Refusal::FlagUnknown { .. } => REFUSED,
     }
 }
 

@@ -18,6 +18,18 @@ struct Scenario {
     argv: &'static [&'static str],
     /// 待比对命令是否输出 `info` 形状的 JSON，需要附加顶层事实对照。
     info_shape: bool,
+    /// 场景额外需要的现场设置，两个镜像各自施加。
+    setup: Setup,
+    /// 是否对照分区内容识别结果（基线 `info` 的 `fs` 与本实现 `inspect` 的 `content.value`）。
+    identification: bool,
+}
+
+/// 前置命令之外的现场设置。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Setup {
+    None,
+    /// 在第一个分区（从 2048 扇区起）内写入一份 16 MiB 的 swap 签名。
+    SwapSignature,
 }
 
 const SCENARIOS: &[Scenario] = &[
@@ -29,6 +41,8 @@ const SCENARIOS: &[Scenario] = &[
         ],
         argv: &["inspect", "{image}"],
         info_shape: false,
+        setup: Setup::None,
+        identification: false,
     },
     Scenario {
         name: "info after new and add",
@@ -38,18 +52,24 @@ const SCENARIOS: &[Scenario] = &[
         ],
         argv: &["info", "{image}"],
         info_shape: true,
+        setup: Setup::None,
+        identification: false,
     },
     Scenario {
         name: "new on an empty image",
         arrange: &[],
         argv: &["new", "{image}", "--yes"],
         info_shape: false,
+        setup: Setup::None,
+        identification: false,
     },
     Scenario {
         name: "add a partition",
         arrange: &[&["new", "{image}", "--yes"]],
         argv: &["add", "{image}", "16M", "--yes"],
         info_shape: false,
+        setup: Setup::None,
+        identification: false,
     },
     Scenario {
         name: "delete a partition",
@@ -59,6 +79,8 @@ const SCENARIOS: &[Scenario] = &[
         ],
         argv: &["delete", "{image}:1", "--yes"],
         info_shape: false,
+        setup: Setup::None,
+        identification: false,
     },
     Scenario {
         name: "D8: the partition type GUID survives a resize",
@@ -68,6 +90,8 @@ const SCENARIOS: &[Scenario] = &[
         ],
         argv: &["resize", "{image}:1", "32M", "--no-fs", "--yes"],
         info_shape: false,
+        setup: Setup::None,
+        identification: false,
     },
     Scenario {
         name: "resize grows the filesystem with the partition",
@@ -78,6 +102,360 @@ const SCENARIOS: &[Scenario] = &[
         ],
         argv: &["resize", "{image}:1", "32M", "--yes"],
         info_shape: false,
+        setup: Setup::None,
+        identification: false,
+    },
+    Scenario {
+        name: "mkfs ext4 is identified the same way",
+        arrange: &[
+            &["new", "{image}", "--yes"],
+            &["add", "{image}", "16M", "--yes"],
+        ],
+        argv: &["mkfs", "{image}:1", "ext4", "--yes"],
+        info_shape: false,
+        setup: Setup::None,
+        identification: true,
+    },
+    Scenario {
+        name: "mkfs btrfs is identified the same way",
+        arrange: &[
+            &["new", "{image}", "--yes"],
+            &["add", "{image}", "32M", "--yes"],
+        ],
+        argv: &["mkfs", "{image}:1", "btrfs", "--yes"],
+        info_shape: false,
+        setup: Setup::None,
+        identification: true,
+    },
+    Scenario {
+        name: "set a GPT partition name",
+        arrange: &[
+            &["new", "{image}", "--yes"],
+            &["add", "{image}", "16M", "--yes"],
+        ],
+        argv: &["set", "{image}:1", "name", "data", "--yes"],
+        info_shape: false,
+        setup: Setup::None,
+        identification: false,
+    },
+    Scenario {
+        name: "set an ext4 label",
+        arrange: &[
+            &["new", "{image}", "--yes"],
+            &["add", "{image}", "16M", "--yes"],
+            &["mkfs", "{image}:1", "ext4", "--yes"],
+        ],
+        argv: &["set", "{image}:1", "label", "DATA", "--yes"],
+        info_shape: false,
+        setup: Setup::None,
+        identification: true,
+    },
+    Scenario {
+        name: "set an ext4 UUID",
+        arrange: &[
+            &["new", "{image}", "--yes"],
+            &["add", "{image}", "16M", "--yes"],
+            &["mkfs", "{image}:1", "ext4", "--yes"],
+        ],
+        argv: &[
+            "set",
+            "{image}:1",
+            "uuid",
+            "0f0e0d0c-0b0a-4908-8706-050403020100",
+            "--yes",
+        ],
+        info_shape: false,
+        setup: Setup::None,
+        identification: true,
+    },
+    Scenario {
+        name: "set the boot flag",
+        arrange: &[
+            &["new", "{image}", "--yes"],
+            &["add", "{image}", "16M", "--yes"],
+        ],
+        argv: &["set", "{image}:1", "flag", "boot", "on", "--yes"],
+        info_shape: false,
+        setup: Setup::None,
+        identification: false,
+    },
+    Scenario {
+        name: "set a GPT type GUID",
+        arrange: &[
+            &["new", "{image}", "--yes"],
+            &["add", "{image}", "16M", "--yes"],
+        ],
+        argv: &[
+            "set",
+            "{image}:1",
+            "type",
+            "C12A7328-F81F-11D2-BA4B-00A0C93EC93B",
+            "--yes",
+        ],
+        info_shape: false,
+        setup: Setup::None,
+        identification: false,
+    },
+    Scenario {
+        name: "shrink an ext4 filesystem with its partition",
+        arrange: &[
+            &["new", "{image}", "--yes"],
+            &["add", "{image}", "16M", "--yes"],
+            &["mkfs", "{image}:1", "ext4", "--yes"],
+        ],
+        argv: &["resize", "{image}:1", "8M", "--yes"],
+        info_shape: false,
+        setup: Setup::None,
+        identification: false,
+    },
+    Scenario {
+        name: "check an ext4 filesystem",
+        arrange: &[
+            &["new", "{image}", "--yes"],
+            &["add", "{image}", "16M", "--yes"],
+            &["mkfs", "{image}:1", "ext4", "--yes"],
+        ],
+        argv: &["check", "{image}:1"],
+        info_shape: false,
+        setup: Setup::None,
+        identification: false,
+    },
+    Scenario {
+        name: "resize by end LBA without moving data",
+        arrange: &[
+            &["new", "{image}", "--yes"],
+            &["add", "{image}", "16M", "--yes"],
+        ],
+        argv: &["resize", "{image}:1", "--end", "40959", "--no-fs", "--yes"],
+        info_shape: false,
+        setup: Setup::None,
+        identification: false,
+    },
+    Scenario {
+        name: "grow a partition to the end of the target",
+        arrange: &[
+            &["new", "{image}", "--yes"],
+            &["add", "{image}", "16M", "--yes"],
+        ],
+        argv: &["resize", "{image}:1", "--grow-to-end", "--no-fs", "--yes"],
+        info_shape: false,
+        setup: Setup::None,
+        identification: false,
+    },
+    Scenario {
+        name: "move a partition to the right",
+        arrange: &[
+            &["new", "{image}", "--yes"],
+            &["add", "{image}", "16M", "--yes"],
+        ],
+        argv: &["move", "{image}:1", "--start", "8192", "--yes"],
+        info_shape: false,
+        setup: Setup::None,
+        identification: false,
+    },
+    Scenario {
+        name: "copy a partition to a new location",
+        arrange: &[
+            &["new", "{image}", "--yes"],
+            &["add", "{image}", "16M", "--yes"],
+        ],
+        argv: &["copy", "{image}:1", "--start", "65536", "--yes"],
+        info_shape: false,
+        setup: Setup::None,
+        identification: false,
+    },
+    Scenario {
+        name: "identify a swap signature in a partition",
+        arrange: &[
+            &["new", "{image}", "--yes"],
+            &["add", "{image}", "16M", "--yes"],
+        ],
+        argv: &["info", "{image}"],
+        info_shape: true,
+        setup: Setup::SwapSignature,
+        identification: true,
+    },
+    Scenario {
+        name: "records list on an empty state root",
+        arrange: &[],
+        argv: &["records", "list"],
+        info_shape: false,
+        setup: Setup::None,
+        identification: false,
+    },
+    Scenario {
+        name: "records verify a missing record",
+        arrange: &[],
+        argv: &[
+            "records",
+            "verify",
+            "{image}",
+            "00000000000000000000000000000000",
+        ],
+        info_shape: false,
+        setup: Setup::None,
+        identification: false,
+    },
+    Scenario {
+        name: "records scan a state root",
+        arrange: &[],
+        argv: &["records", "scan", "{state}"],
+        info_shape: false,
+        setup: Setup::None,
+        identification: false,
+    },
+    Scenario {
+        name: "recover with no record on target",
+        arrange: &[],
+        argv: &["recover", "{image}", "--yes"],
+        info_shape: false,
+        setup: Setup::None,
+        identification: false,
+    },
+    Scenario {
+        name: "recover --release with no record on target",
+        arrange: &[],
+        argv: &["recover", "{image}", "--release", "--yes"],
+        info_shape: false,
+        setup: Setup::None,
+        identification: false,
+    },
+    Scenario {
+        name: "recover --replay-table-only with no record on target",
+        arrange: &[],
+        argv: &["recover", "{image}", "--replay-table-only", "--yes"],
+        info_shape: false,
+        setup: Setup::None,
+        identification: false,
+    },
+    Scenario {
+        name: "help for one command",
+        arrange: &[],
+        argv: &["help", "set"],
+        info_shape: false,
+        setup: Setup::None,
+        identification: false,
+    },
+    Scenario {
+        name: "help for an unknown command",
+        arrange: &[],
+        argv: &["help", "nosuch"],
+        info_shape: false,
+        setup: Setup::None,
+        identification: false,
+    },
+    Scenario {
+        name: "toggle the GPT boot flag on",
+        arrange: &[
+            &["new", "{image}", "--yes"],
+            &["add", "{image}", "16M", "--yes"],
+        ],
+        argv: &["set", "{image}:1", "flag", "boot", "on", "--yes"],
+        info_shape: false,
+        setup: Setup::None,
+        identification: false,
+    },
+    Scenario {
+        name: "toggle the GPT boot flag off",
+        arrange: &[
+            &["new", "{image}", "--yes"],
+            &["add", "{image}", "16M", "--yes"],
+            &["set", "{image}:1", "flag", "boot", "on", "--yes"],
+        ],
+        argv: &["set", "{image}:1", "flag", "boot", "off", "--yes"],
+        info_shape: false,
+        setup: Setup::None,
+        identification: false,
+    },
+    Scenario {
+        name: "set the GPT legacy flag",
+        arrange: &[
+            &["new", "{image}", "--yes"],
+            &["add", "{image}", "16M", "--yes"],
+        ],
+        argv: &["set", "{image}:1", "flag", "legacy", "on", "--yes"],
+        info_shape: false,
+        setup: Setup::None,
+        identification: false,
+    },
+    Scenario {
+        name: "set the GPT hidden flag",
+        arrange: &[
+            &["new", "{image}", "--yes"],
+            &["add", "{image}", "16M", "--yes"],
+        ],
+        argv: &["set", "{image}:1", "flag", "hidden", "on", "--yes"],
+        info_shape: false,
+        setup: Setup::None,
+        identification: false,
+    },
+    Scenario {
+        name: "set the GPT required flag",
+        arrange: &[
+            &["new", "{image}", "--yes"],
+            &["add", "{image}", "16M", "--yes"],
+        ],
+        argv: &["set", "{image}:1", "flag", "required", "on", "--yes"],
+        info_shape: false,
+        setup: Setup::None,
+        identification: false,
+    },
+    Scenario {
+        name: "refuse an unknown GPT flag",
+        arrange: &[
+            &["new", "{image}", "--yes"],
+            &["add", "{image}", "16M", "--yes"],
+        ],
+        argv: &["set", "{image}:1", "flag", "2", "on", "--yes"],
+        info_shape: false,
+        setup: Setup::None,
+        identification: false,
+    },
+    Scenario {
+        name: "set an MBR type byte",
+        arrange: &[
+            &["new", "{image}", "--table", "mbr", "--yes"],
+            &["add", "{image}", "16M", "--yes"],
+        ],
+        argv: &["set", "{image}:1", "type", "0x0c", "--yes"],
+        info_shape: false,
+        setup: Setup::None,
+        identification: true,
+    },
+    Scenario {
+        name: "toggle the MBR boot flag",
+        arrange: &[
+            &["new", "{image}", "--table", "mbr", "--yes"],
+            &["add", "{image}", "16M", "--yes"],
+        ],
+        argv: &["set", "{image}:1", "flag", "boot", "on", "--yes"],
+        info_shape: false,
+        setup: Setup::None,
+        identification: false,
+    },
+    Scenario {
+        name: "hide an MBR FAT partition",
+        arrange: &[
+            &["new", "{image}", "--table", "mbr", "--yes"],
+            &["add", "{image}", "16M", "--yes"],
+            &["set", "{image}:1", "type", "0x0c", "--yes"],
+        ],
+        argv: &["set", "{image}:1", "flag", "hidden", "on", "--yes"],
+        info_shape: false,
+        setup: Setup::None,
+        identification: false,
+    },
+    Scenario {
+        name: "refuse hidden on an MBR partition without a hidden counterpart",
+        arrange: &[
+            &["new", "{image}", "--table", "mbr", "--yes"],
+            &["add", "{image}", "16M", "--yes"],
+            &["set", "{image}:1", "type", "0x83", "--yes"],
+        ],
+        argv: &["set", "{image}:1", "flag", "hidden", "on", "--yes"],
+        info_shape: false,
+        setup: Setup::None,
+        identification: false,
     },
 ];
 
@@ -114,7 +492,7 @@ fn compare(scenario: &Scenario, baseline: &Path, new_binary: &Path) {
     }
     let state_dir = dir.join("state");
     let binaries: [(&Path, &PathBuf); 2] = [(baseline, &old_image), (new_binary, &new_image)];
-    for (binary, image) in binaries {
+    for (binary, image) in &binaries {
         for argv in scenario.arrange {
             let output = run(binary, argv, image, &state_dir);
             assert!(
@@ -124,6 +502,11 @@ fn compare(scenario: &Scenario, baseline: &Path, new_binary: &Path) {
                 binary.display(),
                 String::from_utf8_lossy(&output.stderr)
             );
+        }
+    }
+    if scenario.setup == Setup::SwapSignature {
+        for (_, image) in &binaries {
+            write_swap_signature(image, &dir);
         }
     }
 
@@ -161,14 +544,88 @@ fn compare(scenario: &Scenario, baseline: &Path, new_binary: &Path) {
             scenario.name
         );
     }
+
+    if scenario.identification {
+        let baseline_info = run(baseline, &["info", "{image}"], &old_image, &state_dir);
+        let new_inspect = run(new_binary, &["inspect", "{image}"], &new_image, &state_dir);
+        assert!(
+            baseline_info.status.success() && new_inspect.status.success(),
+            "{}: 识别对照的只读命令失败",
+            scenario.name
+        );
+        assert_eq!(
+            identification_from_info(&baseline_info.stdout),
+            identification_from_inspect(&new_inspect.stdout),
+            "{}: 分区内容识别结果不同",
+            scenario.name
+        );
+    }
     fs::remove_dir_all(&dir).ok();
+}
+
+/// 在镜像的分区 1（2048 扇区起）写入一份 16 MiB 的 swap 签名。
+fn write_swap_signature(image: &Path, dir: &Path) {
+    use std::io::{Seek, SeekFrom, Write};
+
+    let scratch = dir.join("swap.bin");
+    File::create(&scratch)
+        .and_then(|file| file.set_len(16 * 1024 * 1024))
+        .expect("创建 swap 暂存文件");
+    let status = Command::new("mkswap")
+        .arg(&scratch)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .expect("运行 mkswap");
+    assert!(status.success(), "mkswap 失败");
+    let bytes = fs::read(&scratch).expect("读取 swap 暂存文件");
+    let mut file = File::options()
+        .write(true)
+        .open(image)
+        .expect("打开镜像写入 swap");
+    file.seek(SeekFrom::Start(2048 * 512)).expect("定位分区");
+    file.write_all(&bytes).expect("写入 swap 签名");
+    file.sync_all().expect("落盘 swap 签名");
+    fs::remove_file(&scratch).ok();
+}
+
+/// 基线 `info` 的分区内容识别：`partitions[].fs`。
+fn identification_from_info(stdout: &[u8]) -> Vec<String> {
+    let document: Value = serde_json::from_slice(stdout).expect("基线 info 应为 JSON");
+    document["partitions"]
+        .as_array()
+        .expect("基线 info 应有 partitions 数组")
+        .iter()
+        .map(|partition| match partition["fs"].as_str() {
+            Some(kind) => kind.to_owned(),
+            None => "unknown".to_owned(),
+        })
+        .collect()
+}
+
+/// 本实现 `inspect` 的分区内容识别：`partitions[].content.value`。
+fn identification_from_inspect(stdout: &[u8]) -> Vec<String> {
+    let document: Value = serde_json::from_slice(stdout).expect("inspect 输出应为 JSON");
+    document["partitions"]
+        .as_array()
+        .expect("inspect 应有 partitions 数组")
+        .iter()
+        .map(|partition| match partition["content"]["value"].as_str() {
+            Some(kind) => kind.to_owned(),
+            None => "unknown".to_owned(),
+        })
+        .collect()
 }
 
 fn run(binary: &Path, argv: &[&str], image: &Path, state_dir: &Path) -> Output {
     let image = image.to_str().expect("临时路径应为 UTF-8");
+    let state = state_dir.to_str().expect("临时路径应为 UTF-8");
     Command::new(binary)
         .env("DISKEDIT_STATE_DIR", state_dir)
-        .args(argv.iter().map(|token| token.replace("{image}", image)))
+        .args(
+            argv.iter()
+                .map(|token| token.replace("{image}", image).replace("{state}", state)),
+        )
         .output()
         .unwrap_or_else(|error| panic!("{} 无法启动：{error}", binary.display()))
 }

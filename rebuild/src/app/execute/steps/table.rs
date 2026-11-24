@@ -148,9 +148,11 @@ pub fn apply(
                     apply_gpt_property(&mut entries, *partition, *property, value)?;
                     Ok(Current::Gpt { header, entries })
                 }
-                Current::Mbr { .. } => Err(ExecError::Unsupported(
-                    "unsupported partition property for MBR".to_owned(),
-                )),
+                Current::Mbr { mbr, sector } => {
+                    let mut mbr = mbr;
+                    apply_mbr_property(&mut mbr, *partition, *property, value)?;
+                    Ok(Current::Mbr { mbr, sector })
+                }
                 Current::None => Err(ExecError::InvalidPlan(
                     "no partition table to modify".to_owned(),
                 )),
@@ -188,6 +190,15 @@ fn apply_gpt_property(
             entries::set_name(entries, partition, value).map_err(ExecError::InvalidPlan)
         }
         SetProperty::Flag => {
+            if let Some((kind, guid)) = value.split_once(':') {
+                if kind == "esp" {
+                    let (_state, guid) = guid.split_once(':').ok_or_else(|| {
+                        ExecError::InvalidPlan(format!("flag directive {value} is incomplete"))
+                    })?;
+                    return entries::set_type(entries, partition, parse_guid(guid)?)
+                        .map_err(ExecError::InvalidPlan);
+                }
+            }
             let (flag, on) = parse_flag(value)?;
             entries::set_attribute_bit(entries, partition, flag, on).map_err(ExecError::InvalidPlan)
         }
@@ -201,16 +212,89 @@ fn apply_gpt_property(
     }
 }
 
+fn apply_mbr_property(
+    mbr: &mut Mbr,
+    partition: u32,
+    property: SetProperty,
+    value: &str,
+) -> Result<(), ExecError> {
+    let index = entries::index_of(partition).map_err(ExecError::InvalidPlan)?;
+    let entry = mbr
+        .entries
+        .get_mut(index)
+        .filter(|entry| !entry.is_empty())
+        .ok_or_else(|| ExecError::InvalidPlan(format!("partition {partition} not found")))?;
+    match property {
+        SetProperty::Flag => {
+            let (kind, state) = value.split_once(':').ok_or_else(|| {
+                ExecError::InvalidPlan(format!("flag directive {value} is incomplete"))
+            })?;
+            match kind {
+                "mbr-boot" => {
+                    let on = match state {
+                        "on" => true,
+                        "off" => false,
+                        other => {
+                            return Err(ExecError::InvalidPlan(format!(
+                                "flag state {other} must be on or off"
+                            )));
+                        }
+                    };
+                    entry.boot = if on { 0x80 } else { 0x00 };
+                }
+                "mbr-type" => entry.part_type = parse_type_byte(state)?,
+                other => {
+                    return Err(ExecError::InvalidPlan(format!(
+                        "unsupported mbr flag directive {other}"
+                    )));
+                }
+            }
+            Ok(())
+        }
+        SetProperty::Type => {
+            entry.part_type = parse_type_byte(value)?;
+            Ok(())
+        }
+        SetProperty::Name => Err(ExecError::Unsupported(
+            "MBR partitions have no name".to_owned(),
+        )),
+        SetProperty::Label | SetProperty::Uuid => Err(ExecError::InvalidPlan(
+            "this property is not a partition table property".to_owned(),
+        )),
+    }
+}
+
+/// MBR 类型字节：`0xNN` 或十进制 0..=255。
+fn parse_type_byte(value: &str) -> Result<u8, ExecError> {
+    let digits = value
+        .strip_prefix("0x")
+        .or_else(|| value.strip_prefix("0X"))
+        .unwrap_or(value);
+    let radix = if value.len() > digits.len() { 16 } else { 10 };
+    u8::from_str_radix(digits, radix)
+        .map_err(|_| ExecError::InvalidPlan(format!("type {value} is not an MBR type byte")))
+}
+
 /// 解析 `F:on` / `F:off`，返回属性位与目标状态。
+/// 解析 `bit:N:on` / `bit:N:off`，返回属性位与目标状态。
 fn parse_flag(value: &str) -> Result<(u32, bool), ExecError> {
-    let (flag, state) = value.split_once(':').ok_or_else(|| {
-        ExecError::InvalidPlan(format!("property {value} is missing its on/off state"))
-    })?;
-    let flag = flag
-        .trim()
+    let mut parts = value.splitn(3, ':');
+    let kind = parts.next().unwrap_or_default();
+    let bit = parts
+        .next()
+        .ok_or_else(|| ExecError::InvalidPlan(format!("property {value} is missing its bit")))?;
+    let state = parts
+        .next()
+        .ok_or_else(|| ExecError::InvalidPlan(format!("property {value} is missing its state")))?;
+    if kind != "bit" {
+        return Err(ExecError::InvalidPlan(format!(
+            "property {value} has an unknown flag kind"
+        )));
+    }
+    let bit = bit
         .parse::<u32>()
-        .map_err(|_| ExecError::InvalidPlan(format!("property bit {flag} is not an integer")))?;
-    let on = match state.trim() {
+        .map_err(|_| ExecError::InvalidPlan(format!("property bit {bit} is not an integer")))?;
+    let on = match state {
         "on" => true,
         "off" => false,
         other => {
@@ -219,7 +303,7 @@ fn parse_flag(value: &str) -> Result<(u32, bool), ExecError> {
             )));
         }
     };
-    Ok((flag, on))
+    Ok((bit, on))
 }
 
 fn parse_guid(value: &str) -> Result<Guid, ExecError> {

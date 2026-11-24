@@ -23,6 +23,10 @@ pub fn declared_entries() -> impl Iterator<Item = &'static str> {
 
 /// 解析参数并返回退出码。
 pub fn dispatch(args: impl IntoIterator<Item = OsString>) -> u8 {
+    let args: Vec<OsString> = args.into_iter().collect();
+    if args.get(1).is_some_and(|token| token == "help") {
+        return help(&args[2..]);
+    }
     let invocation = match parse::parse(args) {
         Ok(invocation) => invocation,
         Err(message) if message.is_empty() => return 0,
@@ -33,6 +37,24 @@ pub fn dispatch(args: impl IntoIterator<Item = OsString>) -> u8 {
         }
     };
     run(invocation)
+}
+
+/// `diskedit help [CMD]`：没有名字或名字未知时打印全局帮助。
+fn help(rest: &[OsString]) -> u8 {
+    let query: Vec<String> = rest
+        .iter()
+        .map(|token| token.to_string_lossy().into_owned())
+        .collect();
+    if query.is_empty() {
+        spec::print_help();
+        return exit::SUCCESS;
+    }
+    let name = query.join(" ");
+    if spec::print_command(&name) {
+        return exit::SUCCESS;
+    }
+    spec::print_help();
+    exit::USAGE
 }
 
 fn run(invocation: Invocation) -> u8 {
@@ -255,8 +277,8 @@ fn render_check(
 
 fn render_records(request: &Request, snapshot: &Snapshot, platform: &dyn Platform) -> u8 {
     let Some(target) = request.target() else {
-        eprintln!("records list requires a target to locate the record directory");
-        return exit::REFUSED;
+        println!("{}", json::records::render_unavailable());
+        return exit::SUCCESS;
     };
     let Some(identity) = strong_identity(snapshot) else {
         return identity_unprovable();

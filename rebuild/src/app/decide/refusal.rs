@@ -54,6 +54,8 @@ pub enum Refusal {
     PlatformCannotRunTools { why: String },
     /// 参数取值超出允许范围。
     ArgumentOutOfRange { what: String },
+    /// 旗标名或旗标适用形态不在支持集合内。
+    FlagUnknown { why: String },
 }
 
 impl Refusal {
@@ -113,6 +115,7 @@ impl Refusal {
             Self::ArgumentOutOfRange { .. } => {
                 "fix the argument according to the valid range in the help"
             }
+            Self::FlagUnknown { .. } => "use one of the accepted flag names for this table",
         }
     }
 }

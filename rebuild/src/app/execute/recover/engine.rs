@@ -58,12 +58,6 @@ pub struct Summary {
 }
 
 impl Summary {
-    fn nothing() -> Self {
-        Self {
-            action: Action::Nothing,
-        }
-    }
-
     fn cleaned() -> Self {
         Self {
             action: Action::Cleaned,
@@ -134,10 +128,14 @@ fn rollback_record(
         .load()
         .map_err(|error| RecoveryFailure::Refused(error.to_string()))?;
     let Some(bytes) = bytes else {
-        return Ok(Summary::nothing());
+        return Err(RecoveryFailure::Refused(
+            "no recovery record on the target: nothing to recover".to_owned(),
+        ));
     };
     match recover(&bytes, identity) {
-        RecoveryPlan::Absent => Ok(Summary::nothing()),
+        RecoveryPlan::Absent => Err(RecoveryFailure::Refused(
+            "no recovery record on the target: nothing to recover".to_owned(),
+        )),
         RecoveryPlan::Committed => {
             cleanup::clear(store).map_err(|error| RecoveryFailure::Refused(error.to_string()))?;
             Ok(Summary::cleaned())

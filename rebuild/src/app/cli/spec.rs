@@ -400,6 +400,33 @@ pub fn find(name: &str) -> Option<&'static Spec> {
     SPECS.iter().find(|spec| spec.name == name)
 }
 
+/// 打印一条命令的帮助；名字未知时返回 `false`。
+pub fn print_command(name: &str) -> bool {
+    let Some(spec) = find(name) else {
+        return false;
+    };
+    println!("diskedit {}", spec.name);
+    println!();
+    for line in spec.usage {
+        println!("  {line}");
+    }
+    println!();
+    println!("{}", spec.summary);
+    if !spec.options.is_empty() {
+        println!();
+        for option in spec.options {
+            if option.value {
+                println!("  {} VALUE", option.name);
+            } else {
+                println!("  {}", option.name);
+            }
+        }
+    }
+    println!();
+    println!("target: image path or block device; :N = partition number (1-based)");
+    true
+}
+
 /// 打印帮助；写失败不影响退出码。
 pub fn print_help() {
     println!("DiskEdit: disk partition editor");

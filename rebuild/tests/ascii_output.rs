@@ -54,6 +54,8 @@ fn help_version_and_refusals_stay_ascii() {
         vec!["--version"],
         vec!["unknown-command"],
         vec!["info"],
+        vec!["help", "set"],
+        vec!["help", "nosuch"],
         vec!["add", "/dev/null", "16M", "--yes"],
     ] {
         let output = Command::new(binary)

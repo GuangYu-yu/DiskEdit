@@ -583,16 +583,13 @@ fn parse_set(positionals: &[String], flags: &Flags) -> Result<(TargetSpec, SetAc
         }
         "flag" => {
             expect_exact(rest, 2)?;
-            let flag_number = rest[0]
-                .parse::<u32>()
-                .map_err(|_| format!("flag bit {} is not an integer", rest[0]))?;
             let on = match rest[1].as_str() {
                 "on" => true,
                 "off" => false,
                 other => return Err(format!("flag state {other} must be on or off")),
             };
             SetAction::Flag {
-                flag: flag_number.to_string(),
+                flag: rest[0].clone(),
                 on,
             }
         }

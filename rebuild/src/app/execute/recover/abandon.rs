@@ -6,7 +6,10 @@
 use crate::app::execute::ExecError;
 use crate::platform::RecordStore;
 
-/// 归档活跃记录，返回归档后的位置或标识。
+/// 归档活跃记录，返回归档后的位置或标识；没有记录时是成功空操作。
 pub fn apply(store: &mut dyn RecordStore) -> Result<String, ExecError> {
+    if store.load().map_err(ExecError::from)?.is_none() {
+        return Ok(String::new());
+    }
     store.quarantine().map_err(ExecError::from)
 }
