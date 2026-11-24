@@ -11,7 +11,23 @@
 | `judgment-lines.md` | 人类可读文本里的判定行（退出码语义行、恢复三要素）与拒绝成因的固定下一步 |
 | `json/README.md` | 机器可读输出的字段来源（结构体符号与位置），字段级契约 |
 | `images.md` | 固定镜像配方：每种表、文件系统、目标形态各至少一个 |
-| `../divergences.md` | 差异登记（由本目录的骨架升级而来），条目与 `01-目标与边界.md` 第 5 节 D1–D8 对应 |
+| `../divergences.md` | 差异登记，条目与 `01-目标与边界.md` 第 5 节 D1–D12 对应；该表是差异的唯一来源 |
+| `census.json` | 机器冻结的基线全集：命令 → 形态 → 选项/判别项/目标后缀/确认，以及旧版全部退出码构造点的计数与摘要 |
+| `refusal-sites.tsv` | 旧版生产代码里的每个退出码构造点一行（`R0001` 起），带文件、行号、类别、文案 |
+| `refusal-map.tsv` | 上表每一行在新版的认领人：对应的拒绝成因或差异编号、用例位置。未认领即门禁红 |
+
+## 机器普查（先于人工摘要）
+
+人工摘要（本目录的 `commands.md` 等）可能漏项，以机器普查为准。普查器是 `plan/instruments/census.py`，只读旧版源码：
+
+| 做什么 | 命令 | 何时 |
+| --- | --- | --- |
+| 冻结 | `python plan/instruments/census.py freeze --old ../src --out plan/baseline` | 仅首次，或旧版确已变化时 |
+| 旧版没变 | `python plan/instruments/census.py check --old ../src --baseline plan/baseline` | 每批 |
+| 新版命令面没丢东西 | `python plan/instruments/census.py surface --old ../src --new <新版导出> --allow plan/baseline/surface-allowed.txt` | 每个纵切 |
+| 旧版每个拒绝点都有人认领 | `python plan/instruments/census.py owners --baseline plan/baseline --map plan/baseline/refusal-map.tsv` | 每个纵切 |
+
+冻结结果（2026-11-25）：命令 16、形态 26、退出码构造点 974，其中拒绝 581、未改动 104、部分完成族 110、不支持 54、用法 55、内部错误 73。人工写的拒侧用例只有 11 条、`03` 的行为约束只有 16 条，这就是必须做机器普查的原因。
 
 ## 取数来源（源码位置）
 

@@ -1,0 +1,27 @@
+{
+ "gate": "G1",
+ "kind": "lint",
+ "command": [
+  "python",
+  "plan/instruments/census.py",
+  "check",
+  "--old",
+  "../src",
+  "--baseline",
+  "plan/baseline"
+ ],
+ "exit_code": 0,
+ "commit": "f415259",
+ "tree": "a520265f7b07ad0f",
+ "at": "2026-11-24T22:12:54+00:00",
+ "counts": {
+  "result_lines": 0,
+  "passed": 0,
+  "failed": 0,
+  "ignored": 0,
+  "not_applicable": 0
+ },
+ "ok": true,
+ "reasons": [],
+ "log": "plan\\evidence\\G1.log"
+}

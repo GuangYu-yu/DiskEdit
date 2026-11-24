@@ -1,0 +1,975 @@
+id	file	line	kind	message
+R0001	assembly.rs	31	no_mutation	cannot read the partition table: {e}
+R0002	assembly.rs	50	no_mutation	cannot read the GPT: {e}
+R0003	assembly.rs	62	no_mutation	cannot read the MBR: {e}
+R0004	assembly.rs	212	unsupported	the target's sector size is outside the supported set — geometry cannot be constructed: {e}
+R0005	assembly.rs	231	refused	GPT vanished before repair
+R0006	assembly.rs	234	refused	
+R0007	assembly.rs	236	refused	GPT changed between validation and repair — re-run the command
+R0008	assembly.rs	241	internal	a repair plan was requested for a no-op action
+R0009	assembly.rs	248	refused	
+R0010	assembly.rs	264	internal	the table snapshot does not contain LBA0
+R0011	assembly.rs	278	internal	the protective MBR is already canonical — the repair action does not match the disk
+R0012	assembly.rs	307	refused	
+R0013	assembly.rs	313	refused	partition #{part} left the partition table while the plan was being assembled
+R0014	assembly.rs	318	unsupported	the table's sector size is outside the supported set — geometry cannot be constructed: {e}
+R0015	assembly.rs	324	internal	partition #{part}: the sector count overflows the address space
+R0016	assembly.rs	341	refused	
+R0017	assembly.rs	347	refused	partition #{part} left the partition table while the plan was being assembled
+R0018	assembly.rs	352	unsupported	the table's sector size is outside the supported set — geometry cannot be constructed: {e}
+R0019	assembly.rs	383	refused	
+R0020	assembly.rs	389	refused	partition #{part} left the partition table while the plan was being assembled
+R0021	assembly.rs	394	unsupported	the table's sector size is outside the supported set — geometry cannot be constructed: {e}
+R0022	assembly.rs	425	no_mutation	cannot read the system random source for a new UUID: {e}
+R0023	assembly.rs	454	unsupported	the target's sector size is outside the supported set — geometry cannot be constructed: {e}
+R0024	assembly.rs	492	unsupported	the table's sector size is outside the supported set — geometry cannot be constructed: {e}
+R0025	assembly.rs	507	internal	the assembled copy steps are not a CopyPartition followed by a stamped table step
+R0026	assembly.rs	539	unsupported	the table's sector size is outside the supported set — geometry cannot be constructed: {e}
+R0027	assembly.rs	557	internal	the resize plan assembled to an invalid step shape — refusing
+R0028	assembly.rs	574	refused	no GPT
+R0029	assembly.rs	600	unsupported	the table's sector size is outside the supported set — geometry cannot be constructed: {e}
+R0030	assembly.rs	754	internal	a move plan needs at least one entry — nothing was assembled
+R0031	assembly.rs	782	refused	partition #{part} would end beyond the LBA range
+R0032	assembly.rs	791	refused	partition #{part} is outside the entry array
+R0033	assembly.rs	798	refused	partition #{part} cannot move to LBA {dst_first}: {e}
+R0034	assembly.rs	808	refused	partition #{part} is outside the entry array
+R0035	assembly.rs	811	refused	partition #{part} cannot grow to LBA {grow_end}: {e}
+R0036	assembly.rs	818	unsupported	the table's sector size is outside the supported set — geometry cannot be constructed: {e}
+R0037	assembly.rs	823	internal	the assembled move steps do not have the (Relocate, WriteTable, RebuildSwap?)+, WriteTable? shape
+R0038	assembly.rs	844	refused	{detail} — refusing
+R0039	assembly.rs	848	partial	{detail} — the job may already have written the target; inspect it and use `diskedit recover` before retrying
+R0040	assembly.rs	853	no_mutation	{detail} — this run has not written the target; the recovery record can be released
+R0041	assembly.rs	887	internal	
+R0042	assembly.rs	902	internal	the table step compares a different range than the state it was assembled from
+R0043	assembly.rs	908	internal	the table step carries no post-write stamp
+R0044	cli.rs	1359	usage	bad {} {text:?} ({reason}; see `diskedit help {}`)
+R0045	cli.rs	1434	internal	TARGET slot produced {other:?}
+R0046	cli.rs	1435	usage	`{}` needs a target (see diskedit help {})
+R0047	cli.rs	1446	internal	{slot:?} slot produced {other:?}
+R0048	cli.rs	1452	usage	
+R0049	cli.rs	1492	usage	`inspect` takes a whole target, not a partition — drop the :N suffix (got {target})
+R0050	cli.rs	1504	usage	`records list` takes a whole target, not a partition — drop the :N suffix (got {target})
+R0051	cli.rs	1510	internal	optional TARGET slot produced {other:?}
+R0052	cli.rs	1513	usage	`--identity` names a target; give TARGET or drop the option
+R0053	cli.rs	1523	internal	ID slot produced {other:?}
+R0054	cli.rs	1524	usage	`records verify` needs a record ID
+R0055	cli.rs	1528	usage	`records verify` takes a whole target, not a partition — drop the :N suffix (got {target})
+R0056	cli.rs	1538	internal	ROOT slot produced {other:?}
+R0057	cli.rs	1539	usage	`records scan` needs a root directory
+R0058	cli.rs	1562	internal	SIZE slot produced {other:?}
+R0059	cli.rs	1563	usage	specify a SIZE (e.g. +20G, -500M, 10G, grow; see diskedit help resize)
+R0060	cli.rs	1586	usage	`move` needs --start (an LBA, or `end` for pack-to-end) — see diskedit help move
+R0061	cli.rs	1606	usage	`copy` needs --start (an LBA, or `end` for pack-to-end) — see diskedit help copy
+R0062	cli.rs	1634	internal	`set` reached the builder without a property slot
+R0063	cli.rs	1642	usage	`uuid` takes either a value or --random, not both
+R0064	cli.rs	1666	usage	`mkfs` needs a filesystem type: diskedit mkfs <TARGET>:N <FS> (see diskedit help mkfs)
+R0065	cli.rs	1688	internal	BYTES slot produced {other:?}
+R0066	cli.rs	1689	internal	BYTES slot has no token
+R0067	cli.rs	1732	usage	`add` needs an absolute SIZE, e.g. 512M (see diskedit help add)
+R0068	cli.rs	1735	internal	SIZE slot produced {other:?}
+R0069	cli.rs	1736	usage	`add` needs a SIZE: diskedit add <TARGET> SIZE (see diskedit help add)
+R0070	cli.rs	1782	usage	argument {:?} is not valid UTF-8 — diskedit takes its arguments as text
+R0071	cli.rs	1793	usage	records list")
+R0072	cli.rs	1827	usage	{flag} {} is given more than once — a value option cannot take two values
+R0073	cli.rs	1863	usage	
+R0074	cli.rs	1878	usage	{flag} takes no value — write it as a bare flag (got {v:?})
+R0075	cli.rs	1884	usage	`--version` and `--help` name two different outputs — ask for one at a time
+R0076	cli.rs	1902	usage	`--version` takes no other options (got {f})
+R0077	cli.rs	1905	usage	`--version` takes no other arguments (got {t})
+R0078	cli.rs	1925	usage	unexpected extra argument for `{}`: {extra} (see `diskedit help {}`)
+R0079	cli.rs	1932	usage	{f} is not valid for `diskedit {} {}` (see diskedit help {})
+R0080	cli.rs	1940	usage	{f} requires {req} (see diskedit help {})
+R0081	cli.rs	1958	usage	`{}` needs --yes (see diskedit help {})
+R0082	cli.rs	2005	usage	`{}` needs a partition: write <TARGET>:N (see `diskedit help {}`)
+R0083	cli.rs	2009	usage	`{} {}` takes a whole target, not a partition — drop the :N suffix (see `diskedit help {}`)
+R0084	cli.rs	2061	usage	`{}` matches more than one form ({}); pick one
+R0085	cli.rs	2081	usage	`{}` needs a {}: {} — see `diskedit help {}`
+R0086	cli.rs	2089	usage	`{}` does not accept {} as a {} (expected {}) — see `diskedit help {}`
+R0087	cli.rs	2110	usage	`{}` needs {} — see `diskedit help {}`
+R0088	cli.rs	2117	usage	`{}` does not match any accepted form — see `diskedit help {}`
+R0089	cli.rs	2129	usage	{f} is not a valid option for `{cmd}` (see diskedit help {cmd})
+R0090	cli.rs	2138	usage	{f} is not a valid option for `help` (see diskedit help)
+R0091	cli.rs	2155	usage	{flag} {placeholder} requires a value (see diskedit help)
+R0092	cli.rs	2159	usage	bad value {v:?} for {flag}{hint}
+R0093	cli.rs	2199	internal	{} does not match its value domain
+R0094	cmd/fs.rs	80	refused	`mkfs` needs a partition: diskedit mkfs <TARGET>:N <FS> (see diskedit help mkfs)
+R0095	cmd/fs.rs	129	refused	
+R0096	cmd/fs.rs	159	usage	--sector-size only applies to image targets — a mountpoint form takes no sector size
+R0097	cmd/fs.rs	172	no_mutation	online resize requires Linux
+R0098	cmd/fs.rs	179	usage	size {s:?} only applies to the mountpoint form — offline resizes the filesystem into its partition
+R0099	cmd/fs.rs	240	refused	the recovery record at {} {why} — run `diskedit inspect {}` or `diskedit recover {} --yes` first
+R0100	cmd/fs.rs	257	refused	nothing to resize on partition #{part} — a swap area whose page format is not activatable on this host (its space takes effect once the area is rebuilt with `mk
+R0101	cmd/fs.rs	261	refused	nothing to resize on partition #{part} — an LVM PV is not a filesystem (its space takes effect through `resize --grow-lv`)
+R0102	cmd/fs.rs	266	refused	
+R0103	cmd/fs.rs	286	refused	
+R0104	cmd/fs.rs	325	refused	`check` needs a partition: diskedit check <TARGET>:N (see diskedit help check)
+R0105	cmd/fs.rs	340	refused	
+R0106	cmd/fs.rs	350	partial	check failed: {m}
+R0107	cmd/fs.rs	351	refused	check failed: {m}
+R0108	cmd/fs.rs	360	refused	`set` needs a partition: diskedit set <TARGET>:N <PROPERTY> ... (see diskedit help set)
+R0109	cmd/fs.rs	366	usage	--random only applies to `set <target>:N uuid`, not `{key}`
+R0110	cmd/fs.rs	373	refused	`set {key}` takes no state argument — only `set <target>:N flag <flag> on|off` does
+R0111	cmd/fs.rs	394	refused	
+R0112	cmd/fs.rs	405	refused	`set ... name` needs a name (see diskedit help set)
+R0113	cmd/fs.rs	417	refused	`set ... type` needs a type (GPT: GUID text, MBR: 0xXX; see diskedit help set)
+R0114	cmd/fs.rs	422	refused	invalid GUID {value:?} (expect standard text like C12A7328-F81F-11D2-BA4B-00A0C93EC93B, hyphens optional)
+R0115	cmd/fs.rs	428	refused	invalid MBR type {value:?} (expect 0xXX)
+R0116	cmd/fs.rs	430	refused	cannot set type on {other} label
+R0117	cmd/fs.rs	431	refused	label probe failed: {e}
+R0118	cmd/fs.rs	442	refused	`set ... flag` needs a flag name and on|off (see diskedit help set)
+R0119	cmd/fs.rs	447	refused	`set ... flag` takes on or off, not {other:?} (see diskedit help set)
+R0120	cmd/fs.rs	462	refused	mbr flags: only `boot` and `hidden` are supported
+R0121	cmd/fs.rs	463	refused	cannot set flag on {other} label
+R0122	cmd/fs.rs	464	refused	label probe failed: {e}
+R0123	cmd/fs.rs	477	refused	
+R0124	cmd/fs.rs	484	usage	`uuid` takes either a value or --random, not both
+R0125	cmd/fs.rs	492	refused	`set ... uuid` needs a UUID, or --random to generate one (see diskedit help set)
+R0126	cmd/fs.rs	498	refused	
+R0127	cmd/fs.rs	504	refused	`set ... label` needs a value — the new filesystem label (see diskedit help set)
+R0128	cmd/fs.rs	507	refused	unknown property {other:?} for `set` — use name, label, uuid, flag or type (see diskedit help set)
+R0129	cmd/fs.rs	514	refused	set {key} on partition #{part} — target is an LVM2 PV, not a filesystem; PV metadata is changed with pvchange(8)
+R0130	cmd/info.rs	66	refused	`info` reports the whole target — drop :{n}
+R0131	cmd/info.rs	104	refused	
+R0132	cmd/info.rs	214	refused	
+R0133	cmd/info.rs	290	refused	
+R0134	cmd/info.rs	324	refused	
+R0135	cmd/info_grow.rs	12	refused	`info --grow` previews one partition — write the target as <TARGET>:N
+R0136	cmd/info_grow.rs	24	refused	`info --grow` needs a GPT partition table
+R0137	cmd/inspect.rs	74	refused	
+R0138	cmd/inspect.rs	82	usage	`--identity` names a target, but {} is a record entry — drop the option
+R0139	cmd/inspect.rs	90	usage	
+R0140	cmd/inspect.rs	106	refused	
+R0141	cmd/inspect.rs	123	usage	
+R0142	cmd/inspect.rs	136	refused	
+R0143	cmd/inspect.rs	322	refused	target {target} does not exist — nothing to inspect
+R0144	cmd/inspect.rs	325	refused	
+R0145	cmd/inspect.rs	326	refused	
+R0146	cmd/inspect.rs	327	unsupported	
+R0147	cmd/inspect.rs	342	internal	companion file name is not anchor-relative: {e:?}
+R0148	cmd/inspect.rs	351	refused	the anchor directory {} cannot be opened: {e}
+R0149	cmd/inspect.rs	482	refused	structure: the record's magic is not recognized or its payload does not match the layout this build reads — keep the file; `diskedit recover --release` will not
+R0150	cmd/inspect.rs	488	refused	identity: the record belongs to a different target — it must not be cleaned up or replayed for this target
+R0151	cmd/inspect.rs	494	refused	structure: the record is shorter than its declared length — keep the file for manual inspection
+R0152	cmd/inspect.rs	500	refused	structure: the record's CRC does not match — keep the file for manual inspection
+R0153	cmd/inspect.rs	506	refused	path: the entry is not a regular record file — evidence paths never follow symlinks or directories
+R0154	cmd/inspect.rs	512	refused	io: the record could not be read; no structural conclusion was reached
+R0155	cmd/layout.rs	62	refused	`new` operates on the whole target — drop :{n}
+R0156	cmd/layout.rs	117	refused	
+R0157	cmd/layout.rs	129	refused	
+R0158	cmd/layout.rs	142	refused	{why} — pass --overwrite-data to accept overwriting those bytes
+R0159	cmd/layout.rs	147	refused	
+R0160	cmd/layout.rs	171	refused	
+R0161	cmd/layout.rs	226	refused	the pre-image region end overflows the address space
+R0162	cmd/layout.rs	236	refused	the pre-image range exceeds the host address space
+R0163	cmd/layout.rs	242	refused	the pre-image offset exceeds the host address space
+R0164	cmd/layout.rs	252	no_mutation	the pre-image of the table regions
+R0165	cmd/layout.rs	270	refused	`--name` sets a GPT partition name — MBR entries have none; drop --name
+R0166	cmd/layout.rs	277	refused	`add` takes the partition number as --part-number, not :{n}
+R0167	cmd/layout.rs	284	usage	`add` needs an absolute SIZE, got {} (see diskedit help add)
+R0168	cmd/layout.rs	291	usage	`add` needs a SIZE above zero
+R0169	cmd/layout.rs	301	refused	label probe failed: {e}
+R0170	cmd/layout.rs	304	refused	
+R0171	cmd/layout.rs	317	refused	`--type-guid 0xNN` is an MBR type byte — a GPT entry takes a GUID, e.g. {}
+R0172	cmd/layout.rs	327	refused	type GUID cannot be all-zero (that marks an unused entry — use `delete`)
+R0173	cmd/layout.rs	349	refused	`add --start end` has no end point to pin to — give the starting LBA or omit --start
+R0174	cmd/layout.rs	352	refused	`add --start align` has no existing start to align — omit --start to let the first-fit placement use 1 MiB
+R0175	cmd/layout.rs	388	refused	label probe failed: {e}
+R0176	cmd/layout.rs	395	refused	`--type-guid` with a GUID is a GPT type — an MBR entry takes a type byte 0xNN
+R0177	cmd/layout.rs	409	refused	`add --start end` has no end point to pin to — give the starting LBA or omit --start
+R0178	cmd/layout.rs	412	refused	`add --start align` has no existing start to align — omit --start to let the first-fit placement use 1 MiB
+R0179	cmd/layout.rs	422	refused	the MBR disappeared between reads — retry
+R0180	cmd/layout.rs	424	refused	cannot add on none label — run `new` first
+R0181	cmd/layout.rs	442	internal	the table snapshot is empty — LBA0 is missing
+R0182	cmd/layout.rs	481	refused	a partition of {len} sectors starting at LBA {start} runs past the end of the address space
+R0183	cmd/layout.rs	486	refused	--start {requested} lands at LBA {start}..{end}, outside the usable range {lo}..{hi}
+R0184	cmd/layout.rs	491	refused	--start {requested} lands at LBA {start}..{end}, which overlaps the partition at LBA {s}..{e}
+R0185	cmd/layout.rs	504	refused	no aligned free gap fits {len} sectors — the target has no room for this partition
+R0186	cmd/layout.rs	519	internal	the table snapshot is empty — LBA0 is missing
+R0187	cmd/layout.rs	531	refused	`delete` needs a partition: diskedit delete <TARGET>:N --yes (see diskedit help delete)
+R0188	cmd/layout.rs	547	refused	`delete` needs a GPT or MBR target (label: {other})
+R0189	cmd/layout.rs	548	refused	label probe failed: {e}
+R0190	cmd/layout.rs	558	refused	
+R0191	cmd/layout.rs	561	refused	
+R0192	cmd/layout.rs	587	refused	`resize` needs --end (or --grow-to-end)
+R0193	cmd/layout.rs	676	refused	the relocation shift exceeds a signed LBA offset — refusing
+R0194	cmd/layout.rs	728	refused	{why} — refusing to resume it
+R0195	cmd/layout.rs	735	no_mutation	the pre-commit and target ranges
+R0196	cmd/layout.rs	771	refused	the recovery record's relocation plan does not match this request
+R0197	cmd/layout.rs	779	no_mutation	
+R0198	cmd/layout.rs	786	no_mutation	the LVM finish baseline
+R0199	cmd/layout.rs	813	partial_with	
+R0200	cmd/layout.rs	841	refused	
+R0201	cmd/layout.rs	864	no_mutation	partition start overflows byte offset
+R0202	cmd/layout.rs	870	refused	swap relocation refused (size-only changes are allowed)
+R0203	cmd/layout.rs	875	refused	new range {new_start}..{new_end} outside usable {}..{}
+R0204	cmd/layout.rs	889	refused	new range overlaps partition #{}
+R0205	cmd/layout.rs	904	no_mutation	resize LBA arithmetic overflows byte offset
+R0206	cmd/layout.rs	929	refused	
+R0207	cmd/layout.rs	960	refused	
+R0208	cmd/layout.rs	979	no_mutation	resize LBA arithmetic overflows byte offset
+R0209	cmd/layout.rs	1006	refused	--no-fs cannot shrink: the filesystem has to be shrunk first, otherwise the new partition end would cut into filesystem metadata
+R0210	cmd/layout.rs	1012	refused	--no-fs cannot drop the filesystem step of an unfinished resize: the partition is already extended but its filesystem is not — re-run without --no-fs
+R0211	cmd/layout.rs	1067	refused	target size {new_bytes} < estimated minimum FS size {min} bytes (resize2fs -P; the filesystem tool makes the final decision)
+R0212	cmd/layout.rs	1127	partial	the already-committed table step
+R0213	cmd/layout.rs	1172	partial	
+R0214	cmd/layout.rs	1207	partial	growth byte offset overflows — refusing
+R0215	cmd/layout.rs	1278	partial	the transfer progress
+R0216	cmd/layout.rs	1292	partial	{} — the table step must not start
+R0217	cmd/layout.rs	1314	partial	the partition table is written — {}
+R0218	cmd/layout.rs	1348	refused	`--align` does not apply to `--start end` — the start is pinned to the last usable position; drop --align or pass an explicit start LBA
+R0219	cmd/layout.rs	1351	refused	`--align` does not apply to `--start align` — that start is always the next 1 MiB boundary; drop --align
+R0220	cmd/layout.rs	1367	refused	`{cmd}` needs a partition: diskedit {cmd} <TARGET>:N (see diskedit help {cmd})
+R0221	cmd/layout.rs	1372	refused	`{cmd}` needs --start <LBA|end> (see diskedit help {cmd})
+R0222	cmd/layout.rs	1397	refused	partition longer than usable range
+R0223	cmd/layout.rs	1403	refused	end LBA overflows address space
+R0224	cmd/layout.rs	1462	refused	the target was opened as resumable but its recovery record is gone; refusing
+R0225	cmd/layout.rs	1467	refused	
+R0226	cmd/layout.rs	1483	refused	
+R0227	cmd/layout.rs	1486	no_mutation	partition start overflows byte offset
+R0228	cmd/layout.rs	1489	no_mutation	partition length overflows byte offset
+R0229	cmd/layout.rs	1494	partial_with	
+R0230	cmd/layout.rs	1507	partial_with	the table step
+R0231	cmd/layout.rs	1539	refused	
+R0232	cmd/layout.rs	1547	refused	
+R0233	cmd/layout.rs	1561	refused	
+R0234	cmd/layout.rs	1569	refused	
+R0235	cmd/layout.rs	1582	refused	
+R0236	cmd/layout.rs	1587	no_mutation	partition start overflows byte offset
+R0237	cmd/layout.rs	1597	refused	
+R0238	cmd/layout.rs	1633	refused	the GPT disappeared after the repair — refusing
+R0239	cmd/layout.rs	1692	refused	the recovery record's relocation plan does not match this request
+R0240	cmd/layout.rs	1700	refused	cannot record the pre-move range: {e}
+R0241	cmd/layout.rs	1705	refused	
+R0242	cmd/layout.rs	1742	refused	partition longer than usable range
+R0243	cmd/layout.rs	1745	refused	`copy --start align` has no existing start to align — give the destination LBA or `end`
+R0244	cmd/layout.rs	1765	no_mutation	cannot read partition #{part} to digest the copy source ({e})
+R0245	cmd/layout.rs	1771	refused	
+R0246	cmd/mod.rs	88	refused	the target's sector size is outside the supported set — geometry cannot be constructed
+R0247	cmd/mod.rs	89	unsupported	the target's sector size is outside the supported set — geometry cannot be constructed
+R0248	cmd/mod.rs	92	refused	open failed: {e}
+R0249	cmd/mod.rs	113	unsupported	command `{}` declares no capabilities — the gate refuses an undeclared command.
+R0250	cmd/mod.rs	121	unsupported	command `{}` needs the {} primitive, which is {} on this platform for a {} target.
+R0251	cmd/mod.rs	134	unsupported	linux
+R0252	cmd/mod.rs	138	unsupported	linux
+R0253	cmd/mod.rs	142	unsupported	linux
+R0254	cmd/mod.rs	146	unsupported	
+R0255	cmd/records.rs	413	usage	
+R0256	cmd/records.rs	421	refused	cannot determine the identity of {}
+R0257	cmd/records.rs	424	usage	
+R0258	cmd/records.rs	426	refused	
+R0259	cmd/records.rs	443	refused	cannot inspect {}: {e}
+R0260	cmd/records.rs	446	refused	cannot list records: {reason}
+R0261	cmd/records.rs	467	refused	
+R0262	cmd/records.rs	469	refused	{} is not a directory — the record repository cannot be listed
+R0263	cmd/records.rs	474	refused	cannot inspect {}: {e}
+R0264	cmd/records.rs	481	refused	cannot list records: {reason}
+R0265	cmd/records.rs	501	usage	
+R0266	cmd/records.rs	507	usage	核对过
+R0267	cmd/records.rs	513	refused	this target exposes no stable identity to compare against — the record was not verified
+R0268	cmd/records.rs	517	refused	the target could not be read ({why}) — the record was not verified
+R0269	cmd/records.rs	536	refused	cannot verify the record: {reason}
+R0270	cmd/records.rs	540	refused	cannot inspect {}: {e}
+R0271	cmd/records.rs	578	refused	cannot verify the record: {reason}
+R0272	cmd/records.rs	606	refused	not found"{}
+R0273	cmd/records.rs	639	refused	
+R0274	cmd/records.rs	647	refused	the same id exists in {} places — remove the copies by hand; a record must have one home
+R0275	cmd/records.rs	655	refused	
+R0276	cmd/records.rs	662	refused	{} other record(s) could not be verified — one of them may be a second copy of id {}
+R0277	cmd/records.rs	670	refused	the record with id {} is not usable (state: {other:?})
+R0278	cmd/records.rs	693	refused	cannot inspect {}: {e}
+R0279	cmd/records.rs	696	refused	
+R0280	cmd/records.rs	704	refused	
+R0281	cmd/records.rs	710	refused	
+R0282	cmd/records.rs	712	refused	{} is not a directory — the image record container cannot be scanned
+R0283	cmd/records.rs	718	refused	cannot inspect {}: {e}
+R0284	cmd/records.rs	723	refused	
+R0285	cmd/records.rs	732	refused	
+R0286	cmd/records.rs	734	refused	{} is not a directory
+R0287	cmd/records.rs	738	refused	{} does not exist
+R0288	cmd/records.rs	742	refused	cannot inspect {}: {e}
+R0289	cmd/records.rs	758	refused	the scan of {} is incomplete: {reason} — no partial result was returned
+R0290	cmd/recover.rs	33	refused	
+R0291	cmd/recover.rs	52	refused	
+R0292	cmd/recover.rs	65	refused	
+R0293	cmd/recover.rs	75	refused	
+R0294	cmd/recover.rs	82	refused	the recovery record cannot be read ({e}) — nothing was read or written; release it with `diskedit recover --release`
+R0295	cmd/recover.rs	93	refused	
+R0296	cmd/recover.rs	102	refused	
+R0297	cmd/recover.rs	114	partial_records_changed	
+R0298	cmd/recover.rs	126	refused	{msg} — release it with `diskedit recover --release`
+R0299	cmd/recover.rs	139	partial_postcondition	
+R0300	cmd/recover.rs	155	refused	
+R0301	cmd/recover.rs	194	refused	`recover` rolls back the whole target's recovery record — drop :{n}
+R0302	cmd/recover.rs	208	refused	no recovery record on {} — nothing to recover
+R0303	cmd/release.rs	37	refused	`recover --release` releases the whole target's recovery scene — drop :{n}
+R0304	cmd/release.rs	46	refused	
+R0305	cmd/release.rs	58	usage	对本目标的操作
+R0306	cmd/release.rs	67	unsupported	
+R0307	cmd/release.rs	72	unsupported	the host recovery repository is refused: {detail}
+R0308	cmd/release.rs	75	refused	the recovery directory is refused: {detail}
+R0309	cmd/release.rs	78	no_mutation	cannot prepare the recovery directory: {e}
+R0310	cmd/release.rs	93	no_mutation	
+R0311	cmd/release.rs	111	usage	
+R0312	cmd/release.rs	173	refused	
+R0313	cmd/release.rs	183	refused	
+R0314	cmd/release.rs	198	refused	
+R0315	cmd/release.rs	212	refused	
+R0316	cmd/release.rs	218	refused	
+R0317	cmd/release.rs	223	refused	
+R0318	cmd/release.rs	287	refused	
+R0319	cmd/release.rs	302	refused	
+R0320	cmd/release.rs	321	refused	
+R0321	cmd/release.rs	333	refused	
+R0322	cmd/release.rs	337	refused	
+R0323	cmd/resize.rs	118	no_mutation	
+R0324	cmd/resize.rs	134	refused	the GPT disappeared after the repair — refusing
+R0325	cmd/resize.rs	153	partial_with	
+R0326	cmd/resize.rs	237	refused	
+R0327	cmd/resize.rs	258	refused	
+R0328	cmd/resize.rs	268	refused	--dry-run previews table targets — a superfloppy has no partition entry to resize
+R0329	cmd/resize.rs	274	refused	resize requires a GPT or MBR target (label: {other})
+R0330	cmd/resize.rs	275	refused	
+R0331	cmd/resize.rs	278	refused	
+R0332	cmd/resize.rs	290	refused	
+R0333	cmd/resize.rs	316	no_mutation	partition start overflows byte offset
+R0334	cmd/resize.rs	363	refused	
+R0335	cmd/resize.rs	387	refused	
+R0336	cmd/resize.rs	397	refused	
+R0337	cmd/resize.rs	411	no_mutation	partition start overflows byte offset
+R0338	cmd/resize.rs	429	refused	
+R0339	cmd/resize.rs	444	refused	
+R0340	cmd/resize.rs	471	no_mutation	free-space arithmetic overflow (geometry inconsistent)
+R0341	cmd/resize.rs	491	refused	partition already ends at last_usable_lba {last_usable} — nothing to grow
+R0342	cmd/resize.rs	500	refused	right side is occupied — pass --allow-move to relocate the blocking partitions (plan will be printed; --yes confirms)
+R0343	cmd/resize.rs	509	no_mutation	plan failed: {e}
+R0344	cmd/resize.rs	520	refused	
+R0345	cmd/resize.rs	532	refused	
+R0346	cmd/resize.rs	541	refused	`resize` needs a size: diskedit resize <TARGET>[:N] <SIZE> (see diskedit help resize)
+R0347	cmd/resize.rs	545	refused	size {bytes} overflows the LBA range
+R0348	cmd/resize.rs	548	refused	size {bytes} exceeds usable range (partition would end past last_usable_lba {last_usable})
+R0349	cmd/resize.rs	588	refused	not enough contiguous free space to the right — pass --allow-move to relocate the blocking partitions (plan will be printed; --yes confirms)
+R0350	cmd/resize.rs	595	no_mutation	plan failed: {e}
+R0351	cmd/resize.rs	610	refused	
+R0352	cmd/resize/decide.rs	24	refused	--no-fs has no effect on an LVM PV — the partition holds no filesystem of its own; drop --no-fs
+R0353	cmd/resize/decide.rs	30	refused	--grow-lv extends an LV by the space a partition gains — it cannot combine with shrinking this PV; drop --grow-lv
+R0354	cmd/resize/decide.rs	35	refused	partition {part} is not an LVM PV (identified as {}) — --grow-lv needs a PV
+R0355	cmd/resize/decide.rs	54	refused	partition {part} now identifies as a different entry than the pre-lock snapshot — refusing to act on the partition under that slot; re-resolve the target and re
+R0356	cmd/resize/decide.rs	70	refused	partition {part} now identifies as a different entry than the pre-lock snapshot — refusing to act on the partition under that slot; re-resolve the target and re
+R0357	cmd/resize/decide.rs	101	no_mutation	usable-range arithmetic overflow
+R0358	cmd/resize/decide.rs	119	refused	no MBR on target
+R0359	cmd/resize/decide.rs	120	refused	no MBR on target
+R0360	cmd/resize/decide.rs	122	refused	partition {part} not found (MBR resize covers primary partitions 1..4 only)
+R0361	cmd/resize/dry_run.rs	35	refused	
+R0362	cmd/resize/dry_run.rs	58	refused	not enough contiguous free space to the right — pass --allow-move to relocate the blocking partitions (plan will be printed; --yes confirms)
+R0363	cmd/resize/dry_run.rs	62	no_mutation	plan failed: {e}
+R0364	cmd/resize/dry_run.rs	68	refused	`resize` needs a size: diskedit resize <TARGET>[:N] <SIZE> (see diskedit help resize)
+R0365	cmd/resize/dry_run.rs	73	refused	size {bytes} overflows the LBA range
+R0366	cmd/resize/dry_run.rs	76	refused	size {bytes} exceeds usable range (partition would end past last_usable_lba {last_usable})
+R0367	cmd/resize/dry_run.rs	109	refused	not enough contiguous free space to the right — pass --allow-move to relocate the blocking partitions (plan will be printed; --yes confirms)
+R0368	cmd/resize/dry_run.rs	113	no_mutation	plan failed: {e}
+R0369	cmd/resize/dry_run.rs	138	refused	
+R0370	cmd/resize/dry_run.rs	141	refused	
+R0371	cmd/resize/dry_run.rs	154	refused	`resize` needs --end (or --grow-to-end)
+R0372	cmd/resize/dry_run.rs	188	refused	--allow-move is not supported for MBR resize — MBR cannot relocate blocking partitions
+R0373	cmd/resize/dry_run.rs	191	refused	--chunk has no effect for MBR resize — MBR cannot relocate blocking partitions
+R0374	cmd/resize/dry_run.rs	196	refused	no MBR on target
+R0375	cmd/resize/dry_run.rs	197	refused	no MBR on target
+R0376	cmd/resize/dry_run.rs	202	refused	partition {part} not found (MBR resize covers primary partitions 1..4 only)
+R0377	cmd/resize/dry_run.rs	207	refused	extended partition container cannot be resized (logical partitions are out of scope)
+R0378	cmd/resize/dry_run.rs	216	refused	
+R0379	cmd/resize/dry_run.rs	228	refused	`resize` needs a size: diskedit resize <TARGET>[:N] <SIZE> (see diskedit help resize)
+R0380	cmd/resize/dry_run.rs	241	refused	
+R0381	cmd/resize/dry_run.rs	244	refused	
+R0382	cmd/resize/dry_run.rs	257	refused	target size {bytes} < estimated minimum size {min} bytes (resize2fs -P; the filesystem tool makes the final decision)
+R0383	cmd/resize/dry_run.rs	273	refused	not enough contiguous free space to the right (MBR resize cannot relocate blocking partitions)
+R0384	cmd/resize/finish.rs	73	partial_with	
+R0385	cmd/resize/lvm.rs	103	unsupported	
+R0386	cmd/resize/lvm.rs	104	no_mutation	
+R0387	cmd/resize/lvm.rs	105	refused	
+R0388	cmd/resize/msdos.rs	9	partial	
+R0389	cmd/resize/msdos.rs	10	partial	
+R0390	cmd/resize/msdos.rs	14	internal	a read-only verdict reached the write path, which cannot classify it
+R0391	cmd/resize/msdos.rs	35	no_mutation	the LVM finish baseline
+R0392	cmd/resize/msdos.rs	52	no_mutation	the pre-commit and target ranges
+R0393	cmd/resize/msdos.rs	68	internal	the table snapshot is empty — LBA0 is missing
+R0394	cmd/resize/msdos.rs	250	refused	--allow-move is not supported for MBR resize — MBR cannot relocate blocking partitions
+R0395	cmd/resize/msdos.rs	255	refused	--chunk has no effect for MBR resize — MBR cannot relocate blocking partitions
+R0396	cmd/resize/msdos.rs	261	refused	no MBR on target
+R0397	cmd/resize/msdos.rs	263	refused	no MBR on target
+R0398	cmd/resize/msdos.rs	269	refused	partition {part} not found (MBR resize covers primary partitions 1..4 only)
+R0399	cmd/resize/msdos.rs	272	refused	extended partition container cannot be resized (logical partitions are out of scope)
+R0400	cmd/resize/msdos.rs	277	no_mutation	
+R0401	cmd/resize/msdos.rs	304	refused	no MBR on target
+R0402	cmd/resize/msdos.rs	306	refused	no MBR on target
+R0403	cmd/resize/msdos.rs	312	refused	partition {part} not found (MBR resize covers primary partitions 1..4 only)
+R0404	cmd/resize/msdos.rs	315	refused	extended partition container cannot be resized (logical partitions are out of scope)
+R0405	cmd/resize/msdos.rs	320	no_mutation	
+R0406	cmd/resize/msdos.rs	355	refused	
+R0407	cmd/resize/msdos.rs	370	refused	
+R0408	cmd/resize/msdos.rs	414	refused	
+R0409	cmd/resize/msdos.rs	434	refused	
+R0410	cmd/resize/msdos.rs	456	refused	
+R0411	cmd/resize/msdos.rs	460	refused	new size {new_size_lba} sectors exceeds MBR 32-bit LBA limit
+R0412	cmd/resize/msdos.rs	471	refused	`resize` needs a size: diskedit resize <TARGET>[:N] <SIZE> (see diskedit help resize)
+R0413	cmd/resize/msdos.rs	475	refused	size {new_size_lba} sectors exceeds MBR 32-bit LBA limit
+R0414	cmd/resize/msdos.rs	497	refused	not enough contiguous free space to the right (MBR resize cannot relocate blocking partitions)
+R0415	cmd/resize/msdos.rs	513	refused	
+R0416	cmd/resize/msdos.rs	532	refused	target size {bytes} < estimated minimum size {min} bytes (resize2fs -P; the filesystem tool makes the final decision)
+R0417	cmd/resize/msdos.rs	585	refused	no MBR on target
+R0418	cmd/resize/msdos.rs	586	refused	no MBR on target
+R0419	cmd/resize/msdos.rs	588	refused	partition entry {} vanished before the table write — re-run the command
+R0420	cmd/resize/msdos.rs	598	refused	
+R0421	cmd/resize/online.rs	13	no_mutation	cannot check active swap for partition {part}: {e}
+R0422	cmd/resize/online.rs	15	refused	partition {part} is active swap — run swapoff first
+R0423	cmd/resize/online.rs	39	no_mutation	cannot resolve {} to a kernel disk name: {e}
+R0424	cmd/resize/online.rs	43	refused	cannot derive disk name from {}
+R0425	cmd/resize/online.rs	79	partial_with	
+R0426	cmd/resize/online.rs	89	refused	partition {part} of {dn} is mounted at {mount_point} in another mount namespace{} — it cannot be resized from this one; unmount it there or run inside that name
+R0427	cmd/resize/online.rs	97	no_mutation	cannot probe mount state: {e}
+R0428	cmd/resize/online.rs	105	refused	--no-fs is not available online — the online path always includes the filesystem step; unmount the partition to skip it
+R0429	cmd/resize/online.rs	123	refused	--allow-move is not available online — the online path cannot relocate blocking partitions
+R0430	cmd/resize/online.rs	128	refused	--chunk has no effect online — the online path does not relocate data
+R0431	cmd/resize/online.rs	170	refused	no free space to the right — a PV cannot relocate blocking partitions while LVs may be active
+R0432	cmd/resize/online.rs	172	refused	grow would not extend the partition — no usable free space to its right; the online path cannot relocate blocking partitions (unmount to grow offline, or fill t
+R0433	cmd/resize/online.rs	177	no_mutation	grown size overflows ({cur} + {free} sectors × {ss} B)
+R0434	cmd/resize/online.rs	193	refused	size {want} exceeds the usable range — the partition would end past the last usable block
+R0435	cmd/resize/shrink_offline.rs	52	partial_unverified	the earlier filesystem shrink cannot be confirmed
+R0436	cmd/resize/shrink_offline.rs	61	partial	
+R0437	cmd/resize/shrink_offline.rs	75	partial_unverified	
+R0438	cmd/resize/size.rs	24	refused	SIZE overflows the partition size
+R0439	cmd/resize/size.rs	28	refused	SIZE exceeds the current size {cur_bytes}
+R0440	cmd/resize/size.rs	37	refused	SIZE overflows the partition size
+R0441	cmd/resize/size.rs	43	refused	SIZE overflows the partition size
+R0442	cmd/resize/size.rs	47	refused	SIZE exceeds the current size {cur_bytes}
+R0443	cmd/resize/size.rs	55	refused	size {bytes} < one sector ({sector_size})
+R0444	cmd/resize/superfloppy.rs	10	refused	target has no partition table — drop :{n} (the FS occupies the whole device)
+R0445	cmd/resize/superfloppy.rs	13	refused	--grow-lv/--lv needs an LVM PV — superfloppy has no partitions
+R0446	cmd/resize/superfloppy.rs	18	refused	--no-fs leaves nothing to do on a superfloppy — there is no partition to change, the only action is the filesystem grow
+R0447	cmd/resize/superfloppy.rs	21	refused	--allow-move has nothing to do on a superfloppy — there are no partitions to relocate
+R0448	cmd/resize/superfloppy.rs	24	refused	--chunk has no effect on a superfloppy — there is nothing to relocate
+R0449	cmd/resize/superfloppy.rs	38	refused	superfloppy cannot shrink — the FS occupies the whole device, there is no partition boundary to shrink to
+R0450	cmd/resize/superfloppy.rs	41	refused	target exceeds device/image size — extend the image or replace the disk first (this tool does not resize the container)
+R0451	cmd/resize/superfloppy.rs	47	no_mutation	
+R0452	cmd/resize/superfloppy.rs	52	refused	whole-device {} is not a resizable filesystem (no partition table on target)
+R0453	dev/claims.rs	54	refused	cannot use the carrier claim of this target: {e}
+R0454	dev/claims.rs	75	no_mutation	
+R0455	dev/claims.rs	88	refused	
+R0456	dev/claims.rs	93	refused	
+R0457	dev/occupancy.rs	113	no_mutation	
+R0458	dev/occupancy.rs	117	no_mutation	
+R0459	dev/source.rs	220	unsupported	
+R0460	dev/source.rs	224	unsupported	the host recovery repository is refused: {detail}
+R0461	dev/source.rs	228	refused	the recovery directory is refused: {detail}
+R0462	dev/source.rs	231	refused	cannot prepare the recovery directory: {e}
+R0463	dev/source.rs	511	refused	
+R0464	dev/source.rs	899	refused	cannot re-read the opened target after taking the lock: {e}
+R0465	dev/source.rs	902	refused	the opened device has no sysfs node after taking the lock: {e}
+R0466	dev/source.rs	905	refused	the target cannot be re-read after taking the lock: {e}
+R0467	dev/source.rs	913	refused	
+R0468	dev/source.rs	923	refused	
+R0469	dev/source.rs	939	refused	
+R0470	dev/source.rs	941	refused	the device identity could not be checked before writing: {why}
+R0471	dev/source.rs	954	no_mutation	cannot re-read the capacity of the opened target after taking the lock: {e}
+R0472	dev/source.rs	959	refused	
+R0473	dev/source.rs	971	refused	the path now resolves to a different file than the one opened before the lock
+R0474	dev/source.rs	976	refused	the target cannot be reopened after taking the lock: {e}
+R0475	dev/source.rs	981	refused	cannot read the target identity after taking the lock: {e}
+R0476	dev/source.rs	989	refused	the path no longer names the file that was opened before the lock
+R0477	exec/dispatch.rs	98	internal	a VM placement carries no carrier bundle
+R0478	exec/dispatch.rs	110	internal	the VM carrier is not available on this platform
+R0479	exec/dispatch.rs	153	partial	
+R0480	exec/dispatch.rs	154	no_mutation	
+R0481	exec/mod.rs	280	no_mutation	the recovery record
+R0482	exec/mod.rs	554	partial_postcondition	a step of this plan left its postcondition unmet
+R0483	exec/native.rs	72	internal	partition {}: start LBA {} overflows the address space
+R0484	exec/native.rs	78	internal	partition {}: {} sectors overflow the address space
+R0485	exec/native.rs	84	partial	partition {}: {e}
+R0486	exec/placement.rs	67	unsupported	
+R0487	exec/placement.rs	78	unsupported	
+R0488	exec/qemu.rs	88	unsupported	{BUNDLE_ENV}={}: cannot read manifest.json: {e}
+R0489	exec/qemu.rs	94	unsupported	{BUNDLE_ENV}={}: manifest.json is not JSON: {e}
+R0490	exec/qemu.rs	109	unsupported	{BUNDLE_ENV}={}: manifest schema is {schema:?}, this build reads {SCHEMA}
+R0491	exec/qemu.rs	116	unsupported	the VM bundle was built for {arch}, this process is {}
+R0492	exec/qemu.rs	123	unsupported	the VM bundle carries worker {version}, this host speaks {}
+R0493	exec/qemu.rs	131	unsupported	manifest has no `worker` entry
+R0494	exec/qemu.rs	135	unsupported	manifest.worker.sha256 is not a SHA-256 hex string
+R0495	exec/qemu.rs	151	unsupported	manifest has no `{name}` entry
+R0496	exec/qemu.rs	155	unsupported	manifest.{name}.path `{rel}` is not a plain relative path
+R0497	exec/qemu.rs	161	unsupported	manifest.{name}.sha256 is not a SHA-256 hex string
+R0498	exec/qemu.rs	163	unsupported	cannot read the bundle's {name} at {}: {e}
+R0499	exec/qemu.rs	166	unsupported	the bundle's {name} does not match manifest.{name}.sha256 (declared {}, read {})
+R0500	exec/qemu.rs	180	unsupported	{what} is missing or not a string
+R0501	exec/qemu.rs	303	unsupported	no QEMU machine is wired for architecture {}
+R0502	exec/qemu.rs	309	unsupported	virtio-blk cannot carry the target's {}-byte logical sectors
+R0503	exec/qemu.rs	315	unsupported	the VM bundle is present but {program} is not in PATH (package: qemu-system-{})
+R0504	exec/remote.rs	150	unsupported	cannot start the carrier: {e}
+R0505	exec/remote.rs	173	unsupported	the carrier handshake failed: {}
+R0506	exec/remote.rs	177	unsupported	the carrier did not announce that its serial port is ready
+R0507	exec/remote.rs	193	unsupported	the carrier handshake failed: {}
+R0508	exec/remote.rs	197	unsupported	the carrier handshake failed: {}
+R0509	exec/remote.rs	201	unsupported	the carrier answered the handshake with an unexpected frame
+R0510	exec/remote.rs	209	refused	the carrier sees a different target geometry than the host plan: {why}
+R0511	exec/remote.rs	216	refused	
+R0512	exec/remote.rs	565	unsupported	no random source is available for the session token
+R0513	exec/remote.rs	570	partial	the carrier session failed: {}
+R0514	exec/worker.rs	270	partial	the checkpoint did not reach the host: {e}
+R0515	exec/worker.rs	279	partial	the entry barrier did not reach the host: {e}
+R0516	exec/worker.rs	284	partial	the table barrier did not reach the host: {e}
+R0517	exec/worker.rs	294	partial	the table progress did not reach the host: {e}
+R0518	exec/worker.rs	304	partial	the filesystem progress did not reach the host: {e}
+R0519	execution/copy.rs	116	internal	
+R0520	execution/copy.rs	132	partial	partition {}: the transfer chunk ({len} bytes) exceeds the host address space — the transfer may be incomplete
+R0521	execution/copy.rs	153	no_mutation	
+R0522	execution/copy.rs	155	partial	
+R0523	execution/copy.rs	161	no_mutation	the recovery barrier
+R0524	execution/copy.rs	168	partial	
+R0525	execution/copy.rs	182	partial	
+R0526	execution/copy.rs	185	partial	
+R0527	execution/copy.rs	203	partial	
+R0528	execution/copy.rs	213	partial	
+R0529	execution/copy.rs	217	partial	
+R0530	execution/fs.rs	63	refused	partition {} holds {} on disk but the plan was made for {planned}
+R0531	execution/fs.rs	101	refused	
+R0532	execution/mkfs.rs	47	internal	partition {}: the {len}-byte range at byte {base} is outside the target's {} bytes
+R0533	execution/mod.rs	455	partial	partition {}: the relocated range overflows the address space — the transfer may be incomplete
+R0534	execution/mod.rs	463	partial	
+R0535	execution/mod.rs	470	partial	
+R0536	execution/mod.rs	488	internal	plan step {} writes the table but carries no expected stamp — the plan was not assembled
+R0537	execution/mod.rs	499	internal	plan step {} writes table bytes outside its comparison regions
+R0538	execution/mod.rs	514	internal	plan step {} relocates zero sectors
+R0539	execution/mod.rs	520	internal	plan step {} relocates data but is not followed by the table step that commits it
+R0540	execution/mod.rs	531	internal	plan step {} copies data but is not followed by the table step that commits it
+R0541	execution/mod.rs	596	refused	this plan relocates data but no chunk size was given
+R0542	execution/mod.rs	603	refused	chunk size {chunk} bytes must be within 1 MiB..=64 MiB and a multiple of the {sector_size}-byte sector
+R0543	execution/mod.rs	625	refused	
+R0544	execution/mod.rs	634	refused	
+R0545	execution/mod.rs	665	internal	plan step {} has no usable relocation block layout
+R0546	execution/mod.rs	672	internal	plan step {}: the source offset of partition {part} overflows the address space
+R0547	execution/mod.rs	678	internal	plan step {}: the target offset of partition {part} overflows the address space
+R0548	execution/mod.rs	684	internal	plan step {}: the relocation length of partition {part} overflows the address space
+R0549	execution/mod.rs	690	internal	plan step {}: the relocation byte range of partition {part} overflows the address space
+R0550	execution/mod.rs	700	internal	plan step {}: {} chunks are recorded as done but the step only has {count}
+R0551	execution/mod.rs	711	internal	the relocation step is not followed by a table step
+R0552	execution/mod.rs	724	internal	plan step {}: the swap-rebuild step and the relocation entry disagree on the partition type
+R0553	execution/mod.rs	745	internal	a swap-rebuild step is not attached to the relocation entry that owns it
+R0554	execution/mod.rs	751	internal	the copy step is not followed by a table step
+R0555	execution/mod.rs	837	internal	the recorded move cursor overflows the address space
+R0556	execution/mod.rs	843	internal	the recorded move cursor overflows the address space
+R0557	execution/mod.rs	851	refused	
+R0558	execution/relocate.rs	40	partial	partition {part}: {} chunks are recorded as done but this step only has {count} — the transfer may be incomplete
+R0559	execution/relocate.rs	52	partial	partition {part}: the source offset overflows the address space — the transfer may be incomplete
+R0560	execution/relocate.rs	57	partial	partition {part}: the target offset overflows the address space — the transfer may be incomplete
+R0561	execution/relocate.rs	62	partial	partition {part}: the relocation length overflows the address space — the transfer may be incomplete
+R0562	execution/relocate.rs	67	partial	partition {part}: the relocation byte range overflows the address space — the transfer may be incomplete
+R0563	execution/relocate.rs	81	refused	
+R0564	execution/relocate.rs	93	partial	
+R0565	execution/relocate.rs	104	partial	partition {part}: the recorded chunk count exceeds the host address space — the transfer may be incomplete
+R0566	execution/relocate.rs	115	partial	partition {part}: a chunk precedes the planned source start (LBA {}) — the transfer may be incomplete
+R0567	execution/relocate.rs	122	partial	partition {part}: chunk LBA offset × sector size overflows the u64 range — the transfer may be incomplete
+R0568	execution/relocate.rs	130	partial	partition {part}: chunk size × sector size overflows the u64 range — the transfer may be incomplete
+R0569	execution/relocate.rs	135	partial	partition {part}: the relocation chunk ({len} bytes) exceeds the host address space — the transfer may be incomplete
+R0570	execution/relocate.rs	146	no_mutation	
+R0571	execution/relocate.rs	159	refused	
+R0572	execution/relocate.rs	177	partial	partition {part}: the recorded chunk count exceeds the host address space — the transfer may be incomplete
+R0573	execution/relocate.rs	186	partial	partition {part}: a chunk precedes the planned source start (LBA {}) — the transfer may be incomplete
+R0574	execution/relocate.rs	193	partial	partition {part}: chunk LBA offset × sector size overflows the u64 range — the transfer may be incomplete
+R0575	execution/relocate.rs	201	partial	partition {part}: chunk size × sector size overflows the u64 range — the transfer may be incomplete
+R0576	execution/relocate.rs	206	partial	partition {part}: the relocation chunk ({len} bytes) exceeds the host address space — the transfer may be incomplete
+R0577	execution/relocate.rs	213	no_mutation	partition {part}: cannot read the source at byte {off}: {e} — the transfer may be incomplete
+R0578	execution/relocate.rs	222	partial	partition {part}: cannot write the target at byte {dst}: {e} — the transfer may be incomplete
+R0579	execution/relocate.rs	233	partial	partition {part}: cannot flush the moved data: {e} — the transfer may be incomplete
+R0580	execution/relocate.rs	248	partial	partition {part}: cannot flush the moved data: {e} — the transfer may be incomplete
+R0581	execution/relocate.rs	263	partial	partition {part}: cannot flush the moved data: {e} — the transfer may be incomplete
+R0582	execution/relocate.rs	278	partial	partition {part}: the moved data did not read back as written: {e} — the transfer may be incomplete
+R0583	execution/relocate.rs	305	partial	partition {part}: the progress checkpoint was not persisted: {other} — the transfer may be incomplete
+R0584	execution/set.rs	34	internal	the step targets partition 0
+R0585	execution/set.rs	39	refused	
+R0586	execution/set.rs	45	usage	{text:?} is not a UUID
+R0587	execution/swap.rs	37	partial	partition {}: {} — the table entry is committed
+R0588	execution/table.rs	17	partial	the table step carries no expected pre-write stamp — the plan was not assembled; this step wrote nothing, earlier steps may already have written the target
+R0589	execution/table.rs	23	partial	the table step carries no expected post-write stamp — the plan was not assembled; this step wrote nothing, earlier steps may already have written the target
+R0590	execution/table.rs	32	partial	the table step's writes do not match its regions — this step wrote nothing, earlier steps may already have written the target
+R0591	execution/table.rs	57	partial	
+R0592	execution/table.rs	58	no_mutation	
+R0593	execution/table.rs	66	partial	cannot flush the table at byte {}: {e} — the write may not have landed
+R0594	fsops/mount.rs	1191	no_mutation	{} does not denote the device sysfs lists as {disk}: {e} — refusing (fail-closed)
+R0595	fsops/mount.rs	1201	no_mutation	cannot list {} to confirm no partition is in use: {e} — refusing (fail-closed)
+R0596	fsops/mount.rs	1205	no_mutation	cannot list {} to confirm no partition is in use: {e} — refusing (fail-closed)
+R0597	fsops/mount.rs	1215	no_mutation	cannot stat {} to tell whether it is a partition: {e} — refusing (fail-closed)
+R0598	fsops/mount.rs	1227	no_mutation	{dev} does not denote the partition sysfs lists under {}: {e} — refusing (fail-closed)
+R0599	fsops/mount.rs	1236	no_mutation	cannot stat {} to tell whether it is a partition: {e} — refusing (fail-closed)
+R0600	geometry.rs	38	refused	
+R0601	geometry.rs	39	no_mutation	
+R0602	gpt_policy.rs	163	no_mutation	{} — the converged table repair is not recorded
+R0603	gpt_policy.rs	186	refused	
+R0604	gpt_policy.rs	191	no_mutation	{} — the table repair was not started
+R0605	gpt_policy.rs	200	partial	re-read after repair failed
+R0606	gpt_policy.rs	201	partial	re-read after repair failed
+R0607	gpt_policy.rs	203	partial	repair did not converge — refusing
+R0608	gpt_policy.rs	207	partial	{} — the table repair landed but that fact is not recorded
+R0609	gpt_policy.rs	250	refused	
+R0610	gpt_policy.rs	253	refused	
+R0611	gpt_policy.rs	262	refused	{verb} requires a GPT target
+R0612	gpt_policy.rs	317	refused	
+R0613	gpt_policy.rs	325	refused	cannot read the GPT header at LBA1: {e}
+R0614	gpt_policy.rs	327	refused	
+R0615	gpt_policy.rs	332	refused	no partition table on target
+R0616	gpt_policy.rs	388	refused	no partition to point :last at — the table has no defined entry
+R0617	gpt_policy.rs	390	refused	no partition to point :last at — the MBR has no usable primary entry
+R0618	gpt_policy.rs	413	refused	partition {part} is empty
+R0619	gpt_policy.rs	414	refused	partition {part} not found
+R0620	gpt_policy.rs	515	refused	
+R0621	gpt_policy.rs	523	refused	partition {part} entry arithmetic overflows (entry inconsistent with geometry)
+R0622	gpt_policy.rs	538	refused	partition {part} not found (MBR covers primary slots 1..=4)
+R0623	gpt_policy.rs	542	refused	partition {part} is an extended container (logical partitions are out of scope)
+R0624	gpt_policy.rs	574	refused	
+R0625	gpt_policy.rs	585	refused	last_usable_lba arithmetic overflows
+R0626	gpt_policy.rs	637	refused	no GPT
+R0627	gpt_policy.rs	640	refused	geometry edit rejected: {e}
+R0628	gpt_policy.rs	654	refused	range {start}..{end} outside usable {}..{}
+R0629	gpt_policy.rs	664	refused	range overlaps an existing partition
+R0630	gpt_policy.rs	674	refused	partition number {n} is outside 1..={} for this table
+R0631	gpt_policy.rs	680	refused	partition {n} is already in use — pick an empty slot
+R0632	gpt_policy.rs	690	refused	partition table full
+R0633	gpt_policy.rs	721	refused	no GPT
+R0634	gpt_policy.rs	724	refused	geometry edit rejected: {e}
+R0635	gpt_policy.rs	731	refused	GPT vanished after repair
+R0636	gpt_policy.rs	735	refused	geometry edit rejected: {e}
+R0637	gpt_policy.rs	744	refused	no GPT
+R0638	gpt_policy.rs	747	refused	geometry edit rejected: {e}
+R0639	gpt_policy.rs	778	refused	unknown gpt flag {other} (accepted: {})
+R0640	gpt_policy.rs	804	refused	no GPT
+R0641	gpt_policy.rs	815	refused	geometry edit rejected: {e}
+R0642	gpt_policy.rs	841	refused	partition start overflows byte offset
+R0643	gpt_policy.rs	849	refused	partition length overflows byte size
+R0644	gpt_policy.rs	873	internal	the ESP type fallback was not resolved while the plan was being assembled
+R0645	gpt_policy.rs	917	refused	type GUID cannot be all-zero (that marks an unused entry — use `delete`)
+R0646	gpt_policy.rs	952	refused	no GPT
+R0647	gpt_policy.rs	955	refused	geometry edit rejected: {e}
+R0648	gpt_policy.rs	964	refused	GPT vanished after repair
+R0649	gpt_policy.rs	968	refused	geometry edit rejected: {e}
+R0650	main.rs	74	internal	the process panicked
+R0651	main.rs	93	internal	
+R0652	main.rs	137	partial_postcondition	
+R0653	movepart/copy.rs	31	refused	copy target overflows address space
+R0654	movepart/copy.rs	33	refused	copy target outside usable range
+R0655	movepart/copy.rs	40	refused	copy target overlaps partition #{}
+R0656	movepart/copy.rs	61	no_mutation	cannot read the system random source for a new PARTUUID: {e}
+R0657	movepart/plan.rs	165	refused	
+R0658	movepart/plan.rs	246	refused	
+R0659	movepart/plan.rs	250	refused	
+R0660	movepart/plan.rs	263	refused	partition #{part} is outside the entry array
+R0661	movepart/plan.rs	265	internal	partition #{part} has no entry in the geometry
+R0662	movepart/plan.rs	268	refused	partition #{part} is not defined
+R0663	movepart/plan.rs	271	internal	partition #{part} has an inverted range {}..{}
+R0664	movepart/plan.rs	307	refused	
+R0665	movepart/plan.rs	317	no_mutation	partition #{part} start overflows byte offset
+R0666	movepart/plan.rs	320	no_mutation	partition #{part} length overflows byte size
+R0667	movepart/plan.rs	388	refused	partition {num} has ending LBA below starting LBA (corrupted table)
+R0668	movepart/plan.rs	426	refused	insufficient tail space for relocation
+R0669	movepart/plan.rs	429	refused	relocation target LBA overflows — refusing
+R0670	movepart/plan.rs	431	refused	insufficient tail space to relocate blockers by the requested size
+R0671	movepart/plan.rs	436	refused	the relocation shift exceeds a signed LBA offset — refusing
+R0672	movepart/plan.rs	473	refused	insufficient tail space for relocation
+R0673	movepart/plan.rs	482	refused	shift must be positive
+R0674	movepart/plan.rs	485	refused	no partition to relocate (right side is free — no --allow-move needed)
+R0675	movepart/plan.rs	490	refused	shift does not exceed the free gap before the first blocker — relocation not needed
+R0676	movepart/plan.rs	497	refused	relocation target LBA overflows — refusing
+R0677	movepart/plan.rs	506	refused	relocation target LBA overflows — refusing
+R0678	movepart/plan.rs	598	refused	
+R0679	movepart/plan.rs	626	refused	added {delta} bytes is less than one extent ({} bytes) — the LV cannot take any of the added space
+R0680	movepart/plan.rs	631	no_mutation	LV target size overflows
+R0681	movepart/plan.rs	633	refused	LV {} reports 0 bytes — nothing to extend
+R0682	movepart/plan.rs	720	refused	requested size overflows the LBA range
+R0683	movepart/plan.rs	734	refused	shrink does not relocate partitions — this entry point only builds relocation plans for growth
+R0684	movepart/plan.rs	756	refused	
+R0685	movepart/plan.rs	765	refused	
+R0686	movepart/plan.rs	769	refused	
+R0687	movepart/plan.rs	773	refused	
+R0688	movepart/plan.rs	808	refused	
+R0689	movepart/plan.rs	925	refused	the recovery record was written with --chunk {} MiB, this run uses {} — re-run with the original value
+R0690	movepart/plan.rs	933	refused	the recovery record does not match the current disk geometry — refusing
+R0691	movepart/plan.rs	940	refused	the entry index exceeds the host address space
+R0692	movepart/plan.rs	943	refused	recovery record entry progress {} exceeds the plan's {} entries — the record changed between reads; refusing
+R0693	movepart/plan.rs	955	refused	the recovery record names partition {} that is no longer on the disk — refusing
+R0694	movepart/plan.rs	963	no_mutation	relocation target LBA overflows
+R0695	movepart/plan.rs	970	no_mutation	relocation source range overflows
+R0696	movepart/plan.rs	974	no_mutation	relocation target range overflows
+R0697	movepart/plan.rs	986	refused	partition {} is not where the recovery record says it should be (on disk LBA {}, expected {}) — the layout moved under the job; refusing
+R0698	movepart/plan.rs	1002	no_mutation	relocation target LBA overflows
+R0699	movepart/plan.rs	1006	no_mutation	relocation target range overflows
+R0700	movepart/plan.rs	1014	refused	relocation target of partition {} (LBA {}..{}) lies outside the usable range {}..{} — inconsistent recovery record; refusing
+R0701	movepart/plan.rs	1032	refused	relocation target of partition {} (LBA {}..{}) overlaps partition {} on disk — the layout moved under the job; refusing
+R0702	movepart/plan.rs	1043	refused	relocation targets of partitions {} and {} overlap (LBA {}..{}) — inconsistent recovery record; refusing
+R0703	movepart/plan.rs	1059	no_mutation	relocation source range overflows
+R0704	movepart/plan.rs	1061	refused	relocation target of partition {} (LBA {}..{}) would overwrite the source of partition {} (LBA {}..{}) before it is copied — inconsistent recovery record; refus
+R0705	movepart/plan.rs	1078	refused	
+R0706	movepart/plan.rs	1091	refused	the grown partition would extend into partition {} (LBA {}..{}) created since the record was written — the layout moved under the job; refusing
+R0707	movepart/plan.rs	1105	refused	recovery record chunk progress {} exceeds the bound {} fixed in the plan — the record changed between reads; refusing
+R0708	movepart/plan.rs	1114	refused	
+R0709	movepart/shift.rs	96	refused	
+R0710	movepart/shift.rs	124	refused	partition {} has an empty entry on disk — the layout moved under the job; refusing
+R0711	movepart/shift.rs	138	no_mutation	grow target start overflows byte offset
+R0712	movepart/shift.rs	140	no_mutation	grow target length overflows byte size
+R0713	movepart/shift.rs	163	no_mutation	grow target entry inverted
+R0714	movepart/shift.rs	166	no_mutation	grow target length overflows
+R0715	movepart/shift.rs	168	no_mutation	grow target length overflows byte size
+R0716	movepart/shift.rs	170	no_mutation	grow target length overflows byte size
+R0717	movepart/shift.rs	191	no_mutation	relocation shift overflows the LBA range
+R0718	movepart/shift.rs	220	refused	the plan names partition {} that is no longer on the disk — refusing
+R0719	movepart/shift.rs	225	no_mutation	relocation source range overflows
+R0720	movepart/shift.rs	227	refused	
+R0721	movepart/shift.rs	332	no_mutation	partition start overflows byte offset
+R0722	movepart/shift.rs	354	no_mutation	partition {} is outside the entry array
+R0723	movepart/shift.rs	359	refused	grow target entry inverted
+R0724	movepart/shift.rs	361	no_mutation	grow target entry inverted
+R0725	movepart/shift.rs	363	no_mutation	grow target length overflows
+R0726	movepart/shift.rs	375	refused	
+R0727	movepart/shift.rs	402	no_mutation	relocation target LBA overflows
+R0728	movepart/shift.rs	418	no_mutation	the pre-commit and target ranges
+R0729	movepart/shift.rs	420	no_mutation	
+R0730	movepart/shift.rs	519	partial	growth byte offset overflows — refusing
+R0731	movepart/shift.rs	551	partial	partition {part}: {} — the table entry is committed
+R0732	movepart/shift.rs	570	partial	退出后替换
+R0733	online/flow.rs	36	refused	
+R0734	online/flow.rs	37	unsupported	
+R0735	online/flow.rs	38	no_mutation	
+R0736	online/flow.rs	100	refused	mountpoint {} changed target during locking ({} -> {}) — retry
+R0737	online/flow.rs	115	refused	cannot derive disk name from {}
+R0738	online/flow.rs	119	refused	partition {} became active swap during locking — run swapoff first
+R0739	online/flow.rs	122	refused	cannot check active swap for partition {}: {e}
+R0740	online/flow.rs	126	refused	
+R0741	online/flow.rs	133	refused	open failed: {e}
+R0742	online/flow.rs	143	refused	xfs does not support shrinking (online or offline); only growing is possible
+R0743	online/flow.rs	148	refused	{} cannot shrink online (only btrfs can); unmount and use the offline path where supported
+R0744	online/flow.rs	157	refused	
+R0745	online/flow.rs	173	refused	
+R0746	online/flow.rs	174	no_mutation	
+R0747	online/flow.rs	175	partial	
+R0748	online/flow.rs	189	no_mutation	
+R0749	online/flow.rs	218	no_mutation	
+R0750	online/flow.rs	226	refused	
+R0751	online/flow.rs	254	no_mutation	
+R0752	online/flow.rs	301	no_mutation	
+R0753	online/flow.rs	306	refused	
+R0754	online/flow.rs	323	partial	btrfs shrink failed: {}
+R0755	online/flow.rs	372	partial	btrfs shrunk but the partition table write could not be verified: {}
+R0756	online/flow.rs	379	partial	btrfs shrunk but partition resize skipped: {}
+R0757	online/part.rs	44	refused	
+R0758	online/part.rs	45	no_mutation	
+R0759	online/part.rs	46	partial	
+R0760	online/part.rs	47	partial_unverified	warning: partition table written but kernel sync failed: {msg}
+R0761	online/pv.rs	16	no_mutation	cannot resolve the PV target: {e}
+R0762	online/pv.rs	17	refused	
+R0763	online/pv.rs	107	refused	cannot resolve the disk identity: {cause}
+R0764	online/pv.rs	121	unsupported	
+R0765	online/pv.rs	126	unsupported	the host recovery repository is refused: {detail}
+R0766	online/pv.rs	129	refused	cannot prepare the recovery directory: {e}
+R0767	online/pv.rs	146	refused	the device behind {} changed identity during locking — the lock protects a different target now; retry
+R0768	online/pv.rs	166	refused	open failed: {e}
+R0769	online/pv.rs	188	refused	size {new_len_bytes} not aligned to logical block size {}
+R0770	online/pv.rs	196	refused	size overflow
+R0771	online/pv.rs	198	refused	new end {end} exceeds disk capacity {}
+R0772	online/pv.rs	209	refused	new length {new_len_sectors} sectors exceeds the MBR size field (u32 sectors) — MBR cannot address it
+R0773	online/pv.rs	214	refused	new size would overlap an adjacent partition
+R0774	online/pv.rs	223	refused	
+R0775	online/pv.rs	286	refused	partition {pno} became active swap during locking — run swapoff first
+R0776	online/pv.rs	289	refused	cannot check active swap for partition {pno}: {e}
+R0777	online/pv.rs	296	refused	open failed: {e}
+R0778	online/pv.rs	300	refused	partition {pno} is no longer an LVM PV (identified as {}) — re-run `diskedit resize` to re-classify the target
+R0779	online/pv.rs	304	refused	仅扩 FS
+R0780	online/pv.rs	320	refused	PV partition can only grow here (current {} bytes); PV shrink needs the lvreduce/pvresize chain
+R0781	outcome.rs	270	internal	
+R0782	outcome.rs	271	refused	
+R0783	outcome.rs	272	no_mutation	
+R0784	outcome.rs	273	unsupported	
+R0785	outcome.rs	274	partial	
+R0786	outcome.rs	407	no_mutation	{cause}; {self}
+R0787	outcome.rs	408	partial_records_changed	{cause}; {self}
+R0788	outcome.rs	409	partial	
+R0789	recovery/engine.rs	257	refused	
+R0790	recovery/engine.rs	269	refused	
+R0791	recovery/engine.rs	299	refused	
+R0792	recovery/engine.rs	471	refused	--sector-size applies to image files only; a block device's logical sector size is reported by the kernel (BLKSSZGET) and cannot be overridden
+R0793	recovery/engine.rs	503	unsupported	
+R0794	recovery/engine.rs	526	refused	{} ({})
+R0795	recovery/engine.rs	531	refused	
+R0796	recovery/engine.rs	684	partial	{report} — the target may already have changed
+R0797	recovery/engine.rs	686	refused	
+R0798	recovery/engine.rs	734	unsupported	
+R0799	recovery/engine.rs	748	refused	
+R0800	recovery/engine.rs	755	refused	
+R0801	recovery/engine.rs	771	refused	cannot establish the target identity for the recovery record: {e:?}
+R0802	recovery/engine.rs	778	refused	
+R0803	recovery/engine.rs	810	refused	cannot write the recovery record beside the image: {e}
+R0804	recovery/engine.rs	846	refused	cannot resume the recovery record: {e}
+R0805	recovery/engine.rs	849	refused	the existing recovery record belongs to a different operation — refusing to resume it
+R0806	recovery/engine.rs	863	refused	cannot write the recovery record beside the image: {e}
+R0807	recovery/engine.rs	899	refused	cannot resume the recovery record: {e}
+R0808	recovery/engine.rs	902	refused	the existing recovery record belongs to a different operation — refusing to resume it
+R0809	recovery/engine.rs	916	refused	cannot write the recovery record beside the image: {e}
+R0810	recovery/engine.rs	936	refused	open failed: {e}
+R0811	recovery/engine.rs	940	refused	open failed: {e}
+R0812	recovery/engine.rs	949	refused	open failed: {e}
+R0813	recovery/engine.rs	967	refused	open failed: {e}
+R0814	recovery/engine.rs	974	unsupported	
+R0815	recovery/engine.rs	985	refused	the recovery scene of this target cannot be enumerated: {why} — refusing to treat it as empty
+R0816	recovery/record.rs	541	internal	the entry index exceeds the host address space
+R0817	recovery/record.rs	544	internal	relocation entry {entry} is outside the recorded plan — the record contradicts itself
+R0818	recovery/record.rs	552	internal	
+R0819	recovery/record.rs	895	internal	the entry index exceeds the host address space
+R0820	recovery/record.rs	900	internal	the recovery record records {} of {chunks} chunks for relocation entry {} — it contradicts itself
+R0821	recovery/record.rs	942	internal	the recovery record marks all {len} relocation entries as committed but only {done} plan steps as done — it contradicts itself
+R0822	recovery/rollback.rs	365	refused	the recovery record at {}: {scope}
+R0823	recovery/rollback.rs	387	refused	
+R0824	recovery/rollback.rs	470	refused	
+R0825	recovery/rollback.rs	508	refused	the target's GPT disk identity cannot be read ({e}) — {left}; {ROLLBACK_STUCK_REMEDY}
+R0826	recovery/rollback.rs	514	refused	{why} — {left}; {ROLLBACK_STUCK_REMEDY}
+R0827	recovery/rollback.rs	591	refused	
+R0828	recovery/rollback.rs	599	refused	
+R0829	recovery/rollback.rs	606	refused	
+R0830	recovery/rollback.rs	614	refused	cannot read source partition #{} of the recovery record ({e})
+R0831	recovery/rollback.rs	620	refused	
+R0832	recovery/rollback.rs	635	refused	
+R0833	recovery/rollback.rs	662	refused	
+R0834	recovery/rollback.rs	671	refused	
+R0835	recovery/rollback.rs	681	refused	
+R0836	recovery/rollback.rs	744	refused	
+R0837	recovery/rollback.rs	755	refused	
+R0838	recovery/rollback.rs	796	refused	the recorded pre-image range exceeds the host address space
+R0839	recovery/rollback.rs	802	refused	the recorded pre-image range exceeds the host address space
+R0840	recovery/rollback.rs	818	refused	
+R0841	recovery/rollback.rs	839	refused	
+R0842	recovery/rollback.rs	853	refused	the recorded read range exceeds the host address space
+R0843	recovery/rollback.rs	856	refused	the recorded read range exceeds the host address space
+R0844	recovery/rollback.rs	859	refused	the recorded read range exceeds the host address space
+R0845	recovery/rollback.rs	905	refused	
+R0846	recovery/rollback.rs	912	refused	
+R0847	recovery/rollback.rs	920	partial	the rollback write failed at offset {}: {e} — the recovery record at {} is kept; retry `diskedit recover`
+R0848	recovery/rollback.rs	939	partial	
+R0849	recovery/rollback.rs	944	partial	
+R0850	recovery/rollback.rs	952	partial	
+R0851	recovery/sink.rs	41	partial	the target carries no recovery record — the transfer may be incomplete
+R0852	recovery/sink.rs	50	partial	{} — the transfer may be incomplete
+R0853	recovery/sink.rs	63	partial	the target carries no recovery record — the table step must not start
+R0854	recovery/sink.rs	69	partial	{} — the table step must not start
+R0855	recovery/sink.rs	78	partial	the target carries no recovery record — the table step must not start
+R0856	recovery/sink.rs	85	partial	{} — the table step must not start
+R0857	recovery/sink.rs	103	partial	the target carries no recovery record — the table step may not be durably recorded
+R0858	recovery/sink.rs	113	partial	{} — the on-disk state may have changed
+R0859	recovery/sink.rs	127	partial	the target carries no recovery record — the filesystem step may not be durably recorded
+R0860	recovery/sink.rs	136	partial	{} — the on-disk state may have changed
+R0861	support.rs	121	refused	
+R0862	support.rs	425	refused	range {start}..{end} is empty after {align} alignment
+R0863	support.rs	438	refused	start {start} overflows the LBA range when aligned to {align}
+R0864	support.rs	456	refused	target is a partition, not a whole disk — `{cmd}` must be given the whole device instead of {target}
+R0865	support.rs	468	refused	name is {units} UTF-16 code units; a GPT partition name holds at most 36 — refusing rather than truncating
+R0866	support.rs	605	refused	LBA × sector-size overflows byte range (corrupted table)
+R0867	support.rs	611	refused	partition end below start (corrupted table)
+R0868	table/create.rs	80	refused	
+R0869	table/create.rs	82	refused	
+R0870	table/create.rs	91	refused	target too small for an MBR (needs ≥3 sectors at {ss}-byte sector size)
+R0871	table/create.rs	253	refused	{why} — pass --overwrite-partition-data to accept overwriting those bytes
+R0872	table/create.rs	256	refused	
+R0873	table/create.rs	312	refused	
+R0874	table/create.rs	315	refused	
+R0875	table/create.rs	318	refused	
+R0876	table/create.rs	354	refused	
+R0877	table/create.rs	356	refused	
+R0878	table/gpt_write.rs	214	refused	盘没有扇区
+R0879	table/gpt_write.rs	220	refused	disk has zero sectors
+R0880	table/gpt_write.rs	223	no_mutation	
+R0881	table/mbr.rs	234	refused	not an msdos-labelled image
+R0882	table/mbr.rs	237	refused	
+R0883	table/mbr.rs	251	partial	cannot write the MBR: {e} — the on-disk state may have changed
+R0884	table/mbr.rs	253	partial	cannot flush the MBR: {e} — the write may not have landed
+R0885	table/mbr.rs	256	partial	MBR read-back failed: {e} — the write may not have landed
+R0886	table/mbr.rs	258	partial	the MBR differs from what was written — the device or image layer dropped the write
+R0887	table/mbr.rs	269	refused	msdos supports primary slots 1..=4 only
+R0888	table/mbr.rs	278	refused	the sector size exceeds the host address space
+R0889	table/mbr.rs	283	no_mutation	no MBR signature on target
+R0890	table/mbr.rs	294	refused	partition {part} is empty
+R0891	table/mbr.rs	297	refused	partition {part} has a type byte but zero sectors — the entry is invisible to the parser; `delete` clears it
+R0892	table/mbr.rs	316	no_mutation	image too small for MBR
+R0893	table/mbr.rs	320	refused	the sector size exceeds the host address space
+R0894	table/mbr.rs	342	refused	invalid MBR partition number {part} (1..4)
+R0895	table/mbr.rs	345	internal	the MBR snapshot is {} byte(s) for a {sector_size}-byte sector
+R0896	table/mbr.rs	351	no_mutation	no MBR signature on target
+R0897	table/mbr.rs	355	refused	MBR partition {part} is empty
+R0898	table/mbr.rs	360	refused	partition {part} is the GPT protective record (0xEE) — rewriting its size destroys the record used to recognise and recover the GPT
+R0899	table/mbr.rs	365	refused	extended partition container cannot be resized
+R0900	table/mbr.rs	371	refused	partition {part} has a type byte but zero sectors — the entry is invisible to the parser; `delete` clears it
+R0901	table/mbr.rs	379	refused	MBR partition {part} has invalid start LBA 0
+R0902	table/mbr.rs	383	refused	new size 0 would erase partition {part} — use `delete` to remove the entry
+R0903	table/mbr.rs	388	refused	new size {new_size_lba} sectors from LBA {start} exceeds the disk ({total_sectors} sectors)
+R0904	table/mbr.rs	396	refused	new range {start}..{} exceeds the MBR 32-bit LBA limit (last expressible LBA {})
+R0905	table/mbr.rs	416	refused	new range [{start}, {new_end}] overlaps partition {} [{os}, {oe}]
+R0906	table/mbr.rs	472	refused	the sector size exceeds the host address space
+R0907	table/mbr.rs	485	refused	type 0x00 is the empty-entry marker — give a partition type
+R0908	table/mbr.rs	488	refused	type 0xEE is the GPT protective record, not a data partition — use a real partition type
+R0909	table/mbr.rs	493	refused	extended-container types (0x05/0x0F/0x85) are not supported — logical partitions are out of scope
+R0910	table/mbr.rs	511	refused	image has zero sectors
+R0911	table/mbr.rs	515	refused	image has a single sector — no usable range
+R0912	table/mbr.rs	518	refused	range {start}..{end} outside disk (1..{})
+R0913	table/mbr.rs	524	refused	range {start}..{end} exceeds the MBR 32-bit LBA limit (last expressible LBA {})
+R0914	table/mbr.rs	536	refused	partition {} has a type byte but zero sectors — the entry is invisible to the parser; `delete` clears it
+R0915	table/mbr.rs	550	refused	range overlaps an existing partition
+R0916	table/mbr.rs	561	refused	partition number {n} is outside 1..=4 for an MBR table
+R0917	table/mbr.rs	564	refused	partition {n} is already in use — pick an empty primary slot
+R0918	table/mbr.rs	571	refused	all 4 primary slots used (extended/logical unsupported)
+R0919	table/mbr.rs	593	refused	partition {part} is already empty
+R0920	table/mbr.rs	599	refused	partition {part} is the GPT protective record (0xEE) — clearing it destroys the record used to recognise and recover the GPT
+R0921	table/mbr.rs	604	refused	partition {part} is an extended container (0x{cur:02X}) — its type is structural, not a partition
+R0922	table/mbr.rs	676	refused	type 0x{cur:02X} has no hidden counterpart (supported: fat12/16/32 incl. lba, ntfs)
+R0923	table/mbr.rs	714	refused	type 0x00 marks an empty entry — use `delete` to remove the partition
+R0924	table/mbr.rs	718	refused	type 0xEE is the GPT protective record, not a data partition — use a real partition type
+R0925	table/mbr.rs	723	refused	extended-container types (0x05/0x0F/0x85) are not supported — logical partitions are out of scope
+R0926	table/mbr.rs	735	refused	partition {part} is an extended container (0x{cur:02X}) — its type is structural, not descriptive
+R0927	table/mbr.rs	740	refused	partition {part} is the GPT protective record (0xEE) — its type byte is structural, not descriptive
+R0928	table/stamp.rs	152	refused	the table changed on disk after it was read (stamp {expected:?} → {now:?}) — re-run the command
+R0929	table/stamp.rs	186	internal	a decision-time table region does not match the region this write compares
+R0930	table/stamp.rs	192	refused	a table region is too large to compare on this host
+R0931	table/stamp.rs	219	partial	re-reading the table regions after the write failed: {e} — the write may not have landed
+R0932	table/stamp.rs	224	partial	the table on disk differs from what was written (stamp {expected:?} → {now:?}) — progress is not advanced
+R0933	table/stamp.rs	239	refused	a table region is too large to compare on this host
+R0934	table/stamp.rs	243	refused	the partition table changed on disk after it was read (region at byte {} differs) — re-run the command
+R0935	table/stamp.rs	255	no_mutation	re-reading the table stamp failed: {e}
+R0936	table/step.rs	85	refused	
+R0937	table/step.rs	91	refused	disk too small to hold GPT entry array
+R0938	table/step.rs	94	refused	
+R0939	table/step.rs	98	refused	GPT end LBA {} is beyond the container end {file_last_lba} — refusing to write the table
+R0940	table/step.rs	112	refused	table region offset overflows
+R0941	table/step.rs	126	refused	table region offset overflows
+R0942	table/step.rs	142	refused	
+R0943	table/step.rs	184	refused	
+R0944	table/step.rs	187	refused	{given} partition entries given for a header declaring {} — refusing to write the table
+R0945	table/step.rs	194	refused	disk too small to hold GPT entry array
+R0946	table/step.rs	197	refused	
+R0947	table/step.rs	200	refused	
+R0948	table/step.rs	202	refused	
+R0949	table/step.rs	213	internal	the {what} GPT header this write would produce is not self-consistent: {e}
+R0950	table/step.rs	218	internal	the {what} GPT header this write would produce does not match the container end
+R0951	table/step.rs	224	internal	the partition entries this write would produce are invalid: {e}
+R0952	table/step.rs	231	refused	
+R0953	table/step.rs	235	refused	
+R0954	table/step.rs	239	refused	
+R0955	table/step.rs	243	refused	
+R0956	table/step.rs	267	refused	protective MBR image is {} byte(s) for a {ss}-byte sector — refusing to write the table
+R0957	table/step.rs	289	refused	MBR image is {} byte(s) for a {ss}-byte sector — refusing to write the table
+R0958	table/step.rs	306	refused	target too small for an MBR (needs ≥3 sectors at {ss}-byte sector size)
+R0959	table/step.rs	312	internal	the table snapshot is empty — LBA0 is missing
+R0960	table/step.rs	315	internal	the table snapshot's LBA0 is {} byte(s) for a {ss}-byte sector
+R0961	table/step.rs	337	refused	table region offset overflows
+R0962	table/step.rs	345	refused	sector size does not fit the host address space
+R0963	table/step.rs	353	refused	sector size does not fit the host address space
+R0964	table/step.rs	367	internal	the table snapshot does not cover the compare regions — the step was not assembled from one read
+R0965	table/step.rs	374	internal	a write target is outside the compare range or carries the wrong length — the step was not assembled
+R0966	table/step.rs	390	internal	a write target is not in the compare regions — the step was not assembled
+R0967	targetlock.rs	72	no_mutation	cannot open the target lock {}: {e}
+R0968	targetlock.rs	79	no_mutation	cannot take the target lock {}: {e}
+R0969	targetlock.rs	129	no_mutation	cannot identify the target {} to take the inode lock: {e}
+R0970	targetlock.rs	132	refused	
+R0971	targetlock.rs	147	no_mutation	cannot lock the target {}: {e}
+R0972	targetlock.rs	156	refused	
+R0973	targetlock.rs	163	no_mutation	cannot open the target {} to take the inode lock: {e}
+R0974	targetlock.rs	189	no_mutation	

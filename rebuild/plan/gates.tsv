@@ -1,0 +1,34 @@
+# 门禁表：python plan/instruments/gate.py all --plan plan/gates.tsv --who model|human
+# 列：门禁名  谁跑  类型  最少通过数  必需环境变量  必需文件  命令（在 rebuild/ 下执行）
+#
+# 最少通过数是下限，不是目标：用例变多就上调，下调必须在提交说明里写明删了哪条用例、为什么。
+# 标“待钉”的数字是首个纵切落定该测试时的登记数，届时替换成实数；没有实数之前这一行不许变绿。
+# 测试二进制名以 cargo test --list 为准；对不上就改这里的名字，不许为了让名字对上而新建空测试。
+#
+# ---- 模型跑：每批（在 Linux 上；别的平台会把 Linux 后端整块条件编译掉，那种绿不算数）----
+G0	 model	lint	1	 	 	python plan/instruments/census.py selftest
+G0b	 model	lint	1	 	 	python plan/instruments/gate.py selftest
+G0c	 model	lint	1	 	 	python plan/instruments/census.py docs --plan plan
+G1	 model	lint	1	 	 	python plan/instruments/census.py check --old ../src --baseline plan/baseline
+G1b	 model	lint	1	 	 	python plan/instruments/census.py covers --plan plan --src src --tests tests
+G2a	 model	lint	1	 	 	cargo fmt --all -- --check
+G2b	 model	lint	1	 	 	cargo clippy --workspace --all-targets -- -D warnings
+G2c	 model	build	1	 	 	cargo check --workspace --all-targets
+# ---- 模型跑：每个纵切 ----
+# 全集门 G1b、G6b 不参与纵切；纵切只跑 G6（本轮 due 行）。交付前跑全集。
+G3a	 model	test	待钉	 	 	cargo test --test single_construction
+G3b	 model	test	待钉	 	 	cargo test --test layer_direction
+G3c	 model	test	待钉	 	 	cargo test --test inventory
+G3d	 model	test	待钉	 	 	cargo test --test ui
+G4a	 model	test	待钉	 	 	cargo test -p diskedit-core
+G4b	 model	test	待钉	 	 	cargo test --test contract
+G4c	 model	test	待钉	 	 	cargo test --test case_runner
+G4d	 model	test	待钉	 	 	cargo test --test residue
+G5a	 model	test	待钉	 	 	cargo test --test contract_surface
+G5b	 model	lint	1	 	target/command-surface.json	python plan/instruments/census.py surface --old ../src --new target/command-surface.json --allow plan/baseline/surface-allowed.txt
+G6	 model	lint	1	 	plan/baseline/refusal-due.tsv	python plan/instruments/census.py owners --baseline plan/baseline --map plan/baseline/refusal-map.tsv --tests tests --due plan/baseline/refusal-due.tsv
+G6b	 model	lint	1	 	plan/baseline/refusal-map.tsv	python plan/instruments/census.py owners --baseline plan/baseline --map plan/baseline/refusal-map.tsv --tests tests
+# ---- 人跑：每个纵切结束后一条命令（需要 root、镜像、文件系统工具、旧版二进制）----
+G7	 human	test	待钉	DISKEDIT_BASELINE	 	cargo test --test equivalence
+G8	 human	test	待钉	 	 	cargo test
+G8b	 human	build	1	 	 	cargo build --release

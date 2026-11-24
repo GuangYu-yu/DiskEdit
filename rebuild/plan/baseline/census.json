@@ -1,0 +1,469 @@
+{
+ "commands": [
+  {
+   "name": "info",
+   "confirmation": "None",
+   "common_options": [
+    "--sector-size"
+   ],
+   "variants": [
+    {
+     "syntax": "<TARGET> [--sector-size N]",
+     "options": [],
+     "selectors": [],
+     "target": "Whole",
+     "default": true,
+     "syntax_only_options": [
+      "--sector-size"
+     ]
+    },
+    {
+     "syntax": "<TARGET>:N --grow [--sector-size N]",
+     "options": [
+      "--grow"
+     ],
+     "selectors": [
+      "flag:--grow"
+     ],
+     "target": "Partition",
+     "default": false,
+     "syntax_only_options": [
+      "--sector-size"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "inspect",
+   "confirmation": "None",
+   "common_options": [
+    "--identity"
+   ],
+   "variants": [
+    {
+     "syntax": "<TARGET|PATH>",
+     "options": [],
+     "selectors": [],
+     "target": "Whole",
+     "default": true,
+     "syntax_only_options": []
+    }
+   ]
+  },
+  {
+   "name": "records list",
+   "confirmation": "None",
+   "common_options": [
+    "--identity"
+   ],
+   "variants": [
+    {
+     "syntax": "[TARGET]",
+     "options": [],
+     "selectors": [],
+     "target": "Whole",
+     "default": true,
+     "syntax_only_options": []
+    }
+   ]
+  },
+  {
+   "name": "records verify",
+   "confirmation": "None",
+   "common_options": [
+    "--identity"
+   ],
+   "variants": [
+    {
+     "syntax": "<TARGET> <ID>",
+     "options": [],
+     "selectors": [],
+     "target": "Whole",
+     "default": true,
+     "syntax_only_options": []
+    }
+   ]
+  },
+  {
+   "name": "records scan",
+   "confirmation": "None",
+   "common_options": [],
+   "variants": [
+    {
+     "syntax": "<ROOT>",
+     "options": [],
+     "selectors": [],
+     "target": "Any",
+     "default": true,
+     "syntax_only_options": []
+    }
+   ]
+  },
+  {
+   "name": "resize",
+   "confirmation": "Required",
+   "common_options": [
+    "--identity",
+    "--no-fs",
+    "--sector-size",
+    "--yes"
+   ],
+   "variants": [
+    {
+     "syntax": "<TARGET>[:N] <SIZE> [--allow-move] [--chunk N] [--grow-lv] [--lv NAME] [--no-fs] --yes",
+     "options": [
+      "--allow-move",
+      "--chunk",
+      "--dry-run",
+      "--grow-lv",
+      "--lv"
+     ],
+     "selectors": [],
+     "target": "Any",
+     "default": true,
+     "syntax_only_options": [
+      "--no-fs"
+     ]
+    },
+    {
+     "syntax": "<TARGET>:N --end LBA [--align A] [--no-fs] --yes",
+     "options": [
+      "--align",
+      "--dry-run",
+      "--end"
+     ],
+     "selectors": [
+      "flag:--end"
+     ],
+     "target": "Partition",
+     "default": false,
+     "syntax_only_options": [
+      "--no-fs"
+     ]
+    },
+    {
+     "syntax": "<TARGET>:N --grow-to-end [--align A] [--no-fs] --yes",
+     "options": [
+      "--align",
+      "--dry-run",
+      "--grow-to-end"
+     ],
+     "selectors": [
+      "flag:--grow-to-end"
+     ],
+     "target": "Partition",
+     "default": false,
+     "syntax_only_options": [
+      "--no-fs"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "move",
+   "confirmation": "Required",
+   "common_options": [
+    "--identity",
+    "--sector-size",
+    "--yes"
+   ],
+   "variants": [
+    {
+     "syntax": "<TARGET>:N --start <LBA|end|align> [--chunk N] --yes [--align A]",
+     "options": [
+      "--align",
+      "--chunk",
+      "--start"
+     ],
+     "selectors": [],
+     "target": "Partition",
+     "default": true,
+     "syntax_only_options": []
+    }
+   ]
+  },
+  {
+   "name": "copy",
+   "confirmation": "Required",
+   "common_options": [
+    "--identity",
+    "--sector-size",
+    "--yes"
+   ],
+   "variants": [
+    {
+     "syntax": "<TARGET>:N --start <LBA|end> [--chunk N] --yes [--align A] [--name S] [--keep-partuuid]",
+     "options": [
+      "--align",
+      "--chunk",
+      "--keep-partuuid",
+      "--name",
+      "--start"
+     ],
+     "selectors": [],
+     "target": "Partition",
+     "default": true,
+     "syntax_only_options": []
+    }
+   ]
+  },
+  {
+   "name": "delete",
+   "confirmation": "Required",
+   "common_options": [
+    "--identity",
+    "--sector-size",
+    "--yes"
+   ],
+   "variants": [
+    {
+     "syntax": "<TARGET>:N --yes",
+     "options": [],
+     "selectors": [],
+     "target": "Partition",
+     "default": true,
+     "syntax_only_options": []
+    }
+   ]
+  },
+  {
+   "name": "set",
+   "confirmation": "Required",
+   "common_options": [
+    "--identity",
+    "--random",
+    "--sector-size",
+    "--yes"
+   ],
+   "variants": [
+    {
+     "syntax": "<TARGET>:N name S --yes",
+     "options": [],
+     "selectors": [
+      "pos:1=name"
+     ],
+     "target": "Partition",
+     "default": false,
+     "syntax_only_options": []
+    },
+    {
+     "syntax": "<TARGET>:N label S --yes",
+     "options": [],
+     "selectors": [
+      "pos:1=label"
+     ],
+     "target": "Partition",
+     "default": false,
+     "syntax_only_options": []
+    },
+    {
+     "syntax": "<TARGET>:N uuid [U] --yes [--random]",
+     "options": [],
+     "selectors": [
+      "pos:1=uuid"
+     ],
+     "target": "Partition",
+     "default": false,
+     "syntax_only_options": [
+      "--random"
+     ]
+    },
+    {
+     "syntax": "<TARGET>:N flag F on|off --yes",
+     "options": [],
+     "selectors": [
+      "pos:1=flag"
+     ],
+     "target": "Partition",
+     "default": false,
+     "syntax_only_options": []
+    },
+    {
+     "syntax": "<TARGET>:N type GUID|0xXX --yes",
+     "options": [],
+     "selectors": [
+      "pos:1=type"
+     ],
+     "target": "Partition",
+     "default": false,
+     "syntax_only_options": []
+    }
+   ]
+  },
+  {
+   "name": "check",
+   "confirmation": "None",
+   "common_options": [
+    "--sector-size"
+   ],
+   "variants": [
+    {
+     "syntax": "<TARGET>:N",
+     "options": [],
+     "selectors": [],
+     "target": "Partition",
+     "default": true,
+     "syntax_only_options": []
+    }
+   ]
+  },
+  {
+   "name": "mkfs",
+   "confirmation": "Required",
+   "common_options": [
+    "--identity",
+    "--sector-size",
+    "--yes"
+   ],
+   "variants": [
+    {
+     "syntax": "<TARGET>:N <FS> --yes [--label S]",
+     "options": [
+      "--label"
+     ],
+     "selectors": [],
+     "target": "Partition",
+     "default": true,
+     "syntax_only_options": []
+    }
+   ]
+  },
+  {
+   "name": "resizefs",
+   "confirmation": "Required",
+   "common_options": [
+    "--identity",
+    "--sector-size",
+    "--yes"
+   ],
+   "variants": [
+    {
+     "syntax": "<TARGET>:N [BYTES] --yes",
+     "options": [],
+     "selectors": [],
+     "target": "Partition",
+     "default": false,
+     "syntax_only_options": []
+    },
+    {
+     "syntax": "<MOUNTPOINT> [BYTES] --yes",
+     "options": [],
+     "selectors": [],
+     "target": "Whole",
+     "default": false,
+     "syntax_only_options": []
+    }
+   ]
+  },
+  {
+   "name": "recover",
+   "confirmation": "Required",
+   "common_options": [
+    "--identity",
+    "--sector-size",
+    "--yes"
+   ],
+   "variants": [
+    {
+     "syntax": "<TARGET> --yes",
+     "options": [],
+     "selectors": [],
+     "target": "Whole",
+     "default": true,
+     "syntax_only_options": []
+    },
+    {
+     "syntax": "<TARGET> --replay-table-only --yes",
+     "options": [
+      "--replay-table-only"
+     ],
+     "selectors": [
+      "flag:--replay-table-only"
+     ],
+     "target": "Whole",
+     "default": false,
+     "syntax_only_options": []
+    },
+    {
+     "syntax": "<TARGET> --release [--discard-replay] --yes",
+     "options": [
+      "--discard-replay",
+      "--release"
+     ],
+     "selectors": [
+      "flag:--release"
+     ],
+     "target": "Whole",
+     "default": false,
+     "syntax_only_options": []
+    }
+   ]
+  },
+  {
+   "name": "new",
+   "confirmation": "Required",
+   "common_options": [
+    "--identity",
+    "--sector-size",
+    "--yes"
+   ],
+   "variants": [
+    {
+     "syntax": "<TARGET> [--table gpt|mbr] --yes [--overwrite-data]",
+     "options": [
+      "--overwrite-data",
+      "--table"
+     ],
+     "selectors": [],
+     "target": "Whole",
+     "default": true,
+     "syntax_only_options": []
+    }
+   ]
+  },
+  {
+   "name": "add",
+   "confirmation": "Required",
+   "common_options": [
+    "--identity",
+    "--sector-size",
+    "--yes"
+   ],
+   "variants": [
+    {
+     "syntax": "<TARGET> SIZE [--start LBA] [--align A] [--part-number N] [--name S] [--type-guid G] --yes",
+     "options": [
+      "--align",
+      "--name",
+      "--part-number",
+      "--start",
+      "--type-guid"
+     ],
+     "selectors": [],
+     "target": "Whole",
+     "default": true,
+     "syntax_only_options": []
+    }
+   ]
+  }
+ ],
+ "counts": {
+  "commands": 16,
+  "variants": 26,
+  "sites_total": 974,
+  "sites_by_kind": {
+   "internal": 73,
+   "no_mutation": 104,
+   "partial": 93,
+   "partial_postcondition": 3,
+   "partial_records_changed": 2,
+   "partial_unverified": 3,
+   "partial_with": 6,
+   "refused": 581,
+   "unsupported": 54,
+   "usage": 55
+  },
+  "options_in_syntax_not_whitelisted": []
+ },
+ "sites_sha256": "6d58c4b4a7c01879b73037ad0798071a2931a41b5b3affdf433ca17484681048"
+}

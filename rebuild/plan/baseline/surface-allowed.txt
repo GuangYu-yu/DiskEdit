@@ -1,0 +1,3 @@
+# 命令面允许差异清单：每行一条，格式与 census.py surface 打印的差集行完全一致，行尾注明对应的 D 编号
+# 例：surface|common-options|info|['--identity']|[]  D9
+# 没有登记的差异写在这里无效：先在 divergences.md 登记，再把差集行抄到这里
