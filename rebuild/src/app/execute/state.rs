@@ -65,9 +65,25 @@ impl StateMachine {
         self.state
     }
 
-    /// 原像落盘后进入已登记；只允许从写前推进。
+    /// 原像落盘后进入已登记。
+    ///
+    /// 登记的是"这次执行已经开始写"，而不是单个步骤；同一份计划里的后续写步骤
+    /// 落各自原像时仍是已登记，不重复推进。已提交或待恢复之后不能再登记。
     pub fn arm(&mut self) -> Result<(), TransitionError> {
-        self.transition(ExecutionState::Unwritten, ExecutionState::Armed, "arm")
+        match self.state {
+            ExecutionState::Unwritten => {
+                self.state = ExecutionState::Armed;
+                Ok(())
+            }
+            ExecutionState::Armed => Ok(()),
+            other @ (ExecutionState::Committed
+            | ExecutionState::CommittedUnsynced
+            | ExecutionState::RolledBack
+            | ExecutionState::NeedsRecovery) => Err(TransitionError {
+                from: other,
+                wanted: "arm",
+            }),
+        }
     }
 
     /// 记录终态已落盘且内核视图已同步。
@@ -124,15 +140,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn starts_unwritten_and_arms_once() {
+    fn arming_is_idempotent_within_one_execution() {
         let mut machine = StateMachine::new();
         assert_eq!(machine.state(), ExecutionState::Unwritten);
         machine.arm().expect("首次登记应成立");
         assert_eq!(machine.state(), ExecutionState::Armed);
+        // 同一份计划里的第二个写步骤会再次登记原像；已登记不重复推进。
+        machine.arm().expect("后续步骤登记应成立");
+        assert_eq!(machine.state(), ExecutionState::Armed);
+        machine.commit().expect("多步之后仍能提交");
+        assert_eq!(machine.state(), ExecutionState::Committed);
         assert_eq!(
             machine.arm(),
             Err(TransitionError {
-                from: ExecutionState::Armed,
+                from: ExecutionState::Committed,
                 wanted: "arm"
             })
         );
