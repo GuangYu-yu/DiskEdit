@@ -14,6 +14,7 @@ pub mod records;
 pub mod source;
 pub mod target;
 
+use std::os::unix::fs::FileTypeExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -178,10 +179,15 @@ impl Platform for Linux {
             .write(true)
             .open(device)
             .map_err(|error| PlatformError::io(device, error))?;
-        let length = file
+        let metadata = file
             .metadata()
-            .map_err(|error| PlatformError::io(device, error))?
-            .len();
+            .map_err(|error| PlatformError::io(device, error))?;
+        let length = if metadata.file_type().is_block_device() {
+            // 块设备的 `st_size` 恒为 0，容量只能向内核查询。
+            source::BlockSource::open(device)?.len_bytes()
+        } else {
+            metadata.len()
+        };
         let zeros = [0u8; 4096];
         for range in ranges {
             let end = range.end();

@@ -199,6 +199,11 @@ fn observe_content(
         Ok(bytes) => bytes,
         Err(why) => return Observation::unknown(why),
     };
+    eprintln!(
+        "debug: offset={offset} want={want} first={:02x?} at1080={:02x?}",
+        &prefix[..4],
+        &prefix[1080..1084]
+    );
     match probe::identify(&prefix) {
         Evidence::Present(kind) => Observation::known(kind, SOURCE_CONTENT, generation),
         Evidence::UnknownFormat { why } | Evidence::Unreadable { why } => Observation::unknown(why),

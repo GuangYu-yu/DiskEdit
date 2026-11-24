@@ -1,8 +1,12 @@
 //! `resize`：改变分区在表里的起止。
 //!
-//! 三种形态：绝对尺寸、`--end` 终点、`--grow-to-end` 撑到末尾。收缩需要先证明
-//! 文件系统已缩到新范围；当前快照不含该事实，收缩按未知拒绝，不把"没读到"当作
-//! "已经缩好"。
+//! 三种形态：绝对尺寸、`--end` 终点、`--grow-to-end` 撑到末尾。与基线一致，改完
+//! 分区几何后把文件系统调到新的区间：扩容在表提交与内核重读之后做，收缩在新旧
+//! 几何之间先缩文件系统再缩分区；`--no-fs` 只改几何。收缩要求观测到文件系统当前
+//! 大小与可收缩的最小尺寸，不把"没读到"当作"已经缩好"。
+
+use diskedit_core::evidence::Observation;
+use diskedit_core::fs::{FsKind, Verb};
 
 use super::common::{admission, capacity};
 use super::plan::Plan;
@@ -88,7 +92,7 @@ pub fn plan(snapshot: &Snapshot, request: &ResizeRequest) -> Result<Plan, Refusa
             what: "--align 只用于 --end 与 --grow-to-end 形态".to_owned(),
         });
     }
-    if sectors < facts.partition.sectors {
+    if request.no_fs && sectors < facts.partition.sectors {
         let needed =
             sectors
                 .checked_mul(admitted.sector)
@@ -96,15 +100,14 @@ pub fn plan(snapshot: &Snapshot, request: &ResizeRequest) -> Result<Plan, Refusa
                     what: "新分区容量越过可寻址上界".to_owned(),
                 })?;
         match &facts.size {
-            diskedit_core::evidence::Observation::Known { value, .. } if value.bytes <= needed => {}
-            diskedit_core::evidence::Observation::Known { value, .. } => {
+            Observation::Known { value, .. } if value.bytes <= needed => {}
+            Observation::Known { value, .. } => {
                 return Err(Refusal::CapacityInsufficient {
                     needed: value.bytes,
                     available: needed,
                 });
             }
-            diskedit_core::evidence::Observation::Unknown { .. }
-            | diskedit_core::evidence::Observation::NotApplicable { .. } => {
+            Observation::Unknown { .. } | Observation::NotApplicable { .. } => {
                 return Err(Refusal::FactUnknown {
                     what: "filesystem used bytes".to_owned(),
                 });
@@ -176,19 +179,131 @@ pub fn plan(snapshot: &Snapshot, request: &ResizeRequest) -> Result<Plan, Refusa
         TableFormat::Mbr => None,
     };
     let regions = capacity::table_regions(format, layout, admitted.sector)?;
-    let steps = vec![
-        Step::new(
-            StepKind::ResizePartition {
-                format,
+    let new_bytes =
+        sectors
+            .checked_mul(admitted.sector)
+            .ok_or_else(|| Refusal::ArgumentOutOfRange {
+                what: "新分区容量越过可寻址上界".to_owned(),
+            })?;
+    // 几何不变时不碰文件系统：没有方向，调用工具只会白写一遍。
+    let filesystem = if request.no_fs || sectors == facts.partition.sectors {
+        None
+    } else {
+        filesystem_step(snapshot, facts, partition, new_bytes)?
+    };
+    let mut steps = Vec::new();
+    if let Some(Coupling::ShrinkFilesystem { filesystem, bytes }) = filesystem {
+        let old_region = capacity::partition_region(
+            facts.partition.start_lba,
+            facts.partition.sectors,
+            admitted.sector,
+        )?;
+        steps.push(Step::new(
+            StepKind::ShrinkFilesystem {
                 partition,
-                start_lba: start,
-                sectors,
+                filesystem,
+                bytes,
             },
-            regions,
-        ),
-        Step::new(StepKind::RefreshKernelView, Vec::new()),
-    ];
+            vec![old_region],
+        ));
+    }
+    steps.push(Step::new(
+        StepKind::ResizePartition {
+            format,
+            partition,
+            start_lba: start,
+            sectors,
+        },
+        regions,
+    ));
+    steps.push(Step::new(StepKind::RefreshKernelView, Vec::new()));
+    if let Some(Coupling::GrowFilesystem { filesystem, bytes }) = filesystem {
+        let new_region = capacity::partition_region(start, sectors, admitted.sector)?;
+        steps.push(Step::new(
+            StepKind::GrowFilesystem {
+                partition,
+                filesystem,
+                bytes,
+            },
+            vec![new_region],
+        ));
+    }
     Plan::write(steps, admitted.identity)
+}
+
+/// 文件系统要跟着走的那一步。
+enum Coupling {
+    GrowFilesystem { filesystem: FsKind, bytes: u64 },
+    ShrinkFilesystem { filesystem: FsKind, bytes: u64 },
+}
+
+/// 按新容量与当前文件系统大小决定是否、以及往哪边调整文件系统。
+fn filesystem_step(
+    snapshot: &Snapshot,
+    facts: &crate::app::observe::snapshot::PartitionFacts,
+    partition: u32,
+    bytes: u64,
+) -> Result<Option<Coupling>, Refusal> {
+    let content = match &facts.content {
+        Observation::Known { value, .. } => *value,
+        Observation::Unknown { .. } | Observation::NotApplicable { .. } => {
+            return Err(Refusal::ContentUnsupported {
+                what: "未知内容的分区调整".to_owned(),
+                why: "无法识别的文件系统；只改几何请加 --no-fs".to_owned(),
+            });
+        }
+    };
+    let filesystem = content
+        .filesystem()
+        .ok_or_else(|| Refusal::ContentUnsupported {
+            what: format!("{} 跟随分区调整", content.as_str()),
+            why: "该内容不是文件系统；只改几何请加 --no-fs".to_owned(),
+        })?;
+    let observed = match &facts.size {
+        Observation::Known { value, .. } => *value,
+        Observation::Unknown { why } | Observation::NotApplicable { why } => {
+            return Err(Refusal::MinimumSizeUnknown {
+                number: partition,
+                why: why.clone(),
+            });
+        }
+    };
+    match bytes.cmp(&observed.bytes) {
+        std::cmp::Ordering::Equal => Ok(None),
+        std::cmp::Ordering::Greater => {
+            let programs = admission::programs(content, Verb::Grow)?.ok_or_else(|| {
+                Refusal::ContentUnsupported {
+                    what: format!("{} 扩容", content.as_str()),
+                    why: "该内容不支持扩容".to_owned(),
+                }
+            })?;
+            admission::require_tools(snapshot, programs)?;
+            Ok(Some(Coupling::GrowFilesystem { filesystem, bytes }))
+        }
+        std::cmp::Ordering::Less => {
+            let programs = admission::programs(content, Verb::Shrink)?.ok_or_else(|| {
+                Refusal::ContentUnsupported {
+                    what: format!("{} 收缩", content.as_str()),
+                    why: "该内容不支持收缩".to_owned(),
+                }
+            })?;
+            let minimum = observed
+                .min_bytes
+                .ok_or_else(|| Refusal::MinimumSizeUnknown {
+                    number: partition,
+                    why: "该文件系统未给出可收缩的最小尺寸".to_owned(),
+                })?;
+            if bytes < minimum {
+                return Err(Refusal::BelowMinimumSize {
+                    number: partition,
+                    minimum,
+                    requested: bytes,
+                });
+            }
+            admission::require_tools(snapshot, programs)?;
+            Ok(Some(Coupling::ShrinkFilesystem { filesystem, bytes }))
+        }
+    }
 }
 
 /// SIZE 写法 → 目标字节数；增量与百分比以当前分区字节数为锚。
