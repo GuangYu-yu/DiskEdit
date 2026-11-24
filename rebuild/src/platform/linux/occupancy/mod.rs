@@ -66,6 +66,14 @@ fn device_ids(target: &Target) -> PlatformResult<Vec<(u32, u32)>> {
     };
     for entry in entries {
         let entry = entry.map_err(|error| crate::platform::PlatformError::io(&base, error))?;
+        // 整盘目录混有 `uevent`、`size` 等普通文件；只把子目录当候选分区。
+        if !entry
+            .file_type()
+            .map_err(|error| crate::platform::PlatformError::io(entry.path(), error))?
+            .is_dir()
+        {
+            continue;
+        }
         let path = entry.path();
         if super::read_optional_attr(&path.join("partition"))?.is_none() {
             continue;

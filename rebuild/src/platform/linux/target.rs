@@ -4,9 +4,9 @@
 //! [`BlockSource`]。打开后保存路径、种类、字节长度与逻辑扇区；普通文件没有设备级
 //! 扇区，`sector_size` 为 `None`。
 //!
-//! 身份规则：块设备取 sysfs 的 `device/wwid`、`device/serial` 或 `serial`；
-//! 读不到稳定材料返回不可比较指纹。普通文件用设备号与 inode 号混合。major:minor、
-//! 路径、当前挂载点这类易变值不构成强指纹。
+//! 身份规则：块设备以容量为底，有 `device/wwid`、`device/serial` 或 `serial` 时
+//! 一并入指纹；loop 与部分 dm 设备没有这些属性，仅容量仍足以区分目标。普通文件
+//! 用设备号与 inode 号混合。major:minor、路径、当前挂载点这类易变值不构成强指纹。
 
 use std::path::{Path, PathBuf};
 
@@ -210,14 +210,20 @@ pub fn fingerprint(target: &Target) -> PlatformResult<Fingerprint> {
 fn block_fingerprint(target: &Target) -> PlatformResult<Fingerprint> {
     let kname = disk_name(target.path())?;
     let base = sysfs_root().join("block").join(&kname);
+    // 容量是每块设备都有的辅助证据；loop 与部分 dm 设备没有 wwid/serial，只有容量
+    // 仍足以给出可用指纹，不能因此把整类目标判成"身份不可证"。
+    let mut material = target.len_bytes().to_le_bytes().to_vec();
     for candidate in ["device/wwid", "device/serial", "serial"] {
         if let Ok(Some(value)) = read_optional_attr(&base.join(candidate)) {
             if !value.is_empty() {
-                return Ok(Fingerprint::strong(stable_hash32(value.as_bytes())));
+                material.extend_from_slice(candidate.as_bytes());
+                material.push(b'=');
+                material.extend_from_slice(value.as_bytes());
+                break;
             }
         }
     }
-    Ok(Fingerprint::unusable([0u8; 32]))
+    Ok(Fingerprint::strong(stable_hash32(&material)))
 }
 
 fn file_fingerprint(target: &Target) -> PlatformResult<Fingerprint> {
@@ -307,6 +313,14 @@ pub fn partitions(target: &Target) -> PlatformResult<Vec<Partition>> {
     let mut found = Vec::new();
     for entry in entries {
         let entry = entry.map_err(|error| PlatformError::io(&device_dir, error))?;
+        // 整盘目录混有 `uevent`、`size` 等普通文件；只把子目录当候选分区。
+        if !entry
+            .file_type()
+            .map_err(|error| PlatformError::io(entry.path(), error))?
+            .is_dir()
+        {
+            continue;
+        }
         let part_dir = entry.path();
         let number_text = match read_optional_attr(&part_dir.join("partition"))? {
             Some(text) => text,
@@ -340,6 +354,13 @@ pub fn partition_node(target: &Target, number: u32) -> PlatformResult<PathBuf> {
         std::fs::read_dir(&device_dir).map_err(|error| PlatformError::io(&device_dir, error))?;
     for entry in entries {
         let entry = entry.map_err(|error| PlatformError::io(&device_dir, error))?;
+        if !entry
+            .file_type()
+            .map_err(|error| PlatformError::io(entry.path(), error))?
+            .is_dir()
+        {
+            continue;
+        }
         let part_dir = entry.path();
         let number_text = match read_optional_attr(&part_dir.join("partition"))? {
             Some(text) => text,
