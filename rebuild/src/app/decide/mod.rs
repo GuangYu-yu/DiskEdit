@@ -58,7 +58,11 @@ pub fn decide(request: &Request, snapshot: &Snapshot) -> Decision {
             label,
         } => mkfs::plan(snapshot, *partition, *filesystem, label.clone()),
         Command::Resize(request) => resize::plan(snapshot, request),
-        Command::Resizefs { partition, bytes } => resizefs::plan(snapshot, *partition, *bytes),
+        Command::Resizefs {
+            partition,
+            bytes,
+            mount,
+        } => resizefs::plan(snapshot, *partition, *bytes, *mount),
         Command::Move(request) => move_partition::plan(snapshot, request),
         Command::Recover(mode) => recover::plan(snapshot, *mode),
     };

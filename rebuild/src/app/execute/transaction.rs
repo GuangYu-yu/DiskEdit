@@ -288,9 +288,9 @@ fn run_external(
             Access::WritesExternalState => {
                 if let StepKind::RecoverRecords { mode } = &step.kind {
                     let mode = match mode {
-                        crate::app::observe::RecoverMode::Default
-                        | crate::app::observe::RecoverMode::ReplayTableOnly => {
-                            recovery::Mode::RollBack
+                        crate::app::observe::RecoverMode::Default => recovery::Mode::RollBack,
+                        crate::app::observe::RecoverMode::ReplayTableOnly => {
+                            recovery::Mode::ReplayTableOnly
                         }
                         crate::app::observe::RecoverMode::Release { .. } => recovery::Mode::Release,
                     };

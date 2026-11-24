@@ -351,8 +351,19 @@ fn build(
             if partition.is_some() && bytes.is_some() {
                 return Err("离线 resizefs 不接受尺寸参数：它把文件系统撑满所在分区".to_owned());
             }
+            // 挂载点形态反查的是宿主现场，逻辑扇区大小由内核给出，不由用户覆盖。
+            if partition.is_none() && sector_size.is_some() {
+                return Err("挂载点形态不接受 --sector-size：扇区大小取自内核".to_owned());
+            }
             finish(
-                Request::new(target, Command::Resizefs { partition, bytes }),
+                Request::new(
+                    target,
+                    Command::Resizefs {
+                        partition,
+                        bytes,
+                        mount: false,
+                    },
+                ),
                 false,
                 sector_size,
             )
@@ -436,10 +447,32 @@ fn build(
         other => return Err(format!("未知命令 {other}")),
     };
     invocation.yes = yes;
+    if let Some(raw) = value(flags, "--identity")? {
+        invocation.request = invocation
+            .request
+            .with_identity(Some(validate_identity(&raw)?));
+    }
     if spec.confirmation && !yes {
         return Err(format!("写命令 {} 需要 --yes", spec.name));
     }
     Ok(invocation)
+}
+
+/// `--identity` 的合法性：去空白后非空、不含控制字符、长度不超过 255 字节。
+///
+/// 名字会进入记录的命名空间与锁的键，控制字符或超长名字会污染落点。
+fn validate_identity(raw: &str) -> Result<String, String> {
+    let name = raw.trim();
+    if name.is_empty() {
+        return Err("--identity 需要一个非空名字".to_owned());
+    }
+    if name.chars().any(char::is_control) {
+        return Err("--identity 不能包含控制字符".to_owned());
+    }
+    if name.len() > 255 {
+        return Err("--identity 超过 255 字节".to_owned());
+    }
+    Ok(name.to_owned())
 }
 
 fn finish(mut request: Request, dry_run: bool, sector_size: Option<u64>) -> Invocation {

@@ -19,8 +19,10 @@ pub enum Arrange {
 pub enum Requirement {
     /// 普通文件即可。
     None,
-    /// 需要本仓库尚未提供的夹具；runner 回报 `NotApplicable`。
-    Fixture(&'static str),
+    /// 运行前把镜像挂到一个 loop 设备上，制造"目标在用"的现场；运行后释放。
+    LoopBacked,
+    /// 运行前在记录目录预置一份外来实现写下的记录。
+    ForeignRecord,
 }
 
 /// 一条用例。
@@ -212,7 +214,7 @@ pub const CASES: &[Case] = &[
         requirement: Requirement::None,
     },
     Case {
-        name: "resize of a mounted target is refused",
+        name: "resize of an occupied target is refused",
         image_bytes: 64 * 1024 * 1024,
         arrange: Arrange::GptWithPartition,
         argv: &["resize", "{image}:1", "32M", "--yes"],
@@ -220,7 +222,7 @@ pub const CASES: &[Case] = &[
         expected_stdout: &["占用"],
         expected_json_keys: &[],
         unchanged: true,
-        requirement: Requirement::Fixture("被挂载的 loop 设备"),
+        requirement: Requirement::LoopBacked,
     },
     Case {
         name: "add on a block device as a non-root user is unsupported",
@@ -228,10 +230,10 @@ pub const CASES: &[Case] = &[
         arrange: Arrange::Fresh,
         argv: &["add", "/dev/null", "16M", "--yes"],
         expected_code: 6,
-        expected_stdout: &["不支持"],
+        expected_stdout: &["块设备整盘"],
         expected_json_keys: &[],
         unchanged: false,
-        requirement: Requirement::Fixture("非 root 可打开的块设备"),
+        requirement: Requirement::None,
     },
     Case {
         name: "recover refuses a record written by another implementation",
@@ -242,6 +244,6 @@ pub const CASES: &[Case] = &[
         expected_stdout: &["记录"],
         expected_json_keys: &[],
         unchanged: true,
-        requirement: Requirement::Fixture("外来实现写下的记录"),
+        requirement: Requirement::ForeignRecord,
     },
 ];

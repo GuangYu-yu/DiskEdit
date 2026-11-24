@@ -36,6 +36,22 @@ impl Fingerprint {
         }
     }
 
+    /// 由用户声明的名字派生指纹。
+    ///
+    /// 这是命名空间的键，不是设备事实：同一名字在两次调用之间稳定地指同一目标，
+    /// 换个名字就找不到原有记录——与「同一载体必须用同一个名字续跑」的契约一致。
+    /// 只用于自动身份不可得的目标；能被设备自身稳定识别的目标不使用它。
+    pub fn declared(name: &str) -> Self {
+        // 32 字节由四个不同种子的 FNV-1a 展开；算法固定、跨版本稳定，仅供相等比较。
+        let mut bytes = [0u8; 32];
+        for (index, chunk) in bytes.chunks_mut(8).enumerate() {
+            let seed = 0xcbf2_9ce4_8422_2325u64
+                .wrapping_add((index as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15));
+            chunk.copy_from_slice(&fnv1a64_seeded(name.as_bytes(), seed).to_le_bytes());
+        }
+        Self::strong(bytes)
+    }
+
     pub const fn strength(self) -> Strength {
         self.strength
     }
@@ -50,6 +66,16 @@ impl Fingerprint {
             && other.strength == Strength::Strong
             && self.bytes == other.bytes
     }
+}
+
+/// 带种子的 FNV-1a 64，用于把声明名稳定展开成指纹字节。
+fn fnv1a64_seeded(bytes: &[u8], seed: u64) -> u64 {
+    let mut hash = seed;
+    for &byte in bytes {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
 }
 
 #[cfg(test)]
@@ -76,5 +102,15 @@ mod tests {
         assert_eq!(strong.bytes(), bytes);
         assert_eq!(strong.strength(), Strength::Strong);
         assert_eq!(Fingerprint::unusable(bytes).strength(), Strength::Unusable);
+    }
+
+    #[test]
+    fn declared_names_are_stable_and_distinct() {
+        let first = Fingerprint::declared("export-a");
+        let again = Fingerprint::declared("export-a");
+        assert_eq!(first, again);
+        assert!(first.matches(again));
+        assert!(!first.matches(Fingerprint::declared("export-b")));
+        assert_ne!(first.bytes(), [0u8; 32], "展开结果不能退化成全零");
     }
 }

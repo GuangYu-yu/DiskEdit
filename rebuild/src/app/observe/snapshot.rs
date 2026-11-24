@@ -91,7 +91,7 @@ pub fn observe(request: &Request, platform: &dyn Platform) -> Snapshot {
             tools: tools::observe(platform, generation),
         };
     };
-    let identity = identity::observe(platform, target, generation);
+    let identity = identity::observe(platform, target, generation, request.identity());
     let (mut disk, handle) = disk::observe(platform, target, generation);
     if let Some(sector) = request.sector_size() {
         disk.sector_size = Observation::known(

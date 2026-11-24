@@ -378,6 +378,16 @@ impl MountEntry {
     }
 }
 
+/// 一个挂载点所在的整盘目标与分区号。
+///
+/// `resizefs` 的挂载点形态需要把「用户给的目录」反查成「承载它的整盘」与
+/// 「分区号」；上层据此按同一套分区目标观察与判定，不把挂载点当作可写目标。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MountLocation {
+    pub target: PathBuf,
+    pub partition: u32,
+}
+
 /// 一个已启用的交换区。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SwapEntry {
@@ -589,6 +599,14 @@ pub trait Platform {
         options: &[&str],
     ) -> PlatformResult<()>;
     fn umount(&self, mount_point: &Path) -> PlatformResult<()>;
+    /// 把挂载点反查成承载它的整盘目标与分区号。
+    ///
+    /// 只接受落在某个分区上的挂载点；整盘挂载、LVM/dm 挂载或未挂载的目录都
+    /// 返回错误，上层据此拒绝挂载点形态，不猜一个目标。
+    fn mount_location(&self, mount_point: &Path) -> PlatformResult<MountLocation> {
+        let _ = mount_point;
+        Err(PlatformError::not_supported("该宿主不提供挂载点反查"))
+    }
     fn require(&self, program: Program) -> PlatformResult<PathBuf>;
     fn run(&self, program: Program, args: &[&str]) -> PlatformResult<Output>;
     /// 取得分区对应的设备视图。

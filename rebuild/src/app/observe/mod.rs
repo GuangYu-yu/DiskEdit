@@ -62,6 +62,7 @@ impl TargetSpec {
 pub struct Request {
     target: Option<TargetSpec>,
     sector_size: Option<u64>,
+    identity: Option<String>,
     command: Command,
 }
 
@@ -70,6 +71,7 @@ impl Request {
         Self {
             target: Some(target),
             sector_size: None,
+            identity: None,
             command,
         }
     }
@@ -79,6 +81,7 @@ impl Request {
         Self {
             target: None,
             sector_size: None,
+            identity: None,
             command,
         }
     }
@@ -87,6 +90,28 @@ impl Request {
     pub fn with_sector_size(mut self, sector_size: Option<u64>) -> Self {
         self.sector_size = sector_size;
         self
+    }
+
+    /// 替换目标：挂载点形态在平台反查后改写为整盘目标加分区选择器。
+    pub fn with_target(mut self, target: TargetSpec) -> Self {
+        self.target = Some(target);
+        self
+    }
+
+    /// 替换命令：与 [`Request::with_target`] 在同一处改写，保持二者一致。
+    pub fn with_command(mut self, command: Command) -> Self {
+        self.command = command;
+        self
+    }
+
+    /// 用户声明的身份名（`--identity`）：仅用于自动身份不可得的目标。
+    pub fn with_identity(mut self, identity: Option<String>) -> Self {
+        self.identity = identity;
+        self
+    }
+
+    pub fn identity(&self) -> Option<&str> {
+        self.identity.as_deref()
     }
 
     pub fn sector_size(&self) -> Option<u64> {
@@ -137,6 +162,8 @@ pub enum Command {
     Resizefs {
         partition: Option<PartitionSelector>,
         bytes: Option<u64>,
+        /// 由挂载点反查得到；离线形态为 `false`。
+        mount: bool,
     },
     Recover(RecoverMode),
     New {

@@ -14,5 +14,6 @@
 | D8 | 不因几何变化改写用户已有的分区类型 GUID | 类型 GUID 是用户数据 | 确认基线确实改写且外部依赖该改写 | `tests/equivalence.rs` 的 "D8: the partition type GUID survives a resize" |
 | D9 | 只读命令统一输出本实现的结构化 JSON；字段集与 `inspect`/`check` 的输出形态不逐字复刻基线 | 基线实际只有 `info` 与 `records *` 输出 JSON，`inspect`/`check` 输出人读文本且无 `--json`；人读文本不是契约，结构化事实由用例表与独立 oracle 覆盖 | 出现依赖基线文本措辞或基线 JSON 字段名的外部契约 | `tests/equivalence.rs` 的结构化投影对照、`tests/case_runner.rs` |
 | D10 | 本期只交付 Linux 后端；Windows/macOS 宿主的表编辑与文件系统操作返回 `NotSupported`（退出码 `6`） | `01` §7.4 排除非 Linux 后端；端口形状已留出，补齐时只加子树 | Windows/macOS 上的等价表编辑成为交付条件 | `src/platform/mod.rs` 的 `unsupported_platform!` 与按平台能力表生成物（`tests/generated_docs.rs`） |
+| D11 | `resizefs <挂载点>` 在平台反查成功后仍要求分区空闲；已挂载分区的在线扩容会被准入以 `Occupied` 拒绝 | 执行走的是离线事务（整盘租约、原像登记、`e2fsck -fp` 前置修复），这套前提与已挂载文件系统互斥；先接入反查端口，把"不做在线写入"作为显式边界而非静默降级 | 在线执行路径落地（跳过整盘租约与原像登记，直接对已挂载文件系统扩容）后撤回 | `src/platform/linux/mount_location.rs` 的反查用例、`tests/case_runner.rs` 的"占用目标被拒绝"用例 |
 
 条目与 `plan/01-目标与边界.md` 第 5 节一一对应。新增差异必须先改 `01` 再改本表。
