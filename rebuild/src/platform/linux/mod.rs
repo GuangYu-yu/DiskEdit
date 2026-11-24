@@ -4,6 +4,7 @@
 //! 上层只看见 [`crate::platform`] 里的中立类型与端口 trait。
 
 pub mod carrier;
+pub mod console;
 pub mod dm;
 mod fs_size;
 pub mod kernel;
@@ -77,8 +78,16 @@ impl Platform for Linux {
             Ok(output) if output.succeeded() => return Ok(()),
             _ => {}
         }
-        // 兜底：按盘上表逐分区 `BLKPG` 补建；读不到表时如实失败。
+        // 没有 `partx` 时先请内核整体重读：它能同时处理新增与改写过的分区。
+        // 普通文件没有内核分区视图，重读失败在这里没有意义，下面按空集合放行。
         let partitions = self.partitions(path)?;
+        if partitions.is_empty() {
+            return Ok(());
+        }
+        if kernel::reread(path).is_ok() {
+            return Ok(());
+        }
+        // 仍有分区在用，整盘重读被拒；只能按盘上表逐分区补建。
         let ranges: Vec<(u32, u64, u64)> = partitions
             .iter()
             .map(|partition| {
@@ -344,13 +353,25 @@ impl Platform for Linux {
         })
     }
 
-    fn filesystem_ready(&self) -> bool {
-        // 分区设备视图与块设备写入都要求特权；非特权宿主改走虚拟机载体。
-        unsafe { libc::geteuid() == 0 }
+    fn filesystem_ready(&self, kind: crate::platform::TargetKind) -> bool {
+        if unsafe { libc::geteuid() != 0 } {
+            return false;
+        }
+        match kind {
+            // 普通文件经 loop 得到分区设备视图，不需要额外能力。
+            crate::platform::TargetKind::File => true,
+            // 块设备的分区节点与内核重读（partx/BLKPG/BLKRRPART）要求
+            // CAP_SYS_ADMIN；容器里常见 root 但能力被裁剪，此时改走虚拟机载体。
+            crate::platform::TargetKind::Block => has_cap_sys_admin(),
+        }
     }
 
     fn carrier_available(&self) -> bool {
         true
+    }
+
+    fn prepare_protocol_input(&self) -> Result<()> {
+        console::raw_stdin()
     }
 
     fn carrier_target(&self) -> Option<&'static str> {
@@ -453,6 +474,21 @@ pub fn sysfs_root() -> PathBuf {
 /// procfs 根目录。
 pub fn proc_root() -> PathBuf {
     root_from_env("DISKEDIT_PROC_ROOT", "/proc")
+}
+
+/// 当前进程是否持有 `CAP_SYS_ADMIN`（有效集）。
+fn has_cap_sys_admin() -> bool {
+    let Ok(status) = std::fs::read_to_string(proc_root().join("self/status")) else {
+        return false;
+    };
+    let Some(value) = status
+        .lines()
+        .find_map(|line| line.strip_prefix("CapEff:"))
+        .and_then(|text| u64::from_str_radix(text.trim(), 16).ok())
+    else {
+        return false;
+    };
+    value & (1 << 21) != 0
 }
 
 fn root_from_env(name: &str, fallback: &str) -> PathBuf {

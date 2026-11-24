@@ -20,7 +20,11 @@ pub enum Placement {
 }
 
 /// 决定放置。
-pub fn decide(platform: &dyn Platform, steps: &[Step]) -> Result<Placement, ExecError> {
+pub fn decide(
+    platform: &dyn Platform,
+    kind: crate::platform::TargetKind,
+    steps: &[Step],
+) -> Result<Placement, ExecError> {
     let mut required: Vec<Program> = Vec::new();
     let mut filesystem = false;
     for step in steps {
@@ -43,7 +47,7 @@ pub fn decide(platform: &dyn Platform, steps: &[Step]) -> Result<Placement, Exec
         return Ok(Placement::Native);
     }
 
-    let ready = platform.filesystem_ready();
+    let ready = platform.filesystem_ready(kind);
     let missing: Vec<Program> = required
         .iter()
         .copied()

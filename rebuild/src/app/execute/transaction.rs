@@ -149,7 +149,7 @@ pub fn run(
     };
     // 放置一次决定，步骤之间不变；会话在写入任何字节之前建立，启动失败仍然是
     // 写前失败。
-    let location = match placement::decide(platform, confirmed.steps()) {
+    let location = match placement::decide(platform, handle.kind(), confirmed.steps()) {
         Ok(location) => location,
         Err(error) => return classify_unwritten(error),
     };
@@ -189,8 +189,22 @@ pub fn run(
             Access::ReadOnly => continue,
             Access::WritesExternalState => {
                 if let StepKind::RefreshKernelView = step.kind {
-                    if let Err(error) = platform.update_table(path) {
-                        let reason = platform_text(&error);
+                    // 内核视图属于目标所在的那一内核：载体接手时必须在来宾里刷新，
+                    // 宿主看不到来宾的分区设备。
+                    let refreshed = match session.as_mut() {
+                        Some(session) => session.run_step(&step.kind, &[]).and_then(|result| {
+                            match result.applied {
+                                true => Ok(()),
+                                false => Err(result
+                                    .cause
+                                    .unwrap_or_else(|| "来宾没有给出刷新失败的原因".to_owned())),
+                            }
+                        }),
+                        None => platform
+                            .update_table(path)
+                            .map_err(|error| platform_text(&error)),
+                    };
+                    if let Err(reason) = refreshed {
                         if wrote_any {
                             if let Err(commit_error) =
                                 finish_terminal(&mut *store, &body, &mut frames)

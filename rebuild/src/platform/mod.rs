@@ -663,16 +663,23 @@ pub trait Platform {
         let _ = point;
         Err(PlatformError::not_supported("该宿主不提供临时挂载点"))
     }
-    /// 宿主能否直接运行文件系统工具。
+    /// 宿主能否直接对这类目标运行文件系统工具。
     ///
-    /// 建卷、扩缩、改标签等步骤要经分区设备视图操作块设备；不满足该条件的
-    /// 宿主应改由虚拟机载体执行同一批步骤。
-    fn filesystem_ready(&self) -> bool {
+    /// 普通文件目标只需要 loop 设备，块设备目标还要求分区设备视图与内核重读
+    /// 的能力；不满足的宿主应改由虚拟机载体执行同一批步骤。
+    fn filesystem_ready(&self, _kind: TargetKind) -> bool {
         false
     }
     /// 宿主是否提供虚拟机载体。
     fn carrier_available(&self) -> bool {
         false
+    }
+    /// 把承载协议的标准输入切到原始模式。
+    ///
+    /// 来宾经串口工作时，终端行规程默认回显输入；回显与协议帧混在同一条串口上
+    /// 回到宿主，会被当成来宾回复。不提供该能力的宿主保持原样。
+    fn prepare_protocol_input(&self) -> PlatformResult<()> {
+        Ok(())
     }
     /// 来宾看到的整盘设备路径；没有载体时为 `None`。
     fn carrier_target(&self) -> Option<&'static str> {

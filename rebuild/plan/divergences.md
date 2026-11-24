@@ -15,5 +15,7 @@
 | D9 | 只读命令统一输出本实现的结构化 JSON；字段集与 `inspect`/`check` 的输出形态不逐字复刻基线 | 基线实际只有 `info` 与 `records *` 输出 JSON，`inspect`/`check` 输出人读文本且无 `--json`；人读文本不是契约，结构化事实由用例表与独立 oracle 覆盖 | 出现依赖基线文本措辞或基线 JSON 字段名的外部契约 | `tests/equivalence.rs` 的结构化投影对照、`tests/case_runner.rs` |
 | D10 | 本期只交付 Linux 后端；Windows/macOS 宿主的表编辑与文件系统操作返回 `NotSupported`（退出码 `6`） | `01` §7.4 排除非 Linux 后端；端口形状已留出，补齐时只加子树 | Windows/macOS 上的等价表编辑成为交付条件 | `src/platform/mod.rs` 的 `unsupported_platform!` 与按平台能力表生成物（`tests/generated_docs.rs`） |
 | D11 | `resizefs <挂载点>` 在平台反查成功后仍要求分区空闲；已挂载分区的在线扩容会被准入以 `Occupied` 拒绝 | 执行走的是离线事务（整盘租约、原像登记、`e2fsck -fp` 前置修复），这套前提与已挂载文件系统互斥；先接入反查端口，把"不做在线写入"作为显式边界而非静默降级 | 在线执行路径落地（跳过整盘租约与原像登记，直接对已挂载文件系统扩容）后撤回 | `src/platform/linux/mount_location.rs` 的反查用例、`tests/case_runner.rs` 的"占用目标被拒绝"用例 |
+| D12 | 块设备目标在缺少 `CAP_SYS_ADMIN` 的宿主上改由虚拟机载体执行；无可用载体时以 `6` 拒绝，而不是照常尝试并得到内核 `EPERM` | 分区设备视图与内核重读在裁剪过能力的容器里被禁用，照常执行只会得到写前失败；普通文件目标经 loop 得到分区视图，不受该能力限制，仍在宿主直接执行 | 宿主能力探测改为逐项验证 loop/BLKPG/BLKRRPART，且不再依赖 euid 与 `CapEff` | `src/platform/linux/mod.rs::filesystem_ready`、`tests/case_runner.rs` 的块设备用例 |
+| D13 | 退出码 `5` 的人读输出在三要素之后追加一句具体原因 | 原因原先在报告层被丢弃，用户拿不到排障线索；三要素文本本身不变 | 输出体积或逐字稳定性成为对外契约 | `src/app/report/text.rs` 的 `recovery_text_keeps_the_three_elements_and_adds_the_cause` |
 
 条目与 `plan/01-目标与边界.md` 第 5 节一一对应。新增差异必须先改 `01` 再改本表。

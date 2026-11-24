@@ -9,6 +9,7 @@ use std::io::{IsTerminal, stdin, stdout};
 use serde_json::Value;
 
 use super::protocol::{self, Lines, StepResult};
+use crate::app::decide::step::StepKind;
 use crate::app::execute::{self, ExecError};
 use crate::platform::{self, PlatformError, TargetHandle};
 
@@ -44,6 +45,11 @@ pub fn run() -> u8 {
     };
     let mut input = Lines::new(stdin());
     let mut output = stdout();
+
+    if let Err(error) = platform.prepare_protocol_input() {
+        eprintln!("准备协议通道失败：{error}");
+        return 3;
+    }
 
     if protocol::emit(&mut output, &protocol::boot()).is_err() {
         return 5;
@@ -145,14 +151,25 @@ pub fn run() -> u8 {
                             plan_digest: &plan_digest,
                             sector,
                         };
-                        match execute::apply_delegated(
-                            &*platform,
-                            std::path::Path::new(target),
-                            &mut *handle,
-                            &kind,
-                            &regions,
-                            &ctx,
-                        ) {
+                        // 内核视图只能由持有目标的那一内核刷新；该步骤不写字节，
+                        // 不进普通步骤闸口。
+                        let outcome = if matches!(kind, StepKind::RefreshKernelView) {
+                            platform
+                                .update_table(std::path::Path::new(target))
+                                .map_err(|error| {
+                                    ExecError::Postcondition(format!("刷新内核视图失败：{error}"))
+                                })
+                        } else {
+                            execute::apply_delegated(
+                                &*platform,
+                                std::path::Path::new(target),
+                                &mut *handle,
+                                &kind,
+                                &regions,
+                                &ctx,
+                            )
+                        };
+                        match outcome {
                             Ok(()) => StepResult {
                                 applied: true,
                                 class: None,

@@ -343,12 +343,14 @@ fn encode_kind(kind: &StepKind) -> Result<Value, String> {
             "chunk": chunk,
             "ntfs_hidden": ntfs_hidden,
         }),
+        StepKind::RefreshKernelView => json!({
+            "kind": "refresh-kernel-view",
+        }),
         StepKind::Inspect
         | StepKind::Check { .. }
         | StepKind::ListRecords
         | StepKind::VerifyRecord { .. }
         | StepKind::ScanRecords
-        | StepKind::RefreshKernelView
         | StepKind::RecoverRecords { .. } => {
             return Err("该步骤不写目标字节，不进载体协议".to_owned());
         }
@@ -417,6 +419,7 @@ fn decode_kind(frame: &Value) -> Result<StepKind, String> {
             chunk: number_u64(frame, "chunk")?,
             ntfs_hidden: boolean(frame, "ntfs_hidden")?,
         },
+        "refresh-kernel-view" => StepKind::RefreshKernelView,
         other => return Err(format!("未知的步骤 {other}")),
     };
     Ok(decoded)
@@ -623,6 +626,11 @@ mod tests {
     #[test]
     fn read_only_steps_do_not_enter_the_protocol() {
         assert!(step(1, "sid", &StepKind::Inspect, &[]).is_err());
+    }
+
+    #[test]
+    fn kernel_view_refresh_roundtrips() {
+        roundtrip(StepKind::RefreshKernelView);
     }
 
     #[test]
