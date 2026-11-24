@@ -11,7 +11,7 @@ pub mod kernel;
 pub mod loopdev;
 pub mod lvm;
 pub mod mount;
-pub mod mount_location;
+pub mod mount_facts;
 pub mod occupancy;
 pub mod records;
 pub mod source;
@@ -308,8 +308,12 @@ impl Platform for Linux {
         }
     }
 
-    fn mount_location(&self, mount_point: &Path) -> PlatformResult<crate::platform::MountLocation> {
-        mount_location::resolve(mount_point)
+    fn mount_facts(&self, path: &Path) -> PlatformResult<crate::platform::MountFacts> {
+        mount_facts::resolve(self, path)
+    }
+
+    fn swap_active(&self, device: &Path) -> PlatformResult<bool> {
+        mount_facts::swap_active(device)
     }
 
     fn require(&self, program: Program) -> PlatformResult<PathBuf> {

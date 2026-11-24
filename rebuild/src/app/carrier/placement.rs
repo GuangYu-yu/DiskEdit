@@ -116,6 +116,7 @@ fn requirement(kind: &StepKind) -> Option<(ContentKind, catalog::Verb)> {
         | StepKind::SetProperty { .. }
         | StepKind::CopyPartition { .. }
         | StepKind::MovePartition { .. }
+        | StepKind::GrowFilesystemOnline { .. }
         | StepKind::RefreshKernelView
         | StepKind::RecoverRecords { .. }
         | StepKind::Inspect

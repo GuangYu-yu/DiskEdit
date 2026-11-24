@@ -374,6 +374,8 @@ pub struct MountEntry {
     pub major: u32,
     pub minor: u32,
     pub mount_point: PathBuf,
+    pub fstype: String,
+    pub source: PathBuf,
 }
 
 impl MountEntry {
@@ -382,14 +384,39 @@ impl MountEntry {
     }
 }
 
-/// 一个挂载点所在的整盘目标与分区号。
+/// 挂载设备是分区时的分区事实。
 ///
-/// `resizefs` 的挂载点形态需要把「用户给的目录」反查成「承载它的整盘」与
-/// 「分区号」；上层据此按同一套分区目标观察与判定，不把挂载点当作可写目标。
+/// `disk` 是所属整盘的目标路径，`number` 是分区号，`sectors` 是内核视图报告的
+/// 分区长度（512 字节扇区）。内核视图与盘上表可能不同步，消费方据此发现过期。
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct MountLocation {
-    pub target: PathBuf,
-    pub partition: u32,
+pub struct PartitionRef {
+    pub disk: PathBuf,
+    pub number: u32,
+    pub sectors: u64,
+}
+
+/// 一个目录的挂载事实。
+///
+/// 平台只回答"这个目录以什么身份存在"：它是某个设备的挂载点时给出承载设备与
+/// （若设备是分区）分区事实；没有挂载记录或同一挂载点有多条记录时如实区分。
+/// 把挂载点当成可写目标、或替用户猜一个设备，都不属于这个端口的职责。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MountFacts {
+    /// 目录是一个挂载点，`device` 是承载它的设备节点。
+    Mounted {
+        device: PathBuf,
+        partition: Option<PartitionRef>,
+    },
+    /// 目录存在，但不是挂载点。
+    NotMounted,
+    /// 同一路径有多条挂载记录，无法确定生效层。
+    Ambiguous,
+    /// 挂载源不是块设备（多设备或 bind 挂载），没有唯一的块设备目标。
+    NotBlockDevice { source: PathBuf },
+    /// 挂载设备存在，但不是分区（整盘、LVM 或 dm）。
+    NotPartition { device: PathBuf },
+    /// 无法把挂载映射到单一块设备（例如跨设备的 btrfs）。
+    Unmapped { reason: String },
 }
 
 /// 一个已启用的交换区。
@@ -603,14 +630,21 @@ pub trait Platform {
         options: &[&str],
     ) -> PlatformResult<()>;
     fn umount(&self, mount_point: &Path) -> PlatformResult<()>;
-    /// 把挂载点反查成承载它的整盘目标与分区号。
+    /// 把目录反查成挂载事实：承载设备、分区事实与挂载状态。
     ///
-    /// 只接受落在某个分区上的挂载点；整盘挂载、LVM/dm 挂载或未挂载的目录都
-    /// 返回错误，上层据此拒绝挂载点形态，不猜一个目标。
-    fn mount_location(&self, mount_point: &Path) -> PlatformResult<MountLocation> {
-        let _ = mount_point;
+    /// 未挂载与多重挂载是事实，不是错误；只有读取挂载表失败或目录不存在才返回
+    /// 平台错误。上层据此决定拒绝还是继续，不在这里猜一个设备。
+    fn mount_facts(&self, path: &Path) -> PlatformResult<MountFacts> {
+        let _ = path;
         Err(PlatformError::not_supported(
             "this host does not resolve mount points",
+        ))
+    }
+    /// 给定设备是否为活动交换区。
+    fn swap_active(&self, device: &Path) -> PlatformResult<bool> {
+        let _ = device;
+        Err(PlatformError::not_supported(
+            "this host does not report active swap areas",
         ))
     }
     fn require(&self, program: Program) -> PlatformResult<PathBuf>;

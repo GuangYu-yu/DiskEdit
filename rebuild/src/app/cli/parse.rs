@@ -356,14 +356,7 @@ fn build(
                 return Err("mount-point form does not take --sector-size: the sector size comes from the kernel".to_owned());
             }
             finish(
-                Request::new(
-                    target,
-                    Command::Resizefs {
-                        partition,
-                        bytes,
-                        mount: false,
-                    },
-                ),
+                Request::new(target, Command::Resizefs { partition, bytes }),
                 false,
                 sector_size,
             )

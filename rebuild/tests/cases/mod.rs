@@ -214,6 +214,17 @@ pub const CASES: &[Case] = &[
         requirement: Requirement::None,
     },
     Case {
+        name: "resizefs on a path that is not a mount point is refused",
+        image_bytes: 64 * 1024 * 1024,
+        arrange: Arrange::GptWithPartition,
+        argv: &["resizefs", "{image}", "--yes"],
+        expected_code: 3,
+        expected_stdout: &["request refused"],
+        expected_json_keys: &[],
+        unchanged: true,
+        requirement: Requirement::None,
+    },
+    Case {
         name: "resize of an occupied target is refused",
         image_bytes: 64 * 1024 * 1024,
         arrange: Arrange::GptWithPartition,

@@ -69,6 +69,40 @@ pub enum ShrinkScope {
     SingleDeviceOnly,
 }
 
+/// 在已有挂载上扩容文件系统的方式。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OnlineGrow {
+    /// 程序以分区设备为参数。
+    Device(Program),
+    /// 程序以挂载点为参数。
+    MountPoint(Program),
+    /// 该内容没有在线扩容方式，理由随变体携带。
+    Unsupported(&'static str),
+}
+
+impl OnlineGrow {
+    /// 需要的程序；不支持时为 `None`。
+    pub const fn program(self) -> Option<Program> {
+        match self {
+            Self::Device(program) | Self::MountPoint(program) => Some(program),
+            Self::Unsupported(_) => None,
+        }
+    }
+
+    /// 不支持的原因；支持时为 `None`。
+    pub const fn reason(self) -> Option<&'static str> {
+        match self {
+            Self::Unsupported(why) => Some(why),
+            Self::Device(_) | Self::MountPoint(_) => None,
+        }
+    }
+
+    /// 程序是否需要挂载点而不是设备节点。
+    pub const fn takes_mount_point(self) -> bool {
+        matches!(self, Self::MountPoint(_))
+    }
+}
+
 /// 一类内容的能力档案。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Profile {
@@ -249,6 +283,40 @@ pub const fn profile(kind: ContentKind) -> Profile {
     }
 }
 
+/// 一类内容的在线扩容方式。匹配穷尽，新增 [`ContentKind`] 分量必须在此给出结论。
+pub const fn online_grow(kind: ContentKind) -> OnlineGrow {
+    match kind {
+        ContentKind::Filesystem(FsKind::Ext) => OnlineGrow::Device(Program::Resize2fs),
+        ContentKind::Filesystem(FsKind::Xfs) => OnlineGrow::MountPoint(Program::XfsGrowfs),
+        ContentKind::Filesystem(FsKind::Btrfs) => OnlineGrow::MountPoint(Program::Btrfs),
+        ContentKind::Filesystem(
+            FsKind::Squashfs
+            | FsKind::Erofs
+            | FsKind::F2fs
+            | FsKind::Exfat
+            | FsKind::Vfat
+            | FsKind::Ntfs
+            | FsKind::HfsPlus
+            | FsKind::Apfs
+            | FsKind::Bcachefs
+            | FsKind::Jfs
+            | FsKind::Reiserfs
+            | FsKind::Udf,
+        ) => OnlineGrow::Unsupported(
+            "this filesystem has no online grow tool; unmount and grow it through a target form",
+        ),
+        ContentKind::Swap => {
+            OnlineGrow::Unsupported("swap has no online grow; rebuild it at the target size")
+        }
+        ContentKind::Lvm2Pv => OnlineGrow::Unsupported(
+            "LVM2 PVs are grown by the physical-volume path, not by a mounted-filesystem resize",
+        ),
+        ContentKind::Luks => OnlineGrow::Unsupported(LUKS_GROW),
+        ContentKind::BitLocker => OnlineGrow::Unsupported(BITLOCKER),
+        ContentKind::Unknown => OnlineGrow::Unsupported(UNRECOGNIZED),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -362,6 +430,29 @@ mod tests {
             ] {
                 assert!(!row.support(verb).is_supported(), "{kind:?} {verb:?}");
             }
+        }
+    }
+
+    #[test]
+    fn only_the_mountable_families_grow_online() {
+        assert_eq!(
+            online_grow(ContentKind::Filesystem(FsKind::Ext)),
+            OnlineGrow::Device(Program::Resize2fs)
+        );
+        assert_eq!(
+            online_grow(ContentKind::Filesystem(FsKind::Xfs)),
+            OnlineGrow::MountPoint(Program::XfsGrowfs)
+        );
+        assert_eq!(
+            online_grow(ContentKind::Filesystem(FsKind::Btrfs)),
+            OnlineGrow::MountPoint(Program::Btrfs)
+        );
+        for kind in [
+            ContentKind::Filesystem(FsKind::Ntfs),
+            ContentKind::Swap,
+            ContentKind::Unknown,
+        ] {
+            assert!(online_grow(kind).program().is_none(), "{kind:?}");
         }
     }
 

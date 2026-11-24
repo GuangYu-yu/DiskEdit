@@ -28,6 +28,18 @@ pub enum Refusal {
     GeometryUnknown { why: String },
     /// 目标上没有可用分区表。
     TableMissing,
+    /// 挂载点形态的目录不是挂载点。
+    MountNotMounted { path: String },
+    /// 同一路径有多条挂载记录，无法确定生效层。
+    MountAmbiguous { path: String },
+    /// 挂载设备存在，但不是分区。
+    MountNotPartition { device: String },
+    /// 挂载源不是块设备（多设备或 bind 挂载）。
+    MountNotBlockDevice { source: String },
+    /// 无法把挂载映射到单一块设备。
+    MountUnmapped { reason: String },
+    /// 在线形态只扩容，不收窄文件系统。
+    OnlineShrink { why: String },
     /// 分区表损坏。
     TableDamaged { why: String },
     /// 指定的分区不存在。
@@ -85,6 +97,21 @@ impl Refusal {
             }
             Self::TableMissing => {
                 "create a partition table first, or point the command at a target that already has one"
+            }
+            Self::MountNotMounted { .. } => {
+                "pass the mount point of a mounted partition, or use the :N partition form"
+            }
+            Self::MountAmbiguous { .. } => {
+                "unmount the stacked layers so the mount point has a single filesystem, then retry"
+            }
+            Self::MountNotPartition { .. } => {
+                "use the :N form for a whole-disk or logical-volume target"
+            }
+            Self::MountNotBlockDevice { .. } | Self::MountUnmapped { .. } => {
+                "use a single-device filesystem, or use the :N partition form"
+            }
+            Self::OnlineShrink { .. } => {
+                "use resize to shrink the partition and filesystem together"
             }
             Self::TableDamaged { .. } => {
                 "inspect the evidence with read-only commands first, and recover from a backup copy if necessary"

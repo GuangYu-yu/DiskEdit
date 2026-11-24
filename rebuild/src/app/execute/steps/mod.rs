@@ -78,6 +78,9 @@ pub fn precheck(kind: &StepKind, ctx: &Context<'_>) -> Result<(), ExecError> {
         | StepKind::MakeFilesystem { .. }
         | StepKind::GrowFilesystem { .. }
         | StepKind::ShrinkFilesystem { .. } => Ok(()),
+        StepKind::GrowFilesystemOnline { .. } => Err(ExecError::InvalidPlan(
+            "online filesystem steps are executed by the online path".to_owned(),
+        )),
         StepKind::Inspect
         | StepKind::Check { .. }
         | StepKind::ListRecords
@@ -141,6 +144,9 @@ pub fn apply(
         | StepKind::ShrinkFilesystem { .. } => {
             filesystem::apply(kind, regions, channel, token, ctx, host)
         }
+        StepKind::GrowFilesystemOnline { .. } => Err(ExecError::InvalidPlan(
+            "online filesystem steps are executed by the online path".to_owned(),
+        )),
         StepKind::Inspect
         | StepKind::Check { .. }
         | StepKind::ListRecords

@@ -106,6 +106,9 @@ pub fn apply(
                 verify_attr(host, channel, device, *property, value)
             })
         }
+        StepKind::GrowFilesystemOnline { .. } => Err(ExecError::InvalidPlan(
+            "online filesystem steps are executed by the online path".to_owned(),
+        )),
         StepKind::Inspect
         | StepKind::Check { .. }
         | StepKind::ListRecords
@@ -387,7 +390,7 @@ fn verify_size(
 /// 外部工具按自己的放置单元取整，末段装不下一个完整单元时会整段留空；因此
 /// 判据是"末端落在最后一个单元内"（`bytes <= 末端 < bytes + unit`），而不是
 /// 字节相等。ext 在 1.47.x 上会把 900 MiB 卷止于 896 MiB，就是这个形态。
-fn reaches_end(bytes: u64, unit: u64, limit: u64) -> bool {
+pub(crate) fn reaches_end(bytes: u64, unit: u64, limit: u64) -> bool {
     bytes <= limit
         && bytes
             .checked_add(unit.max(1))

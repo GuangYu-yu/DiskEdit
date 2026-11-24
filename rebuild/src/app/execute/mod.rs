@@ -188,6 +188,9 @@ pub fn execute(
     target: &Path,
     generation: u64,
 ) -> Outcome {
+    if online::flow::step(confirmed).is_some() {
+        return online::flow::run(confirmed, platform, Faults::NONE);
+    }
     transaction::run(confirmed, platform, target, generation, Faults::NONE)
 }
 
@@ -199,6 +202,9 @@ pub fn execute_with_faults(
     generation: u64,
     faults: Faults,
 ) -> Outcome {
+    if online::flow::step(confirmed).is_some() {
+        return online::flow::run(confirmed, platform, faults);
+    }
     transaction::run(confirmed, platform, target, generation, faults)
 }
 

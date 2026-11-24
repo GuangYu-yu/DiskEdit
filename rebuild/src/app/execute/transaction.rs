@@ -594,6 +594,7 @@ fn intent_of(kind: &StepKind) -> &'static str {
         StepKind::SetProperty { .. } => "set-property",
         StepKind::MakeFilesystem { .. } => "make-filesystem",
         StepKind::GrowFilesystem { .. } => "grow-filesystem",
+        StepKind::GrowFilesystemOnline { .. } => "grow-filesystem-online",
         StepKind::ShrinkFilesystem { .. } => "shrink-filesystem",
         StepKind::CopyPartition { .. } => "copy-partition",
         StepKind::MovePartition { .. } => "move-partition",

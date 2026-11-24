@@ -48,13 +48,19 @@ pub fn exit_of_refusal(refusal: &Refusal) -> u8 {
         | Refusal::GeometryUnknown { .. }
         | Refusal::ContentUnsupported { .. }
         | Refusal::ToolMissing { .. }
-        | Refusal::PlatformCannotRunTools { .. } => UNSUPPORTED,
+        | Refusal::PlatformCannotRunTools { .. }
+        | Refusal::MountNotBlockDevice { .. }
+        | Refusal::MountUnmapped { .. } => UNSUPPORTED,
         Refusal::IdentityChanged
         | Refusal::OccupancyUnknown { .. }
         | Refusal::Occupied { .. }
         | Refusal::FactUnknown { .. }
         | Refusal::TableMissing
         | Refusal::TableDamaged { .. }
+        | Refusal::MountNotMounted { .. }
+        | Refusal::MountAmbiguous { .. }
+        | Refusal::MountNotPartition { .. }
+        | Refusal::OnlineShrink { .. }
         | Refusal::PartitionMissing { .. }
         | Refusal::PartitionOverlap { .. }
         | Refusal::CapacityInsufficient { .. }

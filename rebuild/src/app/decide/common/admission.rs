@@ -24,9 +24,7 @@ pub struct Admission<'a> {
 
 /// 检查写命令共有的前置条件。
 pub fn admit(snapshot: &Snapshot) -> Result<Admission<'_>, Refusal> {
-    let identity = strong_identity(snapshot)?;
-    let length = known(&snapshot.disk.byte_len, "target byte length")?;
-    let sector = known(&snapshot.disk.sector_size, "target logical block size")?;
+    let admission = geometry(snapshot)?;
     match &snapshot.occupancy {
         Observation::Known { value, .. } => {
             if value.is_occupied() {
@@ -42,6 +40,18 @@ pub fn admit(snapshot: &Snapshot) -> Result<Admission<'_>, Refusal> {
             return Err(Refusal::OccupancyUnknown { why: why.clone() });
         }
     }
+    Ok(admission)
+}
+
+/// 在线形态的准入：目标本来就挂载着，跳过占用闸，其余几何与身份条件不变。
+pub fn admit_online(snapshot: &Snapshot) -> Result<Admission<'_>, Refusal> {
+    geometry(snapshot)
+}
+
+fn geometry(snapshot: &Snapshot) -> Result<Admission<'_>, Refusal> {
+    let identity = strong_identity(snapshot)?;
+    let length = known(&snapshot.disk.byte_len, "target byte length")?;
+    let sector = known(&snapshot.disk.sector_size, "target logical block size")?;
     let partitions = snapshot.contents().ok_or_else(|| Refusal::FactUnknown {
         what: "partition topology".to_owned(),
     })?;

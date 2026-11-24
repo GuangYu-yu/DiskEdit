@@ -11,7 +11,7 @@ use super::disk::DiskFacts;
 use super::table::TableFacts;
 use super::tools::{ToolAvailability, ToolState};
 use super::{FIRST_GENERATION, Request, disk, filesystem, identity, table, tools};
-use crate::platform::{FsSize, Occupancy, Partition, Platform};
+use crate::platform::{FsSize, MountFacts, Occupancy, Partition, Platform};
 
 /// 目标身上的一份分区：内核拓扑、可读内容类别与内容尺寸。
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -39,6 +39,8 @@ pub struct Snapshot {
     pub disk: DiskFacts,
     pub topology: Observation<Topology>,
     pub occupancy: Observation<Occupancy>,
+    /// 目录目标的挂载事实；目标不是挂载点形态的请求时为 `NotApplicable`。
+    pub mount: Observation<MountFacts>,
     pub table: TableFacts,
     pub tools: Vec<ToolAvailability>,
 }
@@ -84,6 +86,7 @@ pub fn observe(request: &Request, platform: &dyn Platform) -> Snapshot {
             },
             topology: Observation::unknown("request has no target argument"),
             occupancy: Observation::unknown("request has no target argument"),
+            mount: Observation::unknown("request has no target argument"),
             table: TableFacts {
                 gpt: Observation::unknown("request has no target argument"),
                 mbr: Observation::unknown("request has no target argument"),
@@ -91,8 +94,16 @@ pub fn observe(request: &Request, platform: &dyn Platform) -> Snapshot {
             tools: tools::observe(platform, generation),
         };
     };
-    let identity = identity::observe(platform, target, generation, request.identity());
-    let (mut disk, handle) = disk::observe(platform, target, generation);
+    let mount = observe_mount(platform, target, request, generation);
+    let observed = match mount.value() {
+        Some(MountFacts::Mounted {
+            partition: Some(partition),
+            ..
+        }) => partition.disk.as_path(),
+        _ => target,
+    };
+    let identity = identity::observe(platform, observed, generation, request.identity());
+    let (mut disk, handle) = disk::observe(platform, observed, generation);
     if let Some(sector) = request.sector_size() {
         disk.sector_size = Observation::known(
             sector,
@@ -103,7 +114,7 @@ pub fn observe(request: &Request, platform: &dyn Platform) -> Snapshot {
     let table = table::observe(handle.as_deref(), &disk, generation);
     let topology = filesystem::observe_topology(
         platform,
-        target,
+        observed,
         &disk,
         &table,
         handle.as_deref(),
@@ -129,7 +140,7 @@ pub fn observe(request: &Request, platform: &dyn Platform) -> Snapshot {
         | super::Command::New { .. }
         | super::Command::Add(_) => topology,
     };
-    let occupancy = disk::observe_occupancy(platform, target, generation);
+    let occupancy = disk::observe_occupancy(platform, observed, generation);
     let tools = tools::observe(platform, generation);
     Snapshot {
         generation,
@@ -137,8 +148,50 @@ pub fn observe(request: &Request, platform: &dyn Platform) -> Snapshot {
         disk,
         topology,
         occupancy,
+        mount,
         table,
         tools,
+    }
+}
+
+/// 目录目标的挂载事实；其它命令不使用该事实。
+fn observe_mount(
+    platform: &dyn Platform,
+    target: &std::path::Path,
+    request: &Request,
+    generation: Generation,
+) -> Observation<MountFacts> {
+    match request.command() {
+        super::Command::Resizefs {
+            partition: None, ..
+        } => match platform.mount_facts(target) {
+            Ok(facts) => Observation::known(
+                facts,
+                diskedit_core::evidence::Source::new("mountinfo"),
+                generation,
+            ),
+            Err(error) => Observation::unknown(error.to_string()),
+        },
+        super::Command::Info
+        | super::Command::Inspect
+        | super::Command::RecordsList
+        | super::Command::RecordsVerify { .. }
+        | super::Command::RecordsScan
+        | super::Command::Resize(_)
+        | super::Command::Move(_)
+        | super::Command::Copy(_)
+        | super::Command::Delete { .. }
+        | super::Command::Set { .. }
+        | super::Command::Check { .. }
+        | super::Command::Mkfs { .. }
+        | super::Command::Resizefs {
+            partition: Some(_), ..
+        }
+        | super::Command::Recover(_)
+        | super::Command::New { .. }
+        | super::Command::Add(_) => {
+            Observation::not_applicable("command does not resolve a mount point")
+        }
     }
 }
 

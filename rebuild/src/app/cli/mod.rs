@@ -10,7 +10,7 @@ use std::ffi::OsString;
 
 use crate::app::decide::{Decision, Refusal, confirm, decide};
 use crate::app::execute;
-use crate::app::observe::{Command, PartitionSelector, Request, Snapshot, TargetSpec, observe};
+use crate::app::observe::{Command, PartitionSelector, Request, Snapshot, observe};
 use crate::app::report::{exit, json, text};
 use crate::platform::{self, Platform, PlatformError};
 
@@ -61,10 +61,6 @@ fn run(invocation: Invocation) -> u8 {
     let platform = match platform::open() {
         Ok(platform) => platform,
         Err(error) => return platform_failure(&error),
-    };
-    let invocation = match resolve_mount_form(invocation, &*platform) {
-        Ok(invocation) => invocation,
-        Err(code) => return code,
     };
     if let Some(code) = reject_identity_on_identified(&invocation.request, &*platform) {
         return code;
@@ -120,54 +116,6 @@ fn reject_identity_on_identified(request: &Request, platform: &dyn Platform) -> 
         }
         _ => None,
     }
-}
-
-/// 挂载点形态的 `resizefs`：先把目录反查成整盘目标与分区号，再走同一套离线判定。
-///
-/// 反查失败即请求与现场不符（目录未挂载、设备不是分区、整盘或逻辑卷挂载），
-/// 按事实类别给出退出码，不把挂载点当可写目标继续。
-fn resolve_mount_form(
-    mut invocation: Invocation,
-    platform: &dyn Platform,
-) -> Result<Invocation, u8> {
-    let Command::Resizefs {
-        partition: None,
-        bytes,
-        mount: false,
-    } = invocation.request.command().clone()
-    else {
-        return Ok(invocation);
-    };
-    let Some(target) = invocation.request.target_spec().cloned() else {
-        return Ok(invocation);
-    };
-    let location = match platform.mount_location(&target.path) {
-        Ok(location) => location,
-        Err(error) => {
-            eprintln!("{error}");
-            return Err(match error {
-                PlatformError::Parse { .. } => exit::REFUSED,
-                PlatformError::NotSupported { .. } | PlatformError::UnsupportedFs { .. } => {
-                    exit::UNSUPPORTED
-                }
-                PlatformError::Io { .. }
-                | PlatformError::Busy { .. }
-                | PlatformError::Denied { .. }
-                | PlatformError::Tools { .. } => exit::ENVIRONMENT,
-            });
-        }
-    };
-    let selector = PartitionSelector::Number(location.partition);
-    let command = Command::Resizefs {
-        partition: Some(selector),
-        bytes,
-        mount: true,
-    };
-    invocation.request = invocation
-        .request
-        .with_target(TargetSpec::new(location.target, Some(selector)))
-        .with_command(command);
-    Ok(invocation)
 }
 
 /// 只读命令直接渲染快照，不进入执行。

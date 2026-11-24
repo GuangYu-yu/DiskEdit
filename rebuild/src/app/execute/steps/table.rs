@@ -44,6 +44,9 @@ pub fn apply(
     ctx: &Context<'_>,
 ) -> Result<(), ExecError> {
     match kind {
+        StepKind::GrowFilesystemOnline { .. } => Err(ExecError::InvalidPlan(
+            "online filesystem steps are executed by the online path".to_owned(),
+        )),
         StepKind::WriteTable { format } => match format {
             TableFormat::Gpt => write_fresh_gpt(channel, token, ctx),
             TableFormat::Mbr => write_fresh_mbr(channel, token),

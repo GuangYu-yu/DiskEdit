@@ -213,6 +213,24 @@ fn encode_kind(out: &mut Vec<u8>, kind: &StepKind) {
             out.push(17);
             out.push(recover_tag(*mode));
         }
+        StepKind::GrowFilesystemOnline {
+            mount_point,
+            device,
+            disk,
+            partition,
+            filesystem,
+            bytes,
+        } => {
+            out.push(18);
+            out.extend_from_slice(&partition.to_le_bytes());
+            out.extend_from_slice(filesystem.as_str().as_bytes());
+            out.push(0);
+            out.extend_from_slice(&bytes.to_le_bytes());
+            for path in [disk, device, mount_point] {
+                out.extend_from_slice(path.to_string_lossy().as_bytes());
+                out.push(0);
+            }
+        }
     }
 }
 

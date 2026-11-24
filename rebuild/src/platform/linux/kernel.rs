@@ -152,6 +152,16 @@ pub fn parse_show(text: &str) -> Option<([u8; 16], u32)> {
     Some((fsid, devices))
 }
 
+/// FSID 在 `/sys/fs/btrfs/` 下的目录名：8-4-4-4-12 分组的 32 位小写十六进制。
+pub fn fsid_uuid(fsid: &[u8; 16]) -> String {
+    let hex: String = fsid.iter().map(|byte| format!("{byte:02x}")).collect();
+    let (head, rest) = hex.split_at(8);
+    let (a, rest) = rest.split_at(4);
+    let (b, rest) = rest.split_at(4);
+    let (c, d) = rest.split_at(4);
+    format!("{head}-{a}-{b}-{c}-{d}")
+}
+
 fn parse_uuid(text: &str) -> Option<[u8; 16]> {
     let hex: String = text
         .chars()

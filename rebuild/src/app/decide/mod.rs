@@ -58,11 +58,10 @@ pub fn decide(request: &Request, snapshot: &Snapshot) -> Decision {
             label,
         } => mkfs::plan(snapshot, *partition, *filesystem, label.clone()),
         Command::Resize(request) => resize::plan(snapshot, request),
-        Command::Resizefs {
-            partition,
-            bytes,
-            mount,
-        } => resizefs::plan(snapshot, *partition, *bytes, *mount),
+        Command::Resizefs { partition, bytes } => {
+            let mount_point = request.target().unwrap_or_else(|| std::path::Path::new(""));
+            resizefs::plan(snapshot, *partition, *bytes, mount_point)
+        }
         Command::Move(request) => move_partition::plan(snapshot, request),
         Command::Recover(mode) => recover::plan(snapshot, *mode),
     };
@@ -100,6 +99,7 @@ mod tests {
                 partitions: Vec::new(),
             }),
             occupancy: known(Occupancy::default()),
+            mount: Observation::not_applicable("test snapshot"),
             table: crate::app::observe::table::TableFacts {
                 gpt: known(GptEvidence::Absent),
                 mbr: known(Evidence::Absent),
@@ -240,6 +240,24 @@ mod tests {
                 why: "x".to_owned(),
             },
             Refusal::TableMissing,
+            Refusal::MountNotMounted {
+                path: "x".to_owned(),
+            },
+            Refusal::MountAmbiguous {
+                path: "x".to_owned(),
+            },
+            Refusal::MountNotPartition {
+                device: "x".to_owned(),
+            },
+            Refusal::MountNotBlockDevice {
+                source: "x".to_owned(),
+            },
+            Refusal::MountUnmapped {
+                reason: "x".to_owned(),
+            },
+            Refusal::OnlineShrink {
+                why: "x".to_owned(),
+            },
             Refusal::TableDamaged {
                 why: "x".to_owned(),
             },

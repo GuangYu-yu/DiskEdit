@@ -4,6 +4,8 @@ pub mod catalog;
 pub mod profile;
 pub mod program;
 
-pub use catalog::{MountNeed, Profile, ShrinkScope, Support, Verb, profile};
+pub use catalog::{
+    MountNeed, OnlineGrow, Profile, ShrinkScope, Support, Verb, online_grow, profile,
+};
 pub use profile::{ContentKind, FsKind, MkfsKind};
 pub use program::Program;

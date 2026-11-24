@@ -481,6 +481,199 @@ fn both_binaries_agree_on_the_same_image() {
     assert_eq!(compared, SCENARIOS.len());
 }
 
+/// 已挂载分区的在线扩容：新旧二进制对同一挂载点执行，比较退出码、盘上表与文件
+/// 系统块数。挂载需要 `CAP_SYS_ADMIN`；沙箱或裁剪过能力的宿主上回报
+/// `NotApplicable`，不静默跳过。
+#[test]
+fn mounted_resizefs_agrees() {
+    let Some(baseline) = std::env::var_os("DISKEDIT_BASELINE") else {
+        eprintln!("NotApplicable: 未提供 DISKEDIT_BASELINE，等价对照需要旧二进制");
+        return;
+    };
+    let baseline = PathBuf::from(baseline);
+    let new_binary = Path::new(env!("CARGO_BIN_EXE_diskedit"));
+    let dir = temp_dir("mounted resizefs");
+    let old_image = dir.join("old.img");
+    let new_image = dir.join("new.img");
+    let state_dir = dir.join("state");
+    for image in [&old_image, &new_image] {
+        File::create(image)
+            .and_then(|file| file.set_len(96 * 1024 * 1024))
+            .expect("创建镜像失败");
+    }
+    for (binary, image) in [(baseline.as_path(), &old_image), (new_binary, &new_image)] {
+        for argv in [
+            &["new", "{image}", "--yes"][..],
+            &["add", "{image}", "32M", "--yes"][..],
+        ] {
+            let output = run(binary, argv, image, &state_dir);
+            assert!(
+                output.status.success(),
+                "前置命令失败：{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+    }
+
+    let Some(old_mount) = Mounted::attach(&old_image, &dir) else {
+        eprintln!("NotApplicable: 宿主无法挂载 loop 分区，在线等价对照需要 CAP_SYS_ADMIN");
+        fs::remove_dir_all(&dir).ok();
+        return;
+    };
+    let Some(new_mount) = Mounted::attach(&new_image, &dir) else {
+        drop(old_mount);
+        eprintln!("NotApplicable: 宿主无法挂载 loop 分区，在线等价对照需要 CAP_SYS_ADMIN");
+        fs::remove_dir_all(&dir).ok();
+        return;
+    };
+
+    let old = run(
+        baseline.as_path(),
+        &["resizefs", old_mount.point_str()],
+        &old_image,
+        &state_dir,
+    );
+    let new = run(
+        new_binary,
+        &["resizefs", new_mount.point_str()],
+        &new_image,
+        &state_dir,
+    );
+    let old_blocks = old_mount.block_count();
+    let new_blocks = new_mount.block_count();
+    drop(old_mount);
+    drop(new_mount);
+
+    assert_eq!(
+        old.status.code(),
+        new.status.code(),
+        "在线 resizefs 退出码不同（基线 stderr: {}）",
+        String::from_utf8_lossy(&old.stderr)
+    );
+    assert_eq!(
+        projection(new_binary, &old_image, &state_dir),
+        projection(new_binary, &new_image, &state_dir),
+        "在线 resizefs 后两枚镜像的分区表投影不同"
+    );
+    assert_eq!(
+        old_blocks, new_blocks,
+        "在线 resizefs 后两个文件系统的块数不同"
+    );
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// 一个已挂载的 loop 分区；析构时卸载并释放 loop 设备。
+struct Mounted {
+    point: PathBuf,
+    partition: String,
+    loop_device: String,
+}
+
+impl Mounted {
+    fn attach(image: &Path, dir: &Path) -> Option<Self> {
+        let output = Command::new("losetup")
+            .arg("-f")
+            .arg("--show")
+            .arg("-P")
+            .arg(image)
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let device = String::from_utf8(output.stdout).ok()?.trim().to_owned();
+        if device.is_empty() {
+            return None;
+        }
+        let partition = format!("{device}p1");
+        let mut ready = false;
+        for _ in 0..40 {
+            if Path::new(&partition).exists() {
+                ready = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        let point = dir.join(format!(
+            "mnt-{}",
+            Path::new(&device)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("loop")
+        ));
+        fs::create_dir_all(&point).ok()?;
+        if !ready {
+            Command::new("losetup").arg("-d").arg(&device).status().ok();
+            return None;
+        }
+        // 分区 32M，文件系统只占 16M，在线扩容才有可扩的余量。
+        let format = Command::new("mkfs.ext4")
+            .arg("-F")
+            .arg(&partition)
+            .arg("16M")
+            .status()
+            .ok()?;
+        if !format.success() {
+            Command::new("losetup").arg("-d").arg(&device).status().ok();
+            return None;
+        }
+        let mounted = Command::new("mount")
+            .arg("-t")
+            .arg("ext4")
+            .arg(&partition)
+            .arg(&point)
+            .status()
+            .ok()?;
+        if !mounted.success() {
+            Command::new("losetup").arg("-d").arg(&device).status().ok();
+            return None;
+        }
+        Some(Self {
+            point,
+            partition,
+            loop_device: device,
+        })
+    }
+
+    fn point_str(&self) -> &str {
+        self.point.to_str().expect("挂载点应为 UTF-8")
+    }
+
+    fn block_count(&self) -> Option<u64> {
+        ext4_block_count(Path::new(&self.partition))
+    }
+}
+
+impl Drop for Mounted {
+    fn drop(&mut self) {
+        Command::new("umount").arg(&self.point).status().ok();
+        Command::new("losetup")
+            .arg("-d")
+            .arg(&self.loop_device)
+            .status()
+            .ok();
+    }
+}
+
+/// 文件系统的 1KiB 块数；独立 oracle，不依赖两个二进制的输出。
+fn ext4_block_count(image: &Path) -> Option<u64> {
+    let output = Command::new("dumpe2fs")
+        .arg("-h")
+        .arg(image)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    for line in text.lines() {
+        if let Some(value) = line.strip_prefix("Block count:") {
+            return value.trim().parse().ok();
+        }
+    }
+    None
+}
+
 fn compare(scenario: &Scenario, baseline: &Path, new_binary: &Path) {
     let dir = temp_dir(scenario.name);
     let old_image = dir.join("old.img");

@@ -2,6 +2,8 @@
 //!
 //! 访问级别由步骤种类唯一决定，不单独传入，避免声明与实际作用不符。
 
+use std::path::PathBuf;
+
 use diskedit_core::fs::{ContentKind, FsKind, MkfsKind};
 use diskedit_core::region::Region;
 use diskedit_core::table::Guid;
@@ -81,6 +83,17 @@ pub enum StepKind {
         filesystem: FsKind,
         bytes: u64,
     },
+    /// 在已挂载的文件系统上扩容到所在分区的容量。
+    ///
+    /// 不写分区表、不登记原像、不卸载用户挂载；由在线执行器运行该族的在线工具。
+    GrowFilesystemOnline {
+        mount_point: PathBuf,
+        device: PathBuf,
+        disk: PathBuf,
+        partition: u32,
+        filesystem: FsKind,
+        bytes: u64,
+    },
     /// 把源分区内容复制到给定的目标区间。
     CopyPartition {
         source: u32,
@@ -119,6 +132,7 @@ impl StepKind {
             | Self::SetProperty { .. }
             | Self::MakeFilesystem { .. }
             | Self::GrowFilesystem { .. }
+            | Self::GrowFilesystemOnline { .. }
             | Self::ShrinkFilesystem { .. }
             | Self::CopyPartition { .. }
             | Self::MovePartition { .. } => Access::WritesTarget,

@@ -33,10 +33,30 @@ pub fn parse(text: &str) -> PlatformResult<Vec<MountEntry>> {
             )));
         }
         let (major, minor) = parse_device(fields[2], index + 1)?;
+        let separator = fields
+            .iter()
+            .position(|field| *field == "-")
+            .ok_or_else(|| {
+                PlatformError::parse(format!(
+                    "mountinfo line {} has no filesystem separator",
+                    index + 1
+                ))
+            })?;
+        let fstype = fields.get(separator + 1).ok_or_else(|| {
+            PlatformError::parse(format!(
+                "mountinfo line {} has no filesystem type",
+                index + 1
+            ))
+        })?;
+        let source = fields.get(separator + 2).ok_or_else(|| {
+            PlatformError::parse(format!("mountinfo line {} has no mount source", index + 1))
+        })?;
         entries.push(MountEntry {
             major,
             minor,
             mount_point: PathBuf::from(decode_octal(fields[4])),
+            fstype: fstype.to_string(),
+            source: PathBuf::from(decode_octal(source)),
         });
     }
     Ok(entries)
@@ -87,11 +107,13 @@ mod tests {
 
     #[test]
     fn parses_major_minor_and_mount_point() {
-        let text = "36 35 8:1 / /boot rw,relatime - ext4 /dev/sda1 rw\0";
+        let text = "36 35 8:1 / /boot rw,relatime shared:1 - ext4 /dev/sda1 rw\0";
         let entries = parse(text).expect("可解析");
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].device(), "8:1");
         assert_eq!(entries[0].mount_point, PathBuf::from("/boot"));
+        assert_eq!(entries[0].fstype, "ext4");
+        assert_eq!(entries[0].source, PathBuf::from("/dev/sda1"));
     }
 
     #[test]
@@ -103,6 +125,7 @@ mod tests {
     #[test]
     fn rejects_malformed_lines() {
         assert!(parse("1 2 not-a-device / /mnt rw - ext4 /dev/x rw").is_err());
+        assert!(parse("1 2 8:1 / /mnt rw ext4 /dev/x rw").is_err());
         assert!(parse("1 2").is_err());
     }
 }

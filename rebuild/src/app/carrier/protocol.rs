@@ -239,6 +239,9 @@ pub fn decode_step(frame: &Value) -> Result<(StepKind, Vec<Region>), String> {
 
 fn encode_kind(kind: &StepKind) -> Result<Value, String> {
     let frame = match kind {
+        StepKind::GrowFilesystemOnline { .. } => {
+            return Err("online filesystem steps cannot be delegated to the carrier".to_owned());
+        }
         StepKind::WriteTable { format } => json!({
             "kind": "write-table",
             "format": format_name(*format),
