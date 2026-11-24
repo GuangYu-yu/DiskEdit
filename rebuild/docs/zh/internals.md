@@ -8,15 +8,15 @@ README 只保留"它是什么、怎么用"。本文件记录行为约束：能�
 
 ## 执行放置
 
-写入只有一条路径：一份作业是一串载体步骤（`TableCommit`、`Transfer`、`Fs`、`Probe`），宿主进程是恢复记录、锁与输出的唯一写者。步骤在哪里执行属于部署细节，每份作业在首次写盘之前决定一次，步骤之间不再改变。
+写入只有一条路径：一份作业是一串步骤（写表、增删调分区、复制、搬移、建卷/扩缩/属性、刷新内核视图），宿主进程是恢复记录、锁与输出的唯一写者。步骤在哪里执行属于部署细节，每份作业在首次写盘之前决定一次，步骤之间不再改变。
 
 - **原生**：宿主满足本作业所需的全部能力——文件系统层要求的平台/root 权限，以及步骤表解析出的每个外部工具。这份清单与原生执行器读的是同一份工具矩阵。
-- **VM**：宿主能力不足，但 `DISKEDIT_VM_BUNDLE` 指向一个通过校验的载体 bundle。整份计划移入 guest；记录、锁、续跑游标与退出码仍由宿主掌握。
+- **VM**：宿主能力不足，但 `DISKEDIT_VM_BUNDLE` 指向一个通过校验的载体 bundle。整份计划移入 guest；记录、锁与退出码仍由宿主掌握。
 - 两者都不满足：以退出码 6 退出，给出缺口与两条出路（安装工具，或提供 bundle）。
 
-bundle 目录包含 `manifest.json`、`kernel` 与 `initramfs`。清单声明 `schema`、`arch`、`binary_version`，并为每件制品给出相对 `path` 与 `sha256`；可选的 `worker.sha256` 记录 worker 映像摘要供审计尾段使用。只有以下全部成立才接受：schema 是当前版本、架构与本进程一致、`binary_version` 与本可执行文件版本一致、每件制品的路径都落在 bundle 目录内、每个 SHA-256 都对得上。任何一项不符都在启动 QEMU 之前拒绝——宿主不会把目标交给身份不明的 guest。
+bundle 目录包含 `manifest.json`、`kernel` 与 `initramfs`。清单声明 `schema`、`arch`、`binary_version`，并为每件制品给出相对 `path` 与 `sha256`；可选的 `worker.sha256` 把 worker 映像固定为本可执行文件。只有以下全部成立才接受：schema 是当前版本、架构与本进程一致、`binary_version` 与本可执行文件版本一致、每件制品的路径都落在 bundle 目录内、每个 SHA-256 都对得上。任何一项不符都在启动 QEMU 之前拒绝——宿主不会把目标交给身份不明的 guest。
 
-启动器把已打开的目标经文件描述符交给 QEMU（`-add-fd` 加 `/dev/fdset/`），通过 `-blockdev` 交给块层、缓存固定为 `cache.direct=on`，以 virtio-blk 按目标的逻辑扇区大小（512 或 4096）呈现，协议走串口控制台，熵由 virtio-rng 提供。QEMU 自身的退出状态只描述虚拟机如何结束；某一步是否落盘由协议的 `result` 与宿主的探测回答，不看该状态。
+启动器把已打开的目标经文件描述符交给 QEMU（`-add-fd` 加 `/dev/fdset/`），通过 `-blockdev` 交给块层、缓存固定为 `cache.direct=on`，以 virtio-blk 按目标的逻辑扇区大小（512 或 4096）呈现，协议走串口控制台，熵由 virtio-rng 提供。QEMU 自身的退出状态只描述虚拟机如何结束；某一步是否落盘由协议的 `result` 在 guest 自己完成回读核对之后回答，不看该状态。
 
 ## 占用边界
 
@@ -42,7 +42,7 @@ bundle 目录包含 `manifest.json`、`kernel` 与 `initramfs`。清单声明 `s
 
 ## 记录中的磁盘 GUID 凭据
 
-除身份段之外，记录（magic `DRE2`，16 字节头部由 magic、载荷长度、载荷 CRC 与头部 CRC 组成——没有单独的版本字段）以三种状态保存目标的 GPT 磁盘 GUID：`Present` / `Unavailable` / `GeneratedThisOperation`。`Present` 必须与磁盘一致；`Unavailable` 表示目标上没有可读的 GPT（MBR / 未分区），不构成证据；`GeneratedThisOperation` 只出现在记录侧（整张表由写入该记录的操作生成），不与磁盘 GUID 比较。两侧均为 `Present` 但值不同、记录为 `Present` 而目标没有可读 GPT、记录为 `Unavailable` 而目标现在带有 GPT，都是身份不匹配。载荷末尾是审计尾段——放置（`native` 或 `vm`）、可选的载体 worker 摘要，以及本作业所需外部工具的版本行——在首次写盘之前写一次，续跑与回滚都不读它。**一种 magic 一种布局**：magic 不是 `DRE2` 的记录按无法识别的格式报告（`UnrecognizedFormat`，携带 magic 字节）；本次构建不回放也不迁移它，会写盘的命令以退出码 3 拒绝。因此旧版本写下的记录无法续跑：用写下它的那个版本完成，再用 `recover --release` 清除。`recover --release` 的自动隔离要求探测能解码整条记录（magic、头部 CRC、载荷 CRC 以及每个尾部段），且记录的身份属于当前载体。
+除身份段之外，记录（magic `DRE2`，16 字节头部由 magic、载荷长度、载荷 CRC 与头部 CRC 组成——没有单独的版本字段）以三种状态保存目标的 GPT 磁盘 GUID：`Present` / `Unavailable` / `GeneratedThisOperation`。`Present` 必须与磁盘一致；`Unavailable` 表示目标上没有可读的 GPT（MBR / 未分区），不构成证据；`GeneratedThisOperation` 只出现在记录侧（整张表由写入该记录的操作生成），不与磁盘 GUID 比较。两侧均为 `Present` 但值不同、记录为 `Present` 而目标没有可读 GPT、记录为 `Unavailable` 而目标现在带有 GPT，都是身份不匹配。**一种 magic 一种布局**：magic 不是 `DRE2` 的记录按无法识别的格式报告（`UnrecognizedFormat`，携带 magic 字节）；本次构建不回放也不迁移它，会写盘的命令以退出码 3 拒绝。因此旧版本写下的记录无法续跑：用写下它的那个版本完成，再用 `recover --release` 清除。`recover --release` 的自动隔离要求探测能解码整条记录（magic、头部 CRC、载荷 CRC 以及每个尾部段），且记录的身份属于当前载体。
 
 ## 恢复记录的位置
 
