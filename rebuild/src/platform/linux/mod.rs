@@ -3,6 +3,7 @@
 //! 一切与内核接口、虚拟文件系统、外部程序路径有关的知识都收在本子树；
 //! 上层只看见 [`crate::platform`] 里的中立类型与端口 trait。
 
+pub mod carrier;
 pub mod dm;
 mod fs_size;
 pub mod kernel;
@@ -336,6 +337,26 @@ impl Platform for Linux {
             stdout: result.stdout,
             stderr: result.stderr,
         })
+    }
+
+    fn filesystem_ready(&self) -> bool {
+        // 分区设备视图与块设备写入都要求特权；非特权宿主改走虚拟机载体。
+        unsafe { libc::geteuid() == 0 }
+    }
+
+    fn carrier_available(&self) -> bool {
+        true
+    }
+
+    fn carrier_target(&self) -> Option<&'static str> {
+        Some(carrier::GUEST_TARGET)
+    }
+
+    fn launch_carrier(
+        &self,
+        launch: &crate::platform::CarrierLaunch,
+    ) -> PlatformResult<Box<dyn crate::platform::CarrierProcess>> {
+        carrier::launch(launch)
     }
 }
 

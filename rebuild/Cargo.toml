@@ -26,12 +26,13 @@ path = "src/main.rs"
 [dependencies]
 diskedit_core = { path = "crates/core" }
 libc = "0.2"
+serde_json = "1"
+sha2 = "0.10"
 
 [lints]
 workspace = true
 
 [dev-dependencies]
-serde_json = "1"
 trybuild = "1"
 
 [profile.release]

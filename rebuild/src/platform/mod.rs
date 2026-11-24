@@ -9,6 +9,7 @@
 //! [`open`]，上层不需要改动。
 
 use std::fmt;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use diskedit_core::fingerprint::Fingerprint;
@@ -537,6 +538,28 @@ pub trait WriteAt: ReadAt {
     fn barrier(&mut self) -> PlatformResult<()>;
 }
 
+/// 启动一台虚拟机载体所需的全部事实。
+///
+/// 目标以独立描述符交给虚拟机，因此启动器按 `target` 重新打开一份句柄；宿主
+/// 已持有的写句柄在会话期间不再写入目标。
+pub struct CarrierLaunch {
+    pub target: PathBuf,
+    pub sector_size: u64,
+    pub disk_size: u64,
+    pub kernel: PathBuf,
+    pub initramfs: PathBuf,
+    pub arch: String,
+    pub token: String,
+}
+
+/// 一台已启动的虚拟机载体。
+pub trait CarrierProcess: Send {
+    /// 取得与载体通信的写端与读端；只能取得一次。
+    fn take_io(&mut self) -> Option<(Box<dyn Write + Send>, Box<dyn Read + Send>)>;
+    /// 结束载体；重复调用无副作用。
+    fn terminate(&mut self);
+}
+
 /// 宿主能力端口。
 pub trait Platform {
     /// 以读写方式打开目标；写通道只在执行期使用。
@@ -616,6 +639,25 @@ pub trait Platform {
     fn remove_mount_point(&self, point: &Path) -> PlatformResult<()> {
         let _ = point;
         Err(PlatformError::not_supported("该宿主不提供临时挂载点"))
+    }
+    /// 宿主能否直接运行文件系统工具。
+    ///
+    /// 建卷、扩缩、改标签等步骤要经分区设备视图操作块设备；不满足该条件的
+    /// 宿主应改由虚拟机载体执行同一批步骤。
+    fn filesystem_ready(&self) -> bool {
+        false
+    }
+    /// 宿主是否提供虚拟机载体。
+    fn carrier_available(&self) -> bool {
+        false
+    }
+    /// 来宾看到的整盘设备路径；没有载体时为 `None`。
+    fn carrier_target(&self) -> Option<&'static str> {
+        None
+    }
+    /// 启动一台虚拟机载体。
+    fn launch_carrier(&self, _launch: &CarrierLaunch) -> PlatformResult<Box<dyn CarrierProcess>> {
+        Err(PlatformError::not_supported("该宿主不提供虚拟机载体"))
     }
     /// 目标对应的记录目录；宿主没有该能力时返回 `NotSupported`。
     fn records(

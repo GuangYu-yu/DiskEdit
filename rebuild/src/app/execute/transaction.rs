@@ -18,6 +18,8 @@ use super::steps::{self, Context};
 use super::token::Recorded;
 use super::write::WriteChannel;
 use super::{ExecError, FailureKind, Faults, Outcome};
+use crate::app::carrier::remote::Session;
+use crate::app::carrier::{dispatch, placement};
 use crate::app::decide::ConfirmedPlan;
 use crate::app::decide::step::{Access, Step, StepKind};
 use crate::platform::{Platform, RecordStore, TargetHandle};
@@ -135,11 +137,44 @@ pub fn run(
         plan_digest: &digest,
         sector,
     };
+    // 放置一次决定，步骤之间不变；会话在写入任何字节之前建立，启动失败仍然是
+    // 写前失败。
+    let location = match placement::decide(platform, confirmed.steps()) {
+        Ok(location) => location,
+        Err(error) => return classify_unwritten(error),
+    };
+    let mut session = match dispatch::open(
+        platform,
+        &location,
+        path,
+        sector,
+        handle.len(),
+        &digest,
+        "apply",
+    ) {
+        Ok(session) => session,
+        Err(error) => return classify_unwritten(error),
+    };
+    // 来宾会写目标，宿主此后再读会与 O_DIRECT 写入竞争；因此会话开始前一次读出
+    // 全部写步骤的原像。放行前目标仍是计划开始时的样子。
+    let mut prepared: Vec<Vec<Preimage>> = Vec::new();
+    if session.is_some() {
+        for step in confirmed.steps() {
+            if step.access() != Access::WritesTarget {
+                prepared.push(Vec::new());
+                continue;
+            }
+            match read_preimages(step, &mut *handle) {
+                Ok(preimages) => prepared.push(preimages),
+                Err(failure) => return failure,
+            }
+        }
+    }
     let mut frames: Vec<Frame> = Vec::new();
     let mut machine = StateMachine::new();
     let mut wrote_any = false;
 
-    for step in confirmed.steps() {
+    for (index, step) in confirmed.steps().iter().enumerate() {
         match step.kind.access() {
             Access::ReadOnly => continue,
             Access::WritesExternalState => {
@@ -171,18 +206,32 @@ pub fn run(
                 }
             }
             Access::WritesTarget => {
-                match execute_target_step(
-                    step,
-                    &mut *handle,
-                    &mut *store,
-                    &body,
-                    &mut frames,
-                    &mut machine,
-                    &ctx,
-                    platform,
-                    path,
-                    &faults,
-                ) {
+                let result = match session.as_mut() {
+                    Some(session) => execute_remote_step(
+                        step,
+                        session,
+                        std::mem::take(&mut prepared[index]),
+                        &mut *store,
+                        &body,
+                        &mut frames,
+                        &mut machine,
+                        &ctx,
+                        &faults,
+                    ),
+                    None => execute_target_step(
+                        step,
+                        &mut *handle,
+                        &mut *store,
+                        &body,
+                        &mut frames,
+                        &mut machine,
+                        &ctx,
+                        platform,
+                        path,
+                        &faults,
+                    ),
+                };
+                match result {
                     Ok(()) => wrote_any = true,
                     Err(failure) => return failure,
                 }
@@ -283,44 +332,9 @@ fn execute_target_step(
         ));
     }
 
-    let mut preimages = Vec::with_capacity(step.regions.len());
-    for region in &step.regions {
-        let (digest, data) = if steps::writes_table(&step.kind) {
-            let data = read_region(handle, *region, PREIMAGE_CHUNK).map_err(classify_unwritten)?;
-            (digest_bytes(&data), data)
-        } else {
-            (
-                hash_region(handle, *region, PREIMAGE_CHUNK).map_err(classify_unwritten)?,
-                Vec::new(),
-            )
-        };
-        preimages.push(Preimage {
-            offset: region.start(),
-            len: region.len(),
-            digest,
-            data,
-        });
-    }
-    let sequence = frames.len() as u32;
-    frames.push(Frame {
-        seq: sequence,
-        kind: FrameKind::Preimage,
-        completed: false,
-        irreversible: !steps::writes_table(&step.kind),
-        intent: intent_of(&step.kind).as_bytes().to_vec(),
-        regions: preimages,
-    });
-    if let Err(error) = store.store(&encode_or_failure(body, frames)?) {
-        frames.pop();
-        return Err(Outcome::unwritten(
-            FailureKind::FailedBeforeWrite,
-            platform_text(&error),
-        ));
-    }
-    if let Err(error) = machine.arm() {
-        return Err(Outcome::needs_recovery(format!("状态推进失败: {error:?}")));
-    }
-    let token = Recorded::mint(&Mint::new(), u64::from(sequence));
+    let preimages = read_preimages(step, handle)?;
+    let sequence = store_preimage(step, preimages, store, body, frames, machine)?;
+    let token = Recorded::mint(&Mint::new(), sequence);
 
     let fail_after = if faults.mid_write { Some(1) } else { None };
     let mut channel = WriteChannel::new(handle, &step.regions).with_fail_after(fail_after);
@@ -348,6 +362,114 @@ fn execute_target_step(
     if faults.after_write {
         return Err(Outcome::needs_recovery("写后中断注入"));
     }
+    store_progress(step, store, body, frames)
+}
+
+/// 来宾执行的一步：宿主先落原像，再把步骤交给会话。
+#[allow(clippy::too_many_arguments)]
+fn execute_remote_step(
+    step: &Step,
+    session: &mut Session,
+    preimages: Vec<Preimage>,
+    store: &mut dyn RecordStore,
+    body: &RecordBody,
+    frames: &mut Vec<Frame>,
+    machine: &mut StateMachine,
+    ctx: &Context<'_>,
+    faults: &Faults,
+) -> Result<(), Outcome> {
+    if let Err(error) = steps::precheck(&step.kind, ctx) {
+        return Err(classify_unwritten(error));
+    }
+    if faults.before_write {
+        return Err(Outcome::unwritten(
+            FailureKind::FailedBeforeWrite,
+            "写前中断注入",
+        ));
+    }
+    store_preimage(step, preimages, store, body, frames, machine)?;
+    match session.run_step(&step.kind, &step.regions) {
+        Ok(result) if result.applied => {}
+        Ok(result) => {
+            let cause = result
+                .cause
+                .unwrap_or_else(|| "来宾没有给出原因".to_owned());
+            let class = match result.class {
+                Some(class) => format!("（类别 {class}）"),
+                None => String::new(),
+            };
+            return Err(Outcome::needs_recovery(format!(
+                "载体步骤失败{class}：{cause}"
+            )));
+        }
+        Err(why) => return Err(Outcome::needs_recovery(why)),
+    }
+    if faults.mid_write || faults.after_write {
+        return Err(Outcome::needs_recovery("写后中断注入"));
+    }
+    store_progress(step, store, body, frames)
+}
+
+fn read_preimages(step: &Step, handle: &mut dyn TargetHandle) -> Result<Vec<Preimage>, Outcome> {
+    let mut preimages = Vec::with_capacity(step.regions.len());
+    for region in &step.regions {
+        let (digest, data) = if steps::writes_table(&step.kind) {
+            let data = read_region(handle, *region, PREIMAGE_CHUNK).map_err(classify_unwritten)?;
+            (digest_bytes(&data), data)
+        } else {
+            (
+                hash_region(handle, *region, PREIMAGE_CHUNK).map_err(classify_unwritten)?,
+                Vec::new(),
+            )
+        };
+        preimages.push(Preimage {
+            offset: region.start(),
+            len: region.len(),
+            digest,
+            data,
+        });
+    }
+    Ok(preimages)
+}
+
+/// 追加原像帧并落盘，随后登记状态机；返回帧序号。
+fn store_preimage(
+    step: &Step,
+    preimages: Vec<Preimage>,
+    store: &mut dyn RecordStore,
+    body: &RecordBody,
+    frames: &mut Vec<Frame>,
+    machine: &mut StateMachine,
+) -> Result<u64, Outcome> {
+    let sequence = frames.len() as u32;
+    frames.push(Frame {
+        seq: sequence,
+        kind: FrameKind::Preimage,
+        completed: false,
+        irreversible: !steps::writes_table(&step.kind),
+        intent: intent_of(&step.kind).as_bytes().to_vec(),
+        regions: preimages,
+    });
+    if let Err(error) = store.store(&encode_or_failure(body, frames)?) {
+        frames.pop();
+        return Err(Outcome::unwritten(
+            FailureKind::FailedBeforeWrite,
+            platform_text(&error),
+        ));
+    }
+    if let Err(error) = machine.arm() {
+        return Err(Outcome::needs_recovery(format!("状态推进失败: {error:?}")));
+    }
+    Ok(u64::from(sequence))
+}
+
+/// 追加完成帧并落盘。
+fn store_progress(
+    step: &Step,
+    store: &mut dyn RecordStore,
+    body: &RecordBody,
+    frames: &mut Vec<Frame>,
+) -> Result<(), Outcome> {
     frames.push(Frame {
         seq: frames.len() as u32,
         kind: FrameKind::Progress,

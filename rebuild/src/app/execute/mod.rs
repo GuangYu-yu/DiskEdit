@@ -22,8 +22,11 @@ pub mod write;
 
 use std::path::Path;
 
+use diskedit_core::region::Region;
+
 use crate::app::decide::ConfirmedPlan;
-use crate::platform::{Platform, PlatformError};
+use crate::app::decide::step::StepKind;
+use crate::platform::{Platform, PlatformError, TargetHandle};
 
 pub use state::ExecutionState;
 pub use token::Recorded;
@@ -197,4 +200,24 @@ pub fn execute_with_faults(
     faults: Faults,
 ) -> Outcome {
     transaction::run(confirmed, platform, target, generation, faults)
+}
+
+/// 工作进程执行宿主委托的一步。
+///
+/// 原像已由宿主在发送之前落盘；这里只写目标、提交缓存并回读核对，不触碰记录。
+pub fn apply_delegated(
+    platform: &dyn Platform,
+    target: &Path,
+    handle: &mut dyn TargetHandle,
+    kind: &StepKind,
+    regions: &[Region],
+    ctx: &steps::Context<'_>,
+) -> Result<(), ExecError> {
+    steps::precheck(kind, ctx)?;
+    let token = Recorded::delegated();
+    let mut channel = WriteChannel::new(handle, regions);
+    let host = steps::Host { platform, target };
+    steps::apply(kind, regions, &mut channel, &token, ctx, &host)?;
+    channel.barrier()?;
+    postcondition::verify(&channel)
 }

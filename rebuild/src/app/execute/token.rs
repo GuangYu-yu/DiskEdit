@@ -18,6 +18,14 @@ impl Recorded {
         Self { sequence }
     }
 
+    /// 来宾执行宿主委托的步骤。
+    ///
+    /// 宿主在发送步骤之前已经把原像落盘，工作进程拿到的是"原像已登记"这一事实
+    /// 的委托，而不是自行登记的权利；它不读写记录目录。
+    pub(crate) const fn delegated() -> Self {
+        Self { sequence: 0 }
+    }
+
     /// 该令牌对应的帧序号。
     pub const fn sequence(self) -> u64 {
         self.sequence
