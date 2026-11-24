@@ -82,6 +82,16 @@ Looked up only when a step needs them; they need not all be present:
 
 Every external invocation gets `LC_ALL=C`, so localised output cannot break parsing.
 
+## Tool behaviour and criteria
+
+The kernel does not re-read a partition table after a write. Rereading goes through `partx -u` first; `BLKRRPART` is only usable when the whole disk can be opened, and fails with `EBUSY` whenever any partition is mounted or used as swap. Added and deleted partitions are then applied per partition with `BLKPG`. A failed reread does not mean the table did not change: it degrades to "kernel view pending", and whether the write holds is answered by reading target bytes back.
+
+An ext grow lands on block-group boundaries. When the last segment cannot hold a complete block group, `resize2fs` leaves it unused — 1.47.x takes a 400 MiB volume grown to 900 MiB to 896 MiB — so "grown to the end of the region" means the end falls inside the last unit, not that byte counts are equal. `e2fsck -fp` runs before grow or shrink; exit 1 means repairs were made and execution continues, and only larger exit bits abort.
+
+An NTFS volume stores its starting sector as `HiddenSectors` at boot-sector offset `0x1C`. After a move, both the main boot sector and the backup in the last sector of the volume must carry the new start; fixing only the main one makes the NTFS checker report a damaged backup. Both signatures are verified first, and nothing is written when either does not match. A resize first tries `ntfsresize`; when it refuses a dirty volume, one `ntfsfix` is run and the resize retried, and the first error is kept if the retry fails.
+
+Loop nodes may be stale: occupancy and mount checks never trust the `/dev/loopN` name or a `backing_file` path. They compare `(lo_device, lo_inode)` from `LOOP_GET_STATUS64` with `(st_dev, st_ino)` of the opened target; names only locate registry entries.
+
 ## OpenWrt combined layout
 
 A read-only squashfs/erofs root plus a trailing RW overlay in the same partition: a grow identifies the inner filesystem and extends only the RW layer through an offset loop, and only ever grows; an inner filesystem other than ext or f2fs is refused. A trailing RW layer that is not yet formatted (first-boot install scene) is not a failure: the partition still grows, and the layer is initialised by fstools on first mount, leaving nothing to do here. Multi-device btrfs is refused for grow.

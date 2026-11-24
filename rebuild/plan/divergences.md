@@ -13,5 +13,6 @@
 | D7 | 载体路径与基线行为等价 | 等价指行为一致，不按可运行性裁剪 | 基线载体在目标环境可运行而本实现不能 | 载体对照用例（`tests/equivalence.rs` 之外的特权夹具） |
 | D8 | 不因几何变化改写用户已有的分区类型 GUID | 类型 GUID 是用户数据 | 确认基线确实改写且外部依赖该改写 | `tests/equivalence.rs` 的 "D8: the partition type GUID survives a resize" |
 | D9 | 只读命令统一输出本实现的结构化 JSON；字段集与 `inspect`/`check` 的输出形态不逐字复刻基线 | 基线实际只有 `info` 与 `records *` 输出 JSON，`inspect`/`check` 输出人读文本且无 `--json`；人读文本不是契约，结构化事实由用例表与独立 oracle 覆盖 | 出现依赖基线文本措辞或基线 JSON 字段名的外部契约 | `tests/equivalence.rs` 的结构化投影对照、`tests/case_runner.rs` |
+| D10 | 本期只交付 Linux 后端；Windows/macOS 宿主的表编辑与文件系统操作返回 `NotSupported`（退出码 `6`） | `01` §7.4 排除非 Linux 后端；端口形状已留出，补齐时只加子树 | Windows/macOS 上的等价表编辑成为交付条件 | `src/platform/mod.rs` 的 `unsupported_platform!` 与按平台能力表生成物（`tests/generated_docs.rs`） |
 
 条目与 `plan/01-目标与边界.md` 第 5 节一一对应。新增差异必须先改 `01` 再改本表。

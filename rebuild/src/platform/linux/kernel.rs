@@ -32,6 +32,10 @@ struct BlkpgIoctlArg {
 }
 
 /// 请内核重读分区表。
+///
+/// 整盘 `BLKRRPART` 在任一分区挂载或用作 swap 时以 `EBUSY` 失败，因此调用方先走
+/// `partx -u`，再用 `BLKPG` 逐分区补齐。重读失败不等于表没变：它只降级为
+/// "内核视图待同步"，写入是否成立由回读目标字节回答。
 pub fn reread(path: &Path) -> PlatformResult<()> {
     let file = std::fs::File::open(path).map_err(|error| PlatformError::io(path, error))?;
     use std::os::fd::AsRawFd;
