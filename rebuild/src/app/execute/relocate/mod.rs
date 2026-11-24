@@ -2,15 +2,15 @@
 //!
 //! 搬移只读写数据区；分区表的新位置由后续 `ResizePartition` 步骤提交。搬移
 //! 已写的块不回收、不清零旧位置，因此记录把这一步标为不可逆。
+//!
+//! 自重叠时块大小收紧到位移：一块的目的区若压到自己的源区，中断后重跑就没有
+//! 原字节可读。每块写完立即回读并与内存中的原字节比对；重叠搬移完成后源区已被
+//! 目的区覆盖，不能再拿"当前源"当核对基准。
 
 use diskedit_core::region::Region;
 
-use super::digest::{Digest, Hasher};
 use super::token::Recorded;
 use super::{ExecError, WriteChannel};
-
-/// 单块字节数。
-pub const CHUNK_BYTES: u64 = 1 << 20;
 
 /// 搬移方向：目标起点在源之后时从尾部向前搬，否则从头部向后搬。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -49,7 +49,12 @@ impl Binding {
         if source.is_empty() {
             return Err(ExecError::InvalidPlan("搬移区间为空".to_owned()));
         }
-        let chunk = chunk.max(1).min(source.len());
+        let mut chunk = chunk.max(1).min(source.len());
+        // 自重叠时一块之内就可能覆盖自己的源；把块收紧到位移，中断后重跑仍读得到原字节。
+        let distance = destination.start().abs_diff(source.start());
+        if distance != 0 && regions_overlap(source, destination) {
+            chunk = chunk.min(distance);
+        }
         let chunks = source.len().div_ceil(chunk);
         Ok(Self {
             source,
@@ -161,6 +166,14 @@ pub fn apply(
         let (source, destination) = binding.piece(index)?;
         let bytes = channel.read_exact(source.start(), source.len() as usize)?;
         channel.write(token, destination, &bytes)?;
+        // 立即回读，以内存里的原字节为基准。重叠搬移之后源区已被覆盖，事后按
+        // "源与目的逐块比对"会把成功报成失败。
+        let landed = channel.read_exact(destination.start(), destination.len() as usize)?;
+        if landed != bytes {
+            return Err(ExecError::Postcondition(format!(
+                "第 {index} 块写入后回读不一致"
+            )));
+        }
         checkpoint.record();
     }
     Ok(Moved {
@@ -168,33 +181,9 @@ pub fn apply(
     })
 }
 
-/// 搬移后核对：目标块的摘要与源块一致。
-pub fn verify(binding: Binding, channel: &mut WriteChannel<'_>) -> Result<(), ExecError> {
-    for index in binding.order() {
-        let (source, destination) = binding.piece(index)?;
-        let source_digest = digest_region(channel, source)?;
-        let destination_digest = digest_region(channel, destination)?;
-        if source_digest != destination_digest {
-            return Err(ExecError::Postcondition(format!(
-                "第 {index} 块搬移后与源不一致"
-            )));
-        }
-    }
-    Ok(())
-}
-
-fn digest_region(channel: &WriteChannel<'_>, region: Region) -> Result<Digest, ExecError> {
-    let mut hasher = Hasher::new();
-    let mut offset = region.start();
-    let mut remaining = region.len();
-    while remaining > 0 {
-        let take = remaining.min(CHUNK_BYTES) as usize;
-        let bytes = channel.read_exact(offset, take)?;
-        hasher.update(&bytes);
-        offset += take as u64;
-        remaining -= take as u64;
-    }
-    Ok(hasher.finish())
+/// 两个区间是否相交（端点相接不算）。
+fn regions_overlap(a: Region, b: Region) -> bool {
+    a.start() < b.end() && b.start() < a.end()
 }
 
 #[cfg(test)]
@@ -237,6 +226,18 @@ mod tests {
         let (source, destination) = binding.piece(2).expect("末块应成立");
         assert_eq!(source.len(), 50);
         assert_eq!(destination.start(), 700);
+    }
+
+    #[test]
+    fn overlapping_moves_clamp_the_chunk_to_the_shift() {
+        // 右移 512 字节：块不得大于位移，否则一块之内就压到自己的源。
+        let binding = Binding::new(region(0, 8192), region(512, 8192), 4096).expect("绑定应成立");
+        assert_eq!(binding.chunk, 512);
+        // 不相交时保留请求的块大小。
+        let apart = Binding::new(region(0, 8192), region(8192, 8192), 4096).expect("绑定应成立");
+        assert_eq!(apart.chunk, 4096);
+        assert!(!regions_overlap(region(0, 512), region(512, 512)));
+        assert!(regions_overlap(region(0, 513), region(512, 512)));
     }
 
     #[test]

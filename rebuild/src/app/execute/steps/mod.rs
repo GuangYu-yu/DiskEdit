@@ -125,7 +125,6 @@ pub fn apply(
             };
             let binding = relocate::Binding::new(source, destination, *chunk)?;
             relocate::apply(binding, channel, token, relocate::RelocateFaults::default())?;
-            relocate::verify(binding, channel)?;
             if *ntfs_hidden {
                 boot::fix_ntfs_hidden(channel, token, destination, ctx.sector)?;
             }
