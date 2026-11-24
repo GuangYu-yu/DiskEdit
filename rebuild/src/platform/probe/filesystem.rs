@@ -37,7 +37,7 @@ fn match_kind(bytes: &[u8]) -> Option<ContentKind> {
     if at(bytes, 1024, &0xE0F5_E1E2u32.to_le_bytes()) {
         return fs(FsKind::Erofs);
     }
-    if at(bytes, 0x438, &0x53EFu16.to_le_bytes()) {
+    if at(bytes, 0x438, &0xEF53u16.to_le_bytes()) {
         return fs(FsKind::Ext);
     }
     if at(bytes, 0x10040, b"_BHRfS_M") {
@@ -120,7 +120,7 @@ mod tests {
         let cases: &[(Vec<u8>, FsKind)] = &[
             (with(0, b"XFSB"), FsKind::Xfs),
             (with(0, b"hsqs"), FsKind::Squashfs),
-            (with(0x438, &0x53EFu16.to_le_bytes()), FsKind::Ext),
+            (with(0x438, &0xEF53u16.to_le_bytes()), FsKind::Ext),
             (with(1024, &0xF2F5_2010u32.to_le_bytes()), FsKind::F2fs),
             (with(3, b"NTFS    "), FsKind::Ntfs),
             (with(3, b"EXFAT   "), FsKind::Exfat),

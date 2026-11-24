@@ -68,9 +68,6 @@ fn run(invocation: Invocation) -> u8 {
             let outcome =
                 execute::execute(&confirmed, &*platform, target, snapshot.generation.get());
             let label = target.display().to_string();
-            if let Some(reason) = outcome.reason() {
-                eprintln!("debug: {reason}");
-            }
             println!("{}", text::outcome(&outcome, &label, &label));
             exit::exit_of(&outcome)
         }

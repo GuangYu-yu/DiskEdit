@@ -358,7 +358,7 @@ mod tests {
         let mut image = vec![0u8; 4 * 1024 * 1024];
         let partition_start = 2048 * SECTOR as usize;
         image[partition_start + 0x438..partition_start + 0x43A]
-            .copy_from_slice(&0x53EFu16.to_le_bytes());
+            .copy_from_slice(&0xEF53u16.to_le_bytes());
         let mut host = FakeHost::image(image);
         host.kind = TargetKind::Block;
         host.partitions = vec![Partition {
