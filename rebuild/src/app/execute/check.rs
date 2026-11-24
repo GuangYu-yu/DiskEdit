@@ -32,7 +32,9 @@ pub fn run(
     let programs = profile(content)
         .support(Verb::Check)
         .tools()
-        .ok_or_else(|| ExecError::Unsupported(format!("{} 没有可用的检查器", content.as_str())))?;
+        .ok_or_else(|| {
+            ExecError::Unsupported(format!("no checker available for {}", content.as_str()))
+        })?;
     let host = Host { platform, target };
     let device_region = DeviceRegion::new(region.start(), region.len());
     with_device(&host, partition, device_region, |device| {
@@ -88,22 +90,25 @@ fn run_checker(platform: &dyn Platform, program: Program, device: &str) -> Resul
         | Program::Partx
         | Program::Blkid => {
             return Err(ExecError::InvalidPlan(format!(
-                "{program:?} 不是一致性检查器"
+                "{program:?} is not a consistency checker"
             )));
         }
     };
     args.push(device);
     let output = platform
         .run(program, &args)
-        .map_err(|error| ExecError::Io(format!("运行 {program:?} 失败: {error}")))?;
+        .map_err(|error| ExecError::Io(format!("failed to run {program:?}: {error}")))?;
     if output.succeeded() {
         return Ok(());
     }
     let detail = output.stderr_text();
     let detail = detail.trim();
     Err(ExecError::Check(if detail.is_empty() {
-        format!("{program:?} 报告问题（{:?}）", output.exit)
+        format!("{program:?} reported problems ({:?})", output.exit)
     } else {
-        format!("{program:?} 报告问题（{:?}）：{detail}", output.exit)
+        format!(
+            "{program:?} reported problems ({:?}): {detail}",
+            output.exit
+        )
     }))
 }

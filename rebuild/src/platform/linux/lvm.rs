@@ -50,7 +50,7 @@ pub fn parse_pvs(text: &str) -> PlatformResult<Vec<PvRow>> {
         let fields: Vec<&str> = line.split_whitespace().collect();
         if fields.len() != 4 {
             return Err(PlatformError::parse(format!(
-                "pvs 第 {} 行应为 4 个字段，实际 {}",
+                "pvs line {} should have 4 fields, got {}",
                 index + 1,
                 fields.len()
             )));
@@ -67,7 +67,7 @@ pub fn parse_pvs(text: &str) -> PlatformResult<Vec<PvRow>> {
 
 fn parse_u64(what: &str, text: &str) -> PlatformResult<u64> {
     text.parse::<u64>()
-        .map_err(|_| PlatformError::parse(format!("{what} 不是十进制字节数：{text:?}")))
+        .map_err(|_| PlatformError::parse(format!("{what} is not a decimal byte count: {text:?}")))
 }
 
 #[cfg(test)]

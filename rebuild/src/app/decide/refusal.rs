@@ -60,27 +60,59 @@ impl Refusal {
     /// 固定的下一步文案。
     pub fn next_step(&self) -> &'static str {
         match self {
-            Self::ConfirmationRequired => "确认后以 --yes 重新执行",
-            Self::OverwriteNotConfirmed => "目标不是空盘；确认覆盖后加覆盖旗标重新执行",
-            Self::IdentityUnprovable { .. } => "确认目标是块设备整盘、分区或镜像文件后重试",
-            Self::IdentityChanged => "目标在计划之后发生变化，重新运行以重新观察",
-            Self::PlanDigestMismatch => "计划不一致，放弃本次执行并重新生成计划",
-            Self::OccupancyUnknown { .. } => "先解除挂载或释放占用，再查看占用来源后重试",
-            Self::Occupied { .. } => "先卸载或释放占用，再重试；只读命令可直接使用",
-            Self::FactUnknown { .. } => "补充探测条件后重新运行；未知事实不会被当作默认值",
-            Self::GeometryUnknown { .. } => "确认目标逻辑块大小与容量后重试",
-            Self::TableMissing => "先创建分区表，或将命令指向已有分区表的目标",
-            Self::TableDamaged { .. } => "先用只读命令检查证据，必要时从备份副本恢复",
-            Self::PartitionMissing { .. } => "先用列举命令确认分区号",
-            Self::PartitionOverlap { .. } => "调整起止位置，避免与既有分区重叠",
-            Self::CapacityInsufficient { .. } => "缩小请求尺寸或换用更大的目标",
-            Self::FilesystemUnknown { .. } => "先识别分区内容类别，再选择对应操作",
-            Self::ContentUnsupported { .. } => "改用该内容类别支持的操作或外部工具",
-            Self::MinimumSizeUnknown { .. } => "先在不缩小的前提下确认文件系统最小尺寸",
-            Self::BelowMinimumSize { .. } => "把目标尺寸提高到文件系统最小尺寸以上",
-            Self::ToolMissing { .. } => "安装所需外部程序后重试",
-            Self::PlatformCannotRunTools { .. } => "在提供所需外部程序的平台上重试",
-            Self::ArgumentOutOfRange { .. } => "按帮助中的取值范围修正参数",
+            Self::ConfirmationRequired => "rerun with --yes after confirmation",
+            Self::OverwriteNotConfirmed => {
+                "target is not blank; rerun with the overwrite flag after confirming overwrite"
+            }
+            Self::IdentityUnprovable { .. } => {
+                "confirm the target is a whole block device, a partition, or an image file, then retry"
+            }
+            Self::IdentityChanged => "target changed after planning; rerun to observe it again",
+            Self::PlanDigestMismatch => "plan mismatch; abandon this run and regenerate the plan",
+            Self::OccupancyUnknown { .. } => {
+                "unmount or release the usage first, then inspect the usage source and retry"
+            }
+            Self::Occupied { .. } => {
+                "unmount or release the usage first, then retry; read-only commands can be used directly"
+            }
+            Self::FactUnknown { .. } => {
+                "provide the missing probe conditions and rerun; unknown facts are never treated as defaults"
+            }
+            Self::GeometryUnknown { .. } => {
+                "confirm the target logical block size and capacity, then retry"
+            }
+            Self::TableMissing => {
+                "create a partition table first, or point the command at a target that already has one"
+            }
+            Self::TableDamaged { .. } => {
+                "inspect the evidence with read-only commands first, and recover from a backup copy if necessary"
+            }
+            Self::PartitionMissing { .. } => {
+                "confirm the partition number with a listing command first"
+            }
+            Self::PartitionOverlap { .. } => {
+                "adjust the start and end so they do not overlap existing partitions"
+            }
+            Self::CapacityInsufficient { .. } => "shrink the requested size or use a larger target",
+            Self::FilesystemUnknown { .. } => {
+                "identify the partition content kind first, then choose the matching operation"
+            }
+            Self::ContentUnsupported { .. } => {
+                "use an operation or external tool supported by this content kind"
+            }
+            Self::MinimumSizeUnknown { .. } => {
+                "confirm the filesystem minimum size before shrinking"
+            }
+            Self::BelowMinimumSize { .. } => {
+                "raise the target size above the filesystem minimum size"
+            }
+            Self::ToolMissing { .. } => "install the required external program and retry",
+            Self::PlatformCannotRunTools { .. } => {
+                "retry on a platform that provides the required external programs"
+            }
+            Self::ArgumentOutOfRange { .. } => {
+                "fix the argument according to the valid range in the help"
+            }
         }
     }
 }

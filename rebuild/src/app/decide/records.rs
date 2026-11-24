@@ -26,7 +26,7 @@ pub fn verify(snapshot: &Snapshot, token: String) -> Result<Plan, Refusal> {
         .filter(|fingerprint| fingerprint.strength() == Strength::Strong);
     if identity.is_none() {
         return Err(Refusal::IdentityUnprovable {
-            why: "目标身份读不出，无法定位记录目录".to_owned(),
+            why: "target identity unreadable, cannot locate the record directory".to_owned(),
         });
     }
     Ok(Plan::read_only(vec![Step::new(

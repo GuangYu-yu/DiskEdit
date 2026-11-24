@@ -99,7 +99,7 @@ impl Target {
         if std::os::unix::fs::FileTypeExt::is_block_device(&file_type) {
             if is_partition_node(path)? {
                 return Err(PlatformError::unsupported(format!(
-                    "{} 是分区节点；受支持的目标是整盘，分区用 `:N` 选择器",
+                    "{} is a partition node; supported targets are whole disks, use a `:N` selector for partitions",
                     path.display()
                 )));
             }
@@ -116,7 +116,7 @@ impl Target {
             });
         }
         Err(PlatformError::unsupported(format!(
-            "{} 既不是普通文件也不是块设备",
+            "{} is neither a regular file nor a block device",
             path.display()
         )))
     }
@@ -263,7 +263,7 @@ fn file_fingerprint(target: &Target) -> PlatformResult<Fingerprint> {
     {
         let _ = metadata;
         Err(PlatformError::not_applicable(
-            "当前平台没有设备号与 inode 号，无法构造文件指纹",
+            "this platform has no device and inode numbers; cannot build a file fingerprint",
         ))
     }
 }
@@ -305,10 +305,10 @@ pub fn disk_name(path: &Path) -> PlatformResult<String> {
     let name = path
         .file_name()
         .and_then(|name| name.to_str())
-        .ok_or_else(|| PlatformError::parse(format!("{} 中没有设备名", path.display())))?;
+        .ok_or_else(|| PlatformError::parse(format!("no device name in {}", path.display())))?;
     if name.is_empty() {
         return Err(PlatformError::parse(format!(
-            "{} 中的设备名为空",
+            "device name in {} is empty",
             path.display()
         )));
     }
@@ -344,15 +344,16 @@ pub fn partitions(target: &Target) -> PlatformResult<Vec<Partition>> {
             Some(text) => text,
             None => continue,
         };
-        let number = parse_u64("分区号", &number_text)?;
-        let number = u32::try_from(number)
-            .map_err(|_| PlatformError::parse(format!("分区号 {number} 超出 u32 范围")))?;
+        let number = parse_u64("partition number", &number_text)?;
+        let number = u32::try_from(number).map_err(|_| {
+            PlatformError::parse(format!("partition number {number} exceeds u32 range"))
+        })?;
         let start_text = read_required_attr(&part_dir.join("start"))?;
         let size_text = read_required_attr(&part_dir.join("size"))?;
         found.push(Partition {
             number,
-            start_lba: parse_u64("分区起点", &start_text)?,
-            sectors: parse_u64("分区长度", &size_text)?,
+            start_lba: parse_u64("partition start", &start_text)?,
+            sectors: parse_u64("partition length", &size_text)?,
         });
     }
     found.sort_by_key(|partition| partition.number);
@@ -384,7 +385,7 @@ pub fn partition_node(target: &Target, number: u32) -> PlatformResult<PathBuf> {
             Some(text) => text,
             None => continue,
         };
-        if parse_u64("分区号", &number_text)? != u64::from(number) {
+        if parse_u64("partition number", &number_text)? != u64::from(number) {
             continue;
         }
         if let Some(dev) = read_optional_attr(&part_dir.join("dev"))? {
@@ -398,12 +399,12 @@ pub fn partition_node(target: &Target, number: u32) -> PlatformResult<PathBuf> {
             return Ok(node);
         }
         return Err(PlatformError::not_supported(format!(
-            "{} 的分区 {number} 在 /dev 下没有可用的设备节点",
+            "{} has no usable device node under /dev for partition {number}",
             target.path().display()
         )));
     }
     Err(PlatformError::parse(format!(
-        "{} 上没有编号为 {number} 的分区",
+        "{} has no partition numbered {number}",
         target.path().display()
     )))
 }
@@ -424,7 +425,7 @@ fn conventional_partition_path(kname: &str, number: u32) -> PathBuf {
 fn parse_u64(what: &str, text: &str) -> PlatformResult<u64> {
     text.trim()
         .parse::<u64>()
-        .map_err(|_| PlatformError::parse(format!("{what}不是十进制整数：{text:?}")))
+        .map_err(|_| PlatformError::parse(format!("{what} is not a decimal integer: {text:?}")))
 }
 
 #[cfg(test)]
@@ -470,7 +471,7 @@ mod tests {
 
     #[test]
     fn parse_u64_reads_decimal_only() {
-        assert_eq!(parse_u64("起点", " 2048\n").expect("可解析"), 2048);
-        assert!(parse_u64("起点", "0x800").is_err());
+        assert_eq!(parse_u64("start", " 2048\n").expect("可解析"), 2048);
+        assert!(parse_u64("start", "0x800").is_err());
     }
 }

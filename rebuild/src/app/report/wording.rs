@@ -27,7 +27,7 @@ impl NextStep {
 /// 部分完成/待恢复的三要素文案。
 pub fn partial(target: &str, evidence: &str, next: NextStep) -> String {
     format!(
-        "目标可能已改变：{target}；证据路径：{evidence}；下一步：diskedit {} {target} --yes",
+        "target may have changed: {target}; evidence: {evidence}; next: diskedit {} {target} --yes",
         next.command()
     )
 }

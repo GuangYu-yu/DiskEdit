@@ -40,7 +40,7 @@ pub fn index_of(partition: u32) -> Result<usize, String> {
     let index = usize::try_from(partition)
         .ok()
         .and_then(|number| number.checked_sub(1))
-        .ok_or_else(|| format!("分区号 {partition} 不合法"))?;
+        .ok_or_else(|| format!("invalid partition number {partition}"))?;
     Ok(index)
 }
 
@@ -55,20 +55,20 @@ pub fn add_gpt(
     part_number: Option<u32>,
 ) -> Result<u32, String> {
     if sectors == 0 {
-        return Err("新分区长度为 0".to_owned());
+        return Err("new partition length is zero".to_owned());
     }
     let index = match part_number {
         Some(number) => {
             let index = index_of(number)?;
             let slot = entries
                 .get(index)
-                .ok_or_else(|| format!("分区号 {number} 超出条目数组"))?;
+                .ok_or_else(|| format!("partition number {number} beyond entry array"))?;
             if is_used(slot) {
-                return Err(format!("分区号 {number} 已被占用"));
+                return Err(format!("partition number {number} is in use"));
             }
             index
         }
-        None => free_slot(entries).ok_or_else(|| "没有空闲分区条目".to_owned())?,
+        None => free_slot(entries).ok_or_else(|| "no free partition entry".to_owned())?,
     };
     entries[index] = PartitionEntry {
         partition_type_guid: type_guid,
@@ -78,7 +78,7 @@ pub fn add_gpt(
         attributes: 0,
         name: PartitionName::from_str_lossy(name),
     };
-    Ok(u32::try_from(index + 1).expect("条目下标受 128 限制"))
+    Ok(u32::try_from(index + 1).expect("entry index fits in u32"))
 }
 
 /// 清零一个条目。
@@ -86,9 +86,9 @@ pub fn delete_gpt(entries: &mut [PartitionEntry], partition: u32) -> Result<(), 
     let index = index_of(partition)?;
     let entry = entries
         .get_mut(index)
-        .ok_or_else(|| format!("分区 {partition} 超出条目数组"))?;
+        .ok_or_else(|| format!("partition {partition} beyond entry array"))?;
     if !is_used(entry) {
-        return Err(format!("分区 {partition} 不存在"));
+        return Err(format!("partition {partition} not found"));
     }
     *entry = EMPTY_GPT;
     Ok(())
@@ -102,14 +102,14 @@ pub fn resize_gpt(
     sectors: u64,
 ) -> Result<(), String> {
     if sectors == 0 {
-        return Err("分区长度不能为 0".to_owned());
+        return Err("partition length cannot be zero".to_owned());
     }
     let index = index_of(partition)?;
     let entry = entries
         .get_mut(index)
-        .ok_or_else(|| format!("分区 {partition} 超出条目数组"))?;
+        .ok_or_else(|| format!("partition {partition} beyond entry array"))?;
     if !is_used(entry) {
-        return Err(format!("分区 {partition} 不存在"));
+        return Err(format!("partition {partition} not found"));
     }
     entry.starting_lba = start_lba;
     entry.ending_lba = start_lba + sectors - 1;
@@ -121,9 +121,9 @@ pub fn set_name(entries: &mut [PartitionEntry], partition: u32, value: &str) -> 
     let index = index_of(partition)?;
     let entry = entries
         .get_mut(index)
-        .ok_or_else(|| format!("分区 {partition} 超出条目数组"))?;
+        .ok_or_else(|| format!("partition {partition} beyond entry array"))?;
     if !is_used(entry) {
-        return Err(format!("分区 {partition} 不存在"));
+        return Err(format!("partition {partition} not found"));
     }
     entry.name = PartitionName::from_str_lossy(value);
     Ok(())
@@ -138,9 +138,9 @@ pub fn set_attributes(
     let index = index_of(partition)?;
     let entry = entries
         .get_mut(index)
-        .ok_or_else(|| format!("分区 {partition} 超出条目数组"))?;
+        .ok_or_else(|| format!("partition {partition} beyond entry array"))?;
     if !is_used(entry) {
-        return Err(format!("分区 {partition} 不存在"));
+        return Err(format!("partition {partition} not found"));
     }
     entry.attributes = value;
     Ok(())
@@ -154,14 +154,16 @@ pub fn set_attribute_bit(
     on: bool,
 ) -> Result<(), String> {
     if flag >= 64 {
-        return Err(format!("属性位 {flag} 超出 64 位属性字"));
+        return Err(format!(
+            "attribute bit {flag} beyond the 64-bit attribute word"
+        ));
     }
     let index = index_of(partition)?;
     let entry = entries
         .get_mut(index)
-        .ok_or_else(|| format!("分区 {partition} 超出条目数组"))?;
+        .ok_or_else(|| format!("partition {partition} beyond entry array"))?;
     if !is_used(entry) {
-        return Err(format!("分区 {partition} 不存在"));
+        return Err(format!("partition {partition} not found"));
     }
     let mask = 1u64 << flag;
     entry.attributes = if on {
@@ -175,14 +177,14 @@ pub fn set_attribute_bit(
 /// 修改分区类型 GUID。
 pub fn set_type(entries: &mut [PartitionEntry], partition: u32, guid: Guid) -> Result<(), String> {
     if guid.is_zero() {
-        return Err("分区类型不能为空".to_owned());
+        return Err("partition type cannot be empty".to_owned());
     }
     let index = index_of(partition)?;
     let entry = entries
         .get_mut(index)
-        .ok_or_else(|| format!("分区 {partition} 超出条目数组"))?;
+        .ok_or_else(|| format!("partition {partition} beyond entry array"))?;
     if !is_used(entry) {
-        return Err(format!("分区 {partition} 不存在"));
+        return Err(format!("partition {partition} not found"));
     }
     entry.partition_type_guid = guid;
     Ok(())
@@ -197,19 +199,19 @@ pub fn add_mbr(
     part_number: Option<u32>,
 ) -> Result<u32, String> {
     if sectors == 0 {
-        return Err("新分区长度为 0".to_owned());
+        return Err("new partition length is zero".to_owned());
     }
-    let start = u32::try_from(start_lba).map_err(|_| "起始 LBA 超出 MBR 范围".to_owned())?;
-    let size = u32::try_from(sectors).map_err(|_| "分区长度超出 MBR 范围".to_owned())?;
+    let start = u32::try_from(start_lba).map_err(|_| "start LBA beyond MBR range".to_owned())?;
+    let size =
+        u32::try_from(sectors).map_err(|_| "partition length beyond MBR range".to_owned())?;
     let index = match part_number {
         Some(number) => {
             let index = index_of(number)?;
-            let slot = mbr
-                .entries
-                .get(index)
-                .ok_or_else(|| format!("分区号 {number} 超出主分区槽"))?;
+            let slot = mbr.entries.get(index).ok_or_else(|| {
+                format!("partition number {number} beyond primary partition slots")
+            })?;
             if !slot.is_empty() {
-                return Err(format!("分区号 {number} 已被占用"));
+                return Err(format!("partition number {number} is in use"));
             }
             index
         }
@@ -217,7 +219,7 @@ pub fn add_mbr(
             .entries
             .iter()
             .position(|entry| entry.is_empty())
-            .ok_or_else(|| "没有空闲主分区槽".to_owned())?,
+            .ok_or_else(|| "no free primary partition slot".to_owned())?,
     };
     mbr.entries[index] = MbrEntry {
         boot: 0,
@@ -225,7 +227,7 @@ pub fn add_mbr(
         start_lba: start,
         size_lba: size,
     };
-    Ok(u32::try_from(index + 1).expect("主分区槽受 4 限制"))
+    Ok(u32::try_from(index + 1).expect("primary slot fits in u32"))
 }
 
 /// 清空 MBR 的一个主分区。
@@ -234,9 +236,9 @@ pub fn delete_mbr(mbr: &mut Mbr, partition: u32) -> Result<(), String> {
     let entry = mbr
         .entries
         .get_mut(index)
-        .ok_or_else(|| format!("分区 {partition} 超出主分区槽"))?;
+        .ok_or_else(|| format!("partition {partition} beyond primary partition slots"))?;
     if entry.is_empty() {
-        return Err(format!("分区 {partition} 不存在"));
+        return Err(format!("partition {partition} not found"));
     }
     *entry = MbrEntry::default();
     Ok(())
@@ -250,18 +252,20 @@ pub fn resize_mbr(
     sectors: u64,
 ) -> Result<(), String> {
     if sectors == 0 {
-        return Err("分区长度不能为 0".to_owned());
+        return Err("partition length cannot be zero".to_owned());
     }
     let index = index_of(partition)?;
     let entry = mbr
         .entries
         .get_mut(index)
-        .ok_or_else(|| format!("分区 {partition} 超出主分区槽"))?;
+        .ok_or_else(|| format!("partition {partition} beyond primary partition slots"))?;
     if entry.is_empty() {
-        return Err(format!("分区 {partition} 不存在"));
+        return Err(format!("partition {partition} not found"));
     }
-    entry.start_lba = u32::try_from(start_lba).map_err(|_| "起始 LBA 超出 MBR 范围".to_owned())?;
-    entry.size_lba = u32::try_from(sectors).map_err(|_| "分区长度超出 MBR 范围".to_owned())?;
+    entry.start_lba =
+        u32::try_from(start_lba).map_err(|_| "start LBA beyond MBR range".to_owned())?;
+    entry.size_lba =
+        u32::try_from(sectors).map_err(|_| "partition length beyond MBR range".to_owned())?;
     Ok(())
 }
 

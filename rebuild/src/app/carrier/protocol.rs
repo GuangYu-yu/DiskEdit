@@ -43,7 +43,7 @@ impl<R: Read> Lines<R> {
             if self.buffer.len() > MAX_FRAME {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
-                    format!("单帧超过 {MAX_FRAME} 字节"),
+                    format!("frame exceeds {MAX_FRAME} bytes"),
                 ));
             }
             let text = String::from_utf8_lossy(&self.buffer);
@@ -58,7 +58,7 @@ impl<R: Read> Lines<R> {
             let value: Value = serde_json::from_str(line).map_err(|error| {
                 std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
-                    format!("帧不是合法 JSON：{error}"),
+                    format!("frame is not valid JSON: {error}"),
                 )
             })?;
             return Ok(Some(value));
@@ -73,7 +73,7 @@ pub fn emit<W: Write>(writer: &mut W, frame: &Value) -> std::io::Result<()> {
     if text.len() > MAX_FRAME {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
-            format!("单帧超过 {MAX_FRAME} 字节"),
+            format!("frame exceeds {MAX_FRAME} bytes"),
         ));
     }
     writer.write_all(text.as_bytes())?;
@@ -127,7 +127,7 @@ pub fn step(id: u32, sid: &str, kind: &StepKind, regions: &[Region]) -> Result<V
     let mut body = encode_kind(kind)?;
     let fields = body
         .as_object_mut()
-        .ok_or_else(|| "步骤编码必须是对象".to_owned())?;
+        .ok_or_else(|| "step encoding must be an object".to_owned())?;
     fields.insert("v".into(), json!(VERSION));
     fields.insert("type".into(), json!("step"));
     fields.insert("id".into(), json!(id));
@@ -175,11 +175,11 @@ pub fn result(id: u32, sid: &str, result: &StepResult) -> Value {
 /// 解码结果帧，返回步骤号与结果。
 pub fn decode_result(frame: &Value) -> Result<(u32, StepResult), String> {
     let id = number_u64(frame, "id")?;
-    let id = u32::try_from(id).map_err(|_| "结果帧的步骤号超出范围".to_owned())?;
+    let id = u32::try_from(id).map_err(|_| "result frame step id out of range".to_owned())?;
     let applied = match text(frame, "outcome")? {
         "applied" => true,
         "failed" => false,
-        other => return Err(format!("未知的结果 {other}")),
+        other => return Err(format!("unknown outcome {other}")),
     };
     let class = frame
         .get("class")
@@ -215,23 +215,24 @@ pub fn decode_step(frame: &Value) -> Result<(StepKind, Vec<Region>), String> {
     let regions = frame
         .get("regions")
         .and_then(Value::as_array)
-        .ok_or_else(|| "步骤缺少 regions".to_owned())?;
+        .ok_or_else(|| "step missing regions".to_owned())?;
     let mut decoded = Vec::with_capacity(regions.len());
     for region in regions {
         let pair = region
             .as_array()
             .filter(|pair| pair.len() == 2)
-            .ok_or_else(|| "区间必须是 [起点, 长度]".to_owned())?;
+            .ok_or_else(|| "region must be [start, length]".to_owned())?;
         let start = pair[0]
             .as_u64()
-            .ok_or_else(|| "区间起点必须是整数".to_owned())?;
+            .ok_or_else(|| "region start must be an integer".to_owned())?;
         let len = pair[1]
             .as_u64()
-            .ok_or_else(|| "区间长度必须是整数".to_owned())?;
+            .ok_or_else(|| "region length must be an integer".to_owned())?;
         let end = start
             .checked_add(len)
-            .ok_or_else(|| "区间越过 64 位上界".to_owned())?;
-        decoded.push(Region::new(start, end).map_err(|error| format!("区间无效：{error:?}"))?);
+            .ok_or_else(|| "region exceeds 64-bit bound".to_owned())?;
+        decoded
+            .push(Region::new(start, end).map_err(|error| format!("invalid region: {error:?}"))?);
     }
     Ok((kind, decoded))
 }
@@ -352,7 +353,7 @@ fn encode_kind(kind: &StepKind) -> Result<Value, String> {
         | StepKind::VerifyRecord { .. }
         | StepKind::ScanRecords
         | StepKind::RecoverRecords { .. } => {
-            return Err("该步骤不写目标字节，不进载体协议".to_owned());
+            return Err("step writes no target bytes; not part of carrier protocol".to_owned());
         }
     };
     Ok(frame)
@@ -392,19 +393,19 @@ fn decode_kind(frame: &Value) -> Result<StepKind, String> {
         "make-filesystem" => StepKind::MakeFilesystem {
             partition: number_u32(frame, "partition")?,
             filesystem: MkfsKind::parse(text(frame, "filesystem")?)
-                .ok_or_else(|| "未知的文件系统类型".to_owned())?,
+                .ok_or_else(|| "unknown filesystem type".to_owned())?,
             label: optional_text(frame, "label")?,
         },
         "grow-filesystem" => StepKind::GrowFilesystem {
             partition: number_u32(frame, "partition")?,
             filesystem: FsKind::from_name(text(frame, "filesystem")?)
-                .ok_or_else(|| "未知的文件系统族".to_owned())?,
+                .ok_or_else(|| "unknown filesystem family".to_owned())?,
             bytes: number_u64(frame, "bytes")?,
         },
         "shrink-filesystem" => StepKind::ShrinkFilesystem {
             partition: number_u32(frame, "partition")?,
             filesystem: FsKind::from_name(text(frame, "filesystem")?)
-                .ok_or_else(|| "未知的文件系统族".to_owned())?,
+                .ok_or_else(|| "unknown filesystem family".to_owned())?,
             bytes: number_u64(frame, "bytes")?,
         },
         "copy-partition" => StepKind::CopyPartition {
@@ -420,7 +421,7 @@ fn decode_kind(frame: &Value) -> Result<StepKind, String> {
             ntfs_hidden: boolean(frame, "ntfs_hidden")?,
         },
         "refresh-kernel-view" => StepKind::RefreshKernelView,
-        other => return Err(format!("未知的步骤 {other}")),
+        other => return Err(format!("unknown step {other}")),
     };
     Ok(decoded)
 }
@@ -454,7 +455,7 @@ fn parse_format(name: &str) -> Result<TableFormat, String> {
     match name {
         "gpt" => Ok(TableFormat::Gpt),
         "mbr" => Ok(TableFormat::Mbr),
-        other => Err(format!("未知的表格式 {other}")),
+        other => Err(format!("unknown table format {other}")),
     }
 }
 
@@ -475,7 +476,7 @@ fn parse_property(name: &str) -> Result<SetProperty, String> {
         "uuid" => Ok(SetProperty::Uuid),
         "flag" => Ok(SetProperty::Flag),
         "type" => Ok(SetProperty::Type),
-        other => Err(format!("未知的属性 {other}")),
+        other => Err(format!("unknown property {other}")),
     }
 }
 
@@ -483,14 +484,14 @@ fn text<'a>(frame: &'a Value, name: &str) -> Result<&'a str, String> {
     frame
         .get(name)
         .and_then(Value::as_str)
-        .ok_or_else(|| format!("缺少字符串字段 {name}"))
+        .ok_or_else(|| format!("missing string field {name}"))
 }
 
 fn optional_text(frame: &Value, name: &str) -> Result<Option<String>, String> {
     match frame.get(name) {
         None | Some(Value::Null) => Ok(None),
         Some(Value::String(value)) => Ok(Some(value.clone())),
-        Some(_) => Err(format!("{name} 必须是字符串或 null")),
+        Some(_) => Err(format!("{name} must be a string or null")),
     }
 }
 
@@ -498,26 +499,26 @@ fn boolean(frame: &Value, name: &str) -> Result<bool, String> {
     frame
         .get(name)
         .and_then(Value::as_bool)
-        .ok_or_else(|| format!("缺少布尔字段 {name}"))
+        .ok_or_else(|| format!("missing boolean field {name}"))
 }
 
 fn number_u64(frame: &Value, name: &str) -> Result<u64, String> {
     frame
         .get(name)
         .and_then(Value::as_u64)
-        .ok_or_else(|| format!("缺少整数字段 {name}"))
+        .ok_or_else(|| format!("missing integer field {name}"))
 }
 
 fn number_u32(frame: &Value, name: &str) -> Result<u32, String> {
     let value = number_u64(frame, name)?;
-    u32::try_from(value).map_err(|_| format!("{name} 超出范围"))
+    u32::try_from(value).map_err(|_| format!("{name} out of range"))
 }
 
 fn number_i64(frame: &Value, name: &str) -> Result<i64, String> {
     frame
         .get(name)
         .and_then(Value::as_i64)
-        .ok_or_else(|| format!("缺少整数字段 {name}"))
+        .ok_or_else(|| format!("missing integer field {name}"))
 }
 
 fn optional_u32(frame: &Value, name: &str) -> Result<Option<u32>, String> {
@@ -528,7 +529,7 @@ fn optional_u32(frame: &Value, name: &str) -> Result<Option<u32>, String> {
 }
 
 fn guid(frame: &Value, name: &str) -> Result<Guid, String> {
-    parse_hex16(text(frame, name)?).ok_or_else(|| format!("{name} 必须是 32 位十六进制 GUID"))
+    parse_hex16(text(frame, name)?).ok_or_else(|| format!("{name} must be a 32-digit hex GUID"))
 }
 
 fn optional_guid(frame: &Value, name: &str) -> Result<Option<Guid>, String> {
@@ -543,8 +544,8 @@ fn optional_content(frame: &Value) -> Result<Option<ContentKind>, String> {
         None | Some(Value::Null) => Ok(None),
         Some(Value::String(name)) => ContentKind::from_name(name)
             .map(Some)
-            .ok_or_else(|| format!("未知的内容类别 {name}")),
-        Some(_) => Err("content 必须是字符串或 null".to_owned()),
+            .ok_or_else(|| format!("unknown content kind {name}")),
+        Some(_) => Err("content must be a string or null".to_owned()),
     }
 }
 

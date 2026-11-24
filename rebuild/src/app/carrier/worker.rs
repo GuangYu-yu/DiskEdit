@@ -26,20 +26,22 @@ pub fn invoked(args: &[OsString]) -> bool {
 /// 工作进程主循环；返回退出码。
 pub fn run() -> u8 {
     if stdin().is_terminal() && std::env::var_os(FROM_INIT).is_none() {
-        eprintln!("__worker 不是用户入口；请经虚拟机载体或引导脚本调用");
+        eprintln!(
+            "__worker is not a user entry point; invoke it via the VM carrier or boot script"
+        );
         return 2;
     }
     let token = match std::env::var(TOKEN) {
         Ok(value) if !value.is_empty() => value,
         _ => {
-            eprintln!("缺少环境变量 {TOKEN}");
+            eprintln!("missing environment variable {TOKEN}");
             return 3;
         }
     };
     let platform = match platform::open() {
         Ok(platform) => platform,
         Err(error) => {
-            eprintln!("工作进程打开平台失败：{error}");
+            eprintln!("worker failed to open platform: {error}");
             return 3;
         }
     };
@@ -47,7 +49,7 @@ pub fn run() -> u8 {
     let mut output = stdout();
 
     if let Err(error) = platform.prepare_protocol_input() {
-        eprintln!("准备协议通道失败：{error}");
+        eprintln!("failed to prepare protocol channel: {error}");
         return 3;
     }
 
@@ -66,21 +68,21 @@ pub fn run() -> u8 {
     if hello.get("type").and_then(Value::as_str) != Some("hello")
         || hello.get("v").and_then(Value::as_u64) != Some(protocol::VERSION)
     {
-        eprintln!("期待握手帧，收到 {:?}", hello.get("type"));
+        eprintln!("expected handshake frame, got {:?}", hello.get("type"));
         return 5;
     }
     if hello.get("token").and_then(Value::as_str) != Some(token.as_str()) {
-        eprintln!("令牌不匹配");
+        eprintln!("token mismatch");
         return 3;
     }
     if hello.get("binary_version").and_then(Value::as_str) != Some(env!("CARGO_PKG_VERSION")) {
-        eprintln!("二进制版本与宿主不一致");
+        eprintln!("binary version does not match host");
         return 3;
     }
     let target = match hello.get("target").and_then(Value::as_str) {
         Some(value) => value,
         None => {
-            eprintln!("握手帧缺少 target");
+            eprintln!("handshake frame missing target");
             return 5;
         }
     };
@@ -99,14 +101,14 @@ pub fn run() -> u8 {
     {
         Some(value) => value,
         None => {
-            eprintln!("握手帧的计划摘要不可用");
+            eprintln!("handshake frame plan digest unavailable");
             return 5;
         }
     };
     let mut handle = match platform.open_target(std::path::Path::new(target)) {
         Ok(handle) => handle,
         Err(error) => {
-            eprintln!("打开目标 {target} 失败：{error}");
+            eprintln!("failed to open target {target}: {error}");
             return 3;
         }
     };
@@ -136,7 +138,7 @@ pub fn run() -> u8 {
         if frame.get("v").and_then(Value::as_u64) != Some(protocol::VERSION)
             || frame.get("sid").and_then(Value::as_str) != Some(sid.as_str())
         {
-            eprintln!("帧的版本或会话号不匹配");
+            eprintln!("frame version or session id mismatch");
             return 5;
         }
         match frame.get("type").and_then(Value::as_str) {
@@ -157,7 +159,9 @@ pub fn run() -> u8 {
                             platform
                                 .update_table(std::path::Path::new(target))
                                 .map_err(|error| {
-                                    ExecError::Postcondition(format!("刷新内核视图失败：{error}"))
+                                    ExecError::Postcondition(format!(
+                                        "failed to refresh kernel view: {error}"
+                                    ))
                                 })
                         } else {
                             execute::apply_delegated(
@@ -197,7 +201,7 @@ pub fn run() -> u8 {
                 return 0;
             }
             Some(other) => {
-                eprintln!("未知的帧类型 {other}");
+                eprintln!("unknown frame type {other}");
                 return 5;
             }
             None => return 5,
@@ -207,7 +211,10 @@ pub fn run() -> u8 {
 
 fn reconcile(handle: &dyn TargetHandle, disk_size: u64, sector: u64) -> Result<(), u8> {
     if handle.len() != disk_size {
-        eprintln!("目标容量 {} 与宿主声明的 {disk_size} 不一致", handle.len());
+        eprintln!(
+            "target capacity {} does not match host declared {disk_size}",
+            handle.len()
+        );
         return Err(3);
     }
     if handle.sector_size() != Some(sector) {
@@ -216,7 +223,7 @@ fn reconcile(handle: &dyn TargetHandle, disk_size: u64, sector: u64) -> Result<(
             && sector == crate::app::observe::disk::IMAGE_LOGICAL_BLOCK;
         if !image {
             eprintln!(
-                "目标扇区尺寸 {:?} 与宿主声明的 {sector} 不一致",
+                "target sector size {:?} does not match host declared {sector}",
                 handle.sector_size()
             );
             return Err(3);
@@ -228,7 +235,7 @@ fn reconcile(handle: &dyn TargetHandle, disk_size: u64, sector: u64) -> Result<(
 fn next(input: &mut Lines<std::io::Stdin>) -> Result<Option<Value>, String> {
     input
         .next_frame()
-        .map_err(|error| format!("读取宿主帧失败：{error}"))
+        .map_err(|error| format!("failed to read host frame: {error}"))
 }
 
 fn class(error: &ExecError) -> u8 {

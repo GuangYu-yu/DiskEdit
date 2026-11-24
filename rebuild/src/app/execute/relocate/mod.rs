@@ -43,11 +43,11 @@ impl Binding {
     pub fn new(source: Region, destination: Region, chunk: u64) -> Result<Self, ExecError> {
         if source.len() != destination.len() {
             return Err(ExecError::InvalidPlan(
-                "搬移的源与目标长度不一致".to_owned(),
+                "source and destination lengths mismatch for move".to_owned(),
             ));
         }
         if source.is_empty() {
-            return Err(ExecError::InvalidPlan("搬移区间为空".to_owned()));
+            return Err(ExecError::InvalidPlan("move region is empty".to_owned()));
         }
         let mut chunk = chunk.max(1).min(source.len());
         // 自重叠时一块之内就可能覆盖自己的源；把块收紧到位移，中断后重跑仍读得到原字节。
@@ -72,14 +72,16 @@ impl Binding {
     /// 按下标取第 `index` 块在源与目标上的区间。
     pub fn piece(self, index: u64) -> Result<(Region, Region), ExecError> {
         if index >= self.chunks {
-            return Err(ExecError::InvalidPlan("块下标越界".to_owned()));
+            return Err(ExecError::InvalidPlan(
+                "chunk index out of range".to_owned(),
+            ));
         }
         let offset = index * self.chunk;
         let len = self.chunk.min(self.source.len() - offset);
         let source = Region::sized(self.source.start() + offset, len)
-            .map_err(|error| ExecError::InvalidPlan(format!("空区间: {error:?}")))?;
+            .map_err(|error| ExecError::InvalidPlan(format!("empty region: {error:?}")))?;
         let destination = Region::sized(self.destination.start() + offset, len)
-            .map_err(|error| ExecError::InvalidPlan(format!("空区间: {error:?}")))?;
+            .map_err(|error| ExecError::InvalidPlan(format!("empty region: {error:?}")))?;
         Ok((source, destination))
     }
 
@@ -161,7 +163,9 @@ pub fn apply(
     let mut checkpoint = Checkpoint::default();
     for index in binding.order() {
         if faults.stop_before_chunk == Some(index) {
-            return Err(ExecError::Injected(format!("搬移在第 {index} 块前中断")));
+            return Err(ExecError::Injected(format!(
+                "move interrupted before chunk {index}"
+            )));
         }
         let (source, destination) = binding.piece(index)?;
         let bytes = channel.read_exact(source.start(), source.len() as usize)?;
@@ -171,7 +175,7 @@ pub fn apply(
         let landed = channel.read_exact(destination.start(), destination.len() as usize)?;
         if landed != bytes {
             return Err(ExecError::Postcondition(format!(
-                "第 {index} 块写入后回读不一致"
+                "read-back mismatch after writing chunk {index}"
             )));
         }
         checkpoint.record();

@@ -30,14 +30,14 @@ pub fn parse(args: impl IntoIterator<Item = std::ffi::OsString>) -> Result<Invoc
     for arg in args {
         let text = arg
             .into_string()
-            .map_err(|_| "参数不是合法的 UTF-8".to_owned())?;
+            .map_err(|_| "argument is not valid UTF-8".to_owned())?;
         tokens.push(text);
     }
     if !tokens.is_empty() {
         tokens.remove(0);
     }
     if tokens.is_empty() {
-        return Err("缺少命令".to_owned());
+        return Err("missing command".to_owned());
     }
     if tokens[0] == "--help" || tokens[0] == "-h" {
         spec::print_help();
@@ -51,12 +51,12 @@ pub fn parse(args: impl IntoIterator<Item = std::ffi::OsString>) -> Result<Invoc
     let (name, consumed) = if tokens[0] == "records" {
         let sub = tokens
             .get(1)
-            .ok_or_else(|| "records 缺少子命令".to_owned())?;
+            .ok_or_else(|| "records requires a subcommand".to_owned())?;
         (format!("records {sub}"), 2)
     } else {
         (tokens[0].clone(), 1)
     };
-    let spec = spec::find(&name).ok_or_else(|| format!("未知命令 {name}"))?;
+    let spec = spec::find(&name).ok_or_else(|| format!("unknown command {name}"))?;
     let (positionals, flags) = collect(&tokens[consumed..], spec)?;
     build(name.as_str(), spec, &positionals, &flags)
 }
@@ -83,10 +83,10 @@ fn collect(rest: &[String], spec: &Spec) -> Result<(Vec<String>, Flags), String>
                 .find(|opt| opt.name == name)
                 .map(|opt| opt.value);
             let Some(value_needed) = value_needed else {
-                return Err(format!("未知选项 {name}"));
+                return Err(format!("unknown option {name}"));
             };
             if flags.contains_key(&name) {
-                return Err(format!("选项 {name} 重复出现"));
+                return Err(format!("option {name} given more than once"));
             }
             if value_needed {
                 let value = match inline {
@@ -95,18 +95,18 @@ fn collect(rest: &[String], spec: &Spec) -> Result<(Vec<String>, Flags), String>
                         index += 1;
                         rest.get(index)
                             .cloned()
-                            .ok_or_else(|| format!("选项 {name} 缺少取值"))?
+                            .ok_or_else(|| format!("option {name} requires a value"))?
                     }
                 };
                 flags.insert(name, Some(value));
             } else {
                 if inline.is_some() {
-                    return Err(format!("选项 {name} 不接受取值"));
+                    return Err(format!("option {name} does not take a value"));
                 }
                 flags.insert(name, None);
             }
         } else if token.starts_with('-') && token != "-" {
-            return Err(format!("未知选项 {token}"));
+            return Err(format!("unknown option {token}"));
         } else {
             positionals.push(token.clone());
         }
@@ -124,7 +124,7 @@ fn value(flags: &Flags, name: &str) -> Result<Option<String>, String> {
 }
 
 fn required_value(flags: &Flags, name: &str) -> Result<String, String> {
-    value(flags, name)?.ok_or_else(|| format!("选项 {name} 缺少取值"))
+    value(flags, name)?.ok_or_else(|| format!("option {name} requires a value"))
 }
 
 fn build(
@@ -174,7 +174,7 @@ fn build(
             let target = target_at(positionals, 0, spec.target)?;
             let token = positionals[1].clone();
             if token.len() != 32 || !token.chars().all(|ch| ch.is_ascii_hexdigit()) {
-                return Err("记录标识必须是 32 位十六进制".to_owned());
+                return Err("record id must be 32 hex digits".to_owned());
             }
             finish(
                 Request::new(target, Command::RecordsVerify { token }),
@@ -204,16 +204,16 @@ fn build(
                 .transpose()?;
             let grow_to_end = flag(flags, "--grow-to-end");
             if end.is_some() && grow_to_end {
-                return Err("--end 与 --grow-to-end 互斥".to_owned());
+                return Err("--end conflicts with --grow-to-end".to_owned());
             }
             if size.is_some() && (end.is_some() || grow_to_end) {
-                return Err("尺寸与 --end/--grow-to-end 互斥".to_owned());
+                return Err("size conflicts with --end/--grow-to-end".to_owned());
             }
             if size.is_none() && end.is_none() && !grow_to_end {
-                return Err("resize 需要 SIZE、--end 或 --grow-to-end".to_owned());
+                return Err("resize requires SIZE, --end, or --grow-to-end".to_owned());
             }
             if (end.is_some() || grow_to_end) && partition.is_none() {
-                return Err("该形态需要分区选择器 :N 或 :last".to_owned());
+                return Err("this form requires a partition selector :N or :last".to_owned());
             }
             finish(
                 Request::new(
@@ -268,7 +268,7 @@ fn build(
             let partition = require_partition(&target)?;
             let start = parse_start(&required_value(flags, "--start")?)?;
             if matches!(start, StartSpec::Align) {
-                return Err("copy 的 --start 只接受 LBA 或 end".to_owned());
+                return Err("copy --start accepts only an LBA or end".to_owned());
             }
             finish(
                 Request::new(
@@ -324,7 +324,7 @@ fn build(
             let target = target_path(positionals, 0)?;
             let partition = require_partition(&target)?;
             let filesystem = MkfsKind::parse(&positionals[1])
-                .ok_or_else(|| format!("未知文件系统 {}", positionals[1]))?;
+                .ok_or_else(|| format!("unknown filesystem {}", positionals[1]))?;
             finish(
                 Request::new(
                     target,
@@ -349,11 +349,11 @@ fn build(
             // 离线形态把文件系统撑满分区，没有尺寸参数；尺寸只在挂载点在线形态出现，
             // 这里拒绝，避免"报成功却没扩到请求尺寸"。
             if partition.is_some() && bytes.is_some() {
-                return Err("离线 resizefs 不接受尺寸参数：它把文件系统撑满所在分区".to_owned());
+                return Err("offline resizefs does not take a size: it grows the filesystem to fill its partition".to_owned());
             }
             // 挂载点形态反查的是宿主现场，逻辑扇区大小由内核给出，不由用户覆盖。
             if partition.is_none() && sector_size.is_some() {
-                return Err("挂载点形态不接受 --sector-size：扇区大小取自内核".to_owned());
+                return Err("mount-point form does not take --sector-size: the sector size comes from the kernel".to_owned());
             }
             finish(
                 Request::new(
@@ -375,10 +375,10 @@ fn build(
             let release = flag(flags, "--release");
             let discard = flag(flags, "--discard-replay");
             if discard && !release {
-                return Err("--discard-replay 需要 --release".to_owned());
+                return Err("--discard-replay requires --release".to_owned());
             }
             if replay && release {
-                return Err("--replay-table-only 与 --release 互斥".to_owned());
+                return Err("--replay-table-only conflicts with --release".to_owned());
             }
             let mode = if release {
                 RecoverMode::Release {
@@ -401,7 +401,7 @@ fn build(
             let table = match value(flags, "--table")?.as_deref() {
                 None | Some("gpt") => TableFormat::Gpt,
                 Some("mbr") => TableFormat::Mbr,
-                Some(other) => return Err(format!("--table 只接受 gpt 或 mbr，收到 {other}")),
+                Some(other) => return Err(format!("--table accepts only gpt or mbr, got {other}")),
             };
             finish(
                 Request::new(
@@ -444,7 +444,7 @@ fn build(
                 sector_size,
             )
         }
-        other => return Err(format!("未知命令 {other}")),
+        other => return Err(format!("unknown command {other}")),
     };
     invocation.yes = yes;
     if let Some(raw) = value(flags, "--identity")? {
@@ -453,7 +453,7 @@ fn build(
             .with_identity(Some(validate_identity(&raw)?));
     }
     if spec.confirmation && !yes {
-        return Err(format!("写命令 {} 需要 --yes", spec.name));
+        return Err(format!("write command {} requires --yes", spec.name));
     }
     Ok(invocation)
 }
@@ -464,13 +464,13 @@ fn build(
 fn validate_identity(raw: &str) -> Result<String, String> {
     let name = raw.trim();
     if name.is_empty() {
-        return Err("--identity 需要一个非空名字".to_owned());
+        return Err("--identity requires a non-empty name".to_owned());
     }
     if name.chars().any(char::is_control) {
-        return Err("--identity 不能包含控制字符".to_owned());
+        return Err("--identity cannot contain control characters".to_owned());
     }
     if name.len() > 255 {
-        return Err("--identity 超过 255 字节".to_owned());
+        return Err("--identity exceeds 255 bytes".to_owned());
     }
     Ok(name.to_owned())
 }
@@ -489,7 +489,7 @@ fn finish(mut request: Request, dry_run: bool, sector_size: Option<u64>) -> Invo
 fn expect_count(positionals: &[String], min: usize, max: usize) -> Result<(), String> {
     if positionals.len() < min || positionals.len() > max {
         return Err(format!(
-            "位置参数数量不符：期望 {min}..={max}，实际 {}",
+            "wrong number of positional arguments: expected {min}..={max}, got {}",
             positionals.len()
         ));
     }
@@ -499,7 +499,7 @@ fn expect_count(positionals: &[String], min: usize, max: usize) -> Result<(), St
 fn target_path(positionals: &[String], index: usize) -> Result<TargetSpec, String> {
     let raw = positionals
         .get(index)
-        .ok_or_else(|| "缺少目标参数".to_owned())?;
+        .ok_or_else(|| "missing target argument".to_owned())?;
     parse_target(raw)
 }
 
@@ -508,12 +508,12 @@ fn target_at(positionals: &[String], index: usize, mode: TargetMode) -> Result<T
     match mode {
         TargetMode::Whole | TargetMode::None => {
             if target.partition.is_some() {
-                return Err("该命令的目标不接受 :N 或 :last 后缀".to_owned());
+                return Err("this command's target does not accept a :N or :last suffix".to_owned());
             }
         }
         TargetMode::Partition => {
             if target.partition.is_none() {
-                return Err("该命令的目标必须带 :N 或 :last".to_owned());
+                return Err("this command's target requires a :N or :last suffix".to_owned());
             }
         }
         TargetMode::Any => {}
@@ -524,7 +524,7 @@ fn target_at(positionals: &[String], index: usize, mode: TargetMode) -> Result<T
 fn require_partition(target: &TargetSpec) -> Result<PartitionSelector, String> {
     target
         .partition
-        .ok_or_else(|| "该命令的目标必须带 :N 或 :last".to_owned())
+        .ok_or_else(|| "this command's target requires a :N or :last suffix".to_owned())
 }
 
 fn partition_of(target: &TargetSpec) -> Result<PartitionSelector, String> {
@@ -538,10 +538,10 @@ fn parse_target(raw: &str) -> Result<TargetSpec, String> {
         }
         if let Ok(number) = suffix.parse::<u32>() {
             if number == 0 {
-                return Err("分区号不能为 0".to_owned());
+                return Err("partition number cannot be 0".to_owned());
             }
             if number > 128 {
-                return Err(format!("分区号 {number} 超出 1..=128"));
+                return Err(format!("partition number {number} out of range 1..=128"));
             }
             return Ok(TargetSpec::new(
                 path,
@@ -554,7 +554,7 @@ fn parse_target(raw: &str) -> Result<TargetSpec, String> {
 
 fn parse_set(positionals: &[String], flags: &Flags) -> Result<(TargetSpec, SetAction), String> {
     if positionals.len() < 2 {
-        return Err("set 需要目标和属性名".to_owned());
+        return Err("set requires a target and a property name".to_owned());
     }
     let target = parse_target(&positionals[0])?;
     let property = positionals[1].as_str();
@@ -570,11 +570,11 @@ fn parse_set(positionals: &[String], flags: &Flags) -> Result<(TargetSpec, SetAc
         }
         "uuid" => {
             if rest.len() > 1 {
-                return Err("set uuid 至多接受一个取值".to_owned());
+                return Err("set uuid takes at most one value".to_owned());
             }
             let random = flag(flags, "--random");
             if rest.is_empty() && !random {
-                return Err("set uuid 需要取值或 --random".to_owned());
+                return Err("set uuid requires a value or --random".to_owned());
             }
             SetAction::Uuid {
                 value: rest.first().cloned(),
@@ -585,11 +585,11 @@ fn parse_set(positionals: &[String], flags: &Flags) -> Result<(TargetSpec, SetAc
             expect_exact(rest, 2)?;
             let flag_number = rest[0]
                 .parse::<u32>()
-                .map_err(|_| format!("属性位 {} 不是整数", rest[0]))?;
+                .map_err(|_| format!("flag bit {} is not an integer", rest[0]))?;
             let on = match rest[1].as_str() {
                 "on" => true,
                 "off" => false,
-                other => return Err(format!("flag 状态 {other} 只能是 on 或 off")),
+                other => return Err(format!("flag state {other} must be on or off")),
             };
             SetAction::Flag {
                 flag: flag_number.to_string(),
@@ -600,17 +600,20 @@ fn parse_set(positionals: &[String], flags: &Flags) -> Result<(TargetSpec, SetAc
             expect_exact(rest, 1)?;
             SetAction::Type(rest[0].clone())
         }
-        other => return Err(format!("未知属性 {other}")),
+        other => return Err(format!("unknown property {other}")),
     };
     if flag(flags, "--random") && property != "uuid" {
-        return Err("--random 只用于 set uuid".to_owned());
+        return Err("--random is only for set uuid".to_owned());
     }
     Ok((target, action))
 }
 
 fn expect_exact(rest: &[String], count: usize) -> Result<(), String> {
     if rest.len() != count {
-        return Err(format!("该属性需要 {count} 个取值，实际 {}", rest.len()));
+        return Err(format!(
+            "wrong number of values for this property: expected {count}, got {}",
+            rest.len()
+        ));
     }
     Ok(())
 }
@@ -625,19 +628,19 @@ fn parse_start(text: &str) -> Result<StartSpec, String> {
 
 fn parse_lba(text: &str) -> Result<u64, String> {
     if let Some(hex) = text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
-        u64::from_str_radix(hex, 16).map_err(|_| format!("{text} 不是合法 LBA"))
+        u64::from_str_radix(hex, 16).map_err(|_| format!("{text} is not a valid LBA"))
     } else {
         text.parse::<u64>()
-            .map_err(|_| format!("{text} 不是合法 LBA"))
+            .map_err(|_| format!("{text} is not a valid LBA"))
     }
 }
 
 fn parse_part_number(text: &str) -> Result<u32, String> {
     let number = text
         .parse::<u32>()
-        .map_err(|_| format!("分区号 {text} 不是整数"))?;
+        .map_err(|_| format!("partition number {text} is not an integer"))?;
     if !(1..=128).contains(&number) {
-        return Err(format!("分区号 {number} 超出 1..=128"));
+        return Err(format!("partition number {number} out of range 1..=128"));
     }
     Ok(number)
 }
@@ -645,10 +648,10 @@ fn parse_part_number(text: &str) -> Result<u32, String> {
 fn parse_sector_size(text: &str) -> Result<u64, String> {
     let sector = text
         .parse::<u64>()
-        .map_err(|_| format!("扇区尺寸 {text} 不是整数"))?;
+        .map_err(|_| format!("sector size {text} is not an integer"))?;
     const ALLOWED: [u64; 8] = [512, 1024, 2048, 4096, 8192, 16384, 32768, 65536];
     if !ALLOWED.contains(&sector) {
-        return Err(format!("扇区尺寸 {sector} 不在允许集合内"));
+        return Err(format!("sector size {sector} is not allowed"));
     }
     Ok(sector)
 }
@@ -656,10 +659,10 @@ fn parse_sector_size(text: &str) -> Result<u64, String> {
 fn parse_size(text: &str) -> Result<u64, String> {
     let trimmed = text.trim();
     if trimmed.is_empty() {
-        return Err("尺寸为空".to_owned());
+        return Err("empty size".to_owned());
     }
     if trimmed.starts_with('+') || trimmed.starts_with('-') || trimmed.ends_with('%') {
-        return Err("只支持绝对尺寸".to_owned());
+        return Err("only absolute sizes are supported".to_owned());
     }
     let lowered = trimmed.to_ascii_lowercase();
     let (digits, multiplier) = [
@@ -689,9 +692,9 @@ fn parse_size(text: &str) -> Result<u64, String> {
     .unwrap_or((lowered.clone(), 1));
     let base = digits
         .parse::<u64>()
-        .map_err(|_| format!("尺寸 {text} 不是合法数字"))?;
+        .map_err(|_| format!("size {text} is not a valid number"))?;
     base.checked_mul(multiplier)
-        .ok_or_else(|| format!("尺寸 {text} 超出范围"))
+        .ok_or_else(|| format!("size {text} out of range"))
 }
 
 /// 解析 `resize` 的 SIZE 写法：`grow`、绝对字节、`+N`/`-N`、`+N%`/`-N%`。
@@ -707,7 +710,7 @@ fn parse_size_spec(text: &str) -> Result<SizeSpec, String> {
         return parse_relative_size(false, body);
     }
     if trimmed.ends_with('%') {
-        return Err("百分比必须是 +N% 或 -N% 形式".to_owned());
+        return Err("percent must use +N% or -N% form".to_owned());
     }
     Ok(SizeSpec::Absolute(parse_size(trimmed)?))
 }
@@ -727,51 +730,52 @@ fn parse_relative_size(grow: bool, body: &str) -> Result<SizeSpec, String> {
 fn parse_percent(text: &str) -> Result<(u64, u64), String> {
     let (whole, fraction) = text.split_once('.').unwrap_or((text, ""));
     if fraction.len() > 9 {
-        return Err(format!("百分比 {text}% 的小数位过多"));
+        return Err(format!("too many decimal places in percent {text}%"));
     }
     let denom = 10u64
-        .checked_pow(u32::try_from(fraction.len()).map_err(|_| "百分比过长".to_owned())?)
-        .ok_or_else(|| format!("百分比 {text}% 超出范围"))?;
+        .checked_pow(u32::try_from(fraction.len()).map_err(|_| "percent too long".to_owned())?)
+        .ok_or_else(|| format!("percent {text}% out of range"))?;
     let whole = if whole.is_empty() {
         0
     } else {
         whole
             .parse::<u64>()
-            .map_err(|_| format!("百分比 {text}% 不是合法数字"))?
+            .map_err(|_| format!("percent {text}% is not a valid number"))?
     };
     let fraction = if fraction.is_empty() {
         0
     } else {
         fraction
             .parse::<u64>()
-            .map_err(|_| format!("百分比 {text}% 不是合法数字"))?
+            .map_err(|_| format!("percent {text}% is not a valid number"))?
     };
     let num = whole
         .checked_mul(denom)
         .and_then(|scaled| scaled.checked_add(fraction))
-        .ok_or_else(|| format!("百分比 {text}% 超出范围"))?;
+        .ok_or_else(|| format!("percent {text}% out of range"))?;
     Ok((num, denom))
 }
 
 fn parse_guid(text: &str) -> Result<Guid, String> {
     if let Some(hex) = text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
         if hex.len() > 2 {
-            return Err(format!("{text} 不是 0xXX 形式"));
+            return Err(format!("{text} is not in 0xXX form"));
         }
-        let byte = u8::from_str_radix(hex, 16).map_err(|_| format!("{text} 不是合法字节"))?;
+        let byte =
+            u8::from_str_radix(hex, 16).map_err(|_| format!("{text} is not a valid byte"))?;
         let mut bytes = [0u8; 16];
         bytes[0] = byte;
         return Ok(Guid(bytes));
     }
     let hex: String = text.chars().filter(|ch| *ch != '-').collect();
     if hex.len() != 32 {
-        return Err(format!("GUID {text} 长度不合法"));
+        return Err(format!("GUID {text} has an invalid length"));
     }
     let mut bytes = [0u8; 16];
     for (index, slot) in bytes.iter_mut().enumerate() {
         let pair = &hex[index * 2..index * 2 + 2];
-        *slot =
-            u8::from_str_radix(pair, 16).map_err(|_| format!("GUID {text} 含非十六进制字符"))?;
+        *slot = u8::from_str_radix(pair, 16)
+            .map_err(|_| format!("GUID {text} contains non-hex characters"))?;
     }
     Ok(Guid(bytes))
 }

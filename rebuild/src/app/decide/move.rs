@@ -24,8 +24,8 @@ pub fn plan(snapshot: &Snapshot, request: &MoveRequest) -> Result<Plan, Refusal>
         admission::TableView::Gpt(copy) => copy,
         admission::TableView::Mbr(_) => {
             return Err(Refusal::ContentUnsupported {
-                what: "MBR 分区平移".to_owned(),
-                why: "平移只对 GPT 目标开放".to_owned(),
+                what: "MBR partition move".to_owned(),
+                why: "move is only available for GPT targets".to_owned(),
             });
         }
     };
@@ -33,13 +33,13 @@ pub fn plan(snapshot: &Snapshot, request: &MoveRequest) -> Result<Plan, Refusal>
     let new_start = placement(request.start, &copy.header, facts.partition.sectors, step)?;
     if new_start == facts.partition.start_lba {
         return Err(Refusal::ArgumentOutOfRange {
-            what: "平移后的起点与当前位置相同".to_owned(),
+            what: "new start equals the current position".to_owned(),
         });
     }
     let end_lba = new_start
         .checked_add(facts.partition.sectors - 1)
         .ok_or_else(|| Refusal::ArgumentOutOfRange {
-            what: "平移后的终点越过可寻址上界".to_owned(),
+            what: "move end exceeds the addressable bound".to_owned(),
         })?;
     if new_start < copy.header.first_usable_lba || end_lba > copy.header.last_usable_lba {
         return Err(Refusal::CapacityInsufficient {
@@ -77,7 +77,7 @@ pub fn plan(snapshot: &Snapshot, request: &MoveRequest) -> Result<Plan, Refusal>
         i128::from(new_start) - i128::from(facts.partition.start_lba),
     )
     .map_err(|_| Refusal::ArgumentOutOfRange {
-        what: "平移距离超出表示范围".to_owned(),
+        what: "move distance out of representable range".to_owned(),
     })?;
     // 已识别的 NTFS 卷在平移后要修正引导扇区；内容未知时不做这个假设。
     let ntfs_hidden = matches!(
@@ -138,7 +138,7 @@ fn align_step(align: Option<u64>, sector: u64) -> Result<u64, Refusal> {
     let bytes = align.unwrap_or(super::add::DEFAULT_ALIGN_BYTES);
     if bytes == 0 {
         return Err(Refusal::ArgumentOutOfRange {
-            what: "对齐不能为 0".to_owned(),
+            what: "alignment cannot be 0".to_owned(),
         });
     }
     Ok(bytes.div_ceil(sector).max(1))

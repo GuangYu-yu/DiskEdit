@@ -76,7 +76,7 @@ mod unix {
                     self.path(),
                     std::io::Error::new(
                         std::io::ErrorKind::UnexpectedEof,
-                        format!("读取起点 {offset} 已到文件末尾"),
+                        format!("read start {offset} is at end of file"),
                     ),
                 ));
             }
@@ -100,7 +100,10 @@ mod unix {
                 if n == 0 {
                     return Err(PlatformError::io(
                         self.path(),
-                        std::io::Error::new(std::io::ErrorKind::WriteZero, "写入返回 0 字节"),
+                        std::io::Error::new(
+                            std::io::ErrorKind::WriteZero,
+                            "write returned 0 bytes",
+                        ),
                     ));
                 }
                 written += n;
@@ -127,7 +130,7 @@ mod fallback {
 
         fn read_at(&self, _offset: u64, _buf: &mut [u8]) -> PlatformResult<usize> {
             Err(PlatformError::not_applicable(
-                "当前平台没有按偏移读取的接口",
+                "this platform has no offset read interface",
             ))
         }
     }
@@ -135,7 +138,7 @@ mod fallback {
     impl WriteAt for FileSource {
         fn write_at(&mut self, _offset: u64, _buf: &[u8]) -> PlatformResult<usize> {
             Err(PlatformError::not_applicable(
-                "当前平台没有按偏移写入的接口",
+                "this platform has no offset write interface",
             ))
         }
 

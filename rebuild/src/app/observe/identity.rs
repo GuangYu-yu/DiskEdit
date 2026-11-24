@@ -33,8 +33,10 @@ pub fn observe(
             Some(name) => {
                 Observation::known(Fingerprint::declared(name), DECLARED_SOURCE, generation)
             }
-            None => Observation::unknown("自动身份不可得，且未声明 --identity"),
+            None => {
+                Observation::unknown("automatic identity unavailable and --identity not declared")
+            }
         },
-        Err(error) => Observation::unknown(format!("读取目标身份失败：{error}")),
+        Err(error) => Observation::unknown(format!("failed to read target identity: {error}")),
     }
 }

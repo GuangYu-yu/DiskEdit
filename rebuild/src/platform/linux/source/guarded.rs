@@ -28,13 +28,13 @@ pub fn create_private_dir(path: &Path) -> PlatformResult<()> {
                     .map_err(|error| PlatformError::io(&current, error))?;
                 if metadata.file_type().is_symlink() {
                     return Err(PlatformError::unsupported(format!(
-                        "{} 是符号链接，拒绝在其上创建目录",
+                        "{} is a symlink; refusing to create a directory on it",
                         current.display()
                     )));
                 }
                 if !metadata.is_dir() {
                     return Err(PlatformError::unsupported(format!(
-                        "{} 已存在且不是目录",
+                        "{} exists and is not a directory",
                         current.display()
                     )));
                 }
@@ -49,7 +49,7 @@ pub fn create_private_dir(path: &Path) -> PlatformResult<()> {
 #[cfg(not(unix))]
 pub fn create_private_dir(path: &Path) -> PlatformResult<()> {
     Err(PlatformError::not_applicable(format!(
-        "当前平台不支持创建私有目录 {}",
+        "this platform does not support creating a private directory {}",
         path.display()
     )))
 }
@@ -64,7 +64,7 @@ pub fn open_private_file(path: &Path, create: bool) -> PlatformResult<std::fs::F
     match std::fs::symlink_metadata(path) {
         Ok(metadata) if metadata.file_type().is_symlink() => {
             return Err(PlatformError::unsupported(format!(
-                "{} 是符号链接，拒绝打开",
+                "{} is a symlink; refusing to open",
                 path.display()
             )));
         }
@@ -90,13 +90,13 @@ pub fn open_private_file(path: &Path, create: bool) -> PlatformResult<std::fs::F
         .map_err(|error| PlatformError::io(path, error))?;
     if !metadata.is_file() {
         return Err(PlatformError::unsupported(format!(
-            "{} 不是普通文件",
+            "{} is not a regular file",
             path.display()
         )));
     }
     if metadata.nlink() > 1 {
         return Err(PlatformError::unsupported(format!(
-            "{} 的硬链接数为 {}，拒绝打开",
+            "{} has {} hard links; refusing to open",
             path.display(),
             metadata.nlink()
         )));
@@ -108,7 +108,7 @@ pub fn open_private_file(path: &Path, create: bool) -> PlatformResult<std::fs::F
 #[cfg(not(unix))]
 pub fn open_private_file(path: &Path, _create: bool) -> PlatformResult<std::fs::File> {
     Err(PlatformError::not_applicable(format!(
-        "当前平台不支持以私有方式打开 {}",
+        "this platform does not support opening {} privately",
         path.display()
     )))
 }
@@ -120,12 +120,12 @@ pub fn write_atomic(dir: &Path, name: &str, bytes: &[u8]) -> PlatformResult<()> 
     use std::os::unix::fs::OpenOptionsExt;
 
     if name.is_empty() || name.contains('/') || name == "." || name == ".." {
-        return Err(PlatformError::parse(format!("不是合法的文件名：{name:?}")));
+        return Err(PlatformError::parse(format!("invalid file name: {name:?}")));
     }
     let parent = std::fs::symlink_metadata(dir).map_err(|error| PlatformError::io(dir, error))?;
     if !parent.is_dir() {
         return Err(PlatformError::unsupported(format!(
-            "{} 不是目录",
+            "{} is not a directory",
             dir.display()
         )));
     }
@@ -163,7 +163,7 @@ pub fn write_atomic(dir: &Path, name: &str, bytes: &[u8]) -> PlatformResult<()> 
                     Some(next) => next,
                     None => {
                         return Err(PlatformError::unsupported(format!(
-                            "在 {} 下无法分配到可用的暂存文件名",
+                            "cannot allocate an available staging file name under {}",
                             dir.display()
                         )));
                     }
@@ -178,7 +178,7 @@ pub fn write_atomic(dir: &Path, name: &str, bytes: &[u8]) -> PlatformResult<()> 
 #[cfg(not(unix))]
 pub fn write_atomic(dir: &Path, _name: &str, _bytes: &[u8]) -> PlatformResult<()> {
     Err(PlatformError::not_applicable(format!(
-        "当前平台不支持在 {} 下原子写入",
+        "this platform does not support atomic writes under {}",
         dir.display()
     )))
 }

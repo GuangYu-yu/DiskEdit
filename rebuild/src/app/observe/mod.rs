@@ -298,11 +298,11 @@ pub(super) fn read_exact_at(
     while filled < buffer.len() {
         let position = offset
             .checked_add(filled as u64)
-            .ok_or_else(|| "读取偏移越过可寻址上界".to_owned())?;
+            .ok_or_else(|| "read offset exceeds addressable bound".to_owned())?;
         match handle.read_at(position, &mut buffer[filled..]) {
-            Ok(0) => return Err(format!("目标在偏移 {position} 处提前结束")),
+            Ok(0) => return Err(format!("target ended early at offset {position}")),
             Ok(read) => filled += read,
-            Err(error) => return Err(format!("读取偏移 {position} 失败：{error}")),
+            Err(error) => return Err(format!("failed to read at offset {position}: {error}")),
         }
     }
     Ok(buffer)

@@ -19,7 +19,7 @@ pub fn read(kname: &str) -> PlatformResult<Vec<String>> {
 fn visit(kname: &str, depth: usize, found: &mut Vec<String>) -> PlatformResult<()> {
     if depth > MAX_DEPTH {
         return Err(PlatformError::unsupported(format!(
-            "{kname} 的 holders 链超过深度上限 {MAX_DEPTH}"
+            "holders chain of {kname} exceeds depth limit {MAX_DEPTH}"
         )));
     }
     let dir = super::super::sysfs_root()
@@ -48,5 +48,5 @@ fn file_name(path: &Path) -> PlatformResult<String> {
         .and_then(|name| name.to_str())
         .filter(|name| !name.is_empty())
         .map(str::to_string)
-        .ok_or_else(|| PlatformError::parse(format!("{} 中没有设备名", path.display())))
+        .ok_or_else(|| PlatformError::parse(format!("no device name in {}", path.display())))
 }

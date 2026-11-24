@@ -46,7 +46,9 @@ pub fn apply(
         if digest(data) != *expected {
             return Err(Failure {
                 written: index,
-                error: ExecError::Record("原像内容与登记的摘要不一致".to_owned()),
+                error: ExecError::Record(
+                    "preimage content and recorded digest mismatch".to_owned(),
+                ),
             });
         }
         if let Err(error) = channel.write(&token, *region, data) {
@@ -118,12 +120,14 @@ fn collect<'a>(frames: &'a [Frame], scope: Scope) -> Result<Vec<Rolling<'a>>, Fa
             if preimage.data.len() as u64 != preimage.len {
                 return Err(Failure {
                     written: 0,
-                    error: ExecError::Record("原像长度与区间长度不一致".to_owned()),
+                    error: ExecError::Record(
+                        "preimage length and region length mismatch".to_owned(),
+                    ),
                 });
             }
             let region = Region::sized(preimage.offset, preimage.len).map_err(|_| Failure {
                 written: 0,
-                error: ExecError::Record("原像区间越界或倒置".to_owned()),
+                error: ExecError::Record("preimage region out of range or inverted".to_owned()),
             })?;
             regions.push((region, preimage.data.as_slice(), preimage.digest));
         }
@@ -131,7 +135,7 @@ fn collect<'a>(frames: &'a [Frame], scope: Scope) -> Result<Vec<Rolling<'a>>, Fa
     if regions.is_empty() && scope == Scope::All {
         return Err(Failure {
             written: 0,
-            error: ExecError::Record("记录中没有可回滚的表区原像".to_owned()),
+            error: ExecError::Record("record has no table preimages to roll back".to_owned()),
         });
     }
     Ok(regions)

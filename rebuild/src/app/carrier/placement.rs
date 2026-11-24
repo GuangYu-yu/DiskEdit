@@ -33,7 +33,10 @@ pub fn decide(
         };
         filesystem = true;
         let programs = admission::programs(content, verb).map_err(|_| {
-            ExecError::Unsupported(format!("{} 的文件系统步骤没有工具矩阵", content.as_str()))
+            ExecError::Unsupported(format!(
+                "filesystem step for {} has no tool matrix",
+                content.as_str()
+            ))
         })?;
         if let Some(list) = programs {
             for program in list {
@@ -59,28 +62,32 @@ pub fn decide(
 
     let mut gaps = Vec::new();
     if !ready {
-        gaps.push("宿主不能直接操作块设备（需要 root 与分区设备视图）".to_owned());
+        gaps.push(
+            "host cannot operate block device directly (requires root and partition device view)"
+                .to_owned(),
+        );
     }
     if !missing.is_empty() {
         let names: Vec<String> = missing
             .iter()
             .map(|program| format!("{program:?}"))
             .collect();
-        gaps.push(format!("缺少程序：{}", names.join("、")));
+        gaps.push(format!("missing programs: {}", names.join(", ")));
     }
-    let detail = gaps.join("；");
+    let detail = gaps.join("; ");
 
     match manifest::resolve() {
         Ok(Some(bundle)) if platform.carrier_available() => Ok(Placement::Vm(bundle)),
         Ok(Some(_)) => Err(ExecError::Unsupported(format!(
-            "{detail}；本宿主不提供虚拟机载体"
+            "{detail}; this host does not provide a VM carrier"
         ))),
         Ok(None) => Err(ExecError::Unsupported(format!(
-            "{detail}；安装缺失程序后重试，或设置 {}=指向包含 manifest.json、kernel、initramfs 的目录以启用虚拟机载体",
+            "{detail}; install the missing programs and retry, or set {}= to a directory \
+             containing manifest.json, kernel, initramfs to enable the VM carrier",
             manifest::VARIABLE
         ))),
         Err(why) => Err(ExecError::Unsupported(format!(
-            "{detail}；虚拟机包不可用：{why}"
+            "{detail}; VM bundle unavailable: {why}"
         ))),
     }
 }

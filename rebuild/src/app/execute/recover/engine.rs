@@ -143,7 +143,7 @@ fn rollback_record(
             Ok(Summary::cleaned())
         }
         RecoveryPlan::Foreign { magic } => Err(RecoveryFailure::Refused(format!(
-            "记录不是本实现写下的：{}",
+            "record was not written by this implementation: {}",
             String::from_utf8_lossy(&magic)
         ))),
         RecoveryPlan::NeedsManual { why } => Err(RecoveryFailure::Refused(why)),
@@ -152,8 +152,8 @@ fn rollback_record(
             // 会把"只恢复了表区"说成"全部复原"。
             if scope == Scope::All && data_may_have_moved(&frames) {
                 return Err(RecoveryFailure::Refused(
-                    "记录里有已完成的数据区步骤，数据可能已经移动，默认回滚无法复原；\
-                     若只需恢复分区表，请用 recover --replay-table-only"
+                    "record has completed data-region steps; data may have moved and the default rollback cannot restore it; \
+                     use recover --replay-table-only to restore only the partition table"
                         .to_owned(),
                 ));
             }
@@ -166,7 +166,9 @@ fn rollback_record(
                 }
             })?;
             cleanup::clear(store).map_err(|error| {
-                RecoveryFailure::Refused(format!("回滚已完成但清理记录失败：{error}"))
+                RecoveryFailure::Refused(format!(
+                    "rolled back but failed to clear the record: {error}"
+                ))
             })?;
             Ok(Summary::rolled_back(rolled.regions, rolled.irreversible))
         }

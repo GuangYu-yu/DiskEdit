@@ -46,9 +46,9 @@ pub fn observe(
                     TargetKind::File => {
                         Observation::known(IMAGE_LOGICAL_BLOCK, SOURCE_IMAGE_BLOCK, generation)
                     }
-                    TargetKind::Block => {
-                        Observation::unknown("块设备未报告逻辑块大小，无法按扇区定位")
-                    }
+                    TargetKind::Block => Observation::unknown(
+                        "block device did not report logical block size; cannot locate by sector",
+                    ),
                 },
             };
             (
@@ -61,7 +61,7 @@ pub fn observe(
             )
         }
         Err(error) => {
-            let why = format!("打开目标失败：{error}");
+            let why = format!("failed to open target: {error}");
             (
                 DiskFacts {
                     kind: Observation::unknown(why.clone()),
@@ -82,6 +82,6 @@ pub fn observe_occupancy(
 ) -> Observation<Occupancy> {
     match platform.occupancy(path) {
         Ok(view) => Observation::known(view, SOURCE_OCCUPANCY, generation),
-        Err(error) => Observation::unknown(format!("读取占用状态失败：{error}")),
+        Err(error) => Observation::unknown(format!("failed to read occupancy: {error}")),
     }
 }

@@ -25,8 +25,8 @@ pub fn plan(
             let format = table.format();
             if format == TableFormat::Mbr && property == SetProperty::Name {
                 return Err(Refusal::ContentUnsupported {
-                    what: "MBR 分区名".to_owned(),
-                    why: "MBR 分区没有名字".to_owned(),
+                    what: "MBR partition name".to_owned(),
+                    why: "MBR partitions have no name".to_owned(),
                 });
             }
             let exists = match table {
@@ -61,8 +61,8 @@ pub fn plan(
             let programs = admission::programs(content, Verb::Attrs)?;
             let Some(programs) = programs else {
                 return Err(Refusal::ContentUnsupported {
-                    what: format!("{} 属性", content.as_str()),
-                    why: "该内容没有可修改的属性".to_owned(),
+                    what: format!("{} properties", content.as_str()),
+                    why: "this content has no modifiable properties".to_owned(),
                 });
             };
             admission::require_tools(snapshot, programs)?;

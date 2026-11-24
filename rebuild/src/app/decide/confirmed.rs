@@ -44,7 +44,7 @@ pub fn confirm(
         return Err(Refusal::PlanDigestMismatch);
     }
     let planned = plan.identity().ok_or_else(|| Refusal::IdentityUnprovable {
-        why: "只读计划不能作为写计划确认".to_owned(),
+        why: "a read-only plan cannot be confirmed as a write plan".to_owned(),
     })?;
     let observed = match current {
         Observation::Known { value, .. } => *value,

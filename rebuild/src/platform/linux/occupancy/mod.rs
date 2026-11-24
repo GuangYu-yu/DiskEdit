@@ -87,14 +87,14 @@ fn device_ids(target: &Target) -> PlatformResult<Vec<(u32, u32)>> {
 
 fn parse_dev(text: &str) -> PlatformResult<(u32, u32)> {
     let (major, minor) = text.trim().split_once(':').ok_or_else(|| {
-        crate::platform::PlatformError::parse(format!("设备号缺少冒号：{text:?}"))
+        crate::platform::PlatformError::parse(format!("device number is missing a colon: {text:?}"))
     })?;
-    let major = major
-        .parse::<u32>()
-        .map_err(|_| crate::platform::PlatformError::parse(format!("设备号主号无效：{text:?}")))?;
-    let minor = minor
-        .parse::<u32>()
-        .map_err(|_| crate::platform::PlatformError::parse(format!("设备号次号无效：{text:?}")))?;
+    let major = major.parse::<u32>().map_err(|_| {
+        crate::platform::PlatformError::parse(format!("invalid device number major: {text:?}"))
+    })?;
+    let minor = minor.parse::<u32>().map_err(|_| {
+        crate::platform::PlatformError::parse(format!("invalid device number minor: {text:?}"))
+    })?;
     Ok((major, minor))
 }
 

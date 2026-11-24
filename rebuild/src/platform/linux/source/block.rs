@@ -34,7 +34,7 @@ impl BlockSource {
         )?);
         if sector_size == 0 {
             return Err(PlatformError::parse(format!(
-                "{} 报告的逻辑扇区为 0",
+                "{} reports a logical sector size of 0",
                 path.display()
             )));
         }
@@ -50,7 +50,7 @@ impl BlockSource {
     #[cfg(not(target_os = "linux"))]
     pub fn open(path: &Path) -> PlatformResult<Self> {
         Err(PlatformError::not_applicable(format!(
-            "当前平台不支持按块设备读取 {}",
+            "reading {} as a block device is not supported on this platform",
             path.display()
         )))
     }
@@ -145,7 +145,7 @@ mod unix {
                     self.path(),
                     std::io::Error::new(
                         std::io::ErrorKind::UnexpectedEof,
-                        format!("读取起点 {offset} 已到设备末尾"),
+                        format!("read start {offset} is at end of device"),
                     ),
                 ));
             }
@@ -169,7 +169,10 @@ mod unix {
                 if n == 0 {
                     return Err(PlatformError::io(
                         self.path(),
-                        std::io::Error::new(std::io::ErrorKind::WriteZero, "写入返回 0 字节"),
+                        std::io::Error::new(
+                            std::io::ErrorKind::WriteZero,
+                            "write returned 0 bytes",
+                        ),
                     ));
                 }
                 written += n;
@@ -197,7 +200,7 @@ mod fallback {
 
         fn read_at(&self, _offset: u64, _buf: &mut [u8]) -> PlatformResult<usize> {
             Err(PlatformError::not_applicable(
-                "当前平台没有按偏移读取的接口",
+                "this platform has no offset read interface",
             ))
         }
     }
@@ -205,12 +208,14 @@ mod fallback {
     impl WriteAt for BlockSource {
         fn write_at(&mut self, _offset: u64, _buf: &[u8]) -> PlatformResult<usize> {
             Err(PlatformError::not_applicable(
-                "当前平台没有按偏移写入的接口",
+                "this platform has no offset write interface",
             ))
         }
 
         fn barrier(&mut self) -> PlatformResult<()> {
-            Err(PlatformError::not_applicable("当前平台没有块设备提交接口"))
+            Err(PlatformError::not_applicable(
+                "this platform has no block device flush interface",
+            ))
         }
     }
 }

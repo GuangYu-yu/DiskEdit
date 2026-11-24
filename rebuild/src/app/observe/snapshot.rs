@@ -76,17 +76,17 @@ pub fn observe(request: &Request, platform: &dyn Platform) -> Snapshot {
     let Some(target) = request.target() else {
         return Snapshot {
             generation,
-            identity: Observation::unknown("请求没有目标参数"),
+            identity: Observation::unknown("request has no target argument"),
             disk: DiskFacts {
-                kind: Observation::unknown("请求没有目标参数"),
-                byte_len: Observation::unknown("请求没有目标参数"),
-                sector_size: Observation::unknown("请求没有目标参数"),
+                kind: Observation::unknown("request has no target argument"),
+                byte_len: Observation::unknown("request has no target argument"),
+                sector_size: Observation::unknown("request has no target argument"),
             },
-            topology: Observation::unknown("请求没有目标参数"),
-            occupancy: Observation::unknown("请求没有目标参数"),
+            topology: Observation::unknown("request has no target argument"),
+            occupancy: Observation::unknown("request has no target argument"),
             table: TableFacts {
-                gpt: Observation::unknown("请求没有目标参数"),
-                mbr: Observation::unknown("请求没有目标参数"),
+                gpt: Observation::unknown("request has no target argument"),
+                mbr: Observation::unknown("request has no target argument"),
             },
             tools: tools::observe(platform, generation),
         };

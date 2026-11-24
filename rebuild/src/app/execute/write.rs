@@ -56,7 +56,7 @@ impl<'a> WriteChannel<'a> {
                 .map_err(ExecError::from)?;
             if read == 0 {
                 return Err(ExecError::Io(format!(
-                    "读取 {} 处 {} 字节时提前结束",
+                    "read at {} for {} bytes ended early",
                     offset, len
                 )));
             }
@@ -75,21 +75,23 @@ impl<'a> WriteChannel<'a> {
         let _ = token;
         if !self.declared.covers(region) {
             return Err(ExecError::InvalidPlan(format!(
-                "写入区间 [{}, {}) 未被本步声明",
+                "write region [{}, {}) not declared by this step",
                 region.start(),
                 region.end()
             )));
         }
         if bytes.len() as u64 != region.len() {
             return Err(ExecError::InvalidPlan(format!(
-                "区间长度 {} 与字节长度 {} 不一致",
+                "region length {} and byte length {} mismatch",
                 region.len(),
                 bytes.len()
             )));
         }
         if let Some(limit) = self.fail_after {
             if self.writes_done >= limit {
-                return Err(ExecError::Injected("写通道在写入过程中被中断".into()));
+                return Err(ExecError::Injected(
+                    "write channel interrupted during write".into(),
+                ));
             }
         }
         let mut offset = region.start();
@@ -100,7 +102,10 @@ impl<'a> WriteChannel<'a> {
                 .write_at(offset, &bytes[written_bytes..])
                 .map_err(ExecError::from)?;
             if written == 0 {
-                return Err(ExecError::Io(format!("向 {} 写入时进度为零", offset)));
+                return Err(ExecError::Io(format!(
+                    "zero progress writing at {}",
+                    offset
+                )));
             }
             offset += written as u64;
             written_bytes += written;
@@ -137,7 +142,7 @@ impl<'a> WriteChannel<'a> {
             }
             if hasher.finish() != *expected {
                 return Err(ExecError::Postcondition(format!(
-                    "区间 [{}, {}) 的回读摘要不一致",
+                    "read-back digest mismatch for region [{}, {})",
                     region.start(),
                     region.end()
                 )));

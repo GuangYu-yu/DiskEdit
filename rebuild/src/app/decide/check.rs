@@ -18,8 +18,8 @@ pub fn plan(snapshot: &Snapshot, selector: PartitionSelector) -> Result<Plan, Re
     let programs = admission::programs(content, Verb::Check)?;
     let Some(programs) = programs else {
         return Err(Refusal::ContentUnsupported {
-            what: format!("{} 一致性检查", content.as_str()),
-            why: "该内容没有可用的检查器".to_owned(),
+            what: format!("{} consistency check", content.as_str()),
+            why: "no checker is available for this content".to_owned(),
         });
     };
     admission::require_tools(snapshot, programs)?;

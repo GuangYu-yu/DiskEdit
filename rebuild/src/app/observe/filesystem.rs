@@ -51,7 +51,9 @@ pub fn observe_topology(
     } else {
         match platform.partitions(path) {
             Ok(partitions) => (partitions, SOURCE_TOPOLOGY),
-            Err(error) => return Observation::unknown(format!("读取分区拓扑失败：{error}")),
+            Err(error) => {
+                return Observation::unknown(format!("failed to read partition topology: {error}"));
+            }
         }
     };
     let facts = partitions
@@ -61,7 +63,7 @@ pub fn observe_topology(
             PartitionFacts {
                 partition,
                 content,
-                size: Observation::unknown("文件系统尺寸尚未探测"),
+                size: Observation::unknown("filesystem size not probed yet"),
             }
         })
         .collect();
@@ -106,7 +108,7 @@ pub fn observe_sizes(
         let region = DeviceRegion::new(offset, len);
         facts.size = match platform.filesystem_size(path, facts.partition.number, region, kind) {
             Ok(size) => Observation::known(size, SOURCE_SIZE, generation),
-            Err(error) => Observation::unknown(format!("读取文件系统尺寸失败：{error}")),
+            Err(error) => Observation::unknown(format!("failed to read filesystem size: {error}")),
         };
     }
     Observation::known(Topology { partitions }, *source, *topology_generation)
@@ -135,7 +137,9 @@ fn file_partitions(table: &TableFacts) -> Result<Vec<Partition>, String> {
         Observation::Known {
             value: GptEvidence::Damaged(error),
             ..
-        } => Err(format!("GPT 损坏，无法给出分区拓扑：{error}")),
+        } => Err(format!(
+            "GPT is damaged; cannot provide partition topology: {error}"
+        )),
         Observation::Known {
             value: GptEvidence::Absent,
             ..
@@ -161,16 +165,16 @@ fn file_partitions(table: &TableFacts) -> Result<Vec<Partition>, String> {
             Observation::Known {
                 value: Evidence::UnknownFormat { why },
                 ..
-            } => Err(format!("MBR 无法解释：{why}")),
+            } => Err(format!("cannot interpret MBR: {why}")),
             Observation::Known {
                 value: Evidence::Unreadable { why },
                 ..
-            } => Err(format!("MBR 读不出：{why}")),
-            Observation::Unknown { why } => Err(format!("MBR 未知：{why}")),
-            Observation::NotApplicable { why } => Err(format!("MBR 不适用：{why}")),
+            } => Err(format!("cannot read MBR: {why}")),
+            Observation::Unknown { why } => Err(format!("MBR unknown: {why}")),
+            Observation::NotApplicable { why } => Err(format!("MBR not applicable: {why}")),
         },
-        Observation::Unknown { why } => Err(format!("GPT 未知：{why}")),
-        Observation::NotApplicable { why } => Err(format!("GPT 不适用：{why}")),
+        Observation::Unknown { why } => Err(format!("GPT unknown: {why}")),
+        Observation::NotApplicable { why } => Err(format!("GPT not applicable: {why}")),
     }
 }
 
@@ -181,19 +185,19 @@ fn observe_content(
     generation: Generation,
 ) -> Observation<ContentKind> {
     let Some(handle) = handle else {
-        return Observation::unknown("目标未能打开，分区内容未读取");
+        return Observation::unknown("cannot open target; partition content not read");
     };
     let Some(sector) = disk.sector_size.value().copied() else {
-        return Observation::unknown("逻辑块大小未知，无法定位分区起点");
+        return Observation::unknown("logical block size unknown; cannot locate partition start");
     };
     let offset = match partition.start_lba.checked_mul(sector) {
         Some(offset) => offset,
-        None => return Observation::unknown("分区起点超出可寻址范围"),
+        None => return Observation::unknown("partition start exceeds addressable range"),
     };
     let capacity = partition.sectors.saturating_mul(sector);
     let want = CONTENT_PREFIX_BYTES.min(usize::try_from(capacity).unwrap_or(usize::MAX));
     if want == 0 {
-        return Observation::unknown("分区长度为零，没有可识别的签名");
+        return Observation::unknown("partition length is zero; no signature to identify");
     }
     let prefix = match super::read_exact_at(handle, offset, want) {
         Ok(bytes) => bytes,
@@ -202,6 +206,6 @@ fn observe_content(
     match probe::identify(&prefix) {
         Evidence::Present(kind) => Observation::known(kind, SOURCE_CONTENT, generation),
         Evidence::UnknownFormat { why } | Evidence::Unreadable { why } => Observation::unknown(why),
-        Evidence::Absent => Observation::unknown("签名识别未给出结论"),
+        Evidence::Absent => Observation::unknown("signature probe was inconclusive"),
     }
 }

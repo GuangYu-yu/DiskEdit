@@ -66,7 +66,10 @@ pub fn run(
         }
     };
     if !confirmed.identity().matches(observed) {
-        return Outcome::unwritten(FailureKind::Refused, "持锁后的目标身份与确认时不一致");
+        return Outcome::unwritten(
+            FailureKind::Refused,
+            "target identity differs from confirmation after locking",
+        );
     }
     // 普通文件没有设备级扇区，分区表按 512 字节逻辑块布局；块设备必须以它报告的
     // 逻辑扇区为准，读不到就停，不猜一个宽度。
@@ -75,7 +78,12 @@ pub fn run(
         _ if handle.kind() == crate::platform::TargetKind::File => {
             crate::app::observe::disk::IMAGE_LOGICAL_BLOCK
         }
-        _ => return Outcome::unwritten(FailureKind::FailedBeforeWrite, "无法确定目标扇区尺寸"),
+        _ => {
+            return Outcome::unwritten(
+                FailureKind::FailedBeforeWrite,
+                "cannot determine target sector size",
+            );
+        }
     };
 
     let writes_target = confirmed
@@ -117,7 +125,10 @@ pub fn run(
                 }
             }
             RecoveryPlan::Foreign { .. } => {
-                return Outcome::unwritten(FailureKind::Refused, "记录目录中存在本实现之外的内容");
+                return Outcome::unwritten(
+                    FailureKind::Refused,
+                    "record directory contains content not written by this implementation",
+                );
             }
             RecoveryPlan::RollBack { .. } | RecoveryPlan::Replay { .. } => {
                 // 记录能解出头部时比对计划摘要：同一份计划与另一份计划是两种不同
@@ -125,14 +136,17 @@ pub fn run(
                 let same_plan = decode(&existing)
                     .is_ok_and(|record| record.body.plan_digest == confirmed.digest());
                 let reason = if same_plan {
-                    "存在未完成的记录（同一份计划），需要先恢复"
+                    "unfinished record present (same plan); recover first"
                 } else {
-                    "存在未完成的记录（另一份计划，摘要不同），需要先恢复"
+                    "unfinished record present (different plan, digest mismatch); recover first"
                 };
                 return Outcome::unwritten(FailureKind::Refused, reason);
             }
             RecoveryPlan::NeedsManual { .. } => {
-                return Outcome::unwritten(FailureKind::Refused, "存在未完成的记录，需要先恢复");
+                return Outcome::unwritten(
+                    FailureKind::Refused,
+                    "unfinished record present; recover first",
+                );
             }
         }
     }
@@ -195,9 +209,9 @@ pub fn run(
                         Some(session) => session.run_step(&step.kind, &[]).and_then(|result| {
                             match result.applied {
                                 true => Ok(()),
-                                false => Err(result
-                                    .cause
-                                    .unwrap_or_else(|| "来宾没有给出刷新失败的原因".to_owned())),
+                                false => Err(result.cause.unwrap_or_else(|| {
+                                    "guest gave no reason for the refresh failure".to_owned()
+                                })),
                             }
                         }),
                         None => platform
@@ -210,12 +224,12 @@ pub fn run(
                                 finish_terminal(&mut *store, &body, &mut frames)
                             {
                                 return Outcome::needs_recovery(format!(
-                                    "内核视图未同步：{reason}；{commit_error}"
+                                    "kernel view not synced: {reason}; {commit_error}"
                                 ));
                             }
                             if let Err(transition) = machine.commit_unsynced() {
                                 return Outcome::needs_recovery(format!(
-                                    "状态推进失败: {transition:?}"
+                                    "state transition failed: {transition:?}"
                                 ));
                             }
                             return Outcome::committed_unsynced(reason);
@@ -225,7 +239,7 @@ pub fn run(
                 } else {
                     return Outcome::unwritten(
                         FailureKind::Refused,
-                        "记录恢复不能与其他写步骤混在同一份计划中",
+                        "record recovery cannot be mixed with other write steps in the same plan",
                     );
                 }
             }
@@ -267,7 +281,7 @@ pub fn run(
         return Outcome::needs_recovery(error);
     }
     if let Err(error) = machine.commit() {
-        return Outcome::needs_recovery(format!("状态推进失败: {error:?}"));
+        return Outcome::needs_recovery(format!("state transition failed: {error:?}"));
     }
     if let Err(error) = store.clear() {
         return Outcome::committed_unsynced(platform_text(&error));
@@ -297,7 +311,10 @@ fn run_external(
         match step.access() {
             Access::ReadOnly => continue,
             Access::WritesTarget => {
-                return Outcome::unwritten(FailureKind::Refused, "外部状态计划包含写目标步骤");
+                return Outcome::unwritten(
+                    FailureKind::Refused,
+                    "external-state plan contains target-writing steps",
+                );
             }
             Access::WritesExternalState => {
                 if let StepKind::RecoverRecords { mode } = &step.kind {
@@ -352,7 +369,7 @@ fn execute_target_step(
     if faults.before_write {
         return Err(Outcome::unwritten(
             FailureKind::FailedBeforeWrite,
-            "写前中断注入",
+            "before-write fault injection",
         ));
     }
 
@@ -370,7 +387,7 @@ fn execute_target_step(
         let reason = match channel.barrier() {
             Ok(()) => format_error(&error),
             Err(barrier) => format!(
-                "{}；提交缓存失败：{}",
+                "{}; failed to commit cache: {}",
                 format_error(&error),
                 format_error(&barrier)
             ),
@@ -384,7 +401,7 @@ fn execute_target_step(
         return Err(Outcome::needs_recovery(format_error(&error)));
     }
     if faults.after_write {
-        return Err(Outcome::needs_recovery("写后中断注入"));
+        return Err(Outcome::needs_recovery("after-write fault injection"));
     }
     store_progress(step, store, body, frames)
 }
@@ -408,7 +425,7 @@ fn execute_remote_step(
     if faults.before_write {
         return Err(Outcome::unwritten(
             FailureKind::FailedBeforeWrite,
-            "写前中断注入",
+            "before-write fault injection",
         ));
     }
     store_preimage(step, preimages, store, body, frames, machine)?;
@@ -417,19 +434,19 @@ fn execute_remote_step(
         Ok(result) => {
             let cause = result
                 .cause
-                .unwrap_or_else(|| "来宾没有给出原因".to_owned());
+                .unwrap_or_else(|| "guest gave no reason".to_owned());
             let class = match result.class {
-                Some(class) => format!("（类别 {class}）"),
+                Some(class) => format!(" (class {class})"),
                 None => String::new(),
             };
             return Err(Outcome::needs_recovery(format!(
-                "载体步骤失败{class}：{cause}"
+                "carrier step failed{class}: {cause}"
             )));
         }
         Err(why) => return Err(Outcome::needs_recovery(why)),
     }
     if faults.mid_write || faults.after_write {
-        return Err(Outcome::needs_recovery("写后中断注入"));
+        return Err(Outcome::needs_recovery("after-write fault injection"));
     }
     store_progress(step, store, body, frames)
 }
@@ -482,7 +499,9 @@ fn store_preimage(
         ));
     }
     if let Err(error) = machine.arm() {
-        return Err(Outcome::needs_recovery(format!("状态推进失败: {error:?}")));
+        return Err(Outcome::needs_recovery(format!(
+            "state transition failed: {error:?}"
+        )));
     }
     Ok(u64::from(sequence))
 }
@@ -521,13 +540,14 @@ fn finish_terminal(
         intent: b"commit".to_vec(),
         regions: Vec::new(),
     });
-    let bytes = encode(body, frames).map_err(|error| format!("记录编码失败: {error:?}"))?;
+    let bytes =
+        encode(body, frames).map_err(|error| format!("failed to encode record: {error:?}"))?;
     store.store(&bytes).map_err(|error| platform_text(&error))
 }
 
 fn encode_or_failure(body: &RecordBody, frames: &[Frame]) -> Result<Vec<u8>, Outcome> {
     encode(body, frames)
-        .map_err(|error| Outcome::needs_recovery(format!("记录编码失败: {error:?}")))
+        .map_err(|error| Outcome::needs_recovery(format!("failed to encode record: {error:?}")))
 }
 
 fn classify_unwritten(error: ExecError) -> Outcome {
@@ -964,7 +984,7 @@ mod tests {
         assert_eq!(outcome.state(), ExecutionState::Unwritten);
         assert_eq!(outcome.failure(), Some(FailureKind::Refused));
         assert!(
-            outcome.reason().unwrap_or("").contains("另一份计划"),
+            outcome.reason().unwrap_or("").contains("different plan"),
             "{:?}",
             outcome.reason()
         );

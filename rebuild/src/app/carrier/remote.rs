@@ -58,7 +58,7 @@ impl Session {
     ) -> Result<Self, String> {
         let guest = platform
             .carrier_target()
-            .ok_or_else(|| "本宿主没有可用的来宾设备".to_owned())?;
+            .ok_or_else(|| "no guest device available on this host".to_owned())?;
         let token = super::token();
         let request = CarrierLaunch {
             target: launch.target.to_path_buf(),
@@ -71,12 +71,12 @@ impl Session {
         };
         let mut process = platform
             .launch_carrier(&request)
-            .map_err(|error| format!("启动虚拟机载体失败：{error}"))?;
+            .map_err(|error| format!("failed to launch VM carrier: {error}"))?;
         let (mut writer, reader) = process
             .take_io()
-            .ok_or_else(|| "虚拟机载体没有可用的通信通道".to_owned())?;
+            .ok_or_else(|| "VM carrier has no communication channel".to_owned())?;
         let events = reader_events(reader);
-        wait_for(&events, "boot", HANDSHAKE, "等待来宾启动")?;
+        wait_for(&events, "boot", HANDSHAKE, "waiting for guest boot")?;
         protocol::emit(
             &mut writer,
             &protocol::hello(
@@ -89,23 +89,23 @@ impl Session {
                 launch.job,
             ),
         )
-        .map_err(|error| format!("发送握手失败：{error}"))?;
-        let ready = wait_for(&events, "ready", HANDSHAKE, "等待来宾就绪")?;
+        .map_err(|error| format!("failed to send handshake: {error}"))?;
+        let ready = wait_for(&events, "ready", HANDSHAKE, "waiting for guest ready")?;
         let version = field(&ready, "binary_version")?;
         if version != env!("CARGO_PKG_VERSION") {
             process.terminate();
             return Err(format!(
-                "来宾版本 {version} 与宿主 {} 不一致",
+                "guest version {version} does not match host {}",
                 env!("CARGO_PKG_VERSION")
             ));
         }
         if ready.get("disk_size").and_then(Value::as_u64) != Some(launch.disk_size) {
             process.terminate();
-            return Err("来宾看到的容量与宿主不一致".to_owned());
+            return Err("guest sees a different capacity than host".to_owned());
         }
         if ready.get("sector_size").and_then(Value::as_u64) != Some(launch.sector_size) {
             process.terminate();
-            return Err("来宾看到的扇区尺寸与宿主不一致".to_owned());
+            return Err("guest sees a different sector size than host".to_owned());
         }
         let sid = field(&ready, "sid")?.to_owned();
         Ok(Self {
@@ -124,7 +124,7 @@ impl Session {
         self.next = self.next.wrapping_add(1);
         let frame = protocol::step(id, &self.sid, kind, regions)?;
         protocol::emit(&mut self.writer, &frame)
-            .map_err(|error| format!("发送步骤 {id} 失败：{error}"))?;
+            .map_err(|error| format!("failed to send step {id}: {error}"))?;
         let timeout = if needs_filesystem_tools(kind) {
             FILESYSTEM_STEP
         } else {
@@ -139,25 +139,25 @@ impl Session {
             Ok(Event::Frame(frame)) => frame,
             Ok(Event::Closed(why)) => return Err(why),
             Err(RecvTimeoutError::Timeout) => {
-                return Err(format!("步骤 {id} 等待结果超时"));
+                return Err(format!("step {id} timed out waiting for result"));
             }
             Err(RecvTimeoutError::Disconnected) => {
-                return Err("虚拟机载体事件通道已断开".to_owned());
+                return Err("VM carrier event channel disconnected".to_owned());
             }
         };
         if frame.get("v").and_then(Value::as_u64) != Some(protocol::VERSION) {
-            return Err("来宾使用了不同的协议版本".to_owned());
+            return Err("guest uses a different protocol version".to_owned());
         }
         let kind = frame.get("type").and_then(Value::as_str).unwrap_or("");
         if kind != "result" {
-            return Err(format!("等待结果时收到 {kind} 帧"));
+            return Err(format!("received {kind} frame while waiting for result"));
         }
         let (reply, result) = protocol::decode_result(&frame)?;
         if reply != id {
-            return Err(format!("结果帧的步骤号 {reply} 与 {id} 不符"));
+            return Err(format!("result frame step id {reply} does not match {id}"));
         }
         if frame.get("sid").and_then(Value::as_str) != Some(&self.sid) {
-            return Err("结果帧的会话号不匹配".to_owned());
+            return Err("result frame session id mismatch".to_owned());
         }
         Ok(result)
     }
@@ -189,11 +189,13 @@ fn reader_events(reader: Box<dyn std::io::Read + Send>) -> Receiver<Event> {
                     }
                 }
                 Ok(None) => {
-                    drop(sender.send(Event::Closed("虚拟机载体已关闭输出".to_owned())));
+                    drop(sender.send(Event::Closed("VM carrier closed output".to_owned())));
                     return;
                 }
                 Err(error) => {
-                    drop(sender.send(Event::Closed(format!("读取载体输出失败：{error}"))));
+                    drop(sender.send(Event::Closed(format!(
+                        "failed to read carrier output: {error}"
+                    ))));
                     return;
                 }
             }
@@ -212,13 +214,13 @@ fn wait_for(
         let frame = match events.recv_timeout(timeout) {
             Ok(Event::Frame(frame)) => frame,
             Ok(Event::Closed(why)) => return Err(why),
-            Err(RecvTimeoutError::Timeout) => return Err(format!("{what}超时")),
+            Err(RecvTimeoutError::Timeout) => return Err(format!("timed out {what}")),
             Err(RecvTimeoutError::Disconnected) => {
-                return Err("虚拟机载体事件通道已断开".to_owned());
+                return Err("VM carrier event channel disconnected".to_owned());
             }
         };
         if frame.get("v").and_then(Value::as_u64) != Some(protocol::VERSION) {
-            return Err("来宾使用了不同的协议版本".to_owned());
+            return Err("guest uses a different protocol version".to_owned());
         }
         if frame.get("type").and_then(Value::as_str) == Some(wanted) {
             return Ok(frame);
@@ -230,7 +232,7 @@ fn field<'a>(frame: &'a Value, name: &str) -> Result<&'a str, String> {
     frame
         .get(name)
         .and_then(Value::as_str)
-        .ok_or_else(|| format!("来宾回复缺少 {name}"))
+        .ok_or_else(|| format!("guest reply missing {name}"))
 }
 
 fn needs_filesystem_tools(kind: &StepKind) -> bool {

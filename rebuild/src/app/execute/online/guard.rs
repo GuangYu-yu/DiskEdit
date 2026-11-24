@@ -25,7 +25,7 @@ pub fn capture(platform: &dyn Platform, device: &Path) -> Result<Identity, ExecE
 pub fn ensure_mapped(identity: &Identity) -> Result<(), ExecError> {
     if identity.devices != 1 {
         return Err(ExecError::Unsupported(format!(
-            "btrfs 跨 {} 个设备，缺少单盘映射",
+            "btrfs spans {} devices; single-device mapping missing",
             identity.devices
         )));
     }
@@ -36,7 +36,7 @@ pub fn ensure_mapped(identity: &Identity) -> Result<(), ExecError> {
 pub fn verify_unchanged(expected: &Identity, actual: &Identity) -> Result<(), ExecError> {
     if expected.fsid != actual.fsid {
         return Err(ExecError::Postcondition(
-            "btrfs FSID 在校验前后不一致".to_owned(),
+            "btrfs FSID mismatch before and after verification".to_owned(),
         ));
     }
     Ok(())

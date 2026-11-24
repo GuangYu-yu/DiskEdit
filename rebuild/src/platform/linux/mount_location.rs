@@ -19,14 +19,15 @@ pub fn resolve(mount_point: &Path) -> PlatformResult<MountLocation> {
     let class = sysfs_root().join("class/block").join(&kname);
     let partition_text = read_optional_attr(&class.join("partition"))?.ok_or_else(|| {
         PlatformError::parse(format!(
-            "挂载点 {} 的设备 {kname} 不是分区；整盘或逻辑卷挂载不支持该形态",
+            "mount point {} device {kname} is not a partition; whole-disk or logical volume mounts are not supported in this form",
             canonical.display()
         ))
     })?;
-    let partition = partition_text
-        .trim()
-        .parse::<u32>()
-        .map_err(|_| PlatformError::parse(format!("{kname} 的分区号无效：{partition_text:?}")))?;
+    let partition = partition_text.trim().parse::<u32>().map_err(|_| {
+        PlatformError::parse(format!(
+            "invalid partition number for {kname}: {partition_text:?}"
+        ))
+    })?;
     let disk = disk_name(&class)?;
     Ok(MountLocation {
         target: Path::new("/dev").join(disk),
@@ -38,7 +39,10 @@ pub fn resolve(mount_point: &Path) -> PlatformResult<MountLocation> {
 fn canonical_mount_point(mount_point: &Path) -> PlatformResult<PathBuf> {
     std::fs::canonicalize(mount_point).map_err(|error| {
         if error.kind() == std::io::ErrorKind::NotFound {
-            PlatformError::parse(format!("挂载点 {} 不存在", mount_point.display()))
+            PlatformError::parse(format!(
+                "mount point {} does not exist",
+                mount_point.display()
+            ))
         } else {
             PlatformError::io(mount_point, error)
         }
@@ -57,8 +61,9 @@ fn select<'a>(entries: &'a [MountEntry], path: &Path) -> PlatformResult<&'a Moun
             best = Some((depth, entry));
         }
     }
-    best.map(|(_, entry)| entry)
-        .ok_or_else(|| PlatformError::parse(format!("{} 不在任何挂载点下", path.display())))
+    best.map(|(_, entry)| entry).ok_or_else(|| {
+        PlatformError::parse(format!("{} is not under any mount point", path.display()))
+    })
 }
 
 /// `prefix` 是否为 `path` 的路径前缀（按分量比较，`/mnt` 不匹配 `/mnt2`）。
@@ -82,7 +87,7 @@ fn kernel_name(major: u32, minor: u32) -> PlatformResult<String> {
         .join(format!("{major}:{minor}"));
     let resolved = std::fs::canonicalize(&link).map_err(|error| {
         if error.kind() == std::io::ErrorKind::NotFound {
-            PlatformError::parse(format!("设备 {major}:{minor} 在 sysfs 中不存在"))
+            PlatformError::parse(format!("device {major}:{minor} does not exist in sysfs"))
         } else {
             PlatformError::io(&link, error)
         }
@@ -91,7 +96,9 @@ fn kernel_name(major: u32, minor: u32) -> PlatformResult<String> {
         .file_name()
         .and_then(|name| name.to_str())
         .map(str::to_owned)
-        .ok_or_else(|| PlatformError::parse(format!("设备 {major}:{minor} 没有内核设备名")))
+        .ok_or_else(|| {
+            PlatformError::parse(format!("device {major}:{minor} has no kernel device name"))
+        })
 }
 
 /// 分区所在整盘的内核设备名：`class/block/<分区名>` 的真实路径的父目录名。
@@ -105,7 +112,7 @@ fn disk_name(partition_class: &Path) -> PlatformResult<String> {
         .map(str::to_owned)
         .ok_or_else(|| {
             PlatformError::parse(format!(
-                "{} 的父目录不是整盘设备目录",
+                "parent directory of {} is not a whole-disk device directory",
                 partition_class.display()
             ))
         })

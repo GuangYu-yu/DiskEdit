@@ -24,8 +24,8 @@ pub fn plan(
     let programs = admission::programs(content, Verb::Mkfs)?;
     let Some(programs) = programs else {
         return Err(Refusal::ContentUnsupported {
-            what: format!("{} 建卷", content.as_str()),
-            why: "该内容不由建卷产生".to_owned(),
+            what: format!("{} create filesystem", content.as_str()),
+            why: "this content is not produced by mkfs".to_owned(),
         });
     };
     admission::require_tools(snapshot, programs)?;

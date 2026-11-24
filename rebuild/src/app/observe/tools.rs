@@ -58,6 +58,6 @@ fn probe(
             | PlatformError::Busy { .. }
             | PlatformError::Denied { .. }
             | PlatformError::Parse { .. }),
-        ) => Observation::unknown(format!("探测程序 {program:?} 失败：{error}")),
+        ) => Observation::unknown(format!("failed to probe program {program:?}: {error}")),
     }
 }

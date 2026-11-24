@@ -21,7 +21,7 @@ impl Plan {
     pub fn write(steps: Vec<Step>, identity: Fingerprint) -> Result<Self, super::Refusal> {
         if identity.strength() != Strength::Strong {
             return Err(super::Refusal::IdentityUnprovable {
-                why: "计划所需的目标身份不足".to_owned(),
+                why: "target identity is insufficient for the plan".to_owned(),
             });
         }
         let digest = plan_digest(Some(identity), &steps);
@@ -48,7 +48,7 @@ impl Plan {
     pub fn external(steps: Vec<Step>, identity: Fingerprint) -> Result<Self, super::Refusal> {
         if identity.strength() != Strength::Strong {
             return Err(super::Refusal::IdentityUnprovable {
-                why: "外部状态计划所需的目标身份不足".to_owned(),
+                why: "target identity is insufficient for the external-state plan".to_owned(),
             });
         }
         let digest = plan_digest(Some(identity), &steps);

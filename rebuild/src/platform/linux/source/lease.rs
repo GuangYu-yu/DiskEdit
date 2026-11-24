@@ -34,7 +34,7 @@ impl Lease {
         match error.raw_os_error() {
             Some(code) if code == libc::EWOULDBLOCK || code == libc::EAGAIN => {
                 Err(PlatformError::unsupported(format!(
-                    "{} 已被其他进程独占，无法取得租约",
+                    "{} is exclusively held by another process; cannot acquire a lease",
                     path.display()
                 )))
             }
@@ -46,7 +46,7 @@ impl Lease {
     #[cfg(not(unix))]
     pub fn acquire(path: &Path) -> PlatformResult<Self> {
         Err(PlatformError::not_applicable(format!(
-            "当前平台不支持对 {} 加独占租约",
+            "an exclusive lease on {} is not supported on this platform",
             path.display()
         )))
     }

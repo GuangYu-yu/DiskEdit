@@ -30,7 +30,7 @@ pub fn parse(text: &str) -> PlatformResult<Vec<SwapEntry>> {
         let fields: Vec<&str> = line.split_whitespace().collect();
         if fields.len() < 2 {
             return Err(PlatformError::parse(format!(
-                "swaps 第 {} 行字段不足",
+                "swaps line {} has too few fields",
                 index + 1
             )));
         }

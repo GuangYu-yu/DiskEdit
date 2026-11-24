@@ -23,7 +23,7 @@ pub fn apply(
     let (source_lba, source_sectors) = table::partition_span(channel, ctx.sector, source)?;
     if sectors > source_sectors {
         return Err(ExecError::InvalidPlan(format!(
-            "复制长度 {sectors} 超过源分区 {source} 的 {source_sectors}"
+            "copy length {sectors} exceeds source partition {source} ({source_sectors})"
         )));
     }
     let chunk = chunk.max(1);
@@ -33,7 +33,7 @@ pub fn apply(
         let take = remaining.min(chunk);
         let bytes = channel.read_exact(source_lba * ctx.sector + offset, take as usize)?;
         let region = Region::sized(start_lba * ctx.sector + offset, take)
-            .map_err(|error| ExecError::InvalidPlan(format!("空区间: {error:?}")))?;
+            .map_err(|error| ExecError::InvalidPlan(format!("empty region: {error:?}")))?;
         channel.write(token, region, &bytes)?;
         offset += take;
         remaining -= take;

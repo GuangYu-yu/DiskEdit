@@ -28,14 +28,15 @@ pub fn plan(
     let Some(selector) = selector else {
         // 挂载点形态在命令行层就应被改写成分区目标；走到这里说明上游漏了反查。
         return Err(Refusal::ContentUnsupported {
-            what: "挂载点形态的 resizefs".to_owned(),
-            why: "请求尚未把挂载点反查成整盘目标与分区号".to_owned(),
+            what: "resizefs in mount point form".to_owned(),
+            why: "request has not resolved the mount point to a whole-disk target and partition number"
+                .to_owned(),
         });
     };
     if !mount && bytes.is_some() {
         // 离线形态没有尺寸参数；保留这条判据，供绕过命令行直接构造请求的调用方一并拒绝。
         return Err(Refusal::ArgumentOutOfRange {
-            what: "离线 resizefs 不接受尺寸参数".to_owned(),
+            what: "offline resizefs does not accept a size argument".to_owned(),
         });
     }
     let partition = admission::select(snapshot, selector)?;
@@ -45,23 +46,24 @@ pub fn plan(
         .sectors
         .checked_mul(admitted.sector)
         .ok_or_else(|| Refusal::GeometryUnknown {
-            why: "分区容量越过可寻址上界".to_owned(),
+            why: "partition capacity exceeds the addressable bound".to_owned(),
         })?;
     if capacity_bytes == 0 {
         return Err(Refusal::ArgumentOutOfRange {
-            what: "分区长度为零".to_owned(),
+            what: "partition length is zero".to_owned(),
         });
     }
     if let Some(requested) = bytes {
         if requested > capacity_bytes {
             return Err(Refusal::ArgumentOutOfRange {
-                what: "请求尺寸超过分区容量".to_owned(),
+                what: "requested size exceeds the partition capacity".to_owned(),
             });
         }
         if requested < capacity_bytes {
             return Err(Refusal::ContentUnsupported {
-                what: "在线 resizefs 收缩文件系统".to_owned(),
-                why: "该形态只把文件系统撑满分区；缩小请改用 resize".to_owned(),
+                what: "online resizefs shrinking the filesystem".to_owned(),
+                why: "this form only grows the filesystem to fill the partition; use resize to shrink"
+                    .to_owned(),
             });
         }
     }
@@ -69,13 +71,13 @@ pub fn plan(
     let filesystem = content
         .filesystem()
         .ok_or_else(|| Refusal::ContentUnsupported {
-            what: format!("{} 调整大小", content.as_str()),
-            why: "该内容不是文件系统".to_owned(),
+            what: format!("{} resize", content.as_str()),
+            why: "this content is not a filesystem".to_owned(),
         })?;
     let programs =
         admission::programs(content, Verb::Grow)?.ok_or_else(|| Refusal::ContentUnsupported {
-            what: format!("{} 扩容", content.as_str()),
-            why: "该文件系统不支持扩容".to_owned(),
+            what: format!("{} grow", content.as_str()),
+            why: "this filesystem does not support growing".to_owned(),
         })?;
     admission::require_tools(snapshot, programs)?;
     let region = capacity::partition_region(

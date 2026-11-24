@@ -44,7 +44,7 @@ fn observe_gpt(
     generation: Generation,
 ) -> Observation<GptEvidence> {
     let Some(handle) = handle else {
-        return Observation::unknown("目标未能打开，GPT 未读取");
+        return Observation::unknown("cannot open target; GPT not read");
     };
     match read_gpt(handle, disk) {
         Ok(evidence) => Observation::known(evidence, SOURCE, generation),
@@ -57,38 +57,41 @@ fn read_gpt(handle: &dyn TargetHandle, disk: &DiskFacts) -> Result<GptEvidence, 
         .sector_size
         .value()
         .copied()
-        .ok_or_else(|| "逻辑块大小未知，无法定位 GPT 头部".to_owned())?;
+        .ok_or_else(|| "logical block size unknown; cannot locate GPT header".to_owned())?;
     let length = disk
         .byte_len
         .value()
         .copied()
-        .ok_or_else(|| "目标长度未知，无法定位备份 GPT".to_owned())?;
+        .ok_or_else(|| "target length unknown; cannot locate backup GPT".to_owned())?;
     if sector < 512 {
-        return Err(format!("逻辑块大小 {sector} 小于 512 字节，不能承载 GPT"));
+        return Err(format!(
+            "logical block size {sector} is below 512 bytes; cannot hold GPT"
+        ));
     }
     let last_lba = length
         .checked_div(sector)
         .and_then(|blocks| blocks.checked_sub(1))
-        .ok_or_else(|| "目标不足一个逻辑块".to_owned())?;
+        .ok_or_else(|| "target is shorter than one logical block".to_owned())?;
     if last_lba < 2 {
-        return Err("目标过小，无法容纳 GPT 头部".to_owned());
+        return Err("target too small to hold GPT header".to_owned());
     }
-    let sector_usize = usize::try_from(sector).map_err(|_| "逻辑块大小超出可寻址范围")?;
+    let sector_usize =
+        usize::try_from(sector).map_err(|_| "logical block size exceeds addressable range")?;
     let primary_header = super::read_exact_at(handle, sector, sector_usize)?;
     let primary_array = super::read_exact_at(handle, 2 * sector, ENTRY_ARRAY_BYTES)?;
     let backup_span = u64::try_from(ENTRY_ARRAY_BYTES)
-        .map_err(|_| "条目数组长度超出 u64 范围")?
+        .map_err(|_| "entry array length exceeds u64 range")?
         .div_ceil(sector)
         .max(1);
     let backup_array_lba = last_lba
         .checked_sub(backup_span)
-        .ok_or_else(|| "目标过小，无法容纳备份条目数组".to_owned())?;
+        .ok_or_else(|| "target too small to hold backup entry array".to_owned())?;
     let backup_offset = last_lba
         .checked_mul(sector)
-        .ok_or_else(|| "备份头部偏移越过可寻址上界".to_owned())?;
+        .ok_or_else(|| "backup header offset exceeds addressable bound".to_owned())?;
     let backup_array_offset = backup_array_lba
         .checked_mul(sector)
-        .ok_or_else(|| "备份条目数组偏移越过可寻址上界".to_owned())?;
+        .ok_or_else(|| "backup entry array offset exceeds addressable bound".to_owned())?;
     let backup_header = super::read_exact_at(handle, backup_offset, sector_usize)?;
     let backup_array = super::read_exact_at(handle, backup_array_offset, ENTRY_ARRAY_BYTES)?;
     Ok(classify(
@@ -106,7 +109,7 @@ fn observe_mbr(
     generation: Generation,
 ) -> Observation<Evidence<Mbr>> {
     let Some(handle) = handle else {
-        return Observation::unknown("目标未能打开，MBR 未读取");
+        return Observation::unknown("cannot open target; MBR not read");
     };
     let sector = match super::read_exact_at(handle, 0, MBR_BYTES) {
         Ok(bytes) => bytes,
@@ -116,7 +119,7 @@ fn observe_mbr(
         Ok(mbr) => Evidence::Present(mbr),
         Err(TableError::MbrSignatureMissing) => Evidence::Absent,
         Err(error) => Evidence::UnknownFormat {
-            why: format!("MBR 解析失败：{error}"),
+            why: format!("failed to parse MBR: {error}"),
         },
     };
     Observation::known(evidence, SOURCE, generation)

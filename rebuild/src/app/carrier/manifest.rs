@@ -28,38 +28,42 @@ pub struct Bundle {
 pub fn resolve() -> Result<Option<Bundle>, String> {
     let root = match std::env::var_os(VARIABLE) {
         Some(value) if value.is_empty() => {
-            return Err(format!("{VARIABLE}= 为空"));
+            return Err(format!("{VARIABLE}= is empty"));
         }
         Some(value) => PathBuf::from(value),
         None => return Ok(None),
     };
     let manifest = root.join("manifest.json");
     let text = fs::read_to_string(&manifest)
-        .map_err(|error| format!("读取 {} 失败：{error}", manifest.display()))?;
+        .map_err(|error| format!("failed to read {}: {error}", manifest.display()))?;
     let value: Value = serde_json::from_str(&text)
-        .map_err(|error| format!("解析 {} 失败：{error}", manifest.display()))?;
+        .map_err(|error| format!("failed to parse {}: {error}", manifest.display()))?;
 
     let schema = value.get("schema").and_then(Value::as_u64);
     if schema != Some(SCHEMA) {
-        return Err(format!("{} 的 schema 必须是 {SCHEMA}", manifest.display()));
+        return Err(format!("schema of {} must be {SCHEMA}", manifest.display()));
     }
     let arch = field(&value, "arch")?;
     if arch != std::env::consts::ARCH {
         return Err(format!(
-            "包的架构 {arch} 与本机 {} 不一致",
+            "bundle arch {arch} does not match host {}",
             std::env::consts::ARCH
         ));
     }
     let version = field(&value, "binary_version")?;
     if version != env!("CARGO_PKG_VERSION") {
         return Err(format!(
-            "包的二进制版本 {version} 与本进程 {} 不一致",
+            "bundle binary version {version} does not match host {}",
             env!("CARGO_PKG_VERSION")
         ));
     }
 
-    let canonical_root = fs::canonicalize(&root)
-        .map_err(|error| format!("解析包目录 {} 失败：{error}", root.display()))?;
+    let canonical_root = fs::canonicalize(&root).map_err(|error| {
+        format!(
+            "failed to resolve bundle directory {}: {error}",
+            root.display()
+        )
+    })?;
     let kernel = artifact(&value, "kernel", &canonical_root)?;
     let initramfs = artifact(&value, "initramfs", &canonical_root)?;
     let worker = match value.get("worker") {
@@ -67,11 +71,11 @@ pub fn resolve() -> Result<Option<Bundle>, String> {
         Some(entry) => {
             let digest = hex32(field(entry, "sha256")?, "worker.sha256")?;
             let current = std::env::current_exe()
-                .map_err(|error| format!("无法定位当前可执行文件：{error}"))?;
+                .map_err(|error| format!("cannot locate current executable: {error}"))?;
             let actual = digest_file(&current)?;
             if digest != actual {
                 return Err(format!(
-                    "包的 worker 摘要与当前可执行文件不一致：声明 {}，实际 {}",
+                    "bundle worker digest does not match current executable: declared {}, actual {}",
                     show(&digest),
                     show(&actual)
                 ));
@@ -88,14 +92,16 @@ pub fn resolve() -> Result<Option<Bundle>, String> {
 
 /// 校验一项产物：路径必须是包内的纯相对路径，摘要必须与文件内容一致。
 fn artifact(value: &Value, name: &str, root: &Path) -> Result<PathBuf, String> {
-    let entry = value.get(name).ok_or_else(|| format!("清单缺少 {name}"))?;
+    let entry = value
+        .get(name)
+        .ok_or_else(|| format!("manifest is missing {name}"))?;
     let relative = field(entry, "path")?;
     let path = inside(root, relative, name)?;
     let declared = hex32(field(entry, "sha256")?, &format!("{name}.sha256"))?;
     let actual = digest_file(&path)?;
     if declared != actual {
         return Err(format!(
-            "{name} 的摘要不匹配：声明 {}，实际 {}",
+            "digest mismatch for {name}: declared {}, actual {}",
             show(&declared),
             show(&actual)
         ));
@@ -114,18 +120,26 @@ fn inside(root: &Path, relative: &str, name: &str) -> Result<PathBuf, String> {
             | Component::ParentDir
             | Component::RootDir
             | Component::Prefix(_) => {
-                return Err(format!("{name}.path 必须是包内的纯相对路径：{relative}"));
+                return Err(format!(
+                    "{name}.path must be a plain relative path inside the bundle: {relative}"
+                ));
             }
         }
     }
     if !normal {
-        return Err(format!("{name}.path 不能为空"));
+        return Err(format!("{name}.path must not be empty"));
     }
     let joined = root.join(path);
-    let canonical = fs::canonicalize(&joined)
-        .map_err(|error| format!("解析 {name} 路径 {} 失败：{error}", joined.display()))?;
+    let canonical = fs::canonicalize(&joined).map_err(|error| {
+        format!(
+            "failed to resolve {name} path {}: {error}",
+            joined.display()
+        )
+    })?;
     if !canonical.starts_with(root) {
-        return Err(format!("{name}.path 越出包目录：{relative}"));
+        return Err(format!(
+            "{name}.path escapes the bundle directory: {relative}"
+        ));
     }
     Ok(canonical)
 }
@@ -134,17 +148,18 @@ fn field<'a>(value: &'a Value, name: &str) -> Result<&'a str, String> {
     value
         .get(name)
         .and_then(Value::as_str)
-        .ok_or_else(|| format!("清单缺少字符串字段 {name}"))
+        .ok_or_else(|| format!("manifest is missing string field {name}"))
 }
 
 fn hex32(text: &str, name: &str) -> Result<[u8; 32], String> {
     if text.len() != 64 {
-        return Err(format!("{name} 必须是 64 位十六进制摘要"));
+        return Err(format!("{name} must be a 64-digit hex digest"));
     }
     let mut bytes = [0u8; 32];
     for (index, chunk) in text.as_bytes().chunks(2).enumerate() {
-        let pair = std::str::from_utf8(chunk).map_err(|_| format!("{name} 含非 ASCII 字符"))?;
-        bytes[index] = u8::from_str_radix(pair, 16).map_err(|_| format!("{name} 不是十六进制"))?;
+        let pair = std::str::from_utf8(chunk)
+            .map_err(|_| format!("{name} contains non-ASCII characters"))?;
+        bytes[index] = u8::from_str_radix(pair, 16).map_err(|_| format!("{name} is not hex"))?;
     }
     Ok(bytes)
 }
@@ -154,14 +169,14 @@ fn show(bytes: &[u8]) -> String {
 }
 
 fn digest_file(path: &Path) -> Result<[u8; 32], String> {
-    let mut file =
-        fs::File::open(path).map_err(|error| format!("打开 {} 失败：{error}", path.display()))?;
+    let mut file = fs::File::open(path)
+        .map_err(|error| format!("failed to open {}: {error}", path.display()))?;
     let mut hasher = Sha256::new();
     let mut buffer = vec![0u8; 1 << 16];
     loop {
         let read = file
             .read(&mut buffer)
-            .map_err(|error| format!("读取 {} 失败：{error}", path.display()))?;
+            .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
         if read == 0 {
             break;
         }

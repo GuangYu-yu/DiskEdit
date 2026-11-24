@@ -113,7 +113,9 @@ impl Platform for Linux {
             ));
         }
         let (fsid, devices) = kernel::parse_show(&output.stdout_text()).ok_or_else(|| {
-            PlatformError::parse("btrfs filesystem show 输出中没有可解析的 fsid 或设备数")
+            PlatformError::parse(
+                "btrfs filesystem show output has no parseable fsid or device count",
+            )
         })?;
         Ok(BtrfsShow { fsid, devices })
     }
@@ -204,7 +206,7 @@ impl Platform for Linux {
             let end = range.end();
             if end > length {
                 return Err(PlatformError::parse(format!(
-                    "清零区间 {range:?} 越过设备长度 {length}"
+                    "wipe range {range:?} exceeds device length {length}"
                 )));
             }
             let mut written = 0u64;
@@ -343,7 +345,7 @@ impl Platform for Linux {
             .map_err(|error| {
                 PlatformError::tools(
                     executable.display().to_string(),
-                    format!("无法启动：{error}"),
+                    format!("failed to start: {error}"),
                 )
             })?;
         Ok(Output {
@@ -419,7 +421,7 @@ fn resolve(program: Program) -> PlatformResult<PathBuf> {
             return Ok(candidate);
         }
     }
-    Err(PlatformError::tools(name, "在 PATH 中找不到可执行文件"))
+    Err(PlatformError::tools(name, "cannot find executable in PATH"))
 }
 
 /// 程序身份到可执行名。可执行名只在本文件维护。
@@ -513,5 +515,5 @@ pub fn read_optional_attr(path: &Path) -> PlatformResult<Option<String>> {
 /// 读取必须存在的属性；不存在按解析失败报告。
 pub fn read_required_attr(path: &Path) -> PlatformResult<String> {
     read_optional_attr(path)?
-        .ok_or_else(|| PlatformError::parse(format!("{} 不存在", path.display())))
+        .ok_or_else(|| PlatformError::parse(format!("{} does not exist", path.display())))
 }

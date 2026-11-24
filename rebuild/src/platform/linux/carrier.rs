@@ -36,7 +36,7 @@ fn locate(name: &str) -> PlatformResult<PathBuf> {
     }
     Err(PlatformError::tools(
         name,
-        "在 PATH 中找不到 QEMU；安装 QEMU 或提供可用的虚拟机载体",
+        "cannot find QEMU in PATH; install QEMU or provide a usable virtual machine carrier",
     ))
 }
 
@@ -116,7 +116,7 @@ fn check_sector(sector: u64) -> PlatformResult<()> {
         Ok(())
     } else {
         Err(PlatformError::not_supported(format!(
-            "目标的逻辑扇区尺寸 {sector} 不受虚拟机载体支持，只接受 512 或 4096"
+            "target logical sector size {sector} is not supported by the virtual machine carrier; only 512 or 4096 is accepted"
         )))
     }
 }
@@ -124,7 +124,10 @@ fn check_sector(sector: u64) -> PlatformResult<()> {
 /// 启动一台载体；返回的进程持有目标描述符直到结束。
 pub fn launch(launch: &CarrierLaunch) -> PlatformResult<Box<dyn CarrierProcess>> {
     let (program, machine, console) = emulator(&launch.arch).ok_or_else(|| {
-        PlatformError::not_supported(format!("架构 {} 没有可用的虚拟机载体", launch.arch))
+        PlatformError::not_supported(format!(
+            "no virtual machine carrier available for architecture {}",
+            launch.arch
+        ))
     })?;
     check_sector(launch.sector_size)?;
     let executable = locate(program)?;
@@ -156,7 +159,7 @@ pub fn launch(launch: &CarrierLaunch) -> PlatformResult<Box<dyn CarrierProcess>>
     }
     let mut child = command
         .spawn()
-        .map_err(|error| PlatformError::tools(program, format!("启动 QEMU 失败：{error}")))?;
+        .map_err(|error| PlatformError::tools(program, format!("failed to start QEMU: {error}")))?;
     let io = child_io(&mut child);
     Ok(Box::new(Process {
         child,

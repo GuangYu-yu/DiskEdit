@@ -60,15 +60,15 @@ pub fn min_size_rule(kind: ContentKind) -> MinSizeRule {
         | ContentKind::Filesystem(FsKind::Jfs)
         | ContentKind::Filesystem(FsKind::Reiserfs)
         | ContentKind::Filesystem(FsKind::Udf) => MinSizeRule::Unavailable {
-            why: "该族没有可信的最小尺寸探针；缩容按重建处理",
+            why: "this family has no trustworthy minimum size probe; shrink is treated as rebuild",
         },
         ContentKind::Swap | ContentKind::Lvm2Pv | ContentKind::Luks | ContentKind::BitLocker => {
             MinSizeRule::Unavailable {
-                why: "容器或交换区没有文件系统级最小尺寸",
+                why: "container or swap area has no filesystem-level minimum size",
             }
         }
         ContentKind::Unknown => MinSizeRule::Unavailable {
-            why: "内容类别未知，不能给出最小尺寸",
+            why: "unknown content kind; cannot give a minimum size",
         },
     }
 }

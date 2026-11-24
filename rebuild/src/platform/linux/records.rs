@@ -88,7 +88,7 @@ impl RecordStore for LinuxRecords {
     fn quarantine(&mut self) -> PlatformResult<String> {
         let active = self.dir.join(RECORD_NAME);
         if std::fs::symlink_metadata(&active).is_err() {
-            return Err(PlatformError::not_supported("没有可归档的记录"));
+            return Err(PlatformError::not_supported("no record to archive"));
         }
         let mut index = 0u32;
         loop {
@@ -100,7 +100,7 @@ impl RecordStore for LinuxRecords {
             }
             index = index
                 .checked_add(1)
-                .ok_or_else(|| PlatformError::unsupported("归档文件名已用尽"))?;
+                .ok_or_else(|| PlatformError::unsupported("archive file names are exhausted"))?;
         }
     }
 }
@@ -156,13 +156,13 @@ pub fn record_dirs(root: &Path) -> PlatformResult<Vec<RecordDir>> {
     let meta = std::fs::metadata(root).map_err(|error| PlatformError::io(root, error))?;
     if !meta.is_dir() {
         return Err(PlatformError::not_supported(format!(
-            "{} 不是目录",
+            "{} is not a directory",
             root.display()
         )));
     }
     if is_record_dir(root) {
         return Err(PlatformError::not_supported(format!(
-            "{} 是记录目录，不是容器根",
+            "{} is a record directory, not a container root",
             root.display()
         )));
     }
@@ -173,7 +173,7 @@ pub fn record_dirs(root: &Path) -> PlatformResult<Vec<RecordDir>> {
             containers.push(recovery);
         } else if root.starts_with(&state) {
             return Err(PlatformError::not_supported(format!(
-                "{} 位于状态根内；容器根是 {}",
+                "{} is inside the state root; the container root is {}",
                 root.display(),
                 recovery.display()
             )));

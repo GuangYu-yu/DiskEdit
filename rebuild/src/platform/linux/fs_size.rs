@@ -37,7 +37,7 @@ impl Linux {
             | FsKind::Jfs
             | FsKind::Reiserfs
             | FsKind::Udf => Err(PlatformError::unsupported_fs(format!(
-                "{kind:?} 没有尺寸探测"
+                "{kind:?} has no size probe"
             ))),
         }
     }
@@ -48,11 +48,13 @@ impl Linux {
             return Err(tool_failure("dumpe2fs", &header));
         }
         let (blocks, block_size, blocks_per_group) = parse_dumpe2fs(&header.stdout_text())
-            .ok_or_else(|| PlatformError::parse("dumpe2fs 输出缺少块数或块大小"))?;
+            .ok_or_else(|| {
+                PlatformError::parse("dumpe2fs output is missing block count or block size")
+            })?;
         let bytes = blocks
             .checked_mul(block_size)
             .filter(|bytes| *bytes > 0)
-            .ok_or_else(|| PlatformError::parse("dumpe2fs 给出的尺寸溢出"))?;
+            .ok_or_else(|| PlatformError::parse("dumpe2fs size overflows"))?;
         let bytes = if bytes > device_bytes {
             device_bytes
         } else {
@@ -84,7 +86,9 @@ impl Linux {
             return Err(tool_failure("ntfsresize", &info));
         }
         let (bytes, unit, minimal) = parse_ntfsresize(&info.stdout_text(), &info.stderr_text())
-            .ok_or_else(|| PlatformError::parse("ntfsresize --info 输出缺少当前或最小尺寸"))?;
+            .ok_or_else(|| {
+                PlatformError::parse("ntfsresize --info output is missing current or minimum size")
+            })?;
         Ok(FsSize {
             bytes,
             unit,
@@ -100,8 +104,9 @@ impl Linux {
         if !output.succeeded() {
             return Err(tool_failure("btrfs", &output));
         }
-        let min = parse_min_dev_size(&output.stdout_text())
-            .ok_or_else(|| PlatformError::parse("btrfs min-dev-size 输出缺少字节数"))?;
+        let min = parse_min_dev_size(&output.stdout_text()).ok_or_else(|| {
+            PlatformError::parse("btrfs min-dev-size output is missing a byte count")
+        })?;
         // btrfs 按 4 KiB 扇区放置；`min-dev-size` 不报告 sectorsize，取格式下限。
         Ok(FsSize {
             bytes: device_bytes,

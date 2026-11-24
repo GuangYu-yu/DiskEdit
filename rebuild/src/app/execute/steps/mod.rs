@@ -56,7 +56,9 @@ pub fn writes_table(kind: &StepKind) -> bool {
 /// 写前闸口：判断该步骤能否在本机执行；失败时不登记原像、不写目标。
 pub fn precheck(kind: &StepKind, ctx: &Context<'_>) -> Result<(), ExecError> {
     if ctx.sector == 0 {
-        return Err(ExecError::InvalidPlan("扇区尺寸不能为 0".to_owned()));
+        return Err(ExecError::InvalidPlan(
+            "sector size cannot be zero".to_owned(),
+        ));
     }
     match kind {
         StepKind::WriteTable { .. }
@@ -83,7 +85,7 @@ pub fn precheck(kind: &StepKind, ctx: &Context<'_>) -> Result<(), ExecError> {
         | StepKind::ScanRecords
         | StepKind::RefreshKernelView
         | StepKind::RecoverRecords { .. } => Err(ExecError::InvalidPlan(
-            "该步骤不属于写目标字节的步骤".to_owned(),
+            "this step does not write target bytes".to_owned(),
         )),
     }
 }
@@ -119,7 +121,7 @@ pub fn apply(
                 [source, destination] => (*source, *destination),
                 _ => {
                     return Err(ExecError::InvalidPlan(
-                        "搬移步骤必须声明旧区间与新区间".to_owned(),
+                        "move step must declare both old and new regions".to_owned(),
                     ));
                 }
             };
@@ -146,7 +148,7 @@ pub fn apply(
         | StepKind::ScanRecords
         | StepKind::RefreshKernelView
         | StepKind::RecoverRecords { .. } => Err(ExecError::InvalidPlan(
-            "该步骤没有写目标字节的实现".to_owned(),
+            "no target-write implementation for this step".to_owned(),
         )),
     }
 }

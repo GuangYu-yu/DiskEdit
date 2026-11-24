@@ -50,11 +50,13 @@ pub fn reread(path: &Path) -> PlatformResult<()> {
 
 /// 用 `BLKPG` 增加一个分区；`start` 与 `length` 以字节计。
 pub fn add_partition(path: &Path, number: u32, start: u64, length: u64) -> PlatformResult<()> {
-    let number = i32::try_from(number)
-        .map_err(|_| PlatformError::parse(format!("分区号 {number} 超出 i32 范围")))?;
-    let start = i64::try_from(start).map_err(|_| PlatformError::parse("分区起点超出 i64 范围"))?;
-    let length =
-        i64::try_from(length).map_err(|_| PlatformError::parse("分区长度超出 i64 范围"))?;
+    let number = i32::try_from(number).map_err(|_| {
+        PlatformError::parse(format!("partition number {number} exceeds i32 range"))
+    })?;
+    let start = i64::try_from(start)
+        .map_err(|_| PlatformError::parse("partition start exceeds i64 range"))?;
+    let length = i64::try_from(length)
+        .map_err(|_| PlatformError::parse("partition length exceeds i64 range"))?;
     let mut partition = BlkpgPartition {
         start,
         length,
@@ -73,8 +75,9 @@ pub fn add_partition(path: &Path, number: u32, start: u64, length: u64) -> Platf
 
 /// 用 `BLKPG` 删除一个分区。
 pub fn delete_partition(path: &Path, number: u32) -> PlatformResult<()> {
-    let number = i32::try_from(number)
-        .map_err(|_| PlatformError::parse(format!("分区号 {number} 超出 i32 范围")))?;
+    let number = i32::try_from(number).map_err(|_| {
+        PlatformError::parse(format!("partition number {number} exceeds i32 range"))
+    })?;
     let mut partition = BlkpgPartition {
         start: 0,
         length: 0,
@@ -118,13 +121,15 @@ pub fn sync_partitions(path: &Path, partitions: &[(u32, u64, u64)]) -> PlatformR
 
 fn classify_ioctl(path: &Path, error: std::io::Error) -> PlatformError {
     match error.raw_os_error() {
-        Some(libc::ENOTTY) | Some(libc::EINVAL) => {
-            PlatformError::unsupported(format!("{} 不接受该内核请求：{error}", path.display()))
-        }
-        Some(libc::EACCES) | Some(libc::EPERM) => {
-            PlatformError::denied(format!("{} 的内核请求被拒绝：{error}", path.display()))
-        }
-        Some(libc::EBUSY) => PlatformError::busy(format!("{} 正被占用：{error}", path.display())),
+        Some(libc::ENOTTY) | Some(libc::EINVAL) => PlatformError::unsupported(format!(
+            "{} does not accept this kernel request: {error}",
+            path.display()
+        )),
+        Some(libc::EACCES) | Some(libc::EPERM) => PlatformError::denied(format!(
+            "{} kernel request was denied: {error}",
+            path.display()
+        )),
+        Some(libc::EBUSY) => PlatformError::busy(format!("{} is in use: {error}", path.display())),
         _ => PlatformError::io(path, error),
     }
 }

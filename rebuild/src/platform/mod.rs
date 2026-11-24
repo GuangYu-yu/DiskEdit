@@ -38,7 +38,7 @@ macro_rules! unsupported_platform {
             ) -> $crate::platform::PlatformResult<Box<dyn $crate::platform::TargetHandle>> {
                 Err($crate::platform::PlatformError::not_supported(concat!(
                     $os,
-                    " 的块设备端口尚未接入"
+                    " block device port is not supported on this host"
                 )))
             }
 
@@ -48,7 +48,7 @@ macro_rules! unsupported_platform {
             ) -> $crate::platform::PlatformResult<Box<dyn $crate::platform::TargetHandle>> {
                 Err($crate::platform::PlatformError::not_supported(concat!(
                     $os,
-                    " 的只读目标端口尚未接入"
+                    " read-only target port is not supported on this host"
                 )))
             }
 
@@ -58,7 +58,7 @@ macro_rules! unsupported_platform {
             ) -> $crate::platform::PlatformResult<diskedit_core::fingerprint::Fingerprint> {
                 Err($crate::platform::PlatformError::not_supported(concat!(
                     $os,
-                    " 的身份端口尚未接入"
+                    " identity port is not supported on this host"
                 )))
             }
 
@@ -68,7 +68,7 @@ macro_rules! unsupported_platform {
             ) -> $crate::platform::PlatformResult<Vec<$crate::platform::Partition>> {
                 Err($crate::platform::PlatformError::not_supported(concat!(
                     $os,
-                    " 的拓扑端口尚未接入"
+                    " topology port is not supported on this host"
                 )))
             }
 
@@ -78,14 +78,14 @@ macro_rules! unsupported_platform {
             ) -> $crate::platform::PlatformResult<$crate::platform::Occupancy> {
                 Err($crate::platform::PlatformError::not_supported(concat!(
                     $os,
-                    " 的占用端口尚未接入"
+                    " occupancy port is not supported on this host"
                 )))
             }
 
             fn reread(&self, _path: &std::path::Path) -> $crate::platform::PlatformResult<()> {
                 Err($crate::platform::PlatformError::not_supported(concat!(
                     $os,
-                    " 不支持分区表重读"
+                    " does not support partition table reread"
                 )))
             }
 
@@ -95,7 +95,7 @@ macro_rules! unsupported_platform {
             ) -> $crate::platform::PlatformResult<()> {
                 Err($crate::platform::PlatformError::not_supported(concat!(
                     $os,
-                    " 不支持在线更新分区表"
+                    " does not support online partition table update"
                 )))
             }
 
@@ -105,7 +105,7 @@ macro_rules! unsupported_platform {
             ) -> $crate::platform::PlatformResult<$crate::platform::BtrfsShow> {
                 Err($crate::platform::PlatformError::not_supported(concat!(
                     $os,
-                    " 不支持读取 btrfs 信息"
+                    " does not support reading btrfs information"
                 )))
             }
 
@@ -115,7 +115,7 @@ macro_rules! unsupported_platform {
             ) -> $crate::platform::PlatformResult<Vec<$crate::platform::PvFacts>> {
                 Err($crate::platform::PlatformError::not_supported(concat!(
                     $os,
-                    " 不支持读取物理卷"
+                    " does not support reading physical volumes"
                 )))
             }
 
@@ -127,7 +127,7 @@ macro_rules! unsupported_platform {
             ) -> $crate::platform::PlatformResult<std::path::PathBuf> {
                 Err($crate::platform::PlatformError::not_supported(concat!(
                     $os,
-                    " 没有 loop 设备"
+                    " has no loop devices"
                 )))
             }
 
@@ -137,7 +137,7 @@ macro_rules! unsupported_platform {
             ) -> $crate::platform::PlatformResult<()> {
                 Err($crate::platform::PlatformError::not_supported(concat!(
                     $os,
-                    " 没有 loop 设备"
+                    " has no loop devices"
                 )))
             }
 
@@ -150,7 +150,7 @@ macro_rules! unsupported_platform {
             ) -> $crate::platform::PlatformResult<()> {
                 Err($crate::platform::PlatformError::not_supported(concat!(
                     $os,
-                    " 的挂载端口尚未接入"
+                    " mount port is not supported on this host"
                 )))
             }
 
@@ -160,7 +160,7 @@ macro_rules! unsupported_platform {
             ) -> $crate::platform::PlatformResult<()> {
                 Err($crate::platform::PlatformError::not_supported(concat!(
                     $os,
-                    " 的挂载端口尚未接入"
+                    " mount port is not supported on this host"
                 )))
             }
 
@@ -169,7 +169,7 @@ macro_rules! unsupported_platform {
                 program: diskedit_core::fs::Program,
             ) -> $crate::platform::PlatformResult<std::path::PathBuf> {
                 Err($crate::platform::PlatformError::not_supported(format!(
-                    concat!($os, " 不提供外部程序：{:?}"),
+                    concat!($os, " does not provide an external program: {:?}"),
                     program
                 )))
             }
@@ -181,7 +181,7 @@ macro_rules! unsupported_platform {
             ) -> $crate::platform::PlatformResult<$crate::platform::Output> {
                 Err($crate::platform::PlatformError::not_supported(concat!(
                     $os,
-                    " 不提供外部程序执行"
+                    " does not provide external program execution"
                 )))
             }
         }
@@ -320,13 +320,17 @@ fn classify_io(kind: std::io::ErrorKind) -> IoKind {
 impl fmt::Display for PlatformError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Io { path, source } => write!(f, "读写 {} 失败：{source}", path.display()),
-            Self::NotSupported { why } => write!(f, "能力不支持：{why}"),
-            Self::UnsupportedFs { why } => write!(f, "文件系统不受支持：{why}"),
-            Self::Busy { why } => write!(f, "目标被占用：{why}"),
-            Self::Denied { why } => write!(f, "权限不足：{why}"),
-            Self::Parse { what } => write!(f, "解析失败：{what}"),
-            Self::Tools { program, why } => write!(f, "外部程序 {program} 执行失败：{why}"),
+            Self::Io { path, source } => {
+                write!(f, "failed to read or write {}: {source}", path.display())
+            }
+            Self::NotSupported { why } => write!(f, "capability not supported: {why}"),
+            Self::UnsupportedFs { why } => write!(f, "filesystem not supported: {why}"),
+            Self::Busy { why } => write!(f, "target in use: {why}"),
+            Self::Denied { why } => write!(f, "permission denied: {why}"),
+            Self::Parse { what } => write!(f, "failed to parse: {what}"),
+            Self::Tools { program, why } => {
+                write!(f, "failed to run external program {program}: {why}")
+            }
         }
     }
 }
@@ -605,7 +609,9 @@ pub trait Platform {
     /// 返回错误，上层据此拒绝挂载点形态，不猜一个目标。
     fn mount_location(&self, mount_point: &Path) -> PlatformResult<MountLocation> {
         let _ = mount_point;
-        Err(PlatformError::not_supported("该宿主不提供挂载点反查"))
+        Err(PlatformError::not_supported(
+            "this host does not resolve mount points",
+        ))
     }
     fn require(&self, program: Program) -> PlatformResult<PathBuf>;
     fn run(&self, program: Program, args: &[&str]) -> PlatformResult<Output>;
@@ -620,7 +626,9 @@ pub trait Platform {
         region: Region,
     ) -> PlatformResult<PartitionDevice> {
         let _ = (target, partition, region);
-        Err(PlatformError::not_supported("该宿主不提供分区设备视图"))
+        Err(PlatformError::not_supported(
+            "this host does not provide a partition device view",
+        ))
     }
     /// 读取文件系统的当前大小与最小尺寸。
     ///
@@ -633,7 +641,9 @@ pub trait Platform {
         kind: FsKind,
     ) -> PlatformResult<FsSize> {
         let _ = (target, partition, region, kind);
-        Err(PlatformError::not_supported("该宿主不提供文件系统尺寸探测"))
+        Err(PlatformError::not_supported(
+            "this host does not provide filesystem size probing",
+        ))
     }
     /// 读取已取得的分区设备上文件系统的尺寸事实。
     ///
@@ -646,22 +656,30 @@ pub trait Platform {
         kind: FsKind,
     ) -> PlatformResult<FsSize> {
         let _ = (device, device_bytes, kind);
-        Err(PlatformError::not_supported("该宿主不提供文件系统尺寸探测"))
+        Err(PlatformError::not_supported(
+            "this host does not provide filesystem size probing",
+        ))
     }
     /// 把设备上若干字节区间清零并提交。
     ///
     /// 建卷前擦除旧签名副本时使用；区间越界由实现拒绝。
     fn wipe(&self, device: &Path, ranges: &[Region]) -> PlatformResult<()> {
         let _ = (device, ranges);
-        Err(PlatformError::not_supported("该宿主不提供设备清零"))
+        Err(PlatformError::not_supported(
+            "this host does not provide device zeroing",
+        ))
     }
     /// 建一个私有临时挂载点；用后经 [`Platform::remove_mount_point`] 释放。
     fn make_mount_point(&self) -> PlatformResult<PathBuf> {
-        Err(PlatformError::not_supported("该宿主不提供临时挂载点"))
+        Err(PlatformError::not_supported(
+            "this host does not provide temporary mount points",
+        ))
     }
     fn remove_mount_point(&self, point: &Path) -> PlatformResult<()> {
         let _ = point;
-        Err(PlatformError::not_supported("该宿主不提供临时挂载点"))
+        Err(PlatformError::not_supported(
+            "this host does not provide temporary mount points",
+        ))
     }
     /// 宿主能否直接对这类目标运行文件系统工具。
     ///
@@ -687,7 +705,9 @@ pub trait Platform {
     }
     /// 启动一台虚拟机载体。
     fn launch_carrier(&self, _launch: &CarrierLaunch) -> PlatformResult<Box<dyn CarrierProcess>> {
-        Err(PlatformError::not_supported("该宿主不提供虚拟机载体"))
+        Err(PlatformError::not_supported(
+            "this host does not provide a virtual machine carrier",
+        ))
     }
     /// 目标对应的记录目录；宿主没有该能力时返回 `NotSupported`。
     fn records(
@@ -696,7 +716,9 @@ pub trait Platform {
         identity: Fingerprint,
     ) -> PlatformResult<Box<dyn RecordStore>> {
         let _ = (target, identity);
-        Err(PlatformError::not_supported("该宿主不提供记录目录"))
+        Err(PlatformError::not_supported(
+            "this host does not provide a record directory",
+        ))
     }
     /// 枚举 `root` 这个容器下的记录目录及其条目。
     ///
@@ -704,12 +726,16 @@ pub trait Platform {
     /// 指到容器，都返回 `NotSupported` 并说明正确位置。容器不存在时返回 I/O 错误。
     fn record_dirs(&self, root: &Path) -> PlatformResult<Vec<RecordDir>> {
         let _ = root;
-        Err(PlatformError::not_supported("该宿主不提供记录容器"))
+        Err(PlatformError::not_supported(
+            "this host does not provide a record container",
+        ))
     }
     /// 读出记录目录 `dir` 下名为 `name` 的条目。
     fn read_record(&self, dir: &Path, name: &str) -> PlatformResult<Vec<u8>> {
         let _ = (dir, name);
-        Err(PlatformError::not_supported("该宿主不提供记录读取"))
+        Err(PlatformError::not_supported(
+            "this host does not provide record reads",
+        ))
     }
 }
 
@@ -730,7 +756,7 @@ pub fn open() -> PlatformResult<Box<dyn Platform>> {
     #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
     {
         Err(PlatformError::not_supported(
-            "当前操作系统没有对应的端口实现",
+            "no port implementation for the current operating system",
         ))
     }
 }

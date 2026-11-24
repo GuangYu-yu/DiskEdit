@@ -13,14 +13,17 @@ pub const MIN_BYTES: usize = 512;
 pub fn identify(bytes: &[u8]) -> Evidence<ContentKind> {
     if bytes.len() < MIN_BYTES {
         return Evidence::Unreadable {
-            why: format!("签名前缀只有 {} 字节，至少需要 {MIN_BYTES}", bytes.len()),
+            why: format!(
+                "signature prefix is only {} bytes; at least {MIN_BYTES} required",
+                bytes.len()
+            ),
         };
     }
     if let Some(kind) = match_kind(bytes) {
         Evidence::Present(kind)
     } else {
         Evidence::UnknownFormat {
-            why: "前缀中没有任何已登记的签名".to_string(),
+            why: "prefix has no registered signature".to_string(),
         }
     }
 }

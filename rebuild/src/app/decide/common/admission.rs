@@ -58,7 +58,7 @@ pub fn strong_identity(snapshot: &Snapshot) -> Result<Fingerprint, Refusal> {
     match &snapshot.identity {
         Observation::Known { value, .. } if value.strength() == Strength::Strong => Ok(*value),
         Observation::Known { .. } => Err(Refusal::IdentityUnprovable {
-            why: "指纹等级不足以识别目标".to_owned(),
+            why: "fingerprint strength is insufficient to identify the target".to_owned(),
         }),
         Observation::Unknown { why } => Err(Refusal::IdentityUnprovable { why: why.clone() }),
         Observation::NotApplicable { why } => Err(Refusal::IdentityUnprovable { why: why.clone() }),
@@ -197,7 +197,7 @@ pub fn select(
         PartitionSelector::Number(number) => {
             if number == 0 {
                 Err(Refusal::ArgumentOutOfRange {
-                    what: "分区号不能为 0".to_owned(),
+                    what: "partition number cannot be 0".to_owned(),
                 })
             } else {
                 Ok(number)
@@ -212,7 +212,7 @@ pub fn select(
             .map(|facts| facts.partition.number)
             .max()
             .ok_or_else(|| Refusal::FactUnknown {
-                what: "目标没有分区，无法解析 :last".to_owned(),
+                what: "target has no partitions; cannot resolve :last".to_owned(),
             }),
     }
 }
@@ -295,11 +295,11 @@ pub fn overlaps(a_start: u64, a_len: u64, b_start: u64, b_len: u64) -> bool {
 
 fn summarize(occupancy: &crate::platform::Occupancy) -> String {
     format!(
-        "挂载 {} 项、交换区 {} 项、持有者 {} 项、阵列成员 {}、回环 {} 项",
+        "{} mounts, {} swaps, {} holders, array member {}, {} loops",
         occupancy.mounts.len(),
         occupancy.swaps.len(),
         occupancy.holders.len(),
-        if occupancy.array_member { "是" } else { "否" },
+        if occupancy.array_member { "yes" } else { "no" },
         occupancy.loops.len()
     )
 }

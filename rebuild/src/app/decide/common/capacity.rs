@@ -36,7 +36,7 @@ impl GptLayout {
 pub fn gpt_layout(length: u64, sector: u64) -> Result<GptLayout, Refusal> {
     if sector == 0 {
         return Err(Refusal::GeometryUnknown {
-            why: "逻辑块大小为零".to_owned(),
+            why: "logical block size is zero".to_owned(),
         });
     }
     let total_lba = length / sector;
@@ -69,7 +69,7 @@ pub fn gpt_layout(length: u64, sector: u64) -> Result<GptLayout, Refusal> {
 pub fn require_mbr_capacity(length: u64, sector: u64) -> Result<u64, Refusal> {
     if sector == 0 {
         return Err(Refusal::GeometryUnknown {
-            why: "逻辑块大小为零".to_owned(),
+            why: "logical block size is zero".to_owned(),
         });
     }
     let total_lba = length / sector;
@@ -92,7 +92,7 @@ pub fn table_regions(
         TableFormat::Mbr => Ok(vec![region(0, MBR_BYTES)?]),
         TableFormat::Gpt => {
             let layout = layout.ok_or_else(|| Refusal::GeometryUnknown {
-                why: "缺少 GPT 布局".to_owned(),
+                why: "missing GPT layout".to_owned(),
             })?;
             let span_bytes = layout.array_span * sector;
             Ok(vec![
@@ -111,18 +111,18 @@ pub fn partition_region(start_lba: u64, sectors: u64, sector: u64) -> Result<Reg
     let offset = start_lba
         .checked_mul(sector)
         .ok_or_else(|| Refusal::GeometryUnknown {
-            why: "分区起点越过可寻址上界".to_owned(),
+            why: "partition start exceeds the addressable bound".to_owned(),
         })?;
     let length = sectors
         .checked_mul(sector)
         .ok_or_else(|| Refusal::GeometryUnknown {
-            why: "分区长度越过可寻址上界".to_owned(),
+            why: "partition length exceeds the addressable bound".to_owned(),
         })?;
     region(offset, length)
 }
 
 fn region(offset: u64, length: u64) -> Result<Region, Refusal> {
     Region::sized(offset, length).map_err(|error: RegionError| Refusal::GeometryUnknown {
-        why: format!("区间无法构造：{error:?}"),
+        why: format!("cannot construct range: {error:?}"),
     })
 }

@@ -61,13 +61,13 @@ pub fn parse_table(text: &str) -> PlatformResult<Vec<DmTarget>> {
         let fields: Vec<&str> = line.split_whitespace().collect();
         if fields.len() < 4 {
             return Err(PlatformError::parse(format!(
-                "dmsetup 第 {} 行字段不足",
+                "dmsetup line {} has too few fields",
                 index + 1
             )));
         }
         targets.push(DmTarget {
-            start_sector: parse_u64("起始扇区", fields[0])?,
-            sectors: parse_u64("扇区数", fields[1])?,
+            start_sector: parse_u64("start sector", fields[0])?,
+            sectors: parse_u64("sector count", fields[1])?,
             kind: fields[2].to_string(),
             params: fields[3..].join(" "),
         });
@@ -77,7 +77,7 @@ pub fn parse_table(text: &str) -> PlatformResult<Vec<DmTarget>> {
 
 fn parse_u64(what: &str, text: &str) -> PlatformResult<u64> {
     text.parse::<u64>()
-        .map_err(|_| PlatformError::parse(format!("{what}不是十进制整数：{text:?}")))
+        .map_err(|_| PlatformError::parse(format!("{what} is not a decimal integer: {text:?}")))
 }
 
 #[cfg(test)]

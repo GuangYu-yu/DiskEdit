@@ -30,13 +30,14 @@ pub fn fix_ntfs_hidden(
     destination: Region,
     sector: u64,
 ) -> Result<(), ExecError> {
-    let sector_len = usize::try_from(sector)
-        .map_err(|_| ExecError::InvalidPlan("扇区尺寸超出表示范围".to_owned()))?;
+    let sector_len = usize::try_from(sector).map_err(|_| {
+        ExecError::InvalidPlan("sector size exceeds representable range".to_owned())
+    })?;
     if sector_len < HIDDEN_SECTORS_OFFSET + HIDDEN_SECTORS_LEN
         || destination.len() < sector.saturating_mul(2)
     {
         return Err(ExecError::InvalidPlan(
-            "NTFS 引导扇区修正需要至少两个完整扇区".to_owned(),
+            "NTFS boot sector fix requires at least two full sectors".to_owned(),
         ));
     }
     let start = destination.start();
@@ -48,14 +49,15 @@ pub fn fix_ntfs_hidden(
         let mut boot = channel.read_exact(offset, sector_len)?;
         if boot.get(SIGNATURE_OFFSET..SIGNATURE_OFFSET + SIGNATURE.len()) != Some(SIGNATURE) {
             return Err(ExecError::Postcondition(format!(
-                "LBA {} 处不是 NTFS 引导扇区，拒绝改写 HiddenSectors",
+                "LBA {} is not an NTFS boot sector; refusing to rewrite HiddenSectors",
                 offset / sector
             )));
         }
         boot[HIDDEN_SECTORS_OFFSET..HIDDEN_SECTORS_OFFSET + HIDDEN_SECTORS_LEN]
             .copy_from_slice(&hidden);
-        let region = Region::sized(offset, sector)
-            .map_err(|error| ExecError::InvalidPlan(format!("引导扇区区间无效: {error:?}")))?;
+        let region = Region::sized(offset, sector).map_err(|error| {
+            ExecError::InvalidPlan(format!("invalid boot sector region: {error:?}"))
+        })?;
         patches.push((region, boot));
     }
     for (region, boot) in patches {

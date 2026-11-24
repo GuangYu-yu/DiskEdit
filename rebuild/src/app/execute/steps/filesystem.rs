@@ -38,9 +38,9 @@ pub fn apply(
             let ranges = signature_ranges(region.len);
             with_device(host, *partition, region, |device| {
                 let args = plan.arguments(device);
-                host.platform
-                    .wipe(device, &ranges)
-                    .map_err(|error| ExecError::Io(format!("擦除旧签名失败: {error}")))?;
+                host.platform.wipe(device, &ranges).map_err(|error| {
+                    ExecError::Io(format!("failed to wipe old signatures: {error}"))
+                })?;
                 run_owned_tool(host, plan.program, &args)?;
                 channel.barrier()?;
                 verify_magic(channel, region, filesystem.content())?;
@@ -93,8 +93,9 @@ pub fn apply(
             value,
             content,
         } => {
-            let content = content
-                .ok_or_else(|| ExecError::InvalidPlan("内容属性步骤缺少内容类型".to_owned()))?;
+            let content = content.ok_or_else(|| {
+                ExecError::InvalidPlan("content property step is missing content type".to_owned())
+            })?;
             let program = attr_program(content, *property, value)?;
             require(host, program)?;
             require(host, Program::Blkid)?;
@@ -118,7 +119,7 @@ pub fn apply(
         | StepKind::MovePartition { .. }
         | StepKind::RefreshKernelView
         | StepKind::RecoverRecords { .. } => Err(ExecError::InvalidPlan(
-            "文件系统执行器收到非文件系统步骤".to_owned(),
+            "filesystem executor received a non-filesystem step".to_owned(),
         )),
     }
 }
@@ -127,7 +128,7 @@ fn declared_region(regions: &[Region]) -> Result<DeviceRegion, ExecError> {
     match regions {
         [region] => Ok(DeviceRegion::new(region.start(), region.len())),
         _ => Err(ExecError::InvalidPlan(
-            "文件系统步骤必须声明恰好一个分区区间".to_owned(),
+            "filesystem step must declare exactly one partition region".to_owned(),
         )),
     }
 }
@@ -145,13 +146,15 @@ where
     let device: PartitionDevice = host
         .platform
         .partition_device(host.target, partition, region)
-        .map_err(|error| ExecError::Unsupported(format!("无法定位分区设备: {error}")))?;
+        .map_err(|error| {
+            ExecError::Unsupported(format!("cannot locate partition device: {error}"))
+        })?;
     let outcome = work(&device.path);
     if let Some(loop_device) = &device.loop_device {
         if let Err(error) = host.platform.loop_detach(loop_device) {
             return match outcome {
                 Ok(_) => Err(ExecError::Io(format!(
-                    "文件系统操作完成但释放 {} 失败: {error}",
+                    "filesystem operation completed but failed to release {}: {error}",
                     loop_device.display()
                 ))),
                 Err(failure) => Err(failure),
@@ -165,19 +168,19 @@ fn require(host: &Host<'_>, program: Program) -> Result<(), ExecError> {
     host.platform
         .require(program)
         .map(|_| ())
-        .map_err(|error| ExecError::Unsupported(format!("{program:?} 不可用: {error}")))
+        .map_err(|error| ExecError::Unsupported(format!("{program:?} unavailable: {error}")))
 }
 
 fn run_tool(host: &Host<'_>, program: Program, args: &[&str]) -> Result<(), ExecError> {
     let output = host
         .platform
         .run(program, args)
-        .map_err(|error| ExecError::Io(format!("运行 {program:?} 失败: {error}")))?;
+        .map_err(|error| ExecError::Io(format!("failed to run {program:?}: {error}")))?;
     if output.succeeded() {
         Ok(())
     } else {
         Err(ExecError::Io(format!(
-            "{program:?} 以 {:?} 结束: {}",
+            "{program:?} exited with {:?}: {}",
             output.exit,
             output.stderr_text().trim()
         )))
@@ -218,7 +221,9 @@ fn grow(host: &Host<'_>, device: &Path, kind: FsKind) -> Result<(), ExecError> {
         | FsKind::Bcachefs
         | FsKind::Jfs
         | FsKind::Reiserfs
-        | FsKind::Udf => Err(ExecError::Unsupported(format!("{kind:?} 不支持原地扩容"))),
+        | FsKind::Udf => Err(ExecError::Unsupported(format!(
+            "{kind:?} does not support in-place growth"
+        ))),
     }
 }
 
@@ -241,10 +246,12 @@ fn shrink(host: &Host<'_>, device: &Path, kind: FsKind, bytes: u64) -> Result<()
         }
         FsKind::Btrfs => {
             let show = host.platform.btrfs_show(device).map_err(|error| {
-                ExecError::Unsupported(format!("读取 btrfs 设备信息失败: {error}"))
+                ExecError::Unsupported(format!("failed to read btrfs device info: {error}"))
             })?;
             if show.devices > 1 {
-                return Err(ExecError::Unsupported("多设备 btrfs 不支持收缩".to_owned()));
+                return Err(ExecError::Unsupported(
+                    "multi-device btrfs does not support shrink".to_owned(),
+                ));
             }
             let size = format!("{bytes}");
             mounted(host, device, "btrfs", |point| {
@@ -266,7 +273,9 @@ fn shrink(host: &Host<'_>, device: &Path, kind: FsKind, bytes: u64) -> Result<()
         | FsKind::Bcachefs
         | FsKind::Jfs
         | FsKind::Reiserfs
-        | FsKind::Udf => Err(ExecError::Unsupported(format!("{kind:?} 不支持收缩"))),
+        | FsKind::Udf => Err(ExecError::Unsupported(format!(
+            "{kind:?} does not support shrink"
+        ))),
     }
 }
 
@@ -287,13 +296,13 @@ fn repair_ext(host: &Host<'_>, device: &str) -> Result<(), ExecError> {
     let output = host
         .platform
         .run(Program::E2fsck, &["-fp", device])
-        .map_err(|error| ExecError::Io(format!("运行 E2fsck 失败: {error}")))?;
+        .map_err(|error| ExecError::Io(format!("failed to run E2fsck: {error}")))?;
     // ext 检查器的退出位是修复结果之和：0 无问题，1 已修复，均表示可继续。
     match output.exit {
         ExitKind::Succeeded | ExitKind::Failed(1) => Ok(()),
         other @ (ExitKind::Failed(_) | ExitKind::Signaled(_) | ExitKind::Unknown) => {
             Err(ExecError::Io(format!(
-                "E2fsck 以 {other:?} 结束: {}",
+                "E2fsck exited with {other:?}: {}",
                 output.stderr_text().trim()
             )))
         }
@@ -308,11 +317,11 @@ where
     let point = host
         .platform
         .make_mount_point()
-        .map_err(|error| ExecError::Unsupported(format!("无法建立挂载点: {error}")))?;
+        .map_err(|error| ExecError::Unsupported(format!("cannot create mount point: {error}")))?;
     let mounted = host
         .platform
         .mount(device, &point, Some(fstype), &[])
-        .map_err(|error| ExecError::Io(format!("挂载 {} 失败: {error}", device.display())));
+        .map_err(|error| ExecError::Io(format!("failed to mount {}: {error}", device.display())));
     if let Err(error) = mounted {
         drop(host.platform.remove_mount_point(&point));
         return Err(error);
@@ -322,7 +331,7 @@ where
     let unmounted = host
         .platform
         .umount(&point)
-        .map_err(|error| ExecError::Io(format!("卸载 {} 失败: {error}", point.display())));
+        .map_err(|error| ExecError::Io(format!("failed to unmount {}: {error}", point.display())));
     drop(host.platform.remove_mount_point(&point));
     match (outcome, unmounted) {
         (Err(failure), _) => Err(failure),
@@ -356,7 +365,9 @@ fn verify_size(
     let facts: FsSize = host
         .platform
         .filesystem_size_of(device, region.len, kind)
-        .map_err(|error| ExecError::Postcondition(format!("回读文件系统尺寸失败: {error}")))?;
+        .map_err(|error| {
+            ExecError::Postcondition(format!("failed to read back filesystem size: {error}"))
+        })?;
     let satisfied = match direction {
         Growth::Grow => reaches_end(facts.bytes, facts.unit, region.len),
         Growth::Shrink => facts.bytes <= requested,
@@ -365,7 +376,7 @@ fn verify_size(
         Ok(())
     } else {
         Err(ExecError::Postcondition(format!(
-            "文件系统尺寸 {} 不满足请求 {}",
+            "filesystem size {} does not meet the request {}",
             facts.bytes, requested
         )))
     }
@@ -419,7 +430,7 @@ fn mkfs_plan(kind: MkfsKind, label: Option<&str>) -> Result<MkfsPlan, ExecError>
         MkfsKind::Swap => (Program::Mkswap, Vec::new(), "-L"),
         MkfsKind::Lvm2Pv => {
             return Err(ExecError::Unsupported(
-                "LVM 物理卷不由本工具的建卷动作创建".to_owned(),
+                "LVM physical volumes are not created by this tool's mkfs action".to_owned(),
             ));
         }
     };
@@ -456,61 +467,62 @@ fn attr_program(
         ContentKind::Filesystem(FsKind::Ext) => match property {
             SetProperty::Label => Ok(Program::Tune2fs),
             SetProperty::Uuid => Ok(Program::Tune2fs),
-            SetProperty::Name | SetProperty::Flag | SetProperty::Type => {
-                Err(ExecError::InvalidPlan("内容属性步骤属性不符".to_owned()))
-            }
+            SetProperty::Name | SetProperty::Flag | SetProperty::Type => Err(
+                ExecError::InvalidPlan("content property step property mismatch".to_owned()),
+            ),
         },
         ContentKind::Filesystem(FsKind::Xfs) => match property {
             SetProperty::Label | SetProperty::Uuid => Ok(Program::XfsAdmin),
-            SetProperty::Name | SetProperty::Flag | SetProperty::Type => {
-                Err(ExecError::InvalidPlan("内容属性步骤属性不符".to_owned()))
-            }
+            SetProperty::Name | SetProperty::Flag | SetProperty::Type => Err(
+                ExecError::InvalidPlan("content property step property mismatch".to_owned()),
+            ),
         },
         ContentKind::Filesystem(FsKind::Btrfs) => match property {
             SetProperty::Label => Ok(Program::Btrfs),
             SetProperty::Uuid => Ok(Program::Btrfstune),
-            SetProperty::Name | SetProperty::Flag | SetProperty::Type => {
-                Err(ExecError::InvalidPlan("内容属性步骤属性不符".to_owned()))
-            }
+            SetProperty::Name | SetProperty::Flag | SetProperty::Type => Err(
+                ExecError::InvalidPlan("content property step property mismatch".to_owned()),
+            ),
         },
         ContentKind::Filesystem(FsKind::Ntfs) => match property {
             SetProperty::Label => Ok(Program::Ntfslabel),
             SetProperty::Uuid if value == "random" => Ok(Program::Ntfslabel),
             SetProperty::Uuid => Err(ExecError::Unsupported(
-                "ntfs 只支持生成新的串号，不能指定具体值".to_owned(),
+                "ntfs only supports generating a new serial; cannot set an explicit value"
+                    .to_owned(),
             )),
-            SetProperty::Name | SetProperty::Flag | SetProperty::Type => {
-                Err(ExecError::InvalidPlan("内容属性步骤属性不符".to_owned()))
-            }
+            SetProperty::Name | SetProperty::Flag | SetProperty::Type => Err(
+                ExecError::InvalidPlan("content property step property mismatch".to_owned()),
+            ),
         },
         ContentKind::Filesystem(FsKind::Vfat) => match property {
             SetProperty::Label => Ok(Program::Fatlabel),
-            SetProperty::Uuid | SetProperty::Name | SetProperty::Flag | SetProperty::Type => {
-                Err(ExecError::Unsupported("vfat 只支持设置标签".to_owned()))
-            }
+            SetProperty::Uuid | SetProperty::Name | SetProperty::Flag | SetProperty::Type => Err(
+                ExecError::Unsupported("vfat only supports setting the label".to_owned()),
+            ),
         },
         ContentKind::Filesystem(FsKind::Exfat) => match property {
             SetProperty::Label => Ok(Program::Exfatlabel),
-            SetProperty::Uuid | SetProperty::Name | SetProperty::Flag | SetProperty::Type => {
-                Err(ExecError::Unsupported("exfat 只支持设置标签".to_owned()))
-            }
+            SetProperty::Uuid | SetProperty::Name | SetProperty::Flag | SetProperty::Type => Err(
+                ExecError::Unsupported("exfat only supports setting the label".to_owned()),
+            ),
         },
         ContentKind::Swap => match property {
             SetProperty::Label => Ok(Program::Swaplabel),
             SetProperty::Uuid if value != "random" => Ok(Program::Swaplabel),
             SetProperty::Uuid => Err(ExecError::Unsupported(
-                "swap 只支持指定 UUID，不能生成新值".to_owned(),
+                "swap only supports an explicit UUID; cannot generate a new one".to_owned(),
             )),
-            SetProperty::Name | SetProperty::Flag | SetProperty::Type => {
-                Err(ExecError::InvalidPlan("内容属性步骤属性不符".to_owned()))
-            }
+            SetProperty::Name | SetProperty::Flag | SetProperty::Type => Err(
+                ExecError::InvalidPlan("content property step property mismatch".to_owned()),
+            ),
         },
         ContentKind::Filesystem(_)
         | ContentKind::Lvm2Pv
         | ContentKind::Luks
         | ContentKind::BitLocker
         | ContentKind::Unknown => Err(ExecError::Unsupported(
-            "该内容不支持原地属性写入".to_owned(),
+            "in-place property writes unsupported for this content".to_owned(),
         )),
     }
 }
@@ -600,7 +612,9 @@ fn verify_attr(
     let output = host
         .platform
         .run(Program::Blkid, &["-p", "-o", "value", "-s", field, &text])
-        .map_err(|error| ExecError::Postcondition(format!("读取内容属性失败: {error}")))?;
+        .map_err(|error| {
+            ExecError::Postcondition(format!("failed to read content property: {error}"))
+        })?;
     let _ = channel;
     let observed = output.stdout_text().trim().to_owned();
     let satisfied = if property == SetProperty::Uuid && value == "random" {
@@ -612,7 +626,7 @@ fn verify_attr(
         Ok(())
     } else {
         Err(ExecError::Postcondition(format!(
-            "内容属性回读为 {observed:?}，与请求 {value:?} 不符"
+            "content property read back as {observed:?}, mismatch with requested {value:?}"
         )))
     }
 }
@@ -643,7 +657,7 @@ fn verify_magic(
                 Ok(())
             } else {
                 Err(ExecError::Postcondition(
-                    "建卷后未读到 FAT 引导扇区签名".to_owned(),
+                    "FAT boot sector signature not found after mkfs".to_owned(),
                 ))
             }
         }
@@ -657,7 +671,7 @@ fn verify_magic(
                 Ok(())
             } else {
                 Err(ExecError::Postcondition(
-                    "建卷后未读到交换区签名".to_owned(),
+                    "swap signature not found after mkfs".to_owned(),
                 ))
             }
         }
@@ -666,14 +680,15 @@ fn verify_magic(
         | ContentKind::Luks
         | ContentKind::BitLocker
         | ContentKind::Unknown => {
-            let (offset, expected) = magic(content)
-                .ok_or_else(|| ExecError::Unsupported("该内容没有可核对的签名".to_owned()))?;
+            let (offset, expected) = magic(content).ok_or_else(|| {
+                ExecError::Unsupported("no verifiable signature for this content".to_owned())
+            })?;
             let bytes = channel.read_exact(region.offset + offset, expected.len())?;
             if bytes == expected {
                 Ok(())
             } else {
                 Err(ExecError::Postcondition(format!(
-                    "建卷后签名不符：期望 {expected:?}，读回 {bytes:?}"
+                    "signature mismatch after mkfs: expected {expected:?}, read back {bytes:?}"
                 )))
             }
         }

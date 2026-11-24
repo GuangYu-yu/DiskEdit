@@ -85,7 +85,9 @@ pub fn apply(
                     .map_err(ExecError::InvalidPlan)?;
                 Ok(Current::Mbr { mbr, sector })
             }
-            Current::None => Err(ExecError::InvalidPlan("新增分区要求已有分区表".to_owned())),
+            Current::None => Err(ExecError::InvalidPlan(
+                "adding a partition requires an existing partition table".to_owned(),
+            )),
         }),
         StepKind::DeletePartition { format, partition } => {
             with_table(channel, ctx, token, *format, |current| match current {
@@ -102,7 +104,9 @@ pub fn apply(
                     entries::delete_mbr(&mut mbr, *partition).map_err(ExecError::InvalidPlan)?;
                     Ok(Current::Mbr { mbr, sector })
                 }
-                Current::None => Err(ExecError::InvalidPlan("没有可删除的分区表".to_owned())),
+                Current::None => Err(ExecError::InvalidPlan(
+                    "no partition table to delete".to_owned(),
+                )),
             })
         }
         StepKind::ResizePartition {
@@ -125,7 +129,9 @@ pub fn apply(
                     .map_err(ExecError::InvalidPlan)?;
                 Ok(Current::Mbr { mbr, sector })
             }
-            Current::None => Err(ExecError::InvalidPlan("没有可调整的分区表".to_owned())),
+            Current::None => Err(ExecError::InvalidPlan(
+                "no partition table to resize".to_owned(),
+            )),
         }),
         StepKind::SetProperty {
             partition,
@@ -142,10 +148,12 @@ pub fn apply(
                     apply_gpt_property(&mut entries, *partition, *property, value)?;
                     Ok(Current::Gpt { header, entries })
                 }
-                Current::Mbr { .. } => {
-                    Err(ExecError::Unsupported("MBR 不支持该分区属性".to_owned()))
-                }
-                Current::None => Err(ExecError::InvalidPlan("没有可修改的分区表".to_owned())),
+                Current::Mbr { .. } => Err(ExecError::Unsupported(
+                    "unsupported partition property for MBR".to_owned(),
+                )),
+                Current::None => Err(ExecError::InvalidPlan(
+                    "no partition table to modify".to_owned(),
+                )),
             })
         }
         StepKind::SetProperty {
@@ -163,9 +171,9 @@ pub fn apply(
         | StepKind::VerifyRecord { .. }
         | StepKind::ScanRecords
         | StepKind::RefreshKernelView
-        | StepKind::RecoverRecords { .. } => {
-            Err(ExecError::InvalidPlan("不是分区表步骤".to_owned()))
-        }
+        | StepKind::RecoverRecords { .. } => Err(ExecError::InvalidPlan(
+            "not a partition table step".to_owned(),
+        )),
     }
 }
 
@@ -187,27 +195,27 @@ fn apply_gpt_property(
             let guid = parse_guid(value)?;
             entries::set_type(entries, partition, guid).map_err(ExecError::InvalidPlan)
         }
-        SetProperty::Label | SetProperty::Uuid => {
-            Err(ExecError::InvalidPlan("该属性不属于分区表步骤".to_owned()))
-        }
+        SetProperty::Label | SetProperty::Uuid => Err(ExecError::InvalidPlan(
+            "this property is not a partition table property".to_owned(),
+        )),
     }
 }
 
 /// 解析 `F:on` / `F:off`，返回属性位与目标状态。
 fn parse_flag(value: &str) -> Result<(u32, bool), ExecError> {
-    let (flag, state) = value
-        .split_once(':')
-        .ok_or_else(|| ExecError::InvalidPlan(format!("属性 {value} 缺少开关状态")))?;
+    let (flag, state) = value.split_once(':').ok_or_else(|| {
+        ExecError::InvalidPlan(format!("property {value} is missing its on/off state"))
+    })?;
     let flag = flag
         .trim()
         .parse::<u32>()
-        .map_err(|_| ExecError::InvalidPlan(format!("属性位 {flag} 不是整数")))?;
+        .map_err(|_| ExecError::InvalidPlan(format!("property bit {flag} is not an integer")))?;
     let on = match state.trim() {
         "on" => true,
         "off" => false,
         other => {
             return Err(ExecError::InvalidPlan(format!(
-                "属性状态 {other} 只能是 on 或 off"
+                "property state {other} must be on or off"
             )));
         }
     };
@@ -218,14 +226,17 @@ fn parse_guid(value: &str) -> Result<Guid, ExecError> {
     let mut bytes = [0u8; 16];
     let hex: String = value.chars().filter(|ch| *ch != '-').collect();
     if hex.len() != 32 {
-        return Err(ExecError::InvalidPlan(format!("GUID {value} 长度不合法")));
+        return Err(ExecError::InvalidPlan(format!(
+            "GUID {value} has invalid length"
+        )));
     }
     for (index, slot) in bytes.iter_mut().enumerate() {
         let pair = hex
             .get(index * 2..index * 2 + 2)
-            .ok_or_else(|| ExecError::InvalidPlan(format!("GUID {value} 长度不合法")))?;
-        *slot = u8::from_str_radix(pair, 16)
-            .map_err(|_| ExecError::InvalidPlan(format!("GUID {value} 含非十六进制字符")))?;
+            .ok_or_else(|| ExecError::InvalidPlan(format!("GUID {value} has invalid length")))?;
+        *slot = u8::from_str_radix(pair, 16).map_err(|_| {
+            ExecError::InvalidPlan(format!("GUID {value} contains non-hex characters"))
+        })?;
     }
     Ok(Guid(bytes))
 }
@@ -242,21 +253,27 @@ fn with_table(
     match edited {
         Current::Gpt { header, entries } => {
             if format != TableFormat::Gpt {
-                return Err(ExecError::InvalidPlan("表格式与步骤声明不一致".to_owned()));
+                return Err(ExecError::InvalidPlan(
+                    "table format mismatch with step declaration".to_owned(),
+                ));
             }
             write_gpt(channel, token, ctx, header, entries)
         }
         Current::Mbr { mbr, sector } => {
             if format != TableFormat::Mbr {
-                return Err(ExecError::InvalidPlan("表格式与步骤声明不一致".to_owned()));
+                return Err(ExecError::InvalidPlan(
+                    "table format mismatch with step declaration".to_owned(),
+                ));
             }
             let mut sector = sector;
             write_into(&mbr, &mut sector);
             let region = Region::sized(0, MBR_BYTES as u64)
-                .map_err(|error| ExecError::InvalidPlan(format!("空区间: {error:?}")))?;
+                .map_err(|error| ExecError::InvalidPlan(format!("empty region: {error:?}")))?;
             channel.write(token, region, &*sector)
         }
-        Current::None => Err(ExecError::InvalidPlan("分区表不存在".to_owned())),
+        Current::None => Err(ExecError::InvalidPlan(
+            "partition table not found".to_owned(),
+        )),
     }
 }
 
@@ -267,7 +284,9 @@ fn table_format(
     match read_current(channel, ctx.sector)? {
         Current::Gpt { .. } => Ok(TableFormat::Gpt),
         Current::Mbr { .. } => Ok(TableFormat::Mbr),
-        Current::None => Err(ExecError::InvalidPlan("分区表不存在".to_owned())),
+        Current::None => Err(ExecError::InvalidPlan(
+            "partition table not found".to_owned(),
+        )),
     }
 }
 
@@ -307,7 +326,7 @@ fn read_primary_gpt(
 ) -> Result<Option<GptCopy>, ExecError> {
     let last_lba = last_lba(channel, sector)?;
     let sector_usize = usize::try_from(sector)
-        .map_err(|_| ExecError::InvalidPlan("扇区尺寸超出寻址范围".to_owned()))?;
+        .map_err(|_| ExecError::InvalidPlan("sector size exceeds addressable range".to_owned()))?;
     let header = channel.read_exact(sector, sector_usize)?;
     let array = channel.read_exact(2 * sector, ARRAY_BYTES)?;
     match parse_primary(&header, &array, last_lba, sector) {
@@ -324,7 +343,7 @@ fn read_backup_gpt(
     let array_span = (ARRAY_BYTES as u64).div_ceil(sector);
     let array_lba = last_lba.saturating_sub(array_span);
     let sector_usize = usize::try_from(sector)
-        .map_err(|_| ExecError::InvalidPlan("扇区尺寸超出寻址范围".to_owned()))?;
+        .map_err(|_| ExecError::InvalidPlan("sector size exceeds addressable range".to_owned()))?;
     let header = channel.read_exact(last_lba * sector, sector_usize)?;
     let array = channel.read_exact(array_lba * sector, ARRAY_BYTES)?;
     match parse_backup(&header, &array, last_lba, sector) {
@@ -348,7 +367,7 @@ fn write_fresh_gpt(
         first_usable_lba: 2 + array_span,
         last_usable_lba: last_lba
             .checked_sub(array_span + 1)
-            .ok_or_else(|| ExecError::InvalidPlan("目标容量不足以容纳 GPT".to_owned()))?,
+            .ok_or_else(|| ExecError::InvalidPlan("target too small for GPT".to_owned()))?,
         disk_guid: entries::guid_from_seed(ctx.plan_digest, 0),
         partition_entry_lba: 2,
         number_of_partition_entries: MAX_ENTRIES,
@@ -370,38 +389,40 @@ fn write_gpt(
     let sector = ctx.sector;
     let last_lba = last_lba(channel, sector)?;
     validate_entries(&entries, header.first_usable_lba, header.last_usable_lba)
-        .map_err(|error| ExecError::InvalidPlan(format!("分区条目不合法: {error:?}")))?;
+        .map_err(|error| ExecError::InvalidPlan(format!("invalid partition entry: {error:?}")))?;
     let sector_usize = usize::try_from(sector)
-        .map_err(|_| ExecError::InvalidPlan("扇区尺寸超出寻址范围".to_owned()))?;
+        .map_err(|_| ExecError::InvalidPlan("sector size exceeds addressable range".to_owned()))?;
     let array = serialize_entries(
         &entries,
         header.number_of_partition_entries,
         header.size_of_partition_entry,
         sector_usize,
     )
-    .map_err(|error| ExecError::InvalidPlan(format!("条目数组无法序列化: {error:?}")))?;
+    .map_err(|error| {
+        ExecError::InvalidPlan(format!("failed to serialize entry array: {error:?}"))
+    })?;
     let crc = array_crc(&array);
     let array_span = (array.len() as u64).div_ceil(sector);
-    let backup_array_lba = last_lba
-        .checked_sub(array_span)
-        .ok_or_else(|| ExecError::InvalidPlan("目标容量不足以容纳备份数组".to_owned()))?;
+    let backup_array_lba = last_lba.checked_sub(array_span).ok_or_else(|| {
+        ExecError::InvalidPlan("target too small for the backup array".to_owned())
+    })?;
 
     let mut primary = header;
     primary.primary_lba = 1;
     primary.backup_lba = last_lba;
     primary.partition_entry_lba = 2;
     primary.entry_array_crc32 = crc;
-    let primary_bytes = primary
-        .serialize(sector_usize)
-        .map_err(|error| ExecError::InvalidPlan(format!("主头无法序列化: {error:?}")))?;
+    let primary_bytes = primary.serialize(sector_usize).map_err(|error| {
+        ExecError::InvalidPlan(format!("failed to serialize primary header: {error:?}"))
+    })?;
 
     let mut backup = primary.clone();
     backup.primary_lba = last_lba;
     backup.backup_lba = 1;
     backup.partition_entry_lba = backup_array_lba;
-    let backup_bytes = backup
-        .serialize(sector_usize)
-        .map_err(|error| ExecError::InvalidPlan(format!("备头无法序列化: {error:?}")))?;
+    let backup_bytes = backup.serialize(sector_usize).map_err(|error| {
+        ExecError::InvalidPlan(format!("failed to serialize backup header: {error:?}"))
+    })?;
 
     let mbr = protective_mbr(last_lba + 1);
     let mbr_region = region_of(0, MBR_BYTES as u64)?;
@@ -440,7 +461,9 @@ pub fn partition_span(
             let entry = entries
                 .get(index)
                 .filter(|entry| !entry.partition_type_guid.is_zero())
-                .ok_or_else(|| ExecError::InvalidPlan(format!("分区 {partition} 不存在")))?;
+                .ok_or_else(|| {
+                    ExecError::InvalidPlan(format!("partition {partition} not found"))
+                })?;
             Ok((
                 entry.starting_lba,
                 entry.ending_lba - entry.starting_lba + 1,
@@ -452,25 +475,34 @@ pub fn partition_span(
                 .entries
                 .get(index)
                 .filter(|entry| !entry.is_empty())
-                .ok_or_else(|| ExecError::InvalidPlan(format!("分区 {partition} 不存在")))?;
+                .ok_or_else(|| {
+                    ExecError::InvalidPlan(format!("partition {partition} not found"))
+                })?;
             Ok((u64::from(entry.start_lba), u64::from(entry.size_lba)))
         }
-        Current::None => Err(ExecError::InvalidPlan("分区表不存在".to_owned())),
+        Current::None => Err(ExecError::InvalidPlan(
+            "partition table not found".to_owned(),
+        )),
     }
 }
 
 fn region_of(start: u64, len: u64) -> Result<Region, ExecError> {
-    Region::sized(start, len).map_err(|error| ExecError::InvalidPlan(format!("空区间: {error:?}")))
+    Region::sized(start, len)
+        .map_err(|error| ExecError::InvalidPlan(format!("empty region: {error:?}")))
 }
 
 /// 目标最后 LBA。
 fn last_lba(channel: &WriteChannel<'_>, sector: u64) -> Result<u64, ExecError> {
     if sector == 0 {
-        return Err(ExecError::InvalidPlan("扇区尺寸不能为 0".to_owned()));
+        return Err(ExecError::InvalidPlan(
+            "sector size cannot be zero".to_owned(),
+        ));
     }
     let len = channel.target_len();
     if len < sector {
-        return Err(ExecError::InvalidPlan("目标小于一个扇区".to_owned()));
+        return Err(ExecError::InvalidPlan(
+            "target is smaller than one sector".to_owned(),
+        ));
     }
     Ok(len / sector - 1)
 }

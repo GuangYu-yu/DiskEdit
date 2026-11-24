@@ -20,8 +20,8 @@ pub fn plan(snapshot: &Snapshot, request: &CopyRequest) -> Result<Plan, Refusal>
         admission::TableView::Gpt(copy) => copy,
         admission::TableView::Mbr(_) => {
             return Err(Refusal::ContentUnsupported {
-                what: "MBR 分区复制".to_owned(),
-                why: "复制只对 GPT 目标开放".to_owned(),
+                what: "MBR partition copy".to_owned(),
+                why: "copy is only available for GPT targets".to_owned(),
             });
         }
     };
@@ -36,7 +36,7 @@ pub fn plan(snapshot: &Snapshot, request: &CopyRequest) -> Result<Plan, Refusal>
         start_lba
             .checked_add(sectors - 1)
             .ok_or_else(|| Refusal::ArgumentOutOfRange {
-                what: "复制终点越过可寻址上界".to_owned(),
+                what: "copy end exceeds the addressable bound".to_owned(),
             })?;
     if start_lba < copy.header.first_usable_lba || end_lba > copy.header.last_usable_lba {
         return Err(Refusal::CapacityInsufficient {
@@ -132,7 +132,7 @@ fn align_step(align: Option<u64>, sector: u64) -> Result<u64, Refusal> {
     let bytes = align.unwrap_or(super::add::DEFAULT_ALIGN_BYTES);
     if bytes == 0 {
         return Err(Refusal::ArgumentOutOfRange {
-            what: "对齐不能为 0".to_owned(),
+            what: "alignment cannot be 0".to_owned(),
         });
     }
     Ok(bytes.div_ceil(sector).max(1))

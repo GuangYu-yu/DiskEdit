@@ -28,7 +28,7 @@ pub fn dispatch(args: impl IntoIterator<Item = OsString>) -> u8 {
         Err(message) if message.is_empty() => return 0,
         Err(message) => {
             eprintln!("{message}");
-            eprintln!("运行 `diskedit --help` 查看用法。");
+            eprintln!("run `diskedit --help` for usage.");
             return exit::USAGE;
         }
     };
@@ -58,7 +58,7 @@ fn run(invocation: Invocation) -> u8 {
                 return render_read_only(&invocation.request, &snapshot, &*platform);
             }
             if invocation.dry_run {
-                println!("dry-run：计划已生成，未写入目标");
+                println!("dry-run: plan generated, nothing written to target");
                 return exit::SUCCESS;
             }
             let confirmed = match confirm(plan, invocation.yes, &snapshot.identity) {
@@ -69,7 +69,7 @@ fn run(invocation: Invocation) -> u8 {
                 }
             };
             let Some(target) = invocation.request.target() else {
-                eprintln!("写命令缺少目标");
+                eprintln!("write command is missing its target");
                 return exit::INTERNAL;
             };
             let outcome =
@@ -91,7 +91,7 @@ fn reject_identity_on_identified(request: &Request, platform: &dyn Platform) -> 
             if fingerprint.strength() == diskedit_core::fingerprint::Strength::Strong =>
         {
             eprintln!(
-                "--identity 只用于自动身份不可得的块设备；{} 已有稳定身份，声明名 {name} 不适用",
+                "--identity is only for block devices without an automatic identity; {} already has a stable identity, declared name {name} does not apply",
                 target.display()
             );
             Some(exit::USAGE)
@@ -184,7 +184,7 @@ fn render_read_only(request: &Request, snapshot: &Snapshot, platform: &dyn Platf
         | Command::Recover(_)
         | Command::New { .. }
         | Command::Add(_) => {
-            eprintln!("该命令没有只读渲染通道");
+            eprintln!("this command has no read-only render path");
             exit::INTERNAL
         }
     }
@@ -209,21 +209,21 @@ fn render_check(
         return exit::REFUSED;
     };
     let Some(path) = request.target() else {
-        eprintln!("check 需要目标");
+        eprintln!("check requires a target");
         return exit::INTERNAL;
     };
     let Some(sector) = snapshot.disk.sector_size.value().copied() else {
-        eprintln!("扇区大小未知，无法定位分区区间");
+        eprintln!("sector size unknown, cannot locate partition range");
         return exit::INTERNAL;
     };
     let Some(content) = facts.content.value().copied() else {
-        eprintln!("分区内容未知，无法选择检查器");
+        eprintln!("partition content unknown, cannot choose a checker");
         return exit::INTERNAL;
     };
     let offset = match facts.partition.start_lba.checked_mul(sector) {
         Some(offset) => offset,
         None => {
-            eprintln!("分区起点越过可寻址上界");
+            eprintln!("partition start exceeds the addressable limit");
             return exit::INTERNAL;
         }
     };
@@ -233,7 +233,7 @@ fn render_check(
     ) {
         Ok(region) => region,
         Err(error) => {
-            eprintln!("分区区间不成立: {error:?}");
+            eprintln!("invalid partition range: {error:?}");
             return exit::INTERNAL;
         }
     };
@@ -255,7 +255,7 @@ fn render_check(
 
 fn render_records(request: &Request, snapshot: &Snapshot, platform: &dyn Platform) -> u8 {
     let Some(target) = request.target() else {
-        eprintln!("records list 需要目标才能定位记录目录");
+        eprintln!("records list requires a target to locate the record directory");
         return exit::REFUSED;
     };
     let Some(identity) = strong_identity(snapshot) else {
@@ -277,7 +277,7 @@ fn render_records_verify(
     token: &str,
 ) -> u8 {
     let Some(target) = request.target() else {
-        eprintln!("records verify 需要目标才能定位记录目录");
+        eprintln!("records verify requires a target to locate the record directory");
         return exit::REFUSED;
     };
     let Some(identity) = strong_identity(snapshot) else {
@@ -301,7 +301,7 @@ fn render_records_verify(
 
 fn render_records_scan(request: &Request, platform: &dyn Platform) -> u8 {
     let Some(root) = request.target() else {
-        eprintln!("records scan 需要容器根");
+        eprintln!("records scan requires a container root");
         return exit::REFUSED;
     };
     match execute::records::scan(platform, root) {
@@ -329,7 +329,7 @@ fn identity_unprovable() -> u8 {
     eprintln!(
         "{}",
         text::refusal(&Refusal::IdentityUnprovable {
-            why: "目标身份读不出，无法定位记录目录".to_owned(),
+            why: "cannot read target identity, cannot locate the record directory".to_owned(),
         })
     );
     exit::UNSUPPORTED

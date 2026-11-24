@@ -100,8 +100,9 @@ pub fn read_region(
     region: Region,
     chunk: usize,
 ) -> Result<Vec<u8>, ExecError> {
-    let len = usize::try_from(region.len())
-        .map_err(|_| ExecError::Io("区域长度超出本机可表示范围".to_owned()))?;
+    let len = usize::try_from(region.len()).map_err(|_| {
+        ExecError::Io("region length exceeds the range representable on this host".to_owned())
+    })?;
     let mut buffer = vec![0u8; len];
     let mut offset = region.start();
     let mut filled = 0;
@@ -112,7 +113,7 @@ pub fn read_region(
             .map_err(ExecError::from)?;
         if read != take {
             return Err(ExecError::Io(format!(
-                "读取区域时提前结束：期望 {take} 字节，实际 {read} 字节"
+                "read of region ended early: expected {take} bytes, got {read} bytes"
             )));
         }
         filled += take;

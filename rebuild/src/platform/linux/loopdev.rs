@@ -28,11 +28,13 @@ pub fn detach_args(device: &Path) -> Vec<String> {
 pub fn parse_device(stdout: &str) -> PlatformResult<PathBuf> {
     let device = stdout.trim();
     if device.is_empty() {
-        return Err(PlatformError::parse("losetup 没有输出现成的设备路径"));
+        return Err(PlatformError::parse(
+            "losetup did not output a ready device path",
+        ));
     }
     if !device.starts_with('/') {
         return Err(PlatformError::parse(format!(
-            "losetup 输出不是绝对路径：{device:?}"
+            "losetup output is not an absolute path: {device:?}"
         )));
     }
     Ok(PathBuf::from(device))

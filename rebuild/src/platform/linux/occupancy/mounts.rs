@@ -28,7 +28,7 @@ pub fn parse(text: &str) -> PlatformResult<Vec<MountEntry>> {
         let fields: Vec<&str> = line.split_whitespace().collect();
         if fields.len() < 5 {
             return Err(PlatformError::parse(format!(
-                "mountinfo 第 {} 行字段不足",
+                "mountinfo line {} has too few fields",
                 index + 1
             )));
         }
@@ -43,15 +43,17 @@ pub fn parse(text: &str) -> PlatformResult<Vec<MountEntry>> {
 }
 
 fn parse_device(text: &str, line: usize) -> PlatformResult<(u32, u32)> {
-    let (major, minor) = text
-        .split_once(':')
-        .ok_or_else(|| PlatformError::parse(format!("mountinfo 第 {line} 行设备号缺少冒号")))?;
-    let major = major
-        .parse::<u32>()
-        .map_err(|_| PlatformError::parse(format!("mountinfo 第 {line} 行主号无效")))?;
-    let minor = minor
-        .parse::<u32>()
-        .map_err(|_| PlatformError::parse(format!("mountinfo 第 {line} 行次号无效")))?;
+    let (major, minor) = text.split_once(':').ok_or_else(|| {
+        PlatformError::parse(format!(
+            "mountinfo line {line} device number is missing a colon"
+        ))
+    })?;
+    let major = major.parse::<u32>().map_err(|_| {
+        PlatformError::parse(format!("mountinfo line {line} has an invalid major number"))
+    })?;
+    let minor = minor.parse::<u32>().map_err(|_| {
+        PlatformError::parse(format!("mountinfo line {line} has an invalid minor number"))
+    })?;
     Ok((major, minor))
 }
 

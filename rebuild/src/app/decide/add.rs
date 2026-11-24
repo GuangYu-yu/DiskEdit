@@ -24,7 +24,7 @@ pub fn plan(snapshot: &Snapshot, request: &AddRequest) -> Result<Plan, Refusal> 
     let sectors = request.size.div_ceil(admitted.sector);
     if sectors == 0 {
         return Err(Refusal::ArgumentOutOfRange {
-            what: "分区长度为零".to_owned(),
+            what: "partition length is zero".to_owned(),
         });
     }
     let step = align_step(request.align, admitted.sector)?;
@@ -47,7 +47,7 @@ pub fn plan(snapshot: &Snapshot, request: &AddRequest) -> Result<Plan, Refusal> 
                 start_lba
                     .checked_add(sectors - 1)
                     .ok_or_else(|| Refusal::ArgumentOutOfRange {
-                        what: "分区终点越过可寻址上界".to_owned(),
+                        what: "partition end exceeds the addressable bound".to_owned(),
                     })?;
             if start_lba < header.first_usable_lba || end_lba > header.last_usable_lba {
                 return Err(Refusal::CapacityInsufficient {
@@ -95,8 +95,8 @@ pub fn plan(snapshot: &Snapshot, request: &AddRequest) -> Result<Plan, Refusal> 
         admission::TableView::Mbr(mbr) => {
             if mbr.extended().is_some() {
                 return Err(Refusal::ContentUnsupported {
-                    what: "MBR 扩展分区".to_owned(),
-                    why: "含扩展分区的目标不参与新增".to_owned(),
+                    what: "MBR extended partition".to_owned(),
+                    why: "targets with extended partitions are not supported for add".to_owned(),
                 });
             }
             let total = capacity::require_mbr_capacity(admitted.length, admitted.sector)?;
@@ -116,10 +116,10 @@ pub fn plan(snapshot: &Snapshot, request: &AddRequest) -> Result<Plan, Refusal> 
                 )?,
             };
             let start = u32::try_from(start_lba).map_err(|_| Refusal::ArgumentOutOfRange {
-                what: "MBR 起点超过 32 位".to_owned(),
+                what: "MBR start exceeds 32 bits".to_owned(),
             })?;
             let size = u32::try_from(sectors).map_err(|_| Refusal::ArgumentOutOfRange {
-                what: "MBR 长度超过 32 位".to_owned(),
+                what: "MBR length exceeds 32 bits".to_owned(),
             })?;
             if u64::from(start) + u64::from(size) > total {
                 return Err(Refusal::CapacityInsufficient {
@@ -168,7 +168,7 @@ fn align_step(align: Option<u64>, sector: u64) -> Result<u64, Refusal> {
     let bytes = align.unwrap_or(DEFAULT_ALIGN_BYTES);
     if bytes == 0 {
         return Err(Refusal::ArgumentOutOfRange {
-            what: "对齐不能为 0".to_owned(),
+            what: "alignment cannot be 0".to_owned(),
         });
     }
     Ok(bytes.div_ceil(sector).max(1))
@@ -216,7 +216,7 @@ fn ensure_slot(slots: usize, free: Option<u32>, requested: Option<u32>) -> Resul
         .is_none_or(|index| index == 0 || index > slots)
     {
         return Err(Refusal::ArgumentOutOfRange {
-            what: format!("分区号 {requested} 超出条目槽范围"),
+            what: format!("partition number {requested} out of entry slot range"),
         });
     }
     if free.is_none() {

@@ -18,14 +18,14 @@ pub fn plan(snapshot: &Snapshot, request: &ResizeRequest) -> Result<Plan, Refusa
     let admitted = admission::admit(snapshot)?;
     let Some(selector) = request.partition else {
         return Err(Refusal::ContentUnsupported {
-            what: "未指定分区的 resize".to_owned(),
-            why: "resize 需要分区选择器 :N 或 :last".to_owned(),
+            what: "resize without a partition".to_owned(),
+            why: "resize requires a partition selector :N or :last".to_owned(),
         });
     };
     if request.grow_lv || request.lv.is_some() {
         return Err(Refusal::ContentUnsupported {
-            what: "LVM 扩容".to_owned(),
-            why: "逻辑卷扩容尚未接入执行器".to_owned(),
+            what: "LVM grow".to_owned(),
+            why: "logical volume grow is not yet wired to an executor".to_owned(),
         });
     }
     let partition = admission::select(snapshot, selector)?;
@@ -40,12 +40,12 @@ pub fn plan(snapshot: &Snapshot, request: &ResizeRequest) -> Result<Plan, Refusa
         .sectors
         .checked_mul(admitted.sector)
         .ok_or_else(|| Refusal::ArgumentOutOfRange {
-            what: "分区容量越过可寻址上界".to_owned(),
+            what: "partition capacity exceeds the addressable bound".to_owned(),
         })?;
     let sectors = match (size, request.end, grow_to_end) {
         (Some(_), Some(_), _) | (Some(_), _, true) | (None, Some(_), true) => {
             return Err(Refusal::ArgumentOutOfRange {
-                what: "尺寸、--end 与 --grow-to-end 只能出现一个".to_owned(),
+                what: "only one of size, --end, and --grow-to-end may be given".to_owned(),
             });
         }
         (Some(spec), None, false) => {
@@ -53,7 +53,7 @@ pub fn plan(snapshot: &Snapshot, request: &ResizeRequest) -> Result<Plan, Refusa
             let sectors = target.div_ceil(admitted.sector);
             if sectors == 0 {
                 return Err(Refusal::ArgumentOutOfRange {
-                    what: "分区长度为零".to_owned(),
+                    what: "partition length is zero".to_owned(),
                 });
             }
             sectors
@@ -62,7 +62,7 @@ pub fn plan(snapshot: &Snapshot, request: &ResizeRequest) -> Result<Plan, Refusa
             .checked_sub(start)
             .and_then(|span| span.checked_add(1))
             .ok_or_else(|| Refusal::ArgumentOutOfRange {
-                what: "--end 早于分区起点".to_owned(),
+                what: "--end precedes the partition start".to_owned(),
             })?,
         (None, None, true) => match table {
             admission::TableView::Gpt(copy) => copy
@@ -76,20 +76,20 @@ pub fn plan(snapshot: &Snapshot, request: &ResizeRequest) -> Result<Plan, Refusa
                 })?,
             admission::TableView::Mbr(_) => {
                 return Err(Refusal::ContentUnsupported {
-                    what: "MBR 撑到末尾".to_owned(),
-                    why: "MBR 没有可用的末尾边界".to_owned(),
+                    what: "MBR grow to end".to_owned(),
+                    why: "MBR has no usable end boundary".to_owned(),
                 });
             }
         },
         (None, None, false) => {
             return Err(Refusal::ArgumentOutOfRange {
-                what: "resize 缺少尺寸、--end 或 --grow-to-end".to_owned(),
+                what: "resize missing size, --end, or --grow-to-end".to_owned(),
             });
         }
     };
     if request.align.is_some() && !request.grow_to_end && request.end.is_none() {
         return Err(Refusal::ArgumentOutOfRange {
-            what: "--align 只用于 --end 与 --grow-to-end 形态".to_owned(),
+            what: "--align only applies to --end and --grow-to-end forms".to_owned(),
         });
     }
     if request.no_fs && sectors < facts.partition.sectors {
@@ -97,7 +97,7 @@ pub fn plan(snapshot: &Snapshot, request: &ResizeRequest) -> Result<Plan, Refusa
             sectors
                 .checked_mul(admitted.sector)
                 .ok_or_else(|| Refusal::ArgumentOutOfRange {
-                    what: "新分区容量越过可寻址上界".to_owned(),
+                    what: "new partition capacity exceeds the addressable bound".to_owned(),
                 })?;
         match &facts.size {
             Observation::Known { value, .. } if value.bytes <= needed => {}
@@ -117,7 +117,7 @@ pub fn plan(snapshot: &Snapshot, request: &ResizeRequest) -> Result<Plan, Refusa
     let end_lba = start
         .checked_add(sectors - 1)
         .ok_or_else(|| Refusal::ArgumentOutOfRange {
-            what: "分区终点越过可寻址上界".to_owned(),
+            what: "partition end exceeds the addressable bound".to_owned(),
         })?;
     match table {
         admission::TableView::Gpt(copy) => {
@@ -149,15 +149,15 @@ pub fn plan(snapshot: &Snapshot, request: &ResizeRequest) -> Result<Plan, Refusa
         admission::TableView::Mbr(mbr) => {
             if mbr.extended().is_some() {
                 return Err(Refusal::ContentUnsupported {
-                    what: "MBR 扩展分区".to_owned(),
-                    why: "含扩展分区的目标不参与调整".to_owned(),
+                    what: "MBR extended partition".to_owned(),
+                    why: "targets with extended partitions are not supported for resize".to_owned(),
                 });
             }
             u32::try_from(start).map_err(|_| Refusal::ArgumentOutOfRange {
-                what: "MBR 起点超过 32 位".to_owned(),
+                what: "MBR start exceeds 32 bits".to_owned(),
             })?;
             u32::try_from(sectors).map_err(|_| Refusal::ArgumentOutOfRange {
-                what: "MBR 长度超过 32 位".to_owned(),
+                what: "MBR length exceeds 32 bits".to_owned(),
             })?;
             for (number, entry) in admission::mbr_used(mbr) {
                 if number == partition {
@@ -183,7 +183,7 @@ pub fn plan(snapshot: &Snapshot, request: &ResizeRequest) -> Result<Plan, Refusa
         sectors
             .checked_mul(admitted.sector)
             .ok_or_else(|| Refusal::ArgumentOutOfRange {
-                what: "新分区容量越过可寻址上界".to_owned(),
+                what: "new partition capacity exceeds the addressable bound".to_owned(),
             })?;
     // 几何不变时不碰文件系统：没有方向，调用工具只会白写一遍。
     let filesystem = if request.no_fs || sectors == facts.partition.sectors {
@@ -248,16 +248,16 @@ fn filesystem_step(
         Observation::Known { value, .. } => *value,
         Observation::Unknown { .. } | Observation::NotApplicable { .. } => {
             return Err(Refusal::ContentUnsupported {
-                what: "未知内容的分区调整".to_owned(),
-                why: "无法识别的文件系统；只改几何请加 --no-fs".to_owned(),
+                what: "partition resize of unknown content".to_owned(),
+                why: "unrecognized filesystem; add --no-fs to change geometry only".to_owned(),
             });
         }
     };
     let filesystem = content
         .filesystem()
         .ok_or_else(|| Refusal::ContentUnsupported {
-            what: format!("{} 跟随分区调整", content.as_str()),
-            why: "该内容不是文件系统；只改几何请加 --no-fs".to_owned(),
+            what: format!("{} follow partition resize", content.as_str()),
+            why: "this content is not a filesystem; add --no-fs to change geometry only".to_owned(),
         })?;
     let observed = match &facts.size {
         Observation::Known { value, .. } => *value,
@@ -273,8 +273,8 @@ fn filesystem_step(
         std::cmp::Ordering::Greater => {
             let programs = admission::programs(content, Verb::Grow)?.ok_or_else(|| {
                 Refusal::ContentUnsupported {
-                    what: format!("{} 扩容", content.as_str()),
-                    why: "该内容不支持扩容".to_owned(),
+                    what: format!("{} grow", content.as_str()),
+                    why: "this content does not support growing".to_owned(),
                 }
             })?;
             admission::require_tools(snapshot, programs)?;
@@ -283,15 +283,15 @@ fn filesystem_step(
         std::cmp::Ordering::Less => {
             let programs = admission::programs(content, Verb::Shrink)?.ok_or_else(|| {
                 Refusal::ContentUnsupported {
-                    what: format!("{} 收缩", content.as_str()),
-                    why: "该内容不支持收缩".to_owned(),
+                    what: format!("{} shrink", content.as_str()),
+                    why: "this content does not support shrinking".to_owned(),
                 }
             })?;
             let minimum = observed
                 .min_bytes
                 .ok_or_else(|| Refusal::MinimumSizeUnknown {
                     number: partition,
-                    why: "该文件系统未给出可收缩的最小尺寸".to_owned(),
+                    why: "this filesystem did not report a minimum shrinkable size".to_owned(),
                 })?;
             if bytes < minimum {
                 return Err(Refusal::BelowMinimumSize {
@@ -311,20 +311,20 @@ fn resolve_size(spec: SizeSpec, current: u64) -> Result<u64, Refusal> {
     match spec {
         SizeSpec::Absolute(bytes) => Ok(bytes),
         SizeSpec::Grow => Err(Refusal::ArgumentOutOfRange {
-            what: "grow 不能作为绝对尺寸解析".to_owned(),
+            what: "grow cannot be resolved as an absolute size".to_owned(),
         }),
         SizeSpec::Delta { grow: true, bytes } => {
             current
                 .checked_add(bytes)
                 .ok_or_else(|| Refusal::ArgumentOutOfRange {
-                    what: "SIZE 超过可寻址上界".to_owned(),
+                    what: "SIZE exceeds the addressable bound".to_owned(),
                 })
         }
         SizeSpec::Delta { grow: false, bytes } => {
             current
                 .checked_sub(bytes)
                 .ok_or_else(|| Refusal::ArgumentOutOfRange {
-                    what: format!("SIZE 超过当前分区大小 {current}"),
+                    what: format!("SIZE exceeds the current partition size {current}"),
                 })
         }
         SizeSpec::Percent { grow, num, denom } => {
@@ -334,20 +334,20 @@ fn resolve_size(spec: SizeSpec, current: u64) -> Result<u64, Refusal> {
                 .and_then(|scaled| scaled.checked_div(100u128 * u128::from(denom)))
                 .filter(|value| *value <= u128::from(u64::MAX))
                 .ok_or_else(|| Refusal::ArgumentOutOfRange {
-                    what: "SIZE 超过可寻址上界".to_owned(),
+                    what: "SIZE exceeds the addressable bound".to_owned(),
                 })? as u64;
             let delta = raw / MIB * MIB;
             if grow {
                 current
                     .checked_add(delta)
                     .ok_or_else(|| Refusal::ArgumentOutOfRange {
-                        what: "SIZE 超过可寻址上界".to_owned(),
+                        what: "SIZE exceeds the addressable bound".to_owned(),
                     })
             } else {
                 current
                     .checked_sub(delta)
                     .ok_or_else(|| Refusal::ArgumentOutOfRange {
-                        what: format!("SIZE 超过当前分区大小 {current}"),
+                        what: format!("SIZE exceeds the current partition size {current}"),
                     })
             }
         }

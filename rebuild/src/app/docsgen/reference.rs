@@ -164,6 +164,37 @@ const OPTIONS: &[OptionDoc] = &[
     },
 ];
 
+/// 命令概要的中文译本；英文概要直接取 `Spec::summary`。
+const ZH_SUMMARIES: &[(&str, &str)] = &[
+    ("info", "显示目标与分区概况"),
+    ("inspect", "逐分区显示起止与内容"),
+    ("records list", "列出记录目录条目"),
+    ("records verify", "校验一条记录"),
+    ("records scan", "扫描记录目录"),
+    ("resize", "改变分区大小"),
+    ("move", "平移一个分区"),
+    ("copy", "复制分区到新位置并新增分区"),
+    ("delete", "删除一个分区"),
+    ("set", "修改分区或文件系统属性"),
+    ("check", "检查一个分区的文件系统"),
+    ("mkfs", "在分区上建卷"),
+    ("resizefs", "调整分区内文件系统大小"),
+    ("recover", "回滚、重放或放弃记录"),
+    ("new", "新建分区表"),
+    ("add", "新增一个分区"),
+];
+
+fn summary_of(spec: &Spec, lang: Lang) -> &'static str {
+    match lang {
+        Lang::En => spec.summary,
+        Lang::Zh => ZH_SUMMARIES
+            .iter()
+            .find(|(name, _)| *name == spec.name)
+            .map(|(_, text)| *text)
+            .expect("每条命令声明都必须有中文概要"),
+    }
+}
+
 /// 渲染一份语言对应的命令参考。
 pub fn render(lang: Lang) -> String {
     let mut out = String::new();
@@ -213,10 +244,7 @@ pub fn render(lang: Lang) -> String {
 }
 
 fn render_command(out: &mut String, spec: &Spec, lang: Lang) {
-    let summary = match lang {
-        Lang::En => spec.summary_en,
-        Lang::Zh => spec.summary,
-    };
+    let summary = summary_of(spec, lang);
     out.push_str(&format!("### `{}`\n\n{summary}\n\n", spec.name));
     out.push_str("```text\n");
     for usage in spec.usage {
@@ -333,6 +361,17 @@ mod tests {
                     .any(|spec| spec.options.iter().any(|option| option.name == doc.name)),
                 "{} 有说明但没有命令声明它",
                 doc.name
+            );
+        }
+    }
+
+    #[test]
+    fn every_command_has_a_chinese_summary() {
+        for spec in SPECS {
+            assert!(
+                ZH_SUMMARIES.iter().any(|(name, _)| *name == spec.name),
+                "{} 缺少中文概要",
+                spec.name
             );
         }
     }
