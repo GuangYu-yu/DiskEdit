@@ -7,7 +7,7 @@
 use std::path::Path;
 
 use diskedit_core::record::{
-    Frame, FrameKind, Preimage, RecordBody, RecoveryPlan, encode, recover as recover_plan,
+    Frame, FrameKind, Preimage, RecordBody, RecoveryPlan, decode, encode, recover as recover_plan,
 };
 
 use super::digest::{digest as digest_bytes, hash_region, read_region};
@@ -119,9 +119,19 @@ pub fn run(
             RecoveryPlan::Foreign { .. } => {
                 return Outcome::unwritten(FailureKind::Refused, "记录目录中存在本实现之外的内容");
             }
-            RecoveryPlan::RollBack { .. }
-            | RecoveryPlan::Replay { .. }
-            | RecoveryPlan::NeedsManual { .. } => {
+            RecoveryPlan::RollBack { .. } | RecoveryPlan::Replay { .. } => {
+                // 记录能解出头部时比对计划摘要：同一份计划与另一份计划是两种不同
+                // 的处境，拒绝信息要说明是哪一种，不能都报成"有未完成记录"。
+                let same_plan = decode(&existing)
+                    .is_ok_and(|record| record.body.plan_digest == confirmed.digest());
+                let reason = if same_plan {
+                    "存在未完成的记录（同一份计划），需要先恢复"
+                } else {
+                    "存在未完成的记录（另一份计划，摘要不同），需要先恢复"
+                };
+                return Outcome::unwritten(FailureKind::Refused, reason);
+            }
+            RecoveryPlan::NeedsManual { .. } => {
                 return Outcome::unwritten(FailureKind::Refused, "存在未完成的记录，需要先恢复");
             }
         }
@@ -914,6 +924,38 @@ mod tests {
         assert!(outcome.succeeded(), "{outcome:?}");
         assert_eq!(*host.image.borrow(), before, "回滚应恢复表区原像");
         assert!(host.records.borrow().is_none(), "回滚后应清理记录");
+    }
+
+    #[test]
+    fn unfinished_record_from_another_plan_names_the_mismatch() {
+        let host = FakeHost::new(2 * 1024 * 1024);
+        let (confirmed, _snapshot) = confirmed_new(&host);
+        let body = RecordBody {
+            target: Fingerprint::strong([3; 32]),
+            geometry_generation: 1,
+            plan_digest: [0x5A; 32],
+        };
+        let frame = Frame {
+            seq: 0,
+            kind: FrameKind::Progress,
+            completed: true,
+            irreversible: false,
+            intent: b"step".to_vec(),
+            regions: Vec::new(),
+        };
+        *host.records.borrow_mut() = Some(encode(&body, &[frame]).expect("编码记录"));
+        let before = host.image.borrow().clone();
+
+        let outcome = run(&confirmed, &host, Path::new("/tmp/image"), 1, Faults::NONE);
+        assert_eq!(outcome.state(), ExecutionState::Unwritten);
+        assert_eq!(outcome.failure(), Some(FailureKind::Refused));
+        assert!(
+            outcome.reason().unwrap_or("").contains("另一份计划"),
+            "{:?}",
+            outcome.reason()
+        );
+        assert_eq!(*host.image.borrow(), before, "拒绝时不得写目标");
+        assert!(host.records.borrow().is_some(), "记录必须留给恢复");
     }
 
     #[test]
