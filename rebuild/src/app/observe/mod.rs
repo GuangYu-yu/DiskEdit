@@ -9,6 +9,15 @@ use diskedit_core::evidence::Generation;
 use diskedit_core::fs::MkfsKind;
 use diskedit_core::table::Guid;
 
+pub mod records;
+pub mod snapshot;
+pub mod table;
+
+pub use snapshot::{
+    CaptureError, InspectSnapshot, RecordSnapshot, Snapshot, TargetFacts, capture, capture_inspect,
+    capture_records,
+};
+
 /// 分区表格式。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TableFormat {
@@ -100,6 +109,11 @@ impl Request {
         self.target.as_ref().map(|spec| spec.path.as_path())
     }
 
+    /// 目标的分区选择器；没有目标或未指定分区时为 `None`。
+    pub fn partition_selector(&self) -> Option<PartitionSelector> {
+        self.target.as_ref().and_then(|spec| spec.partition)
+    }
+
     pub fn command(&self) -> &Command {
         &self.command
     }
@@ -108,7 +122,10 @@ impl Request {
 /// 16 个入口及各自的参数。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Command {
-    Info,
+    /// 整盘信息；`grow` 为真的形态只接受分区目标并给出扩容预览。
+    Info {
+        grow: bool,
+    },
     Inspect,
     RecordsList,
     RecordsVerify {

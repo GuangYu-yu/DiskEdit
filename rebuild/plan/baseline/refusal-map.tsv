@@ -1,1 +1,30 @@
 id	新版认领	依据	用例
+R0046	src/app/cli/parse.rs 目标必填，缺目标报用法	基线与旧 cli.rs:1435 实跑 `inspect` 退 2	tests/cases/mod.rs 的 inspect without a target
+R0049	src/app/cli/parse.rs parse_inspect 拒绝 :N 选择器	基线与旧 cli.rs:1492 实跑 `inspect <img>:1` 退 2	tests/cases/mod.rs 的 inspect refuses a partition selector
+R0050	src/app/cli/parse.rs records list 拒绝 :N 选择器	基线与旧 cli.rs:1504 实跑 `records list <img>:1` 退 2	tests/cases/mod.rs 的 records list refuses a partition selector
+R0052	src/app/cli/parse.rs records list 的 --identity 必须有目标	基线与旧 cli.rs:1513 实跑退 2	tests/cases/mod.rs 的 records list identity without a target
+R0054	src/app/cli/parse.rs records verify 需要 32 位十六进制记录号	基线与旧 cli.rs:1524 实跑缺号退 2	tests/cases/mod.rs 的 records verify without an id
+R0055	src/app/cli/parse.rs records verify 拒绝 :N 选择器	基线与旧 cli.rs:1528 实跑退 2	tests/cases/mod.rs 的 records verify refuses a partition selector
+R0057	src/app/cli/parse.rs records scan 需要根目录	基线与旧 cli.rs:1539 实跑退 2	tests/cases/mod.rs 的 records scan without a root
+R0072	src/app/cli/parse.rs Tokens 拒绝重复的值选项	基线与旧 cli.rs:1827 实跑退 2	tests/cases/mod.rs 的 info with a repeated value option
+R0074	src/app/cli/parse.rs Tokens 裸旗标不接受 =值	基线与旧 cli.rs:1878 实跑 `--grow=1` 退 2	tests/cases/mod.rs 的 info with a value on a bare flag
+R0078	src/app/cli/parse.rs 多余位置参数报用法	基线与旧 cli.rs:1925 实跑退 2	tests/cases/mod.rs 的 info with an extra argument
+R0082	src/app/cli/parse.rs 需要分区选择器的形态拒绝整目标	基线与旧 cli.rs:2005 实跑 `info --grow <img>` 退 2	tests/cases/mod.rs 的 info grow without a partition selector
+R0083	src/app/cli/parse.rs 整目标命令拒绝 :N 后缀	基线与旧 cli.rs:2009 实跑 `info <img>:1` 退 2	tests/cases/mod.rs 的 info rejects a bare partition selector
+R0089	src/app/cli/parse.rs 未知选项报用法	基线与旧 cli.rs:2129 实跑退 2	tests/cases/mod.rs 的 info with an unknown option
+R0091	src/app/cli/parse.rs 值选项缺值报用法	基线与旧 cli.rs:2155 实跑退 2	tests/cases/mod.rs 的 info with a missing option value
+R0092	src/app/cli/parse.rs --sector-size 校验失败报用法	基线与旧 cli.rs:2159 实跑 123 退 2	tests/cases/mod.rs 的 info rejects a non-power-of-two sector size
+R0130	src/app/cli/parse.rs parse_info 拒绝无 --grow 的 :N；旧 cmd/info.rs:66 被 cli 先拒	基线实跑 `info <img>:1` 退 2（旧源码位置 cli.rs:2009）	tests/cases/mod.rs 的 info rejects a bare partition selector
+R0131	src/app/observe/table.rs GPT 双副本损坏 → TableView::Damaged → decide/info.rs 的 TableDamaged	基线实跑 damaged.img 退 3（旧 cmd/info.rs:104）	tests/cases/mod.rs 的 info on a damaged GPT image
+R0132	src/app/observe/table.rs MBR 读取失败 → CaptureError::Unreadable → 拒绝	基线实跑 tiny/zero 目标退 3（旧 cmd/info.rs:214）	tests/cases/mod.rs 的 info on a target smaller than one sector
+R0133	src/app/observe/table.rs 表探测读失败 → CaptureError::Unreadable → 拒绝	基线实跑 /dev/loop0 退 3（旧 cmd/info.rs:290）	tests/cases/mod.rs 的 info on an empty file
+R0134	src/app/observe/probe.rs 内容识别读失败经表观察上报 → CaptureError::Unreadable → 拒绝	基线实跑 /dev/loop0 退 3（旧 cmd/info.rs:324）	tests/cases/mod.rs 的 info on a damaged GPT image
+R0135	src/app/cli/parse.rs --grow 形态必须有分区选择器	基线与旧 cmd/info_grow.rs:12 实跑退 2	tests/cases/mod.rs 的 info grow without a partition selector
+R0136	src/app/decide/info.rs grow 需要 GPT，否则 GptRequired → 退出 3	基线实跑 mbr.img:1 --grow 退 3（旧 cmd/info_grow.rs:24）	tests/cases/mod.rs 的 info grow needs GPT
+R0143	src/app/observe/snapshot.rs 目标打不开 → CaptureError::Platform → 拒绝	基线实跑 inspect missing.img 退 3（旧 cmd/inspect.rs 目标不存在分支）	tests/cases/mod.rs 的 inspect on a missing target
+R0148	src/app/decide/inspect.rs 记录锚定目录不存在 → RecordStoreMissing → 退出 3	基线实跑 inspect 无 anchor 退 3（旧 cmd/inspect.rs anchor 打开失败分支）	tests/cases/mod.rs 的 inspect refuses without an anchor directory
+R0257	src/app/observe/snapshot.rs --identity 用于自身可证明身份的目标 → 用法错误 2	基线与旧 cmd/records.rs:424 实跑 image + --identity 退 2	tests/cases/mod.rs 的 records list identity on an image
+R0268	src/app/observe/snapshot.rs records verify 目标读不出 → 拒绝	基线实跑目录目标退 3（旧 cmd/records.rs:517）	tests/cases/mod.rs 的 records verify on an unreadable target
+R0272	src/app/decide/records.rs 记录不存在或 id 不符 → RecordNotFound → 退出 3	基线实跑缺记录退 3（旧 cmd/records.rs:606）	tests/cases/mod.rs 的 records verify without a record
+R0282	src/app/cli/mod.rs scan 根不是目录 → 拒绝	基线实跑 scan 文件退 3（旧 cmd/records.rs:712）	tests/cases/mod.rs 的 records scan refuses a file
+R0287	src/app/cli/mod.rs scan 根不存在 → 拒绝	基线实跑 scan 缺失目录退 3（旧 cmd/records.rs:738）	tests/cases/mod.rs 的 records scan needs a directory

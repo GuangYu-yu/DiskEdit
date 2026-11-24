@@ -4,6 +4,7 @@
 //! 声明区间内。具体步骤的执行器按纵切逐个接入，这里只固定所有写路径共用的
 //! 约束。
 
+pub mod diagnose;
 pub mod digest;
 pub mod postcondition;
 pub mod state;

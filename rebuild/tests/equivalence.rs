@@ -5,6 +5,8 @@
 
 use std::process::Command;
 
+mod fixtures;
+
 struct Scenario {
     name: &'static str,
     argv: &'static [&'static str],
@@ -71,6 +73,194 @@ const SCENARIOS: &[Scenario] = &[
         name: "unknown option",
         argv: &["info", "--bogus"],
     },
+    Scenario {
+        name: "info on a GPT image",
+        argv: &["info", "target/fixtures/s1/gpt.img"],
+    },
+    Scenario {
+        name: "info on an MBR image",
+        argv: &["info", "target/fixtures/s1/mbr.img"],
+    },
+    Scenario {
+        name: "info on an empty image",
+        argv: &["info", "target/fixtures/s1/empty.img"],
+    },
+    Scenario {
+        name: "info on a damaged GPT image",
+        argv: &["info", "target/fixtures/s1/damaged.img"],
+    },
+    Scenario {
+        name: "info with a partition and no grow",
+        argv: &["info", "target/fixtures/s1/gpt.img:1"],
+    },
+    Scenario {
+        name: "info grow on the last partition",
+        argv: &["info", "target/fixtures/s1/gpt.img:2", "--grow"],
+    },
+    Scenario {
+        name: "info grow on the first partition",
+        argv: &["info", "target/fixtures/s1/gpt.img:1", "--grow"],
+    },
+    Scenario {
+        name: "info grow on MBR",
+        argv: &["info", "target/fixtures/s1/mbr.img:1", "--grow"],
+    },
+    Scenario {
+        name: "info with an invalid sector size",
+        argv: &["info", "target/fixtures/s1/gpt.img", "--sector-size", "123"],
+    },
+    Scenario {
+        name: "info with a 4096 sector size",
+        argv: &[
+            "info",
+            "target/fixtures/s1/gpt.img",
+            "--sector-size",
+            "4096",
+        ],
+    },
+    Scenario {
+        name: "info on a missing target",
+        argv: &["info", "target/fixtures/s1/missing.img"],
+    },
+    Scenario {
+        name: "inspect",
+        argv: &["inspect", "target/fixtures/s1/gpt.img"],
+    },
+    Scenario {
+        name: "inspect on a missing target",
+        argv: &["inspect", "target/fixtures/s1/missing.img"],
+    },
+    Scenario {
+        name: "records list without a target",
+        argv: &["records", "list"],
+    },
+    Scenario {
+        name: "records list on a missing target",
+        argv: &["records", "list", "target/fixtures/s1/missing.img"],
+    },
+    Scenario {
+        name: "records verify without a record",
+        argv: &[
+            "records",
+            "verify",
+            "target/fixtures/s1/gpt.img",
+            "00000000000000000000000000000000",
+        ],
+    },
+    Scenario {
+        name: "records verify with a bad id",
+        argv: &["records", "verify", "target/fixtures/s1/gpt.img", "zz"],
+    },
+    Scenario {
+        name: "records scan a directory",
+        argv: &["records", "scan", "target/fixtures/s1"],
+    },
+    Scenario {
+        name: "records scan a missing directory",
+        argv: &["records", "scan", "target/fixtures/s1/missing"],
+    },
+    Scenario {
+        name: "check on an identified filesystem",
+        argv: &["check", "target/fixtures/s1/ext.img:1"],
+    },
+    Scenario {
+        name: "check on an unidentified partition",
+        argv: &["check", "target/fixtures/s1/gpt.img:1"],
+    },
+    Scenario {
+        name: "check without a partition",
+        argv: &["check", "target/fixtures/s1/gpt.img"],
+    },
+    Scenario {
+        name: "check on a missing target",
+        argv: &["check", "target/fixtures/s1/missing.img:1"],
+    },
+    Scenario {
+        name: "info on a target smaller than one sector",
+        argv: &["info", "target/fixtures/s1/tiny.img"],
+    },
+    Scenario {
+        name: "info on an empty file",
+        argv: &["info", "target/fixtures/s1/zero.img"],
+    },
+    Scenario {
+        name: "info grow without a partition selector",
+        argv: &["info", "--grow", "target/fixtures/s1/gpt.img"],
+    },
+    Scenario {
+        name: "info with a missing option value",
+        argv: &["info", "target/fixtures/s1/gpt.img", "--sector-size"],
+    },
+    Scenario {
+        name: "info with a repeated value option",
+        argv: &[
+            "info",
+            "target/fixtures/s1/gpt.img",
+            "--sector-size",
+            "512",
+            "--sector-size",
+            "4096",
+        ],
+    },
+    Scenario {
+        name: "info with a value on a bare flag",
+        argv: &["info", "--grow=1", "target/fixtures/s1/gpt.img"],
+    },
+    Scenario {
+        name: "info with an extra argument",
+        argv: &["info", "target/fixtures/s1/gpt.img", "extra"],
+    },
+    Scenario {
+        name: "inspect without a target",
+        argv: &["inspect"],
+    },
+    Scenario {
+        name: "inspect refuses a partition selector",
+        argv: &["inspect", "target/fixtures/s1/gpt.img:1"],
+    },
+    Scenario {
+        name: "records list refuses a partition selector",
+        argv: &["records", "list", "target/fixtures/s1/gpt.img:1"],
+    },
+    Scenario {
+        name: "records list identity without a target",
+        argv: &["records", "list", "--identity", "declared-name"],
+    },
+    Scenario {
+        name: "records list identity on an image",
+        argv: &[
+            "records",
+            "list",
+            "--identity",
+            "declared-name",
+            "target/fixtures/s1/gpt.img",
+        ],
+    },
+    Scenario {
+        name: "records verify without an id",
+        argv: &["records", "verify", "target/fixtures/s1/gpt.img"],
+    },
+    Scenario {
+        name: "records verify on an unreadable target",
+        argv: &[
+            "records",
+            "verify",
+            "target/fixtures/s1",
+            "00000000000000000000000000000000",
+        ],
+    },
+    Scenario {
+        name: "records scan without a root",
+        argv: &["records", "scan"],
+    },
+    Scenario {
+        name: "records scan refuses a file",
+        argv: &["records", "scan", "target/fixtures/s1/gpt.img"],
+    },
+    Scenario {
+        name: "check on a directory",
+        argv: &["check", "target/fixtures/s1:1"],
+    },
 ];
 
 fn code(program: &std::path::Path, argv: &[&str]) -> i32 {
@@ -91,6 +281,7 @@ fn both_binaries_agree_on_every_scenario() {
     };
     let baseline = std::path::PathBuf::from(baseline);
     let candidate = std::path::PathBuf::from(env!("CARGO_BIN_EXE_diskedit"));
+    fixtures::prepare();
 
     for scenario in SCENARIOS {
         let expected = code(&baseline, scenario.argv);

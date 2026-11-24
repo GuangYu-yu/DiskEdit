@@ -1,6 +1,7 @@
 //! 用例表执行器：逐条运行二进制并核对退出码与输出片段。
 
 mod cases;
+mod fixtures;
 
 use std::process::Command;
 
@@ -23,6 +24,7 @@ fn run(case: &Case) -> (i32, String, String) {
 
 #[test]
 fn every_case_matches_its_observable_result() {
+    fixtures::prepare();
     for case in CASES {
         let (code, stdout, stderr) = run(case);
         assert_eq!(code, i32::from(case.exit), "{} 的退出码不符", case.name);

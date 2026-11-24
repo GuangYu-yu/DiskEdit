@@ -6,11 +6,9 @@ use std::path::{Path, PathBuf};
 const RETIRED: &[&str] = &[
     "src/app/carrier",
     "src/app/docsgen",
-    "src/app/observe/snapshot.rs",
     "src/app/execute/steps",
     "src/app/execute/online",
     "src/app/decide/common",
-    "src/platform/linux",
 ];
 
 /// 生产源码里不允许出现的临时标记。

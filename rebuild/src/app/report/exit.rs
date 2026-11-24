@@ -57,6 +57,10 @@ pub fn exit_of_refusal(refusal: &Refusal) -> u8 {
         | Refusal::FactUnknown { .. }
         | Refusal::TableMissing
         | Refusal::TableDamaged { .. }
+        | Refusal::GptRequired { .. }
+        | Refusal::RecordNotFound { .. }
+        | Refusal::RecordStoreMissing { .. }
+        | Refusal::RecordDirectoryUnresolved { .. }
         | Refusal::MountNotMounted { .. }
         | Refusal::MountAmbiguous { .. }
         | Refusal::MountNotPartition { .. }

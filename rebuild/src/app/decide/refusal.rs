@@ -42,6 +42,14 @@ pub enum Refusal {
     OnlineShrink { why: String },
     /// 分区表损坏。
     TableDamaged { why: String },
+    /// 该形态需要 GPT 分区表。
+    GptRequired { what: String },
+    /// 指定的记录不存在。
+    RecordNotFound { token: String },
+    /// 记录的锚定目录无法打开。
+    RecordStoreMissing { path: String },
+    /// 目标自身给不出记录目录的键。
+    RecordDirectoryUnresolved { target: String },
     /// 指定的分区不存在。
     PartitionMissing { number: u32 },
     /// 新分区与既有分区重叠。
@@ -116,6 +124,18 @@ impl Refusal {
             Self::TableDamaged { .. } => {
                 "inspect the evidence with read-only commands first, and recover from a backup copy if necessary"
             }
+            Self::GptRequired { .. } => {
+                "use a target whose partition table is GPT, or drop the flag that needs it"
+            }
+            Self::RecordNotFound { .. } => {
+                "list the records for this target and use one of the reported identifiers"
+            }
+            Self::RecordStoreMissing { .. } => {
+                "let a writing command create the anchor directory first, or inspect the target on the host that owns it"
+            }
+            Self::RecordDirectoryUnresolved { .. } => {
+                "give --identity NAME for a block device without a readable WWN, EUI or serial, or address an image"
+            }
             Self::PartitionMissing { .. } => {
                 "confirm the partition number with a listing command first"
             }
@@ -143,6 +163,70 @@ impl Refusal {
                 "fix the argument according to the valid range in the help"
             }
             Self::FlagUnknown { .. } => "use one of the accepted flag names for this table",
+        }
+    }
+
+    /// 固定的一句话成因，供命令行报告使用。
+    pub fn describe(&self) -> String {
+        match self {
+            Self::ConfirmationRequired => "this command writes and needs --yes".to_owned(),
+            Self::OverwriteNotConfirmed => {
+                "the target already holds data; overwriting needs the explicit flag".to_owned()
+            }
+            Self::IdentityUnprovable { why } => format!("target identity is unprovable: {why}"),
+            Self::IdentityChanged => {
+                "the target is not the object the plan was made for".to_owned()
+            }
+            Self::PlanDigestMismatch => "the plan no longer matches its digest".to_owned(),
+            Self::OccupancyUnknown { why } => format!("usage of the target is unknown: {why}"),
+            Self::Occupied { evidence } => format!("the target is in use: {evidence}"),
+            Self::FactUnknown { what } => format!("a required fact is unknown: {what}"),
+            Self::GeometryUnknown { why } => format!("target geometry is unknown: {why}"),
+            Self::TableMissing => "there is no usable partition table".to_owned(),
+            Self::MountNotMounted { path } => format!("{path} is not a mount point"),
+            Self::MountAmbiguous { path } => format!("{path} has more than one mount record"),
+            Self::MountNotPartition { device } => format!("{device} is not a partition"),
+            Self::MountNotBlockDevice { source } => {
+                format!("{source} is not a single block device")
+            }
+            Self::MountUnmapped { reason } => format!("cannot map the mount to a device: {reason}"),
+            Self::OnlineShrink { why } => format!("this form cannot shrink the filesystem: {why}"),
+            Self::TableDamaged { why } => format!("the partition table is damaged: {why}"),
+            Self::GptRequired { what } => what.clone(),
+            Self::RecordNotFound { token } => format!("no recovery record has id {token}"),
+            Self::RecordStoreMissing { path } => {
+                format!("the anchor directory {path} cannot be opened")
+            }
+            Self::RecordDirectoryUnresolved { target } => {
+                format!("{target} has no record directory — this target exposes no stable identity")
+            }
+            Self::PartitionMissing { number } => format!("partition {number} does not exist"),
+            Self::PartitionOverlap { number } => {
+                format!("partition {number} would overlap an existing partition")
+            }
+            Self::CapacityInsufficient { needed, available } => {
+                format!("needed {needed} bytes but only {available} are available")
+            }
+            Self::FilesystemUnknown { number } => {
+                format!("the content of partition {number} is not identified")
+            }
+            Self::ContentUnsupported { what, why } => format!("{what} is not supported: {why}"),
+            Self::MinimumSizeUnknown { number, why } => {
+                format!("the minimum size of partition {number} is unknown: {why}")
+            }
+            Self::BelowMinimumSize {
+                number,
+                minimum,
+                requested,
+            } => format!(
+                "partition {number} cannot shrink below {minimum} bytes (requested {requested})"
+            ),
+            Self::ToolMissing { program } => format!("{program:?} is not available"),
+            Self::PlatformCannotRunTools { why } => {
+                format!("this platform cannot run external tools: {why}")
+            }
+            Self::ArgumentOutOfRange { what } => format!("argument out of range: {what}"),
+            Self::FlagUnknown { why } => format!("unsupported flag: {why}"),
         }
     }
 }
