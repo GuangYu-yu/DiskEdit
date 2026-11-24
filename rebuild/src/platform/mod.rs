@@ -416,13 +416,18 @@ pub struct PartitionDevice {
     pub loop_device: Option<PathBuf>,
 }
 
-/// 文件系统的尺寸事实：当前大小与可收缩到的最小大小。
+/// 文件系统的尺寸事实：当前大小、分配单元与可收缩到的最小大小。
+///
+/// `unit` 是该族放置数据的粒度（ext 是块组、ntfs 是簇、btrfs 是扇区）。扩容后
+/// 工具可能把最后一个不完整的单元留空，因此"扩到区间末端"的判据是末端落在最后
+/// 一个单元内，而不是字节相等；`unit` 为 1 表示该族没有可观测的放置粒度。
 ///
 /// `min_bytes` 为 `None` 表示该族不能收缩或最小尺寸尚未探出；调用方不得据此
 /// 推断为 0 或"可任意收缩"。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FsSize {
     pub bytes: u64,
+    pub unit: u64,
     pub min_bytes: Option<u64>,
 }
 

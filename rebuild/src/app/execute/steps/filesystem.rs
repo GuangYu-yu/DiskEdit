@@ -358,7 +358,7 @@ fn verify_size(
         .filesystem_size_of(device, region.len, kind)
         .map_err(|error| ExecError::Postcondition(format!("回读文件系统尺寸失败: {error}")))?;
     let satisfied = match direction {
-        Growth::Grow => facts.bytes >= requested && facts.bytes <= region.len,
+        Growth::Grow => reaches_end(facts.bytes, facts.unit, region.len),
         Growth::Shrink => facts.bytes <= requested,
     };
     if satisfied {
@@ -369,6 +369,18 @@ fn verify_size(
             facts.bytes, requested
         )))
     }
+}
+
+/// 扩容后是否已吃到区间末端。
+///
+/// 外部工具按自己的放置单元取整，末段装不下一个完整单元时会整段留空；因此
+/// 判据是"末端落在最后一个单元内"（`bytes <= 末端 < bytes + unit`），而不是
+/// 字节相等。ext 在 1.47.x 上会把 900 MiB 卷止于 896 MiB，就是这个形态。
+fn reaches_end(bytes: u64, unit: u64, limit: u64) -> bool {
+    bytes <= limit
+        && bytes
+            .checked_add(unit.max(1))
+            .is_some_and(|next| limit < next)
 }
 
 /// 建卷参数：程序、固定选项与标签形式。
@@ -703,6 +715,19 @@ mod tests {
     fn signature_ranges_stay_inside_small_devices() {
         let ranges = signature_ranges(256 * 1024);
         assert_eq!(ranges, vec![DeviceRegion::new(0, 256 * 1024)]);
+    }
+
+    #[test]
+    fn growth_reaches_end_within_one_unit() {
+        let mib = 1024 * 1024;
+        // 900 MiB 卷止于 896 MiB：相差 4 MiB，落在一个 128 MiB 块组内。
+        assert!(reaches_end(896 * mib, 128 * mib, 900 * mib));
+        // 末端正好相等也是到位。
+        assert!(reaches_end(900 * mib, 128 * mib, 900 * mib));
+        // 差出整整一个单元即视为没扩到位。
+        assert!(!reaches_end(772 * mib, 128 * mib, 900 * mib));
+        // 越过区间末端不成立。
+        assert!(!reaches_end(901 * mib, 128 * mib, 900 * mib));
     }
 
     #[test]
