@@ -97,6 +97,12 @@ impl Target {
         }
         #[cfg(unix)]
         if std::os::unix::fs::FileTypeExt::is_block_device(&file_type) {
+            if is_partition_node(path)? {
+                return Err(PlatformError::unsupported(format!(
+                    "{} 是分区节点；受支持的目标是整盘，分区用 `:N` 选择器",
+                    path.display()
+                )));
+            }
             let source = BlockSource::open(path)?;
             let len = source.len_bytes();
             let sector_size = source.sector_size();
@@ -197,6 +203,18 @@ impl TargetHandle for Target {
     fn lock_exclusive(&mut self) -> PlatformResult<()> {
         Target::lock_exclusive(self)
     }
+}
+
+/// 目标是否为内核眼中的分区节点。
+///
+/// 分区节点只暴露一个切片，按整盘打开会把切片首部当成分区表；受支持的目标形态
+/// 只有镜像、loop 与整盘，分区一律用 `:N` 选择器。
+fn is_partition_node(path: &Path) -> PlatformResult<bool> {
+    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+        return Ok(false);
+    };
+    let class = sysfs_root().join("class/block").join(name);
+    Ok(read_optional_attr(&class.join("partition"))?.is_some())
 }
 
 /// 计算目标指纹。
@@ -418,6 +436,27 @@ mod tests {
         assert_eq!(stable_hash32(b"disk-one"), stable_hash32(b"disk-one"));
         assert_ne!(stable_hash32(b"disk-one"), stable_hash32(b"disk-two"));
         assert_ne!(stable_hash32(b"ab"), stable_hash32(b"ba"));
+    }
+
+    #[test]
+    fn partition_nodes_are_recognised() {
+        use std::sync::Mutex;
+        static ENV: Mutex<()> = Mutex::new(());
+        let _guard = ENV.lock().expect("环境锁");
+        let dir = std::env::temp_dir().join(format!("diskedit-sysfs-{}", std::process::id()));
+        let partition = dir.join("class/block/sdb2");
+        std::fs::create_dir_all(&partition).expect("建分区目录");
+        std::fs::write(partition.join("partition"), "2\n").expect("写 partition 属性");
+        std::fs::create_dir_all(dir.join("class/block/sdb")).expect("建整盘目录");
+        let previous = std::env::var_os("DISKEDIT_SYSFS_ROOT");
+        unsafe { std::env::set_var("DISKEDIT_SYSFS_ROOT", &dir) };
+        assert!(is_partition_node(Path::new("/dev/sdb2")).expect("可判定"));
+        assert!(!is_partition_node(Path::new("/dev/sdb")).expect("可判定"));
+        match previous {
+            Some(value) => unsafe { std::env::set_var("DISKEDIT_SYSFS_ROOT", value) },
+            None => unsafe { std::env::remove_var("DISKEDIT_SYSFS_ROOT") },
+        }
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
