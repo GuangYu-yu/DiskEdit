@@ -346,6 +346,11 @@ fn build(
                 .get(1)
                 .map(|text| parse_size(text))
                 .transpose()?;
+            // 离线形态把文件系统撑满分区，没有尺寸参数；尺寸只在挂载点在线形态出现，
+            // 这里拒绝，避免"报成功却没扩到请求尺寸"。
+            if partition.is_some() && bytes.is_some() {
+                return Err("离线 resizefs 不接受尺寸参数：它把文件系统撑满所在分区".to_owned());
+            }
             finish(
                 Request::new(target, Command::Resizefs { partition, bytes }),
                 false,

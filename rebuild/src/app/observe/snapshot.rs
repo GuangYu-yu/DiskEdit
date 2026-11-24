@@ -110,7 +110,7 @@ pub fn observe(request: &Request, platform: &dyn Platform) -> Snapshot {
         generation,
     );
     let topology = match request.command() {
-        super::Command::Resizefs { .. } | super::Command::Resize(_) => {
+        super::Command::Resize(_) => {
             filesystem::observe_sizes(platform, target, &topology, &disk, generation)
         }
         super::Command::Info
@@ -124,6 +124,7 @@ pub fn observe(request: &Request, platform: &dyn Platform) -> Snapshot {
         | super::Command::Set { .. }
         | super::Command::Check { .. }
         | super::Command::Mkfs { .. }
+        | super::Command::Resizefs { .. }
         | super::Command::Recover(_)
         | super::Command::New { .. }
         | super::Command::Add(_) => topology,
