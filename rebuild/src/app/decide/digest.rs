@@ -200,11 +200,13 @@ fn encode_kind(out: &mut Vec<u8>, kind: &StepKind) {
             partition,
             offset_sectors,
             chunk,
+            ntfs_hidden,
         } => {
             out.push(15);
             out.extend_from_slice(&partition.to_le_bytes());
             out.extend_from_slice(&offset_sectors.to_le_bytes());
             out.extend_from_slice(&chunk.to_le_bytes());
+            out.push(u8::from(*ntfs_hidden));
         }
         StepKind::RefreshKernelView => out.push(16),
         StepKind::RecoverRecords { mode } => {

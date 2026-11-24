@@ -3,6 +3,7 @@
 //! 表格式、复制与搬移直接经写通道落盘；文件系统操作在写前闸口通过后，由
 //! [`filesystem`] 在分区设备视图上运行外部工具，并回读目标字节核对结果。
 
+pub mod boot;
 pub mod copy;
 pub mod entries;
 pub mod filesystem;
@@ -111,7 +112,9 @@ pub fn apply(
             sectors,
             chunk,
         } => copy::apply(*source, *start_lba, *sectors, *chunk, channel, token, ctx),
-        StepKind::MovePartition { chunk, .. } => {
+        StepKind::MovePartition {
+            chunk, ntfs_hidden, ..
+        } => {
             let (source, destination) = match regions {
                 [source, destination] => (*source, *destination),
                 _ => {
@@ -122,7 +125,11 @@ pub fn apply(
             };
             let binding = relocate::Binding::new(source, destination, *chunk)?;
             relocate::apply(binding, channel, token, relocate::RelocateFaults::default())?;
-            relocate::verify(binding, channel)
+            relocate::verify(binding, channel)?;
+            if *ntfs_hidden {
+                boot::fix_ntfs_hidden(channel, token, destination, ctx.sector)?;
+            }
+            Ok(())
         }
         StepKind::SetProperty {
             property: SetProperty::Label | SetProperty::Uuid,

@@ -3,6 +3,9 @@
 //! 新起点由 `--start` 与 `--align` 折算；新区间必须落在可用范围内且不与其它
 //! 分区重叠。计划声明旧区间与新区间两块写区。
 
+use diskedit_core::evidence::Observation;
+use diskedit_core::fs::{ContentKind, FsKind};
+
 use super::common::{admission, capacity};
 use super::plan::Plan;
 use super::refusal::Refusal;
@@ -76,12 +79,21 @@ pub fn plan(snapshot: &Snapshot, request: &MoveRequest) -> Result<Plan, Refusal>
     .map_err(|_| Refusal::ArgumentOutOfRange {
         what: "平移距离超出表示范围".to_owned(),
     })?;
+    // 已识别的 NTFS 卷在平移后要修正引导扇区；内容未知时不做这个假设。
+    let ntfs_hidden = matches!(
+        &facts.content,
+        Observation::Known {
+            value: ContentKind::Filesystem(FsKind::Ntfs),
+            ..
+        }
+    );
     let steps = vec![
         Step::new(
             StepKind::MovePartition {
                 partition,
                 offset_sectors,
                 chunk: request.chunk.unwrap_or(DEFAULT_CHUNK).max(1),
+                ntfs_hidden,
             },
             vec![old, new],
         ),

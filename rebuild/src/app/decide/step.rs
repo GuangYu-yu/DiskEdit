@@ -93,6 +93,8 @@ pub enum StepKind {
         partition: u32,
         offset_sectors: i64,
         chunk: u64,
+        /// 目标内容已识别为 NTFS：平移后修正主备引导扇区里的 `HiddenSectors`。
+        ntfs_hidden: bool,
     },
     /// 让内核重读分区表与块设备尺寸。
     RefreshKernelView,

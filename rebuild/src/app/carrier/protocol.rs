@@ -13,8 +13,8 @@ use serde_json::{Value, json};
 use crate::app::decide::step::StepKind;
 use crate::app::observe::{SetProperty, TableFormat};
 
-/// 协议版本。
-pub const VERSION: u64 = 3;
+/// 协议版本。搬移步骤携带 `ntfs_hidden` 后升到 4。
+pub const VERSION: u64 = 4;
 /// 单帧最大字节数。
 pub const MAX_FRAME: usize = 1 << 20;
 
@@ -335,11 +335,13 @@ fn encode_kind(kind: &StepKind) -> Result<Value, String> {
             partition,
             offset_sectors,
             chunk,
+            ntfs_hidden,
         } => json!({
             "kind": "move-partition",
             "partition": partition,
             "offset_sectors": offset_sectors,
             "chunk": chunk,
+            "ntfs_hidden": ntfs_hidden,
         }),
         StepKind::Inspect
         | StepKind::Check { .. }
@@ -413,6 +415,7 @@ fn decode_kind(frame: &Value) -> Result<StepKind, String> {
             partition: number_u32(frame, "partition")?,
             offset_sectors: number_i64(frame, "offset_sectors")?,
             chunk: number_u64(frame, "chunk")?,
+            ntfs_hidden: boolean(frame, "ntfs_hidden")?,
         },
         other => return Err(format!("未知的步骤 {other}")),
     };
@@ -486,6 +489,13 @@ fn optional_text(frame: &Value, name: &str) -> Result<Option<String>, String> {
         Some(Value::String(value)) => Ok(Some(value.clone())),
         Some(_) => Err(format!("{name} 必须是字符串或 null")),
     }
+}
+
+fn boolean(frame: &Value, name: &str) -> Result<bool, String> {
+    frame
+        .get(name)
+        .and_then(Value::as_bool)
+        .ok_or_else(|| format!("缺少布尔字段 {name}"))
 }
 
 fn number_u64(frame: &Value, name: &str) -> Result<u64, String> {
@@ -606,6 +616,7 @@ mod tests {
             partition: 1,
             offset_sectors: -512,
             chunk: 1 << 20,
+            ntfs_hidden: true,
         });
     }
 

@@ -39,7 +39,7 @@ fn worker_handshake_and_shutdown() {
     let boot = read_frame(&mut stdout);
     assert_eq!(boot["type"], "boot");
     let hello = serde_json::json!({
-        "v": 3,
+        "v": 4,
         "type": "hello",
         "token": "token",
         "binary_version": env!("CARGO_PKG_VERSION"),
@@ -58,7 +58,7 @@ fn worker_handshake_and_shutdown() {
     assert_eq!(ready["sector_size"], 512);
     let sid = ready["sid"].as_str().expect("会话号").to_owned();
 
-    let shutdown = serde_json::json!({ "v": 3, "type": "shutdown", "sid": sid });
+    let shutdown = serde_json::json!({ "v": 4, "type": "shutdown", "sid": sid });
     writeln!(stdin, "{shutdown}").expect("写收尾");
     stdin.flush().expect("刷新");
     let bye = read_frame(&mut stdout);
