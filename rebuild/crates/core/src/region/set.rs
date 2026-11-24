@@ -275,7 +275,7 @@ mod tests {
         let top = region(u64::MAX - 1, u64::MAX);
         assert_eq!(top.len(), 1);
         assert!(top.contains_offset(u64::MAX - 1));
-        assert_eq!(Region::sized(u64::MAX, 1).is_err(), true);
+        assert!(Region::sized(u64::MAX, 1).is_err());
     }
 
     #[test]

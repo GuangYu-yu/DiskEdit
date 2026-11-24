@@ -1,25 +1,13 @@
-//! 观察层：把一次请求与宿主端口转成不可变的事实快照。
+//! 已解析的用户意图。
 //!
-//! 快照里每条事实都是 [`Observation`]，带来源与观测代次；读不到、判不出记
-//! `Unknown`，不折叠成默认值或空集合。本层只读目标，不写盘、不做判定；文件
-//! 系统尺寸需要运行只读探测程序取得，探测本身不改动目标。
-
-pub mod disk;
-pub mod filesystem;
-pub mod identity;
-pub mod snapshot;
-pub mod table;
-pub mod tools;
+//! 只承载命令与参数，不含任何目标事实；观察层在 S1 起把请求与宿主端口合成为
+//! 不可变的事实快照，判定层只消费快照。这里的类型在解析之后不再变化。
 
 use std::path::{Path, PathBuf};
 
 use diskedit_core::evidence::Generation;
 use diskedit_core::fs::MkfsKind;
 use diskedit_core::table::Guid;
-
-use crate::platform::TargetHandle;
-
-pub use snapshot::{Snapshot, observe};
 
 /// 分区表格式。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -56,8 +44,6 @@ impl TargetSpec {
 }
 
 /// 已解析的用户意图。
-///
-/// 只承载命令与参数，不含任何目标事实；打开、识别与判定都发生在后续层。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Request {
     target: Option<TargetSpec>,
@@ -92,7 +78,6 @@ impl Request {
         self
     }
 
-    /// 替换目标：挂载点形态在平台反查后改写为整盘目标加分区选择器。
     /// 用户声明的身份名（`--identity`）：仅用于自动身份不可得的目标。
     pub fn with_identity(mut self, identity: Option<String>) -> Self {
         self.identity = identity;
@@ -237,7 +222,7 @@ pub enum StartSpec {
     Align,
 }
 
-/// `set` 的六种属性形态。
+/// `set` 的属性形态。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SetAction {
     Name(String),
@@ -270,27 +255,3 @@ pub enum SetProperty {
 
 /// 首次观察使用的代次。执行期重探所得代次不得早于此值。
 pub const FIRST_GENERATION: Generation = Generation::new(1);
-
-/// 从目标按偏移读满一段。
-///
-/// 短读与 I/O 失败都折算成不可判定的原因文本：调用方据此产出 `Unknown`，
-/// 不把残缺字节当成正常内容继续解释。
-pub(super) fn read_exact_at(
-    handle: &dyn TargetHandle,
-    offset: u64,
-    len: usize,
-) -> Result<Vec<u8>, String> {
-    let mut buffer = vec![0u8; len];
-    let mut filled = 0;
-    while filled < buffer.len() {
-        let position = offset
-            .checked_add(filled as u64)
-            .ok_or_else(|| "read offset exceeds addressable bound".to_owned())?;
-        match handle.read_at(position, &mut buffer[filled..]) {
-            Ok(0) => return Err(format!("target ended early at offset {position}")),
-            Ok(read) => filled += read,
-            Err(error) => return Err(format!("failed to read at offset {position}: {error}")),
-        }
-    }
-    Ok(buffer)
-}

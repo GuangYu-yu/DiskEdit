@@ -5,19 +5,13 @@
 
 use std::ffi::OsString;
 
-pub mod carrier;
 pub mod cli;
 pub mod decide;
-pub mod docsgen;
 pub mod execute;
 pub mod observe;
 pub mod report;
 
 /// 运行一次进程调用，返回退出码。
 pub fn run(args: impl IntoIterator<Item = OsString>) -> u8 {
-    let args: Vec<OsString> = args.into_iter().collect();
-    if carrier::worker::invoked(&args) {
-        return carrier::worker::run();
-    }
     cli::dispatch(args)
 }

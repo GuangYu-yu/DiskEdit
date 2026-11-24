@@ -1,0 +1,33 @@
+{
+ "gate": "G6",
+ "kind": "lint",
+ "command": [
+  "python",
+  "plan/instruments/census.py",
+  "owners",
+  "--baseline",
+  "plan/baseline",
+  "--map",
+  "plan/baseline/refusal-map.tsv",
+  "--tests",
+  "tests",
+  "--due",
+  "plan/baseline/refusal-due.tsv"
+ ],
+ "exit_code": 1,
+ "commit": "31cb034",
+ "tree": "5c9c0e1bbffc2b6b",
+ "at": "2026-11-24T22:31:24+00:00",
+ "counts": {
+  "result_lines": 0,
+  "passed": 0,
+  "failed": 0,
+  "ignored": 0,
+  "not_applicable": 0
+ },
+ "ok": false,
+ "reasons": [
+  "命令退出码为 1"
+ ],
+ "log": "plan/evidence/G6.log"
+}

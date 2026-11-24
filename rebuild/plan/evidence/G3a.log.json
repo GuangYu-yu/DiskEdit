@@ -1,0 +1,24 @@
+{
+ "gate": "G3a",
+ "kind": "test",
+ "command": [
+  "cargo",
+  "test",
+  "--test",
+  "single_construction"
+ ],
+ "exit_code": 0,
+ "commit": "31cb034",
+ "tree": "5c9c0e1bbffc2b6b",
+ "at": "2026-11-24T22:31:19+00:00",
+ "counts": {
+  "result_lines": 1,
+  "passed": 2,
+  "failed": 0,
+  "ignored": 0,
+  "not_applicable": 0
+ },
+ "ok": true,
+ "reasons": [],
+ "log": "plan/evidence/G3a.log"
+}

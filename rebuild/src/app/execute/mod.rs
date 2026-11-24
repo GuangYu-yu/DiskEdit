@@ -1,36 +1,21 @@
-//! 执行：把已确认的计划变成目标字节，并把过程写进持久记录。
+//! 执行层的基础类型：状态机、写入令牌与唯一写通道。
 //!
-//! 执行只接收 [`ConfirmedPlan`] 与独占句柄；写入必须先有记录原像，再经唯一写
-//! 通道落到声明区间内，最后回读核对。失败落在哪一状态由 [`ExecutionState`]
-//! 决定，报告层只读终态，不猜过程。
-//!
-//! [`ConfirmedPlan`]: crate::app::decide::ConfirmedPlan
+//! 执行只接收已确认的计划与独占句柄；写入必须先有记录原像，再经唯一写通道落到
+//! 声明区间内。具体步骤的执行器按纵切逐个接入，这里只固定所有写路径共用的
+//! 约束。
 
-pub mod check;
 pub mod digest;
-pub mod lvm;
-pub mod online;
 pub mod postcondition;
-pub mod records;
-pub mod recover;
-pub mod relocate;
 pub mod state;
-pub mod steps;
 pub mod token;
 pub mod transaction;
 pub mod write;
 
-use std::path::Path;
-
-use diskedit_core::region::Region;
-
-use crate::app::decide::ConfirmedPlan;
-use crate::app::decide::step::StepKind;
-use crate::platform::{Platform, PlatformError, TargetHandle};
-
-pub use state::ExecutionState;
+pub use state::{ExecutionState, StateMachine, TransitionError};
 pub use token::Recorded;
 pub use write::WriteChannel;
+
+use crate::platform::PlatformError;
 
 /// 执行期错误；报告层按变体给出退出码。
 #[derive(Debug)]
@@ -49,9 +34,7 @@ pub enum ExecError {
     Io(String),
     /// 回读结果与写入不一致。
     Postcondition(String),
-    /// 一致性检查器报告问题；这是检查结论，不是本实现的失败。
-    Check(String),
-    /// 故障注入；仅测试使用。
+    /// 故障注入：模拟写入中途被打断。
     Injected(String),
 }
 
@@ -71,7 +54,6 @@ impl std::fmt::Display for ExecError {
             | Self::InvalidPlan(why)
             | Self::Io(why)
             | Self::Postcondition(why)
-            | Self::Check(why)
             | Self::Injected(why) => f.write_str(why),
         }
     }
@@ -93,6 +75,8 @@ pub enum FailureKind {
 }
 
 /// 一次执行的结果。
+///
+/// 字段私有且只能经状态机方法产出，调用方无法拼出一个"看起来已提交"的结果。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Outcome {
     state: ExecutionState,
@@ -114,12 +98,12 @@ impl Outcome {
     }
 
     /// 完成且无保留。
-    pub(crate) fn completed() -> Self {
+    pub fn completed() -> Self {
         Self::new(ExecutionState::Committed, None, None)
     }
 
     /// 未写目标字节的失败。
-    pub(crate) fn unwritten(failure: FailureKind, reason: impl Into<String>) -> Self {
+    pub fn unwritten(failure: FailureKind, reason: impl Into<String>) -> Self {
         Self::new(
             ExecutionState::Unwritten,
             Some(failure),
@@ -128,7 +112,7 @@ impl Outcome {
     }
 
     /// 已写目标字节而事务未收尾。
-    pub(crate) fn needs_recovery(reason: impl Into<String>) -> Self {
+    pub fn needs_recovery(reason: impl Into<String>) -> Self {
         Self::new(
             ExecutionState::NeedsRecovery,
             Some(FailureKind::NeedsRecovery),
@@ -137,7 +121,7 @@ impl Outcome {
     }
 
     /// 写入完成但内核视图未同步。
-    pub(crate) fn committed_unsynced(reason: impl Into<String>) -> Self {
+    pub fn committed_unsynced(reason: impl Into<String>) -> Self {
         Self::new(
             ExecutionState::CommittedUnsynced,
             Some(FailureKind::NeedsRecovery),
@@ -162,68 +146,29 @@ impl Outcome {
     }
 }
 
-/// 故障注入点；生产路径全部为 `false`。
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Faults {
-    /// 写目标字节之前中断。
-    pub before_write: bool,
-    /// 写入过程中中断。
-    pub mid_write: bool,
-    /// 全部写入完成后、提交记录之前中断。
-    pub after_write: bool,
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-impl Faults {
-    pub const NONE: Self = Self {
-        before_write: false,
-        mid_write: false,
-        after_write: false,
-    };
-}
-
-/// 执行入口。
-pub fn execute(
-    confirmed: &ConfirmedPlan,
-    platform: &dyn Platform,
-    target: &Path,
-    generation: u64,
-) -> Outcome {
-    if online::flow::step(confirmed).is_some() {
-        return online::flow::run(confirmed, platform, Faults::NONE);
+    #[test]
+    fn unwritten_outcomes_carry_their_failure() {
+        let outcome = Outcome::unwritten(FailureKind::Refused, "no");
+        assert_eq!(outcome.state(), ExecutionState::Unwritten);
+        assert_eq!(outcome.failure(), Some(FailureKind::Refused));
+        assert_eq!(outcome.reason(), Some("no"));
+        assert!(!outcome.succeeded());
     }
-    transaction::run(confirmed, platform, target, generation, Faults::NONE)
-}
 
-/// 带故障注入的执行入口；仅测试与仪器使用。
-pub fn execute_with_faults(
-    confirmed: &ConfirmedPlan,
-    platform: &dyn Platform,
-    target: &Path,
-    generation: u64,
-    faults: Faults,
-) -> Outcome {
-    if online::flow::step(confirmed).is_some() {
-        return online::flow::run(confirmed, platform, faults);
+    #[test]
+    fn recovery_outcomes_are_not_success() {
+        let outcome = Outcome::needs_recovery("interrupted");
+        assert_eq!(outcome.state(), ExecutionState::NeedsRecovery);
+        assert!(!outcome.succeeded());
     }
-    transaction::run(confirmed, platform, target, generation, faults)
-}
 
-/// 工作进程执行宿主委托的一步。
-///
-/// 原像已由宿主在发送之前落盘；这里只写目标、提交缓存并回读核对，不触碰记录。
-pub fn apply_delegated(
-    platform: &dyn Platform,
-    target: &Path,
-    handle: &mut dyn TargetHandle,
-    kind: &StepKind,
-    regions: &[Region],
-    ctx: &steps::Context<'_>,
-) -> Result<(), ExecError> {
-    steps::precheck(kind, ctx)?;
-    let token = Recorded::delegated();
-    let mut channel = WriteChannel::new(handle, regions);
-    let host = steps::Host { platform, target };
-    steps::apply(kind, regions, &mut channel, &token, ctx, &host)?;
-    channel.barrier()?;
-    postcondition::verify(&channel)
+    #[test]
+    fn completed_is_the_only_success() {
+        assert!(Outcome::completed().succeeded());
+        assert!(!Outcome::committed_unsynced("unsynced").succeeded());
+    }
 }

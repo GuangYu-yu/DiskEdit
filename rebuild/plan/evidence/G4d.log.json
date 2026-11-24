@@ -1,0 +1,24 @@
+{
+ "gate": "G4d",
+ "kind": "test",
+ "command": [
+  "cargo",
+  "test",
+  "--test",
+  "residue"
+ ],
+ "exit_code": 0,
+ "commit": "31cb034",
+ "tree": "5c9c0e1bbffc2b6b",
+ "at": "2026-11-24T22:31:23+00:00",
+ "counts": {
+  "result_lines": 1,
+  "passed": 3,
+  "failed": 0,
+  "ignored": 0,
+  "not_applicable": 0
+ },
+ "ok": true,
+ "reasons": [],
+ "log": "plan/evidence/G4d.log"
+}

@@ -186,7 +186,11 @@ mod tests {
         let bytes = bytes_with(&all[..2]);
         match recover(&bytes, TARGET) {
             RecoveryPlan::Replay { frames } => assert_eq!(frames, all[..2].to_vec()),
-            other => panic!("expected replay, got {other:?}"),
+            RecoveryPlan::Absent
+            | RecoveryPlan::Committed
+            | RecoveryPlan::RollBack { .. }
+            | RecoveryPlan::Foreign { .. }
+            | RecoveryPlan::NeedsManual { .. } => panic!("expected replay"),
         }
     }
 
@@ -196,7 +200,11 @@ mod tests {
         let bytes = bytes_with(&all[..1]);
         match recover(&bytes, TARGET) {
             RecoveryPlan::RollBack { frames } => assert_eq!(frames, all[..1].to_vec()),
-            other => panic!("expected rollback, got {other:?}"),
+            RecoveryPlan::Absent
+            | RecoveryPlan::Committed
+            | RecoveryPlan::Replay { .. }
+            | RecoveryPlan::Foreign { .. }
+            | RecoveryPlan::NeedsManual { .. } => panic!("expected rollback"),
         }
     }
 
@@ -226,7 +234,11 @@ mod tests {
         let plan = recover(&bytes, TARGET);
         match plan {
             RecoveryPlan::Replay { frames } => assert_eq!(frames, all[..2].to_vec()),
-            other => panic!("expected replay from the intact prefix, got {other:?}"),
+            RecoveryPlan::Absent
+            | RecoveryPlan::Committed
+            | RecoveryPlan::RollBack { .. }
+            | RecoveryPlan::Foreign { .. }
+            | RecoveryPlan::NeedsManual { .. } => panic!("expected replay from the intact prefix"),
         }
     }
 

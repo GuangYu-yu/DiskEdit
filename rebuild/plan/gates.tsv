@@ -16,19 +16,19 @@ G2b	 model	lint	1	 	 	cargo clippy --workspace --all-targets -- -D warnings
 G2c	 model	build	1	 	 	cargo check --workspace --all-targets
 # ---- 模型跑：每个纵切 ----
 # 全集门 G1b、G6b 不参与纵切；纵切只跑 G6（本轮 due 行）。交付前跑全集。
-G3a	 model	test	待钉	 	 	cargo test --test single_construction
-G3b	 model	test	待钉	 	 	cargo test --test layer_direction
-G3c	 model	test	待钉	 	 	cargo test --test inventory
-G3d	 model	test	待钉	 	 	cargo test --test ui
-G4a	 model	test	待钉	 	 	cargo test -p diskedit-core
-G4b	 model	test	待钉	 	 	cargo test --test contract
-G4c	 model	test	待钉	 	 	cargo test --test case_runner
-G4d	 model	test	待钉	 	 	cargo test --test residue
-G5a	 model	test	待钉	 	 	cargo test --test contract_surface
+G3a	 model	test	2	 	 	cargo test --test single_construction
+G3b	 model	test	4	 	 	cargo test --test layer_direction
+G3c	 model	test	3	 	 	cargo test --test inventory
+G3d	 model	test	1	 	 	cargo test --test ui
+G4a	 model	test	117	 	 	cargo test -p diskedit-core
+G4b	 model	test	4	 	 	cargo test --test contract
+G4c	 model	test	1	 	 	cargo test --test case_runner
+G4d	 model	test	3	 	 	cargo test --test residue
+G5a	 model	test	1	 	 	cargo test --test contract_surface
 G5b	 model	lint	1	 	target/command-surface.json	python plan/instruments/census.py surface --old ../src --new target/command-surface.json --allow plan/baseline/surface-allowed.txt
 G6	 model	lint	1	 	plan/baseline/refusal-due.tsv	python plan/instruments/census.py owners --baseline plan/baseline --map plan/baseline/refusal-map.tsv --tests tests --due plan/baseline/refusal-due.tsv
 G6b	 model	lint	1	 	plan/baseline/refusal-map.tsv	python plan/instruments/census.py owners --baseline plan/baseline --map plan/baseline/refusal-map.tsv --tests tests
 # ---- 人跑：每个纵切结束后一条命令（需要 root、镜像、文件系统工具、旧版二进制）----
-G7	 human	test	待钉	DISKEDIT_BASELINE	 	cargo test --test equivalence
-G8	 human	test	待钉	 	 	cargo test
+G7	 human	test	1	DISKEDIT_BASELINE	 	cargo test --test equivalence
+G8	 human	test	35	 	 	cargo test
 G8b	 human	build	1	 	 	cargo build --release

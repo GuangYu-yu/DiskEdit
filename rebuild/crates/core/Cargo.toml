@@ -1,5 +1,5 @@
 [package]
-name = "diskedit_core"
+name = "diskedit-core"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
@@ -7,6 +7,7 @@ description = "Pure computational core of DiskEdit: regions, geometry, partition
 license = "MIT"
 
 [lib]
+name = "diskedit_core"
 path = "src/lib.rs"
 
 [dependencies]

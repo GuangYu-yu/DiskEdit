@@ -1,0 +1,24 @@
+{
+ "gate": "G4c",
+ "kind": "test",
+ "command": [
+  "cargo",
+  "test",
+  "--test",
+  "case_runner"
+ ],
+ "exit_code": 0,
+ "commit": "31cb034",
+ "tree": "5c9c0e1bbffc2b6b",
+ "at": "2026-11-24T22:31:22+00:00",
+ "counts": {
+  "result_lines": 1,
+  "passed": 1,
+  "failed": 0,
+  "ignored": 0,
+  "not_applicable": 0
+ },
+ "ok": true,
+ "reasons": [],
+ "log": "plan/evidence/G4c.log"
+}

@@ -24,7 +24,7 @@ name = "diskedit"
 path = "src/main.rs"
 
 [dependencies]
-diskedit_core = { path = "crates/core" }
+diskedit_core = { package = "diskedit-core", path = "crates/core" }
 libc = "0.2"
 serde_json = "1"
 sha2 = "0.10"

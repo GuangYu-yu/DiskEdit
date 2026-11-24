@@ -14,16 +14,11 @@ pub struct Recorded {
 
 impl Recorded {
     /// 由事务模块铸造；`Mint` 只能在其定义模块内构造，因此别处无法仿造令牌。
+    ///
+    /// S5 接线事务后即被调用；在那之前保留铸造端，避免把令牌做成公开构造。
+    #[allow(dead_code)]
     pub(crate) const fn mint(_mint: &Mint, sequence: u64) -> Self {
         Self { sequence }
-    }
-
-    /// 来宾执行宿主委托的步骤。
-    ///
-    /// 宿主在发送步骤之前已经把原像落盘，工作进程拿到的是"原像已登记"这一事实
-    /// 的委托，而不是自行登记的权利；它不读写记录目录。
-    pub(crate) const fn delegated() -> Self {
-        Self { sequence: 0 }
     }
 
     /// 该令牌对应的帧序号。

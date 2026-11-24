@@ -62,7 +62,7 @@ mod tests {
     fn extremes_do_not_wrap() {
         assert_eq!(up(u64::MAX, 4096), Err(GeometryError::Overflow));
         assert_eq!(up(u64::MAX - 4095, 4096), Ok(u64::MAX - 4095));
-        assert_eq!(down(u64::MAX, 4096), Ok(u64::MAX & !4095));
+        assert_eq!(down(u64::MAX, 4096), Ok(!4095));
         assert!(is_aligned(u64::MAX - 4095, 4096));
         assert!(!is_aligned(1, 0));
     }

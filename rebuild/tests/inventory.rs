@@ -1,96 +1,79 @@
-//! 入口矩阵与 lint 登记：每个声明过的入口恰好有一行，声明缺行即失败。
+//! 入口矩阵与 lint 登记：每个声明过的入口恰好有一行，并且有唯一的纵切归属。
 
 use std::collections::BTreeSet;
 
 use diskedit::app::cli::declared_entries;
 
-/// 一个入口在判定层与报告层的落点。新增入口必须在这里补行。
+/// 一个入口的纵切归属；新增入口必须在这里补行。
 struct Entry {
     command: &'static str,
-    decision: &'static str,
-    report: &'static str,
+    slice: &'static str,
 }
 
 const ENTRIES: &[Entry] = &[
     Entry {
         command: "info",
-        decision: "decide::info::plan",
-        report: "report::json::info",
+        slice: "S1",
     },
     Entry {
         command: "inspect",
-        decision: "decide::inspect::plan",
-        report: "report::json::inspect",
+        slice: "S1",
     },
     Entry {
         command: "records list",
-        decision: "decide::records::list",
-        report: "report::json::records",
+        slice: "S1",
     },
     Entry {
         command: "records verify",
-        decision: "decide::records::verify",
-        report: "report::json::records",
+        slice: "S1",
     },
     Entry {
         command: "records scan",
-        decision: "decide::records::scan",
-        report: "report::json::records",
-    },
-    Entry {
-        command: "resize",
-        decision: "decide::resize::plan",
-        report: "report::text::outcome",
-    },
-    Entry {
-        command: "move",
-        decision: "decide::move_partition::plan",
-        report: "report::text::outcome",
-    },
-    Entry {
-        command: "copy",
-        decision: "decide::copy::plan",
-        report: "report::text::outcome",
-    },
-    Entry {
-        command: "delete",
-        decision: "decide::delete::plan",
-        report: "report::text::outcome",
-    },
-    Entry {
-        command: "set",
-        decision: "decide::set::plan",
-        report: "report::text::outcome",
+        slice: "S1",
     },
     Entry {
         command: "check",
-        decision: "decide::check::plan",
-        report: "report::json::check",
-    },
-    Entry {
-        command: "mkfs",
-        decision: "decide::mkfs::plan",
-        report: "report::text::outcome",
-    },
-    Entry {
-        command: "resizefs",
-        decision: "decide::resizefs::plan",
-        report: "report::text::outcome",
-    },
-    Entry {
-        command: "recover",
-        decision: "decide::recover::plan",
-        report: "report::text::outcome",
+        slice: "S1",
     },
     Entry {
         command: "new",
-        decision: "decide::new::plan",
-        report: "report::text::outcome",
+        slice: "S2",
     },
     Entry {
         command: "add",
-        decision: "decide::add::plan",
-        report: "report::text::outcome",
+        slice: "S3",
+    },
+    Entry {
+        command: "delete",
+        slice: "S3",
+    },
+    Entry {
+        command: "set",
+        slice: "S3",
+    },
+    Entry {
+        command: "move",
+        slice: "S4",
+    },
+    Entry {
+        command: "copy",
+        slice: "S4",
+    },
+    Entry {
+        command: "mkfs",
+        slice: "S5",
+    },
+    Entry {
+        command: "resizefs",
+        slice: "S5",
+    },
+    Entry {
+        command: "resize",
+        slice: "S6",
+    },
+    Entry {
+        command: "recover",
+        slice: "S7",
     },
 ];
 
@@ -105,7 +88,8 @@ fn entry_matrix_matches_the_declared_entries() {
 }
 
 #[test]
-fn every_entry_has_one_row_and_two_destinations() {
+fn every_entry_has_one_row_and_a_known_slice() {
+    const SLICES: &[&str] = &["S1", "S2", "S3", "S4", "S5", "S6", "S7"];
     let mut seen = BTreeSet::new();
     for entry in ENTRIES {
         assert!(
@@ -113,8 +97,12 @@ fn every_entry_has_one_row_and_two_destinations() {
             "入口 {} 在矩阵中有多行",
             entry.command
         );
-        assert!(!entry.decision.is_empty(), "{} 缺少判定落点", entry.command);
-        assert!(!entry.report.is_empty(), "{} 缺少报告落点", entry.command);
+        assert!(
+            SLICES.contains(&entry.slice),
+            "{} 的纵切归属 {} 不在 S1–S7 内",
+            entry.command,
+            entry.slice
+        );
     }
 }
 

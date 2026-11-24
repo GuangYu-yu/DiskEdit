@@ -1,0 +1,11 @@
+error[E0451]: fields `steps`, `digest` and `identity` of struct `ConfirmedPlan` are private
+ --> tests/ui/confirmed_plan_cannot_be_forged.rs:7:9
+  |
+6 |     let _plan = ConfirmedPlan {
+  |                 ------------- in this type
+7 |         steps: Vec::new(),
+  |         ^^^^^ private field
+8 |         digest: [0; 32],
+  |         ^^^^^^ private field
+9 |         identity: Fingerprint::strong([0; 32]),
+  |         ^^^^^^^^ private field

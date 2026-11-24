@@ -11,11 +11,6 @@ struct MintPoint {
 
 const MINT_POINTS: &[MintPoint] = &[
     MintPoint {
-        name: "Snapshot",
-        path: "src/app/observe/snapshot.rs",
-        source: include_str!("../src/app/observe/snapshot.rs"),
-    },
-    MintPoint {
         name: "Request",
         path: "src/app/observe/mod.rs",
         source: include_str!("../src/app/observe/mod.rs"),
@@ -51,14 +46,19 @@ const MINT_POINTS: &[MintPoint] = &[
         source: include_str!("../src/app/execute/token.rs"),
     },
     MintPoint {
+        name: "WriteChannel",
+        path: "src/app/execute/write.rs",
+        source: include_str!("../src/app/execute/write.rs"),
+    },
+    MintPoint {
         name: "ExecutionState",
         path: "src/app/execute/state.rs",
         source: include_str!("../src/app/execute/state.rs"),
     },
     MintPoint {
-        name: "Lease",
-        path: "src/platform/linux/source/lease.rs",
-        source: include_str!("../src/platform/linux/source/lease.rs"),
+        name: "Outcome",
+        path: "src/app/execute/mod.rs",
+        source: include_str!("../src/app/execute/mod.rs"),
     },
 ];
 

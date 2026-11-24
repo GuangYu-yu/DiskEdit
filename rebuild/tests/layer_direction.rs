@@ -1,4 +1,4 @@
-//! 结构仪器：依赖方向由 crate 图与可见性共同保证，此处核对 crate 图。
+//! 结构仪器：依赖方向由 crate 图与可见性共同保证，此处核对 crate 图与平台假设。
 
 use std::process::Command;
 
@@ -23,8 +23,8 @@ fn core_does_not_depend_on_the_package_root() {
     let packages = meta["packages"].as_array().expect("packages 应为数组");
     let core = packages
         .iter()
-        .find(|pkg| pkg["name"] == "diskedit_core")
-        .expect("工作区应包含 diskedit_core");
+        .find(|pkg| pkg["name"] == "diskedit-core")
+        .expect("工作区应包含 diskedit-core");
     let deps = core["dependencies"]
         .as_array()
         .expect("dependencies 应为数组");

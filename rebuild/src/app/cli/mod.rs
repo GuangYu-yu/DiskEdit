@@ -1,343 +1,112 @@
-//! 命令行层：声明式命令定义、`argv → Request`、帮助与用法错误。
+//! 命令行：声明命令面、渲染帮助与用法错误。
 //!
-//! 本层只把字面量解析成请求；观察、判定、执行与报告各由下层承担。用法错误一律
-//! 落退出码 [`report::exit::USAGE`]，且不打开目标。
+//! 命令面只有一张表（[`declare`]）；帮助与门禁导出都读它。S0 固定声明与进程级
+//! 出口（帮助、版本、用法错误），具体命令的解析与判定按纵切接入。
 
-mod parse;
-pub(crate) mod spec;
+pub mod declare;
 
 use std::ffi::OsString;
 
-use crate::app::decide::{Decision, Refusal, confirm, decide};
-use crate::app::execute;
-use crate::app::observe::{Command, PartitionSelector, Request, Snapshot, observe};
-use crate::app::report::{exit, json, text};
-use crate::platform::{self, Platform, PlatformError};
+use crate::app::report::exit;
 
-use parse::Invocation;
+pub use declare::declared_entries;
 
-/// 声明过的全部入口名，按声明顺序。
-pub fn declared_entries() -> impl Iterator<Item = &'static str> {
-    spec::SPECS.iter().map(|entry| entry.name)
-}
-
-/// 解析参数并返回退出码。
+/// 运行一次命令行调用，返回退出码。
 pub fn dispatch(args: impl IntoIterator<Item = OsString>) -> u8 {
-    let args: Vec<OsString> = args.into_iter().collect();
-    if args.get(1).is_some_and(|token| token == "help") {
-        return help(&args[2..]);
-    }
-    let invocation = match parse::parse(args) {
-        Ok(invocation) => invocation,
-        Err(message) if message.is_empty() => return 0,
-        Err(message) => {
-            eprintln!("{message}");
-            eprintln!("run `diskedit --help` for usage.");
-            return exit::USAGE;
-        }
-    };
-    run(invocation)
-}
-
-/// `diskedit help [CMD]`：没有名字或名字未知时打印全局帮助。
-fn help(rest: &[OsString]) -> u8 {
-    let query: Vec<String> = rest
-        .iter()
-        .map(|token| token.to_string_lossy().into_owned())
+    let argv: Vec<String> = args
+        .into_iter()
+        .skip(1)
+        .map(|argument| argument.to_string_lossy().into_owned())
         .collect();
-    if query.is_empty() {
-        spec::print_help();
+
+    if argv.first().is_some_and(|first| first == "help") {
+        return help_topic(&argv[1..]);
+    }
+    if let Some(position) = argv
+        .iter()
+        .position(|argument| argument == "--help" || argument == "-h")
+    {
+        let mut rest = argv.clone();
+        rest.remove(position);
+        return help_topic(&rest);
+    }
+    if argv.len() == 1 && (argv[0] == "--version" || argv[0] == "-V") {
+        println!("diskedit {}", env!("CARGO_PKG_VERSION"));
         return exit::SUCCESS;
     }
-    let name = query.join(" ");
-    if spec::print_command(&name) {
+    usage()
+}
+
+/// 一个帮助主题：空为顶层帮助，命令名可含空格（`records list`）。
+fn help_topic(words: &[String]) -> u8 {
+    if words.is_empty() {
+        print_help();
         return exit::SUCCESS;
     }
-    spec::print_help();
-    exit::USAGE
-}
-
-fn run(invocation: Invocation) -> u8 {
-    let platform = match platform::open() {
-        Ok(platform) => platform,
-        Err(error) => return platform_failure(&error),
-    };
-    if let Some(code) = reject_identity_on_identified(&invocation.request, &*platform) {
-        return code;
-    }
-    let snapshot = observe(&invocation.request, &*platform);
-    match decide(&invocation.request, &snapshot) {
-        Decision::Refuse { refusal } => {
-            eprintln!("{}", text::refusal(&refusal));
-            exit::exit_of_refusal(&refusal)
-        }
-        Decision::Plan { plan } => {
-            if plan.identity().is_none() {
-                return render_read_only(&invocation.request, &snapshot, &*platform);
-            }
-            if invocation.dry_run {
-                println!("dry-run: plan generated, nothing written to target");
-                return exit::SUCCESS;
-            }
-            let confirmed = match confirm(plan, invocation.yes, &snapshot.identity) {
-                Ok(confirmed) => confirmed,
-                Err(refusal) => {
-                    eprintln!("{}", text::refusal(&refusal));
-                    return exit::exit_of_refusal(&refusal);
-                }
-            };
-            let Some(target) = invocation.request.target() else {
-                eprintln!("write command is missing its target");
-                return exit::INTERNAL;
-            };
-            let outcome =
-                execute::execute(&confirmed, &*platform, target, snapshot.generation.get());
-            let label = target.display().to_string();
-            println!("{}", text::outcome(&outcome, &label, &label));
-            exit::exit_of(&outcome)
-        }
-    }
-}
-
-/// `--identity` 只对自动身份不可得的目标成立；目标自身已能稳定识别时明确拒绝，
-/// 不让声明名悄悄覆盖设备事实。
-fn reject_identity_on_identified(request: &Request, platform: &dyn Platform) -> Option<u8> {
-    let name = request.identity()?;
-    let target = request.target()?;
-    match platform.fingerprint(target) {
-        Ok(fingerprint)
-            if fingerprint.strength() == diskedit_core::fingerprint::Strength::Strong =>
-        {
-            eprintln!(
-                "--identity is only for block devices without an automatic identity; {} already has a stable identity, declared name {name} does not apply",
-                target.display()
-            );
-            Some(exit::USAGE)
-        }
-        _ => None,
-    }
-}
-
-/// 只读命令直接渲染快照，不进入执行。
-fn render_read_only(request: &Request, snapshot: &Snapshot, platform: &dyn Platform) -> u8 {
-    let target = request.target().map(|path| path.display().to_string());
-    match request.command() {
-        Command::Info => {
-            println!(
-                "{}",
-                json::info::render(target.as_deref().unwrap_or(""), snapshot)
-            );
+    let name = words.join(" ");
+    match declare::find(&name) {
+        Some(command) => {
+            print_command_help(command);
             exit::SUCCESS
         }
-        Command::Inspect => {
-            println!(
-                "{}",
-                json::inspect::render(target.as_deref().unwrap_or(""), snapshot)
-            );
-            exit::SUCCESS
-        }
-        Command::Check { partition } => {
-            render_check(request, snapshot, platform, *partition, target.as_deref())
-        }
-        Command::RecordsList => render_records(request, snapshot, platform),
-        Command::RecordsVerify { token } => {
-            render_records_verify(request, snapshot, platform, token)
-        }
-        Command::RecordsScan => render_records_scan(request, platform),
-        Command::Resize(_)
-        | Command::Move(_)
-        | Command::Copy(_)
-        | Command::Delete { .. }
-        | Command::Set { .. }
-        | Command::Mkfs { .. }
-        | Command::Resizefs { .. }
-        | Command::Recover(_)
-        | Command::New { .. }
-        | Command::Add(_) => {
-            eprintln!("this command has no read-only render path");
-            exit::INTERNAL
-        }
+        None => usage(),
     }
 }
 
-fn render_check(
-    request: &Request,
-    snapshot: &Snapshot,
-    platform: &dyn Platform,
-    selector: PartitionSelector,
-    target: Option<&str>,
-) -> u8 {
-    let Some(number) = resolve(snapshot, selector) else {
-        eprintln!(
+/// 顶层帮助：按分组列出入口与全部形态。
+fn print_help() {
+    println!("diskedit - disk / image editor");
+    for group in [declare::Group::Everyday, declare::Group::LowLevel] {
+        println!();
+        println!(
             "{}",
-            text::refusal(&Refusal::PartitionMissing { number: 0 })
+            match group {
+                declare::Group::Everyday => "Commands:",
+                declare::Group::LowLevel => "Low-level:",
+            }
         );
-        return exit::REFUSED;
-    };
-    let Some(facts) = snapshot.partition(number) else {
-        eprintln!("{}", text::refusal(&Refusal::PartitionMissing { number }));
-        return exit::REFUSED;
-    };
-    let Some(path) = request.target() else {
-        eprintln!("check requires a target");
-        return exit::INTERNAL;
-    };
-    let Some(sector) = snapshot.disk.sector_size.value().copied() else {
-        eprintln!("sector size unknown, cannot locate partition range");
-        return exit::INTERNAL;
-    };
-    let Some(content) = facts.content.value().copied() else {
-        eprintln!("partition content unknown, cannot choose a checker");
-        return exit::INTERNAL;
-    };
-    let offset = match facts.partition.start_lba.checked_mul(sector) {
-        Some(offset) => offset,
-        None => {
-            eprintln!("partition start exceeds the addressable limit");
-            return exit::INTERNAL;
-        }
-    };
-    let region = match diskedit_core::region::Region::sized(
-        offset,
-        facts.partition.sectors.saturating_mul(sector),
-    ) {
-        Ok(region) => region,
-        Err(error) => {
-            eprintln!("invalid partition range: {error:?}");
-            return exit::INTERNAL;
-        }
-    };
-    match execute::check::run(platform, path, number, region, content) {
-        Ok(report) => {
-            println!(
-                "{}",
-                json::check::render(target.unwrap_or(""), facts, &report)
-            );
-            exit::SUCCESS
-        }
-        Err(execute::ExecError::Check(why)) => {
-            eprintln!("{why}");
-            exit::REFUSED
-        }
-        Err(error) => exec_failure(&error),
-    }
-}
-
-fn render_records(request: &Request, snapshot: &Snapshot, platform: &dyn Platform) -> u8 {
-    let Some(target) = request.target() else {
-        println!("{}", json::records::render_unavailable());
-        return exit::SUCCESS;
-    };
-    let Some(identity) = strong_identity(snapshot) else {
-        return identity_unprovable();
-    };
-    match execute::records::list(platform, target, identity) {
-        Ok(rows) => {
-            println!("{}", json::records::render(&rows));
-            exit::SUCCESS
-        }
-        Err(error) => exec_failure(&error),
-    }
-}
-
-fn render_records_verify(
-    request: &Request,
-    snapshot: &Snapshot,
-    platform: &dyn Platform,
-    token: &str,
-) -> u8 {
-    let Some(target) = request.target() else {
-        eprintln!("records verify requires a target to locate the record directory");
-        return exit::REFUSED;
-    };
-    let Some(identity) = strong_identity(snapshot) else {
-        return identity_unprovable();
-    };
-    match execute::records::verify(platform, target, identity, token) {
-        Ok(report) => {
-            use execute::records::VerifyVerdict;
-            let verdict = report.verdict;
-            println!("{}", json::records::render_verify(&report));
-            match verdict {
-                VerifyVerdict::Valid | VerifyVerdict::Unfinished => exit::SUCCESS,
-                VerifyVerdict::Unusable | VerifyVerdict::NotFound | VerifyVerdict::NotUnique => {
-                    exit::REFUSED
-                }
+        for command in declare::COMMANDS
+            .iter()
+            .filter(|command| command.group == group)
+        {
+            println!("  {:14} {}", command.name, command.summary);
+            for variant in command.variants {
+                println!("      diskedit {} {}", command.name, variant.syntax);
             }
         }
-        Err(error) => exec_failure(&error),
     }
 }
 
-fn render_records_scan(request: &Request, platform: &dyn Platform) -> u8 {
-    let Some(root) = request.target() else {
-        eprintln!("records scan requires a container root");
-        return exit::REFUSED;
-    };
-    match execute::records::scan(platform, root) {
-        Ok(rows) => {
-            println!(
-                "{}",
-                json::records::render_scan(&root.display().to_string(), &rows)
-            );
-            exit::SUCCESS
-        }
-        Err(error) => {
-            eprintln!("{error}");
-            exit::REFUSED
+/// 单个命令的帮助；与顶层帮助读同一张声明表。
+fn print_command_help(command: &declare::CommandDef) {
+    for variant in command.variants {
+        println!("diskedit {} {}", command.name, variant.syntax);
+    }
+    println!();
+    println!("  {}", command.summary);
+    let mut options: Vec<&str> = command.common_options.to_vec();
+    for variant in command.variants {
+        for option in variant.options {
+            if !options.contains(option) {
+                options.push(option);
+            }
         }
     }
-}
-
-fn strong_identity(snapshot: &Snapshot) -> Option<diskedit_core::fingerprint::Fingerprint> {
-    snapshot.identity.value().copied().filter(|fingerprint| {
-        fingerprint.strength() == diskedit_core::fingerprint::Strength::Strong
-    })
-}
-
-fn identity_unprovable() -> u8 {
-    eprintln!(
-        "{}",
-        text::refusal(&Refusal::IdentityUnprovable {
-            why: "cannot read target identity, cannot locate the record directory".to_owned(),
-        })
-    );
-    exit::UNSUPPORTED
-}
-
-fn exec_failure(error: &execute::ExecError) -> u8 {
-    match error {
-        execute::ExecError::Platform(error) => platform_failure(error),
-        execute::ExecError::Record(_)
-        | execute::ExecError::IdentityChanged(_)
-        | execute::ExecError::Unsupported(_)
-        | execute::ExecError::InvalidPlan(_)
-        | execute::ExecError::Io(_)
-        | execute::ExecError::Postcondition(_)
-        | execute::ExecError::Check(_)
-        | execute::ExecError::Injected(_) => {
-            eprintln!("{error}");
-            exit::ENVIRONMENT
+    options.sort_unstable();
+    if !options.is_empty() {
+        println!();
+        println!("options:");
+        for option in options {
+            println!("    {option}");
         }
     }
 }
 
-fn resolve(snapshot: &Snapshot, selector: PartitionSelector) -> Option<u32> {
-    match selector {
-        PartitionSelector::Number(number) => Some(number),
-        PartitionSelector::Last => snapshot
-            .contents()?
-            .iter()
-            .map(|facts| facts.partition.number)
-            .max(),
+/// 用法错误：打到 stderr，退出 2。
+fn usage() -> u8 {
+    eprintln!("diskedit - disk / image editor");
+    for command in declare::COMMANDS {
+        eprintln!("  {:14} {}", command.name, command.summary);
     }
-}
-
-fn platform_failure(error: &PlatformError) -> u8 {
-    eprintln!("{error}");
-    if error.io_kind().is_some() {
-        exit::ENVIRONMENT
-    } else {
-        exit::UNSUPPORTED
-    }
+    exit::USAGE
 }
