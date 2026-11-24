@@ -482,6 +482,13 @@ pub struct RecordEntry {
     pub active: bool,
 }
 
+/// 一个记录目录及其中条目。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RecordDir {
+    pub location: PathBuf,
+    pub entries: Vec<RecordEntry>,
+}
+
 /// 目标对应的记录目录。
 ///
 /// 目录位置与目录权限由平台决定；上层只按 `load`/`store`/`clear`/`quarantine`
@@ -493,6 +500,8 @@ pub trait RecordStore {
     fn store(&mut self, bytes: &[u8]) -> PlatformResult<()>;
     fn clear(&mut self) -> PlatformResult<()>;
     fn entries(&self) -> PlatformResult<Vec<RecordEntry>>;
+    /// 读出目录中的一个条目；名字不是普通文件或读不出时返回错误。
+    fn read_entry(&self, name: &str) -> PlatformResult<Vec<u8>>;
     /// 把活跃记录改名归档，返回归档后的文件名。
     fn quarantine(&mut self) -> PlatformResult<String>;
 }
@@ -616,6 +625,19 @@ pub trait Platform {
     ) -> PlatformResult<Box<dyn RecordStore>> {
         let _ = (target, identity);
         Err(PlatformError::not_supported("该宿主不提供记录目录"))
+    }
+    /// 枚举 `root` 这个容器下的记录目录及其条目。
+    ///
+    /// `root` 是容器而不是单个记录目录；把记录目录当根、或指向状态根内部却没有
+    /// 指到容器，都返回 `NotSupported` 并说明正确位置。容器不存在时返回 I/O 错误。
+    fn record_dirs(&self, root: &Path) -> PlatformResult<Vec<RecordDir>> {
+        let _ = root;
+        Err(PlatformError::not_supported("该宿主不提供记录容器"))
+    }
+    /// 读出记录目录 `dir` 下名为 `name` 的条目。
+    fn read_record(&self, dir: &Path, name: &str) -> PlatformResult<Vec<u8>> {
+        let _ = (dir, name);
+        Err(PlatformError::not_supported("该宿主不提供记录读取"))
     }
 }
 

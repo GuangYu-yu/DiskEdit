@@ -21,7 +21,7 @@ fn case_table_runs_from_the_production_entry() {
         run_case(case);
         ran += 1;
     }
-    assert!(ran >= 12, "至少应有 12 条普通文件用例实际执行，实际 {ran}");
+    assert!(ran >= 14, "至少应有 14 条普通文件用例实际执行，实际 {ran}");
     eprintln!("case runner: {ran} 条执行，{not_applicable} 条 NotApplicable");
 }
 

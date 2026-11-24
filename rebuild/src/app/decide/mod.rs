@@ -45,7 +45,7 @@ pub fn decide(request: &Request, snapshot: &Snapshot) -> Decision {
         Command::Inspect => inspect::plan(),
         Command::Check { partition } => check::plan(snapshot, *partition),
         Command::RecordsList => records::list(),
-        Command::RecordsVerify { token } => records::verify(token.clone()),
+        Command::RecordsVerify { token } => records::verify(snapshot, token.clone()),
         Command::RecordsScan => records::scan(),
         Command::New { table, overwrite } => new::plan(snapshot, *table, *overwrite),
         Command::Add(request) => add::plan(snapshot, request),

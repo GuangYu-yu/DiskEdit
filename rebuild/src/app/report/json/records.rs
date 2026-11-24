@@ -1,21 +1,42 @@
 //! `records *` 的 JSON。
 //!
-//! 只输出记录目录中的条目：名称、字节数与是否为活跃记录。目录位置由平台端口
-//! 给出，本模块不拼路径。
+//! 条目按目录里实际的文件投影：路径、字节数、是否活跃，以及在严格解码后得到的
+//! 标识与结构判定。读不出的条目照样列出，判定写 `unreadable`，不折成空值。
 
-use crate::platform::RecordEntry;
+use crate::app::execute::records::{RecordRow, VerifyReport};
 
-use super::{array, number, object, quote};
+use super::{array, number, object, optional, quote};
 
 /// 渲染记录条目列表。
-pub fn render(entries: &[RecordEntry]) -> String {
-    object(&[("entries", array(entries.iter().map(entry).collect()))])
+pub fn render(rows: &[RecordRow]) -> String {
+    object(&[("entries", array(rows.iter().map(row).collect()))])
 }
 
-fn entry(entry: &RecordEntry) -> String {
+/// 渲染一次校验：命中的条目不单列，`records` 仍是整份目录视图。
+pub fn render_verify(report: &VerifyReport) -> String {
     object(&[
-        ("name", quote(&entry.name)),
-        ("bytes", number(entry.bytes)),
-        ("active", entry.active.to_string()),
+        ("id", quote(&report.token)),
+        ("verdict", quote(report.verdict.as_str())),
+        ("records", array(report.rows.iter().map(row).collect())),
+    ])
+}
+
+/// 渲染一次容器扫描。
+pub fn render_scan(root: &str, rows: &[RecordRow]) -> String {
+    object(&[
+        ("root", quote(root)),
+        ("complete", "true".to_owned()),
+        ("records", array(rows.iter().map(row).collect())),
+    ])
+}
+
+fn row(row: &RecordRow) -> String {
+    object(&[
+        ("path", quote(&row.path.display().to_string())),
+        ("name", quote(&row.name)),
+        ("bytes", number(row.bytes)),
+        ("active", row.active.to_string()),
+        ("id", optional(row.id.as_deref())),
+        ("state", quote(row.state.as_str())),
     ])
 }

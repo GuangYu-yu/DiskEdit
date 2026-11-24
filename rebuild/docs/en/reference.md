@@ -69,7 +69,7 @@ diskedit records scan <ROOT>
 
 | property | value | options |
 |---|---|---|
-| with or without a suffix | none | — |
+| no partition suffix | none | — |
 
 ### `resize`
 

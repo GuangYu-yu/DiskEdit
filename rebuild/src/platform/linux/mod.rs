@@ -306,6 +306,14 @@ impl Platform for Linux {
         )))
     }
 
+    fn record_dirs(&self, root: &Path) -> PlatformResult<Vec<crate::platform::RecordDir>> {
+        records::record_dirs(root)
+    }
+
+    fn read_record(&self, dir: &Path, name: &str) -> PlatformResult<Vec<u8>> {
+        records::read_entry(dir, name)
+    }
+
     fn run(&self, program: Program, args: &[&str]) -> PlatformResult<Output> {
         let executable = resolve(program)?;
         let result = Command::new(&executable)

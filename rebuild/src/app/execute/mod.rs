@@ -6,10 +6,12 @@
 //!
 //! [`ConfirmedPlan`]: crate::app::decide::ConfirmedPlan
 
+pub mod check;
 pub mod digest;
 pub mod lvm;
 pub mod online;
 pub mod postcondition;
+pub mod records;
 pub mod recover;
 pub mod relocate;
 pub mod state;
@@ -44,6 +46,8 @@ pub enum ExecError {
     Io(String),
     /// 回读结果与写入不一致。
     Postcondition(String),
+    /// 一致性检查器报告问题；这是检查结论，不是本实现的失败。
+    Check(String),
     /// 故障注入；仅测试使用。
     Injected(String),
 }
@@ -64,6 +68,7 @@ impl std::fmt::Display for ExecError {
             | Self::InvalidPlan(why)
             | Self::Io(why)
             | Self::Postcondition(why)
+            | Self::Check(why)
             | Self::Injected(why) => f.write_str(why),
         }
     }

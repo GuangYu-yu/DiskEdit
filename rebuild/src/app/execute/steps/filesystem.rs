@@ -133,14 +133,14 @@ fn declared_region(regions: &[Region]) -> Result<DeviceRegion, ExecError> {
 }
 
 /// 在分区设备视图上执行闭包；无论成功失败都释放本次挂接的 loop。
-fn with_device<F>(
+pub(crate) fn with_device<T, F>(
     host: &Host<'_>,
     partition: u32,
     region: DeviceRegion,
     work: F,
-) -> Result<(), ExecError>
+) -> Result<T, ExecError>
 where
-    F: FnOnce(&Path) -> Result<(), ExecError>,
+    F: FnOnce(&Path) -> Result<T, ExecError>,
 {
     let device: PartitionDevice = host
         .platform
@@ -150,7 +150,7 @@ where
     if let Some(loop_device) = &device.loop_device {
         if let Err(error) = host.platform.loop_detach(loop_device) {
             return match outcome {
-                Ok(()) => Err(ExecError::Io(format!(
+                Ok(_) => Err(ExecError::Io(format!(
                     "文件系统操作完成但释放 {} 失败: {error}",
                     loop_device.display()
                 ))),

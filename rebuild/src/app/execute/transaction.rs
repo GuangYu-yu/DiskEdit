@@ -394,6 +394,7 @@ fn classify_unwritten(error: ExecError) -> Outcome {
         | ExecError::IdentityChanged(_)
         | ExecError::Io(_)
         | ExecError::Postcondition(_)
+        | ExecError::Check(_)
         | ExecError::Injected(_)) => {
             Outcome::unwritten(FailureKind::FailedBeforeWrite, format_error(&other))
         }
@@ -409,6 +410,7 @@ fn format_error(error: &ExecError) -> String {
         | ExecError::InvalidPlan(why)
         | ExecError::Io(why)
         | ExecError::Postcondition(why)
+        | ExecError::Check(why)
         | ExecError::Injected(why) => why.clone(),
     }
 }
@@ -544,6 +546,10 @@ mod tests {
 
         fn entries(&self) -> PlatformResult<Vec<RecordEntry>> {
             Ok(Vec::new())
+        }
+
+        fn read_entry(&self, name: &str) -> PlatformResult<Vec<u8>> {
+            Err(PlatformError::not_supported(format!("测试没有条目 {name}")))
         }
 
         fn quarantine(&mut self) -> PlatformResult<String> {

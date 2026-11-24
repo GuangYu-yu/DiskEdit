@@ -275,7 +275,7 @@ pub const SPECS: &[Spec] = &[
         summary: "扫描记录目录",
         summary_en: "scan a recovery record container",
         usage: &["diskedit records scan <ROOT>"],
-        target: TargetMode::Any,
+        target: TargetMode::Whole,
         confirmation: false,
         options: NONE,
     },
