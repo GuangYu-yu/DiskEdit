@@ -216,7 +216,8 @@ pub struct ResizeRequest {
 pub struct MoveRequest {
     pub partition: PartitionSelector,
     pub start: StartSpec,
-    pub align: Option<u64>,
+    pub align: Alignment,
+    /// 单块字节数；`None` 表示未给出，按默认 4 MiB。
     pub chunk: Option<u64>,
 }
 
@@ -225,7 +226,8 @@ pub struct MoveRequest {
 pub struct CopyRequest {
     pub partition: PartitionSelector,
     pub start: StartSpec,
-    pub align: Option<u64>,
+    pub align: Alignment,
+    /// 单块字节数；`None` 表示未给出，按默认 4 MiB。
     pub chunk: Option<u64>,
     pub name: Option<String>,
     pub keep_partuuid: bool,

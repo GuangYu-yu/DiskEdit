@@ -5,6 +5,7 @@ pub mod edit;
 pub mod error;
 pub mod gpt;
 pub mod mbr;
+pub mod relocate;
 pub mod stamp;
 
 pub use create::{
@@ -20,6 +21,7 @@ pub use gpt::header::GptHeader;
 pub use gpt::parse::{GptCopy, GptEvidence, GptState, HeaderIssue};
 pub use mbr::extended::walk_extended;
 pub use mbr::primary::{Mbr, MbrEntry};
+pub use relocate::{ChunkSpan, Layout, Resume, layout, relocation_overlaps, resume};
 pub use stamp::table_stamp;
 
 /// GPT 头固定字段的字节数。

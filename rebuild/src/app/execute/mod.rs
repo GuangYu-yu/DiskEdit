@@ -7,6 +7,7 @@
 pub mod diagnose;
 pub mod digest;
 pub mod postcondition;
+pub mod relocate;
 pub mod state;
 pub mod table;
 pub mod token;

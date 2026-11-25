@@ -24,6 +24,357 @@ use crate::app::observe::{
 use super::step::{Step, StepKind, TableSegment};
 use super::{Decision, Plan, Refusal};
 
+/// 未给出 `--chunk` 时的默认块大小。
+const DEFAULT_CHUNK: u64 = 4 << 20;
+/// 1 MiB 的字节数。
+const MIB: u64 = 1 << 20;
+
+/// 判定 `move`：保持长度，把分区内容与条目平移到新起点。
+pub fn move_partition(snapshot: &EditSnapshot, request: &Request) -> Decision {
+    let Command::Move(moved) = request.command() else {
+        return refuse_edit("move reached with a different command");
+    };
+    if let Some(refusal) = precheck(snapshot, "move") {
+        return Decision::Refuse(refusal);
+    }
+    let Some(identity) = snapshot.target.identity else {
+        return Decision::Refuse(Refusal::IdentityUnprovable {
+            why: "the target gives no comparable identity".to_owned(),
+        });
+    };
+    let Some(TableFacts::Gpt {
+        header,
+        entries,
+        sector_size,
+        total_bytes,
+    }) = &snapshot.facts
+    else {
+        return Decision::Refuse(Refusal::GptRequired {
+            what: "`move` needs a GPT partition table".to_owned(),
+        });
+    };
+    let table = GptTable {
+        header: header.clone(),
+        entries: entries.clone(),
+        sector_size: *sector_size,
+        total_bytes: *total_bytes,
+    };
+    let Some(number) = resolve_gpt(&table, moved.partition) else {
+        return refuse_edit("there is no partition to point `:last` at");
+    };
+    let index = match table.live_index(number) {
+        Ok(index) => index,
+        Err(error) => return refuse_edit(&error.to_string()),
+    };
+    let entry = table.entries[index].clone();
+    let old_start = entry.starting_lba;
+    let len = entry.ending_lba - old_start + 1;
+    let new_start = match start_lba(&table, moved.start, moved.align, old_start, Some(len)) {
+        Ok(start) => start,
+        Err(refusal) => return Decision::Refuse(refusal),
+    };
+    if new_start == old_start {
+        return Decision::Unchanged {
+            note: format!(
+                "partition #{number} already starts at LBA {new_start} — nothing to move"
+            ),
+        };
+    }
+    let Some(new_end) = new_start.checked_add(len - 1) else {
+        return refuse_edit("the move target overflows the LBA range");
+    };
+    if let Err(refusal) = place_range(&table, index, new_start, new_end, true) {
+        return Decision::Refuse(refusal);
+    }
+    let shift = i64::try_from(i128::from(new_start) - i128::from(old_start)).unwrap_or(i64::MAX);
+    let chunk = moved.chunk.unwrap_or(DEFAULT_CHUNK);
+    let mut updated = table.entries.clone();
+    updated[index].starting_lba = new_start;
+    updated[index].ending_lba = new_end;
+    let segments = match table.segments(&updated) {
+        Ok(segments) => segments,
+        Err(error) => {
+            return Decision::Refuse(Refusal::TableDamaged {
+                why: error.to_string(),
+            });
+        }
+    };
+    let data = Step::new(
+        StepKind::MovePartition {
+            partition: number,
+            source_lba: old_start,
+            offset_sectors: shift,
+            chunk,
+            ntfs_hidden: false,
+        },
+        vec![region(new_start * sector_size, len * sector_size)],
+    );
+    let table_step = table_step(
+        TableFormat::Gpt,
+        *sector_size,
+        segments,
+        snapshot.stamp,
+    );
+    let plan = Plan::write(vec![data, table_step], identity);
+    finish(
+        snapshot,
+        plan,
+        format!(
+            "moved partition #{number} to LBA {new_start} (verify with: diskedit info {})",
+            snapshot.target.display
+        ),
+    )
+}
+
+/// 判定 `copy`：把源分区内容与条目复制到新起点，源保持不变。
+pub fn copy_partition(snapshot: &EditSnapshot, request: &Request) -> Decision {
+    let Command::Copy(copied) = request.command() else {
+        return refuse_edit("copy reached with a different command");
+    };
+    if let Some(refusal) = precheck(snapshot, "copy") {
+        return Decision::Refuse(refusal);
+    }
+    let Some(identity) = snapshot.target.identity else {
+        return Decision::Refuse(Refusal::IdentityUnprovable {
+            why: "the target gives no comparable identity".to_owned(),
+        });
+    };
+    let Some(TableFacts::Gpt {
+        header,
+        entries,
+        sector_size,
+        total_bytes,
+    }) = &snapshot.facts
+    else {
+        return Decision::Refuse(Refusal::GptRequired {
+            what: "`copy` needs a GPT partition table".to_owned(),
+        });
+    };
+    let table = GptTable {
+        header: header.clone(),
+        entries: entries.clone(),
+        sector_size: *sector_size,
+        total_bytes: *total_bytes,
+    };
+    let Some(number) = resolve_gpt(&table, copied.partition) else {
+        return refuse_edit("there is no partition to point `:last` at");
+    };
+    let index = match table.live_index(number) {
+        Ok(index) => index,
+        Err(error) => return refuse_edit(&error.to_string()),
+    };
+    if copied.start == StartSpec::Align {
+        return Decision::Refuse(Refusal::TableEdit {
+            why: "`copy --start align` has no existing start to align — give the destination LBA or `end`"
+                .to_owned(),
+        });
+    }
+    let entry = table.entries[index].clone();
+    let len = entry.ending_lba - entry.starting_lba + 1;
+    let new_start = match start_lba(&table, copied.start, copied.align, entry.starting_lba, Some(len))
+    {
+        Ok(start) => start,
+        Err(refusal) => return Decision::Refuse(refusal),
+    };
+    let Some(new_end) = new_start.checked_add(len - 1) else {
+        return refuse_edit("the copy target overflows the LBA range");
+    };
+    // 副本占用新的条目槽位；目标区间与任何既有条目（含源）重叠都拒绝。
+    if let Err(refusal) = place_range(&table, usize::MAX, new_start, new_end, false) {
+        return Decision::Refuse(refusal);
+    }
+    let mut clone = entry.clone();
+    if let Some(name) = &copied.name {
+        if let Err(refusal) = check_name(name) {
+            return Decision::Refuse(refusal);
+        }
+        clone.name = diskedit_core::table::gpt::entries::PartitionName::from_str_lossy(name);
+    }
+    clone.starting_lba = new_start;
+    clone.ending_lba = new_end;
+    if !copied.keep_partuuid {
+        clone.unique_partition_guid = derive_unique(identity, new_start, new_end);
+    }
+    let slot = match table.add_slot(None, new_start, new_end) {
+        Ok(slot) => slot,
+        Err(error) => return refuse_edit(&error.to_string()),
+    };
+    let mut updated = table.entries.clone();
+    updated[slot] = clone;
+    let segments = match table.segments(&updated) {
+        Ok(segments) => segments,
+        Err(error) => {
+            return Decision::Refuse(Refusal::TableDamaged {
+                why: error.to_string(),
+            });
+        }
+    };
+    let data = Step::new(
+        StepKind::CopyPartition {
+            source: number,
+            source_lba: entry.starting_lba,
+            start_lba: new_start,
+            sectors: len,
+            chunk: copied.chunk.unwrap_or(DEFAULT_CHUNK),
+        },
+        vec![region(new_start * sector_size, len * sector_size)],
+    );
+    let table_step = table_step(
+        TableFormat::Gpt,
+        *sector_size,
+        segments,
+        snapshot.stamp,
+    );
+    let plan = Plan::write(vec![data, table_step], identity);
+    let number = u32::try_from(slot + 1).expect("条目下标可表示");
+    finish_copy(
+        snapshot,
+        plan,
+        format!(
+            "copied to partition #{number} (verify with: diskedit info {})",
+            snapshot.target.display
+        ),
+    )
+}
+
+/// 起点选择：LBA 按 --align 上取整，`end` 贴末，`align` 取原起点之后的下一个 1 MiB 边界。
+fn start_lba(
+    table: &GptTable,
+    start: StartSpec,
+    align: Alignment,
+    old_start: u64,
+    length: Option<u64>,
+) -> Result<u64, Refusal> {
+    if align != Alignment::Default && matches!(start, StartSpec::End | StartSpec::Align) {
+        return Err(Refusal::TableEdit {
+            why: "`--align` applies only to an explicit --start LBA".to_owned(),
+        });
+    }
+    let first = table.header.first_usable_lba;
+    let last = table.header.last_usable_lba;
+    let unit = MIB / table.sector_size.max(1);
+    let aligned = |lba: u64| -> Result<u64, Refusal> {
+        if align == Alignment::Mib && unit > 0 {
+            lba.div_ceil(unit)
+                .checked_mul(unit)
+                .ok_or_else(|| Refusal::TableEdit {
+                    why: "the aligned start overflows the LBA range".to_owned(),
+                })
+        } else {
+            Ok(lba)
+        }
+    };
+    let new_start = match start {
+        StartSpec::Lba(lba) => aligned(lba)?,
+        StartSpec::End => {
+            let len = length.ok_or_else(|| Refusal::TableEdit {
+                why: "`--start end` needs a known length".to_owned(),
+            })?;
+            last.checked_sub(len - 1)
+                .ok_or_else(|| Refusal::TableEdit {
+                    why: "the partition is longer than the usable range".to_owned(),
+                })?
+        }
+        StartSpec::Align => {
+            let unit = MIB / table.sector_size.max(1);
+            if unit == 0 {
+                old_start
+            } else {
+                old_start
+                    .div_ceil(unit)
+                    .checked_mul(unit)
+                    .ok_or_else(|| Refusal::TableEdit {
+                        why: "the aligned start overflows the LBA range".to_owned(),
+                    })?
+            }
+        }
+    };
+    if new_start < first {
+        return Err(Refusal::TableEdit {
+            why: format!("the start LBA {new_start} is before the first usable LBA {first}"),
+        });
+    }
+    Ok(new_start)
+}
+
+/// 校验目标区间在可用范围内，且不与应避开的既有条目相交。
+///
+/// `skip` 是要避开的条目下标（搬移自身可与之相交）；`usize::MAX` 表示不跳过任何条目。
+fn place_range(
+    table: &GptTable,
+    skip: usize,
+    start: u64,
+    end: u64,
+    allow_self: bool,
+) -> Result<(), Refusal> {
+    let first = table.header.first_usable_lba;
+    let last = table.header.last_usable_lba;
+    if start > end || start < first || end > last {
+        return Err(Refusal::TableEdit {
+            why: format!("the target range {start}..{end} is outside the usable {first}..{last}"),
+        });
+    }
+    for (index, entry) in table.entries.iter().enumerate() {
+        if entry.partition_type_guid.is_zero() {
+            continue;
+        }
+        if allow_self && index == skip {
+            continue;
+        }
+        if !(end < entry.starting_lba || start > entry.ending_lba) {
+            return Err(Refusal::PartitionOverlap {
+                number: u32::try_from(index + 1).unwrap_or(u32::MAX),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// 组装数据步之后的整表写入步。
+fn table_step(
+    format: TableFormat,
+    segment_size: u64,
+    segments: Vec<Segment>,
+    stamp: [u8; 32],
+) -> Step {
+    let regions = segments.iter().map(|segment| segment.region).collect();
+    let segments: Vec<TableSegment> = segments
+        .into_iter()
+        .map(|segment| TableSegment {
+            region: segment.region,
+            bytes: segment.bytes,
+        })
+        .collect();
+    Step::new(
+        StepKind::WriteTable {
+            format,
+            segment_size,
+            stamp,
+            segments,
+        },
+        regions,
+    )
+}
+
+/// `copy` 不接受续跑：目标上已有未收尾记录一律拒绝。
+fn finish_copy(snapshot: &EditSnapshot, plan: Result<Plan, Refusal>, note: String) -> Decision {
+    let plan = match plan {
+        Ok(plan) => plan,
+        Err(refusal) => return Decision::Refuse(refusal),
+    };
+    let path = record_path(snapshot);
+    match &snapshot.prior {
+        crate::app::observe::PriorState::Absent => {}
+        crate::app::observe::PriorState::Unreadable => {
+            return Decision::Refuse(Refusal::RecordUnreadable { path });
+        }
+        crate::app::observe::PriorState::Present(_) => {
+            return Decision::Refuse(Refusal::RecordConflict { path });
+        }
+    }
+    Decision::Execute { plan, note }
+}
+
 /// 新 GPT 分区的唯一 GUID 由目标身份与区间稳定派生。
 fn derive_unique(identity: diskedit_core::fingerprint::Fingerprint, start: u64, end: u64) -> Guid {
     let mut bytes = [0u8; 16];

@@ -111,6 +111,7 @@ pub enum StepKind {
     /// 把源分区内容复制到给定的目标区间。
     CopyPartition {
         source: u32,
+        source_lba: u64,
         start_lba: u64,
         sectors: u64,
         chunk: u64,
@@ -118,6 +119,7 @@ pub enum StepKind {
     /// 平移一个分区的内容。
     MovePartition {
         partition: u32,
+        source_lba: u64,
         offset_sectors: i64,
         chunk: u64,
         /// 目标内容已识别为 NTFS：平移后修正主备引导扇区里的 `HiddenSectors`。

@@ -229,24 +229,28 @@ fn encode_kind(out: &mut Vec<u8>, kind: &StepKind) {
         }
         StepKind::CopyPartition {
             source,
+            source_lba,
             start_lba,
             sectors,
             chunk,
         } => {
             out.push(14);
             out.extend_from_slice(&source.to_le_bytes());
+            out.extend_from_slice(&source_lba.to_le_bytes());
             out.extend_from_slice(&start_lba.to_le_bytes());
             out.extend_from_slice(&sectors.to_le_bytes());
             out.extend_from_slice(&chunk.to_le_bytes());
         }
         StepKind::MovePartition {
             partition,
+            source_lba,
             offset_sectors,
             chunk,
             ntfs_hidden,
         } => {
             out.push(15);
             out.extend_from_slice(&partition.to_le_bytes());
+            out.extend_from_slice(&source_lba.to_le_bytes());
             out.extend_from_slice(&offset_sectors.to_le_bytes());
             out.extend_from_slice(&chunk.to_le_bytes());
             out.push(u8::from(*ntfs_hidden));

@@ -6,8 +6,8 @@
 use diskedit_core::table::Guid;
 
 use crate::app::observe::{
-    Alignment, Command, PartitionSelector, Request, SetKey, SetRequest, StartSpec, TableFormat,
-    TargetSpec, TypeSelector,
+    Alignment, Command, CopyRequest, MoveRequest, PartitionSelector, Request, SetKey, SetRequest,
+    StartSpec, TableFormat, TargetSpec, TypeSelector,
 };
 
 /// 用法错误：外层打印到 stderr 并以 2 退出。
@@ -39,6 +39,8 @@ pub fn parse(args: &[String]) -> Result<Request, UsageError> {
         "add" => parse_add(rest),
         "delete" => parse_delete(rest),
         "set" => parse_set(rest),
+        "move" => parse_move(rest),
+        "copy" => parse_copy(rest),
         other => Err(UsageError::new(format!("unknown command `{other}`"))),
     }
 }
@@ -314,6 +316,99 @@ fn parse_set(args: &[String]) -> Result<Request, UsageError> {
         .with_sector_size(sector_size(&tokens)?)
         .with_identity(identity(&tokens))
         .with_confirmation(true))
+}
+
+fn parse_move(args: &[String]) -> Result<Request, UsageError> {
+    let tokens = Tokens::scan(
+        args,
+        &["--align", "--start", "--chunk", "--identity", "--sector-size"],
+        &["--yes"],
+    )?;
+    if !tokens.has("--yes") {
+        return Err(UsageError::new("`move` needs --yes"));
+    }
+    let target = one_target(&tokens, "move")?;
+    let Some(partition) = target.partition else {
+        return Err(UsageError::new("`move` needs a partition: write <TARGET>:N"));
+    };
+    let Some(raw) = tokens.value("--start") else {
+        return Err(UsageError::new(
+            "`move` needs --start <LBA|end|align>",
+        ));
+    };
+    let command = Command::Move(MoveRequest {
+        partition,
+        start: parse_start(raw)?,
+        align: alignment(&tokens)?,
+        chunk: chunk_bytes(&tokens)?,
+    });
+    Ok(Request::new(target, command)
+        .with_sector_size(sector_size(&tokens)?)
+        .with_identity(identity(&tokens))
+        .with_confirmation(true))
+}
+
+fn parse_copy(args: &[String]) -> Result<Request, UsageError> {
+    let tokens = Tokens::scan(
+        args,
+        &[
+            "--align",
+            "--start",
+            "--chunk",
+            "--name",
+            "--identity",
+            "--sector-size",
+        ],
+        &["--yes", "--keep-partuuid"],
+    )?;
+    if !tokens.has("--yes") {
+        return Err(UsageError::new("`copy` needs --yes"));
+    }
+    let target = one_target(&tokens, "copy")?;
+    let Some(partition) = target.partition else {
+        return Err(UsageError::new("`copy` needs a partition: write <TARGET>:N"));
+    };
+    let Some(raw) = tokens.value("--start") else {
+        return Err(UsageError::new("`copy` needs --start <LBA|end>"));
+    };
+    let command = Command::Copy(CopyRequest {
+        partition,
+        start: parse_start(raw)?,
+        align: alignment(&tokens)?,
+        chunk: chunk_bytes(&tokens)?,
+        name: tokens.value("--name").map(str::to_owned),
+        keep_partuuid: tokens.has("--keep-partuuid"),
+    });
+    Ok(Request::new(target, command)
+        .with_sector_size(sector_size(&tokens)?)
+        .with_identity(identity(&tokens))
+        .with_confirmation(true))
+}
+
+/// `--align` 的取值；未给出时按不对齐。
+fn alignment(tokens: &Tokens) -> Result<Alignment, UsageError> {
+    match tokens.value("--align") {
+        None => Ok(Alignment::Default),
+        Some("mib") => Ok(Alignment::Mib),
+        Some("none") => Ok(Alignment::None),
+        Some(other) => Err(UsageError::new(format!(
+            "bad value `{other}` for --align (mib|none)"
+        ))),
+    }
+}
+
+/// `--chunk` 以 MiB 计，取值 1..=64；返回字节数。
+fn chunk_bytes(tokens: &Tokens) -> Result<Option<u64>, UsageError> {
+    let Some(raw) = tokens.value("--chunk") else {
+        return Ok(None);
+    };
+    let mib: u64 = raw
+        .parse()
+        .map_err(|_| UsageError::new(format!("`{raw}` is not a chunk size in MiB")))?;
+    if !(1..=64).contains(&mib) {
+        return Err(UsageError::new("--chunk must be in 1..=64 MiB"));
+    }
+    Ok(Some(mib << 20))
 }
 
 fn parse_start(raw: &str) -> Result<StartSpec, UsageError> {
@@ -652,5 +747,63 @@ mod tests {
     fn check_needs_a_partition() {
         assert!(parse_words(&["check", "disk.img"]).is_err());
         assert!(parse_words(&["check", "disk.img:2"]).is_ok());
+    }
+
+    #[test]
+    fn move_needs_a_partition_a_start_and_yes() {
+        assert!(parse_words(&["move", "disk.img:1", "--start", "5000"]).is_err());
+        assert!(parse_words(&["move", "disk.img", "--start", "5000", "--yes"]).is_err());
+        assert!(parse_words(&["move", "disk.img:1", "--yes"]).is_err());
+        let request = parse_words(&["move", "disk.img:2", "--start", "5000", "--yes"]).expect("合法");
+        assert!(matches!(
+            request.command(),
+            Command::Move(m) if m.start == StartSpec::Lba(5000)
+        ));
+    }
+
+    #[test]
+    fn chunk_is_mebibytes_in_range() {
+        for bad in ["0", "65", "x"] {
+            assert!(parse_words(&["move", "disk.img:1", "--start", "5000", "--chunk", bad, "--yes"]).is_err());
+        }
+        let request =
+            parse_words(&["move", "disk.img:1", "--start", "5000", "--chunk", "8", "--yes"]).expect("合法");
+        assert!(matches!(request.command(), Command::Move(m) if m.chunk == Some(8 << 20)));
+    }
+
+    #[test]
+    fn copy_parses_name_and_keep_partuuid() {
+        let request = parse_words(&[
+            "copy",
+            "disk.img:1",
+            "--start",
+            "5000",
+            "--name",
+            "clone",
+            "--keep-partuuid",
+            "--yes",
+        ])
+        .expect("合法");
+        match request.command() {
+            Command::Copy(copy) => {
+                assert_eq!(copy.name.as_deref(), Some("clone"));
+                assert!(copy.keep_partuuid);
+            }
+            Command::Info { .. }
+            | Command::Inspect
+            | Command::RecordsList
+            | Command::RecordsVerify { .. }
+            | Command::RecordsScan
+            | Command::Resize(_)
+            | Command::Move(_)
+            | Command::Delete { .. }
+            | Command::Set(_)
+            | Command::Check { .. }
+            | Command::Mkfs { .. }
+            | Command::Resizefs { .. }
+            | Command::Recover(_)
+            | Command::New { .. }
+            | Command::Add(_) => panic!("expected copy"),
+        }
     }
 }

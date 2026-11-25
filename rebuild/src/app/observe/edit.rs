@@ -57,7 +57,11 @@ pub fn capture_edit(
 ) -> Result<EditSnapshot, CaptureError> {
     if !matches!(
         request.command(),
-        Command::Add(_) | Command::Delete { .. } | Command::Set(_)
+        Command::Add(_)
+            | Command::Delete { .. }
+            | Command::Set(_)
+            | Command::Move(_)
+            | Command::Copy(_)
     ) {
         return Err(CaptureError::Unreadable {
             why: "capture_edit called for a different command".to_owned(),

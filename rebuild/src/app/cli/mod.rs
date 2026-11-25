@@ -101,9 +101,15 @@ fn run(request: &observe::Request) -> u8 {
             Ok(snapshot) => decide::edit::set(&snapshot, request),
             Err(code) => return code,
         },
+        Command::Move(_) => match observe_or_exit(&platform, request, observe::capture_edit) {
+            Ok(snapshot) => decide::edit::move_partition(&snapshot, request),
+            Err(code) => return code,
+        },
+        Command::Copy(_) => match observe_or_exit(&platform, request, observe::capture_edit) {
+            Ok(snapshot) => decide::edit::copy_partition(&snapshot, request),
+            Err(code) => return code,
+        },
         Command::Resize(_)
-        | Command::Move(_)
-        | Command::Copy(_)
         | Command::Mkfs { .. }
         | Command::Resizefs { .. }
         | Command::Recover(_) => return usage(),
@@ -281,7 +287,17 @@ fn write(
         Ok(plan) => plan,
         Err(refusal) => return refuse(&refusal),
     };
-    let outcome = execute::table::run(platform, path, &plan);
+    let relocation = plan.steps().iter().any(|step| {
+        matches!(
+            step.kind,
+            decide::StepKind::MovePartition { .. } | decide::StepKind::CopyPartition { .. }
+        )
+    });
+    let outcome = if relocation {
+        execute::relocate::run(platform, path, &plan)
+    } else {
+        execute::table::run(platform, path, &plan)
+    };
     let code = exit::exit_of(&outcome);
     if outcome.succeeded() {
         println!("{note}");
