@@ -123,7 +123,17 @@ pub fn decide(snapshot: &NewSnapshot, request: &Request) -> Decision {
         regions,
     );
     match Plan::write(vec![step], identity) {
-        Ok(plan) => Decision::Execute(plan.with_request_digest(request_digest)),
+        Ok(plan) => Decision::Execute {
+            plan: plan.with_request_digest(request_digest),
+            note: format!(
+                "created {} table (verify with: diskedit info {})",
+                match format {
+                    TableFormat::Gpt => "gpt",
+                    TableFormat::Mbr => "mbr",
+                },
+                snapshot.target.display
+            ),
+        },
         Err(refusal) => Decision::Refuse(refusal),
     }
 }

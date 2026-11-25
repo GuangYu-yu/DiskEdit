@@ -9,11 +9,13 @@ use diskedit_core::evidence::Generation;
 use diskedit_core::fs::MkfsKind;
 use diskedit_core::table::Guid;
 
+pub mod edit;
 pub mod new;
 pub mod records;
 pub mod snapshot;
 pub mod table;
 
+pub use edit::{EditSnapshot, TableFacts, capture_edit};
 pub use new::{CapturedRegion, NewSnapshot, PriorRecord, PriorState, capture_new};
 pub use snapshot::{
     CaptureError, InspectSnapshot, RecordSnapshot, Snapshot, TargetFacts, capture, capture_inspect,
@@ -60,6 +62,8 @@ pub struct Request {
     target: Option<TargetSpec>,
     sector_size: Option<u64>,
     identity: Option<String>,
+    /// 用户已给出 `--yes`。
+    confirmed: bool,
     command: Command,
 }
 
@@ -69,6 +73,7 @@ impl Request {
             target: Some(target),
             sector_size: None,
             identity: None,
+            confirmed: false,
             command,
         }
     }
@@ -79,8 +84,19 @@ impl Request {
             target: None,
             sector_size: None,
             identity: None,
+            confirmed: false,
             command,
         }
+    }
+
+    /// 记录确认旗标；解析期已保证写命令必须带 `--yes`。
+    pub fn with_confirmation(mut self, confirmed: bool) -> Self {
+        self.confirmed = confirmed;
+        self
+    }
+
+    pub fn confirmed(&self) -> bool {
+        self.confirmed
     }
 
     /// 指定逻辑扇区字节数；判定与执行都以它对齐。
@@ -140,10 +156,7 @@ pub enum Command {
     Delete {
         partition: PartitionSelector,
     },
-    Set {
-        partition: PartitionSelector,
-        action: SetAction,
-    },
+    Set(SetRequest),
     Check {
         partition: PartitionSelector,
     },
@@ -160,8 +173,6 @@ pub enum Command {
     New {
         table: TableFormat,
         overwrite: bool,
-        /// 用户已给出 `--yes`。
-        confirmed: bool,
     },
     Add(AddRequest),
 }
@@ -225,11 +236,75 @@ pub struct CopyRequest {
 pub struct AddRequest {
     /// 要完整容纳的分区尺寸，字节。
     pub size: u64,
-    pub start: Option<u64>,
-    pub align: Option<u64>,
+    pub start: Option<StartSpec>,
+    pub align: Alignment,
     pub part_number: Option<u32>,
     pub name: Option<String>,
-    pub type_guid: Option<Guid>,
+    pub type_guid: Option<TypeSelector>,
+}
+
+/// 自动放置的对齐策略。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Alignment {
+    /// 未给出 `--align`：按 1 MiB 自动放置。
+    Default,
+    /// `--align none`：按给定 LBA 落位。
+    None,
+    /// `--align mib`：按 1 MiB 边界。
+    Mib,
+}
+
+/// `--type-guid` 的两种写法；表型由判定层判断。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TypeSelector {
+    Guid(Guid),
+    Mbr(u8),
+}
+
+/// `set` 的属性名。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SetKey {
+    Name,
+    Label,
+    Uuid,
+    Flag,
+    Type,
+}
+
+impl SetKey {
+    pub fn from_text(text: &str) -> Option<Self> {
+        match text {
+            "name" => Some(Self::Name),
+            "label" => Some(Self::Label),
+            "uuid" => Some(Self::Uuid),
+            "flag" => Some(Self::Flag),
+            "type" => Some(Self::Type),
+            _ => None,
+        }
+    }
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Name => "name",
+            Self::Label => "label",
+            Self::Uuid => "uuid",
+            Self::Flag => "flag",
+            Self::Type => "type",
+        }
+    }
+}
+
+/// `set` 的参数。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SetRequest {
+    pub partition: PartitionSelector,
+    pub key: SetKey,
+    /// 属性值；`uuid` 可省略。
+    pub value: String,
+    /// `flag` 的 `on|off`；其余属性必须为空。
+    pub state: String,
+    /// `uuid` 的 `--random`。
+    pub random: bool,
 }
 
 /// `--start` 的三种取值。
@@ -241,16 +316,6 @@ pub enum StartSpec {
     End,
     /// 从可用区间起点按对齐放置。
     Align,
-}
-
-/// `set` 的属性形态。
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum SetAction {
-    Name(String),
-    Label(String),
-    Uuid { value: Option<String>, random: bool },
-    Flag { flag: String, on: bool },
-    Type(String),
 }
 
 /// `recover` 的三种形态。

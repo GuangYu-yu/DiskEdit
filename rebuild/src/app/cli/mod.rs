@@ -87,15 +87,26 @@ fn run(request: &observe::Request) -> u8 {
             Ok(snapshot) => decide::new::decide(&snapshot, request),
             Err(code) => return code,
         },
+        Command::Add(_) => match observe_or_exit(&platform, request, observe::capture_edit) {
+            Ok(snapshot) => decide::edit::add(&snapshot, request),
+            Err(code) => return code,
+        },
+        Command::Delete { .. } => {
+            match observe_or_exit(&platform, request, observe::capture_edit) {
+                Ok(snapshot) => decide::edit::delete(&snapshot, request),
+                Err(code) => return code,
+            }
+        }
+        Command::Set(_) => match observe_or_exit(&platform, request, observe::capture_edit) {
+            Ok(snapshot) => decide::edit::set(&snapshot, request),
+            Err(code) => return code,
+        },
         Command::Resize(_)
         | Command::Move(_)
         | Command::Copy(_)
-        | Command::Delete { .. }
-        | Command::Set { .. }
         | Command::Mkfs { .. }
         | Command::Resizefs { .. }
-        | Command::Recover(_)
-        | Command::Add(_) => return usage(),
+        | Command::Recover(_) => return usage(),
     };
     conclude(&platform, request, decision)
 }
@@ -203,7 +214,7 @@ fn capture_failed(
         | Command::Move(_)
         | Command::Copy(_)
         | Command::Delete { .. }
-        | Command::Set { .. }
+        | Command::Set(_)
         | Command::Check { .. }
         | Command::Mkfs { .. }
         | Command::Resizefs { .. }
@@ -232,7 +243,11 @@ fn conclude(platform: &dyn Platform, request: &observe::Request, decision: Decis
                 None => exit::INTERNAL,
             },
         },
-        Decision::Execute(plan) => write(platform, request, plan),
+        Decision::Execute { plan, note } => write(platform, request, plan, note),
+        Decision::Unchanged { note } => {
+            println!("{note}");
+            exit::SUCCESS
+        }
     }
 }
 
@@ -241,6 +256,8 @@ fn refuse(refusal: &decide::Refusal) -> u8 {
     let code = exit::exit_of_refusal(refusal);
     let prefix = if code == exit::UNSUPPORTED {
         "unsupported"
+    } else if code == exit::USAGE {
+        "diskedit"
     } else {
         "refused"
     };
@@ -250,35 +267,24 @@ fn refuse(refusal: &decide::Refusal) -> u8 {
 }
 
 /// 写命令：确认计划、执行并汇报终态。
-fn write(platform: &dyn Platform, request: &observe::Request, plan: decide::Plan) -> u8 {
+fn write(
+    platform: &dyn Platform,
+    request: &observe::Request,
+    plan: decide::Plan,
+    note: String,
+) -> u8 {
     let Some(path) = request.target() else {
         return usage();
     };
-    let confirmed = matches!(
-        request.command(),
-        Command::New {
-            confirmed: true,
-            ..
-        }
-    );
     let current = observe_identity(platform, path);
-    let plan = match decide::confirm(plan, confirmed, &current) {
+    let plan = match decide::confirm(plan, request.confirmed(), &current) {
         Ok(plan) => plan,
         Err(refusal) => return refuse(&refusal),
     };
-    let outcome = execute::new::run(platform, path, &plan);
+    let outcome = execute::table::run(platform, path, &plan);
     let code = exit::exit_of(&outcome);
     if outcome.succeeded() {
-        if let Command::New { table, .. } = request.command() {
-            println!(
-                "created {} table (verify with: diskedit info {})",
-                match table {
-                    observe::TableFormat::Gpt => "gpt",
-                    observe::TableFormat::Mbr => "mbr",
-                },
-                path.display()
-            );
-        }
+        println!("{note}");
     } else if let Some(reason) = outcome.reason() {
         let prefix = if code == exit::REFUSED {
             "refused"

@@ -200,7 +200,7 @@ fn capture_mbr(
     Ok((captured, sites))
 }
 
-fn stamp_of(
+pub(super) fn stamp_of(
     handle: &dyn TargetHandle,
     total_bytes: u64,
     sector_size: u64,
@@ -216,7 +216,10 @@ fn stamp_of(
     Ok(table_stamp(&parts))
 }
 
-fn read_region(handle: &dyn TargetHandle, region: Region) -> Result<Vec<u8>, CaptureError> {
+pub(super) fn read_region(
+    handle: &dyn TargetHandle,
+    region: Region,
+) -> Result<Vec<u8>, CaptureError> {
     let mut bytes = vec![0u8; region.len() as usize];
     let mut filled = 0;
     while filled < bytes.len() {
@@ -243,7 +246,7 @@ fn read_region(handle: &dyn TargetHandle, region: Region) -> Result<Vec<u8>, Cap
     Ok(bytes)
 }
 
-fn prior_state(record: &RecordState) -> PriorState {
+pub(super) fn prior_state(record: &RecordState) -> PriorState {
     let Some(bytes) = record.bytes.as_ref() else {
         return PriorState::Absent;
     };

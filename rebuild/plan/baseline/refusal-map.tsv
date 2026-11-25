@@ -30,3 +30,37 @@ R0282	src/app/cli/mod.rs scan 根不是目录 → 拒绝	基线实跑 scan 文�
 R0287	src/app/cli/mod.rs scan 根不存在 → 拒绝	基线实跑 scan 缺失目录退 3（旧 cmd/records.rs:738）	tests/cases/mod.rs 的 records scan needs a directory
 R0155	src/app/cli/parse.rs new 拒绝 :N；旧 cmd/layout.rs:62 被 cli 形态检查先拒	基线实跑 `new <img>:1 --yes` 退 2（旧源码位置 cli.rs:2009）	tests/cases/mod.rs 的 new refuses a partition selector
 R0157	src/app/decide/new.rs 表区非空 → TableOccupied → 退出 3	基线实跑占用镜像 new --yes 退 3（旧 cmd/layout.rs:129）	tests/cases/mod.rs 的 new refuses to overwrite occupied table sectors
+R0108	src/app/cli/parse.rs parse_set 要求 :N → 用法错误	基线实跑 `set <img> name x --yes` 退 2（旧 cli.rs:1450 require_part）	tests/cases/mod.rs 的 set needs a partition
+R0109	src/app/cli/parse.rs --random 只接受 uuid → 用法错误	旧 cmd/fs.rs:366 对非 uuid 属性的 --random 退 2	tests/cases/mod.rs 的 set --random applies only to uuid
+R0110	src/app/decide/edit.rs 非 flag 属性带 state → TableEdit	旧 cmd/fs.rs:373 对 `set name x off` 退 3	tests/cases/mod.rs 的 set refuses a state argument on name
+R0112	src/app/decide/edit.rs name 为空 → TableEdit	旧 cmd/fs.rs:405 对空名字退 3	tests/cases/mod.rs 的 set name refuses an empty value
+R0113	src/app/decide/edit.rs type 为空 → TableEdit	旧 cmd/fs.rs:417 对空类型退 3	tests/cases/mod.rs 的 set type refuses an empty value
+R0114	src/app/decide/edit.rs GPT type 非 GUID → TableEdit	旧 cmd/fs.rs:422 对 `type 0x83` 退 3	tests/cases/mod.rs 的 set type refuses a non-GUID value
+R0115	src/app/decide/edit.rs MBR type 非 0xNN → TableEdit	旧 cmd/fs.rs:428 对 `type zz` 退 3	tests/cases/mod.rs 的 set type refuses an invalid MBR byte
+R0116	src/app/decide/edit.rs 无表目标 set type → TableMissing	旧 cmd/fs.rs:430 对 none label 退 3	tests/cases/mod.rs 的 set type refuses a target without a table
+R0119	src/app/decide/edit.rs flag 状态非 on|off → TableEdit	旧 cmd/fs.rs:447 退 3	tests/cases/mod.rs 的 set flag refuses a bad state
+R0120	src/app/decide/edit.rs MBR 仅 boot/hidden → TableEdit	旧 cmd/fs.rs:462 退 3	tests/cases/mod.rs 的 set flag on MBR accepts only boot and hidden
+R0121	src/app/decide/edit.rs 无表目标 set flag → TableMissing	旧 cmd/fs.rs:463 对 none label 退 3	tests/cases/mod.rs 的 set flag refuses a target without a table
+R0124	src/app/cli/parse.rs uuid 值 + --random → 用法错误	旧 cmd/fs.rs:484 退 2	tests/cases/mod.rs 的 set uuid refuses a value with --random
+R0125	src/app/decide/edit.rs uuid 空且无 --random → TableEdit	旧 cmd/fs.rs:492 退 3	tests/cases/mod.rs 的 set uuid needs a value
+R0127	src/app/decide/edit.rs label 为空 → TableEdit	旧 cmd/fs.rs:504 退 3	tests/cases/mod.rs 的 set label refuses an empty value
+R0128	src/app/cli/parse.rs 未知属性 → 用法错误（旧 cmd 分支不可达）	基线实跑 `set <img>:1 bogus x --yes` 退 2	tests/cases/mod.rs 的 set refuses an unknown property
+R0165	src/app/decide/edit.rs MBR 上 --name → GptRequired	旧 cmd/layout.rs:270 退 3	tests/cases/mod.rs 的 add refuses --name on MBR
+R0166	src/app/cli/parse.rs add 拒绝 :N → 用法错误（旧 cmd 分支不可达）	基线实跑 `add <img>:1 1M --yes` 退 2（旧 cmd/layout.rs:277 的前置形态检查）	tests/cases/mod.rs 的 add refuses a partition selector
+R0167	src/app/cli/parse.rs add 只收绝对 SIZE → 用法错误	旧 cmd/layout.rs:284 退 2	tests/cases/mod.rs 的 add refuses a relative size
+R0168	src/app/decide/edit.rs 零长度 → ArgumentOutOfRange（退 2）	旧 cmd/layout.rs:291 退 2	tests/cases/mod.rs 的 add refuses a zero size
+R0170	src/app/observe/edit.rs 与 decide precheck 拒绝损坏 GPT	旧 cmd/layout.rs:304 退 3	tests/cases/mod.rs 的 add refuses a damaged table
+R0171	src/app/decide/edit.rs GPT 上 0xNN 类型 → TableEdit	旧 cmd/layout.rs:317 退 3	tests/cases/mod.rs 的 add refuses an MBR type byte for GPT
+R0172	src/app/decide/edit.rs 全零类型 GUID → TableEdit	旧 cmd/layout.rs:327 退 3	tests/cases/mod.rs 的 add refuses a zero type GUID
+R0173	src/app/decide/edit.rs place 拒绝 --start end	旧 cmd/layout.rs:349 退 3	tests/cases/mod.rs 的 add refuses --start end
+R0174	src/app/decide/edit.rs place 拒绝 --start align	旧 cmd/layout.rs:352 退 3	tests/cases/mod.rs 的 add refuses --start align
+R0176	src/app/decide/edit.rs MBR 上 GUID 类型 → TableEdit	旧 cmd/layout.rs:395 退 3	tests/cases/mod.rs 的 add refuses a GUID type for MBR
+R0177	src/app/decide/edit.rs place 对 MBR 同样拒绝 --start end	旧 cmd/layout.rs:409 退 3	tests/cases/mod.rs 的 add refuses --start end
+R0178	src/app/decide/edit.rs place 对 MBR 同样拒绝 --start align	旧 cmd/layout.rs:412 退 3	tests/cases/mod.rs 的 add refuses --start align
+R0180	src/app/decide/edit.rs 无表目标 → TableMissing	旧 cmd/layout.rs:424 退 3	tests/cases/mod.rs 的 add refuses a target without a table
+R0182	src/core/table/edit.rs fixed_start 溢出 → PastAddressSpace	旧 cmd/layout.rs:481 退 3	tests/cases/mod.rs 的 add refuses a start past the address space
+R0183	src/core/table/edit.rs fixed_start 越界 → OutsideUsable	旧 cmd/layout.rs:486 退 3	tests/cases/mod.rs 的 add refuses a start outside the usable range
+R0184	src/core/table/edit.rs fixed_start 重叠 → Overlaps	旧 cmd/layout.rs:491 退 3	tests/cases/mod.rs 的 add refuses an overlapping start
+R0185	src/core/table/edit.rs first_fit 无空洞 → NoGapFits	旧 cmd/layout.rs:504 退 3	tests/cases/mod.rs 的 add refuses a target with no room
+R0187	src/app/cli/parse.rs delete 要求 :N → 用法错误	旧 cli.rs:1450 require_part 退 2	tests/cases/mod.rs 的 delete needs a partition
+R0188	src/app/decide/edit.rs 无表目标 delete → TableMissing	旧 cmd/layout.rs:547 退 3	tests/cases/mod.rs 的 delete refuses a target without a table

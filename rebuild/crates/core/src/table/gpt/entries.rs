@@ -20,6 +20,18 @@ pub struct PartitionEntry {
     pub name: PartitionName,
 }
 
+impl PartitionEntry {
+    /// 全零条目：GPT 用它表示"槽位为空"。
+    pub const EMPTY: PartitionEntry = PartitionEntry {
+        partition_type_guid: Guid::ZERO,
+        unique_partition_guid: Guid::ZERO,
+        starting_lba: 0,
+        ending_lba: 0,
+        attributes: 0,
+        name: PartitionName::EMPTY,
+    };
+}
+
 /// 分区名，盘上为 36 个 UTF-16LE 码元；保留原始字节以便逐字节往返。
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct PartitionName {

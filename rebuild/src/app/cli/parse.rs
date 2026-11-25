@@ -3,7 +3,12 @@
 //! 解析只产出 [`Request`]；任何不认识、重复或缺失的参数都变成 [`UsageError`]，
 //! 由命令层统一以用法错误退出。目标上的分区是否存在不在这里判断。
 
-use crate::app::observe::{Command, PartitionSelector, Request, TableFormat, TargetSpec};
+use diskedit_core::table::Guid;
+
+use crate::app::observe::{
+    Alignment, Command, PartitionSelector, Request, SetKey, SetRequest, StartSpec, TableFormat,
+    TargetSpec, TypeSelector,
+};
 
 /// 用法错误：外层打印到 stderr 并以 2 退出。
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -31,6 +36,9 @@ pub fn parse(args: &[String]) -> Result<Request, UsageError> {
         "records" => parse_records(rest),
         "check" => parse_check(rest),
         "new" => parse_new(rest),
+        "add" => parse_add(rest),
+        "delete" => parse_delete(rest),
+        "set" => parse_set(rest),
         other => Err(UsageError::new(format!("unknown command `{other}`"))),
     }
 }
@@ -151,11 +159,252 @@ fn parse_new(args: &[String]) -> Result<Request, UsageError> {
     let command = Command::New {
         table,
         overwrite: tokens.has("--overwrite-data"),
-        confirmed: tokens.has("--yes"),
     };
     Ok(Request::new(target, command)
         .with_sector_size(sector_size(&tokens)?)
-        .with_identity(identity(&tokens)))
+        .with_identity(identity(&tokens))
+        .with_confirmation(true))
+}
+
+fn parse_add(args: &[String]) -> Result<Request, UsageError> {
+    let tokens = Tokens::scan(
+        args,
+        &[
+            "--align",
+            "--start",
+            "--part-number",
+            "--name",
+            "--type-guid",
+            "--identity",
+            "--sector-size",
+        ],
+        &["--yes"],
+    )?;
+    if !tokens.has("--yes") {
+        return Err(UsageError::new("`add` needs --yes"));
+    }
+    if tokens.positionals.len() != 2 {
+        return Err(UsageError::new("add needs <TARGET> <SIZE>"));
+    }
+    let target = target_spec(&tokens.positionals[0])?;
+    if target.partition.is_some() {
+        return Err(UsageError::new(
+            "add writes the partition table — drop the :N suffix",
+        ));
+    }
+    let size = absolute_size(&tokens.positionals[1])?;
+    let align = match tokens.value("--align") {
+        None => Alignment::Default,
+        Some("mib") => Alignment::Mib,
+        Some("none") => Alignment::None,
+        Some(other) => {
+            return Err(UsageError::new(format!(
+                "bad value `{other}` for --align (mib|none)"
+            )));
+        }
+    };
+    let start = tokens.value("--start").map(parse_start).transpose()?;
+    let part_number = tokens
+        .value("--part-number")
+        .map(parse_part_number)
+        .transpose()?;
+    let type_guid = tokens
+        .value("--type-guid")
+        .map(parse_type_selector)
+        .transpose()?;
+    let name = tokens.value("--name").map(str::to_owned);
+    let command = Command::Add(crate::app::observe::AddRequest {
+        size,
+        start,
+        align,
+        part_number,
+        name,
+        type_guid,
+    });
+    Ok(Request::new(target, command)
+        .with_sector_size(sector_size(&tokens)?)
+        .with_identity(identity(&tokens))
+        .with_confirmation(true))
+}
+
+fn parse_delete(args: &[String]) -> Result<Request, UsageError> {
+    let tokens = Tokens::scan(args, &["--identity", "--sector-size"], &["--yes"])?;
+    if !tokens.has("--yes") {
+        return Err(UsageError::new("`delete` needs --yes"));
+    }
+    let target = one_target(&tokens, "delete")?;
+    let Some(partition) = target.partition else {
+        return Err(UsageError::new(
+            "`delete` needs a partition: write <TARGET>:N",
+        ));
+    };
+    Ok(Request::new(target, Command::Delete { partition })
+        .with_sector_size(sector_size(&tokens)?)
+        .with_identity(identity(&tokens))
+        .with_confirmation(true))
+}
+
+fn parse_set(args: &[String]) -> Result<Request, UsageError> {
+    let tokens = Tokens::scan(
+        args,
+        &["--identity", "--sector-size"],
+        &["--yes", "--random"],
+    )?;
+    if !tokens.has("--yes") {
+        return Err(UsageError::new("`set` needs --yes"));
+    }
+    if tokens.positionals.len() < 2 {
+        return Err(UsageError::new(
+            "set needs <TARGET>:N <PROPERTY> [VALUE] [on|off]",
+        ));
+    }
+    let target = target_spec(&tokens.positionals[0])?;
+    let Some(partition) = target.partition else {
+        return Err(UsageError::new("`set` needs a partition: write <TARGET>:N"));
+    };
+    let Some(key) = SetKey::from_text(&tokens.positionals[1]) else {
+        return Err(UsageError::new(format!(
+            "unknown property `{}` for `set` — use name, label, uuid, flag or type",
+            tokens.positionals[1]
+        )));
+    };
+    let extras = &tokens.positionals[2..];
+    let (value, state) = match key {
+        SetKey::Name | SetKey::Label | SetKey::Type => {
+            if extras.is_empty() || extras.len() > 2 {
+                return Err(UsageError::new(format!(
+                    "`set {}` needs a value",
+                    key.as_str()
+                )));
+            }
+            (
+                extras[0].clone(),
+                extras.get(1).cloned().unwrap_or_default(),
+            )
+        }
+        SetKey::Uuid => {
+            if extras.len() > 1 {
+                return Err(UsageError::new("`set uuid` takes at most one value"));
+            }
+            (extras.first().cloned().unwrap_or_default(), String::new())
+        }
+        SetKey::Flag => {
+            if extras.len() != 2 {
+                return Err(UsageError::new("`set flag` needs <NAME> <on|off>"));
+            }
+            (extras[0].clone(), extras[1].clone())
+        }
+    };
+    if tokens.has("--random") && key != SetKey::Uuid {
+        return Err(UsageError::new("`--random` only applies to `set uuid`"));
+    }
+    if key == SetKey::Uuid && tokens.has("--random") && !value.is_empty() {
+        return Err(UsageError::new(
+            "`set uuid` takes a value or --random, not both",
+        ));
+    }
+    let command = Command::Set(SetRequest {
+        partition,
+        key,
+        value,
+        state,
+        random: tokens.has("--random"),
+    });
+    Ok(Request::new(target, command)
+        .with_sector_size(sector_size(&tokens)?)
+        .with_identity(identity(&tokens))
+        .with_confirmation(true))
+}
+
+fn parse_start(raw: &str) -> Result<StartSpec, UsageError> {
+    match raw {
+        "end" => Ok(StartSpec::End),
+        "align" => Ok(StartSpec::Align),
+        _ => raw
+            .parse::<u64>()
+            .map(StartSpec::Lba)
+            .map_err(|_| UsageError::new(format!("`{raw}` is not an LBA or end|align"))),
+    }
+}
+
+fn parse_part_number(raw: &str) -> Result<u32, UsageError> {
+    let number: u32 = raw
+        .parse()
+        .map_err(|_| UsageError::new(format!("`{raw}` is not a partition number")))?;
+    if number == 0 {
+        return Err(UsageError::new("partition numbers start at 1"));
+    }
+    Ok(number)
+}
+
+fn parse_type_selector(raw: &str) -> Result<TypeSelector, UsageError> {
+    if let Some(byte) = raw
+        .strip_prefix("0x")
+        .or_else(|| raw.strip_prefix("0X"))
+        .filter(|digits| !digits.is_empty() && digits.len() <= 2)
+        .and_then(|digits| u8::from_str_radix(digits, 16).ok())
+    {
+        return Ok(TypeSelector::Mbr(byte));
+    }
+    Guid::parse(raw)
+        .map(TypeSelector::Guid)
+        .ok_or_else(|| UsageError::new(format!("`{raw}` is not a GUID or 0xNN type byte")))
+}
+
+/// `add` 只接受绝对字节数；相对写法（+32M、-32M、32%）没有可参照的前值。
+fn absolute_size(raw: &str) -> Result<u64, UsageError> {
+    if raw.starts_with('+') || raw.starts_with('-') || raw.ends_with('%') {
+        return Err(UsageError::new(
+            "add needs an absolute SIZE (e.g. 512M) — relative forms are not accepted",
+        ));
+    }
+    let (value, unit) = match raw.as_bytes().last() {
+        Some(b'k' | b'K') => (&raw[..raw.len() - 1], 1u64 << 10),
+        Some(b'm' | b'M') => (&raw[..raw.len() - 1], 1u64 << 20),
+        Some(b'g' | b'G') => (&raw[..raw.len() - 1], 1u64 << 30),
+        Some(b't' | b'T') => (&raw[..raw.len() - 1], 1u64 << 40),
+        _ => (raw, 1),
+    };
+    let Some(bytes) = decimal(value).and_then(|(num, denom)| {
+        (num as u128)
+            .checked_mul(unit as u128)?
+            .checked_div(denom as u128)
+            .filter(|bytes| *bytes <= u64::MAX as u128)
+            .map(|bytes| bytes as u64)
+    }) else {
+        return Err(UsageError::new(format!("`{raw}` is not a size")));
+    };
+    Ok(bytes)
+}
+
+fn decimal(text: &str) -> Option<(u64, u64)> {
+    if text.is_empty() || text.ends_with('.') {
+        return None;
+    }
+    let (int_part, frac_part) = text.split_once('.').unwrap_or((text, ""));
+    if (int_part.is_empty() && frac_part.is_empty())
+        || !int_part.bytes().all(|byte| byte.is_ascii_digit())
+        || !frac_part.bytes().all(|byte| byte.is_ascii_digit())
+        || frac_part.len() > 18
+    {
+        return None;
+    }
+    let denom = 10u64.checked_pow(frac_part.len() as u32)?;
+    let int: u64 = if int_part.is_empty() {
+        0
+    } else {
+        int_part.parse().ok()?
+    };
+    let frac: u64 = if frac_part.is_empty() {
+        0
+    } else {
+        frac_part.parse().ok()?
+    };
+    let num = (u128::from(int))
+        .checked_mul(u128::from(denom))?
+        .checked_add(u128::from(frac))
+        .filter(|num| *num <= u128::from(u64::MAX))?;
+    Some((num as u64, denom))
 }
 
 fn one_target(tokens: &Tokens, command: &str) -> Result<TargetSpec, UsageError> {

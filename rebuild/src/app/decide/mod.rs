@@ -6,6 +6,7 @@
 pub mod check;
 pub mod confirmed;
 pub mod digest;
+pub mod edit;
 pub mod info;
 pub mod inspect;
 pub mod new;
@@ -27,7 +28,13 @@ pub enum Decision {
     /// 只读命令的报告与审计计划。
     Report { plan: Plan, report: Report },
     /// 会改变目标或外部状态的计划，执行前需确认。
-    Execute(Plan),
+    Execute {
+        plan: Plan,
+        /// 成功后的唯一一句人读摘要。
+        note: String,
+    },
+    /// 请求已经是目标状态，无需写入。
+    Unchanged { note: String },
     /// 拒绝，并带上固定成因。
     Refuse(Refusal),
 }

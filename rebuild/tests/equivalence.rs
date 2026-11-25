@@ -265,6 +265,48 @@ const SCENARIOS: &[Scenario] = &[
         name: "new refuses a partition selector",
         argv: &["new", "target/fixtures/s2/blank.img:1", "--yes"],
     },
+    Scenario {
+        name: "add refuses a partition selector",
+        argv: &["add", "target/fixtures/s1/gpt.img:1", "1M", "--yes"],
+    },
+    Scenario {
+        name: "add refuses a relative size",
+        argv: &["add", "target/fixtures/s1/gpt.img", "+1M", "--yes"],
+    },
+    Scenario {
+        name: "add refuses a zero size",
+        argv: &["add", "target/fixtures/s1/gpt.img", "0", "--yes"],
+    },
+    Scenario {
+        name: "add refuses a target without a table",
+        argv: &["add", "target/fixtures/s1/empty.img", "1M", "--yes"],
+    },
+    Scenario {
+        name: "add refuses a damaged table",
+        argv: &["add", "target/fixtures/s1/damaged.img", "1M", "--yes"],
+    },
+    Scenario {
+        name: "delete refuses a target without a table",
+        argv: &["delete", "target/fixtures/s1/empty.img:1", "--yes"],
+    },
+    Scenario {
+        name: "set refuses an unknown property",
+        argv: &["set", "target/fixtures/s1/gpt.img:1", "bogus", "x", "--yes"],
+    },
+    Scenario {
+        name: "set refuses a filesystem label",
+        argv: &[
+            "set",
+            "target/fixtures/s1/gpt.img:1",
+            "label",
+            "root",
+            "--yes",
+        ],
+    },
+    Scenario {
+        name: "set name is a GPT-only property",
+        argv: &["set", "target/fixtures/s1/mbr.img:1", "name", "x", "--yes"],
+    },
 ];
 
 fn code(program: &std::path::Path, argv: &[&str]) -> i32 {
@@ -324,6 +366,82 @@ fn both_binaries_agree_on_write_scenarios() {
             let mut argv: Vec<String> = prefix.iter().map(|part| (*part).to_owned()).collect();
             argv.push(target.to_owned());
             argv
+        };
+        let expected = code_owned(&baseline, &argv(&for_baseline));
+        let actual = code_owned(&candidate, &argv(&for_candidate));
+        assert_eq!(actual, expected, "{name} 的退出码不一致");
+        let changed = |path: &str| std::fs::read(path).expect("读取副本") != before;
+        assert_eq!(
+            changed(&for_candidate),
+            changed(&for_baseline),
+            "{name} 是否改动目标字节不一致"
+        );
+    }
+}
+
+#[test]
+fn both_binaries_agree_on_table_edits() {
+    let Some(baseline) = std::env::var_os("DISKEDIT_BASELINE") else {
+        eprintln!("NotApplicable: 未提供 DISKEDIT_BASELINE，表编辑对照未执行");
+        return;
+    };
+    let baseline = std::path::PathBuf::from(baseline);
+    let candidate = std::path::PathBuf::from(env!("CARGO_BIN_EXE_diskedit"));
+    fixtures::prepare();
+    let cases: &[(&str, &str, &[&str])] = &[
+        ("add gpt", "gpt.img", &["add", "{T}", "1M", "--yes"]),
+        (
+            "add gpt explicit start",
+            "gpt.img",
+            &["add", "{T}", "300K", "--start", "5000", "--yes"],
+        ),
+        ("add mbr", "mbr.img", &["add", "{T}", "512K", "--yes"]),
+        ("delete gpt", "gpt.img", &["delete", "{T}:2", "--yes"]),
+        ("delete mbr", "mbr.img", &["delete", "{T}:1", "--yes"]),
+        (
+            "set gpt name",
+            "gpt.img",
+            &["set", "{T}:1", "name", "rootfs", "--yes"],
+        ),
+        (
+            "set gpt type",
+            "gpt.img",
+            &[
+                "set",
+                "{T}:2",
+                "type",
+                "C12A7328-F81F-11D2-BA4B-00A0C93EC93B",
+                "--yes",
+            ],
+        ),
+        (
+            "set gpt flag",
+            "gpt.img",
+            &["set", "{T}:1", "flag", "hidden", "on", "--yes"],
+        ),
+        (
+            "set mbr boot",
+            "mbr.img",
+            &["set", "{T}:1", "flag", "boot", "on", "--yes"],
+        ),
+        (
+            "set mbr type",
+            "mbr.img",
+            &["set", "{T}:1", "type", "0x0c", "--yes"],
+        ),
+    ];
+    for (index, (name, source, template)) in cases.iter().enumerate() {
+        let original = std::path::Path::new(fixtures::BASE).join(source);
+        let before = std::fs::read(&original).expect("读取夹具");
+        let for_baseline = format!("{}/eq-{index}-base.img", fixtures::S2_BASE);
+        let for_candidate = format!("{}/eq-{index}-new.img", fixtures::S2_BASE);
+        std::fs::write(&for_baseline, &before).expect("写基线副本");
+        std::fs::write(&for_candidate, &before).expect("写候选副本");
+        let argv = |target: &str| {
+            template
+                .iter()
+                .map(|part| part.replace("{T}", target))
+                .collect::<Vec<String>>()
         };
         let expected = code_owned(&baseline, &argv(&for_baseline));
         let actual = code_owned(&candidate, &argv(&for_candidate));

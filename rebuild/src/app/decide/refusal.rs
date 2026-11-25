@@ -88,6 +88,8 @@ pub enum Refusal {
     RecordUnreadable { path: String },
     /// 目标上有一条针对别的工作的未收尾记录。
     RecordConflict { path: String },
+    /// 表编辑本身不能成立；原因来自纯核的编辑判据。
+    TableEdit { why: String },
 }
 
 impl Refusal {
@@ -193,6 +195,9 @@ impl Refusal {
             Self::RecordConflict { .. } => {
                 "finish or abandon the existing record with recover before starting a different plan"
             }
+            Self::TableEdit { .. } => {
+                "inspect the current table and adjust the request so the edit can be placed"
+            }
         }
     }
 
@@ -273,6 +278,7 @@ impl Refusal {
             Self::RecordConflict { path } => {
                 format!("{path} holds an unfinished record for a different plan")
             }
+            Self::TableEdit { why } => format!("the table cannot take this change: {why}"),
         }
     }
 }

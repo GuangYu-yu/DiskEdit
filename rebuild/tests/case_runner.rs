@@ -92,6 +92,118 @@ fn new_writes_a_readable_table_and_refuses_to_clobber() {
 }
 
 #[test]
+fn add_delete_and_set_rewrite_both_copies() {
+    fixtures::prepare();
+    let directory = "target/fixtures/s3";
+    std::fs::create_dir_all(directory).expect("编辑夹具目录可建");
+    let gpt = format!("{directory}/gpt.img");
+    let mbr = format!("{directory}/mbr.img");
+    std::fs::copy(std::path::Path::new(fixtures::BASE).join("gpt.img"), &gpt)
+        .expect("复制 GPT 夹具");
+    std::fs::copy(std::path::Path::new(fixtures::BASE).join("mbr.img"), &mbr)
+        .expect("复制 MBR 夹具");
+
+    let (code, stdout, stderr) = run_argv(&["add", &gpt, "1M", "--yes"]);
+    assert_eq!(code, 0, "GPT 新增应成功：{stderr}");
+    assert!(stdout.contains("added partition #3"), "{stdout}");
+    let (code, stdout, stderr) = run_argv(&["info", &gpt]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(stdout.contains("\"num\":3"), "{stdout}");
+    assert!(stdout.contains("\"first_lba\":4096"), "{stdout}");
+    let bytes = std::fs::read(&gpt).expect("读取镜像");
+    assert_eq!(
+        &bytes[bytes.len() - 512..bytes.len() - 504],
+        b"EFI PART",
+        "备份 GPT 头必须同步重写"
+    );
+
+    let (code, stdout, stderr) = run_argv(&["set", &format!("{gpt}:1"), "name", "rootfs", "--yes"]);
+    assert_eq!(code, 0, "改 GPT 名字应成功：{stderr}");
+    assert!(stdout.contains("renamed partition #1"), "{stdout}");
+    let (code, stdout, _) = run_argv(&["info", &gpt]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("\"name\":\"rootfs\""), "{stdout}");
+
+    let (code, _, stderr) = run_argv(&[
+        "set",
+        &format!("{gpt}:2"),
+        "type",
+        "C12A7328-F81F-11D2-BA4B-00A0C93EC93B",
+        "--yes",
+    ]);
+    assert_eq!(code, 0, "改 GPT 类型应成功：{stderr}");
+    let (code, stdout, _) = run_argv(&["info", &gpt]);
+    assert_eq!(code, 0);
+    assert!(
+        stdout.contains("\"type\":\"C12A7328-F81F-11D2-BA4B-00A0C93EC93B\""),
+        "{stdout}"
+    );
+
+    let (code, stdout, stderr) =
+        run_argv(&["set", &format!("{gpt}:1"), "flag", "hidden", "on", "--yes"]);
+    assert_eq!(code, 0, "改 GPT 旗标应成功：{stderr}");
+    assert!(stdout.contains("flag hidden=on"), "{stdout}");
+
+    let (code, stdout, stderr) = run_argv(&["delete", &format!("{gpt}:3"), "--yes"]);
+    assert_eq!(code, 0, "GPT 删除应成功：{stderr}");
+    assert!(stdout.contains("deleted partition #3"), "{stdout}");
+    let (code, stdout, _) = run_argv(&["info", &gpt]);
+    assert_eq!(code, 0);
+    assert!(!stdout.contains("\"num\":3"), "{stdout}");
+
+    let (code, stdout, stderr) = run_argv(&["add", &mbr, "512K", "--yes"]);
+    assert_eq!(code, 0, "MBR 新增应成功：{stderr}");
+    assert!(stdout.contains("added partition #2"), "{stdout}");
+    let (code, stdout, _) = run_argv(&["info", &mbr]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("\"num\":2"), "{stdout}");
+
+    let (code, stdout, stderr) =
+        run_argv(&["set", &format!("{mbr}:1"), "flag", "boot", "on", "--yes"]);
+    assert_eq!(code, 0, "MBR 启动标志应成功：{stderr}");
+    assert!(stdout.contains("flag boot=on"), "{stdout}");
+
+    let (code, stdout, stderr) = run_argv(&["delete", &format!("{mbr}:2"), "--yes"]);
+    assert_eq!(code, 0, "MBR 删除应成功：{stderr}");
+    assert!(stdout.contains("deleted partition #2"), "{stdout}");
+
+    let before = std::fs::read(&gpt).expect("读取镜像");
+    let (code, _, _) = run_argv(&["add", &gpt, "4M", "--yes"]);
+    assert_eq!(code, 3, "放不下的新增应拒绝");
+    assert_eq!(
+        std::fs::read(&gpt).expect("读取镜像"),
+        before,
+        "拒绝时不得改字节"
+    );
+
+    let explicit = format!("{directory}/explicit.img");
+    std::fs::copy(
+        std::path::Path::new(fixtures::BASE).join("gpt.img"),
+        &explicit,
+    )
+    .expect("复制 GPT 夹具");
+    let (code, _, stderr) = run_argv(&["add", &explicit, "1M", "--start", "5000", "--yes"]);
+    assert_eq!(code, 0, "显式起点应成功：{stderr}");
+    let (code, stdout, _) = run_argv(&["info", &explicit]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("\"first_lba\":5000"), "{stdout}");
+
+    let aligned = format!("{directory}/aligned.img");
+    std::fs::copy(
+        std::path::Path::new(fixtures::BASE).join("gpt.img"),
+        &aligned,
+    )
+    .expect("复制 GPT 夹具");
+    let (code, _, stderr) = run_argv(&[
+        "add", &aligned, "300K", "--start", "5000", "--align", "mib", "--yes",
+    ]);
+    assert_eq!(code, 0, "对齐起点应成功：{stderr}");
+    let (code, stdout, _) = run_argv(&["info", &aligned]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("\"first_lba\":6144"), "{stdout}");
+}
+
+#[test]
 fn every_case_matches_its_observable_result() {
     fixtures::prepare();
     for case in CASES {
