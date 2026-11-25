@@ -32,3 +32,18 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo test
+
+  discipline:
+    # 两条守卫都要完整历史：足迹需要 diff <基线>..HEAD，提交信息需要逐条主题。
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rebuild
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: 提交外足迹（只允许 rebuild/ 路径）
+        run: python3 plan/instruments/footprint.py
+      - name: 提交信息（前缀 + 范围 + 说明，禁用词）
+        run: python3 plan/instruments/commits.py

@@ -1,0 +1,6 @@
+# 提交外足迹的基线
+#
+# 本文件所在的提交是重写工作的起点：它之后（不含它自己）的每个提交，
+# `git diff --name-only` 只允许出现 `rebuild/` 下的路径，工作区同样只允许
+# `rebuild/` 下的改动。基线由 `plan/instruments/footprint.py` 读取，
+# 不需要在别处再维护一份 SHA。
