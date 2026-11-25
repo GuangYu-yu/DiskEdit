@@ -321,7 +321,13 @@ fn parse_set(args: &[String]) -> Result<Request, UsageError> {
 fn parse_move(args: &[String]) -> Result<Request, UsageError> {
     let tokens = Tokens::scan(
         args,
-        &["--align", "--start", "--chunk", "--identity", "--sector-size"],
+        &[
+            "--align",
+            "--start",
+            "--chunk",
+            "--identity",
+            "--sector-size",
+        ],
         &["--yes"],
     )?;
     if !tokens.has("--yes") {
@@ -329,12 +335,12 @@ fn parse_move(args: &[String]) -> Result<Request, UsageError> {
     }
     let target = one_target(&tokens, "move")?;
     let Some(partition) = target.partition else {
-        return Err(UsageError::new("`move` needs a partition: write <TARGET>:N"));
+        return Err(UsageError::new(
+            "`move` needs a partition: write <TARGET>:N",
+        ));
     };
     let Some(raw) = tokens.value("--start") else {
-        return Err(UsageError::new(
-            "`move` needs --start <LBA|end|align>",
-        ));
+        return Err(UsageError::new("`move` needs --start <LBA|end|align>"));
     };
     let command = Command::Move(MoveRequest {
         partition,
@@ -366,7 +372,9 @@ fn parse_copy(args: &[String]) -> Result<Request, UsageError> {
     }
     let target = one_target(&tokens, "copy")?;
     let Some(partition) = target.partition else {
-        return Err(UsageError::new("`copy` needs a partition: write <TARGET>:N"));
+        return Err(UsageError::new(
+            "`copy` needs a partition: write <TARGET>:N",
+        ));
     };
     let Some(raw) = tokens.value("--start") else {
         return Err(UsageError::new("`copy` needs --start <LBA|end>"));
@@ -754,7 +762,8 @@ mod tests {
         assert!(parse_words(&["move", "disk.img:1", "--start", "5000"]).is_err());
         assert!(parse_words(&["move", "disk.img", "--start", "5000", "--yes"]).is_err());
         assert!(parse_words(&["move", "disk.img:1", "--yes"]).is_err());
-        let request = parse_words(&["move", "disk.img:2", "--start", "5000", "--yes"]).expect("合法");
+        let request =
+            parse_words(&["move", "disk.img:2", "--start", "5000", "--yes"]).expect("合法");
         assert!(matches!(
             request.command(),
             Command::Move(m) if m.start == StartSpec::Lba(5000)
@@ -764,10 +773,29 @@ mod tests {
     #[test]
     fn chunk_is_mebibytes_in_range() {
         for bad in ["0", "65", "x"] {
-            assert!(parse_words(&["move", "disk.img:1", "--start", "5000", "--chunk", bad, "--yes"]).is_err());
+            assert!(
+                parse_words(&[
+                    "move",
+                    "disk.img:1",
+                    "--start",
+                    "5000",
+                    "--chunk",
+                    bad,
+                    "--yes"
+                ])
+                .is_err()
+            );
         }
-        let request =
-            parse_words(&["move", "disk.img:1", "--start", "5000", "--chunk", "8", "--yes"]).expect("合法");
+        let request = parse_words(&[
+            "move",
+            "disk.img:1",
+            "--start",
+            "5000",
+            "--chunk",
+            "8",
+            "--yes",
+        ])
+        .expect("合法");
         assert!(matches!(request.command(), Command::Move(m) if m.chunk == Some(8 << 20)));
     }
 

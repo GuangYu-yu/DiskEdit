@@ -69,12 +69,22 @@ fn execute(
         .source_lba
         .checked_add(data.sectors)
         .and_then(|end| end.checked_mul(sector_size))
-        .ok_or_else(|| (ExecError::InvalidPlan("the source range overflows".to_owned()), false))?;
+        .ok_or_else(|| {
+            (
+                ExecError::InvalidPlan("the source range overflows".to_owned()),
+                false,
+            )
+        })?;
     let dest_bytes = data
         .dest_lba
         .checked_add(data.sectors)
         .and_then(|end| end.checked_mul(sector_size))
-        .ok_or_else(|| (ExecError::InvalidPlan("the target range overflows".to_owned()), false))?;
+        .ok_or_else(|| {
+            (
+                ExecError::InvalidPlan("the target range overflows".to_owned()),
+                false,
+            )
+        })?;
 
     let mut handle = platform
         .open_target(target)
@@ -116,8 +126,13 @@ fn execute(
         }
     }
 
-    let layout = relocate::layout(data.sectors, sector_size, data.shift, data.chunk)
-        .ok_or_else(|| (ExecError::InvalidPlan("the chunk layout is degenerate".to_owned()), false))?;
+    let layout =
+        relocate::layout(data.sectors, sector_size, data.shift, data.chunk).ok_or_else(|| {
+            (
+                ExecError::InvalidPlan("the chunk layout is degenerate".to_owned()),
+                false,
+            )
+        })?;
     let spans = layout.spans(data.source_lba);
     let total = u64::try_from(spans.len()).expect("块数可表示");
     let token = session.token();
@@ -143,10 +158,8 @@ fn execute(
             relocate::Resume::Start => cursor = 0,
             relocate::Resume::Continue { cursor: at } => cursor = at,
             relocate::Resume::Mismatch => {
-                let overlaps = relocate::relocation_overlaps(
-                    data.shift.unsigned_abs(),
-                    data.sectors,
-                );
+                let overlaps =
+                    relocate::relocation_overlaps(data.shift.unsigned_abs(), data.sectors);
                 if overlaps {
                     return Err((
                         ExecError::Record(
@@ -175,7 +188,14 @@ fn execute(
     if cursor < total {
         let mut channel = WriteChannel::new(handle.as_mut(), &data.regions);
         let mut rolling = Hasher::new();
-        hash_prefix_in_channel(&channel, &spans, cursor, sector_size, data.shift, &mut rolling)?;
+        hash_prefix_in_channel(
+            &channel,
+            &spans,
+            cursor,
+            sector_size,
+            data.shift,
+            &mut rolling,
+        )?;
         for (index, span) in spans.iter().enumerate().skip(usize_from(cursor)) {
             let source = lba_region(span.first_lba, span.len_lba, sector_size)?;
             let destination = shifted(span, data.shift, sector_size)?;
@@ -195,9 +215,7 @@ fn execute(
             }
         }
         channel.barrier().map_err(|error| (error, wrote))?;
-        channel
-            .verify_written()
-            .map_err(|error| (error, wrote))?;
+        channel.verify_written().map_err(|error| (error, wrote))?;
     }
 
     let mut preimages = Vec::with_capacity(segments.len());
@@ -221,9 +239,7 @@ fn execute(
     super::postcondition::verify(&channel).map_err(|error| (error, wrote))?;
     drop(channel);
 
-    session
-        .commit()
-        .map_err(|(error, _)| (error, wrote))?;
+    session.commit().map_err(|(error, _)| (error, wrote))?;
     match handle.refresh_partitions() {
         Ok(()) => Ok(None),
         Err(error) => Ok(Some(format!(
@@ -232,10 +248,7 @@ fn execute(
     }
 }
 
-fn data_step(
-    plan: &ConfirmedPlan,
-    sector_size: u64,
-) -> Result<DataStep, (ExecError, bool)> {
+fn data_step(plan: &ConfirmedPlan, sector_size: u64) -> Result<DataStep, (ExecError, bool)> {
     for step in plan.steps() {
         match &step.kind {
             StepKind::MovePartition {
@@ -372,11 +385,7 @@ fn lba_region(lba: u64, sectors: u64, sector_size: u64) -> Result<Region, (ExecE
         })
 }
 
-fn shifted(
-    span: &ChunkSpan,
-    shift: i64,
-    sector_size: u64,
-) -> Result<Region, (ExecError, bool)> {
+fn shifted(span: &ChunkSpan, shift: i64, sector_size: u64) -> Result<Region, (ExecError, bool)> {
     let dest = i128::from(span.first_lba) + i128::from(shift);
     let lba = u64::try_from(dest).map_err(|_| {
         (
@@ -456,6 +465,12 @@ struct Session<'a> {
     table_registered: bool,
 }
 
+/// 续跑点：已完成进度与最近一帧摘要。
+type ResumePoint = (u64, [u8; 16]);
+
+/// 执行失败与"目标是否可能已被写过"的成对结果。
+type ExecFailure = (ExecError, bool);
+
 impl<'a> Session<'a> {
     /// 取锁、读出可续跑进度；没有记录时先落一条意图帧。
     fn prepare(
@@ -463,7 +478,7 @@ impl<'a> Session<'a> {
         identity: Fingerprint,
         plan_digest: [u8; 32],
         spec: &[u8],
-    ) -> Result<(Self, Option<(u64, [u8; 16])>), (ExecError, bool)> {
+    ) -> Result<(Self, Option<ResumePoint>), ExecFailure> {
         let root = platform.state_root().ok_or_else(|| {
             (
                 ExecError::Record("the host has no state directory".to_owned()),
@@ -502,9 +517,7 @@ impl<'a> Session<'a> {
             }
             if decoded.body.plan_digest != plan_digest {
                 return Err((
-                    ExecError::Record(
-                        "the existing record belongs to a different plan".to_owned(),
-                    ),
+                    ExecError::Record("the existing record belongs to a different plan".to_owned()),
                     false,
                 ));
             }

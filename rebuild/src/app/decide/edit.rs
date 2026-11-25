@@ -66,7 +66,7 @@ pub fn move_partition(snapshot: &EditSnapshot, request: &Request) -> Decision {
         Ok(index) => index,
         Err(error) => return refuse_edit(&error.to_string()),
     };
-    let entry = table.entries[index].clone();
+    let entry = table.entries[index];
     let old_start = entry.starting_lba;
     let len = entry.ending_lba - old_start + 1;
     let new_start = match start_lba(&table, moved.start, moved.align, old_start, Some(len)) {
@@ -109,12 +109,7 @@ pub fn move_partition(snapshot: &EditSnapshot, request: &Request) -> Decision {
         },
         vec![region(new_start * sector_size, len * sector_size)],
     );
-    let table_step = table_step(
-        TableFormat::Gpt,
-        *sector_size,
-        segments,
-        snapshot.stamp,
-    );
+    let table_step = table_step(TableFormat::Gpt, *sector_size, segments, snapshot.stamp);
     let plan = Plan::write(vec![data, table_step], identity);
     finish(
         snapshot,
@@ -169,10 +164,15 @@ pub fn copy_partition(snapshot: &EditSnapshot, request: &Request) -> Decision {
                 .to_owned(),
         });
     }
-    let entry = table.entries[index].clone();
+    let entry = table.entries[index];
     let len = entry.ending_lba - entry.starting_lba + 1;
-    let new_start = match start_lba(&table, copied.start, copied.align, entry.starting_lba, Some(len))
-    {
+    let new_start = match start_lba(
+        &table,
+        copied.start,
+        copied.align,
+        entry.starting_lba,
+        Some(len),
+    ) {
         Ok(start) => start,
         Err(refusal) => return Decision::Refuse(refusal),
     };
@@ -183,7 +183,7 @@ pub fn copy_partition(snapshot: &EditSnapshot, request: &Request) -> Decision {
     if let Err(refusal) = place_range(&table, usize::MAX, new_start, new_end, false) {
         return Decision::Refuse(refusal);
     }
-    let mut clone = entry.clone();
+    let mut clone = entry;
     if let Some(name) = &copied.name {
         if let Err(refusal) = check_name(name) {
             return Decision::Refuse(refusal);
@@ -219,12 +219,7 @@ pub fn copy_partition(snapshot: &EditSnapshot, request: &Request) -> Decision {
         },
         vec![region(new_start * sector_size, len * sector_size)],
     );
-    let table_step = table_step(
-        TableFormat::Gpt,
-        *sector_size,
-        segments,
-        snapshot.stamp,
-    );
+    let table_step = table_step(TableFormat::Gpt, *sector_size, segments, snapshot.stamp);
     let plan = Plan::write(vec![data, table_step], identity);
     let number = u32::try_from(slot + 1).expect("条目下标可表示");
     finish_copy(

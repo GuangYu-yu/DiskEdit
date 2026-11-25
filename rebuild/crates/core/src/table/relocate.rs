@@ -54,12 +54,7 @@ pub fn relocation_overlaps(shift_lba: u64, copy_lba: u64) -> bool {
 ///
 /// 自重叠时单块收敛到不超过位移；结果块为零（请求块为零、或自重叠位移为零）
 /// 或字节换算溢出时返回 `None`，调用方按参数或几何错误拒绝，不拿零当除数。
-pub fn layout(
-    copy_lba: u64,
-    sector_size: u64,
-    shift: i64,
-    chunk_bytes: u64,
-) -> Option<Layout> {
+pub fn layout(copy_lba: u64, sector_size: u64, shift: i64, chunk_bytes: u64) -> Option<Layout> {
     if copy_lba == 0 {
         return Some(Layout {
             chunk_lba: 1,
@@ -124,7 +119,13 @@ mod tests {
         let layout = layout(1000, SS, 2000, 1 << 20).expect("布局");
         assert_eq!(layout.count, 1);
         let spans = layout.spans(100);
-        assert_eq!(spans, vec![ChunkSpan { first_lba: 100, len_lba: 1000 }]);
+        assert_eq!(
+            spans,
+            vec![ChunkSpan {
+                first_lba: 100,
+                len_lba: 1000
+            }]
+        );
     }
 
     #[test]

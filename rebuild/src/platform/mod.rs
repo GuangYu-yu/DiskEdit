@@ -3,9 +3,18 @@
 //! 平台选择与具体系统调用只出现在本层；`app` 与纯核不引用任何平台名。
 //! 端口只暴露事实与动作：句柄、扇区大小、身份、占用、外部程序与记录根目录。
 
-pub mod linux;
+//! 目录约定：`mod.rs` 只放中立端口与平台选择；每个平台一个子树，系统调用、
+//! 虚拟文件系统路径与具体可执行名只出现在对应子树内。新增宿主只加子树并把
+//! 它接进 [`host`]，不改上层。
+
 pub mod probe;
-pub mod tools;
+
+#[cfg(target_os = "linux")]
+pub mod linux;
+#[cfg(target_os = "macos")]
+pub mod macos;
+#[cfg(target_os = "windows")]
+pub mod windows;
 
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -13,12 +22,237 @@ use std::path::{Path, PathBuf};
 use diskedit_core::fingerprint::Fingerprint;
 use diskedit_core::fs::Program;
 
+#[cfg(target_os = "linux")]
 pub use linux::LinuxPlatform;
+#[cfg(target_os = "macos")]
+pub use macos::MacOsPlatform;
+#[cfg(target_os = "windows")]
+pub use windows::WindowsPlatform;
 
 /// 当前宿主的端口实现。平台选择只在这里发生。
+#[cfg(target_os = "linux")]
 pub fn host() -> LinuxPlatform {
     LinuxPlatform
 }
+
+#[cfg(target_os = "macos")]
+pub fn host() -> MacOsPlatform {
+    MacOsPlatform
+}
+
+#[cfg(target_os = "windows")]
+pub fn host() -> WindowsPlatform {
+    WindowsPlatform
+}
+
+/// 没有专属子树的其他宿主。
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+pub fn host() -> UnsupportedPlatform {
+    UnsupportedPlatform
+}
+
+/// 尚未接入的宿主：每个端口都显式返回 [`PlatformError::NotSupported`]，
+/// 不返回空事实、不假装成功。接入某个能力时在对应平台子树里实现它。
+pub struct UnsupportedPlatform;
+
+/// 为尚未接入的宿主生成显式"不支持"实现。
+macro_rules! unsupported_platform {
+    ($ty:ty, $os:literal) => {
+        impl $crate::platform::Platform for $ty {
+            fn open_target(
+                &self,
+                _path: &std::path::Path,
+            ) -> $crate::platform::PlatformResult<Box<dyn $crate::platform::TargetHandle>> {
+                Err($crate::platform::PlatformError::not_supported(concat!(
+                    $os,
+                    " 的打开端口尚未接入"
+                )))
+            }
+
+            fn open_target_read_only(
+                &self,
+                _path: &std::path::Path,
+            ) -> $crate::platform::PlatformResult<Box<dyn $crate::platform::TargetHandle>> {
+                Err($crate::platform::PlatformError::not_supported(concat!(
+                    $os,
+                    " 的打开端口尚未接入"
+                )))
+            }
+
+            fn path_kind(&self, _path: &std::path::Path) -> $crate::platform::TargetKind {
+                $crate::platform::TargetKind::Other
+            }
+
+            fn is_partition_node(&self, _path: &std::path::Path) -> bool {
+                false
+            }
+
+            fn identity(
+                &self,
+                _path: &std::path::Path,
+            ) -> $crate::platform::PlatformResult<diskedit_core::fingerprint::Fingerprint> {
+                Err($crate::platform::PlatformError::not_supported(concat!(
+                    $os,
+                    " 的身份端口尚未接入"
+                )))
+            }
+
+            fn occupancy(
+                &self,
+                _path: &std::path::Path,
+            ) -> $crate::platform::PlatformResult<$crate::platform::Occupancy> {
+                Err($crate::platform::PlatformError::not_supported(concat!(
+                    $os,
+                    " 的占用端口尚未接入"
+                )))
+            }
+
+            fn state_root(&self) -> Option<std::path::PathBuf> {
+                None
+            }
+
+            fn is_directory(&self, _path: &std::path::Path) -> bool {
+                false
+            }
+
+            fn list_files(
+                &self,
+                _root: &std::path::Path,
+            ) -> $crate::platform::PlatformResult<Vec<std::path::PathBuf>> {
+                Err($crate::platform::PlatformError::not_supported(concat!(
+                    $os,
+                    " 的目录端口尚未接入"
+                )))
+            }
+
+            fn read_file(
+                &self,
+                _path: &std::path::Path,
+            ) -> $crate::platform::PlatformResult<Option<Vec<u8>>> {
+                Err($crate::platform::PlatformError::not_supported(concat!(
+                    $os,
+                    " 的文件端口尚未接入"
+                )))
+            }
+
+            fn run(
+                &self,
+                _program: diskedit_core::fs::Program,
+                _args: &[String],
+            ) -> $crate::platform::PlatformResult<$crate::platform::ToolRun> {
+                Err($crate::platform::PlatformError::not_supported(concat!(
+                    $os,
+                    " 没有外部工具端口"
+                )))
+            }
+
+            fn tool_available(&self, _program: diskedit_core::fs::Program) -> bool {
+                false
+            }
+
+            fn tool_name(&self, _program: diskedit_core::fs::Program) -> &'static str {
+                "unavailable"
+            }
+
+            fn bind_loop(
+                &self,
+                _path: &std::path::Path,
+                _offset: u64,
+                _len: u64,
+            ) -> $crate::platform::PlatformResult<$crate::platform::LoopBinding> {
+                Err($crate::platform::PlatformError::not_supported(concat!(
+                    $os,
+                    " 没有 loop 设备"
+                )))
+            }
+
+            fn partition_device(
+                &self,
+                _disk: &std::path::Path,
+                _number: u32,
+            ) -> $crate::platform::PlatformResult<std::path::PathBuf> {
+                Err($crate::platform::PlatformError::not_supported(concat!(
+                    $os,
+                    " 的分区设备端口尚未接入"
+                )))
+            }
+
+            fn entropy(&self, _len: usize) -> $crate::platform::PlatformResult<Vec<u8>> {
+                Err($crate::platform::PlatformError::not_supported(concat!(
+                    $os,
+                    " 的随机源尚未接入"
+                )))
+            }
+
+            fn create_directory_all(
+                &self,
+                _path: &std::path::Path,
+            ) -> $crate::platform::PlatformResult<()> {
+                Err($crate::platform::PlatformError::not_supported(concat!(
+                    $os,
+                    " 的目录端口尚未接入"
+                )))
+            }
+
+            fn write_state_file(
+                &self,
+                _path: &std::path::Path,
+                _bytes: &[u8],
+            ) -> $crate::platform::PlatformResult<()> {
+                Err($crate::platform::PlatformError::not_supported(concat!(
+                    $os,
+                    " 的状态文件端口尚未接入"
+                )))
+            }
+
+            fn append_state_file(
+                &self,
+                _path: &std::path::Path,
+                _bytes: &[u8],
+            ) -> $crate::platform::PlatformResult<()> {
+                Err($crate::platform::PlatformError::not_supported(concat!(
+                    $os,
+                    " 的状态文件端口尚未接入"
+                )))
+            }
+
+            fn remove_state_file(
+                &self,
+                _path: &std::path::Path,
+            ) -> $crate::platform::PlatformResult<()> {
+                Err($crate::platform::PlatformError::not_supported(concat!(
+                    $os,
+                    " 的状态文件端口尚未接入"
+                )))
+            }
+
+            fn sync_directory(
+                &self,
+                _path: &std::path::Path,
+            ) -> $crate::platform::PlatformResult<()> {
+                Err($crate::platform::PlatformError::not_supported(concat!(
+                    $os,
+                    " 的目录持久化端口尚未接入"
+                )))
+            }
+
+            fn lock_state(
+                &self,
+                _path: &std::path::Path,
+            ) -> $crate::platform::PlatformResult<Box<dyn $crate::platform::StateLock>> {
+                Err($crate::platform::PlatformError::not_supported(concat!(
+                    $os,
+                    " 的状态锁尚未接入"
+                )))
+            }
+        }
+    };
+}
+
+#[cfg(not(target_os = "linux"))]
+pub(crate) use unsupported_platform;
+
+unsupported_platform!(UnsupportedPlatform, "当前宿主");
 
 /// 端口操作失败。
 #[derive(Debug)]

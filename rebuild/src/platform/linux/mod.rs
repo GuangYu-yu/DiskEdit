@@ -1,7 +1,7 @@
 //! Linux 端口实现：文件与块设备句柄、身份、占用、外部程序与临时块设备视图。
 //!
 //! 只有本模块出现系统调用、虚拟文件系统路径与具体可执行名；上层看到的是
-//! [`super::Platform`] 与 [`super::TargetHandle`] 的中立形状。
+//! [`crate::platform::Platform`] 与 [`crate::platform::TargetHandle`] 的中立形状。
 
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Write};
@@ -14,11 +14,12 @@ use diskedit_core::fingerprint::Fingerprint;
 use diskedit_core::fs::Program;
 use sha2::{Digest, Sha256};
 
-use super::tools;
-use super::{
+use crate::platform::{
     LoopBinding, Occupancy, Platform, PlatformError, PlatformResult, StateLock, TargetHandle,
     TargetKind, ToolRun,
 };
+
+mod tools;
 
 /// Linux 宿主端口。
 #[derive(Debug, Default)]
