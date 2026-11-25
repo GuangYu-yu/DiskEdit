@@ -1,10 +1,18 @@
 //! 分区表：GPT 与 MBR 的纯编解码、CRC 与副本分类。
 
+pub mod create;
 pub mod error;
 pub mod gpt;
 pub mod mbr;
+pub mod stamp;
 
+pub use create::{
+    CapacityError, Conflict, Format, GptContent, GptLayout, LabeledRegion, PartitionSpan, PmbrIssue,
+    PmbrSize, Segment, TableProbe, check_capacity, first_conflict, gpt_content, gpt_layout,
+    new_mbr_lba0, pmbr_size_state, protective_mbr_content, regions_blank, signature_sites,
+};
 pub use error::TableError;
+pub use stamp::table_stamp;
 pub use gpt::entries::{PartitionEntry, PartitionName};
 pub use gpt::header::GptHeader;
 pub use gpt::parse::{GptCopy, GptEvidence, GptState, HeaderIssue};

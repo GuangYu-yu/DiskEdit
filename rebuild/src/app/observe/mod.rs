@@ -9,10 +9,12 @@ use diskedit_core::evidence::Generation;
 use diskedit_core::fs::MkfsKind;
 use diskedit_core::table::Guid;
 
+pub mod new;
 pub mod records;
 pub mod snapshot;
 pub mod table;
 
+pub use new::{CapturedRegion, NewSnapshot, PriorRecord, PriorState, capture_new};
 pub use snapshot::{
     CaptureError, InspectSnapshot, RecordSnapshot, Snapshot, TargetFacts, capture, capture_inspect,
     capture_records,

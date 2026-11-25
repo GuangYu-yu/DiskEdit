@@ -158,7 +158,10 @@ pub fn capture_records(
 }
 
 /// 打开目标并解析身份；`--identity` 的适用性在这里判定一次。
-fn open_target(platform: &dyn Platform, request: &Request) -> Result<TargetFacts, CaptureError> {
+pub(crate) fn open_target(
+    platform: &dyn Platform,
+    request: &Request,
+) -> Result<TargetFacts, CaptureError> {
     let spec = request.target_spec().ok_or(CaptureError::NoTarget)?;
     let path = &spec.path;
     let declared = request.identity();
@@ -195,7 +198,7 @@ fn open_target(platform: &dyn Platform, request: &Request) -> Result<TargetFacts
 }
 
 /// 按目标身份或声明名定位记录。
-fn record_state(
+pub(crate) fn record_state(
     platform: &dyn Platform,
     request: &Request,
     target: &TargetFacts,

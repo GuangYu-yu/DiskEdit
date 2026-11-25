@@ -14,6 +14,8 @@ pub struct Plan {
     steps: Vec<Step>,
     digest: [u8; 32],
     identity: Option<Fingerprint>,
+    /// 跨次重跑稳定的请求摘要；没有时为 `None`，记录退回使用完整摘要。
+    request: Option<[u8; 32]>,
 }
 
 impl Plan {
@@ -29,6 +31,7 @@ impl Plan {
             steps,
             digest,
             identity: Some(identity),
+            request: None,
         })
     }
 
@@ -39,6 +42,7 @@ impl Plan {
             steps,
             digest,
             identity: None,
+            request: None,
         }
     }
 
@@ -56,7 +60,14 @@ impl Plan {
             steps,
             digest,
             identity: Some(identity),
+            request: None,
         })
+    }
+
+    /// 绑定跨次稳定的请求摘要；记录用它判断能否续跑。
+    pub fn with_request_digest(mut self, request: [u8; 32]) -> Self {
+        self.request = Some(request);
+        self
     }
 
     pub fn steps(&self) -> &[Step] {
@@ -65,6 +76,11 @@ impl Plan {
 
     pub fn digest(&self) -> [u8; 32] {
         self.digest
+    }
+
+    /// 记录的比对值：优先请求摘要，否则完整计划摘要。
+    pub fn request_digest(&self) -> [u8; 32] {
+        self.request.unwrap_or(self.digest)
     }
 
     pub fn identity(&self) -> Option<Fingerprint> {

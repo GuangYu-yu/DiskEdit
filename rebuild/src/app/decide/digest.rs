@@ -37,6 +37,35 @@ pub fn plan_digest(identity: Option<Fingerprint>, steps: &[Step]) -> [u8; 32] {
     out
 }
 
+/// 请求摘要：只绑定"新建哪张表、是否覆盖、块大小与目标身份"，不含随机 GUID。
+///
+/// 记录的续跑判定用它：同一请求重跑得到同一摘要，因此可以从中断处继续；
+/// 而完整计划摘要仍绑定实际写出的每个字节。
+pub fn request_digest(
+    identity: Option<Fingerprint>,
+    format: TableFormat,
+    overwrite: bool,
+    sector_size: u64,
+) -> [u8; 32] {
+    let mut lanes = [Lane::new(0xcbf2_9ce4_8422_2325); 4];
+    match identity {
+        Some(identity) => {
+            push_bytes(&mut lanes, b"identity");
+            push_bytes(&mut lanes, &identity.bytes());
+            push_bytes(&mut lanes, &[strength_tag(identity)]);
+        }
+        None => push_bytes(&mut lanes, b"no-identity"),
+    }
+    push_bytes(&mut lanes, b"new-table");
+    push_bytes(&mut lanes, &[format_tag(format), u8::from(overwrite)]);
+    push_bytes(&mut lanes, &sector_size.to_le_bytes());
+    let mut out = [0u8; 32];
+    for (slot, lane) in out.chunks_exact_mut(8).zip(lanes) {
+        slot.copy_from_slice(&lane.finish().to_le_bytes());
+    }
+    out
+}
+
 #[derive(Clone, Copy)]
 struct Lane(u64);
 
@@ -79,9 +108,23 @@ fn encode_kind(out: &mut Vec<u8>, kind: &StepKind) {
             out.extend_from_slice(token.as_bytes());
         }
         StepKind::ScanRecords => out.push(5),
-        StepKind::WriteTable { format } => {
+        StepKind::WriteTable {
+            format,
+            segment_size,
+            stamp,
+            segments,
+        } => {
             out.push(6);
             out.push(format_tag(*format));
+            out.extend_from_slice(&segment_size.to_le_bytes());
+            out.extend_from_slice(stamp);
+            out.extend_from_slice(&(segments.len() as u64).to_le_bytes());
+            for segment in segments {
+                out.extend_from_slice(&segment.region.start().to_le_bytes());
+                out.extend_from_slice(&segment.region.end().to_le_bytes());
+                out.extend_from_slice(&(segment.bytes.len() as u64).to_le_bytes());
+                out.extend_from_slice(&segment.bytes);
+            }
         }
         StepKind::AddPartition {
             format,

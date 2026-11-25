@@ -21,6 +21,13 @@ pub enum Access {
     WritesExternalState,
 }
 
+/// 一段完整的表写入：区间与要落盘的字节。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TableSegment {
+    pub region: Region,
+    pub bytes: Vec<u8>,
+}
+
 /// 一步做什么。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum StepKind {
@@ -35,7 +42,14 @@ pub enum StepKind {
     /// 扫描记录目录。
     ScanRecords,
     /// 写出完整分区表。
-    WriteTable { format: TableFormat },
+    WriteTable {
+        format: TableFormat,
+        segment_size: u64,
+        /// 写前表区摘要：执行前重读首/中/末三扇区必须得到同一个值。
+        stamp: [u8; 32],
+        /// 按落盘顺序排列的写段；`regions` 是本步声明的全部区间。
+        segments: Vec<TableSegment>,
+    },
     /// 新增一个分区。
     AddPartition {
         format: TableFormat,
