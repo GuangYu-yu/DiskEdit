@@ -17,6 +17,8 @@ pub enum DiagnoseResult {
     Problems { message: String },
     /// 缺少所需程序。
     Missing { message: String },
+    /// 拒绝执行：绑定检查视图或启动工具失败。
+    Refused { message: String },
     /// 环境或 I/O 故障，未结论。
     Environment { message: String },
 }
@@ -34,7 +36,7 @@ pub fn run(platform: &dyn Platform, query: &CheckQuery) -> DiagnoseResult {
     let device = match resolve(platform, &query.target) {
         Ok(device) => device,
         Err(error) => {
-            return DiagnoseResult::Environment {
+            return DiagnoseResult::Refused {
                 message: format!("check failed: {error}"),
             };
         }
@@ -42,7 +44,7 @@ pub fn run(platform: &dyn Platform, query: &CheckQuery) -> DiagnoseResult {
     let run = match platform.run(query.program, &[device.device().display().to_string()]) {
         Ok(run) => run,
         Err(error) => {
-            return DiagnoseResult::Environment {
+            return DiagnoseResult::Refused {
                 message: format!("check failed: {error}"),
             };
         }

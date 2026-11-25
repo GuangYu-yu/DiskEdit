@@ -8,12 +8,12 @@
   "diskedit-core"
  ],
  "exit_code": 0,
- "commit": "d969bdc",
- "tree": "0962a3ff371af777",
- "at": "2026-11-24T22:56:23+00:00",
+ "commit": "ff534df",
+ "tree": "c04e0ec6c86e7e88",
+ "at": "2026-11-25T15:16:32+00:00",
  "counts": {
   "result_lines": 2,
-  "passed": 117,
+  "passed": 127,
   "failed": 0,
   "ignored": 0,
   "not_applicable": 0

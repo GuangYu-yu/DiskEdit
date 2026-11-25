@@ -14,6 +14,7 @@ use super::step::Step;
 pub struct ConfirmedPlan {
     steps: Vec<Step>,
     digest: [u8; 32],
+    request_digest: [u8; 32],
     identity: Fingerprint,
 }
 
@@ -24,6 +25,11 @@ impl ConfirmedPlan {
 
     pub fn digest(&self) -> [u8; 32] {
         self.digest
+    }
+
+    /// 记录的比对值：跨次重跑稳定的请求摘要。
+    pub fn request_digest(&self) -> [u8; 32] {
+        self.request_digest
     }
 
     pub fn identity(&self) -> Fingerprint {
@@ -61,6 +67,7 @@ pub fn confirm(
     Ok(ConfirmedPlan {
         steps: plan.steps().to_vec(),
         digest: plan.digest(),
+        request_digest: plan.request_digest(),
         identity: planned,
     })
 }

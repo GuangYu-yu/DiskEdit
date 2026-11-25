@@ -3,7 +3,7 @@
 //! 解析只产出 [`Request`]；任何不认识、重复或缺失的参数都变成 [`UsageError`]，
 //! 由命令层统一以用法错误退出。目标上的分区是否存在不在这里判断。
 
-use crate::app::observe::{Command, PartitionSelector, Request, TargetSpec};
+use crate::app::observe::{Command, PartitionSelector, Request, TableFormat, TargetSpec};
 
 /// 用法错误：外层打印到 stderr 并以 2 退出。
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -30,6 +30,7 @@ pub fn parse(args: &[String]) -> Result<Request, UsageError> {
         "inspect" => parse_inspect(rest),
         "records" => parse_records(rest),
         "check" => parse_check(rest),
+        "new" => parse_new(rest),
         other => Err(UsageError::new(format!("unknown command `{other}`"))),
     }
 }
@@ -121,6 +122,40 @@ fn parse_check(args: &[String]) -> Result<Request, UsageError> {
         .partition
         .ok_or_else(|| UsageError::new("check needs <TARGET>:N"))?;
     Ok(Request::new(target, Command::Check { partition }).with_sector_size(sector_size(&tokens)?))
+}
+
+fn parse_new(args: &[String]) -> Result<Request, UsageError> {
+    let tokens = Tokens::scan(
+        args,
+        &["--table", "--identity", "--sector-size"],
+        &["--yes", "--overwrite-data"],
+    )?;
+    if !tokens.has("--yes") {
+        return Err(UsageError::new("`new` needs --yes"));
+    }
+    let target = one_target(&tokens, "new")?;
+    if target.partition.is_some() {
+        return Err(UsageError::new(
+            "new takes a whole target — drop the :N suffix",
+        ));
+    }
+    let table = match tokens.value("--table") {
+        None | Some("gpt") => TableFormat::Gpt,
+        Some("mbr") => TableFormat::Mbr,
+        Some(other) => {
+            return Err(UsageError::new(format!(
+                "bad value `{other}` for --table (gpt|mbr)"
+            )));
+        }
+    };
+    let command = Command::New {
+        table,
+        overwrite: tokens.has("--overwrite-data"),
+        confirmed: tokens.has("--yes"),
+    };
+    Ok(Request::new(target, command)
+        .with_sector_size(sector_size(&tokens)?)
+        .with_identity(identity(&tokens)))
 }
 
 fn one_target(tokens: &Tokens, command: &str) -> Result<TargetSpec, UsageError> {

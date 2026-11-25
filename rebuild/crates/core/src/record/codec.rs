@@ -55,6 +55,43 @@ pub enum RecordError {
     PreimageTooLarge,
 }
 
+impl std::fmt::Display for RecordError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TooShort { needed, actual } => {
+                write!(f, "record is too short: need {needed} bytes, have {actual}")
+            }
+            Self::ForeignFormat { magic } => write!(f, "record magic {magic:02x?} is not ours"),
+            Self::HeaderCrcMismatch => f.write_str("record header CRC does not match"),
+            Self::PayloadCrcMismatch => f.write_str("record payload CRC does not match"),
+            Self::PayloadTooLarge(len) => {
+                write!(f, "record payload length {len} exceeds the limit")
+            }
+            Self::BodyCrcMismatch => f.write_str("record body CRC does not match"),
+            Self::TrailingBytes => f.write_str("record has trailing bytes after the payload"),
+            Self::FrameIncomplete => f.write_str("record frame is incomplete"),
+            Self::FrameCrcMismatch { seq } => write!(f, "record frame {seq} CRC does not match"),
+            Self::FrameSequence { expected, actual } => {
+                write!(
+                    f,
+                    "record frame {actual} appears where {expected} was expected"
+                )
+            }
+            Self::UnknownFrameKind(kind) => write!(f, "record frame kind {kind} is not known"),
+            Self::ReservedFrameFlags(flags) => {
+                write!(f, "record frame flags {flags:#04x} carry undefined bits")
+            }
+            Self::FramesAfterTerminal => f.write_str("record continues after a terminal frame"),
+            Self::IntentTooLong => f.write_str("record intent text is too long"),
+            Self::TooManyRegions => f.write_str("record frame declares too many regions"),
+            Self::PreimageLengthMismatch => {
+                f.write_str("record preimage length does not match its region")
+            }
+            Self::PreimageTooLarge => f.write_str("record preimage exceeds the size limit"),
+        }
+    }
+}
+
 impl From<HeaderError> for RecordError {
     fn from(error: HeaderError) -> Self {
         match error {

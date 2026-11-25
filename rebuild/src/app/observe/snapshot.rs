@@ -119,7 +119,7 @@ pub fn capture(platform: &dyn Platform, request: &Request) -> Result<Snapshot, C
         .map_err(|error| CaptureError::Unreadable {
             why: error.to_string(),
         })?;
-    let record = record_state(platform, request, &target)?;
+    let record = record_state(platform, &target)?;
     let occupancy = platform.occupancy(&target.path)?;
     Ok(Snapshot {
         target: TargetFacts {
@@ -138,7 +138,7 @@ pub fn capture_inspect(
     request: &Request,
 ) -> Result<InspectSnapshot, CaptureError> {
     let target = open_target(platform, request)?;
-    let record = record_state(platform, request, &target)?;
+    let record = record_state(platform, &target)?;
     let occupancy = platform.occupancy(&target.path)?;
     Ok(InspectSnapshot {
         target,
@@ -153,7 +153,7 @@ pub fn capture_records(
     request: &Request,
 ) -> Result<RecordSnapshot, CaptureError> {
     let target = open_target(platform, request)?;
-    let record = record_state(platform, request, &target)?;
+    let record = record_state(platform, &target)?;
     Ok(RecordSnapshot { target, record })
 }
 
@@ -202,7 +202,6 @@ pub(crate) fn open_target(
 /// 按目标身份或声明名定位记录。
 pub(crate) fn record_state(
     platform: &dyn Platform,
-    request: &Request,
     target: &TargetFacts,
 ) -> Result<RecordState, CaptureError> {
     records::locate(platform, target.identity).map_err(CaptureError::from)

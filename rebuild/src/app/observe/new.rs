@@ -7,14 +7,14 @@ use std::path::PathBuf;
 
 use diskedit_core::record;
 use diskedit_core::region::Region;
-use diskedit_core::table::create;
-use diskedit_core::table::stamp::table_stamp;
 use diskedit_core::table::Guid;
+use diskedit_core::table::create;
+use diskedit_core::table::stamp::{self, table_stamp};
 
 use crate::platform::{Occupancy, Platform, TargetHandle};
 
-use super::snapshot::{CaptureError, TargetFacts, open_target, record_state};
 use super::records::RecordState;
+use super::snapshot::{CaptureError, TargetFacts, open_target, record_state};
 use super::table::{self, TableView};
 use super::{Command, Request, TableFormat};
 
@@ -73,23 +73,24 @@ pub fn capture_new(
     let target = open_target(platform, request)?;
     let handle = platform.open_target_read_only(&target.path)?;
     let sector_size = request.sector_size().unwrap_or(target.sector_size);
-    let format = match request.command() {
-        Command::New { table, .. } => *table,
-        _ => {
-            return Err(CaptureError::Unreadable {
-                why: "capture_new called for a different command".to_owned(),
-            });
-        }
+    let Command::New { table, .. } = request.command() else {
+        return Err(CaptureError::Unreadable {
+            why: "capture_new called for a different command".to_owned(),
+        });
     };
+    let format = *table;
     let table_view = table::observe(handle.as_ref(), request.sector_size(), handle.sector_size())
         .map_err(|error| CaptureError::Unreadable {
-            why: error.to_string(),
-        })?;
-    let record = record_state(platform, request, &target)?;
+        why: error.to_string(),
+    })?;
+    let record = record_state(platform, &target)?;
     let occupancy = platform.occupancy(&target.path)?;
     let is_partition_node = platform.is_partition_node(&target.path);
     let (captured, signature_sites) = match format {
-        TableFormat::Gpt => (capture_gpt(handle.as_ref(), target.bytes, sector_size)?, Vec::new()),
+        TableFormat::Gpt => (
+            capture_gpt(handle.as_ref(), target.bytes, sector_size)?,
+            Vec::new(),
+        ),
         TableFormat::Mbr => capture_mbr(handle.as_ref(), target.bytes, sector_size)?,
     };
     let stamp = stamp_of(handle.as_ref(), target.bytes, sector_size)?;
@@ -173,7 +174,9 @@ fn capture_mbr(
     }
     let mut sites = Vec::new();
     for offset in create::signature_sites(total_bytes, sector_size) {
-        let covered = regions.iter().any(|(_, region)| region.contains_offset(offset));
+        let covered = regions
+            .iter()
+            .any(|(_, region)| region.contains_offset(offset));
         if covered {
             continue;
         }
@@ -205,19 +208,10 @@ fn stamp_of(
     if total_bytes == 0 || sector_size == 0 {
         return Ok(table_stamp(&[]));
     }
-    let last_start = (total_bytes / sector_size).saturating_sub(1) * sector_size;
-    let mut offsets = vec![0u64, sector_size, last_start];
-    offsets.sort_unstable();
-    offsets.dedup();
-    let mut sectors = Vec::new();
-    for offset in offsets {
-        if offset >= total_bytes {
-            continue;
-        }
-        let len = sector_size.min(total_bytes - offset) as usize;
-        let region = Region::sized(offset, len as u64).expect("区间自洽");
-        sectors.push(read_region(handle, region)?);
-    }
+    let sectors = stamp::stamp_regions(total_bytes, sector_size)
+        .into_iter()
+        .map(|region| read_region(handle, region))
+        .collect::<Result<Vec<_>, CaptureError>>()?;
     let parts: Vec<&[u8]> = sectors.iter().map(Vec::as_slice).collect();
     Ok(table_stamp(&parts))
 }
@@ -226,17 +220,19 @@ fn read_region(handle: &dyn TargetHandle, region: Region) -> Result<Vec<u8>, Cap
     let mut bytes = vec![0u8; region.len() as usize];
     let mut filled = 0;
     while filled < bytes.len() {
-        let at = region
-            .start()
-            .checked_add(filled as u64)
-            .ok_or_else(|| CaptureError::Unreadable {
-                why: "read offset overflow".to_owned(),
-            })?;
-        let read = handle.read_at(at, &mut bytes[filled..]).map_err(|error| {
-            CaptureError::Unreadable {
-                why: error.to_string(),
-            }
-        })?;
+        let at =
+            region
+                .start()
+                .checked_add(filled as u64)
+                .ok_or_else(|| CaptureError::Unreadable {
+                    why: "read offset overflow".to_owned(),
+                })?;
+        let read =
+            handle
+                .read_at(at, &mut bytes[filled..])
+                .map_err(|error| CaptureError::Unreadable {
+                    why: error.to_string(),
+                })?;
         if read == 0 {
             return Err(CaptureError::Unreadable {
                 why: format!("reading {} bytes at {at} ended early", bytes.len()),
@@ -273,9 +269,7 @@ pub fn record_paths(
     identity: diskedit_core::fingerprint::Fingerprint,
 ) -> Option<(PathBuf, PathBuf)> {
     let root = platform.state_root()?;
-    let directory = root
-        .join("images")
-        .join(super::records::hex16(identity));
+    let directory = root.join("images").join(super::records::hex16(identity));
     let file = directory.join(super::records::RECORD_FILE);
     Some((directory, file))
 }

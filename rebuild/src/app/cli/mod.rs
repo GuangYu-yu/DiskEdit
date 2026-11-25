@@ -83,6 +83,10 @@ fn run(request: &observe::Request) -> u8 {
                 Err(code) => return code,
             }
         }
+        Command::New { .. } => match observe_or_exit(&platform, request, observe::capture_new) {
+            Ok(snapshot) => decide::new::decide(&snapshot, request),
+            Err(code) => return code,
+        },
         Command::Resize(_)
         | Command::Move(_)
         | Command::Copy(_)
@@ -91,10 +95,9 @@ fn run(request: &observe::Request) -> u8 {
         | Command::Mkfs { .. }
         | Command::Resizefs { .. }
         | Command::Recover(_)
-        | Command::New { .. }
         | Command::Add(_) => return usage(),
     };
-    conclude(&platform, decision)
+    conclude(&platform, request, decision)
 }
 
 /// `records scan`：先证明根是可读目录，再交给判定层。
@@ -124,7 +127,11 @@ fn scan(platform: &dyn Platform, request: &observe::Request) -> u8 {
         })
         .filter_map(|file| std::fs::read(file).ok().map(|bytes| (file.clone(), bytes)))
         .collect();
-    conclude(platform, decide::records::scan_with(path, &records))
+    conclude(
+        platform,
+        request,
+        decide::records::scan_with(path, &records),
+    )
 }
 
 /// 采集失败直接折算成进程出口。
@@ -168,11 +175,19 @@ fn capture_failed(
         // `records list` 在目标读不到时仍然给出空列表，并以成功退出。
         Command::RecordsList => {
             eprintln!("note: {why}");
-            conclude(platform, decide::records::list(None, platform.state_root()))
+            conclude(
+                platform,
+                request,
+                decide::records::list(None, platform.state_root()),
+            )
         }
         // 装不下一个扇区的目标对 `check` 等于没有分区表；对 `info` 是读失败。
         Command::Check { .. } if matches!(error, observe::CaptureError::TooSmall { .. }) => {
-            conclude(platform, Decision::Refuse(decide::Refusal::TableMissing))
+            conclude(
+                platform,
+                request,
+                Decision::Refuse(decide::Refusal::TableMissing),
+            )
         }
         // `check` 已经进入执行阶段：目标字节读不出来是环境故障，不是拒绝。
         // 打开失败仍按拒绝处理，与基线一致。
@@ -202,19 +217,9 @@ fn capture_failed(
 }
 
 /// 把判定结果落到进程出口。
-fn conclude(platform: &dyn Platform, decision: Decision) -> u8 {
+fn conclude(platform: &dyn Platform, request: &observe::Request, decision: Decision) -> u8 {
     match decision {
-        Decision::Refuse(refusal) => {
-            let code = exit::exit_of_refusal(&refusal);
-            let prefix = if code == exit::UNSUPPORTED {
-                "unsupported"
-            } else {
-                "refused"
-            };
-            eprintln!("{prefix}: {}", refusal.describe());
-            eprintln!("— {}", refusal.next_step());
-            code
-        }
+        Decision::Refuse(refusal) => refuse(&refusal),
         Decision::Report { report, .. } => match report {
             decide::Report::Check(query) => check(platform, &query),
             other @ (decide::Report::Info(_)
@@ -227,7 +232,79 @@ fn conclude(platform: &dyn Platform, decision: Decision) -> u8 {
                 None => exit::INTERNAL,
             },
         },
-        Decision::Execute(_) => usage(),
+        Decision::Execute(plan) => write(platform, request, plan),
+    }
+}
+
+/// 拒绝的统一出口。
+fn refuse(refusal: &decide::Refusal) -> u8 {
+    let code = exit::exit_of_refusal(refusal);
+    let prefix = if code == exit::UNSUPPORTED {
+        "unsupported"
+    } else {
+        "refused"
+    };
+    eprintln!("{prefix}: {}", refusal.describe());
+    eprintln!("— {}", refusal.next_step());
+    code
+}
+
+/// 写命令：确认计划、执行并汇报终态。
+fn write(platform: &dyn Platform, request: &observe::Request, plan: decide::Plan) -> u8 {
+    let Some(path) = request.target() else {
+        return usage();
+    };
+    let confirmed = matches!(
+        request.command(),
+        Command::New {
+            confirmed: true,
+            ..
+        }
+    );
+    let current = observe_identity(platform, path);
+    let plan = match decide::confirm(plan, confirmed, &current) {
+        Ok(plan) => plan,
+        Err(refusal) => return refuse(&refusal),
+    };
+    let outcome = execute::new::run(platform, path, &plan);
+    let code = exit::exit_of(&outcome);
+    if outcome.succeeded() {
+        if let Command::New { table, .. } = request.command() {
+            println!(
+                "created {} table (verify with: diskedit info {})",
+                match table {
+                    observe::TableFormat::Gpt => "gpt",
+                    observe::TableFormat::Mbr => "mbr",
+                },
+                path.display()
+            );
+        }
+    } else if let Some(reason) = outcome.reason() {
+        let prefix = if code == exit::REFUSED {
+            "refused"
+        } else {
+            "error"
+        };
+        eprintln!("{prefix}: {reason}");
+    }
+    code
+}
+
+/// 锁外观测身份；执行器会在持锁后再次核对。
+fn observe_identity(
+    platform: &dyn Platform,
+    path: &std::path::Path,
+) -> diskedit_core::evidence::Observation<diskedit_core::fingerprint::Fingerprint> {
+    use diskedit_core::evidence::{Generation, Observation, Source};
+    use diskedit_core::fingerprint::Strength;
+    match platform.identity(path) {
+        Ok(fingerprint) if fingerprint.strength() == Strength::Strong => Observation::known(
+            fingerprint,
+            Source::new("platform.identity"),
+            Generation::FIRST,
+        ),
+        Ok(_) => Observation::not_applicable("the target gives no comparable identity"),
+        Err(error) => Observation::unknown(error.to_string()),
     }
 }
 
@@ -245,6 +322,11 @@ fn check(platform: &dyn Platform, query: &decide::report::CheckQuery) -> u8 {
         execute::diagnose::DiagnoseResult::Missing { message } => {
             eprintln!("unsupported: {message}");
             exit::UNSUPPORTED
+        }
+        execute::diagnose::DiagnoseResult::Refused { message } => {
+            eprintln!("refused: {message}");
+            eprintln!("— this run changed no persistent state");
+            exit::REFUSED
         }
         execute::diagnose::DiagnoseResult::Environment { message } => {
             eprintln!("error: {message}");

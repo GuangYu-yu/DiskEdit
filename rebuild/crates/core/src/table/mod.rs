@@ -7,17 +7,18 @@ pub mod mbr;
 pub mod stamp;
 
 pub use create::{
-    CapacityError, Conflict, Format, GptContent, GptLayout, LabeledRegion, PartitionSpan, PmbrIssue,
-    PmbrSize, Segment, TableProbe, check_capacity, first_conflict, gpt_content, gpt_layout,
-    new_mbr_lba0, pmbr_size_state, protective_mbr_content, regions_blank, signature_sites,
+    CapacityError, Conflict, Format, GptContent, GptLayout, LabeledRegion, PartitionSpan,
+    PmbrIssue, PmbrSize, Segment, TableProbe, check_capacity, first_conflict, gpt_content,
+    gpt_layout, new_mbr_lba0, pmbr_size_state, protective_mbr_content, regions_blank,
+    signature_sites,
 };
 pub use error::TableError;
-pub use stamp::table_stamp;
 pub use gpt::entries::{PartitionEntry, PartitionName};
 pub use gpt::header::GptHeader;
 pub use gpt::parse::{GptCopy, GptEvidence, GptState, HeaderIssue};
 pub use mbr::extended::walk_extended;
 pub use mbr::primary::{Mbr, MbrEntry};
+pub use stamp::table_stamp;
 
 /// GPT 头固定字段的字节数。
 pub const GPT_MIN_HEADER_SIZE: u32 = 92;

@@ -22,7 +22,7 @@ G3c	 model	test	3	 	 	cargo test --test inventory
 G3d	 model	test	1	 	 	cargo test --test ui
 G4a	 model	test	117	 	 	cargo test -p diskedit-core
 G4b	 model	test	4	 	 	cargo test --test contract
-G4c	 model	test	1	 	 	cargo test --test case_runner
+G4c	 model	test	2	 	 	cargo test --test case_runner
 G4d	 model	test	3	 	 	cargo test --test residue
 G5a	 model	test	1	 	 	cargo test --test contract_surface
 G5b	 model	lint	1	 	target/command-surface.json	python plan/instruments/census.py surface --old ../src --new target/command-surface.json --allow plan/baseline/surface-allowed.txt
@@ -32,6 +32,6 @@ G6b	 model	lint	1	 	plan/baseline/refusal-map.tsv	python plan/instruments/census
 G9	 model	lint	1	 	plan/footprint.base	python plan/instruments/footprint.py
 G10	 model	lint	1	 	plan/footprint.base	python plan/instruments/commits.py
 # ---- 人跑：每个纵切结束后一条命令（需要 root、镜像、文件系统工具、旧版二进制）----
-G7	 human	test	1	DISKEDIT_BASELINE	 	cargo test --test equivalence
+G7	 human	test	2	DISKEDIT_BASELINE	 	cargo test --test equivalence
 G8	 human	test	35	 	 	cargo test
 G8b	 human	build	1	 	 	cargo build --release

@@ -231,6 +231,25 @@ pub enum FrameError {
     PreimageTooLarge,
 }
 
+impl std::fmt::Display for FrameError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Incomplete => f.write_str("frame is incomplete"),
+            Self::CrcMismatch { seq } => write!(f, "frame {seq} CRC does not match"),
+            Self::UnknownKind(kind) => write!(f, "frame kind {kind} is not known"),
+            Self::ReservedFlags(flags) => {
+                write!(f, "frame flags {flags:#04x} carry undefined bits")
+            }
+            Self::TooManyRegions => f.write_str("frame declares too many regions"),
+            Self::IntentTooLong => f.write_str("frame intent text is too long"),
+            Self::PreimageLengthMismatch => {
+                f.write_str("frame preimage length does not match its region")
+            }
+            Self::PreimageTooLarge => f.write_str("frame preimage exceeds the size limit"),
+        }
+    }
+}
+
 fn read_u64(bytes: &[u8], offset: usize) -> u64 {
     let mut raw = [0u8; 8];
     raw.copy_from_slice(&bytes[offset..offset + 8]);

@@ -3,14 +3,29 @@
 //! 只用纯字节构造，不依赖宿主的分区工具；两个测试二进制与基线二进制看到同一现场。
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use diskedit_core::table::crc32;
+
+/// 同一进程内多个测试可能同时准备夹具；临时文件名必须互不冲突。
+static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+/// 先写临时文件再改名：并发读者只会看到完整夹具。
+fn write_atomic(path: &Path, bytes: impl AsRef<[u8]>) {
+    let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let temporary = path.with_extension(format!("tmp-{}-{sequence}", std::process::id()));
+    std::fs::write(&temporary, bytes.as_ref()).expect("夹具临时文件可写");
+    std::fs::rename(&temporary, path).expect("夹具可改名");
+}
 
 const SECTOR: usize = 512;
 const TOTAL_SECTORS: usize = 8192; // 4 MiB
 
 /// 夹具目录；两个测试二进制与基线二进制看到同一现场。
 pub const BASE: &str = "target/fixtures/s1";
+
+/// 写命令用的空白/占用镜像目录。
+pub const S2_BASE: &str = "target/fixtures/s2";
 
 /// 建好全部夹具，返回基准目录。
 pub fn prepare() -> PathBuf {
@@ -23,12 +38,26 @@ pub fn prepare() -> PathBuf {
     let mbr = image(&base, "mbr.img");
     write_mbr(&mbr);
     let empty = image(&base, "empty.img");
-    std::fs::write(&empty, vec![0u8; 1 << 20]).expect("空镜像可写");
+    write_atomic(&empty, vec![0u8; 1 << 20]);
     let damaged = image(&base, "damaged.img");
     write_damaged_gpt(&damaged);
-    std::fs::write(base.join("tiny.img"), b"hello").expect("小镜像可写");
-    std::fs::write(base.join("zero.img"), []).expect("空文件可写");
+    write_atomic(&base.join("tiny.img"), b"hello");
+    write_atomic(&base.join("zero.img"), []);
+    prepare_write_fixtures();
     base
+}
+
+/// 写命令夹具：4 MiB 空白镜像与在 LBA8 起有非零字节的镜像。
+fn prepare_write_fixtures() {
+    let base = PathBuf::from(S2_BASE);
+    std::fs::create_dir_all(&base).expect("写夹具目录可建");
+    let blank = vec![0u8; TOTAL_SECTORS * SECTOR];
+    write_atomic(&base.join("blank.img"), &blank);
+    let mut data = blank;
+    for (index, byte) in data[4096..4096 + 5000].iter_mut().enumerate() {
+        *byte = b"hello"[index % 5];
+    }
+    write_atomic(&base.join("data.img"), &data);
 }
 
 fn image(base: &Path, name: &str) -> PathBuf {
@@ -83,7 +112,7 @@ fn write_gpt(path: &Path, with_ext: bool) {
         let base = 2048 * SECTOR;
         put_u16(&mut bytes, base + 1080, 0xEF53);
     }
-    std::fs::write(path, bytes).expect("GPT 镜像可写");
+    write_atomic(path, bytes);
 }
 
 fn write_damaged_gpt(path: &Path) {
@@ -93,7 +122,7 @@ fn write_damaged_gpt(path: &Path) {
     bytes[SECTOR + 20] ^= 0xFF;
     let last = (TOTAL_SECTORS - 1) * SECTOR;
     bytes[last + 20] ^= 0xFF;
-    std::fs::write(path, bytes).expect("损坏镜像可写");
+    write_atomic(path, bytes);
 }
 
 fn write_mbr(path: &Path) {
@@ -106,7 +135,7 @@ fn write_mbr(path: &Path) {
     put_u32(&mut bytes, 446 + 12, 1024);
     bytes[510] = 0x55;
     bytes[511] = 0xAA;
-    std::fs::write(path, bytes).expect("MBR 镜像可写");
+    write_atomic(path, bytes);
 }
 
 fn write_entry(

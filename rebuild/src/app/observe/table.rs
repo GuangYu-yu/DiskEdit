@@ -328,10 +328,15 @@ fn mbr_partition(
 }
 
 fn is_protective(mbr: &mbr_primary::Mbr) -> bool {
-    mbr.entries
-        .iter()
-        .filter(|entry| !entry.is_empty())
-        .all(|entry| entry.part_type == 0xEE)
+    // 空表不是保护性 MBR：零条目的 MBR 仍是可识别的 msdos 表。
+    let mut protective = false;
+    for entry in mbr.entries.iter().filter(|entry| !entry.is_empty()) {
+        if entry.part_type != 0xEE {
+            return false;
+        }
+        protective = true;
+    }
+    protective
 }
 
 /// GPT GUID 的规范文本：前三组按小端还原。

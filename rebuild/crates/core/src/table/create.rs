@@ -40,10 +40,7 @@ pub enum Format {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CapacityError {
     /// GPT 至少需要这么多逻辑块。
-    Gpt {
-        min_sectors: u64,
-        sector_size: u64,
-    },
+    Gpt { min_sectors: u64, sector_size: u64 },
     /// MBR 至少需要三个逻辑块。
     Mbr { sector_size: u64 },
 }
@@ -153,8 +150,7 @@ impl GptLayout {
     }
 
     pub fn backup_header(&self) -> Region {
-        Region::sized(self.last_lba * self.sector_size, self.sector_size)
-            .expect("备份头区间自洽")
+        Region::sized(self.last_lba * self.sector_size, self.sector_size).expect("备份头区间自洽")
     }
 
     /// 写前/写后需要比较的全部区间，按 LBA 升序。
@@ -353,7 +349,9 @@ pub enum PmbrIssue {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PmbrSize {
     Normal,
-    NeedsRepair { cause: PmbrIssue },
+    NeedsRepair {
+        cause: PmbrIssue,
+    },
     /// 值大于两种口径：可能是更大盘的截断副本，拒绝自动修复。
     Inconsistent,
 }
@@ -514,7 +512,10 @@ pub fn first_conflict(regions: &[LabeledRegion], spans: &[PartitionSpan]) -> Opt
 
 /// 所有采集区间是否全零（至少一段）。
 pub fn regions_blank(regions: &[(Region, Vec<u8>)]) -> bool {
-    !regions.is_empty() && regions.iter().all(|(_, bytes)| bytes.iter().all(|&b| b == 0))
+    !regions.is_empty()
+        && regions
+            .iter()
+            .all(|(_, bytes)| bytes.iter().all(|&b| b == 0))
 }
 
 /// MBR 表写入需要清掉的 GPT 签名绝对偏移（不含表头/表尾三段本身）。
@@ -602,7 +603,10 @@ mod tests {
         lba0[446 + 4] = TYPE_PROTECTIVE;
         // 4Kn 容器：规范值是 total/4096 - 1。
         lba0[446 + 12..446 + 16].copy_from_slice(&1023u32.to_le_bytes());
-        assert_eq!(pmbr_size_state(&lba0, 4 * 1024 * 1024, 4096), PmbrSize::Normal);
+        assert_eq!(
+            pmbr_size_state(&lba0, 4 * 1024 * 1024, 4096),
+            PmbrSize::Normal
+        );
         lba0[446 + 12..446 + 16].copy_from_slice(&32u32.to_le_bytes());
         assert_eq!(
             pmbr_size_state(&lba0, 4 * 1024 * 1024, 4096),
@@ -610,8 +614,7 @@ mod tests {
                 cause: PmbrIssue::Stale
             }
         );
-        lba0[446 + 12..446 + 16]
-            .copy_from_slice(&(4u32 * 1024 * 1024 / 512 - 1).to_le_bytes());
+        lba0[446 + 12..446 + 16].copy_from_slice(&(4u32 * 1024 * 1024 / 512 - 1).to_le_bytes());
         assert_eq!(
             pmbr_size_state(&lba0, 4 * 1024 * 1024, 4096),
             PmbrSize::NeedsRepair {
@@ -643,10 +646,7 @@ mod tests {
     fn probe_prefers_recognition_then_emptiness() {
         assert_eq!(TableProbe::classify(true, false), TableProbe::Recognized);
         assert_eq!(TableProbe::classify(false, true), TableProbe::Empty);
-        assert_eq!(
-            TableProbe::classify(false, false),
-            TableProbe::Unrecognized
-        );
+        assert_eq!(TableProbe::classify(false, false), TableProbe::Unrecognized);
         assert!(!regions_blank(&[]));
     }
 

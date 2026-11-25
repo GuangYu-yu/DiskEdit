@@ -8,6 +8,7 @@ use diskedit_core::table::create::{self, PmbrSize, TableProbe};
 use crate::app::observe::new::{NewSnapshot, PriorState};
 use crate::app::observe::table::TableView;
 use crate::app::observe::{Command, Request, TableFormat};
+use crate::platform::Occupancy;
 
 use super::digest::request_digest;
 use super::step::{Step, StepKind, TableSegment};
@@ -15,7 +16,10 @@ use super::{Decision, Plan, Refusal};
 
 /// 判定 `new`。
 pub fn decide(snapshot: &NewSnapshot, request: &Request) -> Decision {
-    let Command::New { table, overwrite } = request.command() else {
+    let Command::New {
+        table, overwrite, ..
+    } = request.command()
+    else {
         return Decision::Refuse(Refusal::ArgumentOutOfRange {
             what: "new decision reached with a different command".to_owned(),
         });
@@ -63,7 +67,8 @@ pub fn decide(snapshot: &NewSnapshot, request: &Request) -> Decision {
         TableFormat::Gpt => create::Format::Gpt,
         TableFormat::Mbr => create::Format::Mbr,
     };
-    if let Err(error) = create::check_capacity(capacity, snapshot.target.bytes, snapshot.target.sector_size)
+    if let Err(error) =
+        create::check_capacity(capacity, snapshot.target.bytes, snapshot.target.sector_size)
     {
         return Decision::Refuse(Refusal::TargetTooSmall {
             why: error.describe(),
@@ -87,6 +92,19 @@ pub fn decide(snapshot: &NewSnapshot, request: &Request) -> Decision {
             probe: probe.as_str().to_owned(),
             regions: describe_regions(snapshot),
         });
+    }
+
+    // 占用闸：目标上任一分区在用（镜像：任一绑定到它的 loop 在用）即拒绝。
+    match &snapshot.occupancy {
+        Occupancy::Idle => {}
+        Occupancy::Used { evidence } => {
+            return Decision::Refuse(Refusal::Occupied {
+                evidence: evidence.clone(),
+            });
+        }
+        Occupancy::Unknown { why } => {
+            return Decision::Refuse(Refusal::OccupancyUnknown { why: why.clone() });
+        }
     }
 
     let total_lba = snapshot.target.bytes / snapshot.target.sector_size;
@@ -127,9 +145,11 @@ fn build_segments(
             })?;
             let lba0 = lba0_bytes(snapshot);
             if let Some(lba0) = &lba0 {
-                if let PmbrSize::Inconsistent =
-                    create::pmbr_size_state(lba0, snapshot.target.bytes, snapshot.target.sector_size)
-                {
+                if let PmbrSize::Inconsistent = create::pmbr_size_state(
+                    lba0,
+                    snapshot.target.bytes,
+                    snapshot.target.sector_size,
+                ) {
                     return Err(Refusal::PmbrInconsistent {
                         why: "the protective MBR size exceeds both sector-size interpretations"
                             .to_owned(),

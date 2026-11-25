@@ -4,6 +4,7 @@
 // covers: R0072, R0074, R0078, R0082, R0083, R0089, R0091, R0092
 // covers: R0130, R0131, R0132, R0133, R0134, R0135, R0136
 // covers: R0143, R0148, R0257, R0268, R0272, R0282, R0287
+// covers: R0155, R0157
 
 /// 一条命令行用例。
 pub struct Case {
@@ -388,5 +389,19 @@ pub const CASES: &[Case] = &[
         exit: 4,
         stdout: "",
         stderr: "error:",
+    },
+    Case {
+        name: "new refuses a partition selector",
+        argv: &["new", "target/fixtures/s2/blank.img:1", "--yes"],
+        exit: 2,
+        stdout: "",
+        stderr: "diskedit",
+    },
+    Case {
+        name: "new refuses to overwrite occupied table sectors",
+        argv: &["new", "target/fixtures/s2/data.img", "--yes"],
+        exit: 3,
+        stdout: "",
+        stderr: "refused:",
     },
 ];

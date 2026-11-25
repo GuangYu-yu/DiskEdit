@@ -6,6 +6,7 @@
 
 pub mod diagnose;
 pub mod digest;
+pub mod new;
 pub mod postcondition;
 pub mod state;
 pub mod token;

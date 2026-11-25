@@ -160,6 +160,8 @@ pub enum Command {
     New {
         table: TableFormat,
         overwrite: bool,
+        /// 用户已给出 `--yes`。
+        confirmed: bool,
     },
     Add(AddRequest),
 }

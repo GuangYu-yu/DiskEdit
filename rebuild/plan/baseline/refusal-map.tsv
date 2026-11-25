@@ -28,3 +28,5 @@ R0268	src/app/observe/snapshot.rs records verify 目标读不出 → 拒绝	基�
 R0272	src/app/decide/records.rs 记录不存在或 id 不符 → RecordNotFound → 退出 3	基线实跑缺记录退 3（旧 cmd/records.rs:606）	tests/cases/mod.rs 的 records verify without a record
 R0282	src/app/cli/mod.rs scan 根不是目录 → 拒绝	基线实跑 scan 文件退 3（旧 cmd/records.rs:712）	tests/cases/mod.rs 的 records scan refuses a file
 R0287	src/app/cli/mod.rs scan 根不存在 → 拒绝	基线实跑 scan 缺失目录退 3（旧 cmd/records.rs:738）	tests/cases/mod.rs 的 records scan needs a directory
+R0155	src/app/cli/parse.rs new 拒绝 :N；旧 cmd/layout.rs:62 被 cli 形态检查先拒	基线实跑 `new <img>:1 --yes` 退 2（旧源码位置 cli.rs:2009）	tests/cases/mod.rs 的 new refuses a partition selector
+R0157	src/app/decide/new.rs 表区非空 → TableOccupied → 退出 3	基线实跑占用镜像 new --yes 退 3（旧 cmd/layout.rs:129）	tests/cases/mod.rs 的 new refuses to overwrite occupied table sectors

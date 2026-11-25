@@ -154,6 +154,9 @@ pub trait TargetHandle {
 
     /// 提交目标缓存。
     fn barrier(&mut self) -> PlatformResult<()>;
+
+    /// 让内核重读分区表与块设备尺寸；普通文件无事可做。
+    fn refresh_partitions(&mut self) -> PlatformResult<()>;
 }
 
 /// 记录目录上的独占锁；销毁时释放。

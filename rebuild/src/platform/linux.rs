@@ -349,6 +349,21 @@ impl TargetHandle for LinuxHandle {
             .sync_all()
             .map_err(|error| PlatformError::io(&self.path, error))
     }
+
+    fn refresh_partitions(&mut self) -> PlatformResult<()> {
+        if !self.kind.is_block_device() {
+            return Ok(());
+        }
+        // BLKRRPART：让内核丢弃并重读该设备的分区表。
+        const BLKRRPART: libc::c_ulong = 0x125f;
+        // SAFETY: fd 由打开的设备句柄保证有效，ioctl 不读取用户缓冲。
+        let result = unsafe { libc::ioctl(self.file.as_raw_fd(), BLKRRPART) };
+        if result == 0 {
+            Ok(())
+        } else {
+            Err(PlatformError::io(&self.path, io::Error::last_os_error()))
+        }
+    }
 }
 
 fn block_sector_size(file: &File) -> Option<u64> {

@@ -8,6 +8,7 @@ pub mod confirmed;
 pub mod digest;
 pub mod info;
 pub mod inspect;
+pub mod new;
 pub mod plan;
 pub mod records;
 pub mod refusal;

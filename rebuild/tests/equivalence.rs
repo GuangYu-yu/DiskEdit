@@ -261,6 +261,10 @@ const SCENARIOS: &[Scenario] = &[
         name: "check on a directory",
         argv: &["check", "target/fixtures/s1:1"],
     },
+    Scenario {
+        name: "new refuses a partition selector",
+        argv: &["new", "target/fixtures/s2/blank.img:1", "--yes"],
+    },
 ];
 
 fn code(program: &std::path::Path, argv: &[&str]) -> i32 {
@@ -271,6 +275,66 @@ fn code(program: &std::path::Path, argv: &[&str]) -> i32 {
         .status
         .code()
         .expect("子进程应正常退出而不是被信号终止")
+}
+
+fn code_owned(program: &std::path::Path, argv: &[String]) -> i32 {
+    Command::new(program)
+        .args(argv)
+        .output()
+        .unwrap_or_else(|error| panic!("运行 {} 失败: {error}", program.display()))
+        .status
+        .code()
+        .expect("子进程应正常退出而不是被信号终止")
+}
+
+/// 写场景必须各用自己的副本：两个二进制看到同一初始字节，互不污染。
+#[test]
+fn both_binaries_agree_on_write_scenarios() {
+    let Some(baseline) = std::env::var_os("DISKEDIT_BASELINE") else {
+        eprintln!("NotApplicable: 未提供 DISKEDIT_BASELINE，写场景对照未执行");
+        return;
+    };
+    let baseline = std::path::PathBuf::from(baseline);
+    let candidate = std::path::PathBuf::from(env!("CARGO_BIN_EXE_diskedit"));
+    fixtures::prepare();
+    let cases: &[(&str, &str, &[&str])] = &[
+        ("new gpt", "blank.img", &["new", "--yes"]),
+        ("new mbr", "blank.img", &["new", "--table", "mbr", "--yes"]),
+        ("new occupied refuses", "data.img", &["new", "--yes"]),
+        (
+            "new occupied overwrites",
+            "data.img",
+            &["new", "--yes", "--overwrite-data"],
+        ),
+        ("new needs yes", "blank.img", &["new"]),
+        (
+            "new on a sector-less image",
+            "../s1/tiny.img",
+            &["new", "--yes"],
+        ),
+    ];
+    for (index, (name, source, prefix)) in cases.iter().enumerate() {
+        let original = std::path::Path::new(fixtures::S2_BASE).join(source);
+        let before = std::fs::read(&original).expect("读取夹具");
+        let for_baseline = format!("{}/eq-{index}-base.img", fixtures::S2_BASE);
+        let for_candidate = format!("{}/eq-{index}-new.img", fixtures::S2_BASE);
+        std::fs::write(&for_baseline, &before).expect("写基线副本");
+        std::fs::write(&for_candidate, &before).expect("写候选副本");
+        let argv = |target: &str| {
+            let mut argv: Vec<String> = prefix.iter().map(|part| (*part).to_owned()).collect();
+            argv.push(target.to_owned());
+            argv
+        };
+        let expected = code_owned(&baseline, &argv(&for_baseline));
+        let actual = code_owned(&candidate, &argv(&for_candidate));
+        assert_eq!(actual, expected, "{name} 的退出码不一致");
+        let changed = |path: &str| std::fs::read(path).expect("读取副本") != before;
+        assert_eq!(
+            changed(&for_candidate),
+            changed(&for_baseline),
+            "{name} 是否改动目标字节不一致"
+        );
+    }
 }
 
 #[test]
