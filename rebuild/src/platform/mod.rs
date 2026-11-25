@@ -156,6 +156,9 @@ pub trait TargetHandle {
     fn barrier(&mut self) -> PlatformResult<()>;
 }
 
+/// 记录目录上的独占锁；销毁时释放。
+pub trait StateLock {}
+
 /// 宿主端口。
 pub trait Platform: Send + Sync {
     /// 以读写方式打开目标。
@@ -166,6 +169,9 @@ pub trait Platform: Send + Sync {
 
     /// 目标的宿主形态；只读元数据，不打开文件。
     fn path_kind(&self, path: &Path) -> TargetKind;
+
+    /// 目标本身是不是块设备上的分区节点（`/dev/sda1`），而不是整盘。
+    fn is_partition_node(&self, path: &Path) -> bool;
 
     /// 目标的稳定身份；镜像取文件对象，块设备取设备本身。
     fn identity(&self, path: &Path) -> PlatformResult<Fingerprint>;
@@ -199,4 +205,25 @@ pub trait Platform: Send + Sync {
 
     /// 整盘块设备上第 N 个分区的设备节点。
     fn partition_device(&self, disk: &Path, number: u32) -> PlatformResult<PathBuf>;
+
+    /// 宿主随机字节，用于新表的 GUID。
+    fn entropy(&self, len: usize) -> PlatformResult<Vec<u8>>;
+
+    /// 递归建立目录。
+    fn create_directory_all(&self, path: &Path) -> PlatformResult<()>;
+
+    /// 以覆盖方式写一个状态文件并落盘。
+    fn write_state_file(&self, path: &Path, bytes: &[u8]) -> PlatformResult<()>;
+
+    /// 追加写一个状态文件并落盘。
+    fn append_state_file(&self, path: &Path, bytes: &[u8]) -> PlatformResult<()>;
+
+    /// 删除一个状态文件；不存在时视为成功。
+    fn remove_state_file(&self, path: &Path) -> PlatformResult<()>;
+
+    /// 把目录项落盘。
+    fn sync_directory(&self, path: &Path) -> PlatformResult<()>;
+
+    /// 对状态文件取独占锁；离开作用域即释放。
+    fn lock_state(&self, path: &Path) -> PlatformResult<Box<dyn StateLock>>;
 }

@@ -4,7 +4,7 @@
 //! [`super::Platform`] 与 [`super::TargetHandle`] 的中立形状。
 
 use std::fs::{File, OpenOptions};
-use std::io;
+use std::io::{self, Read, Write};
 use std::os::unix::fs::{FileExt, FileTypeExt, MetadataExt};
 use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
@@ -16,8 +16,8 @@ use sha2::{Digest, Sha256};
 
 use super::tools;
 use super::{
-    LoopBinding, Occupancy, Platform, PlatformError, PlatformResult, TargetHandle, TargetKind,
-    ToolRun,
+    LoopBinding, Occupancy, Platform, PlatformError, PlatformResult, StateLock, TargetHandle,
+    TargetKind, ToolRun,
 };
 
 /// Linux 宿主端口。
@@ -48,6 +48,25 @@ impl Platform for LinuxPlatform {
             Ok(metadata) if metadata.is_file() => TargetKind::File,
             _ => TargetKind::Other,
         }
+    }
+
+    fn is_partition_node(&self, path: &Path) -> bool {
+        let Ok(metadata) = std::fs::metadata(path) else {
+            return false;
+        };
+        if !metadata.file_type().is_block_device() {
+            return false;
+        }
+        let Ok(resolved) = std::fs::canonicalize(path) else {
+            return false;
+        };
+        let Some(name) = resolved.file_name().and_then(|name| name.to_str()) else {
+            return false;
+        };
+        Path::new("/sys/class/block")
+            .join(name)
+            .join("partition")
+            .exists()
     }
 
     fn identity(&self, path: &Path) -> PlatformResult<Fingerprint> {
@@ -165,7 +184,81 @@ impl Platform for LinuxPlatform {
             )))
         }
     }
+
+    fn entropy(&self, len: usize) -> PlatformResult<Vec<u8>> {
+        let path = Path::new("/dev/urandom");
+        let mut file = File::open(path).map_err(|error| PlatformError::io(path, error))?;
+        let mut bytes = vec![0u8; len];
+        file.read_exact(&mut bytes)
+            .map_err(|error| PlatformError::io(path, error))?;
+        Ok(bytes)
+    }
+
+    fn create_directory_all(&self, path: &Path) -> PlatformResult<()> {
+        std::fs::create_dir_all(path).map_err(|error| PlatformError::io(path, error))
+    }
+
+    fn write_state_file(&self, path: &Path, bytes: &[u8]) -> PlatformResult<()> {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(path)
+            .map_err(|error| PlatformError::io(path, error))?;
+        file.write_all(bytes)
+            .map_err(|error| PlatformError::io(path, error))?;
+        file.sync_all()
+            .map_err(|error| PlatformError::io(path, error))
+    }
+
+    fn append_state_file(&self, path: &Path, bytes: &[u8]) -> PlatformResult<()> {
+        let mut file = OpenOptions::new()
+            .append(true)
+            .open(path)
+            .map_err(|error| PlatformError::io(path, error))?;
+        file.write_all(bytes)
+            .map_err(|error| PlatformError::io(path, error))?;
+        file.sync_all()
+            .map_err(|error| PlatformError::io(path, error))
+    }
+
+    fn remove_state_file(&self, path: &Path) -> PlatformResult<()> {
+        match std::fs::remove_file(path) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(PlatformError::io(path, error)),
+        }
+    }
+
+    fn sync_directory(&self, path: &Path) -> PlatformResult<()> {
+        let directory = File::open(path).map_err(|error| PlatformError::io(path, error))?;
+        directory
+            .sync_all()
+            .map_err(|error| PlatformError::io(path, error))
+    }
+
+    fn lock_state(&self, path: &Path) -> PlatformResult<Box<dyn StateLock>> {
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(path)
+            .map_err(|error| PlatformError::io(path, error))?;
+        let result = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) };
+        if result != 0 {
+            return Err(PlatformError::io(path, io::Error::last_os_error()));
+        }
+        Ok(Box::new(ExclusiveLock { _file: file }))
+    }
 }
+
+/// 文件描述符关闭即释放 `flock`；字段只为持有生命周期。
+struct ExclusiveLock {
+    _file: File,
+}
+
+impl StateLock for ExclusiveLock {}
 
 impl Drop for LoopBinding {
     fn drop(&mut self) {

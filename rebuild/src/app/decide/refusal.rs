@@ -76,6 +76,18 @@ pub enum Refusal {
     ArgumentOutOfRange { what: String },
     /// 旗标名或旗标适用形态不在支持集合内。
     FlagUnknown { why: String },
+    /// 目标是块设备上的分区节点，写命令只接受整盘或镜像。
+    PartitionNodeTarget { command: String, target: String },
+    /// 目标容量装不下要新建的表。
+    TargetTooSmall { why: String },
+    /// 目标表区已有数据，覆盖需要显式旗标。
+    TableOccupied { probe: String, regions: String },
+    /// 保护 MBR 的 SizeInLBA 大于两种口径，拒绝自动修复。
+    PmbrInconsistent { why: String },
+    /// 记录文件存在但无法解码。
+    RecordUnreadable { path: String },
+    /// 目标上有一条针对别的工作的未收尾记录。
+    RecordConflict { path: String },
 }
 
 impl Refusal {
@@ -163,6 +175,24 @@ impl Refusal {
                 "fix the argument according to the valid range in the help"
             }
             Self::FlagUnknown { .. } => "use one of the accepted flag names for this table",
+            Self::PartitionNodeTarget { .. } => {
+                "point the command at the whole disk or the image, not at a partition node"
+            }
+            Self::TargetTooSmall { .. } => {
+                "use a larger target, a smaller sector size, or the other table format"
+            }
+            Self::TableOccupied { .. } => {
+                "rerun with --overwrite-data after confirming those bytes may be replaced"
+            }
+            Self::PmbrInconsistent { .. } => {
+                "inspect the protective MBR on the owning host; automatic repair is refused"
+            }
+            Self::RecordUnreadable { .. } => {
+                "inspect the record file; recover or remove it before writing again"
+            }
+            Self::RecordConflict { .. } => {
+                "finish or abandon the existing record with recover before starting a different plan"
+            }
         }
     }
 
@@ -227,6 +257,22 @@ impl Refusal {
             }
             Self::ArgumentOutOfRange { what } => format!("argument out of range: {what}"),
             Self::FlagUnknown { why } => format!("unsupported flag: {why}"),
+            Self::PartitionNodeTarget { command, target } => {
+                format!("{command} does not write a partition node: {target}")
+            }
+            Self::TargetTooSmall { why } => format!("the target is too small: {why}"),
+            Self::TableOccupied { probe, regions } => format!(
+                "the table sectors already hold data (probe={probe}); regions {regions} would be overwritten"
+            ),
+            Self::PmbrInconsistent { why } => {
+                format!("the protective MBR is inconsistent: {why}")
+            }
+            Self::RecordUnreadable { path } => {
+                format!("the record file {path} cannot be decoded")
+            }
+            Self::RecordConflict { path } => {
+                format!("{path} holds an unfinished record for a different plan")
+            }
         }
     }
 }

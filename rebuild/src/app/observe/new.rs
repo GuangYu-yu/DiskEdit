@@ -9,6 +9,7 @@ use diskedit_core::record;
 use diskedit_core::region::Region;
 use diskedit_core::table::create;
 use diskedit_core::table::stamp::table_stamp;
+use diskedit_core::table::Guid;
 
 use crate::platform::{Occupancy, Platform, TargetHandle};
 
@@ -60,6 +61,8 @@ pub struct NewSnapshot {
     pub stamp: [u8; 32],
     /// 当 `new` 的目标格式为 MBR 时，额外需要清掉的 GPT 签名绝对偏移。
     pub signature_sites: Vec<u64>,
+    /// 新 GPT 的磁盘 GUID；由宿主随机源生成，判定层只使用。
+    pub disk_guid: Guid,
 }
 
 /// 采集 `new` 的现场。
@@ -91,6 +94,7 @@ pub fn capture_new(
     };
     let stamp = stamp_of(handle.as_ref(), target.bytes, sector_size)?;
     let prior = prior_state(&record);
+    let disk_guid = random_guid(platform)?;
     Ok(NewSnapshot {
         target: TargetFacts {
             sector_size,
@@ -104,7 +108,20 @@ pub fn capture_new(
         captured,
         stamp,
         signature_sites,
+        disk_guid,
     })
+}
+
+/// RFC 4122 版本 4 的 GUID；熵只从平台端口取。
+fn random_guid(platform: &dyn Platform) -> Result<Guid, CaptureError> {
+    let mut bytes = platform
+        .entropy(16)
+        .map_err(|error| CaptureError::Unreadable {
+            why: error.to_string(),
+        })?;
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    Ok(Guid(bytes.try_into().expect("熵长度为 16")))
 }
 
 fn capture_gpt(

@@ -71,7 +71,13 @@ pub fn exit_of_refusal(refusal: &Refusal) -> u8 {
         | Refusal::FilesystemUnknown { .. }
         | Refusal::MinimumSizeUnknown { .. }
         | Refusal::BelowMinimumSize { .. }
-        | Refusal::FlagUnknown { .. } => REFUSED,
+        | Refusal::FlagUnknown { .. }
+        | Refusal::PartitionNodeTarget { .. }
+        | Refusal::TargetTooSmall { .. }
+        | Refusal::TableOccupied { .. }
+        | Refusal::PmbrInconsistent { .. }
+        | Refusal::RecordUnreadable { .. }
+        | Refusal::RecordConflict { .. } => REFUSED,
     }
 }
 
