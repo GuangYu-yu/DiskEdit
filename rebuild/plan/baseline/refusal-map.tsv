@@ -75,3 +75,25 @@ R0060	src/app/cli/parse.rs parse_move 要求 --start	旧 cli.rs:1586 实跑 move
 R0061	src/app/cli/parse.rs parse_copy 要求 --start	旧 cli.rs:1606 实跑 copy <img>:1 --yes 退 2	tests/cases/mod.rs 的 copy without --start is a usage error
 R0301	src/app/cli/parse.rs parse_recover 拒绝 :N 选择器	旧 cmd/recover.rs:194 实跑 recover 带 :1 退 2	tests/case_runner.rs 的 recover_refuses_a_partition_selector
 R0302	src/app/decide/recover.rs decide 无记录按拒绝报告	旧 cmd/recover.rs:208 无记录退 3	tests/case_runner.rs 的 recover_refuses_a_target_without_a_record
+R0044	src/app/cli/parse.rs 的取值域校验拒绝非法取值	旧 src/cli.rs:1359 对非法取值退 2	tests/cases/mod.rs 的 mkfs with an unknown filesystem is a usage error
+R0063	src/app/cli/parse.rs parse_set 拒绝 uuid 值与 --random 同时出现	旧 src/cli.rs:1642 两者同给退 2	tests/cases/mod.rs 的 set uuid refuses a value with --random
+R0067	src/app/cli/parse.rs parse_add 只接受绝对 SIZE	旧 src/cli.rs:1732 相对尺寸退 2	tests/cases/mod.rs 的 add refuses a relative size
+R0071	src/app/cli/parse.rs parse_records 的 records list 用法错误	旧 src/cli.rs:1793 records list 缺目标退 2	tests/cases/mod.rs 的 records list without a target
+R0072	src/app/cli/parse.rs Tokens 拒绝重复的值选项	旧 src/cli.rs:1827 重复值选项退 2	tests/cases/mod.rs 的 info with a repeated value option
+R0074	src/app/cli/parse.rs Tokens 裸旗标不接受 =值	旧 src/cli.rs:1878 裸旗标带值退 2	tests/cases/mod.rs 的 info with a value on a bare flag
+R0078	src/app/cli/parse.rs 多余位置参数报用法错误	旧 src/cli.rs:1925 多余参数退 2	tests/cases/mod.rs 的 info with an extra argument
+R0081	src/app/cli/parse.rs 写命令要求 --yes	旧 src/cli.rs:1958 缺 --yes 退 2	tests/cases/mod.rs 的 add without --yes is a usage error
+R0082	src/app/cli/parse.rs 需要分区选择器的形态拒绝整目标	旧 src/cli.rs:2005 缺 :N 退 2	tests/cases/mod.rs 的 delete needs a partition
+R0083	src/app/cli/parse.rs 整目标命令拒绝 :N 后缀	旧 src/cli.rs:2009 整目标带 :N 退 2	tests/cases/mod.rs 的 new refuses a partition selector
+R0085	src/app/cli/parse.rs 入口必需参数缺失报用法错误	旧 src/cli.rs:2081 缺必需参数退 2	tests/cases/mod.rs 的 resizefs without a target is a usage error
+R0086	src/app/cli/parse.rs 选项取值与表类型不匹配报用法错误	旧 src/cli.rs:2089 取值不匹配退 2	tests/cases/mod.rs 的 add refuses an MBR type byte for GPT
+R0088	src/app/cli/parse.rs 命令形态不匹配任一接受形态	旧 src/cli.rs:2117 形态不匹配退 2	tests/cases/mod.rs 的 resizefs size only applies to the mountpoint form
+R0089	src/app/cli/parse.rs 未知选项报用法错误	旧 src/cli.rs:2129 未知选项退 2	tests/cases/mod.rs 的 info with an unknown option
+R0091	src/app/cli/parse.rs 值选项缺值报用法错误	旧 src/cli.rs:2155 缺值退 2	tests/cases/mod.rs 的 info with a missing option value
+R0092	src/app/cli/parse.rs 选项取值非法报用法错误	旧 src/cli.rs:2159 取值非法退 2	tests/cases/mod.rs 的 info rejects a non-power-of-two sector size
+R0863	crates/core/src/geometry/align.rs 对齐溢出由 checked 运算拒绝	旧 src/support.rs:438 对齐后起点溢出退 3	crates/core/src/geometry/align.rs 的 extremes_do_not_wrap
+R0864	src/app/cli/parse.rs 与 decide 拒绝把分区当作整盘目标	旧 src/support.rs:456 分区目标退 3	tests/cases/mod.rs 的 new refuses a partition selector
+R0782	src/app/report/exit.rs::exit_of 把未写拒绝映射为 3	旧 src/outcome.rs:271 refused 构造点	src/app/report/exit.rs 的 every_unwritten_failure_has_one_code
+R0783	src/app/report/exit.rs::exit_of 把未改动拒绝映射为 3	旧 src/outcome.rs:272 no_mutation 构造点	src/app/report/exit.rs 的 every_unwritten_failure_has_one_code
+R0784	src/app/report/exit.rs::exit_of 把不支持映射为 6	旧 src/outcome.rs:273 unsupported 构造点	src/app/report/exit.rs 的 every_unwritten_failure_has_one_code
+R0785	src/app/report/exit.rs::exit_of 把部分完成映射为 5	旧 src/outcome.rs:274 partial 构造点	src/app/report/exit.rs 的 every_unwritten_failure_has_one_code
