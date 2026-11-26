@@ -55,8 +55,8 @@ def allowed(path: str) -> bool:
 
 
 def committed_paths(root: Path, base: str) -> list[str]:
-    output = run_git(root, "diff", "--name-only", "--no-renames", f"{base}..HEAD")
-    return [line for line in output.splitlines() if line]
+    output = run_git(root, "diff", "--name-only", "--no-renames", "-z", f"{base}..HEAD")
+    return [path for path in output.split("\0") if path]
 
 
 def worktree_paths(root: Path) -> list[str]:
