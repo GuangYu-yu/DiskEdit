@@ -11,7 +11,7 @@ use diskedit::app::decide::step::TableSegment;
 use diskedit::app::decide::{Plan, Report, Step, StepKind, confirm};
 use diskedit::app::execute::{ExecutionState, filesystem, resize};
 use diskedit::app::observe::records::RecordState;
-use diskedit::app::observe::resize::{OnlineFacts, ResizeSnapshot};
+use diskedit::app::observe::resize::{LvmFacts, OnlineFacts, ResizeSnapshot};
 use diskedit::app::observe::table::{MbrView, PartitionView, TableView};
 use diskedit::app::observe::{
     Command, PartitionSelector, PriorState, Request, ResizeRequest, SizeSpec, TableFacts,
@@ -691,6 +691,8 @@ struct LivePlatform {
     replies: Mutex<std::collections::VecDeque<Call>>,
     calls: Mutex<Vec<Program>>,
     arg_calls: Mutex<Vec<(Program, Vec<String>)>>,
+    kind: TargetKind,
+    ready: bool,
 }
 
 impl LivePlatform {
@@ -703,7 +705,17 @@ impl LivePlatform {
             replies: Mutex::new(replies.into()),
             calls: Mutex::new(Vec::new()),
             arg_calls: Mutex::new(Vec::new()),
+            kind: TargetKind::File,
+            ready: false,
         }
+    }
+
+    /// 块设备目标：具备块层能力，`partition_device` 给出分区节点。
+    fn new_block(bytes: Vec<u8>, replies: Vec<Call>) -> Self {
+        let mut platform = Self::new(bytes, replies);
+        platform.kind = TargetKind::BlockDevice;
+        platform.ready = true;
+        platform
     }
 
     fn calls(&self) -> Vec<Program> {
@@ -729,7 +741,10 @@ impl Platform for LivePlatform {
         self.open_target(_path)
     }
     fn path_kind(&self, _path: &Path) -> TargetKind {
-        TargetKind::File
+        self.kind
+    }
+    fn filesystem_ready(&self, _path: &Path) -> bool {
+        self.ready
     }
     fn is_partition_node(&self, _path: &Path) -> bool {
         false
@@ -1135,4 +1150,184 @@ fn a_swap_rebuild_keeps_the_old_uuid_and_label_on_the_device() {
             ]
         )]
     );
+}
+
+// --- 在线 PV 几何（块设备上的 PV 被 dm 持有） --------------------------------
+
+/// 块设备上的 PV 分区现场：被 device-mapper 持有（占用 `Used`）但未挂载。
+fn pv_online_snapshot(start: u64, sectors: u64) -> ResizeSnapshot {
+    let mut snapshot = online_snapshot(start, sectors);
+    let content = ContentKind::Lvm2Pv;
+    snapshot.target.kind = TargetKind::BlockDevice;
+    snapshot.occupancy = Occupancy::Used {
+        evidence: "held by device-mapper volumes".to_owned(),
+    };
+    snapshot.online = None;
+    snapshot.partition_mount = Some(PartitionMount::NotMounted);
+    snapshot.swap_active = Some(false);
+    if let Some(partition) = snapshot.selected.as_mut() {
+        partition.content = content;
+    }
+    if let TableView::Mbr(view) = &mut snapshot.view {
+        view.partitions[0].content = content;
+    }
+    snapshot.tools = vec![(Program::Pvs, true), (Program::Pvresize, true)];
+    snapshot.lvm = Some(LvmFacts {
+        selection: None,
+        allocated_end: Ok(0),
+    });
+    snapshot
+}
+
+// covers: B28
+#[test]
+fn pv_online_grow_plans_table_then_kernel_view_then_pv_chain() {
+    let snapshot = pv_online_snapshot(2048, 1024);
+    let request = resize_request(Some(SizeSpec::Grow), None);
+    let diskedit::app::decide::Decision::Execute { plan, .. } =
+        diskedit::app::decide::resize::decide(&snapshot, &request)
+    else {
+        panic!("an online PV grow must plan executable steps");
+    };
+    let kinds: Vec<&StepKind> = plan.steps().iter().map(|step| &step.kind).collect();
+    assert!(matches!(kinds[0], StepKind::WriteTable { .. }), "{kinds:?}");
+    let StepKind::RefreshKernelView {
+        disk,
+        partition,
+        start_bytes,
+        bytes,
+    } = kinds[1]
+    else {
+        panic!("the second step must sync the kernel view: {kinds:?}");
+    };
+    assert_eq!(disk, &PathBuf::from("/dev/sda"));
+    assert_eq!(*partition, 1);
+    assert_eq!(*start_bytes, 2048 * 512);
+    assert_eq!(*bytes, 6144 * 512);
+    let StepKind::LvmGrowChain {
+        partition,
+        start_bytes,
+        old_bytes,
+        new_bytes,
+        grow_lv,
+        ..
+    } = kinds[2]
+    else {
+        panic!("the third step must grow the PV: {kinds:?}");
+    };
+    assert_eq!(*partition, 1);
+    assert_eq!(*start_bytes, 2048 * 512);
+    assert_eq!(*old_bytes, 1024 * 512);
+    assert_eq!(*new_bytes, 6144 * 512);
+    assert!(!*grow_lv);
+}
+
+// covers: B28
+#[test]
+fn pv_online_shrink_is_refused() {
+    let snapshot = pv_online_snapshot(2048, 1024);
+    let request = resize_request(None, Some(2500));
+    let diskedit::app::decide::Decision::Refuse(refusal) =
+        diskedit::app::decide::resize::decide(&snapshot, &request)
+    else {
+        panic!("the online PV path cannot shrink");
+    };
+    assert_eq!(exit::exit_of_refusal(&refusal), exit::REFUSED);
+}
+
+// covers: B28
+#[test]
+fn pv_online_refuses_move_chunk_and_no_fs() {
+    let cases: [fn(&mut ResizeRequest); 3] = [
+        |resize| resize.no_fs = true,
+        |resize| resize.allow_move = true,
+        |resize| resize.chunk = Some(1 << 20),
+    ];
+    for mutate in cases {
+        let snapshot = pv_online_snapshot(2048, 1024);
+        let mut resize = resize_command(Some(SizeSpec::Grow), None);
+        mutate(&mut resize);
+        let request = request_for(resize);
+        let diskedit::app::decide::Decision::Refuse(refusal) =
+            diskedit::app::decide::resize::decide(&snapshot, &request)
+        else {
+            panic!("the online PV path must refuse this flag");
+        };
+        assert_eq!(exit::exit_of_refusal(&refusal), exit::REFUSED);
+    }
+}
+
+const PV_NEW_BYTES: u64 = 6144 * 512;
+
+fn pv_online_execution_plan(bytes: &[u8]) -> diskedit::app::decide::ConfirmedPlan {
+    let table_region = Region::sized(0, 512).expect("表区区间可构造");
+    let table = Step::new(
+        StepKind::WriteTable {
+            format: TableFormat::Mbr,
+            segment_size: 512,
+            stamp: image_stamp(bytes),
+            segments: vec![TableSegment {
+                region: table_region,
+                bytes: vec![0xAA; 512],
+            }],
+        },
+        vec![table_region],
+    );
+    let refresh = Step::new(
+        StepKind::RefreshKernelView {
+            disk: PathBuf::from("/dev/sda"),
+            partition: 1,
+            start_bytes: 2048 * 512,
+            bytes: PV_NEW_BYTES,
+        },
+        Vec::new(),
+    );
+    let lvm_region = Region::sized(2048 * 512, PV_NEW_BYTES).expect("PV 区间可构造");
+    let lvm = Step::new(
+        StepKind::LvmGrowChain {
+            partition: 1,
+            start_bytes: 2048 * 512,
+            old_bytes: 1024 * 512,
+            new_bytes: PV_NEW_BYTES,
+            grow_lv: false,
+            lv: None,
+        },
+        vec![lvm_region],
+    );
+    let plan = Plan::write(vec![table, refresh, lvm], IDENTITY).expect("在线 PV 计划可构造");
+    let current = Observation::known(IDENTITY, Source::new("test"), Generation::FIRST);
+    confirm(plan, true, &current).expect("计划可确认")
+}
+
+// covers: B28
+#[test]
+fn pv_online_runs_the_pv_chain_only_after_the_kernel_view() {
+    let bytes = vec![0u8; DISK_BYTES as usize];
+    // Pvresize 失败：表与内核视图已成，PV 链失败应归档为待恢复。
+    let platform =
+        LivePlatform::new_block(bytes.clone(), vec![Call::Exits(Some(1), String::new())]);
+    let plan = pv_online_execution_plan(&bytes);
+    let outcome = resize::run_pv_online(&platform, &plan);
+    assert_eq!(platform.live_calls(), vec![(1, 2048 * 512, PV_NEW_BYTES)]);
+    assert_eq!(
+        platform.calls(),
+        vec![Program::Pvresize],
+        "PV 链在内核同步之后才跑"
+    );
+    assert_eq!(outcome.state(), ExecutionState::NeedsRecovery);
+    assert_eq!(exit::exit_of(&outcome), exit::PARTIAL);
+}
+
+// covers: B28
+#[test]
+fn pv_online_without_kernel_sync_skips_the_pv_chain() {
+    let bytes = vec![0u8; DISK_BYTES as usize];
+    let platform = LivePlatform::new_block(bytes.clone(), Vec::new());
+    *platform.live_result.lock().unwrap() = Err("EPERM".to_owned());
+    let plan = pv_online_execution_plan(&bytes);
+    let outcome = resize::run_pv_online(&platform, &plan);
+    assert_eq!(platform.live_calls(), vec![(1, 2048 * 512, PV_NEW_BYTES)]);
+    assert!(platform.calls().is_empty(), "内核视图未同步时不能动 PV");
+    assert_eq!(outcome.state(), ExecutionState::CommittedUnsynced);
+    assert_eq!(exit::exit_of(&outcome), exit::PARTIAL);
 }

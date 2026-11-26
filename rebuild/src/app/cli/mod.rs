@@ -385,17 +385,34 @@ fn write(
                 | decide::StepKind::ShrinkFilesystemOnline { .. }
         )
     });
+    let lvm = plan.steps().iter().any(|step| {
+        matches!(
+            step.kind,
+            decide::StepKind::LvmPvShrink { .. } | decide::StepKind::LvmGrowChain { .. }
+        )
+    });
+    // 在线 PV 几何：表写 + 按分区同步内核视图 + PV 链，内核视图步是它区别于离线链的标志。
+    let pv_online = lvm
+        && plan
+            .steps()
+            .iter()
+            .any(|step| matches!(step.kind, decide::StepKind::RefreshKernelView { .. }));
     let outcome = if recovery {
         execute::recover::run(platform, path, &plan)
+    } else if pv_online {
+        // PV 被占用但未挂载：写表、同步内核视图、再让 PV 吸收新空间。
+        execute::resize::run_pv_online(platform, &plan)
     } else if online && table {
         // 已挂载分区的几何调整：表、内核视图与文件系统三步按固定次序执行。
         execute::resize::run_online(platform, &plan)
     } else if online {
         execute::filesystem::run_online(platform, &plan)
-    } else if filesystem && table {
+    } else if (filesystem || lvm) && table {
         execute::resize::run(platform, path, &plan)
     } else if filesystem {
         execute::filesystem::run(platform, path, &plan)
+    } else if lvm {
+        execute::lvm::run(platform, path, &plan)
     } else if relocation {
         execute::relocate::run(platform, path, &plan)
     } else {

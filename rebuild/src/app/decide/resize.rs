@@ -37,6 +37,9 @@ pub fn decide(snapshot: &ResizeSnapshot, request: &Request) -> Decision {
     if let Some(refusal) = online_precondition(snapshot) {
         return Decision::Refuse(refusal);
     }
+    if let Some(decision) = pv_online(snapshot, resize) {
+        return decision;
+    }
     if snapshot.online.is_some() {
         return online(snapshot, resize);
     }
@@ -1055,6 +1058,194 @@ fn online_precondition(snapshot: &ResizeSnapshot) -> Option<Refusal> {
         });
     }
     None
+}
+
+/// 在线 PV 几何：块设备上的 LVM2 PV 分区被 device-mapper 持有（占用为 `Used`）但未挂载时，
+/// 旧版走在线路径——写表、按分区同步内核视图、再让 PV 吸收新空间。只扩不缩，与基线一致。
+///
+/// 返回 `None` 表示这不是在线 PV 现场，交回常规判定：未持有的 PV 走离线链，未判定的占用
+/// 交给占用闸，别的主机形态维持既有拒绝。
+fn pv_online(snapshot: &ResizeSnapshot, resize: &ResizeRequest) -> Option<Decision> {
+    let partition = snapshot.selected.as_ref()?;
+    if partition.content != ContentKind::Lvm2Pv || snapshot.is_partition_node {
+        return None;
+    }
+    // 只处理整盘块设备上的 PV；镜像与挂载形态各走自己的路径。
+    if !snapshot.target.kind.is_block_device() || snapshot.online.is_some() {
+        return None;
+    }
+    if snapshot.swap_active == Some(true) {
+        return None;
+    }
+    // 只有被 dm 持有（`Used`）才是在线；`Idle` 走离线 PV 链，`Unknown` 交给占用闸。
+    if !matches!(snapshot.occupancy, Occupancy::Used { .. }) {
+        return None;
+    }
+    Some(pv_online_decide(snapshot, resize, partition))
+}
+
+/// 在线 PV 几何的判定：只扩、只吃右侧连续空闲、必须能扩 PV。
+fn pv_online_decide(
+    snapshot: &ResizeSnapshot,
+    resize: &ResizeRequest,
+    partition: &crate::app::observe::table::PartitionView,
+) -> Decision {
+    if resize.no_fs {
+        return Decision::Refuse(Refusal::TableEdit {
+            why: "--no-fs cannot resize an LVM2 PV — the PV has to be resized together with the \
+                  partition; omit --no-fs"
+                .to_owned(),
+        });
+    }
+    if resize.allow_move {
+        return Decision::Refuse(Refusal::TableEdit {
+            why:
+                "--allow-move is not available while the PV is held by active volumes — the online \
+                  PV path cannot relocate blocking partitions"
+                    .to_owned(),
+        });
+    }
+    if resize.chunk.is_some() {
+        return Decision::Refuse(Refusal::TableEdit {
+            why:
+                "--chunk has no effect while the PV is held by active volumes — the online PV path \
+                  does not relocate data"
+                    .to_owned(),
+        });
+    }
+    let Some(identity) = snapshot.target.identity else {
+        return Decision::Refuse(Refusal::IdentityUnprovable {
+            why: "the target gives no comparable identity".to_owned(),
+        });
+    };
+    let sector = snapshot.target.sector_size;
+    if sector == 0 {
+        return Decision::Refuse(Refusal::GeometryUnknown {
+            why: "the logical sector size is unknown".to_owned(),
+        });
+    }
+    let (table, protective_mbr) = match editable(snapshot) {
+        Ok(editable) => editable,
+        Err(refusal) => return Decision::Refuse(refusal),
+    };
+    let number = partition.number;
+    let start = partition.first_lba;
+    let old_end = partition.last_lba;
+    let current = partition.bytes;
+    let last_usable = table.last_usable();
+    let free = free_right(&table.used_ranges(), old_end, last_usable);
+    let new_end = match resolve_end(
+        resize,
+        EndContext {
+            start,
+            old_end,
+            current,
+            free,
+            sector,
+            last_usable,
+            grow_ceiling: None,
+        },
+    ) {
+        Ok(end) => end,
+        Err(refusal) => return Decision::Refuse(refusal),
+    };
+    if new_end < old_end {
+        return Decision::Refuse(Refusal::TableEdit {
+            why: "the online PV path can only grow the partition — shrinking a PV held by active \
+                  volumes needs the LV/PV shrink chain; deactivate the volume group and use the \
+                  offline path"
+                .to_owned(),
+        });
+    }
+    if new_end == old_end {
+        if resize.size.as_ref() == Some(&SizeSpec::Grow) {
+            return Decision::Refuse(Refusal::TableEdit {
+                why: "grow would not extend the PV partition — no usable free space to its right; \
+                      the online PV path cannot relocate blocking partitions"
+                    .to_owned(),
+            });
+        }
+        return Decision::Unchanged {
+            note: format!("partition #{number} is already {current} bytes — nothing to do"),
+        };
+    }
+    if new_end - old_end > free {
+        return Decision::Refuse(Refusal::TableEdit {
+            why: "grow would not extend the PV partition — no usable free space to its right; the \
+                  online PV path cannot relocate blocking partitions"
+                .to_owned(),
+        });
+    }
+    let bytes = match (new_end - start + 1).checked_mul(sector) {
+        Some(bytes) => bytes,
+        None => {
+            return Decision::Refuse(Refusal::GeometryUnknown {
+                why: "the grown partition length overflows the byte range".to_owned(),
+            });
+        }
+    };
+    let start_bytes = match start.checked_mul(sector) {
+        Some(bytes) => bytes,
+        None => {
+            return Decision::Refuse(Refusal::GeometryUnknown {
+                why: "the partition start overflows the byte offset".to_owned(),
+            });
+        }
+    };
+    let geometry = FsGeometry {
+        number,
+        start_lba: start,
+        old_bytes: current,
+        new_bytes: bytes,
+        sector,
+    };
+    let lvm_step = match pv_chain_step(snapshot, resize, true, false, &geometry) {
+        Ok(Some(step)) => step,
+        Ok(None) => return refuse("the online PV chain produced no step"),
+        Err(refusal) => return Decision::Refuse(refusal),
+    };
+    if resize.dry_run {
+        return super::report::decision(
+            Report::Resize(ResizePreview {
+                partition: number,
+                start_lba: start,
+                old_end_lba: old_end,
+                new_end_lba: new_end,
+                sector_size: sector,
+                filesystem: Some(partition.content),
+                grow: true,
+            }),
+            vec![Step::new(StepKind::Inspect, Vec::new())],
+        );
+    }
+    let mut segments = match table.resized(number, start, new_end, &[]) {
+        Ok(segments) => segments,
+        Err(why) => return Decision::Refuse(Refusal::TableDamaged { why }),
+    };
+    super::repair::append_protective(&mut segments, protective_mbr);
+    let table_step = table_step(table.format(), sector, segments, snapshot.stamp);
+    let refresh = Step::new(
+        StepKind::RefreshKernelView {
+            disk: snapshot.target.path.clone(),
+            partition: number,
+            start_bytes,
+            bytes,
+        },
+        Vec::new(),
+    );
+    // 扩容：先写表、再同步内核视图、最后让 PV 吸收新空间（B13、B28）。
+    let plan = match Plan::write(vec![table_step, refresh, lvm_step], identity) {
+        Ok(plan) => plan,
+        Err(refusal) => return Decision::Refuse(refusal),
+    };
+    finish(
+        snapshot,
+        plan,
+        format!(
+            "resized LVM2 PV partition #{number} online to LBA {start}..{new_end} (verify with: diskedit info {})",
+            snapshot.target.display
+        ),
+    )
 }
 
 /// 已挂载分区的几何调整：只扩、只吃右侧连续空闲、必须带文件系统步。

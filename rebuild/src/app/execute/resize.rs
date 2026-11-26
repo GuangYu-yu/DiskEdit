@@ -89,6 +89,57 @@ fn execute_online(
     }
 }
 
+/// 执行一份"在线 PV 几何"计划：写表 → 按分区同步内核视图 → 让 PV 吸收新空间。
+///
+/// PV 分区被 device-mapper 持有，整盘重读会 `EBUSY`，所以表提交后按分区同步内核视图；
+/// 内核视图未同步时不动 PV，避免"PV 比内核分区还大"的中间态。PV 链在表与内核视图
+/// 都就位后才跑，任一失败都按持久状态归档。
+pub fn run_pv_online(platform: &dyn Platform, plan: &ConfirmedPlan) -> Outcome {
+    match execute_pv_online(platform, plan) {
+        Ok(None) => Outcome::completed(),
+        Ok(Some(why)) => Outcome::committed_unsynced(why),
+        Err((error, touched)) => failure(error, touched),
+    }
+}
+
+fn execute_pv_online(
+    platform: &dyn Platform,
+    plan: &ConfirmedPlan,
+) -> Result<Option<String>, (ExecError, bool)> {
+    let refresh = plan
+        .steps()
+        .iter()
+        .find(|step| matches!(step.kind, StepKind::RefreshKernelView { .. }))
+        .ok_or_else(|| {
+            (
+                ExecError::InvalidPlan("the online PV plan has no kernel view step".to_owned()),
+                false,
+            )
+        })?;
+    let StepKind::RefreshKernelView {
+        disk,
+        partition,
+        start_bytes,
+        bytes,
+    } = &refresh.kind
+    else {
+        unreachable!("按 RefreshKernelView 选出");
+    };
+    let (disk, partition, start_bytes, bytes) = (disk.clone(), *partition, *start_bytes, *bytes);
+    // 表阶段：提交记录，但不整盘重读（PV 被占用，整盘 `BLKRRPART` 只会 `EBUSY`）。
+    if let Some(note) = super::table::execute_plan(platform, &disk, plan, false)? {
+        return Ok(Some(note));
+    }
+    if let Err(error) = platform.resize_partition_live(&disk, partition, start_bytes, bytes) {
+        return Ok(Some(format!(
+            "partition table written but kernel sync failed: {error}"
+        )));
+    }
+    // 表与内核视图都就位后再扩 PV；失败即"表与视图已达成、PV 未跟上"。
+    super::lvm::execute_plan(platform, &disk, plan)?;
+    Ok(None)
+}
+
 /// 计划里的在线文件系统步骤；必须恰好一个。
 fn online_step(plan: &ConfirmedPlan) -> Result<&crate::app::decide::Step, (ExecError, bool)> {
     let mut found = plan.steps().iter().filter(|step| {
