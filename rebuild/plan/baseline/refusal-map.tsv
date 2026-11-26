@@ -79,21 +79,70 @@ R0044	src/app/cli/parse.rs 的取值域校验拒绝非法取值	旧 src/cli.rs:1
 R0063	src/app/cli/parse.rs parse_set 拒绝 uuid 值与 --random 同时出现	旧 src/cli.rs:1642 两者同给退 2	tests/cases/mod.rs 的 set uuid refuses a value with --random
 R0067	src/app/cli/parse.rs parse_add 只接受绝对 SIZE	旧 src/cli.rs:1732 相对尺寸退 2	tests/cases/mod.rs 的 add refuses a relative size
 R0071	src/app/cli/parse.rs parse_records 的 records list 用法错误	旧 src/cli.rs:1793 records list 缺目标退 2	tests/cases/mod.rs 的 records list without a target
-R0072	src/app/cli/parse.rs Tokens 拒绝重复的值选项	旧 src/cli.rs:1827 重复值选项退 2	tests/cases/mod.rs 的 info with a repeated value option
-R0074	src/app/cli/parse.rs Tokens 裸旗标不接受 =值	旧 src/cli.rs:1878 裸旗标带值退 2	tests/cases/mod.rs 的 info with a value on a bare flag
-R0078	src/app/cli/parse.rs 多余位置参数报用法错误	旧 src/cli.rs:1925 多余参数退 2	tests/cases/mod.rs 的 info with an extra argument
 R0081	src/app/cli/parse.rs 写命令要求 --yes	旧 src/cli.rs:1958 缺 --yes 退 2	tests/cases/mod.rs 的 add without --yes is a usage error
-R0082	src/app/cli/parse.rs 需要分区选择器的形态拒绝整目标	旧 src/cli.rs:2005 缺 :N 退 2	tests/cases/mod.rs 的 delete needs a partition
-R0083	src/app/cli/parse.rs 整目标命令拒绝 :N 后缀	旧 src/cli.rs:2009 整目标带 :N 退 2	tests/cases/mod.rs 的 new refuses a partition selector
 R0085	src/app/cli/parse.rs 入口必需参数缺失报用法错误	旧 src/cli.rs:2081 缺必需参数退 2	tests/cases/mod.rs 的 resizefs without a target is a usage error
 R0086	src/app/cli/parse.rs 选项取值与表类型不匹配报用法错误	旧 src/cli.rs:2089 取值不匹配退 2	tests/cases/mod.rs 的 add refuses an MBR type byte for GPT
 R0088	src/app/cli/parse.rs 命令形态不匹配任一接受形态	旧 src/cli.rs:2117 形态不匹配退 2	tests/cases/mod.rs 的 resizefs size only applies to the mountpoint form
-R0089	src/app/cli/parse.rs 未知选项报用法错误	旧 src/cli.rs:2129 未知选项退 2	tests/cases/mod.rs 的 info with an unknown option
-R0091	src/app/cli/parse.rs 值选项缺值报用法错误	旧 src/cli.rs:2155 缺值退 2	tests/cases/mod.rs 的 info with a missing option value
-R0092	src/app/cli/parse.rs 选项取值非法报用法错误	旧 src/cli.rs:2159 取值非法退 2	tests/cases/mod.rs 的 info rejects a non-power-of-two sector size
-R0863	crates/core/src/geometry/align.rs 对齐溢出由 checked 运算拒绝	旧 src/support.rs:438 对齐后起点溢出退 3	crates/core/src/geometry/align.rs 的 extremes_do_not_wrap
+R0863	crates/core/src/geometry/align.rs 对齐溢出由 checked 运算拒绝	旧 src/support.rs:438 对齐后起点溢出退 3	tests/refusal_claims.rs 的 alignment_overflow_rejects_the_start
 R0864	src/app/cli/parse.rs 与 decide 拒绝把分区当作整盘目标	旧 src/support.rs:456 分区目标退 3	tests/cases/mod.rs 的 new refuses a partition selector
-R0782	src/app/report/exit.rs::exit_of 把未写拒绝映射为 3	旧 src/outcome.rs:271 refused 构造点	src/app/report/exit.rs 的 every_unwritten_failure_has_one_code
-R0783	src/app/report/exit.rs::exit_of 把未改动拒绝映射为 3	旧 src/outcome.rs:272 no_mutation 构造点	src/app/report/exit.rs 的 every_unwritten_failure_has_one_code
-R0784	src/app/report/exit.rs::exit_of 把不支持映射为 6	旧 src/outcome.rs:273 unsupported 构造点	src/app/report/exit.rs 的 every_unwritten_failure_has_one_code
-R0785	src/app/report/exit.rs::exit_of 把部分完成映射为 5	旧 src/outcome.rs:274 partial 构造点	src/app/report/exit.rs 的 every_unwritten_failure_has_one_code
+R0782	src/app/report/exit.rs::exit_of 把未写拒绝映射为 3	旧 src/outcome.rs:271 refused 构造点	tests/contract.rs 的 outcomes_and_refusals_map_to_the_seven_codes
+R0783	src/app/report/exit.rs::exit_of 把未改动拒绝映射为 3	旧 src/outcome.rs:272 no_mutation 构造点	tests/contract.rs 的 outcomes_and_refusals_map_to_the_seven_codes
+R0784	src/app/report/exit.rs::exit_of 把不支持映射为 6	旧 src/outcome.rs:273 unsupported 构造点	tests/contract.rs 的 outcomes_and_refusals_map_to_the_seven_codes
+R0785	src/app/report/exit.rs::exit_of 把部分完成映射为 5	旧 src/outcome.rs:274 partial 构造点	tests/contract.rs 的 outcomes_and_refusals_map_to_the_seven_codes
+R0881	crates/core/src/table/mbr/primary.rs::parse 拒绝无签名扇区	旧 src/table/mbr.rs:234 not an msdos-labelled image	tests/refusal_claims.rs 的 mbr_parse_rejects_unsigned_and_short_sectors
+R0882	crates/core/src/table/mbr/primary.rs::parse 的签名缺失拒绝	旧 src/table/mbr.rs:237 空消息分支	tests/refusal_claims.rs 的 mbr_parse_rejects_unsigned_and_short_sectors
+R0889	crates/core/src/table/mbr/primary.rs::parse 的 MbrSignatureMissing	旧 src/table/mbr.rs:283 no MBR signature on target	tests/refusal_claims.rs 的 mbr_parse_rejects_unsigned_and_short_sectors
+R0892	crates/core/src/table/mbr/primary.rs::parse 的 BufferTooSmall	旧 src/table/mbr.rs:316 image too small for MBR	tests/refusal_claims.rs 的 mbr_parse_rejects_unsigned_and_short_sectors
+R0896	crates/core/src/table/mbr/primary.rs::parse 的 MbrSignatureMissing（重取）	旧 src/table/mbr.rs:351 no MBR signature on target	tests/refusal_claims.rs 的 mbr_parse_rejects_unsigned_and_short_sectors
+R0907	crates/core/src/table/edit.rs::add_mbr 拒绝 0x00 类型	旧 src/table/mbr.rs:485 type 0x00 is the empty-entry marker	tests/refusal_claims.rs 的 mbr_add_rejects_types_ranges_and_overlaps
+R0908	crates/core/src/table/edit.rs::add_mbr 拒绝 0xEE 保护类型	旧 src/table/mbr.rs:488 type 0xEE is the GPT protective record	tests/refusal_claims.rs 的 mbr_add_rejects_types_ranges_and_overlaps
+R0909	crates/core/src/table/edit.rs::add_mbr 拒绝扩展容器类型	旧 src/table/mbr.rs:493 extended-container types are not supported	tests/refusal_claims.rs 的 mbr_add_rejects_types_ranges_and_overlaps
+R0910	crates/core/src/table/edit.rs::add_mbr 的 total_lba < 2 拒绝	旧 src/table/mbr.rs:511 image has zero sectors	tests/refusal_claims.rs 的 mbr_add_rejects_types_ranges_and_overlaps
+R0911	crates/core/src/table/edit.rs::add_mbr 的单扇区拒绝	旧 src/table/mbr.rs:515 image has a single sector	tests/refusal_claims.rs 的 mbr_add_rejects_types_ranges_and_overlaps
+R0912	crates/core/src/table/edit.rs::add_mbr 的 OutOfRange	旧 src/table/mbr.rs:518 range outside disk	tests/refusal_claims.rs 的 mbr_add_rejects_types_ranges_and_overlaps
+R0913	crates/core/src/table/edit.rs::add_mbr 的 PastAddressSpace	旧 src/table/mbr.rs:524 exceeds the MBR 32-bit LBA limit	tests/refusal_claims.rs 的 mbr_add_rejects_types_ranges_and_overlaps
+R0915	crates/core/src/table/edit.rs::add_mbr 的 Overlaps	旧 src/table/mbr.rs:550 range overlaps an existing partition	tests/refusal_claims.rs 的 mbr_add_rejects_types_ranges_and_overlaps
+R0887	crates/core/src/table/edit.rs::add_mbr 的 SlotOutOfRange(max=4)	旧 src/table/mbr.rs:269 msdos supports primary slots 1..=4 only	tests/refusal_claims.rs 的 mbr_add_rejects_slot_limits_and_invisible_entries
+R0891	crates/core/src/table/edit.rs::add_mbr 拒绝有类型零扇区的隐形条目	旧 src/table/mbr.rs:297 type byte but zero sectors	tests/refusal_claims.rs 的 mbr_add_rejects_slot_limits_and_invisible_entries
+R0914	crates/core/src/table/edit.rs::add_mbr 的 UnusableTable（隐形条目）	旧 src/table/mbr.rs:536 type byte but zero sectors	tests/refusal_claims.rs 的 mbr_add_rejects_slot_limits_and_invisible_entries
+R0916	crates/core/src/table/edit.rs::add_mbr 的 SlotOutOfRange	旧 src/table/mbr.rs:561 outside 1..=4 for an MBR table	tests/refusal_claims.rs 的 mbr_add_rejects_slot_limits_and_invisible_entries
+R0917	crates/core/src/table/edit.rs::add_mbr 的 SlotOccupied	旧 src/table/mbr.rs:564 already in use	tests/refusal_claims.rs 的 mbr_add_rejects_slot_limits_and_invisible_entries
+R0918	crates/core/src/table/edit.rs::add_mbr 的 TableFull	旧 src/table/mbr.rs:571 all 4 primary slots used	tests/refusal_claims.rs 的 mbr_add_rejects_slot_limits_and_invisible_entries
+R0622	crates/core/src/table/edit.rs::delete_mbr 的 SlotOutOfRange	旧 src/gpt_policy.rs:538 MBR covers primary slots 1..=4	tests/refusal_claims.rs 的 mbr_delete_rejects_empty_structural_and_out_of_range_slots
+R0890	crates/core/src/table/edit.rs::delete_mbr 的 PartitionEmpty	旧 src/table/mbr.rs:294 partition is empty	tests/refusal_claims.rs 的 mbr_delete_rejects_empty_structural_and_out_of_range_slots
+R0894	crates/core/src/table/edit.rs::delete_mbr 的 SlotOutOfRange	旧 src/table/mbr.rs:342 invalid MBR partition number	tests/refusal_claims.rs 的 mbr_delete_rejects_empty_structural_and_out_of_range_slots
+R0919	crates/core/src/table/edit.rs::delete_mbr 的 PartitionEmpty（已空）	旧 src/table/mbr.rs:593 partition is already empty	tests/refusal_claims.rs 的 mbr_delete_rejects_empty_structural_and_out_of_range_slots
+R0920	crates/core/src/table/edit.rs::delete_mbr 拒绝清除 0xEE 保护记录	旧 src/table/mbr.rs:599 clearing it destroys the protective record	tests/refusal_claims.rs 的 mbr_delete_rejects_empty_structural_and_out_of_range_slots
+R0921	crates/core/src/table/edit.rs::delete_mbr 拒绝扩展容器	旧 src/table/mbr.rs:604 extended container	tests/refusal_claims.rs 的 mbr_delete_rejects_empty_structural_and_out_of_range_slots
+R0898	crates/core/src/table/edit.rs::resize_mbr 拒绝重写 0xEE 保护记录	旧 src/table/mbr.rs:360 rewriting its size destroys the record	tests/refusal_claims.rs 的 mbr_resize_rejects_structural_and_out_of_bounds_ranges
+R0899	crates/core/src/table/edit.rs::resize_mbr 拒绝扩展容器	旧 src/table/mbr.rs:365 extended partition container cannot be resized	tests/refusal_claims.rs 的 mbr_resize_rejects_structural_and_out_of_bounds_ranges
+R0901	crates/core/src/table/edit.rs::resize_mbr 拒绝起始 LBA 0	旧 src/table/mbr.rs:379 invalid start LBA 0	tests/refusal_claims.rs 的 mbr_resize_rejects_structural_and_out_of_bounds_ranges
+R0902	crates/core/src/table/edit.rs::resize_mbr 拒绝零长度	旧 src/table/mbr.rs:383 new size 0 would erase the partition	tests/refusal_claims.rs 的 mbr_resize_rejects_structural_and_out_of_bounds_ranges
+R0903	crates/core/src/table/edit.rs::resize_mbr 拒绝越过盘面	旧 src/table/mbr.rs:388 exceeds the disk	tests/refusal_claims.rs 的 mbr_resize_rejects_structural_and_out_of_bounds_ranges
+R0904	crates/core/src/table/edit.rs::resize_mbr 的 PastAddressSpace	旧 src/table/mbr.rs:396 exceeds the MBR 32-bit LBA limit	tests/refusal_claims.rs 的 mbr_resize_rejects_structural_and_out_of_bounds_ranges
+R0922	crates/core/src/table/edit.rs::set_mbr_hidden 的 NoHiddenCounterpart	旧 src/table/mbr.rs:676 has no hidden counterpart	tests/refusal_claims.rs 的 mbr_type_and_hidden_reject_structural_types
+R0923	crates/core/src/table/edit.rs::set_mbr_type 拒绝 0x00	旧 src/table/mbr.rs:714 type 0x00 marks an empty entry	tests/refusal_claims.rs 的 mbr_type_and_hidden_reject_structural_types
+R0924	crates/core/src/table/edit.rs::set_mbr_type 拒绝 0xEE	旧 src/table/mbr.rs:718 type 0xEE is the GPT protective record	tests/refusal_claims.rs 的 mbr_type_and_hidden_reject_structural_types
+R0925	crates/core/src/table/edit.rs::set_mbr_type 拒绝扩展容器类型	旧 src/table/mbr.rs:723 extended-container types are not supported	tests/refusal_claims.rs 的 mbr_type_and_hidden_reject_structural_types
+R0926	crates/core/src/table/edit.rs::set_mbr_type 拒绝改写扩展容器当前值	旧 src/table/mbr.rs:735 type is structural, not descriptive	tests/refusal_claims.rs 的 mbr_type_and_hidden_reject_structural_types
+R0927	crates/core/src/table/edit.rs::set_mbr_type 拒绝改写 0xEE 当前值	旧 src/table/mbr.rs:740 type byte is structural, not descriptive	tests/refusal_claims.rs 的 mbr_type_and_hidden_reject_structural_types
+R0628	crates/core/src/table/edit.rs::GptTable::add_slot 的 OutsideUsable	旧 src/gpt_policy.rs:654 range outside usable	tests/refusal_claims.rs 的 gpt_add_slot_rejects_bounds_overlap_slots_and_full_table
+R0629	crates/core/src/table/edit.rs::GptTable::add_slot 的 Overlaps	旧 src/gpt_policy.rs:664 range overlaps an existing partition	tests/refusal_claims.rs 的 gpt_add_slot_rejects_bounds_overlap_slots_and_full_table
+R0630	crates/core/src/table/edit.rs::GptTable::add_slot 的 SlotOutOfRange	旧 src/gpt_policy.rs:674 partition number outside 1..=n	tests/refusal_claims.rs 的 gpt_add_slot_rejects_bounds_overlap_slots_and_full_table
+R0631	crates/core/src/table/edit.rs::GptTable::add_slot 的 SlotOccupied	旧 src/gpt_policy.rs:680 already in use	tests/refusal_claims.rs 的 gpt_add_slot_rejects_bounds_overlap_slots_and_full_table
+R0632	crates/core/src/table/edit.rs::GptTable::add_slot 的 TableFull	旧 src/gpt_policy.rs:690 partition table full	tests/refusal_claims.rs 的 gpt_add_slot_rejects_bounds_overlap_slots_and_full_table
+R0616	crates/core/src/table/edit.rs::GptTable::last_live 返回 None，由 decide 报无分区	旧 src/gpt_policy.rs:388 no partition to point :last at	tests/refusal_claims.rs 的 partition_lookup_rejects_empty_and_missing_entries
+R0617	crates/core/src/table/edit.rs::mbr_last_live 返回 None，由 decide 报无分区	旧 src/gpt_policy.rs:390 MBR has no usable primary entry	tests/refusal_claims.rs 的 partition_lookup_rejects_empty_and_missing_entries
+R0618	crates/core/src/table/edit.rs::GptTable::live_index 的 PartitionEmpty	旧 src/gpt_policy.rs:413 partition is empty	tests/refusal_claims.rs 的 partition_lookup_rejects_empty_and_missing_entries
+R0619	crates/core/src/table/edit.rs::GptTable::live_index 的 PartitionMissing	旧 src/gpt_policy.rs:414 partition not found	tests/refusal_claims.rs 的 partition_lookup_rejects_empty_and_missing_entries
+R0625	crates/core/src/policy/gpt.rs::usable_range 拒绝倒置边界	旧 src/gpt_policy.rs:585 last_usable_lba arithmetic overflows	tests/refusal_claims.rs 的 gpt_usable_range_rejects_inverted_bounds
+R0639	crates/core/src/table/edit.rs::GptFlag::parse 拒绝未知名字	旧 src/gpt_policy.rs:778 unknown gpt flag	tests/refusal_claims.rs 的 gpt_flag_names_reject_unknown_values
+R0642	crates/core/src/table/edit.rs::fixed_start 的 PastAddressSpace（起点）	旧 src/gpt_policy.rs:841 partition start overflows byte offset	tests/refusal_claims.rs 的 gpt_placement_rejects_address_space_overflow
+R0643	crates/core/src/table/edit.rs::fixed_start 的 PastAddressSpace（长度）	旧 src/gpt_policy.rs:849 partition length overflows byte size	tests/refusal_claims.rs 的 gpt_placement_rejects_address_space_overflow
+R0611	src/app/decide/edit.rs 对非 GPT 目标报 GptRequired	旧 src/gpt_policy.rs:262 requires a GPT target	tests/cases/mod.rs 的 info grow needs GPT
+R0613	src/app/observe/table.rs 表读取失败 → TableDamaged	旧 src/gpt_policy.rs:325 cannot read the GPT header at LBA1	tests/cases/mod.rs 的 info on a damaged GPT image
+R0615	src/app/decide/edit.rs 无表目标报 TableMissing	旧 src/gpt_policy.rs:332 no partition table on target	tests/cases/mod.rs 的 add refuses a target without a table
+R0626	src/app/decide/edit.rs set type 需要 GPT	旧 src/gpt_policy.rs:637 no GPT	tests/cases/mod.rs 的 set type refuses a target without a table
+R0633	src/app/decide/edit.rs set flag 需要 GPT	旧 src/gpt_policy.rs:721 no GPT	tests/cases/mod.rs 的 set flag refuses a target without a table
+R0637	src/app/decide/edit.rs delete 需要 GPT	旧 src/gpt_policy.rs:744 no GPT	tests/cases/mod.rs 的 delete refuses a target without a table
+R0645	src/app/decide/edit.rs 拒绝全零类型 GUID	旧 src/gpt_policy.rs:917 type GUID cannot be all-zero	tests/cases/mod.rs 的 add refuses a zero type GUID
