@@ -16,6 +16,7 @@ pub mod plan;
 pub mod records;
 pub mod recover;
 pub mod refusal;
+pub mod repair;
 pub mod report;
 pub mod resize;
 pub mod resizefs;

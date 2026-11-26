@@ -22,7 +22,7 @@ use crate::app::observe::{
 };
 
 use super::step::{Step, StepKind, TableSegment};
-use super::{Decision, Plan, Refusal};
+use super::{Decision, Plan, Refusal, repair};
 
 /// 未给出 `--chunk` 时的默认块大小。
 const DEFAULT_CHUNK: u64 = 4 << 20;
@@ -47,17 +47,24 @@ pub fn move_partition(snapshot: &EditSnapshot, request: &Request) -> Decision {
         entries,
         sector_size,
         total_bytes,
+        state,
+        pmbr,
+        lba0,
     }) = &snapshot.facts
     else {
         return Decision::Refuse(Refusal::GptRequired {
             what: "`move` needs a GPT partition table".to_owned(),
         });
     };
-    let table = GptTable {
+    let mut table = GptTable {
         header: header.clone(),
         entries: entries.clone(),
         sector_size: *sector_size,
         total_bytes: *total_bytes,
+    };
+    let repaired = match repair::adopt(&mut table, *state, *pmbr, lba0) {
+        Ok(repaired) => repaired,
+        Err(refusal) => return Decision::Refuse(refusal),
     };
     let Some(number) = resolve_gpt(&table, moved.partition) else {
         return refuse_edit("there is no partition to point `:last` at");
@@ -91,7 +98,7 @@ pub fn move_partition(snapshot: &EditSnapshot, request: &Request) -> Decision {
     let mut updated = table.entries.clone();
     updated[index].starting_lba = new_start;
     updated[index].ending_lba = new_end;
-    let segments = match table.segments(&updated) {
+    let mut segments = match table.segments(&updated) {
         Ok(segments) => segments,
         Err(error) => {
             return Decision::Refuse(Refusal::TableDamaged {
@@ -99,6 +106,7 @@ pub fn move_partition(snapshot: &EditSnapshot, request: &Request) -> Decision {
             });
         }
     };
+    repair::append_protective(&mut segments, repaired.protective_mbr);
     let data = Step::new(
         StepKind::MovePartition {
             partition: number,
@@ -139,17 +147,24 @@ pub fn copy_partition(snapshot: &EditSnapshot, request: &Request) -> Decision {
         entries,
         sector_size,
         total_bytes,
+        state,
+        pmbr,
+        lba0,
     }) = &snapshot.facts
     else {
         return Decision::Refuse(Refusal::GptRequired {
             what: "`copy` needs a GPT partition table".to_owned(),
         });
     };
-    let table = GptTable {
+    let mut table = GptTable {
         header: header.clone(),
         entries: entries.clone(),
         sector_size: *sector_size,
         total_bytes: *total_bytes,
+    };
+    let repaired = match repair::adopt(&mut table, *state, *pmbr, lba0) {
+        Ok(repaired) => repaired,
+        Err(refusal) => return Decision::Refuse(refusal),
     };
     let Some(number) = resolve_gpt(&table, copied.partition) else {
         return refuse_edit("there is no partition to point `:last` at");
@@ -201,7 +216,7 @@ pub fn copy_partition(snapshot: &EditSnapshot, request: &Request) -> Decision {
     };
     let mut updated = table.entries.clone();
     updated[slot] = clone;
-    let segments = match table.segments(&updated) {
+    let mut segments = match table.segments(&updated) {
         Ok(segments) => segments,
         Err(error) => {
             return Decision::Refuse(Refusal::TableDamaged {
@@ -209,6 +224,7 @@ pub fn copy_partition(snapshot: &EditSnapshot, request: &Request) -> Decision {
             });
         }
     };
+    repair::append_protective(&mut segments, repaired.protective_mbr);
     let data = Step::new(
         StepKind::CopyPartition {
             source: number,
@@ -420,6 +436,9 @@ pub fn add(snapshot: &EditSnapshot, request: &Request) -> Decision {
             entries,
             sector_size,
             total_bytes,
+            state,
+            pmbr,
+            lba0,
         } => {
             let sectors = add.size.div_ceil(*sector_size);
             if sectors == 0 {
@@ -427,16 +446,20 @@ pub fn add(snapshot: &EditSnapshot, request: &Request) -> Decision {
                     what: "the requested size rounds down to zero sectors".to_owned(),
                 });
             }
-            let table = GptTable {
+            let mut table = GptTable {
                 header: header.clone(),
                 entries: entries.clone(),
                 sector_size: *sector_size,
                 total_bytes: *total_bytes,
             };
+            let repaired = match repair::adopt(&mut table, *state, *pmbr, lba0) {
+                Ok(repaired) => repaired,
+                Err(refusal) => return Decision::Refuse(refusal),
+            };
             let placed = match place(
                 &table.used_ranges(),
-                header.first_usable_lba,
-                header.last_usable_lba,
+                table.header.first_usable_lba,
+                table.header.last_usable_lba,
                 add.align,
                 *sector_size,
                 sectors,
@@ -473,7 +496,7 @@ pub fn add(snapshot: &EditSnapshot, request: &Request) -> Decision {
                 derive_unique(identity, placed.0, placed.1),
                 name,
             );
-            let segments = match table.segments(&entries) {
+            let mut segments = match table.segments(&entries) {
                 Ok(segments) => segments,
                 Err(error) => {
                     return Decision::Refuse(Refusal::TableDamaged {
@@ -481,6 +504,7 @@ pub fn add(snapshot: &EditSnapshot, request: &Request) -> Decision {
                     });
                 }
             };
+            repair::append_protective(&mut segments, repaired.protective_mbr);
             let number = u32::try_from(index + 1).expect("条目下标可表示");
             finish(
                 snapshot,
@@ -591,12 +615,19 @@ pub fn delete(snapshot: &EditSnapshot, request: &Request) -> Decision {
             entries,
             sector_size,
             total_bytes,
+            state,
+            pmbr,
+            lba0,
         } => {
-            let table = GptTable {
+            let mut table = GptTable {
                 header: header.clone(),
                 entries: entries.clone(),
                 sector_size: *sector_size,
                 total_bytes: *total_bytes,
+            };
+            let repaired = match repair::adopt(&mut table, *state, *pmbr, lba0) {
+                Ok(repaired) => repaired,
+                Err(refusal) => return Decision::Refuse(refusal),
             };
             let Some(number) = resolve_gpt(&table, *partition) else {
                 return refuse_edit("there is no partition to point `:last` at");
@@ -607,7 +638,7 @@ pub fn delete(snapshot: &EditSnapshot, request: &Request) -> Decision {
             };
             let mut entries = table.entries.clone();
             entries[index] = PartitionEntry::EMPTY;
-            let segments = match table.segments(&entries) {
+            let mut segments = match table.segments(&entries) {
                 Ok(segments) => segments,
                 Err(error) => {
                     return Decision::Refuse(Refusal::TableDamaged {
@@ -615,6 +646,7 @@ pub fn delete(snapshot: &EditSnapshot, request: &Request) -> Decision {
                     });
                 }
             };
+            repair::append_protective(&mut segments, repaired.protective_mbr);
             finish(
                 snapshot,
                 table_plan(
@@ -707,17 +739,22 @@ pub fn set(snapshot: &EditSnapshot, request: &Request) -> Decision {
             entries,
             sector_size,
             total_bytes,
-        } => set_gpt(
-            snapshot,
-            set,
-            identity,
-            GptTable {
+            state,
+            pmbr,
+            lba0,
+        } => {
+            let mut table = GptTable {
                 header: header.clone(),
                 entries: entries.clone(),
                 sector_size: *sector_size,
                 total_bytes: *total_bytes,
-            },
-        ),
+            };
+            let repaired = match repair::adopt(&mut table, *state, *pmbr, lba0) {
+                Ok(repaired) => repaired,
+                Err(refusal) => return Decision::Refuse(refusal),
+            };
+            set_gpt(snapshot, set, identity, table, repaired.protective_mbr)
+        }
         TableFacts::Mbr { lba0, .. } => set_mbr(snapshot, set, identity, lba0),
     }
 }
@@ -727,6 +764,7 @@ fn set_gpt(
     set: &SetRequest,
     identity: diskedit_core::fingerprint::Fingerprint,
     table: GptTable,
+    protective_mbr: Option<Vec<u8>>,
 ) -> Decision {
     let Some(number) = resolve_gpt(&table, set.partition) else {
         return refuse_edit("there is no partition to point `:last` at");
@@ -791,7 +829,7 @@ fn set_gpt(
             return filesystem_attr(snapshot, number, set.key);
         }
     }
-    let segments = match table.segments(&entries) {
+    let mut segments = match table.segments(&entries) {
         Ok(segments) => segments,
         Err(error) => {
             return Decision::Refuse(Refusal::TableDamaged {
@@ -799,6 +837,7 @@ fn set_gpt(
             });
         }
     };
+    repair::append_protective(&mut segments, protective_mbr);
     finish(
         snapshot,
         table_plan(

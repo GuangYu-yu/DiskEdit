@@ -3,8 +3,11 @@
 //! 这些函数只读已经解析出的表值，不读盘、不写盘。分区的类型 GUID 属于用户数据：
 //! 几何变化可以移动分区、改动起止，但不得改写已有分区的类型 GUID。
 
+use std::fmt;
+
 use crate::region::{Region, RegionSet};
-use crate::table::gpt::parse::entry_array_span;
+use crate::table::create::PmbrSize;
+use crate::table::gpt::parse::{GptState, HeaderIssue, entry_array_span};
 use crate::table::{GptHeader, Guid, PRIMARY_HEADER_LBA, PartitionEntry, TableError};
 
 /// 一个已有分区的类型 GUID 被改写。
@@ -98,6 +101,183 @@ pub fn preserved_type_guids(
         }
     }
     Ok(())
+}
+
+/// 修复动作：判定该用哪种方式把损坏的表收敛成双副本自洽的规范形态。
+///
+/// 动作本身即状态，不用布尔旗标；需要重算的 `last_usable_lba` 在判定期算好后随
+/// 动作携带，写路径不再重新推导。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RepairAction {
+    /// 无需修复。
+    None,
+    /// 备份头不在容器末端：重写双头，把备份副本搬到设备最后一个 LBA。
+    RelocateBackup {
+        new_backup_lba: u64,
+        new_last_usable: u64,
+    },
+    /// 备份副本自洽，仅保护 MBR 的 SizeInLBA 不是本容器的口径。
+    RepairProtectiveMbr,
+    /// 两者都需处理。
+    RelocateAndRepair {
+        new_backup_lba: u64,
+        new_last_usable: u64,
+    },
+}
+
+impl RepairAction {
+    /// 搬迁后的 `last_usable_lba`；不含搬迁的动作无值。
+    pub fn new_last_usable(self) -> Option<u64> {
+        match self {
+            Self::RelocateBackup {
+                new_last_usable, ..
+            }
+            | Self::RelocateAndRepair {
+                new_last_usable, ..
+            } => Some(new_last_usable),
+            Self::None | Self::RepairProtectiveMbr => None,
+        }
+    }
+
+    /// 是否要重写保护 MBR。
+    pub fn rewrites_protective_mbr(self) -> bool {
+        matches!(
+            self,
+            Self::RepairProtectiveMbr | Self::RelocateAndRepair { .. }
+        )
+    }
+
+    /// 人类可读描述；`None` 动作没有描述。
+    pub fn describe(self) -> Option<String> {
+        match self {
+            Self::None => None,
+            Self::RelocateBackup {
+                new_backup_lba,
+                new_last_usable,
+            } => Some(format!(
+                "relocate backup GPT → LBA {new_backup_lba} (last_usable_lba → {new_last_usable})"
+            )),
+            Self::RepairProtectiveMbr => Some(
+                "rewrite protective MBR (SizeInLBA is not the logical-block value for this container)"
+                    .to_owned(),
+            ),
+            Self::RelocateAndRepair {
+                new_backup_lba,
+                new_last_usable,
+            } => Some(format!(
+                "relocate backup GPT → LBA {new_backup_lba} (last_usable_lba → {new_last_usable}) \
+                 + rewrite protective MBR (SizeInLBA is not the logical-block value for this container)"
+            )),
+        }
+    }
+}
+
+/// 修复判定不能进行的原因。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RepairError {
+    /// 保护 MBR 的 SizeInLBA 大于两种口径：可能是更大盘的截断副本。
+    ProtectiveMbrInconsistent,
+    /// 容器容不下备份数组与备份头。
+    ContainerTooSmall,
+    /// 既有分区越出修复后的可用区上界。
+    PartitionsBeyondNewUsable { max_end: u64, new_last_usable: u64 },
+}
+
+impl fmt::Display for RepairError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ProtectiveMbrInconsistent => f.write_str(
+                "protective MBR SizeInLBA exceeds the container — refusing auto-repair \
+                 (use sgdisk/parted)",
+            ),
+            Self::ContainerTooSmall => f.write_str(
+                "the container is too small for the GPT backup metadata — refusing auto-repair",
+            ),
+            Self::PartitionsBeyondNewUsable {
+                max_end,
+                new_last_usable,
+            } => write!(
+                f,
+                "partitions end at LBA {max_end}, beyond the repaired last usable LBA \
+                 {new_last_usable} — refusing to shrink the table under them"
+            ),
+        }
+    }
+}
+
+/// 判定需要哪种修复，不写盘。两条轴：备份副本是否需要搬到容器末端（`state`）、
+/// 保护 MBR 是否需要按本容器口径规范化（`pmbr`）。
+///
+/// 只有 `PmbrSize::Inconsistent` 拒绝自动修复：值大于两种口径，可能是更大盘的
+/// 截断副本，此时"按本容器重写"会抹掉线人线索。主副本不可读时可用区上界取
+/// `min(备份头的 last_usable, 容器末端减跨度)`，不让重定位静默抬高它；备份缺失
+/// 或两副本分歧时以主头为权威，保持它的 `last_usable` 不变。
+pub fn repair_action(
+    header: &GptHeader,
+    entries: &[PartitionEntry],
+    state: GptState,
+    pmbr: PmbrSize,
+    container_last_lba: u64,
+    sector_size: u64,
+) -> Result<RepairAction, RepairError> {
+    if pmbr == PmbrSize::Inconsistent {
+        return Err(RepairError::ProtectiveMbrInconsistent);
+    }
+    let rewrites_pmbr = matches!(pmbr, PmbrSize::NeedsRepair { .. });
+    if state == GptState::Valid {
+        return Ok(if rewrites_pmbr {
+            RepairAction::RepairProtectiveMbr
+        } else {
+            RepairAction::None
+        });
+    }
+    let span = entry_array_span(
+        header.number_of_partition_entries,
+        header.size_of_partition_entry,
+        sector_size,
+    )
+    .map_err(|_| RepairError::ContainerTooSmall)?;
+    let computed = container_last_lba
+        .checked_sub(span)
+        .and_then(|value| value.checked_sub(1))
+        .ok_or(RepairError::ContainerTooSmall)?;
+    let (new_last_usable, bounds_from_container) = match state {
+        GptState::NeedsRepair {
+            cause: HeaderIssue::PrimaryUnreadable,
+        } => (header.last_usable_lba.min(computed), true),
+        GptState::NeedsRepair {
+            cause: HeaderIssue::BackupUnreadable | HeaderIssue::CopiesDiverge,
+        } => (header.last_usable_lba, false),
+        GptState::NeedsRepair {
+            cause: HeaderIssue::BackupLbaStale { .. },
+        } => (computed, true),
+        GptState::Valid => (computed, true),
+    };
+    if bounds_from_container {
+        let max_end = entries
+            .iter()
+            .filter(|entry| !entry.partition_type_guid.is_zero())
+            .map(|entry| entry.ending_lba)
+            .max()
+            .unwrap_or(0);
+        if max_end > new_last_usable {
+            return Err(RepairError::PartitionsBeyondNewUsable {
+                max_end,
+                new_last_usable,
+            });
+        }
+    }
+    Ok(if rewrites_pmbr {
+        RepairAction::RelocateAndRepair {
+            new_backup_lba: container_last_lba,
+            new_last_usable,
+        }
+    } else {
+        RepairAction::RelocateBackup {
+            new_backup_lba: container_last_lba,
+            new_last_usable,
+        }
+    })
 }
 
 fn lba_region(start: u64, len: u64) -> Result<Region, TableError> {
@@ -224,5 +404,143 @@ mod tests {
         let mut after = entry(1, 0x07);
         after.unique_partition_guid = Guid::ZERO;
         assert_eq!(preserved_type_guids(&[before], &[after]), Ok(()));
+    }
+
+    fn stale_backup() -> GptState {
+        GptState::NeedsRepair {
+            cause: HeaderIssue::BackupLbaStale {
+                expected: 1000,
+                actual: 500,
+            },
+        }
+    }
+
+    fn pmbr_stale() -> PmbrSize {
+        PmbrSize::NeedsRepair {
+            cause: crate::table::create::PmbrIssue::Stale,
+        }
+    }
+
+    /// 判定矩阵：两条轴四组合 + Inconsistent 一票否决，与旧版语义逐格对应。
+    #[test]
+    fn repair_action_decision_matrix() {
+        let normal = PmbrSize::Normal;
+        let valid = GptState::Valid;
+        let base = header();
+        assert_eq!(
+            repair_action(&base, &[], valid, normal, 2000, 512),
+            Ok(RepairAction::None)
+        );
+        assert_eq!(
+            repair_action(&base, &[], valid, pmbr_stale(), 2000, 512),
+            Ok(RepairAction::RepairProtectiveMbr)
+        );
+        assert_eq!(
+            repair_action(&base, &[], stale_backup(), normal, 2000, 512),
+            Ok(RepairAction::RelocateBackup {
+                new_backup_lba: 2000,
+                new_last_usable: 2000 - 32 - 1,
+            })
+        );
+        assert_eq!(
+            repair_action(&base, &[], stale_backup(), pmbr_stale(), 2000, 512),
+            Ok(RepairAction::RelocateAndRepair {
+                new_backup_lba: 2000,
+                new_last_usable: 2000 - 32 - 1,
+            })
+        );
+        assert_eq!(
+            repair_action(&base, &[], valid, PmbrSize::Inconsistent, 2000, 512),
+            Err(RepairError::ProtectiveMbrInconsistent)
+        );
+    }
+
+    /// 主副本不可读时，可用区上界取备份头值与容器计算值的较小者。
+    #[test]
+    fn primary_unreadable_keeps_the_lower_last_usable() {
+        let state = GptState::NeedsRepair {
+            cause: HeaderIssue::PrimaryUnreadable,
+        };
+        let action = repair_action(&header(), &[], state, PmbrSize::Normal, 2000, 512)
+            .expect("主头丢失可修复");
+        assert_eq!(
+            action,
+            RepairAction::RelocateBackup {
+                new_backup_lba: 2000,
+                new_last_usable: 967,
+            }
+        );
+        assert_eq!(action.new_last_usable(), Some(967));
+        assert!(!action.rewrites_protective_mbr());
+    }
+
+    /// 备份缺失或两副本分歧时以主头为权威，不改写可用区上界。
+    #[test]
+    fn backup_side_faults_keep_the_primary_last_usable() {
+        for cause in [HeaderIssue::BackupUnreadable, HeaderIssue::CopiesDiverge] {
+            let state = GptState::NeedsRepair { cause };
+            let action = repair_action(&header(), &[], state, PmbrSize::Normal, 2000, 512)
+                .expect("备份侧损坏可修复");
+            assert_eq!(
+                action,
+                RepairAction::RelocateBackup {
+                    new_backup_lba: 2000,
+                    new_last_usable: 967,
+                }
+            );
+        }
+    }
+
+    /// 容器容不下备份元数据，或既有分区越出新上界，都必须拒绝而不是截断分区。
+    #[test]
+    fn repair_action_refuses_impossible_geometry() {
+        assert_eq!(
+            repair_action(&header(), &[], stale_backup(), PmbrSize::Normal, 32, 512),
+            Err(RepairError::ContainerTooSmall)
+        );
+        let mut far = entry(1, 0x0c);
+        far.ending_lba = 1990;
+        assert!(matches!(
+            repair_action(
+                &header(),
+                &[far],
+                stale_backup(),
+                PmbrSize::Normal,
+                2000,
+                512
+            ),
+            Err(RepairError::PartitionsBeyondNewUsable { .. })
+        ));
+    }
+
+    /// `Inconsistent` 在无需搬迁时也必须拒绝，而不是按普通状态放行。
+    #[test]
+    fn inconsistent_protective_mbr_is_refused_even_with_a_valid_table() {
+        assert_eq!(
+            repair_action(
+                &header(),
+                &[],
+                GptState::Valid,
+                PmbrSize::Inconsistent,
+                2000,
+                512
+            ),
+            Err(RepairError::ProtectiveMbrInconsistent)
+        );
+    }
+
+    #[test]
+    fn describe_covers_every_action_but_none() {
+        assert_eq!(RepairAction::None.describe(), None);
+        assert!(RepairAction::RepairProtectiveMbr.describe().is_some());
+        let relocate = RepairAction::RelocateBackup {
+            new_backup_lba: 10,
+            new_last_usable: 5,
+        };
+        assert!(
+            relocate
+                .describe()
+                .is_some_and(|text| text.contains("LBA 10"))
+        );
     }
 }

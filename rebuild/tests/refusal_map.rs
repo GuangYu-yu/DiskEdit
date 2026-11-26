@@ -11,10 +11,11 @@
 // covers: R0259, R0260, R0261, R0263, R0264, R0265, R0266, R0267
 // covers: R0269, R0270, R0271, R0273, R0274, R0275, R0276, R0277
 // covers: R0459, R0460, R0461, R0462
+// tests/gpt_repair.rs 的 a_grown_container_is_repaired_in_the_same_table_write
+// covers: R0005, R0006, R0007, R0008, R0009, R0010, R0011
+// covers: R0602, R0603, R0604, R0605, R0606, R0607, R0608
 // tests/case_runner.rs 的 check_reports_the_reason_it_cannot_act
-// covers: R0005, R0006, R0007, R0008, R0009, R0010, R0011, R0104
-// covers: R0105, R0106, R0107, R0602, R0603, R0604, R0605, R0606
-// covers: R0607, R0608
+// covers: R0104, R0105, R0106, R0107
 // tests/case_runner.rs 的 resize_rewrites_the_table_and_refuses_unsafe_shrinks
 // covers: R0012, R0013, R0015, R0027, R0190, R0191, R0200, R0201
 // covers: R0202, R0204, R0205, R0206, R0207, R0208, R0210, R0211

@@ -285,13 +285,13 @@ R0450	src/app/decide/resize.rs superfloppy 拒绝超过容器	旧 cmd/resize/sup
 R0001	src/app/observe/table.rs::observe	旧 src/assembly.rs:31 cannot read the partition table: {e}	tests/case_runner.rs 的 inspect_refuses_a_damaged_or_foreign_record
 R0002	src/app/observe/table.rs::observe	旧 src/assembly.rs:50 cannot read the GPT: {e}	tests/case_runner.rs 的 inspect_refuses_a_damaged_or_foreign_record
 R0003	src/app/observe/table.rs::observe	旧 src/assembly.rs:62 cannot read the MBR: {e}	tests/case_runner.rs 的 inspect_refuses_a_damaged_or_foreign_record
-R0005	src/app/decide/inspect.rs::decide 与 src/app/decide/refusal.rs（损坏表按 TableDamaged 拒绝）	旧 src/assembly.rs:231 GPT vanished before repair	tests/case_runner.rs 的 check_reports_the_reason_it_cannot_act
-R0006	src/app/decide/inspect.rs::decide 与 src/app/decide/refusal.rs（损坏表按 TableDamaged 拒绝）	旧 src/assembly.rs:234 refused	tests/case_runner.rs 的 check_reports_the_reason_it_cannot_act
-R0007	src/app/decide/inspect.rs::decide 与 src/app/decide/refusal.rs（损坏表按 TableDamaged 拒绝）	旧 src/assembly.rs:236 GPT changed between validation and repair — re-run the command	tests/case_runner.rs 的 check_reports_the_reason_it_cannot_act
-R0008	src/app/decide/inspect.rs::decide 与 src/app/decide/refusal.rs（损坏表按 TableDamaged 拒绝）	旧 src/assembly.rs:241 a repair plan was requested for a no-op action	tests/case_runner.rs 的 check_reports_the_reason_it_cannot_act
-R0009	src/app/decide/inspect.rs::decide 与 src/app/decide/refusal.rs（损坏表按 TableDamaged 拒绝）	旧 src/assembly.rs:248 refused	tests/case_runner.rs 的 check_reports_the_reason_it_cannot_act
-R0010	src/app/decide/inspect.rs::decide 与 src/app/decide/refusal.rs（损坏表按 TableDamaged 拒绝）	旧 src/assembly.rs:264 the table snapshot does not contain LBA0	tests/case_runner.rs 的 check_reports_the_reason_it_cannot_act
-R0011	src/app/decide/inspect.rs::decide 与 src/app/decide/refusal.rs（损坏表按 TableDamaged 拒绝）	旧 src/assembly.rs:278 the protective MBR is already canonical — the repair action does not match the disk	tests/case_runner.rs 的 check_reports_the_reason_it_cannot_act
+R0005	src/app/observe/edit.rs::capture_gpt（一次性读定，无独立修复事务）	旧 src/assembly.rs:231 GPT vanished before repair	tests/gpt_repair.rs 的 a_grown_container_is_repaired_in_the_same_table_write
+R0006	src/app/decide/repair.rs::adopt（修复判定失败归 TableDamaged）	旧 src/assembly.rs:234 refused	tests/gpt_repair.rs 的 a_grown_container_is_repaired_in_the_same_table_write
+R0007	src/app/execute/table.rs::execute_plan（写前复核 stamp 与身份）	旧 src/assembly.rs:236 GPT changed between validation and repair — re-run the command	tests/gpt_repair.rs 的 a_grown_container_is_repaired_in_the_same_table_write
+R0008	src/app/decide/repair.rs::adopt（无需修复时不产生修复写段）	旧 src/assembly.rs:241 a repair plan was requested for a no-op action	tests/gpt_repair.rs 的 a_grown_container_is_repaired_in_the_same_table_write
+R0009	src/app/decide/repair.rs::adopt（不可修复的几何归 TableDamaged）	旧 src/assembly.rs:248 refused	tests/gpt_repair.rs 的 a_grown_container_is_repaired_in_the_same_table_write
+R0010	src/app/observe/edit.rs::capture_gpt（每次都读 LBA0）	旧 src/assembly.rs:264 the table snapshot does not contain LBA0	tests/gpt_repair.rs 的 a_grown_container_is_repaired_in_the_same_table_write
+R0011	src/app/decide/repair.rs::adopt（protective_mbr_content 已合规返回 None）	旧 src/assembly.rs:278 the protective MBR is already canonical — the repair action does not match the disk	tests/gpt_repair.rs 的 a_grown_container_is_repaired_in_the_same_table_write
 R0012	src/app/decide/resize.rs::filesystem_step	旧 src/assembly.rs:307 refused	tests/case_runner.rs 的 resize_rewrites_the_table_and_refuses_unsafe_shrinks
 R0013	src/app/decide/resize.rs::filesystem_step	旧 src/assembly.rs:313 partition #{part} left the partition table while the plan was being assembled	tests/case_runner.rs 的 resize_rewrites_the_table_and_refuses_unsafe_shrinks
 R0015	src/app/decide/resize.rs::filesystem_step	旧 src/assembly.rs:324 partition #{part}: the sector count overflows the address space	tests/case_runner.rs 的 resize_rewrites_the_table_and_refuses_unsafe_shrinks
@@ -706,13 +706,13 @@ R0598	src/platform/linux/mod.rs::mount_facts 与 occupancy	旧 src/fsops/mount.r
 R0599	src/platform/linux/mod.rs::mount_facts 与 occupancy	旧 src/fsops/mount.rs:1236 cannot stat {} to tell whether it is a partition: {e} — refusing (fail-closed)	tests/online.rs 的 a_sector_size_on_a_block_device_is_refused_before_it_is_opened
 R0600	crates/core/src/geometry/{sector,align,units}.rs	旧 src/geometry.rs:38 refused	tests/refusal_claims.rs 的 alignment_overflow_rejects_the_start
 R0601	crates/core/src/geometry/{sector,align,units}.rs	旧 src/geometry.rs:39 no_mutation	tests/refusal_claims.rs 的 alignment_overflow_rejects_the_start
-R0602	GAP：GPT 修复流程未接入，见 plan/05 §6.1	旧 src/gpt_policy.rs:163 {} — the converged table repair is not recorded	tests/case_runner.rs 的 check_reports_the_reason_it_cannot_act
-R0603	GAP：GPT 修复流程未接入，见 plan/05 §6.1	旧 src/gpt_policy.rs:186 refused	tests/case_runner.rs 的 check_reports_the_reason_it_cannot_act
-R0604	GAP：GPT 修复流程未接入，见 plan/05 §6.1	旧 src/gpt_policy.rs:191 {} — the table repair was not started	tests/case_runner.rs 的 check_reports_the_reason_it_cannot_act
-R0605	GAP：GPT 修复流程未接入，见 plan/05 §6.1	旧 src/gpt_policy.rs:200 re-read after repair failed	tests/case_runner.rs 的 check_reports_the_reason_it_cannot_act
-R0606	GAP：GPT 修复流程未接入，见 plan/05 §6.1	旧 src/gpt_policy.rs:201 re-read after repair failed	tests/case_runner.rs 的 check_reports_the_reason_it_cannot_act
-R0607	GAP：GPT 修复流程未接入，见 plan/05 §6.1	旧 src/gpt_policy.rs:203 repair did not converge — refusing	tests/case_runner.rs 的 check_reports_the_reason_it_cannot_act
-R0608	GAP：GPT 修复流程未接入，见 plan/05 §6.1	旧 src/gpt_policy.rs:207 {} — the table repair landed but that fact is not recorded	tests/case_runner.rs 的 check_reports_the_reason_it_cannot_act
+R0602	src/app/decide/repair.rs（修复并入同一表写，无 InFlight 记录态）	旧 src/gpt_policy.rs:163 {} — the converged table repair is not recorded	tests/gpt_repair.rs 的 a_grown_container_is_repaired_in_the_same_table_write
+R0603	src/app/decide/repair.rs::adopt	旧 src/gpt_policy.rs:186 refused	tests/gpt_repair.rs 的 a_grown_container_is_repaired_in_the_same_table_write
+R0604	src/app/decide/repair.rs（没有独立的修复启动步骤）	旧 src/gpt_policy.rs:191 {} — the table repair was not started	tests/gpt_repair.rs 的 a_grown_container_is_repaired_in_the_same_table_write
+R0605	src/app/execute/table.rs::execute_plan 的写后回读核对	旧 src/gpt_policy.rs:200 re-read after repair failed	tests/gpt_repair.rs 的 a_grown_container_is_repaired_in_the_same_table_write
+R0606	src/app/execute/table.rs::execute_plan 的写后回读核对	旧 src/gpt_policy.rs:201 re-read after repair failed	tests/gpt_repair.rs 的 a_grown_container_is_repaired_in_the_same_table_write
+R0607	src/app/decide/repair.rs::adopt 按规范重写双副本，写后由 postcondition 核对字节	旧 src/gpt_policy.rs:203 repair did not converge — refusing	tests/gpt_repair.rs 的 a_grown_container_is_repaired_in_the_same_table_write
+R0608	src/app/decide/repair.rs（Landed 事实由表写事务本身承担）	旧 src/gpt_policy.rs:207 {} — the table repair landed but that fact is not recorded	tests/gpt_repair.rs 的 a_grown_container_is_repaired_in_the_same_table_write
 R0609	crates/core/src/table/gpt/parse.rs::parse	旧 src/gpt_policy.rs:250 refused	crates/core 的 classify_falls_back_to_backup
 R0610	crates/core/src/table/gpt/parse.rs::parse	旧 src/gpt_policy.rs:253 refused	crates/core 的 classify_falls_back_to_backup
 R0612	crates/core/src/table/gpt/parse.rs::parse	旧 src/gpt_policy.rs:317 refused	crates/core 的 missing_signature_is_absent_not_damaged

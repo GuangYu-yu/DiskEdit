@@ -67,22 +67,35 @@ pub fn decide(snapshot: &ResizeSnapshot, request: &Request) -> Decision {
         });
     }
 
-    let table = match facts {
+    let (table, protective_mbr) = match facts {
         TableFacts::Gpt {
             header,
             entries,
             sector_size,
             total_bytes,
-        } => Resizable::Gpt(GptTable {
-            header: header.clone(),
-            entries: entries.clone(),
-            sector_size: *sector_size,
-            total_bytes: *total_bytes,
-        }),
-        TableFacts::Mbr { lba0, total_lba } => Resizable::Mbr {
-            lba0: lba0.clone(),
-            total_lba: *total_lba,
-        },
+            state,
+            pmbr,
+            lba0,
+        } => {
+            let mut gpt = GptTable {
+                header: header.clone(),
+                entries: entries.clone(),
+                sector_size: *sector_size,
+                total_bytes: *total_bytes,
+            };
+            let repaired = match super::repair::adopt(&mut gpt, *state, *pmbr, lba0) {
+                Ok(repaired) => repaired,
+                Err(refusal) => return Decision::Refuse(refusal),
+            };
+            (Resizable::Gpt(gpt), repaired.protective_mbr)
+        }
+        TableFacts::Mbr { lba0, total_lba } => (
+            Resizable::Mbr {
+                lba0: lba0.clone(),
+                total_lba: *total_lba,
+            },
+            None,
+        ),
     };
 
     // MBR 主表没有可搬移的数据通道：`--allow-move` 与 `--chunk` 在 MBR 上无从执行，
@@ -233,10 +246,11 @@ pub fn decide(snapshot: &ResizeSnapshot, request: &Request) -> Decision {
         };
     }
 
-    let segments = match table.resized(number, start, new_end, &moves) {
+    let mut segments = match table.resized(number, start, new_end, &moves) {
         Ok(segments) => segments,
         Err(why) => return Decision::Refuse(Refusal::TableDamaged { why }),
     };
+    super::repair::append_protective(&mut segments, protective_mbr);
     let table_step = table_step(table.format(), sector, segments, snapshot.stamp);
 
     let mut steps = Vec::new();

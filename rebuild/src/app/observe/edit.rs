@@ -5,10 +5,11 @@
 //! 只消费由此生成的写段。
 
 use diskedit_core::region::Region;
+use diskedit_core::table::create::{PmbrSize, pmbr_size_state};
 use diskedit_core::table::gpt::entries::PartitionEntry;
 use diskedit_core::table::gpt::header::GptHeader;
 use diskedit_core::table::gpt::parse::entry_array_span;
-use diskedit_core::table::gpt::parse::{self, GptEvidence, GptState, HeaderIssue};
+use diskedit_core::table::gpt::parse::{self, GptEvidence, GptState};
 use diskedit_core::table::{PRIMARY_ARRAY_LBA, PRIMARY_HEADER_LBA};
 
 use crate::platform::{Occupancy, Platform, TargetHandle};
@@ -27,6 +28,12 @@ pub enum TableFacts {
         entries: Vec<PartitionEntry>,
         sector_size: u64,
         total_bytes: u64,
+        /// 解析出的副本状态；非 `Valid` 时写路径先在同一个表写里收敛它。
+        state: GptState,
+        /// 保护 MBR 的 SizeInLBA 结论。
+        pmbr: PmbrSize,
+        /// LBA0 的整扇区原字节，供保护 MBR 重写时保留前 446 字节。
+        lba0: Vec<u8>,
     },
     Mbr {
         /// LBA0 的整段字节（至少 512 字节）。
@@ -149,6 +156,12 @@ pub(super) fn capture_gpt(
         handle,
         Region::sized(backup_array_lba * sector_size, array_bytes).expect("区间自洽"),
     )?;
+    let lba0 = read_region(
+        handle,
+        Region::sized(0, sector_size.max(512)).map_err(|_| CaptureError::Unreadable {
+            why: "the protective MBR sector does not fit the target".to_owned(),
+        })?,
+    )?;
     match parse::classify(
         &primary_header,
         &primary_array,
@@ -157,22 +170,15 @@ pub(super) fn capture_gpt(
         last_lba,
         sector_size,
     ) {
-        GptEvidence::Usable(copy) => {
-            if let GptState::NeedsRepair {
-                cause: HeaderIssue::CopiesDiverge,
-            } = copy.state
-            {
-                return Err(CaptureError::Unreadable {
-                    why: "the GPT primary and backup copies describe different tables".to_owned(),
-                });
-            }
-            Ok(TableFacts::Gpt {
-                header: copy.header,
-                entries: copy.entries,
-                sector_size,
-                total_bytes,
-            })
-        }
+        GptEvidence::Usable(copy) => Ok(TableFacts::Gpt {
+            header: copy.header,
+            entries: copy.entries,
+            sector_size,
+            total_bytes,
+            state: copy.state,
+            pmbr: pmbr_size_state(&lba0, total_bytes, sector_size),
+            lba0,
+        }),
         GptEvidence::Damaged(error) => Err(CaptureError::Unreadable {
             why: format!("GPT: {error}"),
         }),
