@@ -5,7 +5,7 @@
 
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Write};
-use std::os::unix::fs::{FileExt, FileTypeExt, MetadataExt};
+use std::os::unix::fs::{FileExt, FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -196,7 +196,10 @@ impl Platform for LinuxPlatform {
     }
 
     fn create_directory_all(&self, path: &Path) -> PlatformResult<()> {
-        std::fs::create_dir_all(path).map_err(|error| PlatformError::io(path, error))
+        std::fs::create_dir_all(path).map_err(|error| PlatformError::io(path, error))?;
+        // B5：记录目录只对属主开放。
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
+            .map_err(|error| PlatformError::io(path, error))
     }
 
     fn remove_directory(&self, path: &Path) -> PlatformResult<()> {
@@ -216,16 +219,37 @@ impl Platform for LinuxPlatform {
     }
 
     fn write_state_file(&self, path: &Path, bytes: &[u8]) -> PlatformResult<()> {
+        // B5：临时名 `.正式名.<pid>.<随机>.tmp`，`O_CREAT|O_EXCL`，文件 0600；
+        // 写入并落盘后原子改名到位，任何半成品都不会以正式名出现。
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| PlatformError::parse("state file path has no name"))?;
+        let suffix = self.entropy(8)?;
+        let temporary = path.with_file_name(format!(
+            ".{name}.{}.{}.tmp",
+            std::process::id(),
+            hex(&suffix)
+        ));
         let mut file = OpenOptions::new()
             .write(true)
-            .create(true)
-            .truncate(true)
-            .open(path)
-            .map_err(|error| PlatformError::io(path, error))?;
-        file.write_all(bytes)
-            .map_err(|error| PlatformError::io(path, error))?;
-        file.sync_all()
-            .map_err(|error| PlatformError::io(path, error))
+            .create_new(true)
+            .mode(0o600)
+            .open(&temporary)
+            .map_err(|error| PlatformError::io(&temporary, error))?;
+        if let Err(error) = file.write_all(bytes).and_then(|()| file.sync_all()) {
+            drop(std::fs::remove_file(&temporary));
+            return Err(PlatformError::io(&temporary, error));
+        }
+        drop(file);
+        if let Err(error) = std::fs::rename(&temporary, path) {
+            drop(std::fs::remove_file(&temporary));
+            return Err(PlatformError::io(path, error));
+        }
+        if let Some(parent) = path.parent() {
+            self.sync_directory(parent)?;
+        }
+        Ok(())
     }
 
     fn append_state_file(&self, path: &Path, bytes: &[u8]) -> PlatformResult<()> {
@@ -526,4 +550,48 @@ fn hex(bytes: &[u8]) -> String {
         text.push_str(&format!("{byte:02x}"));
     }
     text
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // covers: B5
+    #[test]
+    fn state_files_are_private_and_written_atomically() {
+        let platform = LinuxPlatform;
+        let base = std::env::temp_dir().join(format!("diskedit-b5-{}", std::process::id()));
+        drop(std::fs::remove_dir_all(&base));
+        std::fs::create_dir_all(&base).expect("临时根可建立");
+        let directory = base.join("images").join("abcdef");
+        platform
+            .create_directory_all(&directory)
+            .expect("记录目录可建立");
+        let directory_mode = std::fs::metadata(&directory)
+            .expect("目录元数据")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(directory_mode, 0o700, "记录目录只对属主开放");
+
+        let file = directory.join("record");
+        platform
+            .write_state_file(&file, b"record")
+            .expect("写状态文件");
+        let file_mode = std::fs::metadata(&file)
+            .expect("文件元数据")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(file_mode, 0o600, "记录文件只对属主可读写");
+
+        let leftovers: Vec<String> = std::fs::read_dir(&directory)
+            .expect("列目录")
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_name().to_string_lossy().ends_with(".tmp"))
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert!(leftovers.is_empty(), "不应留下临时文件: {leftovers:?}");
+        std::fs::remove_dir_all(&base).expect("清理临时根");
+    }
 }

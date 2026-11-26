@@ -103,6 +103,16 @@ pub struct RecordSnapshot {
     pub record: RecordState,
 }
 
+/// `recover` 消费的现场：目标、记录、占用，以及目标是否为分区节点。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RecoverSnapshot {
+    pub target: TargetFacts,
+    pub record: RecordState,
+    pub occupancy: Occupancy,
+    /// 目标是块设备上的分区节点：回放整盘记录会写错位置。
+    pub is_partition_node: bool,
+}
+
 /// 采集完整快照（`info`、`check`）。
 pub fn capture(platform: &dyn Platform, request: &Request) -> Result<Snapshot, CaptureError> {
     let target = open_target(platform, request)?;
@@ -155,6 +165,23 @@ pub fn capture_records(
     let target = open_target(platform, request)?;
     let record = record_state(platform, &target)?;
     Ok(RecordSnapshot { target, record })
+}
+
+/// 采集 `recover` 的现场：按 B9 的次序先定位记录，再探测占用。
+pub fn capture_recover(
+    platform: &dyn Platform,
+    request: &Request,
+) -> Result<RecoverSnapshot, CaptureError> {
+    let target = open_target(platform, request)?;
+    let is_partition_node = platform.is_partition_node(&target.path);
+    let record = record_state(platform, &target)?;
+    let occupancy = platform.occupancy(&target.path)?;
+    Ok(RecoverSnapshot {
+        target,
+        record,
+        occupancy,
+        is_partition_node,
+    })
 }
 
 /// 打开目标并解析身份；`--identity` 的适用性在这里判定一次。

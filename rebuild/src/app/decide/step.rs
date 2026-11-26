@@ -140,7 +140,7 @@ impl StepKind {
             | Self::ListRecords
             | Self::VerifyRecord { .. }
             | Self::ScanRecords => Access::ReadOnly,
-            Self::RefreshKernelView | Self::RecoverRecords { .. } => Access::WritesExternalState,
+            Self::RefreshKernelView => Access::WritesExternalState,
             Self::WriteTable { .. }
             | Self::AddPartition { .. }
             | Self::DeletePartition { .. }
@@ -151,6 +151,7 @@ impl StepKind {
             | Self::GrowFilesystemOnline { .. }
             | Self::ShrinkFilesystem { .. }
             | Self::CopyPartition { .. }
+            | Self::RecoverRecords { .. }
             | Self::MovePartition { .. } => Access::WritesTarget,
         }
     }

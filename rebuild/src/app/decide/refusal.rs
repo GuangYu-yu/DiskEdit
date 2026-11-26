@@ -90,6 +90,8 @@ pub enum Refusal {
     RecordUnreadable { path: String },
     /// 目标上有一条针对别的工作的未收尾记录。
     RecordConflict { path: String },
+    /// 记录恢复不能按请求执行：外来记录、载荷不可回滚、或放弃会丢掉可回放区间。
+    RecoveryRefused { why: String },
     /// 表编辑本身不能成立；原因来自纯核的编辑判据。
     TableEdit { why: String },
 }
@@ -200,6 +202,9 @@ impl Refusal {
             Self::RecordConflict { .. } => {
                 "finish or abandon the existing record with recover before starting a different plan"
             }
+            Self::RecoveryRefused { .. } => {
+                "inspect the record with `diskedit inspect`, then choose `recover --replay-table-only` or `recover --release`"
+            }
             Self::TableEdit { .. } => {
                 "inspect the current table and adjust the request so the edit can be placed"
             }
@@ -285,6 +290,9 @@ impl Refusal {
             }
             Self::RecordConflict { path } => {
                 format!("{path} holds an unfinished record for a different plan")
+            }
+            Self::RecoveryRefused { why } => {
+                format!("the recovery record cannot be finished here: {why}")
             }
             Self::TableEdit { why } => format!("the table cannot take this change: {why}"),
         }

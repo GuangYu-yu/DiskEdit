@@ -8,6 +8,7 @@ pub mod diagnose;
 pub mod digest;
 pub mod filesystem;
 pub mod postcondition;
+pub mod recover;
 pub mod relocate;
 pub mod resize;
 pub mod state;
@@ -132,6 +133,11 @@ impl Outcome {
             Some(FailureKind::NeedsRecovery),
             Some(reason.into()),
         )
+    }
+
+    /// 目标写入已按记录原像回滚。
+    pub fn rolled_back() -> Self {
+        Self::new(ExecutionState::RolledBack, None, None)
     }
 
     pub fn state(&self) -> ExecutionState {

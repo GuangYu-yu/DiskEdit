@@ -7,8 +7,8 @@ use diskedit_core::fs::MkfsKind;
 use diskedit_core::table::Guid;
 
 use crate::app::observe::{
-    Alignment, Command, CopyRequest, MoveRequest, PartitionSelector, Request, ResizeRequest,
-    SetKey, SetRequest, SizeSpec, StartSpec, TableFormat, TargetSpec, TypeSelector,
+    Alignment, Command, CopyRequest, MoveRequest, PartitionSelector, RecoverMode, Request,
+    ResizeRequest, SetKey, SetRequest, SizeSpec, StartSpec, TableFormat, TargetSpec, TypeSelector,
 };
 
 /// 用法错误：外层打印到 stderr 并以 2 退出。
@@ -45,6 +45,7 @@ pub fn parse(args: &[String]) -> Result<Request, UsageError> {
         "mkfs" => parse_mkfs(rest),
         "resizefs" => parse_resizefs(rest),
         "resize" => parse_resize(rest),
+        "recover" => parse_recover(rest),
         other => Err(UsageError::new(format!("unknown command `{other}`"))),
     }
 }
@@ -194,6 +195,53 @@ fn parse_resizefs(args: &[String]) -> Result<Request, UsageError> {
         bytes,
     };
     Ok(Request::new(target, command)
+        .with_sector_size(sector_size(&tokens)?)
+        .with_identity(identity(&tokens))
+        .with_confirmation(true))
+}
+
+/// `recover`：默认回滚、`--replay-table-only` 或 `--release [--discard-replay]`，三者互斥。
+fn parse_recover(args: &[String]) -> Result<Request, UsageError> {
+    let tokens = Tokens::scan(
+        args,
+        &["--identity", "--sector-size"],
+        &[
+            "--yes",
+            "--replay-table-only",
+            "--release",
+            "--discard-replay",
+        ],
+    )?;
+    if !tokens.has("--yes") {
+        return Err(UsageError::new("`recover` needs --yes"));
+    }
+    let target = one_target(&tokens, "recover")?;
+    if target.partition.is_some() {
+        return Err(UsageError::new(
+            "`recover` handles the whole target's record — drop the :N selector",
+        ));
+    }
+    let replay = tokens.has("--replay-table-only");
+    let release = tokens.has("--release");
+    let discard = tokens.has("--discard-replay");
+    if replay && release {
+        return Err(UsageError::new(
+            "--replay-table-only and --release are mutually exclusive",
+        ));
+    }
+    if discard && !release {
+        return Err(UsageError::new("--discard-replay requires --release"));
+    }
+    let mode = if release {
+        RecoverMode::Release {
+            discard_replay: discard,
+        }
+    } else if replay {
+        RecoverMode::ReplayTableOnly
+    } else {
+        RecoverMode::Default
+    };
+    Ok(Request::new(target, Command::Recover(mode))
         .with_sector_size(sector_size(&tokens)?)
         .with_identity(identity(&tokens))
         .with_confirmation(true))

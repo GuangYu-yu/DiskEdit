@@ -14,6 +14,7 @@ pub mod mkfs;
 pub mod new;
 pub mod plan;
 pub mod records;
+pub mod recover;
 pub mod refusal;
 pub mod report;
 pub mod resize;

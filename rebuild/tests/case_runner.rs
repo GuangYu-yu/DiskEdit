@@ -494,3 +494,43 @@ fn every_case_matches_its_observable_result() {
         }
     }
 }
+
+/// 以指定的环境变量运行二进制；用于把记录根目录隔离到夹具内。
+fn run_argv_env(argv: &[&str], env: &[(&str, &str)]) -> (i32, String, String) {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_diskedit"));
+    command.args(argv);
+    for (key, value) in env {
+        command.env(key, value);
+    }
+    let output = command
+        .output()
+        .unwrap_or_else(|error| panic!("运行 {argv:?} 失败: {error}"));
+    (
+        output.status.code().expect("子进程应正常退出"),
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+    )
+}
+
+// covers: R0302
+#[test]
+fn recover_refuses_a_target_without_a_record() {
+    fixtures::prepare();
+    let directory = "target/fixtures/s7";
+    std::fs::create_dir_all(directory).expect("夹具目录可建");
+    let image = "target/fixtures/s7/blank.img";
+    copy_fixture("blank.img", image);
+    let state = "target/fixtures/s7/state";
+    drop(std::fs::remove_dir_all(state));
+    let (code, _stdout, stderr) =
+        run_argv_env(&["recover", image, "--yes"], &[("XDG_STATE_HOME", state)]);
+    assert_eq!(code, 3, "没有记录应被拒绝：{stderr}");
+    assert!(stderr.contains("no recovery record"), "{stderr}");
+}
+
+// covers: R0301
+#[test]
+fn recover_refuses_a_partition_selector() {
+    let (code, _stdout, stderr) = run_argv(&["recover", "disk.img:1", "--yes"]);
+    assert_eq!(code, 2, "recover 不接受分区选择器：{stderr}");
+}

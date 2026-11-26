@@ -22,8 +22,8 @@ pub use filesystem::{FilesystemSnapshot, PartitionFacts, capture as capture_file
 pub use new::{CapturedRegion, NewSnapshot, PriorRecord, PriorState, capture_new};
 pub use resize::{ResizeSnapshot, capture_resize};
 pub use snapshot::{
-    CaptureError, InspectSnapshot, RecordSnapshot, Snapshot, TargetFacts, capture, capture_inspect,
-    capture_records,
+    CaptureError, InspectSnapshot, RecordSnapshot, RecoverSnapshot, Snapshot, TargetFacts, capture,
+    capture_inspect, capture_records, capture_recover,
 };
 
 /// 分区表格式。

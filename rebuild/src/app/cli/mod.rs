@@ -126,7 +126,12 @@ fn run(request: &observe::Request) -> u8 {
             Ok(snapshot) => decide::resize::decide(&snapshot, request),
             Err(code) => return code,
         },
-        Command::Recover(_) => return usage(),
+        Command::Recover(_) => {
+            match observe_or_exit(&platform, request, observe::capture_recover) {
+                Ok(snapshot) => decide::recover::decide(&snapshot, request),
+                Err(code) => return code,
+            }
+        }
     };
     conclude(&platform, request, decision)
 }
@@ -308,6 +313,10 @@ fn write(
             decide::StepKind::MovePartition { .. } | decide::StepKind::CopyPartition { .. }
         )
     });
+    let recovery = plan
+        .steps()
+        .iter()
+        .any(|step| matches!(step.kind, decide::StepKind::RecoverRecords { .. }));
     let filesystem = plan.steps().iter().any(|step| {
         matches!(
             step.kind,
@@ -320,7 +329,9 @@ fn write(
         .steps()
         .iter()
         .any(|step| matches!(step.kind, decide::StepKind::WriteTable { .. }));
-    let outcome = if filesystem && table {
+    let outcome = if recovery {
+        execute::recover::run(platform, path, &plan)
+    } else if filesystem && table {
         execute::resize::run(platform, path, &plan)
     } else if filesystem {
         execute::filesystem::run(platform, path, &plan)
