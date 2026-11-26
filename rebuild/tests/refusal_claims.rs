@@ -273,7 +273,7 @@ fn mbr_type_and_hidden_reject_structural_types() {
     ));
 }
 
-// covers: R0616, R0617, R0618, R0619
+// covers: R0616, R0617, R0618, R0619, R0660, R0662
 #[test]
 fn partition_lookup_rejects_empty_and_missing_entries() {
     let table = gpt_table(vec![entry(1, 34, 40, false)]);
@@ -293,6 +293,7 @@ fn partition_lookup_rejects_empty_and_missing_entries() {
 
 // covers: R0628, R0629, R0630, R0631, R0632
 // covers: R0183, R0184
+// covers: R0654, R0655
 #[test]
 fn gpt_add_slot_rejects_bounds_overlap_slots_and_full_table() {
     let table = gpt_table(vec![
@@ -346,6 +347,18 @@ fn gpt_flag_names_reject_unknown_values() {
     assert!(GptFlag::parse("no-such-flag").is_none());
 }
 
+// covers: R0671, R0682, R0709, R0717
+#[test]
+fn relocation_layout_rejects_zero_geometry_and_unaddressable_shifts() {
+    use diskedit_core::table::relocate::layout;
+    assert!(layout(10, 0, 1, 512).is_none(), "零扇区尺寸应无布局");
+    let copy = u64::MAX / 2;
+    assert!(
+        layout(copy, 512, i64::MAX - 1, 1 << 20).is_none(),
+        "无法寻址的位移应无布局"
+    );
+}
+
 // covers: R0863
 #[test]
 fn alignment_overflow_rejects_the_start() {
@@ -358,6 +371,7 @@ fn alignment_overflow_rejects_the_start() {
 
 // covers: R0182, R0185, R0222, R0223, R0227, R0228, R0236, R0242
 // covers: R0642, R0643
+// covers: R0653, R0665, R0666, R0730
 #[test]
 fn gpt_placement_rejects_address_space_overflow() {
     assert!(matches!(
