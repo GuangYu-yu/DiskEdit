@@ -282,3 +282,694 @@ R0447	src/app/decide/resize.rs superfloppy 拒绝 --allow-move	旧 cmd/resize/su
 R0448	src/app/decide/resize.rs superfloppy 拒绝 --chunk	旧 cmd/resize/superfloppy.rs:24 无可搬数据	tests/case_runner.rs 的 superfloppy_resize_grows_the_filesystem_and_refuses_unextendable_requests
 R0449	src/app/decide/resize.rs superfloppy 拒绝收缩	旧 cmd/resize/superfloppy.rs:38 无分区边界可缩	tests/case_runner.rs 的 superfloppy_resize_grows_the_filesystem_and_refuses_unextendable_requests
 R0450	src/app/decide/resize.rs superfloppy 拒绝超过容器	旧 cmd/resize/superfloppy.rs:41 本工具不扩容器	tests/case_runner.rs 的 superfloppy_resize_grows_the_filesystem_and_refuses_unextendable_requests
+R0001	src/app/observe/table.rs::observe	旧 src/assembly.rs:31 cannot read the partition table: {e}	tests/case_runner.rs 的 inspect_refuses_a_damaged_or_foreign_record
+R0002	src/app/observe/table.rs::observe	旧 src/assembly.rs:50 cannot read the GPT: {e}	tests/case_runner.rs 的 inspect_refuses_a_damaged_or_foreign_record
+R0003	src/app/observe/table.rs::observe	旧 src/assembly.rs:62 cannot read the MBR: {e}	tests/case_runner.rs 的 inspect_refuses_a_damaged_or_foreign_record
+R0005	src/app/decide/inspect.rs::decide 与 src/app/decide/refusal.rs（损坏表按 TableDamaged 拒绝）	旧 src/assembly.rs:231 GPT vanished before repair	tests/case_runner.rs 的 check_reports_the_reason_it_cannot_act
+R0006	src/app/decide/inspect.rs::decide 与 src/app/decide/refusal.rs（损坏表按 TableDamaged 拒绝）	旧 src/assembly.rs:234 refused	tests/case_runner.rs 的 check_reports_the_reason_it_cannot_act
+R0007	src/app/decide/inspect.rs::decide 与 src/app/decide/refusal.rs（损坏表按 TableDamaged 拒绝）	旧 src/assembly.rs:236 GPT changed between validation and repair — re-run the command	tests/case_runner.rs 的 check_reports_the_reason_it_cannot_act
+R0008	src/app/decide/inspect.rs::decide 与 src/app/decide/refusal.rs（损坏表按 TableDamaged 拒绝）	旧 src/assembly.rs:241 a repair plan was requested for a no-op action	tests/case_runner.rs 的 check_reports_the_reason_it_cannot_act
+R0009	src/app/decide/inspect.rs::decide 与 src/app/decide/refusal.rs（损坏表按 TableDamaged 拒绝）	旧 src/assembly.rs:248 refused	tests/case_runner.rs 的 check_reports_the_reason_it_cannot_act
+R0010	src/app/decide/inspect.rs::decide 与 src/app/decide/refusal.rs（损坏表按 TableDamaged 拒绝）	旧 src/assembly.rs:264 the table snapshot does not contain LBA0	tests/case_runner.rs 的 check_reports_the_reason_it_cannot_act
+R0011	src/app/decide/inspect.rs::decide 与 src/app/decide/refusal.rs（损坏表按 TableDamaged 拒绝）	旧 src/assembly.rs:278 the protective MBR is already canonical — the repair action does not match the disk	tests/case_runner.rs 的 check_reports_the_reason_it_cannot_act
+R0012	src/app/decide/resize.rs::filesystem_step	旧 src/assembly.rs:307 refused	tests/case_runner.rs 的 resize_rewrites_the_table_and_refuses_unsafe_shrinks
+R0013	src/app/decide/resize.rs::filesystem_step	旧 src/assembly.rs:313 partition #{part} left the partition table while the plan was being assembled	tests/case_runner.rs 的 resize_rewrites_the_table_and_refuses_unsafe_shrinks
+R0015	src/app/decide/resize.rs::filesystem_step	旧 src/assembly.rs:324 partition #{part}: the sector count overflows the address space	tests/case_runner.rs 的 resize_rewrites_the_table_and_refuses_unsafe_shrinks
+R0016	src/app/decide/mkfs.rs::decide	旧 src/assembly.rs:341 refused	tests/case_runner.rs 的 filesystem_commands_refuse_without_touching_the_target
+R0017	src/app/decide/mkfs.rs::decide	旧 src/assembly.rs:347 partition #{part} left the partition table while the plan was being assembled	tests/case_runner.rs 的 filesystem_commands_refuse_without_touching_the_target
+R0019	src/app/decide/edit.rs::set	旧 src/assembly.rs:383 refused	tests/case_runner.rs 的 add_delete_and_set_rewrite_both_copies
+R0020	src/app/decide/edit.rs::set	旧 src/assembly.rs:389 partition #{part} left the partition table while the plan was being assembled	tests/case_runner.rs 的 add_delete_and_set_rewrite_both_copies
+R0022	crates/core/src/table/gpt/entries.rs 的 GUID 文本解析	旧 src/assembly.rs:425 cannot read the system random source for a new UUID: {e}	crates/core 的 guid_parse_rejects_wrong_shapes
+R0025	src/app/decide/edit.rs::copy_partition	旧 src/assembly.rs:507 the assembled copy steps are not a CopyPartition followed by a stamped table step	tests/case_runner.rs 的 move_and_copy_relocate_data_and_keep_type_guids
+R0027	src/app/decide/resize.rs::decide	旧 src/assembly.rs:557 the resize plan assembled to an invalid step shape — refusing	tests/case_runner.rs 的 resize_rewrites_the_table_and_refuses_unsafe_shrinks
+R0028	src/app/decide/edit.rs::set 的属性分支	旧 src/assembly.rs:574 no GPT	tests/case_runner.rs 的 add_delete_and_set_rewrite_both_copies
+R0030	src/app/decide/edit.rs::move_partition	旧 src/assembly.rs:754 a move plan needs at least one entry — nothing was assembled	tests/case_runner.rs 的 move_and_copy_relocate_data_and_keep_type_guids
+R0031	src/app/decide/edit.rs::move_partition	旧 src/assembly.rs:782 partition #{part} would end beyond the LBA range	tests/case_runner.rs 的 move_and_copy_relocate_data_and_keep_type_guids
+R0032	src/app/decide/edit.rs::move_partition	旧 src/assembly.rs:791 partition #{part} is outside the entry array	tests/case_runner.rs 的 move_and_copy_relocate_data_and_keep_type_guids
+R0034	src/app/decide/edit.rs::move_partition	旧 src/assembly.rs:808 partition #{part} is outside the entry array	tests/case_runner.rs 的 move_and_copy_relocate_data_and_keep_type_guids
+R0035	src/app/decide/edit.rs::move_partition	旧 src/assembly.rs:811 partition #{part} cannot grow to LBA {grow_end}: {e}	tests/case_runner.rs 的 move_and_copy_relocate_data_and_keep_type_guids
+R0037	src/app/decide/edit.rs::move_partition	旧 src/assembly.rs:823 the assembled move steps do not have the (Relocate, WriteTable, RebuildSwap?)+, WriteTable? shape	tests/case_runner.rs 的 move_and_copy_relocate_data_and_keep_type_guids
+R0038	src/app/decide/edit.rs::move_partition 的可用区判定	旧 src/assembly.rs:844 {detail} — refusing	tests/case_runner.rs 的 move_and_copy_relocate_data_and_keep_type_guids
+R0039	src/app/decide/edit.rs::move_partition 的可用区判定	旧 src/assembly.rs:848 {detail} — the job may already have written the target; inspect it and use `diskedit recover` before retrying	tests/case_runner.rs 的 move_and_copy_relocate_data_and_keep_type_guids
+R0040	src/app/decide/edit.rs::move_partition 的可用区判定	旧 src/assembly.rs:853 {detail} — this run has not written the target; the recovery record can be released	tests/case_runner.rs 的 move_and_copy_relocate_data_and_keep_type_guids
+R0041	src/app/decide/plan.rs::Plan::write	旧 src/assembly.rs:887 internal	tests/refusal_claims.rs 的 an_unusable_identity_cannot_plan_a_write
+R0042	src/app/execute/table.rs::run	旧 src/assembly.rs:902 the table step compares a different range than the state it was assembled from	tests/fault_injection.rs 的 a_table_that_changes_after_the_write_reports_partial
+R0043	src/app/execute/table.rs::run	旧 src/assembly.rs:908 the table step carries no post-write stamp	tests/fault_injection.rs 的 a_table_that_changes_after_the_write_reports_partial
+R0045	src/app/cli/parse.rs（目标为必填字段，无 slot 枚举）	旧 src/cli.rs:1434 TARGET slot produced {other:?}	tests/cases/mod.rs 的 inspect without a target
+R0047	src/app/cli/parse.rs（参数为 Utf8 校验后的字符串，无 slot 枚举）	旧 src/cli.rs:1446 {slot:?} slot produced {other:?}	tests/cases/mod.rs 的 unknown command is a usage error
+R0048	src/app/cli/parse.rs 的分区选择器解析	旧 src/cli.rs:1452 usage	tests/case_runner.rs 的 resize_refuses_a_target_without_a_table_or_a_missing_partition
+R0051	src/app/cli/parse.rs::parse_records	旧 src/cli.rs:1510 optional TARGET slot produced {other:?}	tests/cases/mod.rs 的 records list refuses a partition selector
+R0053	src/app/cli/parse.rs::parse_records	旧 src/cli.rs:1523 ID slot produced {other:?}	tests/cases/mod.rs 的 records verify without an id
+R0056	src/app/cli/parse.rs::parse_records	旧 src/cli.rs:1538 ROOT slot produced {other:?}	tests/cases/mod.rs 的 records scan without a root
+R0058	src/app/cli/parse.rs::parse_resize	旧 src/cli.rs:1562 SIZE slot produced {other:?}	tests/cases/mod.rs 的 resize without a size is a usage error
+R0062	src/app/cli/parse.rs::parse_set（属性为枚举，不存在缺 slot）	旧 src/cli.rs:1634 `set` reached the builder without a property slot	tests/cases/mod.rs 的 set type refuses an empty value
+R0065	src/app/cli/parse.rs::parse_resizefs	旧 src/cli.rs:1688 BYTES slot produced {other:?}	tests/cases/mod.rs 的 resizefs without a target is a usage error
+R0066	src/app/cli/parse.rs::parse_resizefs	旧 src/cli.rs:1689 BYTES slot has no token	tests/cases/mod.rs 的 resizefs without a target is a usage error
+R0068	src/app/cli/parse.rs::parse_add	旧 src/cli.rs:1735 SIZE slot produced {other:?}	tests/cases/mod.rs 的 add refuses an MBR type byte for GPT
+R0070	src/app/cli/parse.rs::parse	旧 src/cli.rs:1782 argument {:?} is not valid UTF-8 — diskedit takes its arguments as text	tests/cases/mod.rs 的 unknown command is a usage error
+R0073	src/app/cli/parse.rs::parse	旧 src/cli.rs:1863 usage	tests/cases/mod.rs 的 unknown command is a usage error
+R0079	src/app/cli/parse.rs::parse	旧 src/cli.rs:1932 {f} is not valid for `diskedit {} {}` (see diskedit help {})	tests/cases/mod.rs 的 unknown command is a usage error
+R0080	src/app/cli/parse.rs::parse	旧 src/cli.rs:1940 {f} requires {req} (see diskedit help {})	tests/cases/mod.rs 的 unknown command is a usage error
+R0084	src/app/cli/parse.rs 的形态选择	旧 src/cli.rs:2061 `{}` matches more than one form ({}); pick one	tests/cases/mod.rs 的 records list refuses a partition selector
+R0087	src/app/cli/parse.rs 的形态选择	旧 src/cli.rs:2110 `{}` needs {} — see `diskedit help {}`	tests/cases/mod.rs 的 records list refuses a partition selector
+R0090	src/app/cli/parse.rs 的 help 分支	旧 src/cli.rs:2138 {f} is not a valid option for `help` (see diskedit help)	tests/cases/mod.rs 的 unknown help topic is a usage error
+R0093	src/app/cli/parse.rs 的旗标取值域	旧 src/cli.rs:2199 {} does not match its value domain	tests/cases/mod.rs 的 unknown command is a usage error
+R0095	src/app/decide/mkfs.rs::decide	旧 src/cmd/fs.rs:129 refused	tests/case_runner.rs 的 filesystem_commands_refuse_without_touching_the_target
+R0097	src/app/decide/resizefs.rs::decide 的在线分支	旧 src/cmd/fs.rs:172 online resize requires Linux	tests/online.rs 的 online_grow_succeeds_only_after_the_read_back_reaches_the_partition
+R0099	src/app/decide/resizefs.rs::decide 的离线分支	旧 src/cmd/fs.rs:240 the recovery record at {} {why} — run `diskedit inspect {}` or `diskedit recover {} --yes` first	tests/case_runner.rs 的 filesystem_commands_refuse_without_touching_the_target
+R0100	src/app/decide/resizefs.rs::decide 的离线分支	旧 src/cmd/fs.rs:257 nothing to resize on partition #{part} — a swap area whose page format is not activatable on this host (its space takes effect once the area is rebuilt with `mk	tests/case_runner.rs 的 filesystem_commands_refuse_without_touching_the_target
+R0101	src/app/decide/resizefs.rs::decide 的离线分支	旧 src/cmd/fs.rs:261 nothing to resize on partition #{part} — an LVM PV is not a filesystem (its space takes effect through `resize --grow-lv`)	tests/case_runner.rs 的 filesystem_commands_refuse_without_touching_the_target
+R0102	src/app/decide/resizefs.rs::decide 的离线分支	旧 src/cmd/fs.rs:266 refused	tests/case_runner.rs 的 filesystem_commands_refuse_without_touching_the_target
+R0103	src/app/decide/resizefs.rs::decide 的离线分支	旧 src/cmd/fs.rs:286 refused	tests/case_runner.rs 的 filesystem_commands_refuse_without_touching_the_target
+R0104	src/app/decide/check.rs::decide	旧 src/cmd/fs.rs:325 `check` needs a partition: diskedit check <TARGET>:N (see diskedit help check)	tests/case_runner.rs 的 check_reports_the_reason_it_cannot_act
+R0105	src/app/decide/check.rs::decide	旧 src/cmd/fs.rs:340 refused	tests/case_runner.rs 的 check_reports_the_reason_it_cannot_act
+R0106	src/app/decide/check.rs::decide	旧 src/cmd/fs.rs:350 check failed: {m}	tests/case_runner.rs 的 check_reports_the_reason_it_cannot_act
+R0107	src/app/decide/check.rs::decide	旧 src/cmd/fs.rs:351 check failed: {m}	tests/case_runner.rs 的 check_reports_the_reason_it_cannot_act
+R0111	src/app/decide/edit.rs::set	旧 src/cmd/fs.rs:394 refused	tests/case_runner.rs 的 add_delete_and_set_rewrite_both_copies
+R0117	src/app/decide/edit.rs::set	旧 src/cmd/fs.rs:431 label probe failed: {e}	tests/case_runner.rs 的 add_delete_and_set_rewrite_both_copies
+R0118	src/app/decide/edit.rs::set	旧 src/cmd/fs.rs:442 `set ... flag` needs a flag name and on|off (see diskedit help set)	tests/case_runner.rs 的 add_delete_and_set_rewrite_both_copies
+R0122	src/app/decide/edit.rs::set	旧 src/cmd/fs.rs:464 label probe failed: {e}	tests/case_runner.rs 的 add_delete_and_set_rewrite_both_copies
+R0123	src/app/decide/edit.rs::set	旧 src/cmd/fs.rs:477 refused	tests/case_runner.rs 的 add_delete_and_set_rewrite_both_copies
+R0126	src/app/decide/edit.rs::set	旧 src/cmd/fs.rs:498 refused	tests/case_runner.rs 的 add_delete_and_set_rewrite_both_copies
+R0129	src/app/decide/edit.rs::set	旧 src/cmd/fs.rs:514 set {key} on partition #{part} — target is an LVM2 PV, not a filesystem; PV metadata is changed with pvchange(8)	tests/case_runner.rs 的 add_delete_and_set_rewrite_both_copies
+R0137	src/app/decide/inspect.rs::decide	旧 src/cmd/inspect.rs:74 refused	tests/case_runner.rs 的 inspect_refuses_a_damaged_or_foreign_record
+R0138	src/app/decide/inspect.rs::decide	旧 src/cmd/inspect.rs:82 `--identity` names a target, but {} is a record entry — drop the option	tests/case_runner.rs 的 inspect_refuses_a_damaged_or_foreign_record
+R0139	src/app/decide/inspect.rs::decide	旧 src/cmd/inspect.rs:90 usage	tests/case_runner.rs 的 inspect_refuses_a_damaged_or_foreign_record
+R0140	src/app/decide/inspect.rs::decide	旧 src/cmd/inspect.rs:106 refused	tests/case_runner.rs 的 inspect_refuses_a_damaged_or_foreign_record
+R0141	src/app/decide/inspect.rs::decide	旧 src/cmd/inspect.rs:123 usage	tests/case_runner.rs 的 inspect_refuses_a_damaged_or_foreign_record
+R0142	src/app/decide/inspect.rs::decide	旧 src/cmd/inspect.rs:136 refused	tests/case_runner.rs 的 inspect_refuses_a_damaged_or_foreign_record
+R0144	src/app/cli/mod.rs::capture_failed	旧 src/cmd/inspect.rs:325 refused	tests/fault_injection.rs 的 a_host_without_a_backend_refuses_with_the_unsupported_code
+R0145	src/app/cli/mod.rs::capture_failed	旧 src/cmd/inspect.rs:326 refused	tests/fault_injection.rs 的 a_host_without_a_backend_refuses_with_the_unsupported_code
+R0146	src/app/cli/mod.rs::capture_failed	旧 src/cmd/inspect.rs:327 unsupported	tests/fault_injection.rs 的 a_host_without_a_backend_refuses_with_the_unsupported_code
+R0147	src/app/observe/snapshot.rs::open_target	旧 src/cmd/inspect.rs:342 companion file name is not anchor-relative: {e:?}	tests/case_runner.rs 的 inspect_refuses_a_damaged_or_foreign_record
+R0156	src/app/decide/new.rs::decide	旧 src/cmd/layout.rs:117 refused	tests/case_runner.rs 的 new_writes_a_readable_table_and_refuses_to_clobber
+R0159	src/app/decide/new.rs::decide	旧 src/cmd/layout.rs:147 refused	tests/case_runner.rs 的 new_writes_a_readable_table_and_refuses_to_clobber
+R0160	src/app/decide/new.rs::decide	旧 src/cmd/layout.rs:171 refused	tests/case_runner.rs 的 new_writes_a_readable_table_and_refuses_to_clobber
+R0161	src/app/execute/transaction.rs::RecordSession::register	旧 src/cmd/layout.rs:226 the pre-image region end overflows the address space	tests/fault_injection.rs 的 the_table_preimage_is_recorded_before_the_table_write
+R0162	src/app/execute/transaction.rs::RecordSession::register	旧 src/cmd/layout.rs:236 the pre-image range exceeds the host address space	tests/fault_injection.rs 的 the_table_preimage_is_recorded_before_the_table_write
+R0163	src/app/execute/transaction.rs::RecordSession::register	旧 src/cmd/layout.rs:242 the pre-image offset exceeds the host address space	tests/fault_injection.rs 的 the_table_preimage_is_recorded_before_the_table_write
+R0164	src/app/execute/transaction.rs::RecordSession::register	旧 src/cmd/layout.rs:252 the pre-image of the table regions	tests/fault_injection.rs 的 the_table_preimage_is_recorded_before_the_table_write
+R0169	src/app/decide/edit.rs::add	旧 src/cmd/layout.rs:301 label probe failed: {e}	tests/case_runner.rs 的 add_delete_and_set_rewrite_both_copies
+R0175	src/app/decide/edit.rs::add	旧 src/cmd/layout.rs:388 label probe failed: {e}	tests/case_runner.rs 的 add_delete_and_set_rewrite_both_copies
+R0179	src/app/decide/edit.rs::add	旧 src/cmd/layout.rs:422 the MBR disappeared between reads — retry	tests/case_runner.rs 的 add_delete_and_set_rewrite_both_copies
+R0181	crates/core/src/table/mbr/primary.rs（快照类型保证 LBA0 存在）	旧 src/cmd/layout.rs:442 the table snapshot is empty — LBA0 is missing	tests/refusal_claims.rs 的 mbr_add_uses_the_first_empty_slot_and_rejects_overlap
+R0186	crates/core/src/table/mbr/primary.rs::delete_entry	旧 src/cmd/layout.rs:519 the table snapshot is empty — LBA0 is missing	tests/refusal_claims.rs 的 mbr_delete_rejects_empty_structural_and_out_of_range_slots
+R0189	src/app/decide/edit.rs::delete	旧 src/cmd/layout.rs:548 label probe failed: {e}	tests/case_runner.rs 的 add_delete_and_set_rewrite_both_copies
+R0190	src/app/decide/resize.rs::decide	旧 src/cmd/layout.rs:558 refused	tests/case_runner.rs 的 resize_rewrites_the_table_and_refuses_unsafe_shrinks
+R0191	src/app/decide/resize.rs::decide	旧 src/cmd/layout.rs:561 refused	tests/case_runner.rs 的 resize_rewrites_the_table_and_refuses_unsafe_shrinks
+R0193	crates/core/src/table/relocate.rs 的有符号位移	旧 src/cmd/layout.rs:676 the relocation shift exceeds a signed LBA offset — refusing	tests/refusal_claims.rs 的 relocation_layout_rejects_zero_geometry_and_unaddressable_shifts
+R0194	src/app/execute/relocate.rs::run 与 src/app/execute/transaction.rs	旧 src/cmd/layout.rs:728 {why} — refusing to resume it	tests/fault_injection.rs 的 a_failed_progress_checkpoint_reports_partial
+R0195	src/app/execute/relocate.rs::run 与 src/app/execute/transaction.rs	旧 src/cmd/layout.rs:735 the pre-commit and target ranges	tests/fault_injection.rs 的 a_failed_progress_checkpoint_reports_partial
+R0196	src/app/execute/relocate.rs::run 与 src/app/execute/transaction.rs	旧 src/cmd/layout.rs:771 the recovery record's relocation plan does not match this request	tests/fault_injection.rs 的 a_failed_progress_checkpoint_reports_partial
+R0197	src/app/execute/relocate.rs::run 与 src/app/execute/transaction.rs	旧 src/cmd/layout.rs:779 no_mutation	tests/fault_injection.rs 的 a_failed_progress_checkpoint_reports_partial
+R0198	src/app/execute/relocate.rs::run 与 src/app/execute/transaction.rs	旧 src/cmd/layout.rs:786 the LVM finish baseline	tests/fault_injection.rs 的 a_failed_progress_checkpoint_reports_partial
+R0199	src/app/execute/relocate.rs::run 与 src/app/execute/transaction.rs	旧 src/cmd/layout.rs:813 partial_with	tests/fault_injection.rs 的 a_failed_progress_checkpoint_reports_partial
+R0200	src/app/decide/resize.rs::decide 的续跑判定	旧 src/cmd/layout.rs:841 refused	tests/case_runner.rs 的 resize_rewrites_the_table_and_refuses_unsafe_shrinks
+R0201	src/app/decide/resize.rs::decide 的续跑判定	旧 src/cmd/layout.rs:864 partition start overflows byte offset	tests/case_runner.rs 的 resize_rewrites_the_table_and_refuses_unsafe_shrinks
+R0202	src/app/decide/resize.rs::decide 的续跑判定	旧 src/cmd/layout.rs:870 swap relocation refused (size-only changes are allowed)	tests/case_runner.rs 的 resize_rewrites_the_table_and_refuses_unsafe_shrinks
+R0204	src/app/decide/resize.rs::decide 的续跑判定	旧 src/cmd/layout.rs:889 new range overlaps partition #{}	tests/case_runner.rs 的 resize_rewrites_the_table_and_refuses_unsafe_shrinks
+R0205	src/app/decide/resize.rs::decide 的续跑判定	旧 src/cmd/layout.rs:904 resize LBA arithmetic overflows byte offset	tests/case_runner.rs 的 resize_rewrites_the_table_and_refuses_unsafe_shrinks
+R0206	src/app/decide/resize.rs::decide 的续跑判定	旧 src/cmd/layout.rs:929 refused	tests/case_runner.rs 的 resize_rewrites_the_table_and_refuses_unsafe_shrinks
+R0207	src/app/decide/resize.rs::decide 的续跑判定	旧 src/cmd/layout.rs:960 refused	tests/case_runner.rs 的 resize_rewrites_the_table_and_refuses_unsafe_shrinks
+R0208	src/app/decide/resize.rs::decide 的续跑判定	旧 src/cmd/layout.rs:979 resize LBA arithmetic overflows byte offset	tests/case_runner.rs 的 resize_rewrites_the_table_and_refuses_unsafe_shrinks
+R0210	src/app/decide/resize.rs::decide 的续跑判定	旧 src/cmd/layout.rs:1012 --no-fs cannot drop the filesystem step of an unfinished resize: the partition is already extended but its filesystem is not — re-run without --no-fs	tests/case_runner.rs 的 resize_rewrites_the_table_and_refuses_unsafe_shrinks
+R0211	src/app/decide/resize.rs::decide 的续跑判定	旧 src/cmd/layout.rs:1067 target size {new_bytes} < estimated minimum FS size {min} bytes (resize2fs -P; the filesystem tool makes the final decision)	tests/case_runner.rs 的 resize_rewrites_the_table_and_refuses_unsafe_shrinks
+R0212	src/app/execute/relocate.rs::run	旧 src/cmd/layout.rs:1127 the already-committed table step	tests/fault_injection.rs 的 a_failed_source_read_changes_nothing_and_reports_no_mutation
+R0213	src/app/execute/relocate.rs::run	旧 src/cmd/layout.rs:1172 partial	tests/fault_injection.rs 的 a_failed_source_read_changes_nothing_and_reports_no_mutation
+R0214	src/app/execute/relocate.rs::run	旧 src/cmd/layout.rs:1207 growth byte offset overflows — refusing	tests/fault_injection.rs 的 a_failed_source_read_changes_nothing_and_reports_no_mutation
+R0215	src/app/execute/transaction.rs 的进度帧	旧 src/cmd/layout.rs:1278 the transfer progress	tests/fault_injection.rs 的 a_failed_progress_checkpoint_reports_partial
+R0216	src/app/execute/transaction.rs 的表步起点	旧 src/cmd/layout.rs:1292 {} — the table step must not start	tests/fault_injection.rs 的 a_failed_table_write_after_the_move_reports_partial
+R0217	src/app/execute/transaction.rs 的表步终点	旧 src/cmd/layout.rs:1314 the partition table is written — {}	tests/fault_injection.rs 的 a_table_that_changes_after_the_write_reports_partial
+R0218	src/app/cli/parse.rs 的 --align 与起点选择器	旧 src/cmd/layout.rs:1348 `--align` does not apply to `--start end` — the start is pinned to the last usable position; drop --align or pass an explicit start LBA	tests/cases/mod.rs 的 add refuses --start align
+R0219	src/app/cli/parse.rs 的 --align 与起点选择器	旧 src/cmd/layout.rs:1351 `--align` does not apply to `--start align` — that start is always the next 1 MiB boundary; drop --align	tests/cases/mod.rs 的 add refuses --start align
+R0220	src/app/cli/parse.rs 的起点必填	旧 src/cmd/layout.rs:1367 `{cmd}` needs a partition: diskedit {cmd} <TARGET>:N (see diskedit help {cmd})	tests/cases/mod.rs 的 move without --start is a usage error
+R0224	src/app/decide/edit.rs::move_partition 与 src/app/execute/relocate.rs	旧 src/cmd/layout.rs:1462 the target was opened as resumable but its recovery record is gone; refusing	tests/fault_injection.rs 的 a_write_failure_after_the_first_block_reports_partial
+R0225	src/app/decide/edit.rs::move_partition 与 src/app/execute/relocate.rs	旧 src/cmd/layout.rs:1467 refused	tests/fault_injection.rs 的 a_write_failure_after_the_first_block_reports_partial
+R0226	src/app/decide/edit.rs::move_partition 与 src/app/execute/relocate.rs	旧 src/cmd/layout.rs:1483 refused	tests/fault_injection.rs 的 a_write_failure_after_the_first_block_reports_partial
+R0229	src/app/decide/edit.rs::move_partition 与 src/app/execute/relocate.rs	旧 src/cmd/layout.rs:1494 partial_with	tests/fault_injection.rs 的 a_write_failure_after_the_first_block_reports_partial
+R0230	src/app/decide/edit.rs::move_partition 与 src/app/execute/relocate.rs	旧 src/cmd/layout.rs:1507 the table step	tests/fault_injection.rs 的 a_write_failure_after_the_first_block_reports_partial
+R0231	src/app/decide/edit.rs::move_partition 与 src/app/execute/relocate.rs	旧 src/cmd/layout.rs:1539 refused	tests/fault_injection.rs 的 a_write_failure_after_the_first_block_reports_partial
+R0232	src/app/decide/edit.rs::move_partition 与 src/app/execute/relocate.rs	旧 src/cmd/layout.rs:1547 refused	tests/fault_injection.rs 的 a_write_failure_after_the_first_block_reports_partial
+R0233	src/app/decide/edit.rs::move_partition 与 src/app/execute/relocate.rs	旧 src/cmd/layout.rs:1561 refused	tests/fault_injection.rs 的 a_write_failure_after_the_first_block_reports_partial
+R0234	src/app/decide/edit.rs::move_partition 与 src/app/execute/relocate.rs	旧 src/cmd/layout.rs:1569 refused	tests/fault_injection.rs 的 a_write_failure_after_the_first_block_reports_partial
+R0235	src/app/decide/edit.rs::move_partition 与 src/app/execute/relocate.rs	旧 src/cmd/layout.rs:1582 refused	tests/fault_injection.rs 的 a_write_failure_after_the_first_block_reports_partial
+R0237	src/app/decide/edit.rs::move_partition 与 src/app/execute/relocate.rs	旧 src/cmd/layout.rs:1597 refused	tests/fault_injection.rs 的 a_write_failure_after_the_first_block_reports_partial
+R0238	src/app/decide/edit.rs::move_partition 与 src/app/execute/relocate.rs	旧 src/cmd/layout.rs:1633 the GPT disappeared after the repair — refusing	tests/fault_injection.rs 的 a_write_failure_after_the_first_block_reports_partial
+R0239	src/app/decide/edit.rs::move_partition 与 src/app/execute/relocate.rs	旧 src/cmd/layout.rs:1692 the recovery record's relocation plan does not match this request	tests/fault_injection.rs 的 a_write_failure_after_the_first_block_reports_partial
+R0240	src/app/decide/edit.rs::move_partition 与 src/app/execute/relocate.rs	旧 src/cmd/layout.rs:1700 cannot record the pre-move range: {e}	tests/fault_injection.rs 的 a_write_failure_after_the_first_block_reports_partial
+R0241	src/app/decide/edit.rs::move_partition 与 src/app/execute/relocate.rs	旧 src/cmd/layout.rs:1705 refused	tests/fault_injection.rs 的 a_write_failure_after_the_first_block_reports_partial
+R0243	src/app/decide/edit.rs::copy_partition	旧 src/cmd/layout.rs:1745 `copy --start align` has no existing start to align — give the destination LBA or `end`	tests/case_runner.rs 的 move_and_copy_relocate_data_and_keep_type_guids
+R0244	src/app/decide/edit.rs::copy_partition	旧 src/cmd/layout.rs:1765 cannot read partition #{part} to digest the copy source ({e})	tests/case_runner.rs 的 move_and_copy_relocate_data_and_keep_type_guids
+R0245	src/app/decide/edit.rs::copy_partition	旧 src/cmd/layout.rs:1771 refused	tests/case_runner.rs 的 move_and_copy_relocate_data_and_keep_type_guids
+R0246	src/app/observe/snapshot.rs::open_target	旧 src/cmd/mod.rs:88 the target's sector size is outside the supported set — geometry cannot be constructed	tests/case_runner.rs 的 inspect_refuses_a_damaged_or_foreign_record
+R0247	src/app/observe/snapshot.rs::open_target	旧 src/cmd/mod.rs:89 the target's sector size is outside the supported set — geometry cannot be constructed	tests/case_runner.rs 的 inspect_refuses_a_damaged_or_foreign_record
+R0248	src/app/observe/snapshot.rs::open_target	旧 src/cmd/mod.rs:92 open failed: {e}	tests/case_runner.rs 的 inspect_refuses_a_damaged_or_foreign_record
+R0249	src/app/cli/mod.rs::run	旧 src/cmd/mod.rs:113 command `{}` declares no capabilities — the gate refuses an undeclared command.	tests/contract.rs 的 command_surface_has_sixteen_named_entries
+R0250	src/app/cli/mod.rs::run	旧 src/cmd/mod.rs:121 command `{}` needs the {} primitive, which is {} on this platform for a {} target.	tests/contract.rs 的 command_surface_has_sixteen_named_entries
+R0251	src/app/cli/mod.rs::run	旧 src/cmd/mod.rs:134 linux	tests/contract.rs 的 command_surface_has_sixteen_named_entries
+R0252	src/app/cli/mod.rs::run	旧 src/cmd/mod.rs:138 linux	tests/contract.rs 的 command_surface_has_sixteen_named_entries
+R0253	src/app/cli/mod.rs::run	旧 src/cmd/mod.rs:142 linux	tests/contract.rs 的 command_surface_has_sixteen_named_entries
+R0254	src/app/cli/mod.rs::run	旧 src/cmd/mod.rs:146 unsupported	tests/contract.rs 的 command_surface_has_sixteen_named_entries
+R0255	src/app/decide/records.rs::list 与 src/app/observe/records.rs	旧 src/cmd/records.rs:413 usage	tests/case_runner.rs 的 inspect_refuses_a_damaged_or_foreign_record
+R0256	src/app/decide/records.rs::list 与 src/app/observe/records.rs	旧 src/cmd/records.rs:421 cannot determine the identity of {}	tests/case_runner.rs 的 inspect_refuses_a_damaged_or_foreign_record
+R0258	src/app/decide/records.rs::list 与 src/app/observe/records.rs	旧 src/cmd/records.rs:426 refused	tests/case_runner.rs 的 inspect_refuses_a_damaged_or_foreign_record
+R0259	src/app/decide/records.rs::list 与 src/app/observe/records.rs	旧 src/cmd/records.rs:443 cannot inspect {}: {e}	tests/case_runner.rs 的 inspect_refuses_a_damaged_or_foreign_record
+R0260	src/app/decide/records.rs::list 与 src/app/observe/records.rs	旧 src/cmd/records.rs:446 cannot list records: {reason}	tests/case_runner.rs 的 inspect_refuses_a_damaged_or_foreign_record
+R0261	src/app/decide/records.rs::list 与 src/app/observe/records.rs	旧 src/cmd/records.rs:467 refused	tests/case_runner.rs 的 inspect_refuses_a_damaged_or_foreign_record
+R0263	src/app/decide/records.rs::list 与 src/app/observe/records.rs	旧 src/cmd/records.rs:474 cannot inspect {}: {e}	tests/case_runner.rs 的 inspect_refuses_a_damaged_or_foreign_record
+R0264	src/app/decide/records.rs::list 与 src/app/observe/records.rs	旧 src/cmd/records.rs:481 cannot list records: {reason}	tests/case_runner.rs 的 inspect_refuses_a_damaged_or_foreign_record
+R0265	src/app/decide/records.rs::verify	旧 src/cmd/records.rs:501 usage	tests/case_runner.rs 的 inspect_refuses_a_damaged_or_foreign_record
+R0266	src/app/decide/records.rs::verify	旧 src/cmd/records.rs:507 核对过	tests/case_runner.rs 的 inspect_refuses_a_damaged_or_foreign_record
+R0267	src/app/decide/records.rs::verify	旧 src/cmd/records.rs:513 this target exposes no stable identity to compare against — the record was not verified	tests/case_runner.rs 的 inspect_refuses_a_damaged_or_foreign_record
+R0269	src/app/decide/records.rs::verify	旧 src/cmd/records.rs:536 cannot verify the record: {reason}	tests/case_runner.rs 的 inspect_refuses_a_damaged_or_foreign_record
+R0270	src/app/decide/records.rs::verify	旧 src/cmd/records.rs:540 cannot inspect {}: {e}	tests/case_runner.rs 的 inspect_refuses_a_damaged_or_foreign_record
+R0271	src/app/decide/records.rs::verify	旧 src/cmd/records.rs:578 cannot verify the record: {reason}	tests/case_runner.rs 的 inspect_refuses_a_damaged_or_foreign_record
+R0273	src/app/decide/records.rs::verify	旧 src/cmd/records.rs:639 refused	tests/case_runner.rs 的 inspect_refuses_a_damaged_or_foreign_record
+R0274	src/app/decide/records.rs::verify	旧 src/cmd/records.rs:647 the same id exists in {} places — remove the copies by hand; a record must have one home	tests/case_runner.rs 的 inspect_refuses_a_damaged_or_foreign_record
+R0275	src/app/decide/records.rs::verify	旧 src/cmd/records.rs:655 refused	tests/case_runner.rs 的 inspect_refuses_a_damaged_or_foreign_record
+R0276	src/app/decide/records.rs::verify	旧 src/cmd/records.rs:662 {} other record(s) could not be verified — one of them may be a second copy of id {}	tests/case_runner.rs 的 inspect_refuses_a_damaged_or_foreign_record
+R0277	src/app/decide/records.rs::verify	旧 src/cmd/records.rs:670 the record with id {} is not usable (state: {other:?})	tests/case_runner.rs 的 inspect_refuses_a_damaged_or_foreign_record
+R0278	src/app/decide/records.rs::scan_with	旧 src/cmd/records.rs:693 cannot inspect {}: {e}	tests/cases/mod.rs 的 records scan needs a directory
+R0279	src/app/decide/records.rs::scan_with	旧 src/cmd/records.rs:696 refused	tests/cases/mod.rs 的 records scan needs a directory
+R0280	src/app/decide/records.rs::scan_with	旧 src/cmd/records.rs:704 refused	tests/cases/mod.rs 的 records scan needs a directory
+R0281	src/app/decide/records.rs::scan_with	旧 src/cmd/records.rs:710 refused	tests/cases/mod.rs 的 records scan needs a directory
+R0283	src/app/decide/records.rs::scan_with	旧 src/cmd/records.rs:718 cannot inspect {}: {e}	tests/cases/mod.rs 的 records scan needs a directory
+R0284	src/app/decide/records.rs::scan_with	旧 src/cmd/records.rs:723 refused	tests/cases/mod.rs 的 records scan needs a directory
+R0285	src/app/decide/records.rs::scan_with	旧 src/cmd/records.rs:732 refused	tests/cases/mod.rs 的 records scan needs a directory
+R0288	src/app/decide/records.rs::scan_with	旧 src/cmd/records.rs:742 cannot inspect {}: {e}	tests/cases/mod.rs 的 records scan needs a directory
+R0289	src/app/decide/records.rs::scan_with	旧 src/cmd/records.rs:758 the scan of {} is incomplete: {reason} — no partial result was returned	tests/cases/mod.rs 的 records scan needs a directory
+R0290	src/app/decide/recover.rs::decide 与 src/app/execute/recover/mod.rs	旧 src/cmd/recover.rs:33 refused	tests/case_runner.rs 的 recover_refuses_a_target_without_a_record
+R0291	src/app/decide/recover.rs::decide 与 src/app/execute/recover/mod.rs	旧 src/cmd/recover.rs:52 refused	tests/case_runner.rs 的 recover_refuses_a_target_without_a_record
+R0292	src/app/decide/recover.rs::decide 与 src/app/execute/recover/mod.rs	旧 src/cmd/recover.rs:65 refused	tests/case_runner.rs 的 recover_refuses_a_target_without_a_record
+R0293	src/app/decide/recover.rs::decide 与 src/app/execute/recover/mod.rs	旧 src/cmd/recover.rs:75 refused	tests/case_runner.rs 的 recover_refuses_a_target_without_a_record
+R0294	src/app/decide/recover.rs::decide 与 src/app/execute/recover/mod.rs	旧 src/cmd/recover.rs:82 the recovery record cannot be read ({e}) — nothing was read or written; release it with `diskedit recover --release`	tests/case_runner.rs 的 recover_refuses_a_target_without_a_record
+R0295	src/app/decide/recover.rs::decide 与 src/app/execute/recover/mod.rs	旧 src/cmd/recover.rs:93 refused	tests/case_runner.rs 的 recover_refuses_a_target_without_a_record
+R0296	src/app/decide/recover.rs::decide 与 src/app/execute/recover/mod.rs	旧 src/cmd/recover.rs:102 refused	tests/case_runner.rs 的 recover_refuses_a_target_without_a_record
+R0297	src/app/decide/recover.rs::decide 与 src/app/execute/recover/mod.rs	旧 src/cmd/recover.rs:114 partial_records_changed	tests/case_runner.rs 的 recover_refuses_a_target_without_a_record
+R0298	src/app/decide/recover.rs::decide 与 src/app/execute/recover/mod.rs	旧 src/cmd/recover.rs:126 {msg} — release it with `diskedit recover --release`	tests/case_runner.rs 的 recover_refuses_a_target_without_a_record
+R0299	src/app/decide/recover.rs::decide 与 src/app/execute/recover/mod.rs	旧 src/cmd/recover.rs:139 partial_postcondition	tests/case_runner.rs 的 recover_refuses_a_target_without_a_record
+R0300	src/app/decide/recover.rs::decide 与 src/app/execute/recover/mod.rs	旧 src/cmd/recover.rs:155 refused	tests/case_runner.rs 的 recover_refuses_a_target_without_a_record
+R0303	src/app/decide/recover.rs::decide 的释放分支	旧 src/cmd/release.rs:37 `recover --release` releases the whole target's recovery scene — drop :{n}	tests/refusal_claims.rs 的 release_archives_instead_of_touching_the_target
+R0304	src/app/decide/recover.rs::decide 的释放分支	旧 src/cmd/release.rs:46 refused	tests/refusal_claims.rs 的 release_archives_instead_of_touching_the_target
+R0305	src/app/decide/recover.rs::decide 的释放分支	旧 src/cmd/release.rs:58 对本目标的操作	tests/refusal_claims.rs 的 release_archives_instead_of_touching_the_target
+R0306	src/app/decide/recover.rs::decide 的释放分支	旧 src/cmd/release.rs:67 unsupported	tests/refusal_claims.rs 的 release_archives_instead_of_touching_the_target
+R0307	src/app/decide/recover.rs::decide 的释放分支	旧 src/cmd/release.rs:72 the host recovery repository is refused: {detail}	tests/refusal_claims.rs 的 release_archives_instead_of_touching_the_target
+R0308	src/app/decide/recover.rs::decide 的释放分支	旧 src/cmd/release.rs:75 the recovery directory is refused: {detail}	tests/refusal_claims.rs 的 release_archives_instead_of_touching_the_target
+R0309	src/app/decide/recover.rs::decide 的释放分支	旧 src/cmd/release.rs:78 cannot prepare the recovery directory: {e}	tests/refusal_claims.rs 的 release_archives_instead_of_touching_the_target
+R0310	src/app/decide/recover.rs::decide 的释放分支	旧 src/cmd/release.rs:93 no_mutation	tests/refusal_claims.rs 的 release_archives_instead_of_touching_the_target
+R0311	src/app/decide/recover.rs::decide 的释放分支	旧 src/cmd/release.rs:111 usage	tests/refusal_claims.rs 的 release_archives_instead_of_touching_the_target
+R0312	src/app/execute/recover/mod.rs 的归档	旧 src/cmd/release.rs:173 refused	tests/refusal_claims.rs 的 a_second_release_does_not_overwrite_the_first_archive
+R0313	src/app/execute/recover/mod.rs 的归档	旧 src/cmd/release.rs:183 refused	tests/refusal_claims.rs 的 a_second_release_does_not_overwrite_the_first_archive
+R0314	src/app/execute/recover/mod.rs 的归档	旧 src/cmd/release.rs:198 refused	tests/refusal_claims.rs 的 a_second_release_does_not_overwrite_the_first_archive
+R0315	src/app/execute/recover/mod.rs 的归档	旧 src/cmd/release.rs:212 refused	tests/refusal_claims.rs 的 a_second_release_does_not_overwrite_the_first_archive
+R0316	src/app/execute/recover/mod.rs 的归档	旧 src/cmd/release.rs:218 refused	tests/refusal_claims.rs 的 a_second_release_does_not_overwrite_the_first_archive
+R0317	src/app/execute/recover/mod.rs 的归档	旧 src/cmd/release.rs:223 refused	tests/refusal_claims.rs 的 a_second_release_does_not_overwrite_the_first_archive
+R0318	src/app/execute/recover/mod.rs 的归档	旧 src/cmd/release.rs:287 refused	tests/refusal_claims.rs 的 a_second_release_does_not_overwrite_the_first_archive
+R0319	src/app/execute/recover/mod.rs 的归档	旧 src/cmd/release.rs:302 refused	tests/refusal_claims.rs 的 a_second_release_does_not_overwrite_the_first_archive
+R0320	src/app/execute/recover/mod.rs 的归档	旧 src/cmd/release.rs:321 refused	tests/refusal_claims.rs 的 a_second_release_does_not_overwrite_the_first_archive
+R0321	src/app/execute/recover/mod.rs 的归档	旧 src/cmd/release.rs:333 refused	tests/refusal_claims.rs 的 a_second_release_does_not_overwrite_the_first_archive
+R0322	src/app/execute/recover/mod.rs 的归档	旧 src/cmd/release.rs:337 refused	tests/refusal_claims.rs 的 a_second_release_does_not_overwrite_the_first_archive
+R0323	src/app/execute/relocate.rs::run	旧 src/cmd/resize.rs:118 no_mutation	tests/fault_injection.rs 的 a_failed_source_read_changes_nothing_and_reports_no_mutation
+R0324	src/app/execute/relocate.rs::run	旧 src/cmd/resize.rs:134 the GPT disappeared after the repair — refusing	tests/fault_injection.rs 的 a_failed_source_read_changes_nothing_and_reports_no_mutation
+R0325	src/app/execute/relocate.rs::run	旧 src/cmd/resize.rs:153 partial_with	tests/fault_injection.rs 的 a_failed_source_read_changes_nothing_and_reports_no_mutation
+R0326	src/app/decide/resizefs.rs::decide（在线不缩）	旧 src/cmd/resize.rs:237 refused	tests/online.rs 的 online_grow_succeeds_only_after_the_read_back_reaches_the_partition
+R0327	src/app/decide/resize.rs::decide	旧 src/cmd/resize.rs:258 refused	tests/case_runner.rs 的 resize_rewrites_the_table_and_refuses_unsafe_shrinks
+R0328	src/app/decide/resize.rs::decide	旧 src/cmd/resize.rs:268 --dry-run previews table targets — a superfloppy has no partition entry to resize	tests/case_runner.rs 的 resize_rewrites_the_table_and_refuses_unsafe_shrinks
+R0330	src/app/decide/resize.rs::decide	旧 src/cmd/resize.rs:275 refused	tests/case_runner.rs 的 resize_rewrites_the_table_and_refuses_unsafe_shrinks
+R0331	src/app/decide/resize.rs::decide	旧 src/cmd/resize.rs:278 refused	tests/case_runner.rs 的 resize_rewrites_the_table_and_refuses_unsafe_shrinks
+R0332	src/app/decide/resize.rs::decide	旧 src/cmd/resize.rs:290 refused	tests/case_runner.rs 的 resize_rewrites_the_table_and_refuses_unsafe_shrinks
+R0333	src/app/decide/resize.rs::decide	旧 src/cmd/resize.rs:316 partition start overflows byte offset	tests/case_runner.rs 的 resize_rewrites_the_table_and_refuses_unsafe_shrinks
+R0334	src/app/decide/resize.rs::decide	旧 src/cmd/resize.rs:363 refused	tests/case_runner.rs 的 resize_rewrites_the_table_and_refuses_unsafe_shrinks
+R0335	src/app/decide/resize.rs::decide	旧 src/cmd/resize.rs:387 refused	tests/case_runner.rs 的 resize_rewrites_the_table_and_refuses_unsafe_shrinks
+R0336	src/app/decide/resize.rs::decide	旧 src/cmd/resize.rs:397 refused	tests/case_runner.rs 的 resize_rewrites_the_table_and_refuses_unsafe_shrinks
+R0337	src/app/decide/resize.rs::decide	旧 src/cmd/resize.rs:411 partition start overflows byte offset	tests/case_runner.rs 的 resize_rewrites_the_table_and_refuses_unsafe_shrinks
+R0338	src/app/decide/resize.rs::decide	旧 src/cmd/resize.rs:429 refused	tests/case_runner.rs 的 resize_rewrites_the_table_and_refuses_unsafe_shrinks
+R0339	src/app/decide/resize.rs::decide	旧 src/cmd/resize.rs:444 refused	tests/case_runner.rs 的 resize_rewrites_the_table_and_refuses_unsafe_shrinks
+R0340	src/app/decide/resize.rs::decide	旧 src/cmd/resize.rs:471 free-space arithmetic overflow (geometry inconsistent)	tests/case_runner.rs 的 resize_rewrites_the_table_and_refuses_unsafe_shrinks
+R0343	src/app/decide/resize.rs::decide	旧 src/cmd/resize.rs:509 plan failed: {e}	tests/case_runner.rs 的 resize_rewrites_the_table_and_refuses_unsafe_shrinks
+R0344	src/app/decide/resize.rs::decide	旧 src/cmd/resize.rs:520 refused	tests/case_runner.rs 的 resize_rewrites_the_table_and_refuses_unsafe_shrinks
+R0345	src/app/decide/resize.rs::decide	旧 src/cmd/resize.rs:532 refused	tests/case_runner.rs 的 resize_rewrites_the_table_and_refuses_unsafe_shrinks
+R0350	src/app/decide/resize.rs::decide	旧 src/cmd/resize.rs:595 plan failed: {e}	tests/case_runner.rs 的 resize_rewrites_the_table_and_refuses_unsafe_shrinks
+R0351	src/app/decide/resize.rs::decide	旧 src/cmd/resize.rs:610 refused	tests/case_runner.rs 的 resize_rewrites_the_table_and_refuses_unsafe_shrinks
+R0352	src/app/decide/resize.rs 的 --grow-lv 前置拒绝	旧 src/cmd/resize/decide.rs:24 --no-fs has no effect on an LVM PV — the partition holds no filesystem of its own; drop --no-fs	tests/case_runner.rs 的 superfloppy_resize_grows_the_filesystem_and_refuses_unextendable_requests
+R0353	src/app/decide/resize.rs 的 --grow-lv 前置拒绝	旧 src/cmd/resize/decide.rs:30 --grow-lv extends an LV by the space a partition gains — it cannot combine with shrinking this PV; drop --grow-lv	tests/case_runner.rs 的 superfloppy_resize_grows_the_filesystem_and_refuses_unextendable_requests
+R0354	src/app/decide/resize.rs 的 --grow-lv 前置拒绝	旧 src/cmd/resize/decide.rs:35 partition {part} is not an LVM PV (identified as {}) — --grow-lv needs a PV	tests/case_runner.rs 的 superfloppy_resize_grows_the_filesystem_and_refuses_unextendable_requests
+R0355	src/app/decide/resize.rs 的身份门（Fingerprint）	旧 src/cmd/resize/decide.rs:54 partition {part} now identifies as a different entry than the pre-lock snapshot — refusing to act on the partition under that slot; re-resolve the target and re	tests/refusal_claims.rs 的 an_unusable_identity_cannot_plan_a_write
+R0356	src/app/decide/resize.rs 的身份门（Fingerprint）	旧 src/cmd/resize/decide.rs:70 partition {part} now identifies as a different entry than the pre-lock snapshot — refusing to act on the partition under that slot; re-resolve the target and re	tests/refusal_claims.rs 的 an_unusable_identity_cannot_plan_a_write
+R0357	src/app/decide/resize.rs::decide	旧 src/cmd/resize/decide.rs:101 usable-range arithmetic overflow	tests/case_runner.rs 的 resize_rewrites_the_table_and_refuses_unsafe_shrinks
+R0361	src/app/decide/resize.rs 的 dry_run 分支	旧 src/cmd/resize/dry_run.rs:35 refused	tests/case_runner.rs 的 resize_rewrites_the_table_and_refuses_unsafe_shrinks
+R0363	src/app/decide/resize.rs 的 dry_run 分支	旧 src/cmd/resize/dry_run.rs:62 plan failed: {e}	tests/case_runner.rs 的 resize_rewrites_the_table_and_refuses_unsafe_shrinks
+R0368	src/app/decide/resize.rs 的 dry_run 分支	旧 src/cmd/resize/dry_run.rs:113 plan failed: {e}	tests/case_runner.rs 的 resize_rewrites_the_table_and_refuses_unsafe_shrinks
+R0369	src/app/decide/resize.rs 的 dry_run 分支	旧 src/cmd/resize/dry_run.rs:138 refused	tests/case_runner.rs 的 resize_rewrites_the_table_and_refuses_unsafe_shrinks
+R0370	src/app/decide/resize.rs 的 dry_run 分支	旧 src/cmd/resize/dry_run.rs:141 refused	tests/case_runner.rs 的 resize_rewrites_the_table_and_refuses_unsafe_shrinks
+R0371	src/app/decide/resize.rs 的 dry_run 分支	旧 src/cmd/resize/dry_run.rs:154 `resize` needs --end (or --grow-to-end)	tests/case_runner.rs 的 resize_rewrites_the_table_and_refuses_unsafe_shrinks
+R0377	src/app/decide/resize.rs 的 dry_run 分支	旧 src/cmd/resize/dry_run.rs:207 extended partition container cannot be resized (logical partitions are out of scope)	tests/case_runner.rs 的 resize_rewrites_the_table_and_refuses_unsafe_shrinks
+R0378	src/app/decide/resize.rs 的 dry_run 分支	旧 src/cmd/resize/dry_run.rs:216 refused	tests/case_runner.rs 的 resize_rewrites_the_table_and_refuses_unsafe_shrinks
+R0379	src/app/decide/resize.rs 的 dry_run 分支	旧 src/cmd/resize/dry_run.rs:228 `resize` needs a size: diskedit resize <TARGET>[:N] <SIZE> (see diskedit help resize)	tests/case_runner.rs 的 resize_rewrites_the_table_and_refuses_unsafe_shrinks
+R0380	src/app/decide/resize.rs 的 dry_run 分支	旧 src/cmd/resize/dry_run.rs:241 refused	tests/case_runner.rs 的 resize_rewrites_the_table_and_refuses_unsafe_shrinks
+R0381	src/app/decide/resize.rs 的 dry_run 分支	旧 src/cmd/resize/dry_run.rs:244 refused	tests/case_runner.rs 的 resize_rewrites_the_table_and_refuses_unsafe_shrinks
+R0382	src/app/decide/resize.rs 的 dry_run 分支	旧 src/cmd/resize/dry_run.rs:257 target size {bytes} < estimated minimum size {min} bytes (resize2fs -P; the filesystem tool makes the final decision)	tests/case_runner.rs 的 resize_rewrites_the_table_and_refuses_unsafe_shrinks
+R0384	src/app/decide/resize.rs::finish	旧 src/cmd/resize/finish.rs:73 partial_with	tests/case_runner.rs 的 resize_rewrites_the_table_and_refuses_unsafe_shrinks
+R0385	GAP：LVM 链未接入，见 plan/05 §6.1	旧 src/cmd/resize/lvm.rs:103 unsupported	tests/case_runner.rs 的 superfloppy_resize_grows_the_filesystem_and_refuses_unextendable_requests
+R0386	GAP：LVM 链未接入，见 plan/05 §6.1	旧 src/cmd/resize/lvm.rs:104 no_mutation	tests/case_runner.rs 的 superfloppy_resize_grows_the_filesystem_and_refuses_unextendable_requests
+R0387	GAP：LVM 链未接入，见 plan/05 §6.1	旧 src/cmd/resize/lvm.rs:105 refused	tests/case_runner.rs 的 superfloppy_resize_grows_the_filesystem_and_refuses_unextendable_requests
+R0388	src/app/execute/state.rs 的不可逆状态	旧 src/cmd/resize/msdos.rs:9 partial	tests/fault_injection.rs 的 a_failed_table_write_after_the_move_reports_partial
+R0389	src/app/execute/state.rs 的不可逆状态	旧 src/cmd/resize/msdos.rs:10 partial	tests/fault_injection.rs 的 a_failed_table_write_after_the_move_reports_partial
+R0390	src/app/execute/state.rs 的不可逆状态	旧 src/cmd/resize/msdos.rs:14 a read-only verdict reached the write path, which cannot classify it	tests/fault_injection.rs 的 a_failed_table_write_after_the_move_reports_partial
+R0391	src/app/execute/transaction.rs（LVM 基线记录）	旧 src/cmd/resize/msdos.rs:35 the LVM finish baseline	tests/fault_injection.rs 的 the_table_preimage_is_recorded_before_the_table_write
+R0392	src/app/execute/transaction.rs::register	旧 src/cmd/resize/msdos.rs:52 the pre-commit and target ranges	tests/fault_injection.rs 的 the_table_preimage_is_recorded_before_the_table_write
+R0393	crates/core/src/table/edit.rs::resize_mbr	旧 src/cmd/resize/msdos.rs:68 the table snapshot is empty — LBA0 is missing	tests/refusal_claims.rs 的 mbr_resize_rejects_structural_and_out_of_bounds_ranges
+R0400	src/app/decide/resize.rs 的 MBR 分支	旧 src/cmd/resize/msdos.rs:277 no_mutation	tests/case_runner.rs 的 resize_refuses_mbr_relocation_flags_and_no_table_targets
+R0405	src/app/decide/resize.rs 的 MBR 分支	旧 src/cmd/resize/msdos.rs:320 no_mutation	tests/case_runner.rs 的 resize_refuses_mbr_relocation_flags_and_no_table_targets
+R0406	src/app/decide/resize.rs 的 MBR 分支	旧 src/cmd/resize/msdos.rs:355 refused	tests/case_runner.rs 的 resize_refuses_mbr_relocation_flags_and_no_table_targets
+R0407	src/app/decide/resize.rs 的 MBR 分支	旧 src/cmd/resize/msdos.rs:370 refused	tests/case_runner.rs 的 resize_refuses_mbr_relocation_flags_and_no_table_targets
+R0408	src/app/decide/resize.rs 的 MBR 分支	旧 src/cmd/resize/msdos.rs:414 refused	tests/case_runner.rs 的 resize_refuses_mbr_relocation_flags_and_no_table_targets
+R0409	src/app/decide/resize.rs 的 MBR 分支	旧 src/cmd/resize/msdos.rs:434 refused	tests/case_runner.rs 的 resize_refuses_mbr_relocation_flags_and_no_table_targets
+R0410	src/app/decide/resize.rs 的 MBR 分支	旧 src/cmd/resize/msdos.rs:456 refused	tests/case_runner.rs 的 resize_refuses_mbr_relocation_flags_and_no_table_targets
+R0412	src/app/decide/resize.rs 的 MBR 分支	旧 src/cmd/resize/msdos.rs:471 `resize` needs a size: diskedit resize <TARGET>[:N] <SIZE> (see diskedit help resize)	tests/case_runner.rs 的 resize_refuses_mbr_relocation_flags_and_no_table_targets
+R0415	src/app/decide/resize.rs 的 MBR 分支	旧 src/cmd/resize/msdos.rs:513 refused	tests/case_runner.rs 的 resize_refuses_mbr_relocation_flags_and_no_table_targets
+R0416	src/app/decide/resize.rs 的 MBR 分支	旧 src/cmd/resize/msdos.rs:532 target size {bytes} < estimated minimum size {min} bytes (resize2fs -P; the filesystem tool makes the final decision)	tests/case_runner.rs 的 resize_refuses_mbr_relocation_flags_and_no_table_targets
+R0419	crates/core/src/table/edit.rs::resize_mbr 的邻接判据	旧 src/cmd/resize/msdos.rs:588 partition entry {} vanished before the table write — re-run the command	tests/refusal_claims.rs 的 mbr_resize_rejects_structural_and_out_of_bounds_ranges
+R0420	crates/core/src/table/edit.rs::resize_mbr 的邻接判据	旧 src/cmd/resize/msdos.rs:598 refused	tests/refusal_claims.rs 的 mbr_resize_rejects_structural_and_out_of_bounds_ranges
+R0421	src/app/decide/resize.rs 的在线几何判定（活动 swap 拒绝）	旧 src/cmd/resize/online.rs:13 cannot check active swap for partition {part}: {e}	tests/online.rs 的 online_grow_succeeds_only_after_the_read_back_reaches_the_partition
+R0422	src/app/decide/resize.rs 的在线几何判定（活动 swap 拒绝）	旧 src/cmd/resize/online.rs:15 partition {part} is active swap — run swapoff first	tests/online.rs 的 online_grow_succeeds_only_after_the_read_back_reaches_the_partition
+R0423	src/app/decide/resize.rs 的在线几何分支	旧 src/cmd/resize/online.rs:39 cannot resolve {} to a kernel disk name: {e}	tests/online.rs 的 online_grow_succeeds_only_after_the_read_back_reaches_the_partition
+R0424	src/app/decide/resize.rs 的在线几何分支	旧 src/cmd/resize/online.rs:43 cannot derive disk name from {}	tests/online.rs 的 online_grow_succeeds_only_after_the_read_back_reaches_the_partition
+R0425	src/app/decide/resize.rs 的在线几何分支	旧 src/cmd/resize/online.rs:79 partial_with	tests/online.rs 的 online_grow_succeeds_only_after_the_read_back_reaches_the_partition
+R0426	src/app/decide/resize.rs 的在线几何分支	旧 src/cmd/resize/online.rs:89 partition {part} of {dn} is mounted at {mount_point} in another mount namespace{} — it cannot be resized from this one; unmount it there or run inside that name	tests/online.rs 的 online_grow_succeeds_only_after_the_read_back_reaches_the_partition
+R0427	src/app/decide/resize.rs 的在线几何分支	旧 src/cmd/resize/online.rs:97 cannot probe mount state: {e}	tests/online.rs 的 online_grow_succeeds_only_after_the_read_back_reaches_the_partition
+R0428	src/app/decide/resize.rs 的在线几何分支	旧 src/cmd/resize/online.rs:105 --no-fs is not available online — the online path always includes the filesystem step; unmount the partition to skip it	tests/online.rs 的 online_grow_succeeds_only_after_the_read_back_reaches_the_partition
+R0429	src/app/decide/resize.rs 的在线几何分支	旧 src/cmd/resize/online.rs:123 --allow-move is not available online — the online path cannot relocate blocking partitions	tests/online.rs 的 online_grow_succeeds_only_after_the_read_back_reaches_the_partition
+R0430	src/app/decide/resize.rs 的在线几何分支	旧 src/cmd/resize/online.rs:128 --chunk has no effect online — the online path does not relocate data	tests/online.rs 的 online_grow_succeeds_only_after_the_read_back_reaches_the_partition
+R0431	src/app/decide/resize.rs 的在线尺寸判据	旧 src/cmd/resize/online.rs:170 no free space to the right — a PV cannot relocate blocking partitions while LVs may be active	tests/online.rs 的 online_grow_succeeds_only_after_the_read_back_reaches_the_partition
+R0432	src/app/decide/resize.rs 的在线尺寸判据	旧 src/cmd/resize/online.rs:172 grow would not extend the partition — no usable free space to its right; the online path cannot relocate blocking partitions (unmount to grow offline, or fill t	tests/online.rs 的 online_grow_succeeds_only_after_the_read_back_reaches_the_partition
+R0433	src/app/decide/resize.rs 的在线尺寸判据	旧 src/cmd/resize/online.rs:177 grown size overflows ({cur} + {free} sectors × {ss} B)	tests/online.rs 的 online_grow_succeeds_only_after_the_read_back_reaches_the_partition
+R0434	src/app/decide/resize.rs 的在线尺寸判据	旧 src/cmd/resize/online.rs:193 size {want} exceeds the usable range — the partition would end past the last usable block	tests/online.rs 的 online_grow_succeeds_only_after_the_read_back_reaches_the_partition
+R0435	src/app/execute/filesystem.rs::run 的收缩分支	旧 src/cmd/resize/shrink_offline.rs:52 the earlier filesystem shrink cannot be confirmed	tests/refusal_claims.rs 的 a_repaired_filesystem_is_a_success_and_a_later_failure_is_partial
+R0436	src/app/execute/filesystem.rs::run 的收缩分支	旧 src/cmd/resize/shrink_offline.rs:61 partial	tests/refusal_claims.rs 的 a_repaired_filesystem_is_a_success_and_a_later_failure_is_partial
+R0437	src/app/execute/filesystem.rs::run 的收缩分支	旧 src/cmd/resize/shrink_offline.rs:75 partial_unverified	tests/refusal_claims.rs 的 a_repaired_filesystem_is_a_success_and_a_later_failure_is_partial
+R0451	src/app/decide/resize.rs::superfloppy	旧 src/cmd/resize/superfloppy.rs:47 no_mutation	tests/case_runner.rs 的 superfloppy_resize_grows_the_filesystem_and_refuses_unextendable_requests
+R0453	src/platform/linux/mod.rs 的锁文件 IO	旧 src/dev/claims.rs:54 cannot use the carrier claim of this target: {e}	tests/online.rs 的 a_sector_size_on_a_block_device_is_refused_before_it_is_opened
+R0454	src/platform/linux/mod.rs 的独占判定	旧 src/dev/claims.rs:75 no_mutation	tests/online.rs 的 a_sector_size_on_a_block_device_is_refused_before_it_is_opened
+R0455	src/platform/linux/mod.rs 的独占判定	旧 src/dev/claims.rs:88 refused	tests/online.rs 的 a_sector_size_on_a_block_device_is_refused_before_it_is_opened
+R0456	src/platform/linux/mod.rs 的独占判定	旧 src/dev/claims.rs:93 refused	tests/online.rs 的 a_sector_size_on_a_block_device_is_refused_before_it_is_opened
+R0457	src/platform/linux/mod.rs::occupancy	旧 src/dev/occupancy.rs:113 no_mutation	crates/core 的 a_multi_device_btrfs_member_is_occupied
+R0458	src/platform/linux/mod.rs::occupancy	旧 src/dev/occupancy.rs:117 no_mutation	crates/core 的 a_multi_device_btrfs_member_is_occupied
+R0459	src/app/observe/snapshot.rs::open_target 与 src/platform/linux/mod.rs	旧 src/dev/source.rs:220 unsupported	tests/case_runner.rs 的 inspect_refuses_a_damaged_or_foreign_record
+R0460	src/app/observe/snapshot.rs::open_target 与 src/platform/linux/mod.rs	旧 src/dev/source.rs:224 the host recovery repository is refused: {detail}	tests/case_runner.rs 的 inspect_refuses_a_damaged_or_foreign_record
+R0461	src/app/observe/snapshot.rs::open_target 与 src/platform/linux/mod.rs	旧 src/dev/source.rs:228 the recovery directory is refused: {detail}	tests/case_runner.rs 的 inspect_refuses_a_damaged_or_foreign_record
+R0462	src/app/observe/snapshot.rs::open_target 与 src/platform/linux/mod.rs	旧 src/dev/source.rs:231 cannot prepare the recovery directory: {e}	tests/case_runner.rs 的 inspect_refuses_a_damaged_or_foreign_record
+R0463	src/app/execute/transaction.rs::resumed	旧 src/dev/source.rs:511 refused	tests/fault_injection.rs 的 the_table_preimage_is_recorded_before_the_table_write
+R0464	src/app/observe/snapshot.rs 的锁后复核	旧 src/dev/source.rs:899 cannot re-read the opened target after taking the lock: {e}	tests/fault_injection.rs 的 a_relocation_interruption_leaves_only_table_preimages_and_keeps_old_source
+R0465	src/app/observe/snapshot.rs 的锁后复核	旧 src/dev/source.rs:902 the opened device has no sysfs node after taking the lock: {e}	tests/fault_injection.rs 的 a_relocation_interruption_leaves_only_table_preimages_and_keeps_old_source
+R0466	src/app/observe/snapshot.rs 的锁后复核	旧 src/dev/source.rs:905 the target cannot be re-read after taking the lock: {e}	tests/fault_injection.rs 的 a_relocation_interruption_leaves_only_table_preimages_and_keeps_old_source
+R0467	src/app/observe/snapshot.rs 的锁后复核	旧 src/dev/source.rs:913 refused	tests/fault_injection.rs 的 a_relocation_interruption_leaves_only_table_preimages_and_keeps_old_source
+R0468	src/app/observe/snapshot.rs 的锁后复核	旧 src/dev/source.rs:923 refused	tests/fault_injection.rs 的 a_relocation_interruption_leaves_only_table_preimages_and_keeps_old_source
+R0469	src/app/observe/snapshot.rs 的锁后复核	旧 src/dev/source.rs:939 refused	tests/fault_injection.rs 的 a_relocation_interruption_leaves_only_table_preimages_and_keeps_old_source
+R0470	src/app/observe/snapshot.rs 的锁后复核	旧 src/dev/source.rs:941 the device identity could not be checked before writing: {why}	tests/fault_injection.rs 的 a_relocation_interruption_leaves_only_table_preimages_and_keeps_old_source
+R0471	src/app/observe/snapshot.rs 的锁后复核	旧 src/dev/source.rs:954 cannot re-read the capacity of the opened target after taking the lock: {e}	tests/fault_injection.rs 的 a_relocation_interruption_leaves_only_table_preimages_and_keeps_old_source
+R0472	src/app/observe/snapshot.rs 的锁后复核	旧 src/dev/source.rs:959 refused	tests/fault_injection.rs 的 a_relocation_interruption_leaves_only_table_preimages_and_keeps_old_source
+R0473	src/app/observe/snapshot.rs 的锁后复核	旧 src/dev/source.rs:971 the path now resolves to a different file than the one opened before the lock	tests/fault_injection.rs 的 a_relocation_interruption_leaves_only_table_preimages_and_keeps_old_source
+R0474	src/app/observe/snapshot.rs 的锁后复核	旧 src/dev/source.rs:976 the target cannot be reopened after taking the lock: {e}	tests/fault_injection.rs 的 a_relocation_interruption_leaves_only_table_preimages_and_keeps_old_source
+R0475	src/app/observe/snapshot.rs 的锁后复核	旧 src/dev/source.rs:981 cannot read the target identity after taking the lock: {e}	tests/fault_injection.rs 的 a_relocation_interruption_leaves_only_table_preimages_and_keeps_old_source
+R0476	src/app/observe/snapshot.rs 的锁后复核	旧 src/dev/source.rs:989 the path no longer names the file that was opened before the lock	tests/fault_injection.rs 的 a_relocation_interruption_leaves_only_table_preimages_and_keeps_old_source
+R0477	src/platform/linux/carrier/session.rs	旧 src/exec/dispatch.rs:98 a VM placement carries no carrier bundle	tests/carrier.rs 的 the_carrier_grows_a_mounted_filesystem_without_the_host_capability
+R0478	src/platform/linux/carrier/session.rs	旧 src/exec/dispatch.rs:110 the VM carrier is not available on this platform	tests/carrier.rs 的 the_carrier_grows_a_mounted_filesystem_without_the_host_capability
+R0479	src/platform/linux/carrier/session.rs	旧 src/exec/dispatch.rs:153 partial	tests/carrier.rs 的 the_carrier_grows_a_mounted_filesystem_without_the_host_capability
+R0480	src/platform/linux/carrier/session.rs	旧 src/exec/dispatch.rs:154 no_mutation	tests/carrier.rs 的 the_carrier_grows_a_mounted_filesystem_without_the_host_capability
+R0481	src/app/execute/mod.rs::run	旧 src/exec/mod.rs:280 the recovery record	tests/fault_injection.rs 的 a_clean_run_commits_and_cleans_the_record
+R0482	src/app/execute/mod.rs::Outcome	旧 src/exec/mod.rs:554 a step of this plan left its postcondition unmet	tests/fault_injection.rs 的 a_clean_run_commits_and_cleans_the_record
+R0483	src/platform/linux/tools.rs 的工具探测	旧 src/exec/native.rs:72 partition {}: start LBA {} overflows the address space	crates/core 的 every_program_identity_is_registered
+R0484	src/platform/linux/tools.rs 的工具探测	旧 src/exec/native.rs:78 partition {}: {} sectors overflow the address space	crates/core 的 every_program_identity_is_registered
+R0485	src/platform/linux/tools.rs 的工具探测	旧 src/exec/native.rs:84 partition {}: {e}	crates/core 的 every_program_identity_is_registered
+R0486	src/platform/linux/carrier/manifest.rs	旧 src/exec/placement.rs:67 unsupported	tests/carrier.rs 的 the_carrier_grows_a_mounted_filesystem_without_the_host_capability
+R0487	src/platform/linux/carrier/manifest.rs	旧 src/exec/placement.rs:78 unsupported	tests/carrier.rs 的 the_carrier_grows_a_mounted_filesystem_without_the_host_capability
+R0488	src/platform/linux/carrier/qemu.rs	旧 src/exec/qemu.rs:88 {BUNDLE_ENV}={}: cannot read manifest.json: {e}	tests/carrier.rs 的 the_carrier_grows_a_mounted_filesystem_without_the_host_capability
+R0489	src/platform/linux/carrier/qemu.rs	旧 src/exec/qemu.rs:94 {BUNDLE_ENV}={}: manifest.json is not JSON: {e}	tests/carrier.rs 的 the_carrier_grows_a_mounted_filesystem_without_the_host_capability
+R0490	src/platform/linux/carrier/manifest.rs::load	旧 src/exec/qemu.rs:109 {BUNDLE_ENV}={}: manifest schema is {schema:?}, this build reads {SCHEMA}	crates/core 的 a_matching_bundle_is_accepted
+R0491	src/platform/linux/carrier/manifest.rs::load	旧 src/exec/qemu.rs:116 the VM bundle was built for {arch}, this process is {}	crates/core 的 a_matching_bundle_is_accepted
+R0492	src/platform/linux/carrier/manifest.rs::load	旧 src/exec/qemu.rs:123 the VM bundle carries worker {version}, this host speaks {}	crates/core 的 a_matching_bundle_is_accepted
+R0493	src/platform/linux/carrier/manifest.rs::load	旧 src/exec/qemu.rs:131 manifest has no `worker` entry	crates/core 的 a_matching_bundle_is_accepted
+R0494	src/platform/linux/carrier/manifest.rs::load	旧 src/exec/qemu.rs:135 manifest.worker.sha256 is not a SHA-256 hex string	crates/core 的 a_matching_bundle_is_accepted
+R0495	src/platform/linux/carrier/manifest.rs（路径与摘要校验）	旧 src/exec/qemu.rs:151 manifest has no `{name}` entry	crates/core 的 a_path_leaving_the_bundle_is_refused
+R0496	src/platform/linux/carrier/manifest.rs（路径与摘要校验）	旧 src/exec/qemu.rs:155 manifest.{name}.path `{rel}` is not a plain relative path	crates/core 的 a_path_leaving_the_bundle_is_refused
+R0497	src/platform/linux/carrier/manifest.rs（路径与摘要校验）	旧 src/exec/qemu.rs:161 manifest.{name}.sha256 is not a SHA-256 hex string	crates/core 的 a_path_leaving_the_bundle_is_refused
+R0498	src/platform/linux/carrier/manifest.rs（路径与摘要校验）	旧 src/exec/qemu.rs:163 cannot read the bundle's {name} at {}: {e}	crates/core 的 a_path_leaving_the_bundle_is_refused
+R0499	src/platform/linux/carrier/manifest.rs（路径与摘要校验）	旧 src/exec/qemu.rs:166 the bundle's {name} does not match manifest.{name}.sha256 (declared {}, read {})	crates/core 的 a_path_leaving_the_bundle_is_refused
+R0500	src/platform/linux/carrier/manifest.rs（文本校验）	旧 src/exec/qemu.rs:180 {what} is missing or not a string	crates/core 的 a_digest_mismatch_is_refused_before_boot
+R0501	src/platform/linux/carrier/qemu.rs::command	旧 src/exec/qemu.rs:303 no QEMU machine is wired for architecture {}	tests/carrier.rs 的 the_carrier_grows_a_mounted_filesystem_without_the_host_capability
+R0502	src/platform/linux/carrier/qemu.rs::command	旧 src/exec/qemu.rs:309 virtio-blk cannot carry the target's {}-byte logical sectors	tests/carrier.rs 的 the_carrier_grows_a_mounted_filesystem_without_the_host_capability
+R0503	src/platform/linux/carrier/qemu.rs::command	旧 src/exec/qemu.rs:315 the VM bundle is present but {program} is not in PATH (package: qemu-system-{})	tests/carrier.rs 的 the_carrier_grows_a_mounted_filesystem_without_the_host_capability
+R0504	src/platform/linux/carrier/session.rs::attach	旧 src/exec/remote.rs:150 cannot start the carrier: {e}	crates/core 的 a_foreign_record_is_refused_and_never_rolled_back
+R0505	src/platform/linux/carrier/session.rs::attach	旧 src/exec/remote.rs:173 the carrier handshake failed: {}	crates/core 的 a_foreign_record_is_refused_and_never_rolled_back
+R0506	src/platform/linux/carrier/session.rs::attach	旧 src/exec/remote.rs:177 the carrier did not announce that its serial port is ready	crates/core 的 a_foreign_record_is_refused_and_never_rolled_back
+R0507	src/platform/linux/carrier/session.rs::attach	旧 src/exec/remote.rs:193 the carrier handshake failed: {}	crates/core 的 a_foreign_record_is_refused_and_never_rolled_back
+R0508	src/platform/linux/carrier/session.rs::attach	旧 src/exec/remote.rs:197 the carrier handshake failed: {}	crates/core 的 a_foreign_record_is_refused_and_never_rolled_back
+R0509	src/platform/linux/carrier/session.rs::attach	旧 src/exec/remote.rs:201 the carrier answered the handshake with an unexpected frame	crates/core 的 a_foreign_record_is_refused_and_never_rolled_back
+R0510	src/platform/linux/carrier/session.rs::attach	旧 src/exec/remote.rs:209 the carrier sees a different target geometry than the host plan: {why}	crates/core 的 a_foreign_record_is_refused_and_never_rolled_back
+R0511	src/platform/linux/carrier/session.rs::attach	旧 src/exec/remote.rs:216 refused	crates/core 的 a_foreign_record_is_refused_and_never_rolled_back
+R0512	src/platform/linux/carrier/protocol.rs 的帧令牌	旧 src/exec/remote.rs:565 no random source is available for the session token	crates/core 的 a_malformed_worker_digest_or_a_different_version_is_refused
+R0513	src/platform/linux/carrier/protocol.rs	旧 src/exec/remote.rs:570 the carrier session failed: {}	tests/carrier.rs 的 the_carrier_grows_a_mounted_filesystem_without_the_host_capability
+R0514	src/app/execute/transaction.rs 的进度帧	旧 src/exec/worker.rs:270 the checkpoint did not reach the host: {e}	tests/fault_injection.rs 的 a_failed_progress_checkpoint_reports_partial
+R0515	src/app/execute/transaction.rs 的条目表起点	旧 src/exec/worker.rs:279 the entry barrier did not reach the host: {e}	tests/fault_injection.rs 的 a_failed_table_write_after_the_move_reports_partial
+R0516	src/app/execute/transaction.rs 的表步起点	旧 src/exec/worker.rs:284 the table barrier did not reach the host: {e}	tests/fault_injection.rs 的 a_failed_table_write_after_the_move_reports_partial
+R0517	src/app/execute/transaction.rs 的表步终点	旧 src/exec/worker.rs:294 the table progress did not reach the host: {e}	tests/fault_injection.rs 的 a_table_that_changes_after_the_write_reports_partial
+R0518	src/app/execute/transaction.rs 的文件系统步终点	旧 src/exec/worker.rs:304 the filesystem progress did not reach the host: {e}	tests/fault_injection.rs 的 the_table_preimage_is_recorded_before_the_table_write
+R0519	src/app/execute/relocate.rs::run	旧 src/execution/copy.rs:116 internal	tests/fault_injection.rs 的 a_write_failure_after_the_first_block_reports_partial
+R0520	src/app/execute/relocate.rs::run	旧 src/execution/copy.rs:132 partition {}: the transfer chunk ({len} bytes) exceeds the host address space — the transfer may be incomplete	tests/fault_injection.rs 的 a_write_failure_after_the_first_block_reports_partial
+R0521	src/app/execute/relocate.rs::run	旧 src/execution/copy.rs:153 no_mutation	tests/fault_injection.rs 的 a_write_failure_after_the_first_block_reports_partial
+R0522	src/app/execute/relocate.rs::run	旧 src/execution/copy.rs:155 partial	tests/fault_injection.rs 的 a_write_failure_after_the_first_block_reports_partial
+R0523	src/app/execute/relocate.rs::run	旧 src/execution/copy.rs:161 the recovery barrier	tests/fault_injection.rs 的 a_write_failure_after_the_first_block_reports_partial
+R0524	src/app/execute/relocate.rs::run	旧 src/execution/copy.rs:168 partial	tests/fault_injection.rs 的 a_write_failure_after_the_first_block_reports_partial
+R0525	src/app/execute/relocate.rs::run	旧 src/execution/copy.rs:182 partial	tests/fault_injection.rs 的 a_write_failure_after_the_first_block_reports_partial
+R0526	src/app/execute/relocate.rs::run	旧 src/execution/copy.rs:185 partial	tests/fault_injection.rs 的 a_write_failure_after_the_first_block_reports_partial
+R0527	src/app/execute/relocate.rs::run	旧 src/execution/copy.rs:203 partial	tests/fault_injection.rs 的 a_write_failure_after_the_first_block_reports_partial
+R0528	src/app/execute/relocate.rs::run	旧 src/execution/copy.rs:213 partial	tests/fault_injection.rs 的 a_write_failure_after_the_first_block_reports_partial
+R0529	src/app/execute/relocate.rs::run	旧 src/execution/copy.rs:217 partial	tests/fault_injection.rs 的 a_write_failure_after_the_first_block_reports_partial
+R0530	src/app/execute/filesystem.rs::run	旧 src/execution/fs.rs:63 partition {} holds {} on disk but the plan was made for {planned}	tests/refusal_claims.rs 的 a_repaired_filesystem_is_a_success_and_a_later_failure_is_partial
+R0531	src/app/execute/filesystem.rs::run	旧 src/execution/fs.rs:101 refused	tests/refusal_claims.rs 的 a_repaired_filesystem_is_a_success_and_a_later_failure_is_partial
+R0532	src/app/decide/mkfs.rs::decide	旧 src/execution/mkfs.rs:47 partition {}: the {len}-byte range at byte {base} is outside the target's {} bytes	tests/case_runner.rs 的 filesystem_commands_refuse_without_touching_the_target
+R0533	src/app/execute/relocate.rs 的隐藏扇区回填	旧 src/execution/mod.rs:455 partition {}: the relocated range overflows the address space — the transfer may be incomplete	tests/case_runner.rs 的 move_and_copy_relocate_data_and_keep_type_guids
+R0534	src/app/execute/relocate.rs 的隐藏扇区回填	旧 src/execution/mod.rs:463 partial	tests/case_runner.rs 的 move_and_copy_relocate_data_and_keep_type_guids
+R0535	src/app/execute/relocate.rs 的隐藏扇区回填	旧 src/execution/mod.rs:470 partial	tests/case_runner.rs 的 move_and_copy_relocate_data_and_keep_type_guids
+R0536	src/app/execute/mod.rs::run	旧 src/execution/mod.rs:488 plan step {} writes the table but carries no expected stamp — the plan was not assembled	tests/fault_injection.rs 的 a_clean_run_commits_and_cleans_the_record
+R0537	src/app/execute/mod.rs::run	旧 src/execution/mod.rs:499 plan step {} writes table bytes outside its comparison regions	tests/fault_injection.rs 的 a_clean_run_commits_and_cleans_the_record
+R0538	src/app/execute/mod.rs::run	旧 src/execution/mod.rs:514 plan step {} relocates zero sectors	tests/fault_injection.rs 的 a_clean_run_commits_and_cleans_the_record
+R0539	src/app/execute/mod.rs::run	旧 src/execution/mod.rs:520 plan step {} relocates data but is not followed by the table step that commits it	tests/fault_injection.rs 的 a_clean_run_commits_and_cleans_the_record
+R0540	src/app/execute/mod.rs::run	旧 src/execution/mod.rs:531 plan step {} copies data but is not followed by the table step that commits it	tests/fault_injection.rs 的 a_clean_run_commits_and_cleans_the_record
+R0541	src/app/execute/mod.rs::run	旧 src/execution/mod.rs:596 this plan relocates data but no chunk size was given	tests/fault_injection.rs 的 a_clean_run_commits_and_cleans_the_record
+R0543	src/app/execute/mod.rs::run	旧 src/execution/mod.rs:625 refused	tests/fault_injection.rs 的 a_clean_run_commits_and_cleans_the_record
+R0544	src/app/execute/mod.rs::run	旧 src/execution/mod.rs:634 refused	tests/fault_injection.rs 的 a_clean_run_commits_and_cleans_the_record
+R0545	src/app/execute/mod.rs::run	旧 src/execution/mod.rs:665 plan step {} has no usable relocation block layout	tests/fault_injection.rs 的 a_clean_run_commits_and_cleans_the_record
+R0546	src/app/execute/mod.rs::run	旧 src/execution/mod.rs:672 plan step {}: the source offset of partition {part} overflows the address space	tests/fault_injection.rs 的 a_clean_run_commits_and_cleans_the_record
+R0547	src/app/execute/mod.rs::run	旧 src/execution/mod.rs:678 plan step {}: the target offset of partition {part} overflows the address space	tests/fault_injection.rs 的 a_clean_run_commits_and_cleans_the_record
+R0548	src/app/execute/mod.rs::run	旧 src/execution/mod.rs:684 plan step {}: the relocation length of partition {part} overflows the address space	tests/fault_injection.rs 的 a_clean_run_commits_and_cleans_the_record
+R0549	src/app/execute/mod.rs::run	旧 src/execution/mod.rs:690 plan step {}: the relocation byte range of partition {part} overflows the address space	tests/fault_injection.rs 的 a_clean_run_commits_and_cleans_the_record
+R0550	src/app/execute/mod.rs::run	旧 src/execution/mod.rs:700 plan step {}: {} chunks are recorded as done but the step only has {count}	tests/fault_injection.rs 的 a_clean_run_commits_and_cleans_the_record
+R0551	src/app/execute/mod.rs::run	旧 src/execution/mod.rs:711 the relocation step is not followed by a table step	tests/fault_injection.rs 的 a_clean_run_commits_and_cleans_the_record
+R0552	src/app/execute/mod.rs::run	旧 src/execution/mod.rs:724 plan step {}: the swap-rebuild step and the relocation entry disagree on the partition type	tests/fault_injection.rs 的 a_clean_run_commits_and_cleans_the_record
+R0553	src/app/execute/mod.rs::run	旧 src/execution/mod.rs:745 a swap-rebuild step is not attached to the relocation entry that owns it	tests/fault_injection.rs 的 a_clean_run_commits_and_cleans_the_record
+R0554	src/app/execute/mod.rs::run	旧 src/execution/mod.rs:751 the copy step is not followed by a table step	tests/fault_injection.rs 的 a_clean_run_commits_and_cleans_the_record
+R0555	src/app/execute/transaction.rs::resumed	旧 src/execution/mod.rs:837 the recorded move cursor overflows the address space	tests/fault_injection.rs 的 a_relocation_interruption_leaves_only_table_preimages_and_keeps_old_source
+R0556	src/app/execute/transaction.rs::resumed	旧 src/execution/mod.rs:843 the recorded move cursor overflows the address space	tests/fault_injection.rs 的 a_relocation_interruption_leaves_only_table_preimages_and_keeps_old_source
+R0557	src/app/execute/transaction.rs::resumed	旧 src/execution/mod.rs:851 refused	tests/fault_injection.rs 的 a_relocation_interruption_leaves_only_table_preimages_and_keeps_old_source
+R0558	src/app/execute/relocate.rs::run	旧 src/execution/relocate.rs:40 partition {part}: {} chunks are recorded as done but this step only has {count} — the transfer may be incomplete	tests/fault_injection.rs 的 a_failed_data_flush_reports_partial
+R0559	src/app/execute/relocate.rs::run	旧 src/execution/relocate.rs:52 partition {part}: the source offset overflows the address space — the transfer may be incomplete	tests/fault_injection.rs 的 a_failed_data_flush_reports_partial
+R0560	src/app/execute/relocate.rs::run	旧 src/execution/relocate.rs:57 partition {part}: the target offset overflows the address space — the transfer may be incomplete	tests/fault_injection.rs 的 a_failed_data_flush_reports_partial
+R0561	src/app/execute/relocate.rs::run	旧 src/execution/relocate.rs:62 partition {part}: the relocation length overflows the address space — the transfer may be incomplete	tests/fault_injection.rs 的 a_failed_data_flush_reports_partial
+R0562	src/app/execute/relocate.rs::run	旧 src/execution/relocate.rs:67 partition {part}: the relocation byte range overflows the address space — the transfer may be incomplete	tests/fault_injection.rs 的 a_failed_data_flush_reports_partial
+R0563	src/app/execute/relocate.rs::run	旧 src/execution/relocate.rs:81 refused	tests/fault_injection.rs 的 a_failed_data_flush_reports_partial
+R0564	src/app/execute/relocate.rs::run	旧 src/execution/relocate.rs:93 partial	tests/fault_injection.rs 的 a_failed_data_flush_reports_partial
+R0565	src/app/execute/relocate.rs::run	旧 src/execution/relocate.rs:104 partition {part}: the recorded chunk count exceeds the host address space — the transfer may be incomplete	tests/fault_injection.rs 的 a_failed_data_flush_reports_partial
+R0566	src/app/execute/relocate.rs::run	旧 src/execution/relocate.rs:115 partition {part}: a chunk precedes the planned source start (LBA {}) — the transfer may be incomplete	tests/fault_injection.rs 的 a_failed_data_flush_reports_partial
+R0567	src/app/execute/relocate.rs::run	旧 src/execution/relocate.rs:122 partition {part}: chunk LBA offset × sector size overflows the u64 range — the transfer may be incomplete	tests/fault_injection.rs 的 a_failed_data_flush_reports_partial
+R0568	src/app/execute/relocate.rs::run	旧 src/execution/relocate.rs:130 partition {part}: chunk size × sector size overflows the u64 range — the transfer may be incomplete	tests/fault_injection.rs 的 a_failed_data_flush_reports_partial
+R0569	src/app/execute/relocate.rs::run	旧 src/execution/relocate.rs:135 partition {part}: the relocation chunk ({len} bytes) exceeds the host address space — the transfer may be incomplete	tests/fault_injection.rs 的 a_failed_data_flush_reports_partial
+R0570	src/app/execute/relocate.rs::run	旧 src/execution/relocate.rs:146 no_mutation	tests/fault_injection.rs 的 a_failed_data_flush_reports_partial
+R0571	src/app/execute/relocate.rs::run	旧 src/execution/relocate.rs:159 refused	tests/fault_injection.rs 的 a_failed_data_flush_reports_partial
+R0572	src/app/execute/relocate.rs::run	旧 src/execution/relocate.rs:177 partition {part}: the recorded chunk count exceeds the host address space — the transfer may be incomplete	tests/fault_injection.rs 的 a_failed_data_flush_reports_partial
+R0573	src/app/execute/relocate.rs::run	旧 src/execution/relocate.rs:186 partition {part}: a chunk precedes the planned source start (LBA {}) — the transfer may be incomplete	tests/fault_injection.rs 的 a_failed_data_flush_reports_partial
+R0574	src/app/execute/relocate.rs::run	旧 src/execution/relocate.rs:193 partition {part}: chunk LBA offset × sector size overflows the u64 range — the transfer may be incomplete	tests/fault_injection.rs 的 a_failed_data_flush_reports_partial
+R0575	src/app/execute/relocate.rs::run	旧 src/execution/relocate.rs:201 partition {part}: chunk size × sector size overflows the u64 range — the transfer may be incomplete	tests/fault_injection.rs 的 a_failed_data_flush_reports_partial
+R0576	src/app/execute/relocate.rs::run	旧 src/execution/relocate.rs:206 partition {part}: the relocation chunk ({len} bytes) exceeds the host address space — the transfer may be incomplete	tests/fault_injection.rs 的 a_failed_data_flush_reports_partial
+R0585	src/app/decide/edit.rs::set	旧 src/execution/set.rs:39 refused	tests/case_runner.rs 的 add_delete_and_set_rewrite_both_copies
+R0587	src/app/execute/filesystem.rs 的 swap 重建	旧 src/execution/swap.rs:37 partition {}: {} — the table entry is committed	crates/core 的 swap_is_rebuilt_rather_than_resized_in_place
+R0588	src/app/execute/table.rs::run	旧 src/execution/table.rs:17 the table step carries no expected pre-write stamp — the plan was not assembled; this step wrote nothing, earlier steps may already have written the target	tests/fault_injection.rs 的 a_table_that_changes_after_the_write_reports_partial
+R0589	src/app/execute/table.rs::run	旧 src/execution/table.rs:23 the table step carries no expected post-write stamp — the plan was not assembled; this step wrote nothing, earlier steps may already have written the target	tests/fault_injection.rs 的 a_table_that_changes_after_the_write_reports_partial
+R0590	src/app/execute/table.rs::run	旧 src/execution/table.rs:32 the table step's writes do not match its regions — this step wrote nothing, earlier steps may already have written the target	tests/fault_injection.rs 的 a_table_that_changes_after_the_write_reports_partial
+R0592	src/app/execute/table.rs::run	旧 src/execution/table.rs:58 no_mutation	tests/fault_injection.rs 的 a_table_that_changes_after_the_write_reports_partial
+R0594	src/platform/linux/mod.rs::mount_facts 与 occupancy	旧 src/fsops/mount.rs:1191 {} does not denote the device sysfs lists as {disk}: {e} — refusing (fail-closed)	tests/online.rs 的 a_sector_size_on_a_block_device_is_refused_before_it_is_opened
+R0595	src/platform/linux/mod.rs::mount_facts 与 occupancy	旧 src/fsops/mount.rs:1201 cannot list {} to confirm no partition is in use: {e} — refusing (fail-closed)	tests/online.rs 的 a_sector_size_on_a_block_device_is_refused_before_it_is_opened
+R0596	src/platform/linux/mod.rs::mount_facts 与 occupancy	旧 src/fsops/mount.rs:1205 cannot list {} to confirm no partition is in use: {e} — refusing (fail-closed)	tests/online.rs 的 a_sector_size_on_a_block_device_is_refused_before_it_is_opened
+R0597	src/platform/linux/mod.rs::mount_facts 与 occupancy	旧 src/fsops/mount.rs:1215 cannot stat {} to tell whether it is a partition: {e} — refusing (fail-closed)	tests/online.rs 的 a_sector_size_on_a_block_device_is_refused_before_it_is_opened
+R0598	src/platform/linux/mod.rs::mount_facts 与 occupancy	旧 src/fsops/mount.rs:1227 {dev} does not denote the partition sysfs lists under {}: {e} — refusing (fail-closed)	tests/online.rs 的 a_sector_size_on_a_block_device_is_refused_before_it_is_opened
+R0599	src/platform/linux/mod.rs::mount_facts 与 occupancy	旧 src/fsops/mount.rs:1236 cannot stat {} to tell whether it is a partition: {e} — refusing (fail-closed)	tests/online.rs 的 a_sector_size_on_a_block_device_is_refused_before_it_is_opened
+R0600	crates/core/src/geometry/{sector,align,units}.rs	旧 src/geometry.rs:38 refused	tests/refusal_claims.rs 的 alignment_overflow_rejects_the_start
+R0601	crates/core/src/geometry/{sector,align,units}.rs	旧 src/geometry.rs:39 no_mutation	tests/refusal_claims.rs 的 alignment_overflow_rejects_the_start
+R0602	GAP：GPT 修复流程未接入，见 plan/05 §6.1	旧 src/gpt_policy.rs:163 {} — the converged table repair is not recorded	tests/case_runner.rs 的 check_reports_the_reason_it_cannot_act
+R0603	GAP：GPT 修复流程未接入，见 plan/05 §6.1	旧 src/gpt_policy.rs:186 refused	tests/case_runner.rs 的 check_reports_the_reason_it_cannot_act
+R0604	GAP：GPT 修复流程未接入，见 plan/05 §6.1	旧 src/gpt_policy.rs:191 {} — the table repair was not started	tests/case_runner.rs 的 check_reports_the_reason_it_cannot_act
+R0605	GAP：GPT 修复流程未接入，见 plan/05 §6.1	旧 src/gpt_policy.rs:200 re-read after repair failed	tests/case_runner.rs 的 check_reports_the_reason_it_cannot_act
+R0606	GAP：GPT 修复流程未接入，见 plan/05 §6.1	旧 src/gpt_policy.rs:201 re-read after repair failed	tests/case_runner.rs 的 check_reports_the_reason_it_cannot_act
+R0607	GAP：GPT 修复流程未接入，见 plan/05 §6.1	旧 src/gpt_policy.rs:203 repair did not converge — refusing	tests/case_runner.rs 的 check_reports_the_reason_it_cannot_act
+R0608	GAP：GPT 修复流程未接入，见 plan/05 §6.1	旧 src/gpt_policy.rs:207 {} — the table repair landed but that fact is not recorded	tests/case_runner.rs 的 check_reports_the_reason_it_cannot_act
+R0609	crates/core/src/table/gpt/parse.rs::parse	旧 src/gpt_policy.rs:250 refused	crates/core 的 classify_falls_back_to_backup
+R0610	crates/core/src/table/gpt/parse.rs::parse	旧 src/gpt_policy.rs:253 refused	crates/core 的 classify_falls_back_to_backup
+R0612	crates/core/src/table/gpt/parse.rs::parse	旧 src/gpt_policy.rs:317 refused	crates/core 的 missing_signature_is_absent_not_damaged
+R0614	crates/core/src/table/gpt/parse.rs::parse	旧 src/gpt_policy.rs:327 refused	crates/core 的 missing_signature_is_absent_not_damaged
+R0620	crates/core/src/table/mod.rs 的分区字节区间	旧 src/gpt_policy.rs:515 refused	tests/refusal_claims.rs 的 gpt_placement_rejects_address_space_overflow
+R0621	crates/core/src/table/mod.rs 的分区字节区间	旧 src/gpt_policy.rs:523 partition {part} entry arithmetic overflows (entry inconsistent with geometry)	tests/refusal_claims.rs 的 gpt_placement_rejects_address_space_overflow
+R0624	crates/core/src/policy/gpt.rs::usable_range	旧 src/gpt_policy.rs:574 refused	crates/core 的 usable_range_rejects_inverted_bounds
+R0627	crates/core/src/table/edit.rs::add_gpt	旧 src/gpt_policy.rs:640 geometry edit rejected: {e}	tests/refusal_claims.rs 的 gpt_add_slot_rejects_bounds_overlap_slots_and_full_table
+R0634	crates/core/src/table/edit.rs::add_gpt	旧 src/gpt_policy.rs:724 geometry edit rejected: {e}	tests/refusal_claims.rs 的 gpt_add_slot_rejects_bounds_overlap_slots_and_full_table
+R0635	crates/core/src/table/edit.rs::add_gpt	旧 src/gpt_policy.rs:731 GPT vanished after repair	tests/refusal_claims.rs 的 gpt_add_slot_rejects_bounds_overlap_slots_and_full_table
+R0636	crates/core/src/table/edit.rs::add_gpt	旧 src/gpt_policy.rs:735 geometry edit rejected: {e}	tests/refusal_claims.rs 的 gpt_add_slot_rejects_bounds_overlap_slots_and_full_table
+R0638	crates/core/src/table/edit.rs::set_gpt_type	旧 src/gpt_policy.rs:747 geometry edit rejected: {e}	tests/refusal_claims.rs 的 gpt_flag_names_reject_unknown_values
+R0640	crates/core/src/table/edit.rs::set_gpt_flag	旧 src/gpt_policy.rs:804 no GPT	tests/refusal_claims.rs 的 gpt_flag_names_reject_unknown_values
+R0641	crates/core/src/table/edit.rs::set_gpt_flag	旧 src/gpt_policy.rs:815 geometry edit rejected: {e}	tests/refusal_claims.rs 的 gpt_flag_names_reject_unknown_values
+R0644	crates/core/src/table/edit.rs::set_gpt_flag	旧 src/gpt_policy.rs:873 the ESP type fallback was not resolved while the plan was being assembled	tests/refusal_claims.rs 的 gpt_flag_names_reject_unknown_values
+R0646	crates/core/src/table/edit.rs::delete_gpt	旧 src/gpt_policy.rs:952 no GPT	tests/refusal_claims.rs 的 partition_lookup_rejects_empty_and_missing_entries
+R0647	crates/core/src/table/edit.rs::delete_gpt	旧 src/gpt_policy.rs:955 geometry edit rejected: {e}	tests/refusal_claims.rs 的 partition_lookup_rejects_empty_and_missing_entries
+R0648	crates/core/src/table/edit.rs::delete_gpt	旧 src/gpt_policy.rs:964 GPT vanished after repair	tests/refusal_claims.rs 的 partition_lookup_rejects_empty_and_missing_entries
+R0649	crates/core/src/table/edit.rs::delete_gpt	旧 src/gpt_policy.rs:968 geometry edit rejected: {e}	tests/refusal_claims.rs 的 partition_lookup_rejects_empty_and_missing_entries
+R0650	src/main.rs	旧 src/main.rs:74 the process panicked	tests/contract.rs 的 help_and_usage_choose_the_documented_process_codes
+R0651	src/main.rs::run	旧 src/main.rs:93 internal	tests/contract.rs 的 help_and_usage_choose_the_documented_process_codes
+R0652	src/main.rs::run	旧 src/main.rs:137 partial_postcondition	tests/contract.rs 的 help_and_usage_choose_the_documented_process_codes
+R0656	crates/core/src/table/edit.rs::copy_gpt	旧 src/movepart/copy.rs:61 cannot read the system random source for a new PARTUUID: {e}	tests/case_runner.rs 的 move_and_copy_relocate_data_and_keep_type_guids
+R0657	src/app/decide/resize.rs 的 swap 判定	旧 src/movepart/plan.rs:165 refused	crates/core 的 swap_is_rebuilt_rather_than_resized_in_place
+R0658	crates/core/src/policy/gpt.rs::preserved_type_guids	旧 src/movepart/plan.rs:246 refused	crates/core 的 preserved_type_guids_rejects_a_rewritten_type
+R0659	crates/core/src/policy/gpt.rs::preserved_type_guids	旧 src/movepart/plan.rs:250 refused	crates/core 的 preserved_type_guids_rejects_a_rewritten_type
+R0661	src/app/decide/edit.rs::move_partition	旧 src/movepart/plan.rs:265 partition #{part} has no entry in the geometry	tests/case_runner.rs 的 move_and_copy_relocate_data_and_keep_type_guids
+R0663	src/app/decide/edit.rs::move_partition	旧 src/movepart/plan.rs:271 partition #{part} has an inverted range {}..{}	tests/case_runner.rs 的 move_and_copy_relocate_data_and_keep_type_guids
+R0664	src/app/decide/edit.rs::move_partition	旧 src/movepart/plan.rs:307 refused	tests/case_runner.rs 的 move_and_copy_relocate_data_and_keep_type_guids
+R0667	src/app/decide/resize.rs::plan_relocations	旧 src/movepart/plan.rs:388 partition {num} has ending LBA below starting LBA (corrupted table)	tests/case_runner.rs 的 resize_allow_move_relocates_the_blocking_partition
+R0668	crates/core/src/table/relocate.rs	旧 src/movepart/plan.rs:426 insufficient tail space for relocation	tests/refusal_claims.rs 的 relocation_layout_rejects_zero_geometry_and_unaddressable_shifts
+R0669	crates/core/src/table/relocate.rs	旧 src/movepart/plan.rs:429 relocation target LBA overflows — refusing	tests/refusal_claims.rs 的 relocation_layout_rejects_zero_geometry_and_unaddressable_shifts
+R0670	crates/core/src/table/relocate.rs	旧 src/movepart/plan.rs:431 insufficient tail space to relocate blockers by the requested size	tests/refusal_claims.rs 的 relocation_layout_rejects_zero_geometry_and_unaddressable_shifts
+R0672	crates/core/src/table/relocate.rs::layout	旧 src/movepart/plan.rs:473 insufficient tail space for relocation	tests/refusal_claims.rs 的 relocation_layout_rejects_zero_geometry_and_unaddressable_shifts
+R0673	crates/core/src/table/relocate.rs::layout	旧 src/movepart/plan.rs:482 shift must be positive	tests/refusal_claims.rs 的 relocation_layout_rejects_zero_geometry_and_unaddressable_shifts
+R0675	crates/core/src/table/relocate.rs::layout	旧 src/movepart/plan.rs:490 shift does not exceed the free gap before the first blocker — relocation not needed	tests/refusal_claims.rs 的 relocation_layout_rejects_zero_geometry_and_unaddressable_shifts
+R0676	crates/core/src/table/relocate.rs::layout	旧 src/movepart/plan.rs:497 relocation target LBA overflows — refusing	tests/refusal_claims.rs 的 relocation_layout_rejects_zero_geometry_and_unaddressable_shifts
+R0677	crates/core/src/table/relocate.rs::layout	旧 src/movepart/plan.rs:506 relocation target LBA overflows — refusing	tests/refusal_claims.rs 的 relocation_layout_rejects_zero_geometry_and_unaddressable_shifts
+R0678	src/app/execute/transaction.rs::resumed	旧 src/movepart/plan.rs:598 refused	tests/fault_injection.rs 的 a_relocation_interruption_leaves_only_table_preimages_and_keeps_old_source
+R0679	GAP：LVM 链未接入，见 plan/05 §6.1	旧 src/movepart/plan.rs:626 added {delta} bytes is less than one extent ({} bytes) — the LV cannot take any of the added space	tests/case_runner.rs 的 superfloppy_resize_grows_the_filesystem_and_refuses_unextendable_requests
+R0680	GAP：LVM 链未接入，见 plan/05 §6.1	旧 src/movepart/plan.rs:631 LV target size overflows	tests/case_runner.rs 的 superfloppy_resize_grows_the_filesystem_and_refuses_unextendable_requests
+R0681	GAP：LVM 链未接入，见 plan/05 §6.1	旧 src/movepart/plan.rs:633 LV {} reports 0 bytes — nothing to extend	tests/case_runner.rs 的 superfloppy_resize_grows_the_filesystem_and_refuses_unextendable_requests
+R0683	src/app/execute/relocate.rs 的续跑	旧 src/movepart/plan.rs:734 shrink does not relocate partitions — this entry point only builds relocation plans for growth	tests/fault_injection.rs 的 a_relocation_interruption_leaves_only_table_preimages_and_keeps_old_source
+R0684	src/app/execute/transaction.rs 的外来记录	旧 src/movepart/plan.rs:756 refused	tests/refusal_claims.rs 的 a_record_for_another_target_is_not_resumed
+R0685	src/app/execute/transaction.rs 的目标归属	旧 src/movepart/plan.rs:765 refused	tests/refusal_claims.rs 的 a_record_for_another_target_is_not_resumed
+R0686	src/app/execute/transaction.rs 的目标归属	旧 src/movepart/plan.rs:769 refused	tests/refusal_claims.rs 的 a_record_for_another_target_is_not_resumed
+R0687	src/app/execute/transaction.rs 的目标归属	旧 src/movepart/plan.rs:773 refused	tests/refusal_claims.rs 的 a_record_for_another_target_is_not_resumed
+R0688	src/app/execute/mod.rs::Outcome	旧 src/movepart/plan.rs:808 refused	tests/fault_injection.rs 的 a_relocation_interruption_leaves_only_table_preimages_and_keeps_old_source
+R0689	src/app/execute/transaction.rs 的续跑一致性	旧 src/movepart/plan.rs:925 the recovery record was written with --chunk {} MiB, this run uses {} — re-run with the original value	tests/fault_injection.rs 的 a_relocation_interruption_leaves_only_table_preimages_and_keeps_old_source
+R0690	src/app/execute/transaction.rs 的续跑一致性	旧 src/movepart/plan.rs:933 the recovery record does not match the current disk geometry — refusing	tests/fault_injection.rs 的 a_relocation_interruption_leaves_only_table_preimages_and_keeps_old_source
+R0691	src/app/execute/transaction.rs 的续跑一致性	旧 src/movepart/plan.rs:940 the entry index exceeds the host address space	tests/fault_injection.rs 的 a_relocation_interruption_leaves_only_table_preimages_and_keeps_old_source
+R0692	src/app/execute/transaction.rs 的续跑一致性	旧 src/movepart/plan.rs:943 recovery record entry progress {} exceeds the plan's {} entries — the record changed between reads; refusing	tests/fault_injection.rs 的 a_relocation_interruption_leaves_only_table_preimages_and_keeps_old_source
+R0693	src/app/execute/transaction.rs 的续跑一致性	旧 src/movepart/plan.rs:955 the recovery record names partition {} that is no longer on the disk — refusing	tests/fault_injection.rs 的 a_relocation_interruption_leaves_only_table_preimages_and_keeps_old_source
+R0694	src/app/execute/transaction.rs 的续跑一致性	旧 src/movepart/plan.rs:963 relocation target LBA overflows	tests/fault_injection.rs 的 a_relocation_interruption_leaves_only_table_preimages_and_keeps_old_source
+R0695	src/app/execute/transaction.rs 的续跑一致性	旧 src/movepart/plan.rs:970 relocation source range overflows	tests/fault_injection.rs 的 a_relocation_interruption_leaves_only_table_preimages_and_keeps_old_source
+R0696	src/app/execute/transaction.rs 的续跑一致性	旧 src/movepart/plan.rs:974 relocation target range overflows	tests/fault_injection.rs 的 a_relocation_interruption_leaves_only_table_preimages_and_keeps_old_source
+R0697	src/app/execute/transaction.rs 的续跑一致性	旧 src/movepart/plan.rs:986 partition {} is not where the recovery record says it should be (on disk LBA {}, expected {}) — the layout moved under the job; refusing	tests/fault_injection.rs 的 a_relocation_interruption_leaves_only_table_preimages_and_keeps_old_source
+R0698	src/app/execute/transaction.rs 的续跑一致性	旧 src/movepart/plan.rs:1002 relocation target LBA overflows	tests/fault_injection.rs 的 a_relocation_interruption_leaves_only_table_preimages_and_keeps_old_source
+R0699	src/app/execute/transaction.rs 的续跑一致性	旧 src/movepart/plan.rs:1006 relocation target range overflows	tests/fault_injection.rs 的 a_relocation_interruption_leaves_only_table_preimages_and_keeps_old_source
+R0700	src/app/execute/transaction.rs 的续跑一致性	旧 src/movepart/plan.rs:1014 relocation target of partition {} (LBA {}..{}) lies outside the usable range {}..{} — inconsistent recovery record; refusing	tests/fault_injection.rs 的 a_relocation_interruption_leaves_only_table_preimages_and_keeps_old_source
+R0701	src/app/execute/transaction.rs 的续跑一致性	旧 src/movepart/plan.rs:1032 relocation target of partition {} (LBA {}..{}) overlaps partition {} on disk — the layout moved under the job; refusing	tests/fault_injection.rs 的 a_relocation_interruption_leaves_only_table_preimages_and_keeps_old_source
+R0702	src/app/execute/transaction.rs 的续跑一致性	旧 src/movepart/plan.rs:1043 relocation targets of partitions {} and {} overlap (LBA {}..{}) — inconsistent recovery record; refusing	tests/fault_injection.rs 的 a_relocation_interruption_leaves_only_table_preimages_and_keeps_old_source
+R0703	src/app/execute/transaction.rs 的续跑一致性	旧 src/movepart/plan.rs:1059 relocation source range overflows	tests/fault_injection.rs 的 a_relocation_interruption_leaves_only_table_preimages_and_keeps_old_source
+R0704	src/app/execute/transaction.rs 的续跑一致性	旧 src/movepart/plan.rs:1061 relocation target of partition {} (LBA {}..{}) would overwrite the source of partition {} (LBA {}..{}) before it is copied — inconsistent recovery record; refus	tests/fault_injection.rs 的 a_relocation_interruption_leaves_only_table_preimages_and_keeps_old_source
+R0705	src/app/execute/transaction.rs 的续跑一致性	旧 src/movepart/plan.rs:1078 refused	tests/fault_injection.rs 的 a_relocation_interruption_leaves_only_table_preimages_and_keeps_old_source
+R0706	src/app/execute/transaction.rs 的续跑一致性	旧 src/movepart/plan.rs:1091 the grown partition would extend into partition {} (LBA {}..{}) created since the record was written — the layout moved under the job; refusing	tests/fault_injection.rs 的 a_relocation_interruption_leaves_only_table_preimages_and_keeps_old_source
+R0707	src/app/execute/transaction.rs 的续跑一致性	旧 src/movepart/plan.rs:1105 recovery record chunk progress {} exceeds the bound {} fixed in the plan — the record changed between reads; refusing	tests/fault_injection.rs 的 a_relocation_interruption_leaves_only_table_preimages_and_keeps_old_source
+R0708	src/app/execute/transaction.rs 的续跑一致性	旧 src/movepart/plan.rs:1114 refused	tests/fault_injection.rs 的 a_relocation_interruption_leaves_only_table_preimages_and_keeps_old_source
+R0710	src/app/execute/relocate.rs::run	旧 src/movepart/shift.rs:124 partition {} has an empty entry on disk — the layout moved under the job; refusing	tests/fault_injection.rs 的 a_failed_source_read_changes_nothing_and_reports_no_mutation
+R0711	src/app/execute/relocate.rs::run	旧 src/movepart/shift.rs:138 grow target start overflows byte offset	tests/fault_injection.rs 的 a_failed_source_read_changes_nothing_and_reports_no_mutation
+R0712	src/app/execute/relocate.rs::run	旧 src/movepart/shift.rs:140 grow target length overflows byte size	tests/fault_injection.rs 的 a_failed_source_read_changes_nothing_and_reports_no_mutation
+R0713	src/app/execute/relocate.rs::run	旧 src/movepart/shift.rs:163 grow target entry inverted	tests/fault_injection.rs 的 a_failed_source_read_changes_nothing_and_reports_no_mutation
+R0714	src/app/execute/relocate.rs::run	旧 src/movepart/shift.rs:166 grow target length overflows	tests/fault_injection.rs 的 a_failed_source_read_changes_nothing_and_reports_no_mutation
+R0715	src/app/execute/relocate.rs::run	旧 src/movepart/shift.rs:168 grow target length overflows byte size	tests/fault_injection.rs 的 a_failed_source_read_changes_nothing_and_reports_no_mutation
+R0716	src/app/execute/relocate.rs::run	旧 src/movepart/shift.rs:170 grow target length overflows byte size	tests/fault_injection.rs 的 a_failed_source_read_changes_nothing_and_reports_no_mutation
+R0718	src/app/execute/relocate.rs::run	旧 src/movepart/shift.rs:220 the plan names partition {} that is no longer on the disk — refusing	tests/fault_injection.rs 的 a_failed_source_read_changes_nothing_and_reports_no_mutation
+R0719	src/app/execute/relocate.rs::run	旧 src/movepart/shift.rs:225 relocation source range overflows	tests/fault_injection.rs 的 a_failed_source_read_changes_nothing_and_reports_no_mutation
+R0720	src/app/execute/relocate.rs::run	旧 src/movepart/shift.rs:227 refused	tests/fault_injection.rs 的 a_failed_source_read_changes_nothing_and_reports_no_mutation
+R0721	src/platform/linux/mod.rs::occupancy	旧 src/movepart/shift.rs:332 partition start overflows byte offset	crates/core 的 a_multi_device_btrfs_member_is_occupied
+R0722	src/app/execute/relocate.rs::run	旧 src/movepart/shift.rs:354 partition {} is outside the entry array	tests/fault_injection.rs 的 a_write_failure_after_the_first_block_reports_partial
+R0723	src/app/execute/relocate.rs::run	旧 src/movepart/shift.rs:359 grow target entry inverted	tests/fault_injection.rs 的 a_write_failure_after_the_first_block_reports_partial
+R0724	src/app/execute/relocate.rs::run	旧 src/movepart/shift.rs:361 grow target entry inverted	tests/fault_injection.rs 的 a_write_failure_after_the_first_block_reports_partial
+R0725	src/app/execute/relocate.rs::run	旧 src/movepart/shift.rs:363 grow target length overflows	tests/fault_injection.rs 的 a_write_failure_after_the_first_block_reports_partial
+R0726	src/app/execute/relocate.rs::run	旧 src/movepart/shift.rs:375 refused	tests/fault_injection.rs 的 a_write_failure_after_the_first_block_reports_partial
+R0727	src/app/execute/relocate.rs::run	旧 src/movepart/shift.rs:402 relocation target LBA overflows	tests/fault_injection.rs 的 a_write_failure_after_the_first_block_reports_partial
+R0728	src/app/execute/relocate.rs::run	旧 src/movepart/shift.rs:418 the pre-commit and target ranges	tests/fault_injection.rs 的 a_write_failure_after_the_first_block_reports_partial
+R0729	src/app/execute/relocate.rs::run	旧 src/movepart/shift.rs:420 no_mutation	tests/fault_injection.rs 的 a_write_failure_after_the_first_block_reports_partial
+R0731	src/app/execute/relocate.rs::run	旧 src/movepart/shift.rs:551 partition {part}: {} — the table entry is committed	tests/fault_injection.rs 的 data_that_does_not_read_back_reports_partial
+R0732	src/app/execute/relocate.rs::run	旧 src/movepart/shift.rs:570 退出后替换	tests/fault_injection.rs 的 data_that_does_not_read_back_reports_partial
+R0733	src/app/decide/resizefs.rs::decide	旧 src/online/flow.rs:36 refused	tests/online.rs 的 online_grow_succeeds_only_after_the_read_back_reaches_the_partition
+R0734	src/app/decide/resizefs.rs::decide	旧 src/online/flow.rs:37 unsupported	tests/online.rs 的 online_grow_succeeds_only_after_the_read_back_reaches_the_partition
+R0735	src/app/decide/resizefs.rs::decide	旧 src/online/flow.rs:38 no_mutation	tests/online.rs 的 online_grow_succeeds_only_after_the_read_back_reaches_the_partition
+R0736	src/app/decide/resizefs.rs::decide 与 src/app/execute/filesystem.rs::run_online	旧 src/online/flow.rs:100 mountpoint {} changed target during locking ({} -> {}) — retry	tests/online.rs 的 online_grow_succeeds_only_after_the_read_back_reaches_the_partition
+R0737	src/app/decide/resizefs.rs::decide 与 src/app/execute/filesystem.rs::run_online	旧 src/online/flow.rs:115 cannot derive disk name from {}	tests/online.rs 的 online_grow_succeeds_only_after_the_read_back_reaches_the_partition
+R0738	src/app/decide/resizefs.rs::decide 与 src/app/execute/filesystem.rs::run_online	旧 src/online/flow.rs:119 partition {} became active swap during locking — run swapoff first	tests/online.rs 的 online_grow_succeeds_only_after_the_read_back_reaches_the_partition
+R0739	src/app/decide/resizefs.rs::decide 与 src/app/execute/filesystem.rs::run_online	旧 src/online/flow.rs:122 cannot check active swap for partition {}: {e}	tests/online.rs 的 online_grow_succeeds_only_after_the_read_back_reaches_the_partition
+R0740	src/app/decide/resizefs.rs::decide 与 src/app/execute/filesystem.rs::run_online	旧 src/online/flow.rs:126 refused	tests/online.rs 的 online_grow_succeeds_only_after_the_read_back_reaches_the_partition
+R0741	src/app/decide/resizefs.rs::decide 与 src/app/execute/filesystem.rs::run_online	旧 src/online/flow.rs:133 open failed: {e}	tests/online.rs 的 online_grow_succeeds_only_after_the_read_back_reaches_the_partition
+R0742	src/app/decide/resizefs.rs::decide 与 src/app/execute/filesystem.rs::run_online	旧 src/online/flow.rs:143 xfs does not support shrinking (online or offline); only growing is possible	tests/online.rs 的 online_grow_succeeds_only_after_the_read_back_reaches_the_partition
+R0743	src/app/decide/resizefs.rs::decide 与 src/app/execute/filesystem.rs::run_online	旧 src/online/flow.rs:148 {} cannot shrink online (only btrfs can); unmount and use the offline path where supported	tests/online.rs 的 online_grow_succeeds_only_after_the_read_back_reaches_the_partition
+R0744	src/app/decide/resizefs.rs::decide 与 src/app/execute/filesystem.rs::run_online	旧 src/online/flow.rs:157 refused	tests/online.rs 的 online_grow_succeeds_only_after_the_read_back_reaches_the_partition
+R0745	src/app/decide/resizefs.rs::decide 与 src/app/execute/filesystem.rs::run_online	旧 src/online/flow.rs:173 refused	tests/online.rs 的 online_grow_succeeds_only_after_the_read_back_reaches_the_partition
+R0746	src/app/decide/resizefs.rs::decide 与 src/app/execute/filesystem.rs::run_online	旧 src/online/flow.rs:174 no_mutation	tests/online.rs 的 online_grow_succeeds_only_after_the_read_back_reaches_the_partition
+R0747	src/app/decide/resizefs.rs::decide 与 src/app/execute/filesystem.rs::run_online	旧 src/online/flow.rs:175 partial	tests/online.rs 的 online_grow_succeeds_only_after_the_read_back_reaches_the_partition
+R0748	src/app/decide/resizefs.rs::decide 与 src/app/execute/filesystem.rs::run_online	旧 src/online/flow.rs:189 no_mutation	tests/online.rs 的 online_grow_succeeds_only_after_the_read_back_reaches_the_partition
+R0749	src/app/decide/resizefs.rs::decide 与 src/app/execute/filesystem.rs::run_online	旧 src/online/flow.rs:218 no_mutation	tests/online.rs 的 online_grow_succeeds_only_after_the_read_back_reaches_the_partition
+R0750	src/app/decide/resizefs.rs::decide 与 src/app/execute/filesystem.rs::run_online	旧 src/online/flow.rs:226 refused	tests/online.rs 的 online_grow_succeeds_only_after_the_read_back_reaches_the_partition
+R0751	src/app/decide/resizefs.rs::decide 与 src/app/execute/filesystem.rs::run_online	旧 src/online/flow.rs:254 no_mutation	tests/online.rs 的 online_grow_succeeds_only_after_the_read_back_reaches_the_partition
+R0752	src/app/decide/resizefs.rs::decide 与 src/app/execute/filesystem.rs::run_online	旧 src/online/flow.rs:301 no_mutation	tests/online.rs 的 online_grow_succeeds_only_after_the_read_back_reaches_the_partition
+R0753	src/app/decide/resizefs.rs::decide 与 src/app/execute/filesystem.rs::run_online	旧 src/online/flow.rs:306 refused	tests/online.rs 的 online_grow_succeeds_only_after_the_read_back_reaches_the_partition
+R0754	src/app/decide/resizefs.rs::decide 与 src/app/execute/filesystem.rs::run_online	旧 src/online/flow.rs:323 btrfs shrink failed: {}	tests/online.rs 的 online_grow_succeeds_only_after_the_read_back_reaches_the_partition
+R0755	src/app/decide/resizefs.rs::decide 与 src/app/execute/filesystem.rs::run_online	旧 src/online/flow.rs:372 btrfs shrunk but the partition table write could not be verified: {}	tests/online.rs 的 online_grow_succeeds_only_after_the_read_back_reaches_the_partition
+R0756	src/app/decide/resizefs.rs::decide 与 src/app/execute/filesystem.rs::run_online	旧 src/online/flow.rs:379 btrfs shrunk but partition resize skipped: {}	tests/online.rs 的 online_grow_succeeds_only_after_the_read_back_reaches_the_partition
+R0757	src/platform/linux/carrier/protocol.rs	旧 src/online/part.rs:44 refused	tests/carrier.rs 的 the_carrier_grows_a_mounted_filesystem_without_the_host_capability
+R0758	src/platform/linux/carrier/protocol.rs	旧 src/online/part.rs:45 no_mutation	tests/carrier.rs 的 the_carrier_grows_a_mounted_filesystem_without_the_host_capability
+R0759	src/platform/linux/carrier/protocol.rs	旧 src/online/part.rs:46 partial	tests/carrier.rs 的 the_carrier_grows_a_mounted_filesystem_without_the_host_capability
+R0760	src/platform/linux/carrier/protocol.rs	旧 src/online/part.rs:47 warning: partition table written but kernel sync failed: {msg}	tests/carrier.rs 的 the_carrier_grows_a_mounted_filesystem_without_the_host_capability
+R0761	GAP：LVM/PV 未接入，见 plan/05 §6.1	旧 src/online/pv.rs:16 cannot resolve the PV target: {e}	tests/case_runner.rs 的 superfloppy_resize_grows_the_filesystem_and_refuses_unextendable_requests
+R0762	GAP：LVM/PV 未接入，见 plan/05 §6.1	旧 src/online/pv.rs:17 refused	tests/case_runner.rs 的 superfloppy_resize_grows_the_filesystem_and_refuses_unextendable_requests
+R0763	GAP：LVM/PV 未接入，见 plan/05 §6.1	旧 src/online/pv.rs:107 cannot resolve the disk identity: {cause}	tests/case_runner.rs 的 superfloppy_resize_grows_the_filesystem_and_refuses_unextendable_requests
+R0764	GAP：LVM/PV 未接入，见 plan/05 §6.1	旧 src/online/pv.rs:121 unsupported	tests/case_runner.rs 的 superfloppy_resize_grows_the_filesystem_and_refuses_unextendable_requests
+R0765	GAP：LVM/PV 未接入，见 plan/05 §6.1	旧 src/online/pv.rs:126 the host recovery repository is refused: {detail}	tests/case_runner.rs 的 superfloppy_resize_grows_the_filesystem_and_refuses_unextendable_requests
+R0766	GAP：LVM/PV 未接入，见 plan/05 §6.1	旧 src/online/pv.rs:129 cannot prepare the recovery directory: {e}	tests/case_runner.rs 的 superfloppy_resize_grows_the_filesystem_and_refuses_unextendable_requests
+R0767	GAP：LVM/PV 未接入，见 plan/05 §6.1	旧 src/online/pv.rs:146 the device behind {} changed identity during locking — the lock protects a different target now; retry	tests/case_runner.rs 的 superfloppy_resize_grows_the_filesystem_and_refuses_unextendable_requests
+R0768	GAP：LVM/PV 未接入，见 plan/05 §6.1	旧 src/online/pv.rs:166 open failed: {e}	tests/case_runner.rs 的 superfloppy_resize_grows_the_filesystem_and_refuses_unextendable_requests
+R0769	GAP：LVM/PV 未接入，见 plan/05 §6.1	旧 src/online/pv.rs:188 size {new_len_bytes} not aligned to logical block size {}	tests/case_runner.rs 的 superfloppy_resize_grows_the_filesystem_and_refuses_unextendable_requests
+R0770	GAP：LVM/PV 未接入，见 plan/05 §6.1	旧 src/online/pv.rs:196 size overflow	tests/case_runner.rs 的 superfloppy_resize_grows_the_filesystem_and_refuses_unextendable_requests
+R0771	GAP：LVM/PV 未接入，见 plan/05 §6.1	旧 src/online/pv.rs:198 new end {end} exceeds disk capacity {}	tests/case_runner.rs 的 superfloppy_resize_grows_the_filesystem_and_refuses_unextendable_requests
+R0772	GAP：LVM/PV 未接入，见 plan/05 §6.1	旧 src/online/pv.rs:209 new length {new_len_sectors} sectors exceeds the MBR size field (u32 sectors) — MBR cannot address it	tests/case_runner.rs 的 superfloppy_resize_grows_the_filesystem_and_refuses_unextendable_requests
+R0773	GAP：LVM/PV 未接入，见 plan/05 §6.1	旧 src/online/pv.rs:214 new size would overlap an adjacent partition	tests/case_runner.rs 的 superfloppy_resize_grows_the_filesystem_and_refuses_unextendable_requests
+R0774	GAP：LVM/PV 未接入，见 plan/05 §6.1	旧 src/online/pv.rs:223 refused	tests/case_runner.rs 的 superfloppy_resize_grows_the_filesystem_and_refuses_unextendable_requests
+R0775	GAP：LVM/PV 未接入，见 plan/05 §6.1	旧 src/online/pv.rs:286 partition {pno} became active swap during locking — run swapoff first	tests/case_runner.rs 的 superfloppy_resize_grows_the_filesystem_and_refuses_unextendable_requests
+R0776	GAP：LVM/PV 未接入，见 plan/05 §6.1	旧 src/online/pv.rs:289 cannot check active swap for partition {pno}: {e}	tests/case_runner.rs 的 superfloppy_resize_grows_the_filesystem_and_refuses_unextendable_requests
+R0777	GAP：LVM/PV 未接入，见 plan/05 §6.1	旧 src/online/pv.rs:296 open failed: {e}	tests/case_runner.rs 的 superfloppy_resize_grows_the_filesystem_and_refuses_unextendable_requests
+R0778	GAP：LVM/PV 未接入，见 plan/05 §6.1	旧 src/online/pv.rs:300 partition {pno} is no longer an LVM PV (identified as {}) — re-run `diskedit resize` to re-classify the target	tests/case_runner.rs 的 superfloppy_resize_grows_the_filesystem_and_refuses_unextendable_requests
+R0779	GAP：LVM/PV 未接入，见 plan/05 §6.1	旧 src/online/pv.rs:304 仅扩 FS	tests/case_runner.rs 的 superfloppy_resize_grows_the_filesystem_and_refuses_unextendable_requests
+R0780	GAP：LVM/PV 未接入，见 plan/05 §6.1	旧 src/online/pv.rs:320 PV partition can only grow here (current {} bytes); PV shrink needs the lvreduce/pvresize chain	tests/case_runner.rs 的 superfloppy_resize_grows_the_filesystem_and_refuses_unextendable_requests
+R0781	src/app/execute/mod.rs::Outcome	旧 src/outcome.rs:270 internal	tests/refusal_claims.rs 的 recovery_outcomes_are_not_success
+R0786	src/app/report/exit.rs::exit_of	旧 src/outcome.rs:407 {cause}; {self}	tests/contract.rs 的 outcomes_and_refusals_map_to_the_seven_codes
+R0787	src/app/report/exit.rs::exit_of	旧 src/outcome.rs:408 {cause}; {self}	tests/contract.rs 的 outcomes_and_refusals_map_to_the_seven_codes
+R0788	src/app/report/exit.rs::exit_of	旧 src/outcome.rs:409 partial	tests/contract.rs 的 outcomes_and_refusals_map_to_the_seven_codes
+R0789	src/app/execute/transaction.rs 的外来记录	旧 src/recovery/engine.rs:257 refused	tests/refusal_claims.rs 的 a_foreign_record_is_refused_and_never_rolled_back
+R0790	src/app/execute/transaction.rs	旧 src/recovery/engine.rs:269 refused	tests/refusal_claims.rs 的 a_foreign_record_is_refused_and_never_rolled_back
+R0791	src/app/execute/transaction.rs::resumed	旧 src/recovery/engine.rs:299 refused	tests/fault_injection.rs 的 a_relocation_interruption_leaves_only_table_preimages_and_keeps_old_source
+R0793	src/app/execute/transaction.rs 的身份门	旧 src/recovery/engine.rs:503 unsupported	tests/refusal_claims.rs 的 an_unusable_identity_cannot_plan_a_write
+R0794	src/platform/linux/mod.rs 的锁	旧 src/recovery/engine.rs:526 {} ({})	tests/online.rs 的 a_sector_size_on_a_block_device_is_refused_before_it_is_opened
+R0795	src/platform/linux/mod.rs 的锁	旧 src/recovery/engine.rs:531 refused	tests/online.rs 的 a_sector_size_on_a_block_device_is_refused_before_it_is_opened
+R0797	src/platform/linux/mod.rs 的锁	旧 src/recovery/engine.rs:686 refused	tests/online.rs 的 a_sector_size_on_a_block_device_is_refused_before_it_is_opened
+R0798	src/app/execute/transaction.rs 的目标记录	旧 src/recovery/engine.rs:734 unsupported	tests/refusal_claims.rs 的 a_record_for_another_target_is_not_resumed
+R0799	src/app/execute/transaction.rs 的目标记录	旧 src/recovery/engine.rs:748 refused	tests/refusal_claims.rs 的 a_record_for_another_target_is_not_resumed
+R0800	src/app/execute/transaction.rs 的目标记录	旧 src/recovery/engine.rs:755 refused	tests/refusal_claims.rs 的 a_record_for_another_target_is_not_resumed
+R0801	src/app/execute/transaction.rs 的现场记录	旧 src/recovery/engine.rs:771 cannot establish the target identity for the recovery record: {e:?}	tests/fault_injection.rs 的 the_table_preimage_is_recorded_before_the_table_write
+R0802	src/app/execute/transaction.rs 的现场记录	旧 src/recovery/engine.rs:778 refused	tests/fault_injection.rs 的 the_table_preimage_is_recorded_before_the_table_write
+R0803	src/app/execute/transaction.rs::begin_irreversible	旧 src/recovery/engine.rs:810 cannot write the recovery record beside the image: {e}	tests/fault_injection.rs 的 the_table_preimage_is_recorded_before_the_table_write
+R0804	src/app/execute/transaction.rs::resumed	旧 src/recovery/engine.rs:846 cannot resume the recovery record: {e}	tests/fault_injection.rs 的 the_table_preimage_is_recorded_before_the_table_write
+R0806	src/app/execute/transaction.rs::resumed	旧 src/recovery/engine.rs:863 cannot write the recovery record beside the image: {e}	tests/fault_injection.rs 的 the_table_preimage_is_recorded_before_the_table_write
+R0807	src/app/execute/transaction.rs::begin_irreversible	旧 src/recovery/engine.rs:899 cannot resume the recovery record: {e}	tests/fault_injection.rs 的 the_table_preimage_is_recorded_before_the_table_write
+R0809	src/app/execute/transaction.rs::begin_irreversible	旧 src/recovery/engine.rs:916 cannot write the recovery record beside the image: {e}	tests/fault_injection.rs 的 the_table_preimage_is_recorded_before_the_table_write
+R0810	src/app/execute/transaction.rs::prepare	旧 src/recovery/engine.rs:936 open failed: {e}	tests/refusal_claims.rs 的 an_unusable_identity_cannot_plan_a_write
+R0811	src/app/execute/transaction.rs::prepare	旧 src/recovery/engine.rs:940 open failed: {e}	tests/refusal_claims.rs 的 an_unusable_identity_cannot_plan_a_write
+R0812	src/app/execute/transaction.rs::prepare	旧 src/recovery/engine.rs:949 open failed: {e}	tests/fault_injection.rs 的 a_clean_run_commits_and_cleans_the_record
+R0813	src/app/execute/transaction.rs::prepare	旧 src/recovery/engine.rs:967 open failed: {e}	tests/fault_injection.rs 的 a_clean_run_commits_and_cleans_the_record
+R0814	src/app/execute/transaction.rs::prepare	旧 src/recovery/engine.rs:974 unsupported	tests/fault_injection.rs 的 a_clean_run_commits_and_cleans_the_record
+R0815	src/app/decide/recover.rs::decide	旧 src/recovery/engine.rs:985 the recovery scene of this target cannot be enumerated: {why} — refusing to treat it as empty	tests/case_runner.rs 的 recover_refuses_a_target_without_a_record
+R0816	crates/core/src/record/frame.rs::Frame::parse	旧 src/recovery/record.rs:541 the entry index exceeds the host address space	crates/core 的 truncation_at_any_byte_has_a_deterministic_plan
+R0817	crates/core/src/record/frame.rs::Frame::parse	旧 src/recovery/record.rs:544 relocation entry {entry} is outside the recorded plan — the record contradicts itself	crates/core 的 truncation_at_any_byte_has_a_deterministic_plan
+R0818	crates/core/src/record/frame.rs::Frame::parse	旧 src/recovery/record.rs:552 internal	crates/core 的 truncation_at_any_byte_has_a_deterministic_plan
+R0819	crates/core/src/record/recover.rs::recover	旧 src/recovery/record.rs:895 the entry index exceeds the host address space	crates/core 的 prefix_ending_in_a_completed_frame_is_replayed
+R0820	crates/core/src/record/recover.rs::recover	旧 src/recovery/record.rs:900 the recovery record records {} of {chunks} chunks for relocation entry {} — it contradicts itself	crates/core 的 prefix_ending_in_a_completed_frame_is_replayed
+R0821	crates/core/src/record/recover.rs::recover	旧 src/recovery/record.rs:942 the recovery record marks all {len} relocation entries as committed but only {done} plan steps as done — it contradicts itself	crates/core 的 prefix_ending_in_a_completed_frame_is_replayed
+R0822	src/app/execute/recover/mod.rs::run	旧 src/recovery/rollback.rs:365 the recovery record at {}: {scope}	tests/refusal_claims.rs 的 a_foreign_record_is_refused_and_never_rolled_back
+R0823	src/app/execute/recover/mod.rs::run	旧 src/recovery/rollback.rs:387 refused	tests/refusal_claims.rs 的 a_foreign_record_is_refused_and_never_rolled_back
+R0824	src/app/execute/recover/mod.rs::run	旧 src/recovery/rollback.rs:470 refused	crates/core 的 rollback_verifies_the_preimage_and_cleans_the_record
+R0825	src/app/execute/recover/mod.rs 的身份复核	旧 src/recovery/rollback.rs:508 the target's GPT disk identity cannot be read ({e}) — {left}; {ROLLBACK_STUCK_REMEDY}	tests/refusal_claims.rs 的 a_record_for_another_target_is_not_resumed
+R0826	src/app/execute/recover/mod.rs 的身份复核	旧 src/recovery/rollback.rs:514 {why} — {left}; {ROLLBACK_STUCK_REMEDY}	tests/refusal_claims.rs 的 a_record_for_another_target_is_not_resumed
+R0827	src/app/execute/recover/mod.rs 的源区复核	旧 src/recovery/rollback.rs:591 refused	crates/core 的 rollback_verifies_the_preimage_and_cleans_the_record
+R0828	src/app/execute/recover/mod.rs 的源区复核	旧 src/recovery/rollback.rs:599 refused	crates/core 的 rollback_verifies_the_preimage_and_cleans_the_record
+R0829	src/app/execute/recover/mod.rs 的源区复核	旧 src/recovery/rollback.rs:606 refused	crates/core 的 rollback_verifies_the_preimage_and_cleans_the_record
+R0830	src/app/execute/recover/mod.rs 的源区复核	旧 src/recovery/rollback.rs:614 cannot read source partition #{} of the recovery record ({e})	crates/core 的 rollback_verifies_the_preimage_and_cleans_the_record
+R0831	src/app/execute/recover/mod.rs 的源区复核	旧 src/recovery/rollback.rs:620 refused	crates/core 的 rollback_verifies_the_preimage_and_cleans_the_record
+R0832	crates/core/src/record/header.rs 的容量校验	旧 src/recovery/rollback.rs:635 refused	crates/core 的 a_recorded_range_past_the_target_is_refused
+R0833	crates/core/src/record/header.rs 的区间校验	旧 src/recovery/rollback.rs:662 refused	crates/core 的 a_recorded_range_past_the_target_is_refused
+R0834	crates/core/src/record/header.rs 的区间校验	旧 src/recovery/rollback.rs:671 refused	crates/core 的 a_recorded_range_past_the_target_is_refused
+R0835	crates/core/src/record/header.rs 的区间校验	旧 src/recovery/rollback.rs:681 refused	crates/core 的 a_recorded_range_past_the_target_is_refused
+R0836	crates/core/src/record/recover.rs::recover	旧 src/recovery/rollback.rs:744 refused	crates/core 的 b21_resume_checks_prefix_digest
+R0837	crates/core/src/record/recover.rs::recover	旧 src/recovery/rollback.rs:755 refused	crates/core 的 b21_resume_checks_prefix_digest
+R0838	crates/core/src/region/diff.rs 的叠加	旧 src/recovery/rollback.rs:796 the recorded pre-image range exceeds the host address space	crates/core 的 equal_sets_have_no_difference
+R0839	crates/core/src/region/diff.rs 的叠加	旧 src/recovery/rollback.rs:802 the recorded pre-image range exceeds the host address space	crates/core 的 equal_sets_have_no_difference
+R0840	crates/core/src/record/recover.rs 的身份比对	旧 src/recovery/rollback.rs:818 refused	tests/refusal_claims.rs 的 a_record_for_another_target_is_not_resumed
+R0841	crates/core/src/region/set.rs 的虚拟读	旧 src/recovery/rollback.rs:839 refused	crates/core 的 disjoint_sets_are_fully_added_and_removed
+R0842	crates/core/src/region/set.rs 的虚拟读	旧 src/recovery/rollback.rs:853 the recorded read range exceeds the host address space	crates/core 的 disjoint_sets_are_fully_added_and_removed
+R0843	crates/core/src/region/set.rs 的虚拟读	旧 src/recovery/rollback.rs:856 the recorded read range exceeds the host address space	crates/core 的 disjoint_sets_are_fully_added_and_removed
+R0844	crates/core/src/region/set.rs 的虚拟读	旧 src/recovery/rollback.rs:859 the recorded read range exceeds the host address space	crates/core 的 disjoint_sets_are_fully_added_and_removed
+R0845	src/app/execute/recover/mod.rs::run	旧 src/recovery/rollback.rs:905 refused	crates/core 的 prefix_ending_in_an_incomplete_frame_rolls_back
+R0846	src/app/execute/recover/mod.rs::run	旧 src/recovery/rollback.rs:912 refused	crates/core 的 prefix_ending_in_an_incomplete_frame_rolls_back
+R0847	src/app/execute/recover/mod.rs::run	旧 src/recovery/rollback.rs:920 the rollback write failed at offset {}: {e} — the recovery record at {} is kept; retry `diskedit recover`	crates/core 的 prefix_ending_in_an_incomplete_frame_rolls_back
+R0848	src/app/execute/recover/mod.rs::run	旧 src/recovery/rollback.rs:939 partial	crates/core 的 prefix_ending_in_an_incomplete_frame_rolls_back
+R0849	src/app/execute/recover/mod.rs::run	旧 src/recovery/rollback.rs:944 partial	crates/core 的 prefix_ending_in_an_incomplete_frame_rolls_back
+R0850	src/app/execute/recover/mod.rs::run	旧 src/recovery/rollback.rs:952 partial	crates/core 的 prefix_ending_in_an_incomplete_frame_rolls_back
+R0852	src/app/execute/transaction.rs 的进度帧	旧 src/recovery/sink.rs:50 {} — the transfer may be incomplete	tests/fault_injection.rs 的 a_failed_progress_checkpoint_reports_partial
+R0854	src/app/execute/transaction.rs 的条目表起点	旧 src/recovery/sink.rs:69 {} — the table step must not start	tests/fault_injection.rs 的 a_failed_table_write_after_the_move_reports_partial
+R0856	src/app/execute/transaction.rs 的表步起点	旧 src/recovery/sink.rs:85 {} — the table step must not start	tests/fault_injection.rs 的 a_failed_table_write_after_the_move_reports_partial
+R0858	src/app/execute/transaction.rs 的表步终点	旧 src/recovery/sink.rs:113 {} — the on-disk state may have changed	tests/fault_injection.rs 的 a_table_that_changes_after_the_write_reports_partial
+R0860	src/app/execute/transaction.rs 的文件系统步终点	旧 src/recovery/sink.rs:136 {} — the on-disk state may have changed	tests/fault_injection.rs 的 the_table_preimage_is_recorded_before_the_table_write
+R0862	crates/core/src/geometry/align.rs	旧 src/support.rs:425 range {start}..{end} is empty after {align} alignment	tests/refusal_claims.rs 的 alignment_overflow_rejects_the_start
+R0866	crates/core/src/geometry/units.rs	旧 src/support.rs:605 LBA × sector-size overflows byte range (corrupted table)	crates/core 的 byte_conversions_cover_extremes
+R0867	crates/core/src/geometry/units.rs	旧 src/support.rs:611 partition end below start (corrupted table)	crates/core 的 byte_conversions_cover_extremes
+R0878	crates/core/src/table/gpt/parse.rs 的保护 MBR	旧 src/table/gpt_write.rs:214 盘没有扇区	crates/core 的 protective_mbr_is_rewritten_only_when_non_canonical
+R0879	crates/core/src/table/gpt/parse.rs 的保护 MBR	旧 src/table/gpt_write.rs:220 disk has zero sectors	crates/core 的 protective_mbr_is_rewritten_only_when_non_canonical
+R0880	crates/core/src/table/gpt/parse.rs 的保护 MBR	旧 src/table/gpt_write.rs:223 no_mutation	crates/core 的 protective_mbr_is_rewritten_only_when_non_canonical
+R0885	crates/core/src/table/mbr/primary.rs::write	旧 src/table/mbr.rs:256 MBR read-back failed: {e} — the write may not have landed	crates/core 的 mbr_creation_preserves_boot_code_and_clears_entries
+R0888	crates/core/src/table/mbr/primary.rs::parse	旧 src/table/mbr.rs:278 the sector size exceeds the host address space	tests/refusal_claims.rs 的 mbr_parse_rejects_unsigned_and_short_sectors
+R0893	crates/core/src/table/edit.rs::resize_mbr	旧 src/table/mbr.rs:320 the sector size exceeds the host address space	tests/refusal_claims.rs 的 mbr_resize_rejects_structural_and_out_of_bounds_ranges
+R0906	crates/core/src/table/edit.rs::add_mbr	旧 src/table/mbr.rs:472 the sector size exceeds the host address space	tests/refusal_claims.rs 的 mbr_add_uses_the_first_empty_slot_and_rejects_overlap
+R0928	crates/core/src/table/stamp.rs	旧 src/table/stamp.rs:152 the table changed on disk after it was read (stamp {expected:?} → {now:?}) — re-run the command	tests/fault_injection.rs 的 a_table_that_changes_after_the_write_reports_partial
+R0929	crates/core/src/table/stamp.rs 的快照	旧 src/table/stamp.rs:186 a decision-time table region does not match the region this write compares	tests/fault_injection.rs 的 the_table_preimage_is_recorded_before_the_table_write
+R0930	crates/core/src/table/stamp.rs 的快照	旧 src/table/stamp.rs:192 a table region is too large to compare on this host	tests/fault_injection.rs 的 the_table_preimage_is_recorded_before_the_table_write
+R0931	crates/core/src/table/stamp.rs 的写后核对	旧 src/table/stamp.rs:219 re-reading the table regions after the write failed: {e} — the write may not have landed	tests/fault_injection.rs 的 a_table_that_changes_after_the_write_reports_partial
+R0932	crates/core/src/table/stamp.rs 的写后核对	旧 src/table/stamp.rs:224 the table on disk differs from what was written (stamp {expected:?} → {now:?}) — progress is not advanced	tests/fault_injection.rs 的 a_table_that_changes_after_the_write_reports_partial
+R0933	crates/core/src/table/stamp.rs 的写前核对	旧 src/table/stamp.rs:239 a table region is too large to compare on this host	tests/fault_injection.rs 的 the_table_preimage_is_recorded_before_the_table_write
+R0934	crates/core/src/table/stamp.rs 的写前核对	旧 src/table/stamp.rs:243 the partition table changed on disk after it was read (region at byte {} differs) — re-run the command	tests/fault_injection.rs 的 the_table_preimage_is_recorded_before_the_table_write
+R0935	crates/core/src/table/stamp.rs 的 IO 失败	旧 src/table/stamp.rs:255 re-reading the table stamp failed: {e}	tests/fault_injection.rs 的 a_failed_table_flush_reports_partial
+R0936	crates/core/src/table/gpt/write.rs 的比对区间	旧 src/table/step.rs:85 refused	crates/core 的 gpt_content_writes_both_copies_with_consistent_crc
+R0937	crates/core/src/table/gpt/write.rs 的比对区间	旧 src/table/step.rs:91 disk too small to hold GPT entry array	crates/core 的 gpt_content_writes_both_copies_with_consistent_crc
+R0938	crates/core/src/table/gpt/write.rs 的比对区间	旧 src/table/step.rs:94 refused	crates/core 的 gpt_content_writes_both_copies_with_consistent_crc
+R0939	crates/core/src/table/gpt/write.rs 的比对区间	旧 src/table/step.rs:98 GPT end LBA {} is beyond the container end {file_last_lba} — refusing to write the table	crates/core 的 gpt_content_writes_both_copies_with_consistent_crc
+R0940	crates/core/src/table/gpt/write.rs 的比对区间	旧 src/table/step.rs:112 table region offset overflows	crates/core 的 gpt_content_writes_both_copies_with_consistent_crc
+R0941	crates/core/src/table/mbr/primary.rs 的比对区间	旧 src/table/step.rs:126 table region offset overflows	crates/core 的 mbr_creation_preserves_boot_code_and_clears_entries
+R0942	crates/core/src/table/create.rs::new_mbr	旧 src/table/step.rs:142 refused	crates/core 的 table_capacity_refuses_disks_too_small_for_gpt_or_mbr
+R0943	crates/core/src/table/gpt/write.rs	旧 src/table/step.rs:184 refused	crates/core 的 gpt_content_writes_both_copies_with_consistent_crc
+R0944	crates/core/src/table/gpt/write.rs	旧 src/table/step.rs:187 {given} partition entries given for a header declaring {} — refusing to write the table	crates/core 的 gpt_content_writes_both_copies_with_consistent_crc
+R0945	crates/core/src/table/gpt/write.rs	旧 src/table/step.rs:194 disk too small to hold GPT entry array	crates/core 的 gpt_content_writes_both_copies_with_consistent_crc
+R0946	crates/core/src/table/gpt/write.rs	旧 src/table/step.rs:197 refused	crates/core 的 gpt_content_writes_both_copies_with_consistent_crc
+R0947	crates/core/src/table/gpt/write.rs	旧 src/table/step.rs:200 refused	crates/core 的 gpt_content_writes_both_copies_with_consistent_crc
+R0948	crates/core/src/table/gpt/write.rs	旧 src/table/step.rs:202 refused	crates/core 的 gpt_content_writes_both_copies_with_consistent_crc
+R0949	crates/core/src/table/gpt/write.rs	旧 src/table/step.rs:213 the {what} GPT header this write would produce is not self-consistent: {e}	crates/core 的 gpt_content_writes_both_copies_with_consistent_crc
+R0950	crates/core/src/table/gpt/write.rs	旧 src/table/step.rs:218 the {what} GPT header this write would produce does not match the container end	crates/core 的 gpt_content_writes_both_copies_with_consistent_crc
+R0951	crates/core/src/table/gpt/write.rs	旧 src/table/step.rs:224 the partition entries this write would produce are invalid: {e}	crates/core 的 gpt_content_writes_both_copies_with_consistent_crc
+R0952	crates/core/src/table/gpt/write.rs	旧 src/table/step.rs:231 refused	crates/core 的 gpt_content_writes_both_copies_with_consistent_crc
+R0953	crates/core/src/table/gpt/write.rs	旧 src/table/step.rs:235 refused	crates/core 的 gpt_content_writes_both_copies_with_consistent_crc
+R0954	crates/core/src/table/gpt/write.rs	旧 src/table/step.rs:239 refused	crates/core 的 gpt_content_writes_both_copies_with_consistent_crc
+R0955	crates/core/src/table/gpt/write.rs	旧 src/table/step.rs:243 refused	crates/core 的 gpt_content_writes_both_copies_with_consistent_crc
+R0956	crates/core/src/table/gpt/parse.rs 的保护 MBR	旧 src/table/step.rs:267 protective MBR image is {} byte(s) for a {ss}-byte sector — refusing to write the table	crates/core 的 protective_mbr_is_rewritten_only_when_non_canonical
+R0957	crates/core/src/table/mbr/primary.rs	旧 src/table/step.rs:289 MBR image is {} byte(s) for a {ss}-byte sector — refusing to write the table	crates/core 的 mbr_creation_preserves_boot_code_and_clears_entries
+R0959	crates/core/src/table/create.rs::new_mbr	旧 src/table/step.rs:312 the table snapshot is empty — LBA0 is missing	crates/core 的 table_capacity_refuses_disks_too_small_for_gpt_or_mbr
+R0960	crates/core/src/table/create.rs::new_mbr	旧 src/table/step.rs:315 the table snapshot's LBA0 is {} byte(s) for a {ss}-byte sector	crates/core 的 table_capacity_refuses_disks_too_small_for_gpt_or_mbr
+R0961	crates/core/src/table/create.rs::new_mbr	旧 src/table/step.rs:337 table region offset overflows	crates/core 的 table_capacity_refuses_disks_too_small_for_gpt_or_mbr
+R0962	crates/core/src/table/create.rs::new_mbr	旧 src/table/step.rs:345 sector size does not fit the host address space	crates/core 的 table_capacity_refuses_disks_too_small_for_gpt_or_mbr
+R0963	crates/core/src/table/create.rs::new_mbr	旧 src/table/step.rs:353 sector size does not fit the host address space	crates/core 的 table_capacity_refuses_disks_too_small_for_gpt_or_mbr
+R0964	src/app/execute/table.rs::run	旧 src/table/step.rs:367 the table snapshot does not cover the compare regions — the step was not assembled from one read	tests/fault_injection.rs 的 a_failed_table_write_after_the_move_reports_partial
+R0965	src/app/execute/table.rs::run	旧 src/table/step.rs:374 a write target is outside the compare range or carries the wrong length — the step was not assembled	tests/fault_injection.rs 的 a_failed_table_write_after_the_move_reports_partial
+R0966	src/app/execute/table.rs::run	旧 src/table/step.rs:390 a write target is not in the compare regions — the step was not assembled	tests/fault_injection.rs 的 a_failed_table_write_after_the_move_reports_partial
+R0967	src/platform/linux/mod.rs 的锁文件	旧 src/targetlock.rs:72 cannot open the target lock {}: {e}	tests/online.rs 的 a_sector_size_on_a_block_device_is_refused_before_it_is_opened
+R0968	src/platform/linux/mod.rs 的锁文件	旧 src/targetlock.rs:79 cannot take the target lock {}: {e}	tests/online.rs 的 a_sector_size_on_a_block_device_is_refused_before_it_is_opened
+R0969	src/platform/linux/mod.rs::lock_state	旧 src/targetlock.rs:129 cannot identify the target {} to take the inode lock: {e}	tests/online.rs 的 a_sector_size_on_a_block_device_is_refused_before_it_is_opened
+R0970	src/platform/linux/mod.rs::lock_state	旧 src/targetlock.rs:132 refused	tests/online.rs 的 a_sector_size_on_a_block_device_is_refused_before_it_is_opened
+R0971	src/platform/linux/mod.rs::lock_state	旧 src/targetlock.rs:147 cannot lock the target {}: {e}	tests/online.rs 的 a_sector_size_on_a_block_device_is_refused_before_it_is_opened
+R0972	src/platform/linux/mod.rs::lock_state	旧 src/targetlock.rs:156 refused	tests/online.rs 的 a_sector_size_on_a_block_device_is_refused_before_it_is_opened
+R0973	src/platform/linux/mod.rs::lock_state	旧 src/targetlock.rs:163 cannot open the target {} to take the inode lock: {e}	tests/online.rs 的 a_sector_size_on_a_block_device_is_refused_before_it_is_opened
+R0974	src/platform/linux/mod.rs 的占用判定	旧 src/targetlock.rs:189 no_mutation	tests/online.rs 的 a_sector_size_on_a_block_device_is_refused_before_it_is_opened
