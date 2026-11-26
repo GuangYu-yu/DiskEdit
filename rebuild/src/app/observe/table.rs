@@ -319,7 +319,7 @@ fn mbr_partition(
         last_lba: first_lba
             .saturating_add(u64::from(entry.size_lba))
             .saturating_sub(1),
-        type_text: format!("{:02X}", entry.part_type),
+        type_text: format!("0x{:02X}", entry.part_type),
         name: String::new(),
         base_bytes,
         bytes,

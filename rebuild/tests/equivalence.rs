@@ -329,6 +329,77 @@ fn code_owned(program: &std::path::Path, argv: &[String]) -> i32 {
         .expect("子进程应正常退出而不是被信号终止")
 }
 
+/// 两份字节之间所有不同的扇区；按扇区比较，GUID 等随机内容的逐字节差异不参与。
+fn changed_offsets(before: &[u8], after: &[u8]) -> Vec<usize> {
+    let sector = 512;
+    let common = before.len().min(after.len());
+    let mut sectors = std::collections::BTreeSet::new();
+    for at in 0..common {
+        if before[at] != after[at] {
+            sectors.insert(at / sector);
+        }
+    }
+    if after.len() > common {
+        sectors.insert(common / sector);
+    }
+    sectors.into_iter().collect()
+}
+
+fn capture(program: &std::path::Path, argv: &[&str]) -> std::process::Output {
+    Command::new(program)
+        .args(argv)
+        .output()
+        .unwrap_or_else(|error| panic!("运行 {} 失败: {error}", program.display()))
+}
+
+// covers: D9
+#[test]
+fn both_binaries_agree_on_info_json_fields() {
+    let Some(baseline) = std::env::var_os("DISKEDIT_BASELINE") else {
+        eprintln!("NotApplicable: 未提供 DISKEDIT_BASELINE，JSON 字段对照未执行");
+        return;
+    };
+    let baseline = std::path::PathBuf::from(baseline);
+    let candidate = std::path::PathBuf::from(env!("CARGO_BIN_EXE_diskedit"));
+    fixtures::prepare();
+    let cases: &[&[&str]] = &[
+        &["info", "target/fixtures/s1/gpt.img"],
+        &["info", "target/fixtures/s1/mbr.img"],
+        &["info", "target/fixtures/s1/empty.img"],
+        &["info", "target/fixtures/s1/damaged.img"],
+        &["info", "target/fixtures/s1/gpt.img:1"],
+        &["info", "target/fixtures/s1/gpt.img:2", "--grow"],
+        &[
+            "info",
+            "target/fixtures/s1/gpt.img",
+            "--sector-size",
+            "4096",
+        ],
+        &["info", "target/fixtures/s1/gpt.img", "--sector-size", "123"],
+    ];
+    for argv in cases {
+        let base = capture(&baseline, argv);
+        let cand = capture(&candidate, argv);
+        assert_eq!(
+            cand.status.code(),
+            base.status.code(),
+            "{argv:?} 的退出码不一致"
+        );
+        if base.status.code() != Some(0) {
+            continue;
+        }
+        let expected: serde_json::Value =
+            serde_json::from_slice(&base.stdout).unwrap_or_else(|error| {
+                panic!("基线 {argv:?} 的 stdout 不是 JSON：{error}");
+            });
+        let actual: serde_json::Value =
+            serde_json::from_slice(&cand.stdout).unwrap_or_else(|error| {
+                panic!("候选 {argv:?} 的 stdout 不是 JSON：{error}");
+            });
+        assert_eq!(actual, expected, "{argv:?} 的 info JSON 不一致");
+    }
+}
+
 /// 写场景必须各用自己的副本：两个二进制看到同一初始字节，互不污染。
 #[test]
 fn both_binaries_agree_on_write_scenarios() {
@@ -370,11 +441,12 @@ fn both_binaries_agree_on_write_scenarios() {
         let expected = code_owned(&baseline, &argv(&for_baseline));
         let actual = code_owned(&candidate, &argv(&for_candidate));
         assert_eq!(actual, expected, "{name} 的退出码不一致");
-        let changed = |path: &str| std::fs::read(path).expect("读取副本") != before;
+        let after_base = std::fs::read(&for_baseline).expect("读取基线副本");
+        let after_candidate = std::fs::read(&for_candidate).expect("读取候选副本");
         assert_eq!(
-            changed(&for_candidate),
-            changed(&for_baseline),
-            "{name} 是否改动目标字节不一致"
+            changed_offsets(&before, &after_candidate),
+            changed_offsets(&before, &after_base),
+            "{name} 改动的字节位置不一致"
         );
     }
 }
@@ -446,11 +518,12 @@ fn both_binaries_agree_on_table_edits() {
         let expected = code_owned(&baseline, &argv(&for_baseline));
         let actual = code_owned(&candidate, &argv(&for_candidate));
         assert_eq!(actual, expected, "{name} 的退出码不一致");
-        let changed = |path: &str| std::fs::read(path).expect("读取副本") != before;
+        let after_base = std::fs::read(&for_baseline).expect("读取基线副本");
+        let after_candidate = std::fs::read(&for_candidate).expect("读取候选副本");
         assert_eq!(
-            changed(&for_candidate),
-            changed(&for_baseline),
-            "{name} 是否改动目标字节不一致"
+            changed_offsets(&before, &after_candidate),
+            changed_offsets(&before, &after_base),
+            "{name} 改动的字节位置不一致"
         );
     }
 }

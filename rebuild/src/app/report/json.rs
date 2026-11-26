@@ -2,7 +2,7 @@
 
 use serde_json::{Value, json};
 
-use crate::app::decide::report::{InfoReport, RecordsReport};
+use crate::app::decide::report::{InfoLabel, InfoReport, RecordsReport};
 
 /// `info` 的整盘 JSON。
 pub fn info(report: &InfoReport) -> String {
@@ -10,13 +10,19 @@ pub fn info(report: &InfoReport) -> String {
         .partitions
         .iter()
         .map(|partition| {
+            // MBR 没有分区名；基线用 `null`，不是空串。
+            let name = if report.label == InfoLabel::Mbr {
+                Value::Null
+            } else {
+                Value::String(partition.name.clone())
+            };
             json!({
                 "num": partition.number,
                 "first_lba": partition.first_lba,
                 "last_lba": partition.last_lba,
                 "size_bytes": partition.size_bytes,
                 "type": partition.type_text,
-                "name": partition.name,
+                "name": name,
                 "fs": partition.content.as_str(),
             })
         })
@@ -43,17 +49,24 @@ pub fn info(report: &InfoReport) -> String {
             "moves": moves,
         })
     });
-    json!({
+    let mut document = json!({
         "label": report.label.as_str(),
         "damaged": report.damaged,
         "sector_size": report.sector_size,
         "size_bytes": report.size_bytes,
         "disk_guid": report.disk_guid,
-        "last_part": report.last_part,
         "partitions": partitions,
-        "preview": preview,
-    })
-    .to_string()
+    });
+    let object = document.as_object_mut().expect("info 文档是对象");
+    // 基线在无分区时省略 `last_part`，而不是输出 `null`。
+    if let Some(last) = report.last_part {
+        object.insert("last_part".to_owned(), json!(last));
+    }
+    // 基线在无预览时完全不输出该字段；`null` 会改变字段集。
+    if let Some(preview) = preview {
+        object.insert("preview".to_owned(), preview);
+    }
+    document.to_string()
 }
 
 /// `records` 的 JSON。
