@@ -685,7 +685,7 @@ pub fn delete_mbr(lba0: &[u8], number: u32) -> Result<Vec<u8>, EditError> {
 /// 改一条 MBR 记录的类型字节。
 pub fn set_mbr_type(lba0: &[u8], number: u32, os_type: u8) -> Result<Vec<u8>, EditError> {
     primary_slot(number)?;
-    check_mbr_type_byte(os_type)?;
+    check_mbr_add_type(os_type)?;
     let index = slot_index(number);
     let current = require_live_mbr(lba0, number, index)?;
     if current == TYPE_PROTECTIVE {
@@ -729,6 +729,9 @@ pub fn resize_mbr(
     let current = require_live_mbr(lba0, number, index)?;
     if MBR_CONTAINER_TYPES.contains(&current) {
         return Err(EditError::ContainerTypeByte(current));
+    }
+    if current == TYPE_PROTECTIVE {
+        return Err(EditError::ProtectiveTypeByte);
     }
     if total_lba < 2 || start < 1 || start > end || end >= total_lba {
         return Err(EditError::OutOfRange {
