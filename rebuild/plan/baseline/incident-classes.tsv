@@ -1,0 +1,11 @@
+class_id	source	source_loc	category	description	behavior	evidence	state	reason
+SA1-001	parted	NEWS:107;NEWS:212	修复	备份 GPT 不在盘尾时被自动搬移，数组长度不足时会同时损坏主备头	修复动作并入同一表写：重定位备份头并规范化保护 MBR，写后逐字节回读	R0602,R0607	已认领	
+SA1-002	parted	NEWS:466;NEWS:469	只读	只读 print 在主备表之一损坏时会覆盖混合 GPT+MBR 的保护 MBR	只读命令只以只读方式打开目标，判定层不产生写计划	tests/case_runner.rs::read_only_commands_leave_the_target_bytes_unchanged	已认领	
+SA1-003	parted	NEWS:470	保护MBR	主备之一损坏时只读操作会改写保护 MBR	PMBR 只在表写中重写；输入 PMBR 不一致时先拒绝或按规范重写，不借只读路径修正	tests/case_runner.rs::new_refuses_an_inconsistent_protective_mbr_and_keeps_a_canonical_one	已认领	
+SA1-004	sfdisk	sfdisk.8:68	在线	内核拒绝删除或移动使用中的分区，却不拒绝缩小；缩小已挂载分区会 I/O 错误与文件系统损坏	写命令先过占用闸；在线缩小只允许 btrfs，次序为在线缩文件系统→表→BLKPG	tests/online.rs::online_resize_refuses_shrinking_a_mounted_partition_with_a_non_btrfs_filesystem	已认领	
+SA1-005	sfdisk	sfdisk.8:43;sfdisk.8:248	隐式	sfdisk 保护首扇区，但 --wipe always 会擦除；fdisk/cfdisk 默认整块擦除	不提供签名擦除选项；new 遇到已有数据须显式 --overwrite-data，否则拒绝且目标字节不变	tests/case_runner.rs::new_writes_a_readable_table_and_refuses_to_clobber	已认领	
+SA1-006	sfdisk	sfdisk.8:129	破坏性操作	--discard 丢弃全部未分区区域，数据不可恢复	从不发送 discard 或 TRIM，也不在未分区区域写零		范围裁剪	不提供丢弃功能;超出 UEFI 与 MBR 表结构的职责范围，规范未要求;只影响主动擦盘的场景;用户须自行运行 wipefs 或 blkdiscard;保留未知选项拒绝这条替代路径;若未来引入须带二次确认与不可恢复提示
+SA1-007	sfdisk	sfdisk.8:405	身份	用 dump 与 restore 复用布局会复制 PARTUUID，造成系统内重复 UUID	copy 默认按目标几何派生新的确定性 PARTUUID，不继承源的 PARTUUID	tests/case_runner.rs::a_copied_partition_gets_its_own_deterministic_partuuid	已认领	
+SA1-008	parted	NEWS:447;NEWS:455	对齐	新分区默认 optimal 对齐为 1 MiB，最小对齐为物理扇区	add 与 copy 的自动起点按 1 MiB 对齐，显式 --align mib 生效	tests/case_runner.rs::add_delete_and_set_rewrite_both_copies	已认领	
+SA1-009	parted	NEWS:207	退出码	parted 曾对已被诊断的错误返回 0	退出码七值单源映射，未写失败与拒绝各自固定出口，测试逐格核对	src/app/report/exit.rs::every_unwritten_failure_has_one_code	已认领	
+SA1-010	sfdisk	sfdisk.8:90	输入面	sfdisk 的 JSON 只作输出格式，不能作为输入	info 只输出本实现结构化 JSON，不提供 JSON 或脚本导入命令		范围裁剪	不提供导入与还原命令;输入格式不属于分区表规范;只影响自动化复刻布局;用户可逐条 add 与 set 或 dd 整盘镜像;保留未知子命令拒绝这条替代路径;若引入须先定义冲突处理与身份校验

@@ -1,0 +1,37 @@
+{
+ "gate": "G11",
+ "kind": "lint",
+ "command": [
+  "python",
+  "plan/instruments/audit.py",
+  "check",
+  "--ledger",
+  "plan/baseline/incident-classes.tsv",
+  "--m4",
+  "plan/06-防漂移执行手册.md",
+  "--appendix",
+  "plan/06-防漂移执行手册.md",
+  "--divergences",
+  "plan/divergences.md",
+  "--refusal-map",
+  "plan/baseline/refusal-map.tsv",
+  "--tests",
+  "tests",
+  "--root",
+  "."
+ ],
+ "exit_code": 0,
+ "commit": "4bd89bc",
+ "tree": "7091a6677d1ccb36",
+ "at": "2026-11-26T17:35:18+00:00",
+ "counts": {
+  "result_lines": 0,
+  "passed": 0,
+  "failed": 0,
+  "ignored": 0,
+  "not_applicable": 0
+ },
+ "ok": true,
+ "reasons": [],
+ "log": "plan/evidence/G11.log"
+}

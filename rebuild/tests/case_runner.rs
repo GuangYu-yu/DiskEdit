@@ -766,6 +766,54 @@ fn read_only_info_emits_one_structured_json_document() {
     }
 }
 
+// 只读命令不得改动目标任何一个字节（parted NEWS：只读操作曾改写混合 MBR）。
+#[test]
+fn read_only_commands_leave_the_target_bytes_unchanged() {
+    let path = "target/fixtures/s1/gpt.img";
+    let before = std::fs::read(path).expect("读取夹具");
+    let (code, _stdout, stderr) = run_argv(&["info", path]);
+    assert_eq!(code, 0, "只读 info 应成功：{stderr}");
+    assert_eq!(
+        std::fs::read(path).expect("读取夹具"),
+        before,
+        "只读命令改动了目标字节"
+    );
+}
+
+/// 读 GPT 主分区项数组里第 `index` 个条目的 PARTUUID（从 1 计）。
+fn entry_partuuid(bytes: &[u8], index: usize) -> [u8; 16] {
+    let table =
+        u64::from_le_bytes(bytes[512 + 72..512 + 80].try_into().expect("表头完整")) as usize * 512;
+    let offset = table + (index - 1) * 128 + 16;
+    bytes[offset..offset + 16]
+        .try_into()
+        .expect("分区项在镜像内")
+}
+
+// 复制出的分区必须有自己的 PARTUUID（sfdisk 还原式复制会撞 UUID）；同一目标重复复制
+// 到同一槽位必须得到同一个值（派生不含随机源）。
+#[test]
+fn a_copied_partition_gets_its_own_deterministic_partuuid() {
+    fixtures::prepare();
+    let directory = "target/fixtures/s4";
+    std::fs::create_dir_all(directory).expect("复制夹具目录可建");
+    let path = format!("{directory}/uuid.img");
+    std::fs::copy(std::path::Path::new(fixtures::BASE).join("gpt.img"), &path)
+        .expect("复制 GPT 夹具");
+    let source = entry_partuuid(&std::fs::read(&path).expect("读取镜像"), 1);
+    let copy = |start: &str| {
+        let (code, _stdout, stderr) =
+            run_argv(&["copy", &format!("{path}:1"), "--start", start, "--yes"]);
+        assert_eq!(code, 0, "复制应成功：{stderr}");
+        entry_partuuid(&std::fs::read(&path).expect("读取镜像"), 3)
+    };
+    let first = copy("6144");
+    assert_ne!(first, source, "副本不得复用源的 PARTUUID");
+    let (code, _stdout, stderr) = run_argv(&["delete", &format!("{path}:3"), "--yes"]);
+    assert_eq!(code, 0, "删除副本应成功：{stderr}");
+    assert_eq!(copy("6144"), first, "同一槽位的重复复制应得到同一 PARTUUID");
+}
+
 // covers: R0358, R0359, R0360
 #[test]
 fn resize_refuses_a_target_without_a_table_or_a_missing_partition() {
