@@ -74,6 +74,10 @@ def problems(subject: str) -> list[str]:
 
 def check(base: str | None) -> int:
     root = repo_root()
+    if run_git(root, "rev-parse", "--is-shallow-repository").strip() == "true":
+        print("提交信息：当前仓库是浅克隆，历史不完整，拒绝下结论；先 `git fetch --unshallow`",
+              file=sys.stderr)
+        return 2
     resolved = base or base_commit(root)
     if not resolved:
         print(f"未找到基线：{BASE_FILE} 还没有提交记录", file=sys.stderr)

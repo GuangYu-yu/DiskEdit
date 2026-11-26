@@ -119,6 +119,16 @@ def tree_fingerprint(root: Path) -> str:
     return h.hexdigest()[:16]
 
 
+def shallow_repository(cwd: Path) -> bool:
+    """浅克隆的提交范围不完整，任何结论都不可信。只有明确是浅克隆才拒绝。"""
+    try:
+        out = subprocess.run(["git", "rev-parse", "--is-shallow-repository"], cwd=cwd,
+                             capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return out.returncode == 0 and out.stdout.strip() == "true"
+
+
 def run_gate(name: str, kind: str, cmd: list[str], log: Path, min_passed: int | None = 1,
              ignored_budget: int = 0, na_budget: int = 0, require_env: list[str] | None = None,
              require_file: list[str] | None = None, cwd: str | None = None) -> bool:
@@ -189,6 +199,11 @@ def read_plan(path: Path) -> list[dict]:
 
 
 def run_all(a: argparse.Namespace) -> int:
+    workdir = Path(a.cwd) if a.cwd else Path.cwd()
+    if shallow_repository(workdir):
+        print("当前仓库是浅克隆：提交范围不完整，拒绝下结论；先 `git fetch --unshallow`",
+              file=sys.stderr)
+        return 2
     try:
         rows = read_plan(Path(a.plan))
     except (OSError, ValueError) as e:
@@ -211,6 +226,10 @@ def run_all(a: argparse.Namespace) -> int:
 
 
 def status(a: argparse.Namespace) -> int:
+    if shallow_repository(Path.cwd()):
+        print("当前仓库是浅克隆：提交范围不完整，拒绝下结论；先 `git fetch --unshallow`",
+              file=sys.stderr)
+        return 2
     evidence = Path(a.evidence)
     records = sorted(evidence.glob("*.log.json")) if evidence.is_dir() else []
     if not records:
@@ -423,6 +442,10 @@ def main() -> int:
     cmd = cmd[1:] if cmd[:1] == ["--"] else cmd
     if a.min_passed < 1:
         print("--min-passed 不得小于 1：没有用例通过的测试不算通过", file=sys.stderr)
+        return 2
+    if shallow_repository(Path(a.cwd) if a.cwd else Path.cwd()):
+        print("当前仓库是浅克隆：提交范围不完整，拒绝下结论；先 `git fetch --unshallow`",
+              file=sys.stderr)
         return 2
     return 0 if run_gate(a.name, a.kind, cmd, Path(a.log), a.min_passed, a.ignored_budget,
                          a.na_budget, a.require_env, a.require_file, a.cwd) else 1
