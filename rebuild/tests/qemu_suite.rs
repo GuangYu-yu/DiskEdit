@@ -59,6 +59,8 @@ assert_eq() { [ "$2" = "$3" ] && ok "$1" || no "$1" "expected [$2] got [$3]"; }
 
 bytes() { blockdev --getsize64 "$1" 2>/dev/null || echo 0; }
 blkcount() { dumpe2fs -h "$1" 2>/dev/null | awk -F: '/^Block count/{gsub(/ /,"",$2);print $2}'; }
+# f2fs superblock 里 block_count 位于结构内偏移 36、绝对偏移 1024+36=1060（小端 u64）。
+f2fs_blocks() { od -An -tu8 -j1060 -N8 "$1" 2>/dev/null | tr -d ' '; }
 detach() { [ -n "$1" ] && { umount "${1}p1" 2>/dev/null; vgchange -an vgtest 2>/dev/null; losetup -d "$1" 2>/dev/null; }; }
 newdisk() { dd if=/dev/zero of="$1" bs=1M count="$2" status=none; L=$(losetup -fP --show "$1"); sleep 1; }
 
@@ -351,6 +353,20 @@ s18_ntfs_grow() {
   detach "$L"; rm -f /tmp/s18.img
 }
 
+# f2fs 离线扩容：真实 fsck.f2fs→resize.f2fs，回读 superblock block_count 核对生长。
+s19_f2fs_grow() {
+  newdisk /tmp/s19.img 300
+  printf 'label: gpt\n, 96M, L\n' | sfdisk "$L" >/dev/null 2>&1; sleep 1
+  "$DE" mkfs "$L:1" f2fs --yes >/tmp/o 2>&1; rc=$?
+  assert_rc s19_mkfs_rc 0 "$rc"
+  before=$(f2fs_blocks "${L}p1")
+  "$DE" resize "$L:1" --grow-to-end --yes >/tmp/o 2>&1; rc=$?
+  assert_rc s19_grow_rc 0 "$rc"
+  after=$(f2fs_blocks "${L}p1")
+  assert_gt s19_fs_grew "$after" "$before"
+  detach "$L"; rm -f /tmp/s19.img
+}
+
 echo "=== SCENARIOS START ==="
 s1_offline_ext4_grow
 s2_offline_ext4_shrink
@@ -370,6 +386,7 @@ s15_ntfs_mkfs_check
 s16_exfat_mkfs_check
 s17_f2fs_mkfs_check
 s18_ntfs_grow
+s19_f2fs_grow
 echo "=== SCENARIOS SUMMARY pass=$PASS fail=$FAIL failed=[$FAILED] ==="
 "##;
 

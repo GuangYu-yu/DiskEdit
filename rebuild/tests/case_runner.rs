@@ -1043,3 +1043,179 @@ fn superfloppy_resize_grows_the_filesystem_and_refuses_unextendable_requests() {
         assert_eq!(code, 3, "{argv:?} 应拒绝：{stderr}");
     }
 }
+
+/// sfdisk 在 GPT 上执行 `-A`（激活）会告警并自动进入嵌套 PMBR，把 legacy 启动位写进
+/// 保护 MBR（实测 util-linux 2.39.3：打印 "Activation is unsupported for GPT --
+/// entering nested PMBR."，并在 PMBR 写 0x80 + 0x01/0xFF 两条记录）。本实现不采纳这条
+/// 隐式决定：`set flag boot` 落在 GPT 的 ESP 类型 GUID 上，legacy active 与 GPT 旗标
+/// 分开建模，保护 MBR 保持规范形态。处置理由见 incident-classes.tsv SA1-015。
+#[test]
+fn a_gpt_boot_flag_becomes_the_esp_type_and_leaves_the_protective_mbr_alone() {
+    fixtures::prepare();
+    let directory = "target/fixtures/sa1-015";
+    std::fs::create_dir_all(directory).expect("夹具目录可建");
+    let image = format!("{directory}/gpt.img");
+    std::fs::write(&image, vec![0u8; 8 * 1024 * 1024]).expect("镜像可写");
+    let (code, _, stderr) = run_argv(&["new", &image, "--yes"]);
+    assert_eq!(code, 0, "建 GPT 应成功：{stderr}");
+    let (code, _, stderr) = run_argv(&["add", &image, "1M", "--yes"]);
+    assert_eq!(code, 0, "加分区应成功：{stderr}");
+
+    let before = std::fs::read(&image).expect("读取镜像");
+    let (code, stdout, stderr) =
+        run_argv(&["set", &format!("{image}:1"), "flag", "boot", "on", "--yes"]);
+    assert_eq!(code, 0, "GPT boot 旗标应成功：{stderr}");
+    assert!(stdout.contains("flag boot=on"), "{stdout}");
+    let after = std::fs::read(&image).expect("读取镜像");
+
+    assert_eq!(&after[..512], &before[..512], "改 GPT 旗标不得写保护 MBR");
+    assert_eq!(after[446], 0x00, "保护 MBR 的启动位必须保持 0");
+    assert_eq!(after[450], 0xEE, "保护 MBR 的类型必须仍是 0xEE");
+
+    let (code, stdout, _) = run_argv(&["info", &image]);
+    assert_eq!(code, 0);
+    assert!(
+        stdout.contains("C12A7328-F81F-11D2-BA4B-00A0C93EC93B"),
+        "boot 旗标应落到 ESP 类型 GUID：{stdout}"
+    );
+}
+
+/// 一份带两个分区的 GPT，返回镜像路径与已写入的字节。
+fn two_partition_gpt(image: &str) {
+    std::fs::write(image, vec![0u8; 32 * 1024 * 1024]).expect("镜像可写");
+    let (code, _, stderr) = run_argv(&["new", image, "--yes"]);
+    assert_eq!(code, 0, "建 GPT 应成功：{stderr}");
+    for _ in 0..2 {
+        let (code, _, stderr) = run_argv(&["add", image, "4M", "--yes"]);
+        assert_eq!(code, 0, "加分区应成功：{stderr}");
+    }
+}
+
+/// 混合 MBR（GPT 的 PMBR 里带一条 legacy 条目）在 gdisk 里被识别并保留；本实现只读
+/// 时接受原样，任何表写都把 PMBR 收敛为规范的单一 0xEE 全覆盖记录。处置理由见
+/// incident-classes.tsv SA3-002。
+#[test]
+fn a_hybrid_mbr_is_read_as_is_and_normalized_only_on_a_table_write() {
+    fixtures::prepare();
+    let directory = "target/fixtures/sa3-hybrid";
+    std::fs::create_dir_all(directory).expect("夹具目录可建");
+    let image = format!("{directory}/hybrid.img");
+    two_partition_gpt(&image);
+
+    let mut bytes = std::fs::read(&image).expect("读取镜像");
+    let sector = 512usize;
+    let first = u64::from_le_bytes(bytes[1024 + 32..1024 + 40].try_into().unwrap());
+    let last = u64::from_le_bytes(bytes[1024 + 40..1024 + 48].try_into().unwrap());
+    let total = (bytes.len() / sector) as u64;
+    // 第 0 条：一条 legacy Linux 记录（0x0C）覆盖分区 1，并置启动位。
+    bytes[446] = 0x80;
+    bytes[450] = 0x0C;
+    bytes[454..458].copy_from_slice(&u32::try_from(first).unwrap().to_le_bytes());
+    bytes[458..462].copy_from_slice(&u32::try_from(last - first + 1).unwrap().to_le_bytes());
+    // 第 1 条：0xEE 保护记录覆盖整盘。
+    bytes[462] = 0x00;
+    bytes[466] = 0xEE;
+    bytes[470..474].copy_from_slice(&1u32.to_le_bytes());
+    bytes[474..478].copy_from_slice(&u32::try_from(total - 1).unwrap().to_le_bytes());
+    bytes[478..510].fill(0);
+    bytes[510] = 0x55;
+    bytes[511] = 0xAA;
+    std::fs::write(&image, &bytes).expect("写回混合 MBR");
+    let before = std::fs::read(&image).expect("读取混合 MBR");
+
+    let (code, _, stderr) = run_argv(&["info", &image]);
+    assert_eq!(code, 0, "混合 MBR 应可读：{stderr}");
+    assert_eq!(
+        std::fs::read(&image).expect("读取镜像"),
+        before,
+        "只读 info 不得重写混合 MBR"
+    );
+
+    let (code, _, stderr) = run_argv(&["set", &format!("{image}:1"), "name", "hybrid", "--yes"]);
+    assert_eq!(code, 0, "表写应成功：{stderr}");
+    let after = std::fs::read(&image).expect("读取镜像");
+    assert_eq!(after[446 + 4], 0xEE, "表写应把保护 MBR 收敛为 0xEE");
+    assert_eq!(
+        &after[446 + 8..446 + 12],
+        &1u32.to_le_bytes(),
+        "保护记录从 LBA 1 开始"
+    );
+    assert_eq!(
+        &after[446 + 12..446 + 16],
+        &u32::try_from(total - 1).unwrap().to_le_bytes(),
+        "保护记录覆盖整盘"
+    );
+    assert!(
+        after[462..510].iter().all(|&byte| byte == 0),
+        "混合条目应在规范化时清除"
+    );
+}
+
+/// 盘上已有的重复 PARTUUID：gdisk 用专家命令 `f` 显式重随机化；本实现读取时保留，
+/// 任何表写只改用户点名的条目，不静默改写身份数据（同 D8 原则）。处置理由见
+/// incident-classes.tsv SA3-001。
+#[test]
+fn duplicate_partuuids_are_read_and_preserved_not_rewritten() {
+    fixtures::prepare();
+    let directory = "target/fixtures/sa3-dup";
+    std::fs::create_dir_all(directory).expect("夹具目录可建");
+    let image = format!("{directory}/dup.img");
+    two_partition_gpt(&image);
+
+    let mut bytes = std::fs::read(&image).expect("读取镜像");
+    let sector = 512usize;
+    let count = u32::from_le_bytes(bytes[512 + 80..512 + 84].try_into().unwrap()) as usize;
+    let entry_size = u32::from_le_bytes(bytes[512 + 84..512 + 88].try_into().unwrap()) as usize;
+    let backup_lba = u64::from_le_bytes(bytes[512 + 32..512 + 40].try_into().unwrap()) as usize;
+    let primary_array =
+        u64::from_le_bytes(bytes[512 + 72..512 + 80].try_into().unwrap()) as usize * sector;
+    let backup_header = backup_lba * sector;
+    let backup_array = u64::from_le_bytes(
+        bytes[backup_header + 72..backup_header + 80]
+            .try_into()
+            .unwrap(),
+    ) as usize
+        * sector;
+    // 让第 2 条复用第 1 条的 PARTUUID，并同时修正两处数组与两个表头的 CRC。
+    let shared: [u8; 16] = bytes[primary_array + 16..primary_array + 32]
+        .try_into()
+        .unwrap();
+    bytes[primary_array + entry_size + 16..primary_array + entry_size + 32]
+        .copy_from_slice(&shared);
+    bytes[backup_array + entry_size + 16..backup_array + entry_size + 32].copy_from_slice(&shared);
+    let logical = count * entry_size;
+    let crc = diskedit_core::table::crc32(&bytes[primary_array..primary_array + logical]);
+    bytes[512 + 88..512 + 92].copy_from_slice(&crc.to_le_bytes());
+    bytes[backup_header + 88..backup_header + 92].copy_from_slice(&crc.to_le_bytes());
+    for header in [512usize, backup_header] {
+        let size = u32::from_le_bytes(bytes[header + 12..header + 16].try_into().unwrap()) as usize;
+        bytes[header + 16..header + 20].copy_from_slice(&[0, 0, 0, 0]);
+        let header_crc = diskedit_core::table::crc32(&bytes[header..header + size]);
+        bytes[header + 16..header + 20].copy_from_slice(&header_crc.to_le_bytes());
+    }
+    std::fs::write(&image, &bytes).expect("写回重复身份");
+    let duplicated = std::fs::read(&image).expect("读取镜像");
+
+    let (code, stdout, stderr) = run_argv(&["info", &image]);
+    assert_eq!(code, 0, "重复 PARTUUID 应可读：{stderr}");
+    assert!(stdout.contains("\"num\":2"), "{stdout}");
+    assert_eq!(
+        std::fs::read(&image).expect("读取镜像"),
+        duplicated,
+        "只读 info 不得改写盘面"
+    );
+
+    let (code, _, stderr) = run_argv(&["set", &format!("{image}:2"), "name", "two", "--yes"]);
+    assert_eq!(code, 0, "编辑应成功：{stderr}");
+    let after = std::fs::read(&image).expect("读取镜像");
+    assert_eq!(
+        &after[primary_array + 16..primary_array + 32],
+        &shared[..],
+        "重复身份不得被静默改写"
+    );
+    assert_eq!(
+        &after[primary_array + entry_size + 16..primary_array + entry_size + 32],
+        &shared[..],
+        "重复身份不得被静默改写"
+    );
+}
