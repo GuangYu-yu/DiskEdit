@@ -203,6 +203,134 @@ fn add_delete_and_set_rewrite_both_copies() {
     assert!(stdout.contains("\"first_lba\":6144"), "{stdout}");
 }
 
+// covers: B13, B26, R0059, R0203, R0209
+#[test]
+fn resize_rewrites_the_table_and_refuses_unsafe_shrinks() {
+    fixtures::prepare();
+    let directory = "target/fixtures/s6";
+    std::fs::create_dir_all(directory).expect("扩缩夹具目录可建");
+    let image = format!("{directory}/gpt.img");
+    std::fs::copy(std::path::Path::new(fixtures::BASE).join("gpt.img"), &image)
+        .expect("复制 GPT 夹具");
+    let original = std::fs::read(&image).expect("读取夹具");
+
+    // 用法错误：缺 SIZE/--end、同给两者、--end 缺分区选择器。
+    let (code, _, stderr) = run_argv(&["resize", &format!("{image}:2"), "--yes"]);
+    assert_eq!(code, 2, "缺尺寸应是用法错误：{stderr}");
+    let (code, _, _) = run_argv(&[
+        "resize",
+        &format!("{image}:2"),
+        "8M",
+        "--end",
+        "5000",
+        "--yes",
+    ]);
+    assert_eq!(code, 2, "SIZE 与 --end 互斥");
+    let (code, _, _) = run_argv(&["resize", &image, "--end", "5000", "--yes"]);
+    assert_eq!(code, 2, "--end 需要分区选择器");
+    let (code, _, _) = run_argv(&["resize", &format!("{image}:2"), "grow"]);
+    assert_eq!(code, 2, "缺 --yes 应是用法错误");
+    assert_eq!(
+        std::fs::read(&image).expect("读取夹具"),
+        original,
+        "用法错误不得改字节"
+    );
+
+    // 扩到右侧空闲末端：partition #2 由 4095 延伸到 last usable 8158。
+    let (code, stdout, stderr) =
+        run_argv(&["resize", &format!("{image}:2"), "grow", "--no-fs", "--yes"]);
+    assert_eq!(code, 0, "只改表的扩容应成功：{stderr}");
+    assert!(stdout.contains("resized partition #2"), "{stdout}");
+    let (code, stdout, _) = run_argv(&["info", &image]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("\"last_lba\":8158"), "{stdout}");
+
+    // 收缩表项但没有先缩文件系统：拒绝，且不改字节。
+    let grown = std::fs::read(&image).expect("读取夹具");
+    let (code, _, _) = run_argv(&[
+        "resize",
+        &format!("{image}:2"),
+        "--end",
+        "5000",
+        "--no-fs",
+        "--yes",
+    ]);
+    assert_eq!(code, 3, "--no-fs 不得收缩");
+    // 越过后端与越过可用区都拒绝。
+    let (code, _, _) = run_argv(&[
+        "resize",
+        &format!("{image}:2"),
+        "--end",
+        "99999",
+        "--no-fs",
+        "--yes",
+    ]);
+    assert_eq!(code, 3, "终点越过可用区应拒绝");
+    assert_eq!(
+        std::fs::read(&image).expect("读取夹具"),
+        grown,
+        "拒绝时目标字节不得改变"
+    );
+
+    // 干跑：打印计划但不写字节。
+    let dry = format!("{directory}/dry.img");
+    std::fs::copy(std::path::Path::new(fixtures::BASE).join("gpt.img"), &dry)
+        .expect("复制 GPT 夹具");
+    let before = std::fs::read(&dry).expect("读取夹具");
+    let (code, stdout, stderr) = run_argv(&[
+        "resize",
+        &format!("{dry}:2"),
+        "--end",
+        "6000",
+        "--no-fs",
+        "--dry-run",
+    ]);
+    assert_eq!(code, 0, "干跑应成功：{stderr}");
+    assert!(stdout.contains("dry run"), "{stdout}");
+    assert!(stdout.contains("6000"), "{stdout}");
+    assert_eq!(
+        std::fs::read(&dry).expect("读取夹具"),
+        before,
+        "干跑不得改字节"
+    );
+
+    // `--align mib` 把终点下取整到 1 MiB 边界（6000 -> 4096）。
+    let aligned = format!("{directory}/aligned.img");
+    std::fs::copy(
+        std::path::Path::new(fixtures::BASE).join("gpt.img"),
+        &aligned,
+    )
+    .expect("复制 GPT 夹具");
+    let (code, stdout, stderr) = run_argv(&[
+        "resize",
+        &format!("{aligned}:2"),
+        "--end",
+        "6000",
+        "--align",
+        "mib",
+        "--no-fs",
+        "--dry-run",
+    ]);
+    assert_eq!(code, 0, "对齐干跑应成功：{stderr}");
+    assert!(stdout.contains("4096"), "对齐后的终点应是 4096：{stdout}");
+
+    // 内容未识别时默认要扩文件系统：拒绝。
+    let unknown = format!("{directory}/unknown.img");
+    std::fs::copy(
+        std::path::Path::new(fixtures::BASE).join("gpt.img"),
+        &unknown,
+    )
+    .expect("复制 GPT 夹具");
+    let before = std::fs::read(&unknown).expect("读取夹具");
+    let (code, _, _) = run_argv(&["resize", &format!("{unknown}:2"), "--end", "6000", "--yes"]);
+    assert_eq!(code, 3, "内容未识别时不得臆测文件系统");
+    assert_eq!(
+        std::fs::read(&unknown).expect("读取夹具"),
+        before,
+        "拒绝时目标字节不得改变"
+    );
+}
+
 // covers: B15, R0064, R0094
 #[test]
 fn filesystem_commands_refuse_without_touching_the_target() {

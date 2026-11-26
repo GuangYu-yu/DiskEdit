@@ -21,15 +21,15 @@ const CHUNK: usize = 1 << 20;
 
 /// 执行一份已确认的整表写入计划。
 pub fn run(platform: &dyn Platform, target: &Path, plan: &ConfirmedPlan) -> Outcome {
-    match execute(platform, target, plan) {
+    match execute_plan(platform, target, plan) {
         Ok(Some(why)) => Outcome::committed_unsynced(why),
         Ok(None) => Outcome::completed(),
         Err((error, wrote)) => failure(error, wrote),
     }
 }
 
-/// 成功时返回内核视图未同步的原因（若有）。
-fn execute(
+/// 表写事务主体；`resize` 也以它为表阶段，成功时返回内核视图未同步的原因（若有）。
+pub(super) fn execute_plan(
     platform: &dyn Platform,
     target: &Path,
     plan: &ConfirmedPlan,

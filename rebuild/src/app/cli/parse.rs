@@ -7,8 +7,8 @@ use diskedit_core::fs::MkfsKind;
 use diskedit_core::table::Guid;
 
 use crate::app::observe::{
-    Alignment, Command, CopyRequest, MoveRequest, PartitionSelector, Request, SetKey, SetRequest,
-    StartSpec, TableFormat, TargetSpec, TypeSelector,
+    Alignment, Command, CopyRequest, MoveRequest, PartitionSelector, Request, ResizeRequest,
+    SetKey, SetRequest, SizeSpec, StartSpec, TableFormat, TargetSpec, TypeSelector,
 };
 
 /// 用法错误：外层打印到 stderr 并以 2 退出。
@@ -44,6 +44,7 @@ pub fn parse(args: &[String]) -> Result<Request, UsageError> {
         "copy" => parse_copy(rest),
         "mkfs" => parse_mkfs(rest),
         "resizefs" => parse_resizefs(rest),
+        "resize" => parse_resize(rest),
         other => Err(UsageError::new(format!("unknown command `{other}`"))),
     }
 }
@@ -196,6 +197,135 @@ fn parse_resizefs(args: &[String]) -> Result<Request, UsageError> {
         .with_sector_size(sector_size(&tokens)?)
         .with_identity(identity(&tokens))
         .with_confirmation(true))
+}
+
+/// `resize`：分区与文件系统一起扩缩；SIZE、`--end` 与 `--grow-to-end` 三选一。
+fn parse_resize(args: &[String]) -> Result<Request, UsageError> {
+    let tokens = Tokens::scan(
+        args,
+        &[
+            "--end",
+            "--align",
+            "--chunk",
+            "--lv",
+            "--identity",
+            "--sector-size",
+        ],
+        &[
+            "--yes",
+            "--grow-to-end",
+            "--allow-move",
+            "--grow-lv",
+            "--no-fs",
+            "--dry-run",
+        ],
+    )?;
+    let dry_run = tokens.has("--dry-run");
+    if !dry_run && !tokens.has("--yes") {
+        return Err(UsageError::new("`resize` needs --yes"));
+    }
+    if tokens.positionals.is_empty() || tokens.positionals.len() > 2 {
+        return Err(UsageError::new(
+            "resize needs <TARGET>[:N] <SIZE>, or <TARGET>:N --end LBA / --grow-to-end",
+        ));
+    }
+    let target = target_spec(&tokens.positionals[0])?;
+    let partition = target.partition;
+    let size = tokens
+        .positionals
+        .get(1)
+        .map(|raw| parse_size_spec(raw))
+        .transpose()?;
+    let end = tokens
+        .value("--end")
+        .map(|raw| {
+            raw.parse::<u64>()
+                .map_err(|_| UsageError::new(format!("`{raw}` is not an LBA")))
+        })
+        .transpose()?;
+    let grow_to_end = tokens.has("--grow-to-end");
+    if end.is_some() && grow_to_end {
+        return Err(UsageError::new(
+            "--end and --grow-to-end are mutually exclusive",
+        ));
+    }
+    if size.is_some() && (end.is_some() || grow_to_end) {
+        return Err(UsageError::new(
+            "give either a SIZE or --end/--grow-to-end, not both",
+        ));
+    }
+    if size.is_none() && end.is_none() && !grow_to_end {
+        return Err(UsageError::new(
+            "resize needs a SIZE, --end or --grow-to-end",
+        ));
+    }
+    if partition.is_none() && (end.is_some() || grow_to_end) {
+        return Err(UsageError::new(
+            "`resize` --end and --grow-to-end need :N (the partition to resize)",
+        ));
+    }
+    let align = match alignment(&tokens)? {
+        Alignment::Mib => Some(1u64 << 20),
+        Alignment::Default | Alignment::None => None,
+    };
+    let lv = tokens.value("--lv").map(str::to_owned);
+    let grow_lv = tokens.has("--grow-lv");
+    if lv.is_some() && !grow_lv {
+        return Err(UsageError::new(
+            "`--lv` only applies together with `--grow-lv`",
+        ));
+    }
+    let command = Command::Resize(ResizeRequest {
+        partition,
+        size,
+        end,
+        grow_to_end,
+        align,
+        allow_move: tokens.has("--allow-move"),
+        chunk: chunk_bytes(&tokens)?,
+        grow_lv,
+        lv,
+        no_fs: tokens.has("--no-fs"),
+        dry_run,
+    });
+    Ok(Request::new(target, command)
+        .with_sector_size(sector_size(&tokens)?)
+        .with_identity(identity(&tokens))
+        .with_confirmation(tokens.has("--yes")))
+}
+
+/// `resize` 的 SIZE：绝对、`+N`/`-N`、`+N%`/`-N%` 与 `grow`。
+fn parse_size_spec(raw: &str) -> Result<SizeSpec, UsageError> {
+    if raw == "grow" {
+        return Ok(SizeSpec::Grow);
+    }
+    if let Some(percent) = raw.strip_suffix('%') {
+        let (grow, digits) = match percent.strip_prefix('+') {
+            Some(rest) => (true, rest),
+            None => match percent.strip_prefix('-') {
+                Some(rest) => (false, rest),
+                None => {
+                    return Err(UsageError::new("a percentage SIZE needs a leading + or -"));
+                }
+            },
+        };
+        let (num, denom) = decimal(digits)
+            .ok_or_else(|| UsageError::new(format!("`{raw}` is not a percentage")))?;
+        return Ok(SizeSpec::Percent { grow, num, denom });
+    }
+    if let Some(rest) = raw.strip_prefix('+') {
+        return Ok(SizeSpec::Delta {
+            grow: true,
+            bytes: absolute_size(rest)?,
+        });
+    }
+    if let Some(rest) = raw.strip_prefix('-') {
+        return Ok(SizeSpec::Delta {
+            grow: false,
+            bytes: absolute_size(rest)?,
+        });
+    }
+    Ok(SizeSpec::Absolute(absolute_size(raw)?))
 }
 
 fn parse_new(args: &[String]) -> Result<Request, UsageError> {

@@ -9,6 +9,7 @@ pub mod digest;
 pub mod filesystem;
 pub mod postcondition;
 pub mod relocate;
+pub mod resize;
 pub mod state;
 pub mod table;
 pub mod token;

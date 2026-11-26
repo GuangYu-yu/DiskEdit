@@ -1,6 +1,6 @@
 //! 现场结论的文本渲染。
 
-use crate::app::decide::report::{InspectReport, RecordVerdict};
+use crate::app::decide::report::{InspectReport, RecordVerdict, ResizePreview};
 use crate::platform::Occupancy;
 
 /// `inspect` 的固定文本行。
@@ -23,6 +23,24 @@ pub fn inspect(report: &InspectReport) -> String {
     format!(
         "evidence: {evidence}\nrecord: {record}\nverdict: {}\noccupancy: {occupancy}",
         verdict(&report.record, &report.occupancy)
+    )
+}
+
+/// `resize --dry-run` 的计算预览；不写字节。
+pub fn resize(report: &ResizePreview) -> String {
+    let action = match report.filesystem {
+        Some(content) if report.grow => format!("grow filesystem ({content:?})"),
+        Some(content) => format!("shrink filesystem ({content:?})"),
+        None => "partition table only".to_owned(),
+    };
+    format!(
+        "partition #{}: LBA {}..{} -> {}..{} (sector {}); {action}\n(dry run: no bytes were written)",
+        report.partition,
+        report.start_lba,
+        report.old_end_lba,
+        report.start_lba,
+        report.new_end_lba,
+        report.sector_size
     )
 }
 

@@ -122,7 +122,11 @@ fn run(request: &observe::Request) -> u8 {
             Err(code) => return code,
         },
         Command::Resizefs { .. } => decide::resizefs::mountpoint(),
-        Command::Resize(_) | Command::Recover(_) => return usage(),
+        Command::Resize(_) => match observe_or_exit(&platform, request, observe::capture_resize) {
+            Ok(snapshot) => decide::resize::decide(&snapshot, request),
+            Err(code) => return code,
+        },
+        Command::Recover(_) => return usage(),
     };
     conclude(&platform, request, decision)
 }
@@ -251,7 +255,8 @@ fn conclude(platform: &dyn Platform, request: &observe::Request, decision: Decis
             decide::Report::Check(query) => check(platform, &query),
             other @ (decide::Report::Info(_)
             | decide::Report::Inspect(_)
-            | decide::Report::Records(_)) => match report::render(&other) {
+            | decide::Report::Records(_)
+            | decide::Report::Resize(_)) => match report::render(&other) {
                 Some(report::Rendered::Json(text)) | Some(report::Rendered::Text(text)) => {
                     println!("{text}");
                     exit::SUCCESS
@@ -311,7 +316,13 @@ fn write(
                 | decide::StepKind::ShrinkFilesystem { .. }
         )
     });
-    let outcome = if filesystem {
+    let table = plan
+        .steps()
+        .iter()
+        .any(|step| matches!(step.kind, decide::StepKind::WriteTable { .. }));
+    let outcome = if filesystem && table {
+        execute::resize::run(platform, path, &plan)
+    } else if filesystem {
         execute::filesystem::run(platform, path, &plan)
     } else if relocation {
         execute::relocate::run(platform, path, &plan)

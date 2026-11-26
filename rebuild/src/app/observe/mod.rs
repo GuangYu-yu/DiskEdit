@@ -13,12 +13,14 @@ pub mod edit;
 pub mod filesystem;
 pub mod new;
 pub mod records;
+pub mod resize;
 pub mod snapshot;
 pub mod table;
 
 pub use edit::{EditSnapshot, TableFacts, capture_edit};
 pub use filesystem::{FilesystemSnapshot, PartitionFacts, capture as capture_filesystem};
 pub use new::{CapturedRegion, NewSnapshot, PriorRecord, PriorState, capture_new};
+pub use resize::{ResizeSnapshot, capture_resize};
 pub use snapshot::{
     CaptureError, InspectSnapshot, RecordSnapshot, Snapshot, TargetFacts, capture, capture_inspect,
     capture_records,

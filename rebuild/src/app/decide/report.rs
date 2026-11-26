@@ -18,6 +18,21 @@ pub enum Report {
     Inspect(InspectReport),
     Records(RecordsReport),
     Check(CheckQuery),
+    Resize(ResizePreview),
+}
+
+/// `resize --dry-run` 的计算预览：只给区间与文件系统动作，不写任何字节。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ResizePreview {
+    pub partition: u32,
+    pub start_lba: u64,
+    pub old_end_lba: u64,
+    pub new_end_lba: u64,
+    pub sector_size: u64,
+    /// 文件系统动作；`None` 表示本次只改表（`--no-fs` 或无文件系统）。
+    pub filesystem: Option<ContentKind>,
+    /// 动作是扩容还是收缩。
+    pub grow: bool,
 }
 
 /// `info` 的整盘视图。

@@ -104,7 +104,7 @@ pub fn capture_edit(
     })
 }
 
-fn capture_gpt(
+pub(super) fn capture_gpt(
     handle: &dyn TargetHandle,
     total_bytes: u64,
     sector_size: u64,
@@ -182,7 +182,7 @@ fn capture_gpt(
     }
 }
 
-fn capture_mbr(
+pub(super) fn capture_mbr(
     handle: &dyn TargetHandle,
     total_bytes: u64,
     sector_size: u64,

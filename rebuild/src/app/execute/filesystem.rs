@@ -29,7 +29,7 @@ const WIPE_CHUNK: usize = 1 << 20;
 
 /// 执行一份只含文件系统步骤的计划。
 pub fn run(platform: &dyn Platform, target: &Path, plan: &ConfirmedPlan) -> Outcome {
-    match execute(platform, target, plan) {
+    match execute_plan(platform, target, plan) {
         Ok(()) => Outcome::completed(),
         Err((error, touched)) => failure(error, touched),
     }
@@ -48,6 +48,8 @@ enum FsAction {
     },
     Shrink {
         partition: u32,
+        filesystem: FsKind,
+        bytes: u64,
     },
 }
 
@@ -56,12 +58,12 @@ impl FsAction {
         match self {
             Self::Make { partition, .. }
             | Self::Grow { partition, .. }
-            | Self::Shrink { partition } => *partition,
+            | Self::Shrink { partition, .. } => *partition,
         }
     }
 }
 
-fn execute(
+pub(super) fn execute_plan(
     platform: &dyn Platform,
     target: &Path,
     plan: &ConfirmedPlan,
@@ -125,11 +127,10 @@ fn execute(
         FsAction::Grow { filesystem, .. } => {
             grow(platform, *filesystem, device.device())?;
         }
-        FsAction::Shrink { .. } => {
-            return Err((
-                ExecError::InvalidPlan("shrink is not part of this executor".to_owned()),
-                false,
-            ));
+        FsAction::Shrink {
+            filesystem, bytes, ..
+        } => {
+            shrink(platform, *filesystem, device.device(), *bytes)?;
         }
     }
 
@@ -137,7 +138,7 @@ fn execute(
     Ok(())
 }
 
-fn check_identity(
+pub(super) fn check_identity(
     platform: &dyn Platform,
     target: &Path,
     plan: &ConfirmedPlan,
@@ -173,8 +174,14 @@ fn fs_action(steps: &[Step]) -> Result<(FsAction, Region), ExecError> {
                 partition: *partition,
                 filesystem: *filesystem,
             }),
-            StepKind::ShrinkFilesystem { partition, .. } => Some(FsAction::Shrink {
+            StepKind::ShrinkFilesystem {
+                partition,
+                filesystem,
+                bytes,
+            } => Some(FsAction::Shrink {
                 partition: *partition,
+                filesystem: *filesystem,
+                bytes: *bytes,
             }),
             StepKind::Inspect
             | StepKind::Check { .. }
@@ -205,13 +212,13 @@ fn fs_action(steps: &[Step]) -> Result<(FsAction, Region), ExecError> {
 }
 
 /// 一步文件系统动作对应的块设备视图。
-struct Device {
+pub(super) struct Device {
     binding: Option<LoopBinding>,
     path: Option<PathBuf>,
 }
 
 impl Device {
-    fn device(&self) -> &Path {
+    pub(super) fn device(&self) -> &Path {
         match (&self.binding, &self.path) {
             (Some(binding), _) => binding.device(),
             (None, Some(path)) => path,
@@ -220,7 +227,7 @@ impl Device {
     }
 }
 
-fn resolve_device(
+pub(super) fn resolve_device(
     platform: &dyn Platform,
     target: &Path,
     partition: u32,
@@ -250,7 +257,7 @@ fn resolve_device(
     }
 }
 
-fn target_sector_size(platform: &dyn Platform, target: &Path) -> Result<u64, ExecError> {
+pub(super) fn target_sector_size(platform: &dyn Platform, target: &Path) -> Result<u64, ExecError> {
     let handle = platform
         .open_target_read_only(target)
         .map_err(ExecError::from)?;
@@ -330,7 +337,11 @@ fn grow_plan(kind: FsKind) -> Option<GrowPlan> {
     Some(GrowPlan::InPlace(ops))
 }
 
-fn grow(platform: &dyn Platform, kind: FsKind, device: &Path) -> Result<(), (ExecError, bool)> {
+pub(super) fn grow(
+    platform: &dyn Platform,
+    kind: FsKind,
+    device: &Path,
+) -> Result<(), (ExecError, bool)> {
     let plan = grow_plan(kind).ok_or_else(|| {
         (
             ExecError::InvalidPlan("this filesystem has no grow program".to_owned()),
@@ -355,7 +366,83 @@ fn grow(platform: &dyn Platform, kind: FsKind, device: &Path) -> Result<(), (Exe
     }
 }
 
-fn grow_mounted(
+/// 收缩文件系统到指定字节数；只覆盖可离线收缩的族。
+pub(super) fn shrink(
+    platform: &dyn Platform,
+    kind: FsKind,
+    device: &Path,
+    bytes: u64,
+) -> Result<(), (ExecError, bool)> {
+    let dev = device.display().to_string();
+    match kind {
+        FsKind::Ext => {
+            // 尺寸后缀 `s` 以 512 字节扇区计。
+            let sectors = bytes / 512;
+            run_sequence(
+                platform,
+                &[
+                    (Program::E2fsck, vec!["-fp".to_owned(), dev.clone()]),
+                    (Program::Resize2fs, vec![dev.clone(), format!("{sectors}s")]),
+                ],
+            )
+        }
+        FsKind::Ntfs => run_sequence(
+            platform,
+            &[(
+                Program::Ntfsresize,
+                vec![
+                    "-f".to_owned(),
+                    "--size".to_owned(),
+                    bytes.to_string(),
+                    dev.clone(),
+                ],
+            )],
+        ),
+        FsKind::Btrfs => grow_mounted(
+            platform,
+            device,
+            &[(
+                Program::Btrfs,
+                vec![
+                    "filesystem".to_owned(),
+                    "resize".to_owned(),
+                    bytes.to_string(),
+                ],
+            )],
+        ),
+        FsKind::Xfs
+        | FsKind::F2fs
+        | FsKind::Vfat
+        | FsKind::Squashfs
+        | FsKind::Erofs
+        | FsKind::Exfat
+        | FsKind::HfsPlus
+        | FsKind::Apfs
+        | FsKind::Bcachefs
+        | FsKind::Jfs
+        | FsKind::Reiserfs
+        | FsKind::Udf => Err((
+            ExecError::InvalidPlan("this filesystem has no offline shrink program".to_owned()),
+            false,
+        )),
+    }
+}
+
+fn run_sequence(
+    platform: &dyn Platform,
+    ops: &[(Program, Vec<String>)],
+) -> Result<(), (ExecError, bool)> {
+    let mut touched = false;
+    for (program, args) in ops {
+        match run_checked(platform, *program, args) {
+            Ok(()) => touched = true,
+            Err((error, spawned)) => return Err((error, touched || spawned)),
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn grow_mounted(
     platform: &dyn Platform,
     device: &Path,
     ops: &[(Program, Vec<String>)],
@@ -419,7 +506,7 @@ fn grow_mounted(
     Ok(())
 }
 
-fn run_checked(
+pub(super) fn run_checked(
     platform: &dyn Platform,
     program: Program,
     args: &[String],

@@ -714,6 +714,44 @@ pub fn set_mbr_boot(lba0: &[u8], number: u32, on: bool) -> Result<Vec<u8>, EditE
     Ok(out)
 }
 
+/// 改一条 MBR 主分区记录的起止；起点与长度原样落位，不改类型与 boot 标志。
+///
+/// 只覆盖主分区 1..4：扩展容器与逻辑分区不在收缩/扩容范围内。
+pub fn resize_mbr(
+    lba0: &[u8],
+    number: u32,
+    start: u64,
+    end: u64,
+    total_lba: u64,
+) -> Result<Vec<u8>, EditError> {
+    primary_slot(number)?;
+    let index = slot_index(number);
+    let current = require_live_mbr(lba0, number, index)?;
+    if MBR_CONTAINER_TYPES.contains(&current) {
+        return Err(EditError::ContainerTypeByte(current));
+    }
+    if total_lba < 2 || start < 1 || start > end || end >= total_lba {
+        return Err(EditError::OutOfRange {
+            start,
+            end,
+            first: 1,
+            last: total_lba.saturating_sub(1),
+        });
+    }
+    if end > MBR_LBA_MAX {
+        return Err(EditError::PastAddressSpace {
+            start,
+            sectors: end - start + 1,
+            limit: MBR_LBA_MAX,
+        });
+    }
+    let mut out = lba0.to_vec();
+    let offset = MBR_ENTRY_BASE + index * MBR_ENTRY_BYTES;
+    out[offset + 8..offset + 12].copy_from_slice(&(start as u32).to_le_bytes());
+    out[offset + 12..offset + 16].copy_from_slice(&((end - start + 1) as u32).to_le_bytes());
+    Ok(out)
+}
+
 /// 切换 visible ↔ hidden 类型码；已在目标态时返回 `None`。
 pub fn set_mbr_hidden(lba0: &[u8], number: u32, on: bool) -> Result<Option<Vec<u8>>, EditError> {
     primary_slot(number)?;
@@ -858,6 +896,24 @@ mod tests {
         sector[MBR_SIGNATURE_OFFSET] = 0x55;
         sector[MBR_SIGNATURE_OFFSET + 1] = 0xAA;
         sector
+    }
+
+    #[test]
+    fn resize_mbr_rewrites_start_and_size_in_place() {
+        let lba0 = mbr_bytes(&[(0x83, 2048, 1024)]);
+        let resized = resize_mbr(&lba0, 1, 2048, 4095, 8192).expect("主分区可扩");
+        let record = mbr_record(&resized, 0).expect("记录可读");
+        assert_eq!(record.part_type, 0x83, "类型字节保持不变");
+        assert_eq!(record.start_lba, 2048);
+        assert_eq!(record.size_lba, 2048);
+        assert!(matches!(
+            resize_mbr(&lba0, 1, 0, 100, 8192),
+            Err(EditError::OutOfRange { .. })
+        ));
+        assert!(matches!(
+            resize_mbr(&lba0, 1, 2048, 9000, 8192),
+            Err(EditError::OutOfRange { .. })
+        ));
     }
 
     #[test]

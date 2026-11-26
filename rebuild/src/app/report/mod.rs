@@ -22,6 +22,7 @@ pub fn render(report: &Report) -> Option<Rendered> {
         Report::Info(info) => Some(Rendered::Json(json::info(info))),
         Report::Records(records) => Some(Rendered::Json(json::records(records))),
         Report::Inspect(inspect) => Some(Rendered::Text(text::inspect(inspect))),
+        Report::Resize(resize) => Some(Rendered::Text(text::resize(resize))),
         Report::Check(_) => None,
     }
 }
