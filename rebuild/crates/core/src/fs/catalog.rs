@@ -185,7 +185,7 @@ pub const fn profile(kind: ContentKind) -> Profile {
             grow: Support::Tools(F2FS_GROW),
             shrink: Support::Unsupported("f2fs shrink is not wired to a tool"),
             attrs: Support::Unsupported("f2fs attributes are not wired to a tool"),
-            check: Support::Tools(&[Program::FsckF2fs]),
+            check: Support::Unsupported("the f2fs checker has no read-only mode"),
             mkfs: Support::Tools(&[Program::MkfsF2fs]),
             mount: MountNeed::Never,
             shrink_scope: ShrinkScope::Any,

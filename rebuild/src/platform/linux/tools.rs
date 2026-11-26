@@ -56,13 +56,13 @@ pub fn executable(program: Program) -> &'static str {
 pub fn check_arguments(program: Program) -> &'static [&'static str] {
     match program {
         Program::E2fsck => &["-f", "-n"],
-        Program::FsckF2fs => &["-n"],
         Program::XfsRepair => &["-n"],
         Program::Btrfs => &["check", "--readonly"],
         Program::FsckVfat => &["-n"],
         Program::FsckExfat => &["-n"],
         Program::Ntfsfix => &["-n"],
         Program::Resize2fs
+        | Program::FsckF2fs
         | Program::Dumpe2fs
         | Program::Mke2fs
         | Program::Tune2fs

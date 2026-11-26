@@ -297,6 +297,60 @@ s14_multidevice_btrfs_refused() {
   rm -f /tmp/s14a.img /tmp/s14b.img
 }
 
+# NTFS：mkfs + check 走真实 ntfs-3g。
+s15_ntfs_mkfs_check() {
+  newdisk /tmp/s15.img 200
+  printf 'label: gpt\n, 128M, L\n' | sfdisk "$L" >/dev/null 2>&1; sleep 1
+  "$DE" mkfs "$L:1" ntfs --yes >/tmp/o 2>&1; rc=$?
+  assert_rc s15_mkfs_rc 0 "$rc"
+  blkid -o value -s TYPE "${L}p1" >/tmp/o 2>&1
+  assert_eq s15_mkfs_type "ntfs" "$(cat /tmp/o)"
+  "$DE" check "$L:1" >/tmp/o 2>&1; rc=$?
+  assert_rc s15_check_rc 0 "$rc"
+  detach "$L"; rm -f /tmp/s15.img
+}
+
+# exFAT：mkfs + check 走真实 exfatprogs。
+s16_exfat_mkfs_check() {
+  newdisk /tmp/s16.img 200
+  printf 'label: gpt\n, 64M, L\n' | sfdisk "$L" >/dev/null 2>&1; sleep 1
+  "$DE" mkfs "$L:1" exfat --yes >/tmp/o 2>&1; rc=$?
+  assert_rc s16_mkfs_rc 0 "$rc"
+  blkid -o value -s TYPE "${L}p1" >/tmp/o 2>&1
+  assert_eq s16_mkfs_type "exfat" "$(cat /tmp/o)"
+  "$DE" check "$L:1" >/tmp/o 2>&1; rc=$?
+  assert_rc s16_check_rc 0 "$rc"
+  detach "$L"; rm -f /tmp/s16.img
+}
+
+# f2fs：mkfs + check 走真实 f2fs-tools。
+s17_f2fs_mkfs_check() {
+  newdisk /tmp/s17.img 200
+  printf 'label: gpt\n, 64M, L\n' | sfdisk "$L" >/dev/null 2>&1; sleep 1
+  "$DE" mkfs "$L:1" f2fs --yes >/tmp/o 2>&1; rc=$?
+  assert_rc s17_mkfs_rc 0 "$rc"
+  blkid -o value -s TYPE "${L}p1" >/tmp/o 2>&1
+  assert_eq s17_mkfs_type "f2fs" "$(cat /tmp/o)"
+  "$DE" check "$L:1" >/tmp/o 2>&1; rc=$?
+  assert_rc s17_check_rc 6 "$rc"
+  grep -q "unsupported" /tmp/o && ok s17_check_message || no s17_check_message "check 未报 unsupported"
+  detach "$L"; rm -f /tmp/s17.img
+}
+
+# NTFS 扩容：真实 ntfsresize 把卷撑到分区末尾。
+s18_ntfs_grow() {
+  newdisk /tmp/s18.img 300
+  printf 'label: gpt\n, 96M, L\n' | sfdisk "$L" >/dev/null 2>&1; sleep 1
+  mkntfs -q -F "${L}p1" >/dev/null 2>&1 || { no s18_mkfs "mkntfs failed"; detach "$L"; rm -f /tmp/s18.img; return; }
+  size_of() { ntfsresize --info --force "$1" 2>&1 | grep 'Current volume size' | grep -o '[0-9][0-9]* bytes' | head -1 | cut -d' ' -f1; }
+  before=$(size_of "${L}p1")
+  "$DE" resize "$L:1" --grow-to-end --yes >/tmp/o 2>&1; rc=$?
+  assert_rc s18_grow_rc 0 "$rc"
+  after=$(size_of "${L}p1")
+  assert_gt s18_volume_grew "$after" "$before"
+  detach "$L"; rm -f /tmp/s18.img
+}
+
 echo "=== SCENARIOS START ==="
 s1_offline_ext4_grow
 s2_offline_ext4_shrink
@@ -312,11 +366,15 @@ s11_mkfs_and_check
 s12_online_xfs_grow
 s13_vfat_mkfs
 s14_multidevice_btrfs_refused
+s15_ntfs_mkfs_check
+s16_exfat_mkfs_check
+s17_f2fs_mkfs_check
+s18_ntfs_grow
 echo "=== SCENARIOS SUMMARY pass=$PASS fail=$FAIL failed=[$FAILED] ==="
 "##;
 
 /// 来宾需要的工具集：分区、文件系统、LVM、内核模块与探测。
-const PACKAGES: &str = "lvm2,btrfs-progs,xfsprogs,dosfstools,exfatprogs,ntfs-3g,kmod,\
+const PACKAGES: &str = "lvm2,btrfs-progs,xfsprogs,dosfstools,exfatprogs,ntfs-3g,f2fs-tools,kmod,\
 e2fsprogs,util-linux,procps,pciutils,fdisk";
 
 #[test]

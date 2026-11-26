@@ -33,7 +33,8 @@ SA2-005	xfsprogs	xfs_growfs -n	依赖行为	xfs 无设备级尺寸探针，须�
 SA2-006	btrfs-progs	btrfs filesystem resize 6.6.3 usage	依赖行为	btrfs 扩容以 superblock 的 total_bytes 为事实	在线扩容后从 superblock 回读 total_bytes 与 sectorsize，覆盖不足落已写待恢复	tests/online.rs::an_online_btrfs_grow_is_verified_from_the_superblock	已认领	
 SA2-007	btrfs-progs	btrfs filesystem resize 6.6.3 usage	依赖行为	文件系统缩容失败时不得再动分区表	btrfs 收缩工具失败或未达目标时，分区表与内核视图保持不变	tests/online.rs::a_btrfs_shrink_that_stopped_short_never_shrinks_the_partition	已认领	
 SA2-008	btrfs-progs	btrfs filesystem resize 6.6.3 usage	依赖行为	缺外部工具时不能猜测结果	工具不可用时在写任何字节之前按不支持拒绝	tests/online.rs::online_btrfs_shrink_without_the_tool_is_refused_before_any_write	已认领	
-SA2-009	ntfs-3g	ntfsresize 2022.10.3 usage	依赖行为	ntfsresize 需要强制旗标与绝对字节尺寸	执行参数固定为 -f 与 --size <bytes>；缺参数级用例，待补	owner:SA3	已登记缺口	
-SA2-010	f2fs-tools	f2fs-tools（宿主未装）	依赖行为	f2fs 扩容次序为 fsck.f2fs 后 resize.f2fs	档案表固定该次序；宿主无 f2fs 工具，真实执行未验证	owner:SA3	已登记缺口	
+SA2-009	ntfs-3g	ntfsresize 2022.10.3 usage	依赖行为	ntfsresize 需要强制旗标与绝对字节尺寸	参数固定 -f 与绝对字节；真机 s18 扩卷后卷尺寸大于扩前	tests/qemu_suite.rs::real_kernel_behaviour_suite	已认领	
+SA2-010	f2fs-tools	f2fs-tools 1.16.0	依赖行为	f2fs 扩容次序为 fsck.f2fs 后 resize.f2fs	档案表固定该次序；mkfs 与不支持检查已在真机覆盖，扩容次序仍未真机执行	owner:SA3	已登记缺口	
 SA2-011	全部 T2	plan/01 §9	依赖行为	工具跨版本输出差异可能改变解析结果	只解析稳定字段并在测试中固定采样；跨版本矩阵未建立	owner:SA3	已登记缺口	
-SA2-012	全部 T2	QEMU s13	依赖行为	各文件系统族 mkfs 与 check 的真实工具覆盖面	vfat 已在真内核覆盖；exfat/ntfs/f2fs 的 mkfs 与 check 未在真实工具下验证	owner:SA3	已登记缺口	
+SA2-012	全部 T2	QEMU s13-s17	依赖行为	各文件系统族 mkfs 与 check 的真实工具覆盖面	vfat/ntfs/exfat/f2fs 的 mkfs 均在真内核覆盖；检查覆盖 vfat/ntfs/exfat，f2fs 因无只读检查器按不支持拒绝	tests/qemu_suite.rs::real_kernel_behaviour_suite	已认领	
+SA2-013	f2fs-tools	f2fs-tools 1.16.0 usage	依赖行为	f2fs 检查器不支持只读旗标，传 -n 会报参数错误并掩盖真实状态	档案表把 f2fs 检查登记为不支持，check 返回 6 而不是把工具参数错误当成磁盘问题	tests/qemu_suite.rs::real_kernel_behaviour_suite	已认领	
