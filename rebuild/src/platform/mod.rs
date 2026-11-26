@@ -427,6 +427,15 @@ pub trait Platform: Send + Sync {
     /// 目标的宿主形态；只读元数据，不打开文件。
     fn path_kind(&self, path: &Path) -> TargetKind;
 
+    /// 本宿主能否对目标所在的块设备执行分区表与视图操作（BLKPG/BLKRRPART、挂载）。
+    ///
+    /// 普通文件经 loop 得到分区视图，不受该能力限制；缺能力的宿主不能假装能做，
+    /// 没有可用载体时上层据此按"不支持"拒绝，而不是照常执行再得到内核 `EPERM`。
+    fn filesystem_ready(&self, path: &Path) -> bool {
+        let _ = path;
+        false
+    }
+
     /// 目标本身是不是块设备上的分区节点（`/dev/sda1`），而不是整盘。
     fn is_partition_node(&self, path: &Path) -> bool;
 

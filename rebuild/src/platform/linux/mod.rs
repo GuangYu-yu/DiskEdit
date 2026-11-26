@@ -51,6 +51,14 @@ impl Platform for LinuxPlatform {
         }
     }
 
+    fn filesystem_ready(&self, path: &Path) -> bool {
+        match self.path_kind(path) {
+            TargetKind::File => true,
+            TargetKind::BlockDevice => block_view_writable(path),
+            TargetKind::Other => false,
+        }
+    }
+
     fn is_partition_node(&self, path: &Path) -> bool {
         let Ok(metadata) = std::fs::metadata(path) else {
             return false;
@@ -416,6 +424,27 @@ fn block_sector_size(file: &File) -> Option<u64> {
     } else {
         None
     }
+}
+
+/// 本进程能否对这块设备执行分区表重读。
+///
+/// 用真实的 `BLKRRPART` 探测，而不是 `euid`/`CapEff` 之类的代理：重读分区表是
+/// 幂等操作，能执行就说明本宿主具备块层能力。`EPERM`/`EACCES` 是能力缺失；
+/// `EBUSY` 等其它错误说明能力在、只是设备正被占用，不能据此判为不支持。
+fn block_view_writable(path: &Path) -> bool {
+    let Ok(file) = OpenOptions::new().read(true).write(true).open(path) else {
+        return false;
+    };
+    // BLKRRPART：让内核丢弃并重读分区表。
+    const BLKRRPART: libc::c_ulong = 0x125f;
+    // SAFETY: fd 来自刚打开的设备；BLKRRPART 不读取用户缓冲。
+    if unsafe { libc::ioctl(file.as_raw_fd(), BLKRRPART) } == 0 {
+        return true;
+    }
+    !matches!(
+        io::Error::last_os_error().raw_os_error(),
+        Some(libc::EPERM) | Some(libc::EACCES)
+    )
 }
 
 fn block_identity(path: &Path, metadata: &std::fs::Metadata) -> PlatformResult<Fingerprint> {

@@ -8,4 +8,4 @@ pub use catalog::{
     MountNeed, OnlineGrow, Profile, ShrinkScope, Support, Verb, online_grow, profile,
 };
 pub use profile::{ContentKind, FsKind, MkfsKind};
-pub use program::Program;
+pub use program::{Access, Determinism, Program};

@@ -45,6 +45,7 @@ pub(super) fn execute_plan(
             )
         })?;
     let (segment_size, stamp, segments) = table_parts(step)?;
+    super::filesystem::ensure_block_capability(platform, target).map_err(|error| (error, false))?;
     let mut handle = platform
         .open_target(target)
         .map_err(|error| (ExecError::from(error), false))?;

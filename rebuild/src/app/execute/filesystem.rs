@@ -45,6 +45,8 @@ enum FsAction {
     Grow {
         partition: u32,
         filesystem: FsKind,
+        /// 文件系统应长到的字节数（分区容量）。
+        bytes: u64,
     },
     Shrink {
         partition: u32,
@@ -69,6 +71,7 @@ pub(super) fn execute_plan(
     plan: &ConfirmedPlan,
 ) -> Result<(), (ExecError, bool)> {
     let (action, region) = fs_action(plan.steps()).map_err(|error| (error, false))?;
+    ensure_block_capability(platform, target).map_err(|error| (error, false))?;
     // 锁前核对一次身份，持锁后再核对一次。
     check_identity(platform, target, plan).map_err(|error| (error, false))?;
     let mut session =
@@ -77,6 +80,8 @@ pub(super) fn execute_plan(
     session
         .begin_irreversible(plan.request_digest(), FS_INTENT)
         .map_err(|error| (error, false))?;
+    // 本步原像已落盘；此后每一次工具调用都必须带着它，写类工具无法在记录之外执行。
+    let token = session.token();
 
     let device = resolve_device(
         platform,
@@ -99,7 +104,6 @@ pub(super) fn execute_plan(
                 let mut handle = platform
                     .open_target(device.device())
                     .map_err(|error| (ExecError::from(error), false))?;
-                let token = session.token();
                 let declared = [Region::sized(0, region.len()).map_err(|_| {
                     (
                         ExecError::InvalidPlan(
@@ -122,20 +126,54 @@ pub(super) fn execute_plan(
                     )
                 })?;
             args.push(device.device().display().to_string());
-            run_checked(platform, program, &args).map_err(|(error, _)| (error, true))?;
+            run_checked(platform, program, &args, &token)
+                .map(|_| ())
+                .map_err(|(error, _)| (error, true))?;
         }
-        FsAction::Grow { filesystem, .. } => {
-            grow(platform, *filesystem, device.device())?;
+        FsAction::Grow {
+            filesystem, bytes, ..
+        } => {
+            grow(platform, *filesystem, device.device(), *bytes, &token)?;
         }
         FsAction::Shrink {
             filesystem, bytes, ..
         } => {
-            shrink(platform, *filesystem, device.device(), *bytes)?;
+            shrink(platform, *filesystem, device.device(), *bytes, &token)?;
         }
     }
 
     session.commit().map_err(|error| (error, true))?;
     Ok(())
+}
+
+/// 块设备目标需要块层能力（分区视图、内核重读、挂载）。
+///
+/// 普通文件经 loop 得到分区视图，不受限；块设备目标在缺能力且无载体时按
+/// "不支持"拒绝，而不是照常执行再得到内核 `EPERM`。
+pub(super) fn ensure_block_capability(
+    platform: &dyn Platform,
+    target: &Path,
+) -> Result<(), ExecError> {
+    match capability_refusal(
+        platform.path_kind(target),
+        platform.filesystem_ready(target),
+    ) {
+        Some(error) => Err(error),
+        None => Ok(()),
+    }
+}
+
+/// 纯判据：文件目标不需要块层能力；块设备目标按探测结果决定。
+fn capability_refusal(kind: TargetKind, ready: bool) -> Option<ExecError> {
+    if kind == TargetKind::BlockDevice && !ready {
+        return Some(ExecError::Unsupported(
+            "this host cannot adjust a block device's partition view (missing CAP_SYS_ADMIN) and \
+             no VM carrier is configured; make DISKEDIT_VM_BUNDLE available or run on a host with \
+             the capability"
+                .to_owned(),
+        ));
+    }
+    None
 }
 
 pub(super) fn check_identity(
@@ -169,10 +207,11 @@ fn fs_action(steps: &[Step]) -> Result<(FsAction, Region), ExecError> {
             StepKind::GrowFilesystem {
                 partition,
                 filesystem,
-                ..
+                bytes,
             } => Some(FsAction::Grow {
                 partition: *partition,
                 filesystem: *filesystem,
+                bytes: *bytes,
             }),
             StepKind::ShrinkFilesystem {
                 partition,
@@ -341,6 +380,8 @@ pub(super) fn grow(
     platform: &dyn Platform,
     kind: FsKind,
     device: &Path,
+    bytes: u64,
+    token: &Recorded,
 ) -> Result<(), (ExecError, bool)> {
     let plan = grow_plan(kind).ok_or_else(|| {
         (
@@ -351,18 +392,28 @@ pub(super) fn grow(
     match plan {
         GrowPlan::InPlace(ops) => {
             let mut touched = false;
+            let mut last = None;
             for (program, mut args) in ops {
                 args.push(device.display().to_string());
-                match run_checked(platform, program, &args) {
-                    Ok(()) => touched = true,
+                match run_checked(platform, program, &args, token) {
+                    Ok(run) => {
+                        touched = true;
+                        last = Some((program, run));
+                    }
                     Err((error, spawned)) => {
                         return Err((error, touched || spawned));
                     }
                 }
             }
+            // 扩到分区容量之后回读几何：工具报成功不等于文件系统真的长满了。
+            if kind == FsKind::Ext
+                && let Some((Program::Dumpe2fs, run)) = last
+            {
+                verify_ext_size(&run, bytes).map_err(|error| (error, touched))?;
+            }
             Ok(())
         }
-        GrowPlan::Mounted(ops) => grow_mounted(platform, device, &ops),
+        GrowPlan::Mounted(ops) => grow_mounted(platform, device, &ops, token),
     }
 }
 
@@ -372,19 +423,26 @@ pub(super) fn shrink(
     kind: FsKind,
     device: &Path,
     bytes: u64,
+    token: &Recorded,
 ) -> Result<(), (ExecError, bool)> {
     let dev = device.display().to_string();
     match kind {
         FsKind::Ext => {
             // 尺寸后缀 `s` 以 512 字节扇区计。
             let sectors = bytes / 512;
-            run_sequence(
+            let last = run_sequence(
                 platform,
                 &[
                     (Program::E2fsck, vec!["-fp".to_owned(), dev.clone()]),
                     (Program::Resize2fs, vec![dev.clone(), format!("{sectors}s")]),
+                    (Program::Dumpe2fs, vec![dev.clone()]),
                 ],
-            )
+                token,
+            )?;
+            if let Some((Program::Dumpe2fs, run)) = last {
+                verify_ext_size(&run, bytes).map_err(|error| (error, true))?;
+            }
+            Ok(())
         }
         FsKind::Ntfs => run_sequence(
             platform,
@@ -397,7 +455,9 @@ pub(super) fn shrink(
                     dev.clone(),
                 ],
             )],
-        ),
+            token,
+        )
+        .map(|_| ()),
         FsKind::Btrfs => grow_mounted(
             platform,
             device,
@@ -409,6 +469,7 @@ pub(super) fn shrink(
                     bytes.to_string(),
                 ],
             )],
+            token,
         ),
         FsKind::Xfs
         | FsKind::F2fs
@@ -428,24 +489,32 @@ pub(super) fn shrink(
     }
 }
 
+/// 顺序运行外部工具；每个调用都在写令牌包围之下。返回最后一次成功的运行，
+/// 供调用方做尺寸回读。
 fn run_sequence(
     platform: &dyn Platform,
     ops: &[(Program, Vec<String>)],
-) -> Result<(), (ExecError, bool)> {
+    token: &Recorded,
+) -> Result<Option<(Program, ToolRun)>, (ExecError, bool)> {
     let mut touched = false;
+    let mut last = None;
     for (program, args) in ops {
-        match run_checked(platform, *program, args) {
-            Ok(()) => touched = true,
+        match run_checked(platform, *program, args, token) {
+            Ok(run) => {
+                touched = true;
+                last = Some((*program, run));
+            }
             Err((error, spawned)) => return Err((error, touched || spawned)),
         }
     }
-    Ok(())
+    Ok(last)
 }
 
 pub(super) fn grow_mounted(
     platform: &dyn Platform,
     device: &Path,
     ops: &[(Program, Vec<String>)],
+    token: &Recorded,
 ) -> Result<(), (ExecError, bool)> {
     let mount_point = platform
         .temporary_directory("mount")
@@ -474,8 +543,8 @@ pub(super) fn grow_mounted(
     for (program, args) in ops {
         let mut args = args.clone();
         args.push(mount_point.display().to_string());
-        match run_checked(platform, *program, &args) {
-            Ok(()) => touched = true,
+        match run_checked(platform, *program, &args, token) {
+            Ok(_) => touched = true,
             Err((error, spawned)) => {
                 touched |= spawned;
                 failure = Some(error);
@@ -506,13 +575,19 @@ pub(super) fn grow_mounted(
     Ok(())
 }
 
+/// 运行一个写类工具；令牌是"本步原像已落盘"的唯一凭据，调用点无法跳过登记。
+///
+/// 文件系统检查工具的退出码 1/2 表示"检查出问题并已修复"（例如脏 ext），那是成功而不是
+/// 失败；修复本身已写目标，后续步骤若失败，调用方按"已写过"归入部分完成。
 pub(super) fn run_checked(
     platform: &dyn Platform,
     program: Program,
     args: &[String],
-) -> Result<(), (ExecError, bool)> {
-    match run_outcome(platform.run(program, args)) {
-        ToolOutcome::Done => Ok(()),
+    token: &Recorded,
+) -> Result<ToolRun, (ExecError, bool)> {
+    let _ = token;
+    match run_outcome(program, platform.run(program, args)) {
+        ToolOutcome::Done(run) => Ok(run),
         // 进程跑过、结局已知或不可知：目标可能已被改动，进恢复流程。
         ToolOutcome::Failed(run) | ToolOutcome::Indeterminate(run) => Err((
             ExecError::Postcondition(format!(
@@ -533,9 +608,9 @@ pub(super) fn run_checked(
 /// 关键是"没跑起来"与"跑过但结局不可知"必须分开：前者可以直接报未改动，
 /// 后者可能已经写了一半，只有它能进入恢复流程。
 enum ToolOutcome {
-    /// 启动并退出 0。
-    Done,
-    /// 启动并退出非零。
+    /// 启动并正常结束（检查器的"已修复"也算）。
+    Done(ToolRun),
+    /// 启动并退出非零且不是可接受的成功码。
     Failed(ToolRun),
     /// 没有启动，工具不可用或无法执行。
     NotStarted(crate::platform::PlatformError),
@@ -543,15 +618,54 @@ enum ToolOutcome {
     Indeterminate(ToolRun),
 }
 
-fn run_outcome(result: crate::platform::PlatformResult<ToolRun>) -> ToolOutcome {
+/// 该程序的退出码是否表示成功。检查器的 1 与 2 是"已修复/已修复需重启"，
+/// 校验通过的命令在脏文件系统上会给出这两个码。
+fn exit_is_clean(program: Program, code: i32) -> bool {
+    if let Program::E2fsck = program {
+        return (0..=2).contains(&code);
+    }
+    code == 0
+}
+
+fn run_outcome(program: Program, result: crate::platform::PlatformResult<ToolRun>) -> ToolOutcome {
     match result {
         Err(error) => ToolOutcome::NotStarted(error),
         Ok(run) => match run.code {
-            Some(0) => ToolOutcome::Done,
+            Some(code) if exit_is_clean(program, code) => ToolOutcome::Done(run),
             Some(_) => ToolOutcome::Failed(run),
             None => ToolOutcome::Indeterminate(run),
         },
     }
+}
+
+/// 从文件系统尺寸探针的输出读块数与块大小。
+fn ext_geometry(stdout: &str) -> Option<(u64, u64)> {
+    let mut count = None;
+    let mut size = None;
+    for line in stdout.lines() {
+        if let Some(rest) = line.strip_prefix("Block count:") {
+            count = rest.split_whitespace().next().and_then(|t| t.parse().ok());
+        } else if let Some(rest) = line.strip_prefix("Block size:") {
+            size = rest.split_whitespace().next().and_then(|t| t.parse().ok());
+        }
+    }
+    count.zip(size)
+}
+
+/// 回读核对：文件系统必须长到目标字节数（按块的整数倍对齐）。
+fn verify_ext_size(run: &ToolRun, expected: u64) -> Result<(), ExecError> {
+    let (count, size) = ext_geometry(&run.stdout).ok_or_else(|| {
+        ExecError::Postcondition("the filesystem probe did not report the geometry".to_owned())
+    })?;
+    let total = count
+        .checked_mul(size)
+        .ok_or_else(|| ExecError::Postcondition("the filesystem geometry overflows".to_owned()))?;
+    if total > expected || expected - total >= size {
+        return Err(ExecError::Postcondition(format!(
+            "the filesystem is {total} bytes, not the expected {expected} bytes rounded to its {size}-byte blocks"
+        )));
+    }
+    Ok(())
 }
 
 fn code_text(code: Option<i32>) -> String {
@@ -731,6 +845,28 @@ mod tests {
         assert_eq!(SIGNATURE_SITE_BYTES % 1024, 0);
     }
 
+    // covers: I9
+    #[test]
+    fn write_class_programs_are_named_and_bounded_by_the_token() {
+        use diskedit_core::fs::Access;
+        // 执行器只经 Program 身份调用外部工具。写类工具都带写令牌参数，且文件系统
+        // 改写后以尺寸探针回读核对；只读探针不改变目标。
+        assert_eq!(Program::Dumpe2fs.access(), Access::ReadOnly);
+        for program in [Program::E2fsck, Program::Resize2fs, Program::Mke2fs] {
+            assert_eq!(
+                program.access(),
+                Access::WritesTarget,
+                "{program:?} 写目标，必须在写令牌包围下执行"
+            );
+        }
+        let filled = ToolRun {
+            code: Some(0),
+            stdout: "Block count:   16\nBlock size:    512\n".to_owned(),
+            stderr: String::new(),
+        };
+        assert!(verify_ext_size(&filled, 16 * 512).is_ok());
+    }
+
     // covers: B27
     #[test]
     fn a_tool_without_an_exit_status_is_indeterminate() {
@@ -741,23 +877,94 @@ mod tests {
             stdout: String::new(),
             stderr: String::new(),
         };
-        assert!(matches!(run_outcome(Ok(done.clone())), ToolOutcome::Done));
+        assert!(matches!(
+            run_outcome(Program::Resize2fs, Ok(done.clone())),
+            ToolOutcome::Done(_)
+        ));
 
         let failed = ToolRun {
             code: Some(1),
             ..done.clone()
         };
-        assert!(matches!(run_outcome(Ok(failed)), ToolOutcome::Failed(_)));
+        assert!(matches!(
+            run_outcome(Program::Resize2fs, Ok(failed)),
+            ToolOutcome::Failed(_)
+        ));
 
         let signalled = ToolRun { code: None, ..done };
         assert!(matches!(
-            run_outcome(Ok(signalled)),
+            run_outcome(Program::Resize2fs, Ok(signalled)),
             ToolOutcome::Indeterminate(_)
         ));
 
         assert!(matches!(
-            run_outcome(Err(PlatformError::not_supported("no tool"))),
+            run_outcome(
+                Program::Resize2fs,
+                Err(PlatformError::not_supported("no tool"))
+            ),
             ToolOutcome::NotStarted(_)
         ));
+    }
+
+    // covers: D4
+    #[test]
+    fn a_repaired_filesystem_is_a_success_and_a_later_failure_is_partial() {
+        // 脏 ext 上检查器会报 1（已修复）；那是成功，修复本身已写目标。
+        let repaired = ToolRun {
+            code: Some(1),
+            stdout: String::new(),
+            stderr: String::new(),
+        };
+        assert!(matches!(
+            run_outcome(Program::E2fsck, Ok(repaired)),
+            ToolOutcome::Done(_)
+        ));
+        // 4 表示存在未修复的错误：不得当作修复成功。
+        let uncorrected = ToolRun {
+            code: Some(4),
+            stdout: String::new(),
+            stderr: String::new(),
+        };
+        assert!(matches!(
+            run_outcome(Program::E2fsck, Ok(uncorrected)),
+            ToolOutcome::Failed(_)
+        ));
+        assert!(exit_is_clean(Program::E2fsck, 2));
+        assert!(!exit_is_clean(Program::Resize2fs, 1));
+    }
+
+    #[test]
+    fn the_size_readback_accepts_only_a_filled_filesystem() {
+        let filled = ToolRun {
+            code: Some(0),
+            stdout: "Block count:              12288\nBlock size:               4096\n".to_owned(),
+            stderr: String::new(),
+        };
+        assert!(verify_ext_size(&filled, 12288 * 4096).is_ok());
+        // 比目标小了一整块以上：没有长满。
+        assert!(verify_ext_size(&filled, 12288 * 4096 + 4096).is_err());
+        // 超出目标：不得接受。
+        assert!(verify_ext_size(&filled, 12288 * 4096 - 4096).is_err());
+        // 输出里没有几何：无法核对，按错误交回。
+        let silent = ToolRun {
+            code: Some(0),
+            stdout: String::new(),
+            stderr: String::new(),
+        };
+        assert!(verify_ext_size(&silent, 4096).is_err());
+    }
+
+    // covers: D11
+    #[test]
+    fn a_block_device_without_the_capability_is_refused_as_unsupported() {
+        // 普通文件经 loop 得到分区视图，不需要块层能力。
+        assert!(capability_refusal(TargetKind::File, false).is_none());
+        // 块设备缺能力且无载体：按不支持拒绝，而不是照常执行再得到 EPERM。
+        assert!(matches!(
+            capability_refusal(TargetKind::BlockDevice, false),
+            Some(ExecError::Unsupported(_))
+        ));
+        // 有能力时放行。
+        assert!(capability_refusal(TargetKind::BlockDevice, true).is_none());
     }
 }
