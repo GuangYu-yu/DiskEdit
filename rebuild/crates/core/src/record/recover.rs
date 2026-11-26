@@ -110,6 +110,7 @@ fn parse_prefix(payload: &[u8]) -> Result<Vec<Frame>, String> {
             Err(FrameError::TooManyRegions)
             | Err(FrameError::IntentTooLong)
             | Err(FrameError::PreimageLengthMismatch)
+            | Err(FrameError::PostimageLengthMismatch)
             | Err(FrameError::PreimageTooLarge) => break,
         }
     }
@@ -149,6 +150,7 @@ mod tests {
                 len: 1024,
                 digest: [0x55; 16],
                 data: Vec::new(),
+                after: Vec::new(),
             }],
         }
     }
@@ -249,7 +251,7 @@ mod tests {
         bytes[0] = b'Z';
         assert_eq!(
             recover(&bytes, TARGET),
-            RecoveryPlan::Foreign { magic: *b"ZRB1" }
+            RecoveryPlan::Foreign { magic: *b"ZRB2" }
         );
     }
 

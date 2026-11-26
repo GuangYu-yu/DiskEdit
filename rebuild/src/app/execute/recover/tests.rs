@@ -202,6 +202,10 @@ fn body() -> RecordBody {
 }
 
 fn preimage_frame(original: &[u8]) -> Frame {
+    preimage_frame_with(original, &[])
+}
+
+fn preimage_frame_with(original: &[u8], after: &[u8]) -> Frame {
     let mut hasher = Hasher::new();
     hasher.update(original);
     Frame {
@@ -215,7 +219,19 @@ fn preimage_frame(original: &[u8]) -> Frame {
             len: original.len() as u64,
             digest: hasher.finish(),
             data: original.to_vec(),
+            after: after.to_vec(),
         }],
+    }
+}
+
+fn intent_frame() -> Frame {
+    Frame {
+        seq: 0,
+        kind: FrameKind::Intent,
+        completed: false,
+        irreversible: false,
+        intent: b"write-table".to_vec(),
+        regions: Vec::new(),
     }
 }
 
@@ -309,6 +325,109 @@ fn a_mismatched_region_is_refused_and_kept() {
     );
     assert_eq!(memory.target.lock().unwrap().as_slice(), &[0x55u8; SECTOR]);
     assert!(memory.get(&record_path()).is_some(), "拒绝后必须保留记录");
+}
+
+// covers: B6, B24
+#[test]
+fn a_fully_written_table_is_replayed_back_to_the_preimage() {
+    let original = vec![0xAAu8; SECTOR];
+    let after = vec![0xBBu8; SECTOR];
+    let memory = Memory::with_target(after.clone());
+    memory.put(
+        &record_path(),
+        record_bytes(&[intent_frame(), preimage_frame_with(&original, &after)]),
+    );
+    let plan = confirmed(
+        RecoverMode::ReplayTableOnly,
+        vec![Region::sized(0, SECTOR as u64).unwrap()],
+    );
+    let outcome = run(&memory, Path::new("memory"), &plan);
+    assert!(recovered(&outcome), "{:?}", outcome.reason());
+    assert_eq!(
+        memory.target.lock().unwrap().as_slice(),
+        original.as_slice(),
+        "写后字节应被写回原像"
+    );
+    assert!(memory.get(&record_path()).is_none());
+}
+
+// covers: B6, B24
+#[test]
+fn a_torn_write_with_one_break_point_is_replayed() {
+    let original = vec![0xAAu8; SECTOR];
+    let after = vec![0xBBu8; SECTOR];
+    let mut torn = original.clone();
+    torn[SECTOR / 2..].copy_from_slice(&after[SECTOR / 2..]);
+    let memory = Memory::with_target(torn);
+    memory.put(
+        &record_path(),
+        record_bytes(&[intent_frame(), preimage_frame_with(&original, &after)]),
+    );
+    let plan = confirmed(
+        RecoverMode::ReplayTableOnly,
+        vec![Region::sized(0, SECTOR as u64).unwrap()],
+    );
+    let outcome = run(&memory, Path::new("memory"), &plan);
+    assert!(recovered(&outcome), "{:?}", outcome.reason());
+    assert_eq!(
+        memory.target.lock().unwrap().as_slice(),
+        original.as_slice()
+    );
+    assert!(memory.get(&record_path()).is_none());
+}
+
+// covers: B24
+#[test]
+fn bytes_that_match_neither_side_are_refused_before_any_write() {
+    let original = vec![0xAAu8; SECTOR];
+    let after = vec![0xBBu8; SECTOR];
+    let memory = Memory::with_target(vec![0x5Au8; SECTOR]);
+    memory.put(
+        &record_path(),
+        record_bytes(&[intent_frame(), preimage_frame_with(&original, &after)]),
+    );
+    let plan = confirmed(
+        RecoverMode::ReplayTableOnly,
+        vec![Region::sized(0, SECTOR as u64).unwrap()],
+    );
+    let outcome = run(&memory, Path::new("memory"), &plan);
+    assert!(!recovered(&outcome), "{:?}", outcome.reason());
+    assert_eq!(memory.target.lock().unwrap().as_slice(), &[0x5Au8; SECTOR]);
+    assert!(memory.get(&record_path()).is_some(), "拒绝后必须保留记录");
+}
+
+#[test]
+fn the_second_tear_point_is_a_conflict() {
+    let mut log = TearLog::default();
+    assert_eq!(log.record(512), Ok(()));
+    assert_eq!(log.record(512), Ok(()), "同一断点投影到多条区间不算冲突");
+    assert_eq!(log.record(768), Err(512));
+}
+
+#[test]
+fn recorded_write_classifies_after_torn_and_original() {
+    let pre = [0xAA; 8];
+    let after = [0xBB; 8];
+    assert_eq!(
+        RecordedWrite::of(&after, &after, &pre),
+        Some(RecordedWrite::After)
+    );
+    assert_eq!(
+        RecordedWrite::of(&pre, &after, &pre),
+        Some(RecordedWrite::Original)
+    );
+    let mut torn = pre;
+    torn[4..].copy_from_slice(&after[4..]);
+    assert_eq!(
+        RecordedWrite::of(&torn, &after, &pre),
+        Some(RecordedWrite::Torn { cut: 4 })
+    );
+    assert_eq!(RecordedWrite::of(&[0x5A; 8], &after, &pre), None);
+    assert_eq!(
+        RecordedWrite::of(&[0x5A; 8], &[], &pre),
+        None,
+        "缺写后字节时不得猜测"
+    );
 }
 
 // covers: B8

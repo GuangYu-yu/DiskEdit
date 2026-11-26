@@ -113,6 +113,7 @@ fn damage(error: &diskedit_core::record::RecordError) -> String {
         | RecordError::IntentTooLong
         | RecordError::TooManyRegions
         | RecordError::PreimageLengthMismatch
+        | RecordError::PostimageLengthMismatch
         | RecordError::PreimageTooLarge => {
             "structure: the record's magic is not recognized or its payload does not match the \
              layout this build reads — keep the file; `diskedit recover --release` will not \

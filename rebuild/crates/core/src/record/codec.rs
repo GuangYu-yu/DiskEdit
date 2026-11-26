@@ -51,6 +51,8 @@ pub enum RecordError {
     TooManyRegions,
     /// 原像长度与区间长度不一致。
     PreimageLengthMismatch,
+    /// 写后字节与原像不等长。
+    PostimageLengthMismatch,
     /// 原像字节数超出 `u32`。
     PreimageTooLarge,
 }
@@ -87,6 +89,9 @@ impl std::fmt::Display for RecordError {
             Self::PreimageLengthMismatch => {
                 f.write_str("record preimage length does not match its region")
             }
+            Self::PostimageLengthMismatch => {
+                f.write_str("record postimage length does not match its preimage")
+            }
             Self::PreimageTooLarge => f.write_str("record preimage exceeds the size limit"),
         }
     }
@@ -113,6 +118,7 @@ impl From<FrameError> for RecordError {
             FrameError::TooManyRegions => Self::TooManyRegions,
             FrameError::IntentTooLong => Self::IntentTooLong,
             FrameError::PreimageLengthMismatch => Self::PreimageLengthMismatch,
+            FrameError::PostimageLengthMismatch => Self::PostimageLengthMismatch,
             FrameError::PreimageTooLarge => Self::PreimageTooLarge,
         }
     }
@@ -253,6 +259,7 @@ mod tests {
                 len: 512,
                 digest: [0x33; 16],
                 data: Vec::new(),
+                after: Vec::new(),
             }],
         }
     }

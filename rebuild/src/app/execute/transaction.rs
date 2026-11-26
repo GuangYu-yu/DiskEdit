@@ -100,11 +100,11 @@ impl<'a> RecordSession<'a> {
         self.pending.is_some()
     }
 
-    /// 登记原像；已有同计划记录时复用它，不重写原像。
+    /// 登记原像与写后字节；已有同计划记录时复用它，不重写原像。
     pub fn register(
         &mut self,
         plan_digest: [u8; 32],
-        preimages: &[(Region, Vec<u8>)],
+        segments: &[(Region, Vec<u8>, Vec<u8>)],
     ) -> Result<(), ExecError> {
         if let Some(pending) = self.pending {
             if pending != plan_digest {
@@ -135,9 +135,9 @@ impl<'a> RecordSession<'a> {
                 completed: true,
                 irreversible: false,
                 intent: Vec::new(),
-                regions: preimages
+                regions: segments
                     .iter()
-                    .map(|(region, bytes)| preimage(*region, bytes))
+                    .map(|(region, before, after)| preimage(*region, before, after))
                     .collect(),
             },
         ];
@@ -236,9 +236,9 @@ impl<'a> RecordSession<'a> {
     }
 }
 
-fn preimage(region: Region, bytes: &[u8]) -> Preimage {
+fn preimage(region: Region, before: &[u8], after: &[u8]) -> Preimage {
     let mut hasher = Hasher::new();
-    hasher.update(bytes);
+    hasher.update(before);
     let full = hasher.finish();
     let mut digest = [0u8; PREIMAGE_DIGEST_BYTES];
     digest.copy_from_slice(&full[..PREIMAGE_DIGEST_BYTES]);
@@ -246,7 +246,8 @@ fn preimage(region: Region, bytes: &[u8]) -> Preimage {
         offset: region.start(),
         len: region.len(),
         digest,
-        data: bytes.to_vec(),
+        data: before.to_vec(),
+        after: after.to_vec(),
     }
 }
 
@@ -265,10 +266,11 @@ mod tests {
     #[test]
     fn preimage_digest_covers_the_bytes() {
         let region = Region::sized(512, 4).expect("区间");
-        let left = preimage(region, &[1, 2, 3, 4]);
-        let right = preimage(region, &[1, 2, 3, 5]);
+        let left = preimage(region, &[1, 2, 3, 4], &[9, 9, 9, 9]);
+        let right = preimage(region, &[1, 2, 3, 5], &[9, 9, 9, 9]);
         assert_ne!(left.digest, right.digest);
         assert_eq!(left.offset, 512);
         assert_eq!(left.len, 4);
+        assert_eq!(left.after, vec![9, 9, 9, 9]);
     }
 }

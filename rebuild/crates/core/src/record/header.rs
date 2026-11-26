@@ -7,7 +7,10 @@ use super::MAX_PAYLOAD_BYTES;
 use crate::table::crc32;
 
 /// 记录文件的格式标识。
-pub const MAGIC: [u8; 4] = *b"DRB1";
+///
+/// 帧布局在写入后字节（postimage）加入时改变，按"布局或语义变化就换标识"的约定
+/// 从 `DRB1` 升为 `DRB2`：旧记录会按外来格式识别，只允许 `recover --release`。
+pub const MAGIC: [u8; 4] = *b"DRB2";
 
 /// 记录头长度，字节。
 pub const HEADER_LEN: usize = 16;

@@ -330,6 +330,7 @@ mod tests {
                     len: data.len() as u64,
                     digest: [0x33; 16],
                     data: data.to_vec(),
+                    after: Vec::new(),
                 }]
             },
         }

@@ -2,10 +2,13 @@
 //!
 //! 每帧自带 CRC，因此即使载荷尾部被截断，也能确定哪些帧已经完整落盘。
 //! 帧长度由字段自身推出：序号(4) | 类型(1) | 标记(1) | 区间数(2)
-//! | 区间(偏移 8、长度 8、摘要 16、原像长度 4、原像 × n) | 意图长度(2) | 意图 | CRC(4)。
+//! | 区间(偏移 8、长度 8、摘要 16、原像长度 4、原像 × n、写后长度 4、写后字节 × m)
+//! | 意图长度(2) | 意图 | CRC(4)。
 //!
 //! 原像只在表区步骤出现，用于回滚；数据区步骤的原像长度为零、标记为不可逆，
-//! 回滚时不动数据区、也不回收旧位置。
+//! 回滚时不动数据区、也不回收旧位置。写后字节只随原像一起出现，让恢复能把"本工具
+//! 写了一半"与"别的程序改过"分开：只有当前字节是原像、写后字节或其唯一断点切分时，
+//! 才允许把原像写回。
 
 use crate::table::crc32;
 
@@ -13,6 +16,8 @@ use crate::table::crc32;
 pub const PREIMAGE_DIGEST_BYTES: usize = 16;
 /// 单条区间记录的固定前缀：偏移、长度、原像摘要、原像长度。
 pub const PREIMAGE_HEADER_BYTES: usize = 8 + 8 + PREIMAGE_DIGEST_BYTES + 4;
+/// 写后字节长度字段的字节数（紧跟原像字节之后）。
+const POSTIMAGE_LEN_BYTES: usize = 4;
 /// 帧固定前缀字节数（序号、类型、标记、区间数）。
 const FRAME_PREFIX_BYTES: usize = 8;
 /// 帧 CRC 字节数。
@@ -87,6 +92,8 @@ pub struct Preimage {
     pub digest: [u8; PREIMAGE_DIGEST_BYTES],
     /// 表区的原始字节；数据区为空。
     pub data: Vec<u8>,
+    /// 本步写完后这段区间应有的字节，与 `data` 等长；数据区或未登记时为空。
+    pub after: Vec<u8>,
 }
 
 /// 一帧记录。
@@ -117,13 +124,20 @@ impl Frame {
             if !region.data.is_empty() && region.data.len() as u64 != region.len {
                 return Err(FrameError::PreimageLengthMismatch);
             }
+            if !region.after.is_empty() && region.after.len() != region.data.len() {
+                return Err(FrameError::PostimageLengthMismatch);
+            }
             let data_len =
                 u32::try_from(region.data.len()).map_err(|_| FrameError::PreimageTooLarge)?;
+            let after_len =
+                u32::try_from(region.after.len()).map_err(|_| FrameError::PreimageTooLarge)?;
             out.extend_from_slice(&region.offset.to_le_bytes());
             out.extend_from_slice(&region.len.to_le_bytes());
             out.extend_from_slice(&region.digest);
             out.extend_from_slice(&data_len.to_le_bytes());
             out.extend_from_slice(&region.data);
+            out.extend_from_slice(&after_len.to_le_bytes());
+            out.extend_from_slice(&region.after);
         }
         out.extend_from_slice(&intent_len.to_le_bytes());
         out.extend_from_slice(&self.intent);
@@ -166,16 +180,36 @@ impl Frame {
             let data_end = header_end
                 .checked_add(data_len)
                 .ok_or(FrameError::Incomplete)?;
-            if data_end > bytes.len() || bytes.len() - data_end < 2 + FRAME_CRC_BYTES {
+            let after_len_at = data_end;
+            let after_at = after_len_at
+                .checked_add(POSTIMAGE_LEN_BYTES)
+                .ok_or(FrameError::Incomplete)?;
+            if after_at > bytes.len() || bytes.len() - after_at < 2 + FRAME_CRC_BYTES {
                 return Err(FrameError::Incomplete);
+            }
+            let after_len = u32::from_le_bytes(
+                bytes[after_len_at..after_at]
+                    .try_into()
+                    .expect("刚校验过四个字节"),
+            ) as usize;
+            let after_end = after_at
+                .checked_add(after_len)
+                .ok_or(FrameError::Incomplete)?;
+            if after_end > bytes.len() || bytes.len() - after_end < 2 + FRAME_CRC_BYTES {
+                return Err(FrameError::Incomplete);
+            }
+            let after = bytes[after_at..after_end].to_vec();
+            if !after.is_empty() && after.len() != data_len {
+                return Err(FrameError::PostimageLengthMismatch);
             }
             regions.push(Preimage {
                 offset,
                 len,
                 digest,
                 data: bytes[header_end..data_end].to_vec(),
+                after,
             });
-            cursor = data_end;
+            cursor = after_end;
         }
         let intent_at = cursor;
         if bytes.len() - intent_at < 2 + FRAME_CRC_BYTES {
@@ -227,6 +261,8 @@ pub enum FrameError {
     IntentTooLong,
     /// 原像长度与区间长度不一致。
     PreimageLengthMismatch,
+    /// 写后字节与原像不等长。
+    PostimageLengthMismatch,
     /// 原像字节数超出 `u32`。
     PreimageTooLarge,
 }
@@ -244,6 +280,9 @@ impl std::fmt::Display for FrameError {
             Self::IntentTooLong => f.write_str("frame intent text is too long"),
             Self::PreimageLengthMismatch => {
                 f.write_str("frame preimage length does not match its region")
+            }
+            Self::PostimageLengthMismatch => {
+                f.write_str("frame postimage length does not match its preimage")
             }
             Self::PreimageTooLarge => f.write_str("frame preimage exceeds the size limit"),
         }
@@ -273,12 +312,14 @@ mod tests {
                     len: 4096,
                     digest: [0x11; PREIMAGE_DIGEST_BYTES],
                     data: Vec::new(),
+                    after: Vec::new(),
                 },
                 Preimage {
                     offset: 8192,
                     len: 512,
                     digest: [0x22; PREIMAGE_DIGEST_BYTES],
                     data: Vec::new(),
+                    after: Vec::new(),
                 },
             ],
         }
@@ -303,6 +344,30 @@ mod tests {
         let (parsed, _) = Frame::parse(&bytes).expect("解析应成立");
         assert_eq!(parsed.regions[0].data, vec![0xab; 4096]);
         assert!(parsed.regions[1].data.is_empty());
+    }
+
+    #[test]
+    fn postimage_bytes_survive_the_round_trip() {
+        let mut original = frame(0, FrameKind::Preimage, false);
+        original.regions[0].data = vec![0xab; 4096];
+        original.regions[0].after = vec![0xcd; 4096];
+        let mut bytes = Vec::new();
+        original.encode_into(&mut bytes).expect("编码应成立");
+        let (parsed, _) = Frame::parse(&bytes).expect("解析应成立");
+        assert_eq!(parsed.regions[0].after, vec![0xcd; 4096]);
+        assert!(parsed.regions[1].after.is_empty());
+    }
+
+    #[test]
+    fn a_postimage_of_a_different_length_is_rejected() {
+        let mut original = frame(0, FrameKind::Preimage, false);
+        original.regions[0].data = vec![0xab; 4096];
+        original.regions[0].after = vec![0xcd; 8];
+        let mut bytes = Vec::new();
+        assert_eq!(
+            original.encode_into(&mut bytes),
+            Err(FrameError::PostimageLengthMismatch)
+        );
     }
 
     #[test]

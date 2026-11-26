@@ -218,14 +218,14 @@ fn execute(
         channel.verify_written().map_err(|error| (error, wrote))?;
     }
 
-    let mut preimages = Vec::with_capacity(segments.len());
+    let mut registered = Vec::with_capacity(segments.len());
     for segment in segments {
         let bytes =
             read_region(handle.as_mut(), segment.region, CHUNK).map_err(|error| (error, wrote))?;
-        preimages.push((segment.region, bytes));
+        registered.push((segment.region, bytes, segment.bytes.clone()));
     }
     session
-        .register_table(&preimages)
+        .register_table(&registered)
         .map_err(|(error, _)| (error, wrote))?;
 
     let mut channel = WriteChannel::new(handle.as_mut(), &table.regions);
@@ -630,8 +630,11 @@ impl<'a> Session<'a> {
         })
     }
 
-    /// 登记表区原像；已有原像帧时复用。
-    fn register_table(&mut self, preimages: &[(Region, Vec<u8>)]) -> Result<(), (ExecError, bool)> {
+    /// 登记表区原像与写后字节；已有原像帧时复用。
+    fn register_table(
+        &mut self,
+        segments: &[(Region, Vec<u8>, Vec<u8>)],
+    ) -> Result<(), (ExecError, bool)> {
         if self.table_registered {
             return Ok(());
         }
@@ -641,9 +644,9 @@ impl<'a> Session<'a> {
             completed: true,
             irreversible: false,
             intent: Vec::new(),
-            regions: preimages
+            regions: segments
                 .iter()
-                .map(|(region, bytes)| preimage(*region, bytes))
+                .map(|(region, before, after)| preimage(*region, before, after))
                 .collect(),
         };
         self.append(frame)?;
@@ -698,14 +701,15 @@ fn progress_of(intent: &[u8]) -> (u64, [u8; 16]) {
     (u64::from_le_bytes(cursor), digest)
 }
 
-fn preimage(region: Region, bytes: &[u8]) -> Preimage {
+fn preimage(region: Region, before: &[u8], after: &[u8]) -> Preimage {
     let mut hasher = Hasher::new();
-    hasher.update(bytes);
+    hasher.update(before);
     Preimage {
         offset: region.start(),
         len: region.len(),
         digest: hasher.finish(),
-        data: bytes.to_vec(),
+        data: before.to_vec(),
+        after: after.to_vec(),
     }
 }
 

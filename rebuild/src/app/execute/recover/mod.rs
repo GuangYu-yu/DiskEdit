@@ -1,9 +1,10 @@
 //! `recover` 的唯一执行器：持锁、锁内重探身份、按记录回写原像或归档记录。
 //!
 //! B9 的准入顺序在这里落地：取记录目录锁 → 锁内重探身份 → 锁内重读记录 →
-//! 再按纯恢复器的结论动作。回滚只读不写：逐条读目标当前字节并与原像核对
-//! （B7 第五条 / B24），不符即拒绝并保留记录，绝不覆盖外部改动；清理与放弃
-//! 都先回读再删除、删除后对目录 `fsync`（B23）。
+//! 再按纯恢复器的结论动作。回滚先做只读判定（B7 第五条 / B24）：当前字节必须
+//! 是本工具写后的样子、停在写前/写后之间的唯一断点，或已经是原像；三者之外一律
+//! 拒绝并保留记录，绝不覆盖外部改动。判定通过后逆序写回原像并读回核对（B6）。
+//! 清理与放弃都先回读再删除、删除后对目录 `fsync`（B23）。
 
 use std::path::{Path, PathBuf};
 
@@ -136,8 +137,13 @@ fn rollback(
         RecoveryPlan::NeedsManual { why } => Err((ExecError::Record(why), false)),
         RecoveryPlan::RollBack { frames } | RecoveryPlan::Replay { frames } => {
             let plan = preimages(&frames).map_err(|error| (error, false))?;
-            verify_against_preimage(platform, target, &plan).map_err(|error| (error, false))?;
-            clear(platform, directory, file, &bytes).map_err(|error| (error, false))?;
+            let pending = admit_replay(platform, target, &plan).map_err(|error| (error, false))?;
+            let wrote = if pending {
+                replay(platform, target, &plan)?
+            } else {
+                false
+            };
+            clear(platform, directory, file, &bytes).map_err(|error| (error, wrote))?;
 
             Ok(Outcome::rolled_back())
         }
@@ -167,10 +173,11 @@ fn release(
     Ok(Outcome::completed())
 }
 
-/// 一条待回写的原像：区间与原始字节。
+/// 一条待回写的原像：区间、原始字节与本步写后字节。
 struct Preimage {
     region: Region,
     data: Vec<u8>,
+    after: Vec<u8>,
 }
 
 /// 从记录帧里取出携带原像字节的区间，并核对登记摘要与字节一致。
@@ -196,39 +203,255 @@ fn preimages(frames: &[Frame]) -> Result<Vec<Preimage>, ExecError> {
                     "the recorded preimage content and digest disagree".to_owned(),
                 ));
             }
+            if !region.after.is_empty() && region.after.len() != region.data.len() {
+                return Err(ExecError::Record(
+                    "the recorded preimage and postimage lengths disagree".to_owned(),
+                ));
+            }
             out.push(Preimage {
                 region: span,
                 data: region.data.clone(),
+                after: region.after.clone(),
             });
         }
     }
     Ok(out)
 }
 
-/// B7 第五条 / B24：逐条读目标当前字节并与原像核对。不符即拒绝、绝不覆盖。
+/// 当前字节相对原像/写后字节的归类。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RecordedWrite {
+    /// 已是本步写后的样子。
+    After,
+    /// 已是原文。
+    Original,
+    /// 本工具的写在区间内停下。
+    Torn { cut: usize },
+}
+
+impl RecordedWrite {
+    /// 前缀与后缀分别计算；一次写只留一个切点。
+    fn of(now: &[u8], after: &[u8], pre: &[u8]) -> Option<Self> {
+        if now == after {
+            return Some(Self::After);
+        }
+        if now == pre {
+            return Some(Self::Original);
+        }
+        if after.is_empty() || now.len() != after.len() || now.len() != pre.len() {
+            return None;
+        }
+        let prefix =
+            |of: &[u8], front: &[u8]| of.iter().zip(front).take_while(|(a, b)| a == b).count();
+        let suffix = |of: &[u8], back: &[u8]| {
+            of.iter()
+                .zip(back.iter().rev())
+                .take_while(|(a, b)| a == b)
+                .count()
+        };
+        let fits = |p: usize, s: usize, len: usize| p + s >= len;
+        let forward = (prefix(after, now), suffix(pre, now));
+        let backward = (prefix(pre, now), suffix(after, now));
+        match (
+            fits(forward.0, forward.1, now.len()),
+            fits(backward.0, backward.1, now.len()),
+        ) {
+            (true, true) if backward.0 > forward.0 => Some(Self::Torn { cut: backward.0 }),
+            (true, _) => Some(Self::Torn { cut: forward.0 }),
+            (false, true) => Some(Self::Torn { cut: backward.0 }),
+            (false, false) => None,
+        }
+    }
+}
+
+/// 一次写只在一个位置停下；两处断点意味着盘面被外部改过。
+#[derive(Default)]
+struct TearLog {
+    first: Option<u64>,
+    conflict: bool,
+}
+
+impl TearLog {
+    fn record(&mut self, at: u64) -> Result<(), u64> {
+        let Some(first) = self.first else {
+            self.first = Some(at);
+            return Ok(());
+        };
+        if self.conflict || first != at {
+            self.conflict = true;
+            return Err(first);
+        }
+        Ok(())
+    }
+}
+
+/// 把逆序回放中原先写过的区间叠加到读出字节上。
+fn read_virtual(
+    handle: &dyn TargetHandle,
+    offset: u64,
+    len: usize,
+    patches: &[(u64, Vec<u8>)],
+) -> Result<Vec<u8>, ExecError> {
+    let mut buffer = read_exact(handle, offset, len)?;
+    for (patch_at, patch) in patches {
+        let patch_end = patch_at.saturating_add(patch.len() as u64);
+        let overlap_start = (*patch_at).max(offset);
+        let overlap_end = patch_end.min(offset + len as u64);
+        if overlap_start >= overlap_end {
+            continue;
+        }
+        let copy = (overlap_end - overlap_start) as usize;
+        let from = (overlap_start - patch_at) as usize;
+        let to = (overlap_start - offset) as usize;
+        buffer[to..to + copy].copy_from_slice(&patch[from..from + copy]);
+    }
+    Ok(buffer)
+}
+
+/// 回滚完成后的整段字节：先写的条目后叠加，因此逆序覆盖。
+fn rolled_back_image(preimages: &[Preimage]) -> Result<Vec<(u64, Vec<u8>)>, ExecError> {
+    let mut image: Vec<(u64, Vec<u8>)> = Vec::new();
+    for item in preimages.iter().rev() {
+        let offset = item.region.start();
+        let mut merged = item.data.clone();
+        let end = offset + merged.len() as u64;
+        // 让新段覆盖已有段的重叠部分。
+        let mut next: Vec<(u64, Vec<u8>)> = Vec::with_capacity(image.len() + 1);
+        for (at, bytes) in &image {
+            let other_end = at + bytes.len() as u64;
+            if other_end <= offset || *at >= end {
+                next.push((*at, bytes.clone()));
+                continue;
+            }
+            if *at < offset {
+                next.push((*at, bytes[..(offset - at) as usize].to_vec()));
+            }
+            if other_end > end {
+                next.push((end, bytes[(end - at) as usize..].to_vec()));
+            }
+        }
+        next.push((offset, std::mem::take(&mut merged)));
+        next.sort_by_key(|(at, _)| *at);
+        image = next;
+    }
+    Ok(image)
+}
+
+fn target_matches_image(
+    handle: &dyn TargetHandle,
+    image: &[(u64, Vec<u8>)],
+) -> Result<bool, ExecError> {
+    for (offset, expected) in image {
+        if read_exact(handle, *offset, expected.len())? != *expected {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// B7 / B24：只读判定"盘面是否还需要回写"。返回 `true` 表示至少一条要写。
 ///
-/// 记录只持久化原像，不保存写入后的字节，因此重建的 `recover` 不会前向重放：
-/// 盘面一旦已经离开原像，只能拒绝并把记录留给人工或 `--release`。
-fn verify_against_preimage(
+/// 每条的当前字节必须是原像、写后字节，或停在两者之间唯一断点的撕裂值；
+/// 其余情况说明盘面被外部改过，拒绝并保留记录。
+fn admit_replay(
     platform: &dyn Platform,
     target: &Path,
     preimages: &[Preimage],
-) -> Result<(), ExecError> {
+) -> Result<bool, ExecError> {
     if preimages.is_empty() {
-        return Ok(());
+        return Ok(false);
     }
     let handle = platform.open_target_read_only(target)?;
-    for item in preimages {
-        let current = read_exact(handle.as_ref(), item.region.start(), item.data.len())?;
-        if current != item.data {
-            return Err(ExecError::Record(format!(
-                "target bytes at [{}..{}) differ from the recorded preimage — refusing to overwrite (B24)",
-                item.region.start(),
-                item.region.end()
-            )));
-        }
+    let image = rolled_back_image(preimages)?;
+    if target_matches_image(handle.as_ref(), &image)? {
+        return Ok(false);
     }
-    Ok(())
+    let mut patches: Vec<(u64, Vec<u8>)> = Vec::new();
+    let mut tears = TearLog::default();
+    let mut pending = false;
+    for item in preimages.iter().rev() {
+        let offset = item.region.start();
+        let now = read_virtual(handle.as_ref(), offset, item.data.len(), &patches)?;
+        if now != item.data {
+            let torn = match RecordedWrite::of(&now, &item.after, &item.data) {
+                Some(RecordedWrite::After) => None,
+                Some(RecordedWrite::Torn { cut }) => Some(cut),
+                Some(RecordedWrite::Original) => {
+                    patches.push((offset, item.data.clone()));
+                    continue;
+                }
+                None => {
+                    return Err(ExecError::Record(format!(
+                        "target bytes at [{}..{}) no longer hold the recorded preimage or the bytes this tool wrote there — the disk changed outside this tool; replaying would overwrite that change (B24)",
+                        item.region.start(),
+                        item.region.end()
+                    )));
+                }
+            };
+            if let Some(cut) = torn
+                && let Err(first) = tears.record(offset + cut as u64)
+            {
+                return Err(ExecError::Record(format!(
+                    "an interrupted write shows up at offset {first} and again at offset {} — one write stops in one place, so two separate break points mean the disk changed outside this tool; refusing to replay (B24)",
+                    offset + cut as u64
+                )));
+            }
+            pending = true;
+        }
+        patches.push((offset, item.data.clone()));
+    }
+    Ok(pending)
+}
+
+/// 逆序写回原像，随后按并集图像读回核对。首个字节写出去之后的任何失败都按待恢复报告。
+fn replay(
+    platform: &dyn Platform,
+    target: &Path,
+    preimages: &[Preimage],
+) -> Result<bool, (ExecError, bool)> {
+    let mut handle = platform
+        .open_target(target)
+        .map_err(|error| (ExecError::from(error), false))?;
+    let mut patches: Vec<(u64, Vec<u8>)> = Vec::new();
+    let mut wrote = false;
+    for item in preimages.iter().rev() {
+        let offset = item.region.start();
+        let now = read_virtual(handle.as_mut(), offset, item.data.len(), &patches)
+            .map_err(|error| (error, wrote))?;
+        if now == item.data {
+            patches.push((offset, item.data.clone()));
+            continue;
+        }
+        // 判定与写之间不再留窗口：这里重新按同一判据核对。
+        if RecordedWrite::of(&now, &item.after, &item.data).is_none() {
+            return Err((
+                ExecError::Record(format!(
+                    "target bytes at [{}..{}) changed while replaying — refusing to overwrite the foreign edit (B24)",
+                    item.region.start(),
+                    item.region.end()
+                )),
+                wrote,
+            ));
+        }
+        handle
+            .write_at(offset, &item.data)
+            .map_err(|error| (ExecError::from(error), wrote))?;
+        wrote = true;
+        patches.push((offset, item.data.clone()));
+    }
+    handle
+        .barrier()
+        .map_err(|error| (ExecError::from(error), wrote))?;
+    let image = rolled_back_image(preimages).map_err(|error| (error, wrote))?;
+    if !target_matches_image(handle.as_ref(), &image).map_err(|error| (error, wrote))? {
+        return Err((
+            ExecError::Io(
+                "the rollback wrote the preimages but the target holds different bytes".to_owned(),
+            ),
+            wrote,
+        ));
+    }
+    Ok(wrote)
 }
 
 /// 从目标读满 `len` 字节；短读按环境故障处理。

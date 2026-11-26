@@ -96,14 +96,14 @@ pub(super) fn execute_plan(
         }
     }
 
-    let mut preimages = Vec::with_capacity(segments.len());
+    let mut registered = Vec::with_capacity(segments.len());
     for segment in segments {
         let bytes =
             read_region(handle.as_mut(), segment.region, CHUNK).map_err(|error| (error, false))?;
-        preimages.push((segment.region, bytes));
+        registered.push((segment.region, bytes, segment.bytes.clone()));
     }
     session
-        .register(plan.request_digest(), &preimages)
+        .register(plan.request_digest(), &registered)
         .map_err(|error| (error, false))?;
 
     let token = session.token();
@@ -177,14 +177,14 @@ fn execute_via_carrier(
             ));
         }
     }
-    let mut preimages = Vec::with_capacity(segments.len());
+    let mut registered = Vec::with_capacity(segments.len());
     for segment in segments {
         let bytes =
             read_region(handle.as_mut(), segment.region, CHUNK).map_err(|error| (error, false))?;
-        preimages.push((segment.region, bytes));
+        registered.push((segment.region, bytes, segment.bytes.clone()));
     }
     session
-        .register(plan.request_digest(), &preimages)
+        .register(plan.request_digest(), &registered)
         .map_err(|error| (error, false))?;
 
     let writes: Vec<crate::platform::CarrierWrite> = segments
