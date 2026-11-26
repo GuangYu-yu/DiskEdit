@@ -9,3 +9,13 @@ SA1-007	sfdisk	sfdisk.8:405	身份	用 dump 与 restore 复用布局会复制 PA
 SA1-008	parted	NEWS:447;NEWS:455	对齐	新分区默认 optimal 对齐为 1 MiB，最小对齐为物理扇区	add 与 copy 的自动起点按 1 MiB 对齐，显式 --align mib 生效	tests/case_runner.rs::add_delete_and_set_rewrite_both_copies	已认领	
 SA1-009	parted	NEWS:207	退出码	parted 曾对已被诊断的错误返回 0	退出码七值单源映射，未写失败与拒绝各自固定出口，测试逐格核对	src/app/report/exit.rs::every_unwritten_failure_has_one_code	已认领	
 SA1-010	sfdisk	sfdisk.8:90	输入面	sfdisk 的 JSON 只作输出格式，不能作为输入	info 只输出本实现结构化 JSON，不提供 JSON 或脚本导入命令		范围裁剪	不提供导入与还原命令;输入格式不属于分区表规范;只影响自动化复刻布局;用户可逐条 add 与 set 或 dd 整盘镜像;保留未知子命令拒绝这条替代路径;若引入须先定义冲突处理与身份校验
+SA1-011	sfdisk	sfdisk.c:573	隐式	move 数据时 fsync 失败只告警并继续	每次写入后 sync_all，错误向上抛，绝不带着未落盘状态报完成	owner:SA3	已登记缺口	
+SA1-012	sfdisk	sfdisk.8:205	破坏性	move-data 非原子，失败可能留下半搬移	搬移按块登记原像可回滚；续跑先核对已写前缀摘要，不符即拒绝且不写	tests/fault_injection.rs::a_resumed_move_with_a_mismatched_prefix_is_refused_without_writing	已认领	
+SA1-013	sfdisk	sfdisk.8:195	在线	--no-reread 只屏蔽内核视图更新，默认只更新被改分区	写表后按分区 BLKPG 同步内核视图，失败落 5 且不动文件系统	tests/online.rs::online_resize_writes_the_table_then_resizes_the_kernel_view_then_the_filesystem	已认领	
+SA1-014	sfdisk	sfdisk.8:305	对齐	带单位的大小按字节解释，并再按设备 I/O 限制对齐	--end 按 --align 下取整，带单位的大小先换算字节再落 LBA	tests/case_runner.rs::resize_rewrites_the_table_and_refuses_unsafe_shrinks	已认领	
+SA1-015	sfdisk	sfdisk.8:73	隐式	GPT 上设置激活旗标会告警并自动进入 PMBR	MBR 激活位与 GPT 分区旗标分开建模，不混用 legacy active 语义	owner:SA2	已登记缺口	
+SA1-016	parted	parted-news:249	范围裁剪	mac/sun/dvh/amiga/bsd 等老盘标的探测与断言	不识别这些盘标，统一按未知拒绝		范围裁剪	不纳入这些老盘标;规范只要求 GPT 与 MBR，分区表主合同不涉及;只影响老平台镜像的识别;目标统一按不识别拒绝并提示;用户可用原始工具处理这些镜像;若日后加入须先补探测与写回用例
+SA1-017	parted	parted-news:227	范围裁剪	nilfs2 等特定文件系统探测会触发断言失败	文件系统识别只按档案表，未登记族按未知拒绝		范围裁剪	不实现逐文件系统探测;识别以档案表与只读探针为唯一事实源;只影响识别精度的覆盖面;未登记族按未知拒绝而不是猜测;inspect 仍给出原始签名供人判断;若加入须先有只读探针与拒绝矩阵
+SA1-018	UEFI	uefi-2.10-5.3.2	修复	备份 GPT 头必须位于盘尾最后可用 LBA	修复动作把备份头重定位到规范位置并并入同一表写，写后回读	tests/gpt_repair.rs::a_grown_container_is_repaired_in_the_same_table_write	已认领	
+SA1-019	UEFI	uefi-2.10-5.2.1	保护MBR	保护 MBR 必须有一条覆盖整盘的 0xEE 记录	PMBR 按规范规范化，不一致的输入拒绝或重写	tests/case_runner.rs::new_refuses_an_inconsistent_protective_mbr_and_keeps_a_canonical_one	已认领	
+SA1-020	gdisk	gdisk.8:142	范围裁剪	恢复菜单把主备头与分区表存成文件再写回	记录只服务崩溃回滚，不提供菜单式备份文件		范围裁剪	不提供菜单式备份与恢复文件;记录是崩溃恢复中间物不是备份;只影响手工备份习惯;用户需 dd 整盘或外部备份;记录与 inspect 可查看当前原像;若引入须先定义文件格式与身份校验
