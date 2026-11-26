@@ -24,6 +24,9 @@
 // covers: R0221
 // covers: R0542, R0584, R0586, R0870, R0958
 // covers: R0262, R0286, R0611, R0639
+// covers: R0069, R0075, R0076, R0077
+// covers: R0362, R0364, R0366, R0367, R0372, R0373, R0394, R0395
+// covers: R0374, R0375, R0376, R0383, R0414
 
 /// 一条命令行用例。
 pub struct Case {
@@ -967,6 +970,68 @@ pub const CASES: &[Case] = &[
     Case {
         name: "resize refuses a target without a partition table",
         argv: &["resize", "target/fixtures/s1/empty.img:1", "+1M", "--yes"],
+        exit: 3,
+        stdout: "",
+        stderr: "refused:",
+    },
+    Case {
+        name: "add without a size is a usage error",
+        argv: &["add", "target/fixtures/s1/gpt.img", "--yes"],
+        exit: 2,
+        stdout: "",
+        stderr: "needs",
+    },
+    Case {
+        name: "version combined with help is a usage error",
+        argv: &["--version", "--help"],
+        exit: 2,
+        stdout: "",
+        stderr: "",
+    },
+    Case {
+        name: "version refuses an extra option",
+        argv: &["--version", "--yes"],
+        exit: 2,
+        stdout: "",
+        stderr: "",
+    },
+    Case {
+        name: "version refuses an extra argument",
+        argv: &["--version", "extra"],
+        exit: 2,
+        stdout: "",
+        stderr: "",
+    },
+    Case {
+        name: "resize of an MBR partition refuses --allow-move",
+        argv: &[
+            "resize",
+            "target/fixtures/s1/mbr.img:1",
+            "+1M",
+            "--allow-move",
+            "--yes",
+        ],
+        exit: 3,
+        stdout: "",
+        stderr: "refused:",
+    },
+    Case {
+        name: "resize of an MBR partition refuses --chunk",
+        argv: &[
+            "resize",
+            "target/fixtures/s1/mbr.img:1",
+            "+1M",
+            "--chunk",
+            "4",
+            "--yes",
+        ],
+        exit: 3,
+        stdout: "",
+        stderr: "refused:",
+    },
+    Case {
+        name: "resize of an MBR partition refuses a blocked right side",
+        argv: &["resize", "target/fixtures/s1/mbr.img:1", "+1M", "--yes"],
         exit: 3,
         stdout: "",
         stderr: "refused:",

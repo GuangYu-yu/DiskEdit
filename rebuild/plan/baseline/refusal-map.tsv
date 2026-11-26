@@ -199,3 +199,20 @@ R0958	src/app/execute/table.rs 拒绝低于 MBR 最小容量的写表	旧 src/ta
 R0262	src/app/decide/records.rs 拒绝把文件当作记录仓库目录	旧 src/cmd/records.rs:469 is not a directory	tests/cases/mod.rs 的 records scan refuses a file
 R0286	src/app/decide/records.rs 扫描根不是目录时拒绝	旧 src/cmd/records.rs:734 is not a directory	tests/cases/mod.rs 的 records scan refuses a file
 R0623	src/app/decide/resize.rs 拒绝扩展容器分区	旧 src/gpt_policy.rs:542 extended container (logical partitions out of scope)	tests/refusal_claims.rs 的 mbr_resize_rejects_structural_and_out_of_bounds_ranges
+R0069	src/app/cli/parse.rs add 缺 SIZE 报用法	旧 src/cli.rs:1736 add needs a SIZE	tests/cases/mod.rs 的 add without a size is a usage error
+R0075	src/app/cli/parse.rs 拒绝 --version 与 --help 同时使用	旧 src/cli.rs:1884 version and help name two outputs	tests/cases/mod.rs 的 version combined with help is a usage error
+R0076	src/app/cli/parse.rs 拒绝 --version 附带其他选项	旧 src/cli.rs:1902 version takes no other options	tests/cases/mod.rs 的 version refuses an extra option
+R0077	src/app/cli/parse.rs 拒绝 --version 附带其他参数	旧 src/cli.rs:1905 version takes no other arguments	tests/cases/mod.rs 的 version refuses an extra argument
+R0362	src/app/decide/resize.rs 右侧空间不足时拒绝并要求搬移	旧 src/cmd/resize/dry_run.rs:58 not enough contiguous free space	tests/cases/mod.rs 的 resize refuses a blocked right side without relocation
+R0364	src/app/cli/parse.rs resize 缺尺寸报用法	旧 src/cmd/resize/dry_run.rs:68 resize needs a size	tests/cases/mod.rs 的 resize without a size is a usage error
+R0366	src/app/decide/resize.rs 拒绝越过 last_usable 的终点	旧 src/cmd/resize/dry_run.rs:76 size exceeds usable range	tests/cases/mod.rs 的 resize refuses an end past the last usable LBA
+R0367	src/app/decide/resize.rs 写前复核右侧空间不足	旧 src/cmd/resize/dry_run.rs:109 not enough contiguous free space	tests/cases/mod.rs 的 resize refuses a blocked right side without relocation
+R0372	src/app/decide/resize.rs 的 MBR 分支不搬移	旧 src/cmd/resize/dry_run.rs:188 --allow-move is not supported for MBR resize	tests/cases/mod.rs 的 resize of an MBR partition refuses --allow-move
+R0373	src/app/decide/resize.rs 的 MBR 分支忽略 chunk	旧 src/cmd/resize/dry_run.rs:191 --chunk has no effect for MBR resize	tests/cases/mod.rs 的 resize of an MBR partition refuses --chunk
+R0394	src/app/decide/resize.rs 的 MBR 写路径不搬移	旧 src/cmd/resize/msdos.rs:250 --allow-move is not supported for MBR resize	tests/cases/mod.rs 的 resize of an MBR partition refuses --allow-move
+R0395	src/app/decide/resize.rs 的 MBR 写路径忽略 chunk	旧 src/cmd/resize/msdos.rs:255 --chunk has no effect for MBR resize	tests/cases/mod.rs 的 resize of an MBR partition refuses --chunk
+R0374	src/app/decide/resize.rs 的 MBR 预览无表拒绝	旧 src/cmd/resize/dry_run.rs:196 no MBR on target	tests/cases/mod.rs 的 resize refuses a target without a partition table
+R0375	src/app/decide/resize.rs 的 MBR 预览无表拒绝（写前）	旧 src/cmd/resize/dry_run.rs:197 no MBR on target	tests/cases/mod.rs 的 resize refuses a target without a partition table
+R0376	src/app/decide/resize.rs 的 MBR 分区不存在	旧 src/cmd/resize/dry_run.rs:202 partition not found	tests/cases/mod.rs 的 resize refuses a missing MBR partition
+R0383	src/app/decide/resize.rs 的 MBR 右侧无空间拒绝	旧 src/cmd/resize/dry_run.rs:273 not enough contiguous free space	tests/cases/mod.rs 的 resize of an MBR partition refuses a blocked right side
+R0414	src/app/decide/resize.rs 的 MBR 写路径右侧无空间拒绝	旧 src/cmd/resize/msdos.rs:497 not enough contiguous free space	tests/cases/mod.rs 的 resize of an MBR partition refuses a blocked right side
