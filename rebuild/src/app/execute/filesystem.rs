@@ -200,37 +200,79 @@ fn run_online_native(
     }
 }
 
-/// 在线扩容之后回读：ext 必须长到分区末尾；其余族没有可用的只读探针时按"已写、
-/// 待恢复"报告，而不是凭工具退出码当作成功。
+/// 在线扩容之后回读：ext 与 btrfs 必须长到分区末尾；其余族没有可用的只读探针时
+/// 按"已写、待恢复"报告，而不是凭工具退出码当作成功。
 fn verify_online_size(
     platform: &dyn Platform,
     online: &Online<'_>,
 ) -> Result<(), (ExecError, bool)> {
-    if online.filesystem != FsKind::Ext {
-        return Err((
+    let device = online.device.display().to_string();
+    match online.filesystem {
+        FsKind::Ext => {
+            let run = platform
+                .run(Program::Dumpe2fs, &["-h".to_owned(), device])
+                .map_err(|error| (ExecError::from(error), true))?;
+            ensure_probe_ran(platform, Program::Dumpe2fs, &run)?;
+            verify_ext_size(&run, online.bytes).map_err(|error| (error, true))
+        }
+        // btrfs 的超级块直接给出总字节数与分配单元，不需要挂载状态；`-f` 是只读的
+        // 全量输出。`total_bytes` 覆盖到区间末端（落在最后一个 sectorsize 内）才算
+        // 长到位——工具退 0 而超级块仍是旧尺寸时不能报成功。
+        FsKind::Btrfs => {
+            let run = platform
+                .run(
+                    Program::Btrfs,
+                    &[
+                        "inspect-internal".to_owned(),
+                        "dump-super".to_owned(),
+                        "-f".to_owned(),
+                        device,
+                    ],
+                )
+                .map_err(|error| (ExecError::from(error), true))?;
+            ensure_probe_ran(platform, Program::Btrfs, &run)?;
+            verify_btrfs_size(&run, online.bytes).map_err(|error| (error, true))
+        }
+        FsKind::Xfs
+        | FsKind::Squashfs
+        | FsKind::Erofs
+        | FsKind::F2fs
+        | FsKind::Exfat
+        | FsKind::Vfat
+        | FsKind::Ntfs
+        | FsKind::HfsPlus
+        | FsKind::Apfs
+        | FsKind::Bcachefs
+        | FsKind::Jfs
+        | FsKind::Reiserfs
+        | FsKind::Udf => Err((
             ExecError::Postcondition(
                 "no read-back probe is available for this filesystem after the online grow"
                     .to_owned(),
             ),
             true,
-        ));
+        )),
     }
-    let device = online.device.display().to_string();
-    let run = platform
-        .run(Program::Dumpe2fs, &["-h".to_owned(), device])
-        .map_err(|error| (ExecError::from(error), true))?;
-    if run.code != Some(0) {
-        return Err((
-            ExecError::Postcondition(format!(
-                "{} exited {}: {}",
-                platform.tool_name(Program::Dumpe2fs),
-                code_text(run.code),
-                run.stderr.trim()
-            )),
-            true,
-        ));
+}
+
+/// 只读探针本身失败：文件系统可能已被工具改过，按"已写、待恢复"报告。
+fn ensure_probe_ran(
+    platform: &dyn Platform,
+    program: Program,
+    run: &ToolRun,
+) -> Result<(), (ExecError, bool)> {
+    if run.code == Some(0) {
+        return Ok(());
     }
-    verify_ext_size(&run, online.bytes).map_err(|error| (error, true))
+    Err((
+        ExecError::Postcondition(format!(
+            "{} exited {}: {}",
+            platform.tool_name(program),
+            code_text(run.code),
+            run.stderr.trim()
+        )),
+        true,
+    ))
 }
 
 /// 本机没有在线工具时交给虚拟机载体；没有载体就按"不支持"拒绝，而不是照常尝试。
@@ -921,6 +963,37 @@ fn verify_ext_size(run: &ToolRun, expected: u64) -> Result<(), ExecError> {
         )));
     }
     Ok(())
+}
+
+/// btrfs 超级块里的 `total_bytes` 与 `sectorsize`：前者覆盖到区间末端、后者是放置单元。
+/// `total_bytes` 必须落在 `[expected - sectorsize, expected]` 内；解析失败不猜默认值。
+fn verify_btrfs_size(run: &ToolRun, expected: u64) -> Result<(), ExecError> {
+    let total = leading_field(&run.stdout, "total_bytes").ok_or_else(|| {
+        ExecError::Postcondition("the btrfs superblock probe did not report total_bytes".to_owned())
+    })?;
+    let unit = leading_field(&run.stdout, "sectorsize").ok_or_else(|| {
+        ExecError::Postcondition("the btrfs superblock probe did not report sectorsize".to_owned())
+    })?;
+    let unit = unit.max(1);
+    if total > expected || expected - total >= unit {
+        return Err(ExecError::Postcondition(format!(
+            "the filesystem is {total} bytes, not the expected {expected} bytes rounded to its {unit}-byte sectors"
+        )));
+    }
+    Ok(())
+}
+
+/// `dump-super` 输出的行首字段：只接受行首的 `name` 加空白再加十进制数。
+/// 不带行首锚定会同时命中 `dev_item.total_bytes` 与备份超级块的同名字段。
+fn leading_field(text: &str, name: &str) -> Option<u64> {
+    text.lines().find_map(|line| {
+        let rest = line.strip_prefix(name)?;
+        let first = rest.chars().next()?;
+        if !first.is_ascii_whitespace() {
+            return None;
+        }
+        rest.split_whitespace().next()?.parse().ok()
+    })
 }
 
 fn code_text(code: Option<i32>) -> String {

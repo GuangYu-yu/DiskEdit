@@ -258,3 +258,4 @@ R0036	src/app/observe/snapshot.rs::open_target 扇区集合校验	旧 assembly.r
 R0883	src/app/execute/table.rs::execute_plan 表写经唯一写通道，写失败按已写归档为待恢复	旧 table/mbr.rs:251 写 MBR 失败即部分完成（盘面可能已变）	tests/fault_injection.rs 的 a_failed_table_write_after_the_move_reports_partial
 R0884	src/app/execute/table.rs::execute_plan 表写后刷盘失败按已写归档为待恢复	旧 table/mbr.rs:253 刷 MBR 失败即部分完成（写可能未落盘）	tests/fault_injection.rs 的 a_failed_table_flush_reports_partial
 R0886	src/app/execute/postcondition.rs::verify 回读写入分段并核对摘要，不符即待恢复	旧 table/mbr.rs:258 回读与写入不符即部分完成	tests/fault_injection.rs 的 a_table_that_changes_after_the_write_reports_partial
+R0792	src/app/observe/snapshot.rs::overrides_block_sector 块设备上的 --sector-size 在打开后拒绝	旧 src/recovery/engine.rs:469-479 块设备显式给扇区尺寸即拒绝（退 3）	tests/online.rs 的 a_sector_size_on_a_block_device_is_refused_before_it_is_opened

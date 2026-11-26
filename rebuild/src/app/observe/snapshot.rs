@@ -32,6 +32,8 @@ pub enum CaptureError {
     UnsupportedSector { bytes: u64 },
     /// 用户声明的身份名不适用于这个目标：它自身已能证明身份，或不是块设备。
     DeclaredIdentityNotApplicable,
+    /// `--sector-size` 只命名镜像的扇区尺寸；块设备的逻辑扇区由内核给出。
+    SectorSizeOnBlockDevice,
 }
 
 impl From<PlatformError> for CaptureError {
@@ -60,6 +62,10 @@ impl std::fmt::Display for CaptureError {
             Self::DeclaredIdentityNotApplicable => f.write_str(
                 "--identity applies only to block devices with no readable WWN, EUI or repeatable \
                  serial; images and identified devices are addressed by their own identity",
+            ),
+            Self::SectorSizeOnBlockDevice => f.write_str(
+                "--sector-size applies to image files only; a block device's logical sector size \
+                 is reported by the kernel (BLKSSZGET) and cannot be overridden",
             ),
         }
     }
@@ -198,6 +204,10 @@ pub(crate) fn open_target(
 ) -> Result<TargetFacts, CaptureError> {
     let spec = request.target_spec().ok_or(CaptureError::NoTarget)?;
     let path = &spec.path;
+    // 覆盖值只命名镜像：块设备上先于打开拒绝，盘被占用时也报拒绝而不是打开失败。
+    if overrides_block_sector(platform.path_kind(path), request.sector_size()) {
+        return Err(CaptureError::SectorSizeOnBlockDevice);
+    }
     let declared = request.identity();
     // 只有 Strong 等级构成身份；不可用等级不参与记录定位，也不能与声明名争用。
     let strong = platform
@@ -217,6 +227,9 @@ pub(crate) fn open_target(
     }
     let handle = platform.open_target_read_only(path)?;
     let kind = handle.kind();
+    if overrides_block_sector(kind, request.sector_size()) {
+        return Err(CaptureError::SectorSizeOnBlockDevice);
+    }
     if declares(kind) {
         return Err(CaptureError::DeclaredIdentityNotApplicable);
     }
@@ -238,6 +251,12 @@ pub(crate) fn open_target(
         sector_size,
         identity,
     })
+}
+
+/// `--sector-size` 只覆盖镜像的扇区尺寸。块设备的逻辑扇区由内核经 BLKSSZGET 给出，
+/// 接受一个不生效的覆盖值会让用户以为扇区被改了。
+fn overrides_block_sector(kind: TargetKind, declared: Option<u64>) -> bool {
+    declared.is_some() && kind.is_block_device()
 }
 
 /// 按目标身份或声明名定位记录。

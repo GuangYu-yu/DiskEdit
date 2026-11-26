@@ -192,6 +192,13 @@ fn capture_failed(
             );
             return usage();
         }
+        observe::CaptureError::SectorSizeOnBlockDevice => {
+            eprintln!(
+                "diskedit: --sector-size applies to image files only; a block device's logical \
+                 sector size is reported by the kernel (BLKSSZGET) and cannot be overridden"
+            );
+            return exit::REFUSED;
+        }
         observe::CaptureError::UnsupportedSector { bytes } => {
             eprintln!(
                 "unsupported: the target's sector size {bytes} is outside the supported set \
@@ -218,6 +225,7 @@ fn capture_failed(
         observe::CaptureError::Unreadable { why } => why.clone(),
         observe::CaptureError::UnsupportedSector { .. } => unreachable!("上面已处理"),
         observe::CaptureError::DeclaredIdentityNotApplicable => unreachable!("上面已处理"),
+        observe::CaptureError::SectorSizeOnBlockDevice => unreachable!("上面已处理"),
     };
     match request.command() {
         // `records list` 在目标读不到时仍然给出空列表，并以成功退出。

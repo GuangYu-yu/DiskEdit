@@ -34,6 +34,7 @@ struct Fake {
     carrier: Mutex<Option<OnlineReport>>,
     carrier_calls: Mutex<usize>,
     native: bool,
+    kind: TargetKind,
 }
 
 impl Fake {
@@ -44,6 +45,7 @@ impl Fake {
             carrier: Mutex::new(None),
             carrier_calls: Mutex::new(0),
             native: true,
+            kind: TargetKind::Other,
         }
     }
 
@@ -73,7 +75,7 @@ impl Platform for Fake {
     }
 
     fn path_kind(&self, _path: &Path) -> TargetKind {
-        TargetKind::Other
+        self.kind
     }
 
     fn is_partition_node(&self, _path: &Path) -> bool {
@@ -202,13 +204,17 @@ impl Carrier for ReportCarrier {
 }
 
 fn plan() -> diskedit::app::decide::ConfirmedPlan {
+    plan_for(FsKind::Ext)
+}
+
+fn plan_for(filesystem: FsKind) -> diskedit::app::decide::ConfirmedPlan {
     let step = Step::new(
         StepKind::GrowFilesystemOnline {
             mount_point: PathBuf::from("/mnt"),
             device: PathBuf::from("/dev/sda1"),
             disk: PathBuf::from("/dev/sda"),
             partition: 1,
-            filesystem: FsKind::Ext,
+            filesystem,
             bytes: 64 << 20,
         },
         Vec::new(),
@@ -270,6 +276,19 @@ fn a_short_filesystem_after_the_tool_is_partial() {
     assert_eq!(exit::exit_of(&outcome), exit::PARTIAL);
 }
 
+// covers: R0792
+#[test]
+fn a_sector_size_on_a_block_device_is_refused_before_it_is_opened() {
+    let mut fake = Fake::new(Vec::new());
+    fake.kind = TargetKind::BlockDevice;
+    let code = diskedit::app::cli::dispatch_with(
+        &fake,
+        ["diskedit", "info", "/dev/sda", "--sector-size", "4096"].map(std::ffi::OsString::from),
+    );
+    assert_eq!(code, exit::REFUSED);
+    assert!(fake.calls().is_empty(), "rejection precedes any tool");
+}
+
 // covers: B28
 #[test]
 fn a_host_without_the_tool_hands_the_grow_to_the_carrier() {
@@ -280,4 +299,40 @@ fn a_host_without_the_tool_hands_the_grow_to_the_carrier() {
     let outcome = filesystem::run_online(&fake, &plan());
     assert_eq!(outcome.state(), ExecutionState::Committed);
     assert_eq!(fake.carrier_calls(), 1);
+}
+
+/// btrfs 的超级块探针：`total_bytes` 落在最后一个分配单元内即达标，输出里
+/// `dev_item.total_bytes` 之类的同名字段不得被当成本卷尺寸。
+fn superblock(total: u64, sectorsize: u64) -> String {
+    format!(
+        "superblock: bytenr=65536, device=/dev/sda1\n\
+         sectorsize              {sectorsize}\n\
+         total_bytes             {total}\n\
+         dev_item.total_bytes    1099511627776\n"
+    )
+}
+
+// covers: B28, I12
+#[test]
+fn an_online_btrfs_grow_is_verified_from_the_superblock() {
+    let fake = Fake::new(vec![
+        Call::Exits(Some(0), String::new()),
+        Call::Exits(Some(0), superblock(64 << 20, 4096)),
+    ]);
+    let outcome = filesystem::run_online(&fake, &plan_for(FsKind::Btrfs));
+    assert_eq!(outcome.state(), ExecutionState::Committed);
+    assert_eq!(exit::exit_of(&outcome), exit::SUCCESS);
+    assert_eq!(fake.calls(), vec![Program::Btrfs, Program::Btrfs]);
+}
+
+// covers: B28, I12
+#[test]
+fn an_online_btrfs_grow_that_stopped_short_is_partial() {
+    let fake = Fake::new(vec![
+        Call::Exits(Some(0), String::new()),
+        Call::Exits(Some(0), superblock(32 << 20, 4096)),
+    ]);
+    let outcome = filesystem::run_online(&fake, &plan_for(FsKind::Btrfs));
+    assert_eq!(outcome.state(), ExecutionState::NeedsRecovery);
+    assert_eq!(exit::exit_of(&outcome), exit::PARTIAL);
 }
