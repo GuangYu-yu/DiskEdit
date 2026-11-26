@@ -274,10 +274,29 @@ impl Platform for LinuxPlatform {
     }
 
     fn create_directory_all(&self, path: &Path) -> PlatformResult<()> {
-        std::fs::create_dir_all(path).map_err(|error| PlatformError::io(path, error))?;
-        // B5：记录目录只对属主开放。
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
-            .map_err(|error| PlatformError::io(path, error))
+        use std::os::unix::fs::DirBuilderExt;
+        // 记录目录链 `<state_root>/images/<键>`：逐级按 0700 建出，只有属主能读——记录里
+        // 存着写前的分区表。`state_root` 之上的中间层只建不核，与基线一致；`create_dir_all`
+        // 会让 `state_root`/`images` 带上 umask 的 0755，故逐级 `DirBuilder::mode(0700)`。
+        let images = path
+            .parent()
+            .ok_or_else(|| PlatformError::parse("the record directory has no parent"))?;
+        let root = images
+            .parent()
+            .ok_or_else(|| PlatformError::parse("the record directory has no grandparent"))?;
+        if let Some(parent) = root.parent() {
+            std::fs::create_dir_all(parent).map_err(|error| PlatformError::io(parent, error))?;
+        }
+        for directory in [root, images, path] {
+            match std::fs::DirBuilder::new().mode(0o700).create(directory) {
+                Ok(()) => {}
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+                Err(error) => return Err(PlatformError::io(directory, error)),
+            }
+            std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o700))
+                .map_err(|error| PlatformError::io(directory, error))?;
+        }
+        Ok(())
     }
 
     fn remove_directory(&self, path: &Path) -> PlatformResult<()> {
@@ -1077,12 +1096,22 @@ mod tests {
         platform
             .create_directory_all(&directory)
             .expect("记录目录可建立");
-        let directory_mode = std::fs::metadata(&directory)
-            .expect("目录元数据")
-            .permissions()
-            .mode()
-            & 0o777;
-        assert_eq!(directory_mode, 0o700, "记录目录只对属主开放");
+        let mode_of = |path: &Path| {
+            std::fs::metadata(path)
+                .expect("目录元数据")
+                .permissions()
+                .mode()
+                & 0o777
+        };
+        // 整条链都只对属主开放：状态根、`images`、键目录。`create_dir_all` 会把前两级
+        // 建成 umask 的 0755，故这里逐级核对，缺一级就是别的账户能遍历记录。
+        assert_eq!(mode_of(&base), 0o700, "状态根只对属主开放");
+        assert_eq!(
+            mode_of(&base.join("images")),
+            0o700,
+            "images 目录只对属主开放"
+        );
+        assert_eq!(mode_of(&directory), 0o700, "记录目录只对属主开放");
 
         let file = directory.join("record");
         platform

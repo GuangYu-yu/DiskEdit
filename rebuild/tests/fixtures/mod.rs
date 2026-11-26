@@ -28,6 +28,10 @@ pub const BASE: &str = "target/fixtures/s1";
 /// 写命令用的空白/占用镜像目录。
 pub const S2_BASE: &str = "target/fixtures/s2";
 
+/// 本进程专用的状态根：两个二进制共用一份全新的 `XDG_STATE_HOME`，隔离宿主的
+/// 真实状态目录，避免历史记录让 `inspect` 之类的只读对照因残留目录而时绿时红。
+pub const STATE_HOME: &str = "target/fixtures/state";
+
 /// 同一进程内的测试可能并发调用；夹具只写一次。
 static PREPARE_ONCE: Once = Once::new();
 
@@ -40,6 +44,9 @@ pub fn prepare() -> PathBuf {
 fn prepare_inner() {
     let base = PathBuf::from(BASE);
     std::fs::create_dir_all(&base).expect("夹具目录可建");
+    // 状态根每次进程启动都重建：对照必须从空状态出发，否则宿主的旧记录会让退出码分叉。
+    drop(std::fs::remove_dir_all(STATE_HOME));
+    std::fs::create_dir_all(STATE_HOME).expect("状态根可建");
     let gpt = image(&base, "gpt.img");
     write_gpt(&gpt, false);
     let ext = image(&base, "ext.img");

@@ -311,6 +311,7 @@ const SCENARIOS: &[Scenario] = &[
 
 fn code(program: &std::path::Path, argv: &[&str]) -> i32 {
     Command::new(program)
+        .env("XDG_STATE_HOME", fixtures::STATE_HOME)
         .args(argv)
         .output()
         .unwrap_or_else(|error| panic!("运行 {} 失败: {error}", program.display()))
@@ -321,6 +322,7 @@ fn code(program: &std::path::Path, argv: &[&str]) -> i32 {
 
 fn code_owned(program: &std::path::Path, argv: &[String]) -> i32 {
     Command::new(program)
+        .env("XDG_STATE_HOME", fixtures::STATE_HOME)
         .args(argv)
         .output()
         .unwrap_or_else(|error| panic!("运行 {} 失败: {error}", program.display()))
@@ -347,6 +349,7 @@ fn changed_offsets(before: &[u8], after: &[u8]) -> Vec<usize> {
 
 fn capture(program: &std::path::Path, argv: &[&str]) -> std::process::Output {
     Command::new(program)
+        .env("XDG_STATE_HOME", fixtures::STATE_HOME)
         .args(argv)
         .output()
         .unwrap_or_else(|error| panic!("运行 {} 失败: {error}", program.display()))
@@ -429,8 +432,8 @@ fn both_binaries_agree_on_write_scenarios() {
     for (index, (name, source, prefix)) in cases.iter().enumerate() {
         let original = std::path::Path::new(fixtures::S2_BASE).join(source);
         let before = std::fs::read(&original).expect("读取夹具");
-        let for_baseline = format!("{}/eq-{index}-base.img", fixtures::S2_BASE);
-        let for_candidate = format!("{}/eq-{index}-new.img", fixtures::S2_BASE);
+        let for_baseline = format!("{}/wr-{index}-base.img", fixtures::S2_BASE);
+        let for_candidate = format!("{}/wr-{index}-new.img", fixtures::S2_BASE);
         std::fs::write(&for_baseline, &before).expect("写基线副本");
         std::fs::write(&for_candidate, &before).expect("写候选副本");
         let argv = |target: &str| {
@@ -505,8 +508,8 @@ fn both_binaries_agree_on_table_edits() {
     for (index, (name, source, template)) in cases.iter().enumerate() {
         let original = std::path::Path::new(fixtures::BASE).join(source);
         let before = std::fs::read(&original).expect("读取夹具");
-        let for_baseline = format!("{}/eq-{index}-base.img", fixtures::S2_BASE);
-        let for_candidate = format!("{}/eq-{index}-new.img", fixtures::S2_BASE);
+        let for_baseline = format!("{}/tb-{index}-base.img", fixtures::S2_BASE);
+        let for_candidate = format!("{}/tb-{index}-new.img", fixtures::S2_BASE);
         std::fs::write(&for_baseline, &before).expect("写基线副本");
         std::fs::write(&for_candidate, &before).expect("写候选副本");
         let argv = |target: &str| {
