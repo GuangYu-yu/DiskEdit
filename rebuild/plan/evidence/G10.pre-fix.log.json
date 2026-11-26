@@ -1,0 +1,22 @@
+{
+ "gate": "G10",
+ "kind": "lint",
+ "command": [
+  "python",
+  "plan/instruments/commits.py"
+ ],
+ "exit_code": 0,
+ "commit": "675280b",
+ "tree": "5f296fa14018afdc",
+ "at": "2026-11-26T04:44:11+00:00",
+ "counts": {
+  "result_lines": 0,
+  "passed": 0,
+  "failed": 0,
+  "ignored": 0,
+  "not_applicable": 0
+ },
+ "ok": true,
+ "reasons": [],
+ "log": "plan/evidence/G10.log"
+}
