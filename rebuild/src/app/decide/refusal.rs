@@ -98,6 +98,8 @@ pub enum Refusal {
     RecoveryRefused { why: String },
     /// 表编辑本身不能成立；原因来自纯核的编辑判据。
     TableEdit { why: String },
+    /// LVM 链的只读查询失败：设备/报表读不出来，本次尚未写目标字节。
+    LvmFailed { why: String },
 }
 
 impl Refusal {
@@ -215,6 +217,7 @@ impl Refusal {
             Self::TableEdit { .. } => {
                 "inspect the current table and adjust the request so the edit can be placed"
             }
+            Self::LvmFailed { .. } => "inspect the LVM state with pvs/vgs/lvs, then retry",
         }
     }
 
@@ -303,6 +306,7 @@ impl Refusal {
                 format!("the recovery record cannot be finished here: {why}")
             }
             Self::TableEdit { why } => format!("the table cannot take this change: {why}"),
+            Self::LvmFailed { why } => format!("the LVM chain cannot proceed: {why}"),
         }
     }
 }

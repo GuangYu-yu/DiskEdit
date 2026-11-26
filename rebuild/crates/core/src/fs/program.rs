@@ -59,6 +59,7 @@ pub enum Program {
     Lvs,
     Vgs,
     Pvresize,
+    Lvextend,
     MkfsVfat,
     MkfsExfat,
     MkfsNtfs,
@@ -75,7 +76,7 @@ pub enum Program {
 
 impl Program {
     /// 全部程序，用于名称唯一性与可执行名对账。
-    pub const ALL: [Program; 38] = [
+    pub const ALL: [Program; 39] = [
         Program::E2fsck,
         Program::Resize2fs,
         Program::Dumpe2fs,
@@ -102,6 +103,7 @@ impl Program {
         Program::Lvs,
         Program::Vgs,
         Program::Pvresize,
+        Program::Lvextend,
         Program::MkfsVfat,
         Program::MkfsExfat,
         Program::MkfsNtfs,
@@ -117,7 +119,7 @@ impl Program {
     ];
 
     /// 程序身份已登记齐全。
-    pub const COUNT: usize = 38;
+    pub const COUNT: usize = 39;
 
     /// 该程序对目标的访问方式。写类工具因此无法在不持写令牌的调用点被执行。
     pub const fn access(self) -> Access {
@@ -148,6 +150,7 @@ impl Program {
             | Self::Mkswap
             | Self::Swaplabel
             | Self::Pvresize
+            | Self::Lvextend
             | Self::MkfsVfat
             | Self::MkfsExfat
             | Self::MkfsNtfs
@@ -192,6 +195,7 @@ impl Program {
             | Self::Lvs
             | Self::Vgs
             | Self::Pvresize
+            | Self::Lvextend
             | Self::Mount
             | Self::Umount
             | Self::Losetup

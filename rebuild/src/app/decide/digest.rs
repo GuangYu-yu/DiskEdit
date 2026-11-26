@@ -278,6 +278,38 @@ fn encode_kind(out: &mut Vec<u8>, kind: &StepKind) {
                 out.push(0);
             }
         }
+        StepKind::LvmPvShrink {
+            partition,
+            start_bytes,
+            bytes,
+        } => {
+            out.push(19);
+            out.extend_from_slice(&partition.to_le_bytes());
+            out.extend_from_slice(&start_bytes.to_le_bytes());
+            out.extend_from_slice(&bytes.to_le_bytes());
+        }
+        StepKind::LvmGrowChain {
+            partition,
+            start_bytes,
+            old_bytes,
+            new_bytes,
+            grow_lv,
+            lv,
+        } => {
+            out.push(20);
+            out.extend_from_slice(&partition.to_le_bytes());
+            out.extend_from_slice(&start_bytes.to_le_bytes());
+            out.extend_from_slice(&old_bytes.to_le_bytes());
+            out.extend_from_slice(&new_bytes.to_le_bytes());
+            out.push(u8::from(*grow_lv));
+            match lv {
+                Some(text) => {
+                    out.push(1);
+                    out.extend_from_slice(text.as_bytes());
+                }
+                None => out.push(0),
+            }
+        }
     }
 }
 

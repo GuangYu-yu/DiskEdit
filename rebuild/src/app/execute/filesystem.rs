@@ -531,6 +531,8 @@ fn fs_action(steps: &[Step]) -> Result<(FsAction, Region), ExecError> {
             | StepKind::SetProperty { .. }
             | StepKind::GrowFilesystemOnline { .. }
             | StepKind::CopyPartition { .. }
+            | StepKind::LvmPvShrink { .. }
+            | StepKind::LvmGrowChain { .. }
             | StepKind::MovePartition { .. }
             | StepKind::RefreshKernelView
             | StepKind::RecoverRecords { .. } => None,

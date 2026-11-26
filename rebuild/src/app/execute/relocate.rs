@@ -320,6 +320,8 @@ fn data_step(plan: &ConfirmedPlan, sector_size: u64) -> Result<DataStep, (ExecEr
             | StepKind::GrowFilesystem { .. }
             | StepKind::ShrinkFilesystem { .. }
             | StepKind::GrowFilesystemOnline { .. }
+            | StepKind::LvmPvShrink { .. }
+            | StepKind::LvmGrowChain { .. }
             | StepKind::RefreshKernelView
             | StepKind::RecoverRecords { .. } => {}
         }
@@ -355,6 +357,8 @@ fn table_parts(step: &Step) -> Result<TableWrite<'_>, (ExecError, bool)> {
         | StepKind::ShrinkFilesystem { .. }
         | StepKind::GrowFilesystemOnline { .. }
         | StepKind::CopyPartition { .. }
+        | StepKind::LvmPvShrink { .. }
+        | StepKind::LvmGrowChain { .. }
         | StepKind::MovePartition { .. }
         | StepKind::RefreshKernelView
         | StepKind::RecoverRecords { .. } => Err((

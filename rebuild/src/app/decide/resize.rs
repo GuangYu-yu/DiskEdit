@@ -34,14 +34,6 @@ pub fn decide(snapshot: &ResizeSnapshot, request: &Request) -> Decision {
     if matches!(snapshot.view, TableView::None) {
         return superfloppy(snapshot, resize);
     }
-    if resize.grow_lv {
-        return Decision::Refuse(Refusal::ContentUnsupported {
-            what: "resize --grow-lv".to_owned(),
-            why: "the LVM chain is not wired in this build; resize the PV, then the LV and its \
-                  filesystem separately"
-                .to_owned(),
-        });
-    }
     if let Some(refusal) = admission(snapshot) {
         return Decision::Refuse(refusal);
     }
@@ -52,6 +44,23 @@ pub fn decide(snapshot: &ResizeSnapshot, request: &Request) -> Decision {
             None => Refusal::TableMissing,
         });
     };
+    let pv = partition.content == ContentKind::Lvm2Pv;
+    if (resize.grow_lv || resize.lv.is_some()) && !pv {
+        return Decision::Refuse(Refusal::TableEdit {
+            why: format!(
+                "--grow-lv/--lv needs an LVM2 PV — partition #{0} holds {1}",
+                partition.number,
+                partition.content.as_str()
+            ),
+        });
+    }
+    if pv && resize.no_fs {
+        return Decision::Refuse(Refusal::TableEdit {
+            why: "--no-fs cannot resize an LVM2 PV — the PV has to be resized together with the \
+                  partition; omit --no-fs"
+                .to_owned(),
+        });
+    }
     let Some(identity) = snapshot.target.identity else {
         return Decision::Refuse(Refusal::IdentityUnprovable {
             why: "the target gives no comparable identity".to_owned(),
@@ -214,16 +223,28 @@ pub fn decide(snapshot: &ResizeSnapshot, request: &Request) -> Decision {
         new_bytes: (new_end - start + 1).saturating_mul(sector),
         sector,
     };
-    let filesystem_step = match filesystem_step(
-        partition.content,
-        resize.no_fs,
-        grow,
-        shrink,
-        &geometry,
-        &snapshot.tools,
-    ) {
-        Ok(step) => step,
-        Err(refusal) => return Decision::Refuse(refusal),
+    let lvm_step = if pv {
+        match pv_chain_step(snapshot, resize, grow, shrink, &geometry) {
+            Ok(step) => step,
+            Err(refusal) => return Decision::Refuse(refusal),
+        }
+    } else {
+        None
+    };
+    let filesystem_step = if pv {
+        None
+    } else {
+        match filesystem_step(
+            partition.content,
+            resize.no_fs,
+            grow,
+            shrink,
+            &geometry,
+            &snapshot.tools,
+        ) {
+            Ok(step) => step,
+            Err(refusal) => return Decision::Refuse(refusal),
+        }
     };
 
     if resize.dry_run {
@@ -234,7 +255,10 @@ pub fn decide(snapshot: &ResizeSnapshot, request: &Request) -> Decision {
                 old_end_lba: old_end,
                 new_end_lba: new_end,
                 sector_size: sector,
-                filesystem: filesystem_step.as_ref().map(|_| partition.content),
+                filesystem: filesystem_step
+                    .as_ref()
+                    .map(|_| partition.content)
+                    .or_else(|| lvm_step.as_ref().map(|_| partition.content)),
                 grow,
             }),
             vec![Step::new(StepKind::Inspect, Vec::new())],
@@ -255,18 +279,24 @@ pub fn decide(snapshot: &ResizeSnapshot, request: &Request) -> Decision {
 
     let mut steps = Vec::new();
     if shrink {
-        // 收缩：先缩文件系统，再写表。
+        // 收缩：先缩 PV/文件系统，再写表。
+        if let Some(step) = lvm_step {
+            steps.push(step);
+        }
         if let Some(step) = filesystem_step {
             steps.push(step);
         }
         steps.push(table_step);
     } else {
-        // 扩容：先把挡路分区搬到新位置，再写表，最后扩文件系统。
+        // 扩容：先把挡路分区搬到新位置，再写表，最后扩 PV/文件系统。
         for relocation in &moves {
             steps.push(relocation.step(sector));
         }
         steps.push(table_step);
         if let Some(step) = filesystem_step {
+            steps.push(step);
+        }
+        if let Some(step) = lvm_step {
             steps.push(step);
         }
     }
@@ -466,6 +496,155 @@ struct FsGeometry {
     old_bytes: u64,
     new_bytes: u64,
     sector: u64,
+}
+
+/// 目标分区是 LVM2 PV 时的链条步骤。
+///
+/// 扩容在表写之后让 PV 吸收新空间（必要时再扩 LV 与其文件系统）；缩容在表写之前
+/// 把 PV 元数据缩到新长度，但只在已分配 extent 都落在新长度之内时才允许。
+fn pv_chain_step(
+    snapshot: &ResizeSnapshot,
+    resize: &ResizeRequest,
+    grow: bool,
+    shrink: bool,
+    geometry: &FsGeometry,
+) -> Result<Option<Step>, Refusal> {
+    if !grow && !shrink {
+        return Ok(None);
+    }
+    require_lvm_tools(snapshot, resize.grow_lv)?;
+    let Some(facts) = &snapshot.lvm else {
+        return Err(Refusal::FactUnknown {
+            what: "the LVM PV facts were not captured".to_owned(),
+        });
+    };
+    let start_bytes = geometry
+        .start_lba
+        .checked_mul(geometry.sector)
+        .ok_or_else(|| Refusal::TableEdit {
+            why: "the partition start overflows the byte offset".to_owned(),
+        })?;
+    if shrink {
+        if resize.grow_lv {
+            return Err(Refusal::TableEdit {
+                why: "--grow-lv cannot be combined with shrinking the PV".to_owned(),
+            });
+        }
+        let allocated = match &facts.allocated_end {
+            Ok(bytes) => *bytes,
+            Err(error) => return Err(lvm_refusal(error)),
+        };
+        if allocated > geometry.new_bytes {
+            return Err(Refusal::TableEdit {
+                why: format!(
+                    "the PV's allocated extents end at {allocated} bytes, past the requested {} \
+                     bytes — shrink the LV/filesystem inside it first",
+                    geometry.new_bytes
+                ),
+            });
+        }
+        return Ok(Some(Step::new(
+            StepKind::LvmPvShrink {
+                partition: geometry.number,
+                start_bytes,
+                bytes: geometry.new_bytes,
+            },
+            vec![region(start_bytes, geometry.old_bytes)],
+        )));
+    }
+    let lv = if resize.grow_lv {
+        match &facts.selection {
+            Some(Ok(selection)) => {
+                // LV 级增量在判定期算清：不足一个 extent、LV 尺寸为零或目标溢出都不能
+                // 等到表写之后才发现，否则会留下"表已扩、LV 未扩"的半成品。
+                if selection.size == 0 {
+                    return Err(Refusal::TableEdit {
+                        why: format!("LV {} reports 0 bytes — nothing to extend", selection.path),
+                    });
+                }
+                let delta = geometry.new_bytes.saturating_sub(geometry.old_bytes);
+                let extents = delta / selection.extent_bytes;
+                if extents == 0 {
+                    return Err(Refusal::TableEdit {
+                        why: format!(
+                            "added {delta} bytes is less than one extent ({} bytes) — the LV cannot \
+                             take any of the added space",
+                            selection.extent_bytes
+                        ),
+                    });
+                }
+                let grown = extents.checked_mul(selection.extent_bytes).ok_or_else(|| {
+                    Refusal::TableEdit {
+                        why: "the requested LV growth overflows the address space".to_owned(),
+                    }
+                })?;
+                selection
+                    .size
+                    .checked_add(grown)
+                    .ok_or_else(|| Refusal::TableEdit {
+                        why: "the LV target size overflows the address space".to_owned(),
+                    })?;
+                Some(selection.path.clone())
+            }
+            Some(Err(error)) => return Err(lvm_refusal(error)),
+            None => {
+                return Err(Refusal::FactUnknown {
+                    what: "the target LV was not selected before the plan".to_owned(),
+                });
+            }
+        }
+    } else {
+        None
+    };
+    Ok(Some(Step::new(
+        StepKind::LvmGrowChain {
+            partition: geometry.number,
+            start_bytes,
+            old_bytes: geometry.old_bytes,
+            new_bytes: geometry.new_bytes,
+            grow_lv: resize.grow_lv,
+            lv,
+        },
+        vec![region(start_bytes, geometry.new_bytes)],
+    )))
+}
+
+/// PV 链所需的外部程序必须在现场采集时都可用。
+fn require_lvm_tools(snapshot: &ResizeSnapshot, grow_lv: bool) -> Result<(), Refusal> {
+    let mut required = vec![Program::Pvs, Program::Pvresize];
+    if grow_lv {
+        required.push(Program::Lvs);
+        required.push(Program::Lvextend);
+    }
+    if !snapshot.target.kind.is_block_device() {
+        required.push(Program::Losetup);
+    }
+    for program in required {
+        if !snapshot
+            .tools
+            .iter()
+            .any(|(known, available)| *known == program && *available)
+        {
+            return Err(Refusal::ToolMissing { program });
+        }
+    }
+    Ok(())
+}
+
+/// LVM 查询失败 → 拒绝成因：请求不符归 3，环境失败归 4，缺工具归 6。
+fn lvm_refusal(error: &crate::app::lvm::LvmError) -> Refusal {
+    use crate::app::lvm::LvmError;
+    match error {
+        LvmError::Refused(message) | LvmError::Inactive(message) => Refusal::TableEdit {
+            why: format!("{message} — {}", error.hint()),
+        },
+        LvmError::Failed(message) => Refusal::LvmFailed {
+            why: message.clone(),
+        },
+        LvmError::ToolMissing(message) => Refusal::PlatformCannotRunTools {
+            why: message.clone(),
+        },
+    }
 }
 
 /// 文件系统步骤；`--no-fs` 或只改表时为 `None`。

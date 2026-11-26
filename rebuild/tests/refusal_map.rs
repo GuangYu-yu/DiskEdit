@@ -117,8 +117,8 @@
 // covers: R0312, R0313, R0314, R0315, R0316, R0317, R0318, R0319
 // covers: R0320, R0321, R0322
 // tests/case_runner.rs 的 superfloppy_resize_grows_the_filesystem_and_refuses_unextendable_requests
-// covers: R0352, R0353, R0354, R0385, R0386, R0387, R0451, R0679
-// covers: R0680, R0681, R0761, R0762, R0763, R0764, R0765, R0766
+// covers: R0352, R0353, R0354, R0451
+// covers: R0761, R0762, R0763, R0764, R0765, R0766
 // covers: R0767, R0768, R0769, R0770, R0771, R0772, R0773, R0774
 // covers: R0775, R0776, R0777, R0778, R0779, R0780
 // tests/refusal_claims.rs 的 mbr_resize_rejects_structural_and_out_of_bounds_ranges

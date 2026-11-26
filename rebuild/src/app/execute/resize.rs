@@ -24,18 +24,44 @@ fn execute(
     target: &Path,
     plan: &ConfirmedPlan,
 ) -> Result<Option<String>, (ExecError, bool)> {
-    let shrink = plan
-        .steps()
-        .iter()
-        .any(|step| matches!(step.kind, StepKind::ShrinkFilesystem { .. }));
+    let has_fs = plan.steps().iter().any(|step| {
+        matches!(
+            step.kind,
+            StepKind::MakeFilesystem { .. }
+                | StepKind::GrowFilesystem { .. }
+                | StepKind::ShrinkFilesystem { .. }
+        )
+    });
+    let has_lvm = plan.steps().iter().any(|step| {
+        matches!(
+            step.kind,
+            StepKind::LvmPvShrink { .. } | StepKind::LvmGrowChain { .. }
+        )
+    });
+    let shrink = plan.steps().iter().any(|step| {
+        matches!(
+            step.kind,
+            StepKind::ShrinkFilesystem { .. } | StepKind::LvmPvShrink { .. }
+        )
+    });
     if shrink {
-        // 收缩：文件系统先缩，成功后才改表。
-        super::filesystem::execute_plan(platform, target, plan)?;
+        // 收缩：PV / 文件系统先缩，成功后才改表。
+        if has_lvm {
+            super::lvm::execute_plan(platform, target, plan)?;
+        }
+        if has_fs {
+            super::filesystem::execute_plan(platform, target, plan)?;
+        }
         super::table::execute_plan(platform, target, plan)
     } else {
-        // 扩容：先提交分区表，再扩文件系统。
+        // 扩容：先提交分区表，再扩 PV / 文件系统。
         let unsynced = super::table::execute_plan(platform, target, plan)?;
-        super::filesystem::execute_plan(platform, target, plan)?;
+        if has_fs {
+            super::filesystem::execute_plan(platform, target, plan)?;
+        }
+        if has_lvm {
+            super::lvm::execute_plan(platform, target, plan)?;
+        }
         Ok(unsynced)
     }
 }

@@ -8,6 +8,7 @@ use std::ffi::OsString;
 pub mod cli;
 pub mod decide;
 pub mod execute;
+pub mod lvm;
 pub mod observe;
 pub mod report;
 

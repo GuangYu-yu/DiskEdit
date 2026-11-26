@@ -108,6 +108,25 @@ pub enum StepKind {
         filesystem: FsKind,
         bytes: u64,
     },
+    /// 缩容前把 LVM2 PV 的元数据缩到指定字节数。
+    ///
+    /// 必须在写表之前执行：PV 元数据先让出尾部，表再缩到同一处。
+    LvmPvShrink {
+        partition: u32,
+        /// 分区起点的字节偏移，用于镜像经 loop 绑定的偏移。
+        start_bytes: u64,
+        /// 缩后的分区字节数。
+        bytes: u64,
+    },
+    /// 扩容后让 PV 吸收新增空间，并按需扩展目标 LV 与其文件系统。
+    LvmGrowChain {
+        partition: u32,
+        start_bytes: u64,
+        old_bytes: u64,
+        new_bytes: u64,
+        grow_lv: bool,
+        lv: Option<String>,
+    },
     /// 把源分区内容复制到给定的目标区间。
     CopyPartition {
         source: u32,
@@ -153,6 +172,8 @@ impl StepKind {
             | Self::ShrinkFilesystem { .. }
             | Self::CopyPartition { .. }
             | Self::RecoverRecords { .. }
+            | Self::LvmPvShrink { .. }
+            | Self::LvmGrowChain { .. }
             | Self::MovePartition { .. } => Access::WritesTarget,
         }
     }

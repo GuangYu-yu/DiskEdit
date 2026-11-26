@@ -342,6 +342,8 @@ fn write(
             | decide::StepKind::GrowFilesystem { .. }
             | decide::StepKind::ShrinkFilesystem { .. }
             | decide::StepKind::CopyPartition { .. }
+            | decide::StepKind::LvmPvShrink { .. }
+            | decide::StepKind::LvmGrowChain { .. }
             | decide::StepKind::MovePartition { .. }
             | decide::StepKind::RefreshKernelView
             | decide::StepKind::RecoverRecords { .. } => None,

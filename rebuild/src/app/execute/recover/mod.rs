@@ -55,6 +55,8 @@ fn execute(
             | StepKind::ShrinkFilesystem { .. }
             | StepKind::GrowFilesystemOnline { .. }
             | StepKind::CopyPartition { .. }
+            | StepKind::LvmPvShrink { .. }
+            | StepKind::LvmGrowChain { .. }
             | StepKind::MovePartition { .. }
             | StepKind::RefreshKernelView => None,
         })

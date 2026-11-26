@@ -51,6 +51,7 @@ pub fn exit_of_refusal(refusal: &Refusal) -> u8 {
         | Refusal::PlatformCannotRunTools { .. }
         | Refusal::MountNotBlockDevice { .. }
         | Refusal::MountUnmapped { .. } => UNSUPPORTED,
+        Refusal::LvmFailed { .. } => ENVIRONMENT,
         Refusal::IdentityChanged
         | Refusal::OccupancyUnknown { .. }
         | Refusal::Occupied { .. }

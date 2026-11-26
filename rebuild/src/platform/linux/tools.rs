@@ -34,6 +34,7 @@ pub fn executable(program: Program) -> &'static str {
         Program::Lvs => "lvs",
         Program::Vgs => "vgs",
         Program::Pvresize => "pvresize",
+        Program::Lvextend => "lvextend",
         Program::MkfsVfat => "mkfs.vfat",
         Program::MkfsExfat => "mkfs.exfat",
         Program::MkfsNtfs => "mkfs.ntfs",
@@ -80,6 +81,7 @@ pub fn check_arguments(program: Program) -> &'static [&'static str] {
         | Program::Lvs
         | Program::Vgs
         | Program::Pvresize
+        | Program::Lvextend
         | Program::MkfsVfat
         | Program::MkfsExfat
         | Program::MkfsNtfs

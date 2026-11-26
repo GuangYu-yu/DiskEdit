@@ -15,8 +15,8 @@ use diskedit_core::fs::Program;
 use sha2::{Digest, Sha256};
 
 use crate::platform::{
-    Carrier, LoopBinding, MountFacts, Occupancy, Platform, PlatformError, PlatformResult,
-    StateLock, TargetHandle, TargetKind, ToolRun,
+    Carrier, DeviceMatch, LoopBinding, MountFacts, Occupancy, Platform, PlatformError,
+    PlatformResult, StateLock, TargetHandle, TargetKind, ToolRun,
 };
 
 mod tools;
@@ -108,6 +108,14 @@ impl Platform for LinuxPlatform {
         } else {
             image_occupancy(path)
         }
+    }
+
+    fn occupancy_for_lvm(&self, path: &Path) -> PlatformResult<Occupancy> {
+        let metadata = std::fs::metadata(path).map_err(|error| PlatformError::io(path, error))?;
+        if metadata.file_type().is_block_device() {
+            return block_occupancy(path, &metadata);
+        }
+        image_occupancy_allow_dm(path)
     }
 
     fn state_root(&self) -> Option<PathBuf> {
@@ -203,6 +211,38 @@ impl Platform for LinuxPlatform {
                 "partition {number} of {} has no device node",
                 disk.display()
             )))
+        }
+    }
+
+    fn compare_devices(&self, target: &Path, reported: &Path) -> DeviceMatch {
+        use std::os::unix::fs::{FileTypeExt, MetadataExt};
+        if target == reported {
+            return DeviceMatch::Same;
+        }
+        let left = match std::fs::metadata(target) {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                return DeviceMatch::Unknown(format!("cannot stat {}: {error}", target.display()));
+            }
+        };
+        let right = match std::fs::metadata(reported) {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                return DeviceMatch::Unknown(format!(
+                    "cannot stat {}: {error}",
+                    reported.display()
+                ));
+            }
+        };
+        let same = if left.file_type().is_block_device() && right.file_type().is_block_device() {
+            left.rdev() == right.rdev()
+        } else {
+            left.dev() == right.dev() && left.ino() == right.ino()
+        };
+        if same {
+            DeviceMatch::Same
+        } else {
+            DeviceMatch::Different
         }
     }
 
@@ -611,6 +651,56 @@ fn image_occupancy(path: &Path) -> PlatformResult<Occupancy> {
                 ),
             });
         }
+    }
+    Ok(Occupancy::Idle)
+}
+
+/// 与 [`image_occupancy`] 相同，但只为 DM 栈持有的 loop 不算占用。
+///
+/// 这是 LVM2 PV 收尾的口径：pvresize 只改 PV 元数据，持有该分区的 dm 栈不解析
+/// 这部分字节。其余持有者（未挂载的 md、另一个 loop 等）与挂载仍按占用拒绝。
+fn image_occupancy_allow_dm(path: &Path) -> PlatformResult<Occupancy> {
+    let canonical = std::fs::canonicalize(path).map_err(|error| PlatformError::io(path, error))?;
+    let block = match std::fs::read_dir("/sys/block") {
+        Ok(entries) => entries,
+        Err(error) => {
+            return Ok(Occupancy::Unknown {
+                why: format!("cannot enumerate block devices: {error}"),
+            });
+        }
+    };
+    for entry in block.flatten() {
+        let backing = entry.path().join("loop/backing_file");
+        let Ok(text) = std::fs::read_to_string(&backing) else {
+            continue;
+        };
+        let target = text.trim();
+        if target.is_empty() {
+            continue;
+        }
+        let resolved = std::fs::canonicalize(Path::new("/").join(target))
+            .unwrap_or_else(|_| PathBuf::from(target));
+        if resolved != canonical {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let mut holders = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(entry.path().join("holders")) {
+            for holder in entries.flatten() {
+                holders.push(holder.file_name().to_string_lossy().into_owned());
+            }
+        }
+        holders.sort();
+        if !holders.is_empty() && holders.iter().all(|holder| holder.starts_with("dm-")) {
+            continue;
+        }
+        return Ok(Occupancy::Used {
+            evidence: if holders.is_empty() {
+                format!("bound to a block device through {name}")
+            } else {
+                format!("bound through {name} and held by {}", holders.join(", "))
+            },
+        });
     }
     Ok(Occupancy::Idle)
 }

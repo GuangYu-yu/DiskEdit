@@ -7,6 +7,7 @@
 pub mod diagnose;
 pub mod digest;
 pub mod filesystem;
+pub mod lvm;
 pub mod postcondition;
 pub mod recover;
 pub mod relocate;

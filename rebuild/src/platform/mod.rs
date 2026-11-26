@@ -356,6 +356,15 @@ pub enum Occupancy {
     Unknown { why: String },
 }
 
+/// 报表里报出的设备与目标设备的关系。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DeviceMatch {
+    Same,
+    Different,
+    /// 无法证明相同：调用方据此拒绝，而不是当作"不同"。
+    Unknown(String),
+}
+
 /// 外部程序的一次运行结果。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ToolRun {
@@ -519,6 +528,12 @@ pub trait Platform: Send + Sync {
     /// 目标的占用结论。
     fn occupancy(&self, path: &Path) -> PlatformResult<Occupancy>;
 
+    /// LVM2 PV 收尾可接受的占用：DM 栈持有镜像的 loop 不算冲突（pvresize 只改 PV
+    /// 元数据，持有它的 dm 栈不解析这部分字节）。默认与 [`Self::occupancy`] 相同。
+    fn occupancy_for_lvm(&self, path: &Path) -> PlatformResult<Occupancy> {
+        self.occupancy(path)
+    }
+
     /// 记录根目录；宿主没有可写状态目录时返回 `None`。
     fn state_root(&self) -> Option<PathBuf>;
 
@@ -550,6 +565,13 @@ pub trait Platform: Send + Sync {
 
     /// 整盘块设备上第 N 个分区的设备节点。
     fn partition_device(&self, disk: &Path, number: u32) -> PlatformResult<PathBuf>;
+
+    /// LVM 报表里报出的设备与目标设备是不是同一段存储。
+    ///
+    /// 默认按"无法证明"返回：没有该能力的宿主不能让调用方把不确定当成不同。
+    fn compare_devices(&self, _target: &Path, _reported: &Path) -> DeviceMatch {
+        DeviceMatch::Unknown("this host cannot compare device identities".to_owned())
+    }
 
     /// 宿主随机字节，用于新表的 GUID。
     fn entropy(&self, len: usize) -> PlatformResult<Vec<u8>>;
