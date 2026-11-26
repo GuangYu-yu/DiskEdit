@@ -748,6 +748,29 @@ pub fn resize_mbr(
             limit: MBR_LBA_MAX,
         });
     }
+    // 邻接自守（与 add_mbr 同判据）：其余槽位任一与新区间重叠即拒绝，且必须挡在
+    // 返回新 LBA0 之前——决定层在写盘前只凭这里的结果放行。
+    for other in 0..4usize {
+        if other == index {
+            continue;
+        }
+        let record = mbr_record(lba0, other)?;
+        if record.part_type == 0 || record.size_lba == 0 {
+            continue;
+        }
+        let used_start = u64::from(record.start_lba);
+        let used_end = used_start
+            .saturating_add(u64::from(record.size_lba))
+            .saturating_sub(1);
+        if !(end < used_start || start > used_end) {
+            return Err(EditError::Overlaps {
+                start,
+                end,
+                existing_start: used_start,
+                existing_end: used_end,
+            });
+        }
+    }
     let mut out = lba0.to_vec();
     let offset = MBR_ENTRY_BASE + index * MBR_ENTRY_BYTES;
     out[offset + 8..offset + 12].copy_from_slice(&(start as u32).to_le_bytes());

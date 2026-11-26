@@ -5,6 +5,7 @@
 // covers: R0130, R0131, R0132, R0133, R0134, R0135, R0136
 // covers: R0143, R0148, R0257, R0268, R0272, R0282, R0287
 // covers: R0155, R0157
+// covers: R0871, R0872
 // covers: R0108, R0109, R0110, R0112, R0113, R0114, R0115, R0116
 // covers: R0119, R0120, R0121, R0124, R0125, R0127, R0128, R0165
 // covers: R0166, R0167, R0168, R0170, R0171, R0172, R0173, R0174
@@ -14,7 +15,7 @@
 // covers: R0060, R0061
 // covers: R0044, R0063, R0067, R0071, R0072, R0074, R0078, R0081
 // covers: R0082, R0083, R0085, R0086, R0088, R0089, R0091, R0092
-// covers: R0864
+// covers: R0864, R0865
 // covers: R0611, R0613, R0615, R0626, R0633, R0637
 // covers: R0645
 // covers: R0346, R0398, R0403, R0342, R0349, R0348, R0396, R0397
@@ -476,6 +477,13 @@ pub const CASES: &[Case] = &[
         stderr: "refused:",
     },
     Case {
+        name: "new refuses a damaged table without an overwrite flag",
+        argv: &["new", "target/fixtures/s1/damaged.img", "--yes"],
+        exit: 3,
+        stdout: "",
+        stderr: "refused:",
+    },
+    Case {
         name: "add without --yes is a usage error",
         argv: &["add", "target/fixtures/s1/gpt.img", "1M"],
         exit: 2,
@@ -825,6 +833,19 @@ pub const CASES: &[Case] = &[
     Case {
         name: "set name refuses an empty value",
         argv: &["set", "target/fixtures/s1/gpt.img:1", "name", "", "--yes"],
+        exit: 3,
+        stdout: "",
+        stderr: "refused:",
+    },
+    Case {
+        name: "set name refuses a value longer than 36 UTF-16 units",
+        argv: &[
+            "set",
+            "target/fixtures/s1/gpt.img:1",
+            "name",
+            "this-name-is-far-longer-than-thirty-six-code-units",
+            "--yes",
+        ],
         exit: 3,
         stdout: "",
         stderr: "refused:",

@@ -438,3 +438,56 @@ fn an_unusable_identity_cannot_plan_a_write() {
     );
     assert_eq!(exit_of_refusal(&error), UNSUPPORTED);
 }
+
+// covers: R0895, R0897, R0900, R0905
+#[test]
+fn mbr_resize_rejects_short_empty_invisible_and_overlapping_states() {
+    // 快照短于一条 MBR 记录区：不可当作表使用。
+    assert!(matches!(
+        resize_mbr(&[0u8; 20], 1, 1, 2, 100),
+        Err(EditError::UnusableTable(_))
+    ));
+    // 空槽不能作为扩缩对象。
+    let empty = mbr_sector(&[]);
+    assert!(matches!(
+        resize_mbr(&empty, 1, 2048, 3071, 8192),
+        Err(EditError::PartitionEmpty(1))
+    ));
+    // 有类型字节但零扇区：条目对解析侧不可见，拒绝改写。
+    let invisible = mbr_sector(&[(0, 0x83, 2048, 0)]);
+    assert!(matches!(
+        resize_mbr(&invisible, 1, 2048, 3071, 8192),
+        Err(EditError::UnusableTable(_))
+    ));
+    // 扩到邻接分区所在区间：重叠必须挡在写 LBA0 之前。
+    let two = mbr_sector(&[(0, 0x83, 2048, 1024), (0, 0x83, 4096, 1024)]);
+    assert!(matches!(
+        resize_mbr(&two, 1, 2048, 5000, 8192),
+        Err(EditError::Overlaps { .. })
+    ));
+    // 只在空隙内扩：成功。
+    assert!(resize_mbr(&two, 1, 2048, 4000, 8192).is_ok());
+}
+
+// covers: R0868, R0869, R0873, R0874, R0875, R0876, R0877
+#[test]
+fn table_capacity_refuses_disks_too_small_for_gpt_or_mbr() {
+    use diskedit_core::table::{CapacityError, Format, check_capacity};
+
+    // 4 MiB 的盘放得下 GPT 与 MBR；只有 1 个扇区的盘两者都不行。
+    assert!(check_capacity(Format::Gpt, 4 << 20, 512).is_ok());
+    assert!(check_capacity(Format::Mbr, 4 << 20, 512).is_ok());
+    assert!(matches!(
+        check_capacity(Format::Gpt, 512, 512),
+        Err(CapacityError::Gpt { .. })
+    ));
+    assert!(matches!(
+        check_capacity(Format::Mbr, 1024, 512),
+        Err(CapacityError::Mbr { .. })
+    ));
+    // 零扇区尺寸是几何错误，两种格式都拒绝。
+    assert!(matches!(
+        check_capacity(Format::Gpt, 4 << 20, 0),
+        Err(CapacityError::Mbr { .. })
+    ));
+}

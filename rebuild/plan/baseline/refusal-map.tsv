@@ -259,3 +259,17 @@ R0883	src/app/execute/table.rs::execute_plan 表写经唯一写通道，写失�
 R0884	src/app/execute/table.rs::execute_plan 表写后刷盘失败按已写归档为待恢复	旧 table/mbr.rs:253 刷 MBR 失败即部分完成（写可能未落盘）	tests/fault_injection.rs 的 a_failed_table_flush_reports_partial
 R0886	src/app/execute/postcondition.rs::verify 回读写入分段并核对摘要，不符即待恢复	旧 table/mbr.rs:258 回读与写入不符即部分完成	tests/fault_injection.rs 的 a_table_that_changes_after_the_write_reports_partial
 R0792	src/app/observe/snapshot.rs::overrides_block_sector 块设备上的 --sector-size 在打开后拒绝	旧 src/recovery/engine.rs:469-479 块设备显式给扇区尺寸即拒绝（退 3）	tests/online.rs 的 a_sector_size_on_a_block_device_is_refused_before_it_is_opened
+R0865	src/app/decide/edit.rs check_name 拒绝超 36 UTF-16 码元的 GPT 名	旧 cmd/fs.rs:468 对超长名拒绝而非截断	tests/cases/mod.rs 的 set name refuses a value longer than 36 UTF-16 units
+R0895	crates/core/src/table/edit.rs mbr_record 拒绝短于一条记录的 LBA0	旧 table/mbr.rs:345 对长度与扇区大小不符的快照报内部错	tests/refusal_claims.rs 的 mbr_resize_rejects_short_empty_invisible_and_overlapping_states
+R0897	crates/core/src/table/edit.rs require_live_mbr 对空槽报 PartitionEmpty	旧 table/mbr.rs:355 对空主分区拒绝 resize	tests/refusal_claims.rs 的 mbr_resize_rejects_short_empty_invisible_and_overlapping_states
+R0900	crates/core/src/table/edit.rs require_live_mbr 对零扇区条目报 UnusableTable	旧 table/mbr.rs:371 对类型字节非零而长度为零的条目拒绝	tests/refusal_claims.rs 的 mbr_resize_rejects_short_empty_invisible_and_overlapping_states
+R0905	crates/core/src/table/edit.rs resize_mbr 拒绝与其余主分区重叠的区间	旧 table/mbr.rs:416 在写 LBA0 前判重叠	tests/refusal_claims.rs 的 mbr_resize_rejects_short_empty_invisible_and_overlapping_states
+R0868	crates/core/src/table/create.rs check_capacity 的 GPT 容量下限	旧 table/create.rs:80 preflight 对过小盘拒绝建 GPT	tests/refusal_claims.rs 的 table_capacity_refuses_disks_too_small_for_gpt_or_mbr
+R0869	crates/core/src/table/create.rs check_capacity 的 MBR 容量下限	旧 table/create.rs:82 preflight 对不足三扇区的盘拒绝建 MBR	tests/refusal_claims.rs 的 table_capacity_refuses_disks_too_small_for_gpt_or_mbr
+R0871	src/app/decide/new.rs 的 TableOccupied 拒绝并提示 --overwrite-data	旧 table/create.rs:253 对既有表占用写入区拒绝	tests/case_runner.rs 的 new_writes_a_readable_table_and_refuses_to_clobber
+R0872	src/app/decide/new.rs 对读不出的既有表同样按 TableOccupied 拒绝	旧 table/create.rs:256 读表失败时未经授权拒绝	tests/cases/mod.rs 的 new refuses a damaged table without an overwrite flag
+R0873	crates/core/src/table/create.rs check_capacity 统一承担旧 create_gpt 的容量判定	旧 table/create.rs:312 是测试直调入口的兜底容量检查	tests/refusal_claims.rs 的 table_capacity_refuses_disks_too_small_for_gpt_or_mbr
+R0874	crates/core/src/table/create.rs check_capacity 的几何判定	旧 table/create.rs:315 的同一判据	tests/refusal_claims.rs 的 table_capacity_refuses_disks_too_small_for_gpt_or_mbr
+R0875	crates/core/src/table/create.rs check_capacity 对零扇区尺寸的拒绝	旧 table/create.rs:318 的几何构造失败	tests/refusal_claims.rs 的 table_capacity_refuses_disks_too_small_for_gpt_or_mbr
+R0876	src/app/decide/new.rs 的 TargetTooSmall 拒绝	旧 table/create.rs:354 直调入口的容量兜底	tests/refusal_claims.rs 的 table_capacity_refuses_disks_too_small_for_gpt_or_mbr
+R0877	crates/core/src/table/create.rs gpt_layout 的容量拒绝	旧 table/create.rs:356 的同一句 too small	tests/refusal_claims.rs 的 table_capacity_refuses_disks_too_small_for_gpt_or_mbr
