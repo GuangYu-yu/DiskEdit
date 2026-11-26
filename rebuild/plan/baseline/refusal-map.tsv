@@ -183,3 +183,11 @@ R0682	crates/core/src/table/relocate.rs::layout 的块布局溢出返回 None	�
 R0709	crates/core/src/table/relocate.rs::layout 的零几何返回 None	旧 src/movepart/shift.rs:96 空消息（零几何）	tests/refusal_claims.rs 的 relocation_layout_rejects_zero_geometry_and_unaddressable_shifts
 R0717	crates/core/src/table/relocate.rs::layout 的位移溢出返回 None	旧 src/movepart/shift.rs:191 relocation shift overflows the LBA range	tests/refusal_claims.rs 的 relocation_layout_rejects_zero_geometry_and_unaddressable_shifts
 R0730	crates/core/src/table/edit.rs::fixed_start 的 PastAddressSpace（增长）	旧 src/movepart/shift.rs:519 growth byte offset overflows	tests/refusal_claims.rs 的 gpt_placement_rejects_address_space_overflow
+R0796	src/app/report/text.rs::recovery 固定三要素并追加原因	旧 src/recovery/engine.rs:684 the target may already have changed	tests/refusal_claims.rs 的 recovery_text_reports_the_possible_change_and_the_cause
+R0805	crates/core/src/record/recover.rs 对外来目标记录给出 NeedsManual	旧 src/recovery/engine.rs:849 belongs to a different operation	tests/refusal_claims.rs 的 a_record_for_another_target_is_not_resumed
+R0808	crates/core/src/record/recover.rs 对身份不符的记录拒绝续跑	旧 src/recovery/engine.rs:902 belongs to a different operation	tests/refusal_claims.rs 的 a_record_for_another_target_is_not_resumed
+R0851	src/app/decide/recover.rs 无记录时拒绝回滚	旧 src/recovery/sink.rs:41 carries no recovery record	tests/case_runner.rs 的 recover_refuses_a_target_without_a_record
+R0853	src/app/decide/recover.rs 无记录时表步骤不得开始	旧 src/recovery/sink.rs:63 carries no recovery record	tests/case_runner.rs 的 recover_refuses_a_target_without_a_record
+R0855	src/app/decide/recover.rs 无记录时不放行表步骤	旧 src/recovery/sink.rs:78 carries no recovery record	tests/case_runner.rs 的 recover_refuses_a_target_without_a_record
+R0857	src/app/decide/recover.rs 无记录时不落表区记录	旧 src/recovery/sink.rs:103 carries no recovery record	tests/case_runner.rs 的 recover_refuses_a_target_without_a_record
+R0859	src/app/decide/recover.rs 无记录时不落文件系统步骤记录	旧 src/recovery/sink.rs:127 carries no recovery record	tests/case_runner.rs 的 recover_refuses_a_target_without_a_record

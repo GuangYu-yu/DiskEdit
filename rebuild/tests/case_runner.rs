@@ -572,6 +572,7 @@ fn run_argv_env(argv: &[&str], env: &[(&str, &str)]) -> (i32, String, String) {
 }
 
 // covers: R0302
+// covers: R0851, R0853, R0855, R0857, R0859
 #[test]
 fn recover_refuses_a_target_without_a_record() {
     fixtures::prepare();

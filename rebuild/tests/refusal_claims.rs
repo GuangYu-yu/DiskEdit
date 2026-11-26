@@ -359,6 +359,35 @@ fn relocation_layout_rejects_zero_geometry_and_unaddressable_shifts() {
     );
 }
 
+// covers: R0796
+#[test]
+fn recovery_text_reports_the_possible_change_and_the_cause() {
+    let text = diskedit::app::report::text::recovery("the write barrier failed");
+    assert!(
+        text.contains("the target may already have been changed"),
+        "{text}"
+    );
+    assert!(text.contains("cause: the write barrier failed"), "{text}");
+}
+
+// covers: R0805, R0808
+#[test]
+fn a_record_for_another_target_is_not_resumed() {
+    use diskedit_core::fingerprint::Fingerprint;
+    use diskedit_core::record::{RecordBody, RecoveryPlan, encode, recover};
+    let body = RecordBody {
+        target: Fingerprint::strong([0x11; 32]),
+        geometry_generation: 1,
+        plan_digest: [0u8; 32],
+    };
+    let bytes = encode(&body, &[]).expect("记录可编码");
+    let plan = recover(&bytes, Fingerprint::strong([0x22; 32]));
+    assert!(
+        matches!(plan, RecoveryPlan::NeedsManual { .. }),
+        "别人的记录不得续跑：{plan:?}"
+    );
+}
+
 // covers: R0863
 #[test]
 fn alignment_overflow_rejects_the_start() {
