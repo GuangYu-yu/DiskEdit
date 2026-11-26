@@ -59,7 +59,7 @@ fn execute(
             | StepKind::LvmPvShrink { .. }
             | StepKind::LvmGrowChain { .. }
             | StepKind::MovePartition { .. }
-            | StepKind::RefreshKernelView => None,
+            | StepKind::RefreshKernelView { .. } => None,
         })
         .ok_or_else(|| {
             (

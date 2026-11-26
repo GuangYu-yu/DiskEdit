@@ -15,8 +15,8 @@ use diskedit_core::fs::Program;
 use sha2::{Digest, Sha256};
 
 use crate::platform::{
-    Carrier, DeviceMatch, LoopBinding, MountFacts, Occupancy, Platform, PlatformError,
-    PlatformResult, StateLock, TargetHandle, TargetKind, ToolRun,
+    Carrier, DeviceMatch, LoopBinding, MountFacts, Occupancy, PartitionMount, Platform,
+    PlatformError, PlatformResult, StateLock, TargetHandle, TargetKind, ToolRun,
 };
 
 mod tools;
@@ -63,6 +63,24 @@ impl Platform for LinuxPlatform {
 
     fn mount_facts(&self, path: &Path) -> PlatformResult<MountFacts> {
         mount_facts(path)
+    }
+
+    fn partition_mount(&self, disk: &Path, partition: u32) -> PlatformResult<PartitionMount> {
+        partition_mount(disk, partition)
+    }
+
+    fn swap_active(&self, disk: &Path, partition: u32) -> PlatformResult<bool> {
+        swap_active(disk, partition)
+    }
+
+    fn resize_partition_live(
+        &self,
+        disk: &Path,
+        partition: u32,
+        start_bytes: u64,
+        len_bytes: u64,
+    ) -> PlatformResult<()> {
+        resize_partition_live(disk, partition, start_bytes, len_bytes)
     }
 
     fn carrier(&self) -> PlatformResult<Option<Box<dyn Carrier>>> {
@@ -574,6 +592,196 @@ fn unescape_mount(text: &str) -> String {
         }
     }
     String::from_utf8_lossy(&out).into_owned()
+}
+
+/// 目标分区的设备号（major, minor）；设备节点不存在时按"不适用"返回。
+fn partition_dev_no(disk: &Path, partition: u32) -> PlatformResult<(u64, u64)> {
+    let node = LinuxPlatform.partition_device(disk, partition)?;
+    let metadata = std::fs::metadata(&node).map_err(|error| PlatformError::io(&node, error))?;
+    let rdev = metadata.rdev();
+    Ok((u64::from(libc::major(rdev)), u64::from(libc::minor(rdev))))
+}
+
+/// 一条挂载记录：设备号与挂载点。
+type MountEntry = ((u64, u64), PathBuf);
+
+/// 一个挂载命名空间的记录集。
+type NamespaceMounts = (Option<u32>, Vec<MountEntry>);
+
+/// 一个挂载命名空间里的挂载记录：设备号与挂载点。
+fn read_mountinfo(path: &Path) -> io::Result<Vec<MountEntry>> {
+    let text = std::fs::read_to_string(path)?;
+    let mut entries = Vec::new();
+    for line in text.lines() {
+        let mut fields = line.split_whitespace();
+        let Some(_id) = fields.next() else { continue };
+        let Some(_parent) = fields.next() else {
+            continue;
+        };
+        let Some(dev) = fields.next() else { continue };
+        let Some((major, minor)) = dev.split_once(':') else {
+            continue;
+        };
+        let (Ok(major), Ok(minor)) = (major.parse::<u64>(), minor.parse::<u64>()) else {
+            continue;
+        };
+        let Some(_root) = fields.next() else { continue };
+        let Some(mount_point) = fields.next() else {
+            continue;
+        };
+        entries.push(((major, minor), PathBuf::from(unescape_mount(mount_point))));
+    }
+    Ok(entries)
+}
+
+/// 本命名空间的 `/proc/self/mountinfo`。
+fn own_mountinfo() -> PlatformResult<Vec<MountEntry>> {
+    read_mountinfo(Path::new("/proc/self/mountinfo"))
+        .map_err(|error| PlatformError::io(Path::new("/proc/self/mountinfo"), error))
+}
+
+/// 其他可读挂载命名空间的 `mountinfo`：读不到的进程直接跳过。
+fn other_mountinfo() -> Vec<NamespaceMounts> {
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return Vec::new();
+    };
+    let mut found = Vec::new();
+    for entry in entries.flatten() {
+        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+            continue;
+        };
+        let Ok(pid) = name.parse::<u32>() else {
+            continue;
+        };
+        if pid == std::process::id() {
+            continue;
+        }
+        let path = Path::new("/proc").join(&name).join("mountinfo");
+        if let Ok(entries) = read_mountinfo(&path) {
+            found.push((Some(pid), entries));
+        }
+    }
+    found
+}
+
+/// 分区在全部可读挂载命名空间里的使用情况。
+fn partition_mount(disk: &Path, partition: u32) -> PlatformResult<PartitionMount> {
+    let target = partition_dev_no(disk, partition)?;
+    let own: Vec<PathBuf> = own_mountinfo()?
+        .into_iter()
+        .filter(|(dev, _)| *dev == target)
+        .map(|(_, mount_point)| mount_point)
+        .collect();
+    match own.len() {
+        1 => {
+            return Ok(PartitionMount::Here {
+                mount_point: own.into_iter().next().expect("长度为一"),
+            });
+        }
+        n if n > 1 => return Ok(PartitionMount::Ambiguous),
+        _ => {}
+    }
+    for (pid, entries) in other_mountinfo() {
+        if let Some((_, mount_point)) = entries.into_iter().find(|(dev, _)| *dev == target) {
+            return Ok(PartitionMount::Elsewhere { mount_point, pid });
+        }
+    }
+    Ok(PartitionMount::NotMounted)
+}
+
+/// 分区是否是活动 swap 区域；读不出的条目按环境故障上抛，不折叠成"没有"。
+fn swap_active(disk: &Path, partition: u32) -> PlatformResult<bool> {
+    let target = partition_dev_no(disk, partition)?;
+    let text = std::fs::read_to_string("/proc/swaps")
+        .map_err(|error| PlatformError::io(Path::new("/proc/swaps"), error))?;
+    for line in text.lines().skip(1) {
+        let Some(source) = line.split_whitespace().next() else {
+            continue;
+        };
+        let metadata = std::fs::metadata(source).map_err(|error| {
+            PlatformError::io(
+                Path::new(source),
+                io::Error::new(
+                    error.kind(),
+                    format!("cannot resolve the /proc/swaps entry {source}: {error}"),
+                ),
+            )
+        })?;
+        let rdev = metadata.rdev();
+        if (u64::from(libc::major(rdev)), u64::from(libc::minor(rdev))) == target {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// `blkpg_ioctl_arg` 里的 `blkpg_partition`。
+#[repr(C)]
+struct BlkpgPartition {
+    start: i64,
+    length: i64,
+    pno: i32,
+    devname: [libc::c_char; 64],
+    volname: [libc::c_char; 64],
+}
+
+/// `BLKPG` 的 ioctl 参数头。
+#[repr(C)]
+struct BlkpgIoctlArg {
+    op: i32,
+    flags: i32,
+    datalen: i32,
+    data: *mut libc::c_void,
+}
+
+/// 让内核按新起点与长度调整一个已存在的分区。
+fn resize_partition_live(
+    disk: &Path,
+    partition: u32,
+    start_bytes: u64,
+    len_bytes: u64,
+) -> PlatformResult<()> {
+    const BLKPG: libc::c_ulong = 0x1269;
+    const BLKPG_RESIZE_PARTITION: i32 = 3;
+    let start = i64::try_from(start_bytes).map_err(|_| {
+        PlatformError::not_applicable("the partition start exceeds the ioctl range")
+    })?;
+    let length = i64::try_from(len_bytes).map_err(|_| {
+        PlatformError::not_applicable("the partition length exceeds the ioctl range")
+    })?;
+    let pno = i32::try_from(partition).map_err(|_| {
+        PlatformError::not_applicable("the partition number exceeds the ioctl range")
+    })?;
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(disk)
+        .map_err(|error| PlatformError::io(disk, error))?;
+    let mut part = BlkpgPartition {
+        start,
+        length,
+        pno,
+        devname: [0; 64],
+        volname: [0; 64],
+    };
+    let mut arg = BlkpgIoctlArg {
+        op: BLKPG_RESIZE_PARTITION,
+        flags: 0,
+        datalen: std::mem::size_of::<BlkpgPartition>() as i32,
+        data: &mut part as *mut BlkpgPartition as *mut libc::c_void,
+    };
+    // SAFETY: fd 来自刚打开的整盘设备；arg 指向的 BlkpgPartition 在调用期间存活。
+    let result = unsafe { libc::ioctl(file.as_raw_fd(), BLKPG, &mut arg) };
+    if result == 0 {
+        return Ok(());
+    }
+    let error = io::Error::last_os_error();
+    match error.raw_os_error() {
+        Some(libc::EPERM) | Some(libc::EACCES) => Err(PlatformError::not_supported(format!(
+            "the kernel refuses a live partition resize without CAP_SYS_ADMIN: {error}"
+        ))),
+        _ => Err(PlatformError::io(disk, error)),
+    }
 }
 
 /// 用真实的 `BLKRRPART` 探测，而不是 `euid`/`CapEff` 之类的代理：重读分区表是

@@ -21,7 +21,7 @@ const CHUNK: usize = 1 << 20;
 
 /// 执行一份已确认的整表写入计划。
 pub fn run(platform: &dyn Platform, target: &Path, plan: &ConfirmedPlan) -> Outcome {
-    match execute_plan(platform, target, plan) {
+    match execute_plan(platform, target, plan, true) {
         Ok(Some(why)) => Outcome::committed_unsynced(why),
         Ok(None) => Outcome::completed(),
         Err((error, wrote)) => failure(error, wrote),
@@ -29,10 +29,14 @@ pub fn run(platform: &dyn Platform, target: &Path, plan: &ConfirmedPlan) -> Outc
 }
 
 /// 表写事务主体；`resize` 也以它为表阶段，成功时返回内核视图未同步的原因（若有）。
+///
+/// `refresh` 为假时不在表提交后重读整盘：已挂载分区的在线路径随后用
+/// `BLKPG_RESIZE_PARTITION` 按分区增量同步，整盘重读只会得到 `EBUSY`。
 pub(super) fn execute_plan(
     platform: &dyn Platform,
     target: &Path,
     plan: &ConfirmedPlan,
+    refresh: bool,
 ) -> Result<Option<String>, (ExecError, bool)> {
     let step = plan
         .steps()
@@ -47,7 +51,7 @@ pub(super) fn execute_plan(
     let (segment_size, stamp, segments) = table_parts(step)?;
     match super::filesystem::ensure_block_capability(platform, target) {
         Ok(()) => {}
-        Err(error @ ExecError::Unsupported(_)) => {
+        Err(error @ ExecError::Unsupported(_)) if refresh => {
             return execute_via_carrier(
                 platform,
                 target,
@@ -121,6 +125,9 @@ pub(super) fn execute_plan(
 
     session.commit().map_err(|error| (error, wrote))?;
     // 记录已提交；内核视图同步失败属于"持久状态已达成但视图未同步"。
+    if !refresh {
+        return Ok(None);
+    }
     match handle.refresh_partitions() {
         Ok(()) => Ok(None),
         Err(error) => Ok(Some(format!(
@@ -242,7 +249,7 @@ fn table_parts(step: &Step) -> Result<TableWrite<'_>, (ExecError, bool)> {
         | StepKind::LvmPvShrink { .. }
         | StepKind::LvmGrowChain { .. }
         | StepKind::MovePartition { .. }
-        | StepKind::RefreshKernelView
+        | StepKind::RefreshKernelView { .. }
         | StepKind::RecoverRecords { .. } => Err((
             ExecError::InvalidPlan("the step is not a table write".to_owned()),
             false,

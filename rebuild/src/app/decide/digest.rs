@@ -255,7 +255,19 @@ fn encode_kind(out: &mut Vec<u8>, kind: &StepKind) {
             out.extend_from_slice(&chunk.to_le_bytes());
             out.push(u8::from(*ntfs_hidden));
         }
-        StepKind::RefreshKernelView => out.push(16),
+        StepKind::RefreshKernelView {
+            disk,
+            partition,
+            start_bytes,
+            bytes,
+        } => {
+            out.push(16);
+            out.extend_from_slice(&partition.to_le_bytes());
+            out.extend_from_slice(&start_bytes.to_le_bytes());
+            out.extend_from_slice(&bytes.to_le_bytes());
+            out.extend_from_slice(disk.to_string_lossy().as_bytes());
+            out.push(0);
+        }
         StepKind::RecoverRecords { mode } => {
             out.push(17);
             out.push(recover_tag(*mode));

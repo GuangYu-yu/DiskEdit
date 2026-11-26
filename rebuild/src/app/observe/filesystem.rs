@@ -176,7 +176,7 @@ fn capture_mounted(
 }
 
 /// 以整盘为现场；身份优先取盘自身证明的强身份，其次用声明的身份名。
-fn open_disk(
+pub(super) fn open_disk(
     platform: &dyn Platform,
     disk: &std::path::Path,
     request: &Request,

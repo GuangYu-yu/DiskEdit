@@ -34,6 +34,12 @@ pub fn decide(snapshot: &ResizeSnapshot, request: &Request) -> Decision {
     if matches!(snapshot.view, TableView::None) {
         return superfloppy(snapshot, resize);
     }
+    if let Some(refusal) = online_precondition(snapshot) {
+        return Decision::Refuse(refusal);
+    }
+    if snapshot.online.is_some() {
+        return online(snapshot, resize);
+    }
     if let Some(refusal) = admission(snapshot) {
         return Decision::Refuse(refusal);
     }
@@ -66,9 +72,6 @@ pub fn decide(snapshot: &ResizeSnapshot, request: &Request) -> Decision {
             why: "the target gives no comparable identity".to_owned(),
         });
     };
-    let Some(facts) = &snapshot.facts else {
-        return Decision::Refuse(unusable(snapshot));
-    };
     let sector = snapshot.target.sector_size;
     if sector == 0 {
         return Decision::Refuse(Refusal::GeometryUnknown {
@@ -76,35 +79,9 @@ pub fn decide(snapshot: &ResizeSnapshot, request: &Request) -> Decision {
         });
     }
 
-    let (table, protective_mbr) = match facts {
-        TableFacts::Gpt {
-            header,
-            entries,
-            sector_size,
-            total_bytes,
-            state,
-            pmbr,
-            lba0,
-        } => {
-            let mut gpt = GptTable {
-                header: header.clone(),
-                entries: entries.clone(),
-                sector_size: *sector_size,
-                total_bytes: *total_bytes,
-            };
-            let repaired = match super::repair::adopt(&mut gpt, *state, *pmbr, lba0) {
-                Ok(repaired) => repaired,
-                Err(refusal) => return Decision::Refuse(refusal),
-            };
-            (Resizable::Gpt(gpt), repaired.protective_mbr)
-        }
-        TableFacts::Mbr { lba0, total_lba } => (
-            Resizable::Mbr {
-                lba0: lba0.clone(),
-                total_lba: *total_lba,
-            },
-            None,
-        ),
+    let (table, protective_mbr) = match editable(snapshot) {
+        Ok(editable) => editable,
+        Err(refusal) => return Decision::Refuse(refusal),
     };
 
     // MBR 主表没有可搬移的数据通道：`--allow-move` 与 `--chunk` 在 MBR 上无从执行，
@@ -928,6 +905,331 @@ fn superfloppy(snapshot: &ResizeSnapshot, resize: &ResizeRequest) -> Decision {
             snapshot.target.display
         ),
     )
+}
+
+/// 把快照里的表事实变成可编辑的表；GPT 先按修复判据落新上界与保护 MBR。
+fn editable(snapshot: &ResizeSnapshot) -> Result<(Resizable, Option<Vec<u8>>), Refusal> {
+    let Some(facts) = &snapshot.facts else {
+        return Err(unusable(snapshot));
+    };
+    match facts {
+        TableFacts::Gpt {
+            header,
+            entries,
+            sector_size,
+            total_bytes,
+            state,
+            pmbr,
+            lba0,
+        } => {
+            let mut gpt = GptTable {
+                header: header.clone(),
+                entries: entries.clone(),
+                sector_size: *sector_size,
+                total_bytes: *total_bytes,
+            };
+            let repaired = super::repair::adopt(&mut gpt, *state, *pmbr, lba0)?;
+            Ok((Resizable::Gpt(gpt), repaired.protective_mbr))
+        }
+        TableFacts::Mbr { lba0, total_lba } => Ok((
+            Resizable::Mbr {
+                lba0: lba0.clone(),
+                total_lba: *total_lba,
+            },
+            None,
+        )),
+    }
+}
+
+/// 在线路径之前的使用事实：别的命名空间里的挂载、活动 swap 都不能在本次处理。
+fn online_precondition(snapshot: &ResizeSnapshot) -> Option<Refusal> {
+    if let Some(partition) = &snapshot.selected {
+        let in_use = matches!(
+            snapshot.partition_mount,
+            Some(
+                crate::platform::PartitionMount::Here { .. }
+                    | crate::platform::PartitionMount::Elsewhere { .. }
+                    | crate::platform::PartitionMount::Ambiguous
+            )
+        );
+        if partition.content == ContentKind::Lvm2Pv && (snapshot.online.is_some() || in_use) {
+            return Some(Refusal::TableEdit {
+                why: "an LVM2 PV cannot be resized while its partition may be held by active \
+                      volumes — the online PV geometry path is not available in this build; \
+                      deactivate the volume group and use the offline PV path (or --grow-lv on an \
+                      unmounted PV)"
+                    .to_owned(),
+            });
+        }
+    }
+    if let Some(mount) = &snapshot.partition_mount {
+        match mount {
+            crate::platform::PartitionMount::Here { .. }
+            | crate::platform::PartitionMount::NotMounted => {}
+            crate::platform::PartitionMount::Elsewhere { mount_point, pid } => {
+                return Some(Refusal::TableEdit {
+                    why: format!(
+                        "partition {0} is mounted at {1} in another mount namespace{2} — it cannot \
+                         be resized from this one; unmount it there or run inside that namespace",
+                        snapshot
+                            .selected
+                            .as_ref()
+                            .map(|partition| partition.number)
+                            .unwrap_or(0),
+                        mount_point.display(),
+                        match pid {
+                            Some(pid) => format!(" (pid {pid})"),
+                            None => " (the namespace id could not be determined)".to_owned(),
+                        }
+                    ),
+                });
+            }
+            crate::platform::PartitionMount::Ambiguous => {
+                return Some(Refusal::TableEdit {
+                    why: "the partition has more than one mount record in this namespace — \
+                          unmount the stacked layers and retry"
+                        .to_owned(),
+                });
+            }
+        }
+    }
+    if snapshot.swap_active == Some(true) {
+        return Some(Refusal::TableEdit {
+            why: format!(
+                "partition {} is active swap — run swapoff first",
+                snapshot
+                    .selected
+                    .as_ref()
+                    .map(|partition| partition.number)
+                    .unwrap_or(0)
+            ),
+        });
+    }
+    None
+}
+
+/// 已挂载分区的几何调整：只扩、只吃右侧连续空闲、必须带文件系统步。
+fn online(snapshot: &ResizeSnapshot, resize: &ResizeRequest) -> Decision {
+    let Some(online) = &snapshot.online else {
+        return refuse("resize reached the online path without mount facts");
+    };
+    if resize.no_fs {
+        return Decision::Refuse(Refusal::TableEdit {
+            why:
+                "--no-fs is not available online — the online path always includes the filesystem \
+                  step; unmount the partition to skip it"
+                    .to_owned(),
+        });
+    }
+    if resize.allow_move {
+        return Decision::Refuse(Refusal::TableEdit {
+            why: "--allow-move is not available online — the online path cannot relocate blocking \
+                  partitions"
+                .to_owned(),
+        });
+    }
+    if resize.chunk.is_some() {
+        return Decision::Refuse(Refusal::TableEdit {
+            why: "--chunk has no effect online — the online path does not relocate data".to_owned(),
+        });
+    }
+    if resize.grow_lv || resize.lv.is_some() {
+        return Decision::Refuse(Refusal::TableEdit {
+            why: "--grow-lv/--lv is not available online — resizing a mounted PV needs the online \
+                  PV geometry path, which this build does not provide"
+                .to_owned(),
+        });
+    }
+    let Some(partition) = &snapshot.selected else {
+        return Decision::Refuse(Refusal::PartitionMissing {
+            number: online.partition,
+        });
+    };
+    if partition.number != online.partition {
+        return Decision::Refuse(Refusal::FactUnknown {
+            what: "the mounted partition does not match the selected partition".to_owned(),
+        });
+    }
+    let Some(identity) = snapshot.target.identity else {
+        return Decision::Refuse(Refusal::IdentityUnprovable {
+            why: "the target gives no comparable identity".to_owned(),
+        });
+    };
+    let sector = snapshot.target.sector_size;
+    if sector == 0 {
+        return Decision::Refuse(Refusal::GeometryUnknown {
+            why: "the logical sector size is unknown".to_owned(),
+        });
+    }
+    let (table, protective_mbr) = match editable(snapshot) {
+        Ok(editable) => editable,
+        Err(refusal) => return Decision::Refuse(refusal),
+    };
+    let number = partition.number;
+    let start = partition.first_lba;
+    let old_end = partition.last_lba;
+    let current = partition.bytes;
+    let last_usable = table.last_usable();
+    let free = free_right(&table.used_ranges(), old_end, last_usable);
+    let new_end = match resolve_end(
+        resize,
+        EndContext {
+            start,
+            old_end,
+            current,
+            free,
+            sector,
+            last_usable,
+            grow_ceiling: None,
+        },
+    ) {
+        Ok(end) => end,
+        Err(refusal) => return Decision::Refuse(refusal),
+    };
+    if new_end < old_end {
+        return Decision::Refuse(Refusal::OnlineShrink {
+            why:
+                "a mounted filesystem can only be grown online; unmount it and shrink through the \
+                  offline path where the filesystem supports it"
+                    .to_owned(),
+        });
+    }
+    if new_end == old_end {
+        if resize.size.as_ref() == Some(&SizeSpec::Grow) {
+            return Decision::Refuse(Refusal::TableEdit {
+                why:
+                    "grow would not extend the partition — no usable free space to its right; the \
+                      online path cannot relocate blocking partitions (unmount to grow offline, or \
+                      fill the filesystem with `resizefs <mountpoint>`)"
+                        .to_owned(),
+            });
+        }
+        return Decision::Unchanged {
+            note: format!("partition #{number} is already {current} bytes — nothing to do"),
+        };
+    }
+    if new_end - old_end > free {
+        return Decision::Refuse(Refusal::TableEdit {
+            why: "grow would not extend the partition — no usable free space to its right; the \
+                  online path cannot relocate blocking partitions (unmount to grow offline, or \
+                  fill the filesystem with `resizefs <mountpoint>`)"
+                .to_owned(),
+        });
+    }
+    let filesystem = match online_filesystem(partition.content, number, &snapshot.tools) {
+        Ok(filesystem) => filesystem,
+        Err(refusal) => return Decision::Refuse(refusal),
+    };
+    let bytes = (new_end - start + 1)
+        .checked_mul(sector)
+        .ok_or_else(|| Refusal::GeometryUnknown {
+            why: "the grown partition length overflows the byte range".to_owned(),
+        });
+    let bytes = match bytes {
+        Ok(bytes) => bytes,
+        Err(refusal) => return Decision::Refuse(refusal),
+    };
+    let start_bytes = start
+        .checked_mul(sector)
+        .ok_or_else(|| Refusal::GeometryUnknown {
+            why: "the partition start overflows the byte offset".to_owned(),
+        });
+    let start_bytes = match start_bytes {
+        Ok(value) => value,
+        Err(refusal) => return Decision::Refuse(refusal),
+    };
+    if resize.dry_run {
+        return super::report::decision(
+            Report::Resize(ResizePreview {
+                partition: number,
+                start_lba: start,
+                old_end_lba: old_end,
+                new_end_lba: new_end,
+                sector_size: sector,
+                filesystem: Some(partition.content),
+                grow: true,
+            }),
+            vec![Step::new(StepKind::Inspect, Vec::new())],
+        );
+    }
+    let mut segments = match table.resized(number, start, new_end, &[]) {
+        Ok(segments) => segments,
+        Err(why) => return Decision::Refuse(Refusal::TableDamaged { why }),
+    };
+    super::repair::append_protective(&mut segments, protective_mbr);
+    let table_step = table_step(table.format(), sector, segments, snapshot.stamp);
+    let refresh = Step::new(
+        StepKind::RefreshKernelView {
+            disk: online.disk.clone(),
+            partition: number,
+            start_bytes,
+            bytes,
+        },
+        Vec::new(),
+    );
+    let grow = Step::new(
+        StepKind::GrowFilesystemOnline {
+            mount_point: online.mount_point.clone(),
+            device: online.device.clone(),
+            disk: online.disk.clone(),
+            partition: number,
+            filesystem,
+            bytes,
+        },
+        Vec::new(),
+    );
+    let plan = match Plan::write(vec![table_step, refresh, grow], identity) {
+        Ok(plan) => plan,
+        Err(refusal) => return Decision::Refuse(refusal),
+    };
+    finish(
+        snapshot,
+        plan,
+        format!(
+            "resized partition #{number} online to LBA {start}..{new_end} (verify with: diskedit info {})",
+            snapshot.target.display
+        ),
+    )
+}
+
+/// 在线扩容可用的文件系统族与工具；没有在线工具的内容类别如实拒绝。
+fn online_filesystem(
+    content: ContentKind,
+    number: u32,
+    tools: &[(Program, bool)],
+) -> Result<diskedit_core::fs::FsKind, Refusal> {
+    use diskedit_core::fs::OnlineGrow;
+    let Some(filesystem) = content.filesystem() else {
+        return Err(match content {
+            ContentKind::Unknown => Refusal::FilesystemUnknown { number },
+            ContentKind::Filesystem(_) => Refusal::ContentUnsupported {
+                what: format!("resize {}", content.as_str()),
+                why: "this filesystem carries no grow step".to_owned(),
+            },
+            ContentKind::Swap
+            | ContentKind::Lvm2Pv
+            | ContentKind::Luks
+            | ContentKind::BitLocker => Refusal::NoFilesystem {
+                number,
+                what: content.as_str().to_owned(),
+            },
+        });
+    };
+    match catalog::online_grow(content) {
+        OnlineGrow::Device(program) | OnlineGrow::MountPoint(program) => {
+            if !tools
+                .iter()
+                .any(|(known, available)| *known == program && *available)
+            {
+                return Err(Refusal::ToolMissing { program });
+            }
+            Ok(filesystem)
+        }
+        OnlineGrow::Unsupported(why) => Err(Refusal::ContentUnsupported {
+            what: format!("resize {} online", content.as_str()),
+            why: why.to_owned(),
+        }),
+    }
 }
 
 fn admission(snapshot: &ResizeSnapshot) -> Option<Refusal> {

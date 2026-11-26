@@ -3,19 +3,30 @@
 //! 这些用例用内存宿主驱动真实执行器，不挂载任何设备；真实挂载与来宾里的扩容由
 //! `tests/carrier.rs` 在具备 QEMU 与 bundle 时执行。
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
+use diskedit::app::decide::step::TableSegment;
 use diskedit::app::decide::{Plan, Step, StepKind, confirm};
-use diskedit::app::execute::{ExecutionState, filesystem};
+use diskedit::app::execute::{ExecutionState, filesystem, resize};
+use diskedit::app::observe::records::RecordState;
+use diskedit::app::observe::resize::{OnlineFacts, ResizeSnapshot};
+use diskedit::app::observe::table::{MbrView, PartitionView, TableView};
+use diskedit::app::observe::{
+    Command, PartitionSelector, PriorState, Request, ResizeRequest, SizeSpec, TableFacts,
+    TableFormat, TargetFacts, TargetSpec,
+};
 use diskedit::app::report::exit;
 use diskedit::platform::{
-    Carrier, LoopBinding, MountFacts, Occupancy, OnlineReport, OnlineRequest, Platform,
-    PlatformError, PlatformResult, StateLock, TargetHandle, TargetKind, ToolRun,
+    Carrier, LoopBinding, MountFacts, Occupancy, OnlineReport, OnlineRequest, PartitionMount,
+    Platform, PlatformError, PlatformResult, StateLock, TargetHandle, TargetKind, ToolRun,
 };
 use diskedit_core::evidence::{Generation, Observation, Source};
 use diskedit_core::fingerprint::Fingerprint;
-use diskedit_core::fs::{FsKind, Program};
+use diskedit_core::fs::{ContentKind, FsKind, Program};
+use diskedit_core::region::Region;
+use diskedit_core::table::stamp::{stamp_regions, table_stamp};
 
 const IDENTITY: Fingerprint = Fingerprint::strong([0x11; 32]);
 
@@ -335,4 +346,503 @@ fn an_online_btrfs_grow_that_stopped_short_is_partial() {
     let outcome = filesystem::run_online(&fake, &plan_for(FsKind::Btrfs));
     assert_eq!(outcome.state(), ExecutionState::NeedsRecovery);
     assert_eq!(exit::exit_of(&outcome), exit::PARTIAL);
+}
+
+// --- 已挂载分区的几何调整（在线 `resize`） ---------------------------------
+
+const DISK_BYTES: u64 = 8192 * 512;
+
+/// 一条 MBR 主分区记录；`start`/`sectors` 都是 LBA。
+fn mbr_lba0(start: u32, sectors: u32) -> Vec<u8> {
+    let mut bytes = vec![0u8; 512];
+    bytes[446] = 0x00;
+    bytes[447..450].copy_from_slice(&[0xFE, 0xFF, 0xFF]);
+    bytes[450] = 0x83;
+    bytes[451..454].copy_from_slice(&[0xFE, 0xFF, 0xFF]);
+    bytes[454..458].copy_from_slice(&start.to_le_bytes());
+    bytes[458..462].copy_from_slice(&sectors.to_le_bytes());
+    bytes[510] = 0x55;
+    bytes[511] = 0xAA;
+    bytes
+}
+
+fn partition_view(start: u64, sectors: u64) -> PartitionView {
+    PartitionView {
+        number: 1,
+        first_lba: start,
+        last_lba: start + sectors - 1,
+        type_text: "0x83".to_owned(),
+        name: String::new(),
+        base_bytes: start * 512,
+        bytes: sectors * 512,
+        content: ContentKind::Filesystem(FsKind::Ext),
+    }
+}
+
+fn absent_record() -> RecordState {
+    RecordState {
+        directory: None,
+        directory_exists: false,
+        file: None,
+        bytes: None,
+        unavailable: None,
+    }
+}
+
+/// 已挂载分区的 MBR 表现场：分区 1 从 `start` 起占 `sectors` 个扇区。
+fn online_snapshot(start: u64, sectors: u64) -> ResizeSnapshot {
+    let partition = partition_view(start, sectors);
+    ResizeSnapshot {
+        target: TargetFacts {
+            display: "/dev/sda".to_owned(),
+            path: PathBuf::from("/dev/sda"),
+            bytes: DISK_BYTES,
+            kind: TargetKind::File,
+            sector_size: 512,
+            identity: Some(IDENTITY),
+        },
+        occupancy: Occupancy::Idle,
+        record: absent_record(),
+        prior: PriorState::Absent,
+        view: TableView::Mbr(MbrView {
+            sector_size: 512,
+            partitions: vec![partition.clone()],
+        }),
+        facts: Some(TableFacts::Mbr {
+            lba0: mbr_lba0(
+                u32::try_from(start).expect("起点可表示"),
+                u32::try_from(sectors).expect("长度可表示"),
+            ),
+            total_lba: DISK_BYTES / 512,
+        }),
+        whole_content: None,
+        stamp: [0u8; 32],
+        is_partition_node: false,
+        selector: Some(PartitionSelector::Number(1)),
+        selected: Some(partition),
+        tools: vec![
+            (Program::E2fsck, true),
+            (Program::Resize2fs, true),
+            (Program::Dumpe2fs, true),
+        ],
+        lvm: None,
+        online: Some(OnlineFacts {
+            mount_point: PathBuf::from("/mnt"),
+            device: PathBuf::from("/dev/sda1"),
+            disk: PathBuf::from("/dev/sda"),
+            partition: 1,
+        }),
+        partition_mount: None,
+        swap_active: Some(false),
+    }
+}
+
+fn resize_command(size: Option<SizeSpec>, end: Option<u64>) -> ResizeRequest {
+    ResizeRequest {
+        partition: None,
+        size,
+        end,
+        grow_to_end: false,
+        align: None,
+        allow_move: false,
+        chunk: None,
+        grow_lv: false,
+        lv: None,
+        no_fs: false,
+        dry_run: false,
+    }
+}
+
+fn request_for(resize: ResizeRequest) -> Request {
+    Request::new(TargetSpec::new("/mnt", None), Command::Resize(resize)).with_confirmation(true)
+}
+
+fn resize_request(size: Option<SizeSpec>, end: Option<u64>) -> Request {
+    request_for(resize_command(size, end))
+}
+
+// covers: R0421, R0422, R0423, R0424, R0425, R0426, R0427, R0428, R0429, R0430, R0431, R0432,
+// covers: R0433, R0434
+#[test]
+fn online_resize_plans_table_then_kernel_view_then_filesystem() {
+    let snapshot = online_snapshot(2048, 1024);
+    let request = resize_request(Some(SizeSpec::Grow), None);
+    let decision = diskedit::app::decide::resize::decide(&snapshot, &request);
+    let diskedit::app::decide::Decision::Execute { plan, .. } = decision else {
+        panic!("an online grow must plan executable steps: {decision:?}");
+    };
+    let kinds: Vec<&StepKind> = plan.steps().iter().map(|step| &step.kind).collect();
+    assert!(matches!(kinds[0], StepKind::WriteTable { .. }), "{kinds:?}");
+    let StepKind::RefreshKernelView {
+        disk,
+        partition,
+        start_bytes,
+        bytes,
+    } = kinds[1]
+    else {
+        panic!("the second step must sync the kernel view: {kinds:?}");
+    };
+    assert_eq!(disk, &PathBuf::from("/dev/sda"));
+    assert_eq!(*partition, 1);
+    assert_eq!(*start_bytes, 2048 * 512);
+    assert_eq!(*bytes, 6144 * 512);
+    let StepKind::GrowFilesystemOnline {
+        mount_point,
+        disk,
+        partition,
+        bytes,
+        ..
+    } = kinds[2]
+    else {
+        panic!("the third step must grow the filesystem: {kinds:?}");
+    };
+    assert_eq!(mount_point, &PathBuf::from("/mnt"));
+    assert_eq!(disk, &PathBuf::from("/dev/sda"));
+    assert_eq!(*partition, 1);
+    assert_eq!(*bytes, 6144 * 512);
+}
+
+// covers: R0428, R0429, R0430
+#[test]
+fn online_resize_refuses_flags_the_online_path_cannot_honour() {
+    let cases: [fn(&mut ResizeRequest); 3] = [
+        |resize| resize.no_fs = true,
+        |resize| resize.allow_move = true,
+        |resize| resize.chunk = Some(1 << 20),
+    ];
+    for mutate in cases {
+        let snapshot = online_snapshot(2048, 1024);
+        let mut resize = resize_command(Some(SizeSpec::Grow), None);
+        mutate(&mut resize);
+        let request = request_for(resize);
+        let diskedit::app::decide::Decision::Refuse(refusal) =
+            diskedit::app::decide::resize::decide(&snapshot, &request)
+        else {
+            panic!("the online path must refuse this flag: {request:?}");
+        };
+        assert_eq!(exit::exit_of_refusal(&refusal), exit::REFUSED);
+    }
+}
+
+// covers: R0742, R0743
+#[test]
+fn online_resize_refuses_shrinking_a_mounted_partition() {
+    let snapshot = online_snapshot(2048, 1024);
+    let request = resize_request(None, Some(3000));
+    let diskedit::app::decide::Decision::Refuse(refusal) =
+        diskedit::app::decide::resize::decide(&snapshot, &request)
+    else {
+        panic!("a mounted partition cannot shrink online");
+    };
+    assert_eq!(exit::exit_of_refusal(&refusal), exit::REFUSED);
+}
+
+// covers: R0432
+#[test]
+fn online_grow_without_free_space_is_refused() {
+    let snapshot = online_snapshot(2048, 6144);
+    let request = resize_request(Some(SizeSpec::Grow), None);
+    let diskedit::app::decide::Decision::Refuse(refusal) =
+        diskedit::app::decide::resize::decide(&snapshot, &request)
+    else {
+        panic!("grow with no free space must be refused");
+    };
+    assert_eq!(exit::exit_of_refusal(&refusal), exit::REFUSED);
+}
+
+struct MemHandle {
+    bytes: Arc<Mutex<Vec<u8>>>,
+}
+
+impl TargetHandle for MemHandle {
+    fn path(&self) -> &Path {
+        Path::new("memory")
+    }
+    fn len(&self) -> u64 {
+        self.bytes.lock().unwrap().len() as u64
+    }
+    fn kind(&self) -> TargetKind {
+        TargetKind::File
+    }
+    fn sector_size(&self) -> Option<u64> {
+        Some(512)
+    }
+    fn read_at(&self, offset: u64, buf: &mut [u8]) -> PlatformResult<usize> {
+        let bytes = self.bytes.lock().unwrap();
+        let start = offset as usize;
+        if start >= bytes.len() {
+            return Ok(0);
+        }
+        let end = (start + buf.len()).min(bytes.len());
+        let len = end - start;
+        buf[..len].copy_from_slice(&bytes[start..end]);
+        Ok(len)
+    }
+    fn write_at(&mut self, offset: u64, buf: &[u8]) -> PlatformResult<usize> {
+        let mut bytes = self.bytes.lock().unwrap();
+        let start = offset as usize;
+        let end = start + buf.len();
+        if end > bytes.len() {
+            return Err(PlatformError::parse("write past the memory image"));
+        }
+        bytes[start..end].copy_from_slice(buf);
+        Ok(buf.len())
+    }
+    fn barrier(&mut self) -> PlatformResult<()> {
+        Ok(())
+    }
+    fn refresh_partitions(&mut self) -> PlatformResult<()> {
+        Ok(())
+    }
+}
+
+/// 内存宿主：带上表字节、记录目录与内核视图调用记录。
+struct LivePlatform {
+    image: Mutex<Vec<u8>>,
+    files: Mutex<BTreeMap<PathBuf, Vec<u8>>>,
+    live: Mutex<Vec<(u32, u64, u64)>>,
+    live_result: Mutex<Result<(), String>>,
+    replies: Mutex<std::collections::VecDeque<Call>>,
+    calls: Mutex<Vec<Program>>,
+}
+
+impl LivePlatform {
+    fn new(bytes: Vec<u8>, replies: Vec<Call>) -> Self {
+        Self {
+            image: Mutex::new(bytes),
+            files: Mutex::new(BTreeMap::new()),
+            live: Mutex::new(Vec::new()),
+            live_result: Mutex::new(Ok(())),
+            replies: Mutex::new(replies.into()),
+            calls: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn calls(&self) -> Vec<Program> {
+        self.calls.lock().unwrap().clone()
+    }
+
+    fn live_calls(&self) -> Vec<(u32, u64, u64)> {
+        self.live.lock().unwrap().clone()
+    }
+}
+
+impl Platform for LivePlatform {
+    fn open_target(&self, _path: &Path) -> PlatformResult<Box<dyn TargetHandle>> {
+        Ok(Box::new(MemHandle {
+            bytes: Arc::new(Mutex::new(self.image.lock().unwrap().clone())),
+        }))
+    }
+    fn open_target_read_only(&self, _path: &Path) -> PlatformResult<Box<dyn TargetHandle>> {
+        self.open_target(_path)
+    }
+    fn path_kind(&self, _path: &Path) -> TargetKind {
+        TargetKind::File
+    }
+    fn is_partition_node(&self, _path: &Path) -> bool {
+        false
+    }
+    fn identity(&self, _path: &Path) -> PlatformResult<Fingerprint> {
+        Ok(IDENTITY)
+    }
+    fn occupancy(&self, _path: &Path) -> PlatformResult<Occupancy> {
+        Ok(Occupancy::Idle)
+    }
+    fn state_root(&self) -> Option<PathBuf> {
+        Some(PathBuf::from("/state"))
+    }
+    fn is_directory(&self, path: &Path) -> bool {
+        path == Path::new("/mnt")
+    }
+    fn list_files(&self, _root: &Path) -> PlatformResult<Vec<PathBuf>> {
+        Ok(self.files.lock().unwrap().keys().cloned().collect())
+    }
+    fn read_file(&self, path: &Path) -> PlatformResult<Option<Vec<u8>>> {
+        Ok(self.files.lock().unwrap().get(path).cloned())
+    }
+    fn run(&self, program: Program, _args: &[String]) -> PlatformResult<ToolRun> {
+        self.calls.lock().unwrap().push(program);
+        let reply = self
+            .replies
+            .lock()
+            .unwrap()
+            .pop_front()
+            .unwrap_or(Call::Exits(Some(0), String::new()));
+        match reply {
+            Call::Exits(code, stdout) => Ok(ToolRun {
+                code,
+                stdout,
+                stderr: String::new(),
+            }),
+        }
+    }
+    fn tool_available(&self, _program: Program) -> bool {
+        true
+    }
+    fn tool_name(&self, _program: Program) -> &'static str {
+        "tool"
+    }
+    fn bind_loop(&self, _path: &Path, _offset: u64, _len: u64) -> PlatformResult<LoopBinding> {
+        Err(PlatformError::not_supported("no loop device in this test"))
+    }
+    fn partition_device(&self, _disk: &Path, _number: u32) -> PlatformResult<PathBuf> {
+        Ok(PathBuf::from("/dev/sda1"))
+    }
+    fn entropy(&self, len: usize) -> PlatformResult<Vec<u8>> {
+        Ok(vec![0u8; len])
+    }
+    fn create_directory_all(&self, _path: &Path) -> PlatformResult<()> {
+        Ok(())
+    }
+    fn remove_directory(&self, _path: &Path) -> PlatformResult<()> {
+        Ok(())
+    }
+    fn temporary_directory(&self, _tag: &str) -> PlatformResult<PathBuf> {
+        Ok(PathBuf::from("/tmp"))
+    }
+    fn write_state_file(&self, path: &Path, bytes: &[u8]) -> PlatformResult<()> {
+        self.files
+            .lock()
+            .unwrap()
+            .insert(path.to_path_buf(), bytes.to_vec());
+        Ok(())
+    }
+    fn append_state_file(&self, path: &Path, bytes: &[u8]) -> PlatformResult<()> {
+        self.files
+            .lock()
+            .unwrap()
+            .entry(path.to_path_buf())
+            .or_default()
+            .extend_from_slice(bytes);
+        Ok(())
+    }
+    fn remove_state_file(&self, path: &Path) -> PlatformResult<()> {
+        self.files.lock().unwrap().remove(path);
+        Ok(())
+    }
+    fn sync_directory(&self, _path: &Path) -> PlatformResult<()> {
+        Ok(())
+    }
+    fn lock_state(&self, _path: &Path) -> PlatformResult<Box<dyn StateLock>> {
+        Ok(Box::new(Lock))
+    }
+    fn mount_facts(&self, _path: &Path) -> PlatformResult<MountFacts> {
+        Ok(MountFacts::Mounted {
+            mount_point: PathBuf::from("/mnt"),
+            device: PathBuf::from("/dev/sda1"),
+            disk: PathBuf::from("/dev/sda"),
+            partition: 1,
+        })
+    }
+    fn partition_mount(&self, _disk: &Path, _partition: u32) -> PlatformResult<PartitionMount> {
+        Ok(PartitionMount::Here {
+            mount_point: PathBuf::from("/mnt"),
+        })
+    }
+    fn swap_active(&self, _disk: &Path, _partition: u32) -> PlatformResult<bool> {
+        Ok(false)
+    }
+    fn resize_partition_live(
+        &self,
+        _disk: &Path,
+        partition: u32,
+        start_bytes: u64,
+        len_bytes: u64,
+    ) -> PlatformResult<()> {
+        self.live
+            .lock()
+            .unwrap()
+            .push((partition, start_bytes, len_bytes));
+        match self.live_result.lock().unwrap().clone() {
+            Ok(()) => Ok(()),
+            Err(why) => Err(PlatformError::not_supported(why)),
+        }
+    }
+}
+
+fn image_stamp(bytes: &[u8]) -> [u8; 32] {
+    let regions = stamp_regions(bytes.len() as u64, 512);
+    let parts: Vec<Vec<u8>> = regions
+        .iter()
+        .map(|region| bytes[region.start() as usize..region.end() as usize].to_vec())
+        .collect();
+    let refs: Vec<&[u8]> = parts.iter().map(Vec::as_slice).collect();
+    table_stamp(&refs)
+}
+
+fn online_execution_plan(bytes: &[u8]) -> diskedit::app::decide::ConfirmedPlan {
+    let region = Region::sized(0, 512).expect("表区区间可构造");
+    let table = Step::new(
+        StepKind::WriteTable {
+            format: TableFormat::Mbr,
+            segment_size: 512,
+            stamp: image_stamp(bytes),
+            segments: vec![TableSegment {
+                region,
+                bytes: vec![0xAA; 512],
+            }],
+        },
+        vec![region],
+    );
+    let refresh = Step::new(
+        StepKind::RefreshKernelView {
+            disk: PathBuf::from("/dev/sda"),
+            partition: 1,
+            start_bytes: 2048 * 512,
+            bytes: 6144 * 512,
+        },
+        Vec::new(),
+    );
+    let grow = Step::new(
+        StepKind::GrowFilesystemOnline {
+            mount_point: PathBuf::from("/mnt"),
+            device: PathBuf::from("/dev/sda1"),
+            disk: PathBuf::from("/dev/sda"),
+            partition: 1,
+            filesystem: FsKind::Ext,
+            bytes: 6144 * 512,
+        },
+        Vec::new(),
+    );
+    let plan = Plan::write(vec![table, refresh, grow], IDENTITY).expect("在线计划可构造");
+    let current = Observation::known(IDENTITY, Source::new("test"), Generation::FIRST);
+    confirm(plan, true, &current).expect("计划可确认")
+}
+
+// covers: R0760
+#[test]
+fn online_resize_writes_the_table_then_resizes_the_kernel_view_then_the_filesystem() {
+    let bytes = vec![0u8; DISK_BYTES as usize];
+    let platform = LivePlatform::new(
+        bytes.clone(),
+        vec![
+            Call::Exits(Some(0), String::new()),
+            Call::Exits(Some(0), geometry(3072, 1024)),
+        ],
+    );
+    let plan = online_execution_plan(&bytes);
+    let outcome = resize::run_online(&platform, &plan);
+    assert_eq!(outcome.state(), ExecutionState::Committed);
+    assert_eq!(exit::exit_of(&outcome), exit::SUCCESS);
+    assert_eq!(platform.live_calls(), vec![(1, 2048 * 512, 6144 * 512)]);
+    assert_eq!(
+        platform.calls(),
+        vec![Program::Resize2fs, Program::Dumpe2fs]
+    );
+}
+
+// covers: R0760
+#[test]
+fn a_failed_kernel_view_update_after_the_table_write_is_partial() {
+    let bytes = vec![0u8; DISK_BYTES as usize];
+    let platform = LivePlatform::new(bytes.clone(), Vec::new());
+    *platform.live_result.lock().unwrap() = Err("EPERM".to_owned());
+    let plan = online_execution_plan(&bytes);
+    let outcome = resize::run_online(&platform, &plan);
+    assert_eq!(outcome.state(), ExecutionState::CommittedUnsynced);
+    assert_eq!(exit::exit_of(&outcome), exit::PARTIAL);
+    assert!(
+        platform.calls().is_empty(),
+        "the filesystem step must not run after a failed kernel update"
+    );
 }

@@ -345,7 +345,7 @@ fn write(
             | decide::StepKind::LvmPvShrink { .. }
             | decide::StepKind::LvmGrowChain { .. }
             | decide::StepKind::MovePartition { .. }
-            | decide::StepKind::RefreshKernelView
+            | decide::StepKind::RefreshKernelView { .. }
             | decide::StepKind::RecoverRecords { .. } => None,
         })
         .unwrap_or(path);
@@ -382,6 +382,9 @@ fn write(
         .any(|step| matches!(step.kind, decide::StepKind::GrowFilesystemOnline { .. }));
     let outcome = if recovery {
         execute::recover::run(platform, path, &plan)
+    } else if online && table {
+        // 已挂载分区的几何调整：表、内核视图与文件系统三步按固定次序执行。
+        execute::resize::run_online(platform, &plan)
     } else if online {
         execute::filesystem::run_online(platform, &plan)
     } else if filesystem && table {

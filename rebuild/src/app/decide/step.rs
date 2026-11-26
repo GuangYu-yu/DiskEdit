@@ -144,8 +144,15 @@ pub enum StepKind {
         /// 目标内容已识别为 NTFS：平移后修正主备引导扇区里的 `HiddenSectors`。
         ntfs_hidden: bool,
     },
-    /// 让内核重读分区表与块设备尺寸。
-    RefreshKernelView,
+    /// 让内核按新的起点与长度调整一个已存在分区（`BLKPG_RESIZE_PARTITION`）。
+    ///
+    /// 用于已挂载分区：整盘重读在分区被占用时返回 `EBUSY`，只能按分区增量调整。
+    RefreshKernelView {
+        disk: PathBuf,
+        partition: u32,
+        start_bytes: u64,
+        bytes: u64,
+    },
     /// 处理记录：回滚、重放或归档。
     RecoverRecords { mode: RecoverMode },
 }
@@ -159,7 +166,7 @@ impl StepKind {
             | Self::ListRecords
             | Self::VerifyRecord { .. }
             | Self::ScanRecords => Access::ReadOnly,
-            Self::RefreshKernelView | Self::GrowFilesystemOnline { .. } => {
+            Self::RefreshKernelView { .. } | Self::GrowFilesystemOnline { .. } => {
                 Access::WritesExternalState
             }
             Self::WriteTable { .. }

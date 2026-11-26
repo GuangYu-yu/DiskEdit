@@ -83,7 +83,7 @@ fn action(steps: &[Step]) -> Result<(Action, Region), ExecError> {
             | StepKind::GrowFilesystemOnline { .. }
             | StepKind::CopyPartition { .. }
             | StepKind::MovePartition { .. }
-            | StepKind::RefreshKernelView
+            | StepKind::RefreshKernelView { .. }
             | StepKind::RecoverRecords { .. } => None,
         };
         if let Some(action) = action {

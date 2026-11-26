@@ -423,6 +423,26 @@ pub enum MountFacts {
     Unmapped { why: String },
 }
 
+/// 一个分区在挂载命名空间里的使用情况。
+///
+/// 占用判定必须取全部可读命名空间：别的命名空间里的挂载同样在用这块分区，只看本
+/// 命名空间会把那种占用读成"未挂载"，随后在仍被挂载的盘上写表。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PartitionMount {
+    /// 本进程所在的命名空间里挂着，给出唯一挂载点。
+    Here { mount_point: PathBuf },
+    /// 只在另一个挂载命名空间里挂着；本命名空间既不能用也不能卸。
+    Elsewhere {
+        mount_point: PathBuf,
+        /// 读到记录时所在的进程；取不到命名空间身份时为 `None`。
+        pid: Option<u32>,
+    },
+    /// 任何可读命名空间里都没有挂载。
+    NotMounted,
+    /// 本命名空间里同一分区有多条挂载记录，无法确定生效层。
+    Ambiguous,
+}
+
 /// 交给载体的在线扩容请求。载体在来宾里把文件系统撑满所在分区。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OnlineRequest {
@@ -536,6 +556,38 @@ pub trait Platform: Send + Sync {
         let _ = path;
         Err(PlatformError::not_supported(
             "this host does not resolve mount points",
+        ))
+    }
+
+    /// 整盘上第 N 个分区当前的挂载情况，取全部可读挂载命名空间。
+    ///
+    /// 不能返回空事实猜测"未挂载"：读不出来就是 `Err`，由调用方按未知处理。
+    fn partition_mount(&self, _disk: &Path, _partition: u32) -> PlatformResult<PartitionMount> {
+        Err(PlatformError::not_supported(
+            "this host does not resolve partition mounts",
+        ))
+    }
+
+    /// 整盘上第 N 个分区是否是活动 swap 区域。
+    fn swap_active(&self, _disk: &Path, _partition: u32) -> PlatformResult<bool> {
+        Err(PlatformError::not_supported(
+            "this host does not report active swap",
+        ))
+    }
+
+    /// 让内核把已存在分区的几何改成给定的起点与长度（`BLKPG_RESIZE_PARTITION`）。
+    ///
+    /// 用于已挂载分区：整盘重读（`BLKRRPART`）在分区被占用时返回 `EBUSY`，只能按
+    /// 分区增量调整。缺能力时返回 `NotSupported`，调用方据此落"表已写、视图未同步"。
+    fn resize_partition_live(
+        &self,
+        _disk: &Path,
+        _partition: u32,
+        _start_bytes: u64,
+        _len_bytes: u64,
+    ) -> PlatformResult<()> {
+        Err(PlatformError::not_supported(
+            "this host cannot resize a partition in the kernel view",
         ))
     }
 

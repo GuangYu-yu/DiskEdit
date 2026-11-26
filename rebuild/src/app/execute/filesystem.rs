@@ -64,28 +64,30 @@ struct Online<'a> {
 
 fn execute_online(platform: &dyn Platform, plan: &ConfirmedPlan) -> Result<(), (ExecError, bool)> {
     let step = single_online_step(plan.steps()).map_err(|error| (error, false))?;
-    let StepKind::GrowFilesystemOnline {
-        mount_point,
-        device,
-        disk,
-        partition,
-        filesystem,
-        bytes,
-    } = &step.kind
-    else {
-        return Err((
-            ExecError::InvalidPlan("the online plan holds no online step".to_owned()),
-            false,
-        ));
-    };
-    let online = Online {
-        mount_point,
-        device,
-        disk,
-        partition: *partition,
-        filesystem: *filesystem,
-        bytes: *bytes,
-    };
+    execute_online_step(platform, plan, step)
+}
+
+/// 在任何写盘之前复核在线步骤的挂载与整盘身份。
+///
+/// 在线几何调整先写表、后扩文件系统，两步都要落在同一个已挂载分区上，因此在写表
+/// 之前先调用它一次；执行文件系统步前 `execute_online_step` 会再复核一次。
+pub(super) fn verify_online(
+    platform: &dyn Platform,
+    plan: &ConfirmedPlan,
+) -> Result<(), ExecError> {
+    let step = online_step(plan.steps())?;
+    let online = online_facts(step)?;
+    confirm_mount(platform, &online)?;
+    check_identity(platform, online.disk, plan)
+}
+
+/// 执行一个已确认计划里的在线步骤；调用方负责保证表阶段已成功。
+pub(super) fn execute_online_step(
+    platform: &dyn Platform,
+    plan: &ConfirmedPlan,
+    step: &Step,
+) -> Result<(), (ExecError, bool)> {
+    let online = online_facts(step).map_err(|error| (error, false))?;
     confirm_mount(platform, &online).map_err(|error| (error, false))?;
     check_identity(platform, online.disk, plan).map_err(|error| (error, false))?;
 
@@ -95,6 +97,47 @@ fn execute_online(platform: &dyn Platform, plan: &ConfirmedPlan) -> Result<(), (
         }
     }
     run_online_carrier(platform, &online)
+}
+
+/// 计划里的在线步骤；必须恰好一个。
+fn online_step(steps: &[Step]) -> Result<&Step, ExecError> {
+    let mut found = steps
+        .iter()
+        .filter(|step| matches!(step.kind, StepKind::GrowFilesystemOnline { .. }));
+    let step = found
+        .next()
+        .ok_or_else(|| ExecError::InvalidPlan("the plan has no online step".to_owned()))?;
+    if found.next().is_some() {
+        return Err(ExecError::InvalidPlan(
+            "a plan may hold only one online step".to_owned(),
+        ));
+    }
+    Ok(step)
+}
+
+/// 在线步骤的现场事实。
+fn online_facts(step: &Step) -> Result<Online<'_>, ExecError> {
+    let StepKind::GrowFilesystemOnline {
+        mount_point,
+        device,
+        disk,
+        partition,
+        filesystem,
+        bytes,
+    } = &step.kind
+    else {
+        return Err(ExecError::InvalidPlan(
+            "the step is not an online filesystem grow".to_owned(),
+        ));
+    };
+    Ok(Online {
+        mount_point,
+        device,
+        disk,
+        partition: *partition,
+        filesystem: *filesystem,
+        bytes: *bytes,
+    })
 }
 
 /// 计划里必须恰好有一个在线步骤。
@@ -534,7 +577,7 @@ fn fs_action(steps: &[Step]) -> Result<(FsAction, Region), ExecError> {
             | StepKind::LvmPvShrink { .. }
             | StepKind::LvmGrowChain { .. }
             | StepKind::MovePartition { .. }
-            | StepKind::RefreshKernelView
+            | StepKind::RefreshKernelView { .. }
             | StepKind::RecoverRecords { .. } => None,
         };
         if let Some(action) = action {

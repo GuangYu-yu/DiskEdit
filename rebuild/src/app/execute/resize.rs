@@ -19,6 +19,68 @@ pub fn run(platform: &dyn Platform, target: &Path, plan: &ConfirmedPlan) -> Outc
     }
 }
 
+/// 执行一份已挂载分区的在线 `resize` 计划：写表 → 内核视图 → 扩文件系统。
+///
+/// 写表之前复核挂载与整盘身份；表提交后用 `BLKPG_RESIZE_PARTITION` 按分区同步内核
+/// 视图（整盘重读在分区被占用时返回 `EBUSY`）；最后在用户已有的挂载上扩文件系统。
+pub fn run_online(platform: &dyn Platform, plan: &ConfirmedPlan) -> Outcome {
+    match execute_online(platform, plan) {
+        Ok(None) => Outcome::completed(),
+        Ok(Some(why)) => Outcome::committed_unsynced(why),
+        Err((error, touched)) => failure(error, touched),
+    }
+}
+
+fn execute_online(
+    platform: &dyn Platform,
+    plan: &ConfirmedPlan,
+) -> Result<Option<String>, (ExecError, bool)> {
+    let refresh = plan
+        .steps()
+        .iter()
+        .find(|step| matches!(step.kind, StepKind::RefreshKernelView { .. }))
+        .ok_or_else(|| {
+            (
+                ExecError::InvalidPlan("the online plan has no kernel view step".to_owned()),
+                false,
+            )
+        })?;
+    let StepKind::RefreshKernelView {
+        disk,
+        partition,
+        start_bytes,
+        bytes,
+    } = &refresh.kind
+    else {
+        unreachable!("按 RefreshKernelView 选出");
+    };
+    let (disk, partition, start_bytes, bytes) = (disk.clone(), *partition, *start_bytes, *bytes);
+    // 写表之前复核：挂载点仍指向同一分区，整盘身份未变。
+    super::filesystem::verify_online(platform, plan).map_err(|error| (error, false))?;
+    // 表阶段：提交记录，但不重读整盘（在线路径随后按分区增量同步）。
+    super::table::execute_plan(platform, &disk, plan, false)?;
+    if let Err(error) = platform.resize_partition_live(&disk, partition, start_bytes, bytes) {
+        return Ok(Some(format!(
+            "partition table written but kernel sync failed: {error}"
+        )));
+    }
+    let step = plan
+        .steps()
+        .iter()
+        .find(|step| matches!(step.kind, StepKind::GrowFilesystemOnline { .. }))
+        .ok_or_else(|| {
+            (
+                ExecError::InvalidPlan("the online plan has no filesystem step".to_owned()),
+                true,
+            )
+        })?;
+    match super::filesystem::execute_online_step(platform, plan, step) {
+        Ok(()) => Ok(None),
+        // 表已提交；文件系统步的任何失败都只能按"已写、待恢复"报告。
+        Err((error, _started)) => Err((error, true)),
+    }
+}
+
 fn execute(
     platform: &dyn Platform,
     target: &Path,
@@ -52,10 +114,10 @@ fn execute(
         if has_fs {
             super::filesystem::execute_plan(platform, target, plan)?;
         }
-        super::table::execute_plan(platform, target, plan)
+        super::table::execute_plan(platform, target, plan, true)
     } else {
         // 扩容：先提交分区表，再扩 PV / 文件系统。
-        let unsynced = super::table::execute_plan(platform, target, plan)?;
+        let unsynced = super::table::execute_plan(platform, target, plan, true)?;
         if has_fs {
             super::filesystem::execute_plan(platform, target, plan)?;
         }
