@@ -13,10 +13,11 @@ use std::sync::{Arc, Mutex};
 use diskedit::app::decide::step::TableSegment;
 use diskedit::app::decide::{Plan, Step, StepKind, confirm};
 use diskedit::app::execute::relocate;
+use diskedit::app::execute::table;
 use diskedit::app::execute::{ExecutionState, Outcome};
 use diskedit::app::observe::TableFormat;
 use diskedit::app::observe::records::{RECORD_FILE, hex16};
-use diskedit::app::report::exit::{ENVIRONMENT, PARTIAL, SUCCESS, UNSUPPORTED, exit_of};
+use diskedit::app::report::exit::{ENVIRONMENT, PARTIAL, REFUSED, SUCCESS, UNSUPPORTED, exit_of};
 use diskedit::platform::{
     LoopBinding, Occupancy, Platform, PlatformError, PlatformResult, StateLock, TargetHandle,
     TargetKind, ToolRun,
@@ -515,4 +516,67 @@ fn a_host_without_a_backend_refuses_with_the_unsupported_code() {
         .collect();
     let code = diskedit::app::cli::dispatch_with(&diskedit::platform::UnsupportedPlatform, args);
     assert_eq!(code, UNSUPPORTED);
+}
+
+/// 只含一次表写的已确认计划；表区就是 LBA0。
+fn table_only_plan(bytes: &[u8]) -> diskedit::app::decide::ConfirmedPlan {
+    let region = Region::sized(0, SECTOR).expect("表区区间可构造");
+    let step = Step::new(
+        StepKind::WriteTable {
+            format: TableFormat::Mbr,
+            segment_size: SECTOR,
+            stamp: stamp_of(bytes),
+            segments: vec![TableSegment {
+                region,
+                bytes: vec![0x11u8; SECTOR as usize],
+            }],
+        },
+        vec![region],
+    );
+    let plan = Plan::write(vec![step], IDENTITY).expect("表计划可构造");
+    let current = Observation::known(IDENTITY, Source::new("test"), Generation::FIRST);
+    confirm(plan, true, &current).expect("计划可确认")
+}
+
+// covers: R0042, R0043
+#[test]
+fn a_target_that_changed_since_the_plan_is_not_written() {
+    // 计划确认后盘面被外力改动：表区摘要不再一致，复用该计划必须按"未写"拒绝，
+    // 而不是在已变的盘上重写。
+    let bytes = initial_bytes();
+    let plan = table_only_plan(&bytes);
+    let memory = Memory::new(bytes, Faults::default());
+    *memory.target.lock().unwrap().get_mut(0).expect("首字节") ^= 0x01;
+    let outcome = table::run(&memory, Path::new("memory"), &plan);
+    assert_eq!(outcome.state(), ExecutionState::Unwritten);
+    assert_eq!(exit_of(&outcome), REFUSED);
+}
+
+// covers: R0958
+#[test]
+fn a_target_smaller_than_one_sector_is_refused_before_writing() {
+    let bytes = initial_bytes();
+    let plan = table_only_plan(&bytes);
+    let memory = Memory::new(vec![0u8; 256], Faults::default());
+    let outcome = table::run(&memory, Path::new("memory"), &plan);
+    assert_eq!(outcome.state(), ExecutionState::Unwritten);
+    assert_eq!(exit_of(&outcome), ENVIRONMENT);
+}
+
+// covers: R0536
+#[test]
+fn a_plan_without_a_table_write_step_never_touches_the_target() {
+    let step = Step::new(StepKind::Inspect, Vec::new());
+    let plan = Plan::write(vec![step], IDENTITY).expect("只读步骤也可装入写计划");
+    let current = Observation::known(IDENTITY, Source::new("test"), Generation::FIRST);
+    let plan = confirm(plan, true, &current).expect("计划可确认");
+    let memory = Memory::new(initial_bytes(), Faults::default());
+    let outcome = table::run(&memory, Path::new("memory"), &plan);
+    assert_eq!(outcome.state(), ExecutionState::Unwritten);
+    assert_eq!(exit_of(&outcome), REFUSED);
+    assert_eq!(
+        memory.target.lock().unwrap().as_slice(),
+        initial_bytes().as_slice(),
+        "计划不含表写时不得改动目标"
+    );
 }
