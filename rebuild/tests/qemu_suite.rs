@@ -412,6 +412,28 @@ s22_btrfs_shrink() {
   detach "$L"; rm -f /tmp/s22.img
 }
 
+# LVM 离线 PV 链：PV 扩容后按增量扩指定 LV（不动其内文件系统）。
+s23_lvm_offline_chain() {
+  newdisk /tmp/s23.img 600
+  printf 'label: gpt\n, 300M, L\n' | sfdisk "$L" >/dev/null 2>&1; sleep 1
+  pvcreate -y -ff "${L}p1" >/dev/null 2>&1 || { no s23_pvcreate "pvcreate failed"; detach "$L"; rm -f /tmp/s23.img; return; }
+  vgcreate vgsa "${L}p1" >/tmp/o 2>&1 || { no s23_vgcreate "$(cat /tmp/o)"; detach "$L"; rm -f /tmp/s23.img; return; }
+  lvcreate -y -L 64M -n lvsa vgsa --wipesignatures n -Z n >/dev/null 2>&1 || { no s23_lvcreate "lvcreate failed"; detach "$L"; rm -f /tmp/s23.img; return; }
+  vgmknodes >/dev/null 2>&1
+  mkfs.ext4 -q -F /dev/vgsa/lvsa
+  pv_before=$(pvs --noheadings --units b --nosuffix -o pv_size "${L}p1" | tr -d ' ')
+  lv_before=$(lvs --noheadings --units b --nosuffix -o lv_size vgsa/lvsa | tr -d ' ')
+  "$DE" resize "$L:1" --grow-to-end --grow-lv --yes >/tmp/o 2>&1; rc=$?
+  assert_rc s23_rc 0 "$rc"
+  pv_after=$(pvs --noheadings --units b --nosuffix -o pv_size "${L}p1" | tr -d ' ')
+  lv_after=$(lvs --noheadings --units b --nosuffix -o lv_size vgsa/lvsa | tr -d ' ')
+  assert_gt s23_pv_grew "$pv_after" "$pv_before"
+  assert_gt s23_lv_grew "$lv_after" "$lv_before"
+  e2fsck -fn /dev/vgsa/lvsa >/dev/null 2>&1; assert_rc s23_fs_clean 0 "$?"
+  detach "$L"; vgremove -ff vgsa 2>/dev/null; pvremove -y "${L}p1" 2>/dev/null
+  rm -f /tmp/s23.img
+}
+
 echo "=== SCENARIOS START ==="
 s1_offline_ext4_grow
 s2_offline_ext4_shrink
@@ -435,6 +457,7 @@ s19_f2fs_grow
 s20_vfat_grow_refused
 s21_ntfs_shrink
 s22_btrfs_shrink
+s23_lvm_offline_chain
 echo "=== SCENARIOS SUMMARY pass=$PASS fail=$FAIL failed=[$FAILED] ==="
 "##;
 
