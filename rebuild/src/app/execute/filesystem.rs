@@ -35,6 +35,261 @@ pub fn run(platform: &dyn Platform, target: &Path, plan: &ConfirmedPlan) -> Outc
     }
 }
 
+/// 执行一份只含在线扩容步骤的计划。
+///
+/// 在线形态直接在用户已有的挂载上运行工具，不写分区表、不登记原像、不卸载挂载。
+/// 工具一旦启动，目标字节就可能已经改变，失败按"已写、待恢复"报告。
+pub fn run_online(platform: &dyn Platform, plan: &ConfirmedPlan) -> Outcome {
+    match execute_online(platform, plan) {
+        Ok(()) => Outcome::completed(),
+        Err((error, started)) => {
+            if started {
+                Outcome::needs_recovery(error.to_string())
+            } else {
+                failure(error, false)
+            }
+        }
+    }
+}
+
+/// 在线扩容的现场事实。
+struct Online<'a> {
+    mount_point: &'a Path,
+    device: &'a Path,
+    disk: &'a Path,
+    partition: u32,
+    filesystem: FsKind,
+    bytes: u64,
+}
+
+fn execute_online(platform: &dyn Platform, plan: &ConfirmedPlan) -> Result<(), (ExecError, bool)> {
+    let step = single_online_step(plan.steps()).map_err(|error| (error, false))?;
+    let StepKind::GrowFilesystemOnline {
+        mount_point,
+        device,
+        disk,
+        partition,
+        filesystem,
+        bytes,
+    } = &step.kind
+    else {
+        return Err((
+            ExecError::InvalidPlan("the online plan holds no online step".to_owned()),
+            false,
+        ));
+    };
+    let online = Online {
+        mount_point,
+        device,
+        disk,
+        partition: *partition,
+        filesystem: *filesystem,
+        bytes: *bytes,
+    };
+    confirm_mount(platform, &online).map_err(|error| (error, false))?;
+    check_identity(platform, online.disk, plan).map_err(|error| (error, false))?;
+
+    if let Some((program, args)) = online_invocation(&online) {
+        if platform.tool_available(program) {
+            return run_online_native(platform, &online, program, &args);
+        }
+    }
+    run_online_carrier(platform, &online)
+}
+
+/// 计划里必须恰好有一个在线步骤。
+fn single_online_step(steps: &[Step]) -> Result<&Step, ExecError> {
+    let mut found = steps
+        .iter()
+        .filter(|step| matches!(step.kind, StepKind::GrowFilesystemOnline { .. }));
+    let step = found
+        .next()
+        .ok_or_else(|| ExecError::InvalidPlan("the plan has no online step".to_owned()))?;
+    if steps.len() != 1 || found.next().is_some() {
+        return Err(ExecError::InvalidPlan(
+            "an online plan must contain exactly one online step".to_owned(),
+        ));
+    }
+    Ok(step)
+}
+
+/// 挂载点必须仍指向计划确认时的同一个分区。
+fn confirm_mount(platform: &dyn Platform, online: &Online<'_>) -> Result<(), ExecError> {
+    use crate::platform::MountFacts;
+    match platform
+        .mount_facts(online.mount_point)
+        .map_err(ExecError::from)?
+    {
+        MountFacts::Mounted {
+            device,
+            disk,
+            partition,
+            ..
+        } if device == online.device && disk == online.disk && partition == online.partition => {
+            Ok(())
+        }
+        MountFacts::Mounted { .. }
+        | MountFacts::NotMounted
+        | MountFacts::NotPartition { .. }
+        | MountFacts::Ambiguous
+        | MountFacts::Unmapped { .. } => Err(ExecError::IdentityChanged(
+            "the mount point no longer resolves to the confirmed partition".to_owned(),
+        )),
+    }
+}
+
+/// 在线扩容的程序与参数；没有在线工具的族返回 `None`。
+fn online_invocation(online: &Online<'_>) -> Option<(Program, Vec<String>)> {
+    let mount = online.mount_point.display().to_string();
+    let device = online.device.display().to_string();
+    match online.filesystem {
+        FsKind::Ext => Some((Program::Resize2fs, vec![device])),
+        FsKind::Xfs => Some((Program::XfsGrowfs, vec![mount])),
+        FsKind::Btrfs => Some((
+            Program::Btrfs,
+            vec![
+                "filesystem".to_owned(),
+                "resize".to_owned(),
+                "max".to_owned(),
+                mount,
+            ],
+        )),
+        FsKind::Squashfs
+        | FsKind::Erofs
+        | FsKind::F2fs
+        | FsKind::Exfat
+        | FsKind::Vfat
+        | FsKind::Ntfs
+        | FsKind::HfsPlus
+        | FsKind::Apfs
+        | FsKind::Bcachefs
+        | FsKind::Jfs
+        | FsKind::Reiserfs
+        | FsKind::Udf => None,
+    }
+}
+
+/// 本机执行在线扩容：工具运行一次，随后回读尺寸确认真的长到分区末尾。
+fn run_online_native(
+    platform: &dyn Platform,
+    online: &Online<'_>,
+    program: Program,
+    args: &[String],
+) -> Result<(), (ExecError, bool)> {
+    match platform.run(program, args) {
+        Err(error) => Err((ExecError::from(error), false)),
+        Ok(run) => match run.code {
+            Some(0) => verify_online_size(platform, online),
+            Some(_) => Err((
+                ExecError::Postcondition(format!(
+                    "{} exited {}: {}",
+                    platform.tool_name(program),
+                    code_text(run.code),
+                    run.stderr.trim()
+                )),
+                true,
+            )),
+            None => Err((
+                ExecError::Postcondition(format!(
+                    "{} was terminated by a signal; its result is unknown",
+                    platform.tool_name(program)
+                )),
+                true,
+            )),
+        },
+    }
+}
+
+/// 在线扩容之后回读：ext 必须长到分区末尾；其余族没有可用的只读探针时按"已写、
+/// 待恢复"报告，而不是凭工具退出码当作成功。
+fn verify_online_size(
+    platform: &dyn Platform,
+    online: &Online<'_>,
+) -> Result<(), (ExecError, bool)> {
+    if online.filesystem != FsKind::Ext {
+        return Err((
+            ExecError::Postcondition(
+                "no read-back probe is available for this filesystem after the online grow"
+                    .to_owned(),
+            ),
+            true,
+        ));
+    }
+    let device = online.device.display().to_string();
+    let run = platform
+        .run(Program::Dumpe2fs, &["-h".to_owned(), device])
+        .map_err(|error| (ExecError::from(error), true))?;
+    if run.code != Some(0) {
+        return Err((
+            ExecError::Postcondition(format!(
+                "{} exited {}: {}",
+                platform.tool_name(Program::Dumpe2fs),
+                code_text(run.code),
+                run.stderr.trim()
+            )),
+            true,
+        ));
+    }
+    verify_ext_size(&run, online.bytes).map_err(|error| (error, true))
+}
+
+/// 本机没有在线工具时交给虚拟机载体；没有载体就按"不支持"拒绝，而不是照常尝试。
+fn run_online_carrier(
+    platform: &dyn Platform,
+    online: &Online<'_>,
+) -> Result<(), (ExecError, bool)> {
+    use crate::platform::{OnlineRequest, PlatformError};
+    let carrier = platform
+        .carrier()
+        .map_err(|error| (ExecError::from(error), false))?;
+    let Some(carrier) = carrier else {
+        return Err((
+            ExecError::Unsupported(format!(
+                "no online grow tool for {} is available and no VM carrier is configured; install \
+                 the filesystem tools or set DISKEDIT_VM_BUNDLE",
+                online.filesystem.as_str()
+            )),
+            false,
+        ));
+    };
+    let sector_size = target_sector_size(platform, online.disk).unwrap_or(512);
+    let request = OnlineRequest {
+        mount_point: online.mount_point.to_path_buf(),
+        device: online.device.to_path_buf(),
+        disk: online.disk.to_path_buf(),
+        partition: online.partition,
+        filesystem: online.filesystem,
+        bytes: online.bytes,
+        sector_size,
+    };
+    match carrier.online_grow(&request) {
+        Ok(report) => match (report.blocks, report.block_size) {
+            (Some(blocks), Some(block_size)) => {
+                let total = blocks.saturating_mul(block_size);
+                if total > online.bytes || online.bytes - total >= block_size {
+                    return Err((
+                        ExecError::Postcondition(format!(
+                            "the guest reports a {total}-byte filesystem, not the expected {} bytes",
+                            online.bytes
+                        )),
+                        true,
+                    ));
+                }
+                Ok(())
+            }
+            _ => Err((
+                ExecError::Postcondition(
+                    "the guest gave no filesystem geometry after the online grow".to_owned(),
+                ),
+                true,
+            )),
+        },
+        Err(PlatformError::NotSupported(why)) => Err((ExecError::Unsupported(why), false)),
+        // 来宾已经启动过：目标可能已被改动，按"已写、待恢复"报告。
+        Err(error) => Err((ExecError::Postcondition(error.to_string()), true)),
+    }
+}
+
 /// 一步文件系统动作。
 enum FsAction {
     Make {

@@ -3,5 +3,5 @@
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
-    ExitCode::from(diskedit::app::run(std::env::args_os()))
+    ExitCode::from(diskedit::entry(std::env::args_os()))
 }

@@ -15,11 +15,13 @@ use diskedit_core::fs::Program;
 use sha2::{Digest, Sha256};
 
 use crate::platform::{
-    LoopBinding, Occupancy, Platform, PlatformError, PlatformResult, StateLock, TargetHandle,
-    TargetKind, ToolRun,
+    Carrier, LoopBinding, MountFacts, Occupancy, Platform, PlatformError, PlatformResult,
+    StateLock, TargetHandle, TargetKind, ToolRun,
 };
 
 mod tools;
+
+pub mod carrier;
 
 /// Linux 宿主端口。
 #[derive(Debug, Default)]
@@ -57,6 +59,14 @@ impl Platform for LinuxPlatform {
             TargetKind::BlockDevice => block_view_writable(path),
             TargetKind::Other => false,
         }
+    }
+
+    fn mount_facts(&self, path: &Path) -> PlatformResult<MountFacts> {
+        mount_facts(path)
+    }
+
+    fn carrier(&self) -> PlatformResult<Option<Box<dyn Carrier>>> {
+        carrier::from_environment()
     }
 
     fn is_partition_node(&self, path: &Path) -> bool {
@@ -428,6 +438,102 @@ fn block_sector_size(file: &File) -> Option<u64> {
 
 /// 本进程能否对这块设备执行分区表重读。
 ///
+/// 把一个路径反查成挂载事实：挂载点必须唯一，挂载源必须是分区，且能映射到单块整盘。
+fn mount_facts(path: &Path) -> PlatformResult<MountFacts> {
+    let mounts = std::fs::read_to_string("/proc/self/mounts")
+        .map_err(|error| PlatformError::io(Path::new("/proc/self/mounts"), error))?;
+    let wanted = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let mut sources: Vec<String> = mounts
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            let source = fields.next()?;
+            let target = fields.next()?;
+            (Path::new(&unescape_mount(target)) == wanted.as_path()).then(|| unescape_mount(source))
+        })
+        .collect();
+    match sources.len() {
+        0 => return Ok(MountFacts::NotMounted),
+        1 => {}
+        _ => return Ok(MountFacts::Ambiguous),
+    }
+    let source = PathBuf::from(sources.remove(0));
+    let device = std::fs::canonicalize(&source).unwrap_or(source);
+    let metadata = match std::fs::metadata(&device) {
+        Ok(metadata) => metadata,
+        Err(error) => {
+            return Ok(MountFacts::Unmapped {
+                why: PlatformError::io(&device, error).to_string(),
+            });
+        }
+    };
+    if !metadata.file_type().is_block_device() {
+        return Ok(MountFacts::NotPartition { device });
+    }
+    let Some(name) = device.file_name().and_then(|name| name.to_str()) else {
+        return Ok(MountFacts::Unmapped {
+            why: "the mounted block device has no name".to_owned(),
+        });
+    };
+    let node = Path::new("/sys/class/block").join(name);
+    let number = match std::fs::read_to_string(node.join("partition")) {
+        Ok(text) => match text.trim().parse::<u32>() {
+            Ok(number) => number,
+            Err(_) => {
+                return Ok(MountFacts::Unmapped {
+                    why: format!("{name} declares an unreadable partition number"),
+                });
+            }
+        },
+        Err(_) => return Ok(MountFacts::NotPartition { device }),
+    };
+    let Some(disk_name) = std::fs::read_link(&node)
+        .ok()
+        .and_then(|target| {
+            target
+                .parent()
+                .and_then(|parent| parent.file_name())
+                .map(|n| n.to_owned())
+        })
+        .and_then(|name| name.to_str().map(str::to_owned))
+    else {
+        return Ok(MountFacts::Unmapped {
+            why: format!("cannot resolve the whole disk that {name} belongs to"),
+        });
+    };
+    Ok(MountFacts::Mounted {
+        mount_point: wanted,
+        device,
+        disk: Path::new("/dev").join(disk_name),
+        partition: number,
+    })
+}
+
+/// `/proc/self/mounts` 把空格、制表、换行与反斜杠写成八进制转义。
+fn unescape_mount(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'\\'
+            && index + 3 < bytes.len()
+            && bytes[index + 1..index + 4]
+                .iter()
+                .all(|byte| (b'0'..=b'7').contains(byte))
+        {
+            let value = (bytes[index + 1] - b'0') * 64
+                + (bytes[index + 2] - b'0') * 8
+                + (bytes[index + 3] - b'0');
+            out.push(value);
+            index += 4;
+        } else {
+            out.push(bytes[index]);
+            index += 1;
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 /// 用真实的 `BLKRRPART` 探测，而不是 `euid`/`CapEff` 之类的代理：重读分区表是
 /// 幂等操作，能执行就说明本宿主具备块层能力。`EPERM`/`EACCES` 是能力缺失；
 /// `EBUSY` 等其它错误说明能力在、只是设备正被占用，不能据此判为不支持。

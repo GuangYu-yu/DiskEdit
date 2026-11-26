@@ -117,13 +117,12 @@ fn run(platform: &dyn Platform, request: &observe::Request) -> u8 {
                 Err(code) => return code,
             }
         }
-        Command::Resizefs {
-            partition: Some(_), ..
-        } => match observe_or_exit(platform, request, observe::capture_filesystem) {
-            Ok(snapshot) => decide::resizefs::decide(&snapshot, request),
-            Err(code) => return code,
-        },
-        Command::Resizefs { .. } => decide::resizefs::mountpoint(),
+        Command::Resizefs { .. } => {
+            match observe_or_exit(platform, request, observe::capture_filesystem) {
+                Ok(snapshot) => decide::resizefs::decide(&snapshot, request),
+                Err(code) => return code,
+            }
+        }
         Command::Resize(_) => match observe_or_exit(platform, request, observe::capture_resize) {
             Ok(snapshot) => decide::resize::decide(&snapshot, request),
             Err(code) => return code,
@@ -315,7 +314,32 @@ fn write(
     let Some(path) = request.target() else {
         return usage();
     };
-    let current = observe_identity(platform, path);
+    // 在线形态的确认对象是承载挂载的整盘，而不是挂载点目录本身。
+    let identity_path = plan
+        .steps()
+        .iter()
+        .find_map(|step| match &step.kind {
+            decide::StepKind::GrowFilesystemOnline { disk, .. } => Some(disk.as_path()),
+            decide::StepKind::Inspect
+            | decide::StepKind::Check { .. }
+            | decide::StepKind::ListRecords
+            | decide::StepKind::VerifyRecord { .. }
+            | decide::StepKind::ScanRecords
+            | decide::StepKind::WriteTable { .. }
+            | decide::StepKind::AddPartition { .. }
+            | decide::StepKind::DeletePartition { .. }
+            | decide::StepKind::ResizePartition { .. }
+            | decide::StepKind::SetProperty { .. }
+            | decide::StepKind::MakeFilesystem { .. }
+            | decide::StepKind::GrowFilesystem { .. }
+            | decide::StepKind::ShrinkFilesystem { .. }
+            | decide::StepKind::CopyPartition { .. }
+            | decide::StepKind::MovePartition { .. }
+            | decide::StepKind::RefreshKernelView
+            | decide::StepKind::RecoverRecords { .. } => None,
+        })
+        .unwrap_or(path);
+    let current = observe_identity(platform, identity_path);
     let plan = match decide::confirm(plan, request.confirmed(), &current) {
         Ok(plan) => plan,
         Err(refusal) => return refuse(&refusal),
@@ -342,8 +366,14 @@ fn write(
         .steps()
         .iter()
         .any(|step| matches!(step.kind, decide::StepKind::WriteTable { .. }));
+    let online = plan
+        .steps()
+        .iter()
+        .any(|step| matches!(step.kind, decide::StepKind::GrowFilesystemOnline { .. }));
     let outcome = if recovery {
         execute::recover::run(platform, path, &plan)
+    } else if online {
+        execute::filesystem::run_online(platform, &plan)
     } else if filesystem && table {
         execute::resize::run(platform, path, &plan)
     } else if filesystem {

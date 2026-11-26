@@ -20,7 +20,7 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 
 use diskedit_core::fingerprint::Fingerprint;
-use diskedit_core::fs::Program;
+use diskedit_core::fs::{FsKind, Program};
 
 #[cfg(target_os = "linux")]
 pub use linux::LinuxPlatform;
@@ -381,6 +381,67 @@ impl LoopBinding {
     }
 }
 
+/// 运行时把目标交给虚拟机载体的入口。
+///
+/// 只有 Linux 提供实现；其余宿主没有载体时返回 `None`，上层照常走本机路径。
+#[cfg(target_os = "linux")]
+pub fn worker_entry(args: &[std::ffi::OsString]) -> Option<u8> {
+    linux::carrier::worker::invoked(args).then(linux::carrier::worker::run)
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn worker_entry(_args: &[std::ffi::OsString]) -> Option<u8> {
+    None
+}
+
+/// 一个挂载点反查出的挂载事实。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MountFacts {
+    /// 路径是挂载点，挂载源是某块整盘上的分区。
+    Mounted {
+        mount_point: PathBuf,
+        device: PathBuf,
+        disk: PathBuf,
+        partition: u32,
+    },
+    /// 路径不是任何挂载点。
+    NotMounted,
+    /// 挂载源不是分区：整盘、或非块设备的挂载源。
+    NotPartition { device: PathBuf },
+    /// 同一路径有多条挂载记录，无法确定是哪一条。
+    Ambiguous,
+    /// 挂载源无法映射到单个整盘。
+    Unmapped { why: String },
+}
+
+/// 交给载体的在线扩容请求。载体在来宾里把文件系统撑满所在分区。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OnlineRequest {
+    pub mount_point: PathBuf,
+    pub device: PathBuf,
+    pub disk: PathBuf,
+    pub partition: u32,
+    pub filesystem: FsKind,
+    /// 分区容量；文件系统应长到这个字节数。
+    pub bytes: u64,
+    pub sector_size: u64,
+}
+
+/// 载体报回的在线扩容结果：工具报告的文件系统几何。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OnlineReport {
+    /// 块数；载体没能读出时为 `None`。
+    pub blocks: Option<u64>,
+    /// 块大小；载体没能读出时为 `None`。
+    pub block_size: Option<u64>,
+}
+
+/// 虚拟机载体端口：把宿主做不了的在线操作交给来宾。
+pub trait Carrier: Send + Sync {
+    /// 在来宾里把 `request.device` 上的文件系统撑满分区。
+    fn online_grow(&self, request: &OnlineRequest) -> PlatformResult<OnlineReport>;
+}
+
 /// 目标的打开方式由具体平台决定，上层只拿到这个按偏移读写的句柄。
 pub trait TargetHandle {
     /// 打开时使用的路径。
@@ -434,6 +495,19 @@ pub trait Platform: Send + Sync {
     fn filesystem_ready(&self, path: &Path) -> bool {
         let _ = path;
         false
+    }
+
+    /// 把一个挂载点反查成挂载事实；本平台不做反查时按"不支持"返回。
+    fn mount_facts(&self, path: &Path) -> PlatformResult<MountFacts> {
+        let _ = path;
+        Err(PlatformError::not_supported(
+            "this host does not resolve mount points",
+        ))
+    }
+
+    /// 当前配置的虚拟机载体；未配置或本平台不提供时为 `None`。
+    fn carrier(&self) -> PlatformResult<Option<Box<dyn Carrier>>> {
+        Ok(None)
     }
 
     /// 目标本身是不是块设备上的分区节点（`/dev/sda1`），而不是整盘。

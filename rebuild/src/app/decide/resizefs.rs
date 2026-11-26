@@ -15,7 +15,7 @@ use super::{Decision, Plan, Refusal};
 pub fn decide(snapshot: &FilesystemSnapshot, request: &Request) -> Decision {
     match request.command() {
         Command::Resizefs { partition, .. } if partition.is_some() => {}
-        Command::Resizefs { .. } => return mountpoint(),
+        Command::Resizefs { bytes, .. } => return online(snapshot, *bytes),
         Command::Info { .. }
         | Command::Inspect
         | Command::RecordsList
@@ -116,10 +116,90 @@ pub fn decide(snapshot: &FilesystemSnapshot, request: &Request) -> Decision {
     )
 }
 
-/// 挂载点形态：在线扩容在挂载视图接入后处理，这里给出可执行的替代形态。
-pub fn mountpoint() -> Decision {
-    Decision::Refuse(Refusal::ContentUnsupported {
-        what: "resizefs at a mount point".to_owned(),
-        why: "pass <TARGET>:N to resize the filesystem inside a partition".to_owned(),
-    })
+/// 挂载点形态：在用户已有的挂载上把文件系统撑满所在分区。
+///
+/// 不写分区表、不卸载挂载。尺寸只允许省略或等于分区容量：大于容量要先改表，
+/// 小于容量是收缩，两者都在任何写盘之前拒绝。
+fn online(snapshot: &FilesystemSnapshot, requested: Option<u64>) -> Decision {
+    use crate::platform::MountFacts;
+
+    let Some(MountFacts::Mounted {
+        mount_point,
+        device,
+        disk,
+        partition: number,
+    }) = snapshot.mount.clone()
+    else {
+        return Decision::Refuse(Refusal::FactUnknown {
+            what: "the mount point did not resolve to a mounted partition".to_owned(),
+        });
+    };
+    let Some(selected) = snapshot
+        .selected
+        .as_ref()
+        .filter(|facts| facts.number == number)
+    else {
+        return Decision::Refuse(Refusal::PartitionMissing { number });
+    };
+    if let Some(requested) = requested {
+        if requested > selected.bytes {
+            return Decision::Refuse(Refusal::CapacityInsufficient {
+                needed: requested,
+                available: selected.bytes,
+            });
+        }
+        if requested < selected.bytes {
+            return Decision::Refuse(Refusal::OnlineShrink {
+                why: "this form grows the filesystem to fill its partition and never changes the \
+                      partition table"
+                    .to_owned(),
+            });
+        }
+    }
+    let content = selected.content;
+    let Some(filesystem) = content.filesystem() else {
+        return Decision::Refuse(Refusal::ContentUnsupported {
+            what: format!("resizefs {}", content.as_str()),
+            why: "this content kind carries no filesystem to resize".to_owned(),
+        });
+    };
+    match catalog::profile(content).support(Verb::Grow) {
+        Support::Tools(_) => {}
+        Support::Unsupported(why) => {
+            return Decision::Refuse(Refusal::ContentUnsupported {
+                what: format!("resizefs {}", content.as_str()),
+                why: why.to_owned(),
+            });
+        }
+        Support::NotApplicable => {
+            return Decision::Refuse(Refusal::ContentUnsupported {
+                what: format!("resizefs {}", content.as_str()),
+                why: "this content kind carries no filesystem to resize".to_owned(),
+            });
+        }
+    }
+    if let Some((program, _)) = snapshot.tools.iter().find(|(_, available)| !available) {
+        return Decision::Refuse(Refusal::ToolMissing { program: *program });
+    }
+    let Ok(identity) = identity(snapshot) else {
+        return Decision::Refuse(Refusal::IdentityUnprovable {
+            why: "the target gives no comparable identity".to_owned(),
+        });
+    };
+    let step = Step::new(
+        StepKind::GrowFilesystemOnline {
+            mount_point,
+            device,
+            disk,
+            partition: number,
+            filesystem,
+            bytes: selected.bytes,
+        },
+        Vec::new(),
+    );
+    finish(
+        snapshot,
+        Plan::external(vec![step], identity),
+        format!("resized the filesystem on partition #{number} through its mounted volume"),
+    )
 }
