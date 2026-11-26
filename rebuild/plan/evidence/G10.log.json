@@ -6,9 +6,9 @@
   "plan/instruments/commits.py"
  ],
  "exit_code": 0,
- "commit": "267db32",
- "tree": "daa82980257d0267",
- "at": "2026-11-26T15:06:08+00:00",
+ "commit": "437c974",
+ "tree": "b7a683ee63f5185f",
+ "at": "2026-11-26T15:09:33+00:00",
  "counts": {
   "result_lines": 0,
   "passed": 0,

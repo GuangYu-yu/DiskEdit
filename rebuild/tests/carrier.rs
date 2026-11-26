@@ -131,7 +131,13 @@ fn the_carrier_writes_whole_disk_segments_without_the_host_capability() {
 
 /// 建一个 32 MiB 分区、里面装着 16 MiB ext4 的 64 MiB 镜像。
 fn image() -> PathBuf {
-    let path = std::env::temp_dir().join(format!("diskedit-carrier-{}.img", std::process::id()));
+    // 两条用例并行运行；只用 pid 会让它们落到同一个临时镜像上互相改写。
+    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let serial = NEXT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let path = std::env::temp_dir().join(format!(
+        "diskedit-carrier-{}-{serial}.img",
+        std::process::id()
+    ));
     std::fs::write(&path, vec![0u8; 64 << 20]).expect("镜像可写");
     let binary = env!("CARGO_BIN_EXE_diskedit");
     run(&[binary, "new", path.to_str().unwrap(), "--yes"]);

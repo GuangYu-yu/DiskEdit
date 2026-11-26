@@ -10,7 +10,7 @@
 | D4 | 需修复才能判定的操作先修复再判定；修复写入目标后失败一律部分完成（`5`） | 避免修复自身改变判定前提 | 修复被证明不写目标字节 | **未验证**：计划中的“脏 ext 收缩”夹具用例不存在；当前只有表修复用例 `tests/gpt_repair.rs`，文件系统修复路径没有故障注入 |
 | D5 | 退出码只由终态映射 | 消除调用点自行选码 | 出现终态无法表达的对外契约 | `src/app/report/exit.rs` 的码表用例 |
 | D6 | 缺失与空集合不折叠为默认值 | 未观测不等于没有 | 出现必须把未观测当默认值的外部契约 | `tests/case_runner.rs` 的未知事实拒侧用例、`Observation` 用例 |
-| D7 | 载体路径与基线行为等价 | 等价指行为一致，不按可运行性裁剪 | 基线载体在目标环境可运行而本实现不能 | **未验证**：`tests/carrier.rs` 在无 `DISKEDIT_VM_BUNDLE` 时打印 `NotApplicable` 后返回，`cargo test` 把它计为通过；当前工作树下未实跑 |
+| D7 | 载体路径与基线行为等价 | 等价指行为一致，不按可运行性裁剪 | 基线载体在目标环境可运行而本实现不能 | `tests/carrier.rs` 两条：来宾在线扩容（宿主回读超级块）与 `write_disk` 整盘偏移写入；需设置 `DISKEDIT_VM_BUNDLE`，未设置时会打印 `NotApplicable` 并被 `cargo test` 计为通过，因此交付记录必须写明 bundle 已配置 |
 | D8 | 不因几何变化改写用户已有的分区类型 GUID | 类型 GUID 是用户数据 | 确认基线确实改写且外部依赖该改写 | `tests/case_runner.rs::move_and_copy_relocate_data_and_keep_type_guids`（断言搬移后两处类型 GUID 不变） |
 | D9 | 只读命令统一输出本实现的结构化 JSON；字段集与 `inspect`/`check` 的输出形态不逐字复刻基线 | 基线实际只有 `info` 与 `records *` 输出 JSON，`inspect`/`check` 输出人读文本且无 `--json`；人读文本不是契约，结构化事实由用例表与独立 oracle 覆盖 | 出现依赖基线文本措辞或基线 JSON 字段名的外部契约 | `tests/case_runner.rs::read_only_info_emits_one_structured_json_document`（JSON 单对象与字段集）；**与基线的结构投影对照未实现** |
 | D10 | 本期只交付 Linux 后端；Windows/macOS 宿主的表编辑与文件系统操作返回 `NotSupported`（退出码 `6`） | `01` §7.4 排除非 Linux 后端；端口形状已留出，补齐时只加子树 | Windows/macOS 上的等价表编辑成为交付条件 | **部分未验证**：非 Linux 后端无法在本机构建；`src/platform/mod.rs` 的 `unsupported_platform!` 只有拒绝码用例，计划中的 `tests/generated_docs.rs` 不存在 |
