@@ -78,6 +78,8 @@ pub fn exit_of_refusal(refusal: &Refusal) -> u8 {
         | Refusal::TableOccupied { .. }
         | Refusal::PmbrInconsistent { .. }
         | Refusal::RecordUnreadable { .. }
+        | Refusal::RecordDamaged { .. }
+        | Refusal::RecordForeign { .. }
         | Refusal::RecordConflict { .. }
         | Refusal::RecoveryRefused { .. }
         | Refusal::TableEdit { .. } => REFUSED,

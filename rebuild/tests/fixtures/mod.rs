@@ -66,6 +66,7 @@ fn prepare_write_fixtures() {
         *byte = b"hello"[index % 5];
     }
     write_atomic(&base.join("data.img"), &data);
+    write_atomic(&base.join("tiny.img"), b"hello");
 }
 
 fn image(base: &Path, name: &str) -> PathBuf {

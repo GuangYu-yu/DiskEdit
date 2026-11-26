@@ -88,6 +88,10 @@ pub enum Refusal {
     PmbrInconsistent { why: String },
     /// 记录文件存在但无法解码。
     RecordUnreadable { path: String },
+    /// 记录结构损坏：截断、校验不符或格式不认。
+    RecordDamaged { why: String },
+    /// 记录属于另一个目标。
+    RecordForeign { why: String },
     /// 目标上有一条针对别的工作的未收尾记录。
     RecordConflict { path: String },
     /// 记录恢复不能按请求执行：外来记录、载荷不可回滚、或放弃会丢掉可回放区间。
@@ -199,6 +203,9 @@ impl Refusal {
             Self::RecordUnreadable { .. } => {
                 "inspect the record file; recover or remove it before writing again"
             }
+            Self::RecordDamaged { .. } | Self::RecordForeign { .. } => {
+                "keep the record file for manual inspection; nothing may write to this target until then"
+            }
             Self::RecordConflict { .. } => {
                 "finish or abandon the existing record with recover before starting a different plan"
             }
@@ -288,6 +295,7 @@ impl Refusal {
             Self::RecordUnreadable { path } => {
                 format!("the record file {path} cannot be decoded")
             }
+            Self::RecordDamaged { why } | Self::RecordForeign { why } => why.clone(),
             Self::RecordConflict { path } => {
                 format!("{path} holds an unfinished record for a different plan")
             }

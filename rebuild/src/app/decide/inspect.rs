@@ -31,11 +31,41 @@ pub fn decide(snapshot: &InspectSnapshot) -> Decision {
         });
     }
     let record = match (&snapshot.record.bytes, &snapshot.record.unavailable) {
-        (Some(bytes), _) => RecordVerdict::Present {
-            bytes: bytes.len() as u64,
-            decoded: decode_summary(bytes),
-        },
-        (None, Some(why)) => RecordVerdict::Unreadable { why: why.clone() },
+        (Some(bytes), _) => {
+            let decoded = match diskedit_core::record::decode(bytes) {
+                Ok(decoded) => decoded,
+                Err(error) => {
+                    return Decision::Refuse(Refusal::RecordDamaged {
+                        why: damage(&error),
+                    });
+                }
+            };
+            // 记录里写着它属于哪个目标：能自行证明身份的目标必须与之相符，否则记录是
+            // 别的工作留下的证据，不能被当作本目标的现状（基线判定为外来）。
+            if let Some(identity) = snapshot.target.identity {
+                if decoded.body.target != identity {
+                    return Decision::Refuse(Refusal::RecordForeign {
+                        why: "identity: the record belongs to a different target — it must not be \
+                              cleaned up or replayed for this target"
+                            .to_owned(),
+                    });
+                }
+            }
+            RecordVerdict::Present {
+                bytes: bytes.len() as u64,
+                decoded: decode_summary(&decoded),
+            }
+        }
+        (None, Some(_)) => {
+            let path = snapshot
+                .record
+                .file
+                .clone()
+                .unwrap_or_else(|| directory.clone());
+            return Decision::Refuse(Refusal::RecordUnreadable {
+                path: path.display().to_string(),
+            });
+        }
         (None, None) => RecordVerdict::Absent,
     };
     let report = InspectReport {
@@ -49,14 +79,47 @@ pub fn decide(snapshot: &InspectSnapshot) -> Decision {
     )
 }
 
-fn decode_summary(bytes: &[u8]) -> String {
-    match diskedit_core::record::decode(bytes) {
-        Ok(decoded) => format!(
-            "geometry generation {}, plan digest {}",
-            decoded.body.geometry_generation,
-            hex(&decoded.body.plan_digest)
-        ),
-        Err(error) => format!("record is unreadable: {error:?}"),
+fn decode_summary(decoded: &diskedit_core::record::DecodedRecord) -> String {
+    format!(
+        "geometry generation {}, plan digest {}",
+        decoded.body.geometry_generation,
+        hex(&decoded.body.plan_digest)
+    )
+}
+
+/// 把解码失败归类成与基线一致的三种结构结论：截断、校验不符、格式不认。
+fn damage(error: &diskedit_core::record::RecordError) -> String {
+    use diskedit_core::record::RecordError;
+    match error {
+        RecordError::TooShort { .. } | RecordError::FrameIncomplete => {
+            "structure: the record is shorter than its declared length — keep the file for manual \
+             inspection"
+                .to_owned()
+        }
+        RecordError::HeaderCrcMismatch
+        | RecordError::PayloadCrcMismatch
+        | RecordError::BodyCrcMismatch
+        | RecordError::FrameCrcMismatch { .. } => {
+            "structure: the record's CRC does not match — keep the file for manual inspection"
+                .to_owned()
+        }
+        RecordError::ForeignFormat { .. }
+        | RecordError::PayloadTooLarge(_)
+        | RecordError::TrailingBytes
+        | RecordError::FrameSequence { .. }
+        | RecordError::UnknownFrameKind(_)
+        | RecordError::ReservedFrameFlags(_)
+        | RecordError::FramesAfterTerminal
+        | RecordError::IntentTooLong
+        | RecordError::TooManyRegions
+        | RecordError::PreimageLengthMismatch
+        | RecordError::PreimageTooLarge => {
+            "structure: the record's magic is not recognized or its payload does not match the \
+             layout this build reads — keep the file; `diskedit recover --release` will not \
+             quarantine it automatically, so remove it by hand once you are sure it is stale, and \
+             nothing may write to this target until then"
+                .to_owned()
+        }
     }
 }
 

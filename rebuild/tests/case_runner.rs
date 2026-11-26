@@ -3,9 +3,15 @@
 mod cases;
 mod fixtures;
 
+#[cfg(target_os = "linux")]
+use std::os::unix::fs::MetadataExt;
+#[cfg(target_os = "linux")]
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use cases::{CASES, Case};
+#[cfg(target_os = "linux")]
+use sha2::{Digest, Sha256};
 
 fn run(case: &Case) -> (i32, String, String) {
     let output = Command::new(env!("CARGO_BIN_EXE_diskedit"))
@@ -782,4 +788,100 @@ fn check_reports_the_reason_it_cannot_act() {
     assert_eq!(code, 6, "未识别内容应不支持：{stderr}");
     assert!(stderr.contains("unsupported:"), "{stderr}");
     assert!(stderr.contains("filesystem type unrecognized"), "{stderr}");
+}
+
+/// 按 Linux 宿主的同一算式（`file\0` + dev + ino + len 的 SHA-256）取镜像指纹。
+#[cfg(target_os = "linux")]
+fn image_fingerprint(image: &str) -> diskedit_core::fingerprint::Fingerprint {
+    let metadata = std::fs::metadata(image).expect("镜像可读");
+    let mut hasher = Sha256::new();
+    hasher.update(b"file\0");
+    hasher.update(metadata.dev().to_le_bytes());
+    hasher.update(metadata.ino().to_le_bytes());
+    hasher.update(metadata.len().to_le_bytes());
+    diskedit_core::fingerprint::Fingerprint::strong(hasher.finalize().into())
+}
+
+/// 记录目录与宿主一致：`<XDG_STATE_HOME>/diskedit/images/<指纹前 16 字节>`。
+#[cfg(target_os = "linux")]
+fn record_state_dir(state: &str, image: &str) -> PathBuf {
+    let fingerprint = image_fingerprint(image);
+    let name: String = fingerprint.bytes()[..16]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    Path::new(state).join("diskedit").join("images").join(name)
+}
+
+#[cfg(target_os = "linux")]
+fn record_body(
+    target: diskedit_core::fingerprint::Fingerprint,
+) -> diskedit_core::record::RecordBody {
+    diskedit_core::record::RecordBody {
+        target,
+        geometry_generation: 1,
+        plan_digest: [0u8; 32],
+    }
+}
+
+// covers: R0149, R0150, R0151, R0152, R0153, R0154
+#[cfg(target_os = "linux")]
+#[test]
+fn inspect_refuses_a_damaged_or_foreign_record() {
+    fixtures::prepare();
+    let directory = "target/fixtures/s7/inspect";
+    drop(std::fs::remove_dir_all(directory));
+    std::fs::create_dir_all(directory).expect("夹具目录可建");
+    let image = format!("{directory}/gpt.img");
+    std::fs::copy(Path::new(fixtures::BASE).join("gpt.img"), &image).expect("复制夹具");
+    let state = format!("{directory}/state");
+    drop(std::fs::remove_dir_all(&state));
+    let record_dir = record_state_dir(&state, &image);
+    std::fs::create_dir_all(&record_dir).expect("记录目录可建");
+    let record = record_dir.join("record");
+
+    let body = record_body(image_fingerprint(&image));
+    let valid = diskedit_core::record::encode(&body, &[]).expect("记录可编码");
+
+    // 截断：头部声明长度大于实际字节。
+    std::fs::write(&record, &valid[..valid.len() - 4]).expect("记录可写");
+    let (code, _stdout, stderr) = run_argv_env(&["inspect", &image], &[("XDG_STATE_HOME", &state)]);
+    assert_eq!(code, 3, "截断记录必须拒绝：{stderr}");
+    assert!(
+        stderr.contains("shorter than its declared length"),
+        "{stderr}"
+    );
+
+    // 校验不符：翻转载荷中间的一个字节。
+    let mut corrupt = valid.clone();
+    let at = corrupt.len() / 2;
+    corrupt[at] ^= 0xFF;
+    std::fs::write(&record, &corrupt).expect("记录可写");
+    let (code, _stdout, stderr) = run_argv_env(&["inspect", &image], &[("XDG_STATE_HOME", &state)]);
+    assert_eq!(code, 3, "校验不符必须拒绝：{stderr}");
+    assert!(stderr.contains("CRC does not match"), "{stderr}");
+
+    // 格式不认：长度足够但标识不是本实现的格式。
+    std::fs::write(&record, vec![0u8; 200]).expect("记录可写");
+    let (code, _stdout, stderr) = run_argv_env(&["inspect", &image], &[("XDG_STATE_HOME", &state)]);
+    assert_eq!(code, 3, "格式不认必须拒绝：{stderr}");
+    assert!(stderr.contains("not recognized"), "{stderr}");
+
+    // 外来：合法记录，但属于另一个目标。
+    let foreign = diskedit_core::record::encode(
+        &record_body(diskedit_core::fingerprint::Fingerprint::strong([0x42; 32])),
+        &[],
+    )
+    .expect("记录可编码");
+    std::fs::write(&record, &foreign).expect("记录可写");
+    let (code, _stdout, stderr) = run_argv_env(&["inspect", &image], &[("XDG_STATE_HOME", &state)]);
+    assert_eq!(code, 3, "外来记录必须拒绝：{stderr}");
+    assert!(stderr.contains("belongs to a different target"), "{stderr}");
+
+    // 非普通文件：记录位置被目录占住，读不出字节。
+    std::fs::remove_file(&record).expect("记录可删");
+    std::fs::create_dir(&record).expect("目录可建");
+    let (code, _stdout, stderr) = run_argv_env(&["inspect", &image], &[("XDG_STATE_HOME", &state)]);
+    assert_eq!(code, 3, "非普通记录条目必须拒绝：{stderr}");
+    assert!(stderr.contains("cannot be decoded"), "{stderr}");
 }

@@ -114,9 +114,6 @@ pub enum RecordVerdict {
         why: String,
     },
     Absent,
-    Unreadable {
-        why: String,
-    },
     Present {
         bytes: u64,
         decoded: String,

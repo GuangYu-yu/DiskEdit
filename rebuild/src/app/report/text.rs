@@ -12,7 +12,6 @@ pub fn inspect(report: &InspectReport) -> String {
     let record = match &report.record {
         RecordVerdict::Unresolved { why } => format!("unresolved: {why}"),
         RecordVerdict::Absent => "absent".to_owned(),
-        RecordVerdict::Unreadable { why } => format!("unreadable: {why}"),
         RecordVerdict::Present { bytes, decoded } => format!("present ({bytes} bytes; {decoded})"),
     };
     let occupancy = match &report.occupancy {
@@ -64,7 +63,6 @@ fn verdict(record: &RecordVerdict, occupancy: &Occupancy) -> &'static str {
         (_, Occupancy::Unknown { .. }) => {
             "occupancy cannot be decided; treat the target as occupied"
         }
-        (RecordVerdict::Unreadable { .. }, _) => "record state cannot be proved; do not write",
         (RecordVerdict::Absent, Occupancy::Idle) => "no record and no usage; target is idle",
     }
 }

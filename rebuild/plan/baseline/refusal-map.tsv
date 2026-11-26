@@ -240,3 +240,9 @@ R0341	src/app/decide/resize.rs `grow` 无空间且已顶到 last usable 走 Tabl
 R0329	src/app/decide/resize.rs 无 GPT/MBR 表的目标走 TableMissing，退 3（与旧版非 resizable label 的 refused 同码）	旧 src/cmd/resize.rs:274 refused "resize requires a GPT or MBR target (label: {other})"	tests/case_runner.rs 的 resize_refuses_mbr_relocation_flags_and_no_table_targets
 R0444	src/app/decide/resize.rs 无表目标（:N 形态）走 TableMissing，退 3	旧 src/cmd/resize/superfloppy.rs:10 refused "target has no partition table — drop :{n}"	tests/case_runner.rs 的 resize_refuses_mbr_relocation_flags_and_no_table_targets
 R0452	src/app/decide/resize.rs 无表目标（整盘形态）走 TableMissing，退 3	旧 src/cmd/resize/superfloppy.rs:52 refused "whole-device {} is not a resizable filesystem"	tests/case_runner.rs 的 resize_refuses_mbr_relocation_flags_and_no_table_targets
+R0149	src/app/decide/inspect.rs::damage 把格式不认的字节判为 RecordDamaged	测试在记录目录写入 200 字节非记录字节，基线旧 cmd/inspect.rs:482 对 UnrecognizedFormat 退 3	tests/case_runner.rs 的 inspect refuses a damaged or foreign record
+R0150	src/app/decide/inspect.rs 比较记录载荷里的目标指纹与当前目标身份	测试写入属于另一个目标的合法记录，基线旧 cmd/inspect.rs:488 对 ForeignTarget 退 3	tests/case_runner.rs 的 inspect refuses a damaged or foreign record
+R0151	src/app/decide/inspect.rs::damage 把 TooShort/FrameIncomplete 判为截断	测试截短合法记录的尾部，基线旧 cmd/inspect.rs:494 对 Incomplete 退 3	tests/case_runner.rs 的 inspect refuses a damaged or foreign record
+R0152	src/app/decide/inspect.rs::damage 把头部/载荷/正文/帧 CRC 不符判为校验失败	测试翻转记录载荷中的字节，基线旧 cmd/inspect.rs:500 对 CrcMismatch 退 3	tests/case_runner.rs 的 inspect refuses a damaged or foreign record
+R0153	src/app/decide/inspect.rs 记录条目读不出字节 → RecordUnreadable	测试把记录位置换成目录，基线旧 cmd/inspect.rs:506 对 NotRegular 退 3	tests/case_runner.rs 的 inspect refuses a damaged or foreign record
+R0154	src/app/decide/inspect.rs 记录条目 IO 不可读 → RecordUnreadable	测试的记录目录满足前置但条目不可读，基线旧 cmd/inspect.rs:512 对 Unreadable 退 3	tests/case_runner.rs 的 inspect refuses a damaged or foreign record
