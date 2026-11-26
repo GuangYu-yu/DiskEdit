@@ -22,7 +22,7 @@
 // covers: R0155, R0158, R0165, R0167, R0168, R0171, R0172, R0173
 // covers: R0174, R0176, R0177, R0178, R0180, R0187, R0192, R0203
 // covers: R0221
-// covers: R0542, R0584, R0586
+// covers: R0542, R0584, R0586, R0870, R0958
 
 /// 一条命令行用例。
 pub struct Case {
@@ -969,6 +969,19 @@ pub const CASES: &[Case] = &[
         exit: 3,
         stdout: "",
         stderr: "refused:",
+    },
+    Case {
+        name: "new refuses a target below the MBR minimum",
+        argv: &[
+            "new",
+            "target/fixtures/s2/tiny.img",
+            "--table",
+            "mbr",
+            "--yes",
+        ],
+        exit: 3,
+        stdout: "",
+        stderr: "MBR needs at least 3 sectors",
     },
     Case {
         name: "set uuid refuses a value that is not a UUID",

@@ -194,3 +194,5 @@ R0859	src/app/decide/recover.rs 无记录时不落文件系统步骤记录	旧 s
 R0542	src/app/cli/parse.rs 的 --chunk 只接受 1..=64 MiB	旧 src/execution/mod.rs:603 chunk size must be within 1 MiB..=64 MiB	tests/cases/mod.rs 的 move refuses a chunk outside one through sixty-four MiB
 R0584	src/app/cli/parse.rs 拒绝分区号 0	旧 src/execution/set.rs:34 the step targets partition 0	tests/cases/mod.rs 的 set refuses partition zero
 R0586	src/app/decide/edit.rs 拒绝非 UUID 的 set uuid 值	旧 src/execution/set.rs:45 is not a UUID	tests/cases/mod.rs 的 set uuid refuses a value that is not a UUID
+R0870	src/app/decide/new.rs 拒绝低于 MBR 最小容量的目标	旧 src/table/create.rs:91 target too small for an MBR	tests/cases/mod.rs 的 new refuses a target below the MBR minimum
+R0958	src/app/execute/table.rs 拒绝低于 MBR 最小容量的写表	旧 src/table/step.rs:306 target too small for an MBR	tests/cases/mod.rs 的 new refuses a target below the MBR minimum
