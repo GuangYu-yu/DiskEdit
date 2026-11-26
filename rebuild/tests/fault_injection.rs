@@ -372,7 +372,7 @@ fn a_failed_progress_checkpoint_reports_partial() {
     assert_partial(&outcome, "进度记录落盘失败");
 }
 
-// covers: R0591
+// covers: R0591, R0883
 #[test]
 fn a_failed_table_write_after_the_move_reports_partial() {
     // 前两次写入是数据块，第三次是表写。
@@ -383,7 +383,7 @@ fn a_failed_table_write_after_the_move_reports_partial() {
     assert_partial(&outcome, "表写失败");
 }
 
-// covers: R0593
+// covers: R0593, R0884
 #[test]
 fn a_failed_table_flush_reports_partial() {
     // 第一次刷盘是数据步，第二次是表步。
@@ -392,6 +392,18 @@ fn a_failed_table_flush_reports_partial() {
         ..Faults::default()
     });
     assert_partial(&outcome, "表刷盘失败");
+}
+
+// covers: R0886
+#[test]
+fn a_table_that_changes_after_the_write_reports_partial() {
+    // 第三次写是表步；写入声称成功但盘面被外力改掉：回读核对必须发现摘要不符，
+    // 按"表已落盘、待恢复"报部分完成，而不是当作成功。
+    let (outcome, _memory) = run(Faults {
+        corrupt_write: Some(3),
+        ..Faults::default()
+    });
+    assert_partial(&outcome, "表回读不符");
 }
 
 /// 记录文件路径：与执行器一致的 `<state>/images/<hex16>/record`。

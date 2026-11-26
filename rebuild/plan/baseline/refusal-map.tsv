@@ -255,3 +255,6 @@ R0024	src/app/observe/snapshot.rs::open_target 扇区集合校验	旧 assembly.r
 R0026	src/app/observe/snapshot.rs::open_target 扇区集合校验	旧 assembly.rs:539 装配 copy 计划时校验表扇区尺寸	tests/fault_injection.rs 的 a_target_with_an_unsupported_sector_size_is_refused_as_unsupported
 R0029	src/app/observe/snapshot.rs::open_target 扇区集合校验	旧 assembly.rs:600 装配 resize 计划时校验表扇区尺寸	tests/fault_injection.rs 的 a_target_with_an_unsupported_sector_size_is_refused_as_unsupported
 R0036	src/app/observe/snapshot.rs::open_target 扇区集合校验	旧 assembly.rs:818 装配 resize 搬移计划时校验表扇区尺寸	tests/fault_injection.rs 的 a_target_with_an_unsupported_sector_size_is_refused_as_unsupported
+R0883	src/app/execute/table.rs::execute_plan 表写经唯一写通道，写失败按已写归档为待恢复	旧 table/mbr.rs:251 写 MBR 失败即部分完成（盘面可能已变）	tests/fault_injection.rs 的 a_failed_table_write_after_the_move_reports_partial
+R0884	src/app/execute/table.rs::execute_plan 表写后刷盘失败按已写归档为待恢复	旧 table/mbr.rs:253 刷 MBR 失败即部分完成（写可能未落盘）	tests/fault_injection.rs 的 a_failed_table_flush_reports_partial
+R0886	src/app/execute/postcondition.rs::verify 回读写入分段并核对摘要，不符即待恢复	旧 table/mbr.rs:258 回读与写入不符即部分完成	tests/fault_injection.rs 的 a_table_that_changes_after_the_write_reports_partial
