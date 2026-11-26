@@ -17,6 +17,8 @@
 // covers: R0864
 // covers: R0611, R0613, R0615, R0626, R0633, R0637
 // covers: R0645
+// covers: R0346, R0398, R0403, R0342, R0349, R0348, R0396, R0397
+// covers: R0401, R0402, R0417, R0418
 
 /// 一条命令行用例。
 pub struct Case {
@@ -922,5 +924,46 @@ pub const CASES: &[Case] = &[
         exit: 2,
         stdout: "",
         stderr: "needs --start",
+    },
+    Case {
+        name: "resize without a size is a usage error",
+        argv: &["resize", "target/fixtures/s1/gpt.img:1", "--yes"],
+        exit: 2,
+        stdout: "",
+        stderr: "size",
+    },
+    Case {
+        name: "resize refuses a missing MBR partition",
+        argv: &["resize", "target/fixtures/s1/mbr.img:5", "+1M", "--yes"],
+        exit: 3,
+        stdout: "",
+        stderr: "refused:",
+    },
+    Case {
+        name: "resize refuses a blocked right side without relocation",
+        argv: &["resize", "target/fixtures/s1/gpt.img:1", "+1M", "--yes"],
+        exit: 3,
+        stdout: "",
+        stderr: "refused:",
+    },
+    Case {
+        name: "resize refuses an end past the last usable LBA",
+        argv: &[
+            "resize",
+            "target/fixtures/s1/gpt.img:2",
+            "--end",
+            "9000",
+            "--yes",
+        ],
+        exit: 3,
+        stdout: "",
+        stderr: "refused:",
+    },
+    Case {
+        name: "resize refuses a target without a partition table",
+        argv: &["resize", "target/fixtures/s1/empty.img:1", "+1M", "--yes"],
+        exit: 3,
+        stdout: "",
+        stderr: "refused:",
     },
 ];

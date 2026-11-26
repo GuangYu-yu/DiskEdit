@@ -146,3 +146,19 @@ R0626	src/app/decide/edit.rs set type 需要 GPT	旧 src/gpt_policy.rs:637 no GP
 R0633	src/app/decide/edit.rs set flag 需要 GPT	旧 src/gpt_policy.rs:721 no GPT	tests/cases/mod.rs 的 set flag refuses a target without a table
 R0637	src/app/decide/edit.rs delete 需要 GPT	旧 src/gpt_policy.rs:744 no GPT	tests/cases/mod.rs 的 delete refuses a target without a table
 R0645	src/app/decide/edit.rs 拒绝全零类型 GUID	旧 src/gpt_policy.rs:917 type GUID cannot be all-zero	tests/cases/mod.rs 的 add refuses a zero type GUID
+R0346	src/app/cli/parse.rs parse_resize 缺 SIZE/--end 报用法	旧 src/cmd/resize.rs:541 resize needs a size	tests/cases/mod.rs 的 resize without a size is a usage error
+R0398	src/app/decide/resize.rs 分区号不存在 → PartitionMissing	旧 src/cmd/resize/msdos.rs:269 partition not found (primary 1..4)	tests/cases/mod.rs 的 resize refuses a missing MBR partition
+R0403	src/app/decide/resize.rs MBR 收缩路径的分区号不存在	旧 src/cmd/resize/msdos.rs:312 partition not found (primary 1..4)	tests/cases/mod.rs 的 resize refuses a missing MBR partition
+R0342	src/app/decide/resize.rs 右侧被占且未授权搬移 → TableEdit 拒绝	旧 src/cmd/resize.rs:500 right side is occupied	tests/cases/mod.rs 的 resize refuses a blocked right side without relocation
+R0349	src/app/decide/resize.rs 右侧连续空间不足 → TableEdit 拒绝	旧 src/cmd/resize.rs:588 not enough contiguous free space	tests/cases/mod.rs 的 resize refuses a blocked right side without relocation
+R0348	src/app/decide/resize.rs resolve_end 拒绝越过 last usable	旧 src/cmd/resize.rs:548 size exceeds usable range	tests/cases/mod.rs 的 resize refuses an end past the last usable LBA
+R0396	src/app/decide/resize.rs 无表目标 → TableMissing	旧 src/cmd/resize/msdos.rs:261 no MBR on target	tests/cases/mod.rs 的 resize refuses a target without a partition table
+R0397	src/app/decide/resize.rs 无表目标 → TableMissing（收缩）	旧 src/cmd/resize/msdos.rs:263 no MBR on target	tests/cases/mod.rs 的 resize refuses a target without a partition table
+R0401	src/app/decide/resize.rs 无表目标 → TableMissing（预览）	旧 src/cmd/resize/msdos.rs:304 no MBR on target	tests/cases/mod.rs 的 resize refuses a target without a partition table
+R0402	src/app/decide/resize.rs 无表目标 → TableMissing（执行）	旧 src/cmd/resize/msdos.rs:306 no MBR on target	tests/cases/mod.rs 的 resize refuses a target without a partition table
+R0417	src/app/decide/resize.rs 写表前重探无表 → TableMissing	旧 src/cmd/resize/msdos.rs:585 no MBR on target	tests/cases/mod.rs 的 resize refuses a target without a partition table
+R0418	src/app/decide/resize.rs 写表前重探无表（收缩）	旧 src/cmd/resize/msdos.rs:586 no MBR on target	tests/cases/mod.rs 的 resize refuses a target without a partition table
+R0399	crates/core/src/table/edit.rs::resize_mbr 拒绝扩展容器	旧 src/cmd/resize/msdos.rs:272 extended container cannot be resized	tests/refusal_claims.rs 的 mbr_resize_rejects_structural_and_out_of_bounds_ranges
+R0404	crates/core/src/table/edit.rs::resize_mbr 拒绝扩展容器（收缩）	旧 src/cmd/resize/msdos.rs:315 extended container cannot be resized	tests/refusal_claims.rs 的 mbr_resize_rejects_structural_and_out_of_bounds_ranges
+R0411	crates/core/src/table/edit.rs::resize_mbr 的 PastAddressSpace	旧 src/cmd/resize/msdos.rs:460 exceeds MBR 32-bit LBA limit	tests/refusal_claims.rs 的 mbr_resize_rejects_structural_and_out_of_bounds_ranges
+R0413	crates/core/src/table/edit.rs::resize_mbr 的 PastAddressSpace（32 位上限）	旧 src/cmd/resize/msdos.rs:475 size exceeds MBR 32-bit LBA limit	tests/refusal_claims.rs 的 mbr_resize_rejects_structural_and_out_of_bounds_ranges

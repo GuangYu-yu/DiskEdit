@@ -99,10 +99,8 @@ pub fn decide(snapshot: &ResizeSnapshot, request: &Request) -> Decision {
     let shrink = new_end < old_end;
 
     if grow && new_end - old_end > free {
-        return Decision::Refuse(Refusal::ContentUnsupported {
-            what: "resize".to_owned(),
-            why: "the right side is occupied by another partition — relocate it with `move` \
-                  first, then rerun"
+        return Decision::Refuse(Refusal::TableEdit {
+            why: "the right side is occupied by another partition — move it first, then rerun"
                 .to_owned(),
         });
     }
