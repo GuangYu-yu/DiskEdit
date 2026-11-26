@@ -249,22 +249,22 @@ fn resolve_end(
         if *size == SizeSpec::Grow {
             old_end
                 .checked_add(free)
-                .ok_or_else(|| out_of_range("grow overflows the LBA range"))?
+                .ok_or_else(|| beyond_table("grow overflows the LBA range"))?
         } else {
             let bytes = resolve_bytes(*size, current)?;
             if bytes < sector {
-                return Err(out_of_range(
-                    "the requested size rounds down below one sector",
-                ));
+                return Err(beyond_table(format!(
+                    "size {bytes} < one sector ({sector})"
+                )));
             }
             let sectors = bytes / sector;
             start
                 .checked_add(sectors)
                 .and_then(|end| end.checked_sub(1))
-                .ok_or_else(|| out_of_range("the requested size overflows the LBA range"))?
+                .ok_or_else(|| beyond_table(format!("size {bytes} overflows the LBA range")))?
         }
     } else {
-        return Err(out_of_range(
+        return Err(beyond_table(
             "`resize` needs a size, --end or --grow-to-end",
         ));
     };
@@ -291,11 +291,11 @@ fn resolve_bytes(size: SizeSpec, current: u64) -> Result<u64, Refusal> {
             if grow {
                 current
                     .checked_add(bytes)
-                    .ok_or_else(|| out_of_range("SIZE overflows the partition size"))
+                    .ok_or_else(|| beyond_table("SIZE overflows the partition size"))
             } else {
                 current
                     .checked_sub(bytes)
-                    .ok_or_else(|| out_of_range("SIZE exceeds the current partition size"))
+                    .ok_or_else(|| beyond_table(format!("SIZE exceeds the current size {current}")))
             }
         }
         SizeSpec::Percent { grow, num, denom } => {
@@ -303,17 +303,17 @@ fn resolve_bytes(size: SizeSpec, current: u64) -> Result<u64, Refusal> {
                 .checked_mul(num as u128)
                 .and_then(|value| value.checked_div(100u128 * denom as u128))
                 .filter(|value| *value <= u64::MAX as u128)
-                .ok_or_else(|| out_of_range("SIZE overflows the partition size"))?
+                .ok_or_else(|| beyond_table("SIZE overflows the partition size"))?
                 as u64;
             let delta = raw / MIB * MIB;
             if grow {
                 current
                     .checked_add(delta)
-                    .ok_or_else(|| out_of_range("SIZE overflows the partition size"))
+                    .ok_or_else(|| beyond_table("SIZE overflows the partition size"))
             } else {
                 current
                     .checked_sub(delta)
-                    .ok_or_else(|| out_of_range("SIZE exceeds the current partition size"))
+                    .ok_or_else(|| beyond_table(format!("SIZE exceeds the current size {current}")))
             }
         }
     }
@@ -540,10 +540,9 @@ fn refuse(why: &str) -> Decision {
     })
 }
 
-fn out_of_range(why: &str) -> Refusal {
-    Refusal::ArgumentOutOfRange {
-        what: why.to_owned(),
-    }
+/// 尺寸请求越出表可以表达的区间：拒绝写表，退出码 3，与基线一致（不是用法错误）。
+fn beyond_table(why: impl Into<String>) -> Refusal {
+    Refusal::TableEdit { why: why.into() }
 }
 
 fn region(start: u64, len: u64) -> diskedit_core::region::Region {

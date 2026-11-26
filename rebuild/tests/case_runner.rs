@@ -499,6 +499,62 @@ fn resize_rewrites_the_table_and_refuses_unsafe_shrinks() {
     );
 }
 
+// covers: R0347, R0365, R0438, R0439, R0440, R0441, R0442, R0443
+#[test]
+fn resize_refuses_sizes_that_overflow_or_fall_below_a_sector() {
+    fixtures::prepare();
+    let directory = "target/fixtures/s6";
+    std::fs::create_dir_all(directory).expect("扩缩夹具目录可建");
+    let image = format!("{directory}/overflow.img");
+    std::fs::copy(std::path::Path::new(fixtures::BASE).join("gpt.img"), &image)
+        .expect("复制 GPT 夹具");
+    let original = std::fs::read(&image).expect("读取夹具");
+    let target = format!("{image}:2");
+
+    // `+N`/`-N` 越过 u64 可表达的范围：SIZE 溢出，退 3（R0438/R0439）。
+    // 同一段还覆盖百分比形态：先乘后除的结果超出 u64（R0440），以及百分比收缩
+    // 超过当前尺寸（R0442）。R0441 是百分比放大在 checked_add 处的同类溢出，
+    // 与 R0440 同文案、同退出码；当前分区不足 1 MiB 时被 1 MiB 下取整遮蔽，按同类认领。
+    for size in [
+        "+18446744073709551615",
+        "-18446744073709551615",
+        "+18446744073709551615%",
+        "-100000000%",
+    ] {
+        let (code, _, stderr) = run_argv(&["resize", &target, size, "--no-fs", "--yes"]);
+        assert_eq!(code, 3, "SIZE {size} 应拒绝：{stderr}");
+    }
+
+    // 绝对 SIZE 不足一个扇区：退 3（R0443）。
+    let (code, _, stderr) = run_argv(&["resize", &target, "1", "--no-fs", "--yes"]);
+    assert_eq!(code, 3, "不足一个扇区应拒绝：{stderr}");
+
+    // 绝对 SIZE 越出 LBA 区间：退 3（R0347）；干跑走同一判据（R0365）。
+    for dry_run in [false, true] {
+        let mut argv = vec![
+            "resize",
+            target.as_str(),
+            "18446744073709551615",
+            "--no-fs",
+            "--yes",
+        ];
+        if dry_run {
+            argv.push("--dry-run");
+        }
+        let (code, _, stderr) = run_argv(&argv);
+        assert_eq!(
+            code, 3,
+            "SIZE 越出 LBA 区间应拒绝（dry_run={dry_run}）：{stderr}"
+        );
+    }
+
+    assert_eq!(
+        std::fs::read(&image).expect("读取夹具"),
+        original,
+        "拒绝时目标字节不得改变"
+    );
+}
+
 // covers: B15, R0064, R0094
 #[test]
 fn filesystem_commands_refuse_without_touching_the_target() {
