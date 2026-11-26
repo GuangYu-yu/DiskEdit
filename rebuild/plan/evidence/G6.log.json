@@ -15,9 +15,9 @@
   "plan/baseline/refusal-due.tsv"
  ],
  "exit_code": 0,
- "commit": "ecf4319",
- "tree": "5eeca37d8426112b",
- "at": "2026-11-26T17:37:10+00:00",
+ "commit": "f13cb3e",
+ "tree": "eed8fa355833887a",
+ "at": "2026-11-26T17:39:32+00:00",
  "counts": {
   "result_lines": 0,
   "passed": 0,

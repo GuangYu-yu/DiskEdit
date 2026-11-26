@@ -780,6 +780,22 @@ fn read_only_commands_leave_the_target_bytes_unchanged() {
     );
 }
 
+// 无盘标的目标只报告空表，不崩溃、不写盘（parted disk_set 曾在无盘标时崩溃）。
+#[test]
+fn info_reports_an_empty_table_without_crashing() {
+    let path = "target/fixtures/s1/empty.img";
+    let before = std::fs::read(path).expect("读取夹具");
+    let (code, stdout, stderr) = run_argv(&["info", path]);
+    assert_eq!(code, 0, "无表目标应正常报告：{stderr}");
+    assert!(stdout.contains("\"label\":\"none\""), "{stdout}");
+    assert!(stdout.contains("\"partitions\":[]"), "{stdout}");
+    assert_eq!(
+        std::fs::read(path).expect("读取夹具"),
+        before,
+        "info 改动了目标"
+    );
+}
+
 /// 读 GPT 主分区项数组里第 `index` 个条目的 PARTUUID（从 1 计）。
 fn entry_partuuid(bytes: &[u8], index: usize) -> [u8; 16] {
     let table =

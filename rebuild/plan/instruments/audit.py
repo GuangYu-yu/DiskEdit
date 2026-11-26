@@ -14,6 +14,12 @@
 
 另外核对 06 附录 A 的 M4 表与账本逐行同集、状态一致；M4 少一行或状态
 不一致都算欠账。
+
+防御面对称 census（`census` 子命令）的计数口径固定在 `count_defenses`：
+按文件累计断言（`PED_ASSERT`/`assert`/`ASSERT`）、异常抛出
+（`ped_exception_throw`/`throw`）、失败路径 `goto`（目标名以
+fail/error/err/out/done/cleanup 开头）。结果写 `plan/baseline/defense-census.tsv`，
+账本用 `census:<tool>` 引用；数字为 0 也如实记录。
 """
 
 from __future__ import annotations
@@ -39,6 +45,47 @@ R = re.compile(r"^R\d{4}$")
 D = re.compile(r"^D\d+$")
 OWNER = re.compile(r"^owner:(SA\d+)$")
 CASE = re.compile(r"^(?P<file>[^\s:]+\.rs)::(?P<name>[A-Za-z0-9_]+)$")
+CENSUS = re.compile(r"^census:(?P<tool>[a-z0-9-]+)$")
+CENSUS_COLUMNS = ["tool", "version", "source", "files", "asserts", "exceptions", "goto_fail", "total"]
+
+
+def count_defenses(root: pathlib.Path) -> tuple[int, int, int, int]:
+    """数三类防御点：断言、异常抛出、失败路径 goto。口径见模块说明。"""
+    files = asserts = exceptions = gotos = 0
+    for path in sorted(root.rglob("*")):
+        if path.suffix not in {".c", ".h", ".cc", ".cpp"}:
+            continue
+        files += 1
+        text = path.read_text(encoding="utf-8", errors="ignore")
+        asserts += len(re.findall(r"\b(?:PED_ASSERT|assert|ASSERT)\s*\(", text))
+        exceptions += len(re.findall(r"\b(?:ped_exception_throw|throw)\b", text))
+        gotos += len(re.findall(r"\bgoto\s+(?:fail|error|err|out|done|cleanup)\w*\s*;", text))
+    return files, asserts, exceptions, gotos
+
+
+def load_census(path: pathlib.Path) -> dict[str, dict[str, str]]:
+    if not path.is_file():
+        return {}
+    rows: dict[str, dict[str, str]] = {}
+    lines = path.read_text(encoding="utf-8").splitlines()
+    if not lines or lines[0].split("\t") != CENSUS_COLUMNS:
+        return {}
+    for line in lines[1:]:
+        if not line.strip():
+            continue
+        cells = line.split("\t")
+        if len(cells) == len(CENSUS_COLUMNS):
+            rows[cells[0]] = dict(zip(CENSUS_COLUMNS, cells))
+    return rows
+
+
+def write_census(path: pathlib.Path, row: dict[str, str]) -> None:
+    rows = load_census(path)
+    rows[row["tool"]] = row
+    lines = ["\t".join(CENSUS_COLUMNS)]
+    for tool in sorted(rows):
+        lines.append("\t".join(rows[tool][column] for column in CENSUS_COLUMNS))
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def load_ledger(path: pathlib.Path) -> tuple[list[dict[str, str]], list[str]]:
@@ -126,8 +173,10 @@ def validate(
     batches: set[str],
     tests: pathlib.Path,
     root: pathlib.Path,
+    census: dict[str, dict[str, str]] | None = None,
 ) -> list[str]:
     errors: list[str] = []
+    census = census or {}
     for row in rows:
         cid = row["class_id"]
         state = row["state"]
@@ -145,6 +194,10 @@ def validate(
                 elif D.fullmatch(token):
                     if token not in known_d:
                         errors.append(f"{cid}: 证据 {token} 不在 divergences.md")
+                elif CENSUS.fullmatch(token):
+                    tool = CENSUS.fullmatch(token).group("tool")
+                    if tool not in census or not census[tool].get("version"):
+                        errors.append(f"{cid}: {token} 在 defense-census.tsv 没有记录")
                 elif not resolve_case(token, tests, root):
                     errors.append(f"{cid}: 证据 {token} 找不到对应的用例函数")
         elif state == "差异":
@@ -179,7 +232,16 @@ def check(args: argparse.Namespace) -> int:
         for found in re.finditer(r"^\|\s*(SA\d)\s*\|", args.appendix.read_text(encoding="utf-8"), re.M)
     }
     errors.extend(
-        validate(rows, m4, known_r, known_d, batches, args.tests, args.root)
+        validate(
+            rows,
+            m4,
+            known_r,
+            known_d,
+            batches,
+            args.tests,
+            args.root,
+            load_census(args.census),
+        )
     )
     if errors:
         for error in errors:
@@ -223,10 +285,36 @@ def selftest() -> int:
                 {"SA1", "SA2"},
                 root / "tests",
                 root,
+                {},
             )
             if bool(errors) != expected:
                 print(f"selftest: 期望失败={expected} 得到 {errors}", file=sys.stderr)
                 failures += 1
+        source = root / "src"
+        source.mkdir()
+        (source / "a.c").write_text(
+            "void f(void) { if (x) goto fail; PED_ASSERT(1); ped_exception_throw(1); }\n",
+            encoding="utf-8",
+        )
+        if count_defenses(source) != (1, 1, 1, 1):
+            print("selftest: 防御点计数口径不对", file=sys.stderr)
+            failures += 1
+        census_row = {column: "0" for column in CENSUS_COLUMNS}
+        census_row["tool"] = "parted"
+        census_row["total"] = "3"
+        errors = validate(
+            [{**good, "evidence": "census:parted"}],
+            {"SA1-001": "已认领"},
+            set(),
+            set(),
+            {"SA1"},
+            root / "tests",
+            root,
+            {"parted": census_row},
+        )
+        if errors:
+            print(f"selftest: census 证据未被接受：{errors}", file=sys.stderr)
+            failures += 1
     print(f"selftest: {'ok' if not failures else str(failures) + ' 项失败'}")
     return 1 if failures else 0
 
@@ -242,9 +330,35 @@ def main() -> int:
     run.add_argument("--divergences", type=pathlib.Path, required=True)
     run.add_argument("--refusal-map", type=pathlib.Path, required=True)
     run.add_argument("--tests", type=pathlib.Path, required=True)
+    run.add_argument("--census", type=pathlib.Path, required=True)
     run.add_argument("--root", type=pathlib.Path, default=pathlib.Path("."))
+    count = sub.add_parser("census")
+    count.add_argument("--source", type=pathlib.Path, required=True)
+    count.add_argument("--tool", required=True)
+    count.add_argument("--version", required=True)
+    count.add_argument("--out", type=pathlib.Path, required=True)
     args = parser.parse_args()
-    return selftest() if args.command == "selftest" else check(args)
+    if args.command == "selftest":
+        return selftest()
+    if args.command == "census":
+        files, asserts, exceptions, gotos = count_defenses(args.source)
+        total = asserts + exceptions + gotos
+        write_census(
+            args.out,
+            {
+                "tool": args.tool,
+                "version": args.version,
+                "source": str(args.source),
+                "files": str(files),
+                "asserts": str(asserts),
+                "exceptions": str(exceptions),
+                "goto_fail": str(gotos),
+                "total": str(total),
+            },
+        )
+        print(f"census: {args.tool} {args.version} files={files} total={total}")
+        return 0
+    return check(args)
 
 
 if __name__ == "__main__":

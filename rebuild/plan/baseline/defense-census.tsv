@@ -1,0 +1,4 @@
+tool	version	source	files	asserts	exceptions	goto_fail	total
+gdisk	master-2026-11-27	/tmp/src/gptfdisk-master	36	0	0	0	0
+libfdisk	2.39.3	/tmp/src/util-linux-2.39.3/libfdisk	24	527	0	84	611
+parted	3.6	/tmp/src/parted-3.6/libparted	124	816	326	487	1629

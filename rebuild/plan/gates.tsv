@@ -33,7 +33,7 @@ G6b	 model	lint	1	 	plan/baseline/refusal-map.tsv	python plan/instruments/census
 # ---- 模型跑：纪律守卫（基线之后只许在 rebuild/ 内落笔；提交信息按范围书写）----
 G9	 model	lint	1	 	plan/footprint.base	python plan/instruments/footprint.py
 G10	 model	lint	1	 	plan/footprint.base	python plan/instruments/commits.py
-G11	 model	lint	1	 	plan/baseline/incident-classes.tsv	python plan/instruments/audit.py check --ledger plan/baseline/incident-classes.tsv --m4 plan/06-防漂移执行手册.md --appendix plan/06-防漂移执行手册.md --divergences plan/divergences.md --refusal-map plan/baseline/refusal-map.tsv --tests tests --root .
+G11	 model	lint	1	 	plan/baseline/incident-classes.tsv	python plan/instruments/audit.py check --ledger plan/baseline/incident-classes.tsv --m4 plan/06-防漂移执行手册.md --appendix plan/06-防漂移执行手册.md --divergences plan/divergences.md --refusal-map plan/baseline/refusal-map.tsv --tests tests --census plan/baseline/defense-census.tsv --root .
 # ---- 人跑：每个纵切结束后一条命令（需要 root、镜像、文件系统工具、旧版二进制）----
 G7	 human	test	3	DISKEDIT_BASELINE	 	cargo test --test equivalence
 G8	 human	test	50	 	 	cargo test

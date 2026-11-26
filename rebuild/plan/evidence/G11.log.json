@@ -17,13 +17,15 @@
   "plan/baseline/refusal-map.tsv",
   "--tests",
   "tests",
+  "--census",
+  "plan/baseline/defense-census.tsv",
   "--root",
   "."
  ],
  "exit_code": 0,
- "commit": "ecf4319",
- "tree": "5eeca37d8426112b",
- "at": "2026-11-26T17:37:11+00:00",
+ "commit": "f13cb3e",
+ "tree": "eed8fa355833887a",
+ "at": "2026-11-26T17:39:33+00:00",
  "counts": {
   "result_lines": 0,
   "passed": 0,
