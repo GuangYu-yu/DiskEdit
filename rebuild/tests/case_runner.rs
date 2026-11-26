@@ -885,3 +885,50 @@ fn inspect_refuses_a_damaged_or_foreign_record() {
     assert_eq!(code, 3, "非普通记录条目必须拒绝：{stderr}");
     assert!(stderr.contains("cannot be decoded"), "{stderr}");
 }
+// covers: R0674
+#[test]
+fn resize_allow_move_relocates_the_blocking_partition() {
+    fixtures::prepare();
+    let directory = "target/fixtures/s6";
+    std::fs::create_dir_all(directory).expect("扩缩夹具目录可建");
+    let image = format!("{directory}/allow-move.img");
+    std::fs::copy(std::path::Path::new(fixtures::BASE).join("gpt.img"), &image)
+        .expect("复制 GPT 夹具");
+
+    // 右侧本来就空时 `--allow-move` 没有可搬对象：按基线拒绝，退 3（R0674）。
+    let (code, _, stderr) = run_argv(&[
+        "resize",
+        &format!("{image}:2"),
+        "grow",
+        "--allow-move",
+        "--no-fs",
+        "--yes",
+    ]);
+    assert_eq!(code, 3, "右侧空闲时 --allow-move 应拒绝：{stderr}");
+
+    // `grow --allow-move`：右侧的 #2 被整体右移，#1 吃到盘尾余量。
+    let (code, stdout, stderr) = run_argv(&[
+        "resize",
+        &format!("{image}:1"),
+        "grow",
+        "--allow-move",
+        "--no-fs",
+        "--yes",
+    ]);
+    assert_eq!(code, 0, "带 --allow-move 的扩容应成功：{stderr}");
+    assert!(
+        stdout.contains("relocated 1 blocking partition"),
+        "应报告搬移了挡路分区：{stdout}"
+    );
+
+    let (code, stdout, _) = run_argv(&["info", &image]);
+    assert_eq!(code, 0);
+    assert!(
+        stdout.contains("\"first_lba\":2048,\"fs\":\"unknown\",\"last_lba\":7134"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("\"first_lba\":7135,\"fs\":\"unknown\",\"last_lba\":8158"),
+        "{stdout}"
+    );
+}

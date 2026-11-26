@@ -273,3 +273,4 @@ R0874	crates/core/src/table/create.rs check_capacity 的几何判定	旧 table/c
 R0875	crates/core/src/table/create.rs check_capacity 对零扇区尺寸的拒绝	旧 table/create.rs:318 的几何构造失败	tests/refusal_claims.rs 的 table_capacity_refuses_disks_too_small_for_gpt_or_mbr
 R0876	src/app/decide/new.rs 的 TargetTooSmall 拒绝	旧 table/create.rs:354 直调入口的容量兜底	tests/refusal_claims.rs 的 table_capacity_refuses_disks_too_small_for_gpt_or_mbr
 R0877	crates/core/src/table/create.rs gpt_layout 的容量拒绝	旧 table/create.rs:356 的同一句 too small	tests/refusal_claims.rs 的 table_capacity_refuses_disks_too_small_for_gpt_or_mbr
+R0674	src/app/decide/resize.rs 在 --allow-move 无挡路分区时拒绝	旧 movepart/plan.rs:485 no partition to relocate (right side is free)	tests/case_runner.rs 的 resize_allow_move_relocates_the_blocking_partition

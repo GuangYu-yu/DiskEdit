@@ -23,6 +23,9 @@ use super::{Decision, Plan, Refusal};
 /// 1 MiB 的字节数：百分比增量与 `--align mib` 的对齐单位。
 const MIB: u64 = 1 << 20;
 
+/// 搬移挡路分区时的默认块大小，与 `move` 命令一致。
+const DEFAULT_CHUNK: u64 = 4 << 20;
+
 /// 判定一次 `resize`。
 pub fn decide(snapshot: &ResizeSnapshot, request: &Request) -> Decision {
     let Command::Resize(resize) = request.command() else {
@@ -105,7 +108,35 @@ pub fn decide(snapshot: &ResizeSnapshot, request: &Request) -> Decision {
     let last_usable = table.last_usable();
     let free = free_right(&table.used_ranges(), old_end, last_usable);
 
-    let new_end = match resolve_end(resize, start, old_end, current, free, sector, last_usable) {
+    // `--allow-move` 只在 GPT 上成立（MBR 已在上面拒绝）：让 `grow` 能吃掉右侧被
+    // 邻接分区占住的空间，并把这些分区整体右移。
+    let relocatable = matches!(table, Resizable::Gpt(_)) && resize.allow_move;
+    // `grow --allow-move` 的天花板：右侧分区整体右移后仍要落在 last usable 之内，
+    // 因此可扩的量 = 右侧空隙 + 盘尾余量。
+    let grow_ceiling = if relocatable && resize.size.as_ref() == Some(&SizeSpec::Grow) {
+        let tail = table
+            .used_ranges()
+            .iter()
+            .map(|&(_, end)| end)
+            .filter(|&end| end > old_end)
+            .max()
+            .map_or(last_usable, |end| last_usable.saturating_sub(end));
+        Some(old_end + free + tail)
+    } else {
+        None
+    };
+    let new_end = match resolve_end(
+        resize,
+        EndContext {
+            start,
+            old_end,
+            current,
+            free,
+            sector,
+            last_usable,
+            grow_ceiling,
+        },
+    ) {
         Ok(end) => end,
         Err(refusal) => return Decision::Refuse(refusal),
     };
@@ -130,9 +161,32 @@ pub fn decide(snapshot: &ResizeSnapshot, request: &Request) -> Decision {
         return Decision::Refuse(Refusal::TableEdit { why });
     }
 
+    // 右侧被挡时的搬移计划：把 `old_end` 之后的分区整体右移，腾出的空间恰好够
+    // 目标终点。没有 `--allow-move` 时保持基线的拒绝。
+    let mut moves: Vec<Relocation> = Vec::new();
     if grow && new_end - old_end > free {
+        if !resize.allow_move {
+            return Decision::Refuse(Refusal::TableEdit {
+                why: "the right side is occupied by another partition — move it first, then rerun"
+                    .to_owned(),
+            });
+        }
+        let Resizable::Gpt(gpt) = &table else {
+            return Decision::Refuse(Refusal::TableEdit {
+                why: "--allow-move is not supported for MBR resize — MBR cannot relocate \
+                      blocking partitions"
+                    .to_owned(),
+            });
+        };
+        let delta = (new_end - old_end) - free;
+        match plan_relocations(gpt, old_end, delta, last_usable) {
+            Ok(planned) => moves = planned,
+            Err(refusal) => return Decision::Refuse(refusal),
+        }
+    } else if resize.allow_move && grow {
+        // 右侧本来就空：`--allow-move` 没有可搬的对象，按基线拒绝而不是静默忽略。
         return Decision::Refuse(Refusal::TableEdit {
-            why: "the right side is occupied by another partition — move it first, then rerun"
+            why: "no partition to relocate (right side is free — no --allow-move needed)"
                 .to_owned(),
         });
     }
@@ -176,7 +230,7 @@ pub fn decide(snapshot: &ResizeSnapshot, request: &Request) -> Decision {
         };
     }
 
-    let segments = match table.resized(number, start, new_end) {
+    let segments = match table.resized(number, start, new_end, &moves) {
         Ok(segments) => segments,
         Err(why) => return Decision::Refuse(Refusal::TableDamaged { why }),
     };
@@ -190,7 +244,10 @@ pub fn decide(snapshot: &ResizeSnapshot, request: &Request) -> Decision {
         }
         steps.push(table_step);
     } else {
-        // 扩容：先写表，再扩文件系统。
+        // 扩容：先把挡路分区搬到新位置，再写表，最后扩文件系统。
+        for relocation in &moves {
+            steps.push(relocation.step(sector));
+        }
         steps.push(table_step);
         if let Some(step) = filesystem_step {
             steps.push(step);
@@ -200,11 +257,16 @@ pub fn decide(snapshot: &ResizeSnapshot, request: &Request) -> Decision {
         Ok(plan) => plan,
         Err(refusal) => return Decision::Refuse(refusal),
     };
+    let relocated = if moves.is_empty() {
+        String::new()
+    } else {
+        format!(", relocated {} blocking partition(s)", moves.len())
+    };
     finish(
         snapshot,
         plan,
         format!(
-            "resized partition #{number} to LBA {start}..{new_end} (verify with: diskedit info {})",
+            "resized partition #{number} to LBA {start}..{new_end}{relocated} (verify with: diskedit info {})",
             snapshot.target.display
         ),
     )
@@ -240,8 +302,14 @@ impl Resizable {
         }
     }
 
-    /// 把指定分区的新终点落进表字节，返回写段。
-    fn resized(&self, number: u32, start: u64, new_end: u64) -> Result<Vec<Segment>, String> {
+    /// 把指定分区的新终点落进表字节，返回写段；`moves` 里的分区同时改到新起点。
+    fn resized(
+        &self,
+        number: u32,
+        start: u64,
+        new_end: u64,
+        moves: &[Relocation],
+    ) -> Result<Vec<Segment>, String> {
         match self {
             Self::Gpt(table) => {
                 let index = table
@@ -249,6 +317,10 @@ impl Resizable {
                     .map_err(|error| error.to_string())?;
                 let mut entries = table.entries.clone();
                 entries[index].ending_lba = new_end;
+                for relocation in moves {
+                    entries[relocation.index].starting_lba = relocation.new_start;
+                    entries[relocation.index].ending_lba = relocation.new_end();
+                }
                 table.segments(&entries).map_err(|error| error.to_string())
             }
             Self::Mbr { lba0, total_lba } => {
@@ -263,25 +335,35 @@ impl Resizable {
     }
 }
 
-/// 计算新终点：SIZE、`--end`、`--grow-to-end` 三种入口，逐项 checked。
-fn resolve_end(
-    resize: &ResizeRequest,
+/// `resolve_end` 的输入：当前几何、右侧空隙与（`--allow-move` 时的）增长天花板。
+struct EndContext {
     start: u64,
     old_end: u64,
     current: u64,
     free: u64,
     sector: u64,
     last_usable: u64,
-) -> Result<u64, Refusal> {
+    grow_ceiling: Option<u64>,
+}
+
+/// 计算新终点：SIZE、`--end`、`--grow-to-end` 三种入口，逐项 checked。
+fn resolve_end(resize: &ResizeRequest, context: EndContext) -> Result<u64, Refusal> {
+    let EndContext {
+        start,
+        old_end,
+        current,
+        free,
+        sector,
+        last_usable,
+        grow_ceiling,
+    } = context;
     let end = if resize.grow_to_end {
         last_usable
     } else if let Some(end) = resize.end {
         end
     } else if let Some(size) = &resize.size {
         if *size == SizeSpec::Grow {
-            old_end
-                .checked_add(free)
-                .ok_or_else(|| beyond_table("grow overflows the LBA range"))?
+            grow_ceiling.unwrap_or(old_end + free)
         } else {
             let bytes = resolve_bytes(*size, current)?;
             if bytes < sector {
@@ -575,6 +657,76 @@ fn refuse(why: &str) -> Decision {
 /// 尺寸请求越出表可以表达的区间：拒绝写表，退出码 3，与基线一致（不是用法错误）。
 fn beyond_table(why: impl Into<String>) -> Refusal {
     Refusal::TableEdit { why: why.into() }
+}
+
+/// 一个被 `--allow-move` 右移的 GPT 分区：条目下标与新旧起点，长度不变。
+struct Relocation {
+    index: usize,
+    number: u32,
+    old_start: u64,
+    new_start: u64,
+    sectors: u64,
+}
+
+impl Relocation {
+    fn new_end(&self) -> u64 {
+        self.new_start + self.sectors - 1
+    }
+
+    fn step(&self, sector: u64) -> Step {
+        let shift = i64::try_from(i128::from(self.new_start) - i128::from(self.old_start))
+            .unwrap_or(i64::MAX);
+        Step::new(
+            StepKind::MovePartition {
+                partition: self.number,
+                source_lba: self.old_start,
+                offset_sectors: shift,
+                chunk: DEFAULT_CHUNK,
+                ntfs_hidden: false,
+            },
+            vec![region(self.new_start * sector, self.sectors * sector)],
+        )
+    }
+}
+
+/// `old_end` 之后的所有分区整体右移 `delta`，腾出目标终点所需的空间。
+///
+/// 只搬 `old_end` 右侧的分区（左侧与被扩分区无关），按起点从右到左排列执行序，
+/// 右移时先动最右的，避免覆盖尚未搬走的分区。任何一个分区右移后越过
+/// `last_usable` 即拒绝——搬不动就没有 `--allow-move` 能兑现的方案。
+fn plan_relocations(
+    table: &GptTable,
+    old_end: u64,
+    delta: u64,
+    last_usable: u64,
+) -> Result<Vec<Relocation>, Refusal> {
+    let mut planned = Vec::new();
+    for (index, entry) in table.entries.iter().enumerate() {
+        if entry.partition_type_guid.is_zero() || entry.starting_lba <= old_end {
+            continue;
+        }
+        let sectors = entry.ending_lba - entry.starting_lba + 1;
+        let new_start = entry
+            .starting_lba
+            .checked_add(delta)
+            .ok_or_else(|| beyond_table("the relocation target overflows the LBA range"))?;
+        if new_start.saturating_add(sectors - 1) > last_usable {
+            return Err(beyond_table(format!(
+                "not enough room to relocate partition #{} — no space before last usable LBA {last_usable}",
+                index + 1
+            )));
+        }
+        planned.push(Relocation {
+            index,
+            number: u32::try_from(index + 1).unwrap_or(u32::MAX),
+            old_start: entry.starting_lba,
+            new_start,
+            sectors,
+        });
+    }
+    // 右移先动最右侧的，落盘顺序与数据搬运的依赖一致。
+    planned.sort_by_key(|relocation| std::cmp::Reverse(relocation.old_start));
+    Ok(planned)
 }
 
 fn region(start: u64, len: u64) -> diskedit_core::region::Region {
