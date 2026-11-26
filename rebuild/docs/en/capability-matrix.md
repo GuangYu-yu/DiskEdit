@@ -1,4 +1,4 @@
-Generated from `app/cli/spec.rs` and `diskedit_core::fs::catalog` by `app/docsgen`.
+Generated from `app/cli/declare.rs`, `app/report/exit.rs` and `diskedit_core::fs::catalog` by `docsgen`.
 Regenerate with `DISKEDIT_WRITE_DOCS=1 cargo test --test generated_docs`.
 CI compares the working tree with the generator output. Do not edit by hand.
 
@@ -35,7 +35,7 @@ there as well.
 
 External programs the catalogue refers to, by identity:
 
-`E2fsck`, `Resize2fs`, `Dumpe2fs`, `Mke2fs`, `Tune2fs`, `Ntfsresize`, `Ntfsfix`, `Ntfslabel`, `FsckF2fs`, `ResizeF2fs`, `XfsGrowfs`, `XfsRepair`, `XfsAdmin`, `Btrfs`, `Btrfstune`, `Fatresize`, `Fatlabel`, `FsckVfat`, `Exfatlabel`, `FsckExfat`, `Mkswap`, `Swaplabel`, `Pvs`, `Lvs`, `Vgs`, `Pvresize`, `MkfsVfat`, `MkfsExfat`, `MkfsNtfs`, `MkfsXfs`, `MkfsBtrfs`, `MkfsF2fs`, `Mount`, `Umount`, `Losetup`, `Sfdisk`, `Partx`, `Blkid`
+`E2fsck`, `Resize2fs`, `Dumpe2fs`, `Mke2fs`, `Tune2fs`, `Ntfsresize`, `Ntfsfix`, `Ntfslabel`, `FsckF2fs`, `ResizeF2fs`, `XfsGrowfs`, `XfsRepair`, `XfsAdmin`, `Btrfs`, `Btrfstune`, `Fatresize`, `Fatlabel`, `FsckVfat`, `Exfatlabel`, `FsckExfat`, `Mkswap`, `Swaplabel`, `Pvs`, `Lvs`, `Vgs`, `Pvresize`, `Lvextend`, `MkfsVfat`, `MkfsExfat`, `MkfsNtfs`, `MkfsXfs`, `MkfsBtrfs`, `MkfsF2fs`, `Mount`, `Umount`, `Losetup`, `Sfdisk`, `Partx`, `Blkid`
 
 ## Runtime gate
 
@@ -61,4 +61,3 @@ root for table writes; block devices do.
 | `recover` | yes | yes (root) | refused (6) |
 | `new` | yes | yes (root) | refused (6) |
 | `add` | yes | yes (root) | refused (6) |
-

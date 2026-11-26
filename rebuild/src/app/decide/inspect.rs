@@ -42,14 +42,14 @@ pub fn decide(snapshot: &InspectSnapshot) -> Decision {
             };
             // 记录里写着它属于哪个目标：能自行证明身份的目标必须与之相符，否则记录是
             // 别的工作留下的证据，不能被当作本目标的现状（基线判定为外来）。
-            if let Some(identity) = snapshot.target.identity {
-                if decoded.body.target != identity {
-                    return Decision::Refuse(Refusal::RecordForeign {
-                        why: "identity: the record belongs to a different target — it must not be \
-                              cleaned up or replayed for this target"
-                            .to_owned(),
-                    });
-                }
+            if let Some(identity) = snapshot.target.identity
+                && decoded.body.target != identity
+            {
+                return Decision::Refuse(Refusal::RecordForeign {
+                    why: "identity: the record belongs to a different target — it must not be \
+                          cleaned up or replayed for this target"
+                        .to_owned(),
+                });
             }
             RecordVerdict::Present {
                 bytes: bytes.len() as u64,

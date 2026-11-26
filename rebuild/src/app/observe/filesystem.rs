@@ -75,17 +75,16 @@ pub fn capture(
         .map(|program| (program, platform.tool_available(program)))
         .collect();
     // 离线扩容经临时挂载的家族还要证明挂载与卸载程序可用。
-    if matches!(request.command(), Command::Resizefs { .. }) {
-        if let Some(partition) = &selected {
-            if matches!(
-                partition.content,
-                ContentKind::Filesystem(FsKind::Xfs) | ContentKind::Filesystem(FsKind::Btrfs)
-            ) {
-                for program in [Program::Mount, Program::Umount] {
-                    if !tools.iter().any(|(known, _)| *known == program) {
-                        tools.push((program, platform.tool_available(program)));
-                    }
-                }
+    if matches!(request.command(), Command::Resizefs { .. })
+        && let Some(partition) = &selected
+        && matches!(
+            partition.content,
+            ContentKind::Filesystem(FsKind::Xfs) | ContentKind::Filesystem(FsKind::Btrfs)
+        )
+    {
+        for program in [Program::Mount, Program::Umount] {
+            if !tools.iter().any(|(known, _)| *known == program) {
+                tools.push((program, platform.tool_available(program)));
             }
         }
     }

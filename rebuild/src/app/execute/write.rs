@@ -95,12 +95,12 @@ impl<'a> WriteChannel<'a> {
                 self.target.len()
             )));
         }
-        if let Some(limit) = self.fail_after {
-            if self.writes_done >= limit {
-                return Err(ExecError::Injected(
-                    "write channel interrupted during write".into(),
-                ));
-            }
+        if let Some(limit) = self.fail_after
+            && self.writes_done >= limit
+        {
+            return Err(ExecError::Injected(
+                "write channel interrupted during write".into(),
+            ));
         }
         let mut offset = region.start();
         let mut written_bytes = 0;

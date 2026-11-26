@@ -154,17 +154,17 @@ fn build_segments(
                 why: error.to_string(),
             })?;
             let lba0 = lba0_bytes(snapshot);
-            if let Some(lba0) = &lba0 {
-                if let PmbrSize::Inconsistent = create::pmbr_size_state(
+            if let Some(lba0) = &lba0
+                && let PmbrSize::Inconsistent = create::pmbr_size_state(
                     lba0,
                     snapshot.target.bytes,
                     snapshot.target.sector_size,
-                ) {
-                    return Err(Refusal::PmbrInconsistent {
-                        why: "the protective MBR size exceeds both sector-size interpretations"
-                            .to_owned(),
-                    });
-                }
+                )
+            {
+                return Err(Refusal::PmbrInconsistent {
+                    why: "the protective MBR size exceeds both sector-size interpretations"
+                        .to_owned(),
+                });
             }
             let content = match &lba0 {
                 Some(lba0) => content.with_protective(lba0, total_lba),

@@ -35,7 +35,7 @@ impl SectorSize {
 
     /// 字节偏移所在的 LBA；起点未对齐时返回 `None`。
     pub fn lba_of(self, offset: u64) -> Option<u64> {
-        if offset % self.0 == 0 {
+        if offset.is_multiple_of(self.0) {
             Some(offset / self.0)
         } else {
             None

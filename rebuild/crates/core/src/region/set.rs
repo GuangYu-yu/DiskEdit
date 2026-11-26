@@ -161,11 +161,11 @@ impl RegionSet {
         all.sort_unstable_by_key(|member| (member.start, member.end));
         let mut merged: Vec<Region> = Vec::with_capacity(all.len());
         for member in all {
-            if let Some(last) = merged.last_mut() {
-                if member.start <= last.end {
-                    last.end = last.end.max(member.end);
-                    continue;
-                }
+            if let Some(last) = merged.last_mut()
+                && member.start <= last.end
+            {
+                last.end = last.end.max(member.end);
+                continue;
             }
             merged.push(member);
         }

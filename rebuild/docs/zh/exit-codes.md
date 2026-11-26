@@ -1,6 +1,4 @@
-由 `app/docsgen` 从 `app/cli/spec.rs` 与 `diskedit_core::fs::catalog` 生成。
-用 `DISKEDIT_WRITE_DOCS=1 cargo test --test generated_docs` 重新生成。
-CI 比对工作树与生成物；不要手工编辑。
+本文件是 `docs/en/exit-codes.md` 的中文译本，不参与生成物逐字比对；退出码以 `app/report/exit.rs` 为准。
 
 # diskedit 退出状态
 

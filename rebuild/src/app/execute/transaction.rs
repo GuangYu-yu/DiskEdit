@@ -66,20 +66,20 @@ impl<'a> RecordSession<'a> {
 
         let mut pending = None;
         let mut sequence = 0;
-        if let Some(bytes) = platform.read_file(&file).map_err(ExecError::from)? {
-            if !bytes.is_empty() {
-                let decoded =
-                    record::decode(&bytes).map_err(|error| ExecError::Record(error.to_string()))?;
-                let last_pending = decoded
-                    .frames
-                    .last()
-                    .map(|frame| !matches!(frame.kind, FrameKind::Committed | FrameKind::Aborted))
-                    .unwrap_or(true);
-                if last_pending {
-                    pending = Some(decoded.body.plan_digest);
-                    sequence = u32::try_from(decoded.frames.len())
-                        .map_err(|_| ExecError::Record("record has too many frames".to_owned()))?;
-                }
+        if let Some(bytes) = platform.read_file(&file).map_err(ExecError::from)?
+            && !bytes.is_empty()
+        {
+            let decoded =
+                record::decode(&bytes).map_err(|error| ExecError::Record(error.to_string()))?;
+            let last_pending = decoded
+                .frames
+                .last()
+                .map(|frame| !matches!(frame.kind, FrameKind::Committed | FrameKind::Aborted))
+                .unwrap_or(true);
+            if last_pending {
+                pending = Some(decoded.body.plan_digest);
+                sequence = u32::try_from(decoded.frames.len())
+                    .map_err(|_| ExecError::Record("record has too many frames".to_owned()))?;
             }
         }
         Ok(Self {

@@ -1,4 +1,4 @@
-Generated from `app/cli/spec.rs` and `diskedit_core::fs::catalog` by `app/docsgen`.
+Generated from `app/cli/declare.rs`, `app/report/exit.rs` and `diskedit_core::fs::catalog` by `docsgen`.
 Regenerate with `DISKEDIT_WRITE_DOCS=1 cargo test --test generated_docs`.
 CI compares the working tree with the generator output. Do not edit by hand.
 
@@ -15,4 +15,3 @@ Seven values; the mapping lives in `app/report/exit.rs`.
 | 4 | I/O or environment failure after execution began, with no target bytes changed |
 | 5 | partial completion, a record awaits recovery, or persistent state is reached while the kernel view is stale |
 | 6 | capability unsupported |
-

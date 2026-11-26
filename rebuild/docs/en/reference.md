@@ -1,4 +1,4 @@
-Generated from `app/cli/spec.rs` and `diskedit_core::fs::catalog` by `app/docsgen`.
+Generated from `app/cli/declare.rs`, `app/report/exit.rs` and `diskedit_core::fs::catalog` by `docsgen`.
 Regenerate with `DISKEDIT_WRITE_DOCS=1 cargo test --test generated_docs`.
 CI compares the working tree with the generator output. Do not edit by hand.
 
@@ -12,7 +12,7 @@ identity of their own reject the flag.
 
 ### `info`
 
-show the target and partition overview
+show partition table and per-partition filesystem identification
 
 ```text
 diskedit info <TARGET> [--sector-size N]
@@ -21,14 +21,14 @@ diskedit info <TARGET>:N --grow [--sector-size N]
 
 | property | value | options |
 |---|---|---|
-| with or without a suffix | none | `--sector-size`, `--grow` |
+| no partition suffix | none | `--grow`, `--sector-size` |
 
 ### `inspect`
 
 show per-partition extents and content
 
 ```text
-diskedit inspect <TARGET>
+diskedit inspect <TARGET|PATH>
 ```
 
 | property | value | options |
@@ -45,7 +45,7 @@ diskedit records list [TARGET]
 
 | property | value | options |
 |---|---|---|
-| no target | none | `--identity` |
+| no partition suffix | none | `--identity` |
 
 ### `records verify`
 
@@ -69,11 +69,11 @@ diskedit records scan <ROOT>
 
 | property | value | options |
 |---|---|---|
-| no partition suffix | none | — |
+| with or without a suffix | none | — |
 
 ### `resize`
 
-resize a partition
+resize a partition and its filesystem
 
 ```text
 diskedit resize <TARGET>[:N] <SIZE> [--allow-move] [--chunk N] [--grow-lv] [--lv NAME] [--no-fs] --yes
@@ -83,7 +83,7 @@ diskedit resize <TARGET>:N --grow-to-end [--align A] [--no-fs] --yes
 
 | property | value | options |
 |---|---|---|
-| with or without a suffix | required (`--yes`) | `--sector-size`, `--yes`, `--identity`, `--allow-move`, `--chunk`, `--grow-lv`, `--lv`, `--no-fs`, `--dry-run`, `--end`, `--grow-to-end`, `--align` |
+| with or without a suffix | required (`--yes`) | `--align`, `--allow-move`, `--chunk`, `--dry-run`, `--end`, `--grow-lv`, `--grow-to-end`, `--identity`, `--lv`, `--no-fs`, `--sector-size`, `--yes` |
 
 ### `move`
 
@@ -95,7 +95,7 @@ diskedit move <TARGET>:N --start <LBA|end|align> [--chunk N] --yes [--align A]
 
 | property | value | options |
 |---|---|---|
-| `:N` or `:last` required | required (`--yes`) | `--sector-size`, `--yes`, `--identity`, `--start`, `--align`, `--chunk` |
+| `:N` or `:last` required | required (`--yes`) | `--align`, `--chunk`, `--identity`, `--sector-size`, `--start`, `--yes` |
 
 ### `copy`
 
@@ -107,7 +107,7 @@ diskedit copy <TARGET>:N --start <LBA|end> [--chunk N] --yes [--align A] [--name
 
 | property | value | options |
 |---|---|---|
-| `:N` or `:last` required | required (`--yes`) | `--sector-size`, `--yes`, `--identity`, `--start`, `--align`, `--chunk`, `--name`, `--keep-partuuid` |
+| `:N` or `:last` required | required (`--yes`) | `--align`, `--chunk`, `--identity`, `--keep-partuuid`, `--name`, `--sector-size`, `--start`, `--yes` |
 
 ### `delete`
 
@@ -119,7 +119,7 @@ diskedit delete <TARGET>:N --yes
 
 | property | value | options |
 |---|---|---|
-| `:N` or `:last` required | required (`--yes`) | `--sector-size`, `--yes`, `--identity` |
+| `:N` or `:last` required | required (`--yes`) | `--identity`, `--sector-size`, `--yes` |
 
 ### `set`
 
@@ -135,7 +135,7 @@ diskedit set <TARGET>:N type GUID|0xXX --yes
 
 | property | value | options |
 |---|---|---|
-| `:N` or `:last` required | required (`--yes`) | `--sector-size`, `--yes`, `--identity`, `--random` |
+| `:N` or `:last` required | required (`--yes`) | `--identity`, `--random`, `--sector-size`, `--yes` |
 
 ### `check`
 
@@ -159,7 +159,7 @@ diskedit mkfs <TARGET>:N <FS> --yes [--label S]
 
 | property | value | options |
 |---|---|---|
-| `:N` or `:last` required | required (`--yes`) | `--sector-size`, `--yes`, `--identity`, `--label` |
+| `:N` or `:last` required | required (`--yes`) | `--identity`, `--label`, `--sector-size`, `--yes` |
 
 ### `resizefs`
 
@@ -172,7 +172,7 @@ diskedit resizefs <MOUNTPOINT> [BYTES] --yes
 
 | property | value | options |
 |---|---|---|
-| with or without a suffix | required (`--yes`) | `--sector-size`, `--yes`, `--identity` |
+| `:N` or `:last` required | required (`--yes`) | `--identity`, `--sector-size`, `--yes` |
 
 ### `recover`
 
@@ -186,7 +186,7 @@ diskedit recover <TARGET> --release [--discard-replay] --yes
 
 | property | value | options |
 |---|---|---|
-| no partition suffix | required (`--yes`) | `--sector-size`, `--yes`, `--identity`, `--replay-table-only`, `--release`, `--discard-replay` |
+| no partition suffix | required (`--yes`) | `--discard-replay`, `--identity`, `--release`, `--replay-table-only`, `--sector-size`, `--yes` |
 
 ## Low-level
 
@@ -200,7 +200,7 @@ diskedit new <TARGET> [--table gpt|mbr] --yes [--overwrite-data]
 
 | property | value | options |
 |---|---|---|
-| no partition suffix | required (`--yes`) | `--sector-size`, `--yes`, `--identity`, `--table`, `--overwrite-data` |
+| no partition suffix | required (`--yes`) | `--identity`, `--overwrite-data`, `--sector-size`, `--table`, `--yes` |
 
 ### `add`
 
@@ -212,7 +212,7 @@ diskedit add <TARGET> SIZE [--start LBA] [--align A] [--part-number N] [--name S
 
 | property | value | options |
 |---|---|---|
-| no partition suffix | required (`--yes`) | `--sector-size`, `--yes`, `--identity`, `--start`, `--align`, `--part-number`, `--name`, `--type-guid` |
+| no partition suffix | required (`--yes`) | `--align`, `--identity`, `--name`, `--part-number`, `--sector-size`, `--start`, `--type-guid`, `--yes` |
 
 ## options
 
@@ -243,4 +243,3 @@ diskedit add <TARGET> SIZE [--start LBA] [--align A] [--part-number N] [--name S
 | `--table` | `gpt|mbr` | partition table type: gpt (default) or mbr |
 | `--type-guid` | `GUID|0xNN` | GPT type GUID text, or an MBR type byte 0xNN |
 | `--yes` | — | acknowledge a write before it starts |
-

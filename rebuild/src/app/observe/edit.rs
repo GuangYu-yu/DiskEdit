@@ -200,7 +200,7 @@ pub(super) fn capture_mbr(
             why: "the MBR sector does not fit the target".to_owned(),
         })?,
     )?;
-    if total_bytes % sector_size != 0 {
+    if !total_bytes.is_multiple_of(sector_size) {
         return Err(CaptureError::Unreadable {
             why: "the target length is not a whole number of sectors".to_owned(),
         });

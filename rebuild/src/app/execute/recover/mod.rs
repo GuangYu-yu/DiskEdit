@@ -161,13 +161,13 @@ fn release(
         return Ok(Outcome::completed());
     };
     // B8：放弃只看对象与归属。若记录能解码且属于别的载体，拒绝动它。
-    if let Ok(decoded) = diskedit_core::record::decode(&bytes) {
-        if !decoded.body.target.matches(identity) {
-            return Err((
-                ExecError::Record("the record belongs to a different target".to_owned()),
-                false,
-            ));
-        }
+    if let Ok(decoded) = diskedit_core::record::decode(&bytes)
+        && !decoded.body.target.matches(identity)
+    {
+        return Err((
+            ExecError::Record("the record belongs to a different target".to_owned()),
+            false,
+        ));
     }
     abandon(platform, directory, file, &bytes).map_err(|error| (error, false))?;
     Ok(Outcome::completed())

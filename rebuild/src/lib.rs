@@ -4,6 +4,7 @@
 //! 每层内部的文件职责由各自的 `mod.rs` 说明。
 
 pub mod app;
+pub mod docsgen;
 pub mod platform;
 
 /// 进程入口：先看是不是来宾工作进程，否则交给应用层。

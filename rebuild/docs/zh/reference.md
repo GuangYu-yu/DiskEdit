@@ -1,6 +1,4 @@
-由 `app/docsgen` 从 `app/cli/spec.rs` 与 `diskedit_core::fs::catalog` 生成。
-用 `DISKEDIT_WRITE_DOCS=1 cargo test --test generated_docs` 重新生成。
-CI 比对工作树与生成物；不要手工编辑。
+本文件是 `docs/en/reference.md` 的中文译本，不参与生成物逐字比对；命令集合由 `tests/generated_docs.rs` 核对，新增命令必须同步补这里。
 
 # diskedit 命令参考
 

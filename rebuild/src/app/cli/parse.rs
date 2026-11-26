@@ -88,10 +88,10 @@ fn parse_records(args: &[String]) -> Result<Request, UsageError> {
         "list" => {
             let tokens = Tokens::scan(&args[1..], &["--identity"], &[])?;
             let target = optional_target(&tokens)?;
-            if let Some(target) = &target {
-                if target.partition.is_some() {
-                    return Err(UsageError::new("records list does not accept a selector"));
-                }
+            if let Some(target) = &target
+                && target.partition.is_some()
+            {
+                return Err(UsageError::new("records list does not accept a selector"));
             }
             if target.is_none() && tokens.has("--identity") {
                 return Err(UsageError::new(

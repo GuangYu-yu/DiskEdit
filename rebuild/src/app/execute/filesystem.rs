@@ -91,10 +91,10 @@ pub(super) fn execute_online_step(
     confirm_mount(platform, &online).map_err(|error| (error, false))?;
     check_identity(platform, online.disk, plan).map_err(|error| (error, false))?;
 
-    if let Some((program, args)) = online_invocation(&online) {
-        if platform.tool_available(program) {
-            return run_online_native(platform, &online, program, &args);
-        }
+    if let Some((program, args)) = online_invocation(&online)
+        && platform.tool_available(program)
+    {
+        return run_online_native(platform, &online, program, &args);
     }
     run_online_carrier(platform, &online)
 }

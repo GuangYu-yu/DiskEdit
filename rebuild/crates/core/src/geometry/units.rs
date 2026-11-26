@@ -16,7 +16,7 @@ pub const PIB: u64 = TIB * 1024;
 pub fn sectors_ceil(bytes: u64, sector: SectorSize) -> Option<u64> {
     let size = sector.bytes();
     let full = bytes / size;
-    if bytes % size == 0 {
+    if bytes.is_multiple_of(size) {
         Some(full)
     } else {
         full.checked_add(1)

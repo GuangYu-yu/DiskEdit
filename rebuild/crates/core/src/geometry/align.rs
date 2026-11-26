@@ -12,7 +12,7 @@ pub fn validate(align: u64) -> Result<(), GeometryError> {
 }
 
 pub fn is_aligned(value: u64, align: u64) -> bool {
-    align.is_power_of_two() && value % align == 0
+    align.is_power_of_two() && value.is_multiple_of(align)
 }
 
 /// 向上取整到 `align` 的倍数；`align` 非法或溢出返回错误。
