@@ -79,6 +79,25 @@ pub fn decide(snapshot: &ResizeSnapshot, request: &Request) -> Decision {
         },
     };
 
+    // MBR 主表没有可搬移的数据通道：`--allow-move` 与 `--chunk` 在 MBR 上无从执行，
+    // 与基线一致地拒绝（退出码 3），而不是静默忽略后按普通扩缩继续。
+    if matches!(table, Resizable::Mbr { .. }) {
+        if resize.allow_move {
+            return Decision::Refuse(Refusal::TableEdit {
+                why: "--allow-move is not supported for MBR resize — MBR cannot relocate \
+                      blocking partitions"
+                    .to_owned(),
+            });
+        }
+        if resize.chunk.is_some() {
+            return Decision::Refuse(Refusal::TableEdit {
+                why: "--chunk has no effect for MBR resize — MBR cannot relocate blocking \
+                      partitions"
+                    .to_owned(),
+            });
+        }
+    }
+
     let number = partition.number;
     let start = partition.first_lba;
     let old_end = partition.last_lba;

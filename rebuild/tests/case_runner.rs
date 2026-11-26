@@ -597,6 +597,57 @@ fn resize_refuses_grow_without_room_and_sizes_past_the_usable_range() {
     );
 }
 
+// covers: R0329, R0372, R0373, R0394, R0395, R0444, R0452
+#[test]
+fn resize_refuses_mbr_relocation_flags_and_no_table_targets() {
+    fixtures::prepare();
+    let directory = "target/fixtures/s6";
+    std::fs::create_dir_all(directory).expect("扩缩夹具目录可建");
+
+    // MBR 主表没有搬移通道：`--allow-move` 与 `--chunk` 均按拒绝处理，退 3。
+    let mbr = format!("{directory}/mbr-flags.img");
+    std::fs::copy(std::path::Path::new(fixtures::BASE).join("mbr.img"), &mbr)
+        .expect("复制 MBR 夹具");
+    let before = std::fs::read(&mbr).expect("读取夹具");
+    let (code, _, stderr) = run_argv(&[
+        "resize",
+        &format!("{mbr}:1"),
+        "grow",
+        "--allow-move",
+        "--no-fs",
+        "--yes",
+    ]);
+    assert_eq!(code, 3, "MBR 不接受 --allow-move：{stderr}");
+    let (code, _, stderr) = run_argv(&[
+        "resize",
+        &format!("{mbr}:1"),
+        "+1M",
+        "--chunk",
+        "1",
+        "--no-fs",
+        "--yes",
+    ]);
+    assert_eq!(code, 3, "MBR 不接受 --chunk：{stderr}");
+    assert_eq!(
+        std::fs::read(&mbr).expect("读取夹具"),
+        before,
+        "拒绝时目标字节不得改变"
+    );
+
+    // 无分区表的目标：没有可扩缩的表，拒绝（退 3）；分区与整盘两种形态同判据。
+    let empty = format!("{directory}/no-table.img");
+    std::fs::copy(
+        std::path::Path::new(fixtures::BASE).join("empty.img"),
+        &empty,
+    )
+    .expect("复制空夹具");
+    let (code, _, stderr) =
+        run_argv(&["resize", &format!("{empty}:1"), "grow", "--no-fs", "--yes"]);
+    assert_eq!(code, 3, "无表目标应拒绝：{stderr}");
+    let (code, _, stderr) = run_argv(&["resize", &format!("{empty}:1"), "1M", "--no-fs", "--yes"]);
+    assert_eq!(code, 3, "无表目标应拒绝：{stderr}");
+}
+
 // covers: B15, R0064, R0094
 #[test]
 fn filesystem_commands_refuse_without_touching_the_target() {
