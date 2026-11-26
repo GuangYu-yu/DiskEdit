@@ -1004,13 +1004,18 @@ fn content_unsupported(key: SetKey) -> Refusal {
     }
 }
 
-/// 文件系统属性：先要求分区承载可识别的内容，再说明本构建未接入写路径。
+/// 文件系统属性：分区存在但内容未知时与已识别内容同样落能力不支持（基线对两者都报
+/// `unsupported`），分区不存在仍按拒绝处理。
 fn filesystem_attr(snapshot: &EditSnapshot, number: u32, key: SetKey) -> Decision {
     match snapshot.view.find(number) {
         Some(partition) if partition.content.as_str() != "unknown" => {
             Decision::Refuse(content_unsupported(key))
         }
-        _ => Decision::Refuse(Refusal::FilesystemUnknown { number }),
+        Some(_) => Decision::Refuse(Refusal::ContentUnsupported {
+            what: format!("set {}", key.as_str()),
+            why: "no label or UUID tool is wired for unidentified content".to_owned(),
+        }),
+        None => Decision::Refuse(Refusal::FilesystemUnknown { number }),
     }
 }
 

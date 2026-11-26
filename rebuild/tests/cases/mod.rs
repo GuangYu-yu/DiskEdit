@@ -579,7 +579,7 @@ pub const CASES: &[Case] = &[
         stderr: "diskedit",
     },
     Case {
-        name: "set label refuses an unidentified partition",
+        name: "set label on unidentified content is unsupported",
         argv: &[
             "set",
             "target/fixtures/s1/gpt.img:1",
@@ -587,9 +587,9 @@ pub const CASES: &[Case] = &[
             "root",
             "--yes",
         ],
-        exit: 3,
+        exit: 6,
         stdout: "",
-        stderr: "refused:",
+        stderr: "unsupported:",
     },
     Case {
         name: "set label needs the filesystem execution path",
