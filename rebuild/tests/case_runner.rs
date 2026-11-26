@@ -371,6 +371,7 @@ fn move_and_copy_relocate_data_and_keep_type_guids() {
 }
 
 // covers: B13, B26, R0059, R0203, R0209
+// covers: B13, R0209
 #[test]
 fn resize_rewrites_the_table_and_refuses_unsafe_shrinks() {
     fixtures::prepare();

@@ -292,6 +292,7 @@ fn partition_lookup_rejects_empty_and_missing_entries() {
 }
 
 // covers: R0628, R0629, R0630, R0631, R0632
+// covers: R0183, R0184
 #[test]
 fn gpt_add_slot_rejects_bounds_overlap_slots_and_full_table() {
     let table = gpt_table(vec![
@@ -355,6 +356,7 @@ fn alignment_overflow_rejects_the_start() {
     );
 }
 
+// covers: R0182, R0185, R0222, R0223, R0227, R0228, R0236, R0242
 // covers: R0642, R0643
 #[test]
 fn gpt_placement_rejects_address_space_overflow() {
@@ -369,5 +371,9 @@ fn gpt_placement_rejects_address_space_overflow() {
     assert!(matches!(
         first_fit(&[], 34, 967, 1, 0),
         Err(EditError::ZeroSize)
+    ));
+    assert!(matches!(
+        first_fit(&[], 34, 967, 1000, 10),
+        Err(EditError::NoGapFits { .. })
     ));
 }

@@ -162,3 +162,12 @@ R0399	crates/core/src/table/edit.rs::resize_mbr 拒绝扩展容器	旧 src/cmd/r
 R0404	crates/core/src/table/edit.rs::resize_mbr 拒绝扩展容器（收缩）	旧 src/cmd/resize/msdos.rs:315 extended container cannot be resized	tests/refusal_claims.rs 的 mbr_resize_rejects_structural_and_out_of_bounds_ranges
 R0411	crates/core/src/table/edit.rs::resize_mbr 的 PastAddressSpace	旧 src/cmd/resize/msdos.rs:460 exceeds MBR 32-bit LBA limit	tests/refusal_claims.rs 的 mbr_resize_rejects_structural_and_out_of_bounds_ranges
 R0413	crates/core/src/table/edit.rs::resize_mbr 的 PastAddressSpace（32 位上限）	旧 src/cmd/resize/msdos.rs:475 size exceeds MBR 32-bit LBA limit	tests/refusal_claims.rs 的 mbr_resize_rejects_structural_and_out_of_bounds_ranges
+R0158	src/app/decide/new.rs 的覆写准入按 TableProbe 分类	旧 src/cmd/layout.rs:142 pass --overwrite-data to accept	tests/cases/mod.rs 的 new refuses to overwrite occupied table sectors
+R0192	src/app/cli/parse.rs parse_resize 表目标缺 --end/SIZE	旧 src/cmd/layout.rs:587 resize needs --end	tests/cases/mod.rs 的 resize without a size is a usage error
+R0221	src/app/cli/parse.rs move/copy 缺 --start 报用法	旧 src/cmd/layout.rs:1372 needs --start	tests/cases/mod.rs 的 copy without --start is a usage error
+R0222	crates/core/src/table/edit.rs::first_fit 的 NoGapFits（超可用长度）	旧 src/cmd/layout.rs:1397 partition longer than usable range	tests/refusal_claims.rs 的 gpt_placement_rejects_address_space_overflow
+R0223	crates/core/src/table/edit.rs::fixed_start 的 PastAddressSpace（终点）	旧 src/cmd/layout.rs:1403 end LBA overflows address space	tests/refusal_claims.rs 的 gpt_placement_rejects_address_space_overflow
+R0227	crates/core/src/table/edit.rs::fixed_start 的 PastAddressSpace（起点）	旧 src/cmd/layout.rs:1486 partition start overflows byte offset	tests/refusal_claims.rs 的 gpt_placement_rejects_address_space_overflow
+R0228	crates/core/src/table/edit.rs::fixed_start 的 PastAddressSpace（长度）	旧 src/cmd/layout.rs:1489 partition length overflows byte offset	tests/refusal_claims.rs 的 gpt_placement_rejects_address_space_overflow
+R0236	crates/core/src/table/edit.rs::fixed_start 的 PastAddressSpace（拷贝源）	旧 src/cmd/layout.rs:1587 partition start overflows byte offset	tests/refusal_claims.rs 的 gpt_placement_rejects_address_space_overflow
+R0242	crates/core/src/table/edit.rs::first_fit 的 NoGapFits（搬移目标）	旧 src/cmd/layout.rs:1742 partition longer than usable range	tests/refusal_claims.rs 的 gpt_placement_rejects_address_space_overflow
