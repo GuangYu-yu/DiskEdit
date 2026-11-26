@@ -580,3 +580,69 @@ fn a_plan_without_a_table_write_step_never_touches_the_target() {
         "计划不含表写时不得改动目标"
     );
 }
+
+/// 与 `relocate::spec_bytes` 相同的几何快照（测试侧独立构造，用来喂记录）。
+fn resume_spec() -> Vec<u8> {
+    let mut out = Vec::new();
+    out.extend_from_slice(b"diskedit-relocate-v1");
+    out.push(1);
+    for value in [2u64, 4, 0, 2 * SECTOR, SECTOR, TOTAL] {
+        out.extend_from_slice(&value.to_le_bytes());
+    }
+    out
+}
+
+// covers: B24
+#[test]
+fn a_resumed_move_with_a_mismatched_prefix_is_refused_without_writing() {
+    let bytes = initial_bytes();
+    let stamp = stamp_of(&bytes);
+    let memory = Memory::new(bytes.clone(), Faults::default());
+    let plan = move_plan(stamp);
+    let mut progress = 1u64.to_le_bytes().to_vec();
+    progress.extend_from_slice(&[0u8; 16]);
+    let record = diskedit_core::record::encode(
+        &diskedit_core::record::RecordBody {
+            target: IDENTITY,
+            geometry_generation: 0,
+            plan_digest: plan.digest(),
+        },
+        &[
+            diskedit_core::record::Frame {
+                seq: 0,
+                kind: FrameKind::Intent,
+                completed: false,
+                irreversible: false,
+                intent: resume_spec(),
+                regions: Vec::new(),
+            },
+            diskedit_core::record::Frame {
+                seq: 1,
+                kind: FrameKind::Progress,
+                completed: false,
+                irreversible: true,
+                intent: progress,
+                regions: Vec::new(),
+            },
+        ],
+    )
+    .expect("记录可编码");
+    let path = PathBuf::from("/state")
+        .join("images")
+        .join(hex16(IDENTITY))
+        .join(RECORD_FILE);
+    memory.files.lock().unwrap().insert(path, record);
+    let outcome = relocate::run(&memory, Path::new("memory"), &plan);
+    assert_eq!(
+        outcome.state(),
+        ExecutionState::Unwritten,
+        "{:?}",
+        outcome.reason()
+    );
+    assert_eq!(exit_of(&outcome), REFUSED);
+    assert_eq!(
+        memory.target.lock().unwrap().as_slice(),
+        bytes.as_slice(),
+        "前缀不符时不得写目标"
+    );
+}

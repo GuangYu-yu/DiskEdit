@@ -21,6 +21,7 @@ const SECTOR: usize = 512;
 struct Memory {
     files: Mutex<BTreeMap<PathBuf, Vec<u8>>>,
     target: Arc<Mutex<Vec<u8>>>,
+    fail_writes: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 struct Lock;
@@ -32,6 +33,7 @@ impl Memory {
         Self {
             files: Mutex::new(BTreeMap::new()),
             target: Arc::new(Mutex::new(bytes)),
+            fail_writes: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         }
     }
 
@@ -58,6 +60,8 @@ impl Memory {
 
 struct MemoryTarget {
     bytes: Arc<Mutex<Vec<u8>>>,
+    fail_writes: Arc<std::sync::atomic::AtomicUsize>,
+    writes: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl TargetHandle for MemoryTarget {
@@ -84,6 +88,13 @@ impl TargetHandle for MemoryTarget {
         Ok(len)
     }
     fn write_at(&mut self, offset: u64, buf: &[u8]) -> PlatformResult<usize> {
+        let call = self
+            .writes
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            + 1;
+        if self.fail_writes.load(std::sync::atomic::Ordering::SeqCst) == call {
+            return Err(PlatformError::parse("injected rollback write failure"));
+        }
         let mut bytes = self.bytes.lock().unwrap();
         let start = offset as usize;
         let end = start + buf.len();
@@ -105,11 +116,15 @@ impl Platform for Memory {
     fn open_target(&self, _path: &Path) -> PlatformResult<Box<dyn TargetHandle>> {
         Ok(Box::new(MemoryTarget {
             bytes: Arc::clone(&self.target),
+            fail_writes: Arc::clone(&self.fail_writes),
+            writes: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         }))
     }
     fn open_target_read_only(&self, _path: &Path) -> PlatformResult<Box<dyn TargetHandle>> {
         Ok(Box::new(MemoryTarget {
             bytes: Arc::clone(&self.target),
+            fail_writes: Arc::clone(&self.fail_writes),
+            writes: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         }))
     }
     fn path_kind(&self, _path: &Path) -> TargetKind {
@@ -547,5 +562,97 @@ fn only_the_directory_derived_from_the_identity_is_consulted() {
     assert!(
         memory.get(&elsewhere).is_some(),
         "别的身份目录里的记录不该被这个目标处理"
+    );
+}
+
+// covers: B24
+#[test]
+fn a_failed_rollback_write_keeps_the_rest_of_the_record_and_reports_partial() {
+    let mut before = vec![0xAAu8; SECTOR];
+    before.extend(vec![0xCCu8; SECTOR]);
+    let mut after = vec![0xBBu8; SECTOR];
+    after.extend(vec![0xDDu8; SECTOR]);
+    let mut first = Hasher::new();
+    first.update(&before[..SECTOR]);
+    let mut second = Hasher::new();
+    second.update(&before[SECTOR..]);
+    let frame = Frame {
+        seq: 1,
+        kind: FrameKind::Preimage,
+        completed: true,
+        irreversible: false,
+        intent: Vec::new(),
+        regions: vec![
+            RecordPreimage {
+                offset: 0,
+                len: SECTOR as u64,
+                digest: first.finish(),
+                data: before[..SECTOR].to_vec(),
+                after: after[..SECTOR].to_vec(),
+            },
+            RecordPreimage {
+                offset: SECTOR as u64,
+                len: SECTOR as u64,
+                digest: second.finish(),
+                data: before[SECTOR..].to_vec(),
+                after: after[SECTOR..].to_vec(),
+            },
+        ],
+    };
+    let memory = Memory::with_target(after.clone());
+    memory.put(&record_path(), record_bytes(&[intent_frame(), frame]));
+    memory
+        .fail_writes
+        .store(2, std::sync::atomic::Ordering::SeqCst);
+    let plan = confirmed(
+        RecoverMode::Default,
+        vec![
+            Region::sized(0, SECTOR as u64).unwrap(),
+            Region::sized(SECTOR as u64, SECTOR as u64).unwrap(),
+        ],
+    );
+    let outcome = run(&memory, Path::new("memory"), &plan);
+    assert_eq!(
+        outcome.state(),
+        ExecutionState::NeedsRecovery,
+        "{:?}",
+        outcome.reason()
+    );
+    let target = memory.target.lock().unwrap().clone();
+    let first_restored = target[..SECTOR] == before[..SECTOR];
+    let second_restored = target[SECTOR..] == before[SECTOR..];
+    assert!(
+        first_restored ^ second_restored,
+        "回滚应完成且只完成其中一段：first={first_restored} second={second_restored}"
+    );
+    assert!(
+        memory.get(&record_path()).is_some(),
+        "回滚未完成时记录必须保留"
+    );
+}
+
+// covers: B24
+#[test]
+fn a_record_with_non_monotonic_frames_is_refused_before_writing() {
+    let bytes = vec![0xCCu8; SECTOR];
+    let memory = Memory::with_target(bytes.clone());
+    let mut second = preimage_frame(&bytes);
+    second.seq = 0;
+    memory.put(&record_path(), record_bytes(&[intent_frame(), second]));
+    let plan = confirmed(
+        RecoverMode::Default,
+        vec![Region::sized(0, SECTOR as u64).unwrap()],
+    );
+    let outcome = run(&memory, Path::new("memory"), &plan);
+    assert_eq!(
+        outcome.state(),
+        ExecutionState::Unwritten,
+        "{:?}",
+        outcome.reason()
+    );
+    assert_eq!(
+        memory.target.lock().unwrap().as_slice(),
+        bytes.as_slice(),
+        "记录自相矛盾时不得写目标"
     );
 }
