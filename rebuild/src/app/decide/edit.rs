@@ -684,6 +684,10 @@ pub fn set(snapshot: &EditSnapshot, request: &Request) -> Decision {
         SetKey::Uuid if set.value.is_empty() && !set.random => {
             return refuse_edit("`set uuid` needs a value or --random");
         }
+        SetKey::Uuid if !set.random && !is_uuid(&set.value) => {
+            let why = format!("`set uuid` value {:?} is not a UUID", set.value);
+            return refuse_edit(&why);
+        }
         SetKey::Name | SetKey::Label | SetKey::Uuid | SetKey::Flag | SetKey::Type => {}
     }
     if let Some(refusal) = precheck(snapshot, "set") {
@@ -1053,6 +1057,19 @@ fn unusable(view: &TableView) -> Refusal {
             why: "the table bytes could not be read back for editing".to_owned(),
         },
     }
+}
+
+/// 值是否为连字符分组的 36 字符十六进制 UUID。
+fn is_uuid(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    bytes.len() == 36
+        && bytes.iter().enumerate().all(|(index, byte)| {
+            if matches!(index, 8 | 13 | 18 | 23) {
+                *byte == b'-'
+            } else {
+                byte.is_ascii_hexdigit()
+            }
+        })
 }
 
 fn refuse_edit(why: &str) -> Decision {

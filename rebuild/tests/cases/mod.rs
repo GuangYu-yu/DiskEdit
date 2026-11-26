@@ -22,6 +22,7 @@
 // covers: R0155, R0158, R0165, R0167, R0168, R0171, R0172, R0173
 // covers: R0174, R0176, R0177, R0178, R0180, R0187, R0192, R0203
 // covers: R0221
+// covers: R0542, R0584, R0586
 
 /// 一条命令行用例。
 pub struct Case {
@@ -968,5 +969,46 @@ pub const CASES: &[Case] = &[
         exit: 3,
         stdout: "",
         stderr: "refused:",
+    },
+    Case {
+        name: "set uuid refuses a value that is not a UUID",
+        argv: &[
+            "set",
+            "target/fixtures/s1/gpt.img:1",
+            "uuid",
+            "not-a-uuid",
+            "--yes",
+        ],
+        exit: 3,
+        stdout: "",
+        stderr: "not a UUID",
+    },
+    Case {
+        name: "set refuses partition zero",
+        argv: &[
+            "set",
+            "target/fixtures/s1/gpt.img:0",
+            "type",
+            "0700",
+            "--yes",
+        ],
+        exit: 2,
+        stdout: "",
+        stderr: "start at 1",
+    },
+    Case {
+        name: "move refuses a chunk outside one through sixty-four MiB",
+        argv: &[
+            "move",
+            "target/fixtures/s1/gpt.img:2",
+            "--start",
+            "100",
+            "--chunk",
+            "128",
+            "--yes",
+        ],
+        exit: 2,
+        stdout: "",
+        stderr: "--chunk",
     },
 ];

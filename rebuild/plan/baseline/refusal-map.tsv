@@ -191,3 +191,6 @@ R0853	src/app/decide/recover.rs 无记录时表步骤不得开始	旧 src/recove
 R0855	src/app/decide/recover.rs 无记录时不放行表步骤	旧 src/recovery/sink.rs:78 carries no recovery record	tests/case_runner.rs 的 recover_refuses_a_target_without_a_record
 R0857	src/app/decide/recover.rs 无记录时不落表区记录	旧 src/recovery/sink.rs:103 carries no recovery record	tests/case_runner.rs 的 recover_refuses_a_target_without_a_record
 R0859	src/app/decide/recover.rs 无记录时不落文件系统步骤记录	旧 src/recovery/sink.rs:127 carries no recovery record	tests/case_runner.rs 的 recover_refuses_a_target_without_a_record
+R0542	src/app/cli/parse.rs 的 --chunk 只接受 1..=64 MiB	旧 src/execution/mod.rs:603 chunk size must be within 1 MiB..=64 MiB	tests/cases/mod.rs 的 move refuses a chunk outside one through sixty-four MiB
+R0584	src/app/cli/parse.rs 拒绝分区号 0	旧 src/execution/set.rs:34 the step targets partition 0	tests/cases/mod.rs 的 set refuses partition zero
+R0586	src/app/decide/edit.rs 拒绝非 UUID 的 set uuid 值	旧 src/execution/set.rs:45 is not a UUID	tests/cases/mod.rs 的 set uuid refuses a value that is not a UUID
